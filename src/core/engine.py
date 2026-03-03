@@ -1274,24 +1274,22 @@ class RiskManager:
             return None
 
         try:
-            order = Order(
-                symbol=event.symbol,
-                side=event.side,
-                order_type=event.order_type if hasattr(event, 'order_type') else OrderType.LIMIT,
-                quantity=event.quantity,
-                price=event.price,
-                strategy=getattr(event, 'strategy', ''),
-                reason=getattr(event, 'reason', ''),
-            )
+            # event.order에 완전한 Order 객체가 포함됨 (order_type, strategy, reason 등)
+            order = event.order
+            if order is None:
+                logger.error(f"[리스크] OrderEvent에 Order 객체 없음: {event.symbol}")
+                await self.clear_pending(event.symbol)
+                return None
+
             success, order_id = await self.engine.broker.submit_order(order)
 
             if success:
                 logger.info(
-                    f"[리스크] 주문 제출 성공: {event.symbol} {event.side.value} "
-                    f"{event.quantity}주 @ {event.price:,.0f} (ID: {order_id})"
+                    f"[리스크] 주문 제출 성공: {order.symbol} {order.side.value} "
+                    f"{order.quantity}주 @ {order.price:,.0f} ({order.order_type.value}, ID: {order_id})"
                 )
             else:
-                logger.warning(f"[리스크] 주문 제출 실패: {event.symbol} — {order_id}")
+                logger.warning(f"[리스크] 주문 제출 실패: {order.symbol} — {order_id}")
                 await self.clear_pending(event.symbol)
                 self.block_symbol(event.symbol)
 
@@ -1302,7 +1300,19 @@ class RiskManager:
         return None
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
-        """체결 후 리스크 업데이트 (부분 체결 지원) - Lock 보호"""
+        """체결 후 포트폴리오 업데이트 + 리스크 추적 (부분 체결 지원) - Lock 보호"""
+        # 1) 포트폴리오 즉시 업데이트 (포지션 생성/수정/삭제, 현금 차감/증가)
+        try:
+            fill = event.fill if hasattr(event, 'fill') and event.fill else Fill(
+                symbol=event.symbol, side=event.side,
+                quantity=event.quantity, price=event.price,
+                commission=getattr(event, 'commission', Decimal("0")),
+            )
+            self.engine.update_position(fill)
+        except Exception as e:
+            logger.error(f"[리스크] 포지션 업데이트 실패: {event.symbol} — {e}")
+
+        # 2) pending 추적 정리
         async with self._pending_lock:
             remaining = self._pending_quantities.get(event.symbol, 0) - (event.quantity or 0)
             if remaining <= 0:

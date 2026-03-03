@@ -290,7 +290,7 @@ class KRScheduler:
             exit_params = bot._strategy_exit_params.get(position.strategy, {}) if position.strategy else {}
 
             # ExitManager.update_price() → Optional[Tuple[action, quantity, reason]]
-            exit_result = bot.exit_manager.update_price(symbol, float(current_price))
+            exit_result = bot.exit_manager.update_price(symbol, current_price)
 
             if exit_result:
                 action, quantity, reason = exit_result
@@ -717,6 +717,31 @@ class KRScheduler:
                             )
                             event = FillEvent.from_fill(fill, source="kis_broker")
                             await bot.engine.emit(event)
+
+                            # 매도 체결 시 _exit_pending 즉시 해제
+                            if fill.side == OrderSide.SELL:
+                                bot._exit_pending_symbols.discard(fill.symbol)
+                                bot._exit_pending_timestamps.pop(fill.symbol, None)
+                                bot._exit_reasons.pop(fill.symbol, None)
+
+                            # 매수 체결 시 ExitManager 등록
+                            if fill.side == OrderSide.BUY:
+                                pos = bot.engine.portfolio.positions.get(fill.symbol)
+                                if pos and bot.exit_manager:
+                                    exit_params = bot._strategy_exit_params.get(
+                                        pos.strategy, {}
+                                    ) if pos.strategy else {}
+                                    try:
+                                        bot.exit_manager.register_position(
+                                            pos,
+                                            stop_loss_pct=exit_params.get("stop_loss_pct"),
+                                            trailing_stop_pct=exit_params.get("trailing_stop_pct"),
+                                            first_exit_pct=exit_params.get("first_exit_pct"),
+                                            second_exit_pct=exit_params.get("second_exit_pct"),
+                                            third_exit_pct=exit_params.get("third_exit_pct"),
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패: {e}")
 
                     check_interval = 2 if open_orders else 5
 
