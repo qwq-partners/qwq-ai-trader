@@ -149,12 +149,24 @@ class DashboardServer:
 
     async def run(self):
         """서버 + SSE 브로드캐스트 실행 (태스크용)"""
-        try:
-            await self.start()
+        # 포트 바인딩 재시도 (재시작 시 이전 프로세스 포트 점유 대기)
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                await self.start()
+                break
+            except OSError as e:
+                if "address already in use" in str(e) and attempt < max_retries - 1:
+                    wait = 3 * (attempt + 1)
+                    logger.warning(f"[대시보드] 포트 {self.port} 점유 중 — {wait}초 후 재시도 ({attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(f"[대시보드] 포트 바인딩 실패: {e}")
+                    return
 
+        try:
             # SSE 브로드캐스트 루프 실행
             await self.sse_manager.run_broadcast_loop()
-
         except asyncio.CancelledError:
             pass
         except Exception as e:
