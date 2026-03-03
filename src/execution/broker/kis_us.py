@@ -528,7 +528,11 @@ class KISUSBroker:
             "total_pnl_pct": float(output3.get("TOT_EVLU_PFLS_RT", "0") or "0"),
         }
 
-    async def get_quote(self, symbol: str, exchange: str = "NASD") -> dict:
+    # 거래소 코드 변환 (주문용 NASD → 시세조회용 NAS)
+    _EXCD_QUOTE_MAP = {"NASD": "NAS", "NAS": "NAS", "NYSE": "NYS", "NYS": "NYS",
+                        "AMEX": "AMS", "AMS": "AMS"}
+
+    async def get_quote(self, symbol: str, exchange: str = "NAS") -> dict:
         """
         해외주식 현재가 조회.
 
@@ -536,9 +540,11 @@ class KISUSBroker:
             {price, change, change_pct, volume, high, low, open}
         """
         url = f"{self.config.base_url}/uapi/overseas-price/v1/quotations/price"
+        # 거래소 코드 변환 (NASD→NAS, NYSE→NYS, AMEX→AMS)
+        excd = self._EXCD_QUOTE_MAP.get(exchange, exchange)
         params = {
             "AUTH": "",
-            "EXCD": exchange,
+            "EXCD": excd,
             "SYMB": symbol,
         }
 
