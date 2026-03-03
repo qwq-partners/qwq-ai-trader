@@ -207,11 +207,11 @@ class USAPIHandler:
         return web.json_response({
             "can_trade": metrics.can_trade,
             "daily_loss_pct": round(metrics.daily_loss_pct, 2),
-            "daily_loss_limit_pct": rm._config.daily_max_loss_pct,
+            "daily_loss_limit_pct": rm.config.daily_max_loss_pct,
             "daily_trades": metrics.daily_trades,
             "daily_max_trades": 999,
             "position_count": len(engine.portfolio.positions),
-            "max_positions": rm._config.max_positions,
+            "max_positions": rm.config.max_positions,
             "consecutive_losses": metrics.consecutive_losses,
             "signals_generated": signals_count,
             "ws_subscribed": ws_sub,

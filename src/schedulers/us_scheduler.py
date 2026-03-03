@@ -418,7 +418,7 @@ class USScheduler:
         # ── 동적 max_price (가용 현금 × max_position_pct%) ─────────────
         uni_cfg = eng.config_raw.get("universe") or {}
         uni_max_price = float(uni_cfg.get("max_price", 0))
-        risk_cfg = eng.risk_manager._config if hasattr(eng.risk_manager, '_config') else eng.risk_manager.config
+        risk_cfg = eng.risk_manager.config
         max_pos_pct = getattr(risk_cfg, 'max_position_pct', 25.0)
         dynamic_max_price = float(eng.portfolio.cash) * (max_pos_pct / 100)
         effective_max_price = uni_max_price if uni_max_price > 0 else dynamic_max_price
@@ -1389,7 +1389,7 @@ class USScheduler:
                     _daily_loss_alerted = False
                     _daily_loss_alert_date = today
 
-                risk_cfg = eng.risk_manager._config if hasattr(eng.risk_manager, '_config') else eng.risk_manager.config
+                risk_cfg = eng.risk_manager.config
                 warn_threshold = getattr(risk_cfg, 'daily_max_loss_pct', 3.0) * 0.67
                 if not _daily_loss_alerted and metrics.daily_loss_pct <= -warn_threshold:
                     _daily_loss_alerted = True
