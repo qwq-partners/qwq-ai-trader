@@ -872,10 +872,12 @@ class KISUSBroker:
         mixn_map = {1: "0", 2: "1", 3: "2", 5: "3", 10: "4", 15: "5", 20: "6"}
         mixn = mixn_map.get(minutes_ago, "3")  # 기본 5분전
 
+        # 거래소 코드 변환 (시세 조회용)
+        excd = self._EXCD_QUOTE_MAP.get(exchange, exchange)
         params = {
             "KEYB":     "",
             "AUTH":     "",
-            "EXCD":     exchange,
+            "EXCD":     excd,
             "MIXN":     mixn,
             "VOL_RANG": str(min_volume),
         }
