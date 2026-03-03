@@ -778,10 +778,14 @@ class UnifiedTradingBot:
             await self._fill_name_cache_from_journal()
 
             # KR 컨텍스트 등록
+            from src.utils.session import KRSession
+            kr_session = KRSession()
+
             kr_ctx = MarketContext(
                 market=Market.KRX,
                 enabled=True,
                 broker=self.broker,
+                session=kr_session,
                 portfolio=self.engine.portfolio,
                 risk_mgr=self.risk_manager,
                 exit_mgr=self.exit_manager,
@@ -1154,7 +1158,7 @@ class UnifiedTradingBot:
             # 4. 대시보드 서버
             if self.dashboard:
                 tasks.append(asyncio.create_task(
-                    self.dashboard.start(), name="dashboard"
+                    self.dashboard.run(), name="dashboard"
                 ))
                 logger.info("[대시보드] 서버 시작")
 

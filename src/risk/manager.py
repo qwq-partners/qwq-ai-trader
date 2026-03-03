@@ -258,7 +258,8 @@ class RiskManager:
         if equity <= 0:
             return False
 
-        effective_pnl = portfolio.daily_pnl
+        # effective_daily_pnl = 실현 + (현재 미실현 - 시작 미실현)
+        effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
         daily_pnl_pct = float(effective_pnl / equity * 100)
 
         if self.market == "KR":

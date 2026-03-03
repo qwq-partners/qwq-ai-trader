@@ -612,7 +612,7 @@ class DailyReportGenerator:
                     except Exception as e:
                         logger.debug(f"[결과] {rec.symbol} 네이버 조회 실패: {e}")
 
-                if price and price > 0:
+                if price is not None and price > 0:
                     rec.result_price = price
                     if rec.prev_close > 0:
                         rec.result_pct = (rec.result_price - rec.prev_close) / rec.prev_close * 100

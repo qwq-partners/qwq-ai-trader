@@ -175,7 +175,9 @@ class KISUSBroker:
     def is_connected(self) -> bool:
         if self._session is None or self._session.closed:
             return False
-        return self._token is not None and self._token_mgr._is_token_valid()
+        return (self._token is not None
+                and self._token_mgr is not None
+                and self._token_mgr._is_token_valid())
 
     # ============================================================
     # 주문

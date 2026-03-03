@@ -1043,7 +1043,7 @@ class TradeStorage:
                     SELECT COUNT(*) FROM trade_events
                     WHERE trade_id = $1 AND event_type = 'SELL'
                 """, row['id'])
-                if sell_count and sell_count > 1:
+                if sell_count is not None and sell_count > 1:
                     logger.debug(f"[PnL보정] {sym} 분할매도 {sell_count}건 — trades 테이블 보정 건너뜀")
                     continue
 

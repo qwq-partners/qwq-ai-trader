@@ -176,6 +176,8 @@ class KISBroker(BaseBroker):
             return False
         if self._token is None:
             return False
+        if self._token_mgr is None:
+            return False
         # 토큰 매니저의 유효성 체크 활용 (만료 5분 전이면 갱신 필요)
         return self._token_mgr._is_token_valid()
 
