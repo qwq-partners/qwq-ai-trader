@@ -846,7 +846,8 @@ class UnifiedTradingBot:
             # 실제 잔고 동기화
             if not self.dry_run and us_engine.broker:
                 try:
-                    balance = await us_engine.broker.get_account_balance()
+                    balance = await us_engine.broker.get_balance()
+                    balance = balance.get("account", {}) if balance else {}
                     if balance:
                         actual_capital = balance.get('total_equity', 0)
                         available_cash = balance.get('available_cash', 0)
