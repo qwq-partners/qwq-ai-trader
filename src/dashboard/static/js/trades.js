@@ -586,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadUSTrades(dateStr) {
     try {
-        const trades = await fetch("/api/us-proxy/api/us/trades?date=" + (dateStr || ""))
+        const trades = await fetch("/api/us/trades?date=" + (dateStr || ""))
             .then(r => r.json()).catch(() => []);
         renderUSTrades(trades);
     } catch (e) {

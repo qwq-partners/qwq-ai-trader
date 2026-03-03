@@ -147,7 +147,7 @@ function renderScreening(results) {
 // ── US 테마 ────────────────────────────────────────────────────────────────
 async function loadUSThemes() {
     try {
-        const themes = await api('/api/us-proxy/api/us/themes');
+        const themes = await api('/api/us/themes');
         renderUSThemes(themes);
     } catch (e) {
         console.warn('US 테마 로드 실패 (봇 오프라인?):', e);
@@ -243,7 +243,7 @@ function renderUSThemes(themes) {
 // ── US 스크리닝 ────────────────────────────────────────────────────────────
 async function loadUSScreening() {
     try {
-        const results = await api('/api/us-proxy/api/us/screening');
+        const results = await api('/api/us/screening');
         renderUSScreening(results);
     } catch (e) {
         console.warn('US 스크리닝 로드 실패 (봇 오프라인?):', e);

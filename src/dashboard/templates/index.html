@@ -454,6 +454,27 @@
 
         </div><!-- /markets-grid -->
 
+        <!-- ═══ US SCREENING ═══ -->
+        <div id="us-screening-card" class="card mc mc-us" style="padding:16px 22px;margin-bottom:16px;">
+            <div class="mc-header" style="margin-bottom:10px;">
+                <span class="mc-title mc-title-us" style="font-size:.95rem;font-weight:700;">US 스크리닝 TOP 10</span>
+                <span id="us-screen-time" style="font-size:.68rem;color:var(--text-muted);margin-left:auto;"></span>
+            </div>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;font-size:.78rem;border-collapse:collapse;">
+                    <thead><tr style="color:var(--text-muted);border-bottom:1px solid var(--border);">
+                        <th style="text-align:left;padding:4px 6px;">종목</th>
+                        <th style="text-align:right;padding:4px 6px;">가격</th>
+                        <th style="text-align:right;padding:4px 6px;">등락</th>
+                        <th style="text-align:right;padding:4px 6px;">5D%</th>
+                        <th style="text-align:right;padding:4px 6px;">RSI</th>
+                        <th style="text-align:right;padding:4px 6px;">점수</th>
+                    </tr></thead>
+                    <tbody id="us-screening-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- (compatibility stub — JS applyMarketFilter 참조용) -->
         <div id="us-summary-section" style="display:none;"></div>
 

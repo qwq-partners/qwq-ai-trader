@@ -321,8 +321,8 @@ function insertPositionDetailRow(afterRow, positions) {
 async function loadUSEquity() {
     try {
         const [portfolio, positions] = await Promise.all([
-            fetch('/api/us-proxy/api/us/portfolio').then(r => r.ok ? r.json() : null),
-            fetch('/api/us-proxy/api/us/positions').then(r => r.ok ? r.json() : null),
+            fetch('/api/us/portfolio').then(r => r.ok ? r.json() : null),
+            fetch('/api/us/positions').then(r => r.ok ? r.json() : null),
         ]);
         renderUSEquity(portfolio, positions);
     } catch (e) {

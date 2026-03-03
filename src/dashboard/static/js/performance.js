@@ -355,8 +355,8 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadUSPerformance() {
     try {
         const [trades, portfolio] = await Promise.all([
-            fetch("/api/us-proxy/api/us/trades").then(r => r.json()).catch(() => []),
-            fetch("/api/us-proxy/api/us/portfolio").then(r => r.json()).catch(() => {}),
+            fetch("/api/us/trades").then(r => r.json()).catch(() => []),
+            fetch("/api/us/portfolio").then(r => r.json()).catch(() => {}),
         ]);
         const total = trades.length;
         const wins = trades.filter(t => (t.pnl || 0) > 0).length;

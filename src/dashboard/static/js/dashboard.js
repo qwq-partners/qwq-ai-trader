@@ -797,11 +797,11 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadUSData() {
     try {
         const [status, portfolio, positions, signals, risk, extOvs] = await Promise.all([
-            fetch("/api/us-proxy/api/us/status").then(r => r.json()).catch(() => ({ offline: true })),
-            fetch("/api/us-proxy/api/us/portfolio").then(r => r.json()).catch(() => ({ offline: true })),
-            fetch("/api/us-proxy/api/us/positions").then(r => r.json()).catch(() => []),
-            fetch("/api/us-proxy/api/us/signals").then(r => r.ok ? r.json() : []).catch(() => []),
-            fetch("/api/us-proxy/api/us/risk").then(r => r.json()).catch(() => null),
+            fetch("/api/us/status").then(r => r.json()).catch(() => ({ offline: true })),
+            fetch("/api/us/portfolio").then(r => r.json()).catch(() => ({ offline: true })),
+            fetch("/api/us/positions").then(r => r.json()).catch(() => []),
+            fetch("/api/us/signals").then(r => r.ok ? r.json() : []).catch(() => []),
+            fetch("/api/us/risk").then(r => r.json()).catch(() => null),
             fetch("/api/accounts/overseas").then(r => r.json()).catch(() => ({ positions: [], summary: {} })),
         ]);
 
