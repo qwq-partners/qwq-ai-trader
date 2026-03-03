@@ -66,6 +66,20 @@ sse.on('external_accounts', (data) => {
     renderExternalAccounts(data);
 });
 
+// US SSE 이벤트 핸들러
+sse.on('us_status', (data) => {
+    if (typeof renderUSStatus === 'function') renderUSStatus(data);
+});
+sse.on('us_portfolio', (data) => {
+    if (typeof renderUSPortfolio === 'function') renderUSPortfolio(data);
+});
+sse.on('us_positions', (data) => {
+    if (typeof renderUSPositions === 'function') renderUSPositions(data);
+});
+sse.on('us_risk', (data) => {
+    if (typeof renderUSRisk === 'function') renderUSRisk(data);
+});
+
 // ============================================================
 // 포지션 테이블
 // ============================================================
