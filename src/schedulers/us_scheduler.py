@@ -869,6 +869,9 @@ class USScheduler:
             cash_val = account_info.get("available_cash")
             if cash_val is not None and float(cash_val) > 0:
                 eng.portfolio.cash = Decimal(str(cash_val))
+            equity_val = account_info.get("total_equity")
+            if equity_val is not None and float(equity_val) > 0:
+                eng.portfolio.initial_capital = Decimal(str(equity_val))
 
         # highest_price + exit_stages 캐시 로드
         hp_cache = self._load_highest_prices()
@@ -951,6 +954,10 @@ class USScheduler:
                     logger.debug(f"[US 동기화] {symbol} — KIS에 없지만 pending 주문 있어 유지")
                     continue
                 pos = eng.portfolio.positions.pop(symbol)
+                # 매도 금액을 현금에 반영 (KIS API에서 현금 조회 불가 시 대비)
+                sell_proceeds = pos.current_price * pos.quantity
+                eng.portfolio.cash += sell_proceeds
+                eng.portfolio.daily_pnl += pos.unrealized_pnl
                 eng.exit_manager.on_position_closed(symbol)
                 eng._pending_symbols.discard(symbol)
                 eng._ws_last_exit_check.pop(symbol, None)
