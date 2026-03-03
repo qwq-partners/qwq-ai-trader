@@ -61,40 +61,28 @@ def acquire_singleton_lock() -> bool:
 
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1단계: 기존 프로세스 종료
+    # 1단계: PID 파일에서 기존 프로세스 종료 (안전: PID 파일에 기록된 프로세스만 종료)
     try:
-        import psutil
-        my_pid = os.getpid()
-        others = []
-        for proc in psutil.process_iter(['pid', 'cmdline']):
-            try:
-                pid = proc.info['pid']
-                if pid == my_pid:
-                    continue
-                cmdline = ' '.join(proc.info.get('cmdline') or [])
-                if 'run_trader.py' in cmdline and 'grep' not in cmdline:
-                    others.append(pid)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-
-        if others:
-            logger.warning(f"기존 트레이더 프로세스 발견: {others} — 종료 시도")
-            for pid in others:
+        if PID_FILE.exists():
+            old_pid = int(PID_FILE.read_text().strip())
+            if old_pid != os.getpid():
                 try:
-                    os.kill(pid, signal.SIGTERM)
+                    os.kill(old_pid, signal.SIGTERM)
+                    logger.warning(f"기존 프로세스 PID={old_pid} SIGTERM 전송")
+                    time.sleep(3)
+                    try:
+                        os.kill(old_pid, 0)  # 아직 살아있는지 확인
+                        os.kill(old_pid, signal.SIGKILL)
+                        logger.warning(f"기존 프로세스 PID={old_pid} SIGKILL 전송")
+                        time.sleep(1)
+                    except ProcessLookupError:
+                        pass
                 except ProcessLookupError:
-                    pass
-            time.sleep(3)
-            for pid in others:
-                try:
-                    if psutil.pid_exists(pid):
-                        os.kill(pid, signal.SIGKILL)
-                        logger.warning(f"PID {pid} SIGKILL 전송")
-                except ProcessLookupError:
-                    pass
-            time.sleep(1)
-    except ImportError:
-        logger.warning("psutil 미설치 — 기존 프로세스 확인 생략")
+                    pass  # 이미 종료됨
+                except ValueError:
+                    pass  # PID 파일 손상
+    except Exception as e:
+        logger.debug(f"기존 프로세스 확인 실패: {e}")
 
     # 2단계: flock 획득 (non-blocking)
     try:
