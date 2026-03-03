@@ -21,15 +21,22 @@
 - HTML 템플릿(8개) 누락 복사
 - `rm._config` → `rm.config` (AttributeError 수정, 3곳)
 
-### 검증 결과
+### 2차 심층 리뷰 (P0×3 + P1×3 추가 수정)
+- **P0**: on_fill에서 `update_position(fill)` 호출 추가 (체결 즉시 포트폴리오 갱신)
+- **P0**: ExitManager에 float 대신 Decimal 전달 (TypeError 해결)
+- **P0**: on_order에서 `event.order` 직접 사용 (order_type/strategy 보존)
+- **P1**: 매수 체결 시 ExitManager 즉시 등록 (2분 지연 → 즉시)
+- **P1**: 매도 체결 시 `_exit_pending_symbols` 즉시 해제 (3분 지연 → 즉시)
+
+### 최종 검증 결과
 | 흐름 | 상태 |
 |------|------|
-| KR 장중 스크리닝 → 매수 | 수정 완료 (ORDER 핸들러) |
-| KR 체결 확인 → 포지션 등록 | PARTIAL (2분 동기화 의존) |
-| KR 분할 익절/손절 → 매도 | 수정 완료 (update_price) |
+| KR 장중 스크리닝 → 매수 | PASS (ORDER 핸들러 + event.order) |
+| KR 체결 확인 → 포지션 등록 | PASS (on_fill에서 update_position + ExitManager 등록) |
+| KR 분할 익절/손절 → 매도 | PASS (update_price + Decimal) |
 | US 스크리닝 → 매수 | PASS |
 | US 청산 → 매도 | PASS |
-| KR 배치 스캔 → T+1 실행 | 수정 완료 (ORDER 핸들러) |
+| KR 배치 스캔 → T+1 실행 | PASS (ORDER 핸들러) |
 
 ---
 
