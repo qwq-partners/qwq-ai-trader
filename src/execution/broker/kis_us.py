@@ -405,18 +405,19 @@ class KISUSBroker:
         if isinstance(output2, list):
             output2 = output2[0] if output2 else {}
 
-        # output2에서 예수금(frcr_dncl_amt)과 총평가(tot_evlu_amt) 추출
-        available_cash = float(output2.get("frcr_dncl_amt", "0") or "0")
-        total_evlu_amt = float(output2.get("tot_evlu_amt", "0") or "0")
-        total_pnl      = float(output2.get("ovrs_tot_pfls", "0") or "0")
-
-        # 총자산 = 예수금 + 보유종목 평가금
-        stock_value = sum(p["qty"] * p["current_price"] for p in positions)
-        total_equity = available_cash + stock_value if available_cash > 0 else total_evlu_amt
+        # output2 핵심 필드:
+        #   frcr_dncl_amt  = 외화 예수금 (주문 가능 USD)
+        #   frcr_evlu_amt  = 보유주식 평가금 (USD)
+        #   ovrs_tot_pfls  = 총 평가손익
+        # 총 미국 자산 = frcr_dncl_amt + frcr_evlu_amt
+        available_cash  = float(output2.get("frcr_dncl_amt", "0") or "0")
+        stock_eval_amt  = float(output2.get("frcr_evlu_amt", "0") or "0")
+        total_pnl       = float(output2.get("ovrs_tot_pfls", "0") or "0")
+        total_equity    = available_cash + stock_eval_amt
 
         logger.debug(
-            f"[잔고] output2: 예수금=${available_cash:.2f}, 총평가=${total_evlu_amt:.2f}, "
-            f"종목평가=${stock_value:.2f}, 총손익=${total_pnl:.2f}"
+            f"[잔고] output2: 예수금=${available_cash:.2f}, 주식평가=${stock_eval_amt:.2f}, "
+            f"총자산=${total_equity:.2f}, 총손익=${total_pnl:.2f}"
         )
 
         # CTRP6504R 폴백 (output2에 예수금이 없을 때 — 장 마감 후 가용)
@@ -447,9 +448,10 @@ class KISUSBroker:
                 pass  # 장중에는 HTTP 500 → 무시
 
         account = {
-            "available_cash": available_cash if available_cash > 0 else None,
-            "total_equity":   total_equity if total_equity > 0 else None,
-            "total_pnl":      total_pnl,
+            "available_cash":  available_cash if available_cash > 0 else None,
+            "total_equity":    total_equity if total_equity > 0 else None,
+            "stock_eval_amt":  stock_eval_amt,
+            "total_pnl":       total_pnl,
         }
 
         return {"positions": positions, "account": account}
