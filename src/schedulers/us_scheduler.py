@@ -742,7 +742,7 @@ class USScheduler:
         reason = exit_signal.get("reason", "")
 
         # ExitManager가 직접 수량을 제공한 경우 사용
-        sell_qty = exit_signal.get("qty", 0)
+        sell_qty = int(exit_signal.get("qty", 0))
         if sell_qty <= 0:
             sell_qty = int(position.quantity * ratio)
 
