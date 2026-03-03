@@ -22,8 +22,8 @@ _REC_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 
 # 프로젝트 내 모듈
 from ..utils.telegram import get_telegram_notifier, TelegramNotifier
-from ..signals.screener import get_screener, ScreenedStock
-from ..signals.sentiment.theme_detector import get_theme_detector, NewsCollector
+from ..signals.screener.kr_screener import get_screener, ScreenedStock
+from ..signals.sentiment.kr_theme_detector import get_theme_detector, NewsCollector
 from ..data.storage.news_storage import get_news_storage
 
 

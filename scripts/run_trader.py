@@ -1161,7 +1161,7 @@ class UnifiedTradingBot:
             # 5. WebSocket 피드 (KR)
             if self.ws_feed and not self.dry_run:
                 tasks.append(asyncio.create_task(
-                    self.ws_feed.start(), name="kr_ws_feed"
+                    self.ws_feed.run(), name="kr_ws_feed"
                 ))
 
             # 모든 태스크 실행
@@ -1214,7 +1214,7 @@ class UnifiedTradingBot:
         # WebSocket 종료
         if self.ws_feed:
             try:
-                await self.ws_feed.stop()
+                await self.ws_feed.disconnect()
             except Exception as e:
                 logger.error(f"KR WebSocket 종료 실패: {e}")
 
