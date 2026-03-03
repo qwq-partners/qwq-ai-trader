@@ -1,0 +1,1523 @@
+"""
+AI Trading Bot v2 - 테마 탐지 시스템
+
+뉴스와 시장 데이터를 분석하여 현재 핫한 테마를 실시간 탐지합니다.
+
+핵심 기능:
+1. 뉴스 수집 (네이버 금융)
+2. LLM 기반 테마 추출
+3. 테마-종목 매핑
+4. 테마 강도 스코어링
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import re
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
+from typing import Dict, List, Optional, Set, Any, Tuple
+import aiohttp
+from loguru import logger
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    logger.warning("scikit-learn not available - similarity-based deduplication disabled")
+
+from src.core.types import Theme
+from src.core.event import ThemeEvent
+from src.utils.llm import LLMManager, LLMTask, get_llm_manager
+from src.data.storage.news_storage import (
+    NewsStorage, NewsArticle as StoredNewsArticle, ThemeRecord, get_news_storage
+)
+
+
+@dataclass
+class NewsArticle:
+    """뉴스 기사"""
+    title: str
+    content: str = ""
+    url: str = ""
+    source: str = ""
+    published_at: datetime = field(default_factory=datetime.now)
+
+    @property
+    def text(self) -> str:
+        """제목 + 본문"""
+        return f"{self.title}\n{self.content}" if self.content else self.title
+
+
+@dataclass
+class ThemeInfo:
+    """테마 정보"""
+    name: str
+    keywords: List[str] = field(default_factory=list)
+    related_stocks: List[str] = field(default_factory=list)  # 종목코드
+    news_count: int = 0
+    mention_count: int = 0
+    score: float = 0.0
+    detected_at: datetime = field(default_factory=datetime.now)
+    last_updated: datetime = field(default_factory=datetime.now)
+    news_titles: List[str] = field(default_factory=list)   # 관련 뉴스 제목 (최대 5개, 하위 호환)
+    news_items: List[dict] = field(default_factory=list)   # 관련 뉴스 [{title, url}] (최대 5개)
+
+    def to_theme(self) -> Theme:
+        """Theme 객체로 변환"""
+        return Theme(
+            name=self.name,
+            keywords=self.keywords,
+            symbols=self.related_stocks,
+            score=self.score,
+            news_count=self.news_count,
+            detected_at=self.detected_at,
+        )
+
+
+# ============================================================
+# 한국 시장 테마-종목 매핑 (기본 데이터)
+# ============================================================
+
+DEFAULT_THEME_STOCKS = {
+    "AI/반도체": ["005930", "000660", "042700", "403870", "357780"],  # 삼전, 하이닉스, 한미반도체, HPSP, 하이브
+    "2차전지": ["373220", "006400", "247540", "086520", "003670"],   # LG에너지, 삼성SDI, 에코프로BM, 에코프로, 포스코퓨처엠
+    "바이오": ["207940", "068270", "326030", "196170", "091990"],    # 삼바, 셀트리온, SK바이오팜, 알테오젠, 셀트리온헬스
+    "로봇": ["277810", "454910", "090460", "049950", "012510"],      # 레인보우로보, 두산로보, 비에이치아이, 엘앤에프, 두산
+    "방산": ["012450", "079550", "047810", "006260", "012750"],      # 한화에어로, LIG넥스원, 한국항공우주, 한화, 에스원
+    "조선": ["010140", "009540", "042660", "042670", "267250"],      # 삼성중공업, 한국조선해양, 대우조선해양, HD현대인프라코어, HD현대
+    "금융/은행": ["105560", "086790", "055550", "024110", "316140"], # KB금융, 하나금융, 신한지주, 기업은행, 우리금융
+    "자동차": ["005380", "000270", "012330", "161390", "204320"],    # 현대차, 기아, 현대모비스, 한국타이어, 만도
+    "엔터": ["352820", "041510", "122870", "035900", "293480"],      # 하이브, SM, YG, JYP, 카카오게임즈
+    "게임": ["263750", "112040", "036570", "251270", "194480"],      # 펄어비스, 위메이드, 엔씨소프트, 넷마블, 데브시스터즈
+    "화장품": ["090430", "051900", "069960", "003850", "214370"],    # 아모레퍼시픽, LG생활건강, 현대백화점, 콜마HD, 케어젠
+    "인터넷/플랫폼": ["035720", "035420", "263750", "036570", "251270"], # 카카오, 네이버
+    "건설": ["000720", "028260", "047040", "034730", "000210"],      # 현대건설, 삼성물산, 대우건설, SK에코플랜트, DL
+    "원자력": ["009830", "034020", "092870", "042600", "331910"],    # 한화솔루션, 두산에너빌리티, 마이크로, 새로닉스, 코스텍시스템
+    "탄소중립": ["009830", "117580", "003580", "267260", "293490"],  # 한화솔루션, 대성에너지, 넥스틸, 현대일렉트릭, 카카오페이
+}
+
+# 테마 키워드 매핑
+THEME_KEYWORDS = {
+    "AI/반도체": ["반도체", "AI", "인공지능", "HBM", "GPU", "엔비디아", "메모리", "파운드리", "TSMC", "삼성전자", "SK하이닉스"],
+    "2차전지": ["2차전지", "배터리", "전기차", "EV", "리튬", "양극재", "음극재", "분리막", "전해질", "에코프로", "LG에너지"],
+    "바이오": ["바이오", "신약", "임상", "FDA", "의약품", "제약", "셀트리온", "삼성바이오", "항암제", "항체"],
+    "로봇": ["로봇", "휴머노이드", "자동화", "협동로봇", "산업용로봇", "테슬라봇", "보스턴다이나믹스"],
+    "방산": ["방산", "무기", "미사일", "K방산", "수출", "국방", "한화에어로스페이스", "LIG넥스원"],
+    "조선": ["조선", "LNG선", "컨테이너선", "수주", "HD현대", "삼성중공업", "한국조선해양"],
+    "원자력": ["원전", "원자력", "SMR", "소형모듈원자로", "두산에너빌리티", "핵발전"],
+    "탄소중립": ["탄소중립", "신재생", "태양광", "풍력", "ESG", "그린뉴딜", "수소"],
+}
+
+
+# ============================================================
+# 주요 종목 이름→코드 매핑 (LLM 프롬프트 힌트용)
+# ============================================================
+KNOWN_STOCKS = {
+    "삼성전자": "005930", "SK하이닉스": "000660", "현대차": "005380",
+    "LG에너지솔루션": "373220", "삼성바이오로직스": "207940", "삼성바이오": "207940",
+    "셀트리온": "068270", "네이버": "035420", "카카오": "035720",
+    "기아": "000270", "포스코홀딩스": "005490", "삼성SDI": "006400",
+    "KB금융": "105560", "한화에어로스페이스": "012450", "한화에어로": "012450",
+    "HD현대중공업": "329180", "에코프로BM": "247540", "에코프로비엠": "247540",
+    "에코프로": "086520", "LG화학": "051910", "현대모비스": "012330",
+    "POSCO홀딩스": "005490", "SK이노베이션": "096770", "LG전자": "066570",
+    "삼성물산": "028260", "한국전력": "015760", "하나금융지주": "086790",
+    "신한지주": "055550", "SK텔레콤": "017670", "KT": "030200",
+    "한미반도체": "042700", "두산에너빌리티": "034020", "포스코퓨처엠": "003670",
+    "알테오젠": "196170", "HD현대": "267250", "LIG넥스원": "079550",
+    "한국항공우주": "047810", "삼성중공업": "010140", "하이브": "352820",
+    "크래프톤": "259960", "SK바이오팜": "326030", "카카오뱅크": "323410",
+    "SK": "034730", "LG": "003550", "한화솔루션": "009830",
+    "현대건설": "000720", "만도": "204320", "한국타이어앤테크놀로지": "161390",
+    "HPSP": "403870", "레인보우로보틱스": "277810", "두산로보틱스": "454910",
+    "한화": "006260", "우리금융": "316140", "기업은행": "024110",
+    "SM": "041510", "YG": "122870", "JYP": "035900",
+    "펄어비스": "263750", "위메이드": "112040", "엔씨소프트": "036570",
+    "넷마블": "251270", "아모레퍼시픽": "090430", "LG생활건강": "051900",
+    "현대일렉트릭": "267260", "대우조선해양": "042660",
+    "한국조선해양": "009540", "HD현대인프라코어": "042670",
+}
+
+
+class NewsCollector:
+    """뉴스 수집기 (네이버 + 다음 금융 + 매일경제 RSS + 유사도 기반 중복 제거)"""
+
+    def __init__(self, client_id: str = "", client_secret: str = "", storage=None):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._storage = storage
+
+        # 네이버 API 키가 없으면 환경변수에서 로드
+        if not self.client_id:
+            import os
+            self.client_id = os.getenv("NAVER_CLIENT_ID", "")
+            self.client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
+
+        # 중복 제거용 캐시 (SHA1 해시)
+        self._seen_keys: Set[str] = set()
+
+        # 유사도 기반 중복 제거용 캐시 (제목+본문)
+        self._similarity_cache: List[Dict[str, Any]] = []
+        self._similarity_threshold = 0.90  # 유사도 임계값 (0.90 = 더 유사해야 중복 판정)
+        self._cache_days = 7  # 캐시 유지 기간 (일)
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self):
+        """HTTP 세션 종료"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    @staticmethod
+    def _make_dedupe_key(title: str, url: str) -> str:
+        """제목+URL 기반 SHA1 중복 키"""
+        raw = f"{title.strip()}|{url.strip()}"
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def _is_duplicate(self, title: str, url: str) -> bool:
+        """중복 여부 체크 (SHA1 해시 기반)"""
+        key = self._make_dedupe_key(title, url)
+        if key in self._seen_keys:
+            return True
+        self._seen_keys.add(key)
+        return False
+
+    async def load_recent_news_for_similarity(self):
+        """DB에서 최근 뉴스를 로드하여 유사도 캐시 초기화 (최근 7일)"""
+        if not self._storage or not SKLEARN_AVAILABLE:
+            return
+
+        try:
+            # hours = 7일 * 24시간 = 168시간
+            recent_news = await self._storage.get_recent_news(
+                hours=self._cache_days * 24,
+                limit=500
+            )
+
+            self._similarity_cache = [
+                {
+                    "title": news.title,
+                    "content": news.content or "",
+                    "text": f"{news.title}\n{news.content or ''}",
+                    "published_at": news.published_at,
+                }
+                for news in recent_news
+            ]
+
+            logger.info(
+                f"[뉴스 중복 체크] 유사도 캐시 로드: {len(self._similarity_cache)}개 (최근 {self._cache_days}일)"
+            )
+
+        except Exception as e:
+            logger.warning(f"[뉴스 중복 체크] 유사도 캐시 로드 실패: {e}")
+
+    def _is_similar_to_existing(self, article: NewsArticle) -> bool:
+        """
+        유사도 기반 중복 체크 (TF-IDF 코사인 유사도)
+
+        Returns:
+            True if similar article exists (threshold >= 0.85)
+        """
+        if not SKLEARN_AVAILABLE or not self._similarity_cache:
+            return False
+
+        try:
+            # 새 기사 텍스트
+            new_text = article.text.strip()
+            if not new_text or len(new_text) < 10:
+                return False
+
+            # 기존 기사 텍스트
+            existing_texts = [item["text"] for item in self._similarity_cache]
+            all_texts = existing_texts + [new_text]
+
+            # TF-IDF 벡터화
+            vectorizer = TfidfVectorizer(
+                max_features=100,
+                ngram_range=(1, 2),
+                min_df=1,
+            )
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+
+            # 새 기사와 기존 기사들 간의 코사인 유사도
+            new_vec = tfidf_matrix[-1]
+            existing_vecs = tfidf_matrix[:-1]
+            similarities = cosine_similarity(new_vec, existing_vecs)[0]
+
+            # 최대 유사도
+            max_similarity = float(np.max(similarities)) if len(similarities) > 0 else 0.0
+
+            if max_similarity >= self._similarity_threshold:
+                logger.debug(
+                    f"[뉴스 중복] 유사 기사 감지 (유사도 {max_similarity:.2f}): {article.title[:50]}"
+                )
+                return True
+
+            # 중복 아니면 캐시에 추가 (최근 500개 유지)
+            self._similarity_cache.append({
+                "title": article.title,
+                "content": article.content,
+                "text": new_text,
+                "published_at": article.published_at,
+            })
+            if len(self._similarity_cache) > 500:
+                self._similarity_cache = self._similarity_cache[-500:]
+
+            return False
+
+        except Exception as e:
+            logger.warning(f"[뉴스 중복 체크] 유사도 계산 실패: {e}")
+            return False
+
+    async def search_news(
+        self,
+        query: str,
+        display: int = 20,
+        sort: str = "date"
+    ) -> List[NewsArticle]:
+        """네이버 뉴스 검색"""
+        if not self.client_id:
+            logger.warning("네이버 API 키 없음 - 뉴스 수집 건너뜀")
+            return []
+
+        try:
+            session = await self._get_session()
+            url = "https://openapi.naver.com/v1/search/news.json"
+
+            async with session.get(
+                url,
+                headers={
+                    "X-Naver-Client-Id": self.client_id,
+                    "X-Naver-Client-Secret": self.client_secret,
+                },
+                params={
+                    "query": query,
+                    "display": display,
+                    "sort": sort,
+                }
+            ) as resp:
+                if resp.status != 200:
+                    logger.error(f"뉴스 검색 실패: {resp.status}")
+                    return []
+
+                data = await resp.json()
+                articles = []
+
+                for item in data.get("items", []):
+                    # HTML 태그 제거
+                    title = re.sub(r'<[^>]+>', '', item.get("title", ""))
+                    description = re.sub(r'<[^>]+>', '', item.get("description", ""))
+
+                    articles.append(NewsArticle(
+                        title=title,
+                        content=description,
+                        url=item.get("link", ""),
+                        source="naver",
+                    ))
+
+                return articles
+
+        except Exception as e:
+            logger.error(f"뉴스 수집 오류: {e}")
+            return []
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=False,
+    )
+    async def fetch_daum_finance_news(self, limit: int = 20) -> List[NewsArticle]:
+        """다음 금융 뉴스 수집 (최대 3회 재시도)"""
+        try:
+            session = await self._get_session()
+            url = "https://finance.daum.net/content/news"
+            params = {"page": 1, "perPage": limit, "category": "stock"}
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+                "Referer": "https://finance.daum.net/",
+            }
+
+            async with session.get(
+                url, params=params, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] 다음 금융 HTTP {resp.status}")
+                    return []
+
+                # JSON 응답인지 확인 (HTML 반환 시 스킵)
+                content_type = resp.headers.get("Content-Type", "")
+                if "json" not in content_type and "javascript" not in content_type:
+                    logger.debug(f"[뉴스] 다음 금융 비-JSON 응답: {content_type[:50]}")
+                    return []
+
+                data = await resp.json()
+                articles = []
+
+                items = data.get("data", [])
+                if not items:
+                    return []
+
+                for item in items[:limit]:
+                    title = item.get("title", "").strip()
+                    if not title:
+                        continue
+
+                    # 요약 200~300자
+                    summary = item.get("summary", "") or item.get("content", "")
+                    if summary:
+                        summary = re.sub(r'<[^>]+>', '', summary).strip()
+                        summary = summary[:300]
+
+                    news_url = item.get("url", "") or item.get("link", "")
+
+                    pub_str = item.get("createdAt", "") or item.get("publishedAt", "")
+                    pub_dt = datetime.now()
+                    if pub_str:
+                        try:
+                            # ISO 형식 파싱 후 timezone-naive로 변환
+                            parsed = datetime.fromisoformat(
+                                pub_str.replace("Z", "+00:00")
+                            )
+                            # timezone-aware → naive (로컬 시각 유지)
+                            pub_dt = parsed.replace(tzinfo=None)
+                        except Exception:
+                            pass
+
+                    articles.append(NewsArticle(
+                        title=title,
+                        content=summary,
+                        url=news_url,
+                        source="daum",
+                        published_at=pub_dt,
+                    ))
+
+                logger.debug(f"[뉴스] 다음 금융: {len(articles)}건 수집")
+                return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] 다음 금융 수집 오류: {e}")
+            return []
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=False,
+    )
+    async def fetch_mk_rss(self, limit: int = 20) -> List[NewsArticle]:
+        """매일경제 증권 RSS 수집 (최대 3회 재시도)"""
+        try:
+            session = await self._get_session()
+            rss_url = "https://www.mk.co.kr/rss/50200011/"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+            }
+
+            async with session.get(
+                rss_url, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] 매경 RSS HTTP {resp.status}")
+                    return []
+
+                xml_text = await resp.text()
+
+            # XML 파싱
+            root = ET.fromstring(xml_text)
+            articles = []
+            count = 0
+
+            for item in root.iter("item"):
+                if count >= limit:
+                    break
+
+                title_el = item.find("title")
+                title = title_el.text.strip() if title_el is not None and title_el.text else ""
+                if not title:
+                    continue
+
+                link_el = item.find("link")
+                link = link_el.text.strip() if link_el is not None and link_el.text else ""
+
+                desc_el = item.find("description")
+                desc = ""
+                if desc_el is not None and desc_el.text:
+                    desc = re.sub(r'<[^>]+>', '', desc_el.text).strip()
+                    desc = desc[:150]
+
+                pub_dt = datetime.now()
+                pub_el = item.find("pubDate")
+                if pub_el is not None and pub_el.text:
+                    try:
+                        pub_dt = parsedate_to_datetime(pub_el.text.strip())
+                        # timezone naive로 변환
+                        pub_dt = pub_dt.replace(tzinfo=None)
+                    except Exception:
+                        pass
+
+                articles.append(NewsArticle(
+                    title=title,
+                    content=desc,
+                    url=link,
+                    source="mk",
+                    published_at=pub_dt,
+                ))
+                count += 1
+
+            logger.debug(f"[뉴스] 매경 RSS: {len(articles)}건 수집")
+            return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] 매경 RSS 수집 오류: {e}")
+            return []
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=False,
+    )
+    async def fetch_hankyung_rss(self, limit: int = 20) -> List[NewsArticle]:
+        """한국경제 증권 RSS 수집 (최대 3회 재시도)"""
+        try:
+            session = await self._get_session()
+            rss_url = "https://www.hankyung.com/feed/finance"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+            }
+
+            async with session.get(
+                rss_url, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] 한경 RSS HTTP {resp.status}")
+                    return []
+
+                xml_text = await resp.text()
+
+            # XML 파싱
+            root = ET.fromstring(xml_text)
+            articles = []
+            count = 0
+
+            for item in root.iter("item"):
+                if count >= limit:
+                    break
+
+                title_el = item.find("title")
+                title = title_el.text.strip() if title_el is not None and title_el.text else ""
+                if not title:
+                    continue
+
+                link_el = item.find("link")
+                link = link_el.text.strip() if link_el is not None and link_el.text else ""
+
+                desc_el = item.find("description")
+                desc = ""
+                if desc_el is not None and desc_el.text:
+                    desc = re.sub(r'<[^>]+>', '', desc_el.text).strip()
+                    desc = desc[:150]
+
+                pub_dt = datetime.now()
+                pub_el = item.find("pubDate")
+                if pub_el is not None and pub_el.text:
+                    try:
+                        pub_dt = parsedate_to_datetime(pub_el.text.strip())
+                        pub_dt = pub_dt.replace(tzinfo=None)
+                    except Exception:
+                        pass
+
+                articles.append(NewsArticle(
+                    title=title,
+                    content=desc,
+                    url=link,
+                    source="hankyung",
+                    published_at=pub_dt,
+                ))
+                count += 1
+
+            logger.debug(f"[뉴스] 한경 RSS: {len(articles)}건 수집")
+            return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] 한경 RSS 수집 오류: {e}")
+            return []
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=False,
+    )
+    async def fetch_stockplus_news(self, limit: int = 20) -> List[NewsArticle]:
+        """stockplus.com 속보 크롤링 (Next.js SPA — JSON-LD 기반)"""
+        try:
+            session = await self._get_session()
+            base_url = "https://newsroom.stockplus.com"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
+            timeout = aiohttp.ClientTimeout(total=15)
+
+            # 1단계: 목록 페이지에서 JSON-LD의 기사 URL 추출
+            async with session.get(
+                f"{base_url}/breaking-news", headers=headers, timeout=timeout
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] stockplus HTTP {resp.status}")
+                    return []
+                html = await resp.text()
+
+            # JSON-LD Schema에서 itemListElement URL 추출
+            article_urls = re.findall(
+                r'"item"\s*:\s*"(https://newsroom\.stockplus\.com/breaking-news/\d+)"',
+                html
+            )
+            if not article_urls:
+                logger.debug("[뉴스] stockplus: JSON-LD에서 기사 URL 없음")
+                return []
+
+            # 2단계: 개별 기사 페이지에서 JSON-LD NewsArticle 메타데이터 추출 (병렬)
+            article_urls = article_urls[:limit]
+
+            async def _fetch_article(article_url: str) -> Optional[NewsArticle]:
+                try:
+                    async with session.get(
+                        article_url, headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as r:
+                        if r.status != 200:
+                            return None
+                        page = await r.text()
+
+                    # JSON-LD NewsArticle 파싱
+                    ld_blocks = re.findall(
+                        r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+                        page, re.DOTALL
+                    )
+                    for block in ld_blocks:
+                        try:
+                            data = json.loads(block)
+                            if data.get("@type") == "NewsArticle":
+                                headline = data.get("headline", "").strip()
+                                if not headline:
+                                    continue
+                                desc = data.get("description", "")
+                                pub_str = data.get("datePublished", "")
+                                pub_dt = datetime.now()
+                                if pub_str:
+                                    try:
+                                        pub_dt = datetime.fromisoformat(
+                                            pub_str.replace("Z", "+00:00")
+                                        ).replace(tzinfo=None)
+                                    except ValueError:
+                                        pass
+                                return NewsArticle(
+                                    title=headline,
+                                    content=desc,
+                                    url=article_url,
+                                    source="stockplus",
+                                    published_at=pub_dt,
+                                )
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                    return None
+                except Exception:
+                    return None
+
+            tasks = [_fetch_article(url) for url in article_urls]
+            results = await asyncio.gather(*tasks)
+            articles = [a for a in results if a is not None]
+
+            logger.debug(f"[뉴스] stockplus: {len(articles)}건 수집 (시도 {len(article_urls)}건)")
+            return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] stockplus 수집 오류: {e}")
+            return []
+
+    async def get_market_news(self, limit: int = 30) -> List[NewsArticle]:
+        """
+        시장 전반 뉴스 수집 (5개 소스 통합)
+
+        소스별 실패 시 무시, 최소 1개 소스로 동작 보장.
+        1차: SHA1 해시 중복 제거
+        2차: 유사도 기반 중복 제거 (TF-IDF 코사인 유사도 >= 0.85)
+        """
+        # 매 수집 시 SHA1 캐시 초기화
+        self._seen_keys.clear()
+        all_articles: List[NewsArticle] = []
+        source_counts: Dict[str, int] = {}
+
+        # 1. 네이버 뉴스 검색 (호출 간 rate limit)
+        try:
+            queries = ["증시", "코스피", "코스닥", "주식시장"]
+            for i, query in enumerate(queries):
+                articles = await self.search_news(query, display=limit // len(queries))
+                all_articles.extend(articles)
+                if i < len(queries) - 1:
+                    await asyncio.sleep(0.15)
+            source_counts["naver"] = len(all_articles)
+        except Exception as e:
+            logger.debug(f"[뉴스] 네이버 소스 실패 (무시): {e}")
+
+        # 2. 다음 금융 뉴스
+        try:
+            daum_articles = await self.fetch_daum_finance_news(limit=20)
+            before = len(all_articles)
+            all_articles.extend(daum_articles)
+            source_counts["daum"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] 다음 소스 실패 (무시): {e}")
+
+        # 3. 매일경제 RSS
+        try:
+            mk_articles = await self.fetch_mk_rss(limit=20)
+            before = len(all_articles)
+            all_articles.extend(mk_articles)
+            source_counts["mk"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] 매경 소스 실패 (무시): {e}")
+
+        # 4. 한국경제 RSS
+        try:
+            hankyung_articles = await self.fetch_hankyung_rss(limit=20)
+            before = len(all_articles)
+            all_articles.extend(hankyung_articles)
+            source_counts["hankyung"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] 한경 소스 실패 (무시): {e}")
+
+        # 5. stockplus 속보
+        try:
+            stockplus_articles = await self.fetch_stockplus_news(limit=20)
+            before = len(all_articles)
+            all_articles.extend(stockplus_articles)
+            source_counts["stockplus"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] stockplus 소스 실패 (무시): {e}")
+
+        # 1차: SHA1 해시 중복 제거 (완전히 동일한 제목+URL)
+        unique_articles: List[NewsArticle] = []
+        for article in all_articles:
+            if not self._is_duplicate(article.title, article.url):
+                unique_articles.append(article)
+
+        # 2차: 유사도 기반 중복 제거 (유사한 기사 제거)
+        final_articles: List[NewsArticle] = []
+        similarity_removed = 0
+        for article in unique_articles:
+            if not self._is_similar_to_existing(article):
+                final_articles.append(article)
+            else:
+                similarity_removed += 1
+
+        # 시간순 정렬 (최신 우선)
+        final_articles.sort(key=lambda a: a.published_at, reverse=True)
+
+        logger.info(
+            f"[뉴스] 수집 완료: 소스별={source_counts}, "
+            f"전체={len(all_articles)}, SHA1제거={len(unique_articles)}, "
+            f"유사도제거={similarity_removed}, 최종={len(final_articles)}"
+        )
+        return final_articles
+
+    async def get_theme_news(self, theme: str, limit: int = 10) -> List[NewsArticle]:
+        """특정 테마 뉴스 수집"""
+        keywords = THEME_KEYWORDS.get(theme, [theme])
+        query = " ".join(keywords[:3])  # 상위 3개 키워드 사용
+        return await self.search_news(query, display=limit)
+
+
+class ThemeDetector:
+    """
+    테마 탐지기
+
+    뉴스를 분석하여 현재 핫한 테마를 탐지합니다.
+    수집된 뉴스와 테마 히스토리는 PostgreSQL에 저장됩니다.
+    """
+
+    # 테마 → 업종 키워드 매핑 (KIS 업종지수 sec_kw in sec_name 매칭)
+    # KIS 표준 업종명: 전기전자, 화학, 의약품, 기계, 운수장비, 서비스업,
+    #   건설업, 전기가스업, 금융업, 은행, 증권, 유통업, 통신업, 철강금속 등
+    THEME_SECTOR_MAP: Dict[str, List[str]] = {
+        "AI/반도체": ["전기전자", "통신업"],
+        "2차전지": ["전기전자", "화학"],
+        "바이오": ["의약품"],
+        "로봇": ["기계", "전기전자"],
+        "방산": ["기계", "운수장비"],
+        "조선": ["운수장비"],
+        "금융/은행": ["은행", "금융업", "증권"],
+        "자동차": ["운수장비"],
+        "엔터": ["서비스업"],
+        "게임": ["서비스업", "통신업"],
+        "화장품": ["화학", "유통업"],
+        "인터넷/플랫폼": ["서비스업", "통신업"],
+        "건설": ["건설업"],
+        "원자력": ["전기가스", "전기전자"],
+        "탄소중립": ["전기가스", "화학"],
+    }
+
+    def __init__(self, llm_manager: Optional[LLMManager] = None, kis_market_data=None, us_market_data=None, stock_master=None):
+        self.llm = llm_manager or get_llm_manager()
+        self.news_collector = NewsCollector()
+        self._kis_market_data = kis_market_data
+        self._us_market_data = us_market_data
+        self._stock_master = stock_master
+
+        # 뉴스/테마 저장소 (PostgreSQL)
+        self._storage: Optional[NewsStorage] = None
+        self._storage_initialized = False
+
+        # 테마 추적
+        self._themes: Dict[str, ThemeInfo] = {}
+        self._last_detection: Optional[datetime] = None
+
+        # 종목별 뉴스 센티멘트 (LLM 결과 저장)
+        # {symbol: {sentiment, impact, direction, theme, reason, updated_at}}
+        self._stock_sentiments: Dict[str, Dict] = {}
+
+        # 설정
+        self.detection_interval_minutes = 30  # 탐지 주기
+        self.min_news_count = 3  # 최소 뉴스 수
+        self.hot_theme_threshold = 70  # 핫 테마 기준 점수
+
+        # 키워드→테마 역매핑 (정규화용)
+        self._keyword_to_theme: Dict[str, str] = {}
+        for theme_name, keywords in THEME_KEYWORDS.items():
+            for kw in keywords:
+                self._keyword_to_theme[kw.lower()] = theme_name
+            # 테마명 자체도 키워드로 등록
+            self._keyword_to_theme[theme_name.lower()] = theme_name
+
+    def _normalize_theme_name(self, raw_name: str) -> str:
+        """LLM 반환 테마명을 DEFAULT_THEME_STOCKS 키로 정규화"""
+        # 1. 정확히 일치
+        if raw_name in DEFAULT_THEME_STOCKS:
+            return raw_name
+
+        # 2. 소문자 비교
+        raw_lower = raw_name.lower().strip()
+        if raw_lower in self._keyword_to_theme:
+            return self._keyword_to_theme[raw_lower]
+
+        # 3. 부분 문자열 매칭 (가장 긴 매칭 우선 → 모호성 방지)
+        candidates = []
+        for key in DEFAULT_THEME_STOCKS:
+            key_lower = key.lower()
+            if raw_lower in key_lower or key_lower in raw_lower:
+                candidates.append(key)
+        if candidates:
+            # 가장 긴 키를 우선 (예: "AI/반도체" > "AI")
+            candidates.sort(key=len, reverse=True)
+            return candidates[0]
+
+        # 4. 키워드 포함 매칭 (가장 긴 키워드 우선)
+        kw_candidates = []
+        for kw, theme in self._keyword_to_theme.items():
+            if kw in raw_lower:
+                kw_candidates.append((len(kw), theme))
+        if kw_candidates:
+            kw_candidates.sort(reverse=True)
+            return kw_candidates[0][1]
+
+        logger.debug(f"[ThemeDetector] 매핑 불가 테마명: {raw_name}")
+        return raw_name
+
+    async def _ensure_storage(self):
+        """저장소 연결 보장"""
+        if not self._storage_initialized:
+            try:
+                self._storage = await get_news_storage()
+                self._storage_initialized = True
+                logger.info("[ThemeDetector] 뉴스 저장소 연결 완료")
+
+                # NewsCollector에도 storage 설정 및 유사도 캐시 초기화
+                self.news_collector._storage = self._storage
+                await self.news_collector.load_recent_news_for_similarity()
+
+            except Exception as e:
+                logger.warning(f"[ThemeDetector] 저장소 연결 실패 (메모리 모드): {e}")
+                self._storage = None
+
+    async def detect_themes(self, force: bool = False) -> List[ThemeInfo]:
+        """
+        테마 탐지 실행
+
+        Args:
+            force: 강제 실행 여부
+        """
+        # 탐지 주기 체크
+        if not force and self._last_detection:
+            elapsed = (datetime.now() - self._last_detection).total_seconds() / 60
+            if elapsed < self.detection_interval_minutes:
+                return list(self._themes.values())
+
+        logger.info("테마 탐지 시작...")
+        self._last_detection = datetime.now()
+
+        # 저장소 연결 보장
+        await self._ensure_storage()
+
+        try:
+            # 1. 시장 뉴스 수집
+            news_articles = await self.news_collector.get_market_news(limit=30)
+
+            if not news_articles:
+                logger.warning("수집된 뉴스 없음")
+                return list(self._themes.values())
+
+            logger.info(f"뉴스 {len(news_articles)}건 수집 완료")
+
+            # 2. LLM으로 테마 + 종목 임팩트 추출 (DB 저장보다 먼저 실행)
+            llm_result = await self._extract_themes_from_news(news_articles)
+            detected_themes = llm_result.get("themes", [])
+            stock_impacts = llm_result.get("stock_impacts", [])
+
+            # 2-1. 뉴스를 DB에 저장 (LLM 결과 후 → sentiment_score 채울 수 있음)
+            if self._storage:
+                stored_articles = [
+                    StoredNewsArticle(
+                        title=a.title,
+                        content=a.content,
+                        url=a.url,
+                        source=a.source,
+                        published_at=a.published_at,
+                        sentiment_score=self._estimate_article_sentiment(a.title),
+                    )
+                    for a in news_articles
+                ]
+                saved = await self._storage.save_news_batch(stored_articles)
+                logger.debug(f"[ThemeDetector] 뉴스 {saved}건 DB 저장")
+
+            if not detected_themes:
+                logger.info("감지된 테마 없음 - 기존 테마 유지")
+                return list(self._themes.values())
+
+            # 2-2. 종목별 센티멘트 파싱 (themes[].stocks + stock_impacts)
+            now = datetime.now()
+
+            # stock_impacts에서 파싱 (새 스케일: -10~+10)
+            for item in stock_impacts:
+                symbol = await self._resolve_stock_symbol(
+                    item.get("symbol", ""), item.get("name", "")
+                )
+                if not symbol:
+                    continue
+                impact = item.get("impact", 0)
+                # impact 부호로 direction 결정
+                direction = "bullish" if impact >= 0 else "bearish"
+                abs_impact = abs(impact)
+                existing = self._stock_sentiments.get(symbol)
+                if not existing or abs_impact > abs(existing.get("impact", 0)):
+                    self._stock_sentiments[symbol] = {
+                        "sentiment": 1.0 if direction == "bullish" else -1.0,
+                        "impact": impact,
+                        "abs_impact": abs_impact,
+                        "direction": direction,
+                        "theme": "",
+                        "reason": item.get("reason", ""),
+                        "updated_at": now,
+                    }
+
+            # 3. 테마 정보 업데이트
+            for theme_data in detected_themes:
+                # themes[].stocks에서 종목 센티멘트 파싱
+                for stock_item in theme_data.get("stocks", []):
+                    symbol = await self._resolve_stock_symbol(
+                        stock_item.get("symbol", ""), stock_item.get("name", "")
+                    )
+                    if not symbol:
+                        continue
+                    impact = stock_item.get("impact", 0)
+                    direction = "bullish" if impact >= 0 else "bearish"
+                    abs_impact = abs(impact)
+                    theme_name_raw = theme_data.get("theme", "")
+                    # 기존 엔트리보다 abs_impact가 높으면 덮어쓰기
+                    existing = self._stock_sentiments.get(symbol)
+                    if not existing or abs_impact > abs(existing.get("impact", 0)):
+                        self._stock_sentiments[symbol] = {
+                            "sentiment": 1.0 if direction == "bullish" else -1.0,
+                            "impact": impact,
+                            "abs_impact": abs_impact,
+                            "direction": direction,
+                            "theme": theme_name_raw,
+                            "reason": f"테마[{theme_name_raw}] 관련",
+                            "updated_at": now,
+                        }
+
+                # 테마명 추출 및 정규화
+                raw_name = theme_data.get("theme", "")
+                if not raw_name:
+                    continue
+
+                theme_name = self._normalize_theme_name(raw_name)
+                if theme_name != raw_name:
+                    logger.info(f"[ThemeDetector] 테마명 정규화: '{raw_name}' → '{theme_name}'")
+
+                # 키워드 매칭으로 관련 뉴스 수집 (최대 5개, 제목+URL)
+                theme_kws = THEME_KEYWORDS.get(theme_name, [theme_name])
+                matched_items: List[dict] = []   # {title, url}
+                for article in news_articles:
+                    if any(kw in article.title for kw in theme_kws):
+                        matched_items.append({
+                            "title": article.title,
+                            "url": getattr(article, "url", "") or "",
+                        })
+                    if len(matched_items) >= 5:
+                        break
+                matched_titles = [item["title"] for item in matched_items]  # 하위 호환
+
+                if theme_name in self._themes:
+                    # 기존 테마 업데이트
+                    theme = self._themes[theme_name]
+                    theme.news_count = theme_data.get("news_count", 0)
+                    theme.score = theme_data.get("score", 0)
+                    theme.last_updated = datetime.now()
+                    theme.news_titles = matched_titles
+                    theme.news_items = matched_items
+                else:
+                    # 새 테마 추가
+                    related_stocks = DEFAULT_THEME_STOCKS.get(theme_name, [])
+
+                    self._themes[theme_name] = ThemeInfo(
+                        name=theme_name,
+                        keywords=THEME_KEYWORDS.get(theme_name, [theme_name]),
+                        related_stocks=related_stocks,
+                        news_count=theme_data.get("news_count", 0),
+                        score=theme_data.get("score", 0),
+                        news_titles=matched_titles,
+                        news_items=matched_items,
+                    )
+
+            if self._stock_sentiments:
+                logger.info(
+                    f"[ThemeDetector] 종목 센티멘트 {len(self._stock_sentiments)}개 갱신"
+                )
+
+            # 3-1. 업종지수 데이터로 테마 점수 보정
+            await self._adjust_scores_by_sector()
+
+            # 3-2. US 시장 오버나이트 데이터로 테마 점수 보정
+            await self._adjust_scores_by_us_market()
+
+            # 4. 오래된 테마 제거 (1시간 이상 업데이트 없음)
+            cutoff = datetime.now() - timedelta(hours=1)
+            self._themes = {
+                name: theme
+                for name, theme in self._themes.items()
+                if theme.last_updated > cutoff
+            }
+
+            # 4-1. 오래된 종목 센티멘트 제거 (1시간 이상)
+            stale_symbols = [
+                sym for sym, data in self._stock_sentiments.items()
+                if data.get("updated_at", datetime.min) < cutoff
+            ]
+            for sym in stale_symbols:
+                del self._stock_sentiments[sym]
+            if stale_symbols:
+                logger.debug(f"[ThemeDetector] 스테일 센티멘트 {len(stale_symbols)}개 제거")
+
+            # 5. 테마 히스토리를 DB에 저장
+            if self._storage and self._themes:
+                theme_records = [
+                    ThemeRecord(
+                        theme_name=theme.name,
+                        score=theme.score,
+                        news_count=theme.news_count,
+                        keywords=theme.keywords,
+                    )
+                    for theme in self._themes.values()
+                ]
+                await self._storage.save_themes_batch(theme_records)
+                logger.debug(f"[ThemeDetector] 테마 {len(theme_records)}개 DB 저장")
+
+            logger.info(f"테마 탐지 완료: {len(self._themes)}개 테마 활성")
+            return list(self._themes.values())
+
+        except Exception as e:
+            logger.exception(f"테마 탐지 오류: {e}")
+            return list(self._themes.values())
+        finally:
+            # LLM 실패 시에도 stale 테마/센티멘트 정리 (무한 유지 방지)
+            try:
+                cutoff = datetime.now() - timedelta(hours=1)
+                self._themes = {
+                    name: theme
+                    for name, theme in self._themes.items()
+                    if theme.last_updated > cutoff
+                }
+                stale_symbols = [
+                    sym for sym, data in self._stock_sentiments.items()
+                    if data.get("updated_at", datetime.min) < cutoff
+                ]
+                for sym in stale_symbols:
+                    del self._stock_sentiments[sym]
+            except Exception:
+                pass  # 정리 실패해도 무시
+
+    async def _get_stock_hints_for_llm(self) -> str:
+        """
+        LLM 프롬프트용 종목 힌트 생성
+
+        1차: kr_stock_master DB에서 KOSPI200+KOSDAQ150 상위 80개
+        2차: KNOWN_STOCKS 폴백
+        """
+        if self._stock_master:
+            try:
+                top_stocks = await self._stock_master.get_top_stocks(80)
+                if top_stocks:
+                    return "\n".join([f"  {s}" for s in top_stocks])
+            except Exception as e:
+                logger.debug(f"[ThemeDetector] stock_master 힌트 로드 실패: {e}")
+
+        # 폴백: KNOWN_STOCKS 상위 40개
+        return "\n".join(
+            [f"  {name}={code}" for name, code in list(KNOWN_STOCKS.items())[:40]]
+        )
+
+    async def _extract_themes_from_news(
+        self,
+        articles: List[NewsArticle]
+    ) -> Dict[str, Any]:
+        """
+        LLM을 사용하여 뉴스에서 테마 + 종목별 임팩트 동시 추출
+
+        Returns:
+            {"themes": [...], "stock_impacts": [...]}
+        """
+        # 뉴스 제목 + 요약(content) 함께 전달 (최대 20개)
+        news_lines = []
+        for a in articles[:20]:
+            line = f"- {a.title}"
+            if a.content:
+                # 요약을 100자로 제한하여 첨부
+                snippet = a.content[:100].strip()
+                if snippet:
+                    line += f" | {snippet}"
+            news_lines.append(line)
+        news_text = "\n".join(news_lines)
+
+        theme_list = list(DEFAULT_THEME_STOCKS.keys())
+        numbered_themes = "\n".join([f"  {i+1}. {t}" for i, t in enumerate(theme_list)])
+
+        # 종목 힌트 (DB 우선, KNOWN_STOCKS 폴백)
+        known_stocks_hint = await self._get_stock_hints_for_llm()
+
+        prompt = f"""다음은 오늘의 한국 주식시장 뉴스입니다 (제목 | 요약):
+
+{news_text}
+
+위 뉴스들을 분석하여 (1) 투자 테마와 (2) 개별 종목 임팩트를 동시에 추출해주세요.
+
+**허용 테마 목록 (반드시 이 중에서만 선택):**
+{numbered_themes}
+
+**참고 - 주요 종목코드:**
+{known_stocks_hint}
+
+다음 JSON 형식으로만 응답하세요:
+{{
+  "themes": [
+    {{
+      "theme": "위 목록의 테마명 그대로",
+      "news_count": 관련 뉴스 수,
+      "score": 0-100 사이의 테마 강도 점수,
+      "reason": "테마 선정 이유 (20자 이내)",
+      "stocks": [
+        {{
+          "symbol": "6자리 종목코드",
+          "name": "종목명",
+          "impact": -10에서 +10 사이 점수,
+          "direction": "bullish 또는 bearish"
+        }}
+      ]
+    }}
+  ],
+  "stock_impacts": [
+    {{
+      "symbol": "6자리 종목코드",
+      "name": "종목명",
+      "impact": -10에서 +10 사이 점수,
+      "direction": "bullish 또는 bearish",
+      "reason": "영향 이유 (30자 이내)"
+    }}
+  ]
+}}
+
+규칙:
+1. themes: 최대 5개 테마, 뉴스 2개 이상인 테마만, 각 테마별 stocks는 최대 5개
+2. stock_impacts: 테마 무관하게 뉴스에 직접 언급된 개별 종목 (최대 10개)
+3. impact 스케일: -10(극단적 악재) ~ 0(무관) ~ +10(극단적 호재). 양수=bullish, 음수=bearish
+4. direction: impact 부호와 일치시킬 것 (양수→bullish, 음수→bearish)
+5. theme 필드는 반드시 위 허용 목록의 테마명을 정확히 사용
+6. symbol은 위 종목코드 힌트 참고, 모르면 빈 문자열"""
+
+        result = await self.llm.complete_json(prompt, task=LLMTask.THEME_DETECTION)
+
+        if "error" in result:
+            logger.error(f"테마 추출 LLM 오류: {result.get('error')}")
+            return {"themes": [], "stock_impacts": []}
+
+        return {
+            "themes": result.get("themes", []),
+            "stock_impacts": result.get("stock_impacts", []),
+        }
+
+    async def get_theme_stocks(self, theme_name: str) -> List[str]:
+        """테마 관련 종목 조회"""
+        theme = self._themes.get(theme_name)
+        if theme:
+            return theme.related_stocks
+
+        # 기본 매핑에서 찾기
+        return DEFAULT_THEME_STOCKS.get(theme_name, [])
+
+    def get_hot_themes(self, min_score: float = 70) -> List[ThemeInfo]:
+        """핫 테마 목록 (점수 기준)"""
+        return [
+            theme for theme in self._themes.values()
+            if theme.score >= min_score
+        ]
+
+    def get_stock_themes(self, symbol: str) -> List[str]:
+        """특정 종목이 속한 테마들"""
+        themes = []
+        for theme_name, stocks in DEFAULT_THEME_STOCKS.items():
+            if symbol in stocks:
+                themes.append(theme_name)
+        return themes
+
+    def get_all_theme_stocks(self) -> Dict[str, List[str]]:
+        """모든 테마와 관련 종목 반환"""
+        return DEFAULT_THEME_STOCKS.copy()
+
+    def get_theme_score(self, symbol: str) -> float:
+        """종목의 테마 점수 (해당 종목이 속한 테마들의 최고 점수)"""
+        themes = self.get_stock_themes(symbol)
+        if not themes:
+            return 0.0
+
+        scores = []
+        for theme_name in themes:
+            if theme_name in self._themes:
+                scores.append(self._themes[theme_name].score)
+
+        return max(scores) if scores else 0.0
+
+    def to_events(self) -> List[ThemeEvent]:
+        """현재 테마들을 이벤트로 변환"""
+        events = []
+        for theme in self._themes.values():
+            events.append(ThemeEvent.from_theme(theme.to_theme(), source="theme_detector"))
+        return events
+
+    # ============================================================
+    # 종목 센티멘트 접근자
+    # ============================================================
+
+    def get_stock_sentiment(self, symbol: str) -> Optional[Dict]:
+        """
+        종목 센티멘트 조회 (1시간 이내 데이터만 반환)
+
+        Returns:
+            {sentiment, impact, direction, theme, reason, updated_at} 또는 None
+        """
+        data = self._stock_sentiments.get(symbol)
+        if not data:
+            return None
+        # 1시간 이상 경과 시 무효
+        elapsed = (datetime.now() - data["updated_at"]).total_seconds()
+        if elapsed > 3600:
+            return None
+        return data
+
+    def get_all_stock_sentiments(self) -> Dict[str, Dict]:
+        """전체 유효 센티멘트 (1시간 이내)"""
+        now = datetime.now()
+        return {
+            symbol: data
+            for symbol, data in self._stock_sentiments.items()
+            if (now - data["updated_at"]).total_seconds() <= 3600
+        }
+
+    async def _resolve_stock_symbol(self, symbol: str, name: str) -> str:
+        """
+        종목코드 보정 (async)
+
+        1차: 6자리 코드 → stock_master DB 검증
+        2차: 이름 → stock_master DB 조회
+        3차: KNOWN_STOCKS 폴백
+        """
+        symbol = (symbol or "").strip()
+        name = (name or "").strip()
+
+        # 1차: 6자리 코드가 주어진 경우
+        if symbol and symbol.isdigit() and len(symbol) == 6:
+            if self._stock_master:
+                try:
+                    if await self._stock_master.validate_ticker(symbol):
+                        return symbol
+                    # DB 검증 실패 → 로그 추가
+                    logger.debug(f"[종목 검증] DB에 없는 코드: {symbol}")
+                    # DB에 없는 코드 → 이름으로 재시도
+                    if name:
+                        resolved = await self._stock_master.lookup_ticker(name)
+                        if resolved:
+                            logger.info(f"[종목 검증] 이름으로 해결: {name} → {resolved}")
+                            return resolved
+                except Exception as e:
+                    logger.warning(f"[종목 검증] DB 조회 오류: {e}")
+            # DB 없거나 검증 불가 시 형식만으로 반환 (하위호환)
+            return symbol
+
+        # 2차: 이름으로 DB 조회
+        if name and self._stock_master:
+            try:
+                resolved = await self._stock_master.lookup_ticker(name)
+                if resolved:
+                    return resolved
+                # 조회 실패 → 로그 추가
+                logger.debug(f"[종목 검증] DB에 없는 이름: {name}")
+            except Exception as e:
+                logger.warning(f"[종목 검증] 이름 조회 오류: {e}")
+
+        # 3차: KNOWN_STOCKS 폴백
+        if name:
+            resolved = KNOWN_STOCKS.get(name, "")
+            if resolved:
+                logger.debug(f"[종목 검증] KNOWN_STOCKS 폴백: {name} → {resolved}")
+                return resolved
+
+        # 최종 실패
+        if symbol or name:
+            logger.warning(f"[종목 검증 실패] symbol='{symbol}', name='{name}'")
+        return ""
+
+    async def _adjust_scores_by_sector(self):
+        """업종지수 등락률 기반 테마 점수 보정"""
+        kmd = self._kis_market_data
+        if not kmd:
+            try:
+                from src.data.providers.kis_market_data import get_kis_market_data
+                kmd = get_kis_market_data()
+            except Exception:
+                return
+
+        try:
+            sectors = await kmd.fetch_sector_indices()
+            if not sectors:
+                return
+
+            # 업종명 → 등락률 맵
+            sector_map: Dict[str, float] = {}
+            for s in sectors:
+                name = s.get("name", "")
+                change_pct = s.get("change_pct", 0.0)
+                if name:
+                    sector_map[name] = change_pct
+
+            adjusted_cnt = 0
+            for theme_name, theme_info in self._themes.items():
+                related_sectors = self.THEME_SECTOR_MAP.get(theme_name, [])
+                if not related_sectors:
+                    continue
+
+                # 관련 업종 등락률 평균
+                pcts = []
+                for sec_kw in related_sectors:
+                    for sec_name, pct in sector_map.items():
+                        if sec_kw in sec_name:
+                            pcts.append(pct)
+                            break
+
+                if not pcts:
+                    continue
+
+                avg_pct = sum(pcts) / len(pcts)
+
+                # 상승 업종: +10~+20 보너스 / 하락 업종: -10~-20 페널티
+                if avg_pct >= 1.0:
+                    bonus = min(avg_pct * 10, 20)
+                    theme_info.score = min(theme_info.score + bonus, 100)
+                    adjusted_cnt += 1
+                elif avg_pct <= -1.0:
+                    penalty = min(abs(avg_pct) * 10, 20)
+                    theme_info.score = max(theme_info.score - penalty, 0)
+                    adjusted_cnt += 1
+
+            if adjusted_cnt:
+                logger.info(f"[ThemeDetector] 업종지수 기반 테마 점수 보정: {adjusted_cnt}개 테마")
+
+        except Exception as e:
+            logger.warning(f"[ThemeDetector] 업종지수 보정 오류 (무시): {e}")
+
+    async def _adjust_scores_by_us_market(self):
+        """US 시장 오버나이트 데이터 기반 테마 점수 보정"""
+        umd = self._us_market_data
+        if not umd:
+            try:
+                from src.data.providers.us_market_data import get_us_market_data
+                umd = get_us_market_data()
+            except Exception:
+                return
+
+        try:
+            sector_signals = await umd.get_sector_signals()
+            if not sector_signals:
+                return
+
+            adjusted_cnt = 0
+            for theme_name, theme_info in self._themes.items():
+                signal = sector_signals.get(theme_name)
+                if not signal:
+                    continue
+
+                boost = signal["boost"]
+                if boost == 0:
+                    continue
+
+                old_score = theme_info.score
+                theme_info.score = max(0, min(theme_info.score + boost, 100))
+                adjusted_cnt += 1
+
+                if abs(boost) >= 15:
+                    movers = ", ".join(signal.get("top_movers", []))
+                    logger.info(
+                        f"[ThemeDetector] US 오버나이트 부스트: "
+                        f"{theme_name} {old_score:.0f}→{theme_info.score:.0f} "
+                        f"(boost={boost:+d}, US avg={signal['us_avg_pct']:+.1f}%, "
+                        f"top: {movers})"
+                    )
+
+            if adjusted_cnt:
+                logger.info(
+                    f"[ThemeDetector] US 오버나이트 기반 테마 점수 보정: {adjusted_cnt}개 테마"
+                )
+
+        except Exception as e:
+            logger.warning(f"[ThemeDetector] US 오버나이트 보정 오류 (무시): {e}")
+
+    @staticmethod
+    def _estimate_article_sentiment(title: str) -> Optional[float]:
+        """키워드 기반 간이 센티멘트 추정 (LLM 미사용)"""
+        if not title:
+            return None
+
+        bullish_keywords = [
+            "급등", "상승", "호재", "수혜", "최고", "신고가", "돌파", "강세",
+            "매출증가", "실적개선", "호실적", "수주", "계약", "상한가",
+            "외국인매수", "기관매수", "순매수",
+        ]
+        bearish_keywords = [
+            "급락", "하락", "악재", "폭락", "최저", "신저가", "약세",
+            "적자", "실적악화", "하한가", "외국인매도", "기관매도",
+            "순매도", "리콜", "부실", "소송",
+        ]
+
+        score = 0.0
+        title_lower = title.lower()
+        for kw in bullish_keywords:
+            if kw in title_lower:
+                score += 0.3
+        for kw in bearish_keywords:
+            if kw in title_lower:
+                score -= 0.3
+
+        # 범위 제한 -1.0 ~ 1.0
+        return max(min(score, 1.0), -1.0) if score != 0 else None
+
+    # ============================================================
+    # DB 조회 메서드 (히스토리/통계)
+    # ============================================================
+
+    async def get_news_history(self, hours: int = 24, limit: int = 100) -> List[Dict]:
+        """최근 뉴스 히스토리 조회"""
+        await self._ensure_storage()
+        if not self._storage:
+            return []
+
+        articles = await self._storage.get_recent_news(hours=hours, limit=limit)
+        return [
+            {
+                "title": a.title,
+                "content": a.content,
+                "url": a.url,
+                "source": a.source,
+                "collected_at": a.collected_at.isoformat() if a.collected_at else None,
+            }
+            for a in articles
+        ]
+
+    async def get_theme_history(self, theme_name: str, days: int = 7) -> List[Dict]:
+        """테마 히스토리 조회"""
+        await self._ensure_storage()
+        if not self._storage:
+            return []
+
+        records = await self._storage.get_theme_history(theme_name, days=days)
+        return [
+            {
+                "theme_name": r.theme_name,
+                "score": r.score,
+                "news_count": r.news_count,
+                "detected_at": r.detected_at.isoformat() if r.detected_at else None,
+            }
+            for r in records
+        ]
+
+    async def get_theme_trend(self, theme_name: str, days: int = 7) -> List[Dict]:
+        """테마 트렌드 (일별 점수 변화)"""
+        await self._ensure_storage()
+        if not self._storage:
+            return []
+
+        return await self._storage.get_theme_trend(theme_name, days=days)
+
+    async def get_hot_themes_from_db(
+        self,
+        hours: int = 24,
+        min_score: float = 70
+    ) -> List[Dict]:
+        """DB에서 핫 테마 조회 (평균 점수 기준)"""
+        await self._ensure_storage()
+        if not self._storage:
+            return []
+
+        return await self._storage.get_hot_themes(hours=hours, min_score=min_score)
+
+    async def get_storage_stats(self) -> Dict:
+        """저장소 통계 조회"""
+        await self._ensure_storage()
+        if not self._storage:
+            return {"status": "disconnected"}
+
+        stats = await self._storage.get_stats()
+        stats["status"] = "connected"
+        return stats
+
+
+# 전역 인스턴스
+_theme_detector: Optional[ThemeDetector] = None
+
+def get_theme_detector() -> ThemeDetector:
+    """전역 테마 탐지기 인스턴스"""
+    global _theme_detector
+    if _theme_detector is None:
+        _theme_detector = ThemeDetector()
+    return _theme_detector

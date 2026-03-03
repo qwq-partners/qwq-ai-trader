@@ -1,0 +1,456 @@
+"""
+QWQ AI Trader - KR 테마 추종 전략
+
+핫 테마 관련 종목을 추적하고 적시에 진입합니다.
+원본: ai-trader-v2/src/strategies/theme_chasing.py
+
+주의: theme_detector는 KR 전용 모듈이며, 통합 프로젝트에서는
+      src/signals/sentiment/theme_detector.py에 위치합니다.
+"""
+
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import Dict, List, Optional, Set, Any
+from loguru import logger
+
+from ..base import BaseStrategy, StrategyConfig
+from ...core.types import (
+    Signal, Position, Theme,
+    OrderSide, SignalStrength, StrategyType
+)
+from ...core.event import MarketDataEvent, ThemeEvent
+
+# ThemeDetector는 lazy import (모듈 미존재 시 graceful degradation)
+try:
+    from ...signals.sentiment.theme_detector import ThemeDetector, ThemeInfo, get_theme_detector
+except ImportError:
+    ThemeDetector = None
+    ThemeInfo = None
+    def get_theme_detector():
+        return None
+
+
+@dataclass
+class ThemeChasingConfig(StrategyConfig):
+    """테마 추종 전략 설정"""
+    name: str = "ThemeChasing"
+    strategy_type: StrategyType = StrategyType.THEME_CHASING
+
+    # 테마 조건
+    min_theme_score: float = 70.0     # 최소 테마 점수
+    max_theme_age_minutes: int = 30   # 테마 신선도 (분)
+
+    # 종목 조건
+    min_change_pct: float = 2.0       # 최소 등락률 (%)
+    max_change_pct: float = 12.0      # 최대 등락률 (%)
+    min_volume_ratio: float = 1.8     # 최소 거래량 비율
+
+    # 진입 조건
+    entry_window_minutes: int = 30    # 테마 발생 후 진입 가능 시간
+    max_entries_per_theme: int = 2    # 테마당 최대 진입 수
+
+    # 청산 조건
+    stop_loss_pct: float = 1.5        # 손절 (테마는 빠른 손절)
+    take_profit_pct: float = 3.0      # 익절
+    trailing_stop_pct: float = 1.0    # 트레일링 스탑
+
+    # 시간대 제한
+    trading_start_time: str = "09:05" # 시작 시간
+    trading_end_time: str = "15:00"   # 종료 시간
+
+
+class ThemeChasingStrategy(BaseStrategy):
+    """
+    테마 추종 전략
+
+    핫 테마 감지 시 관련 종목에 빠르게 진입하여
+    테마 모멘텀을 따라가는 전략입니다.
+    """
+
+    def __init__(self, config: Optional[ThemeChasingConfig] = None, kis_market_data=None):
+        config = config or ThemeChasingConfig()
+        super().__init__(config)
+        self.theme_config = config
+
+        # 테마 탐지기
+        self._theme_detector = None
+
+        # KIS 시장 데이터 (외국인/기관 수급)
+        self._kis_market_data = kis_market_data
+        self._foreign_cache: Dict[str, Dict] = {}
+        self._institution_cache: Dict[str, Dict] = {}
+
+        # 테마 추적
+        self._active_themes: Dict[str, Any] = {}  # ThemeInfo 또는 유사 객체
+        self._theme_entries: Dict[str, int] = {}
+        self._entries_date: Optional[date] = None
+
+        # 포지션별 테마 매핑
+        self._position_themes: Dict[str, str] = {}
+
+    def set_theme_detector(self, detector):
+        """테마 탐지기 설정"""
+        self._theme_detector = detector
+
+    async def on_theme(self, event: ThemeEvent) -> Optional[Signal]:
+        """테마 이벤트 처리"""
+        if not self.enabled:
+            return None
+
+        theme_name = event.name
+        theme_score = event.score
+
+        if theme_score < self.theme_config.min_theme_score:
+            return None
+
+        if theme_name not in self._active_themes:
+            if ThemeInfo is not None:
+                self._active_themes[theme_name] = ThemeInfo(
+                    name=theme_name,
+                    keywords=event.keywords,
+                    related_stocks=event.symbols,
+                    score=theme_score,
+                )
+            else:
+                # ThemeInfo 미사용 시 dict 폴백
+                self._active_themes[theme_name] = {
+                    "name": theme_name,
+                    "keywords": event.keywords,
+                    "related_stocks": event.symbols,
+                    "score": theme_score,
+                    "last_updated": datetime.now(),
+                }
+            self._theme_entries[theme_name] = 0
+            logger.info(f"[테마 추종] 새 핫 테마 감지: {theme_name} (점수: {theme_score:.0f})")
+        else:
+            theme = self._active_themes[theme_name]
+            if hasattr(theme, 'score'):
+                theme.score = theme_score
+                theme.last_updated = datetime.now()
+            else:
+                theme["score"] = theme_score
+                theme["last_updated"] = datetime.now()
+
+        return None
+
+    async def generate_signal(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        position: Optional[Position] = None
+    ) -> Optional[Signal]:
+        """매매 신호 생성"""
+        today = date.today()
+        if self._entries_date != today:
+            self._theme_entries.clear()
+            self._active_themes.clear()
+            self._entries_date = today
+
+        indicators = self.get_indicators(symbol)
+
+        if not indicators:
+            return None
+
+        if position and position.quantity > 0:
+            return await self._check_exit_signal(symbol, current_price, position, indicators)
+
+        return await self._check_entry_signal(symbol, current_price, indicators)
+
+    async def _check_entry_signal(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        indicators: Dict[str, float]
+    ) -> Optional[Signal]:
+        """진입 신호 체크"""
+        if not self._is_trading_time():
+            return None
+
+        if not self._theme_detector:
+            self._theme_detector = get_theme_detector()
+
+        if not self._theme_detector:
+            return None
+
+        stock_themes = self._theme_detector.get_stock_themes(symbol)
+        if not stock_themes:
+            return None
+
+        hot_theme = None
+        hot_theme_score = 0.0
+
+        for theme_name in stock_themes:
+            if theme_name in self._active_themes:
+                theme = self._active_themes[theme_name]
+
+                last_updated = getattr(theme, 'last_updated', None) or theme.get("last_updated", datetime.now())
+                age_minutes = (datetime.now() - last_updated).total_seconds() / 60
+                if age_minutes > self.theme_config.max_theme_age_minutes:
+                    continue
+
+                if self._theme_entries.get(theme_name, 0) >= self.theme_config.max_entries_per_theme:
+                    continue
+
+                t_score = getattr(theme, 'score', None) or theme.get("score", 0)
+                if t_score > hot_theme_score:
+                    hot_theme = theme
+                    hot_theme_score = t_score
+
+        if not hot_theme:
+            return None
+
+        price = float(current_price)
+        change_pct = indicators.get("change_1d", 0)
+        vol_ratio = indicators.get("vol_ratio", 0)
+
+        if change_pct < self.theme_config.min_change_pct:
+            return None
+        if change_pct > self.theme_config.max_change_pct:
+            logger.debug(f"[테마 추종] {symbol} 과열 (등락률 {change_pct:.1f}%)")
+            return None
+
+        if vol_ratio < self.theme_config.min_volume_ratio:
+            return None
+
+        # 뉴스 센티멘트 필터/보너스
+        news_bonus = 0.0
+        news_info = ""
+        if self._theme_detector:
+            sentiment = self._theme_detector.get_stock_sentiment(symbol)
+            if sentiment:
+                direction = sentiment.get("direction", "")
+                impact = sentiment.get("impact", 0)
+                reason_text = sentiment.get("reason", "")
+
+                if direction == "bearish":
+                    logger.info(
+                        f"[테마 추종] {symbol} 악재 차단: "
+                        f"impact={impact}, {reason_text}"
+                    )
+                    return None
+
+                if direction == "bullish":
+                    news_bonus = min(impact * 1.5, 15.0)
+                    news_info = f", 뉴스호재={impact}"
+
+        # 외국인/기관 수급 체크
+        supply_bonus = 0.0
+        supply_info = ""
+        await self._refresh_supply_demand()
+        if self._foreign_cache or self._institution_cache:
+            supply_bonus, supply_info, _ = self._get_supply_demand_bonus(symbol)
+            if supply_info:
+                news_info += f", {supply_info}"
+
+        # 신호 강도 결정
+        if hot_theme_score >= 90:
+            strength = SignalStrength.VERY_STRONG
+        elif hot_theme_score >= 80:
+            strength = SignalStrength.STRONG
+        else:
+            strength = SignalStrength.NORMAL
+
+        score = self._calculate_entry_score(hot_theme_score, change_pct, vol_ratio)
+        score = max(0.0, min(score + news_bonus + supply_bonus, 100.0))
+
+        if score < self.config.min_score:
+            return None
+
+        target_price = Decimal(str(price * (1 + self.theme_config.take_profit_pct / 100)))
+        stop_price = Decimal(str(price * (1 - self.theme_config.stop_loss_pct / 100)))
+
+        hot_theme_name = getattr(hot_theme, 'name', None) or hot_theme.get("name", "unknown")
+        self._theme_entries[hot_theme_name] = self._theme_entries.get(hot_theme_name, 0) + 1
+        self._position_themes[symbol] = hot_theme_name
+
+        reason = (
+            f"테마[{hot_theme_name}] 점수={hot_theme_score:.0f}, "
+            f"등락률={change_pct:+.1f}%, 거래량={vol_ratio:.1f}x{news_info}"
+        )
+
+        logger.info(f"[테마 추종] 진입 신호: {symbol} - {reason}")
+
+        return self.create_signal(
+            symbol=symbol,
+            side=OrderSide.BUY,
+            strength=strength,
+            price=current_price,
+            score=score,
+            reason=reason,
+            target_price=target_price,
+            stop_price=stop_price,
+        )
+
+    async def _check_exit_signal(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        position: Position,
+        indicators: Dict[str, float]
+    ) -> Optional[Signal]:
+        """청산 신호 체크 (테마 쿨다운만 자체 처리)"""
+        theme_name = self._position_themes.get(symbol)
+        if theme_name and theme_name in self._active_themes:
+            theme = self._active_themes[theme_name]
+            t_score = getattr(theme, 'score', None) or theme.get("score", 0)
+
+            if t_score < self.theme_config.min_theme_score * 0.7:
+                self._cleanup_position_theme(symbol)
+                return self.create_signal(
+                    symbol=symbol,
+                    side=OrderSide.SELL,
+                    strength=SignalStrength.NORMAL,
+                    price=current_price,
+                    score=70.0,
+                    reason=f"테마 쿨다운: {theme_name} 점수 {t_score:.0f}",
+                )
+
+        return None
+
+    def _calculate_entry_score(
+        self,
+        theme_score: float,
+        change_pct: float,
+        vol_ratio: float
+    ) -> float:
+        """진입 점수 계산"""
+        score = 0.0
+
+        # 테마 점수 (50점)
+        score += min(theme_score * 0.5, 50)
+
+        # 등락률 (25점)
+        if 2 <= change_pct <= 5:
+            score += 25
+        elif 5 < change_pct <= 8:
+            score += 18
+        elif change_pct <= 12:
+            score += 10
+        else:
+            score += 5
+
+        # 거래량 (25점)
+        score += min(vol_ratio * 5, 25)
+
+        return min(score, 100.0)
+
+    def _is_trading_time(self) -> bool:
+        """거래 가능 시간 체크"""
+        now = datetime.now()
+        current_time = now.strftime("%H:%M")
+        return self.theme_config.trading_start_time <= current_time <= self.theme_config.trading_end_time
+
+    def calculate_score(self, symbol: str) -> float:
+        """신호 점수 계산"""
+        if self._theme_detector:
+            theme_score = self._theme_detector.get_theme_score(symbol)
+        else:
+            theme_score = 0.0
+
+        indicators = self.get_indicators(symbol)
+        if not indicators:
+            return theme_score
+
+        change_pct = indicators.get("change_1d", 0)
+        vol_ratio = indicators.get("vol_ratio", 0)
+
+        return self._calculate_entry_score(theme_score, change_pct, vol_ratio)
+
+    def update_themes(self, themes: List):
+        """테마 정보 업데이트"""
+        for theme in themes:
+            t_score = getattr(theme, 'score', 0)
+            t_name = getattr(theme, 'name', str(theme))
+            if t_score >= self.theme_config.min_theme_score:
+                self._active_themes[t_name] = theme
+            elif t_name in self._active_themes:
+                del self._active_themes[t_name]
+
+    def get_active_themes(self) -> List[str]:
+        """활성 테마 목록"""
+        return list(self._active_themes.keys())
+
+    def get_theme_stocks(self) -> Dict[str, List[str]]:
+        """테마별 관련 종목"""
+        result = {}
+        for theme_name, theme in self._active_themes.items():
+            stocks = getattr(theme, 'related_stocks', None) or theme.get("related_stocks", [])
+            result[theme_name] = stocks
+        return result
+
+    async def _refresh_supply_demand(self):
+        """외국인/기관 수급 데이터 캐시 갱신 (10분 주기)"""
+        if not self._kis_market_data:
+            return
+
+        now = datetime.now()
+        if self._foreign_cache:
+            first = next(iter(self._foreign_cache.values()), {})
+            updated = first.get("updated")
+            if updated and (now - updated).total_seconds() < 600:
+                return
+
+        try:
+            foreign_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="1") or []
+            foreign_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="1") or []
+            self._foreign_cache.clear()
+            for item in foreign_kospi + foreign_kosdaq:
+                sym = item.get("symbol", "")
+                net_buy = item.get("net_buy_qty", 0)
+                if sym:
+                    self._foreign_cache[sym] = {"net_buy": net_buy, "updated": now}
+
+            inst_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="2") or []
+            inst_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="2") or []
+            self._institution_cache.clear()
+            for item in inst_kospi + inst_kosdaq:
+                sym = item.get("symbol", "")
+                net_buy = item.get("net_buy_qty", 0)
+                if sym:
+                    self._institution_cache[sym] = {"net_buy": net_buy, "updated": now}
+
+            logger.debug(
+                f"[테마 추종] 수급 캐시 갱신: 외국인 {len(self._foreign_cache)}종목, "
+                f"기관 {len(self._institution_cache)}종목"
+            )
+        except Exception as e:
+            logger.warning(f"[테마 추종] 수급 데이터 조회 실패 (무시): {e}")
+
+    def _get_supply_demand_bonus(self, symbol: str) -> tuple:
+        """외국인/기관 수급 기반 신뢰도 보너스/페널티"""
+        foreign_data = self._foreign_cache.get(symbol)
+        inst_data = self._institution_cache.get(symbol)
+
+        foreign_buy = foreign_data.get("net_buy", 0) if foreign_data else 0
+        inst_buy = inst_data.get("net_buy", 0) if inst_data else 0
+
+        bonus = 0.0
+        info_parts = []
+        should_block = False
+
+        if foreign_buy < 0 and inst_buy < 0:
+            bonus = -10.0
+            info_parts.append(f"외국인+기관 동시 순매도 주의")
+        elif foreign_buy > 0 and inst_buy > 0:
+            bonus = 10.0
+            info_parts.append(f"외국인+기관 순매수")
+        elif foreign_buy > 0:
+            bonus = 5.0
+            info_parts.append(f"외국인 순매수")
+        elif inst_buy > 0:
+            bonus = 5.0
+            info_parts.append(f"기관 순매수")
+
+        info = ", ".join(info_parts) if info_parts else ""
+        return bonus, info, should_block
+
+    def _cleanup_position_theme(self, symbol: str):
+        """포지션 청산 시 테마 매핑 정리"""
+        if symbol in self._position_themes:
+            theme_name = self._position_themes.pop(symbol)
+            logger.debug(f"[테마 추종] 포지션-테마 매핑 해제: {symbol} <- {theme_name}")
+
+    def on_position_closed(self, symbol: str):
+        """포지션 청산 콜백 (외부에서 호출)"""
+        self._cleanup_position_theme(symbol)

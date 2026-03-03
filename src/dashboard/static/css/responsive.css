@@ -1,0 +1,204 @@
+/* ===========================
+   AI Trader v2 - Responsive
+   =========================== */
+
+/* -- Navigation -- */
+@media (max-width: 768px) {
+  /* 로고 + status를 1행, 네비 pill을 2행으로 분리 */
+  .nav-container {
+    flex-wrap: wrap !important;
+    padding: 10px 16px !important;
+    gap: 6px 0 !important;
+    align-items: center !important;
+  }
+  /* 로고: 1행 왼쪽, 남은 공간 차지 */
+  .nav-logo {
+    flex: 1 !important;
+    min-width: 0 !important;
+  }
+  /* status: 1행 오른쪽 */
+  .nav-status {
+    flex-shrink: 0 !important;
+    font-size: 0.7rem !important;
+    gap: 8px !important;
+  }
+  /* pill 행: 강제로 2행으로 */
+  .nav-links {
+    flex: 0 0 100% !important;
+    order: 3 !important;
+    display: flex !important;
+    gap: 4px !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    padding-bottom: 2px !important;
+  }
+  .nav-links::-webkit-scrollbar { display: none; }
+  .nav-pill {
+    white-space: nowrap;
+    padding: 6px 12px !important;
+    font-size: 0.75rem !important;
+    flex-shrink: 0;
+  }
+  #sb-uptime { display: none !important; }
+  #sb-session { font-size: 0.68rem !important; }
+}
+
+/* -- Main Container -- */
+@media (max-width: 768px) {
+  main {
+    padding: 12px !important;
+  }
+  .main-container {
+    padding: 12px !important;
+  }
+}
+
+/* -- Card -- */
+@media (max-width: 768px) {
+  .card {
+    border-radius: 12px !important;
+  }
+  .card-inner {
+    padding: 16px !important;
+  }
+}
+
+/* -- 2-col grid -> 1-col -- */
+@media (max-width: 768px) {
+  .grid-2col {
+    grid-template-columns: 1fr !important;
+  }
+  .grid-5col {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .grid-auto {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  }
+}
+
+/* -- Hero numbers -- */
+@media (max-width: 768px) {
+  .value-hero {
+    font-size: 1.4rem !important;
+  }
+}
+
+/* -- Tables -- */
+@media (max-width: 768px) {
+  table th, table td {
+    font-size: 0.72rem !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+  .col-hide-mobile {
+    display: none !important;
+  }
+}
+
+/* -- Badges: 줄바꿈 방지 -- */
+.badge {
+  white-space: nowrap;
+}
+
+/* -- 테이블 헤더: 줄바꿈 방지 -- */
+table th {
+  white-space: nowrap;
+}
+@media (max-width: 480px) {
+  table th, table td {
+    font-size: 0.65rem !important;
+  }
+}
+
+/* -- Position table column hiding (mobile) -- */
+@media (max-width: 768px) {
+  #positions-table .col-avg-price,
+  #positions-table .col-quantity,
+  #positions-table .col-market-value,
+  #positions-table .col-holding { display: none !important; }
+}
+
+/* -- Event log height -- */
+@media (max-width: 768px) {
+  #event-log { max-height: 200px !important; }
+}
+
+/* -- Metric row font -- */
+@media (max-width: 480px) {
+  .metric-label { font-size: 0.75rem !important; }
+  .metric-value { font-size: 0.8rem !important; }
+}
+
+/* -- Plotly chart -- */
+@media (max-width: 768px) {
+  #pie-chart { height: 120px !important; }
+}
+
+/* -- Settings page -- */
+@media (max-width: 768px) {
+  .settings-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* -- Performance page -- */
+@media (max-width: 768px) {
+  .perf-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+/* ===========================
+   Markets grid (KR | US)
+   =========================== */
+@media (max-width: 900px) {
+  .markets-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .market-card-kr, .market-card-us {
+    border-radius: 14px !important;
+  }
+  .us-stat-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  .asset-hero { font-size: 1.35rem !important; }
+  .market-header { padding: 12px 14px 10px !important; }
+  .section-inner { padding: 10px 14px !important; }
+  .section-sep { margin: 0 14px !important; }
+  .sub-header { padding: 10px 14px 6px !important; font-size: 0.65rem !important; }
+
+  /* US positions table: 모바일에서 불필요 컬럼 숨김 */
+  #us-positions-table th:nth-child(4),
+  #us-positions-table td:nth-child(4),
+  #us-positions-table th:nth-child(6),
+  #us-positions-table td:nth-child(6) { display: none; }
+}
+
+/* ===========================
+   마켓 필터 버튼
+   =========================== */
+.mf-btn {
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border: 1px solid var(--border-accent);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+.mf-btn:hover {
+    background: rgba(99,102,241,0.08);
+    color: var(--text-primary);
+}
+.mf-btn.mf-active {
+    background: rgba(99,102,241,0.18);
+    border-color: var(--accent-blue);
+    color: #fff;
+}
