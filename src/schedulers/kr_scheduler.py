@@ -289,16 +289,13 @@ class KRScheduler:
             # 전략별 청산 파라미터 적용
             exit_params = bot._strategy_exit_params.get(position.strategy, {}) if position.strategy else {}
 
-            action = bot.exit_manager.check_exit(
-                symbol=symbol,
-                current_price=float(current_price),
-                position=position,
-                **exit_params,
-            )
+            # ExitManager.update_price() → Optional[Tuple[action, quantity, reason]]
+            exit_result = bot.exit_manager.update_price(symbol, float(current_price))
 
-            if action and action.get("action") == "sell":
-                quantity = action.get("quantity", position.quantity)
-                reason = action.get("reason", "ExitManager 청산")
+            if exit_result:
+                action, quantity, reason = exit_result
+                if not quantity or quantity <= 0:
+                    quantity = position.quantity
 
                 logger.info(
                     f"[청산] {symbol} {reason}: {quantity}주 "

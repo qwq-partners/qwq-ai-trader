@@ -936,6 +936,7 @@ class RiskManager:
 
         # 엔진에 핸들러 등록
         engine.register_handler(EventType.SIGNAL, self.on_signal)
+        engine.register_handler(EventType.ORDER, self.on_order)
         engine.register_handler(EventType.FILL, self.on_fill)
 
     @property
@@ -1264,6 +1265,41 @@ class RiskManager:
             self._pending_sides.pop(symbol, None)
             self._reserved_by_order.pop(symbol, None)
             self._pending_fallback_count.pop(symbol, None)
+
+    async def on_order(self, event: OrderEvent) -> Optional[List[Event]]:
+        """ORDER 이벤트 처리 → 브로커에 주문 제출"""
+        if not self.engine.broker:
+            logger.error(f"[리스크] 브로커 미연결 — 주문 제출 불가: {event.symbol}")
+            await self.clear_pending(event.symbol)
+            return None
+
+        try:
+            order = Order(
+                symbol=event.symbol,
+                side=event.side,
+                order_type=event.order_type if hasattr(event, 'order_type') else OrderType.LIMIT,
+                quantity=event.quantity,
+                price=event.price,
+                strategy=getattr(event, 'strategy', ''),
+                reason=getattr(event, 'reason', ''),
+            )
+            success, order_id = await self.engine.broker.submit_order(order)
+
+            if success:
+                logger.info(
+                    f"[리스크] 주문 제출 성공: {event.symbol} {event.side.value} "
+                    f"{event.quantity}주 @ {event.price:,.0f} (ID: {order_id})"
+                )
+            else:
+                logger.warning(f"[리스크] 주문 제출 실패: {event.symbol} — {order_id}")
+                await self.clear_pending(event.symbol)
+                self.block_symbol(event.symbol)
+
+        except Exception as e:
+            logger.exception(f"[리스크] 주문 제출 오류: {event.symbol} — {e}")
+            await self.clear_pending(event.symbol)
+
+        return None
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
         """체결 후 리스크 업데이트 (부분 체결 지원) - Lock 보호"""
