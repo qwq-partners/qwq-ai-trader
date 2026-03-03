@@ -1679,6 +1679,24 @@ class KRScheduler:
                 # 아침 레포트
                 if now.hour == morning_hour and morning_min <= now.minute < morning_min + 15:
                     if last_morning_report != today:
+                        # US 오버나이트 시그널 사전 조회 (아침 레포트 전)
+                        try:
+                            us_md = getattr(bot, 'us_market_data', None)
+                            if us_md:
+                                signal = await us_md.get_overnight_signal()
+                                if signal:
+                                    sentiment = signal.get("sentiment", "neutral")
+                                    indices = signal.get("indices", {})
+                                    logger.info(f"[US 시그널] 시장 심리: {sentiment}")
+                                    for name, info in indices.items():
+                                        logger.info(f"[US 시그널]   {name}: {info.get('change_pct', 0):+.1f}%")
+                                    sector_signals = signal.get("sector_signals", {})
+                                    if sector_signals:
+                                        boosted = [f"{t}({s.get('boost',0):+d})" for t, s in sector_signals.items()]
+                                        logger.info(f"[US 시그널] 한국 테마 영향: {', '.join(boosted)}")
+                        except Exception as e:
+                            logger.warning(f"[US 시그널] 오버나이트 조회 실패: {e}")
+
                         logger.info("[레포트] 아침 추천 종목 레포트 발송 시작")
                         try:
                             await bot.report_generator.generate_morning_report(
