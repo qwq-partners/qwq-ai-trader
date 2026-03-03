@@ -1,5 +1,38 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-04 — 코드 리뷰 + 전략 흐름 검증
+
+### P0 수정 (Critical)
+- **KR ORDER 핸들러 누락**: `EventType.ORDER` 핸들러가 미등록 → 매수/매도 주문이 이벤트 큐에서 드롭됨. `RiskManager.on_order()` 추가하여 `broker.submit_order()` 호출
+- **ExitManager 메서드명 불일치**: `check_exit()` → `update_price()` 변경. KR 손절/익절 불가 해결
+- **대시보드 SSE 미실행**: `dashboard.start()` → `dashboard.run()` (브로드캐스트 루프 포함)
+- **RiskManager daily loss**: `daily_pnl` → `effective_daily_pnl` (미실현 손익 반영)
+- **KR MarketContext session 누락**: `KRSession()` 인스턴스 추가
+
+### US 거래소 코드 수정
+- 현재가 조회: `NASD` → `NAS`, `NYSE` → `NYS`, `AMEX` → `AMS` 변환 (`_EXCD_QUOTE_MAP`)
+- FRMI 시세 조회 실패 → 해결, 60주 매도 체결 완료
+- 매도 수량: `float` → `int` 변환 누락 수정
+- US 잔고: `output2.frcr_dncl_amt`(예수금) + `frcr_evlu_amt`(주식평가금) 사용
+
+### 프론트엔드 수정
+- JS: `/api/us-proxy/api/us/` → `/api/us/` (프록시 제거)
+- SSE: `us_status`, `us_portfolio`, `us_positions`, `us_risk` 이벤트 구독 추가
+- HTML 템플릿(8개) 누락 복사
+- `rm._config` → `rm.config` (AttributeError 수정, 3곳)
+
+### 검증 결과
+| 흐름 | 상태 |
+|------|------|
+| KR 장중 스크리닝 → 매수 | 수정 완료 (ORDER 핸들러) |
+| KR 체결 확인 → 포지션 등록 | PARTIAL (2분 동기화 의존) |
+| KR 분할 익절/손절 → 매도 | 수정 완료 (update_price) |
+| US 스크리닝 → 매수 | PASS |
+| US 청산 → 매도 | PASS |
+| KR 배치 스캔 → T+1 실행 | 수정 완료 (ORDER 핸들러) |
+
+---
+
 ## 2026-03-03 — 초기 구조 (Phase 0-6)
 **커밋**: `4790280` feat: KR+US 통합 트레이딩 엔진 초기 구조
 
