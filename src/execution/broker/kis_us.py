@@ -400,40 +400,55 @@ class KISUSBroker:
                 "exchange":      item.get("ovrs_excg_cd", "NASD"),
             })
 
-        # output2: 계좌 요약 (총평가손익 등, 가용현금은 없음)
+        # output2: 계좌 요약 (예수금 + 총평가 포함)
         output2 = rt_data.get("output2", {})
         if isinstance(output2, list):
             output2 = output2[0] if output2 else {}
-        total_pnl = float(output2.get("ovrs_tot_pfls", "0") or "0")
 
-        # ── 2. CTRP6504R: 가용현금 조회 (장 마감 후만 가능, 실패 시 None) ──
-        available_cash: Optional[float] = None
-        total_equity:   Optional[float] = None
+        # output2에서 예수금(frcr_dncl_amt)과 총평가(tot_evlu_amt) 추출
+        available_cash = float(output2.get("frcr_dncl_amt", "0") or "0")
+        total_evlu_amt = float(output2.get("tot_evlu_amt", "0") or "0")
+        total_pnl      = float(output2.get("ovrs_tot_pfls", "0") or "0")
 
-        try:
-            settle_url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
-            settle_params = {
-                "CANO":              self.config.account_no,
-                "ACNT_PRDT_CD":      self.config.account_product_cd,
-                "WCRC_FRCR_DVSN_CD": "02",
-                "NATN_CD":           "840",
-                "TR_MKET_CD":        "00",
-                "INQR_DVSN_CD":      "00",
-            }
-            settle_data = await self._api_get(settle_url, self._tr_balance, settle_params)
-            if settle_data.get("rt_cd") == "0":
-                output3 = settle_data.get("output3", {})
-                if isinstance(output3, list):
-                    output3 = output3[0] if output3 else {}
-                available_cash = float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0")
-                total_equity   = float(output3.get("FRCR_DNCL_AMT_2", "0") or "0")
-                total_pnl      = float(output3.get("OVRS_TOT_PFLS", total_pnl) or total_pnl)
-        except Exception:
-            pass  # 장중에는 HTTP 500 → 무시
+        # 총자산 = 예수금 + 보유종목 평가금
+        stock_value = sum(p["qty"] * p["current_price"] for p in positions)
+        total_equity = available_cash + stock_value if available_cash > 0 else total_evlu_amt
+
+        logger.debug(
+            f"[잔고] output2: 예수금=${available_cash:.2f}, 총평가=${total_evlu_amt:.2f}, "
+            f"종목평가=${stock_value:.2f}, 총손익=${total_pnl:.2f}"
+        )
+
+        # CTRP6504R 폴백 (output2에 예수금이 없을 때 — 장 마감 후 가용)
+        if available_cash <= 0:
+            try:
+                settle_url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
+                settle_params = {
+                    "CANO":              self.config.account_no,
+                    "ACNT_PRDT_CD":      self.config.account_product_cd,
+                    "WCRC_FRCR_DVSN_CD": "02",
+                    "NATN_CD":           "840",
+                    "TR_MKET_CD":        "00",
+                    "INQR_DVSN_CD":      "00",
+                }
+                settle_data = await self._api_get(settle_url, self._tr_balance, settle_params)
+                if settle_data.get("rt_cd") == "0":
+                    output3 = settle_data.get("output3", {})
+                    if isinstance(output3, list):
+                        output3 = output3[0] if output3 else {}
+                    settle_cash = float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0")
+                    settle_equity = float(output3.get("FRCR_DNCL_AMT_2", "0") or "0")
+                    if settle_cash > 0:
+                        available_cash = settle_cash
+                    if settle_equity > 0:
+                        total_equity = settle_equity
+                    total_pnl = float(output3.get("OVRS_TOT_PFLS", total_pnl) or total_pnl)
+            except Exception:
+                pass  # 장중에는 HTTP 500 → 무시
 
         account = {
-            "available_cash": available_cash,   # None이면 _sync_portfolio가 현재값 유지
-            "total_equity":   total_equity,
+            "available_cash": available_cash if available_cash > 0 else None,
+            "total_equity":   total_equity if total_equity > 0 else None,
             "total_pnl":      total_pnl,
         }
 
