@@ -1,0 +1,29 @@
+[Unit]
+Description=QWQ AI Trader - KR+US 통합 트레이딩 엔진
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/projects/qwq-ai-trader
+ExecStart=/home/user/projects/qwq-ai-trader/venv/bin/python /home/user/projects/qwq-ai-trader/scripts/run_trader.py --config /home/user/projects/qwq-ai-trader/config/default.yml
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qwq-ai-trader
+
+# 환경변수
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/user/projects/qwq-ai-trader:/home/user/projects/qwq-ai-trader/src
+
+# 리소스 제한
+LimitNOFILE=65536
+MemoryMax=1G
+
+# 종료 시 graceful shutdown (SIGTERM)
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
