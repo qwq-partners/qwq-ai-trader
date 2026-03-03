@@ -516,7 +516,7 @@ class DashboardDataCollector:
 
         # KNOWN_STOCKS 역매핑 폴백 (코드→이름)
         if not hasattr(self, '_known_stocks_reverse'):
-            from src.signals.sentiment.theme_detector import KNOWN_STOCKS
+            from src.signals.sentiment.kr_theme_detector import KNOWN_STOCKS
             self._known_stocks_reverse = {v: k for k, v in KNOWN_STOCKS.items()}
 
         themes = []

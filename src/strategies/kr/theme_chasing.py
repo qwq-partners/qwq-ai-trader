@@ -23,7 +23,7 @@ from ...core.event import MarketDataEvent, ThemeEvent
 
 # ThemeDetector는 lazy import (모듈 미존재 시 graceful degradation)
 try:
-    from ...signals.sentiment.theme_detector import ThemeDetector, ThemeInfo, get_theme_detector
+    from ...signals.sentiment.kr_theme_detector import ThemeDetector, ThemeInfo, get_theme_detector
 except ImportError:
     ThemeDetector = None
     ThemeInfo = None
