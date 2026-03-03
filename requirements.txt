@@ -49,6 +49,9 @@ finnhub-python>=2.4.20
 pyarrow>=15.0.0
 exchange-calendars>=4.5.0
 
+# === 데이터베이스 ===
+asyncpg>=0.29.0
+
 # === 유틸리티 ===
 tenacity>=8.2.0
 python-dateutil>=2.8.0

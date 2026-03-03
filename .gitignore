@@ -18,7 +18,10 @@ logs/
 # 캐시 데이터
 data/*.json
 data/*.csv
+data/prices/
 *.cache
+*.parquet
+*.pkl
 
 # IDE
 .vscode/
