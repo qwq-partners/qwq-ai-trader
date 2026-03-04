@@ -677,7 +677,7 @@ class KRScheduler:
                             impact = data.get("impact", 0)
                             abs_impact = abs(impact)
 
-                            news_threshold = (bot.config.get("scheduler") or {}).get("news_impact_threshold", 5)
+                            news_threshold = (bot.config.get("kr", "scheduler") or {}).get("news_impact_threshold", 5)
                             if abs_impact >= news_threshold:
                                 news_event = NewsEvent(
                                     source="theme_detector",
@@ -938,7 +938,7 @@ class KRScheduler:
 
                                 # 장중 전략 사전 체크
                                 _strategy_type = StrategyType.MOMENTUM_BREAKOUT
-                                _sched_cfg = bot.config.get("momentum_breakout") or {}
+                                _sched_cfg = bot.config.get("kr", "strategies", "momentum_breakout") or {}
                                 _momentum_start = _sched_cfg.get("trading_start_time", "09:15")
                                 if "momentum_breakout" in _enabled and hour_min >= _momentum_start:
                                     _strategy_type = StrategyType.MOMENTUM_BREAKOUT
@@ -1146,7 +1146,7 @@ class KRScheduler:
                         logger.error(f"[스크리닝] 자동진입 오류: {e}", exc_info=True)
 
                 # ── 장중 품질 진입 (intraday_buy Option C) ───────────────────
-                _ib_cfg = bot.config.get("intraday_buy") or {}
+                _ib_cfg = bot.config.get("kr", "intraday_buy") or {}
                 _ib_enabled = _ib_cfg.get("enabled", False)
                 _ib_start = _ib_cfg.get("trading_start_time", "10:00")
                 _ib_end = _ib_cfg.get("trading_end_time", "14:30")
@@ -1497,7 +1497,7 @@ class KRScheduler:
         if not bot.report_generator:
             bot.report_generator = get_report_generator()
 
-        sched_cfg = bot.config.get("scheduler") or {}
+        sched_cfg = bot.config.get("kr", "scheduler") or {}
         morning_time_str = sched_cfg.get("morning_report_time", "08:00")
         evening_time_str = sched_cfg.get("evening_report_time", "17:00")
         morning_hour, morning_min = (int(x) for x in morning_time_str.split(":"))
@@ -1811,7 +1811,7 @@ class KRScheduler:
         bot = self.bot
         last_review_date: Optional[date] = None
 
-        sched_cfg = bot.config.get("scheduler") or {}
+        sched_cfg = bot.config.get("kr", "scheduler") or {}
         evo_time_str = sched_cfg.get("evolution_time", "20:30")
         evo_hour, evo_min = (int(x) for x in evo_time_str.split(":"))
 
@@ -2031,7 +2031,7 @@ class KRScheduler:
     async def run_daily_candle_refresh(self):
         """일봉 데이터 갱신 스케줄러 — 장 마감 후(15:40, 20:40)"""
         bot = self.bot
-        sched_cfg = bot.config.get("scheduler") or {}
+        sched_cfg = bot.config.get("kr", "scheduler") or {}
         refresh_times = sched_cfg.get("candle_refresh_times", ["15:40", "20:40"])
         max_symbols_per_run = sched_cfg.get("candle_refresh_max_symbols", 50)
         skip_weekends = sched_cfg.get("candle_refresh_skip_weekends", True)
@@ -2203,6 +2203,14 @@ class KRScheduler:
 
         pending_signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
 
+        # 실행 플래그 파일 기반 영속화 (재시작 시 중복 매수 방지)
+        _flag_dir = Path.home() / ".cache" / "ai_trader"
+        _flag_dir.mkdir(parents=True, exist_ok=True)
+        _today_flag = _flag_dir / f"executed_{date.today().isoformat()}.flag"
+        if _today_flag.exists():
+            last_execute_date = date.today()
+            logger.info(f"[배치스케줄러] 실행 플래그 감지: 오늘({date.today()}) 이미 실행됨 → 중복 방지")
+
         try:
             while bot.running:
                 now = datetime.now()
@@ -2214,6 +2222,18 @@ class KRScheduler:
                     if last_expert_panel_week != iso_week:
                         await self._run_expert_panel()
                         last_expert_panel_week = iso_week
+
+                # 날짜 변경 시 플래그 파일 경로 갱신 + 오래된 플래그 정리
+                _today_flag_cur = _flag_dir / f"executed_{today.isoformat()}.flag"
+                if _today_flag_cur != _today_flag:
+                    _today_flag = _today_flag_cur
+                    for _old_flag in _flag_dir.glob("executed_*.flag"):
+                        try:
+                            _flag_date_str = _old_flag.stem.replace("executed_", "")
+                            if _flag_date_str != today.isoformat():
+                                _old_flag.unlink()
+                        except Exception:
+                            pass
 
                 if is_kr_market_holiday(today):
                     await asyncio.sleep(60)
@@ -2278,6 +2298,7 @@ class KRScheduler:
                             if last_execute_date != today:
                                 result = await bot.batch_analyzer.execute_pending_signals()
                                 last_execute_date = today
+                                (_flag_dir / f"executed_{today.isoformat()}.flag").touch()
                                 logger.info(f"[배치] 풀백 실행: {result}")
                         except Exception as e:
                             logger.error(f"[배치] 풀백 오류: {e}")
@@ -2293,6 +2314,7 @@ class KRScheduler:
                     try:
                         result = await bot.batch_analyzer.execute_pending_signals()
                         last_execute_date = today
+                        (_flag_dir / f"executed_{today.isoformat()}.flag").touch()
                         logger.info(f"[배치] catch-up 실행: {result}")
                     except Exception as e:
                         logger.error(f"[배치] catch-up 실행 오류: {e}")
@@ -2353,6 +2375,7 @@ class KRScheduler:
                     except Exception as e:
                         logger.error(f"[배치스케줄러] 시그널 실행 오류: {e}")
                     last_execute_date = today
+                    (_flag_dir / f"executed_{today.isoformat()}.flag").touch()
 
                 # 09:30~15:20 매 30분 포지션 모니터링
                 if 9 <= now.hour <= 15:

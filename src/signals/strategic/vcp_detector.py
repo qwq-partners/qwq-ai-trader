@@ -14,7 +14,7 @@ Mark Minervini 스타일 변동성 수축 패턴 (Volatility Contraction Pattern
 
 import json
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 

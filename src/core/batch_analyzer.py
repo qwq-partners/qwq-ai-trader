@@ -525,6 +525,19 @@ class BatchAnalyzer:
         """[09:01] 대기 시그널 실행"""
         logger.info("[배치분석] ===== 대기 시그널 실행 =====")
 
+        # 포트폴리오 가드: 재시작 직후 포지션 미로드 대비
+        if not self._engine.portfolio.positions and self._broker:
+            try:
+                loaded_positions = await self._broker.get_positions()
+                if loaded_positions:
+                    for sym, pos in loaded_positions.items():
+                        self._engine.portfolio.positions[sym] = pos
+                    logger.info(
+                        f"[배치분석] 포트폴리오 가드: {len(loaded_positions)}개 포지션 복구"
+                    )
+            except Exception as e:
+                logger.warning(f"[배치분석] 포트폴리오 가드 포지션 조회 실패: {e}")
+
         signals = self._load_json()
         if not signals:
             logger.info("[배치분석] 대기 시그널 없음")
