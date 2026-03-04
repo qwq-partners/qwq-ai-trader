@@ -278,8 +278,13 @@ class KISUSPriceFeed:
             try:
                 obj   = json.loads(raw)
                 tr_id = obj.get("header", {}).get("tr_id", "")
-                # PINGPONG(서버 heartbeat) → 무시
+                # PINGPONG(서버 heartbeat) → PONG 응답 (응답 안 하면 KIS가 연결 끊음)
                 if tr_id == "PINGPONG":
+                    try:
+                        pong = json.dumps({"header": {"tr_id": "PINGPONG"}, "body": {}})
+                        await self._ws.send_str(pong)
+                    except Exception:
+                        pass
                     return
                 rt_cd = obj.get("body", {}).get("rt_cd", "")
                 msg1  = obj.get("body", {}).get("msg1", "")
