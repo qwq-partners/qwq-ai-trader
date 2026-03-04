@@ -598,6 +598,8 @@ class KISWebSocketFeed:
 
     async def run(self):
         """메시지 수신 루프"""
+        # 시작 시 running 플래그 활성화 (_running은 __init__에서 False로 초기화되어 있음)
+        self._running = True
         while True:
             # 장외 시간 — 연결 시도하지 않고 대기
             if not self._should_connect:
