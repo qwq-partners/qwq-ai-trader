@@ -704,6 +704,12 @@ class UnifiedTradingBot:
                         logger.info("[KR] REST+WS 병행 모드")
                     else:
                         logger.info("[KR] WebSocket 피드 초기화 완료")
+
+                    # WS 생성 직후 보유 종목 우선 구독 설정
+                    if self.engine.portfolio.positions:
+                        pos_symbols = list(self.engine.portfolio.positions.keys())
+                        self.ws_feed.set_priority_symbols(pos_symbols)
+                        logger.info(f"[KR] WS 보유 종목 {len(pos_symbols)}개 우선 구독 예약 (연결 후 자동 구독)")
                 except Exception as e:
                     logger.warning(f"[KR] WebSocket 초기화 실패 (무시): {e}")
                     self.ws_feed = None

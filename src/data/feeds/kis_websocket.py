@@ -620,6 +620,9 @@ class KISWebSocketFeed:
                         logger.info(f"WebSocket 재연결 성공 (시도 {self._reconnect_count}회 후)")
                         self._reconnect_count = 0
 
+                    # 연결 직후 priority 종목 포함 구독 적용 (보유 종목 포함)
+                    await self._apply_subscriptions()
+
                 async for msg in self._ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         await self._handle_message(msg.data)
