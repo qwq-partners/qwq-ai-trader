@@ -1,5 +1,32 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-04 — WS 실시간 포지션 모니터링 + 스캔 품질 개선 + 전략 다변화
+
+### P0: WS 실시간 보유 포지션 모니터링 구현
+- **`scripts/run_trader.py`**: `_load_existing_positions()` 후 `ws_feed.set_priority_symbols()` + `subscribe()` 호출하여 보유 종목 WS 자동 구독
+- **`scripts/run_trader.py`**: `_on_market_data()` 콜백에서 보유 종목 수신 시 `kr_scheduler._check_exit_signal()` 즉시 호출 (WS 실시간 청산 체크)
+- **`scripts/run_trader.py`**: `kr_scheduler` 인스턴스를 봇 속성으로 저장 (WS 콜백 접근용)
+- **`src/schedulers/kr_scheduler.py`**: `run_fill_check()` BUY 체결 시 WS priority symbols 갱신 + 신규 심볼 구독
+- **`src/schedulers/kr_scheduler.py`**: `run_rest_price_feed()` 폴링 간격 45초 → 20초 (WS 백업 역할 강화)
+
+### P1: FDR 조회 타임아웃 개선
+- **`src/signals/screener/swing_screener.py`**: `_calculate_all_indicators()` 타임아웃 10초 → 15초, 실패 시 1회 재시도
+- **`src/signals/screener/swing_screener.py`**: `_load_benchmark_index()` FDR 실패 시 KIS API (`broker.get_daily_prices("0001")`) 폴백
+
+### P2: SEPA 전략 점수 완화 + 전략 다변화
+- **`src/core/batch_analyzer.py`**: `execute_pending_signals()` 전략별 최대 포지션 수 제한 추가 (`rsi2_reversal` 최대 3개, `sepa_trend` 최대 3개, 기타 2개)
+- `config/default.yml` sepa_trend min_score는 이미 55 (변경 불필요)
+
+### P3: 포지션 모니터링 간격 단축
+- **`config/default.yml`**: `position_update_interval` 30 → 10분
+- **`src/schedulers/kr_scheduler.py`**: 기본값 30 → 10분
+
+### P4: US 포트폴리오 초기화 None 비교 버그
+- **`scripts/run_trader.py`**: `_initialize_us()` 잔고 조회 시 `balance.get('total_equity') or 0` + `is not None` 가드 추가
+
+### P5: stock_master 로컬 캐시 폴백
+- **`src/dashboard/data_collector.py`**: `_load_stock_master_sync()` pykrx 성공 시 `~/.cache/ai_trader/stock_master_kospi.json` 캐시 저장, 실패 시 캐시 로드 (TTL 48시간)
+
 ## 2026-03-04 — 버그 상세 리뷰 + 수정 (2차)
 
 ### 수정 완료

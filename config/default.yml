@@ -133,7 +133,7 @@ kr:
       enabled: true
       stop_loss_pct: 5.0
       max_holding_days: 10
-      min_score: 60
+      min_score: 55
       weight: 40
 
   exit_manager:
@@ -158,7 +158,7 @@ kr:
     morning_scan_time: "08:20"
     daily_scan_time: "15:40"
     execute_time: "09:01"
-    position_update_interval: 30
+    position_update_interval: 10
     max_entry_slippage_pct: 3.0
     max_holding_days: 10
     evening_scan_enabled: true

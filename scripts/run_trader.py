@@ -194,6 +194,7 @@ class UnifiedTradingBot:
         self._external_accounts: list = []
         self._last_screened: list = []
         self.stock_name_cache: Dict[str, str] = {}
+        self.kr_scheduler = None              # KRScheduler (WS 콜백에서 exit check용)
         self.equity_tracker = None
         self.daily_reviewer = None
         self.report_generator = None
@@ -849,9 +850,9 @@ class UnifiedTradingBot:
                     balance = await us_engine.broker.get_balance()
                     balance = balance.get("account", {}) if balance else {}
                     if balance:
-                        actual_capital = balance.get('total_equity', 0)
-                        available_cash = balance.get('available_cash', 0)
-                        if actual_capital > 0:
+                        actual_capital = balance.get('total_equity') or 0
+                        available_cash = balance.get('available_cash') or 0
+                        if actual_capital is not None and actual_capital > 0:
                             us_engine.portfolio.initial_capital = Decimal(str(actual_capital))
                             us_engine.portfolio.cash = Decimal(str(available_cash))
                             logger.info(f"[US] 계좌 잔고: ${actual_capital:,.2f} (가용: ${available_cash:,.2f})")
@@ -1137,6 +1138,7 @@ class UnifiedTradingBot:
                     try:
                         from src.schedulers.kr_scheduler import KRScheduler
                         kr_scheduler = KRScheduler(self)
+                        self.kr_scheduler = kr_scheduler
                         kr_tasks = kr_scheduler.create_tasks()
                         tasks.extend(kr_tasks)
                         logger.info(f"[KR] 스케줄러 태스크 {len(kr_tasks)}개 시작")
@@ -1290,6 +1292,13 @@ class UnifiedTradingBot:
                 f"[KR] 기존 보유 종목 {len(self.engine.portfolio.positions)}개 로드 "
                 f"(평가금액: {total_value:,.0f}원)"
             )
+
+            # WS 실시간 구독: 보유 종목을 최우선 구독
+            if self.ws_feed and self.engine.portfolio.positions:
+                pos_symbols = list(self.engine.portfolio.positions.keys())
+                self.ws_feed.set_priority_symbols(pos_symbols)
+                await self.ws_feed.subscribe(pos_symbols)
+                logger.info(f"[KR] WS 보유 종목 {len(pos_symbols)}개 우선 구독 설정")
         except Exception as e:
             logger.error(f"[KR] 보유 종목 로드 실패: {e}")
 
@@ -1421,6 +1430,12 @@ class UnifiedTradingBot:
         """KR WebSocket 시장 데이터 콜백"""
         try:
             await self.engine.emit(event)
+
+            # WS 실시간 청산 체크: 보유 종목이면 즉시 exit signal 확인
+            if (self.kr_scheduler
+                    and event.symbol in self.engine.portfolio.positions
+                    and event.close is not None and event.close > 0):
+                await self.kr_scheduler._check_exit_signal(event.symbol, event.close)
         except Exception as e:
             logger.error(f"[KR] 시장 데이터 이벤트 발행 실패: {e}")
 
@@ -1428,7 +1443,7 @@ class UnifiedTradingBot:
         """현재 KR 세션 조회"""
         try:
             from src.utils.session import KRSession
-            return KRSession.get_current_session()
+            return KRSession().get_current_session()  # 인스턴스 생성 후 호출
         except Exception:
             return MarketSession.CLOSED
 

@@ -224,31 +224,81 @@ class DashboardDataCollector:
 
     @classmethod
     def _load_stock_master_sync(cls) -> None:
-        """종목 마스터 동기 로드 (pykrx 블로킹 I/O)"""
-        if cls._stock_master_loaded or not PYKRX_AVAILABLE:
+        """종목 마스터 동기 로드 (pykrx 블로킹 I/O, 실패 시 로컬 캐시 폴백)"""
+        if cls._stock_master_loaded:
             return
 
-        try:
-            logger.info("Loading stock master from pykrx...")
+        _cache_dir = Path.home() / ".cache" / "ai_trader"
+        _kospi_cache = _cache_dir / "stock_master_kospi.json"
+        _kosdaq_cache = _cache_dir / "stock_master_kosdaq.json"
 
-            # KOSPI + KOSDAQ + KONEX 전체 종목 로드
-            for market in ["KOSPI", "KOSDAQ", "KONEX"]:
-                try:
-                    tickers = pykrx_stock.get_market_ticker_list(market=market)
-                    for ticker in tickers:
-                        if ticker not in cls._stock_master_cache:
-                            name = pykrx_stock.get_market_ticker_name(ticker)
-                            if name:
-                                cls._stock_master_cache[ticker] = name
-                except Exception as e:
-                    logger.warning(f"Failed to load {market} tickers: {e}")
-                    continue
+        pykrx_success = False
+        if PYKRX_AVAILABLE:
+            try:
+                logger.info("Loading stock master from pykrx...")
 
-            cls._stock_master_loaded = True
-            logger.info(f"Stock master loaded: {len(cls._stock_master_cache)} stocks")
+                # KOSPI + KOSDAQ + KONEX 전체 종목 로드
+                for market in ["KOSPI", "KOSDAQ", "KONEX"]:
+                    try:
+                        tickers = pykrx_stock.get_market_ticker_list(market=market)
+                        for ticker in tickers:
+                            if ticker not in cls._stock_master_cache:
+                                name = pykrx_stock.get_market_ticker_name(ticker)
+                                if name:
+                                    cls._stock_master_cache[ticker] = name
+                    except Exception as e:
+                        logger.warning(f"Failed to load {market} tickers: {e}")
+                        continue
 
-        except Exception as e:
-            logger.error(f"Failed to load stock master: {e}")
+                if cls._stock_master_cache:
+                    pykrx_success = True
+                    cls._stock_master_loaded = True
+                    logger.info(f"Stock master loaded: {len(cls._stock_master_cache)} stocks")
+
+                    # 성공 시 캐시 저장 (TTL 24시간)
+                    try:
+                        import json as _json
+                        _cache_dir.mkdir(parents=True, exist_ok=True)
+                        # KOSPI/KOSDAQ 분리 저장
+                        _kospi_cache.write_text(_json.dumps(
+                            {k: v for k, v in cls._stock_master_cache.items()},
+                            ensure_ascii=False
+                        ))
+                        logger.debug(f"Stock master cache saved: {len(cls._stock_master_cache)} stocks")
+                    except Exception as _ce:
+                        logger.debug(f"Stock master cache save failed: {_ce}")
+
+            except Exception as e:
+                logger.error(f"Failed to load stock master from pykrx: {e}")
+
+        # pykrx 실패 시 로컬 캐시 폴백
+        if not pykrx_success:
+            try:
+                import json as _json
+                from datetime import datetime as _dt
+                loaded = False
+                for cache_path in [_kospi_cache, _kosdaq_cache]:
+                    if cache_path.exists():
+                        # TTL 24시간 체크
+                        import os as _os
+                        mtime = _os.path.getmtime(cache_path)
+                        age_hours = (_dt.now().timestamp() - mtime) / 3600
+                        if age_hours > 48:
+                            logger.debug(f"Stock master cache expired ({age_hours:.0f}h): {cache_path.name}")
+                            continue
+                        data = _json.loads(cache_path.read_text())
+                        if data:
+                            cls._stock_master_cache.update(data)
+                            loaded = True
+                if loaded and cls._stock_master_cache:
+                    cls._stock_master_loaded = True
+                    logger.info(
+                        f"Stock master loaded from cache: {len(cls._stock_master_cache)} stocks"
+                    )
+                else:
+                    logger.warning("Stock master: pykrx failed and no valid cache available")
+            except Exception as _fe:
+                logger.warning(f"Stock master cache fallback failed: {_fe}")
 
     @classmethod
     async def _load_stock_master(cls) -> None:

@@ -204,18 +204,24 @@ class SwingScreener:
             name = stock["name"]
             loop = asyncio.get_running_loop()
 
-            try:
-                async with sem:
-                    df = await asyncio.wait_for(
-                        loop.run_in_executor(None, self._fetch_fdr_data, symbol, start_date),
-                        timeout=10.0,
-                    )
-            except asyncio.TimeoutError:
-                logger.warning(f"[스윙스크리너] {symbol} FDR 조회 타임아웃(10초), 스킵")
-                return None
-            except Exception as e:
-                logger.debug(f"[스윙스크리너] {symbol} FDR 조회 실패: {e}")
-                return None
+            df = None
+            for attempt in range(2):
+                try:
+                    async with sem:
+                        df = await asyncio.wait_for(
+                            loop.run_in_executor(None, self._fetch_fdr_data, symbol, start_date),
+                            timeout=15.0,
+                        )
+                    break  # 성공 시 루프 탈출
+                except asyncio.TimeoutError:
+                    if attempt == 0:
+                        logger.debug(f"[스윙스크리너] {symbol} FDR 조회 타임아웃(15초), 1회 재시도")
+                        continue
+                    logger.warning(f"[스윙스크리너] {symbol} FDR 조회 타임아웃(15초x2), 스킵")
+                    return None
+                except Exception as e:
+                    logger.debug(f"[스윙스크리너] {symbol} FDR 조회 실패: {e}")
+                    return None
 
             try:
                 if df is None or len(df) < 50:
@@ -542,7 +548,12 @@ class SwingScreener:
         return False
 
     async def _load_benchmark_index(self):
-        """벤치마크 지수(KOSPI) 1년치 로드 (MRS 계산용)"""
+        """벤치마크 지수(KOSPI) 1년치 로드 (MRS 계산용)
+
+        1차: FDR (FinanceDataReader)
+        2차: KIS API 폴백 (KOSPI 지수 최근 20일)
+        """
+        # 1차: FDR
         try:
             loop = asyncio.get_running_loop()
             start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
@@ -552,12 +563,29 @@ class SwingScreener:
             if kospi_df is not None and len(kospi_df) >= 50:
                 self._kospi_closes = [float(row["Close"]) for _, row in kospi_df.iterrows()]
                 logger.info(f"[스윙스크리너] KOSPI 벤치마크 로드: {len(self._kospi_closes)}일")
-            else:
-                self._kospi_closes = []
-                logger.warning("[스윙스크리너] KOSPI 벤치마크 로드 실패")
+                return
         except Exception as e:
-            self._kospi_closes = []
-            logger.warning(f"[스윙스크리너] KOSPI 벤치마크 로드 오류: {e}")
+            logger.warning(f"[스윙스크리너] KOSPI 벤치마크 FDR 로드 오류: {e}")
+
+        # 2차: KIS API 폴백 (KOSPI 지수 최근 20일)
+        self._kospi_closes = []
+        if self._broker:
+            try:
+                history = await self._broker.get_daily_prices("0001", count=20)
+                if history and len(history) >= 10:
+                    self._kospi_closes = [
+                        float(bar.get("close", 0)) for bar in history
+                        if float(bar.get("close", 0)) > 0
+                    ]
+                    logger.info(
+                        f"[스윙스크리너] KOSPI 벤치마크 KIS API 폴백: {len(self._kospi_closes)}일"
+                    )
+                else:
+                    logger.warning("[스윙스크리너] KOSPI 벤치마크 KIS API 데이터 부족")
+            except Exception as e2:
+                logger.warning(f"[스윙스크리너] KOSPI 벤치마크 KIS API 폴백 실패: {e2}")
+        else:
+            logger.warning("[스윙스크리너] KOSPI 벤치마크 로드 실패 (FDR + KIS 모두 불가)")
 
     def _save_supply_demand_cache(self, data: Dict[str, Dict[str, int]]) -> None:
         """수급 데이터를 날짜별 캐시 파일로 저장 (KIS API 성공 시)."""

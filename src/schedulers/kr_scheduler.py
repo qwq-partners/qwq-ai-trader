@@ -724,7 +724,7 @@ class KRScheduler:
                                 bot._exit_pending_timestamps.pop(fill.symbol, None)
                                 bot._exit_reasons.pop(fill.symbol, None)
 
-                            # 매수 체결 시 ExitManager 등록
+                            # 매수 체결 시 ExitManager 등록 + WS 우선 구독
                             if fill.side == OrderSide.BUY:
                                 pos = bot.engine.portfolio.positions.get(fill.symbol)
                                 if pos and bot.exit_manager:
@@ -742,6 +742,16 @@ class KRScheduler:
                                         )
                                     except Exception as e:
                                         logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패: {e}")
+
+                                # WS 보유 종목 우선 구독 갱신
+                                if bot.ws_feed:
+                                    try:
+                                        pos_symbols = list(bot.engine.portfolio.positions.keys())
+                                        bot.ws_feed.set_priority_symbols(pos_symbols)
+                                        await bot.ws_feed.subscribe([fill.symbol])
+                                        logger.debug(f"[체결] {fill.symbol} WS 우선 구독 추가")
+                                    except Exception as e:
+                                        logger.debug(f"[체결] {fill.symbol} WS 구독 갱신 실패: {e}")
 
                     check_interval = 2 if open_orders else 5
 
@@ -1344,7 +1354,7 @@ class KRScheduler:
                 try:
                     current_session = self._get_current_session()
                     if current_session == MarketSession.CLOSED:
-                        await asyncio.sleep(45)
+                        await asyncio.sleep(20)
                         continue
 
                     # 대상 종목: WS가 커버 못 하는 보유종목만
@@ -1358,7 +1368,7 @@ class KRScheduler:
                     ]
 
                     if not target_symbols:
-                        await asyncio.sleep(45)
+                        await asyncio.sleep(20)
                         continue
 
                     success_count = 0
@@ -1402,7 +1412,7 @@ class KRScheduler:
                 except Exception as e:
                     logger.warning(f"[REST피드] 오류: {e}", exc_info=True)
 
-                await asyncio.sleep(45)
+                await asyncio.sleep(20)
 
         except asyncio.CancelledError:
             pass
@@ -2171,7 +2181,7 @@ class KRScheduler:
         batch_cfg = (bot.config.get("kr") or {}).get("batch") or bot.config.get("batch") or {}
         scan_time_str = batch_cfg.get("daily_scan_time", "15:40")
         execute_time_str = batch_cfg.get("execute_time", "09:01")
-        monitor_interval = batch_cfg.get("position_update_interval", 30)
+        monitor_interval = batch_cfg.get("position_update_interval", 10)
         evening_scan_enabled = batch_cfg.get("evening_scan_enabled", True)
         evening_scan_time_str = batch_cfg.get("evening_scan_time", "19:30")
 

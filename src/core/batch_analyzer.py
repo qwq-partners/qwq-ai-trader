@@ -101,7 +101,7 @@ class BatchAnalyzer:
         sepa_cfg = StrategyConfig(
             name="SEPATrend",
             strategy_type=StrategyType.SEPA_TREND,
-            min_score=self._config.get("sepa_trend", {}).get("min_score", 70.0),
+            min_score=self._config.get("sepa_trend", {}).get("min_score", 55.0),
             stop_loss_pct=self._config.get("sepa_trend", {}).get("stop_loss_pct", 5.0),  # 3곳 불일치 통일
             params=self._config.get("sepa_trend", {}),
         )
@@ -592,6 +592,22 @@ class BatchAnalyzer:
                 # 이미 보유 중인 종목 스킵
                 if sig.symbol in self._engine.portfolio.positions:
                     logger.info(f"[배치분석] {sig.symbol} 이미 보유 중, 스킵")
+                    skipped += 1
+                    continue
+
+                # 전략별 최대 포지션 수 제한 (동일 전략 집중 방지)
+                strategy_limits = {"rsi2_reversal": 3, "sepa_trend": 3}
+                default_limit = 2
+                strategy_count = sum(
+                    1 for p in self._engine.portfolio.positions.values()
+                    if p.strategy == sig.strategy
+                )
+                max_for_strategy = strategy_limits.get(sig.strategy, default_limit)
+                if strategy_count >= max_for_strategy:
+                    logger.info(
+                        f"[배치분석] {sig.symbol} 전략 한도 초과: "
+                        f"{sig.strategy} {strategy_count}/{max_for_strategy}개, 스킵"
+                    )
                     skipped += 1
                     continue
 
