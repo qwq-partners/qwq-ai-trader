@@ -726,7 +726,16 @@ class KRScheduler:
 
                             # 매수 체결 시 ExitManager 등록 + WS 우선 구독
                             if fill.side == OrderSide.BUY:
-                                pos = bot.engine.portfolio.positions.get(fill.symbol)
+                                # engine.emit()은 큐에만 넣고 리턴 → FillEvent 처리 전에
+                                # portfolio.positions에 포지션이 없을 수 있음.
+                                # 엔진 루프가 처리할 때까지 최대 1초 대기.
+                                pos = None
+                                for _wait in range(10):
+                                    pos = bot.engine.portfolio.positions.get(fill.symbol)
+                                    if pos:
+                                        break
+                                    await asyncio.sleep(0.1)
+
                                 if pos and bot.exit_manager:
                                     exit_params = bot._strategy_exit_params.get(
                                         pos.strategy, {}
@@ -740,8 +749,14 @@ class KRScheduler:
                                             second_exit_pct=exit_params.get("second_exit_pct"),
                                             third_exit_pct=exit_params.get("third_exit_pct"),
                                         )
+                                        logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%)")
                                     except Exception as e:
                                         logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패: {e}")
+                                else:
+                                    logger.warning(
+                                        f"[체결] {fill.symbol} ExitManager 등록 스킵 "
+                                        f"(pos={'없음' if not pos else 'OK'}, exit_manager={'없음' if not bot.exit_manager else 'OK'})"
+                                    )
 
                                 # WS 보유 종목 우선 구독 갱신
                                 if bot.ws_feed:
