@@ -277,13 +277,17 @@ class KISUSPriceFeed:
         if raw.startswith("{"):
             try:
                 obj   = json.loads(raw)
+                tr_id = obj.get("header", {}).get("tr_id", "")
+                # PINGPONG(서버 heartbeat) → 무시
+                if tr_id == "PINGPONG":
+                    return
                 rt_cd = obj.get("body", {}).get("rt_cd", "")
                 msg1  = obj.get("body", {}).get("msg1", "")
-                tr_id = obj.get("header", {}).get("tr_id", "")
                 if rt_cd == "0":
                     logger.info(f"[KIS US WS] 구독 확인: {tr_id} — {msg1}")
-                else:
+                elif rt_cd:
                     logger.warning(f"[KIS US WS] 오류: {tr_id} rt_cd={rt_cd} {msg1}")
+                # rt_cd 없는 기타 JSON 메시지 → 무시
             except Exception:
                 pass
             return
