@@ -246,7 +246,7 @@ class HealthMonitor:
 
     async def _check_periodic(self) -> List[CheckResult]:
         results = []
-        results.append(await self._check_rolling_performance())
+        # rolling_perf 체크 비활성화 (불필요 알람)
         return results
 
     async def _check_rolling_performance(self) -> CheckResult:
