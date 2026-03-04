@@ -113,10 +113,60 @@ table th {
 
 /* -- Position table column hiding (mobile) -- */
 @media (max-width: 768px) {
+  /* KR: 평균가·수량·평가금액·보유일 숨기기 */
   #positions-table .col-avg-price,
   #positions-table .col-quantity,
   #positions-table .col-market-value,
   #positions-table .col-holding { display: none !important; }
+
+  /* US: 동일하게 숨기기 */
+  #us-positions-table .col-avg-price,
+  #us-positions-table .col-quantity,
+  #us-positions-table .col-market-value,
+  #us-positions-table .col-holding { display: none !important; }
+}
+
+/* -- Position tables: 모바일 반응형 스크롤 (≤600px) -- */
+@media (max-width: 600px) {
+  /* table-layout:fixed + colgroup % → auto 전환, 가로 스크롤 */
+  #positions-table,
+  #us-positions-table {
+    table-layout: auto !important;
+    width: max-content !important;
+    min-width: 100%;
+  }
+
+  /* 모든 셀 줄바꿈·말줄임 방지 */
+  #positions-table th,
+  #positions-table td,
+  #us-positions-table th,
+  #us-positions-table td {
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  /* 전략 컬럼 추가 숨기기 (2번째 col) */
+  #positions-table th:nth-child(2),
+  #positions-table td:nth-child(2),
+  #us-positions-table th:nth-child(2),
+  #us-positions-table td:nth-child(2) {
+    display: none !important;
+  }
+
+  /* 종목명: 최소 너비 확보 */
+  #positions-table td:first-child,
+  #us-positions-table td:first-child {
+    min-width: 90px;
+  }
+
+  /* 스크롤 가능하다는 힌트 (우측 페이드) */
+  #positions-table,
+  #us-positions-table {
+    font-size: 0.72rem !important;
+  }
 }
 
 /* -- Event log height -- */
