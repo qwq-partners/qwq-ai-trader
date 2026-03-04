@@ -218,7 +218,7 @@ kr:
     cache_ttl_hours: 24
 
   scheduler:
-    morning_report_time: "08:00"
+    morning_report_time: "08:25"
     evening_report_time: "16:00"
     evolution_time: "20:30"
     candle_refresh_times: ["15:40", "20:40"]
