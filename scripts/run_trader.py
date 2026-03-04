@@ -13,6 +13,7 @@ KR + US 시장을 단일 프로세스에서 운영합니다.
 
 import argparse
 import asyncio
+import json
 import signal
 import sys
 import os
@@ -179,7 +180,13 @@ class UnifiedTradingBot:
         self._watch_symbols: List[str] = []
         self._screening_interval: int = 600
         self._screening_signal_cooldown: dict = {}
-        self._daily_entry_count: Dict[str, int] = {}
+        # 재시작 생존: 당일 진입 카운터 파일 로드
+        _ec_today = datetime.now().date().isoformat()
+        _ec_path = Path.home() / ".cache" / "ai_trader" / f"daily_entry_count_{_ec_today}.json"
+        try:
+            self._daily_entry_count: Dict[str, int] = json.loads(_ec_path.read_text()) if _ec_path.exists() else {}
+        except Exception:
+            self._daily_entry_count: Dict[str, int] = {}
         self._strategy_exit_params: Dict[str, Dict[str, float]] = {}
         self._symbol_strategy: Dict[str, str] = {}
         self._symbol_signals: Dict[str, Any] = {}

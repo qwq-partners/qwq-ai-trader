@@ -962,7 +962,9 @@ class KRScheduler:
                                 ]
 
                                 # 장중 전략 사전 체크
-                                _strategy_type = StrategyType.MOMENTUM_BREAKOUT
+                                # momentum_breakout/theme_chasing/gap_and_go 우선,
+                                # 비활성 시 sepa_trend 허용 (rsi2_reversal만 단독 활성인 경우 스킵)
+                                _strategy_type = StrategyType.SEPA_TREND  # 기본값
                                 _sched_cfg = bot.config.get("kr", "strategies", "momentum_breakout") or {}
                                 _momentum_start = _sched_cfg.get("trading_start_time", "09:15")
                                 if "momentum_breakout" in _enabled and hour_min >= _momentum_start:
@@ -971,6 +973,9 @@ class KRScheduler:
                                     _strategy_type = StrategyType.THEME_CHASING
                                 elif "gap_and_go" in _enabled:
                                     _strategy_type = StrategyType.GAP_AND_GO
+                                elif "sepa_trend" in _enabled:
+                                    # sepa_trend 활성이면 장중 자동진입 허용
+                                    _strategy_type = StrategyType.SEPA_TREND
                                 elif "momentum_breakout" in _enabled and hour_min < _momentum_start:
                                     logger.debug(f"[스크리닝] 모멘텀 시작시간({_momentum_start}) 전 → 자동진입 스킵")
                                     candidates = []
@@ -1156,6 +1161,13 @@ class KRScheduler:
                                     bot._screening_signal_cooldown[stock.symbol] = now
                                     bot._daily_entry_count[stock.symbol] = bot._daily_entry_count.get(stock.symbol, 0) + 1
                                     signals_emitted += 1
+                                    # 재시작 생존: 파일에 즉시 저장
+                                    try:
+                                        _ec_path = Path.home() / ".cache" / "ai_trader" / f"daily_entry_count_{now.date().isoformat()}.json"
+                                        _ec_path.parent.mkdir(parents=True, exist_ok=True)
+                                        _ec_path.write_text(json.dumps(bot._daily_entry_count))
+                                    except Exception as _ec_err:
+                                        logger.debug(f"[스크리닝] 진입 카운터 저장 실패: {_ec_err}")
 
                                     logger.info(
                                         f"[스크리닝] 시그널 발행: {stock.symbol} {stock.name} "
@@ -1200,11 +1212,17 @@ class KRScheduler:
                             _ib_held = set(bot.engine.portfolio.positions.keys())
                             _ib_rm = bot.engine.risk_manager
                             _ib_stopped = set(_ib_rm._stop_loss_today) if _ib_rm and hasattr(_ib_rm, '_stop_loss_today') else set()
-                            _ib_exclude = _ib_held | _ib_stopped
+                            _ib_pending = set(_ib_rm._pending_orders) if _ib_rm and hasattr(_ib_rm, '_pending_orders') else set()
+                            _ib_exclude = _ib_held | _ib_stopped | _ib_pending
 
-                            if not hasattr(self, '_ib_daily_count'):
-                                self._ib_daily_count = {}
+                            # 장중품질 일일 진입 카운터 — 재시작 생존을 위해 파일 기반
                             _ib_today_key = _ib_now.date().isoformat()
+                            _ib_count_path = Path.home() / ".cache" / "ai_trader" / f"ib_entries_{_ib_today_key}.json"
+                            if not hasattr(self, '_ib_daily_count') or _ib_today_key not in self._ib_daily_count:
+                                try:
+                                    self._ib_daily_count = json.loads(_ib_count_path.read_text()) if _ib_count_path.exists() else {}
+                                except Exception:
+                                    self._ib_daily_count = {}
                             _ib_today_cnt = self._ib_daily_count.get(_ib_today_key, 0)
 
                             _ib_candidates = [
@@ -1337,6 +1355,12 @@ class KRScheduler:
                                 bot._screening_signal_cooldown[_ib_stock.symbol] = _ib_now
                                 _ib_today_cnt += 1
                                 self._ib_daily_count[_ib_today_key] = _ib_today_cnt
+                                # 재시작 생존: 파일에 즉시 저장
+                                try:
+                                    _ib_count_path.parent.mkdir(parents=True, exist_ok=True)
+                                    _ib_count_path.write_text(json.dumps(self._ib_daily_count))
+                                except Exception as _ib_save_err:
+                                    logger.debug(f"[장중품질] 진입 카운터 저장 실패: {_ib_save_err}")
 
                                 logger.info(
                                     f"[장중품질] 신호 발행: {_ib_stock.symbol} {_ib_stock.name} "

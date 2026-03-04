@@ -630,13 +630,20 @@ class UnifiedEngine:
         risk = self.config.risk
         _pending = pending_symbols or set()
 
-        # 1. 일일 손실 제한 체크 (실현 손익만 — 미실현 변화로 매수 차단 방지)
+        # 1. 일일 손실 제한 체크
         _equity = self.portfolio.total_equity
-        effective_pnl = self.portfolio.daily_pnl  # 실현 손익만 사용
+        effective_pnl = self.portfolio.daily_pnl  # 실현 손익
         daily_loss_pct = float(effective_pnl / _equity * 100) if _equity > 0 else 0.0
+        effective_with_unrealized = float(self.portfolio.effective_daily_pnl / _equity * 100) if _equity > 0 else 0.0
+
+        # 실현 손익 기준 소프트 차단
         if daily_loss_pct <= -risk.daily_max_loss_pct:
-            effective_with_unrealized = float(self.portfolio.effective_daily_pnl / _equity * 100) if _equity > 0 else 0.0
             return False, f"일일 손실 한도 도달 (실현={daily_loss_pct:.1f}%, 미실현포함={effective_with_unrealized:.1f}%)"
+
+        # 미실현 포함 하드캡: 1.5× 한도 초과 시 신규 매수 차단 (손절 미작동 등 비정상 상황 방어)
+        hard_cap_pct = risk.daily_max_loss_pct * 1.5
+        if effective_with_unrealized <= -hard_cap_pct:
+            return False, f"일일 손실 하드캡 초과 (미실현포함={effective_with_unrealized:.1f}%, 한도={-hard_cap_pct:.1f}%)"
 
         # 2. (일일 거래 횟수 제한 제거 — 가용 현금이 게이트)
 

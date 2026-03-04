@@ -60,7 +60,7 @@ kr:
     flex_cash_threshold_pct: 10.0
     max_positions_per_sector: 3
     strategy_allocation:
-      momentum_breakout: 60.0
+      momentum_breakout: 55.0  # 합계 100% 유지 (60→55)
       sepa_trend: 25.0
       rsi2_reversal: 10.0
       theme_chasing: 5.0
