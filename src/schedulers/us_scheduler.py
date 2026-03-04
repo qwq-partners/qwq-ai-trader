@@ -87,13 +87,19 @@ class USScheduler:
         # 워치리스트
         tasks.append(asyncio.create_task(self.watchlist_loop(), name="us_watchlist"))
 
-        # Finnhub WS (디스플레이 전용)
+        # Finnhub WS (디스플레이 전용 — 15분 지연, exit 결정 사용 금지)
         if eng.ws_feed:
             tasks.append(asyncio.create_task(eng.ws_feed.start(), name="us_finnhub_ws"))
 
-        # KIS 실시간체결통보 WS
+        # KIS 실시간체결통보 WS (fill notification)
         if eng.kis_ws:
             tasks.append(asyncio.create_task(eng.kis_ws.start(), name="us_kis_ws"))
+
+        # KIS 해외주식 실시간가 WS (HDFSCNT0) — 보유 포지션 실시간 exit 체크
+        if eng.us_price_ws:
+            eng.us_price_ws.on_price(self._on_us_ws_price)
+            tasks.append(asyncio.create_task(eng.us_price_ws.start(), name="us_kis_price_ws"))
+            tasks.append(asyncio.create_task(self._init_ws_price_subs(), name="us_ws_price_init"))
 
         # 거래량급증 루프
         if hasattr(eng.broker, "get_volume_surge"):
@@ -672,19 +678,77 @@ class USScheduler:
             return False
 
     # ============================================================
+    # KIS 해외주식 실시간가 WS 콜백 (HDFSCNT0)
+    # ============================================================
+
+    async def _init_ws_price_subs(self):
+        """서비스 시작 시 기존 보유 포지션을 KIS US WS에 구독"""
+        eng = self.engine
+        await asyncio.sleep(5)  # WS 연결 대기
+        if not eng.us_price_ws:
+            return
+        for symbol in list(eng.portfolio.positions.keys()):
+            exchange = eng._exchange_cache.get(symbol, eng._default_exchange)
+            await eng.us_price_ws.subscribe([symbol], exchange=exchange)
+        if eng.portfolio.positions:
+            logger.info(
+                f"[KIS US WS] 초기 구독 완료: {list(eng.portfolio.positions.keys())}"
+            )
+
+    async def _on_us_ws_price(self, symbol: str, price: float, volume: int):
+        """
+        KIS 해외주식 실시간가 WS 콜백 (HDFSCNT0)
+
+        1. position.current_price / highest_price 즉시 갱신
+        2. ExitManager.update_price() 호출 → exit 시그널 발생 시 매도 실행
+        """
+        eng = self.engine
+        pos = eng.portfolio.positions.get(symbol)
+        if not pos or symbol in eng._pending_symbols:
+            return
+
+        cur = Decimal(str(price))
+        pos.current_price = cur
+        if pos.highest_price is None or cur > pos.highest_price:
+            pos.highest_price = cur
+
+        # ExitManager 실시간 체크
+        exit_signal = eng.exit_manager.update_price(symbol, cur)
+        if not exit_signal:
+            return
+
+        # pending 재확인 (update_price 처리 중 상태 변경 가능)
+        if symbol in eng._pending_symbols:
+            return
+
+        action, qty, reason = exit_signal
+        exchange = await self._get_exchange(symbol)
+        ratio = qty / pos.quantity if pos.quantity > 0 else 1.0
+        logger.info(
+            f"[KIS US WS] exit 시그널 → {symbol} {action} {ratio:.0%} "
+            f"@ ${price:.2f} ({reason})"
+        )
+        await self._execute_exit(
+            symbol, pos,
+            {"action": action, "ratio": ratio, "reason": reason, "qty": qty},
+            exchange,
+        )
+
+    # ============================================================
     # 태스크 2: 청산 체크 루프
     # ============================================================
 
     async def exit_check_loop(self):
         """보유 포지션 → ExitManager → 매도 (KIS REST 실시간 가격 기준)
 
-        Finnhub WS는 무료 플랜 15분 지연 → exit 결정에 사용 금지.
-        항상 KIS REST get_quote()로 실시간 가격 조회 후 exit 판단.
-        - 정규장: eng._exit_check_sec (기본 30초)
-        - 비정규장: 3분 (불필요한 KIS API 절감)
+        KIS 해외주식 실시간가 WS(HDFSCNT0)가 연결된 경우:
+          WS 콜백(_on_us_ws_price)이 실시간으로 exit 체크 → REST는 백업 역할로 주기 완화(60s)
+        WS 미연결 / 비정규장:
+          기존 REST 폴링 주기(기본 30초) 유지
         """
         eng = self.engine
-        _interval = getattr(eng, '_exit_check_sec', 30)
+        _rest_interval   = getattr(eng, '_exit_check_sec', 30)
+        _ws_backup_interval = 60  # WS 연결 시 REST 백업 주기
 
         while eng.running:
             try:
@@ -699,7 +763,9 @@ class USScheduler:
             except Exception as e:
                 logger.exception(f"[US 청산 체크] 오류: {e}")
 
-            await asyncio.sleep(_interval)
+            # WS 연결 시 REST 폴링 완화 (WS가 실시간 exit 처리)
+            ws_ok = eng.us_price_ws and eng.us_price_ws.is_connected
+            await asyncio.sleep(_ws_backup_interval if ws_ok else _rest_interval)
 
     async def _check_exits(self):
         """보유 포지션 순회 → KIS REST 실시간 가격 → 청산 시그널 체크"""
@@ -986,7 +1052,9 @@ class USScheduler:
                 eng.exit_manager.on_position_closed(symbol)
                 eng._pending_symbols.discard(symbol)
                 eng._ws_last_exit_check.pop(symbol, None)
-                # Finnhub WS 구독 해제
+                # WS 구독 해제 (실시간가 + Finnhub 디스플레이)
+                if eng.us_price_ws:
+                    await eng.us_price_ws.unsubscribe([symbol])
                 if eng.ws_feed:
                     await eng.ws_feed.unsubscribe([symbol])
                 logger.info(f"[US 동기화] {symbol} 포지션 청산 확인 (KIS에서 제거됨)")
@@ -1233,7 +1301,10 @@ class USScheduler:
                     indicators=eng._indicator_cache.get(symbol),
                 )
 
-            # Finnhub WS 구독 추가
+            # WS 구독 추가 (실시간 가격 + Finnhub 디스플레이)
+            exchange = await self._get_exchange(symbol)
+            if eng.us_price_ws:
+                await eng.us_price_ws.subscribe([symbol], exchange=exchange)
             if eng.ws_feed:
                 await eng.ws_feed.subscribe([symbol])
 
@@ -1300,6 +1371,8 @@ class USScheduler:
                     eng.exit_manager.on_position_closed(symbol)
                     eng.portfolio.positions.pop(symbol, None)
                     eng._ws_last_exit_check.pop(symbol, None)
+                    if eng.us_price_ws:
+                        await eng.us_price_ws.unsubscribe([symbol])
                     if eng.ws_feed:
                         await eng.ws_feed.unsubscribe([symbol])
                 else:
@@ -1392,14 +1465,20 @@ class USScheduler:
                 session_status = eng.session.get_session()
                 metrics = eng.risk_manager.get_risk_metrics(eng.portfolio)
 
-                ws_status = "connected" if (eng.ws_feed and eng.ws_feed.is_connected) else "disconnected"
+                finnhub_status = "ok" if (eng.ws_feed and eng.ws_feed.is_connected) else "off"
+                price_ws_status = (
+                    f"ok({eng.us_price_ws.subscribed_count})"
+                    if (eng.us_price_ws and eng.us_price_ws.is_connected)
+                    else "off"
+                )
                 logger.info(
                     f"[US Heartbeat] session={session_status.value} | "
                     f"equity=${eng.portfolio.total_equity:.2f} | "
                     f"cash=${eng.portfolio.cash:.2f} | "
                     f"positions={len(eng.portfolio.positions)} | "
                     f"pending={len(eng._pending_orders)} | "
-                    f"ws={ws_status} | "
+                    f"price_ws={price_ws_status} | "
+                    f"finnhub={finnhub_status} | "
                     f"daily_pnl=${metrics.daily_loss:.2f} ({metrics.daily_loss_pct:.1f}%)"
                 )
 

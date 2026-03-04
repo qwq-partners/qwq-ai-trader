@@ -1049,7 +1049,25 @@ class UnifiedTradingBot:
             else:
                 us_engine.kis_ws = None
 
-            # 11. US 테마 탐지기
+            # 11. KIS 해외주식 실시간가 WS (HDFSCNT0) — 보유 포지션 실시간 exit 체크
+            if (not self.dry_run and us_engine.broker
+                    and hasattr(us_engine.broker, 'config')
+                    and us_engine.broker.config.env == "prod"):
+                try:
+                    from src.data.feeds.kis_us_price_ws import KISUSPriceFeed
+                    us_engine.us_price_ws = KISUSPriceFeed(
+                        app_key=us_engine.broker.config.app_key,
+                        app_secret=us_engine.broker.config.app_secret,
+                        is_mock=False,
+                    )
+                    logger.info("[US] KIS 해외주식 실시간가 WS 초기화 완료 (HDFSCNT0)")
+                except Exception as e:
+                    logger.warning(f"[US] KIS 해외주식 실시간가 WS 초기화 실패 (무시): {e}")
+                    us_engine.us_price_ws = None
+            else:
+                us_engine.us_price_ws = None
+
+            # 12. US 테마 탐지기
             if finnhub_key:
                 try:
                     from src.signals.sentiment.us_theme_detector import USThemeDetector
@@ -1061,7 +1079,7 @@ class UnifiedTradingBot:
             else:
                 us_engine.theme_detector = None
 
-            # 12. 어닝 캘린더 프로바이더
+            # 13. 어닝 캘린더 프로바이더
             try:
                 from src.data.providers.earnings import EarningsProvider
                 us_engine.earnings_provider = EarningsProvider(finnhub_key)
@@ -1514,6 +1532,7 @@ class _USEngineBundle:
         self.health_monitor = None
         self.ws_feed = None
         self.kis_ws = None
+        self.us_price_ws = None   # KIS 해외주식 실시간가 WS (HDFSCNT0)
         self.theme_detector = None
         self.earnings_provider = None
         self.sentiment_scorer = None
