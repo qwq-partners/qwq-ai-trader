@@ -95,10 +95,10 @@ class USScheduler:
         if eng.kis_ws:
             tasks.append(asyncio.create_task(eng.kis_ws.start(), name="us_kis_ws"))
 
-        # KIS 해외주식 실시간가 WS (HDFSCNT0) — 보유 포지션 실시간 exit 체크
+        # KIS 해외주식 실시간가 WS (HDFSCNT0) — 보유 포지션 있을 때만 연결
+        # 자동 시작 안 함: _init_ws_price_subs가 포지션 여부 확인 후 동적 시작
         if eng.us_price_ws:
             eng.us_price_ws.on_price(self._on_us_ws_price)
-            tasks.append(asyncio.create_task(eng.us_price_ws.start(), name="us_kis_price_ws"))
             tasks.append(asyncio.create_task(self._init_ws_price_subs(), name="us_ws_price_init"))
 
         # 거래량급증 루프
@@ -682,18 +682,58 @@ class USScheduler:
     # ============================================================
 
     async def _init_ws_price_subs(self):
-        """서비스 시작 시 기존 보유 포지션을 KIS US WS에 구독"""
+        """서비스 시작 시 기존 보유 포지션이 있으면 WS 시작 + 구독"""
         eng = self.engine
-        await asyncio.sleep(5)  # WS 연결 대기
-        if not eng.us_price_ws:
-            return
+        await asyncio.sleep(5)  # 초기화 대기
+        if not eng.us_price_ws or not eng.portfolio.positions:
+            return  # 보유 포지션 없으면 WS 시작 안 함
+        await self._ensure_us_price_ws_running()
+        await asyncio.sleep(3)  # WS 연결 대기
         for symbol in list(eng.portfolio.positions.keys()):
             exchange = eng._exchange_cache.get(symbol, eng._default_exchange)
             await eng.us_price_ws.subscribe([symbol], exchange=exchange)
+        logger.info(f"[KIS US WS] 초기 구독 완료: {list(eng.portfolio.positions.keys())}")
+
+    async def _ensure_us_price_ws_running(self):
+        """보유 포지션이 생겼을 때 WS 태스크 시작 (이미 실행 중이면 스킵)"""
+        eng = self.engine
+        if not eng.us_price_ws:
+            return
+        # 이미 연결됐거나 태스크 실행 중이면 스킵
+        if eng.us_price_ws.is_connected:
+            return
+        task = getattr(eng, '_us_price_ws_task', None)
+        if task and not task.done():
+            return
+        eng._us_price_ws_task = asyncio.create_task(
+            eng.us_price_ws.start(), name="us_kis_price_ws"
+        )
+        logger.info("[KIS US WS] WS 시작 (보유 포지션 진입)")
+
+    async def _maybe_stop_us_price_ws(self):
+        """보유 포지션이 모두 청산됐을 때 WS 종료"""
+        eng = self.engine
+        if not eng.us_price_ws:
+            return
         if eng.portfolio.positions:
-            logger.info(
-                f"[KIS US WS] 초기 구독 완료: {list(eng.portfolio.positions.keys())}"
-            )
+            return  # 아직 포지션 남아 있음
+        if not eng.us_price_ws.is_connected:
+            # 태스크만 남은 경우 취소
+            task = getattr(eng, '_us_price_ws_task', None)
+            if task and not task.done():
+                task.cancel()
+            eng._us_price_ws_task = None
+            return
+        await eng.us_price_ws.stop()
+        task = getattr(eng, '_us_price_ws_task', None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=3)
+            except Exception:
+                pass
+        eng._us_price_ws_task = None
+        logger.info("[KIS US WS] WS 종료 (보유 포지션 없음)")
 
     async def _on_us_ws_price(self, symbol: str, price: float, volume: int):
         """
@@ -1052,11 +1092,12 @@ class USScheduler:
                 eng.exit_manager.on_position_closed(symbol)
                 eng._pending_symbols.discard(symbol)
                 eng._ws_last_exit_check.pop(symbol, None)
-                # WS 구독 해제 (실시간가 + Finnhub 디스플레이)
+                # WS 구독 해제 → 포지션 없으면 WS 종료
                 if eng.us_price_ws:
                     await eng.us_price_ws.unsubscribe([symbol])
                 if eng.ws_feed:
                     await eng.ws_feed.unsubscribe([symbol])
+                await self._maybe_stop_us_price_ws()
                 logger.info(f"[US 동기화] {symbol} 포지션 청산 확인 (KIS에서 제거됨)")
 
                 # 거래 기록
@@ -1301,9 +1342,11 @@ class USScheduler:
                     indicators=eng._indicator_cache.get(symbol),
                 )
 
-            # WS 구독 추가 (실시간 가격 + Finnhub 디스플레이)
+            # WS 시작 (없을 경우) + 구독
             exchange = await self._get_exchange(symbol)
             if eng.us_price_ws:
+                await self._ensure_us_price_ws_running()
+                await asyncio.sleep(0.5)  # 연결 대기 (짧게)
                 await eng.us_price_ws.subscribe([symbol], exchange=exchange)
             if eng.ws_feed:
                 await eng.ws_feed.subscribe([symbol])
@@ -1375,6 +1418,7 @@ class USScheduler:
                         await eng.us_price_ws.unsubscribe([symbol])
                     if eng.ws_feed:
                         await eng.ws_feed.unsubscribe([symbol])
+                    await self._maybe_stop_us_price_ws()
                 else:
                     pos.quantity -= filled_qty
                     logger.info(

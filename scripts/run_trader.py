@@ -1532,7 +1532,8 @@ class _USEngineBundle:
         self.health_monitor = None
         self.ws_feed = None
         self.kis_ws = None
-        self.us_price_ws = None   # KIS 해외주식 실시간가 WS (HDFSCNT0)
+        self.us_price_ws = None             # KIS 해외주식 실시간가 WS (HDFSCNT0)
+        self._us_price_ws_task = None       # us_price_ws 실행 Task 핸들
         self.theme_detector = None
         self.earnings_provider = None
         self.sentiment_scorer = None
