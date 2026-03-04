@@ -1247,28 +1247,41 @@ class UnifiedTradingBot:
                 return
 
             from src.core.types import Position, PositionSide
-            for pos_data in positions:
-                symbol = pos_data.get("symbol", "").zfill(6)
-                if not symbol:
-                    continue
-                quantity = int(pos_data.get("quantity", 0))
-                if quantity <= 0:
-                    continue
-
-                avg_price = Decimal(str(pos_data.get("avg_price", 0)))
-                current_price = Decimal(str(pos_data.get("current_price", avg_price)))
-                name = pos_data.get("name", symbol)
-
-                position = Position(
-                    symbol=symbol,
-                    name=name,
-                    side=PositionSide.LONG,
-                    quantity=quantity,
-                    avg_price=avg_price,
-                    current_price=current_price if current_price > 0 else avg_price,
-                    market=Market.KRX,
-                    currency="KRW",
-                )
+            # get_positions()는 Dict[str, Position] 반환 — .items()로 순회
+            items = positions.items() if isinstance(positions, dict) else enumerate(positions)
+            for symbol, pos_data in items:
+                # pos_data가 Position 객체인 경우
+                if hasattr(pos_data, 'quantity'):
+                    if not symbol:
+                        continue
+                    quantity = pos_data.quantity
+                    if quantity <= 0:
+                        continue
+                    avg_price = pos_data.avg_price
+                    current_price = pos_data.current_price if pos_data.current_price and pos_data.current_price > 0 else avg_price
+                    name = getattr(pos_data, 'name', None) or symbol
+                    position = pos_data
+                # pos_data가 dict인 경우 (하위 호환)
+                else:
+                    symbol = str(symbol).zfill(6) if str(symbol).isdigit() else pos_data.get("symbol", "").zfill(6)
+                    if not symbol:
+                        continue
+                    quantity = int(pos_data.get("quantity", 0))
+                    if quantity <= 0:
+                        continue
+                    avg_price = Decimal(str(pos_data.get("avg_price", 0)))
+                    current_price = Decimal(str(pos_data.get("current_price", avg_price)))
+                    name = pos_data.get("name", symbol)
+                    position = Position(
+                        symbol=symbol,
+                        name=name,
+                        side=PositionSide.LONG,
+                        quantity=quantity,
+                        avg_price=avg_price,
+                        current_price=current_price if current_price > 0 else avg_price,
+                        market=Market.KRX,
+                        currency="KRW",
+                    )
                 self.engine.portfolio.positions[symbol] = position
                 self.stock_name_cache[symbol] = name
 
