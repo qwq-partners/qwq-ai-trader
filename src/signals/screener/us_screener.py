@@ -20,6 +20,7 @@ from loguru import logger
 from src.data.providers.yfinance import YFinanceProvider
 from src.data.providers.finviz import FinvizProvider
 from src.data.store import DataStore
+from src.indicators.technical import rs_rating
 
 
 @dataclass
@@ -80,11 +81,30 @@ class StockScreener:
 
     _CACHE_PATH = Path.home() / ".cache" / "ai_trader_us" / "screener_result.json"
 
+    # SPDR 섹터 ETF 매핑 (US 섹터 로테이션용)
+    SECTOR_ETFS = {
+        "XLK": "Technology",
+        "XLF": "Financial",
+        "XLV": "Healthcare",
+        "XLE": "Energy",
+        "XLI": "Industrial",
+        "XLY": "Consumer Disc.",
+        "XLP": "Consumer Staples",
+        "XLU": "Utilities",
+        "XLB": "Materials",
+        "XLRE": "Real Estate",
+        "XLC": "Communication",
+    }
+
     def __init__(self, provider: YFinanceProvider = None,
                  finviz: FinvizProvider = None):
         self._provider = provider or YFinanceProvider()
         self._store = DataStore()
         self._finviz: Optional[FinvizProvider] = finviz
+        self._benchmark_close: Optional[pd.Series] = None  # SPY 벤치마크
+        self._earnings_symbols: set = set()  # 최근 어닝스 발표 종목
+        self._sector_momentum: Dict[str, float] = {}  # 섹터 ETF 모멘텀
+        self._sector_momentum_date: Optional[date] = None
 
     def save_cache(self, result: ScreenerResult):
         """스크리너 결과를 JSON 캐시로 저장"""
@@ -147,6 +167,10 @@ class StockScreener:
         """Finviz 프로바이더 주입 (live_engine에서 호출)"""
         self._finviz = finviz
 
+    def set_earnings_symbols(self, symbols: set):
+        """어닝스 발표 종목 설정 (스케줄러에서 주입)"""
+        self._earnings_symbols = symbols or set()
+
     def scan(
         self,
         symbols: List[str],
@@ -171,6 +195,44 @@ class StockScreener:
         from zoneinfo import ZoneInfo
         today = datetime.now(ZoneInfo("America/New_York")).date()
         start = today - timedelta(days=lookback_days + 50)  # Extra buffer
+
+        # RS Ranking용 SPY 벤치마크 로딩
+        try:
+            spy_df = self._store.load("SPY", "daily")
+            if spy_df is None or spy_df.empty:
+                spy_df = self._provider.get_daily_bars("SPY", start, today)
+                if not spy_df.empty:
+                    self._store.save("SPY", spy_df, "daily")
+            if spy_df is not None and len(spy_df) >= 252:
+                self._benchmark_close = spy_df["close"]
+                logger.debug(f"[RS] SPY 벤치마크 로딩 완료: {len(spy_df)}일")
+            else:
+                self._benchmark_close = None
+        except Exception as e:
+            logger.warning(f"[RS] SPY 벤치마크 로딩 실패: {e}")
+            self._benchmark_close = None
+
+        # 섹터 ETF 모멘텀 계산 (1일 1회)
+        if self._sector_momentum_date != today:
+            try:
+                for etf in self.SECTOR_ETFS:
+                    etf_df = self._store.load(etf, "daily")
+                    if etf_df is None or etf_df.empty:
+                        etf_df = self._provider.get_daily_bars(etf, start, today)
+                        if not etf_df.empty:
+                            self._store.save(etf, etf_df, "daily")
+                    if etf_df is not None and len(etf_df) >= 20:
+                        ret_20d = (float(etf_df['close'].iloc[-1]) / float(etf_df['close'].iloc[-21]) - 1) * 100
+                        self._sector_momentum[etf] = ret_20d
+                if self._sector_momentum:
+                    sorted_etfs = sorted(self._sector_momentum.items(), key=lambda x: x[1], reverse=True)
+                    top3 = [s for s, _ in sorted_etfs[:3]]
+                    logger.info(
+                        f"[섹터] 모멘텀 상위: {', '.join(f'{s}({self._sector_momentum[s]:+.1f}%)' for s in top3)}"
+                    )
+                self._sector_momentum_date = today
+            except Exception as e:
+                logger.debug(f"[섹터] ETF 모멘텀 계산 실패: {e}")
 
         screener_result = ScreenerResult(scan_date=today, total_scanned=len(symbols))
 
@@ -201,6 +263,22 @@ class StockScreener:
             logger.info(
                 f"[Finviz] 보너스 적용: {bonus_count}/{len(screener_result.results)}종목"
             )
+
+        # 어닝스 촉매 보너스 (최근 어닝스 발표 + 갭상승 종목)
+        if self._earnings_symbols:
+            earnings_bonus_cnt = 0
+            for result in screener_result.results:
+                if result.symbol in self._earnings_symbols:
+                    # 어닝스 후 갭상승(+3% 이상) 시 보너스
+                    if result.change_1d >= 3.0:
+                        result.finviz_bonus += 15
+                        result.flags.append("EARNINGS_CATALYST")
+                        earnings_bonus_cnt += 1
+                    elif result.change_1d >= 1.0:
+                        result.finviz_bonus += 8
+                        earnings_bonus_cnt += 1
+            if earnings_bonus_cnt:
+                logger.info(f"[어닝스] 촉매 보너스 {earnings_bonus_cnt}종목 적용")
 
         # total_score(기술 + Finviz) 기준 정렬
         screener_result.results.sort(key=lambda r: r.total_score, reverse=True)
@@ -341,6 +419,22 @@ class StockScreener:
         elif pct_from_high >= -20:
             score += 5
 
+        # RS Ranking 보너스 (최대 +15 / -10)
+        if self._benchmark_close is not None and len(df) >= 252:
+            try:
+                rs = rs_rating(df['close'], self._benchmark_close.reindex(df.index, method='ffill'))
+                rs_val = float(rs.iloc[-1]) if not pd.isna(rs.iloc[-1]) else 50
+                if rs_val >= 80:
+                    score += 15
+                    flags.append("RS_TOP")
+                elif rs_val >= 70:
+                    score += 10
+                elif rs_val < 30:
+                    score -= 10
+                    flags.append("RS_WEAK")
+            except Exception:
+                pass
+
         score = max(0, min(100, score))
 
         return ScreenResult(
@@ -358,6 +452,65 @@ class StockScreener:
             score=score,
             flags=flags,
         )
+
+
+    def scan_premarket_gap(
+        self,
+        symbols: List[str],
+        min_gap_pct: float = 2.0,
+        limit: int = 20,
+    ) -> List[ScreenResult]:
+        """
+        프리마켓 갭 스캔 — 전일 종가 대비 갭 발생 종목 탐지
+
+        yfinance 전일 종가와 Finviz intraday 데이터를 조합하여
+        장 시작 전 갭상승 종목을 발굴합니다.
+        """
+        gap_results = []
+
+        for symbol in symbols:
+            try:
+                df = self._store.load(symbol, 'daily')
+                if df is None or df.empty or len(df) < 2:
+                    continue
+
+                prev_close = float(df['close'].iloc[-1])
+                if prev_close <= 0:
+                    continue
+
+                # Finviz에서 프리마켓 변동률 확인
+                if self._finviz and self._finviz.is_ready:
+                    intraday = self._finviz.get_intraday_scan(symbol) if hasattr(self._finviz, 'get_intraday_scan') else None
+                    if intraday and 'change_pct' in intraday:
+                        gap_pct = intraday['change_pct']
+                    else:
+                        continue
+                else:
+                    continue
+
+                if gap_pct < min_gap_pct or gap_pct > 20.0:
+                    continue
+
+                # 갭 점수 (60~90)
+                gap_score = 60 + min(30, gap_pct * 3)
+
+                gap_results.append(ScreenResult(
+                    symbol=symbol,
+                    close=prev_close,
+                    change_1d=gap_pct,
+                    score=gap_score,
+                    flags=["PREMARKET_GAP"],
+                ))
+
+            except Exception:
+                continue
+
+        gap_results.sort(key=lambda r: r.change_1d, reverse=True)
+
+        if gap_results:
+            logger.info(f"[프리마켓] 갭 종목 {len(gap_results)}개 발견 (>{min_gap_pct}%)")
+
+        return gap_results[:limit]
 
 
 def print_screen_results(result: ScreenerResult, mode: str = "all", limit: int = 30):

@@ -1,5 +1,55 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-04 — 스크리닝 시스템 8가지 개선 (KR+US 공통)
+
+### 1. 인트라데이 전략 재활성화
+- **`config/evolved_overrides.yml`**: gap_and_go, momentum_breakout, theme_chasing → `enabled: true`
+- **배분 조정**: SEPA 30%, Momentum 25%, RSI2 20%, Gap&Go 15%, Theme 10%
+
+### 2. RS Ranking 통합
+- **`src/signals/screener/us_screener.py`**: SPY 벤치마크 기반 RS 보너스 (RS≥80: +15pt, RS≥70: +10pt, RS<30: -10pt)
+- **`src/signals/screener/kr_screener.py`**: KOSPI 지수 대비 상대강도 `_apply_rs_ranking_bonus()` 필터 추가
+- **`src/strategies/us/sepa_trend.py`, `us/momentum.py`**: RS rating 점수 반영 (최대 +10pt)
+- **`src/strategies/base.py`**: USBaseStrategy에 `set_benchmark()` + `_get_indicators()`에 RS 자동 계산
+- **`src/schedulers/us_scheduler.py`**: SPY 벤치마크 전략 자동 주입
+
+### 3. R/R 비율 필터
+- **`src/strategies/base.py`**: `check_rr_ratio()` 헬퍼 (KR BaseStrategy + US USBaseStrategy)
+- **적용**: SEPA(KR+US), Momentum(US), EarningsDrift(US), Gap&Go(KR) — min R/R 2.0
+- **`config/default.yml`**: `min_rr_ratio: 2.0` 설정 추가
+
+### 4. 프리마켓 갭 스캔
+- **`src/signals/screener/kr_screener.py`**: `screen_premarket_gap()` — 08:30~09:00 갭상승 종목 탐지
+- **`src/signals/screener/us_screener.py`**: `scan_premarket_gap()` — Finviz 프리마켓 데이터 활용
+- **`screen_all()`**: 08~09시 자동 프리마켓 갭 스캔 통합
+- **`us_scheduler.py`**: 프리마켓 갭 종목 스크리닝 최우선 삽입
+
+### 5. 촉매 스캔 (DART + Earnings)
+- **`src/signals/screener/kr_screener.py`**: `_apply_dart_catalyst()` — DART 공시 긍정/위험/차단 자동 처리
+- **`src/signals/screener/us_screener.py`**: 어닝스 촉매 보너스 (갭상승+3%: +15pt, +1%: +8pt)
+- **`us_scheduler.py`**: earnings_today → screener 자동 주입
+
+### 6. ORB (Opening Range Breakout) 확인 매수
+- **`src/strategies/kr/gap_and_go.py`**: ORB 범위(고/저) 추적, 상단 돌파 시 +10pt 보너스
+- **`src/strategies/us/momentum.py`**: 전일 고가 돌파 + 갭업 ORB 보너스 +5pt
+
+### 7. 섹터 로테이션 시그널
+- **`src/signals/screener/kr_screener.py`**: `_apply_sector_rotation_bonus()` — SectorMomentumProvider 활용, 강세섹터 +10pt, 약세섹터 -10pt
+- **`src/signals/screener/us_screener.py`**: SPDR 섹터 ETF (XLK, XLF, XLV 등) 20일 모멘텀 계산
+
+### 8. 동적 유니버스 확장
+- **`src/schedulers/us_scheduler.py`**: screener 상위 50종목(score≥60) 자동 유니버스 편입 (최대 30개/사이클)
+
+### 수정 파일
+- `config/evolved_overrides.yml`, `config/default.yml`
+- `src/strategies/base.py`, `src/strategies/kr/sepa_trend.py`, `src/strategies/kr/gap_and_go.py`
+- `src/strategies/us/sepa_trend.py`, `src/strategies/us/momentum.py`, `src/strategies/us/earnings_drift.py`
+- `src/signals/screener/kr_screener.py`, `src/signals/screener/us_screener.py`
+- `src/schedulers/us_scheduler.py`
+- `src/indicators/technical.py` (기존 `rs_rating()` 활용)
+
+---
+
 ## 2026-03-04 — US 엔진 7가지 버그 수정 (장 오픈 대비)
 
 ### P0: initial_capital 매 동기화 덮어쓰기 → 최초 1회만 설정

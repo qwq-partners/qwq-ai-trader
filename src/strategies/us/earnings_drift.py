@@ -130,6 +130,11 @@ class EarningsDriftStrategy(USBaseStrategy):
         # Target: 20-day trend following (use 15% as default target)
         target = close * 1.15
 
+        # R/R 비율 필터
+        min_rr = self.config.get('min_rr_ratio', 2.0)
+        if not self.check_rr_ratio(close, target, stop, min_rr):
+            return None
+
         reason = (f"Earnings gap +{gap_pct:.1f}% | vol {vol_ratio:.1f}x | "
                   f"held {close_position:.0%}")
 

@@ -4,11 +4,11 @@ risk_config:
   base_position_pct: 10.0
   max_positions: 7
   strategy_allocation:
-    sepa_trend: 65.0
-    rsi2_reversal: 25.0
-    momentum_breakout: 5.0
-    gap_and_go: 5.0
-    theme_chasing: 5.0
+    sepa_trend: 30.0
+    rsi2_reversal: 20.0
+    momentum_breakout: 25.0
+    gap_and_go: 15.0
+    theme_chasing: 10.0
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 2.5
@@ -18,20 +18,20 @@ exit_manager:
   trailing_activate_pct: 2.5
   trailing_stop_pct: 2.5
 momentum_breakout:
-  enabled: false
+  enabled: true
   stop_loss_pct: 3.5
   min_volume_ratio: 2.5
   trading_start_time: '10:30'
   min_score: 75.0
   min_breakout_pct: 0.8
 theme_chasing:
-  enabled: false
+  enabled: true
   stop_loss_pct: 2.5
   min_volume_ratio: 2.3
   trading_start_time: 09:10
   entry_window_minutes: 20
 gap_and_go:
-  enabled: false
+  enabled: true
   stop_loss_pct: 2.5
   min_volume_ratio: 3.0
 sepa_trend:
@@ -59,6 +59,6 @@ _meta:
     source: weekly_rebalance
     timestamp: '2026-02-28T00:01:04.225475'
   momentum_breakout.enabled:
-    source: manual_review
-    timestamp: '2026-02-23T15:35:00'
-    note: evolved_overrides true → false 수정 (default.yml false 덮어쓰기 버그 수정)
+    source: screening_improvement
+    timestamp: '2026-03-04T23:00:00'
+    note: 인트라데이 전략 재활성화 (momentum, theme, gap_and_go)

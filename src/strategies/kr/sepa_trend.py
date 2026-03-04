@@ -75,6 +75,13 @@ class SEPATrendStrategy(BaseStrategy):
                     candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                     candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
+                # R/R 비율 필터
+                if not self.check_rr_ratio(
+                    candidate.entry_price, candidate.target_price,
+                    candidate.stop_price, min_rr=2.0
+                ):
+                    continue
+
                 if score >= 85:
                     strength = SignalStrength.VERY_STRONG
                 elif score >= 75:

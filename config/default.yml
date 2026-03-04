@@ -60,11 +60,11 @@ kr:
     flex_cash_threshold_pct: 10.0
     max_positions_per_sector: 3
     strategy_allocation:
-      momentum_breakout: 55.0  # 합계 100% 유지 (60→55)
-      sepa_trend: 25.0
-      rsi2_reversal: 10.0
-      theme_chasing: 5.0
-      gap_and_go: 5.0
+      sepa_trend: 30.0
+      rsi2_reversal: 20.0
+      momentum_breakout: 25.0
+      gap_and_go: 15.0
+      theme_chasing: 10.0
     hybrid:
       enabled: false
       day_trading_pct: 20.0
@@ -80,6 +80,7 @@ kr:
       min_volume_ratio: 2.0
       min_score: 60.0
       position_size_multiplier: 1.0
+      min_rr_ratio: 2.0  # 최소 Risk/Reward 비율 (2:1)
 
     momentum_breakout:
       enabled: false

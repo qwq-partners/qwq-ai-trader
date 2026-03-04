@@ -165,6 +165,70 @@ class StockScreener:
         }
 
     # ============================================================
+    # 프리마켓 갭 스캔 (08:30~08:50 동시호가)
+    # ============================================================
+
+    async def screen_premarket_gap(self, limit: int = 20, min_gap_pct: float = 2.0) -> List[ScreenedStock]:
+        """
+        프리마켓 갭 스캔 — 동시호가 시간대 갭상승 종목 탐지
+
+        KIS 등락률 순위 API로 장 시작 전 갭상승 종목 발굴.
+        08:30~09:00 동시호가 시간대에 실행하면 가장 효과적.
+        """
+        cache_key = "premarket_gap"
+        if self._is_cache_valid(cache_key):
+            return self._cache[cache_key][:limit]
+
+        stocks = []
+        kmd = self._kis_market_data or get_kis_market_data()
+
+        try:
+            # 등락률 상위 종목 조회
+            raw = await kmd.fetch_fluctuation_rank(limit=50)
+
+            for item in raw:
+                symbol = item.get("symbol", "")
+                name = item.get("name", "")
+                price = item.get("price", 0)
+                change_pct = item.get("change_pct", 0)
+                volume = item.get("volume", 0)
+
+                # 갭 필터: 최소 갭 이상, 최대 15% 이하 (과열 제외)
+                if change_pct < min_gap_pct or change_pct > 15.0:
+                    continue
+
+                # 동전주, ETF 제외
+                if price < 1000:
+                    continue
+                if self._is_etf_etn(name):
+                    continue
+
+                # 갭 크기에 비례한 점수 (60~90)
+                gap_score = 60 + min(30, change_pct * 3)
+
+                stocks.append(ScreenedStock(
+                    symbol=symbol,
+                    name=name,
+                    price=price,
+                    change_pct=change_pct,
+                    volume=volume,
+                    score=gap_score,
+                    reasons=[f"프리마켓 갭 +{change_pct:.1f}%"],
+                ))
+
+            stocks.sort(key=lambda x: x.change_pct, reverse=True)
+            self._update_cache(cache_key, stocks)
+
+            if stocks:
+                logger.info(f"[Screener] 프리마켓 갭 {len(stocks)}개 발굴 (>{min_gap_pct}%)")
+
+            return stocks[:limit]
+
+        except Exception as e:
+            logger.warning(f"[Screener] 프리마켓 갭 스캔 오류: {e}")
+            return stocks
+
+    # ============================================================
     # 거래량 급증 종목
     # ============================================================
 
@@ -584,6 +648,153 @@ class StockScreener:
             return stocks
 
     # ============================================================
+    # DART 공시 촉매 보너스/차단
+    # ============================================================
+
+    async def _apply_dart_catalyst(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """
+        DART 공시 기반 촉매 보너스/차단
+
+        - 긍정 공시 (자기주식취득, 대규모수주 등): +15점
+        - 위험 공시 (유상증자, 전환사채 등): 후보에서 제거
+        - 경고 공시: -10점
+        """
+        if not all_stocks:
+            return
+
+        try:
+            from src.signals.fundamentals.dart_checker import DartChecker
+            checker = DartChecker()
+
+            if not checker._enabled:
+                return
+
+            await checker.ensure_corp_code_map()
+            if not checker._corp_code_map:
+                return
+
+            # 상위 30개 종목만 검사 (API 호출 제한)
+            symbols = sorted(all_stocks.keys(), key=lambda s: all_stocks[s].score, reverse=True)[:30]
+            blocked = []
+            bonus_cnt = 0
+
+            for symbol in symbols:
+                result = await checker.check_disclosures(symbol, days=7)
+
+                if result.risk_level == "block":
+                    blocked.append(symbol)
+                    stock_name = all_stocks[symbol].name
+                    logger.info(
+                        f"[DART] 위험 공시 차단: {stock_name}({symbol}) — "
+                        f"{', '.join(result.risk_disclosures[:2])}"
+                    )
+                elif result.risk_level == "warning":
+                    all_stocks[symbol].score -= 10
+                    all_stocks[symbol].reasons.append("DART 경고공시")
+                elif result.positive_disclosures:
+                    all_stocks[symbol].score += 15
+                    all_stocks[symbol].reasons.append(
+                        f"DART 호재: {result.positive_disclosures[0]}"
+                    )
+                    bonus_cnt += 1
+
+            # 차단 종목 제거
+            for symbol in blocked:
+                del all_stocks[symbol]
+
+            if blocked or bonus_cnt:
+                logger.info(
+                    f"[DART] 촉매 스캔 완료: 차단={len(blocked)}개, 보너스={bonus_cnt}개"
+                )
+
+        except Exception as e:
+            logger.warning(f"[DART] 촉매 스캔 오류 (무시): {e}")
+
+    # ============================================================
+    # RS Ranking 보너스 (KOSPI 대비 상대강도)
+    # ============================================================
+
+    async def _apply_rs_ranking_bonus(
+        self, all_stocks: Dict[str, "ScreenedStock"],
+        daily_cache: Optional[Dict] = None,
+    ):
+        """
+        RS Ranking (Relative Strength) 보너스/감점
+
+        일봉 캐시 데이터를 사용하여 KOSPI 지수 대비 상대 강도를 측정합니다.
+        RS >= 70: +10점, RS >= 80: +15점, RS < 30: -10점
+        """
+        if not all_stocks:
+            return
+
+        try:
+            import pandas as pd
+            from pykrx import stock as pykrx_stock
+
+            # KOSPI 지수 일봉 조회 (벤치마크)
+            from datetime import datetime, timedelta
+            today = datetime.now()
+            start_date = (today - timedelta(days=380)).strftime("%Y%m%d")
+            end_date = today.strftime("%Y%m%d")
+
+            kospi_df = await asyncio.to_thread(
+                pykrx_stock.get_index_ohlcv, start_date, end_date, "1001"
+            )
+            if kospi_df is None or kospi_df.empty or len(kospi_df) < 252:
+                logger.debug("[RS] KOSPI 지수 데이터 부족 — RS 보너스 스킵")
+                return
+
+            benchmark_close = kospi_df['종가']
+
+            rs_applied = 0
+            for symbol, stock in all_stocks.items():
+                # 일봉 캐시에서 종가 시리즈 추출
+                daily_data = (daily_cache or {}).get(symbol)
+                if not daily_data or len(daily_data) < 252:
+                    continue
+
+                try:
+                    close_series = pd.Series(
+                        [d['close'] for d in daily_data if 'close' in d],
+                        index=pd.to_datetime([d['date'] for d in daily_data if 'date' in d])
+                    )
+                    if len(close_series) < 252:
+                        continue
+
+                    # 벤치마크를 종목 인덱스에 맞춰 리인덱싱
+                    bench = benchmark_close.reindex(close_series.index, method='ffill')
+
+                    # RS 계산 (단일 종목이므로 rank 대신 직접 초과수익률 계산)
+                    period = 252
+                    if len(close_series) >= period + 1:
+                        stock_ret = (close_series.iloc[-1] / close_series.iloc[-period] - 1) * 100
+                        bench_ret = (bench.iloc[-1] / bench.iloc[-period] - 1) * 100 if not pd.isna(bench.iloc[-period]) else 0
+                        excess_return = stock_ret - bench_ret
+
+                        # 초과수익률 기반 등급 (대략적 분위)
+                        if excess_return >= 30:
+                            stock.score += 15
+                            stock.reasons.append(f"RS상위(+{excess_return:.0f}%)")
+                            rs_applied += 1
+                        elif excess_return >= 15:
+                            stock.score += 10
+                            stock.reasons.append(f"RS양호(+{excess_return:.0f}%)")
+                            rs_applied += 1
+                        elif excess_return < -20:
+                            stock.score -= 10
+                            stock.reasons.append(f"RS하위({excess_return:.0f}%)")
+                            rs_applied += 1
+
+                except Exception:
+                    continue
+
+            if rs_applied:
+                logger.info(f"[Screener] RS Ranking 보너스 {rs_applied}개 적용")
+
+        except Exception as e:
+            logger.warning(f"[Screener] RS Ranking 보너스 오류 (무시): {e}")
+
+    # ============================================================
     # 밸류에이션 기반 스크리닝 (KIS FHPST01790000)
     # ============================================================
 
@@ -760,6 +971,52 @@ class StockScreener:
 
         except Exception as e:
             logger.warning(f"[Screener] 모멘텀 필터 전체 오류 (무시): {e}")
+
+    async def _apply_sector_rotation_bonus(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """
+        섹터 로테이션 보너스 — 강세 섹터 종목 우선 매수
+
+        SectorMomentumProvider의 섹터 ETF 모멘텀을 기반으로:
+        - 상위 3개 섹터 종목: +10점
+        - 하위 3개 섹터 종목: -10점
+        """
+        if not all_stocks or not self._sector_momentum:
+            return
+
+        try:
+            # 전체 섹터 모멘텀 맵 조회
+            sector_momentum = await self._sector_momentum.get_all_sector_momentum()
+            if not sector_momentum:
+                return
+
+            # 모멘텀 기준 정렬
+            sorted_sectors = sorted(sector_momentum.items(), key=lambda x: x[1], reverse=True)
+            top_sectors = {s for s, _ in sorted_sectors[:3]}
+            bottom_sectors = {s for s, _ in sorted_sectors[-3:] if sector_momentum[s] < 0}
+
+            # 종목별 섹터 매핑
+            symbols = list(all_stocks.keys())
+            sector_map = await self._sector_momentum.get_sector_map_batch(symbols)
+
+            bonus_cnt = 0
+            for symbol, sector in sector_map.items():
+                if symbol not in all_stocks:
+                    continue
+                if sector in top_sectors:
+                    all_stocks[symbol].score += 10
+                    momentum_val = sector_momentum.get(sector, 0)
+                    all_stocks[symbol].reasons.append(f"강세섹터({sector} +{momentum_val:.1f}%)")
+                    bonus_cnt += 1
+                elif sector in bottom_sectors:
+                    all_stocks[symbol].score -= 10
+                    all_stocks[symbol].reasons.append(f"약세섹터({sector})")
+
+            if bonus_cnt:
+                top_info = ", ".join(f"{s}(+{sector_momentum[s]:.1f}%)" for s in top_sectors)
+                logger.info(f"[Screener] 섹터 로테이션: 상위={top_info}, 보너스 {bonus_cnt}개")
+
+        except Exception as e:
+            logger.warning(f"[Screener] 섹터 로테이션 보너스 오류 (무시): {e}")
 
     async def _apply_sector_diversity(self, all_stocks: Dict[str, "ScreenedStock"]):
         """
@@ -1529,6 +1786,18 @@ class StockScreener:
                     all_stocks[stock.symbol].has_inst_buying = True
 
         # ============================================================
+        # 0. 프리마켓 갭 스캔 (08:30~09:00 동시호가 시간대)
+        # ============================================================
+        now_hour = datetime.now().hour
+        if 8 <= now_hour <= 9:
+            try:
+                gap_stocks = await self.screen_premarket_gap(limit=15, min_gap_pct=2.0)
+                for stock in gap_stocks:
+                    merge_stock(stock, 0.5)
+            except Exception as e:
+                logger.warning(f"[Screener] 프리마켓 갭 스캔 오류 (무시): {e}")
+
+        # ============================================================
         # 1. KIS API 스크리닝 (병렬 호출)
         # ============================================================
         kis_results = await asyncio.gather(
@@ -1647,7 +1916,12 @@ class StockScreener:
         await self._apply_momentum_filter(all_stocks, daily_cache=_daily_cache)
 
         # ============================================================
-        # 5-1. 거래량 비율 보완 — 일봉 캐시 재사용 (추가 API 호출 없음)
+        # 5-1. RS Ranking 보너스 (KOSPI 대비 상대강도)
+        # ============================================================
+        await self._apply_rs_ranking_bonus(all_stocks, daily_cache=_daily_cache)
+
+        # ============================================================
+        # 5-2. 거래량 비율 보완 — 일봉 캐시 재사용 (추가 API 호출 없음)
         #      기관/외국인 스크리너는 vol_inrt 없이 기본값 1.0 으로 들어오므로
         #      전일 거래량 대비 오늘 누적 거래량 배율로 정확히 채운다.
         # ============================================================
@@ -1657,6 +1931,11 @@ class StockScreener:
         # 6. 섹터/업종 분산 조정 (특정 섹터 쏠림 방지)
         # ============================================================
         await self._apply_sector_diversity(all_stocks)
+
+        # ============================================================
+        # 6-1. 섹터 로테이션 보너스 (강세 섹터 우선 매수)
+        # ============================================================
+        await self._apply_sector_rotation_bonus(all_stocks)
 
         # ============================================================
         # 7. 변동성 필터 (ATR 기반 고변동성 종목 감점) — 일봉 캐시 재사용
@@ -1674,7 +1953,12 @@ class StockScreener:
         await self._apply_inst_sell_blacklist(all_stocks)
 
         # ============================================================
-        # 7-3. 수급 누적 이력 기록 + 연속 수급 보너스
+        # 7-3. DART 공시 촉매 보너스/차단
+        # ============================================================
+        await self._apply_dart_catalyst(all_stocks)
+
+        # ============================================================
+        # 7-4. 수급 누적 이력 기록 + 연속 수급 보너스
         # ============================================================
         self._record_supply_demand(all_stocks)
         self._apply_supply_accumulation_bonus(all_stocks)

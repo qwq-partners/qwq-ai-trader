@@ -124,6 +124,16 @@ class SEPATrendStrategy(USBaseStrategy):
         elif close > ma50 > ma150:
             score += 5
 
+        # RS Ranking 보너스 (최대 +10)
+        rs_val = indicators.get('rs_rating')
+        if rs_val is not None:
+            if rs_val >= 80:
+                score += 10
+            elif rs_val >= 70:
+                score += 5
+            elif rs_val < 30:
+                score -= 5
+
         score = max(0, min(100, score))
 
         if score < self.min_score:
@@ -131,6 +141,11 @@ class SEPATrendStrategy(USBaseStrategy):
 
         stop = close * (1 - self.stop_loss_pct / 100)
         target = close * (1 + self.take_profit_pct / 100)
+
+        # R/R 비율 필터
+        min_rr = self.config.get('min_rr_ratio', 2.0)
+        if not self.check_rr_ratio(close, target, stop, min_rr):
+            return None
 
         reason = (f"SEPA {sepa_pass}/{sepa_total} | "
                   f"52w high {pct_from_high:+.1f}% | "

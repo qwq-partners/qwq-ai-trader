@@ -350,6 +350,21 @@ class USScheduler:
         """한 사이클의 스크리닝 + 시그널 처리"""
         eng = self.engine
 
+        # RS Ranking용 벤치마크 주입 (한 번만)
+        if not getattr(self, '_benchmark_loaded', False):
+            try:
+                from src.data.store import DataStore
+                store = DataStore()
+                spy_df = store.load("SPY", "daily")
+                if spy_df is not None and len(spy_df) >= 252:
+                    for strat in eng.strategies:
+                        if hasattr(strat, 'set_benchmark'):
+                            strat.set_benchmark(spy_df['close'])
+                    self._benchmark_loaded = True
+                    logger.info("[RS] SPY 벤치마크 전략에 주입 완료")
+            except Exception as e:
+                logger.debug(f"[RS] 벤치마크 주입 실패: {e}")
+
         # 포지션 여유 없으면 스크리닝 스킵 (pending 포함)
         _effective_pos = len(eng.portfolio.positions) + len(
             eng._pending_symbols - set(eng.portfolio.positions.keys())
@@ -389,6 +404,28 @@ class USScheduler:
             logger.debug(
                 f"[US 스크리닝] StockScreener 상위 {len(screen_candidates)}개 후보 사용"
             )
+
+        # ── 프리마켓 갭 스캔 삽입 ─────────────────────────────────
+        if eng.screener and self._finviz and self._finviz_ready:
+            try:
+                gap_results = eng.screener.scan_premarket_gap(
+                    eng._universe[:200], min_gap_pct=2.0, limit=15
+                )
+                if gap_results:
+                    gap_symbols = [
+                        r.symbol for r in gap_results
+                        if r.symbol not in held and r.symbol not in eng._signal_cooldown
+                        and r.symbol not in eng._pending_symbols
+                    ]
+                    if gap_symbols:
+                        existing = set(screen_candidates)
+                        new_gap = [s for s in gap_symbols if s not in existing]
+                        screen_candidates = new_gap + screen_candidates
+                        logger.info(
+                            f"[US 프리마켓] 갭 {len(new_gap)}종목 최우선 삽입"
+                        )
+            except Exception as e:
+                logger.debug(f"[US 프리마켓] 갭 스캔 오류: {e}")
 
         # ── 거래량급증 종목 최우선 삽입 ───────────────────────────
         if eng._vol_surge_symbols and eng._vol_surge_updated:
@@ -1622,6 +1659,10 @@ class USScheduler:
             try:
                 if eng.session.is_market_open():
                     if eng.screener:
+                        # 어닝스 종목 screener에 주입
+                        if eng._earnings_today:
+                            eng.screener.set_earnings_symbols(eng._earnings_today)
+
                         # 순환 스캔: 매 사이클마다 다음 300개 종목
                         batch_size = 300
                         total = len(eng._universe)
@@ -1647,6 +1688,20 @@ class USScheduler:
                                 eng.screener.save_cache(result)
                             except Exception as e:
                                 logger.warning(f"[US 스크리너] 캐시 저장 실패: {e}")
+
+                            # 동적 유니버스 확장: 상위 스크리너 결과를 유니버스에 편입
+                            if result.results:
+                                top_symbols = {
+                                    r.symbol for r in result.results[:50]
+                                    if r.total_score >= 60
+                                }
+                                new_additions = top_symbols - set(eng._universe)
+                                if new_additions:
+                                    eng._universe.extend(list(new_additions)[:30])
+                                    logger.info(
+                                        f"[US 유니버스] 동적 확장 +{len(new_additions)}종목 "
+                                        f"→ 총 {len(eng._universe)}개"
+                                    )
                 else:
                     logger.debug("[US 스크리너] 장 마감 — skip")
             except asyncio.CancelledError:

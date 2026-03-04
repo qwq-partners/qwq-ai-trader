@@ -430,6 +430,45 @@ class BaseStrategy(ABC):
         }
 
     # ============================================================
+    # R/R 비율 필터 (리스크 대비 리워드)
+    # ============================================================
+
+    def check_rr_ratio(
+        self,
+        entry_price: Decimal,
+        target_price: Optional[Decimal],
+        stop_price: Optional[Decimal],
+        min_rr: float = 2.0,
+    ) -> bool:
+        """
+        R/R 비율 체크 — min_rr 미만이면 False (진입 차단)
+
+        Args:
+            entry_price: 진입가
+            target_price: 목표가
+            stop_price: 손절가
+            min_rr: 최소 R/R 비율 (기본 2.0)
+        """
+        if target_price is None or stop_price is None:
+            return True  # 목표/손절 미설정 시 통과
+        if entry_price <= 0:
+            return True
+
+        reward = float(target_price - entry_price)
+        risk = float(entry_price - stop_price)
+
+        if risk <= 0:
+            return True  # 손절가가 진입가 이상이면 통과 (의미 없는 체크)
+
+        rr_ratio = reward / risk
+        if rr_ratio < min_rr:
+            logger.debug(
+                f"[R/R] {self.name} R/R={rr_ratio:.2f} < {min_rr} — 진입 차단"
+            )
+            return False
+        return True
+
+    # ============================================================
     # 신호 생성 헬퍼
     # ============================================================
 
@@ -490,6 +529,9 @@ class USBaseStrategy(ABC):
 
         # Sentiment scorer (optional, set externally)
         self._sentiment_scorer = None
+
+        # RS Ranking용 벤치마크 (외부에서 set_benchmark() 호출)
+        self._benchmark_close: Optional[pd.Series] = None
 
     def evaluate(self, symbol: str, history: pd.DataFrame,
                  portfolio: Portfolio) -> Optional[Signal]:
@@ -562,10 +604,26 @@ class USBaseStrategy(ABC):
         """
         return None
 
+    def set_benchmark(self, benchmark_close: pd.Series):
+        """RS Ranking용 벤치마크 시세 설정 (예: SPY)"""
+        self._benchmark_close = benchmark_close
+
     def _get_indicators(self, symbol: str, history: pd.DataFrame) -> Dict[str, Any]:
         """Compute and cache indicators"""
         try:
             indicators = compute_indicators(history)
+
+            # RS Ranking 계산 (벤치마크 설정 시)
+            if self._benchmark_close is not None and len(history) >= 252:
+                try:
+                    from src.indicators.technical import rs_rating
+                    bench = self._benchmark_close.reindex(history.index, method='ffill')
+                    rs = rs_rating(history['close'], bench)
+                    rs_val = float(rs.iloc[-1]) if not pd.isna(rs.iloc[-1]) else None
+                    if rs_val is not None:
+                        indicators['rs_rating'] = rs_val
+                except Exception:
+                    pass
 
             # Cache management (LRU)
             if symbol in self._indicator_cache:
@@ -579,6 +637,33 @@ class USBaseStrategy(ABC):
         except Exception as e:
             logger.debug(f"Indicator computation failed for {symbol}: {e}")
             return {}
+
+    def check_rr_ratio(
+        self,
+        entry_price: float,
+        target_price: Optional[float],
+        stop_price: Optional[float],
+        min_rr: float = 2.0,
+    ) -> bool:
+        """R/R 비율 체크 — min_rr 미만이면 False"""
+        if target_price is None or stop_price is None:
+            return True
+        if entry_price <= 0:
+            return True
+
+        reward = target_price - entry_price
+        risk = entry_price - stop_price
+
+        if risk <= 0:
+            return True
+
+        rr_ratio = reward / risk
+        if rr_ratio < min_rr:
+            logger.debug(
+                f"[R/R] {self.name} R/R={rr_ratio:.2f} < {min_rr} — 진입 차단"
+            )
+            return False
+        return True
 
     def _create_signal(
         self,

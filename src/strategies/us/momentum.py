@@ -110,14 +110,39 @@ class MomentumBreakoutStrategy(USBaseStrategy):
         elif rsi > 70:
             score -= 8
 
+        # ORB 확인 보너스: 전일 고가 돌파 + 당일 시가 > 전일 종가 (갭업 ORB)
+        if len(history) >= 2:
+            prev_high = float(history['high'].iloc[-2])
+            prev_close_val = float(history['close'].iloc[-2])
+            today_open = float(history['open'].iloc[-1]) if 'open' in history else close
+            if today_open > prev_close_val and close > prev_high:
+                score += 5  # ORB 돌파 보너스
+
         score = max(0, min(100, score))
 
         if score < self.min_score:
             return None
 
+        # RS Ranking 보너스 (최대 +10)
+        rs_val = indicators.get('rs_rating')
+        if rs_val is not None:
+            if rs_val >= 80:
+                score += 10
+            elif rs_val >= 70:
+                score += 5
+            elif rs_val < 30:
+                score -= 5
+
+        score = max(0, min(100, score))
+
         # Stop / Target
         stop = close * (1 - self.stop_loss_pct / 100)
         target = close * (1 + self.take_profit_pct / 100)
+
+        # R/R 비율 필터
+        min_rr = self.config.get('min_rr_ratio', 2.0)
+        if not self.check_rr_ratio(close, target, stop, min_rr):
+            return None
 
         reason = (f"20d breakout +{breakout_pct:.1f}% | "
                   f"vol {vol_ratio:.1f}x | RSI {rsi:.0f} | "

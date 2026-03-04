@@ -111,18 +111,21 @@ class GapAndGoStrategy(BaseStrategy):
             logger.debug(f"[Gap&Go] {symbol} 갭 과열 ({gap_pct:.1f}%)")
             return None
 
-        # 갭 종목 추적
+        # 갭 종목 추적 (ORB 범위 포함)
         if symbol not in self._gap_stocks:
             self._gap_stocks[symbol] = {
                 "gap_pct": gap_pct,
                 "open_price": Decimal(str(open_price)),
                 "high_price": Decimal(str(open_price)),
+                "low_price": Decimal(str(price)),  # ORB 저가
                 "detected_at": datetime.now(),
             }
             logger.info(f"[Gap&Go] 갭상승 감지: {symbol} +{gap_pct:.1f}%")
         else:
             if current_price > self._gap_stocks[symbol]["high_price"]:
                 self._gap_stocks[symbol]["high_price"] = current_price
+            if current_price < self._gap_stocks[symbol].get("low_price", current_price):
+                self._gap_stocks[symbol]["low_price"] = current_price
 
         gap_info = self._gap_stocks[symbol]
 
@@ -166,7 +169,17 @@ class GapAndGoStrategy(BaseStrategy):
         else:
             strength = SignalStrength.NORMAL
 
-        score = min(self._calculate_entry_score(gap_pct, pullback_pct, vol_ratio) + vwap_bonus, 100.0)
+        # ORB (Opening Range Breakout) 확인 보너스
+        orb_bonus = 0.0
+        orb_high = float(gap_info["high_price"])
+        orb_low = float(gap_info.get("low_price", price))
+        orb_range = orb_high - orb_low if orb_high > orb_low else 0
+        if orb_range > 0 and price > orb_high:
+            # ORB 상단 돌파 — 강한 진입 신호
+            orb_bonus = 10.0
+            logger.debug(f"[Gap&Go] {symbol} ORB 상단 돌파 (H={orb_high:.0f} → {price:.0f})")
+
+        score = min(self._calculate_entry_score(gap_pct, pullback_pct, vol_ratio) + vwap_bonus + orb_bonus, 100.0)
 
         # 손절가 계산
         gap_start = float(gap_info["open_price"])
@@ -182,7 +195,12 @@ class GapAndGoStrategy(BaseStrategy):
 
         target_price = Decimal(str(price * (1 + self.gap_config.take_profit_pct / 100)))
 
-        reason = f"갭+{gap_pct:.1f}% 눌림 {pullback_pct:.1f}%, 거래량 {vol_ratio:.1f}x"
+        # R/R 비율 필터
+        if not self.check_rr_ratio(current_price, target_price, stop_price, min_rr=2.0):
+            return None
+
+        orb_info = f", ORB돌파" if orb_bonus > 0 else ""
+        reason = f"갭+{gap_pct:.1f}% 눌림 {pullback_pct:.1f}%, 거래량 {vol_ratio:.1f}x{orb_info}"
 
         logger.info(f"[Gap&Go] 진입 신호: {symbol} - {reason}")
 
