@@ -266,8 +266,43 @@
             .mc-sep  { margin:0 14px; }
             .mc-sub  { padding:9px 14px 6px; font-size:.64rem; }
             .mc-equity-val { font-size:1.35rem; }
-            /* hide less critical columns */
-            .col-avg-price, .col-quantity, .col-market-value, .col-holding { display:none; }
+        }
+
+        /* ── 포지션 테이블 모바일 반응형 ── */
+        @media (max-width:768px) {
+            /* 평균가·수량·평가금액·보유일 숨기기 */
+            .col-avg-price, .col-quantity, .col-market-value, .col-holding { display:none !important; }
+
+            /* 전략 컬럼 숨기기 (2번째) */
+            #positions-table th:nth-child(2),
+            #positions-table td:nth-child(2),
+            #us-positions-table th:nth-child(2),
+            #us-positions-table td:nth-child(2) { display:none !important; }
+
+            /* table-layout:fixed → auto 전환 + 가로 스크롤 */
+            #positions-table,
+            #us-positions-table {
+                table-layout: auto !important;
+                width: max-content !important;
+                min-width: 100%;
+            }
+
+            /* 셀 줄바꿈·말줄임 방지 */
+            #positions-table th,
+            #positions-table td,
+            #us-positions-table th,
+            #us-positions-table td {
+                white-space: nowrap !important;
+                overflow: visible !important;
+                text-overflow: clip !important;
+                padding-left: 8px !important;
+                padding-right: 8px !important;
+                font-size: .72rem !important;
+            }
+
+            /* 종목명 최소 너비 */
+            #positions-table td:first-child,
+            #us-positions-table td:first-child { min-width: 88px; }
         }
 
         /* Market filter buttons (from responsive.css) */
