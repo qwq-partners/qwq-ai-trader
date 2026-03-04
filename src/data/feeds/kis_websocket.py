@@ -25,6 +25,7 @@ from loguru import logger
 from src.core.types import OrderSide, MarketSession
 from src.core.event import MarketDataEvent, QuoteEvent, TickEvent
 from src.utils.token_manager import get_token_manager
+from src.utils.session import KRSession
 
 
 class KISWebSocketType(str, Enum):
@@ -94,6 +95,9 @@ class KISWebSocketFeed:
 
     def __init__(self, config: Optional[KISWebSocketConfig] = None):
         self.config = config or KISWebSocketConfig.from_env()
+
+        # 장 시간 체크용
+        self._kr_session = KRSession()
 
         # WebSocket 상태
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -596,12 +600,37 @@ class KISWebSocketFeed:
     # 메시지 수신
     # ============================================================
 
+    def _is_market_active(self) -> bool:
+        """KR 시장 활성 시간 여부 (프리장~넥스트장: 08:00~20:00)"""
+        session = self._kr_session.get_session()
+        return session != MarketSession.CLOSED
+
     async def run(self):
         """메시지 수신 루프"""
         # 시작 시 running 플래그 활성화 (_running은 __init__에서 False로 초기화되어 있음)
         self._running = True
+        _was_closed = False
         while True:
-            # 장외 시간 — 연결 시도하지 않고 대기
+            # 장외 시간 — 연결 해제 후 대기
+            if not self._is_market_active():
+                if self._connected:
+                    logger.info("[WS] 장 마감 — WebSocket 연결 해제 (다음 장 시작 시 자동 재연결)")
+                    if self._ws and not self._ws.closed:
+                        await self._ws.close()
+                    self._connected = False
+                    _was_closed = True
+                if not _was_closed:
+                    _was_closed = True
+                    logger.info("[WS] 장외 시간 — 다음 장 시작까지 대기")
+                await asyncio.sleep(30)
+                continue
+
+            # 장 시작 복귀
+            if _was_closed:
+                _was_closed = False
+                self._reconnect_count = 0
+                logger.info("[WS] 장 시작 — WebSocket 연결 시도")
+
             if not self._should_connect:
                 await asyncio.sleep(10)
                 continue

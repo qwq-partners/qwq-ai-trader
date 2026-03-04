@@ -1,5 +1,65 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-04 — US 엔진 7가지 버그 수정 (장 오픈 대비)
+
+### P0: initial_capital 매 동기화 덮어쓰기 → 최초 1회만 설정
+- **`src/schedulers/us_scheduler.py`**: `_sync_portfolio()`에서 `initial_capital`을 `total_equity`로 30초마다 덮어쓰던 문제 수정
+- **영향**: `total_pnl`(총 손익)이 항상 0에 수렴하여 수익 추적 불가 + 리스크 판단 왜곡
+
+### P0: exit_stages 반복 복원 → 초기화 시 1회만
+- **`src/schedulers/us_scheduler.py`**: `_sync_portfolio()`에서 `exit_stages` 캐시를 매 동기화마다 복원하던 문제 → `_exit_stages_restored` 플래그로 1회만 실행
+- **영향**: 런타임 중 진행된 익절 단계(FIRST→SECOND)가 캐시의 이전 값으로 롤백되어 중복 분할매도 발생 가능
+
+### P0: 전략 exit 실패 시 ExitManager 손절 누락 방지
+- **`src/schedulers/us_scheduler.py`**: `_check_exits()`에서 전략별 `check_exit()` 호출 후 `_execute_exit` 실패 시에도 `break`로 ExitManager 체크를 건너뛰던 문제 → `strategy_exit_attempted` 플래그로 전략 exit 미발동 시 ExitManager 정상 실행
+
+### P1: 부분체결(partial) 교착 상태 해소
+- **`src/schedulers/us_scheduler.py`**: `_check_orders()`에서 `partial` 상태에 로그만 남기고 교착되던 문제 → 부분체결 타임아웃 추가 (매도 3분, 매수 15분), 타임아웃 시 잔여 취소 + 체결분 반영
+
+### P1: EOD 청산 중복 실행 방지
+- **`src/schedulers/us_scheduler.py`**: `eod_close_loop()`에서 마감 15분간 30초마다 `_eod_close()` 반복 호출되던 문제 → `_eod_close_done` 날짜 플래그로 당일 1회만 실행
+
+### P1: 매수 체결 시 기존 포지션 수량/평균가 갱신
+- **`src/schedulers/us_scheduler.py`**: `_on_order_filled()` 매수 체결 시 sync에서 이미 생성된 포지션의 수량/평균가를 체결 정보로 갱신하지 않던 문제 수정
+
+### P1: API 빈 응답 방어 강화
+- **`src/schedulers/us_scheduler.py`**: `_sync_portfolio()`에서 account_info는 있지만 positions만 빈 배열로 반환된 경우 로컬 포지션 급감 방어 로직 추가
+
+### P1: 스크리너 캐시 주말 무효화 방지
+- **`src/signals/screener/us_screener.py`**: 캐시 유효기간 1일→3일 (금요일 스캔 → 월요일 사용 가능)
+
+## 2026-03-04 — stock_master 안정화 + WS 장시간 제어
+
+### P0: pykrx stock_master 로딩 실패 해결
+- **`src/dashboard/data_collector.py`**: pykrx 실패 시 StockMaster DB(`kr_stock_master` 테이블)에서 종목명 폴백 로드 (3708개 종목)
+- **`src/dashboard/data_collector.py`**: pykrx 재시도 횟수 제한 (최대 3회) — 무한 반복 WARNING 방지
+- **`src/dashboard/data_collector.py`**: 캐시 파일 단일화 (`stock_master.json`), TTL 72시간으로 확장
+- **원인**: pykrx `get_market_ticker_list()`가 장 마감 후 KRX 서버에서 빈 응답 반환 → `index -1` 에러
+
+### P1: KR WebSocket 장 마감 후 불필요한 연결 방지
+- **`src/data/feeds/kis_websocket.py`**: `_is_market_active()` 메서드 추가 — `KRSession`으로 장외 시간 판별
+- **`src/data/feeds/kis_websocket.py`**: `run()` 루프에서 장 마감(CLOSED) 시 WS 연결 해제 + 대기, 장 시작 시 자동 재연결
+- **효과**: 장 마감 후 2분마다 끊기던 WS 재연결 사이클 완전 제거
+
+## 2026-03-04 — CLAUDE.md 대폭 업데이트
+
+### 문서: CLAUDE.md 상세화 (ai-trader-v2 참고)
+- **`CLAUDE.md`**: 79줄 → 300줄+ 대폭 확장
+  - 세션 시작 필수 읽기 설명 보강 (중복 작업 방지, 맥락 파악)
+  - Git & GitHub 섹션 신규 추가
+  - 코드 리뷰 프로토콜 추가 (P0/P1/P2 분류)
+  - 매매 전략 상세 (KR 5개 + US 3개 나열, ExitManager 파라미터)
+  - 리스크 관리 테이블 (KR/US 분리, 상세 파라미터)
+  - 수수료 정보 (KR 왕복 0.227%, US Zero-commission)
+  - 실행 흐름 상세 (KR 스케줄러 7태스크 + US 스케줄러 9태스크)
+  - WebSocket 피드 정보 (KR H0STCNT0, US HDFSCNT0)
+  - 대시보드 개발 패턴, 운영 모니터링 계층
+  - 코딩 규칙 금지 패턴 코드 예시
+  - 설정 주의사항 (evolved_overrides 머지)
+  - 의존성, LLM 모델 선택, 진화 시스템 상세
+  - 트러블슈팅 가이드 (5개 시나리오)
+  - 실행 방법 (--market kr|us|both)
+
 ## 2026-03-04 — WS 실시간 포지션 모니터링 + 스캔 품질 개선 + 전략 다변화
 
 ### P0: WS 실시간 보유 포지션 모니터링 구현

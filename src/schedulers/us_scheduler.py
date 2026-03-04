@@ -830,6 +830,7 @@ class USScheduler:
                     position.highest_price = position.current_price
 
                 # 전략별 커스텀 exit 체크 (SEPA MA50 이탈 등)
+                strategy_exit_attempted = False
                 if position.strategy:
                     for strat in eng.strategies:
                         if strat.strategy_type.value == position.strategy:
@@ -844,10 +845,11 @@ class USScheduler:
                                             {'action': 'close', 'ratio': 1.0, 'reason': custom_reason},
                                             exchange,
                                         )
+                                        strategy_exit_attempted = True
                             break
 
-                # ExitManager 체크 (전략 exit에서 청산 안 한 경우)
-                if symbol not in eng._pending_symbols:
+                # ExitManager 체크 (전략 exit 미발동 또는 주문 실패 시에도 실행)
+                if not strategy_exit_attempted and symbol not in eng._pending_symbols:
                     exit_signal = eng.exit_manager.update_price(symbol, Decimal(str(price)))
                     if exit_signal:
                         action, exit_qty, reason = exit_signal
@@ -1005,14 +1007,20 @@ class USScheduler:
                 eng.portfolio.cash = Decimal(str(cash_val))
             equity_val = account_info.get("total_equity")
             if equity_val is not None and float(equity_val) > 0:
-                eng.portfolio.initial_capital = Decimal(str(equity_val))
+                # initial_capital은 최초 1회만 설정 (이후 덮어쓰기 방지)
+                if eng.portfolio.initial_capital is None or eng.portfolio.initial_capital == Decimal("0"):
+                    eng.portfolio.initial_capital = Decimal(str(equity_val))
+                    logger.info(f"[US 동기화] initial_capital 설정: ${equity_val}")
 
-        # highest_price + exit_stages 캐시 로드
+        # highest_price 캐시 로드
         hp_cache = self._load_highest_prices()
-        stages_cache = self._load_exit_stages()
-        if stages_cache:
-            eng.exit_manager.restore_stages(stages_cache)
-            logger.info(f"[US 동기화] exit_stages 복원: {len(stages_cache)}개")
+        # exit_stages는 초기화 시 1회만 복원 (반복 복원 시 익절 단계 롤백 위험)
+        if not getattr(self, '_exit_stages_restored', False):
+            stages_cache = self._load_exit_stages()
+            if stages_cache:
+                eng.exit_manager.restore_stages(stages_cache)
+                logger.info(f"[US 동기화] exit_stages 최초 복원: {len(stages_cache)}개")
+            self._exit_stages_restored = True
 
         # 포지션
         kis_positions = balance.get("positions", [])
@@ -1074,12 +1082,21 @@ class USScheduler:
         self._save_highest_prices()
 
         # API 실패 방어: 빈 응답으로 기존 포지션이 잘못 삭제되는 것을 방지
-        if not kis_positions and eng.portfolio.positions and not account_info:
-            logger.warning(
-                f"[US 동기화] API 실패 추정 (포지션 0건 + 계좌정보 없음) — "
-                f"로컬 {len(eng.portfolio.positions)}개 포지션 보존"
-            )
-            return
+        local_count = len(eng.portfolio.positions)
+        if not kis_positions and local_count > 0:
+            if not account_info:
+                logger.warning(
+                    f"[US 동기화] API 실패 추정 (포지션 0건 + 계좌정보 없음) — "
+                    f"로컬 {local_count}개 포지션 보존"
+                )
+                return
+            # 로컬에 2개 이상 있는데 KIS가 0건 → API 일시 오류 가능성
+            if local_count >= 2:
+                logger.warning(
+                    f"[US 동기화] 포지션 급감 의심 (KIS 0건 vs 로컬 {local_count}개) — "
+                    f"이번 사이클 보존 (다음 동기화에서 재확인)"
+                )
+                return
 
         # KIS에 없는 포지션 → 청산 처리
         for symbol in list(eng.portfolio.positions.keys()):
@@ -1188,10 +1205,32 @@ class USScheduler:
             if info["status"] == "filled":
                 await self._on_order_filled(order_no, info)
             elif info["status"] == "partial":
+                elapsed = (datetime.now() - pending["submitted_at"]).total_seconds()
                 logger.debug(
                     f"[US 주문 체크] {order_no} 부분체결 "
-                    f"({info['filled_qty']}/{info['qty']})"
+                    f"({info['filled_qty']}/{info['qty']}, {int(elapsed)}초 경과)"
                 )
+                # 부분체결 타임아웃: 매도 3분, 매수 15분
+                partial_timeout = 180 if pending["side"] == "sell" else 900
+                if elapsed > partial_timeout:
+                    logger.warning(
+                        f"[US 주문 체크] {order_no} ({pending['symbol']}) "
+                        f"부분체결 타임아웃 ({int(partial_timeout / 60)}분) — 잔여 취소"
+                    )
+                    cancel_result = await eng.broker.cancel_order(
+                        order_no, pending.get("exchange", eng._default_exchange),
+                        pending["symbol"], pending.get("qty", 0),
+                    )
+                    if cancel_result.get("success"):
+                        # 체결된 분량 반영 (filled로 처리)
+                        info["status"] = "filled"
+                        info["filled_qty"] = info.get("filled_qty", 0)
+                        info["filled_price"] = info.get("filled_price", pending.get("price", 0))
+                        if info["filled_qty"] > 0:
+                            await self._on_order_filled(order_no, info)
+                        else:
+                            eng._pending_symbols.discard(pending["symbol"])
+                            del eng._pending_orders[order_no]
             elif info["status"] == "pending":
                 elapsed = (datetime.now() - pending["submitted_at"]).total_seconds()
                 # 매도(손절)는 2분, 매수는 10분 타임아웃
@@ -1304,6 +1343,17 @@ class USScheduler:
                 )
                 eng.portfolio.positions[symbol] = pos
                 logger.info(f"[US 체결] {symbol} — sync 전 포지션 직접 생성")
+            else:
+                # sync에서 먼저 생성된 포지션 — 체결 정보로 수량/평균가 갱신
+                if pos.quantity != filled_qty or pos.avg_price != Decimal(str(filled_price)):
+                    logger.info(
+                        f"[US 체결] {symbol} 포지션 갱신: "
+                        f"{pos.quantity}→{filled_qty}주, "
+                        f"${pos.avg_price}→${filled_price:.2f}"
+                    )
+                    pos.quantity = filled_qty
+                    pos.avg_price = Decimal(str(filled_price))
+                    pos.current_price = Decimal(str(filled_price))
 
             pos.trade_id = trade_id
             pos.strategy = pending.get("strategy", "")
@@ -1433,13 +1483,16 @@ class USScheduler:
         """마감 15분 전 DAY 포지션 청산 + 마감 후 일일 리포트"""
         eng = self.engine
         _daily_report_sent: Optional[date] = None
+        _eod_close_done: Optional[date] = None
 
         while eng.running:
             try:
                 if eng.session.is_market_open():
                     minutes_left = eng.session.minutes_to_close()
-                    if 0 < minutes_left <= 15:
+                    today = eng.session.now_et().date()
+                    if 0 < minutes_left <= 15 and _eod_close_done != today:
                         await self._eod_close()
+                        _eod_close_done = today
                 else:
                     # 장 마감 후 일일 리포트 (1일 1회)
                     today = eng.session.now_et().date()

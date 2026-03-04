@@ -222,25 +222,36 @@ class DashboardDataCollector:
     # 거래 내역
     # ----------------------------------------------------------
 
+    # pykrx 실패 횟수 추적 (세션 내 반복 시도 방지)
+    _stock_master_attempt_count: int = 0
+    _stock_master_max_attempts: int = 3
+
     @classmethod
     def _load_stock_master_sync(cls) -> None:
         """종목 마스터 동기 로드 (pykrx 블로킹 I/O, 실패 시 로컬 캐시 폴백)"""
         if cls._stock_master_loaded:
             return
 
+        # 최대 시도 횟수 초과 시 재시도 안 함
+        if cls._stock_master_attempt_count >= cls._stock_master_max_attempts:
+            return
+        cls._stock_master_attempt_count += 1
+
         _cache_dir = Path.home() / ".cache" / "ai_trader"
-        _kospi_cache = _cache_dir / "stock_master_kospi.json"
-        _kosdaq_cache = _cache_dir / "stock_master_kosdaq.json"
+        _cache_file = _cache_dir / "stock_master.json"
 
         pykrx_success = False
         if PYKRX_AVAILABLE:
             try:
                 logger.info("Loading stock master from pykrx...")
 
-                # KOSPI + KOSDAQ + KONEX 전체 종목 로드
-                for market in ["KOSPI", "KOSDAQ", "KONEX"]:
+                # 날짜를 명시해야 장 마감 후에도 정상 조회됨
+                from datetime import date as _date
+                today_str = _date.today().strftime("%Y%m%d")
+
+                for market in ["KOSPI", "KOSDAQ"]:
                     try:
-                        tickers = pykrx_stock.get_market_ticker_list(market=market)
+                        tickers = pykrx_stock.get_market_ticker_list(today_str, market=market)
                         for ticker in tickers:
                             if ticker not in cls._stock_master_cache:
                                 name = pykrx_stock.get_market_ticker_name(ticker)
@@ -255,13 +266,12 @@ class DashboardDataCollector:
                     cls._stock_master_loaded = True
                     logger.info(f"Stock master loaded: {len(cls._stock_master_cache)} stocks")
 
-                    # 성공 시 캐시 저장 (TTL 24시간)
+                    # 성공 시 캐시 저장
                     try:
                         import json as _json
                         _cache_dir.mkdir(parents=True, exist_ok=True)
-                        # KOSPI/KOSDAQ 분리 저장
-                        _kospi_cache.write_text(_json.dumps(
-                            {k: v for k, v in cls._stock_master_cache.items()},
+                        _cache_file.write_text(_json.dumps(
+                            cls._stock_master_cache,
                             ensure_ascii=False
                         ))
                         logger.debug(f"Stock master cache saved: {len(cls._stock_master_cache)} stocks")
@@ -275,35 +285,31 @@ class DashboardDataCollector:
         if not pykrx_success:
             try:
                 import json as _json
-                from datetime import datetime as _dt
-                loaded = False
-                for cache_path in [_kospi_cache, _kosdaq_cache]:
-                    if cache_path.exists():
-                        # TTL 24시간 체크
-                        import os as _os
-                        mtime = _os.path.getmtime(cache_path)
-                        age_hours = (_dt.now().timestamp() - mtime) / 3600
-                        if age_hours > 48:
-                            logger.debug(f"Stock master cache expired ({age_hours:.0f}h): {cache_path.name}")
-                            continue
-                        data = _json.loads(cache_path.read_text())
+                if _cache_file.exists():
+                    import os as _os
+                    mtime = _os.path.getmtime(_cache_file)
+                    age_hours = (datetime.now().timestamp() - mtime) / 3600
+                    if age_hours > 72:
+                        logger.debug(f"Stock master cache expired ({age_hours:.0f}h)")
+                    else:
+                        data = _json.loads(_cache_file.read_text())
                         if data:
                             cls._stock_master_cache.update(data)
-                            loaded = True
-                if loaded and cls._stock_master_cache:
-                    cls._stock_master_loaded = True
-                    logger.info(
-                        f"Stock master loaded from cache: {len(cls._stock_master_cache)} stocks"
-                    )
-                else:
-                    logger.warning("Stock master: pykrx failed and no valid cache available")
+                            cls._stock_master_loaded = True
+                            logger.info(
+                                f"Stock master loaded from cache: {len(cls._stock_master_cache)} stocks ({age_hours:.0f}h old)"
+                            )
+                            return
+                logger.warning("Stock master: pykrx failed and no valid cache available")
             except Exception as _fe:
                 logger.warning(f"Stock master cache fallback failed: {_fe}")
 
     @classmethod
     async def _load_stock_master(cls) -> None:
         """종목 마스터 비동기 로드 (이벤트 루프 블로킹 방지)"""
-        if cls._stock_master_loaded or not PYKRX_AVAILABLE:
+        if cls._stock_master_loaded:
+            return
+        if not PYKRX_AVAILABLE:
             return
         await asyncio.to_thread(cls._load_stock_master_sync)
 
@@ -341,6 +347,18 @@ class DashboardDataCollector:
             for stock in getattr(screener, '_last_screened', []):
                 if stock.symbol not in cache and stock.name and stock.name != stock.symbol:
                     cache[stock.symbol] = stock.name
+
+        # 5. StockMaster DB 폴백 (pykrx 실패 시)
+        if not self._stock_master_loaded:
+            sm = getattr(self.bot, 'stock_master', None)
+            if sm and getattr(sm, '_cache_loaded', False):
+                # _name_cache: {종목명 → 코드} → 역변환 {코드 → 종목명}
+                for name, ticker in sm._name_cache.items():
+                    if ticker not in cache:
+                        cache[ticker] = name
+                if sm._name_cache:
+                    self.__class__._stock_master_loaded = True
+                    logger.info(f"Stock master loaded from DB: {len(sm._name_cache)} stocks")
 
         self._name_cache = cache
         self._name_cache_updated = now

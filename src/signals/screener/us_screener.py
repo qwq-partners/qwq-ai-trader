@@ -120,7 +120,8 @@ class StockScreener:
             scan_date = date.fromisoformat(data["scan_date"])
             from zoneinfo import ZoneInfo
             today = datetime.now(ZoneInfo("America/New_York")).date()
-            if (today - scan_date).days > 1:
+            # 주말/연휴 대비: 캘린더 일수 3일 이내면 유효 (금요일 스캔 → 월요일 사용 가능)
+            if (today - scan_date).days > 3:
                 return None
             results = [
                 ScreenResult(
