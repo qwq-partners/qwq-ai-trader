@@ -46,6 +46,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/daily-review/dates", handler.get_daily_review_dates)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
     app.router.add_post("/api/signals/execute", handler.execute_pending_signals)
+    app.router.add_post("/api/scan/run", handler.run_morning_scan)
     app.router.add_get("/api/trade-events", handler.get_trade_events)
     app.router.add_get("/api/daily-settlement", handler.get_daily_settlement)
     app.router.add_get("/api/app/latest", handler.get_latest_app)
@@ -283,6 +284,32 @@ class KRAPIHandler:
             return web.json_response({"success": True, "message": "시그널 실행 시작 (비동기)"})
         except Exception as e:
             logger.error(f"[대시보드] 시그널 실행 오류: {e}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def run_morning_scan(self, request: web.Request) -> web.Response:
+        """
+        배치 스캔 즉시 실행 + 시그널 실행 (수동 풀백 트리거)
+
+        POST /api/scan/run
+        """
+        try:
+            bot = self.dc.bot
+            batch_analyzer = getattr(bot, "batch_analyzer", None)
+            if batch_analyzer is None:
+                return web.json_response(
+                    {"success": False, "message": "batch_analyzer 미초기화"},
+                    status=503,
+                )
+            logger.info("[대시보드] 배치 스캔 수동 트리거 (풀백)")
+
+            async def _run():
+                await batch_analyzer.run_morning_scan()
+                await batch_analyzer.execute_pending_signals()
+
+            asyncio.create_task(_run())
+            return web.json_response({"success": True, "message": "배치 스캔+실행 시작 (비동기)"})
+        except Exception as e:
+            logger.error(f"[대시보드] 배치 스캔 오류: {e}")
             return web.json_response({"success": False, "message": str(e)}, status=500)
 
     async def get_trade_events(self, request: web.Request) -> web.Response:

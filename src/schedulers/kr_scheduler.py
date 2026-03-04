@@ -2168,7 +2168,7 @@ class KRScheduler:
             logger.info("[배치스케줄러] batch_analyzer 없음, 스킵")
             return
 
-        batch_cfg = bot.config.get("batch") or {}
+        batch_cfg = (bot.config.get("kr") or {}).get("batch") or bot.config.get("batch") or {}
         scan_time_str = batch_cfg.get("daily_scan_time", "15:40")
         execute_time_str = batch_cfg.get("execute_time", "09:01")
         monitor_interval = batch_cfg.get("position_update_interval", 30)
@@ -2219,7 +2219,7 @@ class KRScheduler:
                     await asyncio.sleep(60)
                     continue
 
-                # ── catch-up 로직 ────────────────────────────────────────────
+                # ── catch-up 로직 (exec_hour 이전: 스캔만) ───────────────────
                 if (morning_scan_enabled
                         and last_morning_scan_date != today
                         and (now.hour > morning_hour
@@ -2246,6 +2246,41 @@ class KRScheduler:
                             last_prescan_date = today
                         except Exception as e:
                             logger.error(f"[배치] catch-up 아침 스캔 오류: {e}")
+                            last_morning_scan_date = today
+                    else:
+                        last_morning_scan_date = today
+
+                # ── 풀백: exec_hour 이후에도 미스캔 감지 → 즉시 스캔+실행 ──
+                if (morning_scan_enabled
+                        and last_morning_scan_date != today
+                        and now.hour >= exec_hour
+                        and now.hour < 15):
+                    has_valid = False
+                    if pending_signals_path.exists():
+                        try:
+                            _sigs = json.loads(pending_signals_path.read_text())
+                            has_valid = any(
+                                datetime.fromisoformat(s.get("expires_at", "2000-01-01")) > now
+                                and datetime.fromisoformat(s.get("created_at", "2000-01-01")).date() == today
+                                for s in _sigs
+                            )
+                        except Exception:
+                            has_valid = False
+
+                    if not has_valid:
+                        logger.info("[배치스케줄러] 풀백: 장 시작 후 스캔 미실행 감지 → 즉시 스캔+실행")
+                        try:
+                            await self._run_strategic_prescan()
+                            await bot.batch_analyzer.run_morning_scan()
+                            last_morning_scan_date = today
+                            last_prescan_date = today
+                            # 스캔 직후 즉시 실행
+                            if last_execute_date != today:
+                                result = await bot.batch_analyzer.execute_pending_signals()
+                                last_execute_date = today
+                                logger.info(f"[배치] 풀백 실행: {result}")
+                        except Exception as e:
+                            logger.error(f"[배치] 풀백 오류: {e}")
                             last_morning_scan_date = today
                     else:
                         last_morning_scan_date = today
