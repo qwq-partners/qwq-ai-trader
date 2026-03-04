@@ -571,7 +571,7 @@ class SwingScreener:
         self._kospi_closes = []
         if self._broker:
             try:
-                history = await self._broker.get_daily_prices("0001", count=20)
+                history = await self._broker.get_daily_prices("0001", days=20)
                 if history and len(history) >= 10:
                     self._kospi_closes = [
                         float(bar.get("close", 0)) for bar in history
