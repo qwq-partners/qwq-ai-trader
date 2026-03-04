@@ -343,6 +343,18 @@ class USScheduler:
     async def _run_screening(self):
         """한 사이클의 스크리닝 + 시그널 처리"""
         eng = self.engine
+
+        # 포지션 여유 없으면 스크리닝 스킵 (pending 포함)
+        _effective_pos = len(eng.portfolio.positions) + len(
+            eng._pending_symbols - set(eng.portfolio.positions.keys())
+        )
+        _max_pos = eng.risk_manager.config.max_positions if eng.risk_manager else 4
+        if _effective_pos >= _max_pos:
+            logger.debug(
+                f"[US 스크리닝] 포지션 여유 없음 ({_effective_pos}/{_max_pos}) — 스킵"
+            )
+            return
+
         logger.info(f"[US 스크리닝] 시작 — {len(eng._universe)} 종목 중 "
                      f"최대 {eng._max_screen_symbols}개 스캔")
 
@@ -519,6 +531,19 @@ class USScheduler:
         eng = self.engine
         symbol = signal.symbol
 
+        # pending 포함 실효 포지션 수로 max_positions 조기 차단
+        effective_pos_count = len(eng.portfolio.positions) + len(
+            eng._pending_symbols - set(eng.portfolio.positions.keys())
+        )
+        max_pos = eng.risk_manager.config.max_positions
+        if symbol not in eng.portfolio.positions and effective_pos_count >= max_pos:
+            logger.info(
+                f"[US 시그널] {symbol} — max_positions 초과 "
+                f"(보유={len(eng.portfolio.positions)}, pending={len(eng._pending_symbols)}, "
+                f"한도={max_pos})"
+            )
+            return False
+
         # 현재가 조회 (리스크 체크에 필요)
         exchange = await self._get_exchange(symbol)
         quote = await eng.broker.get_quote(symbol, exchange)
@@ -651,17 +676,20 @@ class USScheduler:
     # ============================================================
 
     async def exit_check_loop(self):
-        """보유 포지션 → ExitManager → 매도 (15초 주기, KIS REST 실시간 가격 기준)
+        """보유 포지션 → ExitManager → 매도 (KIS REST 실시간 가격 기준)
 
         Finnhub WS는 무료 플랜 15분 지연 → exit 결정에 사용 금지.
         항상 KIS REST get_quote()로 실시간 가격 조회 후 exit 판단.
+        - 정규장: eng._exit_check_sec (기본 30초)
+        - 비정규장: 3분 (불필요한 KIS API 절감)
         """
         eng = self.engine
+        _interval = getattr(eng, '_exit_check_sec', 30)
 
         while eng.running:
             try:
                 if not eng.session.is_market_open():
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(180)  # 비정규장: 3분
                     continue
 
                 await self._check_exits()
@@ -671,7 +699,7 @@ class USScheduler:
             except Exception as e:
                 logger.exception(f"[US 청산 체크] 오류: {e}")
 
-            await asyncio.sleep(15)  # 항상 15초
+            await asyncio.sleep(_interval)
 
     async def _check_exits(self):
         """보유 포지션 순회 → KIS REST 실시간 가격 → 청산 시그널 체크"""
@@ -954,10 +982,7 @@ class USScheduler:
                     logger.debug(f"[US 동기화] {symbol} — KIS에 없지만 pending 주문 있어 유지")
                     continue
                 pos = eng.portfolio.positions.pop(symbol)
-                # 매도 금액을 현금에 반영 (KIS API에서 현금 조회 불가 시 대비)
-                sell_proceeds = pos.current_price * pos.quantity
-                eng.portfolio.cash += sell_proceeds
-                eng.portfolio.daily_pnl += pos.unrealized_pnl
+                # daily_pnl은 아래 trade.pnl에서 한 번만 가산 (이중 가산 방지)
                 eng.exit_manager.on_position_closed(symbol)
                 eng._pending_symbols.discard(symbol)
                 eng._ws_last_exit_check.pop(symbol, None)
@@ -1141,8 +1166,8 @@ class USScheduler:
 
         symbol = pending["symbol"]
         side = pending["side"]
-        filled_price = fill_info.get("filled_price", 0)
-        filled_qty = fill_info.get("filled_qty", 0)
+        filled_price = float(fill_info.get("filled_price", 0) or 0)
+        filled_qty = int(fill_info.get("filled_qty", 0) or 0)
 
         eng._pending_symbols.discard(symbol)
 

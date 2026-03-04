@@ -1119,6 +1119,28 @@ class UnifiedTradingBot:
             )
             self.engine.register_context("US", us_ctx)
 
+            # 재시작 시 기존 보유 포지션 → ExitManager + highest_price 복원
+            # (ExitManager 초기화 후 여기서 일괄 등록 — 초기 30초간 손절 누락 방지)
+            if us_engine.portfolio.positions and us_engine.exit_manager:
+                try:
+                    from src.schedulers.us_scheduler import USScheduler as _USSched
+                    _tmp_sched = _USSched(us_engine)
+                    hp_cache = _tmp_sched._load_highest_prices()
+                    stages_cache = _tmp_sched._load_exit_stages()
+                    if stages_cache:
+                        us_engine.exit_manager.restore_stages(stages_cache)
+                    for sym, pos in us_engine.portfolio.positions.items():
+                        cached_hp = hp_cache.get(sym, 0.0)
+                        if cached_hp > float(pos.current_price):
+                            pos.highest_price = Decimal(str(cached_hp))
+                        us_engine.exit_manager.register_position(pos)
+                    logger.info(
+                        f"[US] 기존 포지션 {len(us_engine.portfolio.positions)}개 "
+                        f"ExitManager 등록 완료"
+                    )
+                except Exception as e:
+                    logger.warning(f"[US] 기존 포지션 ExitManager 등록 실패 (무시): {e}")
+
             logger.info("[US] 미국 시장 초기화 완료")
             return True
 
