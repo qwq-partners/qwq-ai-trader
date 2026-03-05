@@ -19,7 +19,7 @@ import random
 import time
 import uuid
 from collections import deque
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -60,6 +60,10 @@ class USScheduler:
             engine: _USEngineBundle 인스턴스
         """
         self.engine = engine
+        # 매도 실패 쿨다운 (종목 → 실패시각)
+        self._sell_fail_cooldown: Dict[str, datetime] = {}
+        # 이전 sync 수량 스냅샷 (수량 변화 감지용)
+        self._prev_qty_snapshot: Dict[str, int] = {}
 
     # ============================================================
     # 태스크 생성
@@ -155,8 +159,23 @@ class USScheduler:
             pass
         return {}
 
+    def _load_cached_metadata(self) -> tuple:
+        """캐시에서 entry_times, strategies 로드"""
+        entry_times = {}
+        strategies = {}
+        try:
+            path = self._hp_cache_path()
+            if path.exists():
+                raw = json.loads(path.read_text())
+                if isinstance(raw, dict):
+                    entry_times = raw.get("entry_times", {})
+                    strategies = raw.get("strategies", {})
+        except Exception:
+            pass
+        return entry_times, strategies
+
     def _save_highest_prices(self):
-        """현재 포지션의 highest_price + exit_stages → 캐시 저장"""
+        """현재 포지션의 highest_price + exit_stages + entry_times + strategies → 캐시 저장"""
         eng = self.engine
         try:
             hp = {
@@ -164,9 +183,21 @@ class USScheduler:
                 for sym, pos in eng.portfolio.positions.items()
                 if pos.highest_price is not None
             }
+            entry_times = {
+                sym: pos.entry_time.isoformat()
+                for sym, pos in eng.portfolio.positions.items()
+                if pos.entry_time is not None
+            }
+            strategies = {
+                sym: pos.strategy
+                for sym, pos in eng.portfolio.positions.items()
+                if pos.strategy
+            }
             data = {
                 "highest_prices": hp,
                 "exit_stages": eng.exit_manager.get_stages(),
+                "entry_times": entry_times,
+                "strategies": strategies,
             }
             self._hp_cache_path().write_text(json.dumps(data))
         except Exception as e:
@@ -950,6 +981,11 @@ class USScheduler:
             logger.debug(f"[US 매도 주문] {symbol} — 이미 pending, 스킵")
             return
 
+        # 매도 실패 쿨다운 (5분)
+        last_fail = self._sell_fail_cooldown.get(symbol)
+        if last_fail and (datetime.now() - last_fail).total_seconds() < 300:
+            return
+
         action = exit_signal.get("action", "close")
         ratio = exit_signal.get("ratio", 1.0)
         reason = exit_signal.get("reason", "")
@@ -977,6 +1013,7 @@ class USScheduler:
         result = await eng.broker.submit_sell_order(symbol, exchange, sell_qty, price=sell_price)
 
         if result.get("success"):
+            self._sell_fail_cooldown.pop(symbol, None)  # 성공 시 쿨다운 해제
             order_no = result.get("order_no", "").strip()
             if not order_no:
                 order_no = f"local-{uuid.uuid4().hex[:12]}"
@@ -1018,7 +1055,8 @@ class USScheduler:
                 f"[US 매도 주문] {symbol} {sell_qty}/{position.quantity}주 — {reason}"
             )
         else:
-            logger.warning(f"[US 매도 주문] {symbol} 실패: {result.get('message')}")
+            self._sell_fail_cooldown[symbol] = datetime.now()
+            logger.warning(f"[US 매도 주문] {symbol} 실패 (5분 쿨다운): {result.get('message')}")
 
     # ============================================================
     # 태스크 3: 포트폴리오 동기화
@@ -1073,6 +1111,7 @@ class USScheduler:
 
         # highest_price 캐시 로드
         hp_cache = self._load_highest_prices()
+        et_cache, strat_cache = self._load_cached_metadata()
         _need_restore_stages = not getattr(self, '_exit_stages_restored', False)
 
         # 포지션
@@ -1086,8 +1125,33 @@ class USScheduler:
             if symbol in eng.portfolio.positions:
                 # 기존 포지션 업데이트
                 pos = eng.portfolio.positions[symbol]
+                new_qty = int(kp["qty"])
+                old_qty = self._prev_qty_snapshot.get(symbol, pos.quantity)
+
                 if symbol not in eng._pending_symbols:
-                    pos.quantity = int(kp["qty"])  # float → int (Decimal*float TypeError 방지)
+                    pos.quantity = new_qty
+
+                    # 수량 감소 감지 → 부분/전량 매도 기록 (체결 누락 보완)
+                    if new_qty < old_qty and eng.trade_storage:
+                        sold_qty = old_qty - new_qty
+                        exit_price = float(kp["current_price"])
+                        trade_id = getattr(pos, 'trade_id', None)
+                        if trade_id:
+                            eng.trade_storage.record_exit(
+                                trade_id=trade_id,
+                                exit_price=exit_price,
+                                exit_quantity=sold_qty,
+                                exit_reason="sync_detected",
+                                exit_type="sync_partial",
+                                avg_entry_price=float(pos.avg_price),
+                            )
+                        logger.info(
+                            f"[US 동기화] {symbol} 수량 감소 감지: "
+                            f"{old_qty}→{new_qty}주 (매도 {sold_qty}주 기록)"
+                        )
+                        # 매도 실패 쿨다운 해제 (실제로 체결됨)
+                        self._sell_fail_cooldown.pop(symbol, None)
+
                 pos.avg_price = Decimal(str(kp["avg_price"]))
                 pos.current_price = Decimal(str(kp["current_price"]))
                 eng._exchange_cache[symbol] = kp.get("exchange", eng._default_exchange)
@@ -1105,6 +1169,15 @@ class USScheduler:
                 cur_price = float(kp["current_price"])
                 restored_hp = max(cached_hp, cur_price)
                 sync_trade_id = f"SYNC_{symbol}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                # entry_time 복원 (캐시 → 메모리 캐시 → 현재)
+                restored_et = None
+                if symbol in et_cache:
+                    try:
+                        restored_et = datetime.fromisoformat(et_cache[symbol])
+                    except Exception:
+                        pass
+                if not restored_et:
+                    restored_et = datetime.now()
                 eng.portfolio.positions[symbol] = Position(
                     symbol=symbol,
                     name=kp.get("name", ""),
@@ -1113,13 +1186,15 @@ class USScheduler:
                     avg_price=Decimal(str(kp["avg_price"])),
                     current_price=Decimal(str(cur_price)),
                     highest_price=Decimal(str(restored_hp)),
-                    entry_time=datetime.now(),
+                    entry_time=restored_et,
                     trade_id=sync_trade_id,
                 )
-                # 전략 복원 (메모리 캐시에서)
-                if symbol in eng._symbol_strategy:
+                # 전략 복원 (메모리 캐시 → 파일 캐시)
+                restored_strat = eng._symbol_strategy.get(symbol) or strat_cache.get(symbol)
+                if restored_strat:
                     pos = eng.portfolio.positions[symbol]
-                    pos.strategy = eng._symbol_strategy[symbol]
+                    pos.strategy = restored_strat
+                    eng._symbol_strategy[symbol] = restored_strat
                     for strat in eng.strategies:
                         if strat.strategy_type.value == pos.strategy:
                             pos.time_horizon = strat.time_horizon
@@ -1138,6 +1213,22 @@ class USScheduler:
                     eng.exit_manager.register_position(new_pos)
                 except Exception as e:
                     logger.debug(f"[US 동기화] {symbol} ExitManager 등록 실패: {e}")
+
+                # TradeStorage entry 기록 (체결 누락 보완)
+                if eng.trade_storage and symbol not in self._prev_qty_snapshot:
+                    eng.trade_storage.record_entry(
+                        trade_id=sync_trade_id,
+                        symbol=symbol,
+                        name=kp.get("name", ""),
+                        entry_price=float(kp["avg_price"]),
+                        entry_quantity=int(kp["qty"]),
+                        entry_reason="sync_detected",
+                        entry_strategy=restored_strat or "unknown",
+                        signal_score=0,
+                        indicators=None,
+                        market="US",
+                    )
+                    logger.info(f"[US 동기화] {symbol} 신규 포지션 entry 기록 (sync)")
 
         # exit_stages 복원 (포지션 등록 후 실행 — _states 채워진 뒤 stage 복원)
         if _need_restore_stages:
@@ -1217,6 +1308,12 @@ class USScheduler:
                 eng.portfolio.daily_pnl += trade.pnl
                 eng.portfolio.daily_trades += 1
 
+        # 수량 스냅샷 갱신 (다음 sync에서 변화 감지용)
+        self._prev_qty_snapshot = {
+            sym: pos.quantity
+            for sym, pos in eng.portfolio.positions.items()
+        }
+
     # ============================================================
     # 태스크 4: 주문 상태 체크
     # ============================================================
@@ -1224,6 +1321,12 @@ class USScheduler:
     async def order_check_loop(self):
         """미체결 주문 상태 폴링"""
         eng = self.engine
+
+        # 시작 시 KIS 미체결 주문 복원 (1회)
+        try:
+            await self._recover_pending_orders()
+        except Exception as e:
+            logger.warning(f"[US 주문 복원] 실패: {e}")
 
         while eng.running:
             try:
@@ -1236,6 +1339,66 @@ class USScheduler:
 
             await asyncio.sleep(eng._order_check_sec)
 
+    async def _recover_pending_orders(self):
+        """재시작 시 KIS 미체결 주문 복원 → _pending_orders에 등록"""
+        eng = self.engine
+        if not eng.broker:
+            return
+
+        et_now = eng.session.now_et()
+        today_et = et_now.strftime("%Y%m%d")
+        # 전날 주문도 조회 (장 마감 후 재시작 시 전날 미체결이 남아있을 수 있음)
+        yesterday_et = (et_now - timedelta(days=1)).strftime("%Y%m%d")
+
+        history = await eng.broker.get_order_history(
+            start_date=yesterday_et, end_date=today_et
+        )
+        if not history:
+            return
+
+        recovered = 0
+        for h in history:
+            if h["status"] not in ("pending", "partial"):
+                continue
+            order_no = h["order_no"]
+            if order_no in eng._pending_orders:
+                continue
+
+            symbol = h["symbol"]
+            # 주문 시각 복원 (HHMMSS → datetime)
+            submitted_at = datetime.now()
+            order_time_str = h.get("time", "")
+            if len(order_time_str) >= 6:
+                try:
+                    et_date = et_now.date()
+                    hh, mm, ss = int(order_time_str[:2]), int(order_time_str[2:4]), int(order_time_str[4:6])
+                    et_tz = timezone(timedelta(hours=-5))
+                    submitted_at = datetime(et_date.year, et_date.month, et_date.day,
+                                            hh, mm, ss, tzinfo=et_tz).astimezone().replace(tzinfo=None)
+                except Exception:
+                    pass
+
+            eng._pending_orders[order_no] = {
+                "symbol": symbol,
+                "side": h["side"],
+                "qty": h["qty"],
+                "price": h.get("price", 0),
+                "strategy": eng._symbol_strategy.get(symbol, ""),
+                "reason": "recovered",
+                "exit_type": "",
+                "exchange": h.get("exchange", eng._default_exchange),
+                "submitted_at": submitted_at,
+            }
+            eng._pending_symbols.add(symbol)
+            recovered += 1
+            logger.info(
+                f"[US 주문 복원] {order_no} {h['side']} {symbol} "
+                f"{h['qty']}주 @ ${h.get('price', 0)} ({h['status']})"
+            )
+
+        if recovered:
+            logger.info(f"[US 주문 복원] 총 {recovered}건 미체결 주문 복원 완료")
+
     async def _check_orders(self):
         """체결 내역 조회 → 체결 처리"""
         eng = self.engine
@@ -1243,7 +1406,11 @@ class USScheduler:
         # ET 날짜로 조회 (KST/ET 날짜 불일치 방지)
         et_now = eng.session.now_et()
         today_et = et_now.strftime("%Y%m%d")
+        pending_count = len(eng._pending_orders)
         history = await eng.broker.get_order_history(start_date=today_et, end_date=today_et)
+        logger.debug(
+            f"[US 주문 체크] pending={pending_count}, history={len(history) if history else 0}"
+        )
         if not history:
             return
 
@@ -1459,6 +1626,7 @@ class USScheduler:
                     entry_strategy=pending.get("strategy", ""),
                     signal_score=pending.get("signal_score", 0),
                     indicators=eng._indicator_cache.get(symbol),
+                    market="US",
                 )
 
             # WS 시작 (없을 경우) + 구독

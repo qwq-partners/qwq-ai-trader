@@ -485,6 +485,9 @@ class ExitManager:
             "remaining_before": state.remaining_quantity,
         })
 
+        # stage 변경 즉시 영속화 (재시작 시 복원용)
+        self._persist_states()
+
         return (action, quantity, reason)
 
     def rollback_stage(self, symbol: str) -> bool:

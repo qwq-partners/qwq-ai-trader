@@ -136,35 +136,45 @@ class USAPIHandler:
         return web.json_response(orders)
 
     async def handle_trades(self, request: web.Request) -> web.Response:
-        """거래 내역 반환 (DB 우선, CSV 폴백)"""
-        # DB 사용 가능 시 TradeStorage에서 조회
+        """거래 내역 반환 (DB market='US' 필터링)"""
         ts = getattr(self.engine, 'trade_storage', None)
-        if ts and ts._db_available:
+        if ts and ts._db_available and ts.pool:
             days = int(request.rel_url.query.get("days", "30"))
-            closed = ts.get_closed_trades(days=days)
-            trades = []
-            for t in closed:
-                # KR 종목 제외 (숫자로만 구성된 심볼은 한국 종목)
-                if t.symbol and t.symbol.isdigit():
-                    continue
-                trades.append({
-                    "timestamp": t.exit_time.isoformat() if t.exit_time else "",
-                    "symbol": t.symbol,
-                    "side": "sell",
-                    "entry_price": t.entry_price,
-                    "exit_price": t.exit_price,
-                    "quantity": t.entry_quantity,
-                    "pnl": round(t.pnl, 2),
-                    "pnl_pct": round(t.pnl_pct, 2),
-                    "strategy": t.entry_strategy,
-                    "reason": t.exit_reason,
-                    "exit_type": t.exit_type,
-                    "holding_minutes": t.holding_minutes,
-                    "trade_id": t.id,
-                    "market": "US",
-                })
-            trades.sort(key=lambda x: x["timestamp"], reverse=True)
-            return web.json_response(trades[:200])
+            try:
+                async with ts.pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
+                                  entry_strategy, exit_time, exit_price, exit_quantity,
+                                  exit_reason, exit_type, pnl, pnl_pct, holding_minutes
+                           FROM trades
+                           WHERE market = 'US'
+                             AND exit_time IS NOT NULL
+                             AND entry_time >= NOW() - INTERVAL '1 day' * $1
+                           ORDER BY exit_time DESC
+                           LIMIT 200""",
+                        days,
+                    )
+                trades = []
+                for r in rows:
+                    trades.append({
+                        "timestamp": r["exit_time"].isoformat() if r["exit_time"] else "",
+                        "symbol": r["symbol"],
+                        "side": "sell",
+                        "entry_price": float(r["entry_price"]),
+                        "exit_price": float(r["exit_price"]),
+                        "quantity": int(r["entry_quantity"]),
+                        "pnl": round(float(r["pnl"]), 2),
+                        "pnl_pct": round(float(r["pnl_pct"]), 2),
+                        "strategy": r["entry_strategy"] or "",
+                        "reason": r["exit_reason"] or "",
+                        "exit_type": r["exit_type"] or "",
+                        "holding_minutes": int(r["holding_minutes"] or 0),
+                        "trade_id": r["id"],
+                        "market": "US",
+                    })
+                return web.json_response(trades)
+            except Exception as e:
+                logger.warning(f"[US API] trades DB 조회 실패: {e}")
 
         # CSV 폴백
         date_str = request.rel_url.query.get("date", "")

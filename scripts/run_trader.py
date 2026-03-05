@@ -887,6 +887,7 @@ class UnifiedTradingBot:
                                     current_price=Decimal(str(pos.get("current_price", pos.get("avg_price", 0)))),
                                     market=Market.NASDAQ,
                                     currency="USD",
+                                    entry_time=datetime.now(),
                                 )
                                 us_engine.portfolio.positions[symbol] = us_pos
                         logger.info(f"[US] 보유 포지션 {len(us_engine.portfolio.positions)}개 로드 완료")

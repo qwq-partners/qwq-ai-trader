@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS trades (
     id              VARCHAR(80) PRIMARY KEY,
     symbol          VARCHAR(10)  NOT NULL,
     name            VARCHAR(100) NOT NULL DEFAULT '',
+    market          VARCHAR(5)   NOT NULL DEFAULT 'KR',
     entry_time      TIMESTAMP    NOT NULL,
     entry_price     NUMERIC(12,2) NOT NULL,
     entry_quantity  INTEGER      NOT NULL,
@@ -150,9 +151,16 @@ class TradeStorage:
             logger.info("[TradeStorage] DB 연결 종료")
 
     async def _ensure_tables(self):
-        """테이블 + 인덱스 생성"""
+        """테이블 + 인덱스 생성 + 마이그레이션"""
         async with self.pool.acquire() as conn:
             await conn.execute(SCHEMA_SQL)
+            # 마이그레이션: market 컬럼 추가 (기존 DB 호환)
+            await conn.execute(
+                "ALTER TABLE trades ADD COLUMN IF NOT EXISTS market VARCHAR(5) NOT NULL DEFAULT 'KR'"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market)"
+            )
         logger.info("[TradeStorage] 테이블 확인/생성 완료")
 
     @staticmethod
@@ -230,6 +238,7 @@ class TradeStorage:
         indicators: Dict[str, float] = None,
         market_context: Dict[str, Any] = None,
         theme_info: Dict[str, Any] = None,
+        market: str = "KR",
     ) -> TradeRecord:
         """진입 기록: 캐시 + JSON + DB큐"""
         # 1) 캐시 + JSON (동기)
@@ -250,13 +259,13 @@ class TradeStorage:
         # 2) DB 큐 — trades INSERT
         self._enqueue(
             """INSERT INTO trades
-               (id, symbol, name, entry_time, entry_price, entry_quantity,
+               (id, symbol, name, market, entry_time, entry_price, entry_quantity,
                 entry_reason, entry_strategy, entry_signal_score,
                 market_context, indicators_at_entry, theme_info, created_at, updated_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
                ON CONFLICT (id) DO NOTHING""",
             (
-                trade.id, trade.symbol, trade.name,
+                trade.id, trade.symbol, trade.name, market,
                 trade.entry_time, float(trade.entry_price), trade.entry_quantity,
                 trade.entry_reason, trade.entry_strategy, float(trade.entry_signal_score),
                 json.dumps(trade.market_context, default=str, ensure_ascii=False),
