@@ -215,16 +215,14 @@ class RiskManager:
             else:
                 return False, f"Daily loss limit reached ({daily_pnl_pct:.1f}%)"
 
-        # 3. 최대 포지션 수 제한 (US에서는 항상 적용)
-        if self.market != "KR":
-            if len(portfolio.positions) >= self.config.max_positions:
-                return False, f"Max positions reached ({self.config.max_positions})"
+        # 3. 최대 포지션 수 제한 (KR + US 공통)
+        if len(portfolio.positions) >= self.config.max_positions:
+            return False, f"최대 포지션 수 도달 ({len(portfolio.positions)}/{self.config.max_positions})"
 
-        # 4. 최소 현금 예비 (US)
-        if self.market != "KR":
-            min_cash = portfolio.total_equity * Decimal(str(self.config.min_cash_reserve_pct / 100))
-            if portfolio.cash < min_cash:
-                return False, "Below min cash reserve"
+        # 4. 최소 현금 예비 (KR + US 공통)
+        min_cash = portfolio.total_equity * Decimal(str(self.config.min_cash_reserve_pct / 100))
+        if portfolio.cash < min_cash:
+            return False, f"최소 현금 보유 미달 ({portfolio.cash:,.0f} < {min_cash:,.0f})"
 
         # 5. 포지션 크기 체크
         position_value = price * quantity

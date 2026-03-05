@@ -367,4 +367,5 @@ class KRAPIHandler:
         """봇 재시작 (지연 실행)"""
         await asyncio.sleep(delay_seconds)
         logger.warning("[대시보드] 파라미터 적용 완료 → 봇 재시작")
-        os._exit(0)  # systemd/supervisor가 재시작
+        import sys
+        sys.exit(0)  # systemd/supervisor가 재시작 (graceful shutdown)

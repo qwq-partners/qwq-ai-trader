@@ -519,9 +519,9 @@ class UnifiedEngine:
         pos = self.portfolio.positions[symbol]
 
         # 기존 포지션에 메타데이터 없으면 채우기
-        if not pos.strategy and fill.strategy:
+        if pos.strategy is None and fill.strategy:
             pos.strategy = fill.strategy
-        if not pos.entry_time and fill.timestamp:
+        if pos.entry_time is None and fill.timestamp:
             pos.entry_time = fill.timestamp
 
         if fill.side == OrderSide.BUY:
@@ -559,6 +559,12 @@ class UnifiedEngine:
             self._save_daily_stats()  # 실현손익 즉시 영속화
 
             # 포지션 종료 시 제거
+            if pos.quantity < 0:
+                logger.warning(
+                    f"[엔진] ⚠ {symbol} 음수 수량 감지: {pos.quantity}주 "
+                    f"(이중 매도 가능성) — 0으로 보정 후 제거"
+                )
+                pos.quantity = 0
             if pos.quantity <= 0:
                 del self.portfolio.positions[symbol]
 
@@ -1081,7 +1087,7 @@ class RiskManager:
                 is_stop_loss = bool(event.reason and "손절" in event.reason)
                 if not is_stop_loss:
                     pos = self.engine.portfolio.positions.get(event.symbol)
-                    buf_pct = self.config.pre_market_slippage_buffer_pct
+                    buf_pct = getattr(self.engine.config, 'pre_market_slippage_buffer_pct', 3.0)
                     if pos and pos.avg_price > 0 and event.price and buf_pct > 0:
                         adjusted_price = event.price * Decimal(str(1 - buf_pct / 100))
                         if adjusted_price <= pos.avg_price:
@@ -1291,9 +1297,10 @@ class RiskManager:
             success, order_id = await self.engine.broker.submit_order(order)
 
             if success:
+                price_str = f"{order.price:,.0f}원" if order.price is not None else "시장가"
                 logger.info(
                     f"[리스크] 주문 제출 성공: {order.symbol} {order.side.value} "
-                    f"{order.quantity}주 @ {order.price:,.0f} ({order.order_type.value}, ID: {order_id})"
+                    f"{order.quantity}주 @ {price_str} ({order.order_type.value}, ID: {order_id})"
                 )
             else:
                 logger.warning(f"[리스크] 주문 제출 실패: {order.symbol} — {order_id}")

@@ -1011,12 +1011,7 @@ class USScheduler:
                     await asyncio.sleep(300)
                     continue
 
-                # 일일 통계 리셋 (스크리닝 루프보다 먼저 실행될 수 있으므로)
-                today = eng.session.now_et().date()
-                if eng._daily_reset_done != today:
-                    eng._daily_reset_done = today
-                    eng.portfolio.reset_daily()
-                    logger.info("[US 동기화] 일일 통계 리셋")
+                # 일일 통계 리셋은 screening_loop에서 1회 수행 (중복 방지)
 
                 await self._sync_portfolio()
             except asyncio.CancelledError:

@@ -52,13 +52,8 @@ class KRScheduler:
 
         # 수동 매수 예약 (1회성, 장 시작 시 실행)
         # 형식: [{"symbol": "123320", "name": "TIGER 레버리지", "exit_exempt": True}]
-        self._manual_buy_orders = [
-            {
-                "symbol": "123320",
-                "name": "TIGER 레버리지",
-                "exit_exempt": True,  # 청산 예외
-            },
-        ]
+        # 필요 시 여기에 추가하고, 실행 완료 후 비울 것
+        self._manual_buy_orders = []
 
     def create_tasks(self):
         """모든 KR 스케줄러 태스크 생성 → 리스트 반환
@@ -344,6 +339,10 @@ class KRScheduler:
 
         except Exception as e:
             logger.error(f"[청산] {symbol} 체크 오류: {e}", exc_info=True)
+            # pending 교착 방지: 예외 시 반드시 해제
+            bot._exit_pending_symbols.discard(symbol)
+            bot._exit_pending_timestamps.pop(symbol, None)
+            bot._exit_reasons.pop(symbol, None)
 
     async def _sync_portfolio(self):
         """KIS API와 포트폴리오 동기화"""
@@ -827,7 +826,7 @@ class KRScheduler:
                 await self._sync_portfolio()
             except Exception as e:
                 logger.error(f"동기화 루프 오류: {e}")
-            await asyncio.sleep(120)
+            await asyncio.sleep(30)
 
     async def run_screening(self):
         """주기적 종목 스크리닝 루프"""
@@ -1498,6 +1497,12 @@ class KRScheduler:
             try:
                 now = datetime.now()
                 today_str = now.strftime("%Y%m%d")
+
+                # 공휴일 체크
+                if is_kr_market_holiday(now.date()):
+                    await asyncio.sleep(3600)
+                    continue
+
                 in_market = (
                     (now.hour == 9 and now.minute >= 1)
                     or (9 < now.hour < 15)

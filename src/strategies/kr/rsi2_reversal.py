@@ -92,6 +92,14 @@ class RSI2ReversalStrategy(BaseStrategy):
                     candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
                     atr_pct_value = atr
 
+                # R/R 비율 필터
+                if not self.check_rr_ratio(
+                    entry_price=candidate.entry_price,
+                    target_price=candidate.target_price,
+                    stop_price=candidate.stop_price,
+                ):
+                    continue
+
                 # 시그널 강도 결정
                 if score >= 85:
                     strength = SignalStrength.VERY_STRONG
@@ -158,9 +166,9 @@ class RSI2ReversalStrategy(BaseStrategy):
                 score += 11
 
         # 2. MA200 위 거리 (15점) — 장기 상승추세 확인
-        close = ind.get("close", 0)
+        close = ind.get("close")
         ma200 = ind.get("ma200")
-        if close and ma200 and ma200 > 0:
+        if close is not None and ma200 is not None and ma200 > 0:
             above_pct = (close - ma200) / ma200 * 100
             if above_pct > 20:
                 score += 15
@@ -171,7 +179,7 @@ class RSI2ReversalStrategy(BaseStrategy):
 
         # 3. BB 하단 이탈 (15점)
         bb_lower = ind.get("bb_lower")
-        if close and bb_lower and bb_lower > 0:
+        if close is not None and bb_lower is not None and bb_lower > 0:
             bb_dist = (close - bb_lower) / bb_lower * 100
             if bb_dist < -2:
                 score += 15

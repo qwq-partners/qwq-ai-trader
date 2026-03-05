@@ -397,11 +397,12 @@ class ExitManager:
                     f"ATR트레일링: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
                 )
 
-            # 본전 보호
-            if net_pnl_pct <= 0:
+            # 본전 보호 (매도 수수료 버퍼 포함 — 매도 후 실질 이익 보존)
+            sell_fee_buffer = 0.25  # KR 매도 수수료+세금 ≈ 0.213%, 여유분 포함
+            if net_pnl_pct <= sell_fee_buffer:
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,
-                    f"본전 이탈: +{net_pnl_pct:.2f}% (1R 도달 후 역전)"
+                    f"본전 이탈: +{net_pnl_pct:.2f}% (수수료 버퍼 {sell_fee_buffer}% 이하)"
                 )
 
         elif net_pnl_pct >= self.config.trailing_activate_pct:

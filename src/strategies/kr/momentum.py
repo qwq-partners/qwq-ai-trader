@@ -290,23 +290,23 @@ class MomentumBreakoutStrategy(BaseStrategy):
             score += 10
 
         # 4. 추세 품질 (20점) -- MA정배열 + 가격>VWAP
-        ma5 = indicators.get("ma5", 0)
-        ma20 = indicators.get("ma20", 0)
-        ma60 = indicators.get("ma60", 0)
-        vwap = indicators.get("vwap", 0)
-        high_20d = indicators.get("high_20d", 0)
-        hp = indicators.get("high_proximity", 0)
-        current_price = (high_20d * hp) if (high_20d and hp) else (ma5 if ma5 else 0)
+        ma5 = indicators.get("ma5")
+        ma20 = indicators.get("ma20")
+        ma60 = indicators.get("ma60")
+        vwap = indicators.get("vwap")
+        high_20d = indicators.get("high_20d")
+        hp = indicators.get("high_proximity")
+        current_price = (high_20d * hp) if (high_20d is not None and hp is not None and high_20d > 0) else (ma5 if ma5 is not None else 0)
 
         trend_score = 0.0
-        if ma5 and ma20 and ma60:
+        if ma5 is not None and ma20 is not None and ma60 is not None:
             if ma5 > ma20 > ma60:
                 trend_score += 12
             elif ma5 > ma20:
                 trend_score += 6
-        if current_price and vwap and current_price > vwap:
+        if current_price is not None and vwap is not None and current_price > vwap:
             trend_score += 4
-        if current_price and ma20 and current_price > ma20:
+        if current_price is not None and ma20 is not None and current_price > ma20:
             trend_score += 4
 
         score += min(trend_score, cfg.weight_trend_quality)

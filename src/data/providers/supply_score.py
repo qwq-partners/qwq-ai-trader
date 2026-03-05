@@ -30,11 +30,12 @@ LOOKBACK_DAYS = 5       # 5 영업일
 
 
 def _get_trading_dates(n: int) -> List[str]:
-    """최근 n 영업일 날짜 목록 반환 (오늘 제외, 최신→오래된 순)"""
+    """최근 n 영업일 날짜 목록 반환 (오늘 제외, 최신→오래된 순, 공휴일 제외)"""
+    from src.core.engine import is_kr_market_holiday
     dates = []
     d = datetime.now().date() - timedelta(days=1)
     while len(dates) < n:
-        if d.weekday() < 5:  # 월~금
+        if d.weekday() < 5 and not is_kr_market_holiday(d):
             dates.append(d.strftime("%Y%m%d"))
         d -= timedelta(days=1)
     return dates  # 최신→오래된 순
