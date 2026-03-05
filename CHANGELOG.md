@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-06 — US 대시보드 거래내역 표시 수정 + KIS API 날짜 기준 수정
+> `1157f63`, `982d5a7` | `us_api.py`, `us_scheduler.py`, `trades.html`, `trades.js`
+
+### 수정 내용
+1. **`us_api.py`**: trades 쿼리를 `trades` 테이블(exit_time IS NOT NULL 필터로 미청산 누락) → `trade_events` 테이블로 변경
+   - `metadata` 컬럼 참조 제거 (존재하지 않음) → 개별 컬럼(strategy, pnl 등) 직접 조회
+   - asyncpg `$1::date` 바인딩에 `datetime.date` 객체 전달 (str은 toordinal 에러)
+   - 날짜별 조회 지원 (`?date=YYYY-MM-DD`)
+2. **`us_scheduler.py`**: KIS API 주문 조회 날짜 기준 ET→KST 수정 (KIS는 KST 기준)
+3. **`trades.html`/`trades.js`**: US 거래 섹션에 날짜 선택 UI 추가
+
+---
+
 ## 2026-03-06 — US 거래 기록 누락 + 재시작 시 미체결 주문 복원
 > `0e858cc` | `us_scheduler.py`, `trade_storage.py`, `us_api.py`, `exit_manager.py`, `run_trader.py`
 
