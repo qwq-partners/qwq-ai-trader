@@ -550,11 +550,13 @@ class USScheduler:
             except Exception as e:
                 logger.debug(f"[US 스크리닝] {symbol} 평가 실패: {e}")
 
-        # 시그널 스코어 순 정렬 → 상위 N개 주문
+        # 시그널 스코어 순 정렬 → 성공 N개까지 시도
         signals.sort(key=lambda s: s.score, reverse=True)
         submitted = 0
 
-        for sig in signals[:eng._max_signals_per_cycle]:
+        for sig in signals:
+            if submitted >= eng._max_signals_per_cycle:
+                break
             success = await self._process_signal(sig)
             if success:
                 submitted += 1
@@ -677,20 +679,6 @@ class USScheduler:
             }
             eng._pending_symbols.add(symbol)
             eng._signal_cooldown[symbol] = datetime.now()
-
-            # 주문 기록 (TradeStorage journal)
-            if eng.trade_storage and hasattr(eng.trade_storage, '_journal'):
-                eng.trade_storage._journal.record_order({
-                    "symbol": symbol,
-                    "side": "buy",
-                    "qty": qty,
-                    "price": limit_price,
-                    "order_type": "limit",
-                    "order_no": order_no,
-                    "strategy": strategy_val,
-                    "status": "submitted",
-                    "message": signal.reason,
-                })
 
             eng.recent_signals.append({
                 "symbol": signal.symbol,
@@ -1021,19 +1009,6 @@ class USScheduler:
             }
             eng._pending_symbols.add(symbol)
 
-            if eng.trade_storage and hasattr(eng.trade_storage, '_journal'):
-                eng.trade_storage._journal.record_order({
-                    "symbol": symbol,
-                    "side": "sell",
-                    "qty": sell_qty,
-                    "price": sell_price,
-                    "order_type": "limit",
-                    "order_no": order_no,
-                    "strategy": position.strategy or "",
-                    "status": "submitted",
-                    "message": reason,
-                })
-
             logger.info(
                 f"[US 매도 주문] {symbol} {sell_qty}/{position.quantity}주 — {reason}"
             )
@@ -1113,7 +1088,7 @@ class USScheduler:
                 # 기존 포지션 업데이트
                 pos = eng.portfolio.positions[symbol]
                 if symbol not in eng._pending_symbols:
-                    pos.quantity = kp["qty"]
+                    pos.quantity = int(kp["qty"])  # float → int (Decimal*float TypeError 방지)
                 pos.avg_price = Decimal(str(kp["avg_price"]))
                 pos.current_price = Decimal(str(kp["current_price"]))
                 eng._exchange_cache[symbol] = kp.get("exchange", eng._default_exchange)
@@ -1127,7 +1102,7 @@ class USScheduler:
                     symbol=symbol,
                     name=kp.get("name", ""),
                     side=PositionSide.LONG,
-                    quantity=kp["qty"],
+                    quantity=int(kp["qty"]),
                     avg_price=Decimal(str(kp["avg_price"])),
                     current_price=Decimal(str(cur_price)),
                     highest_price=Decimal(str(restored_hp)),
@@ -1670,7 +1645,7 @@ class USScheduler:
                     _daily_loss_alert_date = today
 
                 risk_cfg = eng.risk_manager.config
-                warn_threshold = getattr(risk_cfg, 'daily_max_loss_pct', 3.0) * 0.67
+                warn_threshold = float(getattr(risk_cfg, 'daily_max_loss_pct', 3.0)) * 0.67
                 if not _daily_loss_alerted and metrics.daily_loss_pct <= -warn_threshold:
                     _daily_loss_alerted = True
                     asyncio.create_task(send_alert(

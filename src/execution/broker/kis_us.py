@@ -702,7 +702,9 @@ class KISUSBroker:
         if not end_date:
             end_date = today
 
-        url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-daily-ccld"
+        # TTTS3035R = inquire-ccnl (당일 해외주식 체결/미체결 조회)
+        # 참고: inquire-daily-ccld는 해외주식에 존재하지 않음 (404) — inquire-ccnl 사용
+        url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl"
         ctx_fk = ""
         ctx_nk = ""
         orders = []
@@ -718,7 +720,7 @@ class KISUSBroker:
                 "SLL_BUY_DVSN": "00",   # 00=전체
                 "CCLD_NCCS_DVSN": "00",  # 00=전체
                 "OVRS_EXCG_CD": "",       # 빈값=전체 거래소
-                "SORT_SQN": "DS",       # 내림차순
+                "SORT_SQN": "DS",        # 내림차순
                 "ORD_DT": "",
                 "ORD_GNO_BRNO": "",
                 "ODNO": "",
