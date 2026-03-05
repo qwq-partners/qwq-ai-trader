@@ -608,6 +608,11 @@ class KISMarketData:
 
                 if price <= 0:
                     logger.debug(f"[KIS] 야간선물 시세: 가격=0 (장외시간)")
+                    # 장외시간 네거티브 캐시 — 불필요한 반복 API 호출 방지
+                    # TTL을 역산하여 60초 후 만료되도록 설정
+                    _neg_ttl = max(cache_ttl - 60, 60)
+                    self._cache[cache_key] = None
+                    self._cache_ts[cache_key] = datetime.now() - timedelta(seconds=_neg_ttl)
                     return None
 
                 result = {

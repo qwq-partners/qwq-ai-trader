@@ -837,6 +837,8 @@ class KRScheduler:
 
             while bot.running:
                 screened = []
+                _overnight_sentiment = None
+                _overnight_volatility = None
                 try:
                     # 세션 확인
                     current_session = self._get_current_session()
@@ -847,8 +849,6 @@ class KRScheduler:
                     logger.info(f"[스크리닝] 동적 종목 스캔 시작... (세션: {current_session.value})")
 
                     # US 오버나이트 시그널 조회
-                    _overnight_sentiment = None
-                    _overnight_volatility = None
                     try:
                         _us_md = getattr(bot, 'us_market_data', None)
                         if _us_md:
@@ -862,12 +862,13 @@ class KRScheduler:
                                         abs(info.get("change_pct", 0))
                                         for info in _indices.values()
                                     )
-                                logger.info(
-                                    f"[스크리닝] US 오버나이트: {_overnight_sentiment}, "
-                                    f"최대변동={_overnight_volatility:.1f}%"
-                                    if _overnight_volatility is not None else
-                                    f"[스크리닝] US 오버나이트: {_overnight_sentiment}"
-                                )
+                                if _overnight_volatility is not None:
+                                    logger.info(
+                                        f"[스크리닝] US 오버나이트: {_overnight_sentiment}, "
+                                        f"최대변동={_overnight_volatility:.1f}%"
+                                    )
+                                else:
+                                    logger.info(f"[스크리닝] US 오버나이트: {_overnight_sentiment}")
                     except Exception as _ov_err:
                         logger.debug(f"[스크리닝] US 오버나이트 조회 실패 (무시): {_ov_err}")
 
