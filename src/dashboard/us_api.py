@@ -143,21 +143,24 @@ class USAPIHandler:
             try:
                 async with ts.pool.acquire() as conn:
                     if date_str:
-                        # 특정 날짜 조회
+                        from datetime import date as _date
+                        target_date = _date.fromisoformat(date_str)
                         rows = await conn.fetch(
-                            """SELECT event_type, symbol, quantity, price,
-                                      created_at, metadata
+                            """SELECT event_type, symbol, name, quantity, price,
+                                      created_at, strategy, pnl, pnl_pct,
+                                      exit_type, exit_reason, trade_id
                                FROM trade_events
-                               WHERE created_at::date = $1::date
+                               WHERE created_at::date = $1
                                  AND symbol NOT SIMILAR TO '[0-9]{6}'
                                ORDER BY created_at DESC
                                LIMIT 200""",
-                            date_str,
+                            target_date,
                         )
                     else:
                         rows = await conn.fetch(
-                            """SELECT event_type, symbol, quantity, price,
-                                      created_at, metadata
+                            """SELECT event_type, symbol, name, quantity, price,
+                                      created_at, strategy, pnl, pnl_pct,
+                                      exit_type, exit_reason, trade_id
                                FROM trade_events
                                WHERE created_at >= NOW() - INTERVAL '7 days'
                                  AND symbol NOT SIMILAR TO '[0-9]{6}'
@@ -166,29 +169,23 @@ class USAPIHandler:
                         )
                 trades = []
                 for r in rows:
-                    meta = r["metadata"] if r["metadata"] else {}
-                    if isinstance(meta, str):
-                        import json as _json
-                        try:
-                            meta = _json.loads(meta)
-                        except Exception:
-                            meta = {}
                     evt = r["event_type"].upper()
                     side = "buy" if evt == "BUY" else "sell"
                     trades.append({
                         "timestamp": r["created_at"].isoformat() if r["created_at"] else "",
                         "symbol": r["symbol"],
+                        "name": r["name"] or "",
                         "side": side,
-                        "entry_price": float(meta.get("entry_price", r["price"])) if side == "sell" else float(r["price"]),
+                        "entry_price": float(r["price"]),
                         "exit_price": float(r["price"]) if side == "sell" else 0,
                         "quantity": int(r["quantity"]),
-                        "pnl": round(float(meta.get("pnl", 0)), 2),
-                        "pnl_pct": round(float(meta.get("pnl_pct", 0)), 2),
-                        "strategy": meta.get("strategy", ""),
-                        "reason": meta.get("reason", ""),
-                        "exit_type": meta.get("exit_type", evt),
-                        "holding_minutes": int(meta.get("holding_minutes", 0)),
-                        "trade_id": meta.get("trade_id", ""),
+                        "pnl": round(float(r["pnl"] or 0), 2),
+                        "pnl_pct": round(float(r["pnl_pct"] or 0), 2),
+                        "strategy": r["strategy"] or "",
+                        "reason": r["exit_reason"] or "",
+                        "exit_type": r["exit_type"] or evt,
+                        "holding_minutes": 0,
+                        "trade_id": r["trade_id"] or "",
                         "market": "US",
                     })
                 return web.json_response(trades)
