@@ -1718,6 +1718,7 @@ class USScheduler:
         eng = self.engine
         _daily_report_sent: Optional[date] = None
         _eod_close_done: Optional[date] = None
+        _us_sync_done: Optional[date] = None
 
         while eng.running:
             try:
@@ -1741,6 +1742,20 @@ class USScheduler:
                                 logger.info("[US EOD] 일일 리포트 발송 완료")
                             except Exception as e:
                                 logger.error(f"[US EOD] 일일 리포트 실패: {e}")
+
+                    # 장 마감 후 KIS 체결 동기화 (16:20 ET 이후, 1일 1회)
+                    if _us_sync_done != today and eng.session.is_trading_day():
+                        now_et = eng.session.now_et()
+                        if now_et.hour == 16 and now_et.minute >= 20:
+                            _us_sync_done = today
+                            try:
+                                if eng.trade_storage and eng.broker:
+                                    await eng.trade_storage.sync_from_kis_us(
+                                        eng.broker, engine=eng
+                                    )
+                                    logger.info("[US EOD] KIS 체결 동기화 완료")
+                            except Exception as e:
+                                logger.error(f"[US EOD] KIS 체결 동기화 실패: {e}")
 
             except asyncio.CancelledError:
                 break

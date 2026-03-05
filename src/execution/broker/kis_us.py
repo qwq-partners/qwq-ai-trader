@@ -783,6 +783,44 @@ class KISUSBroker:
 
         return orders
 
+    async def get_all_fills_for_date(self, target_date=None) -> List[dict]:
+        """
+        특정 날짜의 전체 체결 내역 조회 (TradeStorage sync 호환 포맷).
+        KR broker의 get_all_fills_for_date()와 동일한 반환 형식.
+
+        Args:
+            target_date: date 객체 또는 None(오늘, KST 기준)
+
+        Returns:
+            List[Dict] — symbol, name, sll_buy_dvsn_cd, tot_ccld_qty, avg_prvs, odno, ord_tmd
+        """
+        if target_date and hasattr(target_date, "strftime"):
+            date_str = target_date.strftime("%Y%m%d")
+        else:
+            date_str = datetime.now().strftime("%Y%m%d")
+
+        try:
+            history = await self.get_order_history(start_date=date_str, end_date=date_str)
+            results = []
+            for h in history:
+                filled_qty = h.get("filled_qty", 0)
+                if filled_qty <= 0:
+                    continue
+                side = h.get("side", "")
+                results.append({
+                    "symbol": h["symbol"],
+                    "name": h.get("name", ""),
+                    "sll_buy_dvsn_cd": "01" if side == "sell" else "02",  # 01=매도, 02=매수
+                    "tot_ccld_qty": filled_qty,
+                    "avg_prvs": h.get("filled_price", 0.0),
+                    "odno": h.get("order_no", ""),
+                    "ord_tmd": h.get("time", ""),
+                })
+            return results
+        except Exception as e:
+            logger.error(f"[US] 전체 체결 조회 실패: {e}")
+            return []
+
     # ============================================================
     # Rate Limiter
     # ============================================================

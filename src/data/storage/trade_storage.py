@@ -717,6 +717,26 @@ class TradeStorage:
         pnl_pct = (pnl / cost * Decimal("100")) if cost > 0 else Decimal("0")
         return int(pnl.to_integral_value(rounding=ROUND_HALF_UP)), float(pnl_pct.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
+    @classmethod
+    def calc_pnl_us(cls, entry_price: float, exit_price: float, quantity: int) -> tuple:
+        """US 체결 기반 PnL 계산 (zero-commission).
+
+        Returns:
+            (pnl_usd: float, pnl_pct: float) — USD 손익, 퍼센트 수익률
+        """
+        d_entry = Decimal(str(entry_price))
+        d_exit = Decimal(str(exit_price))
+        d_qty = Decimal(str(quantity))
+
+        buy_amount = d_entry * d_qty
+        sell_amount = d_exit * d_qty
+        pnl = sell_amount - buy_amount  # zero-commission
+        pnl_pct = (pnl / buy_amount * Decimal("100")) if buy_amount > 0 else Decimal("0")
+
+        pnl_rounded = float(pnl.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        pct_rounded = float(pnl_pct.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+        return pnl_rounded, pct_rounded
+
     def _find_recovery_target(self, symbol: str, today: date,
                               db_trades: Dict[str, 'TradeRecord'] = None) -> Optional[TradeRecord]:
         """매도 복구 대상 trade 찾기 (우선순위: 오늘 미청산 → 오늘 부분청산 → 오늘 최근 → 전체 미청산)
@@ -1087,6 +1107,323 @@ class TradeStorage:
 
         except Exception as e:
             logger.error(f"[KIS보정] PnL 보정 실패 (무시): {e}")
+
+
+    async def sync_from_kis_us(self, broker, engine=None):
+        """
+        KIS 해외주식 당일 체결 내역과 캐시/DB 동기화.
+
+        1) 누락 매수/매도 복구
+        2) 청산 거래 PnL 보정 (zero-commission)
+        절대 예외를 전파하지 않습니다.
+        """
+        try:
+            if not hasattr(broker, "get_all_fills_for_date"):
+                logger.debug("[TradeStorage-US] broker에 get_all_fills_for_date 없음, 동기화 건너뜀")
+                return
+
+            today = date.today()
+            fills = await broker.get_all_fills_for_date(today)
+            if not fills:
+                logger.info("[TradeStorage-US] KIS 당일 체결 0건, 동기화 불필요")
+                return
+
+            # 체결을 종목별 매수/매도 그룹화
+            buys = {}   # symbol → list of fills
+            sells = {}  # symbol → list of fills
+            for f in fills:
+                side = f.get("sll_buy_dvsn_cd", "")
+                sym = f.get("symbol", "")
+                if not sym:
+                    continue
+                if side == "02":  # 매수
+                    buys.setdefault(sym, []).append(f)
+                elif side == "01":  # 매도
+                    sells.setdefault(sym, []).append(f)
+
+            synced = 0
+
+            # DB에서 당일 US 이벤트 조회
+            db_buy_symbols: set = set()
+            db_sell_qty_by_symbol: Dict[str, int] = {}
+            db_trades_map: Dict[str, Any] = {}
+
+            if self._db_available and self.pool:
+                try:
+                    buy_rows = await self.pool.fetch(
+                        "SELECT DISTINCT te.symbol FROM trade_events te "
+                        "JOIN trades t ON te.trade_id = t.id "
+                        "WHERE te.event_type='BUY' AND te.event_time::date=$1 AND t.market='US'",
+                        today,
+                    )
+                    db_buy_symbols = {r['symbol'] for r in buy_rows}
+
+                    sell_rows = await self.pool.fetch(
+                        "SELECT te.symbol, COALESCE(SUM(te.quantity), 0) as total_qty "
+                        "FROM trade_events te "
+                        "JOIN trades t ON te.trade_id = t.id "
+                        "WHERE te.event_type='SELL' AND te.event_time::date=$1 AND t.market='US' "
+                        "GROUP BY te.symbol",
+                        today,
+                    )
+                    db_sell_qty_by_symbol = {r['symbol']: int(r['total_qty']) for r in sell_rows}
+
+                    trade_rows = await self.pool.fetch(
+                        "SELECT id, symbol, name, entry_time, entry_price, entry_quantity, "
+                        "exit_time, exit_price, exit_quantity, entry_strategy, entry_signal_score, "
+                        "pnl, pnl_pct "
+                        "FROM trades WHERE market='US' AND ("
+                        "  entry_time::date = $1 OR (exit_time IS NULL AND entry_time::date < $1)"
+                        ")",
+                        today,
+                    )
+                    for tr in trade_rows:
+                        rec = TradeRecord(
+                            id=tr['id'], symbol=tr['symbol'], name=tr['name'] or '',
+                            entry_time=tr['entry_time'],
+                            entry_price=Decimal(str(tr['entry_price'])),
+                            entry_quantity=tr['entry_quantity'],
+                            entry_reason='', entry_strategy=tr['entry_strategy'] or '',
+                            entry_signal_score=Decimal(str(tr['entry_signal_score'] or 0)),
+                        )
+                        if tr['exit_time']:
+                            rec.exit_time = tr['exit_time']
+                            rec.exit_price = Decimal(str(tr['exit_price'] or 0))
+                            rec.exit_quantity = tr['exit_quantity'] or 0
+                            rec.pnl = Decimal(str(tr['pnl'] or 0))
+                            rec.pnl_pct = Decimal(str(tr['pnl_pct'] or 0))
+                        db_trades_map[rec.id] = rec
+                    if db_trades_map:
+                        logger.debug(f"[TradeStorage-US] DB에서 당일 거래 {len(db_trades_map)}건 로드")
+                except Exception as e:
+                    logger.warning(f"[TradeStorage-US] DB 이벤트 조회 실패, 캐시 폴백: {e}")
+
+            # 캐시의 당일 거래 (market 미분리 — symbol로만 비교)
+            cache_trades = {t.symbol: t for t in self.get_today_trades()}
+
+            # ── 누락 매수 복구 ──
+            for sym, buy_fills in buys.items():
+                if sym in db_buy_symbols or sym in cache_trades:
+                    continue
+
+                f = buy_fills[0]
+                qty = int(f.get("tot_ccld_qty", 0))
+                price = float(f.get("avg_prvs", 0))
+                if qty <= 0 or price <= 0:
+                    continue
+
+                trade_id = f"KIS_SYNC_US_{sym}_{today.strftime('%Y%m%d')}"
+                name = f.get("name", "") or sym
+
+                strategy = "momentum"
+                if engine:
+                    pos = engine.portfolio.positions.get(sym)
+                    if pos and getattr(pos, 'strategy', None):
+                        s = pos.strategy
+                        strategy = s.value if hasattr(s, 'value') else str(s)
+
+                self.record_entry(
+                    trade_id=trade_id,
+                    symbol=sym,
+                    name=name,
+                    entry_price=price,
+                    entry_quantity=qty,
+                    entry_reason="KIS 동기화 복구",
+                    entry_strategy=strategy,
+                    market="US",
+                )
+                synced += 1
+                logger.info(f"[TradeStorage-US] KIS 동기화 매수 복구: {sym} {qty}주 @ ${price:.4f}")
+
+            # ── 누락 매도 복구 ──
+            for sym, sell_fills in sells.items():
+                kis_total_sold = sum(int(f.get("tot_ccld_qty", 0)) for f in sell_fills)
+
+                db_total = db_sell_qty_by_symbol.get(sym, 0)
+                cache_total = sum(
+                    t.exit_quantity or 0
+                    for t in self._journal._trades.values()
+                    if t.symbol == sym and t.entry_time and t.entry_time.date() == today
+                )
+                already_sold = max(db_total, cache_total)
+
+                if already_sold >= kis_total_sold:
+                    logger.debug(
+                        f"[TradeStorage-US] {sym} 매도 이미 기록됨 "
+                        f"(KIS={kis_total_sold}, DB={db_total}, 캐시={cache_total})"
+                    )
+                    continue
+
+                missing_qty = kis_total_sold - already_sold
+
+                target_trade = self._find_recovery_target(sym, today, db_trades=db_trades_map)
+                if not target_trade:
+                    logger.warning(
+                        f"[TradeStorage-US] {sym} 매도 복구 대상 trade 없음 (누락 {missing_qty}주)"
+                    )
+                    continue
+
+                remaining = target_trade.entry_quantity - (target_trade.exit_quantity or 0)
+                if missing_qty > remaining:
+                    logger.warning(
+                        f"[TradeStorage-US] {sym} 매도수량 클램핑: "
+                        f"missing={missing_qty} > remaining={remaining}"
+                    )
+                    missing_qty = max(remaining, 0)
+                    if missing_qty <= 0:
+                        continue
+
+                last_fill = sell_fills[-1]
+                price = float(last_fill.get("avg_prvs", 0))
+                if price <= 0:
+                    continue
+
+                actual_time = self._parse_kis_time(last_fill.get("ord_tmd", ""), today)
+
+                result = self.record_exit(
+                    trade_id=target_trade.id,
+                    exit_price=price,
+                    exit_quantity=missing_qty,
+                    exit_reason="KIS 동기화 복구",
+                    exit_type="kis_sync",
+                    exit_time=actual_time,
+                )
+
+                # 캐시 손상 → DB 직접 기록
+                if result is None and self._db_available:
+                    exit_time = actual_time or datetime.now()
+                    entry_price = float(target_trade.entry_price)
+                    pnl, pnl_pct = self.calc_pnl_us(entry_price, price, missing_qty)
+                    total_exit_qty = (target_trade.exit_quantity or 0) + missing_qty
+                    is_fully_closed = total_exit_qty >= target_trade.entry_quantity
+
+                    self._enqueue(
+                        """UPDATE trades SET exit_time=$1, exit_price=$2, exit_quantity=$3,
+                           exit_reason=$4, exit_type=$5, pnl=$6, pnl_pct=$7, updated_at=$8
+                           WHERE id=$9""",
+                        (exit_time, price, total_exit_qty, "KIS 동기화 복구", "kis_sync",
+                         float(pnl), float(pnl_pct), datetime.now(), target_trade.id),
+                    )
+                    self._enqueue(
+                        """INSERT INTO trade_events
+                           (trade_id, symbol, name, event_type, event_time, price, quantity,
+                            exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score, status)
+                           VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                        (target_trade.id, target_trade.symbol, target_trade.name,
+                         exit_time, price, missing_qty, "kis_sync", "KIS 동기화 복구",
+                         float(pnl), float(pnl_pct), target_trade.entry_strategy,
+                         float(target_trade.entry_signal_score),
+                         "kis_sync" if is_fully_closed else "partial"),
+                    )
+                    logger.info(
+                        f"[TradeStorage-US] DB 직접 기록: {sym} {missing_qty}주 pnl=${pnl:+.2f}"
+                    )
+
+                synced += 1
+                logger.info(
+                    f"[TradeStorage-US] KIS 동기화 매도 복구: {sym} {missing_qty}주 @ ${price:.4f} "
+                    f"(trade={target_trade.id})"
+                )
+
+            if synced > 0:
+                logger.info(f"[TradeStorage-US] KIS 동기화 완료: {synced}건 복구")
+            else:
+                logger.info("[TradeStorage-US] KIS 동기화 완료: 누락 없음")
+
+            # PnL 보정 전 DB 큐 drain 대기
+            if self._write_queue:
+                await asyncio.sleep(0.5)
+            await self._reconcile_pnl_us(today, sells)
+
+        except Exception as e:
+            logger.error(f"[TradeStorage-US] KIS 동기화 실패 (무시): {e}")
+
+    async def _reconcile_pnl_us(self, target_date: date, kis_sells: Dict[str, list]):
+        """
+        US 당일 청산 거래의 PnL을 KIS 체결가 기준으로 보정 (zero-commission).
+        """
+        if not self._db_available or not self.pool:
+            return
+
+        try:
+            rows = await self.pool.fetch("""
+                SELECT id, symbol, entry_price, exit_price, entry_quantity,
+                       exit_quantity, pnl, pnl_pct
+                FROM trades
+                WHERE market = 'US'
+                  AND exit_time::date = $1
+                  AND exit_time IS NOT NULL
+            """, target_date)
+
+            if not rows:
+                return
+
+            corrected = 0
+            for row in rows:
+                sym = row['symbol']
+                entry_price = float(row['entry_price'])
+                exit_qty = row['exit_quantity'] or 0
+
+                if entry_price <= 0 or exit_qty <= 0:
+                    continue
+
+                # KIS 가중평균 매도가 계산
+                kis_exit_price = float(row['exit_price'])
+                if sym in kis_sells:
+                    total_qty = 0
+                    total_amt = 0.0
+                    for f in kis_sells[sym]:
+                        q = int(f.get("tot_ccld_qty", 0))
+                        p = float(f.get("avg_prvs", 0))
+                        total_qty += q
+                        total_amt += q * p
+                    if total_qty > 0:
+                        kis_exit_price = total_amt / total_qty
+
+                correct_pnl, correct_pct = self.calc_pnl_us(entry_price, kis_exit_price, exit_qty)
+                old_pnl = float(row['pnl'] or 0)
+
+                # $0.01 이하 차이 무시
+                if abs(correct_pnl - old_pnl) < 0.01:
+                    continue
+
+                # 분할매도 체크 (trades 테이블 보정 건너뜀)
+                sell_count = await self.pool.fetchval(
+                    "SELECT COUNT(*) FROM trade_events "
+                    "WHERE trade_id=$1 AND event_type='SELL' AND event_time::date=$2",
+                    row['id'], target_date,
+                )
+                if sell_count and sell_count > 1:
+                    logger.debug(f"[PnL보정-US] {sym} 분할매도 {sell_count}건 — 보정 건너뜀")
+                    continue
+
+                await self.pool.execute("""
+                    UPDATE trades SET pnl=$1, pnl_pct=$2, exit_price=$3,
+                                      updated_at=CURRENT_TIMESTAMP
+                    WHERE id=$4
+                """, correct_pnl, correct_pct, kis_exit_price, row['id'])
+
+                await self.pool.execute("""
+                    UPDATE trade_events SET pnl=$1, pnl_pct=$2, price=$3
+                    WHERE trade_id=$4 AND event_type='SELL' AND event_time::date=$5
+                """, correct_pnl, correct_pct, kis_exit_price, row['id'], target_date)
+
+                cached = self._journal.get_trade(row['id'])
+                if cached:
+                    cached.pnl = Decimal(str(correct_pnl))
+                    cached.pnl_pct = Decimal(str(correct_pct))
+
+                corrected += 1
+                logger.info(
+                    f"[KIS보정-US] {sym} PnL 보정: ${old_pnl:+.2f} → ${correct_pnl:+.2f} "
+                    f"(entry=${entry_price:.4f} exit=${kis_exit_price:.4f} qty={exit_qty})"
+                )
+
+            if corrected > 0:
+                logger.info(f"[KIS보정-US] 당일 PnL 보정 완료: {corrected}건")
+
+        except Exception as e:
+            logger.error(f"[KIS보정-US] PnL 보정 실패 (무시): {e}")
 
 
 # ── 싱글톤 팩토리 ──────────────────────────────────────────
