@@ -419,8 +419,8 @@ class KISUSBroker:
         total_pnl       = float(output2.get("ovrs_tot_pfls", "0") or "0")
         total_equity    = available_cash + stock_eval_amt
 
-        logger.debug(
-            f"[잔고] output2: 예수금=${available_cash:.2f}, 주식평가=${stock_eval_amt:.2f}, "
+        logger.info(
+            f"[TTTS3012R] output2: 예수금=${available_cash:.2f}, 주식평가=${stock_eval_amt:.2f}, "
             f"총자산=${total_equity:.2f}, 총손익=${total_pnl:.2f}"
         )
 
@@ -441,8 +441,7 @@ class KISUSBroker:
                     output3 = settle_data.get("output3", {})
                     if isinstance(output3, list):
                         output3 = output3[0] if output3 else {}
-                    logger.debug(f"[CTRP6504R] output3 raw keys: {list(output3.keys())[:10]}")
-                    logger.info(f"[CTRP6504R] output3: {dict(list(output3.items())[:8])}")
+                    logger.info(f"[CTRP6504R] output3 keys={list(output3.keys())[:10]} data={dict(list(output3.items())[:8])}")
                     settle_cash = float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0")
                     settle_equity = float(output3.get("FRCR_DNCL_AMT_2", "0") or "0")
                     if settle_cash > 0:
