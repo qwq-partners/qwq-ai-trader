@@ -441,15 +441,21 @@ class KISUSBroker:
                     output3 = settle_data.get("output3", {})
                     if isinstance(output3, list):
                         output3 = output3[0] if output3 else {}
-                    logger.info(f"[CTRP6504R] output3 keys={list(output3.keys())[:10]} data={dict(list(output3.items())[:8])}")
-                    settle_cash = float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0")
-                    settle_equity = float(output3.get("FRCR_DNCL_AMT_2", "0") or "0")
+                    logger.info(f"[CTRP6504R] output3 전체: {dict(output3)}")
+                    # 필드명이 소문자로 반환됨 (WCRC_FRCR_DVSN_CD=02 기준)
+                    # frcr_evlu_tota: 외화 평가 합계 (USD)
+                    # wdrw_psbl_tot_amt: 출금 가능 합계
+                    settle_cash = float(output3.get("frcr_evlu_tota", "0") or "0")
+                    # 대소문자 폴백 (API 버전 차이 대비)
+                    if settle_cash <= 0:
+                        settle_cash = float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0")
+                    settle_equity = settle_cash  # 포지션 없으면 예수금=총자산
                     if settle_cash > 0:
                         available_cash = settle_cash
-                        logger.info(f"[CTRP6504R] 예수금 복원: ${available_cash:.2f}")
+                        logger.info(f"[CTRP6504R] 외화잔고 복원: ${available_cash:.2f}")
                     if settle_equity > 0:
                         total_equity = settle_equity
-                    total_pnl = float(output3.get("OVRS_TOT_PFLS", total_pnl) or total_pnl)
+                    total_pnl = float(output3.get("ovrs_tot_pfls", output3.get("OVRS_TOT_PFLS", total_pnl)) or total_pnl)
                 else:
                     logger.warning(
                         f"[CTRP6504R] 실패: rt_cd={settle_data.get('rt_cd')} "
