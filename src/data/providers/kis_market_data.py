@@ -488,6 +488,104 @@ class KISMarketData:
     # 유틸리티
     # ============================================================
 
+    # ============================================================
+    # 6. KOSPI200 야간선물 현재가 (FHMIF10000000)
+    # ============================================================
+
+    async def get_night_futures_quote(
+        self,
+        symbol: str = "101W09",
+        cache_ttl: int = 300,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        KOSPI200 야간선물 현재가 조회 (KRX 야간거래)
+
+        Args:
+            symbol: 선물 종목코드 (기본: 101W09 = KOSPI200 근월물)
+            cache_ttl: 캐시 유효 시간 (초, 기본 5분)
+
+        Returns:
+            dict: {price, change, change_pct, volume, high, low, open} 또는 None
+        """
+        cache_key = f"ngt_futures_{symbol}"
+        if self._is_cache_valid(cache_key, cache_ttl):
+            return self._cache[cache_key]
+
+        try:
+            session = await self._get_session()
+            headers = await self._get_headers("FHMIF10000000")
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "F",
+                "FID_INPUT_ISCD": symbol,
+            }
+
+            base_url = self._token_manager.base_url
+            url = f"{base_url}/uapi/domestic-futureoption/v1/quotations/inquire-price"
+
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[KIS] 야간선물 시세 조회 실패: HTTP {resp.status}")
+                    return None
+
+                data = await resp.json()
+                rt_cd = data.get("rt_cd", "")
+                if rt_cd != "0":
+                    msg = data.get("msg1", "")
+                    logger.warning(f"[KIS] 야간선물 시세 오류: rt_cd={rt_cd} {msg}")
+                    return None
+
+                output = data.get("output1") or data.get("output", {})
+                if not output:
+                    return None
+
+                # output이 리스트인 경우 첫 번째 항목 사용
+                if isinstance(output, list):
+                    output = output[0] if output else {}
+
+                price = float(output.get("futs_prpr", 0) or output.get("stck_prpr", 0) or 0)
+                prev_close = float(output.get("futs_sdpr", 0) or output.get("stck_sdpr", 0) or 0)
+                change = float(output.get("prdy_vrss", 0) or 0)
+                change_pct = float(output.get("prdy_ctrt", 0) or 0)
+                volume = int(output.get("acml_vol", 0) or 0)
+                high = float(output.get("stck_hgpr", 0) or output.get("futs_hgpr", 0) or 0)
+                low = float(output.get("stck_lwpr", 0) or output.get("futs_lwpr", 0) or 0)
+                open_price = float(output.get("stck_oprc", 0) or output.get("futs_oprc", 0) or 0)
+
+                if price <= 0:
+                    logger.debug(f"[KIS] 야간선물 시세: 가격=0 (장외시간)")
+                    return None
+
+                result = {
+                    "price": price,
+                    "prev_close": prev_close,
+                    "change": change,
+                    "change_pct": change_pct,
+                    "volume": volume,
+                    "high": high,
+                    "low": low,
+                    "open": open_price,
+                    "symbol": symbol,
+                }
+
+                # 심리 판단 (야간선물 등락률 기반)
+                if change_pct <= -1.0:
+                    result["sentiment"] = "bearish"
+                elif change_pct >= 1.0:
+                    result["sentiment"] = "bullish"
+                else:
+                    result["sentiment"] = "neutral"
+
+                self._set_cache(cache_key, result)
+                logger.info(
+                    f"[KIS] KOSPI200 야간선물: {price:.2f} ({change_pct:+.2f}%) "
+                    f"→ {result['sentiment']}"
+                )
+                return result
+
+        except Exception as e:
+            logger.warning(f"[KIS] 야간선물 시세 조회 오류: {e}")
+            return None
+
     def clear_cache(self):
         """캐시 초기화"""
         self._cache.clear()

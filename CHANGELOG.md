@@ -1,5 +1,35 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-05 — US 오버나이트 + KOSPI200 야간선물 레짐 연동
+
+### 1. screen_all에 오버나이트 레짐 직접 연동
+- **`src/signals/screener/kr_screener.py`**: `screen_all()`에 `overnight_sentiment`, `overnight_volatility` 파라미터 추가
+  - 7-7 단계: bearish → 수급 없는 종목 -20pt, 수급 있는 종목 -5pt
+  - bullish → 기관/외국인 수급 종목 +10pt
+- **`src/schedulers/kr_scheduler.py`**: 스크리닝 루프에서 `get_overnight_signal()` 호출 → screen_all에 전달
+
+### 2. 변동성 기반 동적 포지션 사이징
+- **`src/schedulers/kr_scheduler.py`**: 자동 진입 시 오버나이트 변동성에 따른 조정
+  - bearish → min_score=85, 일일진입=1회
+  - 변동성 2~3% → min_score +3, position_multiplier=0.7
+  - 변동성 3%+ → min_score +5, position_multiplier=0.5
+  - `metadata.position_multiplier`로 엔진 포지션 사이징에 반영 (기존 메커니즘 활용)
+
+### 3. KOSPI200 야간선물(KRX) 현재가 조회
+- **`src/data/providers/kis_market_data.py`**: `get_night_futures_quote()` 신규 메서드
+  - KIS API TR ID: `FHMIF10000000`, 종목코드: `101W09` (KOSPI200 근월물)
+  - 등락률 ±1% 기준 bullish/bearish/neutral 판정
+  - 5분 캐시, price/change_pct/volume/sentiment 반환
+- **`src/schedulers/kr_scheduler.py`**: US 지수보다 야간선물 sentiment 우선 적용
+  - 야간선물 데이터가 있고 neutral이 아니면 US 지수 sentiment를 덮어씀
+
+### 수정 파일
+- `src/signals/screener/kr_screener.py`
+- `src/schedulers/kr_scheduler.py`
+- `src/data/providers/kis_market_data.py`
+
+---
+
 ## 2026-03-05 — KR 종목 선별 고도화 3종 (대장주/재료소멸/수급)
 
 ### 1. 테마 대장주 독식 필터 (Winner Takes All)

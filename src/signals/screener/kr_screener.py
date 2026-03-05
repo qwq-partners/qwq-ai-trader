@@ -1747,6 +1747,8 @@ class StockScreener:
         use_naver: bool = True,
         min_price: float = 1000,
         theme_detector=None,
+        overnight_sentiment: Optional[str] = None,
+        overnight_volatility: Optional[float] = None,
     ) -> List[ScreenedStock]:
         """
         모든 스크리닝 실행 및 통합
@@ -1759,6 +1761,8 @@ class StockScreener:
             use_naver: 네이버 금융 크롤링 사용 여부 (기본 True)
             min_price: 최소 가격 필터
             theme_detector: ThemeDetector 인스턴스 (뉴스 호재 종목 추가용)
+            overnight_sentiment: US 오버나이트 시장 심리 (bullish/bearish/neutral)
+            overnight_volatility: US 오버나이트 주요지수 최대 변동률 (절대값 %)
         """
         all_stocks: Dict[str, ScreenedStock] = {}
         # 소스 카운트 추적 (정규화용)
@@ -2050,6 +2054,36 @@ class StockScreener:
                 logger.info(f"[Screener] 개인단독매수 감점 {retail_only_count}개 적용")
         except Exception as e:
             logger.debug(f"[Screener] 개인단독매수 감점 오류 (무시): {e}")
+
+        # ============================================================
+        # 7-7. US 오버나이트 레짐 연동
+        # bearish: 수급 없는 종목 강감점, 최소 점수 상향
+        # bullish: 기관/외국인 수급 종목 가점
+        # ============================================================
+        if overnight_sentiment and overnight_sentiment != "neutral":
+            regime_applied = 0
+            if overnight_sentiment == "bearish":
+                for symbol, stock in all_stocks.items():
+                    if not stock.has_foreign_buying and not stock.has_inst_buying:
+                        # 약세장에서 수급 없는 종목 → 강한 감점
+                        stock.score = max(stock.score - 20, 0)
+                        stock.reasons.append("US 야간 약세 + 수급부재 감점")
+                        regime_applied += 1
+                    elif stock.has_foreign_buying or stock.has_inst_buying:
+                        # 약세장이지만 수급 있는 종목 → 소폭 감점만
+                        stock.score = max(stock.score - 5, 0)
+                        stock.reasons.append("US 야간 약세 (수급 방어)")
+            elif overnight_sentiment == "bullish":
+                for symbol, stock in all_stocks.items():
+                    if stock.has_foreign_buying or stock.has_inst_buying:
+                        stock.score += 10
+                        stock.reasons.append("US 야간 강세 + 수급 가점")
+                        regime_applied += 1
+            if regime_applied:
+                logger.info(
+                    f"[Screener] US 오버나이트 레짐({overnight_sentiment}) "
+                    f"{regime_applied}개 종목 점수 조정"
+                )
 
         # ============================================================
         # 8. 결과 정리

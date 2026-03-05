@@ -846,9 +846,65 @@ class KRScheduler:
 
                     logger.info(f"[스크리닝] 동적 종목 스캔 시작... (세션: {current_session.value})")
 
+                    # US 오버나이트 시그널 조회
+                    _overnight_sentiment = None
+                    _overnight_volatility = None
+                    try:
+                        _us_md = getattr(bot, 'us_market_data', None)
+                        if _us_md:
+                            _ov_signal = await _us_md.get_overnight_signal()
+                            if _ov_signal:
+                                _overnight_sentiment = _ov_signal.get("sentiment")
+                                # 주요지수 변동률 중 최대값 (절대값)
+                                _indices = _ov_signal.get("indices", {})
+                                if _indices:
+                                    _overnight_volatility = max(
+                                        abs(info.get("change_pct", 0))
+                                        for info in _indices.values()
+                                    )
+                                logger.info(
+                                    f"[스크리닝] US 오버나이트: {_overnight_sentiment}, "
+                                    f"최대변동={_overnight_volatility:.1f}%"
+                                    if _overnight_volatility is not None else
+                                    f"[스크리닝] US 오버나이트: {_overnight_sentiment}"
+                                )
+                    except Exception as _ov_err:
+                        logger.debug(f"[스크리닝] US 오버나이트 조회 실패 (무시): {_ov_err}")
+
+                    # KOSPI200 야간선물 시세 조회 (US 지수보다 직접적인 선행지표)
+                    try:
+                        _kis_md = getattr(bot, 'kis_market_data', None)
+                        if _kis_md is None:
+                            _kis_md = getattr(bot, 'screener', None)
+                            if _kis_md and hasattr(_kis_md, '_kis_md'):
+                                _kis_md = _kis_md._kis_md
+                        if _kis_md is None:
+                            from src.data.providers.kis_market_data import get_kis_market_data
+                            _kis_md = get_kis_market_data()
+
+                        _ngt_quote = await _kis_md.get_night_futures_quote()
+                        if _ngt_quote:
+                            _ngt_sentiment = _ngt_quote.get("sentiment")
+                            _ngt_change = _ngt_quote.get("change_pct", 0)
+                            # 야간선물이 US 지수보다 정확 → sentiment 덮어쓰기
+                            if _ngt_sentiment and _ngt_sentiment != "neutral":
+                                _overnight_sentiment = _ngt_sentiment
+                                logger.info(
+                                    f"[스크리닝] KOSPI200 야간선물: {_ngt_quote['price']:.2f} "
+                                    f"({_ngt_change:+.2f}%) → 레짐={_ngt_sentiment}"
+                                )
+                            # 변동률 업데이트 (더 큰 값 사용)
+                            _ngt_vol = abs(_ngt_change)
+                            if _overnight_volatility is None or _ngt_vol > _overnight_volatility:
+                                _overnight_volatility = _ngt_vol
+                    except Exception as _ngt_err:
+                        logger.debug(f"[스크리닝] KOSPI200 야간선물 조회 실패 (무시): {_ngt_err}")
+
                     # 통합 스크리닝 실행
                     screened = await bot.screener.screen_all(
                         theme_detector=bot.theme_detector,
+                        overnight_sentiment=_overnight_sentiment,
+                        overnight_volatility=_overnight_volatility,
                     )
 
                     # 점수 맵 생성
@@ -968,6 +1024,23 @@ class KRScheduler:
 
                                 max_daily_entries = 2
                                 _min_score = 85 if (_idx_change is not None and -1.0 < _idx_change <= -0.5) else 75
+
+                                # US 오버나이트 변동성 기반 동적 조정
+                                if _overnight_sentiment == "bearish":
+                                    _min_score = max(_min_score, 85)
+                                    max_daily_entries = 1
+                                    logger.debug(
+                                        f"[스크리닝] US 약세장 → 최소점수={_min_score}, "
+                                        f"일일진입={max_daily_entries}회"
+                                    )
+                                if _overnight_volatility is not None and _overnight_volatility >= 2.0:
+                                    # 고변동성: 진입 기준 추가 상향
+                                    _vol_boost = 5 if _overnight_volatility >= 3.0 else 3
+                                    _min_score = min(_min_score + _vol_boost, 95)
+                                    logger.debug(
+                                        f"[스크리닝] US 고변동({_overnight_volatility:.1f}%) "
+                                        f"→ 최소점수 +{_vol_boost} = {_min_score}"
+                                    )
                                 candidates = [
                                     s for s in screened
                                     if s.score >= _min_score
@@ -1139,6 +1212,14 @@ class KRScheduler:
                                     stop_price = rt_price * (1 - stop_pct / 100)
                                     target_price = rt_price * (1 + target_pct / 100)
 
+                                    # 오버나이트 변동성 기반 포지션 배율
+                                    _pos_mult = 1.0
+                                    if _overnight_volatility is not None and _overnight_volatility >= 2.0:
+                                        # 변동성 2%~3% → 0.7배, 3%+ → 0.5배
+                                        _pos_mult = 0.5 if _overnight_volatility >= 3.0 else 0.7
+                                    if _overnight_sentiment == "bearish":
+                                        _pos_mult = min(_pos_mult, 0.7)
+
                                     signal = Signal(
                                         symbol=stock.symbol,
                                         side=OrderSide.BUY,
@@ -1158,6 +1239,7 @@ class KRScheduler:
                                             "atr_pct": atr_pct,
                                             "sector": _sector,
                                             "news_validation": _confidence_adj,
+                                            "position_multiplier": _pos_mult,
                                         },
                                     )
 
