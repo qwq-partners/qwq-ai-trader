@@ -1964,6 +1964,94 @@ class StockScreener:
         self._apply_supply_accumulation_bonus(all_stocks)
 
         # ============================================================
+        # 7-5. 테마 대장주 독식 필터 (Winner Takes All)
+        # 같은 테마 내 여러 종목이 있으면 점수 최고 1종목만 유지
+        # ============================================================
+        if theme_detector:
+            try:
+                sentiments = theme_detector.get_all_stock_sentiments()
+                # 테마별 종목 그룹핑 (빈 테마 제외)
+                theme_groups: Dict[str, List[str]] = {}
+                for symbol, data in sentiments.items():
+                    theme = data.get("theme", "")
+                    if theme and symbol in all_stocks:
+                        theme_groups.setdefault(theme, []).append(symbol)
+
+                leader_removed = 0
+                for theme, symbols in theme_groups.items():
+                    if len(symbols) < 2:
+                        continue
+                    # 점수 기준 내림차순 정렬 → 1등만 유지
+                    symbols.sort(key=lambda s: all_stocks[s].score, reverse=True)
+                    leader = symbols[0]
+                    for follower in symbols[1:]:
+                        old_score = all_stocks[follower].score
+                        # 대장주 대비 30% 이상 점수 차이면 강한 감점
+                        penalty = 25
+                        all_stocks[follower].score = max(old_score - penalty, 0)
+                        all_stocks[follower].reasons.append(
+                            f"테마[{theme}] 2등주 감점 (대장: {all_stocks[leader].name})"
+                        )
+                        leader_removed += 1
+
+                    # 대장주 보너스
+                    all_stocks[leader].score += 10
+                    all_stocks[leader].reasons.append(f"테마[{theme}] 대장주")
+
+                if leader_removed:
+                    logger.info(f"[Screener] 테마 대장주 독식 필터: {leader_removed}개 2등주 감점")
+            except Exception as e:
+                logger.warning(f"[Screener] 테마 대장주 독식 필터 오류 (무시): {e}")
+
+        # ============================================================
+        # 7-5b. 재료 생애주기 필터 (Buy the rumor, Sell the news)
+        # LLM이 [confirmed] 태깅한 종목 + 급등 시 재료 소멸 감점
+        # ============================================================
+        if theme_detector:
+            try:
+                sentiments = theme_detector.get_all_stock_sentiments()
+                catalyst_applied = 0
+                for symbol, data in sentiments.items():
+                    phase = data.get("catalyst_phase", "unknown")
+                    if phase == "confirmed" and symbol in all_stocks:
+                        stock = all_stocks[symbol]
+                        # 확정 재료 + 이미 급등 → 재료 소멸 가능성 높음
+                        if stock.change_pct >= 5.0:
+                            stock.score = max(stock.score - 30, 0)
+                            stock.reasons.append(f"재료소멸 위험 (확정+급등{stock.change_pct:+.1f}%)")
+                            catalyst_applied += 1
+                        elif stock.change_pct >= 2.0:
+                            stock.score = max(stock.score - 15, 0)
+                            stock.reasons.append(f"재료소멸 주의 (확정+상승{stock.change_pct:+.1f}%)")
+                            catalyst_applied += 1
+                    elif phase == "rumor" and symbol in all_stocks:
+                        # 기대감 단계 → 보너스 (아직 재료가 살아있음)
+                        all_stocks[symbol].score += 8
+                        all_stocks[symbol].reasons.append("기대감 단계 재료")
+                        catalyst_applied += 1
+                if catalyst_applied:
+                    logger.info(f"[Screener] 재료 생애주기 필터 {catalyst_applied}개 적용")
+            except Exception as e:
+                logger.warning(f"[Screener] 재료 생애주기 필터 오류 (무시): {e}")
+
+        # ============================================================
+        # 7-6. 개인 순매수 + 기관/외국인 미순매수 감점
+        # 스마트머니 없이 개인만 사는 종목 = 물량 넘기기 위험
+        # ============================================================
+        try:
+            retail_only_count = 0
+            for symbol, stock in all_stocks.items():
+                if stock.change_pct >= 3.0 and not stock.has_foreign_buying and not stock.has_inst_buying:
+                    # 상승 중인데 기관/외국인 수급 없음 → 개인 단독 매수 의심
+                    stock.score = max(stock.score - 15, 0)
+                    stock.reasons.append(f"개인단독매수 의심 (기관/외국인 미참여, {stock.change_pct:+.1f}%)")
+                    retail_only_count += 1
+            if retail_only_count:
+                logger.info(f"[Screener] 개인단독매수 감점 {retail_only_count}개 적용")
+        except Exception as e:
+            logger.debug(f"[Screener] 개인단독매수 감점 오류 (무시): {e}")
+
+        # ============================================================
         # 8. 결과 정리
         # ============================================================
         result = list(all_stocks.values())

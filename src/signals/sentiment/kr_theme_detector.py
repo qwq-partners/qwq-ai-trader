@@ -930,6 +930,7 @@ class ThemeDetector:
                         "abs_impact": abs_impact,
                         "direction": direction,
                         "theme": "",
+                        "catalyst_phase": item.get("catalyst_phase", "unknown"),
                         "reason": item.get("reason", ""),
                         "updated_at": now,
                     }
@@ -956,6 +957,7 @@ class ThemeDetector:
                             "abs_impact": abs_impact,
                             "direction": direction,
                             "theme": theme_name_raw,
+                            "catalyst_phase": stock_item.get("catalyst_phase", "unknown"),
                             "reason": f"테마[{theme_name_raw}] 관련",
                             "updated_at": now,
                         }
@@ -1155,6 +1157,7 @@ class ThemeDetector:
       "name": "종목명",
       "impact": -10에서 +10 사이 점수,
       "direction": "bullish 또는 bearish",
+      "catalyst_phase": "rumor 또는 confirmed 또는 unknown",
       "reason": "영향 이유 (30자 이내)"
     }}
   ]
@@ -1166,7 +1169,12 @@ class ThemeDetector:
 3. impact 스케일: -10(극단적 악재) ~ 0(무관) ~ +10(극단적 호재). 양수=bullish, 음수=bearish
 4. direction: impact 부호와 일치시킬 것 (양수→bullish, 음수→bearish)
 5. theme 필드는 반드시 위 허용 목록의 테마명을 정확히 사용
-6. symbol은 위 종목코드 힌트 참고, 모르면 빈 문자열"""
+6. symbol은 위 종목코드 힌트 참고, 모르면 빈 문자열
+7. catalyst_phase: 재료의 생애주기 판별
+   - "rumor": 기대감/루머/검토/추진 단계 (예: "LO 논의 중", "수출 기대감", "임상 진입 예정")
+   - "confirmed": 결과 확정/계약 완료 단계 (예: "계약 체결 완료", "승인 획득", "실적 발표")
+   - "unknown": 판단 불가
+   - 한국 시장에서 "confirmed" 뉴스는 재료 소멸(Buy the rumor, Sell the news) 위험이 높음"""
 
         result = await self.llm.complete_json(prompt, task=LLMTask.THEME_DETECTION)
 

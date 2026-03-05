@@ -1,5 +1,31 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-05 — KR 종목 선별 고도화 3종 (대장주/재료소멸/수급)
+
+### 1. 테마 대장주 독식 필터 (Winner Takes All)
+- **`src/signals/screener/kr_screener.py`**: `screen_all()` 7-5 단계 추가
+  - 같은 테마 내 여러 종목이 올라왔을 때 점수 기준 1등(대장주)에 +10pt 보너스
+  - 2등 이하 종목에 -25pt 감점 + "테마[X] 2등주 감점 (대장: Y)" 사유 태깅
+  - theme_detector의 stock_sentiments에서 테마 그룹핑
+
+### 2. 재료 생애주기 필터 (Buy the rumor, Sell the news)
+- **`src/signals/sentiment/kr_theme_detector.py`**: LLM 프롬프트에 `catalyst_phase` 필드 추가
+  - `rumor`: 기대감/루머/검토 단계 → 스크리너에서 +8pt 보너스
+  - `confirmed`: 확정/완료 단계 → 급등(+5%) 시 -30pt, 상승(+2%) 시 -15pt 감점
+  - `_stock_sentiments` 저장 구조에 `catalyst_phase` 필드 추가
+- **`src/signals/screener/kr_screener.py`**: 7-5b 재료 생애주기 필터 단계 추가
+
+### 3. 개인 단독 매수 감점 필터
+- **`src/signals/screener/kr_screener.py`**: 7-6 단계 추가
+  - 상승(+3%) 중인데 기관/외국인 수급이 없는 종목에 -15pt 감점
+  - "개인단독매수 의심" 사유 태깅
+
+### 수정 파일
+- `src/signals/screener/kr_screener.py`
+- `src/signals/sentiment/kr_theme_detector.py`
+
+---
+
 ## 2026-03-05 — 종목 필터링 재검증 (P0 1건 + P1 3건 수정)
 
 ### P0 수정 (1건)
