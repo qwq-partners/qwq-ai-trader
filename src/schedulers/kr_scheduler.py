@@ -26,7 +26,7 @@ from loguru import logger
 
 from ..core.engine import is_kr_market_holiday, set_kr_market_holidays, _kr_market_holidays
 from ..core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent, MarketDataEvent
-from ..core.types import Signal, OrderSide, SignalStrength, StrategyType, MarketSession
+from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, StrategyType, MarketSession
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.telegram import send_alert
 
@@ -49,6 +49,16 @@ class KRScheduler:
             bot: UnifiedTradingBot 인스턴스 (또는 동일 인터페이스를 가진 객체)
         """
         self.bot = bot
+
+        # 수동 매수 예약 (1회성, 장 시작 시 실행)
+        # 형식: [{"symbol": "123320", "name": "TIGER 레버리지", "exit_exempt": True}]
+        self._manual_buy_orders = [
+            {
+                "symbol": "123320",
+                "name": "TIGER 레버리지",
+                "exit_exempt": True,  # 청산 예외
+            },
+        ]
 
     def create_tasks(self):
         """모든 KR 스케줄러 태스크 생성 → 리스트 반환
@@ -142,6 +152,12 @@ class KRScheduler:
         if bot.health_monitor:
             tasks.append(asyncio.create_task(
                 self.run_health_monitor(), name="kr_health_monitor"
+            ))
+
+        # 수동 매수 예약 (1회성)
+        if self._manual_buy_orders:
+            tasks.append(asyncio.create_task(
+                self.run_manual_buy_orders(), name="kr_manual_buy"
             ))
 
         return tasks
@@ -2462,3 +2478,109 @@ class KRScheduler:
             pass
         except Exception as e:
             logger.error(f"[HealthMonitor] 루프 종료: {e}")
+
+    async def run_manual_buy_orders(self):
+        """수동 매수 예약 실행 (장 시작 09:00 이후 1회성)"""
+        bot = self.bot
+        today = date.today()
+
+        try:
+            # 공휴일/주말 체크
+            if is_kr_market_holiday(today):
+                logger.info("[수동매수] 오늘은 휴장일 — 스킵")
+                return
+
+            # 09:00까지 대기
+            now = datetime.now()
+            target = now.replace(hour=9, minute=0, second=5, microsecond=0)
+            if now < target:
+                wait_secs = (target - now).total_seconds()
+                logger.info(f"[수동매수] 09:00:05까지 {wait_secs:.0f}초 대기")
+                await asyncio.sleep(wait_secs)
+
+            for order_spec in self._manual_buy_orders:
+                symbol = order_spec["symbol"]
+                name = order_spec.get("name", symbol)
+                exit_exempt = order_spec.get("exit_exempt", False)
+
+                try:
+                    # 현재가 조회
+                    quote = await bot.broker.get_quote(symbol)
+                    price = quote.get("price", 0)
+                    if not price or price <= 0:
+                        logger.error(f"[수동매수] {name}({symbol}) 현재가 조회 실패")
+                        continue
+
+                    price_d = Decimal(str(price))
+
+                    # 가용 현금으로 최대 수량 계산 (수수료 고려하여 99.5%)
+                    available = bot.engine.get_available_cash() * Decimal("0.995")
+                    if available <= 0:
+                        logger.warning(f"[수동매수] 가용 현금 부족: {available}")
+                        continue
+
+                    qty = int(available / price_d)
+                    if qty <= 0:
+                        logger.warning(
+                            f"[수동매수] {name}({symbol}) 수량 0 "
+                            f"(가용={available}, 가격={price_d})"
+                        )
+                        continue
+
+                    total_amount = price_d * qty
+                    logger.info(
+                        f"[수동매수] {name}({symbol}) 시장가 매수 "
+                        f"수량={qty}주, 가격≈{price_d:,.0f}원, "
+                        f"총액≈{total_amount:,.0f}원"
+                    )
+
+                    # 시장가 매수 주문
+                    order = Order(
+                        symbol=symbol,
+                        side=OrderSide.BUY,
+                        order_type=OrderType.MARKET,
+                        quantity=qty,
+                        price=None,
+                        strategy="manual",
+                        reason=f"수동 풀매수: {name}",
+                    )
+
+                    success, order_id = await bot.broker.submit_order(order)
+
+                    if success:
+                        logger.info(
+                            f"[수동매수] ✓ {name}({symbol}) 주문 성공 "
+                            f"(주문번호={order_id}, {qty}주)"
+                        )
+                        # 텔레그램 알림
+                        await send_alert(
+                            f"📌 수동 매수 주문\n"
+                            f"{name}({symbol})\n"
+                            f"수량: {qty}주\n"
+                            f"예상 금액: {total_amount:,.0f}원",
+                            force=True,
+                        )
+
+                        # 청산 예외 등록
+                        if exit_exempt and bot.exit_manager:
+                            bot.exit_manager.add_exit_exempt(
+                                symbol, reason=f"수동매수 청산예외: {name}"
+                            )
+                    else:
+                        logger.error(
+                            f"[수동매수] ✗ {name}({symbol}) 주문 실패: {order_id}"
+                        )
+                        await send_alert(
+                            f"⚠️ 수동 매수 실패\n{name}({symbol}): {order_id}",
+                            force=True,
+                        )
+                except Exception as e:
+                    logger.error(f"[수동매수] {name}({symbol}) 오류: {e}")
+
+            # 1회성이므로 리스트 비우기
+            self._manual_buy_orders.clear()
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[수동매수] 오류: {e}")

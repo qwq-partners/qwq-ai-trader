@@ -122,6 +122,9 @@ class ExitManager:
         # 포지션별 청산 상태
         self._states: Dict[str, PositionExitState] = {}
 
+        # 청산 예외 종목 (수동 매수 등)
+        self._exit_exempt: set = set()
+
         # 보유기간 체크용 (포지션별 진입 시간)
         self._entry_times: Dict[str, datetime] = {}
         self._max_holding_days: int = 10  # 설정에서 오버라이드 가능
@@ -313,6 +316,10 @@ class ExitManager:
             action: "sell_partial" | "sell_all" | None
         """
         if symbol not in self._states:
+            return None
+
+        # 청산 예외 종목 스킵
+        if symbol in self._exit_exempt:
             return None
 
         state = self._states[symbol]
@@ -563,6 +570,20 @@ class ExitManager:
             logger.debug(f"[ExitManager] 포지션 상태 제거: {symbol}")
             return True
         return False
+
+    def add_exit_exempt(self, symbol: str, reason: str = ""):
+        """청산 예외 종목 추가 (익절/손절 비활성화)"""
+        self._exit_exempt.add(symbol)
+        logger.info(f"[ExitManager] 청산 예외 추가: {symbol} ({reason or '수동'})")
+
+    def remove_exit_exempt(self, symbol: str):
+        """청산 예외 종목 제거"""
+        self._exit_exempt.discard(symbol)
+        logger.info(f"[ExitManager] 청산 예외 해제: {symbol}")
+
+    def is_exit_exempt(self, symbol: str) -> bool:
+        """청산 예외 종목 여부"""
+        return symbol in self._exit_exempt
 
     # US 호환 메서드
     def on_position_closed(self, symbol: str):

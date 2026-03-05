@@ -1067,16 +1067,13 @@ class UnifiedTradingBot:
             else:
                 us_engine.us_price_ws = None
 
-            # 12. US 테마 탐지기
-            if finnhub_key:
-                try:
-                    from src.signals.sentiment.us_theme_detector import USThemeDetector
-                    us_engine.theme_detector = USThemeDetector(finnhub_key)
-                    logger.info("[US] 테마 탐지기 초기화 완료")
-                except Exception as e:
-                    logger.warning(f"[US] 테마 탐지기 초기화 실패 (무시): {e}")
-                    us_engine.theme_detector = None
-            else:
+            # 12. US 테마 탐지기 (RSS+LLM 기반, Finnhub은 보너스)
+            try:
+                from src.signals.sentiment.us_theme_detector import USThemeDetector
+                us_engine.theme_detector = USThemeDetector(finnhub_key)
+                logger.info("[US] 테마 탐지기 초기화 완료")
+            except Exception as e:
+                logger.warning(f"[US] 테마 탐지기 초기화 실패 (무시): {e}")
                 us_engine.theme_detector = None
 
             # 13. 어닝 캘린더 프로바이더

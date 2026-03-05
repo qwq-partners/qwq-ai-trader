@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-05 — US 테마/섹터 탐지기 구현 + 수동매수/청산예외 기능
+
+### 신규: `src/signals/sentiment/us_theme_detector.py`
+- **RSS 뉴스 수집**: MarketWatch, CNBC, Yahoo Finance RSS (무료, API 키 불필요)
+- **Finnhub 뉴스**: API 키 있으면 보너스 소스로 활용
+- **LLM 테마 추출**: Gemini Flash로 영문 뉴스 → 테마/종목 임팩트 JSON 추출
+- **섹터 ETF 모멘텀**: SPDR 11개 섹터 ETF (XLK~XLC) 1일 수익률로 테마 점수 보정 (±15점)
+- **12개 테마**: AI/Semiconductors, Cloud/SaaS, EV/Clean Energy, Biotech/Pharma, Fintech/Payments, Cybersecurity, Space/Defense, Nuclear Energy, Quantum Computing, Robotics/Automation, Streaming/Media, Cannabis
+- **종목 센티멘트**: impact(-10~+10), direction, theme, reason (1시간 유효)
+- **대시보드 연동**: `/api/us/themes` 엔드포인트 정상 동작
+
+### 수정: `scripts/run_trader.py`
+- finnhub_key 조건 제거 → RSS+LLM 기반이므로 항상 USThemeDetector 초기화
+
+### 신규: 수동 매수 예약 + 청산 예외 기능
+- **`src/strategies/exit_manager.py`**: `_exit_exempt` 셋 추가 — `add_exit_exempt()`, `remove_exit_exempt()`, `is_exit_exempt()` 메서드
+- **`src/schedulers/kr_scheduler.py`**: `run_manual_buy_orders()` — 09:00 장 시작 시 수동 시장가 매수 + 청산 예외 등록
+- **적용**: 123320 TIGER 레버리지 ETF 가용예산 풀매수, 익절/손절 비활성화
+
+---
+
 ## 2026-03-04 — 스크리닝 시스템 8가지 개선 (KR+US 공통)
 
 ### 1. 인트라데이 전략 재활성화
