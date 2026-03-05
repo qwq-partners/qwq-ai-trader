@@ -1345,13 +1345,13 @@ class USScheduler:
         if not eng.broker:
             return
 
-        et_now = eng.session.now_et()
-        today_et = et_now.strftime("%Y%m%d")
-        # 전날 주문도 조회 (장 마감 후 재시작 시 전날 미체결이 남아있을 수 있음)
-        yesterday_et = (et_now - timedelta(days=1)).strftime("%Y%m%d")
+        # KIS API는 KST 날짜 기준
+        now_kst = datetime.now()
+        today_kst = now_kst.strftime("%Y%m%d")
+        yesterday_kst = (now_kst - timedelta(days=1)).strftime("%Y%m%d")
 
         history = await eng.broker.get_order_history(
-            start_date=yesterday_et, end_date=today_et
+            start_date=yesterday_kst, end_date=today_kst
         )
         if not history:
             return
@@ -1365,16 +1365,14 @@ class USScheduler:
                 continue
 
             symbol = h["symbol"]
-            # 주문 시각 복원 (HHMMSS → datetime)
+            # 주문 시각 복원 (KIS ORD_TMD는 KST HHMMSS)
             submitted_at = datetime.now()
             order_time_str = h.get("time", "")
             if len(order_time_str) >= 6:
                 try:
-                    et_date = et_now.date()
                     hh, mm, ss = int(order_time_str[:2]), int(order_time_str[2:4]), int(order_time_str[4:6])
-                    et_tz = timezone(timedelta(hours=-5))
-                    submitted_at = datetime(et_date.year, et_date.month, et_date.day,
-                                            hh, mm, ss, tzinfo=et_tz).astimezone().replace(tzinfo=None)
+                    today = now_kst.date()
+                    submitted_at = datetime(today.year, today.month, today.day, hh, mm, ss)
                 except Exception:
                     pass
 
@@ -1403,13 +1401,12 @@ class USScheduler:
         """체결 내역 조회 → 체결 처리"""
         eng = self.engine
 
-        # ET 날짜로 조회 (KST/ET 날짜 불일치 방지)
-        et_now = eng.session.now_et()
-        today_et = et_now.strftime("%Y%m%d")
+        # KIS API는 KST 날짜 기준 (ET 날짜와 불일치 가능)
+        today_kst = datetime.now().strftime("%Y%m%d")
         pending_count = len(eng._pending_orders)
-        history = await eng.broker.get_order_history(start_date=today_et, end_date=today_et)
-        logger.debug(
-            f"[US 주문 체크] pending={pending_count}, history={len(history) if history else 0}"
+        history = await eng.broker.get_order_history(start_date=today_kst, end_date=today_kst)
+        logger.info(
+            f"[US 주문 체크] pending={pending_count}, history={len(history) if history else 0}, date={today_kst}"
         )
         if not history:
             return

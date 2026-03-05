@@ -561,13 +561,27 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTradeData(todayStr());
     sse.connect();
 
+    // US 날짜 선택 초기화
+    const usDateInput = document.getElementById("us-trade-date");
+    const usBtnToday = document.getElementById("us-btn-today");
+    if (usDateInput) {
+        usDateInput.value = todayStr();
+        usDateInput.addEventListener("change", () => loadUSTrades(usDateInput.value));
+    }
+    if (usBtnToday && usDateInput) {
+        usBtnToday.addEventListener("click", () => {
+            usDateInput.value = todayStr();
+            loadUSTrades(todayStr());
+        });
+    }
+
     // 마켓 필터 바 렌더링
     const filterBar = document.getElementById("market-filter-bar");
     if (filterBar) {
         MarketFilter.render(filterBar, (filter) => {
             applyTradesMarketFilter(filter);
             if (filter !== "kr") {
-                const dateVal = document.getElementById("trade-date")?.value || "";
+                const dateVal = usDateInput?.value || "";
                 loadUSTrades(dateVal);
             }
         });
@@ -575,7 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const initFilter = MarketFilter.get();
     applyTradesMarketFilter(initFilter);
     if (initFilter !== "kr") {
-        const dateVal = document.getElementById("trade-date")?.value || "";
+        const dateVal = usDateInput?.value || "";
         loadUSTrades(dateVal);
     }
 });

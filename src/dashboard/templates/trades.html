@@ -285,9 +285,11 @@
         <!-- US 거래 내역 섹션 -->
         <div id="us-trades-section" style="display:none; margin-top:20px;">
             <div class="card" style="padding:20px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
                     <h2 style="font-size:0.92rem;font-weight:700;color:var(--text-primary);">🇺🇸 미국 거래 내역</h2>
-                    <span id="us-trades-count" style="font-size:0.78rem;color:var(--text-muted);">-</span>
+                    <input type="date" id="us-trade-date">
+                    <button id="us-btn-today" class="btn-primary">오늘</button>
+                    <span id="us-trades-count" style="font-size:0.78rem;color:var(--text-muted);margin-left:auto;">-</span>
                 </div>
                 <table style="width:100%;text-align:left;border-collapse:collapse;">
                     <thead>

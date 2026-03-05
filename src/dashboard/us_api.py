@@ -136,40 +136,59 @@ class USAPIHandler:
         return web.json_response(orders)
 
     async def handle_trades(self, request: web.Request) -> web.Response:
-        """거래 내역 반환 (DB market='US' 필터링)"""
+        """거래 내역 반환 (trade_events 테이블, 날짜별 조회)"""
         ts = getattr(self.engine, 'trade_storage', None)
         if ts and ts._db_available and ts.pool:
-            days = int(request.rel_url.query.get("days", "30"))
+            date_str = request.rel_url.query.get("date", "")
             try:
                 async with ts.pool.acquire() as conn:
-                    rows = await conn.fetch(
-                        """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
-                                  entry_strategy, exit_time, exit_price, exit_quantity,
-                                  exit_reason, exit_type, pnl, pnl_pct, holding_minutes
-                           FROM trades
-                           WHERE market = 'US'
-                             AND exit_time IS NOT NULL
-                             AND entry_time >= NOW() - INTERVAL '1 day' * $1
-                           ORDER BY exit_time DESC
-                           LIMIT 200""",
-                        days,
-                    )
+                    if date_str:
+                        # 특정 날짜 조회
+                        rows = await conn.fetch(
+                            """SELECT event_type, symbol, quantity, price,
+                                      created_at, metadata
+                               FROM trade_events
+                               WHERE created_at::date = $1::date
+                                 AND symbol NOT SIMILAR TO '[0-9]{6}'
+                               ORDER BY created_at DESC
+                               LIMIT 200""",
+                            date_str,
+                        )
+                    else:
+                        rows = await conn.fetch(
+                            """SELECT event_type, symbol, quantity, price,
+                                      created_at, metadata
+                               FROM trade_events
+                               WHERE created_at >= NOW() - INTERVAL '7 days'
+                                 AND symbol NOT SIMILAR TO '[0-9]{6}'
+                               ORDER BY created_at DESC
+                               LIMIT 200""",
+                        )
                 trades = []
                 for r in rows:
+                    meta = r["metadata"] if r["metadata"] else {}
+                    if isinstance(meta, str):
+                        import json as _json
+                        try:
+                            meta = _json.loads(meta)
+                        except Exception:
+                            meta = {}
+                    evt = r["event_type"].upper()
+                    side = "buy" if evt == "BUY" else "sell"
                     trades.append({
-                        "timestamp": r["exit_time"].isoformat() if r["exit_time"] else "",
+                        "timestamp": r["created_at"].isoformat() if r["created_at"] else "",
                         "symbol": r["symbol"],
-                        "side": "sell",
-                        "entry_price": float(r["entry_price"]),
-                        "exit_price": float(r["exit_price"]),
-                        "quantity": int(r["entry_quantity"]),
-                        "pnl": round(float(r["pnl"]), 2),
-                        "pnl_pct": round(float(r["pnl_pct"]), 2),
-                        "strategy": r["entry_strategy"] or "",
-                        "reason": r["exit_reason"] or "",
-                        "exit_type": r["exit_type"] or "",
-                        "holding_minutes": int(r["holding_minutes"] or 0),
-                        "trade_id": r["id"],
+                        "side": side,
+                        "entry_price": float(meta.get("entry_price", r["price"])) if side == "sell" else float(r["price"]),
+                        "exit_price": float(r["price"]) if side == "sell" else 0,
+                        "quantity": int(r["quantity"]),
+                        "pnl": round(float(meta.get("pnl", 0)), 2),
+                        "pnl_pct": round(float(meta.get("pnl_pct", 0)), 2),
+                        "strategy": meta.get("strategy", ""),
+                        "reason": meta.get("reason", ""),
+                        "exit_type": meta.get("exit_type", evt),
+                        "holding_minutes": int(meta.get("holding_minutes", 0)),
+                        "trade_id": meta.get("trade_id", ""),
                         "market": "US",
                     })
                 return web.json_response(trades)
