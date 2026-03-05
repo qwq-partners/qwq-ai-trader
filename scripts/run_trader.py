@@ -1011,21 +1011,10 @@ class UnifiedTradingBot:
                 logger.warning(f"[US] TradeStorage 초기화 실패 (무시): {e}")
                 us_engine.trade_storage = None
 
-            # 9. US WebSocket 피드 (Finnhub — 디스플레이 전용)
+            # 9. US WebSocket 피드 — Finnhub 제거 (무료 15분 지연, callback=pass 낭비)
+            # KIS HDFSCNT0 WS (us_price_ws)가 실시간 exit 전담
             finnhub_key = os.getenv("FINNHUB_API_KEY", "")
-            if finnhub_key:
-                try:
-                    from src.data.feeds.finnhub_ws import FinnhubWSFeed
-                    us_engine.ws_feed = FinnhubWSFeed(finnhub_key)
-                    us_engine.ws_feed.on_trade(us_engine._on_ws_price)
-                    if us_engine.portfolio.positions:
-                        await us_engine.ws_feed.subscribe(list(us_engine.portfolio.positions.keys()))
-                    logger.info(f"[US] Finnhub WS 초기화 완료 (구독 {len(us_engine.portfolio.positions)}개)")
-                except Exception as e:
-                    logger.warning(f"[US] Finnhub WS 초기화 실패 (무시): {e}")
-                    us_engine.ws_feed = None
-            else:
-                us_engine.ws_feed = None
+            us_engine.ws_feed = None  # US는 KIS WS만 사용
 
             # 10. KIS 실시간체결통보 WS
             hts_id = os.getenv("KIS_HTS_ID", "").strip()

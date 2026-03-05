@@ -87,19 +87,15 @@ class USScheduler:
         # 워치리스트
         tasks.append(asyncio.create_task(self.watchlist_loop(), name="us_watchlist"))
 
-        # Finnhub WS (디스플레이 전용 — 15분 지연, exit 결정 사용 금지)
-        if eng.ws_feed:
-            tasks.append(asyncio.create_task(eng.ws_feed.start(), name="us_finnhub_ws"))
-
-        # KIS 실시간체결통보 WS (fill notification)
+        # KIS 실시간체결통보 WS (fill notification, HTS ID 필요)
         if eng.kis_ws:
             tasks.append(asyncio.create_task(eng.kis_ws.start(), name="us_kis_ws"))
 
-        # KIS 해외주식 실시간가 WS (HDFSCNT0) — 보유 포지션 있을 때만 연결
-        # 자동 시작 안 함: _init_ws_price_subs가 포지션 여부 확인 후 동적 시작
+        # KIS 해외주식 실시간가 WS (HDFSCNT0)
+        # ws_market_loop가 장 시작 전 사전 연결 + 포지션 구독 관리
         if eng.us_price_ws:
             eng.us_price_ws.on_price(self._on_us_ws_price)
-            tasks.append(asyncio.create_task(self._init_ws_price_subs(), name="us_ws_price_init"))
+            tasks.append(asyncio.create_task(self.ws_market_loop(), name="us_ws_market"))
 
         # 거래량급증 루프
         if hasattr(eng.broker, "get_volume_surge"):
@@ -718,18 +714,69 @@ class USScheduler:
     # KIS 해외주식 실시간가 WS 콜백 (HDFSCNT0)
     # ============================================================
 
-    async def _init_ws_price_subs(self):
-        """서비스 시작 시 기존 보유 포지션이 있으면 WS 시작 + 구독"""
+    async def ws_market_loop(self):
+        """KIS HDFSCNT0 WS 시장 생명주기 관리
+
+        - 미국 정규장 시작 10분 전 WS 사전 연결 (포지션 진입 즉시 subscribe 가능)
+        - 기존 보유 포지션 있으면 시작 시 바로 subscribe
+        - 정규장 종료 후 30분 대기 → WS 종료 (불필요한 연결 해제)
+        - 루프 주기: 30초 (시장 상태 감지)
+        """
         eng = self.engine
+        if not eng.us_price_ws:
+            return
+
+        _ws_prestarted = False  # 사전 연결 완료 여부
+
+        # 서비스 시작 시: 이미 보유 포지션 있으면 WS 바로 시작 + 구독
         await asyncio.sleep(5)  # 초기화 대기
-        if not eng.us_price_ws or not eng.portfolio.positions:
-            return  # 보유 포지션 없으면 WS 시작 안 함
-        await self._ensure_us_price_ws_running()
-        await asyncio.sleep(3)  # WS 연결 대기
-        for symbol in list(eng.portfolio.positions.keys()):
-            exchange = eng._exchange_cache.get(symbol, eng._default_exchange)
-            await eng.us_price_ws.subscribe([symbol], exchange=exchange)
-        logger.info(f"[KIS US WS] 초기 구독 완료: {list(eng.portfolio.positions.keys())}")
+        if eng.portfolio.positions:
+            logger.info("[KIS US WS] 초기 포지션 감지 → WS 사전 연결")
+            await self._ensure_us_price_ws_running()
+            await asyncio.sleep(3)
+            for symbol in list(eng.portfolio.positions.keys()):
+                exchange = eng._exchange_cache.get(symbol, eng._default_exchange)
+                await eng.us_price_ws.subscribe([symbol], exchange=exchange)
+            logger.info(f"[KIS US WS] 초기 구독: {list(eng.portfolio.positions.keys())}")
+            _ws_prestarted = True
+
+        while eng.running:
+            try:
+                et_now = eng.session.now_et()
+                # 미국 정규장 시작 10분 전 ~ 장 중: WS 사전 연결
+                market_open_soon = eng.session.minutes_to_open() <= 10
+                is_open = eng.session.is_market_open()
+
+                if (market_open_soon or is_open) and not _ws_prestarted:
+                    logger.info("[KIS US WS] 미국장 시작 전 WS 사전 연결")
+                    await self._ensure_us_price_ws_running()
+                    _ws_prestarted = True
+
+                # WS 연결된 상태에서 포지션 구독 동기화
+                if eng.us_price_ws.is_connected and eng.portfolio.positions:
+                    for symbol in list(eng.portfolio.positions.keys()):
+                        if symbol not in eng.us_price_ws._subscribed and symbol not in eng.us_price_ws._pending_sub:
+                            exchange = eng._exchange_cache.get(symbol, eng._default_exchange)
+                            await eng.us_price_ws.subscribe([symbol], exchange=exchange)
+
+                # 장 종료 후 30분 경과 + 포지션 없음 → WS 종료
+                if _ws_prestarted and not is_open:
+                    mins_after_close = eng.session.minutes_since_close()
+                    if mins_after_close is not None and mins_after_close >= 30 and not eng.portfolio.positions:
+                        logger.info("[KIS US WS] 장 종료 30분 경과, 포지션 없음 → WS 종료")
+                        await self._maybe_stop_us_price_ws()
+                        _ws_prestarted = False
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[ws_market_loop] 오류 (무시): {e}")
+
+            await asyncio.sleep(30)
+
+    async def _init_ws_price_subs(self):
+        """[DEPRECATED] ws_market_loop로 대체됨"""
+        pass
 
     async def _ensure_us_price_ws_running(self):
         """보유 포지션이 생겼을 때 WS 태스크 시작 (이미 실행 중이면 스킵)"""
@@ -824,8 +871,8 @@ class USScheduler:
           기존 REST 폴링 주기(기본 30초) 유지
         """
         eng = self.engine
-        _rest_interval   = getattr(eng, '_exit_check_sec', 30)
-        _ws_backup_interval = 60  # WS 연결 시 REST 백업 주기
+        _rest_interval_no_ws = 15   # WS 미연결 시 REST 폴링 주기 (빠른 손절 대응)
+        _ws_backup_interval  = 60   # WS 연결 시 REST 백업 주기
 
         while eng.running:
             try:
@@ -842,7 +889,7 @@ class USScheduler:
 
             # WS 연결 시 REST 폴링 완화 (WS가 실시간 exit 처리)
             ws_ok = eng.us_price_ws and eng.us_price_ws.is_connected
-            await asyncio.sleep(_ws_backup_interval if ws_ok else _rest_interval)
+            await asyncio.sleep(_ws_backup_interval if ws_ok else _rest_interval_no_ws)
 
     async def _check_exits(self):
         """보유 포지션 순회 → KIS REST 실시간 가격 → 청산 시그널 체크"""
@@ -1594,12 +1641,12 @@ class USScheduler:
                 session_status = eng.session.get_session()
                 metrics = eng.risk_manager.get_risk_metrics(eng.portfolio)
 
-                finnhub_status = "ok" if (eng.ws_feed and eng.ws_feed.is_connected) else "off"
                 price_ws_status = (
                     f"ok({eng.us_price_ws.subscribed_count})"
                     if (eng.us_price_ws and eng.us_price_ws.is_connected)
                     else "off"
                 )
+                fill_ws_status = "ok" if (eng.kis_ws and getattr(eng.kis_ws, '_connected', False)) else "off"
                 logger.info(
                     f"[US Heartbeat] session={session_status.value} | "
                     f"equity=${eng.portfolio.total_equity:.2f} | "
@@ -1607,7 +1654,7 @@ class USScheduler:
                     f"positions={len(eng.portfolio.positions)} | "
                     f"pending={len(eng._pending_orders)} | "
                     f"price_ws={price_ws_status} | "
-                    f"finnhub={finnhub_status} | "
+                    f"fill_ws={fill_ws_status} | "
                     f"daily_pnl=${metrics.daily_loss:.2f} ({metrics.daily_loss_pct:.1f}%)"
                 )
 

@@ -407,6 +407,28 @@ class USSession:
         diff = (close_dt - dt).total_seconds() / 60
         return max(0.0, diff)
 
+    def minutes_to_open(self, dt: Optional[datetime] = None) -> Optional[float]:
+        """Minutes until next regular session open (None if market is open or closed for the day)"""
+        if dt is None:
+            dt = self.now_et()
+        if not self.is_trading_day(dt.date()):
+            return None
+        open_dt = dt.replace(hour=9, minute=30, second=0, microsecond=0)
+        diff = (open_dt - dt).total_seconds() / 60
+        if diff < 0:
+            return None  # 이미 지나감
+        return diff
+
+    def minutes_since_close(self, dt: Optional[datetime] = None) -> Optional[float]:
+        """Minutes elapsed since regular session close (None if market is still open or pre-market)"""
+        if dt is None:
+            dt = self.now_et()
+        close_dt = dt.replace(hour=16, minute=0, second=0, microsecond=0)
+        diff = (dt - close_dt).total_seconds() / 60
+        if diff < 0:
+            return None  # 아직 장 중 or 프리마켓
+        return diff
+
     def is_trading_day(self, d: Optional[date] = None) -> bool:
         """Is today a trading day? (NYSE 기준)"""
         if d is None:
