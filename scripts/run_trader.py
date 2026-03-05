@@ -717,6 +717,15 @@ class UnifiedTradingBot:
                         pos_symbols = list(self.engine.portfolio.positions.keys())
                         self.ws_feed.set_priority_symbols(pos_symbols)
                         logger.info(f"[KR] WS 보유 종목 {len(pos_symbols)}개 우선 구독 예약 (연결 후 자동 구독)")
+
+                    # NXT 종목 목록 설정 (프리장/넥스트장 비대상 종목 1006 방지)
+                    try:
+                        nxt_syms = await self.broker.get_nxt_symbols()
+                        if nxt_syms:
+                            self.ws_feed.set_nxt_symbols(nxt_syms)
+                            logger.info(f"[KR] NXT 종목 {len(nxt_syms)}개 WS 필터 설정 완료")
+                    except Exception as _nxt_e:
+                        logger.warning(f"[KR] NXT 종목 로드 실패 (무시): {_nxt_e}")
                 except Exception as e:
                     logger.warning(f"[KR] WebSocket 초기화 실패 (무시): {e}")
                     self.ws_feed = None

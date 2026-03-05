@@ -1515,7 +1515,18 @@ class KRScheduler:
                             if not quote or quote.get("price", 0) <= 0:
                                 continue
 
-                            price = quote["price"]
+                            # 세션별 가격 선택
+                            # - 정규장/프리장: stck_prpr (장전단일가 예상가 포함)
+                            # - 넥스트장: ovtm_untp_prpr (시간외단일가 동적값), 없으면 stck_prpr 폴백
+                            if current_session == MarketSession.NEXT:
+                                ovtm = quote.get("ovtm_price", 0) or 0
+                                price = ovtm if ovtm > 0 else quote["price"]
+                            else:
+                                price = quote["price"]
+
+                            if price <= 0:
+                                continue
+
                             event = MarketDataEvent(
                                 symbol=symbol,
                                 open=Decimal(str(quote.get("open", price))),

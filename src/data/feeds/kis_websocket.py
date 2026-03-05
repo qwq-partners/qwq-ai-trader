@@ -359,8 +359,14 @@ class KISWebSocketFeed:
         # 세션에서 거래 가능한 종목
         session_symbols = self.get_session_symbols()
 
-        # 보유 종목 (항상 구독, 세션 무관하게 - 청산 대비)
-        priority = self._priority_symbols.copy()
+        # 보유 종목 (프리장/넥스트장: NXT 대상만, 정규장: 전체)
+        if self._current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT) and self._nxt_symbols:
+            priority = self._priority_symbols & self._nxt_symbols
+            skipped = self._priority_symbols - self._nxt_symbols
+            if skipped:
+                logger.debug(f"[WS] 보유종목 중 NXT 비대상 {len(skipped)}개 WS 제외 (REST 폴링 커버): {skipped}")
+        else:
+            priority = self._priority_symbols.copy()
 
         # 나머지 슬롯
         available_slots = max(0, self.MAX_SUBSCRIPTIONS - len(priority))
@@ -503,6 +509,16 @@ class KISWebSocketFeed:
         """단일 종목 구독 (체결가 + 호가, 세션별 TR_ID 자동 전환)"""
         if not self._ws or self._ws.closed:
             return
+
+        # 프리장/넥스트장: NXT 비대상 종목은 구독 건너뜀
+        # (NXT 비대상 종목에 H0NXCNT0 전송 시 KIS 서버가 1006으로 연결 종료)
+        if self._current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT):
+            if self._nxt_symbols and symbol not in self._nxt_symbols:
+                logger.debug(
+                    f"[WS] {symbol} NXT 비대상 → 구독 건너뜀 "
+                    f"(세션={self._current_session.value}, REST 폴링으로 커버)"
+                )
+                return
 
         price_tr, orderbook_tr = self._get_tr_ids()
 
