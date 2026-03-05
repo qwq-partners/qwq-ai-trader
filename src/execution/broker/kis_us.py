@@ -112,6 +112,46 @@ class KISUSBroker:
         )
 
     # ============================================================
+    # 주문가능달러 조회 (TTTS3007R)
+    # ============================================================
+
+    async def _get_available_usd_cash(self) -> float:
+        """주문가능외화금액 조회 (TTTS3007R) — 장중/비장 모두 동작.
+
+        KIS 공식 샘플코드 기반:
+          ITEM_CD=AAPL, OVRS_ORD_UNPR=1 로 호출하면
+          ord_psbl_frcr_amt 필드에 USD 주문가능금액 반환.
+
+        Returns:
+            float: 주문가능 USD 금액 (조회 실패 시 0.0)
+        """
+        try:
+            tr_id = "TTTS3007R" if self.config.env == "prod" else "VTTS3007R"
+            url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
+            params = {
+                "CANO":          self.config.account_no,
+                "ACNT_PRDT_CD":  self.config.account_product_cd,
+                "OVRS_EXCG_CD":  "NASD",
+                "OVRS_ORD_UNPR": "1",
+                "ITEM_CD":       "AAPL",
+            }
+            data = await self._api_get(url, tr_id, params)
+            if data.get("rt_cd") != "0":
+                logger.debug(
+                    f"[TTTS3007R] 주문가능달러 조회 실패: {data.get('msg1','')}"
+                )
+                return 0.0
+            output = data.get("output", {})
+            if isinstance(output, list):
+                output = output[0] if output else {}
+            cash = float(output.get("ord_psbl_frcr_amt", "0") or "0")
+            logger.debug(f"[TTTS3007R] ord_psbl_frcr_amt=${cash:.2f}")
+            return cash
+        except Exception as e:
+            logger.debug(f"[TTTS3007R] 조회 오류: {e}")
+            return 0.0
+
+    # ============================================================
     # 잔고 파일 캐시 (장외 폴백)
     # ============================================================
 
@@ -461,38 +501,14 @@ class KISUSBroker:
             f"총자산=${total_equity:.2f}, 총손익=${total_pnl:.2f}"
         )
 
-        # CTRP6504R 폴백 (output2에 예수금이 없을 때 — 장 마감 후 가용)
+        # TTTS3007R 폴백: 주문가능외화금액 조회 (장중/비장 모두 동작)
+        # CTRP6504R 대신 TTTS3007R 사용 — ord_psbl_frcr_amt = USD 잔고 직접 반환
         if available_cash <= 0:
-            try:
-                settle_url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
-                settle_params = {
-                    "CANO":              self.config.account_no,
-                    "ACNT_PRDT_CD":      self.config.account_product_cd,
-                    "WCRC_FRCR_DVSN_CD": "02",
-                    "NATN_CD":           "840",
-                    "TR_MKET_CD":        "00",
-                    "INQR_DVSN_CD":      "00",
-                }
-                settle_data = await self._api_get(settle_url, self._tr_balance, settle_params)
-                if settle_data.get("rt_cd") == "0":
-                    output3 = settle_data.get("output3", {})
-                    if isinstance(output3, list):
-                        output3 = output3[0] if output3 else {}
-                    # CTRP6504R output3은 KRW 환산 합계 — USD 직접 사용 불가
-                    # 참고 로그만 남김 (frcr_evlu_tota = US 자산의 KRW 환산값)
-                    frcr_krw = float(output3.get("frcr_evlu_tota", "0") or "0")
-                    logger.info(
-                        f"[CTRP6504R] US자산(KRW환산)={frcr_krw:,.0f}원 "
-                        f"(USD 직접 조회 불가 — TTTS3012R 비장 미응답)"
-                    )
-                    # USD 잔고는 TTTS3012R(장중)에서만 정확히 조회 가능
-                else:
-                    logger.warning(
-                        f"[CTRP6504R] 실패: rt_cd={settle_data.get('rt_cd')} "
-                        f"msg={repr(settle_data.get('msg1',''))[:60]}"
-                    )
-            except Exception as e:
-                logger.warning(f"[CTRP6504R] 폴백 오류: {e}")
+            ps_cash = await self._get_available_usd_cash()
+            if ps_cash > 0:
+                available_cash = ps_cash
+                total_equity = available_cash + stock_eval_amt
+                logger.info(f"[TTTS3007R] 주문가능달러: ${available_cash:.2f}")
 
         # ── 마지막 성공 잔고 캐시 (장외 표시용) ──────────────────────────
         if available_cash > 0:
