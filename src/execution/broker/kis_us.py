@@ -441,6 +441,8 @@ class KISUSBroker:
                     output3 = settle_data.get("output3", {})
                     if isinstance(output3, list):
                         output3 = output3[0] if output3 else {}
+                    logger.debug(f"[CTRP6504R] output3 raw keys: {list(output3.keys())[:10]}")
+                    logger.info(f"[CTRP6504R] output3: {dict(list(output3.items())[:8])}")
                     settle_cash = float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0")
                     settle_equity = float(output3.get("FRCR_DNCL_AMT_2", "0") or "0")
                     if settle_cash > 0:
