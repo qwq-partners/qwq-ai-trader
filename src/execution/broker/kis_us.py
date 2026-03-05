@@ -390,7 +390,12 @@ class KISUSBroker:
 
         positions = []
         for item in data.get("output1", []):
-            qty = int(item.get("ovrs_cblc_qty", "0") or "0")
+            # float() 사용: fractional shares("1.000000") 포함 대응
+            qty_raw = item.get("ovrs_cblc_qty", "0") or "0"
+            try:
+                qty = float(qty_raw)
+            except (ValueError, TypeError):
+                qty = 0.0
             if qty <= 0:
                 continue
 
@@ -422,9 +427,9 @@ class KISUSBroker:
         잔고 + 계좌 정보 조회.
 
         전략:
-        1. TTTS3012R (실시간 잔고) → 포지션 + P&L (장중 항상 가능)
-        2. CTRP6504R (체결기준잔고) → 가용현금 (장 마감 30분 후부터 가능)
-           실패 시 TTTS3012R output2로 추정값 사용
+        1. TTTS3012R (해외주식 잔고) → 포지션 + output2 예수금/평가 (장중)
+        2. TTTS3007R (주문가능금액조회) → ord_psbl_frcr_amt = 주문가능달러
+           장중/비장 모두 동작. CTRP6504R은 KRW 환산값이므로 사용하지 않음.
 
         Returns:
             {positions: [...], account: {total_equity, available_cash, ...}}
@@ -447,10 +452,18 @@ class KISUSBroker:
         )
         if rt_data.get("rt_cd") != "0":
             # KIS 특성: 포지션 0건 / 장 마감 후 rt_cd="1", msg_cd="" 반환
-            # → CTRP6504R(체결기준잔고)로 폴백 시도
+            # → TTTS3007R(주문가능달러)로 현금 확인 후 빈 포지션으로 반환
             if not rt_data.get("msg_cd") and not rt_data.get("msg1"):
-                logger.info("[TTTS3012R] rt_cd=1 빈 응답 → CTRP6504R 폴백 시도")
-                return await self._get_balance_settle()
+                logger.info("[TTTS3012R] rt_cd=1 빈 응답 → TTTS3007R 주문가능달러 확인")
+                cash = await self._get_available_usd_cash()
+                if cash > 0:
+                    self._last_known_cash = cash
+                    self._last_known_equity = cash
+                    self._save_balance_cache(cash, cash)
+                return {
+                    "positions": [],
+                    "account": {"available_cash": cash or None, "total_equity": cash or None},
+                }
             logger.error(f"잔고 조회 실패 (TTTS3012R): {rt_data.get('msg1', '')} [{rt_data.get('msg_cd','')}]")
             return {}
 
@@ -496,7 +509,7 @@ class KISUSBroker:
         total_pnl       = float(output2.get("ovrs_tot_pfls", "0") or "0")
         total_equity    = available_cash + stock_eval_amt
 
-        logger.info(
+        logger.debug(
             f"[TTTS3012R] output2: 예수금=${available_cash:.2f}, 주식평가=${stock_eval_amt:.2f}, "
             f"총자산=${total_equity:.2f}, 총손익=${total_pnl:.2f}"
         )
@@ -535,7 +548,15 @@ class KISUSBroker:
         return {"positions": positions, "account": account}
 
     async def _get_balance_settle(self) -> dict:
-        """CTRP6504R 체결기준잔고 폴백 (TTTS3012R 실패 시)"""
+        """[DEPRECATED] CTRP6504R 체결기준잔고 — USD 조회 불가 (KRW 환산값 반환).
+
+        CTRP6504R output3 필드:
+        - frcr_evlu_tota: KRW 환산값 (USD 아님, 절대 USD로 사용 금지)
+        - FRCR_DRWG_PSBL_AMT_1: 실제 API 응답에 없는 필드 (lowercase 반환)
+        → 대신 TTTS3007R _get_available_usd_cash() 사용.
+
+        이 함수는 하위 호환을 위해 남겨두지만 직접 호출 금지.
+        """
         url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
         params = {
             "CANO":              self.config.account_no,
@@ -591,36 +612,39 @@ class KISUSBroker:
 
     async def get_account(self) -> dict:
         """
-        계좌 요약 조회.
+        계좌 요약 조회 (TTTS3007R 기반).
+
+        CTRP6504R output3은 KRW 환산값이므로 USD 계좌 조회에 사용 불가.
+        TTTS3007R(주문가능금액조회)로 가용 USD + TTTS3012R output2로 주식평가 합산.
 
         Returns:
-            {total_equity, available_cash, total_pnl, total_pnl_pct}
+            {total_equity, available_cash, total_pnl}
         """
-        url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
-        params = {
-            "CANO": self.config.account_no,
-            "ACNT_PRDT_CD": self.config.account_product_cd,
-            "WCRC_FRCR_DVSN_CD": "02",
-            "NATN_CD": "840",
-            "TR_MKET_CD": "00",
-            "INQR_DVSN_CD": "00",
-        }
+        # 주문가능달러 (TTTS3007R) — 장중/비장 항상 동작
+        available_cash = await self._get_available_usd_cash()
 
-        data = await self._api_get(url, self._tr_balance, params)
-        if data.get("rt_cd") != "0":
-            logger.error(f"계좌 조회 실패: {data.get('msg1', '')}")
-            return {}
-
-        # output3: 계좌 전체 요약
-        output3 = data.get("output3", {})
-        if isinstance(output3, list):
-            output3 = output3[0] if output3 else {}
+        # 주식 평가금액 (TTTS3012R output2) — 장중에만 유효
+        stock_eval = 0.0
+        total_pnl = 0.0
+        try:
+            balance = await self.get_balance()
+            account = balance.get("account", {})
+            if account:
+                # get_balance()가 이미 combined 값을 넣음
+                return {
+                    "total_equity":  account.get("total_equity") or available_cash,
+                    "available_cash": account.get("available_cash") or available_cash,
+                    "total_pnl":     account.get("total_pnl", 0.0),
+                    "total_pnl_pct": 0.0,
+                }
+        except Exception as e:
+            logger.debug(f"[get_account] get_balance 실패 (폴백): {e}")
 
         return {
-            "total_equity": float(output3.get("FRCR_DNCL_AMT_2", "0") or "0"),
-            "available_cash": float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0"),
-            "total_pnl": float(output3.get("OVRS_TOT_PFLS", "0") or "0"),
-            "total_pnl_pct": float(output3.get("TOT_EVLU_PFLS_RT", "0") or "0"),
+            "total_equity":  available_cash,
+            "available_cash": available_cash,
+            "total_pnl":     total_pnl,
+            "total_pnl_pct": 0.0,
         }
 
     # 거래소 코드 변환 (주문용 NASD → 시세조회용 NAS)
