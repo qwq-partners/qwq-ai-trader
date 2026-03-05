@@ -1,5 +1,35 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-05 — 종목 필터링 재검증 (P0 1건 + P1 3건 수정)
+
+### P0 수정 (1건)
+- **`src/strategies/us/momentum.py:34`**: 최소 주가 $5 필터 누락 → `close < 5.0` 체크 추가
+- **`src/strategies/us/sepa_trend.py:35`**: 동일 — $5 필터 추가
+- **`src/strategies/us/earnings_drift.py:42`**: 동일 — $5 필터 추가
+  - 스크리너 우회 경로(거래량급증, 동적유니버스)로 penny stock 진입 가능했음
+
+### P1 수정 (3건)
+- **`src/signals/screener/kr_screener.py:1748`**: `screen_all()` min_price 기본값 `0` → `1000` (호출처 미지정 시 1,000원 미만 종목 우회 방지)
+- **`src/strategies/base.py:301`, `src/indicators/technical.py:361`**: vol_ratio 기본값 `0` → `1.0` (중립값) — 거래량 데이터 없을 때 0이면 의미없는 차단/통과 발생
+- **`src/strategies/us/sepa_trend.py:47,83`**: `if not all([ma50, ...])` → `any(v is None or v <= 0 ...)` + `if ma5 > 0` → `if ma5 is not None` (0값 False 버그 수정)
+
+### 수정 파일
+- `src/strategies/us/momentum.py`, `src/strategies/us/sepa_trend.py`, `src/strategies/us/earnings_drift.py`
+- `src/signals/screener/kr_screener.py`, `src/strategies/base.py`, `src/indicators/technical.py`
+
+---
+
+## 2026-03-05 — US KIS WS 체결통보 콜백 구현
+
+### 수정: `scripts/run_trader.py`
+- **`_on_kis_fill()`**: placeholder → 실제 구현
+  - 체결 즉시 상세 로그 출력 (종목, 수량, 가격, 전략, 주문번호)
+  - 텔레그램 즉시 알림 (REST 폴링 10초 대기 없이 WS Push 시점에 발송)
+  - pending 주문 매칭하여 전략명 포함
+  - 실제 포지션 처리는 기존 `order_check_loop`이 담당 (중복 처리 방지)
+
+---
+
 ## 2026-03-05 — 전체 코드 복기 P0+P1 수정 (16건)
 
 ### P0 수정 (9건)

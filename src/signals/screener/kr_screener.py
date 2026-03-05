@@ -1745,7 +1745,7 @@ class StockScreener:
         llm_manager=None,
         news_titles: List[str] = None,
         use_naver: bool = True,
-        min_price: float = 0,
+        min_price: float = 1000,
         theme_detector=None,
     ) -> List[ScreenedStock]:
         """

@@ -31,7 +31,7 @@ class MomentumBreakoutStrategy(USBaseStrategy):
     def generate_signal(self, symbol: str, indicators: Dict[str, Any],
                         history: pd.DataFrame, portfolio: Portfolio) -> Optional[Signal]:
         close = indicators.get('close', 0)
-        if close <= 0:
+        if close <= 0 or close < 5.0:
             return None
 
         # Use PREVIOUS day's 20-day high for breakout detection

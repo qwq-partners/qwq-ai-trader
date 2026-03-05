@@ -298,8 +298,8 @@ class BaseStrategy(ABC):
                 if elapsed > 0:
                     today_volume = today_volume / elapsed
 
-            indicators["vol_ratio"] = today_volume / indicators["vol_ma20"] if indicators["vol_ma20"] > 0 else 0
-            indicators["vol_ratio_raw"] = volumes[-1] / indicators["vol_ma20"] if indicators["vol_ma20"] > 0 else 0
+            indicators["vol_ratio"] = today_volume / indicators["vol_ma20"] if indicators["vol_ma20"] > 0 else 1.0
+            indicators["vol_ratio_raw"] = volumes[-1] / indicators["vol_ma20"] if indicators["vol_ma20"] > 0 else 1.0
 
         # 전일 종가 / 당일 시가 (갭 전략용)
         if len(history) >= 2:

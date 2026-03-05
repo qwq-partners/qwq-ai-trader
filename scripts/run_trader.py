@@ -1568,9 +1568,36 @@ class _USEngineBundle:
         """Finnhub WS 가격 콜백 (placeholder)"""
         pass
 
-    def _on_kis_fill(self, *args, **kwargs):
-        """KIS 체결통보 콜백 (placeholder)"""
-        pass
+    async def _on_kis_fill(self, *, order_no: str, symbol: str, side: str,
+                           qty: int, price: float, exchange: str):
+        """KIS 체결통보 WS 콜백 — 체결 즉시 로깅 + 텔레그램 알림
+
+        실제 포지션/거래 처리는 order_check_loop._check_orders()가 수행.
+        여기서는 빠른 알림만 담당하여 REST 폴링 대기(10초) 없이 사용자에게 통보.
+        """
+        side_kr = "매수" if side == "buy" else "매도"
+        logger.info(
+            f"[US WS 체결통보] {side_kr} {symbol} {qty}주 @ ${price:.2f} "
+            f"(주문번호={order_no}, 거래소={exchange})"
+        )
+
+        # pending 주문 매칭 확인
+        pending = self._pending_orders.get(order_no)
+        strategy = pending.get("strategy", "") if pending else ""
+
+        # 텔레그램 즉시 알림
+        try:
+            from src.utils.telegram import send_alert
+            alert_lines = [
+                f"[US WS] {side_kr} 체결통보",
+                f"{symbol} {qty}주 @ ${price:.2f}",
+            ]
+            if strategy:
+                alert_lines.append(f"전략: {strategy}")
+            alert_lines.append(f"주문번호: {order_no}")
+            asyncio.create_task(send_alert("\n".join(alert_lines)))
+        except Exception as e:
+            logger.debug(f"[US WS 체결통보] 텔레그램 알림 실패: {e}")
 
 
 class _USConfigProxy:

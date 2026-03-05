@@ -32,19 +32,19 @@ class SEPATrendStrategy(USBaseStrategy):
     def generate_signal(self, symbol: str, indicators: Dict[str, Any],
                         history: pd.DataFrame, portfolio: Portfolio) -> Optional[Signal]:
         close = indicators.get('close', 0)
-        if close <= 0:
+        if close <= 0 or close < 5.0:
             return None
 
-        ma50 = indicators.get('ma50', 0)
-        ma150 = indicators.get('ma150', 0)
-        ma200 = indicators.get('ma200', 0)
-        high_52w = indicators.get('high_52w', 0)
-        low_52w = indicators.get('low_52w', 0)
-        vol_ratio = indicators.get('vol_ratio', 0)
+        ma50 = indicators.get('ma50')
+        ma150 = indicators.get('ma150')
+        ma200 = indicators.get('ma200')
+        high_52w = indicators.get('high_52w')
+        low_52w = indicators.get('low_52w')
+        vol_ratio = indicators.get('vol_ratio', 1.0)
         rsi = indicators.get('rsi', 50)
         change_20d = indicators.get('change_20d', 0)
 
-        if not all([ma50, ma150, ma200, high_52w, low_52w]):
+        if any(v is None or v <= 0 for v in [ma50, ma150, ma200, high_52w, low_52w]):
             return None
 
         # === SEPA Template Criteria ===
@@ -78,9 +78,9 @@ class SEPATrendStrategy(USBaseStrategy):
             sepa_pass += 1
 
         # 6. MA5 > MA20 (short-term momentum)
-        ma5 = indicators.get('ma5', 0)
-        ma20 = indicators.get('ma20', 0)
-        if ma5 > 0 and ma20 > 0 and ma5 > ma20:
+        ma5 = indicators.get('ma5')
+        ma20 = indicators.get('ma20')
+        if ma5 is not None and ma20 is not None and ma5 > ma20:
             sepa_pass += 1
 
         # Must pass at least 5/6 SEPA criteria

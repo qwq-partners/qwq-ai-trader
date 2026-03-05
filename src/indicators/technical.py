@@ -358,7 +358,7 @@ class TechnicalIndicators:
         # 거래량 평균 (20일)
         if len(volumes) >= 20:
             indicators["vol_ma20"] = sum(volumes[-20:]) / 20
-            indicators["vol_ratio"] = volumes[-1] / indicators["vol_ma20"] if indicators["vol_ma20"] > 0 else 0
+            indicators["vol_ratio"] = volumes[-1] / indicators["vol_ma20"] if indicators["vol_ma20"] > 0 else 1.0
 
         # MA5 > MA20 정렬 플래그
         indicators["ma5_above_ma20"] = bool(

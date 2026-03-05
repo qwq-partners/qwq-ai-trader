@@ -39,7 +39,7 @@ class EarningsDriftStrategy(USBaseStrategy):
         The strategy confirms the gap held (close near high) before entering.
         """
         close = indicators.get('close', 0)
-        if close <= 0 or len(history) < 5:
+        if close <= 0 or close < 5.0 or len(history) < 5:
             return None
 
         vol_ratio = indicators.get('vol_ratio', 0)
