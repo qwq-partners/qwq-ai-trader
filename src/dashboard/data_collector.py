@@ -7,6 +7,7 @@ KR 봇의 런타임 데이터를 JSON 변환하여 API/SSE에 제공합니다.
 
 import asyncio
 import json
+import time
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -1135,7 +1136,7 @@ class DashboardDataCollector:
             return result
 
     async def get_ext_overseas_positions(self) -> dict:
-        """외부 계좌 해외주식 조회 — US 섹션 통합용
+        """외부 계좌 해외주식 조회 — US 섹션 통합용 (5분 쿨다운)
 
         Returns:
             {
@@ -1146,6 +1147,15 @@ class DashboardDataCollector:
                 "cached": bool,
             }
         """
+        # 5분 쿨다운: 30초마다 대시보드가 호출하지만 실제 API는 5분에 1회만
+        now_ts = time.time()
+        _OVERSEAS_TTL = 300  # 5분
+        if (
+            getattr(self, '_ext_overseas_cache_result', None) is not None
+            and now_ts - getattr(self, '_ext_overseas_cache_ts', 0) < _OVERSEAS_TTL
+        ):
+            return self._ext_overseas_cache_result
+
         bot = self.bot
         ext_accounts = getattr(bot, '_external_accounts', [])
         broker = getattr(bot, 'broker', None)
@@ -1175,11 +1185,14 @@ class DashboardDataCollector:
             except Exception as e:
                 logger.warning(f"해외주식 조회 실패 {name}(****{cano[-4:]}): {e}")
 
-        return {
+        result = {
             "positions": all_positions,
             "summary": merged_summary,
             "cached": cached,
         }
+        self._ext_overseas_cache_result = result
+        self._ext_overseas_cache_ts = now_ts
+        return result
 
     # ----------------------------------------------------------
     # 자산 히스토리 (Equity History)

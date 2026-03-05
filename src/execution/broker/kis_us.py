@@ -90,6 +90,10 @@ class KISUSBroker:
         self._api_call_times: collections.deque = collections.deque(maxlen=20)
         self._max_rps = 18
 
+        # 마지막 성공 잔고 캐시 (장외 TTTS3012R 빈 응답 시 폴백)
+        self._last_known_cash: float = 0.0
+        self._last_known_equity: float = 0.0
+
         # 검증
         if not self.config.app_key or not self.config.app_secret:
             raise ValueError("KIS_APPKEY와 KIS_APPSECRET이 설정되지 않았습니다.")
@@ -441,11 +445,32 @@ class KISUSBroker:
                     settle_equity = float(output3.get("FRCR_DNCL_AMT_2", "0") or "0")
                     if settle_cash > 0:
                         available_cash = settle_cash
+                        logger.info(f"[CTRP6504R] 예수금 복원: ${available_cash:.2f}")
                     if settle_equity > 0:
                         total_equity = settle_equity
                     total_pnl = float(output3.get("OVRS_TOT_PFLS", total_pnl) or total_pnl)
-            except Exception:
-                pass  # 장중에는 HTTP 500 → 무시
+                else:
+                    logger.warning(
+                        f"[CTRP6504R] 실패: rt_cd={settle_data.get('rt_cd')} "
+                        f"msg={repr(settle_data.get('msg1',''))[:60]}"
+                    )
+            except Exception as e:
+                logger.warning(f"[CTRP6504R] 폴백 오류: {e}")
+
+        # ── 마지막 성공 잔고 캐시 (장외 표시용) ──────────────────────────
+        if available_cash > 0:
+            self._last_known_cash = available_cash
+        if total_equity > 0:
+            self._last_known_equity = total_equity
+
+        # 장외에 TTTS3012R+CTRP6504R 모두 0이면 캐시 폴백
+        if available_cash <= 0 and getattr(self, '_last_known_cash', 0) > 0:
+            logger.info(
+                f"[잔고] 실시간 조회 실패 → 캐시 폴백: "
+                f"cash=${self._last_known_cash:.2f}, equity=${getattr(self,'_last_known_equity',0):.2f}"
+            )
+            available_cash = self._last_known_cash
+            total_equity = getattr(self, '_last_known_equity', available_cash)
 
         account = {
             "available_cash":  available_cash if available_cash > 0 else None,
