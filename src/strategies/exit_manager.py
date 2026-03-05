@@ -260,18 +260,8 @@ class ExitManager:
             saved_high = current_price
             breakeven_was = False
             initial_stage = ExitStage.NONE
-            if position.avg_price and position.avg_price > 0 and current_price > position.avg_price:
-                pnl_pct = float((current_price - position.avg_price) / position.avg_price * 100)
-                if pnl_pct >= eff_third:
-                    initial_stage = ExitStage.TRAILING
-                    logger.info(
-                        f"[ExitManager] {position.symbol} 수익률 추정 +{pnl_pct:.1f}% -> "
-                        f"트레일링 단계 (3차목표={eff_third:.1f}%)"
-                    )
-                elif pnl_pct >= eff_second:
-                    initial_stage = ExitStage.THIRD
-                elif pnl_pct >= eff_first:
-                    initial_stage = ExitStage.FIRST
+            # 주의: persisted 없는 신규 포지션은 항상 NONE에서 시작
+            # stage 추정 점프는 실제 매도 없이 stage만 올려 익절 누락 유발
 
         self._states[position.symbol] = PositionExitState(
             symbol=position.symbol,

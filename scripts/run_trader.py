@@ -877,11 +877,12 @@ class UnifiedTradingBot:
                             symbol = pos.get("symbol", "")
                             if symbol:
                                 from src.core.types import Position, PositionSide
+                                raw_qty = pos.get("qty") or pos.get("quantity") or 0
                                 us_pos = Position(
                                     symbol=symbol,
                                     name=pos.get("name", symbol),
                                     side=PositionSide.LONG,
-                                    quantity=int(pos.get("quantity", 0)),
+                                    quantity=int(raw_qty),
                                     avg_price=Decimal(str(pos.get("avg_price", 0))),
                                     current_price=Decimal(str(pos.get("current_price", pos.get("avg_price", 0)))),
                                     market=Market.NASDAQ,
@@ -944,7 +945,7 @@ class UnifiedTradingBot:
             # 6. US ExitManager
             from src.strategies.exit_manager import ExitManager, ExitConfig
             us_exit_cfg = us_cfg.get("exit_manager", {})
-            us_engine.exit_manager = ExitManager(ExitConfig(
+            us_engine.exit_manager = ExitManager(config=ExitConfig(
                 enable_partial_exit=us_exit_cfg.get("enable_partial_exit", True),
                 first_exit_pct=us_exit_cfg.get("first_exit_pct", 5.0),
                 first_exit_ratio=us_exit_cfg.get("first_exit_ratio", 0.30),
@@ -957,7 +958,7 @@ class UnifiedTradingBot:
                 trailing_activate_pct=us_exit_cfg.get("trailing_activate_pct", 5.0),
                 include_fees=False,  # US: zero-commission
                 eod_close=us_exit_cfg.get("eod_close", False),
-            ))
+            ), market="US")
 
             # 7. US 스크리너 (DataStore + UniverseManager + StockScreener)
             try:
@@ -1131,13 +1132,14 @@ class UnifiedTradingBot:
                     _tmp_sched = _USSched(us_engine)
                     hp_cache = _tmp_sched._load_highest_prices()
                     stages_cache = _tmp_sched._load_exit_stages()
-                    if stages_cache:
-                        us_engine.exit_manager.restore_stages(stages_cache)
                     for sym, pos in us_engine.portfolio.positions.items():
                         cached_hp = hp_cache.get(sym, 0.0)
                         if cached_hp > float(pos.current_price):
                             pos.highest_price = Decimal(str(cached_hp))
                         us_engine.exit_manager.register_position(pos)
+                    # restore_stages는 register_position 후 실행 (_states가 채워진 뒤)
+                    if stages_cache:
+                        us_engine.exit_manager.restore_stages(stages_cache)
                     logger.info(
                         f"[US] 기존 포지션 {len(us_engine.portfolio.positions)}개 "
                         f"ExitManager 등록 완료"

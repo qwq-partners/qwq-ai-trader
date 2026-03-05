@@ -679,6 +679,7 @@ class USScheduler:
             }
             eng._pending_symbols.add(symbol)
             eng._signal_cooldown[symbol] = datetime.now()
+            eng._symbol_strategy[symbol] = strategy_val
 
             eng.recent_signals.append({
                 "symbol": signal.symbol,
@@ -882,8 +883,12 @@ class USScheduler:
     async def _check_exits(self):
         """보유 포지션 순회 → KIS REST 실시간 가격 → 청산 시그널 체크"""
         eng = self.engine
+        positions = list(eng.portfolio.positions.items())
+        if not positions:
+            return
+        logger.debug(f"[US 청산 체크] {len(positions)}개 포지션 체크")
 
-        for symbol, position in list(eng.portfolio.positions.items()):
+        for symbol, position in positions:
             if symbol in eng._pending_symbols:
                 continue
 
@@ -933,7 +938,7 @@ class USScheduler:
                         )
 
             except Exception as e:
-                logger.debug(f"[US 청산 체크] {symbol} 오류: {e}")
+                logger.warning(f"[US 청산 체크] {symbol} 오류: {e}")
 
     async def _execute_exit(self, symbol: str, position: Position,
                             exit_signal: dict, exchange: str):
@@ -1068,13 +1073,7 @@ class USScheduler:
 
         # highest_price 캐시 로드
         hp_cache = self._load_highest_prices()
-        # exit_stages는 초기화 시 1회만 복원 (반복 복원 시 익절 단계 롤백 위험)
-        if not getattr(self, '_exit_stages_restored', False):
-            stages_cache = self._load_exit_stages()
-            if stages_cache:
-                eng.exit_manager.restore_stages(stages_cache)
-                logger.info(f"[US 동기화] exit_stages 최초 복원: {len(stages_cache)}개")
-            self._exit_stages_restored = True
+        _need_restore_stages = not getattr(self, '_exit_stages_restored', False)
 
         # 포지션
         kis_positions = balance.get("positions", [])
@@ -1092,6 +1091,14 @@ class USScheduler:
                 pos.avg_price = Decimal(str(kp["avg_price"]))
                 pos.current_price = Decimal(str(kp["current_price"]))
                 eng._exchange_cache[symbol] = kp.get("exchange", eng._default_exchange)
+
+                # ExitManager에 미등록된 기존 포지션 등록 (재시작 후 누락 방지)
+                if symbol not in eng.exit_manager._states:
+                    try:
+                        eng.exit_manager.register_position(pos)
+                        logger.info(f"[US 동기화] {symbol} ExitManager 재등록 (재시작 복구)")
+                    except Exception as e:
+                        logger.warning(f"[US 동기화] {symbol} ExitManager 재등록 실패: {e}")
             else:
                 # 새 포지션 (외부 진입 또는 체결 반영)
                 cached_hp = hp_cache.get(symbol, 0.0)
@@ -1131,6 +1138,14 @@ class USScheduler:
                     eng.exit_manager.register_position(new_pos)
                 except Exception as e:
                     logger.debug(f"[US 동기화] {symbol} ExitManager 등록 실패: {e}")
+
+        # exit_stages 복원 (포지션 등록 후 실행 — _states 채워진 뒤 stage 복원)
+        if _need_restore_stages:
+            stages_cache = self._load_exit_stages()
+            if stages_cache:
+                eng.exit_manager.restore_stages(stages_cache)
+                logger.info(f"[US 동기화] exit_stages 최초 복원: {len(stages_cache)}개")
+            self._exit_stages_restored = True
 
         # highest_price 캐시 저장 (재시작 대비)
         self._save_highest_prices()

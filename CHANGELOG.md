@@ -1,5 +1,47 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-06 — US ExitManager 분할 익절 완전 수정 (P0 4건)
+
+### 근본 원인
+US 포지션의 분할 익절(1차/2차/3차)이 전혀 동작하지 않았음. 복합 버그 4건이 동시에 작용.
+
+### P0 수정 4건
+
+1. **`scripts/run_trader.py`**: `get_positions()` 반환 키 불일치 — `"qty"` vs `"quantity"`
+   - `pos.get("quantity", 0)` → `pos.get("qty") or pos.get("quantity") or 0`
+   - 포지션 quantity=0으로 등록 → `remaining_quantity=0` → `update_price` 항상 skip
+
+2. **`scripts/run_trader.py`**: `restore_stages()` 순서 버그 — `_states` 비어있는 상태에서 복원 시도
+   - `register_position` → `restore_stages` 순서로 변경 (이전: 역순)
+
+3. **`scripts/run_trader.py`**: `ExitManager(config=..., market="US")` — `market` 파라미터 누락
+   - 기본값 `"KR"`로 동작 → stage 파일명/수수료 계산 오류
+
+4. **`src/schedulers/us_scheduler.py`**: 재시작 후 기존 포지션 ExitManager 미등록
+   - `_sync_portfolio` 기존 포지션 업데이트 시 `register_position` 누락 → `_states` 비어있음
+   - `if symbol not in eng.exit_manager._states:` 조건 추가하여 자동 재등록
+
+### 기타
+- `us_scheduler.py`: `restore_stages`를 포지션 루프 뒤로 이동 (동일 순서 버그)
+- `exit_stages_us_*.json` 파일명 정상화 (market suffix 적용)
+- 과도한 진단 로그 정리 (INFO → DEBUG)
+
+---
+
+## 2026-03-05 — 전체 코드 리뷰 + US coroutine 버그 수정
+
+### P1 수정 3건
+- `kr_scheduler.py`: `_overnight_sentiment` 변수를 try 블록 전에 초기화 (스코프 안전성)
+- `kr_scheduler.py`: f-string 삼항 연산자 → if/else 분리 (가독성)
+- `kis_market_data.py`: 야간선물 장외시간 네거티브 캐시 60초 (불필요 API 호출 방지)
+
+### US coroutine never awaited 수정
+- `us_screener.py`: `scan_premarket_gap` → `async def`로 변경
+- `us_screener.py:483`: `get_intraday_scan` 호출에 `await` + `[symbol]` 리스트 전달
+- `us_scheduler.py:407`: `await` 추가
+
+---
+
 ## 2026-03-05 — US 오버나이트 + KOSPI200 야간선물 레짐 연동
 
 ### 1. screen_all에 오버나이트 레짐 직접 연동

@@ -252,12 +252,12 @@ class Position:
     @property
     def market_value(self) -> Decimal:
         """시장가치"""
-        return self.current_price * self.quantity
+        return self.current_price * Decimal(str(self.quantity))
 
     @property
     def cost_basis(self) -> Decimal:
         """취득원가"""
-        return self.avg_price * self.quantity
+        return self.avg_price * Decimal(str(self.quantity))
 
     @property
     def unrealized_pnl(self) -> Decimal:

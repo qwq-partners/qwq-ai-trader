@@ -93,8 +93,15 @@ class USAPIHandler:
 
     async def handle_positions(self, request: web.Request) -> web.Response:
         positions = []
+        exit_mgr = getattr(self.engine, "exit_manager", None)
         for symbol, pos in self.engine.portfolio.positions.items():
             entry_time = getattr(pos, "entry_time", None)
+            # ExitManager에서 stage 조회
+            stage = ""
+            if exit_mgr and hasattr(exit_mgr, "_states"):
+                state = exit_mgr._states.get(symbol)
+                if state:
+                    stage = state.current_stage.value
             positions.append({
                 "symbol": symbol,
                 "name": getattr(pos, "name", ""),
@@ -104,7 +111,7 @@ class USAPIHandler:
                 "pnl": float(pos.unrealized_pnl),
                 "pnl_pct": round(pos.unrealized_pnl_pct, 2),
                 "strategy": pos.strategy or "",
-                "stage": getattr(pos, "stage", ""),
+                "stage": stage,
                 "market_value": float(pos.market_value),
                 "entry_time": entry_time.isoformat() if entry_time else None,
             })
@@ -137,6 +144,9 @@ class USAPIHandler:
             closed = ts.get_closed_trades(days=days)
             trades = []
             for t in closed:
+                # KR 종목 제외 (숫자로만 구성된 심볼은 한국 종목)
+                if t.symbol and t.symbol.isdigit():
+                    continue
                 trades.append({
                     "timestamp": t.exit_time.isoformat() if t.exit_time else "",
                     "symbol": t.symbol,

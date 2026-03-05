@@ -324,7 +324,7 @@ us:
     env: prod
     screening_interval_min: 15
     max_screen_symbols: 100
-    max_signals_per_cycle: 2
+    max_signals_per_cycle: 3
     signal_cooldown_sec: 300
     position_sync_sec: 30
     exit_check_sec: 30
