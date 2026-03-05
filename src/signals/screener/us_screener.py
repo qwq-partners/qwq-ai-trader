@@ -454,7 +454,7 @@ class StockScreener:
         )
 
 
-    def scan_premarket_gap(
+    async def scan_premarket_gap(
         self,
         symbols: List[str],
         min_gap_pct: float = 2.0,
@@ -480,7 +480,11 @@ class StockScreener:
 
                 # Finviz에서 프리마켓 변동률 확인
                 if self._finviz and self._finviz.is_ready:
-                    intraday = self._finviz.get_intraday_scan(symbol) if hasattr(self._finviz, 'get_intraday_scan') else None
+                    if hasattr(self._finviz, 'get_intraday_scan'):
+                        intraday_map = await self._finviz.get_intraday_scan([symbol])
+                        intraday = intraday_map.get(symbol)
+                    else:
+                        intraday = None
                     if intraday and 'change_pct' in intraday:
                         gap_pct = intraday['change_pct']
                     else:

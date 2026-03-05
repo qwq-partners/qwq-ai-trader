@@ -404,7 +404,7 @@ class USScheduler:
         # ── 프리마켓 갭 스캔 삽입 ─────────────────────────────────
         if eng.screener and self._finviz and self._finviz_ready:
             try:
-                gap_results = eng.screener.scan_premarket_gap(
+                gap_results = await eng.screener.scan_premarket_gap(
                     eng._universe[:200], min_gap_pct=2.0, limit=15
                 )
                 if gap_results:
