@@ -1,5 +1,24 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-06 — US 거래 기록 누락 + 재시작 시 미체결 주문 복원
+> `0e858cc` | `us_scheduler.py`, `trade_storage.py`, `us_api.py`, `exit_manager.py`, `run_trader.py`
+
+### 핵심 수정
+1. **`us_scheduler.py`**: `_sync_portfolio`에서 수량 변화 감지 → 거래 기록 보완
+   - 재시작 후 `_pending_orders` 비어있으면 `_check_orders` 스킵 → 체결 기록 누락
+   - `_prev_qty_snapshot` 비교로 수량 감소 시 exit 기록, 신규 감지 시 entry 기록
+2. **`us_scheduler.py`**: `_recover_pending_orders` 추가 — 재시작 시 KIS 미체결 주문 복원
+   - `order_check_loop` 시작 시 1회 실행 (전일+당일 조회)
+3. **`us_scheduler.py`**: 매도 실패 5분 쿨다운 (`_sell_fail_cooldown`) 추가
+   - "가능수량 부족" 반복 매도 시도 방지
+4. **`trade_storage.py`**: `market` 컬럼 추가 (`KR`/`US` 분리), 마이그레이션 포함
+5. **`us_api.py`**: trades 엔드포인트 → `market='US'` 직접 SQL 필터 (심볼 기반 필터 제거)
+6. **`exit_manager.py`**: stage 변경 시 `_persist_states()` 즉시 호출 (재시작 시 복원 보장)
+7. **`us_scheduler.py`**: hp_cache에 `entry_times`, `strategies` 추가 (재시작 시 메타데이터 복원)
+8. **`run_trader.py`**: Position `entry_time=datetime.now()` 초기화 누락 수정
+
+---
+
 ## 2026-03-06 — US ExitManager 분할 익절 완전 수정 (P0 4건)
 
 ### 근본 원인
