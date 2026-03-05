@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import json
 import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 import aiohttp
@@ -93,6 +95,10 @@ class KISUSBroker:
         # 마지막 성공 잔고 캐시 (장외 TTTS3012R 빈 응답 시 폴백)
         self._last_known_cash: float = 0.0
         self._last_known_equity: float = 0.0
+        self._balance_cache_path = Path(os.path.expanduser("~/.cache/ai_trader_us/us_balance_cache.json"))
+        self._balance_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        # 시작 시 파일 캐시 로드
+        self._load_balance_cache()
 
         # 검증
         if not self.config.app_key or not self.config.app_secret:
@@ -104,6 +110,37 @@ class KISUSBroker:
             f"KISUSBroker 초기화: env={self.config.env}, "
             f"account=****{self.config.account_no[-4:]}"
         )
+
+    # ============================================================
+    # 잔고 파일 캐시 (장외 폴백)
+    # ============================================================
+
+    def _load_balance_cache(self) -> None:
+        """파일에서 마지막 성공 잔고 로드"""
+        try:
+            if self._balance_cache_path.exists():
+                data = json.loads(self._balance_cache_path.read_text())
+                self._last_known_cash = float(data.get("cash", 0))
+                self._last_known_equity = float(data.get("equity", 0))
+                if self._last_known_cash > 0:
+                    logger.info(
+                        f"[US잔고캐시] 로드: cash=${self._last_known_cash:.2f}, "
+                        f"equity=${self._last_known_equity:.2f} "
+                        f"(기준: {data.get('updated_at', 'unknown')})"
+                    )
+        except Exception as e:
+            logger.debug(f"[US잔고캐시] 로드 실패 (무시): {e}")
+
+    def _save_balance_cache(self, cash: float, equity: float) -> None:
+        """마지막 성공 잔고를 파일에 저장"""
+        try:
+            self._balance_cache_path.write_text(json.dumps({
+                "cash": cash,
+                "equity": equity,
+                "updated_at": datetime.now().isoformat(),
+            }))
+        except Exception as e:
+            logger.debug(f"[US잔고캐시] 저장 실패 (무시): {e}")
 
     # ============================================================
     # TR ID (실전/모의 분기)
@@ -441,21 +478,14 @@ class KISUSBroker:
                     output3 = settle_data.get("output3", {})
                     if isinstance(output3, list):
                         output3 = output3[0] if output3 else {}
-                    logger.info(f"[CTRP6504R] output3 전체: {dict(output3)}")
-                    # 필드명이 소문자로 반환됨 (WCRC_FRCR_DVSN_CD=02 기준)
-                    # frcr_evlu_tota: 외화 평가 합계 (USD)
-                    # wdrw_psbl_tot_amt: 출금 가능 합계
-                    settle_cash = float(output3.get("frcr_evlu_tota", "0") or "0")
-                    # 대소문자 폴백 (API 버전 차이 대비)
-                    if settle_cash <= 0:
-                        settle_cash = float(output3.get("FRCR_DRWG_PSBL_AMT_1", "0") or "0")
-                    settle_equity = settle_cash  # 포지션 없으면 예수금=총자산
-                    if settle_cash > 0:
-                        available_cash = settle_cash
-                        logger.info(f"[CTRP6504R] 외화잔고 복원: ${available_cash:.2f}")
-                    if settle_equity > 0:
-                        total_equity = settle_equity
-                    total_pnl = float(output3.get("ovrs_tot_pfls", output3.get("OVRS_TOT_PFLS", total_pnl)) or total_pnl)
+                    # CTRP6504R output3은 KRW 환산 합계 — USD 직접 사용 불가
+                    # 참고 로그만 남김 (frcr_evlu_tota = US 자산의 KRW 환산값)
+                    frcr_krw = float(output3.get("frcr_evlu_tota", "0") or "0")
+                    logger.info(
+                        f"[CTRP6504R] US자산(KRW환산)={frcr_krw:,.0f}원 "
+                        f"(USD 직접 조회 불가 — TTTS3012R 비장 미응답)"
+                    )
+                    # USD 잔고는 TTTS3012R(장중)에서만 정확히 조회 가능
                 else:
                     logger.warning(
                         f"[CTRP6504R] 실패: rt_cd={settle_data.get('rt_cd')} "
@@ -467,17 +497,17 @@ class KISUSBroker:
         # ── 마지막 성공 잔고 캐시 (장외 표시용) ──────────────────────────
         if available_cash > 0:
             self._last_known_cash = available_cash
-        if total_equity > 0:
-            self._last_known_equity = total_equity
+            self._last_known_equity = total_equity if total_equity > 0 else available_cash
+            self._save_balance_cache(available_cash, self._last_known_equity)
 
-        # 장외에 TTTS3012R+CTRP6504R 모두 0이면 캐시 폴백
-        if available_cash <= 0 and getattr(self, '_last_known_cash', 0) > 0:
+        # 장외에 TTTS3012R+CTRP6504R 모두 0이면 파일 캐시 폴백
+        if available_cash <= 0 and self._last_known_cash > 0:
             logger.info(
-                f"[잔고] 실시간 조회 실패 → 캐시 폴백: "
-                f"cash=${self._last_known_cash:.2f}, equity=${getattr(self,'_last_known_equity',0):.2f}"
+                f"[US잔고] 실시간 조회 실패 → 캐시 폴백: "
+                f"cash=${self._last_known_cash:.2f}, equity=${self._last_known_equity:.2f}"
             )
             available_cash = self._last_known_cash
-            total_equity = getattr(self, '_last_known_equity', available_cash)
+            total_equity = self._last_known_equity
 
         account = {
             "available_cash":  available_cash if available_cash > 0 else None,
