@@ -492,21 +492,76 @@ class KISMarketData:
     # 6. KOSPI200 야간선물 현재가 (FHMIF10000000)
     # ============================================================
 
+    @staticmethod
+    def get_kospi200_front_month_code() -> str:
+        """
+        KOSPI200 선물 근월물 종목코드 자동 계산
+
+        코드 체계: 101 + 연도코드 + 월코드
+          - 연도코드: A=2007, B=2008, ... S=2025, T=2026, U=2027 ...
+          - 월코드: 3=Mar, 6=Jun, 9=Sep, C=Dec (분기 만기)
+          - 만기일: 만기월 두 번째 목요일
+
+        만기일 경과 시 자동으로 다음 분기물로 롤오버
+        """
+        now = datetime.now()
+        year, month, day = now.year, now.month, now.day
+
+        _QUARTER_MONTHS = [3, 6, 9, 12]
+        _MONTH_CODES = {3: "3", 6: "6", 9: "9", 12: "C"}
+        _YEAR_BASE = 2007  # A=2007
+
+        def _second_thursday(y: int, m: int) -> int:
+            """해당 월의 두 번째 목요일 날짜 반환"""
+            # 1일의 요일 (0=Mon ... 3=Thu ... 6=Sun)
+            from calendar import monthrange, weekday
+            first_dow = weekday(y, m, 1)
+            # 첫 번째 목요일
+            first_thu = 1 + (3 - first_dow) % 7
+            return first_thu + 7  # 두 번째 목요일
+
+        # 현재 분기 만기월 찾기
+        expiry_year = year
+        expiry_month = None
+        for qm in _QUARTER_MONTHS:
+            if month < qm:
+                expiry_month = qm
+                break
+            elif month == qm:
+                # 만기일 경과 여부 확인
+                second_thu = _second_thursday(year, qm)
+                if day <= second_thu:
+                    expiry_month = qm
+                    break
+                # 만기 지남 → 다음 분기
+
+        if expiry_month is None:
+            # 12월 만기도 지남 → 내년 3월
+            expiry_year = year + 1
+            expiry_month = 3
+
+        year_code = chr(ord("A") + (expiry_year - _YEAR_BASE))
+        code = f"101{year_code}{_MONTH_CODES[expiry_month]}"
+        return code
+
     async def get_night_futures_quote(
         self,
-        symbol: str = "101W09",
+        symbol: Optional[str] = None,
         cache_ttl: int = 300,
     ) -> Optional[Dict[str, Any]]:
         """
         KOSPI200 야간선물 현재가 조회 (KRX 야간거래)
 
         Args:
-            symbol: 선물 종목코드 (기본: 101W09 = KOSPI200 근월물)
+            symbol: 선물 종목코드 (None이면 근월물 자동 계산)
             cache_ttl: 캐시 유효 시간 (초, 기본 5분)
 
         Returns:
-            dict: {price, change, change_pct, volume, high, low, open} 또는 None
+            dict: {price, change, change_pct, volume, high, low, open, sentiment} 또는 None
         """
+        if symbol is None:
+            symbol = self.get_kospi200_front_month_code()
+            logger.debug(f"[KIS] KOSPI200 근월물 자동 계산: {symbol}")
         cache_key = f"ngt_futures_{symbol}"
         if self._is_cache_valid(cache_key, cache_ttl):
             return self._cache[cache_key]
