@@ -515,6 +515,8 @@ class KISUSBroker:
         )
 
         # TTTS3007R: 주문가능외화금액 (항상 조회 — frcr_dncl_amt보다 정확)
+        # ※ KIS 앱 "주문가능달러"와 차이 가능: 앱은 T+2 미결제 매도 대금 포함,
+        #    TTTS3007R은 결제 완료된 즉시 주문 가능 금액만 반환.
         # frcr_dncl_amt(예수금)와 ord_psbl_frcr_amt(주문가능달러)는 다를 수 있음
         ps_cash = await self._get_available_usd_cash()
         if ps_cash > 0:
