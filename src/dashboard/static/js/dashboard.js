@@ -203,29 +203,32 @@ function updateUSPieChart(cash, stock) {
 function updateKRPositionsSummary(positions) {
     const el = document.getElementById('kr-pos-summary-list');
     if (!el) return;
-    if (!positions || positions.length === 0) {
-        el.textContent = '포지션 없음';
-        return;
-    }
     el.textContent = '';
-    positions.slice(0, 5).forEach(pos => {
+    // 수익률 높은 순 정렬
+    const sorted = [...(positions || [])].sort((a, b) => (b.unrealized_pnl_pct ?? 0) - (a.unrealized_pnl_pct ?? 0));
+    const top5 = sorted.slice(0, 5);
+    // 항상 5행 렌더 (포지션 없는 슬롯은 공행으로 고정 높이 유지)
+    for (let i = 0; i < 5; i++) {
+        const pos = top5[i];
         const div = document.createElement('div');
-        div.style.cssText = 'display:flex;justify-content:space-between;padding:1px 0;';
-        const name = document.createElement('span');
-        name.textContent = pos.name || pos.symbol;
-        name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;';
-        const pct = document.createElement('span');
-        const val = pos.unrealized_pnl_pct ?? 0;
-        pct.textContent = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
-        pct.className = 'mono';
-        pct.style.color = val >= 0 ? 'var(--acc-green)' : 'var(--acc-red)';
-        div.append(name, pct);
+        div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0;min-height:1.5em;';
+        if (pos) {
+            const name = document.createElement('span');
+            name.textContent = pos.name || pos.symbol;
+            name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%;';
+            const pct = document.createElement('span');
+            const val = pos.unrealized_pnl_pct ?? 0;
+            pct.textContent = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
+            pct.className = 'mono';
+            pct.style.color = val >= 0 ? 'var(--acc-green)' : 'var(--acc-red)';
+            div.append(name, pct);
+        }
         el.appendChild(div);
-    });
-    if (positions.length > 5) {
+    }
+    if (sorted.length > 5) {
         const more = document.createElement('div');
-        more.style.cssText = 'font-size:.7rem;color:var(--text-muted);text-align:right;';
-        more.textContent = '외 ' + (positions.length - 5) + '개';
+        more.style.cssText = 'font-size:.7rem;color:var(--text-muted);text-align:right;padding-top:1px;';
+        more.textContent = '외 ' + (sorted.length - 5) + '개';
         el.appendChild(more);
     }
 }
@@ -233,29 +236,32 @@ function updateKRPositionsSummary(positions) {
 function updateUSPositionsSummary(positions) {
     const el = document.getElementById('us-pos-summary-list');
     if (!el) return;
-    if (!positions || positions.length === 0) {
-        el.textContent = '포지션 없음';
-        return;
-    }
     el.textContent = '';
-    positions.slice(0, 5).forEach(pos => {
+    // 수익률 높은 순 정렬
+    const sorted = [...(positions || [])].sort((a, b) => (b.pnl_pct ?? 0) - (a.pnl_pct ?? 0));
+    const top5 = sorted.slice(0, 5);
+    // 항상 5행 렌더 (포지션 없는 슬롯은 공행으로 고정 높이 유지)
+    for (let i = 0; i < 5; i++) {
+        const pos = top5[i];
         const div = document.createElement('div');
-        div.style.cssText = 'display:flex;justify-content:space-between;padding:1px 0;';
-        const name = document.createElement('span');
-        name.textContent = pos.name || pos.symbol;
-        name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;';
-        const pct = document.createElement('span');
-        const val = pos.pnl_pct ?? 0;
-        pct.textContent = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
-        pct.className = 'mono';
-        pct.style.color = val >= 0 ? 'var(--acc-green)' : 'var(--acc-red)';
-        div.append(name, pct);
+        div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0;min-height:1.5em;';
+        if (pos) {
+            const name = document.createElement('span');
+            name.textContent = pos.name || pos.symbol;
+            name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%;';
+            const pct = document.createElement('span');
+            const val = pos.pnl_pct ?? 0;
+            pct.textContent = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
+            pct.className = 'mono';
+            pct.style.color = val >= 0 ? 'var(--acc-green)' : 'var(--acc-red)';
+            div.append(name, pct);
+        }
         el.appendChild(div);
-    });
-    if (positions.length > 5) {
+    }
+    if (sorted.length > 5) {
         const more = document.createElement('div');
-        more.style.cssText = 'font-size:.7rem;color:var(--text-muted);text-align:right;';
-        more.textContent = '외 ' + (positions.length - 5) + '개';
+        more.style.cssText = 'font-size:.7rem;color:var(--text-muted);text-align:right;padding-top:1px;';
+        more.textContent = '외 ' + (sorted.length - 5) + '개';
         el.appendChild(more);
     }
 }
