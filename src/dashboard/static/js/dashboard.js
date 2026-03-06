@@ -200,6 +200,28 @@ function updateUSPieChart(cash, stock) {
 // ============================================================
 // 네비 롤링 지수 전광판
 // ============================================================
+
+/**
+ * 등락률 크기에 따라 빨강(상승) / 파랑(하락) 색상 계산.
+ * t = min(|change_pct| / 3, 1)  → 0%=연한색, 3%+=진한색
+ */
+function _tickerColor(changePct) {
+    const t = Math.min(Math.abs(changePct) / 3.0, 1.0);
+    if (changePct >= 0) {
+        // 연한빨강 #fca5a5 → 진한빨강 #dc2626
+        const r = Math.round(252 - t * 32);
+        const g = Math.round(165 - t * 127);
+        const b = Math.round(165 - t * 127);
+        return `rgb(${r},${g},${b})`;
+    } else {
+        // 연한파랑 #93c5fd → 진한파랑 #1d4ed8
+        const r = Math.round(147 - t * 118);
+        const g = Math.round(197 - t * 119);
+        const b = Math.round(253 - t * 37);
+        return `rgb(${r},${g},${b})`;
+    }
+}
+
 function _buildTickerHTML(indices) {
     const items = indices.map(idx => {
         const up    = idx.change_pct >= 0;
@@ -207,14 +229,13 @@ function _buildTickerHTML(indices) {
         const kind  = idx.kind || '';
         // 라벨 색상: KR 지수=cyan, US 지수=amber, KR 개별종목=연보라
         const isPep  = idx.label === '펩트론';
-        const isKR   = kind === 'index_kr' || kind === 'stock_kr';
-        // KR: 상승=빨강(kr-up), 하락=파랑(kr-dn) / US: 상승=초록(up), 하락=빨강(dn)
-        const dirCls = isKR ? (up ? 'kr-up' : 'kr-dn') : (up ? 'up' : 'dn');
         const tiCls  = kind === 'index_kr' ? 'nav-ti nav-ti-kr'
                      : kind === 'index_us' ? 'nav-ti nav-ti-us'
                      : isPep ? 'nav-ti nav-ti-pep'
                      : 'nav-ti nav-ti-stock';
-        const tvCls  = isPep ? `nav-tv nav-tv-pep ${dirCls}` : `nav-tv ${dirCls}`;
+        const tvCls  = isPep ? 'nav-tv nav-tv-pep' : 'nav-tv';
+        // 등락률 강도에 따른 인라인 색상 (상승=빨강, 하락=파랑 — 한국식 전체 적용)
+        const color  = _tickerColor(idx.change_pct);
         // 가격 포맷: 한국 종목=원 정수, US 지수/종목=소수점2자리
         const isKRPrice = kind === 'index_kr' || kind === 'stock_kr';
         const price = isKRPrice
@@ -222,7 +243,7 @@ function _buildTickerHTML(indices) {
             : idx.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
         const pctStr = (up ? '+' : '') + idx.change_pct.toFixed(2) + '%';
         return `<span class="${tiCls}">${idx.label}</span>` +
-               `<span class="${tvCls}">${arrow} ${price} ${pctStr}</span>` +
+               `<span class="${tvCls}" style="color:${color}">${arrow} ${price} ${pctStr}</span>` +
                `<span class="nav-ts">·</span>`;
     }).join('');
     return items + items; // duplicate for seamless loop
