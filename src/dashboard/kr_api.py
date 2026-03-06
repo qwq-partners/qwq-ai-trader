@@ -411,7 +411,10 @@ class KRAPIHandler:
             async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as sess:
                 for sym, label, kind in index_symbols:
                     try:
-                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=5d"
+                        # 스파크라인(1mo)이 필요한 지수는 범위 확대
+                        need_spark = sym in ("^KS11", "^GSPC")
+                        range_param = "1mo" if need_spark else "5d"
+                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range={range_param}"
                         async with sess.get(url) as resp:
                             if resp.status != 200:
                                 continue
@@ -423,12 +426,16 @@ class KRAPIHandler:
                             prev = closes[-2] if len(closes) >= 2 else (closes[-1] if closes else price)
                             chg = price - prev
                             chg_pct = (chg / prev * 100) if prev else 0
-                            results.append({
+                            item = {
                                 "symbol": sym, "label": label, "kind": kind,
                                 "price": round(price, 2),
                                 "change": round(chg, 2),
                                 "change_pct": round(chg_pct, 2),
-                            })
+                            }
+                            # 스파크라인 데이터 (KOSPI·S&P500만)
+                            if need_spark and len(closes) >= 5:
+                                item["sparkline"] = [round(c, 2) for c in closes]
+                            results.append(item)
                     except Exception as e:
                         logger.debug(f"[지수] {sym} 오류: {e}")
         except Exception as e:
