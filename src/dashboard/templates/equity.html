@@ -169,37 +169,45 @@
             /* status-bar 오른쪽 정렬 유지 */
             #status-bar { order: 2 !important; margin-left: auto; }
         }
-        
-        /* ── Nav Dynamic Stats (로고 행 우측) ── */
+                
+        /* ── Nav: 차트 + 롤링 티커 ── */
         .nav-dynamic-stats {
-            display:flex; align-items:center; gap:5px;
-            margin-left:auto; flex-shrink:0;
+            display:flex; align-items:center; gap:7px;
+            margin-left:auto; flex-shrink:0; min-width:0; overflow:hidden;
         }
-        /* Equalizer 애니메이션 바 */
-        .nav-live-bar { display:inline-flex; align-items:flex-end; gap:2px; height:16px; }
-        .nav-live-bar span {
-            display:inline-block; width:3px; border-radius:2px; transform-origin:bottom;
-            background:linear-gradient(to top,#6366f1,#a855f7);
+        /* 스크롤 차트 */
+        .nav-chart-wrap { width:60px; height:18px; overflow:hidden; flex-shrink:0; }
+        .nav-chart-poly {
+            animation: navChartScroll 5s linear infinite;
+            transform-origin: 0 0;
         }
-        .nav-live-bar span:nth-child(1){height:6px; animation:navBeat 1.5s 0.0s  ease-in-out infinite;}
-        .nav-live-bar span:nth-child(2){height:12px;animation:navBeat 1.5s 0.25s ease-in-out infinite;}
-        .nav-live-bar span:nth-child(3){height:8px; animation:navBeat 1.5s 0.5s  ease-in-out infinite;}
-        .nav-live-bar span:nth-child(4){height:14px;animation:navBeat 1.5s 0.75s ease-in-out infinite;}
-        .nav-live-bar span:nth-child(5){height:5px; animation:navBeat 1.5s 1.0s  ease-in-out infinite;}
-        .nav-live-bar span:nth-child(6){height:10px;animation:navBeat 1.5s 1.25s ease-in-out infinite;}
-        @keyframes navBeat {
-            0%,100%{opacity:.4; transform:scaleY(.35);}
-            50%    {opacity:1;   transform:scaleY(1);}
+        @keyframes navChartScroll {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-60px); }
         }
-        /* KR/US 손익 칩 */
-        .nav-stat-chip {
-            font-size:.58rem; font-weight:700; padding:2px 7px; border-radius:5px;
-            font-family:'JetBrains Mono',monospace; white-space:nowrap;
-            letter-spacing:.02em; transition:color .3s, background .3s;
+        /* 롤링 티커 */
+        .nav-ticker-outer {
+            overflow:hidden; min-width:0; flex:1;
+            mask-image:linear-gradient(to right,transparent,#000 12%,#000 88%,transparent);
+            -webkit-mask-image:linear-gradient(to right,transparent,#000 12%,#000 88%,transparent);
         }
-        .nav-stat-kr { background:rgba(34,211,238,.1); color:rgba(34,211,238,.7); border:1px solid rgba(34,211,238,.2); }
-        .nav-stat-us { background:rgba(245,158,11,.1); color:rgba(245,158,11,.7); border:1px solid rgba(245,158,11,.2); }
-        @media(max-width:680px) { .nav-dynamic-stats { order:2; } }
+        .nav-ticker-inner {
+            display:inline-flex; align-items:center; gap:0; white-space:nowrap;
+            animation: navTickerRoll 22s linear infinite;
+        }
+        .nav-ticker-inner:hover { animation-play-state:paused; }
+        @keyframes navTickerRoll {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+        .nav-ti { font-size:.58rem; font-weight:700; letter-spacing:.03em; padding:0 3px 0 8px; }
+        .nav-ti-kr { color:rgba(34,211,238,.8); }
+        .nav-ti-us { color:rgba(245,158,11,.8); }
+        .nav-tv { font-size:.58rem; font-family:'JetBrains Mono',monospace; color:var(--text-secondary); }
+        .nav-ts { font-size:.55rem; color:var(--text-muted); padding:0 2px; }
+        .nav-tv.up  { color:var(--acc-green); }
+        .nav-tv.dn  { color:var(--acc-red); }
+        @media(max-width:680px) { .nav-dynamic-stats { order:2; max-width:calc(100% - 120px); } }
         </style>
 </head>
 <body>
@@ -217,11 +225,32 @@
                 </div>
                 </div>
                 <div class="nav-dynamic-stats" id="nav-dynamic-stats">
-                <div class="nav-live-bar" aria-hidden="true">
-                    <span></span><span></span><span></span><span></span><span></span><span></span>
+                <!-- 스크롤 차트 라인 -->
+                <div class="nav-chart-wrap" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="18" style="display:block;overflow:visible;">
+                        <defs>
+                            <linearGradient id="ncg" x1="0" y1="0" x2="1" y2="0">
+                                <stop offset="0%" stop-color="#6366f1" stop-opacity=".9"/>
+                                <stop offset="50%" stop-color="#a855f7" stop-opacity="1"/>
+                                <stop offset="100%" stop-color="#6366f1" stop-opacity=".9"/>
+                            </linearGradient>
+                        </defs>
+                        <polyline class="nav-chart-poly"
+                            points="0,9 6,6 12,14 18,5 24,11 30,7 36,3 42,12 48,7 54,13 60,9 66,6 72,14 78,5 84,11 90,7 96,3 102,12 108,7 114,13 120,9"
+                            fill="none" stroke="url(#ncg)" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
                 </div>
-                <span id="nav-kr-stat" class="nav-stat-chip nav-stat-kr">KR</span>
-                <span id="nav-us-stat" class="nav-stat-chip nav-stat-us">US</span>
+                <!-- 롤링 지수 전광판 -->
+                <div class="nav-ticker-outer">
+                    <div class="nav-ticker-inner" id="nav-ticker-inner">
+                        <span class="nav-ti nav-ti-kr">KOSPI</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+                        <span class="nav-ti nav-ti-kr">KOSDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+                        <span class="nav-ti nav-ti-us">S&amp;P500</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+                        <span class="nav-ti nav-ti-us">NASDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+                        <span class="nav-ti nav-ti-us">DOW</span><span class="nav-tv">--</span><span class="nav-ts">·&nbsp;&nbsp;</span>
+                    </div>
+                </div>
             </div>
             <div class="nav-links" style="display: flex; gap: 4px; flex: 1;">
                     <a href="/" class="nav-pill" data-page="index">실시간</a>

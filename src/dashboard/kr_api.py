@@ -6,12 +6,16 @@ KR(한국주식) 대시보드 API 엔드포인트.
 """
 
 import os
+import time
 import asyncio
 from datetime import date, datetime
 
 import aiohttp as aiohttp_client
 from aiohttp import web
 from loguru import logger
+
+# 시장 지수 캐시 (5분)
+_indices_cache: dict = {"data": None, "ts": 0.0}
 
 
 def setup_kr_api_routes(app: web.Application, data_collector):
@@ -50,6 +54,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/trade-events", handler.get_trade_events)
     app.router.add_get("/api/daily-settlement", handler.get_daily_settlement)
     app.router.add_get("/api/app/latest", handler.get_latest_app)
+    app.router.add_get("/api/market/indices", handler.get_market_indices)
 
 
 class KRAPIHandler:
@@ -366,6 +371,54 @@ class KRAPIHandler:
             "size_mb": size_mb,
             "modified": datetime.fromtimestamp(latest.stat().st_mtime).isoformat(),
         })
+
+    async def get_market_indices(self, request: web.Request) -> web.Response:
+        """KOSPI·KOSDAQ·S&P500·NASDAQ·DOW 지수 (5분 캐시, Yahoo Finance)"""
+        global _indices_cache
+        if _indices_cache["data"] and (time.time() - _indices_cache["ts"]) < 300:
+            return web.json_response(_indices_cache["data"])
+
+        symbols = [
+            ("^KS11",  "KOSPI"),
+            ("^KQ11",  "KOSDAQ"),
+            ("^GSPC",  "S&P500"),
+            ("^IXIC",  "NASDAQ"),
+            ("^DJI",   "DOW"),
+        ]
+        results = []
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        try:
+            timeout = aiohttp_client.ClientTimeout(total=6)
+            async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as session:
+                for sym, label in symbols:
+                    try:
+                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=2d"
+                        async with session.get(url) as resp:
+                            if resp.status != 200:
+                                continue
+                            js = await resp.json(content_type=None)
+                            meta = js["chart"]["result"][0]["meta"]
+                            price = meta.get("regularMarketPrice") or meta.get("previousClose", 0)
+                            prev  = meta.get("chartPreviousClose") or meta.get("previousClose", price)
+                            change     = price - prev
+                            change_pct = (change / prev * 100) if prev else 0
+                            results.append({
+                                "symbol": sym, "label": label,
+                                "price": round(price, 2),
+                                "change": round(change, 2),
+                                "change_pct": round(change_pct, 2),
+                            })
+                    except Exception as e:
+                        logger.debug(f"[지수] {sym} 오류: {e}")
+        except Exception as e:
+            logger.debug(f"[지수] 조회 오류: {e}")
+
+        if results:
+            _indices_cache["data"] = results
+            _indices_cache["ts"]   = time.time()
+        elif _indices_cache["data"]:
+            return web.json_response(_indices_cache["data"])
+        return web.json_response(results)
 
     async def _restart_bot_delayed(self, delay_seconds: int):
         """봇 재시작 (지연 실행)"""

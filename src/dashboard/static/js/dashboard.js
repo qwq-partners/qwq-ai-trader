@@ -198,22 +198,45 @@ function updateUSPieChart(cash, stock) {
 
 // ============================================================
 // ============================================================
-// 네비 손익 칩 업데이트
+// 네비 롤링 지수 전광판
 // ============================================================
-function _updateNavStat(id, prefix, pct) {
-    const el = document.getElementById(id);
-    if (!el || pct == null) return;
-    const v = Number(pct);
-    el.textContent = prefix + ' ' + (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-    if (v > 0) {
-        el.style.color = 'var(--acc-green)';
-        el.style.background = 'rgba(52,211,153,.12)';
-        el.style.borderColor = 'rgba(52,211,153,.2)';
-    } else if (v < 0) {
-        el.style.color = 'var(--acc-red)';
-        el.style.background = 'rgba(248,113,113,.12)';
-        el.style.borderColor = 'rgba(248,113,113,.2)';
-    }
+function _buildTickerHTML(indices) {
+    const items = indices.map(idx => {
+        const up = idx.change_pct >= 0;
+        const arrow = up ? '▲' : '▼';
+        const cls   = up ? 'up' : 'dn';
+        const isKR  = ['KOSPI','KOSDAQ'].includes(idx.label);
+        const tiCls = isKR ? 'nav-ti nav-ti-kr' : 'nav-ti nav-ti-us';
+        const price = idx.label === 'KOSPI' || idx.label === 'KOSDAQ'
+            ? Math.round(idx.price).toLocaleString()
+            : idx.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+        const pctStr = (up ? '+' : '') + idx.change_pct.toFixed(2) + '%';
+        return `<span class="${tiCls}">${idx.label}</span>` +
+               `<span class="nav-tv ${cls}">${arrow} ${price} ${pctStr}</span>` +
+               `<span class="nav-ts">·</span>`;
+    }).join('');
+    return items + items; // duplicate for seamless loop
+}
+
+async function fetchNavIndices() {
+    try {
+        const data = await fetch('/api/market/indices').then(r => r.json());
+        if (data && data.length > 0) {
+            const inner = document.getElementById('nav-ticker-inner');
+            if (inner) {
+                inner.innerHTML = _buildTickerHTML(data);
+                // 애니메이션 재시작
+                inner.style.animation = 'none';
+                void inner.offsetWidth;
+                inner.style.animation = '';
+            }
+        }
+    } catch(e) {}
+    setTimeout(fetchNavIndices, 5 * 60 * 1000); // 5분마다 갱신
+}
+// 페이지 로드 후 1초 뒤 첫 조회
+if (typeof window !== 'undefined') {
+    window.addEventListener('DOMContentLoaded', () => setTimeout(fetchNavIndices, 1000));
 }
 
 // 포지션 요약 (마켓 카드 내)
@@ -935,7 +958,6 @@ function renderUSPortfolio(p) {
         pnlEl.style.color = pnl >= 0 ? "var(--acc-green)" : "var(--acc-red)";
     }
     // 네비 US 손익 칩 업데이트
-    if (p.daily_pnl_pct != null) _updateNavStat('nav-us-stat', 'US', p.daily_pnl_pct);
 
     // Cash bar
     updateUSPieChart(cash, stock);
@@ -1118,7 +1140,6 @@ function updatePortfolioCard() {
     updatePieChart(kr.cash || 0, kr.total_position_value || 0);
     _updateCardFilterLabel();
     // 네비 KR 손익 칩 업데이트
-    _updateNavStat('nav-kr-stat', 'KR', kr.daily_pnl_pct);
 }
 
 /** KR 실현/미실현 분리 표시 (DOM API) */
