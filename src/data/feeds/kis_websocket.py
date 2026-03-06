@@ -647,6 +647,12 @@ class KISWebSocketFeed:
                 self._reconnect_count = 0
                 logger.info("[WS] 장 시작 — WebSocket 연결 시도")
 
+            # 연결 전 세션 동기화 (PRE_MARKET/NEXT 구독 TR_ID 자동 전환)
+            _current = self._kr_session.get_session()
+            if _current != self._current_session:
+                self._current_session = _current
+                logger.info(f"[WS] 세션 동기화: {_current.value}")
+
             if not self._should_connect:
                 await asyncio.sleep(10)
                 continue
