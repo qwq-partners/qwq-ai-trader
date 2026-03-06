@@ -1,5 +1,60 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-06 — US 거래내역 대시보드 매수+매도 통합 표시
+> `bc564a6` | `us_api.py`
+
+### 문제
+- US 거래내역이 매수 중심으로만 표시 (매도 누락)
+
+### 원인 및 수정
+1. **`created_at::date` → `event_time::date`**: DB 삽입 시각이 아닌 실제 거래 시각 기준으로 필터
+2. **`trades JOIN market='US'`**: symbol 패턴 필터 제거 → 정확한 마켓 분리
+3. **`trades` 테이블 SELL 보완**: `trade_events`에 SELL 레코드 없을 때 `trades.exit_time/exit_price` 로 SELL 행 합성
+4. **미청산 BUY 현재가 보강**: 오픈 포지션 `current_price/pnl/pnl_pct` 실시간 주입
+5. KR `get_trade_events()` 와 동일한 구조로 통일 (2단계 조회 패턴)
+
+---
+
+## 2026-03-06 — 프리장/넥스트장 시세수신 버그 수정
+> `ecb34af` | `kis_websocket.py`, `kr_scheduler.py`, `run_trader.py`
+
+### 문제
+- 프리장(08:00–08:50)에서 KIS WS close_code=1006 5초 루프 반복
+- 넥스트장(15:30–18:00)에서 정규장 종가(정적) 를 시세로 사용
+
+### 원인
+- `_subscribe_symbol()`이 모든 보유종목에 `H0NXCNT0` 전송
+  → TIGER 레버리지 ETF 등 NXT 비대상 종목 구독 시 KIS 서버 즉시 1006 차단
+- NXT 종목 목록을 WS에 전달하는 코드 없음 (`_nxt_symbols` 항상 공집합)
+
+### 수정
+1. **`kis_websocket._subscribe_symbol()`**: 프리/넥스트장 + NXT 비대상 종목 → 구독 건너뜀 (REST 폴링 커버)
+2. **`kis_websocket._apply_subscriptions()`**: 보유종목도 NXT 필터 적용
+3. **`run_trader.py`**: 시작 시 `broker.get_nxt_symbols()` → `ws_feed.set_nxt_symbols()` (650개 로드)
+4. **`kr_scheduler.run_rest_price_feed()`**: 넥스트장 세션 감지 시 `ovtm_untp_prpr`(시간외단일가) 사용
+
+---
+
+## 2026-03-06 — US 해외주식 KIS 체결 동기화 (sync_from_kis_us)
+> `b35ec2a` | `kis_us.py`, `trade_storage.py`, `us_scheduler.py`
+
+### 신규 기능
+KR의 `sync_from_kis` 와 동일하게, 장 마감 후 KIS TTTS3035R 체결 내역을 DB와 대조해 누락 거래 복구
+
+### 구현
+1. **`kis_us.get_all_fills_for_date()`**: `get_order_history()` 래퍼 — KR broker와 동일 포맷 반환
+2. **`trade_storage.calc_pnl_us()`**: zero-commission PnL 계산 (USD float 반환)
+3. **`trade_storage.sync_from_kis_us()`**: 누락 매수/매도 DB 복구 (`market='US'` 필터)
+4. **`trade_storage._reconcile_pnl_us()`**: KIS 실체결가 기준 PnL 보정 ($0.01 이하 무시)
+5. **`us_scheduler.eod_close_loop`**: 매 거래일 16:20 ET 이후 1회 자동 실행
+
+### KR sync_from_kis 와의 차이
+- `market='US'` 조건 DB 조회 (KR 거래와 완전 분리)
+- zero-commission (수수료·세금 0)
+- PnL 단위: USD float (KR은 KRW int)
+
+---
+
 ## 2026-03-06 — US 대시보드 거래내역 표시 수정 + KIS API 날짜 기준 수정
 > `1157f63`, `982d5a7` | `us_api.py`, `us_scheduler.py`, `trades.html`, `trades.js`
 
