@@ -514,14 +514,17 @@ class KISUSBroker:
             f"총자산=${total_equity:.2f}, 총손익=${total_pnl:.2f}"
         )
 
-        # TTTS3007R 폴백: 주문가능외화금액 조회 (장중/비장 모두 동작)
-        # CTRP6504R 대신 TTTS3007R 사용 — ord_psbl_frcr_amt = USD 잔고 직접 반환
-        if available_cash <= 0:
-            ps_cash = await self._get_available_usd_cash()
-            if ps_cash > 0:
-                available_cash = ps_cash
-                total_equity = available_cash + stock_eval_amt
-                logger.info(f"[TTTS3007R] 주문가능달러: ${available_cash:.2f}")
+        # TTTS3007R: 주문가능외화금액 (항상 조회 — frcr_dncl_amt보다 정확)
+        # frcr_dncl_amt(예수금)와 ord_psbl_frcr_amt(주문가능달러)는 다를 수 있음
+        ps_cash = await self._get_available_usd_cash()
+        if ps_cash > 0:
+            if abs(ps_cash - available_cash) > 0.5:
+                logger.info(
+                    f"[TTTS3007R] 주문가능달러 ${ps_cash:.2f} "
+                    f"(frcr_dncl_amt ${available_cash:.2f}와 차이 → TTTS3007R 우선 사용)"
+                )
+            available_cash = ps_cash
+            total_equity = available_cash + stock_eval_amt
 
         # ── 마지막 성공 잔고 캐시 (장외 표시용) ──────────────────────────
         if available_cash > 0:
