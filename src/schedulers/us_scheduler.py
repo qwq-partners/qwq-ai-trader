@@ -287,6 +287,46 @@ class USScheduler:
         except Exception as e:
             logger.warning(f"[US Reconcile] ghost 거래 reconcile 오류: {e}")
 
+    async def _preload_strategies_from_db(self):
+        """재시작 시 DB의 미결 US 거래에서 전략명을 _symbol_strategy에 복원.
+
+        최우선 소스: DB trades.entry_strategy (실제 주문 전략명)
+        SYNC 포지션이 strat_cache 없어도 전략 표시 가능.
+        """
+        eng = self.engine
+        ts = getattr(eng, 'trade_storage', None)
+        pool = getattr(ts, 'pool', None) if ts else None
+        if not pool:
+            return
+        try:
+            rows = await pool.fetch(
+                """SELECT DISTINCT ON (symbol) symbol, entry_strategy
+                   FROM trades
+                   WHERE market = 'US' AND exit_time IS NULL
+                     AND entry_strategy IS NOT NULL AND entry_strategy != '' AND entry_strategy != 'unknown'
+                   ORDER BY symbol, entry_time DESC""",
+            )
+            loaded = 0
+            for row in rows:
+                sym  = row['symbol']
+                strat = row['entry_strategy']
+                # _symbol_strategy에 없거나 비어있을 때만 덮어쓰기
+                if not eng._symbol_strategy.get(sym):
+                    eng._symbol_strategy[sym] = strat
+                    # 이미 포지션이 portfolio에 있으면 즉시 반영
+                    pos = eng.portfolio.positions.get(sym)
+                    if pos and not pos.strategy:
+                        pos.strategy = strat
+                        for strat_obj in eng.strategies:
+                            if strat_obj.strategy_type.value == strat:
+                                pos.time_horizon = strat_obj.time_horizon
+                                break
+                    loaded += 1
+            if loaded:
+                logger.info(f"[US 전략 복원] DB에서 {loaded}개 종목 전략 로드 완료")
+        except Exception as e:
+            logger.warning(f"[US 전략 복원] DB 조회 실패: {e}")
+
     # ============================================================
     # 헬퍼: 히스토리/ATR/거래소
     # ============================================================
@@ -1211,6 +1251,11 @@ class USScheduler:
         if not getattr(self, '_ghost_reconcile_done', False):
             self._ghost_reconcile_done = True
             await self._reconcile_ghost_us_trades(kis_symbols)
+
+        # ── 전략 프리로드 (재시작 후 _symbol_strategy 빈 경우 DB에서 복원) ──
+        if not getattr(self, '_strategy_preload_done', False):
+            self._strategy_preload_done = True
+            await self._preload_strategies_from_db()
 
         for kp in kis_positions:
             symbol = kp["symbol"]
