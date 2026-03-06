@@ -1155,7 +1155,12 @@ class RiskManager:
         # 포지션 크기 계산
         if event.side == OrderSide.SELL:
             pos = self.engine.portfolio.positions.get(event.symbol)
-            position_size = pos.quantity if pos else 0
+            # metadata에 수량이 지정된 경우 분할 익절/트레일링 수량 사용 (1차/2차/3차)
+            _meta_qty = int((event.metadata or {}).get("quantity") or 0)
+            if _meta_qty and pos and 0 < _meta_qty <= pos.quantity:
+                position_size = _meta_qty
+            else:
+                position_size = pos.quantity if pos else 0
         else:
             position_size = self._calculate_position_size(event)
 
