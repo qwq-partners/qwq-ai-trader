@@ -170,18 +170,18 @@
             #status-bar { order: 2 !important; margin-left: auto; }
         }
                 
-        /* ── Nav: 차트 + 롤링 티커 ── */
-        .nav-dynamic-stats {
-            display:flex; align-items:center; gap:7px;
-            margin-left:auto; flex-shrink:0; min-width:0; overflow:hidden;
+        /* ── 지수 전광판 스트립 ── */
+        .ticker-strip {
+            overflow:hidden;
+            background:rgba(9,9,18,.88);
+            backdrop-filter:blur(10px);
+            border-bottom:1px solid rgba(99,102,241,.1);
+            padding:5px 0;
+            mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);
+            -webkit-mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);
         }
-
         /* 롤링 티커 */
-        .nav-ticker-outer {
-            overflow:hidden; min-width:0; flex:1;
-            mask-image:linear-gradient(to right,transparent,#000 12%,#000 88%,transparent);
-            -webkit-mask-image:linear-gradient(to right,transparent,#000 12%,#000 88%,transparent);
-        }
+        .nav-ticker-inner-wrap { display:block; }
         .nav-ticker-inner {
             display:inline-flex; align-items:center; gap:0; white-space:nowrap;
             animation: navTickerRoll 22s linear infinite;
@@ -203,7 +203,6 @@
         .nav-tv.dn    { color:var(--acc-red); }
         .nav-tv.kr-up { color:#f87171; }
         .nav-tv.kr-dn { color:#60a5fa; }
-        @media(max-width:680px) { .nav-dynamic-stats { order:2; max-width:calc(100% - 120px); } }
         </style>
 </head>
 <body>
@@ -220,19 +219,7 @@
                     <span class="nav-brand-sub">AI&nbsp;Trader</span>
                 </div>
                 </div>
-                <div class="nav-dynamic-stats" id="nav-dynamic-stats">
-
-                <!-- 롤링 지수 전광판 -->
-                <div class="nav-ticker-outer">
-                    <div class="nav-ticker-inner" id="nav-ticker-inner">
-                        <span class="nav-ti nav-ti-kr">KOSPI</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-                        <span class="nav-ti nav-ti-kr">KOSDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-                        <span class="nav-ti nav-ti-us">S&amp;P500</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-                        <span class="nav-ti nav-ti-us">NASDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-                        <span class="nav-ti nav-ti-us">DOW</span><span class="nav-tv">--</span><span class="nav-ts">·&nbsp;&nbsp;</span>
-                    </div>
-                </div>
-            </div>
+    
             <div class="nav-links" style="display: flex; gap: 4px; flex: 1;">
                     <a href="/" class="nav-pill" data-page="index">실시간</a>
                     <a href="/trades" class="nav-pill" data-page="trades">거래</a>
@@ -250,6 +237,16 @@
         </div>
     </nav>
 
+    <!-- ─────── 지수 전광판 스트립 ─────── -->
+    <div class="ticker-strip">
+        <div class="nav-ticker-inner" id="nav-ticker-inner">
+            <span class="nav-ti nav-ti-kr">KOSPI</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+            <span class="nav-ti nav-ti-kr">KOSDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+            <span class="nav-ti nav-ti-us">S&amp;P500</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+            <span class="nav-ti nav-ti-us">NASDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+            <span class="nav-ti nav-ti-us">DOW</span><span class="nav-tv">--</span><span class="nav-ts">·&nbsp;&nbsp;</span>
+        </div>
+    </div>
     <!-- Market Filter Bar -->
     <div id="market-filter-bar" style="max-width:1280px;margin:16px auto 0;padding:0 24px;"></div>
 
