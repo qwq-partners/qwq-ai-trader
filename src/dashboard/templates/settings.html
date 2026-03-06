@@ -110,15 +110,32 @@
         .nav-brand-sub  { font-size:.58rem; color:rgba(255,255,255,.42); font-weight:500; letter-spacing:.07em; text-transform:uppercase; }
         /* Mobile: hide status-bar (연결정보·시간) */
         @media (max-width:680px) { #status-bar { display:none !important; } }
-        
-        /* ── 모바일 네비 로고 compact ── */
+                
+        /* ── 모바일 네비 2행 레이아웃 ── */
         @media (max-width:680px) {
-            /* 로고 텍스트("QWQ" / "AI Trader") 숨기고 아이콘만 표시 */
-            .nav-logo-text { display:none !important; }
-            /* 네비바 외부 패딩 축소 */
-            nav > div { padding-left:10px !important; padding-right:10px !important; gap:8px !important; }
-            /* 로고 마크 크기 축소 */
-            .nav-logo-mark { width:28px !important; height:28px !important; border-radius:7px !important; }
+            /* 로고 + 메뉴를 2행으로 쌓기 */
+            nav > div, nav .nav-container {
+                flex-wrap: wrap !important;
+                padding-left: 12px !important;
+                padding-right: 12px !important;
+                padding-top: 8px !important;
+                padding-bottom: 4px !important;
+                gap: 4px !important;
+            }
+            /* 1행: 로고 + status (전체 너비) */
+            nav > div > div:first-child,
+            nav .nav-container > div:first-child { order: 1; flex: 0 0 auto; }
+            /* 2행: 메뉴 링크 (전체 너비 차지, 스크롤 가능) */
+            .nav-links {
+                order: 3 !important;
+                flex: 0 0 100% !important;
+                width: 100% !important;
+                overflow-x: auto !important;
+                flex-wrap: nowrap !important;
+                padding-bottom: 4px !important;
+            }
+            /* status-bar 오른쪽 정렬 유지 */
+            #status-bar { order: 2 !important; margin-left: auto; }
         }
         </style>
 </head>
