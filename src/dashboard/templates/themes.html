@@ -162,11 +162,17 @@
             backdrop-filter:blur(10px);
             border-bottom:1px solid rgba(99,102,241,.1);
             padding:5px 0;
+        }
+        .ticker-strip-wrap {
+            max-width:1280px; margin:0 auto; overflow:hidden;
             mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);
             -webkit-mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);
         }
-        /* 롤링 티커 */
-        .nav-ticker-inner-wrap { display:block; }
+        /* 펩트론 글로우 애니메이션 */
+        @keyframes pepGlow {
+            0%,100% { text-shadow:0 0 6px rgba(251,191,36,.7),0 0 18px rgba(251,191,36,.3); opacity:.9; }
+            50%      { text-shadow:0 0 12px rgba(251,191,36,1),0 0 30px rgba(251,191,36,.7),0 0 55px rgba(251,191,36,.25); opacity:1; }
+        }
         .nav-ticker-inner {
             display:inline-flex; align-items:center; gap:0; white-space:nowrap;
             animation: navTickerRoll 22s linear infinite;
@@ -180,7 +186,7 @@
         .nav-ti-kr { color:rgba(34,211,238,.8); }
         .nav-ti-us { color:rgba(245,158,11,.8); }
         .nav-ti-stock { color:rgba(196,181,253,.8); }
-        .nav-ti-pep  { color:rgba(196,181,253,.8); font-weight:900; }
+        .nav-ti-pep  { color:rgba(251,191,36,.95); font-weight:900; letter-spacing:.05em; animation:pepGlow 2s ease-in-out infinite; }
         .nav-tv-pep  { font-family:'JetBrains Mono',monospace; font-weight:900; }
         .nav-tv { font-size:.58rem; font-family:'JetBrains Mono',monospace; color:var(--text-secondary); }
         .nav-ts { font-size:.55rem; color:var(--text-muted); padding:0 2px; }
@@ -224,6 +230,7 @@
 
     <!-- ─────── 지수 전광판 스트립 ─────── -->
     <div class="ticker-strip">
+      <div class="ticker-strip-wrap">
         <div class="nav-ticker-inner" id="nav-ticker-inner">
             <span class="nav-ti nav-ti-kr">KOSPI</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
             <span class="nav-ti nav-ti-kr">KOSDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
@@ -231,6 +238,7 @@
             <span class="nav-ti nav-ti-us">NASDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
             <span class="nav-ti nav-ti-us">DOW</span><span class="nav-tv">--</span><span class="nav-ts">·&nbsp;&nbsp;</span>
         </div>
+      </div>
     </div>
     <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
 

@@ -263,7 +263,7 @@ async function fetchNavIndices() {
             }
         }
     } catch(e) {}
-    setTimeout(fetchNavIndices, 5 * 60 * 1000); // 5분마다 갱신
+    setTimeout(fetchNavIndices, 30 * 1000); // 30초마다 갱신 (실시간)
 }
 // 페이지 로드 후 1초 뒤 첫 조회
 if (typeof window !== 'undefined') {
