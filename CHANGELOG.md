@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-07 — US 거래량급증 API 오타 + 보유종목 중복매수 방지 + 3차익절 표기
+> `30c8fa2` | `kis_us.py`, `us_scheduler.py`, `dashboard.js`
+
+### 수정 내용
+1. **kis_us.py**: volume-surge API 파라미터 `MIXN` → `MINX` 수정 (철자 뒤바뀜으로 NAS/NYS/AMS 전체 오류)
+2. **us_scheduler.py**: 스크리닝 루프에서 기보유 종목 스킵 추가 (KR과 동일하게 추가 매수 방지)
+3. **dashboard.js**: `exitStageLabel`에 `'third'` → `'3차익절'` 매핑 누락 수정
+
+---
+
 ## 2026-03-06 — US 거래내역 대시보드 매수+매도 통합 표시
 > `bc564a6` | `us_api.py`
 
