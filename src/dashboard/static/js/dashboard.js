@@ -204,15 +204,17 @@ function _buildTickerHTML(indices) {
     const items = indices.map(idx => {
         const up    = idx.change_pct >= 0;
         const arrow = up ? '▲' : '▼';
-        const cls   = up ? 'up' : 'dn';
         const kind  = idx.kind || '';
         // 라벨 색상: KR 지수=cyan, US 지수=amber, KR 개별종목=연보라
         const isPep  = idx.label === '펩트론';
+        const isKR   = kind === 'index_kr' || kind === 'stock_kr';
+        // KR: 상승=빨강(kr-up), 하락=파랑(kr-dn) / US: 상승=초록(up), 하락=빨강(dn)
+        const dirCls = isKR ? (up ? 'kr-up' : 'kr-dn') : (up ? 'up' : 'dn');
         const tiCls  = kind === 'index_kr' ? 'nav-ti nav-ti-kr'
                      : kind === 'index_us' ? 'nav-ti nav-ti-us'
                      : isPep ? 'nav-ti nav-ti-pep'
                      : 'nav-ti nav-ti-stock';
-        const tvCls  = isPep ? `nav-tv nav-tv-pep ${cls}` : `nav-tv ${cls}`;
+        const tvCls  = isPep ? `nav-tv nav-tv-pep ${dirCls}` : `nav-tv ${dirCls}`;
         // 가격 포맷: 한국 종목=원 정수, US 지수/종목=소수점2자리
         const isKRPrice = kind === 'index_kr' || kind === 'stock_kr';
         const price = isKRPrice
