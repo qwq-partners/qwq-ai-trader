@@ -597,12 +597,27 @@ class ExitManager:
         return result
 
     def restore_stages(self, stages: Dict[str, int]):
-        """재시작 시 스테이지 복원 (US 호환)"""
+        """재시작 시 스테이지 복원 (US 호환)
+        
+        주의: 두 파일(exit_stages_us_*.json과 highest_prices.json)에서 독립적으로
+        stage를 복원하므로, 30초 이내 재시작 시 파일 간 시차가 발생할 수 있음.
+        → 현재 stage보다 낮은 값으로 다운그레이드하지 않음 (최고값 우선).
+        """
         stage_order = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
                        ExitStage.THIRD, ExitStage.TRAILING]
         for sym, stage_idx in stages.items():
             if sym in self._states and 0 <= stage_idx < len(stage_order):
-                self._states[sym].current_stage = stage_order[stage_idx]
+                try:
+                    current_idx = stage_order.index(self._states[sym].current_stage)
+                except ValueError:
+                    current_idx = 0
+                # 현재보다 높은 단계만 적용 — 낮은 값으로 다운그레이드 금지
+                if stage_idx > current_idx:
+                    self._states[sym].current_stage = stage_order[stage_idx]
+                    logger.debug(
+                        f"[ExitManager] {sym} restore_stages 업그레이드: "
+                        f"{stage_order[current_idx].value} → {stage_order[stage_idx].value}"
+                    )
 
 
 # 전역 인스턴스
