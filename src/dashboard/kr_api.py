@@ -329,7 +329,11 @@ class KRAPIHandler:
         if event_type not in ("all", "buy", "sell"):
             event_type = "all"
 
-        events = await self.dc.get_trade_events(target_date, event_type)
+        market = request.query.get("market", "all")
+        if market not in ("all", "kr", "KR", "us", "US"):
+            market = "all"
+
+        events = await self.dc.get_trade_events(target_date, event_type, market=market)
         return web.json_response(events)
 
     async def get_daily_settlement(self, request: web.Request) -> web.Response:

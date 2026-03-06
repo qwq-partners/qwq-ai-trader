@@ -23,15 +23,19 @@ function todayStr() {
 // 데이터 로드 (양쪽 API 병렬 호출)
 // ============================================================
 
-async function loadTradeData(dateStr, type) {
+async function loadTradeData(dateStr, type, marketFilter) {
     dateStr = dateStr || todayStr();
     type = type || currentFilter;
+    if (marketFilter === undefined) marketFilter = MarketFilter.get();
     loadingEl.style.display = 'inline';
+
+    // KR 필터 시 market=KR 파라미터 추가
+    const marketParam = (marketFilter === 'kr') ? '&market=KR' : '';
 
     try {
         // 두 API 병렬 호출
         const [events, settlement] = await Promise.all([
-            api(`/api/trade-events?date=${dateStr}&type=${type}`).catch(() => []),
+            api(`/api/trade-events?date=${dateStr}&type=${type}${marketParam}`).catch(() => []),
             api(`/api/daily-settlement?date=${encodeURIComponent(dateStr)}`).catch(() => null),
         ]);
 
@@ -63,7 +67,9 @@ async function loadTradeData(dateStr, type) {
 
 async function updateFilterCounts(dateStr) {
     try {
-        const all = await api(`/api/trade-events?date=${dateStr}&type=all`);
+        const mf = MarketFilter.get();
+        const mp = (mf === 'kr') ? '&market=KR' : '';
+        const all = await api(`/api/trade-events?date=${dateStr}&type=all${mp}`);
         const buys = all.filter(e => e.event_type === 'BUY');
         const sells = all.filter(e => e.event_type === 'SELL');
 
@@ -541,24 +547,23 @@ document.querySelectorAll('.filter-tab').forEach(tab => {
         document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         currentFilter = tab.dataset.type;
-        loadTradeData(dateInput.value, currentFilter);
+        loadTradeData(dateInput.value, currentFilter, MarketFilter.get());
     });
 });
 
 // 날짜 변경
 dateInput.addEventListener('change', () => {
-    loadTradeData(dateInput.value);
+    loadTradeData(dateInput.value, currentFilter, MarketFilter.get());
 });
 
 btnToday.addEventListener('click', () => {
     dateInput.value = todayStr();
-    loadTradeData(todayStr());
+    loadTradeData(todayStr(), currentFilter, MarketFilter.get());
 });
 
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
     dateInput.value = todayStr();
-    loadTradeData(todayStr());
     sse.connect();
 
     // US 날짜 선택 초기화
@@ -580,6 +585,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (filterBar) {
         MarketFilter.render(filterBar, (filter) => {
             applyTradesMarketFilter(filter);
+            // KR 탭: market=KR 필터로 재조회
+            loadTradeData(dateInput.value, currentFilter, filter);
             if (filter !== "kr") {
                 const dateVal = usDateInput?.value || "";
                 loadUSTrades(dateVal);
@@ -588,6 +595,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const initFilter = MarketFilter.get();
     applyTradesMarketFilter(initFilter);
+    loadTradeData(todayStr(), 'all', initFilter);
     if (initFilter !== "kr") {
         const dateVal = usDateInput?.value || "";
         loadUSTrades(dateVal);

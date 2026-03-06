@@ -507,7 +507,7 @@ class DashboardDataCollector:
         return stats
 
     async def get_trade_events(
-        self, target_date: date = None, event_type: str = "all"
+        self, target_date: date = None, event_type: str = "all", market: str = "all"
     ) -> List[Dict[str, Any]]:
         """거래 이벤트 로그 (trade_events 테이블 기반, 폴백: 캐시)"""
         journal = self.bot.trade_journal
@@ -516,7 +516,7 @@ class DashboardDataCollector:
 
         # TradeStorage인 경우 DB 쿼리
         if hasattr(journal, 'get_trade_events'):
-            events = await journal.get_trade_events(target_date, event_type)
+            events = await journal.get_trade_events(target_date, event_type, market=market)
         else:
             # 기존 TradeJournal 폴백: 캐시에서 이벤트 구성
             target_date = target_date or date.today()

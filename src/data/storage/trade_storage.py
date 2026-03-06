@@ -558,11 +558,13 @@ class TradeStorage:
         target_date: date = None,
         event_type: str = "all",
         limit: int = 200,
+        market: str = "all",
     ) -> List[Dict]:
         """
         trade_events 테이블에서 이벤트 로그 조회.
 
         DB 미연결 시 캐시에서 이벤트 구성.
+        market: 'all' | 'KR' | 'US'
         """
         if not self._db_available:
             return self._get_events_from_cache(target_date, event_type)
@@ -588,8 +590,12 @@ class TradeStorage:
             """
             params = [target_date]
 
+            if market and market.upper() in ("KR", "US"):
+                sql += f" AND t.market = ${len(params) + 1}"
+                params.append(market.upper())
+
             if event_type and event_type != "all":
-                sql += " AND te.event_type = $2"
+                sql += f" AND te.event_type = ${len(params) + 1}"
                 params.append(event_type.upper())
 
             sql += " ORDER BY te.event_time DESC LIMIT $" + str(len(params) + 1)
