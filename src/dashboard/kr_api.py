@@ -379,18 +379,23 @@ class KRAPIHandler:
             return web.json_response(_indices_cache["data"])
 
         symbols = [
-            ("^KS11",  "KOSPI"),
-            ("^KQ11",  "KOSDAQ"),
-            ("^GSPC",  "S&P500"),
-            ("^IXIC",  "NASDAQ"),
-            ("^DJI",   "DOW"),
+            # 주요 지수
+            ("^KS11",      "KOSPI",   "index_kr"),
+            ("^KQ11",      "KOSDAQ",  "index_kr"),
+            ("^GSPC",      "S&P500",  "index_us"),
+            ("^IXIC",      "NASDAQ",  "index_us"),
+            ("^DJI",       "DOW",     "index_us"),
+            # 개별 종목
+            ("005930.KS",  "삼성전자",  "stock_kr"),
+            ("000660.KS",  "SK하이닉스", "stock_kr"),
+            ("087010.KS",  "펩트론",   "stock_kr"),
         ]
         results = []
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         try:
             timeout = aiohttp_client.ClientTimeout(total=6)
             async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as session:
-                for sym, label in symbols:
+                for sym, label, kind in symbols:
                     try:
                         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=5d"
                         async with session.get(url) as resp:
@@ -406,7 +411,7 @@ class KRAPIHandler:
                             change     = price - prev
                             change_pct = (change / prev * 100) if prev else 0
                             results.append({
-                                "symbol": sym, "label": label,
+                                "symbol": sym, "label": label, "kind": kind,
                                 "price": round(price, 2),
                                 "change": round(change, 2),
                                 "change_pct": round(change_pct, 2),

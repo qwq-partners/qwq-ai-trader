@@ -202,13 +202,18 @@ function updateUSPieChart(cash, stock) {
 // ============================================================
 function _buildTickerHTML(indices) {
     const items = indices.map(idx => {
-        const up = idx.change_pct >= 0;
+        const up    = idx.change_pct >= 0;
         const arrow = up ? '▲' : '▼';
         const cls   = up ? 'up' : 'dn';
-        const isKR  = ['KOSPI','KOSDAQ'].includes(idx.label);
-        const tiCls = isKR ? 'nav-ti nav-ti-kr' : 'nav-ti nav-ti-us';
-        const price = idx.label === 'KOSPI' || idx.label === 'KOSDAQ'
-            ? Math.round(idx.price).toLocaleString()
+        const kind  = idx.kind || '';
+        // 라벨 색상: KR 지수=cyan, US 지수=amber, KR 개별종목=연보라
+        const tiCls = kind === 'index_kr' ? 'nav-ti nav-ti-kr'
+                    : kind === 'index_us' ? 'nav-ti nav-ti-us'
+                    : 'nav-ti nav-ti-stock';
+        // 가격 포맷: 한국 종목=원 정수, US 지수/종목=소수점2자리
+        const isKRPrice = kind === 'index_kr' || kind === 'stock_kr';
+        const price = isKRPrice
+            ? Math.round(idx.price).toLocaleString() + '원'
             : idx.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
         const pctStr = (up ? '+' : '') + idx.change_pct.toFixed(2) + '%';
         return `<span class="${tiCls}">${idx.label}</span>` +
