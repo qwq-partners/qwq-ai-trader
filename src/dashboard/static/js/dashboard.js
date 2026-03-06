@@ -197,6 +197,25 @@ function updateUSPieChart(cash, stock) {
 }
 
 // ============================================================
+// ============================================================
+// 네비 손익 칩 업데이트
+// ============================================================
+function _updateNavStat(id, prefix, pct) {
+    const el = document.getElementById(id);
+    if (!el || pct == null) return;
+    const v = Number(pct);
+    el.textContent = prefix + ' ' + (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    if (v > 0) {
+        el.style.color = 'var(--acc-green)';
+        el.style.background = 'rgba(52,211,153,.12)';
+        el.style.borderColor = 'rgba(52,211,153,.2)';
+    } else if (v < 0) {
+        el.style.color = 'var(--acc-red)';
+        el.style.background = 'rgba(248,113,113,.12)';
+        el.style.borderColor = 'rgba(248,113,113,.2)';
+    }
+}
+
 // 포지션 요약 (마켓 카드 내)
 // ============================================================
 
@@ -915,6 +934,8 @@ function renderUSPortfolio(p) {
         pnlEl.textContent = sign + fmt(Math.abs(pnl));
         pnlEl.style.color = pnl >= 0 ? "var(--acc-green)" : "var(--acc-red)";
     }
+    // 네비 US 손익 칩 업데이트
+    if (p.daily_pnl_pct != null) _updateNavStat('nav-us-stat', 'US', p.daily_pnl_pct);
 
     // Cash bar
     updateUSPieChart(cash, stock);
@@ -1096,6 +1117,8 @@ function updatePortfolioCard() {
     _renderKRBreakdown(kr, breakdownEl);
     updatePieChart(kr.cash || 0, kr.total_position_value || 0);
     _updateCardFilterLabel();
+    // 네비 KR 손익 칩 업데이트
+    _updateNavStat('nav-kr-stat', 'KR', kr.daily_pnl_pct);
 }
 
 /** KR 실현/미실현 분리 표시 (DOM API) */
