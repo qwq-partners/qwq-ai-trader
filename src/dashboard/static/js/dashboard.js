@@ -171,6 +171,7 @@ function exitStageLabel(exitState) {
         'none': '<span class="badge badge-blue">진입</span>',
         'first': '<span class="badge badge-green">1차익절</span>',
         'second': '<span class="badge badge-green">2차익절</span>',
+        'third': '<span class="badge badge-green">3차익절</span>',
         'trailing': '<span class="badge badge-yellow">트레일링</span>',
     };
     return map[exitState.stage] || exitState.stage;
@@ -205,21 +206,20 @@ function _buildTickerHTML(indices) {
         const arrow = up ? '▲' : '▼';
         const cls   = up ? 'up' : 'dn';
         const kind  = idx.kind || '';
-        // 라벨 색상: KR 지수=cyan, US 지수=amber, KR 개별종목=금색(강조)
-        const isStock = kind === 'stock_kr';
-        const tiCls = kind === 'index_kr' ? 'nav-ti nav-ti-kr'
-                    : kind === 'index_us' ? 'nav-ti nav-ti-us'
-                    : 'nav-ti nav-ti-stock';
-        const tvCls = isStock ? `nav-tv nav-tv-hi ${cls}` : `nav-tv ${cls}`;
+        // 라벨 색상: KR 지수=cyan, US 지수=amber, KR 개별종목=연보라
+        const isPep  = idx.label === '펩트론';
+        const tiCls  = kind === 'index_kr' ? 'nav-ti nav-ti-kr'
+                     : kind === 'index_us' ? 'nav-ti nav-ti-us'
+                     : isPep ? 'nav-ti nav-ti-pep'
+                     : 'nav-ti nav-ti-stock';
+        const tvCls  = isPep ? `nav-tv nav-tv-pep ${cls}` : `nav-tv ${cls}`;
         // 가격 포맷: 한국 종목=원 정수, US 지수/종목=소수점2자리
-        const isKRPrice = kind === 'index_kr' || isStock;
+        const isKRPrice = kind === 'index_kr' || kind === 'stock_kr';
         const price = isKRPrice
             ? Math.round(idx.price).toLocaleString() + '원'
             : idx.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
         const pctStr = (up ? '+' : '') + idx.change_pct.toFixed(2) + '%';
-        // 개별종목 앞에 ◆ 마커
-        const label = isStock ? `◆ ${idx.label}` : idx.label;
-        return `<span class="${tiCls}">${label}</span>` +
+        return `<span class="${tiCls}">${idx.label}</span>` +
                `<span class="${tvCls}">${arrow} ${price} ${pctStr}</span>` +
                `<span class="nav-ts">·</span>`;
     }).join('');
