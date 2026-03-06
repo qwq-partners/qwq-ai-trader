@@ -730,16 +730,64 @@ class KRScheduler:
                                 f"[체결] {fill.symbol} {fill.side.value} "
                                 f"{fill.quantity}주 @ {fill.price:,.0f}원"
                             )
+
+                            # ── SELL 전처리: 포지션 스냅샷 + exit reason 캡처 ──
+                            _sell_pos_snap = None
+                            _exit_reason_snap = ""
+                            if fill.side == OrderSide.SELL:
+                                _sell_pos_snap = bot.engine.portfolio.positions.get(fill.symbol)
+                                _exit_reason_snap = bot._exit_reasons.get(fill.symbol, "")
+
                             event = FillEvent.from_fill(fill, source="kis_broker")
                             await bot.engine.emit(event)
 
-                            # 매도 체결 시 _exit_pending 즉시 해제
+                            # 매도 체결 시 _exit_pending 즉시 해제 + trade journal 기록
                             if fill.side == OrderSide.SELL:
                                 bot._exit_pending_symbols.discard(fill.symbol)
                                 bot._exit_pending_timestamps.pop(fill.symbol, None)
                                 bot._exit_reasons.pop(fill.symbol, None)
 
-                            # 매수 체결 시 ExitManager 등록 + WS 우선 구독
+                                # trade journal SELL 기록
+                                if bot.trade_journal and _sell_pos_snap:
+                                    try:
+                                        # trade_id: position.trade_id 또는 journal open trades 탐색
+                                        _tid = getattr(_sell_pos_snap, 'trade_id', None)
+                                        if not _tid:
+                                            _open = bot.trade_journal.get_open_trades()
+                                            _match = [t for t in _open if t.symbol == fill.symbol]
+                                            if _match:
+                                                _tid = _match[-1].id
+                                        if _tid:
+                                            # exit_type 분류
+                                            _r = _exit_reason_snap
+                                            if "손절" in _r or "stop" in _r.lower():
+                                                _etype = "stop_loss"
+                                            elif "트레일링" in _r or "trailing" in _r.lower():
+                                                _etype = "trailing"
+                                            elif "2차" in _r:
+                                                _etype = "second_take_profit"
+                                            elif "3차" in _r:
+                                                _etype = "third_take_profit"
+                                            elif "익절" in _r or "take_profit" in _r.lower():
+                                                _etype = "take_profit"
+                                            else:
+                                                _etype = "manual"
+                                            bot.trade_journal.record_exit(
+                                                trade_id=_tid,
+                                                exit_price=float(fill.price),
+                                                exit_quantity=fill.quantity,
+                                                exit_reason=_r or "fill_detected",
+                                                exit_type=_etype,
+                                                exit_time=datetime.now(),
+                                                avg_entry_price=float(_sell_pos_snap.avg_price),
+                                            )
+                                            logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
+                                        else:
+                                            logger.warning(f"[체결] {fill.symbol} SELL journal 스킵: trade_id 없음")
+                                    except Exception as _je:
+                                        logger.warning(f"[체결] {fill.symbol} SELL journal 기록 실패: {_je}")
+
+                            # 매수 체결 시 ExitManager 등록 + WS 우선 구독 + trade journal 기록
                             if fill.side == OrderSide.BUY:
                                 # engine.emit()은 큐에만 넣고 리턴 → FillEvent 처리 전에
                                 # portfolio.positions에 포지션이 없을 수 있음.
@@ -772,6 +820,27 @@ class KRScheduler:
                                         f"[체결] {fill.symbol} ExitManager 등록 스킵 "
                                         f"(pos={'없음' if not pos else 'OK'}, exit_manager={'없음' if not bot.exit_manager else 'OK'})"
                                     )
+
+                                # trade journal BUY 기록 (trade_id 미설정 시에만)
+                                if pos and bot.trade_journal and not getattr(pos, 'trade_id', None):
+                                    try:
+                                        from datetime import datetime as _dt
+                                        _tid = f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
+                                        _rec = bot.trade_journal.record_entry(
+                                            trade_id=_tid,
+                                            symbol=fill.symbol,
+                                            name=getattr(pos, 'name', fill.symbol),
+                                            entry_price=float(fill.price),
+                                            entry_quantity=fill.quantity,
+                                            entry_reason=getattr(pos, 'entry_reason', 'buy_signal') or 'buy_signal',
+                                            entry_strategy=str(pos.strategy or 'unknown'),
+                                            signal_score=0.0,
+                                            market="KR",
+                                        )
+                                        pos.trade_id = _rec.id
+                                        logger.info(f"[체결] {fill.symbol} BUY journal 기록 완료 (id={_rec.id})")
+                                    except Exception as _je:
+                                        logger.warning(f"[체결] {fill.symbol} BUY journal 기록 실패: {_je}")
 
                                 # WS 보유 종목 우선 구독 갱신
                                 if bot.ws_feed:
