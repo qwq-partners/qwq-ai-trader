@@ -239,8 +239,15 @@ class SSEManager:
 
         elif event_type == "us_positions":
             positions = []
+            exit_mgr = getattr(engine, "exit_manager", None)
             for symbol, pos in engine.portfolio.positions.items():
                 entry_time = getattr(pos, "entry_time", None)
+                # ExitManager._states에서 stage 조회 (pos.stage 속성 없음)
+                stage = ""
+                if exit_mgr and hasattr(exit_mgr, "_states"):
+                    state = exit_mgr._states.get(symbol)
+                    if state:
+                        stage = state.current_stage.value
                 positions.append({
                     "symbol": symbol,
                     "name": getattr(pos, "name", ""),
@@ -250,7 +257,7 @@ class SSEManager:
                     "pnl": float(pos.unrealized_pnl),
                     "pnl_pct": round(pos.unrealized_pnl_pct, 2),
                     "strategy": pos.strategy or "",
-                    "stage": getattr(pos, "stage", ""),
+                    "stage": stage,
                     "market_value": float(pos.market_value),
                     "entry_time": entry_time.isoformat() if entry_time else None,
                 })
