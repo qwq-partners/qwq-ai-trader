@@ -373,53 +373,123 @@ class KRAPIHandler:
         })
 
     async def get_market_indices(self, request: web.Request) -> web.Response:
-        """KOSPI·KOSDAQ·S&P500·NASDAQ·DOW 지수 (5분 캐시, Yahoo Finance)"""
+        """KOSPI·KOSDAQ·S&P500·NASDAQ·DOW 지수 + KR 개별종목 (5분 캐시)
+        - 지수: Yahoo Finance
+        - KR 개별종목: KIS API 실시간 (프리/넥스트장 포함), 실패 시 Yahoo 폴백
+        """
         global _indices_cache
         if _indices_cache["data"] and (time.time() - _indices_cache["ts"]) < 300:
             return web.json_response(_indices_cache["data"])
 
-        symbols = [
-            # 주요 지수
-            ("^KS11",      "KOSPI",   "index_kr"),
-            ("^KQ11",      "KOSDAQ",  "index_kr"),
-            ("^GSPC",      "S&P500",  "index_us"),
-            ("^IXIC",      "NASDAQ",  "index_us"),
-            ("^DJI",       "DOW",     "index_us"),
-            # 개별 종목
-            ("005930.KS",  "삼성전자",  "stock_kr"),
-            ("000660.KS",  "SK하이닉스", "stock_kr"),
-            ("087010.KS",  "펩트론",   "stock_kr"),
+        from src.utils.session import KRSession
+        from src.core.types import MarketSession
+
+        # 현재 KR 세션 판단
+        kr_session = KRSession().get_session()
+        is_next = kr_session == MarketSession.NEXT
+
+        index_symbols = [
+            ("^KS11",  "KOSPI",  "index_kr"),
+            ("^KQ11",  "KOSDAQ", "index_kr"),
+            ("^GSPC",  "S&P500", "index_us"),
+            ("^IXIC",  "NASDAQ", "index_us"),
+            ("^DJI",   "DOW",    "index_us"),
         ]
+        # 순서: 펩트론, SK하이닉스, 삼성전자
+        kr_stocks = [
+            ("087010", "펩트론",    "stock_kr"),
+            ("000660", "SK하이닉스", "stock_kr"),
+            ("005930", "삼성전자",  "stock_kr"),
+        ]
+
         results = []
+
+        # ── 1. 지수: Yahoo Finance ─────────────────────────────
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         try:
             timeout = aiohttp_client.ClientTimeout(total=6)
-            async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as session:
-                for sym, label, kind in symbols:
+            async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as sess:
+                for sym, label, kind in index_symbols:
                     try:
                         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=5d"
-                        async with session.get(url) as resp:
+                        async with sess.get(url) as resp:
                             if resp.status != 200:
                                 continue
                             js = await resp.json(content_type=None)
-                            meta   = js["chart"]["result"][0]["meta"]
-                            price  = meta.get("regularMarketPrice") or 0
-                            # 전일 종가: close 배열의 끝에서 두 번째 값 사용 (chartPreviousClose는 날짜 범위에 따라 부정확)
+                            meta = js["chart"]["result"][0]["meta"]
+                            price = meta.get("regularMarketPrice") or 0
                             raw_closes = js["chart"]["result"][0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
                             closes = [c for c in raw_closes if c is not None]
-                            prev   = closes[-2] if len(closes) >= 2 else (closes[-1] if closes else price)
-                            change     = price - prev
-                            change_pct = (change / prev * 100) if prev else 0
+                            prev = closes[-2] if len(closes) >= 2 else (closes[-1] if closes else price)
+                            chg = price - prev
+                            chg_pct = (chg / prev * 100) if prev else 0
                             results.append({
                                 "symbol": sym, "label": label, "kind": kind,
                                 "price": round(price, 2),
-                                "change": round(change, 2),
-                                "change_pct": round(change_pct, 2),
+                                "change": round(chg, 2),
+                                "change_pct": round(chg_pct, 2),
                             })
                     except Exception as e:
                         logger.debug(f"[지수] {sym} 오류: {e}")
         except Exception as e:
             logger.debug(f"[지수] 조회 오류: {e}")
+
+        # ── 2. KR 개별종목: KIS API ──────────────────────────────
+        broker = getattr(getattr(self.dc, 'bot', None), 'broker', None)
+        for sym, label, kind in kr_stocks:
+            item = None
+            if broker:
+                try:
+                    q = await broker.get_quote(sym)
+                    if q and q.get("price", 0) > 0:
+                        # 넥스트장(시간외단일가) / 일반
+                        if is_next and q.get("ovtm_price", 0) > 0:
+                            price    = q["ovtm_price"]
+                            chg_pct  = q.get("ovtm_change_pct", 0)
+                            prev     = q.get("prev_close", price)
+                            chg      = price - prev
+                        else:
+                            price   = q["price"]
+                            chg_pct = q.get("change_pct", 0)
+                            chg     = q.get("change", 0)
+                        item = {
+                            "symbol": sym, "label": label, "kind": kind,
+                            "price": round(price),
+                            "change": round(chg),
+                            "change_pct": round(chg_pct, 2),
+                            "source": "kis",
+                        }
+                except Exception as e:
+                    logger.debug(f"[KIS 시세] {sym} 오류: {e}")
+
+            # KIS 실패 → Yahoo Finance 폴백
+            if not item:
+                try:
+                    yf_sym = sym + ".KS"
+                    headers2 = {"User-Agent": "Mozilla/5.0"}
+                    timeout2 = aiohttp_client.ClientTimeout(total=5)
+                    async with aiohttp_client.ClientSession(headers=headers2, timeout=timeout2) as sess2:
+                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_sym}?interval=1d&range=5d"
+                        async with sess2.get(url) as resp:
+                            if resp.status == 200:
+                                js = await resp.json(content_type=None)
+                                meta = js["chart"]["result"][0]["meta"]
+                                price = meta.get("regularMarketPrice") or 0
+                                raw_closes = js["chart"]["result"][0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                                closes = [c for c in raw_closes if c is not None]
+                                prev = closes[-2] if len(closes) >= 2 else price
+                                chg = price - prev
+                                chg_pct = (chg / prev * 100) if prev else 0
+                                item = {
+                                    "symbol": sym, "label": label, "kind": kind,
+                                    "price": round(price), "change": round(chg),
+                                    "change_pct": round(chg_pct, 2), "source": "yahoo",
+                                }
+                except Exception as e:
+                    logger.debug(f"[Yahoo 폴백] {sym} 오류: {e}")
+
+            if item:
+                results.append(item)
 
         if results:
             _indices_cache["data"] = results
