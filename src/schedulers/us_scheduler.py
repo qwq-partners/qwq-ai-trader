@@ -596,6 +596,10 @@ class USScheduler:
             if not eng.running:
                 break
 
+            # 기보유 종목 스킵 (추가 매수 방지)
+            if symbol in eng.portfolio.positions:
+                continue
+
             # 쿨다운 체크
             if self._is_in_cooldown(symbol):
                 continue

@@ -1027,9 +1027,9 @@ class KISUSBroker:
             return []
 
         url = f"{self.config.base_url}/uapi/overseas-stock/v1/ranking/volume-surge"
-        # minutes_ago → MIXN 변환
-        mixn_map = {1: "0", 2: "1", 3: "2", 5: "3", 10: "4", 15: "5", 20: "6"}
-        mixn = mixn_map.get(minutes_ago, "3")  # 기본 5분전
+        # minutes_ago → MINX 변환
+        minx_map = {1: "0", 2: "1", 3: "2", 5: "3", 10: "4", 15: "5", 20: "6"}
+        minx = minx_map.get(minutes_ago, "3")  # 기본 5분전
 
         # 거래소 코드 변환 (시세 조회용)
         excd = self._EXCD_QUOTE_MAP.get(exchange, exchange)
@@ -1037,7 +1037,7 @@ class KISUSBroker:
             "KEYB":     "",
             "AUTH":     "",
             "EXCD":     excd,
-            "MIXN":     mixn,
+            "MINX":     minx,
             "VOL_RANG": str(min_volume),
         }
         try:
