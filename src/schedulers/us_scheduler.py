@@ -203,6 +203,90 @@ class USScheduler:
         except Exception as e:
             logger.debug(f"[US 동기화] 상태 캐시 저장 실패: {e}")
 
+    async def _reconcile_ghost_us_trades(self, kis_symbols: set):
+        """봇 재시작 시 portfolio에 없고 KIS에도 없는 미결 US 거래 자동 청산 기록.
+
+        원인: 포지션이 KIS에서 매도됐지만 재시작으로 portfolio가 초기화돼
+        sync_closed 루프가 거치지 않는 경우.
+        """
+        eng = self.engine
+        ts = getattr(eng, 'trade_storage', None)
+        if not ts or not ts._db_available or not ts.pool:
+            return
+        try:
+            today = datetime.now().date()
+            rows = await ts.pool.fetch(
+                """SELECT id, symbol, name, avg_price as entry_price, entry_quantity,
+                          entry_strategy
+                   FROM trades
+                   WHERE market='US' AND exit_time IS NULL
+                     AND entry_time::date >= (CURRENT_DATE - INTERVAL '7 days')""",
+            )
+            if not rows:
+                return
+
+            portfolio_symbols = set(eng.portfolio.positions.keys())
+            pending_symbols   = set(eng._pending_symbols)
+
+            for row in rows:
+                sym = row['symbol']
+                # KIS에 있거나, portfolio에 있거나, pending이면 건너뜀
+                if sym in kis_symbols or sym in portfolio_symbols or sym in pending_symbols:
+                    continue
+
+                trade_id = row['id']
+                entry_price = float(row['entry_price'] or 0)
+
+                # KIS 현재가 조회 시도 (없으면 entry_price 사용)
+                exit_price = entry_price
+                try:
+                    q = await eng.broker.get_quote(sym)
+                    if q and q.get("price", 0) > 0:
+                        exit_price = float(q["price"])
+                except Exception:
+                    pass
+
+                qty = row['entry_quantity'] or 1
+                result = ts.record_exit(
+                    trade_id=trade_id,
+                    exit_price=exit_price,
+                    exit_quantity=qty,
+                    exit_reason="sync_reconcile (재시작 복구)",
+                    exit_type="sync_reconcile",
+                    exit_time=datetime.now(),
+                    avg_entry_price=entry_price,
+                )
+                if result is None:
+                    # journal 캐시 없는 경우 DB 직접 기록
+                    from decimal import Decimal as _D
+                    pnl = round((exit_price - entry_price) * qty, 2)
+                    pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                    ts._enqueue(
+                        """UPDATE trades SET exit_time=$1, exit_price=$2, exit_quantity=$3,
+                           exit_reason=$4, exit_type=$5, pnl=$6, pnl_pct=$7, updated_at=$8
+                           WHERE id=$9""",
+                        (datetime.now(), exit_price, qty,
+                         "sync_reconcile (재시작 복구)", "sync_reconcile",
+                         round(pnl, 2), round(pnl_pct, 2), datetime.now(), trade_id),
+                    )
+                    ts._enqueue(
+                        """INSERT INTO trade_events
+                           (trade_id, symbol, name, event_type, event_time, price, quantity,
+                            exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score, status)
+                           VALUES ($1,$2,$3,'SELL',$4,$5,$6,'sync_reconcile',
+                                   'sync_reconcile (재시작 복구)',$7,$8,$9,0,'sync_reconcile')
+                           ON CONFLICT DO NOTHING""",
+                        (trade_id, sym, row['name'] or sym,
+                         datetime.now(), exit_price, qty,
+                         round(pnl, 2), round(pnl_pct, 2), row['entry_strategy'] or ''),
+                    )
+                logger.info(
+                    f"[US Reconcile] {sym} ghost 거래 청산 기록: "
+                    f"trade={trade_id} exit=${exit_price:.2f}"
+                )
+        except Exception as e:
+            logger.warning(f"[US Reconcile] ghost 거래 reconcile 오류: {e}")
+
     # ============================================================
     # 헬퍼: 히스토리/ATR/거래소
     # ============================================================
@@ -1116,7 +1200,13 @@ class USScheduler:
 
         # 포지션
         kis_positions = balance.get("positions", [])
-        kis_symbols = set()
+        kis_symbols = {kp["symbol"] for kp in kis_positions}
+
+        # ── DB 미결 US 거래 reconcile (봇 재시작 후 portfolio 공백 보완) ──
+        # KIS에 없고 portfolio에도 없고 pending도 아닌 open trade → sync_reconcile 청산
+        if not getattr(self, '_ghost_reconcile_done', False):
+            self._ghost_reconcile_done = True
+            await self._reconcile_ghost_us_trades(kis_symbols)
 
         for kp in kis_positions:
             symbol = kp["symbol"]
