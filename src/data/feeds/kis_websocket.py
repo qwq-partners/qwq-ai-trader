@@ -617,8 +617,14 @@ class KISWebSocketFeed:
     # ============================================================
 
     def _is_market_active(self) -> bool:
-        """KR 시장 활성 시간 여부 (프리장~넥스트장: 08:00~20:00)"""
+        """KR 시장 활성 시간 여부 (프리장~정규장: 08:00~15:20)
+        
+        넥스트장(15:40~20:00)은 넥스트레이드 별개 거래소로 KIS WS 미지원.
+        REST 폴링(ovtm_untp_prpr)으로 커버.
+        """
         session = self._kr_session.get_session()
+        if session == MarketSession.NEXT:
+            return False  # 넥스트장: WS 비활성, REST 폴링 전담
         return session != MarketSession.CLOSED
 
     async def run(self):

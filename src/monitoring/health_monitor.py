@@ -134,6 +134,11 @@ class HealthMonitor:
         if not ws or not getattr(ws, '_running', False):
             return CheckResult("ws_feed", "critical", True, "WS 비활성")
 
+        # 넥스트장(15:40~20:00): KIS WS 미지원, REST 폴링 전담 → 알람 억제
+        from src.utils.session import KRSession, MarketSession
+        if KRSession().get_session() == MarketSession.NEXT:
+            return CheckResult("ws_feed", "critical", True, "넥스트장 REST 폴링 전담")
+
         last_msg = getattr(ws, '_last_message_time', None)
         if last_msg:
             gap = (datetime.now() - last_msg).total_seconds()
