@@ -204,8 +204,8 @@ function updateKRPositionsSummary(positions) {
     const el = document.getElementById('kr-pos-summary-list');
     if (!el) return;
     el.textContent = '';
-    // 수익률 낮은 순 정렬 (손실 → 수익)
-    const sorted = [...(positions || [])].sort((a, b) => (a.unrealized_pnl_pct ?? 0) - (b.unrealized_pnl_pct ?? 0));
+    // 수익률 높은 순 정렬 (수익 → 손실)
+    const sorted = [...(positions || [])].sort((a, b) => (b.unrealized_pnl_pct ?? 0) - (a.unrealized_pnl_pct ?? 0));
     const top5 = sorted.slice(0, 5);
     // 항상 5행 렌더 (포지션 없는 슬롯은 공행으로 고정 높이 유지)
     for (let i = 0; i < 5; i++) {
@@ -237,8 +237,8 @@ function updateUSPositionsSummary(positions) {
     const el = document.getElementById('us-pos-summary-list');
     if (!el) return;
     el.textContent = '';
-    // 수익률 낮은 순 정렬 (손실 → 수익)
-    const sorted = [...(positions || [])].sort((a, b) => (a.pnl_pct ?? 0) - (b.pnl_pct ?? 0));
+    // 수익률 높은 순 정렬 (수익 → 손실)
+    const sorted = [...(positions || [])].sort((a, b) => (b.pnl_pct ?? 0) - (a.pnl_pct ?? 0));
     const top5 = sorted.slice(0, 5);
     // 항상 5행 렌더 (포지션 없는 슬롯은 공행으로 고정 높이 유지)
     for (let i = 0; i < 5; i++) {
@@ -922,7 +922,10 @@ function renderUSPortfolio(p) {
 
 function renderUSPositions(positions) {
     const tbody  = document.getElementById("us-positions-body");
-    updateUSPositionsSummary(positions);
+    // 수익률 높은 순 정렬
+    const sortedPositions = [...(positions || [])].sort((a, b) => (b.pnl_pct ?? 0) - (a.pnl_pct ?? 0));
+    updateUSPositionsSummary(sortedPositions);
+    positions = sortedPositions;
     if (!tbody) return;
     if (!positions || positions.length === 0) {
         // Note: innerHTML used with static trusted content only (no user input)
