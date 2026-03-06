@@ -197,52 +197,8 @@ function updateUSPieChart(cash, stock) {
 }
 
 // ============================================================
-// ============================================================
 // 네비 롤링 지수 전광판
 // ============================================================
-/** 실제 지수 데이터로 스파크라인 렌더링 */
-function _renderNavSparkline(indices) {
-    // KOSPI 우선, 없으면 S&P500
-    const feat = indices.find(i => i.label === 'KOSPI' && i.sparkline)
-               || indices.find(i => i.label === 'S&P500' && i.sparkline);
-    if (!feat) return;
-
-    const W = 64, H = 20, PAD = 2;
-    const prices = feat.sparkline;
-    const min = Math.min(...prices), max = Math.max(...prices);
-    const rng = max - min || 1;
-    const pts = prices.map((p, i) => {
-        const x = (i / (prices.length - 1)) * W;
-        const y = H - PAD - ((p - min) / rng) * (H - PAD * 2);
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-    });
-
-    const up = feat.change_pct >= 0;
-    const color = up ? '#34d399' : '#f87171';
-
-    const line = document.getElementById('nav-spark-line');
-    const fill = document.getElementById('nav-spark-fill');
-    const s1   = document.getElementById('nsg-s1');
-    const s2   = document.getElementById('nsg-s2');
-    const lbl  = document.getElementById('nav-spark-lbl');
-    const pct  = document.getElementById('nav-spark-pct');
-
-    if (line) { line.setAttribute('points', pts.join(' ')); line.setAttribute('stroke', color); }
-    if (fill) {
-        // 폴리곤: 라인 + 하단 닫기 (fill area)
-        const fillPts = pts.join(' ') + ` ${W},${H} 0,${H}`;
-        fill.setAttribute('points', fillPts);
-    }
-    if (s1) { s1.setAttribute('stop-color', color); }
-    if (s2) { s2.setAttribute('stop-color', color); }
-    if (lbl) lbl.textContent = feat.label;
-    if (pct) {
-        const v = feat.change_pct;
-        pct.textContent = (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-        pct.className = 'nav-spark-pct ' + (up ? 'up' : 'dn');
-    }
-}
-
 function _buildTickerHTML(indices) {
     const items = indices.map(idx => {
         const up    = idx.change_pct >= 0;
@@ -270,8 +226,6 @@ async function fetchNavIndices() {
     try {
         const data = await fetch('/api/market/indices').then(r => r.json());
         if (data && data.length > 0) {
-            // 실제 스파크라인 차트 렌더링
-            _renderNavSparkline(data);
             // 롤링 티커 업데이트
             const inner = document.getElementById('nav-ticker-inner');
             if (inner) {
