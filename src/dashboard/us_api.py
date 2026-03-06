@@ -37,6 +37,7 @@ def setup_us_api_routes(app: web.Application, engine):
     app.router.add_get("/api/us/risk", handler.handle_risk)
     app.router.add_get("/api/us/statistics", handler.handle_statistics)
     app.router.add_get("/api/us/trade-events", handler.handle_trade_events)
+    app.router.add_get("/api/us/equity-history", handler.handle_equity_history)
 
 
 class USAPIHandler:
@@ -399,3 +400,163 @@ class USAPIHandler:
                 "flags": r.flags if r.flags is not None else [],
             })
         return web.json_response(items)
+
+    async def handle_equity_history(self, request: web.Request) -> web.Response:
+        """US 일별 자산 히스토리 (KR equity-history와 동일한 포맷)"""
+        import asyncpg
+        from decimal import Decimal
+
+        eng = self.engine
+        ts = getattr(eng, 'trade_storage', None)
+        pool = getattr(ts, 'pool', None) if ts else None
+
+        # ── 날짜 파라미터 ──
+        today_str = date_type.today().isoformat()
+        date_from = request.rel_url.query.get('from', None)
+        date_to   = request.rel_url.query.get('to', today_str)
+        days_param = request.rel_url.query.get('days', None)
+        if days_param and not date_from:
+            try:
+                from datetime import timedelta
+                ndays = min(int(days_param), 9999)
+                date_from = (date_type.today() - timedelta(days=ndays)).isoformat()
+            except ValueError:
+                date_from = '2020-01-01'
+        if not date_from:
+            date_from = '2020-01-01'
+
+        snapshots = []
+        if pool:
+            try:
+                # 날짜별 집계: 매수/매도 건수, 당일 실현손익
+                rows = await pool.fetch("""
+                    SELECT
+                        te.event_time::date AS day,
+                        COUNT(CASE WHEN te.event_type='BUY'  THEN 1 END) AS buys,
+                        COUNT(CASE WHEN te.event_type='SELL' THEN 1 END) AS sells,
+                        COALESCE(SUM(CASE WHEN te.event_type='SELL' THEN te.pnl ELSE 0 END), 0) AS daily_pnl,
+                        COALESCE(SUM(CASE WHEN te.event_type='SELL' AND te.pnl > 0 THEN 1 END), 0) AS wins
+                    FROM trade_events te
+                    JOIN trades t ON te.trade_id = t.id
+                    WHERE t.market = 'US'
+                      AND te.event_time::date BETWEEN $1 AND $2
+                    GROUP BY te.event_time::date
+                    ORDER BY day
+                """, date_type.fromisoformat(date_from), date_type.fromisoformat(date_to))
+
+                # 미결 포지션 수: 특정 날짜에 buy 있고 exit_time 없는 것
+                all_trades = await pool.fetch("""
+                    SELECT symbol, name, entry_time::date AS entry_day,
+                           exit_time::date AS exit_day, entry_price, entry_quantity,
+                           exit_price, exit_quantity, pnl
+                    FROM trades
+                    WHERE market = 'US'
+                      AND entry_time::date BETWEEN $1 AND $2
+                    ORDER BY entry_time
+                """, date_type.fromisoformat(date_from), date_type.fromisoformat(date_to))
+
+                # 초기자산: engine.portfolio.initial_capital (USD)
+                initial_capital = float(getattr(eng.portfolio, 'initial_capital', None) or 0)
+                if initial_capital <= 0:
+                    # 실제 current total이 최선의 추정치
+                    initial_capital = float(
+                        (eng.portfolio.cash or 0) +
+                        sum(float(p.avg_price) * p.quantity for p in eng.portfolio.positions.values())
+                    )
+
+                # 날짜별 누적 PnL 계산
+                cum_pnl = 0.0
+                prev_equity = initial_capital
+                for row in rows:
+                    day_str = row['day'].isoformat()
+                    dpnl = float(row['daily_pnl'])
+                    sells = int(row['sells'])
+                    wins = int(row['wins'])
+                    cum_pnl += dpnl
+
+                    # 해당 날짜 보유 포지션 수 (당일까지 매수됐고 아직 안 닫힌 것)
+                    pos_count = sum(
+                        1 for t in all_trades
+                        if str(t['entry_day']) <= day_str
+                        and (t['exit_day'] is None or str(t['exit_day']) > day_str)
+                    )
+
+                    # 오늘이면 live portfolio 값 사용
+                    if day_str == today_str:
+                        live_total = float(
+                            eng.portfolio.total_equity
+                            if hasattr(eng.portfolio, 'total_equity') and eng.portfolio.total_equity
+                            else (eng.portfolio.cash or 0) +
+                                 sum(float(p.current_price) * p.quantity for p in eng.portfolio.positions.values())
+                        )
+                        # KR 방식: 오늘 daily_pnl_pct = 어제 대비
+                        day_equity = live_total
+                        dpnl = day_equity - prev_equity
+                    else:
+                        day_equity = prev_equity + dpnl
+
+                    pnl_pct = (dpnl / prev_equity * 100) if prev_equity > 0 else 0
+
+                    # 오늘 포지션 상세: live positions
+                    positions_detail = []
+                    if day_str == today_str:
+                        for sym, p in eng.portfolio.positions.items():
+                            cur = float(p.current_price)
+                            avg = float(p.avg_price)
+                            qty = int(p.quantity)
+                            upnl = (cur - avg) * qty
+                            upnl_pct = (cur - avg) / avg * 100 if avg > 0 else 0
+                            positions_detail.append({
+                                "symbol": sym,
+                                "name": sym,
+                                "quantity": qty,
+                                "avg_price": round(avg, 4),
+                                "current_price": round(cur, 4),
+                                "market_value": round(cur * qty, 2),
+                                "pnl": round(upnl, 2),
+                                "pnl_pct": round(upnl_pct, 2),
+                            })
+
+                    snapshots.append({
+                        "date": day_str,
+                        "total_equity": round(day_equity, 2),
+                        "daily_pnl": round(dpnl, 2),
+                        "daily_pnl_pct": round(pnl_pct, 2),
+                        "cash": round(float(eng.portfolio.cash or 0), 2) if day_str == today_str else None,
+                        "position_count": len(eng.portfolio.positions) if day_str == today_str else pos_count,
+                        "trades_count": int(row['sells']),
+                        "win_rate": (wins / sells * 100) if sells > 0 else 0.0,
+                        "positions": positions_detail,
+                        "currency": "USD",
+                    })
+                    prev_equity = day_equity
+
+            except Exception as e:
+                logger.warning(f"[US equity-history] DB 조회 실패: {e}")
+
+        # 요약 통계
+        summary: dict = {"oldest_date": snapshots[0]["date"] if snapshots else today_str}
+        if snapshots:
+            first_eq = snapshots[0]["total_equity"]
+            last_eq  = snapshots[-1]["total_equity"]
+            period_return = (last_eq - first_eq) / first_eq * 100 if first_eq > 0 else 0
+            pnls = [s["daily_pnl"] for s in snapshots]
+            avg_pnl = sum(pnls) / len(pnls) if pnls else 0
+            # 최대 낙폭
+            peak = snapshots[0]["total_equity"]
+            max_dd = 0.0
+            for s in snapshots:
+                if s["total_equity"] > peak:
+                    peak = s["total_equity"]
+                dd = (peak - s["total_equity"]) / peak * 100 if peak > 0 else 0
+                if dd > max_dd:
+                    max_dd = dd
+            summary.update({
+                "period_return_pct": round(period_return, 2),
+                "max_drawdown_pct":  round(-max_dd, 2),
+                "avg_daily_pnl":     round(avg_pnl, 2),
+                "oldest_date":       snapshots[0]["date"],
+                "currency": "USD",
+            })
+
+        return web.json_response({"snapshots": snapshots, "summary": summary})

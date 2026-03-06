@@ -9,386 +9,318 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/responsive.css?v=3">
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: { extend: { colors: { dark: { 800: '#1e1e2e', 900: '#11111b', 700: '#313244', 600: '#45475a' }, profit: '#34d399', loss: '#f87171' } } }
-        }
-    </script>
+    <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{dark:{800:'#1e1e2e',900:'#11111b',700:'#313244',600:'#45475a'},profit:'#34d399',loss:'#f87171'}}}}</script>
     <style>
         :root {
-            --bg-base: #0b0b14;
-            --bg-surface: #12121e;
-            --bg-elevated: #1a1a2e;
-            --border-subtle: rgba(99, 102, 241, 0.08);
-            --border-accent: rgba(99, 102, 241, 0.2);
-            --text-primary: #e2e8f0;
-            --text-secondary: #8892b0;
-            --text-muted: #5a6480;
-            --accent-blue: #6366f1;
-            --accent-cyan: #22d3ee;
-            --accent-green: #34d399;
-            --accent-red: #f87171;
-            --accent-amber: #fbbf24;
-            --accent-purple: #a78bfa;
+            --bg-base:#0b0b14;--bg-surface:#12121e;--bg-elevated:#1a1a2e;
+            --border-subtle:rgba(99,102,241,.08);--border-accent:rgba(99,102,241,.2);
+            --text-primary:#e2e8f0;--text-secondary:#8892b0;--text-muted:#5a6480;
+            --accent-blue:#6366f1;--accent-cyan:#22d3ee;--accent-green:#34d399;
+            --accent-red:#f87171;--accent-amber:#fbbf24;--accent-purple:#a78bfa;
         }
-        * { box-sizing: border-box; }
-        body {
-            background: var(--bg-base);
-            color: var(--text-primary);
-            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-            margin: 0; min-height: 100vh; position: relative;
-        }
-        body::before {
-            content: ''; position: fixed; inset: 0;
-            background: linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
-            background-size: 60px 60px; pointer-events: none; z-index: 0;
-        }
-        body::after {
-            content: ''; position: fixed; top: 0; left: 0; right: 0; height: 280px;
-            background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(99,102,241,0.06), transparent);
-            pointer-events: none; z-index: 0;
-        }
-        body > * { position: relative; z-index: 1; }
-        .mono { font-family: 'JetBrains Mono', 'SF Mono', monospace; font-feature-settings: 'tnum' on, 'lnum' on; }
-        .card {
-            background: var(--bg-surface); border: 1px solid var(--border-subtle);
-            border-radius: 16px; position: relative; overflow: hidden; backdrop-filter: blur(10px);
-        }
-        .card::before {
-            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(99,102,241,0.15), transparent);
-        }
-        .card-header {
-            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em;
-            color: var(--text-muted); padding-bottom: 14px; border-bottom: 1px solid var(--border-subtle);
-            margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
-        }
-        .card-header .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue); }
-        .badge { padding: 3px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; font-family: 'DM Sans', sans-serif; }
-        .badge-green { background: rgba(52,211,153,0.12); color: var(--accent-green); border: 1px solid rgba(52,211,153,0.15); }
-        .badge-red { background: rgba(248,113,113,0.12); color: var(--accent-red); border: 1px solid rgba(248,113,113,0.15); }
-        .badge-yellow { background: rgba(251,191,36,0.12); color: var(--accent-amber); border: 1px solid rgba(251,191,36,0.15); }
-        .badge-blue { background: rgba(99,102,241,0.12); color: var(--accent-blue); border: 1px solid rgba(99,102,241,0.15); }
-        .nav-pill {
-            padding: 7px 16px; border-radius: 10px; font-size: 0.8rem; font-weight: 500;
-            color: var(--text-muted); text-decoration: none; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); border: 1px solid transparent;
-        }
-        .nav-pill:hover { color: var(--text-secondary); background: rgba(99,102,241,0.06); border-color: var(--border-subtle); }
-        .nav-pill.active { color: #fff; background: linear-gradient(135deg, var(--accent-blue), #818cf8); box-shadow: 0 2px 12px rgba(99,102,241,0.3), inset 0 1px 0 rgba(255,255,255,0.1); font-weight: 600; }
-        .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; vertical-align: middle; }
-        .status-dot.green { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); animation: pulse-green 2s infinite; }
-        .status-dot.red { background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
-        .status-dot.yellow { background: var(--accent-amber); box-shadow: 0 0 6px var(--accent-amber); animation: pulse-amber 1.5s infinite; }
-        @keyframes pulse-green { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
-        @keyframes pulse-amber { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
-        .text-profit { color: var(--accent-green); }
-        .text-loss { color: var(--accent-red); }
-        table th { color: var(--text-muted); font-weight: 500; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; padding-bottom: 10px; }
-        table td { font-size: 0.85rem; }
-        table tbody tr { transition: background 0.15s; }
-        table tbody tr:hover { background: rgba(99,102,241,0.04); }
-        ::-webkit-scrollbar { width: 5px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.15); border-radius: 10px; }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-in { animation: fadeUp 0.45s cubic-bezier(0.16,1,0.3,1) both; }
-        .delay-1 { animation-delay: 0.06s; }
-        .delay-2 { animation-delay: 0.12s; }
-        .delay-3 { animation-delay: 0.18s; }
+        *{box-sizing:border-box;}
+        body{background:var(--bg-base);color:var(--text-primary);font-family:'DM Sans',-apple-system,sans-serif;margin:0;min-height:100vh;}
+        body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(99,102,241,.03)1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,.03)1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;}
+        body::after{content:'';position:fixed;top:0;left:0;right:0;height:280px;background:radial-gradient(ellipse 70% 50% at 50% 0%,rgba(99,102,241,.06),transparent);pointer-events:none;z-index:0;}
+        body>*{position:relative;z-index:1;}
+        .mono{font-family:'JetBrains Mono','SF Mono',monospace;font-feature-settings:'tnum' on,'lnum' on;}
+        .card{background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:16px;position:relative;overflow:hidden;backdrop-filter:blur(10px);}
+        .card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(99,102,241,.15),transparent);}
+        .card-header{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.12em;color:var(--text-muted);padding-bottom:14px;border-bottom:1px solid var(--border-subtle);margin-bottom:16px;display:flex;align-items:center;gap:8px;}
+        .card-header .dot{width:6px;height:6px;border-radius:50%;background:var(--accent-blue);box-shadow:0 0 8px var(--accent-blue);}
+        .badge{padding:3px 10px;border-radius:6px;font-size:.7rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
+        .badge-green{background:rgba(52,211,153,.12);color:var(--accent-green);border:1px solid rgba(52,211,153,.15);}
+        .badge-red{background:rgba(248,113,113,.12);color:var(--accent-red);border:1px solid rgba(248,113,113,.15);}
+        .nav-pill{padding:7px 16px;border-radius:10px;font-size:.8rem;font-weight:500;color:var(--text-muted);text-decoration:none;transition:all .2s cubic-bezier(.4,0,.2,1);border:1px solid transparent;}
+        .nav-pill:hover{color:var(--text-secondary);background:rgba(99,102,241,.06);border-color:var(--border-subtle);}
+        .nav-pill.active{color:#fff;background:linear-gradient(135deg,var(--accent-blue),#818cf8);box-shadow:0 2px 12px rgba(99,102,241,.3),inset 0 1px 0 rgba(255,255,255,.1);font-weight:600;}
+        .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;vertical-align:middle;}
+        .status-dot.green{background:var(--accent-green);box-shadow:0 0 8px var(--accent-green);animation:pulse-green 2s infinite;}
+        .status-dot.red{background:var(--accent-red);}
+        .status-dot.yellow{background:var(--accent-amber);animation:pulse-amber 1.5s infinite;}
+        @keyframes pulse-green{0%,100%{opacity:1;}50%{opacity:.5;}}
+        @keyframes pulse-amber{0%,100%{opacity:1;}50%{opacity:.6;}}
+        .text-profit{color:var(--accent-green);}.text-loss{color:var(--accent-red);}
+        table th{color:var(--text-muted);font-weight:500;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;padding-bottom:10px;}
+        table td{font-size:.85rem;}
+        table tbody tr{transition:background .15s;}
+        table tbody tr:hover{background:rgba(99,102,241,.04);}
+        ::-webkit-scrollbar{width:5px;}::-webkit-scrollbar-track{background:transparent;}
+        ::-webkit-scrollbar-thumb{background:rgba(99,102,241,.15);border-radius:10px;}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
+        .animate-in{animation:fadeUp .45s cubic-bezier(.16,1,.3,1) both;}
+        .delay-1{animation-delay:.06s;}.delay-2{animation-delay:.12s;}.delay-3{animation-delay:.18s;}
+        .expand-btn{cursor:pointer;color:var(--text-muted);transition:color .15s;background:none;border:none;font-size:.82rem;padding:2px 6px;font-family:inherit;}
+        .expand-btn:hover{color:var(--accent-blue);}
+        .position-detail-content{background:var(--bg-elevated);border-radius:8px;margin:4px 0 8px;padding:12px 16px;border:1px solid var(--border-subtle);}
+        .date-input{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;color:var(--text-primary);font-family:'JetBrains Mono',monospace;font-size:.78rem;padding:6px 10px;outline:none;transition:border-color .15s;}
+        .date-input:focus{border-color:var(--accent-blue);}
+        .date-input::-webkit-calendar-picker-indicator{filter:invert(.6);cursor:pointer;}
+        .date-range-label{font-size:.72rem;color:var(--text-muted);font-weight:500;text-transform:uppercase;letter-spacing:.06em;}
+        .date-range-btn{padding:6px 14px;border-radius:8px;font-size:.78rem;font-weight:600;color:#fff;cursor:pointer;transition:all .15s;border:none;background:var(--accent-blue);font-family:inherit;}
+        .date-range-btn:hover{background:#818cf8;}
 
-        /* Expand row */
-        .expand-btn {
-            cursor: pointer; color: var(--text-muted); transition: color 0.15s; background: none; border: none;
-            font-size: 0.82rem; padding: 2px 6px; font-family: inherit;
-        }
-        .expand-btn:hover { color: var(--accent-blue); }
-        .position-detail-row td { padding: 0 !important; }
-        .position-detail-content {
-            background: var(--bg-elevated); border-radius: 8px; margin: 4px 0 8px 0; padding: 12px 16px;
-            border: 1px solid var(--border-subtle);
-        }
+        /* ── Market Tabs ── */
+        .mkt-tabs{display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap;}
+        .mkt-tab{display:flex;align-items:center;gap:6px;padding:8px 18px;border-radius:10px;font-size:.82rem;font-weight:600;cursor:pointer;transition:all .2s;border:1px solid var(--border-subtle);color:var(--text-muted);background:var(--bg-elevated);user-select:none;}
+        .mkt-tab:hover{color:var(--text-secondary);border-color:var(--border-accent);}
+        .mkt-tab.active-kr{color:#fff;background:linear-gradient(135deg,rgba(34,211,238,.25),rgba(34,211,238,.1));border-color:rgba(34,211,238,.4);box-shadow:0 2px 10px rgba(34,211,238,.15);}
+        .mkt-tab.active-us{color:#fff;background:linear-gradient(135deg,rgba(245,158,11,.25),rgba(245,158,11,.1));border-color:rgba(245,158,11,.4);box-shadow:0 2px 10px rgba(245,158,11,.15);}
+        .mkt-tab.active-all{color:#fff;background:linear-gradient(135deg,rgba(99,102,241,.35),rgba(99,102,241,.15));border-color:rgba(99,102,241,.5);box-shadow:0 2px 10px rgba(99,102,241,.2);}
 
-        /* Date range inputs */
-        .date-input {
-            background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px;
-            color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
-            padding: 6px 10px; outline: none; transition: border-color 0.15s;
+        /* ── Nav logo ── */
+        .nav-logo-mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(145deg,#6366f1,#a855f7);display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px rgba(99,102,241,.55),0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.18);flex-shrink:0;}
+        .nav-logo-text{display:flex;flex-direction:column;line-height:1.2;gap:1px;}
+        .nav-brand-main{font-weight:800;font-size:.88rem;color:#fff;letter-spacing:-.02em;}
+        .nav-brand-sub{font-size:.58rem;color:rgba(255,255,255,.42);font-weight:500;letter-spacing:.07em;text-transform:uppercase;}
+        @media(max-width:680px){#status-bar{display:none!important;}}
+        @media(max-width:680px){
+            nav>div,.nav-container{flex-wrap:wrap!important;padding-left:12px!important;padding-right:12px!important;padding-top:8px!important;padding-bottom:4px!important;gap:4px!important;}
+            nav>div>div:first-child,.nav-container>div:first-child{order:1;flex:0 0 auto;}
+            .nav-links{order:3!important;flex:0 0 100%!important;width:100%!important;overflow-x:auto!important;flex-wrap:nowrap!important;padding-bottom:4px!important;}
+            #status-bar{order:2!important;margin-left:auto;}
         }
-        .date-input:focus { border-color: var(--accent-blue); }
-        .date-input::-webkit-calendar-picker-indicator { filter: invert(0.6); cursor: pointer; }
-        .date-range-label {
-            font-size: 0.72rem; color: var(--text-muted); font-weight: 500; text-transform: uppercase;
-            letter-spacing: 0.06em;
-        }
-        .date-range-btn {
-            padding: 6px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 600;
-            color: #fff; cursor: pointer; transition: all 0.15s; border: none;
-            background: var(--accent-blue); font-family: inherit;
-        }
-        .date-range-btn:hover { background: #818cf8; }
-    
-        /* ── QWQ Logo ── */
-        .nav-logo-mark {
-            width:34px; height:34px; border-radius:10px;
-            background:linear-gradient(145deg,#6366f1 0%,#a855f7 100%);
-            display:flex; align-items:center; justify-content:center;
-            box-shadow:0 0 20px rgba(99,102,241,.55),0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.18);
-            flex-shrink:0;
-        }
-        .nav-logo-text { display:flex; flex-direction:column; line-height:1.2; gap:1px; }
-        .nav-brand-main { font-weight:800; font-size:.88rem; color:#fff; letter-spacing:-.02em; }
-        .nav-brand-sub  { font-size:.58rem; color:rgba(255,255,255,.42); font-weight:500; letter-spacing:.07em; text-transform:uppercase; }
-        /* Mobile: hide status-bar (연결정보·시간) */
-        @media (max-width:680px) { #status-bar { display:none !important; } }
-                
-        /* ── 모바일 네비 2행 레이아웃 ── */
-        @media (max-width:680px) {
-            /* 로고 + 메뉴를 2행으로 쌓기 */
-            nav > div, nav .nav-container {
-                flex-wrap: wrap !important;
-                padding-left: 12px !important;
-                padding-right: 12px !important;
-                padding-top: 8px !important;
-                padding-bottom: 4px !important;
-                gap: 4px !important;
-            }
-            /* 1행: 로고 + status (전체 너비) */
-            nav > div > div:first-child,
-            nav .nav-container > div:first-child { order: 1; flex: 0 0 auto; }
-            /* 2행: 메뉴 링크 (전체 너비 차지, 스크롤 가능) */
-            .nav-links {
-                order: 3 !important;
-                flex: 0 0 100% !important;
-                width: 100% !important;
-                overflow-x: auto !important;
-                flex-wrap: nowrap !important;
-                padding-bottom: 4px !important;
-            }
-            /* status-bar 오른쪽 정렬 유지 */
-            #status-bar { order: 2 !important; margin-left: auto; }
-        }
-                
-        /* ── 지수 전광판 스트립 ── */
-        .ticker-strip {
-            overflow:hidden;
-            background:rgba(9,9,18,.88);
-            backdrop-filter:blur(10px);
-            border-bottom:1px solid rgba(99,102,241,.1);
-            padding:5px 0;
-        }
-        .ticker-strip-wrap {
-            max-width:1280px; margin:0 auto; overflow:hidden;
-            mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);
-            -webkit-mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);
-        }
-        /* 펩트론 글로우 애니메이션 */
-        @keyframes pepGlow {
-            0%,100% { text-shadow:0 0 6px rgba(251,191,36,.7),0 0 18px rgba(251,191,36,.3); opacity:.9; }
-            50%      { text-shadow:0 0 12px rgba(251,191,36,1),0 0 30px rgba(251,191,36,.7),0 0 55px rgba(251,191,36,.25); opacity:1; }
-        }
-        .nav-ticker-inner {
-            display:inline-flex; align-items:center; gap:0; white-space:nowrap;
-            animation: navTickerRoll 22s linear infinite;
-        }
-        .nav-ticker-inner:hover { animation-play-state:paused; }
-        @keyframes navTickerRoll {
-            0%   { transform: translateX(0); }
-            100% { transform: translateX(-50%); }
-        }
-        .nav-ti { font-size:.58rem; font-weight:700; letter-spacing:.03em; padding:0 3px 0 8px; }
-        .nav-ti-kr { color:rgba(34,211,238,.8); }
-        .nav-ti-us { color:rgba(245,158,11,.8); }
-        .nav-ti-stock { color:rgba(196,181,253,.8); }
-        .nav-ti-pep  { color:rgba(251,191,36,.95); font-weight:900; letter-spacing:.05em; animation:pepGlow 2s ease-in-out infinite; }
-        .nav-tv-pep  { font-family:'JetBrains Mono',monospace; font-weight:900; }
-        .nav-tv { font-size:.58rem; font-family:'JetBrains Mono',monospace; color:var(--text-secondary); }
-        .nav-ts { font-size:.55rem; color:var(--text-muted); padding:0 2px; }
-        .nav-tv.up    { color:var(--acc-green); }
-        .nav-tv.dn    { color:var(--acc-red); }
-        .nav-tv.kr-up { color:#f87171; }
-        .nav-tv.kr-dn { color:#60a5fa; }
-        </style>
+        /* ── Ticker strip ── */
+        .ticker-strip{overflow:hidden;background:rgba(9,9,18,.88);backdrop-filter:blur(10px);border-bottom:1px solid rgba(99,102,241,.1);padding:5px 0;}
+        .ticker-strip-wrap{max-width:1280px;margin:0 auto;overflow:hidden;mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);-webkit-mask-image:linear-gradient(to right,transparent,#000 2%,#000 98%,transparent);}
+        @keyframes pepGlow{0%,100%{text-shadow:0 0 6px rgba(251,191,36,.7),0 0 18px rgba(251,191,36,.3);opacity:.9;}50%{text-shadow:0 0 12px rgba(251,191,36,1),0 0 30px rgba(251,191,36,.7),0 0 55px rgba(251,191,36,.25);opacity:1;}}
+        .nav-ticker-inner{display:inline-flex;align-items:center;gap:0;white-space:nowrap;animation:navTickerRoll 22s linear infinite;}
+        .nav-ticker-inner:hover{animation-play-state:paused;}
+        @keyframes navTickerRoll{0%{transform:translateX(0);}100%{transform:translateX(-50%);}}
+        .nav-ti{font-size:.58rem;font-weight:700;letter-spacing:.03em;padding:0 3px 0 8px;}
+        .nav-ti-kr{color:rgba(34,211,238,.8);}.nav-ti-us{color:rgba(245,158,11,.8);}.nav-ti-stock{color:rgba(196,181,253,.8);}
+        .nav-ti-pep{color:rgba(251,191,36,.95);font-weight:900;letter-spacing:.05em;animation:pepGlow 2s ease-in-out infinite;}
+        .nav-tv-pep{font-family:'JetBrains Mono',monospace;font-weight:900;}
+        .nav-tv{font-size:.58rem;font-family:'JetBrains Mono',monospace;color:var(--text-secondary);}
+        .nav-ts{font-size:.55rem;color:var(--text-muted);padding:0 2px;}
+
+        /* ── Combined dual-axis chart legend ── */
+        .chart-legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle;}
+    </style>
 </head>
 <body>
-    <!-- Navigation -->
-    <nav style="border-bottom: 1px solid var(--border-subtle); background: rgba(11,11,20,0.85); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 50;">
-        <div class="nav-container" style="max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 24px;">
-            
-                <div class="nav-logo" style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
-                    <div class="nav-logo-mark">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-                </div>
-                <div class="nav-logo-text">
-                    <span class="nav-brand-main">QWQ</span>
-                    <span class="nav-brand-sub">AI&nbsp;Trader</span>
-                </div>
-                </div>
-    
-            <div class="nav-links" style="display: flex; gap: 4px; flex: 1;">
-                    <a href="/" class="nav-pill" data-page="index">실시간</a>
-                    <a href="/trades" class="nav-pill" data-page="trades">거래</a>
-                    <a href="/performance" class="nav-pill" data-page="performance">성과</a>
-                    <a href="/equity" class="nav-pill active" data-page="equity">자산</a>
-                    <a href="/themes" class="nav-pill" data-page="themes">테마</a>
-                    <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
-                    <a href="/settings" class="nav-pill" data-page="settings">설정</a>
-                </div>
-            <div id="status-bar" class="nav-status" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted); flex-shrink: 0;">
-                <span id="sb-status" style="display: flex; align-items: center; gap: 6px;"><span class="status-dot yellow"></span> 연결 중...</span>
-                <span id="sb-session" class="mono" style="color: var(--text-secondary); font-size: 0.75rem;">--</span>
-                <span id="sb-uptime" class="mono" style="color: var(--text-muted); font-size: 0.72rem;">--</span>
-            </div>
-        </div>
-    </nav>
+<!-- Navigation -->
+<nav style="border-bottom:1px solid var(--border-subtle);background:rgba(11,11,20,.85);backdrop-filter:blur(12px);position:sticky;top:0;z-index:50;">
+  <div class="nav-container" style="max-width:1280px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:24px;">
+    <div class="nav-logo" style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <div class="nav-logo-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></div>
+      <div class="nav-logo-text"><span class="nav-brand-main">QWQ</span><span class="nav-brand-sub">AI&nbsp;Trader</span></div>
+    </div>
+    <div class="nav-links" style="display:flex;gap:4px;flex:1;">
+      <a href="/" class="nav-pill" data-page="index">실시간</a>
+      <a href="/trades" class="nav-pill" data-page="trades">거래</a>
+      <a href="/performance" class="nav-pill" data-page="performance">성과</a>
+      <a href="/equity" class="nav-pill active" data-page="equity">자산</a>
+      <a href="/themes" class="nav-pill" data-page="themes">테마</a>
+      <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
+      <a href="/settings" class="nav-pill" data-page="settings">설정</a>
+    </div>
+    <div id="status-bar" style="display:flex;align-items:center;gap:20px;font-size:.78rem;color:var(--text-muted);flex-shrink:0;">
+      <span id="sb-status" style="display:flex;align-items:center;gap:6px;"><span class="status-dot yellow"></span> 연결 중...</span>
+      <span id="sb-session" class="mono" style="color:var(--text-secondary);font-size:.75rem;">--</span>
+      <span id="sb-uptime" class="mono" style="color:var(--text-muted);font-size:.72rem;">--</span>
+    </div>
+  </div>
+</nav>
 
-    <!-- ─────── 지수 전광판 스트립 ─────── -->
-    <div class="ticker-strip">
-      <div class="ticker-strip-wrap">
-        <div class="nav-ticker-inner" id="nav-ticker-inner">
-            <span class="nav-ti nav-ti-kr">KOSPI</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-            <span class="nav-ti nav-ti-kr">KOSDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-            <span class="nav-ti nav-ti-us">S&amp;P500</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-            <span class="nav-ti nav-ti-us">NASDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
-            <span class="nav-ti nav-ti-us">DOW</span><span class="nav-tv">--</span><span class="nav-ts">·&nbsp;&nbsp;</span>
-        </div>
+<!-- Ticker Strip -->
+<div class="ticker-strip">
+  <div class="ticker-strip-wrap">
+    <div class="nav-ticker-inner" id="nav-ticker-inner">
+      <span class="nav-ti nav-ti-kr">KOSPI</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+      <span class="nav-ti nav-ti-kr">KOSDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+      <span class="nav-ti nav-ti-us">S&amp;P500</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+      <span class="nav-ti nav-ti-us">NASDAQ</span><span class="nav-tv">--</span><span class="nav-ts">·</span>
+      <span class="nav-ti nav-ti-us">DOW</span><span class="nav-tv">--</span><span class="nav-ts">·&nbsp;&nbsp;</span>
+    </div>
+  </div>
+</div>
+
+<main style="max-width:1280px;margin:0 auto;padding:24px;">
+
+  <!-- ── Market Tabs ── -->
+  <div class="mkt-tabs animate-in" id="mkt-tabs">
+    <div class="mkt-tab" id="tab-kr" onclick="switchTab('kr')">🇰🇷 <span>한국</span></div>
+    <div class="mkt-tab" id="tab-us" onclick="switchTab('us')">🇺🇸 <span>미국</span></div>
+    <div class="mkt-tab" id="tab-all" onclick="switchTab('all')">🔀 <span>통합</span></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       KR 탭
+  ═══════════════════════════════════════════ -->
+  <div id="section-kr" style="display:none;">
+    <!-- Header + Date Range -->
+    <div class="animate-in" style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+      <h2 style="font-size:1.2rem;font-weight:700;color:#fff;margin:0;">🇰🇷 자산 히스토리</h2>
+      <span id="kr-summary-label" class="mono" style="font-size:.78rem;color:var(--text-muted);">--</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
+        <span class="date-range-label">기간</span>
+        <input type="date" id="kr-date-from" class="date-input">
+        <span style="color:var(--text-muted);font-size:.78rem;">~</span>
+        <input type="date" id="kr-date-to" class="date-input">
+        <button class="date-range-btn" onclick="krSearch()">조회</button>
       </div>
     </div>
-    <!-- Market Filter Bar -->
-    <div id="market-filter-bar" style="max-width:1280px;margin:16px auto 0;padding:0 24px;"></div>
+    <!-- Summary Cards -->
+    <div id="kr-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;" class="animate-in delay-1">
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">기간 수익률</div><div id="kr-s-return" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">최대 낙폭</div><div id="kr-s-dd" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">평균 일일 손익</div><div id="kr-s-avg" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">데이터 일수</div><div id="kr-s-days" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+    </div>
+    <!-- Chart -->
+    <div class="card animate-in delay-2" style="padding:24px;margin-bottom:16px;">
+      <div class="card-header"><span class="dot" style="background:var(--accent-cyan);box-shadow:0 0 8px var(--accent-cyan);"></span>총자산 추이</div>
+      <div id="kr-chart" style="height:320px;"></div>
+    </div>
+    <!-- Table -->
+    <div class="card animate-in delay-3" style="padding:24px;">
+      <div class="card-header">
+        <span class="dot" style="background:var(--accent-purple);box-shadow:0 0 8px var(--accent-purple);"></span>
+        일자별 상세
+        <span id="kr-table-count" style="margin-left:auto;font-size:.7rem;color:var(--text-muted);font-family:'JetBrains Mono',monospace;background:var(--bg-elevated);padding:3px 10px;border-radius:6px;border:1px solid var(--border-subtle);">0일</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;text-align:left;border-collapse:collapse;">
+          <thead><tr style="border-bottom:1px solid var(--border-subtle);">
+            <th style="padding:0 10px 10px 0;width:30px;"></th>
+            <th style="padding:0 10px 10px 0;">날짜</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">총자산</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">변동액</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">변동률</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">현금</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">포지션</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">거래</th>
+            <th style="padding:0 0 10px;text-align:right;">승률</th>
+          </tr></thead>
+          <tbody id="kr-tbody"><tr><td colspan="9" style="padding:40px 0;text-align:center;color:var(--text-muted);font-size:.85rem;">로딩 중...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /section-kr -->
 
-    <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
-        <div id="kr-equity-section">
-        <!-- Header + Date Range -->
-        <div class="animate-in" style="display: flex; align-items: center; gap: 24px; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
-            <div style="display: flex; align-items: center; gap: 16px;">
-                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">🇰🇷 자산 히스토리</h2>
-                <span id="equity-summary" style="font-size: 0.78rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">--</span>
-            </div>
-            <!-- Date range filter -->
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span class="date-range-label">기간</span>
-                <input type="date" id="date-from" class="date-input">
-                <span style="color: var(--text-muted); font-size: 0.78rem;">~</span>
-                <input type="date" id="date-to" class="date-input">
-                <button id="date-search-btn" class="date-range-btn">조회</button>
-            </div>
-        </div>
+  <!-- ══════════════════════════════════════════
+       US 탭
+  ═══════════════════════════════════════════ -->
+  <div id="section-us" style="display:none;">
+    <div class="animate-in" style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+      <h2 style="font-size:1.2rem;font-weight:700;color:#fff;margin:0;">🇺🇸 US 자산 히스토리</h2>
+      <span id="us-summary-label" class="mono" style="font-size:.78rem;color:var(--text-muted);">--</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
+        <span class="date-range-label">기간</span>
+        <input type="date" id="us-date-from" class="date-input">
+        <span style="color:var(--text-muted);font-size:.78rem;">~</span>
+        <input type="date" id="us-date-to" class="date-input">
+        <button class="date-range-btn" onclick="usSearch()">조회</button>
+      </div>
+    </div>
+    <!-- Summary Cards -->
+    <div id="us-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;" class="animate-in delay-1">
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">기간 수익률</div><div id="us-s-return" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">최대 낙폭</div><div id="us-s-dd" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">평균 일일 손익</div><div id="us-s-avg" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+      <div class="card" style="padding:16px;"><div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">데이터 일수</div><div id="us-s-days" class="mono" style="font-size:1.1rem;font-weight:600;">--</div></div>
+    </div>
+    <!-- Chart -->
+    <div class="card animate-in delay-2" style="padding:24px;margin-bottom:16px;">
+      <div class="card-header"><span class="dot" style="background:var(--accent-amber);box-shadow:0 0 8px var(--accent-amber);"></span>US 총자산 추이 (USD)</div>
+      <div id="us-chart" style="height:320px;"></div>
+    </div>
+    <!-- Table -->
+    <div class="card animate-in delay-3" style="padding:24px;">
+      <div class="card-header">
+        <span class="dot" style="background:var(--accent-amber);box-shadow:0 0 8px var(--accent-amber);"></span>
+        일자별 상세
+        <span id="us-table-count" style="margin-left:auto;font-size:.7rem;color:var(--text-muted);font-family:'JetBrains Mono',monospace;background:var(--bg-elevated);padding:3px 10px;border-radius:6px;border:1px solid var(--border-subtle);">0일</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;text-align:left;border-collapse:collapse;">
+          <thead><tr style="border-bottom:1px solid var(--border-subtle);">
+            <th style="padding:0 10px 10px 0;width:30px;"></th>
+            <th style="padding:0 10px 10px 0;">날짜</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">총자산 (USD)</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">변동액</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">변동률</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">현금</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">포지션</th>
+            <th style="padding:0 10px 10px 0;text-align:right;">거래</th>
+            <th style="padding:0 0 10px;text-align:right;">승률</th>
+          </tr></thead>
+          <tbody id="us-tbody"><tr><td colspan="9" style="padding:40px 0;text-align:center;color:var(--text-muted);font-size:.85rem;">로딩 중...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /section-us -->
 
-        <!-- Summary Cards -->
-        <div id="summary-cards" class="perf-grid animate-in delay-1" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;">
-            <div class="card card-inner" style="padding: 16px;">
-                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">기간 수익률</div>
-                <div id="sum-return" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-            </div>
-            <div class="card card-inner" style="padding: 16px;">
-                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">최대 낙폭</div>
-                <div id="sum-drawdown" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-            </div>
-            <div class="card card-inner" style="padding: 16px;">
-                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">평균 일일 손익</div>
-                <div id="sum-avg-pnl" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-            </div>
-            <div class="card card-inner" style="padding: 16px;">
-                <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">데이터 일수</div>
-                <div id="sum-days" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-            </div>
-        </div>
+  <!-- ══════════════════════════════════════════
+       통합 탭
+  ═══════════════════════════════════════════ -->
+  <div id="section-all" style="display:none;">
+    <div class="animate-in" style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+      <h2 style="font-size:1.2rem;font-weight:700;color:#fff;margin:0;">🔀 KR + US 통합 히스토리</h2>
+      <span id="all-summary-label" class="mono" style="font-size:.78rem;color:var(--text-muted);">--</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+        <span class="mono" style="font-size:.7rem;color:var(--text-muted);">환율 <span id="all-fx-rate" style="color:var(--accent-amber);">--</span> KRW/USD</span>
+      </div>
+    </div>
+    <!-- Summary Cards — 4개: KR수익률 / US수익률 / KR최대낙폭 / US최대낙폭 -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;" class="animate-in delay-1">
+      <div class="card" style="padding:16px;border-top:2px solid rgba(34,211,238,.3);">
+        <div style="font-size:.68rem;color:rgba(34,211,238,.7);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">🇰🇷 기간 수익률</div>
+        <div id="all-kr-return" class="mono" style="font-size:1.1rem;font-weight:600;">--</div>
+      </div>
+      <div class="card" style="padding:16px;border-top:2px solid rgba(245,158,11,.3);">
+        <div style="font-size:.68rem;color:rgba(245,158,11,.7);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">🇺🇸 기간 수익률</div>
+        <div id="all-us-return" class="mono" style="font-size:1.1rem;font-weight:600;">--</div>
+      </div>
+      <div class="card" style="padding:16px;border-top:2px solid rgba(34,211,238,.3);">
+        <div style="font-size:.68rem;color:rgba(34,211,238,.7);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">🇰🇷 최대 낙폭</div>
+        <div id="all-kr-dd" class="mono" style="font-size:1.1rem;font-weight:600;">--</div>
+      </div>
+      <div class="card" style="padding:16px;border-top:2px solid rgba(245,158,11,.3);">
+        <div style="font-size:.68rem;color:rgba(245,158,11,.7);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">🇺🇸 최대 낙폭</div>
+        <div id="all-us-dd" class="mono" style="font-size:1.1rem;font-weight:600;">--</div>
+      </div>
+    </div>
+    <!-- Combined Chart (dual-axis) -->
+    <div class="card animate-in delay-2" style="padding:24px;margin-bottom:16px;">
+      <div class="card-header">
+        <span class="dot" style="background:var(--accent-blue);box-shadow:0 0 8px var(--accent-blue);"></span>
+        KR / US 총자산 추이
+        <span style="margin-left:auto;display:flex;gap:16px;font-size:.72rem;">
+          <span><span class="chart-legend-dot" style="background:#22d3ee;"></span>KR (원, 좌축)</span>
+          <span><span class="chart-legend-dot" style="background:#fbbf24;"></span>US (USD, 우축)</span>
+        </span>
+      </div>
+      <div id="all-chart" style="height:340px;"></div>
+    </div>
+    <!-- Combined Table -->
+    <div class="card animate-in delay-3" style="padding:24px;">
+      <div class="card-header">
+        <span class="dot" style="background:var(--accent-blue);box-shadow:0 0 8px var(--accent-blue);"></span>
+        일자별 KR+US 비교
+        <span id="all-table-count" style="margin-left:auto;font-size:.7rem;color:var(--text-muted);font-family:'JetBrains Mono',monospace;background:var(--bg-elevated);padding:3px 10px;border-radius:6px;border:1px solid var(--border-subtle);">0일</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;text-align:left;border-collapse:collapse;">
+          <thead><tr style="border-bottom:1px solid var(--border-subtle);">
+            <th style="padding:0 10px 10px 0;">날짜</th>
+            <th style="padding:0 10px 10px 0;text-align:right;color:rgba(34,211,238,.7);">KR 총자산</th>
+            <th style="padding:0 10px 10px 0;text-align:right;color:rgba(34,211,238,.7);">KR 변동</th>
+            <th style="padding:0 10px 10px 0;text-align:right;color:rgba(34,211,238,.7);">KR %</th>
+            <th style="padding:0 10px 10px 0;text-align:right;color:rgba(245,158,11,.7);">US 총자산</th>
+            <th style="padding:0 10px 10px 0;text-align:right;color:rgba(245,158,11,.7);">US 변동</th>
+            <th style="padding:0 0 10px;text-align:right;color:rgba(245,158,11,.7);">US %</th>
+          </tr></thead>
+          <tbody id="all-tbody"><tr><td colspan="7" style="padding:40px 0;text-align:center;color:var(--text-muted);font-size:.85rem;">로딩 중...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /section-all -->
 
-        <!-- Equity Chart -->
-        <div class="card card-inner animate-in delay-2" style="padding: 24px; margin-bottom: 16px;">
-            <div class="card-header">
-                <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
-                총자산 추이
-            </div>
-            <div id="equity-chart" style="height: 320px;"></div>
-        </div>
+</main>
 
-        <!-- Daily Detail Table -->
-        <div class="card card-inner animate-in delay-3" style="padding: 24px;">
-            <div class="card-header">
-                <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
-                일자별 상세
-                <span id="table-count" style="margin-left: auto; font-size: 0.7rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; background: var(--bg-elevated); padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);">0일</span>
-            </div>
-            <div style="overflow-x: auto;">
-                <table style="width: 100%; text-align: left; border-collapse: collapse;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid var(--border-subtle);">
-                            <th style="padding: 0 10px 10px 0; width: 30px;"></th>
-                            <th style="padding: 0 10px 10px 0;">날짜</th>
-                            <th style="padding: 0 10px 10px 0; text-align: right;">총자산</th>
-                            <th style="padding: 0 10px 10px 0; text-align: right;">변동액</th>
-                            <th style="padding: 0 10px 10px 0; text-align: right;">변동률</th>
-                            <th class="col-hide-mobile" style="padding: 0 10px 10px 0; text-align: right;">현금</th>
-                            <th class="col-hide-mobile" style="padding: 0 10px 10px 0; text-align: right;">포지션</th>
-                            <th class="col-hide-mobile" style="padding: 0 10px 10px 0; text-align: right;">거래</th>
-                            <th style="padding: 0 0 10px 0; text-align: right;">승률</th>
-                        </tr>
-                    </thead>
-                    <tbody id="equity-table-body">
-                        <tr><td colspan="9" style="padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">데이터 로딩 중...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        </div><!-- /kr-equity-section -->
-
-        <!-- US Equity Section -->
-        <div id="us-equity-section" style="display:none;">
-            <div class="animate-in" style="margin-bottom: 20px; display:flex; align-items:center; gap:10px;">
-                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">🇺🇸 US 자산 현황</h2>
-            </div>
-            <div id="us-equity-cards" class="perf-grid animate-in delay-1" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;">
-                <div class="card card-inner" style="padding: 16px;">
-                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">총 자산</div>
-                    <div id="us-eq-total" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-                </div>
-                <div class="card card-inner" style="padding: 16px;">
-                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">현금</div>
-                    <div id="us-eq-cash" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-                </div>
-                <div class="card card-inner" style="padding: 16px;">
-                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">포지션 평가액</div>
-                    <div id="us-eq-positions" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-                </div>
-                <div class="card card-inner" style="padding: 16px;">
-                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">일일 손익</div>
-                    <div id="us-eq-daily-pnl" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
-                </div>
-            </div>
-
-            <!-- US Positions Table -->
-            <div class="card card-inner animate-in delay-2" style="padding: 24px;">
-                <div class="card-header">
-                    <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
-                    US 보유 포지션
-                    <span id="us-eq-pos-count" style="margin-left: auto; font-size: 0.7rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; background: var(--bg-elevated); padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);">0개</span>
-                </div>
-                <div style="overflow-x: auto;">
-                    <table style="width: 100%; text-align: left; border-collapse: collapse;">
-                        <thead>
-                            <tr style="border-bottom: 1px solid var(--border-subtle);">
-                                <th style="padding: 0 10px 10px 0;">종목</th>
-                                <th style="padding: 0 10px 10px 0; text-align: right;">수량</th>
-                                <th style="padding: 0 10px 10px 0; text-align: right;">평균가</th>
-                                <th style="padding: 0 10px 10px 0; text-align: right;">현재가</th>
-                                <th style="padding: 0 10px 10px 0; text-align: right;">평가액</th>
-                                <th style="padding: 0 10px 10px 0; text-align: right;">손익</th>
-                                <th style="padding: 0 0 10px 0; text-align: right;">수익률</th>
-                            </tr>
-                        </thead>
-                        <tbody id="us-eq-positions-body">
-                            <tr><td colspan="7" style="padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">데이터 없음</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div><!-- /us-equity-section -->
-    </main>
-
-    <script src="/static/js/common.js?v=2"></script>
-    <script src="/static/js/equity.js?v=4"></script>
+<script src="/static/js/common.js?v=2"></script>
+<script src="/static/js/equity.js?v=5"></script>
 </body>
 </html>
