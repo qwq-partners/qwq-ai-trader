@@ -317,29 +317,92 @@ function renderCombinedChart() {
         return;
     }
 
-    const traces = [];
-    const layout = {
-        paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
-        margin: { t: 10, b: 40, l: 90, r: 80 },
-        showlegend: false, hovermode: 'x unified',
-        hoverlabel: { bgcolor: '#1a1a2e', bordercolor: 'rgba(99,102,241,.4)', font: { color: '#e2e8f0', size: 12.5, family: 'DM Sans, sans-serif' }, align: 'left' },
-        xaxis: { color: '#5a6480', gridcolor: 'rgba(99,102,241,.06)', tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#5a6480' } },
-        yaxis:  { color: '#22d3ee', gridcolor: 'rgba(99,102,241,.06)', tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#22d3ee' }, tickformat: ',.0f', ticksuffix: '원', title: { text: 'KR (원)', font: { color: '#22d3ee', size: 11 } } },
-        yaxis2: { color: '#fbbf24', overlaying: 'y', side: 'right', tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#fbbf24' }, tickformat: '$.2f', title: { text: 'US (USD)', font: { color: '#fbbf24', size: 11 } } },
+    // ── % 수익률 환산 (기준일 대비 변동률) ──────────────────
+    const toPct = (snaps) => {
+        if (!snaps.length) return [];
+        const base = snaps[0].total_equity;
+        return snaps.map(s => base > 0 ? +((s.total_equity - base) / base * 100).toFixed(2) : 0);
     };
+    const krPcts = toPct(_krSnaps);
+    const usPcts = toPct(_usSnaps);
+
+    // 전체 범위 계산 (KR + US 합산)
+    const allPcts = [...krPcts, ...usPcts];
+    const minP = Math.min(0, ...allPcts);
+    const maxP = Math.max(0, ...allPcts);
+    const pad  = Math.max((maxP - minP) * 0.2, 2);
+
+    const traces = [];
 
     if (_krSnaps.length) {
-        const krEq = _krSnaps.map(s => s.total_equity);
-        const minK = Math.min(...krEq), maxK = Math.max(...krEq), padK = (maxK - minK) * 0.3 || maxK * 0.02;
-        traces.push({ x: _krSnaps.map(s => s.date), y: krEq, name: 'KR 총자산', type: 'scatter', mode: 'lines+markers', yaxis: 'y', line: { color: '#22d3ee', width: 2, shape: 'spline' }, marker: { color: '#22d3ee', size: 7, line: { color: '#1a1a2e', width: 1.5 } } });
-        layout.yaxis.range = [minK - padK, maxK + padK];
+        const hoverKR = _krSnaps.map((s, i) =>
+            `<b>${s.date}</b><br>🇰🇷 KR ${krPcts[i] >= 0 ? '+' : ''}${krPcts[i]}%<br>총자산 ${fmtKRW(s.total_equity)}원`
+        );
+        traces.push({
+            x: _krSnaps.map(s => s.date),
+            y: krPcts,
+            name: '🇰🇷 KR',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#22d3ee', width: 2.5, shape: 'spline' },
+            marker: { color: krPcts.map(v => v >= 0 ? '#34d399' : '#f87171'), size: 8, line: { color: '#1a1a2e', width: 1.5 } },
+            hovertext: hoverKR,
+            hoverinfo: 'text',
+        });
     }
+
     if (_usSnaps.length) {
-        const usEq = _usSnaps.map(s => s.total_equity);
-        const minU = Math.min(...usEq), maxU = Math.max(...usEq), padU = (maxU - minU) * 0.3 || maxU * 0.02;
-        traces.push({ x: _usSnaps.map(s => s.date), y: usEq, name: 'US 총자산', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: { color: '#fbbf24', width: 2, shape: 'spline' }, marker: { color: '#fbbf24', size: 7, line: { color: '#1a1a2e', width: 1.5 } } });
-        layout.yaxis2.range = [minU - padU, maxU + padU];
+        const hoverUS = _usSnaps.map((s, i) =>
+            `<b>${s.date}</b><br>🇺🇸 US ${usPcts[i] >= 0 ? '+' : ''}${usPcts[i]}%<br>총자산 ${fmtUSD(s.total_equity)}`
+        );
+        traces.push({
+            x: _usSnaps.map(s => s.date),
+            y: usPcts,
+            name: '🇺🇸 US',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#fbbf24', width: 2.5, shape: 'spline' },
+            marker: { color: usPcts.map(v => v >= 0 ? '#34d399' : '#f87171'), size: 8, line: { color: '#1a1a2e', width: 1.5 } },
+            hovertext: hoverUS,
+            hoverinfo: 'text',
+        });
     }
+
+    // 0% 기준선
+    const allDates = [...new Set([..._krSnaps.map(s=>s.date),..._usSnaps.map(s=>s.date)])].sort();
+    traces.push({
+        x: [allDates[0], allDates[allDates.length-1]],
+        y: [0, 0],
+        mode: 'lines',
+        line: { color: 'rgba(99,102,241,.25)', width: 1, dash: 'dot' },
+        hoverinfo: 'skip',
+        showlegend: false,
+    });
+
+    const layout = {
+        paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+        margin: { t: 10, b: 40, l: 60, r: 20 },
+        showlegend: true,
+        legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(18,18,30,.8)', bordercolor: 'rgba(99,102,241,.2)', borderwidth: 1, font: { color: '#e2e8f0', size: 12 } },
+        hovermode: 'closest',
+        hoverlabel: { bgcolor: '#1a1a2e', bordercolor: 'rgba(99,102,241,.4)', font: { color: '#e2e8f0', size: 12.5, family: 'DM Sans, sans-serif' } },
+        xaxis: {
+            color: '#5a6480', gridcolor: 'rgba(99,102,241,.06)',
+            tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#5a6480' },
+            showspikes: true, spikemode: 'across', spikethickness: 1,
+            spikecolor: 'rgba(99,102,241,.3)', spikedash: 'dot',
+        },
+        yaxis: {
+            color: '#8892b0', gridcolor: 'rgba(99,102,241,.08)',
+            tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#8892b0' },
+            tickformat: '+.2f', ticksuffix: '%',
+            range: [minP - pad, maxP + pad],
+            zeroline: false,
+            showspikes: true, spikemode: 'across', spikethickness: 1,
+            spikecolor: 'rgba(99,102,241,.3)', spikedash: 'dot',
+        },
+    };
+
     Plotly.react('all-chart', traces, layout, { displayModeBar: false, responsive: true });
 }
 

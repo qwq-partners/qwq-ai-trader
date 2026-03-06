@@ -455,14 +455,15 @@ class USAPIHandler:
                     ORDER BY entry_time
                 """, date_type.fromisoformat(date_from), date_type.fromisoformat(date_to))
 
-                # 초기자산: engine.portfolio.initial_capital (USD)
-                initial_capital = float(getattr(eng.portfolio, 'initial_capital', None) or 0)
+                # 초기자산 추정: 현재 open 포지션 매입원가 + 현금
+                # (initial_capital은 재시작 시 현금만 잡혀 부정확 → cost basis 사용)
+                cost_basis = sum(
+                    float(p.avg_price) * p.quantity
+                    for p in eng.portfolio.positions.values()
+                )
+                initial_capital = cost_basis + float(eng.portfolio.cash or 0)
                 if initial_capital <= 0:
-                    # 실제 current total이 최선의 추정치
-                    initial_capital = float(
-                        (eng.portfolio.cash or 0) +
-                        sum(float(p.avg_price) * p.quantity for p in eng.portfolio.positions.values())
-                    )
+                    initial_capital = float(getattr(eng.portfolio, 'initial_capital', None) or 1)
 
                 # 날짜별 누적 PnL 계산
                 cum_pnl = 0.0
