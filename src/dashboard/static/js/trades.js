@@ -640,7 +640,7 @@ function renderUSTrades(trades) {
         const isBuy = t.side === "buy";
         const pnl = t.pnl || 0;
         const pnlPct = t.pnl_pct || 0;
-        const pCls = !isBuy ? (pnl >= 0 ? 'text-profit' : 'text-loss') : '';
+        const pCls = pnl !== 0 ? (pnl >= 0 ? 'text-profit' : 'text-loss') : '';
         const timeStr = t.timestamp ? t.timestamp.substring(0, 16).replace("T", " ") : "-";
         const price = isBuy ? (t.entry_price || 0) : (t.exit_price || 0);
 
@@ -679,13 +679,14 @@ function renderUSTrades(trades) {
         // 수량
         const tdQty = createTd('py-2 pr-3 text-right mono', t.quantity || '--');
 
-        // 손익
+        // 손익 (BUY 미청산도 미실현 손익 표시)
+        const showPnl = pnl !== 0 || !isBuy;
         const tdPnl = createTd('py-2 pr-3 text-right mono ' + pCls,
-            !isBuy ? (pnl >= 0 ? '+' : '-') + '$' + Math.abs(pnl).toFixed(2) : '--');
+            showPnl ? (pnl >= 0 ? '+' : '-') + '$' + Math.abs(pnl).toFixed(2) : '--');
 
         // 수익률
         const tdPct = createTd('py-2 pr-3 text-right mono ' + pCls,
-            !isBuy ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : '--');
+            showPnl ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : '--');
 
         // 전략
         const tdStrategy = createTd('col-hide-mobile py-2 pr-3 text-xs', t.strategy || '--');
