@@ -392,14 +392,17 @@ class KRAPIHandler:
             async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as session:
                 for sym, label in symbols:
                     try:
-                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=2d"
+                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=5d"
                         async with session.get(url) as resp:
                             if resp.status != 200:
                                 continue
                             js = await resp.json(content_type=None)
-                            meta = js["chart"]["result"][0]["meta"]
-                            price = meta.get("regularMarketPrice") or meta.get("previousClose", 0)
-                            prev  = meta.get("chartPreviousClose") or meta.get("previousClose", price)
+                            meta   = js["chart"]["result"][0]["meta"]
+                            price  = meta.get("regularMarketPrice") or 0
+                            # 전일 종가: close 배열의 끝에서 두 번째 값 사용 (chartPreviousClose는 날짜 범위에 따라 부정확)
+                            raw_closes = js["chart"]["result"][0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                            closes = [c for c in raw_closes if c is not None]
+                            prev   = closes[-2] if len(closes) >= 2 else (closes[-1] if closes else price)
                             change     = price - prev
                             change_pct = (change / prev * 100) if prev else 0
                             results.append({
