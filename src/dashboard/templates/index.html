@@ -100,7 +100,7 @@
             flex-shrink: 0;
         }
         .mc-flag { font-size:1.25rem; line-height:1; }
-        .mc-title { font-size:.82rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+        .mc-title { font-size:.82rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; white-space:nowrap; }
         .mc-title-kr { color: var(--kr); }
         .mc-title-us { color: var(--us); }
         .mc-ccy {
@@ -130,9 +130,9 @@
         .mc-equity-us { background: linear-gradient(135deg,#fff 40%,var(--us)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
 
         /* ── Metric rows ── */
-        .mr { display:flex; justify-content:space-between; align-items:center; padding:7px 0; }
-        .mr-lbl { color:var(--text-secondary); font-size:.8rem; }
-        .mr-val { font-family:'JetBrains Mono',monospace; font-size:.85rem; font-weight:500; color:var(--text-primary); }
+        .mr { display:flex; justify-content:space-between; align-items:center; padding:7px 0; gap:4px; }
+        .mr-lbl { color:var(--text-secondary); font-size:.8rem; white-space:nowrap; flex-shrink:0; }
+        .mr-val { font-family:'JetBrains Mono',monospace; font-size:.85rem; font-weight:500; color:var(--text-primary); white-space:nowrap; text-align:right; }
 
         /* ── Cash mini bar ── */
         .cash-bar-wrap { padding: 2px 0 8px; }
@@ -260,12 +260,32 @@
             .nav-status-txt { display:none; }
         }
         @media (max-width:480px) {
-            main { padding:10px; }
-            .mc-head { padding:13px 14px 11px; }
-            .mc-body { padding:13px 14px 11px; }
-            .mc-sep  { margin:0 14px; }
-            .mc-sub  { padding:9px 14px 6px; font-size:.64rem; }
-            .mc-equity-val { font-size:1.35rem; }
+            main { padding:10px 8px; }
+            /* ── 헤더 compact ── */
+            .mc-head { padding:10px 12px 8px; gap:5px; }
+            .mc-flag { font-size:1.05rem; }
+            .mc-title { font-size:.72rem; letter-spacing:.02em; }
+            .mc-ccy { padding:2px 7px; font-size:.58rem; }
+            /* ── 섹션 패딩 ── */
+            .mc-body { padding:10px 12px 8px; }
+            .mc-sep  { margin:0 12px; }
+            .mc-sub  { padding:7px 12px 5px; font-size:.6rem; letter-spacing:.05em; }
+            /* ── 총자산 ── */
+            .mc-equity-label { font-size:.58rem; }
+            .mc-equity-val { font-size:1.05rem; letter-spacing:-.03em; }
+            /* ── Metric rows (핵심 줄바꿈 방지) ── */
+            .mr { padding:5px 0; }
+            .mr-lbl { font-size:.68rem; }
+            .mr-val { font-size:.68rem; }
+            #p-daily-pnl, #us-daily-pnl { font-size:.68rem !important; }
+            /* PnL breakdown (실현/미실현) */
+            #p-pnl-breakdown { font-size:.56rem; line-height:1.5; }
+            /* ── Badge ── */
+            .badge { padding:2px 7px; font-size:.6rem; }
+            /* ── SM 하단 rows ── */
+            .sm-l, .sm-v { font-size:.6rem; }
+            /* ── 포지션 요약 ── */
+            #kr-positions-summary, #us-positions-summary { padding:8px 12px 6px !important; }
         }
 
         /* ── 포지션 테이블 모바일 반응형 ── */
