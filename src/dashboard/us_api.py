@@ -136,64 +136,149 @@ class USAPIHandler:
         return web.json_response(orders)
 
     async def handle_trades(self, request: web.Request) -> web.Response:
-        """거래 내역 반환 (trade_events 테이블, 날짜별 조회)"""
+        """거래 내역 반환 (KR 방식과 동일: trade_events + trades 테이블 통합)
+
+        - trade_events: BUY/SELL 이벤트 (event_time 기준)
+        - trades: SELL이 trade_events에 없는 청산 거래 보완
+        - 미청산 BUY: 현재가 보강
+        """
+        from datetime import date as _date
+
         ts = getattr(self.engine, 'trade_storage', None)
+        date_str = request.rel_url.query.get("date", "")
+        target_date = None
+        if date_str:
+            try:
+                target_date = _date.fromisoformat(date_str)
+            except ValueError:
+                pass
+
+        events: list[dict] = []
+
         if ts and ts._db_available and ts.pool:
-            date_str = request.rel_url.query.get("date", "")
             try:
                 async with ts.pool.acquire() as conn:
-                    if date_str:
-                        from datetime import date as _date
-                        target_date = _date.fromisoformat(date_str)
-                        rows = await conn.fetch(
-                            """SELECT event_type, symbol, name, quantity, price,
-                                      created_at, strategy, pnl, pnl_pct,
-                                      exit_type, exit_reason, trade_id
-                               FROM trade_events
-                               WHERE created_at::date = $1
-                                 AND symbol NOT SIMILAR TO '[0-9]{6}'
-                               ORDER BY created_at DESC
-                               LIMIT 200""",
+
+                    # ── 1. trade_events 기반 조회 (event_time 기준, market='US') ──
+                    if target_date:
+                        te_rows = await conn.fetch(
+                            """SELECT te.event_type, te.symbol, te.name, te.quantity, te.price,
+                                      te.event_time, te.strategy, te.pnl, te.pnl_pct,
+                                      te.exit_type, te.exit_reason, te.trade_id, te.status
+                               FROM trade_events te
+                               JOIN trades t ON te.trade_id = t.id
+                               WHERE te.event_time::date = $1 AND t.market = 'US'
+                               ORDER BY te.event_time DESC LIMIT 300""",
                             target_date,
                         )
                     else:
-                        rows = await conn.fetch(
-                            """SELECT event_type, symbol, name, quantity, price,
-                                      created_at, strategy, pnl, pnl_pct,
-                                      exit_type, exit_reason, trade_id
-                               FROM trade_events
-                               WHERE created_at >= NOW() - INTERVAL '7 days'
-                                 AND symbol NOT SIMILAR TO '[0-9]{6}'
-                               ORDER BY created_at DESC
-                               LIMIT 200""",
+                        te_rows = await conn.fetch(
+                            """SELECT te.event_type, te.symbol, te.name, te.quantity, te.price,
+                                      te.event_time, te.strategy, te.pnl, te.pnl_pct,
+                                      te.exit_type, te.exit_reason, te.trade_id, te.status
+                               FROM trade_events te
+                               JOIN trades t ON te.trade_id = t.id
+                               WHERE te.event_time >= NOW() - INTERVAL '7 days' AND t.market = 'US'
+                               ORDER BY te.event_time DESC LIMIT 300""",
                         )
-                trades = []
-                for r in rows:
-                    evt = r["event_type"].upper()
-                    side = "buy" if evt == "BUY" else "sell"
-                    trades.append({
-                        "timestamp": r["created_at"].isoformat() if r["created_at"] else "",
-                        "symbol": r["symbol"],
-                        "name": r["name"] or "",
-                        "side": side,
-                        "entry_price": float(r["price"]),
-                        "exit_price": float(r["price"]) if side == "sell" else 0,
-                        "quantity": int(r["quantity"]),
-                        "pnl": round(float(r["pnl"] or 0), 2),
-                        "pnl_pct": round(float(r["pnl_pct"] or 0), 2),
-                        "strategy": r["strategy"] or "",
-                        "reason": r["exit_reason"] or "",
-                        "exit_type": r["exit_type"] or evt,
-                        "holding_minutes": 0,
-                        "trade_id": r["trade_id"] or "",
-                        "market": "US",
-                    })
-                return web.json_response(trades)
+
+                    te_sell_trade_ids: set = set()
+                    for r in te_rows:
+                        evt = r["event_type"].upper()
+                        side = "buy" if evt == "BUY" else "sell"
+                        if evt == "SELL":
+                            te_sell_trade_ids.add(r["trade_id"])
+                        events.append({
+                            "timestamp": r["event_time"].isoformat() if r["event_time"] else "",
+                            "symbol": r["symbol"],
+                            "name": r["name"] or "",
+                            "side": side,
+                            "entry_price": float(r["price"]) if side == "buy" else 0,
+                            "exit_price": float(r["price"]) if side == "sell" else 0,
+                            "quantity": int(r["quantity"]),
+                            "pnl": round(float(r["pnl"] or 0), 2),
+                            "pnl_pct": round(float(r["pnl_pct"] or 0), 2),
+                            "strategy": r["strategy"] or "",
+                            "reason": r["exit_reason"] or "",
+                            "exit_type": r["exit_type"] or evt,
+                            "holding_minutes": 0,
+                            "trade_id": r["trade_id"] or "",
+                            "market": "US",
+                            "status": r["status"] or "",
+                        })
+
+                    # ── 2. trades 테이블: SELL이 trade_events에 없는 청산 보완 ──
+                    # (분할매도가 아닌데 trade_events SELL이 누락된 케이스 커버)
+                    if target_date:
+                        closed_rows = await conn.fetch(
+                            """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
+                                      exit_time, exit_price, exit_quantity, exit_type, exit_reason,
+                                      pnl, pnl_pct, entry_strategy
+                               FROM trades
+                               WHERE market = 'US'
+                                 AND exit_time IS NOT NULL
+                                 AND (entry_time::date = $1 OR exit_time::date = $1)
+                               ORDER BY exit_time DESC""",
+                            target_date,
+                        )
+                    else:
+                        closed_rows = await conn.fetch(
+                            """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
+                                      exit_time, exit_price, exit_quantity, exit_type, exit_reason,
+                                      pnl, pnl_pct, entry_strategy
+                               FROM trades
+                               WHERE market = 'US'
+                                 AND exit_time IS NOT NULL
+                                 AND exit_time >= NOW() - INTERVAL '7 days'
+                               ORDER BY exit_time DESC""",
+                        )
+
+                    for r in closed_rows:
+                        if r["id"] in te_sell_trade_ids:
+                            continue  # trade_events에 이미 존재
+                        exit_qty = r["exit_quantity"] or 0
+                        if exit_qty <= 0:
+                            continue
+                        # trade_events 누락 SELL 보완
+                        events.append({
+                            "timestamp": r["exit_time"].isoformat() if r["exit_time"] else "",
+                            "symbol": r["symbol"],
+                            "name": r["name"] or "",
+                            "side": "sell",
+                            "entry_price": 0,
+                            "exit_price": float(r["exit_price"] or 0),
+                            "quantity": int(exit_qty),
+                            "pnl": round(float(r["pnl"] or 0), 2),
+                            "pnl_pct": round(float(r["pnl_pct"] or 0), 2),
+                            "strategy": r["entry_strategy"] or "",
+                            "reason": r["exit_reason"] or "",
+                            "exit_type": r["exit_type"] or "closed",
+                            "holding_minutes": 0,
+                            "trade_id": r["id"],
+                            "market": "US",
+                            "status": r["exit_type"] or "closed",
+                        })
+
+                # ── 3. 미청산 BUY: 현재가/평가손익 보강 ──
+                portfolio = self.engine.portfolio
+                for ev in events:
+                    if ev["side"] == "buy" and ev.get("status", "") == "holding":
+                        pos = portfolio.positions.get(ev["symbol"])
+                        if pos and pos.avg_price:
+                            ev["current_price"] = float(pos.current_price)
+                            qty = ev["quantity"]
+                            ev["pnl"] = round(float(pos.current_price - pos.avg_price) * qty, 2)
+                            ev["pnl_pct"] = round(
+                                float((pos.current_price - pos.avg_price) / pos.avg_price * 100), 2
+                            )
+
+                events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+                return web.json_response(events[:200])
+
             except Exception as e:
                 logger.warning(f"[US API] trades DB 조회 실패: {e}")
 
-        # CSV 폴백
-        date_str = request.rel_url.query.get("date", "")
+        # ── CSV 폴백 ──
         journal_path = Path(__file__).parent.parent.parent / "data" / "journal" / "trades.csv"
         trades: list[dict] = []
         if journal_path.exists():
@@ -205,6 +290,7 @@ class USAPIHandler:
                     trades.append({
                         "timestamp": row.get("timestamp", ""),
                         "symbol": row.get("symbol", ""),
+                        "name": row.get("name", ""),
                         "side": row.get("side", ""),
                         "entry_price": float(row.get("entry_price", 0) or 0),
                         "exit_price": float(row.get("exit_price", 0) or 0),
