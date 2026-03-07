@@ -595,14 +595,20 @@ class BatchAnalyzer:
                     skipped += 1
                     continue
 
-                # 전략별 최대 포지션 수 제한 (동일 전략 집중 방지)
-                strategy_limits = {"rsi2_reversal": 3, "sepa_trend": 3}
-                default_limit = 2
+                # 전략별 최대 동시 포지션 수 제한 (config 기반 — 하드코딩 제거)
+                _batch_cfg = self._config.get("batch", {})
+                _cfg_limits = _batch_cfg.get("strategy_limits", {})
+                _default_strategy_limits = {
+                    "sepa_trend": 5,      # 23M 자본 기준 현금이 실질 한도
+                    "rsi2_reversal": 3,   # 과매도 반전 — 동시 보유 상한
+                }
+                _default_strategy_limits.update(_cfg_limits)   # config 우선
+                default_limit = _batch_cfg.get("default_strategy_limit", 3)
                 strategy_count = sum(
                     1 for p in self._engine.portfolio.positions.values()
                     if p.strategy == sig.strategy
                 )
-                max_for_strategy = strategy_limits.get(sig.strategy, default_limit)
+                max_for_strategy = _default_strategy_limits.get(sig.strategy, default_limit)
                 if strategy_count >= max_for_strategy:
                     logger.info(
                         f"[배치분석] {sig.symbol} 전략 한도 초과: "

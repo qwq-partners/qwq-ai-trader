@@ -300,6 +300,37 @@ class KRScheduler:
             # 전략별 청산 파라미터 적용
             exit_params = bot._strategy_exit_params.get(position.strategy, {}) if position.strategy else {}
 
+            # RSI2 전략 전용: RSI(2) > 70 청산 신호 (전략 고유 출구)
+            if position.strategy == "rsi2_reversal":
+                _rsi2_val = None
+                # 스크리닝 캐시에서 최신 RSI(2) 조회
+                _last_screened = getattr(bot, '_last_screened', []) or []
+                for _sc in _last_screened:
+                    if _sc.symbol == symbol:
+                        _rsi2_val = _sc.indicators.get("rsi_2")
+                        break
+                if _rsi2_val is not None and _rsi2_val > 70:
+                    _r2_reason = f"RSI2 청산: RSI(2)={_rsi2_val:.1f} > 70 (목표 도달)"
+                    logger.info(f"[RSI2 청산] {symbol} {_r2_reason}")
+                    bot._exit_pending_symbols.add(symbol)
+                    bot._exit_pending_timestamps[symbol] = datetime.now()
+                    bot._exit_reasons[symbol] = _r2_reason
+                    _r2_sell_signal = Signal(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        strength=SignalStrength.STRONG,
+                        strategy=StrategyType.RSI2_REVERSAL,
+                        price=current_price,
+                        score=100.0,
+                        confidence=1.0,
+                        reason=_r2_reason,
+                        metadata={"source": "rsi2_exit", "rsi2": _rsi2_val},
+                    )
+                    await bot.engine.emit(
+                        SignalEvent.from_signal(_r2_sell_signal, source="rsi2_exit")
+                    )
+                    return
+
             # ExitManager.update_price() → Optional[Tuple[action, quantity, reason]]
             exit_result = bot.exit_manager.update_price(symbol, current_price)
 
@@ -323,7 +354,7 @@ class KRScheduler:
                     symbol=symbol,
                     side=OrderSide.SELL,
                     strength=SignalStrength.STRONG,
-                    strategy=StrategyType(position.strategy) if position.strategy else StrategyType.MOMENTUM_BREAKOUT,
+                    strategy=StrategyType(position.strategy) if position.strategy else StrategyType.SEPA_TREND,
                     price=current_price,
                     score=100.0,
                     confidence=1.0,
@@ -1142,6 +1173,72 @@ class KRScheduler:
                                     candidates = []
 
                                 signals_emitted = 0
+
+                                # ── RSI2 장중 기회 탐지 (배치 전용 제약 해소) ──────────
+                                # RSI(2) < 10 과매도 종목이 장중에 발생해도 포착 가능하도록 추가
+                                if "rsi2_reversal" in _enabled:
+                                    _rsi2_intraday = [
+                                        s for s in screened
+                                        if s.symbol not in exclude
+                                        and s.symbol not in bot._screening_signal_cooldown
+                                        and s.symbol not in bot.engine.portfolio.positions
+                                        and (s.indicators.get("rsi_2") or 100) < 10
+                                        and (s.indicators.get("close") or 0) > (s.indicators.get("ma200") or float("inf"))
+                                        and (s.indicators.get("foreign_net_buy") or 0) >= 0  # 수급 양수 or 중립
+                                    ]
+                                    _rsi2_limit = sum(
+                                        1 for p in bot.engine.portfolio.positions.values()
+                                        if p.strategy == "rsi2_reversal"
+                                    )
+                                    for _r2s in _rsi2_intraday[:2]:
+                                        if _rsi2_limit >= 3:
+                                            break
+                                        try:
+                                            _r2q = await bot.broker.get_quote(_r2s.symbol)
+                                            if not _r2q or _r2q.get("price", 0) <= 0:
+                                                continue
+                                            _r2p = _r2q["price"]
+                                            _r2_stop = _r2p * 0.95     # 손절 -5%
+                                            _r2_target = _r2p * 1.10   # 목표 +10% (RSI2 반등 목표)
+                                            _r2_sig = Signal(
+                                                symbol=_r2s.symbol,
+                                                side=OrderSide.BUY,
+                                                strength=SignalStrength.STRONG,
+                                                strategy=StrategyType.RSI2_REVERSAL,
+                                                price=Decimal(str(_r2p)),
+                                                stop_price=Decimal(str(_r2_stop)),
+                                                target_price=Decimal(str(_r2_target)),
+                                                score=_r2s.score,
+                                                confidence=_r2s.score / 100.0,
+                                                reason=(
+                                                    f"RSI2 장중 과매도 진입: {_r2s.name} "
+                                                    f"RSI(2)={_r2s.indicators.get('rsi_2','?'):.1f} "
+                                                    f"점수={_r2s.score:.0f}"
+                                                ),
+                                                metadata={
+                                                    "source": "rsi2_intraday",
+                                                    "name": _r2s.name,
+                                                    "rsi2": _r2s.indicators.get("rsi_2"),
+                                                },
+                                            )
+                                            _name_cache = getattr(bot.engine, '_stock_name_cache', None)
+                                            if _name_cache is not None and _r2s.name:
+                                                _name_cache[_r2s.symbol] = _r2s.name
+                                            await bot.engine.emit(
+                                                SignalEvent.from_signal(_r2_sig, source="rsi2_intraday")
+                                            )
+                                            bot._screening_signal_cooldown[_r2s.symbol] = now
+                                            signals_emitted += 1
+                                            _rsi2_limit += 1
+                                            logger.info(
+                                                f"[RSI2 장중] {_r2s.symbol} {_r2s.name} 시그널 발행: "
+                                                f"RSI(2)={_r2s.indicators.get('rsi_2','?'):.1f}, "
+                                                f"가격={_r2p:,.0f}원"
+                                            )
+                                        except Exception as _r2e:
+                                            logger.debug(f"[RSI2 장중] {_r2s.symbol} 오류: {_r2e}")
+                                # ────────────────────────────────────────────────────────
+
                                 for stock in candidates[:8]:
                                     if signals_emitted >= 5:
                                         break

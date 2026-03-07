@@ -1,3 +1,13 @@
+batch:
+  min_score: 60.0
+  strategy_limits:            # 전략별 최대 동시 포지션 수
+    sepa_trend: 5             # 23M 자본 → 5개 한도 (현금이 실질 제약)
+    rsi2_reversal: 3          # 과매도 반전은 3개로 집중
+    theme_chasing: 2
+    gap_and_go: 2
+  default_strategy_limit: 3
+  gap_down_skip_pct: -2.0
+
 risk_config:
   daily_max_trades: 30
   default_stop_loss_pct: 4.0
@@ -41,7 +51,7 @@ sepa_trend:
 rsi2_reversal:
   enabled: true
   weight: 40
-  min_score: 65
+  min_score: 60   # 65→60: 더 많은 과매도 기회 포착 (장중 탐지 추가로 커버)
 _meta:
   exit_manager.stop_loss_pct:
     source: manual_review
