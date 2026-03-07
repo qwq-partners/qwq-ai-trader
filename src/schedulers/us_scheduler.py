@@ -1512,6 +1512,10 @@ class USScheduler:
                     hh, mm, ss = int(order_time_str[:2]), int(order_time_str[2:4]), int(order_time_str[4:6])
                     today = now_kst.date()
                     submitted_at = datetime(today.year, today.month, today.day, hh, mm, ss)
+                    # 미래 시각으로 설정되면 하루 전으로 보정
+                    # (예: 전날 22:30에 넣은 주문 → today+22:30은 미래 → yesterday+22:30으로 수정)
+                    if submitted_at > now_kst:
+                        submitted_at = submitted_at - timedelta(days=1)
                 except Exception:
                     pass
 
@@ -1541,11 +1545,14 @@ class USScheduler:
         eng = self.engine
 
         # KIS API는 KST 날짜 기준 (ET 날짜와 불일치 가능)
-        today_kst = datetime.now().strftime("%Y%m%d")
+        # 미국장은 KST 22:30~05:00으로 날짜가 걸침 → 전일 포함 조회
+        now_kst = datetime.now()
+        today_kst = now_kst.strftime("%Y%m%d")
+        yesterday_kst = (now_kst - timedelta(days=1)).strftime("%Y%m%d")
         pending_count = len(eng._pending_orders)
-        history = await eng.broker.get_order_history(start_date=today_kst, end_date=today_kst)
+        history = await eng.broker.get_order_history(start_date=yesterday_kst, end_date=today_kst)
         logger.info(
-            f"[US 주문 체크] pending={pending_count}, history={len(history) if history else 0}, date={today_kst}"
+            f"[US 주문 체크] pending={pending_count}, history={len(history) if history else 0}, date={yesterday_kst}~{today_kst}"
         )
         if not history:
             return

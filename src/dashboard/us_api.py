@@ -66,7 +66,7 @@ class USAPIHandler:
         is_paper = broker_name == "alpaca_paper" or env == "dev"
 
         return web.json_response({
-            "running": getattr(engine, "_running", False),
+            "running": getattr(engine, "running", False),
             "session": session_value,
             "timestamp": datetime.now().isoformat(),
             "version": VERSION,
