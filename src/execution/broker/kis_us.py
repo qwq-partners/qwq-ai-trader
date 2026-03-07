@@ -118,9 +118,11 @@ class KISUSBroker:
     async def _get_available_usd_cash(self) -> float:
         """주문가능외화금액 조회 (TTTS3007R) — 장중/비장 모두 동작.
 
-        KIS 공식 샘플코드 기반:
-          ITEM_CD=AAPL, OVRS_ORD_UNPR=1 로 호출하면
-          ord_psbl_frcr_amt 필드에 USD 주문가능금액 반환.
+        KIS TTTS3007R 핵심 필드:
+          - ovrs_ord_psbl_amt : KIS앱 "주문가능달러" (결제완료분 + T+2 미결제 매도재사용분)
+          - ord_psbl_frcr_amt : 즉시결제분만 (T+2 미결제 미포함, 과소계산)
+          - sll_ruse_psbl_amt : 미결제 매도재사용 가능금액 (위 두 값의 차액)
+        → ovrs_ord_psbl_amt 를 실거래 가용 현금으로 사용.
 
         Returns:
             float: 주문가능 USD 금액 (조회 실패 시 0.0)
@@ -144,8 +146,17 @@ class KISUSBroker:
             output = data.get("output", {})
             if isinstance(output, list):
                 output = output[0] if output else {}
-            cash = float(output.get("ord_psbl_frcr_amt", "0") or "0")
-            logger.debug(f"[TTTS3007R] ord_psbl_frcr_amt=${cash:.2f}")
+            # ovrs_ord_psbl_amt = KIS앱 "주문가능달러" (결제분 + T+2 미결제 매도 재사용분 포함)
+            cash = float(output.get("ovrs_ord_psbl_amt", "0") or "0")
+            if cash <= 0:
+                # 폴백: 즉시결제분만
+                cash = float(output.get("ord_psbl_frcr_amt", "0") or "0")
+            settled  = float(output.get("ord_psbl_frcr_amt", "0") or "0")
+            unsettled = float(output.get("sll_ruse_psbl_amt", "0") or "0")
+            logger.info(
+                f"[TTTS3007R] 주문가능달러 ${cash:.2f} "
+                f"(결제완료 ${settled:.2f} + 미결제재사용 ${unsettled:.2f})"
+            )
             return cash
         except Exception as e:
             logger.debug(f"[TTTS3007R] 조회 오류: {e}")
@@ -499,32 +510,25 @@ class KISUSBroker:
         if isinstance(output2, list):
             output2 = output2[0] if output2 else {}
 
-        # output2 핵심 필드:
-        #   frcr_dncl_amt  = 외화 예수금 (주문 가능 USD)
-        #   frcr_evlu_amt  = 보유주식 평가금 (USD)
-        #   ovrs_tot_pfls  = 총 평가손익
-        # 총 미국 자산 = frcr_dncl_amt + frcr_evlu_amt
-        available_cash  = float(output2.get("frcr_dncl_amt", "0") or "0")
-        stock_eval_amt  = float(output2.get("frcr_evlu_amt", "0") or "0")
+        # output2 실제 필드 (TTTS3012R 응답 기준):
+        #   tot_evlu_pfls_amt = 보유주식 현재 평가금액 합계 (USD)
+        #   ovrs_tot_pfls     = 총 평가손익 (USD)
+        #   frcr_pchs_amt1    = 외화 매수금액 (매입원가)
+        # ※ frcr_dncl_amt / frcr_evlu_amt 는 이 output2에 존재하지 않음 (필드명 오류)
+        available_cash  = 0.0   # TTTS3007R로 덮어씀
+        stock_eval_amt  = float(output2.get("tot_evlu_pfls_amt", "0") or "0")
         total_pnl       = float(output2.get("ovrs_tot_pfls", "0") or "0")
         total_equity    = available_cash + stock_eval_amt
 
         logger.debug(
-            f"[TTTS3012R] output2: 예수금=${available_cash:.2f}, 주식평가=${stock_eval_amt:.2f}, "
-            f"총자산=${total_equity:.2f}, 총손익=${total_pnl:.2f}"
+            f"[TTTS3012R] output2: 주식평가=${stock_eval_amt:.2f}, "
+            f"총손익=${total_pnl:.2f}"
         )
 
-        # TTTS3007R: 주문가능외화금액 (항상 조회 — frcr_dncl_amt보다 정확)
-        # ※ KIS 앱 "주문가능달러"와 차이 가능: 앱은 T+2 미결제 매도 대금 포함,
-        #    TTTS3007R은 결제 완료된 즉시 주문 가능 금액만 반환.
-        # frcr_dncl_amt(예수금)와 ord_psbl_frcr_amt(주문가능달러)는 다를 수 있음
+        # TTTS3007R: 주문가능외화금액 — KIS앱 "주문가능달러" 기준
+        # ovrs_ord_psbl_amt = 결제완료분 + T+2 미결제 매도 재사용분 합산 (앱 표시값과 동일)
         ps_cash = await self._get_available_usd_cash()
         if ps_cash > 0:
-            if abs(ps_cash - available_cash) > 0.5:
-                logger.info(
-                    f"[TTTS3007R] 주문가능달러 ${ps_cash:.2f} "
-                    f"(frcr_dncl_amt ${available_cash:.2f}와 차이 → TTTS3007R 우선 사용)"
-                )
             available_cash = ps_cash
             total_equity = available_cash + stock_eval_amt
 
