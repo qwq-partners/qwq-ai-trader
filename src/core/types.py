@@ -484,8 +484,9 @@ class TradeResult:
 
     @property
     def holding_time(self) -> float:
-        """보유 시간 (분)"""
-        return (self.exit_time - self.entry_time).total_seconds() / 60
+        """보유 시간 (분) — 음수 방지 (sync 기록 시 exit < entry 가능)"""
+        delta = (self.exit_time - self.entry_time).total_seconds() / 60
+        return max(0.0, delta)
 
     # holding_minutes는 holding_time의 alias (US 호환)
     @property

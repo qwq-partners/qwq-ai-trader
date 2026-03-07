@@ -2,13 +2,13 @@ risk_config:
   daily_max_trades: 30
   default_stop_loss_pct: 4.0
   base_position_pct: 10.0
-  max_positions: 7
+  max_positions: 10
   strategy_allocation:
-    theme_chasing: 30.0
-    sepa_trend: 5.0
-    rsi2_reversal: 40.0
-    gap_and_go: 25.0
-    momentum_breakout: 5.0
+    sepa_trend: 60.0        # ★ 최고 성과 (88% 승률, +3.82%) → 우선
+    rsi2_reversal: 25.0     # 2순위 (67% 승률, +1.83%)
+    momentum_breakout: 0.0  # 비활성 (35% 승률, -0.88%) → 비활성
+    theme_chasing: 10.0
+    gap_and_go: 5.0
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 2.5
@@ -18,7 +18,7 @@ exit_manager:
   trailing_activate_pct: 2.5
   trailing_stop_pct: 2.5
 momentum_breakout:
-  enabled: true
+  enabled: false            # ← 강제 비활성화 (03-04 대참사 원인)
   stop_loss_pct: 3.5
   min_volume_ratio: 2.5
   trading_start_time: '10:30'
@@ -36,11 +36,11 @@ gap_and_go:
   min_volume_ratio: 3.0
 sepa_trend:
   enabled: true
-  weight: 40
+  weight: 60
   min_score: 60
 rsi2_reversal:
   enabled: true
-  weight: 60
+  weight: 40
   min_score: 65
 _meta:
   exit_manager.stop_loss_pct:
@@ -56,9 +56,10 @@ _meta:
     timestamp: '2026-02-23T15:35:00'
     note: 3.0→2.5% first_exit보다 낮게 (순서 역전 수정)
   risk_config.strategy_allocation:
-    source: weekly_rebalance
-    timestamp: '2026-03-07T00:11:35.617745'
+    source: manual_review
+    timestamp: '2026-03-07T11:00:00'
+    note: 성과 기반 재조정 - sepa_trend 5→60%, rsi2_reversal 40→25%
   momentum_breakout.enabled:
-    source: screening_improvement
-    timestamp: '2026-03-04T23:00:00'
-    note: 인트라데이 전략 재활성화 (momentum, theme, gap_and_go)
+    source: manual_review
+    timestamp: '2026-03-07T11:00:00'
+    note: 03-04 대참사 이후 강제 비활성화 (35% 승률, -1.07M 손실)

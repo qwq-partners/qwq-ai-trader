@@ -541,9 +541,10 @@ class LLMManager:
         prompt: str,
         task: LLMTask = LLMTask.QUICK_CLASSIFY,
         system: str = "",
+        _retry: int = 0,
         **kwargs
     ) -> Dict[str, Any]:
-        """JSON 응답 생성"""
+        """JSON 응답 생성 (Invalid JSON 시 최대 1회 재시도)"""
         response = await self.complete(prompt, task, system, **kwargs)
 
         if not response.success:
@@ -565,6 +566,16 @@ class LLMManager:
                 task=task.value, model=response.model or "",
                 raw=response.content or "", parsed=None, success=False,
             )
+            # 1회 재시도 — JSON 형식만 요청하는 접미 추가
+            if _retry == 0:
+                retry_prompt = (
+                    prompt + "\n\n**중요: 위 지시에 따라 반드시 순수 JSON만 출력하세요. "
+                    "코드블록(```), 설명 텍스트, 마크다운 없이 JSON 객체만 응답하세요.**"
+                )
+                logger.debug(f"[LLM] Invalid JSON 재시도 (task={task.value})")
+                return await self.complete_json(
+                    retry_prompt, task, system, _retry=1, **kwargs
+                )
             return {"error": "Invalid JSON", "raw": response.content}
 
     def _log_llm_response(

@@ -249,38 +249,53 @@ class USScheduler:
                     pass
 
                 qty = row['entry_quantity'] or 1
+                pnl_est = round((exit_price - entry_price) * qty, 2)
+                pnl_pct_est = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+                # exit_type 추론 (sync_reconcile 대신 실제 이유 근사)
+                if pnl_pct_est <= -3.5:
+                    inferred_type = "stop_loss"
+                    inferred_reason = f"sync_inferred: stop_loss ({pnl_pct_est:.1f}%)"
+                elif pnl_pct_est >= 5.0:
+                    inferred_type = "trailing"
+                    inferred_reason = f"sync_inferred: trailing ({pnl_pct_est:.1f}%)"
+                elif pnl_pct_est >= 2.5:
+                    inferred_type = "take_profit"
+                    inferred_reason = f"sync_inferred: take_profit ({pnl_pct_est:.1f}%)"
+                else:
+                    inferred_type = "sync_reconcile"
+                    inferred_reason = f"sync_reconcile (재시작 복구, {pnl_pct_est:.1f}%)"
+
                 result = ts.record_exit(
                     trade_id=trade_id,
                     exit_price=exit_price,
                     exit_quantity=qty,
-                    exit_reason="sync_reconcile (재시작 복구)",
-                    exit_type="sync_reconcile",
+                    exit_reason=inferred_reason,
+                    exit_type=inferred_type,
                     exit_time=datetime.now(),
                     avg_entry_price=entry_price,
                 )
                 if result is None:
                     # journal 캐시 없는 경우 DB 직접 기록
-                    from decimal import Decimal as _D
-                    pnl = round((exit_price - entry_price) * qty, 2)
-                    pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
                     ts._enqueue(
                         """UPDATE trades SET exit_time=$1, exit_price=$2, exit_quantity=$3,
                            exit_reason=$4, exit_type=$5, pnl=$6, pnl_pct=$7, updated_at=$8
                            WHERE id=$9""",
                         (datetime.now(), exit_price, qty,
-                         "sync_reconcile (재시작 복구)", "sync_reconcile",
-                         round(pnl, 2), round(pnl_pct, 2), datetime.now(), trade_id),
+                         inferred_reason, inferred_type,
+                         round(pnl_est, 2), round(pnl_pct_est, 2), datetime.now(), trade_id),
                     )
                     ts._enqueue(
                         """INSERT INTO trade_events
                            (trade_id, symbol, name, event_type, event_time, price, quantity,
                             exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score, status)
-                           VALUES ($1,$2,$3,'SELL',$4,$5,$6,'sync_reconcile',
-                                   'sync_reconcile (재시작 복구)',$7,$8,$9,0,'sync_reconcile')
+                           VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0,$12)
                            ON CONFLICT DO NOTHING""",
                         (trade_id, sym, row['name'] or sym,
                          datetime.now(), exit_price, qty,
-                         round(pnl, 2), round(pnl_pct, 2), row['entry_strategy'] or ''),
+                         inferred_type, inferred_reason,
+                         round(pnl_est, 2), round(pnl_pct_est, 2),
+                         row['entry_strategy'] or '', inferred_type),
                     )
                 logger.info(
                     f"[US Reconcile] {sym} ghost 거래 청산 기록: "
@@ -1414,6 +1429,15 @@ class USScheduler:
 
                 # TradeStorage entry 기록 (체결 누락 보완)
                 if eng.trade_storage and symbol not in self._prev_qty_snapshot:
+                    # pending 주문에서 signal_score/strategy 복원 (fill_ws=off 상황 보완)
+                    _sync_score = 0
+                    _sync_strat = restored_strat or "unknown"
+                    for _pend in eng._pending_orders.values():
+                        if _pend.get("symbol") == symbol and _pend.get("side") == "buy":
+                            _sync_score = _pend.get("signal_score", 0)
+                            if _pend.get("strategy"):
+                                _sync_strat = _pend["strategy"]
+                            break
                     eng.trade_storage.record_entry(
                         trade_id=sync_trade_id,
                         symbol=symbol,
@@ -1421,8 +1445,8 @@ class USScheduler:
                         entry_price=float(kp["avg_price"]),
                         entry_quantity=int(kp["qty"]),
                         entry_reason="sync_detected",
-                        entry_strategy=restored_strat or "unknown",
-                        signal_score=0,
+                        entry_strategy=_sync_strat,
+                        signal_score=_sync_score,
                         indicators=None,
                         market="US",
                     )
@@ -1818,18 +1842,57 @@ class USScheduler:
 
             # TradeStorage DB + 캐시 기록
             if eng.trade_storage:
-                eng.trade_storage.record_entry(
-                    trade_id=trade_id,
-                    symbol=symbol,
-                    name=pos.name,
-                    entry_price=float(filled_price),
-                    entry_quantity=filled_qty,
-                    entry_reason=pending.get("reason", ""),
-                    entry_strategy=pending.get("strategy", ""),
-                    signal_score=pending.get("signal_score", 0),
-                    indicators=eng._indicator_cache.get(symbol),
-                    market="US",
-                )
+                _score = float(pending.get("signal_score", 0) or 0)
+                _strat = pending.get("strategy", "")
+                # sync 경로가 이미 SYNC_ entry를 만들었으면 score/strategy 업데이트 (중복 방지)
+                _sync_trade_id = None
+                if eng.trade_storage.pool:
+                    try:
+                        _row = await eng.trade_storage.pool.fetchrow(
+                            """SELECT id FROM trades
+                               WHERE symbol=$1 AND market='US' AND exit_time IS NULL
+                                 AND entry_reason='sync_detected'
+                               ORDER BY entry_time DESC LIMIT 1""",
+                            symbol,
+                        )
+                        if _row:
+                            _sync_trade_id = _row["id"]
+                    except Exception:
+                        pass
+
+                if _sync_trade_id:
+                    # SYNC_ 레코드를 실제 체결 정보로 보강 (id PK 유지)
+                    eng.trade_storage._enqueue(
+                        """UPDATE trades
+                           SET entry_signal_score=$1, entry_strategy=$2,
+                               entry_price=$3, entry_quantity=$4,
+                               entry_reason=$5, updated_at=NOW()
+                           WHERE id=$6""",
+                        (_score, _strat or "sepa_trend",
+                         float(filled_price), filled_qty,
+                         pending.get("reason", "fill_confirmed"),
+                         _sync_trade_id),
+                    )
+                    trade_id = _sync_trade_id  # 기존 SYNC_ id로 통일
+                    logger.debug(
+                        f"[US 체결] {symbol} SYNC_ entry 보강: score={_score:.0f}, "
+                        f"strat={_strat}, id={_sync_trade_id}"
+                    )
+                else:
+                    eng.trade_storage.record_entry(
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        name=pos.name,
+                        entry_price=float(filled_price),
+                        entry_quantity=filled_qty,
+                        entry_reason=pending.get("reason", ""),
+                        entry_strategy=_strat,
+                        signal_score=_score,
+                        indicators=eng._indicator_cache.get(symbol),
+                        market="US",
+                    )
+                # pos에 trade_id 반영
+                pos.trade_id = trade_id
 
             # WS 시작 (없을 경우) + 구독
             exchange = await self._get_exchange(symbol)
