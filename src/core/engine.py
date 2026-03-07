@@ -1410,11 +1410,26 @@ class RiskManager:
         if self.config.hybrid.enabled:
             base_pct, max_pct, pool_equity = self._get_hybrid_params(signal.strategy, equity)
         else:
-            # config.base_position_pct 사용 (하드코딩 제거)
-            # 전략별 총 예산 한도(strategy_allocation)는 아래 _budget_cap 로직에서 적용
-            # 포지션당 기본 크기는 config에서 읽어 일관되게 적용
-            default_pct = self.config.base_position_pct
-            base_pct = default_pct / 100
+            # 전략별 포지션 크기 (CLAUDE.md 명시값 — 공격적 포지션 운영)
+            # strategy_allocation은 총 예산 cap (아래 _budget_cap 로직에서 적용)
+            # per-position 크기는 전략별로 차별화
+            default_pct = self.config.base_position_pct  # 최종 폴백
+            strategy_position_pct = {
+                StrategyType.SEPA_TREND: 25.0,        # 핵심 전략: 공격적 배분 (CLAUDE.md)
+                StrategyType.RSI2_REVERSAL: 20.0,     # 단기 반전: 중간 배분
+                StrategyType.EARNINGS_DRIFT: 20.0,    # US 어닝스 드리프트
+                StrategyType.THEME_CHASING: 15.0,     # 테마: 집중 배분
+                StrategyType.GAP_AND_GO: 15.0,        # 갭상승: 집중 배분
+                StrategyType.MOMENTUM_BREAKOUT: 0.0,  # 비활성 (03-04 대참사)
+            }
+            strat_pct = strategy_position_pct.get(signal.strategy, default_pct)
+            # 비활성 전략이 0%면 매수 자체를 차단
+            if strat_pct <= 0:
+                logger.warning(
+                    f"[리스크] {signal.symbol} {signal.strategy} 비활성 전략 → 포지션 0% 차단"
+                )
+                return 0
+            base_pct = strat_pct / 100
             max_pct = self.config.max_position_pct / 100
             pool_equity = equity
 
