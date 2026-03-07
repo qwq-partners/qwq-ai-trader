@@ -831,6 +831,7 @@ class SwingScreener:
             overlay_added = candidate.score - pre_overlay_score
             if overlay_added > OVERLAY_MAX_BONUS:
                 candidate.score = pre_overlay_score + OVERLAY_MAX_BONUS
+                overlay_added = OVERLAY_MAX_BONUS
                 logger.debug(
                     f"[스윙스크리너] {sym} 오버레이 캡 적용: "
                     f"+{overlay_added:.0f} → +{OVERLAY_MAX_BONUS}점"
@@ -838,6 +839,9 @@ class SwingScreener:
 
             # 구조화된 메타데이터 (batch_analyzer에서 문자열 파싱 대신 사용)
             candidate.indicators["strategic_layers"] = layers_matched
+            # generate_batch_signals가 indicators에서 재계산하므로
+            # overlay bonus를 별도 필드에 저장 → 전략 점수에 가산
+            candidate.indicators["overlay_bonus"] = round(overlay_added, 1)
 
             if layers_matched > 0:
                 overlay_applied += 1

@@ -224,4 +224,8 @@ class RSI2ReversalStrategy(BaseStrategy):
         elif vol_ratio > 1.0:
             score += 3
 
+        # 전략적 오버레이 보너스 (VCP / 전문가패널 / 수급추세) — swing_screener에서 계산
+        overlay = candidate.indicators.get("overlay_bonus", 0.0) or 0.0
+        score += overlay
+
         return min(score, 100)

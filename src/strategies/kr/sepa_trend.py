@@ -269,4 +269,8 @@ class SEPATrendStrategy(BaseStrategy):
             elif change_20d > 0:
                 score += 2
 
+        # 전략적 오버레이 보너스 (VCP / 전문가패널 / 수급추세) — swing_screener에서 계산
+        overlay = candidate.indicators.get("overlay_bonus", 0.0) or 0.0
+        score += overlay
+
         return min(score, 100)
