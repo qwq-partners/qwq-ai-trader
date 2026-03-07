@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-07 — 야간 로그 분석 기반 6가지 안정성 개선
+> `5dd61f1` | `run_trader.py`, `us_scheduler.py`, `kis_us.py`, `dart_checker.py`
+- systemd MemoryMax 1G→3G, TimeoutStopSec 30→60 (OOM 연쇄 재시작 방지)
+- `_stopped_today` 파일 영속화 (`~/.cache/ai_trader_us/stopped_today_YYYYMMDD.json`)
+  → 재시작 후 손절/트레일링 청산 종목 즉시 재매수 방지 (TNGX 3사이클 반복 원인)
+- `_order_fail_blacklist`: ETP미신청/매수불가 종목 당일 재시도 차단 (FTGC, PDBC, PAA)
+- `get_volume_surge` MINX 오류: MINX 없이 retry + WARNING→DEBUG 다운그레이드
+- `_quote_fail_count`: 현재가 3회 실패 종목 세션 내 블랙리스트 (CVE, BNO, GUSH 등)
+- DART corpCode BadZipFile 오류 → 만료 캐시 폴백 강화
+
 ## 2026-03-07 — US 거래량급증 API 오타 + 보유종목 중복매수 방지 + 3차익절 표기
 > `30c8fa2` | `kis_us.py`, `us_scheduler.py`, `dashboard.js`
 
