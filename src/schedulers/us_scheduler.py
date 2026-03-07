@@ -216,7 +216,7 @@ class USScheduler:
         try:
             today = datetime.now().date()
             rows = await ts.pool.fetch(
-                """SELECT id, symbol, name, avg_price as entry_price, entry_quantity,
+                """SELECT id, symbol, name, entry_price, entry_quantity,
                           entry_strategy
                    FROM trades
                    WHERE market='US' AND exit_time IS NULL
