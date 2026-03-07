@@ -834,7 +834,7 @@ class KRScheduler:
                                             entry_quantity=fill.quantity,
                                             entry_reason=getattr(pos, 'entry_reason', 'buy_signal') or 'buy_signal',
                                             entry_strategy=str(pos.strategy or 'unknown'),
-                                            signal_score=0.0,
+                                            signal_score=float(fill.signal_score or 0.0),
                                             market="KR",
                                         )
                                         pos.trade_id = _rec.id

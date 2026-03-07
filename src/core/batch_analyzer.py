@@ -130,11 +130,11 @@ class BatchAnalyzer:
     def _safe_strategy_type(strategy_str: Optional[str]) -> StrategyType:
         """문자열을 StrategyType으로 안전하게 변환 (ValueError 방지)"""
         if not strategy_str:
-            return StrategyType.MOMENTUM_BREAKOUT
+            return StrategyType.SEPA_TREND  # 기본 전략 (momentum_breakout 비활성)
         try:
             return StrategyType(strategy_str)
         except (ValueError, KeyError):
-            return StrategyType.MOMENTUM_BREAKOUT
+            return StrategyType.SEPA_TREND
 
     async def _scan_and_build(self, expire_today: bool = False):
         """공통 스캔 로직: 스크리닝 -> 시그널 생성 -> PendingSignal 리스트 반환
@@ -615,7 +615,7 @@ class BatchAnalyzer:
                 try:
                     strategy_type = StrategyType(sig.strategy)
                 except (ValueError, KeyError):
-                    strategy_type = StrategyType.MOMENTUM_BREAKOUT
+                    strategy_type = StrategyType.SEPA_TREND  # momentum_breakout 비활성
                 signal = Signal(
                     symbol=sig.symbol,
                     side=OrderSide.BUY,
