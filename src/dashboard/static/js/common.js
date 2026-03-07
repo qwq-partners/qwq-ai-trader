@@ -210,6 +210,71 @@ const MarketFilter = {
 };
 
 // ============================================================
+// 네비 롤링 지수 전광판
+// ============================================================
+
+function _tickerColor(changePct) {
+    const t = Math.min(Math.abs(changePct) / 3.0, 1.0);
+    if (changePct >= 0) {
+        const r = Math.round(252 - t * 32);
+        const g = Math.round(165 - t * 127);
+        const b = Math.round(165 - t * 127);
+        return `rgb(${r},${g},${b})`;
+    } else {
+        const r = Math.round(147 - t * 118);
+        const g = Math.round(197 - t * 119);
+        const b = Math.round(253 - t * 37);
+        return `rgb(${r},${g},${b})`;
+    }
+}
+
+function _buildTickerHTML(indices) {
+    const items = indices.map(idx => {
+        const up    = idx.change_pct >= 0;
+        const arrow = up ? '▲' : '▼';
+        const kind  = idx.kind || '';
+        const isPep  = idx.label === '펩트론';
+        const tiCls  = kind === 'index_kr' ? 'nav-ti nav-ti-kr'
+                     : kind === 'index_us' ? 'nav-ti nav-ti-us'
+                     : isPep ? 'nav-ti nav-ti-pep'
+                     : 'nav-ti nav-ti-stock';
+        const tvCls  = isPep ? 'nav-tv nav-tv-pep' : 'nav-tv';
+        const color  = _tickerColor(idx.change_pct);
+        const isKRPrice = kind === 'index_kr' || kind === 'stock_kr';
+        const price = isKRPrice
+            ? Math.round(idx.price).toLocaleString() + '원'
+            : idx.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+        const pctStr = (up ? '+' : '') + idx.change_pct.toFixed(2) + '%';
+        return `<span class="${tiCls}">${idx.label}</span>` +
+               `<span class="${tvCls}" style="color:${color}">${arrow} ${price} ${pctStr}</span>` +
+               `<span class="nav-ts">·</span>`;
+    }).join('');
+    return items + items;
+}
+
+async function fetchNavIndices() {
+    try {
+        const data = await fetch('/api/market/indices').then(r => r.json());
+        if (data && data.length > 0) {
+            const inner = document.getElementById('nav-ticker-inner');
+            if (inner) {
+                inner.innerHTML = _buildTickerHTML(data);
+                inner.style.animation = 'none';
+                void inner.offsetWidth;
+                inner.style.animation = '';
+                // 데이터 로드 완료 시 전광판 fade-in
+                const strip = inner.closest('.ticker-strip');
+                if (strip) {
+                    strip.style.transition = 'opacity 0.5s ease';
+                    strip.style.opacity = '1';
+                }
+            }
+        }
+    } catch(e) {}
+    setTimeout(fetchNavIndices, 30 * 1000);
+}
+
+// ============================================================
 // 네비게이션 활성화
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
@@ -231,4 +296,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sbSession) sbSession.textContent = sessionLabel(data.session);
         if (sbUptime) sbUptime.textContent = formatDuration(data.uptime_seconds);
     });
+
+    // 전광판 초기화 (모든 페이지 공통) — 데이터 로드 전까지 숨김
+    const _tickerInner = document.getElementById('nav-ticker-inner');
+    if (_tickerInner) {
+        const _strip = _tickerInner.closest('.ticker-strip');
+        if (_strip) _strip.style.opacity = '0';
+        setTimeout(fetchNavIndices, 1000);
+    }
 });
