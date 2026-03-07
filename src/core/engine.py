@@ -1410,15 +1410,11 @@ class RiskManager:
         if self.config.hybrid.enabled:
             base_pct, max_pct, pool_equity = self._get_hybrid_params(signal.strategy, equity)
         else:
-            strategy_position_pct = {
-                StrategyType.SEPA_TREND: 25.0,
-                StrategyType.MOMENTUM_BREAKOUT: 7.0,
-                StrategyType.RSI2_REVERSAL: 20.0,
-                StrategyType.THEME_CHASING: 7.0,
-                StrategyType.GAP_AND_GO: 7.0,
-            }
+            # config.base_position_pct 사용 (하드코딩 제거)
+            # 전략별 총 예산 한도(strategy_allocation)는 아래 _budget_cap 로직에서 적용
+            # 포지션당 기본 크기는 config에서 읽어 일관되게 적용
             default_pct = self.config.base_position_pct
-            base_pct = strategy_position_pct.get(signal.strategy, default_pct) / 100
+            base_pct = default_pct / 100
             max_pct = self.config.max_position_pct / 100
             pool_equity = equity
 

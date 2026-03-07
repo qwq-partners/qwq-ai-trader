@@ -195,13 +195,23 @@ class ExitManager:
                 state.original_quantity = position.quantity
                 state.remaining_quantity = position.quantity
                 if position.quantity > old_qty:
-                    state.current_stage = ExitStage.NONE
+                    added = position.quantity - old_qty
+                    pct_added = added / max(old_qty, 1)
                     new_high = position.current_price or position.avg_price
                     state.highest_price = max(state.highest_price, new_high)
-                    logger.debug(
-                        f"[ExitManager] 포지션 업데이트(추가매수): {position.symbol} "
-                        f"{old_qty}주 -> {position.quantity}주, stage->NONE"
-                    )
+                    # 10% 이상 추가매수만 stage 리셋 (소량 sync 오차는 stage 유지)
+                    if pct_added >= 0.10:
+                        state.current_stage = ExitStage.NONE
+                        logger.info(
+                            f"[ExitManager] 추가매수 확인: {position.symbol} "
+                            f"{old_qty}→{position.quantity}주 (+{pct_added*100:.0f}%), stage→NONE"
+                        )
+                    else:
+                        logger.debug(
+                            f"[ExitManager] 수량 소폭 증가(sync): {position.symbol} "
+                            f"{old_qty}→{position.quantity}주 (+{added}주, "
+                            f"{pct_added*100:.1f}%), stage={state.current_stage.value} 유지"
+                        )
                 else:
                     logger.debug(
                         f"[ExitManager] 포지션 업데이트(부분매도): {position.symbol} "
@@ -387,13 +397,17 @@ class ExitManager:
                     f"ATR트레일링: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
                 )
 
-            # 본전 보호 (매도 수수료 버퍼 포함 — 매도 후 실질 이익 보존)
-            sell_fee_buffer = 0.25  # KR 매도 수수료+세금 ≈ 0.213%, 여유분 포함
-            if net_pnl_pct <= sell_fee_buffer:
-                return self._create_exit(
-                    state, "sell_all", state.remaining_quantity,
-                    f"본전 이탈: +{net_pnl_pct:.2f}% (수수료 버퍼 {sell_fee_buffer}% 이하)"
-                )
+            # 본전 보호 (1차 익절 완료 후에만 적용 — 분할 수익 확보 전 조기청산 방지)
+            # trailing_activate 도달했지만 아직 분할 익절 전인 포지션은 제외
+            if state.current_stage >= ExitStage.FIRST:
+                # KR 매도 수수료+세금 ≈ 0.213%, 여유분 포함 0.25%
+                sell_fee_buffer = 0.0 if self.market in ("US", "NASDAQ", "NYSE") else 0.25
+                if net_pnl_pct <= sell_fee_buffer:
+                    return self._create_exit(
+                        state, "sell_all", state.remaining_quantity,
+                        f"본전 이탈: +{net_pnl_pct:.2f}% "
+                        f"(1차 익절 완료 후 수수료 버퍼 {sell_fee_buffer}% 이하)"
+                    )
 
         elif net_pnl_pct >= self.config.trailing_activate_pct:
             trailing_pct = float((current_price - state.highest_price) / state.highest_price * 100)
@@ -421,7 +435,8 @@ class ExitManager:
         # 1차 익절
         if state.current_stage == ExitStage.NONE:
             if net_pnl_pct >= first_pct:
-                exit_qty = max(1, int(state.original_quantity * self.config.first_exit_ratio))
+                # remaining_quantity 기준 (sync 복원 시 original과 괴리 방지)
+                exit_qty = max(1, int(state.remaining_quantity * self.config.first_exit_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.current_stage = ExitStage.FIRST

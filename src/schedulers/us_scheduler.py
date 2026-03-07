@@ -1857,8 +1857,10 @@ class USScheduler:
                         )
                         if _row:
                             _sync_trade_id = _row["id"]
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        logger.debug(
+                            f"[US 체결] {symbol} SYNC_ entry 조회 실패: {_e} → 신규 entry 생성"
+                        )
 
                 if _sync_trade_id:
                     # SYNC_ 레코드를 실제 체결 정보로 보강 (id PK 유지)
