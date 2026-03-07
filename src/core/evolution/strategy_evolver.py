@@ -202,19 +202,22 @@ class StrategyEvolver:
         self._components: Dict[str, Any] = {}
         self._component_config_attrs: Dict[str, str] = {}
 
-        # 파라미터 범위
+        # 진화 잠금 파라미터 — 수동 분석 후에만 조정 (evolved_overrides 덮어쓰기 금지)
+        self._locked_params: set = {
+            "base_position_pct",       # 포지션 크기: 25% 고정
+            "trailing_stop_pct",       # 트레일링 스탑: 3.0% 고정
+            "trailing_activate_pct",   # 트레일링 활성화: 5.0% 고정
+            "first_exit_pct",          # 1차 익절: 5.0% 고정
+        }
+
+        # 파라미터 범위 (locked 파라미터는 진화 대상에서 자동 제외)
         self._param_bounds: Dict[str, Tuple[Any, Any]] = {
             "min_score": (30, 90),
             "stop_loss_pct": (1.0, 8.0),
             "take_profit_pct": (2.0, 20.0),
-            "trailing_stop_pct": (0.5, 5.0),
             "max_stop_pct": (3.0, 10.0),
             "min_stop_pct": (1.0, 5.0),
-            "first_exit_pct": (1.5, 10.0),
-            # 주간 5% 목표 기준 공격적 운영 — 하한 20% 보장
-            # (진화 알고리즘이 보수화로 15% 아래로 내리는 것 방지)
-            "base_position_pct": (20.0, 35.0),
-            "daily_max_loss_pct": (2.0, 8.0),  # 공격적 운영: 하한 2%, 상한 8%
+            "daily_max_loss_pct": (2.0, 8.0),
         }
 
         logger.info(f"StrategyEvolver 초기화: 규칙 {len(self._rules)}개, 저장소 {self.storage_dir}")
@@ -510,6 +513,11 @@ class StrategyEvolver:
 
                 # 첫 번째 대상만 사용
                 strategy_name, param_name = targets[0]
+
+                # 잠금 파라미터 건너뛰기
+                if param_name in self._locked_params:
+                    continue
+
                 current_value = self._get_param_value(strategy_name, param_name)
                 if current_value is None:
                     continue
@@ -596,6 +604,12 @@ class StrategyEvolver:
             # 신뢰도 높은 첫 번째 제안만 사용
             for adj in advice.parameter_adjustments:
                 if adj.confidence < 0.6:
+                    continue
+
+                # 잠금 파라미터 건너뛰기
+                raw_param = adj.parameter.split(".")[-1] if "." in adj.parameter else adj.parameter
+                if raw_param in self._locked_params:
+                    logger.info(f"[진화] 잠금 파라미터 스킵: {adj.parameter}")
                     continue
 
                 # 파라미터 키 찾기

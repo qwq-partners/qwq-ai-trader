@@ -14,8 +14,8 @@ batch:
 risk_config:
   daily_max_trades: 30
   default_stop_loss_pct: 4.0
-  base_position_pct: 10.0
-  max_positions: 10
+  base_position_pct: 25.0          # ★ LOCKED — 진화 잠금, 수동 분석 후에만 조정
+  max_positions: 7
   strategy_allocation:
     sepa_trend: 60.0        # ★ 최고 성과 (88% 승률, +3.82%) → 우선
     rsi2_reversal: 25.0     # 2순위 (67% 승률, +1.83%)
@@ -25,11 +25,11 @@ risk_config:
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 2.5
-  first_exit_pct: 5.0
+  first_exit_pct: 5.0               # ★ LOCKED — 1차 익절 목표
   first_exit_ratio: 0.3
   stop_loss_pct: 3.0
-  trailing_activate_pct: 2.5
-  trailing_stop_pct: 2.5
+  trailing_activate_pct: 5.0       # ★ LOCKED — 익절 후 트레일링 활성화 (1차 익절과 동일)
+  trailing_stop_pct: 3.0           # ★ LOCKED — 고점 대비 하락 허용폭
 momentum_breakout:
   enabled: false            # ← 강제 비활성화 (03-04 대참사 원인)
   stop_loss_pct: 3.5
@@ -65,9 +65,17 @@ _meta:
     timestamp: '2026-02-23T15:35:00'
     note: 2.5→5.0% R:R 1:1→2:1 복원
   exit_manager.trailing_activate_pct:
-    source: manual_review
-    timestamp: '2026-02-23T15:35:00'
-    note: 3.0→2.5% first_exit보다 낮게 (순서 역전 수정)
+    source: manual_review_locked
+    timestamp: '2026-03-07T23:40:00'
+    note: 2.5→5.0% 1차 익절과 동일 (분할익절 우선, 조기 트레일링 방지)
+  exit_manager.trailing_stop_pct:
+    source: manual_review_locked
+    timestamp: '2026-03-07T23:40:00'
+    note: 2.5→3.0% noise 탈출 방지 (주간 5% 목표 손익비 최적화)
+  risk_config.base_position_pct:
+    source: manual_review_locked
+    timestamp: '2026-03-07T23:40:00'
+    note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
     source: manual_review
     timestamp: '2026-03-07T11:00:00'
