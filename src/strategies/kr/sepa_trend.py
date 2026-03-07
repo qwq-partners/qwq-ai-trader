@@ -197,22 +197,26 @@ class SEPATrendStrategy(BaseStrategy):
             score += 3
 
         # 2. 수급 LCI z-score 기반 (20점)
+        # supply_data_age: 0=당일, 1=전일(T-1), 2=캐시(T-2+)
+        supply_age = ind.get("supply_data_age", 0) or 0
+        lci_discount = max(0.7, 1.0 - supply_age * 0.15)  # T-1: 85%, T-2: 70%
+
         lci = ind.get("lci")
         if lci is not None:
             if lci > 1.5:
-                score += 20
+                score += int(20 * lci_discount)
             elif lci > 1.0:
-                score += 15
+                score += int(15 * lci_discount)
             elif lci > 0.5:
-                score += 10
+                score += int(10 * lci_discount)
             elif lci > 0:
-                score += 5
+                score += int(5 * lci_discount)
         else:
             foreign_net = ind.get("foreign_net_buy", 0) or 0
             inst_net = ind.get("inst_net_buy", 0) or 0
             if foreign_net > 0 or inst_net > 0:
                 supply_score = (10 if foreign_net > 0 else 0) + (10 if inst_net > 0 else 0)
-                score += min(supply_score, 20)
+                score += int(min(supply_score, 20) * lci_discount)
             else:
                 score += 5
 

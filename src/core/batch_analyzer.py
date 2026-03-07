@@ -118,6 +118,9 @@ class BatchAnalyzer:
         self._signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
         self._signals_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # 시장 레짐 캐시 (스캔 후 업데이트)
+        self._market_regime: str = "neutral"  # "bull"|"neutral"|"caution"|"bear"
+
         # 설정
         self._max_entry_slippage_pct = self._config.get("batch", {}).get(
             "max_entry_slippage_pct", 3.0
@@ -183,6 +186,47 @@ class BatchAnalyzer:
         rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
         sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
         strategic_signals = self._generate_strategic_signals(candidates)
+
+        # ── 시장 레짐 감지 및 적용 ───────────────────────────────────────────
+        regime = "neutral"
+        kospi_info = {}
+        if hasattr(self._screener, "get_market_regime"):
+            regime = self._screener.get_market_regime()
+            kospi_info = self._screener.get_kospi_change()
+        self._market_regime = regime
+
+        if regime == "bear":
+            # 하락장: SEPA(추세추종) 전면 차단, STRATEGIC_SWING 차단
+            # RSI2(역추세)는 허용하되 최소 점수 상향
+            bear_sepa_blocked = len(sepa_signals) + len(strategic_signals)
+            sepa_signals = []
+            strategic_signals = []
+            rsi2_signals = [s for s in rsi2_signals if s.score >= 70]  # RSI2 기준 강화
+            logger.warning(
+                f"[배치분석] 🔴 하락장 감지 "
+                f"(KOSPI 5일={kospi_info.get('c5', 0):+.1f}%, "
+                f"20일={kospi_info.get('c20', 0):+.1f}%) "
+                f"→ SEPA/전략스윙 {bear_sepa_blocked}개 차단, "
+                f"RSI2만 허용(score≥70): {len(rsi2_signals)}개"
+            )
+        elif regime == "caution":
+            # 주의장: SEPA 기준 상향 (+10점), STRATEGIC_SWING은 유지
+            sepa_min_caution = self._sepa.config.min_score + 10
+            sepa_signals = [s for s in sepa_signals if s.score >= sepa_min_caution]
+            logger.info(
+                f"[배치분석] 🟡 주의장 감지 "
+                f"(KOSPI 5일={kospi_info.get('c5', 0):+.1f}%, "
+                f"20일={kospi_info.get('c20', 0):+.1f}%) "
+                f"→ SEPA 기준 {self._sepa.config.min_score:.0f}→{sepa_min_caution:.0f}pt, "
+                f"유지: {len(sepa_signals)}개"
+            )
+        elif regime == "bull":
+            logger.info(
+                f"[배치분석] 🟢 상승장 확인 "
+                f"(KOSPI 5일={kospi_info.get('c5', 0):+.1f}%, "
+                f"20일={kospi_info.get('c20', 0):+.1f}%) → 정상 운영"
+            )
+        # ────────────────────────────────────────────────────────────────────
 
         all_signals = rsi2_signals + sepa_signals + strategic_signals
 
@@ -354,7 +398,16 @@ class BatchAnalyzer:
             self._save_json()
 
             # 6. 텔레그램 알림
+            # 레짐 이모지
+            _regime_emoji = {
+                "bull": "🟢", "neutral": "⚪", "caution": "🟡", "bear": "🔴"
+            }.get(self._market_regime, "⚪")
             lines = [f"\U0001f305 <b>아침 스캔 완료</b>"]
+            lines.append(f"{_regime_emoji} 시장 레짐: <b>{self._market_regime.upper()}</b>")
+            if self._market_regime == "bear":
+                lines.append("⛔ <b>하락장 — SEPA 시그널 차단, RSI2만 허용</b>")
+            elif self._market_regime == "caution":
+                lines.append("⚠️ 주의장 — SEPA 기준 상향 적용됨")
             lines.append(f"\U0001f1fa\U0001f1f8 US 오버나이트: {us_summary}")
             lines.append(f"\u2705 최종 시그널: <b>{len(self._pending)}개</b>")
             if removed_us:
@@ -622,14 +675,31 @@ class BatchAnalyzer:
                     strategy_type = StrategyType(sig.strategy)
                 except (ValueError, KeyError):
                     strategy_type = StrategyType.SEPA_TREND  # momentum_breakout 비활성
+
+                # 레짐별 시그널 강도/손절 조정
+                _regime = self._market_regime
+                _strength = SignalStrength.STRONG
+                _stop = Decimal(str(sig.stop_price))
+
+                if _regime == "bear":
+                    # 하락장: 포지션 축소 (STRONG→NORMAL), 손절 타이트
+                    _strength = SignalStrength.NORMAL
+                    _tight_stop = float(current_price) * 0.965   # -3.5%
+                    _stop = Decimal(str(max(float(_stop), _tight_stop)))  # 더 타이트한 쪽
+                    logger.info(f"[배치분석] {sig.symbol} 하락장 조정: 강도=NORMAL, 손절 타이트")
+                elif _regime == "caution":
+                    # 주의장: STRONG 유지, 손절 소폭 타이트
+                    _tight_stop = float(current_price) * 0.975   # -2.5%
+                    _stop = Decimal(str(max(float(_stop), _tight_stop)))
+
                 signal = Signal(
                     symbol=sig.symbol,
                     side=OrderSide.BUY,
-                    strength=SignalStrength.STRONG,
+                    strength=_strength,
                     strategy=strategy_type,
                     price=Decimal(str(current_price)),
                     target_price=Decimal(str(sig.target_price)),
-                    stop_price=Decimal(str(sig.stop_price)),
+                    stop_price=_stop,
                     score=sig.score,
                     confidence=sig.score / 100.0,
                     reason=sig.reason,
@@ -637,6 +707,7 @@ class BatchAnalyzer:
                         "batch_signal": True,
                         "name": sig.name,
                         "atr_pct": sig.atr_pct,
+                        "market_regime": _regime,
                     },
                 )
 
@@ -673,6 +744,25 @@ class BatchAnalyzer:
             return
 
         logger.debug(f"[포지션모니터] {len(self._engine.portfolio.positions)}개 포지션 체크")
+
+        # 하락장에서 ExitManager 트레일링 스탑 강화
+        if self._exit_manager and self._market_regime == "bear":
+            # 기존 설정이 3%라면 2%로 타이트하게 변경
+            if self._exit_manager.config.trailing_stop_pct > 2.0:
+                self._exit_manager.config.trailing_stop_pct = 2.0
+                self._exit_manager.config.trailing_activate_pct = 3.0
+                logger.info("[포지션모니터] 🔴 하락장 → 트레일링 스탑 2%, 활성화 기준 3%")
+        elif self._exit_manager and self._market_regime == "caution":
+            if self._exit_manager.config.trailing_stop_pct > 2.5:
+                self._exit_manager.config.trailing_stop_pct = 2.5
+                self._exit_manager.config.trailing_activate_pct = 4.0
+                logger.info("[포지션모니터] 🟡 주의장 → 트레일링 스탑 2.5%, 활성화 기준 4%")
+        elif self._exit_manager and self._market_regime in ("bull", "neutral"):
+            # 레짐 회복 시 트레일링 원상복구
+            if self._exit_manager.config.trailing_stop_pct < 3.0:
+                self._exit_manager.config.trailing_stop_pct = 3.0
+                self._exit_manager.config.trailing_activate_pct = 5.0
+                logger.info("[포지션모니터] 🟢 레짐 회복 → 트레일링 스탑 3% 복구")
 
         for symbol, pos in list(self._engine.portfolio.positions.items()):
             try:

@@ -429,14 +429,17 @@ class SwingScreener:
                 logger.warning(f"[스윙스크리너] 수급 데이터 조회 실패: {e}")
 
         # KIS 성공 시 캐시 저장 (다음날 08:20 아침 스캔 폴백용)
+        supply_data_age = 0   # 0=당일, 1=전일(T-1), 2=캐시(T-2+)
         if supply_demand:
             self._save_supply_demand_cache(supply_demand)
+            supply_data_age = 0
 
         # pykrx 전일 수급 폴백: KIS API 0종목 시 (프리장 등)
         if not supply_demand:
             try:
                 supply_demand = await asyncio.to_thread(self._fetch_prev_day_supply_pykrx)
                 if supply_demand:
+                    supply_data_age = 1
                     logger.info(
                         f"[스윙스크리너] 수급 데이터: KIS 없음 → pykrx 전일 데이터 사용 "
                         f"({len(supply_demand)}종목)"
@@ -449,12 +452,14 @@ class SwingScreener:
             cached = self._load_supply_demand_cache()
             if cached:
                 supply_demand = cached
+                supply_data_age = 2
 
         # ── 후보별 수급 데이터 주입 ──
         for candidate in candidates:
             sd = supply_demand.get(candidate.symbol, {})
             candidate.indicators["foreign_net_buy"] = sd.get("foreign_net_buy", 0)
             candidate.indicators["inst_net_buy"] = sd.get("inst_net_buy", 0)
+            candidate.indicators["supply_data_age"] = supply_data_age  # 신선도 추적
 
         # 밸류에이션 일괄 조회 (배치 API 활용)
         if self._kis_market_data:
@@ -546,6 +551,41 @@ class SwingScreener:
             return True
 
         return False
+
+    def get_market_regime(self) -> str:
+        """KOSPI 종가 기반 시장 레짐 판단
+
+        Returns: "bull" | "caution" | "bear" | "neutral"
+
+        기준:
+          bear:    5일 변화율 ≤ -3% OR 20일 변화율 ≤ -5%
+          caution: 5일 변화율 ≤ -1.5% OR 20일 변화율 ≤ -2.5%
+          bull:    5일 변화율 ≥ +1% AND 20일 변화율 ≥ 0%
+          neutral: 그 외
+        """
+        closes = self._kospi_closes
+        if not closes or len(closes) < 6:
+            return "neutral"
+
+        c5  = (closes[-1] - closes[-6])  / closes[-6]  * 100 if len(closes) >= 6  else 0.0
+        c20 = (closes[-1] - closes[-21]) / closes[-21] * 100 if len(closes) >= 21 else 0.0
+
+        if c5 <= -3.0 or c20 <= -5.0:
+            return "bear"
+        elif c5 <= -1.5 or c20 <= -2.5:
+            return "caution"
+        elif c5 >= 1.0 and c20 >= 0.0:
+            return "bull"
+        return "neutral"
+
+    def get_kospi_change(self) -> dict:
+        """레짐 판단에 사용된 수치 반환 (로깅/알림용)"""
+        closes = self._kospi_closes
+        if not closes or len(closes) < 6:
+            return {"c5": 0.0, "c20": 0.0, "level": 0.0}
+        c5  = (closes[-1] - closes[-6])  / closes[-6]  * 100 if len(closes) >= 6  else 0.0
+        c20 = (closes[-1] - closes[-21]) / closes[-21] * 100 if len(closes) >= 21 else 0.0
+        return {"c5": round(c5, 2), "c20": round(c20, 2), "level": round(closes[-1], 2)}
 
     async def _load_benchmark_index(self):
         """벤치마크 지수(KOSPI) 1년치 로드 (MRS 계산용)
@@ -732,7 +772,20 @@ class SwingScreener:
         # 1) 전문가 추천 로드
         outlook = self._load_strategic_outlook()
         recommended = {}
+        # 신선도 할인 계산: 오래될수록 보너스 감소 (7일에 50%, 14일에 0%)
+        panel_freshness = 1.0
         if outlook:
+            try:
+                _created = datetime.fromisoformat(outlook.created_at)
+                _days_old = (datetime.now() - _created).days
+                panel_freshness = max(0.3, 1.0 - _days_old / 14.0)
+                if _days_old >= 3:
+                    logger.info(
+                        f"[스윙스크리너] 전문가패널 {_days_old}일 경과 "
+                        f"→ 신선도={panel_freshness:.1%}"
+                    )
+            except Exception:
+                panel_freshness = 1.0
             recommended = {s.symbol: s for s in outlook.recommended_stocks}
             logger.info(f"[스윙스크리너] 전문가 추천 {len(recommended)}종목 로드")
 
@@ -776,13 +829,17 @@ class SwingScreener:
 
             pre_overlay_score = candidate.score  # 오버레이 전 점수 기록
 
-            # Layer 1: 전문가 추천 보너스
+            # Layer 1: 전문가 추천 보너스 (신선도 할인 적용)
             if sym in recommended:
                 pick = recommended[sym]
-                bonus = int(pick.conviction * 25)  # 최대 +25
+                raw_bonus = int(pick.conviction * 25)
+                bonus = max(3, int(raw_bonus * panel_freshness))  # 최소 3pt 보장
                 candidate.score += bonus
+                freshness_note = (
+                    f" [{panel_freshness:.0%}신선도]" if panel_freshness < 0.9 else ""
+                )
                 candidate.reasons.append(
-                    f"전문가패널 추천 (확신도 {pick.conviction:.0%})"
+                    f"전문가패널 추천 (확신도 {pick.conviction:.0%}){freshness_note}"
                 )
                 layers_matched += 1
 
