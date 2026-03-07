@@ -6,7 +6,7 @@ batch:
     theme_chasing: 2
     gap_and_go: 2
   default_strategy_limit: 3
-  gap_down_skip_pct: -2.0
+  gap_down_skip_pct: -3.5   # -2.0→-3.5: 장 시작 오실레이션 후 반등 종목 포착
   lunchtime_scan:             # 낮 추가 스캔/실행 (12:30 윈도우)
     enabled: true             # 아침 미매수 종목 재확인 + 신규 기회 탐지
     time: "12:30"

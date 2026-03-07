@@ -690,6 +690,33 @@ class BatchAnalyzer:
                 if pos.highest_price is None or current_price > pos.highest_price:
                     pos.highest_price = current_price
 
+                # RSI2 전략 전용: RSI(2) > 70 청산 (FDR 일봉 기반, 30분마다 체크)
+                # ScreenedStock(장중 캐시)에는 RSI(2) 없으므로 여기서 정확하게 계산
+                if pos.strategy == "rsi2_reversal":
+                    try:
+                        rsi2_val = await asyncio.get_event_loop().run_in_executor(
+                            None, self._calc_rsi2_from_fdr, symbol
+                        )
+                        if rsi2_val is not None and rsi2_val > 70:
+                            _r2_reason = f"RSI2 청산: RSI(2)={rsi2_val:.1f} > 70 (반등 목표 도달)"
+                            logger.info(f"[포지션모니터] {symbol} {_r2_reason}")
+                            signal = Signal(
+                                symbol=symbol,
+                                side=OrderSide.SELL,
+                                strength=SignalStrength.STRONG,
+                                strategy=StrategyType.RSI2_REVERSAL,
+                                price=current_price,
+                                score=100,
+                                confidence=1.0,
+                                reason=_r2_reason,
+                            )
+                            event = SignalEvent.from_signal(signal, source="rsi2_monitor")
+                            await self._engine.emit(event)
+                            await asyncio.sleep(0.2)
+                            continue
+                    except Exception as _rsi2e:
+                        logger.debug(f"[포지션모니터] {symbol} RSI2 체크 실패 (무시): {_rsi2e}")
+
                 # ExitManager 청산 체크
                 if self._exit_manager:
                     exit_result = self._exit_manager.update_price(symbol, current_price)
@@ -800,6 +827,42 @@ class BatchAnalyzer:
         except Exception as e:
             logger.error(f"[배치분석] JSON 로드 실패: {e}")
             return []
+
+    @staticmethod
+    def _calc_rsi2_from_fdr(symbol: str) -> Optional[float]:
+        """FDR 일봉으로 RSI(2) 계산 (동기 함수 — run_in_executor 전용)
+
+        RSI2 포지션의 반등 목표 도달 여부 체크용.
+        Returns None if data unavailable.
+        """
+        try:
+            import FinanceDataReader as fdr
+            from datetime import timedelta
+            start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            df = fdr.DataReader(symbol, start)
+            if df is None or len(df) < 5:
+                return None
+            closes = df["Close"].tolist()
+            if len(closes) < 4:
+                return None
+            # Wilder's RSI(2) — 단순 버전 (충분히 정확)
+            period = 2
+            gains, losses = [], []
+            for i in range(1, len(closes)):
+                diff = closes[i] - closes[i - 1]
+                gains.append(max(diff, 0))
+                losses.append(max(-diff, 0))
+            if len(gains) < period:
+                return None
+            avg_gain = sum(gains[-period:]) / period
+            avg_loss = sum(losses[-period:]) / period
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            return round(rsi, 1)
+        except Exception:
+            return None
 
     async def _send_telegram_report(self):
         """스캔 결과 텔레그램 알림"""
