@@ -211,8 +211,10 @@ class StrategyEvolver:
             "max_stop_pct": (3.0, 10.0),
             "min_stop_pct": (1.0, 5.0),
             "first_exit_pct": (1.5, 10.0),
-            "base_position_pct": (5.0, 30.0),
-            "daily_max_loss_pct": (1.0, 5.0),
+            # 주간 5% 목표 기준 공격적 운영 — 하한 20% 보장
+            # (진화 알고리즘이 보수화로 15% 아래로 내리는 것 방지)
+            "base_position_pct": (20.0, 35.0),
+            "daily_max_loss_pct": (2.0, 8.0),  # 공격적 운영: 하한 2%, 상한 8%
         }
 
         logger.info(f"StrategyEvolver 초기화: 규칙 {len(self._rules)}개, 저장소 {self.storage_dir}")

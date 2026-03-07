@@ -7,6 +7,9 @@ batch:
     gap_and_go: 2
   default_strategy_limit: 3
   gap_down_skip_pct: -2.0
+  lunchtime_scan:             # 낮 추가 스캔/실행 (12:30 윈도우)
+    enabled: true             # 아침 미매수 종목 재확인 + 신규 기회 탐지
+    time: "12:30"
 
 risk_config:
   daily_max_trades: 30

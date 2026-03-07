@@ -2498,7 +2498,11 @@ class KRScheduler:
             logger.info("[배치스케줄러] batch_analyzer 없음, 스킵")
             return
 
-        batch_cfg = (bot.config.get("kr") or {}).get("batch") or bot.config.get("batch") or {}
+        # evolved_overrides.batch (전역) + kr.batch (default.yml) 병합
+        # → evolved_overrides가 기본, kr.batch가 우선순위 높음
+        _ov_batch = bot.config.get("batch") or {}
+        _kr_batch = (bot.config.get("kr") or {}).get("batch") or {}
+        batch_cfg = {**_ov_batch, **_kr_batch}   # kr 설정이 evolved 설정 덮어씀
         scan_time_str = batch_cfg.get("daily_scan_time", "15:40")
         execute_time_str = batch_cfg.get("execute_time", "09:01")
         monitor_interval = batch_cfg.get("position_update_interval", 10)
@@ -2526,10 +2530,17 @@ class KRScheduler:
         last_scan_date = None
         last_morning_scan_date = None
         last_execute_date = None
+        last_lunchtime_scan_date = None   # 낮 추가 스캔/실행 추적
         last_evening_scan_date = None
         last_monitor_time = None
         last_prescan_date = None
         last_expert_panel_week = None
+
+        # 낮 추가 스캔 설정 읽기
+        _lunchtime_cfg = batch_cfg.get("lunchtime_scan", {})
+        lunchtime_scan_enabled = _lunchtime_cfg.get("enabled", True)
+        lunchtime_scan_time_str = _lunchtime_cfg.get("time", "12:30")
+        _lt_h, _lt_m = (int(x) for x in lunchtime_scan_time_str.split(":"))
 
         pending_signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
 
@@ -2706,6 +2717,29 @@ class KRScheduler:
                         logger.error(f"[배치스케줄러] 시그널 실행 오류: {e}")
                     last_execute_date = today
                     (_flag_dir / f"executed_{today.isoformat()}.flag").touch()
+
+                # ── 12:30 낮 추가 스캔 + 즉시 실행 (추가 진입 기회 확보) ─────
+                # 아침 스캔으로 포착 못한 종목 or 현금 부족으로 건너뛴 종목 재확인
+                if (lunchtime_scan_enabled
+                        and morning_scan_enabled
+                        and now.hour == _lt_h
+                        and _lt_m <= now.minute < _lt_m + 5
+                        and last_lunchtime_scan_date != today
+                        and not is_kr_market_holiday(today)):
+                    logger.info("[배치스케줄러] 낮 추가 스캔 시작 (12:30 윈도우)")
+                    try:
+                        # 현재가 기반 재스캔 → pending_signals.json 갱신
+                        await bot.batch_analyzer.run_morning_scan()
+                        last_morning_scan_date = today   # 스캔 완료 표시
+                        # 갱신된 시그널 즉시 실행 (오늘 플래그 무관하게 재실행)
+                        result = await bot.batch_analyzer.execute_pending_signals()
+                        logger.info(f"[배치스케줄러] 낮 스캔 실행 완료: {result}")
+                        # 낮 실행 후에도 플래그 갱신 (09:01 catch-up 중복 방지)
+                        last_execute_date = today
+                        (_flag_dir / f"executed_{today.isoformat()}.flag").touch()
+                    except Exception as e:
+                        logger.error(f"[배치스케줄러] 낮 스캔 오류: {e}")
+                    last_lunchtime_scan_date = today
 
                 # 09:30~15:20 매 30분 포지션 모니터링
                 if 9 <= now.hour <= 15:

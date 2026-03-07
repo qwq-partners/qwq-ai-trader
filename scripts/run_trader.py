@@ -743,10 +743,17 @@ class UnifiedTradingBot:
                         config={
                             "rsi2_reversal": rsi2_cfg,
                             "sepa_trend": sepa_cfg,
-                            "batch": kr_cfg.get("batch", self.config.get("batch") or {}),
+                            # evolved_overrides.batch + kr.batch 병합 (kr 우선)
+                            "batch": {
+                                **(self.config.get("batch") or {}),
+                                **(kr_cfg.get("batch") or {}),
+                            },
                         },
                     )
-                    batch_cfg = kr_cfg.get("batch", self.config.get("batch") or {})
+                    batch_cfg = {
+                        **(self.config.get("batch") or {}),
+                        **(kr_cfg.get("batch") or {}),
+                    }
                     if self.exit_manager:
                         self.exit_manager._max_holding_days = batch_cfg.get("max_holding_days", 10)
                     logger.info("[KR] 배치 분석기 초기화 완료 (스윙 모멘텀 모드)")

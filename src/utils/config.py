@@ -229,9 +229,11 @@ def _merge_evolved_overrides(raw: Dict[str, Any], config_path: Optional[str] = N
             return raw
 
         # 컴포넌트명 -> config 섹션 매핑
+        # 여기 없는 키는 strategies.{component} 하위에 머지됨
         section_map = {
             "exit_manager": "exit_manager",
             "risk_config": "risk",
+            "batch": "batch",   # evolved_overrides.batch → raw["batch"] (전역)
         }
 
         merged = dict(raw)
