@@ -1052,10 +1052,21 @@ class KISUSBroker:
         try:
             data = await self._api_get(url, "HHDFS76270000", params)
             if data.get("rt_cd") != "0":
-                logger.warning(
-                    f"[거래량급증] API 오류: {data.get('msg1', '')} (excd={exchange})"
-                )
-                return []
+                msg = data.get("msg1", "")
+                if "MINX" in msg or "INPUT FIELD" in msg:
+                    # KIS API 간헐적 파라미터 오류 — MINX 없이 재시도
+                    params_retry = {k: v for k, v in params.items() if k != "MINX"}
+                    data = await self._api_get(url, "HHDFS76270000", params_retry)
+                    if data.get("rt_cd") != "0":
+                        logger.debug(
+                            f"[거래량급증] API 재시도 실패 (무시): {data.get('msg1', '')} (excd={exchange})"
+                        )
+                        return []
+                else:
+                    logger.debug(
+                        f"[거래량급증] API 오류 (무시): {msg} (excd={exchange})"
+                    )
+                    return []
 
             rows = data.get("output2", []) or []
             result = []

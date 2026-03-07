@@ -104,24 +104,47 @@ class DartChecker:
                 ) as resp:
                     if resp.status != 200:
                         logger.warning(f"[DART] corpCode 다운로드 실패: {resp.status}")
-                        return
+                        zip_data = None
+                    else:
+                        zip_data = await resp.read()
 
-                    zip_data = await resp.read()
+            if zip_data:
+                try:
+                    # ZIP 해제 → XML 파싱
+                    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                        xml_filename = zf.namelist()[0]
+                        xml_data = zf.read(xml_filename)
 
-            # ZIP 해제 → XML 파싱
-            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-                xml_filename = zf.namelist()[0]
-                xml_data = zf.read(xml_filename)
+                    # 로컬 캐시 저장
+                    self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                    self.CORPCODE_CACHE.write_bytes(xml_data)
 
-            # 로컬 캐시 저장
-            self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            self.CORPCODE_CACHE.write_bytes(xml_data)
+                    self._parse_corp_code_xml(xml_data)
+                    logger.info(f"[DART] corp_code 매핑 다운로드 완료: {len(self._corp_code_map)}개")
+                    return
+                except zipfile.BadZipFile:
+                    logger.debug("[DART] corpCode 응답이 ZIP 포맷이 아님 — 캐시 폴백 시도")
 
-            self._parse_corp_code_xml(xml_data)
-            logger.info(f"[DART] corp_code 매핑 다운로드 완료: {len(self._corp_code_map)}개")
+            # 다운로드 실패 or ZIP 오류 → 만료 캐시라도 사용
+            if self.CORPCODE_CACHE.exists():
+                try:
+                    self._parse_corp_code_xml(self.CORPCODE_CACHE.read_bytes())
+                    logger.info(
+                        f"[DART] corp_code 만료 캐시 폴백 로드: {len(self._corp_code_map)}개"
+                    )
+                    return
+                except Exception as e2:
+                    logger.warning(f"[DART] 만료 캐시 파싱 실패: {e2}")
 
         except Exception as e:
-            logger.warning(f"[DART] corpCode 다운로드 오류: {e}")
+            logger.debug(f"[DART] corpCode 다운로드 오류 (무시): {e}")
+            # 예외 발생 시에도 만료 캐시 폴백
+            if self.CORPCODE_CACHE.exists() and not self._corp_code_map:
+                try:
+                    self._parse_corp_code_xml(self.CORPCODE_CACHE.read_bytes())
+                    logger.info(f"[DART] corp_code 만료 캐시 폴백: {len(self._corp_code_map)}개")
+                except Exception:
+                    pass
 
     def _parse_corp_code_xml(self, xml_data: bytes):
         """XML에서 stock_code → corp_code 매핑 추출"""

@@ -62,6 +62,8 @@ class USScheduler:
         self.engine = engine
         # 매도 실패 쿨다운 (종목 → 실패시각)
         self._sell_fail_cooldown: Dict[str, datetime] = {}
+        # 현재가 조회 실패 카운터 (3회 이상 → 세션 내 스킵)
+        self._quote_fail_count: Dict[str, int] = {}
         # 이전 sync 수량 스냅샷 (수량 변화 감지용)
         self._prev_qty_snapshot: Dict[str, int] = {}
 
@@ -446,6 +448,12 @@ class USScheduler:
                 if eng._daily_reset_done != today:
                     eng._daily_reset_done = today
                     eng.portfolio.reset_daily()
+                    # 당일 청산 종목 블랙리스트 초기화 (새 거래일)
+                    if hasattr(eng, "_stopped_today"):
+                        eng._stopped_today = set()
+                    if hasattr(eng, "_order_fail_blacklist"):
+                        eng._order_fail_blacklist = set()
+                    self._quote_fail_count = {}
                     logger.info("[US 엔진] 일일 통계 리셋")
 
                 # 어닝 캘린더 갱신 (1일 1회)
@@ -731,6 +739,16 @@ class USScheduler:
         eng = self.engine
         symbol = signal.symbol
 
+        # 당일 손절/트레일링 청산 종목 재매수 차단
+        if symbol in getattr(eng, "_stopped_today", set()):
+            logger.debug(f"[US 시그널] {symbol} — 당일 청산 종목, 재매수 차단")
+            return False
+
+        # 주문 영구실패 블랙리스트 (ETP 미신청, 매수불가 등)
+        if symbol in getattr(eng, "_order_fail_blacklist", set()):
+            logger.debug(f"[US 시그널] {symbol} — 주문 실패 블랙리스트, 스킵")
+            return False
+
         # pending 포함 실효 포지션 수로 max_positions 조기 차단
         effective_pos_count = len(eng.portfolio.positions) + len(
             eng._pending_symbols - set(eng.portfolio.positions.keys())
@@ -744,13 +762,27 @@ class USScheduler:
             )
             return False
 
+        # 현재가 조회 실패 누적 종목 스킵 (3회 이상)
+        _QUOTE_FAIL_LIMIT = 3
+        if self._quote_fail_count.get(symbol, 0) >= _QUOTE_FAIL_LIMIT:
+            logger.debug(f"[US 시그널] {symbol} — 현재가 반복실패 블랙리스트, 스킵")
+            return False
+
         # 현재가 조회 (리스크 체크에 필요)
         exchange = await self._get_exchange(symbol)
         quote = await eng.broker.get_quote(symbol, exchange)
         price = quote.get("price", 0)
         if price <= 0:
-            logger.warning(f"[US 시그널] {symbol} — 현재가 조회 실패")
+            self._quote_fail_count[symbol] = self._quote_fail_count.get(symbol, 0) + 1
+            if self._quote_fail_count[symbol] >= _QUOTE_FAIL_LIMIT:
+                logger.warning(
+                    f"[US 시그널] {symbol} — 현재가 {_QUOTE_FAIL_LIMIT}회 실패, 세션 제외"
+                )
+            else:
+                logger.warning(f"[US 시그널] {symbol} — 현재가 조회 실패")
             return False
+        # 조회 성공 시 실패 카운터 초기화
+        self._quote_fail_count.pop(symbol, None)
 
         # 포지션 사이징 (allow_min_one=True — 금액 기준 최소 1주 보장)
         qty = eng.risk_manager.calculate_position_size(
@@ -855,7 +887,18 @@ class USScheduler:
             )
             return True
         else:
-            logger.warning(f"[US 매수 주문] {symbol} 실패: {result.get('message')}")
+            fail_msg = result.get("message", "")
+            logger.warning(f"[US 매수 주문] {symbol} 실패: {fail_msg}")
+            # 영구 실패 코드 → 당일 블랙리스트 (재시도 차단)
+            _PERMANENT_FAIL_KEYWORDS = [
+                "해외ETP 거래 미신청",
+                "매수불가 종목",
+                "취소주문만 가능",
+            ]
+            if any(kw in fail_msg for kw in _PERMANENT_FAIL_KEYWORDS):
+                blacklist = getattr(eng, "_order_fail_blacklist", set())
+                blacklist.add(symbol)
+                logger.info(f"[US 블랙리스트] {symbol} 당일 매수 차단 — {fail_msg[:40]}")
             return False
 
     # ============================================================
@@ -1178,6 +1221,22 @@ class USScheduler:
                 "submitted_at": datetime.now(),
             }
             eng._pending_symbols.add(symbol)
+
+            # 손절/트레일링 청산 종목 → 당일 재매수 차단 + 파일 영속화
+            if exit_type in ("stop_loss", "trailing"):
+                stopped = getattr(eng, "_stopped_today", set())
+                stopped.add(symbol)
+                try:
+                    import json as _json
+                    from pathlib import Path as _Path
+                    _cache_dir = _Path.home() / ".cache" / "ai_trader_us"
+                    _cache_dir.mkdir(parents=True, exist_ok=True)
+                    _today_str = datetime.now().strftime("%Y%m%d")
+                    _stopped_file = _cache_dir / f"stopped_today_{_today_str}.json"
+                    _stopped_file.write_text(_json.dumps({"symbols": sorted(stopped)}))
+                    logger.info(f"[US 재매수차단] {symbol} 당일 청산 등록 — {sorted(stopped)}")
+                except Exception as _e:
+                    logger.warning(f"[US 재매수차단] 파일 저장 실패 (무시): {_e}")
 
             logger.info(
                 f"[US 매도 주문] {symbol} {sell_qty}/{position.quantity}주 — {reason}"

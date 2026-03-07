@@ -1157,6 +1157,24 @@ class UnifiedTradingBot:
                 except Exception as e:
                     logger.warning(f"[US] 기존 포지션 ExitManager 등록 실패 (무시): {e}")
 
+            # _stopped_today 복원 (재시작 후 당일 손절 종목 재매수 방지)
+            try:
+                import json as _json
+                _cache_dir = Path.home() / ".cache" / "ai_trader_us"
+                _cache_dir.mkdir(parents=True, exist_ok=True)
+                _today_str = datetime.now().strftime("%Y%m%d")
+                _stopped_file = _cache_dir / f"stopped_today_{_today_str}.json"
+                if _stopped_file.exists():
+                    _data = _json.loads(_stopped_file.read_text())
+                    us_engine._stopped_today = set(_data.get("symbols", []))
+                    if us_engine._stopped_today:
+                        logger.info(
+                            f"[US] 당일 청산 종목 복원: {sorted(us_engine._stopped_today)} "
+                            f"→ 재매수 차단"
+                        )
+            except Exception as _e:
+                logger.warning(f"[US] stopped_today 복원 실패 (무시): {_e}")
+
             logger.info("[US] 미국 시장 초기화 완료")
             return True
 
@@ -1554,6 +1572,8 @@ class _USEngineBundle:
         self._symbol_strategy: Dict[str, str] = {}
         self._vol_surge_symbols: Set[str] = set()
         self._vol_surge_updated: Optional[datetime] = None
+        self._stopped_today: Set[str] = set()        # 당일 손절/트레일링 청산 종목 (재매수 방지)
+        self._order_fail_blacklist: Set[str] = set() # 주문 영구실패 종목 (ETP미신청, 매수불가 등)
         self._earnings_today: Set[str] = set()
         self._earnings_last_refresh: Optional[date] = None
         self._finviz_last_refresh: Optional[date] = None
