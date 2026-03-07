@@ -1,5 +1,127 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-07 — 구조적 한계 3종 극복 (시장 레짐 감지 + 신선도 할인)
+> `fe35f32` | `swing_screener.py`, `sepa_trend.py`, `batch_analyzer.py`
+
+### 1. KOSPI 기반 시장 레짐 감지 + 하락장 보호
+- **`SwingScreener.get_market_regime()`**: KOSPI 5일/20일 변화율 기반 레짐 판단
+  - `bear`: 5일≤-3% OR 20일≤-5% / `caution`: 5일≤-1.5% OR 20일≤-2.5%
+  - `bull`: 5일≥+1% AND 20일≥0% / `neutral`: 그 외
+- **`batch_analyzer._scan_and_build()`**: 레짐별 시그널 필터링
+  - `bear`: SEPA/STRATEGIC_SWING 전면 차단, RSI2(score≥70)만 허용
+  - `caution`: SEPA 기준 +10pt 상향
+- **`execute_pending_signals()`**: 레짐별 강도/손절 조정
+  - `bear`: SignalStrength.NORMAL (포지션 축소), 손절 -3.5% 타이트
+  - `caution`: 손절 -2.5% 소폭 타이트
+- **`monitor_positions()`**: 레짐별 트레일링 스탑 자동 조정
+  - `bear`: 3%→2%, 활성화 5%→3% / `caution`: 2.5%/4% / 회복 시 자동 복구
+- **아침 스캔 알림**: 레짐 이모지 (🔴BEAR/🟡CAUTION/🟢BULL) + 경고 메시지 포함
+
+### 2. 전문가 패널 신선도 할인
+- `created_at` 기반 days_old 계산
+- `freshness = max(0.3, 1.0 - days_old / 14)` → Day0=100%, Day7=50%, Day14=30%
+- Layer1 보너스에 freshness 곱셈 (최소 3pt 보장), reasons에 신선도 % 표시
+
+### 3. 수급 데이터 신선도 추적 + LCI 할인
+- `supply_data_age`: 0=당일KIS, 1=T-1pykrx, 2=캐시파일 → `candidate.indicators`에 저장
+- `lci_discount = max(0.7, 1.0 - age * 0.15)` → T-1: 15% 할인, T-2: 30% 할인
+- SEPA 점수 계산 시 LCI/수급 점수에 discount 적용
+
+---
+
+## 2026-03-07 — 오버레이 점수 SEPA/RSI2 최종 점수 반영
+> `a682150` | `sepa_trend.py`, `rsi2_reversal.py`, `swing_screener.py`
+
+### 구조 갭 수정
+- **문제**: `swing_screener._apply_strategic_overlay`가 `candidate.score`에 overlay 가산하지만,
+  `generate_batch_signals`에서 `_calculate_sepa_score()`로 **완전 재계산** → overlay 무시
+  - 예: base=58 + VCP(+15) = 73 → 재계산 시 58 → min_score=60 탈락
+- **수정**: overlay 합산값을 `candidate.indicators["overlay_bonus"]`에 저장
+- **`sepa_trend._calculate_sepa_score`**: 마지막에 `overlay_bonus` 가산
+- **`rsi2_reversal._calculate_rsi2_score`**: 동일 처리
+- **효과**: 경계선 종목(score 55~65)에서 VCP/패널/수급 있으면 SEPA/RSI2 정상 포착
+
+---
+
+## 2026-03-07 — 전략 흐름 분석 후 버그 3종 수정 + 갭다운 필터 완화
+> `d55c72f` | `kr_scheduler.py`, `batch_analyzer.py`, `engine.py`, `evolved_overrides.yml`
+
+### Bug 1: RSI2 장중 탐지 무동작 (제거)
+- `ScreenedStock`에 `indicators` 속성 없음 → 모든 종목에서 AttributeError → 완전 무동작
+- RSI(2)는 일봉 전용 → 진입은 08:20 + 12:30 배치 스캔(SwingScreener)으로만 처리
+
+### Bug 2: RSI2 exit `_check_exit_signal` 무동작 (이전)
+- `ScreenedStock.indicators.rsi_2` 없음 → None 반환 → 청산 로직 미작동
+- `batch_analyzer.monitor_positions`에 `_calc_rsi2_from_fdr()` 추가
+  - FDR 30일 일봉 다운로드 후 Wilder's RSI(2) 계산 (동기 함수, `run_in_executor`)
+  - RSI(2) > 70이면 청산 시그널 (30분마다 체크)
+
+### Bug 3: STRATEGIC_SWING 포지션 크기 10% 폴백
+- `engine.py strategy_position_pct` dict에 `STRATEGIC_SWING` 누락 → `base_position_pct=10%` 폴백
+- 25% 추가 (복합 3계층 시그널이므로 SEPA와 동일 배분)
+
+### 갭다운 필터 완화
+- `evolved_overrides.yml gap_down_skip_pct: -2.0 → -3.5`
+- 장 시작 -2~3% 오실레이션 후 반등하는 SEPA 강세 종목 포착
+
+---
+
+## 2026-03-07 — 주간 5% 달성 2단계 개선 + 스캔 확장
+> `f5da22c`, `aba0626` | `kr_scheduler.py`, `batch_analyzer.py`, `config.py`, `strategy_evolver.py`
+
+### RSI2 개선 (aba0626)
+- 12:30 낮 추가 스캔: `run_morning_scan()` + `execute_pending_signals()` (장중 2번째 기회)
+- RSI2 배치 스캔만 사용 (장중 탐지는 ScreenedStock 구조 제약으로 불가 — 이후 Bug1로 제거)
+
+### 진화 시스템 보호 (f5da22c)
+- `strategy_evolver`: `base_position_pct` 하한 5%→20% (진화 알고리즘 과보수화 방지)
+- `strategy_evolver`: `daily_max_loss_pct` 상한 5%→8%
+- `config.py`: `section_map`에 `batch` 추가 (evolved_overrides.batch 정상 적용)
+- `strategy_limits`: sepa 3→5개, rsi2 3개 (config 이관)
+
+---
+
+## 2026-03-07 — A-3 revert + 2차 코드리뷰 버그 수정
+> `5faf787`, `14c370c` | `engine.py`, `batch_analyzer.py`
+
+### A-3 revert (5faf787)
+- 진화 알고리즘이 `base_position_pct`를 10%로 보수화 → 하드코딩 dict 유지
+- `CLAUDE.md` 기준값: SEPA 25%, RSI2 20%, STRATEGIC_SWING 25%
+- `MOMENTUM_BREAKOUT: 0.0` 완전 차단 추가 (`return 0` 분기)
+
+### 2차 코드리뷰 수정 (14c370c)
+- KR fill signal_score 수정 (strategy 타입 기반 fallback)
+- batch fallback: `MOMENTUM_BREAKOUT` → `SEPA_TREND` (비활성 전략 폴백)
+- `strategy_limits` config 이관 완료
+
+---
+
+## 2026-03-07 — 코드레벨 리뷰 A-1~A-4 수정 + 거래·엔진 종합 개선
+> `a943c23`, `28957c3` | `exit_manager.py`, `engine.py`, `batch_analyzer.py`, `evolved_overrides.yml`
+
+### A-1: 1차 익절 수량 수정 (a943c23)
+- `_check_partial_exit`: `original_quantity * first_exit_ratio` → `remaining_quantity` 기준으로 통일
+- sync 복원 시 over-sell 위험 해소
+
+### A-2: trailing/breakeven 순서 충돌 수정 (a943c23)
+- `breakeven_activated` 후 `ExitStage.FIRST` 완료 전에는 본전 보호 미적용
+- TNGX 조기청산(1차 익절 전 breakeven 조건 도달 즉시 청산) 원인 수정
+
+### A-4: stage 리셋 조건 강화 (a943c23)
+- qty 10% 이상 증가만 NONE 리셋 (소량 sync 오차 무시, US sync 이중 익절 방지)
+
+### 거래·엔진 종합 개선 (28957c3)
+- `evolved_overrides`: `momentum_breakout.enabled: false`, strategy_allocation 재배분
+  (sepa_trend 60%, rsi2_reversal 25%, momentum_breakout 0%)
+- 유령 포지션 6건 DB 정리 (018250, 034020×3, 004020, 024110 — 15일 경과)
+- `_reconcile_ghost_us_trades`: exit_type 추론 로직 추가
+- `_on_order_filled`: SYNC_ 중복 방지 (기존 entry UPDATE)
+- LLM `complete_json`: Invalid JSON 1회 retry
+- `Trade.holding_time`: max(0, delta) 음수 방지
+- `max_positions`: 7→10
+
+---
+
 ## 2026-03-07 — 야간 로그 분석 기반 6가지 안정성 개선
 > `5dd61f1` | `run_trader.py`, `us_scheduler.py`, `kis_us.py`, `dart_checker.py`
 - systemd MemoryMax 1G→3G, TimeoutStopSec 30→60 (OOM 연쇄 재시작 방지)
