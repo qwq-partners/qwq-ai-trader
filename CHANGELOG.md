@@ -1,5 +1,27 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-07 — KR 손익비 최적화 + 전광판 전탭 통합 + 진화 잠금
+> `bda3986` | `evolved_overrides.yml`, `strategy_evolver.py`, `common.js`, `dashboard.js`
+
+### 손익비(R:R) 파라미터 조정
+- `base_position_pct`: 10% → **25%** (포지션 크기 복원, 수익 레버리지 확보)
+- `trailing_activate_pct`: 2.5% → **5.0%** (1차 익절과 동일, 분할 익절 우선 보장)
+- `trailing_stop_pct`: 2.5% → **3.0%** (noise 탈출 방지)
+- `max_positions`: 10 → **7** (집중도 향상)
+
+### 진화 잠금 시스템
+- `strategy_evolver._locked_params`: 4개 파라미터 진화 대상 영구 제외
+  - `base_position_pct`, `trailing_stop_pct`, `trailing_activate_pct`, `first_exit_pct`
+- 규칙 기반 + LLM 기반 양쪽 모두에서 잠금 체크 적용
+- 수동 분석 후에만 조정 가능 (실거래 데이터 축적 후 재평가)
+
+### 전광판 전탭 통합
+- `_tickerColor`, `_buildTickerHTML`, `fetchNavIndices` → `common.js`로 이관
+- 모든 탭(거래내역, 성과분석, 테마 등)에서 실시간 전광판 30초 갱신
+- 데이터 로드 전 숨김 → 로드 후 fade-in 효과
+
+---
+
 ## 2026-03-07 — 구조적 한계 3종 극복 (시장 레짐 감지 + 신선도 할인)
 > `fe35f32` | `swing_screener.py`, `sepa_trend.py`, `batch_analyzer.py`
 
