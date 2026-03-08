@@ -2563,10 +2563,12 @@ JSON:
                             last_rebalance_week = iso_week
 
                         # False Negative 분석 (주간 리밸런싱 후)
-                        try:
-                            await self._analyze_false_negatives()
-                        except Exception as _fn_e:
-                            logger.error(f"[FN분석] 오류: {_fn_e}")
+                        _fn_cfg = (bot.config.get("kr") or {}).get("llm_ops") or {}
+                        if _fn_cfg.get("false_negative_analysis_enabled", True):
+                            try:
+                                await self._analyze_false_negatives()
+                            except Exception as _fn_e:
+                                logger.error(f"[FN분석] 오류: {_fn_e}")
 
                 await asyncio.sleep(60)
 
@@ -2840,6 +2842,14 @@ JSON:
         last_monitor_time = None
         last_prescan_date = None
         last_expert_panel_week = None
+        last_regime_date = None           # LLM 레짐 분류기 중복 실행 방지
+        last_pos_eod_llm_date = None      # 15:00 포지션 LLM 점검 중복 방지
+
+        # LLM 운영 루프 config 플래그
+        _llm_ops_cfg = (bot.config.get("kr") or {}).get("llm_ops") or {}
+        _llm_regime_enabled = _llm_ops_cfg.get("regime_classifier_enabled", True)
+        _llm_pos_eod_enabled = _llm_ops_cfg.get("position_eod_check_enabled", True)
+        _llm_fn_enabled = _llm_ops_cfg.get("false_negative_analysis_enabled", True)
 
         # 낮 추가 스캔 설정 읽기
         _lunchtime_cfg = batch_cfg.get("lunchtime_scan", {})
@@ -2967,10 +2977,12 @@ JSON:
                         last_execute_date = today
 
                 # ── 08:10 LLM 레짐 분류 (아침 스캔 모드, 사전분석 전) ────
-                if (morning_scan_enabled
+                if (_llm_regime_enabled
+                        and morning_scan_enabled
                         and now.hour == 8 and 10 <= now.minute < 15
-                        and last_prescan_date != today):
+                        and last_regime_date != today):
                     await self._run_llm_regime_classifier()
+                    last_regime_date = today
 
                 # ── 사전분석 ──────────────────────────────────────────
                 if (now.hour == prescan_hour
@@ -3053,14 +3065,14 @@ JSON:
                     last_lunchtime_scan_date = today
 
                 # ── 15:00 LLM 포지션 종가 점검 ─────────────────────────
-                if (now.hour == 15 and 0 <= now.minute < 10
-                        and not hasattr(self, '_last_pos_llm_date')
-                        or getattr(self, '_last_pos_llm_date', None) != today):
+                if (_llm_pos_eod_enabled
+                        and now.hour == 15 and 0 <= now.minute < 10
+                        and last_pos_eod_llm_date != today):
                     try:
                         await self._run_position_eod_llm_check()
                     except Exception as _peod_e:
                         logger.error(f"[포지션LLM] 종가점검 오류: {_peod_e}")
-                    self._last_pos_llm_date = today
+                    last_pos_eod_llm_date = today
 
                 # 09:30~15:20 매 30분 포지션 모니터링
                 if 9 <= now.hour <= 15:

@@ -238,10 +238,12 @@ class BatchAnalyzer:
         all_signals = list(seen.values())
 
         # LLM 컨텍스트 필터 적용 (daily_bias + regime + LLM 우선순위)
-        try:
-            all_signals = await self._llm_rank_candidates(all_signals)
-        except Exception as _llm_rank_e:
-            logger.debug(f"[배치분석] LLM 랭킹 실패 (무시): {_llm_rank_e}")
+        _llm_ops = self._config.get("llm_ops") or {}
+        if _llm_ops.get("batch_llm_filter_enabled", True):
+            try:
+                all_signals = await self._llm_rank_candidates(all_signals)
+            except Exception as _llm_rank_e:
+                logger.debug(f"[배치분석] LLM 랭킹 실패 (무시): {_llm_rank_e}")
 
         # 만료일 계산
         now = datetime.now()
@@ -1031,33 +1033,35 @@ class BatchAnalyzer:
                     )
 
                     if result and isinstance(result, dict):
-                        priority = result.get("priority_symbols", [])
-                        exclude = result.get("exclude_symbols", [])
+                        priority = set(result.get("priority_symbols", []))
+                        exclude = set(result.get("exclude_symbols", []))
                         comment = result.get("comment", "")
 
+                        # list.index() 대신 리스트 재구성으로 안전하게 수정
+                        new_signals = []
                         for sig in all_signals:
                             if sig.symbol in priority:
-                                sig_idx = all_signals.index(sig)
-                                all_signals[sig_idx] = Signal(
+                                sig = Signal(
                                     symbol=sig.symbol, side=sig.side,
                                     strength=sig.strength, strategy=sig.strategy,
                                     price=sig.price, target_price=sig.target_price,
                                     stop_price=sig.stop_price,
                                     score=sig.score + 3,
                                     confidence=sig.confidence, reason=sig.reason,
-                                    metadata=sig.metadata,
+                                    metadata=dict(sig.metadata or {}),
                                 )
                             elif sig.symbol in exclude:
-                                sig_idx = all_signals.index(sig)
-                                all_signals[sig_idx] = Signal(
+                                sig = Signal(
                                     symbol=sig.symbol, side=sig.side,
                                     strength=sig.strength, strategy=sig.strategy,
                                     price=sig.price, target_price=sig.target_price,
                                     stop_price=sig.stop_price,
                                     score=sig.score - 8,
                                     confidence=sig.confidence, reason=sig.reason,
-                                    metadata=sig.metadata,
+                                    metadata=dict(sig.metadata or {}),
                                 )
+                            new_signals.append(sig)
+                        all_signals = new_signals
 
                         logger.info(
                             f"[배치LLM] LLM 필터 적용: priority={priority}, "

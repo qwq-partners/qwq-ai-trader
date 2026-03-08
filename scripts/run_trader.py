@@ -748,6 +748,8 @@ class UnifiedTradingBot:
                                 **(self.config.get("batch") or {}),
                                 **(kr_cfg.get("batch") or {}),
                             },
+                            # LLM 운영 루프 config 플래그
+                            "llm_ops": kr_cfg.get("llm_ops") or {},
                         },
                     )
                     batch_cfg = {
