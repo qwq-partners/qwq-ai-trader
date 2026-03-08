@@ -499,6 +499,382 @@ class KRScheduler:
             logger.error(f"[전략적분석] 사전분석 오류: {e}")
             logger.error(traceback.format_exc())
 
+    async def _run_llm_regime_classifier(self):
+        """[08:10] LLM 시장 레짐 분류기 — 배치 스캔 전 오늘 시장 성격 판단"""
+        logger.info("[LLM레짐] ===== 시장 레짐 분류 시작 =====")
+        try:
+            import json
+            from pathlib import Path
+            from ..utils.llm import get_llm_manager, LLMTask
+
+            cache_dir = Path.home() / ".cache" / "ai_trader"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # 1. daily_bias.json 읽기 (전날 LLM 리뷰 결과)
+            bias_data = {}
+            bias_path = cache_dir / "daily_bias.json"
+            if bias_path.exists():
+                try:
+                    bias_data = json.loads(bias_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            assessment = bias_data.get("assessment", "unknown")
+            top_lesson = bias_data.get("top_lesson", "")
+
+            # 2. US 마감 데이터 조회
+            sp500_pct = 0.0
+            nasdaq_pct = 0.0
+            sox_pct = 0.0
+            vix = 0.0
+            try:
+                from ..data.providers.us_market_data import get_us_market_data
+                umd = get_us_market_data()
+                overnight = await umd.get_overnight_signal()
+                indices = overnight.get("indices", {})
+                sp500_pct = indices.get("SP500", {}).get("change_pct", 0)
+                nasdaq_pct = indices.get("NASDAQ", {}).get("change_pct", 0)
+                sox_pct = indices.get("SOX", {}).get("change_pct", 0)
+                vix = indices.get("VIX", {}).get("value", 0)
+            except Exception as e:
+                logger.debug(f"[LLM레짐] US 데이터 조회 실패: {e}")
+
+            # 3. KOSPI 최근 변화율
+            c5 = 0.0
+            c20 = 0.0
+            try:
+                if self.bot.batch_analyzer and hasattr(self.bot.batch_analyzer, '_screener'):
+                    kospi = self.bot.batch_analyzer._screener.get_kospi_change()
+                    c5 = kospi.get("c5", 0)
+                    c20 = kospi.get("c20", 0)
+            except Exception as e:
+                logger.debug(f"[LLM레짐] KOSPI 데이터 조회 실패: {e}")
+
+            # 4. Gemini Flash 레짐 분류 요청
+            llm = get_llm_manager()
+            prompt = f"""오늘 한국 주식시장 레짐 분류 (KST 08:10 기준)
+
+[미국 마감]
+- S&P500: {sp500_pct:+.2f}%  NASDAQ: {nasdaq_pct:+.2f}%
+- 반도체ETF(SOX): {sox_pct:+.2f}%
+- VIX: {vix:.1f}
+
+[KOSPI 최근]
+- 5일 변화율: {c5:+.1f}%  20일: {c20:+.1f}%
+
+[전날 운영 결과]
+- LLM 평가: {assessment}  교훈: {top_lesson}
+
+아래 JSON으로 오늘 시장 성격을 판단하세요:
+{{"regime": "trending_bull | ranging | trending_bear | turning_point", "lead_strategy": "sepa | rsi2 | balanced", "sepa_min_score_today": 65, "rsi2_min_score_today": 60, "entry_start_time": "09:01", "confidence": 0.75, "reasoning": "한 줄 요약"}}"""
+
+            result = await asyncio.wait_for(
+                llm.complete_json(
+                    prompt=prompt,
+                    system="한국 주식시장 레짐 분류 전문가. JSON만 응답.",
+                    task=LLMTask.QUICK_ANALYSIS,
+                    max_tokens=200,
+                ),
+                timeout=15.0,
+            )
+
+            if result and isinstance(result, dict):
+                regime_path = cache_dir / "llm_regime_today.json"
+                result["generated_at"] = datetime.now().isoformat()
+                result["date"] = date.today().isoformat()
+                with open(regime_path, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                logger.info(
+                    f"[LLM레짐] 분류 완료: regime={result.get('regime')}, "
+                    f"lead={result.get('lead_strategy')}, "
+                    f"confidence={result.get('confidence', 0):.2f}"
+                )
+            else:
+                logger.warning("[LLM레짐] LLM 응답 없음 → 기본 레짐 사용")
+
+        except asyncio.TimeoutError:
+            logger.warning("[LLM레짐] LLM 타임아웃 → 기본 레짐 사용")
+        except Exception as e:
+            logger.error(f"[LLM레짐] 오류: {e}")
+
+    async def _run_position_eod_llm_check(self):
+        """[15:00] 보유 포지션 LLM 종가 판단"""
+        bot = self.bot
+        logger.info("[포지션LLM] ===== 종가 포지션 점검 시작 =====")
+        try:
+            positions = bot.engine.portfolio.positions
+            if not positions:
+                logger.info("[포지션LLM] 보유 포지션 없음 → 스킵")
+                return
+
+            from ..utils.llm import get_llm_manager, LLMTask
+
+            # KOSPI 변화율
+            kospi_change = 0.0
+            try:
+                if bot.batch_analyzer and hasattr(bot.batch_analyzer, '_screener'):
+                    kospi = bot.batch_analyzer._screener.get_kospi_change()
+                    kospi_change = kospi.get("c1", kospi.get("c5", 0))
+            except Exception:
+                pass
+
+            # 포지션 데이터 구성
+            pos_lines = []
+            pos_data = []
+            for i, (symbol, pos) in enumerate(positions.items(), 1):
+                entry_price = float(pos.entry_price) if pos.entry_price else 0
+                current_price = float(pos.current_price) if pos.current_price else 0
+                highest = float(pos.highest_price) if pos.highest_price else current_price
+
+                if entry_price <= 0 or current_price <= 0:
+                    continue
+
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+                drawdown = (highest - current_price) / highest * 100 if highest > 0 else 0
+                days = (datetime.now() - pos.entry_time).days if pos.entry_time else 0
+                strategy = pos.strategy or "unknown"
+                name = getattr(pos, 'name', symbol) or symbol
+
+                pos_lines.append(
+                    f"{i}. {name}({symbol}) 진입가={entry_price:,.0f}원 현재가={current_price:,.0f}원\n"
+                    f"   PnL={pnl_pct:+.1f}% 고점대비={drawdown:.1f}% 보유={days}일 전략={strategy}"
+                )
+                pos_data.append({
+                    "symbol": symbol, "name": name,
+                    "pnl_pct": pnl_pct, "drawdown": drawdown,
+                    "days": days, "strategy": strategy,
+                })
+
+            if not pos_lines:
+                return
+
+            prompt = f"""장 마감 전 포지션 점검 (15:00 KST)
+오늘 KOSPI: {kospi_change:+.1f}%
+
+보유 종목:
+{chr(10).join(pos_lines)}
+
+각 종목에 대해 아래 기준으로 판단:
+- exit_today: 오늘 꼭 청산해야 할 이유가 있는가
+- hold: 기존 전략(트레일링/익절)에 맡겨도 되는가
+- tighten: 트레일링 스탑을 타이트하게 할 것
+
+JSON:
+{{"positions": [{{"symbol":"005930","action":"hold","reason":"추세 유효"}}]}}"""
+
+            llm = get_llm_manager()
+            result = await asyncio.wait_for(
+                llm.complete_json(
+                    prompt=prompt,
+                    system="한국 주식 장중 포지션 관리 전문가. JSON만 응답.",
+                    task=LLMTask.QUICK_ANALYSIS,
+                    max_tokens=400,
+                ),
+                timeout=15.0,
+            )
+
+            if not result or not isinstance(result, dict):
+                logger.warning("[포지션LLM] LLM 응답 없음")
+                return
+
+            llm_positions = result.get("positions", [])
+            actions_taken = []
+
+            for llm_pos in llm_positions:
+                symbol = llm_pos.get("symbol", "")
+                action = llm_pos.get("action", "hold")
+                reason = llm_pos.get("reason", "")
+
+                if action == "exit_today" and symbol in positions:
+                    # SELL 시그널 즉시 발행
+                    pos = positions[symbol]
+                    current_price = pos.current_price or Decimal("0")
+                    signal = Signal(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        strength=SignalStrength.STRONG,
+                        strategy=StrategyType.SEPA_TREND,
+                        price=current_price,
+                        score=90,
+                        confidence=0.9,
+                        reason=f"LLM 종가점검: {reason}",
+                    )
+                    event = SignalEvent.from_signal(signal, source="position_eod_llm")
+                    await bot.engine.emit(event)
+                    actions_taken.append(f"🔴 {symbol} 청산: {reason}")
+
+                elif action == "tighten" and symbol in positions:
+                    # 트레일링 스탑 타이트하게
+                    if bot.exit_manager:
+                        try:
+                            state = bot.exit_manager._states.get(symbol)
+                            if state:
+                                old_trail = state.trailing_stop_pct
+                                state.trailing_stop_pct = max(1.5, old_trail - 0.5)
+                                actions_taken.append(
+                                    f"🟡 {symbol} 트레일링 타이트: "
+                                    f"{old_trail:.1f}%→{state.trailing_stop_pct:.1f}%"
+                                )
+                        except Exception:
+                            pass
+
+                elif action == "hold":
+                    actions_taken.append(f"🟢 {symbol} 유지: {reason}")
+
+            # 텔레그램 보고
+            if actions_taken:
+                lines = ["🔍 <b>15:00 포지션 LLM 점검</b>", ""]
+                lines.extend(actions_taken)
+                try:
+                    await send_alert("\n".join(lines))
+                except Exception:
+                    pass
+
+            logger.info(f"[포지션LLM] 점검 완료: {len(actions_taken)}건 처리")
+
+        except asyncio.TimeoutError:
+            logger.warning("[포지션LLM] LLM 타임아웃 → 스킵")
+        except Exception as e:
+            logger.error(f"[포지션LLM] 오류: {e}")
+
+    async def _analyze_false_negatives(self):
+        """이번 주 놓친 폭등 종목 LLM 분석 → false_negative_patterns.json"""
+        logger.info("[FN분석] ===== False Negative 분석 시작 =====")
+        try:
+            import json
+            from pathlib import Path
+
+            cache_dir = Path.home() / ".cache" / "ai_trader"
+
+            # 1. 스크리닝 결과에서 탈락/미포함 종목 vs 실제 상승률 비교
+            # pykrx로 최근 5영업일 상위 상승 종목 조회
+            try:
+                from pykrx import stock as pykrx_stock
+                end_date = date.today().strftime("%Y%m%d")
+                start_date = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
+
+                top_gainers = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: pykrx_stock.get_market_price_change(start_date, end_date)
+                )
+            except Exception as e:
+                logger.warning(f"[FN분석] pykrx 데이터 조회 실패: {e}")
+                return
+
+            if top_gainers is None or top_gainers.empty:
+                logger.info("[FN분석] 상승 종목 데이터 없음")
+                return
+
+            # +8% 이상 상승 종목 추출
+            big_movers = top_gainers[top_gainers["등락률"] >= 8.0].head(10)
+            if big_movers.empty:
+                logger.info("[FN분석] +8% 이상 상승 종목 없음")
+                return
+
+            # 배치 스캔에 포함되었는지 확인 (pending_signals 아카이브)
+            pending_path = cache_dir / "pending_signals.json"
+            scanned_symbols = set()
+            if pending_path.exists():
+                try:
+                    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+                    scanned_symbols = {s.get("symbol", "") for s in pending}
+                except Exception:
+                    pass
+
+            # 보유 종목도 확인
+            held_symbols = set()
+            if self.bot.engine:
+                held_symbols = set(self.bot.engine.portfolio.positions.keys())
+
+            # 놓친 종목 필터
+            missed = []
+            for idx, row in big_movers.iterrows():
+                symbol = str(idx)
+                if symbol in scanned_symbols or symbol in held_symbols:
+                    continue
+                missed.append({
+                    "symbol": symbol,
+                    "change_pct": round(float(row["등락률"]), 1),
+                    "volume": int(row.get("거래량", 0)),
+                })
+
+            if not missed:
+                logger.info("[FN분석] 놓친 폭등 종목 없음 (스캔 커버리지 양호)")
+                return
+
+            # LLM 분석 요청
+            from ..utils.llm import get_llm_manager, LLMTask
+
+            llm = get_llm_manager()
+            missed_text = "\n".join(
+                f"- {m['symbol']}: +{m['change_pct']:.1f}%, 거래량={m['volume']:,}"
+                for m in missed[:10]
+            )
+
+            prompt = f"""이번 주 배치 스캔에서 놓친 폭등 종목 분석:
+
+{missed_text}
+
+왜 스크리닝에서 포착하지 못했을까요?
+공통 패턴이 있다면 향후 스크리닝 개선 방안을 제시하세요.
+
+JSON:
+{{"patterns": ["패턴1", "패턴2"], "improvement_suggestions": ["제안1"], "summary": "요약"}}"""
+
+            result = await asyncio.wait_for(
+                llm.complete_json(
+                    prompt=prompt,
+                    system="한국 주식 스크리닝 개선 분석가. JSON만 응답.",
+                    task=LLMTask.QUICK_ANALYSIS,
+                    max_tokens=300,
+                ),
+                timeout=15.0,
+            )
+
+            if result and isinstance(result, dict):
+                # 누적 저장
+                fn_path = cache_dir / "false_negative_patterns.json"
+                existing = []
+                if fn_path.exists():
+                    try:
+                        existing = json.loads(fn_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        existing = []
+
+                existing.append({
+                    "date": date.today().isoformat(),
+                    "missed_count": len(missed),
+                    "missed_symbols": [m["symbol"] for m in missed],
+                    "patterns": result.get("patterns", []),
+                    "suggestions": result.get("improvement_suggestions", []),
+                    "summary": result.get("summary", ""),
+                })
+                existing = existing[-20:]  # 최근 20주만 보관
+
+                with open(fn_path, "w", encoding="utf-8") as f:
+                    json.dump(existing, f, ensure_ascii=False, indent=2)
+
+                logger.info(
+                    f"[FN분석] 완료: 놓친 {len(missed)}종목, "
+                    f"패턴 {len(result.get('patterns', []))}개 발견"
+                )
+
+                # 텔레그램 보고
+                try:
+                    lines = [
+                        "📉 <b>주간 False Negative 분석</b>",
+                        f"놓친 폭등(+8%↑): <b>{len(missed)}종목</b>",
+                    ]
+                    for p in result.get("patterns", [])[:3]:
+                        lines.append(f"  • {p}")
+                    await send_alert("\n".join(lines))
+                except Exception:
+                    pass
+
+        except asyncio.TimeoutError:
+            logger.warning("[FN분석] LLM 타임아웃")
+        except Exception as e:
+            logger.error(f"[FN분석] 오류: {e}")
+
     async def _run_expert_panel(self):
         """일요일 21:00 주간 전문가 패널"""
         logger.info("[전문가패널] ===== 주간 분석 시작 =====")
@@ -1467,21 +1843,33 @@ class KRScheduler:
                                     except Exception:
                                         pass
 
-                                # LLM 2차 검증
-                                if _ib_llm_verify_on and _ib_stock.score >= 95:
-                                    try:
-                                        _ib_llm_ok = await self._llm_verify_intraday(
-                                            stock=_ib_stock,
-                                            rt_price=_ib_rt_price,
-                                            rt_change=_ib_rt_change,
+                                # LLM 2차 검증 (score 구간별 차등 적용)
+                                if _ib_llm_verify_on:
+                                    _ib_should_verify = False
+                                    if _ib_stock.score >= 90:
+                                        _ib_should_verify = True
+                                    elif _ib_stock.score >= 75:
+                                        _ib_vol_ratio = getattr(_ib_stock, 'volume_ratio', 0) or 0
+                                        _ib_has_foreign = any(
+                                            "외국인" in r or "외인" in r
+                                            for r in (_ib_stock.reasons or [])
                                         )
-                                        if not _ib_llm_ok:
-                                            logger.info(
-                                                f"[장중품질] {_ib_stock.symbol} LLM 2차검증 탈락"
+                                        _ib_should_verify = (_ib_vol_ratio >= 2.0 or _ib_has_foreign)
+
+                                    if _ib_should_verify:
+                                        try:
+                                            _ib_llm_ok = await self._llm_verify_intraday(
+                                                stock=_ib_stock,
+                                                rt_price=_ib_rt_price,
+                                                rt_change=_ib_rt_change,
                                             )
-                                            continue
-                                    except Exception as _llm_e:
-                                        logger.debug(f"[장중품질] LLM 검증 오류 → 스킵: {_llm_e}")
+                                            if not _ib_llm_ok:
+                                                logger.info(
+                                                    f"[장중품질] {_ib_stock.symbol} LLM 2차검증 탈락"
+                                                )
+                                                continue
+                                        except Exception as _llm_e:
+                                            logger.debug(f"[장중품질] LLM 검증 오류 → 스킵: {_llm_e}")
 
                                 # ATR 기반 손절/목표가
                                 _ib_atr = 4.0
@@ -2174,6 +2562,12 @@ class KRScheduler:
                             )
                             last_rebalance_week = iso_week
 
+                        # False Negative 분석 (주간 리밸런싱 후)
+                        try:
+                            await self._analyze_false_negatives()
+                        except Exception as _fn_e:
+                            logger.error(f"[FN분석] 오류: {_fn_e}")
+
                 await asyncio.sleep(60)
 
         except asyncio.CancelledError:
@@ -2572,6 +2966,12 @@ class KRScheduler:
                         logger.error(f"[배치] catch-up 실행 오류: {e}")
                         last_execute_date = today
 
+                # ── 08:10 LLM 레짐 분류 (아침 스캔 모드, 사전분석 전) ────
+                if (morning_scan_enabled
+                        and now.hour == 8 and 10 <= now.minute < 15
+                        and last_prescan_date != today):
+                    await self._run_llm_regime_classifier()
+
                 # ── 사전분석 ──────────────────────────────────────────
                 if (now.hour == prescan_hour
                         and prescan_min <= now.minute < prescan_min + 4
@@ -2651,6 +3051,16 @@ class KRScheduler:
                     except Exception as e:
                         logger.error(f"[배치스케줄러] 낮 스캔 오류: {e}")
                     last_lunchtime_scan_date = today
+
+                # ── 15:00 LLM 포지션 종가 점검 ─────────────────────────
+                if (now.hour == 15 and 0 <= now.minute < 10
+                        and not hasattr(self, '_last_pos_llm_date')
+                        or getattr(self, '_last_pos_llm_date', None) != today):
+                    try:
+                        await self._run_position_eod_llm_check()
+                    except Exception as _peod_e:
+                        logger.error(f"[포지션LLM] 종가점검 오류: {_peod_e}")
+                    self._last_pos_llm_date = today
 
                 # 09:30~15:20 매 30분 포지션 모니터링
                 if 9 <= now.hour <= 15:

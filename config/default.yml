@@ -210,6 +210,14 @@ kr:
     evaluation_period_days: 7
     send_telegram: false
 
+  # LLM 운영 루프 고도화
+  llm_ops:
+    regime_classifier_enabled: true     # 08:10 LLM 시장 레짐 분류기
+    batch_llm_filter_enabled: true      # 배치 스캔 후 LLM 컨텍스트 필터
+    daily_bias_enabled: true            # 20:30 daily_bias.json 피드백 루프
+    position_eod_check_enabled: true    # 15:00 포지션 LLM 종가 점검
+    false_negative_analysis_enabled: true  # 주간 FN 분석
+
   stock_master:
     enabled: true
     refresh_time: "18:00"

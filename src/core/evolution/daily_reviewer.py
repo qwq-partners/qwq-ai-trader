@@ -452,6 +452,12 @@ class DailyReviewer:
             except Exception as e:
                 logger.warning(f"[거래리뷰] 텔레그램 발송 실패: {e}")
 
+        # daily_bias 피드백 루프: 내일 운영에 반영할 바이어스 저장
+        try:
+            await self._save_daily_bias(llm_review, summary)
+        except Exception as e:
+            logger.warning(f"[거래리뷰] daily_bias 저장 실패 (무시): {e}")
+
         return llm_review
 
     def _build_llm_prompt(
@@ -650,6 +656,83 @@ class DailyReviewer:
             logger.info(f"[거래리뷰] LLM 리뷰 저장: {file_path}")
         except Exception as e:
             logger.error(f"[거래리뷰] LLM 리뷰 저장 실패: {e}")
+
+    async def _save_daily_bias(self, llm_result: dict, summary: dict):
+        """LLM 리뷰 결과에서 내일 운영 바이어스 추출 → daily_bias.json 저장"""
+        import json
+        from pathlib import Path
+        from datetime import date, datetime
+
+        bias_path = Path.home() / ".cache" / "ai_trader" / "daily_bias.json"
+
+        # LLM이 제안한 parameter_suggestions에서 바이어스 추출
+        param_suggestions = llm_result.get("parameter_suggestions", [])
+        assessment = llm_result.get("assessment", "fair")
+
+        sepa_boost = 0
+        rsi2_boost = 0
+        avoid_before = None
+        regime_hint = "neutral"
+        top_lesson = ""
+
+        for suggestion in param_suggestions:
+            param = suggestion.get("parameter", "")
+            current = suggestion.get("current_value", 0)
+            suggested = suggestion.get("suggested_value", 0)
+            confidence = suggestion.get("confidence", 0)
+
+            if confidence < 0.6:
+                continue
+
+            if param == "min_score" and "sepa" in suggestion.get("strategy", "").lower():
+                delta = int(suggested) - int(current) if current and suggested else 0
+                sepa_boost = max(-10, min(10, delta))
+            elif param == "min_score" and "rsi2" in suggestion.get("strategy", "").lower():
+                delta = int(suggested) - int(current) if current and suggested else 0
+                rsi2_boost = max(-10, min(10, delta))
+
+        # 전체 평가 기반 기본 바이어스
+        if assessment == "poor":
+            sepa_boost = max(sepa_boost, 5)
+        elif assessment == "good":
+            sepa_boost = min(sepa_boost, 0)
+
+        # 패턴 기반 시간대 제한
+        avoid_patterns = llm_result.get("avoid_patterns", [])
+        for pattern in avoid_patterns:
+            if isinstance(pattern, str):
+                if "오전" in pattern and ("10시" in pattern or "10:00" in pattern):
+                    avoid_before = "10:00"
+                elif "장초반" in pattern or "9시" in pattern:
+                    avoid_before = "09:30"
+
+        insights = llm_result.get("insights", [])
+        if insights:
+            top_lesson = insights[0] if isinstance(insights[0], str) else ""
+
+        bias = {
+            "date": str(date.today()),
+            "assessment": assessment,
+            "sepa_score_boost": sepa_boost,
+            "rsi2_score_boost": rsi2_boost,
+            "avoid_entry_before": avoid_before,
+            "regime_hint": regime_hint,
+            "top_lesson": top_lesson,
+            "generated_at": datetime.now().isoformat(),
+        }
+
+        try:
+            bias_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(bias_path, "w", encoding="utf-8") as f:
+                json.dump(bias, f, ensure_ascii=False, indent=2)
+            logger.info(
+                f"[daily_bias] 저장 완료: sepa_boost={sepa_boost:+d}, "
+                f"rsi2_boost={rsi2_boost:+d}, avoid_before={avoid_before}"
+            )
+        except Exception as e:
+            logger.warning(f"[daily_bias] 저장 실패: {e}")
+
+        return bias
 
     # --- 리포트 조회 ---
 

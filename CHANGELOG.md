@@ -1,5 +1,48 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-08 — LLM 운영 루프 고도화 (6개 기능 추가)
+> `kr_scheduler.py`, `batch_analyzer.py`, `daily_reviewer.py`, `strategy_evolver.py`, `default.yml`
+
+### 1. daily_bias.json 피드백 루프
+- `DailyReviewer._save_daily_bias()`: 매일 20:30 LLM 리뷰 후 운영 바이어스 추출
+- assessment, sepa/rsi2 score boost, avoid_entry_before, top_lesson 저장
+- 익일 배치 스캔에서 자동 반영 (피드백 루프 단절 해소)
+
+### 2. 08:10 LLM 시장 레짐 분류기
+- `_run_llm_regime_classifier()`: US 마감 + KOSPI 5일/20일 + 전날 bias 기반
+- Gemini Flash로 trending_bull/ranging/trending_bear/turning_point 분류
+- `llm_regime_today.json` 저장 → 배치 스캔에서 전략 우선순위 반영
+
+### 3. 배치 스캔 후 LLM 컨텍스트 필터
+- `BatchAnalyzer._llm_rank_candidates()`: 배치 후보에 LLM 필터 적용
+- regime → lead_strategy 기반 전략별 score 조정
+- daily_bias → sepa/rsi2 score boost 적용
+- 5개+ 후보 시 Gemini Flash 우선순위 재조정 (priority +3, exclude -8)
+
+### 4. 15:00 포지션 LLM 종가 점검
+- `_run_position_eod_llm_check()`: 장 마감 전 보유 포지션 LLM 판단
+- action: exit_today → 즉시 SELL 시그널, tighten → 트레일링 -0.5%, hold → 유지
+- 텔레그램 간단 보고
+
+### 5. LLM Verify 재설계 (score 구간별 차등)
+- 90점+ → 항상 LLM 검증
+- 75~89점 → 거래대금 급증(vol_ratio≥2.0) OR 외인 순매수 시에만 검증
+- 75점 미만 → LLM 검증 없음 (기존: 95점 이상만)
+
+### 6. False Negative 분석 (주간)
+- `_analyze_false_negatives()`: 주간 리밸런싱 시 놓친 폭등(+8%↑) 종목 분석
+- pykrx 상승 종목 vs 배치 스캔 결과 비교 → LLM 패턴 분석
+- `false_negative_patterns.json` 누적 저장
+
+### 진화 로직 충돌 방지
+- `StrategyEvolver` docstring에 daily_bias/regime/진화 우선순위 명시
+- daily_bias는 일시적 score 보정(당일 한정), 진화는 영속적 변경 → 충돌 없음
+
+### config 추가
+- `kr.llm_ops`: 6개 기능 모두 on/off 가능 (기본: true)
+
+---
+
 ## 2026-03-07 — KR 손익비 최적화 + 전광판 전탭 통합 + 진화 잠금
 > `bda3986` | `evolved_overrides.yml`, `strategy_evolver.py`, `common.js`, `dashboard.js`
 

@@ -237,6 +237,12 @@ class BatchAnalyzer:
                 seen[sig.symbol] = sig
         all_signals = list(seen.values())
 
+        # LLM 컨텍스트 필터 적용 (daily_bias + regime + LLM 우선순위)
+        try:
+            all_signals = await self._llm_rank_candidates(all_signals)
+        except Exception as _llm_rank_e:
+            logger.debug(f"[배치분석] LLM 랭킹 실패 (무시): {_llm_rank_e}")
+
         # 만료일 계산
         now = datetime.now()
         if expire_today:
@@ -895,6 +901,181 @@ class BatchAnalyzer:
 
         logger.info(f"[배치분석] 전략스윙 시그널 {len(signals)}개 생성")
         return signals
+
+    async def _llm_rank_candidates(self, all_signals: list) -> list:
+        """배치 후보에 대해 LLM 컨텍스트 필터 적용
+
+        1. llm_regime_today.json → 전략 우선순위/entry_start_time 적용
+        2. daily_bias.json → score boost 적용
+        3. 후보 5개 이상 → Gemini Flash 우선순위 재조정
+        4. fail-safe: 오류 시 원본 그대로 반환
+        """
+        if not all_signals:
+            return all_signals
+
+        try:
+            import json
+            from pathlib import Path
+
+            cache_dir = Path.home() / ".cache" / "ai_trader"
+
+            # 1. llm_regime_today.json 로드
+            regime_data = {}
+            regime_path = cache_dir / "llm_regime_today.json"
+            if regime_path.exists():
+                try:
+                    regime_data = json.loads(regime_path.read_text(encoding="utf-8"))
+                    logger.info(f"[배치LLM] 레짐 로드: {regime_data.get('regime', 'unknown')}")
+                except Exception:
+                    pass
+
+            lead_strategy = regime_data.get("lead_strategy", "balanced")
+            entry_start_time = regime_data.get("entry_start_time", "09:01")
+
+            # 2. daily_bias.json 로드
+            bias_data = {}
+            bias_path = cache_dir / "daily_bias.json"
+            if bias_path.exists():
+                try:
+                    bias_data = json.loads(bias_path.read_text(encoding="utf-8"))
+                    logger.info(
+                        f"[배치LLM] 바이어스 로드: sepa={bias_data.get('sepa_score_boost', 0):+d}, "
+                        f"rsi2={bias_data.get('rsi2_score_boost', 0):+d}"
+                    )
+                except Exception:
+                    pass
+
+            sepa_boost = bias_data.get("sepa_score_boost", 0)
+            rsi2_boost = bias_data.get("rsi2_score_boost", 0)
+            avoid_before = bias_data.get("avoid_entry_before")
+
+            # 전략별 score 조정 적용
+            from dataclasses import replace
+            adjusted = []
+            for sig in all_signals:
+                adj = 0.0
+                strategy = sig.strategy.value if hasattr(sig.strategy, 'value') else str(sig.strategy)
+
+                # lead_strategy 기반 조정
+                if lead_strategy == "rsi2" and "sepa" in strategy:
+                    adj -= 5
+                elif lead_strategy == "sepa" and "rsi2" in strategy:
+                    adj -= 3
+
+                # daily_bias score boost
+                if "sepa" in strategy:
+                    adj += sepa_boost
+                elif "rsi2" in strategy:
+                    adj += rsi2_boost
+
+                new_score = sig.score + adj
+                meta = dict(sig.metadata) if sig.metadata else {}
+
+                # entry_start_time 메타데이터 추가
+                if entry_start_time != "09:01":
+                    meta["entry_delay"] = entry_start_time
+                if avoid_before:
+                    meta["avoid_entry_before"] = avoid_before
+
+                if adj != 0 or meta != sig.metadata:
+                    sig = Signal(
+                        symbol=sig.symbol,
+                        side=sig.side,
+                        strength=sig.strength,
+                        strategy=sig.strategy,
+                        price=sig.price,
+                        target_price=sig.target_price,
+                        stop_price=sig.stop_price,
+                        score=new_score,
+                        confidence=sig.confidence,
+                        reason=sig.reason,
+                        metadata=meta,
+                    )
+                adjusted.append(sig)
+
+            all_signals = adjusted
+
+            # 3. 후보 5개 이상일 때만 Gemini Flash LLM 호출
+            if len(all_signals) >= 5:
+                try:
+                    from ..utils.llm import get_llm_manager, LLMTask
+
+                    llm = get_llm_manager()
+                    regime_str = regime_data.get("regime", "neutral")
+                    reasoning = regime_data.get("reasoning", "")
+
+                    cand_lines = []
+                    for i, sig in enumerate(sorted(all_signals, key=lambda s: -s.score)[:20], 1):
+                        name = sig.metadata.get("candidate_name", sig.symbol) if sig.metadata else sig.symbol
+                        strategy = sig.strategy.value if hasattr(sig.strategy, 'value') else str(sig.strategy)
+                        cand_lines.append(
+                            f"{i}. {name}({sig.symbol}) {strategy} score={sig.score:.0f}"
+                        )
+                    candidates_text = "\n".join(cand_lines)
+
+                    prompt = f"""오늘 시장 레짐: {regime_str} ({reasoning})
+배치 후보 {len(all_signals)}개:
+{candidates_text}
+
+오늘 시장에서 진입 우선순위 top 3과 제외 권장을 JSON으로:
+{{"priority_symbols": ["005930", "000660"], "exclude_symbols": ["123456"], "comment": "한 줄 요약"}}"""
+
+                    result = await asyncio.wait_for(
+                        llm.complete_json(
+                            prompt=prompt,
+                            system="한국 주식 배치 후보 우선순위 필터. JSON만 응답.",
+                            task=LLMTask.QUICK_ANALYSIS,
+                            max_tokens=200,
+                        ),
+                        timeout=10.0,
+                    )
+
+                    if result and isinstance(result, dict):
+                        priority = result.get("priority_symbols", [])
+                        exclude = result.get("exclude_symbols", [])
+                        comment = result.get("comment", "")
+
+                        for sig in all_signals:
+                            if sig.symbol in priority:
+                                sig_idx = all_signals.index(sig)
+                                all_signals[sig_idx] = Signal(
+                                    symbol=sig.symbol, side=sig.side,
+                                    strength=sig.strength, strategy=sig.strategy,
+                                    price=sig.price, target_price=sig.target_price,
+                                    stop_price=sig.stop_price,
+                                    score=sig.score + 3,
+                                    confidence=sig.confidence, reason=sig.reason,
+                                    metadata=sig.metadata,
+                                )
+                            elif sig.symbol in exclude:
+                                sig_idx = all_signals.index(sig)
+                                all_signals[sig_idx] = Signal(
+                                    symbol=sig.symbol, side=sig.side,
+                                    strength=sig.strength, strategy=sig.strategy,
+                                    price=sig.price, target_price=sig.target_price,
+                                    stop_price=sig.stop_price,
+                                    score=sig.score - 8,
+                                    confidence=sig.confidence, reason=sig.reason,
+                                    metadata=sig.metadata,
+                                )
+
+                        logger.info(
+                            f"[배치LLM] LLM 필터 적용: priority={priority}, "
+                            f"exclude={exclude}, comment={comment}"
+                        )
+
+                except asyncio.TimeoutError:
+                    logger.debug("[배치LLM] LLM 타임아웃 → 스킵")
+                except Exception as e:
+                    logger.debug(f"[배치LLM] LLM 호출 실패 → 스킵: {e}")
+
+            # 점수순 재정렬
+            all_signals.sort(key=lambda s: -s.score)
+            return all_signals
+
+        except Exception as e:
+            logger.warning(f"[배치LLM] 전체 오류 → 원본 반환: {e}")
+            return all_signals
 
     def _save_json(self):
         """대기 시그널 JSON 저장"""

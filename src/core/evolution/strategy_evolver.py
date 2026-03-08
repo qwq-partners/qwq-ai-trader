@@ -167,6 +167,13 @@ class StrategyEvolver:
     2. 한 번에 1개만 변경
     3. 3영업일 + 5건 최소 거래로 평가
     4. 악화 시 즉시 롤백
+
+    충돌 방지 (daily_bias / llm_regime_today):
+    - daily_bias.json: 매일 20:30 LLM 리뷰 후 생성 → 익일 배치 스캔에서 score boost 적용
+    - llm_regime_today.json: 매일 08:10 생성 → 배치 스캔에서 min_score 오버라이드
+    - 진화 로직(여기): 주 1회 또는 일 1회 파라미터 변경 → evolved_overrides.yml에 영속화
+    - 우선순위: daily_bias/regime은 일시적 보정(당일 한정), 진화는 영속적 변경 → 충돌 없음
+    - daily_bias는 score에 가감만 하고 evolved_overrides의 min_score 자체를 변경하지 않음
     """
 
     def __init__(
