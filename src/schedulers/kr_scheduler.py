@@ -621,9 +621,9 @@ class KRScheduler:
             pos_lines = []
             pos_data = []
             for i, (symbol, pos) in enumerate(positions.items(), 1):
-                entry_price = float(pos.entry_price) if pos.entry_price else 0
-                current_price = float(pos.current_price) if pos.current_price else 0
-                highest = float(pos.highest_price) if pos.highest_price else current_price
+                entry_price = float(pos.entry_price) if pos.entry_price is not None else 0.0
+                current_price = float(pos.current_price) if pos.current_price is not None else 0.0
+                highest = float(pos.highest_price) if pos.highest_price is not None else current_price
 
                 if entry_price <= 0 or current_price <= 0:
                     continue
@@ -685,9 +685,23 @@ JSON:
                 reason = llm_pos.get("reason", "")
 
                 if action == "exit_today" and symbol in positions:
-                    # SELL 시그널 즉시 발행
                     pos = positions[symbol]
-                    current_price = pos.current_price or Decimal("0")
+                    current_price = pos.current_price
+                    entry_price = pos.entry_price
+
+                    # 안전 검증: 가격 데이터 없으면 스킵
+                    if current_price is None or entry_price is None or current_price <= 0:
+                        logger.warning(f"[포지션LLM] {symbol} 가격 데이터 없음, exit_today 무시")
+                        actions_taken.append(f"⚠️ {symbol} 가격 미확인으로 청산 스킵")
+                        continue
+
+                    # 수익 중인 포지션은 LLM 청산 거부 (ExitManager에 위임)
+                    pnl_pct = (current_price - entry_price) / entry_price * 100
+                    if pnl_pct > Decimal("3"):
+                        logger.info(f"[포지션LLM] {symbol} 수익 {pnl_pct:.1f}% → ExitManager 위임")
+                        actions_taken.append(f"🟡 {symbol} 수익중({pnl_pct:.1f}%) ExitManager 위임")
+                        continue
+
                     signal = Signal(
                         symbol=symbol,
                         side=OrderSide.SELL,
@@ -700,7 +714,7 @@ JSON:
                     )
                     event = SignalEvent.from_signal(signal, source="position_eod_llm")
                     await bot.engine.emit(event)
-                    actions_taken.append(f"🔴 {symbol} 청산: {reason}")
+                    actions_taken.append(f"🔴 {symbol} 청산({pnl_pct:+.1f}%): {reason}")
 
                 elif action == "tighten" and symbol in positions:
                     # 트레일링 스탑 타이트하게
@@ -708,7 +722,7 @@ JSON:
                         try:
                             state = bot.exit_manager._states.get(symbol)
                             if state:
-                                old_trail = state.trailing_stop_pct
+                                old_trail = state.trailing_stop_pct if state.trailing_stop_pct is not None else 3.0
                                 state.trailing_stop_pct = max(1.5, old_trail - 0.5)
                                 actions_taken.append(
                                     f"🟡 {symbol} 트레일링 타이트: "

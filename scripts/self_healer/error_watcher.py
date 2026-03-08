@@ -14,12 +14,10 @@ import fcntl
 import json
 import os
 import signal
-import subprocess
 import sys
 import time
 from collections import deque
 from datetime import date
-from pathlib import Path
 
 # 프로젝트 루트
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -140,25 +138,23 @@ class ErrorWatcher:
         self.error_timestamps: dict[str, list[float]] = {}  # 오류별 발생 시각
         self.last_processed: dict[str, float] = {}  # 디바운싱용
 
-    def tail_journal(self):
-        """journalctl -f 로 실시간 로그 스트림"""
-        proc = subprocess.Popen(
-            [
-                "journalctl", "-u", SERVICE_NAME,
-                "-f", "-n", "0", "--no-pager",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+    async def _async_tail_journal(self):
+        """journalctl -f 로 실시간 로그 스트림 (비동기, 이벤트 루프 블로킹 방지)"""
+        proc = await asyncio.create_subprocess_exec(
+            "journalctl", "-u", SERVICE_NAME,
+            "-f", "-n", "0", "--no-pager",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
         try:
-            for line in proc.stdout:
-                if _shutdown:
+            while not _shutdown:
+                line_bytes = await proc.stdout.readline()
+                if not line_bytes:
                     break
-                yield line.rstrip()
+                yield line_bytes.decode("utf-8", errors="replace").rstrip()
         finally:
             proc.kill()
-            proc.wait()
+            await proc.wait()
 
     async def run(self) -> None:
         """메인 이벤트 루프"""
@@ -167,7 +163,7 @@ class ErrorWatcher:
         print(f"[self_healer] 일일 수정 한도: {MAX_FIXES_PER_DAY}회")
         print(f"[self_healer] 쿨다운: {MIN_COOLDOWN_SECS}초")
 
-        for line in self.tail_journal():
+        async for line in self._async_tail_journal():
             if _shutdown:
                 break
 
@@ -246,7 +242,7 @@ class ErrorWatcher:
         # 60초 검증
         print(f"[self_healer] {FIX_VERIFY_WAIT_SECS}초 검증 중...")
         fix_ok = await asyncio.to_thread(
-            verify_fix, ctx.matched_pattern, FIX_VERIFY_WAIT_SECS
+            verify_fix, ctx.error_type, FIX_VERIFY_WAIT_SECS
         )
 
         if not fix_ok:
@@ -332,7 +328,7 @@ class ErrorWatcher:
 
         # 60초 검증
         fix_ok = await asyncio.to_thread(
-            verify_fix, ctx.matched_pattern, FIX_VERIFY_WAIT_SECS
+            verify_fix, ctx.error_type, FIX_VERIFY_WAIT_SECS
         )
 
         if not fix_ok:
@@ -365,7 +361,15 @@ class ErrorWatcher:
         print(f"[self_healer] T2 수정 완료: {result.summary}")
 
     async def _handle_t3(self, ctx: ErrorContext) -> None:
-        """T3: 분석만 → 텔레그램 보고"""
+        """T3: 분석만 → 텔레그램 보고 (일일 한도 공유)"""
+        can_fix, reason = self.state.can_fix()
+        if not can_fix:
+            print(f"[self_healer] T3 분석 불가 (한도): {reason}")
+            await self.notifier.send(
+                f"<b>[self-healer]</b> T3 분석 불가: {reason}\n오류: {ctx.error_message[:200]}"
+            )
+            return
+
         prompt = build_prompt(ctx)
 
         print(f"[self_healer] Claude Code 호출 중 (T3 분석)...")

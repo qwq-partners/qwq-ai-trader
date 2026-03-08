@@ -1,5 +1,76 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-08 — 엔진 탭 대시보드 구현
+
+### 개요
+- 자가수정 에이전트 상태 + 엔진 로그 + LLM 운영 루프를 통합 표시하는 "엔진" 탭 신규 추가
+- 기존 7개 탭 → 8개 탭 (실시간/거래/성과/자산/테마/복기/**엔진**/설정)
+
+### 신규 파일
+| 파일 | 설명 |
+|------|------|
+| `src/dashboard/engine_api.py` | `/api/engine/*` REST API 6개 엔드포인트 |
+| `src/dashboard/templates/engine.html` | 엔진 탭 HTML (5섹션 레이아웃) |
+| `src/dashboard/static/js/engine.js` | API 호출 + 렌더링 + 자동 폴링 |
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `server.py` | engine_api import + `/engine` 라우트 + API 등록 |
+| `index.html` | nav에 "엔진" 탭 추가 |
+| `trades.html` | nav에 "엔진" 탭 추가 |
+| `performance.html` | nav에 "엔진" 탭 추가 |
+| `equity.html` | nav에 "엔진" 탭 추가 |
+| `themes.html` | nav에 "엔진" 탭 추가 |
+| `evolution.html` | nav에 "엔진" 탭 추가 |
+| `settings.html` | nav에 "엔진" 탭 추가 |
+
+### API 엔드포인트
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `GET /api/engine/healer/status` | self-healer 서비스 상태 (5초 캐시) |
+| `GET /api/engine/healer/history` | 수정 이력 (최근 50건) |
+| `GET /api/engine/logs` | 엔진 로그 (NOISE 필터, 레벨 화이트리스트) |
+| `GET /api/engine/llm-regime` | LLM 레짐 분류 현황 |
+| `GET /api/engine/daily-bias` | Daily Bias 보정값 |
+| `GET /api/engine/false-negatives` | False Negative 분석 |
+
+### 설계 문서
+- `docs/engine-tab-design.md` 기반 구현
+- P0 리뷰 반영: 비동기 subprocess, 입력 화이트리스트, 메모리 캐시
+
+---
+
+## 2026-03-08 — P0/P1 보안·안전성 패치 (코드 리뷰 후속)
+
+### Batch 1: 보안 긴급 수정 (self-healer)
+| 파일 | 이슈 | 수정 내용 |
+|------|------|----------|
+| `rollback.py` | P0-1: sudo 비밀번호 하드코딩 | `sudo -n` (NOPASSWD sudoers) 전환, 비밀번호 제거 |
+| `rollback.py` | P0-3: proc.kill() 후 wait() 미호출 | 모든 kill() 후 wait() 추가, 좀비 프로세스 방지 |
+| `rollback.py` | P0-4: re.compile(user_input) ReDoS | 정규식 → 단순 `in` 문자열 매칭 전환 |
+| `healer_agent.py` | P0-2: --dangerously-skip-permissions | `--allowedTools` 화이트리스트 전환 (Read,Edit,Write,Glob,Grep + git/py_compile) |
+| `healer_agent.py` | P0-2: git add -A 무차별 스테이징 | 프롬프트에서 수정 파일만 add 지시 (.env 등 방지) |
+| `error_watcher.py` | P1-5: 동기 tail_journal 이벤트루프 블로킹 | `asyncio.create_subprocess_exec` + `async for` 비동기 전환 |
+| `error_watcher.py` | P1-6: T3 무제한 LLM 호출 | `can_fix()` 일일 한도 체크 추가 |
+
+### Batch 2: 거래 안전성 (kr_scheduler.py)
+| 이슈 | 수정 내용 |
+|------|----------|
+| P0-5: LLM exit_today 무검증 SELL | 가격 데이터 검증 + 수익 3%+ 포지션은 ExitManager 위임 |
+| P1-2: trailing_stop_pct None TypeError | None 시 기본값 3.0% 적용 |
+| P1-3: Decimal/float 혼합 | `pos.entry_price` 등 None 체크를 `is not None`으로 통일 |
+
+### Batch 3: 코드 품질
+| 파일 | 이슈 | 수정 내용 |
+|------|------|----------|
+| `daily_reviewer.py` | P1-7: `current and suggested` 금지 패턴 | `is not None` 패턴으로 수정 |
+
+### 인프라
+- `/etc/sudoers.d/qwq-self-healer` NOPASSWD 규칙 설정 완료
+
+---
+
 ## 2026-03-08 — 자가수정 에이전트 (Self-Healer) 구현
 > `scripts/self_healer/` 전체 신규
 

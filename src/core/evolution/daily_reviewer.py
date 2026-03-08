@@ -685,10 +685,10 @@ class DailyReviewer:
                 continue
 
             if param == "min_score" and "sepa" in suggestion.get("strategy", "").lower():
-                delta = int(suggested) - int(current) if current and suggested else 0
+                delta = int(suggested) - int(current) if current is not None and suggested is not None else 0
                 sepa_boost = max(-10, min(10, delta))
             elif param == "min_score" and "rsi2" in suggestion.get("strategy", "").lower():
-                delta = int(suggested) - int(current) if current and suggested else 0
+                delta = int(suggested) - int(current) if current is not None and suggested is not None else 0
                 rsi2_boost = max(-10, min(10, delta))
 
         # 전체 평가 기반 기본 바이어스

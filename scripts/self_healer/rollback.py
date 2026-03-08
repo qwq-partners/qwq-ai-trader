@@ -3,7 +3,6 @@
 import select
 import subprocess
 import time
-import re
 from typing import Optional
 
 
@@ -46,13 +45,13 @@ def get_fix_diff() -> str:
 
 
 def restart_service() -> bool:
-    """봇 서비스 재시작"""
+    """봇 서비스 재시작 (NOPASSWD sudoers 설정 필요)"""
     result = subprocess.run(
-        ["sudo", "-S", "systemctl", "restart", SERVICE_NAME],
-        input="user123!\n",
+        ["sudo", "-n", "systemctl", "restart", SERVICE_NAME],
         cwd=PROJECT_DIR,
         capture_output=True,
         text=True,
+        timeout=30,
     )
     return result.returncode == 0
 
@@ -67,9 +66,11 @@ def check_service_active() -> bool:
     return result.stdout.strip() == "active"
 
 
-def verify_fix(error_pattern: str, wait_secs: int = VERIFY_WAIT_SECS) -> bool:
+def verify_fix(error_keyword: str, wait_secs: int = VERIFY_WAIT_SECS) -> bool:
     """수정 후 wait_secs 동안 동일 오류 재발 여부 확인.
     True = 오류 미재발 (수정 성공), False = 재발 (롤백 필요)
+
+    error_keyword: 단순 문자열 키워드 (정규식 아님, ReDoS 방지)
     """
     # 재시작 후 서비스 안정화 대기
     time.sleep(5)
@@ -78,6 +79,7 @@ def verify_fix(error_pattern: str, wait_secs: int = VERIFY_WAIT_SECS) -> bool:
         return False
 
     # wait_secs 동안 로그 감시
+    proc = None
     try:
         proc = subprocess.Popen(
             [
@@ -90,22 +92,26 @@ def verify_fix(error_pattern: str, wait_secs: int = VERIFY_WAIT_SECS) -> bool:
         )
 
         deadline = time.time() + wait_secs
-        compiled = re.compile(error_pattern)
 
         while time.time() < deadline:
             ready, _, _ = select.select([proc.stdout], [], [], 1.0)
             if ready:
                 line = proc.stdout.readline()
-                if line and compiled.search(line):
+                if line and error_keyword in line:
                     proc.kill()
+                    proc.wait()
                     print(f"[rollback] 오류 재발 감지: {line.strip()}")
                     return False
 
         proc.kill()
+        proc.wait()
         return True  # 오류 미재발
 
     except Exception as e:
         print(f"[rollback] 검증 중 오류: {e}")
+        if proc:
+            proc.kill()
+            proc.wait()
         return True  # 검증 불능 시 낙관적으로 통과
 
 

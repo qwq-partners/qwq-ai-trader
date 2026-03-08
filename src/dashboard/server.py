@@ -16,6 +16,7 @@ from loguru import logger
 
 from .kr_api import setup_kr_api_routes
 from .us_api import setup_us_api_routes
+from .engine_api import setup_engine_api_routes
 from .data_collector import DashboardDataCollector
 from .sse import SSEManager
 
@@ -86,6 +87,9 @@ class DashboardServer:
         if self.us_engine:
             setup_us_api_routes(app, self.us_engine)
 
+        # 엔진 API 라우트 (/api/engine/*)
+        setup_engine_api_routes(app)
+
         # 통합 SSE 스트림
         app.router.add_get("/api/stream", self.sse_manager.handle_stream)
 
@@ -97,6 +101,7 @@ class DashboardServer:
         app.router.add_get("/themes", self._serve_page("themes.html"))
         app.router.add_get("/settings", self._serve_page("settings.html"))
         app.router.add_get("/evolution", self._serve_page("evolution.html"))
+        app.router.add_get("/engine", self._serve_page("engine.html"))
         app.router.add_get("/settlement", lambda r: web.HTTPFound("/trades"))
 
         # 정적 파일 서빙

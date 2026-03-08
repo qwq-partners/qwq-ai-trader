@@ -76,7 +76,8 @@ def build_prompt(ctx: ErrorContext) -> str:
 1. 위 오류의 근본 원인을 분석하세요
 2. 관련 파일을 읽고 해당 부분을 수정하세요
 3. 수정 후 python3 -c "import ast; ast.parse(open('{file_path_for_check}').read())" 로 문법 확인
-4. git add -A && git commit -m "fix: [자가수정] {ctx.error_type} — {ctx.error_message[:50]}"
+4. git add <수정한 파일만> && git commit -m "fix: [자가수정] {ctx.error_type} — {ctx.error_message[:50]}"
+   (git add -A 금지 — .env 등 민감 파일 포함 방지)
 5. 수정한 내용을 한 줄로 요약해서 마지막에 출력하세요: SUMMARY: <내용>
 
 주의:
@@ -92,7 +93,11 @@ def call_claude_code(prompt: str, timeout: int = MAX_CLAUDE_TIMEOUT_SECS) -> Hea
 
     try:
         result = subprocess.run(
-            ["claude", "--dangerously-skip-permissions", "-p", prompt],
+            [
+                "claude",
+                "--allowedTools", "Read,Glob,Grep,Edit,Write,Bash(python3 -m py_compile *),Bash(git add *),Bash(git commit *),Bash(git diff *),Bash(git status *)",
+                "-p", prompt,
+            ],
             cwd=PROJECT_DIR,
             capture_output=True,
             text=True,
