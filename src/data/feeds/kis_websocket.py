@@ -359,8 +359,9 @@ class KISWebSocketFeed:
         # 세션에서 거래 가능한 종목
         session_symbols = self.get_session_symbols()
 
-        # 보유 종목 (프리장/넥스트장: NXT 대상만, 정규장: 전체)
-        if self._current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT) and self._nxt_symbols:
+        # 보유 종목 (넥스트장: NXT 대상만, 정규장: 전체)
+        # 프리장은 _is_market_active()=False로 WS 자체가 비활성이므로 여기 도달하지 않음
+        if self._current_session == MarketSession.NEXT and self._nxt_symbols:
             priority = self._priority_symbols & self._nxt_symbols
             skipped = self._priority_symbols - self._nxt_symbols
             if skipped:
@@ -510,9 +511,10 @@ class KISWebSocketFeed:
         if not self._ws or self._ws.closed:
             return
 
-        # 프리장/넥스트장: NXT 비대상 종목은 구독 건너뜀
+        # 넥스트장: NXT 비대상 종목은 구독 건너뜀
         # (NXT 비대상 종목에 H0NXCNT0 전송 시 KIS 서버가 1006으로 연결 종료)
-        if self._current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT):
+        # 프리장은 _is_market_active()=False로 WS 자체가 비활성이므로 여기 도달하지 않음
+        if self._current_session == MarketSession.NEXT:
             if self._nxt_symbols and symbol not in self._nxt_symbols:
                 logger.debug(
                     f"[WS] {symbol} NXT 비대상 → 구독 건너뜀 "
@@ -617,14 +619,15 @@ class KISWebSocketFeed:
     # ============================================================
 
     def _is_market_active(self) -> bool:
-        """KR 시장 활성 시간 여부 (프리장~정규장: 08:00~15:20)
-        
-        넥스트장(15:40~20:00)은 넥스트레이드 별개 거래소로 KIS WS 미지원.
-        REST 폴링(ovtm_untp_prpr)으로 커버.
+        """KR 시장 활성 시간 여부 (정규장만: 09:00~15:20)
+
+        - 프리장(08:00~08:50): KRX 단일가 경쟁매매, H0NXCNT0 미지원 → WS 비활성, REST 폴링 전담
+        - 넥스트장(15:40~20:00): Nextrade 별개 거래소, KIS WS 미지원 → WS 비활성, REST 폴링 전담
+        - 정규장(09:00~15:20): H0STCNT0/H0STASP0 지원 → WS 활성
         """
         session = self._kr_session.get_session()
-        if session == MarketSession.NEXT:
-            return False  # 넥스트장: WS 비활성, REST 폴링 전담
+        if session in (MarketSession.PRE_MARKET, MarketSession.NEXT):
+            return False  # 프리장/넥스트장: WS 비활성, REST 폴링 전담
         return session != MarketSession.CLOSED
 
     async def run(self):
