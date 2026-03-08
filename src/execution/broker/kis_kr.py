@@ -234,10 +234,22 @@ class KISBroker(BaseBroker):
                 headers = self._get_headers(tr_id)
                 async with self._session.get(url, headers=headers, params=params) as resp:
                     if resp.status == 401 and attempt < 2:
-                        logger.warning("[토큰] 401 응답, 토큰 갱신 시도")
+                        logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
+                        self._token_mgr.invalidate()
                         await self._ensure_token()
                         continue
                     if resp.status in (429, 500, 502, 503) and attempt < 2:
+                        # HTTP 500 본문에 토큰 오류가 포함될 수 있음
+                        if resp.status == 500:
+                            try:
+                                err_data = await resp.json()
+                                if self._is_token_error(err_data):
+                                    logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
+                                    self._token_mgr.invalidate()
+                                    await self._ensure_token()
+                                    continue
+                            except Exception:
+                                pass
                         wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
                         logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도 ({wait}초 대기)")
                         await asyncio.sleep(wait)
@@ -248,7 +260,8 @@ class KISBroker(BaseBroker):
                         logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
                         return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
                     if self._is_token_error(data) and attempt < 2:
-                        logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 갱신 시도")
+                        logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
+                        self._token_mgr.invalidate()
                         await self._ensure_token()
                         continue
                     return data
@@ -281,10 +294,22 @@ class KISBroker(BaseBroker):
                     headers.update(extra_headers)
                 async with self._session.post(url, headers=headers, json=json_data) as resp:
                     if resp.status == 401 and attempt < 2:
-                        logger.warning("[토큰] 401 응답, 토큰 갱신 시도")
+                        logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
+                        self._token_mgr.invalidate()
                         await self._ensure_token()
                         continue
                     if resp.status in (429, 500, 502, 503) and attempt < 2:
+                        # HTTP 500 본문에 토큰 오류가 포함될 수 있음
+                        if resp.status == 500:
+                            try:
+                                err_data = await resp.json()
+                                if self._is_token_error(err_data):
+                                    logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
+                                    self._token_mgr.invalidate()
+                                    await self._ensure_token()
+                                    continue
+                            except Exception:
+                                pass
                         wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
                         logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도 ({wait}초 대기)")
                         await asyncio.sleep(wait)
@@ -295,7 +320,8 @@ class KISBroker(BaseBroker):
                         logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
                         return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
                     if self._is_token_error(data) and attempt < 2:
-                        logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 갱신 시도")
+                        logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
+                        self._token_mgr.invalidate()
                         await self._ensure_token()
                         continue
                     return data
