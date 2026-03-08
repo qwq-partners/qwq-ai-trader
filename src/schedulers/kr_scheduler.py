@@ -572,7 +572,8 @@ class KRScheduler:
                     prompt=prompt,
                     system="한국 주식시장 레짐 분류 전문가. JSON만 응답.",
                     task=LLMTask.QUICK_ANALYSIS,
-                    max_tokens=300,  # 200→300: 한국어 reasoning 필드 잘림 방지
+                    # max_tokens 미설정: gemini-3-flash-preview는 maxOutputTokens 설정 시
+                    # 오히려 더 일찍 잘리는 버그 있음 (None → 모델 기본값 사용 → 정상)
                 ),
                 timeout=15.0,
             )
