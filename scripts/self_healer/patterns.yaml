@@ -1,0 +1,124 @@
+# qwq-ai-trader 오류 패턴 라이브러리
+# 각 패턴은 정규표현식, journalctl 로그 라인에 매칭됨
+
+# ─── NOISE: 무시할 정상/반복 패턴 ───
+noise:
+  - pattern: "잔고 조회 실패.*주말"
+    description: "주말 KIS API 비활성"
+  - pattern: "get_order_history.*체결 내역 조회 실패"
+    description: "주말/장외 시간 체결 내역 없음"
+  - pattern: "\\[종목 검증 실패\\] symbol='', name='IBK투자증권'"
+    description: "빈 심볼 ETF 필터링"
+  - pattern: "HTTP 500.*1회 재시도"
+    description: "KIS 서버 일시 오류 (자동 재시도)"
+  - pattern: "pykrx failed and no valid cache"
+    description: "pykrx 데이터 미제공 (장외시간)"
+  - pattern: "scikit-learn not available"
+    description: "선택적 의존성 미설치"
+  - pattern: "No module named 'mcp'"
+    description: "선택적 모듈 미설치"
+  - pattern: "Approval Key 발급.*재시도"
+    description: "WS Approval Key 일시 실패 (자동 재시도)"
+  - pattern: "EGW00123.*토큰 갱신"
+    description: "토큰 갱신 정상 흐름 (자동 재발급)"
+  - pattern: "asyncio.CancelledError"
+    description: "태스크 정상 취소"
+  - pattern: "WebSocket.*reconnect"
+    description: "WS 자동 재연결 (정상)"
+  - pattern: "rate limit.*429"
+    description: "API Rate Limit (자체 재시도)"
+  - pattern: "장 종료.*스케줄러 대기"
+    description: "장외 시간 정상 대기"
+  - pattern: "\\[heartbeat\\]"
+    description: "하트비트 로깅 (정상)"
+  - pattern: "캐시.*만료.*갱신"
+    description: "캐시 갱신 정상 흐름"
+
+# ─── T1: 자동 수정 (즉시, 알림만) ───
+t1:
+  - pattern: "SyntaxError: (.+)"
+    description: "Python 문법 오류"
+    extract_file: true
+  - pattern: "IndentationError: (.+)"
+    description: "들여쓰기 오류"
+    extract_file: true
+  - pattern: "ImportError: cannot import name '(\\w+)' from '([^']+)'"
+    description: "임포트 이름 오류"
+    extract_file: true
+  - pattern: "ModuleNotFoundError: No module named '(src\\.[^']+)'"
+    description: "내부 모듈 임포트 오류"
+    extract_file: true
+  - pattern: "AttributeError: '(\\w+)' object has no attribute '(\\w+)'"
+    description: "속성 접근 오류"
+    extract_file: true
+  - pattern: "NameError: name '(\\w+)' is not defined"
+    description: "미정의 변수/함수 참조"
+    extract_file: true
+  - pattern: "KeyError: '(\\w+)'.*File \"(.+\\.py)\", line (\\d+)"
+    description: "딕셔너리 키 누락"
+    extract_file: true
+  - pattern: "TypeError: (\\w+)\\(\\) got an unexpected keyword argument '(\\w+)'"
+    description: "잘못된 키워드 인수"
+    extract_file: true
+  - pattern: "TypeError: (\\w+)\\(\\) missing \\d+ required positional argument"
+    description: "필수 인수 누락"
+    extract_file: true
+  - pattern: "TypeError: unsupported operand type\\(s\\) for"
+    description: "연산자 타입 불일치"
+    extract_file: true
+
+# ─── T2: 수정 후 텔레그램 승인 요청 ───
+t2:
+  - pattern: "RuntimeError: (.+)"
+    description: "런타임 오류"
+    extract_file: true
+  - pattern: "ValueError: (.+)"
+    description: "값 오류"
+    extract_file: true
+  - pattern: "IndexError: (.+)"
+    description: "인덱스 범위 초과"
+    extract_file: true
+  - pattern: "TypeError: .+ argument must be .+, not .+"
+    description: "인수 타입 불일치 (로직 오류)"
+    extract_file: true
+  - pattern: "ZeroDivisionError"
+    description: "0으로 나누기"
+    extract_file: true
+  - pattern: "UnboundLocalError: local variable '(\\w+)'"
+    description: "지역 변수 참조 오류"
+    extract_file: true
+  - pattern: "RecursionError"
+    description: "무한 재귀"
+    extract_file: true
+  - pattern: "StopIteration"
+    description: "이터레이터 고갈"
+    extract_file: true
+  - pattern: "AssertionError"
+    description: "어설션 실패"
+    extract_file: true
+  - pattern: "json\\.decoder\\.JSONDecodeError"
+    description: "JSON 파싱 실패"
+    extract_file: true
+
+# ─── T3: 알림만 (에스컬레이션) ───
+t3:
+  - pattern: "ConnectionRefusedError"
+    description: "연결 거부 (인프라)"
+  - pattern: "OSError: \\[Errno \\d+\\]"
+    description: "OS 수준 에러"
+  - pattern: "MemoryError"
+    description: "메모리 부족"
+  - pattern: "asyncpg.*deadlock"
+    description: "DB 데드락"
+  - pattern: "asyncpg.*pool.*exhausted"
+    description: "DB 연결 풀 고갈"
+  - pattern: "TimeoutError.*(?:KIS|API|broker)"
+    description: "브로커 API 타임아웃"
+  - pattern: "ssl\\.SSLError"
+    description: "SSL 인증서 오류"
+  - pattern: "PermissionError"
+    description: "파일/프로세스 권한 오류"
+  - pattern: "FileNotFoundError: .*(?:config|yml|json)"
+    description: "설정 파일 누락"
+  - pattern: "aiohttp\\.ClientConnectorError"
+    description: "HTTP 연결 실패 (네트워크)"

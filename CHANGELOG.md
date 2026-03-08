@@ -1,5 +1,32 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-08 — 자가수정 에이전트 (Self-Healer) 구현
+> `scripts/self_healer/` 전체 신규
+
+### 개요
+- journalctl 실시간 감시 → 오류 발생 시 Claude Code 자동 호출 → 코드 분석·수정·재배포
+- 3티어 분류: T1(자동수정), T2(승인 후 배포), T3(분석만 보고)
+
+### 신규 파일
+| 파일 | 설명 |
+|------|------|
+| `error_watcher.py` | 메인 데몬 — journalctl tail + 패턴 매칭 + 디바운싱(30초) |
+| `error_classifier.py` | 오류 분류 + 스택트레이스에서 파일/라인 추출 |
+| `healer_agent.py` | Claude Code `--dangerously-skip-permissions -p` 호출 + 결과 파싱 |
+| `rollback.py` | pre-fix 해시 저장 + 60초 검증 + git revert 자동 롤백 |
+| `notifier.py` | 텔레그램 알림 (T1 완료/T2 승인/T3 보고) + 승인 폴링 |
+| `patterns.yaml` | 오류 패턴 라이브러리 (NOISE 15개 + T1 10개 + T2 10개 + T3 10개) |
+| `state.json` | 일일 수정 카운터 + 쿨다운 상태 |
+| `qwq-self-healer.service` | systemd 서비스 파일 |
+
+### 안전장치
+- 하루 최대 3회 자동 수정, 수정 간 5분 쿨다운
+- 수정 후 60초 모니터링 → 동일 오류 재발 시 자동 롤백
+- T1 반복 3회 → T2 승격 (텔레그램 승인 필요)
+- 프로세스 락 파일로 동시 실행 방지
+
+---
+
 ## 2026-03-08 — LLM 운영 루프 고도화 (6개 기능 추가)
 > `kr_scheduler.py`, `batch_analyzer.py`, `daily_reviewer.py`, `strategy_evolver.py`, `default.yml`
 

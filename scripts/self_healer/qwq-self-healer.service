@@ -1,0 +1,28 @@
+[Unit]
+Description=qwq-ai-trader 자가수정 에이전트
+After=qwq-ai-trader.service
+Requires=qwq-ai-trader.service
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/projects/qwq-ai-trader
+ExecStart=/home/user/projects/qwq-ai-trader/venv/bin/python3 scripts/self_healer/error_watcher.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/user
+Environment=PATH=/home/user/.local/bin:/home/user/.claude/local/bin:/home/user/projects/qwq-ai-trader/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=/home/user/projects/qwq-ai-trader:/home/user/projects/qwq-ai-trader/src
+
+# 리소스 제한
+MemoryMax=1G
+CPUQuota=50%
+
+# 로그
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qwq-self-healer
+
+[Install]
+WantedBy=multi-user.target
