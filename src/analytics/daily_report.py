@@ -122,14 +122,7 @@ class DailyReportGenerator:
             except Exception as e:
                 logger.warning(f"LLM 매니저 자동 연결 실패: {e}")
 
-        # 1. 종목 스크리닝 (5,000원 미만 소형주 제외, theme_detector 연동)
-        screened = await self.screener.screen_all(
-            llm_manager=llm_manager,
-            min_price=5000,
-            theme_detector=self.theme_detector,
-        )
-
-        # 2. 테마 탐지
+        # 2. 테마 탐지 (스크리닝 전에 먼저)
         hot_themes = []
         if self.theme_detector:
             try:
@@ -138,8 +131,22 @@ class DailyReportGenerator:
             except Exception as e:
                 logger.warning(f"테마 탐지 실패: {e}")
 
-        # 3. 종목 점수 재계산 및 순위 결정
-        recommendations = await self._rank_stocks(screened, hot_themes, max_stocks)
+        # 1. 배치 스캔 결과(pending_signals.json) 우선 사용
+        #    프리장(08:25)에 screen_all()을 직접 실행하면 KIS 데이터 없어 0건 반환됨
+        #    → 08:20 배치 스캔이 이미 완료된 경우 그 결과를 재활용
+        recommendations = self._load_from_pending_signals(today, max_stocks, hot_themes)
+        if recommendations:
+            logger.info(f"[레포트] 배치 스캔 결과 재활용: {len(recommendations)}종목 (pending_signals.json)")
+        else:
+            # 폴백: 직접 스크리닝 (배치 결과 없을 때)
+            logger.info("[레포트] pending_signals 없음 → 직접 스크리닝 실행")
+            screened = await self.screener.screen_all(
+                llm_manager=llm_manager,
+                min_price=5000,
+                theme_detector=self.theme_detector,
+            )
+            # 3. 종목 점수 재계산 및 순위 결정
+            recommendations = await self._rank_stocks(screened, hot_themes, max_stocks)
 
         # 4. 종목별 대표뉴스 수집
         await self._collect_per_stock_news(recommendations)
@@ -527,6 +534,82 @@ class DailyReportGenerator:
             except Exception as e:
                 logger.warning(f"종목 뉴스 검색 실패 ({rec.name}): {e}")
                 rec.key_news = ""
+
+    def _load_from_pending_signals(
+        self,
+        today: date,
+        max_stocks: int,
+        hot_themes: list,
+    ) -> List["RecommendedStock"]:
+        """pending_signals.json(배치 스캔 결과)에서 RecommendedStock 변환
+
+        배치 스캔(08:20)이 완료된 경우 해당 결과를 레포트에 재활용.
+        프리장(08:25)에 screen_all()을 직접 실행하면 KIS 데이터 없어 0건 반환되는 문제 방지.
+        """
+        try:
+            signals_path = _REC_CACHE_DIR / "pending_signals.json"
+            if not signals_path.exists():
+                return []
+
+            import json as _json
+            from datetime import datetime as _dt
+            data = _json.loads(signals_path.read_text(encoding="utf-8"))
+            if not data:
+                return []
+
+            # 오늘 날짜 시그널만 (만료된 것 제외)
+            now_str = _dt.now().isoformat()
+            valid = [
+                d for d in data
+                if d.get("date", d.get("created_at", ""))[:10] == today.isoformat()
+                and d.get("expires_at", "9999") >= now_str
+            ]
+            if not valid:
+                return []
+
+            # 테마 이름 맵 (hot_themes)
+            theme_map: dict = {}
+            if hot_themes:
+                for ht in hot_themes:
+                    theme_map[getattr(ht, "name", str(ht))] = getattr(ht, "score", 0)
+
+            results: List[RecommendedStock] = []
+            strategy_label = {
+                "sepa_trend": "SEPA 성장주",
+                "rsi2_reversal": "RSI2 단기반등",
+                "strategic_swing": "전략적 스윙",
+            }
+            for i, d in enumerate(sorted(valid, key=lambda x: x.get("score", 0), reverse=True)[:max_stocks], 1):
+                strategy = d.get("strategy", "")
+                reason = d.get("reason", "")
+                entry = float(d.get("entry_price", 0))
+                stop = float(d.get("stop_price", 0))
+                target = float(d.get("target_price", 0))
+                score = float(d.get("score", 0))
+
+                rec = RecommendedStock(
+                    rank=i,
+                    symbol=d.get("symbol", ""),
+                    name=d.get("name", ""),
+                    investment_thesis=reason[:80] if reason else strategy_label.get(strategy, strategy),
+                    catalyst=reason if reason else "배치 스캔 신호",
+                    prev_close=entry,
+                    target_entry=entry,
+                    target_exit=target,
+                    stop_loss=stop,
+                    tech_score=score,
+                    total_score=score,
+                    related_theme=strategy_label.get(strategy, strategy),
+                    risk_level="중",
+                )
+                results.append(rec)
+
+            logger.info(f"[레포트] pending_signals → RecommendedStock 변환: {len(results)}개")
+            return results
+
+        except Exception as e:
+            logger.warning(f"[레포트] pending_signals 로드 실패 (폴백 스크리닝): {e}")
+            return []
 
     def _save_recommendations(self, report_date: date) -> None:
         """추천 종목을 파일에 영속화 (봇 재시작 대응)"""

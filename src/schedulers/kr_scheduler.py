@@ -1961,13 +1961,17 @@ JSON:
     async def run_rest_price_feed(self):
         """REST 폴링 시세 피드 (WebSocket 미사용 시 전략/청산 활성화)
 
-        45초 주기로 보유 포지션의 시세를 REST API 조회 →
-        MarketDataEvent 생성 → 엔진 emit → 전략/청산 활성화.
+        - 보유종목: 20초 주기, 모든 세션 (WS 비활성 구간 커버)
+        - 프리장 전광판: 30초 주기, PRE_MARKET 전용
+          NXT 대상 종목(watch_symbols + pending_signals) 시세 수집 → 대시보드 표시용
         """
         bot = self.bot
         try:
             # 초기 대기 (스크리닝과 시간 분산)
             await asyncio.sleep(90)
+
+            _premarket_watch_tick = 0   # 프리장 전광판 폴링 주기 카운터
+            _nxt_symbols: set = set()   # NXT 대상 종목 캐시
 
             while bot.running:
                 try:
@@ -1976,30 +1980,24 @@ JSON:
                         await asyncio.sleep(20)
                         continue
 
-                    # 대상 종목: WS가 커버 못 하는 보유종목만
+                    # ── 보유종목 시세 (항상 실행) ─────────────────────────────
                     ws_covered = set()
                     if bot.ws_feed and bot.ws_feed._connected:
                         ws_covered = bot.ws_feed._subscribed_symbols
 
-                    target_symbols = [
+                    holding_symbols = [
                         s for s in bot.engine.portfolio.positions.keys()
                         if s.zfill(6) not in ws_covered
                     ]
 
-                    if not target_symbols:
-                        await asyncio.sleep(20)
-                        continue
-
                     success_count = 0
-                    for symbol in target_symbols:
+                    for symbol in holding_symbols:
                         try:
                             quote = await bot.broker.get_quote(symbol)
                             if not quote or quote.get("price", 0) <= 0:
                                 continue
 
                             # 세션별 가격 선택
-                            # - 정규장/프리장: stck_prpr (장전단일가 예상가 포함)
-                            # - 넥스트장: ovtm_untp_prpr (시간외단일가 동적값), 없으면 stck_prpr 폴백
                             if current_session == MarketSession.NEXT:
                                 ovtm = quote.get("ovtm_price", 0) or 0
                                 price = ovtm if ovtm > 0 else quote["price"]
@@ -2035,9 +2033,71 @@ JSON:
                     if success_count > 0:
                         ws_info = f", WS={len(ws_covered)}종목" if ws_covered else ""
                         logger.info(
-                            f"[REST피드] 보유종목 WS백업 {success_count}/{len(target_symbols)}개 갱신 "
+                            f"[REST피드] 보유종목 WS백업 {success_count}/{len(holding_symbols)}개 갱신 "
                             f"(세션={current_session.value}{ws_info})"
                         )
+
+                    # ── 프리장 전광판 시세 (PRE_MARKET 전용, 30초 주기) ────────
+                    # NXT 대상 종목 중 watch_symbols + pending_signals 폴링
+                    # WS가 프리장에서 비활성이므로 REST로 대시보드 표시용 시세 수집
+                    _premarket_watch_tick += 1
+                    if current_session == MarketSession.PRE_MARKET and _premarket_watch_tick >= 2:
+                        _premarket_watch_tick = 0
+
+                        # NXT 대상 종목 캐시 (시작 시 1회 + 30분마다 갱신)
+                        try:
+                            if not _nxt_symbols:
+                                _nxt_symbols = set(await bot.broker.get_nxt_symbols())
+                        except Exception:
+                            pass
+
+                        # 전광판 대상: watch_symbols + 오늘 pending_signals
+                        watch_candidates: set = set(getattr(bot, "_watch_symbols", []))
+                        if bot.batch_analyzer:
+                            try:
+                                pending = bot.batch_analyzer._pending or []
+                                watch_candidates.update(p.symbol for p in pending)
+                            except Exception:
+                                pass
+
+                        # 이미 보유종목으로 처리된 것 제외 + NXT 대상만
+                        holdings_set = set(bot.engine.portfolio.positions.keys())
+                        premarket_targets = [
+                            s for s in watch_candidates
+                            if s not in holdings_set
+                            and (not _nxt_symbols or s.zfill(6) in _nxt_symbols)
+                        ][:20]  # 최대 20종목
+
+                        if premarket_targets:
+                            pm_ok = 0
+                            for symbol in premarket_targets:
+                                try:
+                                    quote = await bot.broker.get_quote(symbol)
+                                    price = quote.get("price", 0) if quote else 0
+                                    if price <= 0:
+                                        continue
+                                    event = MarketDataEvent(
+                                        symbol=symbol,
+                                        open=Decimal(str(quote.get("open", price))),
+                                        high=Decimal(str(quote.get("high", price))),
+                                        low=Decimal(str(quote.get("low", price))),
+                                        close=Decimal(str(price)),
+                                        volume=quote.get("volume", 0),
+                                        change_pct=quote.get("change_pct", 0.0),
+                                        prev_close=Decimal(str(quote["prev_close"])) if quote.get("prev_close") else None,
+                                        source="premarket_polling",
+                                    )
+                                    await bot.engine.emit(event)
+                                    pm_ok += 1
+                                except Exception as e:
+                                    logger.debug(f"[프리장피드] {symbol} 조회 실패: {e}")
+                                await asyncio.sleep(0.2)
+
+                            if pm_ok > 0:
+                                logger.info(
+                                    f"[프리장피드] 전광판 {pm_ok}/{len(premarket_targets)}개 갱신 "
+                                    f"(NXT대상, watch+pending)"
+                                )
 
                 except Exception as e:
                     logger.warning(f"[REST피드] 오류: {e}", exc_info=True)
