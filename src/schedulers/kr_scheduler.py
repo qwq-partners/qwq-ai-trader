@@ -572,12 +572,13 @@ class KRScheduler:
                     prompt=prompt,
                     system="한국 주식시장 레짐 분류 전문가. JSON만 응답.",
                     task=LLMTask.QUICK_ANALYSIS,
-                    max_tokens=200,
+                    max_tokens=300,  # 200→300: 한국어 reasoning 필드 잘림 방지
                 ),
                 timeout=15.0,
             )
 
-            if result and isinstance(result, dict):
+            # "error" 키가 있으면 LLM 파싱 실패 → 파일 저장 생략
+            if result and isinstance(result, dict) and "error" not in result:
                 regime_path = cache_dir / "llm_regime_today.json"
                 result["generated_at"] = datetime.now().isoformat()
                 result["date"] = date.today().isoformat()
@@ -589,7 +590,8 @@ class KRScheduler:
                     f"confidence={result.get('confidence', 0):.2f}"
                 )
             else:
-                logger.warning("[LLM레짐] LLM 응답 없음 → 기본 레짐 사용")
+                raw = result.get("raw", "") if isinstance(result, dict) else ""
+                logger.warning(f"[LLM레짐] LLM 응답 없음/파싱 실패 → 기본 레짐 사용 (raw={raw[:80]!r})")
 
         except asyncio.TimeoutError:
             logger.warning("[LLM레짐] LLM 타임아웃 → 기본 레짐 사용")
