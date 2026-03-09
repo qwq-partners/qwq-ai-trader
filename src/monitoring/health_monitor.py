@@ -135,9 +135,13 @@ class HealthMonitor:
             return CheckResult("ws_feed", "critical", True, "WS 비활성")
 
         # 넥스트장(15:40~20:00): KIS WS 미지원, REST 폴링 전담 → 알람 억제
+        # 장외(CLOSED, 프리장 제외): WS 대기 상태 → 알람 억제
         from src.utils.session import KRSession, MarketSession
-        if KRSession().get_session() == MarketSession.NEXT:
+        _kr_session = KRSession().get_session()
+        if _kr_session == MarketSession.NEXT:
             return CheckResult("ws_feed", "critical", True, "넥스트장 REST 폴링 전담")
+        if _kr_session == MarketSession.CLOSED:
+            return CheckResult("ws_feed", "critical", True, "장외 시간 WS 대기 중")
 
         last_msg = getattr(ws, '_last_message_time', None)
         if last_msg:
