@@ -1541,10 +1541,7 @@ class USScheduler:
                     strategy=pos.strategy or "unknown",
                     reason="sync_closed",
                 )
-                if eng.trade_storage and hasattr(eng.trade_storage, '_journal'):
-                    eng.trade_storage._journal.record_trade(trade)
-
-                # TradeStorage DB 기록
+                # TradeStorage DB 기록 (journal.record_exit도 내부에서 호출됨)
                 trade_id = getattr(pos, 'trade_id', None)
                 if trade_id and eng.trade_storage:
                     eng.trade_storage.record_exit(
@@ -2126,8 +2123,6 @@ class USScheduler:
                     strategy=pos.strategy or pending.get("strategy", ""),
                     reason=pending.get("reason", ""),
                 )
-                if eng.trade_storage and hasattr(eng.trade_storage, '_journal'):
-                    eng.trade_storage._journal.record_trade(trade)
                 eng.risk_manager.record_trade_result(is_win=trade.is_win)
 
                 # TradeStorage DB 기록
