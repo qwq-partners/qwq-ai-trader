@@ -261,7 +261,7 @@ us:
 
   risk:
     daily_max_loss_pct: 3.0
-    max_positions: 10
+    max_positions: 20
     base_position_pct: 25.0
     max_position_pct: 35.0
     min_cash_reserve_pct: 10.0
