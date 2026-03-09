@@ -743,7 +743,14 @@ class KISUSBroker:
                     logger.error(f"체결 내역 조회 실패: {data.get('msg1', '')}")
                 break
 
-            for item in data.get("output1", []):
+            output1 = data.get("output1", [])
+            # output1이 비어있을 때 디버깅: output 키 이름 확인
+            if page == 0 and not output1:
+                avail_keys = [k for k in data.keys() if k.startswith("output")]
+                if avail_keys:
+                    logger.debug(f"[체결조회] output1 비어있음, 응답 키: {avail_keys}")
+
+            for item in output1:
                 order_no = item.get("ODNO", "").strip()
                 if not order_no:
                     continue
@@ -789,6 +796,73 @@ class KISUSBroker:
                 ctx_nk = new_nk
             else:
                 break
+
+        return orders
+
+    async def get_outstanding_orders(self) -> List[dict]:
+        """
+        미체결 주문 조회 (inquire-nccs).
+        get_order_history(inquire-ccnl)가 빈 결과를 줄 때 폴백으로 사용.
+
+        Returns:
+            [{order_no, symbol, side, qty, price, filled_qty, status, exchange}]
+        """
+        # inquire-nccs: 해외주식 미체결내역 조회
+        url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-nccs"
+        tr_id = self._tr("TTTS3018R", "VTTS3018R")
+
+        params = {
+            "CANO": self.config.account_no,
+            "ACNT_PRDT_CD": self.config.account_product_cd,
+            "OVRS_EXCG_CD": "",       # 빈값=전체 거래소
+            "SORT_SQN": "DS",
+            "CTX_AREA_FK200": "",
+            "CTX_AREA_NK200": "",
+        }
+
+        orders = []
+        try:
+            data = await self._api_get(url, tr_id, params)
+            if data.get("rt_cd") != "0":
+                logger.warning(
+                    f"[미체결조회] 실패: {data.get('msg1', '')} ({data.get('msg_cd', '')})"
+                )
+                return orders
+
+            # output 또는 output1 — KIS API 응답 키가 다를 수 있음
+            items = data.get("output", data.get("output1", []))
+            if not items:
+                avail_keys = [k for k in data.keys() if k.startswith("output")]
+                logger.info(f"[미체결조회] 미체결 주문 없음 (응답 키: {avail_keys})")
+
+            for item in (items or []):
+                order_no = item.get("ODNO", "").strip()
+                if not order_no:
+                    continue
+
+                filled_qty = int(item.get("PCHS_QTY", item.get("FT_CCLD_QTY", "0")) or "0")
+                ord_qty = int(item.get("FT_ORD_QTY", item.get("ORD_QTY", "0")) or "0")
+
+                sll_buy = item.get("SLL_BUY_DVSN_CD", "")
+                side = "sell" if sll_buy == "01" else "buy"
+
+                orders.append({
+                    "order_no": order_no,
+                    "symbol": item.get("OVRS_PDNO", item.get("PDNO", "")).strip(),
+                    "side": side,
+                    "qty": ord_qty,
+                    "price": float(item.get("FT_ORD_UNPR3", item.get("OVRS_ORD_UNPR", "0")) or "0"),
+                    "filled_qty": filled_qty,
+                    "status": "partial" if filled_qty > 0 else "pending",
+                    "exchange": item.get("OVRS_EXCG_CD", ""),
+                    "time": item.get("ORD_TMD", ""),
+                })
+
+            if orders:
+                logger.info(f"[미체결조회] {len(orders)}건 미체결 주문 발견")
+
+        except Exception as e:
+            logger.warning(f"[미체결조회] 조회 오류: {e}")
 
         return orders
 

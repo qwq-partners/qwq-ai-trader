@@ -1,5 +1,37 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-10 — US 미체결 주문 타임아웃 누수 수정
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/schedulers/us_scheduler.py` | `_check_orders` history 비어있을 때 즉시 return 제거 → 타임아웃 항상 체크 |
+| `src/schedulers/us_scheduler.py` | pending 타임아웃 시 매도 stage 롤백 + 시장가 재시도 로직 추가 |
+| `src/schedulers/us_scheduler.py` | `_recover_pending_orders` 고아 주문 감지/취소 + nccs 폴백 추가 |
+| `src/execution/broker/kis_us.py` | `get_outstanding_orders()` 미체결 전용 API (inquire-nccs) 추가 |
+| `src/execution/broker/kis_us.py` | `get_order_history` output1 비어있을 때 응답 키 디버그 로깅 |
+
+### 상세
+
+**P0: _check_orders history 빈 결과 시 pending 영구 잔류**
+- `get_order_history()`가 빈 결과 반환 시 `if not history: return`으로 즉시 종료
+- 이후 모든 타임아웃 로직(매도 2분, 매수 10분, 부분체결, 시장가 폴백)에 도달 불가
+- 수정: `history = history or []`로 처리, 빈 history에서도 pending 타임아웃 체크 진행
+
+**P1: 매수 주문 포트폴리오 기반 체결 감지**
+- 매수 pending인데 포지션에 이미 존재 → 체결로 간주하여 pending 즉시 정리
+- 30초 유예 후 감지 (포트폴리오 동기화 시차 고려)
+
+**P1: 매도 타임아웃 시 stage 롤백 누락**
+- 매도 pending이 타임아웃/취소로 정리될 때 ExitManager stage 롤백 미호출
+- 수정: `rollback_stage()` 호출 + 정규장에서 시장가 재주문
+
+**P1: 고아 주문 감지 부재 (재시작 시)**
+- `_recover_pending_orders`에서 고아 매도 주문 발견 시 취소 + stage 롤백
+- `inquire-ccnl` 빈 결과 시 `inquire-nccs` (TTTS3018R) 미체결 전용 API 폴백
+
+---
+
 ## 2026-03-09 — 전체 코드 리뷰 P1 잔여 이슈 8건 수정
 
 ### 수정 파일

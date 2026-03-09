@@ -1592,7 +1592,7 @@ class USScheduler:
             await asyncio.sleep(eng._order_check_sec)
 
     async def _recover_pending_orders(self):
-        """재시작 시 KIS 미체결 주문 복원 → _pending_orders에 등록"""
+        """재시작 시 KIS 미체결 주문 복원 → _pending_orders에 등록, 고아 주문 취소"""
         eng = self.engine
         if not eng.broker:
             return
@@ -1602,10 +1602,23 @@ class USScheduler:
         today_kst = now_kst.strftime("%Y%m%d")
         yesterday_kst = (now_kst - timedelta(days=1)).strftime("%Y%m%d")
 
+        # 1차: inquire-ccnl (체결/미체결 통합 조회)
         history = await eng.broker.get_order_history(
             start_date=yesterday_kst, end_date=today_kst
         )
+
+        # 2차 폴백: inquire-nccs (미체결 전용 조회) — history 비어있을 때
         if not history:
+            logger.info("[US 주문 복원] inquire-ccnl 빈 결과 → inquire-nccs 폴백 시도")
+            try:
+                outstanding = await eng.broker.get_outstanding_orders()
+                if outstanding:
+                    history = outstanding
+            except Exception as e:
+                logger.warning(f"[US 주문 복원] inquire-nccs 조회 실패: {e}")
+
+        if not history:
+            logger.info("[US 주문 복원] 미체결 주문 없음")
             return
 
         recovered = 0
@@ -1617,6 +1630,63 @@ class USScheduler:
                 continue
 
             symbol = h["symbol"]
+            side = h["side"]
+
+            # 매수 주문인데 이미 포지션에 있으면 체결된 것 → 복원 불필요, 취소 시도
+            if side == "buy" and symbol in eng.portfolio.positions:
+                logger.info(
+                    f"[US 주문 복원] {order_no} 매수 {symbol} — "
+                    f"포지션에 이미 존재, 고아 주문 취소 시도"
+                )
+                try:
+                    await eng.broker.cancel_order(
+                        order_no, h.get("exchange", eng._default_exchange),
+                        symbol, h["qty"],
+                    )
+                except Exception:
+                    pass
+                continue
+
+            # 매도 주문인데 포지션이 아직 원래 수량 → 미체결 매도, 취소 + stage 롤백
+            if side == "sell":
+                logger.warning(
+                    f"[US 주문 복원] {order_no} 매도 {symbol} {h['qty']}주 — "
+                    f"고아 매도 주문 발견, 취소 시도"
+                )
+                try:
+                    cancel_result = await eng.broker.cancel_order(
+                        order_no, h.get("exchange", eng._default_exchange),
+                        symbol, h["qty"],
+                    )
+                    if cancel_result.get("success"):
+                        logger.info(f"[US 주문 복원] {symbol} 고아 매도 취소 완료")
+                        # stage 롤백 (매도가 체결되지 않았으므로)
+                        if eng.exit_manager:
+                            eng.exit_manager.rollback_stage(symbol)
+                            logger.info(f"[US 주문 복원] {symbol} ExitManager stage 롤백")
+                    else:
+                        logger.warning(
+                            f"[US 주문 복원] {symbol} 매도 취소 실패 "
+                            f"(이미 체결 추정) — pending에 등록"
+                        )
+                        # 취소 실패 = 체결 중 → pending에 등록하여 추적
+                        eng._pending_orders[order_no] = {
+                            "symbol": symbol,
+                            "side": side,
+                            "qty": h["qty"],
+                            "price": h.get("price", 0),
+                            "strategy": eng._symbol_strategy.get(symbol, ""),
+                            "reason": "recovered",
+                            "exit_type": "",
+                            "exchange": h.get("exchange", eng._default_exchange),
+                            "submitted_at": now_kst,
+                        }
+                        eng._pending_symbols.add(symbol)
+                        recovered += 1
+                except Exception as e:
+                    logger.warning(f"[US 주문 복원] {symbol} 취소 시도 예외: {e}")
+                continue
+
             # 주문 시각 복원 (KIS ORD_TMD는 KST HHMMSS)
             submitted_at = datetime.now()
             order_time_str = h.get("time", "")
@@ -1626,7 +1696,6 @@ class USScheduler:
                     today = now_kst.date()
                     submitted_at = datetime(today.year, today.month, today.day, hh, mm, ss)
                     # 미래 시각으로 설정되면 하루 전으로 보정
-                    # (예: 전날 22:30에 넣은 주문 → today+22:30은 미래 → yesterday+22:30으로 수정)
                     if submitted_at > now_kst:
                         submitted_at = submitted_at - timedelta(days=1)
                 except Exception:
@@ -1634,7 +1703,7 @@ class USScheduler:
 
             eng._pending_orders[order_no] = {
                 "symbol": symbol,
-                "side": h["side"],
+                "side": side,
                 "qty": h["qty"],
                 "price": h.get("price", 0),
                 "strategy": eng._symbol_strategy.get(symbol, ""),
@@ -1646,7 +1715,7 @@ class USScheduler:
             eng._pending_symbols.add(symbol)
             recovered += 1
             logger.info(
-                f"[US 주문 복원] {order_no} {h['side']} {symbol} "
+                f"[US 주문 복원] {order_no} {side} {symbol} "
                 f"{h['qty']}주 @ ${h.get('price', 0)} ({h['status']})"
             )
 
@@ -1667,11 +1736,9 @@ class USScheduler:
         logger.info(
             f"[US 주문 체크] pending={pending_count}, history={len(history) if history else 0}, date={yesterday_kst}~{today_kst}"
         )
-        if not history:
-            return
 
-        # order_no → 체결 정보 매핑
-        filled_map = {h["order_no"]: h for h in history}
+        # history가 비어있어도 pending 타임아웃은 반드시 체크해야 함
+        filled_map = {h["order_no"]: h for h in (history or [])}
 
         for order_no in list(eng._pending_orders.keys()):
             pending = eng._pending_orders.get(order_no)
@@ -1685,13 +1752,100 @@ class USScheduler:
 
             if not info or is_local:
                 elapsed = (datetime.now() - pending["submitted_at"]).total_seconds()
-                if elapsed > 300:
-                    logger.warning(
-                        f"[US 주문 체크] {order_no} ({pending['symbol']}) "
-                        f"{'폴백주문 ' if is_local else ''}타임아웃 (5분) — 제거"
+                symbol = pending["symbol"]
+                side = pending["side"]
+
+                # 포트폴리오 기반 체결 감지: 매수 주문인데 이미 포지션에 있으면 체결된 것
+                if side == "buy" and symbol in eng.portfolio.positions and elapsed > 30:
+                    logger.info(
+                        f"[US 주문 체크] {order_no} ({symbol}) "
+                        f"매수 주문 — 포지션에 이미 존재, 체결로 간주하여 pending 정리"
                     )
-                    eng._pending_symbols.discard(pending["symbol"])
+                    eng._pending_symbols.discard(symbol)
                     del eng._pending_orders[order_no]
+                    continue
+
+                # 타임아웃: 매도 2분 / 매수 10분 (local 주문은 5분)
+                if is_local:
+                    timeout_sec = 300
+                else:
+                    timeout_sec = 120 if side == "sell" else 600
+                side_label = "매도" if side == "sell" else "매수"
+
+                if elapsed > timeout_sec:
+                    cancel_ok = False
+                    # 실주문(non-local)은 취소 시도
+                    if not is_local:
+                        try:
+                            cancel_result = await eng.broker.cancel_order(
+                                order_no, pending.get("exchange", eng._default_exchange),
+                                symbol, pending.get("qty", 0),
+                            )
+                            cancel_ok = bool(cancel_result.get("success"))
+                            if cancel_ok:
+                                logger.warning(
+                                    f"[US 주문 체크] {order_no} ({symbol}) "
+                                    f"{side_label} 이력 미확인 {int(timeout_sec / 60)}분 경과 — 취소 완료"
+                                )
+                            else:
+                                # 취소 실패 = 이미 체결됨 (다음 포트폴리오 동기화에서 반영)
+                                logger.warning(
+                                    f"[US 주문 체크] {order_no} ({symbol}) "
+                                    f"{side_label} 취소 실패 (이미 체결 추정) — pending 제거"
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                f"[US 주문 체크] {order_no} ({symbol}) 취소 시도 예외: {e}"
+                            )
+                    else:
+                        cancel_ok = True
+                        logger.warning(
+                            f"[US 주문 체크] {order_no} ({symbol}) "
+                            f"폴백주문 타임아웃 ({int(timeout_sec / 60)}분) — 제거"
+                        )
+                    eng._pending_symbols.discard(symbol)
+                    del eng._pending_orders[order_no]
+
+                    # 매도 주문 취소 시 ExitManager stage 롤백 + 시장가 재시도
+                    if side == "sell" and cancel_ok:
+                        if eng.exit_manager:
+                            eng.exit_manager.rollback_stage(symbol)
+                            logger.info(
+                                f"[US 주문 체크] {symbol} 매도 취소 → stage 롤백"
+                            )
+                        # 정규장이면 시장가로 재시도
+                        p_exchange = pending.get("exchange", eng._default_exchange)
+                        p_qty = pending.get("qty", 0)
+                        if eng.session.is_market_open() and p_qty > 0:
+                            logger.warning(
+                                f"[US 주문 체크] {symbol} 매도 시장가 폴백 — {p_qty}주"
+                            )
+                            try:
+                                fallback = await eng.broker.submit_sell_order(
+                                    symbol, p_exchange, p_qty, price=0,
+                                )
+                                if fallback.get("success"):
+                                    fb_order_no = fallback.get("order_no", "").strip()
+                                    if not fb_order_no:
+                                        fb_order_no = f"local-{uuid.uuid4().hex[:12]}"
+                                    eng._pending_orders[fb_order_no] = {
+                                        "symbol": symbol,
+                                        "side": "sell",
+                                        "qty": p_qty,
+                                        "price": 0,
+                                        "strategy": pending.get("strategy", ""),
+                                        "reason": f"market_fallback({pending.get('reason', '')})",
+                                        "exchange": p_exchange,
+                                        "submitted_at": datetime.now(),
+                                    }
+                                    eng._pending_symbols.add(symbol)
+                                else:
+                                    logger.error(
+                                        f"[US 주문 체크] {symbol} 시장가 폴백 실패: "
+                                        f"{fallback.get('message')}"
+                                    )
+                            except Exception as e:
+                                logger.error(f"[US 주문 체크] {symbol} 시장가 폴백 예외: {e}")
                 continue
 
             if info["status"] == "filled":
