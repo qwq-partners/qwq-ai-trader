@@ -399,7 +399,7 @@ class ExitManager:
 
             # 본전 보호 (1차 익절 완료 후에만 적용 — 분할 수익 확보 전 조기청산 방지)
             # trailing_activate 도달했지만 아직 분할 익절 전인 포지션은 제외
-            if state.current_stage >= ExitStage.FIRST:
+            if state.current_stage != ExitStage.NONE:  # FIRST 이상 = 1차 익절 완료
                 # KR 매도 수수료+세금 ≈ 0.213%, 여유분 포함 0.25%
                 sell_fee_buffer = 0.0 if self.market in ("US", "NASDAQ", "NYSE") else 0.25
                 if net_pnl_pct <= sell_fee_buffer:
