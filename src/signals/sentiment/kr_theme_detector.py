@@ -1312,9 +1312,9 @@ class ThemeDetector:
                 logger.debug(f"[종목 검증] KNOWN_STOCKS 폴백: {name} → {resolved}")
                 return resolved
 
-        # 최종 실패
+        # 최종 실패 — 비상장/해외/신규종목은 빈번하므로 DEBUG
         if symbol or name:
-            logger.warning(f"[종목 검증 실패] symbol='{symbol}', name='{name}'")
+            logger.debug(f"[종목 검증 실패] symbol='{symbol}', name='{name}'")
         return ""
 
     async def _adjust_scores_by_sector(self):

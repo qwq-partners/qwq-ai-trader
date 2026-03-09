@@ -210,7 +210,7 @@ class USMarketData:
 
         result = await self._fetch_via_v7()
         if not result:
-            logger.warning("[USMarket] v7 API 실패, v8 spark 폴백 시도")
+            logger.debug("[USMarket] v7 API 실패, v8 spark 폴백 시도")
             result = await self._fetch_via_v8_spark()
 
         if result:
