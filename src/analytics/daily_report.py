@@ -710,51 +710,6 @@ class DailyReportGenerator:
                 rec.result_price = None
                 rec.result_pct = None
 
-    async def _get_night_futures_quote(self) -> Optional[Dict]:
-        """KISMarketData 인스턴스를 통해 KOSPI200 야간선물 시세 조회"""
-        kmd = self._kis_market_data
-        if not kmd:
-            try:
-                from ..data.providers.kis_market_data import get_kis_market_data
-                kmd = get_kis_market_data()
-            except Exception:
-                return None
-        return await kmd.get_night_futures_quote()
-
-    async def _fetch_night_futures_section(self) -> List[str]:
-        """KOSPI200 야간선물 섹션 (07:00 US 마감 레포트용)"""
-        nf = await self._get_night_futures_quote()
-        if nf is None:
-            return []
-
-        price = nf.get("price")
-        change_pct = nf.get("change_pct")
-        if price is None or change_pct is None:
-            return []
-        sentiment = nf.get("sentiment", "neutral")
-
-        # 등락 이모지 + 텍스트
-        if change_pct > 0:
-            arrow = "🔼"
-            sign = "+"
-        elif change_pct < 0:
-            arrow = "🔽"
-            sign = ""
-        else:
-            arrow = "▪️"
-            sign = ""
-
-        sentiment_kr = {
-            "bullish": "강세", "bearish": "약세", "neutral": "보합"
-        }.get(sentiment, "보합")
-
-        lines = [
-            f"<b>■ KOSPI200 야간선물</b>",
-            f"  {arrow} <b>{sign}{change_pct:.2f}%</b> ({price:.2f}pt) {sentiment_kr}",
-            "",
-        ]
-        return lines
-
     async def _fetch_sector_summary(self) -> List[str]:
         """업종지수 상승/하락 TOP 5 요약"""
         kmd = self._kis_market_data
@@ -853,16 +808,6 @@ class DailyReportGenerator:
                 if boost_parts:
                     lines.append(f"  → 한국 테마 영향: {', '.join(boost_parts)}")
 
-            # KOSPI200 야간선물 1줄 요약
-            try:
-                nf = await self._get_night_futures_quote()
-                if nf is not None and "change_pct" in nf:
-                    nf_pct = nf["change_pct"]
-                    nf_arrow = "▲" if nf_pct > 0 else ("▼" if nf_pct < 0 else "─")
-                    lines.append(f"  KOSPI200 야간선물 {nf_arrow}{abs(nf_pct):.2f}%")
-            except Exception as nf_err:
-                logger.debug(f"[레포트] 아침 레포트 야간선물 조회 실패 (skip): {nf_err}")
-
             lines.append("")
             return lines
 
@@ -937,14 +882,6 @@ class DailyReportGenerator:
         ]
         lines.extend(idx_lines)
         lines.append("")
-
-        # ── KOSPI200 야간선물 ──
-        try:
-            nf_lines = await self._fetch_night_futures_section()
-            if nf_lines:
-                lines.extend(nf_lines)
-        except Exception as nf_err:
-            logger.warning(f"[레포트] 야간선물 섹션 생성 실패 (skip): {nf_err}")
 
         # ── 빅테크 ──
         bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
