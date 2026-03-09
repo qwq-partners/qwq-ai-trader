@@ -4,7 +4,7 @@ QWQ AI Trader - SSE (Server-Sent Events) 스트림 관리 (통합)
 KR + US 실시간 데이터를 브라우저에 푸시합니다.
 
 이벤트 타입:
-  KR: status, portfolio, positions, risk, events, pending_orders, external_accounts
+  KR: status, portfolio, positions, risk, events, pending_orders
   US: us_status, us_portfolio, us_positions, us_risk
 """
 
@@ -107,7 +107,6 @@ class SSEManager:
             "risk": 10,
             "events": 2,
             "pending_orders": 2,
-            "external_accounts": 30,
         }
 
         # US 이벤트별 주기 (초)
@@ -162,8 +161,6 @@ class SSEManager:
                                             continue
                                     else:
                                         _had_pending = True
-                                elif event_type == "external_accounts":
-                                    data = await dc.get_external_accounts()
                                 else:
                                     continue
 

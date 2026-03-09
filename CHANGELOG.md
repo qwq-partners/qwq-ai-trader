@@ -1,5 +1,33 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-09 — 대시보드 성과+자산 탭 통합
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/dashboard/templates/performance.html` | 성과+자산 탭 통합 레이아웃 (6 요약카드 + 총자산 차트 + 전략/청산 분석 + 일별 히스토리 + KR/US 비교) |
+| `src/dashboard/static/js/performance.js` | 통합 JS (equity.js 기능 흡수: 일별 포지션 확장, KR/US 비교 차트/테이블) |
+| `src/dashboard/server.py` | `/equity` → `/performance` 리다이렉트 |
+| `src/dashboard/templates/*.html` (7개) | 네비게이션에서 "자산" 링크 제거 (8탭→7탭) |
+| `src/dashboard/templates/equity.html` | **삭제** |
+| `src/dashboard/static/js/equity.js` | **삭제** |
+
+### 상세
+
+**성과 탭 통합 레이아웃**
+- ① 6개 요약 카드: 총자산, 기간수익률, MDD, 거래수, 승률, PF
+- ② 총자산 추이 차트 (Plotly, 일별 손익 바 포함)
+- ③ 전략별 승률/거래수 차트 + 청산유형별 평균수익률 차트
+- ④ 전략별 성과 테이블
+- ⑤ 일별 히스토리 테이블 (expandable 포지션 상세)
+- ⑥ KR/US 비교 (수익률 차트 + 일별 대조 테이블)
+- 기간 탭: 1주/1개월/3개월/전체
+- 마켓 필터: 통합/국내/미국
+
+**네비 정리**
+- "자산" 탭 제거, `/equity` 접속 시 `/performance`로 자동 리다이렉트
+- 7개 탭: 실시간 → 거래 → 성과 → 테마 → 복기 → 엔진 → 설정
+
 ## 2026-03-09 — 텔레그램 아침 레포트에 KOSPI200 야간선물 등락률 추가
 
 ### 수정 파일

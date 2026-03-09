@@ -62,8 +62,8 @@ sse.on('health_checks', (data) => {
     renderHealthChecks(data, true);
 });
 
-sse.on('external_accounts', (data) => {
-    renderExternalAccounts(data);
+sse.on('external_accounts', () => {
+    // IRP 카드 삭제됨 — SSE 이벤트 무시
 });
 
 // US SSE 이벤트 핸들러
@@ -468,118 +468,7 @@ function renderHealthChecks(checks, failedOnly) {
     }
 }
 
-// ============================================================
-// 외부 계좌 카드 렌더링
-// ============================================================
-
-function renderExternalAccounts(accounts) {
-    const section = document.getElementById('external-accounts-section');
-    const container = document.getElementById('external-accounts-container');
-
-    if (!accounts || accounts.length === 0) {
-        section.style.display = 'none';
-        return;
-    }
-
-    // 포지션이 있는 계좌만 표시할지 여부 (빈 계좌도 요약은 표시)
-    section.style.display = 'block';
-
-    const cards = accounts.map(acct => {
-        const s = acct.summary || {};
-        const positions = acct.positions || [];
-        const hasError = !!acct.error;
-        const isUSD = acct.currency === 'USD';
-        const fmt = isUSD ? formatUSD : formatCurrency;
-        const fmtPnl = isUSD ? (n => formatUSD(n, 2)) : formatPnl;
-
-        // 계좌 요약
-        const totalEquity = s.total_equity || 0;
-        const stockValue = s.stock_value || 0;
-        const deposit = s.deposit;
-        const unrealizedPnl = s.unrealized_pnl || 0;
-        const purchaseAmt = s.purchase_amount || 0;
-        const pnlPct = purchaseAmt > 0 ? (unrealizedPnl / purchaseAmt * 100) : 0;
-
-        // 포지션 테이블 행
-        let posRows = '';
-        if (positions.length > 0) {
-            posRows = positions.map(p => {
-                const cls = pnlClass(p.pnl);
-                const qtyDisplay = Number.isInteger(p.qty) ? p.qty : Number(p.qty).toFixed(4);
-                const fmtPrice = isUSD ? formatUSD : formatNumber;
-                return `<tr style="border-bottom:1px solid var(--border-subtle);">
-                    <td class="py-1 pr-3" style="font-size:0.82rem; font-weight:500; color:var(--text-primary); white-space:nowrap;">${esc(p.name || p.symbol)} <span style="color:var(--text-muted); font-size:0.68rem;">${esc(p.symbol)}</span></td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${fmtPrice(p.current_price, isUSD ? 2 : 0)}</td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem; color:var(--text-secondary);">${fmtPrice(p.avg_price, isUSD ? 2 : 0)}</td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${qtyDisplay}</td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${fmt(p.eval_amt)}</td>
-                    <td class="py-1 pr-3 text-right mono ${cls}" style="font-size:0.82rem;">${fmtPnl(p.pnl)}</td>
-                    <td class="py-1 text-right mono ${cls}" style="font-size:0.82rem; font-weight:600;">${formatPct(p.pnl_pct)}</td>
-                </tr>`;
-            }).join('');
-        } else {
-            posRows = '<tr><td colspan="7" style="padding:20px 0; text-align:center; color:var(--text-muted); font-size:0.82rem;">보유 종목 없음</td></tr>';
-        }
-
-        // 예수금 표시 (해외계좌는 deposit=null일 수 있음)
-        const depositDisplay = deposit !== null && deposit !== undefined ? fmt(deposit) : '--';
-
-        return `<div class="card" style="padding: 24px; margin-bottom: 16px;">
-            <div class="card-header">
-                <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
-                ${esc(acct.name)} 계좌
-                <span style="margin-left: 8px; font-size: 0.68rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; letter-spacing: 0;">${esc(acct.cano)}</span>
-                ${isUSD ? '<span class="badge badge-blue" style="margin-left:8px;">USD</span>' : ''}
-                ${s.cached ? '<span class="badge badge-yellow" style="margin-left:8px;" title="' + esc(s.cached_at || '') + '">캐시</span>' : ''}
-                ${hasError ? '<span class="badge badge-red" style="margin-left:auto;">오류</span>' : `<span style="margin-left:auto; font-size:0.7rem; color:var(--text-muted); font-family:\'JetBrains Mono\',monospace; background:var(--bg-elevated); padding:3px 10px; border-radius:6px; border:1px solid var(--border-subtle);">${positions.length}종목</span>`}
-            </div>
-
-            <!-- 요약 -->
-            <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px;">
-                <div>
-                    <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">총자산</div>
-                    <div class="mono" style="font-size:0.95rem; font-weight:600; color:var(--text-primary);">${fmt(totalEquity)}</div>
-                </div>
-                <div>
-                    <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">예수금</div>
-                    <div class="mono" style="font-size:0.95rem; font-weight:500; color:var(--text-secondary);">${depositDisplay}</div>
-                </div>
-                <div>
-                    <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">주식평가</div>
-                    <div class="mono" style="font-size:0.95rem; font-weight:500; color:var(--text-secondary);">${fmt(stockValue)}</div>
-                </div>
-                <div>
-                    <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">평가손익</div>
-                    <div class="mono ${pnlClass(unrealizedPnl)}" style="font-size:0.95rem; font-weight:600;">${fmtPnl(unrealizedPnl)} <span style="font-size:0.72rem;">(${formatPct(pnlPct)})</span></div>
-                </div>
-            </div>
-
-            <!-- 포지션 테이블 -->
-            ${hasError ? `<div style="padding:12px; background:rgba(248,113,113,0.06); border:1px solid rgba(248,113,113,0.12); border-radius:8px; margin-bottom:12px;">
-                <div style="color:var(--accent-red); font-size:0.78rem;">조회 실패: ${esc(acct.error)}</div>
-            </div>` : ''}
-
-            ${positions.length > 0 ? `<div style="overflow-x:auto;">
-                <table style="width:100%; text-align:left; border-collapse:collapse;">
-                    <thead>
-                        <tr style="border-bottom:1px solid var(--border-subtle);">
-                            <th style="padding:0 10px 8px 0; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">종목</th>
-                            <th style="padding:0 10px 8px 0; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">현재가</th>
-                            <th style="padding:0 10px 8px 0; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">평균가</th>
-                            <th style="padding:0 10px 8px 0; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">수량</th>
-                            <th style="padding:0 10px 8px 0; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">평가금액</th>
-                            <th style="padding:0 10px 8px 0; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">손익</th>
-                            <th style="padding:0 0 8px 0; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">손익률</th>
-                        </tr>
-                    </thead>
-                    <tbody>${posRows}</tbody>
-                </table>
-            </div>` : `<div style="text-align:center; padding:12px 0; color:var(--text-muted); font-size:0.82rem;">보유 종목 없음</div>`}
-        </div>`;
-    }).join('');
-
-    container.innerHTML = cards;
-}
+// (IRP 외부 계좌 카드 삭제됨)
 
 // ============================================================
 // 주문 이벤트 히스토리
@@ -764,11 +653,6 @@ document.addEventListener('DOMContentLoaded', () => {
             renderHealthChecks(data, false);
         }).catch(() => {});
     }, 30000);
-
-    // 외부 계좌 초기 로드
-    api('/api/accounts/positions').then(data => {
-        renderExternalAccounts(data);
-    }).catch(() => {});
 
     // 프리마켓 데이터 로드
     loadPremarket();

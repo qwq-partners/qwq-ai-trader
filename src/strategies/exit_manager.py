@@ -71,6 +71,9 @@ class ExitConfig:
     # 수수료 포함 계산 (KR=True, US=False)
     include_fees: bool = True
 
+    # 최대 보유 기간 (영업일 기준)
+    max_holding_days: int = 10
+
     # End-of-day close (US day trade 전용)
     eod_close: bool = False
 
@@ -127,7 +130,7 @@ class ExitManager:
 
         # 보유기간 체크용 (포지션별 진입 시간)
         self._entry_times: Dict[str, datetime] = {}
-        self._max_holding_days: int = 10  # 설정에서 오버라이드 가능
+        self._max_holding_days: int = self.config.max_holding_days
 
         # stage 영속화: 재시작 후 정확한 stage 복원
         _cache_dir = Path.home() / ".cache" / "ai_trader"
@@ -257,6 +260,19 @@ class ExitManager:
                 initial_stage = ExitStage(persisted["stage"])
                 saved_high = Decimal(str(persisted.get("highest_price", float(current_price))))
                 breakeven_was = bool(persisted.get("breakeven_activated", False))
+
+                # 재시작 시 고점 보정: 저장된 고점이 현재가보다 5% 초과 높으면
+                # 즉시 트레일링 발동 위험 → 현재가로 리셋
+                if current_price > 0 and saved_high > current_price:
+                    gap_pct = float((saved_high - current_price) / current_price * 100)
+                    if gap_pct > 5.0:
+                        logger.warning(
+                            f"[ExitManager] {position.symbol} 재시작 고점 보정: "
+                            f"{saved_high:,.0f} → {current_price:,.0f} "
+                            f"(괴리 {gap_pct:.1f}% > 5%, 즉시 트레일링 방지)"
+                        )
+                        saved_high = current_price
+
                 logger.info(
                     f"[ExitManager] {position.symbol} stage 파일 복원: "
                     f"stage={initial_stage.value} / 고점={saved_high:,.0f} / BE={breakeven_was}"
@@ -392,13 +408,24 @@ class ExitManager:
             trail_from_high = float((current_price - state.highest_price) / state.highest_price * 100)
 
             if trail_from_high <= -ts_pct_used:
-                return self._create_exit(
-                    state, "sell_all", state.remaining_quantity,
-                    f"ATR트레일링: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
-                )
+                # 3차 익절 완료(THIRD/TRAILING) → 전량 매도
+                # FIRST/SECOND → 분할 익절이 아직 남아있으므로 고점 리셋 (조기 전량 청산 방지)
+                if state.current_stage in (ExitStage.THIRD, ExitStage.TRAILING):
+                    return self._create_exit(
+                        state, "sell_all", state.remaining_quantity,
+                        f"ATR트레일링: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
+                    )
+                else:
+                    # FIRST/SECOND: 고점을 현재가로 리셋하여 분할 익절 기회 보존
+                    logger.info(
+                        f"[ExitManager] {symbol} ATR트레일링 도달({trail_from_high:.2f}%) "
+                        f"but stage={state.current_stage.value} → 고점 리셋 "
+                        f"({state.highest_price:,.0f} → {current_price:,.0f}), 분할 익절 우선"
+                    )
+                    state.highest_price = current_price
+                    self._persist_states()
 
             # 본전 보호 (1차 익절 완료 후에만 적용 — 분할 수익 확보 전 조기청산 방지)
-            # trailing_activate 도달했지만 아직 분할 익절 전인 포지션은 제외
             if state.current_stage != ExitStage.NONE:  # FIRST 이상 = 1차 익절 완료
                 # KR 매도 수수료+세금 ≈ 0.213%, 여유분 포함 0.25%
                 sell_fee_buffer = 0.0 if self.market in ("US", "NASDAQ", "NYSE") else 0.25

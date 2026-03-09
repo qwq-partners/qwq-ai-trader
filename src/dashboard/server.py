@@ -95,7 +95,7 @@ class DashboardServer:
 
         # 페이지 라우트
         app.router.add_get("/", self._serve_page("index.html"))
-        app.router.add_get("/equity", self._serve_page("equity.html"))
+        app.router.add_get("/equity", lambda r: web.HTTPFound("/performance"))
         app.router.add_get("/trades", self._serve_page("trades.html"))
         app.router.add_get("/performance", self._serve_page("performance.html"))
         app.router.add_get("/themes", self._serve_page("themes.html"))
