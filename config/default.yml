@@ -153,6 +153,8 @@ kr:
     trailing_stop_pct: 3.0
     trailing_activate_pct: 5.0
     include_fees: true
+    stale_exit_days: 5
+    stale_exit_pnl_pct: 2.0
 
   batch:
     morning_scan_enabled: true
@@ -317,6 +319,8 @@ us:
     min_stop_pct: 2.0
     max_stop_pct: 6.0
     eod_close: true
+    stale_exit_days: 7
+    stale_exit_pnl_pct: 3.0
 
   universe:
     pools:

@@ -74,6 +74,10 @@ class ExitConfig:
     # 최대 보유 기간 (영업일 기준)
     max_holding_days: int = 10
 
+    # 횡보 조기 청산: N영업일 이상 보유 & |수익률| < X% → 전량 청산
+    stale_exit_days: int = 5          # 횡보 판단 시작 영업일
+    stale_exit_pnl_pct: float = 2.0   # 횡보 판단 수익률 범위 (±%)
+
     # End-of-day close (US day trade 전용)
     eod_close: bool = False
 
@@ -351,10 +355,14 @@ class ExitManager:
         if current_price > state.highest_price:
             state.highest_price = current_price
 
-        # 보유기간 초과 체크 (영업일 기준)
+        # 보유기간 계산 (영업일 기준)
         entry_time = self._entry_times.get(symbol)
-        if entry_time and self._max_holding_days > 0:
+        biz_days = 0
+        if entry_time:
             biz_days = self._count_business_days(entry_time.date(), date.today())
+
+        # 보유기간 초과 체크
+        if biz_days > 0 and self._max_holding_days > 0:
             if biz_days > self._max_holding_days:
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,
@@ -370,6 +378,16 @@ class ExitManager:
         else:
             # US: zero-commission
             net_pnl_pct = float((current_price - state.entry_price) / state.entry_price * 100)
+
+        # 횡보 조기 청산: N영업일 이상 보유 & |수익률| < X% & 1차 익절 전
+        if (biz_days >= self.config.stale_exit_days > 0
+            and abs(net_pnl_pct) < self.config.stale_exit_pnl_pct
+            and state.current_stage == ExitStage.NONE):
+            return self._create_exit(
+                state, "sell_all", state.remaining_quantity,
+                f"횡보 청산: {biz_days}영업일 보유, "
+                f"수익률 {net_pnl_pct:+.2f}% (±{self.config.stale_exit_pnl_pct}% 이내)"
+            )
 
         # 1. 손절 체크
         sl_pct = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
