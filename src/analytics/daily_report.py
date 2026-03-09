@@ -727,8 +727,10 @@ class DailyReportGenerator:
         if nf is None:
             return []
 
-        price = nf["price"]
-        change_pct = nf["change_pct"]
+        price = nf.get("price")
+        change_pct = nf.get("change_pct")
+        if price is None or change_pct is None:
+            return []
         sentiment = nf.get("sentiment", "neutral")
 
         # 등락 이모지 + 텍스트
@@ -854,7 +856,7 @@ class DailyReportGenerator:
             # KOSPI200 야간선물 1줄 요약
             try:
                 nf = await self._get_night_futures_quote()
-                if nf is not None:
+                if nf is not None and "change_pct" in nf:
                     nf_pct = nf["change_pct"]
                     nf_arrow = "▲" if nf_pct > 0 else ("▼" if nf_pct < 0 else "─")
                     lines.append(f"  KOSPI200 야간선물 {nf_arrow}{abs(nf_pct):.2f}%")

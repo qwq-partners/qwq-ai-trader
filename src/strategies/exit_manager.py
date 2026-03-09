@@ -550,9 +550,10 @@ class ExitManager:
 
         if idx > 0:
             state.current_stage = stage_order[idx - 1]
+            self._persist_states()
             logger.warning(
                 f"[ExitManager] {symbol} stage 롤백: {prev_stage.value} -> {state.current_stage.value} "
-                f"(주문 실패로 복원)"
+                f"(주문 실패로 복원, 영속화 완료)"
             )
             return True
         return False
@@ -604,7 +605,9 @@ class ExitManager:
         if symbol in self._states:
             del self._states[symbol]
             self._entry_times.pop(symbol, None)
-            logger.debug(f"[ExitManager] 포지션 상태 제거: {symbol}")
+            self._persisted.pop(symbol, None)
+            self._persist_states()
+            logger.debug(f"[ExitManager] 포지션 상태 제거 및 영속화: {symbol}")
             return True
         return False
 

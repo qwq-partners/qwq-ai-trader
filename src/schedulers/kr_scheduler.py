@@ -395,8 +395,8 @@ class KRScheduler:
                         f"({pos.quantity}주 @ {pos.avg_price:,.0f}원)"
                     )
                     del portfolio.positions[symbol]
-                    if bot.exit_manager and hasattr(bot.exit_manager, '_states'):
-                        bot.exit_manager._states.pop(symbol, None)
+                    if bot.exit_manager:
+                        bot.exit_manager.remove_position(symbol)
                     bot._exit_pending_symbols.discard(symbol)
                     bot._exit_pending_timestamps.pop(symbol, None)
                     bot._sell_blocked_symbols.pop(symbol, None)

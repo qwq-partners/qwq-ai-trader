@@ -1,5 +1,37 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-09 — 전체 코드 리뷰 P0/P1 이슈 수정
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/schedulers/us_scheduler.py` | P0: `_execute_exit` 반환값(bool) 추가 — 매도 실패 시 stage 롤백 + ExitManager 폴백 허용 |
+| `src/strategies/exit_manager.py` | P1: `rollback_stage()`에 `_persist_states()` 추가, `remove_position()`에 영속화+_persisted 정리 추가 |
+| `src/schedulers/kr_scheduler.py` | P1: 유령 포지션 제거 시 `_states.pop()` → `remove_position()` 호출로 변경 (영속화 포함) |
+| `src/analytics/daily_report.py` | P0: 야간선물 dict 키 안전 접근 (`nf["key"]` → `nf.get("key")`) |
+
+### 상세
+
+**P0-1: US 매도 주문 실패 시 ExitManager stage 롤백 누락**
+- 문제: `_execute_exit` 실패 시 stage만 올라가고 실제 매도 안 됨 → 해당 익절 단계 영구 건너뜀
+- 수정: 실패 시 `rollback_stage()` 호출 + `return False`
+
+**P0-2: US 전략 exit 실패 시 ExitManager 폴백 누락**
+- 문제: `strategy_exit_attempted=True`인데 주문 실패 → 손절/ExitManager 체크 모두 스킵
+- 수정: `_execute_exit` 반환값으로 실제 성공 여부 판단, 실패 시 ExitManager 폴백
+
+**P0-3: 야간선물 dict KeyError**
+- 문제: `nf["price"]`, `nf["change_pct"]` 직접 접근 → 키 누락 시 레포트 전체 실패
+- 수정: `nf.get()` 패턴으로 안전 접근, None 시 조기 반환
+
+**P1-2: rollback_stage 영속화 누락**
+- 문제: 롤백 후 재시작 시 롤백 전 stage가 복원됨
+- 수정: `_persist_states()` 호출 추가
+
+**P1-5: 유령 포지션 정리 불완전**
+- 문제: KR `_states.pop()` 직접 사용 → `_entry_times`, `_persisted`, stage 파일 미정리
+- 수정: `remove_position()` 호출로 통일 (영속화 포함)
+
 ## 2026-03-09 — 대시보드 성과+자산 탭 통합
 
 ### 수정 파일

@@ -1154,12 +1154,12 @@ class USScheduler:
                                     custom_reason = strat.check_exit(symbol, history, position)
                                     if custom_reason:
                                         logger.info(f"[US 전략 청산] {symbol} — {custom_reason}")
-                                        await self._execute_exit(
+                                        exit_ok = await self._execute_exit(
                                             symbol, position,
                                             {'action': 'close', 'ratio': 1.0, 'reason': custom_reason},
                                             exchange,
                                         )
-                                        strategy_exit_attempted = True
+                                        strategy_exit_attempted = exit_ok  # 실패 시 False → ExitManager 폴백
                             break
 
                 # ExitManager 체크 (전략 exit 미발동 또는 주문 실패 시에도 실행)
@@ -1178,19 +1178,19 @@ class USScheduler:
                 logger.warning(f"[US 청산 체크] {symbol} 오류: {e}")
 
     async def _execute_exit(self, symbol: str, position: Position,
-                            exit_signal: dict, exchange: str):
-        """매도 주문 실행"""
+                            exit_signal: dict, exchange: str) -> bool:
+        """매도 주문 실행. 성공 시 True, 실패/스킵 시 False 반환."""
         eng = self.engine
 
         # 레이스 컨디션 방지
         if symbol in eng._pending_symbols:
             logger.debug(f"[US 매도 주문] {symbol} — 이미 pending, 스킵")
-            return
+            return False
 
         # 매도 실패 쿨다운 (5분)
         last_fail = self._sell_fail_cooldown.get(symbol)
         if last_fail and (datetime.now() - last_fail).total_seconds() < 300:
-            return
+            return False
 
         action = exit_signal.get("action", "close")
         ratio = exit_signal.get("ratio", 1.0)
@@ -1208,13 +1208,13 @@ class USScheduler:
                     f"[US 매도 주문] {symbol} — 분할매도 스킵 (보유 {position.quantity}주, "
                     f"ratio={ratio:.0%} → 0주)"
                 )
-                return
+                return False
             sell_qty = position.quantity  # 전량매도만 fallback
 
         sell_price = round(float(position.current_price), 2)
         if sell_price <= 0:
             logger.error(f"[US 매도 주문] {symbol} — 현재가 0, 주문 취소 (시장가 오발주 방지)")
-            return
+            return False
 
         result = await eng.broker.submit_sell_order(symbol, exchange, sell_qty, price=sell_price)
 
@@ -1276,9 +1276,14 @@ class USScheduler:
             logger.info(
                 f"[US 매도 주문] {symbol} {sell_qty}/{position.quantity}주 — {reason}"
             )
+            return True
         else:
             self._sell_fail_cooldown[symbol] = datetime.now()
-            logger.warning(f"[US 매도 주문] {symbol} 실패 (5분 쿨다운): {result.get('message')}")
+            # 매도 실패 시 ExitManager stage 롤백 (stage만 올라가고 실제 매도 안 된 상태 방지)
+            if eng.exit_manager:
+                eng.exit_manager.rollback_stage(symbol)
+            logger.warning(f"[US 매도 주문] {symbol} 실패 (5분 쿨다운, stage 롤백): {result.get('message')}")
+            return False
 
     # ============================================================
     # 태스크 3: 포트폴리오 동기화
