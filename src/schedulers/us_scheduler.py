@@ -934,10 +934,13 @@ class USScheduler:
 
         _ws_prestarted = False  # 사전 연결 완료 여부
 
-        # 서비스 시작 시: 이미 보유 포지션 있으면 WS 바로 시작 + 구독
+        # 서비스 시작 시: 미국 장 시간에만 WS 연결 (KIS approval_key 1개 공유 제약)
+        # KR 정규장(09:00~15:20) 중에는 KR WS가 approval_key를 점유 → US WS 연결 금지
         await asyncio.sleep(5)  # 초기화 대기
-        if eng.portfolio.positions:
-            logger.info("[KIS US WS] 초기 포지션 감지 → WS 사전 연결")
+        _initial_open_soon = eng.session.minutes_to_open() <= 10
+        _initial_is_open = eng.session.is_market_open()
+        if eng.portfolio.positions and (_initial_open_soon or _initial_is_open):
+            logger.info("[KIS US WS] 초기 포지션 감지 + 미국 장 시간 → WS 사전 연결")
             await self._ensure_us_price_ws_running()
             await asyncio.sleep(3)
             for symbol in list(eng.portfolio.positions.keys()):
@@ -945,6 +948,11 @@ class USScheduler:
                 await eng.us_price_ws.subscribe([symbol], exchange=exchange)
             logger.info(f"[KIS US WS] 초기 구독: {list(eng.portfolio.positions.keys())}")
             _ws_prestarted = True
+        elif eng.portfolio.positions:
+            logger.info(
+                "[KIS US WS] 초기 포지션 있으나 미국 장 외 시간 → WS 연결 대기 "
+                "(KIS approval_key 1개 제약: KR WS 우선)"
+            )
 
         while eng.running:
             try:
@@ -985,10 +993,22 @@ class USScheduler:
         pass
 
     async def _ensure_us_price_ws_running(self):
-        """보유 포지션이 생겼을 때 WS 태스크 시작 (이미 실행 중이면 스킵)"""
+        """보유 포지션이 생겼을 때 WS 태스크 시작 (이미 실행 중이면 스킵)
+
+        KIS approval_key는 계정당 1개 → KR 정규장 중 KR WS가 점유.
+        미국 정규장 시간(KST 22:30~05:00 / ET 08:20~16:00)에만 US WS 연결.
+        """
         eng = self.engine
         if not eng.us_price_ws:
             return
+
+        # ── KIS approval_key 1개 제약: 미국 장 시간에만 WS 허용 ──────────────
+        is_open = eng.session.is_market_open()
+        open_soon = eng.session.minutes_to_open() <= 10
+        if not (is_open or open_soon):
+            logger.debug("[KIS US WS] 미국 장 외 시간 → WS 연결 스킵 (REST polling 사용)")
+            return
+
         # 이미 연결됐거나 태스크 실행 중이면 스킵
         if eng.us_price_ws.is_connected:
             return

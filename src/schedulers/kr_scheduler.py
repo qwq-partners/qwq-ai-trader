@@ -2004,7 +2004,19 @@ JSON:
                             # 세션별 가격 선택
                             if current_session == MarketSession.NEXT:
                                 ovtm = quote.get("ovtm_price", 0) or 0
-                                price = ovtm if ovtm > 0 else quote["price"]
+                                regular = quote.get("price", 0) or 0
+                                if ovtm > 0:
+                                    price = ovtm
+                                    logger.debug(
+                                        f"[넥스트장] {symbol} 시간외단일가={ovtm:,.0f}원 "
+                                        f"(정규종가={regular:,.0f}원)"
+                                    )
+                                else:
+                                    price = regular
+                                    logger.info(
+                                        f"[넥스트장] {symbol} ovtm_price=0 → 정규종가 폴백 "
+                                        f"{regular:,.0f}원 (넥스트장 미체결 또는 API 미지원)"
+                                    )
                             else:
                                 price = quote["price"]
 
