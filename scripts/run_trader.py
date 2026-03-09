@@ -1027,6 +1027,31 @@ class UnifiedTradingBot:
                     except Exception as e:
                         logger.warning(f"[US] TradeStorage KIS 동기화 실패: {e}")
                 logger.info("[US] TradeStorage 초기화 완료")
+
+                # DB에서 US 포지션 entry_time 복원 (KR과 동일 패턴)
+                if us_engine.portfolio.positions and us_engine.trade_storage.pool:
+                    try:
+                        async with us_engine.trade_storage.pool.acquire() as conn:
+                            rows = await conn.fetch(
+                                "SELECT symbol, entry_strategy, entry_time FROM trades "
+                                "WHERE exit_time IS NULL AND market = 'US' "
+                                "ORDER BY entry_time DESC"
+                            )
+                        et_restored = 0
+                        for row in rows:
+                            sym = row["symbol"]
+                            if sym in us_engine.portfolio.positions:
+                                pos = us_engine.portfolio.positions[sym]
+                                if row["entry_time"]:
+                                    pos.entry_time = row["entry_time"]
+                                    et_restored += 1
+                                if not pos.strategy and row["entry_strategy"]:
+                                    pos.strategy = row["entry_strategy"]
+                        if et_restored:
+                            logger.info(f"[US] 포지션 entry_time DB 복원: {et_restored}개")
+                    except Exception as e:
+                        logger.warning(f"[US] entry_time DB 복원 실패 (무시): {e}")
+
             except Exception as e:
                 logger.warning(f"[US] TradeStorage 초기화 실패 (무시): {e}")
                 us_engine.trade_storage = None

@@ -1,5 +1,22 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-10 — US entry_time DB 복원 + 횡보 종목 조기 청산
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `scripts/run_trader.py` | US 포지션 entry_time을 trades 테이블에서 복원 (datetime.now() → 실제 매수 시점) |
+
+### 상세
+
+**US entry_time 재시작 시 리셋 문제**
+- 기존: `_initialize_us`에서 `entry_time=datetime.now()` → 매번 보유기간 0일로 초기화
+- 수정: TradeStorage 초기화 후 DB(trades 테이블)에서 실제 매수 시점 복원
+- KR과 동일 패턴 (`_restore_position_metadata` 방식)
+- 효과: 보유기간 초과 청산 + 횡보 청산이 재시작 후에도 정상 동작
+
+---
+
 ## 2026-03-10 — 횡보 종목 조기 청산 로직 추가
 
 ### 수정 파일
