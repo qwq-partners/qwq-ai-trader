@@ -499,9 +499,13 @@ class KRScheduler:
             logger.error(f"[전략적분석] 사전분석 오류: {e}")
             logger.error(traceback.format_exc())
 
-    async def _run_llm_regime_classifier(self):
-        """[08:10] LLM 시장 레짐 분류기 — 배치 스캔 전 오늘 시장 성격 판단"""
-        logger.info("[LLM레짐] ===== 시장 레짐 분류 시작 =====")
+    async def _run_llm_regime_classifier(self, label: str = "08:10"):
+        """LLM 시장 레짐 분류기 — 배치 스캔 전 또는 장중 시장 성격 판단
+
+        Args:
+            label: 프롬프트에 표시할 기준 시각 (예: "08:10", "12:00 (장중 업데이트)")
+        """
+        logger.info(f"[LLM레짐] ===== 시장 레짐 분류 시작 ({label}) =====")
         try:
             import json
             from pathlib import Path
@@ -551,7 +555,7 @@ class KRScheduler:
 
             # 4. Gemini Flash 레짐 분류 요청
             llm = get_llm_manager()
-            prompt = f"""오늘 한국 주식시장 레짐 분류 (KST 08:10 기준)
+            prompt = f"""오늘 한국 주식시장 레짐 분류 (KST {label} 기준)
 
 [미국 마감]
 - S&P500: {sp500_pct:+.2f}%  NASDAQ: {nasdaq_pct:+.2f}%
@@ -2920,6 +2924,7 @@ JSON:
         last_prescan_date = None
         last_expert_panel_week = None
         last_regime_date = None           # LLM 레짐 분류기 중복 실행 방지
+        last_regime_noon_date = None      # 12:00 장중 레짐 재분류 중복 실행 방지
         last_pos_eod_llm_date = None      # 15:00 포지션 LLM 점검 중복 방지
 
         # LLM 운영 루프 config 플래그
@@ -3058,8 +3063,16 @@ JSON:
                         and morning_scan_enabled
                         and now.hour == 8 and 10 <= now.minute < 15
                         and last_regime_date != today):
-                    await self._run_llm_regime_classifier()
+                    await self._run_llm_regime_classifier(label="08:10")
                     last_regime_date = today
+
+                # ── 12:00 장중 레짐 재분류 (오전 흐름 반영, 오후 전략 조정) ──
+                if (_llm_regime_enabled
+                        and now.hour == 12 and 0 <= now.minute < 5
+                        and last_regime_noon_date != today):
+                    await self._run_llm_regime_classifier(label="12:00 (장중 업데이트)")
+                    last_regime_noon_date = today
+                    logger.info("[LLM레짐] 장중 레짐 재분류 완료 — 오후 전략에 즉시 반영")
 
                 # ── 사전분석 ──────────────────────────────────────────
                 if (now.hour == prescan_hour
