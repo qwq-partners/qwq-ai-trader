@@ -635,9 +635,11 @@ class KISWebSocketFeed:
         # 시작 시 running 플래그 활성화 (_running은 __init__에서 False로 초기화되어 있음)
         self._running = True
         _was_closed = False
+        _instant_disconnect_count = 0  # 연결 직후 메시지 0개로 끊기는 횟수 (approval_key 무효화 감지용)
         while True:
             # 장외 시간 — 연결 해제 후 대기
             if not self._is_market_active():
+                _instant_disconnect_count = 0  # 장외 시간 진입 시 즉시 끊김 카운터 리셋
                 if self._connected:
                     logger.info("[WS] 장 마감 — WebSocket 연결 해제 (다음 장 시작 시 자동 재연결)")
                     if self._ws and not self._ws.closed:
@@ -683,6 +685,9 @@ class KISWebSocketFeed:
                     # 연결 직후 priority 종목 포함 구독 적용 (보유 종목 포함)
                     await self._apply_subscriptions()
 
+                # 연결 직후 즉시 끊김 감지용: 루프 진입 전 메시지 카운트 스냅샷
+                _msg_before = self._message_count
+
                 async for msg in self._ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         await self._handle_message(msg.data)
@@ -700,6 +705,20 @@ class KISWebSocketFeed:
 
                 # async for 정상 종료 (서버가 연결 닫음)
                 logger.warning(f"WebSocket 수신 루프 종료 (close_code={getattr(self._ws, 'close_code', '?')}, closed={getattr(self._ws, 'closed', '?')})")
+
+                # 메시지 0개 수신 후 즉시 끊김 → approval_key 서버 측 무효화 감지
+                if self._message_count == _msg_before:
+                    _instant_disconnect_count += 1
+                    if _instant_disconnect_count >= 3:
+                        logger.warning(
+                            f"[WS] {_instant_disconnect_count}회 연속 즉시 끊김 감지 "
+                            f"(close_code=1006) → approval_key 강제 재발급 (서킷브레이커/서버 무효화 대응)"
+                        )
+                        self._token_manager.invalidate()
+                        self._approval_key = None
+                        _instant_disconnect_count = 0
+                else:
+                    _instant_disconnect_count = 0  # 메시지 수신 성공 → 정상 연결이었음
 
             except asyncio.CancelledError:
                 break
