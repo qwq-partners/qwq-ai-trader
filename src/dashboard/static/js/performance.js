@@ -559,6 +559,9 @@ async function loadUSPerformance() {
         set('us-perf-winrate', total > 0 ? winRate + '%' : '-');
         set('us-perf-pnl', sign + '$' + Math.abs(totalPnl).toFixed(2), pnlColor);
         set('us-perf-positions', (portfolio.positions_count || 0) + '개');
+
+        // _usSnaps 갱신 후 KR/US 통합 비교 섹션 재렌더링
+        renderCombined();
     } catch (e) {
         console.warn('[US성과] 로드 실패:', e);
     }
