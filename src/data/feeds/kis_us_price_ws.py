@@ -150,9 +150,11 @@ class KISUSPriceFeed:
             self._exchange_map.pop(sym, None)
 
     async def start(self):
-        """WS 연결 루프 (자동 재연결 포함)"""
+        """WS 연결 루프 (자동 재연결 포함, approval_key 무효화 감지)"""
         self._running = True
         backoff = self._BACKOFF_BASE
+        _instant_disconnect_count = 0
+        _msg_count_before = 0
 
         while self._running:
             try:
@@ -163,13 +165,28 @@ class KISUSPriceFeed:
                     backoff = min(backoff * 2, self._BACKOFF_MAX)
                     continue
 
+                _msg_count_before = getattr(self, '_msg_count', 0)
                 await self._connect_and_listen()
-                backoff = self._BACKOFF_BASE   # 정상 종료 시 리셋
+
+                # 메시지 0개 수신 후 즉시 끊김 → approval_key 서버 측 무효화 감지
+                if getattr(self, '_msg_count', 0) == _msg_count_before:
+                    _instant_disconnect_count += 1
+                    if _instant_disconnect_count >= 3:
+                        logger.warning(
+                            f"[KIS US WS] {_instant_disconnect_count}회 연속 즉시 끊김 "
+                            f"→ approval_key 강제 재발급"
+                        )
+                        self._approval_key = None
+                        _instant_disconnect_count = 0
+                else:
+                    _instant_disconnect_count = 0
+                    backoff = self._BACKOFF_BASE  # 메시지 수신 성공 → 정상이었으므로 리셋
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(f"[KIS US WS] 연결 끊김: {e} — {backoff}초 후 재연결")
+                _instant_disconnect_count = 0
 
             if not self._running:
                 break
@@ -318,6 +335,8 @@ class KISUSPriceFeed:
             volume  = int(vol_str) if vol_str.lstrip("-").isdigit() else 0
         except (ValueError, IndexError):
             return
+
+        self._msg_count = getattr(self, '_msg_count', 0) + 1
 
         if self._price_callback:
             try:

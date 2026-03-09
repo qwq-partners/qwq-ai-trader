@@ -1,5 +1,45 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-09 — 전체 코드 리뷰 P1 잔여 이슈 8건 수정
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/strategies/exit_manager.py` | 보유기간 달력일→영업일 변환 + `_count_business_days()` 메서드 추가 |
+| `src/schedulers/kr_scheduler.py` | 매도 체결 시 `exit_manager.on_fill()` 호출 추가 (remaining_quantity 즉시 갱신) |
+| `src/schedulers/us_scheduler.py` | 매도 체결 시 `on_fill()` 호출 + exit_check_loop stage 복원 전 대기 |
+| `src/data/feeds/kis_us_price_ws.py` | approval_key 무효화 감지 (즉시 끊김 3회) + backoff 리셋 조건 수정 |
+| `scripts/run_trader.py` | `_USEngineBundle._running = True`로 통일 |
+| `src/risk/manager.py` | `_consecutive_losses` 재시작 시 daily_stats에서 복원 |
+| `src/dashboard/static/js/common.js` | SSE eventTypes에서 미전송 `health_checks` 제거 |
+
+### 상세
+
+**P1-1: on_fill 미호출 → remaining_quantity 30초 지연 문제**
+- KR: 매도 체결(fill_check) 시 `exit_manager.on_fill()` 즉시 호출
+- US: 매도 체결(_check_orders) 시 `on_fill()` 호출 (on_position_closed 전)
+- 효과: 분할 매도 후 다음 update_price까지 중복 시그널 방지
+
+**P1-3: 보유기간 달력일→영업일**
+- KR: `is_kr_market_holiday()` 사용 (주말+공휴일 제외)
+- US: 주말 제외 (exchange_calendars 의존성 회피)
+
+**P1-6: US exit_check_loop stage 복원 전 실행 방지**
+- `_exit_stages_restored` 플래그 확인, 미복원 시 5초 대기 후 continue
+
+**P1-7+8: US WS approval_key 무효화 감지 + backoff 수정**
+- KR WS와 동일 패턴: 메시지 0개 수신 후 3회 연속 즉시 끊김 감지 → 키 초기화
+- backoff 리셋: 메시지 수신 성공 시에만 BASE로 리셋 (비정상 종료 시 지수 백오프 유지)
+
+**P1-9: _USEngineBundle running 불일치**
+- `_running = False` → `_running = True`로 수정 (running과 동일)
+
+**P1-11: _consecutive_losses 재시작 미복원**
+- `_load_daily_stats()`에서 `daily_stats.consecutive_losses` → `_consecutive_losses` 동기화
+
+**P1-12: SSE health_checks 미전송 이벤트 정리**
+- common.js eventTypes에서 제거 (REST 폴링으로 정상 동작)
+
 ## 2026-03-09 — 전체 코드 리뷰 P0/P1 이슈 수정
 
 ### 수정 파일

@@ -1102,6 +1102,11 @@ class USScheduler:
 
         while eng.running:
             try:
+                # stage 복원 완료 전까지 exit 체크 보류 (중복 익절 방지)
+                if not getattr(self, '_exit_stages_restored', False):
+                    await asyncio.sleep(5)
+                    continue
+
                 if not eng.session.is_market_open():
                     await asyncio.sleep(180)  # 비정규장: 3분
                     continue
@@ -1987,6 +1992,11 @@ class USScheduler:
                 # daily_pnl 갱신
                 eng.portfolio.daily_pnl += trade.pnl
                 eng.portfolio.daily_trades += 1
+
+                # ExitManager remaining_quantity 즉시 갱신
+                eng.exit_manager.on_fill(
+                    symbol, filled_qty, Decimal(str(filled_price))
+                )
 
                 # 부분매도 시 수량 차감, 전량 매도 시 포지션 정리
                 if filled_qty >= pos.quantity:

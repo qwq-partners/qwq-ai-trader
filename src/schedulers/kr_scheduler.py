@@ -1142,11 +1142,18 @@ JSON:
                             event = FillEvent.from_fill(fill, source="kis_broker")
                             await bot.engine.emit(event)
 
-                            # 매도 체결 시 _exit_pending 즉시 해제 + trade journal 기록
+                            # 매도 체결 시 _exit_pending 즉시 해제 + ExitManager 상태 갱신 + trade journal 기록
                             if fill.side == OrderSide.SELL:
                                 bot._exit_pending_symbols.discard(fill.symbol)
                                 bot._exit_pending_timestamps.pop(fill.symbol, None)
                                 bot._exit_reasons.pop(fill.symbol, None)
+
+                                # ExitManager remaining_quantity 즉시 갱신 (30초 sync 의존 제거)
+                                if bot.exit_manager:
+                                    bot.exit_manager.on_fill(
+                                        fill.symbol, fill.quantity,
+                                        Decimal(str(fill.price))
+                                    )
 
                                 # trade journal SELL 기록
                                 if bot.trade_journal and _sell_pos_snap:

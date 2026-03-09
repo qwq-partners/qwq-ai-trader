@@ -351,14 +351,14 @@ class ExitManager:
         if current_price > state.highest_price:
             state.highest_price = current_price
 
-        # 보유기간 초과 체크
+        # 보유기간 초과 체크 (영업일 기준)
         entry_time = self._entry_times.get(symbol)
         if entry_time and self._max_holding_days > 0:
-            holding_days = (datetime.now() - entry_time).days
-            if holding_days > self._max_holding_days:
+            biz_days = self._count_business_days(entry_time.date(), date.today())
+            if biz_days > self._max_holding_days:
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,
-                    f"보유기간 초과: {holding_days}일 (최대 {self._max_holding_days}일)"
+                    f"보유기간 초과: {biz_days}영업일 (최대 {self._max_holding_days}영업일)"
                 )
 
         # 순손익률 계산
@@ -610,6 +610,32 @@ class ExitManager:
             logger.debug(f"[ExitManager] 포지션 상태 제거 및 영속화: {symbol}")
             return True
         return False
+
+    def _count_business_days(self, start_date: date, end_date: date) -> int:
+        """start_date ~ end_date 사이의 영업일 수 (주말 제외, 공휴일은 KR만)"""
+        if start_date >= end_date:
+            return 0
+        count = 0
+        current = start_date + timedelta(days=1)
+        is_kr = self.market == "KR"
+        # KR: is_kr_market_holiday 사용 (주말+공휴일)
+        # US: 주말만 제외 (exchange_calendars 의존성 회피)
+        if is_kr:
+            try:
+                from ..utils.session import is_kr_market_holiday
+                while current <= end_date:
+                    if not is_kr_market_holiday(current):
+                        count += 1
+                    current += timedelta(days=1)
+                return count
+            except ImportError:
+                pass
+        # US 또는 KR 폴백: 주말만 제외
+        while current <= end_date:
+            if current.weekday() < 5:
+                count += 1
+            current += timedelta(days=1)
+        return count
 
     def add_exit_exempt(self, symbol: str, reason: str = ""):
         """청산 예외 종목 추가 (익절/손절 비활성화)"""

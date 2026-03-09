@@ -571,6 +571,7 @@ class RiskManager:
             self.daily_stats.losses = data.get("losses", 0)
             self.daily_stats.total_pnl = Decimal(data.get("total_pnl", "0"))
             self.daily_stats.consecutive_losses = data.get("consecutive_losses", 0)
+            self._consecutive_losses = self.daily_stats.consecutive_losses
             self.daily_stats.peak_equity = Decimal(data.get("peak_equity", str(self.initial_capital)))
 
             logger.info(

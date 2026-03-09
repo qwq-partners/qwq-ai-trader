@@ -1573,7 +1573,7 @@ class _USEngineBundle:
         self._sector_cache: Dict[str, str] = {}
         self._indicator_cache: Dict[str, dict] = {}
         self._tasks: List[asyncio.Task] = []
-        self._running = False
+        self._running = True
         self.running = True
         self.recent_signals: deque = deque(maxlen=50)
         self._ws_last_exit_check: Dict[str, float] = {}
