@@ -16,7 +16,7 @@ let _refreshTimer = null;
 const fmtKRW    = v => Number(v || 0).toLocaleString('ko-KR');
 const fmtUSD    = v => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPnlKRW = v => (v == null ? '--' : (v >= 0 ? '+' : '') + fmtKRW(v) + '원');
-const fmtPnlUSD = v => (v == null ? '--' : (v >= 0 ? '+' : '-') + '$' + Math.abs(Number(v)).toFixed(2));
+const fmtPnlUSD = v => (v == null ? '--' : v === 0 ? '$0.00' : (v > 0 ? '+' : '-') + '$' + Math.abs(Number(v)).toFixed(2));
 const pnlCls    = v => v == null ? '' : (v >= 0 ? 'text-profit' : 'text-loss');
 const fmtPctLocal = v => (v == null ? '--' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
 

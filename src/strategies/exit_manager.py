@@ -205,9 +205,10 @@ class ExitManager:
                     # 10% 이상 추가매수만 stage 리셋 (소량 sync 오차는 stage 유지)
                     if pct_added >= 0.10:
                         state.current_stage = ExitStage.NONE
+                        state.breakeven_activated = False
                         logger.info(
                             f"[ExitManager] 추가매수 확인: {position.symbol} "
-                            f"{old_qty}→{position.quantity}주 (+{pct_added*100:.0f}%), stage→NONE"
+                            f"{old_qty}→{position.quantity}주 (+{pct_added*100:.0f}%), stage→NONE, BE→False"
                         )
                     else:
                         logger.debug(

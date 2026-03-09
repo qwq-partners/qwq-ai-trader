@@ -1103,7 +1103,6 @@ function applyMarketFilter(filter) {
     const krCard   = document.getElementById("kr-market-card");
     const krSec    = document.getElementById("kr-positions-section");
     const usPosF   = document.getElementById("us-positions-full");
-    const extSec   = document.getElementById("external-accounts-section");
     const usSec    = document.getElementById("us-summary-section");
     if (usSec) usSec.style.display = "none"; // 구 컨테이너 항상 숨김
 
@@ -1117,10 +1116,6 @@ function applyMarketFilter(filter) {
     if (usPosF) usPosF.style.display = showUS ? "" : "none";
     const usSignalsSec = document.getElementById("us-signals-section");
     if (usSignalsSec) usSignalsSec.style.display = showUS ? "" : "none";
-    if (extSec) {
-        if (showKR) extSec.style.removeProperty("display");
-        else extSec.style.display = "none";
-    }
 
     // markets-grid: 단일 필터 시 1열로
     const grid = document.querySelector(".markets-grid");
