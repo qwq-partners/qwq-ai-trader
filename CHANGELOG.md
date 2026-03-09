@@ -1,5 +1,49 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-09 — 텔레그램 아침 레포트에 KOSPI200 야간선물 등락률 추가
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/analytics/daily_report.py` | 07:00 US 마감 레포트에 야간선물 섹션 추가 + 08:00 아침 레포트 US 요약에 1줄 추가 |
+
+### 상세
+
+**07:00 미국증시 마감 레포트 (`generate_us_market_report`)**
+- 주요 지수 섹션 바로 뒤에 "■ KOSPI200 야간선물" 섹션 추가
+- `get_night_futures_quote()` 호출 → `🔼 +1.23% (345.67pt) 강세` 형태 표시
+- 조회 실패 시 해당 섹션 skip (나머지 레포트 정상 발송)
+
+**08:00 아침 레포트 (`_fetch_us_market_summary`)**
+- US 시장 요약 끝에 `KOSPI200 야간선물 ▲1.23%` 1줄 추가
+- 조회 실패 시 skip
+
+**헬퍼 메서드 추가**
+- `_get_night_futures_quote()`: KISMarketData 인스턴스 획득 + 야간선물 시세 조회
+- `_fetch_night_futures_section()`: 07:00 레포트용 HTML 포맷 섹션 생성
+
+## 2026-03-09 — ExitManager 분할 익절 로직 개선 (3건)
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/strategies/exit_manager.py` | ATR트레일링 조기 전량 청산 방지 + 재시작 시 고점 보정 + max_holding_days config 주입 |
+
+### 상세
+
+**P1: ATR트레일링 분할 익절 전 조기 전량 청산 방지**
+- 문제: breakeven 활성화 후 ATR트레일링이 stage에 관계없이 전량 매도 → 1차 익절 직후 2차/3차 기회 소멸
+- 사례: 삼성중공업 09:06 1차 익절(60주) → 09:15 ATR트레일링 전량 청산(142주), 9분 만에 분할 종료
+- 수정: THIRD/TRAILING stage에서만 ATR트레일링 전량 매도, FIRST/SECOND에서는 고점을 현재가로 리셋하여 분할 익절 우선
+
+**P1: 재시작 시 highest_price 과도 괴리 보정**
+- 문제: 저장된 고점이 현재가보다 5% 초과 높으면 첫 가격 업데이트에서 즉시 트레일링 발동
+- 수정: register_position() 복원 시 괴리 5% 초과면 현재가로 리셋 + WARNING 로그
+
+**P2: max_holding_days config 주입**
+- 문제: ExitManager._max_holding_days가 10일 하드코딩, 외부 설정 불가
+- 수정: ExitConfig.max_holding_days 필드 추가, config에서 주입 가능
+
 ## 2026-03-08 — 엔진 탭 대시보드 구현
 
 ### 개요
