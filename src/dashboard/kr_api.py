@@ -51,6 +51,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
     app.router.add_post("/api/signals/execute", handler.execute_pending_signals)
     app.router.add_post("/api/scan/run", handler.run_morning_scan)
+    app.router.add_post("/api/sync-trades", handler.sync_trades)
     app.router.add_get("/api/trade-events", handler.get_trade_events)
     app.router.add_get("/api/daily-settlement", handler.get_daily_settlement)
     app.router.add_get("/api/app/latest", handler.get_latest_app)
@@ -315,6 +316,38 @@ class KRAPIHandler:
             return web.json_response({"success": True, "message": "배치 스캔+실행 시작 (비동기)"})
         except Exception as e:
             logger.error(f"[대시보드] 배치 스캔 오류: {e}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def sync_trades(self, request: web.Request) -> web.Response:
+        """
+        KIS 당일 체결 기반 거래이력 동기화 (수동 트리거)
+
+        POST /api/sync-trades
+        """
+        try:
+            bot = self.dc.bot
+            trade_journal = getattr(bot, "trade_journal", None)
+            if trade_journal is None:
+                return web.json_response(
+                    {"success": False, "message": "trade_journal 미초기화"},
+                    status=503,
+                )
+            if not hasattr(trade_journal, "sync_from_kis"):
+                return web.json_response(
+                    {"success": False, "message": "sync_from_kis 미지원"},
+                    status=503,
+                )
+            logger.info("[대시보드] KIS 거래이력 동기화 수동 트리거")
+
+            async def _run():
+                await trade_journal.sync_from_kis(bot.broker, engine=getattr(bot, "engine", None))
+                bot._last_kis_sync_date = None  # 오늘 장 마감 후 재동기화 허용
+                logger.info("[대시보드] KIS 거래이력 동기화 완료")
+
+            asyncio.create_task(_run())
+            return web.json_response({"success": True, "message": "KIS 거래이력 동기화 시작 (비동기)"})
+        except Exception as e:
+            logger.error(f"[대시보드] 거래이력 동기화 오류: {e}")
             return web.json_response({"success": False, "message": str(e)}, status=500)
 
     async def get_trade_events(self, request: web.Request) -> web.Response:
