@@ -55,7 +55,7 @@ class SupplyTrendDetector:
             # 1) 유니버스 구성 (KIS API 당일 수급 상위)
             universe = await self._build_universe()
             if not universe:
-                logger.warning("[수급추세] 유니버스 비어있음")
+                logger.debug("[수급추세] 유니버스 비어있음 (프리장/수급 데이터 없음)")
                 return []
 
             logger.info(f"[수급추세] 유니버스: {len(universe)}종목")

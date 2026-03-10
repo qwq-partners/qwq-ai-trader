@@ -731,6 +731,15 @@ class StockScreener:
             import pandas as pd
             from pykrx import stock as pykrx_stock
 
+            # 252일치 일봉 데이터가 있는 종목이 하나도 없으면 pykrx 호출 자체를 생략
+            eligible_symbols = [
+                s for s in all_stocks
+                if len((daily_cache or {}).get(s) or []) >= 252
+            ]
+            if not eligible_symbols:
+                logger.debug("[RS] 252일 일봉 데이터 보유 종목 없음 — RS 보너스 스킵")
+                return
+
             # KOSPI 지수 일봉 조회 (벤치마크)
             from datetime import datetime, timedelta
             today = datetime.now()
@@ -742,6 +751,10 @@ class StockScreener:
             )
             if kospi_df is None or kospi_df.empty or len(kospi_df) < 252:
                 logger.debug("[RS] KOSPI 지수 데이터 부족 — RS 보너스 스킵")
+                return
+
+            if '종가' not in kospi_df.columns:
+                logger.debug(f"[RS] KOSPI 컬럼 없음 (columns={list(kospi_df.columns)[:5]}) — RS 보너스 스킵")
                 return
 
             benchmark_close = kospi_df['종가']

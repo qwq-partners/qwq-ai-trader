@@ -242,9 +242,11 @@ class KRScheduler:
             )
 
         # 엔진 RiskManager에서 이미 해제된 종목 → _exit_pending_symbols 동기화
+        # stale_cutoff 체크 포함: 방금 등록된 exit pending이 즉시 청소되는 것 방지
         if bot._exit_pending_symbols and bot.engine.risk_manager:
             orphaned = [s for s in list(bot._exit_pending_symbols)
-                        if s not in bot.engine.risk_manager._pending_orders]
+                        if s not in bot.engine.risk_manager._pending_orders
+                        and bot._exit_pending_timestamps.get(s, now_time) < stale_cutoff]
             for s in orphaned:
                 if bot.broker and hasattr(bot.broker, 'cancel_all_for_symbol'):
                     try:
