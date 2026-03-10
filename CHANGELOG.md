@@ -1,5 +1,36 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-11 — SEPA 코어+트레이더 청산 구조 + 추세 무효화 시간 스탑
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/strategies/exit_manager.py` | 전략별 분할 비율(ratio) 지원 + 신고가 실패 시간 스탑(stale_high_days) 추가 |
+| `scripts/run_trader.py` | SEPA 코어+트레이더 프로필 + sync_detected 보수적 리스크 프로필 |
+| `src/schedulers/kr_scheduler.py` | 체결/동기화 시 전략별 ratio/stale_high_days 파라미터 전달 |
+| `src/schedulers/us_scheduler.py` | sync 포지션 등록 시 보수적 리스크 파라미터 적용 |
+
+### 상세
+
+**1. SEPA 코어+트레이더 구조 (큰 추세 수익 극대화)**
+- 기존: 1차(30%) → 2차(50%) → 3차(50%) = 원래 수량의 ~82%가 12% 이전 청산
+- 변경: 1차(20%) → 2차(25%) → 3차(25%) = ~42%만 고정 TP로 청산, 나머지 코어는 트레일링
+- 3차 익절 목표: 12% → 15%로 상향
+- PositionExitState에 전략별 `first/second/third_exit_ratio` 필드 추가
+
+**2. 신고가 실패 시간 스탑 (추세 무효화 감지)**
+- ExitConfig에 `stale_high_days`, `stale_high_min_pnl_pct` 추가
+- PositionExitState에 `last_new_high_date`, `stale_high_days` 추가
+- SEPA: 3영업일 신고가 갱신 실패 + PnL < 3% → 전량 청산
+- 기회비용 절감: 장기 방치 손실 방지
+
+**3. sync_detected 보수적 리스크 (회피 패턴 방지)**
+- `_sync` 전략 프로필 신설: SL=3%, TS=2%, TP1=3%/TP2=5%/TP3=8%
+- sync 포지션은 2영업일 신고가 실패 시 즉시 청산
+- KR/US 동기화 경로 모두 적용
+
+---
+
 ## 2026-03-10 — RS Ranking pykrx → yfinance 전환
 
 ### 수정 파일

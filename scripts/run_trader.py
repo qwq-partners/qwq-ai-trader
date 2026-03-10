@@ -529,9 +529,15 @@ class UnifiedTradingBot:
                 "sepa_trend": {
                     "stop_loss_pct": sepa_cfg.get("stop_loss_pct", 5.0),
                     "trailing_stop_pct": 3.0,
+                    # 코어+트레이더 구조: 분할 비율 축소 → 나머지 코어는 트레일링
                     "first_exit_pct": 5.0,
+                    "first_exit_ratio": 0.20,     # 20% 매도 (기존 30%)
                     "second_exit_pct": 10.0,
-                    "third_exit_pct": 12.0,
+                    "second_exit_ratio": 0.25,    # 25% 매도 (기존 50%)
+                    "third_exit_pct": 15.0,       # 15% 목표 (기존 12%)
+                    "third_exit_ratio": 0.25,     # 25% 매도 (기존 50%)
+                    # → 나머지 ~42% 코어는 트레일링으로 큰 추세 추종
+                    "stale_high_days": 3,         # 3영업일 신고가 실패 → 추세 무효화
                 },
                 "strategic_swing": {
                     "stop_loss_pct": 5.0,
@@ -539,6 +545,15 @@ class UnifiedTradingBot:
                     "first_exit_pct": 5.0,
                     "second_exit_pct": 10.0,
                     "third_exit_pct": 12.0,
+                },
+                # sync_detected 포지션: 보수적 리스크 (회피 패턴 방지)
+                "_sync": {
+                    "stop_loss_pct": 3.0,         # 타이트한 손절
+                    "trailing_stop_pct": 2.0,     # 빠른 트레일링
+                    "first_exit_pct": 3.0,        # 빠른 1차 익절
+                    "second_exit_pct": 5.0,
+                    "third_exit_pct": 8.0,
+                    "stale_high_days": 2,         # 2영업일 신고가 실패 → 즉시 청산
                 },
             }
 
@@ -584,6 +599,10 @@ class UnifiedTradingBot:
                         first_exit_pct=exit_params.get("first_exit_pct"),
                         second_exit_pct=exit_params.get("second_exit_pct"),
                         third_exit_pct=exit_params.get("third_exit_pct"),
+                        first_exit_ratio=exit_params.get("first_exit_ratio"),
+                        second_exit_ratio=exit_params.get("second_exit_ratio"),
+                        third_exit_ratio=exit_params.get("third_exit_ratio"),
+                        stale_high_days=exit_params.get("stale_high_days"),
                     )
                 logger.info(
                     f"[KR] 기존 포지션 {len(self.engine.portfolio.positions)}개 ExitManager 등록 완료"

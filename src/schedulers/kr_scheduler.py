@@ -421,7 +421,22 @@ class KRScheduler:
                         f"전략={pos.strategy or '?'})"
                     )
                     if bot.exit_manager:
-                        bot.exit_manager.register_position(pos)
+                        # 전략별 청산 파라미터 (sync 포지션은 _sync 폴백)
+                        _ep = bot._strategy_exit_params.get(
+                            pos.strategy, bot._strategy_exit_params.get("_sync", {})
+                        ) if pos.strategy else bot._strategy_exit_params.get("_sync", {})
+                        bot.exit_manager.register_position(
+                            pos,
+                            stop_loss_pct=_ep.get("stop_loss_pct"),
+                            trailing_stop_pct=_ep.get("trailing_stop_pct"),
+                            first_exit_pct=_ep.get("first_exit_pct"),
+                            second_exit_pct=_ep.get("second_exit_pct"),
+                            third_exit_pct=_ep.get("third_exit_pct"),
+                            first_exit_ratio=_ep.get("first_exit_ratio"),
+                            second_exit_ratio=_ep.get("second_exit_ratio"),
+                            third_exit_ratio=_ep.get("third_exit_ratio"),
+                            stale_high_days=_ep.get("stale_high_days"),
+                        )
                     if symbol not in bot._watch_symbols:
                         bot._watch_symbols.append(symbol)
 
@@ -1221,6 +1236,10 @@ JSON:
                                             first_exit_pct=exit_params.get("first_exit_pct"),
                                             second_exit_pct=exit_params.get("second_exit_pct"),
                                             third_exit_pct=exit_params.get("third_exit_pct"),
+                                            first_exit_ratio=exit_params.get("first_exit_ratio"),
+                                            second_exit_ratio=exit_params.get("second_exit_ratio"),
+                                            third_exit_ratio=exit_params.get("third_exit_ratio"),
+                                            stale_high_days=exit_params.get("stale_high_days"),
                                         )
                                         logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%)")
                                     except Exception as e:

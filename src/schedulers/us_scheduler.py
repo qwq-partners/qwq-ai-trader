@@ -1450,10 +1450,19 @@ class USScheduler:
                     )
                 eng._exchange_cache[symbol] = kp.get("exchange", eng._default_exchange)
 
-                # ExitManager에 포지션 등록
+                # ExitManager에 포지션 등록 (sync 포지션은 보수적 리스크 적용)
                 new_pos = eng.portfolio.positions[symbol]
                 try:
-                    eng.exit_manager.register_position(new_pos)
+                    # sync_detected 포지션: 타이트한 손절/짧은 유예
+                    eng.exit_manager.register_position(
+                        new_pos,
+                        stop_loss_pct=3.0,
+                        trailing_stop_pct=2.0,
+                        first_exit_pct=3.0,
+                        second_exit_pct=5.0,
+                        third_exit_pct=8.0,
+                        stale_high_days=2,
+                    )
                 except Exception as e:
                     logger.debug(f"[US 동기화] {symbol} ExitManager 등록 실패: {e}")
 

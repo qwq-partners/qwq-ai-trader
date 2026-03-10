@@ -78,6 +78,10 @@ class ExitConfig:
     stale_exit_days: int = 5          # 횡보 판단 시작 영업일
     stale_exit_pnl_pct: float = 2.0   # 횡보 판단 수익률 범위 (±%)
 
+    # 신고가 실패 무효화: N영업일 신고가 갱신 없음 & PnL < X% → 전량 청산 (추세 소멸)
+    stale_high_days: int = 0          # 0 = 비활성화 (전략별 override 사용)
+    stale_high_min_pnl_pct: float = 3.0  # 이 수익률 미만일 때만 적용
+
     # End-of-day close (US day trade 전용)
     eod_close: bool = False
 
@@ -100,11 +104,18 @@ class PositionExitState:
     first_exit_pct: Optional[float] = None
     second_exit_pct: Optional[float] = None
     third_exit_pct: Optional[float] = None
+    # 전략별 익절 비율 (None이면 글로벌 ExitConfig 사용, 코어+트레이더 구조용)
+    first_exit_ratio: Optional[float] = None
+    second_exit_ratio: Optional[float] = None
+    third_exit_ratio: Optional[float] = None
     # ATR 기반 동적 손절
     atr_pct: Optional[float] = None
     dynamic_stop_pct: Optional[float] = None
     # 1R 도달 후 본전 이동 트레일링
     breakeven_activated: bool = False
+    # 신고가 실패 무효화 (추세 소멸 감지)
+    last_new_high_date: Optional[date] = None
+    stale_high_days: Optional[int] = None           # None이면 글로벌 ExitConfig 사용
 
 
 class ExitManager:
@@ -192,6 +203,10 @@ class ExitManager:
         first_exit_pct: Optional[float] = None,
         second_exit_pct: Optional[float] = None,
         third_exit_pct: Optional[float] = None,
+        first_exit_ratio: Optional[float] = None,
+        second_exit_ratio: Optional[float] = None,
+        third_exit_ratio: Optional[float] = None,
+        stale_high_days: Optional[int] = None,
     ):
         """포지션 등록"""
         if position.symbol in self._states:
@@ -307,8 +322,13 @@ class ExitManager:
             first_exit_pct=first_exit_pct,
             second_exit_pct=second_exit_pct,
             third_exit_pct=third_exit_pct,
+            first_exit_ratio=first_exit_ratio,
+            second_exit_ratio=second_exit_ratio,
+            third_exit_ratio=third_exit_ratio,
             atr_pct=atr_pct,
             dynamic_stop_pct=dynamic_stop,
+            last_new_high_date=date.today(),
+            stale_high_days=stale_high_days,
         )
 
         # 보유기간 체크용 진입 시간 기록
@@ -351,9 +371,10 @@ class ExitManager:
         if state.entry_price <= 0:
             return None
 
-        # 고가 업데이트
+        # 고가 업데이트 + 신고가 일자 추적
         if current_price > state.highest_price:
             state.highest_price = current_price
+            state.last_new_high_date = date.today()
 
         # 보유기간 계산 (영업일 기준)
         entry_time = self._entry_times.get(symbol)
@@ -388,6 +409,20 @@ class ExitManager:
                 f"횡보 청산: {biz_days}영업일 보유, "
                 f"수익률 {net_pnl_pct:+.2f}% (±{self.config.stale_exit_pnl_pct}% 이내)"
             )
+
+        # 신고가 실패 무효화 (추세 소멸): N영업일 신고가 갱신 없음 & PnL 미달 & 1차 익절 전
+        eff_stale_high = state.stale_high_days if state.stale_high_days is not None else self.config.stale_high_days
+        if (eff_stale_high > 0
+            and state.last_new_high_date is not None
+            and state.current_stage == ExitStage.NONE):
+            days_since_high = self._count_business_days(state.last_new_high_date, date.today())
+            if (days_since_high >= eff_stale_high
+                and net_pnl_pct < self.config.stale_high_min_pnl_pct):
+                return self._create_exit(
+                    state, "sell_all", state.remaining_quantity,
+                    f"추세 무효화: {days_since_high}영업일 신고가 실패, "
+                    f"수익률 {net_pnl_pct:+.2f}% (< {self.config.stale_high_min_pnl_pct}%)"
+                )
 
         # 1. 손절 체크
         sl_pct = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
@@ -478,44 +513,49 @@ class ExitManager:
         second_pct = state.second_exit_pct if state.second_exit_pct is not None else self.config.second_exit_pct
         third_pct = state.third_exit_pct if state.third_exit_pct is not None else self.config.third_exit_pct
 
+        # 전략별 분할 비율 (코어+트레이더 구조 지원)
+        first_ratio = state.first_exit_ratio if state.first_exit_ratio is not None else self.config.first_exit_ratio
+        second_ratio = state.second_exit_ratio if state.second_exit_ratio is not None else self.config.second_exit_ratio
+        third_ratio = state.third_exit_ratio if state.third_exit_ratio is not None else self.config.third_exit_ratio
+
         # 1차 익절
         if state.current_stage == ExitStage.NONE:
             if net_pnl_pct >= first_pct:
                 # remaining_quantity 기준 (sync 복원 시 original과 괴리 방지)
-                exit_qty = max(1, int(state.remaining_quantity * self.config.first_exit_ratio))
+                exit_qty = max(1, int(state.remaining_quantity * first_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.current_stage = ExitStage.FIRST
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
-                    f"1차 익절 ({self.config.first_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={first_pct:.1f}%)"
+                    f"1차 익절 ({first_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={first_pct:.1f}%)"
                 )
 
         # 2차 익절
         elif state.current_stage == ExitStage.FIRST:
             if net_pnl_pct >= second_pct:
-                exit_qty = max(1, int(state.remaining_quantity * self.config.second_exit_ratio))
+                exit_qty = max(1, int(state.remaining_quantity * second_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.current_stage = ExitStage.SECOND
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
-                    f"2차 익절 ({self.config.second_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={second_pct:.1f}%)"
+                    f"2차 익절 ({second_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={second_pct:.1f}%)"
                 )
 
         # 3차 익절
         elif state.current_stage == ExitStage.SECOND:
             if net_pnl_pct >= third_pct:
-                exit_qty = max(1, int(state.remaining_quantity * self.config.third_exit_ratio))
+                exit_qty = max(1, int(state.remaining_quantity * third_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.current_stage = ExitStage.THIRD
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
-                    f"3차 익절 ({self.config.third_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={third_pct:.1f}%)"
+                    f"3차 익절 ({third_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={third_pct:.1f}%)"
                 )
 
         # 3차 익절 완료 후 트레일링으로 전환
