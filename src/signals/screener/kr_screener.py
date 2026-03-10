@@ -729,9 +729,8 @@ class StockScreener:
 
         try:
             import pandas as pd
-            from pykrx import stock as pykrx_stock
 
-            # 252일치 일봉 데이터가 있는 종목이 하나도 없으면 pykrx 호출 자체를 생략
+            # 252일치 일봉 데이터가 있는 종목이 하나도 없으면 벤치마크 호출 생략
             eligible_symbols = [
                 s for s in all_stocks
                 if len((daily_cache or {}).get(s) or []) >= 252
@@ -740,24 +739,28 @@ class StockScreener:
                 logger.debug("[RS] 252일 일봉 데이터 보유 종목 없음 — RS 보너스 스킵")
                 return
 
-            # KOSPI 지수 일봉 조회 (벤치마크)
+            # KOSPI 지수 일봉 조회 (벤치마크) — yfinance 사용
             from datetime import datetime, timedelta
+            import yfinance as yf
             today = datetime.now()
-            start_date = (today - timedelta(days=380)).strftime("%Y%m%d")
-            end_date = today.strftime("%Y%m%d")
+            start_date = (today - timedelta(days=400)).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
 
             kospi_df = await asyncio.to_thread(
-                pykrx_stock.get_index_ohlcv, start_date, end_date, "1001"
+                yf.download, "^KS11", start=start_date, end=end_date, progress=False
             )
             if kospi_df is None or kospi_df.empty or len(kospi_df) < 252:
                 logger.debug("[RS] KOSPI 지수 데이터 부족 — RS 보너스 스킵")
                 return
 
-            if '종가' not in kospi_df.columns:
+            # yfinance MultiIndex 컬럼 처리
+            if isinstance(kospi_df.columns, pd.MultiIndex):
+                kospi_df.columns = kospi_df.columns.get_level_values(0)
+            if 'Close' not in kospi_df.columns:
                 logger.debug(f"[RS] KOSPI 컬럼 없음 (columns={list(kospi_df.columns)[:5]}) — RS 보너스 스킵")
                 return
 
-            benchmark_close = kospi_df['종가']
+            benchmark_close = kospi_df['Close']
 
             rs_applied = 0
             for symbol, stock in all_stocks.items():

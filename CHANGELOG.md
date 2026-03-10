@@ -1,5 +1,22 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-10 — RS Ranking pykrx → yfinance 전환
+
+### 수정 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `src/signals/screener/kr_screener.py` | `_apply_rs_ranking_bonus`: pykrx `get_index_ohlcv` → yfinance `^KS11` |
+
+### 상세
+
+**pykrx `get_index_ohlcv` KeyError: '지수명'**
+- 원인: KRX 웹사이트 데이터 형식 변경 → pykrx 1.2.4 내부 `IndexTicker.get_name()` 실패
+- 영향: 5분마다 `[Screener] RS Ranking 보너스 오류 (무시): '지수명'` 반복 (하루 200회+)
+- 수정: KOSPI 벤치마크 조회를 yfinance `^KS11`로 전환, MultiIndex 컬럼 처리 추가
+- pykrx는 다른 용도(종목 마스터 등)에서 여전히 사용 중이나 index OHLCV는 yfinance로 대체
+
+---
+
 ## 2026-03-10 — US entry_time DB 복원 + 횡보 종목 조기 청산
 
 ### 수정 파일
