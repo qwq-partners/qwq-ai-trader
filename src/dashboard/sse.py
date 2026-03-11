@@ -206,9 +206,12 @@ class SSEManager:
             logger.info("[SSE] 브로드캐스트 루프 종료")
 
     async def _fetch_market_indices(self) -> Optional[List[Dict]]:
-        """KOSPI/KOSDAQ 실시간 지수 조회.
-        1차: KIS API (fetch_index_price) — 장중 실시간
-        2차: Yahoo Finance — 폴백 (15분 지연 허용)
+        """KOSPI·KOSDAQ 지수 + 미국 3대지수 + KR 개별종목 (펩트론·하이닉스·삼성전자) 조회.
+
+        우선순위:
+          - KR 지수   : KIS fetch_index_price (FHPUP02100000) — 장중 실시간
+          - KR 개별주  : KIS get_quote — 프리/넥스트장 포함, 실패 시 Yahoo 폴백
+          - US 지수   : Yahoo Finance (장중/장외 모두)
         결과는 kr_api의 /api/market/indices 캐시도 갱신해 HTTP 요청과 동기화.
         """
         # 10초 내부 캐시 (네트워크 호출 최소화)
@@ -217,11 +220,13 @@ class SSEManager:
             return self._indices_cache_data
 
         dc = self.data_collector
-        kis_md = getattr(getattr(dc, "bot", None), "kis_market_data", None)
+        bot = getattr(dc, "bot", None)
+        kis_md = getattr(bot, "kis_market_data", None)
+        broker = getattr(bot, "broker", None)
 
         results: List[Dict] = []
 
-        # ── 1차: KIS 실시간 ──────────────────────────────────────
+        # ── 1. KIS 실시간 지수 (KOSPI / KOSDAQ) ─────────────────
         if kis_md:
             try:
                 for code, label in [("0001", "KOSPI"), ("1001", "KOSDAQ")]:
@@ -231,16 +236,16 @@ class SSEManager:
             except Exception as e:
                 logger.debug(f"[SSE 지수] KIS 조회 오류: {e}")
 
-        # ── 2차: Yahoo Finance 폴백 (KIS 실패 종목 보완) ─────────
+        # ── 2. Yahoo Finance (US 지수 + KR 지수 폴백) ───────────
         kis_labels = {r["label"] for r in results}
-        needed = [
+        yahoo_indices = [
             ("^KS11",  "KOSPI",  "index_kr"),
             ("^KQ11",  "KOSDAQ", "index_kr"),
             ("^GSPC",  "S&P500", "index_us"),
             ("^IXIC",  "NASDAQ", "index_us"),
             ("^DJI",   "DOW",    "index_us"),
         ]
-        yahoo_needed = [t for t in needed if t[1] not in kis_labels]
+        yahoo_needed = [t for t in yahoo_indices if t[1] not in kis_labels]
 
         if yahoo_needed:
             try:
@@ -283,11 +288,93 @@ class SSEManager:
             except Exception as e:
                 logger.debug(f"[SSE 지수] Yahoo 조회 오류: {e}")
 
+        # ── 3. KR 개별종목: KIS get_quote (프리/넥스트장 포함) ──
+        KR_STOCKS = [
+            ("087010", "펩트론",     "stock_kr"),
+            ("000660", "SK하이닉스", "stock_kr"),
+            ("005930", "삼성전자",   "stock_kr"),
+        ]
+        try:
+            from src.utils.session import KRSession
+            from src.core.types import MarketSession
+            kr_session = KRSession().get_session()
+            is_next = kr_session == MarketSession.NEXT
+        except Exception:
+            is_next = False
+
+        for sym, label, kind in KR_STOCKS:
+            item: Optional[Dict] = None
+
+            # KIS get_quote 시도
+            if broker:
+                try:
+                    q = await broker.get_quote(sym)
+                    if q and q.get("price", 0) > 0:
+                        if is_next and q.get("ovtm_price", 0) > 0:
+                            price   = q["ovtm_price"]
+                            chg_pct = q.get("ovtm_change_pct", 0)
+                            prev    = q.get("prev_close", price)
+                            chg     = price - prev
+                        else:
+                            price   = q["price"]
+                            chg_pct = q.get("change_pct", 0)
+                            chg     = q.get("change", 0)
+                        item = {
+                            "symbol": sym, "label": label, "kind": kind,
+                            "price": round(price),
+                            "change": round(chg),
+                            "change_pct": round(chg_pct, 2),
+                            "source": "kis",
+                        }
+                except Exception as e:
+                    logger.debug(f"[SSE 개별주] {sym} KIS 오류: {e}")
+
+            # Yahoo Finance 폴백
+            if not item:
+                try:
+                    yf_sym = sym + ".KS"
+                    headers_yf = {"User-Agent": "Mozilla/5.0"}
+                    timeout_yf = aiohttp.ClientTimeout(total=5)
+                    async with aiohttp.ClientSession(
+                        headers=headers_yf, timeout=timeout_yf
+                    ) as sess:
+                        url = (
+                            f"https://query1.finance.yahoo.com/v8/finance/chart/"
+                            f"{yf_sym}?interval=1d&range=5d"
+                        )
+                        async with sess.get(url) as resp:
+                            if resp.status == 200:
+                                js = await resp.json(content_type=None)
+                                meta = js["chart"]["result"][0]["meta"]
+                                price = meta.get("regularMarketPrice") or 0
+                                raw_closes = (
+                                    js["chart"]["result"][0]
+                                    .get("indicators", {})
+                                    .get("quote", [{}])[0]
+                                    .get("close", [])
+                                )
+                                closes = [c for c in raw_closes if c is not None]
+                                prev = closes[-2] if len(closes) >= 2 else price
+                                chg = price - prev
+                                chg_pct = (chg / prev * 100) if prev else 0
+                                item = {
+                                    "symbol": sym, "label": label, "kind": kind,
+                                    "price": round(price),
+                                    "change": round(chg),
+                                    "change_pct": round(chg_pct, 2),
+                                    "source": "yahoo",
+                                }
+                except Exception as e:
+                    logger.debug(f"[SSE 개별주] {sym} Yahoo 폴백 오류: {e}")
+
+            if item:
+                results.append(item)
+
         if not results:
             return self._indices_cache_data  # 이전 캐시 유지
 
-        # 순서 정렬: KOSPI → KOSDAQ → S&P500 → NASDAQ → DOW → 기타
-        order = ["KOSPI", "KOSDAQ", "S&P500", "NASDAQ", "DOW"]
+        # 순서 고정: KOSPI → KOSDAQ → S&P500 → NASDAQ → DOW → 개별주(순서 유지)
+        order = ["KOSPI", "KOSDAQ", "S&P500", "NASDAQ", "DOW", "펩트론", "SK하이닉스", "삼성전자"]
         results.sort(key=lambda x: order.index(x["label"]) if x["label"] in order else 99)
 
         self._indices_cache_data = results
