@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-11 — 대시보드 전광판 US 지수 표시 수정
+
+**`src/dashboard/sse.py`**
+- `import aiohttp` 누락 수정 — `from aiohttp import web`만 있어 `aiohttp.ClientSession`/`ClientTimeout` NameError 발생
+- Yahoo Finance API 호출이 silent fail → US 지수(S&P500, NASDAQ, DOW) 전광판 미표시 원인
+- 수정 후 KOSPI, KOSDAQ, S&P500, NASDAQ, DOW, 개별주 모두 정상 표시
+
+---
+
 ## 2026-03-11 — fetch_index_price TR 수정 (commit `edd809b`)
 
 `fetch_index_price()`에서 잘못된 TR 사용 수정:
