@@ -253,18 +253,48 @@ function _buildTickerHTML(indices) {
     return items + items;
 }
 
-function _applyTickerData(data) {
+// SSE 업데이트용 버퍼 — 다음 애니메이션 사이클 시작 시 적용
+let _pendingTickerData = null;
+let _tickerIterListenerAdded = false;
+
+function _initTickerIterListener(inner) {
+    if (_tickerIterListenerAdded) return;
+    inner.addEventListener('animationiteration', () => {
+        if (_pendingTickerData) {
+            // 사이클 경계(translateX=0)에서 교체 → 끊김 없음
+            inner.innerHTML = _buildTickerHTML(_pendingTickerData);
+            _pendingTickerData = null;
+        }
+    });
+    _tickerIterListenerAdded = true;
+}
+
+function _applyTickerData(data, forceReset) {
     if (!data || !data.length) return;
     const inner = document.getElementById('nav-ticker-inner');
     if (!inner) return;
-    inner.innerHTML = _buildTickerHTML(data);
-    inner.style.animation = 'none';
-    void inner.offsetWidth;
-    inner.style.animation = '';
     const strip = inner.closest('.ticker-strip');
-    if (strip && strip.style.opacity !== '1') {
-        strip.style.transition = 'opacity 0.5s ease';
-        strip.style.opacity = '1';
+
+    const isEmpty = !inner.innerHTML.trim() || inner.innerHTML.includes('--');
+    if (isEmpty || forceReset) {
+        // 최초 로드 or 강제: animation 리셋 후 즉시 시작
+        inner.innerHTML = _buildTickerHTML(data);
+        inner.style.animation = 'none';
+        void inner.offsetWidth;
+        inner.style.animation = '';
+        if (strip && strip.style.opacity !== '1') {
+            strip.style.transition = 'opacity 0.5s ease';
+            strip.style.opacity = '1';
+        }
+        _initTickerIterListener(inner);
+    } else {
+        // SSE 업데이트: 다음 사이클 경계에서 교체 (중간 초기화 방지)
+        _pendingTickerData = data;
+        _initTickerIterListener(inner);
+        if (strip && strip.style.opacity !== '1') {
+            strip.style.transition = 'opacity 0.5s ease';
+            strip.style.opacity = '1';
+        }
     }
 }
 
