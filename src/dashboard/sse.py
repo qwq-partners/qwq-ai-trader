@@ -12,7 +12,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Optional, Set
 
 from aiohttp import web
 from loguru import logger
@@ -31,6 +31,9 @@ class SSEManager:
         self.us_engine = us_engine
         self._clients: Set[web.StreamResponse] = set()
         self._running = False
+        # 지수 전광판 내부 캐시
+        self._indices_cache_data: Optional[List[Dict]] = None
+        self._indices_last_fetch: float = 0
 
     async def handle_stream(self, request: web.Request) -> web.StreamResponse:
         """SSE 스트림 핸들러"""
@@ -184,6 +187,16 @@ class SSEManager:
                                     us_error_logged[event_type] = str(e)
                                     logger.exception(f"[SSE] {event_type} 브로드캐스트 오류")
 
+                # --- 지수 전광판 (KR + US 통합, 10초 주기) ---
+                if now - last_sent.get("market_indices", 0) >= 10:
+                    try:
+                        indices = await self._fetch_market_indices()
+                        if indices:
+                            await self.broadcast("market_indices", indices)
+                            last_sent["market_indices"] = now
+                    except Exception as e:
+                        logger.debug(f"[SSE] market_indices 오류: {e}")
+
                 await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
@@ -191,6 +204,104 @@ class SSEManager:
         finally:
             self._running = False
             logger.info("[SSE] 브로드캐스트 루프 종료")
+
+    async def _fetch_market_indices(self) -> Optional[List[Dict]]:
+        """KOSPI/KOSDAQ 실시간 지수 조회.
+        1차: KIS API (fetch_index_price) — 장중 실시간
+        2차: Yahoo Finance — 폴백 (15분 지연 허용)
+        결과는 kr_api의 /api/market/indices 캐시도 갱신해 HTTP 요청과 동기화.
+        """
+        # 10초 내부 캐시 (네트워크 호출 최소화)
+        now = time.time()
+        if now - self._indices_last_fetch < 10 and self._indices_cache_data:
+            return self._indices_cache_data
+
+        dc = self.data_collector
+        kis_md = getattr(getattr(dc, "bot", None), "kis_market_data", None)
+
+        results: List[Dict] = []
+
+        # ── 1차: KIS 실시간 ──────────────────────────────────────
+        if kis_md:
+            try:
+                for code, label in [("0001", "KOSPI"), ("1001", "KOSDAQ")]:
+                    item = await kis_md.fetch_index_price(code)
+                    if item:
+                        results.append(item)
+            except Exception as e:
+                logger.debug(f"[SSE 지수] KIS 조회 오류: {e}")
+
+        # ── 2차: Yahoo Finance 폴백 (KIS 실패 종목 보완) ─────────
+        kis_labels = {r["label"] for r in results}
+        needed = [
+            ("^KS11",  "KOSPI",  "index_kr"),
+            ("^KQ11",  "KOSDAQ", "index_kr"),
+            ("^GSPC",  "S&P500", "index_us"),
+            ("^IXIC",  "NASDAQ", "index_us"),
+            ("^DJI",   "DOW",    "index_us"),
+        ]
+        yahoo_needed = [t for t in needed if t[1] not in kis_labels]
+
+        if yahoo_needed:
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+                timeout = aiohttp.ClientTimeout(total=6)
+                async with aiohttp.ClientSession(headers=headers, timeout=timeout) as sess:
+                    for sym, lbl, kind in yahoo_needed:
+                        try:
+                            url = (
+                                f"https://query1.finance.yahoo.com/v8/finance/chart/"
+                                f"{sym}?interval=1d&range=5d"
+                            )
+                            async with sess.get(url) as resp:
+                                if resp.status != 200:
+                                    continue
+                                js = await resp.json(content_type=None)
+                                meta = js["chart"]["result"][0]["meta"]
+                                price = meta.get("regularMarketPrice") or 0
+                                raw_closes = (
+                                    js["chart"]["result"][0]
+                                    .get("indicators", {})
+                                    .get("quote", [{}])[0]
+                                    .get("close", [])
+                                )
+                                closes = [c for c in raw_closes if c is not None]
+                                prev = closes[-2] if len(closes) >= 2 else price
+                                chg = price - prev
+                                chg_pct = (chg / prev * 100) if prev else 0
+                                results.append({
+                                    "symbol": sym,
+                                    "label": lbl,
+                                    "kind": kind,
+                                    "price": round(price, 2),
+                                    "change": round(chg, 2),
+                                    "change_pct": round(chg_pct, 2),
+                                    "source": "yahoo",
+                                })
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"[SSE 지수] Yahoo 조회 오류: {e}")
+
+        if not results:
+            return self._indices_cache_data  # 이전 캐시 유지
+
+        # 순서 정렬: KOSPI → KOSDAQ → S&P500 → NASDAQ → DOW → 기타
+        order = ["KOSPI", "KOSDAQ", "S&P500", "NASDAQ", "DOW"]
+        results.sort(key=lambda x: order.index(x["label"]) if x["label"] in order else 99)
+
+        self._indices_cache_data = results
+        self._indices_last_fetch = now
+
+        # kr_api 공유 캐시 갱신 (HTTP /api/market/indices도 동기화)
+        try:
+            from src.dashboard.kr_api import _indices_cache as _kapi_cache
+            _kapi_cache["data"] = results
+            _kapi_cache["ts"] = now
+        except Exception:
+            pass
+
+        return results
 
     def _collect_us_data(self, event_type: str) -> Any:
         """US 엔진에서 SSE 데이터 수집"""

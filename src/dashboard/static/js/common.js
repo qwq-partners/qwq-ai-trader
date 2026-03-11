@@ -41,7 +41,8 @@ class SSEClient {
 
         // 이벤트 타입별 리스너
         const eventTypes = ['status', 'portfolio', 'positions', 'risk', 'events', 'pending_orders',
-                            'us_status', 'us_portfolio', 'us_positions', 'us_risk'];
+                            'us_status', 'us_portfolio', 'us_positions', 'us_risk',
+                            'market_indices'];
         eventTypes.forEach(type => {
             this.eventSource.addEventListener(type, (e) => {
                 try {
@@ -252,26 +253,28 @@ function _buildTickerHTML(indices) {
     return items + items;
 }
 
+function _applyTickerData(data) {
+    if (!data || !data.length) return;
+    const inner = document.getElementById('nav-ticker-inner');
+    if (!inner) return;
+    inner.innerHTML = _buildTickerHTML(data);
+    inner.style.animation = 'none';
+    void inner.offsetWidth;
+    inner.style.animation = '';
+    const strip = inner.closest('.ticker-strip');
+    if (strip && strip.style.opacity !== '1') {
+        strip.style.transition = 'opacity 0.5s ease';
+        strip.style.opacity = '1';
+    }
+}
+
 async function fetchNavIndices() {
     try {
         const data = await fetch('/api/market/indices').then(r => r.json());
-        if (data && data.length > 0) {
-            const inner = document.getElementById('nav-ticker-inner');
-            if (inner) {
-                inner.innerHTML = _buildTickerHTML(data);
-                inner.style.animation = 'none';
-                void inner.offsetWidth;
-                inner.style.animation = '';
-                // 데이터 로드 완료 시 전광판 fade-in
-                const strip = inner.closest('.ticker-strip');
-                if (strip) {
-                    strip.style.transition = 'opacity 0.5s ease';
-                    strip.style.opacity = '1';
-                }
-            }
-        }
+        _applyTickerData(data);
     } catch(e) {}
-    setTimeout(fetchNavIndices, 30 * 1000);
+    // SSE가 살아있으면 폴링 주기 늘림 (백업용 60초)
+    setTimeout(fetchNavIndices, 60 * 1000);
 }
 
 // ============================================================
@@ -297,11 +300,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sbUptime) sbUptime.textContent = formatDuration(data.uptime_seconds);
     });
 
+    // ★ 지수 전광판 실시간 업데이트 (SSE push, 10초 주기)
+    sse.on('market_indices', (data) => {
+        _applyTickerData(data);
+    });
+
     // 전광판 초기화 (모든 페이지 공통) — 데이터 로드 전까지 숨김
+    // SSE 연결 전 초기 데이터는 HTTP 폴링으로 즉시 로드 (1초 후)
     const _tickerInner = document.getElementById('nav-ticker-inner');
     if (_tickerInner) {
         const _strip = _tickerInner.closest('.ticker-strip');
         if (_strip) _strip.style.opacity = '0';
-        setTimeout(fetchNavIndices, 1000);
+        setTimeout(fetchNavIndices, 1000);  // 최초 1회 즉시 로드
     }
 });

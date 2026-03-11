@@ -646,6 +646,64 @@ class KISMarketData:
             logger.warning(f"[KIS] 야간선물 시세 조회 오류: {e}")
             return None
 
+    # ============================================================
+    # 7. KOSPI / KOSDAQ 실시간 지수 현재가 (FHKUP03500100)
+    # ============================================================
+
+    async def fetch_index_price(self, index_code: str = "0001") -> Optional[Dict]:
+        """KOSPI(0001) / KOSDAQ(1001) 현재 지수 조회.
+
+        KIS 업종지수 현재가 API (FHKUP03500100).
+        Returns:
+            {"price": float, "change": float, "change_pct": float, "label": str}
+            or None on failure
+        """
+        label_map = {"0001": "KOSPI", "1001": "KOSDAQ"}
+        label = label_map.get(index_code, index_code)
+        cache_key = f"index_price_{index_code}"
+        if self._is_cache_valid(cache_key, 10):
+            return self._cache[cache_key]
+
+        try:
+            session = await self._get_session()
+            headers = await self._get_headers("FHKUP03500100")
+            url = (
+                f"{self._token_manager.base_url}"
+                "/uapi/domestic-stock/v1/quotations/inquire-index-price"
+            )
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_INPUT_ISCD": index_code,
+            }
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[KIS 지수] {label} HTTP {resp.status}")
+                    return None
+                data = await resp.json()
+                if data.get("rt_cd") != "0":
+                    logger.debug(f"[KIS 지수] {label} API 오류: {data.get('msg1')}")
+                    return None
+                out = data.get("output", {}) or {}
+                price = float(out.get("bstp_nmix_prpr", 0) or 0)
+                change = float(out.get("bstp_nmix_prdy_vrss", 0) or 0)
+                change_pct = float(out.get("bstp_nmix_prdy_ctrt", 0) or 0)
+                if price <= 0:
+                    return None
+                result = {
+                    "symbol": f"^{'KS11' if index_code == '0001' else 'KQ11'}",
+                    "label": label,
+                    "kind": "index_kr",
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "change_pct": round(change_pct, 2),
+                    "source": "kis",
+                }
+                self._set_cache(cache_key, result)
+                return result
+        except Exception as e:
+            logger.debug(f"[KIS 지수] {label} 조회 오류: {e}")
+            return None
+
     def clear_cache(self):
         """캐시 초기화"""
         self._cache.clear()

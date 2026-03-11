@@ -116,6 +116,12 @@ class PositionExitState:
     # 신고가 실패 무효화 (추세 소멸 감지)
     last_new_high_date: Optional[date] = None
     stale_high_days: Optional[int] = None           # None이면 글로벌 ExitConfig 사용
+    # 분할 익절 신호 발행됨, fill 대기 중 (재시작 시 None → current_stage 유지, 재발행 방지)
+    # 파일에 저장 안 함: 재시작 시 None → current_stage=NONE이면 자동 재발행
+    pending_stage: Optional[ExitStage] = None
+    # 포지션 최초 진입 수량 (부분 매도 후에도 유지 — 재시작 정합성 검증용)
+    # 파일의 initial_qty에서 복원, 없으면 original_quantity로 초기화
+    initial_quantity: int = 0
 
 
 class ExitManager:
@@ -180,14 +186,32 @@ class ExitManager:
         return {}
 
     def _persist_states(self) -> None:
-        """현재 모든 포지션의 stage/highest_price를 파일에 저장."""
+        """현재 모든 포지션의 stage/highest_price를 파일에 저장.
+        
+        initial_qty: 포지션 최초 진입 수량 (부분 매도 후에도 유지).
+          재시작 시 KIS 실제 잔고와 비교해 익절 미실행 여부를 검증하는 데 사용.
+        """
         data = {}
         for sym, state in self._states.items():
-            data[sym] = {
+            entry: Dict = {
                 "stage": state.current_stage.value,
                 "highest_price": float(state.highest_price),
                 "breakeven_activated": state.breakeven_activated,
             }
+            # ★ initial_qty: 최초 진입 수량 (부분 매도 후 덮어쓰기 방지)
+            # - stage=NONE(신규/무매도): 현재 수량으로 갱신
+            # - stage>NONE(익절 진행 중): 파일의 기존 initial_qty 보존
+            #   (재시작 시 post-sell qty로 덮어쓰면 정합성 검증이 false positive 유발)
+            if state.current_stage == ExitStage.NONE:
+                entry["initial_qty"] = (
+                    int(state.initial_quantity) if state.initial_quantity
+                    else int(state.original_quantity)
+                )
+            else:
+                existing = self._persisted.get(sym, {}).get("initial_qty")
+                if existing:
+                    entry["initial_qty"] = existing
+            data[sym] = entry
         try:
             with open(self._stage_file, "w") as f:
                 json.dump(data, f)
@@ -275,11 +299,13 @@ class ExitManager:
         current_price = position.current_price or position.avg_price
         persisted = self._persisted.get(position.symbol)
 
+        saved_initial_qty: int = 0
         if persisted:
             try:
                 initial_stage = ExitStage(persisted["stage"])
                 saved_high = Decimal(str(persisted.get("highest_price", float(current_price))))
                 breakeven_was = bool(persisted.get("breakeven_activated", False))
+                saved_initial_qty = int(persisted.get("initial_qty", 0))
 
                 # 재시작 시 고점 보정: 저장된 고점이 현재가보다 5% 초과 높으면
                 # 즉시 트레일링 발동 위험 → 현재가로 리셋
@@ -292,6 +318,27 @@ class ExitManager:
                             f"(괴리 {gap_pct:.1f}% > 5%, 즉시 트레일링 방지)"
                         )
                         saved_high = current_price
+
+                # ★ 재시작 정합성 검증 (initial_qty가 파일에 있을 때만)
+                # stage=FIRST/SECOND/THIRD인데 KIS 실제 잔고가 1차 익절 이후 예상 잔고보다 많으면
+                # = 해당 stage의 매도가 실행되지 않은 것 → NONE으로 리셋해 재발행
+                if (
+                    saved_initial_qty > 0
+                    and initial_stage not in (ExitStage.NONE, ExitStage.TRAILING)
+                ):
+                    eff_first_ratio = first_exit_ratio or self.config.first_exit_ratio
+                    expected_after_first = saved_initial_qty - max(
+                        1, int(saved_initial_qty * eff_first_ratio)
+                    )
+                    if position.quantity > expected_after_first:
+                        logger.warning(
+                            f"[ExitManager] {position.symbol} 재시작 정합성 실패: "
+                            f"KIS qty={position.quantity} > expected_after_1st={expected_after_first} "
+                            f"(initial_qty={saved_initial_qty}, stage={initial_stage.value}) "
+                            f"→ NONE 리셋 (익절 미실행 감지, 재발행 예정)"
+                        )
+                        initial_stage = ExitStage.NONE
+                        breakeven_was = False
 
                 logger.info(
                     f"[ExitManager] {position.symbol} stage 파일 복원: "
@@ -308,6 +355,9 @@ class ExitManager:
             initial_stage = ExitStage.NONE
             # 주의: persisted 없는 신규 포지션은 항상 NONE에서 시작
             # stage 추정 점프는 실제 매도 없이 stage만 올려 익절 누락 유발
+
+        # initial_quantity: 파일에 저장된 최초 진입 수량 우선, 없으면 현재 KIS 잔고
+        initial_qty_for_state = saved_initial_qty if saved_initial_qty > 0 else position.quantity
 
         self._states[position.symbol] = PositionExitState(
             symbol=position.symbol,
@@ -329,6 +379,7 @@ class ExitManager:
             dynamic_stop_pct=dynamic_stop,
             last_new_high_date=date.today(),
             stale_high_days=stale_high_days,
+            initial_quantity=initial_qty_for_state,
         )
 
         # 보유기간 체크용 진입 시간 기록
@@ -519,13 +570,16 @@ class ExitManager:
         third_ratio = state.third_exit_ratio if state.third_exit_ratio is not None else self.config.third_exit_ratio
 
         # 1차 익절
-        if state.current_stage == ExitStage.NONE:
+        # pending_stage가 이미 있으면 fill 대기 중 → 중복 신호 방지
+        if state.current_stage == ExitStage.NONE and state.pending_stage is None:
             if net_pnl_pct >= first_pct:
                 # remaining_quantity 기준 (sync 복원 시 original과 괴리 방지)
                 exit_qty = max(1, int(state.remaining_quantity * first_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
-                state.current_stage = ExitStage.FIRST
+                # ★ stage는 fill 확인 후(on_fill)에만 advance
+                # 재시작 시 pending_stage=None → current_stage=NONE → 자동 재발행 보장
+                state.pending_stage = ExitStage.FIRST
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -533,12 +587,12 @@ class ExitManager:
                 )
 
         # 2차 익절
-        elif state.current_stage == ExitStage.FIRST:
+        elif state.current_stage == ExitStage.FIRST and state.pending_stage is None:
             if net_pnl_pct >= second_pct:
                 exit_qty = max(1, int(state.remaining_quantity * second_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
-                state.current_stage = ExitStage.SECOND
+                state.pending_stage = ExitStage.SECOND
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -546,12 +600,12 @@ class ExitManager:
                 )
 
         # 3차 익절
-        elif state.current_stage == ExitStage.SECOND:
+        elif state.current_stage == ExitStage.SECOND and state.pending_stage is None:
             if net_pnl_pct >= third_pct:
                 exit_qty = max(1, int(state.remaining_quantity * third_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
-                state.current_stage = ExitStage.THIRD
+                state.pending_stage = ExitStage.THIRD
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -592,13 +646,29 @@ class ExitManager:
         return (action, quantity, reason)
 
     def rollback_stage(self, symbol: str) -> bool:
-        """주문 실패 시 stage를 이전 단계로 되돌림"""
+        """주문 실패/타임아웃 시 stage 롤백
+        - pending_stage 있으면: pending만 클리어 (current_stage는 그대로 — fill 전이므로 정상)
+        - pending_stage 없으면: current_stage를 이전 단계로 되돌림 (레거시 호환)
+        """
         if symbol not in self._states:
             return False
 
         state = self._states[symbol]
-        prev_stage = state.current_stage
 
+        # ★ pending_stage가 있으면 fill 전이므로 pending만 클리어
+        # current_stage는 변경하지 않음 (이미 NONE/FIRST/... 그대로)
+        if state.pending_stage is not None:
+            prev_pending = state.pending_stage
+            state.pending_stage = None
+            self._persist_states()
+            logger.warning(
+                f"[ExitManager] {symbol} pending_stage 클리어: {prev_pending.value} "
+                f"(주문 실패/타임아웃, fill 미수신 → current_stage={state.current_stage.value} 유지)"
+            )
+            return True
+
+        # pending 없는 레거시 케이스: current_stage 한 단계 롤백
+        prev_stage = state.current_stage
         stage_order = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
                        ExitStage.THIRD, ExitStage.TRAILING]
         try:
@@ -635,6 +705,17 @@ class ExitManager:
         )
         state.total_realized_pnl += pnl
         state.remaining_quantity -= sold_quantity
+
+        # ★ fill 확인 후 pending_stage → current_stage 승격
+        # 이 시점이 stage가 실제로 advance되는 유일한 지점
+        if state.pending_stage is not None:
+            prev_stage = state.current_stage
+            state.current_stage = state.pending_stage
+            state.pending_stage = None
+            logger.info(
+                f"[ExitManager] {symbol} fill 확인 → stage 승격: "
+                f"{prev_stage.value} → {state.current_stage.value}"
+            )
 
         logger.info(
             f"[ExitManager] {symbol} 청산: {sold_quantity}주 @ {fill_price:,.0f}, "

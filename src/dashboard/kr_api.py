@@ -411,7 +411,7 @@ class KRAPIHandler:
         - KR 개별종목: KIS API 실시간 (프리/넥스트장 포함), 실패 시 Yahoo 폴백
         """
         global _indices_cache
-        if _indices_cache["data"] and (time.time() - _indices_cache["ts"]) < 30:
+        if _indices_cache["data"] and (time.time() - _indices_cache["ts"]) < 10:
             return web.json_response(_indices_cache["data"])
 
         from src.utils.session import KRSession
