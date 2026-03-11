@@ -98,7 +98,7 @@ class GapAndGoStrategy(BaseStrategy):
         price = float(current_price)
 
         # 최소 가격 필터 (동전주 제외)
-        if current_price < self.config.min_price:
+        if current_price < Decimal(str(self.config.min_price)):
             return None
 
         prev_close = indicators.get("prev_close", 0)

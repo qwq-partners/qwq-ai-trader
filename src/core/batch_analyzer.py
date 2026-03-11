@@ -792,7 +792,7 @@ class BatchAnalyzer:
                 # ScreenedStock(장중 캐시)에는 RSI(2) 없으므로 여기서 정확하게 계산
                 if pos.strategy == "rsi2_reversal":
                     try:
-                        rsi2_val = await asyncio.get_event_loop().run_in_executor(
+                        rsi2_val = await asyncio.get_running_loop().run_in_executor(
                             None, self._calc_rsi2_from_fdr, symbol
                         )
                         if rsi2_val is not None and rsi2_val > 70:

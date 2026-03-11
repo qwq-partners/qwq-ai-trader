@@ -1680,7 +1680,8 @@ class _USEngineBundle:
             if strategy:
                 alert_lines.append(f"전략: {strategy}")
             alert_lines.append(f"주문번호: {order_no}")
-            asyncio.create_task(send_alert("\n".join(alert_lines)))
+            _tg_task = asyncio.create_task(send_alert("\n".join(alert_lines)))
+            _tg_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         except Exception as e:
             logger.debug(f"[US WS 체결통보] 텔레그램 알림 실패: {e}")
 

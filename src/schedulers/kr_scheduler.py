@@ -761,8 +761,8 @@ JSON:
                         continue
 
                     # 수익 중인 포지션은 LLM 청산 거부 (ExitManager에 위임)
-                    pnl_pct = (current_price - entry_price) / entry_price * 100
-                    if pnl_pct > Decimal("3"):
+                    pnl_pct = float((current_price - entry_price) / entry_price * 100)
+                    if pnl_pct > 3:
                         logger.info(f"[포지션LLM] {symbol} 수익 {pnl_pct:.1f}% → ExitManager 위임")
                         actions_taken.append(f"🟡 {symbol} 수익중({pnl_pct:.1f}%) ExitManager 위임")
                         continue
@@ -831,7 +831,7 @@ JSON:
                 end_date = date.today().strftime("%Y%m%d")
                 start_date = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
 
-                top_gainers = await asyncio.get_event_loop().run_in_executor(
+                top_gainers = await asyncio.get_running_loop().run_in_executor(
                     None,
                     lambda: pykrx_stock.get_market_price_change(start_date, end_date)
                 )
@@ -1879,7 +1879,7 @@ JSON:
                             # ATR의 70% 수준까지 허용 (최소 config값, 최대 8%)
                             # ATR 없으면 config 기본값 사용
                             def _ib_get_cap(s) -> float:
-                                if s.atr_pct and s.atr_pct > 0:
+                                if s.atr_pct is not None and s.atr_pct > 0:
                                     return min(s.atr_pct * 0.7, 8.0)
                                 return _ib_max_change
 
@@ -1987,7 +1987,9 @@ JSON:
                                     if _ib_stock.score >= 90:
                                         _ib_should_verify = True
                                     elif _ib_stock.score >= 75:
-                                        _ib_vol_ratio = getattr(_ib_stock, 'volume_ratio', 0) or 0
+                                        _ib_vol_ratio = getattr(_ib_stock, 'volume_ratio', 0)
+                                        if _ib_vol_ratio is None:
+                                            _ib_vol_ratio = 0
                                         _ib_has_foreign = any(
                                             "외국인" in r or "외인" in r
                                             for r in (_ib_stock.reasons or [])
@@ -2171,7 +2173,7 @@ JSON:
                                                     continue
 
                                                 # 손절/목표가 (ATR 기반)
-                                                _ssl_atr = _ssl_stk.atr_pct or 4.0
+                                                _ssl_atr = _ssl_stk.atr_pct if _ssl_stk.atr_pct is not None else 4.0
                                                 _ssl_stp = min(max(_ssl_atr * 1.5, 2.0), 8.0)
                                                 _ssl_tgt = min(max(_ssl_stp * 2.0, 4.0), 12.0)
 
@@ -3113,7 +3115,7 @@ JSON:
                             for symbol in symbols_to_refresh:
                                 try:
                                     daily_prices = await bot.broker.get_daily_prices(symbol, days=60)
-                                    if daily_prices and len(daily_prices) > 0:
+                                    if daily_prices is not None and len(daily_prices) > 0:
                                         success_count += 1
                                         logger.debug(f"[일봉갱신] {symbol}: {len(daily_prices)}일 갱신 완료")
                                     else:

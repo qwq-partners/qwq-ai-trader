@@ -2,7 +2,7 @@
 AI Trading Bot v2 - 전략 진화기 (Strategy Evolver)
 
 규칙 기반 자동 튜닝 + LLM 보조 분석.
-한 번에 1개 파라미터만 변경, 3영업일+5건 평가, 즉시 롤백.
+한 번에 1개 파라미터만 변경, 5영업일+10건 평가, 즉시 롤백.
 """
 
 import json
@@ -165,7 +165,7 @@ class StrategyEvolver:
     원칙:
     1. 규칙 기반 우선 (LLM 없이 독립 작동)
     2. 한 번에 1개만 변경
-    3. 3영업일 + 5건 최소 거래로 평가
+    3. 5영업일 + 10건 최소 거래로 평가
     4. 악화 시 즉시 롤백
 
     충돌 방지 (daily_bias / llm_regime_today):
@@ -404,20 +404,20 @@ class StrategyEvolver:
         today = date.today()
         trading_days = _count_trading_days(applied, today)
 
-        # 최소 3영업일 경과 필요
-        if trading_days < 3:
-            logger.debug(f"[진화 평가] 경과 {trading_days}영업일 < 3일, 대기")
+        # 최소 5영업일 경과 필요
+        if trading_days < 5:
+            logger.debug(f"[진화 평가] 경과 {trading_days}영업일 < 5일, 대기")
             return "wait"
 
-        # 최소 5건 거래 필요 (변경 적용일 이후 거래만 필터링)
+        # 최소 10건 거래 필요 (변경 적용일 이후 거래만 필터링)
         recent = self.journal.get_closed_trades(days=trading_days + 2)  # 약간 여유
         recent = [t for t in recent
                   if t.exit_time and t.exit_time.date() > applied]
-        if len(recent) < 5:
-            if trading_days > 7:  # 7영업일 넘었는데도 5건 미달 → 데이터 부족으로 유지
-                logger.info(f"[진화 평가] {trading_days}영업일 경과, {len(recent)}건 < 5건 → 데이터 부족으로 유지")
+        if len(recent) < 10:
+            if trading_days > 10:  # 10영업일 넘었는데도 10건 미달 → 데이터 부족으로 유지
+                logger.info(f"[진화 평가] {trading_days}영업일 경과, {len(recent)}건 < 10건 → 데이터 부족으로 유지")
                 return "keep"
-            logger.debug(f"[진화 평가] {len(recent)}건 < 5건, 대기")
+            logger.debug(f"[진화 평가] {len(recent)}건 < 10건, 대기")
             return "wait"
 
         # 비교 지표

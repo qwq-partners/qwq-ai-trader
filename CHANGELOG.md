@@ -1,5 +1,68 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-11 — 전체 코드 리뷰 + 전략 리뷰 일괄 수정 (22개 파일)
+
+### P0 코드 수정 (치명적)
+
+**`src/strategies/exit_manager.py`** — `or` 금지 패턴 전면 교체 (16곳)
+- `first/second/third_exit_pct or config` → `is not None` 패턴 (분할 익절 0.0 무시 방지)
+- `dynamic_stop_pct or stop_loss_pct or config` → 3단 `is not None` 체인 (손절률)
+- `trailing_stop_pct or config` → `is not None` (트레일링)
+- `current_price or avg_price` → `is not None and > 0` (고점 추적 오동작 방지)
+- `atr_pct or 2.0` → `is not None` (ATR 기본값)
+- `initial_quantity` 0 falsy → `is not None` (재시작 정합성)
+- ATR 승수 `* 1.5` 하드코딩 → `ExitConfig.atr_trailing_multiplier` 필드
+
+**`src/risk/manager.py`** — 손절/익절 0.0 falsy 방지
+- `if position.stop_loss and ...` → `is not None and ...` (3곳)
+- `can_open_position()` 일일 손실: `daily_pnl` → `effective_daily_pnl` (미실현 포함)
+
+**`src/utils/telegram.py`** — 이벤트 루프 내 `asyncio.run()` 충돌 수정
+- `send_sync/send_alert_sync`: 실행 중 루프 감지 → `create_task()` / `asyncio.run()` 분기
+
+**deprecated `asyncio.get_event_loop()`** → `get_running_loop()` 교체
+- `stock_master.py`, `kr_scheduler.py`, `batch_analyzer.py`
+
+**`scripts/run_trader.py`** — fire-and-forget Task 예외 소실 방지
+- `create_task()` 반환값 저장 + `add_done_callback()`
+
+**`src/schedulers/kr_scheduler.py`** — Decimal×float 혼합 방지
+- `pnl_pct` 계산에 `float()` 명시 변환
+
+### P1 코드 수정 (중요)
+
+- **`engine.py`**: `on_market_data/on_theme` 반환값 `None` → `[]`, `or 0` 패턴 5곳 수정
+- **`us_scheduler.py`**: bare `except Exception: pass` → 최소 로깅 (10곳), `or` 패턴 6곳
+- **`kr_scheduler.py`**: `or` 금지 패턴 4곳 수정
+- **`llm.py`**: `model or config` → `is not None` (빈 문자열 보호)
+- **`data_collector.py`**: pykrx 최상단 import → lazy import
+- **`us_screener.py`**: `scan_date: date = None` → `Optional[date]`
+- **`swing_screener.py`**: `if ma200 and close` 금지 패턴 4곳 수정
+
+### 전략 파라미터 조정
+
+| 항목 | 변경 전 | 변경 후 | 파일 |
+|------|--------|--------|------|
+| KR 테마 max_change_pct | 12% | 8% | `theme_chasing.py` |
+| US 모멘텀 min_breakout_pct | 0.3% | 1.0% | `default.yml` |
+| US base_position_pct | 40% | 25% | `default.yml` |
+| US max_position_pct | 50% | 35% | `default.yml` |
+| KR max_positions_per_sector | 3 | 2 | `default.yml` |
+| ranging 레짐 stop_loss | 3.0% | 4.0% | `exit_manager.py` |
+| ranging 레짐 trailing_stop | 2.0% | 2.5% | `exit_manager.py` |
+| 진화 최소 거래 수 | 5건 | 10건 | `strategy_evolver.py` |
+| 진화 평가 기간 | 3일 | 5일 | `strategy_evolver.py` |
+
+### 전략 코드 수정
+
+- **`us/momentum.py`**: RS Ranking 감점을 min_score 체크 이전으로 이동
+- **`kr/sepa_trend.py`**: 적자(PER<0) -5점, 고PBR(>10) -3점 감점 추가
+- **`kr/gap_and_go.py`**: Decimal vs int 비교 → `Decimal(str(...))` 명시
+- **`kr/momentum.py`**: float vs int 비교 → `float(...)` 명시
+- **`kr/sepa_trend.py`, `kr/rsi2_reversal.py`**: `or 0` 금지 패턴 8곳 수정
+
+---
+
 ## 2026-03-11 — 대시보드 전광판 US 지수 표시 수정
 
 **`src/dashboard/sse.py`**

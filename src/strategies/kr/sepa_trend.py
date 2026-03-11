@@ -198,7 +198,7 @@ class SEPATrendStrategy(BaseStrategy):
 
         # 2. 수급 LCI z-score 기반 (20점)
         # supply_data_age: 0=당일, 1=전일(T-1), 2=캐시(T-2+)
-        supply_age = ind.get("supply_data_age", 0) or 0
+        supply_age = ind.get("supply_data_age", 0) if ind.get("supply_data_age") is not None else 0
         lci_discount = max(0.7, 1.0 - supply_age * 0.15)  # T-1: 85%, T-2: 70%
 
         lci = ind.get("lci")
@@ -212,8 +212,8 @@ class SEPATrendStrategy(BaseStrategy):
             elif lci > 0:
                 score += int(5 * lci_discount)
         else:
-            foreign_net = ind.get("foreign_net_buy", 0) or 0
-            inst_net = ind.get("inst_net_buy", 0) or 0
+            foreign_net = ind.get("foreign_net_buy") if ind.get("foreign_net_buy") is not None else 0
+            inst_net = ind.get("inst_net_buy") if ind.get("inst_net_buy") is not None else 0
             if foreign_net > 0 or inst_net > 0:
                 supply_score = (10 if foreign_net > 0 else 0) + (10 if inst_net > 0 else 0)
                 score += int(min(supply_score, 20) * lci_discount)
@@ -230,10 +230,18 @@ class SEPATrendStrategy(BaseStrategy):
         elif per is not None and 0 < per < 30:
             score += 1
 
+        # 적자 기업 감점: PER < 0 → -5점
+        if per is not None and per < 0:
+            score -= 5
+
         if pbr is not None and 0 < pbr < 3:
             score += 2
         elif pbr is not None and 0 < pbr < 5:
             score += 1
+
+        # 고평가 감점: PBR > 10 → -3점
+        if pbr is not None and pbr > 10:
+            score -= 3
 
         if roe is not None and roe > 10:
             score += 6
@@ -241,8 +249,13 @@ class SEPATrendStrategy(BaseStrategy):
             score += 3
 
         # 4. 거래량 모멘텀 (10점)
-        vol_ratio = (ind.get("vol_ratio") or ind.get("volume_ratio") or
-                     ind.get("vol_inrt") or 0)
+        vol_ratio = ind.get("vol_ratio")
+        if vol_ratio is None:
+            vol_ratio = ind.get("volume_ratio")
+        if vol_ratio is None:
+            vol_ratio = ind.get("vol_inrt")
+        if vol_ratio is None:
+            vol_ratio = 0
         try:
             vol_ratio = float(vol_ratio)
         except (TypeError, ValueError):
@@ -259,7 +272,7 @@ class SEPATrendStrategy(BaseStrategy):
         if sm_score is not None:
             score += max(0.0, min(10.0, float(sm_score)))
         else:
-            change_20d = ind.get("change_20d", 0) or 0
+            change_20d = ind.get("change_20d") if ind.get("change_20d") is not None else 0
             try:
                 change_20d = float(change_20d)
             except (TypeError, ValueError):
@@ -274,7 +287,7 @@ class SEPATrendStrategy(BaseStrategy):
                 score += 2
 
         # 전략적 오버레이 보너스 (VCP / 전문가패널 / 수급추세) — swing_screener에서 계산
-        overlay = candidate.indicators.get("overlay_bonus", 0.0) or 0.0
+        overlay = candidate.indicators.get("overlay_bonus") if candidate.indicators.get("overlay_bonus") is not None else 0.0
         score += overlay
 
         return min(score, 100)

@@ -498,7 +498,7 @@ class SwingScreener:
 
             ma200 = ind.get("ma200")
             close = ind.get("close", 0)
-            if ma200 and close and close > ma200:
+            if ma200 is not None and ma200 > 0 and close is not None and close > ma200:
                 score += 10
 
         elif strategy == "sepa_trend":
@@ -508,7 +508,7 @@ class SwingScreener:
             # 52주 고점 근접
             high_52w = ind.get("high_52w", 0)
             close = ind.get("close", 0)
-            if high_52w and close:
+            if high_52w is not None and high_52w > 0 and close is not None and close > 0:
                 from_high = (close - high_52w) / high_52w * 100
                 if from_high >= -10:
                     score += 10
@@ -708,7 +708,8 @@ class SwingScreener:
                     sym = str(ticker).zfill(6)
                     if sym not in result:
                         result[sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
-                    net_qty = int(row.get("순매수거래량", 0) or 0)
+                    _raw_net_qty = row.get("순매수거래량", 0)
+                    net_qty = int(_raw_net_qty) if _raw_net_qty is not None else 0
                     result[sym][field] += net_qty
             except Exception as e:
                 logger.debug(f"[스윙스크리너] pykrx {market} {investor} 조회 실패: {e}")
@@ -725,8 +726,8 @@ class SwingScreener:
         if not candidates:
             return
 
-        all_foreign = [c.indicators.get("foreign_net_buy", 0) or 0 for c in candidates]
-        all_inst = [c.indicators.get("inst_net_buy", 0) or 0 for c in candidates]
+        all_foreign = [c.indicators.get("foreign_net_buy") if c.indicators.get("foreign_net_buy") is not None else 0 for c in candidates]
+        all_inst = [c.indicators.get("inst_net_buy") if c.indicators.get("inst_net_buy") is not None else 0 for c in candidates]
 
         def zscore_list(values: List[float]) -> List[float]:
             n = len(values)

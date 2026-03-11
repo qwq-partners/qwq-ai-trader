@@ -15,9 +15,12 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+# pykrx: lazy import (동기 블로킹 방지)
+# 실제 사용하는 함수 내부에서 import
+PYKRX_AVAILABLE = True
 try:
-    from pykrx import stock as pykrx_stock
-    PYKRX_AVAILABLE = True
+    import importlib
+    importlib.import_module("pykrx")
 except ImportError:
     PYKRX_AVAILABLE = False
 
@@ -249,6 +252,8 @@ class DashboardDataCollector:
                 # 날짜를 명시해야 장 마감 후에도 정상 조회됨
                 from datetime import date as _date
                 today_str = _date.today().strftime("%Y%m%d")
+
+                from pykrx import stock as pykrx_stock
 
                 for market in ["KOSPI", "KOSDAQ"]:
                     try:

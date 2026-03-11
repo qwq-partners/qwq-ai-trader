@@ -56,7 +56,7 @@ class ScreenResult:
 class ScreenerResult:
     """Screener output"""
     results: List[ScreenResult] = field(default_factory=list)
-    scan_date: date = None
+    scan_date: Optional[date] = None
     total_scanned: int = 0
 
     @property

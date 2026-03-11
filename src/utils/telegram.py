@@ -139,7 +139,14 @@ class TelegramNotifier:
 
     def send_sync(self, text: str, **kwargs) -> bool:
         """동기 방식 메시지 발송"""
-        return asyncio.run(self.send_message(text, **kwargs))
+        try:
+            loop = asyncio.get_running_loop()
+            # 이미 루프 실행 중 — fire-and-forget task
+            loop.create_task(self.send_message(text, **kwargs))
+            return True
+        except RuntimeError:
+            # 루프 없음 — 새로 실행
+            return asyncio.run(self.send_message(text, **kwargs))
 
     async def send_alert(
         self,
@@ -441,7 +448,14 @@ class TelegramNotifier:
 
     def send_alert_sync(self, text: str, **kwargs) -> bool:
         """동기 방식 알림 발송"""
-        return asyncio.run(self.send_alert(text, **kwargs))
+        try:
+            loop = asyncio.get_running_loop()
+            # 이미 루프 실행 중 — fire-and-forget task
+            loop.create_task(self.send_alert(text, **kwargs))
+            return True
+        except RuntimeError:
+            # 루프 없음 — 새로 실행
+            return asyncio.run(self.send_alert(text, **kwargs))
 
     async def send_report(
         self,

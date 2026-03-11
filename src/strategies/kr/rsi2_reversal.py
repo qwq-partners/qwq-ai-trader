@@ -213,8 +213,13 @@ class RSI2ReversalStrategy(BaseStrategy):
             score += 5
 
         # 7. 거래대금 증가 (5점) — 수급 유입 추가 확인
-        vol_ratio = (ind.get("vol_ratio") or ind.get("volume_ratio") or
-                     ind.get("vol_inrt") or 0)
+        vol_ratio = ind.get("vol_ratio")
+        if vol_ratio is None:
+            vol_ratio = ind.get("volume_ratio")
+        if vol_ratio is None:
+            vol_ratio = ind.get("vol_inrt")
+        if vol_ratio is None:
+            vol_ratio = 0
         try:
             vol_ratio = float(vol_ratio)
         except (TypeError, ValueError):
@@ -225,7 +230,7 @@ class RSI2ReversalStrategy(BaseStrategy):
             score += 3
 
         # 전략적 오버레이 보너스 (VCP / 전문가패널 / 수급추세) — swing_screener에서 계산
-        overlay = candidate.indicators.get("overlay_bonus", 0.0) or 0.0
+        overlay = candidate.indicators.get("overlay_bonus") if candidate.indicators.get("overlay_bonus") is not None else 0.0
         score += overlay
 
         return min(score, 100)

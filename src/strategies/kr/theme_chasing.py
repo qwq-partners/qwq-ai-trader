@@ -43,7 +43,7 @@ class ThemeChasingConfig(StrategyConfig):
 
     # 종목 조건
     min_change_pct: float = 2.0       # 최소 등락률 (%)
-    max_change_pct: float = 12.0      # 최대 등락률 (%)
+    max_change_pct: float = 8.0       # 최대 등락률 (%)
     min_volume_ratio: float = 1.8     # 최소 거래량 비율
 
     # 진입 조건

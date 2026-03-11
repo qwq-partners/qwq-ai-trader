@@ -118,12 +118,7 @@ class MomentumBreakoutStrategy(USBaseStrategy):
             if today_open > prev_close_val and close > prev_high:
                 score += 5  # ORB 돌파 보너스
 
-        score = max(0, min(100, score))
-
-        if score < self.min_score:
-            return None
-
-        # RS Ranking 보너스 (최대 +10)
+        # RS Ranking 보너스/감점 (최대 +10, 감점 -5) — min_score 체크 전 적용
         rs_val = indicators.get('rs_rating')
         if rs_val is not None:
             if rs_val >= 80:
@@ -134,6 +129,9 @@ class MomentumBreakoutStrategy(USBaseStrategy):
                 score -= 5
 
         score = max(0, min(100, score))
+
+        if score < self.min_score:
+            return None
 
         # Stop / Target
         stop = close * (1 - self.stop_loss_pct / 100)

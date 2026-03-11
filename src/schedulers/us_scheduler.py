@@ -145,8 +145,8 @@ class USScheduler:
                 if isinstance(raw, dict) and "highest_prices" in raw:
                     return raw.get("highest_prices", {})
                 return raw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[US 캐시] highest_prices 로드 실패: {e}")
         return {}
 
     def _load_exit_stages(self) -> dict:
@@ -157,8 +157,8 @@ class USScheduler:
                 raw = json.loads(path.read_text())
                 if isinstance(raw, dict) and "exit_stages" in raw:
                     return raw.get("exit_stages", {})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[US 캐시] exit_stages 로드 실패: {e}")
         return {}
 
     def _load_cached_metadata(self) -> tuple:
@@ -172,8 +172,8 @@ class USScheduler:
                 if isinstance(raw, dict):
                     entry_times = raw.get("entry_times", {})
                     strategies = raw.get("strategies", {})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[US 캐시] metadata 로드 실패: {e}")
         return entry_times, strategies
 
     def _save_highest_prices(self):
@@ -237,7 +237,7 @@ class USScheduler:
                     continue
 
                 trade_id = row['id']
-                entry_price = float(row['entry_price'] or 0)
+                entry_price = float(row['entry_price'] if row['entry_price'] is not None else 0)
 
                 # KIS 현재가 조회 시도 (없으면 entry_price 사용)
                 exit_price = entry_price
@@ -245,10 +245,10 @@ class USScheduler:
                     q = await eng.broker.get_quote(sym)
                     if q and q.get("price", 0) > 0:
                         exit_price = float(q["price"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[US 동기화] {sym} 현재가 조회 실패: {e}")
 
-                qty = row['entry_quantity'] or 1
+                qty = row['entry_quantity'] if row['entry_quantity'] is not None else 1
                 pnl_est = round((exit_price - entry_price) * qty, 2)
                 pnl_pct_est = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
@@ -375,8 +375,8 @@ class USScheduler:
                 if not new_data.empty:
                     eng.data_store.update(symbol, new_data)
                     return eng.data_store.load(symbol)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[US 히스토리] {symbol} 증분 갱신 실패: {e}")
 
             return cached
 
@@ -411,7 +411,8 @@ class USScheduler:
             indicators = compute_indicators(history)
             eng._indicator_cache[symbol] = indicators
             return indicators.get("atr")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[US ATR] {symbol} 인디케이터 계산 실패: {e}")
             return None
 
     async def _get_exchange(self, symbol: str) -> str:
@@ -427,7 +428,8 @@ class USScheduler:
             sector = info.get("sector", "") or ""
             if sector:
                 eng._sector_cache[symbol] = sector
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[US 거래소] {symbol} 조회 실패: {e}")
             exchange = eng._default_exchange
 
         eng._exchange_cache[symbol] = exchange
@@ -645,7 +647,9 @@ class USScheduler:
             candidates = candidates[:eng._max_screen_symbols]
 
         # ── 동적 max_price (가용 현금 × max_position_pct%) ─────────────
-        uni_cfg = eng.config_raw.get("universe") or {}
+        uni_cfg = eng.config_raw.get("universe")
+        if uni_cfg is None:
+            uni_cfg = {}
         uni_max_price = float(uni_cfg.get("max_price", 0))
         risk_cfg = eng.risk_manager.config
         max_pos_pct = getattr(risk_cfg, 'max_position_pct', 25.0)
@@ -686,8 +690,8 @@ class USScheduler:
                 # 인디케이터 사전 계산 → 캐시
                 try:
                     eng._indicator_cache[symbol] = compute_indicators(history)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[US 스크리닝] {symbol} 인디케이터 캐시 실패: {e}")
 
                 # ── 전략 선택 필터 ──────────────────────────────────
                 for strategy in eng.strategies:
@@ -1417,8 +1421,8 @@ class USScheduler:
                 if symbol in et_cache:
                     try:
                         restored_et = datetime.fromisoformat(et_cache[symbol])
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[US 동기화] {symbol} entry_time 파싱 실패: {e}")
                 if not restored_et:
                     restored_et = datetime.now()
                 eng.portfolio.positions[symbol] = Position(
@@ -1433,7 +1437,9 @@ class USScheduler:
                     trade_id=sync_trade_id,
                 )
                 # 전략 복원 (메모리 캐시 → 파일 캐시)
-                restored_strat = eng._symbol_strategy.get(symbol) or strat_cache.get(symbol)
+                restored_strat = eng._symbol_strategy.get(symbol)
+                if restored_strat is None:
+                    restored_strat = strat_cache.get(symbol)
                 if restored_strat:
                     pos = eng.portfolio.positions[symbol]
                     pos.strategy = restored_strat
@@ -1649,8 +1655,8 @@ class USScheduler:
                         order_no, h.get("exchange", eng._default_exchange),
                         symbol, h["qty"],
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[US 주문 복원] {order_no} 고아 주문 취소 실패: {e}")
                 continue
 
             # 매도 주문인데 포지션이 아직 원래 수량 → 미체결 매도, 취소 + stage 롤백
@@ -1704,8 +1710,8 @@ class USScheduler:
                     # 미래 시각으로 설정되면 하루 전으로 보정
                     if submitted_at > now_kst:
                         submitted_at = submitted_at - timedelta(days=1)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[US 주문 복원] 주문시각 파싱 실패: {e}")
 
             eng._pending_orders[order_no] = {
                 "symbol": symbol,
@@ -1966,8 +1972,10 @@ class USScheduler:
 
         symbol = pending["symbol"]
         side = pending["side"]
-        filled_price = float(fill_info.get("filled_price", 0) or 0)
-        filled_qty = int(fill_info.get("filled_qty", 0) or 0)
+        _fp = fill_info.get("filled_price", 0)
+        filled_price = float(_fp if _fp is not None else 0)
+        _fq = fill_info.get("filled_qty", 0)
+        filled_qty = int(_fq if _fq is not None else 0)
 
         eng._pending_symbols.discard(symbol)
 
@@ -2032,7 +2040,8 @@ class USScheduler:
 
             # TradeStorage DB + 캐시 기록
             if eng.trade_storage:
-                _score = float(pending.get("signal_score", 0) or 0)
+                _raw_score = pending.get("signal_score", 0)
+                _score = float(_raw_score if _raw_score is not None else 0)
                 _strat = pending.get("strategy", "")
                 # sync 경로가 이미 SYNC_ entry를 만들었으면 score/strategy 업데이트 (중복 방지)
                 _sync_trade_id = None
@@ -2501,7 +2510,9 @@ class USScheduler:
                 return
 
             last_close = float(history["close"].iloc[-1])
-            uni_cfg = eng.config_raw.get("universe") or {}
+            uni_cfg = eng.config_raw.get("universe")
+            if uni_cfg is None:
+                uni_cfg = {}
             uni_max_price = float(uni_cfg.get("max_price", 0))
             if uni_max_price > 0 and last_close > uni_max_price:
                 return

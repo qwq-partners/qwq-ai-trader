@@ -362,7 +362,9 @@ class UnifiedEngine:
         if event.type == EventType.SIGNAL:
             symbol = getattr(event, 'symbol', '?')
             side = getattr(event, 'side', '?')
-            score = getattr(event, 'score', 0) or 0
+            score = getattr(event, 'score', 0)
+            if score is None:
+                score = 0
             logger.info(f"[엔진] SignalEvent 처리 시작: {symbol} {side}")
             side_label = '매수' if side == OrderSide.BUY else '매도'
             name = self._get_stock_name(symbol)
@@ -874,7 +876,7 @@ class StrategyManager:
             for sig in signals:
                 logger.info(f"[전략→엔진] 신호 큐 추가: {sig.symbol} {sig.side.value} 가격={sig.price} 점수={sig.score:.1f}")
 
-        return signals if signals else None
+        return signals or []
 
     async def on_theme(self, event: ThemeEvent) -> Optional[List[Event]]:
         """테마 감지 시 전략 실행"""
@@ -890,7 +892,7 @@ class StrategyManager:
                 except Exception as e:
                     logger.error(f"전략 오류 ({name}): {e}")
 
-        return signals if signals else None
+        return signals or []
 
 
 class RiskManager:
@@ -1156,7 +1158,8 @@ class RiskManager:
         if event.side == OrderSide.SELL:
             pos = self.engine.portfolio.positions.get(event.symbol)
             # metadata에 수량이 지정된 경우 분할 익절/트레일링 수량 사용 (1차/2차/3차)
-            _meta_qty = int((event.metadata or {}).get("quantity") or 0)
+            _meta_raw = (event.metadata if event.metadata is not None else {}).get("quantity")
+            _meta_qty = int(_meta_raw) if _meta_raw is not None else 0
             if _meta_qty and pos and 0 < _meta_qty <= pos.quantity:
                 position_size = _meta_qty
             else:
@@ -1333,7 +1336,7 @@ class RiskManager:
 
         # 2) pending 추적 정리
         async with self._pending_lock:
-            remaining = self._pending_quantities.get(event.symbol, 0) - (event.quantity or 0)
+            remaining = self._pending_quantities.get(event.symbol, 0) - (event.quantity if event.quantity is not None else 0)
             if remaining <= 0:
                 self._pending_orders.discard(event.symbol)
                 self._pending_quantities.pop(event.symbol, None)

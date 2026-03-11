@@ -138,7 +138,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         price = float(current_price)
 
         # 최소 가격 필터
-        if price < self.config.min_price:
+        if price < float(self.config.min_price):
             return None
 
         # 변동성 필터: 고변동성 종목 진입 제한

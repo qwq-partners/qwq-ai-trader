@@ -71,8 +71,8 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
         "first_exit_pct":    4.0,
         "second_exit_pct":   7.0,
         "third_exit_pct":    9.0,
-        "trailing_stop_pct":  2.0,
-        "stop_loss_pct":      3.0,
+        "trailing_stop_pct":  2.5,
+        "stop_loss_pct":      4.0,
         "stale_high_days":    4,
     },
     "turning_point": {          # 바닥 전환점 — 중간값
@@ -122,6 +122,7 @@ class ExitConfig:
     # 트레일링 스탑
     trailing_stop_pct: float = 3.0    # 고점 대비 하락률 (%)
     trailing_activate_pct: float = 5.0  # 트레일링 활성화 수익률 (%)
+    atr_trailing_multiplier: float = 1.5  # ATR 트레일링 승수
 
     # 수수료 포함 계산 (KR=True, US=False)
     include_fees: bool = True
@@ -262,12 +263,12 @@ class ExitManager:
             #   (재시작 시 post-sell qty로 덮어쓰면 정합성 검증이 false positive 유발)
             if state.current_stage == ExitStage.NONE:
                 entry["initial_qty"] = (
-                    int(state.initial_quantity) if state.initial_quantity
+                    int(state.initial_quantity) if state.initial_quantity is not None
                     else int(state.original_quantity)
                 )
             else:
                 existing = self._persisted.get(sym, {}).get("initial_qty")
-                if existing:
+                if existing is not None:
                     entry["initial_qty"] = existing
             data[sym] = entry
         try:
@@ -301,7 +302,7 @@ class ExitManager:
                 if position.quantity > old_qty:
                     added = position.quantity - old_qty
                     pct_added = added / max(old_qty, 1)
-                    new_high = position.current_price or position.avg_price
+                    new_high = position.current_price if position.current_price is not None and position.current_price > 0 else position.avg_price
                     state.highest_price = max(state.highest_price, new_high)
                     # 10% 이상 추가매수만 stage 리셋 (소량 sync 오차는 stage 유지)
                     if pct_added >= 0.10:
@@ -335,7 +336,7 @@ class ExitManager:
 
                 if highs and lows and closes:
                     atr_pct = calculate_atr(highs, lows, closes, period=14)
-                    if atr_pct:
+                    if atr_pct is not None:
                         dynamic_stop = calculate_dynamic_stop_loss(
                             atr_pct,
                             min_stop=self.config.min_stop_pct,
@@ -350,11 +351,11 @@ class ExitManager:
                 logger.warning(f"[ExitManager] {position.symbol} ATR 계산 실패: {e}")
 
         # 전략별 익절 목표 우선, 없으면 글로벌 기본값
-        eff_first = first_exit_pct or self.config.first_exit_pct
-        eff_second = second_exit_pct or self.config.second_exit_pct
-        eff_third = third_exit_pct or self.config.third_exit_pct
+        eff_first = first_exit_pct if first_exit_pct is not None else self.config.first_exit_pct
+        eff_second = second_exit_pct if second_exit_pct is not None else self.config.second_exit_pct
+        eff_third = third_exit_pct if third_exit_pct is not None else self.config.third_exit_pct
 
-        current_price = position.current_price or position.avg_price
+        current_price = position.current_price if position.current_price is not None and position.current_price > 0 else position.avg_price
         persisted = self._persisted.get(position.symbol)
 
         saved_initial_qty: int = 0
@@ -384,7 +385,7 @@ class ExitManager:
                     saved_initial_qty > 0
                     and initial_stage not in (ExitStage.NONE, ExitStage.TRAILING)
                 ):
-                    eff_first_ratio = first_exit_ratio or self.config.first_exit_ratio
+                    eff_first_ratio = first_exit_ratio if first_exit_ratio is not None else self.config.first_exit_ratio
                     expected_after_first = saved_initial_qty - max(
                         1, int(saved_initial_qty * eff_first_ratio)
                     )
@@ -446,12 +447,13 @@ class ExitManager:
         elif position.symbol not in self._entry_times:
             self._entry_times[position.symbol] = datetime.now()
 
-        effective_stop = dynamic_stop or stop_loss_pct or self.config.stop_loss_pct
-        eff_1st = first_exit_pct or self.config.first_exit_pct
+        effective_stop = dynamic_stop if dynamic_stop is not None else (stop_loss_pct if stop_loss_pct is not None else self.config.stop_loss_pct)
+        eff_1st = first_exit_pct if first_exit_pct is not None else self.config.first_exit_pct
+        eff_ts = trailing_stop_pct if trailing_stop_pct is not None else self.config.trailing_stop_pct
         logger.debug(
             f"[ExitManager] 포지션 등록: {position.symbol} "
             f"(SL={effective_stop:.2f}%, TP1={eff_1st:.1f}%, "
-            f"TS={trailing_stop_pct or self.config.trailing_stop_pct}%, "
+            f"TS={eff_ts}%, "
             f"stage={initial_stage.value}, market={self.market})"
         )
 
@@ -534,10 +536,10 @@ class ExitManager:
                 )
 
         # 1. 손절 체크
-        sl_pct = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
+        sl_pct = state.dynamic_stop_pct if state.dynamic_stop_pct is not None else (state.stop_loss_pct if state.stop_loss_pct is not None else self.config.stop_loss_pct)
         sl_pct = max(sl_pct, self.config.min_stop_pct)
         if net_pnl_pct <= -sl_pct:
-            atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct else ""
+            atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct is not None else ""
             return self._create_exit(
                 state, "sell_all", state.remaining_quantity,
                 f"손절: {net_pnl_pct:.2f}% (SL={sl_pct:.2f}%{atr_info})"
@@ -551,7 +553,7 @@ class ExitManager:
 
         # 3. 1R 본전 이동 체크
         if state.current_stage != ExitStage.NONE and not state.breakeven_activated:
-            one_r = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
+            one_r = state.dynamic_stop_pct if state.dynamic_stop_pct is not None else (state.stop_loss_pct if state.stop_loss_pct is not None else self.config.stop_loss_pct)
             if net_pnl_pct >= one_r:
                 state.breakeven_activated = True
                 self._persist_states()
@@ -565,8 +567,8 @@ class ExitManager:
             return None
 
         if state.breakeven_activated:
-            atr_trail = (state.atr_pct or 2.0) * 1.5
-            base_trail = state.trailing_stop_pct or self.config.trailing_stop_pct
+            atr_trail = (state.atr_pct if state.atr_pct is not None else 2.0) * self.config.atr_trailing_multiplier
+            base_trail = state.trailing_stop_pct if state.trailing_stop_pct is not None else self.config.trailing_stop_pct
             ts_pct_used = max(atr_trail, base_trail)
             trail_from_high = float((current_price - state.highest_price) / state.highest_price * 100)
 
@@ -601,7 +603,7 @@ class ExitManager:
 
         elif net_pnl_pct >= self.config.trailing_activate_pct:
             trailing_pct = float((current_price - state.highest_price) / state.highest_price * 100)
-            ts_pct = state.trailing_stop_pct or self.config.trailing_stop_pct
+            ts_pct = state.trailing_stop_pct if state.trailing_stop_pct is not None else self.config.trailing_stop_pct
             if trailing_pct <= -ts_pct:
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,

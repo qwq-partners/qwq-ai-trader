@@ -203,7 +203,7 @@ class RiskManager:
         # 2. 일일 손실 한도 체크
         if self._is_daily_loss_limit_hit(portfolio, strategy_type):
             equity = portfolio.total_equity
-            effective_pnl = portfolio.daily_pnl
+            effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
             daily_pnl_pct = float(effective_pnl / equity * 100) if equity > 0 else 0.0
 
             if self.market == "KR":
@@ -394,7 +394,7 @@ class RiskManager:
             return None
 
         # 손절 체크
-        if position.stop_loss and price <= position.stop_loss:
+        if position.stop_loss is not None and price <= position.stop_loss:
             if self.market == "KR":
                 self._stop_loss_today.add(position.symbol)
                 self._save_stop_loss_today()
@@ -410,7 +410,7 @@ class RiskManager:
             )
 
         # 익절 체크
-        if position.take_profit and price >= position.take_profit:
+        if position.take_profit is not None and price >= position.take_profit:
             return StopTriggeredEvent(
                 source="risk_manager",
                 symbol=position.symbol,
@@ -421,7 +421,7 @@ class RiskManager:
             )
 
         # 트레일링 스탑 체크
-        if position.trailing_stop_pct and position.highest_price:
+        if position.trailing_stop_pct is not None and position.highest_price is not None:
             trailing_stop = self.calculate_trailing_stop(
                 position.highest_price, OrderSide.BUY
             )

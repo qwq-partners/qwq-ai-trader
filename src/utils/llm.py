@@ -176,8 +176,8 @@ class OpenAIClient(BaseLLMClient):
                 success=False, error="OpenAI API key not configured"
             )
 
-        model = model or self.config.openai_model_light
-        max_tokens = max_tokens or self.config.max_output_tokens
+        model = model if model is not None else self.config.openai_model_light
+        max_tokens = max_tokens if max_tokens is not None else self.config.max_output_tokens
 
         messages = []
         if system:
@@ -293,8 +293,8 @@ class GeminiClient(BaseLLMClient):
                 success=False, error="Gemini API key not configured"
             )
 
-        model = model or self.config.gemini_model_light
-        max_tokens = max_tokens or self.config.max_output_tokens
+        model = model if model is not None else self.config.gemini_model_light
+        max_tokens = max_tokens if max_tokens is not None else self.config.max_output_tokens
 
         # 시스템 프롬프트를 사용자 프롬프트에 통합
         full_prompt = f"{system}\n\n{prompt}" if system else prompt

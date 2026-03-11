@@ -309,7 +309,7 @@ class StockMaster:
         logger.info("[StockMaster] 종목 마스터 갱신 시작...")
 
         # 동기 함수를 executor에서 실행
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         stocks = await loop.run_in_executor(_executor, self._sync_load_fdr)
         kospi200, kospi500, kosdaq150, market_caps = await loop.run_in_executor(
             _executor, self._sync_load_index_members
