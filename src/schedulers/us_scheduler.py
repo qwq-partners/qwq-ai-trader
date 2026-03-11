@@ -1529,8 +1529,15 @@ class USScheduler:
         for symbol in list(eng.portfolio.positions.keys()):
             if symbol not in kis_symbols:
                 if symbol in eng._pending_symbols:
-                    logger.debug(f"[US 동기화] {symbol} — KIS에 없지만 pending 주문 있어 유지")
-                    continue
+                    # 매수 pending만 보존 (매도 assumed-filled는 포지션 정리 진행)
+                    has_pending_buy = any(
+                        o.get("side") == "buy" and o.get("symbol") == symbol
+                        for o in eng._pending_orders.values()
+                    )
+                    if has_pending_buy:
+                        logger.debug(f"[US 동기화] {symbol} — KIS에 없지만 pending 매수 주문 있어 유지")
+                        continue
+                    # pending_buy 없음 → 매도 assumed-filled 상태, 포지션 정리 진행
                 pos = eng.portfolio.positions.pop(symbol)
                 # daily_pnl은 아래 trade.pnl에서 한 번만 가산 (이중 가산 방지)
                 eng.exit_manager.on_position_closed(symbol)
@@ -1815,8 +1822,14 @@ class USScheduler:
                             f"[US 주문 체크] {order_no} ({symbol}) "
                             f"폴백주문 타임아웃 ({int(timeout_sec / 60)}분) — 제거"
                         )
-                    eng._pending_symbols.discard(symbol)
-                    del eng._pending_orders[order_no]
+                    # 매도 assumed-filled: _pending_symbols 유지 → _exit_check_loop 재진입 차단
+                    # _sync_portfolio가 KIS 포지션 확인 후 _pending_symbols discard
+                    if side == "sell" and not cancel_ok:
+                        del eng._pending_orders[order_no]
+                        # _pending_symbols는 유지 (재매도 이중 주문 차단)
+                    else:
+                        eng._pending_symbols.discard(symbol)
+                        del eng._pending_orders[order_no]
 
                     # 매도 주문 취소 시 ExitManager stage 롤백 + 시장가 재시도
                     if side == "sell" and cancel_ok:
