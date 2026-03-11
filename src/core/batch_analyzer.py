@@ -753,24 +753,24 @@ class BatchAnalyzer:
 
         logger.debug(f"[포지션모니터] {len(self._engine.portfolio.positions)}개 포지션 체크")
 
-        # 하락장에서 ExitManager 트레일링 스탑 강화
-        if self._exit_manager and self._market_regime == "bear":
-            # 기존 설정이 3%라면 2%로 타이트하게 변경
-            if self._exit_manager.config.trailing_stop_pct > 2.0:
-                self._exit_manager.config.trailing_stop_pct = 2.0
-                self._exit_manager.config.trailing_activate_pct = 3.0
-                logger.info("[포지션모니터] 🔴 하락장 → 트레일링 스탑 2%, 활성화 기준 3%")
-        elif self._exit_manager and self._market_regime == "caution":
-            if self._exit_manager.config.trailing_stop_pct > 2.5:
-                self._exit_manager.config.trailing_stop_pct = 2.5
-                self._exit_manager.config.trailing_activate_pct = 4.0
-                logger.info("[포지션모니터] 🟡 주의장 → 트레일링 스탑 2.5%, 활성화 기준 4%")
-        elif self._exit_manager and self._market_regime in ("bull", "neutral"):
-            # 레짐 회복 시 트레일링 원상복구
-            if self._exit_manager.config.trailing_stop_pct < 3.0:
-                self._exit_manager.config.trailing_stop_pct = 3.0
-                self._exit_manager.config.trailing_activate_pct = 5.0
-                logger.info("[포지션모니터] 🟢 레짐 회복 → 트레일링 스탑 3% 복구")
+        # 레짐 기반 ExitManager 파라미터 동기화
+        # → 구체적인 조정은 kr_scheduler._apply_regime_to_exit_manager() + REGIME_EXIT_PARAMS 에서 처리.
+        # 여기서는 LLM 레짐 캐시를 읽어 ExitManager에 위임 (30분 주기 monitor와 동기화).
+        if self._exit_manager:
+            try:
+                import json
+                from pathlib import Path
+                from datetime import date as _date
+                from ..strategies.exit_manager import REGIME_EXIT_PARAMS
+                _regime_path = Path.home() / ".cache" / "ai_trader" / "llm_regime_today.json"
+                if _regime_path.exists():
+                    _rd = json.loads(_regime_path.read_text(encoding="utf-8"))
+                    if _rd.get("date") == _date.today().isoformat():
+                        _llm_regime = _rd.get("regime", "neutral")
+                        if _llm_regime in REGIME_EXIT_PARAMS:
+                            self._exit_manager.apply_regime_params(_llm_regime)
+            except Exception as _e:
+                logger.debug(f"[포지션모니터] 레짐 동기화 오류 (무시): {_e}")
 
         for symbol, pos in list(self._engine.portfolio.positions.items()):
             try:

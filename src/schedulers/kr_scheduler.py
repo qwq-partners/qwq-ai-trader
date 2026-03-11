@@ -620,6 +620,47 @@ class KRScheduler:
         except Exception as e:
             logger.error(f"[LLM레짐] 오류: {e}")
 
+    async def _apply_regime_to_exit_manager(self) -> None:
+        """llm_regime_today.json 에서 레짐을 읽어 ExitManager 파라미터를 실시간 갱신.
+
+        _run_llm_regime_classifier() 완료 직후 + 30분 주기 동기화에서 호출.
+        레짐이 바뀐 경우만 ExitManager.apply_regime_params() 가 실제 갱신 수행.
+        """
+        import json
+        from pathlib import Path
+        from ..strategies.exit_manager import REGIME_EXIT_PARAMS
+
+        try:
+            regime_path = Path.home() / ".cache" / "ai_trader" / "llm_regime_today.json"
+            if not regime_path.exists():
+                return
+
+            data = json.loads(regime_path.read_text(encoding="utf-8"))
+
+            # 오늘 날짜 데이터인지 확인
+            from datetime import date
+            if data.get("date") != date.today().isoformat():
+                return
+
+            regime = data.get("regime", "neutral")
+            if regime not in REGIME_EXIT_PARAMS:
+                logger.debug(f"[레짐동기화] 미지원 레짐 {regime!r} → neutral 폴백")
+                regime = "neutral"
+
+            exit_mgr = getattr(self.bot, "exit_manager", None)
+            if exit_mgr is None:
+                logger.debug("[레짐동기화] ExitManager 미발견 → 스킵")
+                return
+
+            updated = exit_mgr.apply_regime_params(regime)
+            if updated > 0:
+                logger.info(
+                    f"[레짐동기화] 레짐={regime}, "
+                    f"{updated}개 포지션 파라미터 갱신 완료"
+                )
+        except Exception as e:
+            logger.warning(f"[레짐동기화] 오류 (무시): {e}")
+
     async def _run_position_eod_llm_check(self):
         """[15:00] 보유 포지션 LLM 종가 판단"""
         bot = self.bot
@@ -2965,6 +3006,7 @@ JSON:
         last_expert_panel_week = None
         last_regime_date = None           # LLM 레짐 분류기 중복 실행 방지
         last_regime_noon_date = None      # 12:00 장중 레짐 재분류 중복 실행 방지
+        last_regime_sync_ts = 0.0         # 레짐 파라미터 30분 주기 동기화 마지막 실행 timestamp
         last_pos_eod_llm_date = None      # 15:00 포지션 LLM 점검 중복 방지
 
         # LLM 운영 루프 config 플래그
@@ -3104,6 +3146,7 @@ JSON:
                         and now.hour == 8 and 10 <= now.minute < 15
                         and last_regime_date != today):
                     await self._run_llm_regime_classifier(label="08:10")
+                    await self._apply_regime_to_exit_manager()  # ★ 기존 포지션 파라미터 즉시 갱신
                     last_regime_date = today
 
                 # ── 12:00 장중 레짐 재분류 (오전 흐름 반영, 오후 전략 조정) ──
@@ -3111,8 +3154,14 @@ JSON:
                         and now.hour == 12 and 0 <= now.minute < 5
                         and last_regime_noon_date != today):
                     await self._run_llm_regime_classifier(label="12:00 (장중 업데이트)")
+                    await self._apply_regime_to_exit_manager()  # ★ 기존 포지션 파라미터 즉시 갱신
                     last_regime_noon_date = today
                     logger.info("[LLM레짐] 장중 레짐 재분류 완료 — 오후 전략에 즉시 반영")
+
+                # ── 레짐 파라미터 30분 주기 동기화 (기존 포지션 실시간 반영) ──
+                if time.time() - last_regime_sync_ts >= 1800:
+                    await self._apply_regime_to_exit_manager()
+                    last_regime_sync_ts = time.time()
 
                 # ── 사전분석 ──────────────────────────────────────────
                 if (now.hour == prescan_hour

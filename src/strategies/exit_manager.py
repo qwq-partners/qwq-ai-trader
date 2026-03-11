@@ -39,6 +39,61 @@ class ExitStage(Enum):
     TRAILING = "trailing"       # 트레일링
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 시장 레짐별 청산 파라미터 테이블
+# LLM 레짐 분류기(trending_bull / ranging / trending_bear / turning_point / neutral)
+# 결과에 따라 ExitManager.apply_regime_params() 가 기존 포지션에 실시간 반영.
+#
+# 설계 원칙:
+#   - stop_loss / trailing / stale_high_days : 모든 stage에 즉시 적용
+#   - first_exit_pct  : stage=NONE 에만 (FIRST 이상은 이미 1차 완료)
+#   - second_exit_pct : stage ≤ FIRST 에만
+#   - third_exit_pct  : stage ≤ SECOND 에만
+# ──────────────────────────────────────────────────────────────────────────────
+REGIME_EXIT_PARAMS: Dict[str, Dict] = {
+    "trending_bull": {
+        "first_exit_pct":    5.0,
+        "second_exit_pct":  10.0,
+        "third_exit_pct":   12.0,
+        "trailing_stop_pct":  3.0,
+        "stop_loss_pct":      5.0,
+        "stale_high_days":    7,
+    },
+    "neutral": {
+        "first_exit_pct":    5.0,
+        "second_exit_pct":   8.0,
+        "third_exit_pct":   10.0,
+        "trailing_stop_pct":  2.5,
+        "stop_loss_pct":      4.0,
+        "stale_high_days":    5,
+    },
+    "ranging": {
+        "first_exit_pct":    4.0,
+        "second_exit_pct":   7.0,
+        "third_exit_pct":    9.0,
+        "trailing_stop_pct":  2.0,
+        "stop_loss_pct":      3.0,
+        "stale_high_days":    4,
+    },
+    "turning_point": {          # 바닥 전환점 — 중간값
+        "first_exit_pct":    4.0,
+        "second_exit_pct":   7.0,
+        "third_exit_pct":    9.0,
+        "trailing_stop_pct":  2.5,
+        "stop_loss_pct":      4.0,
+        "stale_high_days":    5,
+    },
+    "trending_bear": {
+        "first_exit_pct":    3.0,
+        "second_exit_pct":   6.0,
+        "third_exit_pct":    8.0,
+        "trailing_stop_pct":  1.5,
+        "stop_loss_pct":      2.5,
+        "stale_high_days":    3,
+    },
+}
+
+
 @dataclass
 class ExitConfig:
     """청산 설정 (KR/US 통합)"""
@@ -159,6 +214,9 @@ class ExitManager:
         market_suffix = f"_{self.market.lower()}" if self.market != "KR" else ""
         self._stage_file = _cache_dir / f"exit_stages{market_suffix}_{date.today().isoformat()}.json"
         self._persisted: Dict[str, Dict] = self._load_persisted_states()
+
+        # 현재 적용된 레짐 (apply_regime_params 호출 시 갱신)
+        self._current_regime: str = "neutral"
 
     # ------------------------------------------------------------------ #
     # Stage 영속화                                                        #
@@ -685,6 +743,103 @@ class ExitManager:
             )
             return True
         return False
+
+    def apply_regime_params(self, regime: str) -> int:
+        """시장 레짐에 따라 기존 포지션의 청산 파라미터를 실시간 갱신.
+
+        Args:
+            regime: LLM 레짐 분류 결과
+                    (trending_bull / neutral / ranging / turning_point / trending_bear)
+
+        Returns:
+            갱신된 포지션 수
+
+        적용 규칙 (stage별 차등):
+            stop_loss_pct, trailing_stop_pct, stale_high_days — 모든 stage 즉시 적용
+            first_exit_pct  — stage=NONE 만 (FIRST+ 이상은 이미 1차 익절 완료)
+            second_exit_pct — stage ≤ FIRST
+            third_exit_pct  — stage ≤ SECOND
+
+        새 포지션에도 반영되도록 ExitConfig 글로벌 기본값도 함께 갱신.
+        """
+        params = REGIME_EXIT_PARAMS.get(regime)
+        if not params:
+            logger.warning(f"[레짐파라미터] 알 수 없는 레짐: {regime!r} → 적용 생략")
+            return 0
+
+        if regime == self._current_regime and self._states:
+            logger.debug(f"[레짐파라미터] 레짐 변경 없음 ({regime}) → 스킵")
+            return 0
+
+        prev_regime = self._current_regime
+        self._current_regime = regime
+
+        # ── 글로벌 ExitConfig 갱신 (신규 포지션 기본값) ──────────
+        self.config.stop_loss_pct     = params["stop_loss_pct"]
+        self.config.trailing_stop_pct = params["trailing_stop_pct"]
+        self.config.first_exit_pct    = params["first_exit_pct"]
+        self.config.second_exit_pct   = params["second_exit_pct"]
+        self.config.third_exit_pct    = params["third_exit_pct"]
+        self.config.stale_high_days   = params["stale_high_days"]
+
+        # ── 기존 포지션 개별 갱신 ─────────────────────────────────
+        stage_order = [
+            ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
+            ExitStage.THIRD, ExitStage.TRAILING,
+        ]
+        updated = 0
+
+        for sym, state in self._states.items():
+            changed: List[str] = []
+
+            # 항상 적용: 손절 / 트레일링 / stale_high_days
+            if state.stop_loss_pct != params["stop_loss_pct"]:
+                state.stop_loss_pct = params["stop_loss_pct"]
+                changed.append(f"SL={state.stop_loss_pct}%")
+
+            if state.trailing_stop_pct != params["trailing_stop_pct"]:
+                state.trailing_stop_pct = params["trailing_stop_pct"]
+                changed.append(f"TS={state.trailing_stop_pct}%")
+
+            if state.stale_high_days != params["stale_high_days"]:
+                state.stale_high_days = params["stale_high_days"]
+                changed.append(f"stale={state.stale_high_days}d")
+
+            # stage별 조건부 익절 목표 갱신
+            cur_idx = stage_order.index(state.current_stage) if state.current_stage in stage_order else 0
+
+            if cur_idx <= 0:  # NONE → 1차 익절 목표 갱신 가능
+                if state.first_exit_pct != params["first_exit_pct"]:
+                    state.first_exit_pct = params["first_exit_pct"]
+                    changed.append(f"TP1={state.first_exit_pct}%")
+
+            if cur_idx <= 1:  # NONE / FIRST → 2차 익절 목표 갱신 가능
+                if state.second_exit_pct != params["second_exit_pct"]:
+                    state.second_exit_pct = params["second_exit_pct"]
+                    changed.append(f"TP2={state.second_exit_pct}%")
+
+            if cur_idx <= 2:  # NONE / FIRST / SECOND → 3차 익절 목표 갱신 가능
+                if state.third_exit_pct != params["third_exit_pct"]:
+                    state.third_exit_pct = params["third_exit_pct"]
+                    changed.append(f"TP3={state.third_exit_pct}%")
+
+            if changed:
+                updated += 1
+                logger.info(
+                    f"[레짐파라미터] {sym} ({state.current_stage.value}) "
+                    f"← {prev_regime}→{regime}: {', '.join(changed)}"
+                )
+
+        if updated:
+            self._persist_states()
+
+        logger.info(
+            f"[레짐파라미터] {prev_regime} → {regime} 적용 완료: "
+            f"{updated}/{len(self._states)}개 포지션 갱신 "
+            f"(SL={params['stop_loss_pct']}%, TS={params['trailing_stop_pct']}%, "
+            f"TP1/2/3={params['first_exit_pct']}/{params['second_exit_pct']}/{params['third_exit_pct']}%)"
+        )
+        return updated
 
     def on_fill(self, symbol: str, sold_quantity: int, fill_price: Decimal):
         """체결 후 상태 업데이트"""
