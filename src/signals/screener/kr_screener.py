@@ -56,6 +56,7 @@ class ScreenedStock:
     has_foreign_buying: bool = False  # 외국인 순매수
     has_inst_buying: bool = False     # 기관 순매수
     rsi: Optional[float] = None      # RSI-14 (장중품질 과열 필터용)
+    atr_pct: Optional[float] = None  # ATR-14 % (동적 변동률 캡용)
 
     def __hash__(self):
         return hash(self.symbol)
@@ -1268,6 +1269,9 @@ class StockScreener:
                     else:
                         # 적정 변동성 (2~5%)
                         reasons.append(f"적정변동(ATR:{atr_pct:.1f}%)")
+
+                    # ATR 필드 저장 (장중품질 동적 캡용)
+                    all_stocks[symbol].atr_pct = atr_pct
 
                     if bonus != 0 or reasons:
                         all_stocks[symbol].score += bonus

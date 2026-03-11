@@ -185,13 +185,19 @@ kr:
 
   intraday_buy:
     enabled: true
-    min_score: 90
-    max_change_pct: 3.0
+    min_score: 90          # 장중품질 최소 점수 (ATR 동적 캡으로 품질 보완)
+    max_change_pct: 3.0    # ATR 없을 때 fallback 상한 (ATR 있으면 ATR*0.7 사용)
     min_cash_ratio: 0.20
     max_daily_entries: 3
     trading_start_time: "10:00"
     trading_end_time: "14:30"
     llm_verify_enabled: true
+
+  sector_surge:            # 섹터 서지 리더 전략 (Step 2)
+    enabled: true
+    sector_min_change_pct: 2.0   # 섹터 ETF 오늘 등락 기준 (이상이면 급등 섹터)
+    min_score: 80.0              # 섹터서지는 기준 완화 (섹터 컨텍스트가 품질 보완)
+    max_rs_ratio: 1.0            # 섹터 대비 RS 상한 (1.0 = 섹터 등락률 이하만)
 
   theme_detector:
     scan_interval_minutes: 10

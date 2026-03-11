@@ -1866,13 +1866,61 @@ JSON:
                                     self._ib_daily_count = {}
                             _ib_today_cnt = self._ib_daily_count.get(_ib_today_key, 0)
 
+                            # ── Step3: KOSPI 오늘 등락 조회 (RS 정렬 기준) ──
+                            _ib_kospi_chg = 0.0
+                            try:
+                                if bot.batch_analyzer and hasattr(bot.batch_analyzer, '_screener'):
+                                    _ib_kd = bot.batch_analyzer._screener.get_kospi_change()
+                                    _ib_kospi_chg = float(_ib_kd.get("c1", _ib_kd.get("c5", 0)))
+                            except Exception:
+                                pass
+
+                            # ATR 기반 동적 변동률 상한 계산
+                            # ATR의 70% 수준까지 허용 (최소 config값, 최대 8%)
+                            # ATR 없으면 config 기본값 사용
+                            def _ib_get_cap(s) -> float:
+                                if s.atr_pct and s.atr_pct > 0:
+                                    return min(s.atr_pct * 0.7, 8.0)
+                                return _ib_max_change
+
                             _ib_candidates = [
                                 s for s in screened
                                 if s.score >= _ib_min_score
-                                and 0.0 <= s.change_pct <= _ib_max_change
+                                and 0.0 <= s.change_pct <= _ib_get_cap(s)
                                 and s.symbol not in _ib_exclude
                                 and s.symbol not in bot._screening_signal_cooldown
                             ]
+
+                            # ── Step3: KOSPI RS 기반 정렬 보정 ──────────────
+                            # KOSPI 상승장에서 지수 대비 RS > 1.0인 종목 우선
+                            # RS_bonus: 지수 이기면 +5점 (소프트 우선순위)
+                            if _ib_kospi_chg > 0.3 and _ib_candidates:
+                                def _rs_sort_key(s):
+                                    rs = s.change_pct / _ib_kospi_chg if _ib_kospi_chg else 1.0
+                                    rs_bonus = 5.0 if rs >= 1.0 else 0.0
+                                    return s.score + rs_bonus
+
+                                _ib_candidates.sort(key=_rs_sort_key, reverse=True)
+                                logger.debug(
+                                    f"[장중품질] KOSPI={_ib_kospi_chg:+.2f}% → RS 보정 정렬 적용"
+                                )
+
+                            # 후보 진단 로그 (상위 5개, cap 이유 포함)
+                            for _dbg in sorted(screened, key=lambda x: x.score, reverse=True)[:5]:
+                                _cap = _ib_get_cap(_dbg)
+                                _pass = (
+                                    _dbg.score >= _ib_min_score
+                                    and 0.0 <= _dbg.change_pct <= _cap
+                                    and _dbg.symbol not in _ib_exclude
+                                    and _dbg.symbol not in bot._screening_signal_cooldown
+                                )
+                                _atr_str = f"{_dbg.atr_pct:.1f}%" if _dbg.atr_pct else "N/A"
+                                logger.debug(
+                                    f"[장중품질/진단] {_dbg.symbol} {_dbg.name} "
+                                    f"score={_dbg.score:.0f} change={_dbg.change_pct:+.1f}% "
+                                    f"ATR={_atr_str} cap={_cap:.1f}% "
+                                    f"→ {'✅통과' if _pass else '❌탈락'}"
+                                )
 
                             logger.info(
                                 f"[장중품질] 후보 {len(_ib_candidates)}개 | "
@@ -2021,6 +2069,161 @@ JSON:
                                     f"가격={_ib_rt_price:,} ({_ib_today_cnt}/{_ib_max_entries})"
                                 )
                                 await asyncio.sleep(0.3)
+
+                            # ── 섹터 서지 리더 (Sector Surge Leader) ──────────
+                            # 급등 섹터에서 RS 비율이 낮은(덜 오른) 종목 포착
+                            if (
+                                _ib_today_cnt < _ib_max_entries
+                                and bot.batch_analyzer
+                                and hasattr(bot.batch_analyzer, "_sector_momentum")
+                                and bot.batch_analyzer._sector_momentum
+                            ):
+                                try:
+                                    from ..data.providers.sector_momentum import SECTOR_ETF_MAP as _SSL_ETF_MAP
+
+                                    _ssl_cfg = bot.config.get("kr", "sector_surge") or {}
+                                    _ssl_enabled = _ssl_cfg.get("enabled", True)
+                                    _ssl_sector_min = float(_ssl_cfg.get("sector_min_change_pct", 2.0))
+                                    _ssl_min_score = float(_ssl_cfg.get("min_score", 80.0))
+                                    _ssl_max_rs = float(_ssl_cfg.get("max_rs_ratio", 1.0))
+
+                                    if _ssl_enabled:
+                                        # 1) 오늘 급등 섹터 탐색 (ETF 현재가 조회)
+                                        _ssl_surging: dict = {}
+                                        for _ssl_sector, _ssl_etf in _SSL_ETF_MAP.items():
+                                            try:
+                                                _ssl_eq = await bot.broker.get_quote(_ssl_etf)
+                                                if _ssl_eq:
+                                                    _ssl_ec = float(_ssl_eq.get("change_pct", 0) or 0)
+                                                    if _ssl_ec >= _ssl_sector_min:
+                                                        _ssl_surging[_ssl_sector] = _ssl_ec
+                                            except Exception:
+                                                pass
+
+                                        if _ssl_surging:
+                                            logger.info(
+                                                f"[섹터서지] 급등 섹터 {len(_ssl_surging)}개: "
+                                                + ", ".join(
+                                                    f"{s}(+{v:.1f}%)"
+                                                    for s, v in sorted(_ssl_surging.items(), key=lambda x: -x[1])
+                                                )
+                                            )
+                                            # 2) 스크리닝 종목 섹터 매핑
+                                            _ssl_pool = [s for s in screened if s.score >= _ssl_min_score]
+                                            _ssl_syms = [s.symbol for s in _ssl_pool]
+                                            _ssl_smap: dict = {}
+                                            if _ssl_syms:
+                                                _ssl_smap = await bot.batch_analyzer._sector_momentum.get_sector_map_batch(_ssl_syms)
+
+                                            # 3) RS 비율 기반 후보 선별
+                                            _ssl_hits = []
+                                            for _ssl_s in _ssl_pool:
+                                                if _ssl_s.symbol in _ib_exclude:
+                                                    continue
+                                                if _ssl_s.symbol in bot._screening_signal_cooldown:
+                                                    continue
+                                                _ssl_sec = _ssl_smap.get(_ssl_s.symbol)
+                                                if not _ssl_sec or _ssl_sec not in _ssl_surging:
+                                                    continue
+                                                _ssl_sc = _ssl_surging[_ssl_sec]
+                                                _ssl_rs = _ssl_s.change_pct / _ssl_sc if _ssl_sc > 0 else 0
+                                                # RS 0.2~1.0: 섹터 방향은 따라가되, 아직 덜 반영된 종목
+                                                if not (0.2 <= _ssl_rs <= _ssl_max_rs):
+                                                    continue
+                                                _ssl_hits.append((_ssl_s, _ssl_sec, _ssl_sc, _ssl_rs))
+
+                                            _ssl_hits.sort(key=lambda x: x[0].score, reverse=True)
+                                            logger.info(
+                                                f"[섹터서지] 후보 {len(_ssl_hits)}개"
+                                                + (f": {', '.join(f'{x[0].name}({x[3]:.2f}x)' for x in _ssl_hits[:3])}" if _ssl_hits else "")
+                                            )
+
+                                            for _ssl_stk, _ssl_sec2, _ssl_sc2, _ssl_rs2 in _ssl_hits[:3]:
+                                                if _ib_today_cnt >= _ib_max_entries:
+                                                    break
+                                                # RSI 과열 체크
+                                                if _ssl_stk.rsi is not None and _ssl_stk.rsi > 75:
+                                                    logger.info(f"[섹터서지] {_ssl_stk.symbol} RSI 과열 ({_ssl_stk.rsi:.1f})")
+                                                    continue
+                                                # 수급 확인
+                                                if not (_ssl_stk.has_foreign_buying or _ssl_stk.has_inst_buying):
+                                                    logger.info(f"[섹터서지] {_ssl_stk.symbol} 수급 미확인 → 탈락")
+                                                    continue
+                                                # 실시간 가격 재확인
+                                                try:
+                                                    _ssl_q = await bot.broker.get_quote(_ssl_stk.symbol)
+                                                    if not _ssl_q:
+                                                        continue
+                                                    _ssl_rtp = float(_ssl_q.get("price", 0) or 0)
+                                                    _ssl_rtc = float(_ssl_q.get("change_pct", _ssl_stk.change_pct) or 0)
+                                                    if _ssl_rtp <= 0:
+                                                        continue
+                                                    # RT 기준 재검증
+                                                    _ssl_rs_rt = _ssl_rtc / _ssl_sc2 if _ssl_sc2 > 0 else 0
+                                                    if not (0.2 <= _ssl_rs_rt <= _ssl_max_rs):
+                                                        logger.info(
+                                                            f"[섹터서지] {_ssl_stk.symbol} RT 재검증 탈락 "
+                                                            f"rtchange={_ssl_rtc:.1f}% sector={_ssl_sc2:.1f}%"
+                                                        )
+                                                        continue
+                                                except Exception as _ssl_qe:
+                                                    logger.debug(f"[섹터서지] 호가 실패 {_ssl_stk.symbol}: {_ssl_qe}")
+                                                    continue
+
+                                                # 손절/목표가 (ATR 기반)
+                                                _ssl_atr = _ssl_stk.atr_pct or 4.0
+                                                _ssl_stp = min(max(_ssl_atr * 1.5, 2.0), 8.0)
+                                                _ssl_tgt = min(max(_ssl_stp * 2.0, 4.0), 12.0)
+
+                                                _ssl_sig = Signal(
+                                                    symbol=_ssl_stk.symbol,
+                                                    side=OrderSide.BUY,
+                                                    strength=SignalStrength.STRONG,
+                                                    strategy=StrategyType.SEPA_TREND,
+                                                    price=Decimal(str(_ssl_rtp)),
+                                                    target_price=Decimal(str(_ssl_rtp * (1 + _ssl_tgt / 100))),
+                                                    stop_price=Decimal(str(_ssl_rtp * (1 - _ssl_stp / 100))),
+                                                    score=_ssl_stk.score,
+                                                    confidence=min(1.0, _ssl_stk.score / 100.0),
+                                                    reason=(
+                                                        f"섹터서지: {_ssl_stk.name} "
+                                                        f"[{_ssl_sec2}+{_ssl_sc2:.1f}%] RS={_ssl_rs_rt:.2f}"
+                                                    ),
+                                                    metadata={
+                                                        "source": "sector_surge",
+                                                        "name": _ssl_stk.name,
+                                                        "sector": _ssl_sec2,
+                                                        "sector_change": _ssl_sc2,
+                                                        "rs_ratio": _ssl_rs_rt,
+                                                        "atr_pct": _ssl_atr,
+                                                    },
+                                                )
+                                                _nc2 = getattr(bot.engine, "_stock_name_cache", None)
+                                                if _nc2 is not None and _ssl_stk.name:
+                                                    _nc2[_ssl_stk.symbol] = _ssl_stk.name
+
+                                                _ssl_ev = SignalEvent.from_signal(_ssl_sig, source="sector_surge")
+                                                await bot.engine.emit(_ssl_ev)
+
+                                                bot._screening_signal_cooldown[_ssl_stk.symbol] = _ib_now
+                                                _ib_today_cnt += 1
+                                                self._ib_daily_count[_ib_today_key] = _ib_today_cnt
+                                                try:
+                                                    _ib_count_path.parent.mkdir(parents=True, exist_ok=True)
+                                                    _ib_count_path.write_text(json.dumps(self._ib_daily_count))
+                                                except Exception:
+                                                    pass
+                                                logger.info(
+                                                    f"[섹터서지] 신호 발행: {_ssl_stk.symbol} {_ssl_stk.name} "
+                                                    f"점수={_ssl_stk.score:.0f} 등락={_ssl_rtc:+.1f}% "
+                                                    f"섹터=[{_ssl_sec2}]+{_ssl_sc2:.1f}% RS={_ssl_rs_rt:.2f} "
+                                                    f"({_ib_today_cnt}/{_ib_max_entries})"
+                                                )
+                                                await asyncio.sleep(0.3)
+                                        else:
+                                            logger.debug(f"[섹터서지] 급등 섹터 없음 (기준 +{_ssl_sector_min:.1f}%)")
+                                except Exception as _ssl_e:
+                                    logger.warning(f"[섹터서지] 오류: {_ssl_e}", exc_info=True)
 
                     except Exception as _ib_e:
                         logger.warning(f"[장중품질] 오류: {_ib_e}", exc_info=True)
