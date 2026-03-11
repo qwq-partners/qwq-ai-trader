@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-11 — fetch_index_price TR 수정 (commit `edd809b`)
+
+`fetch_index_price()`에서 잘못된 TR 사용 수정:
+- `FHKUP03500100` → **`FHPUP02100000`** (업종지수 현재가 API)
+- `FID_COND_MRKT_DIV_CODE="U"` = 업종(業種) 코드, US시장 코드가 아님
+- KOSPI `0001` / KOSDAQ `1001` 모두 실시간 정상 반환 확인
+
+---
+
 ## 2026-03-11 — 재시작 익절 미실행 버그 수정 + 대시보드 지수 실시간화 (commit `2b1b36a`)
 
 ### 문제
