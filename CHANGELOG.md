@@ -1,5 +1,52 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-11 — 재시작 익절 미실행 버그 수정 + 대시보드 지수 실시간화 (commit `2b1b36a`)
+
+### 문제
+봇 재시작 시 분할 익절 stage가 파일에 먼저 기록된 뒤 주문/체결 이전에 종료되면,
+다음 기동 시 stage=FIRST(혹은 그 이상)지만 실제 매도는 없는 불일치 상태 발생.
+→ 1차 익절 등 이전 단계가 영구 스킵됨.
+
+### 핵심 수정 — ExitManager pending_stage 패턴
+
+**`src/strategies/exit_manager.py`**
+
+- **`pending_stage` 필드 추가** (`PositionExitState`): fill 확인 전 임시 목표 stage 보관.
+  파일에 저장 안 함 → 재시작 시 None → current_stage=NONE → 1차 익절 자동 재발행.
+- **`update_price()`**: `state.current_stage = ExitStage.FIRST` 대신 `state.pending_stage = ExitStage.FIRST`.
+  stage가 파일에 저장되는 시점을 fill 이후로 이연.
+- **`on_fill()`**: fill 확인 후 `pending_stage → current_stage` 승격. stage advance의 유일한 지점.
+- **`rollback_stage()`**: pending_stage 먼저 클리어 (fill 미수신). 없으면 current_stage 한 단계 롤백 (레거시).
+
+### 재시작 정합성 검증 (initial_qty)
+
+- **`_persist_states()`**: `initial_qty` 추가 저장.
+  - stage=NONE: 현재 수량 기록 (최초 진입 수량).
+  - stage>NONE: 기존 파일 값 보존 (부분 매도 후 재시작 시 post-sell qty 덮어쓰기 방지).
+- **`register_position()`**: 파일의 `initial_qty` 로드 후 정합성 검증.
+  `stage≠NONE AND KIS_qty > expected_after_1st` → stage NONE 리셋 → 자동 재발행.
+
+### 대시보드 지수 실시간화
+
+**`src/data/providers/kis_market_data.py`**
+- `fetch_index_price(index_code)` 추가: KIS `FHKUP03500100` KOSPI(0001)/KOSDAQ(1001) 실시간 조회.
+  10초 캐시, 실패 시 Yahoo Finance 폴백.
+
+**`src/dashboard/sse.py`**
+- `_fetch_market_indices()` 추가: KIS 실시간 → Yahoo Finance 폴백 (5종목 통합).
+  결과를 `/api/market/indices` HTTP 캐시와 동기화.
+- 브로드캐스트 루프에 `market_indices` 이벤트 추가 (10초 주기 push).
+
+**`src/dashboard/static/js/common.js`**
+- `SSEClient` 이벤트 타입에 `market_indices` 추가.
+- `_applyTickerData()` 공통 함수 분리 (SSE/HTTP 폴링 공유).
+- `fetchNavIndices()` 폴링 주기: 30s → 60s (SSE가 주채널).
+
+**`src/dashboard/kr_api.py`**
+- `/api/market/indices` HTTP 캐시 TTL: 30s → 10s.
+
+---
+
 ## 2026-03-11 — SEPA 코어+트레이더 청산 구조 + 추세 무효화 시간 스탑
 
 ### 수정 파일

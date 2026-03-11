@@ -647,13 +647,17 @@ class KISMarketData:
             return None
 
     # ============================================================
-    # 7. KOSPI / KOSDAQ 실시간 지수 현재가 (FHKUP03500100)
+    # 7. KOSPI / KOSDAQ 실시간 지수 현재가 (FHPUP02100000)
     # ============================================================
 
     async def fetch_index_price(self, index_code: str = "0001") -> Optional[Dict]:
         """KOSPI(0001) / KOSDAQ(1001) 현재 지수 조회.
 
-        KIS 업종지수 현재가 API (FHKUP03500100).
+        KIS 업종지수 현재가 API (FHPUP02100000).
+        - KOSPI: FID_INPUT_ISCD="0001"
+        - KOSDAQ: FID_INPUT_ISCD="1001"
+        - FID_COND_MRKT_DIV_CODE="U": 업종지수 코드 ("U"=업종, US시장 아님)
+        
         Returns:
             {"price": float, "change": float, "change_pct": float, "label": str}
             or None on failure
@@ -666,13 +670,13 @@ class KISMarketData:
 
         try:
             session = await self._get_session()
-            headers = await self._get_headers("FHKUP03500100")
+            headers = await self._get_headers("FHPUP02100000")
             url = (
                 f"{self._token_manager.base_url}"
                 "/uapi/domestic-stock/v1/quotations/inquire-index-price"
             )
             params = {
-                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_COND_MRKT_DIV_CODE": "U",  # 업종지수 (U=업종, US시장 코드 아님)
                 "FID_INPUT_ISCD": index_code,
             }
             async with session.get(url, headers=headers, params=params) as resp:
