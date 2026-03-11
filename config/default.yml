@@ -196,7 +196,7 @@ kr:
   sector_surge:            # 섹터 서지 리더 전략 (Step 2)
     enabled: true
     sector_min_change_pct: 2.0   # 섹터 ETF 오늘 등락 기준 (이상이면 급등 섹터)
-    min_score: 80.0              # 섹터서지는 기준 완화 (섹터 컨텍스트가 품질 보완)
+    min_score: 60.0              # 섹터 컨텍스트가 품질 보완 → 60점으로 완화
     max_rs_ratio: 1.0            # 섹터 대비 RS 상한 (1.0 = 섹터 등락률 이하만)
 
   theme_detector:
