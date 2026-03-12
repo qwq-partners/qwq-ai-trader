@@ -432,48 +432,48 @@ class SwingScreener:
         supply_data_age = 0   # 0=당일, 1=전일(T-1), 2=캐시(T-2+)
         if supply_demand:
             self._save_supply_demand_cache(supply_demand)
-            supply_data_age = 0
 
-        # prev_date_str: 2~4차 폴백에서 공통 사용 (주말 스킵 포함)
-        _prev = datetime.now().date() - timedelta(days=1)
-        while _prev.weekday() >= 5:
-            _prev -= timedelta(days=1)
-        prev_date_str = _prev.strftime("%Y%m%d")
-        candidate_symbols = [c.symbol for c in candidates]
+        # ── 2~4차 폴백: 1차 성공 시 prev_date_str/candidate_symbols 계산 자체를 건너뜀 ──
+        if not supply_demand:
+            # prev_date_str: 직전 영업일 (주말 스킵)
+            _prev = datetime.now().date() - timedelta(days=1)
+            while _prev.weekday() >= 5:
+                _prev -= timedelta(days=1)
+            prev_date_str = _prev.strftime("%Y%m%d")
+            candidate_symbols = [c.symbol for c in candidates]
 
-        # ── 2차: KIS 종목별 전일 투자자 API (FHKST01010900) ──
-        # pykrx(KRX 인증 차단)를 완전 대체. 후보 종목에 대해 정확한 T-1 데이터 조회.
-        # 장전 08:20에도 전일 확정 데이터 정상 반환.
-        if not supply_demand and self._kis_market_data:
-            try:
-                kis_investor = await self._kis_market_data.fetch_batch_investor_daily(
-                    candidate_symbols, prev_date_str, concurrency=10
-                )
-                if kis_investor:
-                    supply_demand = kis_investor
-                    supply_data_age = 1  # 전일 확정 데이터
-                    logger.info(
-                        f"[스윙스크리너] 수급 T-1: KIS 종목별 API "
-                        f"({len(supply_demand)}/{len(candidate_symbols)}종목, {prev_date_str})"
+            # ── 2차: KIS 종목별 전일 투자자 API (FHKST01010900) ──
+            # pykrx(KRX 인증 차단)를 완전 대체. 장전 08:20에도 T-1 확정 데이터 정상 반환.
+            if self._kis_market_data:
+                try:
+                    kis_investor = await self._kis_market_data.fetch_batch_investor_daily(
+                        candidate_symbols, prev_date_str, concurrency=10
                     )
-            except Exception as e:
-                logger.warning(f"[스윙스크리너] KIS 종목별 투자자 조회 실패: {e}")
+                    if kis_investor:
+                        supply_demand = kis_investor
+                        supply_data_age = 1
+                        logger.info(
+                            f"[스윙스크리너] 수급 T-1: KIS 종목별 API "
+                            f"({len(supply_demand)}/{len(candidate_symbols)}종목, {prev_date_str})"
+                        )
+                except Exception as e:
+                    logger.warning(f"[스윙스크리너] KIS 종목별 투자자 조회 실패: {e}")
 
-        # ── 3차: supply_demand 캐시 폴백 (KIS 종목별 API도 실패 시) ──
-        if not supply_demand:
-            supply_demand = self._load_prev_day_supply_from_cache(prev_date_str)
-            if supply_demand:
-                supply_data_age = 1
-                logger.info(
-                    f"[스윙스크리너] 수급 T-1 캐시 폴백: {len(supply_demand)}종목"
-                )
+            # ── 3차: supply_demand 캐시 폴백 ──
+            if not supply_demand:
+                supply_demand = self._load_prev_day_supply_from_cache(prev_date_str)
+                if supply_demand:
+                    supply_data_age = 1
+                    logger.info(
+                        f"[스윙스크리너] 수급 T-1 캐시 폴백: {len(supply_demand)}종목"
+                    )
 
-        # ── 최종 폴백: T-2+ 캐시 ──
-        if not supply_demand:
-            cached, cache_age = self._load_supply_demand_cache_with_age()
-            if cached:
-                supply_demand = cached
-                supply_data_age = min(cache_age, 2)
+            # ── 4차: T-2+ 캐시 최종 폴백 ──
+            if not supply_demand:
+                cached, cache_age = self._load_supply_demand_cache_with_age()
+                if cached:
+                    supply_demand = cached
+                    supply_data_age = min(cache_age, 2)
 
         # ── 후보별 수급 데이터 주입 ──
         for candidate in candidates:

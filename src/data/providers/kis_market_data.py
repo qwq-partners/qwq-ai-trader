@@ -463,11 +463,22 @@ class KISMarketData:
         results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
         out: Dict[str, Dict[str, int]] = {}
+        no_data: List[str] = []
         for r in results_raw:
-            if isinstance(r, tuple) and r[1]:
+            if isinstance(r, Exception):
+                continue  # 이미 _fetch_one 내부에서 debug 로그
+            if isinstance(r, tuple):
                 sym, day_data = r
-                out[sym] = day_data
+                if day_data:
+                    out[sym] = day_data
+                else:
+                    no_data.append(sym)
 
+        if no_data:
+            logger.debug(
+                f"[KISMarketData] {target_date} 수급 없음 {len(no_data)}종목 "
+                f"(신규상장/거래없음/주말): {no_data[:5]}{'...' if len(no_data) > 5 else ''}"
+            )
         logger.info(
             f"[KISMarketData] 투자자일별 일괄: {len(out)}/{len(symbols)}종목 "
             f"({target_date}) 조회 완료"
