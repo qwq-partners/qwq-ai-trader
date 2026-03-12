@@ -1554,6 +1554,17 @@ class USScheduler:
                 eng.exit_manager.on_position_closed(symbol)
                 eng._pending_symbols.discard(symbol)
                 eng._ws_last_exit_check.pop(symbol, None)
+
+                # 해당 종목 pending 매도 주문 즉시 제거 (history=0 로 2분 대기하던 문제 해결)
+                # _sync_portfolio가 KIS 잔고에서 제거됨을 확인 → 매도 체결로 간주
+                _sell_pend_nos = [
+                    no for no, o in list(eng._pending_orders.items())
+                    if o.get("symbol") == symbol and o.get("side") == "sell"
+                ]
+                for _no in _sell_pend_nos:
+                    eng._pending_orders.pop(_no, None)
+                    logger.info(f"[US 동기화] {symbol} 매도 pending 즉시 해제 (주문번호={_no})")
+
                 # WS 구독 해제 → 포지션 없으면 WS 종료
                 if eng.us_price_ws:
                     await eng.us_price_ws.unsubscribe([symbol])
