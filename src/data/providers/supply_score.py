@@ -116,18 +116,30 @@ class SupplyScoreProvider:
                     logger.debug(f"[수급5일] 캐시 로드: {date_str} {len(cached)}종목")
                     continue
 
-            # pykrx 조회
+            # pykrx 조회 (KRX API가 인증 차단 시 0종목 반환)
             logger.info(f"[수급5일] pykrx 조회: {date_str}")
+            day_data: Dict[str, Dict[str, int]] = {}
             try:
                 day_data = await asyncio.to_thread(
                     self._fetch_pykrx_day, date_str
                 )
-                if day_data:
-                    self._daily[date_str] = day_data
-                    self._save_day(date_str, day_data)
-                    logger.info(f"[수급5일] 로드 완료: {date_str} {len(day_data)}종목")
             except Exception as e:
-                logger.warning(f"[수급5일] {date_str} 조회 실패: {e}")
+                logger.warning(f"[수급5일] pykrx {date_str} 조회 실패: {e}")
+
+            # pykrx 실패(0종목) → supply_demand 스냅샷 캐시로 폴백
+            if not day_data:
+                day_data = self._load_supply_demand_fallback(date_str)
+                if day_data:
+                    logger.info(
+                        f"[수급5일] supply_demand 캐시 폴백: {date_str} {len(day_data)}종목"
+                    )
+
+            if day_data:
+                self._daily[date_str] = day_data
+                self._save_day(date_str, day_data)
+                logger.info(f"[수급5일] 로드 완료: {date_str} {len(day_data)}종목")
+            else:
+                logger.warning(f"[수급5일] {date_str} 데이터 없음 (pykrx+캐시 모두 실패)")
 
         self._loaded_dates = [d for d in dates if d in self._daily]
 
@@ -173,6 +185,48 @@ class SupplyScoreProvider:
                 logger.debug(f"[수급5일] pykrx {market}/{investor} {date_str}: {e}")
 
         return result
+
+    @staticmethod
+    def _load_supply_demand_fallback(date_str: str) -> Dict[str, Dict[str, int]]:
+        """
+        pykrx 실패 시 `supply_demand_YYYYMMDD.json` 스냅샷 캐시 폴백.
+
+        supply_demand 캐시 스키마: {sym: {"foreign_net_buy": N, "inst_net_buy": N}}
+        supply_daily  캐시 스키마: {sym: {"foreign": N, "inst": N}}
+        → 필드명만 다르므로 변환 후 반환.
+
+        대상 날짜를 우선 탐색. 없으면 최대 7일 이내 최근 파일로 폴백.
+        """
+        cache_dir = CACHE_DIR
+        # 정확한 날짜 우선 탐색
+        candidates = [date_str]
+        # 날짜 전후 ±3일 추가 탐색 (연휴/공휴일 커버)
+        try:
+            from datetime import datetime, timedelta
+            dt = datetime.strptime(date_str, "%Y%m%d")
+            for delta in range(1, 4):
+                candidates.append((dt - timedelta(days=delta)).strftime("%Y%m%d"))
+        except Exception:
+            pass
+
+        for target in candidates:
+            path = cache_dir / f"supply_demand_{target}.json"
+            if path.exists():
+                try:
+                    raw = json.loads(path.read_text())
+                    if not raw:
+                        continue
+                    # 스키마 변환: foreign_net_buy → foreign, inst_net_buy → inst
+                    converted: Dict[str, Dict[str, int]] = {}
+                    for sym, vals in raw.items():
+                        converted[sym] = {
+                            "foreign": vals.get("foreign_net_buy", 0),
+                            "inst":    vals.get("inst_net_buy", 0),
+                        }
+                    return converted
+                except Exception:
+                    pass
+        return {}
 
     # ── 점수 계산 ─────────────────────────────────────────────────────────────
 

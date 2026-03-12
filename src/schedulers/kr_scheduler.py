@@ -2462,13 +2462,21 @@ JSON:
                                     sd[s]["inst_net_buy"] += item.get("net_buy_qty", 0)
 
                         if len(sd) >= _MIN_SYMBOLS:
-                            cache_path = Path.home() / ".cache" / "ai_trader" / f"supply_demand_{today_str}.json"
-                            cache_path.parent.mkdir(parents=True, exist_ok=True)
-                            cache_path.write_text(json.dumps(sd))
+                            cache_dir = Path.home() / ".cache" / "ai_trader"
+                            cache_dir.mkdir(parents=True, exist_ok=True)
+                            # supply_demand 저장 (swing_screener LCI 폴백용)
+                            (cache_dir / f"supply_demand_{today_str}.json").write_text(json.dumps(sd))
+                            # supply_daily 저장 (SupplyScoreProvider 5일 누적용)
+                            # 스키마 변환: foreign_net_buy→foreign, inst_net_buy→inst
+                            sd_daily = {
+                                sym: {"foreign": v.get("foreign_net_buy", 0), "inst": v.get("inst_net_buy", 0)}
+                                for sym, v in sd.items()
+                            }
+                            (cache_dir / f"supply_daily_{today_str}.json").write_text(json.dumps(sd_daily))
                             _last_save_ts = time.time()
                             logger.info(
                                 f"[수급캐시] 저장: {today_str} ({len(sd)}종목) "
-                                f"— 내일 08:20 LCI 폴백용"
+                                f"— supply_demand + supply_daily 동시 저장"
                             )
                         else:
                             logger.debug(f"[수급캐시] {len(sd)}종목 < {_MIN_SYMBOLS} 기준 미달, 저장 스킵")

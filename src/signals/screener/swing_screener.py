@@ -447,12 +447,28 @@ class SwingScreener:
             except Exception as e:
                 logger.warning(f"[스윙스크리너] pykrx 전일 수급 조회 실패: {e}")
 
-        # 캐시 파일 폴백: KIS + pykrx 모두 실패 시 (프리장 08:20, KRX 차단 등)
+        # pykrx 0종목 폴백: supply_demand 캐시로 직접 시도 (KRX API 차단 상황)
+        # pykrx가 KRX 인증 차단으로 0종목을 반환할 때 이미 저장된 캐시를 사용
         if not supply_demand:
-            cached = self._load_supply_demand_cache()
+            from datetime import datetime as _dt, timedelta as _td
+            _prev_date = (_dt.now().date() - _td(days=1))
+            while _prev_date.weekday() >= 5:
+                _prev_date -= _td(days=1)
+            prev_date_str = _prev_date.strftime("%Y%m%d")
+            supply_demand = self._load_prev_day_supply_from_cache(prev_date_str)
+            if supply_demand:
+                supply_data_age = 1  # T-1 캐시이므로 age=1
+                logger.info(
+                    f"[스윙스크리너] 수급 데이터: pykrx 차단 → supply_demand 캐시 사용 "
+                    f"({len(supply_demand)}종목, T-1)"
+                )
+
+        # 최종 폴백: 어떤 방법으로도 수급을 못 얻으면 가장 오래된 캐시라도 사용
+        if not supply_demand:
+            cached, cache_age = self._load_supply_demand_cache_with_age()
             if cached:
                 supply_demand = cached
-                supply_data_age = 2
+                supply_data_age = min(cache_age, 2)  # 최대 age=2
 
         # ── 후보별 수급 데이터 주입 ──
         for candidate in candidates:
@@ -669,6 +685,40 @@ class SwingScreener:
         logger.warning("[스윙스크리너] 수급 캐시 없음 → LCI=None (폴백 불가)")
         return {}
 
+    def _load_supply_demand_cache_with_age(self):
+        """
+        가장 최근 수급 캐시 로드 + 실제 age 반환.
+
+        Returns:
+            (data: Dict, age: int) - age는 실제 영업일 기준 경과일
+            데이터 없으면 ({}, 99)
+        """
+        import json as _json
+        from pathlib import Path as _Path
+        from datetime import datetime as _dt, timedelta as _td
+        cache_dir = _Path.home() / ".cache" / "ai_trader"
+        today = _dt.now().date()
+        for days_ago in range(1, 8):
+            target_date = today - _td(days=days_ago)
+            target = target_date.strftime("%Y%m%d")
+            cache_path = cache_dir / f"supply_demand_{target}.json"
+            if cache_path.exists():
+                try:
+                    data = _json.loads(cache_path.read_text())
+                    if data:
+                        # 실제 age: 캘린더 일수 (영업일 기준 1일 차이도 days_ago=1로 정확)
+                        # 주말은 건너뛰므로 실제 거래일 gap으로 age 결정
+                        age = min(days_ago, 2)  # 3일 이상은 모두 age=2로 처리
+                        logger.info(
+                            f"[스윙스크리너] 수급 캐시 로드: {target} ({len(data)}종목) "
+                            f"age={age} ← KIS/pykrx 모두 실패로 폴백"
+                        )
+                        return data, age
+                except Exception as e:
+                    logger.debug(f"[스윙스크리너] 수급 캐시 로드 실패 ({target}): {e}")
+        logger.warning("[스윙스크리너] 수급 캐시 없음 → LCI=None (폴백 불가)")
+        return {}, 99
+
     def _fetch_prev_day_supply_pykrx(self) -> Dict[str, Dict[str, int]]:
         """pykrx로 전일 외국인/기관 순매수 데이터 조회 (동기 함수, asyncio.to_thread 필요)
 
@@ -716,6 +766,41 @@ class SwingScreener:
 
         logger.info(f"[스윙스크리너] pykrx 전일 수급({date_str}): {len(result)}종목 로드")
         return result
+
+    @staticmethod
+    def _load_prev_day_supply_from_cache(date_str: str) -> Dict[str, Dict[str, int]]:
+        """
+        pykrx 실패(0종목) 시 supply_demand_YYYYMMDD.json 스냅샷 캐시로 폴백.
+
+        supply_demand 캐시 스키마: {sym: {"foreign_net_buy": N, "inst_net_buy": N}}
+        전일 날짜 우선 탐색, 없으면 최근 7일 이내 최신 파일 사용.
+        """
+        import json as _json
+        from datetime import datetime, timedelta
+        from pathlib import Path as _Path
+        cache_dir = _Path.home() / ".cache" / "ai_trader"
+
+        # 해당 날짜 → 직전 최대 7일 탐색 (연휴 커버)
+        try:
+            dt = datetime.strptime(date_str, "%Y%m%d")
+        except Exception:
+            dt = datetime.now() - timedelta(days=1)
+
+        for delta in range(0, 8):
+            target = (dt - timedelta(days=delta)).strftime("%Y%m%d")
+            path = cache_dir / f"supply_demand_{target}.json"
+            if path.exists():
+                try:
+                    raw = _json.loads(path.read_text())
+                    if raw:
+                        logger.info(
+                            f"[스윙스크리너] supply_demand 캐시 폴백: "
+                            f"{target} ({len(raw)}종목) ← pykrx 0종목"
+                        )
+                        return raw
+                except Exception:
+                    pass
+        return {}
 
     def _compute_lci_zscore(self, candidates: List[SwingCandidate]):
         """
