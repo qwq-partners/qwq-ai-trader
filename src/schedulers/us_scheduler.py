@@ -931,10 +931,21 @@ class USScheduler:
         - 기존 보유 포지션 있으면 시작 시 바로 subscribe
         - 정규장 종료 후 30분 대기 → WS 종료 (불필요한 연결 해제)
         - 루프 주기: 30초 (시장 상태 감지)
+        - 체결통보(H0GSCNI0): 가격 WS와 동일 연결에서 동시 구독 (KIS WS 1개 제약 해결)
+          KR WS는 09:00~15:20 KST에만 연결 → US WS(22:20~05:30) 와 시간대 불겹침
         """
         eng = self.engine
         if not eng.us_price_ws:
             return
+
+        # 체결통보 콜백 설정 (hts_id 있을 때만)
+        import os as _os
+        _hts_id = _os.getenv("KIS_HTS_ID", "").strip()
+        if (_hts_id and _hts_id.isalnum() and len(_hts_id) >= 6
+                and hasattr(eng, '_on_kis_fill')):
+            eng.us_price_ws.setup_fill(_hts_id)
+            eng.us_price_ws.on_fill(eng._on_kis_fill)
+            logger.info(f"[KIS US WS] 체결통보 구독 설정 완료 (HTS ID: {_hts_id[:4]}****)")
 
         _ws_prestarted = False  # 사전 연결 완료 여부
 
@@ -2301,7 +2312,12 @@ class USScheduler:
                     if (eng.us_price_ws and eng.us_price_ws.is_connected)
                     else "off"
                 )
-                fill_ws_status = "ok" if (eng.kis_ws and getattr(eng.kis_ws, '_connected', False)) else "off"
+                # fill WS: us_price_ws에 통합(H0GSCNI0 동시구독) — kis_ws는 fallback 참조
+                _price_ws_connected = eng.us_price_ws and getattr(eng.us_price_ws, '_connected', False)
+                _fill_hts_set = eng.us_price_ws and getattr(eng.us_price_ws, '_fill_hts_id', None)
+                fill_ws_status = "ok" if (_price_ws_connected and _fill_hts_set) else (
+                    "ok" if (eng.kis_ws and getattr(eng.kis_ws, '_connected', False)) else "off"
+                )
                 logger.info(
                     f"[US Heartbeat] session={session_status.value} | "
                     f"equity=${eng.portfolio.total_equity:.2f} | "

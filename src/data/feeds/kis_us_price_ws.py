@@ -79,6 +79,19 @@ class KISUSPriceFeed:
     _BACKOFF_MAX  = 120
     MAX_SUBSCRIPTIONS = 30  # 해외주식 WS 구독 안전 한도
 
+    # 체결통보 (H0GSCNI0) — 가격 WS와 동일 연결에서 동시 구독
+    _FILL_TR_ID  = "H0GSCNI0"   # 실전
+    _FILL_TR_MOCK = "H0GSCNI9"  # 모의
+    # H0GSCNI0 필드 순서 (^-구분)
+    _FILL_FIELDS = [
+        "CUST_ID","ACNT_NO","ODER_NO","OODER_NO","SELN_BYOV_CLS",
+        "RCTF_CLS","ODER_KIND2","STCK_SHRN_ISCD","CNTG_QTY","CNTG_UNPR",
+        "STCK_CNTG_HOUR","RFUS_YN","CNTG_YN","ACPT_YN","BRNC_NO",
+        "ODER_QTY","ODER_COND","ODER_OBJT_CBLC_QTY","RCTF_OBJT_CBLC_QTY",
+        "ODER_EXCG_CD","STCK_PRPR","ODER_DVSN","CNTG_ISNM",
+    ]
+    _FILL_EXCD_MAP = {"6": "NASD", "7": "NYSE", "8": "AMEX", "C": "HKS", "9": "OTCB"}
+
     def __init__(self, app_key: str, app_secret: str, is_mock: bool = False):
         self._app_key    = app_key
         self._app_secret = app_secret
@@ -99,8 +112,13 @@ class KISUSPriceFeed:
         self._pending_sub:  Dict[str, str] = {}   # 연결 전 대기 큐
         self._exchange_map: Dict[str, str] = {}   # symbol → exchange prefix
 
-        # 콜백: async def fn(symbol, price, volume)
+        # 가격 콜백: async def fn(symbol, price, volume)
         self._price_callback: Optional[Callable[..., Coroutine]] = None
+
+        # 체결통보 (H0GSCNI0) — 같은 WS 연결에 동시 구독
+        self._fill_hts_id:   Optional[str] = None       # setup_fill() 로 설정
+        self._fill_callback: Optional[Callable[..., Coroutine]] = None
+        self._fill_tr_id:    str = self._FILL_TR_MOCK if is_mock else self._FILL_TR_ID
 
     # ──────────────────────────────────────────────
     # Public API
@@ -117,6 +135,16 @@ class KISUSPriceFeed:
     def on_price(self, callback: Callable[..., Coroutine]):
         """실시간 가격 콜백 등록: async def callback(symbol, price, volume)"""
         self._price_callback = callback
+
+    def on_fill(self, callback: Callable[..., Coroutine]):
+        """체결통보 콜백 등록: async def callback(order_no, symbol, side, qty, price, exchange)"""
+        self._fill_callback = callback
+
+    def setup_fill(self, hts_id: str):
+        """체결통보 구독 설정 (KIS HTS 로그인 ID).
+        connect 전/후 모두 호출 가능. 연결 중이면 즉시 구독 전송.
+        """
+        self._fill_hts_id = hts_id
 
     async def subscribe(self, symbols: list, exchange: str = "NASD"):
         """종목 구독 추가 (중복 제거, 한도 체크)"""
@@ -250,6 +278,10 @@ class KISUSPriceFeed:
             for sym, tr_key in list(self._subscribed.items()):
                 await self._send_sub(tr_key, subscribe=True)
 
+            # 체결통보(H0GSCNI0) 구독 — setup_fill(hts_id) 설정 시 동일 WS에서 수신
+            if self._fill_hts_id:
+                await self._subscribe_fill()
+
             # 수신 루프
             async for msg in self._ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
@@ -289,6 +321,73 @@ class KISUSPriceFeed:
         except Exception as e:
             logger.warning(f"[KIS US WS] 전송 오류 ({tr_key}): {e}")
 
+    async def _subscribe_fill(self):
+        """체결통보(H0GSCNI0) 구독 전송 — 가격 WS와 동일 연결 사용"""
+        if not self._ws or self._ws.closed or not self._fill_hts_id:
+            return
+        payload = {
+            "header": {
+                "approval_key": self._approval_key,
+                "custtype":     "P",
+                "tr_type":      "1",
+                "content-type": "utf-8",
+            },
+            "body": {
+                "input": {
+                    "tr_id":  self._fill_tr_id,
+                    "tr_key": self._fill_hts_id,
+                }
+            },
+        }
+        try:
+            await self._ws.send_str(json.dumps(payload))
+            logger.info(f"[KIS US WS] 체결통보 구독 전송 (HTS ID: {self._fill_hts_id[:4]}****)")
+        except Exception as e:
+            logger.warning(f"[KIS US WS] 체결통보 구독 전송 실패: {e}")
+
+    async def _handle_fill_message(self, data_str: str):
+        """H0GSCNI0 체결통보 파싱 → fill callback 호출"""
+        fields = data_str.split("^")
+        if len(fields) < 13:
+            return
+        d = {self._FILL_FIELDS[i]: fields[i]
+             for i in range(min(len(self._FILL_FIELDS), len(fields)))}
+
+        rfus_yn = d.get("RFUS_YN", "1")
+        cntg_yn = d.get("CNTG_YN", "1")
+        if cntg_yn != "2" or rfus_yn != "0":  # 체결통보만 처리
+            return
+
+        order_no = d.get("ODER_NO", "").strip()
+        symbol   = d.get("STCK_SHRN_ISCD", "").strip()
+        side_cls = d.get("SELN_BYOV_CLS", "")
+        side     = "sell" if side_cls == "01" else "buy"
+        qty      = int(d.get("CNTG_QTY", "0") or "0")
+        price    = float(d.get("CNTG_UNPR", "0") or "0")
+        excd_raw = d.get("ODER_COND", "")
+        exchange = self._FILL_EXCD_MAP.get(excd_raw, "NASD")
+
+        if not symbol or not order_no or price <= 0:
+            return
+
+        logger.info(
+            f"[KIS US WS] 체결통보 ← {side.upper()} {symbol} "
+            f"{qty}주 @ ${price:.2f} (주문번호={order_no})"
+        )
+
+        if self._fill_callback:
+            try:
+                await self._fill_callback(
+                    order_no=order_no,
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    price=price,
+                    exchange=exchange,
+                )
+            except Exception as e:
+                logger.error(f"[KIS US WS] 체결통보 콜백 오류: {e}")
+
     async def _handle_message(self, raw: str):
         # JSON → 구독 확인 / 오류 응답
         if raw.startswith("{"):
@@ -314,9 +413,14 @@ class KISUSPriceFeed:
                 pass
             return
 
-        # Push 데이터: tr_id|tr_key|data_cnt|fields^...
+        # Push 데이터: push_type|TR_ID|data_cnt|fields^...
         parts = raw.split("|")
         if len(parts) < 4:
+            return
+
+        # 체결통보 메시지 → 별도 핸들러
+        if len(parts) > 1 and parts[1] in (self._FILL_TR_ID, self._FILL_TR_MOCK):
+            await self._handle_fill_message(parts[3])
             return
 
         fields = parts[3].split("^")

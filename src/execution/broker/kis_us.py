@@ -728,7 +728,7 @@ class KISUSBroker:
                 "ORD_END_DT": end_date,
                 "SLL_BUY_DVSN": "00",   # 00=전체
                 "CCLD_NCCS_DVSN": "00",  # 00=전체
-                "OVRS_EXCG_CD": "",       # 빈값=전체 거래소
+                "OVRS_EXCG_CD": "NASD",   # NASD = 미국 전체(NASDAQ+NYSE+AMEX) — 빈값은 API가 빈 결과 반환
                 "SORT_SQN": "DS",        # 내림차순
                 "ORD_DT": "",
                 "ORD_GNO_BRNO": "",
@@ -814,7 +814,7 @@ class KISUSBroker:
         params = {
             "CANO": self.config.account_no,
             "ACNT_PRDT_CD": self.config.account_product_cd,
-            "OVRS_EXCG_CD": "",       # 빈값=전체 거래소
+            "OVRS_EXCG_CD": "NASD",   # NASD = 미국 전체 — 빈값은 빈 결과 반환
             "SORT_SQN": "DS",
             "CTX_AREA_FK200": "",
             "CTX_AREA_NK200": "",
