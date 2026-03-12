@@ -95,6 +95,11 @@ class SupplyScoreProvider:
         KIS API(FHKST01010900)로 5일치 수급 데이터 로드.
         pykrx/KRX 완전 대체 경로.
 
+        최적화:
+        - 캐시 파일이 있는 날짜는 즉시 로드하고 KIS 호출 생략
+        - 캐시 미스 날짜들은 asyncio.gather로 병렬 조회
+          (concurrency=5로 KIS rate limit 준수, 총 동시 요청 ≤ 25)
+
         Args:
             kis_market_data: KISMarketData 인스턴스
             symbols:         조회할 종목코드 목록 (SEPA 후보 등)
@@ -103,42 +108,64 @@ class SupplyScoreProvider:
         """
         dates = _get_trading_dates(LOOKBACK_DAYS)
 
+        # 1) 캐시 우선 로드 (파일 있는 날짜는 KIS 호출 불필요)
+        missing_dates = []
         for date_str in dates:
             if date_str in self._daily:
-                continue  # 이미 로드됨 (캐시 or 이전 호출)
-
-            # supply_daily 캐시 파일 있으면 스킵
+                continue
             cached = self._load_day(date_str)
             if cached:
                 self._daily[date_str] = cached
-                continue
+            else:
+                missing_dates.append(date_str)
 
-            # KIS 종목별 투자자 일별 조회
-            try:
-                logger.info(f"[수급5일] KIS API 조회: {date_str} ({len(symbols)}종목)")
-                kis_result = await kis_market_data.fetch_batch_investor_daily(
-                    symbols, date_str, concurrency=10
-                )
-                if kis_result:
-                    # supply_daily 스키마 변환: foreign_net_buy → foreign, inst_net_buy → inst
-                    day_data = {
-                        sym: {
-                            "foreign": v.get("foreign_net_buy", 0),
-                            "inst":    v.get("inst_net_buy", 0),
+        # 2) 캐시 미스 날짜를 병렬로 KIS 조회
+        # fetch_stock_investor_daily가 days=30으로 전체 캐시 → 날짜별 재호출 시 캐시 히트
+        # concurrency=5(날짜별) × 최대 5날짜 = 최대 25 동시 요청 (KIS 20/s 이내)
+        if missing_dates:
+            logger.info(
+                f"[수급5일] KIS 병렬 조회: {missing_dates} ({len(symbols)}종목)"
+            )
+
+            async def _fetch_date(date_str: str):
+                try:
+                    kis_result = await kis_market_data.fetch_batch_investor_daily(
+                        symbols, date_str, concurrency=5
+                    )
+                    if kis_result:
+                        day_data = {
+                            sym: {
+                                "foreign": v.get("foreign_net_buy", 0),
+                                "inst":    v.get("inst_net_buy", 0),
+                            }
+                            for sym, v in kis_result.items()
                         }
-                        for sym, v in kis_result.items()
-                    }
-                    self._daily[date_str] = day_data
-                    self._save_day(date_str, day_data)
-                    logger.info(f"[수급5일] KIS 로드 완료: {date_str} {len(day_data)}종목")
-            except Exception as e:
-                logger.warning(f"[수급5일] KIS {date_str} 조회 실패: {e}")
+                        self._daily[date_str] = day_data
+                        self._save_day(date_str, day_data)
+                        logger.info(
+                            f"[수급5일] KIS 로드 완료: {date_str} {len(day_data)}종목"
+                        )
+                    else:
+                        logger.warning(f"[수급5일] KIS {date_str} 0종목 반환")
+                except Exception as e:
+                    logger.warning(f"[수급5일] KIS {date_str} 조회 실패: {e}")
+
+            await asyncio.gather(*[_fetch_date(d) for d in missing_dates])
 
         self._loaded_dates = [d for d in dates if d in self._daily]
         if self._loaded_dates:
             self._score_cache.clear()
             self._meta_cache.clear()
             self._ready = True
+
+        # KIS로 못 채운 날짜가 있으면 supply_demand 캐시 폴백 (ensure_loaded 위임)
+        still_missing = [d for d in dates if d not in self._daily]
+        if still_missing:
+            logger.info(
+                f"[수급5일] KIS 미수록 날짜 → 캐시 폴백: {still_missing}"
+            )
+            await self.ensure_loaded()
+
         return self._ready
 
     async def ensure_loaded(self, force_refresh_today: bool = False) -> bool:
@@ -246,36 +273,33 @@ class SupplyScoreProvider:
 
         supply_demand 캐시 스키마: {sym: {"foreign_net_buy": N, "inst_net_buy": N}}
         supply_daily  캐시 스키마: {sym: {"foreign": N, "inst": N}}
-        → 필드명만 다르므로 변환 후 반환.
+        → 필드명 변환 후 반환.
 
-        대상 날짜를 우선 탐색. 없으면 최대 7일 이내 최근 파일로 폴백.
+        date_str 날짜 우선 탐색, 없으면 최대 7일 이내 최신 파일 탐색 (연휴 5일 + 여유).
+        swing_screener._load_prev_day_supply_from_cache와 탐색 범위를 7일로 통일.
         """
-        cache_dir = CACHE_DIR
-        # 정확한 날짜 우선 탐색
-        candidates = [date_str]
-        # 날짜 전후 ±3일 추가 탐색 (연휴/공휴일 커버)
+        from datetime import datetime, timedelta
         try:
-            from datetime import datetime, timedelta
             dt = datetime.strptime(date_str, "%Y%m%d")
-            for delta in range(1, 4):
-                candidates.append((dt - timedelta(days=delta)).strftime("%Y%m%d"))
         except Exception:
-            pass
+            dt = datetime.now() - timedelta(days=1)
 
-        for target in candidates:
-            path = cache_dir / f"supply_demand_{target}.json"
+        for delta in range(0, 8):  # 0=해당 날짜, 1~7=직전 최대 7일
+            target = (dt - timedelta(days=delta)).strftime("%Y%m%d")
+            path = CACHE_DIR / f"supply_demand_{target}.json"
             if path.exists():
                 try:
                     raw = json.loads(path.read_text())
                     if not raw:
                         continue
                     # 스키마 변환: foreign_net_buy → foreign, inst_net_buy → inst
-                    converted: Dict[str, Dict[str, int]] = {}
-                    for sym, vals in raw.items():
-                        converted[sym] = {
+                    converted: Dict[str, Dict[str, int]] = {
+                        sym: {
                             "foreign": vals.get("foreign_net_buy", 0),
                             "inst":    vals.get("inst_net_buy", 0),
                         }
+                        for sym, vals in raw.items()
+                    }
                     return converted
                 except Exception:
                     pass

@@ -12,6 +12,7 @@ KIS 공식 API 5종을 모아서 관리합니다:
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Optional, Set
 
@@ -371,7 +372,7 @@ class KISMarketData:
     # ============================================================
 
     async def fetch_stock_investor_daily(
-        self, symbol: str, days: int = 10
+        self, symbol: str, days: int = 30
     ) -> Dict[str, Dict[str, int]]:
         """
         종목별 최근 N일 외국인/기관 순매수 조회 (FHKST01010900)
@@ -382,7 +383,7 @@ class KISMarketData:
 
         Args:
             symbol: 종목코드 (6자리)
-            days:   반환할 최근 일수 (최대 30)
+            days:   반환할 최근 일수 (기본 30, 최대 30)
 
         Returns:
             {date_str: {"foreign_net_buy": int, "inst_net_buy": int}, ...}
@@ -423,7 +424,7 @@ class KISMarketData:
                         pass
             if result:
                 self._cache[cache_key] = result
-                self._cache_ts[cache_key] = __import__("time").time()
+                self._cache_ts[cache_key] = time.time()
         except Exception as e:
             logger.debug(f"[KISMarketData] 투자자일별 {symbol} 조회 실패: {e}")
         return dict(list(result.items())[:days])
@@ -448,16 +449,18 @@ class KISMarketData:
         Returns:
             {symbol: {"foreign_net_buy": int, "inst_net_buy": int}, ...}
         """
-        import asyncio as _asyncio
-        sem = _asyncio.Semaphore(concurrency)
+        sem = asyncio.Semaphore(concurrency)
 
         async def _fetch_one(sym: str) -> tuple:
             async with sem:
-                daily = await self.fetch_stock_investor_daily(sym, days=10)
+                # days=30: KIS API는 최대 30 거래일을 한 번에 반환.
+                # 5일치 이상을 ensure_loaded_from_kis에서 요청할 수 있으므로
+                # 최대치로 받아 캐시해 두면 날짜별 재호출 시 캐시 히트됨.
+                daily = await self.fetch_stock_investor_daily(sym, days=30)
                 return sym, daily.get(target_date, {})
 
         tasks = [_fetch_one(sym) for sym in symbols]
-        results_raw = await _asyncio.gather(*tasks, return_exceptions=True)
+        results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
         out: Dict[str, Dict[str, int]] = {}
         for r in results_raw:
