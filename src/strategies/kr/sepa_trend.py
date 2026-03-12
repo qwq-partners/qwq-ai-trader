@@ -58,28 +58,51 @@ class SEPATrendStrategy(BaseStrategy):
         """
         signals = []
         all_scores: List[tuple] = []
+        rr_blocked: List[tuple] = []  # (symbol, stop_pct, target_pct, rr) 추적
+
+        # supply_data_age 기반 min_score 동적 완화
+        # T-2 캐시 사용 시 수급 최대점수 20→14점으로 감소 → min_score 보정
+        supply_age_sample = 0
+        if candidates:
+            supply_age_sample = candidates[0].indicators.get("supply_data_age") or 0
+        effective_min_score = self.config.min_score
+        if supply_age_sample >= 2:
+            effective_min_score = max(45.0, self.config.min_score - 10.0)
+        elif supply_age_sample >= 1:
+            effective_min_score = max(48.0, self.config.min_score - 5.0)
+        if effective_min_score != self.config.min_score:
+            logger.info(
+                f"[SEPA] 수급 T-{supply_age_sample} → min_score 완화: "
+                f"{self.config.min_score:.0f} → {effective_min_score:.0f}"
+            )
 
         for candidate in candidates:
             try:
                 score = self._calculate_sepa_score(candidate)
                 all_scores.append((score, candidate.symbol, candidate.name))
 
-                if score < self.config.min_score:
+                if score < effective_min_score:
                     continue
 
                 # ATR 기반 동적 손절/익절
+                # target cap: 8% → 10% (8%로 cap 시 ATR>2.67% 전 종목이 R/R<2.0으로 차단되는 구조적 버그 수정)
                 atr = candidate.indicators.get("atr_14")
+                stop_pct = 5.0
+                target_pct = 8.0
                 if atr is not None and atr > 0:
                     stop_pct = max(2.5, min(5.0, atr * 1.5))
-                    target_pct = max(3.0, min(8.0, atr * 3.0))
+                    target_pct = max(3.0, min(10.0, atr * 3.0))  # cap 8% → 10%
                     candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                     candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
-                # R/R 비율 필터
+                # R/R 비율 필터 (min_rr: 2.0 → 1.5)
+                # ATR cap(10%)과 stop(최대 5%)의 조합에서 R/R = 10/5 = 2.0 이므로 1.5는 안전망
                 if not self.check_rr_ratio(
                     candidate.entry_price, candidate.target_price,
-                    candidate.stop_price, min_rr=2.0
+                    candidate.stop_price, min_rr=1.5
                 ):
+                    rr = target_pct / stop_pct if stop_pct > 0 else 0
+                    rr_blocked.append((candidate.symbol, candidate.name, stop_pct, target_pct, rr))
                     continue
 
                 if score >= 85:
@@ -121,27 +144,42 @@ class SEPATrendStrategy(BaseStrategy):
             except Exception as e:
                 logger.warning(f"[SEPA] {candidate.symbol} 시그널 생성 실패: {e}")
 
+        # R/R 차단 현황 로그 (블랙박스 제거)
+        if rr_blocked:
+            logger.warning(
+                f"[SEPA] R/R 차단: {len(rr_blocked)}개 "
+                f"(target cap과 stop 충돌 → R/R<1.5 종목)"
+            )
+            for sym, name, sp, tp, rr in rr_blocked[:5]:
+                logger.warning(f"  ✗ {sym} {name}: stop={sp:.1f}% target={tp:.1f}% R/R={rr:.2f}")
+
         # 점수 분포 요약 로그
         if all_scores:
             all_scores.sort(reverse=True)
             top = all_scores[:10]
-            passed = sum(1 for s, _, _ in all_scores if s >= self.config.min_score)
+            passed = sum(1 for s, _, _ in all_scores if s >= effective_min_score)
+            rr_block_count = len(rr_blocked)
             logger.info(
                 f"[SEPA] 점수분포: 전체={len(all_scores)}개, "
-                f"통과={passed}개 (min={self.config.min_score}), "
+                f"통과={passed}개 (min={effective_min_score:.0f}), "
+                f"R/R차단={rr_block_count}개, "
                 f"평균={sum(s for s,_,_ in all_scores)/len(all_scores):.1f}, "
                 f"최고={all_scores[0][0]:.1f}"
             )
             logger.info(f"[SEPA] 상위 10개 점수:")
             for score_val, sym, name in top:
                 lci = None
+                atr_val = None
                 for c in candidates:
                     if c.symbol == sym:
                         lci = c.indicators.get("lci")
+                        atr_val = c.indicators.get("atr_14")
                         break
-                mark = "v" if score_val >= self.config.min_score else " "
+                mark = "v" if score_val >= effective_min_score else " "
                 logger.info(
-                    f"  {mark} {sym} {name}: {score_val:.1f}pt  LCI={f'{lci:.2f}' if lci is not None else 'None'}"
+                    f"  {mark} {sym} {name}: {score_val:.1f}pt  "
+                    f"LCI={f'{lci:.2f}' if lci is not None else 'None'}  "
+                    f"ATR={f'{atr_val:.1f}%' if atr_val is not None else 'N/A'}"
                 )
 
         return signals
