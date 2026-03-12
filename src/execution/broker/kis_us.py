@@ -744,11 +744,16 @@ class KISUSBroker:
                 break
 
             output1 = data.get("output1", [])
-            # output1이 비어있을 때 디버깅: output 키 이름 확인
+            # output1이 비어있을 때 응답 내용 INFO 출력 (history=0 원인 파악용)
             if page == 0 and not output1:
                 avail_keys = [k for k in data.keys() if k.startswith("output")]
-                if avail_keys:
-                    logger.debug(f"[체결조회] output1 비어있음, 응답 키: {avail_keys}")
+                logger.info(
+                    f"[체결조회] output1 비어있음 "
+                    f"rt_cd={data.get('rt_cd')} msg={data.get('msg1','')!r} "
+                    f"응답키={avail_keys} "
+                    f"excg={params.get('OVRS_EXCG_CD')} "
+                    f"dt={params.get('ORD_STRT_DT')}~{params.get('ORD_END_DT')}"
+                )
 
             for item in output1:
                 order_no = item.get("ODNO", "").strip()
