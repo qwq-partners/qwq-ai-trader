@@ -85,18 +85,21 @@ class SEPATrendStrategy(BaseStrategy):
                     continue
 
                 # ATR 기반 동적 손절/익절
-                # target cap: 8% → 10% (8%로 cap 시 ATR>2.67% 전 종목이 R/R<2.0으로 차단되는 구조적 버그 수정)
+                # ▶ P0-1 수정: ExitManager(ATR×2.0, min=4%, max=7%)와 동일 공식 사용
+                #   기존(ATR×1.5, min=2.5%) → R/R 체크가 실제 적용 stop과 달라 필터 무효
+                #   수정 후: sepa_trend stop = ExitManager stop → R/R 체크가 실제 R/R 반영
                 atr = candidate.indicators.get("atr_14")
-                stop_pct = 5.0
-                target_pct = 8.0
+                stop_pct = 5.0   # ATR 없을 때 기본값
+                target_pct = 10.0
                 if atr is not None and atr > 0:
-                    stop_pct = max(2.5, min(5.0, atr * 1.5))
-                    target_pct = max(3.0, min(10.0, atr * 3.0))  # cap 8% → 10%
-                    candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
-                    candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
+                    # ExitConfig: atr_multiplier=2.0, min_stop_pct=4.0, max_stop_pct=7.0
+                    stop_pct = max(4.0, min(7.0, atr * 2.0))
+                    # target: stop × 1.5 이상 보장 + 최대 20% (추세 추종 공간 확보)
+                    target_pct = max(stop_pct * 1.5, min(20.0, atr * 3.0))
+                candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
+                candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
-                # R/R 비율 필터 (min_rr: 2.0 → 1.5)
-                # ATR cap(10%)과 stop(최대 5%)의 조합에서 R/R = 10/5 = 2.0 이므로 1.5는 안전망
+                # R/R 비율 필터 (min_rr=1.5): 이제 실제 ExitManager stop과 일치
                 if not self.check_rr_ratio(
                     candidate.entry_price, candidate.target_price,
                     candidate.stop_price, min_rr=1.5

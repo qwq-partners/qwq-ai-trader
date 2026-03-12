@@ -635,12 +635,15 @@ class BatchAnalyzer:
                     skipped += 1
                     continue
 
-                # 갭다운 체크 (하단: 개장 급락 시 당일 추가 하락 위험)
+                # 갭다운/갭업 체크
+                gap_pct = 0.0
                 if sig.entry_price > 0:
                     gap_pct = (current_price - sig.entry_price) / sig.entry_price * 100
+
+                    # 갭다운 스킵 (개장 급락 시 당일 추가 하락 위험)
                     gap_down_threshold = self._config.get("batch", {}).get(
                         "gap_down_skip_pct", -2.0
-                    )  # 기본 -2%: 전일 종가 대비 2% 이상 갭다운 시 진입 보류
+                    )
                     if gap_pct < gap_down_threshold:
                         logger.info(
                             f"[배치분석] {sig.symbol} 갭다운 스킵: "
@@ -649,6 +652,24 @@ class BatchAnalyzer:
                         )
                         skipped += 1
                         continue
+
+                    # ── P0-6: 갭업 시 점수 재검증 ──
+                    # 갭업이 클수록 목표까지 남은 upside가 줄어들어 실질 R/R 저하.
+                    # 갭업 정도에 비례해 더 높은 품질 점수를 요구.
+                    if gap_pct > 1.0:
+                        _batch_min = self._config.get(sig.strategy, {}).get("min_score", 55.0)
+                        if gap_pct > 2.5:
+                            _gap_extra = 10.0   # 2.5%+ 갭업 → +10pt 추가 요구
+                        else:
+                            _gap_extra = 5.0    # 1.0%+ 갭업 → +5pt 추가 요구
+                        if sig.score < _batch_min + _gap_extra:
+                            logger.info(
+                                f"[배치분석] {sig.symbol} 갭업 점수 미달 스킵: "
+                                f"갭={gap_pct:+.1f}% 점수={sig.score:.0f} "
+                                f"(필요={_batch_min + _gap_extra:.0f})"
+                            )
+                            skipped += 1
+                            continue
 
                 # 이미 보유 중인 종목 스킵
                 if sig.symbol in self._engine.portfolio.positions:
@@ -677,6 +698,18 @@ class BatchAnalyzer:
                     )
                     skipped += 1
                     continue
+
+                # ── P0-5: 섹터 조회 → can_open_position 섹터 제한에 반영 ──
+                # 기존: sector 파라미터 미전달 → engine.can_open_position 섹터 제한 완전 무효
+                # 수정: SectorMomentumProvider로 섹터 조회 → 시그널 메타데이터에 포함
+                _sector = None
+                if self._sector_momentum:
+                    try:
+                        _sector = await self._sector_momentum.get_sector(
+                            sig.symbol, getattr(sig, "name", "") or ""
+                        )
+                    except Exception:
+                        pass  # 섹터 조회 실패 시 섹터 제한 없이 진행
 
                 # 기존 이벤트 시스템으로 Signal 발행
                 try:
@@ -716,6 +749,8 @@ class BatchAnalyzer:
                         "name": sig.name,
                         "atr_pct": sig.atr_pct,
                         "market_regime": _regime,
+                        "sector": _sector,          # P0-5: 섹터 제한 체크에 활용
+                        "gap_pct": round(gap_pct, 2),
                     },
                 )
 

@@ -50,44 +50,59 @@ class ExitStage(Enum):
 #   - second_exit_pct : stage ≤ FIRST 에만
 #   - third_exit_pct  : stage ≤ SECOND 에만
 # ──────────────────────────────────────────────────────────────────────────────
+# ▶ P0-4 수정: 분할 익절 구조를 추세 추종에 맞게 조정
+#
+# 기존 문제: TP1=5% TP2=10% TP3=12% — 타겟이 너무 촘촘하고 낮음.
+#   SEPA 종목 기대 움직임 +20~50%인데 +12%에서 82.5% 포지션 이미 청산.
+#   first_exit_ratio=30% → 너무 이른 수익 확정 + 추세 소멸 후 남은 포지션만 홀딩.
+#
+# 수정:
+#   first_exit_ratio: 30% → 20% (포지션 더 오래 유지)
+#   TP2: 10% → 15% (추세 중간 목표)
+#   TP3: 12% → 25% (추세 후반 목표, SEPA 기대값과 정렬)
+#   trailing: 범위별 3~5% (ATR 대비 현실적 범위로 상향)
+#
+# 기대 효과 (종목 +40% 달성 기준):
+#   변경 전: 30%×5% + 35%×10% + 17.5%×12% + 17.5%×37% = 13.6%
+#   변경 후: 20%×5% + 40%×15% + 20%×25% + 20%×37%     = 19.4%  (+42%)
 REGIME_EXIT_PARAMS: Dict[str, Dict] = {
     "trending_bull": {
         "first_exit_pct":    5.0,
-        "second_exit_pct":  10.0,
-        "third_exit_pct":   12.0,
-        "trailing_stop_pct":  3.0,
+        "second_exit_pct":  15.0,   # 10 → 15
+        "third_exit_pct":   25.0,   # 12 → 25
+        "trailing_stop_pct":  4.0,  #  3 → 4 (KR ATR 5~7% 대비)
         "stop_loss_pct":      5.0,
         "stale_high_days":    7,
     },
     "neutral": {
         "first_exit_pct":    5.0,
-        "second_exit_pct":   8.0,
-        "third_exit_pct":   10.0,
-        "trailing_stop_pct":  2.5,
+        "second_exit_pct":  12.0,   #  8 → 12
+        "third_exit_pct":   20.0,   # 10 → 20
+        "trailing_stop_pct":  3.0,  # 2.5 → 3
         "stop_loss_pct":      4.0,
         "stale_high_days":    5,
     },
     "ranging": {
         "first_exit_pct":    4.0,
-        "second_exit_pct":   7.0,
-        "third_exit_pct":    9.0,
+        "second_exit_pct":   8.0,   #  7 → 8
+        "third_exit_pct":   14.0,   #  9 → 14
         "trailing_stop_pct":  2.5,
         "stop_loss_pct":      4.0,
         "stale_high_days":    4,
     },
     "turning_point": {          # 바닥 전환점 — 중간값
         "first_exit_pct":    4.0,
-        "second_exit_pct":   7.0,
-        "third_exit_pct":    9.0,
-        "trailing_stop_pct":  2.5,
+        "second_exit_pct":  10.0,   #  7 → 10
+        "third_exit_pct":   18.0,   #  9 → 18
+        "trailing_stop_pct":  3.0,  # 2.5 → 3
         "stop_loss_pct":      4.0,
         "stale_high_days":    5,
     },
     "trending_bear": {
         "first_exit_pct":    3.0,
-        "second_exit_pct":   6.0,
-        "third_exit_pct":    8.0,
-        "trailing_stop_pct":  1.5,
+        "second_exit_pct":   8.0,   #  6 → 8 (bear에서도 추세 공간 확보)
+        "third_exit_pct":   14.0,   #  8 → 14
+        "trailing_stop_pct":  2.0,  # 1.5 → 2
         "stop_loss_pct":      2.5,
         "stale_high_days":    3,
     },
@@ -102,14 +117,14 @@ class ExitConfig:
 
     # 1차 익절
     first_exit_pct: float = 5.0       # 목표 수익률 (%)
-    first_exit_ratio: float = 0.30    # 청산 비율
+    first_exit_ratio: float = 0.20    # 청산 비율 (0.30 → 0.20: P0-4 추세 추종 개선)
 
     # 2차 익절
-    second_exit_pct: float = 10.0     # 목표 수익률 (%)
+    second_exit_pct: float = 15.0     # 목표 수익률 (%) (10 → 15: P0-4)
     second_exit_ratio: float = 0.50   # 잔여의 비율
 
     # 3차 익절
-    third_exit_pct: float = 12.0      # 목표 수익률 (%)
+    third_exit_pct: float = 25.0      # 목표 수익률 (%) (12 → 25: P0-4)
     third_exit_ratio: float = 0.50    # 잔여의 비율
 
     # 손절

@@ -837,11 +837,25 @@ class SwingScreener:
         z_foreign = zscore_list(all_foreign)
         z_inst = zscore_list(all_inst)
 
+        # ── P0-2: 시장 전체 수급 상태 절대값 게이트 ──
+        # LCI는 후보 집합 내 상대 z-score만 측정. 시장 전체가 수급 악화 중이어도
+        # "상대적으로 덜 나쁜" 종목이 높은 LCI를 받는 구조.
+        # 게이트: 후보 집합의 60% 이상이 외국인 순매도 → 시장 수급 압박 → LCI 50% 할인
+        n_neg_foreign = sum(1 for v in all_foreign if v < 0)
+        market_sell_pressure = (n_neg_foreign / len(all_foreign)) > 0.60 if all_foreign else False
+        lci_market_mult = 0.5 if market_sell_pressure else 1.0
+        if market_sell_pressure:
+            logger.warning(
+                f"[스윙스크리너] 시장 수급 압박 감지: 외국인 순매도 종목 "
+                f"{n_neg_foreign}/{len(all_foreign)}개 → LCI 50% 할인 적용"
+            )
+
         # 수급 데이터 전무(std≈0) 시 z-score 전부 0 → LCI=None으로 설정하여 폴백 경로 활성화
         all_zero = all(z == 0.0 for z in z_foreign) and all(z == 0.0 for z in z_inst)
         for i, c in enumerate(candidates):
             if all_zero:
                 c.indicators["lci"] = None
+                c.indicators["market_sell_pressure"] = market_sell_pressure
             else:
                 lci = 0.5 * z_foreign[i] + 0.5 * z_inst[i]
 
@@ -852,7 +866,10 @@ class SwingScreener:
                     lci += accel
                     c.indicators["supply_accel"] = round(accel, 3)
 
+                # 시장 수급 압박 할인 적용
+                lci *= lci_market_mult
                 c.indicators["lci"] = round(lci, 3)
+                c.indicators["market_sell_pressure"] = market_sell_pressure
 
     async def _apply_strategic_overlay(
         self, candidates: List[SwingCandidate]

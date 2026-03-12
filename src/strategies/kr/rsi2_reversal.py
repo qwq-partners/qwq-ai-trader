@@ -188,13 +188,32 @@ class RSI2ReversalStrategy(BaseStrategy):
             elif bb_dist < 1:
                 score += 5
 
-        # 4. 수급 (20점) — KRX: 수급 없는 과매도는 Dead Cat Bounce 위험
-        foreign_net = ind.get("foreign_net_buy", 0)
-        inst_net = ind.get("inst_net_buy", 0)
-        if foreign_net > 0:
-            score += 10
-        if inst_net > 0:
-            score += 10
+        # 4. 수급 (20점)
+        # ▶ P0-3 수정: 기존 "당일 외국인 AND 기관 순매수" 조건은 RSI2 진입 조건(연속 하락 = 수급 이탈)
+        #   과 구조적으로 모순. 동시 성립 확률 매우 낮아 RSI2 전략이 사실상 비활성화되던 문제.
+        #
+        # 수정 기준:
+        #   T-1 이상(장전/배치 스캔) 데이터 → 하락 직전 날의 수급 판단 → OR 조건 + 완화된 임계값
+        #   T-0(장중 실시간) 데이터       → 하락 중이므로 기대치 낮춤 → 두 조건 중 하나만 충족도 인정
+        foreign_net = ind.get("foreign_net_buy", 0) or 0
+        inst_net = ind.get("inst_net_buy", 0) or 0
+        supply_age = ind.get("supply_data_age", 0) or 0
+
+        if supply_age >= 1:
+            # T-1 데이터: 하락 이전 날의 수급 → "어느 한 쪽이라도 순매수면" 반등 근거
+            # 소폭 순매도(-50만주 이내)도 허용 (일시 조정으로 볼 수 있음)
+            if foreign_net > 0 and inst_net > 0:
+                score += 20  # 외국인+기관 동시 순매수 → 강한 반등 근거
+            elif foreign_net > 0 or inst_net > 0:
+                score += 12  # 한 쪽만 순매수 → 부분 지지
+            elif foreign_net > -500_000 or inst_net > -500_000:
+                score += 5   # 소폭 순매도 → 단기 조정으로 허용
+        else:
+            # T-0(장중 실시간): 하락 중이므로 순매수 기대 낮음 → 낮은 기준 적용
+            if foreign_net > 0 and inst_net > 0:
+                score += 20
+            elif foreign_net > 0 or inst_net > 0:
+                score += 10
 
         # 5. MRS 맨스필드 상대강도 (5점) — 지수 대비 강세 종목 과매도 → 반등 확률 높음
         mrs = ind.get("mrs")

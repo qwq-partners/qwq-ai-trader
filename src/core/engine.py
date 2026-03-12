@@ -173,6 +173,10 @@ class UnifiedEngine:
         # 통계 — 공유
         self.stats = EngineStats()
 
+        # P0-5: 섹터 임시 캐시 (signal → fill 사이에 sector 전달용)
+        # can_open_position 통과 시 저장 → on_fill 시 position.sector에 복사 후 삭제
+        self._pending_sector_map: Dict[str, str] = {}
+
         # 컴포넌트 참조 (초기화 후 설정 — KR 하위호환)
         self.strategy_manager = None
         self.risk_manager = None
@@ -510,12 +514,14 @@ class UnifiedEngine:
                 )
                 return
             # 새 포지션 (BUY)
+            _sector_for_pos = self._pending_sector_map.pop(symbol, None)
             self.portfolio.positions[symbol] = Position(
                 symbol=symbol,
                 quantity=0,
                 avg_price=Decimal("0"),
                 strategy=fill.strategy,
                 entry_time=fill.timestamp,
+                sector=_sector_for_pos,   # P0-5: 섹터 영속화 (재시작 후에도 섹터 제한 유효)
             )
 
         pos = self.portfolio.positions[symbol]
@@ -662,12 +668,15 @@ class UnifiedEngine:
             )
             logger.debug(f"[리스크] 포지션 현황: {effective_positions}개 (보유={len(self.portfolio.positions)})")
 
-        # 3-1. 섹터 분산 체크
+        # 3-1. 섹터 분산 체크 (P0-5)
         max_per_sector = risk.max_positions_per_sector
         if sector and max_per_sector > 0 and symbol not in self.portfolio.positions:
             same_sector = sum(1 for p in self.portfolio.positions.values() if p.sector == sector)
             if same_sector >= max_per_sector:
                 return False, f"섹터 포지션 한도 초과 ({sector}: {same_sector}/{max_per_sector})"
+        # 통과 시 sector 임시 저장 → on_fill에서 position.sector 설정에 사용
+        if sector:
+            self._pending_sector_map[symbol] = sector
 
         # 4. 포지션 크기 제한
         position_value = price * quantity
