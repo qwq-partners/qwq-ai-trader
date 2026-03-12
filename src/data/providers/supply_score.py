@@ -88,6 +88,59 @@ class SupplyScoreProvider:
 
     # ── 데이터 로드 / 갱신 ────────────────────────────────────────────────────
 
+    async def ensure_loaded_from_kis(
+        self, kis_market_data, symbols: List[str]
+    ) -> bool:
+        """
+        KIS API(FHKST01010900)로 5일치 수급 데이터 로드.
+        pykrx/KRX 완전 대체 경로.
+
+        Args:
+            kis_market_data: KISMarketData 인스턴스
+            symbols:         조회할 종목코드 목록 (SEPA 후보 등)
+        Returns:
+            True if data loaded
+        """
+        dates = _get_trading_dates(LOOKBACK_DAYS)
+
+        for date_str in dates:
+            if date_str in self._daily:
+                continue  # 이미 로드됨 (캐시 or 이전 호출)
+
+            # supply_daily 캐시 파일 있으면 스킵
+            cached = self._load_day(date_str)
+            if cached:
+                self._daily[date_str] = cached
+                continue
+
+            # KIS 종목별 투자자 일별 조회
+            try:
+                logger.info(f"[수급5일] KIS API 조회: {date_str} ({len(symbols)}종목)")
+                kis_result = await kis_market_data.fetch_batch_investor_daily(
+                    symbols, date_str, concurrency=10
+                )
+                if kis_result:
+                    # supply_daily 스키마 변환: foreign_net_buy → foreign, inst_net_buy → inst
+                    day_data = {
+                        sym: {
+                            "foreign": v.get("foreign_net_buy", 0),
+                            "inst":    v.get("inst_net_buy", 0),
+                        }
+                        for sym, v in kis_result.items()
+                    }
+                    self._daily[date_str] = day_data
+                    self._save_day(date_str, day_data)
+                    logger.info(f"[수급5일] KIS 로드 완료: {date_str} {len(day_data)}종목")
+            except Exception as e:
+                logger.warning(f"[수급5일] KIS {date_str} 조회 실패: {e}")
+
+        self._loaded_dates = [d for d in dates if d in self._daily]
+        if self._loaded_dates:
+            self._score_cache.clear()
+            self._meta_cache.clear()
+            self._ready = True
+        return self._ready
+
     async def ensure_loaded(self, force_refresh_today: bool = False) -> bool:
         """
         5일치 데이터 확보 (캐시 우선, 없으면 pykrx 호출).

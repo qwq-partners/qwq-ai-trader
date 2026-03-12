@@ -434,21 +434,31 @@ class SwingScreener:
             self._save_supply_demand_cache(supply_demand)
             supply_data_age = 0
 
-        # pykrx 전일 수급 폴백: KIS API 0종목 시 (프리장 등)
-        if not supply_demand:
+        # ── 2차: KIS 종목별 전일 투자자 API (FHKST01010900) ──
+        # pykrx(KRX 인증 차단)를 완전 대체. 후보 종목에 대해 정확한 T-1 데이터 조회.
+        # 장전 08:20에도 전일 확정 데이터 정상 반환.
+        if not supply_demand and self._kis_market_data:
             try:
-                supply_demand = await asyncio.to_thread(self._fetch_prev_day_supply_pykrx)
-                if supply_demand:
-                    supply_data_age = 1
+                from datetime import datetime as _dt, timedelta as _td
+                _prev = _dt.now().date() - _td(days=1)
+                while _prev.weekday() >= 5:
+                    _prev -= _td(days=1)
+                prev_date_str = _prev.strftime("%Y%m%d")
+                candidate_symbols = [c.symbol for c in candidates]
+                kis_investor = await self._kis_market_data.fetch_batch_investor_daily(
+                    candidate_symbols, prev_date_str, concurrency=10
+                )
+                if kis_investor:
+                    supply_demand = kis_investor
+                    supply_data_age = 1  # 전일 확정 데이터
                     logger.info(
-                        f"[스윙스크리너] 수급 데이터: KIS 없음 → pykrx 전일 데이터 사용 "
-                        f"({len(supply_demand)}종목)"
+                        f"[스윙스크리너] 수급 T-1: KIS 종목별 API "
+                        f"({len(supply_demand)}/{len(candidate_symbols)}종목, {prev_date_str})"
                     )
             except Exception as e:
-                logger.warning(f"[스윙스크리너] pykrx 전일 수급 조회 실패: {e}")
+                logger.warning(f"[스윙스크리너] KIS 종목별 투자자 조회 실패: {e}")
 
-        # pykrx 0종목 폴백: supply_demand 캐시로 직접 시도 (KRX API 차단 상황)
-        # pykrx가 KRX 인증 차단으로 0종목을 반환할 때 이미 저장된 캐시를 사용
+        # ── 3차: supply_demand 캐시 폴백 (KIS 종목별 API도 실패 시) ──
         if not supply_demand:
             from datetime import datetime as _dt, timedelta as _td
             _prev_date = (_dt.now().date() - _td(days=1))
@@ -457,18 +467,17 @@ class SwingScreener:
             prev_date_str = _prev_date.strftime("%Y%m%d")
             supply_demand = self._load_prev_day_supply_from_cache(prev_date_str)
             if supply_demand:
-                supply_data_age = 1  # T-1 캐시이므로 age=1
+                supply_data_age = 1
                 logger.info(
-                    f"[스윙스크리너] 수급 데이터: pykrx 차단 → supply_demand 캐시 사용 "
-                    f"({len(supply_demand)}종목, T-1)"
+                    f"[스윙스크리너] 수급 T-1 캐시 폴백: {len(supply_demand)}종목"
                 )
 
-        # 최종 폴백: 어떤 방법으로도 수급을 못 얻으면 가장 오래된 캐시라도 사용
+        # ── 최종 폴백: T-2+ 캐시 ──
         if not supply_demand:
             cached, cache_age = self._load_supply_demand_cache_with_age()
             if cached:
                 supply_demand = cached
-                supply_data_age = min(cache_age, 2)  # 최대 age=2
+                supply_data_age = min(cache_age, 2)
 
         # ── 후보별 수급 데이터 주입 ──
         for candidate in candidates:
@@ -881,10 +890,19 @@ class SwingScreener:
         if trending:
             logger.info(f"[스윙스크리너] 수급 추세 {len(trending)}종목 로드")
 
-        # 2b) 5일 수급 스코어 (SupplyScoreProvider — 전종목 커버)
+        # 2b) 5일 수급 스코어 (SupplyScoreProvider)
+        # 우선순위: KIS 종목별 API → supply_demand 캐시 폴백 → pykrx(실질적으로 항상 실패)
         supply5d = self._supply5d
         try:
-            await supply5d.ensure_loaded()
+            symbols_for_supply = [c.symbol for c in candidates]
+            if self._kis_market_data and symbols_for_supply:
+                # KIS FHKST01010900으로 후보 종목 5일치 정확히 조회
+                await supply5d.ensure_loaded_from_kis(
+                    self._kis_market_data, symbols_for_supply
+                )
+            if not supply5d.is_ready:
+                # KIS 실패 시 캐시 기반 폴백
+                await supply5d.ensure_loaded()
             logger.info(f"[스윙스크리너] 5일수급 준비: {len(supply5d._loaded_dates)}일치")
         except Exception as _e:
             logger.warning(f"[스윙스크리너] 5일수급 로드 실패: {_e}")

@@ -367,7 +367,112 @@ class KISMarketData:
             return result
 
     # ============================================================
-    # 5. 개별 종목 PER/PBR 조회 (FHKST01010100)
+    # 5. 종목별 투자자 일별 매매동향 (FHKST01010900)
+    # ============================================================
+
+    async def fetch_stock_investor_daily(
+        self, symbol: str, days: int = 10
+    ) -> Dict[str, Dict[str, int]]:
+        """
+        종목별 최근 N일 외국인/기관 순매수 조회 (FHKST01010900)
+
+        - 1회 호출로 최대 30 거래일 데이터 반환
+        - 장전/장후 모두 전일 데이터 정상 반환 (장중엔 당일 빈값)
+        - pykrx/KRX 의존 없이 순수 KIS API만 사용
+
+        Args:
+            symbol: 종목코드 (6자리)
+            days:   반환할 최근 일수 (최대 30)
+
+        Returns:
+            {date_str: {"foreign_net_buy": int, "inst_net_buy": int}, ...}
+            예: {"20260311": {"foreign_net_buy": 2888936, "inst_net_buy": 726265}}
+        """
+        cache_key = f"investor_daily_{symbol}"
+        if self._is_cache_valid(cache_key, 1800):  # 30분 캐시
+            cached = self._cache[cache_key]
+            return dict(list(cached.items())[:days])
+
+        result: Dict[str, Dict[str, int]] = {}
+        try:
+            session = await self._get_session()
+            headers = await self._get_headers("FHKST01010900")
+            url = f"{self._token_manager.base_url}/uapi/domestic-stock/v1/quotations/inquire-investor"
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": symbol,
+            }
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    return result
+                data = await resp.json()
+                if data.get("rt_cd") != "0":
+                    return result
+                for item in data.get("output", []):
+                    date_str = item.get("stck_bsop_date", "")
+                    frgn_raw = item.get("frgn_ntby_qty", "")
+                    orgn_raw = item.get("orgn_ntby_qty", "")
+                    if not date_str or (not frgn_raw and not orgn_raw):
+                        continue
+                    try:
+                        result[date_str] = {
+                            "foreign_net_buy": int(frgn_raw) if frgn_raw else 0,
+                            "inst_net_buy":    int(orgn_raw) if orgn_raw else 0,
+                        }
+                    except (ValueError, TypeError):
+                        pass
+            if result:
+                self._cache[cache_key] = result
+                self._cache_ts[cache_key] = __import__("time").time()
+        except Exception as e:
+            logger.debug(f"[KISMarketData] 투자자일별 {symbol} 조회 실패: {e}")
+        return dict(list(result.items())[:days])
+
+    async def fetch_batch_investor_daily(
+        self,
+        symbols: List[str],
+        target_date: str,
+        concurrency: int = 10,
+    ) -> Dict[str, Dict[str, int]]:
+        """
+        종목 목록의 특정 날짜 외국인/기관 순매수 일괄 조회.
+
+        FHKST01010900을 종목별로 병렬 호출 → target_date의 데이터만 추출.
+        Semaphore(concurrency)로 KIS API rate limit 준수.
+
+        Args:
+            symbols:      종목코드 목록
+            target_date:  조회 날짜 (YYYYMMDD)
+            concurrency:  동시 요청 수 (기본 10)
+
+        Returns:
+            {symbol: {"foreign_net_buy": int, "inst_net_buy": int}, ...}
+        """
+        import asyncio as _asyncio
+        sem = _asyncio.Semaphore(concurrency)
+
+        async def _fetch_one(sym: str) -> tuple:
+            async with sem:
+                daily = await self.fetch_stock_investor_daily(sym, days=10)
+                return sym, daily.get(target_date, {})
+
+        tasks = [_fetch_one(sym) for sym in symbols]
+        results_raw = await _asyncio.gather(*tasks, return_exceptions=True)
+
+        out: Dict[str, Dict[str, int]] = {}
+        for r in results_raw:
+            if isinstance(r, tuple) and r[1]:
+                sym, day_data = r
+                out[sym] = day_data
+
+        logger.info(
+            f"[KISMarketData] 투자자일별 일괄: {len(out)}/{len(symbols)}종목 "
+            f"({target_date}) 조회 완료"
+        )
+        return out
+
+    # ============================================================
+    # 6. 개별 종목 PER/PBR 조회 (FHKST01010100)
     # ============================================================
 
     async def fetch_stock_valuation(self, symbol: str) -> Optional[Dict]:
