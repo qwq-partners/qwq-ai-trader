@@ -743,14 +743,13 @@ class KISUSBroker:
                     logger.error(f"체결 내역 조회 실패: {data.get('msg1', '')}")
                 break
 
-            output1 = data.get("output1", [])
-            # output1이 비어있을 때 응답 내용 INFO 출력 (history=0 원인 파악용)
+            # TTTS3035R 응답 키: 'output' (output1 아님) — output1 폴백 포함
+            output1 = data.get("output", data.get("output1", []))
             if page == 0 and not output1:
                 avail_keys = [k for k in data.keys() if k.startswith("output")]
-                logger.info(
-                    f"[체결조회] output1 비어있음 "
-                    f"rt_cd={data.get('rt_cd')} msg={data.get('msg1','')!r} "
-                    f"응답키={avail_keys} "
+                logger.debug(
+                    f"[체결조회] 결과 없음 "
+                    f"rt_cd={data.get('rt_cd')} 응답키={avail_keys} "
                     f"excg={params.get('OVRS_EXCG_CD')} "
                     f"dt={params.get('ORD_STRT_DT')}~{params.get('ORD_END_DT')}"
                 )
