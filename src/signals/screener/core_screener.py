@@ -279,6 +279,16 @@ class CoreScreener:
             ind["ma_aligned"] = ma_aligned
             ind["ma5_above_ma20"] = (ma5 is not None and ma20 is not None and ma5 > ma20)
 
+            # MA200 연속 하회 일수 (코어홀딩 교체 판단용)
+            ma200_below_days = 0
+            if ma200 is not None and ma200 > 0 and len(closes) >= 200:
+                for ci in range(len(closes) - 1, -1, -1):
+                    if closes[ci] < ma200:
+                        ma200_below_days += 1
+                    else:
+                        break
+            ind["ma200_below_days"] = ma200_below_days
+
             # 펀더멘탈 (유니버스에서 전달받은 값)
             ind["per"] = item.get("per", 0)
             ind["pbr"] = item.get("pbr", 0)
@@ -503,6 +513,8 @@ class CoreScreener:
                 score += 3
             else:
                 score += 1  # 순매도라도 최소 1점
+        else:
+            score += 4  # 데이터 없으면 중립 (API 실패 시 과도한 패널티 방지)
 
         # 기관 순매수 5일 (10점)
         inst_net = ind.get("inst_net_buy_5d")
@@ -514,6 +526,8 @@ class CoreScreener:
                 score += 3
             else:
                 score += 1  # 순매도라도 최소 1점
+        else:
+            score += 4  # 데이터 없으면 중립
 
         return score
 

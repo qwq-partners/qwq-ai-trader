@@ -1275,16 +1275,19 @@ class BatchAnalyzer:
     # 코어홀딩 스캔/리밸런싱
     # ================================================================
 
-    async def execute_core_rebalance(self):
+    async def execute_core_rebalance(self) -> bool:
         """코어홀딩 리밸런싱 실행
 
         1. 현재 코어 포지션 확인
         2. 스캔 실행 → 후보 생성
         3. 교체 대상 판단 (재스코어 < 55 또는 신규 +15점)
         4. 교체 매도 → 신규 매수 시그널 발행
+
+        Returns:
+            True=성공, False=실패 (재시도 필요)
         """
         if self._core_screener is None or self._core_strategy is None:
-            return
+            return False
 
         logger.info("[코어홀딩] 리밸런싱 시작...")
 
@@ -1311,7 +1314,7 @@ class BatchAnalyzer:
             candidates = await self._core_screener.run_full_scan()
             if not candidates:
                 logger.warning("[코어홀딩] 리밸런싱 후보 없음 → 기존 포지션 유지 (스캔 실패일 수 있음)")
-                return
+                return False
 
             # 후보 스코어 맵
             candidate_scores = {c.symbol: c for c in candidates}
@@ -1322,7 +1325,6 @@ class BatchAnalyzer:
                 if c.symbol not in current_core
                 and c.score >= min_score
             ]
-            best_new_score = buy_candidates[0].score if buy_candidates else 0
 
             # 교체 대상 판단
             sell_targets = []
@@ -1343,27 +1345,38 @@ class BatchAnalyzer:
                     sell_targets.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_pct:.1f}%"))
                     continue
 
-                # 3) MA200 이탈 연속 → 교체 (스크리너 지표 활용)
+                # 3) MA200 이탈 연속 N일 → 교체 (스크리너 지표 활용)
                 if ma200_break_days > 0 and rescore.indicators:
-                    close = rescore.indicators.get("close", 0)
-                    ma200 = rescore.indicators.get("ma200", 0)
-                    if close > 0 and ma200 > 0 and close < ma200:
-                        sell_targets.append((sym, f"MA200 이탈 (종가 {close:,.0f} < MA200 {ma200:,.0f})"))
+                    below_days = rescore.indicators.get("ma200_below_days", 0)
+                    if below_days >= ma200_break_days:
+                        close = rescore.indicators.get("close", 0)
+                        ma200 = rescore.indicators.get("ma200", 0)
+                        sell_targets.append((sym, f"MA200 이탈 {below_days}일 연속 (종가 {close:,.0f} < MA200 {ma200:,.0f})"))
                         continue
 
-                # 4) 신규 후보가 replace_threshold 이상 높으면 교체
-                if replace_threshold > 0 and best_new_score - rescore.score >= replace_threshold:
-                    sell_targets.append((
-                        sym,
-                        f"교체 (현재 {rescore.score:.0f} vs 신규 최고 {best_new_score:.0f}, 차이 +{best_new_score - rescore.score:.0f})"
-                    ))
-                    continue
+            # 4) replace_threshold: 기존 포지션을 점수 낮은 순으로 1:1 매칭
+            if replace_threshold > 0 and buy_candidates:
+                # 아직 sell_targets에 안 들어간 기존 포지션만 대상
+                already_selling = {s for s, _ in sell_targets}
+                replaceable = [
+                    (sym, candidate_scores[sym].score)
+                    for sym in current_core
+                    if sym not in already_selling and sym in candidate_scores
+                ]
+                replaceable.sort(key=lambda x: x[1])  # 점수 낮은 순
+
+                for (old_sym, old_score), new_cand in zip(replaceable, buy_candidates):
+                    if new_cand.score - old_score >= replace_threshold:
+                        sell_targets.append((
+                            old_sym,
+                            f"교체 (현재 {old_score:.0f} vs 신규 {new_cand.symbol} {new_cand.score:.0f}, 차이 +{new_cand.score - old_score:.0f})"
+                        ))
 
             for sym, reason in sell_targets:
                 logger.info(f"[코어홀딩] 교체 대상: {sym} ({reason})")
 
-            # 빈 슬롯 계산 (매도 예정 슬롯 반영)
-            remaining_slots = max_positions - (len(current_core) - len(sell_targets))
+            # 빈 슬롯 계산 (매도 예정 슬롯 반영, 음수 방어)
+            remaining_slots = max(0, max_positions - (len(current_core) - len(sell_targets)))
 
             # 매도 시그널 발행 (교체 대상)
             for sym, reason in sell_targets:
@@ -1428,9 +1441,11 @@ class BatchAnalyzer:
                 f"[코어홀딩] 리밸런싱 완료: "
                 f"매도={len(sell_targets)}개, 매수={buy_count}개"
             )
+            return True
 
         except Exception as e:
             logger.error(f"[코어홀딩] 리밸런싱 오류: {e}", exc_info=True)
+            return False
 
     def _save_core_state(self, data: Dict) -> None:
         """코어홀딩 상태 파일 저장"""

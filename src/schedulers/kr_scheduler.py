@@ -3689,8 +3689,12 @@ JSON:
 
                 logger.info(f"[코어홀딩스케줄러] 월초 리밸런싱 실행 ({now.hour}:{now.minute:02d})")
                 try:
-                    await bot.batch_analyzer.execute_core_rebalance()
-                    last_rebalance_month = current_month
+                    success = await bot.batch_analyzer.execute_core_rebalance()
+                    if success:
+                        last_rebalance_month = current_month
+                        logger.info("[코어홀딩스케줄러] 리밸런싱 성공 완료")
+                    else:
+                        logger.warning("[코어홀딩스케줄러] 리밸런싱 실패 → 다음 윈도우 재시도")
                 except Exception as e:
                     logger.error(f"[코어홀딩스케줄러] 리밸런싱 오류 (다음 윈도우 재시도): {e}", exc_info=True)
 

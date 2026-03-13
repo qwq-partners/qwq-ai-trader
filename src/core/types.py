@@ -597,11 +597,12 @@ class RiskConfig:
 
     # 전략별 총 예산 배분 (% of total_equity, 0=제한없음)
     strategy_allocation: Dict[str, float] = field(default_factory=lambda: {
-        "momentum_breakout": 60.0,
-        "sepa_trend": 25.0,
-        "rsi2_reversal": 10.0,
-        "theme_chasing": 5.0,
-        "gap_and_go": 5.0,
+        "core_holding": 30.0,
+        "sepa_trend": 42.0,
+        "rsi2_reversal": 17.5,
+        "momentum_breakout": 0.0,
+        "theme_chasing": 7.0,
+        "gap_and_go": 3.5,
     })
 
 
