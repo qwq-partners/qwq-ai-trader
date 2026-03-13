@@ -1,5 +1,23 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-14 (5차) — 코어홀딩 심층 코드+전략 리뷰 P0 5건 + P1 5건 수정 (5개 파일)
+> commit: 43d7aa8
+
+### P0 수정 (5건)
+- `exit_manager.py`: 코어 트레일링스탑 미발동 — stage=NONE 고착(ratio=0 → 분할익절 없음 → stage 영구 NONE) → `or state.is_core` 조건 추가로 전량 매도 경로 확보
+- `exit_manager.py`: 코어 본전보호 미작동 — `stage != NONE` 조건에 걸려 코어 본전보호 불가 → `or state.is_core` 추가
+- `core_screener.py`: 시총 필터 dead code — `_min_market_cap_b` 설정만 있고 실제 필터링 없음 → StockMaster DB에서 시총 직접 조회 + 필터 적용 + 시총 순위 정렬
+- `core_screener.py`: 수급 바이너리 스코어링 — 순매수면 10점/순매도면 1점 → 금액 기반 구간별 배점 (500억+/100억+/30억+ 각각 10/8/6점)
+- `batch_analyzer.py`: 매도+매수 동시 발행 충돌 — 매도 미체결 상태에서 매수 발행 시 현금 부족 → 2단계 리밸런싱 (매도 선행 → pending_core_buys 저장 → 다음 윈도우에서 매수)
+
+### P1 수정 (5건)
+- `exit_manager.py`: 코어 exit ratio 미영속화/복원 — 재시작 시 글로벌 기본값(0.3) 적용 → `_persist_states`/`register_position`에 ratio 저장/복원 추가
+- `exit_manager.py`: `_check_partial_exit`에 `is_core` 가드 추가 — ratio 복원 실패 시에도 분할 익절 안전 차단
+- `core_screener.py`: PER=0 통과 + API 실패 점수 역설 — `per != 0 and per < 0` → `per <= 0`; 데이터 미조회 8점 > 소규모 매도 2점 역설 → 동일 2점
+- `config.py`: evolved_overrides 전략파라미터 → `kr.strategies.{component}`에도 동시 머지 (theme_chasing enabled 등 미적용 해결)
+- `config.py`: fallback strategy_allocation에 `core_holding: 30.0`, `strategic_swing: 0.0` 추가
+- `risk/manager.py`: `defensive_strategies` 실제 전략명으로 수정 (`mean_reversion` 등 미사용 → `rsi2_reversal`, `core_holding`)
+
 ## 2026-03-13 (4차) — 코어홀딩 심층 코드+전략 리뷰 P0 2건 + P1 8건 수정 (8개 파일)
 
 ### P0 수정 (2건)
