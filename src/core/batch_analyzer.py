@@ -1404,10 +1404,11 @@ class BatchAnalyzer:
                 if buy_count >= remaining_slots:
                     break
 
+                # 코어홀딩: NORMAL 강도 사용 → STRONG(1.5x) 시 2종목으로 30% 도달, 3종목 불가
                 signal = Signal(
                     symbol=candidate.symbol,
                     side=OrderSide.BUY,
-                    strength=SignalStrength.STRONG,
+                    strength=SignalStrength.NORMAL,
                     strategy=StrategyType.CORE_HOLDING,
                     price=candidate.entry_price,
                     stop_price=candidate.entry_price * Decimal(str(1 - core_cfg.get("stop_loss_pct", 15.0) / 100)),

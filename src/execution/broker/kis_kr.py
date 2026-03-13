@@ -1512,7 +1512,7 @@ class KISBroker(BaseBroker):
                 "fid_input_date_1": start_date,
                 "fid_input_date_2": end_date,
                 "fid_period_div_code": "D",  # 일봉
-                "fid_org_adj_prc": "0",  # 수정주가 미반영
+                "fid_org_adj_prc": "1",  # 수정주가 반영 (액면분할/무상증자 등)
             }
 
             data = await self._api_get(url, tr_id, params)

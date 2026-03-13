@@ -608,14 +608,22 @@ class ExitManager:
                 return exit_signal
 
         # 3. 1R 본전 이동 체크
-        if state.current_stage != ExitStage.NONE and not state.breakeven_activated:
-            one_r = state.dynamic_stop_pct if state.dynamic_stop_pct is not None else (state.stop_loss_pct if state.stop_loss_pct is not None else self.config.stop_loss_pct)
-            if net_pnl_pct >= one_r:
+        # 코어홀딩: 분할익절 비활성(ratio=0) → stage가 NONE에서 안 올라감
+        #   → trailing_activate_pct 도달 시 직접 breakeven 활성화
+        _be_eligible = (state.current_stage != ExitStage.NONE) or state.is_core
+        if _be_eligible and not state.breakeven_activated:
+            if state.is_core:
+                # 코어: trailing_activate_pct(10%) 도달 시 본전 보호 활성화
+                _be_threshold = state.trailing_activate_pct if state.trailing_activate_pct is not None else self.config.trailing_activate_pct
+            else:
+                # 일반: 1R(손절폭) 도달 시 본전 보호 활성화
+                _be_threshold = state.dynamic_stop_pct if state.dynamic_stop_pct is not None else (state.stop_loss_pct if state.stop_loss_pct is not None else self.config.stop_loss_pct)
+            if net_pnl_pct >= _be_threshold:
                 state.breakeven_activated = True
                 self._persist_states()
                 logger.info(
-                    f"[ExitManager] {symbol} 1R({one_r:.1f}%) 도달 -> 본전 이동 활성화 "
-                    f"(현재 +{net_pnl_pct:.2f}%)"
+                    f"[ExitManager] {symbol} 본전보호 활성화: 임계값 {_be_threshold:.1f}% 도달 "
+                    f"(현재 +{net_pnl_pct:.2f}%, core={state.is_core})"
                 )
 
         # 4. 트레일링 스탑

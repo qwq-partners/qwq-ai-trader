@@ -216,8 +216,15 @@ class RiskManager:
                 return False, f"Daily loss limit reached ({daily_pnl_pct:.1f}%)"
 
         # 3. 최대 포지션 수 제한 (KR + US 공통)
-        if len(portfolio.positions) >= self.config.max_positions:
-            return False, f"최대 포지션 수 도달 ({len(portfolio.positions)}/{self.config.max_positions})"
+        # 코어홀딩 포지션은 별도 슬롯으로 관리 (max_positions에서 제외)
+        core_count = sum(1 for p in portfolio.positions.values() if p.strategy == "core_holding")
+        non_core_count = len(portfolio.positions) - core_count
+        is_core_signal = (strategy_type == "core_holding")
+        if is_core_signal:
+            # 코어 진입: 코어 3개 상한은 execute_core_rebalance에서 관리
+            pass
+        elif non_core_count >= self.config.max_positions:
+            return False, f"최대 포지션 수 도달 ({non_core_count}/{self.config.max_positions}, 코어 {core_count}개 제외)"
 
         # 4. 최소 현금 예비 (KR + US 공통)
         min_cash = portfolio.total_equity * Decimal(str(self.config.min_cash_reserve_pct / 100))

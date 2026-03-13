@@ -1,5 +1,21 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-13 (4차) — 코어홀딩 심층 코드+전략 리뷰 P0 2건 + P1 8건 수정 (8개 파일)
+
+### P0 수정 (2건)
+- `core_screener.py`: MA200 rolling 계산 수정 — 고정 MA200 대신 각 날짜별 rolling MA200으로 비교 (ma200_below_days 정확도)
+- `kis_kr.py`: `fid_org_adj_prc: "0"→"1"` 수정주가 반영 (액면분할/무상증자 종목 MA200·수익률 왜곡 해결)
+
+### P1 수정 (8건)
+- `batch_analyzer.py`: 코어 매수 시그널 strength STRONG→NORMAL (1.5x 곱연산으로 2종목만 도달하는 문제 해결)
+- `exit_manager.py`: 코어홀딩 본전보호 활성화 경로 추가 (is_core=True → trailing_activate_pct 도달 시 직접 활성화)
+- `config.py`: evolved_overrides `exit_manager` → `kr.exit_manager` 동시 머지 추가
+- `kr_scheduler.py`: 코어 리밸런싱 첫 윈도우 09:01→09:05 (기존 배치 실행과 시간 충돌 방지)
+- `risk/manager.py`: max_positions에서 코어 포지션 제외 — 코어/단기 슬롯 경쟁 해소
+- `core_screener.py`: 펀더멘탈 배당 중립 3→5점 (만점 30 달성 가능), StockMaster 장애 로그 ERROR 격상
+- `core_screener.py`: `_score_trend`/`_score_momentum` 서브스코어 클램프 추가 (30/20점 상한)
+- `types.py`: strategy_allocation에 strategic_swing 키 추가 (US SEPA cap 적용 가능)
+
 ## 2026-03-13 (3차) — 코어홀딩 최종 리뷰 P0/P1 6건 수정 (4개 파일)
 
 - `batch_analyzer.py`: MA200 이탈 1일→연속 N일 체크, remaining_slots 음수 방어

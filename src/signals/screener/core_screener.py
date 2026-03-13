@@ -129,7 +129,7 @@ class CoreScreener:
                 logger.warning(f"[코어스크리너] tradeable_universe 조회 실패: {e}")
 
         if not symbols_with_names:
-            logger.warning("[코어스크리너] 유니버스 구축 실패: 종목 목록 없음")
+            logger.error("[코어스크리너] 유니버스 구축 실패: 종목 목록 없음 (StockMaster 장애 가능)")
             return []
 
         # ETF/ETN 제외
@@ -280,10 +280,14 @@ class CoreScreener:
             ind["ma5_above_ma20"] = (ma5 is not None and ma20 is not None and ma5 > ma20)
 
             # MA200 연속 하회 일수 (코어홀딩 교체 판단용)
+            # P0 수정: 각 날짜별 rolling MA200을 계산하여 비교
+            # 기존: 마지막 날 MA200 고정값으로 과거 종가와 비교 → 부정확
             ma200_below_days = 0
-            if ma200 is not None and ma200 > 0 and len(closes) >= 200:
-                for ci in range(len(closes) - 1, -1, -1):
-                    if closes[ci] < ma200:
+            if ma200 is not None and ma200 > 0 and len(closes) >= 201:
+                for ci in range(len(closes) - 1, max(len(closes) - 31, 199), -1):
+                    # ci 시점의 MA200 = closes[ci-199:ci+1]의 평균
+                    rolling_ma200 = sum(closes[ci - 199:ci + 1]) / 200
+                    if closes[ci] < rolling_ma200:
                         ma200_below_days += 1
                     else:
                         break
@@ -441,7 +445,7 @@ class CoreScreener:
         elif vol20 is not None and vol20 < 5.0:
             score += 3
 
-        return score
+        return min(score, 30.0)
 
     def _score_fundamentals(self, ind: Dict, reasons: List[str]) -> float:
         """펀더멘탈 (30점)"""
@@ -495,7 +499,7 @@ class CoreScreener:
             score += 1
 
         # 배당/안정성 (5점) — 데이터 없으므로 중립 부여
-        score += 3
+        score += 5
 
         return min(score, 30.0)
 
@@ -561,7 +565,7 @@ class CoreScreener:
         if ind.get("ma5_above_ma20"):
             score += 5
 
-        return score
+        return min(score, 20.0)
 
     @staticmethod
     def _is_etf_etn(name: str) -> bool:

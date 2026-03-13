@@ -603,6 +603,7 @@ class RiskConfig:
         "momentum_breakout": 0.0,
         "theme_chasing": 7.0,
         "gap_and_go": 3.5,
+        "strategic_swing": 0.0,
     })
 
 

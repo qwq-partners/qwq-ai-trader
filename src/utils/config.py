@@ -252,6 +252,11 @@ def _merge_evolved_overrides(raw: Dict[str, Any], config_path: Optional[str] = N
                     kr_risk = merged.get("kr", {}).get("risk")
                     if kr_risk is not None:
                         merged["kr"]["risk"] = _deep_merge(kr_risk, params)
+                # exit_manager → kr.exit_manager에도 머지
+                if component == "exit_manager":
+                    kr_section = merged.get("kr", {})
+                    if "exit_manager" in kr_section:
+                        merged["kr"]["exit_manager"] = _deep_merge(kr_section["exit_manager"], params)
             else:
                 # 전략 파라미터 -> strategies.{component} 하위에 머지
                 if "strategies" not in merged:
