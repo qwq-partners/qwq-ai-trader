@@ -1,5 +1,22 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-14 (6차) — 코어홀딩 심층 코드+전략 리뷰 P0 4건 + P1 6건 수정 (6개 파일)
+> commit: 018f390
+
+### P0 수정 (4건)
+- `batch_analyzer.py`: `monitor_positions()` 보유기간 10일 강제청산에서 코어홀딩 제외 — 11일째부터 매 30분 청산 시그널 발행 방지
+- `batch_analyzer.py`: pending_buys 재시도 시 매도 미체결 확인 + 2일 초과 pending 자동 폐기 (가격 괴리 위험)
+- `strategy_evolver.py`: `_apply_allocation_guardrails`에서 진화 비대상 전략(core_holding) 보존 — 주간 리밸런싱이 코어 30% 삭제하던 버그
+- `evolved_overrides.yml`: `core_holding: 30.0` 명시 + `_meta`에 `manual_review_locked` 잠금
+
+### P1 수정 (6건)
+- `core_screener.py`: 배당 무조건 5점→0점 (데이터 미조회 시 변별력 없는 중립 방지)
+- `core_screener.py`: PER 범위 확대 (5-20 5점, ≤35 3점, ≤60 1점) — 한국 대형 성장주 반영
+- `data_collector.py`: `rebalance_day > 28` 가드 (2월 등 짧은 달 `ValueError` 방지)
+- `data_collector.py`: 대시보드 수익률 `unrealized_pnl_pct`→`unrealized_pnl_net_pct` (수수료 포함)
+- `run_trader.py`: `is_core` fallback — `position.strategy == "core_holding"` 직접 판별 (stage 파일 만료 시 안전)
+- `batch_analyzer.py`: 스캔 후보 0건 시 기존 포지션 -10% 손실 체크만 별도 수행 (하락장 리밸런싱 불가 방지)
+
 ## 2026-03-14 (5차) — 코어홀딩 심층 코드+전략 리뷰 P0 5건 + P1 5건 수정 (5개 파일)
 > commit: 43d7aa8
 
