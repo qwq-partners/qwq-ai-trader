@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-14 (7차) — 코어홀딩 심층 코드+전략 리뷰 P0 1건 + P1 5건 수정 (4개 파일)
+> commit: f568cce
+
+### P0 수정 (1건)
+- `strategy_evolver.py`: 주간 리밸런싱 비례 축소 시 core_holding도 함께 축소되던 버그 — 비대상 전략(core_holding)을 total에서 제외하고 valid 전략만 축소
+
+### P1 수정 (5건)
+- `exit_manager.py`: 코어 breakeven 활성화 시 `highest_price`를 현재가로 리셋 — 활성화 직후 고점 괴리로 즉시 트레일링(-8%) 발동 방지
+- `exit_manager.py`: 코어 본전보호 버퍼 `0.25%`→`-2.0%` — +10% 도달 후 조정 시 장기 보유 허용
+- `batch_analyzer.py`: 리밸런싱 손절 판단 3곳 `unrealized_pnl_pct`→`unrealized_pnl_net_pct` (수수료 포함, 대시보드와 일치)
+- `batch_analyzer.py`: `buy_candidates` 전체 `portfolio.positions` 체크 — 스윙+코어 이중 보유 방지 (ExitManager state 충돌)
+- `kr_scheduler.py`: 리밸런싱 오후 윈도우 `13:00-13:04` 추가 — 오전 3회 전부 실패 시 fallback
+
 ## 2026-03-14 (6차) — 코어홀딩 심층 코드+전략 리뷰 P0 4건 + P1 6건 수정 (6개 파일)
 > commit: 018f390
 
