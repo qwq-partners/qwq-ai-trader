@@ -487,15 +487,15 @@ class CoreScreener:
         """펀더멘탈 (30점)"""
         score = 0.0
 
-        # PER 적정 (5점)
+        # PER 적정 (5점) — 한국 대형 성장주 PER 30-50도 허용
         per = ind.get("per")
         if per is not None and per > 0:
-            if 5 <= per <= 15:
+            if 5 <= per <= 20:
                 score += 5
                 reasons.append(f"PER{per:.0f}")
-            elif per <= 25:
+            elif per <= 35:
                 score += 3
-            elif per <= 40:
+            elif per <= 60:
                 score += 1
 
         # PBR (5점) — 좁은 범위 먼저 체크
@@ -534,8 +534,8 @@ class CoreScreener:
         elif rank <= 100:
             score += 1
 
-        # 배당/안정성 (5점) — 데이터 없으므로 중립 부여
-        score += 5
+        # 배당/안정성 (5점) — 데이터 미조회 시 0점 (변별력 없는 중립 부여 방지)
+        # TODO: KIS API 배당수익률 조회 추가 시 차등 배점
 
         return min(score, 30.0)
 

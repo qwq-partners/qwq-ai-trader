@@ -614,7 +614,7 @@ class UnifiedTradingBot:
                         second_exit_ratio=exit_params.get("second_exit_ratio"),
                         third_exit_ratio=exit_params.get("third_exit_ratio"),
                         stale_high_days=exit_params.get("stale_high_days"),
-                        is_core=exit_params.get("is_core", False),
+                        is_core=exit_params.get("is_core", False) or (position.strategy == "core_holding"),
                         max_holding_days=exit_params.get("max_holding_days"),
                         trailing_activate_pct=exit_params.get("trailing_activate_pct"),
                     )

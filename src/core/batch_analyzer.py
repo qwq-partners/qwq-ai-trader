@@ -902,8 +902,10 @@ class BatchAnalyzer:
                         await asyncio.sleep(0.2)  # rate limit
                         continue  # 청산 시그널 발행 시 보유기간 체크 스킵
 
-                # 보유기간 초과 강제 청산
-                if pos.entry_time:
+                # 보유기간 초과 강제 청산 (코어홀딩은 월 리밸런싱으로 관리)
+                if pos.strategy == "core_holding":
+                    pass  # 코어홀딩: max_holding_days=0 (무제한), ExitManager가 트레일링/손절 관리
+                elif pos.entry_time:
                     holding_days = (datetime.now() - pos.entry_time).days
                     if holding_days > self._max_holding_days:
                         logger.info(
@@ -1314,6 +1316,25 @@ class BatchAnalyzer:
             core_state = self.get_core_state()
             pending_buys = core_state.get("pending_core_buys")
             if pending_buys:
+                # pending 유효기간 체크: 2일 초과 시 폐기 (가격 괴리 위험)
+                last_rb = core_state.get("last_rebalance")
+                if last_rb:
+                    try:
+                        rb_dt = datetime.fromisoformat(last_rb)
+                        age_days = (datetime.now() - rb_dt).days
+                        if age_days > 2:
+                            logger.warning(f"[코어홀딩] pending 매수 {age_days}일 경과 → 폐기 (가격 괴리 위험)")
+                            self._save_core_state({"pending_core_buys": None})
+                            pending_buys = None
+                    except Exception:
+                        pass
+            if pending_buys:
+                # 매도 체결 확인: 이전 리밸런싱에서 매도한 종목이 아직 보유 중이면 매수 보류
+                sold_symbols = core_state.get("sold", [])
+                for sold_sym in sold_symbols:
+                    if sold_sym in portfolio.positions:
+                        logger.warning(f"[코어홀딩] {sold_sym} 매도 미체결 → 매수 보류 (다음 윈도우 재시도)")
+                        return False
                 buy_count = 0
                 for pb in pending_buys:
                     sym = pb["symbol"]
@@ -1348,8 +1369,33 @@ class BatchAnalyzer:
             # 스캔 실행
             candidates = await self._core_screener.run_full_scan()
             if not candidates:
-                logger.warning("[코어홀딩] 리밸런싱 후보 없음 → 기존 포지션 유지 (스캔 실패일 수 있음)")
-                return False
+                if not current_core:
+                    logger.warning("[코어홀딩] 후보 0건 + 보유 0개 → 스킵")
+                    return False
+                # 후보 없어도 기존 보유 포지션의 교체 매도 판단은 수행
+                logger.warning("[코어홀딩] 스캔 후보 없음 → 기존 포지션 손실/MA200 이탈 체크만 수행")
+                sell_targets_fallback = []
+                for sym, pos in current_core.items():
+                    if pos.unrealized_pnl_pct <= -10.0:
+                        sell_targets_fallback.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_pct:.1f}%"))
+                if sell_targets_fallback:
+                    for sym, reason in sell_targets_fallback:
+                        pos = portfolio.positions[sym]
+                        event = SignalEvent.from_signal(
+                            Signal(
+                                symbol=sym, side=OrderSide.SELL, strength=SignalStrength.NORMAL,
+                                strategy=StrategyType.CORE_HOLDING, price=pos.current_price,
+                                score=0, reason=f"코어홀딩 리밸런싱: {reason}",
+                                metadata={"is_core": True, "rebalance": True},
+                            ), source="core_rebalance",
+                        )
+                        await self._engine.emit(event)
+                        logger.info(f"[코어홀딩] 후보 없음에서도 매도: {sym} ({reason})")
+                    self._save_core_state({"last_rebalance": datetime.now().isoformat()})
+                    return True
+                logger.info("[코어홀딩] 기존 포지션 이상 없음 → 유지")
+                self._save_core_state({"last_rebalance": datetime.now().isoformat()})
+                return True
 
             # 후보 스코어 맵
             candidate_scores = {c.symbol: c for c in candidates}
@@ -1448,6 +1494,7 @@ class BatchAnalyzer:
                 self._save_core_state({
                     "sold": [s for s, _ in sell_targets],
                     "pending_core_buys": pending_buy_data,
+                    "last_rebalance": datetime.now().isoformat(),
                 })
                 logger.info(
                     f"[코어홀딩] 매도 {len(sell_targets)}개 발행. "

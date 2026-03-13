@@ -1776,7 +1776,7 @@ class DashboardDataCollector:
                 if pos.strategy == "core_holding":
                     mv = float(pos.market_value)
                     cb = float(pos.cost_basis)
-                    pnl_pct = pos.unrealized_pnl_pct
+                    pnl_pct = pos.unrealized_pnl_net_pct  # 수수료 포함 순손익률
                     holding_days = 0
                     if pos.entry_time:
                         delta = (datetime.now() - pos.entry_time).days
@@ -1832,6 +1832,7 @@ class DashboardDataCollector:
         rebalance_day = core_cfg.get("rebalance_day", 1)
 
         # 다음 월 첫 영업일 계산
+        rebalance_day = min(rebalance_day, 28)  # 2월 등 짧은 달 대비
         if today.day > rebalance_day:
             # 이번 달 이미 지남 → 다음 달
             if today.month == 12:

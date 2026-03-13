@@ -1003,7 +1003,12 @@ class StrategyEvolver:
 
             adjusted[key] = round(new, 1)
 
-        # 합계 상한 체크 — 초과 시 비례 축소
+        # 진화 비대상 전략 보존 (core_holding 등 — 수동 관리 전략)
+        for key in current:
+            if key not in self._VALID_STRATEGIES and key not in adjusted:
+                adjusted[key] = current[key]
+
+        # 합계 상한 체크 — 초과 시 비례 축소 (비대상 전략 제외)
         total = sum(adjusted.values())
         if total > self._ALLOC_MAX_TOTAL:
             ratio = self._ALLOC_MAX_TOTAL / total
