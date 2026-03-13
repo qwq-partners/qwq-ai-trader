@@ -104,10 +104,10 @@ class NewsStorage:
 
     async def _ensure_connected(self):
         """연결 보장 (동시 호출 경합 방지)"""
-        if self._pool:
+        if self._pool and not self._pool.is_closing():
             return
         async with self._connect_lock:
-            if not self._pool:
+            if not self._pool or self._pool.is_closing():
                 await self.connect()
 
     # ============================================================
@@ -174,7 +174,14 @@ class NewsStorage:
             return saved_count
 
         except Exception as e:
-            logger.error(f"[NewsStorage] 뉴스 배치 저장 실패: {e}")
+            logger.error(f"[NewsStorage] 뉴스 배치 저장 실패 ({type(e).__name__}): {e}", exc_info=True)
+            # pool 강제 초기화 → 다음 호출 시 자동 재연결
+            if self._pool:
+                try:
+                    await self._pool.close()
+                except Exception:
+                    pass
+                self._pool = None
             return saved_count
 
     async def get_recent_news(
@@ -319,7 +326,14 @@ class NewsStorage:
             return saved_count
 
         except Exception as e:
-            logger.error(f"[NewsStorage] 테마 배치 저장 실패: {e}")
+            logger.error(f"[NewsStorage] 테마 배치 저장 실패 ({type(e).__name__}): {e}", exc_info=True)
+            # pool 강제 초기화 → 다음 호출 시 자동 재연결
+            if self._pool:
+                try:
+                    await self._pool.close()
+                except Exception:
+                    pass
+                self._pool = None
             return saved_count
 
     async def get_theme_history(
