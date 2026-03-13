@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-13 (3차) — 코어홀딩 최종 리뷰 P0/P1 6건 수정 (4개 파일)
+
+- `batch_analyzer.py`: MA200 이탈 1일→연속 N일 체크, remaining_slots 음수 방어
+- `batch_analyzer.py`: replace_threshold 1:1 매칭(과다 매도 방지), bool 반환
+- `core_screener.py`: ma200_below_days 지표 추가, 수급 실패 시 중립 4점
+- `kr_scheduler.py`: 리밸런싱 반환값 기반 재시도
+- `types.py`: strategy_allocation default_factory에 core_holding 추가
+
 ## 2026-03-13 (2차) — 코어홀딩 P0/P1 버그 20건 일괄 수정 (9개 파일)
 
 ### P0 수정 (7건)
