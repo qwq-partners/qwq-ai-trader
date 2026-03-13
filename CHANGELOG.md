@@ -1,5 +1,23 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-13 (2차) — 코어홀딩 P0/P1 버그 20건 일괄 수정 (9개 파일)
+
+### P0 수정 (7건)
+- `batch_analyzer.py`: remaining_slots 교체 매도 반영 (매도 후 빈 슬롯에 매수 가능)
+- `batch_analyzer.py`: replace_threshold(+15점 교체)/ma200_break_days(MA200 이탈) 구현
+- `core_screener.py`: 펀더멘탈 스코어 8→30점 확장 (ROE추정, EPS>0, 시총순위, PBR구간)
+- `core_screener.py`: fetch_batch_valuations 30건→배치루프, 수급 순차→병렬 처리
+- `config.py`: evolved_overrides risk_config→kr.risk 동시 머지 (전략배분 미적용 해결)
+- `data_collector.py`: AppConfig 객체 접근 수정 (isinstance dict→hasattr trading)
+
+### P1 수정 (13건)
+- `core_holding.py`: stop_price 15% 하드코딩→config.stop_loss_pct, exc_info 추가
+- `exit_manager.py`: stale_high is_core 가드, 코어 파라미터 영속화+복원
+- `core_screener.py`: truthy패턴(or 0), 수급점수역전, 미사용코드, PER필터 수정
+- `dashboard.js`: 예산 30% 하드코딩→서버 alloc_pct
+- `kr_scheduler.py`: 리밸런싱 재시도 윈도우(09:01/09:30/10:00), 독스트링 수정
+- `sse.py`: core_holdings 주기 10→30초
+
 ## 2026-03-13 — 코어홀딩 전체 흐름 검증 + P0/P1 수정 (7개 파일)
 
 ### P0 수정 (3건)
