@@ -1310,6 +1310,41 @@ class BatchAnalyzer:
                 pnl_pct = pos.unrealized_pnl_pct
                 logger.info(f"  - {sym} {pos.name}: {pnl_pct:+.2f}%")
 
+            # 이전 리밸런싱에서 미완료 매수가 있는지 확인 (2단계 리밸런싱)
+            core_state = self.get_core_state()
+            pending_buys = core_state.get("pending_core_buys")
+            if pending_buys:
+                buy_count = 0
+                for pb in pending_buys:
+                    sym = pb["symbol"]
+                    if sym in portfolio.positions:
+                        logger.info(f"[코어홀딩] {sym} 이미 보유 중 → 스킵")
+                        continue
+                    entry_price = Decimal(str(pb["entry_price"]))
+                    signal = Signal(
+                        symbol=sym,
+                        side=OrderSide.BUY,
+                        strength=SignalStrength.NORMAL,
+                        strategy=StrategyType.CORE_HOLDING,
+                        price=entry_price,
+                        stop_price=entry_price * Decimal(str(1 - core_cfg.get("stop_loss_pct", 15.0) / 100)),
+                        score=pb.get("score", 70),
+                        confidence=min(pb.get("score", 70) / 100.0, 1.0),
+                        reason=f"코어홀딩 리밸런싱 매수(재시도): {pb.get('name', sym)}",
+                        metadata={"is_core": True, "candidate_name": pb.get("name", sym), "batch_signal": True, "rebalance": True},
+                    )
+                    event = SignalEvent.from_signal(signal, source="core_rebalance")
+                    await self._engine.emit(event)
+                    buy_count += 1
+                    logger.info(f"[코어홀딩] 재시도 매수: {sym} {pb.get('name', '')}")
+                # pending 해제
+                self._save_core_state({"pending_core_buys": None, "last_rebalance": datetime.now().isoformat()})
+                if buy_count > 0:
+                    logger.info(f"[코어홀딩] 재시도 매수 {buy_count}개 발행 완료")
+                    return True
+                logger.info("[코어홀딩] 재시도 매수 대상 없음 (이미 보유)")
+                return True
+
             # 스캔 실행
             candidates = await self._core_screener.run_full_scan()
             if not candidates:
@@ -1399,11 +1434,30 @@ class BatchAnalyzer:
                     logger.info(f"[코어홀딩] 리밸런싱 매도: {sym} ({reason})")
 
             # 매수 시그널 발행 (상위 후보, 빈 슬롯만큼)
-            buy_count = 0
-            for candidate in buy_candidates[:remaining_slots]:
-                if buy_count >= remaining_slots:
-                    break
+            actual_buys = buy_candidates[:remaining_slots]
 
+            # 매도가 있으면 매수를 pending으로 저장 (매도 체결 후 다음 윈도우에서 실행)
+            if sell_targets and actual_buys:
+                pending_buy_data = [{
+                    "symbol": c.symbol,
+                    "name": c.name,
+                    "score": c.score,
+                    "entry_price": str(c.entry_price),
+                    "reasons": c.reasons[:3],
+                } for c in actual_buys]
+                self._save_core_state({
+                    "sold": [s for s, _ in sell_targets],
+                    "pending_core_buys": pending_buy_data,
+                })
+                logger.info(
+                    f"[코어홀딩] 매도 {len(sell_targets)}개 발행. "
+                    f"매수 {len(actual_buys)}개는 pending (매도 체결 후 재시도)"
+                )
+                return False  # 매수 미완료 → 다음 윈도우에서 재시도
+
+            # 매도 없이 매수만 있는 경우 즉시 발행
+            buy_count = 0
+            for candidate in actual_buys:
                 # 코어홀딩: NORMAL 강도 사용 → STRONG(1.5x) 시 2종목으로 30% 도달, 3종목 불가
                 signal = Signal(
                     symbol=candidate.symbol,
@@ -1434,7 +1488,8 @@ class BatchAnalyzer:
             self._save_core_state({
                 "last_rebalance": datetime.now().isoformat(),
                 "sold": [s for s, _ in sell_targets],
-                "bought": [c.symbol for c in buy_candidates[:buy_count]],
+                "bought": [c.symbol for c in actual_buys[:buy_count]],
+                "pending_core_buys": None,
                 "current_core_count": len(current_core) - len(sell_targets) + buy_count,
             })
 

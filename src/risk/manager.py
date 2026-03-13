@@ -271,7 +271,7 @@ class RiskManager:
             # 차등 리스크 관리
             hard_stop_pct = max(self.config.daily_max_loss_pct * 2.5, 5.0)
             if -hard_stop_pct < daily_pnl_pct <= -self.config.daily_max_loss_pct:
-                defensive_strategies = {'mean_reversion', 'defensive', 'value_large_cap'}
+                defensive_strategies = {'rsi2_reversal', 'core_holding'}
                 if strategy_type in defensive_strategies:
                     logger.debug(
                         f"[차등리스크] 손실 {daily_pnl_pct:.1f}% -> "

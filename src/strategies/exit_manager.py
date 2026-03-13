@@ -289,6 +289,10 @@ class ExitManager:
                     entry["trailing_stop_pct"] = state.trailing_stop_pct
                 if state.stale_high_days is not None:
                     entry["stale_high_days"] = state.stale_high_days
+                # 분할 익절 비활성화 ratio도 영속화 (재시작 시 글로벌 기본값 오적용 방어)
+                entry["first_exit_ratio"] = state.first_exit_ratio if state.first_exit_ratio is not None else 0.0
+                entry["second_exit_ratio"] = state.second_exit_ratio if state.second_exit_ratio is not None else 0.0
+                entry["third_exit_ratio"] = state.third_exit_ratio if state.third_exit_ratio is not None else 0.0
             # ★ initial_qty: 최초 진입 수량 (부분 매도 후 덮어쓰기 방지)
             # - stage=NONE(신규/무매도): 현재 수량으로 갱신
             # - stage>NONE(익절 진행 중): 파일의 기존 initial_qty 보존
@@ -415,6 +419,13 @@ class ExitManager:
                         trailing_stop_pct = persisted["trailing_stop_pct"]
                     if "stale_high_days" in persisted and stale_high_days is None:
                         stale_high_days = persisted["stale_high_days"]
+                    # 분할 익절 ratio 복원 (코어: 0.0으로 비활성화)
+                    if "first_exit_ratio" in persisted and first_exit_ratio is None:
+                        first_exit_ratio = persisted["first_exit_ratio"]
+                    if "second_exit_ratio" in persisted and second_exit_ratio is None:
+                        second_exit_ratio = persisted["second_exit_ratio"]
+                    if "third_exit_ratio" in persisted and third_exit_ratio is None:
+                        third_exit_ratio = persisted["third_exit_ratio"]
 
                 # 재시작 시 고점 보정: 저장된 고점이 현재가보다 5% 초과 높으면
                 # 즉시 트레일링 발동 위험 → 현재가로 리셋
@@ -637,9 +648,9 @@ class ExitManager:
             trail_from_high = float((current_price - state.highest_price) / state.highest_price * 100)
 
             if trail_from_high <= -ts_pct_used:
-                # 3차 익절 완료(THIRD/TRAILING) → 전량 매도
+                # 3차 익절 완료(THIRD/TRAILING) 또는 코어홀딩(분할익절 없음) → 전량 매도
                 # FIRST/SECOND → 분할 익절이 아직 남아있으므로 고점 리셋 (조기 전량 청산 방지)
-                if state.current_stage in (ExitStage.THIRD, ExitStage.TRAILING):
+                if state.current_stage in (ExitStage.THIRD, ExitStage.TRAILING) or state.is_core:
                     return self._create_exit(
                         state, "sell_all", state.remaining_quantity,
                         f"ATR트레일링: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
@@ -654,8 +665,8 @@ class ExitManager:
                     state.highest_price = current_price
                     self._persist_states()
 
-            # 본전 보호 (1차 익절 완료 후에만 적용 — 분할 수익 확보 전 조기청산 방지)
-            if state.current_stage != ExitStage.NONE:  # FIRST 이상 = 1차 익절 완료
+            # 본전 보호 (1차 익절 완료 또는 코어홀딩 — 분할 수익 확보 전 조기청산 방지)
+            if state.current_stage != ExitStage.NONE or state.is_core:
                 # KR 매도 수수료+세금 ≈ 0.213%, 여유분 포함 0.25%
                 sell_fee_buffer = 0.0 if self.market in ("US", "NASDAQ", "NYSE") else 0.25
                 if net_pnl_pct <= sell_fee_buffer:
@@ -683,6 +694,9 @@ class ExitManager:
         net_pnl_pct: float
     ) -> Optional[Tuple[str, int, str]]:
         """분할 익절 체크 (3단계, 전략별 목표 우선)"""
+        # 코어홀딩은 분할 익절 비활성화 (ratio 복원 실패 시에도 안전)
+        if state.is_core:
+            return None
 
         first_pct = state.first_exit_pct if state.first_exit_pct is not None else self.config.first_exit_pct
         second_pct = state.second_exit_pct if state.second_exit_pct is not None else self.config.second_exit_pct

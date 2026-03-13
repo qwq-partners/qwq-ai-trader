@@ -80,11 +80,13 @@ def _build_risk_config(risk_cfg: Dict[str, Any]) -> RiskConfig:
         flex_cash_threshold_pct=float(risk_cfg.get("flex_cash_threshold_pct", 10.0)),
         max_positions_per_sector=int(risk_cfg.get("max_positions_per_sector", 3)),
         strategy_allocation=risk_cfg.get("strategy_allocation", {
-            "momentum_breakout": 60.0,
-            "sepa_trend": 25.0,
-            "rsi2_reversal": 10.0,
-            "theme_chasing": 5.0,
-            "gap_and_go": 5.0,
+            "core_holding": 30.0,
+            "sepa_trend": 30.0,
+            "rsi2_reversal": 20.0,
+            "momentum_breakout": 0.0,
+            "theme_chasing": 10.0,
+            "gap_and_go": 10.0,
+            "strategic_swing": 0.0,
         }),
     )
 
@@ -266,6 +268,12 @@ def _merge_evolved_overrides(raw: Dict[str, Any], config_path: Optional[str] = N
                 merged["strategies"][component] = _deep_merge(
                     merged["strategies"][component], params
                 )
+                # kr.strategies.{component}에도 머지 (KR 설정이 kr.strategies를 우선 참조)
+                kr_strategies = merged.get("kr", {}).get("strategies")
+                if kr_strategies is not None and component in kr_strategies:
+                    merged["kr"]["strategies"][component] = _deep_merge(
+                        kr_strategies[component], params
+                    )
 
         count = sum(len(p) for p in overrides.values() if isinstance(p, dict))
         logger.info(f"진화 오버라이드 머지: {override_path} ({count}개 파라미터)")

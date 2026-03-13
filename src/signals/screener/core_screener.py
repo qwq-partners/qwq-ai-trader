@@ -138,8 +138,17 @@ class CoreScreener:
             if not self._is_etf_etn(name)
         }
 
-        # KIS API로 밸류에이션 데이터 조회
+        # 시총 필터: StockMaster DB에서 시총(억원) 조회
         symbol_list = list(filtered_symbols.keys())
+        market_caps = await self._fetch_market_caps(symbol_list)
+        if market_caps:
+            min_cap_eok = int(self._min_market_cap_b * 10000)  # 조→억 변환
+            before = len(symbol_list)
+            symbol_list = [s for s in symbol_list if market_caps.get(s, 0) >= min_cap_eok]
+            filtered_symbols = {s: filtered_symbols[s] for s in symbol_list}
+            logger.info(f"[코어스크리너] 시총 필터: {before}개→{len(symbol_list)}개 (>= {min_cap_eok}억원)")
+
+        # KIS API로 밸류에이션 데이터 조회
         valuations: Dict[str, Dict] = {}
 
         if self._kis_market_data:
@@ -155,6 +164,14 @@ class CoreScreener:
                 logger.info(f"[코어스크리너] 밸류에이션 조회 완료: {len(valuations)}개")
             except Exception as e:
                 logger.warning(f"[코어스크리너] 밸류에이션 조회 실패: {e}")
+
+        # 시총 기준 정렬 → rank 부여 (실제 시총 순위)
+        sorted_symbols = sorted(
+            symbol_list,
+            key=lambda s: market_caps.get(s, 0),
+            reverse=True,
+        )
+        rank_map = {sym: idx for idx, sym in enumerate(sorted_symbols)}
 
         # 유니버스 구성
         for code in symbol_list:
@@ -190,11 +207,30 @@ class CoreScreener:
                 "pbr": pbr,
                 "eps": eps,
                 "bps": bps,
-                "rank": len(universe),  # 유니버스 내 순위 (시총순)
+                "rank": rank_map.get(code, 999),  # 실제 시총 기준 순위
+                "market_cap_eok": market_caps.get(code, 0),
             })
 
         logger.info(f"[코어스크리너] 최종 유니버스: {len(universe)}개 (가격필터 후)")
         return universe
+
+    async def _fetch_market_caps(self, symbols: List[str]) -> Dict[str, int]:
+        """StockMaster DB에서 시총(억원) 조회"""
+        if not self._stock_master:
+            return {}
+        pool = getattr(self._stock_master, 'pool', None)
+        if pool is None:
+            return {}
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT ticker, market_cap FROM kr_stock_master WHERE ticker = ANY($1::text[])",
+                    symbols,
+                )
+                return {row['ticker']: int(row['market_cap'] or 0) for row in rows}
+        except Exception as e:
+            logger.warning(f"[코어스크리너] 시총 DB 조회 실패: {e}")
+            return {}
 
     async def _calculate_indicators(self, universe: List[Dict]) -> List[CoreCandidate]:
         """일봉 데이터 + 기술적 지표 계산"""
@@ -280,8 +316,7 @@ class CoreScreener:
             ind["ma5_above_ma20"] = (ma5 is not None and ma20 is not None and ma5 > ma20)
 
             # MA200 연속 하회 일수 (코어홀딩 교체 판단용)
-            # P0 수정: 각 날짜별 rolling MA200을 계산하여 비교
-            # 기존: 마지막 날 MA200 고정값으로 과거 종가와 비교 → 부정확
+            # 각 날짜별 rolling MA200을 계산하여 비교
             ma200_below_days = 0
             if ma200 is not None and ma200 > 0 and len(closes) >= 201:
                 for ci in range(len(closes) - 1, max(len(closes) - 31, 199), -1):
@@ -299,6 +334,7 @@ class CoreScreener:
             ind["eps"] = item.get("eps", 0)
             ind["bps"] = item.get("bps", 0)
             ind["rank"] = item.get("rank", 999)
+            ind["market_cap_eok"] = item.get("market_cap_eok", 0)
 
             candidate = CoreCandidate(
                 symbol=symbol,
@@ -365,9 +401,9 @@ class CoreScreener:
             if close <= ind["ma200"]:
                 continue
 
-            # PER > 0 (적자 기업 제외, 밸류에이션 미조회 시 통과)
+            # PER > 0 (적자 기업 제외: PER=0은 적자 또는 미제공)
             per = ind.get("per")
-            if per is not None and per != 0 and per < 0:
+            if per is not None and per <= 0:
                 continue
 
             # 거래대금 필터
@@ -489,7 +525,7 @@ class CoreScreener:
             elif roe_est >= 5:
                 score += 1
 
-        # 시총 순위 (5점) — 유니버스 내 순위 기반
+        # 시총 순위 (5점) — 실제 시총 기준 순위
         rank = ind.get("rank", 999)
         if rank <= 20:
             score += 5
@@ -504,36 +540,69 @@ class CoreScreener:
         return min(score, 30.0)
 
     def _score_supply(self, ind: Dict, reasons: List[str]) -> float:
-        """수급 추세 (20점)"""
+        """수급 추세 (20점) — 금액 기반 구간별 배점"""
         score = 0.0
+        close = ind.get("close", 0)
 
-        # 외인 순매수 5일 (10점)
+        # 외인 순매수 5일 (10점) — 주수×현재가로 대략적 금액 환산
         foreign_net = ind.get("foreign_net_buy_5d")
-        if foreign_net is not None:
+        if foreign_net is not None and close > 0:
+            foreign_amt = foreign_net * close  # 대략적 금액(원)
             if foreign_net > 0:
-                score += 10
-                reasons.append("외인매수")
-            elif foreign_net == 0:
-                score += 3
+                if foreign_amt >= 50_000_000_000:  # 500억+
+                    score += 10
+                    reasons.append(f"외인매수{foreign_amt/1e8:,.0f}억")
+                elif foreign_amt >= 10_000_000_000:  # 100억+
+                    score += 8
+                    reasons.append("외인매수")
+                elif foreign_amt >= 3_000_000_000:  # 30억+
+                    score += 6
+                else:
+                    score += 4
             else:
-                score += 1  # 순매도라도 최소 1점
+                # 순매도: 규모에 따라 차등 감점
+                abs_amt = abs(foreign_amt)
+                if abs_amt >= 50_000_000_000:
+                    score += 0  # 대규모 매도
+                elif abs_amt >= 10_000_000_000:
+                    score += 1
+                else:
+                    score += 2  # 소규모 매도
+        elif foreign_net is not None:
+            # close=0 (가격 미조회): 주수 기반 fallback
+            score += 3 if foreign_net > 0 else 1
         else:
-            score += 4  # 데이터 없으면 중립 (API 실패 시 과도한 패널티 방지)
+            score += 2  # 데이터 없음 = 순매도 소규모와 동일 (역설 해소)
 
         # 기관 순매수 5일 (10점)
         inst_net = ind.get("inst_net_buy_5d")
-        if inst_net is not None:
+        if inst_net is not None and close > 0:
+            inst_amt = inst_net * close
             if inst_net > 0:
-                score += 10
-                reasons.append("기관매수")
-            elif inst_net == 0:
-                score += 3
+                if inst_amt >= 50_000_000_000:
+                    score += 10
+                    reasons.append(f"기관매수{inst_amt/1e8:,.0f}억")
+                elif inst_amt >= 10_000_000_000:
+                    score += 8
+                    reasons.append("기관매수")
+                elif inst_amt >= 3_000_000_000:
+                    score += 6
+                else:
+                    score += 4
             else:
-                score += 1  # 순매도라도 최소 1점
+                abs_amt = abs(inst_amt)
+                if abs_amt >= 50_000_000_000:
+                    score += 0
+                elif abs_amt >= 10_000_000_000:
+                    score += 1
+                else:
+                    score += 2
+        elif inst_net is not None:
+            score += 3 if inst_net > 0 else 1
         else:
-            score += 4  # 데이터 없으면 중립
+            score += 2  # 데이터 없음
 
-        return score
+        return min(score, 20.0)
 
     def _score_momentum(self, ind: Dict, reasons: List[str]) -> float:
         """모멘텀 품질 (20점)"""
