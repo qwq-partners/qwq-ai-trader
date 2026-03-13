@@ -631,6 +631,14 @@ class ExitManager:
                 _be_threshold = state.dynamic_stop_pct if state.dynamic_stop_pct is not None else (state.stop_loss_pct if state.stop_loss_pct is not None else self.config.stop_loss_pct)
             if net_pnl_pct >= _be_threshold:
                 state.breakeven_activated = True
+                # 코어: breakeven 활성화 시점에서 trailing 기준점(고점)을 현재가로 리셋
+                # → 활성화 직후 고점 괴리에 의한 즉시 트레일링 발동 방지
+                if state.is_core and current_price < state.highest_price:
+                    logger.info(
+                        f"[ExitManager] {symbol} 코어 고점 리셋: "
+                        f"{state.highest_price:,.0f} → {current_price:,.0f} (BE 활성화 시점)"
+                    )
+                    state.highest_price = current_price
                 self._persist_states()
                 logger.info(
                     f"[ExitManager] {symbol} 본전보호 활성화: 임계값 {_be_threshold:.1f}% 도달 "
@@ -667,13 +675,18 @@ class ExitManager:
 
             # 본전 보호 (1차 익절 완료 또는 코어홀딩 — 분할 수익 확보 전 조기청산 방지)
             if state.current_stage != ExitStage.NONE or state.is_core:
-                # KR 매도 수수료+세금 ≈ 0.213%, 여유분 포함 0.25%
-                sell_fee_buffer = 0.0 if self.market in ("US", "NASDAQ", "NYSE") else 0.25
+                if state.is_core:
+                    # 코어: 장기 보유 → 본전 보호 버퍼를 넓게 (-2% 허용)
+                    # +10% 도달 후 조정 시 과도한 조기 청산 방지
+                    sell_fee_buffer = -2.0
+                else:
+                    # 일반 스윙: 수수료 버퍼 (KR 0.25%, US 0%)
+                    sell_fee_buffer = 0.0 if self.market in ("US", "NASDAQ", "NYSE") else 0.25
                 if net_pnl_pct <= sell_fee_buffer:
                     return self._create_exit(
                         state, "sell_all", state.remaining_quantity,
                         f"본전 이탈: +{net_pnl_pct:.2f}% "
-                        f"(1차 익절 완료 후 수수료 버퍼 {sell_fee_buffer}% 이하)"
+                        f"({'코어 버퍼' if state.is_core else '1차 익절 완료 후 수수료 버퍼'} {sell_fee_buffer}% 이하)"
                     )
 
         elif net_pnl_pct >= (state.trailing_activate_pct if state.trailing_activate_pct is not None else self.config.trailing_activate_pct):

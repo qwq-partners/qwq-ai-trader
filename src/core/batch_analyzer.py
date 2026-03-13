@@ -1309,7 +1309,7 @@ class BatchAnalyzer:
 
             logger.info(f"[코어홀딩] 현재 코어 포지션: {len(current_core)}개")
             for sym, pos in current_core.items():
-                pnl_pct = pos.unrealized_pnl_pct
+                pnl_pct = pos.unrealized_pnl_net_pct  # 수수료 포함 순손익률
                 logger.info(f"  - {sym} {pos.name}: {pnl_pct:+.2f}%")
 
             # 이전 리밸런싱에서 미완료 매수가 있는지 확인 (2단계 리밸런싱)
@@ -1376,8 +1376,8 @@ class BatchAnalyzer:
                 logger.warning("[코어홀딩] 스캔 후보 없음 → 기존 포지션 손실/MA200 이탈 체크만 수행")
                 sell_targets_fallback = []
                 for sym, pos in current_core.items():
-                    if pos.unrealized_pnl_pct <= -10.0:
-                        sell_targets_fallback.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_pct:.1f}%"))
+                    if pos.unrealized_pnl_net_pct <= -10.0:
+                        sell_targets_fallback.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_net_pct:.1f}%"))
                 if sell_targets_fallback:
                     for sym, reason in sell_targets_fallback:
                         pos = portfolio.positions[sym]
@@ -1400,10 +1400,11 @@ class BatchAnalyzer:
             # 후보 스코어 맵
             candidate_scores = {c.symbol: c for c in candidates}
 
-            # 신규 매수 후보 (현재 미보유 + 점수 상위, 교체 판단에도 사용)
+            # 신규 매수 후보 (전체 미보유 + 점수 상위, 교체 판단에도 사용)
+            # 스윙+코어 이중 보유 방지: 코어뿐 아니라 전체 포트폴리오 체크
             buy_candidates = [
                 c for c in candidates
-                if c.symbol not in current_core
+                if c.symbol not in portfolio.positions
                 and c.score >= min_score
             ]
 
@@ -1422,8 +1423,8 @@ class BatchAnalyzer:
                     continue
 
                 # 2) 수익률 -10% → 교체
-                if pos.unrealized_pnl_pct <= -10.0:
-                    sell_targets.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_pct:.1f}%"))
+                if pos.unrealized_pnl_net_pct <= -10.0:
+                    sell_targets.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_net_pct:.1f}%"))
                     continue
 
                 # 3) MA200 이탈 연속 N일 → 교체 (스크리너 지표 활용)

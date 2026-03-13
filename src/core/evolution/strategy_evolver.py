@@ -1008,14 +1008,20 @@ class StrategyEvolver:
             if key not in self._VALID_STRATEGIES and key not in adjusted:
                 adjusted[key] = current[key]
 
-        # 합계 상한 체크 — 초과 시 비례 축소 (비대상 전략 제외)
-        total = sum(adjusted.values())
-        if total > self._ALLOC_MAX_TOTAL:
-            ratio = self._ALLOC_MAX_TOTAL / total
-            adjusted = {k: round(v * ratio, 1) for k, v in adjusted.items()}
-            # 축소 후에도 최소값 보장
+        # 합계 상한 체크 — 비대상 전략(core_holding 등)은 축소 제외
+        non_valid_total = sum(v for k, v in adjusted.items() if k not in self._VALID_STRATEGIES)
+        valid_total = sum(v for k, v in adjusted.items() if k in self._VALID_STRATEGIES)
+        valid_cap = self._ALLOC_MAX_TOTAL - non_valid_total
+        if valid_cap > 0 and valid_total > valid_cap:
+            ratio = valid_cap / valid_total
+            adjusted = {
+                k: round(v * ratio, 1) if k in self._VALID_STRATEGIES else v
+                for k, v in adjusted.items()
+            }
+            # 축소 후에도 최소값 보장 (비대상 제외)
             for k in adjusted:
-                adjusted[k] = max(self._ALLOC_MIN_PCT, adjusted[k])
+                if k in self._VALID_STRATEGIES:
+                    adjusted[k] = max(self._ALLOC_MIN_PCT, adjusted[k])
 
         return adjusted
 
