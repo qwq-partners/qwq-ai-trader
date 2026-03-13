@@ -58,6 +58,10 @@ sse.on('pending_orders', (data) => {
     renderPendingOrders(data);
 });
 
+sse.on('core_holdings', (data) => {
+    renderCoreHoldings(data);
+});
+
 sse.on('health_checks', (data) => {
     renderHealthChecks(data, true);
 });
@@ -1102,6 +1106,7 @@ function applyMarketFilter(filter) {
     const usCard   = document.getElementById("us-market-card");
     const krCard   = document.getElementById("kr-market-card");
     const krSec    = document.getElementById("kr-positions-section");
+    const coreSec  = document.getElementById("core-holdings-section");
     const usPosF   = document.getElementById("us-positions-full");
     const usSec    = document.getElementById("us-summary-section");
     if (usSec) usSec.style.display = "none"; // 구 컨테이너 항상 숨김
@@ -1112,6 +1117,7 @@ function applyMarketFilter(filter) {
     if (usCard)  usCard.style.display  = showUS ? "" : "none";
     if (krCard)  krCard.style.display  = showKR ? "" : "none";
     if (krSec)   krSec.style.display   = showKR ? "" : "none";
+    if (coreSec) coreSec.style.display = showKR ? "" : "none";
     // us-positions-full: US 마켓 표시 여부에 따라 제어 (KR positions-section과 동일 방식)
     if (usPosF) usPosF.style.display = showUS ? "" : "none";
     const usSignalsSec = document.getElementById("us-signals-section");
@@ -1123,4 +1129,110 @@ function applyMarketFilter(filter) {
 
     updatePortfolioCard();
     updateRiskCard();
+}
+
+// ============================================================
+// 코어홀딩 렌더링
+// ============================================================
+
+function renderCoreHoldings(data) {
+    const section = document.getElementById('core-holdings-section');
+    if (!section) return;
+
+    const positions = data.positions || [];
+    const summary = data.summary || {};
+    const maxPositions = summary.max_positions || 3;
+
+    // 코어 포지션이 없고 예산도 0이면 숨김
+    if (positions.length === 0 && !summary.budget) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = '';
+
+    // 예산
+    const budgetEl = document.getElementById('core-budget');
+    if (budgetEl) {
+        budgetEl.textContent = summary.budget ? `예산 ${formatKRW(summary.budget)} / 30%` : '예산 -';
+    }
+
+    // 총 평가
+    const totalValEl = document.getElementById('core-total-value');
+    if (totalValEl) {
+        totalValEl.textContent = summary.total_value ? formatKRW(summary.total_value) : '-';
+    }
+
+    // 총 수익률
+    const totalPnlEl = document.getElementById('core-total-pnl');
+    if (totalPnlEl) {
+        const pnl = summary.total_pnl_pct || 0;
+        totalPnlEl.textContent = `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`;
+        totalPnlEl.style.color = pnl >= 0 ? 'var(--acc-green)' : 'var(--acc-red)';
+    }
+
+    // 다음 리밸런싱
+    const rbEl = document.getElementById('core-next-rebalance');
+    if (rbEl) {
+        const daysTo = data.days_to_rebalance || 0;
+        const rbDate = data.next_rebalance || '';
+        if (rbDate) {
+            const mm = rbDate.slice(5, 7);
+            const dd = rbDate.slice(8, 10);
+            rbEl.textContent = `D-${daysTo} (${mm}/${dd})`;
+        } else {
+            rbEl.textContent = '-';
+        }
+    }
+
+    // 카드 그리드
+    const grid = document.getElementById('core-cards-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    // 포지션 카드
+    positions.forEach(pos => {
+        const pnlColor = pos.unrealized_pnl_pct >= 0 ? 'var(--acc-green)' : 'var(--acc-red)';
+        const pnlSign = pos.unrealized_pnl_pct >= 0 ? '+' : '';
+        const weightBar = Math.min(100, (pos.weight_pct / 15) * 100);
+
+        const card = document.createElement('div');
+        card.style.cssText = 'background:var(--bg-elevated);border:1px solid rgba(245,158,11,0.15);border-radius:10px;padding:14px;';
+        card.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="font-size:.78rem;font-weight:700;">${pos.name || pos.symbol}</div>
+                <div style="font-size:.62rem;color:var(--text-muted);font-family:'JetBrains Mono',monospace;">${pos.symbol}</div>
+            </div>
+            <div style="font-size:1rem;font-weight:700;font-family:'JetBrains Mono',monospace;margin-bottom:4px;">${formatNumber(pos.current_price)}</div>
+            <div style="font-size:.82rem;font-weight:600;color:${pnlColor};margin-bottom:8px;">${pnlSign}${pos.unrealized_pnl_pct.toFixed(2)}%</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.62rem;color:var(--text-muted);margin-bottom:8px;">
+                <div>매입 ${formatNumber(pos.avg_price)}</div>
+                <div>수량 ${pos.quantity}주</div>
+                <div>평가 ${formatKRW(pos.market_value)}</div>
+                <div>보유 ${pos.holding_days}일</div>
+            </div>
+            <div style="background:var(--bg-base);border-radius:4px;height:6px;overflow:hidden;">
+                <div style="height:100%;width:${weightBar}%;background:linear-gradient(90deg,#f59e0b,#fbbf24);border-radius:4px;transition:width .3s;"></div>
+            </div>
+            <div style="font-size:.58rem;color:var(--text-muted);text-align:right;margin-top:2px;">${pos.weight_pct}%</div>
+        `;
+        grid.appendChild(card);
+    });
+
+    // 빈 슬롯 카드
+    const emptySlots = maxPositions - positions.length;
+    for (let i = 0; i < emptySlots; i++) {
+        const emptyCard = document.createElement('div');
+        emptyCard.style.cssText = 'background:var(--bg-elevated);border:2px dashed rgba(245,158,11,0.15);border-radius:10px;padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:120px;color:var(--text-muted);';
+        emptyCard.innerHTML = `
+            <div style="font-size:1.2rem;margin-bottom:6px;opacity:0.4;">+</div>
+            <div style="font-size:.68rem;">후보 탐색 중</div>
+        `;
+        grid.appendChild(emptyCard);
+    }
+}
+
+function formatKRW(value) {
+    if (value >= 100000000) return (value / 100000000).toFixed(1) + '억';
+    if (value >= 10000) return (value / 10000).toFixed(0) + '만';
+    return formatNumber(value);
 }

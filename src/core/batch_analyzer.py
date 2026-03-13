@@ -108,6 +108,35 @@ class BatchAnalyzer:
         self._rsi2 = RSI2ReversalStrategy(rsi2_cfg)
         self._sepa = SEPATrendStrategy(sepa_cfg)
 
+        # 코어홀딩 전략 초기화
+        self._core_strategy = None
+        self._core_screener = None
+        core_cfg_raw = self._config.get("core_holding", {})
+        if core_cfg_raw.get("enabled", False):
+            try:
+                from ..strategies.kr.core_holding import CoreHoldingStrategy
+                from ..signals.screener.core_screener import CoreScreener
+                core_strat_cfg = StrategyConfig(
+                    name="CoreHolding",
+                    strategy_type=StrategyType.CORE_HOLDING,
+                    min_score=core_cfg_raw.get("min_score", 70.0),
+                    stop_loss_pct=core_cfg_raw.get("stop_loss_pct", 15.0),
+                    params=core_cfg_raw,
+                )
+                self._core_strategy = CoreHoldingStrategy(core_strat_cfg)
+                self._core_screener = CoreScreener(
+                    broker=broker,
+                    kis_market_data=kis_market_data,
+                    stock_master=stock_master,
+                    config=core_cfg_raw,
+                )
+                logger.info("[배치분석기] 코어홀딩 전략/스크리너 초기화 완료")
+            except Exception as e:
+                logger.warning(f"[배치분석기] 코어홀딩 초기화 실패 (무시): {e}")
+
+        # 코어홀딩 상태 영속화 파일
+        self._core_state_path = Path.home() / ".cache" / "ai_trader" / "core_holding_state.json"
+
         # strategic_swing 최소 점수 (2계층 이상 복합 시그널만)
         self._strategic_min_score = self._config.get(
             "strategic_swing", {}
@@ -1241,3 +1270,207 @@ class BatchAnalyzer:
 
         except Exception as e:
             logger.warning(f"[배치분석] 텔레그램 알림 실패: {e}")
+
+    # ================================================================
+    # 코어홀딩 스캔/리밸런싱
+    # ================================================================
+
+    async def run_core_scan(self) -> List:
+        """코어홀딩 종목 스캔 (월초 리밸런싱용)
+
+        Returns:
+            코어홀딩 후보 시그널 리스트
+        """
+        if self._core_screener is None or self._core_strategy is None:
+            logger.debug("[코어홀딩] 스크리너/전략 미초기화 → 스킵")
+            return []
+
+        logger.info("[코어홀딩] 월초 스캔 시작...")
+        try:
+            # 스크리닝
+            candidates = await self._core_screener.run_full_scan()
+            if not candidates:
+                logger.info("[코어홀딩] 스캔 결과 없음")
+                return []
+
+            # 전략 시그널 생성
+            signals = await self._core_strategy.generate_batch_signals(candidates)
+            logger.info(f"[코어홀딩] 스캔 완료: {len(candidates)}개 후보, {len(signals)}개 시그널")
+
+            # 상태 파일 저장
+            self._save_core_state({
+                "last_scan": datetime.now().isoformat(),
+                "candidates": len(candidates),
+                "signals": len(signals),
+                "top_candidates": [
+                    {"symbol": c.symbol, "name": c.name, "score": c.score}
+                    for c in candidates[:10]
+                ],
+            })
+
+            return signals
+
+        except Exception as e:
+            logger.error(f"[코어홀딩] 스캔 오류: {e}", exc_info=True)
+            return []
+
+    async def execute_core_rebalance(self):
+        """코어홀딩 리밸런싱 실행
+
+        1. 현재 코어 포지션 확인
+        2. 스캔 실행 → 후보 생성
+        3. 교체 대상 판단 (재스코어 < 55 또는 신규 +15점)
+        4. 교체 매도 → 신규 매수 시그널 발행
+        """
+        if self._core_screener is None or self._core_strategy is None:
+            return
+
+        logger.info("[코어홀딩] 리밸런싱 시작...")
+
+        try:
+            core_cfg = self._config.get("core_holding", {})
+            max_positions = core_cfg.get("max_positions", 3)
+            min_score = core_cfg.get("min_score", 70)
+            replace_threshold = core_cfg.get("replace_threshold", 15)
+            ma200_break_days = core_cfg.get("ma200_break_days", 5)
+
+            # 현재 코어 포지션 확인
+            portfolio = self._engine.portfolio
+            current_core = {}
+            for sym, pos in portfolio.positions.items():
+                if pos.strategy == "core_holding":
+                    current_core[sym] = pos
+
+            logger.info(f"[코어홀딩] 현재 코어 포지션: {len(current_core)}개")
+            for sym, pos in current_core.items():
+                pnl_pct = pos.unrealized_pnl_pct
+                logger.info(f"  - {sym} {pos.name}: {pnl_pct:+.2f}%")
+
+            # 스캔 실행
+            candidates = await self._core_screener.run_full_scan()
+            if not candidates:
+                logger.warning("[코어홀딩] 리밸런싱 후보 없음 → 기존 포지션 유지 (스캔 실패일 수 있음)")
+                return
+
+            # 후보 스코어 맵
+            candidate_scores = {c.symbol: c for c in candidates}
+
+            # 교체 대상 판단
+            sell_targets = []
+            for sym, pos in current_core.items():
+                rescore = candidate_scores.get(sym)
+                # 스캔에 포함되지 않은 종목은 유지 (스캔 누락 ≠ 필터 미달)
+                if rescore is None:
+                    logger.info(f"[코어홀딩] {sym} 스캔 결과 없음 → 유지")
+                    continue
+
+                # 1) 재스코어 < 55 → 교체
+                if rescore.score < 55:
+                    sell_targets.append((sym, f"재스코어 {rescore.score:.0f} < 55"))
+                    continue
+
+                # 2) 수익률 -10% → 교체
+                if pos.unrealized_pnl_pct <= -10.0:
+                    sell_targets.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_pct:.1f}%"))
+                    continue
+
+            # 신규 매수 후보 (현재 미보유 + 점수 상위)
+            buy_candidates = [
+                c for c in candidates
+                if c.symbol not in current_core
+                and c.score >= min_score
+            ]
+
+            # 교체 로직: 신규 후보가 기존 대비 15점+ 높으면 교체
+            for sym, reason in sell_targets:
+                logger.info(f"[코어홀딩] 교체 대상: {sym} ({reason})")
+
+            # 빈 슬롯 계산 (교체 매도가 체결되기 전에는 순수 빈 슬롯만 매수 — 경쟁 조건 방지)
+            remaining_slots = max_positions - len(current_core)
+
+            # 매도 시그널 발행 (교체 대상)
+            for sym, reason in sell_targets:
+                if sym in portfolio.positions:
+                    pos = portfolio.positions[sym]
+                    event = SignalEvent.from_signal(
+                        Signal(
+                            symbol=sym,
+                            side=OrderSide.SELL,
+                            strength=SignalStrength.NORMAL,
+                            strategy=StrategyType.CORE_HOLDING,
+                            price=pos.current_price,
+                            score=0,
+                            reason=f"코어홀딩 리밸런싱: {reason}",
+                            metadata={"is_core": True, "rebalance": True},
+                        ),
+                        source="core_rebalance",
+                    )
+                    await self._engine.emit(event)
+                    logger.info(f"[코어홀딩] 리밸런싱 매도: {sym} ({reason})")
+
+            # 매수 시그널 발행 (상위 후보, 빈 슬롯만큼)
+            buy_count = 0
+            for candidate in buy_candidates[:remaining_slots]:
+                if buy_count >= remaining_slots:
+                    break
+
+                signal = Signal(
+                    symbol=candidate.symbol,
+                    side=OrderSide.BUY,
+                    strength=SignalStrength.STRONG,
+                    strategy=StrategyType.CORE_HOLDING,
+                    price=candidate.entry_price,
+                    stop_price=candidate.entry_price * Decimal(str(1 - 15.0 / 100)),
+                    score=candidate.score,
+                    confidence=candidate.score / 100.0,
+                    reason=f"코어홀딩 리밸런싱 진입: {', '.join(candidate.reasons[:3])}",
+                    metadata={
+                        "is_core": True,
+                        "candidate_name": candidate.name,
+                        "batch_signal": True,
+                        "rebalance": True,
+                    },
+                )
+                event = SignalEvent.from_signal(signal, source="core_rebalance")
+                await self._engine.emit(event)
+                buy_count += 1
+                logger.info(
+                    f"[코어홀딩] 리밸런싱 매수: {candidate.symbol} {candidate.name} "
+                    f"점수={candidate.score:.0f}"
+                )
+
+            # 상태 저장
+            self._save_core_state({
+                "last_rebalance": datetime.now().isoformat(),
+                "sold": [s for s, _ in sell_targets],
+                "bought": [c.symbol for c in buy_candidates[:buy_count]],
+                "current_core_count": len(current_core) - len(sell_targets) + buy_count,
+            })
+
+            logger.info(
+                f"[코어홀딩] 리밸런싱 완료: "
+                f"매도={len(sell_targets)}개, 매수={buy_count}개"
+            )
+
+        except Exception as e:
+            logger.error(f"[코어홀딩] 리밸런싱 오류: {e}", exc_info=True)
+
+    def _save_core_state(self, data: Dict) -> None:
+        """코어홀딩 상태 파일 저장"""
+        try:
+            existing = {}
+            if self._core_state_path.exists():
+                existing = json.loads(self._core_state_path.read_text())
+            existing.update(data)
+            self._core_state_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2))
+        except Exception as e:
+            logger.warning(f"[코어홀딩] 상태 저장 실패: {e}")
+
+    def get_core_state(self) -> Dict:
+        """코어홀딩 상태 파일 로드"""
+        try:
+            if self._core_state_path.exists():
+                return json.loads(self._core_state_path.read_text())
+        except Exception as e:
+            logger.debug(f"[코어홀딩] 상태 로드 실패: {e}")
+        return {}

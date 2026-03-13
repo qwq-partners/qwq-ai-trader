@@ -42,7 +42,7 @@ class SSEClient {
         // 이벤트 타입별 리스너
         const eventTypes = ['status', 'portfolio', 'positions', 'risk', 'events', 'pending_orders',
                             'us_status', 'us_portfolio', 'us_positions', 'us_risk',
-                            'market_indices'];
+                            'market_indices', 'core_holdings'];
         eventTypes.forEach(type => {
             this.eventSource.addEventListener(type, (e) => {
                 try {

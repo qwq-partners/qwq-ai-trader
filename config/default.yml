@@ -47,7 +47,7 @@ kr:
     max_daily_new_buys: 5
     base_position_pct: 25.0
     max_position_pct: 28.0
-    max_positions: 5
+    max_positions: 8
     min_cash_reserve_pct: 5.0
     min_position_value: 200000       # 20만원
     dynamic_max_positions: true
@@ -60,10 +60,11 @@ kr:
     flex_cash_threshold_pct: 10.0
     max_positions_per_sector: 2
     strategy_allocation:
+      core_holding: 30.0
       sepa_trend: 30.0
       rsi2_reversal: 20.0
-      momentum_breakout: 25.0
-      gap_and_go: 15.0
+      momentum_breakout: 0.0
+      gap_and_go: 10.0
       theme_chasing: 10.0
     hybrid:
       enabled: false
@@ -136,6 +137,26 @@ kr:
       max_holding_days: 10
       min_score: 55
       weight: 40
+
+    core_holding:
+      enabled: true
+      max_positions: 3
+      position_pct: 10.0
+      max_position_pct: 15.0
+      min_score: 70
+      replace_threshold: 15
+      min_market_cap_b: 0.5
+      min_price: 5000
+      min_avg_trading_value: 1000000000
+      stop_loss_pct: 15.0
+      trailing_stop_pct: 8.0
+      trailing_activate_pct: 10.0
+      max_holding_days: 0
+      stale_exit_days: 0
+      stale_high_days: 0
+      emergency_stop_pct: 15.0
+      rebalance_day: 1
+      ma200_break_days: 5
 
   exit_manager:
     enable_partial_exit: true

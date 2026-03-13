@@ -546,6 +546,17 @@ class UnifiedTradingBot:
                     "second_exit_pct": 10.0,
                     "third_exit_pct": 12.0,
                 },
+                "core_holding": {
+                    "stop_loss_pct": 15.0,
+                    "trailing_stop_pct": 8.0,
+                    "trailing_activate_pct": 10.0,
+                    "first_exit_ratio": 0.0,    # 분할 익절 비활성화
+                    "second_exit_ratio": 0.0,
+                    "third_exit_ratio": 0.0,
+                    "stale_high_days": 0,       # 신고가 실패 무효화 off
+                    "max_holding_days": 0,      # 보유기간 무제한
+                    "is_core": True,            # 레짐 오버라이드 제외 플래그
+                },
                 # sync_detected 포지션: 보수적 리스크 (회피 패턴 방지)
                 "_sync": {
                     "stop_loss_pct": 3.0,         # 타이트한 손절
@@ -603,6 +614,9 @@ class UnifiedTradingBot:
                         second_exit_ratio=exit_params.get("second_exit_ratio"),
                         third_exit_ratio=exit_params.get("third_exit_ratio"),
                         stale_high_days=exit_params.get("stale_high_days"),
+                        is_core=exit_params.get("is_core", False),
+                        max_holding_days=exit_params.get("max_holding_days"),
+                        trailing_activate_pct=exit_params.get("trailing_activate_pct"),
                     )
                 logger.info(
                     f"[KR] 기존 포지션 {len(self.engine.portfolio.positions)}개 ExitManager 등록 완료"
@@ -753,6 +767,7 @@ class UnifiedTradingBot:
             if rsi2_cfg.get("enabled") or sepa_cfg.get("enabled"):
                 try:
                     from src.core.batch_analyzer import BatchAnalyzer
+                    core_cfg = strategies_cfg.get("core_holding") or {}
                     self.batch_analyzer = BatchAnalyzer(
                         engine=self.engine,
                         broker=self.broker,
@@ -762,6 +777,7 @@ class UnifiedTradingBot:
                         config={
                             "rsi2_reversal": rsi2_cfg,
                             "sepa_trend": sepa_cfg,
+                            "core_holding": core_cfg,
                             # evolved_overrides.batch + kr.batch 병합 (kr 우선)
                             "batch": {
                                 **(self.config.get("batch") or {}),

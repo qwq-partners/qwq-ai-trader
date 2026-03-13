@@ -1438,6 +1438,7 @@ class RiskManager:
                 StrategyType.THEME_CHASING: 15.0,     # 테마: 집중 배분
                 StrategyType.GAP_AND_GO: 15.0,        # 갭상승: 집중 배분
                 StrategyType.MOMENTUM_BREAKOUT: 0.0,  # 비활성 (03-04 대참사)
+                StrategyType.CORE_HOLDING: 10.0,      # 코어홀딩: 30% 예산 / 최대 3종목 = 10%
             }
             strat_pct = strategy_position_pct.get(signal.strategy, default_pct)
             # 비활성 전략이 0%면 매수 자체를 차단

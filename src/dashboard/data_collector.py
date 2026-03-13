@@ -1757,3 +1757,113 @@ class DashboardDataCollector:
         if len(ord_tmd) >= 6:
             return f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:6]}"
         return ord_tmd
+
+    def get_core_holdings(self) -> Dict[str, Any]:
+        """코어홀딩 섹션 데이터"""
+        from datetime import date, timedelta
+        from src.core.engine import is_kr_market_holiday
+
+        portfolio = getattr(self.bot, 'engine', None)
+        if portfolio:
+            portfolio = portfolio.portfolio
+
+        core_positions = []
+        total_value = 0
+        total_cost = 0
+
+        if portfolio:
+            for sym, pos in portfolio.positions.items():
+                if pos.strategy == "core_holding":
+                    mv = float(pos.market_value)
+                    cb = float(pos.cost_basis)
+                    pnl_pct = pos.unrealized_pnl_pct
+                    holding_days = 0
+                    if pos.entry_time:
+                        delta = (datetime.now() - pos.entry_time).days
+                        holding_days = max(0, delta)
+
+                    # 포지션 비중 (총자산 대비)
+                    equity = float(portfolio.total_equity) if portfolio.total_equity > 0 else 1
+                    weight_pct = mv / equity * 100
+
+                    core_positions.append({
+                        "symbol": sym,
+                        "name": pos.name or sym,
+                        "quantity": pos.quantity,
+                        "avg_price": float(pos.avg_price),
+                        "current_price": float(pos.current_price),
+                        "market_value": mv,
+                        "cost_basis": cb,
+                        "unrealized_pnl": float(pos.unrealized_pnl),
+                        "unrealized_pnl_pct": round(pnl_pct, 2),
+                        "holding_days": holding_days,
+                        "weight_pct": round(weight_pct, 1),
+                    })
+                    total_value += mv
+                    total_cost += cb
+
+        # 코어홀딩 설정 조회
+        equity = float(portfolio.total_equity) if portfolio else 0
+        batch_analyzer = getattr(self.bot, 'batch_analyzer', None)
+        core_cfg = {}
+        if batch_analyzer:
+            core_cfg = getattr(batch_analyzer, '_config', {}).get("core_holding", {})
+
+        # 코어홀딩 예산 (설정의 strategy_allocation.core_holding %)
+        core_alloc_pct = 30.0
+        _risk_cfg = getattr(self.bot, 'config', {})
+        if isinstance(_risk_cfg, dict):
+            core_alloc_pct = _risk_cfg.get("risk_config", {}).get("strategy_allocation", {}).get("core_holding", 30.0)
+        budget = equity * (core_alloc_pct / 100)
+
+        # 총 수익률
+        total_pnl_pct = 0.0
+        if total_cost > 0:
+            total_pnl_pct = (total_value - total_cost) / total_cost * 100
+
+        # 다음 리밸런싱 일자 계산
+        today = date.today()
+        next_rebalance = None
+        rebalance_day = core_cfg.get("rebalance_day", 1)
+
+        # 다음 월 첫 영업일 계산
+        if today.day > rebalance_day:
+            # 이번 달 이미 지남 → 다음 달
+            if today.month == 12:
+                next_month = date(today.year + 1, 1, rebalance_day)
+            else:
+                next_month = date(today.year, today.month + 1, rebalance_day)
+        else:
+            next_month = date(today.year, today.month, rebalance_day)
+
+        for delta in range(0, 7):
+            candidate = next_month + timedelta(days=delta)
+            if candidate.weekday() < 5:
+                try:
+                    if not is_kr_market_holiday(candidate):
+                        next_rebalance = candidate.isoformat()
+                        break
+                except Exception:
+                    next_rebalance = candidate.isoformat()
+                    break
+
+        days_to_rebalance = 0
+        if next_rebalance:
+            try:
+                rb_date = date.fromisoformat(next_rebalance)
+                days_to_rebalance = (rb_date - today).days
+            except Exception:
+                pass
+
+        return {
+            "positions": core_positions,
+            "summary": {
+                "total_value": round(total_value),
+                "total_pnl_pct": round(total_pnl_pct, 2),
+                "budget": round(budget),
+                "count": len(core_positions),
+                "max_positions": core_cfg.get("max_positions", 3) if batch_analyzer else 3,
+            },
+            "next_rebalance": next_rebalance,
+            "days_to_rebalance": days_to_rebalance,
+        }

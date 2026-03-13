@@ -89,6 +89,7 @@ class StrategyType(str, Enum):
     SCALPING = "scalping"                      # 스캘핑
     RSI2_REVERSAL = "rsi2_reversal"            # RSI(2) 역전
     SEPA_TREND = "sepa_trend"                  # SEPA 추세 전략 (스윙)
+    CORE_HOLDING = "core_holding"              # 코어홀딩 중장기 전략
     STRATEGIC_SWING = "strategic_swing"        # 전략적 스윙
 
     # US 전략
@@ -102,6 +103,7 @@ class TimeHorizon(str, Enum):
     DAY = "day"                # 데이 트레이딩 (1일 이내)
     SHORT_TERM = "short_term"  # 단기 (2-5일)
     SWING = "swing"            # 스윙 (5-20일)
+    MEDIUM_TERM = "medium_term"  # 중장기 (20일+, 코어홀딩)
 
 
 # ============================================================

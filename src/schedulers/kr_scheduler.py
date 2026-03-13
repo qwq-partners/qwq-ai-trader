@@ -143,6 +143,12 @@ class KRScheduler:
                 self.run_batch_scheduler(), name="kr_batch_scheduler"
             ))
 
+        # 코어홀딩 월초 리밸런싱
+        if bot.batch_analyzer and getattr(bot.batch_analyzer, '_core_strategy', None):
+            tasks.append(asyncio.create_task(
+                self.run_core_rebalance_scheduler(), name="kr_core_rebalance"
+            ))
+
         # 헬스 모니터
         if bot.health_monitor:
             tasks.append(asyncio.create_task(
@@ -436,6 +442,9 @@ class KRScheduler:
                             second_exit_ratio=_ep.get("second_exit_ratio"),
                             third_exit_ratio=_ep.get("third_exit_ratio"),
                             stale_high_days=_ep.get("stale_high_days"),
+                            is_core=_ep.get("is_core", False),
+                            max_holding_days=_ep.get("max_holding_days"),
+                            trailing_activate_pct=_ep.get("trailing_activate_pct"),
                         )
                     if symbol not in bot._watch_symbols:
                         bot._watch_symbols.append(symbol)
@@ -1281,6 +1290,9 @@ JSON:
                                             second_exit_ratio=exit_params.get("second_exit_ratio"),
                                             third_exit_ratio=exit_params.get("third_exit_ratio"),
                                             stale_high_days=exit_params.get("stale_high_days"),
+                                            is_core=exit_params.get("is_core", False),
+                                            max_holding_days=exit_params.get("max_holding_days"),
+                                            trailing_activate_pct=exit_params.get("trailing_activate_pct"),
                                         )
                                         logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%)")
                                     except Exception as e:
@@ -3608,3 +3620,71 @@ JSON:
             pass
         except Exception as e:
             logger.error(f"[수동매수] 오류: {e}")
+
+    async def run_core_rebalance_scheduler(self):
+        """코어홀딩 월초 리밸런싱 스케줄러
+
+        매월 첫 영업일 08:20에 코어홀딩 스캔 → 09:01에 리밸런싱 실행.
+        """
+        from datetime import date, timedelta
+        from src.core.engine import is_kr_market_holiday
+
+        bot = self.bot
+        last_rebalance_month: Optional[str] = None
+
+        # 상태 파일에서 마지막 리밸런싱 월 로드
+        try:
+            core_state = bot.batch_analyzer.get_core_state()
+            last_rb = core_state.get("last_rebalance", "")
+            if last_rb:
+                last_rebalance_month = last_rb[:7]  # "YYYY-MM"
+        except Exception:
+            pass
+
+        logger.info("[코어홀딩스케줄러] 시작")
+
+        while True:
+            try:
+                await asyncio.sleep(60)  # 1분 주기
+
+                now = datetime.now()
+                today = now.date()
+                current_month = today.strftime("%Y-%m")
+
+                # 이미 이번 달 리밸런싱 완료
+                if last_rebalance_month == current_month:
+                    continue
+
+                # 코어홀딩 설정
+                core_cfg = bot.batch_analyzer._config.get("core_holding", {})
+                rebalance_day = core_cfg.get("rebalance_day", 1)
+
+                # 월초 첫 영업일 판단
+                check_date = date(today.year, today.month, rebalance_day)
+                # rebalance_day부터 5일간 첫 영업일 탐색
+                first_biz_day = None
+                for delta in range(0, 7):
+                    candidate_date = check_date + timedelta(days=delta)
+                    if candidate_date.month != today.month:
+                        break
+                    if candidate_date.weekday() < 5 and not is_kr_market_holiday(candidate_date):
+                        first_biz_day = candidate_date
+                        break
+
+                if first_biz_day is None or today != first_biz_day:
+                    continue
+
+                # 09:01 리밸런싱 실행 (내부에서 스캔 포함)
+                if now.hour == 9 and 1 <= now.minute < 5:
+                    logger.info("[코어홀딩스케줄러] 월초 리밸런싱 실행")
+                    try:
+                        await bot.batch_analyzer.execute_core_rebalance()
+                        last_rebalance_month = current_month
+                    except Exception as e:
+                        logger.error(f"[코어홀딩스케줄러] 리밸런싱 오류: {e}")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[코어홀딩스케줄러] 루프 오류: {e}")
+                await asyncio.sleep(60)

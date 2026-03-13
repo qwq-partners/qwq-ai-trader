@@ -1,5 +1,70 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-13 — 코어홀딩 전체 흐름 검증 + P0/P1 수정 (7개 파일)
+
+### P0 수정 (3건)
+- **`src/strategies/exit_manager.py`**
+  - `trailing_activate_pct` 포지션별 오버라이드 추가 (PositionExitState 필드 + register_position 파라미터 + update_price에서 사용). 코어 10%로 설정되나 글로벌 5%가 적용되던 문제 해결
+  - 횡보 조기 청산(`stale_exit_days`)에 `not state.is_core` 가드 추가. 코어 포지션 5영업일 후 전량 청산 방지
+  - 코어 포지션 ATR 동적 손절 비활성화 (`is_core`일 때 dynamic_stop 계산 건너뛰기). 15% 고정 손절이 6~7% ATR로 덮어씌워지던 문제 해결
+- **`src/core/engine.py`** — `strategy_position_pct`에 `CORE_HOLDING: 10.0` 추가 (30%예산÷3종목). 25% 폴백으로 과대 사이징 방지
+
+### P1 수정 (5건)
+- **`src/core/batch_analyzer.py`** — `execute_core_rebalance()` 빈 슬롯만 매수 (교체 매도 미체결 상태에서 매수 시도 방지)
+- **`src/schedulers/kr_scheduler.py`** — 08:20 불필요 스캔 제거 (09:01이 독립적으로 스캔하므로 API 2회 호출 낭비 해소)
+- **`src/dashboard/static/js/dashboard.js`** — `applyMarketFilter()`에 코어홀딩 섹션 추가 (US 필터 시 숨김)
+- **`src/dashboard/data_collector.py`** — budget 30%/max_positions 3 하드코딩 → 설정에서 읽도록 변경, batch_analyzer 중복 선언 정리
+- **3개 register_position call site** — `trailing_activate_pct` 파라미터 전달 추가 (kr_scheduler.py ×2, run_trader.py ×1)
+
+## 2026-03-13 — 코어홀딩 P0/P1 버그 수정 (4개 파일)
+
+### P0 수정 (5건)
+- **`src/signals/screener/core_screener.py`** — 전면 재작성
+  - `StockMaster.get_all_stocks()` → `get_top_stocks(limit=150)` 사용 (기존 메서드 존재하지 않음)
+  - `KISMarketData.get_market_cap_top()` 제거 → `fetch_batch_valuations()` 사용
+  - `broker.get_daily_candles()` → `broker.get_daily_prices(symbol, days=250)` 사용
+  - `KISMarketData.get_daily_prices()` 폴백 제거 (해당 메서드 없음)
+  - dead ternary (`_get_daily_candles_sync` 분기) 제거 (P1 #7)
+  - 수급 데이터 별도 `_enrich_supply_demand()` 메서드로 분리 (`fetch_stock_investor_daily()` 사용)
+- **`src/schedulers/kr_scheduler.py`** — 2개 `register_position()` call site에 `is_core`/`max_holding_days` 전달 추가
+- **`scripts/run_trader.py`** — 1개 `register_position()` call site에 `is_core`/`max_holding_days` 전달 추가
+
+### P1 수정 (2건)
+- **`src/signals/screener/core_screener.py`** — PBR 스코어링 순서 수정 (pbr<3 → 3점, pbr<5 → 2점, 좁은 범위 먼저)
+- **`src/core/batch_analyzer.py`** — `execute_core_rebalance()`: 스캔에 포함되지 않은 종목은 유지 (스캔 실패 ≠ 기본 필터 미달)
+
+## 2026-03-13 — KR 코어홀딩(Core Holding) 중장기 전략 구현 (17개 파일)
+
+### 신규 파일 (2개)
+- **`src/strategies/kr/core_holding.py`** — CoreHoldingStrategy (배치 시그널 생성, 100점 스코어링)
+- **`src/signals/screener/core_screener.py`** — CoreScreener (대형주 유니버스→지표→스코어링)
+
+### 핵심 변경
+- **`src/core/types.py`** — `StrategyType.CORE_HOLDING`, `TimeHorizon.MEDIUM_TERM` 추가
+- **`src/strategies/exit_manager.py`** — `PositionExitState`에 `is_core`/`max_holding_days` 추가, ratio=0 분할익절 비활성화 가드, `apply_regime_params()` 코어 포지션 스킵, 포지션별 max_holding_days 우선 적용
+- **`config/default.yml`** — `kr.strategies.core_holding` 섹션 추가, `max_positions` 5→8, `strategy_allocation`에 `core_holding: 30.0`
+- **`config/evolved_overrides.yml`** — `strategy_allocation` 재조정 (core_holding 30%, sepa 42%, rsi2 17.5%, theme 7%, gap 3.5%), `max_positions` 8
+- **`scripts/run_trader.py`** — `_strategy_exit_params`에 core_holding 엔트리 추가 (SL 15%, TS 8%, 분할익절 비활성화), BatchAnalyzer에 core_holding config 전달
+- **`src/core/batch_analyzer.py`** — 코어홀딩 전략/스크리너 초기화, `run_core_scan()`, `execute_core_rebalance()` 메서드 추가
+- **`src/schedulers/kr_scheduler.py`** — `run_core_rebalance_scheduler()` 월초 리밸런싱 태스크 추가
+
+### 대시보드
+- **`src/dashboard/data_collector.py`** — `get_core_holdings()` 메서드 (코어 포지션, 요약, 리밸런싱 일정)
+- **`src/dashboard/kr_api.py`** — `/api/core-holdings` GET 라우트
+- **`src/dashboard/sse.py`** — `core_holdings` 이벤트 (10초 주기)
+- **`src/dashboard/static/js/common.js`** — SSE eventTypes에 `core_holdings` 추가
+- **`src/dashboard/templates/index.html`** — 코어홀딩 카드형 섹션 (KR 포지션 위)
+- **`src/dashboard/static/js/dashboard.js`** — `renderCoreHoldings()` 함수 (카드형 레이아웃, 빈 슬롯, 비중 바)
+
+### 설계 요약
+- 전체 자본의 30%(~690만), 최대 3종목, 월 1회 리밸런싱
+- 분할 익절 비활성화, 손절 -15%, 트레일링 고점 -8% (활성화: +10%)
+- 시총 5000억+, 주가 5000원+, MA200 위, PER>0 필터
+- ExitManager 코어 포지션: 레짐 오버라이드 제외, 보유기간 무제한
+- 교체: 재스코어 < 55 또는 수익률 -10% 시 리밸런싱 매도
+
+---
+
 ## 2026-03-13 — 2차 전체 코드 리뷰 + 전략 리뷰 일괄 수정 (19개 파일)
 
 ### P0 코드 수정 (5건)

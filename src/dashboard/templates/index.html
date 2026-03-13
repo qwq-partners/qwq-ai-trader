@@ -641,6 +641,36 @@
             <div id="premarket-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;"></div>
         </div>
 
+        <!-- ═══ CORE HOLDINGS ═══ -->
+        <div id="core-holdings-section" style="margin-bottom:16px;display:none;">
+            <div class="card ai d3" style="padding:20px 22px;border-left:3px solid #f59e0b;background:linear-gradient(135deg,var(--bg-card) 0%,rgba(245,158,11,0.03) 100%);">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(245,158,11,0.2);">
+                    <span style="font-size:1rem;">🏛️</span>
+                    <span style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#f59e0b;">코어 홀딩</span>
+                    <span id="core-budget" style="margin-left:auto;font-size:.68rem;color:var(--text-muted);font-family:'JetBrains Mono',monospace;background:var(--bg-elevated);padding:3px 10px;border-radius:6px;border:1px solid rgba(245,158,11,0.2);">예산 -</span>
+                </div>
+                <!-- 요약 -->
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
+                    <div style="text-align:center;">
+                        <div style="font-size:.62rem;color:var(--text-muted);margin-bottom:2px;">총 평가</div>
+                        <div id="core-total-value" style="font-size:.88rem;font-weight:700;font-family:'JetBrains Mono',monospace;">-</div>
+                    </div>
+                    <div style="text-align:center;">
+                        <div style="font-size:.62rem;color:var(--text-muted);margin-bottom:2px;">총 수익률</div>
+                        <div id="core-total-pnl" style="font-size:.88rem;font-weight:700;font-family:'JetBrains Mono',monospace;">-</div>
+                    </div>
+                    <div style="text-align:center;">
+                        <div style="font-size:.62rem;color:var(--text-muted);margin-bottom:2px;">다음 리밸런싱</div>
+                        <div id="core-next-rebalance" style="font-size:.88rem;font-weight:700;font-family:'JetBrains Mono',monospace;">-</div>
+                    </div>
+                </div>
+                <!-- 카드 그리드 -->
+                <div id="core-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;">
+                    <!-- JS에서 동적 렌더링 -->
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ KR POSITIONS ═══ -->
         <div id="kr-positions-section">
             <div class="mc mc-kr ai d3" style="padding:20px 22px;margin-bottom:16px;">

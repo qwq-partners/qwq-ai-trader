@@ -15,13 +15,14 @@ risk_config:
   daily_max_trades: 30
   default_stop_loss_pct: 4.0
   base_position_pct: 25.0          # ★ LOCKED — 진화 잠금, 수동 분석 후에만 조정
-  max_positions: 5
+  max_positions: 8                 # 기존5 + 코어3
   strategy_allocation:
-    sepa_trend: 60.0        # ★ 최고 성과 (88% 승률, +3.82%) → 우선
-    rsi2_reversal: 25.0     # 2순위 (67% 승률, +1.83%)
+    core_holding: 30.0      # 코어홀딩 중장기 (전체 자본 30%)
+    sepa_trend: 42.0        # ★ 최고 성과 (88% 승률, +3.82%) → 우선 (60→42)
+    rsi2_reversal: 17.5     # 2순위 (67% 승률, +1.83%) (25→17.5)
     momentum_breakout: 0.0  # 비활성 (35% 승률, -0.88%) → 비활성
-    theme_chasing: 10.0
-    gap_and_go: 5.0
+    theme_chasing: 7.0      # (10→7)
+    gap_and_go: 3.5         # (5→3.5)
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 3.5

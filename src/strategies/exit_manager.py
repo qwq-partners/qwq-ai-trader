@@ -193,6 +193,10 @@ class PositionExitState:
     # 포지션 최초 진입 수량 (부분 매도 후에도 유지 — 재시작 정합성 검증용)
     # 파일의 initial_qty에서 복원, 없으면 original_quantity로 초기화
     initial_quantity: int = 0
+    # 코어홀딩 전용: 레짐 오버라이드 제외, 포지션별 max_holding_days 우선 적용
+    is_core: bool = False
+    max_holding_days: Optional[int] = None  # None이면 글로벌 ExitConfig 사용, 0이면 무제한
+    trailing_activate_pct: Optional[float] = None  # None이면 글로벌 ExitConfig 사용
 
 
 class ExitManager:
@@ -271,7 +275,12 @@ class ExitManager:
                 "stage": state.current_stage.value,
                 "highest_price": float(state.highest_price),
                 "breakeven_activated": state.breakeven_activated,
+                "is_core": state.is_core,
             }
+            if state.max_holding_days is not None:
+                entry["max_holding_days"] = state.max_holding_days
+            if state.trailing_activate_pct is not None:
+                entry["trailing_activate_pct"] = state.trailing_activate_pct
             # ★ initial_qty: 최초 진입 수량 (부분 매도 후 덮어쓰기 방지)
             # - stage=NONE(신규/무매도): 현재 수량으로 갱신
             # - stage>NONE(익절 진행 중): 파일의 기존 initial_qty 보존
@@ -305,6 +314,9 @@ class ExitManager:
         second_exit_ratio: Optional[float] = None,
         third_exit_ratio: Optional[float] = None,
         stale_high_days: Optional[int] = None,
+        is_core: bool = False,
+        max_holding_days: Optional[int] = None,
+        trailing_activate_pct: Optional[float] = None,
     ):
         """포지션 등록"""
         if position.symbol in self._states:
@@ -340,10 +352,10 @@ class ExitManager:
                     )
             return
 
-        # ATR 계산 및 동적 손절 설정
+        # ATR 계산 및 동적 손절 설정 (코어홀딩은 ATR 동적 손절 비활성화 — 고정 SL 우선)
         atr_pct = None
         dynamic_stop = None
-        if self.config.enable_dynamic_stop and price_history:
+        if self.config.enable_dynamic_stop and price_history and not is_core:
             try:
                 highs = price_history.get("high", [])
                 lows = price_history.get("low", [])
@@ -380,6 +392,13 @@ class ExitManager:
                 saved_high = Decimal(str(persisted.get("highest_price", float(current_price))))
                 breakeven_was = bool(persisted.get("breakeven_activated", False))
                 saved_initial_qty = int(persisted.get("initial_qty", 0))
+                # 코어홀딩 플래그 복원 (파일에 저장된 값 우선)
+                if persisted.get("is_core", False):
+                    is_core = True
+                if "max_holding_days" in persisted:
+                    max_holding_days = persisted["max_holding_days"]
+                if "trailing_activate_pct" in persisted:
+                    trailing_activate_pct = persisted["trailing_activate_pct"]
 
                 # 재시작 시 고점 보정: 저장된 고점이 현재가보다 5% 초과 높으면
                 # 즉시 트레일링 발동 위험 → 현재가로 리셋
@@ -454,6 +473,9 @@ class ExitManager:
             last_new_high_date=date.today(),
             stale_high_days=stale_high_days,
             initial_quantity=initial_qty_for_state,
+            is_core=is_core,
+            max_holding_days=max_holding_days,
+            trailing_activate_pct=trailing_activate_pct,
         )
 
         # 보유기간 체크용 진입 시간 기록
@@ -508,12 +530,13 @@ class ExitManager:
         if entry_time:
             biz_days = self._count_business_days(entry_time.date(), date.today())
 
-        # 보유기간 초과 체크
-        if biz_days > 0 and self._max_holding_days > 0:
-            if biz_days > self._max_holding_days:
+        # 보유기간 초과 체크 (포지션별 max_holding_days 우선 적용)
+        eff_max_holding = state.max_holding_days if state.max_holding_days is not None else self._max_holding_days
+        if biz_days > 0 and eff_max_holding > 0:
+            if biz_days > eff_max_holding:
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,
-                    f"보유기간 초과: {biz_days}영업일 (최대 {self._max_holding_days}영업일)"
+                    f"보유기간 초과: {biz_days}영업일 (최대 {eff_max_holding}영업일)"
                 )
 
         # 순손익률 계산
@@ -526,8 +549,9 @@ class ExitManager:
             # US: zero-commission
             net_pnl_pct = float((current_price - state.entry_price) / state.entry_price * 100)
 
-        # 횡보 조기 청산: N영업일 이상 보유 & |수익률| < X% & 1차 익절 전
-        if (biz_days >= self.config.stale_exit_days > 0
+        # 횡보 조기 청산: N영업일 이상 보유 & |수익률| < X% & 1차 익절 전 (코어홀딩 제외)
+        if (not state.is_core
+            and biz_days >= self.config.stale_exit_days > 0
             and abs(net_pnl_pct) < self.config.stale_exit_pnl_pct
             and state.current_stage == ExitStage.NONE):
             return self._create_exit(
@@ -616,7 +640,7 @@ class ExitManager:
                         f"(1차 익절 완료 후 수수료 버퍼 {sell_fee_buffer}% 이하)"
                     )
 
-        elif net_pnl_pct >= self.config.trailing_activate_pct:
+        elif net_pnl_pct >= (state.trailing_activate_pct if state.trailing_activate_pct is not None else self.config.trailing_activate_pct):
             trailing_pct = float((current_price - state.highest_price) / state.highest_price * 100)
             ts_pct = state.trailing_stop_pct if state.trailing_stop_pct is not None else self.config.trailing_stop_pct
             if trailing_pct <= -ts_pct:
@@ -644,10 +668,16 @@ class ExitManager:
         second_ratio = state.second_exit_ratio if state.second_exit_ratio is not None else self.config.second_exit_ratio
         third_ratio = state.third_exit_ratio if state.third_exit_ratio is not None else self.config.third_exit_ratio
 
+        # ratio=0이면 해당 단계 분할 익절 비활성화 (코어홀딩 등)
+        if first_ratio <= 0 and second_ratio <= 0 and third_ratio <= 0:
+            return None
+
         # 1차 익절
         # pending_stage가 이미 있으면 fill 대기 중 → 중복 신호 방지
         if state.current_stage == ExitStage.NONE and state.pending_stage is None:
-            if net_pnl_pct >= first_pct:
+            if first_ratio <= 0:
+                pass  # 분할 익절 비활성화 → 스킵
+            elif net_pnl_pct >= first_pct:
                 # remaining_quantity 기준 (sync 복원 시 original과 괴리 방지)
                 exit_qty = max(1, int(state.remaining_quantity * first_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
@@ -663,7 +693,9 @@ class ExitManager:
 
         # 2차 익절
         elif state.current_stage == ExitStage.FIRST and state.pending_stage is None:
-            if net_pnl_pct >= second_pct:
+            if second_ratio <= 0:
+                pass  # 분할 익절 비활성화
+            elif net_pnl_pct >= second_pct:
                 exit_qty = max(1, int(state.remaining_quantity * second_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
@@ -676,7 +708,9 @@ class ExitManager:
 
         # 3차 익절
         elif state.current_stage == ExitStage.SECOND and state.pending_stage is None:
-            if net_pnl_pct >= third_pct:
+            if third_ratio <= 0:
+                pass  # 분할 익절 비활성화
+            elif net_pnl_pct >= third_pct:
                 exit_qty = max(1, int(state.remaining_quantity * third_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
@@ -807,6 +841,11 @@ class ExitManager:
         updated = 0
 
         for sym, state in self._states.items():
+            # 코어홀딩 포지션은 레짐 오버라이드에서 제외
+            if state.is_core:
+                logger.debug(f"[레짐파라미터] {sym} 코어홀딩 → 레짐 오버라이드 스킵")
+                continue
+
             changed: List[str] = []
 
             # 항상 적용: 손절 / 트레일링 / stale_high_days

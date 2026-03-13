@@ -113,6 +113,7 @@ class SSEManager:
             "risk": 10,
             "events": 2,
             "pending_orders": 2,
+            "core_holdings": 10,
         }
 
         # US 이벤트별 주기 (초)
@@ -167,6 +168,8 @@ class SSEManager:
                                             continue
                                     else:
                                         _had_pending = True
+                                elif event_type == "core_holdings":
+                                    data = dc.get_core_holdings()
                                 else:
                                     continue
 

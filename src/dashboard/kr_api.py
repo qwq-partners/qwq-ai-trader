@@ -56,6 +56,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/daily-settlement", handler.get_daily_settlement)
     app.router.add_get("/api/app/latest", handler.get_latest_app)
     app.router.add_get("/api/market/indices", handler.get_market_indices)
+    app.router.add_get("/api/core-holdings", handler.get_core_holdings)
 
 
 class KRAPIHandler:
@@ -535,6 +536,10 @@ class KRAPIHandler:
         elif _indices_cache["data"]:
             return web.json_response(_indices_cache["data"])
         return web.json_response(results)
+
+    async def get_core_holdings(self, request: web.Request) -> web.Response:
+        """코어홀딩 데이터"""
+        return web.json_response(self.dc.get_core_holdings())
 
     async def _restart_bot_delayed(self, delay_seconds: int):
         """봇 재시작 (지연 실행)"""
