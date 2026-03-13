@@ -113,7 +113,7 @@ class SSEManager:
             "risk": 10,
             "events": 2,
             "pending_orders": 2,
-            "core_holdings": 10,
+            "core_holdings": 30,
         }
 
         # US 이벤트별 주기 (초)

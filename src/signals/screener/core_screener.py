@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.indicators.technical import TechnicalIndicators
 
 
 @dataclass
@@ -43,7 +42,6 @@ class CoreScreener:
         self._broker = broker
         self._kis_market_data = kis_market_data
         self._stock_master = stock_master
-        self._indicators = TechnicalIndicators()
         self._config = config or {}
 
         # 필터 설정
@@ -146,7 +144,14 @@ class CoreScreener:
 
         if self._kis_market_data:
             try:
-                valuations = await self._kis_market_data.fetch_batch_valuations(symbol_list)
+                # 30건씩 배치 처리 (API 제한 대응)
+                batch_size = 30
+                for bi in range(0, len(symbol_list), batch_size):
+                    batch = symbol_list[bi:bi + batch_size]
+                    batch_vals = await self._kis_market_data.fetch_batch_valuations(batch)
+                    valuations.update(batch_vals)
+                    if bi + batch_size < len(symbol_list):
+                        await asyncio.sleep(0.5)
                 logger.info(f"[코어스크리너] 밸류에이션 조회 완료: {len(valuations)}개")
             except Exception as e:
                 logger.warning(f"[코어스크리너] 밸류에이션 조회 실패: {e}")
@@ -168,17 +173,24 @@ class CoreScreener:
             if price < self._min_price:
                 continue
 
-            per = val.get("per", 0) or 0
-            pbr = val.get("pbr", 0) or 0
+            _per = val.get("per")
+            per = float(_per) if _per is not None else 0.0
+            _pbr = val.get("pbr")
+            pbr = float(_pbr) if _pbr is not None else 0.0
+            _eps = val.get("eps")
+            eps = float(_eps) if _eps is not None else 0.0
+            _bps = val.get("bps")
+            bps = float(_bps) if _bps is not None else 0.0
 
             universe.append({
                 "symbol": code,
                 "name": name or val.get("name", ""),
                 "price": price,
-                "per": float(per),
-                "pbr": float(pbr),
-                "eps": float(val.get("eps", 0) or 0),
-                "bps": float(val.get("bps", 0) or 0),
+                "per": per,
+                "pbr": pbr,
+                "eps": eps,
+                "bps": bps,
+                "rank": len(universe),  # 유니버스 내 순위 (시총순)
             })
 
         logger.info(f"[코어스크리너] 최종 유니버스: {len(universe)}개 (가격필터 후)")
@@ -270,6 +282,9 @@ class CoreScreener:
             # 펀더멘탈 (유니버스에서 전달받은 값)
             ind["per"] = item.get("per", 0)
             ind["pbr"] = item.get("pbr", 0)
+            ind["eps"] = item.get("eps", 0)
+            ind["bps"] = item.get("bps", 0)
+            ind["rank"] = item.get("rank", 999)
 
             candidate = CoreCandidate(
                 symbol=symbol,
@@ -289,25 +304,26 @@ class CoreScreener:
             return
 
         symbols = [c.symbol for c in candidates]
-        today_str = datetime.now().strftime("%Y%m%d")
 
         try:
-            # 배치 수급 조회 (5일간 합산)
+            # 배치 수급 조회 (5일간 합산, 10건씩 병렬)
             investor_data: Dict[str, Dict] = {}
-            for sym in symbols:
-                try:
-                    daily = await self._kis_market_data.fetch_stock_investor_daily(sym, days=5)
-                    if daily:
-                        total_foreign = sum(d.get("foreign_net_buy", 0) for d in daily.values())
-                        total_inst = sum(d.get("inst_net_buy", 0) for d in daily.values())
-                        investor_data[sym] = {
-                            "foreign_net_buy_5d": total_foreign,
-                            "inst_net_buy_5d": total_inst,
-                        }
-                except Exception:
-                    pass
-                # 레이트 리밋
-                await asyncio.sleep(0.1)
+            batch_size = 10
+            for bi in range(0, len(symbols), batch_size):
+                batch = symbols[bi:bi + batch_size]
+                tasks = [self._kis_market_data.fetch_stock_investor_daily(sym, days=5) for sym in batch]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for sym, daily in zip(batch, results):
+                    if isinstance(daily, Exception) or not daily:
+                        continue
+                    total_foreign = sum(d.get("foreign_net_buy", 0) for d in daily.values())
+                    total_inst = sum(d.get("inst_net_buy", 0) for d in daily.values())
+                    investor_data[sym] = {
+                        "foreign_net_buy_5d": total_foreign,
+                        "inst_net_buy_5d": total_inst,
+                    }
+                if bi + batch_size < len(symbols):
+                    await asyncio.sleep(0.5)
 
             # 후보에 수급 데이터 병합
             for c in candidates:
@@ -335,9 +351,9 @@ class CoreScreener:
             if close <= ind["ma200"]:
                 continue
 
-            # PER > 0 (적자 기업 제외)
-            per = ind.get("per", 0)
-            if per is not None and per <= 0:
+            # PER > 0 (적자 기업 제외, 밸류에이션 미조회 시 통과)
+            per = ind.get("per")
+            if per is not None and per != 0 and per < 0:
                 continue
 
             # 거래대금 필터
@@ -422,24 +438,56 @@ class CoreScreener:
         score = 0.0
 
         # PER 적정 (5점)
-        per = ind.get("per", 0)
+        per = ind.get("per")
         if per is not None and per > 0:
             if 5 <= per <= 15:
                 score += 5
+                reasons.append(f"PER{per:.0f}")
             elif per <= 25:
                 score += 3
             elif per <= 40:
                 score += 1
 
-        # PBR (3점) — 좁은 범위 먼저 체크
-        pbr = ind.get("pbr", 0)
-        if pbr is not None and 0 < pbr < 3:
-            score += 3
+        # PBR (5점) — 좁은 범위 먼저 체크
+        pbr = ind.get("pbr")
+        if pbr is not None and 0 < pbr < 1.5:
+            score += 5
             reasons.append(f"PBR{pbr:.1f}")
+        elif pbr is not None and 0 < pbr < 3:
+            score += 3
         elif pbr is not None and 0 < pbr < 5:
-            score += 2
+            score += 1
 
-        return score
+        # EPS > 0 이익 기업 (5점)
+        eps = ind.get("eps")
+        if eps is not None and eps > 0:
+            score += 5
+
+        # ROE 추정 = EPS / BPS × 100 (5점)
+        bps = ind.get("bps")
+        if eps is not None and bps is not None and bps > 0:
+            roe_est = eps / bps * 100
+            if roe_est >= 15:
+                score += 5
+                reasons.append(f"ROE~{roe_est:.0f}%")
+            elif roe_est >= 10:
+                score += 3
+            elif roe_est >= 5:
+                score += 1
+
+        # 시총 순위 (5점) — 유니버스 내 순위 기반
+        rank = ind.get("rank", 999)
+        if rank <= 20:
+            score += 5
+        elif rank <= 50:
+            score += 3
+        elif rank <= 100:
+            score += 1
+
+        # 배당/안정성 (5점) — 데이터 없으므로 중립 부여
+        score += 3
+
+        return min(score, 30.0)
 
     def _score_supply(self, ind: Dict, reasons: List[str]) -> float:
         """수급 추세 (20점)"""
@@ -447,23 +495,25 @@ class CoreScreener:
 
         # 외인 순매수 5일 (10점)
         foreign_net = ind.get("foreign_net_buy_5d")
-        if foreign_net is not None and foreign_net > 0:
-            score += 10
-            reasons.append("외인매수")
-        elif foreign_net is not None and foreign_net == 0:
-            score += 3
+        if foreign_net is not None:
+            if foreign_net > 0:
+                score += 10
+                reasons.append("외인매수")
+            elif foreign_net == 0:
+                score += 3
+            else:
+                score += 1  # 순매도라도 최소 1점
 
         # 기관 순매수 5일 (10점)
         inst_net = ind.get("inst_net_buy_5d")
-        if inst_net is not None and inst_net > 0:
-            score += 10
-            reasons.append("기관매수")
-        elif inst_net is not None and inst_net == 0:
-            score += 3
-
-        # 수급 데이터 없으면 기본 점수
-        if foreign_net is None and inst_net is None:
-            score += 6  # 기본 중립 점수
+        if inst_net is not None:
+            if inst_net > 0:
+                score += 10
+                reasons.append("기관매수")
+            elif inst_net == 0:
+                score += 3
+            else:
+                score += 1  # 순매도라도 최소 1점
 
         return score
 

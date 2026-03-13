@@ -3624,7 +3624,8 @@ JSON:
     async def run_core_rebalance_scheduler(self):
         """코어홀딩 월초 리밸런싱 스케줄러
 
-        매월 첫 영업일 08:20에 코어홀딩 스캔 → 09:01에 리밸런싱 실행.
+        매월 첫 영업일 09:01~09:04에 리밸런싱 실행 (내부에서 스캔 포함).
+        실패 시 09:30, 10:00에 재시도.
         """
         from datetime import date, timedelta
         from src.core.engine import is_kr_market_holiday
@@ -3643,6 +3644,9 @@ JSON:
 
         logger.info("[코어홀딩스케줄러] 시작")
 
+        # 리밸런싱 실행 윈도우 (시, 분시작, 분끝)
+        rebalance_windows = [(9, 1, 5), (9, 30, 34), (10, 0, 4)]
+
         while True:
             try:
                 await asyncio.sleep(60)  # 1분 주기
@@ -3660,8 +3664,7 @@ JSON:
                 rebalance_day = core_cfg.get("rebalance_day", 1)
 
                 # 월초 첫 영업일 판단
-                check_date = date(today.year, today.month, rebalance_day)
-                # rebalance_day부터 5일간 첫 영업일 탐색
+                check_date = date(today.year, today.month, min(rebalance_day, 28))
                 first_biz_day = None
                 for delta in range(0, 7):
                     candidate_date = check_date + timedelta(days=delta)
@@ -3674,14 +3677,22 @@ JSON:
                 if first_biz_day is None or today != first_biz_day:
                     continue
 
-                # 09:01 리밸런싱 실행 (내부에서 스캔 포함)
-                if now.hour == 9 and 1 <= now.minute < 5:
-                    logger.info("[코어홀딩스케줄러] 월초 리밸런싱 실행")
-                    try:
-                        await bot.batch_analyzer.execute_core_rebalance()
-                        last_rebalance_month = current_month
-                    except Exception as e:
-                        logger.error(f"[코어홀딩스케줄러] 리밸런싱 오류: {e}")
+                # 리밸런싱 실행 윈도우 체크 (실패 시 다음 윈도우에서 재시도)
+                in_window = False
+                for wh, wm_start, wm_end in rebalance_windows:
+                    if now.hour == wh and wm_start <= now.minute < wm_end:
+                        in_window = True
+                        break
+
+                if not in_window:
+                    continue
+
+                logger.info(f"[코어홀딩스케줄러] 월초 리밸런싱 실행 ({now.hour}:{now.minute:02d})")
+                try:
+                    await bot.batch_analyzer.execute_core_rebalance()
+                    last_rebalance_month = current_month
+                except Exception as e:
+                    logger.error(f"[코어홀딩스케줄러] 리밸런싱 오류 (다음 윈도우 재시도): {e}", exc_info=True)
 
             except asyncio.CancelledError:
                 break

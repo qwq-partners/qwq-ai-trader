@@ -80,11 +80,13 @@ class CoreHoldingStrategy(BaseStrategy):
                 else:
                     strength = SignalStrength.NORMAL
 
-                # 코어홀딩: 손절 -15%, 목표가 없음 (장기 보유)
-                entry_price = candidate.entry_price
-                stop_price = entry_price * Decimal(str(1 - 15.0 / 100))
+                # 코어홀딩: 설정 기반 손절, 목표가 없음 (장기 보유)
+                entry_price = Decimal(str(candidate.entry_price))
+                sl_pct = self.config.stop_loss_pct
+                stop_price = entry_price * Decimal(str(1 - sl_pct / 100))
 
                 reasons = candidate.reasons if hasattr(candidate, 'reasons') else []
+                reason_text = ', '.join(reasons[:3]) if reasons else f"점수 {score:.0f}"
 
                 signal = Signal(
                     symbol=candidate.symbol,
@@ -95,8 +97,8 @@ class CoreHoldingStrategy(BaseStrategy):
                     target_price=None,
                     stop_price=stop_price,
                     score=score,
-                    confidence=score / 100.0,
-                    reason=f"코어홀딩: {', '.join(reasons[:3])}",
+                    confidence=min(score / 100.0, 1.0),
+                    reason=f"코어홀딩: {reason_text}",
                     metadata={
                         "strategy_name": self.name,
                         "candidate_name": getattr(candidate, 'name', ''),
@@ -114,7 +116,7 @@ class CoreHoldingStrategy(BaseStrategy):
 
             except Exception as e:
                 sym = getattr(candidate, 'symbol', '?')
-                logger.warning(f"[코어홀딩] {sym} 시그널 생성 실패: {e}")
+                logger.warning(f"[코어홀딩] {sym} 시그널 생성 실패: {e}", exc_info=True)
 
         if signals:
             logger.info(f"[코어홀딩] 총 {len(signals)}개 시그널 생성")

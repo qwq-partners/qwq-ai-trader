@@ -1153,7 +1153,8 @@ function renderCoreHoldings(data) {
     // 예산
     const budgetEl = document.getElementById('core-budget');
     if (budgetEl) {
-        budgetEl.textContent = summary.budget ? `예산 ${formatKRW(summary.budget)} / 30%` : '예산 -';
+        const allocPct = summary.alloc_pct || 30;
+        budgetEl.textContent = summary.budget ? `예산 ${formatKRW(summary.budget)} / ${allocPct}%` : '예산 -';
     }
 
     // 총 평가

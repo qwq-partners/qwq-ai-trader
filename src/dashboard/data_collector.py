@@ -1811,9 +1811,14 @@ class DashboardDataCollector:
 
         # 코어홀딩 예산 (설정의 strategy_allocation.core_holding %)
         core_alloc_pct = 30.0
-        _risk_cfg = getattr(self.bot, 'config', {})
-        if isinstance(_risk_cfg, dict):
-            core_alloc_pct = _risk_cfg.get("risk_config", {}).get("strategy_allocation", {}).get("core_holding", 30.0)
+        try:
+            _app_cfg = getattr(self.bot, 'config', None)
+            if _app_cfg is not None and hasattr(_app_cfg, 'trading'):
+                _alloc = getattr(_app_cfg.trading.risk, 'strategy_allocation', None)
+                if isinstance(_alloc, dict):
+                    core_alloc_pct = _alloc.get("core_holding", 30.0)
+        except Exception:
+            pass
         budget = equity * (core_alloc_pct / 100)
 
         # 총 수익률
@@ -1861,6 +1866,7 @@ class DashboardDataCollector:
                 "total_value": round(total_value),
                 "total_pnl_pct": round(total_pnl_pct, 2),
                 "budget": round(budget),
+                "alloc_pct": core_alloc_pct,
                 "count": len(core_positions),
                 "max_positions": core_cfg.get("max_positions", 3) if batch_analyzer else 3,
             },

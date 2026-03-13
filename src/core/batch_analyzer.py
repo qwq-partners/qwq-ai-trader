@@ -1275,45 +1275,6 @@ class BatchAnalyzer:
     # 코어홀딩 스캔/리밸런싱
     # ================================================================
 
-    async def run_core_scan(self) -> List:
-        """코어홀딩 종목 스캔 (월초 리밸런싱용)
-
-        Returns:
-            코어홀딩 후보 시그널 리스트
-        """
-        if self._core_screener is None or self._core_strategy is None:
-            logger.debug("[코어홀딩] 스크리너/전략 미초기화 → 스킵")
-            return []
-
-        logger.info("[코어홀딩] 월초 스캔 시작...")
-        try:
-            # 스크리닝
-            candidates = await self._core_screener.run_full_scan()
-            if not candidates:
-                logger.info("[코어홀딩] 스캔 결과 없음")
-                return []
-
-            # 전략 시그널 생성
-            signals = await self._core_strategy.generate_batch_signals(candidates)
-            logger.info(f"[코어홀딩] 스캔 완료: {len(candidates)}개 후보, {len(signals)}개 시그널")
-
-            # 상태 파일 저장
-            self._save_core_state({
-                "last_scan": datetime.now().isoformat(),
-                "candidates": len(candidates),
-                "signals": len(signals),
-                "top_candidates": [
-                    {"symbol": c.symbol, "name": c.name, "score": c.score}
-                    for c in candidates[:10]
-                ],
-            })
-
-            return signals
-
-        except Exception as e:
-            logger.error(f"[코어홀딩] 스캔 오류: {e}", exc_info=True)
-            return []
-
     async def execute_core_rebalance(self):
         """코어홀딩 리밸런싱 실행
 
@@ -1355,6 +1316,14 @@ class BatchAnalyzer:
             # 후보 스코어 맵
             candidate_scores = {c.symbol: c for c in candidates}
 
+            # 신규 매수 후보 (현재 미보유 + 점수 상위, 교체 판단에도 사용)
+            buy_candidates = [
+                c for c in candidates
+                if c.symbol not in current_core
+                and c.score >= min_score
+            ]
+            best_new_score = buy_candidates[0].score if buy_candidates else 0
+
             # 교체 대상 판단
             sell_targets = []
             for sym, pos in current_core.items():
@@ -1374,19 +1343,27 @@ class BatchAnalyzer:
                     sell_targets.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_pct:.1f}%"))
                     continue
 
-            # 신규 매수 후보 (현재 미보유 + 점수 상위)
-            buy_candidates = [
-                c for c in candidates
-                if c.symbol not in current_core
-                and c.score >= min_score
-            ]
+                # 3) MA200 이탈 연속 → 교체 (스크리너 지표 활용)
+                if ma200_break_days > 0 and rescore.indicators:
+                    close = rescore.indicators.get("close", 0)
+                    ma200 = rescore.indicators.get("ma200", 0)
+                    if close > 0 and ma200 > 0 and close < ma200:
+                        sell_targets.append((sym, f"MA200 이탈 (종가 {close:,.0f} < MA200 {ma200:,.0f})"))
+                        continue
 
-            # 교체 로직: 신규 후보가 기존 대비 15점+ 높으면 교체
+                # 4) 신규 후보가 replace_threshold 이상 높으면 교체
+                if replace_threshold > 0 and best_new_score - rescore.score >= replace_threshold:
+                    sell_targets.append((
+                        sym,
+                        f"교체 (현재 {rescore.score:.0f} vs 신규 최고 {best_new_score:.0f}, 차이 +{best_new_score - rescore.score:.0f})"
+                    ))
+                    continue
+
             for sym, reason in sell_targets:
                 logger.info(f"[코어홀딩] 교체 대상: {sym} ({reason})")
 
-            # 빈 슬롯 계산 (교체 매도가 체결되기 전에는 순수 빈 슬롯만 매수 — 경쟁 조건 방지)
-            remaining_slots = max_positions - len(current_core)
+            # 빈 슬롯 계산 (매도 예정 슬롯 반영)
+            remaining_slots = max_positions - (len(current_core) - len(sell_targets))
 
             # 매도 시그널 발행 (교체 대상)
             for sym, reason in sell_targets:
@@ -1420,9 +1397,9 @@ class BatchAnalyzer:
                     strength=SignalStrength.STRONG,
                     strategy=StrategyType.CORE_HOLDING,
                     price=candidate.entry_price,
-                    stop_price=candidate.entry_price * Decimal(str(1 - 15.0 / 100)),
+                    stop_price=candidate.entry_price * Decimal(str(1 - core_cfg.get("stop_loss_pct", 15.0) / 100)),
                     score=candidate.score,
-                    confidence=candidate.score / 100.0,
+                    confidence=min(candidate.score / 100.0, 1.0),
                     reason=f"코어홀딩 리밸런싱 진입: {', '.join(candidate.reasons[:3])}",
                     metadata={
                         "is_core": True,
@@ -1458,6 +1435,7 @@ class BatchAnalyzer:
     def _save_core_state(self, data: Dict) -> None:
         """코어홀딩 상태 파일 저장"""
         try:
+            self._core_state_path.parent.mkdir(parents=True, exist_ok=True)
             existing = {}
             if self._core_state_path.exists():
                 existing = json.loads(self._core_state_path.read_text())

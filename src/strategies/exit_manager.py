@@ -281,6 +281,14 @@ class ExitManager:
                 entry["max_holding_days"] = state.max_holding_days
             if state.trailing_activate_pct is not None:
                 entry["trailing_activate_pct"] = state.trailing_activate_pct
+            # 코어 포지션의 전용 파라미터 영속화 (재시작 시 strategy=None 폴백 방어)
+            if state.is_core:
+                if state.stop_loss_pct is not None:
+                    entry["stop_loss_pct"] = state.stop_loss_pct
+                if state.trailing_stop_pct is not None:
+                    entry["trailing_stop_pct"] = state.trailing_stop_pct
+                if state.stale_high_days is not None:
+                    entry["stale_high_days"] = state.stale_high_days
             # ★ initial_qty: 최초 진입 수량 (부분 매도 후 덮어쓰기 방지)
             # - stage=NONE(신규/무매도): 현재 수량으로 갱신
             # - stage>NONE(익절 진행 중): 파일의 기존 initial_qty 보존
@@ -392,13 +400,21 @@ class ExitManager:
                 saved_high = Decimal(str(persisted.get("highest_price", float(current_price))))
                 breakeven_was = bool(persisted.get("breakeven_activated", False))
                 saved_initial_qty = int(persisted.get("initial_qty", 0))
-                # 코어홀딩 플래그 복원 (파일에 저장된 값 우선)
+                # 코어홀딩 플래그/파라미터 복원 (파일에 저장된 값 우선)
                 if persisted.get("is_core", False):
                     is_core = True
                 if "max_holding_days" in persisted:
                     max_holding_days = persisted["max_holding_days"]
                 if "trailing_activate_pct" in persisted:
                     trailing_activate_pct = persisted["trailing_activate_pct"]
+                # 코어 포지션 전용 파라미터 복원 (strategy=None 재시작 방어)
+                if is_core:
+                    if "stop_loss_pct" in persisted and stop_loss_pct is None:
+                        stop_loss_pct = persisted["stop_loss_pct"]
+                    if "trailing_stop_pct" in persisted and trailing_stop_pct is None:
+                        trailing_stop_pct = persisted["trailing_stop_pct"]
+                    if "stale_high_days" in persisted and stale_high_days is None:
+                        stale_high_days = persisted["stale_high_days"]
 
                 # 재시작 시 고점 보정: 저장된 고점이 현재가보다 5% 초과 높으면
                 # 즉시 트레일링 발동 위험 → 현재가로 리셋
@@ -560,9 +576,10 @@ class ExitManager:
                 f"수익률 {net_pnl_pct:+.2f}% (±{self.config.stale_exit_pnl_pct}% 이내)"
             )
 
-        # 신고가 실패 무효화 (추세 소멸): N영업일 신고가 갱신 없음 & PnL 미달 & 1차 익절 전
+        # 신고가 실패 무효화 (추세 소멸): N영업일 신고가 갱신 없음 & PnL 미달 & 1차 익절 전 (코어홀딩 제외)
         eff_stale_high = state.stale_high_days if state.stale_high_days is not None else self.config.stale_high_days
-        if (eff_stale_high > 0
+        if (not state.is_core
+            and eff_stale_high > 0
             and state.last_new_high_date is not None
             and state.current_stage == ExitStage.NONE):
             days_since_high = self._count_business_days(state.last_new_high_date, date.today())
