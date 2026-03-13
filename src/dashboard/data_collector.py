@@ -536,6 +536,7 @@ class DashboardDataCollector:
                         "strategy": t.entry_strategy, "signal_score": float(t.entry_signal_score),
                         "status": t.exit_type if t.is_closed else "holding",
                         "entry_price": float(t.entry_price), "entry_quantity": t.entry_quantity,
+                        "entry_reason": t.entry_reason,
                     })
                 if t.exit_time and t.exit_time.date() == target_date and event_type in ("all", "sell"):
                     events.append({
@@ -547,8 +548,18 @@ class DashboardDataCollector:
                         "strategy": t.entry_strategy, "signal_score": float(t.entry_signal_score),
                         "status": t.exit_type or "closed",
                         "entry_price": float(t.entry_price), "entry_quantity": t.entry_quantity,
+                        "entry_reason": t.entry_reason,
                     })
             events.sort(key=lambda e: e.get("event_time", ""), reverse=True)
+
+        # is_sync 플래그 추가 (동기화/복구 포지션 식별)
+        for ev in events:
+            trade_id = ev.get("trade_id", "")
+            entry_reason = ev.get("entry_reason", "") or ev.get("reason", "")
+            ev["is_sync"] = (
+                entry_reason == "sync_detected"
+                or (isinstance(trade_id, str) and trade_id.startswith("SYNC_"))
+            )
 
         # 종목명 + 미청산 BUY 현재가 보강
         portfolio = self.bot.engine.portfolio

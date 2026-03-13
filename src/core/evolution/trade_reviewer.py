@@ -115,6 +115,12 @@ class TradeReviewer:
         else:
             trades = self.journal.get_closed_trades(days)
 
+        # 동기화/복구 포지션 제외 (전략 의사결정 없는 정합성 이벤트)
+        sync_count = sum(1 for t in trades if t.is_sync)
+        trades = [t for t in trades if not t.is_sync]
+        if sync_count > 0:
+            logger.info(f"[복기] 동기화 포지션 {sync_count}건 제외 (전략 통계 왜곡 방지)")
+
         if not trades:
             # 거래 없어도 진화 컨텍스트는 요약에 포함
             summary = ""

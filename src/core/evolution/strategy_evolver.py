@@ -415,7 +415,8 @@ class StrategyEvolver:
         # 최소 10건 거래 필요 (변경 적용일 이후 거래만 필터링)
         recent = self.journal.get_closed_trades(days=trading_days + 2)  # 약간 여유
         recent = [t for t in recent
-                  if t.exit_time and t.exit_time.date() > applied]
+                  if t.exit_time and t.exit_time.date() > applied
+                  and not t.is_sync]  # 동기화 포지션 제외
         if len(recent) < 10:
             if trading_days > 10:  # 10영업일 넘었는데도 10건 미달 → 데이터 부족으로 유지
                 logger.info(f"[진화 평가] {trading_days}영업일 경과, {len(recent)}건 < 10건 → 데이터 부족으로 유지")

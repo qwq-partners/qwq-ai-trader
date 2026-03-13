@@ -63,6 +63,14 @@ class TradeRecord:
         return self.pnl > 0
 
     @property
+    def is_sync(self) -> bool:
+        """동기화/복구 기반 포지션 여부 (전략 의사결정 없는 정합성 이벤트)"""
+        return (
+            self.entry_reason == "sync_detected"
+            or self.id.startswith("SYNC_")
+        )
+
+    @property
     def is_closed(self) -> bool:
         """청산 완료 여부 (전량 매도 시에만 True)"""
         if self.exit_time is None:
@@ -355,9 +363,11 @@ class TradeJournal:
         if trade.entry_time:
             self._save_trades(trade.entry_time.date())
 
-    def get_statistics(self, days: int = 30) -> Dict[str, Any]:
-        """거래 통계"""
+    def get_statistics(self, days: int = 30, exclude_sync: bool = True) -> Dict[str, Any]:
+        """거래 통계 (exclude_sync=True: 동기화 포지션 제외)"""
         trades = self.get_closed_trades(days)
+        if exclude_sync:
+            trades = [t for t in trades if not t.is_sync]
 
         if not trades:
             return {

@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-14 — 동기화 포지션 분리 (정합성 이벤트 vs 전략 거래)
+
+### 배경
+동기화/복구로 생성된 포지션(entry_reason="sync_detected", SYNC_* ID)이 전략 통계(승률, 손익비, 진화)를 왜곡하는 문제. 의사결정 없는 포지션을 '정합성 이벤트'로 분류하고 리포트에서 분리.
+
+### 변경 (5개 파일)
+- `trade_journal.py`: `TradeRecord.is_sync` 프로퍼티 추가 — `entry_reason=="sync_detected"` 또는 `id.startswith("SYNC_")` 판별
+- `trade_journal.py`: `get_statistics(exclude_sync=True)` — 통계에서 동기화 거래 기본 제외
+- `trade_reviewer.py`: `review_period()` 시작 시 sync 거래 필터링 + 제외 건수 로깅
+- `daily_reviewer.py`: `generate_trade_report()` — sync 거래 분리, `sync_events` 섹션으로 이력 보존 (통계 미포함)
+- `strategy_evolver.py`: `_evaluate_active_change()` — 진화 평가 거래에서 sync 제외
+- `data_collector.py`: `get_trade_events()` — 각 이벤트에 `is_sync` 플래그 추가 (대시보드 UI 분리용)
+
 ## 2026-03-14 (7차) — 코어홀딩 심층 코드+전략 리뷰 P0 1건 + P1 5건 수정 (4개 파일)
 > commit: f568cce
 

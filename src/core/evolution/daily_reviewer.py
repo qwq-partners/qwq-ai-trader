@@ -230,9 +230,13 @@ class DailyReviewer:
         # 부분 청산도 포함 (exit_time이 있으면 매도 이력 있음)
         closed_trades = [t for t in trades if t.exit_time is not None]
 
+        # 동기화/복구 포지션 분리 (전략 의사결정 없는 정합성 이벤트)
+        sync_trades = [t for t in closed_trades if t.is_sync]
+        closed_trades = [t for t in closed_trades if not t.is_sync]
+
         logger.info(
             f"[거래리뷰] 거래 리포트 생성: {target_date} "
-            f"(전체 {len(trades)}건, 청산 {len(closed_trades)}건)"
+            f"(전체 {len(trades)}건, 청산 {len(closed_trades)}건, 동기화 {len(sync_trades)}건)"
         )
 
         # 개별 거래 정보
@@ -262,10 +266,22 @@ class DailyReviewer:
         # 전략별 성과
         strategy_performance = self._calculate_strategy_performance(closed_trades)
 
+        # 동기화 이벤트 기록 (통계에서 제외되지만 이력은 보존)
+        sync_details = []
+        for t in sync_trades:
+            sync_details.append({
+                "symbol": t.symbol,
+                "name": t.name,
+                "entry_reason": t.entry_reason,
+                "pnl": round(float(t.pnl)),
+                "pnl_pct": round(float(t.pnl_pct), 2),
+            })
+
         report = {
             "date": target_date.isoformat(),
             "generated_at": datetime.now().isoformat(),
             "trades": trade_details,
+            "sync_events": sync_details,
             "summary": summary,
             "strategy_performance": strategy_performance,
         }
