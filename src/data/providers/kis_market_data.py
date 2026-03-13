@@ -424,7 +424,7 @@ class KISMarketData:
                         pass
             if result:
                 self._cache[cache_key] = result
-                self._cache_ts[cache_key] = time.time()
+                self._cache_ts[cache_key] = datetime.now()
         except Exception as e:
             logger.debug(f"[KISMarketData] 투자자일별 {symbol} 조회 실패: {e}")
         return dict(list(result.items())[:days])

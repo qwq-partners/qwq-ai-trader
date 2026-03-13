@@ -145,7 +145,7 @@ class DashboardServer:
 
     async def stop(self):
         """서버 중지"""
-        self.sse_manager.stop()
+        await self.sse_manager.stop()
         if self._site:
             await self._site.stop()
         if self._runner:

@@ -142,6 +142,7 @@ class KISWebSocketFeed:
         self._last_message_time: Optional[datetime] = None
         self._reconnect_count = 0
         self._logged_first_price = False
+        self._rebuild_task: Optional[asyncio.Task] = None
 
         logger.info(f"KISWebSocketFeed 초기화: env={self.config.env}, 롤링주기={self.ROLLING_INTERVAL}초")
 
@@ -255,7 +256,8 @@ class KISWebSocketFeed:
             self._current_session = session
             logger.info(f"[WS] 세션 변경: {session.value}")
             # 세션 변경 시 구독 재구성 필요
-            asyncio.create_task(self._rebuild_subscriptions())
+            self._rebuild_task = asyncio.create_task(self._rebuild_subscriptions())
+            self._rebuild_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
     def set_nxt_symbols(self, symbols: List[str]):
         """

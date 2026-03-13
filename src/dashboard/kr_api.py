@@ -437,18 +437,19 @@ class KRAPIHandler:
 
         results = []
 
-        # ── 1. 지수: Yahoo Finance ─────────────────────────────
+        # Yahoo Finance 세션 1회 생성, 지수 + KR 폴백에서 재사용
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        try:
-            timeout = aiohttp_client.ClientTimeout(total=6)
-            async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as sess:
+        timeout = aiohttp_client.ClientTimeout(total=6)
+        async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as yahoo_sess:
+            # ── 1. 지수: Yahoo Finance ─────────────────────────────
+            try:
                 for sym, label, kind in index_symbols:
                     try:
                         # 스파크라인(1mo)이 필요한 지수는 범위 확대
                         need_spark = sym in ("^KS11", "^GSPC")
                         range_param = "1mo" if need_spark else "5d"
                         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range={range_param}"
-                        async with sess.get(url) as resp:
+                        async with yahoo_sess.get(url) as resp:
                             if resp.status != 200:
                                 continue
                             js = await resp.json(content_type=None)
@@ -471,46 +472,43 @@ class KRAPIHandler:
                             results.append(item)
                     except Exception as e:
                         logger.debug(f"[지수] {sym} 오류: {e}")
-        except Exception as e:
-            logger.debug(f"[지수] 조회 오류: {e}")
+            except Exception as e:
+                logger.debug(f"[지수] 조회 오류: {e}")
 
-        # ── 2. KR 개별종목: KIS API ──────────────────────────────
-        broker = getattr(getattr(self.dc, 'bot', None), 'broker', None)
-        for sym, label, kind in kr_stocks:
-            item = None
-            if broker:
-                try:
-                    q = await broker.get_quote(sym)
-                    if q and q.get("price", 0) > 0:
-                        # 넥스트장(시간외단일가) / 일반
-                        if is_next and q.get("ovtm_price", 0) > 0:
-                            price    = q["ovtm_price"]
-                            chg_pct  = q.get("ovtm_change_pct", 0)
-                            prev     = q.get("prev_close", price)
-                            chg      = price - prev
-                        else:
-                            price   = q["price"]
-                            chg_pct = q.get("change_pct", 0)
-                            chg     = q.get("change", 0)
-                        item = {
-                            "symbol": sym, "label": label, "kind": kind,
-                            "price": round(price),
-                            "change": round(chg),
-                            "change_pct": round(chg_pct, 2),
-                            "source": "kis",
-                        }
-                except Exception as e:
-                    logger.debug(f"[KIS 시세] {sym} 오류: {e}")
+            # ── 2. KR 개별종목: KIS API ──────────────────────────────
+            broker = getattr(getattr(self.dc, 'bot', None), 'broker', None)
+            for sym, label, kind in kr_stocks:
+                item = None
+                if broker:
+                    try:
+                        q = await broker.get_quote(sym)
+                        if q and q.get("price", 0) > 0:
+                            # 넥스트장(시간외단일가) / 일반
+                            if is_next and q.get("ovtm_price", 0) > 0:
+                                price    = q["ovtm_price"]
+                                chg_pct  = q.get("ovtm_change_pct", 0)
+                                prev     = q.get("prev_close", price)
+                                chg      = price - prev
+                            else:
+                                price   = q["price"]
+                                chg_pct = q.get("change_pct", 0)
+                                chg     = q.get("change", 0)
+                            item = {
+                                "symbol": sym, "label": label, "kind": kind,
+                                "price": round(price),
+                                "change": round(chg),
+                                "change_pct": round(chg_pct, 2),
+                                "source": "kis",
+                            }
+                    except Exception as e:
+                        logger.debug(f"[KIS 시세] {sym} 오류: {e}")
 
-            # KIS 실패 → Yahoo Finance 폴백
-            if not item:
-                try:
-                    yf_sym = sym + ".KS"
-                    headers2 = {"User-Agent": "Mozilla/5.0"}
-                    timeout2 = aiohttp_client.ClientTimeout(total=5)
-                    async with aiohttp_client.ClientSession(headers=headers2, timeout=timeout2) as sess2:
+                # KIS 실패 → Yahoo Finance 폴백 (세션 재사용)
+                if not item:
+                    try:
+                        yf_sym = sym + ".KS"
                         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_sym}?interval=1d&range=5d"
-                        async with sess2.get(url) as resp:
+                        async with yahoo_sess.get(url) as resp:
                             if resp.status == 200:
                                 js = await resp.json(content_type=None)
                                 meta = js["chart"]["result"][0]["meta"]
@@ -525,11 +523,11 @@ class KRAPIHandler:
                                     "price": round(price), "change": round(chg),
                                     "change_pct": round(chg_pct, 2), "source": "yahoo",
                                 }
-                except Exception as e:
-                    logger.debug(f"[Yahoo 폴백] {sym} 오류: {e}")
+                    except Exception as e:
+                        logger.debug(f"[Yahoo 폴백] {sym} 오류: {e}")
 
-            if item:
-                results.append(item)
+                if item:
+                    results.append(item)
 
         if results:
             _indices_cache["data"] = results

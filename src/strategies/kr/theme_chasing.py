@@ -184,7 +184,7 @@ class ThemeChasingStrategy(BaseStrategy):
             if theme_name in self._active_themes:
                 theme = self._active_themes[theme_name]
 
-                last_updated = getattr(theme, 'last_updated', None) or theme.get("last_updated", datetime.now())
+                last_updated = getattr(theme, 'last_updated', None) or (theme.get("last_updated", datetime.now()) if isinstance(theme, dict) else datetime.now())
                 age_minutes = (datetime.now() - last_updated).total_seconds() / 60
                 if age_minutes > self.theme_config.max_theme_age_minutes:
                     continue
@@ -192,7 +192,7 @@ class ThemeChasingStrategy(BaseStrategy):
                 if self._theme_entries.get(theme_name, 0) >= self.theme_config.max_entries_per_theme:
                     continue
 
-                t_score = getattr(theme, 'score', None) or theme.get("score", 0)
+                t_score = getattr(theme, 'score', None) or (theme.get("score", 0) if isinstance(theme, dict) else 0)
                 if t_score > hot_theme_score:
                     hot_theme = theme
                     hot_theme_score = t_score

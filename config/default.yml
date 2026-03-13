@@ -47,7 +47,7 @@ kr:
     max_daily_new_buys: 5
     base_position_pct: 25.0
     max_position_pct: 28.0
-    max_positions: 10
+    max_positions: 5
     min_cash_reserve_pct: 5.0
     min_position_value: 200000       # 20만원
     dynamic_max_positions: true
@@ -141,9 +141,9 @@ kr:
     enable_partial_exit: true
     first_exit_pct: 5.0
     first_exit_ratio: 0.30
-    second_exit_pct: 10.0
+    second_exit_pct: 15.0
     second_exit_ratio: 0.50
-    third_exit_pct: 12.0
+    third_exit_pct: 25.0
     third_exit_ratio: 0.5
     stop_loss_pct: 5.0
     enable_dynamic_stop: true
@@ -286,7 +286,7 @@ us:
       breakout_period: 20
       min_breakout_pct: 1.0
       volume_surge_ratio: 1.8
-      min_score: 50
+      min_score: 65
       stop_loss_pct: 5.0
       take_profit_pct: 15.0
 
@@ -306,7 +306,7 @@ us:
       min_gap_pct: 5.0
       min_revenue_growth_pct: 15
       min_score: 70
-      stop_loss_pct: 8.0
+      stop_loss_pct: 5.5
       max_holding_days: 20
 
   exit_manager:

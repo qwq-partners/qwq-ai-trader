@@ -43,7 +43,7 @@ class GapAndGoConfig(StrategyConfig):
 
     # 시간 제한
     entry_start_time: str = "09:20"   # 진입 시작 시간
-    entry_end_time: str = "11:30"     # 진입 종료 시간
+    entry_end_time: str = "10:30"     # 진입 종료 시간
 
 
 class GapAndGoStrategy(BaseStrategy):

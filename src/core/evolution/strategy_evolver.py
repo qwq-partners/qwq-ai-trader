@@ -130,7 +130,7 @@ def _build_rules() -> List[AutoTuningRule]:
             name="bad_profit_factor",
             condition=lambda r: r.profit_factor < 1.0 and r.total_trades >= 5,
             parameter="exit_manager.stop_loss_pct",
-            adjustment=lambda v: max(v - 0.5, 1.5),
+            adjustment=lambda v: max(v - 0.5, 3.0),
             reason_template="손익비 {profit_factor:.2f} < 1.0 -> 손절 -0.5%",
         ),
 
@@ -285,9 +285,12 @@ class StrategyEvolver:
 
     def _save_state(self):
         """진화 상태 저장"""
-        state_file = self.storage_dir / "evolution_state.json"
-        with open(state_file, "w", encoding="utf-8") as f:
-            json.dump(self.state.to_dict(), f, ensure_ascii=False, indent=2)
+        try:
+            state_file = self.storage_dir / "evolution_state.json"
+            with open(state_file, "w", encoding="utf-8") as f:
+                json.dump(self.state.to_dict(), f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"진화 상태 저장 실패: {e}")
 
     # ============================================================
     # 전략/컴포넌트 등록

@@ -1,5 +1,53 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-13 — 2차 전체 코드 리뷰 + 전략 리뷰 일괄 수정 (19개 파일)
+
+### P0 코드 수정 (5건)
+
+- **`execution/broker/base.py:138`** — `from src.utils...` 절대 import → `from ...utils...` 상대 import (ModuleNotFoundError 방지)
+- **`core/engine.py:1221`** — BUY 주문 `event.strategy.value` None 방어 누락 → `if event.strategy else "unknown"` 추가
+- **`data/providers/kis_market_data.py:427`** — 캐시 타임스탬프 `time.time()`→`datetime.now()` (타입 불일치 TypeError 방지)
+- **`core/engine.py:1134`** — `now` 변수 섀도잉 → `cash_warn_now` 분리 (stale 쿨다운 방지)
+- **`scripts/futures_monitor.py:285`** — deprecated `asyncio.get_event_loop()` → `get_running_loop()`
+
+### P1 코드 수정 (12건)
+
+- **`core/evolution/daily_reviewer.py:186-187`** — `round(float(pnl))` 제거 (US $0.50 소수점 손익 보존)
+- **`core/engine.py:1348`** — `event.quantity=None` 시 경고 로그 + pending 전체 해제 (영구 잠금 방지)
+- **`core/engine.py:1337`** — Fill 폴백 생성 시 `strategy` 메타데이터 전달 추가
+- **`core/engine.py:1036`** — `time_val` 중복 계산 삭제 (1001행과 중복)
+- **`core/evolution/strategy_evolver.py:286`** — `_save_state()` try/except 래핑 (디스크 풀 시 크래시 방지)
+- **`signals/screener/us_screener.py:344`** — RSI 계산 SMA→Wilder's Smoothing 교체 (전략 모듈과 일관성)
+- **`strategies/kr/theme_chasing.py:187,195`** — ThemeInfo 객체 `.get()` 호출 전 `isinstance(dict)` 타입 체크
+- **`data/feeds/kis_websocket.py:258`** — `create_task` fire-and-forget → `_rebuild_task` 인스턴스 변수 + done_callback
+- **`strategies/us/sepa_trend.py:68`** — `sepa_pass += 0.5` → `+= 1` (int/float 혼합 방지)
+- **`dashboard/kr_api.py`** — Yahoo Finance `ClientSession` 매 호출 생성 → 함수 레벨 1회 생성/재사용
+- **`dashboard/sse.py`** — SSE `_http_session` lazy 생성/재사용 + `stop()` async 전환
+- **`dashboard/server.py:148`** — `sse_manager.stop()` → `await sse_manager.stop()` (async 호환)
+
+### P0 전략 수정 (3건)
+
+| 항목 | 변경 전 | 변경 후 | 파일 |
+|------|--------|--------|------|
+| KR exit second/third_exit_pct | 10%/12% | 15%/25% | `default.yml` (코드 기본값 동기화) |
+| KR min_stop_pct | 2.5% | 3.5% | `evolved_overrides.yml` (whipsaw 방지) |
+| KR max_positions | 7(evolved)/10(default) | 5/5 | 양쪽 동기화 (자본 대비 현실적) |
+
+### P1 전략 수정 (8건)
+
+| 항목 | 변경 전 | 변경 후 | 파일 |
+|------|--------|--------|------|
+| KR 모멘텀 stop/tp/trailing | 2%/5%/1.5% | 5%/15%/3% | `kr/momentum.py` (ExitManager 정렬) |
+| 테마추종 stop_loss | 2.5% | 3.5% | `evolved_overrides.yml` |
+| US 모멘텀 min_score | 50 | 65 | `default.yml` |
+| US 어닝스 stop_loss | 8.0% | 5.5% | `default.yml` |
+| 진화 stop 하한 | 1.5% | 3.0% | `strategy_evolver.py` |
+| 갭앤고 entry_end_time | 11:30 | 10:30 | `gap_and_go.py` |
+| SEPA T-2 min_score 하한 | 45 | 50 | `sepa_trend.py` |
+| trending_bear stop | 2.5% | 3.5% | `exit_manager.py` |
+
+---
+
 ## 2026-03-11 — 전체 코드 리뷰 + 전략 리뷰 일괄 수정 (22개 파일)
 
 ### P0 코드 수정 (치명적)

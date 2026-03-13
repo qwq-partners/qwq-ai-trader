@@ -15,7 +15,7 @@ risk_config:
   daily_max_trades: 30
   default_stop_loss_pct: 4.0
   base_position_pct: 25.0          # ★ LOCKED — 진화 잠금, 수동 분석 후에만 조정
-  max_positions: 7
+  max_positions: 5
   strategy_allocation:
     sepa_trend: 60.0        # ★ 최고 성과 (88% 승률, +3.82%) → 우선
     rsi2_reversal: 25.0     # 2순위 (67% 승률, +1.83%)
@@ -24,7 +24,7 @@ risk_config:
     gap_and_go: 5.0
 exit_manager:
   max_stop_pct: 6.0
-  min_stop_pct: 2.5
+  min_stop_pct: 3.5
   first_exit_pct: 5.0               # ★ LOCKED — 1차 익절 목표
   first_exit_ratio: 0.3
   stop_loss_pct: 3.0
@@ -39,7 +39,7 @@ momentum_breakout:
   min_breakout_pct: 0.8
 theme_chasing:
   enabled: true
-  stop_loss_pct: 2.5
+  stop_loss_pct: 3.5
   min_volume_ratio: 2.3
   trading_start_time: 09:10
   entry_window_minutes: 20

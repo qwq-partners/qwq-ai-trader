@@ -1033,7 +1033,6 @@ class RiskManager:
             # 시장가 재주문 (동시호가 시간대에는 지정가 유지)
             pos = self.engine.portfolio.positions.get(s)
             if pos and pos.quantity > 0:
-                time_val = now.hour * 100 + now.minute
                 if 1520 <= time_val < 1530:
                     logger.info(f"[리스크] 동시호가 시간대 시장가 불가: {s} → 지정가 유지")
                     continue
@@ -1131,11 +1130,11 @@ class RiskManager:
         if event.side == OrderSide.BUY:
             available = self.engine.get_available_cash() - self._reserved_cash
             if available <= 0:
-                now = datetime.now()
+                cash_warn_now = datetime.now()
                 if (self._last_cash_warn_time is None or
-                        (now - self._last_cash_warn_time).total_seconds() > 60):
+                        (cash_warn_now - self._last_cash_warn_time).total_seconds() > 60):
                     logger.warning(f"[리스크] 가용 현금 없음 - 매수 신호 무시 ({event.symbol})")
-                    self._last_cash_warn_time = now
+                    self._last_cash_warn_time = cash_warn_now
                 return None
 
         # 전략 예산 한도 조기 차단
@@ -1218,7 +1217,7 @@ class RiskManager:
                 order_type=OrderType.MARKET,
                 quantity=position_size,
                 price=event.price,
-                strategy=event.strategy.value,
+                strategy=event.strategy.value if event.strategy else "unknown",
                 reason=event.reason,
                 signal_score=event.score
             )
@@ -1338,6 +1337,7 @@ class RiskManager:
                 symbol=event.symbol, side=event.side,
                 quantity=event.quantity, price=event.price,
                 commission=getattr(event, 'commission', Decimal("0")),
+                strategy=getattr(event, 'strategy', None),
             )
             self.engine.update_position(fill)
         except Exception as e:
@@ -1345,7 +1345,11 @@ class RiskManager:
 
         # 2) pending 추적 정리
         async with self._pending_lock:
-            remaining = self._pending_quantities.get(event.symbol, 0) - (event.quantity if event.quantity is not None else 0)
+            if event.quantity is None:
+                logger.warning(f"[리스크] FillEvent quantity=None: {event.symbol} → pending 전체 해제")
+                remaining = 0
+            else:
+                remaining = self._pending_quantities.get(event.symbol, 0) - event.quantity
             if remaining <= 0:
                 self._pending_orders.discard(event.symbol)
                 self._pending_quantities.pop(event.symbol, None)

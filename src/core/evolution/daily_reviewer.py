@@ -183,8 +183,8 @@ class DailyReviewer:
                     rec.exit_type = r['exit_type'] or ''
                     # TradeRecord 내부에서 float 연산에 사용되므로 Decimal 유지하되
                     # 하위 호출에서 float += Decimal 에러를 방지
-                    rec.pnl = Decimal(str(round(float(r['pnl'] or 0))))
-                    rec.pnl_pct = Decimal(str(round(float(r['pnl_pct'] or 0), 4)))
+                    rec.pnl = Decimal(str(float(r['pnl'] or 0)))
+                    rec.pnl_pct = Decimal(str(float(r['pnl_pct'] or 0)))
                     rec.holding_minutes = r['holding_minutes'] or 0
                 # JSONB 필드 (asyncpg는 자동 파싱하므로 dict일 수 있음)
                 for field_name in ('indicators_at_entry', 'indicators_at_exit',

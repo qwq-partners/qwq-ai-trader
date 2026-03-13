@@ -41,9 +41,9 @@ class MomentumConfig(StrategyConfig):
     weight_theme: float = 10.0
 
     # 청산 조건
-    stop_loss_pct: float = 2.0       # 손절 (%)
-    take_profit_pct: float = 5.0     # 익절 (%)
-    trailing_stop_pct: float = 1.5   # 트레일링 스탑 (%)
+    stop_loss_pct: float = 5.0       # 손절 (%) — ExitManager 기본값과 정렬
+    take_profit_pct: float = 15.0    # 익절 (%) — ExitManager 기본값과 정렬
+    trailing_stop_pct: float = 3.0   # 트레일링 스탑 (%) — ExitManager 기본값과 정렬
 
     # 시간대 제한
     trading_start_time: str = "09:15" # 시작 시간 (장 개시 15분 후: 초반 과열 회피)

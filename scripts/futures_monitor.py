@@ -282,7 +282,7 @@ class FuturesMonitor:
         self._running = True
 
         # 시그널 핸들러
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda: setattr(self, "_running", False))
 

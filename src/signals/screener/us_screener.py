@@ -341,10 +341,12 @@ class StockScreener:
         change_20d = (close / float(df['close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
 
         # RSI
-        delta = df['close'].diff().tail(15)
-        gain = delta.where(delta > 0, 0).mean()
-        loss = (-delta.where(delta < 0, 0)).mean()
-        rs = float(gain / loss) if loss > 0 else 100
+        delta = df['close'].diff()
+        _gain = delta.where(delta > 0, 0)
+        _loss = (-delta.where(delta < 0, 0))
+        avg_gain = _gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1]
+        avg_loss = _loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1]
+        rs = float(avg_gain / avg_loss) if avg_loss > 0 else 100
         rsi = 100 - (100 / (1 + rs))
 
         # 52-week high

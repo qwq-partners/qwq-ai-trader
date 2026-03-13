@@ -65,7 +65,7 @@ class SEPATrendStrategy(USBaseStrategy):
             if ma200 > ma200_20ago:
                 sepa_pass += 1
         else:
-            sepa_pass += 0.5  # Partial credit if not enough data
+            sepa_pass += 1  # 데이터 부족 시 관대하게 통과 처리
 
         # 4. 52-week low +30% (strong uptrend)
         pct_from_low = (close - low_52w) / low_52w * 100 if low_52w > 0 else 0

@@ -103,7 +103,7 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
         "second_exit_pct":   8.0,   #  6 → 8 (bear에서도 추세 공간 확보)
         "third_exit_pct":   14.0,   #  8 → 14
         "trailing_stop_pct":  2.0,  # 1.5 → 2
-        "stop_loss_pct":      2.5,
+        "stop_loss_pct":      3.5,
         "stale_high_days":    3,
     },
 }

@@ -35,6 +35,8 @@ class SSEManager:
         # 지수 전광판 내부 캐시
         self._indices_cache_data: Optional[List[Dict]] = None
         self._indices_last_fetch: float = 0
+        # Yahoo Finance HTTP 세션 재사용
+        self._http_session: Optional[aiohttp.ClientSession] = None
 
     async def handle_stream(self, request: web.Request) -> web.StreamResponse:
         """SSE 스트림 핸들러"""
@@ -250,42 +252,45 @@ class SSEManager:
 
         if yahoo_needed:
             try:
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-                timeout = aiohttp.ClientTimeout(total=6)
-                async with aiohttp.ClientSession(headers=headers, timeout=timeout) as sess:
-                    for sym, lbl, kind in yahoo_needed:
-                        try:
-                            url = (
-                                f"https://query1.finance.yahoo.com/v8/finance/chart/"
-                                f"{sym}?interval=1d&range=5d"
+                if self._http_session is None or self._http_session.closed:
+                    self._http_session = aiohttp.ClientSession(
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                        timeout=aiohttp.ClientTimeout(total=6),
+                    )
+                sess = self._http_session
+                for sym, lbl, kind in yahoo_needed:
+                    try:
+                        url = (
+                            f"https://query1.finance.yahoo.com/v8/finance/chart/"
+                            f"{sym}?interval=1d&range=5d"
+                        )
+                        async with sess.get(url) as resp:
+                            if resp.status != 200:
+                                continue
+                            js = await resp.json(content_type=None)
+                            meta = js["chart"]["result"][0]["meta"]
+                            price = meta.get("regularMarketPrice") or 0
+                            raw_closes = (
+                                js["chart"]["result"][0]
+                                .get("indicators", {})
+                                .get("quote", [{}])[0]
+                                .get("close", [])
                             )
-                            async with sess.get(url) as resp:
-                                if resp.status != 200:
-                                    continue
-                                js = await resp.json(content_type=None)
-                                meta = js["chart"]["result"][0]["meta"]
-                                price = meta.get("regularMarketPrice") or 0
-                                raw_closes = (
-                                    js["chart"]["result"][0]
-                                    .get("indicators", {})
-                                    .get("quote", [{}])[0]
-                                    .get("close", [])
-                                )
-                                closes = [c for c in raw_closes if c is not None]
-                                prev = closes[-2] if len(closes) >= 2 else price
-                                chg = price - prev
-                                chg_pct = (chg / prev * 100) if prev else 0
-                                results.append({
-                                    "symbol": sym,
-                                    "label": lbl,
-                                    "kind": kind,
-                                    "price": round(price, 2),
-                                    "change": round(chg, 2),
-                                    "change_pct": round(chg_pct, 2),
-                                    "source": "yahoo",
-                                })
-                        except Exception:
-                            pass
+                            closes = [c for c in raw_closes if c is not None]
+                            prev = closes[-2] if len(closes) >= 2 else price
+                            chg = price - prev
+                            chg_pct = (chg / prev * 100) if prev else 0
+                            results.append({
+                                "symbol": sym,
+                                "label": lbl,
+                                "kind": kind,
+                                "price": round(price, 2),
+                                "change": round(chg, 2),
+                                "change_pct": round(chg_pct, 2),
+                                "source": "yahoo",
+                            })
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.debug(f"[SSE 지수] Yahoo 조회 오류: {e}")
 
@@ -330,41 +335,41 @@ class SSEManager:
                 except Exception as e:
                     logger.debug(f"[SSE 개별주] {sym} KIS 오류: {e}")
 
-            # Yahoo Finance 폴백
+            # Yahoo Finance 폴백 (HTTP 세션 재사용)
             if not item:
                 try:
-                    yf_sym = sym + ".KS"
-                    headers_yf = {"User-Agent": "Mozilla/5.0"}
-                    timeout_yf = aiohttp.ClientTimeout(total=5)
-                    async with aiohttp.ClientSession(
-                        headers=headers_yf, timeout=timeout_yf
-                    ) as sess:
-                        url = (
-                            f"https://query1.finance.yahoo.com/v8/finance/chart/"
-                            f"{yf_sym}?interval=1d&range=5d"
+                    if self._http_session is None or self._http_session.closed:
+                        self._http_session = aiohttp.ClientSession(
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                            timeout=aiohttp.ClientTimeout(total=6),
                         )
-                        async with sess.get(url) as resp:
-                            if resp.status == 200:
-                                js = await resp.json(content_type=None)
-                                meta = js["chart"]["result"][0]["meta"]
-                                price = meta.get("regularMarketPrice") or 0
-                                raw_closes = (
-                                    js["chart"]["result"][0]
-                                    .get("indicators", {})
-                                    .get("quote", [{}])[0]
-                                    .get("close", [])
-                                )
-                                closes = [c for c in raw_closes if c is not None]
-                                prev = closes[-2] if len(closes) >= 2 else price
-                                chg = price - prev
-                                chg_pct = (chg / prev * 100) if prev else 0
-                                item = {
-                                    "symbol": sym, "label": label, "kind": kind,
-                                    "price": round(price),
-                                    "change": round(chg),
-                                    "change_pct": round(chg_pct, 2),
-                                    "source": "yahoo",
-                                }
+                    yf_sym = sym + ".KS"
+                    url = (
+                        f"https://query1.finance.yahoo.com/v8/finance/chart/"
+                        f"{yf_sym}?interval=1d&range=5d"
+                    )
+                    async with self._http_session.get(url) as resp:
+                        if resp.status == 200:
+                            js = await resp.json(content_type=None)
+                            meta = js["chart"]["result"][0]["meta"]
+                            price = meta.get("regularMarketPrice") or 0
+                            raw_closes = (
+                                js["chart"]["result"][0]
+                                .get("indicators", {})
+                                .get("quote", [{}])[0]
+                                .get("close", [])
+                            )
+                            closes = [c for c in raw_closes if c is not None]
+                            prev = closes[-2] if len(closes) >= 2 else price
+                            chg = price - prev
+                            chg_pct = (chg / prev * 100) if prev else 0
+                            item = {
+                                "symbol": sym, "label": label, "kind": kind,
+                                "price": round(price),
+                                "change": round(chg),
+                                "change_pct": round(chg_pct, 2),
+                                "source": "yahoo",
+                            }
                 except Exception as e:
                     logger.debug(f"[SSE 개별주] {sym} Yahoo 폴백 오류: {e}")
 
@@ -481,6 +486,9 @@ class SSEManager:
 
         return None
 
-    def stop(self):
-        """브로드캐스트 중지"""
+    async def stop(self):
+        """브로드캐스트 중지 및 리소스 정리"""
         self._running = False
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None

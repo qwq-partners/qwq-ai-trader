@@ -67,7 +67,7 @@ class SEPATrendStrategy(BaseStrategy):
             supply_age_sample = candidates[0].indicators.get("supply_data_age") or 0
         effective_min_score = self.config.min_score
         if supply_age_sample >= 2:
-            effective_min_score = max(45.0, self.config.min_score - 10.0)
+            effective_min_score = max(50.0, self.config.min_score - 10.0)
         elif supply_age_sample >= 1:
             effective_min_score = max(48.0, self.config.min_score - 5.0)
         if effective_min_score != self.config.min_score:

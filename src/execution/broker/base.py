@@ -135,7 +135,7 @@ class BaseBroker(ABC):
 
     def calculate_commission(self, side: OrderSide, quantity: int, price: Decimal) -> Decimal:
         """수수료 계산 — FeeCalculator 기준 (한투 BanKIS 2026년~)"""
-        from src.utils.fee_calculator import get_fee_calculator
+        from ...utils.fee_calculator import get_fee_calculator
         calc = get_fee_calculator()
         value = price * quantity
 
