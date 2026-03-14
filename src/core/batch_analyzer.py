@@ -612,7 +612,7 @@ class BatchAnalyzer:
             logger.error(traceback.format_exc())
 
     async def execute_pending_signals(self):
-        """[09:01] 대기 시그널 실행"""
+        """[09:01] 대기 시그널 실행 (분산 실행: signal_interval_sec 간격)"""
         logger.info("[배치분석] ===== 대기 시그널 실행 =====")
 
         # 포트폴리오 가드: 재시작 직후 포지션 미로드 대비
@@ -633,8 +633,13 @@ class BatchAnalyzer:
             logger.info("[배치분석] 대기 시그널 없음")
             return
 
+        # 슬라이딩 윈도우 설정: 시그널 간 간격으로 슬리피지 위험 분산
+        batch_cfg = self._config.get("batch", {})
+        signal_interval_sec = batch_cfg.get("signal_interval_sec", 30)
+
         executed = 0
         skipped = 0
+        valid_idx = 0  # 유효 시그널 실행 순번 (간격 적용용)
 
         for sig in signals:
             try:
@@ -788,9 +793,18 @@ class BatchAnalyzer:
                 if name_cache is not None and sig.name and sig.name != sig.symbol:
                     name_cache[sig.symbol] = sig.name
 
+                # 슬라이딩 윈도우: 첫 시그널은 즉시, 이후 signal_interval_sec 간격
+                if valid_idx > 0 and signal_interval_sec > 0:
+                    logger.info(
+                        f"[배치분석] 시그널 분산: {signal_interval_sec}초 대기 "
+                        f"({valid_idx + 1}/{len(signals)})"
+                    )
+                    await asyncio.sleep(signal_interval_sec)
+
                 event = SignalEvent.from_signal(signal, source="batch_analyzer")
                 await self._engine.emit(event)
                 executed += 1
+                valid_idx += 1
 
                 logger.info(
                     f"[배치분석] {sig.symbol} {sig.name} 시그널 발행: "
@@ -929,6 +943,140 @@ class BatchAnalyzer:
 
             except Exception as e:
                 logger.warning(f"[포지션모니터] {symbol} 체크 오류: {e}")
+
+        # 코어홀딩 이벤트 기반 조기 경보
+        await self._monitor_core_positions()
+
+    async def _monitor_core_positions(self):
+        """코어홀딩 이벤트 기반 조기 청산 체크
+
+        월 1회 리밸런싱 사이에 급격히 악화된 코어 포지션을 조기에 감지.
+        트리거 조건:
+          1) 수익률 <= early_loss_alert_pct (-12%)
+          2) MA200 이탈 연속 일수 >= early_ma200_alert_days (3일)
+        """
+        core_cfg = self._config.get("core_holding", {})
+        if not core_cfg.get("enabled", False):
+            return
+
+        early_loss_pct = core_cfg.get("early_loss_alert_pct", -12.0)
+        early_ma200_days = core_cfg.get("early_ma200_alert_days", 3)
+
+        portfolio = self._engine.portfolio
+        pending_sells = getattr(self._engine, '_pending_sells', set())
+
+        core_positions = [
+            (sym, p) for sym, p in portfolio.positions.items()
+            if p.strategy == "core_holding" and sym not in pending_sells
+        ]
+        if not core_positions:
+            return
+
+        # MA200 이탈 카운터 캐시
+        ma200_cache_path = Path.home() / ".cache" / "ai_trader" / "core_ma200_breaks.json"
+        ma200_breaks = {}
+        try:
+            if ma200_cache_path.exists():
+                ma200_breaks = json.loads(ma200_cache_path.read_text(encoding="utf-8"))
+                # 날짜 롤오버: 오래된 데이터 정리 (7일 초과)
+                today_str = date.today().isoformat()
+                ma200_breaks = {
+                    k: v for k, v in ma200_breaks.items()
+                    if isinstance(v, dict) and v.get("updated", "") >= (date.today() - timedelta(days=7)).isoformat()
+                }
+        except Exception:
+            ma200_breaks = {}
+
+        ma200_updated = False
+
+        for symbol, pos in core_positions:
+            try:
+                triggers = []
+
+                # 1. 수익률 조기 경보
+                pnl_pct = float(getattr(pos, "unrealized_pnl_net_pct", 0) or 0)
+                if pnl_pct <= early_loss_pct:
+                    triggers.append(f"손실경보 {pnl_pct:.1f}% (임계 {early_loss_pct:.1f}%)")
+
+                # 2. MA200 이탈 체크 (일봉 기반)
+                try:
+                    daily_prices = await self._broker.get_daily_prices(symbol, days=250)
+                    if daily_prices is not None and len(daily_prices) >= 200:
+                        # MA200 계산: 최근 200일 종가 평균
+                        closes = [float(d.get("close", d.get("stck_clpr", 0))) for d in daily_prices[:200]]
+                        if all(c > 0 for c in closes):
+                            ma200 = sum(closes) / len(closes)
+                            current = float(pos.current_price) if pos.current_price is not None else 0
+                            if current > 0 and current < ma200:
+                                # MA200 이탈 카운터 증가
+                                prev = ma200_breaks.get(symbol, {})
+                                prev_count = prev.get("count", 0)
+                                prev_date = prev.get("updated", "")
+                                today_str = date.today().isoformat()
+                                if prev_date == today_str:
+                                    # 같은 날 이미 업데이트됨 → 유지
+                                    break_days = prev_count
+                                else:
+                                    break_days = prev_count + 1
+                                    ma200_breaks[symbol] = {"count": break_days, "updated": today_str}
+                                    ma200_updated = True
+
+                                if break_days >= early_ma200_days:
+                                    triggers.append(
+                                        f"MA200 이탈 {break_days}일 (임계 {early_ma200_days}일, "
+                                        f"현재가={current:,.0f} < MA200={ma200:,.0f})"
+                                    )
+                            else:
+                                # MA200 위에 있으면 카운터 리셋
+                                if symbol in ma200_breaks:
+                                    ma200_breaks[symbol] = {"count": 0, "updated": date.today().isoformat()}
+                                    ma200_updated = True
+                except Exception as _ma_e:
+                    logger.debug(f"[코어조기경보] {symbol} MA200 체크 실패 (무시): {_ma_e}")
+
+                if triggers:
+                    trigger_str = " / ".join(triggers)
+                    logger.warning(
+                        f"[코어조기경보] {symbol} 이벤트 트리거: {trigger_str} → 즉시 매도 시그널"
+                    )
+
+                    # 텔레그램 알림
+                    try:
+                        from ..utils.telegram import send_alert
+                        await send_alert(
+                            f"🚨 코어홀딩 조기경보\n"
+                            f"{getattr(pos, 'name', symbol)}({symbol})\n"
+                            f"{trigger_str}"
+                        )
+                    except Exception:
+                        pass
+
+                    # 매도 시그널 발행
+                    current_price = pos.current_price if pos.current_price is not None else Decimal("0")
+                    signal = Signal(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        strength=SignalStrength.STRONG,
+                        strategy=StrategyType.CORE_HOLDING,
+                        price=current_price,
+                        score=100,
+                        confidence=1.0,
+                        reason=f"코어홀딩 조기경보: {trigger_str}",
+                        metadata={"is_core": True, "early_alert": True},
+                    )
+                    event = SignalEvent.from_signal(signal, source="core_early_alert")
+                    await self._engine.emit(event)
+
+            except Exception as e:
+                logger.error(f"[코어조기경보] {symbol} 체크 오류: {e}")
+
+        # MA200 카운터 캐시 저장
+        if ma200_updated:
+            try:
+                ma200_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                ma200_cache_path.write_text(json.dumps(ma200_breaks, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
 
     def _generate_strategic_signals(self, candidates) -> List[Signal]:
         """strategic_swing 시그널 생성: 2계층 이상 복합신호 종목"""
