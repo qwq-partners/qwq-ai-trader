@@ -1,5 +1,24 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-14 — P0/P1/P2 개선 4개 항목 구현 (5개 파일)
+
+### P0: 레짐 충돌 가드 (Regime Conflict Guard)
+- `kr_scheduler.py`: `_resolve_regime_conflict()` 메서드 추가 — KOSPI 기술 레짐(bear/caution)이 LLM 레짐(trending_bull 등)과 충돌 시 안전한 쪽으로 조정
+- `kr_scheduler.py`: `_apply_regime_to_exit_manager()`에서 충돌 해소 로직 적용
+- `default.yml`: `regime_conflict_guard_enabled` 설정 추가 (기본 true)
+
+### P1: 09:01 슬라이딩 윈도우 (시그널 분산 실행)
+- `batch_analyzer.py`: `execute_pending_signals()`에 `signal_interval_sec` 간격 분산 실행 적용 — 장 초반 슬리피지 위험 분산
+- `default.yml`: `kr.batch.signal_interval_sec: 30` 설정 추가
+
+### P2: 코어홀딩 이벤트 기반 조기 경보
+- `batch_analyzer.py`: `_monitor_core_positions()` 메서드 추가 — 수익률 -12% 조기경보, MA200 이탈 연속 3일 시 즉시 매도 시그널
+- `batch_analyzer.py`: `monitor_positions()` 끝에 코어 조기경보 호출 추가
+- `default.yml`: `early_ma200_alert_days`, `early_loss_alert_pct`, `early_rescore_alert` 설정 추가
+
+### P1: 파라미터 민감도 분석 스크립트
+- `scripts/sensitivity_analysis.py`: 신규 — 주요 전략 파라미터(점수, 익절, 트레일링) ±변동 시 과거 시그널/거래 영향 분석 도구
+
 ## 2026-03-14 (8차) — 코드+전략 심층 리뷰 P0 1건 + P1 3건 수정 (3개 파일)
 
 ### P0 수정 (1건)
