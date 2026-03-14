@@ -221,8 +221,10 @@ class RiskManager:
         non_core_count = len(portfolio.positions) - core_count
         is_core_signal = (strategy_type == "core_holding")
         if is_core_signal:
-            # 코어 진입: 코어 3개 상한은 execute_core_rebalance에서 관리
-            pass
+            # 코어 진입: 최대 3개 상한 (execute_core_rebalance + 여기서 이중 검증)
+            max_core = 3
+            if core_count >= max_core:
+                return False, f"코어홀딩 상한 도달 ({core_count}/{max_core}개)"
         elif non_core_count >= self.config.max_positions:
             return False, f"최대 포지션 수 도달 ({non_core_count}/{self.config.max_positions}, 코어 {core_count}개 제외)"
 

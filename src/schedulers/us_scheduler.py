@@ -1179,7 +1179,7 @@ class USScheduler:
                                             {'action': 'close', 'ratio': 1.0, 'reason': custom_reason},
                                             exchange,
                                         )
-                                        strategy_exit_attempted = exit_ok  # 실패 시 False → ExitManager 폴백
+                                        strategy_exit_attempted = True  # 시도 자체를 기록 (실패 시에도 ExitManager 폴백 방지 → 중복 주문 차단)
                             break
 
                 # ExitManager 체크 (전략 exit 미발동 또는 주문 실패 시에도 실행)

@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-14 (8차) — 코드+전략 심층 리뷰 P0 1건 + P1 3건 수정 (3개 파일)
+
+### P0 수정 (1건)
+- `strategy_evolver.py`: 진화 평가에서 `t.exit_time.date() > applied` → `>=` (적용 당일 거래 누락 → wait 상태 장기화 방지)
+
+### P1 수정 (3건)
+- `risk/manager.py`: core_holding `can_open_position`에서 3개 상한 가드 추가 — 리밸런싱 외 경로 코어 초과 진입 차단
+- `strategy_evolver.py`: 진화 평가 PF 계산에서 `total_loss or 1` → `min(..., 99.9)` 상한 적용 (loss=0 시 PF 왜곡 방지)
+- `us_scheduler.py`: `_check_exits` 전략 매도 실패 시 `strategy_exit_attempted=True` 고정 — ExitManager 폴백 중복 주문 차단
+
 ## 2026-03-14 — 동기화 포지션 분리 (정합성 이벤트 vs 전략 거래)
 
 ### 배경
