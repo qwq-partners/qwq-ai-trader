@@ -157,6 +157,9 @@ kr:
       emergency_stop_pct: 15.0
       rebalance_day: 1
       ma200_break_days: 5
+      early_ma200_alert_days: 3          # 조기경보: MA200 이탈 연속 일수
+      early_loss_alert_pct: -12.0        # 조기경보: 손실률 임계 (손절 -15% 전)
+      early_rescore_alert: 40.0          # 조기경보: 재스코어 하한
 
   exit_manager:
     enable_partial_exit: true
@@ -182,6 +185,7 @@ kr:
     morning_scan_time: "08:20"
     daily_scan_time: "15:40"
     execute_time: "09:01"
+    signal_interval_sec: 30             # 시그널 분산 실행 간격 (슬리피지 방지)
     position_update_interval: 10
     max_entry_slippage_pct: 3.0
     max_holding_days: 10
@@ -246,6 +250,7 @@ kr:
     daily_bias_enabled: true            # 20:30 daily_bias.json 피드백 루프
     position_eod_check_enabled: true    # 15:00 포지션 LLM 종가 점검
     false_negative_analysis_enabled: true  # 주간 FN 분석
+    regime_conflict_guard_enabled: true # KOSPI 기술 레짐 vs LLM 레짐 충돌 가드
 
   stock_master:
     enabled: true

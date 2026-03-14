@@ -629,11 +629,36 @@ class KRScheduler:
         except Exception as e:
             logger.error(f"[LLM레짐] 오류: {e}")
 
+    # ── 레짐 충돌 해소 ──────────────────────────────────────────────
+    # LLM 낙관도 캡 테이블: KOSPI 기술 레짐이 약세이면 LLM 레짐의 낙관도를 제한
+    _LLM_OPTIMISM_ORDER = ["trending_bear", "ranging", "turning_point", "neutral", "trending_bull"]
+    _KOSPI_CAP = {
+        "bear":    "neutral",        # LLM 최대 neutral (trending_bull/turning_point 불가)
+        "caution": "turning_point",  # LLM 최대 turning_point (trending_bull만 차단)
+        "neutral": "trending_bull",  # 제한 없음
+        "bull":    "trending_bull",  # 제한 없음
+    }
+
+    def _resolve_regime_conflict(self, kospi_regime: str, llm_regime: str) -> str:
+        """두 레짐 시스템 충돌 시 안전한 쪽으로 조정"""
+        cap = self._KOSPI_CAP.get(kospi_regime, "neutral")
+        cap_idx = self._LLM_OPTIMISM_ORDER.index(cap) if cap in self._LLM_OPTIMISM_ORDER else 3
+        llm_idx = self._LLM_OPTIMISM_ORDER.index(llm_regime) if llm_regime in self._LLM_OPTIMISM_ORDER else 3
+        if llm_idx > cap_idx:
+            adjusted = cap
+            logger.warning(
+                f"[레짐충돌가드] KOSPI={kospi_regime} vs LLM={llm_regime} → {adjusted}로 조정 "
+                f"(낙관도 캡 적용)"
+            )
+            return adjusted
+        return llm_regime
+
     async def _apply_regime_to_exit_manager(self) -> None:
         """llm_regime_today.json 에서 레짐을 읽어 ExitManager 파라미터를 실시간 갱신.
 
         _run_llm_regime_classifier() 완료 직후 + 30분 주기 동기화에서 호출.
         레짐이 바뀐 경우만 ExitManager.apply_regime_params() 가 실제 갱신 수행.
+        KOSPI 기술 레짐과 LLM 레짐이 충돌 시 안전한 쪽으로 조정 (레짐 충돌 가드).
         """
         import json
         from pathlib import Path
@@ -655,6 +680,32 @@ class KRScheduler:
             if regime not in REGIME_EXIT_PARAMS:
                 logger.debug(f"[레짐동기화] 미지원 레짐 {regime!r} → neutral 폴백")
                 regime = "neutral"
+
+            # ── 레짐 충돌 가드: KOSPI 기술 레짐 vs LLM 레짐 ──
+            llm_ops_cfg = getattr(self.bot, 'config', {})
+            if isinstance(llm_ops_cfg, dict):
+                kr_cfg = llm_ops_cfg.get("kr", {})
+            else:
+                kr_cfg = {}
+            guard_enabled = kr_cfg.get("llm_ops", {}).get("regime_conflict_guard_enabled", True)
+
+            if guard_enabled:
+                kospi_regime = "neutral"
+                if hasattr(self.bot, "batch_analyzer") and self.bot.batch_analyzer is not None:
+                    _screener = getattr(self.bot.batch_analyzer, "_screener", None)
+                    if _screener is not None and hasattr(_screener, "get_market_regime"):
+                        try:
+                            kospi_regime = _screener.get_market_regime()
+                        except Exception:
+                            pass
+
+                original_regime = regime
+                regime = self._resolve_regime_conflict(kospi_regime, regime)
+                if regime != original_regime:
+                    logger.info(
+                        f"[레짐동기화] 충돌 해소: LLM={original_regime} → 조정={regime} "
+                        f"(KOSPI 기술={kospi_regime})"
+                    )
 
             exit_mgr = getattr(self.bot, "exit_manager", None)
             if exit_mgr is None:
