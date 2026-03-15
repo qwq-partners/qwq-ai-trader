@@ -17,13 +17,20 @@
 - `requirements.txt`: `scikit-learn>=1.4.0` 추가 (venv 설치 완료)
 - 효과: `유사도제거=0 → 53건` 추가 제거, 최종 98건 → 46건으로 품질 향상
 
+### 추가 수정 (2차)
+- `us_theme_detector.py`: 뉴스 부족(0건) 시 `_cleanup_stale()` 스킵 → 기존 테마 보존
+  - 원인: SHA1 TTL 2h 내 재수집 시 0건 → 즉시 cleanup → 테마 삭제 → "뉴스 부족" 루프
+- `us_theme_detector.py`: `_cleanup_stale()` stale 타임아웃 1h → 4h (SHA1 TTL 2h + 버퍼 커버)
+- `kr_theme_detector.py`: `_cache_days` 7일 → 1일
+  - 원인: 7일치 500건 DB 로드 → 신규 기사 97% 유사도 차단 → 최종 5건만 통과
+
 ### 수치 비교
 
 | | 수정 전 | 수정 후 |
 |---|---|---|
-| US 뉴스 최종 통과 | 2~3건 | 60+건 |
-| US 활성 테마 | 1개 (stale Space/Defense) | 2개 (AI/Semiconductors, Streaming/Media) |
-| KR 유사도 제거 | 0건 | 53건 |
+| US 뉴스 최종 통과 | 2~3건 (기동 후 수시간) | 60+건 |
+| US 활성 테마 | 1개 (stale, 반복 삭제) | 2개 (4시간 유지) |
+| KR 유사도 제거 후 최종 | 5~15건 (과필터) | 61건 |
 
 ## 2026-03-14 — KR 전략 백테스트 엔진 구현
 
