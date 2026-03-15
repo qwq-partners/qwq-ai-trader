@@ -660,6 +660,21 @@ class NewsCollector:
         """
         # 매 수집 시 SHA1 캐시 초기화
         self._seen_keys.clear()
+
+        # 유사도 캐시 TTL 정리 (2시간 초과 항목 제거)
+        # 누적 방치 시 500개 포화 → 신규 기사 전부 유사도 차단 방지
+        _sim_cutoff = datetime.now() - timedelta(hours=2)
+        before_sim = len(self._similarity_cache)
+        self._similarity_cache = [
+            item for item in self._similarity_cache
+            if item.get("published_at", datetime.min) >= _sim_cutoff
+        ]
+        if before_sim != len(self._similarity_cache):
+            logger.debug(
+                f"[뉴스 중복 체크] 유사도 캐시 TTL 정리: "
+                f"{before_sim} → {len(self._similarity_cache)}개"
+            )
+
         all_articles: List[NewsArticle] = []
         source_counts: Dict[str, int] = {}
 
