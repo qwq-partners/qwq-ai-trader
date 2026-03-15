@@ -1,5 +1,88 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-15 — US/KR 뉴스 중복제거 개선 (2개 파일)
+
+### 문제
+- `us_theme_detector.py`: `seen_hashes`가 `Set[str]`로 영구 누적 → 봇 기동 후 수 시간 내 RSS 70건 중 68건 차단 → 뉴스 2건만 통과 → LLM 분석 스킵 (min_news_count=3 미달)
+- `kr_theme_detector.py`: scikit-learn 미설치로 TF-IDF 유사도 중복제거 비활성화 → 유사 기사 53건이 LLM 프롬프트에 중복 유입
+
+### 수정: US 뉴스 중복제거 2단계 구조 (`us_theme_detector.py`)
+- **1차 SHA1**: `Set[str]` → `Dict[str, datetime]` TTL 2시간 기반 — 2시간 지난 기사 해시 만료, 재수집 허용
+- **2차 TF-IDF 유사도**: `_is_similar_to_existing()` 추가 — 영문 기사 코사인 유사도 ≥ 0.85 중복 판정
+  - `sklearn.feature_extraction.text.TfidfVectorizer` (max_features=200, ngram_range=(1,2))
+  - 인메모리 슬라이딩 캐시 최대 500건, TTL 4시간 자동 만료
+- 로그 포맷 KR과 통일: `전체=N, SHA1제거=N, 유사도제거=N, 최종=N`
+
+### 수정: KR 뉴스 유사도 중복제거 활성화
+- `requirements.txt`: `scikit-learn>=1.4.0` 추가 (venv 설치 완료)
+- 효과: `유사도제거=0 → 53건` 추가 제거, 최종 98건 → 46건으로 품질 향상
+
+### 수치 비교
+
+| | 수정 전 | 수정 후 |
+|---|---|---|
+| US 뉴스 최종 통과 | 2~3건 | 60+건 |
+| US 활성 테마 | 1개 (stale Space/Defense) | 2개 (AI/Semiconductors, Streaming/Media) |
+| KR 유사도 제거 | 0건 | 53건 |
+
+## 2026-03-14 — KR 전략 백테스트 엔진 구현
+
+### 신규 파일
+- `scripts/backtest_strategies.py` (~870줄): SEPA, RSI-2, Core Holding 전략 백테스트 엔진
+
+### 주요 기능
+- **3전략 미러링**: 실제 전략의 100점 스코어링 로직 (SEPA/RSI-2/Core) 충실 재현
+- **청산 시뮬레이션**: 3단계 분할 익절 + ATR 동적 손절 + 트레일링 + 횡보/추세 무효화 청산
+- **리스크 관리**: 전략별 배분 (SEPA 60%/RSI-2 10%/Core 30%), 포지션 수 제한, 일일 손실 제한
+- **T+1 실행**: 시그널 당일 생성 → 익일 시가 체결 (look-ahead bias 방지)
+- **레짐 필터**: KOSPI/삼성전자 MA 기반 BULLISH/NEUTRAL/BEARISH 판단, BEARISH 시 SEPA 차단
+- **설정 연동**: `default.yml` + `evolved_overrides.yml` 자동 머지
+- **pykrx OHLCV**: pickle 캐싱, 2차 실행 시 데이터 로드 5초 이내
+- **결과 출력**: 콘솔 요약 + CSV (거래 내역, 자산 추이, 요약)
+
+### 6개월 백테스트 결과 (2025-09 ~ 2026-03, 150종목)
+- 총 수익률: -8.81%, MDD: -17.49%, 승률: 58.8%, 손익비: 1.57
+- SEPA -9.5% (약세장 손실 주도), RSI-2 +1.4% (유일 수익), Core -0.7% (1건 발동)
+
+### CLI
+```bash
+python scripts/backtest_strategies.py --months 6 --strategies sepa,rsi2,core
+python scripts/backtest_strategies.py --months 1 --universe-size 30  # 스모크 테스트
+```
+
+## 2026-03-14 (9차) — 전수 코드 리뷰 P0 7건 + P1 3건 수정 (6개 파일)
+
+### P0 수정 (7건)
+- `batch_analyzer.py`: `sig.metadata` None 접근 방어 (`(sig.metadata or {}).get(...)`) — 스캔 크래시 방지
+- `batch_analyzer.py`: 프리장 R/R 재검증 `downside` 계산에 `abs()` 추가 — 프리장 급락 시 R/R 부호 오류 수정
+- `batch_analyzer.py`: 코어 조기경보 중복 신호 방지 — `_exited_symbols` 세트로 이미 청산 발행된 종목 제외
+- `batch_analyzer.py`: 텔레그램 알림 실패 silent swallow → 경고 로그 추가
+- `risk/manager.py`: `get_risk_metrics()`에서 `effective_daily_pnl` AttributeError 방어 (`getattr` 패턴)
+- `risk/manager.py`: `calculate_position_size()` 가용현금 음수 방어 (`max(0, cash - reserve)`)
+- `exit_manager.py`: 재시작 정합성 검증에 부분체결 허용 버퍼 5% 추가 — 중복 매도 방지
+
+### P1 수정 (3건)
+- `strategy_evolver.py`: 진화 평가 거래 필터에 `entry_time >= applied` 조건 추가 — 변경 이전 진입 거래 제외
+- `strategy_evolver.py`: `_clamp_value()` float 파라미터 타입 보존 — int 캐스팅 소수점 손실 방지
+- `strategy_evolver.py`: 데이터 부족 시 자동 "keep" → "rollback" (보수적) — 미검증 파라미터 영구 정착 방지
+
+### 기타 개선
+- `types.py`: `RiskConfig.max_core_positions` 필드 추가 (기본 3) — max_core 하드코딩 제거
+- `risk/manager.py`: 코어홀딩 상한 검증에서 config 참조 (`getattr(self.config, 'max_core_positions', 3)`)
+- `exit_manager.py`: `highest_price` 영속화 시 `float()` → `str()` — Decimal 정밀도 보존
+
+## 2026-03-14 — LLM 모델 업그레이드 + 프리장 시그널 재검증 (3개 파일)
+
+### LLM 모델 업그레이드
+- `src/utils/llm.py`: GPT 5.2→5.4, Gemini 3.0→3.1 (flash-lite-preview, pro-preview) 업그레이드
+
+### 프리장 가격 기반 시그널 재검증 (NXT 대상 종목)
+- `src/core/batch_analyzer.py`: `_premarket_revalidate()` 메서드 추가 — 08:20 스캔 후 09:01 실행 전 프리장 가격 변동 반영
+  - 공통: 프리장 급락 ≤-5% → 시그널 취소 (악재 의심)
+  - RSI-2: 프리장 반등 ≥+3% → 시그널 취소 (평균회귀 소멸)
+  - SEPA/코어홀딩: 프리장 가격 기준 R/R < 1.3 → 시그널 취소
+- `config/default.yml`: `premarket_revalidation` 설정 섹션 추가 (rsi2_bounce_cancel_pct, gap_down_cancel_pct, min_rr_ratio)
+
 ## 2026-03-14 — P0/P1/P2 개선 4개 항목 구현 (5개 파일)
 
 ### P0: 레짐 충돌 가드 (Regime Conflict Guard)

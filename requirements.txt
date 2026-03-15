@@ -46,6 +46,7 @@ pykrx>=1.0.0
 # === US 데이터 ===
 yfinance>=0.2.36
 finnhub-python>=2.4.20
+scikit-learn>=1.4.0
 pyarrow>=15.0.0
 exchange-calendars>=4.5.0
 

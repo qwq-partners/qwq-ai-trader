@@ -21,10 +21,19 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 from loguru import logger
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    logger.warning("[US 뉴스] scikit-learn not available - similarity deduplication disabled")
 
 from .kr_theme_detector import NewsArticle, ThemeInfo
 from ...utils.llm import LLMManager, LLMTask, get_llm_manager
@@ -173,8 +182,12 @@ class USThemeDetector:
         self._stock_sentiments: Dict[str, Dict] = {}
         self._last_detection: Optional[datetime] = None
 
-        # 중복 제거
-        self._seen_hashes: Set[str] = set()
+        # 중복 제거 1차: SHA1 TTL 기반 (hash → 최초 수집 시각)
+        self._seen_hashes: Dict[str, datetime] = {}
+
+        # 중복 제거 2차: TF-IDF 유사도 기반 (인메모리, 최대 500개)
+        self._similarity_cache: List[Dict[str, Any]] = []
+        self._similarity_threshold = 0.85  # 영문 뉴스 유사도 임계값
 
         # 섹터 ETF 캐시
         self._sector_momentum: Dict[str, float] = {}
@@ -352,25 +365,103 @@ class USThemeDetector:
             elif isinstance(result, list):
                 all_articles.extend(result)
 
-        # SHA1 중복 제거
+        # SHA1 중복 제거 (TTL 2시간: 2시간 지난 기사는 재수집 허용)
+        now = datetime.now()
+        sha1_cutoff = now - timedelta(hours=2)
+        sim_cutoff = now - timedelta(hours=4)
+
+        # 만료된 SHA1 해시 정리
+        expired = [h for h, ts in self._seen_hashes.items() if ts < sha1_cutoff]
+        for h in expired:
+            del self._seen_hashes[h]
+
+        # 만료된 유사도 캐시 정리 (4시간)
+        self._similarity_cache = [
+            item for item in self._similarity_cache
+            if item.get("published_at", now) >= sim_cutoff
+        ]
+
         unique: List[NewsArticle] = []
         for article in all_articles:
             key = hashlib.sha1(
                 f"{article.title}{article.url}".encode()
             ).hexdigest()
             if key not in self._seen_hashes:
-                self._seen_hashes.add(key)
+                self._seen_hashes[key] = now
                 unique.append(article)
 
-        # 해시 셋이 너무 커지면 정리 (1000개 이상)
-        if len(self._seen_hashes) > 1000:
-            self._seen_hashes = set(list(self._seen_hashes)[-500:])
+        # 2차: 유사도 기반 중복 제거 (TF-IDF 코사인 유사도)
+        final: List[NewsArticle] = []
+        similarity_removed = 0
+        for article in unique:
+            if self._is_similar_to_existing(article):
+                similarity_removed += 1
+            else:
+                final.append(article)
 
         logger.info(
             f"[US 뉴스] 수집 완료: 전체={len(all_articles)}, "
-            f"중복제거={len(all_articles) - len(unique)}, 최종={len(unique)}"
+            f"SHA1제거={len(unique)}, 유사도제거={similarity_removed}, 최종={len(final)}"
         )
-        return unique
+        return final
+
+    def _is_similar_to_existing(self, article: NewsArticle) -> bool:
+        """TF-IDF 코사인 유사도 기반 중복 체크 (영문 뉴스)
+
+        Returns:
+            True  → 유사 기사 존재 (중복으로 판정)
+            False → 신규 기사 (캐시에 추가)
+        """
+        if not SKLEARN_AVAILABLE or not self._similarity_cache:
+            # sklearn 없거나 캐시 비어있으면 바로 캐시 추가 후 통과
+            new_text = f"{article.title} {article.content or ''}".strip()
+            if new_text:
+                self._similarity_cache.append({
+                    "text": new_text,
+                    "published_at": datetime.now(),
+                })
+                if len(self._similarity_cache) > 500:
+                    self._similarity_cache = self._similarity_cache[-500:]
+            return False
+
+        try:
+            new_text = f"{article.title} {article.content or ''}".strip()
+            if not new_text or len(new_text) < 10:
+                return False
+
+            existing_texts = [item["text"] for item in self._similarity_cache]
+            all_texts = existing_texts + [new_text]
+
+            vectorizer = TfidfVectorizer(
+                max_features=200,
+                ngram_range=(1, 2),
+                min_df=1,
+            )
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+
+            new_vec = tfidf_matrix[-1]
+            existing_vecs = tfidf_matrix[:-1]
+            similarities = cosine_similarity(new_vec, existing_vecs)[0]
+            max_similarity = float(np.max(similarities)) if len(similarities) > 0 else 0.0
+
+            if max_similarity >= self._similarity_threshold:
+                logger.debug(
+                    f"[US 뉴스 중복] 유사도 {max_similarity:.2f}: {article.title[:60]}"
+                )
+                return True
+
+            # 신규 기사 → 캐시에 추가 (최대 500개 슬라이딩 윈도우, cached_at 기준)
+            self._similarity_cache.append({
+                "text": new_text,
+                "published_at": datetime.now(),
+            })
+            if len(self._similarity_cache) > 500:
+                self._similarity_cache = self._similarity_cache[-500:]
+            return False
+
+        except Exception as e:
+            logger.warning(f"[US 뉴스] 유사도 계산 실패: {e}")
+            return False
 
     async def _fetch_rss(self, url: str, source: str, limit: int = 20) -> List[NewsArticle]:
         """범용 RSS/Atom XML 파서"""
