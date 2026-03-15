@@ -228,8 +228,10 @@ class USThemeDetector:
             logger.info(f"[US 테마] 뉴스 {len(articles)}건 수집")
 
             if len(articles) < self.min_news_count:
-                logger.warning(f"[US 테마] 뉴스 부족 ({len(articles)}건)")
-                self._cleanup_stale()
+                logger.warning(
+                    f"[US 테마] 뉴스 부족 ({len(articles)}건) — 기존 테마 유지"
+                )
+                # 새 기사가 없을 땐 cleanup 스킵: SHA1 TTL(2h) 안에서는 기존 테마 보존
                 return list(self._themes.values())
 
             # 2. LLM 테마 추출
@@ -860,9 +862,13 @@ Rules:
         return symbol
 
     def _cleanup_stale(self):
-        """1시간 초과 stale 테마/센티멘트 제거"""
+        """4시간 초과 stale 테마/센티멘트 제거
+        
+        SHA1 TTL(2h) + 버퍼(2h) = 4h: RSS 피드가 동일 기사를 반복 반환하므로
+        SHA1 만료(2h) 후 재분석 사이클까지 테마가 살아남도록 여유를 둔다.
+        """
         now = datetime.now()
-        cutoff = now - timedelta(hours=1)
+        cutoff = now - timedelta(hours=4)
 
         stale_themes = [
             name for name, info in self._themes.items()
