@@ -309,8 +309,8 @@ INITIAL_CAPITAL (KR, 기본 500000)
 ## LLM 모델 선택
 | 작업 | Primary | Fallback |
 |------|---------|----------|
-| 테마 탐지, 뉴스 요약 | Gemini Flash Lite | OpenAI gpt-5-mini |
-| 거래 복기, 전략 진화 | OpenAI gpt-5.2 | Gemini 2.5 Pro |
+| 테마 탐지, 뉴스 요약 | Gemini 3.1 Flash Lite | OpenAI gpt-5-mini |
+| 거래 복기, 전략 진화 | OpenAI gpt-5.4 | Gemini 3.1 Pro |
 
 ---
 

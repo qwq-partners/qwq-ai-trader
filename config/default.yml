@@ -195,6 +195,10 @@ kr:
       ovtm_vol_threshold: 0.01
       price_bonus_pct: 2.0
       price_penalty_pct: -3.0
+    premarket_revalidation:
+      rsi2_bounce_cancel_pct: 3.0      # RSI-2: 프리장 반등 ≥3% → 시그널 취소
+      gap_down_cancel_pct: -5.0        # 공통: 프리장 급락 ≤-5% → 시그널 취소
+      min_rr_ratio: 1.3                # SEPA/코어: R/R < 1.3 → 시그널 취소
       gap_remove_pct: 8.0
       score_bonus: 10.0
       score_penalty: -15.0

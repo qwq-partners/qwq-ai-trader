@@ -297,7 +297,7 @@ class BatchAnalyzer:
 
             pending = PendingSignal(
                 symbol=sig.symbol,
-                name=sig.metadata.get("candidate_name", sig.symbol),
+                name=(sig.metadata or {}).get("candidate_name", sig.symbol),
                 strategy=sig.strategy.value,
                 side=sig.side.value,
                 entry_price=entry_price,
@@ -308,7 +308,7 @@ class BatchAnalyzer:
                 reason=sig.reason,
                 created_at=now.isoformat(),
                 expires_at=expires.isoformat(),
-                atr_pct=float(sig.metadata.get("atr_pct", 0)),
+                atr_pct=float((sig.metadata or {}).get("atr_pct", 0)),
             )
             result.append(pending)
 
@@ -611,6 +611,92 @@ class BatchAnalyzer:
             import traceback
             logger.error(traceback.format_exc())
 
+    async def _premarket_revalidate(
+        self, signals: list, nxt_symbols: list
+    ) -> list:
+        """프리장 가격 기반 시그널 재검증 (NXT 대상 종목만)
+
+        08:20 아침 스캔 이후 프리장(08:00~08:50)에서 가격이 크게 변한 종목의
+        시그널을 전략별 기준으로 필터링합니다.
+        """
+        if not nxt_symbols:
+            return signals
+
+        nxt_set = {s.zfill(6) for s in nxt_symbols}
+        pre_cfg = self._config.get("batch", {}).get("premarket_revalidation", {})
+        rsi2_bounce_pct = pre_cfg.get("rsi2_bounce_cancel_pct", 3.0)
+        gap_down_cancel_pct = pre_cfg.get("gap_down_cancel_pct", -5.0)
+        rr_min = pre_cfg.get("min_rr_ratio", 1.3)
+
+        validated = []
+        for sig in signals:
+            sym6 = sig.symbol.zfill(6)
+            if sym6 not in nxt_set:
+                validated.append(sig)
+                continue
+
+            try:
+                quote = await self._broker.get_quote(sig.symbol)
+                if not quote:
+                    validated.append(sig)
+                    continue
+
+                # 프리장 시간외 가격 → 없으면 정규장 현재가 사용
+                pre_price = float(quote.get("ovtm_price", 0) or 0)
+                if pre_price <= 0:
+                    pre_price = float(quote.get("price", 0) or 0)
+                if pre_price <= 0 or sig.entry_price <= 0:
+                    validated.append(sig)
+                    continue
+
+                chg_pct = (pre_price - sig.entry_price) / sig.entry_price * 100
+
+                # 1) 공통: 프리장 급락 → 악재 의심, 시그널 취소
+                if chg_pct <= gap_down_cancel_pct:
+                    logger.info(
+                        f"[프리장검증] {sig.symbol} {sig.name} 취소: "
+                        f"프리장 {chg_pct:+.1f}% 급락 (기준 {gap_down_cancel_pct}%)"
+                    )
+                    continue
+
+                # 2) RSI-2 역추세: 프리장에서 이미 반등 → 역추세 진입 의미 상실
+                if sig.strategy == "rsi2_reversal" and chg_pct >= rsi2_bounce_pct:
+                    logger.info(
+                        f"[프리장검증] {sig.symbol} {sig.name} RSI-2 취소: "
+                        f"프리장 이미 +{chg_pct:.1f}% 반등 (기준 +{rsi2_bounce_pct}%)"
+                    )
+                    continue
+
+                # 3) SEPA 등 추세전략: 프리장 가격 기준 R/R 재계산
+                if sig.strategy in ("sepa_trend", "core_holding") and chg_pct > 0:
+                    remaining_upside = (
+                        (sig.target_price - pre_price) / pre_price * 100
+                        if pre_price > 0 else 0
+                    )
+                    downside = abs(
+                        (pre_price - sig.stop_price) / pre_price * 100
+                    ) if pre_price > 0 else 1
+                    rr = remaining_upside / downside if downside > 0 else 99
+                    if rr < rr_min:
+                        logger.info(
+                            f"[프리장검증] {sig.symbol} {sig.name} R/R 미달 취소: "
+                            f"프리장 {chg_pct:+.1f}% → R/R={rr:.2f} (기준 {rr_min})"
+                        )
+                        continue
+
+                validated.append(sig)
+            except Exception as e:
+                logger.warning(f"[프리장검증] {sig.symbol} 조회 실패 (통과): {e}")
+                validated.append(sig)
+
+        cancelled = len(signals) - len(validated)
+        if cancelled > 0:
+            logger.info(
+                f"[프리장검증] NXT 프리장 재검증 완료: "
+                f"{len(signals)}개 중 {cancelled}개 취소, {len(validated)}개 유효"
+            )
+        return validated
+
     async def execute_pending_signals(self):
         """[09:01] 대기 시그널 실행 (분산 실행: signal_interval_sec 간격)"""
         logger.info("[배치분석] ===== 대기 시그널 실행 =====")
@@ -632,6 +718,17 @@ class BatchAnalyzer:
         if not signals:
             logger.info("[배치분석] 대기 시그널 없음")
             return
+
+        # ── 프리장 가격 기반 시그널 재검증 (NXT 대상 종목만) ──
+        # 08:20 아침 스캔 후 40분간 프리장 가격 변동 반영
+        try:
+            nxt_symbols = await self._broker.get_nxt_symbols()
+            signals = await self._premarket_revalidate(signals, nxt_symbols)
+            if not signals:
+                logger.info("[배치분석] 프리장 재검증 후 유효 시그널 없음")
+                return
+        except Exception as e:
+            logger.warning(f"[배치분석] 프리장 재검증 실패 (원본 유지): {e}")
 
         # 슬라이딩 윈도우 설정: 시그널 간 간격으로 슬리피지 위험 분산
         batch_cfg = self._config.get("batch", {})
@@ -850,6 +947,7 @@ class BatchAnalyzer:
             except Exception as _e:
                 logger.debug(f"[포지션모니터] 레짐 동기화 오류 (무시): {_e}")
 
+        _exited_symbols: set = set()  # 이번 루프에서 청산 신호 발행된 종목 (중복 방지)
         for symbol, pos in list(self._engine.portfolio.positions.items()):
             try:
                 # REST API 현재가 조회
@@ -913,6 +1011,7 @@ class BatchAnalyzer:
                         )
                         event = SignalEvent.from_signal(signal, source="position_monitor")
                         await self._engine.emit(event)
+                        _exited_symbols.add(symbol)
                         await asyncio.sleep(0.2)  # rate limit
                         continue  # 청산 시그널 발행 시 보유기간 체크 스킵
 
@@ -944,16 +1043,19 @@ class BatchAnalyzer:
             except Exception as e:
                 logger.warning(f"[포지션모니터] {symbol} 체크 오류: {e}")
 
-        # 코어홀딩 이벤트 기반 조기 경보
-        await self._monitor_core_positions()
+        # 코어홀딩 이벤트 기반 조기 경보 (이미 청산 신호 발행된 종목 제외)
+        await self._monitor_core_positions(exclude_symbols=_exited_symbols)
 
-    async def _monitor_core_positions(self):
+    async def _monitor_core_positions(self, exclude_symbols: set = None):
         """코어홀딩 이벤트 기반 조기 청산 체크
 
         월 1회 리밸런싱 사이에 급격히 악화된 코어 포지션을 조기에 감지.
         트리거 조건:
           1) 수익률 <= early_loss_alert_pct (-12%)
           2) MA200 이탈 연속 일수 >= early_ma200_alert_days (3일)
+
+        Args:
+            exclude_symbols: 이미 청산 신호가 발행된 종목 (중복 방지)
         """
         core_cfg = self._config.get("core_holding", {})
         if not core_cfg.get("enabled", False):
@@ -965,9 +1067,12 @@ class BatchAnalyzer:
         portfolio = self._engine.portfolio
         pending_sells = getattr(self._engine, '_pending_sells', set())
 
+        _exclude = exclude_symbols or set()
         core_positions = [
             (sym, p) for sym, p in portfolio.positions.items()
-            if p.strategy == "core_holding" and sym not in pending_sells
+            if p.strategy == "core_holding"
+            and sym not in pending_sells
+            and sym not in _exclude  # ExitManager/보유기간에서 이미 청산 신호 발행된 종목 제외
         ]
         if not core_positions:
             return
@@ -1048,8 +1153,8 @@ class BatchAnalyzer:
                             f"{getattr(pos, 'name', symbol)}({symbol})\n"
                             f"{trigger_str}"
                         )
-                    except Exception:
-                        pass
+                    except Exception as _tg_e:
+                        logger.warning(f"[코어조기경보] {symbol} 텔레그램 알림 실패: {_tg_e}")
 
                     # 매도 시그널 발행
                     current_price = pos.current_price if pos.current_price is not None else Decimal("0")

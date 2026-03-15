@@ -50,12 +50,12 @@ class LLMConfig:
     gemini_api_key: str = ""
 
     # 모델 선택
-    # Heavy: 깊은 분석, 거래 복기에 사용 (GPT-5.2 Thinking 모델)
-    openai_model_heavy: str = "gpt-5.2"
+    # Heavy: 깊은 분석, 거래 복기에 사용 (GPT-5.4 최신 모델)
+    openai_model_heavy: str = "gpt-5.4"
     # Light: 빠른 분류, 테마 탐지에 사용
     openai_model_light: str = "gpt-5-mini"
     gemini_model_heavy: str = "gemini-3.1-pro-preview"
-    gemini_model_light: str = "gemini-3-flash-preview"
+    gemini_model_light: str = "gemini-3.1-flash-lite-preview"
 
     # 타임아웃 (Thinking 모델은 추론에 시간이 걸림)
     timeout_seconds: int = 120

@@ -592,6 +592,9 @@ class RiskConfig:
     consecutive_loss_threshold: int = 3
     consecutive_loss_size_factor: float = 0.5
 
+    # 코어홀딩 (KR)
+    max_core_positions: int = 3            # 코어홀딩 최대 동시 보유 수
+
     # 하이브리드 전략 (KR)
     hybrid: HybridConfig = field(default_factory=HybridConfig)
 

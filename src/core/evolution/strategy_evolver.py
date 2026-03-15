@@ -416,11 +416,12 @@ class StrategyEvolver:
         recent = self.journal.get_closed_trades(days=trading_days + 2)  # 약간 여유
         recent = [t for t in recent
                   if t.exit_time and t.exit_time.date() >= applied
-                  and not t.is_sync]  # 동기화 포지션 제외 (>=: 적용 당일 포함)
+                  and t.entry_time and t.entry_time.date() >= applied
+                  and not t.is_sync]  # 동기화 포지션 제외, 변경 이전 진입 거래 제외
         if len(recent) < 10:
-            if trading_days > 10:  # 10영업일 넘었는데도 10건 미달 → 데이터 부족으로 유지
-                logger.info(f"[진화 평가] {trading_days}영업일 경과, {len(recent)}건 < 10건 → 데이터 부족으로 유지")
-                return "keep"
+            if trading_days > 10:  # 10영업일 넘었는데도 10건 미달 → 검증 불가, 보수적 롤백
+                logger.info(f"[진화 평가] {trading_days}영업일 경과, {len(recent)}건 < 10건 → 데이터 부족으로 롤백 (보수적)")
+                return "rollback"
             logger.debug(f"[진화 평가] {len(recent)}건 < 10건, 대기")
             return "wait"
 
@@ -758,7 +759,9 @@ class StrategyEvolver:
             return new_value
         min_val, max_val = self._param_bounds[param_name]
         try:
-            clamped = type(current_value)(max(min_val, min(max_val, float(new_value))))
+            clamped_float = max(min_val, min(max_val, float(new_value)))
+            # float 파라미터는 float 유지 (int 캐스팅 시 소수점 손실 방지)
+            clamped = clamped_float if isinstance(current_value, float) else type(current_value)(clamped_float)
             return clamped
         except (ValueError, TypeError):
             return current_value

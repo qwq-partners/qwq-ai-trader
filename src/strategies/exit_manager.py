@@ -273,7 +273,7 @@ class ExitManager:
         for sym, state in self._states.items():
             entry: Dict = {
                 "stage": state.current_stage.value,
-                "highest_price": float(state.highest_price),
+                "highest_price": str(state.highest_price),
                 "breakeven_activated": state.breakeven_activated,
                 "is_core": state.is_core,
             }
@@ -450,7 +450,9 @@ class ExitManager:
                     expected_after_first = saved_initial_qty - max(
                         1, int(saved_initial_qty * eff_first_ratio)
                     )
-                    if position.quantity > expected_after_first:
+                    # 부분체결 허용: 5% 버퍼 (KIS 부분체결 시 수량 소폭 불일치 허용)
+                    tolerance_qty = max(1, int(saved_initial_qty * 0.05))
+                    if position.quantity > expected_after_first + tolerance_qty:
                         logger.warning(
                             f"[ExitManager] {position.symbol} 재시작 정합성 실패: "
                             f"KIS qty={position.quantity} > expected_after_1st={expected_after_first} "

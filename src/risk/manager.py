@@ -221,8 +221,8 @@ class RiskManager:
         non_core_count = len(portfolio.positions) - core_count
         is_core_signal = (strategy_type == "core_holding")
         if is_core_signal:
-            # 코어 진입: 최대 3개 상한 (execute_core_rebalance + 여기서 이중 검증)
-            max_core = 3
+            # 코어 진입: 최대 N개 상한 (execute_core_rebalance + 여기서 이중 검증)
+            max_core = getattr(self.config, 'max_core_positions', 3)
             if core_count >= max_core:
                 return False, f"코어홀딩 상한 도달 ({core_count}/{max_core}개)"
         elif non_core_count >= self.config.max_positions:
@@ -312,7 +312,7 @@ class RiskManager:
 
         equity = portfolio.total_equity
         min_cash = equity * Decimal(str(self.config.min_cash_reserve_pct / 100))
-        available = portfolio.cash - min_cash
+        available = max(Decimal("0"), portfolio.cash - min_cash)
 
         if available < Decimal(str(self.config.min_position_value)):
             if allow_min_one and portfolio.cash >= price:
@@ -516,13 +516,14 @@ class RiskManager:
     def get_risk_metrics(self, portfolio: Portfolio) -> RiskMetrics:
         """Get current risk state (US 호환)"""
         daily_loss_pct = 0.0
+        effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
         if portfolio.initial_capital > 0:
             daily_loss_pct = float(
-                portfolio.effective_daily_pnl / portfolio.initial_capital * 100
+                effective_pnl / portfolio.initial_capital * 100
             )
 
         return RiskMetrics(
-            daily_loss=portfolio.effective_daily_pnl,
+            daily_loss=effective_pnl,
             daily_loss_pct=daily_loss_pct,
             daily_trades=portfolio.daily_trades,
             total_exposure=float(1 - portfolio.cash_ratio) * 100,
