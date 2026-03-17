@@ -1781,6 +1781,7 @@ class DashboardDataCollector:
         core_positions = []
         total_value = 0
         total_cost = 0
+        name_cache = self._build_name_cache()
 
         if portfolio:
             for sym, pos in portfolio.positions.items():
@@ -1797,9 +1798,14 @@ class DashboardDataCollector:
                     equity = float(portfolio.total_equity) if portfolio.total_equity > 0 else 1
                     weight_pct = mv / equity * 100
 
+                    # 종목명: pos.name 우선, 없으면 name_cache, 최후 심볼
+                    display_name = (pos.name or "").strip()
+                    if not display_name or display_name == sym:
+                        display_name = name_cache.get(sym, sym)
+
                     core_positions.append({
                         "symbol": sym,
-                        "name": pos.name or sym,
+                        "name": display_name,
                         "quantity": pos.quantity,
                         "avg_price": float(pos.avg_price),
                         "current_price": float(pos.current_price),
