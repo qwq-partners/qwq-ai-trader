@@ -98,6 +98,10 @@ const strategyNames = {
     theme_chasing: '테마',
     gap_and_go: '갭상승',
     mean_reversion: '평균회귀',
+    core_holding: '코어홀딩',
+    sepa_trend: 'SEPA',
+    rsi2_reversal: 'RSI2',
+    strategic_swing: '스윙',
 };
 
 function renderSortedPositions() {
@@ -142,9 +146,18 @@ function renderSortedPositions() {
             }
         }
 
-        return `<tr class="border-b" style="border-color:rgba(99,102,241,0.08)">
-            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
-            <td class="py-2 pr-3" style="font-size:0.75rem; color:var(--accent-purple);">${esc(stName)}</td>
+        const isCore = pos.strategy === 'core_holding';
+        const rowStyle = isCore
+            ? 'border-color:rgba(251,191,36,0.18); border-left:3px solid var(--accent-amber); background:rgba(251,191,36,0.04);'
+            : 'border-color:rgba(99,102,241,0.08); border-left:3px solid transparent;';
+        const strategyColor = isCore ? 'var(--accent-amber)' : 'var(--accent-purple)';
+        const coreBadge = isCore
+            ? ' <span style="display:inline-block; font-size:0.62rem; font-weight:600; color:var(--accent-amber); background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.35); border-radius:4px; padding:0 4px; vertical-align:middle; letter-spacing:.03em;">코어</span>'
+            : '';
+
+        return `<tr class="border-b" style="${rowStyle}">
+            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)}${coreBadge} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
+            <td class="py-2 pr-3" style="font-size:0.75rem; color:${strategyColor};">${esc(stName)}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
             <td class="col-avg-price py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
             <td class="col-quantity py-2 pr-3 text-right mono">${pos.quantity}</td>
@@ -217,9 +230,17 @@ function updateKRPositionsSummary(positions) {
         const div = document.createElement('div');
         div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0;min-height:1.5em;';
         if (pos) {
+            const isCore = pos.strategy === 'core_holding';
             const name = document.createElement('span');
-            name.textContent = pos.name || pos.symbol;
-            name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%;';
+            name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%;display:flex;align-items:center;gap:4px;';
+            if (isCore) {
+                const dot = document.createElement('span');
+                dot.title = '코어홀딩';
+                dot.style.cssText = 'display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent-amber);flex-shrink:0;';
+                name.appendChild(dot);
+            }
+            const nameText = document.createTextNode(pos.name || pos.symbol);
+            name.appendChild(nameText);
             const pct = document.createElement('span');
             const val = pos.unrealized_pnl_pct ?? 0;
             pct.textContent = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
