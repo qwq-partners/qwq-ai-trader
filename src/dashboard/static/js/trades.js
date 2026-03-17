@@ -275,25 +275,72 @@ function renderEvents(events) {
         // 수익률
         const tdPct = createTd('py-2 pr-3 text-right mono ' + pnlCls, pnlPct !== 0 ? formatPct(pnlPct) : '--');
 
-        // 전략
-        const strategy = (ev.strategy && ev.strategy !== 'unknown') ? ev.strategy : '--';
-        const tdStrategy = createTd('py-2 pr-3 text-xs', strategy);
-        tdStrategy.style.color = 'var(--text-secondary)';
+        // 전략 컬럼 (전략명 + 전략 색상)
+        const _strat = (ev.strategy && ev.strategy !== 'unknown' && ev.strategy !== 'unclassified')
+            ? ev.strategy : null;
+        const _stratLabel = {
+            sepa_trend: 'SEPA', rsi2_reversal: 'RSI2', theme_chasing: '테마',
+            momentum_breakout: '모멘텀', strategic_swing: '스윙', gap_and_go: '갭상승',
+            core_holding: '코어홀딩', mean_reversion: '평균회귀',
+        }[_strat] || _strat || '--';
+        const tdStrategy = createTd('py-2 pr-3 text-xs', _stratLabel);
+        tdStrategy.style.color = (_strat === 'core_holding') ? 'var(--accent-amber)' : 'var(--text-secondary)';
+        if (_strat) tdStrategy.title = `전략: ${_strat}`;
 
         // 상태
         const tdStatus = document.createElement('td');
         tdStatus.className = 'py-2 pr-3';
         tdStatus.appendChild(createStatusBadge(ev.status || '', isBuy));
 
-        // 사유 (매도 이벤트만)
-        const exitReason = (!isBuy && ev.exit_reason) ? ev.exit_reason : '';
-        const tdReason = createTd('py-2 text-xs', exitReason);
-        tdReason.style.color = 'var(--text-muted)';
-        tdReason.style.maxWidth = '200px';
-        tdReason.style.overflow = 'hidden';
-        tdReason.style.textOverflow = 'ellipsis';
-        tdReason.style.whiteSpace = 'nowrap';
-        if (exitReason) tdReason.title = exitReason;
+        // 근거 컬럼: 매수=entry_tags pills, 매도=exit_reason
+        const tdReason = document.createElement('td');
+        tdReason.className = 'py-2 text-xs';
+        tdReason.style.cssText = 'max-width:240px;';
+
+        if (isBuy && ev.entry_tags && ev.entry_tags.length > 0) {
+            // 태그 pill 렌더링
+            const tagWrap = document.createElement('div');
+            tagWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;align-items:center;';
+            const visibleTags = ev.entry_tags.slice(0, 4);
+            visibleTags.forEach(tag => {
+                const pill = document.createElement('span');
+                pill.textContent = tag;
+                pill.style.cssText = [
+                    'display:inline-block',
+                    'font-size:0.6rem',
+                    'padding:1px 5px',
+                    'border-radius:4px',
+                    'background:rgba(99,102,241,0.10)',
+                    'color:var(--text-secondary)',
+                    'border:1px solid rgba(99,102,241,0.15)',
+                    'white-space:nowrap',
+                ].join(';');
+                tagWrap.appendChild(pill);
+            });
+            if (ev.entry_tags.length > 4) {
+                const more = document.createElement('span');
+                more.textContent = `+${ev.entry_tags.length - 4}`;
+                more.style.cssText = 'font-size:0.6rem;color:var(--text-muted);';
+                tagWrap.appendChild(more);
+            }
+            tdReason.appendChild(tagWrap);
+            tdReason.title = ev.entry_tags.join(' | ');
+        } else if (!isBuy && ev.exit_reason) {
+            tdReason.textContent = ev.exit_reason;
+            tdReason.style.color = 'var(--text-muted)';
+            tdReason.style.overflow = 'hidden';
+            tdReason.style.textOverflow = 'ellipsis';
+            tdReason.style.whiteSpace = 'nowrap';
+            tdReason.title = ev.exit_reason;
+        } else if (isBuy && ev.entry_reason && ev.entry_reason !== 'buy_signal') {
+            // 태그 없는 구버전 데이터: entry_reason 표시
+            tdReason.textContent = ev.entry_reason;
+            tdReason.style.color = 'var(--text-muted)';
+            tdReason.style.overflow = 'hidden';
+            tdReason.style.textOverflow = 'ellipsis';
+            tdReason.style.whiteSpace = 'nowrap';
+            tdReason.title = ev.entry_reason;
+        }
 
         tr.append(tdTime, tdName, tdType, tdPrice, tdQty, tdPnl, tdPct, tdStrategy, tdStatus, tdReason);
         fragment.appendChild(tr);

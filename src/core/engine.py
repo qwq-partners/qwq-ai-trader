@@ -936,6 +936,10 @@ class RiskManager:
         # 중복 주문 방지: 주문 진행 중인 종목
         self._pending_orders: Set[str] = set()
 
+        # 시그널 메타데이터 캐시: fill 시 record_entry 태그 구성에 사용
+        # {symbol: {"reason": str, "metadata": dict, "strategy": str, "score": float}}
+        self._pending_signal_cache: Dict[str, Dict] = {}
+
         # pending 등록 시각 (stale pending 정리용)
         self._pending_timestamps: Dict[str, datetime] = {}
         self._PENDING_TIMEOUT_SECONDS = 600  # 10분 타임아웃
@@ -972,6 +976,24 @@ class RiskManager:
     def _reserved_cash(self) -> Decimal:
         """예약 현금 합계 (주문별 추적 기반)"""
         return sum(self._reserved_by_order.values()) if self._reserved_by_order else Decimal("0")
+
+    def _get_core_reserve(self) -> Decimal:
+        """코어홀딩 예약 현금 계산
+
+        전체 자산의 core_holding 배분율에서 현재 코어 포지션 가치를 차감한 금액.
+        비코어 전략은 이 금액을 제외한 풀에서만 매수 가능.
+        """
+        _alloc = self.config.strategy_allocation
+        core_alloc_pct = _alloc.get("core_holding", 0)
+        if core_alloc_pct <= 0:
+            return Decimal("0")
+        equity = self.engine.portfolio.total_equity
+        if equity <= 0:
+            return Decimal("0")
+        core_budget = equity * Decimal(str(core_alloc_pct / 100))
+        current_core = self.engine.portfolio.get_strategy_allocation("core_holding")
+        reserve = core_budget - current_core
+        return max(reserve, Decimal("0"))
 
     def block_symbol(self, symbol: str):
         """종목 주문 쿨다운 등록 (외부에서 호출)"""
@@ -1129,6 +1151,10 @@ class RiskManager:
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
         if event.side == OrderSide.BUY:
             available = self.engine.get_available_cash() - self._reserved_cash
+            # 비코어 전략: 코어 예약 현금 차감 (코어 30% 예산 보호)
+            is_core = (event.strategy == StrategyType.CORE_HOLDING)
+            if not is_core:
+                available -= self._get_core_reserve()
             if available <= 0:
                 cash_warn_now = datetime.now()
                 if (self._last_cash_warn_time is None or
@@ -1241,10 +1267,14 @@ class RiskManager:
                 except Exception:
                     _sector = None
 
+            # 비코어 전략: reserved_cash에 코어 예약금 포함 (코어 30% 예산 보호)
+            _effective_reserved = self._reserved_cash
+            if order.strategy != "core_holding":
+                _effective_reserved += self._get_core_reserve()
             can_trade, reason = self.engine.can_open_position(
                 order.symbol, order.side, order.quantity, order.price or Decimal("0"),
                 pending_symbols=self._pending_orders,
-                reserved_cash=self._reserved_cash,
+                reserved_cash=_effective_reserved,
                 sector=_sector,
             )
             if not can_trade:
@@ -1265,6 +1295,15 @@ class RiskManager:
             self._pending_sides[order.symbol] = order.side
 
             self._last_signal_time[order.symbol] = datetime.now()
+
+            # BUY 시그널 메타데이터 캐시 (fill 시 entry_tags 구성용)
+            if order.side == OrderSide.BUY:
+                self._pending_signal_cache[order.symbol] = {
+                    "reason": event.reason or "",
+                    "metadata": dict(event.metadata) if event.metadata else {},
+                    "strategy": event.strategy.value if event.strategy else order.strategy or "",
+                    "score": float(event.score or 0),
+                }
 
             if order.side == OrderSide.BUY and order.price and order.quantity:
                 self._reserved_by_order[order.symbol] = order.price * order.quantity * Decimal("1.015")
@@ -1422,9 +1461,15 @@ class RiskManager:
             )
             return 0
 
+        _is_core = (signal.strategy == StrategyType.CORE_HOLDING)
+
         # 하이브리드 모드: 타임 호라이즌별 자금 풀 사용
         if self.config.hybrid.enabled:
             base_pct, max_pct, pool_equity = self._get_hybrid_params(signal.strategy, equity)
+            # 하이브리드 모드에서도 비코어 전략은 코어 예약분 차감
+            if not _is_core:
+                core_reserve = self._get_core_reserve()
+                pool_equity = max(pool_equity - core_reserve, Decimal("0"))
         else:
             # 전략별 포지션 크기 (CLAUDE.md 명시값 — 공격적 포지션 운영)
             # strategy_allocation은 총 예산 cap (아래 _budget_cap 로직에서 적용)
@@ -1449,7 +1494,18 @@ class RiskManager:
                 return 0
             base_pct = strat_pct / 100
             max_pct = self.config.max_position_pct / 100
-            pool_equity = equity
+            # 코어 예산 예약: 비코어 전략은 코어 예약분 제외한 풀에서 계산
+            if _is_core:
+                pool_equity = equity
+            else:
+                core_reserve = self._get_core_reserve()
+                pool_equity = max(equity - core_reserve, Decimal("0"))
+                if pool_equity <= 0:
+                    logger.info(
+                        f"[리스크] 코어 예산 예약으로 가용 풀 없음: {signal.symbol} "
+                        f"(equity={equity:,.0f}, core_reserve={core_reserve:,.0f})"
+                    )
+                    return 0
 
         # 신호 강도에 따른 조정
         multiplier = {
@@ -1463,6 +1519,7 @@ class RiskManager:
         pct_value = pool_equity * Decimal(str(position_pct))
 
         # 가용 현금 (수수료 여유분, 예약 현금 차감)
+        # 주의: 비코어 전략은 pool_equity에서 이미 코어 예약분 차감됨 → available에서 이중 차감 금지
         available = self.engine.get_available_cash() - self._reserved_cash
         if available <= 0:
             return 0

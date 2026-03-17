@@ -537,6 +537,7 @@ class DashboardDataCollector:
                         "status": t.exit_type if t.is_closed else "holding",
                         "entry_price": float(t.entry_price), "entry_quantity": t.entry_quantity,
                         "entry_reason": t.entry_reason,
+                        "entry_tags": list(getattr(t, 'entry_tags', None) or []),
                     })
                 if t.exit_time and t.exit_time.date() == target_date and event_type in ("all", "sell"):
                     events.append({
@@ -549,6 +550,7 @@ class DashboardDataCollector:
                         "status": t.exit_type or "closed",
                         "entry_price": float(t.entry_price), "entry_quantity": t.entry_quantity,
                         "entry_reason": t.entry_reason,
+                        "entry_tags": list(getattr(t, 'entry_tags', None) or []),
                     })
             events.sort(key=lambda e: e.get("event_time", ""), reverse=True)
 

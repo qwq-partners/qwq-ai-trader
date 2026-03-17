@@ -1359,19 +1359,86 @@ JSON:
                                     try:
                                         from datetime import datetime as _dt
                                         _tid = f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
+
+                                        # ── 시그널 캐시에서 메타데이터 추출 ──────────────
+                                        _sig_cache = getattr(bot.engine, '_pending_signal_cache', {})
+                                        _sig_meta = _sig_cache.pop(fill.symbol, {})
+                                        _sig_reason = _sig_meta.get("reason", "")
+                                        _sig_metadata = _sig_meta.get("metadata", {})
+                                        _sig_strategy = (
+                                            _sig_meta.get("strategy")
+                                            or str(pos.strategy or "")
+                                        )
+                                        _sig_score = _sig_meta.get("score") or float(fill.signal_score or 0.0)
+
+                                        # ── 진입근거 태그 구성 (3개 이상 의무) ──────────
+                                        _tags = []
+
+                                        # Tag 1: 전략명
+                                        _strat_label = {
+                                            "sepa_trend": "SEPA추세", "rsi2_reversal": "RSI2반전",
+                                            "theme_chasing": "테마추종", "momentum_breakout": "모멘텀돌파",
+                                            "strategic_swing": "전략스윙", "gap_and_go": "갭상승",
+                                            "core_holding": "코어홀딩",
+                                        }.get(_sig_strategy, _sig_strategy or "미분류")
+                                        _tags.append(f"전략:{_strat_label}")
+
+                                        # Tag 2: 시그널 점수
+                                        if _sig_score:
+                                            _tags.append(f"점수:{_sig_score:.0f}pt")
+
+                                        # Tag 3: 등락률 (있으면)
+                                        _rt_chg = _sig_metadata.get("rt_change_pct")
+                                        if _rt_chg is not None:
+                                            _tags.append(f"등락:{_rt_chg:+.1f}%")
+
+                                        # Tag 4+: 섹터
+                                        _sector = _sig_metadata.get("sector") or getattr(pos, 'sector', None)
+                                        if _sector:
+                                            _tags.append(f"섹터:{_sector}")
+
+                                        # Tag 5+: ATR 변동성
+                                        _atr = _sig_metadata.get("atr_pct")
+                                        if _atr:
+                                            _tags.append(f"ATR:{_atr:.1f}%")
+
+                                        # Tag 6+: 뉴스/테마 검증
+                                        _news_adj = _sig_metadata.get("news_validation")
+                                        if _news_adj and abs(_news_adj) > 0:
+                                            _tags.append(f"뉴스:{'호재' if _news_adj > 0 else '악재'}{_news_adj:+.2f}")
+
+                                        # Tag 7+: 시그널 소스
+                                        _source = _sig_metadata.get("source", "")
+                                        if _source:
+                                            _source_label = {
+                                                "live_screening": "장중스크리닝",
+                                                "batch_scan": "배치스캔",
+                                                "intraday_quality": "장중품질",
+                                                "core_rebalance": "코어리밸런싱",
+                                            }.get(_source, _source)
+                                            _tags.append(f"소스:{_source_label}")
+
+                                        # 3개 미달이면 reason에서 키워드 보충
+                                        if len(_tags) < 3 and _sig_reason:
+                                            _tags.append(f"근거:{_sig_reason[:30]}")
+
                                         _rec = bot.trade_journal.record_entry(
                                             trade_id=_tid,
                                             symbol=fill.symbol,
                                             name=getattr(pos, 'name', fill.symbol),
                                             entry_price=float(fill.price),
                                             entry_quantity=fill.quantity,
-                                            entry_reason=getattr(pos, 'entry_reason', 'buy_signal') or 'buy_signal',
-                                            entry_strategy=str(pos.strategy or 'unknown'),
-                                            signal_score=float(fill.signal_score or 0.0),
+                                            entry_reason=_sig_reason or "buy_signal",
+                                            entry_strategy=_sig_strategy or "unclassified",
+                                            signal_score=_sig_score,
+                                            entry_tags=_tags,
                                             market="KR",
                                         )
                                         pos.trade_id = _rec.id
-                                        logger.info(f"[체결] {fill.symbol} BUY journal 기록 완료 (id={_rec.id})")
+                                        logger.info(
+                                            f"[체결] {fill.symbol} BUY journal 기록 완료 "
+                                            f"(id={_rec.id}, 전략={_sig_strategy}, 태그={len(_tags)}개)"
+                                        )
                                     except Exception as _je:
                                         logger.warning(f"[체결] {fill.symbol} BUY journal 기록 실패: {_je}")
 

@@ -26,9 +26,10 @@ class TradeRecord:
     entry_time: datetime = None          # 진입 시간
     entry_price: float = 0               # 진입가
     entry_quantity: int = 0              # 진입 수량
-    entry_reason: str = ""               # 진입 사유
-    entry_strategy: str = ""             # 사용 전략
+    entry_reason: str = ""               # 진입 사유 (요약 문자열)
+    entry_strategy: str = ""             # 사용 전략 (의무)
     entry_signal_score: float = 0        # 진입 신호 점수
+    entry_tags: List[str] = field(default_factory=list)  # 진입근거 태그 (3개 이상 의무)
 
     # 청산 정보
     exit_time: Optional[datetime] = None # 청산 시간
@@ -195,13 +196,36 @@ class TradeJournal:
         indicators: Dict[str, float] = None,
         market_context: Dict[str, Any] = None,
         theme_info: Dict[str, Any] = None,
+        entry_tags: List[str] = None,
+        market: str = "KR",
     ) -> TradeRecord:
         """
         진입 기록
 
         매수 체결 시 호출합니다.
+
+        의무 규칙:
+        - entry_strategy: 반드시 실제 전략명 (unknown/empty 불가 → 경고 후 fallback)
+        - entry_tags: 3개 이상 진입근거 (미달 시 경고 후 저장은 허용)
         """
         now = datetime.now()
+
+        # ── 전략 태그 의무 검증 ─────────────────────────────────
+        _strategy = entry_strategy or ""
+        if not _strategy or _strategy in ("unknown", ""):
+            logger.warning(
+                f"[저널] {symbol} 전략 태그 누락 (entry_strategy='{_strategy}') "
+                f"→ 'unclassified'로 기록. 진입 근거 재확인 필요."
+            )
+            _strategy = "unclassified"
+
+        # ── 진입근거 3항목 의무 검증 ──────────────────────────────
+        _tags: List[str] = list(entry_tags or [])
+        if len(_tags) < 3:
+            logger.warning(
+                f"[저널] {symbol} 진입근거 {len(_tags)}개 (최소 3개 필요) "
+                f"→ tags={_tags}. 시그널 메타데이터 확인 필요."
+            )
 
         trade = TradeRecord(
             id=trade_id,
@@ -211,8 +235,9 @@ class TradeJournal:
             entry_price=entry_price,
             entry_quantity=entry_quantity,
             entry_reason=entry_reason,
-            entry_strategy=entry_strategy,
+            entry_strategy=_strategy,
             entry_signal_score=signal_score,
+            entry_tags=_tags,
             indicators_at_entry=indicators or {},
             market_context=market_context or {},
             theme_info=theme_info or {},
