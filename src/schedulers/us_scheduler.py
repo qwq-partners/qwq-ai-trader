@@ -468,6 +468,23 @@ class USScheduler:
                     # 당일 청산 종목 블랙리스트 초기화 (새 거래일)
                     if hasattr(eng, "_stopped_today"):
                         eng._stopped_today = set()
+                    # 당일 청산 파일 복원 (봇 재시작 시 재매수 차단 유지)
+                    try:
+                        import json as _json
+                        from pathlib import Path as _Path
+                        _cache_dir = _Path.home() / ".cache" / "ai_trader_us"
+                        _today_str = today.strftime("%Y%m%d")
+                        _stopped_file = _cache_dir / f"stopped_today_{_today_str}.json"
+                        if _stopped_file.exists():
+                            _data = _json.loads(_stopped_file.read_text())
+                            _loaded = set(_data.get("symbols", []))
+                            if _loaded:
+                                if not hasattr(eng, "_stopped_today"):
+                                    eng._stopped_today = set()
+                                eng._stopped_today.update(_loaded)
+                                logger.info(f"[US 재매수차단] 파일 복원: {sorted(_loaded)}")
+                    except Exception as _e:
+                        logger.warning(f"[US 재매수차단] 파일 로드 실패 (무시): {_e}")
                     if hasattr(eng, "_order_fail_blacklist"):
                         eng._order_fail_blacklist = set()
                     self._quote_fail_count = {}
@@ -501,7 +518,11 @@ class USScheduler:
                         dynamic = await fz.discover_dynamic()
                         eng._dynamic_last_refresh = today
                         if dynamic:
-                            new_syms = set(dynamic) - set(eng._universe)
+                            _cfg_excl = set(
+                                eng.config_raw.get("us", {}).get("universe", {})
+                                .get("excluded_symbols", [])
+                            ) if hasattr(eng, "config_raw") else set()
+                            new_syms = set(dynamic) - set(eng._universe) - _cfg_excl
                             eng._dynamic_symbols = new_syms
                             if new_syms:
                                 logger.info(
@@ -736,6 +757,46 @@ class USScheduler:
             except Exception as e:
                 logger.debug(f"[US 스크리닝] {symbol} 평가 실패: {e}")
 
+        # ── Finviz 실시간 가격 사전 필터 (프리마켓 가격 괴리 제거) ──────
+        fz = self._finviz
+        if fz and self._finviz_ready and signals:
+            try:
+                sig_symbols = [s.symbol for s in signals]
+                fz_snap = await fz.get_intraday_scan(sig_symbols)
+                filtered_signals = []
+                for sig in signals:
+                    snap = fz_snap.get(sig.symbol)
+                    if not snap:
+                        filtered_signals.append(sig)  # Finviz 데이터 없으면 통과
+                        continue
+                    fz_chg = snap.get("change_pct", 0.0)
+                    fz_price = snap.get("price", 0.0)
+                    # 당일 변동률 -3% 이하 → 하락 종목 제외
+                    if fz_chg <= -3.0:
+                        logger.info(
+                            f"[US Finviz 가격필터] {sig.symbol} 제외: "
+                            f"당일 {fz_chg:+.1f}% (Finviz ${fz_price:.2f})"
+                        )
+                        continue
+                    # Finviz 실시간 가격 vs 시그널 가격 괴리 5% 이상 → 제외
+                    if sig.price and float(sig.price) > 0 and fz_price > 0:
+                        gap = abs(fz_price - float(sig.price)) / float(sig.price) * 100
+                        if gap >= 5.0:
+                            logger.info(
+                                f"[US Finviz 가격필터] {sig.symbol} 제외: "
+                                f"가격괴리 {gap:.1f}% (시그널=${float(sig.price):.2f} vs Finviz=${fz_price:.2f})"
+                            )
+                            continue
+                    filtered_signals.append(sig)
+                if len(filtered_signals) < len(signals):
+                    logger.info(
+                        f"[US Finviz 가격필터] {len(signals) - len(filtered_signals)}개 시그널 제거 "
+                        f"(원본 {len(signals)} → {len(filtered_signals)})"
+                    )
+                signals = filtered_signals
+            except Exception as e:
+                logger.debug(f"[US Finviz 가격필터] 조회 실패 (무시): {e}")
+
         # 시그널 스코어 순 정렬 → 성공 N개까지 시도
         signals.sort(key=lambda s: s.score, reverse=True)
         submitted = 0
@@ -766,6 +827,15 @@ class USScheduler:
         # 주문 영구실패 블랙리스트 (ETP 미신청, 매수불가 등)
         if symbol in getattr(eng, "_order_fail_blacklist", set()):
             logger.debug(f"[US 시그널] {symbol} — 주문 실패 블랙리스트, 스킵")
+            return False
+
+        # config excluded_symbols (해외ETP 미신청 등 영구 제외 종목)
+        _cfg_excluded = set(
+            (eng.config_raw.get("us", {}) if hasattr(eng, "config_raw") else {})
+            .get("universe", {}).get("excluded_symbols", [])
+        )
+        if symbol in _cfg_excluded:
+            logger.debug(f"[US 시그널] {symbol} — config 영구 제외 종목, 스킵")
             return False
 
         # pending 포함 실효 포지션 수로 max_positions 조기 차단
@@ -802,6 +872,25 @@ class USScheduler:
             return False
         # 조회 성공 시 실패 카운터 초기화
         self._quote_fail_count.pop(symbol, None)
+
+        # 시그널 평가가격 vs 실시간 현재가 갭 체크 (프리마켓 가격 괴리 방지)
+        if signal.price and float(signal.price) > 0:
+            signal_price = float(signal.price)
+            gap_pct = (price - signal_price) / signal_price * 100
+            # 현재가가 시그널 가격 대비 3% 이상 하락 → 진입 보류
+            if gap_pct <= -3.0:
+                logger.warning(
+                    f"[US 시그널] {symbol} — 가격 괴리 차단: "
+                    f"시그널=${signal_price:.2f} → 현재=${price:.2f} ({gap_pct:+.1f}%)"
+                )
+                return False
+            # 현재가가 시그널 가격 대비 5% 이상 상승 → 추격 매수 방지
+            if gap_pct >= 5.0:
+                logger.warning(
+                    f"[US 시그널] {symbol} — 추격매수 차단: "
+                    f"시그널=${signal_price:.2f} → 현재=${price:.2f} ({gap_pct:+.1f}%)"
+                )
+                return False
 
         # 포지션 사이징 (allow_min_one=True — 금액 기준 최소 1주 보장)
         qty = eng.risk_manager.calculate_position_size(
@@ -952,28 +1041,33 @@ class USScheduler:
         # 서비스 시작 시: 미국 장 시간에만 WS 연결 (KIS approval_key 1개 공유 제약)
         # KR 정규장(09:00~15:20) 중에는 KR WS가 approval_key를 점유 → US WS 연결 금지
         await asyncio.sleep(5)  # 초기화 대기
-        _initial_open_soon = eng.session.minutes_to_open() <= 10
-        _initial_is_open = eng.session.is_market_open()
-        if eng.portfolio.positions and (_initial_open_soon or _initial_is_open):
-            logger.info("[KIS US WS] 초기 포지션 감지 + 미국 장 시간 → WS 사전 연결")
-            await self._ensure_us_price_ws_running()
-            await asyncio.sleep(3)
-            for symbol in list(eng.portfolio.positions.keys()):
-                exchange = eng._exchange_cache.get(symbol, eng._default_exchange)
-                await eng.us_price_ws.subscribe([symbol], exchange=exchange)
-            logger.info(f"[KIS US WS] 초기 구독: {list(eng.portfolio.positions.keys())}")
-            _ws_prestarted = True
-        elif eng.portfolio.positions:
-            logger.info(
-                "[KIS US WS] 초기 포지션 있으나 미국 장 외 시간 → WS 연결 대기 "
-                "(KIS approval_key 1개 제약: KR WS 우선)"
-            )
+        try:
+            _mto = eng.session.minutes_to_open()
+            _initial_open_soon = (_mto is not None and _mto <= 10)
+            _initial_is_open = eng.session.is_market_open()
+            if eng.portfolio.positions and (_initial_open_soon or _initial_is_open):
+                logger.info("[KIS US WS] 초기 포지션 감지 + 미국 장 시간 → WS 사전 연결")
+                await self._ensure_us_price_ws_running()
+                await asyncio.sleep(3)
+                for symbol in list(eng.portfolio.positions.keys()):
+                    exchange = eng._exchange_cache.get(symbol, eng._default_exchange)
+                    await eng.us_price_ws.subscribe([symbol], exchange=exchange)
+                logger.info(f"[KIS US WS] 초기 구독: {list(eng.portfolio.positions.keys())}")
+                _ws_prestarted = True
+            elif eng.portfolio.positions:
+                logger.info(
+                    "[KIS US WS] 초기 포지션 있으나 미국 장 외 시간 → WS 연결 대기 "
+                    "(KIS approval_key 1개 제약: KR WS 우선)"
+                )
+        except Exception as e:
+            logger.warning(f"[ws_market_loop] 초기화 오류 (루프 계속): {e}")
 
         while eng.running:
             try:
                 et_now = eng.session.now_et()
                 # 미국 정규장 시작 10분 전 ~ 장 중: WS 사전 연결
-                market_open_soon = eng.session.minutes_to_open() <= 10
+                _mto = eng.session.minutes_to_open()
+                market_open_soon = (_mto is not None and _mto <= 10)
                 is_open = eng.session.is_market_open()
 
                 if (market_open_soon or is_open) and not _ws_prestarted:
@@ -1019,7 +1113,8 @@ class USScheduler:
 
         # ── KIS approval_key 1개 제약: 미국 장 시간에만 WS 허용 ──────────────
         is_open = eng.session.is_market_open()
-        open_soon = eng.session.minutes_to_open() <= 10
+        _mto = eng.session.minutes_to_open()
+        open_soon = (_mto is not None and _mto <= 10)
         if not (is_open or open_soon):
             logger.debug("[KIS US WS] 미국 장 외 시간 → WS 연결 스킵 (REST polling 사용)")
             return
@@ -1268,6 +1363,7 @@ class USScheduler:
                 "symbol": symbol,
                 "side": "sell",
                 "qty": sell_qty,
+                "orig_qty": position.quantity,
                 "price": float(position.current_price),
                 "strategy": position.strategy or "",
                 "reason": reason,
@@ -1277,8 +1373,8 @@ class USScheduler:
             }
             eng._pending_symbols.add(symbol)
 
-            # 손절/트레일링 청산 종목 → 당일 재매수 차단 + 파일 영속화
-            if exit_type in ("stop_loss", "trailing"):
+            # 당일 매도 종목 → 재매수 차단 + 파일 영속화 (익절/손절 무관)
+            if True:
                 stopped = getattr(eng, "_stopped_today", set())
                 stopped.add(symbol)
                 try:
@@ -1806,6 +1902,29 @@ class USScheduler:
                     del eng._pending_orders[order_no]
                     continue
 
+                # 포트폴리오 기반 매도 체결 감지: 부분/전량 매도 후 수량 감소 확인
+                if side == "sell" and elapsed > 30:
+                    pos = eng.portfolio.positions.get(symbol)
+                    expected_qty = pending.get("qty", 0)
+                    if pos is None:
+                        # 전량 매도 체결 — 포지션 소멸
+                        logger.info(
+                            f"[US 주문 체크] {order_no} ({symbol}) "
+                            f"매도 주문 — 포지션 소멸, 체결로 간주하여 pending 정리"
+                        )
+                        eng._pending_symbols.discard(symbol)
+                        del eng._pending_orders[order_no]
+                        continue
+                    elif expected_qty and pos.quantity < pending.get("orig_qty", pos.quantity + expected_qty):
+                        # 부분 매도 체결 — 수량 감소 확인 (orig_qty가 있을 때만)
+                        logger.info(
+                            f"[US 주문 체크] {order_no} ({symbol}) "
+                            f"매도 주문 — 수량 감소 확인 ({pos.quantity}주 남음), 체결로 간주"
+                        )
+                        eng._pending_symbols.discard(symbol)
+                        del eng._pending_orders[order_no]
+                        continue
+
                 # 타임아웃: 매도 2분 / 매수 10분 (local 주문은 5분)
                 if is_local:
                     timeout_sec = 300
@@ -1860,16 +1979,26 @@ class USScheduler:
                             logger.info(
                                 f"[US 주문 체크] {symbol} 매도 취소 → stage 롤백"
                             )
-                        # 정규장이면 시장가로 재시도
+                        # 정규장이면 적극적 지정가로 재시도 (KIS US는 시장가 미지원)
                         p_exchange = pending.get("exchange", eng._default_exchange)
                         p_qty = pending.get("qty", 0)
                         if eng.session.is_market_open() and p_qty > 0:
+                            # 현재가 조회 후 -2% 지정가 (빠른 체결 유도)
+                            try:
+                                _quote = await eng.broker.get_quote(symbol, p_exchange)
+                                _fallback_price = _quote.get("price", 0)
+                            except Exception:
+                                _fallback_price = 0
+                            if _fallback_price <= 0:
+                                _fallback_price = pending.get("price", 0)
+                            _fallback_price = round(_fallback_price * 0.98, 2)  # -2% 적극적 지정가
                             logger.warning(
-                                f"[US 주문 체크] {symbol} 매도 시장가 폴백 — {p_qty}주"
+                                f"[US 주문 체크] {symbol} 매도 적극지정가 폴백 — "
+                                f"{p_qty}주 @ ${_fallback_price:.2f}"
                             )
                             try:
                                 fallback = await eng.broker.submit_sell_order(
-                                    symbol, p_exchange, p_qty, price=0,
+                                    symbol, p_exchange, p_qty, price=_fallback_price,
                                 )
                                 if fallback.get("success"):
                                     fb_order_no = fallback.get("order_no", "").strip()
@@ -1888,11 +2017,11 @@ class USScheduler:
                                     eng._pending_symbols.add(symbol)
                                 else:
                                     logger.error(
-                                        f"[US 주문 체크] {symbol} 시장가 폴백 실패: "
+                                        f"[US 주문 체크] {symbol} 적극지정가 폴백 실패: "
                                         f"{fallback.get('message')}"
                                     )
                             except Exception as e:
-                                logger.error(f"[US 주문 체크] {symbol} 시장가 폴백 예외: {e}")
+                                logger.error(f"[US 주문 체크] {symbol} 적극지정가 폴백 예외: {e}")
                 continue
 
             if info["status"] == "filled":
@@ -1944,7 +2073,7 @@ class USScheduler:
                         del eng._pending_orders[order_no]
                         logger.info(f"[US 주문 체크] {order_no} 취소 완료")
 
-                        # 매도 취소 후 시장가 폴백 재주문 (정규장에서만)
+                        # 매도 취소 후 적극지정가 폴백 재주문 (정규장에서만)
                         if pending["side"] == "sell":
                             symbol = pending["symbol"]
                             p_exchange = pending.get("exchange", eng._default_exchange)
@@ -1952,15 +2081,25 @@ class USScheduler:
 
                             if not eng.session.is_market_open():
                                 logger.warning(
-                                    f"[US 주문 체크] {symbol} 정규장 아님 → 시장가 폴백 스킵"
+                                    f"[US 주문 체크] {symbol} 정규장 아님 → 적극지정가 폴백 스킵"
                                 )
                                 eng._pending_symbols.discard(symbol)
                             else:
+                                # 현재가 조회 후 -2% 적극적 지정가 (KIS US 시장가 미지원)
+                                try:
+                                    _q = await eng.broker.get_quote(symbol, p_exchange)
+                                    _fp = _q.get("price", 0)
+                                except Exception:
+                                    _fp = 0
+                                if _fp <= 0:
+                                    _fp = pending.get("price", 0)
+                                _fp = round(_fp * 0.98, 2)
                                 logger.warning(
-                                    f"[US 주문 체크] {symbol} 매도 시장가 폴백 — {p_qty}주"
+                                    f"[US 주문 체크] {symbol} 매도 적극지정가 폴백 — "
+                                    f"{p_qty}주 @ ${_fp:.2f}"
                                 )
                                 fallback = await eng.broker.submit_sell_order(
-                                    symbol, p_exchange, p_qty, price=0,
+                                    symbol, p_exchange, p_qty, price=_fp,
                                 )
                                 if fallback.get("success"):
                                     fb_order_no = fallback.get("order_no", "").strip()
@@ -1970,16 +2109,16 @@ class USScheduler:
                                         "symbol": symbol,
                                         "side": "sell",
                                         "qty": p_qty,
-                                        "price": 0,
+                                        "price": _fp,
                                         "strategy": pending.get("strategy", ""),
-                                        "reason": f"market_fallback({pending.get('reason', '')})",
+                                        "reason": f"aggressive_limit({pending.get('reason', '')})",
                                         "exchange": p_exchange,
                                         "submitted_at": datetime.now(),
                                     }
                                     eng._pending_symbols.add(symbol)
                                 else:
                                     logger.error(
-                                        f"[US 주문 체크] {symbol} 시장가 폴백 실패: "
+                                        f"[US 주문 체크] {symbol} 적극지정가 폴백 실패: "
                                         f"{fallback.get('message')}"
                                     )
                                     # 긴급 알림
