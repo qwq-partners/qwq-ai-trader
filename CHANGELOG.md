@@ -1,5 +1,153 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-18 — 10라운드 코드 리뷰 P0 수정 7건
+
+### P0-1: Cash=0 sync skip (`us_scheduler.py:1446`)
+- **문제**: `cash_val > 0` 조건으로 cash=0 상태(전액 투자)를 skip → portfolio.cash 미갱신
+- **수정**: `cash_val >= 0`으로 변경, 0도 유효한 값으로 동기화
+
+### P0-2: 전략 exit 실패 시 ExitManager 손절 차단 (`us_scheduler.py:1269-1289`)
+- **문제**: `strategy_exit_attempted=True`가 전략 exit 시도만으로 설정 → 실패해도 ExitManager 완전 skip → 손절 미발동
+- **수정**: `strategy_exit_submitted=bool(exit_ok)`로 변경, 매도 주문 성공 시에만 ExitManager skip
+
+### P0-3: WS+REST exit 체크 레이스 컨디션 (`us_scheduler.py`)
+- **문제**: `_on_us_ws_price`와 `_check_exits`가 동시에 같은 포지션에서 exit 시그널 발생 → 이중 매도
+- **수정**: per-symbol `asyncio.Lock` 추가, 한쪽이 처리 중이면 다른 쪽 skip
+
+### P0-4: RSI2 ATR=None 시 stop/target 미설정 (`rsi2_reversal.py:86-93`)
+- **문제**: ATR 미제공 시 스크리너 기본값(-5%/+5%, R:R 1:1) 유지 → `check_rr_ratio(min_rr=2.0)` 실패 → 시그널 전부 탈락
+- **수정**: ATR=None일 때 기본 stop=5%, target=10% (R:R 2:1) 폴백 추가
+
+### P0-5: EOD close price=0 시장가 실패 (`us_scheduler.py:_eod_close`)
+- **문제**: DAY 포지션 마감 청산에 `price=0` (시장가) 사용 → KIS US API 거부
+- **수정**: 현재가 × 0.98 aggressive limit으로 변경
+
+### P0-6: 매도 폴백 무한 재시도 루프 (`us_scheduler.py:_check_orders`)
+- **문제**: 매도 취소 → 폴백 → 재취소 → 무한 반복 가능
+- **수정**: `_sell_retry_count[symbol]` per-symbol 최대 3회 제한, 초과 시 수동 확인 알림
+
+### P0-7: equity≤0 시 일일 손실 한도 bypass (`risk/manager.py:265`)
+- **문제**: `equity <= 0`일 때 `return False` → 손실 한도 미도달 판정 → 추가 매수 가능
+- **수정**: `return True`로 변경 (equity 0 이하 → 거래 차단)
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/schedulers/us_scheduler.py` | P0-1,2,3,5,6 |
+| `src/strategies/kr/rsi2_reversal.py` | P0-4 |
+| `src/risk/manager.py` | P0-7 |
+
+## 2026-03-18 — US WS 통합 + 매도 폴백 수정 (`us_scheduler.py`)
+
+### WS approval_key 충돌 해소
+- **문제**: `kis_us_ws`(체결통보) + `kis_us_price_ws`(가격) 두 개가 approval_key 경쟁 → "ALREADY IN USE appkey" → `price_ws=off`
+- **수정**: `us_price_ws`에 체결통보(H0GSCNI0) 통합 구독, 별도 `kis_ws`는 `us_price_ws` 없을 때만 폴백
+- **결과**: 단일 WS에서 가격+체결통보 동시 처리, 충돌 해소
+
+## 2026-03-18 — US 매도 폴백: 시장가→적극지정가 (`us_scheduler.py`)
+
+### 문제
+- IMMX 1차 익절 지정가 미체결 → 2분 타임아웃 → 시장가(`price=0`) 폴백 → KIS US API "주문단가를 입력 하십시오" 에러
+- KIS 해외주식 API는 시장가 주문을 지원하지 않음 (ORD_DVSN="00"에서 price=0 불가)
+- 2번 연속 같은 실패 패턴 반복
+
+### 수정
+- 2곳의 시장가 폴백 → **적극지정가 폴백** (현재가 -2% 지정가)으로 변경
+  1. `_check_orders` inquire-ccnl 미확인 타임아웃 후 폴백 (line ~1970)
+  2. `_check_orders` pending status 타임아웃 후 폴백 (line ~2070)
+- 현재가 조회 실패 시 원래 pending price를 기반으로 -2% 설정
+
+## 2026-03-17 — US 엔진 P0/P1/P2 3건 수정 (WS 연결, 거래소 매핑, 매도 감지)
+
+### P0: US WebSocket 전혀 연결 안됨 (치명적)
+- **원인**: `minutes_to_open()` → 장중에 `None` 반환 → `None <= 10` → TypeError → 코루틴 사망
+- **영향**: 실시간 가격 피드 없음, EXIT 체크가 REST 폴링에만 의존 (15초 지연)
+- **수정**: `us_scheduler.py` 3곳에서 `_mto is not None and _mto <= 10` 패턴 적용
+- **추가**: `ws_market_loop` 초기화 섹션 try/except 추가 (silent crash 방지)
+- **결과**: `price_ws=ok(8)` — WS 정상 연결, 보유 종목 실시간 구독
+
+### P1: 22개 종목 현재가 조회 실패 (매 스크리닝)
+- **원인**: `yfinance.get_info()`가 `exchange` 필드 미반환 → 모든 종목이 `NASD` 기본값 → NYSE/AMEX 종목 KIS API 실패
+- **수정**: `src/data/providers/yfinance.py` `get_info()`에 `'exchange': info.get('exchange', '')` 추가
+- **결과**: SEI(NYSE), EC(NYSE), BP(NYSE) 등 정상 조회 (`NYSESEI` 정확히 매핑)
+
+### P2: 매도 pending 2분 지연 감지
+- **원인**: `inquire-ccnl` 빈 결과 반복 → 2분 타임아웃 후에야 취소 시도로 감지
+- **수정**: 매수뿐 아니라 매도도 포트폴리오 기반 체결 감지 추가
+  - 전량 매도: 포지션 소멸 → 즉시 pending 정리
+  - 부분 매도: `orig_qty` 대비 수량 감소 → 체결 간주
+- **pending에 `orig_qty` 필드 추가** (매도 주문 시 원래 보유 수량 기록)
+
+## 2026-03-16 — US 당일 재매수 차단 강화 (`us_scheduler.py`)
+
+### 문제
+- ORKA: 익절 매도 후 같은 날 동일 종목 재진입 → 하락으로 손실
+- `_stopped_today`가 `stop_loss`/`trailing` 매도만 차단, 익절은 미차단
+- 봇 재시작 시 `_stopped_today` 메모리 초기화 → 파일은 저장하지만 로드하지 않음
+
+### 수정
+1. **모든 매도 유형 재매수 차단**: `if exit_type in ("stop_loss", "trailing"):` → `if True:` (익절 포함)
+2. **재시작 시 파일 복원**: 일일 리셋에서 `stopped_today_{YYYYMMDD}.json` 파일 로드 추가
+   - 파일 위치: `~/.cache/ai_trader_us/stopped_today_{YYYYMMDD}.json`
+   - 새 거래일이면 파일 없음 → 빈 set (정상)
+   - 장중 재시작이면 파일 존재 → 이전 청산 종목 복원
+
+### 효과
+- 동일 종목 당일 재진입 완전 차단 (매도 사유 무관)
+- 봇 재시작해도 차단 목록 유지
+
+## 2026-03-16 — US 프리마켓 가격 괴리 방지 2중 게이트 (`us_scheduler.py`)
+
+### 문제
+- AXTI 매수 직후 1분만에 -5.99% 손절: 스크리닝이 yfinance 전일종가 기반 → 프리마켓 가격 괴리 무시
+- `_run_screening()` 시그널 생성 시점에 당일 가격 변동 체크 없음
+- `_process_signal()` 주문 직전에도 시그널가 vs 현재가 갭 체크 없음
+
+### 수정 1: Finviz 실시간 가격 사전 필터 (`_run_screening()` 내)
+- 시그널 생성 후, 주문 전에 **Finviz `get_intraday_scan()` 배치 조회** (1회 API 호출로 전체 시그널 종목)
+- 당일 변동률 ≤ -3% → 시그널 제거 (하락 종목 매수 차단)
+- Finviz 실시간가 vs 시그널 평가가 괴리 ≥ 5% → 시그널 제거
+
+### 수정 2: KIS 현재가 갭 체크 (`_process_signal()` 내)
+- 주문 직전 `get_quote()` 현재가 vs `signal.price` 비교
+- 현재가 < 시그널가 -3% → "가격 괴리 차단"
+- 현재가 > 시그널가 +5% → "추격매수 차단"
+
+### 효과
+- 2중 게이트: ① Finviz 배치(효율적) → ② KIS 개별(정확) → 프리마켓 함정 매수 차단
+
+## 2026-03-16 — 코어홀딩 예산 예약 + 빈슬롯 즉시 매수 (2개 파일)
+
+### 문제
+- `strategy_allocation.core_holding: 30%`가 **상한(cap)**으로만 작동, **예약(reservation)**이 아님
+- SEPA 등 비코어 전략이 전체 자산에서 포지션 계산 → 코어 30% 예산까지 소진
+- 코어 매수는 월초 첫 영업일에만 가능 → 빈 슬롯이 한 달간 방치
+
+### 수정 1: 코어 예산 예약 (`src/core/engine.py`)
+- `_get_core_reserve()` 메서드 추가: `equity × 30% - 현재코어포지션가치 = 예약금`
+- `on_signal()`: 비코어 매수 시 가용현금에서 코어 예약금 차감
+- `_calculate_position_size()`: 비코어 전략의 `pool_equity = equity - core_reserve`
+- 코어 전략은 전체 equity 기준 유지
+
+### 수정 2: 빈슬롯 즉시 매수 (`src/schedulers/kr_scheduler.py`)
+- 기존: 월초 첫 영업일 09:05~13:04 윈도우에서만 리밸런싱
+- 변경: 매일 장중 코어 포지션 < max(3) && 예산 잔여 시 즉시 스캔+매수
+- 빈슬롯 매수 윈도우: 09:10~09:14, 10:00~10:04, 13:30~13:34
+- 일일 1회 시도 제한 (last_fill_date 추적)
+- 월초 풀 리밸런싱(교체 판단)은 기존대로 유지
+
+### 리뷰 후 추가 수정 (P1 3건, P2 1건)
+- **P1-1**: `_calculate_position_size()` available에서 코어 예약 이중 차감 제거 (pool_equity에서 이미 반영)
+- **P1-2**: 하이브리드 모드에서도 비코어 전략에 코어 예약 적용 (현재 비활성이나 방어적 추가)
+- **P1-3**: `can_open_position()` 호출 시 `reserved_cash`에 코어 예약금 포함하여 2차 검증 강화
+- **P2-3**: 빈슬롯 매수 실패 시 `last_fill_date` 미설정 → 다음 윈도우에서 재시도 허용
+
+### 동작 예시 (자본 50만원)
+| 시점 | 기존 | 변경 후 |
+|------|------|---------|
+| SEPA 매수 시 | pool=50만 → 25% = 12.5만 | pool=35만(코어15만 예약) → 25% = 8.75만 |
+| 코어 빈 슬롯 | 다음달 초까지 대기 | 당일 09:10 스캔 → 즉시 매수 |
+
 ## 2026-03-15 — US/KR 뉴스 중복제거 개선 (2개 파일)
 
 ### 문제

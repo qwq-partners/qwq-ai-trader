@@ -66,6 +66,8 @@ class USScheduler:
         self._quote_fail_count: Dict[str, int] = {}
         # 이전 sync 수량 스냅샷 (수량 변화 감지용)
         self._prev_qty_snapshot: Dict[str, int] = {}
+        # exit 체크 per-symbol 락 (WS 콜백 + REST 동시 실행 방지)
+        self._exit_locks: Dict[str, asyncio.Lock] = {}
 
     # ============================================================
     # 태스크 생성
@@ -93,15 +95,15 @@ class USScheduler:
         # 워치리스트
         tasks.append(asyncio.create_task(self.watchlist_loop(), name="us_watchlist"))
 
-        # KIS 실시간체결통보 WS (fill notification, HTS ID 필요)
-        if eng.kis_ws:
-            tasks.append(asyncio.create_task(eng.kis_ws.start(), name="us_kis_ws"))
-
         # KIS 해외주식 실시간가 WS (HDFSCNT0)
-        # ws_market_loop가 장 시작 전 사전 연결 + 포지션 구독 관리
+        # ws_market_loop가 장 시작 전 사전 연결 + 포지션 구독 + 체결통보(H0GSCNI0) 통합 관리
+        # KIS approval_key 1개 제약: 단일 WS에서 가격+체결통보 동시 처리
         if eng.us_price_ws:
             eng.us_price_ws.on_price(self._on_us_ws_price)
             tasks.append(asyncio.create_task(self.ws_market_loop(), name="us_ws_market"))
+        elif eng.kis_ws:
+            # us_price_ws가 없을 때만 별도 체결통보 WS 사용 (폴백)
+            tasks.append(asyncio.create_task(eng.kis_ws.start(), name="us_kis_ws"))
 
         # 거래량급증 루프
         if hasattr(eng.broker, "get_volume_surge"):
@@ -1172,27 +1174,33 @@ class USScheduler:
         if pos.highest_price is None or cur > pos.highest_price:
             pos.highest_price = cur
 
-        # ExitManager 실시간 체크
-        exit_signal = eng.exit_manager.update_price(symbol, cur)
-        if not exit_signal:
-            return
+        # per-symbol 락 (REST exit_check과 동시 실행 방지)
+        lock = self._exit_locks.setdefault(symbol, asyncio.Lock())
+        if lock.locked():
+            return  # REST 체크가 이미 진행 중 → 스킵 (다음 틱에서 재처리)
 
-        # pending 재확인 (update_price 처리 중 상태 변경 가능)
-        if symbol in eng._pending_symbols:
-            return
+        async with lock:
+            # ExitManager 실시간 체크
+            exit_signal = eng.exit_manager.update_price(symbol, cur)
+            if not exit_signal:
+                return
 
-        action, qty, reason = exit_signal
-        exchange = await self._get_exchange(symbol)
-        ratio = qty / pos.quantity if pos.quantity > 0 else 1.0
-        logger.info(
-            f"[KIS US WS] exit 시그널 → {symbol} {action} {ratio:.0%} "
-            f"@ ${price:.2f} ({reason})"
-        )
-        await self._execute_exit(
-            symbol, pos,
-            {"action": action, "ratio": ratio, "reason": reason, "qty": qty},
-            exchange,
-        )
+            # pending 재확인 (update_price 처리 중 상태 변경 가능)
+            if symbol in eng._pending_symbols:
+                return
+
+            action, qty, reason = exit_signal
+            exchange = await self._get_exchange(symbol)
+            ratio = qty / pos.quantity if pos.quantity > 0 else 1.0
+            logger.info(
+                f"[KIS US WS] exit 시그널 → {symbol} {action} {ratio:.0%} "
+                f"@ ${price:.2f} ({reason})"
+            )
+            await self._execute_exit(
+                symbol, pos,
+                {"action": action, "ratio": ratio, "reason": reason, "qty": qty},
+                exchange,
+            )
 
     # ============================================================
     # 태스크 2: 청산 체크 루프
@@ -1244,53 +1252,59 @@ class USScheduler:
             if symbol in eng._pending_symbols:
                 continue
 
-            try:
-                # KIS REST 실시간 현재가 (primary)
-                exchange = await self._get_exchange(symbol)
-                quote = await eng.broker.get_quote(symbol, exchange)
-                price = quote.get("price", 0)
-                if price <= 0:
-                    continue
+            # per-symbol 락 (WS 콜백과 동시 실행 방지)
+            lock = self._exit_locks.setdefault(symbol, asyncio.Lock())
+            if lock.locked():
+                continue  # WS 콜백이 이미 처리 중 → 스킵
 
-                position.current_price = Decimal(str(price))
+            async with lock:
+                try:
+                    # KIS REST 실시간 현재가 (primary)
+                    exchange = await self._get_exchange(symbol)
+                    quote = await eng.broker.get_quote(symbol, exchange)
+                    price = quote.get("price", 0)
+                    if price <= 0:
+                        continue
 
-                # 최고가 갱신
-                if position.highest_price is None or position.current_price > position.highest_price:
-                    position.highest_price = position.current_price
+                    position.current_price = Decimal(str(price))
 
-                # 전략별 커스텀 exit 체크 (SEPA MA50 이탈 등)
-                strategy_exit_attempted = False
-                if position.strategy:
-                    for strat in eng.strategies:
-                        if strat.strategy_type.value == position.strategy:
-                            if eng.data_store:
-                                history = eng.data_store.load(symbol)
-                                if history is not None and len(history) >= 50:
-                                    custom_reason = strat.check_exit(symbol, history, position)
-                                    if custom_reason:
-                                        logger.info(f"[US 전략 청산] {symbol} — {custom_reason}")
-                                        exit_ok = await self._execute_exit(
-                                            symbol, position,
-                                            {'action': 'close', 'ratio': 1.0, 'reason': custom_reason},
-                                            exchange,
-                                        )
-                                        strategy_exit_attempted = True  # 시도 자체를 기록 (실패 시에도 ExitManager 폴백 방지 → 중복 주문 차단)
-                            break
+                    # 최고가 갱신
+                    if position.highest_price is None or position.current_price > position.highest_price:
+                        position.highest_price = position.current_price
 
-                # ExitManager 체크 (전략 exit 미발동 또는 주문 실패 시에도 실행)
-                if not strategy_exit_attempted and symbol not in eng._pending_symbols:
-                    exit_signal = eng.exit_manager.update_price(symbol, Decimal(str(price)))
-                    if exit_signal:
-                        action, exit_qty, reason = exit_signal
-                        ratio = exit_qty / position.quantity if position.quantity > 0 else 1.0
-                        await self._execute_exit(
-                            symbol, position,
-                            {'action': action, 'ratio': ratio, 'reason': reason, 'qty': exit_qty},
-                            exchange,
-                        )
+                    # 전략별 커스텀 exit 체크 (SEPA MA50 이탈 등)
+                    strategy_exit_submitted = False
+                    if position.strategy:
+                        for strat in eng.strategies:
+                            if strat.strategy_type.value == position.strategy:
+                                if eng.data_store:
+                                    history = eng.data_store.load(symbol)
+                                    if history is not None and len(history) >= 50:
+                                        custom_reason = strat.check_exit(symbol, history, position)
+                                        if custom_reason:
+                                            logger.info(f"[US 전략 청산] {symbol} — {custom_reason}")
+                                            exit_ok = await self._execute_exit(
+                                                symbol, position,
+                                                {'action': 'close', 'ratio': 1.0, 'reason': custom_reason},
+                                                exchange,
+                                            )
+                                            strategy_exit_submitted = bool(exit_ok)  # 매도 주문 성공 시에만 True
+                                break
 
-            except Exception as e:
-                logger.warning(f"[US 청산 체크] {symbol} 오류: {e}")
+                    # ExitManager 체크 (전략 exit 미발동 또는 주문 실패 시 폴백 — 손절 안전망)
+                    if not strategy_exit_submitted and symbol not in eng._pending_symbols:
+                        exit_signal = eng.exit_manager.update_price(symbol, Decimal(str(price)))
+                        if exit_signal:
+                            action, exit_qty, reason = exit_signal
+                            ratio = exit_qty / position.quantity if position.quantity > 0 else 1.0
+                            await self._execute_exit(
+                                symbol, position,
+                                {'action': action, 'ratio': ratio, 'reason': reason, 'qty': exit_qty},
+                                exchange,
+                            )
+
+                except Exception as e:
+                    logger.warning(f"[US 청산 체크] {symbol} 오류: {e}")
 
     async def _execute_exit(self, symbol: str, position: Position,
                             exit_signal: dict, exchange: str) -> bool:
@@ -1443,7 +1457,7 @@ class USScheduler:
         account_info = balance.get("account", {})
         if account_info:
             cash_val = account_info.get("available_cash")
-            if cash_val is not None and float(cash_val) > 0:
+            if cash_val is not None and float(cash_val) >= 0:  # 0도 유효 (전액 투자 상태)
                 eng.portfolio.cash = Decimal(str(cash_val))
             equity_val = account_info.get("total_equity")
             if equity_val is not None and float(equity_val) > 0:
@@ -1972,56 +1986,71 @@ class USScheduler:
                         eng._pending_symbols.discard(symbol)
                         del eng._pending_orders[order_no]
 
-                    # 매도 주문 취소 시 ExitManager stage 롤백 + 시장가 재시도
+                    # 매도 주문 취소 시 ExitManager stage 롤백 + 적극 지정가 재시도
                     if side == "sell" and cancel_ok:
                         if eng.exit_manager:
                             eng.exit_manager.rollback_stage(symbol)
                             logger.info(
                                 f"[US 주문 체크] {symbol} 매도 취소 → stage 롤백"
                             )
-                        # 정규장이면 적극적 지정가로 재시도 (KIS US는 시장가 미지원)
-                        p_exchange = pending.get("exchange", eng._default_exchange)
-                        p_qty = pending.get("qty", 0)
-                        if eng.session.is_market_open() and p_qty > 0:
-                            # 현재가 조회 후 -2% 지정가 (빠른 체결 유도)
-                            try:
-                                _quote = await eng.broker.get_quote(symbol, p_exchange)
-                                _fallback_price = _quote.get("price", 0)
-                            except Exception:
-                                _fallback_price = 0
-                            if _fallback_price <= 0:
-                                _fallback_price = pending.get("price", 0)
-                            _fallback_price = round(_fallback_price * 0.98, 2)  # -2% 적극적 지정가
-                            logger.warning(
-                                f"[US 주문 체크] {symbol} 매도 적극지정가 폴백 — "
-                                f"{p_qty}주 @ ${_fallback_price:.2f}"
+                        # 폴백 재시도 횟수 제한 (최대 3회)
+                        _retry_key = f"sell_fallback_{symbol}"
+                        _retry_cnt = getattr(self, '_sell_retry_count', {})
+                        if not hasattr(self, '_sell_retry_count'):
+                            self._sell_retry_count = {}
+                            _retry_cnt = self._sell_retry_count
+                        _retry_cnt[symbol] = _retry_cnt.get(symbol, 0) + 1
+
+                        if _retry_cnt[symbol] > 3:
+                            logger.error(
+                                f"[US 주문 체크] {symbol} 매도 폴백 {_retry_cnt[symbol]}회 초과 → "
+                                f"폴백 중단 (수동 확인 필요)"
                             )
-                            try:
-                                fallback = await eng.broker.submit_sell_order(
-                                    symbol, p_exchange, p_qty, price=_fallback_price,
+                            self._sell_fail_cooldown[symbol] = datetime.now()
+                        else:
+                            # 정규장이면 적극적 지정가로 재시도 (KIS US는 시장가 미지원)
+                            p_exchange = pending.get("exchange", eng._default_exchange)
+                            p_qty = pending.get("qty", 0)
+                            if eng.session.is_market_open() and p_qty > 0:
+                                # 현재가 조회 후 -2% 지정가 (빠른 체결 유도)
+                                try:
+                                    _quote = await eng.broker.get_quote(symbol, p_exchange)
+                                    _fallback_price = _quote.get("price", 0)
+                                except Exception:
+                                    _fallback_price = 0
+                                if _fallback_price <= 0:
+                                    _fallback_price = pending.get("price", 0)
+                                _fallback_price = round(_fallback_price * 0.98, 2)  # -2% 적극적 지정가
+                                logger.warning(
+                                    f"[US 주문 체크] {symbol} 매도 적극지정가 폴백 "
+                                    f"({_retry_cnt[symbol]}/3) — {p_qty}주 @ ${_fallback_price:.2f}"
                                 )
-                                if fallback.get("success"):
-                                    fb_order_no = fallback.get("order_no", "").strip()
-                                    if not fb_order_no:
-                                        fb_order_no = f"local-{uuid.uuid4().hex[:12]}"
-                                    eng._pending_orders[fb_order_no] = {
-                                        "symbol": symbol,
-                                        "side": "sell",
-                                        "qty": p_qty,
-                                        "price": 0,
-                                        "strategy": pending.get("strategy", ""),
-                                        "reason": f"market_fallback({pending.get('reason', '')})",
-                                        "exchange": p_exchange,
-                                        "submitted_at": datetime.now(),
-                                    }
-                                    eng._pending_symbols.add(symbol)
-                                else:
-                                    logger.error(
-                                        f"[US 주문 체크] {symbol} 적극지정가 폴백 실패: "
-                                        f"{fallback.get('message')}"
+                                try:
+                                    fallback = await eng.broker.submit_sell_order(
+                                        symbol, p_exchange, p_qty, price=_fallback_price,
                                     )
-                            except Exception as e:
-                                logger.error(f"[US 주문 체크] {symbol} 적극지정가 폴백 예외: {e}")
+                                    if fallback.get("success"):
+                                        fb_order_no = fallback.get("order_no", "").strip()
+                                        if not fb_order_no:
+                                            fb_order_no = f"local-{uuid.uuid4().hex[:12]}"
+                                        eng._pending_orders[fb_order_no] = {
+                                            "symbol": symbol,
+                                            "side": "sell",
+                                            "qty": p_qty,
+                                            "price": _fallback_price,
+                                            "strategy": pending.get("strategy", ""),
+                                            "reason": f"sell_fallback_{_retry_cnt[symbol]}({pending.get('reason', '')})",
+                                            "exchange": p_exchange,
+                                            "submitted_at": datetime.now(),
+                                        }
+                                        eng._pending_symbols.add(symbol)
+                                    else:
+                                        logger.error(
+                                            f"[US 주문 체크] {symbol} 적극지정가 폴백 실패: "
+                                            f"{fallback.get('message')}"
+                                        )
+                                except Exception as e:
+                                    logger.error(f"[US 주문 체크] {symbol} 적극지정가 폴백 예외: {e}")
                 continue
 
             if info["status"] == "filled":
@@ -2073,17 +2102,33 @@ class USScheduler:
                         del eng._pending_orders[order_no]
                         logger.info(f"[US 주문 체크] {order_no} 취소 완료")
 
-                        # 매도 취소 후 적극지정가 폴백 재주문 (정규장에서만)
+                        # 매도 취소 후 적극지정가 폴백 재주문 (정규장에서만, 최대 3회)
                         if pending["side"] == "sell":
                             symbol = pending["symbol"]
                             p_exchange = pending.get("exchange", eng._default_exchange)
                             p_qty = pending.get("qty", 0)
+
+                            # 폴백 재시도 횟수 제한
+                            if not hasattr(self, '_sell_retry_count'):
+                                self._sell_retry_count = {}
+                            self._sell_retry_count[symbol] = self._sell_retry_count.get(symbol, 0) + 1
 
                             if not eng.session.is_market_open():
                                 logger.warning(
                                     f"[US 주문 체크] {symbol} 정규장 아님 → 적극지정가 폴백 스킵"
                                 )
                                 eng._pending_symbols.discard(symbol)
+                            elif self._sell_retry_count[symbol] > 3:
+                                logger.error(
+                                    f"[US 주문 체크] {symbol} 매도 폴백 "
+                                    f"{self._sell_retry_count[symbol]}회 초과 → 중단 (수동 확인 필요)"
+                                )
+                                eng._pending_symbols.discard(symbol)
+                                self._sell_fail_cooldown[symbol] = datetime.now()
+                                asyncio.create_task(send_alert(
+                                    f"[US] 긴급: 매도 폴백 3회 초과\n"
+                                    f"{symbol} {p_qty}주 — 수동 확인 필요"
+                                ))
                             else:
                                 # 현재가 조회 후 -2% 적극적 지정가 (KIS US 시장가 미지원)
                                 try:
@@ -2095,8 +2140,8 @@ class USScheduler:
                                     _fp = pending.get("price", 0)
                                 _fp = round(_fp * 0.98, 2)
                                 logger.warning(
-                                    f"[US 주문 체크] {symbol} 매도 적극지정가 폴백 — "
-                                    f"{p_qty}주 @ ${_fp:.2f}"
+                                    f"[US 주문 체크] {symbol} 매도 적극지정가 폴백 "
+                                    f"({self._sell_retry_count[symbol]}/3) — {p_qty}주 @ ${_fp:.2f}"
                                 )
                                 fallback = await eng.broker.submit_sell_order(
                                     symbol, p_exchange, p_qty, price=_fp,
@@ -2111,7 +2156,7 @@ class USScheduler:
                                         "qty": p_qty,
                                         "price": _fp,
                                         "strategy": pending.get("strategy", ""),
-                                        "reason": f"aggressive_limit({pending.get('reason', '')})",
+                                        "reason": f"sell_fallback_{self._sell_retry_count[symbol]}({pending.get('reason', '')})",
                                         "exchange": p_exchange,
                                         "submitted_at": datetime.now(),
                                     }
@@ -2124,7 +2169,7 @@ class USScheduler:
                                     # 긴급 알림
                                     asyncio.create_task(send_alert(
                                         f"[US] 긴급: 매도 실패\n"
-                                        f"{symbol} {p_qty}주 — 지정가 취소 + 시장가 모두 실패\n"
+                                        f"{symbol} {p_qty}주 — 지정가 취소 + 폴백 모두 실패\n"
                                         f"수동 확인 필요"
                                     ))
                     else:
@@ -2293,6 +2338,9 @@ class USScheduler:
                 f"[US 체결] 매도 {symbol} {filled_qty}주 @ ${filled_price:.2f} "
                 f"(사유: {pending.get('reason', '')})"
             )
+            # 매도 폴백 재시도 카운터 초기화
+            if hasattr(self, '_sell_retry_count'):
+                self._sell_retry_count.pop(symbol, None)
 
             # 텔레그램 매도 체결 알림
             entry_price = float(pos.avg_price) if pos else 0
@@ -2411,7 +2459,7 @@ class USScheduler:
             await asyncio.sleep(30)
 
     async def _eod_close(self):
-        """DAY 타임호라이즌 포지션 시장가 전량 청산"""
+        """DAY 타임호라이즌 포지션 전량 청산 (aggressive limit)"""
         eng = self.engine
         day_strategies = {s.strategy_type.value for s in eng.strategies
                          if s.time_horizon == TimeHorizon.DAY}
@@ -2422,11 +2470,20 @@ class USScheduler:
 
             if pos.strategy in day_strategies or pos.time_horizon == TimeHorizon.DAY:
                 exchange = await self._get_exchange(symbol)
-                logger.info(f"[US EOD] {symbol} DAY 포지션 시장가 청산")
 
-                # 시장가 주문 (price=0)
+                # KIS US API는 시장가(price=0) 미지원 → aggressive limit (-2%)
+                sell_price = float(pos.current_price) if pos.current_price and pos.current_price > 0 else 0
+                if sell_price <= 0:
+                    quote = await eng.broker.get_quote(symbol, exchange)
+                    sell_price = quote.get("price", 0)
+                if sell_price <= 0:
+                    logger.error(f"[US EOD] {symbol} 현재가 조회 실패 → 청산 스킵")
+                    continue
+                sell_price = round(sell_price * 0.98, 2)  # -2% aggressive limit
+                logger.info(f"[US EOD] {symbol} DAY 포지션 청산 @ ${sell_price:.2f} (aggressive limit)")
+
                 result = await eng.broker.submit_sell_order(
-                    symbol, exchange, pos.quantity, price=0
+                    symbol, exchange, pos.quantity, price=sell_price
                 )
                 if result.get("success"):
                     order_no = result.get("order_no", "").strip()
@@ -2434,13 +2491,13 @@ class USScheduler:
                         order_no = f"local-{uuid.uuid4().hex[:12]}"
                     eng._pending_orders[order_no] = {
                         "symbol": symbol, "side": "sell", "qty": pos.quantity,
-                        "price": 0, "strategy": pos.strategy or "",
+                        "price": sell_price, "strategy": pos.strategy or "",
                         "reason": "eod_close", "exchange": exchange,
                         "submitted_at": datetime.now(),
                     }
                     eng._pending_symbols.add(symbol)
                 else:
-                    logger.error(f"[US EOD] {symbol} 시장가 청산 실패: {result.get('message')}")
+                    logger.error(f"[US EOD] {symbol} 청산 실패: {result.get('message')}")
 
     # ============================================================
     # 태스크 6: Heartbeat

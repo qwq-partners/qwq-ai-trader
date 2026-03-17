@@ -88,9 +88,13 @@ class RSI2ReversalStrategy(BaseStrategy):
                 if atr is not None and atr > 0:
                     stop_pct = max(3.0, min(7.0, atr * 2.0))     # 2×ATR, 3~7% 범위
                     target_pct = max(5.0, min(15.0, atr * 4.0))   # 4×ATR, 5~15% 범위
-                    candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
-                    candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
                     atr_pct_value = atr
+                else:
+                    # ATR 미제공 시 기본값 (R:R 2:1 보장)
+                    stop_pct = 5.0
+                    target_pct = 10.0
+                candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
+                candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
                 # R/R 비율 필터
                 if not self.check_rr_ratio(

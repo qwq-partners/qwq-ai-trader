@@ -263,7 +263,7 @@ class RiskManager:
         """
         equity = portfolio.total_equity
         if equity <= 0:
-            return False
+            return True  # equity 0 이하 → 거래 차단 (안전 장치)
 
         # effective_daily_pnl = 실현 + (현재 미실현 - 시작 미실현)
         effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)

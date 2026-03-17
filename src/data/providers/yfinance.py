@@ -132,6 +132,7 @@ class YFinanceProvider(DataProvider):
                 'sector': info.get('sector', ''),
                 'industry': info.get('industry', ''),
                 'market_cap': info.get('marketCap', 0),
+                'exchange': info.get('exchange', ''),
             }
         except Exception as e:
             logger.debug(f"No info for {symbol}: {e}")
