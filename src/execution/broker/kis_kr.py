@@ -1488,9 +1488,12 @@ class KISBroker(BaseBroker):
         """
         과거 일봉 OHLCV 데이터 조회
 
+        NOTE: KIS FHKST03010100 API는 1회 최대 100행 반환.
+              days > 100인 경우 end_date를 당겨가며 페이지네이션 처리.
+
         Args:
             symbol: 종목코드
-            days: 조회 일수 (기본 60일)
+            days: 조회 거래일수 (기본 60일)
 
         Returns:
             일봉 데이터 리스트 (오래된 순서)
@@ -1502,54 +1505,86 @@ class KISBroker(BaseBroker):
         try:
             tr_id = "FHKST03010100"
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
-
+            # 충분히 먼 과거로 시작일 고정 (페이지네이션이 여기까지 도달하면 중단)
+            earliest_date = (datetime.now() - timedelta(days=int(days * 1.6) + 30)).strftime("%Y%m%d")
             end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=days + 30)).strftime("%Y%m%d")
+            all_rows: List[Dict[str, Any]] = []
+            max_pages = 5  # 안전 상한 (100행×5=500거래일)
 
-            params = {
-                "fid_cond_mrkt_div_code": "J",
-                "fid_input_iscd": symbol.zfill(6),
-                "fid_input_date_1": start_date,
-                "fid_input_date_2": end_date,
-                "fid_period_div_code": "D",  # 일봉
-                "fid_org_adj_prc": "1",  # 수정주가 반영 (액면분할/무상증자 등)
-            }
+            for _ in range(max_pages):
+                params = {
+                    "fid_cond_mrkt_div_code": "J",
+                    "fid_input_iscd": symbol.zfill(6),
+                    "fid_input_date_1": earliest_date,
+                    "fid_input_date_2": end_date,
+                    "fid_period_div_code": "D",  # 일봉
+                    "fid_org_adj_prc": "1",  # 수정주가 반영
+                }
 
-            data = await self._api_get(url, tr_id, params)
+                data = await self._api_get(url, tr_id, params)
 
-            rt_cd = data.get("rt_cd", "")
-            if str(rt_cd) != "0":
-                msg = data.get("msg1", "")
-                logger.warning(f"일봉 조회 실패 ({symbol}): {msg}")
-                return []
+                rt_cd = data.get("rt_cd", "")
+                if str(rt_cd) != "0":
+                    msg = data.get("msg1", "")
+                    logger.warning(f"일봉 조회 실패 ({symbol}): {msg}")
+                    break
 
-            output2 = data.get("output2", [])
-            if not output2:
-                return []
+                output2 = data.get("output2", [])
+                if not output2:
+                    break
 
-            result = []
-            for item in output2:
-                try:
-                    close_p = float(item.get("stck_clpr", "0") or "0")
-                    if close_p <= 0:
+                page_rows: List[Dict[str, Any]] = []
+                for item in output2:
+                    try:
+                        close_p = float(item.get("stck_clpr", "0") or "0")
+                        if close_p <= 0:
+                            continue
+                        page_rows.append({
+                            "date": item.get("stck_bsop_date", ""),
+                            "open": float(item.get("stck_oprc", "0") or "0"),
+                            "high": float(item.get("stck_hgpr", "0") or "0"),
+                            "low": float(item.get("stck_lwpr", "0") or "0"),
+                            "close": close_p,
+                            "volume": int(item.get("acml_vol", "0") or "0"),
+                            "value": int(item.get("acml_tr_pbmn", "0") or "0"),
+                        })
+                    except (ValueError, TypeError):
                         continue
-                    result.append({
-                        "date": item.get("stck_bsop_date", ""),
-                        "open": float(item.get("stck_oprc", "0") or "0"),
-                        "high": float(item.get("stck_hgpr", "0") or "0"),
-                        "low": float(item.get("stck_lwpr", "0") or "0"),
-                        "close": close_p,
-                        "volume": int(item.get("acml_vol", "0") or "0"),
-                        "value": int(item.get("acml_tr_pbmn", "0") or "0"),
-                    })
-                except (ValueError, TypeError):
-                    continue
 
-            # 오래된 순서로 정렬
-            result.sort(key=lambda x: x["date"])
+                all_rows.extend(page_rows)
 
-            # 요청 일수만큼 자르기
-            return result[-days:]
+                # 충분히 모았으면 중단
+                if len(all_rows) >= days:
+                    break
+
+                # 다음 페이지: 이번 페이지 중 가장 오래된 날짜 하루 전으로 end_date 조정
+                if page_rows:
+                    oldest_in_page = min(r["date"] for r in page_rows)
+                    # oldest_in_page 전날로 end_date 설정
+                    prev_day = (
+                        datetime.strptime(oldest_in_page, "%Y%m%d") - timedelta(days=1)
+                    ).strftime("%Y%m%d")
+                    if prev_day < earliest_date:
+                        break  # 더 이상 조회할 범위 없음
+                    end_date = prev_day
+                    await asyncio.sleep(0.2)  # API 레이트 리밋
+                else:
+                    break
+
+            if not all_rows:
+                return []
+
+            # 중복 제거 + 오래된 순서 정렬
+            seen: set = set()
+            unique: List[Dict[str, Any]] = []
+            for r in all_rows:
+                if r["date"] not in seen:
+                    seen.add(r["date"])
+                    unique.append(r)
+            unique.sort(key=lambda x: x["date"])
+
+            # 요청 거래일수만큼 자르기
+            return unique[-days:]
 
         except Exception as e:
             logger.error(f"일봉 조회 오류 ({symbol}): {e}")
