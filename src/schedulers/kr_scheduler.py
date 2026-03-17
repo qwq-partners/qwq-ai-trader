@@ -335,7 +335,7 @@ class KRScheduler:
                     symbol=symbol,
                     side=OrderSide.SELL,
                     strength=SignalStrength.STRONG,
-                    strategy=StrategyType(position.strategy) if position.strategy else StrategyType.SEPA_TREND,
+                    strategy=(StrategyType(position.strategy) if position.strategy and position.strategy in {e.value for e in StrategyType} else StrategyType.SEPA_TREND),
                     price=current_price,
                     score=100.0,
                     confidence=1.0,
@@ -3673,16 +3673,17 @@ JSON:
             logger.error(f"[수동매수] 오류: {e}")
 
     async def run_core_rebalance_scheduler(self):
-        """코어홀딩 월초 리밸런싱 스케줄러
+        """코어홀딩 리밸런싱 + 빈 슬롯 즉시 매수 스케줄러
 
-        매월 첫 영업일 09:01~09:04에 리밸런싱 실행 (내부에서 스캔 포함).
-        실패 시 09:30, 10:00에 재시도.
+        1) 매월 첫 영업일: 풀 리밸런싱 (교체/매도/매수 판단)
+        2) 매일 장중: 코어 포지션이 비었거나 예산 여유 시 즉시 매수
         """
         from datetime import date, timedelta
         from src.core.engine import is_kr_market_holiday
 
         bot = self.bot
         last_rebalance_month: Optional[str] = None
+        last_fill_date: Optional[str] = None  # 일일 빈 슬롯 매수 추적
 
         # 상태 파일에서 마지막 리밸런싱 월 로드
         try:
@@ -3690,14 +3691,18 @@ JSON:
             last_rb = core_state.get("last_rebalance", "")
             if last_rb:
                 last_rebalance_month = last_rb[:7]  # "YYYY-MM"
+            last_fill_date = core_state.get("last_fill_date")
         except Exception:
             pass
 
-        logger.info("[코어홀딩스케줄러] 시작")
+        logger.info("[코어홀딩스케줄러] 시작 (월초 리밸런싱 + 빈슬롯 즉시매수)")
 
         # 리밸런싱 실행 윈도우 (시, 분시작, 분끝)
         # 09:05 시작: 기존 배치 실행(09:01)과 충돌 방지
         rebalance_windows = [(9, 5, 9), (9, 30, 34), (10, 0, 4), (13, 0, 4)]
+
+        # 빈 슬롯 매수 윈도우 (월초가 아닌 날에도 실행)
+        fill_windows = [(9, 10, 14), (10, 0, 4), (13, 30, 34)]
 
         while True:
             try:
@@ -3705,50 +3710,109 @@ JSON:
 
                 now = datetime.now()
                 today = now.date()
+                today_str = today.isoformat()
                 current_month = today.strftime("%Y-%m")
 
-                # 이미 이번 달 리밸런싱 완료
-                if last_rebalance_month == current_month:
+                # 영업일/공휴일 체크
+                if today.weekday() >= 5 or is_kr_market_holiday(today):
                     continue
 
                 # 코어홀딩 설정
                 core_cfg = bot.batch_analyzer._config.get("core_holding", {})
+                max_core_positions = core_cfg.get("max_positions", 3)
                 rebalance_day = core_cfg.get("rebalance_day", 1)
 
-                # 월초 첫 영업일 판단
-                check_date = date(today.year, today.month, min(rebalance_day, 28))
-                first_biz_day = None
-                for delta in range(0, 7):
-                    candidate_date = check_date + timedelta(days=delta)
-                    if candidate_date.month != today.month:
-                        break
-                    if candidate_date.weekday() < 5 and not is_kr_market_holiday(candidate_date):
-                        first_biz_day = candidate_date
-                        break
-
-                if first_biz_day is None or today != first_biz_day:
+                # 현재 코어 포지션 수 확인
+                portfolio = bot.engine.portfolio if hasattr(bot, 'engine') else None
+                if portfolio is None:
                     continue
+                core_count = sum(
+                    1 for p in portfolio.positions.values()
+                    if p.strategy == "core_holding"
+                )
 
-                # 리밸런싱 실행 윈도우 체크 (실패 시 다음 윈도우에서 재시도)
-                in_window = False
-                for wh, wm_start, wm_end in rebalance_windows:
-                    if now.hour == wh and wm_start <= now.minute < wm_end:
-                        in_window = True
-                        break
+                # ── 1) 월초 풀 리밸런싱 (기존 로직) ──
+                is_monthly_rebalance = False
+                if last_rebalance_month != current_month:
+                    check_date = date(today.year, today.month, min(rebalance_day, 28))
+                    first_biz_day = None
+                    for delta in range(0, 7):
+                        candidate_date = check_date + timedelta(days=delta)
+                        if candidate_date.month != today.month:
+                            break
+                        if candidate_date.weekday() < 5 and not is_kr_market_holiday(candidate_date):
+                            first_biz_day = candidate_date
+                            break
 
-                if not in_window:
-                    continue
+                    if first_biz_day is not None and today == first_biz_day:
+                        in_window = False
+                        for wh, wm_start, wm_end in rebalance_windows:
+                            if now.hour == wh and wm_start <= now.minute < wm_end:
+                                in_window = True
+                                break
 
-                logger.info(f"[코어홀딩스케줄러] 월초 리밸런싱 실행 ({now.hour}:{now.minute:02d})")
-                try:
-                    success = await bot.batch_analyzer.execute_core_rebalance()
-                    if success:
-                        last_rebalance_month = current_month
-                        logger.info("[코어홀딩스케줄러] 리밸런싱 성공 완료")
-                    else:
-                        logger.warning("[코어홀딩스케줄러] 리밸런싱 실패 → 다음 윈도우 재시도")
-                except Exception as e:
-                    logger.error(f"[코어홀딩스케줄러] 리밸런싱 오류 (다음 윈도우 재시도): {e}", exc_info=True)
+                        if in_window:
+                            is_monthly_rebalance = True
+                            logger.info(f"[코어홀딩스케줄러] 월초 리밸런싱 실행 ({now.hour}:{now.minute:02d})")
+                            try:
+                                success = await bot.batch_analyzer.execute_core_rebalance()
+                                if success:
+                                    last_rebalance_month = current_month
+                                    last_fill_date = today_str  # 리밸런싱 날은 추가 매수 불필요
+                                    logger.info("[코어홀딩스케줄러] 리밸런싱 성공 완료")
+                                else:
+                                    logger.warning("[코어홀딩스케줄러] 리밸런싱 실패 → 다음 윈도우 재시도")
+                            except Exception as e:
+                                logger.error(f"[코어홀딩스케줄러] 리밸런싱 오류 (다음 윈도우 재시도): {e}", exc_info=True)
+
+                # ── 2) 빈 슬롯 즉시 매수 (코어 미보유 또는 슬롯 여유 시) ──
+                if not is_monthly_rebalance and core_count < max_core_positions:
+                    # 오늘 이미 빈슬롯 매수 시도했으면 스킵
+                    if last_fill_date == today_str:
+                        continue
+
+                    # 매수 윈도우 체크
+                    in_fill_window = False
+                    for wh, wm_start, wm_end in fill_windows:
+                        if now.hour == wh and wm_start <= now.minute < wm_end:
+                            in_fill_window = True
+                            break
+                    if not in_fill_window:
+                        continue
+
+                    # 코어 예산 여유 확인
+                    equity = portfolio.total_equity
+                    if equity <= 0:
+                        continue
+                    alloc = getattr(bot.engine.config, 'risk', None)
+                    core_alloc_pct = 30.0  # 기본값
+                    if alloc and hasattr(alloc, 'strategy_allocation'):
+                        core_alloc_pct = alloc.strategy_allocation.get("core_holding", 30.0)
+                    core_budget = equity * Decimal(str(core_alloc_pct / 100))
+                    current_core_value = portfolio.get_strategy_allocation("core_holding")
+                    remaining_budget = core_budget - current_core_value
+                    min_position_value = Decimal(str(core_cfg.get("min_position_value", 200000)))
+
+                    if remaining_budget < min_position_value:
+                        continue
+
+                    empty_slots = max_core_positions - core_count
+                    logger.info(
+                        f"[코어홀딩스케줄러] 빈슬롯 매수 시도: {empty_slots}슬롯 비어있음, "
+                        f"예산 잔여 {remaining_budget:,.0f}원 ({now.hour}:{now.minute:02d})"
+                    )
+                    try:
+                        success = await bot.batch_analyzer.execute_core_rebalance()
+                        if success:
+                            last_fill_date = today_str
+                            logger.info("[코어홀딩스케줄러] 빈슬롯 매수 성공")
+                            bot.batch_analyzer._save_core_state({"last_fill_date": today_str})
+                        else:
+                            # 실패 시 last_fill_date 미설정 → 다음 윈도우에서 재시도
+                            logger.info("[코어홀딩스케줄러] 빈슬롯 매수 실패 (후보 없음 등) → 다음 윈도우 재시도")
+                    except Exception as e:
+                        # 예외 시에도 재시도 허용 (last_fill_date 미설정)
+                        logger.error(f"[코어홀딩스케줄러] 빈슬롯 매수 오류: {e}", exc_info=True)
 
             except asyncio.CancelledError:
                 break
