@@ -366,6 +366,9 @@ us:
     max_price: 200.0
     min_avg_volume_usd: 5000000
     min_market_cap_mm: 300
+    excluded_symbols:
+      - IXC   # 해외ETP 거래 미신청 계좌 — 매수불가
+      - GUSH  # 해외ETP 거래 미신청 계좌 — 매수불가
 
   live:
     broker: kis

@@ -1045,7 +1045,14 @@ class UnifiedTradingBot:
                 # 유니버스 로드
                 pools = us_cfg.get("universe", {}).get("pools", ["sp500"])
                 us_engine._universe = us_engine.universe_mgr.get_universe(pools)
-                logger.info(f"[US] 유니버스: {len(us_engine._universe)} 종목")
+                # 영구 제외 종목 필터 (해외ETP 미신청 등 계좌 제약 종목)
+                _excluded = set(us_cfg.get("universe", {}).get("excluded_symbols", []))
+                if _excluded:
+                    _before = len(us_engine._universe)
+                    us_engine._universe = [s for s in us_engine._universe if s not in _excluded]
+                    logger.info(f"[US] 유니버스 제외: {sorted(_excluded)} ({_before} → {len(us_engine._universe)} 종목)")
+                else:
+                    logger.info(f"[US] 유니버스: {len(us_engine._universe)} 종목")
             except Exception as e:
                 logger.warning(f"[US] 스크리너/유니버스 초기화 실패 (무시): {e}")
                 us_engine.screener = None
