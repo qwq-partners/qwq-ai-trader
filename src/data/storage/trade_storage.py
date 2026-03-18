@@ -239,10 +239,11 @@ class TradeStorage:
         market_context: Dict[str, Any] = None,
         theme_info: Dict[str, Any] = None,
         market: str = "KR",
+        entry_tags: list = None,
     ) -> TradeRecord:
         """진입 기록: 캐시 + JSON + DB큐"""
         # 1) 캐시 + JSON (동기)
-        trade = self._journal.record_entry(
+        _journal_kwargs = dict(
             trade_id=trade_id,
             symbol=symbol,
             name=name,
@@ -255,6 +256,11 @@ class TradeStorage:
             market_context=market_context,
             theme_info=theme_info,
         )
+        if entry_tags is not None and hasattr(self._journal, 'record_entry'):
+            import inspect
+            if 'entry_tags' in inspect.signature(self._journal.record_entry).parameters:
+                _journal_kwargs['entry_tags'] = entry_tags
+        trade = self._journal.record_entry(**_journal_kwargs)
 
         # 2) DB 큐 — trades INSERT
         self._enqueue(
@@ -905,6 +911,25 @@ class TradeStorage:
                     pos = engine.portfolio.positions.get(sym)
                     if pos and hasattr(pos, 'strategy') and pos.strategy:
                         strategy = str(pos.strategy.value) if hasattr(pos.strategy, 'value') else str(pos.strategy)
+
+                # core_holding_state.json에서 코어홀딩 전략 확인 (엔진 포지션 없을 때 폴백)
+                if strategy == "momentum_breakout":
+                    try:
+                        import json as _json
+                        from pathlib import Path as _Path
+                        _state_file = _Path.home() / ".cache" / "ai_trader" / "core_holding_state.json"
+                        if _state_file.exists():
+                            _state = _json.loads(_state_file.read_text())
+                            _bought = _state.get("bought", [])
+                            # 현재 코어 포지션 목록도 확인
+                            _core_positions = [
+                                p_sym for p_sym, p in (engine.portfolio.positions.items() if engine else {})
+                                if getattr(p, 'strategy', '') in ('core_holding', 'CORE_HOLDING')
+                            ]
+                            if sym in _bought or sym in _core_positions:
+                                strategy = "core_holding"
+                    except Exception:
+                        pass
                 self.record_entry(
                     trade_id=trade_id,
                     symbol=sym,
