@@ -256,10 +256,8 @@ class TradeStorage:
             market_context=market_context,
             theme_info=theme_info,
         )
-        if entry_tags is not None and hasattr(self._journal, 'record_entry'):
-            import inspect
-            if 'entry_tags' in inspect.signature(self._journal.record_entry).parameters:
-                _journal_kwargs['entry_tags'] = entry_tags
+        if entry_tags is not None:
+            _journal_kwargs['entry_tags'] = entry_tags
         trade = self._journal.record_entry(**_journal_kwargs)
 
         # 2) DB 큐 — trades INSERT

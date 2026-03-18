@@ -864,14 +864,14 @@ class USScheduler:
         submitted = 0
         _consecutive_fund_fail = 0  # 연속 자금 부족 실패 카운터
 
-        for sig in signals:
+        for _sig_idx, sig in enumerate(signals):
             if submitted >= eng._max_signals_per_cycle:
                 break
             # 연속 3건 자금 부족 → 나머지 시그널 조기 중단 (API 호출 낭비 방지)
             if _consecutive_fund_fail >= 3:
                 logger.info(
                     f"[US 스크리닝] 자금 부족 연속 {_consecutive_fund_fail}건 → "
-                    f"나머지 {len(signals) - signals.index(sig)}건 스킵"
+                    f"나머지 {len(signals) - _sig_idx}건 스킵"
                 )
                 break
             success = await self._process_signal(sig)
@@ -1466,20 +1466,19 @@ class USScheduler:
             eng._pending_symbols.add(symbol)
 
             # 당일 매도 종목 → 재매수 차단 + 파일 영속화 (익절/손절 무관)
-            if True:
-                stopped = getattr(eng, "_stopped_today", set())
-                stopped.add(symbol)
-                try:
-                    import json as _json
-                    from pathlib import Path as _Path
-                    _cache_dir = _Path.home() / ".cache" / "ai_trader_us"
-                    _cache_dir.mkdir(parents=True, exist_ok=True)
-                    _today_str = datetime.now().strftime("%Y%m%d")
-                    _stopped_file = _cache_dir / f"stopped_today_{_today_str}.json"
-                    _stopped_file.write_text(_json.dumps({"symbols": sorted(stopped)}))
-                    logger.info(f"[US 재매수차단] {symbol} 당일 청산 등록 — {sorted(stopped)}")
-                except Exception as _e:
-                    logger.warning(f"[US 재매수차단] 파일 저장 실패 (무시): {_e}")
+            stopped = getattr(eng, "_stopped_today", set())
+            stopped.add(symbol)
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                _cache_dir = _Path.home() / ".cache" / "ai_trader_us"
+                _cache_dir.mkdir(parents=True, exist_ok=True)
+                _today_str = datetime.now().strftime("%Y%m%d")
+                _stopped_file = _cache_dir / f"stopped_today_{_today_str}.json"
+                _stopped_file.write_text(_json.dumps({"symbols": sorted(stopped)}))
+                logger.info(f"[US 재매수차단] {symbol} 당일 청산 등록 — {sorted(stopped)}")
+            except Exception as _e:
+                logger.warning(f"[US 재매수차단] 파일 저장 실패 (무시): {_e}")
 
             logger.info(
                 f"[US 매도 주문] {symbol} {sell_qty}/{position.quantity}주 — {reason}"
@@ -2041,8 +2040,8 @@ class USScheduler:
                         eng._pending_symbols.discard(symbol)
                         del eng._pending_orders[order_no]
                         continue
-                    elif expected_qty and pos.quantity < pending.get("orig_qty", pos.quantity + expected_qty):
-                        # 부분 매도 체결 — 수량 감소 확인 (orig_qty가 있을 때만)
+                    elif expected_qty and "orig_qty" in pending and pos.quantity < pending["orig_qty"]:
+                        # 부분 매도 체결 — 수량 감소 확인 (orig_qty 기록된 주문만)
                         logger.info(
                             f"[US 주문 체크] {order_no} ({symbol}) "
                             f"매도 주문 — 수량 감소 확인 ({pos.quantity}주 남음), 체결로 간주"
@@ -2106,7 +2105,6 @@ class USScheduler:
                                 f"[US 주문 체크] {symbol} 매도 취소 → stage 롤백"
                             )
                         # 폴백 재시도 횟수 제한 (최대 3회)
-                        _retry_key = f"sell_fallback_{symbol}"
                         _retry_cnt = getattr(self, '_sell_retry_count', {})
                         if not hasattr(self, '_sell_retry_count'):
                             self._sell_retry_count = {}

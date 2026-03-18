@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-18 — 커밋 리뷰 P1/P2 수정 5건
+
+### P1: 부분 매도 체결 오탐 (`us_scheduler.py:2044`)
+- **문제**: `orig_qty` 없는 구버전 pending에서 fallback `pos.quantity + expected_qty` → 항상 True → 30초 후 오탐
+- **수정**: `"orig_qty" in pending` 존재 시에만 부분 매도 감지
+
+### P2: 코드 품질 4건
+- `_retry_key` 미사용 변수 제거 (`us_scheduler.py:2109`)
+- `inspect.signature` → 직접 kwarg 전달로 단순화 (`trade_storage.py:259`)
+- `if True:` 불필요한 감싸기 제거 + 들여쓰기 정리 (`us_scheduler.py:1469`)
+- `signals.index(sig)` O(n) → `enumerate` O(1) (`us_scheduler.py:867`)
+
 ## 2026-03-18 — 일일 리뷰 개선 2건
 
 ### P1: KR entry_signal_score 전량 0 기록 버그 (`kr_scheduler.py:1364`)
