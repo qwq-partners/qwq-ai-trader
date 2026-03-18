@@ -3769,7 +3769,7 @@ JSON:
         rebalance_windows = [(9, 5, 9), (9, 30, 34), (10, 0, 4), (13, 0, 4)]
 
         # 빈 슬롯 매수 윈도우 (월초가 아닌 날에도 실행)
-        fill_windows = [(9, 10, 14), (10, 0, 4), (13, 30, 34)]
+        fill_windows = [(9, 10, 14), (10, 0, 4), (13, 30, 34), (15, 0, 10)]
 
         while True:
             try:
@@ -3871,9 +3871,33 @@ JSON:
                     try:
                         success = await bot.batch_analyzer.execute_core_rebalance()
                         if success:
-                            last_fill_date = today_str
-                            logger.info("[코어홀딩스케줄러] 빈슬롯 매수 성공")
-                            bot.batch_analyzer._save_core_state({"last_fill_date": today_str})
+                            # ── 실제 주문 제출 여부 검증 ──
+                            # 포지션 수 재확인 + pending 코어 주문 확인
+                            await asyncio.sleep(0.5)  # 이벤트 루프 처리 대기
+                            new_core_count = sum(
+                                1 for p in portfolio.positions.values()
+                                if p.strategy == "core_holding"
+                            )
+                            pending_core = sum(
+                                1 for sym, info in getattr(bot.engine, '_pending_orders', {}).items()
+                                if info.get('strategy') == 'core_holding'
+                                   or getattr(portfolio.positions.get(sym), 'strategy', '') == 'core_holding'
+                            )
+                            actually_filled = (new_core_count > core_count) or (pending_core > 0)
+                            if actually_filled:
+                                last_fill_date = today_str
+                                logger.info(
+                                    f"[코어홀딩스케줄러] 빈슬롯 매수 성공 "
+                                    f"(포지션 {core_count}→{new_core_count}, pending={pending_core})"
+                                )
+                                bot.batch_analyzer._save_core_state({"last_fill_date": today_str})
+                            else:
+                                # 시그널 발행됐지만 실제 주문 미제출 (현금 부족 등)
+                                # → last_fill_date 미설정, 다음 윈도우에서 재시도
+                                logger.warning(
+                                    f"[코어홀딩스케줄러] 빈슬롯 매수 미체결 "
+                                    f"(포지션 변화 없음, pending=0) → 다음 윈도우 재시도"
+                                )
                         else:
                             # 실패 시 last_fill_date 미설정 → 다음 윈도우에서 재시도
                             logger.info("[코어홀딩스케줄러] 빈슬롯 매수 실패 (후보 없음 등) → 다음 윈도우 재시도")
