@@ -515,8 +515,22 @@ class UnifiedEngine:
                 return
             # 새 포지션 (BUY)
             _sector_for_pos = self._pending_sector_map.pop(symbol, None)
+
+            # 종목명 조회: pending_signal_cache → metadata.candidate_name → 봇 name_cache
+            _pos_name = ""
+            if self.risk_manager:
+                _sig_cache = getattr(self.risk_manager, '_pending_signal_cache', {})
+                _meta = _sig_cache.get(symbol, {}).get("metadata", {})
+                _pos_name = _meta.get("candidate_name", "") or _meta.get("name", "")
+            if not _pos_name:
+                # 봇 레벨 종목명 캐시 폴백 (data_collector 또는 screener)
+                _bot = getattr(self, '_bot_ref', None)
+                if _bot:
+                    _pos_name = getattr(_bot, 'stock_name_cache', {}).get(symbol, "")
+
             self.portfolio.positions[symbol] = Position(
                 symbol=symbol,
+                name=_pos_name,
                 quantity=0,
                 avg_price=Decimal("0"),
                 strategy=fill.strategy,

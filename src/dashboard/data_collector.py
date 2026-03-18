@@ -363,8 +363,28 @@ class DashboardDataCollector:
                     if ticker not in cache:
                         cache[ticker] = name
                 if sm._name_cache:
+                    # _stock_master_cache에도 저장 → 이후 TTL 갱신 시 step1에서 재사용
+                    self._stock_master_cache.update({
+                        ticker: name for name, ticker in sm._name_cache.items()
+                    })
                     self.__class__._stock_master_loaded = True
                     logger.info(f"Stock master loaded from DB: {len(sm._name_cache)} stocks")
+
+        # 6. 현재 포지션 중 name="" 종목 → _stock_master_cache 직접 보완
+        for symbol, pos in portfolio.positions.items():
+            if symbol not in cache and symbol in self._stock_master_cache:
+                cache[symbol] = self._stock_master_cache[symbol]
+
+        # 7. batch_analyzer CoreScreener 최근 스캔 결과 반영
+        ba = getattr(self.bot, 'batch_analyzer', None)
+        if ba:
+            cs = getattr(ba, '_core_screener', None)
+            if cs:
+                for cand in getattr(cs, '_last_candidates', []):
+                    sym = getattr(cand, 'symbol', None)
+                    nm  = getattr(cand, 'name', None)
+                    if sym and nm and nm != sym and sym not in cache:
+                        cache[sym] = nm
 
         self._name_cache = cache
         self._name_cache_updated = now

@@ -91,6 +91,9 @@ class CoreScreener:
                 f"{c.score:.1f}점 ({', '.join(c.reasons[:3])})"
             )
 
+        # 대시보드 종목명 조회용 캐시 (data_collector._build_name_cache step7에서 사용)
+        self._last_candidates = scored
+
         return scored
 
     async def _build_universe(self) -> List[Dict[str, Any]]:
