@@ -207,11 +207,13 @@ class USScheduler:
         except Exception as e:
             logger.debug(f"[US 동기화] 상태 캐시 저장 실패: {e}")
 
-    async def _reconcile_ghost_us_trades(self, kis_symbols: set):
+    async def _reconcile_ghost_us_trades(self, kis_symbols: set, kis_positions: list = None):
         """봇 재시작 시 portfolio에 없고 KIS에도 없는 미결 US 거래 자동 청산 기록.
 
         원인: 포지션이 KIS에서 매도됐지만 재시작으로 portfolio가 초기화돼
         sync_closed 루프가 거치지 않는 경우.
+
+        kis_positions: KIS 실제 포지션 리스트 (수량 불일치 처리에 사용)
         """
         eng = self.engine
         ts = getattr(eng, 'trade_storage', None)
@@ -303,6 +305,64 @@ class USScheduler:
                     f"[US Reconcile] {sym} ghost 거래 청산 기록: "
                     f"trade={trade_id} exit=${exit_price:.2f}"
                 )
+
+            # ── 2. 수량 불일치 처리: KIS qty < DB total qty (재시작 누적 SYNC_ 레코드 정리) ──
+            # 예: ADEA 3개 레코드(1+1+4=6주) → KIS 1주 → 오래된 레코드 순서로 close
+            if kis_positions:
+                kis_qty_map = {kp["symbol"]: int(kp["qty"]) for kp in kis_positions}
+                # symbol별 DB 오픈 레코드 그룹화
+                sym_db_map: dict = {}
+                for row in rows:
+                    sym = row['symbol']
+                    if sym not in kis_symbols:
+                        continue  # 이미 1번(ghost)에서 처리됨
+                    sym_db_map.setdefault(sym, []).append(row)
+
+                for sym, sym_rows in sym_db_map.items():
+                    if len(sym_rows) <= 1:
+                        continue  # 레코드 1개면 else branch에서 정상 처리
+                    db_total = sum(int(r['entry_quantity'] or 0) for r in sym_rows)
+                    kis_qty = kis_qty_map.get(sym, 0)
+                    if db_total <= kis_qty:
+                        continue  # 수량 일치 또는 DB가 더 적으면 스킵
+
+                    # 오래된 레코드부터 close (가장 최근 레코드는 else branch에서 관리)
+                    sym_rows_sorted = sorted(sym_rows, key=lambda r: r['entry_time'])
+                    remaining_to_close = db_total - kis_qty
+                    _now = datetime.now()
+                    for row in sym_rows_sorted:
+                        if remaining_to_close <= 0:
+                            break
+                        if row['symbol'] in portfolio_symbols:
+                            continue  # 현재 엔진이 추적 중인 레코드는 건드리지 않음
+                        trade_id = row['id']
+                        entry_price = float(row['entry_price'] or 0)
+                        row_qty = int(row['entry_quantity'] or 0)
+                        close_qty = min(row_qty, remaining_to_close)
+                        # 현재가 조회 시도
+                        _exit_price = entry_price
+                        try:
+                            q = await eng.broker.get_quote(sym)
+                            if q and q.get("price", 0) > 0:
+                                _exit_price = float(q["price"])
+                        except Exception:
+                            pass
+                        _pnl = round((_exit_price - entry_price) * close_qty, 2)
+                        _pct = round((_exit_price - entry_price) / entry_price * 100, 2) if entry_price > 0 else 0
+                        ts._enqueue(
+                            """UPDATE trades SET exit_time=$1, exit_price=$2, exit_quantity=$3,
+                               exit_reason=$4, exit_type=$5, pnl=$6, pnl_pct=$7, updated_at=$8
+                               WHERE id=$9 AND exit_time IS NULL""",
+                            (_now, _exit_price, close_qty,
+                             "sync_qty_reconcile (중복 SYNC_ 레코드 정리)", "sync_reconcile",
+                             _pnl, _pct, _now, trade_id),
+                        )
+                        remaining_to_close -= close_qty
+                        logger.info(
+                            f"[US Reconcile] {sym} 수량 초과 레코드 정리: "
+                            f"trade={trade_id} close={close_qty}주 (db_total={db_total}, kis={kis_qty})"
+                        )
+
         except Exception as e:
             logger.warning(f"[US Reconcile] ghost 거래 reconcile 오류: {e}")
 
@@ -1479,7 +1539,7 @@ class USScheduler:
         # KIS에 없고 portfolio에도 없고 pending도 아닌 open trade → sync_reconcile 청산
         if not getattr(self, '_ghost_reconcile_done', False):
             self._ghost_reconcile_done = True
-            await self._reconcile_ghost_us_trades(kis_symbols)
+            await self._reconcile_ghost_us_trades(kis_symbols, kis_positions)
 
         # ── 전략 프리로드 (재시작 후 _symbol_strategy 빈 경우 DB에서 복원) ──
         if not getattr(self, '_strategy_preload_done', False):
@@ -1536,6 +1596,40 @@ class USScheduler:
                 cached_hp = hp_cache.get(symbol, 0.0)
                 cur_price = float(kp["current_price"])
                 restored_hp = max(cached_hp, cur_price)
+
+                # ── 기존 오픈 DB 레코드 정리 (재시작 중복 SYNC_ 누적 방지) ──
+                # 동일 종목의 미결 레코드를 모두 close 후 신규 SYNC_ 1건 생성
+                if eng.trade_storage and eng.trade_storage._db_available and eng.trade_storage.pool:
+                    try:
+                        async with eng.trade_storage.pool.acquire() as _conn:
+                            _old_recs = await _conn.fetch(
+                                """SELECT id, entry_price, entry_quantity FROM trades
+                                   WHERE market='US' AND symbol=$1 AND exit_time IS NULL""",
+                                symbol,
+                            )
+                        if _old_recs:
+                            _now = datetime.now()
+                            _exit_p = cur_price or float(kp.get("avg_price") or 0)
+                            for _rec in _old_recs:
+                                _ep = float(_rec["entry_price"] or 0)
+                                _eq = int(_rec["entry_quantity"] or 0)
+                                _pnl = round((_exit_p - _ep) * _eq, 2)
+                                _pct = round((_exit_p - _ep) / _ep * 100, 2) if _ep > 0 else 0
+                                eng.trade_storage._enqueue(
+                                    """UPDATE trades SET exit_time=$1, exit_price=$2,
+                                       exit_quantity=$3, exit_reason=$4, exit_type=$5,
+                                       pnl=$6, pnl_pct=$7, updated_at=$8
+                                       WHERE id=$9 AND exit_time IS NULL""",
+                                    (_now, _exit_p, _eq,
+                                     "sync_qty_reconcile (재시작 중복 레코드 정리)", "sync_reconcile",
+                                     _pnl, _pct, _now, _rec["id"]),
+                                )
+                            logger.info(
+                                f"[US 동기화] {symbol} 기존 오픈 레코드 {len(_old_recs)}건 정리 후 신규 SYNC_ 생성"
+                            )
+                    except Exception as _e:
+                        logger.warning(f"[US 동기화] {symbol} 기존 레코드 정리 오류: {_e}")
+
                 sync_trade_id = f"SYNC_{symbol}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
                 # entry_time 복원 (캐시 → 메모리 캐시 → 현재)
                 restored_et = None
