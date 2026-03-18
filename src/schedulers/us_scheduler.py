@@ -862,13 +862,26 @@ class USScheduler:
         # 시그널 스코어 순 정렬 → 성공 N개까지 시도
         signals.sort(key=lambda s: s.score, reverse=True)
         submitted = 0
+        _consecutive_fund_fail = 0  # 연속 자금 부족 실패 카운터
 
         for sig in signals:
             if submitted >= eng._max_signals_per_cycle:
                 break
+            # 연속 3건 자금 부족 → 나머지 시그널 조기 중단 (API 호출 낭비 방지)
+            if _consecutive_fund_fail >= 3:
+                logger.info(
+                    f"[US 스크리닝] 자금 부족 연속 {_consecutive_fund_fail}건 → "
+                    f"나머지 {len(signals) - signals.index(sig)}건 스킵"
+                )
+                break
             success = await self._process_signal(sig)
             if success:
                 submitted += 1
+                _consecutive_fund_fail = 0
+            elif self._last_reject_reason == "insufficient_funds":
+                _consecutive_fund_fail += 1
+            else:
+                _consecutive_fund_fail = 0  # 다른 사유 실패는 리셋
 
         earnings_count = len(eng._earnings_today) if eng._earnings_today else 0
         logger.info(
@@ -878,6 +891,7 @@ class USScheduler:
 
     async def _process_signal(self, signal: Signal) -> bool:
         """시그널을 주문으로 변환"""
+        self._last_reject_reason = ""  # 실패 사유 추적 (screening_loop 조기 중단용)
         eng = self.engine
         symbol = signal.symbol
 
@@ -960,6 +974,7 @@ class USScheduler:
         )
         if qty <= 0:
             logger.info(f"[US 시그널] {symbol} — 사이징 0주 (자금 부족)")
+            self._last_reject_reason = "insufficient_funds"
             return False
 
         # 리스크 체크 (섹터 다각화 포함)
@@ -1059,6 +1074,9 @@ class USScheduler:
         else:
             fail_msg = result.get("message", "")
             logger.warning(f"[US 매수 주문] {symbol} 실패: {fail_msg}")
+            # 자금 부족 → 스크리닝 조기 종료용 사유 기록
+            if "주문가능금액" in fail_msg or "잔고부족" in fail_msg:
+                self._last_reject_reason = "insufficient_funds"
             # 영구 실패 코드 → 당일 블랙리스트 (재시도 차단)
             _PERMANENT_FAIL_KEYWORDS = [
                 "해외ETP 거래 미신청",

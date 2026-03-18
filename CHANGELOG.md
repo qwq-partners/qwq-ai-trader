@@ -1,5 +1,22 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-18 — 일일 리뷰 개선 2건
+
+### P1: KR entry_signal_score 전량 0 기록 버그 (`kr_scheduler.py:1364`)
+- **문제**: `getattr(bot.engine, '_pending_signal_cache', {})` — `_pending_signal_cache`는 `engine.risk_manager`에 위치하나 `engine` 자체에서 조회 → 항상 `{}` 반환 → 모든 KR 거래의 signal_score=0
+- **수정**: `getattr(bot.engine.risk_manager, '_pending_signal_cache', {})`로 올바른 경로 참조
+
+### P2: US 스크리닝 자금 부족 연속 실패 시 조기 종료 (`us_scheduler.py`)
+- **문제**: 자금 부족(25건/일) 시에도 나머지 시그널 전부 순회 → 불필요한 API 호출 낭비
+- **수정**: `_consecutive_fund_fail` 카운터 추가, 연속 3건 자금 부족 시 스크리닝 루프 break
+- **범위**: `_process_signal` 내 qty≤0 + submit_buy_order 실패("주문가능금액") 양쪽 모두 사유 기록
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/schedulers/kr_scheduler.py` | signal_cache 경로 수정 (engine → risk_manager) |
+| `src/schedulers/us_scheduler.py` | 자금 부족 연속 실패 조기 종료 + reject_reason 기록 |
+
 ## 2026-03-18 — 10라운드 코드 리뷰 P0 수정 7건
 
 ### P0-1: Cash=0 sync skip (`us_scheduler.py:1446`)

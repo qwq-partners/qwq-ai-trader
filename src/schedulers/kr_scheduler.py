@@ -1361,7 +1361,8 @@ JSON:
                                         _tid = f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
 
                                         # ── 시그널 캐시에서 메타데이터 추출 ──────────────
-                                        _sig_cache = getattr(bot.engine, '_pending_signal_cache', {})
+                                        _rm = getattr(bot.engine, 'risk_manager', None)
+                                        _sig_cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
                                         _sig_meta = _sig_cache.pop(fill.symbol, {})
                                         _sig_reason = _sig_meta.get("reason", "")
                                         _sig_metadata = _sig_meta.get("metadata", {})
