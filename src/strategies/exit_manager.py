@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from enum import Enum
 from loguru import logger
 
@@ -152,6 +152,12 @@ class ExitConfig:
     # 신고가 실패 무효화: N영업일 신고가 갱신 없음 & PnL < X% → 전량 청산 (추세 소멸)
     stale_high_days: int = 0          # 0 = 비활성화 (전략별 override 사용)
     stale_high_min_pnl_pct: float = 3.0  # 이 수익률 미만일 때만 적용
+
+    # 복합 트레일링 (MA5 + 전일저가 기반)
+    enable_composite_trailing: bool = True       # 복합 트레일링 활성화
+    composite_trail_min_stage: str = "first"     # 최소 적용 단계 (1차 익절 완료 이후)
+    composite_ma5_buffer_pct: float = 0.5        # MA5 아래 버퍼 (%) — MA5 - 0.5% 이탈 시 청산
+    composite_prev_low_enabled: bool = True      # 전일 저가 기준 활성화
 
     # End-of-day close (US day trade 전용)
     eod_close: bool = False
@@ -525,9 +531,17 @@ class ExitManager:
 
         self._persist_states()
 
-    def update_price(self, symbol: str, current_price: Decimal) -> Optional[Tuple[str, int, str]]:
+    def update_price(self, symbol: str, current_price: Decimal,
+                     market_data: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, int, str]]:
         """
         가격 업데이트 및 청산 신호 확인
+
+        Args:
+            market_data: 복합 트레일링용 시장 데이터 (선택)
+                - ma5: 5일 이동평균
+                - prev_low: 전일 저가
+                - high: 당일 고가
+                - low: 당일 저가
 
         Returns:
             (action, quantity, reason) 또는 None
@@ -675,6 +689,11 @@ class ExitManager:
                     state.highest_price = current_price
                     self._persist_states()
 
+            # 복합 트레일링 (MA5 + 전일저가 기반, 코어홀딩 제외)
+            composite_exit = self._check_composite_trailing(state, symbol, current_price, market_data)
+            if composite_exit:
+                return composite_exit
+
             # 본전 보호 (1차 익절 완료 또는 코어홀딩 — 분할 수익 확보 전 조기청산 방지)
             if state.current_stage != ExitStage.NONE or state.is_core:
                 if state.is_core:
@@ -699,6 +718,80 @@ class ExitManager:
                     state, "sell_all", state.remaining_quantity,
                     f"트레일링: 고점 대비 {trailing_pct:.2f}%"
                 )
+
+        return None
+
+    # ── 복합 트레일링 (MA5 + 전일저가) ──────────────────────────────────────
+    _COMPOSITE_STAGE_MAP = {
+        "none": ExitStage.NONE,
+        "first": ExitStage.FIRST,
+        "second": ExitStage.SECOND,
+        "third": ExitStage.THIRD,
+        "trailing": ExitStage.TRAILING,
+    }
+    _STAGE_ORDER = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND, ExitStage.THIRD, ExitStage.TRAILING]
+
+    def _check_composite_trailing(
+        self,
+        state: PositionExitState,
+        symbol: str,
+        current_price: Decimal,
+        market_data: Optional[Dict[str, Any]],
+    ) -> Optional[Tuple[str, int, str]]:
+        """복합 트레일링: MA5/전일저가 기반 기술적 지지선 청산"""
+        if not self.config.enable_composite_trailing:
+            return None
+        if state.is_core:
+            return None
+        if market_data is None:
+            return None
+
+        # 최소 적용 단계 체크
+        min_stage = self._COMPOSITE_STAGE_MAP.get(
+            self.config.composite_trail_min_stage, ExitStage.FIRST
+        )
+        cur_idx = self._STAGE_ORDER.index(state.current_stage) if state.current_stage in self._STAGE_ORDER else 0
+        min_idx = self._STAGE_ORDER.index(min_stage) if min_stage in self._STAGE_ORDER else 1
+        if cur_idx < min_idx:
+            return None
+
+        price_f = float(current_price)
+
+        # 조건 1: MA5 이탈
+        ma5 = market_data.get("ma5")
+        if ma5 is not None:
+            ma5_f = float(ma5)
+            if ma5_f > 0:
+                buffer = self.config.composite_ma5_buffer_pct
+                threshold = ma5_f * (1 - buffer / 100)
+                if price_f < threshold:
+                    logger.info(
+                        f"[ExitManager] {symbol} 복합트레일링 MA5 이탈: "
+                        f"현재가 {price_f:,.0f} < MA5({ma5_f:,.0f}) - {buffer}% = {threshold:,.0f}"
+                    )
+                    return self._create_exit(
+                        state, "sell_all", state.remaining_quantity,
+                        f"복합트레일링: MA5({ma5_f:,.0f}) - {buffer}% 이탈"
+                    )
+
+        # 조건 2: 전일저가 이탈
+        if self.config.composite_prev_low_enabled:
+            prev_low = market_data.get("prev_low")
+            day_low = market_data.get("low")
+            if prev_low is not None and day_low is not None:
+                prev_low_f = float(prev_low)
+                day_low_f = float(day_low)
+                if prev_low_f > 0 and day_low_f > 0 and day_low_f < prev_low_f:
+                    if price_f < prev_low_f:
+                        logger.info(
+                            f"[ExitManager] {symbol} 복합트레일링 전일저가 이탈: "
+                            f"현재가 {price_f:,.0f} < 전일저가 {prev_low_f:,.0f} "
+                            f"(당일저가 {day_low_f:,.0f})"
+                        )
+                        return self._create_exit(
+                            state, "sell_all", state.remaining_quantity,
+                            f"복합트레일링: 전일저가({prev_low_f:,.0f}) 이탈"
+                        )
 
         return None
 

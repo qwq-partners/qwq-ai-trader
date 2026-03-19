@@ -104,6 +104,12 @@ kr:
       stop_loss_pct: 3.0
       take_profit_pct: 8.0
       trailing_stop_pct: 2.0
+      # 진입 품질 강화
+      min_trading_value: 500000000    # 최소 거래대금 5억원
+      min_theme_breadth: 3            # 테마 내 동반 상승 최소 종목 수
+      theme_breadth_change_pct: 1.0   # 동반 상승 판정 최소 등락률 (%)
+      max_high_retreat_pct: 3.0       # 장중 고점 대비 최대 후퇴 (%)
+
 
     gap_and_go:
       enabled: false
@@ -179,6 +185,11 @@ kr:
     include_fees: true
     stale_exit_days: 5
     stale_exit_pnl_pct: 2.0
+    # 복합 트레일링 (MA5 + 전일저가 기반)
+    enable_composite_trailing: true
+    composite_trail_min_stage: "first"
+    composite_ma5_buffer_pct: 0.5
+    composite_prev_low_enabled: true
 
   batch:
     morning_scan_enabled: true

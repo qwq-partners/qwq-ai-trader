@@ -303,7 +303,7 @@ function renderExitPnlChart(byExitType) {
     const exitLabels = {
         take_profit: '익절', first_take_profit: '1차익절', second_take_profit: '2차익절',
         third_take_profit: '3차익절', stop_loss: '손절', trailing: '트레일링',
-        trailing_stop: '트레일링', breakeven: '본전', manual: '수동',
+        trailing_stop: '트레일링', breakeven: '본전', stale: '횡보청산', manual: '수동',
         kis_sync: '동기화', profit_taking: '익절', time_exit: '시간청산',
     };
 

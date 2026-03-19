@@ -169,6 +169,12 @@ class TradeStorage:
         if not exit_reason:
             return exit_type
         r = exit_reason.lower()
+        # 본전 이탈: reason에 "1차 익절" 등이 언급돼도 breakeven 우선
+        if "본전 이탈" in r:
+            return "breakeven"
+        # 횡보/추세 무효화
+        if exit_type in ("take_profit", "unknown", "", "manual") and ("횡보 청산" in r or "추세 무효화" in r):
+            return "stale"
         # take_profit → first/second/third 세분화
         if exit_type in ("take_profit", "unknown", ""):
             if "1차 익절" in r or "1차익절" in r:

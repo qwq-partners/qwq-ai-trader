@@ -150,6 +150,11 @@ class BatchAnalyzer:
         # 시장 레짐 캐시 (스캔 후 업데이트)
         self._market_regime: str = "neutral"  # "bull"|"neutral"|"caution"|"bear"
 
+        # 복합 트레일링용 캐시 (MA5, 전일저가)
+        self._ma5_cache: Dict[str, float] = {}
+        self._prev_low_cache: Dict[str, float] = {}
+        self._composite_cache_date: Optional[date] = None
+
         # 설정
         self._max_entry_slippage_pct = self._config.get("batch", {}).get(
             "max_entry_slippage_pct", 3.0
@@ -921,12 +926,63 @@ class BatchAnalyzer:
         self._pending = []
         self._save_json()
 
+    async def _refresh_composite_cache(self):
+        """복합 트레일링용 MA5/전일저가 캐시 갱신 (일 1회)"""
+        today = date.today()
+        if self._composite_cache_date == today:
+            return
+
+        symbols = list(self._engine.portfolio.positions.keys())
+        if not symbols:
+            return
+
+        try:
+            from pykrx import stock as pykrx_stock
+
+            end_date = today.strftime("%Y%m%d")
+            start_date = (today - timedelta(days=20)).strftime("%Y%m%d")
+
+            for symbol in symbols:
+                try:
+                    padded = symbol.zfill(6)
+                    df = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        pykrx_stock.get_market_ohlcv_by_date,
+                        start_date, end_date, padded,
+                    )
+                    if df is None or df.empty or len(df) < 2:
+                        continue
+
+                    prev_low = float(df["저가"].iloc[-2])
+                    if prev_low > 0:
+                        self._prev_low_cache[symbol] = prev_low
+
+                    if len(df) >= 5:
+                        ma5 = float(df["종가"].iloc[-5:].mean())
+                        if ma5 > 0:
+                            self._ma5_cache[symbol] = ma5
+                except Exception as e:
+                    logger.debug(f"[포지션모니터] {symbol} 복합캐시 실패: {e}")
+
+                await asyncio.sleep(0.1)
+
+            self._composite_cache_date = today
+            logger.info(
+                f"[포지션모니터] 복합캐시 갱신: MA5 {len(self._ma5_cache)}종목, "
+                f"전일저가 {len(self._prev_low_cache)}종목"
+            )
+        except Exception as e:
+            logger.warning(f"[포지션모니터] 복합캐시 갱신 실패 (무시): {e}")
+
     async def monitor_positions(self):
         """[매 30분] 보유 포지션 시세 갱신 + 청산 체크"""
         if not self._engine.portfolio.positions:
             return
 
         logger.debug(f"[포지션모니터] {len(self._engine.portfolio.positions)}개 포지션 체크")
+
+        # 복합 트레일링 캐시 갱신 (일 1회)
+        await self._refresh_composite_cache()
 
         # 레짐 기반 ExitManager 파라미터 동기화
         # → 구체적인 조정은 kr_scheduler._apply_regime_to_exit_manager() + REGIME_EXIT_PARAMS 에서 처리.
@@ -991,9 +1047,17 @@ class BatchAnalyzer:
                     except Exception as _rsi2e:
                         logger.debug(f"[포지션모니터] {symbol} RSI2 체크 실패 (무시): {_rsi2e}")
 
-                # ExitManager 청산 체크
+                # ExitManager 청산 체크 (복합 트레일링 데이터 포함)
                 if self._exit_manager:
-                    exit_result = self._exit_manager.update_price(symbol, current_price)
+                    _md = None
+                    if self._ma5_cache or self._prev_low_cache:
+                        _md = {
+                            "ma5": self._ma5_cache.get(symbol),
+                            "prev_low": self._prev_low_cache.get(symbol),
+                            "high": float(quote.get("high", 0)) if quote.get("high") else None,
+                            "low": float(quote.get("low", 0)) if quote.get("low") else None,
+                        }
+                    exit_result = self._exit_manager.update_price(symbol, current_price, market_data=_md)
                     if exit_result:
                         action, qty, reason = exit_result
                         logger.info(f"[포지션모니터] {symbol} 청산 시그널: {reason} ({qty}주)")

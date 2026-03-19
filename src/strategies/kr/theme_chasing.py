@@ -55,6 +55,16 @@ class ThemeChasingConfig(StrategyConfig):
     take_profit_pct: float = 3.0      # 익절
     trailing_stop_pct: float = 1.0    # 트레일링 스탑
 
+    # 거래대금 필터 (진입 품질)
+    min_trading_value: float = 500_000_000   # 최소 거래대금 5억원 (당일 누적)
+
+    # 테마 확산도 (진입 품질)
+    min_theme_breadth: int = 3               # 테마 내 동반 상승 최소 종목 수
+    theme_breadth_change_pct: float = 1.0    # 동반 상승 판정 최소 등락률 (%)
+
+    # 장중 고점 유지 (진입 품질)
+    max_high_retreat_pct: float = 3.0        # 장중 고점 대비 최대 후퇴 허용 (%)
+
     # 시간대 제한
     trading_start_time: str = "09:05" # 시작 시간
     trading_end_time: str = "15:00"   # 종료 시간
@@ -213,6 +223,49 @@ class ThemeChasingStrategy(BaseStrategy):
         if vol_ratio < self.theme_config.min_volume_ratio:
             return None
 
+        # 거래대금 필터 (유동성 확보)
+        trading_value = float(current_price) * indicators.get("volume", 0)
+        if trading_value < self.theme_config.min_trading_value:
+            logger.debug(
+                f"[테마 추종] {symbol} 거래대금 부족: "
+                f"{trading_value / 1e8:.1f}억 < {self.theme_config.min_trading_value / 1e8:.1f}억"
+            )
+            return None
+
+        # 장중 고점 대비 후퇴율 체크
+        day_high = indicators.get("high", 0)
+        retreat_pct = 0.0
+        if day_high > 0 and price > 0:
+            retreat_pct = (day_high - price) / day_high * 100
+            if retreat_pct > self.theme_config.max_high_retreat_pct:
+                logger.debug(
+                    f"[테마 추종] {symbol} 장중 고점 후퇴: "
+                    f"{retreat_pct:.1f}% > {self.theme_config.max_high_retreat_pct:.1f}%"
+                )
+                return None
+
+        # 테마 확산도: 같은 테마의 다른 종목들도 동반 상승 중인지 확인
+        theme_stocks = (
+            getattr(hot_theme, 'related_stocks', None)
+            or (hot_theme.get("related_stocks", []) if isinstance(hot_theme, dict) else [])
+        )
+        breadth_count = 0
+        for ts in theme_stocks[:10]:  # 상위 10개만 체크 (성능)
+            if ts == symbol:
+                continue
+            ts_ind = self.get_indicators(ts)
+            if ts_ind:
+                ts_change = ts_ind.get("change_1d", 0)
+                if ts_change >= self.theme_config.theme_breadth_change_pct:
+                    breadth_count += 1
+
+        if breadth_count < self.theme_config.min_theme_breadth:
+            logger.debug(
+                f"[테마 추종] {symbol} 테마 확산도 부족: "
+                f"동반상승 {breadth_count}종목 < 최소 {self.theme_config.min_theme_breadth}종목"
+            )
+            return None
+
         # 뉴스 센티멘트 필터/보너스
         news_bonus = 0.0
         news_info = ""
@@ -251,7 +304,11 @@ class ThemeChasingStrategy(BaseStrategy):
         else:
             strength = SignalStrength.NORMAL
 
-        score = self._calculate_entry_score(hot_theme_score, change_pct, vol_ratio)
+        score = self._calculate_entry_score(
+            hot_theme_score, change_pct, vol_ratio,
+            breadth_count=breadth_count, retreat_pct=retreat_pct,
+            trading_value=trading_value,
+        )
         score = max(0.0, min(score + news_bonus + supply_bonus, 100.0))
 
         if score < self.config.min_score:
@@ -312,26 +369,45 @@ class ThemeChasingStrategy(BaseStrategy):
         self,
         theme_score: float,
         change_pct: float,
-        vol_ratio: float
+        vol_ratio: float,
+        breadth_count: int = 0,
+        retreat_pct: float = 0.0,
+        trading_value: float = 0,
     ) -> float:
-        """진입 점수 계산"""
+        """진입 점수 계산 (100점 만점, 5개 항목)"""
         score = 0.0
 
-        # 테마 점수 (50점)
-        score += min(theme_score * 0.5, 50)
+        # 테마 점수 (40점)
+        score += min(theme_score * 0.4, 40)
 
-        # 등락률 (25점)
+        # 등락률 (20점)
         if 2 <= change_pct <= 5:
-            score += 25
+            score += 20
         elif 5 < change_pct <= 8:
-            score += 18
+            score += 14
         elif change_pct <= 12:
-            score += 10
+            score += 8
         else:
+            score += 4
+
+        # 거래량비율 (15점)
+        score += min(vol_ratio * 3, 15)
+
+        # 테마 확산도 (15점)
+        if breadth_count >= 5:
+            score += 15
+        elif breadth_count >= 3:
+            score += 10
+        elif breadth_count >= 1:
             score += 5
 
-        # 거래량 (25점)
-        score += min(vol_ratio * 5, 25)
+        # 장중 고점 유지도 (10점) — 후퇴가 적을수록 고점수
+        if retreat_pct <= 0.5:
+            score += 10
+        elif retreat_pct <= 1.5:
+            score += 7
+        elif retreat_pct <= 3.0:
+            score += 4
 
         return min(score, 100.0)
 

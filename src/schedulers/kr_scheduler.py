@@ -55,6 +55,11 @@ class KRScheduler:
         # 필요 시 여기에 추가하고, 실행 완료 후 비울 것
         self._manual_buy_orders = []
 
+        # 복합 트레일링용 캐시 (일봉 기반, 장중 불변)
+        self._ma5_cache: Dict[str, float] = {}        # 종목별 5일 이동평균
+        self._prev_day_low: Dict[str, float] = {}     # 종목별 전일 저가
+        self._composite_cache_date: Optional[date] = None  # 캐시 갱신 날짜
+
     def create_tasks(self):
         """모든 KR 스케줄러 태스크 생성 → 리스트 반환
 
@@ -267,7 +272,8 @@ class KRScheduler:
                     bot.exit_manager.rollback_stage(s)
                 logger.warning(f"[청산 pending] {s} 동기화 해제 (RiskManager에 없음 → 고아 pending 정리)")
 
-    async def _check_exit_signal(self, symbol: str, current_price: Decimal):
+    async def _check_exit_signal(self, symbol: str, current_price: Decimal,
+                                market_data: Optional[Dict] = None):
         """분할 익절/손절 신호 확인"""
         bot = self.bot
         if not bot.exit_manager or not bot.broker:
@@ -313,7 +319,7 @@ class KRScheduler:
             # FDR 일봉 데이터로 30분마다 체크 (정확한 RSI(2) 계산)
 
             # ExitManager.update_price() → Optional[Tuple[action, quantity, reason]]
-            exit_result = bot.exit_manager.update_price(symbol, current_price)
+            exit_result = bot.exit_manager.update_price(symbol, current_price, market_data=market_data)
 
             if exit_result:
                 action, quantity, reason = exit_result
@@ -1290,10 +1296,17 @@ JSON:
                                                 _etype = "stop_loss"
                                             elif "트레일링" in _r or "trailing" in _r.lower():
                                                 _etype = "trailing"
+                                            elif "본전 이탈" in _r or "breakeven" in _r.lower():
+                                                # 본전 이탈: reason에 "1차 익절" 언급돼도 breakeven 우선
+                                                _etype = "breakeven"
+                                            elif "횡보 청산" in _r or "추세 무효화" in _r:
+                                                _etype = "stale"
                                             elif "2차" in _r:
                                                 _etype = "second_take_profit"
                                             elif "3차" in _r:
                                                 _etype = "third_take_profit"
+                                            elif "1차" in _r:
+                                                _etype = "first_take_profit"
                                             elif "익절" in _r or "take_profit" in _r.lower():
                                                 _etype = "take_profit"
                                             else:
@@ -2367,6 +2380,58 @@ JSON:
         except asyncio.CancelledError:
             pass
 
+    async def _refresh_composite_cache(self):
+        """복합 트레일링용 MA5/전일저가 캐시 갱신 (일 1회, 장 시작 전)"""
+        today = date.today()
+        if self._composite_cache_date == today:
+            return  # 이미 갱신됨
+
+        bot = self.bot
+        symbols = list(bot.engine.portfolio.positions.keys())
+        if not symbols:
+            return
+
+        try:
+            from pykrx import stock as pykrx_stock
+
+            end_date = today.strftime("%Y%m%d")
+            # 10일치 조회 (MA5 계산 + 전일저가)
+            start_date = (today - timedelta(days=20)).strftime("%Y%m%d")
+
+            for symbol in symbols:
+                try:
+                    padded = symbol.zfill(6)
+                    df = await asyncio.to_thread(
+                        pykrx_stock.get_market_ohlcv_by_date,
+                        start_date, end_date, padded,
+                    )
+                    if df is None or df.empty or len(df) < 2:
+                        continue
+
+                    # 전일저가: 마지막에서 두 번째 행 (전일)의 저가
+                    prev_low = float(df["저가"].iloc[-2]) if len(df) >= 2 else 0
+                    if prev_low > 0:
+                        self._prev_day_low[symbol] = prev_low
+
+                    # MA5: 최근 5일 종가 평균
+                    if len(df) >= 5:
+                        ma5 = float(df["종가"].iloc[-5:].mean())
+                        if ma5 > 0:
+                            self._ma5_cache[symbol] = ma5
+
+                except Exception as e:
+                    logger.debug(f"[복합캐시] {symbol} 데이터 조회 실패: {e}")
+
+                await asyncio.sleep(0.1)  # pykrx rate limit
+
+            self._composite_cache_date = today
+            logger.info(
+                f"[복합캐시] MA5 {len(self._ma5_cache)}종목, "
+                f"전일저가 {len(self._prev_day_low)}종목 갱신 완료"
+            )
+        except Exception as e:
+            logger.warning(f"[복합캐시] 갱신 실패 (무시): {e}")
+
     async def run_rest_price_feed(self):
         """REST 폴링 시세 피드 (WebSocket 미사용 시 전략/청산 활성화)
 
@@ -2388,6 +2453,9 @@ JSON:
                     if current_session == MarketSession.CLOSED:
                         await asyncio.sleep(20)
                         continue
+
+                    # ── 복합 트레일링 캐시 갱신 (일 1회) ──────────────────────
+                    await self._refresh_composite_cache()
 
                     # ── 보유종목 시세 (항상 실행) ─────────────────────────────
                     ws_covered = set()
@@ -2441,9 +2509,15 @@ JSON:
                             )
                             await bot.engine.emit(event)
 
-                            # 보유 종목 ExitManager 청산 체크
+                            # 보유 종목 ExitManager 청산 체크 (복합 트레일링 데이터 포함)
                             if bot.exit_manager and symbol in bot.engine.portfolio.positions:
-                                await self._check_exit_signal(symbol, Decimal(str(price)))
+                                _md = {
+                                    "ma5": self._ma5_cache.get(symbol),
+                                    "prev_low": self._prev_day_low.get(symbol),
+                                    "high": quote.get("high"),
+                                    "low": quote.get("low"),
+                                }
+                                await self._check_exit_signal(symbol, Decimal(str(price)), market_data=_md)
 
                             success_count += 1
                         except Exception as e:

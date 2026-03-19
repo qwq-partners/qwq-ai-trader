@@ -1,5 +1,31 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-18 — 성과 개선 2건: 복합 트레일링 스탑 + 테마 추종 진입 품질 강화
+
+### Feature 1: 복합 트레일링 스탑 (MA5 + 전일저가)
+- **ExitManager.update_price()** 시그니처 확장: `market_data` 파라미터 추가 (하위 호환)
+- **ExitConfig** 4개 필드 추가: `enable_composite_trailing`, `composite_trail_min_stage`, `composite_ma5_buffer_pct`, `composite_prev_low_enabled`
+- **복합 트레일링 로직**: 1차 익절 이후 MA5 - 0.5% 이탈 또는 전일저가 이탈 시 전량 청산 (코어홀딩 제외)
+- **KR 스케줄러**: `_refresh_composite_cache()` — pykrx 기반 MA5/전일저가 일 1회 캐시
+- **BatchAnalyzer**: `monitor_positions()`에서도 동일 복합 트레일링 데이터 전달
+- 기존 ATR 트레일링과 OR 관계 — 어느 하나라도 발동 시 청산
+
+### Feature 2: 테마 추종 진입 품질 강화
+- **ThemeChasingConfig** 4개 필드 추가: `min_trading_value`(5억), `min_theme_breadth`(3종목), `theme_breadth_change_pct`(1%), `max_high_retreat_pct`(3%)
+- **거래대금 필터**: 당일 누적 거래대금 < 5억원 종목 차단
+- **테마 확산도**: 동일 테마 내 동반 상승 종목 3개 미만 시 차단 (고립 상승 배제)
+- **장중 고점 후퇴**: 고점 대비 3% 초과 후퇴 시 차단 (이미 꺾인 종목 배제)
+- **스코어링 재분배**: 테마 40 + 등락률 20 + 거래량 15 + 확산도 15 + 고점유지 10 = 100점
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/strategies/exit_manager.py` | ExitConfig 필드 + update_price 시그니처 + _check_composite_trailing() |
+| `src/strategies/kr/theme_chasing.py` | Config 필드 + 필터 3종 + 스코어링 확장 |
+| `src/schedulers/kr_scheduler.py` | MA5/전일저가 캐시 + _check_exit_signal market_data 전달 |
+| `src/core/batch_analyzer.py` | monitor_positions 복합캐시 + market_data 전달 |
+| `config/default.yml` | 복합 트레일링 + 테마 품질 파라미터 기본값 |
+
 ## 2026-03-18 — 커밋 리뷰 P1/P2 수정 5건
 
 ### P1: 부분 매도 체결 오탐 (`us_scheduler.py:2044`)

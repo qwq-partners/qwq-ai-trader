@@ -367,6 +367,7 @@ function createStatusBadge(status, isBuy) {
         'second_take_profit':['badge badge-green', '2차익절'],
         'trailing':          ['badge badge-yellow', '트레일링'],
         'breakeven':         ['badge badge-yellow', '본전'],
+        'stale':             ['badge badge-gray', '횡보청산'],
         'stop_loss':         ['badge badge-red', '손절'],
         'manual':            ['badge badge-blue', '수동'],
         'kis_sync':          ['badge badge-blue', '동기화'],
@@ -491,8 +492,8 @@ function renderExitTypeChart(events) {
         counts[type] = (counts[type] || 0) + 1;
     });
 
-    const labelMap = { take_profit: '익절', first_take_profit: '1차익절', second_take_profit: '2차익절', stop_loss: '손절', trailing: '트레일링', breakeven: '본전', manual: '수동', kis_sync: '동기화' };
-    const colorMap = { take_profit: '#34d399', first_take_profit: '#34d399', second_take_profit: '#22d3ee', stop_loss: '#f87171', trailing: '#fbbf24', breakeven: '#fbbf24', manual: '#6366f1', kis_sync: '#a78bfa' };
+    const labelMap = { take_profit: '익절', first_take_profit: '1차익절', second_take_profit: '2차익절', stop_loss: '손절', trailing: '트레일링', breakeven: '본전', stale: '횡보청산', manual: '수동', kis_sync: '동기화' };
+    const colorMap = { take_profit: '#34d399', first_take_profit: '#34d399', second_take_profit: '#22d3ee', stop_loss: '#f87171', trailing: '#fbbf24', breakeven: '#fbbf24', stale: '#9ca3af', manual: '#6366f1', kis_sync: '#a78bfa' };
 
     const labels = Object.keys(counts).map(k => labelMap[k] || k);
     const data = [{
@@ -537,7 +538,7 @@ function renderExitTypeSummary(events) {
     const labelMap = {
         take_profit: '익절', first_take_profit: '1차익절', second_take_profit: '2차익절',
         third_take_profit: '3차익절', stop_loss: '손절', trailing: '트레일링',
-        breakeven: '본전', manual: '수동', kis_sync: '동기화',
+        breakeven: '본전', stale: '횡보청산', manual: '수동', kis_sync: '동기화',
     };
 
     // exit_type별 그룹핑
