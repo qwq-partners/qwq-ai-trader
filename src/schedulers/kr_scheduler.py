@@ -1441,6 +1441,43 @@ JSON:
                                         if len(_tags) < 3 and _sig_reason:
                                             _tags.append(f"근거:{_sig_reason[:30]}")
 
+                                        # ── 진입 시 시장 컨텍스트 + 지표 수집 ──────────
+                                        _indicators = {}
+                                        _market_ctx = {}
+                                        _theme = {}
+                                        try:
+                                            # 지표: 시그널 캐시 + 실시간 데이터
+                                            _atr_v = _sig_metadata.get("atr_pct")
+                                            if _atr_v is not None:
+                                                _indicators["atr_pct"] = float(_atr_v)
+                                            _rsi_v = _sig_metadata.get("rsi")
+                                            if _rsi_v is not None:
+                                                _indicators["rsi"] = float(_rsi_v)
+                                            _vol_r = _sig_metadata.get("volume_ratio")
+                                            if _vol_r is not None:
+                                                _indicators["volume_ratio"] = float(_vol_r)
+                                            _chg = _sig_metadata.get("rt_change_pct")
+                                            if _chg is not None:
+                                                _indicators["change_pct"] = float(_chg)
+
+                                            # 시장 컨텍스트: 레짐 + 세션
+                                            _regime_path = Path.home() / ".cache" / "ai_trader" / "llm_regime_today.json"
+                                            if _regime_path.exists():
+                                                _rd = json.loads(_regime_path.read_text(encoding="utf-8"))
+                                                if _rd.get("date") == date.today().isoformat():
+                                                    _market_ctx["regime"] = _rd.get("regime", "unknown")
+                                                    _market_ctx["regime_confidence"] = _rd.get("confidence", 0)
+                                            _market_ctx["session"] = self._get_current_session().value
+                                            _market_ctx["source"] = _sig_metadata.get("source", "")
+
+                                            # 테마 정보 (있으면)
+                                            _theme_name = _sig_metadata.get("theme_name")
+                                            if _theme_name:
+                                                _theme["name"] = _theme_name
+                                                _theme["score"] = _sig_metadata.get("theme_score", 0)
+                                        except Exception:
+                                            pass  # 메타데이터 수집 실패 시 빈 dict로 진행
+
                                         _rec = bot.trade_journal.record_entry(
                                             trade_id=_tid,
                                             symbol=fill.symbol,
@@ -1450,6 +1487,9 @@ JSON:
                                             entry_reason=_sig_reason or "buy_signal",
                                             entry_strategy=_sig_strategy or "unclassified",
                                             signal_score=_sig_score,
+                                            indicators=_indicators or None,
+                                            market_context=_market_ctx or None,
+                                            theme_info=_theme or None,
                                             entry_tags=_tags,
                                             market="KR",
                                         )

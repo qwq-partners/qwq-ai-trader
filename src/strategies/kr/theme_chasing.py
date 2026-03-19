@@ -307,7 +307,6 @@ class ThemeChasingStrategy(BaseStrategy):
         score = self._calculate_entry_score(
             hot_theme_score, change_pct, vol_ratio,
             breadth_count=breadth_count, retreat_pct=retreat_pct,
-            trading_value=trading_value,
         )
         score = max(0.0, min(score + news_bonus + supply_bonus, 100.0))
 
@@ -372,7 +371,6 @@ class ThemeChasingStrategy(BaseStrategy):
         vol_ratio: float,
         breadth_count: int = 0,
         retreat_pct: float = 0.0,
-        trading_value: float = 0,
     ) -> float:
         """진입 점수 계산 (100점 만점, 5개 항목)"""
         score = 0.0

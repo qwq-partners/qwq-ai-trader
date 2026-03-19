@@ -153,6 +153,10 @@ class ExitConfig:
     stale_high_days: int = 0          # 0 = 비활성화 (전략별 override 사용)
     stale_high_min_pnl_pct: float = 3.0  # 이 수익률 미만일 때만 적용
 
+    # 익절 후 횡보 청산: stage >= FIRST & N영업일 보유 & 수익률 < X% → 저효율 포지션 정리
+    post_exit_stale_days: int = 5            # 1차 익절 후 횡보 판단 영업일
+    post_exit_stale_pnl_pct: float = 3.0     # 이 수익률 미만이면 저효율로 판단 (%)
+
     # 복합 트레일링 (MA5 + 전일저가 기반)
     enable_composite_trailing: bool = True       # 복합 트레일링 활성화
     composite_trail_min_stage: str = "first"     # 최소 적용 단계 (1차 익절 완료 이후)
@@ -603,6 +607,25 @@ class ExitManager:
                 f"수익률 {net_pnl_pct:+.2f}% (±{self.config.stale_exit_pnl_pct}% 이내)"
             )
 
+        # 익절 후 저효율 청산: 1차 익절 완료 이후 N영업일 보유 & 수익률 < X%
+        # 이미 수익 확보(분할 매도)했으나 잔여 물량이 추세 없이 체류 → 기회비용 손실
+        if (not state.is_core
+            and state.current_stage not in (ExitStage.NONE, ExitStage.TRAILING)
+            and self.config.post_exit_stale_days > 0
+            and biz_days >= self.config.post_exit_stale_days
+            and 0 < net_pnl_pct < self.config.post_exit_stale_pnl_pct):
+            # 신고가 갱신 여부 체크: 최근 갱신 중이면 아직 추세 진행 → 스킵
+            _days_since_high = 0
+            if state.last_new_high_date is not None:
+                _days_since_high = self._count_business_days(state.last_new_high_date, date.today())
+            if _days_since_high >= 3:  # 3영업일 이상 신고가 미갱신 시에만 발동
+                return self._create_exit(
+                    state, "sell_all", state.remaining_quantity,
+                    f"익절후 저효율: {biz_days}영업일 보유, stage={state.current_stage.value}, "
+                    f"수익률 {net_pnl_pct:+.2f}% (< {self.config.post_exit_stale_pnl_pct}%), "
+                    f"신고가 {_days_since_high}일 전"
+                )
+
         # 신고가 실패 무효화 (추세 소멸): N영업일 신고가 갱신 없음 & PnL 미달 & 1차 익절 전 (코어홀딩 제외)
         eff_stale_high = state.stale_high_days if state.stale_high_days is not None else self.config.stale_high_days
         if (not state.is_core
@@ -695,19 +718,26 @@ class ExitManager:
                 return composite_exit
 
             # 본전 보호 (1차 익절 완료 또는 코어홀딩 — 분할 수익 확보 전 조기청산 방지)
+            # Stage별 차등 버퍼: 초기 stage에서는 추세 공간 확보, 후기 stage에서는 수익 보호
             if state.current_stage != ExitStage.NONE or state.is_core:
                 if state.is_core:
                     # 코어: 장기 보유 → 본전 보호 버퍼를 넓게 (-2% 허용)
-                    # +10% 도달 후 조정 시 과도한 조기 청산 방지
                     sell_fee_buffer = -2.0
+                elif state.current_stage == ExitStage.FIRST:
+                    # 1차 익절 완료: 20% 이미 수익 확보 → 추세 추종 여유 부여
+                    # 정상적인 눌림목(-5~7%)에서 조기 청산 방지
+                    sell_fee_buffer = -1.5
+                elif state.current_stage == ExitStage.SECOND:
+                    # 2차 익절 완료: 추가 수익 확보 → 버퍼 축소
+                    sell_fee_buffer = -0.5
                 else:
-                    # 일반 스윙: 수수료 버퍼 (KR 0.25%, US 0%)
+                    # THIRD/TRAILING: 수수료 보호 (KR 0.25%, US 0%)
                     sell_fee_buffer = 0.0 if self.market in ("US", "NASDAQ", "NYSE") else 0.25
                 if net_pnl_pct <= sell_fee_buffer:
+                    _stage_label = f"stage={state.current_stage.value}" if not state.is_core else "코어"
                     return self._create_exit(
                         state, "sell_all", state.remaining_quantity,
-                        f"본전 이탈: +{net_pnl_pct:.2f}% "
-                        f"({'코어 버퍼' if state.is_core else '1차 익절 완료 후 수수료 버퍼'} {sell_fee_buffer}% 이하)"
+                        f"본전 이탈: {net_pnl_pct:+.2f}% ({_stage_label}, 버퍼={sell_fee_buffer}%)"
                     )
 
         elif net_pnl_pct >= (state.trailing_activate_pct if state.trailing_activate_pct is not None else self.config.trailing_activate_pct):

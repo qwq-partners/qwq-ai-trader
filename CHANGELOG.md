@@ -1,5 +1,35 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-19 — 성과 개선 후속 3건: 본전보호 완화 + 저효율 청산 + 거래 기록 품질
+
+### Fix 1: 본전 보호 Stage별 차등 버퍼 (`exit_manager.py`)
+- **문제**: 1차 익절(+5%) 후 정상 눌림목에서 +0.25%까지 하락 시 잔여 80% 전량 청산 → 추세 조기 포기
+- **수정**: Stage별 버퍼 차등 적용
+  - FIRST: -1.5% (20% 이미 수익 확보, 추세 추종 여유)
+  - SECOND: -0.5% (추가 수익 확보, 버퍼 축소)
+  - THIRD/TRAILING: +0.25% (기존 유지, 수수료 보호)
+  - 코어홀딩: -2.0% (기존 유지)
+
+### Fix 2: 익절 후 저효율 포지션 청산 (`exit_manager.py`)
+- **문제**: 기존 횡보 청산은 `stage=NONE`에서만 작동 → 1차 익절 후 +3%에서 5일 이상 체류하는 저효율 포지션 방치
+- **수정**: `post_exit_stale_days=5`, `post_exit_stale_pnl_pct=3.0%` 추가
+  - stage >= FIRST & 5영업일+ 보유 & 수익률 < 3% & 신고가 3일 이상 미갱신 → 전량 청산
+  - 신고가 갱신 중이면 추세 진행으로 판단 → 스킵
+
+### Fix 3: KR 거래 기록 품질 강화 (`kr_scheduler.py`)
+- **문제**: `record_entry()` 호출 시 `indicators`, `market_context`, `theme_info` 미전달 → 복기 데이터 부실
+- **수정**: 매수 체결 시 자동 수집하여 전달
+  - `indicators`: ATR, RSI, volume_ratio, change_pct
+  - `market_context`: 시장 레짐(llm_regime_today), 세션, 시그널 소스
+  - `theme_info`: 테마명, 테마 점수
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/strategies/exit_manager.py` | ExitConfig 필드 + 본전보호 차등 버퍼 + 익절후 저효율 청산 |
+| `src/schedulers/kr_scheduler.py` | record_entry에 indicators/market_context/theme_info 전달 |
+| `config/default.yml` | post_exit_stale_days/pnl_pct 기본값 |
+
 ## 2026-03-18 — 성과 개선 2건: 복합 트레일링 스탑 + 테마 추종 진입 품질 강화
 
 ### Feature 1: 복합 트레일링 스탑 (MA5 + 전일저가)
