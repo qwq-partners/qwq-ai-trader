@@ -1,5 +1,35 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-20 — 11라운드 코드 리뷰: P0 1건 + P1 4건 수정
+
+### P0: 복합 트레일링 breakeven 미활성 시 미작동 (`exit_manager.py`)
+- **문제**: `_check_composite_trailing()`이 `breakeven_activated=True` 블록 내부에서만 호출 → 1차 익절 직후 가격 하락으로 breakeven 미활성 시 MA5/전일저가 청산 불가
+- **수정**: 복합 트레일링 호출을 breakeven 블록 밖으로 이동, stage >= min_stage이면 독립 실행
+
+### P1-1: 테마 확산도 장 초반 전면 차단 (`theme_chasing.py`)
+- **문제**: `get_indicators(ts)` 캐시 미스(장 초반) → 모든 종목 None → breadth_count=0 → min_theme_breadth 미충족
+- **수정**: 캐시된 종목 2개 미만이면 확산도 체크 스킵 (다른 필터로 품질 보장)
+
+### P1-2: 장중 신규 매수 종목 복합캐시 미포함 (`kr_scheduler.py`, `batch_analyzer.py`)
+- **문제**: `_refresh_composite_cache()` 일 1회 실행 → 장중 진입 종목 캐시 없음 → 복합 트레일링 무효
+- **수정**: `_fill_composite_single()` 추가 — REST 피드에서 캐시 미스 발견 시 해당 종목만 즉시 갱신
+
+### P1-3: 복합캐시 메모리 누수 (`kr_scheduler.py`, `batch_analyzer.py`)
+- **문제**: `_ma5_cache`/`_prev_low_cache`에 추가만 하고 삭제 없음 → 장기 운영 시 점진적 증가
+- **수정**: 날짜 변경 시 `clear()` 후 재구축
+
+### P1-4: STAGE_ORDER 중복 정의 통일 (`exit_manager.py`)
+- **문제**: 동일 stage 리스트가 클래스 속성 + 메서드 내 로컬 변수로 4곳 중복 → 불일치 위험
+- **수정**: `ExitManager.STAGE_ORDER` 클래스 상수로 통일, 메서드 내 로컬 변수 참조로 교체
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/strategies/exit_manager.py` | 복합 트레일링 위치 이동 + STAGE_ORDER 통일 |
+| `src/strategies/kr/theme_chasing.py` | 테마 확산도 캐시 미스 보정 |
+| `src/schedulers/kr_scheduler.py` | `_fill_composite_single()` + 캐시 clear() |
+| `src/core/batch_analyzer.py` | `_fill_composite_single()` + 캐시 clear() |
+
 ## 2026-03-19 — 성과 개선 후속 3건: 본전보호 완화 + 저효율 청산 + 거래 기록 품질
 
 ### Fix 1: 본전 보호 Stage별 차등 버퍼 (`exit_manager.py`)

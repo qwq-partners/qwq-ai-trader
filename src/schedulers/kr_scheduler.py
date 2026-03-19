@@ -2431,6 +2431,10 @@ JSON:
         if self._composite_cache_date == today:
             return  # 이미 갱신됨
 
+        # 날짜 변경 시 이전 캐시 정리 (메모리 누수 방지)
+        self._ma5_cache.clear()
+        self._prev_day_low.clear()
+
         bot = self.bot
         symbols = list(bot.engine.portfolio.positions.keys())
         if not symbols:
@@ -2476,6 +2480,31 @@ JSON:
             )
         except Exception as e:
             logger.warning(f"[복합캐시] 갱신 실패 (무시): {e}")
+
+    async def _fill_composite_single(self, symbol: str):
+        """단일 종목 MA5/전일저가 즉시 갱신 (장중 신규 매수 종목용)"""
+        try:
+            from pykrx import stock as pykrx_stock
+            today = date.today()
+            end_date = today.strftime("%Y%m%d")
+            start_date = (today - timedelta(days=20)).strftime("%Y%m%d")
+            padded = symbol.zfill(6)
+            df = await asyncio.to_thread(
+                pykrx_stock.get_market_ohlcv_by_date,
+                start_date, end_date, padded,
+            )
+            if df is None or df.empty or len(df) < 2:
+                return
+            prev_low = float(df["저가"].iloc[-2])
+            if prev_low > 0:
+                self._prev_day_low[symbol] = prev_low
+            if len(df) >= 5:
+                ma5 = float(df["종가"].iloc[-5:].mean())
+                if ma5 > 0:
+                    self._ma5_cache[symbol] = ma5
+            logger.info(f"[복합캐시] {symbol} 즉시 갱신: MA5={self._ma5_cache.get(symbol, 'N/A')}, 전일저가={self._prev_day_low.get(symbol, 'N/A')}")
+        except Exception as e:
+            logger.debug(f"[복합캐시] {symbol} 즉시 갱신 실패: {e}")
 
     async def run_rest_price_feed(self):
         """REST 폴링 시세 피드 (WebSocket 미사용 시 전략/청산 활성화)
@@ -2556,6 +2585,9 @@ JSON:
 
                             # 보유 종목 ExitManager 청산 체크 (복합 트레일링 데이터 포함)
                             if bot.exit_manager and symbol in bot.engine.portfolio.positions:
+                                # 장중 신규 매수 종목: 캐시 미스 시 즉시 갱신
+                                if symbol not in self._ma5_cache and self._composite_cache_date is not None:
+                                    await self._fill_composite_single(symbol)
                                 _md = {
                                     "ma5": self._ma5_cache.get(symbol),
                                     "prev_low": self._prev_day_low.get(symbol),

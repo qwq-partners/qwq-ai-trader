@@ -217,6 +217,16 @@ class ExitManager:
     US: zero-commission 기준 분할 익절 관리.
     """
 
+    # 클래스 상수: stage 순서 (모든 메서드에서 통일 사용)
+    STAGE_ORDER = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND, ExitStage.THIRD, ExitStage.TRAILING]
+    _COMPOSITE_STAGE_MAP = {
+        "none": ExitStage.NONE,
+        "first": ExitStage.FIRST,
+        "second": ExitStage.SECOND,
+        "third": ExitStage.THIRD,
+        "trailing": ExitStage.TRAILING,
+    }
+
     def __init__(self, config: Optional[ExitConfig] = None, market: str = "KR"):
         self.config = config or ExitConfig()
         self.market = market.upper()
@@ -712,11 +722,6 @@ class ExitManager:
                     state.highest_price = current_price
                     self._persist_states()
 
-            # 복합 트레일링 (MA5 + 전일저가 기반, 코어홀딩 제외)
-            composite_exit = self._check_composite_trailing(state, symbol, current_price, market_data)
-            if composite_exit:
-                return composite_exit
-
             # 본전 보호 (1차 익절 완료 또는 코어홀딩 — 분할 수익 확보 전 조기청산 방지)
             # Stage별 차등 버퍼: 초기 stage에서는 추세 공간 확보, 후기 stage에서는 수익 보호
             if state.current_stage != ExitStage.NONE or state.is_core:
@@ -749,17 +754,13 @@ class ExitManager:
                     f"트레일링: 고점 대비 {trailing_pct:.2f}%"
                 )
 
-        return None
+        # 5. 복합 트레일링 (MA5 + 전일저가 기반, breakeven 여부 무관, stage >= min_stage)
+        # breakeven 블록과 독립 — 1차 익절 직후 가격 하락으로 breakeven 미활성 시에도 작동
+        composite_exit = self._check_composite_trailing(state, symbol, current_price, market_data)
+        if composite_exit:
+            return composite_exit
 
-    # ── 복합 트레일링 (MA5 + 전일저가) ──────────────────────────────────────
-    _COMPOSITE_STAGE_MAP = {
-        "none": ExitStage.NONE,
-        "first": ExitStage.FIRST,
-        "second": ExitStage.SECOND,
-        "third": ExitStage.THIRD,
-        "trailing": ExitStage.TRAILING,
-    }
-    _STAGE_ORDER = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND, ExitStage.THIRD, ExitStage.TRAILING]
+        return None
 
     def _check_composite_trailing(
         self,
@@ -780,8 +781,8 @@ class ExitManager:
         min_stage = self._COMPOSITE_STAGE_MAP.get(
             self.config.composite_trail_min_stage, ExitStage.FIRST
         )
-        cur_idx = self._STAGE_ORDER.index(state.current_stage) if state.current_stage in self._STAGE_ORDER else 0
-        min_idx = self._STAGE_ORDER.index(min_stage) if min_stage in self._STAGE_ORDER else 1
+        cur_idx = self.STAGE_ORDER.index(state.current_stage) if state.current_stage in self.STAGE_ORDER else 0
+        min_idx = self.STAGE_ORDER.index(min_stage) if min_stage in self.STAGE_ORDER else 1
         if cur_idx < min_idx:
             return None
 
@@ -955,8 +956,7 @@ class ExitManager:
 
         # pending 없는 레거시 케이스: current_stage 한 단계 롤백
         prev_stage = state.current_stage
-        stage_order = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
-                       ExitStage.THIRD, ExitStage.TRAILING]
+        stage_order = self.STAGE_ORDER
         try:
             idx = stage_order.index(state.current_stage)
         except ValueError:
@@ -1011,10 +1011,7 @@ class ExitManager:
         self.config.stale_high_days   = params["stale_high_days"]
 
         # ── 기존 포지션 개별 갱신 ─────────────────────────────────
-        stage_order = [
-            ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
-            ExitStage.THIRD, ExitStage.TRAILING,
-        ]
+        stage_order = self.STAGE_ORDER  # noqa: 하위 호환 변수명 유지
         updated = 0
 
         for sym, state in self._states.items():
@@ -1187,10 +1184,8 @@ class ExitManager:
         """영속화용 스테이지 상태 반환 (US 호환)"""
         result = {}
         for sym, state in self._states.items():
-            stage_order = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
-                           ExitStage.THIRD, ExitStage.TRAILING]
             try:
-                result[sym] = stage_order.index(state.current_stage)
+                result[sym] = self.STAGE_ORDER.index(state.current_stage)
             except ValueError:
                 result[sym] = 0
         return result
@@ -1202,17 +1197,15 @@ class ExitManager:
         stage를 복원하므로, 30초 이내 재시작 시 파일 간 시차가 발생할 수 있음.
         → 현재 stage보다 낮은 값으로 다운그레이드하지 않음 (최고값 우선).
         """
-        stage_order = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
-                       ExitStage.THIRD, ExitStage.TRAILING]
         for sym, stage_idx in stages.items():
-            if sym in self._states and 0 <= stage_idx < len(stage_order):
+            if sym in self._states and 0 <= stage_idx < len(self.STAGE_ORDER):
                 try:
-                    current_idx = stage_order.index(self._states[sym].current_stage)
+                    current_idx = self.STAGE_ORDER.index(self._states[sym].current_stage)
                 except ValueError:
                     current_idx = 0
                 # 현재보다 높은 단계만 적용 — 낮은 값으로 다운그레이드 금지
                 if stage_idx > current_idx:
-                    self._states[sym].current_stage = stage_order[stage_idx]
+                    self._states[sym].current_stage = self.STAGE_ORDER[stage_idx]
                     logger.debug(
                         f"[ExitManager] {sym} restore_stages 업그레이드: "
                         f"{stage_order[current_idx].value} → {stage_order[stage_idx].value}"

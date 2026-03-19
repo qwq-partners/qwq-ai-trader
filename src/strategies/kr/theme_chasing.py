@@ -250,19 +250,23 @@ class ThemeChasingStrategy(BaseStrategy):
             or (hot_theme.get("related_stocks", []) if isinstance(hot_theme, dict) else [])
         )
         breadth_count = 0
+        _cached_count = 0  # 지표 캐시가 있는 종목 수
         for ts in theme_stocks[:10]:  # 상위 10개만 체크 (성능)
             if ts == symbol:
                 continue
             ts_ind = self.get_indicators(ts)
             if ts_ind:
+                _cached_count += 1
                 ts_change = ts_ind.get("change_1d", 0)
                 if ts_change >= self.theme_config.theme_breadth_change_pct:
                     breadth_count += 1
 
-        if breadth_count < self.theme_config.min_theme_breadth:
+        # 캐시된 종목이 충분할 때만 확산도 체크 (장 초반 캐시 미스 방어)
+        # 캐시 2개 미만이면 확산도 판단 불가 → 스킵 (다른 필터로 품질 보장)
+        if _cached_count >= 2 and breadth_count < self.theme_config.min_theme_breadth:
             logger.debug(
                 f"[테마 추종] {symbol} 테마 확산도 부족: "
-                f"동반상승 {breadth_count}종목 < 최소 {self.theme_config.min_theme_breadth}종목"
+                f"동반상승 {breadth_count}/{_cached_count}종목 < 최소 {self.theme_config.min_theme_breadth}종목"
             )
             return None
 
