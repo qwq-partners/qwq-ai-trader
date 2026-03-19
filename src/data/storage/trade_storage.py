@@ -913,8 +913,9 @@ class TradeStorage:
                 strategy = "momentum_breakout"  # 장중 스크리닝 기본값
                 if engine:
                     pos = engine.portfolio.positions.get(sym)
-                    if pos and hasattr(pos, 'strategy') and pos.strategy:
-                        strategy = str(pos.strategy.value) if hasattr(pos.strategy, 'value') else str(pos.strategy)
+                    _raw_strat = str(pos.strategy.value if hasattr(pos.strategy, 'value') else pos.strategy or "") if pos and hasattr(pos, 'strategy') else ""
+                    if _raw_strat and _raw_strat not in ("unknown", "unclassified", ""):
+                        strategy = _raw_strat
 
                 # core_holding_state.json에서 코어홀딩 전략 확인 (엔진 포지션 없을 때 폴백)
                 if strategy == "momentum_breakout":

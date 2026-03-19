@@ -1041,6 +1041,9 @@ class BatchAnalyzer:
                                 reason=_r2_reason,
                             )
                             event = SignalEvent.from_signal(signal, source="rsi2_monitor")
+                            _rm = getattr(self._engine, 'risk_manager', None)
+                            if _rm and hasattr(_rm, '_pending_exit_reasons'):
+                                _rm._pending_exit_reasons[symbol] = _r2_reason
                             await self._engine.emit(event)
                             await asyncio.sleep(0.2)
                             continue
@@ -1074,6 +1077,9 @@ class BatchAnalyzer:
                             reason=reason,
                         )
                         event = SignalEvent.from_signal(signal, source="position_monitor")
+                        _rm = getattr(self._engine, 'risk_manager', None)
+                        if _rm and hasattr(_rm, '_pending_exit_reasons'):
+                            _rm._pending_exit_reasons[symbol] = reason
                         await self._engine.emit(event)
                         _exited_symbols.add(symbol)
                         await asyncio.sleep(0.2)  # rate limit
@@ -1100,6 +1106,9 @@ class BatchAnalyzer:
                             reason=f"보유기간 초과: {holding_days}일>{self._max_holding_days}일",
                         )
                         event = SignalEvent.from_signal(signal, source="position_monitor")
+                        _rm = getattr(self._engine, 'risk_manager', None)
+                        if _rm and hasattr(_rm, '_pending_exit_reasons'):
+                            _rm._pending_exit_reasons[symbol] = f"보유기간 초과: {holding_days}일>{self._max_holding_days}일"
                         await self._engine.emit(event)
 
                 await asyncio.sleep(0.2)  # rate limit
@@ -1234,6 +1243,9 @@ class BatchAnalyzer:
                         metadata={"is_core": True, "early_alert": True},
                     )
                     event = SignalEvent.from_signal(signal, source="core_early_alert")
+                    _rm = getattr(self._engine, 'risk_manager', None)
+                    if _rm and hasattr(_rm, '_pending_exit_reasons'):
+                        _rm._pending_exit_reasons[symbol] = f"코어홀딩 조기경보: {trigger_str}"
                     await self._engine.emit(event)
 
             except Exception as e:

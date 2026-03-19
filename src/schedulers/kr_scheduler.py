@@ -1262,6 +1262,11 @@ JSON:
                             if fill.side == OrderSide.SELL:
                                 _sell_pos_snap = bot.engine.portfolio.positions.get(fill.symbol)
                                 _exit_reason_snap = bot._exit_reasons.get(fill.symbol, "")
+                                # batch_analyzer 경로 폴백: _pending_exit_reasons 확인
+                                if not _exit_reason_snap:
+                                    _rm = getattr(bot.engine, 'risk_manager', None)
+                                    _per = getattr(_rm, '_pending_exit_reasons', {}) if _rm else {}
+                                    _exit_reason_snap = _per.pop(fill.symbol, "")
 
                             event = FillEvent.from_fill(fill, source="kis_broker")
                             await bot.engine.emit(event)

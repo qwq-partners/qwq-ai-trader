@@ -954,6 +954,10 @@ class RiskManager:
         # {symbol: {"reason": str, "metadata": dict, "strategy": str, "score": float}}
         self._pending_signal_cache: Dict[str, Dict] = {}
 
+        # 매도 청산 이유 캐시: batch_analyzer 등 bot._exit_reasons 미접근 경로에서 설정
+        # {symbol: reason_str} — run_fill_check의 _exit_reasons 폴백용
+        self._pending_exit_reasons: Dict[str, str] = {}
+
         # pending 등록 시각 (stale pending 정리용)
         self._pending_timestamps: Dict[str, datetime] = {}
         self._PENDING_TIMEOUT_SECONDS = 600  # 10분 타임아웃
@@ -1410,6 +1414,7 @@ class RiskManager:
                 self._pending_sides.pop(event.symbol, None)
                 self._reserved_by_order.pop(event.symbol, None)
                 self._pending_fallback_count.pop(event.symbol, None)
+                self._pending_exit_reasons.pop(event.symbol, None)
             else:
                 self._pending_quantities[event.symbol] = remaining
                 logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
