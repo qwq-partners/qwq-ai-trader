@@ -2613,8 +2613,10 @@ JSON:
                     # NXT 대상 종목 중 watch_symbols + pending_signals 폴링
                     # WS가 프리장에서 비활성이므로 REST로 대시보드 표시용 시세 수집
                     _premarket_watch_tick += 1
-                    if current_session == MarketSession.PRE_MARKET and _premarket_watch_tick >= 2:
+                    _is_ext_session = current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT)
+                    if _is_ext_session and _premarket_watch_tick >= 2:
                         _premarket_watch_tick = 0
+                        _session_label = "프리장피드" if current_session == MarketSession.PRE_MARKET else "넥스트장피드"
 
                         # NXT 대상 종목 캐시 (시작 시 1회 + 30분마다 갱신)
                         try:
@@ -2645,7 +2647,14 @@ JSON:
                             for symbol in premarket_targets:
                                 try:
                                     quote = await bot.broker.get_quote(symbol)
-                                    price = quote.get("price", 0) if quote else 0
+                                    if not quote:
+                                        continue
+                                    # 넥스트장: ovtm_price 우선, 없으면 정규가 폴백
+                                    if current_session == MarketSession.NEXT:
+                                        ovtm = quote.get("ovtm_price", 0) or 0
+                                        price = ovtm if ovtm > 0 else quote.get("price", 0)
+                                    else:
+                                        price = quote.get("price", 0)
                                     if price <= 0:
                                         continue
                                     event = MarketDataEvent(
@@ -2657,17 +2666,17 @@ JSON:
                                         volume=quote.get("volume", 0),
                                         change_pct=quote.get("change_pct", 0.0),
                                         prev_close=Decimal(str(quote["prev_close"])) if quote.get("prev_close") else None,
-                                        source="premarket_polling",
+                                        source=f"{current_session.value}_polling",
                                     )
                                     await bot.engine.emit(event)
                                     pm_ok += 1
                                 except Exception as e:
-                                    logger.debug(f"[프리장피드] {symbol} 조회 실패: {e}")
+                                    logger.debug(f"[{_session_label}] {symbol} 조회 실패: {e}")
                                 await asyncio.sleep(0.2)
 
                             if pm_ok > 0:
                                 logger.info(
-                                    f"[프리장피드] 전광판 {pm_ok}/{len(premarket_targets)}개 갱신 "
+                                    f"[{_session_label}] 전광판 {pm_ok}/{len(premarket_targets)}개 갱신 "
                                     f"(NXT대상, watch+pending)"
                                 )
 
