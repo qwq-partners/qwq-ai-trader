@@ -818,7 +818,7 @@ JSON:
                 if action == "exit_today" and symbol in positions:
                     pos = positions[symbol]
                     current_price = pos.current_price
-                    entry_price = pos.entry_price
+                    entry_price = pos.avg_price  # Position은 avg_price 사용 (entry_price 없음)
 
                     # 안전 검증: 가격 데이터 없으면 스킵
                     if current_price is None or entry_price is None or current_price <= 0:
