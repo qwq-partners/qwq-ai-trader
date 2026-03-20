@@ -130,11 +130,13 @@ async def run_test(symbols: list[str], duration: int):
             print(f"✅ WS 연결 성공\n")
 
             # 2. H0NXCNT0 구독 (체결가 + 호가)
+            # 넥스트장 개장 직후 서버 준비 대기
+            await asyncio.sleep(3)
             for sym in symbols:
                 for tr_id in (TR_NXT_PRICE, TR_NXT_ORDERBOOK):
                     msg = make_subscribe_msg(approval_key, sym, tr_id, subscribe=True)
                     await ws.send(json.dumps(msg))
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.1)
             print(f"📡 구독 완료: {len(symbols)}종목 × 2TR (H0NXCNT0 + H0NXASP0)\n")
 
             # 3. 메시지 수신 루프
