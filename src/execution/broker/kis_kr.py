@@ -1422,6 +1422,60 @@ class KISBroker(BaseBroker):
             logger.exception(f"현재가 조회 오류: {e}")
             return {}
 
+    async def get_overtime_quote(self, symbol: str) -> Dict[str, Any]:
+        """넥스트장(시간외단일가) 현재가 조회 — FHPST02300000
+
+        기존 get_quote()의 ovtm_untp_prpr 필드가 항상 0을 반환하는 문제를 해결하기 위해
+        전용 시간외현재가 TR을 직접 호출합니다.
+
+        Returns:
+            dict with keys: price, change_pct, volume, high, low, bid, ask
+            (price=0 이면 넥스트장 미거래 또는 API 미지원)
+        """
+        if not self.is_connected:
+            if not await self.connect():
+                return {}
+
+        try:
+            url = f"{self.config.base_url}/uapi/domestic-stock/v1/quotations/inquire-overtime-price"
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "NX",   # NXT 마켓
+                "FID_INPUT_ISCD": symbol.zfill(6),
+            }
+            data = await self._api_get(url, "FHPST02300000", params)
+
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                return {}
+
+            o = data.get("output", {})
+            price    = float(o.get("ovtm_untp_prpr", "0") or "0")
+            bid      = float(o.get("bidp", "0") or "0")
+            ask      = float(o.get("askp", "0") or "0")
+            chg_pct  = float(o.get("ovtm_untp_prdy_ctrt", "0") or "0")
+            vol      = int(o.get("ovtm_untp_vol", "0") or "0")
+
+            # 체결가 없을 때 호가 mid-price로 폴백 (호가 접수 구간)
+            if price <= 0 and bid > 0 and ask > 0:
+                price = (bid + ask) / 2
+                logger.debug(f"[시간외] {symbol} 체결가 없음, 호가 mid 사용: ({bid:,.0f}+{ask:,.0f})/2={price:,.0f}")
+
+            return {
+                "symbol": symbol,
+                "price": price,
+                "change_pct": chg_pct,
+                "volume": vol,
+                "high": float(o.get("ovtm_untp_hgpr", "0") or "0"),
+                "low": float(o.get("ovtm_untp_lwpr", "0") or "0"),
+                "open": float(o.get("ovtm_untp_oprc", "0") or "0"),
+                "bid": bid,
+                "ask": ask,
+            }
+
+        except Exception as e:
+            logger.debug(f"시간외현재가 조회 오류 ({symbol}): {e}")
+            return {}
+
     async def get_orderbook(self, symbol: str) -> Dict[str, Any]:
         """호가 조회"""
         if not self.is_connected:

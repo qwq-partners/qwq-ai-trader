@@ -2544,30 +2544,44 @@ JSON:
                     success_count = 0
                     for symbol in holding_symbols:
                         try:
-                            quote = await bot.broker.get_quote(symbol)
-                            if not quote or quote.get("price", 0) <= 0:
-                                continue
-
-                            # 세션별 가격 선택
+                            # 세션별 가격 조회
                             if current_session == MarketSession.NEXT:
-                                ovtm = quote.get("ovtm_price", 0) or 0
-                                regular = quote.get("price", 0) or 0
-                                if ovtm > 0:
-                                    price = ovtm
-                                    logger.debug(
-                                        f"[넥스트장] {symbol} 시간외단일가={ovtm:,.0f}원 "
-                                        f"(정규종가={regular:,.0f}원)"
-                                    )
-                                else:
-                                    price = regular
-                                    logger.info(
-                                        f"[넥스트장] {symbol} ovtm_price=0 → 정규종가 폴백 "
-                                        f"{regular:,.0f}원 (넥스트장 미체결 또는 API 미지원)"
-                                    )
-                            else:
-                                price = quote["price"]
+                                # FHPST02300000: 시간외단일가 전용 API (NX 마켓)
+                                ovtm_q = await bot.broker.get_overtime_quote(symbol)
+                                ovtm_price = ovtm_q.get("price", 0) if ovtm_q else 0
 
-                            if price <= 0:
+                                if ovtm_price > 0:
+                                    price = ovtm_price
+                                    source = "overtime_polling"
+                                    logger.debug(
+                                        f"[넥스트장] {symbol} FHPST02300000 "
+                                        f"시간외단일가={price:,.0f}원 ({ovtm_q.get('change_pct', 0):+.2f}%)"
+                                    )
+                                    # ovtm_q로 이벤트 구성 (prev_close는 get_quote에서 보완)
+                                    quote = {
+                                        "price": price,
+                                        "open": ovtm_q.get("open", price),
+                                        "high": ovtm_q.get("high", price),
+                                        "low": ovtm_q.get("low", price),
+                                        "volume": ovtm_q.get("volume", 0),
+                                        "change_pct": ovtm_q.get("change_pct", 0.0),
+                                        "prev_close": None,
+                                    }
+                                else:
+                                    # FHPST02300000 미거래 → 정규 종가 폴백
+                                    quote = await bot.broker.get_quote(symbol)
+                                    price = quote.get("price", 0) if quote else 0
+                                    source = "rest_polling"
+                                    if price > 0:
+                                        logger.debug(
+                                            f"[넥스트장] {symbol} 시간외단일가 없음 → 정규종가 {price:,.0f}원"
+                                        )
+                            else:
+                                quote = await bot.broker.get_quote(symbol)
+                                price = quote.get("price", 0) if quote else 0
+                                source = "rest_polling"
+
+                            if not quote or price <= 0:
                                 continue
 
                             event = MarketDataEvent(
@@ -2579,7 +2593,7 @@ JSON:
                                 volume=quote.get("volume", 0),
                                 change_pct=quote.get("change_pct", 0.0),
                                 prev_close=Decimal(str(quote["prev_close"])) if quote.get("prev_close") else None,
-                                source="rest_polling",
+                                source=source,
                             )
                             await bot.engine.emit(event)
 
@@ -2646,16 +2660,29 @@ JSON:
                             pm_ok = 0
                             for symbol in premarket_targets:
                                 try:
-                                    quote = await bot.broker.get_quote(symbol)
-                                    if not quote:
-                                        continue
-                                    # 넥스트장: ovtm_price 우선, 없으면 정규가 폴백
+                                    # 넥스트장: FHPST02300000 전용 API 우선
                                     if current_session == MarketSession.NEXT:
-                                        ovtm = quote.get("ovtm_price", 0) or 0
-                                        price = ovtm if ovtm > 0 else quote.get("price", 0)
+                                        ovtm_q = await bot.broker.get_overtime_quote(symbol)
+                                        ovtm_price = ovtm_q.get("price", 0) if ovtm_q else 0
+                                        if ovtm_price > 0:
+                                            quote = {
+                                                "price": ovtm_price,
+                                                "open": ovtm_q.get("open", ovtm_price),
+                                                "high": ovtm_q.get("high", ovtm_price),
+                                                "low": ovtm_q.get("low", ovtm_price),
+                                                "volume": ovtm_q.get("volume", 0),
+                                                "change_pct": ovtm_q.get("change_pct", 0.0),
+                                                "prev_close": None,
+                                            }
+                                            price = ovtm_price
+                                        else:
+                                            quote = await bot.broker.get_quote(symbol)
+                                            price = quote.get("price", 0) if quote else 0
                                     else:
-                                        price = quote.get("price", 0)
-                                    if price <= 0:
+                                        quote = await bot.broker.get_quote(symbol)
+                                        price = quote.get("price", 0) if quote else 0
+
+                                    if not quote or price <= 0:
                                         continue
                                     event = MarketDataEvent(
                                         symbol=symbol,
