@@ -1458,7 +1458,7 @@ class KISBroker(BaseBroker):
             # 체결가 없을 때 호가 mid-price로 폴백 (호가 접수 구간)
             if price <= 0 and bid > 0 and ask > 0:
                 price = (bid + ask) / 2
-                logger.debug(f"[시간외] {symbol} 체결가 없음, 호가 mid 사용: ({bid:,.0f}+{ask:,.0f})/2={price:,.0f}")
+                logger.info(f"[시간외] {symbol} 체결가 없음 → 호가 mid 사용: ({bid:,.0f}+{ask:,.0f})/2={price:,.0f}원")
 
             return {
                 "symbol": symbol,

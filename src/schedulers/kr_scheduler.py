@@ -2553,9 +2553,9 @@ JSON:
                                 if ovtm_price > 0:
                                     price = ovtm_price
                                     source = "overtime_polling"
-                                    logger.debug(
-                                        f"[넥스트장] {symbol} FHPST02300000 "
-                                        f"시간외단일가={price:,.0f}원 ({ovtm_q.get('change_pct', 0):+.2f}%)"
+                                    logger.info(
+                                        f"[넥스트장] {symbol} 시간외단일가={price:,.0f}원 "
+                                        f"({ovtm_q.get('change_pct', 0):+.2f}%) [FHPST02300000]"
                                     )
                                     # ovtm_q로 이벤트 구성 (prev_close는 get_quote에서 보완)
                                     quote = {
