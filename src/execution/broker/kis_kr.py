@@ -1439,8 +1439,8 @@ class KISBroker(BaseBroker):
         try:
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/quotations/inquire-overtime-price"
             params = {
-                "FID_COND_MRKT_DIV_CODE": "NX",   # NXT 마켓
-                "FID_INPUT_ISCD": symbol.zfill(6),
+                "fid_cond_mrkt_div_code": "J",     # "J"로 해야 ovtm_untp_prpr 값 반환 ("NX"=0)
+                "fid_input_iscd": symbol.zfill(6),
             }
             data = await self._api_get(url, "FHPST02300000", params)
 
