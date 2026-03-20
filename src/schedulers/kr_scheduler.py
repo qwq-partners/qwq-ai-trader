@@ -4030,7 +4030,9 @@ JSON:
                         f"예산 잔여 {remaining_budget:,.0f}원 ({now.hour}:{now.minute:02d})"
                     )
                     try:
-                        success = await bot.batch_analyzer.execute_core_rebalance()
+                        # allow_replace=False: 빈슬롯 채우기만, 기존 코어 종목 교체 없음
+                        # 교체(replace_threshold)는 월초 풀 리밸런싱에서만 허용
+                        success = await bot.batch_analyzer.execute_core_rebalance(allow_replace=False)
                         if success:
                             # ── 실제 주문 제출 여부 검증 ──
                             # 포지션 수 재확인 + pending 코어 주문 확인

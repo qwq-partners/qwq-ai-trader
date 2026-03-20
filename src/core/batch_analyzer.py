@@ -1638,13 +1638,16 @@ class BatchAnalyzer:
     # 코어홀딩 스캔/리밸런싱
     # ================================================================
 
-    async def execute_core_rebalance(self) -> bool:
+    async def execute_core_rebalance(self, allow_replace: bool = True) -> bool:
         """코어홀딩 리밸런싱 실행
 
         1. 현재 코어 포지션 확인
         2. 스캔 실행 → 후보 생성
-        3. 교체 대상 판단 (재스코어 < 55 또는 신규 +15점)
+        3. 교체 대상 판단 (재스코어 < 55 또는 신규 +15점) — allow_replace=True 시만
         4. 교체 매도 → 신규 매수 시그널 발행
+
+        Args:
+            allow_replace: True=교체 허용 (월초 리밸런싱), False=빈슬롯 매수만 (교체 없음)
 
         Returns:
             True=성공, False=실패 (재시도 필요)
@@ -1798,7 +1801,8 @@ class BatchAnalyzer:
                         continue
 
             # 4) replace_threshold: 기존 포지션을 점수 낮은 순으로 1:1 매칭
-            if replace_threshold > 0 and buy_candidates:
+            # allow_replace=False(빈슬롯 즉시 매수)일 때는 교체 로직 스킵 — 빈슬롯 채우기만
+            if allow_replace and replace_threshold > 0 and buy_candidates:
                 # 아직 sell_targets에 안 들어간 기존 포지션만 대상
                 already_selling = {s for s, _ in sell_targets}
                 replaceable = [
@@ -1814,6 +1818,8 @@ class BatchAnalyzer:
                             old_sym,
                             f"교체 (현재 {old_score:.0f} vs 신규 {new_cand.symbol} {new_cand.score:.0f}, 차이 +{new_cand.score - old_score:.0f})"
                         ))
+            elif not allow_replace:
+                logger.debug("[코어홀딩] allow_replace=False → replace_threshold 교체 스킵 (빈슬롯 매수 전용)")
 
             for sym, reason in sell_targets:
                 logger.info(f"[코어홀딩] 교체 대상: {sym} ({reason})")
