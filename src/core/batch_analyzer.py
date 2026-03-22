@@ -991,6 +991,8 @@ class BatchAnalyzer:
                 start_date, end_date, padded,
             )
             if df is None or df.empty or len(df) < 2:
+                self._ma5_cache.setdefault(symbol, None)
+                logger.debug(f"[포지션모니터] {symbol} 복합캐시 데이터 없음 (재시도 방지)")
                 return
             prev_low = float(df["저가"].iloc[-2])
             if prev_low > 0:
@@ -999,9 +1001,12 @@ class BatchAnalyzer:
                 ma5 = float(df["종가"].iloc[-5:].mean())
                 if ma5 > 0:
                     self._ma5_cache[symbol] = ma5
+            if symbol not in self._ma5_cache:
+                self._ma5_cache[symbol] = None
             logger.info(f"[포지션모니터] {symbol} 복합캐시 즉시 갱신 완료")
         except Exception as e:
-            logger.debug(f"[포지션모니터] {symbol} 복합캐시 즉시 갱신 실패: {e}")
+            self._ma5_cache.setdefault(symbol, None)
+            logger.debug(f"[포지션모니터] {symbol} 복합캐시 즉시 갱신 실패 (재시도 방지): {e}")
 
     async def monitor_positions(self):
         """[매 30분] 보유 포지션 시세 갱신 + 청산 체크"""

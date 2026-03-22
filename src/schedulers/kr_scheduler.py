@@ -2494,6 +2494,9 @@ JSON:
                 start_date, end_date, padded,
             )
             if df is None or df.empty or len(df) < 2:
+                # 데이터 없음 — sentinel 등록으로 재시도 방지
+                self._ma5_cache.setdefault(symbol, None)
+                logger.debug(f"[복합캐시] {symbol} 데이터 없음 (재시도 방지 등록)")
                 return
             prev_low = float(df["저가"].iloc[-2])
             if prev_low > 0:
@@ -2502,9 +2505,14 @@ JSON:
                 ma5 = float(df["종가"].iloc[-5:].mean())
                 if ma5 > 0:
                     self._ma5_cache[symbol] = ma5
+            # 데이터는 있지만 MA5 미산출(5일 미만) → sentinel 등록
+            if symbol not in self._ma5_cache:
+                self._ma5_cache[symbol] = None
             logger.info(f"[복합캐시] {symbol} 즉시 갱신: MA5={self._ma5_cache.get(symbol, 'N/A')}, 전일저가={self._prev_day_low.get(symbol, 'N/A')}")
         except Exception as e:
-            logger.debug(f"[복합캐시] {symbol} 즉시 갱신 실패: {e}")
+            # 예외 시에도 sentinel 등록 — pykrx 폭주 방지
+            self._ma5_cache.setdefault(symbol, None)
+            logger.debug(f"[복합캐시] {symbol} 즉시 갱신 실패 (재시도 방지): {e}")
 
     async def run_rest_price_feed(self):
         """REST 폴링 시세 피드 (WebSocket 미사용 시 전략/청산 활성화)

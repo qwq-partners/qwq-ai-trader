@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-22 — 12라운드 코드 리뷰: P1 1건 수정
+
+### P1: `_fill_composite_single` 실패 시 무한 재시도 (`kr_scheduler.py`, `batch_analyzer.py`)
+- **문제**: pykrx 빈 응답(장외시간) 또는 예외 시 캐시에 미추가 → 다음 20초 틱에 재호출 → 장외시간 동안 수백 회 불필요한 pykrx 호출 (KRX rate limit 위험)
+- **수정**: 실패/빈 응답 시에도 `self._ma5_cache[symbol] = None` sentinel 등록 → 재시도 방지
+- ExitManager의 `_check_composite_trailing`은 `ma5 is not None` 체크로 sentinel 안전 처리
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/schedulers/kr_scheduler.py` | `_fill_composite_single` 실패 시 sentinel 캐시 등록 |
+| `src/core/batch_analyzer.py` | 동일 수정 |
+
 ## 2026-03-20 — 11라운드 코드 리뷰: P0 1건 + P1 4건 수정
 
 ### P0: 복합 트레일링 breakeven 미활성 시 미작동 (`exit_manager.py`)
