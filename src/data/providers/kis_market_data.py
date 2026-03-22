@@ -367,6 +367,81 @@ class KISMarketData:
             logger.error(f"{investor_name} 매매동향 조회 오류: {e}")
             return result
 
+    async def fetch_frgnmem_trade_estimate(
+        self,
+        market: str = "0000",
+        sort_cls: str = "0",
+    ) -> List[Dict]:
+        """
+        외국계 매매종목 가집계 (TR: FHKST644100C0)
+
+        장중 외국계 증권사 추정 순매수 순위. fetch_foreign_institution의 보완 소스.
+        데이터 발표: 장중 수시 (fetch_foreign_institution과 달리 외국계 브로커 기반).
+
+        Args:
+            market: "0000"=전체, "1001"=코스피, "2001"=코스닥
+            sort_cls: "0"=매수순, "1"=매도순
+
+        Returns:
+            [{"symbol", "name", "net_buy_qty", "net_buy_amt", "price", "change_pct"}, ...]
+        """
+        cache_key = f"frgnmem_estimate_{market}_{sort_cls}"
+        if self._is_cache_valid(cache_key, 300):  # 5분 캐시
+            return self._cache[cache_key]
+
+        result: List[Dict] = []
+        try:
+            session = await self._get_session()
+            headers = await self._get_headers("FHKST644100C0")
+            url = f"{self._token_manager.base_url}/uapi/domestic-stock/v1/quotations/frgnmem-trade-estimate"
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_COND_SCR_DIV_CODE": "16441",
+                "FID_INPUT_ISCD": market,
+                "FID_RANK_SORT_CLS_CODE": sort_cls,
+                "FID_RANK_SORT_CLS_CODE_2": "0",
+            }
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[KIS] 외국계가집계 HTTP {resp.status}")
+                    return result
+                data = await resp.json()
+                rt_cd = data.get("rt_cd")
+                if rt_cd != "0":
+                    msg1 = data.get("msg1", "")
+                    # EGW0020x: KIS rate limit 에러
+                    if rt_cd and rt_cd.startswith("EGW0020"):
+                        logger.warning(f"[KIS] 외국계가집계 rate limit({rt_cd}): {msg1}")
+                    else:
+                        logger.debug(f"[KIS] 외국계가집계 API 오류({rt_cd}): {msg1}")
+                    return result
+                output = data.get("output", [])
+                if not isinstance(output, list):
+                    output = [output] if output else []
+                # 첫 성공 응답 시 필드명 확인용 DEBUG 로그
+                if output:
+                    logger.debug(f"[KIS] frgnmem_trade_estimate 첫 항목 keys: {list(output[0].keys())}")
+                for item in output:
+                    symbol = item.get("mksc_shrn_iscd", "").zfill(6)
+                    name = item.get("hts_kor_isnm", "").strip()
+                    if not symbol or not name:
+                        continue
+                    result.append({
+                        "symbol": symbol,
+                        "name": name,
+                        "net_buy_qty": int(item.get("ntby_qty", 0) or 0),
+                        "net_buy_amt": int(item.get("ntby_tr_pbmn", 0) or 0),
+                        "price": float(item.get("stck_prpr", 0) or 0),
+                        "change_pct": float(item.get("prdy_ctrt", 0) or 0),
+                    })
+            if result:
+                self._set_cache(cache_key, result)
+            logger.info(f"[KIS] 외국계가집계({market}) {len(result)}종목")
+            return result
+        except Exception as e:
+            logger.debug(f"[KIS] 외국계가집계 조회 오류: {e}")
+            return result
+
     # ============================================================
     # 5. 종목별 투자자 일별 매매동향 (FHKST01010900)
     # ============================================================
@@ -483,6 +558,105 @@ class KISMarketData:
             f"[KISMarketData] 투자자일별 일괄: {len(out)}/{len(symbols)}종목 "
             f"({target_date}) 조회 완료"
         )
+        return out
+
+    async def fetch_investor_trend_estimate(
+        self, symbol: str
+    ) -> Optional[Dict]:
+        """
+        종목별 외인/기관 추정가집계 (TR: HHPTJ04160200)
+
+        증권사 직원 집계 기반 장중 추정치:
+        - 외국인: 09:30, 11:20, 13:20, 14:30
+        - 기관종합: 10:00, 11:20, 13:20, 14:30
+
+        ⚠️ 응답 필드명 KIS 문서 미확인. 첫 성공 시 INFO 로그로 확인 필요.
+
+        Returns:
+            {"symbol": str, "frgn_ntby_qty": int, "inst_ntby_qty": int, "raw": dict}
+            or None
+        """
+        cache_key = f"investor_trend_{symbol}"
+        if self._is_cache_valid(cache_key, 600):  # 10분 캐시
+            return self._cache[cache_key]
+
+        try:
+            session = await self._get_session()
+            headers = await self._get_headers("HHPTJ04160200")
+            url = f"{self._token_manager.base_url}/uapi/domestic-stock/v1/quotations/investor-trend-estimate"
+            params = {"MKSC_SHRN_ISCD": symbol}
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[KIS] 추정가집계({symbol}) HTTP {resp.status}")
+                    return None
+                data = await resp.json()
+                rt_cd = data.get("rt_cd")
+                if rt_cd != "0":
+                    msg1 = data.get("msg1", "")
+                    if rt_cd and rt_cd.startswith("EGW0020"):
+                        logger.warning(f"[KIS] 추정가집계 rate limit({rt_cd}): {msg1}")
+                    else:
+                        logger.debug(f"[KIS] 추정가집계({symbol}) 오류({rt_cd}): {msg1}")
+                    return None
+                output = data.get("output", {}) or {}
+                if isinstance(output, list):
+                    output = output[0] if output else {}
+                # ⚠️ 필드명 미확인: 여러 패턴 시도
+                frgn_qty = int(
+                    output.get("frgn_ntby_qty")
+                    or output.get("frgn_stkp_qty")
+                    or output.get("frgn_est_ntby_qty")
+                    or 0
+                )
+                inst_qty = int(
+                    output.get("orgn_ntby_qty")
+                    or output.get("inst_ntby_qty")
+                    or output.get("inst_est_ntby_qty")
+                    or 0
+                )
+                # 첫 성공 시 실제 필드명 INFO 로그 (운영 중 확인용)
+                logger.info(f"[KIS] 추정가집계({symbol}) raw keys: {list(output.keys())} frgn={frgn_qty} inst={inst_qty}")
+                result = {
+                    "symbol": symbol,
+                    "frgn_ntby_qty": frgn_qty,
+                    "inst_ntby_qty": inst_qty,
+                    "raw": output,
+                }
+                self._set_cache(cache_key, result)
+                return result
+        except Exception as e:
+            logger.debug(f"[KIS] 추정가집계({symbol}) 조회 오류: {e}")
+            return None
+
+    async def fetch_batch_investor_trend_estimate(
+        self,
+        symbols: List[str],
+        concurrency: int = 8,
+    ) -> Dict[str, Dict]:
+        """
+        복수 종목 외인/기관 추정가집계 일괄 조회 (HHPTJ04160200)
+
+        Returns:
+            {symbol: {"frgn_ntby_qty": int, "inst_ntby_qty": int}, ...}
+        """
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _fetch_one(sym: str):
+            async with sem:
+                return sym, await self.fetch_investor_trend_estimate(sym)
+
+        tasks = [_fetch_one(sym) for sym in symbols]
+        raw = await asyncio.gather(*tasks, return_exceptions=True)
+
+        out: Dict[str, Dict] = {}
+        for r in raw:
+            if isinstance(r, Exception):
+                continue
+            if isinstance(r, tuple):
+                sym, res = r
+                if res:
+                    out[sym] = {"frgn_ntby_qty": res["frgn_ntby_qty"], "inst_ntby_qty": res["inst_ntby_qty"]}
+        logger.info(f"[KIS] 추정가집계 일괄: {len(out)}/{len(symbols)}종목 조회 완료")
         return out
 
     # ============================================================

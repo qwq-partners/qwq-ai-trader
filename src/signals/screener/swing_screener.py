@@ -399,6 +399,29 @@ class SwingScreener:
         # 1차: KIS 실시간 API (장중/마감 후)
         # 2차: pykrx 전일 수급 (프리장 등 KIS 데이터 없는 경우 자동 폴백)
         supply_demand: Dict[str, Dict[str, int]] = {}  # symbol -> {foreign_net_buy, inst_net_buy}
+        # ── 0차: 외국계 추정 가집계 (장중 10시 이후만, TR: FHKST644100C0) ──
+        # 외국계 브로커 기반 추정치 — 결제 전 데이터라 장중에만 유효.
+        # 1차(fetch_foreign_institution)와 병합해 커버리지 최대화.
+        _now_hour = datetime.now().hour
+        if self._kis_market_data and _now_hour >= 10:
+            try:
+                _est_results = await asyncio.gather(
+                    self._kis_market_data.fetch_frgnmem_trade_estimate(market="1001", sort_cls="0"),  # 코스피 외국계 매수
+                    self._kis_market_data.fetch_frgnmem_trade_estimate(market="2001", sort_cls="0"),  # 코스닥 외국계 매수
+                    return_exceptions=True,
+                )
+                for _est_res in _est_results:
+                    if isinstance(_est_res, list):
+                        for _item in _est_res:
+                            _sym = _item.get("symbol", "")
+                            if _sym:
+                                if _sym not in supply_demand:
+                                    supply_demand[_sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
+                                supply_demand[_sym]["foreign_net_buy"] += _item.get("net_buy_qty", 0)
+                if supply_demand:
+                    logger.info(f"[스윙스크리너] 0차 외국계가집계: {len(supply_demand)}종목")
+            except Exception as _e:
+                logger.debug(f"[스윙스크리너] 0차 외국계가집계 실패: {_e}")
         if self._kis_market_data:
             try:
                 fi_results = await asyncio.gather(
