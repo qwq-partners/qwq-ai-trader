@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-23 — 신규 TR 커밋 리뷰: P1 1건 수정
+
+### P1: `fetch_investor_trend_estimate` or-chain에서 0값 무시 (`kis_market_data.py`)
+- **문제**: `output.get("frgn_ntby_qty") or output.get(...)` — 순매수 0주일 때 falsy → 다음 키(잔고수량 등)로 폴백 → 수급 데이터 왜곡
+- **수정**: `is not None` 체크로 교체 — 0 값 정상 보존
+- CLAUDE.md 절대 금지 패턴 (`value or default` — value=0이면 default 반환) 해당
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/data/providers/kis_market_data.py` | or-chain → is not None 순차 체크 |
+
 ## 2026-03-22 — 12라운드 코드 리뷰: P1 1건 수정
 
 ### P1: `_fill_composite_single` 실패 시 무한 재시도 (`kr_scheduler.py`, `batch_analyzer.py`)

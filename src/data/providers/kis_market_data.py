@@ -601,20 +601,22 @@ class KISMarketData:
                 output = data.get("output", {}) or {}
                 if isinstance(output, list):
                     output = output[0] if output else {}
-                # ⚠️ 필드명 미확인: 여러 패턴 시도
-                frgn_qty = int(
-                    output.get("frgn_ntby_qty")
-                    or output.get("frgn_stkp_qty")
-                    or output.get("frgn_est_ntby_qty")
-                    or 0
-                )
-                inst_qty = int(
-                    output.get("orgn_ntby_qty")
-                    or output.get("inst_ntby_qty")
-                    or output.get("inst_est_ntby_qty")
-                    or 0
-                )
-                # 첫 성공 시 실제 필드명 INFO 로그 (운영 중 확인용)
+                # ⚠️ 필드명 미확인: 여러 패턴 시도 (0 값 보존을 위해 is not None 체크)
+                _frgn_raw = output.get("frgn_ntby_qty")
+                if _frgn_raw is None:
+                    _frgn_raw = output.get("frgn_stkp_qty")
+                if _frgn_raw is None:
+                    _frgn_raw = output.get("frgn_est_ntby_qty")
+                frgn_qty = int(_frgn_raw or 0)
+
+                _inst_raw = output.get("orgn_ntby_qty")
+                if _inst_raw is None:
+                    _inst_raw = output.get("inst_ntby_qty")
+                if _inst_raw is None:
+                    _inst_raw = output.get("inst_est_ntby_qty")
+                inst_qty = int(_inst_raw or 0)
+
+                # 첫 성공 시 실제 필드명 확인용 (운영 안정화 후 DEBUG로 변경)
                 logger.info(f"[KIS] 추정가집계({symbol}) raw keys: {list(output.keys())} frgn={frgn_qty} inst={inst_qty}")
                 result = {
                     "symbol": symbol,
