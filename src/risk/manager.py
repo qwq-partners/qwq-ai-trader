@@ -262,27 +262,63 @@ class RiskManager:
 
         return True, ""
 
-    def update_market_trend(self, kospi_pct: float, kosdaq_pct: float):
-        """스케줄러에서 호출: KOSPI/KOSDAQ 장중 등락률 갱신 → 사이드카 판단
+    def update_market_trend(self, kospi: dict, kosdaq: dict):
+        """스케줄러에서 호출: KOSPI/KOSDAQ 장중 OHLC 기반 추세 갱신
 
-        판단 기준:
-        - 양 시장 평균 >= -0.3% → 회복세 (recovering=True)
-        - 양 시장 평균 < -0.3% → 하락세 (recovering=False)
+        추세 판단 3가지 지표:
+        1. 전일대비 등락률 (change_pct) — 전일 종가 대비 현재
+        2. 시가대비 방향 — 장 시작 후 상승/하락
+        3. 장중 위치 — (현재가 - 저가) / (고가 - 저가) → 0%=저가, 100%=고가
 
-        사이드카 전환 로직:
-        - 일일 손실이 경고 구간(-3%~-5%)에 있을 때만 작동
-        - 하락세 → 사이드카 ON (특정 종목 손실 + 시장 하락 = 추가 매수 위험)
-        - 회복세 → 사이드카 OFF (특정 종목 손실이지만 시장은 반등 = 기회)
+        recovering 판단:
+        - 전일대비 등락률 평균 >= -0.5% 이고 시가대비 상승이면 → 회복세
+        - 장중 위치 50% 이상 (고가 쪽에 가까움) → 회복세 보강
+        - 전일대비 등락률 평균 < -0.5% 이고 시가대비 하락이면 → 하락세
         """
         from datetime import datetime
-        avg_pct = (kospi_pct + kosdaq_pct) / 2
-        recovering = avg_pct >= -0.3
+
+        def _calc_trend(idx: dict) -> dict:
+            price = idx.get("price", 0)
+            open_p = idx.get("open", 0)
+            high_p = idx.get("high", 0)
+            low_p = idx.get("low", 0)
+            change_pct = idx.get("change_pct", 0)
+            # 시가대비 방향
+            vs_open = ((price - open_p) / open_p * 100) if open_p > 0 else 0
+            # 장중 위치 (0%=저가, 100%=고가)
+            intraday_range = high_p - low_p
+            position_pct = ((price - low_p) / intraday_range * 100) if intraday_range > 0 else 50
+            return {
+                "change_pct": change_pct,
+                "vs_open_pct": round(vs_open, 2),
+                "position_pct": round(position_pct, 1),
+            }
+
+        ki = _calc_trend(kospi)
+        kq = _calc_trend(kosdaq)
+
+        avg_change = (ki["change_pct"] + kq["change_pct"]) / 2
+        avg_vs_open = (ki["vs_open_pct"] + kq["vs_open_pct"]) / 2
+        avg_position = (ki["position_pct"] + kq["position_pct"]) / 2
+
+        # 회복세 판단: 전일대비 + 시가대비 + 장중위치 종합
+        # - 전일대비 양호(-0.5% 이상) AND (시가대비 양호 OR 장중위치 50% 이상) → 회복
+        # - 전일대비 약세(-0.5% 미만) AND 시가대비 하락 AND 장중위치 30% 미만 → 하락
+        if avg_change >= -0.5 and (avg_vs_open >= 0 or avg_position >= 50):
+            recovering = True
+        elif avg_change < -0.5 and avg_vs_open < 0 and avg_position < 30:
+            recovering = False
+        else:
+            # 혼조세: 이전 상태 유지 (너무 자주 전환 방지)
+            recovering = self._market_trend.get("recovering", True)
 
         prev_state = self._sidecar_active
         self._market_trend = {
-            "kospi_pct": kospi_pct,
-            "kosdaq_pct": kosdaq_pct,
-            "avg_pct": avg_pct,
+            "kospi_pct": ki["change_pct"],
+            "kosdaq_pct": kq["change_pct"],
+            "avg_pct": avg_change,
+            "vs_open_pct": avg_vs_open,
+            "position_pct": avg_position,
             "recovering": recovering,
             "ts": datetime.now(),
         }
@@ -292,11 +328,8 @@ class RiskManager:
             self._sidecar_active = False
             logger.info(
                 f"[리스크] 사이드카 해제: 시장 회복세 "
-                f"(KOSPI {kospi_pct:+.1f}%, KOSDAQ {kosdaq_pct:+.1f}%, 평균 {avg_pct:+.1f}%)"
+                f"(전일대비 {avg_change:+.1f}%, 시가대비 {avg_vs_open:+.1f}%, 장중위치 {avg_position:.0f}%)"
             )
-        elif not self._sidecar_active and not recovering:
-            # 사이드카는 _is_daily_loss_limit_hit에서 손실 구간 진입 시 활성화
-            pass  # 여기서는 비활성 유지 (손실 구간이 아닐 수 있음)
 
         if prev_state != self._sidecar_active:
             logger.info(f"[리스크] 사이드카 상태: {'ON' if self._sidecar_active else 'OFF'}")
@@ -333,8 +366,9 @@ class RiskManager:
                     self._sidecar_active = False
                     logger.debug(
                         f"[스마트사이드카] 손실 {daily_pnl_pct:.1f}% but 시장 회복세 "
-                        f"(KOSPI {trend.get('kospi_pct', 0):+.1f}%, "
-                        f"KOSDAQ {trend.get('kosdaq_pct', 0):+.1f}%) → 매수 허용"
+                        f"(전일비 {trend.get('avg_pct', 0):+.1f}%, "
+                        f"시가비 {trend.get('vs_open_pct', 0):+.1f}%, "
+                        f"장중위치 {trend.get('position_pct', 50):.0f}%) → 매수 허용"
                     )
                     # 방어적 전략만 허용 (완전 개방은 아님)
                     defensive_strategies = {'rsi2_reversal', 'core_holding', 'sepa_trend'}
@@ -347,8 +381,9 @@ class RiskManager:
                         self._sidecar_active = True
                         logger.warning(
                             f"[스마트사이드카] 사이드카 ON: 손실 {daily_pnl_pct:.1f}% + 시장 하락세 "
-                            f"(KOSPI {trend.get('kospi_pct', 0):+.1f}%, "
-                            f"KOSDAQ {trend.get('kosdaq_pct', 0):+.1f}%)"
+                            f"(전일비 {trend.get('avg_pct', 0):+.1f}%, "
+                            f"시가비 {trend.get('vs_open_pct', 0):+.1f}%, "
+                            f"장중위치 {trend.get('position_pct', 50):.0f}%)"
                         )
                     return True
                 else:

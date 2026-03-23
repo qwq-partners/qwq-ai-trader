@@ -2461,17 +2461,18 @@ JSON:
                         await asyncio.sleep(120)
                         continue
 
-                    # KOSPI + KOSDAQ 동시 조회
+                    # KOSPI + KOSDAQ 동시 조회 (시가/고가/저가 포함)
                     kospi, kosdaq = await asyncio.gather(
                         kis_md.fetch_index_price("0001"),
                         kis_md.fetch_index_price("1001"),
                         return_exceptions=True,
                     )
 
-                    kospi_pct = kospi.get("change_pct", 0.0) if isinstance(kospi, dict) else 0.0
-                    kosdaq_pct = kosdaq.get("change_pct", 0.0) if isinstance(kosdaq, dict) else 0.0
+                    kospi_data = kospi if isinstance(kospi, dict) else {}
+                    kosdaq_data = kosdaq if isinstance(kosdaq, dict) else {}
 
-                    rm.update_market_trend(kospi_pct, kosdaq_pct)
+                    if kospi_data or kosdaq_data:
+                        rm.update_market_trend(kospi_data, kosdaq_data)
 
                 except asyncio.CancelledError:
                     raise

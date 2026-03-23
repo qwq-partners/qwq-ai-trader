@@ -986,6 +986,9 @@ class KISMarketData:
                 price = float(out.get("bstp_nmix_prpr", 0) or 0)
                 change = float(out.get("bstp_nmix_prdy_vrss", 0) or 0)
                 change_pct = float(out.get("bstp_nmix_prdy_ctrt", 0) or 0)
+                open_price = float(out.get("bstp_nmix_oprc", 0) or 0)
+                high_price = float(out.get("bstp_nmix_hgpr", 0) or 0)
+                low_price = float(out.get("bstp_nmix_lwpr", 0) or 0)
                 if price <= 0:
                     return None
                 result = {
@@ -993,6 +996,9 @@ class KISMarketData:
                     "label": label,
                     "kind": "index_kr",
                     "price": round(price, 2),
+                    "open": round(open_price, 2),
+                    "high": round(high_price, 2),
+                    "low": round(low_price, 2),
                     "change": round(change, 2),
                     "change_pct": round(change_pct, 2),
                     "source": "kis",
