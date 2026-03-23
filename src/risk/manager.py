@@ -338,13 +338,16 @@ class RiskManager:
         """
         일일 손실 한도 도달 여부 (KR: 시장 추세 연동 스마트 사이드카)
 
-        KR 로직:
-        - 손실 < 경고 구간 → 허용
-        - 경고 구간(-3%~-5%):
+        KR 로직 (daily_max_loss_pct=5% 기준):
+        - 손실 < 경고 시작(-3.5%) → 허용
+        - 경고 구간(-3.5% ~ -5%):
             → 시장 하락세 → 사이드카 ON (전면 차단)
-            → 시장 회복세 → 사이드카 OFF (방어적 전략 허용)
-            → 추세 정보 없음 → 기존 차등 리스크 (방어적 전략만)
-        - 하드 스탑(-5%+) → 전면 차단
+            → 시장 회복세 → 허용 (특정 종목 문제, 시장은 OK)
+            → 추세 정보 없음 → 방어적 전략만 허용
+        - 한도 초과(-5% ~ -12.5%):
+            → 시장 회복세 → 방어적 전략(RSI2/코어/SEPA)만 허용
+            → 시장 하락세 또는 추세 없음 → 전면 차단
+        - 하드 스탑(-12.5%+) → 무조건 전면 차단
         """
         equity = portfolio.total_equity
         if equity <= 0:
@@ -355,28 +358,25 @@ class RiskManager:
         daily_pnl_pct = float(effective_pnl / equity * 100)
 
         if self.market == "KR":
-            warn_pct = self.config.daily_max_loss_pct  # 5%
-            hard_stop_pct = max(warn_pct * 2.5, 5.0)   # 12.5% (또는 최소 5%)
+            warn_start_pct = self.config.daily_max_loss_pct * 0.7  # 3.5% (경고 시작)
+            warn_pct = self.config.daily_max_loss_pct               # 5% (한도)
+            hard_stop_pct = max(warn_pct * 2.5, 5.0)                # 12.5%
 
-            # 경고 구간: -warn_pct ~ -hard_stop_pct 사이
-            if -hard_stop_pct < daily_pnl_pct <= -warn_pct:
+            # 경고 구간: -warn_start_pct ~ -warn_pct (예: -3.5% ~ -5%)
+            if -warn_pct < daily_pnl_pct <= -warn_start_pct:
                 # 시장 추세 연동: 회복세면 특정 종목 손실 → 매수 허용
                 trend = self._market_trend
+                # 경고 구간: 시장 회복세면 전면 허용, 하락세면 차단
                 if trend and trend.get("recovering"):
                     self._sidecar_active = False
                     logger.debug(
-                        f"[스마트사이드카] 손실 {daily_pnl_pct:.1f}% but 시장 회복세 "
+                        f"[스마트사이드카] 경고구간 {daily_pnl_pct:.1f}% but 시장 회복세 "
                         f"(전일비 {trend.get('avg_pct', 0):+.1f}%, "
                         f"시가비 {trend.get('vs_open_pct', 0):+.1f}%, "
                         f"장중위치 {trend.get('position_pct', 50):.0f}%) → 매수 허용"
                     )
-                    # 방어적 전략만 허용 (완전 개방은 아님)
-                    defensive_strategies = {'rsi2_reversal', 'core_holding', 'sepa_trend'}
-                    if strategy_type in defensive_strategies:
-                        return False
-                    return True
+                    return False  # 시장 OK → 전면 허용
                 elif trend and not trend.get("recovering"):
-                    # 시장 하락세 → 사이드카 ON
                     if not self._sidecar_active:
                         self._sidecar_active = True
                         logger.warning(
@@ -385,18 +385,31 @@ class RiskManager:
                             f"시가비 {trend.get('vs_open_pct', 0):+.1f}%, "
                             f"장중위치 {trend.get('position_pct', 50):.0f}%)"
                         )
-                    return True
+                    return True  # 시장도 하락 → 차단
                 else:
-                    # 추세 정보 없음 → 기존 차등 리스크 (방어적 전략만)
-                    defensive_strategies = {'rsi2_reversal', 'core_holding'}
+                    return False  # 추세 정보 없음(장 초반 등) → 허용 (아직 경고 구간)
+
+            # 한도 초과 구간: -warn_pct ~ -hard_stop_pct (예: -5% ~ -12.5%)
+            if -hard_stop_pct < daily_pnl_pct <= -warn_pct:
+                trend = self._market_trend
+                if trend and trend.get("recovering"):
+                    self._sidecar_active = False
+                    # 시장 회복세 → 방어적 전략만 허용
+                    defensive_strategies = {'rsi2_reversal', 'core_holding', 'sepa_trend'}
                     if strategy_type in defensive_strategies:
                         logger.debug(
-                            f"[차등리스크] 손실 {daily_pnl_pct:.1f}% -> "
-                            f"방어적 전략 '{strategy_type}' 허용 (추세 정보 없음)"
+                            f"[스마트사이드카] 한도초과 {daily_pnl_pct:.1f}% but 시장 회복세 "
+                            f"→ 방어적 전략 '{strategy_type}' 허용"
                         )
                         return False
                     return True
+                else:
+                    # 시장 하락세 또는 추세 없음 → 전면 차단
+                    if not self._sidecar_active and trend:
+                        self._sidecar_active = True
+                    return True
 
+            # 하드 스탑: 무조건 차단
             if daily_pnl_pct <= -hard_stop_pct:
                 return True
         else:

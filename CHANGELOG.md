@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-23 — 리뷰: 사이드카 경고 구간 분리 + 지수 OHLC 추세 판단
+
+### P1 수정: 경고 구간 조기 진입 + 2단계 분리 (`risk/manager.py`)
+- **문제**: 기존 경고 구간이 -5%~-12.5%로, 미실현 -4.7% 상황에서 진입 못함 → 매수 차단 안 됨
+- **수정**: 2단계로 분리
+  - 경고 구간(-3.5%~-5%): 시장 회복세 → 전면 허용 / 하락세 → 사이드카 차단
+  - 한도 초과(-5%~-12.5%): 시장 회복세 → 방어적 전략만 / 하락세 → 전면 차단
+  - 하드 스탑(-12.5%+): 무조건 전면 차단
+
+### 개선: 지수 OHLC 기반 추세 판단 (`kis_market_data.py`, `risk/manager.py`)
+- KIS API(FHPUP02100000)에서 시가/고가/저가 필드 추가 파싱
+- 추세 판단 3지표: 전일대비 등락률 + 시가대비 방향 + 장중 위치(고저 내 현재가 비율)
+- 혼조세 시 이전 상태 유지 (잦은 ON/OFF 전환 방지)
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/risk/manager.py` | 경고 구간 -3.5% 조기 진입 + 2단계 분리 + OHLC 추세 판단 |
+| `src/data/providers/kis_market_data.py` | fetch_index_price에 open/high/low 필드 추가 |
+| `src/schedulers/kr_scheduler.py` | update_market_trend에 dict 전체 전달 |
+
 ## 2026-03-23 — 로그 분석 기반 개선 2건: 스마트 사이드카 + 유령 포지션 레이스 컨디션
 
 ### Feature: 시장 추세 연동 스마트 사이드카 (`risk/manager.py`, `kr_scheduler.py`)
