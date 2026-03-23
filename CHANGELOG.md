@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-23 — 13라운드 코드 리뷰: P0 1건 + P1 2건 수정
+
+### P0: engine.py vs RiskManager 일일 손실 기준 불일치 → 스마트 사이드카 무력화 (`engine.py`)
+- **문제**: engine.py는 `daily_pnl`(실현만) -5%에서 무조건 차단, RiskManager는 `effective_daily_pnl`(미실현 포함)으로 스마트 사이드카 적용 → RiskManager가 "허용"해도 engine이 막거나, 미실현 -4.7%를 engine이 감지 못해 통과시키는 이중 불일치
+- **수정**: engine.py의 소프트 체크(실현 -5%) 제거 → 하드캡만 유지, `effective_daily_pnl` 기준 + 하드캡을 RiskManager와 동일(2.5×=12.5%)로 통일. 세밀한 판단은 RiskManager 스마트 사이드카에 위임.
+
+### P1-1: `run_market_trend_monitor` 장외시간 60초 sleep 루프 (`kr_scheduler.py`)
+- **문제**: NEXT/CLOSED 세션에서 `continue` 후 60초 sleep → 120초에 도달 못 함
+- **수정**: 장외 시간에도 120초 sleep으로 통일
+
+### P1-2: `update_market_trend` 빈 dict 시 추세 왜곡 (`risk/manager.py`)
+- **문제**: kospi={}, kosdaq={} 입력 시 모두 0 → avg_change=0 → 회복세 오판
+- **수정**: 양쪽 price 모두 없으면 early return
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/core/engine.py` | 소프트 체크 제거 → 하드캡만 유지 (effective_daily_pnl 기준, 12.5%) |
+| `src/risk/manager.py` | update_market_trend 빈 dict 가드 |
+| `src/schedulers/kr_scheduler.py` | 장외 시간 sleep 120초 통일 |
+
 ## 2026-03-23 — 리뷰: 사이드카 경고 구간 분리 + 지수 OHLC 추세 판단
 
 ### P1 수정: 경고 구간 조기 진입 + 2단계 분리 (`risk/manager.py`)

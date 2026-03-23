@@ -294,8 +294,11 @@ class RiskManager:
                 "position_pct": round(position_pct, 1),
             }
 
-        ki = _calc_trend(kospi)
-        kq = _calc_trend(kosdaq)
+        # 양쪽 모두 유효한 데이터가 있어야 추세 판단 (빈 dict 방어)
+        if not kospi.get("price") and not kosdaq.get("price"):
+            return
+        ki = _calc_trend(kospi) if kospi.get("price") else {"change_pct": 0, "vs_open_pct": 0, "position_pct": 50}
+        kq = _calc_trend(kosdaq) if kosdaq.get("price") else {"change_pct": 0, "vs_open_pct": 0, "position_pct": 50}
 
         avg_change = (ki["change_pct"] + kq["change_pct"]) / 2
         avg_vs_open = (ki["vs_open_pct"] + kq["vs_open_pct"]) / 2

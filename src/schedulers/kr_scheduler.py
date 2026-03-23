@@ -2452,7 +2452,7 @@ JSON:
                 try:
                     current_session = self._get_current_session()
                     if current_session not in (MarketSession.REGULAR, MarketSession.PRE_MARKET):
-                        await asyncio.sleep(60)
+                        await asyncio.sleep(120)
                         continue
 
                     rm = getattr(bot.engine, 'risk_manager', None)

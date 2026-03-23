@@ -658,18 +658,12 @@ class UnifiedEngine:
         risk = self.config.risk
         _pending = pending_symbols or set()
 
-        # 1. 일일 손실 제한 체크
+        # 1. 일일 손실 하드캡 (극단적 안전망)
+        # 세밀한 판단은 RiskManager._is_daily_loss_limit_hit()에서 스마트 사이드카로 처리.
+        # 여기서는 effective_daily_pnl 기반 하드캡만 체크하여 이중 안전망 역할.
         _equity = self.portfolio.total_equity
-        effective_pnl = self.portfolio.daily_pnl  # 실현 손익
-        daily_loss_pct = float(effective_pnl / _equity * 100) if _equity > 0 else 0.0
         effective_with_unrealized = float(self.portfolio.effective_daily_pnl / _equity * 100) if _equity > 0 else 0.0
-
-        # 실현 손익 기준 소프트 차단
-        if daily_loss_pct <= -risk.daily_max_loss_pct:
-            return False, f"일일 손실 한도 도달 (실현={daily_loss_pct:.1f}%, 미실현포함={effective_with_unrealized:.1f}%)"
-
-        # 미실현 포함 하드캡: 1.5× 한도 초과 시 신규 매수 차단 (손절 미작동 등 비정상 상황 방어)
-        hard_cap_pct = risk.daily_max_loss_pct * 1.5
+        hard_cap_pct = risk.daily_max_loss_pct * 2.5  # RiskManager hard_stop과 동일 (12.5%)
         if effective_with_unrealized <= -hard_cap_pct:
             return False, f"일일 손실 하드캡 초과 (미실현포함={effective_with_unrealized:.1f}%, 한도={-hard_cap_pct:.1f}%)"
 
