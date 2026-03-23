@@ -98,7 +98,7 @@ class HealthMonitor:
         results = []
         results.append(await self._check_event_loop_stall())
         results.append(await self._check_ws_feed())
-        results.append(await self._check_daily_loss())
+        # results.append(await self._check_daily_loss())  # 일일 손실 알람 비활성화
         results.append(await self._check_pending_deadlock())
         return results
 
