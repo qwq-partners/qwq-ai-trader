@@ -84,6 +84,11 @@ class RiskManager:
         # 연속 손실 카운터 (US 적응형 사이징)
         self._consecutive_losses: int = 0
 
+        # 시장 추세 연동 사이드카 (KR 전용)
+        # 스케줄러가 장중 주기적으로 갱신 → _is_daily_loss_limit_hit에서 참조
+        self._market_trend: dict = {}  # {"kospi_pct": float, "kosdaq_pct": float, "recovering": bool, "ts": datetime}
+        self._sidecar_active: bool = False  # 사이드카 활성 상태
+
         logger.info(
             f"RiskManager 초기화 ({self.market}): "
             f"일일손실한도={config.daily_max_loss_pct}%, "
@@ -257,9 +262,56 @@ class RiskManager:
 
         return True, ""
 
+    def update_market_trend(self, kospi_pct: float, kosdaq_pct: float):
+        """스케줄러에서 호출: KOSPI/KOSDAQ 장중 등락률 갱신 → 사이드카 판단
+
+        판단 기준:
+        - 양 시장 평균 >= -0.3% → 회복세 (recovering=True)
+        - 양 시장 평균 < -0.3% → 하락세 (recovering=False)
+
+        사이드카 전환 로직:
+        - 일일 손실이 경고 구간(-3%~-5%)에 있을 때만 작동
+        - 하락세 → 사이드카 ON (특정 종목 손실 + 시장 하락 = 추가 매수 위험)
+        - 회복세 → 사이드카 OFF (특정 종목 손실이지만 시장은 반등 = 기회)
+        """
+        from datetime import datetime
+        avg_pct = (kospi_pct + kosdaq_pct) / 2
+        recovering = avg_pct >= -0.3
+
+        prev_state = self._sidecar_active
+        self._market_trend = {
+            "kospi_pct": kospi_pct,
+            "kosdaq_pct": kosdaq_pct,
+            "avg_pct": avg_pct,
+            "recovering": recovering,
+            "ts": datetime.now(),
+        }
+
+        # 사이드카 전환 로그 (상태 변경 시에만)
+        if self._sidecar_active and recovering:
+            self._sidecar_active = False
+            logger.info(
+                f"[리스크] 사이드카 해제: 시장 회복세 "
+                f"(KOSPI {kospi_pct:+.1f}%, KOSDAQ {kosdaq_pct:+.1f}%, 평균 {avg_pct:+.1f}%)"
+            )
+        elif not self._sidecar_active and not recovering:
+            # 사이드카는 _is_daily_loss_limit_hit에서 손실 구간 진입 시 활성화
+            pass  # 여기서는 비활성 유지 (손실 구간이 아닐 수 있음)
+
+        if prev_state != self._sidecar_active:
+            logger.info(f"[리스크] 사이드카 상태: {'ON' if self._sidecar_active else 'OFF'}")
+
     def _is_daily_loss_limit_hit(self, portfolio: Portfolio, strategy_type: str = "") -> bool:
         """
-        일일 손실 한도 도달 여부 (KR: 차등 리스크 관리)
+        일일 손실 한도 도달 여부 (KR: 시장 추세 연동 스마트 사이드카)
+
+        KR 로직:
+        - 손실 < 경고 구간 → 허용
+        - 경고 구간(-3%~-5%):
+            → 시장 하락세 → 사이드카 ON (전면 차단)
+            → 시장 회복세 → 사이드카 OFF (방어적 전략 허용)
+            → 추세 정보 없음 → 기존 차등 리스크 (방어적 전략만)
+        - 하드 스탑(-5%+) → 전면 차단
         """
         equity = portfolio.total_equity
         if equity <= 0:
@@ -270,17 +322,44 @@ class RiskManager:
         daily_pnl_pct = float(effective_pnl / equity * 100)
 
         if self.market == "KR":
-            # 차등 리스크 관리
-            hard_stop_pct = max(self.config.daily_max_loss_pct * 2.5, 5.0)
-            if -hard_stop_pct < daily_pnl_pct <= -self.config.daily_max_loss_pct:
-                defensive_strategies = {'rsi2_reversal', 'core_holding'}
-                if strategy_type in defensive_strategies:
+            warn_pct = self.config.daily_max_loss_pct  # 5%
+            hard_stop_pct = max(warn_pct * 2.5, 5.0)   # 12.5% (또는 최소 5%)
+
+            # 경고 구간: -warn_pct ~ -hard_stop_pct 사이
+            if -hard_stop_pct < daily_pnl_pct <= -warn_pct:
+                # 시장 추세 연동: 회복세면 특정 종목 손실 → 매수 허용
+                trend = self._market_trend
+                if trend and trend.get("recovering"):
+                    self._sidecar_active = False
                     logger.debug(
-                        f"[차등리스크] 손실 {daily_pnl_pct:.1f}% -> "
-                        f"방어적 전략 '{strategy_type}' 허용"
+                        f"[스마트사이드카] 손실 {daily_pnl_pct:.1f}% but 시장 회복세 "
+                        f"(KOSPI {trend.get('kospi_pct', 0):+.1f}%, "
+                        f"KOSDAQ {trend.get('kosdaq_pct', 0):+.1f}%) → 매수 허용"
                     )
-                    return False
+                    # 방어적 전략만 허용 (완전 개방은 아님)
+                    defensive_strategies = {'rsi2_reversal', 'core_holding', 'sepa_trend'}
+                    if strategy_type in defensive_strategies:
+                        return False
+                    return True
+                elif trend and not trend.get("recovering"):
+                    # 시장 하락세 → 사이드카 ON
+                    if not self._sidecar_active:
+                        self._sidecar_active = True
+                        logger.warning(
+                            f"[스마트사이드카] 사이드카 ON: 손실 {daily_pnl_pct:.1f}% + 시장 하락세 "
+                            f"(KOSPI {trend.get('kospi_pct', 0):+.1f}%, "
+                            f"KOSDAQ {trend.get('kosdaq_pct', 0):+.1f}%)"
+                        )
+                    return True
                 else:
+                    # 추세 정보 없음 → 기존 차등 리스크 (방어적 전략만)
+                    defensive_strategies = {'rsi2_reversal', 'core_holding'}
+                    if strategy_type in defensive_strategies:
+                        logger.debug(
+                            f"[차등리스크] 손실 {daily_pnl_pct:.1f}% -> "
+                            f"방어적 전략 '{strategy_type}' 허용 (추세 정보 없음)"
+                        )
+                        return False
                     return True
 
             if daily_pnl_pct <= -hard_stop_pct:

@@ -99,6 +99,11 @@ class KRScheduler:
                 self.run_rest_price_feed(), name="kr_rest_price_feed"
             ))
 
+        # 시장 추세 모니터 (사이드카 연동)
+        tasks.append(asyncio.create_task(
+            self.run_market_trend_monitor(), name="kr_market_trend"
+        ))
+
         # 교착 pending 정리
         tasks.append(asyncio.create_task(
             self.run_pending_cleanup(), name="kr_pending_cleanup"
@@ -400,9 +405,17 @@ class KRScheduler:
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
                 bot_symbols = set(portfolio.positions.keys())
 
-                # 유령 포지션 제거
+                # 유령 포지션 제거 (매도 pending 중인 종목은 보호)
                 ghost_symbols = bot_symbols - kis_symbols
                 for symbol in ghost_symbols:
+                    # 매도 주문 pending 중이면 KIS 반영 지연일 수 있음 → 스킵
+                    if symbol in bot._exit_pending_symbols:
+                        _pts = bot._exit_pending_timestamps.get(symbol)
+                        _elapsed = (datetime.now() - _pts).total_seconds() if _pts else 0
+                        logger.info(
+                            f"[동기화] {symbol} 매도 pending 중 ({_elapsed:.0f}초) → 유령 판정 보류"
+                        )
+                        continue
                     pos = portfolio.positions[symbol]
                     logger.warning(
                         f"[동기화] 유령 포지션 제거: {symbol} {pos.name} "
@@ -2421,6 +2434,51 @@ JSON:
 
                 # 다음 스캔까지 대기
                 await asyncio.sleep(bot._screening_interval)
+
+        except asyncio.CancelledError:
+            pass
+
+    async def run_market_trend_monitor(self):
+        """KOSPI/KOSDAQ 장중 추세 모니터 (2분 주기) → RiskManager 사이드카 연동
+
+        일일 손실 경고 구간(-3%~-5%)에서 시장 전체가 하락인지 개별 종목 문제인지 구분.
+        시장 회복세면 매수 허용, 하락세면 차단.
+        """
+        bot = self.bot
+        try:
+            await asyncio.sleep(60)  # 초기 대기 (장 시작 안정화)
+
+            while bot.running:
+                try:
+                    current_session = self._get_current_session()
+                    if current_session not in (MarketSession.REGULAR, MarketSession.PRE_MARKET):
+                        await asyncio.sleep(60)
+                        continue
+
+                    rm = getattr(bot.engine, 'risk_manager', None)
+                    kis_md = getattr(bot, 'kis_market_data', None)
+                    if not rm or not kis_md:
+                        await asyncio.sleep(120)
+                        continue
+
+                    # KOSPI + KOSDAQ 동시 조회
+                    kospi, kosdaq = await asyncio.gather(
+                        kis_md.fetch_index_price("0001"),
+                        kis_md.fetch_index_price("1001"),
+                        return_exceptions=True,
+                    )
+
+                    kospi_pct = kospi.get("change_pct", 0.0) if isinstance(kospi, dict) else 0.0
+                    kosdaq_pct = kosdaq.get("change_pct", 0.0) if isinstance(kosdaq, dict) else 0.0
+
+                    rm.update_market_trend(kospi_pct, kosdaq_pct)
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug(f"[시장추세] 갱신 오류 (무시): {e}")
+
+                await asyncio.sleep(120)  # 2분 주기
 
         except asyncio.CancelledError:
             pass

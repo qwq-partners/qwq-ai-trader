@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-23 — 로그 분석 기반 개선 2건: 스마트 사이드카 + 유령 포지션 레이스 컨디션
+
+### Feature: 시장 추세 연동 스마트 사이드카 (`risk/manager.py`, `kr_scheduler.py`)
+- **문제**: 일일 손실 -4.7% 상태에서 개별 종목 손실인데도 전체 매수가 차단되지 않거나, 반대로 시장 반등 시에도 일괄 차단되는 비효율
+- **설계**: 일일 손실 경고 구간(-5%~-12.5%)에서 KOSPI/KOSDAQ 장중 등락률 기반 판단
+  - 시장 하락세(평균 < -0.3%) → 사이드카 ON (전면 차단)
+  - 시장 회복세(평균 >= -0.3%) → 사이드카 OFF (SEPA/RSI2/코어홀딩 허용)
+  - 추세 정보 없음 → 기존 차등 리스크 유지 (방어적 전략만)
+- `run_market_trend_monitor()` 2분 주기로 KOSPI/KOSDAQ 지수 조회 → `RiskManager.update_market_trend()` 갱신
+- 하드 스탑(-12.5%) 초과 시 시장 추세 무관 전면 차단
+
+### Fix: 유령 포지션 레이스 컨디션 (`kr_scheduler.py`)
+- **문제**: 매도 주문 제출(12:59:31) → KIS 체결 반영 → 동기화(12:59:37)에서 유령 제거 → fill 수신(12:59:38) 시 포지션 없음 → daily_pnl 미반영
+- **수정**: `_sync_portfolio()`에서 `_exit_pending_symbols`에 포함된 종목은 유령 판정 보류
+
+### 수정 파일
+| 파일 | 수정 내용 |
+|------|-----------|
+| `src/risk/manager.py` | `update_market_trend()` + `_is_daily_loss_limit_hit` 시장 추세 연동 |
+| `src/schedulers/kr_scheduler.py` | `run_market_trend_monitor()` 2분 주기 + 유령 포지션 pending 보호 |
+
 ## 2026-03-23 — 신규 TR 커밋 리뷰: P1 1건 수정
 
 ### P1: `fetch_investor_trend_estimate` or-chain에서 0값 무시 (`kis_market_data.py`)
