@@ -19,6 +19,7 @@ from ...core.types import (
     Signal, Position, Theme,
     OrderSide, SignalStrength, StrategyType
 )
+from ...utils.sizing import atr_position_multiplier
 from ...core.event import MarketDataEvent, ThemeEvent
 
 # ThemeDetector는 lazy import (모듈 미존재 시 graceful degradation)
@@ -345,14 +346,7 @@ class ThemeChasingStrategy(BaseStrategy):
 
         # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
         _atr_val = atr_pct if atr_pct is not None else 0
-        if _atr_val <= 3:
-            _pos_mult = 1.0
-        elif _atr_val <= 5:
-            _pos_mult = 0.8
-        elif _atr_val <= 8:
-            _pos_mult = 0.6
-        else:
-            _pos_mult = 0.4
+        _pos_mult = atr_position_multiplier(_atr_val)
 
         return Signal(
             symbol=symbol,

@@ -28,6 +28,7 @@ from ..core.engine import is_kr_market_holiday, set_kr_market_holidays, _kr_mark
 from ..core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent, MarketDataEvent
 from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, StrategyType, MarketSession
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
+from ..utils.sizing import atr_position_multiplier
 from ..utils.telegram import send_alert
 
 
@@ -1956,14 +1957,18 @@ JSON:
                                         except Exception as e:
                                             logger.debug(f"[스크리닝] {stock.symbol} 검증 오류 (무시): {e}")
 
-                                    # ATR 기반 stop/target 계산
-                                    atr_pct = 4.0
-                                    for reason in stock.reasons:
-                                        if "ATR:" in reason:
-                                            try:
-                                                atr_pct = float(reason.split("ATR:")[1].replace("%)", "").strip())
-                                            except Exception:
-                                                pass
+                                    # ATR 기반 stop/target 계산 (stock.atr_pct 직접 접근, reason 파싱 폴백)
+                                    atr_pct = stock.atr_pct if stock.atr_pct is not None else 4.0
+                                    if atr_pct <= 0:
+                                        # atr_pct=0 폴백: reason에서 재시도
+                                        for reason in stock.reasons:
+                                            if "ATR:" in reason:
+                                                try:
+                                                    atr_pct = float(reason.split("ATR:")[1].replace("%)", "").strip())
+                                                except Exception:
+                                                    pass
+                                        if atr_pct <= 0:
+                                            atr_pct = 4.0
 
                                     # ATR > 10% 초고변동 종목 제외
                                     if atr_pct > 10.0:
@@ -1984,14 +1989,8 @@ JSON:
                                         _pos_mult = min(_pos_mult, 0.7)
 
                                     # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
-                                    if atr_pct <= 3:
-                                        _atr_mult = 1.0
-                                    elif atr_pct <= 5:
-                                        _atr_mult = 0.8
-                                    elif atr_pct <= 8:
-                                        _atr_mult = 0.6
-                                    else:
-                                        _atr_mult = 0.4
+                                    # 장중 시그널: 오버나이트 변동성과 ATR 중 더 보수적인 값 적용
+                                    _atr_mult = atr_position_multiplier(atr_pct)
                                     _pos_mult = max(0.4, min(_pos_mult, _atr_mult))
 
                                     signal = Signal(

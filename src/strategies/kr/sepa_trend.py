@@ -15,6 +15,7 @@ from ..base import BaseStrategy, StrategyConfig
 from ...core.types import (
     Signal, Position, OrderSide, SignalStrength, StrategyType
 )
+from ...utils.sizing import atr_position_multiplier
 
 
 class SEPATrendStrategy(BaseStrategy):
@@ -125,14 +126,7 @@ class SEPATrendStrategy(BaseStrategy):
                 atr_pct_value = atr_pct_value if atr_pct_value is not None else 0
 
                 # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
-                if atr_pct_value <= 3:
-                    _pos_mult = 1.0
-                elif atr_pct_value <= 5:
-                    _pos_mult = 0.8
-                elif atr_pct_value <= 8:
-                    _pos_mult = 0.6
-                else:
-                    _pos_mult = 0.4
+                _pos_mult = atr_position_multiplier(atr_pct_value)
 
                 signal = Signal(
                     symbol=candidate.symbol,
@@ -264,7 +258,6 @@ class SEPATrendStrategy(BaseStrategy):
 
         # 20일 고점 대비 눌림 보너스 / 추격 감점
         high_20d = ind.get("high_20d")
-        close = ind.get("close")
         if high_20d is not None and high_20d > 0 and close is not None and close > 0:
             pullback_pct = (close - high_20d) / high_20d * 100
             if -7 <= pullback_pct <= -3:
@@ -366,4 +359,4 @@ class SEPATrendStrategy(BaseStrategy):
         overlay = candidate.indicators.get("overlay_bonus") if candidate.indicators.get("overlay_bonus") is not None else 0.0
         score += overlay
 
-        return min(score, 100)
+        return max(0, min(score, 100))
