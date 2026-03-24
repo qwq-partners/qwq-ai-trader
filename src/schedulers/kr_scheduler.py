@@ -381,8 +381,8 @@ class KRScheduler:
 
             if not balance:
                 logger.warning("포트폴리오 동기화: 잔고 조회 실패")
-                if bot.engine and bot.engine.risk_manager:
-                    bot.engine.risk_manager.set_sync_status(False)
+                if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                    bot.risk_manager.set_sync_status(False)
                 return
 
             # 2. API 빈 결과 방어: lock 밖에서 재시도 (lock 내 sleep 방지)
@@ -400,8 +400,8 @@ class KRScheduler:
                     logger.warning(
                         "[동기화] 재시도에도 KIS 포지션 0건 → API 오류로 간주, 동기화 건너뜀"
                     )
-                    if bot.engine and bot.engine.risk_manager:
-                        bot.engine.risk_manager.set_sync_status(False)
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(False)
                     return
 
             # 3. lock 내에서 포트폴리오 수정
@@ -530,13 +530,13 @@ class KRScheduler:
                 )
 
             # 동기화 성공 → 리스크 매니저에 알림
-            if bot.engine and bot.engine.risk_manager:
-                bot.engine.risk_manager.set_sync_status(True)
+            if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                bot.risk_manager.set_sync_status(True)
 
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
-            if bot.engine and bot.engine.risk_manager:
-                bot.engine.risk_manager.set_sync_status(False)
+            if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                bot.risk_manager.set_sync_status(False)
 
     async def _run_strategic_prescan(self):
         """15:35 전략적 사전분석 (배치 스캔 직전 수급 추세 + VCP 탐지)"""
@@ -1578,8 +1578,8 @@ JSON:
                 await self._sync_portfolio()
             except Exception as e:
                 logger.error(f"동기화 루프 오류: {e}")
-                if self.bot.engine and self.bot.engine.risk_manager:
-                    self.bot.engine.risk_manager.set_sync_status(False)
+                if self.bot.risk_manager and hasattr(self.bot.risk_manager, 'set_sync_status'):
+                    self.bot.risk_manager.set_sync_status(False)
             await asyncio.sleep(30)
 
     async def run_screening(self):
