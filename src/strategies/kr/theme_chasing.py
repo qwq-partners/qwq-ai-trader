@@ -65,6 +65,9 @@ class ThemeChasingConfig(StrategyConfig):
     # 장중 고점 유지 (진입 품질)
     max_high_retreat_pct: float = 3.0        # 장중 고점 대비 최대 후퇴 허용 (%)
 
+    # ATR 진입 필터 (초고변동 종목 차단)
+    max_atr_pct: float = 8.0                 # ATR 상한 (%)
+
     # 시간대 제한
     trading_start_time: str = "09:05" # 시작 시간
     trading_end_time: str = "15:00"   # 종료 시간
@@ -232,6 +235,15 @@ class ThemeChasingStrategy(BaseStrategy):
             )
             return None
 
+        # ATR 진입 필터 (초고변동 종목 차단)
+        atr_pct = indicators.get("atr_14")
+        if atr_pct is not None and atr_pct > self.theme_config.max_atr_pct:
+            logger.info(
+                f"[테마 추종] {symbol} ATR 과다: "
+                f"{atr_pct:.1f}% > {self.theme_config.max_atr_pct:.1f}%"
+            )
+            return None
+
         # 장중 고점 대비 후퇴율 체크
         day_high = indicators.get("high", 0)
         retreat_pct = 0.0
@@ -331,15 +343,35 @@ class ThemeChasingStrategy(BaseStrategy):
 
         logger.info(f"[테마 추종] 진입 신호: {symbol} - {reason}")
 
-        return self.create_signal(
+        # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
+        _atr_val = atr_pct if atr_pct is not None else 0
+        if _atr_val <= 3:
+            _pos_mult = 1.0
+        elif _atr_val <= 5:
+            _pos_mult = 0.8
+        elif _atr_val <= 8:
+            _pos_mult = 0.6
+        else:
+            _pos_mult = 0.4
+
+        return Signal(
             symbol=symbol,
             side=OrderSide.BUY,
             strength=strength,
+            strategy=self.config.strategy_type,
             price=current_price,
-            score=score,
-            reason=reason,
             target_price=target_price,
             stop_price=stop_price,
+            score=score,
+            confidence=score / 100.0,
+            reason=reason,
+            metadata={
+                "strategy_name": self.name,
+                "indicators": dict(self._indicators.get(symbol, {})),
+                "atr_pct": _atr_val,
+                "position_multiplier": _pos_mult,
+                "theme_name": hot_theme_name,
+            },
         )
 
     async def _check_exit_signal(

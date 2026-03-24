@@ -1,5 +1,44 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-24 — 복기 기반 트레이딩 개선 7건
+
+### 1. theme_chasing max_holding_days 3일 제한 (`run_trader.py`)
+- theme_chasing exit_params에 `max_holding_days: 3` 추가 — 단기 테마 전략 보유기간 제한
+
+### 2. 지표 추가: ma200_distance_pct + high_20d/low_20d (`technical.py`)
+- MA200 대비 거리(%) — 과확장 필터용
+- 20일 고저 — 눌림 보너스/추격 감점용
+
+### 3. 60일 급등 과확장 필터 (`sepa_trend.py`, `swing_screener.py`)
+- SEPA generate_batch_signals: MA200 대비 +80% 이상 → 후보 차단
+- _calculate_sepa_score: MA200 +50% → -10점, +30% → -5점
+- swing_screener _base_technical_score(sepa_trend): 동일 감점 적용
+
+### 4. SEPA 눌림 보너스 / 추격 감점 (`sepa_trend.py`)
+- 20일 고점 대비 -3%~-7% 눌림 → +5점 보너스
+- 20일 고가 돌파 직후 → -5점 추격 감점
+
+### 5. ATR 진입 필터 (`theme_chasing.py`, `kr_scheduler.py`, `default.yml`)
+- ThemeChasingConfig에 `max_atr_pct: 8.0` 추가
+- theme_chasing _check_entry_signal: ATR > max_atr_pct → 진입 차단
+- kr_scheduler 장중 스크리닝: ATR > 10% → 종목 제외
+- config/default.yml에 기본값 추가
+
+### 6. ATR 기반 포지션 사이징 (`sepa_trend.py`, `theme_chasing.py`, `kr_scheduler.py`)
+- ATR ≤3%: 1.0배 / 3~5%: 0.8배 / 5~8%: 0.6배 / >8%: 0.4배
+- sepa_trend: signal.metadata에 position_multiplier 추가
+- theme_chasing: Signal 직접 생성으로 변경 + atr_pct, position_multiplier, theme_name metadata
+- kr_scheduler 장중 시그널: ATR 배율과 오버나이트 배율 중 min() 적용, 최소 0.4배 클램핑
+
+### 7. 동기화 장애 시 매수 차단 프로토콜 (`risk/manager.py`, `kr_scheduler.py`)
+- RiskManager에 `_sync_healthy`, `_sync_fail_count` 추가
+- `set_sync_status(healthy)`: 연속 3회 실패 → 매수 차단, 성공 1회 → 즉시 복구
+- `can_open_position()`: sync 장애 시 매수 거부
+- kr_scheduler `_sync_portfolio`: 성공/실패/재시도실패 시 상태 갱신
+- `run_portfolio_sync` 루프 예외에서도 갱신
+
+---
+
 ## 2026-03-23 — 13라운드 코드 리뷰: P0 1건 + P1 2건 수정
 
 ### P0: engine.py vs RiskManager 일일 손실 기준 불일치 → 스마트 사이드카 무력화 (`engine.py`)

@@ -511,6 +511,7 @@ class UnifiedTradingBot:
                     "first_exit_pct": theme_strategy_cfg.get("take_profit_pct", 8.0) * 0.3,
                     "second_exit_pct": theme_strategy_cfg.get("take_profit_pct", 8.0) * 0.6,
                     "third_exit_pct": theme_strategy_cfg.get("take_profit_pct", 8.0),
+                    "max_holding_days": 3,  # 단기 전략: 3영업일 제한
                 },
                 "gap_and_go": {
                     "stop_loss_pct": gap_cfg.get("stop_loss_pct", 2.0),

@@ -89,6 +89,11 @@ class RiskManager:
         self._market_trend: dict = {}  # {"kospi_pct": float, "kosdaq_pct": float, "recovering": bool, "ts": datetime}
         self._sidecar_active: bool = False  # 사이드카 활성 상태
 
+        # 포트폴리오 동기화 장애 프로토콜 (연속 3회 실패 시 매수 차단)
+        self._sync_healthy: bool = True
+        self._sync_fail_count: int = 0
+        self._sync_fail_threshold: int = 3
+
         logger.info(
             f"RiskManager 초기화 ({self.market}): "
             f"일일손실한도={config.daily_max_loss_pct}%, "
@@ -205,6 +210,10 @@ class RiskManager:
         if self.market == "KR" and symbol in self._stop_loss_today:
             return False, "당일 손절 종목 재진입 금지"
 
+        # 1.5. 포트폴리오 동기화 장애 체크
+        if not self._sync_healthy:
+            return False, f"포트폴리오 동기화 장애 (연속 {self._sync_fail_count}회 실패) — 매수 차단"
+
         # 2. 일일 손실 한도 체크
         if self._is_daily_loss_limit_hit(portfolio, strategy_type):
             equity = portfolio.total_equity
@@ -261,6 +270,25 @@ class RiskManager:
                 return False, f"Sector limit reached for {sector}"
 
         return True, ""
+
+    def set_sync_status(self, healthy: bool):
+        """포트폴리오 동기화 상태 갱신
+
+        연속 sync_fail_threshold회 실패 시 매수 차단.
+        성공 1회로 즉시 복구.
+        """
+        if healthy:
+            if not self._sync_healthy:
+                logger.info("[리스크] 포트폴리오 동기화 복구 → 매수 차단 해제")
+            self._sync_fail_count = 0
+            self._sync_healthy = True
+        else:
+            self._sync_fail_count += 1
+            if self._sync_fail_count >= self._sync_fail_threshold and self._sync_healthy:
+                self._sync_healthy = False
+                logger.warning(
+                    f"[리스크] 포트폴리오 동기화 장애 (연속 {self._sync_fail_count}회 실패) → 매수 차단"
+                )
 
     def update_market_trend(self, kospi: dict, kosdaq: dict):
         """스케줄러에서 호출: KOSPI/KOSDAQ 장중 OHLC 기반 추세 갱신

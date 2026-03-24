@@ -557,6 +557,14 @@ class SwingScreener:
                 if from_high >= -10:
                     score += 10
 
+            # MA200 과확장 감점 (60일 급등 후행 추격 방지)
+            ma200_dist = ind.get("ma200_distance_pct")
+            if ma200_dist is not None:
+                if ma200_dist > 50:
+                    score -= 10
+                elif ma200_dist > 30:
+                    score -= 5
+
         return min(score, 100)
 
     @staticmethod

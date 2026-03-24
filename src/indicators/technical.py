@@ -351,6 +351,16 @@ class TechnicalIndicators:
         indicators["high_52w"] = max(highs[-lookback_52w:])
         indicators["low_52w"] = min(lows[-lookback_52w:])
 
+        # MA200 대비 거리 (과확장 필터용)
+        ma200 = indicators.get("ma200")
+        if ma200 is not None and ma200 > 0:
+            indicators["ma200_distance_pct"] = round((closes[-1] - ma200) / ma200 * 100, 1)
+
+        # 20일 고저 (눌림 보너스용)
+        if len(highs) >= 20:
+            indicators["high_20d"] = float(max(highs[-20:]))
+            indicators["low_20d"] = float(min(lows[-20:]))
+
         # 현재가
         indicators["close"] = closes[-1]
         indicators["volume"] = volumes[-1] if volumes else 0

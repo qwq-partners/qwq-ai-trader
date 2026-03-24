@@ -78,6 +78,12 @@ class SEPATrendStrategy(BaseStrategy):
 
         for candidate in candidates:
             try:
+                # 과확장 차단: MA200 대비 +80% 이상 → 후행 추격 방지
+                ma200_dist = candidate.indicators.get("ma200_distance_pct")
+                if ma200_dist is not None and ma200_dist > 80:
+                    logger.debug(f"[SEPA] {candidate.symbol} 과확장 차단: MA200 대비 +{ma200_dist:.0f}%")
+                    continue
+
                 score = self._calculate_sepa_score(candidate)
                 all_scores.append((score, candidate.symbol, candidate.name))
 
@@ -118,6 +124,16 @@ class SEPATrendStrategy(BaseStrategy):
                 atr_pct_value = candidate.indicators.get("atr_14", 0)
                 atr_pct_value = atr_pct_value if atr_pct_value is not None else 0
 
+                # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
+                if atr_pct_value <= 3:
+                    _pos_mult = 1.0
+                elif atr_pct_value <= 5:
+                    _pos_mult = 0.8
+                elif atr_pct_value <= 8:
+                    _pos_mult = 0.6
+                else:
+                    _pos_mult = 0.4
+
                 signal = Signal(
                     symbol=candidate.symbol,
                     side=OrderSide.BUY,
@@ -134,6 +150,7 @@ class SEPATrendStrategy(BaseStrategy):
                         "candidate_name": candidate.name,
                         "indicators": candidate.indicators,
                         "atr_pct": atr_pct_value,
+                        "position_multiplier": _pos_mult,
                     },
                 )
                 signals.append(signal)
@@ -236,6 +253,24 @@ class SEPATrendStrategy(BaseStrategy):
 
         if ind.get("ma5_above_ma20", False):
             score += 3
+
+        # MA200 과확장 감점 (60일 급등 후행 추격 방지)
+        ma200_dist = ind.get("ma200_distance_pct")
+        if ma200_dist is not None:
+            if ma200_dist > 50:
+                score -= 10
+            elif ma200_dist > 30:
+                score -= 5
+
+        # 20일 고점 대비 눌림 보너스 / 추격 감점
+        high_20d = ind.get("high_20d")
+        close = ind.get("close")
+        if high_20d is not None and high_20d > 0 and close is not None and close > 0:
+            pullback_pct = (close - high_20d) / high_20d * 100
+            if -7 <= pullback_pct <= -3:
+                score += 5   # 적정 눌림: 보너스
+            elif pullback_pct > 0:
+                score -= 5   # 20일 고가 돌파 직후: 추격 감점
 
         # 2. 수급 LCI z-score 기반 (20점)
         # supply_data_age: 0=당일, 1=전일(T-1), 2=캐시(T-2+)

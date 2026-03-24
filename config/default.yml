@@ -109,6 +109,7 @@ kr:
       min_theme_breadth: 3            # 테마 내 동반 상승 최소 종목 수
       theme_breadth_change_pct: 1.0   # 동반 상승 판정 최소 등락률 (%)
       max_high_retreat_pct: 3.0       # 장중 고점 대비 최대 후퇴 (%)
+      max_atr_pct: 8.0               # ATR 상한 — 초고변동 종목 차단 (%)
 
 
     gap_and_go:

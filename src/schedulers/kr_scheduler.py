@@ -380,6 +380,8 @@ class KRScheduler:
 
             if not balance:
                 logger.warning("포트폴리오 동기화: 잔고 조회 실패")
+                if bot.engine and bot.engine.risk_manager:
+                    bot.engine.risk_manager.set_sync_status(False)
                 return
 
             # 2. API 빈 결과 방어: lock 밖에서 재시도 (lock 내 sleep 방지)
@@ -397,6 +399,8 @@ class KRScheduler:
                     logger.warning(
                         "[동기화] 재시도에도 KIS 포지션 0건 → API 오류로 간주, 동기화 건너뜀"
                     )
+                    if bot.engine and bot.engine.risk_manager:
+                        bot.engine.risk_manager.set_sync_status(False)
                     return
 
             # 3. lock 내에서 포트폴리오 수정
@@ -524,8 +528,14 @@ class KRScheduler:
                     f"[동기화] 확인 완료: 보유={_log_total}종목, 변경 없음"
                 )
 
+            # 동기화 성공 → 리스크 매니저에 알림
+            if bot.engine and bot.engine.risk_manager:
+                bot.engine.risk_manager.set_sync_status(True)
+
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
+            if bot.engine and bot.engine.risk_manager:
+                bot.engine.risk_manager.set_sync_status(False)
 
     async def _run_strategic_prescan(self):
         """15:35 전략적 사전분석 (배치 스캔 직전 수급 추세 + VCP 탐지)"""
@@ -1567,6 +1577,8 @@ JSON:
                 await self._sync_portfolio()
             except Exception as e:
                 logger.error(f"동기화 루프 오류: {e}")
+                if self.bot.engine and self.bot.engine.risk_manager:
+                    self.bot.engine.risk_manager.set_sync_status(False)
             await asyncio.sleep(30)
 
     async def run_screening(self):
@@ -1953,6 +1965,11 @@ JSON:
                                             except Exception:
                                                 pass
 
+                                    # ATR > 10% 초고변동 종목 제외
+                                    if atr_pct > 10.0:
+                                        logger.info(f"[스크리닝] {stock.symbol} 탈락: ATR 초과 ({atr_pct:.1f}% > 10%)")
+                                        continue
+
                                     stop_pct = min(max(atr_pct * 1.5, 2.0), 8.0)
                                     target_pct = min(max(stop_pct * 2.0, 4.0), 15.0)
                                     stop_price = rt_price * (1 - stop_pct / 100)
@@ -1965,6 +1982,17 @@ JSON:
                                         _pos_mult = 0.5 if _overnight_volatility >= 3.0 else 0.7
                                     if _overnight_sentiment == "bearish":
                                         _pos_mult = min(_pos_mult, 0.7)
+
+                                    # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
+                                    if atr_pct <= 3:
+                                        _atr_mult = 1.0
+                                    elif atr_pct <= 5:
+                                        _atr_mult = 0.8
+                                    elif atr_pct <= 8:
+                                        _atr_mult = 0.6
+                                    else:
+                                        _atr_mult = 0.4
+                                    _pos_mult = max(0.4, min(_pos_mult, _atr_mult))
 
                                     signal = Signal(
                                         symbol=stock.symbol,
