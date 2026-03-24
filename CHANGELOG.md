@@ -1,6 +1,14 @@
 # QWQ AI Trader - Changelog
 
-## 2026-03-24 — 복기 기반 트레이딩 개선 7건
+## 2026-03-24 — 복기 기반 트레이딩 개선 7건 + 리뷰 P1 수정
+
+### 리뷰 수정 (c697353)
+- **P1-1**: `sepa_trend.py` — score 음수 방지 `max(0, min(score, 100))`
+- **P1-2**: ATR→position_multiplier 매핑 3곳 중복 → `utils/sizing.py` 공통 헬퍼 추출
+- **P1-4**: `kr_scheduler.py` — ATR 파싱을 `stock.atr_pct` 직접 접근으로 변경 (reason 파싱 폴백 유지)
+- **P2-5**: `sepa_trend.py` — close 변수 재선언 제거
+
+### 개선 7건 (d524679)
 
 ### 1. theme_chasing max_holding_days 3일 제한 (`run_trader.py`)
 - theme_chasing exit_params에 `max_holding_days: 3` 추가 — 단기 테마 전략 보유기간 제한
