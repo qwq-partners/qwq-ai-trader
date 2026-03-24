@@ -628,6 +628,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // US 필터 탭 (전체/매수/매도)
+    document.querySelectorAll("#us-filter-tabs .filter-tab").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("#us-filter-tabs .filter-tab").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            renderUSTradesFiltered(btn.dataset.usType || "all");
+        });
+    });
+
     // 마켓 필터 바 렌더링
     const filterBar = document.getElementById("market-filter-bar");
     if (filterBar) {
@@ -654,14 +663,67 @@ document.addEventListener('DOMContentLoaded', () => {
 // 마켓 필터 (US 거래)
 // ============================================================
 
+let _usTradesCache = [];  // 필터링용 캐시
+let _usTradeFilter = "all";
+
 async function loadUSTrades(dateStr) {
+    const loading = document.getElementById("us-loading");
+    if (loading) loading.style.display = "inline";
     try {
-        const trades = await fetch("/api/us/trades?date=" + (dateStr || ""))
-            .then(r => r.json()).catch(() => []);
-        renderUSTrades(trades);
+        const [trades, positions] = await Promise.all([
+            fetch("/api/us/trades?date=" + (dateStr || "")).then(r => r.json()).catch(() => []),
+            fetch("/api/us/positions").then(r => r.json()).catch(() => []),
+        ]);
+        _usTradesCache = trades || [];
+        renderUSStats(_usTradesCache, positions);
+        renderUSTradesFiltered(_usTradeFilter);
+        renderUSHoldings(positions);
     } catch (e) {
         console.warn("[US거래] 로드 실패:", e);
+    } finally {
+        if (loading) loading.style.display = "none";
     }
+}
+
+function renderUSStats(trades, positions) {
+    // 통계 계산
+    const sells = trades.filter(t => t.side === "sell");
+    const buys = trades.filter(t => t.side === "buy");
+    const wins = sells.filter(t => (t.pnl || 0) > 0);
+    const losses = sells.filter(t => (t.pnl || 0) < 0);
+    const realizedPnl = sells.reduce((s, t) => s + (t.pnl || 0), 0);
+    const unrealizedPnl = (positions || []).reduce((s, p) => s + (p.pnl || 0), 0);
+
+    const fmt = (v) => (v >= 0 ? '+' : '-') + '$' + Math.abs(v).toFixed(2);
+    const cls = (v) => v >= 0 ? 'text-profit' : 'text-loss';
+
+    const rEl = document.getElementById("us-s-realized");
+    if (rEl) { rEl.textContent = fmt(realizedPnl); rEl.className = 'stat-value ' + cls(realizedPnl); }
+    const uEl = document.getElementById("us-s-unrealized");
+    if (uEl) { uEl.textContent = fmt(unrealizedPnl); uEl.className = 'stat-value ' + cls(unrealizedPnl); }
+    const bEl = document.getElementById("us-s-buys");
+    if (bEl) bEl.textContent = buys.length + '건';
+    const sEl = document.getElementById("us-s-sells");
+    if (sEl) sEl.textContent = sells.length + '건';
+    const wEl = document.getElementById("us-s-winloss");
+    if (wEl) { wEl.textContent = wins.length + ' / ' + losses.length; wEl.className = 'stat-value ' + (wins.length >= losses.length ? 'text-profit' : 'text-loss'); }
+
+    // 필터 탭 카운트
+    document.querySelectorAll("#us-filter-tabs .us-filter-count").forEach(el => {
+        const btn = el.closest("button");
+        const type = btn?.dataset?.usType;
+        if (type === "all") el.textContent = trades.length;
+        else if (type === "buy") el.textContent = buys.length;
+        else if (type === "sell") el.textContent = sells.length;
+    });
+}
+
+function renderUSTradesFiltered(filter) {
+    _usTradeFilter = filter;
+    let filtered = _usTradesCache;
+    if (filter === "buy") filtered = _usTradesCache.filter(t => t.side === "buy");
+    else if (filter === "sell") filtered = _usTradesCache.filter(t => t.side === "sell");
+    renderUSTrades(filtered);
 }
 
 // XSS safe: all dynamic values escaped via esc(), data from own trusted backend API
@@ -689,7 +751,7 @@ function renderUSTrades(trades) {
         const pnl = t.pnl || 0;
         const pnlPct = t.pnl_pct || 0;
         const pCls = pnl !== 0 ? (pnl >= 0 ? 'text-profit' : 'text-loss') : '';
-        const timeStr = t.timestamp ? t.timestamp.substring(0, 16).replace("T", " ") : "-";
+        const timeStr = t.timestamp ? t.timestamp.substring(11, 16) : "-";
         const price = isBuy ? (t.entry_price || 0) : (t.exit_price || 0);
 
         const tr = document.createElement('tr');
@@ -700,15 +762,27 @@ function renderUSTrades(trades) {
         const tdTime = createTd('py-2 pr-3 text-xs', timeStr);
         tdTime.style.color = 'var(--text-muted)';
 
-        // 종목
-        const tdSymbol = createTd('py-2 pr-3 font-medium', t.symbol || '--');
-        tdSymbol.style.cssText = 'color:#fff;white-space:nowrap;';
+        // 종목 (코드 + 이름)
+        const tdSymbol = document.createElement('td');
+        tdSymbol.className = 'py-2 pr-3';
+        tdSymbol.style.cssText = 'white-space:nowrap;';
+        const symCode = document.createElement('span');
+        symCode.className = 'font-medium';
+        symCode.style.color = '#fff';
+        symCode.textContent = t.symbol || '--';
+        tdSymbol.appendChild(symCode);
+        if (t.name) {
+            const symName = document.createElement('span');
+            symName.className = 'text-xs';
+            symName.style.cssText = 'color:var(--text-muted);margin-left:6px;';
+            symName.textContent = t.name;
+            tdSymbol.appendChild(symName);
+        }
 
         // 유형 배지
         const tdType = document.createElement('td');
         tdType.className = 'py-2 pr-3';
         const typeBadge = document.createElement('span');
-        typeBadge.className = 'badge';
         if (isBuy) {
             typeBadge.className = 'badge badge-blue';
             typeBadge.textContent = '매수';
@@ -737,22 +811,35 @@ function renderUSTrades(trades) {
             showPnl ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : '--');
 
         // 전략
-        const tdStrategy = createTd('col-hide-mobile py-2 pr-3 text-xs', t.strategy || '--');
+        const strategyMap = { sepa_trend: 'SEPA', momentum_breakout: '모멘텀', earnings_drift: '어닝스' };
+        const tdStrategy = createTd('col-hide-mobile py-2 pr-3 text-xs', strategyMap[t.strategy] || t.strategy || '--');
         tdStrategy.style.color = 'var(--text-secondary)';
 
-        // 상태 배지
+        // 상태 배지 (exit_type 활용)
         const tdStatus = document.createElement('td');
         tdStatus.className = 'col-hide-mobile py-2 pr-3';
         const statusBadge = document.createElement('span');
         if (isBuy) {
             statusBadge.className = 'badge badge-blue';
             statusBadge.textContent = '체결';
-        } else if (pnl >= 0) {
-            statusBadge.className = 'badge badge-green';
-            statusBadge.textContent = '익절';
         } else {
-            statusBadge.className = 'badge badge-red';
-            statusBadge.textContent = '손절';
+            const et = (t.exit_type || '').toLowerCase();
+            if (et.includes('stop') || et.includes('sl') || pnl < 0) {
+                statusBadge.className = 'badge badge-red';
+                statusBadge.textContent = '손절';
+            } else if (et.includes('trailing')) {
+                statusBadge.className = 'badge badge-amber';
+                statusBadge.textContent = '트레일링';
+            } else if (et.includes('eod') || et.includes('close')) {
+                statusBadge.className = 'badge badge-gray';
+                statusBadge.textContent = 'EOD';
+            } else if (et.includes('partial') || et.includes('first') || et.includes('second') || et.includes('third')) {
+                statusBadge.className = 'badge badge-green';
+                statusBadge.textContent = '분할익절';
+            } else {
+                statusBadge.className = pnl >= 0 ? 'badge badge-green' : 'badge badge-red';
+                statusBadge.textContent = pnl >= 0 ? '익절' : '손절';
+            }
         }
         tdStatus.appendChild(statusBadge);
 
@@ -762,6 +849,66 @@ function renderUSTrades(trades) {
         if (t.reason) tdReason.title = t.reason;
 
         tr.append(tdTime, tdSymbol, tdType, tdPrice, tdQty, tdPnl, tdPct, tdStrategy, tdStatus, tdReason);
+        fragment.appendChild(tr);
+    });
+
+    tbody.textContent = '';
+    tbody.appendChild(fragment);
+}
+
+function renderUSHoldings(positions) {
+    const section = document.getElementById("us-holdings-section");
+    const tbody = document.getElementById("us-holdings-tbody");
+    const countEl = document.getElementById("us-positions-count");
+    if (!tbody || !section) return;
+    if (!positions || positions.length === 0) {
+        section.style.display = "none";
+        return;
+    }
+    section.style.display = "block";
+    if (countEl) countEl.textContent = positions.length + "종목";
+
+    const fragment = document.createDocumentFragment();
+    positions.forEach(p => {
+        const pnl = p.pnl || 0;
+        const pnlPct = p.pnl_pct || 0;
+        const pCls = pnl >= 0 ? 'text-profit' : 'text-loss';
+        const stageMap = { none: '-', first: '1차', second: '2차', third: '3차', trailing: '트레일링' };
+
+        const tr = document.createElement('tr');
+        tr.className = 'border-b';
+        tr.style.borderColor = 'rgba(99,102,241,0.08)';
+
+        // 종목
+        const tdSym = document.createElement('td');
+        tdSym.className = 'py-2 pr-3';
+        const code = document.createElement('span');
+        code.className = 'font-medium';
+        code.style.color = '#fff';
+        code.textContent = p.symbol;
+        tdSym.appendChild(code);
+        if (p.name) {
+            const nm = document.createElement('span');
+            nm.className = 'text-xs';
+            nm.style.cssText = 'color:var(--text-muted);margin-left:6px;';
+            nm.textContent = p.name;
+            tdSym.appendChild(nm);
+        }
+
+        const tdQty = createTd('py-2 pr-3 text-right mono', p.quantity);
+        const tdAvg = createTd('py-2 pr-3 text-right mono', '$' + Number(p.avg_price).toFixed(2));
+        const tdCur = createTd('py-2 pr-3 text-right mono', '$' + Number(p.current_price).toFixed(2));
+        const tdPnl = createTd('py-2 pr-3 text-right mono ' + pCls,
+            (pnl >= 0 ? '+' : '-') + '$' + Math.abs(pnl).toFixed(2) + ' (' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(1) + '%)');
+
+        const strategyMap2 = { sepa_trend: 'SEPA', momentum_breakout: '모멘텀', earnings_drift: '어닝스' };
+        const tdStr = createTd('col-hide-mobile py-2 pr-3 text-xs', strategyMap2[p.strategy] || p.strategy || '-');
+        tdStr.style.color = 'var(--text-secondary)';
+
+        const tdStage = createTd('col-hide-mobile py-2 text-xs', stageMap[p.stage] || p.stage || '-');
+        tdStage.style.color = 'var(--text-muted)';
+
+        tr.append(tdSym, tdQty, tdAvg, tdCur, tdPnl, tdStr, tdStage);
         fragment.appendChild(tr);
     });
 

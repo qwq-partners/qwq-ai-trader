@@ -71,6 +71,8 @@
         .badge-red { background: rgba(248,113,113,0.12); color: var(--accent-red); border: 1px solid rgba(248,113,113,0.15); }
         .badge-yellow { background: rgba(251,191,36,0.12); color: var(--accent-amber); border: 1px solid rgba(251,191,36,0.15); }
         .badge-blue { background: rgba(99,102,241,0.12); color: var(--accent-blue); border: 1px solid rgba(99,102,241,0.15); }
+        .badge-amber { background: rgba(251,191,36,0.12); color: var(--accent-amber); border: 1px solid rgba(251,191,36,0.15); }
+        .badge-gray { background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid rgba(148,163,184,0.15); }
         .badge-sell-win { background: rgba(52,211,153,0.12); color: var(--accent-green); border: 1px solid rgba(52,211,153,0.15); }
         .badge-sell-loss { background: rgba(248,113,113,0.12); color: var(--accent-red); border: 1px solid rgba(248,113,113,0.15); }
         .nav-pill {
@@ -381,37 +383,102 @@
 
         <!-- US 거래 내역 섹션 -->
         <div id="us-trades-section" style="display:none; margin-top:20px;">
-            <div class="card" style="padding:20px;">
-                <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
-                    <h2 style="font-size:0.92rem;font-weight:700;color:var(--text-primary);">🇺🇸 미국 거래 내역</h2>
-                    <input type="date" id="us-trade-date">
-                    <button id="us-btn-today" class="btn-primary">오늘</button>
+
+            <!-- Header + Date picker + Filter tabs -->
+            <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+                <h2 style="font-size:1.25rem;font-weight:700;color:#fff;margin:0;">🇺🇸 미국 거래 내역</h2>
+                <input type="date" id="us-trade-date">
+                <button id="us-btn-today" class="btn-primary">오늘</button>
+                <span id="us-loading" style="display:none;font-size:0.8rem;color:var(--text-muted);">로딩...</span>
+                <div id="us-filter-tabs" style="display:flex;gap:6px;margin-left:auto;">
+                    <button class="filter-tab active" data-us-type="all">전체 <span class="us-filter-count">0</span></button>
+                    <button class="filter-tab" data-us-type="buy">매수 <span class="us-filter-count">0</span></button>
+                    <button class="filter-tab" data-us-type="sell">매도 <span class="us-filter-count">0</span></button>
+                </div>
+            </div>
+
+            <!-- US 통계 카드 -->
+            <div class="grid-5col" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">
+                <div class="stat-card">
+                    <div class="stat-label">실현 손익</div>
+                    <div id="us-s-realized" class="stat-value">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">미실현 손익</div>
+                    <div id="us-s-unrealized" class="stat-value">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">매수 건수</div>
+                    <div id="us-s-buys" class="stat-value">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">매도 건수</div>
+                    <div id="us-s-sells" class="stat-value">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">승 / 패</div>
+                    <div id="us-s-winloss" class="stat-value">--</div>
+                </div>
+            </div>
+
+            <!-- US 거래 이벤트 로그 -->
+            <div class="card card-inner" style="padding:24px;margin-bottom:16px;">
+                <div class="card-header">
+                    <span class="dot" style="background:var(--accent-cyan);box-shadow:0 0 8px var(--accent-cyan);"></span>
+                    거래 이벤트 로그
                     <span id="us-trades-count" style="font-size:0.78rem;color:var(--text-muted);margin-left:auto;">-</span>
                 </div>
-                <table style="width:100%;text-align:left;border-collapse:collapse;">
-                    <thead>
-                        <tr style="border-bottom:1px solid var(--border-subtle);">
-                            <th style="padding:0 10px 10px 0;">시간</th>
-                            <th style="padding:0 10px 10px 0;">종목</th>
-                            <th style="padding:0 10px 10px 0;">유형</th>
-                            <th style="padding:0 10px 10px 0;text-align:right;">가격</th>
-                            <th style="padding:0 10px 10px 0;text-align:right;">수량</th>
-                            <th style="padding:0 10px 10px 0;text-align:right;">손익</th>
-                            <th style="padding:0 10px 10px 0;text-align:right;">수익률</th>
-                            <th class="col-hide-mobile" style="padding:0 10px 10px 0;">전략</th>
-                            <th class="col-hide-mobile" style="padding:0 10px 10px 0;">상태</th>
-                            <th class="col-hide-mobile" style="padding:0 0 10px 0;">사유</th>
-                        </tr>
-                    </thead>
-                    <tbody id="us-trades-body">
-                        <tr><td colspan="10" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">거래 내역 없음</td></tr>
-                    </tbody>
-                </table>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;text-align:left;border-collapse:collapse;">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border-subtle);">
+                                <th style="padding:0 10px 10px 0;">시간</th>
+                                <th style="padding:0 10px 10px 0;">종목</th>
+                                <th style="padding:0 10px 10px 0;">유형</th>
+                                <th style="padding:0 10px 10px 0;text-align:right;">가격</th>
+                                <th style="padding:0 10px 10px 0;text-align:right;">수량</th>
+                                <th style="padding:0 10px 10px 0;text-align:right;">손익</th>
+                                <th style="padding:0 10px 10px 0;text-align:right;">수익률</th>
+                                <th class="col-hide-mobile" style="padding:0 10px 10px 0;">전략</th>
+                                <th class="col-hide-mobile" style="padding:0 10px 10px 0;">상태</th>
+                                <th class="col-hide-mobile" style="padding:0 0 10px 0;">사유</th>
+                            </tr>
+                        </thead>
+                        <tbody id="us-trades-body">
+                            <tr><td colspan="10" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">거래 내역 없음</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- US 보유 현황 -->
+            <div id="us-holdings-section" class="card card-inner" style="padding:24px;display:none;">
+                <div class="card-header">
+                    <span class="dot" style="background:var(--accent-purple);box-shadow:0 0 8px var(--accent-purple);"></span>
+                    보유 현황
+                    <span id="us-positions-count" style="font-size:0.78rem;color:var(--text-muted);margin-left:auto;">-</span>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;text-align:left;border-collapse:collapse;">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border-subtle);">
+                                <th style="padding:0 12px 10px 0;">종목</th>
+                                <th style="padding:0 12px 10px 0;text-align:right;">수량</th>
+                                <th style="padding:0 12px 10px 0;text-align:right;">평균단가</th>
+                                <th style="padding:0 12px 10px 0;text-align:right;">현재가</th>
+                                <th style="padding:0 12px 10px 0;text-align:right;">평가손익</th>
+                                <th class="col-hide-mobile" style="padding:0 12px 10px 0;">전략</th>
+                                <th class="col-hide-mobile" style="padding:0 0 10px 0;">단계</th>
+                            </tr>
+                        </thead>
+                        <tbody id="us-holdings-tbody"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </main>
 
     <script src="/static/js/common.js?v=4"></script>
-    <script src="/static/js/trades.js?v=2"></script>
+    <script src="/static/js/trades.js?v=3"></script>
 </body>
 </html>
