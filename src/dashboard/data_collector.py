@@ -1629,6 +1629,7 @@ class DashboardDataCollector:
                         WHERE te.event_type = 'SELL'
                           AND te.event_time::date = $1
                     """, target_date)
+                # (symbol, qty) → 후보 리스트 [(price, pnl, ep, etype), ...]
                 for row in ev_rows:
                     sym = row['symbol']
                     qty = int(row['quantity'])
@@ -1636,10 +1637,7 @@ class DashboardDataCollector:
                     pnl_val = float(row['pnl'] or 0)
                     ep = float(row['entry_price'] or 0)
                     etype = row['exit_type'] or ''
-                    # 가격 키: 소수점 반올림 허용 ±1%
-                    for delta in range(-3, 4):
-                        key = (sym, qty, round(price) + delta * max(1, round(price * 0.001)))
-                        db_sell_pnl[key] = (pnl_val, ep, etype)
+                    db_sell_pnl.setdefault((sym, qty), []).append((price, pnl_val, ep, etype))
             except Exception as _e:
                 logger.warning(f"[정산] DB trade_events 조회 실패: {_e}")
 
@@ -1717,13 +1715,17 @@ class DashboardDataCollector:
             ep = 0
             is_direct_trade = False   # 봇 외 사용자 직접 거래 플래그
 
-            # DB 매칭 시도 (symbol + quantity + price_rounded)
+            # DB 매칭 시도: (symbol, qty) 후보 중 가격 ±2% 이내 가장 가까운 것
             db_match = None
-            for delta in range(-3, 4):
-                key = (sym, qty, round(sell_price) + delta * max(1, round(sell_price * 0.001)))
-                if key in db_sell_pnl:
-                    db_match = db_sell_pnl.pop(key)  # 1:1 소비
-                    break
+            candidates = db_sell_pnl.get((sym, qty))
+            if candidates:
+                threshold = sell_price * 0.02  # 2% 허용
+                best = min(candidates, key=lambda x: abs(x[0] - sell_price))
+                if abs(best[0] - sell_price) <= max(threshold, 100):  # 최소 100원 허용
+                    db_match = (best[1], best[2], best[3])
+                    candidates.remove(best)
+                    if not candidates:
+                        del db_sell_pnl[(sym, qty)]
 
             if db_match is not None:
                 pnl, ep, _ = db_match
