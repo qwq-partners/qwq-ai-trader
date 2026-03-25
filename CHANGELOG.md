@@ -1,6 +1,13 @@
 # QWQ AI Trader - Changelog
 
-## 2026-03-25 — 집중 기회 5건 + US 대시보드 개선
+## 2026-03-25 — 14라운드 리뷰 + 집중 기회 5건 + US 대시보드 개선
+
+### 14라운드 리뷰 수정 (7e524ad)
+- **P0-1**: 재진입 +1%~+3% 데드존 해소 → -3%~+3% 통합 허용, -3% 미만만 급락차단
+- **P1-1**: SEPA 고점수+고ATR 시 최소 비중 보장 (`min→max`, score≥90: 0.8배 최소)
+- **P1-2**: `_exited_today` JSON 영속화 + 재시작 복원 + 분할매도 최초가격 보존
+- **P1-3**: RSI2 VCP — `vcp_score` 우선 사용 + `overlay_bonus` 폴백, None 안전 체크
+- **P1-4**: theme_chasing MA20 15% → 25% 완화 (테마 단기급등 특성 반영)
 
 ### 집중 기회 구현 (74e5fe0)
 1. **SEPA 우선 배분**: score 90+ → 1.4배, 85+ & MRS>0 → 1.2배 position_multiplier
