@@ -1608,14 +1608,57 @@ class DashboardDataCollector:
         buys_raw = [f for f in fills if f.get('sll_buy_dvsn_cd') == '02']
         sells_raw = [f for f in fills if f.get('sll_buy_dvsn_cd') == '01']
 
-        # DB에서 진입가 조회
+        # ── DB trade_events에서 정확한 pnl 로드 ─────────────────────────────────
+        # KIS 체결 내역은 entry_price 추정이 부정확하므로,
+        # 이미 봇이 정확하게 계산해 DB에 저장한 trade_events.pnl을 우선 사용.
+        # 매칭 키: (symbol, quantity, rounded_price)
+        db_sell_pnl: dict = {}   # (sym, qty, price_key) → (pnl, entry_price, exit_type)
+        db_buy_fills: dict = {}  # sym → list of (qty, price) for 당일 봇 외 매수 추정
+        journal = getattr(self.bot, 'trade_journal', None)
+        pool = None
+        if journal:
+            pool = getattr(journal, 'pool', None) or getattr(journal, '_pool', None)
+        if pool:
+            try:
+                async with pool.acquire() as _conn:
+                    ev_rows = await _conn.fetch("""
+                        SELECT te.symbol, te.quantity, te.price, te.pnl, te.exit_type,
+                               t.entry_price
+                        FROM trade_events te
+                        JOIN trades t ON te.trade_id = t.id
+                        WHERE te.event_type = 'SELL'
+                          AND te.event_time::date = $1
+                    """, target_date)
+                for row in ev_rows:
+                    sym = row['symbol']
+                    qty = int(row['quantity'])
+                    price = float(row['price'])
+                    pnl_val = float(row['pnl'] or 0)
+                    ep = float(row['entry_price'] or 0)
+                    etype = row['exit_type'] or ''
+                    # 가격 키: 소수점 반올림 허용 ±1%
+                    for delta in range(-3, 4):
+                        key = (sym, qty, round(price) + delta * max(1, round(price * 0.001)))
+                        db_sell_pnl[key] = (pnl_val, ep, etype)
+            except Exception as _e:
+                logger.warning(f"[정산] DB trade_events 조회 실패: {_e}")
+
+        # 오늘 KIS 매수 체결 (봇 외 직접거래 pnl 추정용)
+        for f in buys_raw:
+            sym = f.get('symbol', '')
+            qty = int(f.get('tot_ccld_qty', 0))
+            price = float(f.get('avg_prvs', 0))
+            if sym and qty > 0 and price > 0:
+                db_buy_fills.setdefault(sym, []).append((qty, price))
+        # ─────────────────────────────────────────────────────────────────────────
+
+        # DB에서 진입가 조회 (DB pnl 매칭 실패 시 폴백용)
         entry_prices = await self._load_entry_prices(target_date)
 
-        # KIS 보유 종목 평균단가 (더 정확)
+        # KIS 보유 종목 평균단가 (폴백용)
         positions_raw = {}
         try:
             positions_raw = await broker.get_positions()
-            # dict or list 모두 처리
             pos_items = positions_raw.values() if isinstance(positions_raw, dict) else positions_raw
             for p in pos_items:
                 try:
@@ -1668,19 +1711,56 @@ class DashboardDataCollector:
             sym = f.get('symbol', '')
             name = f.get('name', '') or name_cache.get(sym, sym)
 
-            ep = self._pop_entry_price(sym, entry_prices)   # FIFO 진입가
+            # ── pnl: DB trade_events 우선, 없으면 FIFO entry_price 폴백 ────────
             pnl = 0
             pnl_pct = 0
-            if ep > 0:
-                buy_cost = qty * ep
-                buy_fee = round(buy_cost * self.BUY_FEE_RATE)
-                pnl = sell_net - buy_cost - buy_fee
-                pnl_pct = (pnl / (buy_cost + buy_fee) * 100) if (buy_cost + buy_fee) > 0 else 0
-                total_realized_pnl += pnl
-                if pnl >= 0:
-                    win_count += 1
+            ep = 0
+            is_direct_trade = False   # 봇 외 사용자 직접 거래 플래그
+
+            # DB 매칭 시도 (symbol + quantity + price_rounded)
+            db_match = None
+            for delta in range(-3, 4):
+                key = (sym, qty, round(sell_price) + delta * max(1, round(sell_price * 0.001)))
+                if key in db_sell_pnl:
+                    db_match = db_sell_pnl.pop(key)  # 1:1 소비
+                    break
+
+            if db_match is not None:
+                pnl, ep, _ = db_match
+                pnl = round(pnl)
+                buy_cost_for_pct = ep * qty * (1 + self.BUY_FEE_RATE) if ep > 0 else 1
+                pnl_pct = pnl / buy_cost_for_pct * 100 if buy_cost_for_pct else 0
+            else:
+                # DB에 없는 체결 = 봇 외 사용자 직접 거래
+                is_direct_trade = True
+                # 같은 날 동일 종목 KIS 매수 체결이 있으면 그 가격으로 추정
+                same_day_buys = db_buy_fills.get(sym, [])
+                ep_guess = 0
+                for bqty, bprice in same_day_buys:
+                    if bqty == qty:
+                        ep_guess = bprice
+                        break
+                if ep_guess > 0:
+                    ep = ep_guess
+                    buy_cost = qty * ep
+                    buy_fee = round(buy_cost * self.BUY_FEE_RATE)
+                    pnl = sell_net - buy_cost - buy_fee
+                    pnl_pct = (pnl / (buy_cost + buy_fee) * 100) if (buy_cost + buy_fee) > 0 else 0
                 else:
-                    loss_count += 1
+                    # 매수 기록도 없으면 FIFO 폴백
+                    ep = self._pop_entry_price(sym, entry_prices)
+                    if ep > 0:
+                        buy_cost = qty * ep
+                        buy_fee = round(buy_cost * self.BUY_FEE_RATE)
+                        pnl = sell_net - buy_cost - buy_fee
+                        pnl_pct = (pnl / (buy_cost + buy_fee) * 100) if (buy_cost + buy_fee) > 0 else 0
+
+            total_realized_pnl += pnl
+            if pnl >= 0:
+                win_count += 1
+            else:
+                loss_count += 1
+            # ─────────────────────────────────────────────────────────────────────
 
             sell_list.append({
                 "time": self._format_kis_time(f.get('ord_tmd', '')),
@@ -1691,6 +1771,7 @@ class DashboardDataCollector:
                 "entry_price": ep,
                 "pnl": round(pnl), "pnl_pct": round(pnl_pct, 2),
                 "odno": f.get('odno', ''),
+                "is_direct_trade": is_direct_trade,   # 봇 외 직접 거래 여부
             })
 
         # 보유 현황 (미실현) — 수수료+거래세 포함 순손익
