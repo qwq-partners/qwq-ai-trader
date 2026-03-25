@@ -116,11 +116,15 @@ class RSI2ReversalStrategy(BaseStrategy):
                 # ATR 기반 포지션 사이징
                 _pos_mult = atr_position_multiplier(atr_pct_value)
 
-                # MA200 상방 + VCP 수축 결합 → 고확신 패턴: 배율 확대
-                _has_ma200 = (candidate.indicators.get("ma200") or 0) > 0 and (candidate.indicators.get("close") or 0) > (candidate.indicators.get("ma200") or 0)
-                _has_vcp = (candidate.indicators.get("overlay_bonus") or 0) >= 3.0
-                if _has_ma200 and _has_vcp:
-                    _pos_mult = min(_pos_mult * 1.3, 1.3)
+                # MA200 상방 + VCP/복합 오버레이 결합 → 고확신 패턴: 배율 확대
+                # overlay_bonus: VCP(최대5) + 전문가패널 + 수급추세 복합 보너스
+                # vcp_score: VCP 단독 점수 (있으면 우선 사용)
+                _ma200 = candidate.indicators.get("ma200")
+                _close = candidate.indicators.get("close")
+                _has_ma200 = _ma200 is not None and _ma200 > 0 and _close is not None and _close > _ma200
+                _vcp = candidate.indicators.get("vcp_score") or candidate.indicators.get("overlay_bonus") or 0
+                if _has_ma200 and _vcp >= 3.0:
+                    _pos_mult = max(_pos_mult * 1.3, 0.8)
 
                 signal = Signal(
                     symbol=candidate.symbol,

@@ -82,7 +82,8 @@ class RiskManager:
         self._stop_loss_today: set = self._load_stop_loss_today()
 
         # 당일 청산 종목 재진입 제한 (KR): 눌림/재돌파 확인 필요
-        self._exited_today: Dict[str, Dict] = {}  # {symbol: {"price": 청산가, "time": 청산시각}}
+        self._exited_today_path = cache_dir / f"exited_today{market_suffix}.json"
+        self._exited_today: Dict[str, Dict] = self._load_exited_today()
 
         # 연속 손실 카운터 (US 적응형 사이징)
         self._consecutive_losses: int = 0
@@ -281,12 +282,17 @@ class RiskManager:
         return True, ""
 
     def record_exit(self, symbol: str, exit_price: float):
-        """청산 종목 기록 (당일 재진입 조건 체크용)"""
+        """청산 종목 기록 (당일 재진입 조건 체크용)
+
+        분할 매도 시 최초 청산가를 기준으로 유지 (덮어쓰기 방지).
+        """
         if self.market == "KR":
-            self._exited_today[symbol] = {
-                "price": exit_price,
-                "time": datetime.now(),
-            }
+            if symbol not in self._exited_today:
+                self._exited_today[symbol] = {
+                    "price": exit_price,
+                    "time": datetime.now().isoformat(),
+                }
+                self._save_exited_today()
 
     def check_reentry_condition(self, symbol: str, current_price: float) -> tuple:
         """동일 종목 재진입 조건 체크 (눌림/재돌파 확인형)
@@ -302,24 +308,28 @@ class RiskManager:
             return True, ""  # 당일 청산 이력 없음 → 자유 진입
 
         exit_price = exit_info["price"]
-        exit_time = exit_info["time"]
+        exit_time_raw = exit_info["time"]
+        if isinstance(exit_time_raw, str):
+            exit_time = datetime.fromisoformat(exit_time_raw)
+        else:
+            exit_time = exit_time_raw
         elapsed_min = (datetime.now() - exit_time).total_seconds() / 60
 
         # 최소 쿨다운 30분
         if elapsed_min < 30:
             return False, f"당일 청산 후 쿨다운 ({elapsed_min:.0f}분/30분)"
 
-        # 눌림 확인: 청산가 대비 -3% 이상 하락 후 반등한 상태
+        # 눌림/재돌파 확인: 청산가 대비 가격 위치로 판단
         if exit_price > 0 and current_price > 0:
             from_exit = (current_price - exit_price) / exit_price * 100
-            # 청산가 대비 -3%~+1% 범위 = 눌림 구간 진입 허용
-            if -3 <= from_exit <= 1:
-                return True, f"눌림 확인 (청산가 대비 {from_exit:+.1f}%)"
-            # 청산가 대비 +3% 이상 = 재돌파 확인
-            if from_exit >= 3:
+            # 청산가 대비 -3%~+3% = 눌림~소폭반등 구간 → 재진입 허용
+            if -3 <= from_exit <= 3:
+                return True, f"눌림/횡보 확인 (청산가 대비 {from_exit:+.1f}%)"
+            # 청산가 대비 +3% 초과 = 재돌파 → 재진입 허용
+            if from_exit > 3:
                 return True, f"재돌파 확인 (청산가 대비 {from_exit:+.1f}%)"
-            # 청산가 근처 횡보 또는 단순 반등 → 차단
-            return False, f"눌림/재돌파 미확인 (청산가 대비 {from_exit:+.1f}%)"
+            # -3% 미만 = 급락 중 → 차단 (추격 방지)
+            return False, f"급락 중 재진입 차단 (청산가 대비 {from_exit:+.1f}%)"
 
         return True, ""
 
@@ -674,6 +684,7 @@ class RiskManager:
         self.metrics.can_trade = True
         self._stop_loss_today.clear()
         self._exited_today.clear()
+        self._save_exited_today()
 
         self._save_daily_stats()
 
@@ -831,3 +842,32 @@ class RiskManager:
                 json.dump(data, f)
         except Exception as e:
             logger.error(f"손절 종목 저장 실패: {e}")
+
+    def _load_exited_today(self) -> Dict[str, Dict]:
+        """당일 청산 종목을 파일에서 복원"""
+        try:
+            if not self._exited_today_path.exists():
+                return {}
+            with open(self._exited_today_path, 'r') as f:
+                data = json.load(f)
+            if data.get("date") != date.today().isoformat():
+                return {}
+            entries = data.get("entries", {})
+            if entries:
+                logger.info(f"[리스크] 청산 종목 복원: {list(entries.keys())} (재진입 제한)")
+            return entries
+        except Exception as e:
+            logger.error(f"청산 종목 로드 실패: {e}")
+            return {}
+
+    def _save_exited_today(self):
+        """당일 청산 종목을 파일에 저장"""
+        try:
+            data = {
+                "date": date.today().isoformat(),
+                "entries": self._exited_today,
+            }
+            with open(self._exited_today_path, 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.error(f"청산 종목 저장 실패: {e}")
