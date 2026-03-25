@@ -224,6 +224,20 @@ class ThemeChasingStrategy(BaseStrategy):
             logger.debug(f"[테마 추종] {symbol} 과열 (등락률 {change_pct:.1f}%)")
             return None
 
+        # RSI 과매수 차단 — 이미 과열된 종목은 초반 확산 구간이 아님
+        rsi_14 = indicators.get("rsi_14")
+        if rsi_14 is not None and rsi_14 > 75:
+            logger.debug(f"[테마 추종] {symbol} RSI 과매수 차단: {rsi_14:.0f} > 75")
+            return None
+
+        # MA20 대비 과거 차단 — 이미 급등한 종목 추격 방지
+        ma20 = indicators.get("ma20")
+        if ma20 is not None and ma20 > 0 and price > 0:
+            ma20_dist = (price - ma20) / ma20 * 100
+            if ma20_dist > 15:
+                logger.debug(f"[테마 추종] {symbol} MA20 과거 차단: +{ma20_dist:.1f}% > 15%")
+                return None
+
         if vol_ratio < self.theme_config.min_volume_ratio:
             return None
 

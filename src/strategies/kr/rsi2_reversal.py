@@ -25,6 +25,7 @@ from ..base import BaseStrategy, StrategyConfig
 from ...core.types import (
     Signal, Position, OrderSide, SignalStrength, StrategyType
 )
+from ...utils.sizing import atr_position_multiplier
 
 
 class RSI2ReversalStrategy(BaseStrategy):
@@ -112,6 +113,15 @@ class RSI2ReversalStrategy(BaseStrategy):
                 else:
                     strength = SignalStrength.NORMAL
 
+                # ATR 기반 포지션 사이징
+                _pos_mult = atr_position_multiplier(atr_pct_value)
+
+                # MA200 상방 + VCP 수축 결합 → 고확신 패턴: 배율 확대
+                _has_ma200 = (candidate.indicators.get("ma200") or 0) > 0 and (candidate.indicators.get("close") or 0) > (candidate.indicators.get("ma200") or 0)
+                _has_vcp = (candidate.indicators.get("overlay_bonus") or 0) >= 3.0
+                if _has_ma200 and _has_vcp:
+                    _pos_mult = min(_pos_mult * 1.3, 1.3)
+
                 signal = Signal(
                     symbol=candidate.symbol,
                     side=OrderSide.BUY,
@@ -128,6 +138,7 @@ class RSI2ReversalStrategy(BaseStrategy):
                         "candidate_name": candidate.name,
                         "indicators": candidate.indicators,
                         "atr_pct": atr_pct_value,
+                        "position_multiplier": _pos_mult,
                     },
                 )
                 signals.append(signal)
@@ -256,4 +267,4 @@ class RSI2ReversalStrategy(BaseStrategy):
         overlay = candidate.indicators.get("overlay_bonus") if candidate.indicators.get("overlay_bonus") is not None else 0.0
         score += overlay
 
-        return min(score, 100)
+        return max(0, min(score, 100))

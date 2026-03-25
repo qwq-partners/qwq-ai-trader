@@ -1350,6 +1350,9 @@ JSON:
                                                 avg_entry_price=float(_sell_pos_snap.avg_price),
                                             )
                                             logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
+                                            # 재진입 제한: 청산 종목 기록
+                                            if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
+                                                bot.risk_manager.record_exit(fill.symbol, float(fill.price))
                                         else:
                                             logger.warning(f"[체결] {fill.symbol} SELL journal 스킵: trade_id 없음")
                                     except Exception as _je:

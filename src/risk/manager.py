@@ -81,6 +81,9 @@ class RiskManager:
         self._stop_loss_today_path = cache_dir / f"stop_loss_today{market_suffix}.json"
         self._stop_loss_today: set = self._load_stop_loss_today()
 
+        # 당일 청산 종목 재진입 제한 (KR): 눌림/재돌파 확인 필요
+        self._exited_today: Dict[str, Dict] = {}  # {symbol: {"price": 청산가, "time": 청산시각}}
+
         # 연속 손실 카운터 (US 적응형 사이징)
         self._consecutive_losses: int = 0
 
@@ -210,6 +213,12 @@ class RiskManager:
         if self.market == "KR" and symbol in self._stop_loss_today:
             return False, "당일 손절 종목 재진입 금지"
 
+        # 1.2. 동일 종목 재진입 제한 (KR): 눌림/재돌파 확인형
+        if self.market == "KR" and symbol in self._exited_today:
+            can_re, reason = self.check_reentry_condition(symbol, float(price))
+            if not can_re:
+                return False, f"재진입 제한: {reason}"
+
         # 1.5. 포트폴리오 동기화 장애 체크
         if not self._sync_healthy:
             return False, f"포트폴리오 동기화 장애 (연속 {self._sync_fail_count}회 실패) — 매수 차단"
@@ -268,6 +277,49 @@ class RiskManager:
             )
             if sector_count >= self.config.max_positions_per_sector:
                 return False, f"Sector limit reached for {sector}"
+
+        return True, ""
+
+    def record_exit(self, symbol: str, exit_price: float):
+        """청산 종목 기록 (당일 재진입 조건 체크용)"""
+        if self.market == "KR":
+            self._exited_today[symbol] = {
+                "price": exit_price,
+                "time": datetime.now(),
+            }
+
+    def check_reentry_condition(self, symbol: str, current_price: float) -> tuple:
+        """동일 종목 재진입 조건 체크 (눌림/재돌파 확인형)
+
+        Returns:
+            (허용 여부, 사유)
+        """
+        if self.market != "KR":
+            return True, ""
+
+        exit_info = self._exited_today.get(symbol)
+        if exit_info is None:
+            return True, ""  # 당일 청산 이력 없음 → 자유 진입
+
+        exit_price = exit_info["price"]
+        exit_time = exit_info["time"]
+        elapsed_min = (datetime.now() - exit_time).total_seconds() / 60
+
+        # 최소 쿨다운 30분
+        if elapsed_min < 30:
+            return False, f"당일 청산 후 쿨다운 ({elapsed_min:.0f}분/30분)"
+
+        # 눌림 확인: 청산가 대비 -3% 이상 하락 후 반등한 상태
+        if exit_price > 0 and current_price > 0:
+            from_exit = (current_price - exit_price) / exit_price * 100
+            # 청산가 대비 -3%~+1% 범위 = 눌림 구간 진입 허용
+            if -3 <= from_exit <= 1:
+                return True, f"눌림 확인 (청산가 대비 {from_exit:+.1f}%)"
+            # 청산가 대비 +3% 이상 = 재돌파 확인
+            if from_exit >= 3:
+                return True, f"재돌파 확인 (청산가 대비 {from_exit:+.1f}%)"
+            # 청산가 근처 횡보 또는 단순 반등 → 차단
+            return False, f"눌림/재돌파 미확인 (청산가 대비 {from_exit:+.1f}%)"
 
         return True, ""
 
@@ -621,6 +673,7 @@ class RiskManager:
         self.metrics = RiskMetrics()
         self.metrics.can_trade = True
         self._stop_loss_today.clear()
+        self._exited_today.clear()
 
         self._save_daily_stats()
 

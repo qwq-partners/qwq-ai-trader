@@ -128,6 +128,12 @@ class SEPATrendStrategy(BaseStrategy):
                 # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
                 _pos_mult = atr_position_multiplier(atr_pct_value)
 
+                # 고점수(90+) 또는 섹터 RS 우수 → 자본 집중 (최대 1.4배)
+                if score >= 90:
+                    _pos_mult = min(_pos_mult * 1.4, 1.4)
+                elif score >= 85 and candidate.indicators.get("mrs", 0) is not None and (candidate.indicators.get("mrs") or 0) > 0:
+                    _pos_mult = min(_pos_mult * 1.2, 1.2)
+
                 signal = Signal(
                     symbol=candidate.symbol,
                     side=OrderSide.BUY,

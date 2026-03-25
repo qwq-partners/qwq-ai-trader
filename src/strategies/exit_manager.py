@@ -730,8 +730,9 @@ class ExitManager:
                     sell_fee_buffer = -2.0
                 elif state.current_stage == ExitStage.FIRST:
                     # 1차 익절 완료: 20% 이미 수익 확보 → 추세 추종 여유 부여
-                    # 정상적인 눌림목(-5~7%)에서 조기 청산 방지
-                    sell_fee_buffer = -1.5
+                    # 강한 트렌드 종목의 정상적인 눌림목(-5~7%)에서 조기 청산 방지
+                    # ATR/MA5 트레일링이 기술적 청산을 담당하므로 본전보호는 넓게
+                    sell_fee_buffer = -2.5
                 elif state.current_stage == ExitStage.SECOND:
                     # 2차 익절 완료: 추가 수익 확보 → 버퍼 축소
                     sell_fee_buffer = -0.5
