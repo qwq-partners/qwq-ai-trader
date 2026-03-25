@@ -973,6 +973,36 @@ class TradeStorage:
                     logger.warning(f"[TradeStorage] {sym} 매도 복구 대상 trade 없음 (누락 {missing_qty}주)")
                     continue
 
+                # ── 진입 이전 매도 필터링 ──────────────────────────────────────────────
+                # 사용자 직접 거래 (봇 미주문): KIS 매도 체결 시각이 봇 진입 시각보다
+                # 이를 경우 해당 체결은 다른 포지션의 청산이므로 복구 대상에서 제외.
+                entry_dt = target_trade.entry_time  # datetime or None
+                if entry_dt:
+                    valid_fills = [
+                        f for f in sell_fills
+                        if self._parse_kis_time(f.get("ord_tmd", ""), today) is None
+                        or (self._parse_kis_time(f.get("ord_tmd", ""), today) >= entry_dt)
+                    ]
+                    if not valid_fills:
+                        logger.info(
+                            f"[TradeStorage] {sym} 매도 복구 건너뜀: "
+                            f"KIS 매도 {len(sell_fills)}건 모두 봇 진입({entry_dt.strftime('%H:%M:%S')}) 이전 "
+                            f"→ 사용자 직접 거래로 판단"
+                        )
+                        continue
+                    if len(valid_fills) < len(sell_fills):
+                        excluded = len(sell_fills) - len(valid_fills)
+                        logger.info(
+                            f"[TradeStorage] {sym} 매도 복구: 진입 이전 {excluded}건 제외, "
+                            f"진입 이후 {len(valid_fills)}건만 복구"
+                        )
+                        sell_fills = valid_fills
+                        kis_total_sold = sum(int(f.get("tot_ccld_qty", 0)) for f in sell_fills)
+                        missing_qty = max(kis_total_sold - already_sold, 0)
+                        if missing_qty <= 0:
+                            continue
+                # ────────────────────────────────────────────────────────────────────────
+
                 # 매도수량 클램핑: entry_quantity 초과 방지
                 remaining = target_trade.entry_quantity - (target_trade.exit_quantity or 0)
                 if missing_qty > remaining:

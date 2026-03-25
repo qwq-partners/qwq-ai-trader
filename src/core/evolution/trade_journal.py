@@ -80,11 +80,15 @@ class TradeRecord:
 
     def to_dict(self) -> Dict:
         """딕셔너리로 변환 (JSON 저장용)"""
+        from decimal import Decimal as _Decimal
+
         d = asdict(self)
-        # datetime 변환
         for key, value in d.items():
             if isinstance(value, datetime):
                 d[key] = value.isoformat() if value else None
+            elif isinstance(value, _Decimal):
+                # fee_calculator 등 내부에서 Decimal이 필드에 들어올 수 있음
+                d[key] = float(value)
         return d
 
     @classmethod
