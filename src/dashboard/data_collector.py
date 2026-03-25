@@ -1668,7 +1668,7 @@ class DashboardDataCollector:
             sym = f.get('symbol', '')
             name = f.get('name', '') or name_cache.get(sym, sym)
 
-            ep = entry_prices.get(sym, 0)
+            ep = self._pop_entry_price(sym, entry_prices)   # FIFO 진입가
             pnl = 0
             pnl_pct = 0
             if ep > 0:
@@ -1749,10 +1749,19 @@ class DashboardDataCollector:
         })
 
     async def _load_entry_prices(self, target_date: date) -> Dict[str, float]:
-        """DB에서 매도 종목의 진입가 로딩"""
+        """DB에서 매도 종목의 진입가 로딩.
+
+        동일 symbol에 여러 포지션이 있을 경우 FIFO 방식으로 큐를 만들어
+        get_daily_settlement가 pop_entry_price()로 순서대로 소비하도록 한다.
+        반환값은 하위 호환용 Dict[str, float] (첫 번째 진입가)이며,
+        self._entry_price_queues 에 List[float] 큐도 함께 세팅된다.
+        """
         entry_prices: Dict[str, float] = {}
+        # symbol → FIFO 큐 (entry_time 오름차순)
+        queues: Dict[str, list] = {}
         journal = self.bot.trade_journal
         if not journal:
+            self._entry_price_queues = queues
             return entry_prices
 
         # TradeStorage (DB) 사용 시
@@ -1765,24 +1774,46 @@ class DashboardDataCollector:
                         FROM trades
                         WHERE exit_time IS NULL
                            OR exit_time::date = $1
-                        ORDER BY entry_time
+                        ORDER BY entry_time ASC
                     """, target_date)
                     for r in rows:
-                        entry_prices[r['symbol']] = float(r['entry_price'])
+                        sym = r['symbol']
+                        ep = float(r['entry_price'])
+                        queues.setdefault(sym, []).append(ep)
+                        entry_prices[sym] = queues[sym][0]   # FIFO: 첫 번째 진입가
             except Exception as e:
                 logger.warning(f"[정산] DB 진입가 조회 실패: {e}")
 
         # 캐시 폴백
         if not entry_prices:
             try:
-                for t in journal.get_open_trades():
-                    entry_prices[t.symbol] = float(t.entry_price)
-                for t in journal.get_trades_by_date(target_date):
-                    entry_prices[t.symbol] = float(t.entry_price)
+                all_trades = list(journal.get_open_trades()) + list(journal.get_trades_by_date(target_date))
+                all_trades.sort(key=lambda t: getattr(t, 'entry_time', ''))
+                for t in all_trades:
+                    sym = t.symbol
+                    ep = float(t.entry_price)
+                    queues.setdefault(sym, []).append(ep)
+                    entry_prices[sym] = queues[sym][0]
             except Exception as e:
                 logger.warning(f"[정산] 캐시 진입가 조회 실패: {e}")
 
+        self._entry_price_queues = queues
         return entry_prices
+
+    def _pop_entry_price(self, sym: str, entry_prices: Dict[str, float]) -> float:
+        """FIFO 방식으로 symbol의 다음 진입가를 반환.
+
+        큐가 있으면 앞에서 pop, 없으면 entry_prices 기본값 사용.
+        같은 symbol에 분할 진입/청산이 여러 번 있을 때 각 매도에 올바른 진입가를 연결한다.
+        """
+        queues = getattr(self, '_entry_price_queues', {})
+        q = queues.get(sym)
+        if q:
+            ep = q.pop(0)
+            # 큐 소진 후 폴백용으로 entry_prices도 갱신
+            entry_prices[sym] = q[0] if q else ep
+            return ep
+        return entry_prices.get(sym, 0)
 
     @staticmethod
     def _format_kis_time(ord_tmd: str) -> str:
