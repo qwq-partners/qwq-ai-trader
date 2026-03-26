@@ -1169,6 +1169,12 @@ function renderCoreHoldings(data) {
         section.style.display = 'none';
         return;
     }
+    // US 전용 필터 시 코어 섹션 숨김 (코어홀딩은 KR 전용)
+    const mf = MarketFilter.get();
+    if (mf === "us") {
+        section.style.display = 'none';
+        return;
+    }
     section.style.display = '';
 
     // 예산
