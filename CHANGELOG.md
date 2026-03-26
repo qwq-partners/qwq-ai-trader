@@ -1,6 +1,19 @@
 # QWQ AI Trader - Changelog
 
-## 2026-03-27 — 회피 패턴 5건 + 집중 기회 3건 (d6f1ba4)
+## 2026-03-27 — 15라운드 전체 리뷰 + 회피 패턴 + 집중 기회
+
+### 15라운드 전체 리뷰 수정 (1bbe7dd)
+- **P0-1**: very_strong 신호 배율 2.0→1.3 (단일 종목 28% 과잉 집중 방지)
+- **P0-2**: 전략 배분 합계 105%→100% (비활성 momentum 5%→0%)
+- **P0-3**: stop_loss_pct=3.0→3.5 (min_stop_pct=3.5 정합성)
+- **P1-1**: daily_pnl_pct 기준 initial_capital→total_equity 통일
+- **P1-5**: Gap&Go ATR position_multiplier 적용 (고변동 갭 종목 사이징 누락)
+- **P1-8**: KR 섹터 집중도 제한 작동 — can_open_position에 sector 전달
+- **P1-9**: 본전보호 FIRST -2.5%→-1.5% (1차 익절 후 순손실 방지)
+- **P2-2**: check_rr_ratio risk≤0 → False (잘못된 손절가 차단)
+- **P2-8**: ATR sizing 계단함수→선형 보간 (불연속 점프 제거)
+
+### 회피 패턴 5건 + 집중 기회 3건 (d6f1ba4)
 
 ### 회피 패턴
 1. **장초반 추격 방지**: theme_chasing 시간대별 max_change 차등 (09~10시: 4%, 이후: 8%)
