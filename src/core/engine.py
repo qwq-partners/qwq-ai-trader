@@ -1262,22 +1262,24 @@ class RiskManager:
 
         # 리스크 체크 (SELL은 포지션 축소이므로 체크 스킵)
         if order.side == OrderSide.BUY:
-            if self._risk_validator:
-                can_trade, reason = self._risk_validator.can_open_position(
-                    order.symbol, order.side, order.quantity,
-                    order.price or Decimal("0"), self.engine.portfolio,
-                    strategy_type=order.strategy,
-                )
-                if not can_trade:
-                    logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
-                    return None
-
+            # 섹터 조회 (섹터 집중도 제한용)
             _sector = event.metadata.get("sector") if event.metadata else None
             if not _sector and self._sector_lookup:
                 try:
                     _sector = await self._sector_lookup(order.symbol)
                 except Exception:
                     _sector = None
+
+            if self._risk_validator:
+                can_trade, reason = self._risk_validator.can_open_position(
+                    order.symbol, order.side, order.quantity,
+                    order.price or Decimal("0"), self.engine.portfolio,
+                    strategy_type=order.strategy,
+                    sector=_sector,
+                )
+                if not can_trade:
+                    logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
+                    return None
 
             # 비코어 전략: reserved_cash에 코어 예약금 포함 (코어 30% 예산 보호)
             _effective_reserved = self._reserved_cash
@@ -1520,10 +1522,10 @@ class RiskManager:
                     )
                     return 0
 
-        # 신호 강도에 따른 조정
+        # 신호 강도에 따른 조정 (2천만원 규모: 과잉 집중 방지)
         multiplier = {
-            "very_strong": 2.0,
-            "strong": 1.5,
+            "very_strong": 1.3,
+            "strong": 1.15,
             "normal": 1.0,
             "weak": 0.5
         }.get(signal.strength.value, 1.0)

@@ -458,7 +458,7 @@ class BaseStrategy(ABC):
         risk = float(entry_price - stop_price)
 
         if risk <= 0:
-            return True  # 손절가가 진입가 이상이면 통과 (의미 없는 체크)
+            return False  # 손절가 >= 진입가: 잘못된 설정 → 진입 차단
 
         rr_ratio = reward / risk
         if rr_ratio < min_rr:

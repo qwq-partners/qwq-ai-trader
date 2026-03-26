@@ -2,20 +2,21 @@
 
 
 def atr_position_multiplier(atr_pct: float) -> float:
-    """ATR(%) → 포지션 배율 매핑
+    """ATR(%) → 포지션 배율 매핑 (선형 보간)
+
+    ATR이 높을수록 배율 축소. 경계값에서 불연속 점프 없이 연속 함수.
 
     | ATR   | multiplier | 효과       |
     |-------|-----------|------------|
-    | ≤ 3%  | 1.0       | 정상 비중   |
-    | 3~5%  | 0.8       | 20% 축소   |
-    | 5~8%  | 0.6       | 40% 축소   |
-    | > 8%  | 0.4       | 60% 축소   |
+    | ≤ 2%  | 1.0       | 정상 비중   |
+    | 5%    | 0.7       | 30% 축소   |
+    | 8%    | 0.4       | 60% 축소   |
+    | ≥ 10% | 0.3       | 70% 축소   |
     """
-    if atr_pct <= 3:
+    if atr_pct <= 2.0:
         return 1.0
-    elif atr_pct <= 5:
-        return 0.8
-    elif atr_pct <= 8:
-        return 0.6
+    elif atr_pct >= 10.0:
+        return 0.3
     else:
-        return 0.4
+        # 2% ~ 10% 구간: 선형 보간 (1.0 → 0.3)
+        return round(1.0 - (atr_pct - 2.0) * (0.7 / 8.0), 3)

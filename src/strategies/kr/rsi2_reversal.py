@@ -214,9 +214,9 @@ class RSI2ReversalStrategy(BaseStrategy):
         # 수정 기준:
         #   T-1 이상(장전/배치 스캔) 데이터 → 하락 직전 날의 수급 판단 → OR 조건 + 완화된 임계값
         #   T-0(장중 실시간) 데이터       → 하락 중이므로 기대치 낮춤 → 두 조건 중 하나만 충족도 인정
-        foreign_net = ind.get("foreign_net_buy", 0) or 0
-        inst_net = ind.get("inst_net_buy", 0) or 0
-        supply_age = ind.get("supply_data_age", 0) or 0
+        foreign_net = ind.get("foreign_net_buy") if ind.get("foreign_net_buy") is not None else 0
+        inst_net = ind.get("inst_net_buy") if ind.get("inst_net_buy") is not None else 0
+        supply_age = ind.get("supply_data_age") if ind.get("supply_data_age") is not None else 0
 
         if supply_age >= 1:
             # T-1 데이터: 하락 이전 날의 수급 → "어느 한 쪽이라도 순매수면" 반등 근거

@@ -739,9 +739,11 @@ class RiskManager:
         """Get current risk state (US 호환)"""
         daily_loss_pct = 0.0
         effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
-        if portfolio.initial_capital > 0:
+        # _is_daily_loss_limit_hit와 동일 기준(total_equity) 사용
+        equity = portfolio.total_equity
+        if equity > 0:
             daily_loss_pct = float(
-                effective_pnl / portfolio.initial_capital * 100
+                effective_pnl / equity * 100
             )
 
         return RiskMetrics(

@@ -13,9 +13,9 @@ from loguru import logger
 
 from ..base import BaseStrategy, StrategyConfig
 from ...core.types import (
-    Signal, Position,
-    OrderSide, SignalStrength, StrategyType
+    Signal, Position, OrderSide, SignalStrength, StrategyType
 )
+from ...utils.sizing import atr_position_multiplier
 
 
 @dataclass
@@ -209,15 +209,28 @@ class GapAndGoStrategy(BaseStrategy):
 
         logger.info(f"[Gap&Go] 진입 신호: {symbol} - {reason}")
 
-        return self.create_signal(
+        # ATR 기반 포지션 사이징 (갭 종목은 고변동 → 축소 필수)
+        _atr = indicators.get("atr_14")
+        _atr_val = _atr if _atr is not None else 0
+        _pos_mult = atr_position_multiplier(_atr_val)
+
+        return Signal(
             symbol=symbol,
             side=OrderSide.BUY,
             strength=strength,
+            strategy=self.config.strategy_type,
             price=current_price,
-            score=score,
-            reason=reason,
             target_price=target_price,
             stop_price=stop_price,
+            score=score,
+            confidence=score / 100.0,
+            reason=reason,
+            metadata={
+                "strategy_name": self.name,
+                "indicators": dict(self._indicators.get(symbol, {})),
+                "atr_pct": _atr_val,
+                "position_multiplier": _pos_mult,
+            },
         )
 
     async def _check_exit_signal(

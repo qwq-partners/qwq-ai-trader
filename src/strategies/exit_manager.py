@@ -117,7 +117,7 @@ class ExitConfig:
 
     # 1차 익절
     first_exit_pct: float = 5.0       # 목표 수익률 (%)
-    first_exit_ratio: float = 0.20    # 청산 비율 (0.30 → 0.20: P0-4 추세 추종 개선)
+    first_exit_ratio: float = 0.30    # 청산 비율 (evolved_overrides: 0.30)
 
     # 2차 익절
     second_exit_pct: float = 15.0     # 목표 수익률 (%) (10 → 15: P0-4)
@@ -730,9 +730,8 @@ class ExitManager:
                     sell_fee_buffer = -2.0
                 elif state.current_stage == ExitStage.FIRST:
                     # 1차 익절 완료: 20% 이미 수익 확보 → 추세 추종 여유 부여
-                    # 강한 트렌드 종목의 정상적인 눌림목(-5~7%)에서 조기 청산 방지
-                    # ATR/MA5 트레일링이 기술적 청산을 담당하므로 본전보호는 넓게
-                    sell_fee_buffer = -2.5
+                    # ATR/MA5 트레일링이 기술적 청산 담당, 본전보호는 최소 수익 보호
+                    sell_fee_buffer = -1.5
                 elif state.current_stage == ExitStage.SECOND:
                     # 2차 익절 완료: 추가 수익 확보 → 버퍼 축소
                     sell_fee_buffer = -0.5
