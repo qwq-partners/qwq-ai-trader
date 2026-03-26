@@ -69,6 +69,12 @@ class ThemeChasingConfig(StrategyConfig):
     # ATR 진입 필터 (초고변동 종목 차단)
     max_atr_pct: float = 8.0                 # ATR 상한 (%)
 
+    # 대형주 제외 (시가총액 상위 대형주는 테마 모멘텀 약함)
+    exclude_large_cap_symbols: bool = True    # 대형주 테마 편입 차단
+
+    # 장초반 과열 방지 (시간대별 등락률 상한 차등)
+    max_change_pct_morning: float = 4.0      # 09:05~10:00 (장초반 추격 방지)
+
     # 시간대 제한
     trading_start_time: str = "09:05" # 시작 시간
     trading_end_time: str = "15:00"   # 종료 시간
@@ -220,9 +226,28 @@ class ThemeChasingStrategy(BaseStrategy):
 
         if change_pct < self.theme_config.min_change_pct:
             return None
-        if change_pct > self.theme_config.max_change_pct:
-            logger.debug(f"[테마 추종] {symbol} 과열 (등락률 {change_pct:.1f}%)")
+
+        # 시간대별 등락률 상한 차등 (장초반 추격 방지)
+        now_time = datetime.now().strftime("%H:%M")
+        if now_time < "10:00":
+            _max_change = self.theme_config.max_change_pct_morning  # 4%
+        else:
+            _max_change = self.theme_config.max_change_pct  # 8%
+        if change_pct > _max_change:
+            logger.debug(f"[테마 추종] {symbol} 과열 (등락률 {change_pct:.1f}% > {_max_change:.0f}%)")
             return None
+
+        # 대형주 테마 편입 차단 (시총 상위 대형주는 테마 모멘텀 약함)
+        if self.theme_config.exclude_large_cap_symbols:
+            _large_caps = {
+                '005930', '000660', '373220', '207940', '005380',
+                '000270', '051910', '006400', '035420', '035720',
+                '068270', '028260', '105560', '055550', '086790',
+                '316140', '003670', '034730', '012330', '066570',
+            }
+            if symbol in _large_caps:
+                logger.debug(f"[테마 추종] {symbol} 대형주 제외")
+                return None
 
         # RSI 과매수 차단 — 이미 과열된 종목은 초반 확산 구간이 아님
         rsi_14 = indicators.get("rsi_14")
@@ -424,13 +449,13 @@ class ThemeChasingStrategy(BaseStrategy):
         # 테마 점수 (40점)
         score += min(theme_score * 0.4, 40)
 
-        # 등락률 (20점)
-        if 2 <= change_pct <= 5:
-            score += 20
-        elif 5 < change_pct <= 8:
-            score += 14
-        elif change_pct <= 12:
-            score += 8
+        # 등락률 (20점) — 초기 확산 구간(2~4%)에 집중
+        if 2 <= change_pct <= 4:
+            score += 20   # 초기 확산: 최고 점수
+        elif 4 < change_pct <= 6:
+            score += 14   # 초기 가속
+        elif 6 < change_pct <= 8:
+            score += 8    # 과열 진입
         else:
             score += 4
 

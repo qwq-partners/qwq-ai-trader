@@ -317,6 +317,28 @@ class KRScheduler:
             if not position:
                 return
 
+            # theme_chasing 장마감 전 EOD 청산 (15:10 이후, 손실 포지션 우선 정리)
+            _now_hm = datetime.now().strftime("%H:%M")
+            if position.strategy == "theme_chasing" and _now_hm >= "15:10":
+                _theme_pnl_pct = float(position.unrealized_pnl_pct)
+                if _theme_pnl_pct < 1.0:  # 수익 +1% 미만이면 EOD 청산
+                    logger.info(
+                        f"[테마EOD] {symbol} 장마감 전 청산: "
+                        f"수익률={_theme_pnl_pct:+.1f}% < +1.0% (갭리스크 방지)"
+                    )
+                    _eod_qty = position.quantity
+                    sell_price = await bot.broker.get_best_bid(symbol)
+                    if sell_price and sell_price > 0:
+                        order = await bot.broker.submit_order(
+                            symbol=symbol, side="sell",
+                            quantity=_eod_qty, price=int(sell_price),
+                        )
+                        if order and order.get("order_no"):
+                            bot._exit_pending_symbols.add(symbol)
+                            bot._exit_pending_timestamps[symbol] = datetime.now()
+                            bot._exit_reasons[symbol] = f"테마EOD: 수익률 {_theme_pnl_pct:+.1f}%"
+                    return
+
             # 전략별 청산 파라미터 적용
             exit_params = bot._strategy_exit_params.get(position.strategy, {}) if position.strategy else {}
 
@@ -1799,12 +1821,15 @@ JSON:
                                         f"[스크리닝] US 고변동({_overnight_volatility:.1f}%) "
                                         f"→ 최소점수 +{_vol_boost} = {_min_score}"
                                     )
+                                # 시간대별 등락률 상한 (장초반 추격 방지)
+                                _max_rt_change = 10.0 if now.hour >= 11 else 7.0 if now.hour >= 10 else 5.0
                                 candidates = [
                                     s for s in screened
                                     if s.score >= _min_score
                                     and s.symbol not in exclude
                                     and s.symbol not in bot._screening_signal_cooldown
                                     and bot._daily_entry_count.get(s.symbol, 0) < max_daily_entries
+                                    and s.change_pct <= _max_rt_change
                                 ]
 
                                 # 장중 전략 사전 체크
@@ -1980,6 +2005,24 @@ JSON:
 
                                     stop_pct = min(max(atr_pct * 1.5, 2.0), 8.0)
                                     target_pct = min(max(stop_pct * 2.0, 4.0), 15.0)
+
+                                    # R/R 비율 검증 (장중 자동진입도 기대수익 체크)
+                                    _rr = target_pct / stop_pct if stop_pct > 0 else 0
+                                    if _rr < 1.5:
+                                        logger.debug(f"[스크리닝] {stock.symbol} 탈락: R/R 부족 ({_rr:.1f} < 1.5)")
+                                        continue
+
+                                    # 고점 확장 후 눌림 없이 매수 방지
+                                    # 당일 등락률이 높은데 ATR 대비 이미 많이 올랐으면 추격
+                                    if rt_change > 0 and atr_pct > 0:
+                                        _surge_ratio = rt_change / atr_pct
+                                        if _surge_ratio > 1.2:  # ATR의 120% 이상 급등 = 추격
+                                            logger.info(
+                                                f"[스크리닝] {stock.symbol} 탈락: 고점 추격 "
+                                                f"(등락 {rt_change:+.1f}% / ATR {atr_pct:.1f}% = {_surge_ratio:.1f}x)"
+                                            )
+                                            continue
+
                                     stop_price = rt_price * (1 - stop_pct / 100)
                                     target_price = rt_price * (1 + target_pct / 100)
 
