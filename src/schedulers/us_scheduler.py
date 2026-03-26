@@ -1581,14 +1581,42 @@ class USScheduler:
                         sold_qty = old_qty - new_qty
                         exit_price = float(kp["current_price"])
                         trade_id = getattr(pos, 'trade_id', None)
+                        # pending_orders에서 실제 exit_type/reason 복원
+                        _p_reason = "sync_detected"
+                        _p_exit_type = "sync_partial"
+                        _p_sell_nos = [
+                            no for no, o in list(eng._pending_orders.items())
+                            if o.get("symbol") == symbol and o.get("side") == "sell"
+                        ]
+                        for _pno in _p_sell_nos:
+                            _pi = eng._pending_orders.pop(_pno, {})
+                            if _pi.get("reason"):
+                                _p_reason = _pi["reason"]
+                            if _pi.get("exit_type"):
+                                _p_exit_type = _pi["exit_type"]
                         if trade_id:
                             eng.trade_storage.record_exit(
                                 trade_id=trade_id,
                                 exit_price=exit_price,
                                 exit_quantity=sold_qty,
-                                exit_reason="sync_detected",
-                                exit_type="sync_partial",
+                                exit_reason=_p_reason,
+                                exit_type=_p_exit_type,
                                 avg_entry_price=float(pos.avg_price),
+                            )
+                            # trade_events에 SELL 이벤트 INSERT
+                            _p_pnl = round((exit_price - float(pos.avg_price)) * sold_qty, 2)
+                            _p_pnl_pct = round((exit_price - float(pos.avg_price)) / float(pos.avg_price) * 100, 2) if pos.avg_price > 0 else 0
+                            eng.trade_storage._enqueue(
+                                """INSERT INTO trade_events
+                                   (trade_id, symbol, name, event_type, event_time, price, quantity,
+                                    exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score, status, market)
+                                   VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0,$12,'US')
+                                   ON CONFLICT DO NOTHING""",
+                                (trade_id, symbol, pos.name or symbol,
+                                 datetime.now(), exit_price, sold_qty,
+                                 _p_exit_type, _p_reason,
+                                 _p_pnl, _p_pnl_pct,
+                                 pos.strategy or '', _p_exit_type),
                             )
                         logger.info(
                             f"[US 동기화] {symbol} 수량 감소 감지: "
@@ -1778,12 +1806,19 @@ class USScheduler:
 
                 # 해당 종목 pending 매도 주문 즉시 제거 (history=0 로 2분 대기하던 문제 해결)
                 # _sync_portfolio가 KIS 잔고에서 제거됨을 확인 → 매도 체결로 간주
+                # pending_orders에서 실제 exit_type/reason 복원
+                _actual_reason = "sync_closed"
+                _actual_exit_type = "sync_closed"
                 _sell_pend_nos = [
                     no for no, o in list(eng._pending_orders.items())
                     if o.get("symbol") == symbol and o.get("side") == "sell"
                 ]
                 for _no in _sell_pend_nos:
-                    eng._pending_orders.pop(_no, None)
+                    _pend_info = eng._pending_orders.pop(_no, {})
+                    if _pend_info.get("reason"):
+                        _actual_reason = _pend_info["reason"]
+                    if _pend_info.get("exit_type"):
+                        _actual_exit_type = _pend_info["exit_type"]
                     logger.info(f"[US 동기화] {symbol} 매도 pending 즉시 해제 (주문번호={_no})")
 
                 # WS 구독 해제 → 포지션 없으면 WS 종료
@@ -1804,18 +1839,35 @@ class USScheduler:
                     entry_time=pos.entry_time or datetime.now(),
                     exit_time=datetime.now(),
                     strategy=pos.strategy or "unknown",
-                    reason="sync_closed",
+                    reason=_actual_reason,
                 )
-                # TradeStorage DB 기록 (journal.record_exit도 내부에서 호출됨)
+                # TradeStorage DB 기록
                 trade_id = getattr(pos, 'trade_id', None)
+                _exit_price = float(pos.current_price)
+                _entry_price = float(pos.avg_price)
+                _pnl = round((_exit_price - _entry_price) * pos.quantity, 2)
+                _pnl_pct = round((_exit_price - _entry_price) / _entry_price * 100, 2) if _entry_price > 0 else 0
                 if trade_id and eng.trade_storage:
                     eng.trade_storage.record_exit(
                         trade_id=trade_id,
-                        exit_price=float(pos.current_price),
+                        exit_price=_exit_price,
                         exit_quantity=pos.quantity,
-                        exit_reason="sync_closed",
-                        exit_type="sync_closed",
-                        avg_entry_price=float(pos.avg_price),
+                        exit_reason=_actual_reason,
+                        exit_type=_actual_exit_type,
+                        avg_entry_price=_entry_price,
+                    )
+                    # trade_events에 SELL 이벤트 INSERT (대시보드 거래탭 표시용)
+                    eng.trade_storage._enqueue(
+                        """INSERT INTO trade_events
+                           (trade_id, symbol, name, event_type, event_time, price, quantity,
+                            exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score, status, market)
+                           VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0,$12,'US')
+                           ON CONFLICT DO NOTHING""",
+                        (trade_id, symbol, pos.name or symbol,
+                         datetime.now(), _exit_price, pos.quantity,
+                         _actual_exit_type, _actual_reason,
+                         _pnl, _pnl_pct,
+                         pos.strategy or '', _actual_exit_type),
                     )
 
                 # daily_pnl 갱신
@@ -2018,11 +2070,22 @@ class USScheduler:
                 side = pending["side"]
 
                 # 포트폴리오 기반 체결 감지: 매수 주문인데 이미 포지션에 있으면 체결된 것
+                # ★ 부분 체결 가능: 봇 주문 수량과 KIS 실제 수량이 다를 수 있음
                 if side == "buy" and symbol in eng.portfolio.positions and elapsed > 30:
-                    logger.info(
-                        f"[US 주문 체크] {order_no} ({symbol}) "
-                        f"매수 주문 — 포지션에 이미 존재, 체결로 간주하여 pending 정리"
-                    )
+                    pos = eng.portfolio.positions[symbol]
+                    ordered_qty = pending.get("qty", 0)
+                    kis_qty = pos.quantity  # 동기화에서 갱신된 KIS 실제 수량
+                    if ordered_qty > 0 and kis_qty < ordered_qty:
+                        logger.warning(
+                            f"[US 주문 체크] {order_no} ({symbol}) "
+                            f"매수 부분 체결 감지: 주문 {ordered_qty}주 → 실제 {kis_qty}주 "
+                            f"(봇 수량을 KIS 기준으로 보정)"
+                        )
+                    else:
+                        logger.info(
+                            f"[US 주문 체크] {order_no} ({symbol}) "
+                            f"매수 주문 — 포지션에 이미 존재 ({kis_qty}주), 체결로 간주하여 pending 정리"
+                        )
                     eng._pending_symbols.discard(symbol)
                     del eng._pending_orders[order_no]
                     continue
@@ -2088,14 +2151,12 @@ class USScheduler:
                             f"[US 주문 체크] {order_no} ({symbol}) "
                             f"폴백주문 타임아웃 ({int(timeout_sec / 60)}분) — 제거"
                         )
-                    # 매도 assumed-filled: _pending_symbols 유지 → _exit_check_loop 재진입 차단
-                    # _sync_portfolio가 KIS 포지션 확인 후 _pending_symbols discard
-                    if side == "sell" and not cancel_ok:
-                        del eng._pending_orders[order_no]
-                        # _pending_symbols는 유지 (재매도 이중 주문 차단)
-                    else:
-                        eng._pending_symbols.discard(symbol)
-                        del eng._pending_orders[order_no]
+                    # 매도 assumed-filled 또는 취소 완료: pending 정리
+                    # ★ 이전: 매도 assumed-filled 시 _pending_symbols 유지 → 동기화에서 수량 보정 차단됨
+                    # ★ 수정: _pending_symbols도 해제하여 다음 동기화에서 KIS 실제 수량 반영
+                    #    (재매도 이중 주문은 _exit_check_loop의 별도 쿨다운으로 방어)
+                    del eng._pending_orders[order_no]
+                    eng._pending_symbols.discard(symbol)
 
                     # 매도 주문 취소 시 ExitManager stage 롤백 + 적극 지정가 재시도
                     if side == "sell" and cancel_ok:
