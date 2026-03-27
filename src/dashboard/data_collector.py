@@ -1648,6 +1648,21 @@ class DashboardDataCollector:
             price = float(f.get('avg_prvs', 0))
             if sym and qty > 0 and price > 0:
                 db_buy_fills.setdefault(sym, []).append((qty, price))
+
+        # ── trades DB 오픈 포지션 → 봇 관리 종목 판별용 ──────────────────────────
+        # trade_events 매칭 실패 시에도 trades 테이블에 오픈 포지션이 있으면
+        # 봇이 관리하던 포지션으로 간주 (is_direct_trade=False)
+        bot_managed_symbols: set = set()
+        if pool:
+            try:
+                async with pool.acquire() as _conn:
+                    open_rows = await _conn.fetch("""
+                        SELECT DISTINCT symbol FROM trades
+                        WHERE exit_time IS NULL
+                    """)
+                    bot_managed_symbols = {r['symbol'] for r in open_rows}
+            except Exception as _e:
+                logger.warning(f"[정산] bot_managed_symbols 조회 실패: {_e}")
         # ─────────────────────────────────────────────────────────────────────────
 
         # DB에서 진입가 조회 (DB pnl 매칭 실패 시 폴백용)
@@ -1733,8 +1748,9 @@ class DashboardDataCollector:
                 buy_cost_for_pct = ep * qty * (1 + self.BUY_FEE_RATE) if ep > 0 else 1
                 pnl_pct = pnl / buy_cost_for_pct * 100 if buy_cost_for_pct else 0
             else:
-                # DB에 없는 체결 = 봇 외 사용자 직접 거래
-                is_direct_trade = True
+                # DB trade_events 매칭 실패 → trades 오픈 포지션 여부로 재판별
+                # trades 테이블에 오픈 포지션이 있으면 봇이 관리하던 종목 (trade_id 누락 버그)
+                is_direct_trade = sym not in bot_managed_symbols
                 # 같은 날 동일 종목 KIS 매수 체결이 있으면 그 가격으로 추정
                 same_day_buys = db_buy_fills.get(sym, [])
                 ep_guess = 0
