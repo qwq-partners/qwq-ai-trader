@@ -1376,7 +1376,91 @@ JSON:
                                             if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
                                                 bot.risk_manager.record_exit(fill.symbol, float(fill.price))
                                         else:
-                                            logger.warning(f"[체결] {fill.symbol} SELL journal 스킵: trade_id 없음")
+                                            # trade_id 없음 → trades DB 직접 조회 후 기록
+                                            # (sync_detected 등 journal 미등록 포지션 대응)
+                                            logger.warning(f"[체결] {fill.symbol} SELL trade_id 없음 → DB 직접 기록 시도")
+                                            _db_pool = getattr(bot.trade_journal, 'pool', None)
+                                            if _db_pool:
+                                                try:
+                                                    async with _db_pool.acquire() as _dbc:
+                                                        _db_row = await _dbc.fetchrow(
+                                                            """SELECT id, entry_price, entry_strategy
+                                                               FROM trades
+                                                               WHERE symbol=$1 AND exit_time IS NULL
+                                                               ORDER BY entry_time DESC LIMIT 1""",
+                                                            fill.symbol,
+                                                        )
+                                                    if _db_row:
+                                                        _db_tid = str(_db_row['id'])
+                                                        _db_ep = float(_db_row['entry_price'] or 0) or float(_sell_pos_snap.avg_price)
+                                                        _db_strat = str(_db_row['entry_strategy'] or 'sync_detected')
+                                                        # exit_type 분류 (정규 경로와 동일 로직)
+                                                        _r2 = _exit_reason_snap or ''
+                                                        if "손절" in _r2 or "stop" in _r2.lower():
+                                                            _etype2 = "stop_loss"
+                                                        elif "트레일링" in _r2 or "trailing" in _r2.lower():
+                                                            _etype2 = "trailing"
+                                                        elif "본전 이탈" in _r2 or "breakeven" in _r2.lower():
+                                                            _etype2 = "breakeven"
+                                                        elif "횡보 청산" in _r2 or "추세 무효화" in _r2:
+                                                            _etype2 = "stale"
+                                                        elif "2차" in _r2:
+                                                            _etype2 = "second_take_profit"
+                                                        elif "3차" in _r2:
+                                                            _etype2 = "third_take_profit"
+                                                        elif "1차" in _r2:
+                                                            _etype2 = "first_take_profit"
+                                                        elif "익절" in _r2 or "take_profit" in _r2.lower():
+                                                            _etype2 = "take_profit"
+                                                        else:
+                                                            _etype2 = "manual"
+                                                        # PnL 계산 (수수료 포함 순손익)
+                                                        _sell_amt2 = float(fill.price) * fill.quantity
+                                                        _sell_fee2 = round(_sell_amt2 * 0.000131)
+                                                        _sell_tax2 = round(_sell_amt2 * 0.002)
+                                                        _sell_net2 = _sell_amt2 - _sell_fee2 - _sell_tax2
+                                                        _buy_cost2 = _db_ep * fill.quantity
+                                                        _buy_fee2 = round(_buy_cost2 * 0.000141)
+                                                        _this_pnl2 = round(_sell_net2 - _buy_cost2 - _buy_fee2)
+                                                        _invested2 = _buy_cost2 + _buy_fee2
+                                                        _pnl_pct2 = round(_this_pnl2 / _invested2 * 100, 2) if _invested2 > 0 else 0.0
+                                                        _sym_name2 = getattr(_sell_pos_snap, 'name', '') or fill.symbol
+                                                        _now2 = datetime.now()
+                                                        async with _db_pool.acquire() as _dbc:
+                                                            await _dbc.execute(
+                                                                """INSERT INTO trade_events
+                                                                   (trade_id, symbol, name,
+                                                                    event_type, event_time, price, quantity,
+                                                                    exit_type, exit_reason,
+                                                                    pnl, pnl_pct, strategy, signal_score, status)
+                                                                   VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0.0,$12)""",
+                                                                _db_tid, fill.symbol, _sym_name2,
+                                                                _now2, float(fill.price), fill.quantity,
+                                                                _etype2, _r2 or 'fill_detected',
+                                                                _this_pnl2, _pnl_pct2, _db_strat, _etype2,
+                                                            )
+                                                            await _dbc.execute(
+                                                                """UPDATE trades SET
+                                                                   exit_time=$1, exit_price=$2, exit_quantity=$3,
+                                                                   exit_reason=$4, exit_type=$5,
+                                                                   pnl=$6, pnl_pct=$7, updated_at=$8
+                                                                   WHERE id=$9 AND exit_time IS NULL""",
+                                                                _now2, float(fill.price), fill.quantity,
+                                                                _r2 or 'fill_detected', _etype2,
+                                                                _this_pnl2, _pnl_pct2, _now2, _db_tid,
+                                                            )
+                                                        logger.info(
+                                                            f"[체결] {fill.symbol} SELL DB 직접 기록 완료 "
+                                                            f"(trade_id={_db_tid}, pnl={_this_pnl2:+,}원)"
+                                                        )
+                                                        if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
+                                                            bot.risk_manager.record_exit(fill.symbol, float(fill.price))
+                                                    else:
+                                                        logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: 오픈 포지션 없음")
+                                                except Exception as _dbe:
+                                                    logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: {_dbe}")
+                                            else:
+                                                logger.warning(f"[체결] {fill.symbol} SELL journal 완전 스킵 (pool 없음)")
                                     except Exception as _je:
                                         logger.warning(f"[체결] {fill.symbol} SELL journal 기록 실패: {_je}")
 
