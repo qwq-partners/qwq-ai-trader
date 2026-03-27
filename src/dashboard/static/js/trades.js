@@ -103,11 +103,10 @@ function renderSettlementSummary(settlement) {
     unrealized.textContent = formatPnl(s.unrealized_pnl);
     unrealized.className = 'stat-value mono ' + pnlClass(s.unrealized_pnl);
 
-    // 익절/손절 합계 — 봇 거래만 (직접 거래 제외)
+    // 익절/손절 합계 — 전체 매도 기준 (realized_pnl = tpTotal + slTotal 항상 일치)
     const sells = settlement.sells || [];
-    const botSells = sells.filter(t => !t.is_direct_trade);
-    const tpTotal = botSells.reduce((acc, t) => acc + ((t.pnl || 0) > 0 ? (t.pnl || 0) : 0), 0);
-    const slTotal = botSells.reduce((acc, t) => acc + ((t.pnl || 0) < 0 ? (t.pnl || 0) : 0), 0);
+    const tpTotal = sells.reduce((acc, t) => acc + ((t.pnl || 0) > 0 ? (t.pnl || 0) : 0), 0);
+    const slTotal = sells.reduce((acc, t) => acc + ((t.pnl || 0) < 0 ? (t.pnl || 0) : 0), 0);
 
     const tpEl = el('s-tp-total');
     tpEl.textContent = tpTotal > 0 ? formatPnl(tpTotal) : '--';
