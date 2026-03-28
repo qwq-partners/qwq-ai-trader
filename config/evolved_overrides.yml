@@ -11,17 +11,17 @@ batch:
     enabled: true
     time: '12:30'
 risk_config:
-  daily_max_trades: 30
+  daily_max_trades: 10
   default_stop_loss_pct: 4.0
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    rsi2_reversal: 10.0
+    momentum_breakout: 0.0   # 비활성(enabled=false): 예산 0% 고정
     sepa_trend: 45.0
     gap_and_go: 5.0
+    rsi2_reversal: 10.0
     theme_chasing: 10.0
-    momentum_breakout: 0.0   # 비활성 전략: 예산 0%
-    core_holding: 30.0       # 별도 풀 관리
+    core_holding: 30.0       # 별도 풀 관리 (locked)
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 3.5
@@ -78,7 +78,7 @@ _meta:
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
     source: weekly_rebalance
-    timestamp: '2026-03-21T00:00:34.649333'
+    timestamp: '2026-03-28T00:00:16.608262'
   risk_config.strategy_allocation.core_holding:
     source: manual_review_locked
     timestamp: '2026-03-14T00:15:00'

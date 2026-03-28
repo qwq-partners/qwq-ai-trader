@@ -847,10 +847,10 @@ class StrategyEvolver:
         "momentum_breakout", "sepa_trend", "rsi2_reversal",
         "theme_chasing", "gap_and_go",
     }
-    _ALLOC_MIN_PCT = 5.0       # 최소 5% (테스트 기회 보장)
-    _ALLOC_MAX_PCT = 70.0      # 최대 70%
-    _ALLOC_MAX_CHANGE = 15.0   # 주당 ±15%p
-    _ALLOC_MAX_TOTAL = 105.0   # 합계 상한 (동시 진입 여유)
+    _ALLOC_MIN_PCT = 5.0       # 최소 5% (테스트 기회 보장, 활성 전략만)
+    _ALLOC_MAX_PCT = 60.0      # 최대 60%
+    _ALLOC_MAX_CHANGE = 10.0   # 주당 ±10%p (과격 변동 방지)
+    _ALLOC_MAX_TOTAL = 100.0   # 합계 상한 (100% 초과 금지)
 
     async def rebalance_strategy_allocation(self) -> Dict[str, Any]:
         """
@@ -987,13 +987,32 @@ class StrategyEvolver:
     def _apply_allocation_guardrails(
         self, current: Dict[str, float], proposed: Dict[str, float]
     ) -> Dict[str, float]:
-        """가드레일 적용: min/max/change/total 제한"""
+        """가드레일 적용: min/max/change/total 제한
+
+        비활성 전략(enabled=false)은 0% 강제 — 예산 낭비 방지.
+        합계 재검증 루프로 100% 초과 방지.
+        """
         adjusted: Dict[str, float] = {}
+
+        # 비활성 전략 탐지: evolved_overrides에서 enabled=false인 전략
+        _disabled = set()
+        if hasattr(self, '_config') and self._config:
+            for strat in self._VALID_STRATEGIES:
+                strat_cfg = self._config.get(strat) or {}
+                if isinstance(strat_cfg, dict) and strat_cfg.get("enabled") is False:
+                    _disabled.add(strat)
+        # 폴백: engine.py에서 비활성 하드코딩된 전략
+        _disabled.add("momentum_breakout")  # 03-04 대참사 이후 영구 비활성
 
         # 현재 키 + 제안 키 합집합 (유효 전략만)
         all_keys = (set(current.keys()) | set(proposed.keys())) & self._VALID_STRATEGIES
 
         for key in all_keys:
+            # 비활성 전략: 예산 0% 강제
+            if key in _disabled:
+                adjusted[key] = 0.0
+                continue
+
             old = current.get(key, 0.0)
             new = float(proposed.get(key, old))
 
@@ -1012,20 +1031,22 @@ class StrategyEvolver:
             if key not in self._VALID_STRATEGIES and key not in adjusted:
                 adjusted[key] = current[key]
 
-        # 합계 상한 체크 — 비대상 전략(core_holding 등)은 축소 제외
+        # 합계 상한 체크 + 재검증 루프 (최대 3회)
         non_valid_total = sum(v for k, v in adjusted.items() if k not in self._VALID_STRATEGIES)
-        valid_total = sum(v for k, v in adjusted.items() if k in self._VALID_STRATEGIES)
         valid_cap = self._ALLOC_MAX_TOTAL - non_valid_total
-        if valid_cap > 0 and valid_total > valid_cap:
-            ratio = valid_cap / valid_total
-            adjusted = {
-                k: round(v * ratio, 1) if k in self._VALID_STRATEGIES else v
-                for k, v in adjusted.items()
-            }
-            # 축소 후에도 최소값 보장 (비대상 제외)
-            for k in adjusted:
-                if k in self._VALID_STRATEGIES:
-                    adjusted[k] = max(self._ALLOC_MIN_PCT, adjusted[k])
+        for _ in range(3):
+            valid_total = sum(v for k, v in adjusted.items() if k in self._VALID_STRATEGIES)
+            if valid_cap > 0 and valid_total > valid_cap:
+                ratio = valid_cap / valid_total
+                for k in list(adjusted.keys()):
+                    if k in self._VALID_STRATEGIES and k not in _disabled:
+                        adjusted[k] = round(adjusted[k] * ratio, 1)
+                # 축소 후 최소값 보장 (비활성 제외)
+                for k in adjusted:
+                    if k in self._VALID_STRATEGIES and k not in _disabled:
+                        adjusted[k] = max(self._ALLOC_MIN_PCT, adjusted[k])
+            else:
+                break
 
         return adjusted
 
