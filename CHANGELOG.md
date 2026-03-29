@@ -1,6 +1,18 @@
 # QWQ AI Trader - Changelog
 
-## 2026-03-30 — Phase 1~5 완료: 에이전트 팀 아키텍처
+## 2026-03-30 — Phase 1~6: 에이전트 팀 아키텍처 + PRISM 채용
+
+### Phase 6: PRISM 우위 영역 채용 (87ed14d)
+1. **펀더멘탈 밸류에이션 필터**: 적자+고PBR -10점, 극단PER(>50) -5점
+2. **시장 지수 레벨 학습**: TradeMemory에 KOSPI 레벨 구간별 승률 → 원칙 추출
+3. **LLM 종합 판단**: 고점수(85+) 비강세장에서 선택적 2차 검증 (fail-open)
+4. **LLM 보조 회고**: 주간 압축 시 손실 패턴 LLM 분석 (선택적)
+
+### Phase 1~5 통합 리뷰 수정 (988f096)
+- P0: 크로스검증 규칙5 섹터 정확 비교 (record_exit에 sector 추가)
+- P1: score 원본 보존, RSI 안전 변환, 설정 절대경로, entry_indicators 복원
+
+### Phase 1~5 완료: 에이전트 팀 아키텍처
 
 ### Phase 1: 크로스 전략 검증 게이트 (`cross_validator.py`)
 - 8개 교차 검증 규칙 (RSI과매수, 수급불일치, 체제부적합, 섹터과집중, 추격매수, 거래메모리 등)
