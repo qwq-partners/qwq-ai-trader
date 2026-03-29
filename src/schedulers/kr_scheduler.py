@@ -1375,6 +1375,27 @@ JSON:
                                             # 재진입 제한: 청산 종목 기록
                                             if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
                                                 bot.risk_manager.record_exit(fill.symbol, float(fill.price))
+                                            # 거래 메모리: Layer 1 기록
+                                            if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
+                                                try:
+                                                    _entry_time = getattr(_sell_pos_snap, 'entry_time', None)
+                                                    _holding = (datetime.now() - _entry_time).days if _entry_time else 0
+                                                    _pnl_pct = (float(fill.price) - float(_sell_pos_snap.avg_price)) / float(_sell_pos_snap.avg_price) * 100 if _sell_pos_snap.avg_price > 0 else 0
+                                                    _regime = getattr(bot.engine, '_market_regime', 'neutral')
+                                                    bot.engine.risk_manager._trade_memory.record_outcome(
+                                                        symbol=fill.symbol,
+                                                        name=getattr(_sell_pos_snap, 'name', ''),
+                                                        strategy=_sell_pos_snap.strategy or '',
+                                                        sector=getattr(_sell_pos_snap, 'sector', ''),
+                                                        entry_date=_entry_time.strftime('%Y-%m-%d') if _entry_time else '',
+                                                        exit_date=datetime.now().strftime('%Y-%m-%d'),
+                                                        holding_days=_holding,
+                                                        pnl_pct=_pnl_pct,
+                                                        exit_type=_etype,
+                                                        market_regime=_regime,
+                                                    )
+                                                except Exception as _mem_err:
+                                                    logger.debug(f"[거래메모리] 기록 실패 (무시): {_mem_err}")
                                         else:
                                             # trade_id 없음 → trades DB 직접 조회 후 기록
                                             # (sync_detected 등 journal 미등록 포지션 대응)

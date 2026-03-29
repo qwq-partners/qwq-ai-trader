@@ -21,9 +21,10 @@ class CrossStrategyValidator:
     규칙 기반으로 동작하므로 LLM 호출 없이 실시간 성능을 유지합니다.
     """
 
-    def __init__(self, portfolio=None, risk_manager=None):
+    def __init__(self, portfolio=None, risk_manager=None, trade_memory=None):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
+        self._trade_memory = trade_memory
 
         # 오늘 검증 통계
         self._stats = {
@@ -150,6 +151,13 @@ class CrossStrategyValidator:
             if close < ma200 and strategy in ("sepa_trend", "theme_chasing"):
                 adjusted_score -= 10
                 penalties.append(f"MA200하방(-{(1-close/ma200)*100:.1f}%) -10")
+
+        # === 규칙 8: 거래 메모리 기반 점수 보정 ===
+        if self._trade_memory:
+            memory_adj = self._trade_memory.get_score_adjustment(strategy, sector or "")
+            if memory_adj != 0:
+                adjusted_score += memory_adj
+                penalties.append(f"메모리보정({memory_adj:+d})")
 
         # 감점 적용 결과
         if penalties:

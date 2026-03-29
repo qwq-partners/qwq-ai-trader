@@ -933,11 +933,16 @@ class RiskManager:
         # 섹터 조회 콜러블 (async def(symbol) -> Optional[str])
         self._sector_lookup = sector_lookup
 
+        # 거래 메모리 시스템
+        from .evolution.trade_memory import TradeMemory
+        self._trade_memory = TradeMemory()
+
         # 크로스 전략 검증 게이트
         from .cross_validator import CrossStrategyValidator
         self._cross_validator = CrossStrategyValidator(
             portfolio=engine.portfolio,
             risk_manager=risk_validator,
+            trade_memory=self._trade_memory,
         )
 
         # 주문 실패 쿨다운 추적 (종목별)
