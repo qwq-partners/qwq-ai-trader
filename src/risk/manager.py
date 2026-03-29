@@ -281,8 +281,8 @@ class RiskManager:
 
         return True, ""
 
-    def record_exit(self, symbol: str, exit_price: float):
-        """청산 종목 기록 (당일 재진입 조건 체크용)
+    def record_exit(self, symbol: str, exit_price: float, sector: str = ""):
+        """청산 종목 기록 (당일 재진입 조건 체크 + 크로스 검증 섹터 비교용)
 
         분할 매도 시 최초 청산가를 기준으로 유지 (덮어쓰기 방지).
         """
@@ -291,6 +291,7 @@ class RiskManager:
                 self._exited_today[symbol] = {
                     "price": exit_price,
                     "time": datetime.now().isoformat(),
+                    "sector": sector,
                 }
                 self._save_exited_today()
 

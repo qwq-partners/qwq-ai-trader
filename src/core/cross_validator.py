@@ -120,20 +120,16 @@ class CrossStrategyValidator:
                 )
                 return False, 0, f"섹터 집중: {sector} {same_sector_count}종목 보유 중"
 
-        # === 규칙 5: 전일 동일 섹터 손절 후 동일 섹터 재진입 ===
+        # === 규칙 5: 당일 손절 종목과 동일 섹터 재진입 경고 ===
+        # 손절 종목의 섹터 정보를 직접 비교 (섹터 미확인 시 스킵)
         if sector and self._risk_manager:
-            stop_loss_today = getattr(self._risk_manager, '_stop_loss_today', set())
-            if stop_loss_today and self._portfolio:
-                for sl_symbol in stop_loss_today:
-                    sl_pos_sector = None
-                    # 포지션에서 섹터 조회 (이미 청산되어 없을 수 있음)
-                    # _exited_today에서 조회 시도
-                    exited = getattr(self._risk_manager, '_exited_today', {})
-                    # 직접적인 섹터 비교는 어려우므로 경고만 부여
-                    if sl_symbol != symbol:
-                        adjusted_score -= 5
-                        penalties.append(f"동일일 손절종목 존재 -5")
-                        break  # 1회만 감점
+            exited = getattr(self._risk_manager, '_exited_today', {})
+            for sl_symbol, sl_info in exited.items():
+                sl_sector = sl_info.get("sector") if isinstance(sl_info, dict) else None
+                if sl_sector and sl_sector == sector and sl_symbol != symbol:
+                    adjusted_score -= 5
+                    penalties.append(f"동일섹터({sector}) 손절종목 존재 -5")
+                    break
 
         # === 규칙 6: ATR 대비 등락률 과다 (추격 매수 감지) ===
         atr_pct = metadata.get("atr_pct") or indicators.get("atr_14")

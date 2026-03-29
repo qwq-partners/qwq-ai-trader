@@ -151,10 +151,16 @@ class TradeMemory:
             # 핵심 지표 태그
             rsi = ind.get("rsi_14") or ind.get("rsi")
             if rsi is not None:
-                parts.append(f"RSI{int(rsi)}")
+                try:
+                    parts.append(f"RSI{int(float(rsi))}")
+                except (ValueError, TypeError):
+                    pass
             atr = ind.get("atr_14") or ind.get("atr_pct")
             if atr is not None:
-                parts.append(f"ATR{atr:.0f}%")
+                try:
+                    parts.append(f"ATR{float(atr):.0f}%")
+                except (ValueError, TypeError):
+                    pass
             foreign = ind.get("foreign_net_buy")
             if foreign is not None and foreign > 0:
                 parts.append("기관매수")
@@ -215,8 +221,16 @@ class TradeMemory:
             win_rate = stats["wins"] / total
             avg_pnl = stats["total_pnl"] / total
 
-            # 기존 원칙 업데이트 or 신규 생성
-            existing = next((p for p in self._layer3 if key in p.rule), None)
+            # 기존 원칙 업데이트 or 신규 생성 (conditions 기반 정확 매칭)
+            _key_parts = key.split("|")
+            _match_strategy = _key_parts[0]
+            _match_sector = _key_parts[1] if len(_key_parts) > 1 else ""
+            existing = next(
+                (p for p in self._layer3
+                 if p.conditions.get("strategy") == _match_strategy
+                 and p.conditions.get("sector", "") == _match_sector),
+                None
+            )
 
             if win_rate >= 0.6 and avg_pnl > 1.0:
                 # 성공 패턴 → 긍정 원칙

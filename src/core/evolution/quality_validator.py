@@ -24,7 +24,11 @@ class QualityValidator:
 
     def __init__(self, trade_memory=None, config_path: str = None):
         self._trade_memory = trade_memory
-        self._config_path = Path(config_path) if config_path else Path("config/evolved_overrides.yml")
+        # 절대 경로 사용 (systemd 서비스에서 CWD가 다를 수 있음)
+        if config_path:
+            self._config_path = Path(config_path)
+        else:
+            self._config_path = Path(__file__).parent.parent.parent.parent / "config" / "evolved_overrides.yml"
         self._results_dir = Path.home() / ".cache" / "ai_trader" / "quality_reports"
         self._results_dir.mkdir(parents=True, exist_ok=True)
 

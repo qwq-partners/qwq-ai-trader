@@ -1372,9 +1372,10 @@ JSON:
                                                 avg_entry_price=float(_sell_pos_snap.avg_price),
                                             )
                                             logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
-                                            # 재진입 제한: 청산 종목 기록
+                                            # 재진입 제한: 청산 종목 기록 (섹터 포함)
                                             if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
-                                                bot.risk_manager.record_exit(fill.symbol, float(fill.price))
+                                                _exit_sector = getattr(_sell_pos_snap, 'sector', '')
+                                                bot.risk_manager.record_exit(fill.symbol, float(fill.price), sector=_exit_sector)
                                             # 거래 메모리: Layer 1 기록
                                             if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
                                                 try:
@@ -1382,6 +1383,12 @@ JSON:
                                                     _holding = (datetime.now() - _entry_time).days if _entry_time else 0
                                                     _pnl_pct = (float(fill.price) - float(_sell_pos_snap.avg_price)) / float(_sell_pos_snap.avg_price) * 100 if _sell_pos_snap.avg_price > 0 else 0
                                                     _regime = getattr(bot.engine, '_market_regime', 'neutral')
+                                                    # 진입 시점 지표 복원 (trade_journal에서)
+                                                    _mem_indicators = {}
+                                                    if _tid and bot.trade_journal:
+                                                        _tr = bot.trade_journal._trades.get(_tid)
+                                                        if _tr and hasattr(_tr, 'indicators_at_entry'):
+                                                            _mem_indicators = _tr.indicators_at_entry or {}
                                                     bot.engine.risk_manager._trade_memory.record_outcome(
                                                         symbol=fill.symbol,
                                                         name=getattr(_sell_pos_snap, 'name', ''),
@@ -1392,6 +1399,7 @@ JSON:
                                                         holding_days=_holding,
                                                         pnl_pct=_pnl_pct,
                                                         exit_type=_etype,
+                                                        entry_indicators=_mem_indicators,
                                                         market_regime=_regime,
                                                     )
                                                 except Exception as _mem_err:

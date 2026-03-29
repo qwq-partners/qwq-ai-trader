@@ -1191,6 +1191,11 @@ class RiskManager:
                 logger.info(f"[크로스검증] {event.symbol} 차단: {_cv_reason}")
                 return None
             if _cv_score != event.score:
+                # 원본 점수 보존 (저널/로그 추적용)
+                if event.metadata is None:
+                    event.metadata = {}
+                event.metadata["original_score"] = event.score
+                event.metadata["cross_adjustment"] = round(_cv_score - event.score, 1)
                 event.score = _cv_score
 
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
