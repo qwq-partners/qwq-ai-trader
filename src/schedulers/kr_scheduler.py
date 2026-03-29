@@ -1393,9 +1393,18 @@ JSON:
                                                     _kospi_level = ""
                                                     if hasattr(bot.engine, '_regime_adapter'):
                                                         _rd = getattr(bot.engine._regime_adapter, '_regime_data', {})
-                                                        _kp = _rd.get("kospi_change", 0)
-                                                        # 간이 레벨: KOSPI 등락률 구간화
-                                                        # 실제 KOSPI 지수가 필요하지만 변화율로 대체
+                                                        _avg_chg = _rd.get("avg_change", 0)
+                                                        # 등락률 구간화: -3%~+3%를 1% 단위로
+                                                        if _avg_chg <= -2:
+                                                            _kospi_level = "급락(-2%이하)"
+                                                        elif _avg_chg <= -1:
+                                                            _kospi_level = "하락(-1~-2%)"
+                                                        elif _avg_chg < 1:
+                                                            _kospi_level = "보합(-1~+1%)"
+                                                        elif _avg_chg < 2:
+                                                            _kospi_level = "상승(+1~+2%)"
+                                                        else:
+                                                            _kospi_level = "급등(+2%이상)"
                                                     bot.engine.risk_manager._trade_memory.record_outcome(
                                                         symbol=fill.symbol,
                                                         name=getattr(_sell_pos_snap, 'name', ''),
@@ -1408,6 +1417,7 @@ JSON:
                                                         exit_type=_etype,
                                                         entry_indicators=_mem_indicators,
                                                         market_regime=_regime,
+                                                        market_level=_kospi_level,
                                                     )
                                                 except Exception as _mem_err:
                                                     logger.debug(f"[거래메모리] 기록 실패 (무시): {_mem_err}")

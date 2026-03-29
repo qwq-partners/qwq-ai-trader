@@ -84,7 +84,9 @@ class CrossStrategyValidator:
         adjusted_score = score
 
         # === 규칙 1: 기술적 과매수 상태에서 추세 전략 매수 ===
-        rsi_14 = indicators.get("rsi_14") or indicators.get("rsi")
+        rsi_14 = indicators.get("rsi_14")
+        if rsi_14 is None:
+            rsi_14 = indicators.get("rsi")
         if rsi_14 is not None and rsi_14 > 70 and strategy in ("sepa_trend", "momentum_breakout"):
             adjusted_score -= 10
             penalties.append(f"RSI과매수({rsi_14:.0f}>70) -10")
@@ -134,8 +136,14 @@ class CrossStrategyValidator:
                     break
 
         # === 규칙 6: ATR 대비 등락률 과다 (추격 매수 감지) ===
-        atr_pct = metadata.get("atr_pct") or indicators.get("atr_14")
-        rt_change = indicators.get("change_1d") or indicators.get("change_pct") or indicators.get("rt_change_pct")
+        atr_pct = metadata.get("atr_pct")
+        if atr_pct is None:
+            atr_pct = indicators.get("atr_14")
+        rt_change = indicators.get("change_1d")
+        if rt_change is None:
+            rt_change = indicators.get("change_pct")
+        if rt_change is None:
+            rt_change = indicators.get("rt_change_pct")
         if atr_pct is not None and atr_pct > 0 and rt_change is not None and rt_change > 0:
             surge_ratio = rt_change / atr_pct
             if surge_ratio > 1.5:
