@@ -148,6 +148,9 @@ class UnifiedEngine:
         self.running = False
         self.paused = False
 
+        # 시장 체제 (크로스 검증에서 참조)
+        self._market_regime: str = "neutral"
+
         # 시장별 컨텍스트
         self.contexts: Dict[str, MarketContext] = {}
 
@@ -930,6 +933,13 @@ class RiskManager:
         # 섹터 조회 콜러블 (async def(symbol) -> Optional[str])
         self._sector_lookup = sector_lookup
 
+        # 크로스 전략 검증 게이트
+        from .cross_validator import CrossStrategyValidator
+        self._cross_validator = CrossStrategyValidator(
+            portfolio=engine.portfolio,
+            risk_manager=risk_validator,
+        )
+
         # 주문 실패 쿨다운 추적 (종목별)
         self._order_fail_cooldown: Dict[str, datetime] = {}
         self._COOLDOWN_SECONDS = 300  # 5분 쿨다운
@@ -1159,6 +1169,24 @@ class RiskManager:
         if event.side == OrderSide.BUY and event.symbol in self.engine.portfolio.positions:
             logger.debug(f"[리스크] 기존 포지션 보유 차단: {event.symbol}")
             return None
+
+        # 크로스 전략 검증 게이트 (매수만)
+        if event.side == OrderSide.BUY:
+            _meta = event.metadata if event.metadata is not None else {}
+            _regime = getattr(self.engine, '_market_regime', 'neutral')
+            _cv_pass, _cv_score, _cv_reason = self._cross_validator.validate(
+                symbol=event.symbol,
+                side="buy",
+                strategy=event.strategy.value if event.strategy else "",
+                score=event.score,
+                metadata=_meta,
+                market_regime=_regime,
+            )
+            if not _cv_pass:
+                logger.info(f"[크로스검증] {event.symbol} 차단: {_cv_reason}")
+                return None
+            if _cv_score != event.score:
+                event.score = _cv_score
 
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
         if event.side == OrderSide.BUY:

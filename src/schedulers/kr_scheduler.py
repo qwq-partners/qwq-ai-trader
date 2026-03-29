@@ -2631,6 +2631,14 @@ JSON:
                     if kospi_data or kosdaq_data:
                         rm.update_market_trend(kospi_data, kosdaq_data)
 
+                        # 시장 체제 갱신 (크로스 검증 게이트에서 참조)
+                        if bot.engine:
+                            from ..core.market_regime import MarketRegimeAdapter
+                            if not hasattr(bot.engine, '_regime_adapter'):
+                                bot.engine._regime_adapter = MarketRegimeAdapter()
+                            bot.engine._regime_adapter.update_regime(kospi_data, kosdaq_data)
+                            bot.engine._market_regime = bot.engine._regime_adapter.regime
+
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
