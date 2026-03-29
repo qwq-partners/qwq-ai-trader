@@ -1,23 +1,34 @@
 # QWQ AI Trader - Changelog
 
-## 2026-03-30 — Phase 1+2+5: 에이전트 팀 아키텍처 착수 (12d7b11)
+## 2026-03-30 — Phase 1~5 완료: 에이전트 팀 아키텍처
 
 ### Phase 1: 크로스 전략 검증 게이트 (`cross_validator.py`)
-- 7개 교차 검증 규칙 (RSI과매수, 수급불일치, 체제부적합, 섹터과집중, 추격매수 등)
+- 8개 교차 검증 규칙 (RSI과매수, 수급불일치, 체제부적합, 섹터과집중, 추격매수, 거래메모리 등)
 - engine.py `on_signal()`에 게이트 삽입 — 감점 후 50점 미만 차단
 
 ### Phase 2: 시장 체제 사전 적응 (`market_regime.py`)
 - bull/bear/sideways/neutral 4단계 체제 판단
 - KOSPI+KOSDAQ 기반 2분마다 갱신 → engine._market_regime으로 크로스 검증 연동
 
+### Phase 3: 거래 메모리 시스템 (`trade_memory.py`)
+- Layer 1: 원시 기록 (진입/청산 지표, 시장 체제, 전략, 섹터)
+- Layer 2: 요약 압축 (7일 이후, 패턴 → 결과)
+- Layer 3: 원칙 추출 (승률/PnL 기반 score ±3 보정, 90일 미검증 비활성)
+- kr_scheduler 매도 체결 시 자동 기록 + 크로스 검증에서 점수 보정 활용
+
+### Phase 4: 품질 검증 파이프라인 (`quality_validator.py`)
+- 매일 20:30 evolve 직전 자동 실행
+- 거래 성과 + 설정 일관성 + 크로스 통계 + 포지션 집중도 검증
+- 금요일 거래 메모리 주간 압축 자동 트리거
+
 ### Phase 5: 에이전트 팀 8명 구성
-- trade-analyst, market-analyst, strategy-advisor, engine-monitor, risk-auditor, param-optimizer + code-reviewer, debugger
-- `.claude/agents/*.md` 6개 신규 생성
-- `~/CLAUDE.md` + 프로젝트 `CLAUDE.md` 위임 규칙 갱신
+- trade-analyst, market-analyst, strategy-advisor, engine-monitor
+- risk-auditor, param-optimizer + code-reviewer, debugger
+- `.claude/agents/*.md` 6개 신규 + CLAUDE.md 위임 규칙 갱신
 
 ### 로드맵 (`docs/ROADMAP_AGENT_TEAM.md`)
 - PRISM-INSIGHT 분석 기반 6-Phase 로드맵 수립
-- Phase 3(거래 메모리), Phase 4(품질 검증), Phase 6(LLM 판단) 후속 예정
+- Phase 6(LLM 종합 판단) 후속 예정
 
 ---
 
