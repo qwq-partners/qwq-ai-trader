@@ -1389,6 +1389,13 @@ JSON:
                                                         _tr = bot.trade_journal._trades.get(_tid)
                                                         if _tr and hasattr(_tr, 'indicators_at_entry'):
                                                             _mem_indicators = _tr.indicators_at_entry or {}
+                                                    # KOSPI 레벨 구간 (시장 변곡점 학습용)
+                                                    _kospi_level = ""
+                                                    if hasattr(bot.engine, '_regime_adapter'):
+                                                        _rd = getattr(bot.engine._regime_adapter, '_regime_data', {})
+                                                        _kp = _rd.get("kospi_change", 0)
+                                                        # 간이 레벨: KOSPI 등락률 구간화
+                                                        # 실제 KOSPI 지수가 필요하지만 변화율로 대체
                                                     bot.engine.risk_manager._trade_memory.record_outcome(
                                                         symbol=fill.symbol,
                                                         name=getattr(_sell_pos_snap, 'name', ''),

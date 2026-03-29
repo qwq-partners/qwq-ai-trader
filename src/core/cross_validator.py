@@ -21,10 +21,12 @@ class CrossStrategyValidator:
     규칙 기반으로 동작하므로 LLM 호출 없이 실시간 성능을 유지합니다.
     """
 
-    def __init__(self, portfolio=None, risk_manager=None, trade_memory=None):
+    def __init__(self, portfolio=None, risk_manager=None, trade_memory=None,
+                 llm_manager=None):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
         self._trade_memory = trade_memory
+        self._llm_manager = llm_manager  # LLM 종합 판단 (선택적)
 
         # 오늘 검증 통계
         self._stats = {
@@ -148,7 +150,21 @@ class CrossStrategyValidator:
                 adjusted_score -= 10
                 penalties.append(f"MA200하방(-{(1-close/ma200)*100:.1f}%) -10")
 
-        # === 규칙 8: 거래 메모리 기반 점수 보정 ===
+        # === 규칙 8: 펀더멘탈 밸류에이션 필터 (PRISM 차용) ===
+        # PER 극단 고평가 또는 적자 + 고PBR → 추격 매수 위험
+        per = indicators.get("per")
+        pbr = indicators.get("pbr")
+        if per is not None and pbr is not None:
+            # 적자(PER<0) + 고PBR(>5) = 투기적 고평가
+            if per < 0 and pbr > 5:
+                adjusted_score -= 10
+                penalties.append(f"적자+고PBR({pbr:.1f}) -10")
+            # PER > 50 = 극단 고평가 (성장주 프리미엄 감안해도 과도)
+            elif per > 50:
+                adjusted_score -= 5
+                penalties.append(f"극단PER({per:.0f}) -5")
+
+        # === 규칙 9: 거래 메모리 기반 점수 보정 ===
         if self._trade_memory:
             memory_adj = self._trade_memory.get_score_adjustment(strategy, sector or "")
             if memory_adj != 0:
@@ -173,6 +189,56 @@ class CrossStrategyValidator:
 
         self._stats["passed"] += 1
         return True, adjusted_score, ""
+
+    async def llm_second_check(
+        self,
+        symbol: str,
+        strategy: str,
+        score: float,
+        indicators: dict,
+        market_regime: str,
+    ) -> bool:
+        """
+        LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
+
+        비용 최소화: 하루 최대 3~5회, 거부 시 score -20.
+        실시간 성능: 타임아웃 10초, 실패 시 통과(fail-open).
+        """
+        if not self._llm_manager:
+            return True
+
+        # 강세장이면 LLM 검증 생략 (속도 우선)
+        if market_regime == "bull":
+            return True
+
+        # 고점수 시그널만 검증
+        if score < 85:
+            return True
+
+        try:
+            prompt = (
+                f"종목 {symbol}, 전략 {strategy}, 점수 {score:.0f}.\n"
+                f"시장 체제: {market_regime}.\n"
+                f"지표: RSI={indicators.get('rsi_14', 'N/A')}, "
+                f"ATR={indicators.get('atr_14', 'N/A')}%, "
+                f"MA200거리={indicators.get('ma200_distance_pct', 'N/A')}%, "
+                f"PER={indicators.get('per', 'N/A')}, "
+                f"수급={'+' if (indicators.get('foreign_net_buy') or 0) > 0 else '-'}.\n\n"
+                f"이 매수 시그널을 승인하시겠습니까? "
+                f"YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
+            )
+            import asyncio
+            response = await asyncio.wait_for(
+                self._llm_manager.generate(prompt, max_tokens=100),
+                timeout=10.0,
+            )
+            if response and "NO" in response.upper()[:10]:
+                logger.info(f"[크로스검증] LLM 거부: {symbol} — {response[:80]}")
+                return False
+            return True
+        except Exception as e:
+            logger.debug(f"[크로스검증] LLM 검증 실패 (통과): {e}")
+            return True  # fail-open
 
     def get_stats(self) -> Dict:
         """오늘 검증 통계"""

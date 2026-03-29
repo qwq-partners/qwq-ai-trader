@@ -34,6 +34,7 @@ class TradeOutcome:
     # 시장 상황
     market_regime: str = "neutral"
     market_change_pct: float = 0.0  # KOSPI/KOSDAQ 평균 등락률
+    market_level: str = ""           # KOSPI 레벨 구간 (예: "2700~2800")
     # 태그
     tags: List[str] = field(default_factory=list)
     timestamp: str = ""
@@ -75,9 +76,10 @@ class TradeMemory:
     매수 시    → get_score_adjustment() → Layer 3 원칙 기반 점수 보정
     """
 
-    def __init__(self, cache_dir: str = None):
+    def __init__(self, cache_dir: str = None, llm_manager=None):
         self._cache_dir = Path(cache_dir or Path.home() / ".cache" / "ai_trader" / "trade_memory")
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._llm_manager = llm_manager  # LLM 보조 회고 (선택적)
 
         self._layer1: List[TradeOutcome] = []
         self._layer2: List[TradeSummary] = []
@@ -103,6 +105,7 @@ class TradeMemory:
         entry_indicators: Dict[str, Any] = None,
         market_regime: str = "neutral",
         market_change_pct: float = 0.0,
+        market_level: str = "",
         tags: List[str] = None,
     ):
         """거래 완료 시 Layer 1에 기록"""
@@ -119,6 +122,7 @@ class TradeMemory:
             entry_indicators=entry_indicators or {},
             market_regime=market_regime,
             market_change_pct=round(market_change_pct, 2),
+            market_level=market_level,
             tags=tags or [],
             timestamp=datetime.now().isoformat(),
         )
@@ -274,6 +278,45 @@ class TradeMemory:
                     ))
                     new_principles += 1
 
+        # 시장 레벨별 승률 분석 (PRISM의 지수 변곡점 학습)
+        level_stats: Dict[str, Dict] = {}
+        for s in self._layer2:
+            # Layer 2에는 market_level이 없으므로 Layer 1에서 집계
+            pass
+        for o in self._layer1:
+            if o.market_level:
+                lv = o.market_level
+                if lv not in level_stats:
+                    level_stats[lv] = {"wins": 0, "losses": 0, "total_pnl": 0.0}
+                if o.pnl_pct > 0:
+                    level_stats[lv]["wins"] += 1
+                else:
+                    level_stats[lv]["losses"] += 1
+                level_stats[lv]["total_pnl"] += o.pnl_pct
+
+        for lv, stats in level_stats.items():
+            total = stats["wins"] + stats["losses"]
+            if total < 5:
+                continue
+            win_rate = stats["wins"] / total
+            avg_pnl = stats["total_pnl"] / total
+            if win_rate <= 0.35:
+                _lv_existing = next(
+                    (p for p in self._layer3 if p.conditions.get("market_level") == lv),
+                    None
+                )
+                if not _lv_existing:
+                    self._layer3.append(TradePrinciple(
+                        rule=f"KOSPI {lv} 구간: 승률 {win_rate:.0%}, 평균 {avg_pnl:+.1f}% → 보수적 진입",
+                        confidence=round(1 - win_rate, 2),
+                        score_delta=-2,
+                        source_count=total,
+                        last_verified=date.today().isoformat(),
+                        conditions={"market_level": lv},
+                        created_at=datetime.now().isoformat(),
+                    ))
+                    new_principles += 1
+
         # 오래된 원칙 비활성화 (90일 미검증)
         cutoff = (date.today() - timedelta(days=90)).isoformat()
         for p in self._layer3:
@@ -295,7 +338,8 @@ class TradeMemory:
     # 점수 보정 (매수 시 호출)
     # ============================================================
 
-    def get_score_adjustment(self, strategy: str, sector: str = "") -> int:
+    def get_score_adjustment(self, strategy: str, sector: str = "",
+                             market_level: str = "") -> int:
         """
         Layer 3 원칙 기반 매수 점수 보정
 
@@ -310,6 +354,14 @@ class TradeMemory:
                 continue
 
             cond = p.conditions
+
+            # 시장 레벨 원칙 (전략/섹터 무관, 레벨만 매칭)
+            if cond.get("market_level"):
+                if market_level and cond["market_level"] == market_level:
+                    total_delta += p.score_delta
+                    matched_rules.append(f"{p.rule} ({p.score_delta:+d})")
+                continue
+
             # 전략 매칭
             if cond.get("strategy") and cond["strategy"] != strategy:
                 continue
@@ -339,11 +391,55 @@ class TradeMemory:
         """Layer 1→2→3 전체 압축 실행"""
         l1_count = self._compress_to_layer2()
         l3_count = self._extract_principles()
+
+        # LLM 보조 회고: 최근 손실 거래에서 교훈 추출 (선택적)
+        llm_insights = 0
+        if self._llm_manager and len(self._layer2) >= 5:
+            try:
+                llm_insights = self._llm_retrospective()
+            except Exception as e:
+                logger.debug(f"[거래메모리] LLM 회고 실패 (무시): {e}")
+
         logger.info(
-            f"[거래메모리] 압축 완료: L1→L2 {l1_count}건, L2→L3 원칙 {l3_count}건 "
+            f"[거래메모리] 압축 완료: L1→L2 {l1_count}건, L2→L3 원칙 {l3_count}건, "
+            f"LLM회고 {llm_insights}건 "
             f"(L1={len(self._layer1)}, L2={len(self._layer2)}, "
             f"L3={len([p for p in self._layer3 if p.active])}개 활성)"
         )
+
+    def _llm_retrospective(self) -> int:
+        """LLM 보조 회고: 최근 손실 거래 패턴에서 교훈 추출 (PRISM 4단계 차용)"""
+        if not self._llm_manager:
+            return 0
+
+        # 최근 손실 거래 5건 요약
+        recent_losses = [s for s in self._layer2 if not s.is_win][-5:]
+        if len(recent_losses) < 3:
+            return 0
+
+        loss_summary = "\n".join(
+            f"- {s.pattern} → {s.result} ({s.strategy})"
+            for s in recent_losses
+        )
+
+        prompt = (
+            f"최근 손실 거래 {len(recent_losses)}건을 분석하세요:\n"
+            f"{loss_summary}\n\n"
+            f"반복되는 실패 패턴 1~2개를 추출하고, "
+            f"각각 '조건 → 회피 규칙' 형태로 작성하세요."
+        )
+
+        try:
+            import asyncio
+            # 동기 컨텍스트에서 호출될 수 있으므로 try
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 이미 이벤트 루프 내 — 직접 호출 불가, 스킵
+                return 0
+        except RuntimeError:
+            return 0
+
+        return 0  # 비동기 환경에서만 실행 가능 — 향후 async 버전 필요
 
     # ============================================================
     # 요약
