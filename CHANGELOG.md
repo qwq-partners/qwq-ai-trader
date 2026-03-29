@@ -2,6 +2,10 @@
 
 ## 2026-03-30 — Phase 1~6: 에이전트 팀 아키텍처 + PRISM 채용
 
+### 최종 리뷰 수정 (77270d7)
+- 크로스검증 `or` 패턴 → `is None` 체크 (CLAUDE.md 규칙 준수)
+- `_kospi_level` 5구간 레벨 계산 + `record_outcome` 전달 (시장 변곡점 학습 활성화)
+
 ### Phase 6: PRISM 우위 영역 채용 (87ed14d)
 1. **펀더멘탈 밸류에이션 필터**: 적자+고PBR -10점, 극단PER(>50) -5점
 2. **시장 지수 레벨 학습**: TradeMemory에 KOSPI 레벨 구간별 승률 → 원칙 추출
