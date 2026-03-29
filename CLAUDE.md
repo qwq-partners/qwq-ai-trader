@@ -22,11 +22,18 @@
 - Always commit and push together unless explicitly told otherwise.
 - `gh auth login` interactive mode does NOT work in this environment.
 
+## 에이전트 팀 (8명)
+- 거래 분석: trade-analyst / 시장 분석: market-analyst
+- 전략 조언: strategy-advisor / 엔진 점검: engine-monitor
+- 리스크 감사: risk-auditor / 파라미터 최적화: param-optimizer
+- 코드 리뷰: code-reviewer / 디버깅: debugger
+
 ## 프로젝트 개요
 - KR+US 통합 트레이딩 엔진 (Full Rewrite)
 - 단일 KIS appkey로 국내+해외 주식 동시 운영
 - 비동기(asyncio) 이벤트 기반 아키텍처
 - 단일 포트 8080에서 KR+US 대시보드 통합 서빙
+- 크로스 전략 검증 게이트 + 시장 체제 사전 적응
 
 ## 프로젝트 경로
 - 소스: `/home/user/projects/qwq-ai-trader`

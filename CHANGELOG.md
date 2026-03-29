@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-30 — Phase 1+2+5: 에이전트 팀 아키텍처 착수 (12d7b11)
+
+### Phase 1: 크로스 전략 검증 게이트 (`cross_validator.py`)
+- 7개 교차 검증 규칙 (RSI과매수, 수급불일치, 체제부적합, 섹터과집중, 추격매수 등)
+- engine.py `on_signal()`에 게이트 삽입 — 감점 후 50점 미만 차단
+
+### Phase 2: 시장 체제 사전 적응 (`market_regime.py`)
+- bull/bear/sideways/neutral 4단계 체제 판단
+- KOSPI+KOSDAQ 기반 2분마다 갱신 → engine._market_regime으로 크로스 검증 연동
+
+### Phase 5: 에이전트 팀 8명 구성
+- trade-analyst, market-analyst, strategy-advisor, engine-monitor, risk-auditor, param-optimizer + code-reviewer, debugger
+- `.claude/agents/*.md` 6개 신규 생성
+- `~/CLAUDE.md` + 프로젝트 `CLAUDE.md` 위임 규칙 갱신
+
+### 로드맵 (`docs/ROADMAP_AGENT_TEAM.md`)
+- PRISM-INSIGHT 분석 기반 6-Phase 로드맵 수립
+- Phase 3(거래 메모리), Phase 4(품질 검증), Phase 6(LLM 판단) 후속 예정
+
+---
+
 ## 2026-03-28 — 16라운드: 진화 시스템 가드레일 강화 (d03dc26)
 
 - **P0-1**: 비활성 전략(momentum_breakout) 예산 0% 강제 — 진화가 12.5% 배정한 것 차단
