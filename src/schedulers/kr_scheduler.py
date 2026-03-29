@@ -3401,6 +3401,24 @@ JSON:
 
                 if now.hour == evo_hour and evo_min <= now.minute < evo_min + 15:
                     if last_review_date != today:
+                        # 품질 검증 (evolve 직전)
+                        try:
+                            from ..core.evolution.quality_validator import QualityValidator
+                            _qv_memory = None
+                            if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
+                                _qv_memory = bot.engine.risk_manager._trade_memory
+                            _qv = QualityValidator(trade_memory=_qv_memory)
+                            _qv_stats = bot.risk_manager.get_risk_summary() if bot.risk_manager else {}
+                            _qv_cv = None
+                            if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_cross_validator'):
+                                _qv_cv = bot.engine.risk_manager._cross_validator.get_stats()
+                            await _qv.run_daily_validation(
+                                daily_stats=_qv_stats,
+                                cross_validator_stats=_qv_cv,
+                            )
+                        except Exception as _qv_err:
+                            logger.warning(f"[품질검증] 실행 실패 (무시): {_qv_err}")
+
                         daily_reviewer = bot.daily_reviewer
                         if daily_reviewer:
                             logger.info("[거래리뷰] LLM 종합평가 생성 시작...")
