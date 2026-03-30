@@ -137,16 +137,23 @@ class MarketRegimeAdapter:
     _llm_assessment: str = ""
     _llm_assessment_date = None
 
-    async def llm_morning_diagnosis(self, llm_manager, theme_summary: str = ""):
+    async def llm_morning_diagnosis(
+        self,
+        llm_manager,
+        theme_summary: str = "",
+        premarket_data: Dict = None,
+        news_headlines: str = "",
+    ):
         """
         장 시작 전 LLM 시장 진단 — GPT-5.4 1회/일
 
-        뉴스+매크로 맥락으로 체제 판단을 보강합니다.
-        결과를 _market_regime에 반영하지는 않고, 로그+메타데이터로 참조.
+        뉴스+매크로+넥스트장 맥락으로 체제 판단을 보강합니다.
 
         Args:
             llm_manager: LLMManager 인스턴스
-            theme_summary: 오늘 테마 탐지 요약 (있으면)
+            theme_summary: 오늘 테마 탐지 요약
+            premarket_data: 넥스트장 시세 (보유 종목별 등락률)
+            news_headlines: 최신 뉴스 헤드라인 요약
         """
         from datetime import date as _date
         today = _date.today()
@@ -162,15 +169,27 @@ class MarketRegimeAdapter:
             f"시가대비: {self._regime_data.get('avg_vs_open', 0):+.1f}%"
         )
 
+        # 넥스트장 데이터 추가
+        premarket_info = ""
+        if premarket_data:
+            pm_lines = []
+            for sym, pm in premarket_data.items():
+                if pm.get("price", 0) > 0:
+                    pm_lines.append(f"  {sym}: {pm.get('change_pct', 0):+.1f}% (거래량 {pm.get('volume', 0):,})")
+            if pm_lines:
+                premarket_info = f"\n=== 넥스트장 보유종목 시세 ===\n" + "\n".join(pm_lines[:8])
+
         prompt = (
             f"당신은 KR 주식시장 전문 분석가입니다.\n\n"
             f"=== 현재 시장 상황 ===\n{regime_info}\n"
+            + (premarket_info + "\n" if premarket_info else "")
             + (f"\n=== 오늘 테마 ===\n{theme_summary}\n" if theme_summary else "")
+            + (f"\n=== 뉴스 헤드라인 ===\n{news_headlines}\n" if news_headlines else "")
             + f"\n=== 진단 요청 ===\n"
             f"오늘 장 전략 방향을 한 줄로 제시하세요.\n"
             f"형식: [공격/중립/방어] 사유\n"
-            f"예: [공격] 반도체 수급 강세 + 미국 기술주 호조, SEPA 확대\n"
-            f"예: [방어] 관세 리스크 + 원화 약세, 테마 축소 권고"
+            f"예: [공격] 반도체 수급 강세 + 미국 기술주 호조 + 넥스트장 강세, SEPA 확대\n"
+            f"예: [방어] 관세 리스크 + 넥스트장 약세 + 원화 약세, 테마 축소 권고"
         )
 
         try:

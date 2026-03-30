@@ -2698,6 +2698,8 @@ JSON:
                                 if _ra._llm_assessment_date != now.date():
                                     try:
                                         from ..utils.llm import get_llm_manager
+
+                                        # 테마 요약
                                         _theme_summary = ""
                                         if bot.theme_detector:
                                             _active = bot.theme_detector.get_active_themes()
@@ -2706,8 +2708,35 @@ JSON:
                                                     f"{t.name}({t.score:.0f})" if hasattr(t, 'name') else str(t)
                                                     for t in _active[:5]
                                                 )
+
+                                        # 넥스트장 시세 수집 (보유 종목, 실패 시 빈 dict)
+                                        _pm_data = {}
+                                        if bot.broker and hasattr(bot.broker, 'get_overtime_price'):
+                                            for _pm_sym in list(bot.engine.portfolio.positions.keys())[:5]:
+                                                try:
+                                                    _pm_quote = await bot.broker.get_overtime_price(_pm_sym)
+                                                    if _pm_quote and _pm_quote.get("price", 0) > 0:
+                                                        _pm_data[_pm_sym] = _pm_quote
+                                                except Exception:
+                                                    pass  # 넥스트장 조회 실패는 조용히 무시
+                                            if _pm_data:
+                                                logger.info(f"[시장체제] 넥스트장 시세 {len(_pm_data)}종목 수집")
+
+                                        # 최신 뉴스 헤드라인
+                                        _news_headlines = ""
+                                        if bot.theme_detector and hasattr(bot.theme_detector, '_recent_news'):
+                                            _recent = getattr(bot.theme_detector, '_recent_news', [])
+                                            if _recent:
+                                                _news_headlines = "\n".join(
+                                                    f"- {n.title}" if hasattr(n, 'title') else f"- {n}"
+                                                    for n in _recent[:5]
+                                                )
+
                                         await _ra.llm_morning_diagnosis(
-                                            get_llm_manager(), theme_summary=_theme_summary,
+                                            get_llm_manager(),
+                                            theme_summary=_theme_summary,
+                                            premarket_data=_pm_data,
+                                            news_headlines=_news_headlines,
                                         )
                                     except Exception as _lmd_e:
                                         logger.debug(f"[시장체제] LLM 장전 진단 실패 (무시): {_lmd_e}")
