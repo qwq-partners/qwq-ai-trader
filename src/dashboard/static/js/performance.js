@@ -782,7 +782,7 @@ async function loadUSPerformance() {
         const [trades, portfolio, equityData] = await Promise.all([
             fetch('/api/us/trades').then(r => r.json()).catch(() => []),
             fetch('/api/us/portfolio').then(r => r.json()).catch(() => ({})),
-            api('/api/us/equity-history?days=9999').catch(() => ({ snapshots: [] })),
+            api('/api/us/equity-history?days=' + (currentDays < 7 ? 9999 : currentDays)).catch(() => ({ snapshots: [] })),
         ]);
 
         _usSnaps = equityData.snapshots || [];
@@ -815,13 +815,14 @@ function renderCombined() {
     const krSum = buildSummary(_krSnaps, true);
     const usSum = buildSummary(_usSnaps, false);
 
-    const allDates = new Set([..._krSnaps.map(s => s.date), ..._usSnaps.map(s => s.date)]);
+    const krDatesSet = new Set(_krSnaps.map(s => s.date));
+    const commonCount = _usSnaps.filter(s => krDatesSet.has(s.date)).length;
     const labelEl = document.getElementById('combined-label');
     if (labelEl) {
         const parts = [];
         if (krSum.period_return_pct != null) parts.push('KR ' + fmtPctLocal(krSum.period_return_pct));
         if (usSum.period_return_pct != null) parts.push('US ' + fmtPctLocal(usSum.period_return_pct));
-        labelEl.textContent = allDates.size + '일 | ' + parts.join(' / ');
+        labelEl.textContent = commonCount + '일 | ' + parts.join(' / ');
     }
 
     renderCombinedChart();
@@ -943,7 +944,10 @@ function renderCombinedTable() {
 
     const krMap = Object.fromEntries(_krSnaps.map(s => [s.date, s]));
     const usMap = Object.fromEntries(_usSnaps.map(s => [s.date, s]));
-    const allDates = [...new Set([..._krSnaps.map(s => s.date), ..._usSnaps.map(s => s.date)])].sort().reverse();
+    const krDates = new Set(_krSnaps.map(s => s.date));
+    const usDates = new Set(_usSnaps.map(s => s.date));
+    // 교집합: 양쪽 모두 데이터가 있는 날짜만
+    const allDates = [...krDates].filter(d => usDates.has(d)).sort().reverse();
 
     if (cntEl) cntEl.textContent = allDates.length + '일';
 
