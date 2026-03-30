@@ -52,6 +52,7 @@ class TradeSummary:
     pnl_pct: float
     count: int = 1           # 동일 패턴 발생 횟수
     period: str = ""         # "2026-03-W13" (주차)
+    market_level: str = ""   # KOSPI 레벨 구간 (변곡점 학습용)
 
 
 @dataclass
@@ -183,6 +184,7 @@ class TradeMemory:
                 is_win=outcome.pnl_pct > 0,
                 pnl_pct=outcome.pnl_pct,
                 period=datetime.now().strftime("%Y-W%W"),
+                market_level=outcome.market_level,
             )
             self._layer2.append(summary)
 
@@ -280,9 +282,18 @@ class TradeMemory:
 
         # 시장 레벨별 승률 분석 (PRISM의 지수 변곡점 학습)
         level_stats: Dict[str, Dict] = {}
+        # Layer 2에서도 market_level 집계
         for s in self._layer2:
-            # Layer 2에는 market_level이 없으므로 Layer 1에서 집계
-            pass
+            if s.market_level:
+                lv = s.market_level
+                if lv not in level_stats:
+                    level_stats[lv] = {"wins": 0, "losses": 0, "total_pnl": 0.0}
+                if s.is_win:
+                    level_stats[lv]["wins"] += 1
+                else:
+                    level_stats[lv]["losses"] += 1
+                level_stats[lv]["total_pnl"] += s.pnl_pct
+        # Layer 1도 추가 집계
         for o in self._layer1:
             if o.market_level:
                 lv = o.market_level

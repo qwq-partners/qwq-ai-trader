@@ -157,7 +157,7 @@ scripts/
 | 일일 최대 손실 | -5.0% | effective_daily_pnl 기준 |
 | 일일 거래 횟수 | 10회 | daily_max_trades |
 | 일일 신규 매수 | 5개 | max_daily_new_buys |
-| 최대 포지션 수 | 7개 | max_positions |
+| 최대 포지션 수 | 8개 | max_positions |
 | 기본 포지션 비율 | 25% | equity 대비 |
 | 최대 포지션 비율 | 28% | 개별 포지션 상한 |
 | 최소 현금 보유 | 5% | total_equity 대비 |

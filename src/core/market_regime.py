@@ -86,8 +86,8 @@ class MarketRegimeAdapter:
         elif abs(avg_change) <= 1.0:
             self._current_regime = "sideways"
         else:
-            # 혼조: 이전 상태 유지 (과도한 전환 방지)
-            pass
+            # 혼조: sideways로 분류 (neutral 고착 방지)
+            self._current_regime = "sideways"
 
         self._regime_data = {
             "kospi_change": kospi_change,
@@ -136,7 +136,7 @@ class MarketRegimeAdapter:
     # LLM 장 시작 전 시장 진단 (08:50 실행)
     # ============================================================
 
-    def __init_llm_state(self):
+    def _init_llm_state(self):
         """LLM 상태 초기화 (lazy)"""
         if not hasattr(self, '_llm_assessment_inited'):
             self._llm_assessment = ""
@@ -161,7 +161,7 @@ class MarketRegimeAdapter:
             premarket_data: 넥스트장 시세 (보유 종목별 등락률)
             news_headlines: 최신 뉴스 헤드라인 요약
         """
-        self.__init_llm_state()
+        self._init_llm_state()
         from datetime import date as _date
         today = _date.today()
         if self._llm_assessment_date == today:
