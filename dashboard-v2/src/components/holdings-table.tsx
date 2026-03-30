@@ -58,8 +58,10 @@ export function HoldingsTable({ positions, market }: Props) {
         </TableHeader>
         <TableBody>
           {sorted.map((p) => {
-            const pnlColor = p.pnl >= 0 ? "text-green-400" : "text-red-400";
-            const Icon = p.pnl >= 0 ? TrendingUp : TrendingDown;
+            const pnl = p.pnl ?? 0;
+            const pnlPct = p.pnl_pct ?? 0;
+            const pnlColor = pnl >= 0 ? "text-green-400" : "text-red-400";
+            const Icon = pnl >= 0 ? TrendingUp : TrendingDown;
             return (
               <TableRow key={p.symbol} className="hover:bg-muted/30">
                 <TableCell>
@@ -82,12 +84,12 @@ export function HoldingsTable({ positions, market }: Props) {
                 <TableCell className={`text-right font-mono ${pnlColor}`}>
                   <div className="flex items-center justify-end gap-1">
                     <Icon className="h-3 w-3" />
-                    <span>{formatPct(p.pnl_pct)}</span>
+                    <span>{formatPct(pnlPct)}</span>
                   </div>
                   <div className="text-xs opacity-70">
                     {isKR
-                      ? `${p.pnl >= 0 ? "+" : ""}${p.pnl.toLocaleString()}원`
-                      : `${p.pnl >= 0 ? "+" : "-"}$${Math.abs(p.pnl).toFixed(2)}`}
+                      ? `${pnl >= 0 ? "+" : ""}${pnl.toLocaleString()}원`
+                      : `${pnl >= 0 ? "+" : "-"}$${Math.abs(pnl).toFixed(2)}`}
                   </div>
                 </TableCell>
                 <TableCell className="hidden md:table-cell">

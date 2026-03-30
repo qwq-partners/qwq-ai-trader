@@ -1,7 +1,7 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, ShieldAlert } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { TrendingUp, TrendingDown, Wallet, BarChart3, Target } from "lucide-react";
 import type { Portfolio, Position, Market } from "@/types/dashboard";
 import { formatKRW, formatUSD, formatPct } from "@/lib/format";
 
@@ -16,24 +16,32 @@ export function MetricsCards({ portfolio, positions, market }: Props) {
 
   const isKR = market === "kr";
   const fmt = isKR ? formatKRW : formatUSD;
-  const pnlColor = portfolio.daily_pnl >= 0 ? "text-green-400" : "text-red-400";
-  const totalPnl = positions.reduce((s, p) => s + p.pnl, 0);
-  const winCount = positions.filter(p => p.pnl > 0).length;
-  const lossCount = positions.filter(p => p.pnl < 0).length;
+  const dailyPnl = portfolio.daily_pnl ?? 0;
+  const dailyPnlPct = portfolio.daily_pnl_pct ?? 0;
+  const totalValue = portfolio.total_value ?? 0;
+  const cash = portfolio.cash ?? 0;
+  const posValue = portfolio.positions_value ?? 0;
+  const posCount = portfolio.positions_count ?? 0;
+
+  const pnlColor = dailyPnl >= 0 ? "text-green-400" : "text-red-400";
+  const totalPnl = (positions ?? []).reduce((s, p) => s + (p.pnl ?? 0), 0);
+  const winCount = (positions ?? []).filter(p => (p.pnl ?? 0) > 0).length;
+  const lossCount = (positions ?? []).filter(p => (p.pnl ?? 0) < 0).length;
+  const investPct = totalValue > 0 ? ((posValue / totalValue) * 100).toFixed(0) : "0";
 
   const cards = [
     {
       title: "총 자산",
-      value: fmt(portfolio.total_value),
-      sub: `현금 ${fmt(portfolio.cash)}`,
+      value: fmt(totalValue),
+      sub: `현금 ${fmt(cash)}`,
       icon: Wallet,
       color: isKR ? "text-blue-400" : "text-emerald-400",
     },
     {
       title: "일일 손익",
-      value: `${portfolio.daily_pnl >= 0 ? "+" : ""}${fmt(portfolio.daily_pnl)}`,
-      sub: formatPct(portfolio.daily_pnl_pct),
-      icon: portfolio.daily_pnl >= 0 ? TrendingUp : TrendingDown,
+      value: `${dailyPnl >= 0 ? "+" : ""}${fmt(dailyPnl)}`,
+      sub: formatPct(dailyPnlPct),
+      icon: dailyPnl >= 0 ? TrendingUp : TrendingDown,
       color: pnlColor,
     },
     {
@@ -45,8 +53,8 @@ export function MetricsCards({ portfolio, positions, market }: Props) {
     },
     {
       title: "포지션",
-      value: `${portfolio.positions_count}종목`,
-      sub: `투자비중 ${((portfolio.positions_value / portfolio.total_value) * 100).toFixed(0)}%`,
+      value: `${posCount}종목`,
+      sub: `투자비중 ${investPct}%`,
       icon: Target,
       color: "text-amber-400",
     },

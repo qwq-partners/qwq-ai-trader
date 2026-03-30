@@ -5,6 +5,19 @@ import { krApi, usApi } from "@/lib/api";
 import type { Portfolio, Position, Trade, Market } from "@/types/dashboard";
 import { todayStr } from "@/lib/format";
 
+// API 응답을 내부 Portfolio 타입으로 정규화
+function normalizePortfolio(raw: any, positions: any[]): Portfolio | null {
+  if (!raw) return null;
+  return {
+    cash: raw.cash ?? 0,
+    total_value: raw.total_equity ?? raw.total_value ?? 0,
+    positions_value: raw.total_position_value ?? raw.positions_value ?? 0,
+    daily_pnl: raw.daily_pnl ?? 0,
+    daily_pnl_pct: raw.daily_pnl_pct ?? (raw.total_equity > 0 ? (raw.daily_pnl / raw.total_equity * 100) : 0),
+    positions_count: raw.positions_count ?? (positions ? positions.length : 0),
+  };
+}
+
 export function useDashboardData(market: Market) {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -19,7 +32,7 @@ export function useDashboardData(market: Market) {
       setError(null);
 
       const api = market === "kr" ? krApi : usApi;
-      const [p, pos, t] = await Promise.all([
+      const [rawP, pos, t] = await Promise.all([
         api.portfolio(),
         api.positions(),
         market === "kr"
@@ -27,9 +40,10 @@ export function useDashboardData(market: Market) {
           : usApi.trades(todayStr()),
       ]);
 
-      if (p) setPortfolio(p as Portfolio);
-      if (pos) setPositions(pos as Position[]);
-      if (t) setTrades(t as Trade[]);
+      const posArr = (pos ?? []) as Position[];
+      setPortfolio(normalizePortfolio(rawP, posArr));
+      setPositions(posArr);
+      setTrades((t ?? []) as Trade[]);
       setLastUpdate(new Date().toLocaleTimeString("ko-KR"));
     } catch (e: any) {
       setError(e.message || "데이터 로드 실패");
@@ -40,7 +54,7 @@ export function useDashboardData(market: Market) {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, 30_000); // 30초
+    const interval = setInterval(refresh, 30_000);
     return () => clearInterval(interval);
   }, [refresh]);
 
