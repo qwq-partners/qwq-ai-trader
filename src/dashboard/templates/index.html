@@ -537,6 +537,34 @@
                 <span id="r-trades-gauge" style="display:none;"></span>
                 <span id="r-positions-gauge" style="display:none;"></span>
 
+                <hr class="mc-sep">
+
+                <!-- 6. AI 엔진 현황 (Phase 1~6) -->
+                <div class="mc-sub">AI 엔진</div>
+                <div class="mc-body ops-body">
+                    <div class="mr">
+                        <span class="mr-lbl">시장 체제</span>
+                        <span id="ai-regime" class="badge badge-blue" style="font-size:0.68rem;">-</span>
+                    </div>
+                    <div class="mr">
+                        <span class="mr-lbl">크로스 검증</span>
+                        <span class="mr-val mono">
+                            <span id="ai-cv-passed" style="color:var(--accent-green);">0</span>
+                            <span class="muted-sep">/</span>
+                            <span id="ai-cv-blocked" style="color:var(--accent-red);">0</span>
+                            <span class="muted-sep">/</span>
+                            <span id="ai-cv-total" class="val-muted">0</span>
+                        </span>
+                    </div>
+                    <div class="mr">
+                        <span class="mr-lbl">거래 원칙</span>
+                        <span class="mr-val mono">
+                            <span id="ai-mem-l3">0</span>개 활성
+                        </span>
+                    </div>
+                    <div id="ai-llm-assessment" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:4px 0;line-height:1.3;"></div>
+                </div>
+
             </div><!-- /kr-market-card -->
 
 
@@ -780,6 +808,6 @@
     </main>
 
     <script src="/static/js/common.js?v=4"></script>
-    <script src="/static/js/dashboard.js?v=10"></script>
+    <script src="/static/js/dashboard.js?v=11"></script>
 </body>
 </html>

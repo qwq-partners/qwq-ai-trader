@@ -1116,6 +1116,38 @@ function updateRiskCard() {
         consec.textContent = kr.consecutive_losses;
         consec.style.color = kr.consecutive_losses >= 3 ? 'var(--acc-red)' : '';
     }
+
+    // === AI 엔진 현황 (Phase 1~6) ===
+    // 시장 체제
+    const regimeEl = document.getElementById('ai-regime');
+    if (regimeEl && kr.market_regime) {
+        const regimeMap = { bull: '🟢 강세', bear: '🔴 약세', sideways: '🟡 횡보', neutral: '⚪ 중립' };
+        const regimeColorMap = { bull: 'badge-green', bear: 'badge-red', sideways: 'badge-amber', neutral: 'badge-blue' };
+        regimeEl.textContent = regimeMap[kr.market_regime] || kr.market_regime;
+        regimeEl.className = 'badge ' + (regimeColorMap[kr.market_regime] || 'badge-blue');
+        regimeEl.style.fontSize = '0.68rem';
+    }
+    // 크로스 검증 통계
+    const cvPassed = document.getElementById('ai-cv-passed');
+    const cvBlocked = document.getElementById('ai-cv-blocked');
+    const cvTotal = document.getElementById('ai-cv-total');
+    if (cvTotal && kr.cross_validator) {
+        const cv = kr.cross_validator;
+        if (cvPassed) cvPassed.textContent = cv.passed || 0;
+        if (cvBlocked) cvBlocked.textContent = cv.blocked || 0;
+        if (cvTotal) cvTotal.textContent = cv.total || 0;
+    }
+    // 거래 메모리 원칙
+    const memL3 = document.getElementById('ai-mem-l3');
+    if (memL3 && kr.trade_memory) {
+        memL3.textContent = kr.trade_memory.layer3_active || 0;
+    }
+    // LLM 장전 진단
+    const llmEl = document.getElementById('ai-llm-assessment');
+    if (llmEl && kr.market_regime_llm) {
+        llmEl.textContent = kr.market_regime_llm;
+        llmEl.style.display = 'block';
+    }
 }
 
 function _setRiskGaugesVisible(visible) {

@@ -220,6 +220,23 @@ class DashboardDataCollector:
             result["can_trade"] = risk_mgr.metrics.can_trade
             result["consecutive_losses"] = risk_mgr.daily_stats.consecutive_losses
 
+        # 크로스 검증 통계 (Phase 1)
+        _engine_rm = engine.risk_manager if hasattr(engine, 'risk_manager') else None
+        if _engine_rm and hasattr(_engine_rm, '_cross_validator'):
+            result["cross_validator"] = _engine_rm._cross_validator.get_stats()
+
+        # 시장 체제 (Phase 2)
+        if hasattr(engine, '_regime_adapter') and engine._regime_adapter:
+            _ra = engine._regime_adapter
+            result["market_regime"] = _ra.regime
+            result["market_regime_llm"] = getattr(_ra, '_llm_assessment', '')[:80]
+        elif hasattr(engine, '_market_regime'):
+            result["market_regime"] = engine._market_regime
+
+        # 거래 메모리 요약 (Phase 3)
+        if _engine_rm and hasattr(_engine_rm, '_trade_memory'):
+            result["trade_memory"] = _engine_rm._trade_memory.get_summary()
+
         return _serialize(result)
 
     # ----------------------------------------------------------
