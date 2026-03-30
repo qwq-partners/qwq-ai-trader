@@ -129,15 +129,19 @@ class MarketRegimeAdapter:
             "params": self.params,
             "data": self._regime_data,
             "last_update": self._last_update.isoformat() if self._last_update else None,
-            "llm_assessment": self._llm_assessment,
+            "llm_assessment": getattr(self, '_llm_assessment', ''),
         }
 
     # ============================================================
     # LLM 장 시작 전 시장 진단 (08:50 실행)
     # ============================================================
 
-    _llm_assessment: str = ""
-    _llm_assessment_date = None
+    def __init_llm_state(self):
+        """LLM 상태 초기화 (lazy)"""
+        if not hasattr(self, '_llm_assessment_inited'):
+            self._llm_assessment = ""
+            self._llm_assessment_date = None
+            self._llm_assessment_inited = True
 
     async def llm_morning_diagnosis(
         self,
@@ -157,6 +161,7 @@ class MarketRegimeAdapter:
             premarket_data: 넥스트장 시세 (보유 종목별 등락률)
             news_headlines: 최신 뉴스 헤드라인 요약
         """
+        self.__init_llm_state()
         from datetime import date as _date
         today = _date.today()
         if self._llm_assessment_date == today:
@@ -215,7 +220,6 @@ class MarketRegimeAdapter:
                 self._llm_assessment_date = today
 
                 # 체제 미세 조정 (LLM이 [방어]인데 체제가 bull이면 sideways로)
-                content_upper = self._llm_assessment.upper()
                 if "[방어]" in self._llm_assessment and self._current_regime == "bull":
                     self._current_regime = "sideways"
                     logger.info(

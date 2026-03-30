@@ -261,14 +261,15 @@ class CrossStrategyValidator:
                 f"ATR={indicators.get('atr_14', 'N/A')}%, "
                 f"MA200거리={indicators.get('ma200_distance_pct', 'N/A')}%, "
                 f"PER={indicators.get('per', 'N/A')}, "
-                f"수급={'+' if (indicators.get('foreign_net_buy') or 0) > 0 else '-'}.\n"
+                f"수급={'+' if (indicators.get('foreign_net_buy') if indicators.get('foreign_net_buy') is not None else 0) > 0 else '-'}.\n"
                 + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
                 + "\n이 매수 시그널을 승인하시겠습니까? "
                 "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )
-            # LLMManager.complete() 사용 (generate() 없음)
+            # GPT-5.4 (STRATEGY_ANALYSIS) — 추론 필요한 매수 판단
+            from ..utils.llm import LLMTask
             resp = await asyncio.wait_for(
-                self._llm_manager.complete(prompt, max_tokens=100),
+                self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100),
                 timeout=10.0,
             )
             if not resp.success:
