@@ -163,6 +163,7 @@ kr:
       stale_high_days: 0
       emergency_stop_pct: 15.0
       rebalance_day: 1
+      rebalance_exclude: []         # 리밸런싱 제외 종목 코드 목록
       ma200_break_days: 5
       early_ma200_alert_days: 3          # 조기경보: MA200 이탈 연속 일수
       early_loss_alert_pct: -12.0        # 조기경보: 손실률 임계 (손절 -15% 전)

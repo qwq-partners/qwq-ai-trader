@@ -30,6 +30,10 @@ exit_manager:
   stop_loss_pct: 3.5
   trailing_activate_pct: 5.0
   trailing_stop_pct: 3.0
+core_holding:
+  rebalance_exclude:
+    - "263750"    # 펄어비스 — 수동 매수, 리밸런싱 제외 (2026-03-30 설정)
+
 momentum_breakout:
   enabled: false
   stop_loss_pct: 3.5

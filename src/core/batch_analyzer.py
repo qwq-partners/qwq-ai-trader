@@ -1668,6 +1668,7 @@ class BatchAnalyzer:
             min_score = core_cfg.get("min_score", 70)
             replace_threshold = core_cfg.get("replace_threshold", 15)
             ma200_break_days = core_cfg.get("ma200_break_days", 5)
+            rebalance_exclude = set(str(s) for s in core_cfg.get("rebalance_exclude", []))
 
             # 현재 코어 포지션 확인
             portfolio = self._engine.portfolio
@@ -1745,6 +1746,9 @@ class BatchAnalyzer:
                 logger.warning("[코어홀딩] 스캔 후보 없음 → 기존 포지션 손실/MA200 이탈 체크만 수행")
                 sell_targets_fallback = []
                 for sym, pos in current_core.items():
+                    if sym in rebalance_exclude:
+                        logger.info(f"[코어홀딩] {sym} 리밸런싱 제외 목록 → 폴백 스킵")
+                        continue
                     if pos.unrealized_pnl_net_pct <= -10.0:
                         sell_targets_fallback.append((sym, f"리밸런싱 손절 {pos.unrealized_pnl_net_pct:.1f}%"))
                 if sell_targets_fallback:
@@ -1780,6 +1784,10 @@ class BatchAnalyzer:
             # 교체 대상 판단
             sell_targets = []
             for sym, pos in current_core.items():
+                # rebalance_exclude 설정 심볼은 교체/손절 대상 제외
+                if sym in rebalance_exclude:
+                    logger.info(f"[코어홀딩] {sym} 리밸런싱 제외 목록 → 스킵")
+                    continue
                 rescore = candidate_scores.get(sym)
                 # 스캔에 포함되지 않은 종목은 유지 (스캔 누락 ≠ 필터 미달)
                 if rescore is None:
@@ -1808,12 +1816,13 @@ class BatchAnalyzer:
             # 4) replace_threshold: 기존 포지션을 점수 낮은 순으로 1:1 매칭
             # allow_replace=False(빈슬롯 즉시 매수)일 때는 교체 로직 스킵 — 빈슬롯 채우기만
             if allow_replace and replace_threshold > 0 and buy_candidates:
-                # 아직 sell_targets에 안 들어간 기존 포지션만 대상
+                # 아직 sell_targets에 안 들어간 기존 포지션만 대상 (제외 목록 심볼도 스킵)
                 already_selling = {s for s, _ in sell_targets}
                 replaceable = [
                     (sym, candidate_scores[sym].score)
                     for sym in current_core
                     if sym not in already_selling and sym in candidate_scores
+                    and sym not in rebalance_exclude
                 ]
                 replaceable.sort(key=lambda x: x[1])  # 점수 낮은 순
 
