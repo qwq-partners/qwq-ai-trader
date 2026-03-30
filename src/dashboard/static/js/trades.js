@@ -58,8 +58,20 @@ async function loadTradeData(dateStr, type, marketFilter) {
             renderSettlementSummary(settlement);
             renderHoldings(settlement.holdings);
         } else {
+            // settlement 타임아웃/실패 시 portfolio API로 미실현 손익 보정
             renderEventSummary(events);
             hideHoldings();
+            // 당일 날짜일 때만 portfolio 실제값으로 미실현 손익 덮어쓰기
+            // (오늘 이전 보유 포지션은 trade-events에 없어서 과소 집계됨)
+            if (dateStr === todayStr()) {
+                api('/api/portfolio').then(portfolio => {
+                    const unrealizedEl = document.getElementById('s-unrealized');
+                    if (unrealizedEl && portfolio && portfolio.unrealized_pnl_net != null) {
+                        unrealizedEl.textContent = formatPnl(portfolio.unrealized_pnl_net);
+                        unrealizedEl.className = 'stat-value mono ' + pnlClass(portfolio.unrealized_pnl_net);
+                    }
+                }).catch(() => {});
+            }
         }
 
         // 청산유형별 금액 요약 테이블
