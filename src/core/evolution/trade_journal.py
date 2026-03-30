@@ -66,9 +66,12 @@ class TradeRecord:
     @property
     def is_sync(self) -> bool:
         """동기화/복구 기반 포지션 여부 (전략 의사결정 없는 정합성 이벤트)"""
+        _sync_exit_types = ("kis_sync", "sync_reconcile", "sync_closed", "sync_partial")
         return (
             self.entry_reason == "sync_detected"
             or self.id.startswith("SYNC_")
+            or self.id.startswith("KIS_SYNC_")
+            or (self.exit_type or "") in _sync_exit_types
         )
 
     @property

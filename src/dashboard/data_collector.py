@@ -578,9 +578,13 @@ class DashboardDataCollector:
         for ev in events:
             trade_id = ev.get("trade_id", "")
             entry_reason = ev.get("entry_reason", "") or ev.get("reason", "")
+            _etype_ev = ev.get("exit_type", "") or ""
             ev["is_sync"] = (
                 entry_reason == "sync_detected"
-                or (isinstance(trade_id, str) and trade_id.startswith("SYNC_"))
+                or (isinstance(trade_id, str) and (
+                    trade_id.startswith("SYNC_") or trade_id.startswith("KIS_SYNC_")
+                ))
+                or _etype_ev in ("kis_sync", "sync_reconcile", "sync_closed", "sync_partial")
             )
 
         # 종목명 + 미청산 BUY 현재가 보강

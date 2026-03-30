@@ -1388,7 +1388,7 @@ JSON:
                                                 trade_id=_tid,
                                                 exit_price=float(fill.price),
                                                 exit_quantity=fill.quantity,
-                                                exit_reason=_r or "fill_detected",
+                                                exit_reason=_exit_reason_snap or "fill_detected",
                                                 exit_type=_etype,
                                                 exit_time=datetime.now(),
                                                 avg_entry_price=float(_sell_pos_snap.avg_price),
@@ -1486,7 +1486,7 @@ JSON:
                                                                    VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0.0,$12)""",
                                                                 _db_tid, fill.symbol, _sym_name2,
                                                                 _now2, float(fill.price), fill.quantity,
-                                                                _etype2, _r2 or 'fill_detected',
+                                                                _etype2, _exit_reason_snap or 'fill_detected',
                                                                 _this_pnl2, _pnl_pct2, _db_strat, _etype2,
                                                             )
                                                             await _dbc.execute(
@@ -1496,7 +1496,7 @@ JSON:
                                                                    pnl=$6, pnl_pct=$7, updated_at=$8
                                                                    WHERE id=$9 AND exit_time IS NULL""",
                                                                 _now2, float(fill.price), fill.quantity,
-                                                                _r2 or 'fill_detected', _etype2,
+                                                                _exit_reason_snap or 'fill_detected', _etype2,
                                                                 _this_pnl2, _pnl_pct2, _now2, _db_tid,
                                                             )
                                                         logger.info(
