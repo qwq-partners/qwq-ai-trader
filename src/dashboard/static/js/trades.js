@@ -32,11 +32,19 @@ async function loadTradeData(dateStr, type, marketFilter) {
     // KR 필터 시 market=KR 파라미터 추가
     const marketParam = (marketFilter === 'kr') ? '&market=KR' : '';
 
+    // settlement에 5초 타임아웃 (KIS API 지연 시 거래 탭 전체 블로킹 방지)
+    function apiWithTimeout(path, ms) {
+        return Promise.race([
+            api(path).catch(() => null),
+            new Promise(resolve => setTimeout(() => resolve(null), ms)),
+        ]);
+    }
+
     try {
-        // 두 API 병렬 호출
+        // 두 API 병렬 호출 (settlement는 타임아웃 적용)
         const [events, settlement] = await Promise.all([
             api(`/api/trade-events?date=${dateStr}&type=${type}${marketParam}`).catch(() => []),
-            api(`/api/daily-settlement?date=${encodeURIComponent(dateStr)}`).catch(() => null),
+            apiWithTimeout(`/api/daily-settlement?date=${encodeURIComponent(dateStr)}`, 5000),
         ]);
 
         cachedEvents = events;

@@ -1550,9 +1550,13 @@ class DashboardDataCollector:
             return {"error": "브로커 미연결", "date": target_date.isoformat()}
 
         try:
-            fills = await broker.get_all_fills_for_date(target_date)
+            import asyncio as _asyncio
+            fills = await _asyncio.wait_for(
+                broker.get_all_fills_for_date(target_date),
+                timeout=20.0,
+            )
         except Exception as e:
-            logger.error(f"[정산] KIS 체결 조회 실패: {e}")
+            logger.warning(f"[정산] KIS 체결 조회 실패/타임아웃: {e}")
             return {"error": f"KIS 체결 조회 실패: {e}", "date": target_date.isoformat()}
 
         if not fills:
