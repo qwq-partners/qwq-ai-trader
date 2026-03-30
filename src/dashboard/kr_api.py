@@ -585,6 +585,31 @@ class KRAPIHandler:
                         if close is not None:
                             dt = datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d")
                             data.append({"date": dt, "close": round(close, 2)})
+
+                    # Yahoo Finance 지연 보완: KIS API로 최근 KOSPI 보충
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    last_date = data[-1]["date"] if data else ""
+                    if last_date < today_str:
+                        broker = getattr(getattr(self.dc, 'bot', None), 'broker', None)
+                        if broker:
+                            try:
+                                # KIS 국내지수 현재가 (KOSPI)
+                                q = await broker.get_quote("0001")  # KOSPI 지수코드
+                                if q and q.get("price", 0) > 0:
+                                    data.append({"date": today_str, "close": round(q["price"], 2)})
+                            except Exception:
+                                pass
+                        if data[-1]["date"] < today_str:
+                            # broker 실패 시 market_indices에서 KOSPI 가져오기
+                            try:
+                                cached = _indices_cache.get("data") or []
+                                for item in cached:
+                                    if item.get("label") == "KOSPI" and item.get("price", 0) > 0:
+                                        data.append({"date": today_str, "close": round(item["price"], 2)})
+                                        break
+                            except Exception:
+                                pass
+
                     _benchmark_cache = {"data": data, "ts": time.time(), "range": yf_range}
                     return web.json_response(data)
         except Exception as e:
