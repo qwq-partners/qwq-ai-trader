@@ -11,6 +11,7 @@ let _krSnaps = [];
 let _usSnaps = [];
 let _fxRate = 1450;
 let _refreshTimer = null;
+let _kospiData = [];
 
 // ── 로컬 포맷 헬퍼 (common.js에 없는 것) ──────────────────
 const fmtKRW    = v => Number(v || 0).toLocaleString('ko-KR');
@@ -49,13 +50,18 @@ async function loadPerformance(days) {
 
         renderSummaryCards(stats, _krSnaps);
         renderEquityChart(_krSnaps);
+        renderStrategyCards(stats.by_strategy || {});
         renderStrategyChart(stats.by_strategy || {});
         renderExitPnlChart(stats.by_exit_type || {});
+        renderStrategyTreemap(stats.by_strategy || {});
         renderStrategyTable(stats.by_strategy || {});
         renderDailyTable(_krSnaps);
     } catch (e) {
         console.error('[성과] KR 로드 오류:', e);
     }
+
+    // 벤치마크 (비동기, 차트 지연 허용)
+    fetchBenchmark(days).then(() => renderBenchmarkChart(_krSnaps, _kospiData));
 }
 
 // ── 요약 카드 6개 ──────────────────────────────────────────
@@ -245,6 +251,186 @@ function renderEquityChart(snaps) {
     Plotly.react(chartId, [base, traceLine, traceBar], layout, { displayModeBar: false, responsive: true });
 }
 
+// ── 벤치마크 데이터 조회 ──────────────────────────────────
+async function fetchBenchmark(days) {
+    try {
+        const resp = await fetch('/api/benchmark?days=' + days);
+        _kospiData = await resp.json();
+    } catch (e) {
+        _kospiData = [];
+        console.debug('[벤치마크] 로드 실패:', e);
+    }
+}
+
+// ── 벤치마크 비교 차트 (포트폴리오 vs KOSPI) ──────────────
+function renderBenchmarkChart(snaps, kospiData) {
+    const el = document.getElementById('benchmark-chart');
+    const alphaEl = document.getElementById('benchmark-alpha');
+    if (!el) return;
+
+    if ((!snaps || snaps.length === 0) && (!kospiData || kospiData.length === 0)) {
+        el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:.85rem;">데이터 없음</div>';
+        if (alphaEl) alphaEl.textContent = '';
+        return;
+    }
+
+    const traces = [];
+
+    // 포트폴리오 누적 수익률 %
+    if (snaps && snaps.length > 0) {
+        const baseEq = snaps[0].total_equity;
+        const dates = snaps.map(s => s.date);
+        const rets = snaps.map(s => baseEq > 0 ? +((s.total_equity - baseEq) / baseEq * 100).toFixed(2) : 0);
+        traces.push({
+            x: dates, y: rets,
+            type: 'scatter', mode: 'lines+markers', name: '포트폴리오',
+            line: { color: '#22d3ee', width: 2.5, shape: 'spline' },
+            marker: { color: rets.map(v => v >= 0 ? '#34d399' : '#f87171'), size: 7, line: { color: '#1a1a2e', width: 1.5 } },
+            fill: 'tozeroy', fillcolor: 'rgba(34,211,238,.06)',
+            hovertemplate: '<b>%{x}</b><br>포트폴리오: %{y:+.2f}%<extra></extra>',
+        });
+    }
+
+    // KOSPI 누적 수익률 %
+    if (kospiData && kospiData.length > 0 && snaps && snaps.length > 0) {
+        const startDate = snaps[0].date;
+        const endDate = snaps[snaps.length - 1].date;
+        const filtered = kospiData.filter(k => k.date >= startDate && k.date <= endDate);
+        if (filtered.length > 0) {
+            const baseK = filtered[0].close;
+            traces.push({
+                x: filtered.map(k => k.date),
+                y: filtered.map(k => baseK > 0 ? +((k.close - baseK) / baseK * 100).toFixed(2) : 0),
+                type: 'scatter', mode: 'lines', name: 'KOSPI',
+                line: { color: '#a78bfa', width: 2, shape: 'spline', dash: 'dot' },
+                hovertemplate: '<b>%{x}</b><br>KOSPI: %{y:+.2f}%<extra></extra>',
+            });
+        }
+    }
+
+    if (traces.length === 0) {
+        el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:.85rem;">데이터 없음</div>';
+        return;
+    }
+
+    // Alpha 계산 + 헤더 표시
+    if (alphaEl && snaps && snaps.length >= 2 && kospiData && kospiData.length > 0) {
+        const portRet = (snaps[snaps.length - 1].total_equity - snaps[0].total_equity) / snaps[0].total_equity * 100;
+        const filtered = kospiData.filter(k => k.date >= snaps[0].date && k.date <= snaps[snaps.length - 1].date);
+        if (filtered.length >= 2) {
+            const kospiRet = (filtered[filtered.length - 1].close - filtered[0].close) / filtered[0].close * 100;
+            const alpha = portRet - kospiRet;
+            alphaEl.textContent = 'Alpha ' + (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%p';
+            alphaEl.style.color = alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+        } else {
+            alphaEl.textContent = '';
+        }
+    }
+
+    // Y축 범위
+    const allY = traces.flatMap(t => t.y);
+    const minY = Math.min(0, ...allY);
+    const maxY = Math.max(0, ...allY);
+    const pad = Math.max((maxY - minY) * 0.2, 1);
+
+    // 0% 기준선
+    const allDates = [...new Set(traces.flatMap(t => t.x))].sort();
+    if (allDates.length >= 2) {
+        traces.push({
+            x: [allDates[0], allDates[allDates.length - 1]], y: [0, 0],
+            mode: 'lines', line: { color: 'rgba(99,102,241,.25)', width: 1, dash: 'dot' },
+            hoverinfo: 'skip', showlegend: false,
+        });
+    }
+
+    const layout = {
+        paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+        margin: { t: 10, b: 40, l: 60, r: 20 },
+        showlegend: true,
+        legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(18,18,30,.8)', bordercolor: 'rgba(99,102,241,.2)', borderwidth: 1, font: { color: '#e2e8f0', size: 12 } },
+        hovermode: 'x unified',
+        hoverlabel: { bgcolor: '#1a1a2e', bordercolor: 'rgba(99,102,241,.4)', font: { color: '#e2e8f0', size: 12.5, family: 'DM Sans, sans-serif' } },
+        xaxis: {
+            color: '#5a6480', gridcolor: 'rgba(99,102,241,.06)',
+            tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#5a6480' },
+            showspikes: true, spikemode: 'across', spikethickness: 1,
+            spikecolor: 'rgba(99,102,241,.3)', spikedash: 'dot',
+        },
+        yaxis: {
+            color: '#8892b0', gridcolor: 'rgba(99,102,241,.08)',
+            tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#8892b0' },
+            tickformat: '+.1f', ticksuffix: '%',
+            range: [minY - pad, maxY + pad], zeroline: false,
+        },
+        height: 320,
+        font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
+    };
+
+    Plotly.react('benchmark-chart', traces, layout, { displayModeBar: false, responsive: true });
+}
+
+// ── 전략별 성과 카드 ─────────────────────────────────────
+function renderStrategyCards(byStrategy) {
+    const container = document.getElementById('strategy-cards-container');
+    if (!container) return;
+    const keys = Object.keys(byStrategy);
+    if (keys.length === 0) { container.innerHTML = ''; return; }
+
+    const names = {
+        momentum_breakout: '모멘텀', theme_chasing: '테마추종', gap_and_go: '갭상승',
+        mean_reversion: '평균회귀', sepa_trend: 'SEPA 추세', rsi2_reversal: 'RSI2 반전',
+    };
+    const colors = {
+        momentum_breakout: '#6366f1', theme_chasing: '#f59e0b', gap_and_go: '#22d3ee',
+        mean_reversion: '#a78bfa', sepa_trend: '#34d399', rsi2_reversal: '#f87171',
+    };
+
+    const html = keys.map(k => {
+        const s = byStrategy[k];
+        const name = names[k] || k;
+        const color = colors[k] || '#6366f1';
+        const wr = (s.win_rate || 0).toFixed(1);
+        const wrPct = Math.min(100, Math.max(0, s.win_rate || 0));
+        const avgPct = s.avg_pnl_pct != null ? s.avg_pnl_pct : 0;
+        const pnlC = s.total_pnl > 0 ? 'text-profit' : s.total_pnl < 0 ? 'text-loss' : '';
+        const avgC = avgPct > 0 ? 'text-profit' : avgPct < 0 ? 'text-loss' : '';
+        const losses = (s.trades || 0) - (s.wins || 0);
+
+        return '<div class="stat-card" style="text-align:left;padding:16px 18px;">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">' +
+                '<div style="width:8px;height:8px;border-radius:50%;background:' + color + ';box-shadow:0 0 8px ' + color + ';flex-shrink:0;"></div>' +
+                '<span style="font-size:.82rem;font-weight:600;color:#fff;">' + esc(name) + '</span>' +
+                '<span class="mono" style="margin-left:auto;font-size:.7rem;color:var(--text-muted);">' + (s.trades || 0) + '건</span>' +
+            '</div>' +
+            '<div style="margin-bottom:10px;">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
+                    '<span style="font-size:.68rem;color:var(--text-muted);">승률</span>' +
+                    '<span class="mono" style="font-size:.78rem;font-weight:600;color:' + (wrPct >= 50 ? 'var(--accent-green)' : 'var(--accent-red)') + ';">' + wr + '%</span>' +
+                '</div>' +
+                '<div style="height:4px;background:rgba(99,102,241,.1);border-radius:2px;overflow:hidden;">' +
+                    '<div style="height:100%;width:' + wrPct + '%;background:' + (wrPct >= 50 ? 'var(--accent-green)' : 'var(--accent-red)') + ';border-radius:2px;transition:width .3s;"></div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
+                '<div>' +
+                    '<div style="font-size:.62rem;color:var(--text-muted);margin-bottom:2px;">평균 수익률</div>' +
+                    '<div class="mono ' + avgC + '" style="font-size:.82rem;font-weight:600;">' + fmtPctLocal(avgPct) + '</div>' +
+                '</div>' +
+                '<div>' +
+                    '<div style="font-size:.62rem;color:var(--text-muted);margin-bottom:2px;">총 손익</div>' +
+                    '<div class="mono ' + pnlC + '" style="font-size:.82rem;font-weight:600;">' + formatPnl(s.total_pnl) + '</div>' +
+                '</div>' +
+                '<div>' +
+                    '<div style="font-size:.62rem;color:var(--text-muted);margin-bottom:2px;">승 / 패</div>' +
+                    '<div class="mono" style="font-size:.78rem;"><span class="text-profit">' + (s.wins || 0) + '</span> / <span class="text-loss">' + losses + '</span></div>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+
+    container.innerHTML = html;
+}
+
 // ── 전략별 차트 ────────────────────────────────────────────
 function renderStrategyChart(byStrategy) {
     const keys = Object.keys(byStrategy);
@@ -333,6 +519,63 @@ function renderExitPnlChart(byExitType) {
     };
 
     Plotly.react('exit-pnl-chart', data, layout, { displayModeBar: false, responsive: true });
+}
+
+// ── 전략 구성 히트맵 (Treemap) ────────────────────────────
+function renderStrategyTreemap(byStrategy) {
+    const el = document.getElementById('strategy-treemap');
+    if (!el) return;
+    const keys = Object.keys(byStrategy);
+    if (keys.length === 0) {
+        el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:.85rem;">데이터 없음</div>';
+        return;
+    }
+
+    const names = {
+        momentum_breakout: '모멘텀', theme_chasing: '테마추종', gap_and_go: '갭상승',
+        mean_reversion: '평균회귀', sepa_trend: 'SEPA', rsi2_reversal: 'RSI2',
+        strategic_swing: '스윙', core_holding: '코어', earnings_drift: '어닝스', unknown: '기타',
+    };
+
+    const labels = [], parents = [], values = [], colors = [], texts = [];
+    labels.push('전체'); parents.push(''); values.push(0); colors.push(0); texts.push('');
+
+    keys.forEach(function(k) {
+        var s = byStrategy[k];
+        var trades = s.trades || 1;
+        var avgPct = s.avg_pnl_pct || 0;
+        var wr = (s.win_rate || 0).toFixed(1);
+        labels.push(names[k] || k);
+        parents.push('전체');
+        values.push(trades);
+        colors.push(avgPct);
+        texts.push(trades + '건 / 승률 ' + wr + '%<br>평균 ' + (avgPct >= 0 ? '+' : '') + avgPct.toFixed(2) + '%');
+    });
+
+    var trace = {
+        type: 'treemap', branchvalues: 'total',
+        labels: labels, parents: parents, values: values,
+        text: texts, textinfo: 'label+text',
+        marker: {
+            colors: colors,
+            colorscale: [
+                [0, '#f87171'], [0.35, '#f87171'], [0.45, '#5a6480'],
+                [0.55, '#5a6480'], [0.65, '#34d399'], [1, '#34d399']
+            ],
+            cmid: 0, line: { width: 2, color: '#0b0b14' },
+        },
+        textfont: { color: '#e2e8f0', size: 13, family: 'DM Sans, sans-serif' },
+        hovertemplate: '<b>%{label}</b><br>%{text}<extra></extra>',
+    };
+
+    var layout = {
+        paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+        margin: { t: 10, b: 10, l: 10, r: 10 },
+        height: 280,
+        font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
+    };
+
+    Plotly.react('strategy-treemap', [trace], layout, { displayModeBar: false, responsive: true });
 }
 
 // ── 전략별 테이블 ──────────────────────────────────────────

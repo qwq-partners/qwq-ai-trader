@@ -16,6 +16,7 @@ from loguru import logger
 
 # 시장 지수 캐시 (5분)
 _indices_cache: dict = {"data": None, "ts": 0.0}
+_benchmark_cache: dict = {"data": None, "ts": 0.0, "range": ""}
 
 
 def setup_kr_api_routes(app: web.Application, data_collector):
@@ -57,6 +58,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/app/latest", handler.get_latest_app)
     app.router.add_get("/api/market/indices", handler.get_market_indices)
     app.router.add_get("/api/core-holdings", handler.get_core_holdings)
+    app.router.add_get("/api/benchmark", handler.get_benchmark)
 
 
 class KRAPIHandler:
@@ -540,6 +542,54 @@ class KRAPIHandler:
     async def get_core_holdings(self, request: web.Request) -> web.Response:
         """코어홀딩 데이터"""
         return web.json_response(self.dc.get_core_holdings())
+
+    async def get_benchmark(self, request: web.Request) -> web.Response:
+        """KOSPI 벤치마크 데이터 (Yahoo Finance)"""
+        global _benchmark_cache
+        try:
+            days = int(request.query.get("days", "30"))
+        except ValueError:
+            return web.json_response({"error": "Invalid days"}, status=400)
+        days = max(7, min(days, 1825))
+
+        if days <= 14:
+            yf_range = "1mo"
+        elif days <= 45:
+            yf_range = "3mo"
+        elif days <= 120:
+            yf_range = "6mo"
+        elif days <= 400:
+            yf_range = "2y"
+        else:
+            yf_range = "5y"
+
+        if (_benchmark_cache["data"]
+                and _benchmark_cache["range"] == yf_range
+                and (time.time() - _benchmark_cache["ts"]) < 600):
+            return web.json_response(_benchmark_cache["data"])
+
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        timeout = aiohttp_client.ClientTimeout(total=10)
+        try:
+            async with aiohttp_client.ClientSession(headers=headers, timeout=timeout) as sess:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/^KS11?interval=1d&range={yf_range}"
+                async with sess.get(url) as resp:
+                    if resp.status != 200:
+                        return web.json_response([])
+                    js = await resp.json(content_type=None)
+                    result = js["chart"]["result"][0]
+                    timestamps = result.get("timestamp", [])
+                    closes = result["indicators"]["quote"][0].get("close", [])
+                    data = []
+                    for ts_val, close in zip(timestamps, closes):
+                        if close is not None:
+                            dt = datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d")
+                            data.append({"date": dt, "close": round(close, 2)})
+                    _benchmark_cache = {"data": data, "ts": time.time(), "range": yf_range}
+                    return web.json_response(data)
+        except Exception as e:
+            logger.debug(f"[벤치마크] KOSPI 조회 오류: {e}")
+            return web.json_response([])
 
     async def _restart_bot_delayed(self, delay_seconds: int):
         """봇 재시작 (지연 실행)"""

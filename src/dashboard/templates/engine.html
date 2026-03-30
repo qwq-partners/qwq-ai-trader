@@ -342,7 +342,7 @@
         }
     </style>
     <link rel="stylesheet" href="/static/css/dashboard.css?v=4">
-    <link rel="stylesheet" href="/static/css/responsive.css?v=4">
+    <link rel="stylesheet" href="/static/css/responsive.css?v=5">
 </head>
 <body>
 
@@ -474,9 +474,31 @@
             </div>
         </div>
 
+        <!-- ═══ AI 판단 로그 ═══ -->
+        <div style="margin-top:16px;">
+            <h3 style="font-size:.92rem;font-weight:700;color:#fff;margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--acc-purple)" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                AI 판단 로그
+            </h3>
+            <div class="engine-grid-bottom" style="margin-top:0;">
+                <div class="card">
+                    <div class="card-header">크로스 검증 현황</div>
+                    <div class="card-body" id="ai-cv-content"><div class="empty-msg">로딩 중...</div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">시장 체제 · LLM 진단</div>
+                    <div class="card-body" id="ai-regime-content"><div class="empty-msg">로딩 중...</div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">활성 거래 원칙</div>
+                    <div class="card-body" id="ai-principles-content"><div class="empty-msg">로딩 중...</div></div>
+                </div>
+            </div>
+        </div>
+
     </main>
 
-    <script src="/static/js/common.js?v=4"></script>
-    <script src="/static/js/engine.js?v=1"></script>
+    <script src="/static/js/common.js?v=5"></script>
+    <script src="/static/js/engine.js?v=2"></script>
 </body>
 </html>

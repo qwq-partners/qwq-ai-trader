@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/responsive.css?v=3">
+    <link rel="stylesheet" href="/static/css/responsive.css?v=5">
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -270,6 +270,19 @@
             <div id="equity-chart" style="height: 320px;"></div>
         </div>
 
+        <!-- ②-b 벤치마크 비교 차트 (포트폴리오 vs KOSPI) -->
+        <div class="card animate-in delay-2" style="padding: 24px; margin-bottom: 16px;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                포트폴리오 vs KOSPI 벤치마크
+                <span id="benchmark-alpha" style="margin-left:auto;font-size:.75rem;font-family:'JetBrains Mono',monospace;font-weight:700;"></span>
+            </div>
+            <div id="benchmark-chart" style="height: 320px;"></div>
+        </div>
+
+        <!-- ②-c 전략별 성과 카드 -->
+        <div id="strategy-cards-container" class="animate-in delay-2" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px;"></div>
+
         <!-- ③ 전략/청산 분석 (2열) -->
         <div class="grid-2col" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
             <div class="card animate-in delay-2" style="padding: 24px;">
@@ -286,6 +299,15 @@
                 </div>
                 <div id="exit-pnl-chart" style="height: 280px;"></div>
             </div>
+        </div>
+
+        <!-- ③-b 전략 구성 히트맵 -->
+        <div class="card animate-in delay-3" style="padding: 24px; margin-bottom: 16px;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber);"></span>
+                전략 구성 히트맵
+            </div>
+            <div id="strategy-treemap" style="height: 280px;"></div>
         </div>
 
         <!-- 전략별 상세 테이블 -->
@@ -411,6 +433,6 @@
     </main>
 
     <script src="/static/js/common.js?v=5"></script>
-    <script src="/static/js/performance.js?v=5"></script>
+    <script src="/static/js/performance.js?v=6"></script>
 </body>
 </html>

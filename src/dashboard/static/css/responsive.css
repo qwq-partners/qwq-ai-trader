@@ -252,3 +252,109 @@ table th {
     border-color: var(--accent-blue);
     color: #fff;
 }
+
+/* ===========================
+   Mobile Enhancement v5
+   =========================== */
+
+/* -- 차트 높이 축소 (태블릿) -- */
+@media (max-width: 768px) {
+  #equity-chart,
+  #benchmark-chart,
+  #combined-chart { height: 220px !important; }
+
+  #strategy-chart,
+  #exit-pnl-chart { height: 200px !important; }
+
+  /* 카드 패딩 축소 */
+  .card { padding: 16px !important; }
+
+  /* 성과 일별 테이블: 현금(6)·포지션(7) 숨기기 */
+  table:has(#daily-tbody) th:nth-child(6),
+  table:has(#daily-tbody) td:nth-child(6),
+  table:has(#daily-tbody) th:nth-child(7),
+  table:has(#daily-tbody) td:nth-child(7) { display: none !important; }
+
+  /* KR/US 비교 테이블: 변동액(3,6) 숨기기 */
+  table:has(#combined-tbody) th:nth-child(3),
+  table:has(#combined-tbody) td:nth-child(3),
+  table:has(#combined-tbody) th:nth-child(6),
+  table:has(#combined-tbody) td:nth-child(6) { display: none !important; }
+
+  /* 벤치마크 Alpha 라벨 */
+  #benchmark-alpha { font-size: 0.65rem !important; }
+
+  /* 전략 카드 컨테이너 */
+  #strategy-cards-container {
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)) !important;
+    gap: 8px !important;
+  }
+}
+
+/* -- 폰 (≤480px) -- */
+@media (max-width: 480px) {
+  /* 차트 추가 축소 */
+  #equity-chart,
+  #benchmark-chart,
+  #combined-chart { height: 180px !important; }
+
+  #strategy-chart,
+  #exit-pnl-chart { height: 160px !important; }
+
+  /* 카드/패딩 */
+  .card { padding: 12px !important; border-radius: 10px !important; }
+  .card-header { font-size: 0.6rem !important; margin-bottom: 10px !important; padding-bottom: 8px !important; gap: 5px !important; }
+
+  /* 성과 요약 카드 */
+  .stat-card { padding: 10px 12px !important; border-radius: 10px !important; }
+  .stat-label { font-size: 0.58rem !important; margin-bottom: 3px !important; }
+  .stat-value { font-size: 0.92rem !important; }
+
+  /* 전략 카드 */
+  #strategy-cards-container {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px !important;
+  }
+
+  /* 탭 버튼 */
+  .tab-btn { padding: 5px 10px !important; font-size: 0.7rem !important; }
+
+  /* 마켓 필터 */
+  .mf-btn { padding: 4px 10px !important; font-size: 0.7rem !important; }
+
+  /* 티커 스트립 */
+  .ticker-strip { padding: 2px 0 !important; }
+  .nav-ti { font-size: .5rem !important; padding: 0 2px 0 6px !important; }
+  .nav-tv { font-size: .5rem !important; }
+  .nav-ts { font-size: .48rem !important; }
+
+  /* 거래 페이지 필터/버튼 */
+  .filter-tab { padding: 5px 10px !important; font-size: 0.7rem !important; }
+  .btn-primary { padding: 5px 12px !important; font-size: 0.75rem !important; }
+  input[type="date"] { padding: 5px 8px !important; font-size: 0.75rem !important; width: 130px !important; }
+
+  /* 성과 일별 테이블: 추가로 expand(1)·승률(9) 숨기기 */
+  table:has(#daily-tbody) th:nth-child(1),
+  table:has(#daily-tbody) td:nth-child(1),
+  table:has(#daily-tbody) th:nth-child(9),
+  table:has(#daily-tbody) td:nth-child(9) { display: none !important; }
+
+  /* KR/US 비교 테이블: 추가로 KR%(4), US%(7) 숨기기 */
+  table:has(#combined-tbody) th:nth-child(4),
+  table:has(#combined-tbody) td:nth-child(4) { display: none !important; }
+
+  /* h2 타이틀 */
+  h2 { font-size: 1rem !important; }
+
+  /* 전략 테이블: 전략명 줄바꿈 방지 */
+  #strategy-table-body td:first-child { white-space: nowrap; font-size: 0.72rem !important; }
+}
+
+/* -- 초소형 (≤360px) -- */
+@media (max-width: 360px) {
+  main { padding: 8px !important; }
+  .nav-pill { padding: 5px 8px !important; font-size: 0.68rem !important; }
+  .perf-grid-6 { grid-template-columns: 1fr 1fr !important; gap: 6px !important; }
+  #strategy-cards-container { grid-template-columns: 1fr !important; }
+  .stat-value { font-size: 0.85rem !important; }
+}

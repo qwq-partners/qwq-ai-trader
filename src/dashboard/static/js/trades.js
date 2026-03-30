@@ -950,3 +950,50 @@ function applyTradesMarketFilter(filter) {
         if (usSec) usSec.style.display = "none";
     }
 }
+
+// ─── 거래 일지 (Daily Review) ───
+async function loadDailyJournal(dateStr) {
+    const el = document.getElementById('journal-content');
+    const dateEl = document.getElementById('journal-date');
+    if (!el) return;
+    try {
+        const data = await fetch('/api/daily-review?date=' + (dateStr || '')).then(r => r.json());
+        if (dateEl) dateEl.textContent = data.date || dateStr || '';
+        if (!data || data.empty || !data.review) {
+            el.innerHTML = '<span style="color:var(--text-muted);">해당 날짜의 AI 복기 데이터가 없습니다.</span>';
+            return;
+        }
+        const r = data.review;
+        let html = '';
+        if (r.summary) html += '<div style="margin-bottom:12px;padding:10px 14px;background:var(--bg-elevated);border-radius:10px;border:1px solid var(--border-subtle);">' + esc(r.summary) + '</div>';
+        if (r.wins && r.wins.length > 0) {
+            html += '<div style="margin-bottom:8px;font-size:.72rem;font-weight:600;color:var(--accent-green);text-transform:uppercase;letter-spacing:.08em;">성공 패턴</div>';
+            html += '<ul style="margin:0 0 12px;padding-left:18px;">';
+            r.wins.forEach(function(w) { html += '<li style="margin-bottom:4px;">' + esc(w) + '</li>'; });
+            html += '</ul>';
+        }
+        if (r.losses && r.losses.length > 0) {
+            html += '<div style="margin-bottom:8px;font-size:.72rem;font-weight:600;color:var(--accent-red);text-transform:uppercase;letter-spacing:.08em;">실패 패턴</div>';
+            html += '<ul style="margin:0 0 12px;padding-left:18px;">';
+            r.losses.forEach(function(l) { html += '<li style="margin-bottom:4px;">' + esc(l) + '</li>'; });
+            html += '</ul>';
+        }
+        if (r.lessons && r.lessons.length > 0) {
+            html += '<div style="margin-bottom:8px;font-size:.72rem;font-weight:600;color:var(--accent-purple);text-transform:uppercase;letter-spacing:.08em;">교훈</div>';
+            html += '<ul style="margin:0;padding-left:18px;">';
+            r.lessons.forEach(function(l) { html += '<li style="margin-bottom:4px;">' + esc(l) + '</li>'; });
+            html += '</ul>';
+        }
+        if (!html) html = '<span style="color:var(--text-muted);">복기 내용 없음</span>';
+        el.innerHTML = html;
+    } catch (e) {
+        el.innerHTML = '<span style="color:var(--text-muted);">복기 데이터 로드 실패</span>';
+    }
+}
+
+// 날짜 변경 시 일지도 갱신
+dateInput.addEventListener('change', function() { loadDailyJournal(dateInput.value); });
+btnToday.addEventListener('click', function() { loadDailyJournal(todayStr()); });
+
+// 초기 로드
+document.addEventListener('DOMContentLoaded', function() { loadDailyJournal(todayStr()); });

@@ -1,5 +1,79 @@
 # QWQ AI Trader - Changelog
 
+## 2026-03-31 — 대시보드 개선 5~6: 벤치마크 비교 + 전략 카드
+
+### 성과 차트: 포트폴리오 vs KOSPI 벤치마크
+- **벤치마크 비교 차트** 추가 (`performance.html`, `performance.js`)
+  - 포트폴리오 누적 수익률 vs KOSPI 누적 수익률 시계열 오버레이
+  - Alpha(초과수익) 자동 계산 + 헤더에 색상 표시
+  - 기간 선택 연동 (1주/1개월/3개월/전체)
+- **벤치마크 API** 추가 (`kr_api.py`)
+  - `/api/benchmark?days=N` — KOSPI 일별 종가 (Yahoo Finance, 10분 캐시)
+
+### 전략별 성과 카드
+- **전략 카드 그리드** 추가 (`performance.html`, `performance.js`)
+  - 전략별 승률 프로그레스 바 + 평균 수익률 + 총 손익 + 승/패
+  - 전략 컬러 코딩 (SEPA=green, 테마=amber, RSI2=red 등)
+  - 자동 레이아웃 (auto-fill, 최소 220px)
+
+### 모바일 반응형 개선 (개선 7)
+- **responsive.css v5**: 3단계 브레이크포인트 (768px/480px/360px)
+- **차트 높이 축소**: 태블릿 220px, 폰 180px (기존 320px)
+- **카드 패딩 축소**: 태블릿 16px, 폰 12px (기존 24px)
+- **테이블 컬럼 자동 숨기기**: 성과 일별 테이블(현금/포지션), KR/US 비교(변동액)
+  - `:has()` 셀렉터 활용 (Chrome 105+)
+- **전략 카드 반응형**: 태블릿 170px, 폰 2열, 초소형 1열
+- **티커 스트립 축소**: 폰에서 .5rem 글씨, 패딩 축소
+- **입력/버튼 축소**: date input, filter-tab, btn-primary 폰 사이즈 최적화
+- **CSS 버전 v=5**: 전체 HTML 템플릿 캐시 갱신
+
+### 수정 파일
+- `src/dashboard/kr_api.py` — `/api/benchmark` 엔드포인트 + 10분 캐시
+- `src/dashboard/templates/performance.html` — 벤치마크 차트 카드 + 전략 카드 컨테이너
+- `src/dashboard/static/js/performance.js` — `fetchBenchmark`, `renderBenchmarkChart`, `renderStrategyCards`
+- `src/dashboard/static/css/responsive.css` — Mobile Enhancement v5 (3단계 브레이크포인트)
+- `src/dashboard/templates/*.html` — CSS 버전 v=5 갱신 (7개 파일)
+
+### AI 판단 로그 (개선 8)
+- **엔진 페이지에 AI 판단 섹션** 추가 (`engine.html`, `engine.js`)
+  - 크로스 검증 현황 (통과/차단/감점 + 통과율 게이지)
+  - 시장 체제 + LLM 장전 진단 (bull/bear/sideways + 진단 텍스트)
+  - 활성 거래 원칙 목록 (L1/L2/L3 건수 + delta/confidence)
+  - 60초 자동 갱신
+
+### 거래 일지 (개선 9)
+- **거래 페이지에 Daily Review 카드** 추가 (`trades.html`, `trades.js`)
+  - 날짜 선택 연동 — 해당 날짜의 AI 복기 자동 로드
+  - 성공 패턴, 실패 패턴, 교훈 구조화 표시
+  - `/api/daily-review` 엔드포인트 활용
+
+### 전략 구성 히트맵 (개선 10)
+- **성과 페이지에 Plotly Treemap** 추가 (`performance.html`, `performance.js`)
+  - 전략별 거래 수 기반 면적 + 평균 수익률 기반 색상 (적/녹)
+  - 전략명, 거래수, 승률, 평균 수익률 호버 표시
+  - 기간 선택 탭 연동
+
+### 알림 설정 (개선 11)
+- **설정 페이지에 알림 설정 카드** 추가 (`settings.html`)
+  - 텔레그램 연결 상태, 일일 손실 알림 한도, 최대 거래 알림
+  - 매수/매도 체결 알림, 장전 LLM 진단, 주간 원칙 리포트 스케줄 표시
+
+### 코드 리뷰 수정
+- `common.js` 캐시 버전 v=5 전체 통일 (evolution, themes, settlement, settings, index)
+- `engine.js` 중복 `esc()` 함수 제거 (common.js 전역 함수 사용)
+
+### 전체 수정 파일
+- `src/dashboard/kr_api.py` — `/api/benchmark` 벤치마크 API
+- `src/dashboard/templates/performance.html` — 벤치마크 + 전략카드 + 트리맵
+- `src/dashboard/templates/engine.html` — AI 판단 로그 섹션
+- `src/dashboard/templates/trades.html` — 거래 일지 카드
+- `src/dashboard/templates/settings.html` — 알림 설정 카드
+- `src/dashboard/static/js/performance.js` — 벤치마크/카드/트리맵 렌더링
+- `src/dashboard/static/js/engine.js` — fetchAILog + 중복 esc 제거
+- `src/dashboard/static/js/trades.js` — loadDailyJournal
+- `src/dashboard/static/css/responsive.css` — Mobile Enhancement v5
+- `src/dashboard/templates/*.html` — CSS/JS 캐시 버전 통일
+
 ## 2026-03-30 — Phase 1~6: 에이전트 팀 아키텍처 + PRISM 채용
 
 ### 거래 원칙 시스템 + 대시보드 개선 (428f063~606cecf)

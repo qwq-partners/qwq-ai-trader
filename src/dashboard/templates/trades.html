@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/responsive.css?v=3">
+    <link rel="stylesheet" href="/static/css/responsive.css?v=5">
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -476,9 +476,21 @@
                 </div>
             </div>
         </div>
+
+        <!-- ═══ 거래 일지 (Daily Review) ═══ -->
+        <div class="card animate-in delay-3" style="padding:24px;margin-top:16px;">
+            <div class="card-header">
+                <span class="dot" style="background:var(--accent-purple);box-shadow:0 0 8px var(--accent-purple);"></span>
+                거래 일지 (AI 복기)
+                <span id="journal-date" style="margin-left:auto;font-size:.7rem;color:var(--text-muted);font-family:'JetBrains Mono',monospace;">--</span>
+            </div>
+            <div id="journal-content" style="font-size:.82rem;color:var(--text-secondary);line-height:1.6;">
+                로딩 중...
+            </div>
+        </div>
     </main>
 
-    <script src="/static/js/common.js?v=4"></script>
-    <script src="/static/js/trades.js?v=5"></script>
+    <script src="/static/js/common.js?v=5"></script>
+    <script src="/static/js/trades.js?v=6"></script>
 </body>
 </html>

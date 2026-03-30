@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/responsive.css?v=3">
+    <link rel="stylesheet" href="/static/css/responsive.css?v=5">
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -285,6 +285,17 @@
                 </div>
             </div>
 
+            <!-- Notifications -->
+            <div class="card card-inner animate-in delay-3" style="padding: 24px;">
+                <div class="card-header">
+                    <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
+                    알림 설정
+                </div>
+                <div id="cfg-notifications">
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">로딩 중...</div>
+                </div>
+            </div>
+
             <!-- US Market -->
             <div class="card card-inner animate-in delay-3" style="padding: 24px; grid-column: 1 / -1;">
                 <div class="card-header">
@@ -298,7 +309,7 @@
         </div>
     </main>
 
-    <script src="/static/js/common.js?v=4"></script>
+    <script src="/static/js/common.js?v=5"></script>
     <script>
         const configLabels = {
             initial_capital: '초기 자본금', market: '시장',
@@ -461,9 +472,34 @@
             }
         }
 
+        async function loadNotificationConfig() {
+            const el = document.getElementById('cfg-notifications');
+            try {
+                const [cfg, risk] = await Promise.all([
+                    api('/api/config'),
+                    api('/api/risk'),
+                ]);
+                const riskCfg = cfg.risk || {};
+                const telegramOk = risk.timestamp ? true : false;
+                let html = '';
+                html += '<div class="config-row"><span class="config-label">텔레그램 봇</span><span class="config-value">' +
+                    (telegramOk ? '<span style="color:var(--accent-green);">연결됨</span>' : '<span style="color:var(--accent-red);">미연결</span>') + '</span></div>';
+                html += '<div class="config-row"><span class="config-label">일일 손실 알림</span><span class="config-value">' + (riskCfg.daily_max_loss_pct || '-5') + '%</span></div>';
+                html += '<div class="config-row"><span class="config-label">최대 거래 알림</span><span class="config-value">' + (riskCfg.daily_max_trades || 10) + '회</span></div>';
+                html += '<div class="config-row"><span class="config-label">매수 체결 알림</span><span class="config-value" style="color:var(--accent-green);">활성</span></div>';
+                html += '<div class="config-row"><span class="config-label">매도 체결 알림</span><span class="config-value" style="color:var(--accent-green);">활성</span></div>';
+                html += '<div class="config-row"><span class="config-label">장전 LLM 진단</span><span class="config-value" style="color:var(--accent-green);">08:50</span></div>';
+                html += '<div class="config-row"><span class="config-label">주간 원칙 리포트</span><span class="config-value" style="color:var(--accent-green);">토요일 00:00</span></div>';
+                el.innerHTML = html;
+            } catch (e) {
+                el.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;">로드 실패</div>';
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             loadConfig();
             loadAppDownload();
+            loadNotificationConfig();
             sse.connect();
         });
     </script>

@@ -7,14 +7,7 @@ let logLevel = 'error,warning';
 let noiseFilter = 'hide';
 let autoRefreshLog = null;
 
-// ─── 헬퍼 ───
-function esc(s) {
-    if (!s) return '';
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
-}
-
+// ─── 헬퍼 (esc는 common.js에서 전역 제공) ───
 function timeAgo(ts) {
     if (!ts) return '—';
     const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T'));
@@ -325,19 +318,80 @@ async function fetchFalseNegatives() {
     }
 }
 
+// ─── AI 판단 로그 ───
+async function fetchAILog() {
+    try {
+        const r = await fetch('/api/risk');
+        const d = await r.json();
+
+        // 크로스 검증
+        const cvEl = document.getElementById('ai-cv-content');
+        if (cvEl) {
+            const cv = d.cross_validator || {};
+            const total = cv.total || 0, passed = cv.passed || 0, blocked = cv.blocked || 0, penalized = cv.penalized || 0;
+            const passRate = total > 0 ? (passed / total * 100).toFixed(1) : '--';
+            cvEl.innerHTML =
+                '<div class="mr"><span class="mr-lbl">오늘 시그널</span><span class="mr-val mono">' + total + '건</span></div>' +
+                '<div class="mr"><span class="mr-lbl">통과</span><span class="mr-val mono" style="color:var(--acc-green)">' + passed + '건</span></div>' +
+                '<div class="mr"><span class="mr-lbl">차단</span><span class="mr-val mono" style="color:var(--acc-red)">' + blocked + '건</span></div>' +
+                '<div class="mr"><span class="mr-lbl">감점</span><span class="mr-val mono" style="color:var(--acc-amber)">' + penalized + '건</span></div>' +
+                '<div class="mr"><span class="mr-lbl">통과율</span><span class="mr-val mono">' + passRate + '%</span></div>' +
+                '<div style="margin-top:8px;"><div class="confidence-bar"><div class="confidence-fill" style="width:' + (total > 0 ? (passed / total * 100) : 0) + '%;background:var(--acc-green);"></div></div></div>';
+        }
+
+        // 시장 체제 + LLM
+        const regimeEl = document.getElementById('ai-regime-content');
+        if (regimeEl) {
+            const regime = d.market_regime || 'neutral';
+            const llm = d.market_regime_llm || '';
+            const rm = { bull: 'BULL 강세', bear: 'BEAR 약세', sideways: 'SIDEWAYS 횡보', neutral: 'NEUTRAL 중립' };
+            const rc = { bull: 'var(--acc-green)', bear: 'var(--acc-red)', sideways: 'var(--acc-amber)', neutral: 'var(--text-muted)' };
+            regimeEl.innerHTML =
+                '<div class="mr"><span class="mr-lbl">현재 체제</span><span class="mr-val" style="font-weight:700;color:' + (rc[regime] || 'var(--text-muted)') + ';">' + (rm[regime] || regime) + '</span></div>' +
+                (llm ? '<div style="margin-top:8px;padding:10px 12px;background:var(--bg-elevated);border-radius:8px;border:1px solid var(--border-sub);font-size:.78rem;color:var(--text-secondary);line-height:1.5;">' + esc(llm) + '</div>' :
+                    '<div class="mr"><span class="mr-lbl">LLM 진단</span><span class="mr-val" style="color:var(--text-muted);">대기 중</span></div>');
+        }
+
+        // 거래 원칙
+        const princEl = document.getElementById('ai-principles-content');
+        if (princEl) {
+            const tm = d.trade_memory || {};
+            const principles = tm.principles || [];
+            let html =
+                '<div class="mr"><span class="mr-lbl">L1 원시</span><span class="mr-val mono">' + (tm.layer1_count || 0) + '건</span></div>' +
+                '<div class="mr"><span class="mr-lbl">L2 요약</span><span class="mr-val mono">' + (tm.layer2_count || 0) + '건</span></div>' +
+                '<div class="mr"><span class="mr-lbl">L3 원칙</span><span class="mr-val mono">' + (tm.layer3_active || 0) + '/' + (tm.layer3_total || 0) + ' 활성</span></div>';
+
+            if (principles.length > 0) {
+                html += '<div style="margin-top:10px;border-top:1px solid var(--border-sub);padding-top:8px;">';
+                principles.slice(0, 8).forEach(function(p) {
+                    var dc = p.delta > 0 ? 'var(--acc-green)' : p.delta < 0 ? 'var(--acc-red)' : 'var(--text-muted)';
+                    var dl = p.delta > 0 ? '+' + p.delta : String(p.delta);
+                    html += '<div style="padding:4px 0;display:flex;align-items:flex-start;gap:8px;border-bottom:1px solid rgba(99,102,241,.05);">' +
+                        '<span style="font-size:.68rem;font-weight:700;color:' + dc + ';font-family:\'JetBrains Mono\',monospace;flex-shrink:0;width:24px;text-align:center;">' + dl + '</span>' +
+                        '<span style="font-size:.72rem;color:var(--text-secondary);flex:1;line-height:1.4;">' + esc(p.rule) + '</span>' +
+                        '<span style="font-size:.6rem;color:var(--text-muted);flex-shrink:0;">' + ((p.confidence || 0) * 100).toFixed(0) + '%</span></div>';
+                });
+                html += '</div>';
+            }
+            princEl.innerHTML = html;
+        }
+    } catch (e) {
+        console.warn('[engine] AI log error:', e);
+    }
+}
+
 // ─── 초기화 ───
 document.addEventListener('DOMContentLoaded', () => {
-    // 초기 로드
     fetchHealerStatus();
     fetchHealerHistory();
     fetchLogs();
     fetchRegime();
     fetchDailyBias();
     fetchFalseNegatives();
+    fetchAILog();
 
-    // 자동 폴링
     setInterval(fetchHealerStatus, 5000);
     autoRefreshLog = setInterval(fetchLogs, 30000);
-
-    // 로그 레벨 버튼 — HTML onclick으로 처리 (중복 등록 방지)
+    setInterval(fetchAILog, 60000);
 });
