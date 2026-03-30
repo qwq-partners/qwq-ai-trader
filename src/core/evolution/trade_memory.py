@@ -383,6 +383,47 @@ class TradeMemory:
 
         return total_delta
 
+    def get_context_for_signal(
+        self,
+        strategy: str,
+        sector: str = "",
+        max_patterns: int = 3,
+    ) -> str:
+        """
+        매수 시그널 생성 시 참고할 메모리 컨텍스트 반환
+
+        LLM 이중 검증 프롬프트 / 로그 보조용.
+        Layer 1(최근 원시) → Layer 2(요약 패턴) 순으로 최대 max_patterns건 반환.
+
+        Returns:
+            관련 패턴 요약 문자열 (없으면 "")
+        """
+        if not self._layer1 and not self._layer2:
+            return ""
+
+        matches: List[str] = []
+
+        # L1: 최근 관련 거래 (같은 전략 또는 같은 섹터)
+        for outcome in reversed(self._layer1[-20:]):
+            if outcome.strategy == strategy or (sector and outcome.sector == sector):
+                matches.append(
+                    f"[최근] {outcome.symbol} {outcome.strategy} "
+                    f"{outcome.pnl_pct:+.1f}% ({outcome.exit_type}, "
+                    f"{outcome.market_regime})"
+                )
+                if len(matches) >= max_patterns:
+                    break
+
+        # L2: L1 미달 시 요약 패턴으로 보완
+        if len(matches) < max_patterns:
+            for summary in reversed(self._layer2[-30:]):
+                if summary.strategy == strategy or (sector and summary.sector == sector):
+                    matches.append(f"[패턴] {summary.pattern} → {summary.result}")
+                    if len(matches) >= max_patterns:
+                        break
+
+        return "; ".join(matches)
+
     # ============================================================
     # 주간 압축 (금요일 evolve 후 호출)
     # ============================================================

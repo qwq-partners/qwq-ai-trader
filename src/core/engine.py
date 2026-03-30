@@ -1198,6 +1198,23 @@ class RiskManager:
                 event.metadata["cross_adjustment"] = round(_cv_score - event.score, 1)
                 event.score = _cv_score
 
+            # LLM 이중 검증: 고점수(85+) + 비강세장 — 하루 최대 5회
+            if _cv_score >= 85 and _regime != "bull":
+                _llm_ok = await self._cross_validator.llm_second_check(
+                    symbol=event.symbol,
+                    strategy=event.strategy.value if event.strategy else "",
+                    score=_cv_score,
+                    indicators=_meta.get("indicators") or {},
+                    market_regime=_regime,
+                    sector=_meta.get("sector", ""),
+                )
+                if not _llm_ok:
+                    logger.info(f"[크로스검증] {event.symbol} LLM 이중검증 거부")
+                    if event.metadata is None:
+                        event.metadata = {}
+                    event.metadata["llm_second_check"] = "rejected"
+                    return None
+
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
         if event.side == OrderSide.BUY:
             available = self.engine.get_available_cash() - self._reserved_cash

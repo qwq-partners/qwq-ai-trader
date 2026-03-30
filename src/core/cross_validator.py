@@ -37,6 +37,11 @@ class CrossStrategyValidator:
         }
         self._stats_date = None
 
+        # LLM 이중 검증 일일 한도 (비용 폭발 방지)
+        self._daily_llm_count: int = 0
+        self._daily_llm_count_date = None
+        self._daily_llm_max: int = 5  # 하루 최대 5회
+
     def set_portfolio(self, portfolio):
         self._portfolio = portfolio
 
@@ -205,6 +210,7 @@ class CrossStrategyValidator:
         score: float,
         indicators: dict,
         market_regime: str,
+        sector: str = "",
     ) -> bool:
         """
         LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
@@ -223,16 +229,40 @@ class CrossStrategyValidator:
         if score < 85:
             return True
 
+        # 일일 한도 체크 (비용 제어)
+        today = datetime.now().date()
+        if self._daily_llm_count_date != today:
+            self._daily_llm_count = 0
+            self._daily_llm_count_date = today
+        if self._daily_llm_count >= self._daily_llm_max:
+            logger.debug(
+                f"[크로스검증] LLM 이중검증 일일 한도 초과 "
+                f"({self._daily_llm_max}회) → 자동 통과"
+            )
+            return True
+        self._daily_llm_count += 1
+        logger.info(
+            f"[크로스검증] LLM 이중검증 #{self._daily_llm_count}/{self._daily_llm_max}: "
+            f"{symbol} 점수={score:.0f} 체제={market_regime}"
+        )
+
         try:
+            # 거래 메모리 컨텍스트 (최근 유사 패턴)
+            mem_context = ""
+            if self._trade_memory and hasattr(self._trade_memory, 'get_context_for_signal'):
+                mem_context = self._trade_memory.get_context_for_signal(strategy, sector)
+
             prompt = (
                 f"종목 {symbol}, 전략 {strategy}, 점수 {score:.0f}.\n"
-                f"시장 체제: {market_regime}.\n"
+                f"시장 체제: {market_regime}."
+                + (f" 섹터: {sector}." if sector else "") + "\n"
                 f"지표: RSI={indicators.get('rsi_14', 'N/A')}, "
                 f"ATR={indicators.get('atr_14', 'N/A')}%, "
                 f"MA200거리={indicators.get('ma200_distance_pct', 'N/A')}%, "
                 f"PER={indicators.get('per', 'N/A')}, "
-                f"수급={'+' if (indicators.get('foreign_net_buy') or 0) > 0 else '-'}.\n\n"
-                f"이 매수 시그널을 승인하시겠습니까? "
+                f"수급={'+' if (indicators.get('foreign_net_buy') or 0) > 0 else '-'}.\n"
+                + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
+                + "\n이 매수 시그널을 승인하시겠습니까? "
                 f"YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )
             import asyncio

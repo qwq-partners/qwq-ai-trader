@@ -1415,18 +1415,20 @@ JSON:
                                                     _kospi_level = ""
                                                     if hasattr(bot.engine, '_regime_adapter'):
                                                         _rd = getattr(bot.engine._regime_adapter, '_regime_data', {})
-                                                        _avg_chg = _rd.get("avg_change", 0)
-                                                        # 등락률 구간화: -3%~+3%를 1% 단위로
-                                                        if _avg_chg <= -2:
-                                                            _kospi_level = "급락(-2%이하)"
-                                                        elif _avg_chg <= -1:
-                                                            _kospi_level = "하락(-1~-2%)"
-                                                        elif _avg_chg < 1:
-                                                            _kospi_level = "보합(-1~+1%)"
-                                                        elif _avg_chg < 2:
-                                                            _kospi_level = "상승(+1~+2%)"
-                                                        else:
-                                                            _kospi_level = "급등(+2%이상)"
+                                                        # _rd 비어있으면 (봇 시작 직후 미수집) 레이블 미부여
+                                                        if _rd:
+                                                            _avg_chg = _rd.get("avg_change", 0)
+                                                            # 등락률 구간화: -3%~+3%를 1% 단위로
+                                                            if _avg_chg <= -2:
+                                                                _kospi_level = "급락(-2%이하)"
+                                                            elif _avg_chg <= -1:
+                                                                _kospi_level = "하락(-1~-2%)"
+                                                            elif _avg_chg < 1:
+                                                                _kospi_level = "보합(-1~+1%)"
+                                                            elif _avg_chg < 2:
+                                                                _kospi_level = "상승(+1~+2%)"
+                                                            else:
+                                                                _kospi_level = "급등(+2%이상)"
                                                     bot.engine.risk_manager._trade_memory.record_outcome(
                                                         symbol=fill.symbol,
                                                         name=getattr(_sell_pos_snap, 'name', ''),
