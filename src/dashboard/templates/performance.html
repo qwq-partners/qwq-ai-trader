@@ -225,11 +225,16 @@
         <!-- Header + Period tabs -->
         <div class="animate-in" style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
             <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">🇰🇷 성과 분석</h2>
-            <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+            <div style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
                 <button class="tab-btn active" data-days="7">1주</button>
                 <button class="tab-btn" data-days="30">1개월</button>
                 <button class="tab-btn" data-days="90">3개월</button>
                 <button class="tab-btn" data-days="9999">전체</button>
+                <span style="color:var(--text-muted);font-size:.72rem;margin:0 4px;">|</span>
+                <input type="date" id="perf-date-from" style="background:var(--bg-elevated);border:1px solid var(--border-subtle);color:var(--text-primary);padding:5px 10px;border-radius:8px;font-size:.75rem;font-family:'DM Sans',sans-serif;">
+                <span style="color:var(--text-muted);font-size:.72rem;">~</span>
+                <input type="date" id="perf-date-to" style="background:var(--bg-elevated);border:1px solid var(--border-subtle);color:var(--text-primary);padding:5px 10px;border-radius:8px;font-size:.75rem;font-family:'DM Sans',sans-serif;">
+                <button id="perf-date-apply" class="tab-btn" style="background:rgba(99,102,241,.15);color:var(--accent-blue);border-color:rgba(99,102,241,.3);">조회</button>
             </div>
         </div>
 

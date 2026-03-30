@@ -31,12 +31,18 @@ async function fetchFxRate() {
     } catch (_) { /* 실패 시 기본값 1450 유지 */ }
 }
 
+// ── 커스텀 날짜 범위 상태 ────────────────────────────────────
+let _customDateFrom = '';
+let _customDateTo = '';
+
 // ── 메인 로드 (KR) ─────────────────────────────────────────
 async function loadPerformance(days) {
     currentDays = days;
+    _customDateFrom = '';
+    _customDateTo = '';
 
     // 탭 활성화 표시
-    document.querySelectorAll('.tab-btn').forEach(b => {
+    document.querySelectorAll('.tab-btn[data-days]').forEach(b => {
         b.classList.toggle('active', parseInt(b.dataset.days) === days);
     });
 
@@ -62,6 +68,41 @@ async function loadPerformance(days) {
 
     // 벤치마크 (비동기, 차트 지연 허용)
     fetchBenchmark(days).then(() => renderBenchmarkChart(_krSnaps, _kospiData));
+}
+
+// ── 날짜 범위 로드 (KR) ──────────────────────────────────────
+async function loadPerformanceByRange(dateFrom, dateTo) {
+    _customDateFrom = dateFrom;
+    _customDateTo = dateTo;
+
+    // 탭 비활성화
+    document.querySelectorAll('.tab-btn[data-days]').forEach(b => b.classList.remove('active'));
+
+    // days 계산 (벤치마크 + US 기간 동기화용)
+    const diffMs = new Date(dateTo) - new Date(dateFrom);
+    currentDays = Math.max(1, Math.ceil(diffMs / 86400000));
+
+    try {
+        const [stats, equityData] = await Promise.all([
+            api('/api/trades/stats?days=' + currentDays),
+            api('/api/equity-history?from=' + dateFrom + '&to=' + dateTo),
+        ]);
+
+        _krSnaps = equityData.snapshots || [];
+
+        renderSummaryCards(stats, _krSnaps);
+        renderEquityChart(_krSnaps);
+        renderStrategyCards(stats.by_strategy || {});
+        renderStrategyChart(stats.by_strategy || {});
+        renderExitPnlChart(stats.by_exit_type || {});
+        renderStrategyTreemap(stats.by_strategy || {});
+        renderStrategyTable(stats.by_strategy || {});
+        renderDailyTable(_krSnaps);
+    } catch (e) {
+        console.error('[성과] KR 범위 로드 오류:', e);
+    }
+
+    fetchBenchmark(currentDays).then(() => renderBenchmarkChart(_krSnaps, _kospiData));
 }
 
 // ── 요약 카드 6개 ──────────────────────────────────────────
@@ -1004,17 +1045,32 @@ function applyPerfMarketFilter(filter) {
 function startAutoRefresh() {
     if (_refreshTimer) clearInterval(_refreshTimer);
     _refreshTimer = setInterval(() => {
-        loadPerformance(currentDays);
+        if (_customDateFrom && _customDateTo) {
+            loadPerformanceByRange(_customDateFrom, _customDateTo);
+        } else {
+            loadPerformance(currentDays);
+        }
         const filter = MarketFilter.get();
         if (filter !== 'kr') loadUSPerformance();
     }, 30000);
 }
 
 // ── 탭 이벤트 ──────────────────────────────────────────────
-document.querySelectorAll('.tab-btn').forEach(btn => {
+document.querySelectorAll('.tab-btn[data-days]').forEach(btn => {
     btn.addEventListener('click', () => {
         loadPerformance(parseInt(btn.dataset.days));
     });
+});
+
+// ── 날짜 범위 선택 이벤트 ────────────────────────────────────
+document.getElementById('perf-date-apply')?.addEventListener('click', () => {
+    const from = document.getElementById('perf-date-from')?.value;
+    const to = document.getElementById('perf-date-to')?.value;
+    if (!from || !to) return;
+    if (from > to) { alert('시작일이 종료일보다 늦습니다.'); return; }
+    loadPerformanceByRange(from, to);
+    const filter = MarketFilter.get();
+    if (filter !== 'kr') loadUSPerformance();
 });
 
 // ── 초기화 ─────────────────────────────────────────────────
