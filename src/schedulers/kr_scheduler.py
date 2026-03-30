@@ -3687,6 +3687,24 @@ JSON:
                 now = datetime.now()
 
                 if now.hour == 0 and 5 <= now.minute < 10:
+                    # 주간 거래 원칙 리포트 (토요일 00:00, 리밸런싱 후)
+                    try:
+                        from ..core.evolution.trading_principles import TradingPrinciplesManager
+                        _tp_memory = None
+                        _tp_llm = None
+                        if bot.engine and bot.engine.risk_manager:
+                            _tp_memory = getattr(bot.engine.risk_manager, '_trade_memory', None)
+                        from ..utils.llm import get_llm_manager
+                        _tp_llm = get_llm_manager()
+                        _tpm = TradingPrinciplesManager(trade_memory=_tp_memory, llm_manager=_tp_llm)
+                        _tp_report = await _tpm.generate_weekly_report()
+                        _tpm.save_report(_tp_report)
+                        if bot.telegram:
+                            await bot.telegram.send_message(_tp_report, parse_mode="HTML")
+                        logger.info("[거래원칙] 주간 리포트 생성 + 텔레그램 전송 완료")
+                    except Exception as _tp_e:
+                        logger.warning(f"[거래원칙] 주간 리포트 실패 (무시): {_tp_e}")
+
                     try:
                         log_base = Path(__file__).parent.parent.parent / "logs"
                         cleanup_old_logs(str(log_base), max_days=7)
