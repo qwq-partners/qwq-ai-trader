@@ -2738,6 +2738,47 @@ JSON:
                                             premarket_data=_pm_data,
                                             news_headlines=_news_headlines,
                                         )
+
+                                        # 텔레그램 전송 (장전 진단 결과)
+                                        if _ra._llm_assessment and bot.telegram:
+                                            try:
+                                                _tg_lines = [
+                                                    "🌅 <b>장전 시장 진단</b>",
+                                                    "",
+                                                    f"<b>■ AI 판단</b>",
+                                                    f"{_ra._llm_assessment}",
+                                                    "",
+                                                    f"<b>■ 시장 체제</b>: {_ra._current_regime}",
+                                                    f"KOSPI {kospi_data.get('change_pct', 0):+.1f}% / KOSDAQ {kosdaq_data.get('change_pct', 0):+.1f}%",
+                                                ]
+                                                if _pm_data:
+                                                    _tg_lines.append("")
+                                                    _tg_lines.append("<b>■ 넥스트장</b>")
+                                                    for _ps, _pv in list(_pm_data.items())[:5]:
+                                                        _pn = ""
+                                                        _pos = bot.engine.portfolio.positions.get(_ps)
+                                                        if _pos:
+                                                            _pn = f" {_pos.name}" if getattr(_pos, 'name', '') else ""
+                                                        _tg_lines.append(
+                                                            f"  {_ps}{_pn}: {_pv.get('change_pct', 0):+.1f}%"
+                                                        )
+                                                if _theme_summary:
+                                                    _tg_lines.append("")
+                                                    _tg_lines.append(f"<b>■ 테마</b>: {_theme_summary}")
+                                                if _news_headlines:
+                                                    _tg_lines.append("")
+                                                    _tg_lines.append("<b>■ 뉴스</b>")
+                                                    for _nl in _news_headlines.split("\n")[:3]:
+                                                        _tg_lines.append(f"  {_nl}")
+
+                                                await bot.telegram.send_message(
+                                                    "\n".join(_tg_lines),
+                                                    parse_mode="HTML",
+                                                )
+                                                logger.info("[시장체제] 텔레그램 장전 진단 전송 완료")
+                                            except Exception as _tg_e:
+                                                logger.debug(f"[시장체제] 텔레그램 전송 실패 (무시): {_tg_e}")
+
                                     except Exception as _lmd_e:
                                         logger.debug(f"[시장체제] LLM 장전 진단 실패 (무시): {_lmd_e}")
 
