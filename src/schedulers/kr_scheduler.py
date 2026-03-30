@@ -178,6 +178,47 @@ class KRScheduler:
     # 헬퍼
     # ============================================================
 
+    @staticmethod
+    def _classify_exit_type(reason: str) -> str:
+        """exit_reason 문자열 → exit_type 태그 변환 (단일 출처, 중복 방지)
+
+        ExitManager / batch_analyzer / kr_scheduler 세 곳에서 발생하는
+        모든 reason 패턴을 커버한다.
+
+        패턴 우선순위 (위에서 아래):
+          1. 손절
+          2. 트레일링
+          3. 본전 이탈 (breakeven)
+          4. stale 계열 (횡보·무효화·저효율·보유기간 초과·코어홀딩 조기경보)
+          5. RSI2 청산 → take_profit
+          6. 분할 익절 (3차→2차→1차 순서 — "2차"가 "1차" 포함 오탐 방지)
+          7. 일반 익절
+          8. 테마 EOD / fill_detected / 기타 → manual
+        """
+        r = reason or ""
+        if "손절" in r or "stop" in r.lower():
+            return "stop_loss"
+        if "트레일링" in r or "trailing" in r.lower():
+            return "trailing"
+        if "본전 이탈" in r or "breakeven" in r.lower():
+            return "breakeven"
+        if ("횡보 청산" in r or "추세 무효화" in r
+                or "익절후 저효율" in r
+                or "보유기간 초과" in r
+                or "코어홀딩 조기경보" in r):
+            return "stale"
+        if "RSI2 청산" in r:
+            return "take_profit"
+        if "3차" in r:
+            return "third_take_profit"
+        if "2차" in r:
+            return "second_take_profit"
+        if "1차" in r:
+            return "first_take_profit"
+        if "익절" in r or "take_profit" in r.lower():
+            return "take_profit"
+        return "manual"
+
     def _trim_watch_symbols(self):
         """감시 종목 리스트가 최대 수를 초과하면 오래된 비포지션 종목 제거"""
         bot = self.bot
@@ -1341,27 +1382,8 @@ JSON:
                                             if _match:
                                                 _tid = _match[-1].id
                                         if _tid:
-                                            # exit_type 분류
-                                            _r = _exit_reason_snap
-                                            if "손절" in _r or "stop" in _r.lower():
-                                                _etype = "stop_loss"
-                                            elif "트레일링" in _r or "trailing" in _r.lower():
-                                                _etype = "trailing"
-                                            elif "본전 이탈" in _r or "breakeven" in _r.lower():
-                                                # 본전 이탈: reason에 "1차 익절" 언급돼도 breakeven 우선
-                                                _etype = "breakeven"
-                                            elif "횡보 청산" in _r or "추세 무효화" in _r:
-                                                _etype = "stale"
-                                            elif "2차" in _r:
-                                                _etype = "second_take_profit"
-                                            elif "3차" in _r:
-                                                _etype = "third_take_profit"
-                                            elif "1차" in _r:
-                                                _etype = "first_take_profit"
-                                            elif "익절" in _r or "take_profit" in _r.lower():
-                                                _etype = "take_profit"
-                                            else:
-                                                _etype = "manual"
+                                            # exit_type 분류 (공통 함수 위임)
+                                            _etype = self._classify_exit_type(_exit_reason_snap)
                                             bot.trade_journal.record_exit(
                                                 trade_id=_tid,
                                                 exit_price=float(fill.price),
@@ -1440,26 +1462,8 @@ JSON:
                                                         _db_tid = str(_db_row['id'])
                                                         _db_ep = float(_db_row['entry_price'] or 0) or float(_sell_pos_snap.avg_price)
                                                         _db_strat = str(_db_row['entry_strategy'] or 'sync_detected')
-                                                        # exit_type 분류 (정규 경로와 동일 로직)
-                                                        _r2 = _exit_reason_snap or ''
-                                                        if "손절" in _r2 or "stop" in _r2.lower():
-                                                            _etype2 = "stop_loss"
-                                                        elif "트레일링" in _r2 or "trailing" in _r2.lower():
-                                                            _etype2 = "trailing"
-                                                        elif "본전 이탈" in _r2 or "breakeven" in _r2.lower():
-                                                            _etype2 = "breakeven"
-                                                        elif "횡보 청산" in _r2 or "추세 무효화" in _r2:
-                                                            _etype2 = "stale"
-                                                        elif "2차" in _r2:
-                                                            _etype2 = "second_take_profit"
-                                                        elif "3차" in _r2:
-                                                            _etype2 = "third_take_profit"
-                                                        elif "1차" in _r2:
-                                                            _etype2 = "first_take_profit"
-                                                        elif "익절" in _r2 or "take_profit" in _r2.lower():
-                                                            _etype2 = "take_profit"
-                                                        else:
-                                                            _etype2 = "manual"
+                                                        # exit_type 분류 (공통 함수 위임)
+                                                        _etype2 = self._classify_exit_type(_exit_reason_snap)
                                                         # PnL 계산 (수수료 포함 순손익)
                                                         _sell_amt2 = float(fill.price) * fill.quantity
                                                         _sell_fee2 = round(_sell_amt2 * 0.000131)
