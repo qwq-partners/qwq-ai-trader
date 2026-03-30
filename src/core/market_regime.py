@@ -9,8 +9,10 @@ QWQ AI Trader - 시장 체제 사전 적응
 - SmartSidecar: 장중 손실 발생 시 사후 차단 (안전망)
 """
 
+import os
 from datetime import datetime
 from typing import Dict, Optional
+import aiohttp
 from loguru import logger
 
 
@@ -179,12 +181,24 @@ class MarketRegimeAdapter:
             if pm_lines:
                 premarket_info = f"\n=== 넥스트장 보유종목 시세 ===\n" + "\n".join(pm_lines[:8])
 
+        # Perplexity 실시간 검색으로 매크로 컨텍스트 보강 (PRISM 차용)
+        perplexity_context = ""
+        _pplx_key = os.getenv("PERPLEXITY_API_KEY", "")
+        if _pplx_key:
+            try:
+                perplexity_context = await self._fetch_perplexity_context(_pplx_key)
+                if perplexity_context:
+                    logger.info(f"[시장체제] Perplexity 매크로 검색 완료 ({len(perplexity_context)}자)")
+            except Exception as _pe:
+                logger.debug(f"[시장체제] Perplexity 검색 실패 (무시): {_pe}")
+
         prompt = (
             f"당신은 KR 주식시장 전문 분석가입니다.\n\n"
             f"=== 현재 시장 상황 ===\n{regime_info}\n"
             + (premarket_info + "\n" if premarket_info else "")
             + (f"\n=== 오늘 테마 ===\n{theme_summary}\n" if theme_summary else "")
             + (f"\n=== 뉴스 헤드라인 ===\n{news_headlines}\n" if news_headlines else "")
+            + (f"\n=== 실시간 매크로 ===\n{perplexity_context}\n" if perplexity_context else "")
             + f"\n=== 진단 요청 ===\n"
             f"오늘 장 전략 방향을 한 줄로 제시하세요.\n"
             f"형식: [공격/중립/방어] 사유\n"
@@ -220,3 +234,44 @@ class MarketRegimeAdapter:
                 logger.debug(f"[시장체제] LLM 진단 실패 (무시): {resp.error}")
         except Exception as e:
             logger.debug(f"[시장체제] LLM 진단 오류 (무시): {e}")
+
+    async def _fetch_perplexity_context(self, api_key: str) -> str:
+        """Perplexity 실시간 검색 — 오늘 KR 시장 매크로 컨텍스트 수집
+
+        Sonar 모델 사용, 1회 ~$0.005. 실패 시 빈 문자열 반환.
+        """
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                payload = {
+                    "model": "sonar",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "오늘 한국 주식시장에 영향을 줄 핵심 이슈 3가지를 "
+                                "한 줄씩 간결하게 알려주세요. "
+                                "글로벌 매크로, 환율, 정책, 섹터 동향 위주로."
+                            ),
+                        }
+                    ],
+                    "max_tokens": 200,
+                }
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                }
+                async with session.post(
+                    "https://api.perplexity.ai/chat/completions",
+                    json=payload,
+                    headers=headers,
+                ) as resp:
+                    if resp.status != 200:
+                        logger.debug(f"[Perplexity] HTTP {resp.status}")
+                        return ""
+                    data = await resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    return content.strip()[:500]  # 500자 제한
+        except Exception as e:
+            logger.debug(f"[Perplexity] 검색 실패: {e}")
+            return ""
