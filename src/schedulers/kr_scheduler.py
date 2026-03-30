@@ -3451,7 +3451,7 @@ JSON:
                                     "positions": [
                                         {
                                             "symbol": sym,
-                                            "sector": getattr(pos, "sector", ""),
+                                            "sector": pos.sector or "unknown",
                                             "pnl_pct": float(getattr(pos, "unrealized_pnl_pct", 0)),
                                         }
                                         for sym, pos in _pf.positions.items()

@@ -723,15 +723,17 @@ class RiskManager:
 
     def get_risk_summary(self) -> Dict[str, Any]:
         """리스크 요약"""
+        _wins = self.daily_stats.wins
+        _losses = self.daily_stats.losses
+        _total = _wins + _losses
         return {
             "can_trade": self.metrics.can_trade,
             "daily_loss_pct": self.metrics.daily_loss_pct,
             "daily_trades": self.daily_stats.trades,
+            "wins": _wins,
+            "losses": _losses,
             "consecutive_losses": self.daily_stats.consecutive_losses,
-            "win_rate": (
-                self.daily_stats.wins / max(1, self.daily_stats.wins + self.daily_stats.losses) * 100
-                if (self.daily_stats.wins + self.daily_stats.losses) > 0 else 0
-            ),
+            "win_rate": (_wins / max(1, _total) * 100 if _total > 0 else 0),
             "total_pnl": float(self.daily_stats.total_pnl),
             "market": self.market,
         }

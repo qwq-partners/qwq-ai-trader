@@ -105,14 +105,21 @@ class QualityValidator:
 
         pnl = stats.get("total_pnl", 0)
 
-        # get_risk_summary() 포맷 (daily_trades + win_rate)
+        # get_risk_summary() 포맷 (daily_trades + win_rate + wins + losses)
         if "daily_trades" in stats:
             total = stats.get("daily_trades", 0)
             if total == 0:
                 return {"level": "info", "message": "거래 없음", "trades": 0}
-            win_rate = stats.get("win_rate", 0.0)
-            wins = round(win_rate / 100 * total)
-            losses = total - wins
+            # wins/losses 직접 제공 시 우선 사용 (역산 오류 방지)
+            if "wins" in stats and "losses" in stats:
+                wins = stats["wins"]
+                losses = stats["losses"]
+                win_rate = wins / max(1, wins + losses) * 100 if (wins + losses) > 0 else 0.0
+            else:
+                # 하위 호환: win_rate만 있을 때 역산
+                win_rate = stats.get("win_rate", 0.0)
+                wins = round(win_rate / 100 * total)
+                losses = total - wins
             consecutive_losses = stats.get("consecutive_losses", 0)
         else:
             # 레거시 포맷 (wins + losses 직접 지정)
