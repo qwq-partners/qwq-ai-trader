@@ -933,18 +933,21 @@ class RiskManager:
         # 섹터 조회 콜러블 (async def(symbol) -> Optional[str])
         self._sector_lookup = sector_lookup
 
-        # 거래 메모리 시스템
-        from .evolution.trade_memory import TradeMemory
-        self._trade_memory = TradeMemory()
-
-        # 크로스 전략 검증 게이트
-        from .cross_validator import CrossStrategyValidator
+        # LLM 매니저 (크로스 검증 + 거래 메모리 공유)
         from ..utils.llm import get_llm_manager
+        _llm_mgr = get_llm_manager()
+
+        # 거래 메모리 시스템 (LLM 구조화 복기 활성화)
+        from .evolution.trade_memory import TradeMemory
+        self._trade_memory = TradeMemory(llm_manager=_llm_mgr)
+
+        # 크로스 전략 검증 게이트 (LLM 이중 검증 활성화)
+        from .cross_validator import CrossStrategyValidator
         self._cross_validator = CrossStrategyValidator(
             portfolio=engine.portfolio,
             risk_manager=risk_validator,
             trade_memory=self._trade_memory,
-            llm_manager=get_llm_manager(),  # LLM 이중 검증 활성화
+            llm_manager=_llm_mgr,
         )
 
         # 주문 실패 쿨다운 추적 (종목별)

@@ -2691,6 +2691,27 @@ JSON:
                             bot.engine._regime_adapter.update_regime(kospi_data, kosdaq_data)
                             bot.engine._market_regime = bot.engine._regime_adapter.regime
 
+                            # 08:50 LLM 장 시작 전 시장 진단 (1회/일)
+                            _now_hm = now.strftime("%H:%M")
+                            if "08:48" <= _now_hm <= "08:55":
+                                _ra = bot.engine._regime_adapter
+                                if _ra._llm_assessment_date != now.date():
+                                    try:
+                                        from ..utils.llm import get_llm_manager
+                                        _theme_summary = ""
+                                        if bot.theme_detector:
+                                            _active = bot.theme_detector.get_active_themes()
+                                            if _active:
+                                                _theme_summary = ", ".join(
+                                                    f"{t.name}({t.score:.0f})" if hasattr(t, 'name') else str(t)
+                                                    for t in _active[:5]
+                                                )
+                                        await _ra.llm_morning_diagnosis(
+                                            get_llm_manager(), theme_summary=_theme_summary,
+                                        )
+                                    except Exception as _lmd_e:
+                                        logger.debug(f"[시장체제] LLM 장전 진단 실패 (무시): {_lmd_e}")
+
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

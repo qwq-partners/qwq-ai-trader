@@ -127,4 +127,77 @@ class MarketRegimeAdapter:
             "params": self.params,
             "data": self._regime_data,
             "last_update": self._last_update.isoformat() if self._last_update else None,
+            "llm_assessment": self._llm_assessment,
         }
+
+    # ============================================================
+    # LLM 장 시작 전 시장 진단 (08:50 실행)
+    # ============================================================
+
+    _llm_assessment: str = ""
+    _llm_assessment_date = None
+
+    async def llm_morning_diagnosis(self, llm_manager, theme_summary: str = ""):
+        """
+        장 시작 전 LLM 시장 진단 — GPT-5.4 1회/일
+
+        뉴스+매크로 맥락으로 체제 판단을 보강합니다.
+        결과를 _market_regime에 반영하지는 않고, 로그+메타데이터로 참조.
+
+        Args:
+            llm_manager: LLMManager 인스턴스
+            theme_summary: 오늘 테마 탐지 요약 (있으면)
+        """
+        from datetime import date as _date
+        today = _date.today()
+        if self._llm_assessment_date == today:
+            return  # 당일 중복 실행 방지
+
+        from ..utils.llm import LLMTask
+
+        regime_info = (
+            f"현재 체제: {self._current_regime}\n"
+            f"KOSPI 등락: {self._regime_data.get('kospi_change', 0):+.1f}%\n"
+            f"KOSDAQ 등락: {self._regime_data.get('kosdaq_change', 0):+.1f}%\n"
+            f"시가대비: {self._regime_data.get('avg_vs_open', 0):+.1f}%"
+        )
+
+        prompt = (
+            f"당신은 KR 주식시장 전문 분석가입니다.\n\n"
+            f"=== 현재 시장 상황 ===\n{regime_info}\n"
+            + (f"\n=== 오늘 테마 ===\n{theme_summary}\n" if theme_summary else "")
+            + f"\n=== 진단 요청 ===\n"
+            f"오늘 장 전략 방향을 한 줄로 제시하세요.\n"
+            f"형식: [공격/중립/방어] 사유\n"
+            f"예: [공격] 반도체 수급 강세 + 미국 기술주 호조, SEPA 확대\n"
+            f"예: [방어] 관세 리스크 + 원화 약세, 테마 축소 권고"
+        )
+
+        try:
+            resp = await llm_manager.complete(
+                prompt, task=LLMTask.MARKET_ANALYSIS, max_tokens=150,
+            )
+            if resp.success and resp.content:
+                self._llm_assessment = resp.content.strip()
+                self._llm_assessment_date = today
+
+                # 체제 미세 조정 (LLM이 [방어]인데 체제가 bull이면 sideways로)
+                content_upper = self._llm_assessment.upper()
+                if "[방어]" in self._llm_assessment and self._current_regime == "bull":
+                    self._current_regime = "sideways"
+                    logger.info(
+                        f"[시장체제] LLM 진단으로 bull → sideways 조정: "
+                        f"{self._llm_assessment[:60]}"
+                    )
+                elif "[공격]" in self._llm_assessment and self._current_regime == "bear":
+                    self._current_regime = "sideways"
+                    logger.info(
+                        f"[시장체제] LLM 진단으로 bear → sideways 조정: "
+                        f"{self._llm_assessment[:60]}"
+                    )
+
+                logger.info(f"[시장체제] LLM 장전 진단: {self._llm_assessment[:80]}")
+            else:
+                logger.debug(f"[시장체제] LLM 진단 실패 (무시): {resp.error}")
+        except Exception as e:
+            logger.debug(f"[시장체제] LLM 진단 오류 (무시): {e}")

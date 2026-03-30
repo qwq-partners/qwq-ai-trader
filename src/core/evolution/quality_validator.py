@@ -65,9 +65,9 @@ class QualityValidator:
         # 4. 포지션 집중도 검증
         results["position_concentration"] = self._check_concentration(portfolio_summary)
 
-        # 5. 거래 메모리 압축 (금요일)
+        # 5. 거래 메모리 압축 (금요일) + LLM 구조화 복기
         if datetime.now().weekday() == 4:  # 금요일
-            results["memory_compression"] = self._trigger_memory_compression()
+            results["memory_compression"] = await self._trigger_memory_compression()
 
         # 종합 등급
         warnings = sum(1 for v in results.values() if isinstance(v, dict) and v.get("level") == "warning")
@@ -250,13 +250,13 @@ class QualityValidator:
 
         return result
 
-    def _trigger_memory_compression(self) -> Dict:
+    async def _trigger_memory_compression(self) -> Dict:
         """거래 메모리 압축 (금요일)"""
         if not self._trade_memory:
             return {"level": "info", "message": "거래 메모리 미설정"}
 
         try:
-            self._trade_memory.compress_layers()
+            await self._trade_memory.compress_layers()
             summary = self._trade_memory.get_summary()
             return {
                 "level": "ok",

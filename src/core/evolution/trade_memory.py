@@ -428,16 +428,16 @@ class TradeMemory:
     # 주간 압축 (금요일 evolve 후 호출)
     # ============================================================
 
-    def compress_layers(self):
+    async def compress_layers(self):
         """Layer 1→2→3 전체 압축 실행"""
         l1_count = self._compress_to_layer2()
         l3_count = self._extract_principles()
 
-        # LLM 보조 회고: 최근 손실 거래에서 교훈 추출 (선택적)
+        # LLM 구조화 복기: 오늘 거래에서 교훈 추출 → 원칙으로 환류
         llm_insights = 0
-        if self._llm_manager and len(self._layer2) >= 5:
+        if self._llm_manager and (self._layer1 or self._layer2):
             try:
-                llm_insights = self._llm_retrospective()
+                llm_insights = await self._llm_structured_review()
             except Exception as e:
                 logger.debug(f"[거래메모리] LLM 회고 실패 (무시): {e}")
 
@@ -448,39 +448,96 @@ class TradeMemory:
             f"L3={len([p for p in self._layer3 if p.active])}개 활성)"
         )
 
-    def _llm_retrospective(self) -> int:
-        """LLM 보조 회고: 최근 손실 거래 패턴에서 교훈 추출 (PRISM 4단계 차용)"""
+    async def _llm_structured_review(self) -> int:
+        """LLM 구조화 복기: 최근 거래에서 실패/성공 패턴 추출 → 원칙 생성
+
+        PRISM 4단계 차용: 상황분석 → 판단평가 → 교훈추출 → 패턴태깅
+        GPT-5.4 (heavy) 사용, 1회/일, ~$0.01
+        """
         if not self._llm_manager:
             return 0
 
-        # 최근 손실 거래 5건 요약
-        recent_losses = [s for s in self._layer2 if not s.is_win][-5:]
-        if len(recent_losses) < 3:
+        from ..utils.llm import LLMTask
+
+        # 최근 거래 요약 (L1 전체 + L2 최근 10건)
+        recent_trades = []
+        for o in self._layer1[-10:]:
+            recent_trades.append(
+                f"{'✅' if o.pnl_pct > 0 else '❌'} {o.symbol} {o.strategy} "
+                f"{o.pnl_pct:+.1f}% ({o.exit_type}, {o.holding_days}일, "
+                f"체제={o.market_regime}, 섹터={o.sector or 'N/A'})"
+            )
+        for s in self._layer2[-5:]:
+            recent_trades.append(f"{'✅' if s.is_win else '❌'} [요약] {s.pattern} → {s.result}")
+
+        if len(recent_trades) < 3:
             return 0
 
-        loss_summary = "\n".join(
-            f"- {s.pattern} → {s.result} ({s.strategy})"
-            for s in recent_losses
-        )
-
+        trades_text = "\n".join(recent_trades)
         prompt = (
-            f"최근 손실 거래 {len(recent_losses)}건을 분석하세요:\n"
-            f"{loss_summary}\n\n"
-            f"반복되는 실패 패턴 1~2개를 추출하고, "
-            f"각각 '조건 → 회피 규칙' 형태로 작성하세요."
+            f"당신은 30년 경력 트레이더입니다. 최근 거래를 분석하세요.\n\n"
+            f"=== 최근 거래 ===\n{trades_text}\n\n"
+            f"=== 분석 요청 ===\n"
+            f"1. 반복되는 실패 패턴이 있다면 1~2개 추출\n"
+            f"2. 성공 거래의 공통점이 있다면 1~2개 추출\n"
+            f"3. 각 패턴을 다음 형식으로 작성:\n"
+            f'   AVOID: [전략] + [조건] → [회피 규칙]\n'
+            f'   FOCUS: [전략] + [조건] → [집중 규칙]\n\n'
+            f"간결하게 4줄 이내로 답하세요."
         )
 
-        try:
-            import asyncio
-            # 동기 컨텍스트에서 호출될 수 있으므로 try
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 이미 이벤트 루프 내 — 직접 호출 불가, 스킵
-                return 0
-        except RuntimeError:
+        resp = await self._llm_manager.complete(
+            prompt, task=LLMTask.TRADE_REVIEW, max_tokens=300,
+        )
+        if not resp.success:
             return 0
 
-        return 0  # 비동기 환경에서만 실행 가능 — 향후 async 버전 필요
+        content = resp.content or ""
+        new_count = 0
+
+        # AVOID/FOCUS 패턴 파싱 → Layer 3 원칙 생성
+        for line in content.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith("AVOID:"):
+                rule_text = line[6:].strip()
+                # 중복 체크
+                if any(rule_text[:20] in p.rule for p in self._layer3):
+                    continue
+                self._layer3.append(TradePrinciple(
+                    rule=f"[LLM회고] {rule_text}",
+                    confidence=0.5,  # 초기 신뢰도 (검증 후 상향)
+                    score_delta=-2,
+                    source_count=len(recent_trades),
+                    last_verified=date.today().isoformat(),
+                    conditions={"source": "llm_review"},
+                    created_at=datetime.now().isoformat(),
+                ))
+                new_count += 1
+                logger.info(f"[거래메모리] LLM 회피 원칙: {rule_text}")
+
+            elif line.startswith("FOCUS:"):
+                rule_text = line[6:].strip()
+                if any(rule_text[:20] in p.rule for p in self._layer3):
+                    continue
+                self._layer3.append(TradePrinciple(
+                    rule=f"[LLM회고] {rule_text}",
+                    confidence=0.5,
+                    score_delta=+2,
+                    source_count=len(recent_trades),
+                    last_verified=date.today().isoformat(),
+                    conditions={"source": "llm_review"},
+                    created_at=datetime.now().isoformat(),
+                ))
+                new_count += 1
+                logger.info(f"[거래메모리] LLM 집중 원칙: {rule_text}")
+
+        if new_count:
+            self._save_layer3()
+
+        return new_count
 
     # ============================================================
     # 요약
