@@ -2,6 +2,15 @@
 
 ## 2026-03-30 — Phase 1~6: 에이전트 팀 아키텍처 + PRISM 채용
 
+### 3곳 LLM 통합 + 데이터 소스 확장 (e92e829~b290ce7)
+- **매수 전 LLM 2차 검증**: GPT-5.4, 하루 5회, 고점수(85+) 비강세장만
+- **저녁 LLM 구조화 복기**: AVOID/FOCUS 원칙 자동 생성 → Layer 3 환류
+- **장전 LLM 시장 진단**: 08:50 [공격/중립/방어] 판단 + 체제 미세 조정
+- **Perplexity 실시간 매크로 검색**: Sonar 모델, $0.005/회
+- **넥스트장 시세 연동**: 보유 종목 5개 get_overtime_price() graceful
+- **뉴스 헤드라인 5건**: theme_detector 최근 뉴스 주입
+- **리뷰 수정**: task=STRATEGY_ANALYSIS 명시, LLM 상태 lazy 초기화
+
 ### 최종 리뷰 수정 (77270d7)
 - 크로스검증 `or` 패턴 → `is None` 체크 (CLAUDE.md 규칙 준수)
 - `_kospi_level` 5구간 레벨 계산 + `record_outcome` 전달 (시장 변곡점 학습 활성화)
