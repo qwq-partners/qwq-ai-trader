@@ -215,7 +215,7 @@ class CrossStrategyValidator:
         """
         LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
 
-        비용 최소화: 하루 최대 3~5회, 거부 시 score -20.
+        비용 최소화: 하루 최대 5회 (_daily_llm_max), 거부 시 주문 차단.
         실시간 성능: 타임아웃 10초, 실패 시 통과(fail-open).
         """
         if not self._llm_manager:
