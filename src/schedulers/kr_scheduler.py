@@ -3443,9 +3443,25 @@ JSON:
                             _qv_cv = None
                             if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_cross_validator'):
                                 _qv_cv = bot.engine.risk_manager._cross_validator.get_stats()
+                            # portfolio_summary: 포지션 집중도 검증용
+                            _qv_portfolio = None
+                            if bot.engine and bot.engine.portfolio:
+                                _pf = bot.engine.portfolio
+                                _qv_portfolio = {
+                                    "positions": [
+                                        {
+                                            "symbol": sym,
+                                            "sector": getattr(pos, "sector", ""),
+                                            "pnl_pct": float(getattr(pos, "unrealized_pnl_pct", 0)),
+                                        }
+                                        for sym, pos in _pf.positions.items()
+                                    ],
+                                    "total_equity": float(getattr(_pf, "total_equity", 0)),
+                                }
                             await _qv.run_daily_validation(
                                 daily_stats=_qv_stats,
                                 cross_validator_stats=_qv_cv,
+                                portfolio_summary=_qv_portfolio,
                             )
                         except Exception as _qv_err:
                             logger.warning(f"[품질검증] 실행 실패 (무시): {_qv_err}")

@@ -94,19 +94,36 @@ class QualityValidator:
         return results
 
     def _check_trading_performance(self, stats: Dict = None) -> Dict:
-        """일일 거래 성과 검증"""
+        """일일 거래 성과 검증
+
+        risk_manager.get_risk_summary() 포맷 지원:
+          daily_trades, win_rate(%), total_pnl, consecutive_losses
+        레거시 포맷도 지원: wins, losses
+        """
         if not stats:
             return {"level": "info", "message": "거래 통계 없음"}
 
-        wins = stats.get("wins", 0)
-        losses = stats.get("losses", 0)
-        total = wins + losses
         pnl = stats.get("total_pnl", 0)
 
-        if total == 0:
-            return {"level": "info", "message": "거래 없음", "trades": 0}
+        # get_risk_summary() 포맷 (daily_trades + win_rate)
+        if "daily_trades" in stats:
+            total = stats.get("daily_trades", 0)
+            if total == 0:
+                return {"level": "info", "message": "거래 없음", "trades": 0}
+            win_rate = stats.get("win_rate", 0.0)
+            wins = round(win_rate / 100 * total)
+            losses = total - wins
+            consecutive_losses = stats.get("consecutive_losses", 0)
+        else:
+            # 레거시 포맷 (wins + losses 직접 지정)
+            wins = stats.get("wins", 0)
+            losses = stats.get("losses", 0)
+            total = wins + losses
+            if total == 0:
+                return {"level": "info", "message": "거래 없음", "trades": 0}
+            win_rate = wins / total * 100
+            consecutive_losses = 0
 
-        win_rate = wins / total * 100
         result = {
             "level": "ok",
             "trades": total,
@@ -114,15 +131,16 @@ class QualityValidator:
             "losses": losses,
             "win_rate": round(win_rate, 1),
             "pnl": pnl,
+            "consecutive_losses": consecutive_losses,
         }
 
         # 경고 기준
         if total >= 5 and win_rate < 30:
             result["level"] = "warning"
             result["message"] = f"승률 {win_rate:.0f}% (5건+ 중 30% 미만)"
-        elif losses >= 3 and wins == 0:
+        elif consecutive_losses >= 3:
             result["level"] = "warning"
-            result["message"] = f"연속 손실 {losses}건 (승리 0건)"
+            result["message"] = f"연속 손실 {consecutive_losses}건"
 
         return result
 

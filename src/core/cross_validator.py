@@ -247,6 +247,7 @@ class CrossStrategyValidator:
         )
 
         try:
+            import asyncio
             # 거래 메모리 컨텍스트 (최근 유사 패턴)
             mem_context = ""
             if self._trade_memory and hasattr(self._trade_memory, 'get_context_for_signal'):
@@ -263,15 +264,19 @@ class CrossStrategyValidator:
                 f"수급={'+' if (indicators.get('foreign_net_buy') or 0) > 0 else '-'}.\n"
                 + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
                 + "\n이 매수 시그널을 승인하시겠습니까? "
-                f"YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
+                "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )
-            import asyncio
-            response = await asyncio.wait_for(
-                self._llm_manager.generate(prompt, max_tokens=100),
+            # LLMManager.complete() 사용 (generate() 없음)
+            resp = await asyncio.wait_for(
+                self._llm_manager.complete(prompt, max_tokens=100),
                 timeout=10.0,
             )
-            if response and "NO" in response.upper()[:10]:
-                logger.info(f"[크로스검증] LLM 거부: {symbol} — {response[:80]}")
+            if not resp.success:
+                logger.debug(f"[크로스검증] LLM 응답 실패 (통과): {resp.error}")
+                return True  # fail-open
+            content = (resp.content or "").strip()
+            if content and "NO" in content.upper()[:10]:
+                logger.info(f"[크로스검증] LLM 거부: {symbol} — {content[:80]}")
                 return False
             return True
         except Exception as e:

@@ -939,10 +939,12 @@ class RiskManager:
 
         # 크로스 전략 검증 게이트
         from .cross_validator import CrossStrategyValidator
+        from ..utils.llm import get_llm_manager
         self._cross_validator = CrossStrategyValidator(
             portfolio=engine.portfolio,
             risk_manager=risk_validator,
             trade_memory=self._trade_memory,
+            llm_manager=get_llm_manager(),  # LLM 이중 검증 활성화
         )
 
         # 주문 실패 쿨다운 추적 (종목별)
