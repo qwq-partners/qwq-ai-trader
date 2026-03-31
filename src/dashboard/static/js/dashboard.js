@@ -1296,3 +1296,129 @@ function formatKRW(value) {
     if (value >= 10000) return (value / 10000).toFixed(0) + '만';
     return formatNumber(value);
 }
+
+// ═══════════════════════════════════════════════════════════
+// 매수 신호 이력 (Signal Events)
+// ═══════════════════════════════════════════════════════════
+
+const GATE_META = {
+    'G1_regime':  { label: '레짐',  color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' },
+    'G2_cross':   { label: '크로스', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)'  },
+    'G3_risk':    { label: '리스크', color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
+    'G4_llm':     { label: 'LLM',   color: '#22d3ee', bg: 'rgba(34,211,238,0.12)'  },
+    'G5_cash':    { label: '현금',  color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
+    'G5_budget':  { label: '예산',  color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
+};
+
+let _sigEvents = [];
+let _sigFilter = '';
+let _sigStats = { passed: 0, blocked: 0, penalized: 0 };
+
+async function loadSignalEvents() {
+    try {
+        const typeQ = _sigFilter ? `&type=${_sigFilter}` : '';
+        const [evts, stats] = await Promise.all([
+            fetch(`/api/signal-events?limit=60${typeQ}`).then(r => r.json()),
+            fetch('/api/signal-events/stats?days=7').then(r => r.json()),
+        ]);
+        _sigEvents = evts;
+        _sigStats = stats;
+        renderSignalEvents();
+        renderSignalStats();
+    } catch(e) {
+        console.debug('signal-events load error', e);
+    }
+}
+
+function sigFilterChange() {
+    _sigFilter = document.getElementById('sig-filter')?.value || '';
+    loadSignalEvents();
+}
+
+function renderSignalStats() {
+    const s = _sigStats;
+    const ep = document.getElementById('sig-stat-passed');
+    const eb = document.getElementById('sig-stat-blocked');
+    const en = document.getElementById('sig-stat-pen');
+    if (ep) ep.textContent = `통과 ${s.passed || 0}`;
+    if (eb) eb.textContent = `차단 ${s.blocked || 0}`;
+    if (en) en.textContent = `감점 ${s.penalized || 0}`;
+
+    // 게이트별 통계 바
+    const gateEl = document.getElementById('sig-gate-stats');
+    if (!gateEl) return;
+    gateEl.innerHTML = '';
+    const gates = s.by_gate || [];
+    const total = gates.reduce((a, g) => a + g.count, 0);
+    if (total === 0) return;
+    gates.forEach(g => {
+        const meta = GATE_META[g.gate] || { label: g.gate, color: '#8892b0', bg: 'rgba(136,146,176,0.1)' };
+        const pct = total > 0 ? Math.round(g.count / total * 100) : 0;
+        const chip = document.createElement('div');
+        chip.style.cssText = `display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:5px;background:${meta.bg};border:1px solid ${meta.color}33;font-size:.7rem;font-family:'JetBrains Mono',monospace;`;
+        chip.innerHTML = `<span style="color:${meta.color};font-weight:700;">${meta.label}</span><span style="color:#8892b0;">${g.count}건</span><span style="color:#5a6480;">${pct}%</span>`;
+        gateEl.appendChild(chip);
+    });
+}
+
+function renderSignalEvents() {
+    const el = document.getElementById('sig-event-list');
+    if (!el) return;
+    if (!_sigEvents.length) {
+        el.innerHTML = '<div style="color:var(--text-muted);font-size:.8rem;text-align:center;padding:20px 0;">이벤트 없음</div>';
+        return;
+    }
+    el.innerHTML = '';
+    _sigEvents.forEach(ev => {
+        const isBlocked   = ev.event_type === 'blocked';
+        const isPassed    = ev.event_type === 'passed';
+        const isPenalized = ev.event_type === 'penalized';
+        const typeColor   = isBlocked ? '#f87171' : isPassed ? '#34d399' : '#fbbf24';
+        const typeBg      = isBlocked ? 'rgba(248,113,113,0.08)' : isPassed ? 'rgba(52,211,153,0.08)' : 'rgba(251,191,36,0.08)';
+        const typeTxt     = isBlocked ? '차단' : isPassed ? '통과' : '감점';
+        const gateMeta    = ev.block_gate ? (GATE_META[ev.block_gate] || { label: ev.block_gate, color: '#8892b0', bg: '#8892b010' }) : null;
+
+        const dt = ev.event_time ? ev.event_time.substring(11, 16) : '';
+        const scoreTxt = isPenalized && ev.adjusted_score !== ev.score
+            ? `${ev.score?.toFixed(0)}→<span style="color:#fbbf24;">${ev.adjusted_score?.toFixed(0)}</span>`
+            : `${ev.score?.toFixed(0)}`;
+
+        const row = document.createElement('div');
+        row.style.cssText = `display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;background:${typeBg};border:1px solid ${typeColor}22;font-size:.78rem;flex-wrap:wrap;`;
+        row.innerHTML = `
+            <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-muted);min-width:34px;">${dt}</span>
+            <span style="font-weight:700;color:${typeColor};min-width:26px;">${typeTxt}</span>
+            <span style="font-weight:600;color:var(--text-primary);">${ev.name || ev.symbol}</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-muted);">${ev.symbol}</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:#6366f1;">점수 ${scoreTxt}</span>
+            ${ev.strategy ? `<span style="font-size:.65rem;color:var(--text-muted);background:var(--bg-elevated);padding:1px 5px;border-radius:4px;">${ev.strategy}</span>` : ''}
+            ${gateMeta ? `<span style="font-size:.65rem;font-weight:700;padding:1px 7px;border-radius:4px;background:${gateMeta.bg};color:${gateMeta.color};">${gateMeta.label}</span>` : ''}
+            ${ev.block_reason ? `<span style="font-size:.68rem;color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ev.block_reason}">${ev.block_reason}</span>` : ''}
+        `;
+        el.appendChild(row);
+    });
+}
+
+// SSE 실시간 수신
+sse.on('signal_event', (data) => {
+    const ev = data;
+    _sigEvents.unshift(ev);
+    if (_sigEvents.length > 60) _sigEvents.pop();
+
+    // 통계 갱신
+    if (ev.event_type === 'passed')    _sigStats.passed = (_sigStats.passed || 0) + 1;
+    if (ev.event_type === 'blocked')   _sigStats.blocked = (_sigStats.blocked || 0) + 1;
+    if (ev.event_type === 'penalized') _sigStats.penalized = (_sigStats.penalized || 0) + 1;
+
+    // 필터 적용 후 렌더
+    if (!_sigFilter || ev.event_type === _sigFilter) {
+        renderSignalEvents();
+    }
+    renderSignalStats();
+});
+
+// 페이지 로드 시 초기화
+document.addEventListener('DOMContentLoaded', () => {
+    // 기존 DOMContentLoaded와 충돌 방지: 지연 로드
+    setTimeout(loadSignalEvents, 800);
+});

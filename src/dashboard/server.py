@@ -128,6 +128,13 @@ class DashboardServer:
         if self.data_collector:
             await DashboardDataCollector._load_stock_master()
 
+        # SignalEventStorage SSE 콜백 연결
+        try:
+            from src.data.storage.signal_event_storage import SignalEventStorage
+            SignalEventStorage.get().set_sse_callback(self.sse_manager.broadcast)
+        except Exception as _e:
+            logger.debug(f"[대시보드] SignalEventStorage SSE 연결 실패 (무시): {_e}")
+
         self._app = self._create_app()
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()

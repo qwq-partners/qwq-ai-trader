@@ -792,6 +792,33 @@
             </div>
         </div>
 
+        <!-- ═══ SIGNAL EVENTS (매수 신호 이력) ═══ -->
+        <div class="card ai d4" style="padding:20px 22px;margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+                <div class="card-header" style="border:none;padding:0;margin:0;">
+                    <span class="dot" style="width:6px;height:6px;background:#a78bfa;box-shadow:0 0 8px #a78bfa;"></span>
+                    매수 신호 이력 <span style="font-size:.7rem;color:var(--text-muted);font-weight:400;">(투자 원칙 적용 로그)</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <span id="sig-stat-passed"  style="font-size:.72rem;padding:3px 9px;border-radius:5px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);color:#34d399;font-family:'JetBrains Mono',monospace;">통과 0</span>
+                    <span id="sig-stat-blocked" style="font-size:.72rem;padding:3px 9px;border-radius:5px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.2);color:#f87171;font-family:'JetBrains Mono',monospace;">차단 0</span>
+                    <span id="sig-stat-pen"     style="font-size:.72rem;padding:3px 9px;border-radius:5px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.2);color:#fbbf24;font-family:'JetBrains Mono',monospace;">감점 0</span>
+                    <select id="sig-filter" onchange="sigFilterChange()" style="font-size:.72rem;padding:3px 8px;border-radius:5px;background:var(--bg-elevated);border:1px solid var(--border-sub);color:var(--text-secondary);cursor:pointer;">
+                        <option value="">전체</option>
+                        <option value="blocked">차단만</option>
+                        <option value="passed">통과만</option>
+                        <option value="penalized">감점만</option>
+                    </select>
+                </div>
+            </div>
+            <!-- 게이트별 통계 바 -->
+            <div id="sig-gate-stats" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>
+            <!-- 이벤트 리스트 -->
+            <div id="sig-event-list" style="display:flex;flex-direction:column;gap:4px;max-height:320px;overflow-y:auto;">
+                <div style="color:var(--text-muted);font-size:.8rem;text-align:center;padding:20px 0;">매수 신호 대기 중...</div>
+            </div>
+        </div>
+
         <!-- ═══ REAL-TIME EVENT LOG ═══ -->
         <div class="card ai d4" style="padding:20px 22px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">

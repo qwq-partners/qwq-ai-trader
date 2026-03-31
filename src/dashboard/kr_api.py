@@ -52,6 +52,8 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
     app.router.add_post("/api/signals/execute", handler.execute_pending_signals)
     app.router.add_post("/api/scan/run", handler.run_morning_scan)
+    app.router.add_get("/api/signal-events", handler.get_signal_events)
+    app.router.add_get("/api/signal-events/stats", handler.get_signal_event_stats)
     app.router.add_post("/api/sync-trades", handler.sync_trades)
     app.router.add_get("/api/trade-events", handler.get_trade_events)
     app.router.add_get("/api/daily-settlement", handler.get_daily_settlement)
@@ -615,6 +617,30 @@ class KRAPIHandler:
         except Exception as e:
             logger.debug(f"[벤치마크] KOSPI 조회 오류: {e}")
             return web.json_response([])
+
+    # ────────────────────────────────────────────────────────────
+    # 시그널 이벤트 API (매수 차단/통과 이력 + 통계)
+    # ────────────────────────────────────────────────────────────
+
+    async def get_signal_events(self, request: web.Request) -> web.Response:
+        """GET /api/signal-events?limit=50&type=blocked"""
+        from ..data.storage.signal_event_storage import SignalEventStorage
+        limit = int(request.rel_url.query.get("limit", 50))
+        event_type = request.rel_url.query.get("type") or None
+        rows = await SignalEventStorage.get().get_recent(limit=limit, event_type=event_type)
+        # datetime 직렬화
+        for r in rows:
+            for k, v in r.items():
+                if hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+        return web.json_response(rows)
+
+    async def get_signal_event_stats(self, request: web.Request) -> web.Response:
+        """GET /api/signal-events/stats?days=30"""
+        from ..data.storage.signal_event_storage import SignalEventStorage
+        days = int(request.rel_url.query.get("days", 30))
+        stats = await SignalEventStorage.get().get_stats(days=days)
+        return web.json_response(stats)
 
     async def _restart_bot_delayed(self, delay_seconds: int):
         """봇 재시작 (지연 실행)"""

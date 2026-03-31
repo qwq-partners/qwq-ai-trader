@@ -30,6 +30,7 @@ from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, St
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
 from ..utils.telegram import send_alert
+from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 
 
 class KRScheduler:
@@ -1901,7 +1902,24 @@ JSON:
                             logger.debug(f"[스크리닝] 마켓 레짐 조회 실패 (무시): {_mre}")
 
                         if not _market_regime_ok:
-                            pass  # 약세장 → 자동진입 스킵
+                            # G1_regime: 약세장 차단 → 상위 후보 기록
+                            _top_cands = sorted(
+                                [s for s in screened if s.score >= 70],
+                                key=lambda x: x.score, reverse=True
+                            )[:5]
+                            for _bc in _top_cands:
+                                asyncio.create_task(_SigLog.get().log(
+                                    symbol=_bc.symbol,
+                                    name=getattr(_bc, "name", ""),
+                                    strategy="intraday_screening",
+                                    score=float(_bc.score),
+                                    side="buy",
+                                    event_type="blocked",
+                                    block_gate="G1_regime",
+                                    block_reason=f"약세장 진입 차단: KOSDAQ {_idx_change:+.1f}%",
+                                    market_regime="bear",
+                                    sector=getattr(_bc, "sector", ""),
+                                ))
                         else:
                             # 만료된 쿨다운 정리 (30분)
                             now = datetime.now()

@@ -23,6 +23,7 @@ import signal
 import sys
 
 from loguru import logger
+from src.data.storage.signal_event_storage import SignalEventStorage as _SigLog
 
 from .event import (
     Event, EventType,
@@ -1031,6 +1032,41 @@ class RiskManager:
         """종목 주문 쿨다운 등록 (외부에서 호출)"""
         self._order_fail_cooldown[symbol] = datetime.now()
 
+    # ─────────────────────────────────────────────────────────────
+    # 시그널 이벤트 로깅 헬퍼
+    # ─────────────────────────────────────────────────────────────
+    def _log_sig(
+        self, event: SignalEvent, *,
+        event_type: str,
+        block_gate: Optional[str] = None,
+        block_reason: Optional[str] = None,
+        adjusted_score: Optional[float] = None,
+        regime: str = "",
+    ) -> None:
+        """시그널 이벤트를 DB에 fire-and-forget으로 기록 (BUY만)"""
+        if event.side != OrderSide.BUY:
+            return
+        meta = event.metadata or {}
+        asyncio.create_task(
+            _SigLog.get().log(
+                symbol=event.symbol,
+                name=meta.get("name", ""),
+                strategy=event.strategy.value if event.strategy else "",
+                score=float(event.score or 0),
+                adjusted_score=float(adjusted_score or event.score or 0),
+                side="buy",
+                event_type=event_type,
+                block_gate=block_gate,
+                block_reason=block_reason,
+                market_regime=regime or getattr(self.engine, "_market_regime", ""),
+                sector=meta.get("sector", ""),
+                metadata={
+                    "reason": getattr(event, "reason", ""),
+                    "indicators": meta.get("indicators", {}),
+                },
+            )
+        )
+
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
         logger.info(f"[리스크] 신호 수신: {event.symbol} {event.side.value} 가격={event.price} 점수={event.score:.1f}")
@@ -1194,6 +1230,8 @@ class RiskManager:
             )
             if not _cv_pass:
                 logger.info(f"[크로스검증] {event.symbol} 차단: {_cv_reason}")
+                self._log_sig(event, event_type="blocked", block_gate="G2_cross",
+                              block_reason=_cv_reason, regime=_regime)
                 return None
             if _cv_score != event.score:
                 # 원본 점수 보존 (저널/로그 추적용)
@@ -1201,7 +1239,12 @@ class RiskManager:
                     event.metadata = {}
                 event.metadata["original_score"] = event.score
                 event.metadata["cross_adjustment"] = round(_cv_score - event.score, 1)
+                _orig_score = float(event.score)
                 event.score = _cv_score
+                self._log_sig(event, event_type="penalized", adjusted_score=float(_cv_score),
+                              block_gate="G2_cross",
+                              block_reason=f"크로스 검증 감점 {_orig_score:.0f}→{_cv_score:.0f}",
+                              regime=_regime)
 
             # LLM 이중 검증: 고점수(85+) + 비강세장 — 하루 최대 5회
             if _cv_score >= 85 and _regime != "bull":
@@ -1218,6 +1261,9 @@ class RiskManager:
                     if event.metadata is None:
                         event.metadata = {}
                     event.metadata["llm_second_check"] = "rejected"
+                    self._log_sig(event, event_type="blocked", block_gate="G4_llm",
+                                  block_reason="LLM 이중검증 거부 (85+점, 비강세장)",
+                                  regime=_regime)
                     return None
 
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
@@ -1233,6 +1279,8 @@ class RiskManager:
                         (cash_warn_now - self._last_cash_warn_time).total_seconds() > 60):
                     logger.warning(f"[리스크] 가용 현금 없음 - 매수 신호 무시 ({event.symbol})")
                     self._last_cash_warn_time = cash_warn_now
+                self._log_sig(event, event_type="blocked", block_gate="G5_cash",
+                              block_reason="가용 현금 부족")
                 return None
 
         # 전략 예산 한도 조기 차단
@@ -1249,6 +1297,10 @@ class RiskManager:
                         f"[리스크] 전략 예산 소진: {_strat_name} "
                         f"(한도={_budget_cap:,.0f}, 사용={_current:,.0f})"
                     )
+                    self._log_sig(event, event_type="blocked", block_gate="G5_budget",
+                                  block_reason=f"{_strat_name} 전략 예산 소진 "
+                                               f"(한도={float(_budget_cap):,.0f}, "
+                                               f"사용={float(_current):,.0f})")
                     return None
 
         # 주문 실패 쿨다운 체크
@@ -1339,6 +1391,8 @@ class RiskManager:
                 )
                 if not can_trade:
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
+                    self._log_sig(event, event_type="blocked", block_gate="G3_risk",
+                                  block_reason=reason)
                     return None
 
             # 비코어 전략: reserved_cash에 코어 예약금 포함 (코어 30% 예산 보호)
@@ -1353,7 +1407,13 @@ class RiskManager:
             )
             if not can_trade:
                 logger.warning(f"주문 거부: {order.symbol} - {reason}")
+                self._log_sig(event, event_type="blocked", block_gate="G3_risk",
+                              block_reason=reason)
                 return None
+
+        # ── 모든 게이트 통과 → passed 기록 (BUY만)
+        if order.side == OrderSide.BUY:
+            self._log_sig(event, event_type="passed")
 
         logger.info(f"주문 생성: {order.side.value} {order.symbol} {order.quantity}주 @ {order.price}")
 
