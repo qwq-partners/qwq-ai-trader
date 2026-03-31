@@ -1378,7 +1378,7 @@ function renderSignalEvents() {
         const typeTxt     = isBlocked ? '차단' : isPassed ? '통과' : '감점';
         const gateMeta    = ev.block_gate ? (GATE_META[ev.block_gate] || { label: ev.block_gate, color: '#8892b0', bg: '#8892b010' }) : null;
 
-        const dt = ev.event_time ? ev.event_time.substring(11, 16) : '';
+        const dt = ev.event_time ? (parseInt(ev.event_time.substring(11, 13)) < 12 ? '오전 ' : '오후 ') + ev.event_time.substring(11, 16) : '';
         const scoreTxt = isPenalized && ev.adjusted_score !== ev.score
             ? `${ev.score?.toFixed(0)}→<span style="color:#fbbf24;">${ev.adjusted_score?.toFixed(0)}</span>`
             : `${ev.score?.toFixed(0)}`;

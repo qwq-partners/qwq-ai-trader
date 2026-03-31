@@ -77,6 +77,13 @@ class SEPATrendStrategy(BaseStrategy):
                 f"{self.config.min_score:.0f} → {effective_min_score:.0f}"
             )
 
+        # 장중 후반 진입 차단: 14:30 이후 → 익일 갭 리스크
+        from datetime import datetime as _dt
+        _now_hm = _dt.now().strftime("%H:%M")
+        if "09:00" <= _now_hm <= "15:30" and _now_hm >= "14:30":
+            logger.info("[SEPA] 장중 후반(14:30+) 신규 진입 차단 — 오버나이트 갭 리스크")
+            return signals
+
         for candidate in candidates:
             try:
                 # 과확장 차단: MA200 대비 +80% 이상 → 후행 추격 방지
@@ -91,12 +98,14 @@ class SEPATrendStrategy(BaseStrategy):
                 if score < effective_min_score:
                     continue
 
-                # ATR 기반 동적 손절/익절
-                # ▶ P0-1 수정: ExitManager(ATR×2.0, min=4%, max=7%)와 동일 공식 사용
-                #   기존(ATR×1.5, min=2.5%) → R/R 체크가 실제 적용 stop과 달라 필터 무효
-                #   수정 후: sepa_trend stop = ExitManager stop → R/R 체크가 실제 R/R 반영
+                # ATR 데이터 품질 가드: atr_pct=0.0 또는 None → 진입 차단
                 atr = candidate.indicators.get("atr_14")
-                stop_pct = 5.0   # ATR 없을 때 기본값
+                if atr is None or atr <= 0:
+                    logger.debug(f"[SEPA] {candidate.symbol} ATR 누락/0 차단: atr_14={atr}")
+                    continue
+
+                # ATR 기반 동적 손절/익절
+                stop_pct = 5.0
                 target_pct = 10.0
                 if atr is not None and atr > 0:
                     # ExitConfig: atr_multiplier=2.0, min_stop_pct=4.0, max_stop_pct=7.0
@@ -233,7 +242,13 @@ class SEPATrendStrategy(BaseStrategy):
             elif spread > 0:
                 score += 3
 
+        # MA50 최소 거리: 2% 이상 상회해야 추세 유효
         close = ind.get("close")
+        if close is not None and ma50 is not None and ma50 > 0:
+            ma50_dist_pct = (close - ma50) / ma50 * 100
+            if ma50_dist_pct < 2.0:
+                score -= 5   # MA50 겨우 상회: 애매한 추세
+
         high_52w = ind.get("high_52w")
         if close is not None and high_52w is not None and high_52w > 0:
             from_high = (close - high_52w) / high_52w * 100
@@ -244,6 +259,7 @@ class SEPATrendStrategy(BaseStrategy):
             elif from_high >= -15:
                 score += 3
 
+        # MRS(종목 리더십) — 섹터 강세만 추종 방지
         mrs = ind.get("mrs")
         mrs_slope = ind.get("mrs_slope", 0)
         if mrs is not None:
@@ -251,6 +267,8 @@ class SEPATrendStrategy(BaseStrategy):
                 score += 5
             elif mrs > 0:
                 score += 3
+            else:
+                score -= 5   # RS 음수: 섹터 강세여도 종목 자체 약세
 
         if ind.get("ma5_above_ma20", False):
             score += 3
@@ -340,8 +358,10 @@ class SEPATrendStrategy(BaseStrategy):
             score += 10
         elif vol_ratio > 1.5:
             score += 7
-        elif vol_ratio > 1.0:
+        elif vol_ratio > 1.2:
             score += 4
+        elif vol_ratio < 0.8:
+            score -= 5   # 거래량 부족: 돌파/추세 확인 불가
 
         # 5. 섹터 모멘텀 (10점)
         sm_score = ind.get("sector_momentum_score")
