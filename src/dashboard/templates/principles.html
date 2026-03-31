@@ -95,21 +95,25 @@
             pointer-events: none;
         }
 
-        /* Timeline */
+        /* Timeline — card style */
         .timeline-item {
-            display: flex; align-items: flex-start; gap: 14px; padding: 10px 0;
-            border-bottom: 1px solid var(--border-subtle); position: relative;
+            display: flex; flex-direction: column; gap: 4px;
+            padding: 12px 14px; border-radius: 10px;
+            background: var(--bg-elevated); border: 1px solid var(--border-subtle);
         }
-        .timeline-item:last-child { border-bottom: none; }
+        .timeline-header {
+            display: flex; align-items: center; gap: 8px;
+        }
         .timeline-time {
-            font-family: 'JetBrains Mono', monospace; font-size: .72rem;
-            color: var(--accent-cyan); min-width: 70px; padding-top: 2px; font-weight: 600;
+            font-family: 'JetBrains Mono', monospace; font-size: .7rem;
+            color: var(--bg-base); font-weight: 700; flex-shrink: 0;
+            padding: 2px 8px; border-radius: 5px; white-space: nowrap;
         }
         .timeline-dot {
-            width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0;
+            width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: none;
         }
-        .timeline-title { font-size: .85rem; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
-        .timeline-desc { font-size: .78rem; color: var(--text-secondary); line-height: 1.5; }
+        .timeline-title { font-size: .85rem; font-weight: 700; color: var(--text-primary); line-height: 1.3; }
+        .timeline-desc { font-size: .78rem; color: var(--text-secondary); line-height: 1.55; word-break: keep-all; overflow-wrap: break-word; }
 
         /* Flow gates */
         .gate-item {
@@ -213,11 +217,46 @@
             color: var(--text-secondary);
         }
 
-        @media (max-width: 640px) {
-            .nav-links { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+        /* Responsive grid overrides */
+        .grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .grid-3col { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+
+        @media (max-width: 700px) {
+            /* Nav */
+            .nav-links { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; padding-bottom: 2px; min-width: 0; }
             .nav-links::-webkit-scrollbar { display: none; }
-            .nav-pill { padding: 6px 10px; font-size: .74rem; }
+            .nav-pill { padding: 6px 10px; font-size: .73rem; }
+            .nav-brand-sub { display: none; }
+            .nav-logo { gap: 7px !important; flex-shrink: 0; }
+            .nav-logo-mark { width: 24px !important; height: 24px !important; border-radius: 6px !important; }
+
+            /* Grids → single column */
+            .grid-2col { grid-template-columns: 1fr !important; }
+            .grid-3col { grid-template-columns: 1fr 1fr !important; }
+
+            /* Timeline */
+            .timeline-grid { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+            .timeline-title { font-size: .82rem; }
+
+            /* Principles */
+            .principle-card { padding: 10px 12px; }
+            .principle-rule { font-size: .8rem; }
+            .principle-rationale { font-size: .73rem; }
+
+            /* Gate grid */
+            .gate-grid { grid-template-columns: 1fr !important; }
+
+            /* Loop */
+            .loop-wrap { flex-direction: column !important; align-items: stretch !important; }
             .loop-arrow-h { display: none; }
+            .loop-node { min-width: unset !important; }
+
+            /* Hero */
+            .hero-chips { gap: 8px !important; }
+        }
+        @media (max-width: 420px) {
+            .grid-3col { grid-template-columns: 1fr !important; }
+            .timeline-grid { grid-template-columns: 1fr !important; }
         }
     </style>
 </head>
@@ -225,7 +264,7 @@
 
 <!-- ===== NAV ===== -->
 <nav style="border-bottom: 1px solid var(--border-subtle); background: rgba(11,11,20,0.85); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 50;">
-    <div class="nav-container" style="max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 24px;">
+    <div class="nav-container" style="max-width: 1280px; margin: 0 auto; padding: 10px 16px; display: flex; align-items: center; gap: 12px;">
         <div class="nav-logo" style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
             <div class="nav-logo-mark">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
@@ -235,7 +274,8 @@
                 <span class="nav-brand-sub">AI&nbsp;Trader</span>
             </div>
         </div>
-        <div class="nav-links" style="display: flex; gap: 4px; flex: 1;">
+        <div class="nav-links" style="display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none;">
+        <style>.nav-links::-webkit-scrollbar{display:none}</style>
             <a href="/" class="nav-pill" data-page="index">실시간</a>
             <a href="/trades" class="nav-pill" data-page="trades">거래</a>
             <a href="/performance" class="nav-pill" data-page="performance">성과</a>
@@ -248,7 +288,7 @@
     </div>
 </nav>
 
-<div style="max-width: 1100px; margin: 0 auto; padding: 32px 24px 64px;">
+<div style="max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px;">
 
     <!-- ===== HERO ===== -->
     <div class="card card-accent" style="padding: 40px 36px; margin-bottom: 28px; text-align: center; overflow: hidden;">
@@ -265,7 +305,7 @@
             점수가 높아도 원칙에 어긋나면 진입하지 않는다.<br>
             LLM 기반 판단 + 규칙 기반 안전장치 + 경험 기반 학습이 결합된 자율 매매 시스템.
         </p>
-        <div style="display: flex; gap: 12px; justify-content: center; margin-top: 24px; flex-wrap: wrap;">
+        <div class="hero-chips" style="display: flex; gap: 12px; justify-content: center; margin-top: 24px; flex-wrap: wrap;">
             <span class="chip">📋 핵심 원칙 21개</span>
             <span class="chip">🚪 진입 게이트 5단계</span>
             <span class="chip">📊 레짐 연동 청산</span>
@@ -274,73 +314,76 @@
     </div>
 
     <!-- ===== GRID: Timeline + Layers ===== -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px;">
+    <div class="grid-2col" style="margin-bottom: 28px;">
 
         <!-- Daily Timeline -->
         <div class="card" style="padding: 24px;">
             <div class="section-label">하루 타임라인</div>
             <h2 style="font-size: 1rem; font-weight: 700; margin: 0 0 16px;">매 거래일 자동 실행 흐름</h2>
 
-            <div class="timeline-item">
-                <div class="timeline-time">00:00~</div>
-                <div class="timeline-dot" style="background: var(--text-muted);"></div>
-                <div>
-                    <div class="timeline-title">뉴스 수집 & 테마 탐지</div>
+            <div class="timeline-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+
+                <div class="timeline-item">
+                    <div class="timeline-header">
+                        <div class="timeline-time" style="background: var(--text-muted);">00:00~</div>
+                    </div>
+                    <div class="timeline-title">🗞️ 뉴스 & 테마 탐지</div>
                     <div class="timeline-desc">5개 언론사 108건 수집 → 중복 제거 → LLM 테마 분류 (30분 주기)</div>
                 </div>
-            </div>
-            <div class="timeline-item">
-                <div class="timeline-time">08:10</div>
-                <div class="timeline-dot" style="background: var(--accent-purple);"></div>
-                <div>
-                    <div class="timeline-title">LLM 시장 레짐 분류</div>
-                    <div class="timeline-desc">bull / ranging / turning_point / bear 4단계 판단 → 전체 포지션 파라미터 즉시 재조정</div>
+
+                <div class="timeline-item">
+                    <div class="timeline-header">
+                        <div class="timeline-time" style="background: var(--accent-purple);">08:10</div>
+                    </div>
+                    <div class="timeline-title">🧠 LLM 레짐 분류</div>
+                    <div class="timeline-desc">bull/ranging/bear 4단계 판단 → 전체 포지션 파라미터 즉시 재조정</div>
                 </div>
-            </div>
-            <div class="timeline-item">
-                <div class="timeline-time">08:20</div>
-                <div class="timeline-dot" style="background: var(--accent-blue);"></div>
-                <div>
-                    <div class="timeline-title">아침 배치 스캔</div>
-                    <div class="timeline-desc">214종목 스윙 스크리닝 → RSI2 / SEPA / VCP 후보 → LLM 최종 랭킹</div>
+
+                <div class="timeline-item">
+                    <div class="timeline-header">
+                        <div class="timeline-time" style="background: var(--accent-blue);">08:20</div>
+                    </div>
+                    <div class="timeline-title">🔍 아침 배치 스캔</div>
+                    <div class="timeline-desc">214종목 → RSI2/SEPA/VCP 후보 → LLM 최종 랭킹</div>
                 </div>
-            </div>
-            <div class="timeline-item">
-                <div class="timeline-time">09:01</div>
-                <div class="timeline-dot" style="background: var(--accent-green);"></div>
-                <div>
-                    <div class="timeline-title">배치 시그널 실행</div>
-                    <div class="timeline-desc">어제 생성된 pending 시그널 실행 → 5단계 진입 게이트 통과 시 매수</div>
+
+                <div class="timeline-item">
+                    <div class="timeline-header">
+                        <div class="timeline-time" style="background: var(--accent-green);">09:01</div>
+                    </div>
+                    <div class="timeline-title">✅ 시그널 실행</div>
+                    <div class="timeline-desc">pending 시그널 → 5단계 게이트 통과 시 매수 주문 발행</div>
                 </div>
-            </div>
-            <div class="timeline-item">
-                <div class="timeline-time">09:00~</div>
-                <div class="timeline-dot" style="background: var(--accent-cyan);"></div>
-                <div>
-                    <div class="timeline-title">장중 스크리닝 (30분 주기)</div>
-                    <div class="timeline-desc">거래량 급증 / 기관순매수 / 등락률 상위 실시간 탐지 + DART 공시 감시</div>
+
+                <div class="timeline-item">
+                    <div class="timeline-header">
+                        <div class="timeline-time" style="background: var(--accent-cyan);">장중</div>
+                    </div>
+                    <div class="timeline-title">📡 장중 스크리닝</div>
+                    <div class="timeline-desc">30분 주기. 거래량 급증/기관순매수/등락률 상위 + DART 공시 감시</div>
                 </div>
-            </div>
-            <div class="timeline-item">
-                <div class="timeline-time">15:10</div>
-                <div class="timeline-dot" style="background: var(--accent-amber);"></div>
-                <div>
-                    <div class="timeline-title">테마주 EOD 청산</div>
-                    <div class="timeline-desc">보유 테마주 수익률 +1% 미만이면 당일 전량 청산 (오버나이트 갭 리스크 방지)</div>
+
+                <div class="timeline-item">
+                    <div class="timeline-header">
+                        <div class="timeline-time" style="background: var(--accent-amber);">15:10</div>
+                    </div>
+                    <div class="timeline-title">🚪 EOD 청산</div>
+                    <div class="timeline-desc">테마주 수익률 +1% 미만 → 당일 전량 청산 (갭 리스크 방지)</div>
                 </div>
-            </div>
-            <div class="timeline-item">
-                <div class="timeline-time">16:00</div>
-                <div class="timeline-dot" style="background: var(--accent-purple);"></div>
-                <div>
-                    <div class="timeline-title">LLM 일일 리뷰</div>
+
+                <div class="timeline-item" style="grid-column: 1 / -1;">
+                    <div class="timeline-header">
+                        <div class="timeline-time" style="background: var(--accent-purple);">16:00</div>
+                    </div>
+                    <div class="timeline-title">🔬 LLM 일일 리뷰</div>
                     <div class="timeline-desc">거래 결과 분석 → 진입 품질 평가 → 피해야 할 패턴 추출 → 메모리 축적</div>
                 </div>
+
             </div>
         </div>
 
         <!-- System Layers -->
-        <div class="card" style="padding: 24px;">
+        <div class="card" style="padding: 24px; align-self: start;">
             <div class="section-label">시스템 구조</div>
             <h2 style="font-size: 1rem; font-weight: 700; margin: 0 0 16px;">5개 레이어 아키텍처</h2>
             <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -401,7 +444,7 @@
             </div>
             <div class="gate-arrow">↓</div>
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+            <div class="gate-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
                 <div class="gate-item">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                         <div class="gate-number" style="background: rgba(99,102,241,0.15); color: var(--accent-blue);">G1</div>
@@ -740,7 +783,7 @@
         <h2 style="font-size: 1rem; font-weight: 700; margin: 0 0 6px;">AI 자기진화 — 같은 실수를 반복하지 않는 구조</h2>
         <p style="font-size: .8rem; color: var(--text-secondary); margin: 0 0 20px;">모든 거래는 기록되고, 패턴이 추출되며, 다음 판단에 반영됩니다.</p>
 
-        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;">
+        <div class="loop-wrap" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;">
             <div class="loop-node">
                 <div class="loop-icon">📈</div>
                 <div class="loop-title">거래 완료</div>
@@ -772,7 +815,7 @@
             </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 20px;">
+        <div class="grid-3col" style="margin-top: 20px;">
             <div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px;">
                 <div style="font-size: .72rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px;">TradeMemory 3계층</div>
                 <div style="font-size: .79rem; line-height: 1.6; color: var(--text-secondary);">
