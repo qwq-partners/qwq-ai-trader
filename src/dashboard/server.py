@@ -102,6 +102,7 @@ class DashboardServer:
         app.router.add_get("/settings", self._serve_page("settings.html"))
         app.router.add_get("/evolution", self._serve_page("evolution.html"))
         app.router.add_get("/engine", self._serve_page("engine.html"))
+        app.router.add_get("/principles", self._serve_page("principles.html"))
         app.router.add_get("/settlement", lambda r: web.HTTPFound("/trades"))
 
         # 정적 파일 서빙
