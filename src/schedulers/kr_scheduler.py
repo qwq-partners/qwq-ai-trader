@@ -1882,20 +1882,47 @@ JSON:
                         and bot.engine and bot.broker
                         and "09:15" <= datetime.now().strftime("%H:%M") <= "15:00"):
                     try:
-                        # === 마켓 레짐 필터 (약세장 진입 차단) ===
+                        # === 마켓 레짐 필터 (약세장 진입 차단) — KOSPI+KOSDAQ 종합 판단 ===
                         _market_regime_ok = True
+                        _kospi_chg = 0.0
+                        _kosdaq_chg = 0.0
+                        _weighted_chg = 0.0
+                        _regime_block_reason = ""
                         try:
-                            _idx_quote = await bot.broker.get_quote("229200")
-                            _idx_change = _idx_quote.get("change_pct", 0) if _idx_quote else 0
-                            if _idx_change <= -1.0:
-                                _market_regime_ok = False
-                                logger.info(
-                                    f"[스크리닝] 마켓 레짐 필터: KOSDAQ {_idx_change:+.1f}% → "
-                                    f"약세장 진입 차단"
+                            # 우선 RiskManager 캐시 활용 (이미 2분 주기 갱신)
+                            _rm = bot.engine.risk_manager if bot.engine else None
+                            _trend = getattr(_rm, "_market_trend", {}) if _rm else {}
+                            _trend_age = (datetime.now() - _trend["ts"]).total_seconds() if _trend.get("ts") else 999
+
+                            if _trend and _trend_age < 180:
+                                # 캐시 신선 (3분 이내) → 직접 사용
+                                _kospi_chg = _trend.get("kospi_pct", 0.0)
+                                _kosdaq_chg = _trend.get("kosdaq_pct", 0.0)
+                            else:
+                                # 캐시 만료 → API 직접 조회 (병렬)
+                                _kospi_q, _kosdaq_q = await asyncio.gather(
+                                    bot.broker.get_quote("069500"),  # KODEX 200 (KOSPI)
+                                    bot.broker.get_quote("229200"),  # KODEX KOSDAQ150
+                                    return_exceptions=True,
                                 )
-                            elif _idx_change <= -0.5:
+                                _kospi_chg = _kospi_q.get("change_pct", 0.0) if isinstance(_kospi_q, dict) else 0.0
+                                _kosdaq_chg = _kosdaq_q.get("change_pct", 0.0) if isinstance(_kosdaq_q, dict) else 0.0
+
+                            # 가중 평균: KOSPI 60% + KOSDAQ 40%
+                            _weighted_chg = _kospi_chg * 0.6 + _kosdaq_chg * 0.4
+
+                            # 차단 조건: 가중 평균 ≤ -1.0% 또는 어느 한쪽 ≤ -2.5%
+                            if _weighted_chg <= -1.0 or _kospi_chg <= -2.5 or _kosdaq_chg <= -2.5:
+                                _market_regime_ok = False
+                                _regime_block_reason = (
+                                    f"약세장 진입 차단: KOSPI {_kospi_chg:+.1f}% / "
+                                    f"KOSDAQ {_kosdaq_chg:+.1f}% (가중 {_weighted_chg:+.1f}%)"
+                                )
+                                logger.info(f"[스크리닝] 마켓 레짐 필터: {_regime_block_reason}")
+                            elif _weighted_chg <= -0.5:
                                 logger.info(
-                                    f"[스크리닝] 마켓 레짐 주의: KOSDAQ {_idx_change:+.1f}% → "
+                                    f"[스크리닝] 마켓 레짐 주의: KOSPI {_kospi_chg:+.1f}% / "
+                                    f"KOSDAQ {_kosdaq_chg:+.1f}% (가중 {_weighted_chg:+.1f}%) → "
                                     f"보수적 진입 (점수 85+ 만)"
                                 )
                         except Exception as _mre:
@@ -1916,9 +1943,14 @@ JSON:
                                     side="buy",
                                     event_type="blocked",
                                     block_gate="G1_regime",
-                                    block_reason=f"약세장 진입 차단: KOSDAQ {_idx_change:+.1f}%",
+                                    block_reason=_regime_block_reason or f"약세장 진입 차단: 가중 {_weighted_chg:+.1f}%",
                                     market_regime="bear",
                                     sector=getattr(_bc, "sector", ""),
+                                    metadata={
+                                        "kospi_chg": _kospi_chg,
+                                        "kosdaq_chg": _kosdaq_chg,
+                                        "weighted_chg": _weighted_chg,
+                                    },
                                 ))
                         else:
                             # 만료된 쿨다운 정리 (30분)
