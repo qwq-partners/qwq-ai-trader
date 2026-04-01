@@ -17,9 +17,9 @@ risk_config:
   max_positions: 8
   strategy_allocation:
     momentum_breakout: 0.0   # 비활성(enabled=false): 예산 0% 고정
-    sepa_trend: 45.0
+    sepa_trend: 40.0
     gap_and_go: 5.0
-    rsi2_reversal: 10.0
+    rsi2_reversal: 15.0
     theme_chasing: 10.0
     core_holding: 30.0       # 별도 풀 관리 (locked)
 exit_manager:

@@ -209,9 +209,12 @@ class GapAndGoStrategy(BaseStrategy):
 
         logger.info(f"[Gap&Go] 진입 신호: {symbol} - {reason}")
 
-        # ATR 기반 포지션 사이징 (갭 종목은 고변동 → 축소 필수)
+        # ATR 데이터 품질 가드 + 포지션 사이징
         _atr = indicators.get("atr_14")
-        _atr_val = _atr if _atr is not None else 0
+        if _atr is None or _atr <= 0:
+            logger.debug(f"[Gap&Go] {symbol} ATR 누락/0 차단: atr_14={_atr}")
+            return None
+        _atr_val = _atr
         _pos_mult = atr_position_multiplier(_atr_val)
 
         return Signal(

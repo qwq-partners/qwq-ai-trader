@@ -40,7 +40,7 @@ class CrossStrategyValidator:
         # LLM 이중 검증 일일 한도 (비용 폭발 방지)
         self._daily_llm_count: int = 0
         self._daily_llm_count_date = None
-        self._daily_llm_max: int = 5  # 하루 최대 5회
+        self._daily_llm_max: int = 10  # 하루 최대 10회
 
     def set_portfolio(self, portfolio):
         self._portfolio = portfolio

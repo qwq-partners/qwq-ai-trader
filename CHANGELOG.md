@@ -22,8 +22,18 @@
 - 14:30 이후 SEPA 신규 시그널 생성 차단
 - 익일 장초반 갭 손절 노출 방지 (오버나이트 갭 리스크)
 
+### LLM 복기 반영 (추가 4건)
+- **LLM 이중검증 한도 확대**: 5회 → 10회/일 (`cross_validator.py`)
+- **RSI2/Gap&Go ATR=0 가드**: 전 전략 통일 (기존 SEPA만 적용)
+- **RSI2 비중 확대**: 10% → 15% (SEPA 45% → 40%) — 과매도 반전 기회 포착 강화
+- **고점수 포지션 사이징 완화**: 80+ 최소 0.65배, 85+ 0.75배, 90+ 0.85배 보장
+
 ### 수정 파일
-- `src/strategies/kr/sepa_trend.py` — 5대 회피 패턴 차단 로직
+- `src/strategies/kr/sepa_trend.py` — 5대 회피 패턴 + 포지션 사이징 완화
+- `src/strategies/kr/rsi2_reversal.py` — ATR=0 진입 차단
+- `src/strategies/kr/gap_and_go.py` — ATR=0 진입 차단
+- `src/core/cross_validator.py` — LLM 한도 5→10회
+- `config/evolved_overrides.yml` — RSI2 15%, SEPA 40%
 
 ## 2026-03-31 — 대시보드 개선 5~6: 벤치마크 비교 + 전략 카드
 

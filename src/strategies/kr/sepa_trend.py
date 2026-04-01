@@ -137,12 +137,14 @@ class SEPATrendStrategy(BaseStrategy):
                 # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
                 _pos_mult = atr_position_multiplier(atr_pct_value)
 
-                # 고점수(90+) 또는 섹터 RS 우수 → 자본 집중
-                # 고확신 시 ATR 축소를 부분 완화하여 최소 0.8배 보장
+                # 고점수 → 신호 강도에 비례한 포지션 확대
+                # ATR 축소를 부분 완화하여 고확신 신호에 적정 비중 보장
                 if score >= 90:
-                    _pos_mult = max(_pos_mult * 1.4, 0.8)
+                    _pos_mult = max(_pos_mult * 1.5, 0.85)
                 elif score >= 85 and (candidate.indicators.get("mrs") or 0) > 0:
-                    _pos_mult = max(_pos_mult * 1.2, 0.7)
+                    _pos_mult = max(_pos_mult * 1.3, 0.75)
+                elif score >= 80:
+                    _pos_mult = max(_pos_mult * 1.15, 0.65)
 
                 signal = Signal(
                     symbol=candidate.symbol,

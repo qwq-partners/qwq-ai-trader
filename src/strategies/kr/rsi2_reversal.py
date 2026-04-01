@@ -83,8 +83,11 @@ class RSI2ReversalStrategy(BaseStrategy):
                 if score < self.config.min_score:
                     continue
 
-                # ATR 기반 동적 손절/익절 (R:R 1:2 보장)
+                # ATR 데이터 품질 가드
                 atr = candidate.indicators.get("atr_14")
+                if atr is None or atr <= 0:
+                    logger.debug(f"[RSI2] {candidate.symbol} ATR 누락/0 차단: atr_14={atr}")
+                    continue
                 atr_pct_value = 0.0
                 if atr is not None and atr > 0:
                     stop_pct = max(3.0, min(7.0, atr * 2.0))     # 2×ATR, 3~7% 범위
