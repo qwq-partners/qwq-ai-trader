@@ -88,15 +88,10 @@ class RSI2ReversalStrategy(BaseStrategy):
                 if atr is None or atr <= 0:
                     logger.debug(f"[RSI2] {candidate.symbol} ATR 누락/0 차단: atr_14={atr}")
                     continue
-                atr_pct_value = 0.0
-                if atr is not None and atr > 0:
-                    stop_pct = max(3.0, min(7.0, atr * 2.0))     # 2×ATR, 3~7% 범위
-                    target_pct = max(5.0, min(15.0, atr * 4.0))   # 4×ATR, 5~15% 범위
-                    atr_pct_value = atr
-                else:
-                    # ATR 미제공 시 기본값 (R:R 2:1 보장)
-                    stop_pct = 5.0
-                    target_pct = 10.0
+                # ATR 가드 통과 → atr > 0 보장
+                atr_pct_value = atr
+                stop_pct = max(3.0, min(7.0, atr * 2.0))     # 2×ATR, 3~7% 범위
+                target_pct = max(5.0, min(15.0, atr * 4.0))   # 4×ATR, 5~15% 범위
                 candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                 candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 

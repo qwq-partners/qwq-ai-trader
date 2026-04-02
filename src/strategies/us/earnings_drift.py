@@ -139,9 +139,12 @@ class EarningsDriftStrategy(USBaseStrategy):
         reason = (f"Earnings gap +{gap_pct:.1f}% | vol {vol_ratio:.1f}x | "
                   f"held {close_position:.0%}")
 
-        # ATR 포지션 사이징 (어닝 드리프트는 고변동 허용 → 가드만)
-        atr_pct = indicators.get('atr_pct', 0)
-        _pos_mult = atr_position_multiplier(atr_pct) if atr_pct is not None and atr_pct > 0 else 0.8
+        # ATR 포지션 사이징 (어닝 드리프트는 갭 자체가 고변동 → ATR 없어도 0.8배로 허용)
+        atr_pct = indicators.get('atr_pct')
+        if atr_pct is not None and atr_pct > 0:
+            _pos_mult = atr_position_multiplier(atr_pct)
+        else:
+            _pos_mult = 0.8  # ATR 미제공 시 보수적 기본값
 
         return self._create_signal(
             symbol=symbol, score=score, reason=reason,

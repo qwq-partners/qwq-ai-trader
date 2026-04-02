@@ -148,7 +148,7 @@ class MomentumBreakoutStrategy(USBaseStrategy):
                   f"1d {change_1d:+.1f}%")
 
         # ATR 데이터 품질 가드 + 포지션 사이징
-        atr_pct = indicators.get('atr_pct', 0)
+        atr_pct = indicators.get('atr_pct')
         if atr_pct is None or atr_pct <= 0:
             logger.debug(f"[US 모멘텀] {symbol} ATR 누락/0 차단")
             return None

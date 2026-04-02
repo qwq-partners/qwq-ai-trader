@@ -9,6 +9,7 @@ Adapted from ai-trader-us/src/strategies/sepa.py (renamed to sepa_trend.py)
 
 from typing import Dict, Any, Optional
 import pandas as pd
+from loguru import logger
 
 from ..base import USBaseStrategy
 from ...core.types import Signal, Portfolio, Position, StrategyType, TimeHorizon
@@ -153,7 +154,7 @@ class SEPATrendStrategy(USBaseStrategy):
                   f"vol {vol_ratio:.1f}x")
 
         # ATR 데이터 품질 가드 + 포지션 사이징
-        atr_pct = indicators.get('atr_pct', 0)
+        atr_pct = indicators.get('atr_pct')
         if atr_pct is None or atr_pct <= 0:
             logger.debug(f"[US SEPA] {symbol} ATR 누락/0 차단")
             return None

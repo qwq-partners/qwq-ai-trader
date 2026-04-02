@@ -81,14 +81,20 @@ class USMarketRegimeAdapter:
         prev = self._regime
 
         # US 시장은 KR보다 변동폭이 작음 → 임계값 하향
-        if avg_change > 0.7 and avg_vs_open > 0.2:
+        # avg_change 기본 판단 + vs_open 보조 (vs_open 미전달 시에도 동작)
+        if avg_change > 0.7:
             self._regime = "bull"
-        elif avg_change < -0.7 and avg_vs_open < -0.2:
+        elif avg_change < -0.7:
             self._regime = "bear"
-        elif abs(avg_change) <= 0.7:
-            self._regime = "sideways"
         else:
             self._regime = "sideways"
+
+        # vs_open 역방향이면 혼조 → sideways로 완화
+        if avg_vs_open != 0.0:
+            if self._regime == "bull" and avg_vs_open < -0.3:
+                self._regime = "sideways"
+            elif self._regime == "bear" and avg_vs_open > 0.3:
+                self._regime = "sideways"
 
         self._last_update = datetime.now()
 

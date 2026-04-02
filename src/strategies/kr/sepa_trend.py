@@ -141,7 +141,7 @@ class SEPATrendStrategy(BaseStrategy):
                 # ATR 축소를 부분 완화하여 고확신 신호에 적정 비중 보장
                 if score >= 90:
                     _pos_mult = max(_pos_mult * 1.5, 0.85)
-                elif score >= 85 and (candidate.indicators.get("mrs") or 0) > 0:
+                elif score >= 85 and (candidate.indicators.get("mrs") if candidate.indicators.get("mrs") is not None else 0) > 0:
                     _pos_mult = max(_pos_mult * 1.3, 0.75)
                 elif score >= 80:
                     _pos_mult = max(_pos_mult * 1.15, 0.65)
