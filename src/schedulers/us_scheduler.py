@@ -859,13 +859,26 @@ class USScheduler:
             except Exception as e:
                 logger.debug(f"[US Finviz 가격필터] 조회 실패 (무시): {e}")
 
+        # ── 시장 체제 파라미터 적용 ──
+        _regime_params = {}
+        if getattr(eng, 'market_regime', None):
+            _regime_params = eng.market_regime.params
+            _min_score_adj = _regime_params.get("min_score_adj", 0)
+            _max_buys = _regime_params.get("max_daily_new_buys", 3)
+            if _min_score_adj != 0:
+                for sig in signals:
+                    sig.score += _min_score_adj
+                logger.debug(f"[US 체제] 점수 보정 {_min_score_adj:+d}pt ({eng._market_regime_str})")
+        else:
+            _max_buys = 3
+
         # 시그널 스코어 순 정렬 → 성공 N개까지 시도
         signals.sort(key=lambda s: s.score, reverse=True)
         submitted = 0
         _consecutive_fund_fail = 0  # 연속 자금 부족 실패 카운터
 
         for _sig_idx, sig in enumerate(signals):
-            if submitted >= eng._max_signals_per_cycle:
+            if submitted >= min(eng._max_signals_per_cycle, _max_buys):
                 break
             # 연속 3건 자금 부족 → 나머지 시그널 조기 중단 (API 호출 낭비 방지)
             if _consecutive_fund_fail >= 3:
@@ -970,7 +983,12 @@ class USScheduler:
 
         # ── US 크로스 검증 게이트 (KR 엔진과 통일) ──────────────────
         if getattr(eng, 'cross_validator', None) and signal.side == OrderSide.BUY:
-            _meta = signal.metadata or {}
+            _meta = dict(signal.metadata or {})
+            # indicators 주입 (크로스검증 규칙 1,6,7,8 활성화)
+            if "indicators" not in _meta:
+                _cached_ind = eng._indicator_cache.get(symbol, {})
+                if _cached_ind:
+                    _meta["indicators"] = _cached_ind
             _regime = getattr(eng, '_market_regime_str', 'neutral')
             _strategy = signal.strategy.value if hasattr(signal.strategy, 'value') else str(signal.strategy)
             _cv_pass, _cv_score, _cv_reason = eng.cross_validator.validate(
@@ -1013,16 +1031,21 @@ class USScheduler:
             logger.info(f"[US 시그널] {symbol} — 리스크 체크 실패: {reject_reason}")
             return False
 
-        # ── ATR 기반 포지션 사이징 (KR 엔진과 통일) ─────────────────────
+        # ── ATR 기반 포지션 사이징 + 체제 배율 ────────────────────────
         _pos_mult = 1.0
         if signal.metadata:
             _pos_mult = signal.metadata.get("position_multiplier", 1.0)
-        if _pos_mult != 1.0 and qty > 1:
-            adjusted = max(1, int(qty * _pos_mult))
-            if adjusted < qty:
+        # 체제 배율 적용
+        _regime_boost = 1.0
+        if getattr(eng, 'market_regime', None):
+            _regime_boost = eng.market_regime.params.get("position_mult_boost", 1.0)
+        _total_mult = _pos_mult * _regime_boost
+        if _total_mult != 1.0 and qty > 1:
+            adjusted = max(1, int(qty * _total_mult))
+            if adjusted != qty:
                 logger.info(
-                    f"[US ATR사이징] {symbol} {qty}→{adjusted}주 "
-                    f"(ATR mult={_pos_mult:.2f})"
+                    f"[US 사이징] {symbol} {qty}→{adjusted}주 "
+                    f"(ATR={_pos_mult:.2f} × 체제={_regime_boost:.2f})"
                 )
                 qty = adjusted
 
@@ -2747,7 +2770,7 @@ class USScheduler:
                         _hdr = {"User-Agent": "Mozilla/5.0"}
                         _to = _aiohttp.ClientTimeout(total=8)
                         async with _aiohttp.ClientSession(headers=_hdr, timeout=_to) as _sess:
-                            spy_chg, qqq_chg = 0.0, 0.0
+                            spy_chg, qqq_chg = None, None
                             for _sym, _name in [("SPY", "spy"), ("QQQ", "qqq")]:
                                 try:
                                     _url = f"https://query1.finance.yahoo.com/v8/finance/chart/{_sym}?interval=1d&range=2d"
@@ -2761,8 +2784,13 @@ class USScheduler:
                                                 else: qqq_chg = _chg
                                 except Exception:
                                     pass
-                            eng.market_regime.update_regime(spy_chg, qqq_chg)
-                            eng._market_regime_str = eng.market_regime.regime
+                            # 양쪽 모두 실패 시 체제 업데이트 스킵
+                            if spy_chg is not None or qqq_chg is not None:
+                                eng.market_regime.update_regime(
+                                    spy_chg if spy_chg is not None else 0.0,
+                                    qqq_chg if qqq_chg is not None else 0.0,
+                                )
+                                eng._market_regime_str = eng.market_regime.regime
                     except Exception as _e:
                         logger.debug(f"[US 시장체제] 업데이트 실패: {_e}")
 

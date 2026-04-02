@@ -29,6 +29,7 @@ from .types import (
     Signal, OrderSide, SignalStrength, StrategyType
 )
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
+from ..utils.sizing import atr_position_multiplier
 
 
 @dataclass
@@ -976,10 +977,11 @@ class BatchAnalyzer:
                         "batch_signal": True,
                         "name": sig.name,
                         "atr_pct": sig.atr_pct,
+                        "position_multiplier": atr_position_multiplier(sig.atr_pct) if sig.atr_pct > 0 else 1.0,
                         "market_regime": _regime,
                         "intraday_state": self._intraday_state,
                         "intraday_kospi_pct": round(self._intraday_kospi_pct, 2),
-                        "sector": _sector,          # P0-5: 섹터 제한 체크에 활용
+                        "sector": _sector,
                         "gap_pct": round(gap_pct, 2),
                     },
                 )
