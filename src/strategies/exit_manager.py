@@ -999,12 +999,13 @@ class ExitManager:
             return True
         return False
 
-    def apply_regime_params(self, regime: str) -> int:
+    def apply_regime_params(self, regime: str, *, force: bool = False) -> int:
         """시장 레짐에 따라 기존 포지션의 청산 파라미터를 실시간 갱신.
 
         Args:
             regime: LLM 레짐 분류 결과
                     (trending_bull / neutral / ranging / turning_point / trending_bear)
+            force:  True이면 레짐 변경 없어도 강제 재적용 (장중 급락 해제 복원 등)
 
         Returns:
             갱신된 포지션 수
@@ -1022,7 +1023,7 @@ class ExitManager:
             logger.warning(f"[레짐파라미터] 알 수 없는 레짐: {regime!r} → 적용 생략")
             return 0
 
-        if regime == self._current_regime and self._states:
+        if not force and regime == self._current_regime and self._states:
             logger.debug(f"[레짐파라미터] 레짐 변경 없음 ({regime}) → 스킵")
             return 0
 
@@ -1096,6 +1097,30 @@ class ExitManager:
             f"(SL={params['stop_loss_pct']}%, TS={params['trailing_stop_pct']}%, "
             f"TP1/2/3={params['first_exit_pct']}/{params['second_exit_pct']}/{params['third_exit_pct']}%)"
         )
+
+        # ── 장중 급락 override 재적용 ──────────────────────────────────
+        # 레짐 재분류(12:00 LLM, 30분 sync)가 intraday crash 설정을 덮어쓰는 버그 방지.
+        # crash가 active이면 SL/TS를 다시 조임 (TP는 레짐값 유지).
+        if self._intraday_crash_level != "normal":
+            crash_p = INTRADAY_CRASH_PARAMS.get(self._intraday_crash_level, {})
+            if crash_p:
+                c_sl = crash_p["stop_loss_pct"]
+                c_ts = crash_p["trailing_stop_pct"]
+                if self.config.stop_loss_pct > c_sl:
+                    self.config.stop_loss_pct = c_sl
+                if self.config.trailing_stop_pct > c_ts:
+                    self.config.trailing_stop_pct = c_ts
+                for sym2, state2 in self._states.items():
+                    if not state2.is_core:
+                        if state2.stop_loss_pct > c_sl:
+                            state2.stop_loss_pct = c_sl
+                        if state2.trailing_stop_pct > c_ts:
+                            state2.trailing_stop_pct = c_ts
+                logger.warning(
+                    f"[장중급락] 레짐({regime}) 적용 후 crash({self._intraday_crash_level}) "
+                    f"재적용 → SL ≤ {c_sl}%, TS ≤ {c_ts}%"
+                )
+        # ─────────────────────────────────────────────────────────────────
         return updated
 
     def apply_intraday_crash_params(self, crash_level: str) -> int:
@@ -1163,11 +1188,9 @@ class ExitManager:
             return
         prev_level = self._intraday_crash_level
         self._intraday_crash_level = "normal"
-        # 레짐 중복 스킵 방지: 임시로 "force" 트릭
-        saved = self._current_regime
-        self._current_regime = "__recovering__"
-        self.apply_regime_params(saved)
-        logger.info(f"[장중급락] {prev_level} → normal 해제: 레짐 {saved!r} 복원")
+        # force=True: 레짐 변경 없어도 강제 재적용 (crash로 조인 SL/TS 복원)
+        self.apply_regime_params(self._current_regime, force=True)
+        logger.info(f"[장중급락] {prev_level} → normal 해제: 레짐 {self._current_regime!r} 복원")
 
     def on_fill(self, symbol: str, sold_quantity: int, fill_price: Decimal):
         """체결 후 상태 업데이트"""

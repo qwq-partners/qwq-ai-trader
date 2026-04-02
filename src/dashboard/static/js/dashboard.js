@@ -1302,12 +1302,13 @@ function formatKRW(value) {
 // ═══════════════════════════════════════════════════════════
 
 const GATE_META = {
-    'G1_regime':  { label: '레짐',  color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' },
-    'G2_cross':   { label: '크로스', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)'  },
-    'G3_risk':    { label: '리스크', color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
-    'G4_llm':     { label: 'LLM',   color: '#22d3ee', bg: 'rgba(34,211,238,0.12)'  },
-    'G5_cash':    { label: '현금',  color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
-    'G5_budget':  { label: '예산',  color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
+    'G1_regime':   { label: '레짐',   color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' },
+    'G2_cross':    { label: '크로스',  color: '#fbbf24', bg: 'rgba(251,191,36,0.12)'  },
+    'G3_risk':     { label: '리스크',  color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
+    'G4_llm':      { label: 'LLM',    color: '#22d3ee', bg: 'rgba(34,211,238,0.12)'  },
+    'G5_cash':     { label: '현금',   color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
+    'G5_budget':   { label: '예산',   color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
+    'G_intraday':  { label: '장중급락', color: '#fb923c', bg: 'rgba(251,146,60,0.12)'  },
 };
 
 let _sigEvents = [];

@@ -28,6 +28,7 @@ from .event import SignalEvent
 from .types import (
     Signal, OrderSide, SignalStrength, StrategyType
 )
+from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 
 
 @dataclass
@@ -747,6 +748,18 @@ class BatchAnalyzer:
                 f"[장중급락] 🆘 severe 상태 (KOSPI {self._intraday_kospi_pct:+.2f}%) "
                 f"→ 대기 시그널 {len(signals)}개 전면 차단"
             )
+            _reason = f"장중 폭락 severe (KOSPI {self._intraday_kospi_pct:+.2f}%)"
+            for _s in signals:
+                asyncio.create_task(_SigLog.get().log(
+                    symbol=_s.symbol, name=getattr(_s, "name", ""),
+                    strategy=getattr(_s, "strategy", ""),
+                    score=float(getattr(_s, "score", 0)),
+                    side="buy", event_type="blocked",
+                    block_gate="G_intraday", block_reason=_reason,
+                    market_regime=self._market_regime,
+                    metadata={"intraday_state": "severe",
+                              "kospi_pct": round(self._intraday_kospi_pct, 2)},
+                ))
             return
         # caution/crash: 최소 점수 상향 (종목 루프에서 개별 적용)
         _intraday_score_boost = {"normal": 0, "caution": 5, "crash": 10}.get(
@@ -835,23 +848,43 @@ class BatchAnalyzer:
 
                 # ── 장중 급락 개별 종목 게이트 ────────────────────────────
                 if _intraday_score_boost > 0:
+                    _i_reason = None
                     # crash 상태: SEPA 전략 차단 (역추세 RSI2만 허용)
                     if self._intraday_state == "crash" and sig.strategy == "sepa_trend":
+                        _i_reason = (
+                            f"장중 급락 crash (KOSPI {self._intraday_kospi_pct:+.2f}%) "
+                            "— SEPA 전략 차단"
+                        )
                         logger.info(
                             f"[장중급락] {sig.symbol} SEPA 차단 (crash 상태): "
                             f"score={sig.score:.0f}"
                         )
-                        skipped += 1
-                        continue
-                    # 최소 점수 검증 (+boost)
-                    _intraday_min = self._config.get(sig.strategy, {}).get("min_score", 55.0)
-                    _required = _intraday_min + _intraday_score_boost
-                    if sig.score < _required:
-                        logger.info(
-                            f"[장중급락] {sig.symbol} 점수 미달 스킵: "
-                            f"{sig.score:.0f} < {_required:.0f} "
-                            f"(base={_intraday_min:.0f} + boost={_intraday_score_boost})"
-                        )
+                    else:
+                        # 최소 점수 검증 (+boost)
+                        _intraday_min = self._config.get(sig.strategy, {}).get("min_score", 55.0)
+                        _required = _intraday_min + _intraday_score_boost
+                        if sig.score < _required:
+                            _i_reason = (
+                                f"장중 급락 {self._intraday_state} "
+                                f"(KOSPI {self._intraday_kospi_pct:+.2f}%) "
+                                f"— 점수 미달 {sig.score:.0f}/{_required:.0f}"
+                            )
+                            logger.info(
+                                f"[장중급락] {sig.symbol} 점수 미달 스킵: "
+                                f"{sig.score:.0f} < {_required:.0f} "
+                                f"(base={_intraday_min:.0f} + boost={_intraday_score_boost})"
+                            )
+                    if _i_reason:
+                        asyncio.create_task(_SigLog.get().log(
+                            symbol=sig.symbol, name=getattr(sig, "name", ""),
+                            strategy=getattr(sig, "strategy", ""),
+                            score=float(getattr(sig, "score", 0)),
+                            side="buy", event_type="blocked",
+                            block_gate="G_intraday", block_reason=_i_reason,
+                            market_regime=self._market_regime,
+                            metadata={"intraday_state": self._intraday_state,
+                                      "kospi_pct": round(self._intraday_kospi_pct, 2)},
+                        ))
                         skipped += 1
                         continue
                 # ──────────────────────────────────────────────────────
