@@ -12,6 +12,7 @@ import pandas as pd
 
 from ..base import USBaseStrategy
 from ...core.types import Signal, Portfolio, StrategyType, TimeHorizon
+from ...utils.sizing import atr_position_multiplier
 
 
 class EarningsDriftStrategy(USBaseStrategy):
@@ -138,8 +139,13 @@ class EarningsDriftStrategy(USBaseStrategy):
         reason = (f"Earnings gap +{gap_pct:.1f}% | vol {vol_ratio:.1f}x | "
                   f"held {close_position:.0%}")
 
+        # ATR 포지션 사이징 (어닝 드리프트는 고변동 허용 → 가드만)
+        atr_pct = indicators.get('atr_pct', 0)
+        _pos_mult = atr_position_multiplier(atr_pct) if atr_pct is not None and atr_pct > 0 else 0.8
+
         return self._create_signal(
             symbol=symbol, score=score, reason=reason,
             price=close, stop_price=stop, target_price=target,
-            metadata={'gap_pct': gap_pct, 'vol_ratio': vol_ratio},
+            metadata={'gap_pct': gap_pct, 'vol_ratio': vol_ratio,
+                      'atr_pct': atr_pct, 'position_multiplier': _pos_mult},
         )

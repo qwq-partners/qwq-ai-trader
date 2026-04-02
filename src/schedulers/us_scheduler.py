@@ -968,6 +968,26 @@ class USScheduler:
                 )
                 return False
 
+        # ── US 크로스 검증 게이트 (KR 엔진과 통일) ──────────────────
+        if getattr(eng, 'cross_validator', None) and signal.side == OrderSide.BUY:
+            _meta = signal.metadata or {}
+            _regime = getattr(eng, '_market_regime_str', 'neutral')
+            _strategy = signal.strategy.value if hasattr(signal.strategy, 'value') else str(signal.strategy)
+            _cv_pass, _cv_score, _cv_reason = eng.cross_validator.validate(
+                symbol=symbol,
+                side="buy",
+                strategy=_strategy,
+                score=signal.score,
+                metadata=_meta,
+                market_regime=_regime,
+            )
+            if not _cv_pass:
+                logger.info(f"[US 크로스검증] {symbol} 차단: {_cv_reason}")
+                return False
+            if _cv_score != signal.score:
+                logger.info(f"[US 크로스검증] {symbol} 감점: {signal.score:.0f}→{_cv_score:.0f} ({_cv_reason})")
+                signal.score = _cv_score
+
         # 포지션 사이징 (allow_min_one=True — 금액 기준 최소 1주 보장)
         qty = eng.risk_manager.calculate_position_size(
             eng.portfolio, Decimal(str(price)), allow_min_one=True
@@ -992,6 +1012,19 @@ class USScheduler:
         if not can_open:
             logger.info(f"[US 시그널] {symbol} — 리스크 체크 실패: {reject_reason}")
             return False
+
+        # ── ATR 기반 포지션 사이징 (KR 엔진과 통일) ─────────────────────
+        _pos_mult = 1.0
+        if signal.metadata:
+            _pos_mult = signal.metadata.get("position_multiplier", 1.0)
+        if _pos_mult != 1.0 and qty > 1:
+            adjusted = max(1, int(qty * _pos_mult))
+            if adjusted < qty:
+                logger.info(
+                    f"[US ATR사이징] {symbol} {qty}→{adjusted}주 "
+                    f"(ATR mult={_pos_mult:.2f})"
+                )
+                qty = adjusted
 
         # ── Finviz Beta 기반 포지션 리스크 보정 ──────────────────────────
         fz = self._finviz
@@ -2706,6 +2739,32 @@ class USScheduler:
                     f"fill_ws={fill_ws_status} | "
                     f"daily_pnl=${metrics.daily_loss:.2f} ({metrics.daily_loss_pct:.1f}%)"
                 )
+
+                # ── US 시장 체제 업데이트 (SPY/QQQ 기반, 5분 주기) ──
+                if getattr(eng, 'market_regime', None):
+                    try:
+                        import aiohttp as _aiohttp
+                        _hdr = {"User-Agent": "Mozilla/5.0"}
+                        _to = _aiohttp.ClientTimeout(total=8)
+                        async with _aiohttp.ClientSession(headers=_hdr, timeout=_to) as _sess:
+                            spy_chg, qqq_chg = 0.0, 0.0
+                            for _sym, _name in [("SPY", "spy"), ("QQQ", "qqq")]:
+                                try:
+                                    _url = f"https://query1.finance.yahoo.com/v8/finance/chart/{_sym}?interval=1d&range=2d"
+                                    async with _sess.get(_url) as _resp:
+                                        if _resp.status == 200:
+                                            _js = await _resp.json(content_type=None)
+                                            _closes = [c for c in _js["chart"]["result"][0]["indicators"]["quote"][0].get("close", []) if c is not None]
+                                            if len(_closes) >= 2:
+                                                _chg = (_closes[-1] - _closes[-2]) / _closes[-2] * 100
+                                                if _name == "spy": spy_chg = _chg
+                                                else: qqq_chg = _chg
+                                except Exception:
+                                    pass
+                            eng.market_regime.update_regime(spy_chg, qqq_chg)
+                            eng._market_regime_str = eng.market_regime.regime
+                    except Exception as _e:
+                        logger.debug(f"[US 시장체제] 업데이트 실패: {_e}")
 
                 # 헬스 모니터 (있는 경우)
                 if eng.health_monitor and hasattr(eng.health_monitor, 'run_loop'):

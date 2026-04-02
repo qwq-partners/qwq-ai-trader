@@ -13,6 +13,7 @@ import pandas as pd
 from ..base import USBaseStrategy
 from ...core.types import Signal, Portfolio, Position, StrategyType, TimeHorizon
 from ...indicators.technical import sma
+from ...utils.sizing import atr_position_multiplier
 
 
 class SEPATrendStrategy(USBaseStrategy):
@@ -151,9 +152,19 @@ class SEPATrendStrategy(USBaseStrategy):
                   f"52w high {pct_from_high:+.1f}% | "
                   f"vol {vol_ratio:.1f}x")
 
+        # ATR 데이터 품질 가드 + 포지션 사이징
+        atr_pct = indicators.get('atr_pct', 0)
+        if atr_pct is None or atr_pct <= 0:
+            logger.debug(f"[US SEPA] {symbol} ATR 누락/0 차단")
+            return None
+        _pos_mult = atr_position_multiplier(atr_pct)
+        if score >= 85:
+            _pos_mult = max(_pos_mult * 1.3, 0.75)
+
         return self._create_signal(
             symbol=symbol, score=score, reason=reason,
             price=close, stop_price=stop, target_price=target,
+            metadata={'atr_pct': atr_pct, 'position_multiplier': _pos_mult},
         )
 
     def check_exit(self, symbol: str, history: pd.DataFrame,

@@ -1,5 +1,36 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-02 — US 엔진 고도화: KR 엔진 3대 기능 이식
+
+### Phase 1: ATR 기반 포지션 사이징
+- US 3개 전략(모멘텀, SEPA, 어닝스드리프트)에 `atr_position_multiplier` 적용
+- ATR=0/None 시 모멘텀/SEPA 진입 차단 (데이터 품질 가드)
+- `_process_signal()`에서 `position_multiplier` 메타데이터 읽어 수량 조정
+- 고점수(85+) 배율 완화: min 0.75x 보장
+
+### Phase 2: 시장 체제 인식 (SPY/QQQ 기반)
+- `src/core/us_market_regime.py` 신규 생성
+- SPY 60% + QQQ 40% 가중 평균 등락률 기반 bull/bear/sideways/neutral 판단
+- 임계값: US 시장 특성 반영 (bull > +0.7%, bear < -0.7%)
+- 체제별 파라미터: min_score_adj, max_daily_new_buys, position_mult_boost
+- heartbeat_loop(5분)에서 Yahoo Finance로 SPY/QQQ 데이터 갱신
+
+### Phase 3: 크로스 검증 게이트
+- `CrossStrategyValidator`에 `market="US"` 파라미터 추가
+- US 적용 규칙 6개: RSI과매수, 약세장차단(모멘텀만), 섹터과집중, 추격매수, MA200하방, 밸류에이션
+- US 제외 규칙 3개: 수급(데이터없음), 동일섹터손절(전면차단으로 불필요), 거래메모리(미구현)
+- US bear 시 earnings_drift는 허용 (어닝 서프라이즈 특성)
+- `_process_signal()`에 검증 게이트 삽입 (포지션 사이징 전)
+
+### 수정 파일
+- `src/core/us_market_regime.py` — 신규: US 시장 체제 판단
+- `src/core/cross_validator.py` — market 파라미터 + US 규칙 분기
+- `src/strategies/us/momentum.py` — ATR 사이징 + ATR=0 가드
+- `src/strategies/us/sepa_trend.py` — ATR 사이징 + ATR=0 가드
+- `src/strategies/us/earnings_drift.py` — ATR 사이징
+- `src/schedulers/us_scheduler.py` — 크로스검증 게이트 + ATR 사이징 적용 + 시장체제 업데이트
+- `scripts/run_trader.py` — _USEngineBundle에 market_regime, cross_validator 추가
+
 ## 2026-04-01 — SEPA 복기 기반 5대 회피 패턴 차단
 
 ### ATR 데이터 품질 가드

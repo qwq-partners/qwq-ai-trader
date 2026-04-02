@@ -1252,6 +1252,25 @@ class UnifiedTradingBot:
             except Exception as _e:
                 logger.warning(f"[US] stopped_today 복원 실패 (무시): {_e}")
 
+            # ── US AI 고도화: 시장 체제 + 크로스 검증 ──
+            try:
+                from src.core.us_market_regime import USMarketRegimeAdapter
+                us_engine.market_regime = USMarketRegimeAdapter()
+                logger.info("[US] 시장 체제 어댑터 초기화 완료")
+            except Exception as _e:
+                logger.warning(f"[US] 시장 체제 초기화 실패 (무시): {_e}")
+
+            try:
+                from src.core.cross_validator import CrossStrategyValidator
+                us_engine.cross_validator = CrossStrategyValidator(
+                    portfolio=us_engine.portfolio,
+                    risk_manager=us_engine.risk_manager,
+                    market="US",
+                )
+                logger.info("[US] 크로스 검증 게이트 초기화 완료")
+            except Exception as _e:
+                logger.warning(f"[US] 크로스 검증 초기화 실패 (무시): {_e}")
+
             logger.info("[US] 미국 시장 초기화 완료")
             return True
 
@@ -1631,6 +1650,11 @@ class _USEngineBundle:
         self.earnings_provider = None
         self.sentiment_scorer = None
         self.news_provider = None
+
+        # AI 고도화 (KR 엔진과 통일)
+        self.market_regime = None          # USMarketRegimeAdapter
+        self._market_regime_str = "neutral"
+        self.cross_validator = None        # CrossStrategyValidator (market="US")
 
         # 상태
         self._universe: list = []

@@ -22,11 +22,12 @@ class CrossStrategyValidator:
     """
 
     def __init__(self, portfolio=None, risk_manager=None, trade_memory=None,
-                 llm_manager=None):
+                 llm_manager=None, market: str = "KR"):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
         self._trade_memory = trade_memory
         self._llm_manager = llm_manager  # LLM 종합 판단 (선택적)
+        self._market = market  # "KR" 또는 "US"
 
         # 오늘 검증 통계
         self._stats = {
@@ -96,19 +97,24 @@ class CrossStrategyValidator:
             adjusted_score -= 10
             penalties.append(f"RSI과매수({rsi_14:.0f}>70) -10")
 
-        # === 규칙 2: 기관+외국인 동시 순매도 상태에서 테마/모멘텀 매수 ===
-        foreign_net = indicators.get("foreign_net_buy")
-        inst_net = indicators.get("inst_net_buy")
-        if foreign_net is not None and inst_net is not None:
-            if foreign_net < 0 and inst_net < 0 and strategy in ("theme_chasing", "momentum_breakout", "gap_and_go"):
-                self._stats["blocked"] += 1
-                logger.info(
-                    f"[크로스검증] {symbol} 차단: {strategy} 매수 + 기관/외국인 동시 순매도"
-                )
-                return False, 0, "수급 불일치: 기관+외국인 동시 순매도"
+        # === 규칙 2: 기관+외국인 동시 순매도 (KR 전용 — US는 수급 데이터 없음) ===
+        if self._market == "KR":
+            foreign_net = indicators.get("foreign_net_buy")
+            inst_net = indicators.get("inst_net_buy")
+            if foreign_net is not None and inst_net is not None:
+                if foreign_net < 0 and inst_net < 0 and strategy in ("theme_chasing", "momentum_breakout", "gap_and_go"):
+                    self._stats["blocked"] += 1
+                    logger.info(
+                        f"[크로스검증] {symbol} 차단: {strategy} 매수 + 기관/외국인 동시 순매도"
+                    )
+                    return False, 0, "수급 불일치: 기관+외국인 동시 순매도"
 
         # === 규칙 3: 약세 체제에서 공격적 전략 차단 ===
-        if market_regime == "bear" and strategy in ("theme_chasing", "gap_and_go"):
+        # US: earnings_drift는 어닝 서프라이즈 기반 → bear에서도 허용
+        _bear_block = ("theme_chasing", "gap_and_go")
+        if self._market == "US":
+            _bear_block = ("momentum_breakout",)  # US bear: 모멘텀만 차단, SEPA/어닝은 허용
+        if market_regime == "bear" and strategy in _bear_block:
             self._stats["blocked"] += 1
             logger.info(
                 f"[크로스검증] {symbol} 차단: 약세장 + {strategy}"
