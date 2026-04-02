@@ -150,6 +150,11 @@ class BatchAnalyzer:
         # 시장 레짐 캐시 (스캔 후 업데이트)
         self._market_regime: str = "neutral"  # "bull"|"neutral"|"caution"|"bear"
 
+        # 장중 급락 감지 (5분 주기, kr_scheduler에서 갱신)
+        # "normal" | "caution" | "crash" | "severe"
+        self._intraday_state: str = "normal"
+        self._intraday_kospi_pct: float = 0.0
+
         # 복합 트레일링용 캐시 (MA5, 전일저가)
         self._ma5_cache: Dict[str, float] = {}
         self._prev_low_cache: Dict[str, float] = {}
@@ -735,6 +740,27 @@ class BatchAnalyzer:
         except Exception as e:
             logger.warning(f"[배치분석] 프리장 재검증 실패 (원본 유지): {e}")
 
+        # ── 장중 급락 게이트 ───────────────────────────────────────────────
+        # severe: 신규 진입 전면 차단
+        if self._intraday_state == "severe":
+            logger.warning(
+                f"[장중급락] 🆘 severe 상태 (KOSPI {self._intraday_kospi_pct:+.2f}%) "
+                f"→ 대기 시그널 {len(signals)}개 전면 차단"
+            )
+            return
+        # caution/crash: 최소 점수 상향 (종목 루프에서 개별 적용)
+        _intraday_score_boost = {"normal": 0, "caution": 5, "crash": 10}.get(
+            self._intraday_state, 0
+        )
+        if _intraday_score_boost > 0:
+            logger.warning(
+                f"[장중급락] {'🟡' if self._intraday_state=='caution' else '🔴'} "
+                f"{self._intraday_state} 상태 (KOSPI {self._intraday_kospi_pct:+.2f}%) "
+                f"→ 진입 최소점수 +{_intraday_score_boost}pt 상향, "
+                f"{'SEPA 차단' if self._intraday_state=='crash' else 'SEPA 점수 강화'}"
+            )
+        # ─────────────────────────────────────────────────────────────────
+
         # 슬라이딩 윈도우 설정: 시그널 간 간격으로 슬리피지 위험 분산
         batch_cfg = self._config.get("batch", {})
         signal_interval_sec = batch_cfg.get("signal_interval_sec", 30)
@@ -807,6 +833,29 @@ class BatchAnalyzer:
                             skipped += 1
                             continue
 
+                # ── 장중 급락 개별 종목 게이트 ────────────────────────────
+                if _intraday_score_boost > 0:
+                    # crash 상태: SEPA 전략 차단 (역추세 RSI2만 허용)
+                    if self._intraday_state == "crash" and sig.strategy == "sepa_trend":
+                        logger.info(
+                            f"[장중급락] {sig.symbol} SEPA 차단 (crash 상태): "
+                            f"score={sig.score:.0f}"
+                        )
+                        skipped += 1
+                        continue
+                    # 최소 점수 검증 (+boost)
+                    _intraday_min = self._config.get(sig.strategy, {}).get("min_score", 55.0)
+                    _required = _intraday_min + _intraday_score_boost
+                    if sig.score < _required:
+                        logger.info(
+                            f"[장중급락] {sig.symbol} 점수 미달 스킵: "
+                            f"{sig.score:.0f} < {_required:.0f} "
+                            f"(base={_intraday_min:.0f} + boost={_intraday_score_boost})"
+                        )
+                        skipped += 1
+                        continue
+                # ──────────────────────────────────────────────────────
+
                 # 이미 보유 중인 종목 스킵
                 if sig.symbol in self._engine.portfolio.positions:
                     logger.info(f"[배치분석] {sig.symbol} 이미 보유 중, 스킵")
@@ -869,6 +918,16 @@ class BatchAnalyzer:
                     _tight_stop = float(current_price) * 0.975   # -2.5%
                     _stop = Decimal(str(max(float(_stop), _tight_stop)))
 
+                # 장중 급락 시 손절 추가 강화 (레짐 조정과 누적 적용)
+                if self._intraday_state == "caution":
+                    _tight_stop = float(current_price) * 0.970   # -3.0%
+                    _stop = Decimal(str(max(float(_stop), _tight_stop)))
+                    _strength = SignalStrength.NORMAL
+                elif self._intraday_state == "crash":
+                    _tight_stop = float(current_price) * 0.975   # -2.5%
+                    _stop = Decimal(str(max(float(_stop), _tight_stop)))
+                    _strength = SignalStrength.NORMAL
+
                 signal = Signal(
                     symbol=sig.symbol,
                     side=OrderSide.BUY,
@@ -885,6 +944,8 @@ class BatchAnalyzer:
                         "name": sig.name,
                         "atr_pct": sig.atr_pct,
                         "market_regime": _regime,
+                        "intraday_state": self._intraday_state,
+                        "intraday_kospi_pct": round(self._intraday_kospi_pct, 2),
                         "sector": _sector,          # P0-5: 섹터 제한 체크에 활용
                         "gap_pct": round(gap_pct, 2),
                     },
@@ -1007,6 +1068,56 @@ class BatchAnalyzer:
         except Exception as e:
             self._ma5_cache.setdefault(symbol, None)
             logger.debug(f"[포지션모니터] {symbol} 복합캐시 즉시 갱신 실패 (재시도 방지): {e}")
+
+    async def update_intraday_state(self, kospi_pct: float) -> str:
+        """KOSPI 당일 등락률 기반 장중 급락 상태 업데이트.
+
+        kr_scheduler가 5분 주기로 호출.
+        상태 변화 시 ExitManager에 SL/TS 즉시 반영.
+
+        Args:
+            kospi_pct: KOSPI 당일 등락률 (%) — fetch_index_price()의 change_pct
+
+        Returns:
+            새 상태 문자열
+        """
+        # 상태 결정
+        if kospi_pct <= -3.5:
+            new_state = "severe"
+        elif kospi_pct <= -2.5:
+            new_state = "crash"
+        elif kospi_pct <= -1.5:
+            new_state = "caution"
+        else:
+            new_state = "normal"
+
+        prev_state = self._intraday_state
+        self._intraday_state = new_state
+        self._intraday_kospi_pct = kospi_pct
+
+        if new_state != prev_state:
+            if new_state == "normal":
+                # 급락 해제 → 레짐 파라미터 복원
+                if self._exit_manager:
+                    self._exit_manager.recover_from_intraday_crash()
+                logger.info(
+                    f"[장중급락] 해제: KOSPI {kospi_pct:+.2f}% "
+                    f"({prev_state} → normal) — 레짐 파라미터 복원"
+                )
+            else:
+                # 급락 심화 또는 신규 진입
+                if self._exit_manager:
+                    self._exit_manager.apply_intraday_crash_params(new_state)
+                emoji = {"caution": "🟡", "crash": "🔴", "severe": "🆘"}.get(new_state, "⚠️")
+                level_desc = {
+                    "caution": f"주의장 (KOSPI {kospi_pct:+.2f}%)",
+                    "crash":   f"급락 (KOSPI {kospi_pct:+.2f}%)",
+                    "severe":  f"폭락 (KOSPI {kospi_pct:+.2f}%) — 신규 진입 전면 차단",
+                }.get(new_state, "")
+                logger.warning(
+                    f"[장중급락] {emoji} {prev_state} → {new_state}: {level_desc}"
+                )
+        return new_state
 
     async def monitor_positions(self):
         """[매 30분] 보유 포지션 시세 갱신 + 청산 체크"""

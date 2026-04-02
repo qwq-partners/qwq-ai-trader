@@ -108,6 +108,31 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
     },
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 장중 급락 단계별 손절/트레일링 오버라이드 파라미터
+# KOSPI 당일 등락률 기준:
+#   caution : -1.5% ~ -2.5%  → 손절/트레일링 소폭 강화
+#   crash   : -2.5% ~ -3.5%  → trending_bear 수준으로 압축
+#   severe  : -3.5% 이하      → 신규 진입 전면 차단 + 최단 손절
+#
+# * TP 목표치는 레짐 파라미터 유지 (추세 흐름에서 복구 여지 남김)
+# * 코어홀딩 포지션은 장중 급락 오버라이드에서도 제외 (is_core=True)
+# ──────────────────────────────────────────────────────────────────────────────
+INTRADAY_CRASH_PARAMS: Dict[str, Dict] = {
+    "caution": {
+        "stop_loss_pct":      3.0,   # neutral 4% → 3%
+        "trailing_stop_pct":  2.5,   # neutral 3% → 2.5%
+    },
+    "crash": {
+        "stop_loss_pct":      2.5,   # trending_bear 3.5% → 2.5%
+        "trailing_stop_pct":  2.0,   # trending_bear 2% 유지
+    },
+    "severe": {
+        "stop_loss_pct":      2.0,   # 최단 손절 — severe일 땐 진입도 차단
+        "trailing_stop_pct":  1.5,
+    },
+}
+
 
 @dataclass
 class ExitConfig:
@@ -257,6 +282,8 @@ class ExitManager:
 
         # 현재 적용된 레짐 (apply_regime_params 호출 시 갱신)
         self._current_regime: str = "neutral"
+        # 장중 급락 오버라이드 상태 ("normal" | "caution" | "crash" | "severe")
+        self._intraday_crash_level: str = "normal"
 
     # ------------------------------------------------------------------ #
     # Stage 영속화                                                        #
@@ -1070,6 +1097,77 @@ class ExitManager:
             f"TP1/2/3={params['first_exit_pct']}/{params['second_exit_pct']}/{params['third_exit_pct']}%)"
         )
         return updated
+
+    def apply_intraday_crash_params(self, crash_level: str) -> int:
+        """장중 급락 단계에 따라 SL/trailing 즉시 조임.
+
+        TP 목표치는 변경하지 않음 — 레짐 파라미터 유지.
+        코어홀딩 포지션(is_core=True) 제외.
+
+        Args:
+            crash_level: "caution" | "crash" | "severe"
+
+        Returns:
+            갱신된 포지션 수
+        """
+        params = INTRADAY_CRASH_PARAMS.get(crash_level)
+        if not params:
+            logger.warning(f"[장중급락] 알 수 없는 crash_level: {crash_level!r}")
+            return 0
+
+        if crash_level == self._intraday_crash_level:
+            return 0  # 변경 없음
+
+        prev_level = self._intraday_crash_level
+        self._intraday_crash_level = crash_level
+
+        # 글로벌 ExitConfig도 갱신 (신규 포지션에 적용)
+        new_sl  = params["stop_loss_pct"]
+        new_ts  = params["trailing_stop_pct"]
+        self.config.stop_loss_pct     = new_sl
+        self.config.trailing_stop_pct = new_ts
+
+        updated = 0
+        for sym, state in self._states.items():
+            if state.is_core:
+                continue  # 코어홀딩 제외
+            changed: List[str] = []
+            if state.stop_loss_pct > new_sl:   # 더 타이트할 때만 덮어씀
+                state.stop_loss_pct = new_sl
+                changed.append(f"SL={new_sl}%")
+            if state.trailing_stop_pct > new_ts:
+                state.trailing_stop_pct = new_ts
+                changed.append(f"TS={new_ts}%")
+            if changed:
+                updated += 1
+                logger.warning(
+                    f"[장중급락] {sym} SL/TS 강화: {', '.join(changed)}"
+                )
+
+        if updated:
+            self._persist_states()
+
+        logger.warning(
+            f"[장중급락] {prev_level} → {crash_level} 파라미터 적용: "
+            f"{updated}/{len(self._states)}개 포지션 (SL={new_sl}%, TS={new_ts}%)"
+        )
+        return updated
+
+    def recover_from_intraday_crash(self) -> None:
+        """장중 급락 해제 — 현재 레짐 파라미터로 복원.
+
+        intraday_crash_level이 normal이 아닌 상태에서 KOSPI가 회복될 때 호출.
+        _current_regime 기준으로 apply_regime_params() 재실행.
+        """
+        if self._intraday_crash_level == "normal":
+            return
+        prev_level = self._intraday_crash_level
+        self._intraday_crash_level = "normal"
+        # 레짐 중복 스킵 방지: 임시로 "force" 트릭
+        saved = self._current_regime
+        self._current_regime = "__recovering__"
+        self.apply_regime_params(saved)
+        logger.info(f"[장중급락] {prev_level} → normal 해제: 레짐 {saved!r} 복원")
 
     def on_fill(self, symbol: str, sold_quantity: int, fill_price: Decimal):
         """체결 후 상태 업데이트"""

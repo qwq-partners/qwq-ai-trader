@@ -4015,6 +4015,7 @@ JSON:
         last_regime_date = None           # LLM 레짐 분류기 중복 실행 방지
         last_regime_noon_date = None      # 12:00 장중 레짐 재분류 중복 실행 방지
         last_regime_sync_ts = 0.0         # 레짐 파라미터 30분 주기 동기화 마지막 실행 timestamp
+        last_crash_check_ts = 0.0         # 장중 KOSPI 급락 감지 5분 주기
         last_pos_eod_llm_date = None      # 15:00 포지션 LLM 점검 중복 방지
 
         # LLM 운영 루프 config 플래그
@@ -4170,6 +4171,23 @@ JSON:
                 if time.time() - last_regime_sync_ts >= 1800:
                     await self._apply_regime_to_exit_manager()
                     last_regime_sync_ts = time.time()
+
+                # ── 장중 KOSPI 급락 감지 (5분 주기, 09:00~15:35) ─────────────
+                # 오늘 장중 폭락 → 손절 강화 + 신규 매수 차단/상향
+                _crash_interval = 300  # 5분
+                if (9 <= now.hour < 16
+                        and not (now.hour == 15 and now.minute >= 35)
+                        and time.time() - last_crash_check_ts >= _crash_interval):
+                    try:
+                        _kis_md = getattr(bot, "kis_market_data", None)
+                        if _kis_md:
+                            kospi_data = await _kis_md.fetch_index_price("0001")
+                            if kospi_data and "change_pct" in kospi_data:
+                                _pct = float(kospi_data["change_pct"])
+                                await bot.batch_analyzer.update_intraday_state(_pct)
+                    except Exception as _e:
+                        logger.debug(f"[장중급락] KOSPI 조회 실패 (무시): {_e}")
+                    last_crash_check_ts = time.time()
 
                 # ── 사전분석 ──────────────────────────────────────────
                 if (now.hour == prescan_hour
