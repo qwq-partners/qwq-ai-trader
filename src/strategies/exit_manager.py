@@ -554,6 +554,30 @@ class ExitManager:
             trailing_activate_pct=trailing_activate_pct,
         )
 
+        # ── 장중 급락 active 시: 신규 포지션에도 즉시 crash SL/TS 적용 ──
+        # apply_intraday_crash_params()는 중복 레벨 시 스킵되므로, 신규 등록 포지션은
+        # 별도로 확인해야 함. 코어홀딩은 제외.
+        if not is_core and self._intraday_crash_level != "normal":
+            crash_p = INTRADAY_CRASH_PARAMS.get(self._intraday_crash_level, {})
+            if crash_p:
+                c_sl = crash_p["stop_loss_pct"]
+                c_ts = crash_p["trailing_stop_pct"]
+                state = self._states[position.symbol]
+                tightened = []
+                if state.stop_loss_pct is None or state.stop_loss_pct > c_sl:
+                    state.stop_loss_pct = c_sl
+                    tightened.append(f"SL={c_sl}%")
+                if state.trailing_stop_pct is None or state.trailing_stop_pct > c_ts:
+                    state.trailing_stop_pct = c_ts
+                    tightened.append(f"TS={c_ts}%")
+                if tightened:
+                    logger.warning(
+                        f"[장중급락] 신규 포지션 {position.symbol} "
+                        f"crash({self._intraday_crash_level}) 즉시 적용: "
+                        f"{', '.join(tightened)}"
+                    )
+        # ──────────────────────────────────────────────────────────────
+
         # 보유기간 체크용 진입 시간 기록
         if position.entry_time:
             self._entry_times[position.symbol] = position.entry_time
