@@ -283,7 +283,11 @@
         </div>
 
         <!-- 정산 Summary -->
-        <div class="grid-5col animate-in delay-1" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px;">
+        <div class="grid-5col animate-in delay-1" style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px;">
+            <div class="stat-card" title="전일 종가 대비 오늘 성과 = 실현손익 + 미실현 변화분 (실시간 탭과 동일 기준)">
+                <div class="stat-label">오늘 성과 <span style="font-size:.65rem;opacity:.6;">(전일대비)</span></div>
+                <div id="s-daily-pnl" class="stat-value">--</div>
+            </div>
             <div class="stat-card">
                 <div class="stat-label">실현 손익</div>
                 <div id="s-realized" class="stat-value">--</div>

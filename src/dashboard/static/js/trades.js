@@ -58,19 +58,36 @@ async function loadTradeData(dateStr, type, marketFilter) {
             renderSettlementSummary(settlement);
             renderHoldings(settlement.holdings);
         } else {
-            // settlement 타임아웃/실패 시 portfolio API로 미실현 손익 보정
+            // settlement 타임아웃/실패 시 이벤트 기반 요약으로 폴백
             renderEventSummary(events);
             hideHoldings();
-            // 당일 날짜일 때만 portfolio 실제값으로 미실현 손익 덮어쓰기
-            // (오늘 이전 보유 포지션은 trade-events에 없어서 과소 집계됨)
-            if (dateStr === todayStr()) {
-                api('/api/portfolio').then(portfolio => {
+        }
+
+        // 당일이면 portfolio API에서 effective_daily_pnl + 미실현 보정
+        // - s-daily-pnl: 실시간 탭과 동일 기준 "오늘 성과(전일대비)"
+        // - settlement 실패 시 s-unrealized도 portfolio 실제값으로 보정
+        const dailyPnlEl = document.getElementById('s-daily-pnl');
+        if (dateStr === todayStr()) {
+            api('/api/portfolio').then(portfolio => {
+                // effective_daily_pnl (실현손익 + 미실현 변화분)
+                if (dailyPnlEl && portfolio?.daily_pnl != null) {
+                    dailyPnlEl.textContent = formatPnl(portfolio.daily_pnl);
+                    dailyPnlEl.className = 'stat-value mono ' + pnlClass(portfolio.daily_pnl);
+                }
+                // settlement 실패 시에만 미실현 손익 보정
+                if ((!settlement || settlement.error) && portfolio?.unrealized_pnl_net != null) {
                     const unrealizedEl = document.getElementById('s-unrealized');
-                    if (unrealizedEl && portfolio && portfolio.unrealized_pnl_net != null) {
+                    if (unrealizedEl) {
                         unrealizedEl.textContent = formatPnl(portfolio.unrealized_pnl_net);
                         unrealizedEl.className = 'stat-value mono ' + pnlClass(portfolio.unrealized_pnl_net);
                     }
-                }).catch(() => {});
+                }
+            }).catch(() => { if (dailyPnlEl) dailyPnlEl.textContent = '--'; });
+        } else {
+            // 과거 날짜: effective_daily_pnl 없음 → 카드 숨김
+            if (dailyPnlEl) {
+                const card = dailyPnlEl.closest('.stat-card');
+                if (card) card.style.display = 'none';
             }
         }
 
