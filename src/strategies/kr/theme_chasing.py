@@ -241,7 +241,10 @@ class ThemeChasingStrategy(BaseStrategy):
             return None
 
         # 급등 후 눌림 확인: 장중 고점 대비 최소 1% 이상 하락해야 진입
-        day_high = indicators.get("high", 0)
+        day_high = indicators.get("high") or indicators.get("stck_hgpr") or 0
+        if isinstance(day_high, str):
+            try: day_high = float(day_high)
+            except (ValueError, TypeError): day_high = 0
         if day_high > 0 and price > 0 and change_pct > 5.0:
             retreat_from_high = (day_high - price) / day_high * 100
             if retreat_from_high < 1.0:

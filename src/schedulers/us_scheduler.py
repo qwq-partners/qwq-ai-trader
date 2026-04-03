@@ -1495,6 +1495,10 @@ class USScheduler:
 
         if result.get("success"):
             self._sell_fail_cooldown.pop(symbol, None)  # 성공 시 쿨다운 해제
+            # 연속 실패 카운터 초기화
+            _fail_key = f"_sell_fail_count_{symbol}"
+            if hasattr(self, _fail_key):
+                delattr(self, _fail_key)
             order_no = result.get("order_no", "").strip()
             if not order_no:
                 order_no = f"local-{uuid.uuid4().hex[:12]}"
