@@ -983,6 +983,8 @@ class BatchAnalyzer:
                         "intraday_kospi_pct": round(self._intraday_kospi_pct, 2),
                         "sector": _sector,
                         "gap_pct": round(gap_pct, 2),
+                        # LLM 이중검증용 지표 주입 (스크리너 캐시)
+                        "indicators": self._screener._indicators._cache.get(sig.symbol, {}),
                     },
                 )
 

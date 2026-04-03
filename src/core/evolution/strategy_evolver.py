@@ -845,7 +845,7 @@ class StrategyEvolver:
     # ============================================================
     _VALID_STRATEGIES = {
         "momentum_breakout", "sepa_trend", "rsi2_reversal",
-        "theme_chasing", "gap_and_go",
+        "theme_chasing", "gap_and_go", "strategic_swing",
     }
     _ALLOC_MIN_PCT = 5.0       # 최소 5% (테스트 기회 보장, 활성 전략만)
     _ALLOC_MAX_PCT = 60.0      # 최대 60%

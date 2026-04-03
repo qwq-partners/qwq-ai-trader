@@ -1474,6 +1474,18 @@ class USScheduler:
                 return False
             sell_qty = position.quantity  # 전량매도만 fallback
 
+        # 실제 보유 수량 대비 매도 수량 클램핑 (RLAY 유형 무한 루프 방지)
+        actual_qty = position.quantity
+        if sell_qty > actual_qty:
+            logger.warning(
+                f"[US 매도 주문] {symbol} 수량 보정: {sell_qty}→{actual_qty}주 "
+                f"(ExitManager 기록과 실제 보유 불일치)"
+            )
+            sell_qty = actual_qty
+        if sell_qty <= 0:
+            logger.debug(f"[US 매도 주문] {symbol} — 보유 수량 0, 스킵")
+            return False
+
         sell_price = round(float(position.current_price), 2)
         if sell_price <= 0:
             logger.error(f"[US 매도 주문] {symbol} — 현재가 0, 주문 취소 (시장가 오발주 방지)")
@@ -1542,10 +1554,25 @@ class USScheduler:
             return True
         else:
             self._sell_fail_cooldown[symbol] = datetime.now()
-            # 매도 실패 시 ExitManager stage 롤백 (stage만 올라가고 실제 매도 안 된 상태 방지)
+            # 연속 실패 카운터 (무한 루프 방지)
+            _fail_key = f"_sell_fail_count_{symbol}"
+            _fail_cnt = getattr(self, _fail_key, 0) + 1
+            setattr(self, _fail_key, _fail_cnt)
+            # 매도 실패 시 ExitManager stage 롤백
             if eng.exit_manager:
                 eng.exit_manager.rollback_stage(symbol)
-            logger.warning(f"[US 매도 주문] {symbol} 실패 (5분 쿨다운, stage 롤백): {result.get('message')}")
+            if _fail_cnt >= 3:
+                # 3회 연속 실패 → 포트폴리오 동기화 강제 실행
+                logger.warning(
+                    f"[US 매도 주문] {symbol} 연속 {_fail_cnt}회 실패 → 포트폴리오 동기화 요청"
+                )
+                try:
+                    await self._sync_portfolio()
+                except Exception:
+                    pass
+                setattr(self, _fail_key, 0)  # 리셋
+            else:
+                logger.warning(f"[US 매도 주문] {symbol} 실패 ({_fail_cnt}/3, 5분 쿨다운): {result.get('message')}")
             return False
 
     # ============================================================

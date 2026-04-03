@@ -16,12 +16,13 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    momentum_breakout: 0.0   # 비활성(enabled=false): 예산 0% 고정
-    sepa_trend: 40.0
     gap_and_go: 5.0
-    rsi2_reversal: 15.0
-    theme_chasing: 10.0
-    core_holding: 30.0       # 별도 풀 관리 (locked)
+    theme_chasing: 5.0
+    momentum_breakout: 0.0
+    sepa_trend: 25.0
+    rsi2_reversal: 25.0
+    strategic_swing: 10.0
+    core_holding: 30.0
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 3.5
@@ -32,8 +33,7 @@ exit_manager:
   trailing_stop_pct: 3.0
 core_holding:
   rebalance_exclude:
-    - "263750"    # 펄어비스 — 수동 매수, 리밸런싱 제외 (2026-03-30 설정)
-
+  - '263750'
 momentum_breakout:
   enabled: false
   stop_loss_pct: 3.5
@@ -81,9 +81,8 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: manual_review
-    timestamp: '2026-03-28T21:14:00'
-    note: 16라운드 복원 — 비활성 momentum 0%, 합계 100%
+    source: weekly_rebalance
+    timestamp: '2026-04-04T00:00:35.462004'
   risk_config.strategy_allocation.core_holding:
     source: manual_review_locked
     timestamp: '2026-03-14T00:15:00'
