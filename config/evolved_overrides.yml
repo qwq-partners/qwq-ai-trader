@@ -24,10 +24,10 @@ risk_config:
     strategic_swing: 10.0
     core_holding: 30.0
 exit_manager:
-  max_stop_pct: 6.0
+  max_stop_pct: 8.0
   min_stop_pct: 3.5
   first_exit_pct: 5.0
-  first_exit_ratio: 0.3
+  first_exit_ratio: 0.2
   stop_loss_pct: 3.5
   trailing_activate_pct: 5.0
   trailing_stop_pct: 3.0

@@ -227,15 +227,26 @@ class ThemeChasingStrategy(BaseStrategy):
         if change_pct < self.theme_config.min_change_pct:
             return None
 
-        # 시간대별 등락률 상한 차등 (장초반 추격 방지)
+        # 시간대별 등락률 상한 차등 + 오후 진입 차단
         now_time = datetime.now().strftime("%H:%M")
+        if now_time >= "14:00":
+            logger.debug(f"[테마 추종] {symbol} 오후 진입 차단 (14:00+) — 오버나이트 갭 리스크")
+            return None
         if now_time < "10:00":
             _max_change = self.theme_config.max_change_pct_morning  # 4%
         else:
-            _max_change = self.theme_config.max_change_pct  # 8%
+            _max_change = min(self.theme_config.max_change_pct, 7.0)  # 7% 상한
         if change_pct > _max_change:
             logger.debug(f"[테마 추종] {symbol} 과열 (등락률 {change_pct:.1f}% > {_max_change:.0f}%)")
             return None
+
+        # 급등 후 눌림 확인: 장중 고점 대비 최소 1% 이상 하락해야 진입
+        day_high = indicators.get("high", 0)
+        if day_high > 0 and price > 0 and change_pct > 5.0:
+            retreat_from_high = (day_high - price) / day_high * 100
+            if retreat_from_high < 1.0:
+                logger.debug(f"[테마 추종] {symbol} 눌림 미확인: 고점 대비 {retreat_from_high:.1f}% 후퇴 (최소 1%)")
+                return None
 
         # 대형주 테마 편입 차단 (시총 상위 대형주는 테마 모멘텀 약함)
         if self.theme_config.exclude_large_cap_symbols:
