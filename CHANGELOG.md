@@ -1,5 +1,31 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-04 — LLM 복기 반영 + 종합 리뷰 수정 + strategic_swing 승격
+
+### LLM 복기 반영 (a073c03)
+- ATR 동적 손절 범위 확대: `max_stop_pct` 6→8% (ATR 6%+ 종목 조기 손절 방지)
+- 1차 익절 비율 축소: `first_exit_ratio` 30→20% (수익 거래 80% 추세 추종 잔류)
+- theme_chasing 재설계: 급등률 상한 7%, 14:00+ 진입 차단, +5% 급등 시 눌림 1%+ 필수
+
+### strategic_swing 정식 승격 (039ad2d)
+- `_VALID_STRATEGIES`에 추가, 예산 10% 배분 (sepa 25%, rsi2 25%, core 30%)
+- 복합 시그널(2계층+) 기반 고conviction 진입, 7건 57.1%/+2.50% 최고 성과
+
+### RLAY 무한 루프 수정 (039ad2d)
+- 매도 수량 > 실제 보유 → 자동 클램핑
+- 연속 3회 실패 → 포트폴리오 동기화 강제 + 카운터 리셋
+
+### 배치 indicators 누락 수정 (039ad2d, d4a5f6c)
+- execute_pending_signals에서 스크리너 캐시 indicators 주입
+- LLM 이중검증 "지표 비어있어 거부" → 정상 검증 가능
+- position_multiplier 배치 경로 재계산 주입
+
+### 종합 리뷰 수정 (ea56d5d, d4a5f6c, 0af09ec)
+- P0: US sepa_trend logger 미임포트, 시장체제 항상 sideways 고정, theme_chasing high키 폴백
+- P1: US 크로스검증 빈 indicators → indicator_cache 주입
+- P1: US 시장체제 PARAMS 실제 적용 (min_score_adj, max_buys, position_mult_boost)
+- P1: RSI2 데드코드, or 0 패턴, 매도실패 카운터 정리
+
 ## 2026-04-02 — US 엔진 고도화: KR 엔진 3대 기능 이식
 
 ### Phase 1: ATR 기반 포지션 사이징
