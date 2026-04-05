@@ -32,3 +32,8 @@ model: sonnet
 - 시장 환경 변화를 파라미터 문제와 구분
 - 신뢰구간 없이 점 추정만으로 결론 금지
 - 롤백 기준 명시 (손익비 < 1.0 → 즉시 롤백)
+
+## 참조 문서
+- `docs/README.md` — 전체 문서 인덱스
+- `docs/evolution/evolution-system.md` — 진화 시스템
+- `docs/strategies/kr-strategies.md` — 전략 파라미터

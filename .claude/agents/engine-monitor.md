@@ -34,3 +34,8 @@ model: haiku
 - 장 마감 후 KIS API "조회 오류"는 정상 (시스템 점검 시간)
 - MCP/pykrx/stock master 관련 경고는 무시
 - 에러와 경고를 구분하여 보고 (에러만 즉시 조치)
+
+## 참조 문서
+- `docs/README.md` — 전체 문서 인덱스
+- `docs/operations/runbook.md` — 운영 매뉴얼
+- `docs/architecture/system-overview.md` — 아키텍처

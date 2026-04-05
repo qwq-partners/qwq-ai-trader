@@ -32,3 +32,8 @@ model: sonnet
 - 섹터 로테이션 방향 (어디서 어디로)
 - 전략별 체제 적합도 (1~10)
 - 포지션 사이징 권고 (공격/방어/중립)
+
+## 참조 문서
+- `docs/README.md` — 전체 문서 인덱스
+- `docs/strategies/us-strategies.md` — US 전략+시장체제
+- `docs/integrations/external-apis.md` — API 연동

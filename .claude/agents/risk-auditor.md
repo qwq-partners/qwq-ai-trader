@@ -39,3 +39,8 @@ model: sonnet
 - `src/risk/manager.py`
 - `src/core/engine.py` — strategy_allocation, position sizing
 - `src/core/evolution/strategy_evolver.py` — 가드레일
+
+## 참조 문서
+- `docs/README.md` — 전체 문서 인덱스
+- `docs/risk/risk-and-exit.md` — 리스크 관리
+- `docs/operations/runbook.md` — 트러블슈팅

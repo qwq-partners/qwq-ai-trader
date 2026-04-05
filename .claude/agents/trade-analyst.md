@@ -31,3 +31,8 @@ model: sonnet
 - 모든 수치는 수수료 포함 기준 (KR: 왕복 0.227%)
 - 소수 거래 표본에서 과적합 결론 금지 (최소 10건 이상)
 - 시장 환경(bull/bear) 구분하여 전략 성과 평가
+
+## 참조 문서
+- `docs/README.md` — 전체 문서 인덱스
+- `docs/strategies/kr-strategies.md` — KR 전략 상세
+- `docs/risk/risk-and-exit.md` — 리스크/청산
