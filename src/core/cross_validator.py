@@ -22,12 +22,13 @@ class CrossStrategyValidator:
     """
 
     def __init__(self, portfolio=None, risk_manager=None, trade_memory=None,
-                 llm_manager=None, market: str = "KR"):
+                 llm_manager=None, market: str = "KR", trade_wiki=None):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
         self._trade_memory = trade_memory
         self._llm_manager = llm_manager  # LLM 종합 판단 (선택적)
         self._market = market  # "KR" 또는 "US"
+        self._trade_wiki = trade_wiki  # 거래 위키 (교훈 컨텍스트)
 
         # 오늘 검증 통계
         self._stats = {
@@ -259,6 +260,11 @@ class CrossStrategyValidator:
             if self._trade_memory and hasattr(self._trade_memory, 'get_context_for_signal'):
                 mem_context = self._trade_memory.get_context_for_signal(strategy, sector)
 
+            # 위키 컨텍스트 (전략/섹터/체제별 축적 교훈)
+            wiki_context = ""
+            if self._trade_wiki:
+                wiki_context = self._trade_wiki.query(strategy, sector, market_regime)
+
             prompt = (
                 f"종목 {symbol}, 전략 {strategy}, 점수 {score:.0f}.\n"
                 f"시장 체제: {market_regime}."
@@ -269,6 +275,7 @@ class CrossStrategyValidator:
                 f"PER={indicators.get('per', 'N/A')}, "
                 f"수급={'+' if (indicators.get('foreign_net_buy') if indicators.get('foreign_net_buy') is not None else 0) > 0 else '-'}.\n"
                 + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
+                + (f"위키 교훈: {wiki_context}\n" if wiki_context else "")
                 + "\n이 매수 시그널을 승인하시겠습니까? "
                 "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )

@@ -41,6 +41,7 @@ class LLMTask(str, Enum):
     QUICK_CLASSIFY = "quick_classify"        # 빠른 분류 -> Gemini Flash
     STRATEGY_ANALYSIS = "strategy_analysis"  # 전략 분석/진화 -> GPT-4
     QUICK_ANALYSIS = "quick_analysis"        # 빠른 실시간 분석 -> Gemini Flash
+    WIKI_INGEST = "wiki_ingest"              # 위키 교훈 추출 -> Gemini Flash
 
 
 @dataclass
@@ -419,6 +420,10 @@ class LLMManager:
             "fallback": (LLMProvider.GEMINI, "heavy"),
         },
         LLMTask.QUICK_ANALYSIS: {
+            "primary": (LLMProvider.GEMINI, "light"),
+            "fallback": (LLMProvider.OPENAI, "light"),
+        },
+        LLMTask.WIKI_INGEST: {
             "primary": (LLMProvider.GEMINI, "light"),
             "fallback": (LLMProvider.OPENAI, "light"),
         },

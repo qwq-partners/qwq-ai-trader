@@ -1705,6 +1705,17 @@ class USScheduler:
                                  _p_pnl, _p_pnl_pct,
                                  pos.strategy or '', _p_exit_type),
                             )
+                            # Wiki Ingest (fire-and-forget)
+                            _wiki = getattr(eng, 'cross_validator', None)
+                            _wiki = getattr(_wiki, '_trade_wiki', None) if _wiki else None
+                            if _wiki:
+                                asyncio.create_task(_wiki.ingest({
+                                    "symbol": symbol, "name": pos.name or symbol,
+                                    "strategy": pos.strategy or '',
+                                    "sector": eng._sector_cache.get(symbol, ''),
+                                    "pnl_pct": _p_pnl_pct, "exit_type": _p_exit_type,
+                                    "holding_days": 0, "market_regime": getattr(eng, '_market_regime_str', 'neutral'),
+                                }))
                         logger.info(
                             f"[US 동기화] {symbol} 수량 감소 감지: "
                             f"{old_qty}→{new_qty}주 (매도 {sold_qty}주 기록)"

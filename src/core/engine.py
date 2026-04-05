@@ -942,6 +942,10 @@ class RiskManager:
         from .evolution.trade_memory import TradeMemory
         self._trade_memory = TradeMemory(llm_manager=_llm_mgr)
 
+        # 거래 위키 (Karpathy LLM Wiki 패턴)
+        from .evolution.trade_wiki import TradeWiki
+        self._trade_wiki = TradeWiki(llm_manager=_llm_mgr)
+
         # 크로스 전략 검증 게이트 (LLM 이중 검증 활성화)
         from .cross_validator import CrossStrategyValidator
         self._cross_validator = CrossStrategyValidator(
@@ -949,6 +953,7 @@ class RiskManager:
             risk_manager=risk_validator,
             trade_memory=self._trade_memory,
             llm_manager=_llm_mgr,
+            trade_wiki=self._trade_wiki,
         )
 
         # 주문 실패 쿨다운 추적 (종목별)

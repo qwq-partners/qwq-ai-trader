@@ -1444,6 +1444,19 @@ JSON:
                                                         market_regime=_regime,
                                                         market_level=_kospi_level,
                                                     )
+                                                    # 위키 Ingest (fire-and-forget)
+                                                    _wiki = getattr(bot.engine.risk_manager, '_trade_wiki', None)
+                                                    if _wiki:
+                                                        asyncio.create_task(_wiki.ingest({
+                                                            "symbol": fill.symbol,
+                                                            "name": getattr(_sell_pos_snap, 'name', ''),
+                                                            "strategy": _sell_pos_snap.strategy or '',
+                                                            "sector": getattr(_sell_pos_snap, 'sector', ''),
+                                                            "pnl_pct": _pnl_pct,
+                                                            "exit_type": _etype,
+                                                            "holding_days": _holding,
+                                                            "market_regime": _regime,
+                                                        }))
                                                 except Exception as _mem_err:
                                                     logger.debug(f"[거래메모리] 기록 실패 (무시): {_mem_err}")
                                         else:
@@ -3721,6 +3734,15 @@ JSON:
                                 await self._analyze_false_negatives()
                             except Exception as _fn_e:
                                 logger.error(f"[FN분석] 오류: {_fn_e}")
+
+                        # Wiki Lint (주간 헬스체크)
+                        try:
+                            _wiki = getattr(bot.engine.risk_manager, '_trade_wiki', None)
+                            if _wiki:
+                                _lint = await _wiki.lint()
+                                logger.info(f"[Wiki Lint] 완료: {_lint.get('total_pages',0)}p, stale={len(_lint.get('stale_pages',[]))}")
+                        except Exception as _wl_e:
+                            logger.debug(f"[Wiki Lint] 오류 (무시): {_wl_e}")
 
                 await asyncio.sleep(60)
 
