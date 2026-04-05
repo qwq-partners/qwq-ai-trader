@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(systemctl is-active*)",
+      "Bash(journalctl*)",
+      "Bash(source venv/bin/activate*)",
+      "Bash(python3 -m py_compile*)",
+      "Bash(find src/ scripts/ -name*)",
+      "Bash(curl -s http://localhost:8080*)",
+      "Bash(wc -l*)",
+      "Bash(ls*)",
+      "Bash(cat /home/user/.cache/ai_trader*)",
+      "Bash(grep*)",
+      "Bash(echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader*)",
+      "Bash(echo 'user123!' | sudo -S -k systemctl stop qwq-ai-trader*)",
+      "Bash(echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader*)",
+      "Bash(sleep*)",
+      "Read(/home/user/**)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE '\\.(py)$' 2>/dev/null; then python3 -m py_compile \"$(echo \"$TOOL_INPUT\" | grep -oP '\"file_path\":\\s*\"\\K[^\"]+')\" 2>&1 || true; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

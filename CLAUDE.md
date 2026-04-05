@@ -1,5 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
-> 최종 업데이트: 2026-03-04
+> 최종 업데이트: 2026-04-06
 
 ## 세션 시작 시 필수 읽기
 
@@ -331,6 +331,24 @@ INITIAL_CAPITAL (KR, 기본 500000)
 - 즉시 롤백: 손익비 < 1.0
 - 내장 규칙: 승률 < 40% → 진입 기준 +5, 승률 > 65% → 진입 기준 -5
 - 결과는 `evolved_overrides.yml`에 영속화
+
+## Trade Wiki (Karpathy LLM Wiki 패턴)
+
+- 거래 교훈을 전략/섹터/시장체제별 마크다운 위키로 축적
+- 위치: `~/.cache/ai_trader/wiki/`
+- 3가지 오퍼레이션:
+  - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM(Gemini Flash) 교훈 추출
+  - **Query**: 크로스검증 시 전략/섹터/체제별 축적 교훈 컨텍스트 반환
+  - **Lint**: 토요일 주간 헬스체크 (stale/저조 페이지 감지)
+- 동시성: `asyncio.Lock`, fire-and-forget (매매 비차단)
+- 크기 제한: 페이지 200줄, 로그 500줄, 전체 ~1MB
+
+## US 엔진 고도화
+
+- ATR 기반 포지션 사이징 (3개 전략 통일)
+- SPY/QQQ 기반 시장 체제 판단 (`us_market_regime.py`)
+- 크로스 검증 게이트 6규칙 (수급 제외, bear시 어닝스 허용)
+- 체제별 파라미터: min_score_adj, max_daily_new_buys, position_mult_boost
 
 ---
 

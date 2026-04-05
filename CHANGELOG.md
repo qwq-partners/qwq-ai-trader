@@ -1,5 +1,29 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-06 — Trade Wiki 시스템 (Karpathy LLM Wiki 패턴)
+
+### Trade Wiki 구현 (22dad71, 6d0b301)
+- **Karpathy LLM Wiki 패턴** 적용 — 거래 교훈을 전략/섹터/시장체제별 마크다운 위키로 축적
+- `src/core/evolution/trade_wiki.py` 신규 (TradeWiki 클래스, ~350줄)
+- 3가지 오퍼레이션:
+  - **Ingest**: 매도 체결 → 전략/섹터/체제 위키 3~5개 페이지 자동 업데이트 + LLM 교훈 추출 (Gemini Flash)
+  - **Query**: 크로스검증 시 관련 위키 교훈 컨텍스트 반환 (파일 읽기, <1ms)
+  - **Lint**: 주간(토요일) 헬스체크 — stale 페이지, 저조 승률 감지
+- 위키 구조: `~/.cache/ai_trader/wiki/{strategies,sectors,regimes}/*.md` + `index.md` + `log.md`
+- 동시성: `asyncio.Lock` 보호, fire-and-forget (매매 비차단)
+- 통합: KR/US 양쪽 SELL 체결 시 ingest, LLM 이중검증 프롬프트에 wiki 교훈 주입
+
+### 리뷰 수정 (6d0b301)
+- P0: LLM `generate()` → `complete()` + `resp.content` 접근
+- P0: US 엔진에 TradeWiki 인스턴스 전달 (run_trader.py)
+- P1: 비테이블(교훈) 섹션 max_rows 불릿 행 인식
+- P1: `asyncio.Lock` 동시 ingest 방지
+- P1: ingest 메서드 들여쓰기 정합성
+
+### 최종 종합 리뷰 PASS
+- P0: 0건 / P1: 0건 / P2: 3건 (경미, 기능 무해)
+- 13개 검증 항목 전체 PASS (wiki 경로, import, ATR 가드, 배분 합계 등)
+
 ## 2026-04-04 — LLM 복기 반영 + 종합 리뷰 수정 + strategic_swing 승격
 
 ### LLM 복기 반영 (a073c03)
