@@ -1262,12 +1262,16 @@ class UnifiedTradingBot:
 
             try:
                 from src.core.cross_validator import CrossStrategyValidator
+                from src.core.evolution.trade_wiki import TradeWiki
+                from src.utils.llm import get_llm_manager as _get_llm
+                _us_wiki = TradeWiki(llm_manager=_get_llm())
                 us_engine.cross_validator = CrossStrategyValidator(
                     portfolio=us_engine.portfolio,
                     risk_manager=us_engine.risk_manager,
                     market="US",
+                    trade_wiki=_us_wiki,
                 )
-                logger.info("[US] 크로스 검증 게이트 초기화 완료")
+                logger.info("[US] 크로스 검증 게이트 + Wiki 초기화 완료")
             except Exception as _e:
                 logger.warning(f"[US] 크로스 검증 초기화 실패 (무시): {_e}")
 

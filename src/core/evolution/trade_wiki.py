@@ -43,6 +43,7 @@ class TradeWiki:
         (self._dir / "strategies").mkdir(exist_ok=True)
         (self._dir / "regimes").mkdir(exist_ok=True)
         (self._dir / "sectors").mkdir(exist_ok=True)
+        self._lock = asyncio.Lock()  # 동시 ingest 방지
 
     # ================================================================
     # Ingest: 매도 체결 후 관련 위키 페이지 업데이트
@@ -55,41 +56,42 @@ class TradeWiki:
             trade: {symbol, name, strategy, sector, pnl_pct, exit_type,
                     holding_days, market_regime, entry_price, exit_price, ...}
         """
-        try:
-            symbol = trade.get("symbol", "")
-            strategy = trade.get("strategy", "unknown")
-            sector = trade.get("sector", "")
-            regime = trade.get("market_regime", "neutral")
-            pnl_pct = trade.get("pnl_pct", 0)
-            name = trade.get("name", symbol)
+        async with self._lock:
+            try:
+                symbol = trade.get("symbol", "")
+                strategy = trade.get("strategy", "unknown")
+                sector = trade.get("sector", "")
+                regime = trade.get("market_regime", "neutral")
+                pnl_pct = trade.get("pnl_pct", 0)
+                name = trade.get("name", symbol)
 
-            # 1. 전략 페이지 업데이트
-            await self._update_strategy_page(strategy, trade)
+                # 1. 전략 페이지 업데이트
+                await self._update_strategy_page(strategy, trade)
 
-            # 2. 섹터 페이지 업데이트 (섹터 정보 있을 때만)
-            if sector:
-                await self._update_sector_page(sector, trade)
+                # 2. 섹터 페이지 업데이트 (섹터 정보 있을 때만)
+                if sector:
+                    await self._update_sector_page(sector, trade)
 
-            # 3. 시장 체제 페이지 업데이트
-            await self._update_regime_page(regime, trade)
+                # 3. 시장 체제 페이지 업데이트
+                await self._update_regime_page(regime, trade)
 
-            # 4. LLM 교훈 추출 (선택적)
-            lesson = ""
-            if self._llm:
-                lesson = await self._extract_lesson(trade)
+                # 4. LLM 교훈 추출 (선택적)
+                lesson = ""
+                if self._llm:
+                    lesson = await self._extract_lesson(trade)
 
-            # 5. 로그 추가
-            self._append_log(trade, lesson)
+                # 5. 로그 추가
+                self._append_log(trade, lesson)
 
-            # 6. 인덱스 재생성
-            self._rebuild_index()
+                # 6. 인덱스 재생성
+                self._rebuild_index()
 
-            logger.info(
-                f"[Wiki] Ingest: {symbol} {name} ({strategy}, "
-                f"{pnl_pct:+.1f}%) → 위키 업데이트 완료"
-            )
-        except Exception as e:
-            logger.debug(f"[Wiki] Ingest 실패 (무시): {e}")
+                logger.info(
+                    f"[Wiki] Ingest: {symbol} {name} ({strategy}, "
+                    f"{pnl_pct:+.1f}%) -> wiki updated"
+                )
+            except Exception as e:
+                logger.debug(f"[Wiki] Ingest fail (ignored): {e}")
 
     async def _update_strategy_page(self, strategy: str, trade: Dict):
         """전략 위키 페이지 업데이트"""
@@ -185,8 +187,8 @@ class TradeWiki:
                 f"새 교훈을 1~2줄로 작성하세요. 기존과 중복되지 않는 새로운 관점만."
             )
 
-            result = await self._llm.generate(prompt, task=LLMTask.WIKI_INGEST, max_tokens=150)
-            lesson = result.strip()
+            resp = await self._llm.complete(prompt, task=LLMTask.WIKI_INGEST, max_tokens=150)
+            lesson = (resp.content if resp.success else "").strip()
             if lesson:
                 # 전략 페이지 교훈 섹션에 추가
                 page = self._read_or_create(strat_path, "")
@@ -436,12 +438,15 @@ class TradeWiki:
 
         lines.insert(table_data_start, row)
 
-        # max_rows 초과 시 오래된 행 삭제
+        # max_rows 초과 시 오래된 행 삭제 (테이블 | 행 + 불릿 - 행 모두)
         data_rows = []
         for i in range(table_data_start, len(lines)):
-            if lines[i].startswith("|") and not lines[i].startswith("|--"):
+            line_s = lines[i].strip()
+            if line_s.startswith("|") and not line_s.startswith("|--"):
                 data_rows.append(i)
-            elif not lines[i].startswith("|"):
+            elif line_s.startswith("- "):
+                data_rows.append(i)
+            elif line_s.startswith("##") or (line_s == "" and i > table_data_start + 1):
                 break
         while len(data_rows) > max_rows:
             lines.pop(data_rows[-1])
