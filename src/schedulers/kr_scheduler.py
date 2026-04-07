@@ -3771,8 +3771,7 @@ JSON:
                         _tpm = TradingPrinciplesManager(trade_memory=_tp_memory, llm_manager=_tp_llm)
                         _tp_report = await _tpm.generate_weekly_report()
                         _tpm.save_report(_tp_report)
-                        if bot.telegram:
-                            await bot.telegram.send_message(_tp_report, parse_mode="HTML")
+                        await send_alert(_tp_report)
                         logger.info("[거래원칙] 주간 리포트 생성 + 텔레그램 전송 완료")
                     except Exception as _tp_e:
                         logger.warning(f"[거래원칙] 주간 리포트 실패 (무시): {_tp_e}")

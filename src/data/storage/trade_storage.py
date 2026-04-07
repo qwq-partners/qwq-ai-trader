@@ -437,6 +437,16 @@ class TradeStorage:
         if not self._db_available or not self.pool:
             return self._journal.get_statistics(days)
 
+        # 풀 상태 검증 — 풀이 닫혀있으면 재연결 시도
+        try:
+            if self.pool._closed:
+                logger.warning("[TradeStorage] DB 풀 닫힘 — 재연결 시도")
+                await self.connect()
+                if not self._db_available:
+                    return self._journal.get_statistics(days)
+        except AttributeError:
+            pass
+
         cutoff = datetime.now() - timedelta(days=days)
         try:
             async with self.pool.acquire() as conn:
@@ -541,7 +551,7 @@ class TradeStorage:
             }
 
         except Exception as e:
-            logger.warning(f"[TradeStorage] DB 통계 조회 실패, JSON 폴백: {e}")
+            logger.warning(f"[TradeStorage] DB 통계 조회 실패, JSON 폴백: {type(e).__name__}: {e}")
             return self._journal.get_statistics(days)
 
     def update_review(
