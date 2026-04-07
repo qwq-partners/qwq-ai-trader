@@ -415,8 +415,8 @@ class TradeJournal:
         wins = [t for t in trades if t.is_win]
         losses = [t for t in trades if not t.is_win]
 
-        total_pnl = sum(t.pnl for t in trades)
-        avg_pnl_pct = sum(t.pnl_pct for t in trades) / len(trades)
+        total_pnl = sum(float(t.pnl) for t in trades)
+        avg_pnl_pct = sum(float(t.pnl_pct) for t in trades) / len(trades)
         avg_holding = sum(t.holding_minutes for t in trades) / len(trades)
 
         best = max(trades, key=lambda t: t.pnl_pct) if trades else None
@@ -448,7 +448,7 @@ class TradeJournal:
             stats[strategy]["trades"] += 1
             if trade.is_win:
                 stats[strategy]["wins"] += 1
-            stats[strategy]["total_pnl"] += trade.pnl
+            stats[strategy]["total_pnl"] += float(trade.pnl)
 
         # 승률 계산
         for strategy, s in stats.items():
@@ -468,7 +468,7 @@ class TradeJournal:
             stats[exit_type]["trades"] += 1
             if trade.is_win:
                 stats[exit_type]["wins"] += 1
-            stats[exit_type]["total_pnl_pct"] += trade.pnl_pct
+            stats[exit_type]["total_pnl_pct"] += float(trade.pnl_pct)
 
         # 평균 계산
         for exit_type, s in stats.items():
