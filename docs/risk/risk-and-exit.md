@@ -84,6 +84,19 @@
 | TP2 | 15% | 8% | 10% |
 | TP3 | 25% | 15% | 20% |
 
+## 시장 체제별 동적 파라미터 (market_regime.py → engine.py)
+
+| 파라미터 | bull | neutral | sideways | bear |
+|----------|------|---------|---------|------|
+| min_score_adj | -10 | 0 | +3 | +10 |
+| max_daily_new_buys | 6 | 4 | 3 | 2 |
+| position_mult_boost | 1.2x | 1.0x | 0.9x | 0.7x |
+| max_positions_adj | +2 | 0 | 0 | -2 |
+| base_position_pct | 30% | 25% | 25% | 20% |
+| min_cash_reserve | 3% | 5% | 5% | 10% |
+
+bull 시 효과: max_positions 8→10, 현금 5→3%, 비중 25→30% → **현금 적극 배치**
+
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 
 ```

@@ -623,20 +623,33 @@ class UnifiedEngine:
         """포지션 조회"""
         return self.portfolio.positions.get(symbol)
 
+    def _get_regime_params(self) -> dict:
+        """현재 시장 체제 파라미터 (MarketRegimeAdapter에서 동적 조회)"""
+        engine = getattr(self, '_engine_ref', None) or self._engine
+        adapter = getattr(engine, '_regime_adapter', None)
+        if adapter and hasattr(adapter, 'get_params'):
+            return adapter.get_params()
+        return {}
+
     def get_available_cash(self) -> Decimal:
-        """가용 현금 (최소 현금 보유량 제외)"""
-        min_reserve = self.portfolio.total_equity * Decimal(str(self.config.risk.min_cash_reserve_pct / 100))
+        """가용 현금 (최소 현금 보유량 제외, 체제별 동적)"""
+        rp = self._get_regime_params()
+        min_reserve_pct = rp.get("min_cash_reserve_pct", self.config.risk.min_cash_reserve_pct)
+        min_reserve = self.portfolio.total_equity * Decimal(str(min_reserve_pct / 100))
         return max(self.portfolio.cash - min_reserve, Decimal("0"))
 
     def get_effective_max_positions(self, reserved_cash: Decimal = Decimal("0")) -> int:
-        """자산 규모 + 여유자금 기반 실효 최대 포지션 수"""
+        """자산 규모 + 여유자금 기반 실효 최대 포지션 수 (체제별 동적)"""
         risk = self.config.risk
-        max_pos = risk.max_positions
+        rp = self._get_regime_params()
+        max_pos = risk.max_positions + rp.get("max_positions_adj", 0)
         if risk.dynamic_max_positions and risk.min_position_value > 0:
             equity_f = float(self.portfolio.total_equity)
             if equity_f > 0:
-                investable = equity_f * (1 - risk.min_cash_reserve_pct / 100)
-                per_pos = max(equity_f * risk.base_position_pct / 100, risk.min_position_value)
+                _min_cash = rp.get("min_cash_reserve_pct", risk.min_cash_reserve_pct)
+                _base_pos = rp.get("base_position_pct", risk.base_position_pct)
+                investable = equity_f * (1 - _min_cash / 100)
+                per_pos = max(equity_f * _base_pos / 100, risk.min_position_value)
                 calculated = int(investable / per_pos) if per_pos > 0 else 0
                 max_pos = min(max(1, calculated), risk.max_positions)
         # Flex: 여유자금 시 추가 슬롯

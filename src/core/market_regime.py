@@ -22,24 +22,33 @@ class MarketRegimeAdapter:
     # 체제별 파라미터 기본값
     REGIME_PARAMS = {
         "bull": {
-            "sepa_min_score_adj": -5,       # 기본 min_score에서 완화
-            "theme_max_change_adj": 2.0,    # 기본 max_change에 추가
-            "max_daily_new_buys": 5,
-            "position_mult_boost": 1.1,
-            "description": "강세장: 적극적 진입",
+            "sepa_min_score_adj": -10,      # 기본 min_score 대폭 완화 (60→50)
+            "theme_max_change_adj": 2.0,
+            "max_daily_new_buys": 6,        # 적극 매수 (5→6)
+            "position_mult_boost": 1.2,     # 포지션 20% 확대
+            "max_positions_adj": +2,        # 최대 포지션 +2 확대 (8→10)
+            "base_position_pct": 30.0,      # 기본 비중 25→30%
+            "min_cash_reserve_pct": 3.0,    # 최소 현금 5→3%
+            "description": "강세장: 공격적 현금 배치",
         },
         "bear": {
-            "sepa_min_score_adj": +10,      # 기본 min_score에서 강화
-            "theme_max_change_adj": -2.0,   # 기본 max_change에서 축소
+            "sepa_min_score_adj": +10,
+            "theme_max_change_adj": -2.0,
             "max_daily_new_buys": 2,
             "position_mult_boost": 0.7,
-            "description": "약세장: 보수적 진입",
+            "max_positions_adj": -2,        # 최대 포지션 축소
+            "base_position_pct": 20.0,      # 기본 비중 축소
+            "min_cash_reserve_pct": 10.0,   # 현금 비중 확대
+            "description": "약세장: 보수적 방어",
         },
         "sideways": {
             "sepa_min_score_adj": +3,
             "theme_max_change_adj": 0.0,
             "max_daily_new_buys": 3,
             "position_mult_boost": 0.9,
+            "max_positions_adj": 0,
+            "base_position_pct": 25.0,
+            "min_cash_reserve_pct": 5.0,
             "description": "횡보장: 선별적 진입",
         },
         "neutral": {
@@ -47,6 +56,9 @@ class MarketRegimeAdapter:
             "theme_max_change_adj": 0.0,
             "max_daily_new_buys": 4,
             "position_mult_boost": 1.0,
+            "max_positions_adj": 0,
+            "base_position_pct": 25.0,
+            "min_cash_reserve_pct": 5.0,
             "description": "중립: 기본 기준",
         },
     }
@@ -55,6 +67,10 @@ class MarketRegimeAdapter:
         self._current_regime: str = "neutral"
         self._regime_data: Dict = {}
         self._last_update: Optional[datetime] = None
+
+    def get_params(self) -> Dict:
+        """현재 체제의 파라미터 반환"""
+        return self.REGIME_PARAMS.get(self._current_regime, self.REGIME_PARAMS["neutral"])
 
     def update_regime(self, kospi_data: dict, kosdaq_data: dict):
         """
