@@ -22,24 +22,24 @@ class MarketRegimeAdapter:
     # 체제별 파라미터 기본값
     REGIME_PARAMS = {
         "bull": {
-            "sepa_min_score_adj": -10,      # 기본 min_score 대폭 완화 (60→50)
+            "sepa_min_score_adj": -5,       # 기본 min_score 완화 (60→55)
             "theme_max_change_adj": 2.0,
-            "max_daily_new_buys": 6,        # 적극 매수 (5→6)
-            "position_mult_boost": 1.2,     # 포지션 20% 확대
+            "max_daily_new_buys": 5,        # 적극 매수
+            "position_mult_boost": 1.0,     # base 30%로 이미 확대 → boost 중복 방지
             "max_positions_adj": +2,        # 최대 포지션 +2 확대 (8→10)
             "base_position_pct": 30.0,      # 기본 비중 25→30%
-            "min_cash_reserve_pct": 3.0,    # 최소 현금 5→3%
-            "description": "강세장: 공격적 현금 배치",
+            "min_cash_reserve_pct": 5.0,    # 최소 현금 5% 유지 (절대 하한)
+            "description": "강세장: 비중 확대 + 포지션 확장",
         },
         "bear": {
-            "sepa_min_score_adj": +10,
+            "sepa_min_score_adj": +15,      # 기준 대폭 강화 (60→75)
             "theme_max_change_adj": -2.0,
-            "max_daily_new_buys": 2,
-            "position_mult_boost": 0.7,
-            "max_positions_adj": -2,        # 최대 포지션 축소
-            "base_position_pct": 20.0,      # 기본 비중 축소
-            "min_cash_reserve_pct": 10.0,   # 현금 비중 확대
-            "description": "약세장: 보수적 방어",
+            "max_daily_new_buys": 1,        # 극소 매수 (2→1)
+            "position_mult_boost": 0.6,     # 포지션 40% 축소
+            "max_positions_adj": -2,
+            "base_position_pct": 18.0,      # 기본 비중 축소
+            "min_cash_reserve_pct": 15.0,   # 현금 15% 확보
+            "description": "약세장: 극보수적 방어",
         },
         "sideways": {
             "sepa_min_score_adj": +3,
@@ -95,15 +95,45 @@ class MarketRegimeAdapter:
 
         prev_regime = self._current_regime
 
-        if avg_change > 1.0 and avg_vs_open > 0.3:
-            self._current_regime = "bull"
+        # 장초 1시간(09:00~10:00) neutral 고정 — 초기 모멘텀으로 bull/bear 오판 방지
+        now_hm = datetime.now().strftime("%H:%M")
+        if "09:00" <= now_hm < "10:00":
+            self._current_regime = "neutral"
+        elif avg_change > 1.0 and avg_vs_open > 0.3:
+            # 체제 전환 지연: bull/bear 전환 시 30분 확인
+            if prev_regime != "bull":
+                if not hasattr(self, '_pending_regime') or self._pending_regime != "bull":
+                    self._pending_regime = "bull"
+                    self._pending_since = datetime.now()
+                    self._current_regime = prev_regime  # 유지
+                elif (datetime.now() - self._pending_since).total_seconds() >= 1800:
+                    self._current_regime = "bull"
+                    self._pending_regime = None
+                else:
+                    self._current_regime = prev_regime  # 30분 미만 → 유지
+            else:
+                self._current_regime = "bull"
+                self._pending_regime = None
         elif avg_change < -1.0 and avg_vs_open < -0.3:
-            self._current_regime = "bear"
+            if prev_regime != "bear":
+                if not hasattr(self, '_pending_regime') or self._pending_regime != "bear":
+                    self._pending_regime = "bear"
+                    self._pending_since = datetime.now()
+                    self._current_regime = prev_regime
+                elif (datetime.now() - self._pending_since).total_seconds() >= 1800:
+                    self._current_regime = "bear"
+                    self._pending_regime = None
+                else:
+                    self._current_regime = prev_regime
+            else:
+                self._current_regime = "bear"
+                self._pending_regime = None
         elif abs(avg_change) <= 1.0:
             self._current_regime = "sideways"
+            self._pending_regime = None
         else:
-            # 혼조: sideways로 분류 (neutral 고착 방지)
             self._current_regime = "sideways"
+            self._pending_regime = None
 
         self._regime_data = {
             "kospi_change": kospi_change,

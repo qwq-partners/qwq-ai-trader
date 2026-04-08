@@ -625,8 +625,7 @@ class UnifiedEngine:
 
     def _get_regime_params(self) -> dict:
         """현재 시장 체제 파라미터 (MarketRegimeAdapter에서 동적 조회)"""
-        engine = getattr(self, '_engine_ref', None) or self._engine
-        adapter = getattr(engine, '_regime_adapter', None)
+        adapter = getattr(self, '_regime_adapter', None)
         if adapter and hasattr(adapter, 'get_params'):
             return adapter.get_params()
         return {}
@@ -651,7 +650,8 @@ class UnifiedEngine:
                 investable = equity_f * (1 - _min_cash / 100)
                 per_pos = max(equity_f * _base_pos / 100, risk.min_position_value)
                 calculated = int(investable / per_pos) if per_pos > 0 else 0
-                max_pos = min(max(1, calculated), risk.max_positions)
+                _regime_max = risk.max_positions + rp.get("max_positions_adj", 0)
+                max_pos = min(max(1, calculated), _regime_max)
         # Flex: 여유자금 시 추가 슬롯
         if risk.flex_extra_positions > 0 and float(self.portfolio.total_equity) > 0:
             avail_cash = float(self.get_available_cash() - reserved_cash)
