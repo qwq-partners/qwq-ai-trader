@@ -625,8 +625,7 @@ class UnifiedEngine:
 
     def _get_regime_params(self) -> dict:
         """현재 시장 체제 파라미터 (MarketRegimeAdapter에서 동적 조회)"""
-        engine = getattr(self, '_engine_ref', None) or self._engine
-        adapter = getattr(engine, '_regime_adapter', None)
+        adapter = getattr(self, '_regime_adapter', None)
         if adapter and hasattr(adapter, 'get_params'):
             return adapter.get_params()
         return {}
