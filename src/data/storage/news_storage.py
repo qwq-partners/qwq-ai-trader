@@ -92,7 +92,7 @@ class NewsStorage:
             logger.info("[NewsStorage] PostgreSQL 연결 완료")
             return True
         except Exception as e:
-            logger.error(f"[NewsStorage] DB 연결 실패: {e}")
+            logger.error(f"[NewsStorage] DB 연결 실패: {type(e).__name__}: {e}")
             return False
 
     async def disconnect(self):
@@ -145,6 +145,8 @@ class NewsStorage:
     async def save_news_batch(self, articles: List[NewsArticle]) -> int:
         """뉴스 기사 배치 저장"""
         await self._ensure_connected()
+        if not self._pool:
+            return 0
 
         saved_count = 0
         try:
@@ -302,6 +304,8 @@ class NewsStorage:
     async def save_themes_batch(self, themes: List[ThemeRecord]) -> int:
         """테마 배치 저장"""
         await self._ensure_connected()
+        if not self._pool:
+            return 0
 
         saved_count = 0
         try:
