@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-15 — evolve() 호출 경로 복원 + 4/7~4/15 복기 기반 10대 개선
+
+### evolve() 자동 호출 복원
+- `src/schedulers/kr_scheduler.py` — 20:30 LLM 복기 직후 `strategy_evolver.evolve(days=7)` 호출 추가
+- CLAUDE.md 설계("TradeReviewer → DailyReviewer → StrategyEvolver")대로 경로 복원
+- 기존 가드레일 유지: 1개 파라미터/5영업일+10건 평가/악화 시 즉시 롤백
+- 이전: LLM이 7일간 max_atr_pct를 반복 권고했으나 evolve() 미호출로 자동 반영 불가
+
 ## 2026-04-15 — 4/7~4/15 복기 기반 10대 개선
 
 ### P0: 즉시 조치 (3건)

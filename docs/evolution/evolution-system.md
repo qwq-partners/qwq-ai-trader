@@ -88,7 +88,7 @@ wiki/
 - 메서드: `self._llm.complete(prompt, task=..., max_tokens=150)`
 - 응답: `resp.content.strip()` (LLMResponse 객체)
 
-## 3. 전략 진화 (strategy_evolver.py)
+## 3. 전략 진화 (strategy_evolver.py) — 매일 20:30 자동 실행
 
 ### 유효 전략
 ```python

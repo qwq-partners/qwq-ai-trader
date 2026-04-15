@@ -3654,6 +3654,30 @@ JSON:
                         else:
                             last_review_date = today
 
+                        # 전략 진화 실행 (LLM 복기 직후)
+                        # 가드레일: 1개 파라미터/5영업일+10건 평가/악화 시 즉시 롤백
+                        if bot.strategy_evolver:
+                            try:
+                                evo_result = await bot.strategy_evolver.evolve(days=7)
+                                evo_status = evo_result.get("status", "unknown")
+                                if evo_status == "applied":
+                                    _change = evo_result.get("change", {})
+                                    logger.info(
+                                        f"[진화] 파라미터 변경 적용: "
+                                        f"{_change.get('strategy', '?')}.{_change.get('parameter', '?')} "
+                                        f"{_change.get('old_value', '?')} → {_change.get('new_value', '?')}"
+                                    )
+                                elif evo_status == "rollback":
+                                    logger.warning(f"[진화] 이전 변경 롤백: {evo_result.get('change', {})}")
+                                elif evo_status == "keep":
+                                    logger.info(f"[진화] 이전 변경 유지 확정")
+                                elif evo_status == "waiting":
+                                    logger.debug(f"[진화] 평가 대기 중: {evo_result.get('reason', '')}")
+                                else:
+                                    logger.debug(f"[진화] {evo_status}: {evo_result.get('reason', '')}")
+                            except Exception as evo_err:
+                                logger.warning(f"[진화] 실행 실패 (무시): {evo_err}")
+
                 await asyncio.sleep(60)
 
         except asyncio.CancelledError:
