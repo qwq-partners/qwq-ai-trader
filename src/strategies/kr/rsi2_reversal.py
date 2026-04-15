@@ -88,6 +88,12 @@ class RSI2ReversalStrategy(BaseStrategy):
                 if atr is None or atr <= 0:
                     logger.debug(f"[RSI2] {candidate.symbol} ATR 누락/0 차단: atr_14={atr}")
                     continue
+
+                # ATR 상한 가드: 극고변동성 종목 역추세 진입 차단
+                _max_atr = self.config.params.get("max_atr_pct", 8.0)
+                if atr > _max_atr:
+                    logger.info(f"[RSI2] {candidate.symbol} ATR 과다 차단: {atr:.1f}% > {_max_atr:.1f}%")
+                    continue
                 # ATR 가드 통과 → atr > 0 보장
                 atr_pct_value = atr
                 stop_pct = max(3.0, min(7.0, atr * 2.0))     # 2×ATR, 3~7% 범위

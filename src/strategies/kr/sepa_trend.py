@@ -104,6 +104,12 @@ class SEPATrendStrategy(BaseStrategy):
                     logger.debug(f"[SEPA] {candidate.symbol} ATR 누락/0 차단: atr_14={atr}")
                     continue
 
+                # ATR 상한 가드: 고변동성 종목 진입 차단 (노이즈 손절 방지)
+                _max_atr = self.config.params.get("max_atr_pct", 6.0)
+                if atr > _max_atr:
+                    logger.info(f"[SEPA] {candidate.symbol} ATR 과다 차단: {atr:.1f}% > {_max_atr:.1f}%")
+                    continue
+
                 # ATR 기반 동적 손절/익절
                 stop_pct = 5.0
                 target_pct = 10.0

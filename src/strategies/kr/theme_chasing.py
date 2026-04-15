@@ -66,8 +66,8 @@ class ThemeChasingConfig(StrategyConfig):
     # 장중 고점 유지 (진입 품질)
     max_high_retreat_pct: float = 3.0        # 장중 고점 대비 최대 후퇴 허용 (%)
 
-    # ATR 진입 필터 (초고변동 종목 차단)
-    max_atr_pct: float = 8.0                 # ATR 상한 (%)
+    # ATR 진입 필터 (고변동 종목 차단 — 노이즈 손절 방지)
+    max_atr_pct: float = 5.5                 # ATR 상한 (%)
 
     # 대형주 제외 (시가총액 상위 대형주는 테마 모멘텀 약함)
     exclude_large_cap_symbols: bool = True    # 대형주 테마 편입 차단
@@ -76,7 +76,7 @@ class ThemeChasingConfig(StrategyConfig):
     max_change_pct_morning: float = 4.0      # 09:05~10:00 (장초반 추격 방지)
 
     # 시간대 제한
-    trading_start_time: str = "09:05" # 시작 시간
+    trading_start_time: str = "09:30" # 시작 시간 (장초반 30분 변동성 회피)
     trading_end_time: str = "15:00"   # 종료 시간
 
 

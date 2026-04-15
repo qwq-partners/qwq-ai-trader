@@ -225,6 +225,9 @@ class StrategyEvolver:
             "max_stop_pct": (3.0, 10.0),
             "min_stop_pct": (1.0, 5.0),
             "daily_max_loss_pct": (2.0, 8.0),
+            "max_atr_pct": (3.0, 15.0),
+            "min_change_pct": (1.0, 5.0),
+            "min_volume_ratio": (1.0, 5.0),
         }
 
         logger.info(f"StrategyEvolver 초기화: 규칙 {len(self._rules)}개, 저장소 {self.storage_dir}")

@@ -696,9 +696,19 @@ class UnifiedEngine:
         # 3-1. 섹터 분산 체크 (P0-5)
         max_per_sector = risk.max_positions_per_sector
         if sector and max_per_sector > 0 and symbol not in self.portfolio.positions:
-            same_sector = sum(1 for p in self.portfolio.positions.values() if p.sector == sector)
+            same_sector_positions = [
+                (s, p) for s, p in self.portfolio.positions.items() if p.sector == sector
+            ]
+            same_sector = len(same_sector_positions)
             if same_sector >= max_per_sector:
                 return False, f"섹터 포지션 한도 초과 ({sector}: {same_sector}/{max_per_sector})"
+            # 동일 섹터 2번째 진입 시 경고 (상관관계 리스크)
+            if same_sector >= 1:
+                existing = [s for s, _ in same_sector_positions]
+                logger.warning(
+                    f"[리스크] 동일 섹터 추가 진입 경고: {symbol} → {sector} "
+                    f"(기존 {existing}, {same_sector+1}/{max_per_sector})"
+                )
         # 통과 시 sector 임시 저장 → on_fill에서 position.sector 설정에 사용
         if sector:
             self._pending_sector_map[symbol] = sector

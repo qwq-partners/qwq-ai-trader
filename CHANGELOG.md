@@ -1,5 +1,62 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-15 — 4/7~4/15 복기 기반 10대 개선
+
+### P0: 즉시 조치 (3건)
+
+#### SEPA max_atr_pct 가드 추가
+- `src/strategies/kr/sepa_trend.py` — ATR 6% 초과 종목 진입 차단
+- 기간 손실 Top 5 중 4건이 ATR 6%+ 종목 (LIG넥스원, 후성, KEC 등)
+- `self.config.params.get("max_atr_pct", 6.0)` — 설정 파일로 조정 가능
+
+#### Theme max_atr_pct 5.5 + min_change_pct 2.5%
+- `src/strategies/kr/theme_chasing.py` — max_atr_pct 기본값 8.0→5.5
+- `config/evolved_overrides.yml` — max_atr_pct: 5.5, min_change_pct: 2.5
+- `config/default.yml` — 동기화
+
+#### 장초반 진입 금지 30분 확대
+- `config/default.yml` — batch execute_time: "09:01"→"09:30"
+- `config/evolved_overrides.yml` — theme trading_start_time: "09:10"→"09:30"
+- `src/strategies/kr/theme_chasing.py` — trading_start_time 기본값 "09:05"→"09:30"
+- 4/7~4/8 장초반 15분 이내 4건 진입 모두 손절 (승률 0%)
+
+### P1: 중요 개선 (4건)
+
+#### 동일 섹터 추가 진입 경고 로그
+- `src/core/engine.py` — 동일 섹터 2번째 진입 시 WARNING 로그 추가
+- 기존 max_positions_per_sector=2 제한은 이미 구현됨
+
+#### RSI2 max_atr_pct 8.0 가드 추가
+- `src/strategies/kr/rsi2_reversal.py` — ATR 8% 초과 종목 역추세 진입 차단
+- KEC(ATR 15.73%) 손절 -5.14% 사례 방지
+
+#### 1차 익절 비율 (관찰)
+- first_exit_ratio 이미 0.2(20%)로 축소됨
+- PF 문제의 근본 원인은 고ATR 진입 → P0 ATR 가드로 해결 예상
+
+### P2: 관찰/버그 수정 (3건)
+
+#### equity 스냅샷 비정상 데이터 가드
+- `src/analytics/equity_tracker.py` — 재시작 직후 동기화 전 상태 감지 시 저장 스킵
+- 4/13 equity 파일 오류 원인: 봇 재시작 후 포트폴리오 미동기화 상태에서 backfill 실행
+
+#### US sync 미청산 레코드
+- 5건 존재하나 exit_time 기반 필터링으로 이미 무시됨 → 정리 불필요
+
+#### 진화 시스템 max_atr_pct 자동 진화 지원
+- `src/core/evolution/strategy_evolver.py` — _param_bounds에 max_atr_pct, min_change_pct, min_volume_ratio 등록
+- 기존: _param_bounds 미등록 → LLM 권고 파라미터 자동 적용 불가
+
+### 수정 파일
+- `src/strategies/kr/sepa_trend.py` — max_atr_pct 가드
+- `src/strategies/kr/theme_chasing.py` — max_atr_pct 5.5, trading_start_time 09:30
+- `src/strategies/kr/rsi2_reversal.py` — max_atr_pct 가드
+- `src/core/engine.py` — 섹터 중복 경고 로그
+- `src/analytics/equity_tracker.py` — 비정상 데이터 가드
+- `src/core/evolution/strategy_evolver.py` — _param_bounds 확장
+- `config/default.yml` — execute_time 09:30, theme max_atr_pct 5.5
+- `config/evolved_overrides.yml` — theme 파라미터 업데이트
+
 ## 2026-04-06 — Trade Wiki 시스템 (Karpathy LLM Wiki 패턴)
 
 ### Trade Wiki 구현 (22dad71, 6d0b301)

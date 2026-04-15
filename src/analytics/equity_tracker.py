@@ -74,6 +74,17 @@ class EquityTracker:
         cash = float(portfolio.cash)
         positions_value = float(portfolio.total_position_value)
         total_equity = float(portfolio.total_equity)
+
+        # 비정상 데이터 가드: 재시작 직후 동기화 전 상태 감지
+        initial_cap = float(portfolio.initial_capital) if portfolio.initial_capital else 0
+        _min_equity = initial_cap * 0.1 if initial_cap > 0 else 100_000
+        if total_equity < _min_equity and cash == 0 and positions_value == 0:
+            logger.warning(
+                f"[자산추적] 비정상 포트폴리오 감지 → 스냅샷 저장 스킵: "
+                f"total_equity={total_equity:,.0f}, cash={cash:,.0f}, "
+                f"positions={len(portfolio.positions)}개 (동기화 전 상태 추정)"
+            )
+            return
         effective_pnl = float(portfolio.effective_daily_pnl)
         initial_capital = float(portfolio.initial_capital)
         pnl_pct = (effective_pnl / initial_capital * 100) if initial_capital > 0 else 0.0

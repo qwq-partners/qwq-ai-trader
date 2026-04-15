@@ -52,7 +52,7 @@ UnifiedTradingBot (scripts/run_trader.py)
   ↓
   PendingSignal 저장 (JSON)
 
-09:01 시그널 실행
+09:30 시그널 실행
   execute_pending_signals()
   ↓ 각 시그널:
   현재가 조회 → 갭다운/갭업 체크

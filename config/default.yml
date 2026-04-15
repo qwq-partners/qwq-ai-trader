@@ -109,7 +109,7 @@ kr:
       min_theme_breadth: 3            # 테마 내 동반 상승 최소 종목 수
       theme_breadth_change_pct: 1.0   # 동반 상승 판정 최소 등락률 (%)
       max_high_retreat_pct: 3.0       # 장중 고점 대비 최대 후퇴 (%)
-      max_atr_pct: 8.0               # ATR 상한 — 초고변동 종목 차단 (%)
+      max_atr_pct: 5.5               # ATR 상한 — 고변동 종목 차단 (노이즈 손절 방지) (%)
 
 
     gap_and_go:
@@ -200,7 +200,7 @@ kr:
     morning_scan_enabled: true
     morning_scan_time: "08:20"
     daily_scan_time: "15:40"
-    execute_time: "09:01"
+    execute_time: "09:30"
     signal_interval_sec: 30             # 시그널 분산 실행 간격 (슬리피지 방지)
     position_update_interval: 10
     max_entry_slippage_pct: 3.0
