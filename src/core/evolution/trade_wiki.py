@@ -59,7 +59,7 @@ class TradeWiki:
         async with self._lock:
             try:
                 symbol = trade.get("symbol", "")
-                strategy = trade.get("strategy", "unknown")
+                strategy = trade.get("strategy", "") or "unknown"
                 sector = trade.get("sector", "")
                 regime = trade.get("market_regime", "neutral")
                 pnl_pct = trade.get("pnl_pct", 0)

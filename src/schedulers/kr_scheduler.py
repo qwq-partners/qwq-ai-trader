@@ -369,16 +369,20 @@ class KRScheduler:
                         f"수익률={_theme_pnl_pct:+.1f}% < +1.0% (갭리스크 방지)"
                     )
                     _eod_qty = position.quantity
-                    sell_price = await bot.broker.get_best_bid(symbol)
-                    if sell_price and sell_price > 0:
-                        order = await bot.broker.submit_order(
-                            symbol=symbol, side="sell",
-                            quantity=_eod_qty, price=int(sell_price),
-                        )
-                        if order and order.get("order_no"):
-                            bot._exit_pending_symbols.add(symbol)
-                            bot._exit_pending_timestamps[symbol] = datetime.now()
-                            bot._exit_reasons[symbol] = f"테마EOD: 수익률 {_theme_pnl_pct:+.1f}%"
+                    # 매도 시그널 발행 (engine.on_signal 경유 → 정상 주문 경로)
+                    _eod_signal = Signal(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        strength=SignalStrength.STRONG,
+                        strategy=(StrategyType(position.strategy) if position.strategy and position.strategy in {e.value for e in StrategyType} else StrategyType.THEME_CHASING),
+                        price=current_price,
+                        score=100.0,
+                        confidence=1.0,
+                        reason=f"테마EOD: 수익률 {_theme_pnl_pct:+.1f}%",
+                        metadata={"source": "theme_eod", "quantity": _eod_qty},
+                    )
+                    _eod_event = SignalEvent.from_signal(_eod_signal, source="theme_eod")
+                    await bot.engine.emit(_eod_event)
                     return
 
             # 전략별 청산 파라미터 적용
