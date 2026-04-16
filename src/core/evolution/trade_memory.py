@@ -168,7 +168,7 @@ class TradeMemory:
                     pass
             foreign = ind.get("foreign_net_buy")
             if foreign is not None and foreign > 0:
-                parts.append("기관매수")
+                parts.append("외국인매수")
 
             pattern = " + ".join(parts) if parts else outcome.strategy
 

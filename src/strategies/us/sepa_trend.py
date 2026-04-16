@@ -135,8 +135,7 @@ class SEPATrendStrategy(USBaseStrategy):
         elif close > ma50 > ma150:
             score += 5
 
-        # RS Ranking 보너스 (최대 +10)
-        rs_val = indicators.get('rs_rating')
+        # RS Ranking 보너스 (최대 +10, 위에서 조회한 rs_val 재사용)
         if rs_val is not None:
             if rs_val >= 80:
                 score += 10

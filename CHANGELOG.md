@@ -1,5 +1,75 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-15 — P1/P2 엔진·스케줄러·브로커 계열 수정
+
+### P1-1: `_pending_sector_map` clear_pending에서 정리 누락
+- `src/core/engine.py` — `clear_pending()`에 `self._pending_sector_map.pop(symbol, None)` 추가
+
+### P1-2: US `_sync_portfolio` Lock 미사용
+- `src/schedulers/us_scheduler.py` — `_portfolio_lock` (asyncio.Lock) 추가, 포지션 제거 블록을 Lock으로 보호
+
+### P1-3: US `_execute_exit` setattr 동적 속성 → Dict 전환
+- `src/schedulers/us_scheduler.py` — `_sell_fail_counts: Dict[str, int]` 추가, `setattr/getattr/delattr/hasattr` → dict 접근으로 전환
+
+### P1-4: `_USEngineBundle` running 플래그 이중관리 해소
+- `scripts/run_trader.py` — `_running` 제거, `running` 단일 플래그만 사용
+
+### P1-5: 이벤트 큐 포화 시 중요 이벤트 보존
+- `src/core/engine.py` — `_purge_queue()` 메서드 추가, FILL/ORDER 이벤트는 큐 정리 시 절대 폐기하지 않음
+
+### P2-1: 시그널 핸들러 중복 등록 제거
+- `src/core/engine.py` — `_setup_signal_handlers()` 메서드 및 `import signal` 제거 (봇이 자체 핸들러로 덮어씀)
+
+### P2-2: `_get_current_session()` 함수 내 import 의도 주석
+- `src/core/engine.py` — 지연 임포트(순환 참조 방지) 의도 주석 추가
+
+### P2-3: KIS US `available_cash=0` 처리 — P0-7에서 수정 완료 확인
+
+### P2-4: `_log_sig` 연속 실패 경고 + or 패턴 수정
+- `src/core/engine.py` — `event.score or 0` / `adjusted_score or event.score or 0` → None 체크 분리, 연속 10회 실패 시 WARNING 로그
+
+### P2-5: `_screening_signal_cooldown` 크기 방어
+- `src/schedulers/kr_scheduler.py` — 500 초과 시 최신 300건만 보존하는 방어 로직 추가
+
+---
+
+## 2026-04-15 — P1/P2 전략·청산·진화·설정 계열 수정
+
+### P1-A: ExitManager FIRST stage 본전보호 버퍼 조정
+- `src/strategies/exit_manager.py` — `sell_fee_buffer = -1.5` → `-0.5` (first_exit_ratio=0.2 기준 순손실 방지)
+
+### P1-B: ExitManager first_exit_ratio 주석 보정
+- `src/strategies/exit_manager.py:145` — 주석을 evolved_overrides에서 0.2로 오버라이드되는 것을 명시
+
+### P1-C: gap_and_go ATR 가드 순서 수정
+- `src/strategies/kr/gap_and_go.py` — ATR 가드를 "진입 신호" 로그 출력 전으로 이동 (모니터링 혼선 방지)
+
+### P1-D: ExitManager eod_close 필드 주석 보강
+- `src/strategies/exit_manager.py:192` — ExitManager 내부 미사용, us_scheduler가 직접 처리함을 주석에 명시
+
+### P1-E: trade_memory Layer 2 태그 오류 수정
+- `src/core/evolution/trade_memory.py:171` — `foreign_net_buy > 0`일 때 "기관매수" → "외국인매수" 정정
+
+### P2-1: 어닝스 드리프트 target 하드코딩 제거
+- `src/strategies/us/earnings_drift.py` — `close * 1.15` → `close * (1 + self.take_profit_pct / 100)` (config 참조)
+
+### P2-2: US SEPA rs_val 중복 조회 제거
+- `src/strategies/us/sepa_trend.py:139` — 2번째 `rs_val = indicators.get('rs_rating')` 제거, 첫 번째 결과 재사용
+
+### P2-3: 테마 대형주 심볼 하드코딩 주석 보강
+- `src/strategies/kr/theme_chasing.py:259` — 정적 목록 + 주기적 갱신 필요 + 종목명 주석 추가
+
+### P2-4: 크로스검증 최소 점수 상수화
+- `src/core/cross_validator.py` — 하드코딩 50 → `_MIN_PASS_SCORE = 50` 클래스 상수화
+
+### P2-5: KR SEPA 스코어 문서 보정
+- `docs/strategies/kr-strategies.md` — "100점 만점" → "100점 만점, overlay 포함 후 100점 클램핑" 명시
+
+### P2-6: CLAUDE.md 청산 관리 설명 정확화
+- `CLAUDE.md` — 2차 +15%, 3차 +25%, ATR 범위 3.5~8% 등 evolved_overrides 실제값 반영
+
+---
+
 ## 2026-04-15 — P0 치명적 이슈 7건 수정
 
 ### P0-1: ExitManager restore_stages() NameError 수정

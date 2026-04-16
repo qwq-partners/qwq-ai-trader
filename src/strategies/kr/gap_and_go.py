@@ -204,18 +204,18 @@ class GapAndGoStrategy(BaseStrategy):
         if not self.check_rr_ratio(current_price, target_price, stop_price, min_rr=2.0):
             return None
 
-        orb_info = f", ORB돌파" if orb_bonus > 0 else ""
-        reason = f"갭+{gap_pct:.1f}% 눌림 {pullback_pct:.1f}%, 거래량 {vol_ratio:.1f}x{orb_info}"
-
-        logger.info(f"[Gap&Go] 진입 신호: {symbol} - {reason}")
-
-        # ATR 데이터 품질 가드 + 포지션 사이징
+        # ATR 데이터 품질 가드 (진입 신호 로그 전에 체크 — 모니터링 혼선 방지)
         _atr = indicators.get("atr_14")
         if _atr is None or _atr <= 0:
             logger.debug(f"[Gap&Go] {symbol} ATR 누락/0 차단: atr_14={_atr}")
             return None
         _atr_val = _atr
         _pos_mult = atr_position_multiplier(_atr_val)
+
+        orb_info = f", ORB돌파" if orb_bonus > 0 else ""
+        reason = f"갭+{gap_pct:.1f}% 눌림 {pullback_pct:.1f}%, 거래량 {vol_ratio:.1f}x{orb_info}"
+
+        logger.info(f"[Gap&Go] 진입 신호: {symbol} - {reason}")
 
         return Signal(
             symbol=symbol,

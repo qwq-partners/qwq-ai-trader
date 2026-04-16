@@ -144,11 +144,11 @@ scripts/
 | 어닝스 드리프트 | `us/earnings_drift.py` | EPS 서프라이즈 후 모멘텀 |
 
 ### 청산 관리 (ExitManager)
-- **1차 익절**: +5% → 20% 매도
-- **2차 익절**: +10% → 50% 매도
-- **3차 익절**: 전략별 상이 (RSI2/Strategic Swing: +20%, SEPA: +15%, 기타: 전략 config)
+- **1차 익절**: +5% → 20% 매도 (evolved_overrides: first_exit_ratio=0.2)
+- **2차 익절**: +15% → 잔여의 50% 매도
+- **3차 익절**: +25% → 잔여의 50% 매도 (기본값, 레짐별 REGIME_EXIT_PARAMS로 조정)
 - **트레일링**: 고점 대비 3% 하락, 수익 +5% 이상 시 활성화
-- **ATR 동적 손절**: 기본 5%, ATR×2, 범위 4~7%
+- **ATR 동적 손절**: 기본 5%, ATR×2, 범위 3.5~8% (evolved_overrides)
 - **포지션 상태**: `PositionExitState` — NONE/FIRST/SECOND/THIRD/TRAILING 단계 추적
 
 ---

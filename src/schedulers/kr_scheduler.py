@@ -2021,12 +2021,17 @@ JSON:
                                     },
                                 ))
                         else:
-                            # 만료된 쿨다운 정리 (30분)
+                            # 만료된 쿨다운 정리 (30분) + 크기 방어
                             now = datetime.now()
                             expired = [s for s, t in bot._screening_signal_cooldown.items()
                                        if (now - t).total_seconds() > 1800]
                             for s in expired:
                                 del bot._screening_signal_cooldown[s]
+                            # 크기 방어: 500 초과 시 가장 오래된 항목부터 정리
+                            if len(bot._screening_signal_cooldown) > 500:
+                                sorted_items = sorted(bot._screening_signal_cooldown.items(), key=lambda x: x[1])
+                                bot._screening_signal_cooldown = dict(sorted_items[-300:])
+                                logger.warning(f"[스크리닝] 쿨다운 dict 크기 방어: 500 초과 → 300건으로 축소")
 
                             # 기보유 + pending + 당일 손절 종목
                             held = set(bot.engine.portfolio.positions.keys())

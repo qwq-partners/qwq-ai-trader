@@ -142,7 +142,7 @@ class ExitConfig:
 
     # 1차 익절
     first_exit_pct: float = 5.0       # 목표 수익률 (%)
-    first_exit_ratio: float = 0.30    # 청산 비율 (evolved_overrides: 0.30)
+    first_exit_ratio: float = 0.30    # 청산 비율 (evolved_overrides에서 0.2로 오버라이드)
 
     # 2차 익절
     second_exit_pct: float = 15.0     # 목표 수익률 (%) (10 → 15: P0-4)
@@ -188,7 +188,7 @@ class ExitConfig:
     composite_ma5_buffer_pct: float = 0.5        # MA5 아래 버퍼 (%) — MA5 - 0.5% 이탈 시 청산
     composite_prev_low_enabled: bool = True      # 전일 저가 기준 활성화
 
-    # End-of-day close (US day trade 전용)
+    # End-of-day close (US day trade 전용 — ExitManager 내부 미사용, us_scheduler가 직접 처리)
     eod_close: bool = False
 
 
@@ -782,7 +782,8 @@ class ExitManager:
                 elif state.current_stage == ExitStage.FIRST:
                     # 1차 익절 완료: 20% 이미 수익 확보 → 추세 추종 여유 부여
                     # ATR/MA5 트레일링이 기술적 청산 담당, 본전보호는 최소 수익 보호
-                    sell_fee_buffer = -1.5
+                    # -0.5%: first_exit_ratio=0.2 기준 1차 익절 수익(5%×20%=1%) > 잔여 손실(0.5%×80%=0.4%)
+                    sell_fee_buffer = -0.5
                 elif state.current_stage == ExitStage.SECOND:
                     # 2차 익절 완료: 추가 수익 확보 → 버퍼 축소
                     sell_fee_buffer = -0.5

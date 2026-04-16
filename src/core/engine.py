@@ -19,7 +19,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Coroutine, Set
 from dataclasses import dataclass, field
-import signal
 import sys
 
 from loguru import logger
@@ -197,19 +196,9 @@ class UnifiedEngine:
         # 종목명 캐시 (외부에서 설정)
         self._stock_name_cache: Dict[str, str] = {}
 
-        # 시그널 핸들러
-        self._setup_signal_handlers()
+        # 시그널 핸들러: run_trader.py 봇이 자체 핸들러로 덮어쓰므로 엔진에서는 등록하지 않음
 
         logger.info("UnifiedEngine 초기화 완료")
-
-    def _setup_signal_handlers(self):
-        """시스템 시그널 핸들러 설정"""
-        def handle_shutdown(signum, frame):
-            logger.warning(f"종료 신호 수신 ({signum}). 안전하게 종료합니다...")
-            self.running = False
-
-        signal.signal(signal.SIGINT, handle_shutdown)
-        signal.signal(signal.SIGTERM, handle_shutdown)
 
     # ============================================================
     # 시장 컨텍스트 관리
@@ -276,15 +265,30 @@ class UnifiedEngine:
         if handler in self._handlers[event_type]:
             self._handlers[event_type].remove(handler)
 
+    # 큐 정리 시 보존해야 할 중요 이벤트 타입 (체결/주문은 절대 폐기 금지)
+    _CRITICAL_EVENT_TYPES = frozenset({EventType.FILL, EventType.ORDER})
+
+    def _purge_queue(self, keep_count: int) -> None:
+        """큐 정리: FILL/ORDER 이벤트 보존, 나머지 중 최저 우선순위 폐기 (Lock 내부 호출 전용)"""
+        critical = [e for e in self._event_queue if e.type in self._CRITICAL_EVENT_TYPES]
+        non_critical = [e for e in self._event_queue if e.type not in self._CRITICAL_EVENT_TYPES]
+        non_critical.sort()
+        available_slots = max(keep_count - len(critical), 0)
+        kept = critical + non_critical[:available_slots]
+        discarded = len(self._event_queue) - len(kept)
+        if discarded > 0:
+            logger.warning(
+                f"[엔진] 큐 정리: {discarded}건 폐기 (FILL/ORDER {len(critical)}건 보존)"
+            )
+        heapq.heapify(kept)
+        self._event_queue = kept
+
     async def emit(self, event: Event):
         """이벤트 발행 (큐에 추가)"""
         async with self._queue_lock:
             if len(self._event_queue) >= self._MAX_QUEUE_SIZE:
                 logger.warning(f"이벤트 큐 포화 ({len(self._event_queue)}건) → 최저 우선순위 이벤트 폐기")
-                # 가장 낮은 우선순위(큰 값) 이벤트 제거
-                self._event_queue.sort()
-                self._event_queue = self._event_queue[:self._MAX_QUEUE_SIZE - 1]
-                heapq.heapify(self._event_queue)
+                self._purge_queue(self._MAX_QUEUE_SIZE - 1)
             heapq.heappush(self._event_queue, event)
 
     async def emit_many(self, events: List[Event]):
@@ -295,16 +299,18 @@ class UnifiedEngine:
             current = len(self._event_queue)
             if current + needed > self._MAX_QUEUE_SIZE:
                 logger.warning(f"이벤트 큐 포화 ({current}건) → 최저 우선순위 이벤트 폐기")
-                self._event_queue.sort()
                 keep = max(self._MAX_QUEUE_SIZE - needed, self._MAX_QUEUE_SIZE // 2)
-                self._event_queue = self._event_queue[:keep]
-                heapq.heapify(self._event_queue)
+                self._purge_queue(keep)
             # 일괄 push
             for event in events:
                 if len(self._event_queue) < self._MAX_QUEUE_SIZE:
                     heapq.heappush(self._event_queue, event)
                 else:
-                    logger.warning(f"[엔진] 이벤트 큐 포화 — {event.type} 폐기")
+                    # FILL/ORDER는 큐 풀이어도 강제 삽입
+                    if event.type in self._CRITICAL_EVENT_TYPES:
+                        heapq.heappush(self._event_queue, event)
+                    else:
+                        logger.warning(f"[엔진] 이벤트 큐 포화 — {event.type} 폐기")
 
     # ============================================================
     # 메인 이벤트 루프
@@ -487,6 +493,7 @@ class UnifiedEngine:
     def _get_current_session(self) -> MarketSession:
         """현재 시장 세션 반환 (KR 기본, SessionUtil 사용)"""
         try:
+            # 지연 임포트 의도: 순환 참조 방지 (session_util ↔ engine)
             from ..utils.session_util import SessionUtil
             return SessionUtil.get_current_session()
         except ImportError:
@@ -495,6 +502,7 @@ class UnifiedEngine:
     def is_trading_hours(self) -> bool:
         """KR 거래 가능 시간 여부 (SessionUtil 사용)"""
         try:
+            # 지연 임포트 의도: 순환 참조 방지 (session_util ↔ engine)
             from ..utils.session_util import SessionUtil
             return SessionUtil.is_trading_hours(self.config)
         except ImportError:
@@ -1072,6 +1080,8 @@ class RiskManager:
     # ─────────────────────────────────────────────────────────────
     # 시그널 이벤트 로깅 헬퍼
     # ─────────────────────────────────────────────────────────────
+    _sig_log_consecutive_failures: int = 0  # 연속 실패 카운터 (클래스 변수)
+
     def _log_sig(
         self, event: SignalEvent, *,
         event_type: str,
@@ -1084,18 +1094,22 @@ class RiskManager:
         if event.side != OrderSide.BUY:
             return
         meta = event.metadata or {}
+        # score 0이 유효한 값이므로 or 패턴 대신 None 체크
+        _score = float(event.score) if event.score is not None else 0.0
+        _adj_score = float(adjusted_score) if adjusted_score is not None else _score
+        _regime = regime if regime else getattr(self.engine, "_market_regime", "")
         task = asyncio.create_task(
             _SigLog.get().log(
                 symbol=event.symbol,
                 name=meta.get("name", ""),
                 strategy=event.strategy.value if event.strategy else "",
-                score=float(event.score or 0),
-                adjusted_score=float(adjusted_score or event.score or 0),
+                score=_score,
+                adjusted_score=_adj_score,
                 side="buy",
                 event_type=event_type,
                 block_gate=block_gate,
                 block_reason=block_reason,
-                market_regime=regime or getattr(self.engine, "_market_regime", ""),
+                market_regime=_regime,
                 sector=meta.get("sector", ""),
                 metadata={
                     "reason": getattr(event, "reason", ""),
@@ -1103,8 +1117,24 @@ class RiskManager:
                 },
             )
         )
-        # fire-and-forget 예외 무음 처리 (unhandled exception 경고 방지)
-        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+        def _on_log_done(t):
+            """fire-and-forget 예외 무음 + 연속 실패 카운터"""
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                RiskManager._sig_log_consecutive_failures += 1
+                if RiskManager._sig_log_consecutive_failures >= 10:
+                    logger.warning(
+                        f"[리스크] 시그널 로깅 연속 {RiskManager._sig_log_consecutive_failures}회 실패 — "
+                        f"최근 오류: {exc}"
+                    )
+                    RiskManager._sig_log_consecutive_failures = 0  # 경고 후 리셋
+            else:
+                RiskManager._sig_log_consecutive_failures = 0
+
+        task.add_done_callback(_on_log_done)
 
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
@@ -1519,6 +1549,7 @@ class RiskManager:
             self._reserved_by_order.pop(symbol, None)
             self._pending_fallback_count.pop(symbol, None)
             self._pending_signal_cache.pop(symbol, None)
+            self._pending_sector_map.pop(symbol, None)
 
     async def on_order(self, event: OrderEvent) -> Optional[List[Event]]:
         """ORDER 이벤트 처리 → 브로커에 주문 제출"""

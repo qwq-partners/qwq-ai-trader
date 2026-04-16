@@ -1676,7 +1676,7 @@ class _USEngineBundle:
         self._sector_cache: Dict[str, str] = {}
         self._indicator_cache: Dict[str, dict] = {}
         self._tasks: List[asyncio.Task] = []
-        self._running = True
+        # 상태 플래그: running만 사용 (_running 사용 금지 — 이중 관리 방지)
         self.running = True
         self.recent_signals: deque = deque(maxlen=50)
         self._ws_last_exit_check: Dict[str, float] = {}

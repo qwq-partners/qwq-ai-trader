@@ -21,6 +21,9 @@ class CrossStrategyValidator:
     규칙 기반으로 동작하므로 LLM 호출 없이 실시간 성능을 유지합니다.
     """
 
+    # 감점 후 최소 통과 점수 (이하면 차단)
+    _MIN_PASS_SCORE: int = 50
+
     def __init__(self, portfolio=None, risk_manager=None, trade_memory=None,
                  llm_manager=None, market: str = "KR", trade_wiki=None,
                  max_sector_positions: int = 2):
@@ -207,10 +210,10 @@ class CrossStrategyValidator:
             )
 
         # 감점 후 최소 점수 미달이면 차단
-        if adjusted_score < 50:
+        if adjusted_score < self._MIN_PASS_SCORE:
             self._stats["blocked"] += 1
             logger.info(
-                f"[크로스검증] {symbol} 차단: 감점 후 {adjusted_score:.0f} < 50"
+                f"[크로스검증] {symbol} 차단: 감점 후 {adjusted_score:.0f} < {self._MIN_PASS_SCORE}"
             )
             return False, adjusted_score, f"크로스 감점 후 점수 부족 ({adjusted_score:.0f})"
 

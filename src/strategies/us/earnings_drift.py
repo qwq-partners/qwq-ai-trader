@@ -36,6 +36,7 @@ class EarningsDriftStrategy(USBaseStrategy):
         self.min_revenue_growth_pct = self.config.get('min_revenue_growth_pct', 15)
         self.min_volume_surge = self.config.get('min_volume_surge', 3.5)
         self.stop_loss_pct = self.config.get('stop_loss_pct', 8.0)
+        self.take_profit_pct = self.config.get('take_profit_pct', 15.0)
         self.max_holding_days = self.config.get('max_holding_days', 20)
 
     def generate_signal(self, symbol: str, indicators: Dict[str, Any],
@@ -140,8 +141,8 @@ class EarningsDriftStrategy(USBaseStrategy):
         pct_stop = close * (1 - self.stop_loss_pct / 100)
         stop = max(earnings_day_stop, pct_stop)
 
-        # Target: 20-day trend following (use 15% as default target)
-        target = close * 1.15
+        # Target: 20-day trend following (설정에서 참조)
+        target = close * (1 + self.take_profit_pct / 100)
 
         # R/R 비율 필터
         min_rr = self.config.get('min_rr_ratio', 2.0)
