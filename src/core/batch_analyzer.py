@@ -1456,7 +1456,9 @@ class BatchAnalyzer:
                 continue
 
             # ATR 유효성 검증 (0/None이면 손절가 산출 불가)
-            atr_check = c.indicators.get("atr_pct") or c.indicators.get("atr_14")
+            atr_check = c.indicators.get("atr_pct")
+            if atr_check is None:
+                atr_check = c.indicators.get("atr_14")
             if atr_check is None or atr_check <= 0:
                 continue
 

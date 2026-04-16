@@ -45,7 +45,7 @@ theme_chasing:
   enabled: true
   stop_loss_pct: 3.5
   min_volume_ratio: 2.3
-  trading_start_time: 09:30
+  trading_start_time: '09:30'
   entry_window_minutes: 20
   max_atr_pct: 5.5
   min_change_pct: 2.5

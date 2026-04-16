@@ -44,7 +44,7 @@ class EarningsDriftStrategy(USBaseStrategy):
         Daily backtesting approximation:
         Detect earnings gap-up patterns from price data.
 
-        A large gap-up (+5%+) with very high volume suggests earnings reaction.
+        A large gap-up (+7%+) with very high volume suggests earnings reaction.
         The strategy confirms the gap held (close near high) before entering.
         """
         if not EarningsDriftStrategy._proxy_warning_logged:

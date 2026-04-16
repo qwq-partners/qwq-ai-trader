@@ -68,7 +68,6 @@ class SEPATrendStrategy(USBaseStrategy):
                 sepa_pass += 1
         else:
             logger.debug(f"[US SEPA] {symbol} MA200 상향 데이터 부족 — 기준 미통과")
-            pass  # 데이터 부족 시 통과 불가
 
         # 4. 52-week low +30% (strong uptrend)
         pct_from_low = (close - low_52w) / low_52w * 100 if low_52w > 0 else 0

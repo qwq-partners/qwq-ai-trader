@@ -566,10 +566,11 @@ class UnifiedEngine:
 
         else:
             # 매도 — fill 수량이 보유 수량 초과 시 보정 (음수 수량 방지)
-            if fill.quantity > pos.quantity:
-                logger.error(f"[엔진] SELL fill {symbol} 초과: 요청={fill.quantity}, 보유={pos.quantity} → 보정")
-                fill.quantity = pos.quantity
-            pos.quantity -= fill.quantity
+            sell_qty = fill.quantity
+            if sell_qty > pos.quantity:
+                logger.error(f"[엔진] SELL fill {symbol} 초과: 요청={sell_qty}, 보유={pos.quantity} → 보정")
+                sell_qty = pos.quantity
+            pos.quantity -= sell_qty
 
             # 매도 비용 계산 (수수료 + 거래세 0.20%, fee_calculator 기준 통일)
             try:
@@ -1517,6 +1518,7 @@ class RiskManager:
             self._pending_sides.pop(symbol, None)
             self._reserved_by_order.pop(symbol, None)
             self._pending_fallback_count.pop(symbol, None)
+            self._pending_signal_cache.pop(symbol, None)
 
     async def on_order(self, event: OrderEvent) -> Optional[List[Event]]:
         """ORDER 이벤트 처리 → 브로커에 주문 제출"""
