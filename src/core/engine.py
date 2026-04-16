@@ -56,13 +56,13 @@ def set_kr_market_holidays(holidays: Set[date]):
 def is_kr_market_holiday(d: date) -> bool:
     """한국 시장 휴장일 여부 (주말 + 공휴일)
 
-    동적 데이터(API)와 Fallback(하드코딩)을 합쳐서 체크합니다.
-    API는 당월/익월만 로드하므로 3개월 후 공휴일은 Fallback에서 커버합니다.
+    동적 데이터가 있으면 동적 데이터만 신뢰합니다.
+    동적 데이터가 없을 때만 Fallback(하드코딩)을 사용합니다.
     """
     if d.weekday() >= 5:
         return True
     if _kr_market_holidays:
-        return d in _kr_market_holidays or d in _FALLBACK_HOLIDAYS
+        return d in _kr_market_holidays  # 동적 데이터만 신뢰
     # 동적 데이터가 없으면 하드코딩 공휴일 체크 (fallback)
     return d in _FALLBACK_HOLIDAYS
 

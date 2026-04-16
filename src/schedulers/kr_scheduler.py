@@ -31,6 +31,7 @@ from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
 from ..utils.telegram import send_alert
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
+from ..utils.fee_calculator import get_fee_calculator
 
 
 class KRScheduler:
@@ -61,6 +62,9 @@ class KRScheduler:
         self._ma5_cache: Dict[str, float] = {}        # 종목별 5일 이동평균
         self._prev_day_low: Dict[str, float] = {}     # 종목별 전일 저가
         self._composite_cache_date: Optional[date] = None  # 캐시 갱신 날짜
+
+        # 매수 체결 후 ExitManager 등록 실패 종목 (다음 fill_check 주기에 재시도)
+        self._pending_exit_registrations: Set[str] = set()
 
     def create_tasks(self):
         """모든 KR 스케줄러 태스크 생성 → 리스트 반환
@@ -1496,16 +1500,15 @@ JSON:
                                                         _db_strat = str(_db_row['entry_strategy'] or 'sync_detected')
                                                         # exit_type 분류 (공통 함수 위임)
                                                         _etype2 = self._classify_exit_type(_exit_reason_snap)
-                                                        # PnL 계산 (수수료 포함 순손익)
-                                                        _sell_amt2 = float(fill.price) * fill.quantity
-                                                        _sell_fee2 = round(_sell_amt2 * 0.000131)
-                                                        _sell_tax2 = round(_sell_amt2 * 0.002)
-                                                        _sell_net2 = _sell_amt2 - _sell_fee2 - _sell_tax2
-                                                        _buy_cost2 = _db_ep * fill.quantity
-                                                        _buy_fee2 = round(_buy_cost2 * 0.000141)
-                                                        _this_pnl2 = round(_sell_net2 - _buy_cost2 - _buy_fee2)
-                                                        _invested2 = _buy_cost2 + _buy_fee2
-                                                        _pnl_pct2 = round(_this_pnl2 / _invested2 * 100, 2) if _invested2 > 0 else 0.0
+                                                        # PnL 계산 (FeeCalculator 사용, 수수료 포함 순손익)
+                                                        _fc = get_fee_calculator("KR")
+                                                        _this_pnl2_d, _pnl_pct2_d = _fc.calculate_net_pnl(
+                                                            Decimal(str(_db_ep)),
+                                                            Decimal(str(float(fill.price))),
+                                                            fill.quantity,
+                                                        )
+                                                        _this_pnl2 = int(_this_pnl2_d)
+                                                        _pnl_pct2 = round(float(_pnl_pct2_d), 2)
                                                         _sym_name2 = getattr(_sell_pos_snap, 'name', '') or fill.symbol
                                                         _now2 = datetime.now()
                                                         async with _db_pool.acquire() as _dbc:
@@ -1582,8 +1585,10 @@ JSON:
                                     except Exception as e:
                                         logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패: {e}")
                                 else:
-                                    logger.warning(
-                                        f"[체결] {fill.symbol} ExitManager 등록 스킵 "
+                                    # 포지션 미생성 — 다음 fill_check 주기에 재시도
+                                    self._pending_exit_registrations.add(fill.symbol)
+                                    logger.error(
+                                        f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열 추가 "
                                         f"(pos={'없음' if not pos else 'OK'}, exit_manager={'없음' if not bot.exit_manager else 'OK'})"
                                     )
 
@@ -1725,6 +1730,40 @@ JSON:
                                         logger.debug(f"[체결] {fill.symbol} WS 우선 구독 추가")
                                     except Exception as e:
                                         logger.debug(f"[체결] {fill.symbol} WS 구독 갱신 실패: {e}")
+
+                    # 미등록 종목 재시도 (이전 주기에서 포지션 미생성으로 실패한 종목)
+                    if self._pending_exit_registrations and bot.exit_manager:
+                        _retry_done = set()
+                        for _retry_sym in list(self._pending_exit_registrations):
+                            _retry_pos = bot.engine.portfolio.positions.get(_retry_sym)
+                            if _retry_pos:
+                                _retry_params = bot._strategy_exit_params.get(
+                                    _retry_pos.strategy, {}
+                                ) if _retry_pos.strategy else {}
+                                try:
+                                    bot.exit_manager.register_position(
+                                        _retry_pos,
+                                        stop_loss_pct=_retry_params.get("stop_loss_pct"),
+                                        trailing_stop_pct=_retry_params.get("trailing_stop_pct"),
+                                        first_exit_pct=_retry_params.get("first_exit_pct"),
+                                        second_exit_pct=_retry_params.get("second_exit_pct"),
+                                        third_exit_pct=_retry_params.get("third_exit_pct"),
+                                        first_exit_ratio=_retry_params.get("first_exit_ratio"),
+                                        second_exit_ratio=_retry_params.get("second_exit_ratio"),
+                                        third_exit_ratio=_retry_params.get("third_exit_ratio"),
+                                        stale_high_days=_retry_params.get("stale_high_days"),
+                                        is_core=_retry_params.get("is_core", False),
+                                        max_holding_days=_retry_params.get("max_holding_days"),
+                                        trailing_activate_pct=_retry_params.get("trailing_activate_pct"),
+                                    )
+                                    _retry_done.add(_retry_sym)
+                                    logger.info(f"[체결] {_retry_sym} ExitManager 재시도 등록 성공")
+                                except Exception as _re:
+                                    logger.warning(f"[체결] {_retry_sym} ExitManager 재시도 등록 실패: {_re}")
+                            elif _retry_sym not in bot.engine.portfolio.positions:
+                                # 포지션이 사라졌으면 (수동 매도 등) 대기열에서 제거
+                                _retry_done.add(_retry_sym)
+                        self._pending_exit_registrations -= _retry_done
 
                     check_interval = 2 if open_orders else 5
 

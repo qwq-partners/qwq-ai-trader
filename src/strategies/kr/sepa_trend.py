@@ -65,7 +65,8 @@ class SEPATrendStrategy(BaseStrategy):
         # T-2 캐시 사용 시 수급 최대점수 20→14점으로 감소 → min_score 보정
         supply_age_sample = 0
         if candidates:
-            supply_age_sample = candidates[0].indicators.get("supply_data_age") or 0
+            _supply_age_raw = candidates[0].indicators.get("supply_data_age")
+            supply_age_sample = _supply_age_raw if _supply_age_raw is not None else 0
         effective_min_score = self.config.min_score
         if supply_age_sample >= 2:
             effective_min_score = max(50.0, self.config.min_score - 10.0)

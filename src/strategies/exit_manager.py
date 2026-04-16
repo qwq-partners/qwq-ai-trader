@@ -1353,7 +1353,7 @@ class ExitManager:
                     self._states[sym].current_stage = self.STAGE_ORDER[stage_idx]
                     logger.debug(
                         f"[ExitManager] {sym} restore_stages 업그레이드: "
-                        f"{stage_order[current_idx].value} → {stage_order[stage_idx].value}"
+                        f"{self.STAGE_ORDER[current_idx].value} → {self.STAGE_ORDER[stage_idx].value}"
                     )
 
 

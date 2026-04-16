@@ -128,7 +128,10 @@ class RSI2ReversalStrategy(BaseStrategy):
                 _ma200 = candidate.indicators.get("ma200")
                 _close = candidate.indicators.get("close")
                 _has_ma200 = _ma200 is not None and _ma200 > 0 and _close is not None and _close > _ma200
-                _vcp = candidate.indicators.get("vcp_score") or candidate.indicators.get("overlay_bonus") or 0
+                _vcp_raw = candidate.indicators.get("vcp_score")
+                if _vcp_raw is None:
+                    _vcp_raw = candidate.indicators.get("overlay_bonus")
+                _vcp = _vcp_raw if _vcp_raw is not None else 0
                 if _has_ma200 and _vcp >= 3.0:
                     _pos_mult = max(_pos_mult * 1.3, 0.8)
 

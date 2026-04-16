@@ -1,5 +1,31 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-15 — P0 치명적 이슈 7건 수정
+
+### P0-1: ExitManager restore_stages() NameError 수정
+- `src/strategies/exit_manager.py` — `restore_stages()`에서 지역변수 `stage_order` 참조 → `self.STAGE_ORDER`로 수정
+
+### P0-2: 수수료 하드코딩 제거 (kr_scheduler.py)
+- `src/schedulers/kr_scheduler.py` — 하드코딩 수수료율(0.000131, 0.002, 0.000141) → `FeeCalculator.calculate_net_pnl()` 사용
+
+### P0-3: `or` 패턴 위반 3곳 수정
+- `src/strategies/kr/sepa_trend.py:68` — `supply_data_age or 0` → `None` 체크 분리
+- `src/strategies/kr/rsi2_reversal.py:131` — `vcp_score or overlay_bonus or 0` → `None` 체크 체인
+- `src/strategies/kr/theme_chasing.py:244` — `high or stck_hgpr or 0` → `None` 체크 체인
+
+### P0-4: position_multiplier 이중 적용 확인
+- 확인 완료: kr_scheduler에서 metadata에 설정만 하고, engine._calculate_position_size에서만 적용 → 이중 적용 없음
+
+### P0-5: fill_check ExitManager 미등록 종목 재시도
+- `src/schedulers/kr_scheduler.py` — `_pending_exit_registrations` set 추가, 포지션 대기 실패 시 다음 fill_check 주기에 재시도
+- 경고 로그 레벨 WARNING → ERROR 상향
+
+### P0-6: is_kr_market_holiday 동적+FALLBACK 이중 체크 제거
+- `src/core/engine.py` — 동적 데이터 있으면 동적만 신뢰, 없을 때만 FALLBACK 사용
+
+### P0-7: KIS US available_cash=0 시 None 반환 수정
+- `src/execution/broker/kis_us.py` — `available_cash > 0` → `available_cash >= 0` (0원 정상 처리)
+
 ## 2026-04-17 — Phase 3: P1 하위 5건 + P2 주요 8건 수정
 
 ### P1-A: cooldown dict 무한 증가 방지

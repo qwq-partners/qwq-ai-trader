@@ -548,7 +548,7 @@ class KISUSBroker:
             total_equity = self._last_known_equity
 
         account = {
-            "available_cash":  available_cash if available_cash > 0 else None,
+            "available_cash":  available_cash if available_cash >= 0 else None,
             "total_equity":    total_equity if total_equity > 0 else None,
             "stock_eval_amt":  stock_eval_amt,
             "total_pnl":       total_pnl,
