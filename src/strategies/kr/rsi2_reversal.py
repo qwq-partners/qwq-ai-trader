@@ -94,9 +94,11 @@ class RSI2ReversalStrategy(BaseStrategy):
                 if atr > _max_atr:
                     logger.info(f"[RSI2] {candidate.symbol} ATR 과다 차단: {atr:.1f}% > {_max_atr:.1f}%")
                     continue
-                # ATR 가드 통과 → atr > 0 보장
+                # ATR 가드 통과 → atr > 0 보장 (설정 참조)
+                _min_stop = self.config.params.get("min_stop_pct", 3.5)
+                _max_stop = self.config.params.get("max_stop_pct", 7.0)
                 atr_pct_value = atr
-                stop_pct = max(3.0, min(7.0, atr * 2.0))     # 2×ATR, 3~7% 범위
+                stop_pct = max(_min_stop, min(_max_stop, atr * 2.0))     # 2×ATR, 설정 범위
                 target_pct = max(5.0, min(15.0, atr * 4.0))   # 4×ATR, 5~15% 범위
                 candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                 candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
@@ -247,9 +249,11 @@ class RSI2ReversalStrategy(BaseStrategy):
             elif mrs > 0:
                 score += 3
 
-        # 6. 5일 하락 후 반등 조짐 (10점)
+        # 6. 5일 하락 후 반등 조짐 (10점) — 급락 시 추세 붕괴 감점
         change_5d = ind.get("change_5d", 0)
-        if change_5d is not None and change_5d < -5:
+        if change_5d is not None and change_5d < -15:
+            score -= 5  # 추세 붕괴 위험: 5일 -15% 이상 급락
+        elif change_5d is not None and change_5d < -5:
             score += 10
         elif change_5d is not None and change_5d < -3:
             score += 5

@@ -1,6 +1,6 @@
 # US 전략 상세
 
-> 최종 갱신: 2026-04-06
+> 최종 갱신: 2026-04-15
 
 ## US 엔진 고도화 (2026-04-02~)
 
@@ -11,7 +11,8 @@ KR 엔진의 3대 기능을 이식:
 
 ## 1. Momentum Breakout (`src/strategies/us/momentum.py`)
 
-- 20일 고가 돌파 + 거래량 2x 확인
+- 20일 고가 돌파 + 거래량 2.5x 확인 (기존 2.0x → 2.5x 상향)
+- **min_breakout_pct: 2.0%** (기존 0.8% → 2.0% 상향, 노이즈 필터링 강화)
 - RSI > 80 차단
 - RS Ranking >= 80 시 +10점 보너스
 - ATR = 0/None → **진입 차단**
@@ -21,14 +22,19 @@ KR 엔진의 3대 기능을 이식:
 ## 2. SEPA Trend (`src/strategies/us/sepa_trend.py`)
 
 - 미너비니 5/6 기준 통과
-- RS Ranking 보너스
+- **MA200 상향 판정: 데이터 220봉 미만 시 기준 미통과** (기존 자동 통과 → 차단)
+- **RS Rating < min_rs_rating(70) → 진입 차단** (기존 감점(-5) → 완전 차단)
+- RS Ranking 보너스 (80+ → +10, 70+ → +5)
 - ATR = 0/None → **진입 차단**
 - `position_multiplier` metadata 전달
 - `from loguru import logger` 필수 (P0 수정 완료)
 
 ## 3. Earnings Drift (`src/strategies/us/earnings_drift.py`)
 
-- 갭 5%+ + 거래량 2.5x + 갭 유지(close > open)
+- **현재 버전: 갭+거래량 프록시 기반 (실적 확인 API 미연동)**
+- 갭 **7.0%+** (기존 5.0% → 상향, 일반 뉴스 갭 필터링 강화)
+- 거래량 **3.5x+** (기존 2.5x → 상향, 진정한 어닝 반응 폭증 필터)
+- 갭 유지(close > open)
 - ATR 가드: **lenient** (0/None → 0.8x 폴백, 진입 허용)
   - 어닝 서프라이즈는 갭 자체가 고변동 → 데이터 없어도 기회 포착
 - bear 장에서도 허용 (크로스검증 예외)

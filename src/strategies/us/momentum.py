@@ -24,8 +24,8 @@ class MomentumBreakoutStrategy(USBaseStrategy):
     def __init__(self, config: dict = None):
         super().__init__(config)
         self.breakout_period = self.config.get('breakout_period', 20)
-        self.min_breakout_pct = self.config.get('min_breakout_pct', 0.8)
-        self.volume_surge_ratio = self.config.get('volume_surge_ratio', 2.0)
+        self.min_breakout_pct = self.config.get('min_breakout_pct', 2.0)
+        self.volume_surge_ratio = self.config.get('volume_surge_ratio', 2.5)
         self.stop_loss_pct = self.config.get('stop_loss_pct', 4.0)
         self.take_profit_pct = self.config.get('take_profit_pct', 10.0)
 

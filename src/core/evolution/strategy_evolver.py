@@ -215,6 +215,7 @@ class StrategyEvolver:
             "trailing_stop_pct",       # 트레일링 스탑: 3.0% 고정
             "trailing_activate_pct",   # 트레일링 활성화: 5.0% 고정
             "first_exit_pct",          # 1차 익절: 5.0% 고정
+            "stop_loss_pct",           # 손절 비율: 수동 조정만 허용
         }
 
         # 파라미터 범위 (locked 파라미터는 진화 대상에서 자동 제외)

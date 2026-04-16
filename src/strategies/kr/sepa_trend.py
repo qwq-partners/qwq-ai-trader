@@ -110,21 +110,22 @@ class SEPATrendStrategy(BaseStrategy):
                     logger.info(f"[SEPA] {candidate.symbol} ATR 과다 차단: {atr:.1f}% > {_max_atr:.1f}%")
                     continue
 
-                # ATR 기반 동적 손절/익절
-                stop_pct = 5.0
-                target_pct = 10.0
+                # ATR 기반 동적 손절/익절 (설정 참조)
+                _min_stop = self.config.params.get("min_stop_pct", 4.0)
+                _max_stop = self.config.params.get("max_stop_pct", 7.0)
+                stop_pct = self.config.stop_loss_pct  # 기본값 (ATR 없을 때)
+                target_pct = self.config.take_profit_pct
                 if atr is not None and atr > 0:
-                    # ExitConfig: atr_multiplier=2.0, min_stop_pct=4.0, max_stop_pct=7.0
-                    stop_pct = max(4.0, min(7.0, atr * 2.0))
+                    stop_pct = max(_min_stop, min(_max_stop, atr * 2.0))
                     # target: stop × 1.5 이상 보장 + 최대 20% (추세 추종 공간 확보)
                     target_pct = max(stop_pct * 1.5, min(20.0, atr * 3.0))
                 candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                 candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
-                # R/R 비율 필터 (min_rr=1.5): 이제 실제 ExitManager stop과 일치
+                # R/R 비율 필터 (min_rr=2.0): US SEPA와 동일 기준 통일
                 if not self.check_rr_ratio(
                     candidate.entry_price, candidate.target_price,
-                    candidate.stop_price, min_rr=1.5
+                    candidate.stop_price, min_rr=2.0
                 ):
                     rr = target_pct / stop_pct if stop_pct > 0 else 0
                     rr_blocked.append((candidate.symbol, candidate.name, stop_pct, target_pct, rr))

@@ -28,7 +28,7 @@ exit_manager:
   min_stop_pct: 3.5
   first_exit_pct: 5.0
   first_exit_ratio: 0.2
-  stop_loss_pct: 3.5
+  stop_loss_pct: 5.0
   trailing_activate_pct: 5.0
   trailing_stop_pct: 3.0
 core_holding:
@@ -45,13 +45,14 @@ theme_chasing:
   enabled: true
   stop_loss_pct: 3.5
   min_volume_ratio: 2.3
-  trading_start_time: '09:30'
+  trading_start_time: 09:30
   entry_window_minutes: 20
   max_atr_pct: 5.5
   min_change_pct: 2.5
+  min_score: 57.0
 gap_and_go:
   enabled: true
-  stop_loss_pct: 2.5
+  stop_loss_pct: 3.5
   min_volume_ratio: 3.0
 sepa_trend:
   enabled: true
@@ -64,8 +65,8 @@ rsi2_reversal:
 _meta:
   exit_manager.stop_loss_pct:
     source: manual_review
-    timestamp: '2026-02-23T15:35:00'
-    note: 2.5→3.0% ATR min 정합성 수정
+    timestamp: '2026-04-15T00:00:00'
+    note: 3.5→5.0% trending_bull 기본값과 일치 (레짐 적용 전 초기값 정합성)
   exit_manager.first_exit_pct:
     source: manual_review
     timestamp: '2026-02-23T15:35:00'
@@ -93,3 +94,6 @@ _meta:
     source: manual_review
     timestamp: '2026-03-07T11:00:00'
     note: 03-04 대참사 이후 강제 비활성화 (35% 승률, -1.07M 손실)
+  theme_chasing.min_score:
+    source: rule
+    timestamp: '2026-04-16T20:30:54.150763'

@@ -1,5 +1,55 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-15 — P1 상위 중요 이슈 7건 수정
+
+### P1-1: KR SEPA R/R 기준 통일
+- `src/strategies/kr/sepa_trend.py` — `min_rr=1.5` → `min_rr=2.0` (US SEPA와 동일 기준)
+
+### P1-2: RSI2 급락 감점 추가
+- `src/strategies/kr/rsi2_reversal.py` — `change_5d < -15%` 시 -5점 감점 (추세 붕괴 위험)
+
+### P1-3: CrossValidator 규칙2 — sepa_trend 수급 감점
+- `src/core/cross_validator.py` — 기관+외국인 동시 순매도 시 sepa_trend는 차단 대신 -10점 감점 (배치 T+1 특성 반영)
+
+### P1-4: US SEPA RS Rating 진입 차단
+- `src/strategies/us/sepa_trend.py` — `rs_rating < min_rs_rating(70)` 시 return None (기존 감점 → 완전 차단)
+
+### P1-5: 진화 잠금에 stop_loss_pct 추가
+- `src/core/evolution/strategy_evolver.py` — `_locked_params`에 `stop_loss_pct` 추가
+
+### P1-6: RSI2/Strategic Swing 3차 익절 상향
+- `scripts/run_trader.py` — `rsi2_reversal` + `strategic_swing`의 `third_exit_pct: 12.0` → `20.0`
+
+### P1-7: gap_and_go stop_loss 통일
+- `config/evolved_overrides.yml` — `gap_and_go.stop_loss_pct: 2.5` → `3.5` (min_stop_pct와 일치)
+
+### 문서 업데이트
+- `docs/strategies/kr-strategies.md` — RSI2 5일 하락 점수 기준 변경 반영
+- `docs/strategies/us-strategies.md` — US SEPA RS Rating 차단 기준 반영
+- `docs/evolution/evolution-system.md` — 잠금 파라미터 목록 추가 (stop_loss_pct 포함)
+- `docs/risk/risk-and-exit.md` — 크로스검증 규칙2 sepa_trend 감점 처리 반영
+
+## 2026-04-15 — US 전략 3개 P0 진입 로직 강화
+
+### P0-5: US SEPA MA200 데이터 부족 시 자동 통과 차단
+- `src/strategies/us/sepa_trend.py` — MA200 상향 판정 시 데이터 220봉 미만이면 `sepa_pass += 1` (자동 통과) 제거
+- 데이터 부족 시 기준 미통과로 처리 + debug 로그 추가
+
+### P0-6: US 어닝스 드리프트 — 프록시 기반 명시 + 필터 강화
+- `src/strategies/us/earnings_drift.py`
+  - 클래스 docstring에 "현재 버전: 갭+거래량 프록시 기반, 실적 확인 API 미연동" 명시
+  - `generate_signal()` 상단에 1회성 debug 경고 로그 추가
+  - `min_gap_pct` 기본값 5.0% → 7.0% (일반 뉴스 갭 필터링 강화)
+  - `min_volume_surge` 기본값 신설 3.5x (기존 하드코딩 2.5x → 설정 기반 3.5x)
+- `config/default.yml` — US earnings_drift 섹션 `min_gap_pct: 7.0`, `min_volume_surge: 3.5` 반영
+
+### P0-7: US 모멘텀 min_breakout_pct / volume_surge_ratio 상향
+- `src/strategies/us/momentum.py` — 기본값 `min_breakout_pct` 0.8 → 2.0, `volume_surge_ratio` 2.0 → 2.5
+- `config/default.yml` — US momentum 섹션 `min_breakout_pct: 2.0`, `volume_surge_ratio: 2.5` 반영
+
+### 문서 업데이트
+- `docs/strategies/us-strategies.md` — 3개 전략 변경사항 반영
+
 ## 2026-04-15 — P0 버그 수정: 섹터 하드코딩 + 진화 전략 미구분
 
 ### P0-11: cross_validator 섹터 집중도 하드코딩 → 설정 참조

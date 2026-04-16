@@ -105,6 +105,14 @@ _VALID_STRATEGIES = {
 - 비활성 전략 0% 고정 (momentum_breakout)
 - core_holding은 별도 관리 (locked)
 
+### 진화 잠금 파라미터 (`_locked_params`)
+진화 시스템이 자동 조정 불가한 파라미터 (수동 분석 후에만 변경):
+- `base_position_pct` — 포지션 크기 25% 고정
+- `trailing_stop_pct` — 트레일링 스탑 3.0% 고정
+- `trailing_activate_pct` — 트레일링 활성화 5.0% 고정
+- `first_exit_pct` — 1차 익절 5.0% 고정
+- `stop_loss_pct` — 손절 비율 (수동 조정만 허용)
+
 ### 내장 자동 튜닝 규칙 (`_build_rules`)
 | 규칙 | 조건 | 파라미터 | 조정 |
 |------|------|----------|------|

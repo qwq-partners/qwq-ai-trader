@@ -1,6 +1,13 @@
 {
-    "date": "",
-    "fixes_today": 0,
-    "last_fix_timestamp": 0,
-    "history": []
+  "date": "2026-04-07",
+  "fixes_today": 1,
+  "last_fix_timestamp": 1775522485.3894756,
+  "history": [
+    {
+      "timestamp": "2026-04-07 09:41:25",
+      "error_key": "TypeError:trade_journal.py:418",
+      "summary": "`trade_journal.py`의 `get_statistics()` 및 전략별/청산유형별 통계에서 `t.pnl`/`t.pnl_pct`가 Decimal과 float 혼합되어 `sum()` TypeError 발생 → 4곳에 `float()` 캐스팅 추가하여 수정",
+      "commit_hash": "d2b2222146c405afc5bda145c9ed1f14907c34a8"
+    }
+  ]
 }

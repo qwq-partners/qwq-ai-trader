@@ -67,7 +67,8 @@ class SEPATrendStrategy(USBaseStrategy):
             if ma200 > ma200_20ago:
                 sepa_pass += 1
         else:
-            sepa_pass += 1  # 데이터 부족 시 관대하게 통과 처리
+            logger.debug(f"[US SEPA] {symbol} MA200 상향 데이터 부족 — 기준 미통과")
+            pass  # 데이터 부족 시 통과 불가
 
         # 4. 52-week low +30% (strong uptrend)
         pct_from_low = (close - low_52w) / low_52w * 100 if low_52w > 0 else 0
@@ -87,6 +88,15 @@ class SEPATrendStrategy(USBaseStrategy):
 
         # Must pass at least 5/6 SEPA criteria
         if sepa_pass < 5:
+            return None
+
+        # RS Rating 최소 기준 미달 시 진입 차단
+        rs_val = indicators.get('rs_rating')
+        if rs_val is not None and rs_val < self.min_rs_rating:
+            logger.debug(
+                f"[US SEPA] {symbol} RS Rating 미달 차단: "
+                f"{rs_val:.0f} < {self.min_rs_rating}"
+            )
             return None
 
         # --- Score (0-100) ---

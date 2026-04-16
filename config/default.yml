@@ -35,8 +35,8 @@ kr:
     enable_next_market: true         # 넥스트장 (15:40~20:00)
     pre_market_slippage_buffer_pct: 3.0
     fees:
-      buy_rate: 0.00015              # 매수 수수료 0.015%
-      sell_rate: 0.00195             # 매도 수수료 + 거래세
+      buy_rate: 0.00014              # 매수 수수료 0.014% (한투 BanKIS 0.0140527%)
+      sell_rate: 0.00213             # 매도 수수료 + 거래세 0.213% (수수료 0.013% + 세금 0.20%)
     slippage:
       expected_ticks: 1
       max_ticks: 3
@@ -311,7 +311,7 @@ us:
     enable_after_hours: false
     commission:
       type: kis
-      rate: 0.25                     # 0.25%
+      rate: 0.0                      # zero-commission (KIS 해외주식)
       min: 0.0
     slippage:
       model: percentage
@@ -336,8 +336,8 @@ us:
       enabled: true
       time_horizon: swing
       breakout_period: 20
-      min_breakout_pct: 1.0
-      volume_surge_ratio: 1.8
+      min_breakout_pct: 2.0
+      volume_surge_ratio: 2.5
       min_score: 65
       stop_loss_pct: 5.0
       take_profit_pct: 15.0
@@ -355,7 +355,8 @@ us:
       enabled: true
       time_horizon: swing
       min_eps_surprise_pct: 10
-      min_gap_pct: 5.0
+      min_gap_pct: 7.0
+      min_volume_surge: 3.5
       min_revenue_growth_pct: 15
       min_score: 70
       stop_loss_pct: 5.5

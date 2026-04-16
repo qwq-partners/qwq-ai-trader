@@ -525,7 +525,7 @@ class UnifiedTradingBot:
                     "trailing_stop_pct": 3.0,
                     "first_exit_pct": 5.0,
                     "second_exit_pct": 10.0,
-                    "third_exit_pct": 12.0,
+                    "third_exit_pct": 20.0,  # 12→20% 상향 (추세 추종 공간 확보)
                 },
                 "sepa_trend": {
                     "stop_loss_pct": sepa_cfg.get("stop_loss_pct", 5.0),
@@ -545,7 +545,7 @@ class UnifiedTradingBot:
                     "trailing_stop_pct": 3.0,
                     "first_exit_pct": 5.0,
                     "second_exit_pct": 10.0,
-                    "third_exit_pct": 12.0,
+                    "third_exit_pct": 20.0,  # 12→20% 상향 (추세 추종 공간 확보)
                 },
                 "core_holding": {
                     "stop_loss_pct": 15.0,

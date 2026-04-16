@@ -105,12 +105,17 @@ class CrossStrategyValidator:
             foreign_net = indicators.get("foreign_net_buy")
             inst_net = indicators.get("inst_net_buy")
             if foreign_net is not None and inst_net is not None:
-                if foreign_net < 0 and inst_net < 0 and strategy in ("theme_chasing", "momentum_breakout", "gap_and_go"):
-                    self._stats["blocked"] += 1
-                    logger.info(
-                        f"[크로스검증] {symbol} 차단: {strategy} 매수 + 기관/외국인 동시 순매도"
-                    )
-                    return False, 0, "수급 불일치: 기관+외국인 동시 순매도"
+                if foreign_net < 0 and inst_net < 0:
+                    if strategy in ("theme_chasing", "momentum_breakout", "gap_and_go"):
+                        self._stats["blocked"] += 1
+                        logger.info(
+                            f"[크로스검증] {symbol} 차단: {strategy} 매수 + 기관/외국인 동시 순매도"
+                        )
+                        return False, 0, "수급 불일치: 기관+외국인 동시 순매도"
+                    # sepa_trend: 배치(T+1) 특성상 완전 차단 대신 감점 처리
+                    if strategy == "sepa_trend":
+                        adjusted_score -= 10
+                        penalties.append(f"[규칙2] 기관+외국인 동시 순매도 — SEPA 감점 -10")
 
         # === 규칙 3: 약세 체제에서 공격적 전략 차단 ===
         # US: earnings_drift는 어닝 서프라이즈 기반 → bear에서도 허용

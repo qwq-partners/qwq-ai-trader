@@ -9,6 +9,7 @@ Adapted from ai-trader-us/src/strategies/earnings_drift.py
 
 from typing import Dict, Any, Optional
 import pandas as pd
+from loguru import logger
 
 from ..base import USBaseStrategy
 from ...core.types import Signal, Portfolio, StrategyType, TimeHorizon
@@ -16,17 +17,24 @@ from ...utils.sizing import atr_position_multiplier
 
 
 class EarningsDriftStrategy(USBaseStrategy):
-    """Post-Earnings Drift: buy strong earnings gap that holds"""
+    """Post-Earnings Drift: buy strong earnings gap that holds
+
+    현재 버전: 갭+거래량 프록시 기반.
+    실적 확인(EPS 서프라이즈) API 미연동 — min_eps_surprise_pct, min_revenue_growth_pct
+    파라미터는 향후 실적 API 연동 시 활용 예정.
+    """
 
     name = "earnings_drift"
     strategy_type = StrategyType.EARNINGS_DRIFT
     time_horizon = TimeHorizon.SWING
+    _proxy_warning_logged = False
 
     def __init__(self, config: dict = None):
         super().__init__(config)
-        self.min_gap_pct = self.config.get('min_gap_pct', 5.0)
+        self.min_gap_pct = self.config.get('min_gap_pct', 7.0)
         self.min_eps_surprise_pct = self.config.get('min_eps_surprise_pct', 10)
         self.min_revenue_growth_pct = self.config.get('min_revenue_growth_pct', 15)
+        self.min_volume_surge = self.config.get('min_volume_surge', 3.5)
         self.stop_loss_pct = self.config.get('stop_loss_pct', 8.0)
         self.max_holding_days = self.config.get('max_holding_days', 20)
 
@@ -39,6 +47,10 @@ class EarningsDriftStrategy(USBaseStrategy):
         A large gap-up (+5%+) with very high volume suggests earnings reaction.
         The strategy confirms the gap held (close near high) before entering.
         """
+        if not EarningsDriftStrategy._proxy_warning_logged:
+            logger.debug("[US 어닝스] 현재 갭+거래량 프록시 기반 — 실적 확인 API 미연동")
+            EarningsDriftStrategy._proxy_warning_logged = True
+
         close = indicators.get('close', 0)
         if close <= 0 or close < 5.0 or len(history) < 5:
             return None
@@ -69,8 +81,8 @@ class EarningsDriftStrategy(USBaseStrategy):
         if gap_pct < self.min_gap_pct:
             return None
 
-        # --- Volume Surge (earnings days typically 3x+) ---
-        if vol_ratio < 2.5:
+        # --- Volume Surge (어닝 반응은 거래량 3.5x+ 폭증) ---
+        if vol_ratio < self.min_volume_surge:
             return None
 
         # --- Gap Hold Confirmation ---
