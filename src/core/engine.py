@@ -565,7 +565,10 @@ class UnifiedEngine:
                 pos.highest_price = fill.price
 
         else:
-            # 매도
+            # 매도 — fill 수량이 보유 수량 초과 시 보정 (음수 수량 방지)
+            if fill.quantity > pos.quantity:
+                logger.error(f"[엔진] SELL fill {symbol} 초과: 요청={fill.quantity}, 보유={pos.quantity} → 보정")
+                fill.quantity = pos.quantity
             pos.quantity -= fill.quantity
 
             # 매도 비용 계산 (수수료 + 거래세 0.20%, fee_calculator 기준 통일)
@@ -977,6 +980,7 @@ class RiskManager:
             trade_memory=self._trade_memory,
             llm_manager=_llm_mgr,
             trade_wiki=self._trade_wiki,
+            max_sector_positions=config.max_positions_per_sector,
         )
 
         # 주문 실패 쿨다운 추적 (종목별)
@@ -1563,6 +1567,7 @@ class RiskManager:
                 self._reserved_by_order.pop(event.symbol, None)
                 self._pending_fallback_count.pop(event.symbol, None)
                 self._pending_exit_reasons.pop(event.symbol, None)
+                self._pending_signal_cache.pop(event.symbol, None)
             else:
                 self._pending_quantities[event.symbol] = remaining
                 logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")

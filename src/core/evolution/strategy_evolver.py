@@ -526,6 +526,14 @@ class StrategyEvolver:
                 if not targets:
                     continue
 
+                # low_frequency 규칙: 전략별 성과에서 가장 거래가 적은 전략만 타겟팅
+                if rule.name == "low_frequency" and review.strategy_performance:
+                    targets = self._narrow_targets_by_lowest_trades(
+                        targets, review.strategy_performance
+                    )
+                    if not targets:
+                        continue
+
                 # 첫 번째 대상만 사용
                 strategy_name, param_name = targets[0]
 
@@ -601,6 +609,35 @@ class StrategyEvolver:
                     targets.append((prefix, param))
 
         return targets
+
+    def _narrow_targets_by_lowest_trades(
+        self,
+        targets: List[Tuple[str, str]],
+        strategy_performance: Dict[str, Dict],
+    ) -> List[Tuple[str, str]]:
+        """와일드카드 타겟 중 거래가 가장 적은 전략만 반환 (low_frequency 전용)
+
+        strategy_performance에 등록된 전략만 비교하고, 등록되지 않은 전략은
+        거래 0건으로 간주합니다.
+        """
+        if not targets:
+            return targets
+
+        # 각 타겟 전략의 거래 수 확인
+        target_trades = []
+        for strategy_name, param_name in targets:
+            perf = strategy_performance.get(strategy_name, {})
+            trades_count = perf.get("trades", 0)
+            target_trades.append((strategy_name, param_name, trades_count))
+
+        # 거래가 가장 적은 전략 선택
+        target_trades.sort(key=lambda x: x[2])
+        lowest = target_trades[0]
+        logger.info(
+            f"[진화] low_frequency 타겟 좁히기: {lowest[0]}.{lowest[1]} "
+            f"(거래 {lowest[2]}건, 전체 {len(targets)}개 전략 중)"
+        )
+        return [(lowest[0], lowest[1])]
 
     # ============================================================
     # LLM 보조 분석 (선택적)

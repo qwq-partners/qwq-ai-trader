@@ -473,6 +473,10 @@ class KISBroker(BaseBroker):
 
         except Exception as e:
             logger.exception(f"주문 제출 오류: {e}")
+            # pending 좀비 방지: 예외 시 _pending_orders에서 제거
+            self._pending_orders.pop(order.id, None)
+            self._order_id_to_kis_no.pop(order.id, None)
+            self._order_id_to_orgno.pop(order.id, None)
             return False, str(e)
 
     def _get_order_division(self, order: Order) -> str:

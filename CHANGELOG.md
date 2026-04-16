@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-15 — P0 버그 수정: 섹터 하드코딩 + 진화 전략 미구분
+
+### P0-11: cross_validator 섹터 집중도 하드코딩 → 설정 참조
+- `src/core/cross_validator.py` — `same_sector_count >= 3` 하드코딩을 `self._max_sector_positions`로 교체
+- `__init__`에 `max_sector_positions` 파라미터 추가 (기본값 2)
+- `src/core/engine.py` — KR 엔진 호출 시 `config.max_positions_per_sector` 전달
+- `scripts/run_trader.py` — US 엔진 호출 시 `trading_config.risk.max_positions_per_sector` 전달
+- KR=2, US=3 설정값이 정상 적용됨
+
+### P0-12: 진화 low_frequency 규칙 전략 미구분 수정
+- `src/core/evolution/strategy_evolver.py` — `_find_triggered_rule()`에서 low_frequency 규칙 트리거 시 `review.strategy_performance` 활용
+- `_narrow_targets_by_lowest_trades()` 메서드 추가: 와일드카드 `*.min_score` 타겟 중 거래가 가장 적은 전략만 선택
+- 기존 문제: sepa 거래 부족인데 theme_chasing.min_score가 변경되는 현상 해결
+
 ## 2026-04-16 — 코어홀딩 초과 비중 관리 시스템
 
 ### P0: 초과 비중 감지 + 텔레그램 경고

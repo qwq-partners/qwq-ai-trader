@@ -22,13 +22,15 @@ class CrossStrategyValidator:
     """
 
     def __init__(self, portfolio=None, risk_manager=None, trade_memory=None,
-                 llm_manager=None, market: str = "KR", trade_wiki=None):
+                 llm_manager=None, market: str = "KR", trade_wiki=None,
+                 max_sector_positions: int = 2):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
         self._trade_memory = trade_memory
         self._llm_manager = llm_manager  # LLM 종합 판단 (선택적)
         self._market = market  # "KR" 또는 "US"
         self._trade_wiki = trade_wiki  # 거래 위키 (교훈 컨텍스트)
+        self._max_sector_positions = max_sector_positions  # 동일 섹터 최대 포지션 수 (설정 참조)
 
         # 오늘 검증 통계
         self._stats = {
@@ -129,7 +131,7 @@ class CrossStrategyValidator:
                 1 for p in self._portfolio.positions.values()
                 if getattr(p, 'sector', None) == sector
             )
-            if same_sector_count >= 3:
+            if same_sector_count >= self._max_sector_positions:
                 self._stats["blocked"] += 1
                 logger.info(
                     f"[크로스검증] {symbol} 차단: 섹터 과집중 ({sector}: {same_sector_count}종목)"

@@ -1270,6 +1270,7 @@ class UnifiedTradingBot:
                     risk_manager=us_engine.risk_manager,
                     market="US",
                     trade_wiki=_us_wiki,
+                    max_sector_positions=us_engine.trading_config.risk.max_positions_per_sector,
                 )
                 logger.info("[US] 크로스 검증 게이트 + Wiki 초기화 완료")
             except Exception as _e:

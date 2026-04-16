@@ -435,6 +435,18 @@ class KRScheduler:
             bot._exit_pending_symbols.discard(symbol)
             bot._exit_pending_timestamps.pop(symbol, None)
             bot._exit_reasons.pop(symbol, None)
+            # 엔진 RiskManager의 pending도 해제 (좀비 방지)
+            if bot.engine.risk_manager:
+                try:
+                    await bot.engine.risk_manager.clear_pending(symbol)
+                except Exception:
+                    pass
+            # ExitManager 단계 롤백 (실패한 매도 시도의 단계 복원)
+            if bot.exit_manager:
+                try:
+                    bot.exit_manager.rollback_stage(symbol)
+                except Exception:
+                    pass
 
     async def _sync_portfolio(self):
         """KIS API와 포트폴리오 동기화"""

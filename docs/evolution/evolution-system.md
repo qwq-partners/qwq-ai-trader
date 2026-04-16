@@ -105,6 +105,18 @@ _VALID_STRATEGIES = {
 - 비활성 전략 0% 고정 (momentum_breakout)
 - core_holding은 별도 관리 (locked)
 
+### 내장 자동 튜닝 규칙 (`_build_rules`)
+| 규칙 | 조건 | 파라미터 | 조정 |
+|------|------|----------|------|
+| low_win_rate | 승률 < 40%, 5건+ | *.min_score | +5 (max 90) |
+| high_win_rate | 승률 > 65%, 10건+ | *.min_score | -5 (min 40) |
+| bad_profit_factor | PF < 1.0, 5건+ | stop_loss_pct | -0.5% (min 3%) |
+| low_frequency | 1~4건/7일 | *.min_score | -3 (min 40), 전략별 타겟팅 |
+| large_avg_loss | 평균 < -2%, 5건+ | max_stop_pct | -1% (min 3%) |
+
+> **low_frequency 전략 타겟팅**: `*.min_score` 와일드카드 사용 시 `review.strategy_performance`에서
+> 거래가 가장 적은 전략만 선별하여 해당 전략의 min_score만 조정 (다른 전략 오염 방지)
+
 ### 주간 리밸런싱 (토요일 00:00)
 - LLM(Gemini) 기반 성과 분석 → 배분 제안
 - 가드레일 적용 후 `evolved_overrides.yml` 저장
