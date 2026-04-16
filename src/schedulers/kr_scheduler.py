@@ -4639,6 +4639,141 @@ JSON:
                         # 예외 시에도 재시도 허용 (last_fill_date 미설정)
                         logger.error(f"[코어홀딩스케줄러] 빈슬롯 매수 오류: {e}", exc_info=True)
 
+                # ── 3) 코어 초과 비중 감지 + 트림 ──
+                core_cfg_ow = bot.batch_analyzer._config.get("core_holding", {})
+                _ow_alert_pct = core_cfg_ow.get("overweight_alert_pct", 35.0)
+                _trim_threshold_pct = core_cfg_ow.get("trim_threshold_pct", 40.0)
+                _trim_ratio = core_cfg_ow.get("trim_ratio", 0.5)
+                _trim_min_value = core_cfg_ow.get("trim_min_value", 200000)
+                _individual_max_pct = core_cfg_ow.get("individual_max_pct", 20.0)
+                _rebalance_exclude = set(str(s) for s in core_cfg_ow.get("rebalance_exclude", []))
+
+                equity = portfolio.total_equity
+                if equity > 0:
+                    current_core_value = portfolio.get_strategy_allocation("core_holding")
+                    core_pct = float(current_core_value / equity * 100)
+
+                    # P0: 초과 비중 경고 (35%+, 쿨다운 24시간)
+                    if core_pct >= _ow_alert_pct:
+                        _last_ow_alert = getattr(self, '_last_core_ow_alert', None)
+                        _now_ts = datetime.now()
+                        if _last_ow_alert is None or (_now_ts - _last_ow_alert).total_seconds() > 86400:
+                            self._last_core_ow_alert = _now_ts
+                            # 종목별 상세
+                            _core_details = []
+                            for sym, pos in portfolio.positions.items():
+                                if pos.strategy == "core_holding":
+                                    _sym_pct = float(pos.market_value / equity * 100)
+                                    _core_details.append(
+                                        f"  {sym} {pos.name}: {float(pos.market_value):,.0f}원 "
+                                        f"({_sym_pct:.1f}%, {float(pos.unrealized_pnl_pct):+.1f}%)"
+                                    )
+                            _alert_msg = (
+                                f"⚠️ [코어홀딩] 초과 비중 경고\n"
+                                f"코어 비중: {core_pct:.1f}% (예산 30%)\n"
+                                f"코어 평가: {float(current_core_value):,.0f}원\n"
+                                f"총 자산: {float(equity):,.0f}원\n"
+                                + "\n".join(_core_details)
+                            )
+                            logger.warning(f"[코어홀딩] 초과 비중 {core_pct:.1f}% >= {_ow_alert_pct:.0f}%")
+                            try:
+                                await send_alert(_alert_msg)
+                            except Exception:
+                                pass
+
+                    # P1-2: 주간 트림 (금요일 14:00~14:15, 40%+)
+                    if (now.weekday() == 4 and now.hour == 14 and 0 <= now.minute < 15
+                            and core_pct >= _trim_threshold_pct):
+                        _last_trim = getattr(self, '_last_core_trim_date', None)
+                        if _last_trim != today_str:
+                            self._last_core_trim_date = today_str
+                            # 설정에서 비율 읽기 (하드코딩 방지)
+                            _core_alloc_pct = 30.0
+                            _risk_alloc = getattr(bot.engine.config, 'risk', None)
+                            if _risk_alloc and hasattr(_risk_alloc, 'strategy_allocation'):
+                                _core_alloc_pct = _risk_alloc.strategy_allocation.get("core_holding", 30.0)
+                            _position_pct = core_cfg_ow.get("position_pct", 10.0)
+                            _max_position_pct = core_cfg_ow.get("max_position_pct", 15.0)
+
+                            core_budget = equity * Decimal(str(_core_alloc_pct / 100))
+                            excess = current_core_value - core_budget
+                            trim_target = excess * Decimal(str(_trim_ratio))
+
+                            # 코어 포지션 평가금 높은 순 정렬
+                            _core_positions = sorted(
+                                [(s, p) for s, p in portfolio.positions.items()
+                                 if p.strategy == "core_holding" and s not in _rebalance_exclude],
+                                key=lambda x: x[1].market_value, reverse=True
+                            )
+
+                            _trimmed = []
+                            _remaining = trim_target
+                            for sym, pos in _core_positions:
+                                if _remaining <= Decimal(str(_trim_min_value)):
+                                    break
+
+                                # 개별 종목 상한 체크
+                                sym_pct = float(pos.market_value / equity * 100)
+                                target_value = equity * Decimal(str(_position_pct / 100))
+                                sym_excess = pos.market_value - target_value
+
+                                # 개별 상한 초과 또는 전체 트림 대상
+                                if sym_pct >= _individual_max_pct:
+                                    # max_position_pct까지 축소
+                                    sym_trim = pos.market_value - equity * Decimal(str(_max_position_pct / 100))
+                                elif sym_excess > 0:
+                                    sym_trim = min(sym_excess, _remaining)
+                                else:
+                                    continue
+
+                                sym_trim = min(sym_trim, _remaining)
+                                if sym_trim < Decimal(str(_trim_min_value)):
+                                    continue
+
+                                trim_qty = int(sym_trim / pos.current_price)
+                                if trim_qty <= 0:
+                                    continue
+
+                                # 부분 매도 시그널 발행 (quantity 키로 수량 전달 → on_signal에서 인식)
+                                event = SignalEvent.from_signal(
+                                    Signal(
+                                        symbol=sym,
+                                        side=OrderSide.SELL,
+                                        strength=SignalStrength.NORMAL,
+                                        strategy=StrategyType.CORE_HOLDING,
+                                        price=pos.current_price,
+                                        score=0,
+                                        reason=f"코어 초과 비중 트림: {core_pct:.1f}% > {_trim_threshold_pct:.0f}%, {trim_qty}주 매도",
+                                        metadata={
+                                            "is_core": True,
+                                            "trim": True,
+                                            "quantity": trim_qty,
+                                        },
+                                    ),
+                                    source="core_trim",
+                                )
+                                await bot.engine.emit(event)
+
+                                actual_trim_value = pos.current_price * trim_qty
+                                _remaining -= actual_trim_value
+                                _trimmed.append(f"{sym} {pos.name}: {trim_qty}주 ({float(actual_trim_value):,.0f}원)")
+                                logger.info(
+                                    f"[코어홀딩] 트림: {sym} {trim_qty}주 "
+                                    f"(비중 {sym_pct:.1f}% → ~{sym_pct - float(actual_trim_value/equity*100):.1f}%)"
+                                )
+
+                            if _trimmed:
+                                _trim_msg = (
+                                    f"✂️ [코어홀딩] 초과 비중 트림 실행\n"
+                                    f"코어 비중: {core_pct:.1f}% → 목표 30%\n"
+                                    f"초과분: {float(excess):,.0f}원, 트림 목표: {float(trim_target):,.0f}원\n"
+                                    + "\n".join(_trimmed)
+                                )
+                                try:
+                                    await send_alert(_trim_msg)
+                                except Exception:
+                                    pass
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

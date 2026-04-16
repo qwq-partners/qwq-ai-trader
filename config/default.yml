@@ -168,6 +168,12 @@ kr:
       early_ma200_alert_days: 3          # 조기경보: MA200 이탈 연속 일수
       early_loss_alert_pct: -12.0        # 조기경보: 손실률 임계 (손절 -15% 전)
       early_rescore_alert: 40.0          # 조기경보: 재스코어 하한
+      # 초과 비중 관리
+      overweight_alert_pct: 35.0         # 경고 알림 기준 (총자산 대비 코어 비중 %)
+      trim_threshold_pct: 40.0           # 트림 실행 기준 (%)
+      trim_ratio: 0.5                    # 초과분 대비 트림 비율 (50%)
+      trim_min_value: 200000             # 최소 트림 금액 (원, 수수료 대비)
+      individual_max_pct: 20.0           # 개별 종목 트림 기준 (총자산 대비 %)
 
   exit_manager:
     enable_partial_exit: true

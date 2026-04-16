@@ -1,5 +1,38 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-16 — 코어홀딩 초과 비중 관리 시스템
+
+### P0: 초과 비중 감지 + 텔레그램 경고
+- `src/schedulers/kr_scheduler.py` — 코어 비중 >= 35% 시 텔레그램 경고 (24시간 쿨다운)
+- 종목별 평가금/비중/수익률 상세 포함
+
+### P1: 비코어 pool_equity 보호
+- `src/core/engine.py` — 코어 30% 초과 시 비코어 pool_equity에서 코어 실점유분 차감
+- `_get_core_actual_value()` 메서드 추가
+- 코어 39% 점유 → 비코어 pool = equity의 61% (기존: 100%)
+
+### P1-2: 주간 트림 (부분 익절)
+- `src/schedulers/kr_scheduler.py` — 매주 금요일 14:00 실행
+- 코어 비중 >= 40% → 초과분의 50% 트림
+- 개별 종목 >= 20% → max_position_pct(15%)까지 축소
+- 가장 많이 오른 종목부터 부분 매도 (metadata.quantity로 수량 전달)
+- 최소 트림 20만원 (수수료 대비), rebalance_exclude 종목 제외
+
+### P2: config 파라미터 확장
+- `config/default.yml` — overweight_alert_pct, trim_threshold_pct, trim_ratio, trim_min_value, individual_max_pct 추가
+
+### 리뷰 수정 (P0×2, P2×3)
+- P0-1: trim_qty → quantity 키 변경 (전량 매도 방지)
+- P0-2: _send_telegram → send_alert 교체 (미존재 메서드)
+- P2-1: 루프 내 불필요 import 제거
+- P2-2: 하드코딩 비율(30%, 10%, 15%) → config 값 참조
+- P2-4: _get_core_actual_value() 이중 호출 제거
+
+### 수정 파일
+- `src/core/engine.py` — pool_equity 보호 + _get_core_actual_value()
+- `src/schedulers/kr_scheduler.py` — 경고 + 트림 로직
+- `config/default.yml` — 코어 초과 비중 파라미터 5개
+
 ## 2026-04-15 — evolve() 호출 경로 복원 + 4/7~4/15 복기 기반 10대 개선
 
 ### evolve() 자동 호출 복원

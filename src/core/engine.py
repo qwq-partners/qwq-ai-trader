@@ -1039,10 +1039,10 @@ class RiskManager:
         return sum(self._reserved_by_order.values()) if self._reserved_by_order else Decimal("0")
 
     def _get_core_reserve(self) -> Decimal:
-        """코어홀딩 예약 현금 계산
+        """코어홀딩 예약/초과분 계산
 
-        전체 자산의 core_holding 배분율에서 현재 코어 포지션 가치를 차감한 금액.
-        비코어 전략은 이 금액을 제외한 풀에서만 매수 가능.
+        코어 예산 미달 시: 예약 금액 반환 (비코어 풀에서 차감)
+        코어 예산 초과 시: 0 반환 (예약 불필요)
         """
         _alloc = self.config.strategy_allocation
         core_alloc_pct = _alloc.get("core_holding", 0)
@@ -1055,6 +1055,10 @@ class RiskManager:
         current_core = self.engine.portfolio.get_strategy_allocation("core_holding")
         reserve = core_budget - current_core
         return max(reserve, Decimal("0"))
+
+    def _get_core_actual_value(self) -> Decimal:
+        """코어홀딩 실제 점유 금액 (비코어 풀 보호용)"""
+        return self.engine.portfolio.get_strategy_allocation("core_holding")
 
     def block_symbol(self, symbol: str):
         """종목 주문 쿨다운 등록 (외부에서 호출)"""
@@ -1657,16 +1661,22 @@ class RiskManager:
                 return 0
             base_pct = strat_pct / 100
             max_pct = self.config.max_position_pct / 100
-            # 코어 예산 예약: 비코어 전략은 코어 예약분 제외한 풀에서 계산
+            # 코어 예산 예약: 비코어 전략은 코어 점유분 제외한 풀에서 계산
             if _is_core:
                 pool_equity = equity
             else:
+                core_actual = self._get_core_actual_value()
                 core_reserve = self._get_core_reserve()
-                pool_equity = max(equity - core_reserve, Decimal("0"))
+                if core_reserve > 0:
+                    # 코어 예산 미달: 예약분 차감
+                    pool_equity = max(equity - core_reserve, Decimal("0"))
+                else:
+                    # 코어 예산 소진/초과: 코어 실점유분 차감 (초과 비중 보호)
+                    pool_equity = max(equity - core_actual, Decimal("0"))
                 if pool_equity <= 0:
                     logger.info(
-                        f"[리스크] 코어 예산 예약으로 가용 풀 없음: {signal.symbol} "
-                        f"(equity={equity:,.0f}, core_reserve={core_reserve:,.0f})"
+                        f"[리스크] 코어 점유로 가용 풀 없음: {signal.symbol} "
+                        f"(equity={equity:,.0f}, core={core_actual:,.0f})"
                     )
                     return 0
 
