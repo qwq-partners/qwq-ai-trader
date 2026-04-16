@@ -1,6 +1,6 @@
 # 진화 시스템 + Trade Wiki
 
-> 최종 갱신: 2026-04-06
+> 최종 갱신: 2026-04-17
 
 ## 전체 구조
 
@@ -116,7 +116,7 @@ _VALID_STRATEGIES = {
 ### 내장 자동 튜닝 규칙 (`_build_rules`)
 | 규칙 | 조건 | 파라미터 | 조정 |
 |------|------|----------|------|
-| low_win_rate | 승률 < 40%, 5건+ | *.min_score | +5 (max 90) |
+| low_win_rate | 승률 < 40%, 5건+ | *.min_score | +5 (max 85) |
 | high_win_rate | 승률 > 65%, 10건+ | *.min_score | -5 (min 40) |
 | bad_profit_factor | PF < 1.0, 5건+ | stop_loss_pct | -0.5% (min 3%) |
 | low_frequency | 1~4건/7일 | *.min_score | -3 (min 40), 전략별 타겟팅 |

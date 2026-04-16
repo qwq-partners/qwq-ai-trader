@@ -235,7 +235,7 @@ class ThemeChasingStrategy(BaseStrategy):
         if now_time < "10:00":
             _max_change = self.theme_config.max_change_pct_morning  # 4%
         else:
-            _max_change = min(self.theme_config.max_change_pct, 7.0)  # 7% 상한
+            _max_change = self.theme_config.max_change_pct  # config 값 그대로 사용
         if change_pct > _max_change:
             logger.debug(f"[테마 추종] {symbol} 과열 (등락률 {change_pct:.1f}% > {_max_change:.0f}%)")
             return None

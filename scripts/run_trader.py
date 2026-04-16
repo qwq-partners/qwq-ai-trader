@@ -1355,6 +1355,12 @@ class UnifiedTradingBot:
         except Exception as e:
             logger.exception(f"실행 오류: {e}")
         finally:
+            # 모든 태스크 안전 종료
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             await self.shutdown()
 
     def stop(self):

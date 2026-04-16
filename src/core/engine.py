@@ -1083,7 +1083,7 @@ class RiskManager:
         if event.side != OrderSide.BUY:
             return
         meta = event.metadata or {}
-        asyncio.create_task(
+        task = asyncio.create_task(
             _SigLog.get().log(
                 symbol=event.symbol,
                 name=meta.get("name", ""),
@@ -1102,6 +1102,8 @@ class RiskManager:
                 },
             )
         )
+        # fire-and-forget 예외 무음 처리 (unhandled exception 경고 방지)
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
@@ -1114,11 +1116,21 @@ class RiskManager:
         for s in expired:
             del self._order_fail_cooldown[s]
 
+        # cooldown dict 크기 방어 (야간/주말 정리 안 되는 경우 대비)
+        if len(self._order_fail_cooldown) > 500:
+            cutoff = now - timedelta(seconds=self._COOLDOWN_SECONDS)
+            self._order_fail_cooldown = {s: t for s, t in self._order_fail_cooldown.items() if t > cutoff}
+
         # 만료된 신호 쿨다운 항목 정리
         expired_signals = [s for s, t in self._last_signal_time.items()
                            if (now - t).total_seconds() >= self._SIGNAL_COOLDOWN_SECONDS]
         for s in expired_signals:
             del self._last_signal_time[s]
+
+        # signal dict 크기 방어
+        if len(self._last_signal_time) > 500:
+            cutoff = now - timedelta(seconds=self._SIGNAL_COOLDOWN_SECONDS * 10)
+            self._last_signal_time = {s: t for s, t in self._last_signal_time.items() if t > cutoff}
 
         # stale pending 주문 정리 (매도: 90초, 매수: 10분 타임아웃)
         _SELL_TIMEOUT = 90  # 매도 지정가 미체결 타임아웃
@@ -1429,6 +1441,7 @@ class RiskManager:
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
                     self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                                   block_reason=reason)
+                    self._pending_sector_map.pop(order.symbol, None)
                     return None
 
             # 비코어 전략: reserved_cash에 코어 예약금 포함 (코어 30% 예산 보호)
@@ -1445,6 +1458,7 @@ class RiskManager:
                 logger.warning(f"주문 거부: {order.symbol} - {reason}")
                 self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                               block_reason=reason)
+                self._pending_sector_map.pop(order.symbol, None)
                 return None
 
         # ── 모든 게이트 통과 → passed 기록 (BUY만)

@@ -1,5 +1,42 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-17 — Phase 3: P1 하위 5건 + P2 주요 8건 수정
+
+### P1-A: cooldown dict 무한 증가 방지
+- `src/core/engine.py` — `_order_fail_cooldown`, `_last_signal_time` dict 크기 500 초과 시 일괄 정리 가드 추가
+
+### P1-B: sector_map 고아 정리
+- `src/core/engine.py` — 주문 거절(can_trade=False) 시 `_pending_sector_map.pop()` 추가 (2곳: 리스크 검증 + can_open_position)
+
+### P1-C: run_trader.py finally에서 task cancel
+- `scripts/run_trader.py` — finally 블록에서 모든 tasks cancel + await 처리 추가
+
+### P1-D: strategic_swing ATR 가드 추가
+- `src/core/batch_analyzer.py` — `_generate_strategic_signals()`에서 ATR=0/None 시 continue 가드 추가
+
+### P1-E: 진화 param_bounds 범위 조정
+- `src/core/evolution/strategy_evolver.py` — `min_score: (30,90)→(40,85)`, `max_atr_pct: (3.0,15.0)→(3.0,8.0)`
+
+### P2-1: fire-and-forget task 예외 처리
+- `src/core/engine.py` — `_log_sig()` create_task에 done_callback 추가 (unhandled exception 경고 방지)
+
+### P2-2: 테마 max_change_pct 하드코딩 제거
+- `src/strategies/kr/theme_chasing.py` — `min(..., 7.0)` → config 값 그대로 사용
+
+### P2-3: CLAUDE.md 문서 오류 수정
+- US 최대 포지션 수 4개→10개, 평가 기간 3영업일+5건→5영업일+10건, 1차 익절 30%→20%
+
+### P2-4: config_persistence note 필드 저장
+- `src/core/evolution/config_persistence.py` — `save_override()`에 `note` 파라미터 추가 (선택적, _meta에 저장)
+
+### 문서 업데이트
+- `CLAUDE.md` — 최종 업데이트 2026-04-17, US 리스크/진화/청산 실제값 반영
+- `docs/evolution/evolution-system.md` — param_bounds min_score max 90→85 반영
+- `docs/risk/risk-and-exit.md` — 갱신일 업데이트
+- `docs/architecture/system-overview.md` — 갱신일 업데이트
+
+---
+
 ## 2026-04-15 — P1 상위 중요 이슈 7건 수정
 
 ### P1-1: KR SEPA R/R 기준 통일

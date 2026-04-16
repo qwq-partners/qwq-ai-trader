@@ -69,7 +69,7 @@ class EvolvedConfigManager:
         except Exception as e:
             logger.error(f"진화 오버라이드 저장 실패: {e}")
 
-    def save_override(self, component: str, param: str, value: Any, source: str = "evolution"):
+    def save_override(self, component: str, param: str, value: Any, source: str = "evolution", note: str = ""):
         """
         파라미터 오버라이드 저장 (출처 추적)
 
@@ -78,6 +78,7 @@ class EvolvedConfigManager:
             param: 파라미터명 (e.g., "stop_loss_pct")
             value: 값
             source: 출처 ("evolution" | "manual" | "rollback" | "dashboard")
+            note: 변경 사유 메모 (선택적)
         """
         # YAML 직렬화 가능한 타입으로 변환
         if hasattr(value, 'item'):  # numpy scalar
@@ -95,10 +96,13 @@ class EvolvedConfigManager:
         if "_meta" not in self._overrides:
             self._overrides["_meta"] = {}
         meta_key = f"{component}.{param}"
-        self._overrides["_meta"][meta_key] = {
+        meta = {
             "source": source,
             "timestamp": datetime.now().isoformat(),
         }
+        if note:
+            meta["note"] = note
+        self._overrides["_meta"][meta_key] = meta
 
         try:
             self._save()

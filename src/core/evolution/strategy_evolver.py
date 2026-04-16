@@ -220,13 +220,13 @@ class StrategyEvolver:
 
         # 파라미터 범위 (locked 파라미터는 진화 대상에서 자동 제외)
         self._param_bounds: Dict[str, Tuple[Any, Any]] = {
-            "min_score": (30, 90),
+            "min_score": (40, 85),
             "stop_loss_pct": (1.0, 8.0),
             "take_profit_pct": (2.0, 20.0),
             "max_stop_pct": (3.0, 10.0),
             "min_stop_pct": (1.0, 5.0),
             "daily_max_loss_pct": (2.0, 8.0),
-            "max_atr_pct": (3.0, 15.0),
+            "max_atr_pct": (3.0, 8.0),
             "min_change_pct": (1.0, 5.0),
             "min_volume_ratio": (1.0, 5.0),
         }

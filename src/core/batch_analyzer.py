@@ -1455,6 +1455,11 @@ class BatchAnalyzer:
             if c.score < self._strategic_min_score:
                 continue
 
+            # ATR 유효성 검증 (0/None이면 손절가 산출 불가)
+            atr_check = c.indicators.get("atr_pct") or c.indicators.get("atr_14")
+            if atr_check is None or atr_check <= 0:
+                continue
+
             entry_price = float(c.entry_price) if c.entry_price else 0
             if entry_price <= 0:
                 continue
