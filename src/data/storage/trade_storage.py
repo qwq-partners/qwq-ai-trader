@@ -432,6 +432,10 @@ class TradeStorage:
     def get_closed_trades(self, days: int = 30) -> List[TradeRecord]:
         return self._journal.get_closed_trades(days)
 
+    async def sync_from_db(self, days: int = 7):
+        """DB에서 JSON 누락 거래를 _trades에 보강 (리밸런싱용)"""
+        return await self._journal.sync_from_db(days)
+
     def get_open_trades(self) -> List[TradeRecord]:
         return self._journal.get_open_trades()
 
