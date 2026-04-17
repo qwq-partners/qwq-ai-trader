@@ -17,11 +17,11 @@ risk_config:
   max_positions: 8
   strategy_allocation:
     strategic_swing: 10.0
-    momentum_breakout: 0.0
-    gap_and_go: 5.0
     theme_chasing: 5.0
-    rsi2_reversal: 15.0
-    sepa_trend: 35.0
+    gap_and_go: 5.0
+    rsi2_reversal: 20.0
+    sepa_trend: 25.0
+    momentum_breakout: 0.0
     core_holding: 30.0
 exit_manager:
   max_stop_pct: 8.0
@@ -45,7 +45,7 @@ theme_chasing:
   enabled: true
   stop_loss_pct: 3.5
   min_volume_ratio: 2.3
-  trading_start_time: '09:30'
+  trading_start_time: 09:30
   entry_window_minutes: 20
   max_atr_pct: 5.5
   min_change_pct: 2.5
@@ -85,7 +85,7 @@ _meta:
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
     source: weekly_rebalance
-    timestamp: '2026-04-11T00:00:58.458762'
+    timestamp: '2026-04-18T00:00:21.938816'
   risk_config.strategy_allocation.core_holding:
     source: manual_review_locked
     timestamp: '2026-03-14T00:15:00'

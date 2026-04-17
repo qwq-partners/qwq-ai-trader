@@ -11,6 +11,8 @@ from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+
+import asyncio
 from loguru import logger
 
 
@@ -165,6 +167,146 @@ class TradeJournal:
 
         logger.info(f"거래 저널 로드: {len(self._trades)}건 (최근 {days}일)")
 
+    def _recover_trade_from_db_sync(self, trade_id: str) -> Optional["TradeRecord"]:
+        """DB(trades 테이블)에서 단일 거래 복원 (동기 래핑)
+
+        record_exit()이 동기 메서드이므로 이벤트 루프가 있으면
+        asyncio.to_thread로 블로킹 DB 호출을 수행합니다.
+        """
+        try:
+            import asyncpg
+            db_url = os.getenv("DATABASE_URL")
+            if not db_url:
+                return None
+
+            loop = None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
+            if loop and loop.is_running():
+                # 이미 이벤트 루프 안 → 새 스레드에서 실행
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(self._fetch_trade_from_db, db_url, trade_id)
+                    return future.result(timeout=10)
+            else:
+                return asyncio.run(self._async_fetch_trade(db_url, trade_id))
+        except Exception as e:
+            logger.warning(f"[저널] DB 복원 실패 (trade_id={trade_id}): {e}")
+            return None
+
+    def _fetch_trade_from_db(self, db_url: str, trade_id: str) -> Optional["TradeRecord"]:
+        """별도 스레드에서 DB 조회 (새 이벤트루프 생성)"""
+        return asyncio.run(self._async_fetch_trade(db_url, trade_id))
+
+    async def _async_fetch_trade(self, db_url: str, trade_id: str) -> Optional["TradeRecord"]:
+        """단일 거래 DB 조회"""
+        import asyncpg
+        conn = await asyncpg.connect(db_url)
+        try:
+            row = await conn.fetchrow(
+                """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
+                          entry_reason, entry_strategy, entry_signal_score,
+                          exit_time, exit_price, exit_quantity, exit_reason, exit_type,
+                          pnl, pnl_pct, holding_minutes
+                   FROM trades WHERE id = $1""",
+                trade_id,
+            )
+            if not row:
+                return None
+            return self._row_to_trade_record(row)
+        finally:
+            await conn.close()
+
+    @staticmethod
+    def _row_to_trade_record(row) -> "TradeRecord":
+        """DB 행 → TradeRecord 변환"""
+        return TradeRecord(
+            id=row["id"],
+            symbol=row["symbol"],
+            name=row["name"] or "",
+            entry_time=row["entry_time"],
+            entry_price=float(row["entry_price"]),
+            entry_quantity=int(row["entry_quantity"]),
+            entry_reason=row["entry_reason"] or "",
+            entry_strategy=row["entry_strategy"] or "",
+            entry_signal_score=float(row["entry_signal_score"] or 0),
+            exit_time=row["exit_time"],
+            exit_price=float(row["exit_price"] or 0),
+            exit_quantity=int(row["exit_quantity"] or 0),
+            exit_reason=row["exit_reason"] or "",
+            exit_type=row["exit_type"] or "",
+            pnl=float(row["pnl"] or 0),
+            pnl_pct=float(row["pnl_pct"] or 0),
+            holding_minutes=int(row["holding_minutes"] or 0),
+        )
+
+    async def sync_from_db(self, days: int = 7):
+        """DB의 trades 테이블에서 JSON에 누락된 거래를 보강
+
+        strategy_evolver.rebalance_strategy_allocation() 호출 전에 실행하여
+        메모리 dict(_trades)를 DB 기준으로 보강합니다.
+        """
+        import asyncpg
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            logger.debug("[저널] DATABASE_URL 미설정 → DB 동기화 스킵")
+            return
+
+        pool = None
+        try:
+            pool = await asyncpg.create_pool(db_url, min_size=1, max_size=2)
+            cutoff = datetime.now() - timedelta(days=days)
+
+            # 청산 완료된 거래만 조회 (exit_time IS NOT NULL)
+            rows = await pool.fetch(
+                """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
+                          entry_reason, entry_strategy, entry_signal_score,
+                          exit_time, exit_price, exit_quantity, exit_reason, exit_type,
+                          pnl, pnl_pct, holding_minutes
+                   FROM trades
+                   WHERE entry_time >= $1 AND exit_time IS NOT NULL
+                   ORDER BY entry_time""",
+                cutoff,
+            )
+
+            synced = 0
+            for row in rows:
+                tid = row["id"]
+
+                if tid in self._trades:
+                    existing = self._trades[tid]
+                    # exit 정보가 없는 레코드 보강 (부분 누락)
+                    if not existing.is_closed and row["pnl"] is not None:
+                        existing.exit_time = row["exit_time"]
+                        existing.exit_price = float(row["exit_price"] or 0)
+                        existing.exit_quantity = int(row["exit_quantity"] or 0)
+                        existing.pnl = float(row["pnl"] or 0)
+                        existing.pnl_pct = float(row["pnl_pct"] or 0)
+                        existing.exit_type = row["exit_type"] or ""
+                        existing.exit_reason = row["exit_reason"] or ""
+                        existing.holding_minutes = int(row["holding_minutes"] or 0)
+                        synced += 1
+                    continue
+
+                # _trades에 없으면 새로 생성
+                trade = self._row_to_trade_record(row)
+                self._trades[tid] = trade
+                synced += 1
+
+            if synced > 0:
+                logger.info(f"[저널] DB 동기화: {synced}건 보강 (JSON 누락분)")
+            else:
+                logger.debug(f"[저널] DB 동기화: 보강 대상 없음 ({len(rows)}건 조회)")
+
+        except Exception as e:
+            logger.warning(f"[저널] DB 동기화 실패: {e}")
+        finally:
+            if pool:
+                await pool.close()
+
     def _save_trades(self, trade_date: date):
         """해당 날짜 거래 저장"""
         file_path = self._get_file_path(trade_date)
@@ -275,17 +417,49 @@ class TradeJournal:
         indicators: Dict[str, float] = None,
         exit_time: datetime = None,
         avg_entry_price: float = None,
+        # 폴백용 optional 파라미터 (메모리에 trade가 없을 때 최소 레코드 생성)
+        symbol: str = None,
+        name: str = None,
+        entry_price: float = None,
+        entry_strategy: str = None,
     ) -> Optional[TradeRecord]:
         """
         청산 기록
 
         매도 체결 시 호출합니다.
         avg_entry_price: 포트폴리오 평균단가 (KIS 일치용). None이면 개별 trade.entry_price 사용.
+
+        폴백: trade_id가 메모리에 없을 때, symbol 등 optional 파라미터가 있으면
+        최소 TradeRecord를 생성하여 청산 기록을 보존합니다.
         """
         trade = self._trades.get(trade_id)
         if not trade:
-            logger.warning(f"[저널] 거래 ID 없음: {trade_id}")
-            return None
+            # DB에서 복원 시도
+            trade = self._recover_trade_from_db_sync(trade_id)
+            if trade:
+                self._trades[trade_id] = trade
+                logger.info(f"[저널] 거래 ID {trade_id} DB에서 복원 성공")
+            elif symbol:
+                # 최소 레코드 생성 (폴백)
+                _ep = entry_price or avg_entry_price or exit_price
+                trade = TradeRecord(
+                    id=trade_id,
+                    symbol=symbol,
+                    name=name or "",
+                    entry_time=datetime.now(),  # 정확한 시간 불명 → 현재 시간
+                    entry_price=_ep,
+                    entry_quantity=exit_quantity,
+                    entry_reason="recovered_at_exit",
+                    entry_strategy=entry_strategy or "unknown",
+                )
+                self._trades[trade_id] = trade
+                logger.warning(
+                    f"[저널] 거래 ID {trade_id} 메모리 미존재 → 최소 레코드 생성 "
+                    f"(symbol={symbol}, entry_price={_ep})"
+                )
+            else:
+                logger.warning(f"[저널] 거래 ID 없음: {trade_id} (복원 실패, symbol 미제공)")
+                return None
 
         now = exit_time or datetime.now()
 

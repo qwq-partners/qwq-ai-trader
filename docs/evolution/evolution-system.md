@@ -126,9 +126,16 @@ _VALID_STRATEGIES = {
 > 거래가 가장 적은 전략만 선별하여 해당 전략의 min_score만 조정 (다른 전략 오염 방지)
 
 ### 주간 리밸런싱 (토요일 00:00)
+- **DB 동기화**: 시작 시 `journal.sync_from_db(days=7)` 호출 → JSON 누락 거래 DB에서 보강
 - LLM(Gemini) 기반 성과 분석 → 배분 제안
 - 가드레일 적용 후 `evolved_overrides.yml` 저장
 - 텔레그램 리포트
+
+### record_exit 폴백 메커니즘
+- `trade_journal.record_exit()` 호출 시 trade_id가 메모리에 없는 경우:
+  1. DB `trades` 테이블에서 복원 시도 (`_recover_trade_from_db_sync`)
+  2. DB에도 없고 `symbol` 파라미터가 있으면 최소 TradeRecord 생성
+  3. 둘 다 실패 시 기존 동작 (None 반환)
 
 ## 4. 일일 복기 (daily_reviewer.py)
 

@@ -310,6 +310,11 @@ class TradeStorage:
         indicators: Dict[str, float] = None,
         exit_time: datetime = None,
         avg_entry_price: float = None,
+        # 폴백용 optional (메모리에 trade 없을 때 최소 레코드 생성)
+        symbol: str = None,
+        name: str = None,
+        entry_price: float = None,
+        entry_strategy: str = None,
     ) -> Optional[TradeRecord]:
         """청산 기록: 캐시 + JSON + DB큐"""
         # exit_type 세분화: reason에 구체적 정보가 있으면 재분류
@@ -321,7 +326,7 @@ class TradeStorage:
         if prev_trade:
             prev_pnl = float(prev_trade.pnl)
 
-        # 1) 캐시 + JSON
+        # 1) 캐시 + JSON (폴백 파라미터 전달)
         trade = self._journal.record_exit(
             trade_id=trade_id,
             exit_price=exit_price,
@@ -331,6 +336,10 @@ class TradeStorage:
             indicators=indicators,
             exit_time=exit_time,
             avg_entry_price=avg_entry_price,
+            symbol=symbol,
+            name=name,
+            entry_price=entry_price,
+            entry_strategy=entry_strategy,
         )
         if not trade:
             return None

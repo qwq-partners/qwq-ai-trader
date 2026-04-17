@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-15 — 리밸런싱 DB 기반 전환 + JSON flush 즉시 저장
+
+### 수정 1: 리밸런싱 DB 동기화
+- `src/core/evolution/trade_journal.py` — `sync_from_db()` 비동기 메서드 추가: DB `trades` 테이블에서 JSON에 누락된 거래 기록을 `_trades` dict에 보강
+- `src/core/evolution/trade_journal.py` — `_row_to_trade_record()`, `_async_fetch_trade()`, `_recover_trade_from_db_sync()`, `_fetch_trade_from_db()` 헬퍼 추가
+- `src/core/evolution/strategy_evolver.py` — `rebalance_strategy_allocation()` 시작 시 `await self.journal.sync_from_db(days=7)` 호출 추가
+
+### 수정 2: record_exit 폴백 레코드 생성
+- `src/core/evolution/trade_journal.py` — `record_exit()`에 optional 파라미터 `symbol`, `name`, `entry_price`, `entry_strategy` 추가
+- 메모리에 trade_id가 없을 때: (1) DB에서 복원 시도 → (2) symbol 제공 시 최소 레코드 생성 → (3) 둘 다 실패 시 기존 None 반환
+- `src/data/storage/trade_storage.py` — `record_exit()`에 동일 optional 파라미터 추가, `_journal.record_exit()`로 전달
+
+---
+
 ## 2026-04-15 — P1/P2 엔진·스케줄러·브로커 계열 수정
 
 ### P1-1: `_pending_sector_map` clear_pending에서 정리 누락

@@ -903,6 +903,12 @@ class StrategyEvolver:
         """
         logger.info("[리밸런싱] 주간 전략 예산 리밸런싱 시작")
 
+        # DB에서 거래 기록 보강 (JSON 누락분 복구)
+        try:
+            await self.journal.sync_from_db(days=7)
+        except Exception as e:
+            logger.warning(f"[리밸런싱] DB 동기화 실패 (JSON 폴백): {e}")
+
         # 1. 현재 배분 조회
         config_mgr = get_evolved_config_manager()
         overrides = config_mgr.get_overrides()
