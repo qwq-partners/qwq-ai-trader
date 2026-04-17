@@ -36,6 +36,12 @@ _REVIEW_SYSTEM_PROMPT = """당신은 경험 많은 퀀트 트레이더이자 전
 - 일평균 수익률 1% 달성
 - 승률 55% 이상 + 손익비 1.5 이상
 
+## 중요 규칙
+- parameter_suggestions는 "현재 설정" 섹션에 명시된 파라미터를 확인한 후,
+  이미 적용된 개선은 재제안하지 마세요.
+- 예: max_atr_pct가 이미 6.0%로 설정되어 있다면 같은 값을 다시 제안하지 않습니다.
+- 제안은 현재 설정에서 변경이 필요한 경우에만 포함하세요.
+
 ## 응답 형식
 반드시 유효한 JSON 형식으로만 응답하세요. 마크다운 코드 블록이나 설명 없이 JSON만 출력하세요."""
 
@@ -538,6 +544,44 @@ class DailyReviewer:
                 indicator_parts = [f"{k}={v}" for k, v in indicators.items() if isinstance(v, (int, float))]
                 if indicator_parts:
                     lines.append(f"- 진입지표: {', '.join(indicator_parts[:8])}")
+
+        # 현재 적용 중인 전략 설정 (이미 적용된 개선 재제안 방지)
+        lines.extend(["", "## 현재 설정 (이미 적용 중 — 재제안 금지)"])
+        try:
+            import yaml
+            _ov_path = Path(__file__).parent.parent.parent.parent / "config" / "evolved_overrides.yml"
+            _ov = yaml.safe_load(_ov_path.read_text(encoding="utf-8")) if _ov_path.exists() else {}
+
+            # 핵심 파라미터만 추출
+            _exit = _ov.get("exit_manager", {})
+            if _exit:
+                lines.append(f"- exit_manager: stop_loss={_exit.get('stop_loss_pct')}%, "
+                             f"first_exit_pct={_exit.get('first_exit_pct')}%, "
+                             f"first_exit_ratio={_exit.get('first_exit_ratio')}, "
+                             f"trailing={_exit.get('trailing_stop_pct')}%")
+
+            _risk = _ov.get("risk_config", {})
+            _alloc = _risk.get("strategy_allocation", {})
+            if _alloc:
+                lines.append(f"- 전략배분: {', '.join(f'{k}={v}%' for k, v in _alloc.items())}")
+
+            # 전략별 파라미터
+            for _strat in ["sepa_trend", "rsi2_reversal", "theme_chasing", "gap_and_go"]:
+                _s = _ov.get(_strat, {})
+                if _s:
+                    _parts = [f"{k}={v}" for k, v in _s.items() if k != "enabled"]
+                    if _parts:
+                        lines.append(f"- {_strat}: {', '.join(_parts)}")
+
+            # 배치 설정
+            _default_path = Path(__file__).parent.parent.parent.parent / "config" / "default.yml"
+            if _default_path.exists():
+                _default_cfg = yaml.safe_load(_default_path.read_text(encoding="utf-8")) or {}
+                _batch_exec = (_default_cfg.get("kr", {}).get("batch", {}) or {}).get("execute_time", "09:30")
+                lines.append(f"- 배치 실행 시간: {_batch_exec}")
+
+        except Exception as _cfg_err:
+            lines.append(f"- (설정 로드 실패: {_cfg_err})")
 
         # 응답 형식 안내
         lines.extend([
