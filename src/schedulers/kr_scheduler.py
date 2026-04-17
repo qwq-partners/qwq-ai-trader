@@ -4240,9 +4240,9 @@ JSON:
                     else:
                         last_morning_scan_date = today
 
-                # [공통] 시그널 있고 09:01 이후면 즉시 실행
+                # [공통] 시그널 있고 실행 시간(execute_time) 이후면 즉시 실행
                 if (last_execute_date != today
-                        and now.hour >= exec_hour
+                        and (now.hour > exec_hour or (now.hour == exec_hour and now.minute >= exec_min))
                         and now.hour < 15
                         and pending_signals_path.exists()):
                     try:
