@@ -264,6 +264,48 @@ class StockScreener:
                 f"[Finviz] 보너스 적용: {bonus_count}/{len(screener_result.results)}종목"
             )
 
+        # 섹터 로테이션 보너스 — 종목 sector(finviz_meta)와 SECTOR_ETFS 모멘텀 연동
+        # bear 국면에서 XLP/XLV 같은 방어 섹터에 가산점, XLY/XLK 같은 약세 섹터에 감점
+        if self._sector_momentum and self._finviz and self._finviz.is_ready:
+            _SECTOR_TO_ETF = {
+                "Technology": "XLK", "Financial": "XLF", "Healthcare": "XLV",
+                "Energy": "XLE", "Industrials": "XLI", "Industrial": "XLI",
+                "Consumer Cyclical": "XLY", "Consumer Defensive": "XLP",
+                "Consumer Staples": "XLP", "Utilities": "XLU",
+                "Basic Materials": "XLB", "Materials": "XLB",
+                "Real Estate": "XLRE", "Communication Services": "XLC",
+            }
+            try:
+                _vals = list(self._sector_momentum.values())
+                _avg = sum(_vals) / len(_vals) if _vals else 0.0
+                _rot_count = 0
+                for result in screener_result.results:
+                    sector_str = (result.finviz_meta or {}).get("sector") or (result.finviz_meta or {}).get("Sector")
+                    if not sector_str:
+                        continue
+                    etf = _SECTOR_TO_ETF.get(sector_str)
+                    if not etf or etf not in self._sector_momentum:
+                        continue
+                    rel = self._sector_momentum[etf] - _avg
+                    if rel >= 5.0:
+                        result.finviz_bonus += 10
+                        result.flags.append(f"SECTOR_HOT({etf})")
+                        _rot_count += 1
+                    elif rel >= 2.0:
+                        result.finviz_bonus += 5
+                        _rot_count += 1
+                    elif rel <= -5.0:
+                        result.finviz_bonus -= 10
+                        result.flags.append(f"SECTOR_COLD({etf})")
+                        _rot_count += 1
+                    elif rel <= -2.0:
+                        result.finviz_bonus -= 5
+                        _rot_count += 1
+                if _rot_count:
+                    logger.info(f"[섹터 로테이션] 점수 조정 {_rot_count}종목 적용 (avg ETF mom {_avg:+.1f}%)")
+            except Exception as _re:
+                logger.debug(f"[섹터 로테이션] 보너스 적용 실패 (무시): {_re}")
+
         # 어닝스 촉매 보너스 (최근 어닝스 발표 + 갭상승 종목)
         if self._earnings_symbols:
             earnings_bonus_cnt = 0

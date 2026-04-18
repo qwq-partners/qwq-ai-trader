@@ -360,9 +360,13 @@ class BaseStrategy(ABC):
             indicators["high_proximity"] = closes[-1] / high_20d if high_20d > 0 else 0
             indicators["low_proximity"] = closes[-1] / low_20d if low_20d > 0 else 1
 
-        # 52주(약 250일) 최고가 - 가능한 데이터로 추정
-        all_highs = [float(p.high) for p in history]
-        indicators["high_52w"] = max(all_highs) if all_highs else closes[-1]
+        # 52주 최고가 — 명시적 250영업일 슬라이스
+        # history가 250 미만이면 사용 가능한 전체 사용 (warm-up 구간 fallback)
+        # 이전: history 전체 max → history 길이가 200이면 사실상 "200일 신고가"라 SEPA stage 판정 오차
+        _w52 = history[-250:] if len(history) >= 250 else history
+        _w52_highs = [float(p.high) for p in _w52]
+        indicators["high_52w"] = max(_w52_highs) if _w52_highs else closes[-1]
+        indicators["high_52w_window"] = len(_w52)  # 디버깅: 실제 사용된 캔들 수
 
         # 지표 저장 및 LRU 갱신
         self._indicators[symbol] = indicators

@@ -16,9 +16,9 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    sepa_trend: 10.0
+    sepa_trend: 25.0
     theme_chasing: 5.0
-    rsi2_reversal: 40.0
+    rsi2_reversal: 25.0
     strategic_swing: 10.0
     gap_and_go: 5.0
     momentum_breakout: 0.0
@@ -49,7 +49,7 @@ theme_chasing:
   entry_window_minutes: 20
   max_atr_pct: 5.5
   min_change_pct: 2.5
-  min_score: 57.0
+  min_score: 65.0
 gap_and_go:
   enabled: true
   stop_loss_pct: 3.5
@@ -84,8 +84,9 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: weekly_rebalance
-    timestamp: '2026-04-18T02:06:18.369711'
+    source: manual_review
+    timestamp: '2026-04-18T20:30:00'
+    note: 3회 중복 리밸런싱(02:00~02:06) 과적합 롤백 — rsi2 40→25, sepa 10→25 (표본 1건 근거 결정 무효화)
   risk_config.strategy_allocation.core_holding:
     source: manual_review_locked
     timestamp: '2026-03-14T00:15:00'
@@ -95,5 +96,6 @@ _meta:
     timestamp: '2026-03-07T11:00:00'
     note: 03-04 대참사 이후 강제 비활성화 (35% 승률, -1.07M 손실)
   theme_chasing.min_score:
-    source: rule
-    timestamp: '2026-04-16T20:30:54.150763'
+    source: manual_review
+    timestamp: '2026-04-18T20:30:00'
+    note: rule(low_frequency)로 60→57 자동 하향됐으나 before_win_rate=0.0 버그로 평가 불가 — 65로 수동 정정 (잡음 진입 차단 강화)

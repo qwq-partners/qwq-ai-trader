@@ -104,10 +104,13 @@ def _build_trading_config(
 
     fees = trading.get("fees", {})
 
+    # Fallback 수수료: FeeCalculator 단일 소스(FeeConfig 기본값)와 일치시킴
+    # - 매수: 0.0140527% (한투 BanKIS)
+    # - 매도: 0.0130527% + 0.20% 거래세(2026.1.1~) = 0.2130527%
     return TradingConfig(
         initial_capital=Decimal(str(initial_capital)),
-        buy_fee_rate=float(fees.get("buy_rate", 0.00015)),
-        sell_fee_rate=float(fees.get("sell_rate", 0.00195)),
+        buy_fee_rate=float(fees.get("buy_rate", 0.000140527)),
+        sell_fee_rate=float(fees.get("sell_rate", 0.002130527)),
         enable_pre_market=trading.get("enable_pre_market", True),
         enable_next_market=trading.get("enable_next_market", True),
         pre_market_slippage_buffer_pct=float(trading.get("pre_market_slippage_buffer_pct", 3.0)),

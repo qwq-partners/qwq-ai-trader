@@ -96,12 +96,18 @@ class CrossStrategyValidator:
         adjusted_score = score
 
         # === 규칙 1: 기술적 과매수 상태에서 추세 전략 매수 ===
+        # 중복 감점 주의: kr_screener._apply_momentum_filter가 이미 RSI>75 시 -10, >70 시 -5 적용.
+        # 여기서는 크로스검증 단계(체제/수급 종합 판단) 보정이므로 감점 규모를 -5로 축소해
+        # 이중 감점 폭을 -20 → -15로 완화. bull 체제는 RSI 70~80이 모멘텀의 sweet spot이므로
+        # bull에서는 감점 생략.
         rsi_14 = indicators.get("rsi_14")
         if rsi_14 is None:
             rsi_14 = indicators.get("rsi")
-        if rsi_14 is not None and rsi_14 > 70 and strategy in ("sepa_trend", "momentum_breakout"):
-            adjusted_score -= 10
-            penalties.append(f"RSI과매수({rsi_14:.0f}>70) -10")
+        if (rsi_14 is not None and rsi_14 > 70
+                and market_regime != "bull"
+                and strategy in ("sepa_trend", "momentum_breakout")):
+            adjusted_score -= 5
+            penalties.append(f"RSI과매수({rsi_14:.0f}>70) -5")
 
         # === 규칙 2: 기관+외국인 동시 순매도 (KR 전용 — US는 수급 데이터 없음) ===
         if self._market == "KR":
@@ -120,9 +126,11 @@ class CrossStrategyValidator:
                         adjusted_score -= 10
                         penalties.append(f"[규칙2] 기관+외국인 동시 순매도 — SEPA 감점 -10")
 
-        # === 규칙 3: 약세 체제에서 공격적 전략 차단 ===
+        # === 규칙 3: 약세 체제에서 공격적/역추세 전략 차단 ===
+        # KR: rsi2_reversal 추가 — Connors 원전 규칙(지수 약세 시 RSI(2) 진입 금지) 준수,
+        #     "칼떨어지는 칼" 진입 방지. momentum_breakout도 약세장 추격 매수 위험으로 차단.
         # US: earnings_drift는 어닝 서프라이즈 기반 → bear에서도 허용
-        _bear_block = ("theme_chasing", "gap_and_go")
+        _bear_block = ("theme_chasing", "gap_and_go", "rsi2_reversal", "momentum_breakout")
         if self._market == "US":
             _bear_block = ("momentum_breakout",)  # US bear: 모멘텀만 차단, SEPA/어닝은 허용
         if market_regime == "bear" and strategy in _bear_block:
@@ -173,12 +181,15 @@ class CrossStrategyValidator:
                 penalties.append(f"추격매수(등락/ATR={surge_ratio:.1f}x) -15")
 
         # === 규칙 7: MA200 하방에서 추세 추종 (SEPA/테마) ===
+        # 중복 감점 주의: swing_screener._base_technical_score에서도 MA200 상방이 보너스 조건.
+        # SEPA 후보가 스크리너에서 이미 감점된 상태로 올라오므로 여기서는 -5로 축소해
+        # 중복 폭을 -20 → -15로 완화.
         ma200 = indicators.get("ma200")
         close = indicators.get("close")
         if ma200 is not None and close is not None and ma200 > 0:
             if close < ma200 and strategy in ("sepa_trend", "theme_chasing"):
-                adjusted_score -= 10
-                penalties.append(f"MA200하방(-{(1-close/ma200)*100:.1f}%) -10")
+                adjusted_score -= 5
+                penalties.append(f"MA200하방(-{(1-close/ma200)*100:.1f}%) -5")
 
         # === 규칙 8: 펀더멘탈 밸류에이션 필터 (PRISM 차용) ===
         # PER 극단 고평가 또는 적자 + 고PBR → 추격 매수 위험
@@ -232,8 +243,12 @@ class CrossStrategyValidator:
         """
         LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
 
-        비용 최소화: 하루 최대 5회 (_daily_llm_max), 거부 시 주문 차단.
+        비용 최소화: 하루 최대 10회 (_daily_llm_max), 거부 시 주문 차단.
         실시간 성능: 타임아웃 10초, 실패 시 통과(fail-open).
+
+        fail-open 정책 의도: LLM 장애나 한도 소진 시 매수 차단보다 기회 손실 방지를 우선.
+        규칙1~9는 이미 결정론적 게이트로 작동하므로 LLM은 추가 안전장치 역할.
+        엄격 모드가 필요하면 return True → return False 로 변경 (정책 결정 사안).
         """
         if not self._llm_manager:
             return True

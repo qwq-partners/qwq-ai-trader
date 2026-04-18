@@ -135,15 +135,22 @@ class TradeStorage:
 
     async def disconnect(self):
         """큐 drain + DB 연결 종료"""
-        # writer 중지
+        # writer 중지 — 큐 크기 기반 동적 timeout (대량 청산 시 데이터 손실 방지)
         if self._writer_task and not self._writer_task.done():
             if self._write_queue:
                 await self._write_queue.put(None)  # sentinel
+                # 항목당 0.1초 + base 10초, 최대 60초 (지나친 셧다운 지연 방지)
+                qsize = self._write_queue.qsize()
+                drain_timeout = max(10.0, min(60.0, 10.0 + qsize * 0.1))
                 try:
-                    await asyncio.wait_for(self._writer_task, timeout=10)
+                    await asyncio.wait_for(self._writer_task, timeout=drain_timeout)
                 except asyncio.TimeoutError:
+                    remaining = self._write_queue.qsize()
                     self._writer_task.cancel()
-                    logger.warning("[TradeStorage] writer 타임아웃, 강제 종료")
+                    logger.warning(
+                        f"[TradeStorage] writer 타임아웃({drain_timeout:.0f}s), 강제 종료 "
+                        f"— 미처리 큐 {remaining}건 (데이터 손실 가능)"
+                    )
 
         if self.pool:
             await self.pool.close()

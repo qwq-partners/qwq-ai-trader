@@ -75,7 +75,17 @@ class SwingScreener:
         )
 
         # 4단계: 수급/재무 점수 + LCI z-score 계산
-        all_candidates = rsi2_candidates + sepa_candidates
+        # dedupe: 동일 종목이 RSI2(역추세) + SEPA(추세) 양쪽 통과 시 score 높은 전략 하나만 유지
+        # — 같은 종목에 두 전략 동시 진입은 사실상 단일 사건의 이중 노출(allocation 50%+)
+        _merged: Dict[str, SwingCandidate] = {}
+        for _c in rsi2_candidates + sepa_candidates:
+            _prev = _merged.get(_c.symbol)
+            if _prev is None or _c.score > _prev.score:
+                _merged[_c.symbol] = _c
+        _dup_count = (len(rsi2_candidates) + len(sepa_candidates)) - len(_merged)
+        if _dup_count > 0:
+            logger.info(f"[스윙스크리너] 중복 제거: {_dup_count}건 (동일 종목 RSI2+SEPA 동시 통과)")
+        all_candidates = list(_merged.values())
         scored = await self._apply_composite_score(all_candidates)
         self._compute_lci_zscore(scored)  # 수급 데이터 주입 후 LCI 계산
 

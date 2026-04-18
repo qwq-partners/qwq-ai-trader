@@ -1,5 +1,39 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-18 — 3인 합동 전체 검증(코드/전략/데이터/종목선정) P0~P2 18건 일괄 수정
+
+7개 전문 에이전트(engine-monitor, risk-auditor, trade-analyst, market-analyst, strategy-advisor, param-optimizer, Explore) 병렬 리뷰 + 교차 검증 후 일괄 수정.
+
+### P0 — 치명적 (5건)
+- **P0-1**: `src/core/cross_validator.py:125` — `_bear_block` 튜플에 `rsi2_reversal`, `momentum_breakout` 추가. Connors 원전 RSI(2) 규칙(지수 약세 시 역추세 진입 금지) 준수. 2020-03/2022-09 폭락 시 칼떨어지는 칼 진입 무방비였음.
+- **P0-2**: `config/evolved_overrides.yml` — 3회 중복 리밸런싱(2026-04-18 02:00~02:06)으로 rsi2 15→40%, sepa 35→10%까지 편향된 것을 rsi2=25%, sepa=25%로 롤백. 근거가 표본 1건(4/17 +4.75%)뿐이었음.
+- **P0-3**: `src/schedulers/kr_scheduler.py:3744` — `last_rebalance_week`를 `~/.cache/ai_trader/last_rebalance.json`에 영속화. 재시작 시 같은 주 중복 실행 방지 가드.
+- **P0-4**: `config/default.yml:62` — `strategy_allocation`에 `strategic_swing: 0.0` 키 추가. `engine.G5_budget` 게이트 통과에 필요한 키가 default에 없어서 evolved 머지 실패 시 신호 전량 차단 위험.
+- **P0-5**: `src/signals/screener/swing_screener.py:78` — RSI2/SEPA 후보 중복 제거(dedupe). 동일 종목이 양쪽 통과 시 score 높은 전략만 유지. 중복 시 단일 종목에 50%+ 집중 노출 위험.
+
+### P1 — 중요 (8건)
+- **P1-1**: `src/risk/manager.py:452` — 일일 손실 % 분모를 `total_equity`에서 `initial_capital`로 통일. 대시보드 표시값과 차단 기준 불일치로 "표시값 -4.9%인데 이미 차단" 혼선 제거.
+- **P1-2**: `src/risk/manager.py:686` — `reset_daily_stats()`에 `self._consecutive_losses = 0` 추가. 전일 4연패 상태가 익일 포지션 사이징에 잔존하는 문제 해결.
+- **P1-3**: `src/core/cross_validator.py:235-243` — docstring "5회" → "10회"로 실제 값 정정 + fail-open 정책 의도 주석 추가.
+- **P1-4**: `src/signals/sentiment/kr_theme_detector.py:95-105` — 테마 매핑 오류 정리. 034730(SK 지주)이 건설테마 잘못 매핑 → GS건설(006360) 교체. 에스원(012750) 방산 오탐 → 한화시스템(272210). 게임주를 인터넷/플랫폼 테마에서 분리. "인터넷/플랫폼/건설/자동차" THEME_KEYWORDS 추가.
+- **P1-5**: `src/strategies/base.py:363` — 52주 고가 계산을 명시적 250영업일 슬라이스로 변경. 기존 `history` 전체 max 방식은 history 길이가 200일이면 "200일 신고가"로 오작동, SEPA Stage 2 판정 오차.
+- **P1-6**: `src/signals/screener/us_screener.py:253` — 섹터 ETF 모멘텀 계산만 하고 점수 미반영이던 것을 종목 score에 ±10 보너스 적용. bear 국면에서 XLP/XLV 방어 섹터 가산, XLY/XLK 약세 감점.
+- **P1-7**: `config/default.yml:355` — `earnings_drift.enabled: false`. EPS surprise / 매출 성장률 API 미연동 상태에서 갭+거래량 프록시만으로 운용하면 sell-the-news 위험 무방비.
+- **P1-8**: `src/data/storage/trade_storage.py:137` — writer 큐 shutdown timeout을 큐 크기 기반 동적 산정(10~60초)으로 변경. 대량 청산 시 데이터 손실 방지.
+
+### P2 — 개선 (4건)
+- **P2-1**: `config/evolved_overrides.yml` — `theme_chasing.min_score` 57→65 롤백. low_frequency 룰 자동 하향이 `before_win_rate=0.0` 기록 버그로 평가 불가 상태였음.
+- **P2-2**: `src/data/providers/kis_market_data.py:30-58` — 캐시 maxsize=2000 + 타임스탬프 기반 간이 LRU 추가. 메모리 무한 증가 방지.
+- **P2-3**: `src/utils/config.py:109-110` — fallback 수수료를 FeeCalculator(FeeConfig) 단일 소스와 일치(0.000140527 / 0.002130527). 설정 파싱 실패 시 수수료 이중 기준 방지.
+- **P2-4**: `src/core/cross_validator.py:98-108,177-184` — 규칙1(RSI>70)과 규칙7(MA200 하방) 감점을 -10 → -5로 축소. 스크리너와 이중 감점 폭을 -20 → -15로 완화. 규칙1은 bull 체제 시 감점 생략.
+
+### 검증
+- `python3 -m py_compile` 전체 OK
+- `systemctl restart qwq-ai-trader` → active, 31개 태스크 기동, 에러 없음
+- US 시장 체제 neutral → bull 갱신, 테마 탐지 뉴스 76건 수집, 업종지수 조회 38개 정상
+
+---
+
 ## 2026-04-15 — 리밸런싱 DB 기반 전환 + JSON flush 즉시 저장
 
 ### 수정 1: 리밸런싱 DB 동기화

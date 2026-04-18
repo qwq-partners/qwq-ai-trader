@@ -3742,9 +3742,39 @@ JSON:
             logger.error(f"거래 리뷰 스케줄러 오류: {e}")
 
     async def run_weekly_rebalance_scheduler(self):
-        """매주 토요일 00:00 전략 예산 리밸런싱"""
+        """매주 토요일 00:00 전략 예산 리밸런싱
+
+        last_rebalance_week를 디스크에 영속화 — 재시작 시 같은 주에 중복 실행되어
+        한 밤에 3회 동방향 변경(rsi2 15→40%) 같은 과적합 사고 방지.
+        """
         bot = self.bot
-        last_rebalance_week: Optional[int] = None
+        rebalance_state_file = Path.home() / ".cache" / "ai_trader" / "last_rebalance.json"
+
+        def _load_last_week() -> Optional[int]:
+            try:
+                if rebalance_state_file.exists():
+                    with open(rebalance_state_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        return data.get("iso_week")
+            except Exception as e:
+                logger.warning(f"[리밸런싱] 상태 로드 실패: {e}")
+            return None
+
+        def _save_last_week(iso_year: int, iso_week: int):
+            try:
+                rebalance_state_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(rebalance_state_file, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "iso_year": iso_year,
+                        "iso_week": iso_week,
+                        "saved_at": datetime.now().isoformat(),
+                    }, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"[리밸런싱] 상태 저장 실패: {e}")
+
+        last_rebalance_week: Optional[int] = _load_last_week()
+        if last_rebalance_week is not None:
+            logger.info(f"[리밸런싱] 직전 실행 주차 복원: ISO week {last_rebalance_week}")
 
         try:
             while bot.running:
@@ -3752,12 +3782,13 @@ JSON:
 
                 if (now.weekday() == 5 and now.hour == 0
                         and 0 <= now.minute < 15):
-                    iso_week = now.isocalendar()[1]
+                    iso_year, iso_week, _ = now.isocalendar()
                     if last_rebalance_week != iso_week:
                         logger.info("[리밸런싱] 주간 전략 예산 리밸런싱 실행")
                         try:
                             result = await bot.strategy_evolver.rebalance_strategy_allocation()
                             last_rebalance_week = iso_week
+                            _save_last_week(iso_year, iso_week)
 
                             status = result.get("status", "unknown")
                             if status == "applied":
@@ -3810,6 +3841,7 @@ JSON:
                                 traceback.format_exc()
                             )
                             last_rebalance_week = iso_week
+                            _save_last_week(iso_year, iso_week)
 
                         # False Negative 분석 (주간 리밸런싱 후)
                         _fn_cfg = (bot.config.get("kr") or {}).get("llm_ops") or {}

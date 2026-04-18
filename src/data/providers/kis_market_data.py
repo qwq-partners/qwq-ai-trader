@@ -30,6 +30,9 @@ class KISMarketData:
         self._session: Optional[aiohttp.ClientSession] = None
         self._cache: Dict[str, Any] = {}
         self._cache_ts: Dict[str, datetime] = {}
+        # 캐시 maxsize — 코스닥 1500종목 + 매크로/섹터/휴장일 등 여유 포함
+        # 초과 시 가장 오래된 10%를 LRU 방식으로 제거 (메모리 무한 증가 방지)
+        self._cache_maxsize: int = 2000
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -56,6 +59,17 @@ class KISMarketData:
     def _set_cache(self, key: str, value: Any):
         self._cache[key] = value
         self._cache_ts[key] = datetime.now()
+        # maxsize 초과 시 오래된 10% 제거 (간이 LRU — 타임스탬프 기반)
+        if len(self._cache) > self._cache_maxsize:
+            try:
+                evict_n = max(1, self._cache_maxsize // 10)
+                oldest = sorted(self._cache_ts.items(), key=lambda x: x[1])[:evict_n]
+                for k, _ in oldest:
+                    self._cache.pop(k, None)
+                    self._cache_ts.pop(k, None)
+                logger.debug(f"[KISMarketData] 캐시 evict {evict_n}건 (size→{len(self._cache)})")
+            except Exception as _e:
+                logger.debug(f"[KISMarketData] 캐시 evict 실패 (무시): {_e}")
 
     # ============================================================
     # 1. 휴장일 조회 (CTCA0903R)

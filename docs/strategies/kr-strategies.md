@@ -1,6 +1,6 @@
 # KR 전략 상세
 
-> 최종 갱신: 2026-04-06
+> 최종 갱신: 2026-04-18 (RSI2 bear 체제 게이트 추가, 배분 롤백 반영)
 
 ## 전략 배분 (evolved_overrides.yml 기준)
 
@@ -72,6 +72,9 @@ RSI(2) 과매도 반전 진입. 상위 추세(MA200) 필터 결합.
 - ATR = 0/None → 진입 차단
 - ATR > 8.0% → **진입 차단** (극고변동성 역추세 진입 방지)
 - VCP overlay >= 3.0 + MA200 상방 → position_multiplier 확대
+- **약세장(market_regime=bear) 전면 차단** — 2026-04-18 추가. Connors 원전 RSI(2) 규칙
+  (지수가 MA200 하방 또는 약세장에서는 역추세 진입 금지) 준수. 크로스검증 규칙 3에서
+  `_bear_block`에 `rsi2_reversal`, `momentum_breakout` 추가.
 
 ---
 

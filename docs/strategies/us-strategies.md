@@ -1,6 +1,6 @@
 # US 전략 상세
 
-> 최종 갱신: 2026-04-15
+> 최종 갱신: 2026-04-18 (earnings_drift 비활성화 + 섹터 로테이션 보너스 적용)
 
 ## US 엔진 고도화 (2026-04-02~)
 
@@ -29,15 +29,13 @@ KR 엔진의 3대 기능을 이식:
 - `position_multiplier` metadata 전달
 - `from loguru import logger` 필수 (P0 수정 완료)
 
-## 3. Earnings Drift (`src/strategies/us/earnings_drift.py`)
+## 3. Earnings Drift (`src/strategies/us/earnings_drift.py`) — **2026-04-18 비활성화 중**
 
-- **현재 버전: 갭+거래량 프록시 기반 (실적 확인 API 미연동)**
-- 갭 **7.0%+** (기존 5.0% → 상향, 일반 뉴스 갭 필터링 강화)
-- 거래량 **3.5x+** (기존 2.5x → 상향, 진정한 어닝 반응 폭증 필터)
-- 갭 유지(close > open)
-- ATR 가드: **lenient** (0/None → 0.8x 폴백, 진입 허용)
-  - 어닝 서프라이즈는 갭 자체가 고변동 → 데이터 없어도 기회 포착
-- bear 장에서도 허용 (크로스검증 예외)
+- **현재 상태: `config/default.yml` `enabled: false`**
+- 비활성화 사유: EPS surprise / 매출 성장률 API 미연동 상태. 갭+거래량 프록시만으로는
+  "sell-the-news"(부진 발표 후 일시 갭업) 위험 무방비. finnhub/polygon earnings
+  calendar 연동 + EPS surprise ≥10% 가드 추가 후 재활성화 예정.
+- 기존 설정(참고): 갭 7.0%+, 거래량 3.5x+, close>open, ATR 0/None 시 0.8x 폴백, bear 허용
 
 ## US 시장 체제 (`src/core/us_market_regime.py`)
 
@@ -73,3 +71,19 @@ KR 엔진의 3대 기능을 이식:
 
 ### indicators 주입
 `_process_signal()`에서 `eng._indicator_cache.get(symbol, {})`를 metadata에 주입 → 크로스검증 규칙 1,6,7,8 활성화
+
+## US 섹터 로테이션 보너스 (2026-04-18 적용)
+
+`src/signals/screener/us_screener.py`의 `scan()` 단계 — 11개 SPDR 섹터 ETF(XLK/XLF/XLV/...)
+의 20일 모멘텀을 매일 1회 계산하고, **종목 sector(finviz_meta)와 매핑된 ETF의 상대
+모멘텀(평균 대비 편차)에 따라 종목 score에 ±10 보너스** 적용.
+
+| 상대 편차 (ETF vs 전체 평균) | 점수 조정 | flag |
+|------|------|------|
+| ≥ +5.0%p | +10 | `SECTOR_HOT(XLx)` |
+| ≥ +2.0%p | +5 | - |
+| ≤ −5.0%p | −10 | `SECTOR_COLD(XLx)` |
+| ≤ −2.0%p | −5 | - |
+
+bear 국면에서 XLP(필수소비재)/XLV(헬스케어) 가산, XLY(경기소비재)/XLK(기술) 감점이
+목적. finviz_meta.sector → ETF 매핑은 14개 섹터 명칭 지원.

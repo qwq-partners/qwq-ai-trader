@@ -66,6 +66,7 @@ kr:
       momentum_breakout: 0.0
       gap_and_go: 10.0
       theme_chasing: 10.0
+      strategic_swing: 0.0  # batch_analyzer가 동적 생성하는 복합신호 — engine.G5_budget 게이트 통과를 위해 키 등록 필요
     hybrid:
       enabled: false
       day_trading_pct: 20.0
@@ -352,7 +353,10 @@ us:
       min_rs_rating: 70
 
     earnings_drift:
-      enabled: true
+      # 비활성화: EPS surprise / 매출 성장률 API 미연동 상태 — 갭+거래량 프록시만으로
+      # 운용하면 sell-the-news(어닝 부진 발표 후 갭업) 위험 무방비.
+      # finnhub/polygon earnings calendar 연동 + EPS surprise ≥10% 가드 추가 후 재활성화.
+      enabled: false
       time_horizon: swing
       min_eps_surprise_pct: 10
       min_gap_pct: 7.0

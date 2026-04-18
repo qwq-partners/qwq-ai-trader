@@ -448,8 +448,12 @@ class RiskManager:
             return True  # equity 0 이하 → 거래 차단 (안전 장치)
 
         # effective_daily_pnl = 실현 + (현재 미실현 - 시작 미실현)
+        # 분모 통일: initial_capital 기준 — 대시보드(data_collector/equity_tracker)와
+        # 동일 분모 사용해 "표시값 -4.9%인데 차단된다" 같은 의사결정 혼선 방지.
+        # initial_capital이 0/음수면 fallback으로 equity 사용 (안전 장치).
         effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
-        daily_pnl_pct = float(effective_pnl / equity * 100)
+        _denom = self.initial_capital if self.initial_capital and self.initial_capital > 0 else equity
+        daily_pnl_pct = float(effective_pnl / _denom * 100)
 
         if self.market == "KR":
             warn_start_pct = self.config.daily_max_loss_pct * 0.7  # 3.5% (경고 시작)
@@ -685,6 +689,9 @@ class RiskManager:
         self.metrics.can_trade = True
         self._stop_loss_today.clear()
         self._exited_today.clear()
+        # 연속 손실 카운터 일일 리셋 — 전일 4연패가 익일 첫 거래 전 사이징 50% 축소를
+        # 잘못 끌고 가지 않도록. (record_trade_result의 승리 시 즉시 리셋과 별개로 날짜 경계 보강)
+        self._consecutive_losses = 0
         self._save_exited_today()
 
         self._save_daily_stats()
