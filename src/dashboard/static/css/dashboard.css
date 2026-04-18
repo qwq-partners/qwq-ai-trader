@@ -1,31 +1,128 @@
-/* AI Trader v2 Dashboard - 추가 스타일 */
+/* ========================================================================
+ * AI Trader Dashboard — 디자인 시스템 (2026-04-18)
+ * Phase C: 폰트 스케일, accent 색상 일관화, 반응형 확장, 접근성 기본
+ * ======================================================================== */
 
-/* 스크롤바 */
+/* ─── 디자인 토큰 (fallback — HTML <style>의 :root 변수와 함께 동작) ─── */
+:root {
+    /* 폰트 스케일 (6단계) */
+    --fs-xs:   0.60rem;   /* 보조 라벨 */
+    --fs-sm:   0.68rem;   /* 섹션 라벨 */
+    --fs-base: 0.78rem;   /* 본문 */
+    --fs-md:   0.90rem;   /* 카드 제목 */
+    --fs-lg:   1.10rem;   /* 페이지 제목 */
+    --fs-xl:   1.40rem;   /* 주요 숫자 */
+    --fs-2xl:  1.80rem;   /* equity */
+
+    /* 간격 */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 22px;
+
+    /* 전환 */
+    --t-fast: 120ms;
+    --t-med:  200ms;
+    --t-slow: 320ms;
+}
+
+/* ─── 스크롤바 ─── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.15); border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.25); }
 
-/* 로그 영역 */
+/* ─── 로그 영역 ─── */
 #event-log { max-height: 300px; overflow-y: auto; }
 #event-log .log-entry:last-child { border-bottom: none; }
 
-/* 차트 컨테이너 */
+/* ─── 차트 컨테이너 ─── */
 .chart-container { min-height: 200px; }
 
-/* 로딩 */
-.skeleton { background: linear-gradient(90deg, #12121e 25%, #1a1a2e 50%, #12121e 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 0.5rem; }
+/* ─── 로딩 스켈레톤 ─── */
+.skeleton {
+    background: linear-gradient(90deg, #12121e 25%, #1a1a2e 50%, #12121e 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 0.5rem;
+}
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* 트랜지션 */
+/* ─── 트랜지션 ─── */
 .fade-in { animation: fadeIn 0.3s ease-in; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-/* 포지션 테이블 호버 */
-#positions-table tbody tr:hover { background: rgba(99,102,241,0.04); }
+/* ─── 포지션 테이블 hover ─── */
+#positions-table tbody tr:hover,
+#us-positions-table tbody tr:hover {
+    background: rgba(99,102,241,0.04);
+}
 
-/* 반응형 */
+/* ─── 접근성: focus-visible (키보드 네비게이션) ─── */
+:focus-visible {
+    outline: 2px solid var(--acc-blue, #6366f1);
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+button:focus, a:focus, select:focus, input:focus {
+    outline: none; /* :focus-visible만 표시 */
+}
+
+/* ─── Live region (스크린리더용) ─── */
+.sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap; border: 0;
+}
+
+/* ─── 반응형 확장 ─── */
+/* 태블릿 (≤1024px) — 2열 그리드 축소 */
+@media (max-width: 1024px) {
+    .markets-grid { gap: 12px !important; }
+}
+
+/* 태블릿 소형 (≤768px) */
 @media (max-width: 768px) {
     .grid-cols-2 { grid-template-columns: 1fr !important; }
     nav .flex { flex-wrap: wrap; }
+    :root {
+        --fs-xl: 1.20rem;
+        --fs-2xl: 1.50rem;
+    }
+}
+
+/* 모바일 (≤640px) — 디자인 토큰 축소 */
+@media (max-width: 640px) {
+    :root {
+        --fs-xs: 0.55rem;
+        --fs-sm: 0.62rem;
+        --fs-base: 0.72rem;
+        --fs-md: 0.82rem;
+        --fs-lg: 1.00rem;
+        --fs-xl: 1.15rem;
+        --fs-2xl: 1.40rem;
+        --sp-5: 14px;
+    }
+    /* 포지션 projection 압축 */
+    .stage-proj { min-width: 72px; }
+    .stage-proj-lbl { font-size: 0.52rem; }
+}
+
+/* 모바일 소형 (≤380px) — 티커 스트립 가독성 */
+@media (max-width: 380px) {
+    .ticker-strip, .tk { font-size: 0.58rem !important; }
+    .risk-gauge-track { height: 5px; }
+}
+
+/* 동작 축소 선호 (prefers-reduced-motion) */
+@media (prefers-reduced-motion: reduce) {
+    .risk-gauge-fill, .stage-proj-bar > div,
+    .skeleton, .fade-in {
+        animation: none !important;
+        transition: none !important;
+    }
 }

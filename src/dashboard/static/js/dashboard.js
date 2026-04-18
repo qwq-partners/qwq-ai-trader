@@ -34,7 +34,22 @@ sse.on('status', (data) => {
     // 엔진 통계
     document.getElementById('r-events').textContent = formatNumber(data.engine.events_processed);
     document.getElementById('r-signals').textContent = formatNumber(data.engine.signals_generated);
-    document.getElementById('r-ws-sub').textContent = data.websocket.subscribed_count;
+
+    // P0-3: WS 구독 라벨 명확화 — "N종목" + 0이면 경고색
+    const wsEl = document.getElementById('r-ws-sub');
+    if (wsEl) {
+        const n = data.websocket.subscribed_count || 0;
+        wsEl.textContent = `${n}종목`;
+        // 장중인데 WS 구독이 0이면 피드 단절 가능성
+        const isOpen = data.session && ['regular', 'pre_market', 'after_hours'].includes(data.session);
+        if (n === 0 && isOpen) {
+            wsEl.classList.add('risk-danger');
+            wsEl.title = '⚠️ 장중 WS 구독 0 — 실시간 시세 단절 가능성';
+        } else {
+            wsEl.classList.remove('risk-danger');
+            wsEl.title = 'WebSocket 실시간 시세 구독 종목 수';
+        }
+    }
 
     // 상태바
     document.getElementById('sb-session').textContent = sessionLabel(data.session);
@@ -128,10 +143,13 @@ function renderSortedPositions() {
     const now = new Date();
     const rows = sorted.map(pos => {
         // 수수료 포함 순손익 (unrealized_pnl_net)을 우선 사용
-        const netPnl = pos.unrealized_pnl_net ?? pos.unrealized_pnl;
-        const netPct = pos.unrealized_pnl_net_pct ?? pos.unrealized_pnl_pct;
+        // P0-4: fallback 체인 + NaN 가드 — 백엔드 스키마 변경 시 "--" 깨지기 방지
+        const _pnlRaw = pos.unrealized_pnl_net ?? pos.unrealized_pnl;
+        const _pctRaw = pos.unrealized_pnl_net_pct ?? pos.unrealized_pnl_pct;
+        const netPnl = (typeof _pnlRaw === 'number' && isFinite(_pnlRaw)) ? _pnlRaw : null;
+        const netPct = (typeof _pctRaw === 'number' && isFinite(_pctRaw)) ? _pctRaw : null;
+        if (_pnlRaw != null && netPnl == null) console.warn('[positions] invalid unrealized_pnl:', pos.symbol, _pnlRaw);
         const pnlCls = pnlClass(netPnl);
-        const stageLabel = exitStageLabel(pos.exit_state);
         const stName = strategyNames[pos.strategy] || pos.strategy || '--';
 
         // 보유시간
@@ -146,17 +164,25 @@ function renderSortedPositions() {
             }
         }
 
+        // P0-5: 전략 배지 확장 (코어/테마/갭상승/RSI2)
         const isCore = pos.strategy === 'core_holding';
         const rowStyle = isCore
             ? 'border-color:rgba(251,191,36,0.18); border-left:3px solid var(--accent-amber); background:rgba(251,191,36,0.04);'
             : 'border-color:rgba(99,102,241,0.08); border-left:3px solid transparent;';
         const strategyColor = isCore ? 'var(--accent-amber)' : 'var(--accent-purple)';
-        const coreBadge = isCore
-            ? ' <span style="display:inline-block; font-size:0.62rem; font-weight:600; color:var(--accent-amber); background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.35); border-radius:4px; padding:0 4px; vertical-align:middle; letter-spacing:.03em;">코어</span>'
-            : '';
+        const _badgeMap = {
+            'core_holding':   '<span class="strat-badge sb-core" title="코어홀딩: SL -15%, 트레일링 8%, 분할익절 미사용">코어</span>',
+            'theme_chasing':  '<span class="strat-badge sb-theme" title="테마추종: 최대 3일 보유, 14:00 이후 신규진입 차단">테마</span>',
+            'gap_and_go':     '<span class="strat-badge sb-gap" title="갭상승: 09:20~10:30 한정, VWAP 이탈 즉시 청산">갭</span>',
+            'rsi2_reversal':  '<span class="strat-badge sb-rsi2" title="RSI(2) 과매도 반전: bear 체제 차단, ATR×2 손절">RSI2</span>',
+        };
+        const stratBadge = _badgeMap[pos.strategy] || '';
+
+        // P0-1 + Impact1: 청산단계 projection — 다음 TP/SL 거리 계산
+        const stageHtml = renderStageProjection(pos, netPct);
 
         return `<tr class="border-b" style="${rowStyle}">
-            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)}${coreBadge} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
+            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)}${stratBadge} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
             <td class="py-2 pr-3" style="font-size:0.75rem; color:${strategyColor};">${esc(stName)}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
             <td class="col-avg-price py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
@@ -165,7 +191,7 @@ function renderSortedPositions() {
             <td class="py-2 pr-3 text-right mono ${pnlCls}" title="평가손익: ${formatPnl(pos.unrealized_pnl)}">${formatPnl(netPnl)}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}" title="평가수익률: ${formatPct(pos.unrealized_pnl_pct)}">${formatPct(netPct)}</td>
             <td class="col-holding py-2 pr-3 mono" style="font-size:0.75rem; color:var(--text-secondary);">${holdStr}</td>
-            <td class="py-2">${stageLabel}</td>
+            <td class="py-2">${stageHtml}</td>
         </tr>`;
     }).join('');
 
@@ -192,6 +218,53 @@ function exitStageLabel(exitState) {
         'trailing': '<span class="badge badge-yellow">트레일링</span>',
     };
     return map[exitState.stage] || exitState.stage;
+}
+
+// P0-1 + Impact1: 포지션 projection — 현재 수익률 기준 다음 TP / SL까지 거리 시각화
+// 코어홀딩은 분할익절 미사용이므로 별도 분기
+function renderStageProjection(pos, netPct) {
+    const stageBadge = exitStageLabel(pos.exit_state);
+    if (netPct == null) return `<div class="stage-proj">${stageBadge}</div>`;
+
+    const isCore = pos.strategy === 'core_holding';
+    const stage = pos.exit_state?.stage || 'none';
+
+    // 다음 목표값 결정 (기본 설정: 1차 +5%, 2차 +15%, 3차 +25%; SL -5% / 코어 -15%)
+    // 실제값은 exit_state에 stop_loss_pct/first/second/third_exit_pct가 있으면 우선 사용
+    const es = pos.exit_state || {};
+    const tp1 = es.first_exit_pct ?? 5.0;
+    const tp2 = es.second_exit_pct ?? 15.0;
+    const tp3 = es.third_exit_pct ?? 25.0;
+    const sl  = -(es.stop_loss_pct ?? (isCore ? 15.0 : 5.0));
+
+    let nextLabel = '', nextPct = 0;
+    if (stage === 'none') { nextLabel = 'TP1'; nextPct = tp1; }
+    else if (stage === 'first')  { nextLabel = 'TP2'; nextPct = tp2; }
+    else if (stage === 'second') { nextLabel = 'TP3'; nextPct = tp3; }
+    else if (stage === 'third' || stage === 'trailing') { nextLabel = 'TRAIL'; nextPct = tp3; }
+
+    const toTp = nextPct - netPct;   // +면 남은 거리, -면 이미 넘김
+    const toSl = netPct - sl;         // +면 SL까지 margin
+
+    // 바 채우기: SL ~ nextTP 구간에서 현재 위치
+    const range = nextPct - sl;
+    const fillPct = range > 0 ? Math.max(0, Math.min(100, ((netPct - sl) / range) * 100)) : 50;
+
+    // 위험도 색상 텍스트
+    const slClose = toSl < 1.0;   // SL까지 1%p 이내
+    const tpClose = toTp < 1.0 && toTp > -1.0;  // TP 근접
+
+    const tpTxt = toTp >= 0 ? `${nextLabel} -${toTp.toFixed(1)}%p` : `${nextLabel} ✓`;
+    const slTxt = `SL +${toSl.toFixed(1)}%p`;
+
+    return `<div class="stage-proj" title="${nextLabel} ${nextPct}% / SL ${sl}% / 현재 ${netPct.toFixed(2)}%">
+        ${stageBadge}
+        <div class="stage-proj-bar"><div style="width:${fillPct}%"></div></div>
+        <div class="stage-proj-lbl" style="display:flex;justify-content:space-between;gap:6px;">
+            <span style="color:${slClose ? 'var(--acc-red)' : 'var(--text-muted)'}">${slTxt}</span>
+            <span style="color:${tpClose ? 'var(--acc-green)' : 'var(--text-muted)'}">${tpTxt}</span>
+        </div>
+    </div>`;
 }
 
 // ============================================================
@@ -643,6 +716,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Impact기능 3: Regime Timeline 토글 (접기/펼치기)
+    const rtToggle = document.getElementById('regime-timeline-toggle');
+    const rtBody = document.getElementById('regime-timeline');
+    if (rtToggle && rtBody) {
+        const toggleRT = () => {
+            const expanded = rtBody.style.display !== 'none';
+            rtBody.style.display = expanded ? 'none' : '';
+            rtToggle.textContent = expanded ? '펼치기 ▸' : '접기 ▾';
+            rtToggle.setAttribute('aria-expanded', String(!expanded));
+        };
+        rtToggle.addEventListener('click', toggleRT);
+        rtToggle.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRT(); }
+        });
+    }
+
     // SSE 연결
     sse.connect();
 
@@ -846,10 +935,11 @@ function renderUSPositions(positions) {
     const now = new Date();
     // All dynamic values escaped via esc() — safe from XSS (data from own backend API)
     tbody.innerHTML = positions.map(p => {
-        const pnl = p.pnl || 0;
-        const pnlPct = p.pnl_pct || 0;
+        // P0-4: pnl fallback + NaN 가드
+        const _p = p.pnl, _pp = p.pnl_pct;
+        const pnl = (typeof _p === 'number' && isFinite(_p)) ? _p : 0;
+        const pnlPct = (typeof _pp === 'number' && isFinite(_pp)) ? _pp : 0;
         const pCls = pnlClass(pnl);
-        const stageLabel = exitStageLabel(p.stage ? { stage: p.stage } : null);
         // 보유시간
         let holdStr = '--';
         if (p.entry_time) {
@@ -861,8 +951,21 @@ function renderUSPositions(positions) {
                 holdStr = diffMin + 'm';
             }
         }
+        // P0-5: US 전략 배지 (earnings_drift 비활성 중, sepa/momentum만 정상)
+        const _usBadgeMap = {
+            'momentum_breakout': '<span class="strat-badge sb-gap" title="US Momentum: 20일 고가 돌파">MOM</span>',
+            'sepa_trend':        '<span class="strat-badge sb-rsi2" title="US SEPA: Minervini Stage 2">SEPA</span>',
+            'earnings_drift':    '<span class="strat-badge sb-theme" title="어닝스 드리프트 (2026-04-18 비활성)">EARN</span>',
+        };
+        const usBadge = _usBadgeMap[p.strategy] || '';
+        // P0-1: US 포지션에도 projection (기본 TP 5/15/25, SL 5%)
+        const posForProj = {
+            strategy: p.strategy,
+            exit_state: { stage: p.stage, stop_loss_pct: 5.0, first_exit_pct: 5.0, second_exit_pct: 15.0, third_exit_pct: 25.0 },
+        };
+        const stageHtml = renderStageProjection(posForProj, pnlPct);
         return '<tr class="border-b" style="border-color:rgba(99,102,241,0.08)">' +
-            '<td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">' + esc(p.symbol) + (p.name ? ' <span style="color:var(--text-muted);font-size:0.72rem;font-weight:400;">' + esc(p.name) + '</span>' : '') + '</td>' +
+            '<td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">' + esc(p.symbol) + usBadge + (p.name ? ' <span style="color:var(--text-muted);font-size:0.72rem;font-weight:400;">' + esc(p.name) + '</span>' : '') + '</td>' +
             '<td class="py-2 pr-3" style="font-size:0.75rem;color:var(--accent-purple);">' + esc(p.strategy || '--') + '</td>' +
             '<td class="py-2 pr-3 text-right mono">' + fmtUsd(p.current_price) + '</td>' +
             '<td class="col-avg-price py-2 pr-3 text-right mono text-gray-400">' + fmtUsd(p.avg_price) + '</td>' +
@@ -871,7 +974,7 @@ function renderUSPositions(positions) {
             '<td class="py-2 pr-3 text-right mono ' + pCls + '">' + (pnl >= 0 ? '+' : '-') + '$' + Math.abs(pnl).toFixed(2) + '</td>' +
             '<td class="py-2 pr-3 text-right mono ' + pCls + '">' + formatPct(pnlPct) + '</td>' +
             '<td class="col-holding py-2 pr-3 mono" style="font-size:0.75rem;color:var(--text-secondary);">' + holdStr + '</td>' +
-            '<td class="py-2">' + stageLabel + '</td>' +
+            '<td class="py-2">' + stageHtml + '</td>' +
         '</tr>';
     }).join('');
 }
@@ -1092,16 +1195,33 @@ function updateRiskCard() {
         canTrade.textContent = kr.can_trade ? 'Yes' : 'No';
         canTrade.className = 'badge ' + (kr.can_trade ? 'badge-green' : 'badge-red');
     }
-    // 일일 손실
+    // P0-2: 일일 손실 + 게이지 — 0→-3% 초록, -3→-4.5% 주황, -4.5% 이상 빨강
     if (dailyLoss) {
         dailyLoss.textContent = formatPct(kr.daily_loss_pct);
-        dailyLoss.style.color = kr.daily_loss_pct < 0 ? 'var(--acc-red)' : '';
+        const loss = kr.daily_loss_pct || 0;
+        dailyLoss.classList.remove('risk-danger', 'risk-warn');
+        if (loss <= -4.5) dailyLoss.classList.add('risk-danger');
+        else if (loss <= -3.0) dailyLoss.classList.add('risk-warn');
     }
     if (dailyLossLim) dailyLossLim.textContent = '-' + kr.daily_loss_limit_pct + '%';
     if (lossGauge) {
-        const lossPct = Math.min(Math.abs(kr.daily_loss_pct) / kr.daily_loss_limit_pct * 100, 100);
-        lossGauge.style.width = lossPct + '%';
-        lossGauge.className = 'gauge-fill ' + (lossPct > 70 ? 'bg-red-500' : lossPct > 40 ? 'bg-yellow-500' : 'bg-green-500');
+        // 한도 대비 사용률 (0~100%) — initial_capital 분모 (2026-04-18 엔진 일치)
+        const loss = kr.daily_loss_pct || 0;
+        const ratio = kr.daily_loss_limit_pct > 0
+            ? Math.min(Math.abs(loss) / kr.daily_loss_limit_pct * 100, 100)
+            : 0;
+        lossGauge.style.width = ratio + '%';
+        // 색상 단계: >90% 빨강, >60% 주황, 그 외 초록
+        lossGauge.classList.remove('gauge-green', 'gauge-amber', 'gauge-red');
+        if (ratio > 90) lossGauge.classList.add('gauge-red');
+        else if (ratio > 60) lossGauge.classList.add('gauge-amber');
+        else lossGauge.classList.add('gauge-green');
+        // aria 라이브 업데이트 (접근성)
+        const track = lossGauge.parentElement;
+        if (track && track.getAttribute('role') === 'progressbar') {
+            track.setAttribute('aria-valuenow', Math.round(ratio));
+            track.setAttribute('aria-valuetext', `${loss.toFixed(2)}% (한도 ${ratio.toFixed(0)}% 사용)`);
+        }
     }
     // 거래 횟수
     if (trades) trades.textContent = kr.daily_trades;
@@ -1126,6 +1246,19 @@ function updateRiskCard() {
         regimeEl.textContent = regimeMap[kr.market_regime] || kr.market_regime;
         regimeEl.className = 'badge ' + (regimeColorMap[kr.market_regime] || 'badge-blue');
         regimeEl.style.fontSize = '0.68rem';
+        // Impact기능 3: Regime Timeline 현재 행 하이라이트
+        ['bull','bear','sideways','neutral'].forEach(r => {
+            const tr = document.getElementById('rt-' + r);
+            if (tr) {
+                if (r === kr.market_regime) {
+                    tr.style.background = 'rgba(99,102,241,0.10)';
+                    tr.style.fontWeight = '600';
+                } else {
+                    tr.style.background = '';
+                    tr.style.fontWeight = '';
+                }
+            }
+        });
     }
     // 크로스 검증 통계
     const cvPassed = document.getElementById('ai-cv-passed');
@@ -1391,15 +1524,21 @@ function renderSignalEvents() {
 
         const row = document.createElement('div');
         row.style.cssText = `display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;background:${typeBg};border:1px solid ${typeColor}22;font-size:.78rem;flex-wrap:wrap;`;
+        // Impact기능 2 (LLM Rationale): block_reason을 tooltip + 규칙 번호 배지로 노출
+        // XSS 방어(Phase D): 모든 동적 값 esc() 처리
+        const safeName = esc(ev.name || ev.symbol);
+        const safeSymbol = esc(ev.symbol);
+        const safeStrategy = ev.strategy ? esc(ev.strategy) : '';
+        const safeReason = ev.block_reason ? esc(ev.block_reason) : '';
         row.innerHTML = `
             <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-muted);min-width:34px;">${dt}</span>
             <span style="font-weight:700;color:${typeColor};min-width:26px;">${typeTxt}</span>
-            <span style="font-weight:600;color:var(--text-primary);">${ev.name || ev.symbol}</span>
-            <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-muted);">${ev.symbol}</span>
+            <span style="font-weight:600;color:var(--text-primary);">${safeName}</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-muted);">${safeSymbol}</span>
             <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:#6366f1;">점수 ${scoreTxt}</span>
-            ${ev.strategy ? `<span style="font-size:.65rem;color:var(--text-muted);background:var(--bg-elevated);padding:1px 5px;border-radius:4px;">${ev.strategy}</span>` : ''}
-            ${gateMeta ? `<span style="font-size:.65rem;font-weight:700;padding:1px 7px;border-radius:4px;background:${gateMeta.bg};color:${gateMeta.color};">${gateMeta.label}</span>` : ''}
-            ${ev.block_reason ? `<span style="font-size:.68rem;color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${ev.block_reason}">${ev.block_reason}</span>` : ''}
+            ${safeStrategy ? `<span style="font-size:.65rem;color:var(--text-muted);background:var(--bg-elevated);padding:1px 5px;border-radius:4px;">${safeStrategy}</span>` : ''}
+            ${gateMeta ? `<span style="font-size:.65rem;font-weight:700;padding:1px 7px;border-radius:4px;background:${gateMeta.bg};color:${gateMeta.color};" title="크로스검증 게이트 ${esc(ev.block_gate||'')}">${esc(gateMeta.label)}</span>` : ''}
+            ${safeReason ? `<span style="font-size:.68rem;color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:help;" title="차단사유: ${safeReason}">${safeReason}</span>` : ''}
         `;
         el.appendChild(row);
     });

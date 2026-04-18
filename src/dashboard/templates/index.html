@@ -48,6 +48,48 @@
 
         *, ::before, ::after { box-sizing: border-box; }
 
+        /* 리스크 게이지 (P0-2) */
+        .risk-gauge-track {
+            width: 100%; height: 6px; background: rgba(99,102,241,0.10);
+            border-radius: 3px; overflow: hidden;
+        }
+        .risk-gauge-fill {
+            height: 100%; width: 0%; border-radius: 3px;
+            transition: width .4s ease, background-color .4s ease;
+        }
+        .gauge-green  { background: linear-gradient(90deg, #34d399, #10b981); }
+        .gauge-amber  { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+        .gauge-red    { background: linear-gradient(90deg, #f87171, #dc2626); }
+        .risk-danger  { color: var(--acc-red) !important; }
+        .risk-warn    { color: var(--acc-amber) !important; }
+
+        /* 전략 배지 (P0-5) */
+        .strat-badge {
+            display:inline-block; font-size:0.60rem; font-weight:600;
+            border-radius:3px; padding:1px 4px; vertical-align:middle;
+            letter-spacing:.03em; margin-left:4px;
+        }
+        .sb-core  { color: var(--acc-amber); background: rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.35); }
+        .sb-theme { color: #f0abfc; background: rgba(240,171,252,0.10); border:1px solid rgba(240,171,252,0.35); }
+        .sb-gap   { color: var(--acc-cyan); background: rgba(34,211,238,0.08); border:1px solid rgba(34,211,238,0.30); }
+        .sb-rsi2  { color: var(--acc-green); background: rgba(52,211,153,0.08); border:1px solid rgba(52,211,153,0.30); }
+
+        /* 청산단계 projection 미니바 (P0-1) */
+        .stage-proj {
+            display:flex; flex-direction:column; gap:2px; min-width:92px;
+        }
+        .stage-proj-bar {
+            width:100%; height:4px; background: rgba(148,163,184,0.12);
+            border-radius:2px; overflow:hidden; position:relative;
+        }
+        .stage-proj-bar > div {
+            height:100%; background: linear-gradient(90deg, #f87171, #34d399);
+            border-radius:2px;
+        }
+        .stage-proj-lbl {
+            font-size:0.58rem; color: var(--text-muted); font-family:'JetBrains Mono',monospace;
+        }
+
         body {
             background: var(--bg-base);
             color: var(--text-primary);
@@ -212,8 +254,14 @@
         .dt th { color:var(--text-muted); font-weight:500; font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; padding:0 10px 10px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .dt td { font-size:.82rem; padding:10px 10px 10px 0; border-top:1px solid var(--border-sub); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .dt tbody tr:hover { background:rgba(99,102,241,.03); }
-        .sortable-th { cursor:pointer; user-select:none; transition:color .15s; }
-        .sortable-th:hover { color:var(--text-secondary); }
+        .sortable-th { cursor:pointer; user-select:none; transition:all .18s; }
+        .sortable-th:hover { color:var(--text-secondary); background: rgba(99,102,241,0.04); }
+        /* P1-1: 활성 정렬 컬럼 시각 피드백 — 배경색 + 테두리 */
+        .sortable-th.asc, .sortable-th.desc {
+            color: var(--acc-blue);
+            background: rgba(99,102,241,0.12);
+            box-shadow: inset 0 -2px 0 var(--acc-blue);
+        }
         .sortable-th.asc .sort-icon::after  { content:' ▲'; font-size:.55rem; }
         .sortable-th.desc .sort-icon::after { content:' ▼'; font-size:.55rem; }
         .sort-icon { color:var(--acc-blue); }
@@ -524,17 +572,24 @@
                 <div class="mc-sub">리스크 현황</div>
                 <div class="mc-body ops-body">
                     <div class="mr" style="display:none;"><span class="mr-lbl">거래 가능</span><span id="r-can-trade" class="badge badge-green">Yes</span></div>
-                    <div class="mr"><span class="mr-lbl">일일 손실</span><span class="mr-val mono"><span id="r-daily-loss">0%</span> <span class="muted-sep">/</span> <span id="r-daily-loss-limit" class="val-muted">-5%</span></span></div>
+                    <!-- P0-2: 일일 손실 게이지바 (색상: 0→-3%초록, -3→-4.5%주황, -4.5%+빨강) -->
+                    <div class="mr" style="flex-direction:column;align-items:stretch;gap:4px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <span class="mr-lbl">일일 손실</span>
+                            <span class="mr-val mono"><span id="r-daily-loss">0%</span> <span class="muted-sep">/</span> <span id="r-daily-loss-limit" class="val-muted">-5%</span></span>
+                        </div>
+                        <div class="risk-gauge-track" title="initial_capital 분모 기준" role="progressbar" aria-label="일일 손실 한도 사용률" aria-valuemin="0" aria-valuemax="100"><div id="r-loss-gauge" class="risk-gauge-fill gauge-green"></div></div>
+                    </div>
                     <div class="mr"><span class="mr-lbl">거래 횟수</span><span class="mr-val mono"><span id="r-trades">0</span> <span class="muted-sep">/</span> <span id="r-max-trades" class="val-muted">30</span></span></div>
                     <div class="mr"><span class="mr-lbl">포지션</span><span class="mr-val mono"><span id="r-positions">0</span> <span class="muted-sep">/</span> <span id="r-max-positions" class="val-muted">9</span></span></div>
                     <hr class="ops-sep">
                     <div class="sm"><span class="sm-l">연속 손실</span><span id="r-consecutive" class="sm-v">0</span></div>
                     <div class="sm"><span class="sm-l">신호 생성</span><span id="r-signals" class="sm-v">0</span></div>
-                    <div class="sm"><span class="sm-l">WS 구독</span><span id="r-ws-sub" class="sm-v">0</span></div>
+                    <!-- P0-3: WS 라벨 명확화 — "N종목 구독 중", 0일 때 경고색 -->
+                    <div class="sm" title="WebSocket 실시간 시세 구독 종목 수 (0이면 피드 단절)"><span class="sm-l">WS 구독</span><span id="r-ws-sub" class="sm-v">0종목</span></div>
                 </div>
                 <!-- JS compat: hidden gauge stubs -->
                 <span id="r-events" style="display:none;">0</span>
-                <span id="r-loss-gauge" style="display:none;"></span>
                 <span id="r-trades-gauge" style="display:none;"></span>
                 <span id="r-positions-gauge" style="display:none;"></span>
 
@@ -564,6 +619,34 @@
                         </span>
                     </div>
                     <div id="ai-llm-assessment" style="display:none;font-size:0.68rem;color:var(--text-muted);padding:4px 0;line-height:1.3;"></div>
+                </div>
+
+                <!-- Impact 기능 3: 체제 전환 시 청산 파라미터 변화 -->
+                <hr class="mc-sep">
+                <div class="mc-sub" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span>체제별 청산 규칙</span>
+                    <span id="regime-timeline-toggle" style="font-size:0.62rem;color:var(--text-muted);cursor:pointer;user-select:none;" role="button" tabindex="0" aria-expanded="false" aria-controls="regime-timeline">펼치기 ▸</span>
+                </div>
+                <div id="regime-timeline" class="mc-body" style="display:none;font-size:0.65rem;padding:6px 22px 12px;">
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead>
+                            <tr style="color:var(--text-muted);border-bottom:1px solid var(--border-sub);">
+                                <th style="text-align:left;padding:4px 2px;font-weight:600;">체제</th>
+                                <th style="text-align:right;padding:4px 2px;font-weight:600;" title="손절 %">SL</th>
+                                <th style="text-align:right;padding:4px 2px;font-weight:600;" title="트레일링 % (활성)">TS</th>
+                                <th style="text-align:right;padding:4px 2px;font-weight:600;" title="1·2·3차 익절 %">TP1/2/3</th>
+                            </tr>
+                        </thead>
+                        <tbody class="mono">
+                            <tr id="rt-bull"><td style="padding:3px 2px;color:var(--acc-green);">🟢 강세</td><td style="text-align:right;padding:3px 2px;">5.0%</td><td style="text-align:right;padding:3px 2px;">4.0%</td><td style="text-align:right;padding:3px 2px;color:var(--text-secondary);">5 / 15 / 25</td></tr>
+                            <tr id="rt-neutral"><td style="padding:3px 2px;color:var(--acc-blue);">⚪ 중립</td><td style="text-align:right;padding:3px 2px;">5.0%</td><td style="text-align:right;padding:3px 2px;">3.0%</td><td style="text-align:right;padding:3px 2px;color:var(--text-secondary);">5 / 12 / 20</td></tr>
+                            <tr id="rt-sideways"><td style="padding:3px 2px;color:var(--acc-amber);">🟡 횡보</td><td style="text-align:right;padding:3px 2px;">4.0%</td><td style="text-align:right;padding:3px 2px;">3.0%</td><td style="text-align:right;padding:3px 2px;color:var(--text-secondary);">4 / 10 / 20</td></tr>
+                            <tr id="rt-bear"><td style="padding:3px 2px;color:var(--acc-red);">🔴 약세</td><td style="text-align:right;padding:3px 2px;">3.0%</td><td style="text-align:right;padding:3px 2px;">2.5%</td><td style="text-align:right;padding:3px 2px;color:var(--text-secondary);">3 / 8 / 15</td></tr>
+                        </tbody>
+                    </table>
+                    <div style="margin-top:6px;color:var(--text-muted);font-size:0.60rem;line-height:1.4;">
+                        ※ 체제 전환 시 ExitManager가 자동 재계산. <strong style="color:var(--acc-red);">bear 전환 시 RSI2/momentum 신규 진입 전면 차단</strong> (Connors 원전 규칙).
+                    </div>
                 </div>
 
             </div><!-- /kr-market-card -->

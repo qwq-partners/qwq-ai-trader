@@ -46,6 +46,9 @@ async function loadPerformance(days) {
         b.classList.toggle('active', parseInt(b.dataset.days) === days);
     });
 
+    // P1-3: 로딩 UI — 전체 영역에 오버레이 표시 (1~3초 블랭크 방지)
+    _showPerfLoading(true);
+
     try {
         const [stats, equityData] = await Promise.all([
             api('/api/trades/stats?days=' + days),
@@ -64,10 +67,31 @@ async function loadPerformance(days) {
         renderDailyTable(_krSnaps);
     } catch (e) {
         console.error('[성과] KR 로드 오류:', e);
+    } finally {
+        _showPerfLoading(false);
     }
 
     // 벤치마크 (비동기, 차트 지연 허용)
     fetchBenchmark(days).then(() => renderBenchmarkChart(_krSnaps, _kospiData));
+}
+
+function _showPerfLoading(show) {
+    let ov = document.getElementById('perf-loading-overlay');
+    if (show && !ov) {
+        ov = document.createElement('div');
+        ov.id = 'perf-loading-overlay';
+        ov.style.cssText = 'position:fixed;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#6366f1,#22d3ee,#6366f1);background-size:200% 100%;animation:perfShimmer 1.2s linear infinite;z-index:9999;';
+        const style = document.getElementById('perf-shimmer-style');
+        if (!style) {
+            const s = document.createElement('style');
+            s.id = 'perf-shimmer-style';
+            s.textContent = '@keyframes perfShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}';
+            document.head.appendChild(s);
+        }
+        document.body.appendChild(ov);
+    } else if (!show && ov) {
+        ov.remove();
+    }
 }
 
 // ── 날짜 범위 로드 (KR) ──────────────────────────────────────

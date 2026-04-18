@@ -155,10 +155,26 @@ function formatDuration(seconds) {
 }
 
 function esc(str) {
+    // HTML 텍스트 노드 + 속성값 양쪽에 안전 — &, <, >, ", ', / 모두 escape
+    // (createElement+textContent는 "와 ' 미처리 → title="..."에 삽입 시 속성 폭주 위험)
     if (str == null) return '';
-    const d = document.createElement('div');
-    d.textContent = String(str);
-    return d.innerHTML;
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/\//g, '&#x2F;');
+}
+
+/** URL 검증 — javascript: / data: 스킴 차단 */
+function safeUrl(url) {
+    if (!url) return '';
+    const s = String(url).trim().toLowerCase();
+    if (s.startsWith('javascript:') || s.startsWith('data:') || s.startsWith('vbscript:')) {
+        return '#';
+    }
+    return url;
 }
 
 function sessionLabel(session) {

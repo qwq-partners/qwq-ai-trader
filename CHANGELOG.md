@@ -1,5 +1,63 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-18 — 대시보드 + 모바일앱 UI/UX 전면 개선 (Phase A~F)
+
+### Phase A: 웹 P0 5건 (트레이더 의사결정 즉시 향상)
+- **P0-1 + Impact1**: 포지션 테이블 "청산단계" 컬럼을 projection 위젯으로 확장
+  - `index.html`: `.stage-proj` / `.stage-proj-bar` / `.stage-proj-lbl` 스타일 추가
+  - `dashboard.js:renderStageProjection()` 신규 — SL~nextTP 구간 미니바 + "SL +X%p / TP1 -X%p" 라벨
+  - KR/US 포지션 테이블 양쪽 적용
+- **P0-2**: 일일 손실 한도 게이지바 — 숫자 표시에 색상 게이지 추가
+  - `.risk-gauge-track/fill` + `.gauge-green/amber/red` 스타일
+  - JS: >90% 빨강, >60% 주황, 그 외 초록. aria-valuenow 라이브 업데이트
+- **P0-3**: WS 구독 라벨 "0" → "N종목" 명확화 + 장중 0일 때 경고색
+- **P0-4**: pnl fallback NaN 가드 — `_rawPnl` isFinite 체크 + console.warn
+- **P0-5**: 전략 특수 뱃지 확장 — 코어/테마/갭/RSI2 각각 `.sb-core/sb-theme/sb-gap/sb-rsi2` 추가
+
+### Phase B: 웹 P1 (효율성)
+- **P1-1**: 정렬 활성 컬럼 시각 피드백 — `.sortable-th.asc/desc` 배경색 + 하단 inset 박스 섀도
+- **P1-3**: 성과 페이지 탭 전환 로딩 UI — `_showPerfLoading()` 상단 shimmer 오버레이
+
+### Phase C: 웹 P2 디자인 시스템 & 접근성
+- `dashboard.css` **31 → 120줄** 확장
+  - 디자인 토큰: `--fs-xs~2xl`, `--sp-1~5`, `--t-fast/med/slow`
+  - 1024/768/640/380 반응형 4단계
+  - `:focus-visible` 키보드 네비 outline
+  - `@media (prefers-reduced-motion)` 감속 모드
+  - `.sr-only` 스크린리더 전용 클래스
+- `index.html` 게이지에 `role="progressbar" aria-label` 적용
+
+### Phase D: 보안 XSS 감사
+- `common.js:esc()` 강화 — &/</>/"/'//  모두 escape (속성 폭주 방지)
+- `common.js:safeUrl()` 신규 — javascript:/data:/vbscript: 스킴 차단
+- `themes.js` 뉴스 URL에 `safeUrl()` + `rel="noopener noreferrer"` 강화
+- `dashboard.js` 신호 이벤트 렌더링 — ev.name/symbol/strategy/block_reason 전건 esc() 적용
+
+### Phase E: Impact 기능 2·3
+- **LLM Signal Rationale**: 신호로그 차단 사유 → tooltip 확장 + 게이트 번호 title
+- **Regime Exit Timeline**: KR 마켓 카드에 "체제별 청산 규칙" 토글 테이블
+  - bull/neutral/sideways/bear 4개 체제 × SL/TS/TP1~3 한눈에
+  - 현재 체제 행 자동 하이라이트 (regime 변경 시 동기화)
+  - "bear 전환 시 RSI2/momentum 전면 차단" 명시
+  - 키보드 접근성(Enter/Space 토글)
+
+### Phase F: 모바일앱 동등 개선 (`/home/user/projects/ai-trader-mobile`)
+- `app/(tabs)/index.tsx`:
+  - `RiskGauge`: 임계값을 웹과 동일 60/90% 로 통일 + 손실 텍스트 색상 단계
+  - `STRATEGY_LABELS`: rsi2_reversal/strategic_swing/core_holding 추가
+  - `STRATEGY_BADGE`: 코어/테마/갭/RSI2 특수 배지 4종
+  - `getStageProjection()`: 웹 `renderStageProjection`과 동일 로직
+  - `PositionCard`: 전략 배지 + 청산 projection 미니바 + SL/TP 거리 표시
+  - `accessibilityRole="progressbar"` 추가
+- `EXIT_STATE_COLORS`에 `first/second/third` 상태 추가 (웹 동등)
+
+### 검증
+- `python3 -m py_compile` 전체 OK (엔진 변경 없음 — 대시보드 정적 자산만)
+- `systemctl restart qwq-ai-trader` → active, 에러 없음
+- 모바일 `tsc --noEmit` — 기존 demo-data.ts 타입 오류만, 금번 수정 관련 오류 0건
+
+---
+
 ## 2026-04-18 — 3인 합동 전체 검증(코드/전략/데이터/종목선정) P0~P2 18건 일괄 수정
 
 7개 전문 에이전트(engine-monitor, risk-auditor, trade-analyst, market-analyst, strategy-advisor, param-optimizer, Explore) 병렬 리뷰 + 교차 검증 후 일괄 수정.

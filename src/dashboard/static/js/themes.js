@@ -76,10 +76,10 @@ function renderThemes(themes) {
                 <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${newsItems.length}건</div>
                 ${newsItems.slice(0, 5).map(item => {
                     const title = esc(item.title || item);
-                    const url = item.url || "";
+                    const url = item.url ? esc(safeUrl(item.url)) : "";
                     return url
                         ? `<div class="text-xs mb-0.5" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                             <a href="${esc(url)}" target="_blank" rel="noopener"
+                             <a href="${url}" target="_blank" rel="noopener noreferrer"
                                 style="color:var(--accent-blue);text-decoration:none;"
                                 title="${title}">• ${title}</a>
                            </div>`
