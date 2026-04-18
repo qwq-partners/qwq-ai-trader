@@ -16,11 +16,11 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    strategic_swing: 10.0
+    sepa_trend: 10.0
     theme_chasing: 5.0
+    rsi2_reversal: 40.0
+    strategic_swing: 10.0
     gap_and_go: 5.0
-    rsi2_reversal: 20.0
-    sepa_trend: 25.0
     momentum_breakout: 0.0
     core_holding: 30.0
 exit_manager:
@@ -85,7 +85,7 @@ _meta:
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
     source: weekly_rebalance
-    timestamp: '2026-04-18T00:00:21.938816'
+    timestamp: '2026-04-18T02:06:18.369711'
   risk_config.strategy_allocation.core_holding:
     source: manual_review_locked
     timestamp: '2026-03-14T00:15:00'
