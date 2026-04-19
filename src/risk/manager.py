@@ -363,13 +363,14 @@ class RiskManager:
 
         return True, ""
 
-    def record_exit(self, symbol: str, exit_price: float, sector: str = ""):
+    def record_exit(self, symbol: str, exit_price: float, sector: str = "", is_full_exit: bool = True):
         """청산 종목 기록 (당일 재진입 조건 체크 + 크로스 검증 섹터 비교용)
 
         분할 매도 시 최초 청산가를 기준으로 유지 (덮어쓰기 방지).
-        당일 청산 카운터도 함께 증가시켜 D+1 분리 쿨다운 규칙의 트리거로 사용.
+        당일 청산 카운터는 **심볼별 최초 청산 1회**만 증가 (분할매도 중복 카운트 방지).
+        is_full_exit=False: 부분 청산 — 재진입 기록만, 카운터 미증가.
         """
-        # 당일 청산 카운터 증가 (KR/US 공통) — 날짜 롤오버 시 리셋
+        # 당일 청산 카운터 — 날짜 롤오버 시 리셋
         today = date.today()
         if self._daily_exit_count_date != today:
             logger.debug(
@@ -381,18 +382,21 @@ class RiskManager:
             self._daily_exit_count_date = today
             self._last_exit_cooldown_log.clear()
 
-        self._daily_exit_count += 1
-        threshold = int(getattr(self.config, 'daily_exit_cooldown_threshold', 0) or 0)
-        if threshold > 0:
-            logger.info(
-                f"[리스크] 당일 청산 누적: {self._daily_exit_count}/{threshold} "
-                f"({symbol} @ {exit_price})"
-            )
-        else:
-            logger.debug(
-                f"[리스크] 당일 청산 카운터: {self._daily_exit_count} "
-                f"(쿨다운 비활성, threshold=0)"
-            )
+        # 심볼별 최초 청산 1회만 카운트 (1차/2차/3차/트레일링 중복 방지)
+        is_new_exit = symbol not in self._exited_today
+        if is_new_exit:
+            self._daily_exit_count += 1
+            threshold = int(getattr(self.config, 'daily_exit_cooldown_threshold', 0) or 0)
+            if threshold > 0:
+                logger.info(
+                    f"[리스크] 당일 청산 누적: {self._daily_exit_count}/{threshold} "
+                    f"({symbol} @ {exit_price})"
+                )
+            else:
+                logger.debug(
+                    f"[리스크] 당일 청산 카운터: {self._daily_exit_count} "
+                    f"(쿨다운 비활성, threshold=0)"
+                )
 
         if self.market == "KR":
             if symbol not in self._exited_today:

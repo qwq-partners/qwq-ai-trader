@@ -340,6 +340,11 @@ class ExitManager:
                 entry["max_holding_days"] = state.max_holding_days
             if state.trailing_activate_pct is not None:
                 entry["trailing_activate_pct"] = state.trailing_activate_pct
+            # ATR-linked trailing: 재시작 시 소실 방지 (sync 재등록에서 원본 atr_pct를 못 받음)
+            if state.effective_trailing_stop_pct is not None:
+                entry["effective_trailing_stop_pct"] = state.effective_trailing_stop_pct
+            if state.atr_pct is not None:
+                entry["atr_pct"] = state.atr_pct
             # 코어 포지션의 전용 파라미터 영속화 (재시작 시 strategy=None 폴백 방어)
             if state.is_core:
                 if state.stop_loss_pct is not None:
@@ -460,6 +465,10 @@ class ExitManager:
         #   - cap_pct   : 상한선 (너무 커져 손실 확대 방지)
         # ATR이 없으면 None 저장 → 기존 방식 fallback
         effective_ts_pct: Optional[float] = None
+        # 영속화된 상태에서 atr_pct/effective_ts 복원 (sync 재등록 + 재시작 경로)
+        persisted_check = self._persisted.get(position.symbol, {})
+        if atr_pct is None and persisted_check.get("atr_pct") is not None:
+            atr_pct = float(persisted_check["atr_pct"])
         if (
             self.config.enable_atr_linked_trailing
             and atr_pct is not None
@@ -477,6 +486,12 @@ class ExitManager:
                 f"ATR={atr_pct:.2f}% × {self.config.atr_link_multiplier} = {atr_based:.2f}% / "
                 f"config_ts={float(base_ts):.2f}% → effective={effective_ts_pct:.2f}% "
                 f"(cap={self.config.atr_link_cap_pct}%)"
+            )
+        elif persisted_check.get("effective_trailing_stop_pct") is not None:
+            # ATR 미전달이지만 영속화된 effective_ts가 있으면 복원 (재시작 경로)
+            effective_ts_pct = float(persisted_check["effective_trailing_stop_pct"])
+            logger.debug(
+                f"[ExitManager] {position.symbol} effective_ts 복원: {effective_ts_pct:.2f}%"
             )
 
         # 전략별 익절 목표 우선, 없으면 글로벌 기본값

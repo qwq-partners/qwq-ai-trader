@@ -338,9 +338,12 @@ class MarketRegimeAdapter:
             logger.debug(f"[체제] VIX 캐시 로드 실패 (무시): {e}")
 
         # 캐시 만료/부재 → 백그라운드 refresh 예약 (실행 중 event loop 있을 때만)
+        # race 방지: 이미 실행 중인 fetch 태스크가 있으면 재예약 금지
+        if getattr(self, "_vix_fetch_task", None) is not None and not self._vix_fetch_task.done():
+            return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._fetch_vix())
+            self._vix_fetch_task = loop.create_task(self._fetch_vix())
         except RuntimeError:
             # 이벤트 루프가 없으면 조용히 패스 (기존 상태 유지)
             pass
@@ -364,10 +367,11 @@ class MarketRegimeAdapter:
             self._vix_last_fetch = datetime.now()
             self._vix_state = self._classify_vix(self._vix_value)
 
-            # 캐시 파일 영속화
+            # 캐시 파일 영속화 (원자적 쓰기: tmp → rename)
             try:
                 _VIX_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                with _VIX_CACHE_PATH.open("w", encoding="utf-8") as f:
+                tmp_path = _VIX_CACHE_PATH.with_suffix(".tmp")
+                with tmp_path.open("w", encoding="utf-8") as f:
                     json.dump(
                         {
                             "timestamp": self._vix_last_fetch.isoformat(),
@@ -375,6 +379,7 @@ class MarketRegimeAdapter:
                         },
                         f,
                     )
+                os.replace(tmp_path, _VIX_CACHE_PATH)
             except Exception as e:
                 logger.debug(f"[체제] VIX 캐시 저장 실패 (무시): {e}")
 
