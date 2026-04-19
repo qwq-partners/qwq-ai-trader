@@ -105,6 +105,14 @@ class RiskManager:
         # 차단 로그 스팸 방지 쿨다운
         self._last_sync_block_log: Dict[str, datetime] = {}
 
+        # 당일 청산 누적 쿨다운 (D+1 분리)
+        # 4/14 -8.42% 사고 대응: 같은 날 다수 청산 + 다수 신규 매수 동시 발생 방지
+        # 3건 이상 청산 발생 시 신규 매수 차단 → 다음 거래일에 재개
+        self._daily_exit_count: int = 0
+        self._daily_exit_count_date: Optional[date] = date.today()
+        # 차단 로그 스팸 방지 쿨다운 (심볼별 60초)
+        self._last_exit_cooldown_log: Dict[str, datetime] = {}
+
         logger.info(
             f"RiskManager 초기화 ({self.market}): "
             f"일일손실한도={config.daily_max_loss_pct}%, "
@@ -327,13 +335,65 @@ class RiskManager:
             if sector_count >= self.config.max_positions_per_sector:
                 return False, f"Sector limit reached for {sector}"
 
+        # 8. 당일 청산 누적 쿨다운 (D+1 분리)
+        # 4/14 -8.42% 사고 대응: 같은 날 다수 청산 + 다수 신규 매수 방지
+        # threshold=0 이면 비활성 (안전장치)
+        threshold = int(getattr(self.config, 'daily_exit_cooldown_threshold', 0) or 0)
+        if threshold > 0:
+            # 날짜 롤오버 방어 (외부에서 record_exit 안 불린 상태로 날짜 바뀔 때)
+            today = date.today()
+            if self._daily_exit_count_date != today:
+                self._daily_exit_count = 0
+                self._daily_exit_count_date = today
+                self._last_exit_cooldown_log.clear()
+
+            if self._daily_exit_count >= threshold:
+                # 심볼별 60초 로그 쿨다운 (스팸 방지)
+                now = datetime.now()
+                _last = self._last_exit_cooldown_log.get(symbol)
+                if _last is None or (now - _last).total_seconds() >= 60:
+                    logger.warning(
+                        f"[리스크] 당일 청산 {self._daily_exit_count}건 누적 — "
+                        f"신규 매수 차단 ({symbol}), 다음 거래일 재개 예정"
+                    )
+                    self._last_exit_cooldown_log[symbol] = now
+                return False, (
+                    f"당일 청산 {self._daily_exit_count}건 누적, 다음 거래일 재개"
+                )
+
         return True, ""
 
     def record_exit(self, symbol: str, exit_price: float, sector: str = ""):
         """청산 종목 기록 (당일 재진입 조건 체크 + 크로스 검증 섹터 비교용)
 
         분할 매도 시 최초 청산가를 기준으로 유지 (덮어쓰기 방지).
+        당일 청산 카운터도 함께 증가시켜 D+1 분리 쿨다운 규칙의 트리거로 사용.
         """
+        # 당일 청산 카운터 증가 (KR/US 공통) — 날짜 롤오버 시 리셋
+        today = date.today()
+        if self._daily_exit_count_date != today:
+            logger.debug(
+                f"[리스크] 당일 청산 카운터 날짜 롤오버: "
+                f"{self._daily_exit_count_date} -> {today} "
+                f"(이전 카운터 {self._daily_exit_count} → 0)"
+            )
+            self._daily_exit_count = 0
+            self._daily_exit_count_date = today
+            self._last_exit_cooldown_log.clear()
+
+        self._daily_exit_count += 1
+        threshold = int(getattr(self.config, 'daily_exit_cooldown_threshold', 0) or 0)
+        if threshold > 0:
+            logger.info(
+                f"[리스크] 당일 청산 누적: {self._daily_exit_count}/{threshold} "
+                f"({symbol} @ {exit_price})"
+            )
+        else:
+            logger.debug(
+                f"[리스크] 당일 청산 카운터: {self._daily_exit_count} "
+                f"(쿨다운 비활성, threshold=0)"
+            )
+
         if self.market == "KR":
             if symbol not in self._exited_today:
                 self._exited_today[symbol] = {
@@ -751,6 +811,10 @@ class RiskManager:
         # 연속 손실 카운터 일일 리셋 — 전일 4연패가 익일 첫 거래 전 사이징 50% 축소를
         # 잘못 끌고 가지 않도록. (record_trade_result의 승리 시 즉시 리셋과 별개로 날짜 경계 보강)
         self._consecutive_losses = 0
+        # 당일 청산 카운터도 날짜 경계에서 리셋 (D+1 분리 쿨다운 해제)
+        self._daily_exit_count = 0
+        self._daily_exit_count_date = today
+        self._last_exit_cooldown_log.clear()
         self._save_exited_today()
 
         self._save_daily_stats()

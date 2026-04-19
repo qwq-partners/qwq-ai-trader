@@ -592,6 +592,12 @@ class RiskConfig:
     consecutive_loss_threshold: int = 3
     consecutive_loss_size_factor: float = 0.5
 
+    # 당일 청산 누적 쿨다운 (D+1 분리)
+    # 청산 당일 신규 매수를 차단해 "저점 청산 후 즉시 재진입 → 반등 미스" 패턴 방지
+    # 4/14 -8.42% 사고 대응: 같은 날 다수 청산 + 다수 신규 매수 동시 발생 방지
+    # threshold=0 이면 규칙 비활성 (안전장치)
+    daily_exit_cooldown_threshold: int = 3
+
     # 코어홀딩 (KR)
     max_core_positions: int = 3            # 코어홀딩 최대 동시 보유 수
 

@@ -1,6 +1,6 @@
 # 리스크 관리 + 청산 전략
 
-> 최종 갱신: 2026-04-19 (동기화 trading_lock 타임아웃 안전장치 추가)
+> 최종 갱신: 2026-04-19 (당일 청산 누적 D+1 쿨다운 추가)
 
 ## KR 리스크 (src/risk/manager.py + engine.py)
 
@@ -29,6 +29,19 @@
 - 차단 로그: `[리스크] 동기화 복구 중 신규 매수 차단 ({symbol})` — 심볼별 60초 쿨다운
 - 구현: `src/risk/manager.py` (`_sync_healthy`, `_sync_unhealthy_since`, `_sync_timeout_minutes=10`)
 - 호출 경로: `kr_scheduler._sync_portfolio()` 성공/실패마다 `set_sync_status()` 호출 → `engine.on_signal → _risk_validator.can_open_position` 게이트에서 차단
+
+### 당일 청산 누적 쿨다운 (D+1 분리, KR/US 공통)
+> **배경**: 4/14 -8.42% 사고 — 단일일에 다수 청산 + 다수 신규 매수 동시 발생, SK하이닉스 저점 청산 후 +16% 반등을 미스. "청산 당일은 현금 유지, 다음 거래일에 신규 진입" 규칙으로 교체.
+
+- 카운터: `RiskManager._daily_exit_count` (+ `_daily_exit_count_date`) — `record_exit()` 호출 시 +1, 날짜 롤오버 자동 리셋
+- 차단 로직: `can_open_position()` 마지막 단계(섹터 제한 뒤) — 다른 차단 사유(일일 손실/동기화/포지션 수)가 모두 우선
+- 설정: `RiskConfig.daily_exit_cooldown_threshold: int = 3` (0이면 비활성 안전장치)
+- 호출점: `src/schedulers/kr_scheduler.py` fill_check의 SELL 체결 기록 두 경로 (기존 `record_exit` 호출점 재사용, 신규 삽입 없음)
+- 로그:
+  - 카운터 증가: `[리스크] 당일 청산 누적: {n}/{threshold} ({symbol} @ {price})`
+  - 차단: `[리스크] 당일 청산 {n}건 누적 — 신규 매수 차단 ({symbol}), 다음 거래일 재개 예정` (심볼별 60초 스팸 방지)
+- 리셋: `reset_daily_stats()` (날짜 변경 감지 시) + `can_open_position()` 내부 방어적 날짜 체크
+- 안전장치: threshold=0 이면 규칙 비활성 / 다른 차단이 우선이므로 기존 로직 회귀 없음 / 카운터는 KR/US 둘 다 증가하지만 US는 `max_daily_new_buys`가 이미 유사 기능 보완
 
 ## US 리스크
 

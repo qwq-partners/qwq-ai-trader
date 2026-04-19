@@ -1,5 +1,39 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-19 — 당일 청산 누적 D+1 쿨다운 규칙 추가
+
+### 배경
+4/14 -8.42% 사고 — 단일일에 다수 청산 + 다수 신규 매수가 동시 발생해 SK하이닉스 저점 청산 후 +16% 반등을 놓침.
+"청산 당일은 현금 유지, 다음 거래일에 신규 진입" 규칙(D+1 분리)을 도입해 저점 청산 직후 같은 자금으로 급하게 새 종목에 들어가는 패턴을 차단.
+
+### 변경 파일
+- `src/risk/manager.py`
+  - `_daily_exit_count: int = 0`, `_daily_exit_count_date: Optional[date]`, `_last_exit_cooldown_log: Dict[str, datetime]` 필드 추가
+  - `record_exit()` — 카운터 +1 + 날짜 롤오버 자동 리셋 + `[리스크] 당일 청산 누적: n/threshold` 로그
+  - `can_open_position()` — 섹터 제한 뒤(8단계)에 `_daily_exit_count >= threshold` 차단 로직 추가 (기존 차단이 우선)
+  - `reset_daily_stats()` — 날짜 변경 시 카운터 리셋 경로 보강
+- `src/core/types.py` — `RiskConfig.daily_exit_cooldown_threshold: int = 3` (0이면 비활성 안전장치)
+- `docs/risk/risk-and-exit.md` — "당일 청산 누적 쿨다운 (D+1 분리)" 섹션 신규
+
+### 구현 포인트
+- **호출점 재사용**: `record_exit()`는 이미 `kr_scheduler.py` fill_check SELL 체결 두 경로(1420, 1542 라인)에서 호출 중이라 신규 삽입 없음 — 리스크 최소
+- **시그니처 호환성 유지**: `can_open_position()` 파라미터/반환값 변경 없음
+- **스팸 방지**: 심볼별 60초 로그 쿨다운 (동기화 차단과 동일 패턴)
+- **evolved_overrides 튜닝 가능**: YAML에서 `risk.daily_exit_cooldown_threshold` 조정 가능
+
+### 검증
+- `python3 -m py_compile` src/risk/manager.py, src/core/types.py → OK
+- 단위 시나리오:
+  - 3건 청산 후 4번째 매수 → `(False, "당일 청산 3건 누적, 다음 거래일 재개")` 차단 확인
+  - threshold=0 → 4건 청산해도 차단 없음 확인
+  - 날짜 롤오버 → `_daily_exit_count` 0으로 리셋 + 매수 허용 확인
+- 기존 차단 로직(동기화/일일손실/포지션수)이 모두 신규 규칙보다 앞에 위치 → 회귀 없음
+
+### 봇 재시작
+- **미반영** — 사용자 일괄 배포 예정
+
+---
+
 ## 2026-04-19 — ExitManager ATR 연동 트레일링 스탑 (매크로 노이즈 방어)
 
 ### 배경
