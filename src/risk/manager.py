@@ -94,9 +94,16 @@ class RiskManager:
         self._sidecar_active: bool = False  # 사이드카 활성 상태
 
         # 포트폴리오 동기화 장애 프로토콜 (연속 3회 실패 시 매수 차단)
+        # trading_lock: sync_healthy=False 상태에서 신규 매수 진입 차단
         self._sync_healthy: bool = True
         self._sync_fail_count: int = 0
         self._sync_fail_threshold: int = 3
+        # 차단 시작 시각 (타임아웃 안전장치용)
+        self._sync_unhealthy_since: Optional[datetime] = None
+        # 차단 지속 한도 (분): 초과 시 강제 해제 + CRITICAL 경고
+        self._sync_timeout_minutes: int = 10
+        # 차단 로그 스팸 방지 쿨다운
+        self._last_sync_block_log: Dict[str, datetime] = {}
 
         logger.info(
             f"RiskManager 초기화 ({self.market}): "
@@ -220,9 +227,50 @@ class RiskManager:
             if not can_re:
                 return False, f"재진입 제한: {reason}"
 
-        # 1.5. 포트폴리오 동기화 장애 체크
+        # 1.5. 포트폴리오 동기화 장애 체크 (trading_lock)
+        # 대형 손실 이력: KIS API 일시 응답 지연 → 복구 과정에서 비정상 상태 진입
+        # → 03-27 DB손해보험 -14%, SK하이닉스 -11.89% 등 10건 중 7건이 이 패턴
         if not self._sync_healthy:
-            return False, f"포트폴리오 동기화 장애 (연속 {self._sync_fail_count}회 실패) — 매수 차단"
+            # 타임아웃 안전장치: 10분 이상 차단 지속 시 강제 해제
+            # (블로킹 영구화 방지 — 운영 연속성 보장)
+            now = datetime.now()
+            if self._sync_unhealthy_since is not None:
+                elapsed_min = (now - self._sync_unhealthy_since).total_seconds() / 60
+                if elapsed_min >= self._sync_timeout_minutes:
+                    logger.critical(
+                        f"[리스크] 동기화 차단 타임아웃 강제 해제 "
+                        f"({elapsed_min:.1f}분 경과, 한도 {self._sync_timeout_minutes}분) "
+                        f"— 장기 스턱 방지용 자동 복구. 동기화 상태 즉시 점검 필요!"
+                    )
+                    self._sync_healthy = True
+                    self._sync_fail_count = 0
+                    self._sync_unhealthy_since = None
+                    self._last_sync_block_log.clear()
+                    # 강제 해제 → 이번 매수는 통과 (이후 체크 계속)
+                else:
+                    # 차단 유지 — 심볼별 로그 쿨다운 (60초)
+                    _last = self._last_sync_block_log.get(symbol)
+                    if _last is None or (now - _last).total_seconds() >= 60:
+                        logger.warning(
+                            f"[리스크] 동기화 복구 중 신규 매수 차단 ({symbol}) "
+                            f"— 연속 {self._sync_fail_count}회 실패, "
+                            f"{elapsed_min:.1f}분 경과 (타임아웃 {self._sync_timeout_minutes}분)"
+                        )
+                        self._last_sync_block_log[symbol] = now
+                    return False, (
+                        f"동기화 복구 중 매수 차단 "
+                        f"(연속 {self._sync_fail_count}회 실패, {elapsed_min:.1f}분)"
+                    )
+            else:
+                # 타임스탬프 누락(방어적) — 현재 시각으로 초기화 후 차단
+                self._sync_unhealthy_since = now
+                logger.warning(
+                    f"[리스크] 동기화 복구 중 신규 매수 차단 ({symbol}) "
+                    f"— 연속 {self._sync_fail_count}회 실패"
+                )
+                return False, (
+                    f"동기화 복구 중 매수 차단 (연속 {self._sync_fail_count}회 실패)"
+                )
 
         # 2. 일일 손실 한도 체크
         if self._is_daily_loss_limit_hit(portfolio, strategy_type):
@@ -335,22 +383,33 @@ class RiskManager:
         return True, ""
 
     def set_sync_status(self, healthy: bool):
-        """포트폴리오 동기화 상태 갱신
+        """포트폴리오 동기화 상태 갱신 (trading_lock 제어)
 
         연속 sync_fail_threshold회 실패 시 매수 차단.
         성공 1회로 즉시 복구.
+        차단 지속 시간은 can_open_position에서 타임아웃 감시.
         """
         if healthy:
             if not self._sync_healthy:
-                logger.info("[리스크] 포트폴리오 동기화 복구 → 매수 차단 해제")
+                elapsed_min = 0.0
+                if self._sync_unhealthy_since is not None:
+                    elapsed_min = (datetime.now() - self._sync_unhealthy_since).total_seconds() / 60
+                logger.info(
+                    f"[리스크] 포트폴리오 동기화 복구 → 매수 차단 해제 "
+                    f"(차단 지속 {elapsed_min:.1f}분)"
+                )
             self._sync_fail_count = 0
             self._sync_healthy = True
+            self._sync_unhealthy_since = None
+            self._last_sync_block_log.clear()
         else:
             self._sync_fail_count += 1
             if self._sync_fail_count >= self._sync_fail_threshold and self._sync_healthy:
                 self._sync_healthy = False
+                self._sync_unhealthy_since = datetime.now()
                 logger.warning(
-                    f"[리스크] 포트폴리오 동기화 장애 (연속 {self._sync_fail_count}회 실패) → 매수 차단"
+                    f"[리스크] 포트폴리오 동기화 장애 (연속 {self._sync_fail_count}회 실패) → "
+                    f"매수 차단 (타임아웃 {self._sync_timeout_minutes}분 후 자동 해제)"
                 )
 
     def update_market_trend(self, kospi: dict, kosdaq: dict):

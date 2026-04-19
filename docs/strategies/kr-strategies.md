@@ -138,3 +138,50 @@ SEPA/RSI2 후보 중 **2계층 이상 복합 시그널** (전문가패널+수급
 - max_positions = 3
 - 리밸런싱 제외 종목 설정 가능 (evolved_overrides.yml)
 - ATR 동적 손절 비활성 (고정 SL)
+
+---
+
+## 시장 체제 판단 보조지표 (VIX 경량 패널) — 2026-04-19 추가
+
+### 배경
+`MarketRegimeAdapter`의 MA20/시가대비 기반 판단은 후행적이다. 4/8 이란 휴전 랠리
+(KOSPI +6.87%)에서 시스템이 4/14까지 bear 체제를 유지해 월간 알파 -15.51%p 손실.
+이를 보완하기 위해 CBOE VIX(^VIX)를 보조지표로 도입.
+
+### 구현 (`src/core/market_regime.py`)
+- **조회**: `yfinance.Ticker("^VIX").history(period="2d")` → 최근 종가
+  - 동기 호출은 `asyncio.to_thread`로 래핑 (이벤트 루프 블로킹 방지)
+- **캐시**: `~/.cache/ai_trader/vix_cache.json` (JSON `{timestamp, value}`)
+  - TTL 6시간 — 1일 1회 이상만 네트워크 조회 (yfinance rate limit 보호)
+  - `update_regime()` 호출 시 캐시 읽기 + 만료 시 백그라운드 task로 refresh
+- **실패 처리**: 네트워크/라이브러리 예외는 조용히 `logger.debug`만 남기고 기존 로직 fallback.
+  VIX 조회 실패가 전체 엔진 차단을 유발하지 않는다.
+
+### 판단 규칙
+
+| VIX 상태 | 값 | 동작 |
+|---------|----|------|
+| Fear | VIX >= 30 | 기준 체제가 `bull`이면 `sideways`로 강등 (급변동 예고) |
+| Normal | 15 < VIX < 30 | 기존 로직 그대로 |
+| Complacency | VIX <= 15 | bull 전환 확인 지연 **1800초 → 600초** 단축 (랠리 포착) |
+
+주의: bear 전환은 안전 우선 — complacency에도 기존 1800초 유지.
+
+### 로그 형식
+```
+[체제] VIX=35.0 (fear), 기준 체제 bull → 조정 sideways
+[체제] VIX=17.5 (normal) 갱신 완료
+```
+
+### 제약
+- `REGIME_PARAMS` 테이블 자체는 변경하지 않음 (파라미터 조정은 별도 단계)
+- VIX 조회 주기 1일 1회 (캐시 TTL 6시간으로 자연 제한)
+- 첫 봇 기동 시 캐시가 없으면 백그라운드 fetch 예약 — 첫 호출은 VIX 미반영,
+  두 번째 호출부터 반영 (감수 범위 내)
+
+### 회귀 테스트 아이디어
+1. **VIX=None (캐시 부재 + 네트워크 실패)** → 기존 MA20 기반 판정과 동일한 결과
+2. **VIX=12 (complacency)** + bull 조건 → 첫 호출 pending, 10분 후 두 번째 호출에서 bull
+3. **VIX=35 (fear)** + bull 조건 → 즉시 sideways
+4. **VIX=20 (normal)** → 기존 로직과 완전 동일 (회귀 없음)
+5. 장초 09:00~10:00 neutral 고정 시간에 VIX fear가 오면 → neutral 유지 (VIX 적용 전)

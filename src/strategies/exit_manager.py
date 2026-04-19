@@ -162,7 +162,15 @@ class ExitConfig:
     # 트레일링 스탑
     trailing_stop_pct: float = 3.0    # 고점 대비 하락률 (%)
     trailing_activate_pct: float = 5.0  # 트레일링 활성화 수익률 (%)
-    atr_trailing_multiplier: float = 1.5  # ATR 트레일링 승수
+    atr_trailing_multiplier: float = 1.5  # ATR 트레일링 승수 (breakeven 모드에서 사용)
+
+    # ATR-linked 트레일링 (고정 트레일링을 ATR에 연동하여 과민 청산 방지)
+    # effective_ts = min( max(config_trailing_stop_pct, ATR_pct × atr_link_multiplier), atr_link_cap_pct )
+    # - 하한: REGIME 기반 trailing_stop_pct 존중 (너무 작아지지 않음)
+    # - 상한: atr_link_cap_pct (트레일링이 너무 커져 손실 확대 방지)
+    enable_atr_linked_trailing: bool = True   # ATR 연동 트레일링 활성화
+    atr_link_multiplier: float = 1.2          # ATR_pct × 배수 = 제안 트레일링
+    atr_link_cap_pct: float = 6.0             # 상한선 (%)
 
     # 수수료 포함 계산 (KR=True, US=False)
     include_fees: bool = True
@@ -217,6 +225,10 @@ class PositionExitState:
     # ATR 기반 동적 손절
     atr_pct: Optional[float] = None
     dynamic_stop_pct: Optional[float] = None
+    # ATR 연동 트레일링: register 시 계산된 실효 트레일링 한도 (%)
+    # - None: ATR 미전달 → 기존 방식 (state.trailing_stop_pct 또는 config 사용)
+    # - 숫자: ATR-linked 방식 (max(config_ts, ATR×mult), capped by atr_link_cap_pct)
+    effective_trailing_stop_pct: Optional[float] = None
     # 1R 도달 후 본전 이동 트레일링
     breakeven_activated: bool = False
     # 신고가 실패 무효화 (추세 소멸 감지)
@@ -376,6 +388,7 @@ class ExitManager:
         is_core: bool = False,
         max_holding_days: Optional[int] = None,
         trailing_activate_pct: Optional[float] = None,
+        atr_pct_hint: Optional[float] = None,
     ):
         """포지션 등록"""
         if position.symbol in self._states:
@@ -412,8 +425,8 @@ class ExitManager:
             return
 
         # ATR 계산 및 동적 손절 설정 (코어홀딩은 ATR 동적 손절 비활성화 — 고정 SL 우선)
-        atr_pct = None
-        dynamic_stop = None
+        atr_pct: Optional[float] = None
+        dynamic_stop: Optional[float] = None
         if self.config.enable_dynamic_stop and price_history and not is_core:
             try:
                 highs = price_history.get("high", [])
@@ -435,6 +448,36 @@ class ExitManager:
                         )
             except Exception as e:
                 logger.warning(f"[ExitManager] {position.symbol} ATR 계산 실패: {e}")
+
+        # price_history로 ATR 계산에 실패했거나 코어홀딩인 경우, 외부에서 전달된 hint를 사용
+        if atr_pct is None and atr_pct_hint is not None and atr_pct_hint > 0:
+            atr_pct = float(atr_pct_hint)
+
+        # ── ATR 연동 트레일링 계산 ─────────────────────────────────────
+        # effective_ts = min( max(config_ts, ATR × mult), atr_link_cap_pct )
+        #   - config_ts : 전략별 trailing_stop_pct (없으면 글로벌 기본값)
+        #   - ATR×mult  : 변동성 연동 트레일링 (매크로 노이즈 흡수)
+        #   - cap_pct   : 상한선 (너무 커져 손실 확대 방지)
+        # ATR이 없으면 None 저장 → 기존 방식 fallback
+        effective_ts_pct: Optional[float] = None
+        if (
+            self.config.enable_atr_linked_trailing
+            and atr_pct is not None
+            and atr_pct > 0
+            and not is_core  # 코어홀딩은 별도 고정 트레일링 우선
+        ):
+            base_ts = trailing_stop_pct if trailing_stop_pct is not None else self.config.trailing_stop_pct
+            atr_based = float(atr_pct) * float(self.config.atr_link_multiplier)
+            # 하한: config 기반 최소값 존중
+            candidate = max(float(base_ts), atr_based)
+            # 상한: cap_pct 초과 금지
+            effective_ts_pct = min(candidate, float(self.config.atr_link_cap_pct))
+            logger.info(
+                f"[ExitManager] {position.symbol} ATR-linked 트레일링: "
+                f"ATR={atr_pct:.2f}% × {self.config.atr_link_multiplier} = {atr_based:.2f}% / "
+                f"config_ts={float(base_ts):.2f}% → effective={effective_ts_pct:.2f}% "
+                f"(cap={self.config.atr_link_cap_pct}%)"
+            )
 
         # 전략별 익절 목표 우선, 없으면 글로벌 기본값
         eff_first = first_exit_pct if first_exit_pct is not None else self.config.first_exit_pct
@@ -546,6 +589,7 @@ class ExitManager:
             third_exit_ratio=third_exit_ratio,
             atr_pct=atr_pct,
             dynamic_stop_pct=dynamic_stop,
+            effective_trailing_stop_pct=effective_ts_pct,
             last_new_high_date=date.today(),
             stale_high_days=stale_high_days,
             initial_quantity=initial_qty_for_state,
@@ -587,10 +631,15 @@ class ExitManager:
         effective_stop = dynamic_stop if dynamic_stop is not None else (stop_loss_pct if stop_loss_pct is not None else self.config.stop_loss_pct)
         eff_1st = first_exit_pct if first_exit_pct is not None else self.config.first_exit_pct
         eff_ts = trailing_stop_pct if trailing_stop_pct is not None else self.config.trailing_stop_pct
+        _ts_label = (
+            f"TS={effective_ts_pct:.2f}% (ATR-linked, base={eff_ts}%)"
+            if effective_ts_pct is not None
+            else f"TS={eff_ts}%"
+        )
         logger.debug(
             f"[ExitManager] 포지션 등록: {position.symbol} "
             f"(SL={effective_stop:.2f}%, TP1={eff_1st:.1f}%, "
-            f"TS={eff_ts}%, "
+            f"{_ts_label}, "
             f"stage={initial_stage.value}, market={self.market})"
         )
 
@@ -752,7 +801,13 @@ class ExitManager:
         if state.breakeven_activated:
             atr_trail = (state.atr_pct if state.atr_pct is not None else 2.0) * self.config.atr_trailing_multiplier
             base_trail = state.trailing_stop_pct if state.trailing_stop_pct is not None else self.config.trailing_stop_pct
-            ts_pct_used = max(atr_trail, base_trail)
+            # ATR-linked effective_trailing 존재 시 우선 반영 (register 시 계산된 하한+상한 적용값)
+            if state.effective_trailing_stop_pct is not None and state.effective_trailing_stop_pct > 0:
+                ts_pct_used = max(atr_trail, float(state.effective_trailing_stop_pct))
+                _trail_src = "ATR-linked trailing"
+            else:
+                ts_pct_used = max(atr_trail, float(base_trail))
+                _trail_src = "ATR트레일링"
             trail_from_high = float((current_price - state.highest_price) / state.highest_price * 100)
 
             if trail_from_high <= -ts_pct_used:
@@ -761,12 +816,12 @@ class ExitManager:
                 if state.current_stage in (ExitStage.THIRD, ExitStage.TRAILING) or state.is_core:
                     return self._create_exit(
                         state, "sell_all", state.remaining_quantity,
-                        f"ATR트레일링: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
+                        f"{_trail_src}: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
                     )
                 else:
                     # FIRST/SECOND: 고점을 현재가로 리셋하여 분할 익절 기회 보존
                     logger.info(
-                        f"[ExitManager] {symbol} ATR트레일링 도달({trail_from_high:.2f}%) "
+                        f"[ExitManager] {symbol} {_trail_src} 도달({trail_from_high:.2f}%) "
                         f"but stage={state.current_stage.value} → 고점 리셋 "
                         f"({state.highest_price:,.0f} → {current_price:,.0f}), 분할 익절 우선"
                     )
@@ -799,11 +854,17 @@ class ExitManager:
 
         elif net_pnl_pct >= (state.trailing_activate_pct if state.trailing_activate_pct is not None else self.config.trailing_activate_pct):
             trailing_pct = float((current_price - state.highest_price) / state.highest_price * 100)
-            ts_pct = state.trailing_stop_pct if state.trailing_stop_pct is not None else self.config.trailing_stop_pct
+            # ATR-linked effective_trailing이 있으면 우선 사용 (매크로 노이즈 흡수)
+            if state.effective_trailing_stop_pct is not None and state.effective_trailing_stop_pct > 0:
+                ts_pct = float(state.effective_trailing_stop_pct)
+                _trail_src = "ATR-linked trailing"
+            else:
+                ts_pct = float(state.trailing_stop_pct if state.trailing_stop_pct is not None else self.config.trailing_stop_pct)
+                _trail_src = "트레일링"
             if trailing_pct <= -ts_pct:
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,
-                    f"트레일링: 고점 대비 {trailing_pct:.2f}%"
+                    f"{_trail_src}: 고점 대비 {trailing_pct:.2f}% (한도=-{ts_pct:.1f}%)"
                 )
 
         # 5. 복합 트레일링 (MA5 + 전일저가 기반, breakeven 여부 무관, stage >= min_stage)

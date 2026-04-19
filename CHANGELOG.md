@@ -1,5 +1,107 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-19 — ExitManager ATR 연동 트레일링 스탑 (매크로 노이즈 방어)
+
+### 배경
+SK하이닉스 4/13 일시 저점에서 고정 3% 트레일링에 조기 청산 → 4/14~ +16% 반등 누락.
+고정 트레일링이 고변동 종목의 매크로 노이즈에 과민하게 반응하는 문제를 해결.
+
+### 변경 파일
+- `src/strategies/exit_manager.py` — ATR-linked 트레일링 계산 + effective_trailing_stop_pct 상태 저장
+- `src/schedulers/kr_scheduler.py` — 체결/리트라이/sync 3개 register_position 호출에 `atr_pct_hint` 전달
+- `docs/risk/risk-and-exit.md` — "ATR 연동 트레일링 (ATR-linked trailing)" 섹션 신규
+
+### 구현 상세
+- **ExitConfig 신규 필드**:
+  - `enable_atr_linked_trailing: bool = True`
+  - `atr_link_multiplier: float = 1.2`
+  - `atr_link_cap_pct: float = 6.0`
+- **PositionExitState 신규 필드**: `effective_trailing_stop_pct: Optional[float]`
+- **공식**: `effective_ts = min( max(config_ts, ATR_pct × 1.2), 6.0 )`
+  - 하한: REGIME/전략별 `trailing_stop_pct` 존중
+  - 상한: 6.0% (손실 확대 방지)
+- **register_position 신규 파라미터**: `atr_pct_hint: Optional[float] = None`
+  - price_history 계산 실패/코어홀딩 케이스 대비 외부 hint 수용
+  - hint 없으면 기존 방식 fallback (effective_trailing_stop_pct=None)
+- **update_price 트레일링 블록**: breakeven 활성/비활성 양쪽 모두 `effective_trailing_stop_pct` 우선 사용, 로그에 "ATR-linked trailing" 표시
+- **호출 경로 3곳 (kr_scheduler)**:
+  - fill 체결 (1569) — `_pending_signal_cache[symbol].metadata.atr_pct` pop 없이 조회
+  - retry (1744) — 동일 캐시에서 hint 추출
+  - portfolio sync (542) — `_ep.get("atr_pct")` 시 전달 (현재 dict에 키 없으면 None, 확장 여지)
+
+### 검증
+- `python3 -m py_compile` src/strategies/exit_manager.py, src/schedulers/kr_scheduler.py → OK
+- 단위 시나리오 6개 모두 통과:
+  - ATR=5% → 6.0% (상한 도달)
+  - ATR=2% → 3.0% (config 하한 유지, 기존 방식)
+  - ATR=None → None (fallback)
+  - ATR=10% → 6.0% (상한 clamp)
+  - strategy_ts=4.0, ATR=2% → 4.0% (전략 하한 존중)
+  - is_core=True → None (코어홀딩 제외)
+- 봇 재시작은 후속 작업(현재 세션 커밋 단계로 보고)
+
+### 기대 효과
+- 고변동 종목(ATR 4%+)은 트레일링 자동 확대 → 일시 저점 노이즈 흡수
+- 저변동 종목(ATR 2% 이하)은 기존 3%/전략별 값 유지 → 보수적 수익 보호 유지
+- 상한 6%로 비정상 고ATR 종목에서 손실 확대 방지
+
+## 2026-04-19 — 시장 체제 VIX 보조지표 (경량)
+
+### 배경
+4/8 이란 휴전 랠리(KOSPI +6.87%)에서 MA20 후행 판단으로 bear 유지 → 4월 α -15.51%p 미스매치.
+VIX 급변동 지표를 보조로 도입하여 체제 전환 타이밍을 개선.
+
+### 변경 파일
+- `src/core/market_regime.py` — VIX 조회/캐시/조정 로직 추가 (신규 파일 없음)
+- `docs/strategies/kr-strategies.md` — "시장 체제 판단 보조지표 (VIX 경량 패널)" 섹션 추가
+
+### 구현 상세
+- **신규 상수**: `_VIX_CACHE_PATH`, `_VIX_CACHE_TTL_SEC=21600`, `_VIX_FEAR_THRESHOLD=30.0`, `_VIX_COMPLACENCY_THRESHOLD=15.0`
+- **신규 메서드**:
+  - `_load_vix_cache_or_refresh()` — JSON 캐시 읽기, 만료 시 백그라운드 fetch 예약
+  - `_fetch_vix()` (async) — `asyncio.to_thread`로 yfinance 동기 호출 래핑 + 캐시 저장
+  - `_fetch_vix_sync()` (static) — `yf.Ticker("^VIX").history(period="2d")`
+  - `_classify_vix()` — fear/complacency/normal 라벨링
+  - `_apply_vix_adjustment()` — bull → sideways 강등 (Fear 시)
+- **`update_regime()` 동작 변경**:
+  - 진입 직후 `_load_vix_cache_or_refresh()` 호출
+  - `confirm_delay_sec` 변수로 bull 확인 지연 조건부 단축 (complacency 시 1800→600초)
+  - bear 전환 지연은 안전 우선으로 기존 1800초 유지
+  - `_regime_data`에 `vix`, `vix_state` 필드 추가
+- **실패 안전성**: 네트워크/yfinance 예외는 `logger.debug`만 기록, 기존 MA20 로직 그대로 fallback
+
+### 검증
+- `python3 -m py_compile src/core/market_regime.py` → OK
+- yfinance 실제 VIX 조회 성공 (17.48 @ 2026-04-17)
+- Fear 시뮬(VIX=35, bull) → sideways 강등 확인
+- Complacency 시뮬(VIX=12) → 10분 후 bull 전환 확인
+- 캐시 파일 `~/.cache/ai_trader/vix_cache.json` 자동 생성 확인
+
+### 제약
+- `REGIME_PARAMS` 테이블 자체는 미변경 (별도 Phase)
+- 첫 봇 기동 시 캐시 부재 → 첫 호출은 VIX 미반영, 두 번째 호출부터 적용
+
+## 2026-04-19 — KIS 동기화 복구 중 신규 매수 차단 강화 (trading_lock)
+
+### 배경
+- 과거 대형 손실 10건 중 **7건**이 동일 패턴: KIS API 일시 응답 지연 → 포트폴리오 동기화 복구 과정에서 비정상 상태로 신규 진입
+- 대표 사례: 03-27 DB손해보험 -14%, SK하이닉스 -11.89%
+
+### 변경
+- **`src/risk/manager.py`**
+  - 기존 `_sync_healthy` 차단 로직 활용 + 타임아웃 안전장치 추가
+  - 신규 필드: `_sync_unhealthy_since` (차단 시작 시각), `_sync_timeout_minutes=10`, `_last_sync_block_log` (심볼별 로그 쿨다운)
+  - `can_open_position()` 1.5단계: 차단 시 `"[리스크] 동기화 복구 중 신규 매수 차단 ({symbol})"` 로그 + 심볼별 60초 쿨다운
+  - 10분 초과 차단 유지 시 **CRITICAL 로그 + 강제 해제** (운영 영구 블로킹 방지)
+  - `set_sync_status()`: 복구 시 타임스탬프 초기화 + 지속 분 로깅
+- **`docs/risk/risk-and-exit.md`**: trading_lock 섹션 상세화
+
+### 영향 범위
+- KR 전용 (US 스케줄러는 `set_sync_status` 미호출 — 영향 없음)
+- 호출 경로: `kr_scheduler._sync_portfolio()` → `risk_manager.set_sync_status()` → `engine.on_signal → _risk_validator.can_open_position` 게이트
+- 기존 차단 규칙 변경 없음, 로그 명확화 + 타임아웃 안전장치만 추가
+- 수정 파일: `src/risk/manager.py`, `docs/risk/risk-and-exit.md`, `CHANGELOG.md`
+
 ## 2026-04-18 — 대시보드 + 모바일앱 UI/UX 전면 개선 (Phase A~F)
 
 ### Phase A: 웹 P0 5건 (트레이더 의사결정 즉시 향상)

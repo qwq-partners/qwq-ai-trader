@@ -16,18 +16,20 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    sepa_trend: 25.0
+    sepa_trend: 30.0
     theme_chasing: 5.0
     rsi2_reversal: 25.0
-    strategic_swing: 10.0
+    strategic_swing: 25.0
     gap_and_go: 5.0
     momentum_breakout: 0.0
-    core_holding: 30.0
+    core_holding: 10.0
 exit_manager:
   max_stop_pct: 8.0
   min_stop_pct: 3.5
   first_exit_pct: 5.0
   first_exit_ratio: 0.2
+  second_exit_ratio: 0.4
+  third_exit_ratio: 0.35
   stop_loss_pct: 5.0
   trailing_activate_pct: 5.0
   trailing_stop_pct: 3.0
@@ -88,9 +90,17 @@ _meta:
     timestamp: '2026-04-18T20:30:00'
     note: 3회 중복 리밸런싱(02:00~02:06) 과적합 롤백 — rsi2 40→25, sepa 10→25 (표본 1건 근거 결정 무효화)
   risk_config.strategy_allocation.core_holding:
-    source: manual_review_locked
-    timestamp: '2026-03-14T00:15:00'
-    note: 코어홀딩 30% 고정, 진화 비대상 (장기 보유 전략)
+    source: manual_review
+    timestamp: '2026-04-19T21:00:00'
+    note: 30→10% 축소 (PF 0.03 확정 손실, SK스퀘어 -12.9% 등). strategic_swing 10→25% 승격(승률 81% 검증), sepa_trend 25→30%
+  exit_manager.second_exit_ratio:
+    source: manual_review
+    timestamp: '2026-04-19T21:00:00'
+    note: 0.5→0.4 (+15% 도달 시 익절 확대, trailing 되돌림 방지)
+  exit_manager.third_exit_ratio:
+    source: manual_review
+    timestamp: '2026-04-19T21:00:00'
+    note: 0.5→0.35 (+25% 도달 시 총 실현 22.5%로 확대, +40% 시 +16% 개선)
   momentum_breakout.enabled:
     source: manual_review
     timestamp: '2026-03-07T11:00:00'

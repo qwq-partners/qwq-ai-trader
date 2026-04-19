@@ -553,6 +553,7 @@ class KRScheduler:
                             is_core=_ep.get("is_core", False),
                             max_holding_days=_ep.get("max_holding_days"),
                             trailing_activate_pct=_ep.get("trailing_activate_pct"),
+                            atr_pct_hint=_ep.get("atr_pct"),
                         )
                     if symbol not in bot._watch_symbols:
                         bot._watch_symbols.append(symbol)
@@ -1565,6 +1566,18 @@ JSON:
                                     exit_params = bot._strategy_exit_params.get(
                                         pos.strategy, {}
                                     ) if pos.strategy else {}
+                                    # 시그널 캐시에서 atr_pct hint 추출 (ATR-linked trailing용)
+                                    # 주의: pop하지 않음 — 아래 trade journal 블록이 동일 캐시를 pop()함
+                                    _atr_hint: Optional[float] = None
+                                    try:
+                                        _rm_h = getattr(bot.engine, 'risk_manager', None)
+                                        _sig_cache_h = getattr(_rm_h, '_pending_signal_cache', {}) if _rm_h else {}
+                                        _sig_meta_h = _sig_cache_h.get(fill.symbol, {})
+                                        _atr_meta = _sig_meta_h.get("metadata", {}).get("atr_pct")
+                                        if _atr_meta is not None and float(_atr_meta) > 0:
+                                            _atr_hint = float(_atr_meta)
+                                    except Exception:
+                                        _atr_hint = None
                                     try:
                                         bot.exit_manager.register_position(
                                             pos,
@@ -1580,8 +1593,9 @@ JSON:
                                             is_core=exit_params.get("is_core", False),
                                             max_holding_days=exit_params.get("max_holding_days"),
                                             trailing_activate_pct=exit_params.get("trailing_activate_pct"),
+                                            atr_pct_hint=_atr_hint,
                                         )
-                                        logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%)")
+                                        logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%, ATR-hint={_atr_hint})")
                                     except Exception as e:
                                         logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패: {e}")
                                 else:
@@ -1740,6 +1754,17 @@ JSON:
                                 _retry_params = bot._strategy_exit_params.get(
                                     _retry_pos.strategy, {}
                                 ) if _retry_pos.strategy else {}
+                                # 시그널 캐시에서 atr_pct hint 추출 (ATR-linked trailing용)
+                                _retry_atr_hint: Optional[float] = None
+                                try:
+                                    _rm_r = getattr(bot.engine, 'risk_manager', None)
+                                    _sig_cache_r = getattr(_rm_r, '_pending_signal_cache', {}) if _rm_r else {}
+                                    _sig_meta_r = _sig_cache_r.get(_retry_sym, {})
+                                    _atr_meta_r = _sig_meta_r.get("metadata", {}).get("atr_pct")
+                                    if _atr_meta_r is not None and float(_atr_meta_r) > 0:
+                                        _retry_atr_hint = float(_atr_meta_r)
+                                except Exception:
+                                    _retry_atr_hint = None
                                 try:
                                     bot.exit_manager.register_position(
                                         _retry_pos,
@@ -1755,6 +1780,7 @@ JSON:
                                         is_core=_retry_params.get("is_core", False),
                                         max_holding_days=_retry_params.get("max_holding_days"),
                                         trailing_activate_pct=_retry_params.get("trailing_activate_pct"),
+                                        atr_pct_hint=_retry_atr_hint,
                                     )
                                     _retry_done.add(_retry_sym)
                                     logger.info(f"[체결] {_retry_sym} ExitManager 재시도 등록 성공")

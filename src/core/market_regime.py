@@ -10,10 +10,20 @@ QWQ AI Trader - 시장 체제 사전 적응
 """
 
 import os
+import json
+import asyncio
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
 import aiohttp
 from loguru import logger
+
+
+# VIX 캐시 설정
+_VIX_CACHE_PATH = Path.home() / ".cache" / "ai_trader" / "vix_cache.json"
+_VIX_CACHE_TTL_SEC = 6 * 3600  # 6시간
+_VIX_FEAR_THRESHOLD = 30.0
+_VIX_COMPLACENCY_THRESHOLD = 15.0
 
 
 class MarketRegimeAdapter:
@@ -67,6 +77,10 @@ class MarketRegimeAdapter:
         self._current_regime: str = "neutral"
         self._regime_data: Dict = {}
         self._last_update: Optional[datetime] = None
+        # VIX 보조지표 상태
+        self._vix_value: Optional[float] = None
+        self._vix_state: str = "normal"  # "fear" / "complacency" / "normal"
+        self._vix_last_fetch: Optional[datetime] = None
 
     def get_params(self) -> Dict:
         """현재 체제의 파라미터 반환"""
@@ -80,7 +94,13 @@ class MarketRegimeAdapter:
         - bull:     평균 등락률 > +1% AND 시가대비 상승
         - bear:     평균 등락률 < -1% AND 시가대비 하락
         - sideways: 그 외
+
+        VIX 보조지표 적용 (캐시 TTL 6시간):
+        - VIX >= 30 (Fear): bull → sideways 강등
+        - VIX <= 15 (Complacency): bull/sideways 전환 지연 30분 → 10분 단축
         """
+        # VIX 캐시 로드 (TTL 만료 시 백그라운드 refresh 예약)
+        self._load_vix_cache_or_refresh()
         kospi_change = kospi_data.get("change_pct", 0)
         kosdaq_change = kosdaq_data.get("change_pct", 0)
         avg_change = (kospi_change + kosdaq_change) / 2
@@ -95,26 +115,30 @@ class MarketRegimeAdapter:
 
         prev_regime = self._current_regime
 
+        # VIX complacency 상태 시 bull/sideways 전환 확인 지연 단축 (1800초 → 600초)
+        confirm_delay_sec = 600 if self._vix_state == "complacency" else 1800
+
         # 장초 1시간(09:00~10:00) neutral 고정 — 초기 모멘텀으로 bull/bear 오판 방지
         now_hm = datetime.now().strftime("%H:%M")
         if "09:00" <= now_hm < "10:00":
             self._current_regime = "neutral"
         elif avg_change > 1.0 and avg_vs_open > 0.3:
-            # 체제 전환 지연: bull/bear 전환 시 30분 확인
+            # 체제 전환 지연: bull/bear 전환 시 기본 30분 (complacency 시 10분)
             if prev_regime != "bull":
                 if not hasattr(self, '_pending_regime') or self._pending_regime != "bull":
                     self._pending_regime = "bull"
                     self._pending_since = datetime.now()
                     self._current_regime = prev_regime  # 유지
-                elif (datetime.now() - self._pending_since).total_seconds() >= 1800:
+                elif (datetime.now() - self._pending_since).total_seconds() >= confirm_delay_sec:
                     self._current_regime = "bull"
                     self._pending_regime = None
                 else:
-                    self._current_regime = prev_regime  # 30분 미만 → 유지
+                    self._current_regime = prev_regime  # 확인 시간 미만 → 유지
             else:
                 self._current_regime = "bull"
                 self._pending_regime = None
         elif avg_change < -1.0 and avg_vs_open < -0.3:
+            # bear 전환은 안전 우선 — VIX complacency에도 기본 30분 유지
             if prev_regime != "bear":
                 if not hasattr(self, '_pending_regime') or self._pending_regime != "bear":
                     self._pending_regime = "bear"
@@ -135,11 +159,16 @@ class MarketRegimeAdapter:
             self._current_regime = "sideways"
             self._pending_regime = None
 
+        # VIX 기반 조정 (Fear 시 bull 강등)
+        self._apply_vix_adjustment(prev_regime)
+
         self._regime_data = {
             "kospi_change": kospi_change,
             "kosdaq_change": kosdaq_change,
             "avg_change": avg_change,
             "avg_vs_open": avg_vs_open,
+            "vix": self._vix_value,
+            "vix_state": self._vix_state,
         }
         self._last_update = datetime.now()
 
@@ -284,6 +313,120 @@ class MarketRegimeAdapter:
                 logger.debug(f"[시장체제] LLM 진단 실패 (무시): {resp.error}")
         except Exception as e:
             logger.debug(f"[시장체제] LLM 진단 오류 (무시): {e}")
+
+    # ============================================================
+    # VIX 보조지표 (경량: 캐시 TTL 6시간, yfinance 기반, 1일 1회)
+    # ============================================================
+
+    def _load_vix_cache_or_refresh(self):
+        """VIX 캐시 파일 로드 — 만료/부재 시 백그라운드 refresh 예약"""
+        try:
+            if _VIX_CACHE_PATH.exists():
+                with _VIX_CACHE_PATH.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                ts_str = data.get("timestamp")
+                value = data.get("value")
+                if ts_str is not None and value is not None:
+                    ts = datetime.fromisoformat(ts_str)
+                    age = (datetime.now() - ts).total_seconds()
+                    if age < _VIX_CACHE_TTL_SEC:
+                        self._vix_value = float(value)
+                        self._vix_last_fetch = ts
+                        self._vix_state = self._classify_vix(self._vix_value)
+                        return  # 유효 캐시 적용
+        except Exception as e:
+            logger.debug(f"[체제] VIX 캐시 로드 실패 (무시): {e}")
+
+        # 캐시 만료/부재 → 백그라운드 refresh 예약 (실행 중 event loop 있을 때만)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._fetch_vix())
+        except RuntimeError:
+            # 이벤트 루프가 없으면 조용히 패스 (기존 상태 유지)
+            pass
+
+    @staticmethod
+    def _classify_vix(vix: float) -> str:
+        """VIX 값 → 상태 라벨"""
+        if vix is not None and vix >= _VIX_FEAR_THRESHOLD:
+            return "fear"
+        if vix is not None and vix <= _VIX_COMPLACENCY_THRESHOLD:
+            return "complacency"
+        return "normal"
+
+    async def _fetch_vix(self):
+        """yfinance로 VIX 조회 (동기 → to_thread 래핑). 실패 시 조용히 fallback."""
+        try:
+            vix_value = await asyncio.to_thread(self._fetch_vix_sync)
+            if vix_value is None:
+                return
+            self._vix_value = float(vix_value)
+            self._vix_last_fetch = datetime.now()
+            self._vix_state = self._classify_vix(self._vix_value)
+
+            # 캐시 파일 영속화
+            try:
+                _VIX_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with _VIX_CACHE_PATH.open("w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "timestamp": self._vix_last_fetch.isoformat(),
+                            "value": self._vix_value,
+                        },
+                        f,
+                    )
+            except Exception as e:
+                logger.debug(f"[체제] VIX 캐시 저장 실패 (무시): {e}")
+
+            logger.info(
+                f"[체제] VIX={self._vix_value:.1f} ({self._vix_state}) 갱신 완료"
+            )
+        except Exception as e:
+            # 네트워크 실패 등 — 조용히 fallback (전체 차단 금지)
+            logger.debug(f"[체제] VIX 조회 실패 (무시): {e}")
+
+    @staticmethod
+    def _fetch_vix_sync() -> Optional[float]:
+        """yfinance 동기 조회 헬퍼 (asyncio.to_thread에서 호출)"""
+        try:
+            import yfinance as yf
+            hist = yf.Ticker("^VIX").history(period="2d")
+            if hist is None or hist.empty:
+                return None
+            close = hist["Close"].iloc[-1]
+            if close is None:
+                return None
+            return float(close)
+        except Exception:
+            return None
+
+    def _apply_vix_adjustment(self, prev_regime: str):
+        """
+        VIX 상태 기반 체제 조정
+        - Fear (>=30): bull → sideways 강등
+        - Complacency (<=15): 전환 지연 단축은 update_regime 내부에서 처리
+        - Normal: 조정 없음
+        """
+        if self._vix_value is None:
+            return
+
+        base_regime = self._current_regime
+        adjusted = base_regime
+
+        if self._vix_state == "fear" and base_regime == "bull":
+            adjusted = "sideways"
+            self._current_regime = adjusted
+            logger.info(
+                f"[체제] VIX={self._vix_value:.1f} (fear), "
+                f"기준 체제 {base_regime} → 조정 {adjusted}"
+            )
+        else:
+            # 로그는 상태 변화 또는 complacency 확인 시에만 (스팸 방지)
+            if prev_regime != base_regime:
+                logger.info(
+                    f"[체제] VIX={self._vix_value:.1f} ({self._vix_state}), "
+                    f"기준 체제 {base_regime} → 조정 {adjusted}"
+                )
 
     async def _fetch_perplexity_context(self, api_key: str) -> str:
         """Perplexity 실시간 검색 — 오늘 KR 시장 매크로 컨텍스트 수집
