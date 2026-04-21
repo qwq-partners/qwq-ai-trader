@@ -1030,6 +1030,12 @@ class RiskManager:
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
 
+        # 섹터 임시 캐시 (clear_pending에서 참조 — UnifiedEngine._pending_sector_map과 호환 목적)
+        # ★ 버그 방지 (2026-04-20 08:00 AttributeError):
+        #   clear_pending(line ~1552), _on_order_failure(line ~1475, 1492)에서 참조하는데
+        #   RiskManager.__init__에 초기화 누락 상태였음 → 주문 제출 실패 시 AttributeError 폭주
+        self._pending_sector_map: Dict[str, str] = {}
+
         # 당일 손절 종목 (재진입 방지)
         self._stop_loss_today: Set[str] = set()
 
@@ -1139,6 +1145,25 @@ class RiskManager:
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
         logger.info(f"[리스크] 신호 수신: {event.symbol} {event.side.value} 가격={event.price} 점수={event.score:.1f}")
+
+        # 진입 근거 표준화 검증 (2026-04-21 도입, shadow 모드 — 경고만 발생, 차단 없음)
+        # 1주일 관찰 후 hard-reject로 전환 예정
+        if event.side == OrderSide.BUY and event.signal is not None:
+            _eff_reasons = event.signal.effective_reasons()
+            _placeholder_terms = {"buy_signal", "auto_buy", "signal", ""}
+            _is_placeholder = (
+                len(_eff_reasons) == 0
+                or all(r.lower().strip() in _placeholder_terms for r in _eff_reasons)
+            )
+            if _is_placeholder:
+                logger.warning(
+                    f"[근거검증] {event.symbol} BUY 시그널 진입 근거 부실 — "
+                    f"reasons={_eff_reasons}, source={event.source} "
+                    f"(shadow 모드: 차단 없음, 1주일 후 hard-reject 전환 예정)"
+                )
+                if event.signal.metadata is None:
+                    event.signal.metadata = {}
+                event.signal.metadata.setdefault("flags", []).append("weak_reason")
 
         # 만료된 쿨다운 항목 정리
         now = datetime.now()
@@ -1513,8 +1538,15 @@ class RiskManager:
 
             # BUY 시그널 메타데이터 캐시 (fill 시 entry_tags 구성용)
             if order.side == OrderSide.BUY:
+                _sig = event.signal
+                _reasons_list = list(_sig.effective_reasons()) if _sig else []
+                _score_breakdown = dict(_sig.score_breakdown) if _sig and _sig.score_breakdown else {}
+                _ctx_snapshot = dict(_sig.context_snapshot) if _sig and _sig.context_snapshot else {}
                 self._pending_signal_cache[order.symbol] = {
                     "reason": event.reason or "",
+                    "reasons": _reasons_list,
+                    "score_breakdown": _score_breakdown,
+                    "context_snapshot": _ctx_snapshot,
                     "metadata": dict(event.metadata) if event.metadata else {},
                     "strategy": event.strategy.value if event.strategy else order.strategy or "",
                     "score": float(event.score or 0),

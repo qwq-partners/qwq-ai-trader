@@ -282,16 +282,60 @@ class StockMaster:
         except ImportError:
             logger.warning("[StockMaster] pykrx 설치 필요: pip install pykrx")
 
-        # pykrx 실패 시 FDR 폴백 (KOSPI200만)
-        if not kospi200:
+        # pykrx 실패/부분실패 시 FDR 종합 폴백
+        # 시총 100건 미만이면 pykrx가 사실상 실패한 것 (KRX_ID/KRX_PW 미설정 시 빈값 반환)
+        need_fdr_marcap = len(market_caps) < 100
+        if need_fdr_marcap or not kospi200 or not kosdaq150:
             try:
                 import FinanceDataReader as fdr
                 df = fdr.StockListing("KRX-MARCAP")
-                if not df.empty and "KOSPI200" in df.columns:
-                    kospi200 = set(df[df["KOSPI200"] == "Y"]["Code"].astype(str))
-                    logger.info(f"[StockMaster/FDR폴백] KOSPI200 {len(kospi200)}개")
-            except Exception:
-                pass
+                if df is None or df.empty:
+                    logger.warning("[StockMaster/FDR폴백] KRX-MARCAP 조회 실패")
+                else:
+                    # KOSPI200 폴백 (구버전 컬럼 호환)
+                    if not kospi200 and "KOSPI200" in df.columns:
+                        kospi200 = set(df[df["KOSPI200"] == "Y"]["Code"].astype(str))
+                        logger.info(f"[StockMaster/FDR폴백] KOSPI200 {len(kospi200)}개")
+
+                    # 시가총액 + KOSPI500/KOSDAQ150 폴백
+                    if need_fdr_marcap and "Marcap" in df.columns and "MarketId" in df.columns:
+                        df_kospi_fdr = df[df["MarketId"] == "STK"].copy()
+                        df_kosdaq_fdr = df[df["MarketId"] == "KSQ"].copy()
+
+                        # 시총 갱신 (억원 단위)
+                        for _, row in df_kospi_fdr.iterrows():
+                            ticker = str(row["Code"])
+                            cap_eok = int(row["Marcap"]) // 100_000_000
+                            market_caps[ticker] = cap_eok
+                        for _, row in df_kosdaq_fdr.iterrows():
+                            ticker = str(row["Code"])
+                            cap_eok = int(row["Marcap"]) // 100_000_000
+                            market_caps[ticker] = cap_eok
+
+                        logger.info(
+                            f"[StockMaster/FDR폴백] 시가총액 로드: "
+                            f"KOSPI {len(df_kospi_fdr)}개, KOSDAQ {len(df_kosdaq_fdr)}개"
+                        )
+
+                        # KOSPI500: KOSPI 시총 상위 500
+                        if not kospi500 and not df_kospi_fdr.empty:
+                            kospi500 = set(
+                                df_kospi_fdr.nlargest(500, "Marcap")["Code"].astype(str)
+                            )
+                            logger.info(
+                                f"[StockMaster/FDR폴백] KOSPI500(시총기준) {len(kospi500)}개"
+                            )
+
+                        # KOSDAQ150: KOSDAQ 시총 상위 150 (pykrx 실패 시)
+                        if not kosdaq150 and not df_kosdaq_fdr.empty:
+                            kosdaq150 = set(
+                                df_kosdaq_fdr.nlargest(150, "Marcap")["Code"].astype(str)
+                            )
+                            logger.info(
+                                f"[StockMaster/FDR폴백] KOSDAQ150(시총기준) {len(kosdaq150)}개"
+                            )
+            except Exception as e:
+                logger.warning(f"[StockMaster/FDR폴백] 실패: {e}")
 
         return kospi200, kospi500, kosdaq150, market_caps
 

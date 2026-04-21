@@ -28,9 +28,11 @@ class TradeRecord:
     entry_time: datetime = None          # 진입 시간
     entry_price: float = 0               # 진입가
     entry_quantity: int = 0              # 진입 수량
-    entry_reason: str = ""               # 진입 사유 (요약 문자열)
+    entry_reason: str = ""               # 진입 사유 (요약 문자열, 하위호환)
+    entry_reasons: List[str] = field(default_factory=list)  # 구조화 진입 근거 (2026-04-21 도입)
     entry_strategy: str = ""             # 사용 전략 (의무)
     entry_signal_score: float = 0        # 진입 신호 점수
+    score_breakdown: Dict[str, float] = field(default_factory=dict)  # 전략별 핵심 메트릭 (2026-04-21 도입)
     entry_tags: List[str] = field(default_factory=list)  # 진입근거 태그 (3개 이상 의무)
 
     # 청산 정보
@@ -347,6 +349,8 @@ class TradeJournal:
         theme_info: Dict[str, Any] = None,
         entry_tags: List[str] = None,
         market: str = "KR",
+        entry_reasons: List[str] = None,
+        score_breakdown: Dict[str, float] = None,
     ) -> TradeRecord:
         """
         진입 기록
@@ -376,6 +380,29 @@ class TradeJournal:
                 f"→ tags={_tags}. 시그널 메타데이터 확인 필요."
             )
 
+        # ── 구조화 reasons 표준화 (entry_reason 문자열 폴백) ──────
+        _reasons_list: List[str] = list(entry_reasons or [])
+        if not _reasons_list and entry_reason:
+            _parts = [
+                p.strip()
+                for p in entry_reason.replace(";", ",").split(",")
+                if p.strip()
+            ]
+            _reasons_list = _parts if _parts else [entry_reason.strip()]
+
+        # 진입 근거 placeholder 검증 (2026-04-21 도입, shadow 모드 — 경고만)
+        _placeholder_terms = {"buy_signal", "auto_buy", "signal", ""}
+        _is_placeholder = (
+            len(_reasons_list) == 0
+            or all(r.lower().strip() in _placeholder_terms for r in _reasons_list)
+        )
+        if _is_placeholder:
+            logger.warning(
+                f"[저널] {symbol} 진입 근거 placeholder 감지 — "
+                f"reasons={_reasons_list}, strategy={_strategy} "
+                f"(shadow 모드: 저장 허용, 1주일 후 hard-reject 전환 예정)"
+            )
+
         trade = TradeRecord(
             id=trade_id,
             symbol=symbol,
@@ -384,8 +411,10 @@ class TradeJournal:
             entry_price=entry_price,
             entry_quantity=entry_quantity,
             entry_reason=entry_reason,
+            entry_reasons=_reasons_list,
             entry_strategy=_strategy,
             entry_signal_score=signal_score,
+            score_breakdown=score_breakdown or {},
             entry_tags=_tags,
             indicators_at_entry=indicators or {},
             market_context=market_context or {},

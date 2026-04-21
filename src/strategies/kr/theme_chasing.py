@@ -11,7 +11,7 @@ QWQ AI Trader - KR 테마 추종 전략
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Dict, List, Optional, Set, Any
+from typing import Dict, List, Optional, Set, Any, Tuple
 from loguru import logger
 
 from ..base import BaseStrategy, StrategyConfig
@@ -108,6 +108,9 @@ class ThemeChasingStrategy(BaseStrategy):
 
         # 포지션별 테마 매핑
         self._position_themes: Dict[str, str] = {}
+
+        # 진입 후 확산 체크 1회성 플래그 (2026-04-21 도입, shadow 모드 로그 dedup)
+        self._diffusion_checked: Set[str] = set()
 
     def set_theme_detector(self, detector):
         """테마 탐지기 설정"""
@@ -407,6 +410,30 @@ class ThemeChasingStrategy(BaseStrategy):
         _atr_val = atr_pct if atr_pct is not None else 0
         _pos_mult = atr_position_multiplier(_atr_val)
 
+        # 구조화 진입 근거 (2026-04-21 도입 — 사후 복기/진화 학습 신호)
+        _reasons: List[str] = [
+            f"테마:{hot_theme_name}",
+            f"테마점수:{hot_theme_score:.0f}",
+            f"동반상승:{breadth_count}종목",
+            f"등락률:{change_pct:+.1f}%",
+            f"거래량:{vol_ratio:.1f}x",
+        ]
+        if news_bonus > 0:
+            _reasons.append(f"뉴스호재:+{news_bonus:.1f}점")
+        if supply_bonus > 0:
+            _reasons.append(f"수급:+{supply_bonus:.1f}점")
+
+        _score_breakdown = {
+            "theme_score": float(hot_theme_score),
+            "change_pct": float(change_pct),
+            "vol_ratio": float(vol_ratio),
+            "breadth_count": float(breadth_count),
+            "news_bonus": float(news_bonus),
+            "supply_bonus": float(supply_bonus),
+            "atr_pct": float(_atr_val),
+            "final_score": float(score),
+        }
+
         return Signal(
             symbol=symbol,
             side=OrderSide.BUY,
@@ -418,6 +445,14 @@ class ThemeChasingStrategy(BaseStrategy):
             score=score,
             confidence=score / 100.0,
             reason=reason,
+            reasons=_reasons,
+            score_breakdown=_score_breakdown,
+            context_snapshot={
+                "theme_name": hot_theme_name,
+                "theme_score": hot_theme_score,
+                "breadth_count": breadth_count,
+                "session": "regular",
+            },
             metadata={
                 "strategy_name": self.name,
                 "indicators": dict(self._indicators.get(symbol, {})),
@@ -450,6 +485,93 @@ class ThemeChasingStrategy(BaseStrategy):
                     score=70.0,
                     reason=f"테마 쿨다운: {theme_name} 점수 {t_score:.0f}",
                 )
+
+        return None
+
+    def check_post_entry_diffusion(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        position: Position,
+    ) -> Optional[Tuple[bool, str]]:
+        """진입 후 확산 검증 (2026-04-21 도입, shadow 모드)
+
+        진입 +30~60분 윈도우 내 다음 두 조건을 동시 평가:
+            (a) 동테마 동반상승 종목 수 ≥ min_theme_breadth (확산 지속)
+            (b) 진입가 대비 -1.5% 이상 유지 (즉시 손절 영역 아님)
+
+        ⚠️ AND 조건: 둘 다 미충족 시에만 경고
+            (확산 약화 단독 = 단순 모멘텀 둔화, 손절은 ExitManager에 위임)
+            (가격만 -1.5% 미만 = 단순 손절 영역, ExitManager가 처리)
+            (확산 약화 + 손실 동시 = theme_chasing 본질 가설 깨짐 → 즉시 청산 후보)
+
+        ⚠️ shadow 모드: 자동 청산 시그널 발행 안 함. 1주일 데이터 누적 후
+        false-exit 빈도 측정하여 자동화 여부 결정.
+
+        ⚠️ 1회성: 한 포지션당 한 번만 평가하고 _diffusion_checked에 추가
+        (윈도우 내 매 가격 업데이트마다 로그 폭주 방지).
+        """
+        if not position or not position.entry_time:
+            return None
+
+        # 1회성 dedup
+        if symbol in self._diffusion_checked:
+            return None
+
+        # 진입 30~60분 윈도우만 체크
+        elapsed_min = (datetime.now() - position.entry_time).total_seconds() / 60
+        if elapsed_min < 30 or elapsed_min > 60:
+            return None
+
+        theme_name = self._position_themes.get(symbol)
+        if not theme_name:
+            return None  # theme_chasing 진입이 아님 (혹은 메모리 손실)
+
+        # (a) 테마 확산도 체크 (sync API: get_all_theme_stocks)
+        breadth_ok = True
+        breadth_msg = ""
+        if self._theme_detector and hasattr(self._theme_detector, "get_all_theme_stocks"):
+            try:
+                all_theme_stocks = self._theme_detector.get_all_theme_stocks() or {}
+                theme_symbols = all_theme_stocks.get(theme_name, []) or []
+                rising = 0
+                _change_threshold = float(getattr(self.theme_config, "theme_breadth_change_pct", 1.0))
+                for s in theme_symbols[:30]:  # 최대 30종목
+                    s_indicators = self.get_indicators(s)
+                    if s_indicators and s_indicators.get("change_1d", 0) >= _change_threshold:
+                        rising += 1
+                min_breadth = self.theme_config.min_theme_breadth
+                if rising < min_breadth:
+                    breadth_ok = False
+                    breadth_msg = f"테마 확산 약화: 동반상승 {rising}/{min_breadth}종목"
+            except Exception as e:
+                logger.debug(f"[테마확산체크] {symbol} 확산도 평가 실패: {e}")
+
+        # (b) 진입가 대비 -1.5% 미만 보유?
+        price_ok = True
+        price_msg = ""
+        try:
+            entry_p = float(position.avg_price or 0)
+            if entry_p > 0:
+                pnl_pct = (float(current_price) - entry_p) / entry_p * 100
+                if pnl_pct < -1.5:
+                    price_ok = False
+                    price_msg = f"진입가 대비 {pnl_pct:+.2f}% (-1.5% 미만)"
+        except Exception as e:
+            logger.debug(f"[테마확산체크] {symbol} 가격 평가 실패: {e}")
+
+        # 평가 완료 표시 (성공 여부 무관 — 1회만 평가)
+        self._diffusion_checked.add(symbol)
+
+        # 두 조건 모두 미충족이면 경고 (shadow 모드 — 시그널 발행 X)
+        if not breadth_ok and not price_ok:
+            warn = f"{breadth_msg} + {price_msg}"
+            logger.warning(
+                f"[테마확산체크/SHADOW] {symbol}({theme_name}) 진입 +{elapsed_min:.0f}분 "
+                f"확산 부진: {warn} "
+                f"→ 자동 청산 후보 (현재 shadow 모드 — 알림만)"
+            )
+            return (True, warn)
 
         return None
 
@@ -613,6 +735,8 @@ class ThemeChasingStrategy(BaseStrategy):
         if symbol in self._position_themes:
             theme_name = self._position_themes.pop(symbol)
             logger.debug(f"[테마 추종] 포지션-테마 매핑 해제: {symbol} <- {theme_name}")
+        # 확산 체크 1회성 플래그 리셋 (다음 진입 시 재평가)
+        self._diffusion_checked.discard(symbol)
 
     def on_position_closed(self, symbol: str):
         """포지션 청산 콜백 (외부에서 호출)"""

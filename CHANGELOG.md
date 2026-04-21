@@ -1,5 +1,165 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-21 — 진입 근거 표준화 + theme_chasing 확산 검증 (P0 #1+#2)
+
+### 배경
+오늘 거래 복기(N=2) + strategy-advisor 검증 결과:
+- SK하이닉스 거래의 entry_reason이 "buy_signal" placeholder로만 기록됨 → 사후 복기/진화 학습 입력 데이터 무력화
+- LLM 복기: "theme_chasing은 '올랐다'보다 '계속 확산될 근거가 있다'가 핵심" — 진입 후 확산 검증 부재
+- 단일 일자 N=2는 통계적 결정 불가 → 데이터 인프라 보강을 모든 파라미터 튜닝의 전제로 결정
+
+### 수정 #1 — Signal 진입 근거 표준화 (shadow 모드)
+- `src/core/types.py` Signal 데이터클래스:
+  - `reasons: List[str]` (구조화 진입 근거, 최소 2개 권장) 필드 추가
+  - `score_breakdown: Dict[str, float]` (전략별 핵심 메트릭) 필드 추가
+  - `context_snapshot: Dict[str, Any]` (시장 체제, 섹터 강도 등) 필드 추가
+  - `effective_reasons()` 헬퍼: reasons → reason 폴백 로직
+- `src/core/engine.py` RiskManager.on_signal:
+  - BUY 시그널 placeholder 검증 (shadow 모드 — 경고만, 1주일 후 hard-reject 전환)
+  - placeholder terms: `{"buy_signal", "auto_buy", "signal", ""}`
+  - 미충족 시 `metadata.flags.append("weak_reason")` + WARNING 로깅
+- `src/core/engine.py` `_pending_signal_cache` 확장: reasons/score_breakdown/context_snapshot 보존
+- `src/core/evolution/trade_journal.py` TradeRecord:
+  - `entry_reasons: List[str]`, `score_breakdown: Dict[str, float]` 필드 추가
+  - `record_entry()` 신규 인자 + placeholder 검증 (shadow 모드)
+  - reason 문자열 → reasons 리스트 자동 폴백 (쉼표/세미콜론 분리)
+- `src/schedulers/kr_scheduler.py` run_fill_check:
+  - 캐시 reasons/score_breakdown/context_snapshot 추출 → record_entry 전달
+  - context_snapshot은 market_context에 병합
+
+### 수정 #2 — theme_chasing 진입 후 확산 검증 (shadow 모드)
+- `src/strategies/kr/theme_chasing.py`:
+  - generate_signal에서 reasons/score_breakdown/context_snapshot 채우기 시범 적용
+  - `check_post_entry_diffusion()` 신규 메서드:
+    - 진입 +30~60분 윈도우만 검증 (1회성)
+    - (a) 동테마 동반상승 종목 ≥ min_theme_breadth 유지
+    - (b) 진입가 대비 -1.5% 미만 보유 중
+    - 두 조건 모두 미충족 시 WARNING 로깅 (자동 청산 X)
+- `src/schedulers/kr_scheduler.py` _check_exit_signal:
+  - position.strategy == "theme_chasing" 일 때 check_post_entry_diffusion 호출
+  - REST 피드 주기(20초)마다 평가 → 진입 +30~60분에만 1회 동작
+
+### 적용 범위
+- theme_chasing만 새 reasons 필드 활용 (예시)
+- 나머지 4개 KR 전략(momentum, sepa_trend, rsi2_reversal, gap_and_go)은 기존 reason: str 사용
+  → effective_reasons() 폴백으로 backward compat
+- 점진 적용 권장 (strategy-advisor): 1주일 shadow 데이터 누적 후 다른 전략도 reasons 표준화
+
+### 보류된 항목 (4건)
+- `docs/strategies/pending-decisions.md` 등록
+- 트리거 조건: 전략별 ≥10건 + 5영업일 / Evolver 자동 평가 / 일평균 ±2% 5일
+
+### 검증
+- `python3 -m py_compile src/core/types.py src/core/engine.py src/core/evolution/trade_journal.py src/schedulers/kr_scheduler.py src/strategies/kr/theme_chasing.py` → ALL OK
+- 백워드 호환: 기존 Signal(reason="...") 패턴 그대로 작동
+- placeholder 차단 비활성 (shadow 모드)이라 정상 매매 흐름 영향 없음
+
+---
+
+## 2026-04-21 — kr_stock_master FDR 폴백 추가 + US WS 라이프사이클 개선
+
+### 사고 로그
+- 04-21 09:30 KR 장 개시 후 매수 0건 (스크리닝 후보 0개)
+- WebSocket close_code=1006 무한 재연결 루프 (KR ↔ US WS approval_key 충돌)
+- DB 직접 조회: kospi500_yn='Y' 1개, KOSDAQ 시총 1,000억 이상 0개 — `kr_stock_master` 손상
+- → 모든 우량주가 "비우량/소형주"로 필터링되어 매수 차단
+
+### 근본 원인
+1. **stock_master 손상**: 04-20 18:00 일일 갱신 시 pykrx가 KRX_ID/KRX_PW 환경변수 미설정으로 시가총액 빈값 반환 → DB가 0으로 덮어써짐
+2. **WS approval_key 충돌**: US WS가 after_hours 세션에 계속 연결되어 KR 장 개시 시 단일 approval_key를 두고 충돌 → 매 5초 close_code=1006
+
+### 수정
+- `src/data/storage/stock_master.py` `_sync_load_index_members`:
+  - pykrx 시총 100건 미만 시 FDR(`KRX-MARCAP`) 자동 폴백 추가
+  - KOSPI500/KOSDAQ150도 FDR 시총 상위로 폴백
+  - KRX 인증 환경변수 의존성 제거
+- `src/schedulers/us_scheduler.py` `ws_market_loop`:
+  - KR 정규장 시간(KST 08:50~15:30) 진입 시 US WS 강제 종료 (포지션 유무 무관)
+  - approval_key 충돌 사전 차단
+
+### 즉시 조치 (사고 대응)
+- FDR로 `kr_stock_master` 임시 재구축: KOSPI500 501개, KOSDAQ150 150개, market_cap>0 2,782개 복원
+- 봇 재시작으로 WS 데드락 해소
+- 10:35 매수 흐름 정상 복원 (SK하이닉스 첫 체결)
+
+### 검증
+- `python3 -m py_compile src/data/storage/stock_master.py src/schedulers/us_scheduler.py` → OK
+- DB 복구 후 다음 스크리닝 사이클: 통합 후보 38개 정상 통과
+- 자동 매수 1건 체결 (000660 SK하이닉스)
+
+---
+
+## 2026-04-20 — RiskManager._pending_sector_map 초기화 누락 버그 수정
+
+### 사고 로그
+`08:00:16 | ERROR | src.core.engine:on_order:1583 | [리스크] 주문 제출 오류: 017670 — 'RiskManager' object has no attribute '_pending_sector_map'`
+
+### 근본 원인
+- `_pending_sector_map`은 UnifiedEngine.__init__ (line 181)에만 초기화되어 있음
+- 하지만 RiskManager의 `clear_pending()` (line 1552), `_on_order_failure` (line 1475, 1492)에서 참조
+- 주문 제출 예외 시 `clear_pending()` 호출 경로에서 AttributeError 발생 → 오전 8:00 장 개시 시 주문 2건 실패
+
+### 수정
+- `src/core/engine.py` RiskManager.__init__ (line ~1031 부근): `self._pending_sector_map: Dict[str, str] = {}` 추가
+
+### 검증
+- `python3 -m py_compile src/core/engine.py` → OK
+- 재시작 후 로그에 AttributeError 재현 없음
+
+---
+
+## 2026-04-20 — KR 보유 포지션 UI 개선 (심볼코드 숨김)
+
+### 변경
+- `src/dashboard/static/js/dashboard.js` (line 185): KR 포지션 행에서 종목코드(예: 071050) 숨김 — 종목명 + 전략 뱃지만 표시
+- 국내 종목은 한글 종목명이 직관적이므로 6자리 코드 생략이 가독성에 유리
+- US 포지션은 ticker(AAPL 등)가 primary 식별자이므로 유지
+
+---
+
+## 2026-04-20 — 코어홀딩 is_core 플래그 정합성 버그 수정 (SK텔레콤/KT/삼성생명 사고)
+
+### 사고 요약
+재시작 후 코어 3종목(017670 SK텔레콤, 030200 KT, 032830 삼성생명)이 ExitManager에서 is_core=False로 잘못 등록 → WS 첫 체결가 수신 시 일반 분할 익절 규칙 적용 → 연쇄 매도 발생.
+
+**실현 내역**:
+- 017670: 29주 전량 → +553,424원 (1차+2차+3차 연속 트리거)
+- 030200: 7주 (09:00 1차) + 30주 KIS 계좌 잔존 의심 (재시작 후 portfolio 누락)
+- 032830: 2주 (09:34 1차) + 8주 (MA5 복합트레일링 연쇄 전량) → +266,322원
+
+### 근본 원인
+1. **run_trader.py 초기화 순서 버그** (주요): 
+   - Step 10 `exit_manager.register_position` 호출 시점에 `pos.strategy=None`
+   - Step 11에서야 DB 연결 + `_restore_position_metadata` 실행
+   - 결과: `is_core = (pos.strategy == "core_holding")` 체크가 False로 평가되어 일반 포지션으로 등록
+2. **trade_storage 설계 부작용**: 1차 익절만으로도 `trades.exit_time`이 기록되어 잔여 수량 있는데도 "closed"로 분류 → `WHERE exit_time IS NULL` 쿼리에서 누락 → `_restore_position_metadata` 도 strategy 복원 실패
+3. **register_position 조기 리턴**: 동일 심볼 재등록 시 early return → 후속 portfolio sync에서 올바른 is_core=True가 와도 반영 못함
+
+### 수정 파일
+- `scripts/run_trader.py` (line 601~624): 
+  - 신규 Step 10-0 추가: ExitManager register_position **이전**에 DB 연결 + `_restore_position_metadata` 실행
+  - Step 11의 DB 재-연결 로직은 fallback으로 단순화
+- `src/strategies/exit_manager.py` (line 399~): 
+  - 재등록 시 `is_core=True`가 오면 기존 False 상태 승격 + 관련 파라미터(SL/TS/ratio) 동기 복사 + `_persist_states()` 즉시 저장
+  - 대시보드(pos.strategy)와 ExitManager(is_core) 두 진실 불일치 방지
+
+### 사용자 결정 사항
+- 현재 보유 중 코어 분류 포지션 모두 일반 포지션으로 재분류 (원복 없이 초기화)
+- 기존 `core_holding` 매수 로직이 빈 슬롯(3개)을 다시 채우도록 허용
+
+### 검증
+- `python3 -m py_compile` scripts/run_trader.py, src/strategies/exit_manager.py → OK
+- 재시작 로그 확인:
+  - `[KR] DB 선-연결 + 포지션 전략 복원 완료 (ExitManager 등록 전)` (Step 10-0 작동)
+  - `[KR] 포지션 전략 복원 (DB): 3개` 먼저 출력
+  - `[KR] 기존 포지션 8개 ExitManager 등록 완료 (코어: 0개)` — 사용자 의도대로 코어 0 인식
+
+### 추가 조사 필요
+- `030200 KT` 누락 30주 재동기화 (KIS 실계좌 확인 필요 — HTS 수동 체크)
+- trade_storage의 partial-sell exit_time 덮어쓰기 로직 개선 검토 (별건)
+
+---
+
 ## 2026-04-19 — 당일 청산 누적 D+1 쿨다운 규칙 추가
 
 ### 배경

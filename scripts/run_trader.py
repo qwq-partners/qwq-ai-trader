@@ -598,6 +598,26 @@ class UnifiedTradingBot:
             ))
             logger.info("[KR] 분할 익절 관리자 초기화 완료")
 
+            # 10-0. (순서 중요) ExitManager register_position 전에 DB 연결 + 포지션 전략 복원
+            # ★ 버그 방지 (2026-04-20 SK텔레콤/KT/삼성생명 사고):
+            #   과거에는 step 11(자가 진화 초기화)에서 DB 연결 후 metadata 복원 →
+            #   step 10의 register_position이 먼저 실행되어 pos.strategy=None 상태로 is_core=False 등록 →
+            #   WS 첫 체결가 수신 시 코어 포지션이 일반 분할 익절로 오인되어 추가 매도 발생.
+            #   해결: register_position 이전에 pos.strategy를 먼저 복원해 is_core 플래그 정합성 확보.
+            self.trade_journal = None
+            try:
+                from src.core.evolution import get_trade_journal
+                self.trade_journal = get_trade_journal()
+                if hasattr(self.trade_journal, 'connect'):
+                    await self.trade_journal.connect()
+                    if self.broker and hasattr(self.trade_journal, 'sync_from_kis'):
+                        await self.trade_journal.sync_from_kis(self.broker, engine=self.engine)
+                    if self.engine.portfolio.positions:
+                        await self._restore_position_metadata(self.engine.portfolio.positions)
+                logger.info("[KR] DB 선-연결 + 포지션 전략 복원 완료 (ExitManager 등록 전)")
+            except Exception as e:
+                logger.warning(f"[KR] DB 선-연결 실패 (register_position은 strategy=None으로 진행): {e}")
+
             # 10. 기존 포지션을 ExitManager에 등록
             if self.engine.portfolio.positions:
                 for symbol, position in self.engine.portfolio.positions.items():
@@ -620,24 +640,22 @@ class UnifiedTradingBot:
                         trailing_activate_pct=exit_params.get("trailing_activate_pct"),
                     )
                 logger.info(
-                    f"[KR] 기존 포지션 {len(self.engine.portfolio.positions)}개 ExitManager 등록 완료"
+                    f"[KR] 기존 포지션 {len(self.engine.portfolio.positions)}개 ExitManager 등록 완료 "
+                    f"(코어: {sum(1 for p in self.engine.portfolio.positions.values() if p.strategy == 'core_holding')}개)"
                 )
 
-            # 11. 자가 진화 엔진 초기화
+            # 11. 자가 진화 엔진 초기화 (DB는 10-0에서 이미 연결됨)
             evolution_cfg = kr_cfg.get("evolution", self.config.get("evolution") or {})
             if evolution_cfg.get("enabled", True):
                 try:
-                    from src.core.evolution import get_trade_journal, get_strategy_evolver
-                    self.trade_journal = get_trade_journal()
-
-                    # TradeStorage DB 연결
-                    if hasattr(self.trade_journal, 'connect'):
-                        await self.trade_journal.connect()
-                        if self.broker and hasattr(self.trade_journal, 'sync_from_kis'):
-                            await self.trade_journal.sync_from_kis(self.broker, engine=self.engine)
-                        # DB 연결 후 포지션 전략/진입시간 복원
-                        if self.engine.portfolio.positions:
-                            await self._restore_position_metadata(self.engine.portfolio.positions)
+                    from src.core.evolution import get_strategy_evolver
+                    # trade_journal은 10-0에서 이미 초기화됨. 실패 시 None.
+                    if self.trade_journal is None:
+                        # 10-0 실패 시 fallback
+                        from src.core.evolution import get_trade_journal as _get_tj
+                        self.trade_journal = _get_tj()
+                        if hasattr(self.trade_journal, 'connect'):
+                            await self.trade_journal.connect()
 
                     # 일일 통계 복원
                     self.engine.restore_daily_stats()

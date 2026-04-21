@@ -182,7 +182,7 @@ function renderSortedPositions() {
         const stageHtml = renderStageProjection(pos, netPct);
 
         return `<tr class="border-b" style="${rowStyle}">
-            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)}${stratBadge} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
+            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)}${stratBadge}</td>
             <td class="py-2 pr-3" style="font-size:0.75rem; color:${strategyColor};">${esc(stName)}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
             <td class="col-avg-price py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>

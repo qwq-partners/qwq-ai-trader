@@ -363,6 +363,16 @@ class KRScheduler:
             if not position:
                 return
 
+            # theme_chasing post-entry diffusion 체크 (2026-04-21 도입, shadow 모드)
+            # 진입 +30~60분 윈도우에서 확산 부진 시 경고 로깅 (자동 청산 X)
+            if position.strategy == "theme_chasing":
+                _theme_strat = bot.engine.strategies.get("theme_chasing") if bot.engine else None
+                if _theme_strat and hasattr(_theme_strat, "check_post_entry_diffusion"):
+                    try:
+                        _theme_strat.check_post_entry_diffusion(symbol, current_price, position)
+                    except Exception as _diff_e:
+                        logger.debug(f"[테마확산체크] {symbol} 평가 오류: {_diff_e}")
+
             # theme_chasing 장마감 전 EOD 청산 (15:10 이후, 손실 포지션 우선 정리)
             _now_hm = datetime.now().strftime("%H:%M")
             if position.strategy == "theme_chasing" and _now_hm >= "15:10":
@@ -1617,6 +1627,9 @@ JSON:
                                         _sig_cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
                                         _sig_meta = _sig_cache.pop(fill.symbol, {})
                                         _sig_reason = _sig_meta.get("reason", "")
+                                        _sig_reasons_list = _sig_meta.get("reasons", []) or []
+                                        _sig_score_breakdown = _sig_meta.get("score_breakdown", {}) or {}
+                                        _sig_context_snapshot = _sig_meta.get("context_snapshot", {}) or {}
                                         _sig_metadata = _sig_meta.get("metadata", {})
                                         _sig_strategy = (
                                             _sig_meta.get("strategy")
@@ -1712,6 +1725,11 @@ JSON:
                                         except Exception:
                                             pass  # 메타데이터 수집 실패 시 빈 dict로 진행
 
+                                        # 진입근거: 구조화 reasons 우선, 없으면 _sig_reason 폴백
+                                        # context_snapshot은 market_context에 병합
+                                        if _sig_context_snapshot:
+                                            _market_ctx = {**(_market_ctx or {}), **_sig_context_snapshot}
+
                                         _rec = bot.trade_journal.record_entry(
                                             trade_id=_tid,
                                             symbol=fill.symbol,
@@ -1719,8 +1737,10 @@ JSON:
                                             entry_price=float(fill.price),
                                             entry_quantity=fill.quantity,
                                             entry_reason=_sig_reason or "buy_signal",
+                                            entry_reasons=_sig_reasons_list,
                                             entry_strategy=_sig_strategy or "unclassified",
                                             signal_score=_sig_score,
+                                            score_breakdown=_sig_score_breakdown,
                                             indicators=_indicators or None,
                                             market_context=_market_ctx or None,
                                             theme_info=_theme or None,

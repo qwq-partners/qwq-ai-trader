@@ -398,6 +398,32 @@ class ExitManager:
         """포지션 등록"""
         if position.symbol in self._states:
             state = self._states[position.symbol]
+            # 코어 플래그 업그레이드 (초기 등록 시 strategy 누락으로 is_core=False 저장된 경우 복구)
+            # 대시보드와 ExitManager 두 진실 불일치 방지 — sync에서 is_core=True 오면 승격
+            if is_core and not state.is_core:
+                state.is_core = True
+                if stop_loss_pct is not None:
+                    state.stop_loss_pct = stop_loss_pct
+                if trailing_stop_pct is not None:
+                    state.trailing_stop_pct = trailing_stop_pct
+                if trailing_activate_pct is not None:
+                    state.trailing_activate_pct = trailing_activate_pct
+                if first_exit_ratio is not None:
+                    state.first_exit_ratio = first_exit_ratio
+                if second_exit_ratio is not None:
+                    state.second_exit_ratio = second_exit_ratio
+                if third_exit_ratio is not None:
+                    state.third_exit_ratio = third_exit_ratio
+                if stale_high_days is not None:
+                    state.stale_high_days = stale_high_days
+                if max_holding_days is not None:
+                    state.max_holding_days = max_holding_days
+                logger.warning(
+                    f"[ExitManager] {position.symbol} 코어 플래그 승격: is_core False→True "
+                    f"(SL={state.stop_loss_pct}, TS={state.trailing_stop_pct}, "
+                    f"분할익절 ratio={state.first_exit_ratio}/{state.second_exit_ratio}/{state.third_exit_ratio})"
+                )
+                self._persist_states()
             if position.quantity != state.remaining_quantity:
                 old_qty = state.remaining_quantity
                 state.entry_price = position.avg_price

@@ -1230,6 +1230,20 @@ class USScheduler:
                         await self._maybe_stop_us_price_ws()
                         _ws_prestarted = False
 
+                # KR 정규장 시간(KST 08:50~15:30)에는 US WS 강제 종료
+                # (KIS approval_key 1개 제약 — KR WS와 충돌 시 close_code=1006 무한루프 발생)
+                if _ws_prestarted and not is_open and eng.us_price_ws.is_connected:
+                    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                    kst_now = _dt.now(_tz(_td(hours=9)))
+                    kst_min = kst_now.hour * 60 + kst_now.minute
+                    if 8 * 60 + 50 <= kst_min <= 15 * 60 + 30:
+                        logger.warning(
+                            f"[KIS US WS] KR 정규장 시간({kst_now.strftime('%H:%M')} KST) — "
+                            f"approval_key 충돌 방지 위해 US WS 강제 종료 (포지션 {len(eng.portfolio.positions)}개)"
+                        )
+                        await self._maybe_stop_us_price_ws()
+                        _ws_prestarted = False
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

@@ -416,7 +416,10 @@ class Signal:
     score: float = 0.0              # 신호 점수 (0~100)
     confidence: float = 0.0         # 신뢰도 (0~1)
 
-    reason: str = ""                # 신호 생성 사유
+    reason: str = ""                # 신호 생성 사유 (요약 문자열 — 하위호환)
+    reasons: List[str] = field(default_factory=list)          # 구조화 진입 근거 (최소 2개 권장, 2026-04-21 도입)
+    score_breakdown: Dict[str, float] = field(default_factory=dict)   # 전략별 핵심 메트릭
+    context_snapshot: Dict[str, Any] = field(default_factory=dict)    # 시장 체제, 섹터 강도 등
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     timestamp: datetime = field(default_factory=datetime.now)
@@ -431,6 +434,15 @@ class Signal:
         if self.expires_at is None:
             return False
         return datetime.now() > self.expires_at
+
+    def effective_reasons(self) -> List[str]:
+        """구조화 reasons가 비어있으면 reason 문자열을 쉼표/세미콜론 분리하여 폴백"""
+        if self.reasons:
+            return list(self.reasons)
+        if self.reason:
+            parts = [p.strip() for p in self.reason.replace(";", ",").split(",") if p.strip()]
+            return parts if parts else [self.reason.strip()]
+        return []
 
 
 @dataclass
