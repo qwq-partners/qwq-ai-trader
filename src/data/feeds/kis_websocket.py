@@ -687,8 +687,12 @@ class KISWebSocketFeed:
                     # 연결 직후 priority 종목 포함 구독 적용 (보유 종목 포함)
                     await self._apply_subscriptions()
 
-                # 연결 직후 즉시 끊김 감지용: 루프 진입 전 메시지 카운트 스냅샷
-                _msg_before = self._message_count
+                # 연결 직후 즉시 끊김 감지용: 실제 시세 데이터 수신 여부로 판정
+                # 2026-04-22 수정: 기존에는 _message_count(모든 TEXT 메시지)로 비교 →
+                # 구독 ack/에러 응답만 받고 바로 끊겨도 increment돼 서킷브레이커 미동작.
+                # 이제 _price_data_count(실제 시세 데이터)로 판정하여 즉시 끊김 탐지.
+                _price_before = self._price_data_count
+                _connect_time = datetime.now()
 
                 async for msg in self._ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
@@ -706,21 +710,32 @@ class KISWebSocketFeed:
                         logger.warning("WebSocket 연결 종료 중...")
 
                 # async for 정상 종료 (서버가 연결 닫음)
-                logger.warning(f"WebSocket 수신 루프 종료 (close_code={getattr(self._ws, 'close_code', '?')}, closed={getattr(self._ws, 'closed', '?')})")
+                _conn_duration = (datetime.now() - _connect_time).total_seconds()
+                logger.warning(
+                    f"WebSocket 수신 루프 종료 (close_code={getattr(self._ws, 'close_code', '?')}, "
+                    f"closed={getattr(self._ws, 'closed', '?')}, "
+                    f"duration={_conn_duration:.1f}s, 시세수신={self._price_data_count - _price_before}건)"
+                )
 
-                # 메시지 0개 수신 후 즉시 끊김 → approval_key 서버 측 무효화 감지
-                if self._message_count == _msg_before:
+                # 시세 데이터 0건 수신 + 짧은 연결(<10초) → approval_key 서버 측 무효화 감지
+                # 구독 ack만 받고 서버가 즉시 끊는 케이스(approval_key 경합/무효화)를 잡음.
+                _no_data = (self._price_data_count == _price_before)
+                _short_conn = (_conn_duration < 10.0)
+                if _no_data and _short_conn:
                     _instant_disconnect_count += 1
                     if _instant_disconnect_count >= 3:
                         logger.warning(
                             f"[WS] {_instant_disconnect_count}회 연속 즉시 끊김 감지 "
-                            f"(close_code=1006) → approval_key 강제 재발급 (서킷브레이커/서버 무효화 대응)"
+                            f"(close_code=1006, duration<10s, 시세 0건) → "
+                            f"approval_key 강제 재발급 (서킷브레이커/서버 무효화 대응)"
                         )
                         self._token_manager.invalidate()
                         self._approval_key = None
                         _instant_disconnect_count = 0
+                        # 재발급 대기 시간 확보 (KIS rate limit 회피)
+                        await asyncio.sleep(30)
                 else:
-                    _instant_disconnect_count = 0  # 메시지 수신 성공 → 정상 연결이었음
+                    _instant_disconnect_count = 0  # 시세 수신 성공 → 정상 연결이었음
 
             except asyncio.CancelledError:
                 break
