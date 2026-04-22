@@ -253,6 +253,8 @@ class TradeStorage:
         theme_info: Dict[str, Any] = None,
         market: str = "KR",
         entry_tags: list = None,
+        entry_reasons: list = None,
+        score_breakdown: Dict[str, float] = None,
     ) -> TradeRecord:
         """진입 기록: 캐시 + JSON + DB큐"""
         # 1) 캐시 + JSON (동기)
@@ -268,9 +270,14 @@ class TradeStorage:
             indicators=indicators,
             market_context=market_context,
             theme_info=theme_info,
+            market=market,
         )
         if entry_tags is not None:
             _journal_kwargs['entry_tags'] = entry_tags
+        if entry_reasons is not None:
+            _journal_kwargs['entry_reasons'] = entry_reasons
+        if score_breakdown is not None:
+            _journal_kwargs['score_breakdown'] = score_breakdown
         trade = self._journal.record_entry(**_journal_kwargs)
 
         # 2) DB 큐 — trades INSERT
@@ -836,6 +843,19 @@ class TradeStorage:
             all_open.sort(key=lambda t: t.entry_time)
             return all_open[0]
 
+        # 5. 2026-04-22 추가: 잔여 수량이 남은 부분청산 거래 (is_closed=True라도 포함)
+        #   케이스: 어제 진입 → 오늘 1차 익절로 exit_time 세팅됨 → 2차/3차 매도 복구 대상
+        #   entry_time 날짜 제한 없음(최근 N일 이내 FIFO).
+        partial_any = [
+            t for t in all_trades
+            if t.symbol == symbol
+            and (t.exit_quantity or 0) < t.entry_quantity
+            and t.entry_time
+        ]
+        if partial_any:
+            partial_any.sort(key=lambda t: t.entry_time, reverse=True)
+            return partial_any[0]
+
         return None
 
     async def sync_from_kis(self, broker, engine=None):
@@ -896,13 +916,19 @@ class TradeStorage:
                     db_sell_qty_by_symbol = {r['symbol']: int(r['total_qty']) for r in sell_rows}
 
                     # DB trades 테이블에서 거래 로드:
-                    # 오늘 진입한 거래 OR 미청산 포지션(이전 날 진입, 오늘 청산 대상)
+                    # 1) 오늘 진입한 거래
+                    # 2) 미청산 포지션(이전 날 진입)
+                    # 3) 2026-04-22 추가: 잔여 수량이 남은 부분청산 거래 (이전 날 진입, 오늘 1차 익절 등)
+                    #    — exit_time IS NOT NULL이지만 exit_quantity < entry_quantity인 경우 복구 대상
                     trade_rows = await self.pool.fetch(
                         "SELECT id, symbol, name, entry_time, entry_price, entry_quantity, "
                         "exit_time, exit_price, exit_quantity, entry_strategy, entry_signal_score, "
                         "entry_reason, exit_reason, exit_type, pnl, pnl_pct "
-                        "FROM trades WHERE entry_time::date = $1 "
-                        "   OR (exit_time IS NULL AND entry_time::date < $1)",
+                        "FROM trades "
+                        "WHERE entry_time::date = $1 "
+                        "   OR (exit_time IS NULL AND entry_time::date < $1) "
+                        "   OR (COALESCE(exit_quantity,0) < entry_quantity "
+                        "       AND entry_time::date >= ($1::date - INTERVAL '30 days'))",
                         today,
                     )
                     for tr in trade_rows:

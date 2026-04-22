@@ -1089,27 +1089,44 @@ class UnifiedTradingBot:
                         logger.warning(f"[US] TradeStorage KIS 동기화 실패: {e}")
                 logger.info("[US] TradeStorage 초기화 완료")
 
-                # DB에서 US 포지션 entry_time 복원 (KR과 동일 패턴)
+                # DB에서 US 포지션 entry_time + trade_id 복원 (KR과 동일 패턴)
+                # 2026-04-22 수정: trade_id 복원 추가 — 재시작 후 SELL이
+                # "DB 직접 기록" 폴백 대신 정상 record_exit 경로를 타도록.
+                # 부분매도로 exit_time 세팅됐어도 잔여 수량 있으면 매칭.
                 if us_engine.portfolio.positions and us_engine.trade_storage.pool:
                     try:
                         async with us_engine.trade_storage.pool.acquire() as conn:
                             rows = await conn.fetch(
-                                "SELECT symbol, entry_strategy, entry_time FROM trades "
-                                "WHERE exit_time IS NULL AND market = 'US' "
+                                "SELECT id, symbol, entry_strategy, entry_time, "
+                                "       entry_quantity, exit_quantity "
+                                "FROM trades WHERE market = 'US' "
+                                "  AND (exit_time IS NULL "
+                                "       OR COALESCE(exit_quantity, 0) < entry_quantity) "
                                 "ORDER BY entry_time DESC"
                             )
                         et_restored = 0
+                        tid_restored = 0
+                        seen_syms = set()
                         for row in rows:
                             sym = row["symbol"]
+                            if sym in seen_syms:
+                                continue
                             if sym in us_engine.portfolio.positions:
+                                seen_syms.add(sym)
                                 pos = us_engine.portfolio.positions[sym]
                                 if row["entry_time"]:
                                     pos.entry_time = row["entry_time"]
                                     et_restored += 1
                                 if not pos.strategy and row["entry_strategy"]:
                                     pos.strategy = row["entry_strategy"]
-                        if et_restored:
-                            logger.info(f"[US] 포지션 entry_time DB 복원: {et_restored}개")
+                                if not getattr(pos, "trade_id", None) and row["id"]:
+                                    pos.trade_id = str(row["id"])
+                                    tid_restored += 1
+                        if et_restored or tid_restored:
+                            logger.info(
+                                f"[US] 포지션 메타 DB 복원: entry_time={et_restored}개, "
+                                f"trade_id={tid_restored}개"
+                            )
                     except Exception as e:
                         logger.warning(f"[US] entry_time DB 복원 실패 (무시): {e}")
 
@@ -1510,22 +1527,40 @@ class UnifiedTradingBot:
 
         try:
             async with self.trade_journal.pool.acquire() as conn:
+                # 2026-04-22 수정: trade_id 복원 추가 — 재시작 후 SELL이
+                # "DB 직접 기록" 폴백 대신 정상 record_exit 경로를 타도록.
+                # 부분매도로 exit_time이 세팅됐어도 잔여 수량 있으면 매칭.
                 rows = await conn.fetch(
-                    "SELECT symbol, entry_strategy, entry_time FROM trades "
-                    "WHERE exit_time IS NULL ORDER BY entry_time DESC"
+                    "SELECT id, symbol, entry_strategy, entry_time, "
+                    "       entry_quantity, exit_quantity "
+                    "FROM trades "
+                    "WHERE exit_time IS NULL "
+                    "   OR COALESCE(exit_quantity, 0) < entry_quantity "
+                    "ORDER BY entry_time DESC"
                 )
             restored = 0
+            tid_restored = 0
+            seen_syms = set()  # 같은 symbol의 중복 매칭 방지 (최신 entry_time 우선)
             for row in rows:
                 sym = row["symbol"]
+                if sym in seen_syms:
+                    continue
                 if sym in positions:
+                    seen_syms.add(sym)
                     pos = positions[sym]
                     if not pos.strategy and row["entry_strategy"]:
                         pos.strategy = row["entry_strategy"]
                         restored += 1
                     if not pos.entry_time and row["entry_time"]:
                         pos.entry_time = row["entry_time"]
-            if restored:
-                logger.info(f"[KR] 포지션 전략 복원 (DB): {restored}개")
+                    if not getattr(pos, "trade_id", None) and row["id"]:
+                        pos.trade_id = str(row["id"])
+                        tid_restored += 1
+            if restored or tid_restored:
+                logger.info(
+                    f"[KR] 포지션 메타 복원 (DB): 전략/시간={restored}개, "
+                    f"trade_id={tid_restored}개"
+                )
         except Exception as e:
             logger.warning(f"[KR] 포지션 메타데이터 복원 실패: {e}")
 

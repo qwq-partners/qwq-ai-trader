@@ -1,5 +1,38 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-22 — 거래 로그 누락 복구 + 재시작 메타 복원 (P0)
+
+### 배경
+대시보드에 당일 KR 매매 내역 7건 중 5건 누락 (67% 유실) — KIS API 체결내역 대조 결과:
+- 누락된 매수 2건: S-Oil(010950) 09:30, LG디스플레이(034220) 11:50
+- 누락된 매도 3건: HJ중공업(097230) 2차/3차 부분매도 (09:32, 11:20, 11:38, 총 28주)
+
+### 근본 원인 분석
+1. **재시작 후 `pos.trade_id` 미복원** — `_restore_position_metadata`가 strategy/entry_time만 복원하고 trade_id는 복원 안 함. 따라서 어제 진입 포지션은 모두 trade_id=None 상태로 등록 → SELL 체결 시 "DB 직접 기록" 폴백 경로로 빠짐.
+2. **`TradeStorage.record_entry()` 시그니처 불일치** — kr_scheduler가 `entry_reasons`/`score_breakdown` kwarg를 넘겼지만 Wrapper 시그니처에 없어 TypeError → BUY 저널 기록 전량 실패.
+3. **"DB 직접 기록" 부분매도 처리 오류** — `UPDATE trades SET exit_time=... WHERE exit_time IS NULL`이 1차 익절만으로 trade row를 완전 닫음. 이후 2차/3차 매도 시 `WHERE exit_time IS NULL`로 조회 실패 → "오픈 포지션 없음".
+4. **`sync_from_kis` DB 쿼리 누락** — `WHERE entry_time::date = today OR (exit_time IS NULL AND entry_time < today)` 조건이 "어제 진입·오늘 부분청산" 케이스(exit_time NOT NULL, exit_qty<entry_qty)를 제외.
+5. **`_find_recovery_target` 우선순위 누락** — 부분청산된 과거 trade를 recovery 대상에서 제외.
+6. **`bot.engine.strategies` AttributeError** — `theme_chasing` 확산 체크 시 존재하지 않는 속성 접근 (correct: `bot.strategy_manager.strategies`). 청산 체크 루프마다 에러 스택 로깅.
+
+### 수정
+- `src/data/storage/trade_storage.py`
+  - **`record_entry()` 시그니처 확장**: `entry_reasons`, `score_breakdown` kwarg 추가 + 기본 `market` kwarg도 journal로 forward.
+  - **`_find_recovery_target()` 우선순위 5 추가**: 잔여 수량 있는 부분청산 trade도 매칭 (entry_date 제한 없음, 최근 순).
+  - **`sync_from_kis()` DB trade_rows 쿼리 확장**: `COALESCE(exit_quantity,0) < entry_quantity AND entry_time >= today-30d` 조건 추가하여 어제 진입·오늘 부분청산 케이스 포함.
+- `src/schedulers/kr_scheduler.py`
+  - **DB 직접 기록 경로 부분매도 처리**: `remaining_after = _sell_pos_snap.quantity - fill.quantity` 판정으로 전량 청산 시에만 `exit_time` 세팅. 부분매도는 `exit_quantity`/`pnl`만 누적 UPDATE. SELECT 조건도 `OR exit_quantity < entry_quantity`로 완화.
+  - **`theme_chasing` strategies 참조 수정**: `bot.engine.strategies` → `bot.strategy_manager.strategies`.
+- `scripts/run_trader.py`
+  - **KR `_restore_position_metadata()`**: `pos.trade_id` 복원 추가. 쿼리 조건도 `exit_time IS NULL OR exit_quantity < entry_quantity`로 완화하여 부분청산 trade도 매칭.
+  - **US `_initialize_us()` 메타 복원**: 동일 패턴 적용 — `trade_id` 복원 + 부분청산 매칭.
+
+### 재발 방지 체크리스트
+- [ ] 신규 kwarg 추가 시 Wrapper(TradeStorage)도 반드시 동시 수정
+- [ ] 부분매도 지원 필요한 경로는 모두 `WHERE exit_time IS NULL OR exit_qty < entry_qty` 패턴 사용
+- [ ] 재시작 복원 로직은 strategy/entry_time/trade_id 3종 세트 복원 (KR/US 공통)
+- [ ] 종료 후 KIS API 체결내역 vs trade_events DB 카운트 자동 대조 (TODO: 일일 리포트에 추가)
+
 ## 2026-04-21 — 진입 근거 표준화 + theme_chasing 확산 검증 (P0 #1+#2)
 
 ### 배경

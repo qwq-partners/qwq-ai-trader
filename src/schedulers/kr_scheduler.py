@@ -366,7 +366,10 @@ class KRScheduler:
             # theme_chasing post-entry diffusion 체크 (2026-04-21 도입, shadow 모드)
             # 진입 +30~60분 윈도우에서 확산 부진 시 경고 로깅 (자동 청산 X)
             if position.strategy == "theme_chasing":
-                _theme_strat = bot.engine.strategies.get("theme_chasing") if bot.engine else None
+                _theme_strat = (
+                    bot.strategy_manager.strategies.get("theme_chasing")
+                    if getattr(bot, "strategy_manager", None) else None
+                )
                 if _theme_strat and hasattr(_theme_strat, "check_post_entry_diffusion"):
                     try:
                         _theme_strat.check_post_entry_diffusion(symbol, current_price, position)
@@ -1498,10 +1501,16 @@ JSON:
                                             if _db_pool:
                                                 try:
                                                     async with _db_pool.acquire() as _dbc:
+                                                        # 2026-04-22 수정: 부분매도 후 재조회 가능하도록
+                                                        # exit_time IS NULL 조건 완화 — 오늘 진입분 또는 미청산건 모두 허용
+                                                        # (1차 익절로 exit_time 세팅된 건도 잔여 수량 있으면 재사용)
                                                         _db_row = await _dbc.fetchrow(
-                                                            """SELECT id, entry_price, entry_strategy
+                                                            """SELECT id, entry_price, entry_strategy,
+                                                                      entry_quantity, exit_quantity, exit_time
                                                                FROM trades
-                                                               WHERE symbol=$1 AND exit_time IS NULL
+                                                               WHERE symbol=$1
+                                                                 AND (exit_time IS NULL
+                                                                      OR COALESCE(exit_quantity, 0) < entry_quantity)
                                                                ORDER BY entry_time DESC LIMIT 1""",
                                                             fill.symbol,
                                                         )
@@ -1509,8 +1518,16 @@ JSON:
                                                         _db_tid = str(_db_row['id'])
                                                         _db_ep = float(_db_row['entry_price'] or 0) or float(_sell_pos_snap.avg_price)
                                                         _db_strat = str(_db_row['entry_strategy'] or 'sync_detected')
+                                                        _db_entry_qty = int(_db_row['entry_quantity'] or 0)
+                                                        _db_prev_exit_qty = int(_db_row['exit_quantity'] or 0)
+                                                        _new_exit_qty = _db_prev_exit_qty + int(fill.quantity)
+                                                        # 부분매도 판정: 포지션 스냅샷 기준 잔여 수량 + DB 기준 청산합계
+                                                        _pre_qty = int(getattr(_sell_pos_snap, 'quantity', 0) or 0)
+                                                        _remaining_after = _pre_qty - int(fill.quantity)
+                                                        _is_full_exit = (_remaining_after <= 0) and (_new_exit_qty >= _db_entry_qty)
                                                         # exit_type 분류 (공통 함수 위임)
                                                         _etype2 = self._classify_exit_type(_exit_reason_snap)
+                                                        _status2 = _etype2 if _is_full_exit else "partial"
                                                         # PnL 계산 (FeeCalculator 사용, 수수료 포함 순손익)
                                                         _fc = get_fee_calculator("KR")
                                                         _this_pnl2_d, _pnl_pct2_d = _fc.calculate_net_pnl(
@@ -1533,21 +1550,38 @@ JSON:
                                                                 _db_tid, fill.symbol, _sym_name2,
                                                                 _now2, float(fill.price), fill.quantity,
                                                                 _etype2, _exit_reason_snap or 'fill_detected',
-                                                                _this_pnl2, _pnl_pct2, _db_strat, _etype2,
+                                                                _this_pnl2, _pnl_pct2, _db_strat, _status2,
                                                             )
-                                                            await _dbc.execute(
-                                                                """UPDATE trades SET
-                                                                   exit_time=$1, exit_price=$2, exit_quantity=$3,
-                                                                   exit_reason=$4, exit_type=$5,
-                                                                   pnl=$6, pnl_pct=$7, updated_at=$8
-                                                                   WHERE id=$9 AND exit_time IS NULL""",
-                                                                _now2, float(fill.price), fill.quantity,
-                                                                _exit_reason_snap or 'fill_detected', _etype2,
-                                                                _this_pnl2, _pnl_pct2, _now2, _db_tid,
-                                                            )
+                                                            if _is_full_exit:
+                                                                # 전량 청산: exit_time 세팅, 누적 pnl/pct/exit_quantity
+                                                                await _dbc.execute(
+                                                                    """UPDATE trades SET
+                                                                       exit_time=$1, exit_price=$2,
+                                                                       exit_quantity=$3,
+                                                                       exit_reason=$4, exit_type=$5,
+                                                                       pnl=COALESCE(pnl,0)+$6,
+                                                                       pnl_pct=$7, updated_at=$8
+                                                                       WHERE id=$9""",
+                                                                    _now2, float(fill.price), _new_exit_qty,
+                                                                    _exit_reason_snap or 'fill_detected', _etype2,
+                                                                    _this_pnl2, _pnl_pct2, _now2, _db_tid,
+                                                                )
+                                                            else:
+                                                                # 부분매도: exit_time/exit_type은 건드리지 않고
+                                                                # exit_quantity 누적 + pnl 누적만 반영
+                                                                await _dbc.execute(
+                                                                    """UPDATE trades SET
+                                                                       exit_quantity=$1,
+                                                                       pnl=COALESCE(pnl,0)+$2,
+                                                                       updated_at=$3
+                                                                       WHERE id=$4""",
+                                                                    _new_exit_qty, _this_pnl2, _now2, _db_tid,
+                                                                )
                                                         logger.info(
                                                             f"[체결] {fill.symbol} SELL DB 직접 기록 완료 "
-                                                            f"(trade_id={_db_tid}, pnl={_this_pnl2:+,}원)"
+                                                            f"(trade_id={_db_tid}, pnl={_this_pnl2:+,}원, "
+                                                            f"누적청산={_new_exit_qty}/{_db_entry_qty}, "
+                                                            f"{'전량' if _is_full_exit else '부분'})"
                                                         )
                                                         if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
                                                             bot.risk_manager.record_exit(fill.symbol, float(fill.price))

@@ -100,3 +100,43 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - **pykrx 간헐적 실패**: `Stock master: pykrx failed` → DB 폴백 자동 전환
 - **MCP 모듈 없음**: `No module named 'mcp'` → 기능 영향 없음 (폴백 동작)
 - **Yahoo Finance 지연**: KOSPI 데이터 2~3일 지연 → KIS 실시간 보충
+
+### 거래 로그 누락 감지 (대시보드 vs KIS API 대조)
+
+대시보드의 `/trades` 거래 이벤트 개수가 실제보다 적다면 다음 스크립트로 KIS API 체결내역과 대조:
+
+```bash
+source venv/bin/activate && python3 << 'EOF'
+import asyncio
+from datetime import date
+from src.utils.config import load_dotenv
+from src.utils.token_manager import get_token_manager
+from src.execution.broker.kis_kr import KISBroker, KISConfig
+
+async def main():
+    load_dotenv()
+    broker = KISBroker(KISConfig.from_env(), get_token_manager())
+    await broker.connect()
+    fills = await broker.get_all_fills_for_date(date.today())
+    print(f"KIS API 오늘 KR 체결: {len(fills)}건")
+    for f in fills:
+        side = '매수' if f['sll_buy_dvsn_cd'] == '02' else '매도'
+        print(f"  {f['ord_tmd']:<8} {side} {f['symbol']} {f['name']:<14} {f['tot_ccld_qty']}주 @ {f['avg_prvs']:,.0f}")
+    await broker.disconnect()
+asyncio.run(main())
+EOF
+```
+
+DB 측 카운트:
+```bash
+PGPASSWORD=... psql -U postgres -d ai_db -c \
+  "SELECT symbol, event_type, SUM(quantity) qty, COUNT(*) cnt FROM trade_events \
+   WHERE event_time::date=CURRENT_DATE AND symbol ~ '^[0-9]{6}\$' \
+   GROUP BY symbol, event_type ORDER BY symbol;"
+```
+
+**불일치 원인 체크리스트**:
+1. `pos.trade_id` 복원 누락 (`_restore_position_metadata` 로그에서 `trade_id=N개` 확인)
+2. `TradeStorage.record_entry()` TypeError (`BUY journal 기록 실패` 로그 grep)
+3. `DB 직접 기록 실패: 오픈 포지션 없음` (부분매도 로직 문제)
+4. `sync_from_kis`에서 `매도 복구 대상 trade 없음` (cross-day partial 쿼리 누락)
