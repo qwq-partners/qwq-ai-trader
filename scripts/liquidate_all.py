@@ -119,15 +119,27 @@ async def liquidate_us(broker, dry_run: bool, force: bool):
     """US 포지션 전량 청산"""
     print("\n=== US 포지션 ===")
     positions = await broker.get_positions()
-    active = {s: p for s, p in positions.items() if p.get('quantity', 0) > 0} if isinstance(positions, dict) else {}
 
-    # KISUSBroker.get_positions()는 리스트를 반환할 수 있음
+    # 2026-04-22 수정: KIS US API는 `qty` 키 반환 (quantity 아님)
+    # MEMORY: feedback_is_core_init_order.md의 KIS API key naming 규칙
+    def _qty(p):
+        """포지션 dict에서 수량 추출 — qty 우선, quantity 폴백"""
+        v = p.get('qty', p.get('quantity', 0)) if isinstance(p, dict) else getattr(p, 'quantity', 0)
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+    active = {}
     if isinstance(positions, list):
-        active = {}
         for p in positions:
-            sym = p.get('symbol', '')
-            qty = int(p.get('quantity', 0))
-            if qty > 0 and sym:
+            sym = p.get('symbol', '') if isinstance(p, dict) else getattr(p, 'symbol', '')
+            q = _qty(p)
+            if q > 0 and sym:
+                active[sym] = p
+    elif isinstance(positions, dict):
+        for sym, p in positions.items():
+            if _qty(p) > 0:
                 active[sym] = p
 
     if not active:
@@ -135,14 +147,14 @@ async def liquidate_us(broker, dry_run: bool, force: bool):
         return
 
     for symbol, pos in active.items():
+        qty = _qty(pos)
         if isinstance(pos, dict):
-            qty = pos.get('quantity', 0)
             avg = pos.get('avg_price', 0)
             cur = pos.get('current_price', 0)
             name = pos.get('name', symbol)
             print(f"  {symbol:<8} {name:<20} {qty}주 avg=${avg:.2f} cur=${cur:.2f}")
         else:
-            print(f"  {symbol} {pos.quantity}주")
+            print(f"  {symbol} {qty}주")
 
     if dry_run:
         return
@@ -154,12 +166,19 @@ async def liquidate_us(broker, dry_run: bool, force: bool):
             return
 
     for symbol, pos in active.items():
-        qty = pos.get('quantity', pos.quantity) if isinstance(pos, dict) else pos.quantity
+        qty = _qty(pos)
+        if qty <= 0:
+            continue
+        # 거래소 코드 자동 추출 (KIS_US 주문은 exchange 필수 — NASD/NYSE/AMEX)
+        exchange = pos.get('exchange', 'NASD') if isinstance(pos, dict) else 'NASD'
         try:
-            result = await broker.submit_sell_order(symbol, int(qty), price=0, order_type="market")
-            print(f"  {symbol} {qty}주 → {'OK' if result.get('success') else 'FAIL'}")
+            # KISUSBroker.submit_sell_order(symbol, exchange, qty, price)
+            # price=0 → 시장가 (ORD_DVSN='00' + OVRS_ORD_UNPR='0')
+            result = await broker.submit_sell_order(symbol, exchange=exchange, qty=qty, price=0)
+            ok = result.get('success') if isinstance(result, dict) else False
+            print(f"  {symbol}({exchange}) {qty}주 → {'OK' if ok else 'FAIL'} ({result.get('message','')})")
         except Exception as e:
-            print(f"  {symbol} 매도 실패: {e}")
+            print(f"  {symbol}({exchange}) 매도 실패: {e}")
         await asyncio.sleep(0.5)
 
 
