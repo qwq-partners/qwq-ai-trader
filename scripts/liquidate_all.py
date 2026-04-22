@@ -171,12 +171,17 @@ async def liquidate_us(broker, dry_run: bool, force: bool):
             continue
         # 거래소 코드 자동 추출 (KIS_US 주문은 exchange 필수 — NASD/NYSE/AMEX)
         exchange = pos.get('exchange', 'NASD') if isinstance(pos, dict) else 'NASD'
+        # 2026-04-22 수정: KIS 해외주식은 price=0 시장가 미지원 ("주문단가를 입력 하십시오")
+        # 현재가 대비 2% 하향 지정가로 즉시체결 유도 (SELL slippage buffer)
+        cur_price = float(pos.get('current_price', 0)) if isinstance(pos, dict) else 0
+        if cur_price <= 0:
+            print(f"  {symbol}({exchange}) 현재가 미확인 — 스킵")
+            continue
+        limit_price = round(cur_price * 0.98, 2)  # 2% 하향 지정가
         try:
-            # KISUSBroker.submit_sell_order(symbol, exchange, qty, price)
-            # price=0 → 시장가 (ORD_DVSN='00' + OVRS_ORD_UNPR='0')
-            result = await broker.submit_sell_order(symbol, exchange=exchange, qty=qty, price=0)
+            result = await broker.submit_sell_order(symbol, exchange=exchange, qty=qty, price=limit_price)
             ok = result.get('success') if isinstance(result, dict) else False
-            print(f"  {symbol}({exchange}) {qty}주 → {'OK' if ok else 'FAIL'} ({result.get('message','')})")
+            print(f"  {symbol}({exchange}) {qty}주 @ ${limit_price} (cur ${cur_price}) → {'OK' if ok else 'FAIL'} ({result.get('message','')})")
         except Exception as e:
             print(f"  {symbol}({exchange}) 매도 실패: {e}")
         await asyncio.sleep(0.5)
