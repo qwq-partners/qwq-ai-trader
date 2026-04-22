@@ -1071,56 +1071,112 @@ class TradeStorage:
                     if missing_qty <= 0:
                         continue
 
-                # 누락분만 복구 (마지막 체결가 사용)
-                last_fill = sell_fills[-1]
-                price = float(last_fill.get("avg_prvs", 0))
-                if price <= 0:
-                    continue
+                # ── 2026-04-22 개선: 개별 fill 단위로 기록 ──────────────────────
+                # 기존: 마지막 체결가 + missing_qty 합계로 단일 이벤트 기록 (PnL/가격 부정확)
+                # 개선: KIS 체결을 chronological 정렬 후 이미 기록된 ODNO 스킵하고 개별 기록
+                #      idempotency는 kis_order_no 컬럼 기준.
+                # 이미 DB에 기록된 ODNO 집합 조회
+                recorded_odnos: set = set()
+                if self.pool:
+                    try:
+                        odno_rows = await self.pool.fetch(
+                            """SELECT kis_order_no FROM trade_events
+                               WHERE trade_id=$1 AND event_type='SELL'
+                                 AND kis_order_no IS NOT NULL""",
+                            target_trade.id,
+                        )
+                        recorded_odnos = {str(r['kis_order_no']) for r in odno_rows if r['kis_order_no']}
+                    except Exception:
+                        recorded_odnos = set()
 
-                actual_time = self._parse_kis_time(last_fill.get("ord_tmd", ""), today)
-
-                result = self.record_exit(
-                    trade_id=target_trade.id,
-                    exit_price=price,
-                    exit_quantity=missing_qty,
-                    exit_reason="KIS 동기화 복구",
-                    exit_type="kis_sync",
-                    exit_time=actual_time,
+                # 시간순 정렬 (KIS는 reverse chrono로 반환되므로 ord_tmd 오름차순으로 재정렬)
+                fills_sorted = sorted(
+                    sell_fills,
+                    key=lambda f: str(f.get("ord_tmd", "000000"))
                 )
 
-                # 캐시 손상으로 record_exit이 None → DB에 직접 기록
-                if result is None and self._db_available:
-                    exit_time = actual_time or datetime.now()
-                    entry_price = float(target_trade.entry_price)
-                    pnl, pnl_pct = self.calc_pnl(entry_price, price, missing_qty)
-                    total_exit_qty = (target_trade.exit_quantity or 0) + missing_qty
-                    is_fully_closed = total_exit_qty >= target_trade.entry_quantity
+                # 이미 기록된 수량(already_sold)만큼은 skip 처리
+                # ODNO 매칭이 있으면 우선 ODNO로 skip, 없으면 qty 기준 선행 skip
+                fills_to_record = []
+                qty_to_skip = already_sold
+                for f in fills_sorted:
+                    odno = str(f.get("odno", "")).strip()
+                    fqty = int(f.get("tot_ccld_qty", 0))
+                    if fqty <= 0:
+                        continue
+                    if odno and odno in recorded_odnos:
+                        # 이미 이 ODNO가 trade_events에 있음 → skip
+                        continue
+                    if qty_to_skip >= fqty:
+                        qty_to_skip -= fqty
+                        continue
+                    if qty_to_skip > 0:
+                        # 부분 skip — fill의 뒤쪽 수량만 복구
+                        fills_to_record.append((f, fqty - qty_to_skip))
+                        qty_to_skip = 0
+                    else:
+                        fills_to_record.append((f, fqty))
 
-                    self._enqueue(
-                        """UPDATE trades SET exit_time=$1, exit_price=$2, exit_quantity=$3,
-                           exit_reason=$4, exit_type=$5, pnl=$6, pnl_pct=$7, updated_at=$8
-                           WHERE id=$9""",
-                        (exit_time, price, total_exit_qty, "KIS 동기화 복구", "kis_sync",
-                         float(pnl), float(pnl_pct), datetime.now(), target_trade.id),
+                # entry_qty 초과 방지
+                _rem_cap = target_trade.entry_quantity - (target_trade.exit_quantity or 0)
+                _recovered_qty = 0
+                for f, rec_qty in fills_to_record:
+                    if _rem_cap <= 0:
+                        break
+                    this_qty = min(rec_qty, _rem_cap)
+                    price = float(f.get("avg_prvs", 0))
+                    if price <= 0:
+                        continue
+                    odno = str(f.get("odno", "")).strip() or None
+                    actual_time = self._parse_kis_time(f.get("ord_tmd", ""), today)
+                    result = self.record_exit(
+                        trade_id=target_trade.id,
+                        exit_price=price,
+                        exit_quantity=this_qty,
+                        exit_reason=f"KIS 동기화 복구 (ODNO={odno})" if odno else "KIS 동기화 복구",
+                        exit_type="kis_sync",
+                        exit_time=actual_time,
                     )
-                    self._enqueue(
-                        """INSERT INTO trade_events
-                           (trade_id, symbol, name, event_type, event_time, price, quantity,
-                            exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score, status)
-                           VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
-                        (target_trade.id, target_trade.symbol, target_trade.name,
-                         exit_time, price, missing_qty, "kis_sync", "KIS 동기화 복구",
-                         float(pnl), float(pnl_pct), target_trade.entry_strategy,
-                         float(target_trade.entry_signal_score),
-                         "kis_sync" if is_fully_closed else "partial"),
+                    if result is None and self._db_available:
+                        exit_time = actual_time or datetime.now()
+                        entry_price = float(target_trade.entry_price)
+                        pnl, pnl_pct = self.calc_pnl(entry_price, price, this_qty)
+                        total_exit_qty = (target_trade.exit_quantity or 0) + _recovered_qty + this_qty
+                        is_fully_closed = total_exit_qty >= target_trade.entry_quantity
+                        self._enqueue(
+                            """UPDATE trades SET exit_time=$1, exit_price=$2, exit_quantity=$3,
+                               exit_reason=$4, exit_type=$5, pnl=COALESCE(pnl,0)+$6,
+                               pnl_pct=$7, updated_at=$8
+                               WHERE id=$9""",
+                            (exit_time, price, total_exit_qty, "KIS 동기화 복구",
+                             "kis_sync" if is_fully_closed else "partial",
+                             float(pnl), float(pnl_pct), datetime.now(), target_trade.id),
+                        )
+                        self._enqueue(
+                            """INSERT INTO trade_events
+                               (trade_id, symbol, name, event_type, event_time, price, quantity,
+                                exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score,
+                                status, kis_order_no)
+                               VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+                            (target_trade.id, target_trade.symbol, target_trade.name,
+                             exit_time, price, this_qty, "kis_sync", "KIS 동기화 복구",
+                             float(pnl), float(pnl_pct), target_trade.entry_strategy,
+                             float(target_trade.entry_signal_score),
+                             "kis_sync" if is_fully_closed else "partial", odno),
+                        )
+                        logger.info(
+                            f"[TradeStorage] DB 직접 기록 (캐시 미보유): {sym} {this_qty}주 @ {price:,.0f} "
+                            f"pnl={int(pnl):+,}원 ODNO={odno}"
+                        )
+                    _recovered_qty += this_qty
+                    _rem_cap -= this_qty
+                    logger.info(
+                        f"[TradeStorage] KIS 동기화 매도 복구: {sym} {this_qty}주 @ {price:,.0f} "
+                        f"(ODNO={odno}, trade={target_trade.id})"
                     )
-                    logger.info(f"[TradeStorage] DB 직접 기록 (캐시 미보유): {sym} {missing_qty}주 pnl={pnl:+,.0f}")
 
-                synced += 1
-                logger.info(
-                    f"[TradeStorage] KIS 동기화 매도 복구: {sym} {missing_qty}주 @ {price:,.0f} "
-                    f"(trade={target_trade.id}, KIS={kis_total_sold}, 기존={already_sold})"
-                )
+                if _recovered_qty > 0:
+                    synced += 1
 
             if synced > 0:
                 logger.info(f"[TradeStorage] KIS 동기화 완료: {synced}건 복구")
@@ -1198,19 +1254,15 @@ class TradeStorage:
                     logger.debug(f"[PnL보정] {sym} 분할매도 {sell_count}건 — trades 테이블 보정 건너뜀")
                     continue
 
-                # DB 업데이트
+                # trades 테이블만 집계 보정 (trade_events 개별 price는 보정하지 않음)
+                # 2026-04-22 수정: 기존에는 trade_events의 price도 가중평균으로 overwrite했는데,
+                # 그러면 개별 매도 체결의 실제 가격이 소실됨. 대시보드가 KIS 앱과 일치하지 않게 됨.
+                # 개별 이벤트는 건드리지 않고, 집계 행만 KIS 가중평균/총PnL로 정리한다.
                 await self.pool.execute("""
                     UPDATE trades SET pnl = $1, pnl_pct = $2, exit_price = $3,
                                       updated_at = CURRENT_TIMESTAMP
                     WHERE id = $4
                 """, correct_pnl, correct_pct, kis_exit_price, row['id'])
-
-                # trade_events SELL 이벤트도 보정 (여기 도달 시 sell_count <= 1 보장)
-                await self.pool.execute("""
-                    UPDATE trade_events SET pnl = $1, pnl_pct = $2, price = $3
-                    WHERE trade_id = $4 AND event_type = 'SELL'
-                      AND event_time::date = $5
-                """, correct_pnl, correct_pct, kis_exit_price, row['id'], target_date)
 
                 # 캐시도 동기화
                 cached = self._journal.get_trade(row['id'])

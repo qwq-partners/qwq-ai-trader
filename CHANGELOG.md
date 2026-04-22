@@ -33,6 +33,28 @@
 - [ ] 재시작 복원 로직은 strategy/entry_time/trade_id 3종 세트 복원 (KR/US 공통)
 - [ ] 종료 후 KIS API 체결내역 vs trade_events DB 카운트 자동 대조 (TODO: 일일 리포트에 추가)
 
+### 추가 수정 (2차 검증 후, user 피드백)
+KIS 앱 체결내역 화면과 비교 결과 **개별 fill 가격이 DB와 불일치**하는 문제 발견.
+
+**원인 7**: `sync_from_kis` 매도 복구가 `sell_fills[-1]`(사실상 가장 오래된 fill) 가격 + `missing_qty` 총합으로 단일 이벤트 기록. 예: HJ중공업 4개 fill(6@28400, 11@29550, 5@31150, 12@30650)에서 첫 6주는 정상 기록됐지만 나머지 28주는 "28주 @ 28,400" 단일 이벤트로 기록 → 가격/PnL 대폭 부정확.
+
+**원인 8**: `_reconcile_pnl`이 `sell_count==1`일 때 trade_events의 price 컬럼까지 KIS 가중평균으로 UPDATE → 개별 매도 체결가가 소실. 예: 6주 @ 28,400 이벤트가 weighted avg 29,970.59로 덮어써짐.
+
+**수정**
+- `src/data/storage/trade_storage.py` `sync_from_kis` 매도 복구:
+  - KIS 체결을 `ord_tmd` 기준 오름차순 정렬
+  - `kis_order_no` 기준 idempotency — 이미 기록된 ODNO 스킵
+  - `already_sold` 수량만큼 오래된 fill 순으로 선행 skip (부분 skip 지원)
+  - 나머지를 fill별로 개별 `record_exit` 호출 (가격/시간/ODNO 각각 정확)
+- `_reconcile_pnl`: trade_events 개별 price UPDATE 제거. trades 집계 row만 보정.
+
+**결과 (HJ중공업 097230 backfill 후)**
+- 09:02:41 6주 @ 28,400 pnl=+6,814 (4.17%)
+- 09:32:29 11주 @ 29,550 pnl=+25,115 (8.39%)
+- 11:20:47 5주 @ 31,150 pnl=+19,399 (14.26%)
+- 11:38:53 12주 @ 30,650 pnl=+40,570 (12.43%)
+- 합계 34주 net pnl=+91,898원 (기존 오기록 64,233원 대비 +27,665원 상향)
+
 ## 2026-04-21 — 진입 근거 표준화 + theme_chasing 확산 검증 (P0 #1+#2)
 
 ### 배경
