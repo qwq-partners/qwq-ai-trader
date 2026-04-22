@@ -110,6 +110,39 @@ class DashboardServer:
 
         return app
 
+    # 2026-04-22: US 엔진 비활성 시 US 관련 UI 전역 숨김 + JS 가드 주입
+    # self.us_engine is None이면 자동으로 활성화 — 템플릿 수정 없이 정책 토글 가능.
+    _US_DISABLE_SNIPPET = """<style id="us-disable-style">
+/* US 엔진 비활성: 모든 US 관련 UI 숨김 */
+#us-market-card, #us-positions-full, #us-signals-section,
+#us-summary-section, #us-positions-summary,
+#us-trades-section, #us-holdings-section,
+#us-themes-section, #us-performance-section,
+#us-screening-count, #us-themes-grid, #us-screening-body,
+.mf-btn[data-val="us"], .mf-btn[data-val="all"],
+.nav-pill[data-page="us"],
+[data-market="us"] {
+    display: none !important;
+}
+/* 설정 페이지의 "US 오버나이트 시그널" 카드 숨김 */
+.card:has(#cfg-us-market) { display: none !important; }
+/* US 카드가 사라진 상태에서 KR 카드를 전폭으로 확장 */
+.markets-grid { grid-template-columns: 1fr !important; }
+</style>
+<script id="us-disable-script">
+window.US_ENABLED = false;
+// US 데이터 로딩 함수가 정의돼 있으면 noop으로 덮어쓰기 (fetch 낭비 방지)
+document.addEventListener("DOMContentLoaded", function() {
+    if (typeof loadUSData === "function") { window.loadUSData = function() {}; }
+    // 마켓 필터가 us/all로 저장돼 있으면 kr로 강제
+    try {
+        var cur = localStorage.getItem("market_filter");
+        if (cur === "us" || cur === "all") { localStorage.setItem("market_filter", "kr"); }
+    } catch(e) {}
+});
+</script>
+"""
+
     def _serve_page(self, template_name: str):
         """HTML 페이지 서빙 핸들러 팩토리"""
         async def handler(request: web.Request) -> web.Response:
@@ -118,6 +151,13 @@ class DashboardServer:
                 return web.Response(text="Page not found", status=404)
 
             content = file_path.read_text(encoding="utf-8")
+
+            # US 엔진 비활성 시 전역 숨김 snippet 주입
+            if not self.us_engine and "</head>" in content:
+                content = content.replace(
+                    "</head>", self._US_DISABLE_SNIPPET + "</head>", 1
+                )
+
             return web.Response(text=content, content_type="text/html", charset="utf-8")
 
         return handler
