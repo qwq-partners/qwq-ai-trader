@@ -497,9 +497,84 @@
             </div>
         </div>
 
+        <!-- 2026-04-23 추가: 시스템 리소스 모니터링 (인프라 다운사이징 검토용) -->
+        <div class="section" style="margin-top:24px;">
+            <h3 style="font-size:.92rem;font-weight:700;color:#fff;margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--acc-cyan,#22d3ee)" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>
+                시스템 리소스 (sysstat)
+                <span id="sys-refresh-hint" style="margin-left:auto;font-size:.7rem;color:var(--text-muted);">30초마다 갱신</span>
+            </h3>
+            <div class="engine-grid-bottom" style="margin-top:0;">
+                <div class="card">
+                    <div class="card-header">현재 상태</div>
+                    <div class="card-body" id="sys-current"><div class="empty-msg">로딩 중...</div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">최근 7일 통계</div>
+                    <div class="card-body" id="sys-history"><div class="empty-msg">로딩 중...</div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">다운사이징 힌트</div>
+                    <div class="card-body" id="sys-hint"><div class="empty-msg">로딩 중...</div></div>
+                </div>
+            </div>
+        </div>
+
     </main>
 
     <script src="/static/js/common.js?v=5"></script>
     <script src="/static/js/engine.js?v=2"></script>
+    <script>
+    // 시스템 리소스 패널 (sysstat 기반)
+    async function loadSystemResources() {
+        try {
+            const r = await fetch('/api/system/resources?days=7');
+            const data = await r.json();
+            const cur = data.current || {};
+            const hist = data.history || {};
+            const hint = data.downsize_hint || {};
+
+            // 현재 상태
+            const cpu = cur.cpu || {};
+            const mem = cur.memory || {};
+            const disk = cur.disk || {};
+            document.getElementById('sys-current').innerHTML = `
+                <div style="font-size:.78rem;line-height:1.8;">
+                  <div><b>CPU</b> ${cpu.vcpus}코어 · 현재 ${cpu.percent_now}% · load ${cpu.load1}/${cpu.load5}/${cpu.load15}</div>
+                  <div><b>RAM</b> ${(mem.used_mb/1024).toFixed(1)}/${(mem.total_mb/1024).toFixed(1)}GB (${mem.percent}%) · avail ${(mem.available_mb/1024).toFixed(1)}GB</div>
+                  <div><b>Disk</b> ${disk.used_gb}/${disk.total_gb}GB (${disk.percent}%) · free ${disk.free_gb}GB</div>
+                  <div><b>Uptime</b> ${cur.uptime_days}일</div>
+                  <div style="font-size:.68rem;color:var(--text-muted);margin-top:6px;">${cpu.model || ''}</div>
+                </div>`;
+
+            // 히스토리 통계
+            const c = hist.cpu_percent || {};
+            const m = hist.memory_percent || {};
+            document.getElementById('sys-history').innerHTML = `
+                <div style="font-size:.78rem;line-height:1.8;">
+                  <div><b>CPU</b> (${hist.samples_cpu}샘플)</div>
+                  <div style="padding-left:10px;">avg <b>${c.avg ?? '—'}%</b> · p50 ${c.p50 ?? '—'}% · p95 ${c.p95 ?? '—'}% · peak <b style="color:var(--acc-yellow,#fbbf24);">${c.peak ?? '—'}%</b></div>
+                  <div style="margin-top:6px;"><b>Memory</b> (${hist.samples_mem}샘플)</div>
+                  <div style="padding-left:10px;">avg <b>${m.avg ?? '—'}%</b> · p50 ${m.p50 ?? '—'}% · p95 ${m.p95 ?? '—'}% · peak <b style="color:var(--acc-yellow,#fbbf24);">${m.peak ?? '—'}%</b></div>
+                  <div style="font-size:.68rem;color:var(--text-muted);margin-top:8px;">최근 ${hist.days}일 · 10분 간격</div>
+                </div>`;
+
+            // 다운사이징 힌트
+            const hints = hint.hints || [];
+            if (hints.length === 0) {
+                document.getElementById('sys-hint').innerHTML = '<div class="empty-msg">판단 데이터 수집 중 (샘플 누적 필요)</div>';
+            } else {
+                document.getElementById('sys-hint').innerHTML =
+                    '<div style="font-size:.78rem;line-height:1.7;">' +
+                    hints.map(h => `<div style="margin-bottom:4px;">• ${h}</div>`).join('') +
+                    '</div>';
+            }
+        } catch (e) {
+            console.error('[sys] load error', e);
+        }
+    }
+    loadSystemResources();
+    setInterval(loadSystemResources, 30000);
+    </script>
 </body>
 </html>

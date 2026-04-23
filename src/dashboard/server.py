@@ -17,6 +17,7 @@ from loguru import logger
 from .kr_api import setup_kr_api_routes
 from .us_api import setup_us_api_routes
 from .engine_api import setup_engine_api_routes
+from .system_api import setup_system_api_routes
 from .data_collector import DashboardDataCollector
 from .sse import SSEManager
 
@@ -89,6 +90,9 @@ class DashboardServer:
 
         # 엔진 API 라우트 (/api/engine/*)
         setup_engine_api_routes(app)
+
+        # 시스템 리소스 API (/api/system/*) — 인프라 다운사이징 검토용
+        setup_system_api_routes(app)
 
         # 통합 SSE 스트림
         app.router.add_get("/api/stream", self.sse_manager.handle_stream)
