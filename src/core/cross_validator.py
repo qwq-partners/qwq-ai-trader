@@ -24,6 +24,11 @@ class CrossStrategyValidator:
     # 감점 후 최소 통과 점수 (이하면 차단)
     _MIN_PASS_SCORE: int = 50
 
+    # 2026-04-23 추가: 튜닝 가능 상수 (매직넘버 정리)
+    # 지표 결손 감점: 결손 지표 1개당 -N점, 최대 -M점
+    _MISSING_IND_PENALTY_STEP: int = 2   # 지표 1개당 감점
+    _MISSING_IND_PENALTY_CAP: int = 8    # 최대 감점 (지표 4개 이상 결손 시 적용)
+
     def __init__(self, portfolio=None, risk_manager=None, trade_memory=None,
                  llm_manager=None, market: str = "KR", trade_wiki=None,
                  max_sector_positions: int = 2):
@@ -98,20 +103,35 @@ class CrossStrategyValidator:
         # 2026-04-23 추가: 지표 결손 시 보수적 감점 (risk-auditor 감사 결과)
         # atr_pct 78.6%, PER/PBR 87.7%, 수급 78.6% 결손 → R6/R7/R8/R2 사실상 비활성.
         # 단기 임시 방편: 지표 None이면 "불확실 = 의심" 원칙으로 -2점 × 결손 지표 수.
-        # 장기: screener에서 지표 필수 공급 강제 필요 (별도 작업).
+        # 2026-04-23 수정: metadata 상위 키(atr_pct, sector 등)와 indicators dict 둘 다 체크.
+        #   스크리너는 top-level metadata, 전략은 indicators dict로 공급하는 구조 혼재.
         _missing_key_indicators = []
-        if indicators.get("atr_pct") is None and indicators.get("atr_14") is None:
+        _has_atr = (
+            indicators.get("atr_pct") is not None
+            or indicators.get("atr_14") is not None
+            or metadata.get("atr_pct") is not None
+        )
+        if not _has_atr:
             _missing_key_indicators.append("ATR")
-        if indicators.get("per") is None:
+        if indicators.get("per") is None and metadata.get("per") is None:
             _missing_key_indicators.append("PER")
-        if indicators.get("pbr") is None:
+        if indicators.get("pbr") is None and metadata.get("pbr") is None:
             _missing_key_indicators.append("PBR")
         # 수급은 KR 전용
         if self._market == "KR":
-            if indicators.get("foreign_net_buy") is None and indicators.get("inst_net_buy") is None:
+            _has_supply = (
+                indicators.get("foreign_net_buy") is not None
+                or indicators.get("inst_net_buy") is not None
+                or metadata.get("foreign_net_buy") is not None
+                or metadata.get("inst_net_buy") is not None
+            )
+            if not _has_supply:
                 _missing_key_indicators.append("수급")
         if _missing_key_indicators:
-            _missing_penalty = min(len(_missing_key_indicators) * 2, 8)  # 최대 -8점
+            _missing_penalty = min(
+                len(_missing_key_indicators) * self._MISSING_IND_PENALTY_STEP,
+                self._MISSING_IND_PENALTY_CAP,
+            )
             adjusted_score -= _missing_penalty
             penalties.append(f"지표결손({','.join(_missing_key_indicators)}) -{_missing_penalty}")
 

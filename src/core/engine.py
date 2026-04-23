@@ -1011,6 +1011,16 @@ class RiskManager:
         self._last_signal_time: Dict[str, datetime] = {}
         self._SIGNAL_COOLDOWN_SECONDS = 30  # 60→30: 빠른 신호 처리
 
+        # 2026-04-23 추가: G4 LLM 검증 임계값 (튜닝 가능 상수)
+        # - score < _LLM_CHECK_MIN: LLM 건너뜀 (저점수는 R1~R9로 충분)
+        # - _LLM_CHECK_MIN ≤ score < _LLM_BYPASS_AT: LLM 호출, 거부 시 사이즈 축소
+        # - score ≥ _LLM_BYPASS_AT: LLM 완전 우회 (강한 모멘텀 신뢰)
+        # - LLM 거부 시 포지션 multiplier 배율 (0.5 = 50% 축소)
+        # 거래분석 근거: LLM 차단 40건 재진입 시 avg +5.72% → 기존 차단이 기회 손실
+        self._LLM_CHECK_MIN = 85
+        self._LLM_BYPASS_AT = 95
+        self._LLM_REJECT_SIZE_MULT = 0.5
+
         # 현금 부족 로그 쓰로틀링
         self._last_cash_warn_time: Optional[datetime] = None
 
@@ -1377,14 +1387,15 @@ class RiskManager:
                               block_reason=f"크로스 검증 감점 {_orig_score:.0f}→{_cv_score:.0f}",
                               regime=_regime)
 
-            # 2026-04-23 재설계: LLM 이중검증 기준 완화
+            # 2026-04-23 재설계: LLM 이중검증 기준 완화 (튜닝 상수 사용)
             #   거래분석 결과: LLM 차단 40건 → 5일 내 재진입 시 avg +5.72% (차단이 오히려 기회 손실).
             #   특히 SK하이닉스/하나금융 등 고점수(93~99) 종목을 잘못 차단한 케이스가 다수.
             #   변경:
-            #   - score >= 95는 LLM 우회 (강한 모멘텀은 검증 건너뜀)
-            #   - LLM 거부 시 차단 대신 position_multiplier 50% 축소로 완화
-            #   - 85~94 범위만 LLM 보조 검증 사용
-            if 85 <= _cv_score < 95 and _regime != "bull":
+            #   - score >= _LLM_BYPASS_AT(95): LLM 우회 (강한 모멘텀은 검증 건너뜀)
+            #   - _LLM_CHECK_MIN(85) <= score < _LLM_BYPASS_AT(95): LLM 보조 검증
+            #   - LLM 거부 시 차단 대신 position_multiplier × _LLM_REJECT_SIZE_MULT(0.5) 완화
+            if (self._LLM_CHECK_MIN <= _cv_score < self._LLM_BYPASS_AT
+                    and _regime != "bull"):
                 _llm_ok = await self._cross_validator.llm_second_check(
                     symbol=event.symbol,
                     strategy=event.strategy.value if event.strategy else "",
@@ -1403,13 +1414,13 @@ class RiskManager:
                         event.metadata = {}
                     event.metadata["llm_second_check"] = "rejected_soft"
                     _cur_mult = event.metadata.get("position_multiplier", 1.0)
-                    event.metadata["position_multiplier"] = float(_cur_mult) * 0.5
+                    event.metadata["position_multiplier"] = float(_cur_mult) * self._LLM_REJECT_SIZE_MULT
                     # _calculate_position_size가 실제 읽는 곳 (engine.py:1856+ 참조)
                     if event.signal is not None:
                         if event.signal.metadata is None:
                             event.signal.metadata = {}
                         _sig_mult = event.signal.metadata.get("position_multiplier", 1.0)
-                        event.signal.metadata["position_multiplier"] = float(_sig_mult) * 0.5
+                        event.signal.metadata["position_multiplier"] = float(_sig_mult) * self._LLM_REJECT_SIZE_MULT
                     logger.info(
                         f"[크로스검증] {event.symbol} LLM 이중검증 soft-reject "
                         f"→ 사이즈 50% 축소 후 진행 (차단 아님)"

@@ -342,6 +342,16 @@ class BaseStrategy(ABC):
             variance = sum((x - mean) ** 2 for x in closes[-20:]) / 20
             indicators["volatility"] = (variance ** 0.5) / mean * 100 if mean > 0 else 0
 
+        # ATR (14일) — 추격매수 감지(cross_validator R6), 동적 손절용
+        # 2026-04-23 추가: 지표 결손률 78.6% (ATR 기준) 교정 — R6 활성화
+        if len(history) >= 15:
+            highs = [float(p.high) for p in history]
+            lows = [float(p.low) for p in history]
+            atr_pct = self._calculate_atr_pct(highs, lows, closes, 14)
+            if atr_pct is not None:
+                indicators["atr_14"] = atr_pct   # % 단위
+                indicators["atr_pct"] = atr_pct  # 별칭 (cross_validator가 양쪽 참조)
+
         # 고가/저가 대비 (당일 제외: 돌파 감지를 위해 전일까지만 사용)
         if len(history) >= 21:
             prev_history = history[-21:-1]  # 전일까지 20일
@@ -383,6 +393,41 @@ class BaseStrategy(ABC):
             self._price_history.pop(oldest_symbol, None)
             self._last_candle_ts.pop(oldest_symbol, None)
             self._last_calc_time.pop(oldest_symbol, None)
+
+    def _calculate_atr_pct(
+        self, highs: List[float], lows: List[float],
+        closes: List[float], period: int = 14
+    ) -> Optional[float]:
+        """
+        ATR (Average True Range) % 계산
+
+        True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+        ATR = 최근 period개 TR의 평균. 반환은 최근 종가 대비 %.
+
+        history는 과거→최신 순서 (base.py의 price_history 구조 그대로 사용).
+        """
+        n = len(closes)
+        if n < period + 1 or len(highs) != n or len(lows) != n:
+            return None
+        try:
+            # 최근 period개 True Range 계산
+            trs = []
+            start = max(1, n - period)
+            for i in range(start, n):
+                h = highs[i]
+                l = lows[i]
+                pc = closes[i - 1]
+                tr = max(h - l, abs(h - pc), abs(l - pc))
+                trs.append(tr)
+            if not trs:
+                return None
+            atr_abs = sum(trs) / len(trs)
+            cur_close = closes[-1]
+            if cur_close <= 0:
+                return None
+            return (atr_abs / cur_close) * 100
+        except (ValueError, ZeroDivisionError, IndexError):
+            return None
 
     def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
         """

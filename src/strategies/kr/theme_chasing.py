@@ -79,6 +79,10 @@ class ThemeChasingConfig(StrategyConfig):
     trading_start_time: str = "09:30" # 시작 시간 (장초반 30분 변동성 회피)
     trading_end_time: str = "15:00"   # 종료 시간
 
+    # 2026-04-23 추가: 고점수 사이즈 축소 (거래분석 — 고점수가 더 손실 패턴 교정)
+    high_score_threshold: float = 90.0     # 이 이상이면 축소 적용
+    high_score_size_mult: float = 0.5      # 축소 배율 (0.5 = 50%)
+
 
 class ThemeChasingStrategy(BaseStrategy):
     """
@@ -416,12 +420,17 @@ class ThemeChasingStrategy(BaseStrategy):
         _atr_val = atr_pct if atr_pct is not None else 0
         _pos_mult = atr_position_multiplier(_atr_val)
 
-        # 2026-04-23 추가: 고점수(≥90) 테마는 사이즈 50% 축소
+        # 2026-04-23 추가: 고점수 테마는 사이즈 축소 (config 토글 가능)
         # 거래분석 결과: 고점수(≥85) avg -0.82%, 저점수(<85) avg -0.46%
         # 고점수가 오히려 더 손실 — 테마 고점 추격 매수 경향.
-        if score >= 90:
-            _pos_mult *= 0.5
-            logger.info(f"[테마 추종] {symbol} 고점수({score:.0f}≥90) 사이즈 50% 축소 적용")
+        _high_thr = self.theme_config.high_score_threshold
+        _high_mult = self.theme_config.high_score_size_mult
+        if score >= _high_thr:
+            _pos_mult *= _high_mult
+            logger.info(
+                f"[테마 추종] {symbol} 고점수({score:.0f}≥{_high_thr:.0f}) "
+                f"사이즈 {_high_mult*100:.0f}% 축소 적용"
+            )
 
         # 구조화 진입 근거 (2026-04-21 도입 — 사후 복기/진화 학습 신호)
         _reasons: List[str] = [
