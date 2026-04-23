@@ -147,6 +147,15 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 """
 
+    # 2026-04-23: Mobile-First v2 — 모든 페이지에 CSS/JS 자동 주입
+    # 하단 fixed nav + 스티키 요약 + 홈 Quick KPI + 거래 카드 + 성과 탭
+    _MOBILE_V2_SNIPPET = """
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e18">
+<link rel="stylesheet" href="/static/css/mobile-v2.css?v=3">
+<script defer src="/static/js/mobile-v2.js?v=3"></script>
+"""
+
     def _serve_page(self, template_name: str):
         """HTML 페이지 서빙 핸들러 팩토리"""
         async def handler(request: web.Request) -> web.Response:
@@ -160,6 +169,12 @@ document.addEventListener("DOMContentLoaded", function() {
             if not self.us_engine and "</head>" in content:
                 content = content.replace(
                     "</head>", self._US_DISABLE_SNIPPET + "</head>", 1
+                )
+
+            # Mobile-First v2 주입 (모든 페이지 공통)
+            if "</head>" in content:
+                content = content.replace(
+                    "</head>", self._MOBILE_V2_SNIPPET + "</head>", 1
                 )
 
             return web.Response(text=content, content_type="text/html", charset="utf-8")

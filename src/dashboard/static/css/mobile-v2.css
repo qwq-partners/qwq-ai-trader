@@ -1,0 +1,373 @@
+/* ============================================================
+   QWQ AI Trader — Mobile-First v2
+   (2026-04-23) 70% 모바일 트래픽 최적화
+   ============================================================ */
+
+/* ─────────────────────────────────────────────────────────
+   P4. 터치 타겟 44px 최소 + 폰트 최소 0.7rem
+   ───────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* 모든 인터랙티브 요소 44px 이상 */
+  .nav-pill,
+  .btn-primary,
+  .mf-btn,
+  .filter-tab,
+  .tab-btn,
+  button:not(.inline-btn):not(.chip):not(.mini-btn),
+  a.nav-pill {
+    min-height: 44px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+  }
+  /* 핵심 텍스트 최소 0.7rem */
+  .stat-label { font-size: 0.68rem !important; }
+  .mr-lbl { font-size: 0.72rem !important; }
+  .sm-l, .sm-v { font-size: 0.7rem !important; }
+  /* 스크롤바 hide */
+  .hide-scrollbar::-webkit-scrollbar { display: none; }
+  .hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+}
+
+/* ─────────────────────────────────────────────────────────
+   P1-A. 스티키 요약 바 (상단 고정)
+   ───────────────────────────────────────────────────────── */
+.mv2-sticky-summary {
+  display: none;
+}
+@media (max-width: 768px) {
+  .mv2-sticky-summary {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: rgba(15, 18, 31, 0.92);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(99, 102, 241, 0.18);
+    padding: 8px 14px;
+    gap: 14px;
+    align-items: center;
+    font-size: 0.78rem;
+    justify-content: space-between;
+  }
+  .mv2-sticky-summary .mv2-ss-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .mv2-sticky-summary .mv2-ss-lbl {
+    font-size: 0.58rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .mv2-sticky-summary .mv2-ss-val {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+  }
+  .mv2-sticky-summary .mv2-ss-val.pos { color: #34d399; }
+  .mv2-sticky-summary .mv2-ss-val.neg { color: #f87171; }
+  .mv2-sticky-summary .mv2-ss-val.muted { color: var(--text-secondary); }
+}
+
+/* ─────────────────────────────────────────────────────────
+   P1-B. 하단 Fixed Navigation (모바일 전용)
+   ───────────────────────────────────────────────────────── */
+.mv2-bottom-nav { display: none; }
+@media (max-width: 768px) {
+  /* 상단 네비의 pill은 숨김 (상단은 로고+status만) */
+  nav .nav-links { display: none !important; }
+
+  .mv2-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    background: rgba(11, 14, 24, 0.96);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-top: 1px solid rgba(99, 102, 241, 0.2);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom)) 4px;
+    gap: 2px;
+    justify-content: space-around;
+    align-items: stretch;
+  }
+  .mv2-bn-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 2px;
+    min-height: 52px;
+    border-radius: 10px;
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+    font-weight: 600;
+  }
+  .mv2-bn-item:hover,
+  .mv2-bn-item:active {
+    background: rgba(99, 102, 241, 0.12);
+    color: var(--text-secondary);
+  }
+  .mv2-bn-item.active {
+    color: #fff;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(129, 140, 248, 0.18));
+  }
+  .mv2-bn-item .mv2-bn-icon {
+    font-size: 1.15rem;
+    line-height: 1;
+  }
+  .mv2-bn-item .mv2-bn-label {
+    font-size: 0.62rem;
+    letter-spacing: 0.02em;
+  }
+
+  /* 하단 nav 때문에 본문 영역 패딩 추가 */
+  body { padding-bottom: 72px; }
+  main { padding-bottom: 72px !important; }
+}
+
+/* ─────────────────────────────────────────────────────────
+   P1-C. 홈 Quick KPI 그리드 (모바일 전용, 상단 배치)
+   ───────────────────────────────────────────────────────── */
+.mv2-home-kpi { display: none; }
+@media (max-width: 768px) {
+  .mv2-home-kpi {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 12px 14px 14px;
+  }
+  .mv2-kpi-card {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.07), rgba(99, 102, 241, 0.02));
+    border: 1px solid rgba(99, 102, 241, 0.18);
+    border-radius: 14px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-height: 72px;
+  }
+  .mv2-kpi-label {
+    font-size: 0.64rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .mv2-kpi-value {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.2;
+    word-break: keep-all;
+  }
+  .mv2-kpi-value.pos { color: #34d399; }
+  .mv2-kpi-value.neg { color: #f87171; }
+  .mv2-kpi-sub {
+    font-size: 0.62rem;
+    color: var(--text-secondary);
+  }
+  .mv2-kpi-sub.pos { color: #34d399; }
+  .mv2-kpi-sub.neg { color: #f87171; }
+
+  /* 기존 큰 카드(markets-grid)를 홈 kpi 하단으로 위치 유지하되 여백 축소 */
+  .markets-grid { gap: 10px !important; margin-top: 4px !important; }
+  /* 기존 mc-equity-label은 이미 큰 숫자 표시 중 → 숨김 (kpi로 대체) */
+  body.page-home .mc-equity-label,
+  body.page-home .mc-equity-val { display: none !important; }
+  /* Market card 자체는 유지 (리스크/AI엔진 정보 접근용) */
+}
+
+/* ─────────────────────────────────────────────────────────
+   P1-D. 포지션 스와이프 카드 (모바일 전용)
+   ───────────────────────────────────────────────────────── */
+.mv2-pos-swipe { display: none; }
+@media (max-width: 768px) {
+  .mv2-pos-swipe {
+    display: flex;
+    gap: 8px;
+    padding: 6px 14px 14px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mv2-pos-swipe::-webkit-scrollbar { display: none; }
+  .mv2-pos-card {
+    flex: 0 0 128px;
+    scroll-snap-align: start;
+    background: var(--bg-card, rgba(20, 23, 39, 0.8));
+    border: 1px solid var(--border-accent, rgba(99, 102, 241, 0.16));
+    border-radius: 12px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .mv2-pos-card .mv2-pc-sym {
+    font-size: 0.8rem;
+    color: #fff;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mv2-pos-card .mv2-pc-pnl {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .mv2-pos-card .mv2-pc-pnl.pos { color: #34d399; }
+  .mv2-pos-card .mv2-pc-pnl.neg { color: #f87171; }
+  .mv2-pos-card .mv2-pc-sub {
+    font-size: 0.62rem;
+    color: var(--text-muted);
+  }
+
+  /* 데스크톱 포지션 테이블은 홈에선 숨김 (trades 페이지에서 상세 제공) */
+  body.page-home #positions-table-card { display: none !important; }
+  body.page-home #kr-positions-full { display: none !important; }
+}
+
+/* ─────────────────────────────────────────────────────────
+   P2. Trades 카드 스택 (모바일 전용)
+   ───────────────────────────────────────────────────────── */
+.mv2-trades-cards { display: none; }
+@media (max-width: 768px) {
+  .mv2-trades-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 4px 12px;
+  }
+  .mv2-trade-card {
+    background: var(--bg-card, rgba(20, 23, 39, 0.6));
+    border: 1px solid rgba(99, 102, 241, 0.14);
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 6px 10px;
+    align-items: center;
+  }
+  .mv2-trade-card .mv2-tc-icon {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+  .mv2-trade-card .mv2-tc-icon.buy {
+    background: rgba(34, 211, 238, 0.18);
+    color: #22d3ee;
+  }
+  .mv2-trade-card .mv2-tc-icon.sell {
+    background: rgba(251, 113, 133, 0.18);
+    color: #fb7185;
+  }
+  .mv2-trade-card .mv2-tc-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .mv2-tc-sym {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mv2-tc-meta {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .mv2-tc-pnl {
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .mv2-tc-pnl.pos { color: #34d399; }
+  .mv2-tc-pnl.neg { color: #f87171; }
+  .mv2-tc-pnl.muted { color: var(--text-secondary); font-size: 0.76rem; }
+  .mv2-tc-pnl-sub {
+    font-size: 0.66rem;
+    color: var(--text-muted);
+  }
+
+  /* 기존 trades 테이블은 모바일에서 숨김 (:has 사용 — Chrome 105+, Safari 15.4+) */
+  body.page-trades .card:has(#trades-body) > div:last-child {
+    display: none !important;
+  }
+  /* 필터 바/통계 카드 등은 유지 */
+}
+
+/* ─────────────────────────────────────────────────────────
+   P3. Performance 탭 분할 (모바일 전용)
+   ───────────────────────────────────────────────────────── */
+.mv2-perf-tabs { display: none; }
+@media (max-width: 768px) {
+  .mv2-perf-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 4px 4px 10px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mv2-perf-tabs::-webkit-scrollbar { display: none; }
+  .mv2-perf-tab-btn {
+    flex-shrink: 0;
+    padding: 8px 14px;
+    border-radius: 18px;
+    background: rgba(99, 102, 241, 0.06);
+    border: 1px solid rgba(99, 102, 241, 0.14);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    min-height: 36px;
+  }
+  .mv2-perf-tab-btn.active {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(129, 140, 248, 0.18));
+    color: #fff;
+    border-color: rgba(99, 102, 241, 0.4);
+  }
+  /* 모바일에서 성과 페이지 섹션 표시 제어 */
+  body.page-performance .perf-section { display: none; }
+  body.page-performance .perf-section.mv2-active { display: block; }
+}
+
+/* ─────────────────────────────────────────────────────────
+   P5. Skeleton Loading
+   ───────────────────────────────────────────────────────── */
+.mv2-skel {
+  background: linear-gradient(
+    90deg,
+    rgba(99, 102, 241, 0.05) 0%,
+    rgba(99, 102, 241, 0.15) 50%,
+    rgba(99, 102, 241, 0.05) 100%
+  );
+  background-size: 200% 100%;
+  animation: mv2-skel-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+  color: transparent !important;
+  pointer-events: none;
+}
+@keyframes mv2-skel-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
