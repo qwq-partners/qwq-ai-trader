@@ -132,6 +132,12 @@ class DashboardServer:
 .card:has(#cfg-us-market) { display: none !important; }
 /* US 카드가 사라진 상태에서 KR 카드를 전폭으로 확장 */
 .markets-grid { grid-template-columns: 1fr !important; }
+/* 2026-04-23 추가: 티커 스트립의 US 지수(S&P500/NASDAQ/DOW) 숨김
+   구조: <span nav-ti nav-ti-us>NAME</span><span nav-tv>VAL</span><span nav-ts>·</span>
+   인접 형제 2개까지 같이 숨김 */
+.nav-ti-us,
+.nav-ti-us + .nav-tv,
+.nav-ti-us + .nav-tv + .nav-ts { display: none !important; }
 </style>
 <script id="us-disable-script">
 window.US_ENABLED = false;
@@ -143,6 +149,23 @@ document.addEventListener("DOMContentLoaded", function() {
         var cur = localStorage.getItem("market_filter");
         if (cur === "us" || cur === "all") { localStorage.setItem("market_filter", "kr"); }
     } catch(e) {}
+    // 티커 빌더가 US 지수를 내보내지 않도록 데이터 필터 래퍼 (common.js 실행 후 DOM mutation 방어)
+    try {
+        var _stripEl = document.getElementById('nav-ticker-inner');
+        if (_stripEl) {
+            var _observer = new MutationObserver(function() {
+                _stripEl.querySelectorAll('.nav-ti-us').forEach(function(ti) {
+                    // 함께 따라붙는 값(.nav-tv)과 구분자(.nav-ts) 제거
+                    var nx1 = ti.nextElementSibling;
+                    var nx2 = nx1 ? nx1.nextElementSibling : null;
+                    ti.remove();
+                    if (nx1 && nx1.classList.contains('nav-tv')) nx1.remove();
+                    if (nx2 && nx2.classList.contains('nav-ts')) nx2.remove();
+                });
+            });
+            _observer.observe(_stripEl, { childList: true, subtree: false });
+        }
+    } catch(e) {}
 });
 </script>
 """
@@ -152,8 +175,8 @@ document.addEventListener("DOMContentLoaded", function() {
     _MOBILE_V2_SNIPPET = """
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0e18">
-<link rel="stylesheet" href="/static/css/mobile-v2.css?v=3">
-<script defer src="/static/js/mobile-v2.js?v=3"></script>
+<link rel="stylesheet" href="/static/css/mobile-v2.css?v=4">
+<script defer src="/static/js/mobile-v2.js?v=4"></script>
 """
 
     def _serve_page(self, template_name: str):

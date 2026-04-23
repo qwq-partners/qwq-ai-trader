@@ -250,7 +250,13 @@
         wrap.innerHTML = `<div style="color:var(--text-muted);font-size:.75rem;padding:14px;">보유 포지션 없음</div>`;
         return;
       }
-      wrap.innerHTML = list.map((p) => {
+      // 2026-04-23: 수익률 내림차순 정렬 (수익 큰 종목 먼저)
+      const sorted = [...list].sort((a, b) => {
+        const pa = a.pnl_pct ?? a.unrealized_pnl_pct ?? 0;
+        const pb = b.pnl_pct ?? b.unrealized_pnl_pct ?? 0;
+        return pb - pa;
+      });
+      wrap.innerHTML = sorted.map((p) => {
         const pnlPct = p.pnl_pct ?? p.unrealized_pnl_pct ?? 0;
         const sName = p.name || p.symbol;
         return `
