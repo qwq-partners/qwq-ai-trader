@@ -57,6 +57,8 @@ class ScreenedStock:
     has_inst_buying: bool = False     # 기관 순매수
     rsi: Optional[float] = None      # RSI-14 (장중품질 과열 필터용)
     atr_pct: Optional[float] = None  # ATR-14 % (동적 변동률 캡용)
+    per: Optional[float] = None      # PER (R8 펀더멘탈 필터용)
+    pbr: Optional[float] = None      # PBR (R8 펀더멘탈 필터용)
 
     def __hash__(self):
         return hash(self.symbol)
@@ -840,6 +842,11 @@ class StockScreener:
                 pbr = val.get("pbr", 0)
                 eps = val.get("eps", 0)
                 bps = val.get("bps", 0)
+
+                # 2026-04-23 추가: PER/PBR을 ScreenedStock에 보존 (cross_validator R8 활성화)
+                # 0이면 None으로 저장 (결손 구분)
+                all_stocks[symbol].per = float(per) if per else None
+                all_stocks[symbol].pbr = float(pbr) if pbr else None
 
                 # 재무 건전성 평가
                 bonus = 0

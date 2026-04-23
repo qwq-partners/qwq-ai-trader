@@ -2423,6 +2423,9 @@ JSON:
                                                     _supply_cache.get(stock.symbol, {}).get("inst_net_buy")
                                                     if _supply_cache else None
                                                 ),
+                                                # 2026-04-23 추가: PER/PBR 전달 (R8 활성화)
+                                                "per": getattr(stock, "per", None),
+                                                "pbr": getattr(stock, "pbr", None),
                                             },
                                         },
                                     )
