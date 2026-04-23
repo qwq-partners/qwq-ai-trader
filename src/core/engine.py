@@ -706,20 +706,31 @@ class UnifiedEngine:
             logger.debug(f"[리스크] 포지션 현황: {effective_positions}개 (보유={len(self.portfolio.positions)})")
 
         # 3-1. 섹터 분산 체크 (P0-5)
+        # 2026-04-23 수정: pending 섹터 카운트 추가 (TOCTOU 버그 수정)
+        #   기존엔 portfolio.positions만 카운트 → 같은 섹터 2종목이 동시에 pending이면
+        #   각각 통과하여 max_sector_positions 우회. _pending_sector_map의 미체결 섹터도 합산.
         max_per_sector = risk.max_positions_per_sector
         if sector and max_per_sector > 0 and symbol not in self.portfolio.positions:
             same_sector_positions = [
                 (s, p) for s, p in self.portfolio.positions.items() if p.sector == sector
             ]
-            same_sector = len(same_sector_positions)
+            pending_same_sector = [
+                sym for sym, sec in self._pending_sector_map.items()
+                if sec == sector and sym not in self.portfolio.positions and sym != symbol
+            ]
+            same_sector = len(same_sector_positions) + len(pending_same_sector)
             if same_sector >= max_per_sector:
-                return False, f"섹터 포지션 한도 초과 ({sector}: {same_sector}/{max_per_sector})"
+                _existing = [s for s, _ in same_sector_positions] + pending_same_sector
+                return False, (
+                    f"섹터 포지션 한도 초과 ({sector}: "
+                    f"{same_sector}/{max_per_sector}, 기존+pending={_existing})"
+                )
             # 동일 섹터 2번째 진입 시 경고 (상관관계 리스크)
             if same_sector >= 1:
-                existing = [s for s, _ in same_sector_positions]
+                existing = [s for s, _ in same_sector_positions] + pending_same_sector
                 logger.warning(
                     f"[리스크] 동일 섹터 추가 진입 경고: {symbol} → {sector} "
-                    f"(기존 {existing}, {same_sector+1}/{max_per_sector})"
+                    f"(기존+pending {existing}, {same_sector+1}/{max_per_sector})"
                 )
         # 통과 시 sector 임시 저장 → on_fill에서 position.sector 설정에 사용
         if sector:
@@ -1094,15 +1105,28 @@ class RiskManager:
         block_gate: Optional[str] = None,
         block_reason: Optional[str] = None,
         adjusted_score: Optional[float] = None,
+        original_score: Optional[float] = None,
         regime: str = "",
     ) -> None:
-        """시그널 이벤트를 DB에 fire-and-forget으로 기록 (BUY만)"""
+        """시그널 이벤트를 DB에 fire-and-forget으로 기록 (BUY만)
+
+        2026-04-23 수정: 기존엔 `event.score`를 그대로 읽어 `_score`로 기록했는데,
+        호출자가 event.score를 이미 감점 후 값으로 mutate한 뒤 호출하는 경우가 있어
+        DB의 score 컬럼도 감점 후 값이 돼 원본 score가 소실됐다.
+        이제 original_score 인자를 우선 사용하고, 없으면 metadata['original_score'] 폴백.
+        """
         if event.side != OrderSide.BUY:
             return
         meta = event.metadata or {}
         # score 0이 유효한 값이므로 or 패턴 대신 None 체크
-        _score = float(event.score) if event.score is not None else 0.0
-        _adj_score = float(adjusted_score) if adjusted_score is not None else _score
+        _event_score = float(event.score) if event.score is not None else 0.0
+        if original_score is not None:
+            _score = float(original_score)
+        elif meta.get("original_score") is not None:
+            _score = float(meta["original_score"])
+        else:
+            _score = _event_score
+        _adj_score = float(adjusted_score) if adjusted_score is not None else _event_score
         _regime = regime if regime else getattr(self.engine, "_market_regime", "")
         task = asyncio.create_task(
             _SigLog.get().log(
@@ -1332,26 +1356,35 @@ class RiskManager:
                 metadata=_meta,
                 market_regime=_regime,
             )
+            # 원본 점수 보존 (로그/DB 추적용)
+            _orig_score = float(event.score) if event.score is not None else 0.0
             if not _cv_pass:
                 logger.info(f"[크로스검증] {event.symbol} 차단: {_cv_reason}")
                 self._log_sig(event, event_type="blocked", block_gate="G2_cross",
-                              block_reason=_cv_reason, regime=_regime)
+                              block_reason=_cv_reason, regime=_regime,
+                              original_score=_orig_score,
+                              adjusted_score=float(_cv_score))
                 return None
             if _cv_score != event.score:
-                # 원본 점수 보존 (저널/로그 추적용)
                 if event.metadata is None:
                     event.metadata = {}
-                event.metadata["original_score"] = event.score
-                event.metadata["cross_adjustment"] = round(_cv_score - event.score, 1)
-                _orig_score = float(event.score)
+                event.metadata["original_score"] = _orig_score
+                event.metadata["cross_adjustment"] = round(_cv_score - _orig_score, 1)
                 event.score = _cv_score
                 self._log_sig(event, event_type="penalized", adjusted_score=float(_cv_score),
+                              original_score=_orig_score,
                               block_gate="G2_cross",
                               block_reason=f"크로스 검증 감점 {_orig_score:.0f}→{_cv_score:.0f}",
                               regime=_regime)
 
-            # LLM 이중 검증: 고점수(85+) + 비강세장 — 하루 최대 5회
-            if _cv_score >= 85 and _regime != "bull":
+            # 2026-04-23 재설계: LLM 이중검증 기준 완화
+            #   거래분석 결과: LLM 차단 40건 → 5일 내 재진입 시 avg +5.72% (차단이 오히려 기회 손실).
+            #   특히 SK하이닉스/하나금융 등 고점수(93~99) 종목을 잘못 차단한 케이스가 다수.
+            #   변경:
+            #   - score >= 95는 LLM 우회 (강한 모멘텀은 검증 건너뜀)
+            #   - LLM 거부 시 차단 대신 position_multiplier 50% 축소로 완화
+            #   - 85~94 범위만 LLM 보조 검증 사용
+            if 85 <= _cv_score < 95 and _regime != "bull":
                 _llm_ok = await self._cross_validator.llm_second_check(
                     symbol=event.symbol,
                     strategy=event.strategy.value if event.strategy else "",
@@ -1361,14 +1394,31 @@ class RiskManager:
                     sector=_meta.get("sector", ""),
                 )
                 if not _llm_ok:
-                    logger.info(f"[크로스검증] {event.symbol} LLM 이중검증 거부")
+                    # 차단 대신 사이즈 50% 축소 (기회 손실 최소화)
+                    # 2026-04-23 코드리뷰 보강: event.signal.metadata None 방어
+                    #   기존엔 `if event.signal and event.signal.metadata:`만 체크해서
+                    #   metadata=None이면 축소 자체가 안 먹힘 → "LLM 거부인데 100% 사이즈"로 진입.
+                    #   이제 metadata가 None이어도 dict 초기화 후 0.5 세팅.
                     if event.metadata is None:
                         event.metadata = {}
-                    event.metadata["llm_second_check"] = "rejected"
-                    self._log_sig(event, event_type="blocked", block_gate="G4_llm",
-                                  block_reason="LLM 이중검증 거부 (85+점, 비강세장)",
+                    event.metadata["llm_second_check"] = "rejected_soft"
+                    _cur_mult = event.metadata.get("position_multiplier", 1.0)
+                    event.metadata["position_multiplier"] = float(_cur_mult) * 0.5
+                    # _calculate_position_size가 실제 읽는 곳 (engine.py:1856+ 참조)
+                    if event.signal is not None:
+                        if event.signal.metadata is None:
+                            event.signal.metadata = {}
+                        _sig_mult = event.signal.metadata.get("position_multiplier", 1.0)
+                        event.signal.metadata["position_multiplier"] = float(_sig_mult) * 0.5
+                    logger.info(
+                        f"[크로스검증] {event.symbol} LLM 이중검증 soft-reject "
+                        f"→ 사이즈 50% 축소 후 진행 (차단 아님)"
+                    )
+                    self._log_sig(event, event_type="penalized", block_gate="G4_llm",
+                                  block_reason="LLM 이중검증 거부 (사이즈 50% 축소)",
+                                  original_score=_orig_score,
+                                  adjusted_score=float(_cv_score),
                                   regime=_regime)
-                    return None
 
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
         if event.side == OrderSide.BUY:

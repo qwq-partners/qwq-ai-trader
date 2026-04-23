@@ -95,6 +95,26 @@ class CrossStrategyValidator:
         penalties = []
         adjusted_score = score
 
+        # 2026-04-23 추가: 지표 결손 시 보수적 감점 (risk-auditor 감사 결과)
+        # atr_pct 78.6%, PER/PBR 87.7%, 수급 78.6% 결손 → R6/R7/R8/R2 사실상 비활성.
+        # 단기 임시 방편: 지표 None이면 "불확실 = 의심" 원칙으로 -2점 × 결손 지표 수.
+        # 장기: screener에서 지표 필수 공급 강제 필요 (별도 작업).
+        _missing_key_indicators = []
+        if indicators.get("atr_pct") is None and indicators.get("atr_14") is None:
+            _missing_key_indicators.append("ATR")
+        if indicators.get("per") is None:
+            _missing_key_indicators.append("PER")
+        if indicators.get("pbr") is None:
+            _missing_key_indicators.append("PBR")
+        # 수급은 KR 전용
+        if self._market == "KR":
+            if indicators.get("foreign_net_buy") is None and indicators.get("inst_net_buy") is None:
+                _missing_key_indicators.append("수급")
+        if _missing_key_indicators:
+            _missing_penalty = min(len(_missing_key_indicators) * 2, 8)  # 최대 -8점
+            adjusted_score -= _missing_penalty
+            penalties.append(f"지표결손({','.join(_missing_key_indicators)}) -{_missing_penalty}")
+
         # === 규칙 1: 기술적 과매수 상태에서 추세 전략 매수 ===
         # 중복 감점 주의: kr_screener._apply_momentum_filter가 이미 RSI>75 시 -10, >70 시 -5 적용.
         # 여기서는 크로스검증 단계(체제/수급 종합 판단) 보정이므로 감점 규모를 -5로 축소해
@@ -267,9 +287,13 @@ class CrossStrategyValidator:
             self._daily_llm_count = 0
             self._daily_llm_count_date = today
         if self._daily_llm_count >= self._daily_llm_max:
-            logger.debug(
-                f"[크로스검증] LLM 이중검증 일일 한도 초과 "
-                f"({self._daily_llm_max}회) → 자동 통과"
+            # 2026-04-23 수정: 한도 소진 시 경고 로그 승격 + 통과 유지
+            # 기존엔 debug 로그라 LLM 보호 상실 인지 지연 → warning으로 즉시 알림
+            # 상위 호출자(engine.py:1389)가 변동성 큰 날 본 로그를 보고 수동 조치 가능
+            logger.warning(
+                f"[크로스검증] LLM 이중검증 일일 한도 소진 "
+                f"({self._daily_llm_max}회) → fail-open 통과. "
+                f"고변동 날엔 수동 모니터링 필요."
             )
             return True
         self._daily_llm_count += 1

@@ -230,8 +230,14 @@ class ThemeChasingStrategy(BaseStrategy):
         if change_pct < self.theme_config.min_change_pct:
             return None
 
-        # 시간대별 등락률 상한 차등 + 오후 진입 차단
+        # 시간대별 진입 차단 (2026-04-23 강화)
+        # 거래분석 결과: 09시 진입 2건 0승, 14시 이후 진입 2건 0승 — 시간대 전패 패턴
+        # 장초반 30분(09:00~09:30): 변동성 폭 + 가격 발견 과정 → 테마 진입 금지
+        # 오후(14:00~): 오버나이트 갭 리스크 → 진입 금지
         now_time = datetime.now().strftime("%H:%M")
+        if now_time < "09:30":
+            logger.debug(f"[테마 추종] {symbol} 장초반 30분 진입 차단 ({now_time}<09:30) — 변동성/가격발견 회피")
+            return None
         if now_time >= "14:00":
             logger.debug(f"[테마 추종] {symbol} 오후 진입 차단 (14:00+) — 오버나이트 갭 리스크")
             return None
@@ -409,6 +415,13 @@ class ThemeChasingStrategy(BaseStrategy):
         # ATR 기반 포지션 사이징 (고변동 → 비중 축소)
         _atr_val = atr_pct if atr_pct is not None else 0
         _pos_mult = atr_position_multiplier(_atr_val)
+
+        # 2026-04-23 추가: 고점수(≥90) 테마는 사이즈 50% 축소
+        # 거래분석 결과: 고점수(≥85) avg -0.82%, 저점수(<85) avg -0.46%
+        # 고점수가 오히려 더 손실 — 테마 고점 추격 매수 경향.
+        if score >= 90:
+            _pos_mult *= 0.5
+            logger.info(f"[테마 추종] {symbol} 고점수({score:.0f}≥90) 사이즈 50% 축소 적용")
 
         # 구조화 진입 근거 (2026-04-21 도입 — 사후 복기/진화 학습 신호)
         _reasons: List[str] = [
