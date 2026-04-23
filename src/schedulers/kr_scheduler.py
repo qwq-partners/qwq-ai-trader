@@ -377,6 +377,9 @@ class KRScheduler:
                         logger.debug(f"[테마확산체크] {symbol} 평가 오류: {_diff_e}")
 
             # theme_chasing 장마감 전 EOD 청산 (15:10 이후, 손실 포지션 우선 정리)
+            # 2026-04-23 수정: pending 등록 누락으로 1~2초 내 동일 시그널 100+회 emit 버그 수정
+            #   기존에는 emit만 하고 pending 미등록 → 다음 price tick에서 line 346 체크 전에
+            #   엔진 큐가 처리 못 해 여러 번 통과 → 로그/큐 스팸. 이제 emit 직전에 pending 등록.
             _now_hm = datetime.now().strftime("%H:%M")
             if position.strategy == "theme_chasing" and _now_hm >= "15:10":
                 _theme_pnl_pct = float(position.unrealized_pnl_pct)
@@ -386,6 +389,10 @@ class KRScheduler:
                         f"수익률={_theme_pnl_pct:+.1f}% < +1.0% (갭리스크 방지)"
                     )
                     _eod_qty = position.quantity
+                    # 동기적 pending 등록 (다음 tick에서 line 344 guard 즉시 작동)
+                    bot._exit_pending_symbols.add(symbol)
+                    bot._exit_pending_timestamps[symbol] = datetime.now()
+                    bot._exit_reasons[symbol] = f"테마EOD: 수익률 {_theme_pnl_pct:+.1f}%"
                     # 매도 시그널 발행 (engine.on_signal 경유 → 정상 주문 경로)
                     _eod_signal = Signal(
                         symbol=symbol,
