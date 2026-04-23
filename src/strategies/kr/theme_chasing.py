@@ -477,7 +477,20 @@ class ThemeChasingStrategy(BaseStrategy):
             },
             metadata={
                 "strategy_name": self.name,
-                "indicators": dict(self._indicators.get(symbol, {})),
+                "indicators": {
+                    **dict(self._indicators.get(symbol, {})),
+                    # 2026-04-23 추가: 수급 데이터 주입 (cross_validator R2 활성화)
+                    #   기존엔 수급 데이터가 metadata에 없어 R2(기관+외국인 동시 매도) 규칙이 비활성.
+                    #   이제 _foreign_cache/_institution_cache에서 가져와 indicators에 포함.
+                    "foreign_net_buy": (
+                        self._foreign_cache.get(symbol, {}).get("net_buy", 0)
+                        if self._foreign_cache else None
+                    ),
+                    "inst_net_buy": (
+                        self._institution_cache.get(symbol, {}).get("net_buy", 0)
+                        if self._institution_cache else None
+                    ),
+                },
                 "atr_pct": _atr_val,
                 "position_multiplier": _pos_mult,
                 "theme_name": hot_theme_name,

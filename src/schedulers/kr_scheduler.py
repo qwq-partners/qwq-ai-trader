@@ -2198,6 +2198,19 @@ JSON:
                                 # RSI(2) 계산 불가 → 08:20 + 12:30 배치 스캔(SwingScreener)으로만 처리
                                 # (ScreenedStock은 RSI-14만 있고 indicators 속성 없음)
 
+                                # 2026-04-23 추가: 수급 캐시 로드 (cross_validator R2 활성화용)
+                                # supply_demand_YYYYMMDD.json: {symbol: {foreign_net_buy, inst_net_buy}}
+                                _supply_cache: Dict[str, Dict[str, int]] = {}
+                                try:
+                                    _sd_path = (
+                                        Path.home() / ".cache" / "ai_trader" /
+                                        f"supply_demand_{datetime.now().strftime('%Y%m%d')}.json"
+                                    )
+                                    if _sd_path.exists():
+                                        _supply_cache = json.loads(_sd_path.read_text())
+                                except Exception as _sd_err:
+                                    logger.debug(f"[스크리닝] 수급 캐시 로드 실패: {_sd_err}")
+
                                 for stock in candidates[:8]:
                                     if signals_emitted >= 5:
                                         break
@@ -2398,6 +2411,19 @@ JSON:
                                             "sector": _sector,
                                             "news_validation": _confidence_adj,
                                             "position_multiplier": _pos_mult,
+                                            # 2026-04-23 추가: cross_validator R2 활성화 (수급 체크)
+                                            # indicators dict 하위에 foreign/inst net_buy 주입
+                                            "indicators": {
+                                                "atr_pct": atr_pct,
+                                                "foreign_net_buy": (
+                                                    _supply_cache.get(stock.symbol, {}).get("foreign_net_buy")
+                                                    if _supply_cache else None
+                                                ),
+                                                "inst_net_buy": (
+                                                    _supply_cache.get(stock.symbol, {}).get("inst_net_buy")
+                                                    if _supply_cache else None
+                                                ),
+                                            },
                                         },
                                     )
 
