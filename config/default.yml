@@ -73,6 +73,21 @@ kr:
       short_term_pct: 30.0
       swing_pct: 50.0
 
+  # 2026-04-23 추가: 크로스검증/LLM/교체 튜닝 파라미터 (진화 시스템 연동 가능)
+  validator:
+    # CrossStrategyValidator
+    min_pass_score: 50                    # 감점 후 이 미만이면 차단
+    missing_indicator_penalty_step: 2     # 지표 1개 결손당 감점
+    missing_indicator_penalty_cap: 8      # 최대 감점 (4개 결손부터 적용)
+    llm_daily_max: 10                     # LLM 이중검증 하루 최대 호출수
+    # G4 LLM 트리거 (engine RiskManager)
+    llm_check_score_min: 85               # 이 이상에서 LLM 호출 시작
+    llm_bypass_score: 95                  # 이 이상에선 LLM 우회 (강한 모멘텀 신뢰)
+    llm_reject_size_mult: 0.5             # LLM 거부 시 포지션 사이즈 배율
+    # 포지션 만석 자동 교체
+    replacement_min_score: 85             # 이 점수 이상 신규 시그널만 교체 트리거
+    replacement_cooldown_sec: 600         # 같은 포지션 재축출 쿨다운(초)
+
   strategies:
     defaults:
       holding_period_days: 3

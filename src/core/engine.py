@@ -33,7 +33,7 @@ from .event import (
 from .types import (
     Order, Fill, Position, Portfolio, Signal, RiskMetrics,
     OrderSide, OrderStatus, OrderType, TradingConfig, RiskConfig, MarketSession,
-    StrategyType, TimeHorizon
+    StrategyType, TimeHorizon, SignalStrength
 )
 from .market_context import MarketContext
 
@@ -970,7 +970,7 @@ class RiskManager:
     """
 
     def __init__(self, engine: UnifiedEngine, config: RiskConfig, risk_validator=None,
-                 sector_lookup=None):
+                 sector_lookup=None, validator_config: Optional[dict] = None):
         self.engine = engine
         self.config = config
 
@@ -979,6 +979,9 @@ class RiskManager:
 
         # 섹터 조회 콜러블 (async def(symbol) -> Optional[str])
         self._sector_lookup = sector_lookup
+
+        # 2026-04-23 추가: validator 튜닝 dict (YAML `validator:` 섹션)
+        _vcfg = validator_config or {}
 
         # LLM 매니저 (크로스 검증 + 거래 메모리 공유)
         from ..utils.llm import get_llm_manager
@@ -997,6 +1000,11 @@ class RiskManager:
         self._cross_validator = CrossStrategyValidator(
             portfolio=engine.portfolio,
             risk_manager=risk_validator,
+            # YAML 토글 (없으면 클래스 default)
+            min_pass_score=_vcfg.get("min_pass_score"),
+            missing_indicator_penalty_step=_vcfg.get("missing_indicator_penalty_step"),
+            missing_indicator_penalty_cap=_vcfg.get("missing_indicator_penalty_cap"),
+            llm_daily_max=_vcfg.get("llm_daily_max"),
             trade_memory=self._trade_memory,
             llm_manager=_llm_mgr,
             trade_wiki=self._trade_wiki,
@@ -1011,15 +1019,25 @@ class RiskManager:
         self._last_signal_time: Dict[str, datetime] = {}
         self._SIGNAL_COOLDOWN_SECONDS = 30  # 60→30: 빠른 신호 처리
 
-        # 2026-04-23 추가: G4 LLM 검증 임계값 (튜닝 가능 상수)
+        # 2026-04-23 추가: G4 LLM 검증 임계값 (YAML 토글 가능)
         # - score < _LLM_CHECK_MIN: LLM 건너뜀 (저점수는 R1~R9로 충분)
         # - _LLM_CHECK_MIN ≤ score < _LLM_BYPASS_AT: LLM 호출, 거부 시 사이즈 축소
         # - score ≥ _LLM_BYPASS_AT: LLM 완전 우회 (강한 모멘텀 신뢰)
         # - LLM 거부 시 포지션 multiplier 배율 (0.5 = 50% 축소)
         # 거래분석 근거: LLM 차단 40건 재진입 시 avg +5.72% → 기존 차단이 기회 손실
-        self._LLM_CHECK_MIN = 85
-        self._LLM_BYPASS_AT = 95
-        self._LLM_REJECT_SIZE_MULT = 0.5
+        self._LLM_CHECK_MIN = int(_vcfg.get("llm_check_score_min", 85))
+        self._LLM_BYPASS_AT = int(_vcfg.get("llm_bypass_score", 95))
+        self._LLM_REJECT_SIZE_MULT = float(_vcfg.get("llm_reject_size_mult", 0.5))
+
+        # 2026-04-23 추가: 포지션 만석 시 자동 교체 임계값 (YAML 토글 가능)
+        # 새 시그널의 adjusted_score가 이 이상이면 가장 약한 비코어 포지션 축출 시도.
+        # 축출 조건(_try_evict_weakest_position):
+        # - core_holding 제외 (코어 보호)
+        # - 수익 중인 포지션 제외 (승자 킬 금지)
+        # - 진입 점수 가장 낮고 손실 큰 포지션 우선 매도
+        self._REPLACEMENT_MIN_SCORE = int(_vcfg.get("replacement_min_score", 85))
+        self._REPLACEMENT_LAST_EVICT_TS: Dict[str, datetime] = {}
+        self._REPLACEMENT_COOLDOWN_SEC = int(_vcfg.get("replacement_cooldown_sec", 600))
 
         # 현금 부족 로그 쓰로틀링
         self._last_cash_warn_time: Optional[datetime] = None
@@ -1099,6 +1117,114 @@ class RiskManager:
     def _get_core_actual_value(self) -> Decimal:
         """코어홀딩 실제 점유 금액 (비코어 풀 보호용)"""
         return self.engine.portfolio.get_strategy_allocation("core_holding")
+
+    async def _try_evict_weakest_position(
+        self, *, new_symbol: str, new_score: float, new_reason: str
+    ) -> Optional[str]:
+        """
+        포지션 만석 시 자동 교체 — 가장 약한 비코어 포지션 매도 시그널 발행.
+
+        선정 기준 (우선순위):
+        1. 코어홀딩(core_holding) 제외
+        2. 수익 중인 포지션 제외 (unrealized_pnl_pct > 0 은 보호)
+        3. pending 상태 제외 (이미 청산 진행 중)
+        4. 최근 10분 내 교체 시도 대상 제외 (쿨다운)
+        5. 점수: 진입 점수 낮은 순 (signal_score 없으면 0)
+        6. 손익: 손실이 큰 순 (더 나쁜 성과 우선 축출)
+
+        실제 매수는 여기서 실행하지 않음. 매도 시그널 발행 후 체결되면 다음 screening
+        cycle에서 새 후보가 자연 진입 (타이밍/TOCTOU 안전).
+
+        Returns:
+            축출 대상 symbol, 없으면 None
+        """
+        try:
+            now = datetime.now()
+            candidates = []
+            for sym, pos in self.engine.portfolio.positions.items():
+                if pos.strategy == "core_holding":
+                    continue
+                if sym in self._pending_orders:
+                    continue
+                pnl_pct = float(getattr(pos, 'unrealized_pnl_pct', 0) or 0)
+                if pnl_pct > 0:
+                    continue  # 승자 킬 금지
+                # 쿨다운 체크
+                _last_ts = self._REPLACEMENT_LAST_EVICT_TS.get(sym)
+                if _last_ts and (now - _last_ts).total_seconds() < self._REPLACEMENT_COOLDOWN_SEC:
+                    continue
+                entry_score = float(getattr(pos, 'entry_signal_score', 0) or 0)
+                candidates.append((sym, pos, entry_score, pnl_pct))
+
+            if not candidates:
+                logger.info(
+                    f"[리스크] 교체 대상 없음 (신규 {new_symbol} 점수 {new_score:.0f}): "
+                    f"모든 비코어 포지션이 수익 중 or pending or 쿨다운"
+                )
+                return None
+
+            # 정렬: 진입 점수 낮은 순(1순위), 손실 큰 순(2순위)
+            candidates.sort(key=lambda x: (x[2], x[3]))
+            victim_sym, victim_pos, victim_score, victim_pnl = candidates[0]
+
+            # 신규 점수가 기존 점수보다 실제로 높은지 확인 (최소 +5점 우위)
+            if new_score < victim_score + 5:
+                logger.info(
+                    f"[리스크] 교체 스킵: 신규 {new_symbol}({new_score:.0f}) "
+                    f"vs 축출 후보 {victim_sym}({victim_score:.0f}) — 우위 <5점"
+                )
+                return None
+
+            # 매도 시그널 발행 (자체 이벤트 큐로 re-entrant)
+            from .event import SignalEvent
+            _strat_type = StrategyType.SEPA_TREND
+            if victim_pos.strategy:
+                try:
+                    _strat_type = StrategyType(victim_pos.strategy)
+                except ValueError:
+                    pass
+            _cur_price = getattr(victim_pos, 'current_price', None) or victim_pos.avg_price
+            _sell_signal = Signal(
+                symbol=victim_sym,
+                side=OrderSide.SELL,
+                strength=SignalStrength.STRONG,
+                strategy=_strat_type,
+                price=_cur_price,
+                score=100.0,
+                confidence=1.0,
+                reason=(
+                    f"포지션 교체: 신규 {new_symbol}(점수 {new_score:.0f}) "
+                    f"→ 약점 포지션 {victim_sym}(진입 {victim_score:.0f}, {victim_pnl:+.1f}%) 청산"
+                ),
+                metadata={
+                    "source": "replacement",
+                    "quantity": victim_pos.quantity,
+                    "exit_action": "replacement_exit",
+                    "replaced_by": new_symbol,
+                    "new_score": new_score,
+                },
+            )
+            _sell_event = SignalEvent.from_signal(_sell_signal, source="replacement")
+            await self.engine.emit(_sell_event)
+
+            # 쿨다운 기록 + 추적
+            self._REPLACEMENT_LAST_EVICT_TS[victim_sym] = now
+            # dict 크기 방어
+            if len(self._REPLACEMENT_LAST_EVICT_TS) > 100:
+                _cutoff = now - timedelta(seconds=self._REPLACEMENT_COOLDOWN_SEC * 2)
+                self._REPLACEMENT_LAST_EVICT_TS = {
+                    s: t for s, t in self._REPLACEMENT_LAST_EVICT_TS.items() if t > _cutoff
+                }
+
+            logger.info(
+                f"[리스크] 교체 매도 시그널 발행: {victim_sym} "
+                f"(진입점수 {victim_score:.0f}, 현재 {victim_pnl:+.1f}%) "
+                f"→ 신규 {new_symbol}({new_score:.0f}) 교체 대비"
+            )
+            return victim_sym
+        except Exception as e:
+            logger.warning(f"[리스크] 교체 시도 중 오류 (무시): {e}")
+            return None
 
     def block_symbol(self, symbol: str):
         """종목 주문 쿨다운 등록 (외부에서 호출)"""
@@ -1555,6 +1681,21 @@ class RiskManager:
                     sector=_sector,
                 )
                 if not can_trade:
+                    # 2026-04-23 추가: "최대 포지션 수 도달" 시 자동 교체 로직
+                    #   고점수(adjusted_score >= _REPLACEMENT_MIN_SCORE) 시그널이 만석에 막히면
+                    #   가장 약한 비코어 포지션을 자동 청산 → 다음 screening cycle에서 진입.
+                    #   실제 매수는 여기서 수행하지 않고 sell signal만 발행 (TOCTOU/타이밍 안전성).
+                    if ("최대 포지션 수 도달" in reason
+                            and event.score >= self._REPLACEMENT_MIN_SCORE):
+                        _evicted = await self._try_evict_weakest_position(
+                            new_symbol=order.symbol, new_score=float(event.score),
+                            new_reason=event.reason or "high-score replacement",
+                        )
+                        if _evicted:
+                            logger.info(
+                                f"[리스크] 포지션 교체: {_evicted} 청산 시그널 발행 "
+                                f"(신규 {order.symbol} 점수 {event.score:.0f} 우선)"
+                            )
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
                     self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                                   block_reason=reason)

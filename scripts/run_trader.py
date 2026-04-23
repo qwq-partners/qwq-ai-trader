@@ -743,13 +743,20 @@ class UnifiedTradingBot:
             self.engine.broker = self.broker
 
             # 엔진 이벤트 핸들링용 RiskManager (SIGNAL→ORDER, FILL 추적)
+            # 2026-04-23 추가: validator 튜닝 파라미터를 config/default.yml `kr.validator`에서 로드
+            _validator_cfg = kr_cfg.get("validator") or self.config.get("validator") or {}
             engine_risk_manager = RiskManager(
                 self.engine, self.config.trading.risk,
                 risk_validator=self.risk_manager,
                 sector_lookup=self._get_sector,
+                validator_config=_validator_cfg,
             )
             self.engine.risk_manager = engine_risk_manager
-            logger.info("[KR] 엔진 리스크 매니저 등록 완료")
+            logger.info(
+                f"[KR] 엔진 리스크 매니저 등록 완료 "
+                f"(validator: LLM 범위={engine_risk_manager._LLM_CHECK_MIN}~{engine_risk_manager._LLM_BYPASS_AT}, "
+                f"교체 임계={engine_risk_manager._REPLACEMENT_MIN_SCORE})"
+            )
 
             # 16. WebSocket 피드 초기화
             if not self.dry_run:

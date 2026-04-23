@@ -31,7 +31,12 @@ class CrossStrategyValidator:
 
     def __init__(self, portfolio=None, risk_manager=None, trade_memory=None,
                  llm_manager=None, market: str = "KR", trade_wiki=None,
-                 max_sector_positions: int = 2):
+                 max_sector_positions: int = 2,
+                 # 2026-04-23 추가: YAML 토글 가능 튜닝 파라미터
+                 min_pass_score: Optional[int] = None,
+                 missing_indicator_penalty_step: Optional[int] = None,
+                 missing_indicator_penalty_cap: Optional[int] = None,
+                 llm_daily_max: Optional[int] = None):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
         self._trade_memory = trade_memory
@@ -39,6 +44,14 @@ class CrossStrategyValidator:
         self._market = market  # "KR" 또는 "US"
         self._trade_wiki = trade_wiki  # 거래 위키 (교훈 컨텍스트)
         self._max_sector_positions = max_sector_positions  # 동일 섹터 최대 포지션 수 (설정 참조)
+
+        # YAML 토글 적용 (None이면 클래스 상수 사용)
+        if min_pass_score is not None:
+            self._MIN_PASS_SCORE = int(min_pass_score)
+        if missing_indicator_penalty_step is not None:
+            self._MISSING_IND_PENALTY_STEP = int(missing_indicator_penalty_step)
+        if missing_indicator_penalty_cap is not None:
+            self._MISSING_IND_PENALTY_CAP = int(missing_indicator_penalty_cap)
 
         # 오늘 검증 통계
         self._stats = {
@@ -52,7 +65,7 @@ class CrossStrategyValidator:
         # LLM 이중 검증 일일 한도 (비용 폭발 방지)
         self._daily_llm_count: int = 0
         self._daily_llm_count_date = None
-        self._daily_llm_max: int = 10  # 하루 최대 10회
+        self._daily_llm_max: int = int(llm_daily_max) if llm_daily_max is not None else 10
 
     def set_portfolio(self, portfolio):
         self._portfolio = portfolio
