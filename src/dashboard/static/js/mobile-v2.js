@@ -309,7 +309,14 @@
       if (tds.length < 4) return;
       // 텍스트 기반 파싱 (기존 테이블 구조 의존)
       const time = (tds[0]?.textContent || "").trim();
-      const symbolText = (tds[1]?.textContent || "").trim();
+      // 종목 컬럼: <div>name</div><div>code</div> 구조 → 첫 div(name)만 사용, 티커 코드 생략
+      const symTd = tds[1];
+      let symbolText = "";
+      if (symTd) {
+        const nameDiv = symTd.querySelector("div:first-child");
+        if (nameDiv) symbolText = (nameDiv.textContent || "").trim();
+        else symbolText = (symTd.textContent || "").trim();
+      }
       const type = (tds[2]?.textContent || "").trim();
       const price = (tds[3]?.textContent || "").trim();
       const qty = (tds[4]?.textContent || "").trim();
