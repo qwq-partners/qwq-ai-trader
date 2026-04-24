@@ -171,10 +171,14 @@ function renderSortedPositions() {
             : 'border-color:rgba(99,102,241,0.08); border-left:3px solid transparent;';
         const strategyColor = isCore ? 'var(--accent-amber)' : 'var(--accent-purple)';
         const _badgeMap = {
-            'core_holding':   '<span class="strat-badge sb-core" title="코어홀딩: SL -15%, 트레일링 8%, 분할익절 미사용">코어</span>',
-            'theme_chasing':  '<span class="strat-badge sb-theme" title="테마추종: 최대 3일 보유, 14:00 이후 신규진입 차단">테마</span>',
-            'gap_and_go':     '<span class="strat-badge sb-gap" title="갭상승: 09:20~10:30 한정, VWAP 이탈 즉시 청산">갭</span>',
-            'rsi2_reversal':  '<span class="strat-badge sb-rsi2" title="RSI(2) 과매도 반전: bear 체제 차단, ATR×2 손절">RSI2</span>',
+            'core_holding':     '<span class="strat-badge sb-core" title="코어홀딩: SL -15%, 트레일링 8%, 분할익절 미사용">코어</span>',
+            'theme_chasing':    '<span class="strat-badge sb-theme" title="테마추종: 최대 3일 보유, 14:00 이후 신규진입 차단">테마</span>',
+            'gap_and_go':       '<span class="strat-badge sb-gap" title="갭상승: 09:20~10:30 한정, VWAP 이탈 즉시 청산">갭</span>',
+            'rsi2_reversal':    '<span class="strat-badge sb-rsi2" title="RSI(2) 과매도 반전: bear 체제 차단, ATR×2 손절">RSI2</span>',
+            // 2026-04-24 추가: 일반 전략도 라벨링 (일관성)
+            'strategic_swing':  '<span class="strat-badge sb-swing" title="전략적 스윙: SEPA+수급+뉴스 복합, 3~7일 보유">스윙</span>',
+            'momentum_breakout':'<span class="strat-badge sb-momentum" title="모멘텀 돌파: 20일 신고가 돌파 + 거래량 급증">모멘텀</span>',
+            'sepa_trend':       '<span class="strat-badge sb-sepa" title="SEPA 추세: Weinstein 단계 분석, RS 등급 기반">SEPA</span>',
         };
         const stratBadge = _badgeMap[pos.strategy] || '';
 
