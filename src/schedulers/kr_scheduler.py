@@ -1436,10 +1436,14 @@ JSON:
                                                 avg_entry_price=float(_sell_pos_snap.avg_price),
                                             )
                                             logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
-                                            # 재진입 제한: 청산 종목 기록 (섹터 포함)
+                                            # 재진입 제한: 청산 종목 기록 (섹터 + 타입 포함)
+                                            # 2026-04-24: exit_type 전달 → 손실청산(stop_loss/breakeven)만 쿨다운 카운트
                                             if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
                                                 _exit_sector = getattr(_sell_pos_snap, 'sector', '')
-                                                bot.risk_manager.record_exit(fill.symbol, float(fill.price), sector=_exit_sector)
+                                                bot.risk_manager.record_exit(
+                                                    fill.symbol, float(fill.price),
+                                                    sector=_exit_sector, exit_type=_etype,
+                                                )
                                             # 거래 메모리: Layer 1 기록
                                             if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
                                                 try:
@@ -1591,7 +1595,11 @@ JSON:
                                                             f"{'전량' if _is_full_exit else '부분'})"
                                                         )
                                                         if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
-                                                            bot.risk_manager.record_exit(fill.symbol, float(fill.price))
+                                                            # 2026-04-24: DB 직접 기록 경로도 exit_type 전달
+                                                            bot.risk_manager.record_exit(
+                                                                fill.symbol, float(fill.price),
+                                                                exit_type=_etype2,
+                                                            )
                                                     else:
                                                         logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: 오픈 포지션 없음")
                                                 except Exception as _dbe:

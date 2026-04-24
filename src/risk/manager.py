@@ -338,6 +338,12 @@ class RiskManager:
         # 8. 당일 청산 누적 쿨다운 (D+1 분리)
         # 4/14 -8.42% 사고 대응: 같은 날 다수 청산 + 다수 신규 매수 방지
         # threshold=0 이면 비활성 (안전장치)
+        #
+        # 2026-04-24 개선: 수익 상태에선 차단 해제 (오탐 제거)
+        #   기존: 청산 횟수 ≥ 3 → 무조건 차단 (수익 익절 3건에도 발동)
+        #   개선: (손실청산 ≥ 3) AND (당일 PnL < -1%) 둘 다일 때만 차단
+        #   - record_exit에서 손실 청산(stop_loss/breakeven)만 카운트하도록 변경
+        #   - 여기선 추가로 당일 PnL 음수 조건 체크 → 수익 중이면 프리패스
         threshold = int(getattr(self.config, 'daily_exit_cooldown_threshold', 0) or 0)
         if threshold > 0:
             # 날짜 롤오버 방어 (외부에서 record_exit 안 불린 상태로 날짜 바뀔 때)
@@ -348,27 +354,58 @@ class RiskManager:
                 self._last_exit_cooldown_log.clear()
 
             if self._daily_exit_count >= threshold:
-                # 심볼별 60초 로그 쿨다운 (스팸 방지)
-                now = datetime.now()
-                _last = self._last_exit_cooldown_log.get(symbol)
-                if _last is None or (now - _last).total_seconds() >= 60:
-                    logger.warning(
-                        f"[리스크] 당일 청산 {self._daily_exit_count}건 누적 — "
-                        f"신규 매수 차단 ({symbol}), 다음 거래일 재개 예정"
+                # 당일 PnL < -1% 일 때만 차단 (수익 중에는 기회 허용)
+                _daily_pnl_pct = 0.0
+                try:
+                    _eq = float(portfolio.total_equity)
+                    _eff_pnl = float(getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl))
+                    _daily_pnl_pct = (_eff_pnl / _eq * 100) if _eq > 0 else 0.0
+                except Exception:
+                    pass
+
+                _NET_LOSS_GATE = -1.0  # 당일 손익 < -1% 일 때만 차단 트리거
+                if _daily_pnl_pct < _NET_LOSS_GATE:
+                    # 심볼별 60초 로그 쿨다운 (스팸 방지)
+                    now = datetime.now()
+                    _last = self._last_exit_cooldown_log.get(symbol)
+                    if _last is None or (now - _last).total_seconds() >= 60:
+                        logger.warning(
+                            f"[리스크] 당일 손실청산 {self._daily_exit_count}건 + "
+                            f"PnL {_daily_pnl_pct:+.1f}% — 신규 매수 차단 ({symbol})"
+                        )
+                        self._last_exit_cooldown_log[symbol] = now
+                    return False, (
+                        f"당일 손실청산 {self._daily_exit_count}건 누적 + "
+                        f"PnL {_daily_pnl_pct:+.1f}% < {_NET_LOSS_GATE:.0f}% → 차단"
                     )
-                    self._last_exit_cooldown_log[symbol] = now
-                return False, (
-                    f"당일 청산 {self._daily_exit_count}건 누적, 다음 거래일 재개"
-                )
+                else:
+                    # 쿨다운 임계 도달했지만 수익 중 — 허용 (로그는 60초 쿨다운)
+                    now = datetime.now()
+                    _last_key = f"__bypass__{symbol}"
+                    _last = self._last_exit_cooldown_log.get(_last_key)
+                    if _last is None or (now - _last).total_seconds() >= 60:
+                        logger.info(
+                            f"[리스크] 손실청산 {self._daily_exit_count}건 도달했으나 "
+                            f"수익 상태(PnL {_daily_pnl_pct:+.1f}% ≥ {_NET_LOSS_GATE:.0f}%) → "
+                            f"{symbol} 매수 허용"
+                        )
+                        self._last_exit_cooldown_log[_last_key] = now
 
         return True, ""
 
-    def record_exit(self, symbol: str, exit_price: float, sector: str = "", is_full_exit: bool = True):
+    # 2026-04-24: 손절성 청산 타입 (익절/트레일링/stale은 카운트 제외)
+    #   기존엔 청산 종류 무관 전부 카운트 → 수익 청산 3건으로도 쿨다운 발동(오탐).
+    #   4/14 사고(대부분 손절 연쇄) 방지는 유지하되, 손실성 청산만 카운트.
+    _LOSS_EXIT_TYPES = {"stop_loss", "breakeven"}
+
+    def record_exit(self, symbol: str, exit_price: float, sector: str = "",
+                    is_full_exit: bool = True, exit_type: str = ""):
         """청산 종목 기록 (당일 재진입 조건 체크 + 크로스 검증 섹터 비교용)
 
         분할 매도 시 최초 청산가를 기준으로 유지 (덮어쓰기 방지).
-        당일 청산 카운터는 **심볼별 최초 청산 1회**만 증가 (분할매도 중복 카운트 방지).
+        당일 청산 카운터는 **심볼별 최초 청산 1회 + 손실성 청산만** 증가.
         is_full_exit=False: 부분 청산 — 재진입 기록만, 카운터 미증가.
+        exit_type: stop_loss/breakeven만 카운트 (take_profit/trailing/stale 제외).
         """
         # 당일 청산 카운터 — 날짜 롤오버 시 리셋
         today = date.today()
@@ -382,21 +419,29 @@ class RiskManager:
             self._daily_exit_count_date = today
             self._last_exit_cooldown_log.clear()
 
-        # 심볼별 최초 청산 1회만 카운트 (1차/2차/3차/트레일링 중복 방지)
+        # 심볼별 최초 청산 1회 + **손실성 청산(손절/본전이탈)**만 카운트
+        # 익절/트레일링/stale은 심리적 복구매수 유발 패턴이 아니므로 제외
         is_new_exit = symbol not in self._exited_today
-        if is_new_exit:
+        is_loss_exit = exit_type in self._LOSS_EXIT_TYPES
+        if is_new_exit and is_loss_exit:
             self._daily_exit_count += 1
             threshold = int(getattr(self.config, 'daily_exit_cooldown_threshold', 0) or 0)
             if threshold > 0:
                 logger.info(
-                    f"[리스크] 당일 청산 누적: {self._daily_exit_count}/{threshold} "
-                    f"({symbol} @ {exit_price})"
+                    f"[리스크] 당일 손실청산 누적: {self._daily_exit_count}/{threshold} "
+                    f"({symbol} @ {exit_price}, type={exit_type})"
                 )
             else:
                 logger.debug(
-                    f"[리스크] 당일 청산 카운터: {self._daily_exit_count} "
+                    f"[리스크] 당일 손실청산 카운터: {self._daily_exit_count} "
                     f"(쿨다운 비활성, threshold=0)"
                 )
+        elif is_new_exit:
+            # 익절/트레일링 등 비손실 청산은 디버그 로그만
+            logger.debug(
+                f"[리스크] 비손실 청산 카운트 제외: {symbol} "
+                f"(type={exit_type or 'unknown'}, 누적 {self._daily_exit_count} 유지)"
+            )
 
         if self.market == "KR":
             if symbol not in self._exited_today:
