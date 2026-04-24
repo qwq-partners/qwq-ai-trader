@@ -175,8 +175,8 @@ document.addEventListener("DOMContentLoaded", function() {
     _MOBILE_V2_SNIPPET = """
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0e18">
-<link rel="stylesheet" href="/static/css/mobile-v2.css?v=5">
-<script defer src="/static/js/mobile-v2.js?v=5"></script>
+<link rel="stylesheet" href="/static/css/mobile-v2.css?v=6">
+<script defer src="/static/js/mobile-v2.js?v=6"></script>
 """
 
     def _serve_page(self, template_name: str):

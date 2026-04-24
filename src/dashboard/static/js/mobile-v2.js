@@ -256,14 +256,28 @@
         const pb = b.pnl_pct ?? b.unrealized_pnl_pct ?? 0;
         return pb - pa;
       });
+      // 2026-04-24: 전략 배지 매핑 (dashboard.js와 동일 팔레트)
+      const _stratBadgeMap = {
+        "core_holding":     { label: "코어",    cls: "sb-core" },
+        "theme_chasing":    { label: "테마",    cls: "sb-theme" },
+        "gap_and_go":       { label: "갭",      cls: "sb-gap" },
+        "rsi2_reversal":    { label: "RSI2",    cls: "sb-rsi2" },
+        "strategic_swing":  { label: "스윙",    cls: "sb-swing" },
+        "momentum_breakout":{ label: "모멘텀",  cls: "sb-momentum" },
+        "sepa_trend":       { label: "SEPA",    cls: "sb-sepa" },
+      };
       wrap.innerHTML = sorted.map((p) => {
         const pnlPct = p.pnl_pct ?? p.unrealized_pnl_pct ?? 0;
         const sName = p.name || p.symbol;
+        const badge = _stratBadgeMap[p.strategy];
+        const badgeHtml = badge
+          ? `<span class="strat-badge ${badge.cls}">${badge.label}</span>`
+          : "";
         return `
           <div class="mv2-pos-card">
-            <span class="mv2-pc-sym">${sName}</span>
+            <span class="mv2-pc-sym">${sName}${badgeHtml}</span>
             <span class="mv2-pc-pnl ${sign(pnlPct)}">${fmtPct(pnlPct, 1)}</span>
-            <span class="mv2-pc-sub">${p.quantity || 0}주 · ${p.strategy || "-"}</span>
+            <span class="mv2-pc-sub">${p.quantity || 0}주</span>
           </div>`;
       }).join("");
     } catch (e) {
