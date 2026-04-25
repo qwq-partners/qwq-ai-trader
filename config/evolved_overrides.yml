@@ -16,12 +16,12 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    sepa_trend: 30.0
+    sepa_trend: 50.0
+    gap_and_go: 10.0
     theme_chasing: 5.0
-    rsi2_reversal: 25.0
-    strategic_swing: 25.0
-    gap_and_go: 5.0
+    rsi2_reversal: 15.0
     momentum_breakout: 0.0
+    strategic_swing: 10.0
     core_holding: 10.0
 exit_manager:
   max_stop_pct: 8.0
@@ -86,13 +86,13 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: manual_review
-    timestamp: '2026-04-18T20:30:00'
-    note: 3회 중복 리밸런싱(02:00~02:06) 과적합 롤백 — rsi2 40→25, sepa 10→25 (표본 1건 근거 결정 무효화)
+    source: weekly_rebalance
+    timestamp: '2026-04-25T10:22:16.317025'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
-    note: 30→10% 축소 (PF 0.03 확정 손실, SK스퀘어 -12.9% 등). strategic_swing 10→25% 승격(승률 81% 검증), sepa_trend 25→30%
+    note: 30→10% 축소 (PF 0.03 확정 손실, SK스퀘어 -12.9% 등). strategic_swing 10→25% 승격(승률
+      81% 검증), sepa_trend 25→30%
   exit_manager.second_exit_ratio:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
@@ -108,4 +108,5 @@ _meta:
   theme_chasing.min_score:
     source: manual_review
     timestamp: '2026-04-18T20:30:00'
-    note: rule(low_frequency)로 60→57 자동 하향됐으나 before_win_rate=0.0 버그로 평가 불가 — 65로 수동 정정 (잡음 진입 차단 강화)
+    note: rule(low_frequency)로 60→57 자동 하향됐으나 before_win_rate=0.0 버그로 평가 불가 — 65로
+      수동 정정 (잡음 진입 차단 강화)

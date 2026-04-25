@@ -921,23 +921,41 @@ class StrategyEvolver:
         current = {k: float(v) for k, v in risk_alloc.items()}
         logger.info(f"[리밸런싱] 현재 배분: {current}")
 
-        # 2. 지난 주 전략별 성과
-        review = self.reviewer.review_period(7)
-        if review.total_trades < 3:
-            logger.info(f"[리밸런싱] 거래 부족 ({review.total_trades}건 < 3건), 스킵")
-            return {"status": "skipped", "reason": f"거래 부족 ({review.total_trades}건)"}
+        # 2. 다중 시계열 전략별 성과 (1주 + 30일 누적)
+        # 2026-04-25: 1주 표본이 작으면 노이즈 위험 — 누적(30일) 함께 분석.
+        review_7d = self.reviewer.review_period(7)
+        review_30d = self.reviewer.review_period(30)
+        if review_7d.total_trades < 3 and review_30d.total_trades < 5:
+            logger.info(
+                f"[리밸런싱] 거래 부족 (1주 {review_7d.total_trades}건 < 3 AND "
+                f"30일 {review_30d.total_trades}건 < 5), 스킵"
+            )
+            return {
+                "status": "skipped",
+                "reason": f"거래 부족 (1주 {review_7d.total_trades}건, 30일 {review_30d.total_trades}건)",
+            }
+        # primary review (LLM 신뢰도/메트릭 노출용)
+        review = review_7d if review_7d.total_trades >= 3 else review_30d
 
         # 3. LLM 호출
         try:
             from ...utils.llm import get_llm_manager, LLMTask
 
             llm = get_llm_manager()
-            perf_summary = self._build_perf_summary(review)
+            perf_summary_7d = self._build_perf_summary(review_7d)
+            perf_summary_30d = self._build_perf_summary(review_30d)
 
             system_prompt = (
                 "당신은 한국 주식 단기매매 봇의 자본 배분 전략가입니다.\n"
-                "지난 1주 전략별 성과를 분석하고, 각 전략의 총예산 비중(%)을 조정하세요.\n\n"
-                "원칙:\n"
+                "두 시계열(지난 1주, 누적 30일) 전략별 성과를 함께 보고, "
+                "각 전략의 총예산 비중(%)을 조정하세요.\n\n"
+                "분석 원칙:\n"
+                "- **누적(30일) 우선**: 표본이 충분(≥10건)한 전략은 30일 데이터를 신뢰\n"
+                "- **1주 표본 작으면(<5건) 노이즈 가능성** — 단독 판단 자제, 추세 단서로만 활용\n"
+                "- 1주 vs 30일 신호가 상충하면, **표본이 큰 쪽 우선**\n"
+                "- 1주 부진하나 30일 양호 → 일시적 변동 가능성, 급감액 자제\n"
+                "- 1주 양호하나 30일 부진 → 회복 단서지만 신뢰도 낮음, 완만 증액\n\n"
+                "지표 우선순위:\n"
                 "- 수익성: 승률 × 평균수익률이 높은 전략에 더 많은 자본 배분\n"
                 "- 안정성: 연속 손실이 적은 전략 선호\n"
                 "- 거래빈도: 거래 기회가 충분한 전략에 배분\n"
@@ -949,16 +967,21 @@ class StrategyEvolver:
                 "- 비활성 전략(momentum_breakout): 반드시 0%\n\n"
                 "JSON 형식으로 응답:\n"
                 '{ "allocations": {"momentum_breakout": 60, ...}, '
-                '"reasoning": "분석 사유", "confidence": 0.7 }'
+                '"reasoning": "분석 사유 (1주/30일 비교 명시)", "confidence": 0.7 }'
             )
 
             user_prompt = (
                 f"현재 배분: {json.dumps(current, ensure_ascii=False)}\n\n"
-                f"지난 1주 성과:\n{perf_summary}\n\n"
-                f"전체 요약: 총 {review.total_trades}건, "
-                f"승률 {review.win_rate:.1f}%, "
-                f"손익비 {review.profit_factor:.2f}, "
-                f"총손익 {review.total_pnl:,.0f}원"
+                f"=== 지난 1주 성과 ===\n{perf_summary_7d}\n"
+                f"  요약: 총 {review_7d.total_trades}건, "
+                f"승률 {review_7d.win_rate:.1f}%, "
+                f"손익비 {review_7d.profit_factor:.2f}, "
+                f"총손익 {review_7d.total_pnl:,.0f}원\n\n"
+                f"=== 누적 30일 성과 ===\n{perf_summary_30d}\n"
+                f"  요약: 총 {review_30d.total_trades}건, "
+                f"승률 {review_30d.win_rate:.1f}%, "
+                f"손익비 {review_30d.profit_factor:.2f}, "
+                f"총손익 {review_30d.total_pnl:,.0f}원"
             )
 
             result = await llm.complete_json(
