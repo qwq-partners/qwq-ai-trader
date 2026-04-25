@@ -385,11 +385,16 @@
     if ($(".mv2-perf-tabs")) return;
 
     // 대상 섹션 식별 — 헤더 텍스트로 자동 탐지
+    // 2026-04-25: US 관련 섹션은 제외 (US 엔진 비활성)
     const sections = [];
     $$("h2, h3").forEach((h) => {
       const card = h.closest(".card, .section, div");
       if (!card) return;
+      // US 섹션 스킵: 헤더에 🇺🇸 또는 "미국" 포함 시 또는 카드 ID가 us-*로 시작
       const txt = h.textContent || "";
+      if (txt.includes("🇺🇸") || txt.includes("미국") || /US/.test(txt)) return;
+      const cardId = card.id || "";
+      if (cardId.startsWith("us-") || cardId === "combined-section") return;
       let tabName = null;
       if (/요약|overview|총괄/i.test(txt)) tabName = "요약";
       else if (/전략별|strategy/i.test(txt)) tabName = "전략별";

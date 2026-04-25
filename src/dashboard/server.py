@@ -123,6 +123,13 @@ class DashboardServer:
 #us-trades-section, #us-holdings-section,
 #us-themes-section, #us-performance-section,
 #us-screening-count, #us-themes-grid, #us-screening-body,
+/* 2026-04-25 추가: KR/US 비교 섹션 (통합 필터 트리거) + 추가 US 자식 ID들 */
+#combined-section,
+#us-trade-date, #us-btn-today, #us-loading, #us-filter-tabs,
+#us-s-realized, #us-s-unrealized, #us-s-buys, #us-s-sells, #us-s-winloss,
+#us-trades-count, #us-trades-body, #us-positions-count, #us-holdings-tbody,
+#us-perf-total, #us-perf-winrate, #us-perf-pnl, #us-perf-positions,
+#btn-refresh-us-themes, #btn-refresh-us-screening,
 .mf-btn[data-val="us"], .mf-btn[data-val="all"],
 .nav-pill[data-page="us"],
 [data-market="us"] {
@@ -130,11 +137,11 @@ class DashboardServer:
 }
 /* 설정 페이지의 "US 오버나이트 시그널" 카드 숨김 */
 .card:has(#cfg-us-market) { display: none !important; }
+/* 2026-04-25: 호환성 — :has() 미지원 브라우저용 직접 ID 매칭 */
+#cfg-us-market { display: none !important; }
 /* US 카드가 사라진 상태에서 KR 카드를 전폭으로 확장 */
 .markets-grid { grid-template-columns: 1fr !important; }
-/* 2026-04-23 추가: 티커 스트립의 US 지수(S&P500/NASDAQ/DOW) 숨김
-   구조: <span nav-ti nav-ti-us>NAME</span><span nav-tv>VAL</span><span nav-ts>·</span>
-   인접 형제 2개까지 같이 숨김 */
+/* 2026-04-23 추가: 티커 스트립의 US 지수(S&P500/NASDAQ/DOW) 숨김 */
 .nav-ti-us,
 .nav-ti-us + .nav-tv,
 .nav-ti-us + .nav-tv + .nav-ts { display: none !important; }
@@ -148,6 +155,30 @@ document.addEventListener("DOMContentLoaded", function() {
     try {
         var cur = localStorage.getItem("market_filter");
         if (cur === "us" || cur === "all") { localStorage.setItem("market_filter", "kr"); }
+    } catch(e) {}
+    // 2026-04-25 추가: 런타임 안전장치 — id="us-*" 또는 🇺🇸/미국 텍스트 포함 요소 숨김
+    try {
+        // ID 기반: us-* 시작
+        document.querySelectorAll('[id^="us-"]').forEach(function(el) {
+            el.style.setProperty('display', 'none', 'important');
+        });
+        // #cfg-us-market 부모 카드도 숨김 (settings.html)
+        var cfgUs = document.getElementById('cfg-us-market');
+        if (cfgUs) {
+            var card = cfgUs.closest('.card, .card-inner') || cfgUs.parentElement;
+            if (card) card.style.setProperty('display', 'none', 'important');
+        }
+        // KR/US 비교 섹션
+        var combined = document.getElementById('combined-section');
+        if (combined) combined.style.setProperty('display', 'none', 'important');
+        // h2/h3 텍스트에 "🇺🇸" 포함된 카드 숨김 (auto-detection)
+        document.querySelectorAll('h2, h3').forEach(function(h) {
+            var t = h.textContent || '';
+            if (t.indexOf('🇺🇸') >= 0 || t.indexOf('미국') >= 0) {
+                var card = h.closest('.card, .card-inner, [id]') || h.parentElement;
+                if (card) card.style.setProperty('display', 'none', 'important');
+            }
+        });
     } catch(e) {}
     // 티커 빌더가 US 지수를 내보내지 않도록 데이터 필터 래퍼 (common.js 실행 후 DOM mutation 방어)
     try {
@@ -175,8 +206,8 @@ document.addEventListener("DOMContentLoaded", function() {
     _MOBILE_V2_SNIPPET = """
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0e18">
-<link rel="stylesheet" href="/static/css/mobile-v2.css?v=6">
-<script defer src="/static/js/mobile-v2.js?v=6"></script>
+<link rel="stylesheet" href="/static/css/mobile-v2.css?v=7">
+<script defer src="/static/js/mobile-v2.js?v=7"></script>
 """
 
     def _serve_page(self, template_name: str):
