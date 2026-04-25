@@ -113,6 +113,39 @@ class CrossStrategyValidator:
         penalties = []
         adjusted_score = score
 
+        # 2026-04-25 추가: 진입 시간대 가드 (KR 전용)
+        # 30일 데이터: 09시 -440k(승률 26.7%) / 10시 +181k / 12시 +1.08M(승률 70%)
+        # → 09:00~09:29 하드 차단, 09:30~10:30 -8점 페널티, 12:30~13:00 +5 보너스
+        # 청산 시그널은 시간 가드 미적용 (sell은 통과)
+        if self._market == "KR" and side == "buy":
+            from datetime import datetime as _dt
+            now = _dt.now()
+            now_hm = now.hour * 100 + now.minute  # 930 = 09:30
+            # 09:00~09:29 하드 차단 (장초반 30분 모든 매수 신호 차단)
+            # 단, core_holding은 별도 배치(09:30 execute)로 처리되므로 영향 없음
+            if 900 <= now_hm < 930 and strategy != "core_holding":
+                self._stats["blocked"] += 1
+                logger.info(
+                    f"[크로스검증] {symbol} 차단: 09:00~09:29 장초반 변동성 회피 "
+                    f"({strategy}, KR 30일 -440k 패턴)"
+                )
+                return False, 0, "장초반 30분 진입 차단 (09:00~09:29)"
+            # 09:30~10:30 -8점 페널티 (변동성 방향 미확정 구간)
+            if 930 <= now_hm < 1030 and strategy != "core_holding":
+                adjusted_score -= 8
+                penalties.append("장초반 변동성 -8 (09:30~10:30)")
+            # 12:30~13:00 +5 보너스 (점심 batch 추세 확정 후 진입 sweet spot)
+            if 1230 <= now_hm <= 1300:
+                adjusted_score += 5
+                penalties.append("점심 sweet spot +5 (12:30~13:00)")
+
+        # 2026-04-25 추가: sepa_trend 고점수 추격매수 페널티
+        # 90일 데이터 역설: 80~90점 승률 31.8% / -636k, 60~70점 승률 82.4% / +937k
+        # 고점수가 오히려 추격매수 함정 → 90+ -10점 페널티
+        if side == "buy" and strategy == "sepa_trend" and score >= 90:
+            adjusted_score -= 10
+            penalties.append("SEPA 90+ 추격매수 -10")
+
         # 2026-04-23 추가: 지표 결손 시 보수적 감점 (risk-auditor 감사 결과)
         # atr_pct 78.6%, PER/PBR 87.7%, 수급 78.6% 결손 → R6/R7/R8/R2 사실상 비활성.
         # 단기 임시 방편: 지표 None이면 "불확실 = 의심" 원칙으로 -2점 × 결손 지표 수.
@@ -217,6 +250,15 @@ class CrossStrategyValidator:
                     adjusted_score -= 5
                     penalties.append(f"동일섹터({sector}) 손절종목 존재 -5")
                     break
+
+        # === 규칙 5-2 (2026-04-25 추가): 외국인 5일 누적 매수 상위 섹터 보너스 ===
+        # supply_score_provider 또는 supply_daily_*.json 5일 누적 합계 기준,
+        # 외국인 매수 강한 섹터 종목에 +5 overlay (수급 모멘텀 추적)
+        if sector and self._market == "KR":
+            top_sectors = metadata.get("foreign_top_sectors") or []
+            if isinstance(top_sectors, (list, tuple)) and sector in top_sectors:
+                adjusted_score += 5
+                penalties.append(f"외국인 매수 상위 섹터({sector}) +5")
 
         # === 규칙 6: ATR 대비 등락률 과다 (추격 매수 감지) ===
         atr_pct = metadata.get("atr_pct")
