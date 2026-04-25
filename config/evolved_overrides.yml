@@ -25,9 +25,11 @@ risk_config:
     core_holding: 10.0
 exit_manager:
   # 2026-04-25: 단기/중기 보유(<6h) -2.96M 손실 패턴 — 노이즈 손절 차단 위해
-  # min_stop_pct 3.5 → 4.5로 상향. ATR×2 동적 손절도 자연스럽게 +0.5~1% 완화.
+  # min_stop_pct 3.5 → 4.0으로 상향 (4.5에서 한 단계 환원).
+  # 근거: max_position_pct 28% × min_stop 4.0% × 4건 동시 손절 = 4.48% < 5% (daily_max).
+  # 4.5%면 5.04% 한도 초과 가능 (risk-auditor 지적).
   max_stop_pct: 8.0
-  min_stop_pct: 4.5
+  min_stop_pct: 4.0
   first_exit_pct: 5.0
   first_exit_ratio: 0.2
   second_exit_ratio: 0.4

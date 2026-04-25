@@ -225,6 +225,29 @@ class RiskManager:
         Returns:
             (가능 여부, 거부 사유)
         """
+        # 0. 매크로 이벤트 캘린더 체크 (KR 전용) — 2026-04-25 추가
+        # FOMC/한은 금통위/KOSPI 옵션만기 등 고변동성 날짜에 신규 매수 1건으로 제한.
+        # 당일 진입한 포지션 수(entry_time == today) 기준으로 카운트.
+        if self.market == "KR" and side == OrderSide.BUY:
+            try:
+                from ..utils.macro_calendar import is_macro_event_day
+                from datetime import date as _d
+                _macro_label, _is_macro = is_macro_event_day()
+                if _is_macro:
+                    _today = _d.today()
+                    _today_entries = sum(
+                        1 for p in portfolio.positions.values()
+                        if getattr(p, 'entry_time', None)
+                        and p.entry_time.date() == _today
+                    )
+                    if _today_entries >= 1:
+                        return False, (
+                            f"매크로 이벤트({_macro_label}) — 변동성 방어로 신규 매수 1건 제한 "
+                            f"(이미 {_today_entries}건 진입)"
+                        )
+            except Exception:
+                pass  # 캘린더 모듈 없거나 오류면 통과 (안전 폴백)
+
         # 1. 당일 재진입 금지 체크 (KR 전용)
         if self.market == "KR" and symbol in self._stop_loss_today:
             return False, "당일 손절 종목 재진입 금지"

@@ -2226,6 +2226,51 @@ JSON:
                                 except Exception as _sd_err:
                                     logger.debug(f"[스크리닝] 수급 캐시 로드 실패: {_sd_err}")
 
+                                # 2026-04-25 추가: 외국인 5일 누적 매수 상위 섹터 계산
+                                # supply_daily_YYYYMMDD.json (foreign/inst 합산 ×5일) → 섹터 집계 → top 3
+                                # cross_validator R5-2가 metadata["foreign_top_sectors"] 참조하여 +5점 overlay
+                                _foreign_top_sectors: list = []
+                                try:
+                                    _cache_dir = Path.home() / ".cache" / "ai_trader"
+                                    _today = datetime.now().date()
+                                    _sym_5d_foreign: Dict[str, int] = {}
+                                    for _i in range(5):
+                                        _d = _today - timedelta(days=_i)
+                                        _f = _cache_dir / f"supply_daily_{_d.strftime('%Y%m%d')}.json"
+                                        if _f.exists():
+                                            _data = json.loads(_f.read_text())
+                                            for _sym, _v in _data.items():
+                                                _sym_5d_foreign[_sym] = (
+                                                    _sym_5d_foreign.get(_sym, 0) + int(_v.get("foreign", 0))
+                                                )
+                                    # 양수만 (순매수) + 섹터 집계
+                                    _sector_score: Dict[str, int] = {}
+                                    for _sym, _net in _sym_5d_foreign.items():
+                                        if _net <= 0:
+                                            continue
+                                        _sec = None
+                                        if hasattr(bot, '_get_sector'):
+                                            try:
+                                                _sec = await bot._get_sector(_sym)
+                                            except Exception:
+                                                _sec = None
+                                        if not _sec:
+                                            continue
+                                        _sector_score[_sec] = _sector_score.get(_sec, 0) + _net
+                                    # top 3 섹터
+                                    _foreign_top_sectors = [
+                                        s for s, _ in sorted(
+                                            _sector_score.items(), key=lambda x: x[1], reverse=True
+                                        )[:3]
+                                    ]
+                                    if _foreign_top_sectors:
+                                        logger.info(
+                                            f"[스크리닝] 외국인 5일 매수 상위 섹터 (overlay +5): "
+                                            f"{_foreign_top_sectors}"
+                                        )
+                                except Exception as _fts_err:
+                                    logger.debug(f"[스크리닝] foreign_top_sectors 계산 실패: {_fts_err}")
+
                                 for stock in candidates[:8]:
                                     if signals_emitted >= 5:
                                         break
@@ -2426,6 +2471,8 @@ JSON:
                                             "sector": _sector,
                                             "news_validation": _confidence_adj,
                                             "position_multiplier": _pos_mult,
+                                            # 2026-04-25 추가: cross_validator R5-2 활성화 (외국인 매수 섹터 +5)
+                                            "foreign_top_sectors": _foreign_top_sectors,
                                             # 2026-04-23 추가: cross_validator R2 활성화 (수급 체크)
                                             # indicators dict 하위에 foreign/inst net_buy 주입
                                             "indicators": {
