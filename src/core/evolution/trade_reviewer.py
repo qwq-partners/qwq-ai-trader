@@ -142,15 +142,18 @@ class TradeReviewer:
             )
 
         # 기본 통계 계산
+        # 2026-04-25 수정: TradeRecord.pnl/pnl_pct 필드 타입은 float이나
+        # DB sync 경로(trade_storage.sync_from_db)에선 Decimal 인스턴스로 들어옴.
+        # 경계에서 float()로 강제 변환하여 Decimal+float TypeError 방지.
         wins = [t for t in trades if t.is_win]
         losses = [t for t in trades if not t.is_win]
 
-        total_profit = sum(t.pnl for t in wins) if wins else 0
-        total_loss = abs(sum(t.pnl for t in losses)) if losses else 0
+        total_profit = sum(float(t.pnl) for t in wins) if wins else 0.0
+        total_loss = abs(sum(float(t.pnl) for t in losses)) if losses else 0.0
 
         win_rate = len(wins) / len(trades) * 100 if trades else 0
-        avg_pnl_pct = sum(t.pnl_pct for t in trades) / len(trades) if trades else 0
-        total_pnl = sum(t.pnl for t in trades)
+        avg_pnl_pct = sum(float(t.pnl_pct) for t in trades) / len(trades) if trades else 0.0
+        total_pnl = sum(float(t.pnl) for t in trades)
         # 손실 0원 시 profit_factor 상한 99.9 (LLM 왜곡 방지)
         profit_factor = min(total_profit / total_loss, 99.9) if total_loss > 0 else (99.9 if total_profit > 0 else 0)
 
@@ -355,9 +358,10 @@ class TradeReviewer:
             stats[strategy]["trades"] += 1
             if trade.is_win:
                 stats[strategy]["wins"] += 1
-            stats[strategy]["total_pnl"] += trade.pnl
-            stats[strategy]["total_pnl_pct"] += trade.pnl_pct
-            stats[strategy]["avg_holding_minutes"] += trade.holding_minutes
+            # 2026-04-25: float() 강제 — DB sync 경로에서 Decimal 들어오는 경우 방어
+            stats[strategy]["total_pnl"] += float(trade.pnl)
+            stats[strategy]["total_pnl_pct"] += float(trade.pnl_pct)
+            stats[strategy]["avg_holding_minutes"] += trade.holding_minutes or 0
 
         # 평균 계산
         for strategy, s in stats.items():
