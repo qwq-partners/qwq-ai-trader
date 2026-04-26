@@ -198,13 +198,15 @@ function renderSummaryCards(stats, snaps) {
     }
 
     // 6) Profit Factor — by_exit_type 합산
+    // 2026-04-27 수정: API 필드명은 avg_pnl_pct (avg_pnl 아님). 기존 코드에서 et.avg_pnl
+    // 참조하면 undefined → 0 → 모든 합계 0 → "--" 표시 버그.
     const pfEl = document.getElementById('perf-pf');
     if (pfEl) {
         const byExit = stats.by_exit_type || {};
         let totalGross = 0, totalLoss = 0;
         for (const key of Object.keys(byExit)) {
             const et = byExit[key];
-            const avgPnl = et.avg_pnl || 0;
+            const avgPnl = et.avg_pnl_pct ?? et.avg_pnl ?? 0;
             const trades = et.trades || 0;
             const sumPnl = avgPnl * trades;
             if (sumPnl > 0) totalGross += sumPnl;
