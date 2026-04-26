@@ -135,6 +135,9 @@ class DashboardServer:
 [data-market="us"] {
     display: none !important;
 }
+/* 2026-04-26: US 엔진 비활성으로 마켓 구분 자체 불필요 — 필터 바 전체 숨김 */
+#market-filter-bar,
+.mf-bar { display: none !important; }
 /* 설정 페이지의 "US 오버나이트 시그널" 카드 숨김 */
 .card:has(#cfg-us-market) { display: none !important; }
 /* 2026-04-25: 호환성 — :has() 미지원 브라우저용 직접 ID 매칭 */
@@ -151,10 +154,24 @@ window.US_ENABLED = false;
 // US 데이터 로딩 함수가 정의돼 있으면 noop으로 덮어쓰기 (fetch 낭비 방지)
 document.addEventListener("DOMContentLoaded", function() {
     if (typeof loadUSData === "function") { window.loadUSData = function() {}; }
-    // 마켓 필터가 us/all로 저장돼 있으면 kr로 강제
+    // 마켓 필터 강제 kr + 필터 바 제거 (재생성 시에도 즉시 제거)
     try {
-        var cur = localStorage.getItem("market_filter");
-        if (cur === "us" || cur === "all") { localStorage.setItem("market_filter", "kr"); }
+        localStorage.setItem("market_filter", "kr");
+        var _removeMfBar = function() {
+            var mfBar = document.getElementById("market-filter-bar");
+            if (mfBar) {
+                mfBar.style.setProperty("display", "none", "important");
+                while (mfBar.firstChild) mfBar.removeChild(mfBar.firstChild);
+            }
+            document.querySelectorAll(".mf-bar").forEach(function(el) {
+                el.style.setProperty("display", "none", "important");
+                el.remove();
+            });
+        };
+        _removeMfBar();
+        // 다른 JS가 re-render할 수 있으므로 MutationObserver로 즉시 차단
+        var _mfObserver = new MutationObserver(_removeMfBar);
+        _mfObserver.observe(document.body, { childList: true, subtree: true });
     } catch(e) {}
     // 2026-04-25 추가: 런타임 안전장치 — id="us-*" 또는 🇺🇸/미국 텍스트 포함 요소 숨김
     try {
@@ -206,8 +223,8 @@ document.addEventListener("DOMContentLoaded", function() {
     _MOBILE_V2_SNIPPET = """
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0e18">
-<link rel="stylesheet" href="/static/css/mobile-v2.css?v=7">
-<script defer src="/static/js/mobile-v2.js?v=7"></script>
+<link rel="stylesheet" href="/static/css/mobile-v2.css?v=8">
+<script defer src="/static/js/mobile-v2.js?v=8"></script>
 """
 
     def _serve_page(self, template_name: str):
