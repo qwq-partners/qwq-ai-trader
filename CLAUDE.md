@@ -350,6 +350,15 @@ INITIAL_CAPITAL (KR, 기본 500000)
 - 내장 규칙: 승률 < 40% → 진입 기준 +5, 승률 > 65% → 진입 기준 -5
 - 결과는 `evolved_overrides.yml`에 영속화
 
+## 주간 매도 후속 복기 (Post-Exit Review)
+
+- 매주 토요일 09:00 KST 자동 실행 (`run_post_exit_review_scheduler`)
+- 최근 30일 KR 매도 거래 → KIS 현재가 조회 → 매도 후 변동 추적
+- 분류: +3% 이상=놓침, -3% 이하=회피, 그 사이=타당
+- LLM: GPT-5.4 (STRATEGY_ANALYSIS, fallback Gemini Pro), 표본 ≥5건
+- 출력: JSON + Wiki 페이지(`weekly_post_exit_YYYY-WNN.md`) + 텔레그램
+- Wiki 페이지는 다음 weekly rebalance 시 LLM 컨텍스트로 자동 흡수
+
 ## Trade Wiki (Karpathy LLM Wiki 패턴)
 
 - 거래 교훈을 전략/섹터/시장체제별 마크다운 위키로 축적

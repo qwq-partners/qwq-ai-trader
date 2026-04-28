@@ -136,6 +136,11 @@ class KRScheduler:
                 self.run_weekly_rebalance_scheduler(), name="kr_weekly_rebalance"
             ))
 
+        # 주간 매도 후속 복기 (토요일 09:00)
+        tasks.append(asyncio.create_task(
+            self.run_post_exit_review_scheduler(), name="kr_post_exit_review"
+        ))
+
         # 로그 정리
         tasks.append(asyncio.create_task(
             self.run_log_cleanup(), name="kr_log_cleanup"
@@ -4037,6 +4042,92 @@ JSON:
             pass
         except Exception as e:
             logger.error(f"주간 리밸런싱 스케줄러 오류: {e}")
+
+    async def run_post_exit_review_scheduler(self):
+        """매주 토요일 09:00 KST 매도 후속 복기
+
+        최근 30일 매도 거래의 매도 후 추세를 추적해 전략 개선 인사이트 추출.
+        - 표본별 현재가 조회 → 매도후 변동률 계산
+        - 전략 × exit_type 매트릭스 집계
+        - GPT-5.4(STRATEGY_ANALYSIS)로 인과 분석
+        - Wiki 페이지 작성 (다음 weekly rebalance LLM 컨텍스트로 흡수)
+        - 텔레그램 리포트
+        """
+        bot = self.bot
+        state_file = Path.home() / ".cache" / "ai_trader" / "last_post_exit_review.json"
+
+        def _load_last_week() -> Optional[int]:
+            try:
+                if state_file.exists():
+                    with open(state_file, "r", encoding="utf-8") as f:
+                        return json.load(f).get("iso_week")
+            except Exception as e:
+                logger.warning(f"[후속복기] 상태 로드 실패: {e}")
+            return None
+
+        def _save_last_week(iso_year: int, iso_week: int):
+            try:
+                state_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(state_file, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "iso_year": iso_year,
+                        "iso_week": iso_week,
+                        "saved_at": datetime.now().isoformat(),
+                    }, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"[후속복기] 상태 저장 실패: {e}")
+
+        last_run_week: Optional[int] = _load_last_week()
+        if last_run_week is not None:
+            logger.info(f"[후속복기] 직전 실행 주차 복원: ISO week {last_run_week}")
+
+        try:
+            while bot.running:
+                now = datetime.now()
+
+                if (now.weekday() == 5 and now.hour == 9
+                        and 0 <= now.minute < 15):
+                    iso_year, iso_week, _ = now.isocalendar()
+                    if last_run_week != iso_week:
+                        logger.info("[후속복기] 주간 매도 후속 복기 실행")
+                        try:
+                            from ..analytics.post_exit_review import PostExitReviewer
+                            reviewer = PostExitReviewer(
+                                trade_journal=bot.trade_journal,
+                                broker=bot.broker,
+                            )
+                            report = await reviewer.run_weekly()
+                            last_run_week = iso_week
+                            _save_last_week(iso_year, iso_week)
+
+                            if report.get("status") == "ok":
+                                msg = report.get("telegram_message", "")
+                                if msg:
+                                    await send_alert(msg)
+                                logger.info(
+                                    f"[후속복기] 완료: 표본={report.get('samples')}, "
+                                    f"저장={report.get('saved_path')}"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[후속복기] 결과: {report.get('status')} "
+                                    f"({report.get('error') or report.get('reason') or ''})"
+                                )
+                        except Exception as e:
+                            logger.error(f"[후속복기] 실행 오류: {e}")
+                            await self._send_error_alert(
+                                "ERROR", "주간 매도 후속 복기 오류",
+                                traceback.format_exc()
+                            )
+                            last_run_week = iso_week
+                            _save_last_week(iso_year, iso_week)
+
+                await asyncio.sleep(60)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"매도 후속 복기 스케줄러 오류: {e}")
 
     async def run_log_cleanup(self):
         """로그/캐시 정리 스케줄러 — 매일 00:05"""

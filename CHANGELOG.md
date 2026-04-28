@@ -1,5 +1,36 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-28 — 주간 매도 후속 복기 시스템 (Post-Exit Review)
+
+### 배경
+4/27 사용자 분석: 최근 2주간 매도 16건 중 10건이 매도 후 평균 +10.5% 추가 상승, 5건만 -5.8% 회피 성공 (강세장 효과 ~60% 설명). 매도 후 추세를 매주 자동 추적해 전략 진화 사이클에 반영하는 시스템 필요.
+
+### 추가
+- `src/analytics/post_exit_review.py` — `PostExitReviewer` 클래스 신규
+  - DB `trades`에서 최근 30일 KR 매도 거래 조회 (asyncpg pool 활용)
+  - 종목별 KIS `get_quote()` 호출 (rate limit 0.2s sleep)
+  - 매도 후 변동률 계산 + 분류 (놓침 ≥+3%, 회피 ≤-3%, 타당)
+  - 전략 × exit_type 매트릭스 집계 (count, missed, avoided, avg_post_exit, avg_pnl_pct)
+  - GPT-5.4 (LLMTask.STRATEGY_ANALYSIS, fallback Gemini Pro)로 인과 추론 + 검증 가능 가설 생성
+  - JSON 리포트: `~/.cache/ai_trader/journal/post_exit_review_YYYYMMDD.json`
+  - Wiki 페이지: `~/.cache/ai_trader/wiki/weekly_post_exit_YYYY-WNN.md` → 다음 weekly rebalance 시 LLM 컨텍스트로 자동 흡수
+  - 텔레그램 리포트: Top 5 놓침/회피 + 전략별 평균 + LLM 인사이트
+- `src/schedulers/kr_scheduler.py`
+  - `run_post_exit_review_scheduler()` 메서드 추가 (토요일 09:00 KST 실행)
+  - ISO week 기반 중복 실행 방지 (`last_post_exit_review.json` 영속화)
+  - `create_tasks()`에 `kr_post_exit_review` 등록
+
+### 안전 장치
+- 표본 < 5건 시 LLM 호출 스킵 (결론 도출 불가)
+- 거래정지/상폐 종목 시세 0 시 skip + 로그
+- API 실패 시 종목별 retry 후 skip (전체 중단 방지)
+- 진화 시스템 1건 변경 원칙 — LLM 출력 강제 가이드라인에 명시
+
+### 검증
+- 스모크 테스트: DB 77건 조회, 분류/집계/저장/위키/텔레그램 포맷 모두 정상
+- py_compile 통과 (post_exit_review.py, kr_scheduler.py)
+- 봇 재시작 후 `kr_post_exit_review` 태스크 정상 등록
+
 ## 2026-04-22 — 거래 로그 누락 복구 + 재시작 메타 복원 (P0)
 
 ### 배경

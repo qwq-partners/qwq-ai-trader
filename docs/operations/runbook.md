@@ -67,6 +67,27 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `config/evolved_overrides.yml` | 진화 오버라이드 | **양쪽 모두 확인 필요** |
 | `.env` | API 키 | 커밋 금지 |
 
+## 주간 자동화 (토요일)
+
+| 시각 (KST) | 작업 | 위치 |
+|-----------|------|------|
+| Sat 00:00 | 전략 예산 리밸런싱 (StrategyEvolver) | `kr_weekly_rebalance` |
+| Sat 00:00 | False Negative 분석 + Wiki Lint | (리밸런싱 후 연속 실행) |
+| Sat 00:05 | 주간 거래 원칙 리포트 (TradingPrinciplesManager) | `kr_log_cleanup` 내 |
+| **Sat 09:00** | **매도 후속 복기 (PostExitReviewer)** | `kr_post_exit_review` |
+
+### 주간 매도 후속 복기 (2026-04-28~)
+
+- **목적**: 최근 30일 매도 거래의 "매도 후 추세"를 추적해 전략 진화에 반영.
+- **실행**: 매주 토요일 09:00 KST, ISO week 기반 중복 방지 (`~/.cache/ai_trader/last_post_exit_review.json`).
+- **분류**: 매도 후 +3% 이상=놓침, -3% 이하=회피, 그 사이=타당.
+- **LLM**: GPT-5.4 (STRATEGY_ANALYSIS, fallback Gemini Pro). 표본 < 5건이면 호출 스킵.
+- **출력**:
+  - JSON 리포트: `~/.cache/ai_trader/journal/post_exit_review_YYYYMMDD.json`
+  - Wiki 페이지: `~/.cache/ai_trader/wiki/weekly_post_exit_YYYY-WNN.md` → 다음 weekly rebalance 시 LLM 컨텍스트로 자동 흡수
+  - 텔레그램: Top 5 놓침/회피 + 전략별 평균 + LLM 인사이트
+- **수동 실행**: `python -c "..."` 형태로는 broker 인스턴스 충돌 위험 있음 — 봇 외부에서는 mock broker 사용 권장.
+
 ## 트러블슈팅
 
 ### 봇 미응답
