@@ -1,5 +1,36 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-28 — 대시보드 주문 이벤트 매수/매도/익절/손절 구분
+
+### 배경
+홈 화면 "주문 이벤트 로그"에서 매수/매도가 모두 "체결" 단일 라벨로만 표시되어, 익절/손절 시각 구분 불가. 사용자 요청으로 4단계 분류 추가.
+
+### 변경
+- `src/core/engine.py:386-417` — FILL 이벤트 핸들러 분류 로직
+  - BUY 체결 → 라벨 "매수" (badge-blue)
+  - SELL 체결 + gross PnL > +0.25% → "익절" (badge-green)
+  - SELL 체결 + gross PnL < -0.25% → "손절" (badge-red)
+  - SELL 체결 + ±0.25% 이내 → "매도" (badge-gray, 수수료 임계 동가)
+  - 메시지에 PnL% 포함 (예: "삼성SDI 매도 5주 @ 614,000 (-4.95%)")
+  - OrderSide enum + 문자열 직렬화 양쪽 안전 (`endswith("BUY")` 폴백)
+  - avg_price=None/0 폴백 시 "매도" 라벨 + PnL 미표시
+- `src/dashboard/data_collector.py:1123-1131` — `get_order_history` keywords에 매수/익절/손절/매도 추가
+- `src/dashboard/static/js/dashboard.js:592-672` — 배지 매핑 4타입 추가 + 메시지 색상 분기 (익절 green / 손절 red / 매수 blue / 매도 gray) + "체결" fallback 유지 (재시작 전 잔존 이벤트 호환)
+- `src/dashboard/templates/index.html:219-221` — `.badge-purple` `.badge-gray` CSS 정의 추가
+
+### 코드 리뷰 반영 (P1+P2)
+- P1-1: OrderSide enum 비교에 문자열 폴백 추가
+- P1-2: 수수료 임계값 ±0.25% 도입 (KR 왕복 0.227% 근사)
+- P1-3: docstring에 "가중평균 기준 라벨" 명시
+- P2-1: `if avg_px is not None and avg_px > 0` (CLAUDE.md "절대 금지 패턴" 준수)
+- P2-2: Decimal 일관 사용 (마지막 표시만 float)
+- P2-4: typeColors 룩업 단순화 (`typeColors[evtType] || 'badge-blue'`)
+
+### 검증
+- py_compile 통과 (engine.py, data_collector.py)
+- 봇 재시작 정상 (active)
+- 백워드 컴팩트: 재시작 전 잔존 "체결" 이벤트는 dashboard.js fallback으로 처리
+
 ## 2026-04-28 — 주간 매도 후속 복기 시스템 (Post-Exit Review)
 
 ### 배경

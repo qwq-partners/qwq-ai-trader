@@ -590,7 +590,11 @@ function renderOrderHistory(events) {
     countEl.textContent = events.length + '건';
 
     const typeColors = {
-        '체결': 'badge-green',
+        '매수': 'badge-blue',
+        '익절': 'badge-green',
+        '손절': 'badge-red',
+        '매도': 'badge-gray',
+        '체결': 'badge-green',  // 구버전 호환
         '주문': 'badge-blue',
         '취소': 'badge-red',
         '폴백': 'badge-yellow',
@@ -617,10 +621,7 @@ function renderOrderHistory(events) {
         const evtType = evt.type || '--';
         const message = evt.message || '';
 
-        let badgeCls = 'badge-blue';
-        for (const [key, cls] of Object.entries(typeColors)) {
-            if (evtType === key) { badgeCls = cls; break; }
-        }
+        const badgeCls = typeColors[evtType] || 'badge-blue';
 
         // 시간
         const tdTime = document.createElement('td');
@@ -642,12 +643,19 @@ function renderOrderHistory(events) {
         tdMsg.className = 'py-2';
         tdMsg.style.cssText = 'font-size:0.82rem; color:var(--text-primary);';
 
-        // 메시지에서 매도 손익 강조
-        const isSell = message.includes('매도');
-        if (isSell && evtType === '체결') {
+        // 이벤트 유형별 메시지 색상 (익절/손절/매수 우선, 구버전 체결 fallback)
+        if (evtType === '익절') {
+            tdMsg.style.color = 'var(--acc-green, #34d399)';
+        } else if (evtType === '손절') {
             tdMsg.style.color = '#f87171';
-        } else if (message.includes('매수') && evtType === '체결') {
-            tdMsg.style.color = 'var(--accent-blue)';
+        } else if (evtType === '매수') {
+            tdMsg.style.color = 'var(--accent-blue, #818cf8)';
+        } else if (evtType === '매도') {
+            tdMsg.style.color = 'var(--text-secondary)';
+        } else if (evtType === '체결') {
+            // 구버전 이벤트 (재시작 전 잔존): 메시지에서 매수/매도 추정
+            if (message.includes('매도')) tdMsg.style.color = '#f87171';
+            else if (message.includes('매수')) tdMsg.style.color = 'var(--accent-blue, #818cf8)';
         }
         tdMsg.textContent = message;
 

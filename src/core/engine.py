@@ -388,9 +388,39 @@ class UnifiedEngine:
             side = getattr(event, 'side', '?')
             price = getattr(event, 'price', 0)
             qty = getattr(event, 'quantity', 0)
-            side_label = '매수' if side == OrderSide.BUY else '매도'
             name = self._get_stock_name(symbol)
-            self.push_dashboard_event("체결", f"{name} {side_label} {qty}주 @ {float(price):,.0f}")
+
+            # OrderSide enum + 문자열 직렬화 양쪽 안전: "BUY" suffix 검사
+            is_buy = (side == OrderSide.BUY) or (
+                isinstance(side, str) and side.upper().endswith("BUY")
+            )
+            side_label = "매수" if is_buy else "매도"
+
+            # 매수/매도 + 익절/손절 분류
+            # 라벨 기준: 포지션의 avg_price (가중평균) 대비 gross PnL.
+            # 수수료(KR 왕복 ~0.227%) 미반영이라 ±0.25% 이내는 "매도"로 중립화.
+            event_label = "매수" if is_buy else "매도"
+            pnl_str = ""
+            if not is_buy:
+                pos = self.portfolio.positions.get(symbol)
+                avg_px = getattr(pos, 'avg_price', None) if pos else None
+                if avg_px is not None and avg_px > 0:
+                    try:
+                        pnl_pct_dec = (Decimal(str(price)) - avg_px) / avg_px * Decimal("100")
+                        pnl_pct = float(pnl_pct_dec)
+                        if pnl_pct > 0.25:
+                            event_label = "익절"
+                        elif pnl_pct < -0.25:
+                            event_label = "손절"
+                        # else: keep "매도" (수수료 임계 내 동가)
+                        pnl_str = f" ({pnl_pct:+.2f}%)"
+                    except Exception:
+                        pass
+
+            self.push_dashboard_event(
+                event_label,
+                f"{name} {side_label} {qty}주 @ {float(price):,.0f}{pnl_str}",
+            )
         elif event.type == EventType.ERROR:
             msg = getattr(event, 'message', str(event))
             self.push_dashboard_event("오류", msg[:100])
