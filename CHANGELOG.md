@@ -1,5 +1,54 @@
 # QWQ AI Trader - Changelog
 
+## 2026-04-28 — 검증 차단 해소 (좀비 포지션 + allocation 재조정)
+
+### 배경
+09:30~09:32 매수 시그널 5건 모두 차단. 진단 결과:
+- 010140 삼성중공업 (점수 98→87, LLM soft-reject 통과) → "전략 예산 소진: strategic_swing 한도=2,588,146 사용=2,731,000"
+- 005930 삼성전자 (점수 93) → 동일 사유
+- 175330 / 032640 / 012750 → 자동 -14점 감점(장초반 -8, 지표결손 -6)으로 50점 미만
+
+근본 원인:
+1. 034020 두산에너빌리티 strategic_swing 좀비 포지션 2건 (3/16 55주 + 3/26 28주, 합계 5,940,000+2,884,000=8.82M)이 DB OPEN으로 잔존. 실제 KIS 보유 0주 (3/27 sepa_trend stop_loss 통합 매도 시 strategic_swing이 정리 안 됨)
+2. 봇이 일부 포지션의 `pos.strategy` 필드를 "strategic_swing"으로 복원 못 해 사용액을 한도 초과 상태로 인식
+3. cross_validator 장초반 -8 페널티가 batch 전략(strategic_swing)에도 적용
+
+### 변경
+- **DB cleanup**:
+  ```
+  UPDATE trades SET exit_time='2026-03-27 15:30:00',
+    exit_quantity=entry_quantity, exit_price=entry_price,
+    pnl=0, pnl_pct=0, exit_type='sync_reconcile',
+    exit_reason='좀비 정리 (KIS 실제 보유 0주, 다른 trade로 청산 통합 추정)'
+  WHERE symbol='034020' AND exit_time IS NULL;
+  ```
+  - 2 rows updated. `exit_type='sync_reconcile'` 사용 (기존 enum 재활용 — `trade_journal._sync_exit_types`에 이미 등록되어 review/evolve 모집단에서 자동 제외)
+- `config/evolved_overrides.yml`:
+  - `risk_config.strategy_allocation.strategic_swing`: 10.0 → **15.0**
+  - `risk_config.strategy_allocation.sepa_trend`: 50.0 → **45.0**
+  - 합계 100% 유지 (gap_and_go 10 + theme_chasing 5 + rsi2_reversal 15 + core_holding 10)
+  - `_meta` 갱신 (manual_review, timestamp 2026-04-28T14:40:00)
+- `src/core/cross_validator.py:134-137`:
+  - 09:30~10:30 -8점 페널티 예외에 `strategic_swing` 추가 (배치 T+1 전략은 09:30 진입이 정상)
+  - 코드 주석에 "장중 진입 추가 시 재검토 필수" 가드 명기
+
+### 코드 리뷰 P0 반영
+- **P0**: `exit_type='cleanup'` 신규 enum 사용 시 `trade_journal._sync_exit_types` 미인식 → strategic_swing 승률 75%→64% 즉시 왜곡. → `sync_reconcile`(기존 enum)으로 재변경하여 회피.
+- JSON 저널: 3/16, 3/26은 30일 retention 외 (4/13~ 만 잔존) → 메모리 부활 위험 없음 ✓.
+
+### 데이터 검증
+- 4월 KR 거래 통계 (전략별):
+  - strategic_swing: 12건 75% 승률 +1.40M
+  - core_holding: 6건 67% +0.37M
+  - sepa_trend: 17건 65% +0.11M
+  - rsi2_reversal: 7건 43% -0.002M
+  - theme_chasing: 27건 30% **-0.12M** (5% 캡 유지 정당화)
+- daily_max 안전 마진: `min_stop_pct 4.0% × max_position_pct 28% × 4건 동시손절 = 4.48% < 5%` 유지 ✓
+- 표본 한계: strategic_swing 12건은 95% CI ±24%p (bull 편향 가능) — `_meta`에 명기
+
+### 미해결 (의도된 동작)
+- 장중 자동진입(theme_chasing 강제 매핑) + theme_chasing 5% 잔여 < min_position_value 200k → 0주 차단. 의도된 손실 통제(승률 30%) → 변경 불필요.
+
 ## 2026-04-28 — 대시보드 주문 이벤트 매수/매도/익절/손절 구분
 
 ### 배경

@@ -88,6 +88,45 @@ python scripts/liquidate_all.py --force        # 확인 없이
   - 텔레그램: Top 5 놓침/회피 + 전략별 평균 + LLM 인사이트
 - **수동 실행**: `python -c "..."` 형태로는 broker 인스턴스 충돌 위험 있음 — 봇 외부에서는 mock broker 사용 권장.
 
+## DB 좀비 포지션 진단/정리
+
+### 증상
+점수 90+ 매수 시그널이 "전략 예산 소진"으로 차단. 한도 산정에 의문.
+
+### 진단 (2026-04-28 사고 기준)
+```bash
+# 1. 봇 인식 vs DB 보유 비교
+PGPASSWORD=$DB_PW psql -U postgres -h localhost -d ai_db -c "
+  SELECT symbol, name, entry_strategy,
+         entry_quantity * entry_price AS cost
+  FROM trades WHERE market='KR' AND exit_time IS NULL
+  ORDER BY entry_strategy, cost DESC;"
+
+# 2. 실제 KIS 보유 확인
+curl -s http://localhost:8080/api/positions | python3 -m json.tool
+
+# 3. 동일 종목이 DB OPEN인데 KIS에는 없으면 → 좀비
+```
+
+### 정리 SQL (반드시 `sync_reconcile` 사용)
+```sql
+UPDATE trades
+SET exit_time='YYYY-MM-DD HH:MM:SS',  -- 실제 청산 추정 시각
+    exit_quantity=entry_quantity,
+    exit_price=entry_price,           -- pnl 0으로 강제 (회계 왜곡 인정)
+    pnl=0, pnl_pct=0,
+    exit_type='sync_reconcile',       -- ⚠️ 'cleanup' 금지! is_sync 필터 미인식
+    exit_reason='좀비 정리 (사유 명기)'
+WHERE symbol=? AND exit_time IS NULL;
+```
+
+**중요**: `exit_type='cleanup'`은 `trade_journal._sync_exit_types` 에 등록되지 않아 진화/리뷰 평가에서 패배로 잘못 집계됨. 반드시 `sync_reconcile` 사용.
+
+### 사후 조치
+1. DB 백업 확보: `pg_dump -t trades -t trade_events ai_db | gzip > ~/backups/...`
+2. 봇 재시작 → 메타 복원 검증 (보유 종목 수 일치 확인)
+3. `evolved_overrides.yml`의 strategy_allocation 한도 영향 재계산
+
 ## 트러블슈팅
 
 ### 봇 미응답

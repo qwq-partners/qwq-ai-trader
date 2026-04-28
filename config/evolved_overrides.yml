@@ -16,12 +16,12 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    sepa_trend: 50.0
+    sepa_trend: 45.0
     gap_and_go: 10.0
     theme_chasing: 5.0
     rsi2_reversal: 15.0
     momentum_breakout: 0.0
-    strategic_swing: 10.0
+    strategic_swing: 15.0
     core_holding: 10.0
 exit_manager:
   # 2026-04-25: 단기/중기 보유(<6h) -2.96M 손실 패턴 — 노이즈 손절 차단 위해
@@ -90,8 +90,10 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: weekly_rebalance
-    timestamp: '2026-04-25T10:22:16.317025'
+    source: manual_review
+    timestamp: '2026-04-28T14:40:00'
+    note: 'strategic_swing 10→15%(75% 승률, 4월 표본 12건, bull 편향 주의), sepa_trend
+      50→45%. 034020 좀비 포지션이 strategic_swing 한도(2.6M) 단독 초과로 매수 5건 차단된 사고 후 조치.'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'

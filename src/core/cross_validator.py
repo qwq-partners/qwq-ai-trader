@@ -131,7 +131,9 @@ class CrossStrategyValidator:
                 )
                 return False, 0, "장초반 30분 진입 차단 (09:00~09:29)"
             # 09:30~10:30 -8점 페널티 (변동성 방향 미확정 구간)
-            if 930 <= now_hm < 1030 and strategy != "core_holding":
+            # core_holding/strategic_swing은 배치(T+1) 전략 — 09:30 시작이 정상 동작이므로 예외.
+            # 주의: strategic_swing이 미래에 장중 진입 추가 시 이 면제 재검토 필수.
+            if 930 <= now_hm < 1030 and strategy not in ("core_holding", "strategic_swing"):
                 adjusted_score -= 8
                 penalties.append("장초반 변동성 -8 (09:30~10:30)")
             # 12:30~13:00 +5 보너스 (점심 batch 추세 확정 후 진입 sweet spot)
