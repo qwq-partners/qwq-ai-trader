@@ -1,5 +1,31 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-02 — 주간 리밸런싱 Decimal+float TypeError 재발 방지
+
+### 배경
+2026-05-02 00:00:10 주간 리밸런싱 실행 중 `unsupported operand type(s) for +=: 'float' and 'decimal.Decimal'` 에러 발생. ISO week 18 상태 저장 후 실패 → 이번 주 리밸런싱 미실행.
+
+### 근본 원인
+`trade_reviewer.py:_calculate_max_drawdown`:
+- `cumulative = 0` (int) 초기화 후 `cumulative += trade.pnl_pct`
+- DB sync 경로에서 `pnl_pct`가 Decimal로 들어오면 첫 iter에서 cumulative가 Decimal로 변환되지만, 일부 trade가 float일 경우 두 번째 iter에서 Decimal+float 충돌.
+- `_generate_summary_for_llm`의 `total_pnl = sum(t.pnl for t in trades)` 도 동일 패턴.
+
+### 수정
+- `src/core/evolution/trade_reviewer.py:210-230` — `_calculate_max_drawdown`:
+  - 초기값 `0` → `0.0` (명시적 float)
+  - `cumulative += trade.pnl_pct` → `cumulative += float(trade.pnl_pct or 0)`
+- `src/core/evolution/trade_reviewer.py:573` — `_generate_summary_for_llm`:
+  - `sum(t.pnl for t in trades)` → `sum(float(t.pnl or 0) for t in trades)`
+
+### 검증
+- 스모크 테스트: review_period(7) 8건/win 37.5%/pf 0.38/dd 10.58% / review_period(30) 58건/win 41.4%/pf 1.40/dd 26.56% 모두 정상 계산.
+- 봇 재시작 정상.
+
+### 미실행 리밸런싱
+- 2026-05-02 ISO week 18 상태가 이미 저장되어 다음 토요일(2026-05-09)까지 자동 재시도 없음.
+- 수동 트리거 원하면 `~/.cache/ai_trader/last_rebalance.json` 삭제 후 봇 재시작 권장 (장 마감 후 안전 시간).
+
 ## 2026-04-28 — 검증 차단 해소 (좀비 포지션 + allocation 재조정)
 
 ### 배경

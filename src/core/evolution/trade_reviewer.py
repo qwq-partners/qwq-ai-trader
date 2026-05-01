@@ -210,17 +210,18 @@ class TradeReviewer:
     def _calculate_max_drawdown(self, trades: List[TradeRecord]) -> float:
         """최대 낙폭 계산"""
         if not trades:
-            return 0
+            return 0.0
 
         # 시간순 정렬
         sorted_trades = sorted(trades, key=lambda t: t.entry_time or datetime.min)
 
-        cumulative = 0
-        peak = 0
-        max_drawdown = 0
+        # DB sync 경로에서 pnl_pct가 Decimal로 들어와 float += Decimal 충돌 방지
+        cumulative = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
 
         for trade in sorted_trades:
-            cumulative += trade.pnl_pct
+            cumulative += float(trade.pnl_pct or 0)
             if cumulative > peak:
                 peak = cumulative
             drawdown = peak - cumulative
@@ -570,7 +571,8 @@ class TradeReviewer:
     ) -> str:
         """LLM 분석용 요약 텍스트 생성"""
         # 일평균 지표 계산 (공휴일 포함 실제 영업일)
-        total_pnl = sum(t.pnl for t in trades)
+        # DB sync 경로 Decimal+float 혼용 방어
+        total_pnl = sum(float(t.pnl or 0) for t in trades)
         # entry_time이 None인 레코드 제외 (손상 데이터 방어)
         valid_trades = [t for t in trades if t.entry_time]
         if len(valid_trades) >= 2:
