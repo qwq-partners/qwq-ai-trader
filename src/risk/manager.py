@@ -501,15 +501,16 @@ class RiskManager:
             return False, f"당일 청산 후 쿨다운 ({elapsed_min:.0f}분/30분)"
 
         # 눌림/재돌파 확인: 청산가 대비 가격 위치로 판단
+        # 2026-05-02: -3%~+3% → -5%~+5% 완화 (주간 후속복기 stop_loss 24건 중 17건 V자 반등)
         if exit_price > 0 and current_price > 0:
             from_exit = (current_price - exit_price) / exit_price * 100
-            # 청산가 대비 -3%~+3% = 눌림~소폭반등 구간 → 재진입 허용
-            if -3 <= from_exit <= 3:
+            # 청산가 대비 -5%~+5% = 눌림~소폭반등 구간 → 재진입 허용
+            if -5 <= from_exit <= 5:
                 return True, f"눌림/횡보 확인 (청산가 대비 {from_exit:+.1f}%)"
-            # 청산가 대비 +3% 초과 = 재돌파 → 재진입 허용
-            if from_exit > 3:
+            # 청산가 대비 +5% 초과 = 재돌파 → 재진입 허용
+            if from_exit > 5:
                 return True, f"재돌파 확인 (청산가 대비 {from_exit:+.1f}%)"
-            # -3% 미만 = 급락 중 → 차단 (추격 방지)
+            # -5% 미만 = 급락 중 → 차단 (추격 방지)
             return False, f"급락 중 재진입 차단 (청산가 대비 {from_exit:+.1f}%)"
 
         return True, ""
