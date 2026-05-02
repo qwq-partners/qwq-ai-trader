@@ -1,5 +1,49 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-02 — 통합 코드 리뷰 P0+P1+P2 일괄 반영
+
+### 배경
+3-에이전트 통합 코드 리뷰(general-purpose + risk-auditor + engine-monitor)에서 P0 2건, P1 3건, P2 1건 발견. A안(stop_loss V자 반등 재진입 허용) 채택 후 일괄 수정.
+
+### 변경
+
+**P0-1: FILL 라벨링 강건성** (`src/core/engine.py:386-440`)
+- 마지막 분할청산 시 portfolio.positions에서 종목이 제거된 후라면 라벨이 "매도"로 폴백되던 문제
+- 폴백 체인: portfolio.positions → trade_journal 오픈 trade → fill 객체의 avg_price
+- `except Exception: pass` → 좁은 예외(`InvalidOperation, ZeroDivisionError, TypeError, ValueError`) + 디버그 로그
+- `from decimal import Decimal, InvalidOperation` 추가
+
+**P0-2: 재진입 A안 — stop_loss 종목 V자 반등 재진입 허용** (`src/risk/manager.py:251-265, 478-518`)
+- 신규 메서드 `_check_stop_loss_rebound(symbol, current_price)`:
+  - 30분 쿨다운 충족
+  - 청산가 대비 +5% 이상 재돌파
+- 기존 `_stop_loss_today` 무조건 차단 → 위 조건 충족 시 차단 해제
+- 근거: W18 후속복기 stop_loss 24건 중 17건(71%)이 매도 후 +3%↑ 상승
+
+**P1-3: PostExitReviewer 09:00 → 09:30 KST** (`src/schedulers/kr_scheduler.py:4087-4092`)
+- weekly_rebalance(00:00) + KIS API 폭주 회피 (70종목 14초+)
+- 윈도우: 토 09:30~09:44
+
+**P1-5: data_collector keywords type-only 매칭** (`src/dashboard/data_collector.py:1123-1136`)
+- 기존: type 또는 message 부분 매치 → "신규 매수 cooldown" 같은 리스크 메시지 오염
+- 변경: type 정확 매치만 (`set in` 검사)
+
+**P2-6: CLAUDE.md 절대 금지 패턴 4건 수정**
+- `src/core/evolution/trade_reviewer.py:222`, `:574`
+  - `float(t.pnl_pct or 0)` → `float(pnl_pct_val) if pnl_pct_val is not None else 0`
+  - `sum(float(t.pnl or 0) for ...)` → `sum(float(t.pnl) for ... if t.pnl is not None)`
+- `src/analytics/post_exit_review.py:133-135, 155`
+  - `float(r[...] or 0)` 4건 → `float(...) if ... is not None else 0.0` 명시 None 체크
+
+### 검증
+- py_compile 통과 (6개 파일)
+- 봇 재시작 정상 (active)
+- 기존 검증: W18 후속복기 71건 표본은 그대로 유지
+
+### 미반영 (의도적 보류)
+- **rsi2_reversal 9.5% 사실상 비활성**: per-position 20% > allocation 9.5%. 다음 weekly_rebalance에서 LLM 자동 조정 기대
+- **strategic_swing 18.8% bull 편향 가드**: 5/9 LLM rebalance 결과 검토 후 결정
+
 ## 2026-05-02 — 재진입 가격 조건 완화 (V자 반등 포착)
 
 ### 배경

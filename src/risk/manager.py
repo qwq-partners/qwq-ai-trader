@@ -248,9 +248,19 @@ class RiskManager:
             except Exception:
                 pass  # 캘린더 모듈 없거나 오류면 통과 (안전 폴백)
 
-        # 1. 당일 재진입 금지 체크 (KR 전용)
+        # 1. 당일 재진입 체크 (KR 전용)
+        # 2026-05-02: A안 — stop_loss 종목도 V자 반등(+5% 재돌파) 시 재진입 허용
+        # 근거: 주간 후속복기 stop_loss 24건 중 17건(71%)이 매도 후 +3% 이상 상승.
+        # 단, 30분 쿨다운 + 손절가 대비 +5% 이상 명확한 재돌파만 허용 (추격 손절 방지).
         if self.market == "KR" and symbol in self._stop_loss_today:
-            return False, "당일 손절 종목 재진입 금지"
+            allow_rebound, rebound_reason = self._check_stop_loss_rebound(
+                symbol, float(price)
+            )
+            if not allow_rebound:
+                return False, f"당일 손절 종목 재진입 금지 ({rebound_reason})"
+            logger.info(
+                f"[재진입] {symbol} 손절 후 V자 반등 감지 — 재진입 허용 ({rebound_reason})"
+            )
 
         # 1.2. 동일 종목 재진입 제한 (KR): 눌림/재돌파 확인형
         if self.market == "KR" and symbol in self._exited_today:
@@ -474,6 +484,49 @@ class RiskManager:
                     "sector": sector,
                 }
                 self._save_exited_today()
+
+    def _check_stop_loss_rebound(self, symbol: str, current_price: float) -> tuple:
+        """손절 종목 V자 반등 재진입 가능 여부 (KR 전용)
+
+        조건:
+        - 청산가 대비 +5% 이상 재돌파 (명확한 반등 확인)
+        - 청산 후 30분 이상 경과 (즉시 추격 방지)
+
+        주간 후속복기(W18) 결과: stop_loss 24건 중 17건(71%)이 매도 후 +3% 이상 상승.
+        +5% 임계는 노이즈 반등 배제용 보수 마진.
+
+        Returns:
+            (허용 여부, 사유)
+        """
+        if self.market != "KR":
+            return False, "KR 외 시장"
+
+        exit_info = self._exited_today.get(symbol)
+        if exit_info is None:
+            return False, "청산 정보 없음"
+
+        exit_price = exit_info.get("price", 0)
+        exit_time_raw = exit_info.get("time")
+        if not exit_time_raw or exit_price <= 0 or current_price <= 0:
+            return False, "청산 데이터 불충분"
+
+        if isinstance(exit_time_raw, str):
+            try:
+                exit_time = datetime.fromisoformat(exit_time_raw)
+            except ValueError:
+                return False, "청산 시간 파싱 실패"
+        else:
+            exit_time = exit_time_raw
+
+        elapsed_min = (datetime.now() - exit_time).total_seconds() / 60
+        if elapsed_min < 30:
+            return False, f"쿨다운 미충족 ({elapsed_min:.0f}분/30분)"
+
+        from_exit = (current_price - exit_price) / exit_price * 100
+        if from_exit < 5:
+            return False, f"반등 미달 (청산가 대비 {from_exit:+.1f}% < +5%)"
+
+        return True, f"V자 반등 +{from_exit:.1f}% (>=+5%)"
 
     def check_reentry_condition(self, symbol: str, current_price: float) -> tuple:
         """동일 종목 재진입 조건 체크 (눌림/재돌파 확인형)

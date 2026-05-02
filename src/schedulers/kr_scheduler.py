@@ -4085,8 +4085,9 @@ JSON:
             while bot.running:
                 now = datetime.now()
 
+                # 토요일 09:30~09:44 (weekly_rebalance 00:00 + KIS API 폭주 회피 위해 09:30 이후)
                 if (now.weekday() == 5 and now.hour == 9
-                        and 0 <= now.minute < 15):
+                        and 30 <= now.minute < 45):
                     iso_year, iso_week, _ = now.isocalendar()
                     if last_run_week != iso_week:
                         logger.info("[후속복기] 주간 매도 후속 복기 실행")

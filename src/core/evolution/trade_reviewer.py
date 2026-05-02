@@ -221,7 +221,8 @@ class TradeReviewer:
         max_drawdown = 0.0
 
         for trade in sorted_trades:
-            cumulative += float(trade.pnl_pct or 0)
+            pnl_pct_val = trade.pnl_pct if trade.pnl_pct is not None else 0
+            cumulative += float(pnl_pct_val)
             if cumulative > peak:
                 peak = cumulative
             drawdown = peak - cumulative
@@ -572,7 +573,7 @@ class TradeReviewer:
         """LLM 분석용 요약 텍스트 생성"""
         # 일평균 지표 계산 (공휴일 포함 실제 영업일)
         # DB sync 경로 Decimal+float 혼용 방어
-        total_pnl = sum(float(t.pnl or 0) for t in trades)
+        total_pnl = sum(float(t.pnl) for t in trades if t.pnl is not None)
         # entry_time이 None인 레코드 제외 (손상 데이터 방어)
         valid_trades = [t for t in trades if t.entry_time]
         if len(valid_trades) >= 2:

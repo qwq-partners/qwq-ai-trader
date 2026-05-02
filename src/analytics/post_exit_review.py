@@ -130,9 +130,9 @@ class PostExitReviewer:
                 "strategy": r["entry_strategy"] or "unknown",
                 "entry_time": r["entry_time"].isoformat() if r["entry_time"] else None,
                 "exit_time": r["exit_time"].isoformat() if r["exit_time"] else None,
-                "entry_price": float(r["entry_price"] or 0),
-                "exit_price": float(r["exit_price"] or 0),
-                "pnl_pct": float(r["pnl_pct"] or 0),
+                "entry_price": float(r["entry_price"]) if r["entry_price"] is not None else 0.0,
+                "exit_price": float(r["exit_price"]) if r["exit_price"] is not None else 0.0,
+                "pnl_pct": float(r["pnl_pct"]) if r["pnl_pct"] is not None else 0.0,
                 "exit_type": r["exit_type"] or "unknown",
                 "exit_reason": (r["exit_reason"] or "")[:200],
                 "holding_minutes": r["holding_minutes"] or 0,
@@ -152,7 +152,9 @@ class PostExitReviewer:
         for sym in unique_symbols:
             try:
                 quote = await self._broker.get_quote(sym)
-                price = float((quote or {}).get("price", 0) or 0)
+                quote_data = quote if quote else {}
+                raw_price = quote_data.get("price")
+                price = float(raw_price) if raw_price is not None else 0.0
                 if price > 0:
                     symbol_to_price[sym] = price
                 else:

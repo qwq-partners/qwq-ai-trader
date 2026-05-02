@@ -16,18 +16,14 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    sepa_trend: 45.0
-    gap_and_go: 10.0
-    theme_chasing: 5.0
-    rsi2_reversal: 15.0
+    strategic_swing: 18.8
     momentum_breakout: 0.0
-    strategic_swing: 15.0
+    gap_and_go: 9.5
+    theme_chasing: 5.0
+    sepa_trend: 47.2
+    rsi2_reversal: 9.5
     core_holding: 10.0
 exit_manager:
-  # 2026-04-25: 단기/중기 보유(<6h) -2.96M 손실 패턴 — 노이즈 손절 차단 위해
-  # min_stop_pct 3.5 → 4.0으로 상향 (4.5에서 한 단계 환원).
-  # 근거: max_position_pct 28% × min_stop 4.0% × 4건 동시 손절 = 4.48% < 5% (daily_max).
-  # 4.5%면 5.04% 한도 초과 가능 (risk-auditor 지적).
   max_stop_pct: 8.0
   min_stop_pct: 4.0
   first_exit_pct: 5.0
@@ -90,10 +86,8 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: manual_review
-    timestamp: '2026-04-28T14:40:00'
-    note: 'strategic_swing 10→15%(75% 승률, 4월 표본 12건, bull 편향 주의), sepa_trend
-      50→45%. 034020 좀비 포지션이 strategic_swing 한도(2.6M) 단독 초과로 매수 5건 차단된 사고 후 조치.'
+    source: weekly_rebalance
+    timestamp: '2026-05-02T01:43:43.182152'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
@@ -112,7 +106,5 @@ _meta:
     timestamp: '2026-03-07T11:00:00'
     note: 03-04 대참사 이후 강제 비활성화 (35% 승률, -1.07M 손실)
   theme_chasing.min_score:
-    source: manual_review
-    timestamp: '2026-04-18T20:30:00'
-    note: rule(low_frequency)로 60→57 자동 하향됐으나 before_win_rate=0.0 버그로 평가 불가 — 65로
-      수동 정정 (잡음 진입 차단 강화)
+    source: rule
+    timestamp: '2026-04-29T20:31:15.804674'

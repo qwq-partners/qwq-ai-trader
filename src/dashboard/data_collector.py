@@ -1121,15 +1121,18 @@ class DashboardDataCollector:
     # ----------------------------------------------------------
 
     def get_order_history(self) -> List[Dict[str, Any]]:
-        """주문 관련 이벤트 히스토리 (신호/주문/체결/매수/익절/손절/매도/취소/폴백/오류)"""
+        """주문 관련 이벤트 히스토리 (신호/주문/체결/매수/익절/손절/매도/취소/폴백/오류)
+
+        type 정확 매치만 사용 — message 부분 매치는 "신규 매수 cooldown" 등
+        리스크 메시지 오염 위험 (2026-05-02 코드리뷰 P1-5).
+        """
         engine = self.bot.engine
         events = getattr(engine, '_dashboard_events', [])
-        keywords = (
+        allowed_types = {
             "신호", "주문", "체결", "매수", "익절", "손절", "매도",
             "폴백", "취소", "오류",
-        )
-        return [e for e in events if any(kw in e.get("type", "") for kw in keywords)
-                or any(kw in e.get("message", "") for kw in keywords)]
+        }
+        return [e for e in events if e.get("type", "") in allowed_types]
 
     # ----------------------------------------------------------
     # 헬스체크 결과

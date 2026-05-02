@@ -15,7 +15,7 @@ import heapq
 import json
 from collections import deque
 from datetime import datetime, date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Coroutine, Set
 from dataclasses import dataclass, field
@@ -402,8 +402,27 @@ class UnifiedEngine:
             event_label = "매수" if is_buy else "매도"
             pnl_str = ""
             if not is_buy:
+                # avg_price 조회: 1순위 portfolio.positions, 2순위 trade_journal 오픈 trade,
+                # 3순위 fill 객체에 직접 첨부된 평균가
+                avg_px = None
                 pos = self.portfolio.positions.get(symbol)
-                avg_px = getattr(pos, 'avg_price', None) if pos else None
+                if pos is not None:
+                    avg_px = getattr(pos, 'avg_price', None)
+                if (avg_px is None or avg_px <= 0):
+                    # 폴백: trade_journal 마지막 오픈 trade의 entry_price
+                    tj = getattr(self, '_trade_journal', None) or getattr(self, 'trade_journal', None)
+                    if tj is not None:
+                        try:
+                            opens = tj.get_open_trades(symbol) if hasattr(tj, 'get_open_trades') else []
+                            if opens:
+                                avg_px = Decimal(str(opens[0].entry_price))
+                        except Exception as _tj_err:
+                            logger.debug(f"[엔진] FILL 라벨 trade_journal 폴백 실패 {symbol}: {_tj_err}")
+                if (avg_px is None or avg_px <= 0):
+                    fill_obj = getattr(event, 'fill', None)
+                    fill_avg = getattr(fill_obj, 'avg_price', None) if fill_obj else None
+                    if fill_avg is not None and fill_avg > 0:
+                        avg_px = Decimal(str(fill_avg))
                 if avg_px is not None and avg_px > 0:
                     try:
                         pnl_pct_dec = (Decimal(str(price)) - avg_px) / avg_px * Decimal("100")
@@ -414,8 +433,10 @@ class UnifiedEngine:
                             event_label = "손절"
                         # else: keep "매도" (수수료 임계 내 동가)
                         pnl_str = f" ({pnl_pct:+.2f}%)"
-                    except Exception:
-                        pass
+                    except (InvalidOperation, ZeroDivisionError, TypeError, ValueError) as _calc_err:
+                        logger.debug(f"[엔진] FILL 라벨 PnL 계산 실패 {symbol}: {_calc_err}")
+                else:
+                    logger.debug(f"[엔진] FILL 라벨 avg_price 미확보 {symbol} → '매도'로 폴백")
 
             self.push_dashboard_event(
                 event_label,
