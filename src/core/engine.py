@@ -410,19 +410,22 @@ class UnifiedEngine:
                     avg_px = getattr(pos, 'avg_price', None)
                 if (avg_px is None or avg_px <= 0):
                     # 폴백: trade_journal 마지막 오픈 trade의 entry_price
+                    # get_open_trades()는 인자 없이 전체 반환 → symbol 필터 + 최신 entry_time 우선
                     tj = getattr(self, '_trade_journal', None) or getattr(self, 'trade_journal', None)
-                    if tj is not None:
+                    if tj is not None and hasattr(tj, 'get_open_trades'):
                         try:
-                            opens = tj.get_open_trades(symbol) if hasattr(tj, 'get_open_trades') else []
-                            if opens:
-                                avg_px = Decimal(str(opens[0].entry_price))
+                            all_opens = tj.get_open_trades() or []
+                            sym_opens = [t for t in all_opens if getattr(t, 'symbol', '') == symbol]
+                            if sym_opens:
+                                latest = max(
+                                    sym_opens,
+                                    key=lambda t: getattr(t, 'entry_time', None) or datetime.min,
+                                )
+                                ep = getattr(latest, 'entry_price', None)
+                                if ep is not None:
+                                    avg_px = Decimal(str(ep))
                         except Exception as _tj_err:
                             logger.debug(f"[엔진] FILL 라벨 trade_journal 폴백 실패 {symbol}: {_tj_err}")
-                if (avg_px is None or avg_px <= 0):
-                    fill_obj = getattr(event, 'fill', None)
-                    fill_avg = getattr(fill_obj, 'avg_price', None) if fill_obj else None
-                    if fill_avg is not None and fill_avg > 0:
-                        avg_px = Decimal(str(fill_avg))
                 if avg_px is not None and avg_px > 0:
                     try:
                         pnl_pct_dec = (Decimal(str(price)) - avg_px) / avg_px * Decimal("100")

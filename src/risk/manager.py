@@ -252,6 +252,8 @@ class RiskManager:
         # 2026-05-02: A안 — stop_loss 종목도 V자 반등(+5% 재돌파) 시 재진입 허용
         # 근거: 주간 후속복기 stop_loss 24건 중 17건(71%)이 매도 후 +3% 이상 상승.
         # 단, 30분 쿨다운 + 손절가 대비 +5% 이상 명확한 재돌파만 허용 (추격 손절 방지).
+        # P1-3: V자 반등 통과 시 다음 _exited_today 분기에서 재차단되지 않도록 단축 평가
+        stop_loss_rebound_passed = False
         if self.market == "KR" and symbol in self._stop_loss_today:
             allow_rebound, rebound_reason = self._check_stop_loss_rebound(
                 symbol, float(price)
@@ -261,9 +263,12 @@ class RiskManager:
             logger.info(
                 f"[재진입] {symbol} 손절 후 V자 반등 감지 — 재진입 허용 ({rebound_reason})"
             )
+            stop_loss_rebound_passed = True
 
         # 1.2. 동일 종목 재진입 제한 (KR): 눌림/재돌파 확인형
-        if self.market == "KR" and symbol in self._exited_today:
+        # V자 반등 통과한 stop_loss 종목은 단축 통과 (이미 +5% 재돌파 검증됨)
+        if (self.market == "KR" and symbol in self._exited_today
+                and not stop_loss_rebound_passed):
             can_re, reason = self.check_reentry_condition(symbol, float(price))
             if not can_re:
                 return False, f"재진입 제한: {reason}"
@@ -476,7 +481,8 @@ class RiskManager:
                 f"(type={exit_type or 'unknown'}, 누적 {self._daily_exit_count} 유지)"
             )
 
-        if self.market == "KR":
+        # P1-4: 부분 청산 시 _exited_today 등록 금지 — 잔여분 손절 시 잘못된 기준선 방지
+        if self.market == "KR" and is_full_exit:
             if symbol not in self._exited_today:
                 self._exited_today[symbol] = {
                     "price": exit_price,

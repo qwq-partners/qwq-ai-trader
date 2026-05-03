@@ -904,8 +904,9 @@ class StrategyEvolver:
         logger.info("[리밸런싱] 주간 전략 예산 리밸런싱 시작")
 
         # DB에서 거래 기록 보강 (JSON 누락분 복구)
+        # 2026-05-03: 90일 시계열 review 추가 → DB sync 범위도 90일로 확장
         try:
-            await self.journal.sync_from_db(days=7)
+            await self.journal.sync_from_db(days=90)
         except Exception as e:
             logger.warning(f"[리밸런싱] DB 동기화 실패 (JSON 폴백): {e}")
 
@@ -921,10 +922,12 @@ class StrategyEvolver:
         current = {k: float(v) for k, v in risk_alloc.items()}
         logger.info(f"[리밸런싱] 현재 배분: {current}")
 
-        # 2. 다중 시계열 전략별 성과 (1주 + 30일 누적)
+        # 2. 다중 시계열 전략별 성과 (1주 + 30일 + 90일 누적)
         # 2026-04-25: 1주 표본이 작으면 노이즈 위험 — 누적(30일) 함께 분석.
+        # 2026-05-03: 90일 누적 추가 — 단일 시점 표본 과적합 방지 (rsi2 4월 7건 vs 누적 10건/60% 모순 사례)
         review_7d = self.reviewer.review_period(7)
         review_30d = self.reviewer.review_period(30)
+        review_90d = self.reviewer.review_period(90)
         if review_7d.total_trades < 3 and review_30d.total_trades < 5:
             logger.info(
                 f"[리밸런싱] 거래 부족 (1주 {review_7d.total_trades}건 < 3 AND "
@@ -944,17 +947,20 @@ class StrategyEvolver:
             llm = get_llm_manager()
             perf_summary_7d = self._build_perf_summary(review_7d)
             perf_summary_30d = self._build_perf_summary(review_30d)
+            perf_summary_90d = self._build_perf_summary(review_90d)
 
             system_prompt = (
                 "당신은 한국 주식 단기매매 봇의 자본 배분 전략가입니다.\n"
-                "두 시계열(지난 1주, 누적 30일) 전략별 성과를 함께 보고, "
+                "세 시계열(지난 1주, 누적 30일, 누적 90일) 전략별 성과를 함께 보고, "
                 "각 전략의 총예산 비중(%)을 조정하세요.\n\n"
-                "분석 원칙:\n"
-                "- **누적(30일) 우선**: 표본이 충분(≥10건)한 전략은 30일 데이터를 신뢰\n"
-                "- **1주 표본 작으면(<5건) 노이즈 가능성** — 단독 판단 자제, 추세 단서로만 활용\n"
-                "- 1주 vs 30일 신호가 상충하면, **표본이 큰 쪽 우선**\n"
-                "- 1주 부진하나 30일 양호 → 일시적 변동 가능성, 급감액 자제\n"
-                "- 1주 양호하나 30일 부진 → 회복 단서지만 신뢰도 낮음, 완만 증액\n\n"
+                "분석 원칙 (시계열 우선순위):\n"
+                "- **누적 90일이 가장 신뢰**: 표본이 가장 크고 시장 체제 변동을 흡수\n"
+                "- **30일은 최근 추세 단서**: 90일 대비 큰 차이 시 체제 전환 의심\n"
+                "- **1주는 노이즈 가능성**: 단독 판단 자제, 추세 단서로만 활용\n"
+                "- 시계열 간 상충 시: **표본이 큰 쪽(90일 > 30일 > 1주) 우선**\n"
+                "- 30일 vs 90일 부호 일치 + 1주 부진 → 일시적 변동 가능성, 급감액 자제\n"
+                "- 30일 vs 90일 부호 불일치 → 체제 전환 가능성, 보수적 조정\n"
+                "- 90일 부진하나 30일 호전 → 회복 단서지만 신뢰도 낮음, 완만 증액\n\n"
                 "지표 우선순위:\n"
                 "- 수익성: 승률 × 평균수익률이 높은 전략에 더 많은 자본 배분\n"
                 "- 안정성: 연속 손실이 적은 전략 선호\n"
@@ -967,7 +973,8 @@ class StrategyEvolver:
                 "- 비활성 전략(momentum_breakout): 반드시 0%\n\n"
                 "JSON 형식으로 응답:\n"
                 '{ "allocations": {"momentum_breakout": 60, ...}, '
-                '"reasoning": "분석 사유 (1주/30일 비교 명시)", "confidence": 0.7 }'
+                '"reasoning": "분석 사유 (1주/30일/90일 시계열 비교 명시 필수)", '
+                '"confidence": 0.7 }'
             )
 
             user_prompt = (
@@ -981,7 +988,12 @@ class StrategyEvolver:
                 f"  요약: 총 {review_30d.total_trades}건, "
                 f"승률 {review_30d.win_rate:.1f}%, "
                 f"손익비 {review_30d.profit_factor:.2f}, "
-                f"총손익 {review_30d.total_pnl:,.0f}원"
+                f"총손익 {review_30d.total_pnl:,.0f}원\n\n"
+                f"=== 누적 90일 성과 (가장 신뢰) ===\n{perf_summary_90d}\n"
+                f"  요약: 총 {review_90d.total_trades}건, "
+                f"승률 {review_90d.win_rate:.1f}%, "
+                f"손익비 {review_90d.profit_factor:.2f}, "
+                f"총손익 {review_90d.total_pnl:,.0f}원"
             )
 
             result = await llm.complete_json(

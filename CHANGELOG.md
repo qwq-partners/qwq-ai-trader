@@ -1,5 +1,57 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-03 — 거래 원칙 리포트 분석 후속 + 코드리뷰 P0+P1 반영
+
+### 배경
+2026-05-03 주간 거래 원칙 리포트 분석 결과:
+- L3 경험 원칙(67% 승률) vs 5/2 LLM rebalance(rsi2 9.5% 감액) 모순
+- 단일 시점 표본(4월 7건) 과적합 의심
+- theme_chasing 누적 -300k (44건, 승률 34.1%)
+
+3건 권고 일괄 진행 후 통합 코드 리뷰에서 P0 2건 + P1 4건 발견.
+
+### 변경
+
+**A: rebalance LLM 시계열 90일 추가** (`src/core/evolution/strategy_evolver.py`)
+- review_period(7) + (30) + **(90)** 3시계열
+- system_prompt: 누적 90일 우선, 30일 vs 90일 부호 불일치 시 체제 전환 의심
+- reasoning에 1주/30일/90일 비교 명시 의무화
+- **P0-2 수정**: `sync_from_db(days=7)` → `sync_from_db(days=90)` (90일 표본 누락 방지)
+
+**B: rsi2_reversal allocation 9.5 → 12.5** (`config/evolved_overrides.yml`)
+- sepa_trend 47.2 → 44.2 (합계 100%)
+- 근거: 누적 60% 승률 + L3 경험 67%/+1점 — 4월 7건 표본 과적합 보정
+- `_meta`에 manual_review + 사유 명기
+
+**C: theme_chasing.min_score 65 → 75** (`config/evolved_overrides.yml`)
+- L1 18건 분석: 0일 보유 78%, manual 청산 67%, 1일+ 보유 4건만 승률 75%/+2.14%
+- 65점은 테마 검출만 통과되는 낮은 게이트 — 75 상향으로 초기확산 구간(2-4%)+테마확산 5종목+ 강제
+- 효과 가설: 거래 빈도 60-70% 감소, 승률 34→45-50%, 평균 PnL +0.5~1.0%p 개선
+
+**P0-1 수정: FILL 라벨링 trade_journal 폴백** (`src/core/engine.py:386-440`)
+- `tj.get_open_trades(symbol)` → `tj.get_open_trades()` + symbol 필터 + entry_time DESC 정렬
+- 메서드 시그니처 인자 미지원 → TypeError로 폴백 무력화 → 정렬 명시로 최신 trade 보장
+- `Fill.avg_price` 데드 폴백 제거 (Fill 데이터클래스에 해당 필드 없음)
+
+**P1-3 수정: V자 반등 통과 시 단축 평가** (`src/risk/manager.py:251-269`)
+- stop_loss V자 반등 통과 시 `stop_loss_rebound_passed = True` 플래그
+- 다음 `_exited_today` 분기에서 단축 통과 (이미 +5% 재돌파 검증됨)
+- 두 게이트 직렬 차단 회귀 방지
+
+**P1-4 수정: 부분 청산 시 `_exited_today` 등록 금지** (`src/risk/manager.py:479-487`)
+- `is_full_exit=False`면 등록 안 함
+- 잔여분 손절 시 잘못된 기준선(첫 부분 청산가) 사용 방지
+
+### 검증
+- py_compile 통과 (3개 파일)
+- 봇 재시작 정상 (active)
+- 다음 weekly_rebalance(5/9 토 00:00)부터 90일 시계열 자동 반영
+
+### 미반영 (의도적 보류)
+- P2-11 (90일 review 빈 경우 system_prompt 동적 약화): 5/9 첫 실행 후 결과 보고 검토
+- rsi2_reversal 12.5%: per-position 25%보다 낮아 진입 시 12.5%로 축소된 포지션 — 자본금 충분 (25.4M × 12.5% = 3.18M > 200k min_position_value) 시 정상 작동
+- strategic_swing 18.8% bull 편향 가드: 5/9 결과 후 결정
+
 ## 2026-05-02 — 통합 코드 리뷰 P0+P1+P2 일괄 반영
 
 ### 배경
