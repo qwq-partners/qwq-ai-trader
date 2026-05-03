@@ -1,5 +1,65 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-04 — theme_chasing 폐지 + 3-에이전트 검증 P0/P1 일괄
+
+### 배경
+2026-05-03 11건 변경 후 3-에이전트 통합 검증(risk-auditor + param-optimizer + 코드리뷰).
+
+### theme_chasing 전략 폐지 (param-optimizer 검증 결과)
+- **이전 변경(min_score 65→75)이 역효과 판명**:
+  - DB 75-80점: 21.4% 승률 / -1.01% (최악 구간)
+  - DB 80-85점: 11.1% 승률 / -1.08% (최악2)
+  - DB 70-75점(차단되는 구간): 75% 승률(n=4) — 임계가 정반대 작용
+- 누적 44건 -300k 손실, 보유 0일 78%, manual 청산 67% — 구조적 부적합
+- 1일+ 잔류 4건만 75% 승률 → 점수 아닌 **보유 기간**이 진짜 구분자
+
+**조치**:
+- `theme_chasing.enabled: true → false`
+- `strategy_allocation.theme_chasing: 5.0 → 0.0`, `sepa_trend: 44.2 → 49.2` (재배분)
+- 재활성화 조건: 보유 기간 필터(4일+) 또는 80+ 임계 + 강세 테마장 한정
+
+### 코드리뷰 P0/P1 즉시 수정 (5건)
+
+**P0-A: V자 재진입 1회 제한** (`src/risk/manager.py`)
+- 시나리오: 손절 → V자 +5% 재진입 → 재손절 → 또 V자 → 무한 재진입 가능
+- daily_max worst case: 1종목 2회 손절 = 2.5%p, 4건 동반 시 6.25% (5% 한도 초과)
+- 신규 `_stop_loss_rebound_used` set: V자 재진입 사용 마킹 → 재손절 시 당일 영구 차단
+
+**P1-2: 패널 보너스 side==BUY 분기** (`src/core/cross_validator.py`)
+- 매도 시그널에도 패널 보너스가 적용되어 청산 점수 부풀림 → 게이트 통과율 인위 증가
+- `is_buy_signal = str(side).upper().endswith("BUY")` 가드 추가
+
+**P1-3: 패널 21일 폐기 + freshness <0.5 보너스 0**
+- 14일 후 신선도 0.3 floor에 의해 영구 +2 보너스 → stale 추천이 게이트 우회
+- 21일 초과 시 보너스 미적용
+- freshness < 0.5 시 보너스 미적용 (시장 상황 변화 반영)
+
+**P1-1: stale lock 단축** (`_load_panel_outlook`)
+- 일요 갱신 직후 첫 호출 실패 시 6시간 stale lock → 월요일 패널 미적용
+- 실패/None lock 30분으로 단축, 성공 lock은 6시간 유지
+
+**P2-5: panel_risks 빈 시 LLM 가이드 미출력**
+- "위 매크로 리스크가..." 문구가 컨텍스트 없이 부유 → 헛된 NO 편향 가능
+- `risk_guide` 변수로 조건부 출력
+
+### 토큰 cap 완화 (사용자 요청 2~3배)
+- `_build_wiki_context` 5KB → **12KB**
+- 전략별 wiki 교훈 600자 → **1200자**
+- 직전 주 매도후 복기 1500자 → **3000자**
+- 직전 주 monitoring 1200자 → **2500자**
+- panel_risks 3건/120자 → **5건/250자**
+
+### 검증
+- py_compile 통과 (3개 파일)
+- 봇 재시작 정상
+- monitoring-checkpoints.md에 검증 항목 등록
+
+### param-optimizer 추가 발견 (모니터링)
+- strategic_swing 18.8%: trending_bull에서 28.6% 승률(!) — bull 전환 시 위험. ranging 한정 우수
+- 누적 cap -15: 60-75점 67.9% 승률 합산 — 합리적이나 영향 작음 (5건만 cap 적용)
+- rsi2 4%×0.40: 단기 회전 적합 검증 (보유 28h vs SEPA 70h)
+- rsi2 12.5%: 진입 빈도 변화 효과 제한적
+
 ## 2026-05-03 — 전문가 패널 통합 (P0+P1+P2 일괄)
 
 ### 배경

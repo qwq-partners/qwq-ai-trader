@@ -85,6 +85,11 @@ class RiskManager:
         self._exited_today_path = cache_dir / f"exited_today{market_suffix}.json"
         self._exited_today: Dict[str, Dict] = self._load_exited_today()
 
+        # V자 반등 재진입 1회 제한 (2026-05-04 P0-A, risk-auditor)
+        # 손절 후 V자 반등으로 재진입한 종목을 기록 → 재손절 시 영구 차단
+        # 같은 종목 당일 2회 손절(daily_max 6.25%) 방지
+        self._stop_loss_rebound_used: set = set()
+
         # 연속 손실 카운터 (US 적응형 사이징)
         self._consecutive_losses: int = 0
 
@@ -253,8 +258,12 @@ class RiskManager:
         # 근거: 주간 후속복기 stop_loss 24건 중 17건(71%)이 매도 후 +3% 이상 상승.
         # 단, 30분 쿨다운 + 손절가 대비 +5% 이상 명확한 재돌파만 허용 (추격 손절 방지).
         # P1-3: V자 반등 통과 시 다음 _exited_today 분기에서 재차단되지 않도록 단축 평가
+        # 2026-05-04 P0-A: V자 재진입은 당일 1회만 허용 (재손절 시 daily_max 초과 방지)
         stop_loss_rebound_passed = False
         if self.market == "KR" and symbol in self._stop_loss_today:
+            # V자 재진입 이미 사용했으면 이후 재손절 → 당일 영구 차단
+            if symbol in self._stop_loss_rebound_used:
+                return False, "당일 V자 반등 재진입 1회 제한 (재손절 후 차단)"
             allow_rebound, rebound_reason = self._check_stop_loss_rebound(
                 symbol, float(price)
             )
@@ -264,6 +273,8 @@ class RiskManager:
                 f"[재진입] {symbol} 손절 후 V자 반등 감지 — 재진입 허용 ({rebound_reason})"
             )
             stop_loss_rebound_passed = True
+            # 1회 제한 마킹 — 재손절 시 당일 영구 차단
+            self._stop_loss_rebound_used.add(symbol)
 
         # 1.2. 동일 종목 재진입 제한 (KR): 눌림/재돌파 확인형
         # V자 반등 통과한 stop_loss 종목은 단축 통과 (이미 +5% 재돌파 검증됨)
@@ -939,6 +950,7 @@ class RiskManager:
         self.metrics = RiskMetrics()
         self.metrics.can_trade = True
         self._stop_loss_today.clear()
+        self._stop_loss_rebound_used.clear()  # P0-A: 일일 V자 재진입 사용 기록 리셋
         self._exited_today.clear()
         # 연속 손실 카운터 일일 리셋 — 전일 4연패가 익일 첫 거래 전 사이징 50% 축소를
         # 잘못 끌고 가지 않도록. (record_trade_result의 승리 시 즉시 리셋과 별개로 날짜 경계 보강)

@@ -76,17 +76,22 @@ class CrossStrategyValidator:
         self._panel_regime: str = ""
 
     def _load_panel_outlook(self) -> None:
-        """전문가 패널 결과 로드 (6시간 캐시)
+        """전문가 패널 결과 로드 (성공 6h, 실패/None 30min 캐시)
 
         파일: ~/.cache/ai_trader/strategic/strategic_outlook.json
-        주 1회 갱신(일요일 21:00) — 6시간마다 재로드해 첫 호출 비용 분산.
+        주 1회 갱신(일요일 21:00).
+
+        2026-05-04 코드리뷰 P1-1: 실패/None 시 30분 단축 lock — 일요 갱신 직후
+        첫 호출 실패가 6시간 stale로 이어지는 회귀 방지.
         """
         now = datetime.now()
-        if (
-            self._panel_loaded_at is not None
-            and (now - self._panel_loaded_at).total_seconds() < 6 * 3600
-        ):
-            return
+        # 성공 후 6시간 또는 실패 후 30분 lock
+        if self._panel_loaded_at is not None:
+            elapsed = (now - self._panel_loaded_at).total_seconds()
+            success_lock = self._panel_outlook is not None and elapsed < 6 * 3600
+            fail_lock = self._panel_outlook is None and elapsed < 30 * 60
+            if success_lock or fail_lock:
+                return
         try:
             from ..signals.strategic.expert_panel import ExpertPanel
             panel = ExpertPanel()
@@ -105,7 +110,7 @@ class CrossStrategyValidator:
             self._panel_loaded_at = now
         except Exception as e:
             logger.debug(f"[크로스검증] 전문가 패널 로드 실패 (무시): {e}")
-            self._panel_loaded_at = now  # 다음 6시간 재시도 방지
+            self._panel_loaded_at = now
 
     def _combine_regime(self, llm_regime: str) -> str:
         """LLM regime + 패널 regime 보수적 결합 (둘 중 약세 우선)
@@ -379,24 +384,41 @@ class CrossStrategyValidator:
 
         # === 규칙 10: 전문가 패널 추천 보너스 (2026-05-03 P0 통합) ===
         # 일요일 21:00 갱신, 14일 이내 신선도 가중. 모든 전략에 일관 적용.
-        self._load_panel_outlook()
-        if symbol in self._panel_recommended:
-            try:
-                pick = self._panel_recommended[symbol]
-                # 신선도 계산 (생성 후 14일까지 0.3까지 감소)
-                freshness = 1.0
-                if self._panel_outlook:
-                    created = datetime.fromisoformat(self._panel_outlook.created_at)
-                    days_old = (datetime.now() - created).days
-                    freshness = max(0.3, 1.0 - days_old / 14.0)
-                # 보너스 = conviction × 10 × freshness (cross_validator는 swing_screener 25보다 보수)
-                # 주: swing_screener는 별도 +25 점수에 들어가므로 여기서는 추가 보너스만 작게
-                conv = float(getattr(pick, "conviction", 0.5))
-                bonus = max(2, int(conv * 10 * freshness))
-                adjusted_score += bonus
-                penalties.append(f"전문가패널 추천(+{bonus} conv={conv:.0%}/신선도{freshness:.0%})")
-            except Exception as _e:
-                logger.debug(f"[크로스검증] 패널 보너스 계산 실패 {symbol}: {_e}")
+        # 2026-05-04 코드리뷰 P1 반영:
+        # - side==BUY일 때만 적용 (매도 점수 부풀림 방지)
+        # - 21일 초과 시 폐기 (보너스 0)
+        # - freshness < 0.5 시 보너스 0 (stale 패널 영향 차단)
+        is_buy_signal = str(side).upper().endswith("BUY")
+        if is_buy_signal:
+            self._load_panel_outlook()
+            if symbol in self._panel_recommended:
+                try:
+                    pick = self._panel_recommended[symbol]
+                    # 신선도 계산
+                    freshness = 1.0
+                    days_old = 0
+                    if self._panel_outlook:
+                        created = datetime.fromisoformat(self._panel_outlook.created_at)
+                        days_old = (datetime.now() - created).days
+                        freshness = max(0.3, 1.0 - days_old / 14.0)
+                    # 21일 초과 패널은 폐기 (시장 상황 변화 가능)
+                    if days_old > 21:
+                        logger.debug(
+                            f"[크로스검증] 패널 {days_old}일 경과 — 보너스 미적용 ({symbol})"
+                        )
+                    elif freshness < 0.5:
+                        logger.debug(
+                            f"[크로스검증] 패널 신선도 {freshness:.0%} < 50% — 보너스 미적용 ({symbol})"
+                        )
+                    else:
+                        conv = float(getattr(pick, "conviction", 0.5))
+                        bonus = max(2, int(conv * 10 * freshness))
+                        adjusted_score += bonus
+                        penalties.append(
+                            f"전문가패널 추천(+{bonus} conv={conv:.0%}/신선도{freshness:.0%})"
+                        )
+                except Exception as _e:
+                    logger.debug(f"[크로스검증] 패널 보너스 계산 실패 {symbol}: {_e}")
 
         # === 누적 감점 cap (2026-05-03 P0-1) ===
         # 시간대 -8 + 지표결손 -8 + MA200 -5 + 극단PER -5 = 최대 -26 누적 가능
@@ -495,14 +517,18 @@ class CrossStrategyValidator:
             if self._trade_wiki:
                 wiki_context = self._trade_wiki.query(strategy, sector, market_regime)
 
-            # 패널 risk_factors 컨텍스트 (2026-05-03 P1 통합)
+            # 패널 risk_factors 컨텍스트 (2026-05-03 P1 통합, 5/4 토큰 cap 완화)
             self._load_panel_outlook()
             panel_risks = ""
             if self._panel_risk_factors:
-                # 상위 3건만 (토큰 절약)
-                top_risks = self._panel_risk_factors[:3]
-                panel_risks = " | ".join(r[:120] for r in top_risks)
+                # 상위 5건, 각 250자 (이전 3×120 → 5×250 약 2배 확대)
+                top_risks = self._panel_risk_factors[:5]
+                panel_risks = " | ".join(r[:250] for r in top_risks)
             panel_combined_regime = self._combine_regime(market_regime)
+
+            risk_guide = ""
+            if panel_risks:
+                risk_guide = "위 매크로 리스크가 해당 종목/전략에 직접 영향 가능 시 보수적으로 NO. "
 
             prompt = (
                 f"종목 {symbol}, 전략 {strategy}, 점수 {score:.0f}.\n"
@@ -515,10 +541,10 @@ class CrossStrategyValidator:
                 f"수급={'+' if (indicators.get('foreign_net_buy') if indicators.get('foreign_net_buy') is not None else 0) > 0 else '-'}.\n"
                 + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
                 + (f"위키 교훈: {wiki_context}\n" if wiki_context else "")
-                + (f"📌 주간 매크로 리스크 (전문가 패널): {panel_risks}\n" if panel_risks else "")
+                + (f"주간 매크로 리스크 (전문가 패널): {panel_risks}\n" if panel_risks else "")
                 + "\n이 매수 시그널을 승인하시겠습니까? "
-                "위 매크로 리스크가 해당 종목/전략에 직접 영향 가능 시 보수적으로 NO. "
-                "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
+                + risk_guide
+                + "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )
             # GPT-5.4 (STRATEGY_ANALYSIS) — 추론 필요한 매수 판단
             from ..utils.llm import LLMTask

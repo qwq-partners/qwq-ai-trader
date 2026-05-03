@@ -1093,12 +1093,13 @@ class StrategyEvolver:
                 try:
                     content = page.read_text(encoding="utf-8")
                     # 교훈 섹션 추출 (## 교훈 ~ 다음 ## 까지)
+                    # 2026-05-04 토큰 cap 완화: 600 → 1200자
                     lessons_section = ""
                     if "## 교훈" in content:
                         after = content.split("## 교훈", 1)[1]
                         next_h2 = after.find("\n## ")
                         lessons_section = after[:next_h2] if next_h2 > 0 else after
-                        lessons_section = lessons_section.strip()[:600]
+                        lessons_section = lessons_section.strip()[:1200]
                     if lessons_section:
                         parts.append(f"\n[{strat}]")
                         parts.append(lessons_section)
@@ -1117,7 +1118,8 @@ class StrategyEvolver:
             if mon_files:
                 try:
                     latest_mon = mon_files[0]
-                    mon_content = latest_mon.read_text(encoding="utf-8")[:1200]
+                    # 2026-05-04 토큰 cap 완화: 1200 → 2500자
+                    mon_content = latest_mon.read_text(encoding="utf-8")[:2500]
                     parts.append(f"\n**직전 주 모니터링 검증 ({latest_mon.name}):**")
                     parts.append(mon_content)
                 except Exception as _e:
@@ -1141,11 +1143,12 @@ class StrategyEvolver:
                         next_h2 = after.find("\n## ")
                         llm_section = after[:next_h2] if next_h2 > 0 else after
                         break
-                # LLM 섹션이 없으면 전체 1500자
+                # LLM 섹션이 없으면 전체 3000자
+                # 2026-05-04 토큰 cap 완화: 1500 → 3000자
                 if not llm_section:
-                    llm_section = content[:1500]
+                    llm_section = content[:3000]
                 else:
-                    llm_section = llm_section.strip()[:1500]
+                    llm_section = llm_section.strip()[:3000]
                 if llm_section:
                     parts.append(f"\n**직전 주 매도후 복기 ({latest.name}):**")
                     parts.append(llm_section)
@@ -1153,8 +1156,8 @@ class StrategyEvolver:
                 logger.debug(f"[리밸런싱] weekly_post_exit 읽기 실패: {_e}")
 
         result = "\n".join(parts)
-        # 토큰 예산 보호: 최대 5KB
-        return result[:5000] if result else ""
+        # 토큰 예산: 최대 12KB (2026-05-04 사용자 요청 2~3배 완화)
+        return result[:12000] if result else ""
 
     def _build_perf_summary(self, review: ReviewResult) -> str:
         """전략별 성과 요약 텍스트 생성"""

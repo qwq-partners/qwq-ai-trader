@@ -19,8 +19,8 @@ risk_config:
     strategic_swing: 18.8
     momentum_breakout: 0.0
     gap_and_go: 9.5
-    theme_chasing: 5.0
-    sepa_trend: 44.2
+    theme_chasing: 0.0
+    sepa_trend: 49.2
     rsi2_reversal: 12.5
     core_holding: 10.0
 exit_manager:
@@ -44,7 +44,7 @@ momentum_breakout:
   min_score: 75.0
   min_breakout_pct: 0.8
 theme_chasing:
-  enabled: true
+  enabled: false
   stop_loss_pct: 3.5
   min_volume_ratio: 2.3
   trading_start_time: 09:30
@@ -86,10 +86,12 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: manual_review
-    timestamp: '2026-05-03T00:00:00'
-    note: 'rsi2_reversal 9.5→12.5%, sepa_trend 47.2→44.2%. 5/2 LLM rebalance가 4월
-      7건(43%)에 과적합. 누적(3/6~) 10건/60% + L3 경험 67%/+1점 우호적이라 수동 보정.'
+    source: manual_review_locked
+    timestamp: '2026-05-04T00:00:00'
+    note: 'theme_chasing 폐지(5→0%) → sepa_trend 49.2%로 재배분. param-optimizer
+      DB 검증: 75-85점 구간 21~11% 승률(-1.01%~-1.08%) 최악. 차단되는 70-75는 75% 승률(n=4)
+      → 75 임계 역효과. 누적 44건 -300k 손실 + 보유 0일 78% → 전략 자체 폐기.
+      strategic_swing 18.8% bull 편향 추가 상향은 회피.'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
@@ -110,6 +112,10 @@ _meta:
   theme_chasing.min_score:
     source: manual_review
     timestamp: '2026-05-03T01:00:00'
-    note: '65→75. L1 18건 분석: 0일 보유 78%, manual 청산 67%, 1일+ 보유 4건만 승률 75%/+2.14%.
-      65점은 테마검출만 통과되는 낮은 게이트 — 75 상향으로 초기확산 구간(2-4%)+테마확산 5종목+ 강제. 효과
-      가설: 거래 빈도 60-70% 감소, 승률 34→45-50%, 평균 PnL +0.5~1.0%p 개선. 5영업일 후 검증.'
+    note: '65→75. (2026-05-04 param-optimizer 검증 후 전략 자체 폐지로 무효화 — enabled:false)'
+  theme_chasing.enabled:
+    source: manual_review_locked
+    timestamp: '2026-05-04T00:00:00'
+    note: 'param-optimizer DB 검증: 75-85점 구간 11~21% 승률(-1.0%~-1.08%) 최악. 75 임계 역효과
+      판명. 누적 44건 -300k 손실, 보유 0일 78%, manual 청산 67%, 1일+ 잔류만 66.7% 승률 → 전략
+      구조적 부적합 → 폐지. 5% allocation은 sepa_trend로 재배분. 재활성화 시 보유 기간 필터(4일+) 도입 검토.'
