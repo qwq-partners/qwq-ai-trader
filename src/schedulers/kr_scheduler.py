@@ -4114,6 +4114,31 @@ JSON:
                                     f"[후속복기] 결과: {report.get('status')} "
                                     f"({report.get('error') or report.get('reason') or ''})"
                                 )
+
+                            # Phase 2: 모니터링 체크포인트 자동 검증 (post-exit 직후)
+                            try:
+                                from ..analytics.monitoring_runner import MonitoringRunner
+                                _mr = MonitoringRunner()
+                                _mr_result = await _mr.run_weekly()
+                                if _mr_result.get("status") == "ok":
+                                    _mr_msg = _mr.format_telegram(_mr_result)
+                                    if _mr_msg:
+                                        await send_alert(_mr_msg)
+                                    logger.info(
+                                        f"[모니터링] 완료: 체크포인트={_mr_result.get('checkpoints_count')}, "
+                                        f"SQL={_mr_result.get('sql_executed')}"
+                                    )
+                                else:
+                                    logger.info(f"[모니터링] 결과: {_mr_result.get('status')}")
+                            except Exception as _mr_e:
+                                logger.error(f"[모니터링] 자동 검증 실패: {_mr_e}")
+                                try:
+                                    await self._send_error_alert(
+                                        "WARN", "주간 모니터링 자동 검증 실패",
+                                        traceback.format_exc()
+                                    )
+                                except Exception:
+                                    pass
                         except Exception as e:
                             logger.error(f"[후속복기] 실행 오류: {e}")
                             await self._send_error_alert(

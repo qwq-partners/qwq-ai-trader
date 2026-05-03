@@ -1105,7 +1105,25 @@ class StrategyEvolver:
                 except Exception as _e:
                     logger.debug(f"[리밸런싱] wiki {strat}.md 읽기 실패: {_e}")
 
-        # 2. 직전 주 매도후 복기 (LLM 분석 섹션)
+        # 2-1. 직전 주 모니터링 자동 검증 결과 (Phase 2 통합, 2026-05-03)
+        # 파일명 기반 정렬 (YYYY-WNN.md) — mtime은 백업 복원 시 흐트러짐
+        monitoring_dir = wiki_dir / "monitoring"
+        if monitoring_dir.exists():
+            mon_files = sorted(
+                monitoring_dir.glob("*.md"),
+                key=lambda p: p.name,
+                reverse=True,
+            )
+            if mon_files:
+                try:
+                    latest_mon = mon_files[0]
+                    mon_content = latest_mon.read_text(encoding="utf-8")[:1200]
+                    parts.append(f"\n**직전 주 모니터링 검증 ({latest_mon.name}):**")
+                    parts.append(mon_content)
+                except Exception as _e:
+                    logger.debug(f"[리밸런싱] monitoring 읽기 실패: {_e}")
+
+        # 2-2. 직전 주 매도후 복기 (LLM 분석 섹션)
         post_exit_files = sorted(
             wiki_dir.glob("weekly_post_exit_*.md"),
             key=lambda p: p.stat().st_mtime,

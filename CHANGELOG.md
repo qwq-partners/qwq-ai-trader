@@ -1,5 +1,51 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-03 — Phase 2+3 + 통합 코드리뷰 P0/P1 반영
+
+### 배경
+사용자 요청: Phase 2+3 진행 후 상세 코드리뷰. 두 에이전트 통합 리뷰 결과:
+- Phase 1+2+3 코드리뷰: P0 3건(SQL 안전성, DB 누수, multi-statement) + P1 7건
+- 엔진 전체 흐름 진단: P0 2건(누적 감점 cap, 분할익절 분기) + P1 5건
+
+### Phase 2 신규 — 모니터링 자동 검증
+- `src/analytics/monitoring_runner.py` 신규
+  - `MonitoringRunner.run_weekly()`:
+    - `docs/operations/monitoring-checkpoints.md` 활성 섹션 파싱
+    - 활성 체크포인트의 SQL 코드블록 자동 추출 + 실행
+    - 결과를 `~/.cache/ai_trader/wiki/monitoring/{iso_year}-W{iso_week:02d}.md`에 영속화
+    - 텔레그램 요약 메시지
+- `src/schedulers/kr_scheduler.py:4117-4135`
+  - 토 09:30 post-exit 직후 monitoring_runner 자동 실행 hook
+
+### Phase 3 — Wiki 컨텍스트에 monitoring 결과 통합
+- `src/core/evolution/strategy_evolver.py:_build_wiki_context`
+  - 직전 주 `wiki/monitoring/*.md` 추출 (~1200자) 추가
+  - 다음 weekly_rebalance LLM 자동 흡수 → 의사결정 루프 닫힘
+
+### 코드리뷰 P0/P1 반영
+- **P0-3 SQL 화이트리스트** (`monitoring_runner.py:_execute_checkpoint`)
+  - SELECT/WITH 시작만 허용 (DROP/DELETE/TRUNCATE/UPDATE 차단)
+  - md 편집 실수로 인한 운영 DB 파괴 방지
+- **P0-1 DB 연결 누수 보호**
+  - `conn = None` 초기화 + finally close 패턴
+  - `asyncio.CancelledError`는 명시적 raise (graceful shutdown 보장)
+- **P1-4 monitoring 파일 정렬 mtime → 파일명**
+  - `key=lambda p: p.name` (YYYY-WNN.md 정렬 가능)
+  - 백업 복원 시 mtime 흐트러짐 방어
+- **P1-6 monitoring 실패 텔레그램 알림 격상**
+  - logger.warning → logger.error + `_send_error_alert`
+  - 운영자가 stale 컨텍스트 인지 가능
+- **P2 이모지 제거** (CLAUDE.md 규칙)
+  - `❌` → `[ERROR]`
+
+### 검증
+- py_compile 3파일 통과
+- 봇 재시작 정상
+
+### 미반영 (사용자 결정 대기)
+- 엔진 P0-1: cross_validator 누적 감점 cap -15 (60-70점대 종목 차단율 30%↓ 가설)
+- 엔진 P0-2: rsi2_reversal/gap_and_go 1차 익절 5%×0.20 → 4%×0.40 (단기 회전 분기)
+
 ## 2026-05-03 — Phase 1: Wiki + Post-Exit → Rebalance LLM 컨텍스트 통합
 
 ### 배경
