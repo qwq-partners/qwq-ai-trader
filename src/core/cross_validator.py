@@ -309,6 +309,21 @@ class CrossStrategyValidator:
                 adjusted_score += memory_adj
                 penalties.append(f"메모리보정({memory_adj:+d})")
 
+        # === 누적 감점 cap (2026-05-03 P0-1) ===
+        # 시간대 -8 + 지표결손 -8 + MA200 -5 + 극단PER -5 = 최대 -26 누적 가능
+        # 60-70점대 종목이 자동 차단되는 역설(이전 분석: 91.7% 승률 영역) 방지
+        # 추격매수(-15)/RSI과매수(-5)/적자+고PBR(-10)는 hard block 의도라 캡 예외
+        TOTAL_PENALTY_CAP = 15
+        _HARD_BLOCK_TAGS = ("추격매수", "RSI과매수", "적자+고PBR")
+        has_hard_block = any(any(tag in p for tag in _HARD_BLOCK_TAGS) for p in penalties)
+        if not has_hard_block:
+            total_penalty = score - adjusted_score
+            if total_penalty > TOTAL_PENALTY_CAP:
+                penalties.append(
+                    f"누적감점캡({total_penalty:.0f}→{TOTAL_PENALTY_CAP})"
+                )
+                adjusted_score = score - TOTAL_PENALTY_CAP
+
         # 감점 적용 결과
         if penalties:
             self._stats["penalized"] += 1

@@ -6,6 +6,55 @@
 
 ## 활성 체크포인트
 
+### 2026-05-08~ (5영업일 후) — cross_validator 누적 감점 cap -15 효과
+
+- **커밋**: 적용 예정 (2026-05-03)
+- **변경**: `src/core/cross_validator.py` — 누적 감점이 `TOTAL_PENALTY_CAP=15`를 초과하면 capped. 추격매수/RSI과매수/적자+고PBR은 hard block 의도라 캡 예외.
+- **효과 가설**:
+  - [ ] 60-75점대 종목 차단율 30%↓
+  - [ ] 통과 종목 5일 누적 승률 보존 (60+ 종목 82.4% 영역)
+- **검증 SQL**:
+  ```sql
+  SELECT entry_strategy AS strat, COUNT(*) AS n,
+         ROUND((SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*),0) * 100)::numeric, 1) AS win_rate,
+         ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl,
+         ROUND(SUM(pnl)::numeric, 0) AS total_pnl
+  FROM trades
+  WHERE market='KR'
+    AND exit_time::date >= '2026-05-04'
+    AND exit_type NOT IN ('kis_sync','sync_reconcile','sync_closed','sync_partial')
+    AND entry_signal_score BETWEEN 60 AND 75
+  GROUP BY entry_strategy ORDER BY n DESC;
+  ```
+- **롤백 트리거**: 통과 종목 승률 5%p 이상 하락 시 즉시 롤백.
+
+### 2026-05-08~ — rsi2_reversal/gap_and_go 1차 익절 4%×0.40 효과
+
+- **커밋**: 적용 예정 (2026-05-03)
+- **변경**: `scripts/run_trader.py:_strategy_exit_params`
+  - rsi2_reversal: first_exit_pct 5.0→**4.0**, first_exit_ratio 0.20→**0.40**
+  - gap_and_go: first_exit_pct ~2.4→**4.0**, first_exit_ratio 0.20→**0.40**
+- **효과 가설**:
+  - [ ] 거래당 평균 실현 PnL +0.3%p 개선 (단기 회전 1.5일 평균 보유 적합화)
+  - [ ] 1차 익절 도달율 증가 (4% 임계 낮춤)
+  - [ ] 잔여 포지션 손절률 감소 (40% 매도 후 보호)
+- **검증 SQL**:
+  ```sql
+  SELECT entry_strategy AS strat, COUNT(*) AS n,
+         ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl,
+         ROUND(SUM(pnl)::numeric, 0) AS total_pnl,
+         SUM(CASE WHEN exit_type='first_take_profit' THEN 1 ELSE 0 END) AS first_tp_count,
+         SUM(CASE WHEN exit_type='stop_loss' THEN 1 ELSE 0 END) AS stop_loss_count
+  FROM trades
+  WHERE market='KR'
+    AND entry_strategy IN ('rsi2_reversal','gap_and_go')
+    AND exit_time::date >= '2026-05-04'
+  GROUP BY entry_strategy ORDER BY n DESC;
+  ```
+- **롤백 트리거**: 평균 PnL이 -0.5%p 이상 악화되면 5%/0.20으로 롤백.
+
+
+
 ### 2026-05-09 (토 00:00) — Weekly Rebalance 90일 시계열 + Wiki 컨텍스트 첫 반영
 
 - **커밋**: afc09cb (90일 시계열) + Phase 1 (Wiki 컨텍스트)

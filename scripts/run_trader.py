@@ -516,14 +516,20 @@ class UnifiedTradingBot:
                 "gap_and_go": {
                     "stop_loss_pct": gap_cfg.get("stop_loss_pct", 2.0),
                     "trailing_stop_pct": gap_cfg.get("trailing_stop_pct", 1.5),
-                    "first_exit_pct": gap_cfg.get("take_profit_pct", 8.0) * 0.3,
+                    # 2026-05-03 P0-2: 단기 회전 전략 1차 익절 강화
+                    # 가설: 1차 4%×0.40 (기존 ~2.4×0.20 정도) → 거래당 PnL +0.3%p 개선
+                    "first_exit_pct": 4.0,
+                    "first_exit_ratio": 0.40,
                     "second_exit_pct": gap_cfg.get("take_profit_pct", 8.0) * 0.6,
                     "third_exit_pct": gap_cfg.get("take_profit_pct", 8.0),
                 },
                 "rsi2_reversal": {
                     "stop_loss_pct": rsi2_cfg.get("stop_loss_pct", 5.0),
                     "trailing_stop_pct": 3.0,
-                    "first_exit_pct": 5.0,
+                    # 2026-05-03 P0-2: 단기 회전 전략 1차 익절 강화 (보유 1.5일 평균)
+                    # 가설: 1차 4%×0.40 → 거래당 PnL +0.3%p 개선, 5건 후 검증
+                    "first_exit_pct": 4.0,
+                    "first_exit_ratio": 0.40,
                     "second_exit_pct": 10.0,
                     "third_exit_pct": 20.0,  # 12→20% 상향 (추세 추종 공간 확보)
                 },

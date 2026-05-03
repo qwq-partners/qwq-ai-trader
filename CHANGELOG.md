@@ -1,5 +1,32 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-03 — 엔진 P0 적용 (감점 cap + 단기 회전 1차 익절)
+
+### 배경
+strategy-advisor 엔진 흐름 진단에서 P0 2건 발견. 사용자 승인 후 일괄 적용.
+
+### 변경
+
+**P0-1: cross_validator 누적 감점 cap -15** (`src/core/cross_validator.py`)
+- 시간대 -8 + 지표결손 -8 + MA200 -5 + 극단PER -5 = 최대 -26 누적 가능 → 60-70점대 종목 자동 차단(91.7% 승률 영역) 역설
+- `TOTAL_PENALTY_CAP=15` 도입, 누적 감점 초과 시 capped
+- Hard block 예외 화이트리스트: "추격매수", "RSI과매수", "적자+고PBR" — 단독 차단 의도 보존
+- 가설: 60-75점대 차단율 30%↓, 통과 종목 승률 보존
+
+**P0-2: rsi2_reversal/gap_and_go 1차 익절 분기** (`scripts/run_trader.py:_strategy_exit_params`)
+- 단기 회전(평균 보유 1.5일) 전략은 SEPA(5-7일)와 같은 5%×0.20 비율 부적합
+- rsi2_reversal: first_exit_pct 5.0→**4.0**, first_exit_ratio 0.20→**0.40**
+- gap_and_go: first_exit_pct ~2.4→**4.0**, first_exit_ratio 0.20→**0.40**
+- 가설: 거래당 평균 PnL +0.3%p 개선, 1차 도달율 증가, 잔여 손절률 감소
+
+### 모니터링 체크포인트 등록
+- `docs/operations/monitoring-checkpoints.md` 활성 섹션에 2건 추가 (검증 SQL + 롤백 트리거 포함)
+- 5영업일(2026-05-08) 후 1차 평가
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상
+
 ## 2026-05-03 — Phase 2+3 + 통합 코드리뷰 P0/P1 반영
 
 ### 배경
