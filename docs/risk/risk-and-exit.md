@@ -1,6 +1,6 @@
 # 리스크 관리 + 청산 전략
 
-> 최종 갱신: 2026-04-19 (당일 청산 누적 D+1 쿨다운 추가)
+> 최종 갱신: 2026-05-04 (V자 재진입 1회 제한, 누적 감점 cap, 패널 통합 P0/P1)
 
 ## KR 리스크 (src/risk/manager.py + engine.py)
 
@@ -30,6 +30,25 @@
 - 구현: `src/risk/manager.py` (`_sync_healthy`, `_sync_unhealthy_since`, `_sync_timeout_minutes=10`)
 - 호출 경로: `kr_scheduler._sync_portfolio()` 성공/실패마다 `set_sync_status()` 호출 → `engine.on_signal → _risk_validator.can_open_position` 게이트에서 차단
 
+### 당일 손절 종목 V자 반등 재진입 (2026-05-02~05-04)
+> **배경**: 주간 후속복기(W18) stop_loss 24건 중 17건(71%)이 매도 후 +3%↑ 상승. 강세장에서 V자 반등을 못 잡는 패턴.
+
+- **차단 해제 조건** (`risk/manager.py:_check_stop_loss_rebound`):
+  1. 청산 후 30분 이상 경과 (즉시 추격 방지)
+  2. 청산가 대비 +5% 이상 재돌파 (명확한 반등 확인)
+- **1회 제한 (5/4 P0-A)**: V자 재진입 사용 후 재손절 → 당일 영구 차단
+  - `_stop_loss_rebound_used` set으로 마킹
+  - daily_max worst case 6.25% (1종목 2회 손절) → 5.0% 회귀
+- **단축 평가**: V자 통과 시 다음 `_exited_today` 분기에서 재차단 안 됨 (`stop_loss_rebound_passed=True`)
+- 로그: `[재진입] {symbol} 손절 후 V자 반등 감지 — 재진입 허용 (V자 반등 +X.X% (>=+5%))`
+
+### 동일 종목 재진입 제한 (당일 청산 후, KR 전용)
+- 30분 쿨다운 + 가격 조건 (`check_reentry_condition`):
+  - **-5%~+5%**: 눌림/횡보 → 재진입 허용 (5/2 -3→-5% 완화)
+  - **+5% 초과**: 재돌파 → 재진입 허용
+  - **-5% 미만**: 급락 중 → 차단
+- 부분 청산은 `_exited_today` 미등록 (5/3 P1-4) — 잔여분 손절 시 잘못된 기준선 방지
+
 ### 당일 청산 누적 쿨다운 (D+1 분리, KR/US 공통)
 > **배경**: 4/14 -8.42% 사고 — 단일일에 다수 청산 + 다수 신규 매수 동시 발생, SK하이닉스 저점 청산 후 +16% 반등을 미스. "청산 당일은 현금 유지, 다음 거래일에 신규 진입" 규칙으로 교체.
 
@@ -54,18 +73,35 @@
 
 ## 크로스 전략 검증 (src/core/cross_validator.py)
 
-### 9개 규칙 (KR)
+### 10개 규칙 (KR) — 2026-05-03 패널 추천 추가
+
 | 규칙 | 조건 | 효과 |
 |------|------|------|
-| 1 | RSI>70 + 추세 전략 (bull 제외) | **-5점** (스크리너와 중복 감점 완화, 2026-04-18) |
-| 2 | 기관+외국인 동시 순매도 (KR only) | theme/momentum/gap: **차단**, sepa_trend: **-10점** |
-| 3 | 약세장 + **theme_chasing / gap_and_go / rsi2_reversal / momentum_breakout** | **차단** (RSI2 추가: Connors 원전 규칙, 2026-04-18) |
-| 4 | 동일 섹터 N종목+ (설정값: KR=2, US=3) | **차단** |
+| 1 | RSI>70 + 추세 전략 (bull 제외) | **-5점** |
+| 2 | 기관+외국인 동시 순매도 | theme/momentum/gap: **차단**, sepa_trend: **-10점** |
+| 3 | 약세장 + theme_chasing / gap_and_go / rsi2_reversal / momentum_breakout | **차단** |
+| 4 | 동일 섹터 N종목+ (KR=2, US=3) | **차단** |
 | 5 | 당일 손절 동일 섹터 재진입 | -5점 |
-| 6 | 등락률/ATR > 1.5 (추격매수) | -15점 |
-| 7 | MA200 하방 + 추세 추종 | **-5점** (중복 감점 완화, 2026-04-18) |
-| 8 | 적자+고PBR, 극단PER>50 | -5~10점 |
+| 6 | 등락률/ATR > 1.5 (추격매수) | -15점 (hard block, cap 예외) |
+| 7 | MA200 하방 + 추세 추종 | **-5점** |
+| 8 | 적자+고PBR (-10), 극단PER>50 (-5) | -5~10점 (적자+고PBR은 hard block, cap 예외) |
 | 9 | 거래 메모리 L3 보정 | ±3점 |
+| **10** | **전문가 패널 추천 (BUY only, 2026-05-03)** | **+max(2, conv×10×freshness)** |
+
+### 누적 감점 cap (2026-05-03)
+- **최대 누적 감점 -15점** 제한 (이전 최대 -26점 → 60-70점대 우수 종목 자동 차단 역설 방지)
+- Hard block 예외 화이트리스트: `추격매수`, `RSI과매수`, `적자+고PBR` (단독 차단 의도 보존)
+- 적용 위치: `cross_validator.py` 규칙 9 직후
+
+### LLM 이중검증
+- 조건: 점수 85+ AND 비강세장
+- 한도: **10회/일** (비용 제어)
+- 모델: GPT-5.4 (STRATEGY_ANALYSIS)
+- 프롬프트 컨텍스트:
+  - 지표 + 거래메모리 + Wiki 교훈
+  - **regime 결합** (LLM regime + 패널 regime 보수적 결합 — 둘 중 bear → bear)
+  - **주간 매크로 리스크** (전문가 패널 risk_factors 상위 5건/250자, 빈 시 가이드 미출력)
+- fail-open: LLM 장애 시 매수 차단보다 기회 손실 방지 우선
 
 ### LLM 이중검증
 - 조건: 점수 85+ AND 비강세장

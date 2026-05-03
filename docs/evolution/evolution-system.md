@@ -1,5 +1,7 @@
 # 진화 시스템 + Trade Wiki
 
+> 최종 갱신: 2026-05-04 (Phase 1+2+3 통합: Wiki + Monitoring + 90일 시계열 → Rebalance LLM)
+
 > 최종 갱신: 2026-04-17
 
 ## 전체 구조
@@ -125,11 +127,36 @@ _VALID_STRATEGIES = {
 > **low_frequency 전략 타겟팅**: `*.min_score` 와일드카드 사용 시 `review.strategy_performance`에서
 > 거래가 가장 적은 전략만 선별하여 해당 전략의 min_score만 조정 (다른 전략 오염 방지)
 
-### 주간 리밸런싱 (토요일 00:00)
-- **DB 동기화**: 시작 시 `journal.sync_from_db(days=7)` 호출 → JSON 누락 거래 DB에서 보강
-- LLM(Gemini) 기반 성과 분석 → 배분 제안
+### 주간 리밸런싱 (토요일 00:00) — 2026-05-03 Phase 1+2+3 통합
+- **DB 동기화**: 시작 시 `journal.sync_from_db(days=90)` 호출 (5/3 7→90 확장)
+- **다중 시계열 분석**: 1주 + 30일 + **90일** 누적 (5/3 추가)
+  - system_prompt: 누적 90일 우선, 30일 vs 90일 부호 불일치 시 체제 전환 의심
+  - reasoning에 "1주/30일/90일 시계열 비교 명시 필수"
+- **누적 교훈 컨텍스트** (`_build_wiki_context`, 2026-05-03~5/4):
+  - `wiki/strategies/{name}.md` 교훈 섹션 추출 (전략당 1200자)
+  - 직전 주 `wiki/monitoring/*.md` (모니터링 자동 검증, 2500자)
+  - 직전 주 `wiki/weekly_post_exit_*.md` LLM 분석 (3000자)
+  - 최대 12KB user_prompt 주입 → LLM이 "왜 부진/양호한지" 인사이트 함께 판단
+- LLM (GPT-5.4 STRATEGY_ANALYSIS) 기반 성과 분석 → 배분 제안
 - 가드레일 적용 후 `evolved_overrides.yml` 저장
 - 텔레그램 리포트
+
+### 주간 매도 후속 복기 (`PostExitReviewer`, 토요일 09:30)
+- `src/analytics/post_exit_review.py` (2026-04-28 신규)
+- 최근 30일 KR 매도 거래 → KIS get_quote → 매도 후 변동률 추적
+- 분류: +3% 이상=놓침, -3% 이하=회피, 그 사이=타당
+- GPT-5.4 (LLMTask.STRATEGY_ANALYSIS, fallback Gemini Pro) 인사이트
+- 출력:
+  - JSON: `~/.cache/ai_trader/journal/post_exit_review_YYYYMMDD.json`
+  - Wiki: `~/.cache/ai_trader/wiki/weekly_post_exit_YYYY-WNN.md` → 다음 weekly_rebalance 자동 흡수
+  - 텔레그램 리포트
+
+### 모니터링 자동 검증 (`MonitoringRunner`, 토요일 09:35) — Phase 2
+- `src/analytics/monitoring_runner.py` (2026-05-03 신규)
+- `docs/operations/monitoring-checkpoints.md` 활성 섹션 SQL 자동 실행
+- SELECT/WITH 화이트리스트 강제 (DROP/DELETE 차단)
+- 결과를 `~/.cache/ai_trader/wiki/monitoring/{iso}-WNN.md` 영속화
+- 다음 weekly_rebalance LLM이 `_build_wiki_context`로 자동 흡수 → 의사결정 루프 닫힘
 
 ### record_exit 폴백 메커니즘
 - `trade_journal.record_exit()` 호출 시 trade_id가 메모리에 없는 경우:

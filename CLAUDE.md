@@ -131,7 +131,7 @@ scripts/
 | 전략 | 파일 | 설명 |
 |------|------|------|
 | 모멘텀 | `kr/momentum.py` | 20일 고가 돌파 + 거래량 급증 |
-| 테마추종 | `kr/theme_chasing.py` | 핫 테마 종목 추종 |
+| 테마추종 | `kr/theme_chasing.py` | 🚫 **폐지** (2026-05-04, allocation 0%) |
 | 갭상승 | `kr/gap_and_go.py` | 갭상승 후 눌림목 매수 |
 | SEPA | `kr/sepa_trend.py` | SEPA 추세 전략 (스윙) |
 | RSI2 반전 | `kr/rsi2_reversal.py` | RSI(2) 과매도 반전 진입 |

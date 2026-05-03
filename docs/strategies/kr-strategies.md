@@ -1,18 +1,42 @@
 # KR 전략 상세
 
-> 최종 갱신: 2026-04-18 (RSI2 bear 체제 게이트 추가, 배분 롤백 반영)
+> 최종 갱신: 2026-05-04 (theme_chasing 폐지, rsi2/gap 단기 회전 분기, 전문가 패널 통합)
 
 ## 전략 배분 (evolved_overrides.yml 기준)
 
 | 전략 | 배분 | 상태 | 포지션 크기 |
 |------|------|------|-----------|
-| SEPA Trend | 25% | 활성 | 25% equity |
-| RSI2 Reversal | 25% | 활성 | 20% equity |
-| Strategic Swing | 10% | 활성 | 25% equity (SEPA급) |
-| Theme Chasing | 5% | 활성 | 15% equity |
-| Gap & Go | 5% | 활성 | 15% equity |
-| Core Holding | 30% | locked | 10% equity (30%/3종목) |
+| SEPA Trend | **49.2%** | 활성 | 25% equity |
+| RSI2 Reversal | **12.5%** | 활성 | 20% equity |
+| Strategic Swing | **18.8%** | 활성 ⚠️ | 25% equity (SEPA급) |
+| Gap & Go | 9.5% | 활성 | 15% equity |
+| Core Holding | 10% | locked | 10% equity |
+| **Theme Chasing** | **0%** | 🚫 폐지 | - |
 | Momentum Breakout | 0% | 비활성 | - |
+
+⚠️ Strategic Swing: trending_bull에서 28.6% 승률 (param-optimizer DB) — bull 전환 시 18.8%
+노출이 역풍 가능성. ranging 레짐에서 85.7% 우수.
+
+## 1차 익절 분기 (단기/중기 회전 차등) — 2026-05-03 추가
+
+| 전략 | 1차 익절 % | 매도 비율 | 비고 |
+|------|----------|---------|------|
+| SEPA Trend / Strategic Swing | 5% | 0.20 | 추세 추종 (보유 5-7일) |
+| **RSI2 Reversal** | **4%** | **0.40** | 단기 반전 (보유 1.5일) |
+| **Gap & Go** | **4%** | **0.40** | 단기 모멘텀 |
+| Core Holding | 5% | 0.0 (분할 비활성) | 트레일링만 |
+
+`scripts/run_trader.py:_strategy_exit_params`에 정의.
+
+## 전문가 패널 통합 (2026-05-03~)
+
+`signals/strategic/expert_panel.py` — 일요일 21:00 갱신, GPT-5.4 4명 병렬 호출.
+
+**활용 경로 3건:**
+1. **swing_screener** (sepa_trend, strategic_swing): 추천 종목 +25점 부스트
+2. **cross_validator 규칙 10**: 모든 전략에 +max(2, conv×10×freshness) 보너스
+   - side==BUY 한정, 21일 폐기, freshness<0.5 보너스 0
+3. **LLM 2차 검증**: regime 결합 + risk_factors 컨텍스트 주입 (상위 5건)
 
 ## 1. SEPA Trend (`src/strategies/kr/sepa_trend.py`)
 
@@ -78,30 +102,36 @@ RSI(2) 과매도 반전 진입. 상위 추세(MA200) 필터 결합.
 
 ---
 
-## 3. Theme Chasing (`src/strategies/kr/theme_chasing.py`)
+## 3. Theme Chasing (`src/strategies/kr/theme_chasing.py`) — 🚫 폐지 (2026-05-04)
 
-### 개요
-핫 테마 종목 실시간 추종. 장중 급등 종목 포착.
+### ❌ 비활성 상태
+`evolved_overrides.yml`: `theme_chasing.enabled: false`, `allocation: 0.0%`.
 
-### 필터
+### 폐지 근거 (param-optimizer DB 검증, 2026-05-04)
+- 누적 44건 -300k 손실 (3월~4월)
+- 점수 구간별 실제 승률 (역설):
+  | 구간 | n | 승률 | 평균 PnL |
+  |------|---|------|---------|
+  | 70-75 | 4 | **75.0%** | +0.97% |
+  | 75-80 | 14 | 21.4% | -1.01% |
+  | 80-85 | 9 | 11.1% | -1.08% |
+  | 85+ | 16 | 43.8% | -0.82% |
+  → min_score 75 상향(이전 변경)이 차단하는 70-75는 75% 승률 우수, 통과되는 75-85는 최악 → 임계 정반대 작용
+- 보유 기간이 진짜 구분자: 0일 22.2% / 4일+ 66.7% — 점수 무관
+
+### 재활성화 조건 (5/16 토 평가)
+- 보유 기간 필터(4일+ 잔류 우대) 도입
+- 또는 80+ 임계 + 강세 테마장(예: 2차전지 폭등) 한정
+- `evolved_overrides.yml _meta.theme_chasing.enabled` 사유 참조
+
+### 기존 설정 (참고용 — 비활성 중)
 | 조건 | 값 |
 |------|---|
-| 최소 등락률 | min_change_pct (**2.5%**) |
-| 최대 등락률 (09~10시) | 4% |
-| 최대 등락률 (10시~) | 7% |
-| ATR 상한 | **5.5%** (고변동 종목 차단) |
-| 진입 시작 시간 | **09:30** (장초반 30분 변동성 회피) |
-| 14:00 이후 | **진입 차단** |
-| RSI > 75 | 차단 |
-| MA20 대비 +25% | 차단 |
-| 장중 고점 후퇴 > 3% | 차단 |
-| **+5% 급등 시 눌림 < 1%** | **차단 (추격 방지)** |
-| 대형주 20개 | 차단 |
-
-### 스코어링
-- 등락률 구간: 2~4%=20, 4~6%=14, 6~7%=8
-- 테마 점수, 거래대금, 수급 가산
-- 장중 고점 후퇴율 기반 점수 조정
+| 최소 등락률 | 2.5% |
+| ATR 상한 | 5.5% |
+| 진입 시작 시간 | 09:30 |
+| 14:00 이후 | 진입 차단 |
+| min_score | 75 (5/3 65→75, 5/4 폐지) |
 
 ---
 
