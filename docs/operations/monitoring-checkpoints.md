@@ -6,17 +6,22 @@
 
 ## 활성 체크포인트
 
-### 2026-05-09 (토 00:00) — Weekly Rebalance 90일 시계열 첫 반영
+### 2026-05-09 (토 00:00) — Weekly Rebalance 90일 시계열 + Wiki 컨텍스트 첫 반영
 
-- **커밋**: afc09cb
-- **변경**: `strategy_evolver.rebalance_strategy_allocation` — 1주+30일+**90일** 시계열, 90일 우선 system_prompt
+- **커밋**: afc09cb (90일 시계열) + Phase 1 (Wiki 컨텍스트)
+- **변경**:
+  - `strategy_evolver.rebalance_strategy_allocation` — 1주+30일+**90일** 시계열, 90일 우선 system_prompt
+  - **Phase 1**: `_build_wiki_context()` — 전략별 wiki 교훈 + 직전 주 매도후 복기 LLM 분석 → user_prompt 주입
 - **확인 항목**:
   - [ ] 5/9 00:00:10 KST 리밸런싱 실행 로그 (`journalctl -u qwq-ai-trader --since "2026-05-09 00:00"`)
   - [ ] LLM reasoning 출력에 "1주/30일/90일" 시계열 비교 명시 포함
+  - [ ] **LLM reasoning에 Wiki 교훈 인용 포함 여부** (Phase 1 효과 측정)
   - [ ] `sync_from_db(days=90)` 정상 작동 (DB 동기화 보강 로그 확인)
   - [ ] rsi2_reversal allocation 변동 — 누적 60% 승률을 LLM이 인식했는가
   - [ ] strategic_swing 추가 상향(>20%) 발생 시 bull 편향 가드 검토
-- **회귀 위험**: review_period(90)이 빈 결과 시 system_prompt가 "90일 신뢰" 강조와 충돌 (P2-11 미반영)
+- **회귀 위험**:
+  - review_period(90)이 빈 결과 시 system_prompt가 "90일 신뢰" 강조와 충돌 (P2-11 미반영)
+  - wiki_ctx 5KB 추가로 LLM 토큰 비용 증가 (~$0.05/주 추정, 무시 가능)
 
 ### 2026-05-09~ (5영업일 후) — theme_chasing min_score 75 효과 검증
 

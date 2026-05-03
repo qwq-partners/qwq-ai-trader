@@ -1,5 +1,45 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-03 — Phase 1: Wiki + Post-Exit → Rebalance LLM 컨텍스트 통합
+
+### 배경
+사용자 요청: "llm위키와 모니터링이 서로 연동되서 누적하며 리밸런싱 및 우리 전략판단에 도움이 되도록 하자".
+
+기존 진단:
+- Trade Wiki는 cross_validator(진입 게이트)에만 활용
+- Strategy Evolver(rebalance)는 단순 통계만 보고 LLM 결정 — "왜 부진/양호한지" 인사이트 없음
+- weekly_post_exit_*.md 페이지는 작성만 되고 흡수 약속만 있음
+
+3단계 통합 설계 중 Phase 1 즉시 구현 (다음 5/9 weekly_rebalance에서 첫 반영).
+
+### 변경
+- `src/core/evolution/strategy_evolver.py`
+  - **`_build_wiki_context(strategies)` 신규 메서드**:
+    - `~/.cache/ai_trader/wiki/strategies/{strategy}.md`에서 "## 교훈" 섹션 추출 (전략당 ~600자)
+    - 직전 주 `weekly_post_exit_*.md`의 LLM 분석 섹션 추출 (~1500자)
+    - 마크다운 결합, 최대 5KB
+  - **`rebalance_strategy_allocation` 통합**:
+    - LLM 호출 직전 wiki_ctx 빌드
+    - user_prompt에 "📚 누적 교훈 (Trade Wiki + 직전 주 매도후 복기)" 섹션 추가
+  - **system_prompt 가이드 추가**:
+    - "통계만 보지 말고 누적 교훈과 함께 판단"
+    - "직전 주 매도후 복기 LLM 분석은 단기 신호 보조, 90일 누적 우선"
+    - "Wiki 교훈에 명시된 패턴이 있으면 reasoning에 인용"
+  - reasoning 필드 의무화: "1주/30일/90일 시계열 비교 + 누적 교훈 인용 명시"
+
+### 검증
+- 스모크 테스트: `_build_wiki_context` 2700자 정상 생성 (sepa/swing/rsi2/theme/core 5전략 교훈 + 직전 주 후속복기)
+- py_compile 통과
+- 봇 재시작 정상
+
+### 미반영 (Phase 2, 3)
+- Phase 2: Monitoring 체크포인트 자동 검증 (활성 SQL 자동 실행 → wiki/monitoring/*.md)
+- Phase 3: 매일 evolve(20:30)와 cross_validator에도 통합
+
+### 다음 검증
+- 5/9 토 00:00 weekly_rebalance에서 LLM reasoning에 "Wiki 교훈 인용" 포함 여부 확인
+- monitoring-checkpoints.md 갱신
+
 ## 2026-05-03 — 거래 원칙 리포트 분석 후속 + 코드리뷰 P0+P1 반영
 
 ### 배경

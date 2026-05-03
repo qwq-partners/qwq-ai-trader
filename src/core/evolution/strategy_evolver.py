@@ -971,9 +971,13 @@ class StrategyEvolver:
                 "- 합계: ≤ 100% (레버리지 금지)\n"
                 "- 주당 변경: 각 전략 ±10%p 이내\n"
                 "- 비활성 전략(momentum_breakout): 반드시 0%\n\n"
+                "누적 교훈 활용 (Trade Wiki + 매도후 복기):\n"
+                "- 통계만 보지 말고 **왜 이 전략이 부진/양호한지** 누적 교훈 컨텍스트 함께 판단\n"
+                "- 직전 주 매도후 복기의 LLM 분석은 **단기 신호 보조**로만 활용 (90일 누적이 우선)\n"
+                "- Wiki 교훈에 명시된 패턴(예: '특정 시간대 손실 다발')이 있으면 reasoning에 인용\n\n"
                 "JSON 형식으로 응답:\n"
                 '{ "allocations": {"momentum_breakout": 60, ...}, '
-                '"reasoning": "분석 사유 (1주/30일/90일 시계열 비교 명시 필수)", '
+                '"reasoning": "분석 사유 (1주/30일/90일 시계열 비교 + 누적 교훈 인용 명시)", '
                 '"confidence": 0.7 }'
             )
 
@@ -995,6 +999,11 @@ class StrategyEvolver:
                 f"손익비 {review_90d.profit_factor:.2f}, "
                 f"총손익 {review_90d.total_pnl:,.0f}원"
             )
+
+            # Phase 1: Wiki 축적 교훈 컨텍스트 주입 (2026-05-03)
+            wiki_ctx = self._build_wiki_context(list(current.keys()))
+            if wiki_ctx:
+                user_prompt += f"\n\n=== 📚 누적 교훈 (Trade Wiki + 직전 주 매도후 복기) ===\n{wiki_ctx}"
 
             result = await llm.complete_json(
                 prompt=user_prompt,
@@ -1052,6 +1061,82 @@ class StrategyEvolver:
             "reasoning": reasoning,
             "confidence": confidence,
         }
+
+    def _build_wiki_context(self, strategies: List[str]) -> str:
+        """Trade Wiki 축적 교훈 + 직전 주 매도후 복기 추출 (2026-05-03 Phase 1)
+
+        파일 직접 읽기 (LLM/instance 의존 없음, 안전).
+
+        Args:
+            strategies: 활성 전략명 리스트
+
+        Returns:
+            마크다운 컨텍스트 (~3-5KB), 빈 문자열이면 wiki 미사용
+        """
+        from pathlib import Path
+        wiki_dir = Path.home() / ".cache" / "ai_trader" / "wiki"
+        if not wiki_dir.exists():
+            return ""
+
+        parts: List[str] = []
+
+        # 1. 전략별 위키 페이지 핵심 추출 (각 ~300자)
+        strat_dir = wiki_dir / "strategies"
+        if strat_dir.exists():
+            parts.append("**전략별 누적 교훈:**")
+            for strat in strategies:
+                if not strat or strat == "momentum_breakout":
+                    continue
+                page = strat_dir / f"{strat}.md"
+                if not page.exists():
+                    continue
+                try:
+                    content = page.read_text(encoding="utf-8")
+                    # 교훈 섹션 추출 (## 교훈 ~ 다음 ## 까지)
+                    lessons_section = ""
+                    if "## 교훈" in content:
+                        after = content.split("## 교훈", 1)[1]
+                        next_h2 = after.find("\n## ")
+                        lessons_section = after[:next_h2] if next_h2 > 0 else after
+                        lessons_section = lessons_section.strip()[:600]
+                    if lessons_section:
+                        parts.append(f"\n[{strat}]")
+                        parts.append(lessons_section)
+                except Exception as _e:
+                    logger.debug(f"[리밸런싱] wiki {strat}.md 읽기 실패: {_e}")
+
+        # 2. 직전 주 매도후 복기 (LLM 분석 섹션)
+        post_exit_files = sorted(
+            wiki_dir.glob("weekly_post_exit_*.md"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if post_exit_files:
+            try:
+                latest = post_exit_files[0]
+                content = latest.read_text(encoding="utf-8")
+                # LLM 분석 섹션 추출 (## LLM 분석 ~ 다음 ## 까지)
+                llm_section = ""
+                for marker in ("## LLM 분석", "## LLM"):
+                    if marker in content:
+                        after = content.split(marker, 1)[1]
+                        next_h2 = after.find("\n## ")
+                        llm_section = after[:next_h2] if next_h2 > 0 else after
+                        break
+                # LLM 섹션이 없으면 전체 1500자
+                if not llm_section:
+                    llm_section = content[:1500]
+                else:
+                    llm_section = llm_section.strip()[:1500]
+                if llm_section:
+                    parts.append(f"\n**직전 주 매도후 복기 ({latest.name}):**")
+                    parts.append(llm_section)
+            except Exception as _e:
+                logger.debug(f"[리밸런싱] weekly_post_exit 읽기 실패: {_e}")
+
+        result = "\n".join(parts)
+        # 토큰 예산 보호: 최대 5KB
+        return result[:5000] if result else ""
 
     def _build_perf_summary(self, review: ReviewResult) -> str:
         """전략별 성과 요약 텍스트 생성"""
