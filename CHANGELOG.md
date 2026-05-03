@@ -1,5 +1,48 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-03 — 전문가 패널 통합 (P0+P1+P2 일괄)
+
+### 배경
+사용자 요청: "전문가 패널 분석을 단순 리포트 아닌 전략 활용까지 확대 + 리스크 팩터 반영".
+
+기존 활용:
+- swing_screener: 추천 종목 +25점 보너스 (SEPA만)
+- kr_scheduler 장중 LLM 검증: 패널 regime으로 통과 기준 차등화
+
+활용 한계:
+- kr_screener(일반 스크리너) 미연동 — 모멘텀/테마/RSI2/갭 후보는 보너스 X
+- risk_factors 미활용
+- LLM regime + 패널 regime 이중 시스템, 우선순위 미정의
+
+### 변경 (`src/core/cross_validator.py`)
+
+**P0: 모든 전략 진입 시 패널 추천 보너스**
+- 신규 메서드 `_load_panel_outlook()` (6시간 캐시)
+- 규칙 10 추가: `symbol in self._panel_recommended` → `+max(2, conv × 10 × freshness)` 보너스
+- swing_screener의 +25점과 별도로, 모든 전략에 일관 적용 (보수 보너스 +5~+10)
+- 14일까지 신선도 0.3까지 감소
+
+**P1: risk_factors → LLM 2차 검증 컨텍스트 주입**
+- `llm_second_check`에 `📌 주간 매크로 리스크` 섹션 추가
+- 상위 3건만 (토큰 절약), 각 120자 제한
+- LLM에게 "리스크가 종목/전략에 직접 영향 가능 시 보수적 NO" 가이드
+
+**P2: regime 이중 시스템 보수적 결합**
+- 신규 메서드 `_combine_regime(llm_regime)`:
+  - llm + panel 모두 bull → bull 유지
+  - 둘 중 하나가 bear → bear 우선 (보수)
+  - 그 외 neutral
+- LLM 2차 검증 프롬프트에 `(LLM+패널 결합={panel_combined_regime})` 표시
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상
+
+### 모니터링
+- 일요일 21:00 패널 갱신 후 cross_validator가 6시간 내 자동 흡수
+- 다음 LLM 2차 검증부터 risk_factors 반영 시작
+- 효과 측정: 패널 추천 종목 vs 미추천 종목 진입 후 실현 PnL 비교 (5/9 후속복기)
+
 ## 2026-05-03 — 엔진 P0 적용 (감점 cap + 단기 회전 1차 익절)
 
 ### 배경

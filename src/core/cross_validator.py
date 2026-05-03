@@ -9,7 +9,7 @@ PRISM-INSIGHT의 "투자전략가" 패턴을 규칙 기반으로 구현.
 """
 
 from datetime import datetime
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 from loguru import logger
 
 
@@ -66,6 +66,74 @@ class CrossStrategyValidator:
         self._daily_llm_count: int = 0
         self._daily_llm_count_date = None
         self._daily_llm_max: int = int(llm_daily_max) if llm_daily_max is not None else 10
+
+        # 전문가 패널 캐시 (2026-05-03 통합 — 일요일 21:00 갱신)
+        # _panel_loaded_at: 마지막 로드 시각, 6시간마다 재로드
+        self._panel_outlook = None
+        self._panel_loaded_at: Optional[datetime] = None
+        self._panel_recommended: Dict[str, Any] = {}
+        self._panel_risk_factors: List[str] = []
+        self._panel_regime: str = ""
+
+    def _load_panel_outlook(self) -> None:
+        """전문가 패널 결과 로드 (6시간 캐시)
+
+        파일: ~/.cache/ai_trader/strategic/strategic_outlook.json
+        주 1회 갱신(일요일 21:00) — 6시간마다 재로드해 첫 호출 비용 분산.
+        """
+        now = datetime.now()
+        if (
+            self._panel_loaded_at is not None
+            and (now - self._panel_loaded_at).total_seconds() < 6 * 3600
+        ):
+            return
+        try:
+            from ..signals.strategic.expert_panel import ExpertPanel
+            panel = ExpertPanel()
+            outlook = panel.load_outlook()
+            if outlook:
+                self._panel_outlook = outlook
+                self._panel_recommended = {
+                    s.symbol: s for s in (outlook.recommended_stocks or [])
+                }
+                self._panel_risk_factors = list(outlook.risk_factors or [])
+                self._panel_regime = (outlook.market_regime or "").lower()
+                logger.info(
+                    f"[크로스검증] 전문가 패널 로드: 추천 {len(self._panel_recommended)}종목, "
+                    f"리스크 {len(self._panel_risk_factors)}건, 레짐={self._panel_regime}"
+                )
+            self._panel_loaded_at = now
+        except Exception as e:
+            logger.debug(f"[크로스검증] 전문가 패널 로드 실패 (무시): {e}")
+            self._panel_loaded_at = now  # 다음 6시간 재시도 방지
+
+    def _combine_regime(self, llm_regime: str) -> str:
+        """LLM regime + 패널 regime 보수적 결합 (둘 중 약세 우선)
+
+        예: llm=bull, panel=neutral → neutral (보수)
+            llm=neutral, panel=bullish → neutral (LLM 우선, 단기 신호)
+            둘 다 같으면 그대로
+        """
+        llm_regime = (llm_regime or "").lower()
+        panel_regime = self._panel_regime
+        if not panel_regime:
+            return llm_regime
+        # 매핑: bullish/강세 → bull, bearish/약세 → bear, 그 외 neutral
+        def _norm(r: str) -> str:
+            r = r.lower()
+            if "bull" in r or "강세" in r:
+                return "bull"
+            if "bear" in r or "약세" in r:
+                return "bear"
+            return "neutral"
+        l_norm = _norm(llm_regime)
+        p_norm = _norm(panel_regime)
+        # 보수적 결합: bear 있으면 bear, 둘 다 bull이면 bull, 그 외 neutral
+        if l_norm == "bear" or p_norm == "bear":
+            return "trending_bear" if "trending" in llm_regime else "bear"
+        if l_norm == "bull" and p_norm == "bull":
+            return llm_regime if "bull" in llm_regime else "trending_bull"
+        return "neutral"
 
     def set_portfolio(self, portfolio):
         self._portfolio = portfolio
@@ -309,6 +377,27 @@ class CrossStrategyValidator:
                 adjusted_score += memory_adj
                 penalties.append(f"메모리보정({memory_adj:+d})")
 
+        # === 규칙 10: 전문가 패널 추천 보너스 (2026-05-03 P0 통합) ===
+        # 일요일 21:00 갱신, 14일 이내 신선도 가중. 모든 전략에 일관 적용.
+        self._load_panel_outlook()
+        if symbol in self._panel_recommended:
+            try:
+                pick = self._panel_recommended[symbol]
+                # 신선도 계산 (생성 후 14일까지 0.3까지 감소)
+                freshness = 1.0
+                if self._panel_outlook:
+                    created = datetime.fromisoformat(self._panel_outlook.created_at)
+                    days_old = (datetime.now() - created).days
+                    freshness = max(0.3, 1.0 - days_old / 14.0)
+                # 보너스 = conviction × 10 × freshness (cross_validator는 swing_screener 25보다 보수)
+                # 주: swing_screener는 별도 +25 점수에 들어가므로 여기서는 추가 보너스만 작게
+                conv = float(getattr(pick, "conviction", 0.5))
+                bonus = max(2, int(conv * 10 * freshness))
+                adjusted_score += bonus
+                penalties.append(f"전문가패널 추천(+{bonus} conv={conv:.0%}/신선도{freshness:.0%})")
+            except Exception as _e:
+                logger.debug(f"[크로스검증] 패널 보너스 계산 실패 {symbol}: {_e}")
+
         # === 누적 감점 cap (2026-05-03 P0-1) ===
         # 시간대 -8 + 지표결손 -8 + MA200 -5 + 극단PER -5 = 최대 -26 누적 가능
         # 60-70점대 종목이 자동 차단되는 역설(이전 분석: 91.7% 승률 영역) 방지
@@ -406,9 +495,18 @@ class CrossStrategyValidator:
             if self._trade_wiki:
                 wiki_context = self._trade_wiki.query(strategy, sector, market_regime)
 
+            # 패널 risk_factors 컨텍스트 (2026-05-03 P1 통합)
+            self._load_panel_outlook()
+            panel_risks = ""
+            if self._panel_risk_factors:
+                # 상위 3건만 (토큰 절약)
+                top_risks = self._panel_risk_factors[:3]
+                panel_risks = " | ".join(r[:120] for r in top_risks)
+            panel_combined_regime = self._combine_regime(market_regime)
+
             prompt = (
                 f"종목 {symbol}, 전략 {strategy}, 점수 {score:.0f}.\n"
-                f"시장 체제: {market_regime}."
+                f"시장 체제: {market_regime} (LLM+패널 결합={panel_combined_regime})."
                 + (f" 섹터: {sector}." if sector else "") + "\n"
                 f"지표: RSI={indicators.get('rsi_14', 'N/A')}, "
                 f"ATR={indicators.get('atr_14', 'N/A')}%, "
@@ -417,7 +515,9 @@ class CrossStrategyValidator:
                 f"수급={'+' if (indicators.get('foreign_net_buy') if indicators.get('foreign_net_buy') is not None else 0) > 0 else '-'}.\n"
                 + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
                 + (f"위키 교훈: {wiki_context}\n" if wiki_context else "")
+                + (f"📌 주간 매크로 리스크 (전문가 패널): {panel_risks}\n" if panel_risks else "")
                 + "\n이 매수 시그널을 승인하시겠습니까? "
+                "위 매크로 리스크가 해당 종목/전략에 직접 영향 가능 시 보수적으로 NO. "
                 "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )
             # GPT-5.4 (STRATEGY_ANALYSIS) — 추론 필요한 매수 판단

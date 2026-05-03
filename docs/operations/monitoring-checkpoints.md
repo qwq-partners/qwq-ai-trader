@@ -6,6 +6,39 @@
 
 ## 활성 체크포인트
 
+### 2026-05-09~ — 전문가 패널 통합 효과 (P0+P1+P2)
+
+- **커밋**: 적용 예정 (2026-05-03)
+- **변경**: `src/core/cross_validator.py`
+  - P0: 모든 전략 진입 시 패널 추천 보너스 (`+max(2, conv × 10 × freshness)`)
+  - P1: risk_factors → LLM 2차 검증 컨텍스트 주입
+  - P2: LLM regime + 패널 regime 보수적 결합
+- **확인 항목**:
+  - [ ] 일요일 21:00 패널 갱신 후 6시간 내 cross_validator 자동 흡수 로그
+  - [ ] LLM 2차 검증 프롬프트에 "주간 매크로 리스크" 섹션 출력
+  - [ ] 패널 추천 종목 진입 시 점수 보너스 로그 (`전문가패널 추천(+X conv=...)`)
+  - [ ] regime 결합 결과 (`LLM+패널 결합=trending_bull` 등)
+- **효과 가설**:
+  - [ ] 패널 추천 종목 진입 빈도 증가 (모든 전략에 보너스 확산)
+  - [ ] 매크로 리스크 인식 시 LLM 거부율 증가 (의사결정 보수화)
+  - [ ] 패널 미추천 + 약세 regime 종목 진입 감소
+- **검증 SQL** (5/9 W19 후속복기 시점):
+  ```sql
+  WITH panel_picks AS (
+    SELECT '005930' AS sym UNION SELECT '000660' UNION SELECT '064350'
+    UNION SELECT '489790' UNION SELECT '009830'
+  )
+  SELECT
+    CASE WHEN t.symbol IN (SELECT sym FROM panel_picks) THEN '추천' ELSE '비추천' END AS group_,
+    COUNT(*) AS n,
+    ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl,
+    ROUND(SUM(pnl)::numeric, 0) AS total_pnl
+  FROM trades t
+  WHERE market='KR' AND exit_time::date >= '2026-05-04'
+    AND exit_type NOT IN ('kis_sync','sync_reconcile','sync_closed','sync_partial')
+  GROUP BY group_;
+  ```
+
 ### 2026-05-08~ (5영업일 후) — cross_validator 누적 감점 cap -15 효과
 
 - **커밋**: 적용 예정 (2026-05-03)
