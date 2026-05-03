@@ -19,6 +19,7 @@
 
 ### Operations (운영)
 - [runbook.md](operations/runbook.md) — 봇 관리, 코드 변경 프로토콜, 트러블슈팅, 캐시/로그 위치
+- [monitoring-checkpoints.md](operations/monitoring-checkpoints.md) — 변경 적용 후 검증 체크포인트 (시점·전략별)
 
 ### Integrations (연동)
 - [external-apis.md](integrations/external-apis.md) — KIS, pykrx, yfinance, Finnhub, Finviz, LLM(OpenAI/Gemini/Perplexity), Telegram, DART
