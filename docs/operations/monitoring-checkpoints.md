@@ -6,6 +6,42 @@
 
 ## 활성 체크포인트
 
+### 2026-05-18~ (2주 후) — 09:00~09:29 장초반 차단 재검토
+
+- **상태**: A안 채택 (현 상태 유지) — 2026-05-04 사용자 결정
+- **재검토 사유**:
+  - 도입 근거 (2026-04-25): 30일 09시 진입 -440k 중 **76%가 theme_chasing**
+  - **2026-05-04 theme_chasing 폐지**로 주요 손실 원인 제거됨
+  - 5/4 SK하이닉스 09:21 시그널 차단 → +12.5% 놓침 (실제 기회비용 발생)
+  - 현재 차단 규칙은 theme 포함 데이터 기반
+- **재검토 시점**: 2026-05-18 (theme 폐지 후 2주 누적)
+- **재검토 SQL** (theme 폐지 후 09시 진입 데이터):
+  ```sql
+  -- theme_chasing 폐지(5/4) 이후 09:00~09:29 진입 종목 통계
+  SELECT
+    EXTRACT(HOUR FROM entry_time) || ':' ||
+      CASE WHEN EXTRACT(MINUTE FROM entry_time) < 30 THEN '00-29' ELSE '30-59' END AS time_slot,
+    entry_strategy,
+    COUNT(*) AS n,
+    ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl,
+    ROUND((SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*),0) * 100)::numeric, 1) AS win_rate
+  FROM trades
+  WHERE market='KR'
+    AND entry_time::date >= '2026-05-05'
+    AND exit_time IS NOT NULL
+    AND exit_type NOT IN ('kis_sync','sync_reconcile','sync_closed','sync_partial')
+  GROUP BY time_slot, entry_strategy
+  ORDER BY time_slot, n DESC;
+  ```
+- **검토 옵션** (재검토 시):
+  - 옵션 1: 현 상태 유지 (theme 없이도 -440k 패턴 재현 시)
+  - 옵션 2: strategic_swing/sepa_trend만 09:00~09:29 허용
+  - 옵션 3: bull 레짐에서만 차단 해제
+  - 옵션 4: 차단 시간 09:00~**09:15** 단축
+- **재검토 트리거**:
+  - theme 폐지 후 09:00~09:29 진입 N≥10건 누적
+  - 평균 PnL이 변경 전(-0.20%) 대비 +0.5%p 이상 개선되면 옵션 2~4 검토
+
 ### 2026-05-12~ — 슬리피지 체제 분기 (bull 5% / neutral·bear 3%)
 
 - **커밋**: 적용 예정 (2026-05-05)
