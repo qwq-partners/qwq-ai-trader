@@ -225,7 +225,13 @@ kr:
     execute_time: "09:30"
     signal_interval_sec: 30             # 시그널 분산 실행 간격 (슬리피지 방지)
     position_update_interval: 10
-    max_entry_slippage_pct: 3.0
+    # 2026-05-05: 시장 체제별 슬리피지 분기 (bull 5% / neutral·bear 3%)
+    # 단일 float도 하위 호환 (모든 체제 동일 적용)
+    max_entry_slippage_pct:
+      bull: 5.0
+      neutral: 3.0
+      caution: 3.0
+      bear: 3.0
     max_holding_days: 10
     evening_scan_enabled: true
     evening_scan_time: "19:30"

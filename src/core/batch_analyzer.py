@@ -167,21 +167,36 @@ class BatchAnalyzer:
         # bull(강세)에서만 +5% 허용 (강세 갭업 53.8% 승률 데이터 근거),
         # neutral/bear는 3% 유지 (사용자 우려: 추격매수 재발 방지)
         _slip_cfg = self._config.get("batch", {}).get("max_entry_slippage_pct", 3.0)
+
+        def _coerce_slip(v: Any, default: float) -> float:
+            """진화 자동 갱신/수동 편집 실수 방어 — None/dict/list/str 모두 안전"""
+            if v is None:
+                return default
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"[배치분석] 슬리피지 설정 잘못된 타입 {v!r} → 기본값 {default} 사용"
+                )
+                return default
+
         if isinstance(_slip_cfg, dict):
             self._slippage_by_regime: Dict[str, float] = {
-                "bull": float(_slip_cfg.get("bull", 5.0)),
-                "neutral": float(_slip_cfg.get("neutral", 3.0)),
-                "caution": float(_slip_cfg.get("caution", 3.0)),
-                "bear": float(_slip_cfg.get("bear", 3.0)),
+                "bull": _coerce_slip(_slip_cfg.get("bull"), 5.0),
+                "neutral": _coerce_slip(_slip_cfg.get("neutral"), 3.0),
+                "caution": _coerce_slip(_slip_cfg.get("caution"), 3.0),
+                "bear": _coerce_slip(_slip_cfg.get("bear"), 3.0),
             }
         else:
             # 하위 호환: 단일 float이면 모든 체제에 동일 적용
-            _v = float(_slip_cfg)
+            _v = _coerce_slip(_slip_cfg, 3.0)
             self._slippage_by_regime = {
                 "bull": _v, "neutral": _v, "caution": _v, "bear": _v,
             }
         # 기본값(폴백)
         self._max_entry_slippage_pct = self._slippage_by_regime.get("neutral", 3.0)
+        # 알 수 없는 regime 폴백 시 1회성 warning 방지용 dedupe set
+        self._unknown_regime_warned: set = set()
         self._max_holding_days = self._config.get("batch", {}).get(
             "max_holding_days", 10
         )
@@ -316,15 +331,23 @@ class BatchAnalyzer:
 
         # PendingSignal 변환
         result: List[PendingSignal] = []
+        # 2026-05-05 P0: 체제별 슬리피지 분기 (bull 5% / neutral 3% / bear 3%)
+        # 루프 밖에서 1회 계산 — 사이클 중간 regime 변경 가능성 차단 + 미세 최적화
+        if self._market_regime in self._slippage_by_regime:
+            _slip = self._slippage_by_regime[self._market_regime]
+        else:
+            _slip = self._max_entry_slippage_pct
+            if self._market_regime not in self._unknown_regime_warned:
+                logger.warning(
+                    f"[배치분석] 알 수 없는 regime '{self._market_regime}' "
+                    f"→ 슬리피지 폴백 {_slip}% 적용"
+                )
+                self._unknown_regime_warned.add(self._market_regime)
         for sig in all_signals:
             entry_price = float(sig.price) if sig.price else 0
             if entry_price <= 0:
                 continue
 
-            # 2026-05-05 P0: 체제별 슬리피지 분기 (bull 5% / neutral 3% / bear 3%)
-            _slip = self._slippage_by_regime.get(
-                self._market_regime, self._max_entry_slippage_pct
-            )
             max_entry = entry_price * (1 + _slip / 100)
 
             pending = PendingSignal(
