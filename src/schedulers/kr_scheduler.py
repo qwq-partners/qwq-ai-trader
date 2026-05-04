@@ -886,7 +886,8 @@ class KRScheduler:
             pos_lines = []
             pos_data = []
             for i, (symbol, pos) in enumerate(positions.items(), 1):
-                entry_price = float(pos.entry_price) if pos.entry_price is not None else 0.0
+                # Position은 avg_price 사용 (entry_price 속성 없음)
+                entry_price = float(pos.avg_price) if pos.avg_price is not None else 0.0
                 current_price = float(pos.current_price) if pos.current_price is not None else 0.0
                 highest = float(pos.highest_price) if pos.highest_price is not None else current_price
 
