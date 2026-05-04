@@ -7,6 +7,14 @@ batch:
     gap_and_go: 2
   default_strategy_limit: 3
   gap_down_skip_pct: -3.5
+  # 2026-05-05 P0: 시장 체제별 슬리피지 분기
+  # bull(강세장)에서만 +5% 허용 — 강세 갭업 +5~10% 구간 승률 53.8% 데이터 근거
+  # neutral/bear는 3% 유지 — 추격매수 재발 방지 (95-100점 구간 승률 37.9% 데이터)
+  max_entry_slippage_pct:
+    bull: 5.0
+    neutral: 3.0
+    caution: 3.0
+    bear: 3.0
   lunchtime_scan:
     enabled: true
     time: '12:30'

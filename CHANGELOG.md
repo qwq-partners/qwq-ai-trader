@@ -1,5 +1,44 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-05 — 슬리피지 체제 분기 (bull 5% / neutral·bear 3%)
+
+### 배경
+2026-05-04 추천 10종 80% 적중 / 평균 +5.91% vs 우리 +2.39% → -3.5%p (~90만원) 기회비용. 차단 사유: `max_entry_slippage_pct = 3.0%` 갭업 컷이 강세장 폭등 종목 차단.
+
+### 3-전문가 검증
+- **trade-analyst**: "갭업 = 손해" 거짓 (DB 136건). +5~10% 구간 승률 53.8% (vs 전체 46.3%). 단, 점수 95-100점 37.9%/-0.58% + 09:00~09:29 진입 31.3%/-740k 패턴은 데이터 지지.
+- **market-analyst**: 갭업 후속은 체제 의존. bull + 거래량 동반 = 추세 시작 신호.
+- **strategy-advisor**: bull 한정 완화가 안전 (옵션 ②). 사용자 우려(추격매수 재발)는 bear/neutral에서 발생 → 그 영역은 보수 유지.
+
+### 변경
+- `config/evolved_overrides.yml batch.max_entry_slippage_pct`:
+  - 단일 float `3.0` → dict `{bull: 5.0, neutral: 3.0, caution: 3.0, bear: 3.0}`
+  - bull에서만 +2%p 완화, 나머지는 그대로
+- `src/core/batch_analyzer.py:166-185, 308-312`:
+  - dict 로드 + 하위 호환 (단일 float도 허용)
+  - `_slippage_by_regime` 신규 attribute
+  - PendingSignal 생성 시 `self._market_regime` 기반 lookup
+
+### 효과 가설 (5영업일 + 5건 평가)
+- bull 레짐 신규 통과 종목 평균 PnL ≥ 0%
+- bear/neutral 거래는 변경 전 대비 ±2%p 이내
+- 일일 -5% 도달 0~1회
+
+### 안전 마진
+- bear/sideways 3% 유지 (사용자 우려 보존)
+- cross_validator 추격매수 -15 (등락률/ATR>1.5)는 그대로 — 5/4 삼성증권 +25% 갭은 어차피 차단
+- 09:00~09:29 장초반 차단 그대로 (-740k 패턴 데이터)
+- 누적 감점 cap -15 그대로
+
+### 롤백 트리거
+- bull 갭업 통과 종목 3건 이상 -7%↓ 손절 → 24h 내 환원
+- 5영업일 누적 손익비 < 1.0 → bull 5→4%
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상
+- monitoring-checkpoints.md에 5/12 검증 항목 등록
+
 ## 2026-05-04 — theme_chasing 폐지 + 3-에이전트 검증 P0/P1 일괄
 
 ### 배경

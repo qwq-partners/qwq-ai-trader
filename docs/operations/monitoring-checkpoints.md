@@ -6,6 +6,44 @@
 
 ## 활성 체크포인트
 
+### 2026-05-12~ — 슬리피지 체제 분기 (bull 5% / neutral·bear 3%)
+
+- **커밋**: 적용 예정 (2026-05-05)
+- **변경**: `config/evolved_overrides.yml batch.max_entry_slippage_pct`
+  - 단일 float 3.0 → dict `{bull: 5.0, neutral: 3.0, caution: 3.0, bear: 3.0}`
+  - `batch_analyzer.py:166-185, 308-312` regime별 lookup
+- **근거** (3-전문가 분석, 5/4):
+  - trade-analyst: 갭업 +5~10% 구간 승률 53.8% (전체 평균 46.3% 초과)
+  - 95-100점 구간 승률 37.9% (-0.58%) ← 추격매수 패턴 데이터
+  - 09:00~09:29 진입 31.3% / -740k ← 장초반 차단 데이터 지지
+  - market-analyst: 강세장 갭업 + 거래량 = 추세 시작 신호
+  - strategy-advisor: bull 한정 완화가 daily_max -5% 영향 미미
+- **5/4 케이스**:
+  - 차단된 6종 평균 +9.8% 수익 — 강세장 갭업 미포착
+  - 키움증권 +6.2% (갭 +3%로 차단) → 5%로 포착 가능
+  - 삼성증권 +28.3% (갭 +25%) → cross_validator 추격매수 -15로 차단 (안전)
+- **효과 가설**:
+  - [ ] bull 레짐에서 신규 통과 종목 평균 PnL ≥ 0%
+  - [ ] bear/neutral 레짐 거래는 변경 전 대비 ±2%p 이내
+  - [ ] 일일 -5% 도달 0~1회
+- **롤백 트리거**:
+  - bull 갭업 통과 종목 3건 이상 -7%↓ 손절 → 24h 내 환원
+  - 5영업일 누적 손익비 < 1.0 → bull 5→4%
+- **검증 SQL**:
+  ```sql
+  SELECT
+    market_regime,
+    COUNT(*) AS n,
+    ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl,
+    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins
+  FROM trades
+  WHERE market='KR'
+    AND exit_time::date >= '2026-05-06'
+    AND exit_type NOT IN ('kis_sync','sync_reconcile','sync_closed','sync_partial')
+  GROUP BY market_regime;
+  ```
+
+
 ### 2026-05-09~ — theme_chasing 전략 폐지 효과
 
 - **커밋**: 적용 예정 (2026-05-04)

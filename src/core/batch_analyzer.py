@@ -163,9 +163,25 @@ class BatchAnalyzer:
         self._composite_cache_date: Optional[date] = None
 
         # 설정
-        self._max_entry_slippage_pct = self._config.get("batch", {}).get(
-            "max_entry_slippage_pct", 3.0
-        )
+        # 2026-05-05 P0: 시장 체제별 슬리피지 분기
+        # bull(강세)에서만 +5% 허용 (강세 갭업 53.8% 승률 데이터 근거),
+        # neutral/bear는 3% 유지 (사용자 우려: 추격매수 재발 방지)
+        _slip_cfg = self._config.get("batch", {}).get("max_entry_slippage_pct", 3.0)
+        if isinstance(_slip_cfg, dict):
+            self._slippage_by_regime: Dict[str, float] = {
+                "bull": float(_slip_cfg.get("bull", 5.0)),
+                "neutral": float(_slip_cfg.get("neutral", 3.0)),
+                "caution": float(_slip_cfg.get("caution", 3.0)),
+                "bear": float(_slip_cfg.get("bear", 3.0)),
+            }
+        else:
+            # 하위 호환: 단일 float이면 모든 체제에 동일 적용
+            _v = float(_slip_cfg)
+            self._slippage_by_regime = {
+                "bull": _v, "neutral": _v, "caution": _v, "bear": _v,
+            }
+        # 기본값(폴백)
+        self._max_entry_slippage_pct = self._slippage_by_regime.get("neutral", 3.0)
         self._max_holding_days = self._config.get("batch", {}).get(
             "max_holding_days", 10
         )
@@ -305,7 +321,11 @@ class BatchAnalyzer:
             if entry_price <= 0:
                 continue
 
-            max_entry = entry_price * (1 + self._max_entry_slippage_pct / 100)
+            # 2026-05-05 P0: 체제별 슬리피지 분기 (bull 5% / neutral 3% / bear 3%)
+            _slip = self._slippage_by_regime.get(
+                self._market_regime, self._max_entry_slippage_pct
+            )
+            max_entry = entry_price * (1 + _slip / 100)
 
             pending = PendingSignal(
                 symbol=sig.symbol,
