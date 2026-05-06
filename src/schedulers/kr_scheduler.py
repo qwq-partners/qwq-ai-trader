@@ -4434,6 +4434,7 @@ JSON:
         last_morning_scan_date = None
         last_execute_date = None
         last_lunchtime_scan_date = None   # 낮 추가 스캔/실행 추적
+        last_capital_check_date = None    # F-3 14:00 자본활용률 체크 추적 (2026-05-06)
         last_evening_scan_date = None
         last_monitor_time = None
         last_prescan_date = None
@@ -4694,6 +4695,33 @@ JSON:
                     except Exception as e:
                         logger.error(f"[배치스케줄러] 낮 스캔 오류: {e}")
                     last_lunchtime_scan_date = today
+
+                # ── 14:00 자본활용률 체크 + 추가 진입 (F-3, 2026-05-06) ─
+                # lunchtime_scan(13:30) 후 자본 미활용 시 큐 자동 진입
+                # 추격매수 4중 안전망 그대로 (cross_validator -15, max_positions, 14:30 sepa 차단)
+                if (now.hour == 14 and 0 <= now.minute < 5
+                        and last_capital_check_date != today
+                        and not is_kr_market_holiday(today)):
+                    try:
+                        portfolio = bot.engine.portfolio
+                        equity = float(portfolio.total_equity)
+                        cash = float(portfolio.cash)
+                        cash_ratio = cash / equity if equity > 0 else 0.0
+                        if cash_ratio > 0.25:
+                            logger.info(
+                                f"[배치스케줄러] 14:00 자본활용률 체크: "
+                                f"현금 {cash_ratio:.1%} > 25% — 추가 진입 실행"
+                            )
+                            result = await bot.batch_analyzer.execute_pending_signals()
+                            logger.info(f"[배치스케줄러] 14:00 추가 실행 완료: {result}")
+                        else:
+                            logger.debug(
+                                f"[배치스케줄러] 14:00 자본활용률 체크: "
+                                f"현금 {cash_ratio:.1%} ≤ 25% — 추가 진입 스킵"
+                            )
+                    except Exception as e:
+                        logger.error(f"[배치스케줄러] 14:00 자본활용률 체크 오류: {e}")
+                    last_capital_check_date = today
 
                 # ── 15:00 LLM 포지션 종가 점검 ─────────────────────────
                 if (_llm_pos_eod_enabled

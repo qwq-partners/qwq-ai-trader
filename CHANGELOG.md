@@ -1,5 +1,67 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-06 — F-3 자본 회전 효율 개편 (한방 적용)
+
+### 배경
+4-전문가(engine-monitor + strategy-advisor + param-optimizer + market-analyst) 분석 결과:
+- 사용자 우려 일부는 오해 (시그널 매일 가능, weekly = allocation 조정만)
+- 일부는 사실: sepa 일평균 0.77건(이상치 1.0~1.5), 빈 평일 7%, 5/6 시점 현금 35.7%
+- strategy-advisor 권고: **옵션 F (08:20 후보 큐 + 익절 트리거)** P0
+- market-analyst 권고: **12:30 → 13:30 lunchtime 이동** (기관 오후 수급 반영)
+- 사용자 결정: **"한방에 F-3"**
+
+### 변경 (5건)
+
+**1. `config/evolved_overrides.yml batch.strategy_limits 한도 확대**
+- sepa_trend: 5 → **10** (이상치 일평균 1.0~1.5건 확보)
+- rsi2_reversal: 3 → 5
+- strategic_swing: 신규 명시 5
+- gap_and_go: 2 → 3
+- theme_chasing: 0 (폐지 5/4)
+
+**2. `batch.min_score`: 60.0 → 55.0**
+- engine-monitor 권고 (시장 수급 약세일 시그널 부족 해소)
+- cross_validator 4중 안전망 그대로 → 추격매수 위험 미증가
+
+**3. `batch.daily_max_new_buys`: 5 → 7**
+- 자본 회전 가속 (기존 max_positions+flex 8+2=10 그대로)
+
+**4. `batch.lunchtime_scan.time`: '12:30' → '13:30'**
+- 기관 오후 수급 반영 시점 (market-analyst 권고)
+- 14:00 자본활용률 체크와 30분 간격 두어 단계적 활용
+
+**5. `src/schedulers/kr_scheduler.py` 14:00 자본활용률 체크 task 신규**
+- 현금 비율 > 25% 시 `execute_pending_signals()` 자동 호출
+- lunchtime_scan(13:30) 후 30분 후 재진입 트리거
+- 추격매수 4중 안전망 그대로 (cross_validator -15, max_positions 가중, 14:30 sepa 차단, regime)
+
+### 안전 마진 보존
+- daily_max -5% 그대로 (4건 동시손절 4.48% < 5%)
+- max_position_pct 28% 그대로
+- max_positions 8 + flex 2 = 10 그대로
+- cross_validator 누적 감점 cap -15 그대로
+- 09:00~09:29 장초반 차단 그대로
+- 14:30 이후 sepa 진입 차단 그대로
+
+### 효과 가설 (5영업일 평가)
+| 지표 | 현재 | 목표 |
+|------|------|------|
+| 현금 비중 | 35.7% | 18~20% |
+| sepa 비중 | 19.7% | 35~40% |
+| 일평균 sepa 진입 | 0.77건 | 1.5~2건 |
+| 일평균 swing 진입 | 0.80건 | 1.2~1.5건 |
+| 월 추가 수익 | - | +94~141k |
+
+### 롤백 트리거
+- 5영업일 daily_max -5% 도달 1회 이상 → 즉시 롤백
+- 추격매수 손익비 -10% 악화 → min_score 55→58 단계 환원
+- raw 보유 종목 12+ → 14:00 체크 임계 25% → 35% 상향
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상 (active)
+- monitoring-checkpoints.md에 5/13 평가 항목 등록 예정
+
 ## 2026-05-06 — max_positions 잔여 비율 가중 카운트
 
 ### 배경

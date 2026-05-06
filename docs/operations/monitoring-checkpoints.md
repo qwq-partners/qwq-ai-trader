@@ -6,6 +6,32 @@
 
 ## 활성 체크포인트
 
+### 2026-05-13~ — F-3 자본 회전 효율 개편 효과
+
+- **커밋**: 적용 예정 (2026-05-06)
+- **변경 5건**: strategy_limits 한도 확대 + min_score 60→55 + daily_max_new_buys 5→7 + lunchtime 13:30 + 14:00 자본활용률 체크 task
+- **확인 항목**:
+  - [ ] 일평균 sepa 진입 1.5+ (이전 0.77)
+  - [ ] 일평균 swing 진입 1.2+ (이전 0.80)
+  - [ ] 현금 비중 18~20% (이전 35.7% 5/6 단일, 90일 평균 13%)
+  - [ ] 14:00 자본활용률 체크 발동 로그 + 추가 진입 건수
+  - [ ] daily_max -5% 도달 0회
+- **롤백 트리거**:
+  - daily_max 도달 1회+ → 즉시 롤백 (5단계 모두 환원)
+  - 손익비 -10% 악화 → min_score 55→58 단계 환원
+  - raw 보유 12+ → 14:00 체크 임계 25%→35% 상향
+- **검증 SQL**:
+  ```sql
+  SELECT entry_strategy, COUNT(*) AS n,
+         ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl,
+         ROUND(SUM(pnl)::numeric, 0) AS total_pnl
+  FROM trades
+  WHERE market='KR' AND entry_time::date >= '2026-05-07'
+    AND exit_time IS NOT NULL
+    AND exit_type NOT IN ('kis_sync','sync_reconcile','sync_closed','sync_partial')
+  GROUP BY entry_strategy ORDER BY n DESC;
+  ```
+
 ### 2026-05-13~ — max_positions 잔여 비율 가중 카운트 효과
 
 - **커밋**: 적용 예정 (2026-05-06)
