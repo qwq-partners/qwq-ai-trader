@@ -1498,24 +1498,48 @@ class BatchAnalyzer:
             except Exception:
                 pass
 
-        # 2026-05-06 P0: 코어홀딩 stale_alert (자동매도 X, 알림만)
-        # 30영업일 ±3% 박스권 → 멀티배거 가설 약화 시그널
-        # 사용자 결정 보존 (자동 청산 안 함)
-        await self._check_core_stale_alert(core_positions)
+        # 2026-05-06 P0: 코어홀딩 stale (D안 하이브리드 — 알림 + 자동매도)
+        # 30영업일 ±3% → 알림 / 45영업일 ±3% OR 30영업일 ±2%+거래량 → 자동매도
+        # P0-1: exclude_symbols 전달 (이미 청산 신호 발행된 종목 중복 SELL 차단)
+        await self._check_core_stale_alert(core_positions, exclude_symbols=_exclude)
 
-    async def _check_core_stale_alert(self, core_positions: List) -> None:
-        """코어홀딩 횡보 알림 (자동매도 X, 텔레그램만)
+    async def _check_core_stale_alert(self, core_positions: List, exclude_symbols: set = None) -> None:
+        """코어홀딩 횡보 감지 — 알림 + 자동매도 (D안 하이브리드, 2026-05-07)
 
-        조건: 진입 후 N영업일 + |PnL| ≤ X% (default: 30일 / ±3%)
-        알림 후 7일 내 재발송 방지 (cache).
+        Tier 1 (알림): N영업일 + |PnL| ≤ X% → 텔레그램 (7일 쿨다운)
+        Tier 2 (자동매도): 둘 중 하나 충족 시
+          - 45영업일+ ±3% (시간 기반)
+          - 30영업일+ ±2% + 최근 5일 거래량 < 20일 평균 50% (조건 기반)
+
+        2026-05-07 P0 코드리뷰 반영:
+        - exclude_symbols 가드 (이미 청산 발행된 종목 중복 SELL 차단)
+        - rebalance_exclude 화이트리스트 (운영자 보호 의지 보존)
+        - 정확한 영업일 계산 (휴일 고려)
+        - daily_prices 당일 제외 + 정렬 가정 검증
         """
         core_cfg = self._config.get("core_holding", {})
         if not core_cfg.get("stale_alert_enabled", True):
             return
 
+        # P1-4: rebalance_exclude 화이트리스트 (사용자 보호 의지)
+        rebalance_exclude = set(core_cfg.get("rebalance_exclude", []) or [])
+
+        # P0-1: 이미 청산 발행된 종목 중복 SELL 방지
+        _exclude = exclude_symbols or set()
+        pending_sells = getattr(self._engine, '_pending_sells', set())
+
+        # Tier 1 (알림)
         stale_days = int(core_cfg.get("core_stale_days", 30))
         stale_band = float(core_cfg.get("core_stale_pnl_band_pct", 3.0))
         cooldown_days = int(core_cfg.get("core_stale_cooldown_days", 7))
+
+        # Tier 2 (자동매도)
+        auto_sell_enabled = bool(core_cfg.get("core_stale_auto_sell_enabled", True))
+        time_based_days = int(core_cfg.get("core_stale_auto_sell_days", 45))
+        cond_based_days = int(core_cfg.get("core_stale_strict_days", 30))
+        cond_based_band = float(core_cfg.get("core_stale_strict_band_pct", 2.0))
+        vol_ratio_threshold = float(core_cfg.get("core_stale_volume_ratio", 0.5))
+        vol_check_days = int(core_cfg.get("core_stale_volume_days", 5))
 
         cache_path = Path.home() / ".cache" / "ai_trader" / "core_stale_alerts.json"
         alerts_sent: Dict[str, str] = {}
@@ -1528,20 +1552,136 @@ class BatchAnalyzer:
         today = date.today()
         cache_updated = False
 
+        # P0-2: 정확한 KR 영업일 계산 헬퍼
+        def _kr_business_days(start_d: date, end_d: date) -> int:
+            from ..utils.session import is_kr_market_holiday
+            count = 0
+            d = start_d + timedelta(days=1)
+            while d <= end_d:
+                if d.weekday() < 5 and not is_kr_market_holiday(d):
+                    count += 1
+                d += timedelta(days=1)
+            return count
+
         for symbol, pos in core_positions:
             try:
+                # P0-1 + P1-4: 중복 SELL + 화이트리스트 방어
+                if symbol in pending_sells or symbol in _exclude:
+                    continue
+                if symbol in rebalance_exclude:
+                    logger.debug(
+                        f"[코어stale] {symbol} rebalance_exclude 화이트리스트 — 자동매도 면제"
+                    )
+                    continue
+
                 entry_time = getattr(pos, "entry_time", None)
                 if entry_time is None:
                     continue
                 entry_date = entry_time.date() if hasattr(entry_time, 'date') else entry_time
-                # 영업일 추정: 단순 일수 × 5/7 보정 (대략)
-                elapsed_days = (today - entry_date).days
-                business_days = int(elapsed_days * 5 / 7)
-                if business_days < stale_days:
+                # P0-2: 정확한 영업일 계산 (단순 5/7 환산 → 휴일 고려)
+                business_days = _kr_business_days(entry_date, today)
+                _pnl_raw = getattr(pos, "unrealized_pnl_net_pct", None)
+                if _pnl_raw is None:
+                    _pnl_raw = 0
+                pnl_pct = abs(float(_pnl_raw))
+
+                # 거래량 데이터 (자동매도 조건 기반에만 필요)
+                volume_collapsed = False
+                if auto_sell_enabled and business_days >= cond_based_days:
+                    try:
+                        # P0-3: 25일 요청 → 첫 인덱스가 당일이면 1번부터 사용 (당일 거래량 왜곡 회피)
+                        daily = await self._broker.get_daily_prices(symbol, days=25)
+                        if daily and len(daily) >= 21:
+                            # 가장 최근 = index 0 가정 (KIS), 당일 봉 제외하기 위해 [1:21]
+                            first_day = str(daily[0].get("date", "") or daily[0].get("stck_bsop_date", ""))
+                            today_str_kr = today.strftime("%Y%m%d")
+                            offset = 1 if today_str_kr in first_day else 0
+                            volumes = [
+                                float(d.get("volume", d.get("acml_vol", 0)))
+                                for d in daily[offset:offset + 20]
+                            ]
+                            if len(volumes) == 20 and all(v >= 0 for v in volumes):
+                                avg20 = sum(volumes) / 20
+                                recent_n = min(vol_check_days, len(volumes))
+                                recent = volumes[:recent_n]
+                                avg_recent = sum(recent) / recent_n if recent_n > 0 else 0
+                                if avg20 > 0 and avg_recent / avg20 < vol_ratio_threshold:
+                                    volume_collapsed = True
+                    except Exception as _ve:
+                        logger.debug(f"[코어stale] {symbol} 거래량 체크 실패: {_ve}")
+
+                # ── Tier 2: 자동매도 조건 ────────────────────────
+                auto_sell_reason = None
+                if auto_sell_enabled:
+                    if business_days >= time_based_days and pnl_pct <= stale_band:
+                        auto_sell_reason = (
+                            f"시간 기반: {business_days}영업일+ ±{stale_band}% 이내"
+                        )
+                    elif (business_days >= cond_based_days and pnl_pct <= cond_based_band
+                            and volume_collapsed):
+                        auto_sell_reason = (
+                            f"조건 기반: {business_days}영업일+ ±{cond_based_band}% 이내 + "
+                            f"거래량 < {vol_ratio_threshold:.0%} (20일 평균)"
+                        )
+
+                if auto_sell_reason:
+                    logger.warning(
+                        f"[코어stale자동매도] {symbol} 청산 조건 충족: {auto_sell_reason}"
+                    )
+                    # 텔레그램 알림
+                    try:
+                        from ..utils.telegram import send_alert
+                        await send_alert(
+                            f"🔴 <b>코어홀딩 stale 자동 청산</b>\n"
+                            f"{getattr(pos, 'name', symbol)}({symbol})\n"
+                            f"{auto_sell_reason}\n"
+                            f"PnL: {float(getattr(pos, 'unrealized_pnl_net_pct', 0) or 0):+.2f}%"
+                        )
+                    except Exception as _tg_e:
+                        logger.warning(f"[코어stale자동매도] {symbol} 텔레그램 실패: {_tg_e}")
+
+                    # 매도 시그널 발행 (조기경보와 동일 경로)
+                    emit_success = False
+                    try:
+                        current_price = pos.current_price if pos.current_price is not None else Decimal("0")
+                        signal = Signal(
+                            symbol=symbol,
+                            side=OrderSide.SELL,
+                            strength=SignalStrength.STRONG,
+                            strategy=StrategyType.CORE_HOLDING,
+                            price=current_price,
+                            score=100,
+                            confidence=1.0,
+                            reason=f"코어 stale 자동매도: {auto_sell_reason}",
+                            metadata={"is_core": True, "stale_auto_sell": True},
+                        )
+                        event = SignalEvent.from_signal(signal, source="core_stale_auto_sell")
+                        _rm = getattr(self._engine, 'risk_manager', None)
+                        if _rm and hasattr(_rm, '_pending_exit_reasons'):
+                            _rm._pending_exit_reasons[symbol] = f"코어 stale 자동매도: {auto_sell_reason}"
+                        await self._engine.emit(event)
+                        emit_success = True
+                    except Exception as _emit_e:
+                        logger.error(f"[코어stale자동매도] {symbol} 시그널 발행 실패: {_emit_e}")
+                        # 발행 실패 시 텔레그램으로 운영자 통지 (위에서 이미 통지했지만 재시도)
+                        try:
+                            from ..utils.telegram import send_alert
+                            await send_alert(
+                                f"⚠️ <b>코어 stale 자동매도 시그널 발행 실패</b>\n"
+                                f"{getattr(pos, 'name', symbol)}({symbol})\n"
+                                f"이유: {_emit_e}\n"
+                                f"수동 청산 검토 필요"
+                            )
+                        except Exception:
+                            pass
+                    if emit_success:
+                        continue  # 발행 성공 시 알림 스킵
+                    # 발행 실패 시 Tier 1 알림 경로로 폴백 (운영자 인지 우선)
+
+                # ── Tier 1: 알림 (자동매도 미발동 시만) ─────────
+                if business_days < stale_days or pnl_pct > stale_band:
                     continue
-                pnl_pct = abs(float(getattr(pos, "unrealized_pnl_net_pct", 0) or 0))
-                if pnl_pct > stale_band:
-                    continue
+
                 # 쿨다운 체크
                 last_alert_str = alerts_sent.get(symbol)
                 if last_alert_str:
@@ -1562,14 +1702,15 @@ class BatchAnalyzer:
                         f"🟡 <b>코어홀딩 횡보 경보 (자동매도 X)</b>\n"
                         f"{getattr(pos, 'name', symbol)}({symbol})\n"
                         f"진입 후 {business_days}영업일+ 동안 |PnL| {pnl_pct:.2f}% ±{stale_band}% 이내\n"
-                        f"멀티배거 가설 약화 시그널 — 다음 월초 리밸런싱 검토 권장"
+                        f"15영업일 더 횡보하거나 거래량 소실 시 자동 청산 예정\n"
+                        f"보유 지속 원하면 운영자 수동 결정 필요"
                     )
                     alerts_sent[symbol] = today.isoformat()
                     cache_updated = True
                 except Exception as _tg_e:
                     logger.warning(f"[코어stale경보] {symbol} 텔레그램 실패: {_tg_e}")
             except Exception as e:
-                logger.debug(f"[코어stale경보] {symbol} 체크 오류 (무시): {e}")
+                logger.debug(f"[코어stale] {symbol} 체크 오류 (무시): {e}")
 
         if cache_updated:
             try:

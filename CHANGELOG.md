@@ -1,5 +1,50 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-07 — 코어 stale D안 하이브리드 자동매도 + P0/P1 코드리뷰
+
+### 변경
+- `_check_core_stale_alert` D안 하이브리드 자동매도 추가
+  - **Tier 1 (알림)**: 30영업일+ ±3% (기존)
+  - **Tier 2 (자동매도)**:
+    - 시간 기반: 45영업일+ ±3%
+    - 조건 기반: 30영업일+ ±2% + 거래량 50% 미만 5일+
+- 자동매도 시 SignalEvent.SELL emit (조기경보와 동일 경로)
+- 거래량: `broker.get_daily_prices(days=25)` → 당일 제외 후 5/20일 평균 비율
+- `config/default.yml core_holding` 신규 6 파라미터
+
+### 코드리뷰 P0/P1 즉시 수정 (4건)
+
+**P0-1: `_pending_sells`/`exclude_symbols` 가드** (batch_analyzer.py)
+- `_check_core_stale_alert`에 같은 사이클 중복 SELL 차단
+- 호출자(_monitor_core_positions)가 exclude_symbols 전달
+
+**P0-2: 정확한 KR 영업일 계산**
+- `int(elapsed_days * 5/7)` 단순 환산 → `_kr_business_days(start, end)` 헬퍼
+- `is_kr_market_holiday` 활용 (휴일 정확 반영)
+- 자동매도 시점 1주 일찍 당겨지는 회귀 방지
+
+**P0-3: daily_prices 정렬 + 당일 제외**
+- 첫 인덱스 date 비교 → 당일이면 offset=1
+- `len(volumes) == 20` 검증 강화
+- 장 시작 직후 당일 거래량 0 왜곡 회피
+
+**P1-4: rebalance_exclude 화이트리스트**
+- 사용자가 `core_holding.rebalance_exclude` 설정한 종목은 자동매도 면제
+- 운영자 보호 의지 일관성 (월 리밸런싱 + stale 자동매도 동일)
+
+**P1-1: emit 실패 시 분기 분리**
+- 발행 실패 시 텔레그램 재통지 + Tier 1 알림 경로 폴백
+- 운영자가 자동매도 실패 인지 보장
+
+### 안전 마진
+- daily_max -5% 그대로 (자동매도는 SELL이라 신규 진입 한도 무관)
+- ATR 트레일링 -8%, 조기경보 -12%, MA200 그대로
+- 모든 안전 장치 4중 보존
+
+### 검증
+- py_compile 통과 (3 파일)
+- 봇 재시작 정상
+
 ## 2026-05-07 — 코어홀딩 stale_alert (자동매도 X, 텔레그램만)
 
 ### 배경
