@@ -1,5 +1,41 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-06 — max_positions 잔여 비율 가중 카운트
+
+### 배경
+사용자 지적: 1차/2차 익절로 잔여 작아진 포지션도 max_positions 카운트에서 1슬롯 차지 → 자본 충분한데 신규 진입 차단.
+
+분할 익절 단계별 잔여:
+- NONE 100% / FIRST 80% / SECOND 48% / THIRD 31% / TRAILING ~31%
+
+### 변경
+- `src/risk/manager.py`:
+  - 신규 `set_exit_manager(em)` setter
+  - 신규 `_get_position_weight(symbol)`: ExitManager의 `remaining_quantity / original_quantity` 비율 반환
+    - 0.2 floor (트레일링 잔여라도 최소 1/5 슬롯 — 남용 방지)
+    - ExitManager 미연결 시 1.0 폴백 (기존 동작)
+  - `can_open_position` 비코어 카운트 변경:
+    - 단순 `len(positions) - core_count` → `sum(weight)` 가중 합산
+    - 차단 메시지에 raw count 함께 표시 (디버깅 가시성)
+- `scripts/run_trader.py:610`:
+  - ExitManager 초기화 직후 `risk_manager.set_exit_manager(exit_manager)` 호출
+  - 로그: "RiskManager ↔ ExitManager 연결 (max_positions 가중 카운트)"
+
+### 안전 장치
+- max 슬롯 8 + flex 2 = **10 그대로 유지**
+- 가중 합산이 10 초과 못 함
+- 0.2 floor로 트레일링 잔여 무한 진입 방지
+- 다른 게이트(현금, daily_max, 섹터, 전략 budget) 그대로
+
+### 효과
+- 자본 충분 + 1차 익절 진행된 포지션 다수 시 신규 슬롯 여유 확보
+- 예: 5건 보유 중 3건이 FIRST(0.8) → 4.4 슬롯 사용 → 3.6 슬롯 여유 (이전 단순 카운트는 5)
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상
+- 로그 "RiskManager ↔ ExitManager 연결" 확인
+
 ## 2026-05-05 — 슬리피지 체제 분기 (bull 5% / neutral·bear 3%)
 
 ### 배경

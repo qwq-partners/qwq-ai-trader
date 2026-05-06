@@ -604,6 +604,11 @@ class UnifiedTradingBot:
             ))
             logger.info("[KR] 분할 익절 관리자 초기화 완료")
 
+            # RiskManager에 ExitManager 참조 주입 (max_positions 가중 카운트용, 2026-05-06)
+            if self.risk_manager and self.exit_manager:
+                self.risk_manager.set_exit_manager(self.exit_manager)
+                logger.info("[KR] RiskManager ↔ ExitManager 연결 (max_positions 가중 카운트)")
+
             # 10-0. (순서 중요) ExitManager register_position 전에 DB 연결 + 포지션 전략 복원
             # ★ 버그 방지 (2026-04-20 SK텔레콤/KT/삼성생명 사고):
             #   과거에는 step 11(자가 진화 초기화)에서 DB 연결 후 metadata 복원 →

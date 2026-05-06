@@ -118,6 +118,10 @@ class RiskManager:
         # 차단 로그 스팸 방지 쿨다운 (심볼별 60초)
         self._last_exit_cooldown_log: Dict[str, datetime] = {}
 
+        # ExitManager 참조 (2026-05-06): max_positions 잔여 비율 가중 카운트용
+        # 1차/2차 익절로 잔여 작아진 포지션이 신규 진입을 차단하지 않도록 weight 적용
+        self._exit_manager = None
+
         logger.info(
             f"RiskManager 초기화 ({self.market}): "
             f"일일손실한도={config.daily_max_loss_pct}%, "
@@ -125,6 +129,33 @@ class RiskManager:
             f"최대비율={config.max_position_pct}%, "
             f"최소금액={config.min_position_value:,}"
         )
+
+    def set_exit_manager(self, exit_manager) -> None:
+        """ExitManager 참조 설정 (max_positions 가중 카운트용)"""
+        self._exit_manager = exit_manager
+
+    def _get_position_weight(self, symbol: str) -> float:
+        """포지션의 max_positions 슬롯 가중치 (잔여 비율 기준)
+
+        2026-05-06 P0: 1차/2차 익절 후 잔여 작아진 포지션은 슬롯 가중 감소.
+        ExitManager 참조 없거나 stage 정보 없으면 1.0 폴백 (기존 동작).
+
+        Returns:
+            0.0 < weight ≤ 1.0
+        """
+        if self._exit_manager is None:
+            return 1.0
+        try:
+            state = self._exit_manager._states.get(symbol)
+            if state is None:
+                return 1.0
+            orig = max(int(getattr(state, "original_quantity", 0)), 1)
+            remain = max(int(getattr(state, "remaining_quantity", orig)), 0)
+            weight = remain / orig
+            # 0.2 floor: 트레일링 잔여라도 최소 1/5 슬롯은 차지 (남용 방지)
+            return max(0.2, min(1.0, weight))
+        except Exception:
+            return 1.0
 
     def _get_available_cash(self, portfolio: Portfolio) -> Decimal:
         """가용 현금 (최소 예비금 제외)"""
@@ -346,16 +377,28 @@ class RiskManager:
 
         # 3. 최대 포지션 수 제한 (KR + US 공통)
         # 코어홀딩 포지션은 별도 슬롯으로 관리 (max_positions에서 제외)
+        # 2026-05-06 P0: 잔여 비율 가중 카운트 — 1차/2차 익절 진행된 포지션은 슬롯 일부만 차지
         core_count = sum(1 for p in portfolio.positions.values() if p.strategy == "core_holding")
-        non_core_count = len(portfolio.positions) - core_count
         is_core_signal = (strategy_type == "core_holding")
         if is_core_signal:
             # 코어 진입: 최대 N개 상한 (execute_core_rebalance + 여기서 이중 검증)
             max_core = getattr(self.config, 'max_core_positions', 3)
             if core_count >= max_core:
                 return False, f"코어홀딩 상한 도달 ({core_count}/{max_core}개)"
-        elif non_core_count >= self.config.max_positions:
-            return False, f"최대 포지션 수 도달 ({non_core_count}/{self.config.max_positions}, 코어 {core_count}개 제외)"
+        else:
+            # 비코어: 잔여 비율 가중 합산 (ExitManager 미연결 시 단순 카운트 폴백)
+            non_core_weighted = 0.0
+            non_core_raw = 0
+            for sym, p in portfolio.positions.items():
+                if p.strategy == "core_holding":
+                    continue
+                non_core_raw += 1
+                non_core_weighted += self._get_position_weight(sym)
+            if non_core_weighted >= self.config.max_positions:
+                return False, (
+                    f"최대 포지션 수 도달 (가중 {non_core_weighted:.1f}/"
+                    f"{self.config.max_positions}, raw={non_core_raw}, 코어 {core_count}개 제외)"
+                )
 
         # 4. 최소 현금 예비 (KR + US 공통)
         min_cash = portfolio.total_equity * Decimal(str(self.config.min_cash_reserve_pct / 100))
