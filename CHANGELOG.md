@@ -1,5 +1,49 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-06 — F-3 코드리뷰 P0/P1 즉시 수정
+
+### 배경
+F-3 변경(cc16461) 코드리뷰 결과 P0 2건 + P1 3건 발견. 즉시 수정.
+
+### 변경
+
+**P0-1: `max_daily_new_buys` 데드 키 강제** (`src/risk/manager.py:can_open_position`)
+- F-3에 7건 한도 추가했으나 **코드 어디에도 강제 안 됨** (데드 키워드)
+- can_open_position에 신규 카운트 로직 추가:
+  ```python
+  if side == BUY and strategy != core_holding:
+      today_buy_count = sum(1 for p in positions if p.entry_time.date() == today)
+      if today_buy_count >= config.max_daily_new_buys:
+          return False
+  ```
+- 차단 메시지: "일일 신규 매수 한도 도달 (X/7, 코어 제외)"
+
+**P0-2: capital_check 영속화** (`src/schedulers/kr_scheduler.py:4699-4740`)
+- `last_capital_check_date` 인메모리만 → 봇 재시작 시 같은 날 중복 실행 가능
+- `_capital_checked_<date>.flag` 파일 추가 (lunchtime과 동일 패턴)
+- 실행 시각: 14:00 → **13:50** (sepa 14:30 차단 안전망 정렬)
+
+**P1-3: execute_pending_signals 14:30 SEPA 차단** (`src/core/batch_analyzer.py:840`)
+- `sepa_trend.generate_batch_signals`은 14:30 차단하나, pending에 저장된 시그널은 미적용
+- 13:50 capital_check이 sepa 시그널을 14:30 윈도우에 강제 진입시킬 위험
+- execute_pending_signals 루프 내 추가:
+  ```python
+  if sig.strategy == "sepa_trend" and now.hour >= 14 and now.minute >= 30:
+      skip
+  ```
+
+**P1-4: capital_check None 방어**
+- `getattr(portfolio, "total_equity", None)` 가드
+- equity/cash None 시 warning 로그 + 다음 분에 재시도 가능
+- `last_capital_check_date = today`를 성공 분기 안으로 이동 (예외 시 재시도 보장)
+
+**P2-8: 로그 텍스트 잔존 정정**
+- "12:30 윈도우" → 실제 시간 반영
+
+### 검증
+- py_compile 통과 (3 파일)
+- 봇 재시작 정상
+
 ## 2026-05-06 — F-3 자본 회전 효율 개편 (한방 적용)
 
 ### 배경

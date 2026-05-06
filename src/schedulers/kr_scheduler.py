@@ -4696,32 +4696,48 @@ JSON:
                         logger.error(f"[배치스케줄러] 낮 스캔 오류: {e}")
                     last_lunchtime_scan_date = today
 
-                # ── 14:00 자본활용률 체크 + 추가 진입 (F-3, 2026-05-06) ─
-                # lunchtime_scan(13:30) 후 자본 미활용 시 큐 자동 진입
-                # 추격매수 4중 안전망 그대로 (cross_validator -15, max_positions, 14:30 sepa 차단)
-                if (now.hour == 14 and 0 <= now.minute < 5
+                # ── 13:50 자본활용률 체크 + 추가 진입 (F-3, 2026-05-06) ─
+                # lunchtime_scan(13:30) 후 자본 미활용 시 추가 진입 트리거
+                # 13:50으로 당김: 14:30 sepa 진입 차단까지 40분 윈도우 + 14:30 안전망 정렬
+                # 추격매수 4중 안전망 그대로 (cross_validator -15, max_positions, daily_max_new_buys 7)
+                # P0-2: .flag 파일로 재시작 시 중복 실행 방지
+                _capital_flag = _flag_dir / f"capital_checked_{today.isoformat()}.flag"
+                if (now.hour == 13 and 50 <= now.minute < 55
                         and last_capital_check_date != today
+                        and not _capital_flag.exists()
                         and not is_kr_market_holiday(today)):
                     try:
                         portfolio = bot.engine.portfolio
-                        equity = float(portfolio.total_equity)
-                        cash = float(portfolio.cash)
-                        cash_ratio = cash / equity if equity > 0 else 0.0
-                        if cash_ratio > 0.25:
-                            logger.info(
-                                f"[배치스케줄러] 14:00 자본활용률 체크: "
-                                f"현금 {cash_ratio:.1%} > 25% — 추가 진입 실행"
+                        # P1-4: None/Decimal 방어
+                        equity_raw = getattr(portfolio, "total_equity", None)
+                        cash_raw = getattr(portfolio, "cash", None)
+                        if equity_raw is None or cash_raw is None:
+                            logger.warning(
+                                "[배치스케줄러] 13:50 자본활용률 체크 스킵 (portfolio 미동기화)"
                             )
-                            result = await bot.batch_analyzer.execute_pending_signals()
-                            logger.info(f"[배치스케줄러] 14:00 추가 실행 완료: {result}")
                         else:
-                            logger.debug(
-                                f"[배치스케줄러] 14:00 자본활용률 체크: "
-                                f"현금 {cash_ratio:.1%} ≤ 25% — 추가 진입 스킵"
-                            )
+                            equity = float(equity_raw)
+                            cash = float(cash_raw)
+                            cash_ratio = cash / equity if equity > 0 else 0.0
+                            if cash_ratio > 0.25:
+                                logger.info(
+                                    f"[배치스케줄러] 13:50 자본활용률 체크: "
+                                    f"현금 {cash_ratio:.1%} > 25% — 추가 진입 실행"
+                                )
+                                result = await bot.batch_analyzer.execute_pending_signals()
+                                logger.info(
+                                    f"[배치스케줄러] 13:50 추가 실행 완료: {result}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"[배치스케줄러] 13:50 자본활용률 체크: "
+                                    f"현금 {cash_ratio:.1%} ≤ 25% — 추가 진입 스킵"
+                                )
+                            # 성공 분기에서만 플래그 (예외 시 다음 분에 재시도 가능)
+                            last_capital_check_date = today
+                            _capital_flag.touch()
                     except Exception as e:
-                        logger.error(f"[배치스케줄러] 14:00 자본활용률 체크 오류: {e}")
-                    last_capital_check_date = today
+                        logger.error(f"[배치스케줄러] 13:50 자본활용률 체크 오류: {e}")
 
                 # ── 15:00 LLM 포지션 종가 점검 ─────────────────────────
                 if (_llm_pos_eod_enabled

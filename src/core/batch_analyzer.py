@@ -755,6 +755,7 @@ class BatchAnalyzer:
     async def execute_pending_signals(self):
         """[09:01] 대기 시그널 실행 (분산 실행: signal_interval_sec 간격)"""
         logger.info("[배치분석] ===== 대기 시그널 실행 =====")
+        now = datetime.now()
 
         # 포트폴리오 가드: 재시작 직후 포지션 미로드 대비
         if not self._engine.portfolio.positions and self._broker:
@@ -834,6 +835,16 @@ class BatchAnalyzer:
                     continue
 
                 # 현재가 조회
+                # 2026-05-06 F-3 P1-3: 14:30 이후 SEPA 진입 차단
+                # sepa_trend.generate_batch_signals은 14:30 차단하지만 execute_pending_signals
+                # 은 미적용이라 13:50 capital_check이 sepa 시그널을 14:30 윈도우에 강제 진입시킬 위험
+                if sig.strategy == "sepa_trend" and now.hour >= 14 and now.minute >= 30:
+                    logger.info(
+                        f"[배치분석] {sig.symbol} sepa 14:30+ 진입 차단 (오버나이트 갭 리스크)"
+                    )
+                    skipped += 1
+                    continue
+
                 quote = await self._broker.get_quote(sig.symbol)
                 if not quote:
                     logger.warning(f"[배치분석] {sig.symbol} 현재가 조회 실패")

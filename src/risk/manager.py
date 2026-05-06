@@ -375,6 +375,25 @@ class RiskManager:
             else:
                 return False, f"Daily loss limit reached ({daily_pnl_pct:.1f}%)"
 
+        # 2-1. 일일 신규 매수 한도 (KR + US 공통)
+        # 2026-05-06 F-3 P0-1: max_daily_new_buys가 코드에 강제 안 됐던 데드 키 수정
+        # 카운트 기준: 오늘 entry_time인 포지션 + 코어는 별도 (max_core_positions로 통제)
+        if side == OrderSide.BUY and strategy_type != "core_holding":
+            max_daily = int(getattr(self.config, "max_daily_new_buys", 0) or 0)
+            if max_daily > 0:
+                today_d = date.today()
+                today_buy_count = sum(
+                    1 for p in portfolio.positions.values()
+                    if p.strategy != "core_holding"
+                    and getattr(p, "entry_time", None) is not None
+                    and p.entry_time.date() == today_d
+                )
+                if today_buy_count >= max_daily:
+                    return False, (
+                        f"일일 신규 매수 한도 도달 ({today_buy_count}/{max_daily}, "
+                        f"코어 제외)"
+                    )
+
         # 3. 최대 포지션 수 제한 (KR + US 공통)
         # 코어홀딩 포지션은 별도 슬롯으로 관리 (max_positions에서 제외)
         # 2026-05-06 P0: 잔여 비율 가중 카운트 — 1차/2차 익절 진행된 포지션은 슬롯 일부만 차지
