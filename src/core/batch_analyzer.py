@@ -1498,6 +1498,89 @@ class BatchAnalyzer:
             except Exception:
                 pass
 
+        # 2026-05-06 P0: 코어홀딩 stale_alert (자동매도 X, 알림만)
+        # 30영업일 ±3% 박스권 → 멀티배거 가설 약화 시그널
+        # 사용자 결정 보존 (자동 청산 안 함)
+        await self._check_core_stale_alert(core_positions)
+
+    async def _check_core_stale_alert(self, core_positions: List) -> None:
+        """코어홀딩 횡보 알림 (자동매도 X, 텔레그램만)
+
+        조건: 진입 후 N영업일 + |PnL| ≤ X% (default: 30일 / ±3%)
+        알림 후 7일 내 재발송 방지 (cache).
+        """
+        core_cfg = self._config.get("core_holding", {})
+        if not core_cfg.get("stale_alert_enabled", True):
+            return
+
+        stale_days = int(core_cfg.get("core_stale_days", 30))
+        stale_band = float(core_cfg.get("core_stale_pnl_band_pct", 3.0))
+        cooldown_days = int(core_cfg.get("core_stale_cooldown_days", 7))
+
+        cache_path = Path.home() / ".cache" / "ai_trader" / "core_stale_alerts.json"
+        alerts_sent: Dict[str, str] = {}
+        try:
+            if cache_path.exists():
+                alerts_sent = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            alerts_sent = {}
+
+        today = date.today()
+        cache_updated = False
+
+        for symbol, pos in core_positions:
+            try:
+                entry_time = getattr(pos, "entry_time", None)
+                if entry_time is None:
+                    continue
+                entry_date = entry_time.date() if hasattr(entry_time, 'date') else entry_time
+                # 영업일 추정: 단순 일수 × 5/7 보정 (대략)
+                elapsed_days = (today - entry_date).days
+                business_days = int(elapsed_days * 5 / 7)
+                if business_days < stale_days:
+                    continue
+                pnl_pct = abs(float(getattr(pos, "unrealized_pnl_net_pct", 0) or 0))
+                if pnl_pct > stale_band:
+                    continue
+                # 쿨다운 체크
+                last_alert_str = alerts_sent.get(symbol)
+                if last_alert_str:
+                    try:
+                        last_alert_date = date.fromisoformat(last_alert_str)
+                        if (today - last_alert_date).days < cooldown_days:
+                            continue
+                    except Exception:
+                        pass
+
+                logger.info(
+                    f"[코어stale경보] {symbol} 횡보 감지: "
+                    f"{business_days}영업일+ / |PnL|={pnl_pct:.2f}% ≤ {stale_band}%"
+                )
+                try:
+                    from ..utils.telegram import send_alert
+                    await send_alert(
+                        f"🟡 <b>코어홀딩 횡보 경보 (자동매도 X)</b>\n"
+                        f"{getattr(pos, 'name', symbol)}({symbol})\n"
+                        f"진입 후 {business_days}영업일+ 동안 |PnL| {pnl_pct:.2f}% ±{stale_band}% 이내\n"
+                        f"멀티배거 가설 약화 시그널 — 다음 월초 리밸런싱 검토 권장"
+                    )
+                    alerts_sent[symbol] = today.isoformat()
+                    cache_updated = True
+                except Exception as _tg_e:
+                    logger.warning(f"[코어stale경보] {symbol} 텔레그램 실패: {_tg_e}")
+            except Exception as e:
+                logger.debug(f"[코어stale경보] {symbol} 체크 오류 (무시): {e}")
+
+        if cache_updated:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(
+                    json.dumps(alerts_sent, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+            except Exception:
+                pass
+
     def _generate_strategic_signals(self, candidates) -> List[Signal]:
         """strategic_swing 시그널 생성: 2계층 이상 복합신호 종목"""
         signals = []

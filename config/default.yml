@@ -183,6 +183,12 @@ kr:
       ma200_break_days: 5
       early_ma200_alert_days: 3          # 조기경보: MA200 이탈 연속 일수
       early_loss_alert_pct: -12.0        # 조기경보: 손실률 임계 (손절 -15% 전)
+      # 2026-05-06: 코어홀딩 stale_alert (자동매도 X, 텔레그램만)
+      # 30영업일 ±3% 박스권 → 멀티배거 가설 약화 시그널 → 사용자 결정 보존
+      stale_alert_enabled: true
+      core_stale_days: 30                # 횡보 판단 영업일
+      core_stale_pnl_band_pct: 3.0       # ±% 이내 = 횡보
+      core_stale_cooldown_days: 7        # 알림 재발송 방지 쿨다운
       early_rescore_alert: 40.0          # 조기경보: 재스코어 하한
       # 초과 비중 관리
       overweight_alert_pct: 35.0         # 경고 알림 기준 (총자산 대비 코어 비중 %)

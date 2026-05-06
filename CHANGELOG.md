@@ -1,5 +1,46 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-07 — 코어홀딩 stale_alert (자동매도 X, 텔레그램만)
+
+### 배경
+strategy-advisor 분석 결과 **core_holding은 모든 stale 청산 로직에서 명시 제외** → ±5% 박스권으로 영원히 머물러도 자동 청산 0건. 자본 묶임 위험.
+
+현 보유 코어:
+- 271560 오리온: ±0.5% 박스권 5+영업일 (트리거 전부 휴면)
+- 009540 HD한국조선해양: -3.4% (트레일링 미활성)
+
+### 변경
+- `src/core/batch_analyzer.py`:
+  - 신규 `_check_core_stale_alert(core_positions)` 메서드
+  - `_monitor_core_positions` 끝에서 호출
+  - 조건: 30영업일+ 보유 + |PnL| ≤ 3% → 텔레그램 경보
+  - 알림 후 7일 쿨다운 (재발송 방지)
+  - 자동매도 X (사용자 결정 보존)
+  - cache: `~/.cache/ai_trader/core_stale_alerts.json`
+- `config/default.yml core_holding`:
+  - `stale_alert_enabled: true`
+  - `core_stale_days: 30`
+  - `core_stale_pnl_band_pct: 3.0`
+  - `core_stale_cooldown_days: 7`
+
+### 안전 마진 (자동매도 안 함)
+- daily_max -5% 영향 0
+- ATR 트레일링 -8%, 조기경보 -12%, MA200 이탈 그대로
+- 사용자가 알림 받고 다음 월초 리밸런싱에서 결정
+
+### 효과 가설 (3개월 운용)
+- H1: alert 발동 종목의 30일 후 PnL이 미발동 코어보다 저조 (Mann-Whitney U test)
+- H2: 사용자 청산 결정 시 회수 자본의 다음 코어 후보 진입 IRR > 보유 지속 IRR
+
+### 롤백 트리거
+- 발동 종목이 30일 내 신고가 50%+ 돌파 → 임계 너무 빡빡 → 35영업일/±2% 완화
+- 사용자 5회 모두 "보유 지속" 선택 → 임계 완화
+- 첫 3건 알림 후 손익 악영향 → 비활성화
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상
+
 ## 2026-05-06 — F-3 코드리뷰 P0/P1 즉시 수정
 
 ### 배경
