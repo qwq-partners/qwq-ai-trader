@@ -200,11 +200,23 @@ class SupplyTrendDetector:
             prev_5 = sum(foreign_daily[-10:-5]) + sum(inst_daily[-10:-5])
             is_accelerating = recent_5 > prev_5 > 0
 
+        # 2026-05-10 P0-1: 수급 델타(1차 미분) 보너스
+        # 가설: today 외국인 net이 5일 평균의 3배+ → 폭등 사전징후
+        # 5/4 SK하이닉스 사례: 4/30~5/4 외국인 누적 412만주, 5/4 단독 289만주(평균 대비 ~3.5배)
+        # 진입 차단된 종목이 +31% 폭등
+        delta_ratio = 0.0
+        if len(foreign_daily) >= 6:
+            today_net = foreign_daily[-1] + inst_daily[-1]
+            prev_5_avg = (sum(foreign_daily[-6:-1]) + sum(inst_daily[-6:-1])) / 5
+            if prev_5_avg > 0:
+                delta_ratio = today_net / prev_5_avg
+
         # 점수 산출
         score = self._calculate_trend_score(
             foreign_streak, inst_streak,
             foreign_total, inst_total,
             is_accelerating,
+            delta_ratio=delta_ratio,
         )
 
         if score < 30:
@@ -219,6 +231,10 @@ class SupplyTrendDetector:
             reasons.append("외국인+기관 동시 매집")
         if is_accelerating:
             reasons.append("순매수 가속 중")
+        if delta_ratio >= 5:
+            reasons.append(f"수급 델타 폭증({delta_ratio:.1f}x)")
+        elif delta_ratio >= 3:
+            reasons.append(f"수급 델타 점프({delta_ratio:.1f}x)")
 
         return SupplyTrendStock(
             symbol=symbol,
@@ -250,6 +266,7 @@ class SupplyTrendDetector:
         foreign_total: float,
         inst_total: float,
         is_accelerating: bool,
+        delta_ratio: float = 0.0,
     ) -> float:
         """수급 추세 점수 (0~100)"""
         score = 0.0
@@ -282,6 +299,13 @@ class SupplyTrendDetector:
         # 가속
         if is_accelerating:
             score += 10
+
+        # 2026-05-10 P0-1: 수급 델타(1차 미분) 보너스
+        # today 외국인+기관 net / 직전 5일 평균 → 3배+ 점프 시 폭등 사전징후
+        if delta_ratio >= 5:
+            score += 30  # 폭증 (extreme)
+        elif delta_ratio >= 3:
+            score += 20  # 점프 (strong)
 
         return min(score, 100)
 

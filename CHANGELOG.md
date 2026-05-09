@@ -1,5 +1,44 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-10 — 사전징후 P0-1: 수급 델타 보너스
+
+### 배경
+4-전문가 분석(strategy/market/trade/general-purpose) 결과, 급등 사전징후 포착 부족의 핵심 원인은 **수급 1차 미분(가속도)** 누락. 5/4 SK하이닉스 사례:
+- 4/30~5/4 외국인 누적 412만주
+- 5/4 단독 289만주 → 직전 5일 평균 대비 **약 3.5배 점프**
+- 우리 봇은 이를 인식하지 못해 09:21 차단 + 진입가 한도 차단 → +31% 폭등 미포착
+
+### 변경 (`src/signals/strategic/supply_trend.py`)
+- `_analyze_supply_trend`에 `delta_ratio` 계산 추가
+  - `today_net = foreign_daily[-1] + inst_daily[-1]`
+  - `prev_5_avg = mean(직전 5일 외국인+기관)`
+  - `delta_ratio = today_net / prev_5_avg`
+- `_calculate_trend_score`에 `delta_ratio` 파라미터 추가
+  - `≥5x` (폭증): **+30점**
+  - `≥3x` (점프): **+20점**
+- reasons에 "수급 델타 점프(N.Nx)" 표시
+
+### 효과 가설 (5영업일 + 5건 평가)
+- 5/4 SK하이닉스급 시그널 사전 포착 (delta_ratio ~3.5x → +20점)
+- 진입 종목 D+1 평균 수익률 비적용 대비 **+0.5%p 개선**
+- 외국인 5일 누적 + 델타 점프 조합 시 강한 시그널 (스코어 100 도달 가능)
+
+### 안전 마진
+- daily_max -5% 영향 0 (점수 보너스만, 진입 게이트 그대로)
+- cross_validator 누적 감점 cap -15 그대로
+- 추격매수 hard block(R6 -15) 그대로
+- 점수 상승 → 진입 빈도 증가는 max_positions/daily_max_new_buys 한도로 통제
+
+### 미반영 (보류 — 5영업일 평가 후)
+- P0-2 장초반 -8 감점 bull 체제 분기
+- P1 거래량/가격 다이버전스, BB Squeeze, 호가 체결강도, 섹터 동시 강세
+- P2 텔레그램 채널 Phase 1 (수동 forward)
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상
+- monitoring-checkpoints.md에 5/16 평가 항목 등록
+
 ## 2026-05-09 — W19 monitoring 분석 + theme_chasing 5% 자동할당 P0 버그 수정
 
 ### 배경

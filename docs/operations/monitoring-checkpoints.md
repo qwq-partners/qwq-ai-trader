@@ -6,6 +6,34 @@
 
 ## 활성 체크포인트
 
+### 2026-05-16~ (5영업일 후) — 수급 델타 보너스 P0-1 효과
+
+- **커밋**: 적용 예정 (2026-05-10)
+- **변경**: `supply_trend._calculate_trend_score`
+  - `delta_ratio = today_net / mean(5d_avg_net)`
+  - `≥5x`: +30점 / `≥3x`: +20점
+- **근거**: 5/4 SK하이닉스 외국인 4/30~5/4 누적 412만주, 5/4 단독 289만주 = 약 3.5배 점프 (사전징후)
+- **효과 가설**:
+  - [ ] delta_ratio ≥3 종목 발견 빈도 (주간 N건)
+  - [ ] 해당 종목 진입 시 D+1 평균 PnL 비적용 대비 +0.5%p 개선
+  - [ ] 5/4 SK하이닉스급 사전징후 종목 사전 포착
+- **검증 SQL** (5/16):
+  ```sql
+  -- 5/11 이후 신규 진입 종목 + reason에 "수급 델타" 포함 종목 추적
+  SELECT t.symbol, t.name, t.entry_strategy, t.entry_time::date,
+         t.entry_signal_score AS score, t.pnl_pct, t.exit_type
+  FROM trades t
+  WHERE t.market='KR'
+    AND t.entry_time::date >= '2026-05-11'
+    AND (t.entry_reason LIKE '%수급 델타%'
+         OR t.entry_reason LIKE '%수급 가속%')
+  ORDER BY t.entry_time DESC;
+  ```
+- **롤백 트리거**:
+  - 5건 평가 시 손익비 < 1.0 → 즉시 보너스 삭제
+  - delta_ratio ≥3 종목의 D+1 평균 < 0% → 임계 5x로 상향
+  - 진입 빈도 폭증 (일평균 3건 이상 추가) → 보너스 +20→+10 축소
+
 ### 2026-06-07~ (3개월 운용 후 평가) — 코어 stale D안 자동매도 효과
 
 - **커밋**: 적용 예정 (2026-05-07, 6번째 코어 stale 변경)
