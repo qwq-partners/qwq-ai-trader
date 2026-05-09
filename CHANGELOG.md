@@ -1,5 +1,51 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-09 — W19 monitoring 분석 + theme_chasing 5% 자동할당 P0 버그 수정
+
+### 배경
+5/9 00:00 weekly_rebalance 실행 후 W19 monitoring 자동 검증(SQL 9건) 분석 결과:
+- **P0 버그**: `theme_chasing.enabled:false`인데 LLM rebalance가 **5% 자동 할당**
+- 원인: `strategy_evolver._apply_allocation_guardrails`의 `self._config` 미주입 → enabled 체크 분기 무력화 → momentum_breakout만 0% 강제됨
+
+### F-3 효과 검증 (5/4 이후 5영업일, 16건 거래)
+| 전략 | n | 승률 | 평균 PnL | 총 손익 |
+|------|---|------|---------|---------|
+| core_holding | 1 | 100% | +30.22% | +741k (SK스퀘어) |
+| sepa_trend | 4 | 75% | +5.05% | +221k |
+| strategic_swing | 5 | 60% | +1.09% | +168k |
+| gap_and_go | 4 | 75% | +1.63% | +107k |
+| rsi2_reversal | 2 | 50% | -0.13% | -8k |
+| **합계** | 16 | - | - | **+1,229k** |
+
+→ F-3 자본 회전 + 패널 통합 + 슬리피지 분기 효과 양호.
+
+### 변경
+
+**P0: `_apply_allocation_guardrails` evolved_overrides 직접 읽기**
+- `self._config` 미주입 회귀 방어
+- `get_evolved_config_manager().get_overrides()` 호출
+- enabled:false 전략을 _disabled set에 추가
+- self._config 폴백 경로도 보존 (외부 주입 시)
+
+**evolved_overrides.yml 즉시 환원**
+- `strategy_allocation.theme_chasing: 5.0 → 0.0`
+- `strategy_allocation.sepa_trend: 47.3 → 52.3` (재배분)
+- `_meta`: source=manual_review_locked, 5/9 P0 버그 수정 사유 명기
+
+### W19 monitoring 검증 결과 (9건 SQL)
+✅ 누적 감점 cap -15: sepa 66.7%/+6.42%, gap/core 100% — 정상
+✅ rsi2/gap 1차 익절 4%×0.40: gap 4건 first_tp 2 (50% 도달)
+✅ core 트레일링 -8%: SK스퀘어 +30.22% / HD현대일렉 +14.6% 재확인
+✅ theme_chasing 폐지 효과: 진입 0건 ✓
+✅ SQL 화이트리스트: SELECT/WITH만 통과 (보안 정상)
+⚠️ 패널 추천 효과: 추천 1건(+10.15%) vs 비추천 15건(+3.47%) — 표본 부족
+⚠️ 슬리피지 SQL: market_regime 컬럼 없음 (DB 스키마 보강 필요, 별도 P1)
+
+### 검증
+- py_compile 통과
+- 봇 재시작 정상
+- 다음 weekly(5/16) theme_chasing 0% 유지 확인 예정
+
 ## 2026-05-07 — 코어 stale D안 하이브리드 자동매도 + P0/P1 코드리뷰
 
 ### 변경

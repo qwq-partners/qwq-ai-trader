@@ -1,24 +1,19 @@
 batch:
-  # 2026-05-06 F-3: 자본 회전 효율 개편 — 한도 확대 + lunchtime 13:30 이동
-  # 근거: param-optimizer 데이터 — sepa 일평균 0.77건 (이상치 1.0~1.5)
-  # min_score 55: engine-monitor 권고 (시장 수급 약세일 시그널 부족 해소)
   min_score: 55.0
   strategy_limits:
-    sepa_trend: 10        # 5 → 10 (한도 2배, 추격매수 4중 안전망 그대로)
-    rsi2_reversal: 5      # 3 → 5
-    strategic_swing: 5    # 신규 명시
-    gap_and_go: 3         # 2 → 3
-    theme_chasing: 0      # 폐지 (5/4)
+    sepa_trend: 10
+    rsi2_reversal: 5
+    strategic_swing: 5
+    gap_and_go: 3
+    theme_chasing: 0
   default_strategy_limit: 3
   gap_down_skip_pct: -3.5
-  daily_max_new_buys: 7   # 5 → 7 (자본 회전 가속)
-  # 2026-05-05 P0: 시장 체제별 슬리피지 분기
+  daily_max_new_buys: 7
   max_entry_slippage_pct:
     bull: 5.0
     neutral: 3.0
     caution: 3.0
     bear: 3.0
-  # 2026-05-06 F-3: 12:30 → 13:30 (기관 오후 수급 반영, market-analyst 권고)
   lunchtime_scan:
     enabled: true
     time: '13:30'
@@ -28,12 +23,12 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    strategic_swing: 18.8
-    momentum_breakout: 0.0
-    gap_and_go: 9.5
+    sepa_trend: 52.3
+    strategic_swing: 21.5
+    rsi2_reversal: 9.0
     theme_chasing: 0.0
-    sepa_trend: 49.2
-    rsi2_reversal: 12.5
+    gap_and_go: 7.2
+    momentum_breakout: 0.0
     core_holding: 10.0
 exit_manager:
   max_stop_pct: 8.0
@@ -99,11 +94,10 @@ _meta:
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
     source: manual_review_locked
-    timestamp: '2026-05-04T00:00:00'
-    note: 'theme_chasing 폐지(5→0%) → sepa_trend 49.2%로 재배분. param-optimizer
-      DB 검증: 75-85점 구간 21~11% 승률(-1.01%~-1.08%) 최악. 차단되는 70-75는 75% 승률(n=4)
-      → 75 임계 역효과. 누적 44건 -300k 손실 + 보유 0일 78% → 전략 자체 폐기.
-      strategic_swing 18.8% bull 편향 추가 상향은 회피.'
+    timestamp: '2026-05-09T05:30:00'
+    note: '5/9 weekly_rebalance가 theme_chasing 5% 자동 할당하는 P0 버그 수정 — _config
+      미주입 → enabled:false 무시되어 LLM이 5% 부여. 가드레일 코드에서 evolved_overrides 직접 읽기
+      추가. 5% → 0%, sepa_trend 47.3 → 52.3으로 재배분. theme_chasing.enabled:false 그대로 유지.'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
@@ -124,10 +118,10 @@ _meta:
   theme_chasing.min_score:
     source: manual_review
     timestamp: '2026-05-03T01:00:00'
-    note: '65→75. (2026-05-04 param-optimizer 검증 후 전략 자체 폐지로 무효화 — enabled:false)'
+    note: 65→75. (2026-05-04 param-optimizer 검증 후 전략 자체 폐지로 무효화 — enabled:false)
   theme_chasing.enabled:
     source: manual_review_locked
     timestamp: '2026-05-04T00:00:00'
     note: 'param-optimizer DB 검증: 75-85점 구간 11~21% 승률(-1.0%~-1.08%) 최악. 75 임계 역효과
-      판명. 누적 44건 -300k 손실, 보유 0일 78%, manual 청산 67%, 1일+ 잔류만 66.7% 승률 → 전략
-      구조적 부적합 → 폐지. 5% allocation은 sepa_trend로 재배분. 재활성화 시 보유 기간 필터(4일+) 도입 검토.'
+      판명. 누적 44건 -300k 손실, 보유 0일 78%, manual 청산 67%, 1일+ 잔류만 66.7% 승률 → 전략 구조적 부적합
+      → 폐지. 5% allocation은 sepa_trend로 재배분. 재활성화 시 보유 기간 필터(4일+) 도입 검토.'

@@ -1184,7 +1184,20 @@ class StrategyEvolver:
         adjusted: Dict[str, float] = {}
 
         # 비활성 전략 탐지: evolved_overrides에서 enabled=false인 전략
+        # 2026-05-09 P0: self._config 미주입 회귀 → evolved_overrides.yml 직접 읽기로 대체
+        # 이전 버그: theme_chasing.enabled:false인데 LLM rebalance가 5% 자동 할당
         _disabled = set()
+        try:
+            from .config_persistence import get_evolved_config_manager
+            config_mgr = get_evolved_config_manager()
+            overrides = config_mgr.get_overrides() or {}
+            for strat in self._VALID_STRATEGIES:
+                strat_cfg = overrides.get(strat) or {}
+                if isinstance(strat_cfg, dict) and strat_cfg.get("enabled") is False:
+                    _disabled.add(strat)
+        except Exception as _cfg_err:
+            logger.warning(f"[리밸런싱] enabled:false 체크 실패 (무시): {_cfg_err}")
+        # self._config 폴백 (외부 주입 경로 보존)
         if hasattr(self, '_config') and self._config:
             for strat in self._VALID_STRATEGIES:
                 strat_cfg = self._config.get(strat) or {}
