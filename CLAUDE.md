@@ -151,6 +151,13 @@ scripts/
 - **ATR 동적 손절**: 기본 5%, ATR×2, 범위 3.5~8% (evolved_overrides)
 - **포지션 상태**: `PositionExitState` — NONE/FIRST/SECOND/THIRD/TRAILING 단계 추적
 
+### 코어홀딩 A안 (2026-05-11~ "장기 추세 캐처")
+- **진입 필터**: MA200 위 + 60일 ≥+5% + 신고가 80% 이내 → 박스권 자동 배제
+- **점수 (100점)**: 추세 20 + 펀더 20 + 수급 20 + 모멘텀 30 + RS등급 10
+- **청산**: stop_loss 10%, trailing 12% (느슨), 분할익절 OFF, max_holding 무제한
+- **stale**: Tier1 20영업일±3%, Tier2 30영업일±3% OR 20영업일±2%+거래량50%
+- **리밸런싱**: 격주 (rebalance_interval_weeks=2)
+
 ---
 
 ## 리스크 관리
