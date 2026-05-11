@@ -1,14 +1,26 @@
 """
 QWQ AI Trader - 코어홀딩 종목 스크리너
 
-대형 우량주 중심 중장기 보유 종목 발굴.
-시총 5000억+, MA200 존재, 안정적 우상향 추세 종목 스코어링.
+대형 우량주 중심 중장기 추세 캐처 (3~6개월 +30~50% 노림).
+시총 5000억+, MA200 존재, 모멘텀 가속 종목 스코어링.
+
+2026-05-11 A안 재정의: "장기 추세 캐처"
+  - 박스권 대형주(통신/저변동) 자동 배제
+  - 모멘텀 가중치 ↑, 펀더/추세 가중치 ↓
+  - RS 등급(MRS) 신규 추가
 
 스코어링 (100점 만점):
-    추세 안정성  30점
-    펀더멘탈    30점
+    추세 안정성  20점 (이전 30, ↓)
+    펀더멘탈    20점 (이전 30, ↓)
     수급 추세   20점
-    모멘텀 품질 20점
+    모멘텀 품질 30점 (이전 20, ↑ + 60일+10% 신고가 가중)
+    RS 등급     10점 (신규)
+
+진입 필터 (_apply_base_filter):
+    - MA200 위 (기존)
+    - 60일 수익률 ≥ +5% (신규, 박스권 배제)
+    - 신고가 80% 이내 (신규, from_52w_high ≥ -20%)
+    - PER > 0, 거래대금 충족 (기존)
 """
 
 import asyncio
@@ -390,7 +402,11 @@ class CoreScreener:
             logger.warning(f"[코어스크리너] 수급 데이터 조회 실패: {e}")
 
     def _apply_base_filter(self, candidates: List[CoreCandidate]) -> List[CoreCandidate]:
-        """기본 필터: MA200 존재, PER>0, 거래대금 충분"""
+        """기본 필터 + 진입 모멘텀 필터 (2026-05-11 A안)
+
+        기존: MA200 존재, MA200 위, PER>0, 거래대금
+        신규: 60일 수익률 ≥ +5%, 신고가 80% 이내 — 박스권 대형주 자동 배제
+        """
         filtered = []
         for c in candidates:
             ind = c.indicators
@@ -414,21 +430,33 @@ class CoreScreener:
             if avg_tv is not None and avg_tv < self._min_avg_trading_value:
                 continue
 
+            # ── 2026-05-11 A안: 진입 모멘텀 필터 ─────────────────
+            # 박스권 대형주(통신/식음료/저변동) 자동 배제
+            change_60d = ind.get("change_60d")
+            if change_60d is None or change_60d < 5.0:
+                continue  # 60일 +5% 미달 → 박스권
+
+            high_52w = ind.get("high_52w", 0)
+            if high_52w > 0 and close > 0:
+                from_high_pct = (close - high_52w) / high_52w * 100
+                if from_high_pct < -20:
+                    continue  # 신고가 80% 미달 → 약세 추세
+
             filtered.append(c)
         return filtered
 
     def _score_candidates(self, candidates: List[CoreCandidate]) -> List[CoreCandidate]:
-        """100점 만점 스코어링"""
+        """100점 만점 스코어링 (2026-05-11 A안: 모멘텀 가중치 ↑)"""
         for c in candidates:
             score = 0.0
             reasons = []
             ind = c.indicators
 
-            # ── 추세 안정성 (30점) ──
+            # ── 추세 안정성 (20점, 이전 30) ──
             trend_score = self._score_trend(ind, reasons)
             score += trend_score
 
-            # ── 펀더멘탈 (30점) ──
+            # ── 펀더멘탈 (20점, 이전 30) ──
             fund_score = self._score_fundamentals(ind, reasons)
             score += fund_score
 
@@ -436,9 +464,13 @@ class CoreScreener:
             supply_score = self._score_supply(ind, reasons)
             score += supply_score
 
-            # ── 모멘텀 품질 (20점) ──
+            # ── 모멘텀 품질 (30점, 이전 20) ──
             momentum_score = self._score_momentum(ind, reasons)
             score += momentum_score
+
+            # ── RS 등급 (10점, 신규) ──
+            rs_score = self._score_rs_rating(ind, reasons)
+            score += rs_score
 
             c.score = min(score, 100.0)
             c.reasons = reasons
@@ -446,29 +478,23 @@ class CoreScreener:
         return candidates
 
     def _score_trend(self, ind: Dict, reasons: List[str]) -> float:
-        """추세 안정성 (30점)"""
+        """추세 안정성 (20점, 2026-05-11 A안 축소)
+
+        축소: 저변동성/52주고점 보너스 제거 → 모멘텀으로 이동
+        """
         score = 0.0
 
-        # MA 정배열 (10점)
+        # MA 정배열 (7점)
         if ind.get("ma_aligned"):
-            score += 10
+            score += 7
             reasons.append("MA정배열")
 
-        # MA200 위 (5점)
+        # MA200 위 (3점)
         close = ind.get("close", 0)
         ma200 = ind.get("ma200", 0)
         if close > 0 and ma200 > 0 and close > ma200:
-            score += 5
+            score += 3
             reasons.append("MA200↑")
-
-        # 52주 고점 -15% 이내 (5점)
-        high_52w = ind.get("high_52w", 0)
-        if close > 0 and high_52w > 0:
-            from_high_pct = (close - high_52w) / high_52w * 100
-            if from_high_pct >= -15:
-                score += 5
-                if from_high_pct >= -5:
-                    reasons.append(f"52주고점근접({from_high_pct:+.1f}%)")
 
         # 6개월 수익률 > 0 (5점)
         change_6m = ind.get("change_6m")
@@ -476,71 +502,63 @@ class CoreScreener:
             score += 5
             reasons.append(f"6M+{change_6m:.1f}%")
 
-        # 저변동성 (5점): 20일 변동성 < 3%
+        # 변동성 적정 (5점): 너무 낮으면 박스권 신호 → 3~6%가 추세 캐치 sweet spot
         vol20 = ind.get("volatility_20d", 999)
-        if vol20 is not None and vol20 < 3.0:
+        if vol20 is not None and 3.0 <= vol20 <= 6.0:
             score += 5
-            reasons.append("저변동")
-        elif vol20 is not None and vol20 < 5.0:
-            score += 3
+        elif vol20 is not None and vol20 < 8.0:
+            score += 2
 
-        return min(score, 30.0)
+        return min(score, 20.0)
 
     def _score_fundamentals(self, ind: Dict, reasons: List[str]) -> float:
-        """펀더멘탈 (30점)"""
+        """펀더멘탈 (20점, 2026-05-11 A안 축소)
+
+        축소 배경: 코어 역할 재정의 — 펀더보다 모멘텀 우선.
+        펀더는 "최소 적자 회피" 수준으로 단순화.
+        """
         score = 0.0
 
-        # PER 적정 (5점) — 한국 대형 성장주 PER 30-50도 허용
+        # PER 적정 (4점)
         per = ind.get("per")
         if per is not None and per > 0:
             if 5 <= per <= 20:
-                score += 5
+                score += 4
                 reasons.append(f"PER{per:.0f}")
             elif per <= 35:
-                score += 3
-            elif per <= 60:
-                score += 1
+                score += 2
 
-        # PBR (5점) — 좁은 범위 먼저 체크
+        # PBR (4점)
         pbr = ind.get("pbr")
         if pbr is not None and 0 < pbr < 1.5:
-            score += 5
+            score += 4
             reasons.append(f"PBR{pbr:.1f}")
         elif pbr is not None and 0 < pbr < 3:
-            score += 3
-        elif pbr is not None and 0 < pbr < 5:
-            score += 1
+            score += 2
 
-        # EPS > 0 이익 기업 (5점)
+        # EPS > 0 이익 기업 (4점)
         eps = ind.get("eps")
         if eps is not None and eps > 0:
-            score += 5
+            score += 4
 
-        # ROE 추정 = EPS / BPS × 100 (5점)
+        # ROE 추정 (4점)
         bps = ind.get("bps")
         if eps is not None and bps is not None and bps > 0:
             roe_est = eps / bps * 100
             if roe_est >= 15:
-                score += 5
+                score += 4
                 reasons.append(f"ROE~{roe_est:.0f}%")
             elif roe_est >= 10:
-                score += 3
-            elif roe_est >= 5:
-                score += 1
+                score += 2
 
-        # 시총 순위 (5점) — 실제 시총 기준 순위
+        # 시총 순위 (4점)
         rank = ind.get("rank", 999)
         if rank <= 20:
-            score += 5
+            score += 4
         elif rank <= 50:
-            score += 3
-        elif rank <= 100:
-            score += 1
+            score += 2
 
-        # 배당/안정성 (5점) — 데이터 미조회 시 0점 (변별력 없는 중립 부여 방지)
-        # TODO: KIS API 배당수익률 조회 추가 시 차등 배점
-
-        return min(score, 30.0)
+        return min(score, 20.0)
 
     def _score_supply(self, ind: Dict, reasons: List[str]) -> float:
         """수급 추세 (20점) — 금액 기반 구간별 배점"""
@@ -608,36 +626,82 @@ class CoreScreener:
         return min(score, 20.0)
 
     def _score_momentum(self, ind: Dict, reasons: List[str]) -> float:
-        """모멘텀 품질 (20점)"""
+        """모멘텀 품질 (30점, 2026-05-11 A안 강화)
+
+        강화: 60일 모멘텀 단계별 가중, 신고가 근접, MA5>MA20 + 가속 추가.
+        장기 추세 캐치 핵심 지표.
+        """
         score = 0.0
 
-        # MRS > 0 (5점) - 있으면 사용
-        mrs = ind.get("mrs")
-        if mrs is not None and mrs > 0:
-            score += 5
-            reasons.append("MRS↑")
-        elif mrs is None:
-            score += 2  # MRS 데이터 없으면 중립
-
-        # 20일 수익률 > 0 (5점)
+        # 20일 수익률 (5점)
         change_20d = ind.get("change_20d")
-        if change_20d is not None and change_20d > 0:
-            score += 5
-        elif change_20d is not None and change_20d > -3:
-            score += 2
+        if change_20d is not None:
+            if change_20d >= 10:
+                score += 5
+                reasons.append(f"20D+{change_20d:.0f}%")
+            elif change_20d > 0:
+                score += 3
 
-        # 60일 수익률 > 0 (5점)
+        # 60일 수익률 — 추세 캐처 핵심 (10점, 단계별)
         change_60d = ind.get("change_60d")
-        if change_60d is not None and change_60d > 0:
-            score += 5
-        elif change_60d is not None and change_60d > -5:
-            score += 2
+        if change_60d is not None:
+            if change_60d >= 20:
+                score += 10
+                reasons.append(f"60D+{change_60d:.0f}%★")
+            elif change_60d >= 10:
+                score += 7
+                reasons.append(f"60D+{change_60d:.0f}%")
+            elif change_60d > 5:
+                score += 4
 
         # MA5 > MA20 (5점)
         if ind.get("ma5_above_ma20"):
             score += 5
 
-        return min(score, 20.0)
+        # 신고가 근접 (5점) — 52주 고점 95% 이상
+        close = ind.get("close", 0)
+        high_52w = ind.get("high_52w", 0)
+        if close > 0 and high_52w > 0:
+            from_high_pct = (close - high_52w) / high_52w * 100
+            if from_high_pct >= -5:
+                score += 5
+                reasons.append("신고가권")
+            elif from_high_pct >= -10:
+                score += 3
+
+        # 모멘텀 가속 (5점) — 20일 모멘텀 > 60일 평균 모멘텀의 1/3
+        if (change_20d is not None and change_60d is not None
+                and change_60d > 0 and change_20d > change_60d / 3 * 1.5):
+            score += 5
+            reasons.append("모멘텀 가속")
+
+        return min(score, 30.0)
+
+    def _score_rs_rating(self, ind: Dict, reasons: List[str]) -> float:
+        """RS 등급 (10점, 2026-05-11 신규)
+
+        MRS(시장상대강도) 또는 rs_rating을 등급화.
+        IBD RS Rating 컨셉: 시장 대비 상대 수익률 백분위.
+        """
+        score = 0.0
+        rs = ind.get("rs_rating")
+        if rs is None:
+            rs = ind.get("mrs")
+        if rs is None:
+            return 0.0  # 데이터 없으면 0점 (변별력 보존)
+
+        if rs >= 80:
+            score = 10
+            reasons.append(f"RS{rs:.0f}★")
+        elif rs >= 60:
+            score = 7
+            reasons.append(f"RS{rs:.0f}")
+        elif rs >= 40:
+            score = 4
+        elif rs >= 20:
+            score = 1
+
+        return min(score, 10.0)
 
     @staticmethod
     def _is_etf_etn(name: str) -> bool:

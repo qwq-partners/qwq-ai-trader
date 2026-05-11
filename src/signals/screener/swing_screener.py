@@ -1012,6 +1012,14 @@ class SwingScreener:
                 candidate.reasons.append(
                     f"수급추세 {trend.foreign_streak}일외국인+{trend.inst_streak}일기관"
                 )
+                # 2026-05-11 P0-1 계측: delta_ratio 영속화 (효과 검증 트레이스)
+                _dr = getattr(trend, "delta_ratio", 0.0) or 0.0
+                if _dr > 0:
+                    candidate.indicators["supply_delta_ratio"] = round(float(_dr), 2)
+                    if _dr >= 3:
+                        candidate.reasons.append(
+                            f"수급 델타 {'폭증' if _dr >= 5 else '점프'}({_dr:.1f}x)"
+                        )
                 layers_matched += 1
             elif supply5d and supply5d.is_ready:
                 # SupplyTrendDetector 미수록 종목 → 5일 수급 스코어로 보완

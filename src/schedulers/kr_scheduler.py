@@ -1761,6 +1761,15 @@ JSON:
                                             _chg = _sig_metadata.get("rt_change_pct")
                                             if _chg is not None:
                                                 _indicators["change_pct"] = float(_chg)
+                                            # 2026-05-11 P0-1 계측: 수급 델타 영속화
+                                            # candidate.indicators → signal.metadata['indicators'] 경로
+                                            _nested_ind = _sig_metadata.get("indicators") or {}
+                                            _dr = _nested_ind.get("supply_delta_ratio")
+                                            if _dr is not None:
+                                                try:
+                                                    _indicators["supply_delta_ratio"] = float(_dr)
+                                                except (TypeError, ValueError):
+                                                    pass
 
                                             # 시장 컨텍스트: 레짐 + 세션
                                             _regime_path = Path.home() / ".cache" / "ai_trader" / "llm_regime_today.json"
@@ -4903,19 +4912,24 @@ JSON:
 
         bot = self.bot
         last_rebalance_month: Optional[str] = None
+        last_rebalance_date: Optional[date] = None  # 2026-05-11 A안: 격주 트리거용
         last_fill_date: Optional[str] = None  # 일일 빈 슬롯 매수 추적
 
-        # 상태 파일에서 마지막 리밸런싱 월 로드
+        # 상태 파일에서 마지막 리밸런싱 월/날짜 로드
         try:
             core_state = bot.batch_analyzer.get_core_state()
             last_rb = core_state.get("last_rebalance", "")
             if last_rb:
                 last_rebalance_month = last_rb[:7]  # "YYYY-MM"
+                try:
+                    last_rebalance_date = date.fromisoformat(last_rb[:10])
+                except ValueError:
+                    last_rebalance_date = None
             last_fill_date = core_state.get("last_fill_date")
         except Exception:
             pass
 
-        logger.info("[코어홀딩스케줄러] 시작 (월초 리밸런싱 + 빈슬롯 즉시매수)")
+        logger.info("[코어홀딩스케줄러] 시작 (주기 리밸런싱 + 빈슬롯 즉시매수)")
 
         # 리밸런싱 실행 윈도우 (시, 분시작, 분끝)
         # 09:05 시작: 기존 배치 실행(09:01)과 충돌 방지
@@ -4941,6 +4955,9 @@ JSON:
                 core_cfg = bot.batch_analyzer._config.get("core_holding", {})
                 max_core_positions = core_cfg.get("max_positions", 3)
                 rebalance_day = core_cfg.get("rebalance_day", 1)
+                # 2026-05-11 A안: 격주(2주) 리밸런싱 옵션 (기본 4주 = 월 1회)
+                rebalance_interval_weeks = int(core_cfg.get("rebalance_interval_weeks", 4))
+                rebalance_interval_days = rebalance_interval_weeks * 7
 
                 # 현재 코어 포지션 수 확인
                 portfolio = bot.engine.portfolio if hasattr(bot, 'engine') else None
@@ -4951,18 +4968,28 @@ JSON:
                     if p.strategy == "core_holding"
                 )
 
-                # ── 1) 월초 풀 리밸런싱 (기존 로직) ──
+                # ── 1) 풀 리밸런싱 (월 1회 OR rebalance_interval_weeks 경과 시) ──
                 is_monthly_rebalance = False
-                if last_rebalance_month != current_month:
-                    check_date = date(today.year, today.month, min(rebalance_day, 28))
-                    first_biz_day = None
-                    for delta in range(0, 7):
-                        candidate_date = check_date + timedelta(days=delta)
-                        if candidate_date.month != today.month:
-                            break
-                        if candidate_date.weekday() < 5 and not is_kr_market_holiday(candidate_date):
-                            first_biz_day = candidate_date
-                            break
+                # 격주 트리거: last_rebalance_date 기준 N일 경과
+                _interval_due = (
+                    rebalance_interval_weeks < 4
+                    and last_rebalance_date is not None
+                    and (today - last_rebalance_date).days >= rebalance_interval_days
+                )
+                if last_rebalance_month != current_month or _interval_due:
+                    if _interval_due:
+                        # 격주 모드: 다음 영업일 첫 윈도우에서 실행
+                        first_biz_day = today
+                    else:
+                        check_date = date(today.year, today.month, min(rebalance_day, 28))
+                        first_biz_day = None
+                        for delta in range(0, 7):
+                            candidate_date = check_date + timedelta(days=delta)
+                            if candidate_date.month != today.month:
+                                break
+                            if candidate_date.weekday() < 5 and not is_kr_market_holiday(candidate_date):
+                                first_biz_day = candidate_date
+                                break
 
                     if first_biz_day is not None and today == first_biz_day:
                         in_window = False
@@ -4973,11 +5000,17 @@ JSON:
 
                         if in_window:
                             is_monthly_rebalance = True
-                            logger.info(f"[코어홀딩스케줄러] 월초 리밸런싱 실행 ({now.hour}:{now.minute:02d})")
+                            _trigger_label = "격주" if _interval_due else "월초"
+                            logger.info(
+                                f"[코어홀딩스케줄러] {_trigger_label} 리밸런싱 실행 "
+                                f"({now.hour}:{now.minute:02d}, "
+                                f"interval={rebalance_interval_weeks}주)"
+                            )
                             try:
                                 success = await bot.batch_analyzer.execute_core_rebalance()
                                 if success:
                                     last_rebalance_month = current_month
+                                    last_rebalance_date = today  # A안: 격주 트리거 기준 갱신
                                     last_fill_date = today_str  # 리밸런싱 날은 추가 매수 불필요
                                     logger.info("[코어홀딩스케줄러] 리밸런싱 성공 완료")
                                 else:

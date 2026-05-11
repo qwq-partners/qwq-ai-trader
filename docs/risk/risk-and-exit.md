@@ -176,6 +176,23 @@ bull 시 효과: max_positions 8→10, 현금 5→3%, 비중 25→30% → **현�
 | 개별 종목 20%+ | 15%까지 축소 (max_position_pct) |
 | 비코어 pool | 코어 실점유분 차감 (초과 시 보호) |
 
+## 코어홀딩 A안 청산 파라미터 (2026-05-11~)
+
+| 항목 | 값 | 비고 |
+|------|---|------|
+| stop_loss_pct | 10% | 이전 15 → 10 (조기 손절 강화) |
+| trailing_stop_pct | 12% | 이전 8 → 12 (느슨한 추세 추종) |
+| trailing_activate_pct | 10% | +10% 도달 후 트레일링 시작 |
+| 분할익절 ratio | 0/0/0 | OFF (장기 추세 끝까지) |
+| ATR-linked trailing | 비활성 | `not is_core` 가드, 고정 12% 우선 |
+| max_holding_days | 무제한 | 0 |
+
+**stale 자동 컷 (evolved_overrides)**
+- Tier 1 알림: 20영업일 + ±3% (이전 30)
+- Tier 2 자동매도: 30영업일+±3% OR 20영업일+±2%+거래량 50% 미만 (이전 45/30)
+
+**리밸런싱 주기**: 격주 (`rebalance_interval_weeks=2`, 이전 월 1회)
+
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 
 ```

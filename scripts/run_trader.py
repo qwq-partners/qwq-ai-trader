@@ -554,10 +554,13 @@ class UnifiedTradingBot:
                     "third_exit_pct": 20.0,  # 12→20% 상향 (추세 추종 공간 확보)
                 },
                 "core_holding": {
-                    "stop_loss_pct": 15.0,
-                    "trailing_stop_pct": 8.0,
+                    # 2026-05-11 A안: "장기 추세 캐처" — 3~6개월 +30~50% 노림
+                    # 분할익절 완전 비활성, 손절 -10%, 트레일링 -12% (느슨)
+                    # 이전(2026-04): SL=15 TS=8 → SK스퀘어 +38→+30 회귀 사례 8%p 손실 방지
+                    "stop_loss_pct": 10.0,      # 15 → 10 (조기 손절 강화)
+                    "trailing_stop_pct": 12.0,  # 8 → 12 (느슨한 트레일링, 큰 추세 추종)
                     "trailing_activate_pct": 10.0,
-                    "first_exit_ratio": 0.0,    # 분할 익절 비활성화
+                    "first_exit_ratio": 0.0,    # 분할 익절 OFF (장기 추세 끝까지)
                     "second_exit_ratio": 0.0,
                     "third_exit_ratio": 0.0,
                     "stale_high_days": 0,       # 신고가 실패 무효화 off

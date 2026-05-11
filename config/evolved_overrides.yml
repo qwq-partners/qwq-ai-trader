@@ -43,6 +43,20 @@ exit_manager:
 core_holding:
   rebalance_exclude:
   - '263750'
+  # 2026-05-11 A안: stale 임계 단축 (박스권 종목 빠른 회수)
+  # Tier 1 (알림): 30 → 20영업일 + ±3%
+  # Tier 2 (자동매도): 45 → 30영업일 + ±3% / 30 → 20영업일 + ±2%+거래량 50% 미만
+  core_stale_days: 20
+  core_stale_pnl_band_pct: 3.0
+  core_stale_cooldown_days: 5
+  core_stale_auto_sell_enabled: true
+  core_stale_auto_sell_days: 30
+  core_stale_strict_days: 20
+  core_stale_strict_band_pct: 2.0
+  core_stale_volume_ratio: 0.5
+  core_stale_volume_days: 5
+  # 갱신 주기: 월 1회 → 격주 1회 (토요일)
+  rebalance_interval_weeks: 2
 momentum_breakout:
   enabled: false
   stop_loss_pct: 3.5

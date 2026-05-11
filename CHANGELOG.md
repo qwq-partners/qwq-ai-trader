@@ -1,5 +1,74 @@
 # QWQ AI Trader - Changelog
 
+## 2026-05-11 — 코어 A안 재정의 + P0-1 계측 보강
+
+### 1) 코어홀딩 "장기 추세 캐처" A안 (3~6개월 +30~50% 노림)
+
+**배경**: 최근 6주 코어 12건 청산 분석 — 큰 수익(+14~30%)은 전부 "추세 캐치"(SK스퀘어/SKT/HD현대일렉). 점수 체계 "안정성 60% + 모멘텀 20%" 가중치가 박스권 대형주(KT/오리온/통신주) 선호 → 1차 익절 후 본전 회귀 사례 다수. 사용자 요청: "코어 종목 선택 로직 재점검, 보유 종목 너무 구림".
+
+**변경 1: 진입 모멘텀 필터 (`core_screener._apply_base_filter`)**
+- 60일 수익률 ≥ +5% (박스권 대형주 자동 배제)
+- 신고가 80% 이내 (from_52w_high ≥ -20%)
+- 기존: MA200 위, PER>0, 거래대금 유지
+
+**변경 2: 점수 가중치 재배분 (`core_screener._score_*`)**
+- 추세 안정성: 30 → **20점** (저변동성 가중치 제거, 박스권 신호 컷)
+- 펀더멘탈: 30 → **20점** (코어 역할: 펀더보다 모멘텀 우선)
+- 수급 추세: 20점 유지
+- 모멘텀 품질: 20 → **30점** (60일 가중 단계별, 신고가 근접 추가, 모멘텀 가속 추가)
+- RS 등급: **신규 +10점** (rs_rating 또는 mrs 백분위)
+
+**변경 3: ExitManager 코어 분기 (`scripts/run_trader.py`)**
+- stop_loss_pct: 15 → **10%** (조기 손절 강화)
+- trailing_stop_pct: 8 → **12%** (느슨한 트레일링, 큰 추세 추종)
+- 분할익절 ratio: 0/0/0 (이미 OFF, 유지)
+- 효과: SK스퀘어 +38→+30 8%p 회귀 사례 방지, +30% 후 -12% trail까지 보호
+
+**변경 4: stale 임계 단축 (`config/evolved_overrides.yml`)**
+- Tier 1 알림: 30 → **20영업일** + ±3%
+- Tier 2 자동매도(시간): 45 → **30영업일** + ±3%
+- Tier 2 자동매도(조건): 30 → **20영업일** + ±2% + 거래량 50% 미만
+- 쿨다운: 7일 → 5일
+
+**변경 5: 격주 리밸런싱 (`kr_scheduler.run_core_holding_scheduler`)**
+- rebalance_interval_weeks=2 (월 1회 → 격주 1회)
+- last_rebalance_date 기반 트리거 (월별 트래킹과 병존)
+- 토요일 갱신 → 박스권 종목 빠른 회수
+
+**기대 효과**
+- 오리온/KT급 박스권 종목 진입 자체 차단 (60일+5% 미달)
+- 보유 중 박스권 → 5/19~5/30 자동 컷
+- SK스퀘어급 추세 종목은 분할익절 OFF로 끝까지 가져감
+
+### 2) P0-1 계측 보강 (수급 델타 영속화)
+
+**배경**: 5/11 자동 cron 검증 → 수급 델타 진입 0건. `trades.entry_reason`에 'buy_signal'만 저장, supply_trend reasons는 메모리에서만 사용. 효과 측정 트레이스 zero. 5/18 재검증 예약(job c8ee3cd0).
+
+**변경**
+- `supply_trend.SupplyTrendStock`: `delta_ratio: float = 0.0` 필드 추가
+- `_analyze_supply_trend`: 반환 객체에 `delta_ratio=round(delta_ratio, 2)` 주입
+- `swing_screener._apply_strategic_overlays`: `candidate.indicators["supply_delta_ratio"]` 영속화 + reasons 표시
+- `kr_scheduler._check_orders`: `_sig_metadata['indicators']['supply_delta_ratio']` → `_indicators["supply_delta_ratio"]` 추출 → `trade_journal.record_entry`로 `indicators_at_entry` 영속화
+
+**검증 SQL (5/18 재시도)**
+```sql
+SELECT t.symbol, t.entry_strategy, t.entry_time::date,
+       (t.indicators_at_entry->>'supply_delta_ratio')::float AS delta,
+       t.pnl_pct
+FROM trades t
+WHERE t.market='KR' AND t.entry_time >= '2026-05-11'
+  AND (t.indicators_at_entry->>'supply_delta_ratio')::float >= 3
+ORDER BY t.entry_time DESC;
+```
+
+### 코드 리뷰 결과 (P0/P1/P2)
+- **P0**: 0건
+- **P1**: 0건 (ATR-linked trailing은 `not is_core` 가드 검증 완료 — 12% trailing 정상 적용)
+- **P2 (모니터링)**:
+  - 가중치 변경 시 점수 분포 변화로 min_score=70 통과 종목 변동 가능 → 첫 격주 리밸런싱 결과 점검
+  - last_rebalance_date 파싱 시 짧은 "YYYY-MM" 형식 폴백 — 안전 try/except 처리됨
+  - 새 점수 분포 모니터링: 30영업일 운영 후 통계 비교
+
 ## 2026-05-10 — 사전징후 P0-1: 수급 델타 보너스
 
 ### 배경

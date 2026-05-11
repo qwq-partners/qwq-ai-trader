@@ -29,6 +29,7 @@ class SupplyTrendStock:
     foreign_total: float  # 최근 10일 외국인 누적 순매수(주)
     inst_total: float  # 최근 10일 기관 누적 순매수(주)
     is_accelerating: bool = False  # 순매수 가속
+    delta_ratio: float = 0.0  # 2026-05-11 P0-1: today_net / 직전 5일 평균 (사전징후 추적)
     reasons: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -245,6 +246,7 @@ class SupplyTrendDetector:
             foreign_total=foreign_total,
             inst_total=inst_total,
             is_accelerating=is_accelerating,
+            delta_ratio=round(delta_ratio, 2),
             reasons=reasons,
         )
 

@@ -8,25 +8,32 @@
 
 ### 2026-05-16~ (5영업일 후) — 수급 델타 보너스 P0-1 효과
 
-- **커밋**: 적용 예정 (2026-05-10)
+- **커밋**: 7200ebe (2026-05-10 적용)
 - **변경**: `supply_trend._calculate_trend_score`
   - `delta_ratio = today_net / mean(5d_avg_net)`
   - `≥5x`: +30점 / `≥3x`: +20점
 - **근거**: 5/4 SK하이닉스 외국인 4/30~5/4 누적 412만주, 5/4 단독 289만주 = 약 3.5배 점프 (사전징후)
+- **1차 평가 (2026-05-11, 자동 cron 04d1d954)**: ⚠️ **계측 부재 — 평가 불가, 7일 연장**
+  - 수급 델타 진입 건수: 0건 (`entry_reason LIKE '%수급 델타%'` 매칭 0)
+  - 동기간 SEPA 7건 (avg D+1 +2.58%), Swing 7건 (avg +0.64%) — 비교 불가
+  - 원인: `trades.entry_reason`에 'buy_signal' 같은 간단 텍스트만 저장됨
+  - supply_trend reasons는 메모리에서만 사용되고 영속화 안 됨 → 효과 측정 트레이스 없음
+  - **즉시 보강 필요**: signal_events.metadata 또는 trades.indicators_at_entry에 supply_score breakdown 영속화
+  - 재평가 예정: 2026-05-18 (계측 보강 + 7일 데이터 축적 후)
 - **효과 가설**:
   - [ ] delta_ratio ≥3 종목 발견 빈도 (주간 N건)
   - [ ] 해당 종목 진입 시 D+1 평균 PnL 비적용 대비 +0.5%p 개선
   - [ ] 5/4 SK하이닉스급 사전징후 종목 사전 포착
-- **검증 SQL** (5/16):
+- **검증 SQL** (5/18 재시도):
   ```sql
-  -- 5/11 이후 신규 진입 종목 + reason에 "수급 델타" 포함 종목 추적
+  -- supply_trend metadata에 delta_ratio 영속화 후
   SELECT t.symbol, t.name, t.entry_strategy, t.entry_time::date,
-         t.entry_signal_score AS score, t.pnl_pct, t.exit_type
+         t.entry_signal_score AS score, t.pnl_pct,
+         (t.indicators_at_entry->>'supply_delta_ratio')::float AS delta
   FROM trades t
   WHERE t.market='KR'
     AND t.entry_time::date >= '2026-05-11'
-    AND (t.entry_reason LIKE '%수급 델타%'
-         OR t.entry_reason LIKE '%수급 가속%')
+    AND (t.indicators_at_entry->>'supply_delta_ratio')::float >= 3
   ORDER BY t.entry_time DESC;
   ```
 - **롤백 트리거**:
