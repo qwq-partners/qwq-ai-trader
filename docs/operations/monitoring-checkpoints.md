@@ -6,6 +6,52 @@
 
 ## 활성 체크포인트
 
+### 2026-05-19~ (1주일 후) — PostgreSQL 튜닝 효과 검증
+
+- **적용 일자**: 2026-05-12 08:33 KST
+- **변경 내용**:
+  - shared_buffers 128MB → 512MB
+  - effective_cache_size 기본 → 2GB
+  - work_mem 4MB → 16MB
+  - maintenance_work_mem → 128MB
+  - pg_stat_statements 활성화
+  - pg_cron 활성화 (매일 02:00 ANALYZE, 일요일 03:00 VACUUM ANALYZE, 일요일 04:00 stat_statements reset)
+- **검증 항목**:
+  - [ ] 테이블 캐시 히트율 82.9% → 95%+ 회복 확인 (`pg_statio_user_tables`)
+  - [ ] pg_stat_statements top10 쿼리 분석 — 평균 실행시간 + 호출 빈도
+  - [ ] 봇 메모리 사용량 변화 (PG 캐시 512MB 증가 → OS 메모리 압박 여부)
+  - [ ] pg_cron 잡 3개 정상 실행 (`cron.job_run_details` last_status='succeeded')
+  - [ ] dead tuple 누적 추세 (autovacuum + 주간 VACUUM 효과)
+- **인덱스 보강 검토** (top10 쿼리 분석 후):
+  - 자주 쓰이는 WHERE 컬럼 인덱스 누락 여부
+  - 미사용 인덱스 정리 (단 pkey/unique 제외)
+- **검증 SQL**:
+  ```sql
+  -- 캐시 히트율
+  SELECT sum(heap_blks_hit) * 100.0 / NULLIF(sum(heap_blks_hit) + sum(heap_blks_read), 0) AS hit_pct
+  FROM pg_statio_user_tables;
+  -- top10 느린 쿼리
+  SELECT query, calls, mean_exec_time, total_exec_time
+  FROM pg_stat_statements
+  ORDER BY mean_exec_time DESC LIMIT 10;
+  -- pg_cron 실행 이력
+  SELECT jobid, status, start_time, end_time FROM cron.job_run_details
+  ORDER BY start_time DESC LIMIT 20;
+  ```
+- **롤백 트리거**:
+  - OS 메모리 압박으로 봇 OOM 발생 → shared_buffers 256MB로 축소
+  - pg_cron 잡 실패율 > 20% → 잡 비활성화 또는 일정 조정
+
+### 2026-06-12~ (1개월 후) — DB 중장기 최적화 검토
+
+- **선결 조건**: 5/19 1차 검증 완료
+- **검토 항목**:
+  - [ ] krx_minute (607만행 539MB) 파티셔닝 도입 — 월별 RANGE 파티셔닝
+  - [ ] ats_trades (156만행) 파티셔닝 검토
+  - [ ] candles (94만행) 파티셔닝 필요성 (소형이라 우선순위 낮음)
+- **트리거**: krx_minute 쿼리가 top10에 들고 평균 1초+ 걸리면 우선 진행
+- **작업 난이도**: 중-상 (파티셔닝은 다운타임 또는 점진 마이그레이션 필요)
+
 ### 2026-05-16~ (5영업일 후) — 수급 델타 보너스 P0-1 효과
 
 - **커밋**: 7200ebe (2026-05-10 적용)
