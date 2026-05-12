@@ -1030,7 +1030,156 @@ class DailyReportGenerator:
                 else:
                     logger.error("[레포트] 미국증시 레포트 발송 실패")
 
+            # ── 3) LLM 증권사 모닝브리프 (2026-05-13 추가) ───────────────
+            # 통합 차트/텍스트 후 LLM 분석 추가 발송 — 시장 분위기, 한국 투자 시사점
+            try:
+                llm_brief = await self._generate_llm_market_brief(
+                    quotes=quotes,
+                    sector_signals=sector_signals,
+                    avg_pct=avg_pct,
+                    us_date_str=us_date_str,
+                    mood=mood,
+                )
+                if llm_brief:
+                    await self.telegram.send_report(llm_brief)
+                    logger.info("[레포트] LLM 모닝브리프 발송 완료")
+            except Exception as brief_err:
+                logger.error(f"[레포트] LLM 모닝브리프 생성/발송 실패: {brief_err}", exc_info=True)
+
         return report
+
+    async def _generate_llm_market_brief(
+        self,
+        quotes: Dict,
+        sector_signals: Dict,
+        avg_pct: float,
+        us_date_str: str,
+        mood: str,
+    ) -> Optional[str]:
+        """LLM 증권사 모닝브리프 생성 (2026-05-13 신규)
+
+        US 마감 데이터를 GPT-5.4(MARKET_ANALYSIS)로 분석.
+        증권사 morning brief 형태로 한국 투자자 시사점 도출.
+        """
+        try:
+            from ..utils.llm import get_llm_manager, LLMTask
+        except Exception as e:
+            logger.warning(f"[모닝브리프] LLM 모듈 로드 실패: {e}")
+            return None
+
+        # 지수 데이터 정리
+        index_list = ["^GSPC", "^IXIC", "^DJI", "^SOX", "^VIX"]
+        index_names_map = {
+            "^GSPC": "S&P500", "^IXIC": "NASDAQ", "^DJI": "DOW",
+            "^SOX": "필라델피아 반도체(SOX)", "^VIX": "VIX(공포지수)",
+        }
+        idx_lines = []
+        for sym in index_list:
+            q = quotes.get(sym)
+            if not q:
+                continue
+            name = index_names_map.get(sym, sym)
+            pct = q.get("change_pct", 0.0)
+            price = q.get("price", 0.0)
+            idx_lines.append(f"  - {name}: {pct:+.2f}% ({price:,.1f})")
+
+        # 빅테크
+        bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
+        bt_lines = []
+        for sym in bigtech:
+            q = quotes.get(sym)
+            if q:
+                bt_lines.append(f"{sym} {q.get('change_pct', 0):+.1f}%")
+
+        # 섹터 영향
+        sector_lines = []
+        if sector_signals:
+            for theme, sig in sorted(
+                sector_signals.items(),
+                key=lambda x: abs(x[1].get("boost", 0)),
+                reverse=True,
+            )[:5]:
+                boost = sig.get("boost", 0)
+                avg_s = sig.get("us_avg_pct", 0)
+                movers = sig.get("top_movers", [])[:3]
+                sector_lines.append(
+                    f"  - {theme}: 부스트 {boost:+d}점, 평균 {avg_s:+.1f}%, {', '.join(movers)}"
+                )
+
+        prompt = f"""한국 투자자용 미국증시 마감 모닝브리프 작성.
+
+[기준일] {us_date_str} 미국시장 마감
+
+[주요 지수]
+{chr(10).join(idx_lines) if idx_lines else '  (데이터 없음)'}
+지수 평균 등락: {avg_pct:+.2f}%
+시장 분위기: {mood}
+
+[빅테크]
+  {' / '.join(bt_lines) if bt_lines else '(데이터 없음)'}
+
+[한국 시장 영향 (US 섹터→KR 테마 매핑)]
+{chr(10).join(sector_lines) if sector_lines else '  (영향 미미)'}
+
+위 데이터를 바탕으로 증권사 morning brief 형태로 작성. Telegram HTML 태그(<b>, <i>) 사용 가능.
+
+출력 형식 (꼭 이 5개 섹션 순서로):
+1. <b>■ 시장 종합 평가</b>: 2~3문장 (전반적 분위기, 변동성, 주요 동력)
+2. <b>■ 핵심 이슈 분석</b>: 데이터에서 추론 가능한 핵심 이슈 2~3건 (이벤트/실적/지표/지정학 — 명시 단서 없으면 "추가 확인 필요" 명시)
+3. <b>■ 섹터 흐름</b>: 강세 섹터 2~3개 + 약세 섹터 2~3개 (이유 포함)
+4. <b>■ 한국시장 시사점</b>: 오늘 KOSPI/KOSDAQ 갭/모멘텀 영향 + 주목 섹터 + 회피 섹터
+5. <b>■ 투자 전략 시사점</b>: 시나리오 2건 (강세 시나리오 / 약세 시나리오)
+
+500~800자 권장. 마지막에 "<i>※ 본 분석은 LLM 자동 생성. 투자 판단 본인 책임.</i>" 추가.
+"""
+
+        llm = get_llm_manager()
+        try:
+            result = await asyncio.wait_for(
+                llm.complete(
+                    prompt=prompt,
+                    system="당신은 한국 증권사 리서치센터 미국시장 담당 애널리스트. 한국 투자자 관점에서 핵심을 짚어 간결하게 작성.",
+                    task=LLMTask.MARKET_ANALYSIS,
+                    max_tokens=1200,
+                ),
+                timeout=45.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[모닝브리프] LLM 타임아웃 (45s)")
+            return None
+        except Exception as e:
+            logger.warning(f"[모닝브리프] LLM 호출 실패: {e}")
+            return None
+
+        if not result:
+            return None
+
+        # LLMResponse 객체에서 content 추출
+        text = getattr(result, "content", None)
+        if text is None:
+            if isinstance(result, dict):
+                text = result.get("content") or result.get("text") or ""
+            else:
+                text = str(result)
+
+        text = (text or "").strip()
+        if not text:
+            logger.warning("[모닝브리프] LLM 응답 빈값")
+            return None
+
+        # 성공 여부 확인 (LLMResponse 우선)
+        if hasattr(result, "success") and not result.success:
+            err = getattr(result, "error", "unknown")
+            logger.warning(f"[모닝브리프] LLM 호출 실패: {err}")
+            return None
+
+        header = (
+            f"🧠 <b>LLM 모닝브리프</b> — 한국 투자자용\n"
+            f"<i>{us_date_str} 미국 마감 기반</i>\n\n"
+        )
+        # Telegram 메시지 길이 제한 (~4096자) 안전 마진
+        body = text[:3800]
+        return header + body
 
     def _format_morning_report(
         self,

@@ -19,7 +19,7 @@ batch:
     time: '13:30'
 risk_config:
   daily_max_trades: 10
-  default_stop_loss_pct: 4.0
+  default_stop_loss_pct: 2.8
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
@@ -43,9 +43,6 @@ exit_manager:
 core_holding:
   rebalance_exclude:
   - '263750'
-  # 2026-05-11 A안: stale 임계 단축 (박스권 종목 빠른 회수)
-  # Tier 1 (알림): 30 → 20영업일 + ±3%
-  # Tier 2 (자동매도): 45 → 30영업일 + ±3% / 30 → 20영업일 + ±2%+거래량 50% 미만
   core_stale_days: 20
   core_stale_pnl_band_pct: 3.0
   core_stale_cooldown_days: 5
@@ -55,7 +52,6 @@ core_holding:
   core_stale_strict_band_pct: 2.0
   core_stale_volume_ratio: 0.5
   core_stale_volume_days: 5
-  # 갱신 주기: 월 1회 → 격주 1회 (토요일)
   rebalance_interval_weeks: 2
 momentum_breakout:
   enabled: false
@@ -109,9 +105,9 @@ _meta:
   risk_config.strategy_allocation:
     source: manual_review_locked
     timestamp: '2026-05-09T05:30:00'
-    note: '5/9 weekly_rebalance가 theme_chasing 5% 자동 할당하는 P0 버그 수정 — _config
-      미주입 → enabled:false 무시되어 LLM이 5% 부여. 가드레일 코드에서 evolved_overrides 직접 읽기
-      추가. 5% → 0%, sepa_trend 47.3 → 52.3으로 재배분. theme_chasing.enabled:false 그대로 유지.'
+    note: 5/9 weekly_rebalance가 theme_chasing 5% 자동 할당하는 P0 버그 수정 — _config 미주입 →
+      enabled:false 무시되어 LLM이 5% 부여. 가드레일 코드에서 evolved_overrides 직접 읽기 추가. 5% → 0%,
+      sepa_trend 47.3 → 52.3으로 재배분. theme_chasing.enabled:false 그대로 유지.
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
@@ -139,3 +135,6 @@ _meta:
     note: 'param-optimizer DB 검증: 75-85점 구간 11~21% 승률(-1.0%~-1.08%) 최악. 75 임계 역효과
       판명. 누적 44건 -300k 손실, 보유 0일 78%, manual 청산 67%, 1일+ 잔류만 66.7% 승률 → 전략 구조적 부적합
       → 폐지. 5% allocation은 sepa_trend로 재배분. 재활성화 시 보유 기간 필터(4일+) 도입 검토.'
+  risk_config.default_stop_loss_pct:
+    source: llm
+    timestamp: '2026-05-11T20:33:17.019911'
