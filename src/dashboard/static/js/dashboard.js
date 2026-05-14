@@ -945,6 +945,8 @@ function renderUSPositions(positions) {
     }
     const fmtUsd = v => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const now = new Date();
+    // 2026-05-14: 수익률 내림차순 정렬 (수익 → 손실)
+    positions = [...(positions || [])].sort((a, b) => (b.pnl_pct ?? 0) - (a.pnl_pct ?? 0));
     // All dynamic values escaped via esc() — safe from XSS (data from own backend API)
     tbody.innerHTML = positions.map(p => {
         // P0-4: pnl fallback + NaN 가드
@@ -1394,8 +1396,12 @@ function renderCoreHoldings(data) {
     if (!grid) return;
     grid.innerHTML = '';
 
+    // 2026-05-14: 수익률 내림차순 정렬 (수익 → 손실)
+    const sortedPositions = [...(positions || [])].sort(
+        (a, b) => (b.unrealized_pnl_pct ?? 0) - (a.unrealized_pnl_pct ?? 0)
+    );
     // 포지션 카드
-    positions.forEach(pos => {
+    sortedPositions.forEach(pos => {
         const pnlColor = pos.unrealized_pnl_pct >= 0 ? 'var(--acc-green)' : 'var(--acc-red)';
         const pnlSign = pos.unrealized_pnl_pct >= 0 ? '+' : '';
         const weightBar = Math.min(100, (pos.weight_pct / 15) * 100);
@@ -1424,7 +1430,7 @@ function renderCoreHoldings(data) {
     });
 
     // 빈 슬롯 카드
-    const emptySlots = maxPositions - positions.length;
+    const emptySlots = maxPositions - sortedPositions.length;
     for (let i = 0; i < emptySlots; i++) {
         const emptyCard = document.createElement('div');
         emptyCard.style.cssText = 'background:var(--bg-elevated);border:2px dashed rgba(245,158,11,0.15);border-radius:10px;padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:120px;color:var(--text-muted);';

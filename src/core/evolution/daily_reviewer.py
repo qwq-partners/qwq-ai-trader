@@ -72,8 +72,15 @@ _RESPONSE_SCHEMA = """{
       "confidence": 0.8
     }
   ],
-  "telegram_summary": "📊 <b>2/14 거래 리뷰</b>\\n\\n<b>■ 성과</b>\\n  승률 40% (2/5) | 손익 <b>-45,230원</b>\\n  PF 0.85\\n\\n<b>■ 인사이트</b>\\n  • 장초반 과열 진입 주의\\n  • SEPA 전략 유지"
-}"""
+  "telegram_summary": "📊 <b>2/14 거래 리뷰</b>\\n\\n<b>■ 성과</b>\\n  승률 40% (2/5) | 손익 <b>-45,230원</b>\\n  거래률 -0.85% / 자본률 -0.18%\\n  PF 0.85\\n\\n<b>■ 인사이트</b>\\n  • 장초반 과열 진입 주의\\n  • SEPA 전략 유지"
+}
+
+## telegram_summary 작성 규칙 (필수)
+- "거래률"은 요약 통계의 total_pnl_pct (각 거래의 진입 cost 기준 단순 합)
+- "자본률"은 요약 통계의 capital_pnl_pct (전체 자본 기준)
+- 두 값을 명확히 구분해 표시 — 단순 "수익률"이라 쓰면 사용자가 자본 수익률로 오해함
+- 형식: "거래률 ±X.XX% / 자본률 ±Y.YYY%"
+- 일평균 수익률 1% 목표는 **자본률 기준**임 (자본 25M의 1% = 25만원)"""
 
 
 def _parse_date_str(date_str: Optional[str]) -> date:
@@ -303,6 +310,28 @@ class DailyReviewer:
 
         return report
 
+    def _get_capital_basis(self) -> float:
+        """자본률 계산용 기준 자본 — INITIAL_CAPITAL 환경변수 우선,
+        없으면 daily_stats.json의 total_equity, 둘 다 없으면 25,000,000원 폴백.
+        2026-05-14: 거래 단위 pnl_pct vs 자본 단위 pnl_pct 구분용.
+        """
+        try:
+            cap = float(os.getenv("INITIAL_CAPITAL", "0") or 0)
+            if cap > 0:
+                return cap
+        except (TypeError, ValueError):
+            pass
+        try:
+            stats_path = Path(os.path.expanduser("~/.cache/ai_trader/daily_stats.json"))
+            if stats_path.exists():
+                data = json.loads(stats_path.read_text(encoding="utf-8"))
+                eq = float(data.get("total_equity") or 0)
+                if eq > 0:
+                    return eq
+        except Exception:
+            pass
+        return 25_000_000.0  # 폴백 (KR 기본 자본)
+
     def _calculate_summary(self, trades: List[TradeRecord]) -> Dict[str, Any]:
         """청산 거래 목록에서 요약 통계를 계산한다."""
         if not trades:
@@ -313,6 +342,8 @@ class DailyReviewer:
                 "win_rate": 0.0,
                 "total_pnl": 0.0,
                 "total_pnl_pct": 0.0,
+                "capital_pnl_pct": 0.0,
+                "capital_basis": self._get_capital_basis(),
                 "profit_factor": 0.0,
                 "best_trade": None,
                 "worst_trade": None,
@@ -333,7 +364,11 @@ class DailyReviewer:
             profit_factor = 0.0
 
         total_pnl = float(sum(float(t.pnl) for t in trades))
+        # 거래 단위 수익률 합 (각 거래의 진입 cost 기준)
         total_pnl_pct = float(sum(float(t.pnl_pct) for t in trades))
+        # 2026-05-14 추가: 자본 단위 수익률 (전체 자산 대비)
+        capital_basis = self._get_capital_basis()
+        capital_pnl_pct = (total_pnl / capital_basis * 100) if capital_basis > 0 else 0.0
 
         best = max(trades, key=lambda t: float(t.pnl_pct))
         worst = min(trades, key=lambda t: float(t.pnl_pct))
@@ -345,6 +380,8 @@ class DailyReviewer:
             "win_rate": round(len(wins) / len(trades) * 100, 1),
             "total_pnl": round(total_pnl),
             "total_pnl_pct": round(total_pnl_pct, 2),
+            "capital_pnl_pct": round(capital_pnl_pct, 3),
+            "capital_basis": round(capital_basis),
             "profit_factor": round(profit_factor, 2),
             "best_trade": {
                 "symbol": best.symbol,
@@ -499,7 +536,9 @@ class DailyReviewer:
             f"- 총 거래: {summary.get('total_trades', 0)}건",
             f"- 승리: {summary.get('wins', 0)}건 / 패배: {summary.get('losses', 0)}건",
             f"- 승률: {summary.get('win_rate', 0):.1f}%",
-            f"- 총 손익: {summary.get('total_pnl', 0):+,.0f}원 ({summary.get('total_pnl_pct', 0):+.2f}%)",
+            f"- 총 손익: {summary.get('total_pnl', 0):+,.0f}원",
+            f"- 거래률(개별 진입 cost 기준): {summary.get('total_pnl_pct', 0):+.2f}%",
+            f"- 자본률(자본 {summary.get('capital_basis', 0):,.0f}원 기준): {summary.get('capital_pnl_pct', 0):+.3f}%",
             f"- Profit Factor: {summary.get('profit_factor', 0):.2f}",
         ]
 
@@ -684,11 +723,13 @@ class DailyReviewer:
 
         date_display = target_date.strftime("%-m/%-d")
         assess_emoji = {"good": "\U0001f7e2", "fair": "\U0001f7e1", "poor": "\U0001f534"}.get(assessment, "\u26aa")
+        capital_pnl_pct = summary.get("capital_pnl_pct", 0.0)
         telegram_summary = (
             f"\U0001f4ca <b>{date_display} 거래 리뷰</b> (자동)\n\n"
             f"<b>\u25a0 성과</b>  {assess_emoji}\n"
             f"  승률 <b>{win_rate:.0f}%</b> ({summary.get('wins', 0)}/{total_trades})\n"
-            f"  손익 <b>{total_pnl:+,.0f}원</b> ({total_pnl_pct:+.2f}%)\n"
+            f"  손익 <b>{total_pnl:+,.0f}원</b>\n"
+            f"  거래률 {total_pnl_pct:+.2f}% / 자본률 {capital_pnl_pct:+.3f}%\n"
             f"  PF {profit_factor:.2f}"
         )
 
