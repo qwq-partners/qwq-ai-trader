@@ -23,11 +23,11 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    sepa_trend: 52.3
-    strategic_swing: 21.5
-    rsi2_reversal: 9.0
     theme_chasing: 0.0
-    gap_and_go: 7.2
+    strategic_swing: 28.9
+    rsi2_reversal: 6.8
+    gap_and_go: 12.9
+    sepa_trend: 41.4
     momentum_breakout: 0.0
     core_holding: 10.0
 exit_manager:
@@ -103,11 +103,8 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: manual_review_locked
-    timestamp: '2026-05-09T05:30:00'
-    note: 5/9 weekly_rebalance가 theme_chasing 5% 자동 할당하는 P0 버그 수정 — _config 미주입 →
-      enabled:false 무시되어 LLM이 5% 부여. 가드레일 코드에서 evolved_overrides 직접 읽기 추가. 5% → 0%,
-      sepa_trend 47.3 → 52.3으로 재배분. theme_chasing.enabled:false 그대로 유지.
+    source: weekly_rebalance
+    timestamp: '2026-05-16T00:00:58.868292'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'

@@ -497,7 +497,19 @@ class TradeJournal:
         trade.exit_price = exit_price
         trade.exit_quantity = (trade.exit_quantity or 0) + exit_quantity  # 누적
         trade.exit_reason = exit_reason
-        trade.exit_type = exit_type
+
+        # 2026-05-16 W20 후속복기 P4: manual exit 세분화
+        # 기존 'manual'에 테마EOD + sync_detected + 진짜 수동이 섞여 분석 왜곡 → 분리
+        # post_exit_review에서 reason 패턴 별 분석 가능하도록 exit_type 표준화
+        _effective_exit_type = exit_type
+        if exit_type == "manual" and exit_reason:
+            _rl = exit_reason.lower()
+            if "테마eod" in exit_reason or "theme_eod" in _rl:
+                _effective_exit_type = "theme_eod"
+            elif "fill_detected" in _rl or "kis 동기화" in exit_reason or "sync" in _rl:
+                _effective_exit_type = "sync_detected"
+            # 그 외 'manual'은 진짜 수동 청산 (사용자 KIS HTS 매도 등)
+        trade.exit_type = _effective_exit_type
         trade.indicators_at_exit = indicators or {}
 
         # 손익 계산 (수수료 포함, 누적: 부분 매도 시 += 방식)
