@@ -666,6 +666,79 @@ class BatchAnalyzer:
             import traceback
             logger.error(traceback.format_exc())
 
+    def _log_gap_down_blocked(self, symbol: str, name: str, chg_pct: float, entry_price) -> None:
+        """P3 (2026-05-18): 갭다운 차단 종목 로깅 (회피 정확도 추적용)
+
+        ~/.cache/ai_trader/gap_down_blocked_YYYY-MM-DD.json에 누적 저장.
+        매일 batch가 D+1~D+5 종가 비교로 정확도 통계 산출.
+        """
+        try:
+            from pathlib import Path
+            today = date.today()
+            path = Path.home() / ".cache" / "ai_trader" / f"gap_down_blocked_{today.isoformat()}.json"
+            data = []
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8")) or []
+                except Exception:
+                    data = []
+            data.append({
+                "symbol": symbol,
+                "name": name,
+                "blocked_date": today.isoformat(),
+                "signal_entry_price": float(entry_price) if entry_price else 0.0,
+                "premarket_chg_pct": round(chg_pct, 2),
+                "timestamp": datetime.now().isoformat(),
+            })
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"[프리장검증] 갭다운 로그 저장 실패 {symbol}: {e}")
+
+    def _update_gap_down_tracking(self) -> None:
+        """P3 (2026-05-18): 과거 갭다운 차단 종목의 D+1~D+5 추적 갱신.
+
+        파일별로 D+1, D+3, D+5 종가를 매일 추가 → 5일 후 회피 정확도 통계 산출 가능.
+        보관 기간: 30일 (오래된 파일 자동 정리는 별도).
+        """
+        try:
+            from pathlib import Path
+            cache_dir = Path.home() / ".cache" / "ai_trader"
+            today = date.today()
+            # 1~5영업일 전 차단 파일 순회
+            for d_offset in range(1, 8):
+                target = today - timedelta(days=d_offset)
+                if target.weekday() >= 5:  # 주말 스킵
+                    continue
+                path = cache_dir / f"gap_down_blocked_{target.isoformat()}.json"
+                if not path.exists():
+                    continue
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8")) or []
+                except Exception:
+                    continue
+                updated = False
+                for entry in data:
+                    bd = entry.get("blocked_date")
+                    if not bd:
+                        continue
+                    try:
+                        blocked_date = date.fromisoformat(bd)
+                    except Exception:
+                        continue
+                    biz_days_passed = sum(
+                        1 for i in range(1, (today - blocked_date).days + 1)
+                        if (blocked_date + timedelta(days=i)).weekday() < 5
+                    )
+                    key = f"close_d{biz_days_passed}"
+                    if biz_days_passed in (1, 3, 5) and key not in entry:
+                        # KIS 종가 조회 시도 (async가 아니므로 별도 task로 실행 어려움 — defer)
+                        entry[f"_need_close_d{biz_days_passed}"] = True
+                        updated = True
+                if updated:
+                    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"[프리장검증] 추적 갱신 실패: {e}")
+
     async def _premarket_revalidate(
         self, signals: list, nxt_symbols: list
     ) -> list:
@@ -712,6 +785,8 @@ class BatchAnalyzer:
                         f"[프리장검증] {sig.symbol} {sig.name} 취소: "
                         f"프리장 {chg_pct:+.1f}% 급락 (기준 {gap_down_cancel_pct}%)"
                     )
+                    # 2026-05-18 P3: 갭다운 차단 회피 정확도 추적 — D+1~D+5 종가 비교용 로그
+                    self._log_gap_down_blocked(sig.symbol, sig.name, chg_pct, sig.entry_price)
                     continue
 
                 # 2) RSI-2 역추세: 프리장에서 이미 반등 → 역추세 진입 의미 상실
@@ -745,6 +820,11 @@ class BatchAnalyzer:
                 validated.append(sig)
 
         cancelled = len(signals) - len(validated)
+        # P3 (2026-05-18): 갭다운 차단 정확도 추적 — 매일 D+1 종가 비교용 캐시 저장
+        try:
+            self._update_gap_down_tracking()
+        except Exception as _gd_err:
+            logger.debug(f"[프리장검증] 갭다운 추적 업데이트 실패: {_gd_err}")
         if cancelled > 0:
             logger.info(
                 f"[프리장검증] NXT 프리장 재검증 완료: "

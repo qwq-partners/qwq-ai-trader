@@ -244,6 +244,8 @@ class PositionExitState:
     is_core: bool = False
     max_holding_days: Optional[int] = None  # None이면 글로벌 ExitConfig 사용, 0이면 무제한
     trailing_activate_pct: Optional[float] = None  # None이면 글로벌 ExitConfig 사용
+    # 2026-05-18 P2-a: 전략별 청산 차등 (composite trailing 버퍼 조정용)
+    strategy_name: Optional[str] = None  # rsi2_reversal, sepa_trend, gap_and_go 등
 
 
 class ExitManager:
@@ -394,6 +396,7 @@ class ExitManager:
         max_holding_days: Optional[int] = None,
         trailing_activate_pct: Optional[float] = None,
         atr_pct_hint: Optional[float] = None,
+        strategy_name: Optional[str] = None,  # 2026-05-18 P2-a
     ):
         """포지션 등록"""
         if position.symbol in self._states:
@@ -637,6 +640,7 @@ class ExitManager:
             is_core=is_core,
             max_holding_days=max_holding_days,
             trailing_activate_pct=trailing_activate_pct,
+            strategy_name=strategy_name or getattr(position, "strategy", None),
         )
 
         # ── 장중 급락 active 시: 신규 포지션에도 즉시 crash SL/TS 적용 ──
@@ -947,7 +951,17 @@ class ExitManager:
         if ma5 is not None:
             ma5_f = float(ma5)
             if ma5_f > 0:
+                # 2026-05-18 P2-a: 전략별 차등 MA5 버퍼
+                # rsi2_reversal (단기 평균회귀): 0.3% 더 타이트 → 빠른 청산
+                # sepa_trend (추세 추종): 0.5% 기본 유지 → 추세 여유 확보
+                # gap_and_go (단기 모멘텀): 0.4% 중간
                 buffer = self.config.composite_ma5_buffer_pct
+                _strat = getattr(state, "strategy_name", None) or ""
+                if _strat == "rsi2_reversal":
+                    buffer = 0.3
+                elif _strat == "gap_and_go":
+                    buffer = 0.4
+                # sepa_trend / strategic_swing은 글로벌 기본값(0.5%) 유지
                 threshold = ma5_f * (1 - buffer / 100)
                 if price_f < threshold:
                     logger.info(

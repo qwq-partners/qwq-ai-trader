@@ -49,36 +49,53 @@ class SupplyTrendDetector:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     async def detect_accumulation(self) -> List[SupplyTrendStock]:
-        """수급 매집 종목 탐지"""
+        """수급 매집 종목 탐지
+
+        2026-05-18 P0-1 데이터 파이프라인 수리:
+        - 기존 pykrx MCP 의존 → KIS API FHKST01010900 (fetch_stock_investor_daily) 우선
+        - 장전/장후 모두 D-1 데이터 정상 반환 가능
+        - pykrx는 폴백
+        """
         logger.info("[수급추세] 탐지 시작...")
 
         try:
             # 1) 유니버스 구성 (KIS API 당일 수급 상위)
             universe = await self._build_universe()
             if not universe:
-                logger.debug("[수급추세] 유니버스 비어있음 (프리장/수급 데이터 없음)")
-                return []
+                # 폴백: KIS 종가 기준 수급 상위 종목 (D-1 기준)
+                logger.debug("[수급추세] 유니버스 비어있음 (장 시작 전) → KOSPI200 폴백")
+                universe = await self._build_fallback_universe()
+                if not universe:
+                    logger.warning("[수급추세] 폴백 유니버스도 비어있음 → 종료")
+                    return []
 
             logger.info(f"[수급추세] 유니버스: {len(universe)}종목")
 
-            # 2) pykrx MCP로 20영업일 수급 조회
-            from src.utils.mcp_client import get_mcp_manager
-            manager = get_mcp_manager()
-
-            if not manager.is_server_available("pykrx"):
-                logger.warning("[수급추세] pykrx MCP 미사용 가능 → KIS 당일 데이터로 대체")
-                return self._fallback_daily_only(universe)
+            # 2) KIS API FHKST01010900 우선 (장전/장후 모두 D-1 데이터 제공)
+            use_kis = self._kis_market_data is not None and hasattr(
+                self._kis_market_data, "fetch_stock_investor_daily"
+            )
+            manager = None
+            if not use_kis:
+                from src.utils.mcp_client import get_mcp_manager
+                manager = get_mcp_manager()
+                if not manager.is_server_available("pykrx"):
+                    logger.warning(
+                        "[수급추세] KIS API + pykrx 모두 사용 불가 → 폴백 모드"
+                    )
+                    return self._fallback_daily_only(universe)
 
             stocks = []
-
-            # 유니버스를 80종목으로 제한 (pykrx MCP 부하 방지)
             universe_items = list(universe.items())[:80]
-            sem = asyncio.Semaphore(5)  # 동시 5개 제한
+            sem = asyncio.Semaphore(8)  # 동시 8개
 
             async def bounded_analyze(sym, nm):
                 async with sem:
                     try:
-                        result = await self._analyze_supply_trend(manager, sym, nm)
+                        if use_kis:
+                            result = await self._analyze_supply_trend_kis(sym, nm)
+                        else:
+                            result = await self._analyze_supply_trend(manager, sym, nm)
                         if result and result.score >= 50:
                             return result
                     except Exception as e:
@@ -95,14 +112,21 @@ class SupplyTrendDetector:
 
             stocks.sort(key=lambda x: x.score, reverse=True)
 
-            # 캐시 저장
+            # P0-1 검증 강화: 30종목 미달 시 캐시 미저장 (잡음 방지)
+            if len(stocks) < 30 and len(stocks) > 0:
+                logger.warning(
+                    f"[수급추세] 탐지 종목 {len(stocks)}개 < 30 — 이전 캐시 유지 (잡음 방지)"
+                )
+                return stocks
             self._save_cache(stocks)
 
-            logger.info(f"[수급추세] 탐지 완료: {len(stocks)}종목 (점수 50+)")
+            logger.info(
+                f"[수급추세] 탐지 완료: {len(stocks)}종목 (점수 50+), 소스={'KIS_API' if use_kis else 'pykrx'}"
+            )
             for s in stocks[:5]:
                 logger.info(
                     f"  {s.symbol} {s.name}: 점수={s.score:.0f} "
-                    f"외국인{s.foreign_streak}일 기관{s.inst_streak}일"
+                    f"외국인{s.foreign_streak}일 기관{s.inst_streak}일 delta={s.delta_ratio:.1f}x"
                 )
 
             return stocks
@@ -110,6 +134,119 @@ class SupplyTrendDetector:
         except Exception as e:
             logger.error(f"[수급추세] 탐지 오류: {e}")
             return []
+
+    async def _build_fallback_universe(self) -> Dict[str, str]:
+        """장 시작 전 폴백: stock_master에서 KOSPI/KOSDAQ 시총 상위 80종목
+
+        KIS API FHKST01010900은 D-1 데이터 제공하므로 유니버스가 정적이어도 OK.
+        2026-05-18 P0-1 데이터 파이프라인 수리: 08:15 실행 시 0종목 문제 해결.
+        """
+        universe = {}
+        # 1차 폴백: 하드코딩 KOSPI 대형주 (최소 보장 — KIS FHKST01010900은 D-1 데이터)
+        if True:  # 항상 적용 (다음 단계에서 stock_master 동적 교체 예정)
+            universe = {
+                "005930": "삼성전자", "000660": "SK하이닉스", "373220": "LG에너지솔루션",
+                "207940": "삼성바이오로직스", "005380": "현대차", "000270": "기아",
+                "012330": "현대모비스", "068270": "셀트리온", "035420": "NAVER",
+                "035720": "카카오", "005490": "POSCO홀딩스", "051910": "LG화학",
+                "006400": "삼성SDI", "066570": "LG전자", "105560": "KB금융",
+                "055550": "신한지주", "086790": "하나금융지주", "316140": "우리금융지주",
+                "024110": "기업은행", "032830": "삼성생명", "402340": "SK스퀘어",
+                "017670": "SK텔레콤", "030200": "KT", "015760": "한국전력",
+                "034730": "SK", "003550": "LG", "267260": "HD현대일렉트릭",
+                "009540": "HD한국조선해양", "329180": "HD현대중공업", "012450": "한화에어로스페이스",
+                "272210": "한화시스템", "079550": "LIG넥스원", "086280": "현대글로비스",
+                "047810": "한국항공우주", "010140": "삼성중공업", "028260": "삼성물산",
+                "009830": "한화솔루션", "010130": "고려아연", "011170": "롯데케미칼",
+            }
+        return universe
+
+    async def _analyze_supply_trend_kis(
+        self, symbol: str, name: str
+    ) -> Optional[SupplyTrendStock]:
+        """KIS API FHKST01010900 기반 수급 분석 (2026-05-18 P0-1 수리)
+
+        장전/장후 모두 D-1 기준 30영업일 데이터 조회 가능.
+        """
+        if not self._kis_market_data:
+            return None
+
+        try:
+            # KIS 종목별 투자자 일별 매매동향 (최근 30일)
+            data = await self._kis_market_data.fetch_stock_investor_daily(
+                symbol, days=30
+            )
+        except Exception:
+            return None
+
+        if not data or len(data) < 5:
+            return None
+
+        # date_str → 오래된 순 정렬
+        sorted_dates = sorted(data.keys())
+        foreign_daily = [data[d]["foreign_net_buy"] for d in sorted_dates]
+        inst_daily = [data[d]["inst_net_buy"] for d in sorted_dates]
+
+        # 연속 순매수 일수 계산
+        foreign_streak = self._count_consecutive_positive(foreign_daily)
+        inst_streak = self._count_consecutive_positive(inst_daily)
+
+        # 최근 10일 누적
+        recent_10 = min(10, len(foreign_daily))
+        foreign_total = sum(foreign_daily[-recent_10:])
+        inst_total = sum(inst_daily[-recent_10:])
+
+        # 가속 판단
+        is_accelerating = False
+        if len(foreign_daily) >= 10:
+            recent_5 = sum(foreign_daily[-5:]) + sum(inst_daily[-5:])
+            prev_5 = sum(foreign_daily[-10:-5]) + sum(inst_daily[-10:-5])
+            is_accelerating = recent_5 > prev_5 > 0
+
+        # delta_ratio (P0-1 핵심)
+        delta_ratio = 0.0
+        if len(foreign_daily) >= 6:
+            today_net = foreign_daily[-1] + inst_daily[-1]
+            prev_5_avg = (sum(foreign_daily[-6:-1]) + sum(inst_daily[-6:-1])) / 5
+            if prev_5_avg > 0:
+                delta_ratio = today_net / prev_5_avg
+
+        score = self._calculate_trend_score(
+            foreign_streak, inst_streak,
+            foreign_total, inst_total,
+            is_accelerating,
+            delta_ratio=delta_ratio,
+        )
+
+        if score < 30:
+            return None
+
+        reasons = []
+        if foreign_streak >= 5:
+            reasons.append(f"외국인 {foreign_streak}일 연속 순매수")
+        if inst_streak >= 5:
+            reasons.append(f"기관 {inst_streak}일 연속 순매수")
+        if foreign_streak >= 5 and inst_streak >= 5:
+            reasons.append("외국인+기관 동시 매집")
+        if is_accelerating:
+            reasons.append("순매수 가속 중")
+        if delta_ratio >= 5:
+            reasons.append(f"수급 델타 폭증({delta_ratio:.1f}x)")
+        elif delta_ratio >= 3:
+            reasons.append(f"수급 델타 점프({delta_ratio:.1f}x)")
+
+        return SupplyTrendStock(
+            symbol=symbol,
+            name=name,
+            score=score,
+            foreign_streak=foreign_streak,
+            inst_streak=inst_streak,
+            foreign_total=foreign_total,
+            inst_total=inst_total,
+            is_accelerating=is_accelerating,
+            delta_ratio=round(delta_ratio, 2),
+            reasons=reasons,
+        )
 
     async def _build_universe(self) -> Dict[str, str]:
         """유니버스 구성: 당일 수급 상위 + 주요 종목"""

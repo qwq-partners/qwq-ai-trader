@@ -64,8 +64,18 @@
   - 동기간 SEPA 7건 (avg D+1 +2.58%), Swing 7건 (avg +0.64%) — 비교 불가
   - 원인: `trades.entry_reason`에 'buy_signal' 같은 간단 텍스트만 저장됨
   - supply_trend reasons는 메모리에서만 사용되고 영속화 안 됨 → 효과 측정 트레이스 없음
-  - **즉시 보강 필요**: signal_events.metadata 또는 trades.indicators_at_entry에 supply_score breakdown 영속화
+  - 보강 PR: a39ac20 — swing_screener+kr_scheduler에 supply_delta_ratio 영속화 추가
   - 재평가 예정: 2026-05-18 (계측 보강 + 7일 데이터 축적 후)
+- **2차 평가 (2026-05-18, 자동 cron c8ee3cd0)**: ⚠️ **데이터 파이프라인 실패 — 영속화 0건, 마지막 연장**
+  - `indicators_at_entry ? 'supply_delta_ratio'` 진입: 0건
+  - 동기간 SEPA 2건 (avg -4.60%), Swing 4건 (avg -0.33%) — 폭락장 영향
+  - 근본 원인: SupplyTrendDetector 자체가 거의 동작 안 함
+    - 08:15/08:20 실행 시 유니버스 0종목 (장 시작 전 KIS 당일 데이터 없음)
+    - pykrx MCP 의존 — "pykrx MCP 미사용 → KIS 당일 데이터로 대체" 후 0종목
+    - 캐시 파일 supply_trend_*.json 존재하지 않음
+  - 손익비/D+1 < 0% 트리거 조건 발동했으나 **폭락장 영향**이 더 커서 P0-1 자체 효과로 단정 불가
+  - **결정**: 5/25까지 3차 마지막 연장 (총 14영업일, 한계 21영업일)
+  - **선결**: 데이터 파이프라인 수리 (SupplyTrendDetector 실행 시각 또는 데이터 소스 변경)
 - **효과 가설**:
   - [ ] delta_ratio ≥3 종목 발견 빈도 (주간 N건)
   - [ ] 해당 종목 진입 시 D+1 평균 PnL 비적용 대비 +0.5%p 개선
