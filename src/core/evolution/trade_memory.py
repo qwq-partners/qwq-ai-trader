@@ -328,6 +328,13 @@ class TradeMemory:
                     ))
                     new_principles += 1
 
+        # 2026-05-18 P2-b: 요일별 청산 다발 패턴 (폭락 D-1 사전 신호)
+        # 가설: 금요일 N건+ trailing/stop_loss 동시 발생 → 월요일 갭다운 위험
+        try:
+            new_principles += self._extract_weekday_exit_principle()
+        except Exception as e:
+            logger.debug(f"[거래메모리] 요일별 청산 패턴 추출 실패 (무시): {e}")
+
         # 오래된 원칙 비활성화 (90일 미검증)
         cutoff = (date.today() - timedelta(days=90)).isoformat()
         for p in self._layer3:
@@ -349,6 +356,94 @@ class TradeMemory:
     # 점수 보정 (매수 시 호출)
     # ============================================================
 
+    def _extract_weekday_exit_principle(self) -> int:
+        """P2-b (2026-05-18): 요일별 청산 다발 패턴 학습
+
+        가설: 금요일 N건+ 동시 청산(trailing/stop_loss) → 월요일 KOSPI -1%↓ 위험
+        근거: 5/9~5/11 손절 → 5/12 -3.69% 폭락 / 5/15 trailing 4건 → 5/18 -3.70%
+
+        분석:
+        - L1+L2에서 요일별 청산 카운트 집계
+        - exit_type in (stop_loss, trailing) 한정
+        - 금요일 청산 ≥3건 발생한 사례 추적
+        - 직후 영업일(월) 시장 변동성 데이터 부족하므로 단순 빈도 학습만
+        """
+        from datetime import datetime as _dt
+
+        # L1 청산 → 요일별 집계
+        weekday_exits: Dict[int, List[Dict]] = {}  # 0=Mon, 4=Fri
+        all_outcomes = list(self._layer1)
+        if len(all_outcomes) < 20:
+            return 0  # 표본 부족
+
+        for o in all_outcomes:
+            if o.exit_type not in ("stop_loss", "trailing"):
+                continue
+            try:
+                exit_dt = _dt.strptime(o.exit_date, "%Y-%m-%d")
+            except (ValueError, TypeError):
+                continue
+            wd = exit_dt.weekday()
+            weekday_exits.setdefault(wd, []).append({
+                "symbol": o.symbol,
+                "exit_date": o.exit_date,
+                "pnl_pct": o.pnl_pct,
+                "exit_type": o.exit_type,
+            })
+
+        # 금요일 (4) 청산 다발 사례 분석
+        friday_exits = weekday_exits.get(4, [])
+        if len(friday_exits) < 5:
+            return 0
+
+        # 같은 금요일 날짜별 그룹 — N건+ 동시 청산 사례 추출
+        from collections import defaultdict
+        date_groups: Dict[str, List[Dict]] = defaultdict(list)
+        for e in friday_exits:
+            date_groups[e["exit_date"]].append(e)
+
+        cluster_dates = [d for d, items in date_groups.items() if len(items) >= 3]
+
+        if len(cluster_dates) < 2:
+            return 0  # 클러스터 사례 부족
+
+        # 원칙 등록 (조건부)
+        rule = (
+            f"금요일 3건+ 동시 청산(trailing/stop_loss) 시 "
+            f"다음 영업일 갭다운 위험 — 신규 매수 보수적 진입"
+        )
+        confidence = min(0.85, 0.5 + 0.1 * len(cluster_dates))  # 사례 수 비례
+        existing = next(
+            (p for p in self._layer3
+             if p.conditions.get("pattern") == "friday_exit_cluster"),
+            None
+        )
+        if existing:
+            existing.confidence = confidence
+            existing.source_count = sum(len(items) for items in date_groups.values())
+            existing.last_verified = date.today().isoformat()
+            return 0
+        else:
+            self._layer3.append(TradePrinciple(
+                rule=rule,
+                confidence=round(confidence, 2),
+                score_delta=-2,  # 월요일 진입 시 -2점 감점
+                source_count=sum(len(items) for items in date_groups.values()),
+                last_verified=date.today().isoformat(),
+                conditions={
+                    "pattern": "friday_exit_cluster",
+                    "cluster_threshold": 3,
+                    "weekday": 4,  # 금요일
+                    "apply_weekday": 0,  # 월요일 진입 시 적용
+                },
+                created_at=datetime.now().isoformat(),
+            ))
+            logger.info(
+                f"[거래메모리] 신규 원칙: 금요일 청산 클러스터 ({len(cluster_dates)}건 사례, "
+                f"신뢰도 {confidence:.0%})"
+            )
+            return 1
+
     def get_score_adjustment(self, strategy: str, sector: str = "",
                              market_level: str = "") -> int:
         """
@@ -360,11 +455,23 @@ class TradeMemory:
         total_delta = 0
         matched_rules = []
 
+        # 현재 요일 (P2-b 적용용)
+        from datetime import datetime as _dt
+        _today_wd = _dt.now().weekday()
+
         for p in self._layer3:
             if not p.active or p.confidence < 0.5:
                 continue
 
             cond = p.conditions
+
+            # P2-b 패턴: 요일 기반 (금요일 청산 다발 → 월요일 감점)
+            if cond.get("pattern") == "friday_exit_cluster":
+                apply_wd = cond.get("apply_weekday", 0)  # 기본 월요일
+                if _today_wd == apply_wd:
+                    total_delta += p.score_delta
+                    matched_rules.append(f"{p.rule} ({p.score_delta:+d})")
+                continue
 
             # 시장 레벨 원칙 (전략/섹터 무관, 레벨만 매칭)
             if cond.get("market_level"):

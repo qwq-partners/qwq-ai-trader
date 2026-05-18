@@ -146,6 +146,11 @@ class KRScheduler:
             self.run_log_cleanup(), name="kr_log_cleanup"
         ))
 
+        # 2026-05-18 P1: 약세장 안전자산(TIGER KOFR) 자동 운용
+        tasks.append(asyncio.create_task(
+            self.run_safe_asset_loop(), name="kr_safe_asset"
+        ))
+
         # 종목 마스터 갱신
         if bot.stock_master:
             tasks.append(asyncio.create_task(
@@ -4164,6 +4169,187 @@ JSON:
             pass
         except Exception as e:
             logger.error(f"매도 후속 복기 스케줄러 오류: {e}")
+
+    async def run_safe_asset_loop(self):
+        """P1 (2026-05-18): TIGER KOFR 안전자산 자동 운용
+
+        목적: 약세장/폭락 후 자본 정체 시 현금을 단기 안전자산(KOFR)에 배치
+              → 강세장 회복 또는 새 시그널 발생 시 즉시 SEPA 자본화
+
+        4-OR 해제 트리거 (장기 쏠림 방지):
+        - (a) 시장 체제 정상화 (caution → normal)
+        - (b) 새 SEPA/swing/RSI2 매수 시그널 발생
+        - (c) 최대 보유 5영업일 초과
+        - (d) 사용자 수동 청산 (텔레그램, 추후)
+
+        상한: 자본의 25% (max_position_pct 정책 준수)
+        실행 주기: 5분 (장중 09:00~15:30 한정)
+        """
+        bot = self.bot
+        SAFE_SYMBOL = "114810"  # TIGER KOFR
+        SAFE_NAME = "TIGER KOFR"
+        CAP_PCT = 25.0  # 자본 대비 상한
+        MAX_HOLD_DAYS = 5  # 최대 보유 영업일
+
+        state_path = Path.home() / ".cache" / "ai_trader" / "safe_asset_state.json"
+
+        def _load_state() -> Dict:
+            try:
+                if state_path.exists():
+                    return json.loads(state_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            return {}
+
+        def _save_state(d: Dict) -> None:
+            try:
+                state_path.write_text(json.dumps(d, ensure_ascii=False, indent=2))
+            except Exception as e:
+                logger.debug(f"[안전자산] 상태 저장 실패: {e}")
+
+        try:
+            while bot.running:
+                await asyncio.sleep(300)  # 5분 주기
+                now = datetime.now()
+                today = now.date()
+
+                # 장중 한정 (09:30~15:20)
+                if (today.weekday() >= 5
+                        or is_kr_market_holiday(today)
+                        or now.hour < 9 or now.hour > 15
+                        or (now.hour == 15 and now.minute > 20)
+                        or (now.hour == 9 and now.minute < 30)):
+                    continue
+
+                portfolio = bot.engine.portfolio if bot.engine else None
+                if not portfolio:
+                    continue
+
+                equity = float(getattr(portfolio, "total_equity", 0) or 0)
+                cash = float(getattr(portfolio, "cash", 0) or 0)
+                if equity <= 0:
+                    continue
+
+                cash_ratio = cash / equity if equity > 0 else 0
+                ba = bot.batch_analyzer
+                intraday_state = getattr(ba, "_intraday_state", "normal") if ba else "normal"
+                regime = getattr(ba, "_market_regime", "neutral") if ba else "neutral"
+
+                # 현재 보유 KOFR 확인
+                kofr_pos = portfolio.positions.get(SAFE_SYMBOL)
+                has_kofr = kofr_pos is not None and kofr_pos.quantity > 0
+                state_data = _load_state()
+
+                # ── 매수 트리거 ──
+                # 조건: 현금 ≥ 30% + 시장 caution/crash/severe
+                buy_eligible = (
+                    not has_kofr
+                    and cash_ratio >= 0.30
+                    and intraday_state in ("caution", "crash", "severe")
+                )
+                if buy_eligible:
+                    # 매수 금액: min(현금-5%, 자본의 25%)
+                    reserved_cash = equity * 0.05  # 최소 현금 5% 유지
+                    available = max(0, cash - reserved_cash)
+                    cap_amount = equity * (CAP_PCT / 100)
+                    buy_amount = min(available, cap_amount)
+                    if buy_amount < 200000:  # 20만원 미달 스킵
+                        continue
+                    try:
+                        # 현재가 조회
+                        quote = await bot.broker.get_quote(SAFE_SYMBOL)
+                        price = float(quote.get("price", 0)) if quote else 0
+                        if price <= 0:
+                            continue
+                        qty = int(buy_amount // price)
+                        if qty <= 0:
+                            continue
+                        logger.info(
+                            f"[안전자산] KOFR 매수 트리거: 현금 {cash_ratio:.0%} + 시장={intraday_state} → "
+                            f"{qty}주 @ {price:,.0f} = {qty*price:,.0f}원"
+                        )
+                        # 주문 (시장가)
+                        from ..core.types import Order, OrderSide, OrderType
+                        order = Order(
+                            symbol=SAFE_SYMBOL,
+                            side=OrderSide.BUY,
+                            order_type=OrderType.MARKET,
+                            quantity=qty,
+                            price=Decimal(str(price)),
+                            strategy="safe_asset",
+                            reason=f"안전자산 자동 매수: 약세장 자본 활용",
+                        )
+                        await bot.broker.submit_order(order)
+                        state_data["entry_date"] = today.isoformat()
+                        state_data["entry_qty"] = qty
+                        state_data["entry_price"] = price
+                        state_data["entry_reason"] = f"{intraday_state}+cash_{cash_ratio:.0%}"
+                        _save_state(state_data)
+                    except Exception as e:
+                        logger.warning(f"[안전자산] KOFR 매수 실패: {e}")
+                    continue
+
+                # ── 청산 트리거 (보유 시) ──
+                if has_kofr:
+                    sell_reason = None
+                    # (a) 시장 정상화
+                    if intraday_state == "normal" and regime != "bear":
+                        sell_reason = "시장 정상화"
+                    # (b) 새 매수 시그널 발생 — pending_signals.json 확인
+                    if sell_reason is None:
+                        try:
+                            ps_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
+                            if ps_path.exists():
+                                sigs = json.loads(ps_path.read_text(encoding="utf-8")) or []
+                                fresh_sigs = [
+                                    s for s in sigs
+                                    if datetime.fromisoformat(s.get("expires_at", "2000-01-01")) > now
+                                    and s.get("strategy") in ("sepa_trend", "strategic_swing")
+                                ]
+                                if fresh_sigs:
+                                    sell_reason = f"신규 시그널({len(fresh_sigs)}건)"
+                        except Exception:
+                            pass
+                    # (c) 5영업일 초과
+                    if sell_reason is None:
+                        entry_d = state_data.get("entry_date")
+                        if entry_d:
+                            try:
+                                entry_date = date.fromisoformat(entry_d)
+                                biz_days = sum(
+                                    1 for i in range(1, (today - entry_date).days + 1)
+                                    if (entry_date + timedelta(days=i)).weekday() < 5
+                                    and not is_kr_market_holiday(entry_date + timedelta(days=i))
+                                )
+                                if biz_days >= MAX_HOLD_DAYS:
+                                    sell_reason = f"{biz_days}영업일 보유 한도"
+                            except Exception:
+                                pass
+
+                    if sell_reason:
+                        try:
+                            from ..core.types import Order, OrderSide, OrderType
+                            order = Order(
+                                symbol=SAFE_SYMBOL,
+                                side=OrderSide.SELL,
+                                order_type=OrderType.MARKET,
+                                quantity=kofr_pos.quantity,
+                                price=Decimal(str(kofr_pos.current_price or kofr_pos.avg_price)),
+                                strategy="safe_asset",
+                                reason=f"안전자산 자동 매도: {sell_reason}",
+                            )
+                            await bot.broker.submit_order(order)
+                            logger.info(
+                                f"[안전자산] KOFR 매도: {kofr_pos.quantity}주 — {sell_reason}"
+                            )
+                            state_data.clear()
+                            _save_state(state_data)
+                        except Exception as e:
+                            logger.warning(f"[안전자산] KOFR 매도 실패: {e}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[안전자산] 루프 오류: {e}")
 
     async def run_log_cleanup(self):
         """로그/캐시 정리 스케줄러 — 매일 00:05"""
