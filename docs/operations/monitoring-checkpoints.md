@@ -6,6 +6,62 @@
 
 ## 활성 체크포인트
 
+### 2026-05-25~ (1주일 후) — 5/18 5종 변경 통합 검증
+
+- **적용 일자**: 2026-05-18 (커밋 05bcdd5 + 75ccec4)
+- **변경**: P0-1 데이터 파이프라인 수리 / P1 KOFR 자동운용 / P2-a 트레일링 차등 / P2-b 요일 클러스터 학습 / P3 갭다운 추적
+
+#### A. P0-1 수급 델타 영속화 (자동 cron b10426bf, 5/25 10:37)
+- 검증: `indicators_at_entry ? 'supply_delta_ratio'` 진입 N건
+- 목표: 5건+ 영속화 (3차 마지막, 미달 시 강제 롤백)
+- SQL: `SELECT COUNT(*) FROM trades WHERE market='KR' AND entry_time >= '2026-05-18' AND indicators_at_entry ? 'supply_delta_ratio';`
+- 캐시 확인: `ls ~/.cache/ai_trader/strategic/supply_trend_*.json`
+- 롤백 트리거: 5건 미달 OR delta_ratio≥3 D+1 < 0%
+
+#### B. P1 KOFR 자동 운용
+- 첫 매수 발동 시점 추적 (다음 폭락 KOSPI -2%↓ + 현금 30%↑)
+- 4-OR 청산 트리거 정확도:
+  - [ ] (a) 시장 정상화 트리거 — caution→normal 시점
+  - [ ] (b) 신규 시그널 트리거 — pending_signals 발견 시점
+  - [ ] (c) 5영업일 한도 트리거
+  - [ ] (d) 수동 청산 (텔레그램 통합 후)
+- 상한 25% 준수 — equity × 0.25 초과 보유 사례 0건 확인
+- 최소 현금 5% 유지 — 다른 시그널 진입 차단 사례 0건
+- 로그 위치: `[안전자산] KOFR 매수/매도`
+- 상태 파일: `~/.cache/ai_trader/safe_asset_state.json`
+- 롤백 트리거:
+  - KOFR 1주 보유 후 SEPA 시그널 발생했는데 (b) 트리거 미발화
+  - 5영업일 초과해도 (c) 자동 청산 안 됨
+  - 매수 시도 후 broker submit_order 실패율 ≥30%
+
+#### C. P2-a 복합 트레일링 전략별 차등
+- 검증 SQL:
+```sql
+SELECT entry_strategy, exit_type, COUNT(*),
+       AVG(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) AS avg
+FROM trades
+WHERE market='KR' AND exit_time >= '2026-05-18'
+  AND exit_reason LIKE '%복합트레일링%'
+GROUP BY 1, 2 ORDER BY 3 DESC;
+```
+- 모니터링: RSI2 0.3% 버퍼로 조기 청산 빈도 증가 여부
+- 조정 트리거: RSI2 복합 트레일링 청산 후 D+1 +3%+ 회복 비율 ≥40% → 0.4%로 완화
+
+#### D. P2-b 금요일 청산 클러스터 L3 학습
+- 첫 학습 발화 추적: 다음 금요일 청산 3건+ 발생 시 L3 원칙 자동 등록
+- 학습 후 적용 검증: 다음 월요일 SEPA 시그널 점수에 "메모리보정(-2)" 표시
+- 신뢰도 추이: 사례 누적 시 0.5 → 0.85 점진 증가
+- 검증 위치: `[거래메모리] 신규 원칙: 금요일 청산 클러스터` 로그
+- 롤백 트리거: 5건 사례 누적 후 월요일 KOSPI +1%↑ 사례가 -1%↓ 사례보다 많으면 패턴 무효 (active=False 수동 처리)
+
+#### E. P3 갭다운 차단 정확도
+- 누적 파일: `~/.cache/ai_trader/gap_down_blocked_YYYY-MM-DD.json`
+- 4주 후 (2026-06-15~) 정확도 분석:
+  - 차단 종목의 D+5 종가 < 시그널 진입가 → 회피 성공
+  - 회피율 ≥75% → 임계 -5% 유지
+  - 회피율 50~75% → 임계 -6%로 완화 검토
+  - 회피율 < 50% → 임계 폐지 검토
+
 ### 2026-05-19~ (1주일 후) — PostgreSQL 튜닝 효과 검증
 
 - **적용 일자**: 2026-05-12 08:33 KST
