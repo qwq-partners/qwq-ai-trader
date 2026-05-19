@@ -4186,8 +4186,18 @@ JSON:
         실행 주기: 5분 (장중 09:00~15:30 한정)
         """
         bot = self.bot
-        SAFE_SYMBOL = "114810"  # TIGER KOFR
-        SAFE_NAME = "TIGER KOFR"
+        # 2026-05-19 P0 사고 정정 (114810 = 한솔아이원스, KOFR 아님):
+        # 후보 종목 + 키워드 검증 추가. 첫 발화 시 KIS API로 이름 확인 후 키워드 매칭 안 되면 영구 비활성.
+        SAFE_CANDIDATES = [
+            # 검증된 단기/안전 자산 후보 (실거래 전 이름 검증 필수)
+            ("458730", ["KOFR", "코퍼"]),                # KOSEF KOFR액티브
+            ("357870", ["단기채", "단기 채권", "단기채권"]),  # 후보 단기채 ETF
+            ("152470", ["단기채", "단기 채권", "단기채권"]),  # KODEX 단기채권액티브 후보
+            ("273130", ["단기통안", "통안채", "통안"]),     # KODEX 단기통안채액티브 후보
+        ]
+        SAFE_SYMBOL: Optional[str] = None
+        SAFE_NAME: str = ""
+        SAFE_VALIDATED: bool = False  # 종목명 검증 완료 여부
         CAP_PCT = 25.0  # 자본 대비 상한
         MAX_HOLD_DAYS = 5  # 최대 보유 영업일
 
@@ -4220,6 +4230,40 @@ JSON:
                         or (now.hour == 15 and now.minute > 20)
                         or (now.hour == 9 and now.minute < 30)):
                     continue
+
+                # 2026-05-19 P0 사고 정정: 종목 키워드 검증 (지연 초기화)
+                if not SAFE_VALIDATED:
+                    for _cand_sym, _keywords in SAFE_CANDIDATES:
+                        try:
+                            q = await bot.broker.get_quote(_cand_sym)
+                            if not q:
+                                continue
+                            _name = (q.get("name") or q.get("hts_kor_isnm") or "").strip()
+                            if not _name:
+                                continue
+                            # 키워드 매칭 검증
+                            _matched = any(kw in _name for kw in _keywords)
+                            if _matched:
+                                SAFE_SYMBOL = _cand_sym
+                                SAFE_NAME = _name
+                                SAFE_VALIDATED = True
+                                logger.info(
+                                    f"[안전자산] 후보 검증 통과: {_cand_sym} = '{_name}' "
+                                    f"(키워드 {_keywords[0]} 매칭)"
+                                )
+                                break
+                            else:
+                                logger.warning(
+                                    f"[안전자산] 후보 거부: {_cand_sym} = '{_name}' "
+                                    f"키워드({_keywords}) 미매칭"
+                                )
+                        except Exception as _ve:
+                            logger.debug(f"[안전자산] 후보 {_cand_sym} 검증 실패: {_ve}")
+                    if not SAFE_VALIDATED:
+                        logger.error(
+                            "[안전자산] 모든 후보 검증 실패 → 자동 운용 영구 비활성 (수동 조사 필요)"
+                        )
+                        return  # loop 종료
 
                 portfolio = bot.engine.portfolio if bot.engine else None
                 if not portfolio:
