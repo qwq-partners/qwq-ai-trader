@@ -73,11 +73,19 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
   - pg_stat_statements 활성화
   - pg_cron 활성화 (매일 02:00 ANALYZE, 일요일 03:00 VACUUM ANALYZE, 일요일 04:00 stat_statements reset)
 - **검증 항목**:
-  - [ ] 테이블 캐시 히트율 82.9% → 95%+ 회복 확인 (`pg_statio_user_tables`)
-  - [ ] pg_stat_statements top10 쿼리 분석 — 평균 실행시간 + 호출 빈도
-  - [ ] 봇 메모리 사용량 변화 (PG 캐시 512MB 증가 → OS 메모리 압박 여부)
-  - [ ] pg_cron 잡 3개 정상 실행 (`cron.job_run_details` last_status='succeeded')
-  - [ ] dead tuple 누적 추세 (autovacuum + 주간 VACUUM 효과)
+  - [x] 테이블 캐시 히트율 82.9% → **84.5%** (미미한 개선, 추가 튜닝 필요 — 아래 추가 조치)
+  - [x] pg_stat_statements top10 쿼리 분석 — 최대 평균 **42.4ms** (1초+ 쿼리 없음 ✅)
+  - [x] 봇 메모리 사용량 — **540MB RSS** (정상, 1GB 미달)
+  - [x] pg_cron 잡 3개 — **실패율 100%** ⚠️ "connection failed" — 5/19 use_background_workers=on 추가 적용
+  - [ ] dead tuple 누적 추세 (다음 주 재확인)
+- **1차 검증 결과 (2026-05-19 cron 05b945cd 발화)**:
+  - 캐시 히트율 84.5% (목표 95% 미달) → shared_buffers 512MB 추가 부족 가능성
+  - pg_stat_statements: 평균 1초+ 쿼리 0건 → **인덱스 보강 불요** ✅
+  - 봇 메모리 정상
+  - pg_cron 100% 실패 → **추가 조치 적용**: cron.use_background_workers=on, max_worker_processes=12, cron.max_running_jobs=8 + PG 재시작 (5/19 10:30 KST)
+- **추가 조치 후 재검증 필요** (다음 주):
+  - 매일 02:00 ANALYZE 잡 실행 성공 확인
+  - shared_buffers 512→1GB 증가 검토 (RAM 27% — 다소 공격적, OOM 모니터링 후 결정)
 - **인덱스 보강 검토** (top10 쿼리 분석 후):
   - 자주 쓰이는 WHERE 컬럼 인덱스 누락 여부
   - 미사용 인덱스 정리 (단 pkey/unique 제외)
