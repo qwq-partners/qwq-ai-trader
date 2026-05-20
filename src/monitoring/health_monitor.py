@@ -135,11 +135,15 @@ class HealthMonitor:
             return CheckResult("ws_feed", "critical", True, "WS 비활성")
 
         # 넥스트장(15:40~20:00): KIS WS 미지원, REST 폴링 전담 → 알람 억제
-        # 장외(CLOSED, 프리장 제외): WS 대기 상태 → 알람 억제
+        # 프리장(08:00~08:50): KRX 단일가, H0NXCNT0 미지원 → WS 비활성, REST 폴링 → 알람 억제
+        # 장외(CLOSED): WS 대기 상태 → 알람 억제
+        # 2026-05-20: 프리장 알람 억제 추가 (사용자 보고 매일 08:30~09:00 5건 알람 정정)
         from src.utils.session import KRSession, MarketSession
         _kr_session = KRSession().get_session()
         if _kr_session == MarketSession.NEXT:
             return CheckResult("ws_feed", "critical", True, "넥스트장 REST 폴링 전담")
+        if _kr_session == MarketSession.PRE_MARKET:
+            return CheckResult("ws_feed", "critical", True, "프리장 REST 폴링 전담 (KIS WS H0NXCNT0 미지원)")
         if _kr_session == MarketSession.CLOSED:
             return CheckResult("ws_feed", "critical", True, "장외 시간 WS 대기 중")
 
