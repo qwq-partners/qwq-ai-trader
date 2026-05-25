@@ -439,12 +439,13 @@ class SupplyTrendDetector:
         if is_accelerating:
             score += 10
 
-        # 2026-05-10 P0-1: 수급 델타(1차 미분) 보너스
-        # today 외국인+기관 net / 직전 5일 평균 → 3배+ 점프 시 폭등 사전징후
-        if delta_ratio >= 5:
-            score += 30  # 폭증 (extreme)
-        elif delta_ratio >= 3:
-            score += 20  # 점프 (strong)
+        # 2026-05-25 P0-1 롤백: 효과 측정 데이터 0건 (21일 한계 도달)
+        # 점수 부여는 비활성화하되 delta_ratio 자체는 indicators_at_entry에 영속화 유지
+        # (향후 점수 체계 재설계 시 데이터 누적용)
+        # ROLLBACK_REASON: 14일간 영속화 진입 0건 + 점수 임계 50점 통과 종목 0건
+        # 원본 (2026-05-10 ~ 2026-05-25):
+        #   if delta_ratio >= 5: score += 30
+        #   elif delta_ratio >= 3: score += 20
 
         return min(score, 100)
 

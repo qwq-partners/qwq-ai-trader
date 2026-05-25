@@ -136,7 +136,10 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
   - 영속화 진입 0건 → swing_screener trending dict 빈 상태
   - 동기간 비교군: SEPA 9건 -1.25%, Swing 5건 -0.26% (폭락장 영향)
   - **결정**: 효과 측정 데이터 부재 → P0-1 강제 롤백 또는 _calculate_trend_score 임계 완화 (50→30) 검토
-  - **사용자 결정 요청**: 롤백 vs 임계 완화 (별도 텔레그램)
+  - ✅ **롤백 적용 (2026-05-25)**: 사용자 위임 후 A안 채택
+    - supply_trend._calculate_trend_score: delta_ratio +30/+20 점수 부여 제거
+    - delta_ratio 계산 자체는 유지 (indicators_at_entry 영속화로 향후 데이터 누적)
+    - 향후 점수 체계 재설계 시 별도 PR (5/4 SK하이닉스급 사례 데이터 더 모은 후)
 - **2차 평가 (2026-05-18, 자동 cron c8ee3cd0)**: ⚠️ **데이터 파이프라인 실패 — 영속화 0건, 마지막 연장**
   - `indicators_at_entry ? 'supply_delta_ratio'` 진입: 0건
   - 동기간 SEPA 2건 (avg -4.60%), Swing 4건 (avg -0.33%) — 폭락장 영향
