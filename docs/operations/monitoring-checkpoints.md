@@ -130,6 +130,13 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
   - supply_trend reasons는 메모리에서만 사용되고 영속화 안 됨 → 효과 측정 트레이스 없음
   - 보강 PR: a39ac20 — swing_screener+kr_scheduler에 supply_delta_ratio 영속화 추가
   - 재평가 예정: 2026-05-18 (계측 보강 + 7일 데이터 축적 후)
+- **3차 평가 (2026-05-25, 자동 cron b10426bf)**: ❌ **21일 한계 도달 — 영속화 0건, 롤백 필요**
+  - 캐시 파일 4개 생성 (5/18, 5/19, 5/20, 5/22) — 모두 `[]` 빈 배열
+  - SupplyTrendDetector 실행됐으나 **점수 50+ 통과 종목 0건**
+  - 영속화 진입 0건 → swing_screener trending dict 빈 상태
+  - 동기간 비교군: SEPA 9건 -1.25%, Swing 5건 -0.26% (폭락장 영향)
+  - **결정**: 효과 측정 데이터 부재 → P0-1 강제 롤백 또는 _calculate_trend_score 임계 완화 (50→30) 검토
+  - **사용자 결정 요청**: 롤백 vs 임계 완화 (별도 텔레그램)
 - **2차 평가 (2026-05-18, 자동 cron c8ee3cd0)**: ⚠️ **데이터 파이프라인 실패 — 영속화 0건, 마지막 연장**
   - `indicators_at_entry ? 'supply_delta_ratio'` 진입: 0건
   - 동기간 SEPA 2건 (avg -4.60%), Swing 4건 (avg -0.33%) — 폭락장 영향
