@@ -86,6 +86,24 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
 - **추가 조치 후 재검증 필요** (다음 주):
   - 매일 02:00 ANALYZE 잡 실행 성공 확인
   - shared_buffers 512→1GB 증가 검토 (RAM 27% — 다소 공격적, OOM 모니터링 후 결정)
+- **2차 검증 (2026-05-26, 자동 cron 650004db)**:
+  - pg_cron 7일 결과:
+    - jobid 4 (analyze-large-tables): **7회 succeeded ✅** (매일 02:00 정상)
+    - jobid 5 (weekly-vacuum): **1회 failed** — "VACUUM cannot be executed from a function"
+    - jobid 6 (reset-stat-statements): 1회 succeeded ✅
+  - 캐시 히트율 **77.7%** ⚠️ (5/19 84.5% → -6.8%p 악화) — 데이터 누적 + shared_buffers 부족
+  - 인덱스 캐시 99.4% (정상)
+  - 봇 메모리 RSS 611MB (1GB 미달, 정상)
+- **2차 조치 (2026-05-26)**:
+  - weekly-vacuum 잡 삭제 → **weekly-analyze-all** 신규 등록 (VACUUM 제외, ANALYZE만)
+    - 이유: pg_cron background worker가 VACUUM을 함수 내 실행 못 함
+    - 대안: autovacuum이 VACUUM 자동 처리 + 일요일 ANALYZE만 명시
+  - **shared_buffers 512MB → 1GB 증가** (RAM 3.7GB의 27%)
+  - PG 재시작, 봇 active 유지 ✅
+- **3차 검증 필요** (1주 후, 2026-06-02):
+  - 캐시 히트율 1GB로 90%+ 회복 여부
+  - OS 메모리 압박 여부 (free 명령 확인)
+  - pg_cron 잡 4개 모두 succeeded 확인 (analyze-large + weekly-analyze + reset-stat-statements)
 - **인덱스 보강 검토** (top10 쿼리 분석 후):
   - 자주 쓰이는 WHERE 컬럼 인덱스 누락 여부
   - 미사용 인덱스 정리 (단 pkey/unique 제외)
