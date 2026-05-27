@@ -315,21 +315,37 @@ class DailyReviewer:
         없으면 daily_stats.json의 total_equity, 둘 다 없으면 25,000,000원 폴백.
         2026-05-14: 거래 단위 pnl_pct vs 자본 단위 pnl_pct 구분용.
         """
-        try:
-            cap = float(os.getenv("INITIAL_CAPITAL", "0") or 0)
-            if cap > 0:
-                return cap
-        except (TypeError, ValueError):
-            pass
+        # 2026-05-27 폴백 순서 정정: 실제 운용 total_equity 우선, INITIAL_CAPITAL env는 보조
+        # 사고: INITIAL_CAPITAL=500000(기본값)으로 자본률 171% 과장 표시
+        # 정정: 봇 실제 운용 자본(daily_stats.total_equity 또는 dashboard API)을 1차 사용
         try:
             stats_path = Path(os.path.expanduser("~/.cache/ai_trader/daily_stats.json"))
             if stats_path.exists():
                 data = json.loads(stats_path.read_text(encoding="utf-8"))
-                eq = float(data.get("total_equity") or 0)
-                if eq > 0:
+                # peak_equity (실제 운용 자본 추적) 또는 total_equity
+                eq = float(data.get("peak_equity") or data.get("total_equity") or 0)
+                if eq > 1_000_000:
                     return eq
         except Exception:
             pass
+        # 보조: dashboard API (live engine 값)
+        try:
+            import urllib.request
+            with urllib.request.urlopen("http://localhost:8080/api/portfolio", timeout=2) as resp:
+                pf = json.loads(resp.read())
+                eq = float(pf.get("initial_capital") or pf.get("total_equity") or 0)
+                if eq > 1_000_000:
+                    return eq
+        except Exception:
+            pass
+        # 보조: env (단 100만원 이상 합리적인 값만 신뢰)
+        try:
+            cap = float(os.getenv("INITIAL_CAPITAL", "0") or 0)
+            if cap > 1_000_000:
+                return cap
+        except (TypeError, ValueError):
+            pass
+        # 최후 폴백
         return 25_000_000.0  # 폴백 (KR 기본 자본)
 
     def _calculate_summary(self, trades: List[TradeRecord]) -> Dict[str, Any]:
