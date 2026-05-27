@@ -69,14 +69,16 @@ class TradeRecord:
 
     @property
     def is_sync(self) -> bool:
-        """동기화/복구 기반 포지션 여부 (전략 의사결정 없는 정합성 이벤트)"""
+        """동기화/복구 기반 포지션 여부 (전략 의사결정 없는 정합성 이벤트)
+
+        2026-05-27 정정: 진입 sync + 청산 봇 운용 케이스를 정상 거래로 분류
+        - 사고: KT 030200 (id=KIS_SYNC_..., exit_type=stop_loss) 손절 -33만원이
+          일일 리뷰 sync_events로 잘못 분류되어 손익 856k(4건)로 +311k 과장 표시
+        - 수정: 청산 타입이 sync 계열일 때만 sync로 분류 (id/entry_reason 기준 제거)
+          → 진입은 KIS sync여도 청산이 봇 정상 운용(stop_loss/trailing/take_profit)이면 정상 거래
+        """
         _sync_exit_types = ("kis_sync", "sync_reconcile", "sync_closed", "sync_partial")
-        return (
-            self.entry_reason == "sync_detected"
-            or self.id.startswith("SYNC_")
-            or self.id.startswith("KIS_SYNC_")
-            or (self.exit_type or "") in _sync_exit_types
-        )
+        return (self.exit_type or "") in _sync_exit_types
 
     @property
     def is_closed(self) -> bool:
