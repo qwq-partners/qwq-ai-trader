@@ -301,6 +301,18 @@ class CrossStrategyValidator:
             )
             return False, 0, f"체제 부적합: 약세장에서 {strategy} 차단"
 
+        # === 규칙 3-2 (2026-05-28 P1-A): caution에서도 gap_and_go 차단 ===
+        # 5/28 사고: 09:53 caution 해제 직후 gap_and_go 3건 동시 진입 → 2건 손절(-357k)
+        # 변동성 큰 시점에 단기 모멘텀 진입은 트랩 빈번 → caution에서도 차단
+        if (self._market == "KR"
+                and market_regime == "caution"
+                and strategy == "gap_and_go"):
+            self._stats["blocked"] += 1
+            logger.info(
+                f"[크로스검증] {symbol} 차단: 주의장 + gap_and_go (변동성 회피)"
+            )
+            return False, 0, "체제 부적합: 주의장에서 gap_and_go 차단"
+
         # === 규칙 4: 동일 섹터 과집중 ===
         sector = metadata.get("sector")
         if sector and self._portfolio:

@@ -725,6 +725,7 @@ class KRScheduler:
                 logger.debug(f"[LLM레짐] KOSPI 데이터 조회 실패: {e}")
 
             # 4. Gemini Flash 레짐 분류 요청
+            # 2026-05-28 P2-D: KR 5일/20일 기술적 우선 명시 (5/28 사고 후 강화)
             llm = get_llm_manager()
             prompt = f"""오늘 한국 주식시장 레짐 분류 (KST {label} 기준)
 
@@ -733,14 +734,20 @@ class KRScheduler:
 - 반도체ETF(SOX): {sox_pct:+.2f}%
 - VIX: {vix:.1f}
 
-[KOSPI 최근]
+[KOSPI 최근 ★ 최우선 판단 근거]
 - 5일 변화율: {c5:+.1f}%  20일: {c20:+.1f}%
 
 [전날 운영 결과]
 - LLM 평가: {assessment}  교훈: {top_lesson}
 
+★ 판단 우선순위 (반드시 준수):
+1. KOSPI 5일/20일이 약세(c5 ≤ -3% OR c20 ≤ -5%)이면 미장이 강세여도 **trending_bear 또는 turning_point**로 판단
+2. KOSPI c5 ≤ -1.5%이면 **turning_point 또는 ranging** (절대 trending_bull 금지)
+3. 미장 상승이 한국 약세를 뒤집지 못함 — 5/28 사고 사례에서 미장 강세에도 KR 약세 지속
+4. **trending_bull은 KOSPI c5 ≥ +1% AND c20 ≥ 0%일 때만** (둘 다 만족)
+
 아래 JSON으로 오늘 시장 성격을 판단하세요:
-{{"regime": "trending_bull | ranging | trending_bear | turning_point", "lead_strategy": "sepa | rsi2 | balanced", "sepa_min_score_today": 65, "rsi2_min_score_today": 60, "entry_start_time": "09:01", "confidence": 0.75, "reasoning": "한 줄 요약"}}"""
+{{"regime": "trending_bull | ranging | trending_bear | turning_point", "lead_strategy": "sepa | rsi2 | balanced", "sepa_min_score_today": 65, "rsi2_min_score_today": 60, "entry_start_time": "09:01", "confidence": 0.75, "reasoning": "한 줄 요약 (KOSPI c5/c20 수치 반드시 포함)"}}"""
 
             result = await asyncio.wait_for(
                 llm.complete_json(

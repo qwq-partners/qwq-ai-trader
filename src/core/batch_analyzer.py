@@ -156,6 +156,9 @@ class BatchAnalyzer:
         # "normal" | "caution" | "crash" | "severe"
         self._intraday_state: str = "normal"
         self._intraday_kospi_pct: float = 0.0
+        # 2026-05-28 P1-B: caution → normal 전환 직후 5분 cooldown
+        # 5/28 사고: 09:53 잠시 normal 회복 → gap_and_go 3건 진입 → 즉시 손절
+        self._intraday_recovery_until: Optional[datetime] = None
 
         # 복합 트레일링용 캐시 (MA5, 전일저가)
         self._ma5_cache: Dict[str, float] = {}
@@ -867,6 +870,15 @@ class BatchAnalyzer:
             logger.warning(f"[배치분석] 프리장 재검증 실패 (원본 유지): {e}")
 
         # ── 장중 급락 게이트 ───────────────────────────────────────────────
+        # 2026-05-28 P1-B: caution/crash 해제 직후 5분 cooldown 차단
+        if self._intraday_recovery_until and datetime.now() < self._intraday_recovery_until:
+            _remain = (self._intraday_recovery_until - datetime.now()).total_seconds()
+            logger.warning(
+                f"[장중급락] 회복 직후 cooldown: 신규 진입 {_remain:.0f}초 차단 "
+                f"({len(signals)}개 시그널 대기)"
+            )
+            return
+
         # severe: 신규 진입 전면 차단
         if self._intraday_state == "severe":
             logger.warning(
@@ -1240,6 +1252,81 @@ class BatchAnalyzer:
             self._ma5_cache.setdefault(symbol, None)
             logger.debug(f"[포지션모니터] {symbol} 복합캐시 즉시 갱신 실패 (재시도 방지): {e}")
 
+    async def _preemptive_stale_exit_on_bear(self) -> None:
+        """P2-C (2026-05-28): 약세장 진입 시 5일+ 보유 stale 종목 선제 청산
+
+        조건:
+        - 시장 normal → crash/severe 전환 직후
+        - 보유 5영업일 이상 + 미실현 +1% 미만 (이미 추세 상실 종목)
+        - 코어홀딩 제외 (별도 정책)
+        - sepa/swing/rsi2/gap_and_go 대상
+
+        목적: -5% stop_loss까지 가지 않고 본전 부근에서 빠져나가기
+        """
+        from ..core.types import StrategyType, OrderSide, SignalEvent, Signal, SignalStrength
+        from datetime import date as _date
+        try:
+            from ..utils.session import is_kr_market_holiday
+        except Exception:
+            is_kr_market_holiday = lambda d: False
+
+        portfolio = self._engine.portfolio
+        if not portfolio or not portfolio.positions:
+            return
+
+        today = _date.today()
+        candidates = []
+        for symbol, pos in portfolio.positions.items():
+            # 코어홀딩 제외
+            if pos.strategy == "core_holding":
+                continue
+            entry_t = getattr(pos, "entry_time", None)
+            if entry_t is None:
+                continue
+            entry_d = entry_t.date() if hasattr(entry_t, "date") else entry_t
+            # 영업일 계산
+            biz_days = sum(
+                1 for i in range(0, (today - entry_d).days)
+                if (entry_d + timedelta(days=i+1)).weekday() < 5
+                and not is_kr_market_holiday(entry_d + timedelta(days=i+1))
+            )
+            if biz_days < 5:
+                continue
+            # 미실현 수익률 +1% 미만 (정체 종목)
+            pnl_pct = float(getattr(pos, "unrealized_pnl_pct", 0) or 0)
+            if pnl_pct >= 1.0:
+                continue  # 수익 구간이면 trailing에 위임
+            candidates.append((symbol, pos, biz_days, pnl_pct))
+
+        if not candidates:
+            return
+
+        logger.warning(
+            f"[장중급락] 🚨 P2-C 선제 stale 청산: {len(candidates)}개 종목 "
+            f"(5영업일+ 보유 + 미실현 < +1%)"
+        )
+        for symbol, pos, biz_days, pnl_pct in candidates:
+            try:
+                signal = Signal(
+                    symbol=symbol,
+                    side=OrderSide.SELL,
+                    strength=SignalStrength.STRONG,
+                    strategy=StrategyType(pos.strategy) if pos.strategy in {e.value for e in StrategyType} else StrategyType.SEPA_TREND,
+                    price=Decimal(str(pos.current_price or pos.avg_price)),
+                    score=100.0,
+                    confidence=1.0,
+                    reason=f"P2-C 선제 stale 청산: {biz_days}일 보유, PnL {pnl_pct:+.1f}%, 약세장 진입",
+                    metadata={"source": "preemptive_stale_bear", "quantity": pos.quantity},
+                )
+                event = SignalEvent.from_signal(signal, source="preemptive_stale_bear")
+                await self._engine.emit(event)
+                logger.info(
+                    f"[장중급락] {symbol} 선제 청산 시그널: "
+                    f"{biz_days}영업일 보유 / 미실현 {pnl_pct:+.1f}%"
+                )
+            except Exception as e:
+                logger.warning(f"[장중급락] {symbol} 선제 청산 발행 실패: {e}")
+
     async def update_intraday_state(self, kospi_pct: float) -> str:
         """KOSPI 당일 등락률 기반 장중 급락 상태 업데이트.
 
@@ -1266,15 +1353,34 @@ class BatchAnalyzer:
         self._intraday_state = new_state
         self._intraday_kospi_pct = kospi_pct
 
+        # 2026-05-28 P2-C: 약세장(crash/severe) 진입 시 stale 종목 선제 청산
+        # 5/28 사고: 셀트리온 6일 보유 → 약세장 진입 시 -5% 손절(-289k)
+        # 가설: 5일+ 보유 + 약세 진입 = 추세 상실, 선제 청산이 stop_loss보다 유리
+        if (new_state in ("crash", "severe") and prev_state == "normal"):
+            try:
+                await self._preemptive_stale_exit_on_bear()
+            except Exception as _ps_err:
+                logger.warning(f"[장중급락] 선제 stale 청산 실패: {_ps_err}")
+
         if new_state != prev_state:
             if new_state == "normal":
                 # 급락 해제 → 레짐 파라미터 복원
                 if self._exit_manager:
                     self._exit_manager.recover_from_intraday_crash()
-                logger.info(
-                    f"[장중급락] 해제: KOSPI {kospi_pct:+.2f}% "
-                    f"({prev_state} → normal) — 레짐 파라미터 복원"
-                )
+                # 2026-05-28 P1-B: caution+/crash+/severe → normal 회복 시 5분 cooldown
+                # 5/28 09:53 트랩 방지: 잠깐 회복 후 즉시 진입 → 트랩 패턴 차단
+                if prev_state in ("caution", "crash", "severe"):
+                    self._intraday_recovery_until = datetime.now() + timedelta(minutes=5)
+                    logger.info(
+                        f"[장중급락] 해제 + 5분 cooldown: KOSPI {kospi_pct:+.2f}% "
+                        f"({prev_state} → normal) — 신규 진입 5분 차단 "
+                        f"(재진입 가능: {self._intraday_recovery_until.strftime('%H:%M:%S')})"
+                    )
+                else:
+                    logger.info(
+                        f"[장중급락] 해제: KOSPI {kospi_pct:+.2f}% "
+                        f"({prev_state} → normal) — 레짐 파라미터 복원"
+                    )
             else:
                 # 급락 심화 또는 신규 진입
                 if self._exit_manager:
