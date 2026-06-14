@@ -187,7 +187,249 @@ class KRScheduler:
                 self.run_manual_buy_orders(), name="kr_manual_buy"
             ))
 
+        # 2026-05-29 추가: 전문가 시스템 (7명) 정기 브리핑
+        if getattr(self.bot, "expert_orchestrator", None):
+            tasks.append(asyncio.create_task(
+                self.run_expert_briefing(), name="kr_expert_briefing"
+            ))
+
         return tasks
+
+    # ============================================================
+    # 전문가 시스템 브리핑 (2026-05-29 추가)
+    # ============================================================
+    async def run_expert_briefing(self):
+        """8명 전문가 정기 호출 — 5개 슬롯
+
+        평일: 07:30 장전 / 13:00 장중 / 16:30 장후
+        주말/월요일 전: 일요일 22:00 sunday_evening / 월요일 06:00 monday_premarket
+          → 갭 risk 캐치 (weekend_signal_expert 활용)
+
+        2026-05-29 추가: 첫 거래일 모니터링용 텔레그램 브리핑 전송.
+        2026-06-07 추가: weekend/monday 슬롯 + BEAR 임계 완화 (주말 데이터 적음).
+        """
+        import asyncio as _aio
+        from datetime import datetime as _dt
+        logger.info("[전문가] 브리핑 스케줄러 시작 (5개 슬롯)")
+        ran_today = set()
+        slots = {
+            "morning": "07:30",            # 평일
+            "midday": "13:00",             # 평일
+            "after": "16:30",              # 평일
+            "sunday_evening": "22:00",     # 일요일만
+            "monday_premarket": "06:00",   # 월요일만
+        }
+        slot_labels = {
+            "morning": "🌅 장전",
+            "midday": "☀️ 장중",
+            "after": "🌙 장후",
+            "sunday_evening": "🌃 일요일 야간 갭 점검",
+            "monday_premarket": "🌄 월요일 개장 전 갭 risk",
+        }
+        # 주말 슬롯 한정: BEAR 합의 임계 완화 (데이터 적어 신뢰도 자연 낮음)
+        # — confidence ≥0.6, BEAR 1명 이상이면 합의 인정
+        relaxed_slots = {"sunday_evening", "monday_premarket"}
+        # 슬롯 발화 요일 가드 (0=월, 6=일)
+        slot_weekday_filter = {
+            "morning": {0, 1, 2, 3, 4},
+            "midday": {0, 1, 2, 3, 4},
+            "after": {0, 1, 2, 3, 4},
+            "sunday_evening": {6},
+            "monday_premarket": {0},
+        }
+        while True:
+            try:
+                _now_dt = _dt.now()
+                now = _now_dt.strftime("%H:%M")
+                today = _now_dt.date().isoformat()
+                weekday = _now_dt.weekday()
+                for slot_name, slot_time in slots.items():
+                    key = f"{today}_{slot_name}"
+                    if key in ran_today:
+                        continue
+                    if weekday not in slot_weekday_filter[slot_name]:
+                        continue
+                    if now >= slot_time and now < slot_time[:2] + ":59":
+                        logger.info(f"[전문가] {slot_name} 브리핑 시작 ({slot_time})")
+                        try:
+                            orch = self.bot.expert_orchestrator
+                            ops = await orch.run_all(force=True)
+                            bull = sum(1 for o in ops.values() if o.regime_bias.value == "bull")
+                            bear = sum(1 for o in ops.values() if o.regime_bias.value == "bear")
+                            agg = orch.aggregate_regime_score(ops)
+                            bias = orch.aggregate_bias(ops).value
+                            if slot_name in relaxed_slots:
+                                bear_consensus = orch.bear_consensus(
+                                    threshold_confidence=0.6, min_count=1,
+                                    opinions=ops,
+                                )
+                            else:
+                                bear_consensus = orch.bear_consensus(opinions=ops)
+                            logger.info(
+                                f"[전문가] {slot_name}: 총 {len(ops)}명, "
+                                f"bull={bull}, bear={bear}, "
+                                f"aggregate={agg:+d}, bear_consensus={bear_consensus}"
+                            )
+
+                            # 텔레그램 브리핑 전송
+                            # morning + 주말/월요일 슬롯은 채널, 평일 midday/after는 DM
+                            use_channel = slot_name in (
+                                "morning", "sunday_evening", "monday_premarket"
+                            )
+                            await self._send_expert_briefing_telegram(
+                                slot_labels[slot_name], ops, agg, bias, bear_consensus,
+                                use_report_channel=use_channel,
+                            )
+                        except Exception as e:
+                            logger.warning(f"[전문가] {slot_name} 브리핑 실패: {e}")
+                        ran_today.add(key)
+                if len(ran_today) > 10:
+                    ran_today = {k for k in ran_today if k.startswith(today)}
+                await _aio.sleep(60)
+            except Exception as e:
+                logger.error(f"[전문가] 스케줄러 오류: {e}")
+                await _aio.sleep(60)
+
+    async def _send_expert_briefing_telegram(
+        self, label: str, ops: dict, agg: int, bias: str, bear_consensus: bool,
+        use_report_channel: bool = False,
+    ):
+        """전문가 브리핑 텔레그램 전송
+
+        use_report_channel=True → LLM 모닝브리프 채널(report_chat_id)로 발송
+        use_report_channel=False → 기본 채널(chat_id, DM)
+        """
+        try:
+            from src.utils.telegram import get_telegram_notifier
+            notifier = get_telegram_notifier()
+            if not notifier:
+                return
+
+            order = (
+                "weekend_signal_expert",   # 갭 risk 먼저 (가장 시급)
+                "macro_economist", "kr_market_expert", "us_market_expert",
+                "kr_economy_expert", "global_micro_expert",
+                "news_curator", "earnings_expert",
+            )
+            short_name_map = {
+                "macro_economist": "거시",
+                "kr_market_expert": "KR시장",
+                "us_market_expert": "US시장",
+                "kr_economy_expert": "한국경제",
+                "global_micro_expert": "글로벌",
+                "news_curator": "뉴스",
+                "earnings_expert": "실적",
+                "weekend_signal_expert": "갭risk",
+            }
+            # 카테고리별 카운트
+            bull_n = sum(1 for o in ops.values() if o.is_valid and o.regime_bias.value == "bull")
+            neut_n = sum(1 for o in ops.values() if o.is_valid and o.regime_bias.value == "neutral")
+            bear_n = sum(1 for o in ops.values() if o.is_valid and o.regime_bias.value == "bear")
+            valid_n = bull_n + neut_n + bear_n
+
+            # 종합 score 해석
+            if agg >= 15:
+                agg_label = "🟢 강세 우위"
+            elif agg >= 5:
+                agg_label = "🟢 약상승"
+            elif agg <= -15:
+                agg_label = "🔴 약세 우위"
+            elif agg <= -5:
+                agg_label = "🔴 약하락"
+            else:
+                agg_label = "⚪ 중립"
+
+            lines = [
+                f"🧠 <b>{label} 전문가 브리핑</b>",
+                f"━━━━━━━━━━━━━━━",
+                f"<b>종합 bias</b>: {bias.upper()} {agg_label}",
+                f"<b>체제 보정</b>: score={agg:+d} (-30~+30 스케일, market_regime 반영)",
+                f"<b>분포</b>: 🟢{bull_n} ⚪{neut_n} 🔴{bear_n} (총 {valid_n}명)",
+                f"<b>BEAR 합의</b>: {'⚠️ YES (BUY 차단)' if bear_consensus else '✓ NO (정상매매)'}",
+                f"<i>※ 합의 기준: 신뢰도 ≥70%인 BEAR 의견 2명 이상</i>",
+                "",
+                f"━━━━━━━━━━━━━━━",
+                f"<b>전문가별 의견</b>",
+                f"<i>※ 신뢰도 = 수집된 데이터 충실도 (LLM 자기평가 아님)</i>",
+                "",
+            ]
+            for name in order:
+                op = ops.get(name)
+                if op is None or not op.is_valid:
+                    continue
+                emoji = "🟢" if op.regime_bias.value == "bull" else ("🔴" if op.regime_bias.value == "bear" else "⚪")
+                short_name = short_name_map.get(name, name)
+                # 시장체제 전문가만 종합 score에 반영되는 점 표시
+                in_aggregate = name in (
+                    "macro_economist", "kr_market_expert", "us_market_expert",
+                    "kr_economy_expert", "global_micro_expert",
+                    "weekend_signal_expert",
+                )
+                tag = "" if in_aggregate else " <i>(종합 미반영)</i>"
+                lines.append(
+                    f"{emoji} <b>{short_name}</b>: {op.score:+d} · 신뢰도 {op.confidence:.0%}{tag}"
+                )
+                # 핵심 발견 1개 (모든 슬롯, 길이 제한)
+                if op.key_findings:
+                    finding = op.key_findings[0]
+                    if len(finding) > 110:
+                        finding = finding[:110] + "..."
+                    lines.append(f"   └ <i>{finding}</i>")
+
+            # 아침 슬롯이면 추가 핵심 발견 (2번째 항목, 브리프형)
+            if use_report_channel:
+                lines.append("")
+                lines.append(f"━━━━━━━━━━━━━━━")
+                lines.append(f"<b>추가 인사이트</b>")
+                for name in order:
+                    op = ops.get(name)
+                    if op is None or not op.is_valid or len(op.key_findings) < 2:
+                        continue
+                    finding = op.key_findings[1]
+                    if len(finding) > 110:
+                        finding = finding[:110] + "..."
+                    lines.append(f"• <i>{short_name_map.get(name, name)}</i>: {finding}")
+
+            msg = "\n".join(lines)
+
+            # 2026-06-05: morning 슬롯이면 LLM 모닝브리프 캐시를 앞에 결합
+            # daily_report.py 07:00이 캐시 저장 → 07:30 여기서 통합 발송
+            if use_report_channel:
+                try:
+                    import json as _json
+                    from pathlib import Path as _Path
+                    cache_path = _Path.home() / ".cache" / "ai_trader" / "llm_morning_brief.json"
+                    if cache_path.exists():
+                        data = _json.loads(cache_path.read_text(encoding="utf-8"))
+                        gen_at = data.get("generated_at", "")
+                        try:
+                            gen_dt = datetime.fromisoformat(gen_at)
+                            age_h = (datetime.now() - gen_dt).total_seconds() / 3600
+                        except (ValueError, TypeError):
+                            age_h = 999
+                        llm_text = data.get("text", "")
+                        if llm_text and age_h < 6:
+                            sep = "\n\n━━━━━━━━━━━━━━━\n\n"
+                            msg = llm_text + sep + msg
+                            logger.info(
+                                f"[전문가] LLM 모닝브리프 결합 (cache age={age_h:.1f}h)"
+                            )
+                        elif llm_text:
+                            logger.warning(
+                                f"[전문가] LLM 모닝브리프 캐시 만료 ({age_h:.1f}h) — 결합 스킵"
+                            )
+                except Exception as cache_err:
+                    logger.warning(f"[전문가] LLM 모닝브리프 결합 실패: {cache_err}")
+
+                ok = await notifier.send_report(msg)
+            else:
+                ok = await notifier.send_message(msg)
+            logger.info(
+                f"[전문가] 텔레그램 전송 "
+                f"{'채널' if use_report_channel else 'DM'}: {'OK' if ok else 'FAIL'}"
+            )
+        except Exception as e:
+            logger.warning(f"[전문가] 텔레그램 전송 실패: {e}")
 
     # ============================================================
     # 헬퍼
@@ -525,20 +767,33 @@ class KRScheduler:
                 bot_symbols = set(portfolio.positions.keys())
 
                 # 유령 포지션 제거 (매도 pending 중인 종목은 보호)
+                # 2026-06-09: 좀비 후보 마킹 또는 30분+ stale pending이면 강제 제거
+                _zombie_candidates = getattr(
+                    bot.engine.risk_manager, "_zombie_candidate_symbols", set()
+                ) if hasattr(bot.engine, "risk_manager") else set()
                 ghost_symbols = bot_symbols - kis_symbols
                 for symbol in ghost_symbols:
-                    # 매도 주문 pending 중이면 KIS 반영 지연일 수 있음 → 스킵
-                    if symbol in bot._exit_pending_symbols:
+                    # 좀비 후보 마킹된 경우 즉시 제거 (KIS 수량초과 N회 누적)
+                    _forced_remove = symbol in _zombie_candidates
+                    if not _forced_remove and symbol in bot._exit_pending_symbols:
                         _pts = bot._exit_pending_timestamps.get(symbol)
                         _elapsed = (datetime.now() - _pts).total_seconds() if _pts else 0
-                        logger.info(
-                            f"[동기화] {symbol} 매도 pending 중 ({_elapsed:.0f}초) → 유령 판정 보류"
-                        )
-                        continue
+                        # 30분+ pending이면 강제 유령 처리 (stale 매도 시도 무한반복 방지)
+                        if _elapsed >= 1800:
+                            logger.warning(
+                                f"[동기화] {symbol} 매도 pending 30분 초과 ({_elapsed:.0f}초) → 강제 유령 정리"
+                            )
+                            _forced_remove = True
+                        else:
+                            logger.info(
+                                f"[동기화] {symbol} 매도 pending 중 ({_elapsed:.0f}초) → 유령 판정 보류"
+                            )
+                            continue
                     pos = portfolio.positions[symbol]
                     logger.warning(
                         f"[동기화] 유령 포지션 제거: {symbol} {pos.name} "
                         f"({pos.quantity}주 @ {pos.avg_price:,.0f}원)"
+                        f"{' [좀비 후보]' if symbol in _zombie_candidates else ''}"
                     )
                     del portfolio.positions[symbol]
                     if bot.exit_manager:
@@ -546,6 +801,13 @@ class KRScheduler:
                     bot._exit_pending_symbols.discard(symbol)
                     bot._exit_pending_timestamps.pop(symbol, None)
                     bot._sell_blocked_symbols.pop(symbol, None)
+                    # 좀비 카운터/마킹 정리
+                    if hasattr(bot.engine, "risk_manager"):
+                        _rm = bot.engine.risk_manager
+                        if hasattr(_rm, "_zombie_candidate_symbols"):
+                            _rm._zombie_candidate_symbols.discard(symbol)
+                        if hasattr(_rm, "_kis_qty_mismatch_count"):
+                            _rm._kis_qty_mismatch_count.pop(symbol, None)
 
                 # 누락 포지션 추가
                 new_symbols = kis_symbols - bot_symbols
@@ -3010,6 +3272,10 @@ JSON:
                             if not hasattr(bot.engine, '_regime_adapter'):
                                 bot.engine._regime_adapter = MarketRegimeAdapter()
                             bot.engine._regime_adapter.update_regime(kospi_data, kosdaq_data)
+                            # 2026-05-29: 전문가 의견으로 체제 보정
+                            _exp_orch = getattr(bot, "expert_orchestrator", None)
+                            if _exp_orch is not None:
+                                bot.engine._regime_adapter.apply_expert_adjustment(_exp_orch)
                             bot.engine._market_regime = bot.engine._regime_adapter.regime
 
                             # 08:50 LLM 장 시작 전 시장 진단 (1회/일)
@@ -3870,11 +4136,33 @@ JSON:
                                     ],
                                     "total_equity": float(getattr(_pf, "total_equity", 0)),
                                 }
-                            await _qv.run_daily_validation(
+                            _qv_result = await _qv.run_daily_validation(
                                 daily_stats=_qv_stats,
                                 cross_validator_stats=_qv_cv,
                                 portfolio_summary=_qv_portfolio,
                             )
+
+                            # 2026-05-29: 전문가 출력 결과 텔레그램 알림
+                            try:
+                                _exp_block = _qv_result.get("expert_output", {})
+                                if isinstance(_exp_block, dict) and _exp_block.get("today_count"):
+                                    from src.utils.telegram import get_telegram_notifier
+                                    _notifier = get_telegram_notifier()
+                                    if _notifier:
+                                        _level = _exp_block.get("level", "ok")
+                                        _emoji = "✅" if _level == "ok" else ("⚠️" if _level == "warning" else "❌")
+                                        _msg = (
+                                            f"{_emoji} 일일 품질검증 — 전문가 시스템\n"
+                                            f"━━━━━━━━━━━━━━━\n"
+                                            f"오늘 발행: {_exp_block.get('today_count')}/7\n"
+                                            f"평균 신뢰도: {_exp_block.get('avg_confidence', 0):.0%}\n"
+                                            f"BULL: {_exp_block.get('bull_count', 0)}명 / "
+                                            f"BEAR: {_exp_block.get('bear_count', 0)}명\n"
+                                            f"주간 발행: {_exp_block.get('weekly_total', 0)}건"
+                                        )
+                                        await _notifier.send_message(_msg)
+                            except Exception as _exp_err:
+                                logger.debug(f"[품질검증] 텔레그램 전송 실패: {_exp_err}")
                         except Exception as _qv_err:
                             logger.warning(f"[품질검증] 실행 실패 (무시): {_qv_err}")
 

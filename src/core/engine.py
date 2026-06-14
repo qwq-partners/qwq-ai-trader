@@ -1063,6 +1063,7 @@ class RiskManager:
             llm_manager=_llm_mgr,
             trade_wiki=self._trade_wiki,
             max_sector_positions=config.max_positions_per_sector,
+            expert_orchestrator=getattr(engine, "expert_orchestrator", None),
         )
 
         # 주문 실패 쿨다운 추적 (종목별)
@@ -1119,6 +1120,12 @@ class RiskManager:
 
         # 매도 시장가 폴백 횟수 추적 (무한 루프 방지, 최대 2회)
         self._pending_fallback_count: Dict[str, int] = {}
+
+        # KIS 잔고 불일치 카운터 (2026-06-09 추가)
+        # "주문 가능한 수량 초과" 에러가 N회+ 발생 시 좀비 후보로 마킹
+        # → portfolio_sync가 강제 유령 정리 + 텔레그램 알람
+        self._kis_qty_mismatch_count: Dict[str, int] = {}
+        self._zombie_candidate_symbols: Set[str] = set()
 
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
@@ -1866,6 +1873,36 @@ class RiskManager:
                 logger.warning(f"[리스크] 주문 제출 실패: {order.symbol} — {order_id}")
                 await self.clear_pending(event.symbol)
                 self.block_symbol(event.symbol)
+
+                # KIS "주문 가능 수량 초과" → 좀비 포지션 의심 (2026-06-09 추가)
+                _err = str(order_id) if order_id else ""
+                if "APBK0400" in _err or "주문 가능한 수량" in _err:
+                    if order.side == OrderSide.SELL:
+                        sym = order.symbol
+                        cnt = self._kis_qty_mismatch_count.get(sym, 0) + 1
+                        self._kis_qty_mismatch_count[sym] = cnt
+                        logger.warning(
+                            f"[좀비감지] {sym} 매도 수량초과 {cnt}회 누적 (KIS 잔고 < 엔진 인식)"
+                        )
+                        if cnt >= 2 and sym not in self._zombie_candidate_symbols:
+                            self._zombie_candidate_symbols.add(sym)
+                            logger.warning(
+                                f"[좀비감지] {sym} 좀비 후보 마킹 — 다음 sync에서 강제 정리"
+                            )
+                            # 텔레그램 알람 (비차단)
+                            try:
+                                from ..utils.telegram import send_alert
+                                _pos = self.engine.portfolio.positions.get(sym)
+                                _name = getattr(_pos, "name", "?") if _pos else "?"
+                                _qty = getattr(_pos, "quantity", "?") if _pos else "?"
+                                asyncio.create_task(send_alert(
+                                    f"⚠️ <b>좀비 포지션 감지</b>\n"
+                                    f"{sym} {_name} (엔진 {_qty}주)\n"
+                                    f"KIS 매도 수량초과 {cnt}회 연속 — 실제 잔고 0주 의심\n"
+                                    f"다음 portfolio_sync에서 자동 제거됩니다"
+                                ))
+                            except Exception:
+                                pass
 
         except Exception as e:
             logger.exception(f"[리스크] 주문 제출 오류: {event.symbol} — {e}")

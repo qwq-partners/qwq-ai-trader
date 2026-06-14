@@ -445,3 +445,33 @@ us:
     order_check_sec: 10
     heartbeat_sec: 300
     default_exchange: NASD
+
+# ============================================================
+# 전문가 시스템 (2026-05-29 추가, 7명)
+# ============================================================
+experts:
+  enabled: true
+  fail_open: true                # 전문가 오류 시 매매 차단 안 함
+  daily_call_budget: 50          # 에이전트당 일일 LLM 호출 상한
+  cache_ttl_hours: 6             # 의견 캐시 유효 시간
+  # Shadow mode: 규칙 #11 BUY 차단을 비활성화하고 로그만 기록.
+  # 1주일 운영 후 ~/.cache/ai_trader/rule11_shadow_log.jsonl 분석으로 hit rate 확인.
+  # 검증 후 false로 전환하여 실제 차단 활성화.
+  shadow_mode: true
+  agents:
+    news_curator: true
+    macro_economist: true
+    kr_market_expert: true
+    us_market_expert: true
+    kr_economy_expert: true
+    global_micro_expert: true
+    earnings_expert: true
+  weights:
+    news_curator: 1.0
+    macro_economist: 1.0
+    kr_market_expert: 1.0
+    us_market_expert: 1.0
+    kr_economy_expert: 0.8
+    global_micro_expert: 0.8
+    earnings_expert: 1.0
+

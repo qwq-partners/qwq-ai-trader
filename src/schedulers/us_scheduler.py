@@ -113,7 +113,55 @@ class USScheduler:
         if hasattr(eng.broker, "get_volume_surge"):
             tasks.append(asyncio.create_task(self.volume_surge_loop(), name="us_vol_surge"))
 
+        # 2026-05-29: 전문가 시스템 (us-market-expert 우선) 정기 호출
+        # US는 KR과 같은 orchestrator 공유 — KR scheduler가 메인 브리핑 담당,
+        # 여기서는 us_market_expert만 ET 장 시작 전 추가 호출
+        if getattr(eng, "expert_orchestrator", None):
+            tasks.append(asyncio.create_task(
+                self.us_expert_loop(), name="us_expert_briefing"
+            ))
+
         return tasks
+
+    # ============================================================
+    # 전문가 시스템 — US 장 사이클 (2026-05-29 추가)
+    # ============================================================
+    async def us_expert_loop(self):
+        """ET 08:30 (장전), 12:30 (장중), 16:30 (장후) us-market-expert 호출"""
+        from datetime import datetime as _dt
+        eng = self.engine
+        orch = getattr(eng, "expert_orchestrator", None)
+        if orch is None:
+            return
+        logger.info("[US전문가] 브리핑 루프 시작")
+        ran = set()
+        # ET가 아닌 KST 기준 (서버가 KST) — ET 08:30 = KST 22:30 (DST: 21:30)
+        slots = {"premarket": "21:30", "midday": "01:30", "post": "06:00"}
+        while True:
+            try:
+                now_hm = _dt.now().strftime("%H:%M")
+                today = _dt.now().date().isoformat()
+                for slot, t in slots.items():
+                    key = f"{today}_{slot}"
+                    if key in ran:
+                        continue
+                    if now_hm >= t and now_hm < t[:2] + ":59":
+                        try:
+                            op = await orch.run_one("us_market_expert", force=True)
+                            if op:
+                                logger.info(
+                                    f"[US전문가] {slot}: {op.regime_bias.value} "
+                                    f"score={op.score:+d} conf={op.confidence:.2f}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"[US전문가] {slot} 실패: {e}")
+                        ran.add(key)
+                if len(ran) > 8:
+                    ran = {k for k in ran if k.startswith(today)}
+                await asyncio.sleep(60)
+            except Exception as e:
+                logger.error(f"[US전문가] 루프 오류: {e}")
+                await asyncio.sleep(60)
 
     # ============================================================
     # 헬퍼: Finviz 프로바이더 접근

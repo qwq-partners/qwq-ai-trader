@@ -26,11 +26,26 @@
 - Always commit and push together unless explicitly told otherwise.
 - `gh auth login` interactive mode does NOT work in this environment.
 
-## 에이전트 팀 (8명)
+## 에이전트 팀 (15명 — 운영 8명 + 전문가 7명)
+
+### 운영·분석 팀 (8명, 기존)
 - 거래 분석: trade-analyst / 시장 분석: market-analyst
 - 전략 조언: strategy-advisor / 엔진 점검: engine-monitor
 - 리스크 감사: risk-auditor / 파라미터 최적화: param-optimizer
 - 코드 리뷰: code-reviewer / 디버깅: debugger
+
+### 도메인 전문가 팀 (7명, 2026-05-29 추가)
+- **news-curator** — 한·미·글로벌 뉴스 sentiment + 이벤트 태그 (30분 주기)
+- **macro-economist** — Fed/금리/환율/원자재 거시 (일 3회)
+- **kr-market-expert** — KOSPI 수급·섹터 로테이션 (일 3회)
+- **us-market-expert** — SPY/QQQ/VIX/섹터 ETF/어닝 (일 3회)
+- **kr-economy-expert** — 한국 거시 (한은/수출입/PF, 일 2회)
+- **global-micro-expert** — 반도체·2차전지·바이오·조선 공급망 (일 2회)
+- **earnings-expert** — 어닝 캘린더·서프라이즈·드리프트 (일 2회)
+
+> 전문가 시스템 상세: `docs/agents/expert-system.md`
+> 코드: `src/experts/` (orchestrator·base·7명 모듈)
+> 출력: `ExpertOpinion` (score/bias/confidence/findings) → market_regime + cross_validator
 
 ## 프로젝트 개요
 - KR+US 통합 트레이딩 엔진 (Full Rewrite)
@@ -63,6 +78,7 @@ UnifiedEngine (단일 엔진)
   │   ├── "kr": MarketContext (KRBroker, KRSession, Portfolio(KRW), ...)
   │   └── "us": MarketContext (USBroker, USSession, Portfolio(USD), ...)
   ├── shared: KISTokenManager, TelegramNotifier, LLMManager
+  ├── expert_orchestrator: 7명 전문가 (2026-05-29~)
   └── dashboard: DashboardServer (포트 8080)
 ```
 

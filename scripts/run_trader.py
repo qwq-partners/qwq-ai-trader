@@ -170,6 +170,9 @@ class UnifiedTradingBot:
         self.health_monitor = None            # HealthMonitor
         self.ws_feed = None                   # KISWebSocketFeed
 
+        # 전문가 시스템 (2026-05-29 추가, 7명)
+        self.expert_orchestrator = None       # src.experts.ExpertOrchestrator
+
         # 대시보드
         self.dashboard = None                 # DashboardServer
 
@@ -586,6 +589,28 @@ class UnifiedTradingBot:
                 market="KR",
             )
 
+            # 8.5 전문가 시스템 초기화 (2026-05-29 추가, 7명)
+            try:
+                from src.experts import ExpertConfig, ExpertOrchestrator
+                expert_cfg = ExpertConfig.from_yaml(
+                    self.config.raw if hasattr(self.config, "raw") else {}
+                )
+                if expert_cfg.enabled:
+                    self.expert_orchestrator = ExpertOrchestrator(
+                        config=expert_cfg,
+                        llm_manager=getattr(self, "llm_manager", None),
+                    )
+                    self.expert_orchestrator.register_all()
+                    n_experts = len(self.expert_orchestrator.agents)
+                    logger.info(
+                        f"[전문가] {n_experts}명 등록 완료 (예산 {expert_cfg.daily_call_budget}회/agent)"
+                    )
+                else:
+                    logger.info("[전문가] 비활성화됨 (config experts.enabled=false)")
+            except Exception as _e:
+                logger.warning(f"[전문가] 초기화 실패 (fail_open): {_e}")
+                self.expert_orchestrator = None
+
             # 9. ExitManager 초기화
             from src.strategies.exit_manager import ExitManager, ExitConfig
             exit_cfg = kr_cfg.get("exit_manager", self.config.get("exit_manager") or {})
@@ -759,6 +784,10 @@ class UnifiedTradingBot:
             # 엔진 이벤트 핸들링용 RiskManager (SIGNAL→ORDER, FILL 추적)
             # 2026-04-23 추가: validator 튜닝 파라미터를 config/default.yml `kr.validator`에서 로드
             _validator_cfg = kr_cfg.get("validator") or self.config.get("validator") or {}
+            # 전문가 시스템을 engine에 사전 부착 (cross_validator init 시 참조)
+            # P2-5: public 속성 (engine.expert_orchestrator)
+            if self.expert_orchestrator is not None:
+                self.engine.expert_orchestrator = self.expert_orchestrator
             engine_risk_manager = RiskManager(
                 self.engine, self.config.trading.risk,
                 risk_validator=self.risk_manager,
@@ -1250,6 +1279,9 @@ class UnifiedTradingBot:
 
             # 번들 저장
             self._us_engine = us_engine
+            # 2026-05-29: 전문가 시스템 공유
+            if self.expert_orchestrator is not None:
+                us_engine.expert_orchestrator = self.expert_orchestrator
 
             # US 컨텍스트 등록
             us_ctx = MarketContext(

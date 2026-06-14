@@ -197,6 +197,76 @@ class MarketRegimeAdapter:
         """체제 반영 포지션 배율"""
         return self.params.get("position_mult_boost", 1.0)
 
+    # ============================================================
+    # 전문가 시스템 보정 (2026-05-29 추가)
+    # ============================================================
+    def apply_expert_adjustment(self, expert_orchestrator) -> None:
+        """ExpertOrchestrator의 집계 점수로 체제를 보정한다.
+
+        - aggregate_regime_score: -30 ~ +30
+        - bear_consensus: confidence≥0.7인 BEAR 2명 이상
+
+        효과:
+        - bear 합의 → bull/sideways → bear 강등 (안전 우선)
+        - 강한 bull 점수 (+20 이상) → sideways → bull 격상 (확인 지연 단축)
+        """
+        if expert_orchestrator is None:
+            return
+        try:
+            score = expert_orchestrator.aggregate_regime_score()
+            bear_consensus = expert_orchestrator.bear_consensus(
+                threshold_confidence=0.7, min_count=2
+            )
+        except Exception as e:
+            logger.debug(f"[시장체제] 전문가 보정 실패: {e}")
+            return
+
+        prev = self._current_regime
+
+        # P1-6 (2026-05-29 리뷰): pending_regime 메커니즘과 통합
+        # 즉시 변경 대신 _expert_pending에 등록하고 확인 시간(기본 10분) 후 적용.
+        # 페이크 BEAR 변동에 의한 잦은 체제 변경 방지.
+        proposed: Optional[str] = None
+        reason: str = ""
+        if bear_consensus and self._current_regime in ("bull", "sideways", "neutral"):
+            proposed = "bear"
+            reason = f"전문가 BEAR 합의 (score={score})"
+        elif score >= 20 and self._current_regime in ("sideways", "neutral"):
+            proposed = "bull"
+            reason = f"전문가 BULL 강한 합의 (score={score})"
+        elif score <= -20 and self._current_regime in ("bull", "sideways"):
+            proposed = "sideways"
+            reason = f"전문가 BEAR (score={score})"
+        elif score >= 10 and not bear_consensus and self._current_regime == "bear":
+            proposed = "sideways"
+            reason = f"전문가 BEAR 합의 해소 (score={score})"
+
+        EXPERT_CONFIRM_SEC = 600  # 10분 — VIX의 confirm_delay와 통일
+        if proposed is None:
+            # 변경 없음 → pending 클리어
+            if hasattr(self, "_expert_pending"):
+                self._expert_pending = None
+        elif (
+            not hasattr(self, "_expert_pending")
+            or self._expert_pending != proposed
+        ):
+            # 새 제안 → pending 등록만, 즉시 변경 안 함
+            self._expert_pending = proposed
+            self._expert_pending_since = datetime.now()
+            logger.info(
+                f"[시장체제] 전문가 제안: {prev} → {proposed} ({reason}, 확인 대기 10분)"
+            )
+        elif (
+            datetime.now() - self._expert_pending_since
+        ).total_seconds() >= EXPERT_CONFIRM_SEC:
+            self._current_regime = proposed
+            logger.info(f"[시장체제] 전문가 보정 확정: {prev} → {proposed} ({reason})")
+            self._expert_pending = None
+
+        # 디버그 흔적
+        self._regime_data["expert_score"] = score
+        self._regime_data["expert_bear_consensus"] = bear_consensus
+
     def get_summary(self) -> Dict:
         """현재 체제 요약"""
         return {
