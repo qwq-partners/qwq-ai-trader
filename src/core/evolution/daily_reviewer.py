@@ -638,6 +638,33 @@ class DailyReviewer:
         except Exception as _cfg_err:
             lines.append(f"- (설정 로드 실패: {_cfg_err})")
 
+        # 전문가 의견 (2026-05-29 추가 — 7명 전문가 시스템)
+        try:
+            from src.experts.opinion_store import load_all_today
+            ops = load_all_today()
+            if ops:
+                lines.extend(["", "## 오늘 전문가 의견 (참고)"])
+                for name in (
+                    "macro_economist", "kr_market_expert", "us_market_expert",
+                    "kr_economy_expert", "global_micro_expert",
+                    "news_curator", "earnings_expert",
+                ):
+                    op = ops.get(name)
+                    if op is None or not op.is_valid:
+                        continue
+                    findings = "; ".join(op.key_findings[:3])
+                    lines.append(
+                        f"- **{name}**: {op.regime_bias.value}, "
+                        f"score={op.score:+d}, conf={op.confidence:.2f} — {findings[:200]}"
+                    )
+                lines.append("")
+                lines.append(
+                    "→ 위 전문가 의견과 거래 결과를 대조하여, "
+                    "전문가가 경고했는데도 진입한 거래/전문가 합의를 활용한 거래를 함께 평가하세요."
+                )
+        except Exception as _exp_err:
+            lines.append(f"- (전문가 의견 로드 실패: {_exp_err})")
+
         # 응답 형식 안내
         lines.extend([
             "",

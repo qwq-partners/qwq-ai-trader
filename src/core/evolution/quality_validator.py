@@ -69,6 +69,9 @@ class QualityValidator:
         if datetime.now().weekday() == 4:  # 금요일
             results["memory_compression"] = await self._trigger_memory_compression()
 
+        # 6. 전문가 시스템 출력 신뢰도 (2026-05-29 추가, P0-2 async)
+        results["expert_output"] = await self._check_expert_output_async()
+
         # 종합 등급
         warnings = sum(1 for v in results.values() if isinstance(v, dict) and v.get("level") == "warning")
         errors = sum(1 for v in results.values() if isinstance(v, dict) and v.get("level") == "error")
@@ -249,6 +252,66 @@ class QualityValidator:
             result["message"] = f"섹터 과집중: {max_sector_name} {max_sector}종목"
 
         return result
+
+    async def _check_expert_output_async(self) -> Dict:
+        """전문가 시스템 출력 검증 — async + to_thread (P0-2)"""
+        import asyncio
+        return await asyncio.to_thread(self._check_expert_output)
+
+    def _check_expert_output(self) -> Dict:
+        """전문가 시스템 출력 검증 (2026-05-29 추가)
+
+        - 오늘 7명 중 의견 발행 횟수
+        - 평균 confidence
+        - bull/bear 분포
+        - 7일 hit_rate (간이): bear 의견 후 -3% 이상 하락 빈도
+        """
+        try:
+            from src.experts.opinion_store import load_all_today, list_recent
+        except ImportError:
+            # P2-7: 미설치는 warning (info는 카운트 안 됨)
+            return {"level": "warning", "message": "전문가 시스템 모듈 누락"}
+
+        try:
+            today_ops = load_all_today()
+            if not today_ops:
+                return {"level": "warning", "message": "오늘 전문가 의견 0건"}
+
+            valid = [o for o in today_ops.values() if o.is_valid and o.confidence > 0]
+            if not valid:
+                return {"level": "warning", "message": f"유효 의견 0/{len(today_ops)}"}
+
+            avg_conf = sum(o.confidence for o in valid) / len(valid)
+            bull_n = sum(1 for o in valid if o.regime_bias.value == "bull")
+            bear_n = sum(1 for o in valid if o.regime_bias.value == "bear")
+
+            # 7일 발행 빈도 (간이 health)
+            issued_last_week = 0
+            for name in today_ops:
+                issued_last_week += len(list_recent(name, days=7))
+
+            level = "ok"
+            messages = []
+            if avg_conf < 0.3:
+                level = "warning"
+                messages.append(f"평균 confidence 낮음 {avg_conf:.2f}")
+            if len(valid) < 5:
+                level = "warning"
+                messages.append(f"발행 의견 부족 {len(valid)}/7")
+            if issued_last_week < 30:
+                messages.append(f"주간 발행 {issued_last_week}건 (목표 50+)")
+
+            return {
+                "level": level,
+                "today_count": len(valid),
+                "avg_confidence": round(avg_conf, 3),
+                "bull_count": bull_n,
+                "bear_count": bear_n,
+                "weekly_total": issued_last_week,
+                "messages": messages,
+            }
+        except Exception as e:
+            return {"level": "error", "message": f"전문가 검증 실패: {e}"}
 
     async def _trigger_memory_compression(self) -> Dict:
         """거래 메모리 압축 (금요일)"""

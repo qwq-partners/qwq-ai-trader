@@ -1030,8 +1030,10 @@ class DailyReportGenerator:
                 else:
                     logger.error("[레포트] 미국증시 레포트 발송 실패")
 
-            # ── 3) LLM 증권사 모닝브리프 (2026-05-13 추가) ───────────────
-            # 통합 차트/텍스트 후 LLM 분석 추가 발송 — 시장 분위기, 한국 투자 시사점
+            # ── 3) LLM 증권사 모닝브리프 (2026-05-13 추가, 2026-06-05 캐시화) ─
+            # 2026-06-05: 별도 발송 중단 → 캐시 파일에 저장.
+            # 07:30 전문가 브리핑(_send_expert_briefing_telegram)이 캐시를 읽어
+            # 하나의 통합 메시지로 발송한다.
             try:
                 llm_brief = await self._generate_llm_market_brief(
                     quotes=quotes,
@@ -1041,10 +1043,21 @@ class DailyReportGenerator:
                     mood=mood,
                 )
                 if llm_brief:
-                    await self.telegram.send_report(llm_brief)
-                    logger.info("[레포트] LLM 모닝브리프 발송 완료")
+                    import json as _json
+                    from pathlib import Path as _Path
+                    cache_path = _Path.home() / ".cache" / "ai_trader" / "llm_morning_brief.json"
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_text(
+                        _json.dumps({
+                            "us_date": us_date_str,
+                            "text": llm_brief,
+                            "generated_at": datetime.now().isoformat(),
+                        }, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    logger.info(f"[레포트] LLM 모닝브리프 캐시 저장 → {cache_path}")
             except Exception as brief_err:
-                logger.error(f"[레포트] LLM 모닝브리프 생성/발송 실패: {brief_err}", exc_info=True)
+                logger.error(f"[레포트] LLM 모닝브리프 생성/캐시 실패: {brief_err}", exc_info=True)
 
         return report
 

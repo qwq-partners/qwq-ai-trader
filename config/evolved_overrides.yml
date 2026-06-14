@@ -23,13 +23,13 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    sepa_trend: 30.1
-    strategic_swing: 33.4
+    strategic_swing: 34.0
     momentum_breakout: 0.0
-    gap_and_go: 18.1
-    rsi2_reversal: 8.4
     theme_chasing: 0.0
-    core_holding: 10.0
+    sepa_trend: 5.0
+    gap_and_go: 28.0
+    rsi2_reversal: 9.0
+    core_holding: 20.0
 exit_manager:
   max_stop_pct: 8.0
   min_stop_pct: 4.0
@@ -39,17 +39,17 @@ exit_manager:
   third_exit_ratio: 0.35
   stop_loss_pct: 5.0
   trailing_activate_pct: 5.0
-  trailing_stop_pct: 3.0
+  trailing_stop_pct: 4.5
 core_holding:
   rebalance_exclude:
   - '263750'
   core_stale_days: 20
-  core_stale_pnl_band_pct: 3.0
+  core_stale_pnl_band_pct: 7.0
   core_stale_cooldown_days: 5
   core_stale_auto_sell_enabled: true
   core_stale_auto_sell_days: 30
   core_stale_strict_days: 20
-  core_stale_strict_band_pct: 2.0
+  core_stale_strict_band_pct: 5.0
   core_stale_volume_ratio: 0.5
   core_stale_volume_days: 5
   rebalance_interval_weeks: 2
@@ -105,7 +105,7 @@ _meta:
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
     source: weekly_rebalance
-    timestamp: '2026-05-23T00:00:28.462150'
+    timestamp: '2026-06-13T00:00:56.511666'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
@@ -138,4 +138,14 @@ _meta:
     timestamp: '2026-05-11T20:33:17.019911'
   gap_and_go.min_score:
     source: rule
-    timestamp: '2026-05-20T20:30:19.174963'
+    timestamp: '2026-06-08T20:31:39.175444'
+  risk_config.strategy_allocation.core_holding.20pct:
+    source: manual_review
+    timestamp: '2026-06-04T14:50:00'
+    note: 10→20% 상향, strategic_swing 38.4→28.4 상쇄. 4/19 30→10 축소 이후 강세장 복귀 (KOSPI
+      5일 +9.4%, 20일 +33.4%) + 6/4 오리온/SK 추세 진입 실패 손절 후 빈슬롯 즉시 채우기 위한 예산 정상화.
+  core_holding.core_stale_band:
+    source: manual_review
+    timestamp: '2026-06-04T14:50:00'
+    note: pnl_band 3→7%, strict_band 2→5%. 6/4 오리온(-5.4%, 32영업일)·SK(-6.9%, 6영업일) 추세
+      진입 실패 종목이 stale 사각지대(±3%)에 갇혀 자동청산 불가했던 사고 후속 보완. 느린 손실 패턴 자동 컷.
