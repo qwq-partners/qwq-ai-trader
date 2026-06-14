@@ -1,5 +1,373 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-14 — 크로스검증 3건 패치 (rule11 dedup + SEPA 횡보 차단 + gap_and_go 장막판 캡)
+
+### 배경
+- 6/10~6/13 KR 거래 -507,756원, 승률 42%, 일별 악화 추세 (-58k → -175k → -273k)
+- 단일 최대 손실 SK하이닉스 SEPA -272,868원 — sideways 레짐에 추세 전략 진입 부정합
+- 6/12 14:09~14:57 gap_and_go 5건 집중 진입 → 다음날 오버나잇 손실 -175k 사고
+- rule11 shadow log 5건이 전부 동일 종목·날짜(000810, 6/8) 중복 → 통계 의미 상실
+
+### 변경 (src/core/cross_validator.py)
+- **규칙 3-3 신규**: KR sideways/neutral 레짐 + sepa_trend → 매수 차단
+  - 근거: 6/12 SK하이닉스 단일 -272k 사고, SEPA는 추세 추종 전략으로 횡보장 부정합
+- **규칙 3-4 신규**: KR 14:30 이후 gap_and_go 신규 진입 일 2건 캡
+  - `_gap_late_count` 일일 카운터, 통과 시점에 증가, 한도 도달 시 차단
+  - 근거: 6/12 장막판 5건 집중 → 오버나잇 갭하락 노출 패턴
+- **rule11 hit dedup**: `_log_rule11_hit`에 (date, symbol) 키셋 추가
+  - 5분 주기 스크리닝이 동일 hit을 다회 기록하던 문제 해결
+  - 진짜 unique 표본 카운트로 shadow → 활성화 결정 데이터 정합화
+- `__init__`에 `_rule11_logged_today`, `_rule11_dedup_date`, `_gap_late_count`, `_gap_late_count_date` 신규
+- `validate()` 입구에 일일 리셋 + `_late_gap_entry` 플래그 추가, 통과 종점에서 카운터 증가
+
+### 보류 (W24 권고)
+- gap_and_go.min_stop_pct 4.0% → 4.4% 완화 권고 — `evolution_state.active_change`(6/8 min_score 60→65) 평가 종료 후 적용 ("1건 변경 원칙" 준수)
+
+### 검증
+- py_compile 통과
+- systemctl restart 후 active 확인, 에러 로그 없음
+
+## 2026-06-09 — 좀비 포지션 자동 감지·정리 (KIS fill 수신 실패 대응)
+
+### 배경
+- 2026-06-08 사고: 032830 삼성생명이 KIS에서는 매도 체결됐는데 엔진 fill_check 미수신 → 엔진은 5주 보유로 인식, KIS는 0주
+- 결과: 5분 주기로 매도 시도 19회 반복, KIS는 "주문 가능한 수량을 초과" 거부, _sync_portfolio는 "매도 pending 중" 보호 로직에 걸려 유령 정리 못함
+- 사용자 수동 확인 후 봇 재시작으로만 정리 가능했던 사각지대
+
+### 변경
+- **`src/core/engine.py::RiskManager`**:
+  - `_kis_qty_mismatch_count: Dict[str, int]` + `_zombie_candidate_symbols: Set[str]` 신규
+  - `on_order` 실패 핸들러: 에러 메시지에 `APBK0400` 또는 `주문 가능한 수량` 포함 시 종목별 카운터 증가
+  - 카운터 ≥2 + 매도 주문이면 `_zombie_candidate_symbols`에 추가 + 텔레그램 ⚠️ 알람 (비차단)
+- **`src/schedulers/kr_scheduler.py::_sync_portfolio`**:
+  - `_zombie_candidate_symbols`에 있는 종목은 pending 상태 무시하고 즉시 유령 정리
+  - 추가 안전망: pending 시간이 1800초(30분) 이상 stale이면 강제 유령 처리
+  - 정리 후 카운터·마킹 자동 클리어
+
+### 효과
+- KIS 잔고와 엔진 인식 불일치 자동 감지 (수동 재시작 불필요)
+- 무한 매도 재시도 루프 차단
+- 운영자에게 텔레그램 실시간 경고
+
+## 2026-06-07 — 야간·주말 갭 risk 캡처 시스템 (전문가 시스템 확장)
+
+### 배경
+- 사용자 지적: "한국 선물·미장 반도체 약세인데 월요일 분위기 안 좋을 듯. 전문가가 catch up 해야 한다"
+- 기존 전문가 시스템(07:30/13:00/16:30)은 야간/주말 미동작, KOSPI 야간선물·SOX 단기 변동 미반영
+
+### A안 — 기존 전문가 보강
+- **`src/experts/kr_market_expert.py`**:
+  - `_fetch_kospi200_futures()` 추가 (KS200=F → ^KS200 → NKD=F 폴백)
+  - score 룰: 야간선물 -2%+ → -18점 (월요일 갭다운 위험), -1%+ → -10점, +2%+ → +15점
+- **`src/experts/us_market_expert.py`**:
+  - `_fetch_semis_state()` 추가 (^SOX, SMH의 1일/5일 변동)
+  - score 룰: SOX 5일 -3%+ → -18점 (KR 직격), SOX 당일 -2%+ → -10점
+- **`src/experts/macro_economist.py`**:
+  - `_fetch_semis_basket_5d()` 추가 (^SOX/SMH/NVDA/AMD/TSM 5일 평균)
+  - 약한 가중치(-8/+5) — us_market_expert와 중복 회피
+
+### B안 — 신규 슬롯 + 임계 완화
+- **`src/schedulers/kr_scheduler.py::run_expert_briefing`**:
+  - `sunday_evening` 22:00 (일요일만), `monday_premarket` 06:00 (월요일만) 슬롯 추가
+  - 요일 가드(`slot_weekday_filter`)로 발화 제한
+  - 주말 슬롯 한정 BEAR 합의 임계 완화 (`confidence ≥0.6`, 1명) — 주말 데이터 적어 신뢰도 자연 낮음
+  - 새 슬롯은 morning과 동일하게 채널(report_chat_id) 발송
+
+### C안 — 신규 전문가 (8번째)
+- **`src/experts/weekend_signal_expert.py`** (신규):
+  - 데이터: ES=F, NQ=F, KS200=F/NKD=F, KRW=X, ^VIX, BTC-USD, ZB=F
+  - 룰: 야간 US 선물·KR 야간선물·원/달러·VIX·BTC 종합 점수 (-100~+100)
+  - refresh 30분, valid 2시간 (시장 변동 빠름 반영)
+  - `weights=1.2` (갭 risk 캐치용, 종합 score 우선)
+- **`src/experts/orchestrator.py::register_all`**: 8번째로 등록, `market_experts` 튜플 포함
+- **`src/experts/types.py`**: agents/weights dict에 `weekend_signal_expert` 추가
+- **`scripts/run_trader.py`**: 등록 인원 하드코딩 "7명" → `len(orchestrator.agents)` 동적
+
+### 효과
+- 매주 일요일 22:00 KST + 월요일 06:00 KST에 갭 risk 자동 브리핑 (텔레그램 채널)
+- 평일 슬롯에도 SOX/야간선물 정보가 us_market/kr_market 점수에 자동 반영
+- 월요일 시가 갭다운 위험을 시스템이 사전 감지 → 사용자 매매 판단 우선순위 정보 제공
+
+### 검증
+- 봇 재시작 후 "전문가 8명 등록 완료" 확인
+- 다음 sunday_evening 슬롯: 2026-06-07 22:00 KST (오늘 50분 후)
+
+## 2026-06-05 — 모닝브리프 + 전문가 브리핑 통합 발송
+
+### 변경
+- `src/analytics/daily_report.py`:
+  - 07:00 미국 마감 후 생성되는 LLM 모닝브리프를 별도 발송에서 **파일 캐시**로 전환
+  - 캐시: `~/.cache/ai_trader/llm_morning_brief.json` (text + generated_at)
+- `src/schedulers/kr_scheduler.py::_send_expert_briefing_telegram`:
+  - morning 슬롯(07:30)에서 LLM 모닝브리프 캐시 prepend (cache age < 6h 가드)
+  - 단일 통합 메시지로 채널 발송 (≥4096자 시 send_report 자동 분할)
+
+### 효과
+- 종전: 07:00 LLM 모닝브리프 1개, 07:30 전문가 브리핑 1개 — 두 메시지 분산
+- 변경 후: 07:30에 모닝브리프 + 구분선 + 전문가 브리핑 = 단일 통합 메시지
+- 첫 적용일: 2026-06-06 (06/05 캐시는 변경 전 코드로 미저장)
+
+## 2026-06-05 — 전문가 브리핑 메시지 상세화
+
+### 변경
+- `src/schedulers/kr_scheduler.py::_send_expert_briefing_telegram`:
+  - 종합 score 해석 라벨 추가 (강세 우위/약상승/중립/약하락/약세 우위)
+  - bull/neutral/bear 분포 카운트 (총 N명 중 N/N/N)
+  - BEAR 합의 기준 명시 (신뢰도 ≥70% + 2명 이상)
+  - 신뢰도가 "데이터 충실도"임을 안내 (LLM 자기평가 아님)
+  - 시장체제 전문가 5명만 종합 score에 반영됨을 표시 (뉴스/실적은 `(종합 미반영)` 태그)
+  - 모든 슬롯에 전문가별 핵심 발견 1개씩 인라인 표시 (이전: morning만 별도 섹션)
+  - morning 슬롯엔 "추가 인사이트" 섹션으로 두 번째 발견 첨부
+
+### 의도
+- 사용자 요청 (2026-06-04 23:39 KST): "레포트 더 상세하게 설명"
+- 종합 score가 산출된 맥락(어떤 분포에서 나왔는지)을 한 메시지로 파악 가능
+- 신뢰도 해석 오류 방지 (모델 확신이 아닌 데이터 양 기반임)
+
+## 2026-06-04 — 코어홀딩 추세 진입 실패 손절 + stale 룰/예산 정상화
+
+### 배경
+- 사용자 질의: "수익률 별로인 코어를 계속 들고 가는 게 의미가 있냐"
+- 진단: 오리온(-5.4%, 32영업일 보유)·SK(-6.9%, 6영업일 보유) 모두 진입 후 highest<avg
+  → 추세 캐처 컨셉의 진입 실패형. stale 사각지대(±3% 밴드)에 갇혀 자동청산 불가
+
+### 실행 (4단계 패키지)
+1. **종목 매도** (`scripts/sell_specific.py` 신규):
+   - 271560 오리온 16주 매도 → -118k (-5.4%)
+   - 034730 SK 3주 매도 → -145k (-6.9%)
+   - 합계 -263k 손절, 현금 4,036k 회수
+2. **stale 룰 강화** (`config/evolved_overrides.yml`):
+   - `core_stale_pnl_band_pct`: 3.0 → 7.0
+   - `core_stale_strict_band_pct`: 2.0 → 5.0
+   - 향후 -5~7% "느린 손실" 패턴 자동 컷
+3. **코어 예산 정상화** (`config/evolved_overrides.yml`):
+   - `risk_config.strategy_allocation.core_holding`: 10.0 → 20.0
+   - `strategic_swing`: 38.4 → 28.4 (상쇄, 총합 98%)
+   - 근거: KOSPI 5일 +9.4%/20일 +33.4% 강세장 + 6/4 매도 후 빈슬롯 즉시 활용
+4. **봇 재시작 + 검증**: 09개 포지션 정상 로드, 코어홀딩스케줄러 정상 가동
+5. **6/5 빈슬롯 매수 자동 가동 예정**: 09:10~10:00 첫 윈도우
+
+### 영향
+- 즉시: 사각지대 손실 누적 차단, 4M 현금 회수
+- 1주: 강세장 코어 2~3종 신규 진입 가능
+- 장기: 같은 패턴 시스템 자동 컷 → 매매 인지 비용 절감
+
+## 2026-05-31 — 전문가 모닝 브리핑 → 미장 레포트 채널 라우팅
+
+### 변경
+- `src/schedulers/kr_scheduler.py`:
+  - `_send_expert_briefing_telegram(use_report_channel=False)` 인자 추가
+  - **morning 슬롯 (07:30)** → `report_chat_id` (-1003374679062, LLM 모닝브리프 채널)
+  - **midday/after 슬롯** → 기본 DM (TELEGRAM_CHAT_ID 1754899925)
+- 아침 슬롯 전용으로 **핵심 발견** 섹션 추가 (각 전문가 key_findings[0] 첨부)
+- HTML parse mode 적용 (bold/italic)
+
+### 의도
+- 미장 마감 모닝브리프와 같은 채널에서 전문가 7명 의견 함께 받음
+- 채널 구독자가 통합 시장 진단 (US 마감 + 전문가 진단) 한 곳에서 확인
+- 장중/장후 브리핑은 개인 DM으로 분리 (운영자 전용)
+
+### 검증
+- py_compile OK, 봇 재시작 active
+- 라이브 send_report 테스트 → True (채널 전송 성공)
+- 다음 브리핑: 6/1 (월) 07:30 → 미장 채널 첫 전송
+
+## 2026-05-30 — trailing_stop_pct 완화 (3.0 → 4.5, +50%)
+
+### 배경
+- 주간 매도 후속 복기 보고서 (n=66):
+  - trailing 평균 매도후% **+22.54%** (가장 큰 놓침 패턴)
+  - 놓친 상위 종목: 삼성전기, LG이노텍, SK하이닉스, LG전자 (반도체/IT 추세)
+  - 추세 캐치 종목에서 trailing 조기컷이 반복
+
+### 의사결정 분석
+- 보고서 원안: 3.0 → 6.0 (+100%, "4% → 6%로 잘못 인용된 +50%")
+- 보고서 daily_max 계산 부적절: trailing은 익절 단계라 손실 한도와 무관
+- 결정: **보수적 단계 채택 (A안)** — 3.0 → 4.5 (+50%)
+- 1주일 후 재평가 후 6.0 추가 확대 검토
+
+### 변경
+- `config/evolved_overrides.yml:43` — `trailing_stop_pct: 3.0 → 4.5`
+- 인라인 주석: 변경 근거, 재평가 일자(2026-06-06) 명시
+
+### 영향 범위
+- 모든 전략의 trailing exit (단계적이므로 안전)
+- trailing_activate_pct (5%)는 미변경 — CLAUDE.md "최대 1개 파라미터만 변경" 규칙 준수
+
+### 검증
+- yaml 파싱 OK
+- 봇 재시작 active
+- ExitManager stage 복원 8종목 정상
+- trailing 관련 ERROR 0건
+
+### 재평가 (2026-06-06 예정)
+- trailing 평균 매도후% 다시 측정
+- 개선(< +15%) 시 6.0% 추가 확대 검토
+- 악화 시 즉시 5.0%로 후퇴
+
+## 2026-05-29 — 전문가 시스템 운영 강화 (Shadow + 모니터링 + 매크로 캘린더)
+
+### 1. 첫 거래일 모니터링
+- `run_expert_briefing()` — 텔레그램 브리핑 전송 (07:30/13:00/16:30)
+  - 종합 점수, bear_consensus, 7명 개별 score/confidence 이모지로 시각화
+- `quality_validator` 결과 텔레그램 알림 (20:25)
+  - 발행 수, 평균 신뢰도, bull/bear 분포, 주간 발행
+
+### 2. Shadow Mode (규칙 #11)
+- `ExpertConfig.shadow_mode` 신규 (기본 true)
+- shadow_mode=true: BEAR 합의 감지 시 **차단하지 않고** hit_log에 기록만
+- `~/.cache/ai_trader/rule11_shadow_log.jsonl` — 종목, 전문가 의견 시점 영속화
+- `scripts/analyze_rule11_shadow.py` — 주간 hit rate 분석 (yfinance로 후속 가격 검증)
+  - hit rate ≥60% → shadow_mode: false 권장
+  - 50~60% → 1주일 추가 관찰
+  - <50% → 규칙 비활성 유지
+
+### 3. 수동 매크로 오버라이드 (FOMC/CPI/PCE/NFP 캘린더)
+- `~/.cache/ai_trader/manual_macro_overrides.json` 작성
+- 출처: Federal Reserve, BLS, BEA, Bank of Korea 공식 사이트
+- 포함:
+  - BOK 기준금리: 2.5% (2026-05-28 동결, 8회 연속)
+  - Fed Funds Rate Target: 4.25~4.50%
+  - **다음 발표 캘린더**:
+    - 2026-06-05 NFP (5월분, 08:30 ET)
+    - 2026-06-10 CPI (5월분, 08:30 ET)
+    - 2026-06-17 FOMC (dot plot 갱신, 14:00 ET)
+    - 2026-06-25 PCE (5월분, 08:30 ET)
+    - 2026-07-10 BOK 금통위
+- 발표 직후 사용자가 cpi_yoy 등 직접 갱신 권장
+
+### 검증
+- py_compile 전체 통과
+- 봇 재시작 후 7명 등록 + 브리핑 스케줄러 시작 + ERROR 0건
+- shadow_mode=True 확인 (config + 코드)
+
+## 2026-05-29 — 전문가 시스템 P2 정리 (코드 품질)
+
+리뷰 P2 항목 7건 정리. 운영 영향은 없으나 일관성·유지보수 향상.
+
+- **P2-1** `__init__.py` docstring에서 존재하지 않는 perplexity.py 언급 제거 + wiki.py 추가
+- **P2-2** `_build_opinion` issued_at/valid_until을 동일 now() 기준으로 통일 (시차 제거)
+- **P2-3** `us2y` → `us_short_yield`로 이름 정정 (^IRX는 13주 T-bill, 2년물 아님)
+- **P2-4** 거시 종합 LLM Task QUICK_ANALYSIS → MARKET_ANALYSIS (heavy 모델)
+- **P2-5** `engine._expert_orchestrator` → public `engine.expert_orchestrator`
+- **P2-6** `ExpertOpinion.from_dict` ValueError/TypeError 안전 파싱
+- **P2-7** quality_validator 미설치 시 info → warning (집계 누락 방지)
+- **Pyright 보강**: orchestrator.py `result` 타입 isinstance 분기 추가
+- yfinance gold 정상범위 1000~4000 → 1000~4500 (2026 시점 시세 반영)
+
+검증: py_compile 전체 통과, 봇 재시작 후 7명 등록 + ERROR 0건.
+
+## 2026-05-29 — 전문가 시스템 P0/P1 후속 수정 (코드리뷰 28건 대응)
+
+리뷰에서 발견된 P0 6건 + P1 7건 즉시 수정.
+
+### P0 (치명적, 매매 동결 위험)
+- **P0-1 (cross_validator.py:437)** BEAR 합의 게이트가 표본 부족 시 매매 영구 차단
+  - 유효 의견 ≥4명일 때만 게이트 활성화
+  - fail_open=true 존중 (평가 실패 시 통과)
+- **P0-2 (quality_validator.py)** 동기 I/O가 메인 루프 stall 가능 → async + to_thread 전환
+- **P0-3 (base.py)** _analyze가 dict 등 잘못된 타입 반환 시 AttributeError → isinstance 체크
+- **P0-4 (orchestrator.py)** 음수 confidence/가중치로 score 부호 역전 → max(0, ...) 클램프
+- **P0-6 (base.py)** yfinance 7명 병렬 호출 429 위험 → YFINANCE_SEMAPHORE(4) throttle
+- **P0-7 (base.py)** 만료된 캐시 영구 재사용 → is_valid 체크 후에만 사용
+
+### P1 (중요)
+- **P1-1 (orchestrator.py)** aiohttp 세션 누수 → close_all() 메서드 추가
+- **P1-3 (macro_economist.py)** yfinance 비정상값 → 지표별 정상 범위 (_VALID_RANGES) 검증
+  - 검증 동작 확인: gold=4529 ($/oz) 정상범위[1000,4000] 이탈 자동 폐기
+- **P1-4 (news_curator.py)** get_symbol_sentiment LLM 호출이 budget 우회 → _check_budget/inc_call 적용
+- **P1-5 (news_curator.py)** LLM 응답 형식 변화 silent fail → warning 로그
+- **P1-6 (market_regime.py)** apply_expert_adjustment이 pending_regime 메커니즘 무시
+  → 10분 확인 시간 도입 (페이크 BEAR 변동 방지)
+- **P1-7 (market_regime.py)** bear → bull 회복 경로 부재 → score≥10 + bear 해소 시 sideways 격상
+- **P1-8 (kr_market_expert.py)** 공매도 휴일 미처리 → is_kr_market_holiday로 영업일 회피
+- **P1-10 (earnings_expert.py)** DART API 미사용 (docstring 거짓) → 실제 호출 구현
+  → 잠정실적/연결재무 키워드 필터, 10건 이상 시 score +5
+- **P1-11** 영문 로그 prefix → 한국어 통일
+  ([macro]→[거시], [kr-market]→[KR시장], [news_curator]→[뉴스큐레이터] 등)
+
+### 검증
+- P0-1: 표본 2명 + BEAR → 게이트 비활성 (정상)
+- P0-4: 음수 confidence 무시 (정상)
+- P1-1: close_all() 호출 성공
+- P1-3: gold 4529 폐기 로그 확인
+- 봇 재시작 후 7명 등록 OK + ERROR 0건
+
+## 2026-05-29 — 전문가 시스템 도입 (7명 도메인 전문가)
+
+### 배경
+- 기존 6명 운영/분석 에이전트는 가격·수급·체결 중심
+- 약점: 거시·뉴스·섹터·실적 등 **외부 정보 입력이 빈약**
+- 글로벌 매크로(Fed/CPI/환율), 뉴스 sentiment, 산업 사이클을 자동 흡수하는 도메인 전문가 7명 추가
+
+### 도입 전문가
+| 전문가 | 역할 | 데이터 소스 | 주기 |
+|--------|------|-------------|------|
+| news-curator | 종목/섹터 sentiment + 이벤트 태그 | 네이버 + Finnhub + Perplexity | 30분 |
+| macro-economist | Fed/금리/환율/원자재 거시 진단 | yfinance + Perplexity | 일 3회 |
+| kr-market-expert | KOSPI 수급·섹터 로테이션 | pykrx + yfinance | 일 3회 |
+| us-market-expert | SPY/QQQ/VIX/섹터 ETF/어닝 | yfinance + Finnhub | 일 3회 |
+| kr-economy-expert | 한국 거시 (한은/수출입/PF) | Perplexity + yfinance | 일 2회 |
+| global-micro-expert | 반도체·2차전지·바이오·조선 공급망 | Perplexity + yfinance | 일 2회 |
+| earnings-expert | 어닝 캘린더·서프라이즈·드리프트 | Finnhub + DART | 일 2회 |
+
+### 새 코드 (src/experts/, 약 2,500줄)
+- `types.py` — ExpertOpinion, RegimeBias, ExpertConfig
+- `base.py` — ExpertAgent (캐시·예산·에러 핸들링)
+- `orchestrator.py` — 7명 조율, 병렬 실행, aggregate_regime_score, bear_consensus
+- `opinion_store.py` — ~/.cache/ai_trader/experts/ 일별 영속화
+- `wiki.py` — ~/.cache/ai_trader/wiki/experts/ 마크다운 누적 + 토요일 lint
+- 7개 전문가 모듈
+
+### 엔진 통합
+1. `src/core/market_regime.py` — `apply_expert_adjustment()` 메서드
+   - BEAR 합의 → bull/sideways/neutral → bear 강등
+   - 강한 BULL(score≥+20) → sideways → bull 격상
+2. `src/core/cross_validator.py` — **규칙 #11 (전문가 BEAR 합의 게이트)**
+   - confidence≥0.7인 BEAR 의견 2명 이상 → BUY 신호 즉시 차단
+3. `src/core/engine.py` — CrossValidator init에 expert_orchestrator 전달
+4. `src/core/evolution/daily_reviewer.py` — LLM 프롬프트에 7명 의견 주입
+5. `src/core/evolution/quality_validator.py` — `_check_expert_output()` 일일 신뢰도 체크
+6. `src/schedulers/kr_scheduler.py` — `run_expert_briefing()` 07:30/13:00/16:30
+7. `src/schedulers/us_scheduler.py` — `us_expert_loop()` ET 08:30/12:30/16:30
+8. `scripts/run_trader.py` — bot.expert_orchestrator 초기화 + engine 주입
+
+### 설정 (config/default.yml)
+```yaml
+experts:
+  enabled: true
+  fail_open: true
+  daily_call_budget: 50
+  cache_ttl_hours: 6
+  agents: {...각 on/off}
+  weights: {...품질 가중치}
+```
+
+### 신규 API 키 발급: **0개**
+- NAVER/FINNHUB/PERPLEXITY/DART 모두 이미 보유
+- FRED → yfinance ^TNX 등으로 우회
+- ECOS(한은) → Perplexity 자연어 검색으로 우회
+- 수동 입력 슬롯: `~/.cache/ai_trader/manual_macro_overrides.json`
+
+### 안전장치
+- **fail_open**: 전문가 오류 시 매매 차단 안 함 (기본값)
+- **graceful degradation**: 모든 _analyze 예외 → NEUTRAL 의견 반환
+- **마스터 스위치**: `experts.enabled: false`
+- **개별 on/off**: agents.{name}: false
+- **호출 예산**: 에이전트당 일 50회 상한, 초과 시 캐시 의존
+
+### 검증
+- 7명 병렬 분석 7/7 유효 (dry-run)
+- aggregate_regime_score +3 neutral / bear_consensus False
+- US bull score=+25 (SPY MA50+7.5%, 어닝 +10.7%) 정상 식별
+- market_regime.apply_expert_adjustment dry-run OK
+- cross_validator 규칙 #11 BUY 차단 동작 확인
+
+### 알려진 제약
+- pykrx 수급 데이터: KRX_ID/PW 미설정으로 일부 fail (graceful fallback)
+- yfinance KRW=X 일부 stale 값 가능 → 수동 오버라이드 권장
+- Perplexity 호출 빈도 증가 → Pro 한도(월 $20) 내
+
 ## 2026-05-11 — 코어 A안 재정의 + P0-1 계측 보강
 
 ### 1) 코어홀딩 "장기 추세 캐처" A안 (3~6개월 +30~50% 노림)

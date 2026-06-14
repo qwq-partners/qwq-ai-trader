@@ -9,8 +9,10 @@ PRISM-INSIGHT의 "투자전략가" 패턴을 규칙 기반으로 구현.
 """
 
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
 from loguru import logger
+import json
 
 
 class CrossStrategyValidator:
@@ -36,7 +38,8 @@ class CrossStrategyValidator:
                  min_pass_score: Optional[int] = None,
                  missing_indicator_penalty_step: Optional[int] = None,
                  missing_indicator_penalty_cap: Optional[int] = None,
-                 llm_daily_max: Optional[int] = None):
+                 llm_daily_max: Optional[int] = None,
+                 expert_orchestrator=None):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
         self._trade_memory = trade_memory
@@ -44,6 +47,11 @@ class CrossStrategyValidator:
         self._market = market  # "KR" 또는 "US"
         self._trade_wiki = trade_wiki  # 거래 위키 (교훈 컨텍스트)
         self._max_sector_positions = max_sector_positions  # 동일 섹터 최대 포지션 수 (설정 참조)
+        self._expert_orchestrator = expert_orchestrator  # 2026-05-29 추가
+        # 2026-05-29: 규칙 #11 hit log 경로 (shadow mode 효과 측정용)
+        self._rule11_log_path = (
+            Path.home() / ".cache" / "ai_trader" / "rule11_shadow_log.jsonl"
+        )
 
         # YAML 토글 적용 (None이면 클래스 상수 사용)
         if min_pass_score is not None:
@@ -61,6 +69,16 @@ class CrossStrategyValidator:
             "penalized": 0,
         }
         self._stats_date = None
+
+        # 2026-06-14 추가: 규칙 #11 hit 중복 제거용 (date, symbol) 키셋
+        # 5분 주기 스크리닝으로 동일 종목·동일 날짜가 다회 기록되는 문제 차단
+        self._rule11_logged_today: set = set()
+        self._rule11_dedup_date = None
+
+        # 2026-06-14 추가: gap_and_go 장막판(14:30+) 일일 진입 카운터
+        # 6/12 14:09~14:57 5건 집중 → 오버나잇 risk 풀 사고 재발 방지
+        self._gap_late_count: int = 0
+        self._gap_late_count_date = None
 
         # LLM 이중 검증 일일 한도 (비용 폭발 방지)
         self._daily_llm_count: int = 0
@@ -174,6 +192,17 @@ class CrossStrategyValidator:
         if self._stats_date != today:
             self._stats = {"total": 0, "passed": 0, "blocked": 0, "penalized": 0}
             self._stats_date = today
+
+        # 2026-06-14 추가: 규칙 #11 dedup / gap 장막판 카운터 일일 리셋
+        if self._rule11_dedup_date != today:
+            self._rule11_logged_today = set()
+            self._rule11_dedup_date = today
+        if self._gap_late_count_date != today:
+            self._gap_late_count = 0
+            self._gap_late_count_date = today
+
+        # gap_and_go 장막판 진입 후보 (통과 시 카운터 증가)
+        _late_gap_entry = False
 
         self._stats["total"] += 1
 
@@ -313,6 +342,39 @@ class CrossStrategyValidator:
             )
             return False, 0, "체제 부적합: 주의장에서 gap_and_go 차단"
 
+        # === 규칙 3-3 (2026-06-14): 횡보장에서 sepa_trend 차단 (KR) ===
+        # 6/12 SK하이닉스 -272,868원 단일 최대 손실 사고:
+        # ranging 레짐에서 SEPA 추세 추종 진입 → 신호 신뢰성 급감
+        # SEPA는 명확한 추세 체제(bull)에서만 작동하도록 게이트
+        if (self._market == "KR"
+                and market_regime in ("sideways", "neutral")
+                and strategy == "sepa_trend"):
+            self._stats["blocked"] += 1
+            logger.info(
+                f"[크로스검증] {symbol} 차단: 횡보장({market_regime}) + sepa_trend "
+                f"(추세 부적합, 6/12 -272k 사고 재발 방지)"
+            )
+            return False, 0, f"체제 부적합: 횡보장({market_regime})에서 sepa_trend 차단"
+
+        # === 규칙 3-4 (2026-06-14): gap_and_go 장막판(14:30+) 일일 진입 캡 (KR) ===
+        # 6/12 14:09~14:57 5건 집중 진입 → 다음날 오버나잇 손실 -175k 사고
+        # 장 막판 30분 진입은 추세 확정 부족 + 익일 갭하락 노출 구조
+        # 일 2건으로 제한 → 추가 진입은 차단
+        if (self._market == "KR"
+                and side == "buy"
+                and strategy == "gap_and_go"):
+            _now_hm = datetime.now().hour * 100 + datetime.now().minute
+            if _now_hm >= 1430:
+                if self._gap_late_count >= 2:
+                    self._stats["blocked"] += 1
+                    logger.info(
+                        f"[크로스검증] {symbol} 차단: gap_and_go 장막판 진입 "
+                        f"{self._gap_late_count}/2 도달 (14:30+ 오버나잇 risk 캡)"
+                    )
+                    return False, 0, "장막판 gap_and_go 일일 한도(2건) 도달"
+                # 통과 후보 — 최종 패스 시 카운터 증가
+                _late_gap_entry = True
+
         # === 규칙 4: 동일 섹터 과집중 ===
         sector = metadata.get("sector")
         if sector and self._portfolio:
@@ -432,6 +494,45 @@ class CrossStrategyValidator:
                 except Exception as _e:
                     logger.debug(f"[크로스검증] 패널 보너스 계산 실패 {symbol}: {_e}")
 
+        # === 규칙 11: 전문가 BEAR 합의 게이트 (2026-05-29 추가) ===
+        # Shadow mode: shadow_mode=true 일 때 차단하지 않고 로그만 기록.
+        # 1주일 운영 후 hit rate 확인하고 false로 전환.
+        if is_buy_signal and self._expert_orchestrator is not None:
+            try:
+                snap = self._expert_orchestrator.snapshot()
+                valid_n = sum(1 for o in snap.values() if o.is_valid)
+                _exp_cfg = getattr(self._expert_orchestrator, "config", None)
+                _shadow = getattr(_exp_cfg, "shadow_mode", True)
+
+                if valid_n >= 4 and self._expert_orchestrator.bear_consensus(
+                    threshold_confidence=0.7, min_count=2, opinions=snap
+                ):
+                    # hit_log 영속화 (실제 후속 가격으로 hit rate 측정)
+                    self._log_rule11_hit(symbol, snap, score)
+
+                    if _shadow:
+                        logger.info(
+                            f"[크로스검증] {symbol} SHADOW: 전문가 BEAR 합의 감지 "
+                            f"(차단 안 함, 유효 {valid_n}명)"
+                        )
+                        # 통과 — 점수만 정상 반환
+                    else:
+                        self._stats["blocked"] += 1
+                        logger.info(
+                            f"[크로스검증] {symbol} 차단: 전문가 BEAR 합의 "
+                            f"(규칙#11, 유효 의견 {valid_n}명)"
+                        )
+                        return False, adjusted_score, "전문가 BEAR 합의 — 신규매수 차단"
+            except Exception as _e:
+                _exp_cfg = getattr(self._expert_orchestrator, "config", None)
+                _fail_open = getattr(_exp_cfg, "fail_open", True)
+                logger.debug(
+                    f"[크로스검증] 규칙#11 평가 실패 {symbol}: {_e} (fail_open={_fail_open})"
+                )
+                if not _fail_open:
+                    self._stats["blocked"] += 1
+                    return False, adjusted_score, "전문가 시스템 평가 실패 (fail_closed)"
+
         # === 누적 감점 cap (2026-05-03 P0-1) ===
         # 시간대 -8 + 지표결손 -8 + MA200 -5 + 극단PER -5 = 최대 -26 누적 가능
         # 60-70점대 종목이 자동 차단되는 역설(이전 분석: 91.7% 승률 영역) 방지
@@ -463,8 +564,61 @@ class CrossStrategyValidator:
             )
             return False, adjusted_score, f"크로스 감점 후 점수 부족 ({adjusted_score:.0f})"
 
+        # 2026-06-14: 장막판 gap_and_go 통과 시 일일 카운터 증가 (규칙 3-4)
+        if _late_gap_entry:
+            self._gap_late_count += 1
+            logger.debug(
+                f"[크로스검증] gap_and_go 장막판 카운터: {self._gap_late_count}/2"
+            )
+
         self._stats["passed"] += 1
         return True, adjusted_score, ""
+
+    def _log_rule11_hit(
+        self,
+        symbol: str,
+        snap: Dict[str, Any],
+        score: float,
+    ) -> None:
+        """규칙 #11 BEAR 합의 감지 시 hit_log에 기록
+
+        Shadow mode 운영 중에는 차단하지 않으므로 실제 후속 가격으로
+        효과를 측정해야 한다. 다음 정보를 jsonl로 영속화:
+        - timestamp, symbol, strategy_score
+        - 각 전문가의 bias/score/confidence
+        - 후처리(주간 분석) 시 +N일 가격 변동으로 hit rate 계산
+        """
+        # 2026-06-14: (date, symbol) 중복 기록 방지
+        # 5분 주기 스크리닝으로 동일 종목이 1일 다회 hit되어 통계 왜곡
+        # → 같은 날 같은 종목은 첫 hit만 기록
+        today = datetime.now().date()
+        dedup_key = (today, symbol)
+        if dedup_key in self._rule11_logged_today:
+            return
+
+        try:
+            self._rule11_log_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "market": self._market,
+                "score": float(score),
+                "experts": {
+                    name: {
+                        "bias": op.regime_bias.value,
+                        "score": op.score,
+                        "confidence": round(op.confidence, 3),
+                    }
+                    for name, op in snap.items()
+                    if op.is_valid
+                },
+            }
+            with self._rule11_log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            # dedup 마킹 (성공 시에만)
+            self._rule11_logged_today.add(dedup_key)
+        except Exception as e:
+            logger.debug(f"[크로스검증] hit_log 기록 실패: {e}")
 
     async def llm_second_check(
         self,

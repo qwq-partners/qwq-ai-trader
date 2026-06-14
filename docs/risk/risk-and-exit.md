@@ -80,6 +80,9 @@
 | 1 | RSI>70 + 추세 전략 (bull 제외) | **-5점** |
 | 2 | 기관+외국인 동시 순매도 | theme/momentum/gap: **차단**, sepa_trend: **-10점** |
 | 3 | 약세장 + theme_chasing / gap_and_go / rsi2_reversal / momentum_breakout | **차단** |
+| 3-2 | caution + gap_and_go (KR, 2026-05-28) | **차단** (5/28 -357k 사고) |
+| 3-3 | sideways/neutral + sepa_trend (KR, 2026-06-14) | **차단** (6/12 SK하이닉스 -272k 사고) |
+| 3-4 | 14:30+ gap_and_go 일 2건 초과 (KR, 2026-06-14) | **차단** (6/12 5건 집중 → 오버나잇 -175k 사고) |
 | 4 | 동일 섹터 N종목+ (KR=2, US=3) | **차단** |
 | 5 | 당일 손절 동일 섹터 재진입 | -5점 |
 | 6 | 등락률/ATR > 1.5 (추격매수) | -15점 (hard block, cap 예외) |
@@ -187,11 +190,16 @@ bull 시 효과: max_positions 8→10, 현금 5→3%, 비중 25→30% → **현�
 | ATR-linked trailing | 비활성 | `not is_core` 가드, 고정 12% 우선 |
 | max_holding_days | 무제한 | 0 |
 
-**stale 자동 컷 (evolved_overrides)**
-- Tier 1 알림: 20영업일 + ±3% (이전 30)
-- Tier 2 자동매도: 30영업일+±3% OR 20영업일+±2%+거래량 50% 미만 (이전 45/30)
+**stale 자동 컷 (evolved_overrides, 2026-06-04 밴드 확대)**
+- Tier 1 알림: 20영업일 + **±7%** (이전 ±3 → 느린 손실 -5~7% 패턴까지 포착)
+- Tier 2 자동매도: 30영업일+±7% OR 20영업일+**±5%**+거래량 50% 미만 (이전 ±3/±2)
+- 변경 배경: 2026-06-04 오리온(-5.4%/32일)·SK(-6.9%/6일) 추세 진입 실패 종목이
+  ±3% 사각지대에 갇혀 자동청산 못한 사고 후속
 
 **리밸런싱 주기**: 격주 (`rebalance_interval_weeks=2`, 이전 월 1회)
+
+**예산 (2026-06-04 정상화)**: 20% (이전 10%, KOSPI 강세장 복귀로 30% 시절 수준 복원
+검토 차 우선 20% 단계 적용. strategic_swing 38.4→28.4 상쇄)
 
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 
