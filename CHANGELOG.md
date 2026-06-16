@@ -1,5 +1,32 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-16 — LLM 모델명 config override (GPT-5 deprecation 마이그레이션 Phase 1)
+
+### 배경
+- OpenAI 발표: GPT-5/mini/nano/pro 2025-08-07 snapshot은 2026-12-10 셧다운
+- 현재 사용: `gpt-5.4`(heavy), `gpt-5-mini`(light) — alias 형태 사용 중
+- 코드 수정 없이 모델 교체 가능한 사전 작업 필요 (Phase 1)
+
+### 변경
+- **config/default.yml**: `llm:` 섹션에 모델명 키 4개 추가
+  - `openai_model_heavy`, `openai_model_light`
+  - `gemini_model_heavy`, `gemini_model_light`
+- **src/utils/llm.py**:
+  - `LLMConfig.from_config(cls, cfg)`: env(API키) + YAML(모델명) 결합 로드
+  - `set_llm_config(cfg)`: 전역 LLM 설정 등록 함수 추가
+  - `get_llm_manager()`: 등록된 설정 우선 사용 (없으면 from_env 폴백)
+- **scripts/run_trader.py**: AppConfig 로드 직후 `set_llm_config()` 호출
+  - 시작 로그: `[LLM] 모델 설정: openai_heavy=..., openai_light=..., gemini_heavy=..., gemini_light=...`
+
+### 효과
+- 모델 교체 시 코드 변경 불필요 — `config/default.yml` 또는 `evolved_overrides.yml`에서 키만 바꾸면 적용
+- Shadow A/B 단계(Phase 3)에서 신구 모델 동시 사용 기반 마련
+- 빈 문자열/키 없음 시 dataclass 기본값 폴백 (backward compat)
+
+### 검증
+- py_compile 통과
+- restart 후 `[LLM] 모델 설정: openai_heavy=gpt-5.4, openai_light=gpt-5-mini, ...` 로그 확인
+
 ## 2026-06-16 (확장) — SECOND/THIRD 익절 단계도 0.7x 추가 디스카운트
 
 ### 배경

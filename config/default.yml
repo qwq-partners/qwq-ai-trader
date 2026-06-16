@@ -13,6 +13,13 @@ llm:
   primary: gemini_flash_lite
   fallback: openai_gpt5_mini
   daily_budget: 5.0
+  # 2026-06-16: 모델명 config override (Dec 10, 2026 OpenAI GPT-5 snapshot deprecation 대비)
+  # 코드 변경 없이 evolved_overrides.yml 또는 default.yml에서 모델 교체 가능
+  # 빈 문자열 또는 키 없으면 LLMConfig dataclass 기본값 사용
+  openai_model_heavy: "gpt-5.4"        # 거래 복기, 전략 진화 (heavy)
+  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약 (light)
+  gemini_model_heavy: "gemini-3.1-pro-preview"
+  gemini_model_light: "gemini-3.1-flash-lite-preview"
 
 logging:
   level: INFO

@@ -75,6 +75,32 @@ class LLMConfig:
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         )
 
+    @classmethod
+    def from_config(cls, cfg: Optional[Dict[str, Any]] = None) -> "LLMConfig":
+        """env(API 키) + YAML(모델명) 결합 로드.
+
+        2026-06-16: GPT-5 snapshot deprecation 대비 — 모델명을 config로 빼서
+        코드 수정 없이 evolved_overrides.yml에서 교체 가능하게 함.
+
+        cfg는 default.yml/evolved_overrides 머지된 dict 또는 그 안의 `llm:` 섹션.
+        키가 없거나 빈 문자열이면 dataclass 기본값 유지.
+        """
+        llm_cfg = cfg or {}
+        if "llm" in llm_cfg and isinstance(llm_cfg["llm"], dict):
+            llm_cfg = llm_cfg["llm"]
+        return cls(
+            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+            openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.4"),
+            openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
+            gemini_model_heavy=(
+                llm_cfg.get("gemini_model_heavy") or "gemini-3.1-pro-preview"
+            ),
+            gemini_model_light=(
+                llm_cfg.get("gemini_model_light") or "gemini-3.1-flash-lite-preview"
+            ),
+        )
+
 
 @dataclass
 class LLMUsage:
@@ -645,10 +671,23 @@ class LLMManager:
 
 # 전역 인스턴스 (선택적 사용)
 _llm_manager: Optional[LLMManager] = None
+_pending_config: Optional[LLMConfig] = None
+
+
+def set_llm_config(cfg: LLMConfig) -> None:
+    """전역 LLM 설정 등록 (app 시작 시 호출).
+
+    2026-06-16: GPT-5 deprecation 대비, 모델명을 config로 주입할 수 있게.
+    이후 get_llm_manager()는 이 설정으로 LLMManager 인스턴스화.
+    이미 인스턴스가 있으면 다음 호출까지 영향 없음 — 시작 시점에 호출 권장.
+    """
+    global _pending_config
+    _pending_config = cfg
+
 
 def get_llm_manager() -> LLMManager:
     """전역 LLM 매니저 인스턴스"""
     global _llm_manager
     if _llm_manager is None:
-        _llm_manager = LLMManager()
+        _llm_manager = LLMManager(config=_pending_config)
     return _llm_manager

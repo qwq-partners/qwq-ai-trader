@@ -1931,6 +1931,19 @@ async def main():
             config_path=args.config,
             dotenv_path=str(project_root / ".env")
         )
+        # 2026-06-16: LLM 모델명 config override 주입 (GPT-5 deprecation 대비)
+        try:
+            from src.utils.llm import LLMConfig as _LLMConfig, set_llm_config
+            _llm_cfg = _LLMConfig.from_config(config.raw if hasattr(config, "raw") else {})
+            set_llm_config(_llm_cfg)
+            logger.info(
+                f"[LLM] 모델 설정: openai_heavy={_llm_cfg.openai_model_heavy}, "
+                f"openai_light={_llm_cfg.openai_model_light}, "
+                f"gemini_heavy={_llm_cfg.gemini_model_heavy}, "
+                f"gemini_light={_llm_cfg.gemini_model_light}"
+            )
+        except Exception as _llm_err:
+            logger.warning(f"[LLM] 모델명 config 주입 실패 (기본값 사용): {_llm_err}")
     except ImportError:
         # AppConfig 미구현 시 빈 설정 사용
         logger.warning("AppConfig 미구현 — 빈 설정으로 시작")
