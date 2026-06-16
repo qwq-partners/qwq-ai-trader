@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-17 — quick_analysis 실패율 33% 원인 해결 (max_tokens 부족)
+
+### 배경
+- Phase 1 베이스라인 분석에서 quick_analysis task 실패율 33% (gpt-5-mini) / 31.6% (gemini) 발견
+- 로그 분석:
+  - **gemini 6건 실패**: 8개 포지션 응답이 ~860~900 bytes에서 JSON 닫히지 않고 잘림
+  - **gpt-5-mini 2건 실패**: raw 빈 응답 — reasoning 모델이 reasoning에 토큰 소진
+- 원인:
+  1. `kr_scheduler.py:1210` 포지션 15:00 LLM `max_tokens=400` — 8개 포지션 응답에 부족
+  2. `kr_scheduler.py:1565` 진입 검증 LLM `max_tokens=120` — GPT-5 reasoning 토큰 보장 안 됨
+
+### 변경
+- **`src/schedulers/kr_scheduler.py:1210`**: `max_tokens=400` → `max(600, len(pos_lines) * 150)` 동적 계산
+  - 8개 포지션 시 1200 tokens 보장 (실제 응답 860~900 bytes 여유 확보)
+- **`src/schedulers/kr_scheduler.py:1565`**: `max_tokens=120` → `600`
+  - GPT-5 reasoning 모델은 reasoning에 토큰 소진 → 출력 짧아도 여유 필요
+
+### 검증
+- py_compile + restart 정상
+- 후속 모니터링: 다음 7일 베이스라인 재실행으로 quick_analysis 성공률 ≥95% 회복 확인
+
 ## 2026-06-16 — LLM 베이스라인 수집 스크립트 (GPT-5 마이그레이션 Phase 1 후속)
 
 ### 추가

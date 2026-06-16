@@ -1202,12 +1202,15 @@ JSON:
 {{"positions": [{{"symbol":"005930","action":"hold","reason":"추세 유효"}}]}}"""
 
             llm = get_llm_manager()
+            # 2026-06-17: max_tokens 400 → 동적 (포지션당 150) — 6/12·6/15·6/16 6건 JSON 잘림 사고 후속
+            # 8개 포지션 시 응답 ~860~900 bytes로 잘려 success=false → JSON 미완료 파싱 실패
+            _max_tokens = max(600, len(pos_lines) * 150)
             result = await asyncio.wait_for(
                 llm.complete_json(
                     prompt=prompt,
                     system="한국 주식 장중 포지션 관리 전문가. JSON만 응답.",
                     task=LLMTask.QUICK_ANALYSIS,
-                    max_tokens=400,
+                    max_tokens=_max_tokens,
                 ),
                 timeout=15.0,
             )
@@ -1557,12 +1560,15 @@ JSON:
 응답 형식 (JSON만):
 {{"q1": "Y", "q2": "Y", "q3": "Y", "pass": true}}"""
 
+            # 2026-06-17: max_tokens 120 → 600 (GPT-5 reasoning 토큰 보장)
+            # 6/10 gpt-5-mini 빈 응답 2건 — reasoning 모델은 reasoning에 토큰 소진하므로
+            # 출력 JSON이 짧아도 (~40 bytes) max_completion_tokens는 여유 필요
             result = await asyncio.wait_for(
                 llm.complete_json(
                     prompt=prompt,
                     system=f"당신은 한국 주식 장중 진입 검증 전문가입니다. {_sys_note} 선정 근거 텍스트만 보고 JSON으로만 응답하세요.",
                     task=LLMTask.QUICK_ANALYSIS,
-                    max_tokens=120,
+                    max_tokens=600,
                 ),
                 timeout=timeout_sec,
             )
