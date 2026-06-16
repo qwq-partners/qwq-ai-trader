@@ -5,10 +5,11 @@
 ## max_positions 잔여 비율 가중 카운트 (2026-05-06~)
 
 분할익절 진행된 포지션이 신규 매수를 막지 않도록 슬롯 가중치 적용:
-- `weight = remain / orig` (잔여 수량 / 원본 수량)
-- 일반 단계(NONE/FIRST/SECOND/THIRD): floor 0.2
-- **TRAILING 단계 (2026-06-16): 추가 × 0.5 곱셈, floor 0.1**
-- 정당화: TRAILING은 +5% 이상 확정 이익 + 고점 추적 모드 → 신규 슬롯 우선 양보
+- 기본: `weight = remain / orig` (잔여 수량 / 원본 수량)
+- **NONE/FIRST**: floor 0.2 (1차 익절은 잔여 80%로 아직 큰 포지션)
+- **SECOND/THIRD** (2026-06-16 확장): 추가 × 0.7 곱셈, floor 0.15
+- **TRAILING** (2026-06-16): 추가 × 0.5 곱셈, floor 0.1
+- 정당화: 익절 진행 = 자금 회수 → 슬롯도 비례 양보, 상승장 신규 기회 확보
 - 구현: `src/risk/manager.py:_get_position_weight`
 - 비교 게이트: `non_core_weighted >= max_positions` (코어홀딩은 별도 슬롯)
 

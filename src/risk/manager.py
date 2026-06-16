@@ -155,15 +155,19 @@ class RiskManager:
             remain = max(int(getattr(state, "remaining_quantity", orig)), 0)
             weight = remain / orig
 
-            # 2026-06-16: TRAILING 단계 추가 디스카운트
-            # 트레일링은 +5% 이상 확정 이익 + 고점 추적 모드 — 신규 슬롯 우선 양보
+            # 2026-06-16: 익절 진행 단계별 추가 디스카운트 (확장)
+            # 정당화: 분할익절로 자금 회수된 만큼 슬롯도 추가 양보
             stage_val = getattr(getattr(state, "current_stage", None), "value", None)
             if stage_val == "trailing":
+                # TRAILING: +25% 이상 분할익절 완료 + 고점 추적 모드 → 최대 양보
                 weight *= 0.5
-                # TRAILING 전용 floor 0.1 (완전 제외는 risk 노출 과다)
                 return max(0.1, min(1.0, weight))
+            if stage_val in ("second", "third"):
+                # SECOND/THIRD: 2차/3차 익절 = 절반 이상 자금 회수 완료
+                weight *= 0.7
+                return max(0.15, min(1.0, weight))
 
-            # 일반 단계: 0.2 floor (남용 방지)
+            # NONE/FIRST: 기존 floor 0.2 유지 (1차 익절은 잔여 80%로 아직 큰 포지션)
             return max(0.2, min(1.0, weight))
         except Exception:
             return 1.0
