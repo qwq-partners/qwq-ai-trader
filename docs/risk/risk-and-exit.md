@@ -1,6 +1,16 @@
 # 리스크 관리 + 청산 전략
 
-> 최종 갱신: 2026-05-04 (V자 재진입 1회 제한, 누적 감점 cap, 패널 통합 P0/P1)
+> 최종 갱신: 2026-06-16 (TRAILING 단계 슬롯 가중 추가 디스카운트)
+
+## max_positions 잔여 비율 가중 카운트 (2026-05-06~)
+
+분할익절 진행된 포지션이 신규 매수를 막지 않도록 슬롯 가중치 적용:
+- `weight = remain / orig` (잔여 수량 / 원본 수량)
+- 일반 단계(NONE/FIRST/SECOND/THIRD): floor 0.2
+- **TRAILING 단계 (2026-06-16): 추가 × 0.5 곱셈, floor 0.1**
+- 정당화: TRAILING은 +5% 이상 확정 이익 + 고점 추적 모드 → 신규 슬롯 우선 양보
+- 구현: `src/risk/manager.py:_get_position_weight`
+- 비교 게이트: `non_core_weighted >= max_positions` (코어홀딩은 별도 슬롯)
 
 ## KR 리스크 (src/risk/manager.py + engine.py)
 
@@ -9,7 +19,7 @@
 |------|---|------|
 | 일일 최대 손실 | -5.0% | effective_daily_pnl **÷ initial_capital** 기준 (2026-04-18 분모 통일 — 대시보드 표시와 일치) |
 | 일일 거래 횟수 | 10회 | daily_max_trades |
-| 최대 포지션 수 | 8개 | max_positions |
+| 최대 포지션 수 | 8개 | max_positions (잔여 비율 가중 카운트) |
 | 기본 포지션 비율 | 25% | equity 대비 |
 | 최소 현금 보유 | 5% | total_equity 대비 |
 

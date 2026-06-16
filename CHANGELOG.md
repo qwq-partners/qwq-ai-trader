@@ -1,5 +1,29 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-16 — TRAILING 단계 슬롯 가중치 추가 디스카운트 (상승장 신규 매수 기회 확보)
+
+### 배경
+- 사용자 지적: 상승장에 1차/2차 익절 후 트레일링 진입 종목이 많아지면 max_positions 한계로 신규 매수 기회 상실 우려
+- 기존 메커니즘(2026-05-06): 잔여 비율(`remain/orig`) 기반 가중 카운트, floor 0.2
+- 라이브 검증 (현재 11개 포지션): raw=8(max 도달) → weighted=6.38 → 신규 1.62 슬롯 여유
+- 기존 메커니즘이 50%는 커버하나, TRAILING 단계는 별도 디스카운트 없어 사용자 우려 일부 유효
+
+### 변경 (src/risk/manager.py:_get_position_weight)
+- TRAILING 단계 포지션: 기존 `weight = remain/orig`에 추가 **× 0.5** 곱셈
+- TRAILING 전용 floor: 0.2 → **0.1** 완화 (완전 제외는 risk 노출 과다)
+- 기존 NONE/FIRST/SECOND/THIRD 단계는 floor 0.2 유지 (변경 없음)
+- 정당화: TRAILING은 +5% 이상 확정 이익 + 고점 추적 모드 → 신규 슬롯 우선 양보
+
+### 효과 (예시)
+- 8개 포지션 모두 TRAILING + 잔여 30% 가정:
+  - 기존: max(0.2, 0.3) × 8 = 2.4 슬롯 → 5.6 여유
+  - 신규: max(0.1, 0.3×0.5) × 8 = 1.2 슬롯 → **6.8 여유**
+- 차이: 신규 슬롯 1.2개 추가 확보
+
+### 검증
+- py_compile 통과
+- systemctl restart 후 active
+
 ## 2026-06-14 — 크로스검증 3건 패치 (rule11 dedup + SEPA 횡보 차단 + gap_and_go 장막판 캡)
 
 ### 배경

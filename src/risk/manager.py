@@ -138,6 +138,8 @@ class RiskManager:
         """포지션의 max_positions 슬롯 가중치 (잔여 비율 기준)
 
         2026-05-06 P0: 1차/2차 익절 후 잔여 작아진 포지션은 슬롯 가중 감소.
+        2026-06-16: TRAILING 단계는 추가 0.5x 디스카운트 (확정 이익 모드 →
+                    신규 진입에 슬롯 더 양보). floor도 0.2 → 0.1로 완화.
         ExitManager 참조 없거나 stage 정보 없으면 1.0 폴백 (기존 동작).
 
         Returns:
@@ -152,7 +154,16 @@ class RiskManager:
             orig = max(int(getattr(state, "original_quantity", 0)), 1)
             remain = max(int(getattr(state, "remaining_quantity", orig)), 0)
             weight = remain / orig
-            # 0.2 floor: 트레일링 잔여라도 최소 1/5 슬롯은 차지 (남용 방지)
+
+            # 2026-06-16: TRAILING 단계 추가 디스카운트
+            # 트레일링은 +5% 이상 확정 이익 + 고점 추적 모드 — 신규 슬롯 우선 양보
+            stage_val = getattr(getattr(state, "current_stage", None), "value", None)
+            if stage_val == "trailing":
+                weight *= 0.5
+                # TRAILING 전용 floor 0.1 (완전 제외는 risk 노출 과다)
+                return max(0.1, min(1.0, weight))
+
+            # 일반 단계: 0.2 floor (남용 방지)
             return max(0.2, min(1.0, weight))
         except Exception:
             return 1.0
