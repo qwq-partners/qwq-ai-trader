@@ -1,5 +1,30 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-17 — ✅ Phase 2 후속 모델 가용성 프로브: gpt-5.4-mini 확인 (마이그레이션 경로 확정)
+
+### 추가
+- **scripts/probe_openai_models.py**: light/heavy 후속 모델 후보 14개를 OpenAI API에 실제 호출하여 가용성 + resolved snapshot 확인
+
+### 프로브 결과 (2026-06-17)
+
+**Light 가용** (gpt-5-mini 대체 경로):
+| Alias | Resolved Snapshot | 비고 |
+|-------|-------------------|------|
+| ✅ gpt-5.4-mini | gpt-5.4-mini-2026-03-17 | **권장 — 같은 family 후속** |
+| ✅ gpt-5.4-nano | gpt-5.4-nano-2026-03-17 | 저비용 대안 |
+
+**Heavy 가용** (gpt-5.4 미래 대비):
+| Alias | Resolved Snapshot |
+|-------|-------------------|
+| ✅ gpt-5.5 | gpt-5.5-2026-04-23 |
+
+**기타 시도 → 모두 404 model_not_found**:
+gpt-5.5-mini, gpt-5.6-mini, gpt-6-mini, gpt-6-nano, gpt-5.5-nano, gpt-5-mini-2026-03-05, gpt-5-mini-latest, gpt-5.6, gpt-6, gpt-6-pro, gpt-5.4-pro
+
+### 마이그레이션 경로 확정
+- `gpt-5-mini` (🔴 deprecated 2026-12-10) → **`gpt-5.4-mini`** (안전, 같은 family 후속)
+- `gpt-5.4` (🟢 안전) → 유지, 필요 시 `gpt-5.5`로 업그레이드 가능
+
 ## 2026-06-17 — 🔴 GPT-5 alias→snapshot 캡처: gpt-5-mini가 Deprecation 대상으로 해석 (Phase 1 후속)
 
 ### 추가
