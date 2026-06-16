@@ -1,5 +1,24 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-16 — LLM 베이스라인 수집 스크립트 (GPT-5 마이그레이션 Phase 1 후속)
+
+### 추가
+- **scripts/llm_baseline.py**: `~/.cache/ai_trader/llm_responses/*.jsonl`에서 task×model별 통계 집계
+  - 호출수, 성공률, raw 응답 크기 (토큰 미기록 → bytes proxy)
+  - Deprecation 대상 snapshot ID(`gpt-5-2025-08-07` 등) 직접 사용 감지
+  - `--days N`, `--json out.json` 옵션
+- 초기 베이스라인 (최근 7일):
+  - 총 1,149건 호출
+  - gemini-3.1-flash-lite-preview: 858건 (75%) — theme_detection, quick_analysis
+  - gpt-5-mini: 286건 (25%) — theme_detection, quick_analysis
+  - gpt-5.4: 5건 — strategy_analysis (heavy)
+  - **Deprecation snapshot 직접 사용 0건** (alias만 사용)
+
+### 마이그레이션 우선순위 (분석 결과)
+1. **gpt-5-mini** (286건/주, alias) — 영향 최대, Shadow A/B 우선
+2. **gpt-5.4** (5건/주, heavy) — 영향 작지만 품질 중요
+3. Gemini 무관
+
 ## 2026-06-16 — LLM 모델명 config override (GPT-5 deprecation 마이그레이션 Phase 1)
 
 ### 배경
