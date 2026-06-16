@@ -1,5 +1,27 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-17 — 🔴 GPT-5 alias→snapshot 캡처: gpt-5-mini가 Deprecation 대상으로 해석 (Phase 1 후속)
+
+### 추가
+- **scripts/capture_openai_snapshots.py**: config의 OpenAI alias 호출 → 응답 `model` 필드에서 실제 snapshot ID 추출
+
+### 캡처 결과 (2026-06-17 첫 실행)
+| Alias | Resolved Snapshot | Deprecation |
+|-------|-------------------|-------------|
+| gpt-5-mini | **gpt-5-mini-2025-08-07** | 🔴 **YES (2026-12-10 셧다운)** |
+| gpt-5.4 | gpt-5.4-2026-03-05 | 🟢 NO |
+
+### 영향 평가
+- 사용 중인 `gpt-5-mini` alias가 deprecation 직접 대상 snapshot으로 해석됨
+- OpenAI가 alias를 newer snapshot으로 auto-roll 하지 않으면 **12/10 셧다운 시 즉시 호출 실패**
+- 베이스라인 286건/주 → 폴백(Gemini)으로 100% 전환 시 라우팅 변화 + 비용 증가 가능
+
+### 긴급도 상승
+- Phase 2 (후속 모델 조사) **즉시 진입 필요**
+- 후보:
+  - `gpt-5.4-mini` 또는 신규 `gpt-6-mini` 가용성 확인
+  - 임시 폴백 강화 (Gemini로 사전 트래픽 이전)
+
 ## 2026-06-17 — quick_analysis 실패율 33% 원인 해결 (max_tokens 부족)
 
 ### 배경
