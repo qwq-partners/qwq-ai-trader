@@ -1,5 +1,31 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-17 — LLM 마이그레이션 자동화 (Phase 3→4 자동 전환 모니터)
+
+### 추가
+- **scripts/llm_migration_monitor.py**: 일일 자동 실행 스크립트
+  - 최근 7일 shadow 분석 → 텔레그램 일일 요약 발송
+  - Shadow 시작 후 7일+ 경과 시 자동 전환 검토
+    - 기준: both_success ≥95%, key_overlap ≥85%, shadow_failed ≤5%, n≥50
+    - 충족 시: `evolved_overrides.yml`에 `llm.openai_model_light: gpt-5.4-mini` 추가 + 봇 자동 재시작
+    - 미충족 시: 텔레그램 경고 + 사유 명시 + 수동 결정 요청
+  - 전환 후 7일 안정성 모니터 → Phase 5 (shadow 비활성) 권장 알림
+  - 상태 파일: `~/.cache/ai_trader/llm_migration_state.json`
+- **cron 등록**: `0 22 * * *` (매일 22:00 KST)
+  - 명령: `/home/ubuntu/projects/qwq-ai-trader/venv/bin/python /home/ubuntu/projects/qwq-ai-trader/scripts/llm_migration_monitor.py`
+  - 로그: `~/.cache/ai_trader/llm_migration_monitor.log`
+
+### 자동 진행 흐름
+1. 6/17~6/23: 매일 22:00 일일 요약 (shadow 데이터 누적 보고)
+2. 6/24~: 매일 22:00 전환 기준 평가 → 충족 시 즉시 자동 전환
+3. 전환 후: 매일 새 모델 모니터, 7일 안정 시 Phase 5 알림
+4. 모든 단계에서 텔레그램 통보 → 사용자 개입 없이 진행
+
+### 안전장치
+- 기준 미충족 시 자동 변경 안 함
+- 봇 재시작 실패해도 evolved_overrides.yml 변경은 다음 정기 재시작 시 자동 적용
+- 롤백: evolved_overrides.yml의 `llm.openai_model_light` 키 제거 → 기본값(gpt-5-mini) 복귀
+
 ## 2026-06-17 — Phase 3 Shadow A/B 활성화 (gpt-5-mini vs gpt-5.4-mini, 1주 비교)
 
 ### 배경
