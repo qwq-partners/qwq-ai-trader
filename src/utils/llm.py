@@ -58,6 +58,10 @@ class LLMConfig:
     gemini_model_heavy: str = "gemini-3.1-pro-preview"
     gemini_model_light: str = "gemini-3.1-flash-lite-preview"
 
+    # 2026-06-17 Phase 3: Shadow A/B — light 후속 모델 비교용 (deprecation 마이그레이션)
+    # 빈 문자열이면 비활성, 값이 있으면 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출
+    openai_model_light_shadow: str = ""
+
     # 타임아웃 (Thinking 모델은 추론에 시간이 걸림)
     timeout_seconds: int = 120
 
@@ -99,6 +103,7 @@ class LLMConfig:
             gemini_model_light=(
                 llm_cfg.get("gemini_model_light") or "gemini-3.1-flash-lite-preview"
             ),
+            openai_model_light_shadow=(llm_cfg.get("openai_model_light_shadow") or ""),
         )
 
 
@@ -458,6 +463,8 @@ class LLMManager:
     # LLM 응답 로그 경로
     _LLM_LOG_DIR = Path.home() / ".cache" / "ai_trader" / "llm_responses"
     _LLM_LOG_RETENTION_DAYS = 7
+    # 2026-06-17 Phase 3: Shadow A/B 비교 로그 (light 후속 모델 마이그레이션)
+    _SHADOW_LOG_DIR = Path.home() / ".cache" / "ai_trader" / "llm_shadow"
 
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config or LLMConfig.from_env()
@@ -546,6 +553,7 @@ class LLMManager:
         if response.success:
             self.stats["success_count"] += 1
             self.daily_usage.add(response.input_tokens, response.output_tokens, response.model)
+            self._maybe_fire_shadow(prompt, system, task, kwargs, response)
             return response
 
         # Fallback 시도
@@ -561,11 +569,91 @@ class LLMManager:
         if response.success:
             self.stats["success_count"] += 1
             self.daily_usage.add(response.input_tokens, response.output_tokens, response.model)
+            self._maybe_fire_shadow(prompt, system, task, kwargs, response)
         else:
             self.stats["error_count"] += 1
             logger.error(f"Fallback LLM도 실패 ({fallback_provider.value}): {response.error}")
 
         return response
+
+    def _maybe_fire_shadow(
+        self,
+        prompt: str,
+        system: str,
+        task: LLMTask,
+        kwargs: dict,
+        primary_response: LLMResponse,
+    ) -> None:
+        """2026-06-17 Phase 3: Shadow A/B — light 후속 모델 마이그레이션 비교.
+
+        조건: openai_model_light_shadow 설정 && primary가 openai_model_light였을 때만 호출.
+        fire-and-forget — 본 응답은 즉시 반환됨.
+        """
+        shadow_model = self.config.openai_model_light_shadow
+        if not shadow_model:
+            return
+        if primary_response.model != self.config.openai_model_light:
+            return
+        try:
+            asyncio.create_task(
+                self._fire_shadow(prompt, system, task, kwargs, primary_response, shadow_model)
+            )
+        except Exception as e:
+            logger.debug(f"[LLM-Shadow] 스케줄 실패: {e}")
+
+    async def _fire_shadow(
+        self,
+        prompt: str,
+        system: str,
+        task: LLMTask,
+        kwargs: dict,
+        primary_response: LLMResponse,
+        shadow_model: str,
+    ) -> None:
+        """Shadow 호출 + 비교 로그 기록."""
+        import time
+        import uuid
+        pair_id = uuid.uuid4().hex[:12]
+        t0 = time.time()
+        try:
+            shadow_resp = await self.openai.complete(
+                prompt, system, model=shadow_model, **kwargs
+            )
+        except Exception as e:
+            shadow_resp = LLMResponse(
+                content="", model=shadow_model, provider=LLMProvider.OPENAI,
+                success=False, error=str(e)[:200],
+            )
+        latency_ms = int((time.time() - t0) * 1000)
+        try:
+            self._SHADOW_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            today = datetime.now().strftime("%Y%m%d")
+            log_path = self._SHADOW_LOG_DIR / f"{today}.jsonl"
+            entry = {
+                "ts": datetime.now().isoformat(),
+                "pair_id": pair_id,
+                "task": task.value,
+                "primary": {
+                    "model": primary_response.model,
+                    "success": primary_response.success,
+                    "content": (primary_response.content or "")[:5120],
+                    "in_tokens": primary_response.input_tokens,
+                    "out_tokens": primary_response.output_tokens,
+                },
+                "shadow": {
+                    "model": shadow_resp.model,
+                    "success": shadow_resp.success,
+                    "content": (shadow_resp.content or "")[:5120],
+                    "error": shadow_resp.error or "",
+                    "in_tokens": shadow_resp.input_tokens,
+                    "out_tokens": shadow_resp.output_tokens,
+                    "latency_ms": latency_ms,
+                },
+            }
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except Exception as e:
+            logger.debug(f"[LLM-Shadow] 로그 실패: {e}")
 
     async def complete_json(
         self,

@@ -17,9 +17,14 @@ llm:
   # 코드 변경 없이 evolved_overrides.yml 또는 default.yml에서 모델 교체 가능
   # 빈 문자열 또는 키 없으면 LLMConfig dataclass 기본값 사용
   openai_model_heavy: "gpt-5.4"        # 거래 복기, 전략 진화 (heavy)
-  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약 (light)
+  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약 (light) — 2026-12-10 deprecation
   gemini_model_heavy: "gemini-3.1-pro-preview"
   gemini_model_light: "gemini-3.1-flash-lite-preview"
+  # 2026-06-17 Phase 3: Shadow A/B — gpt-5-mini 후속 비교
+  # 활성화 시 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출 (fire-and-forget)
+  # 로그: ~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl
+  # 빈 문자열 = 비활성, "gpt-5.4-mini" = 활성 비교
+  openai_model_light_shadow: "gpt-5.4-mini"
 
 logging:
   level: INFO

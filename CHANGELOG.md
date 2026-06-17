@@ -1,5 +1,34 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-17 — Phase 3 Shadow A/B 활성화 (gpt-5-mini vs gpt-5.4-mini, 1주 비교)
+
+### 배경
+- Phase 2에서 `gpt-5.4-mini` 가용 확인
+- 즉시 전환 전에 1주 Shadow 비교로 응답 품질·지연·토큰 사용 검증
+
+### 변경
+- **src/utils/llm.py**:
+  - `LLMConfig.openai_model_light_shadow: str = ""` 신규 (빈 문자열=비활성)
+  - `_maybe_fire_shadow()`: primary가 `openai_model_light`였을 때만 트리거
+  - `_fire_shadow()`: 동일 프롬프트로 shadow_model 호출 (fire-and-forget), 비교 로그 기록
+  - 로그: `~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl`
+  - 필드: `pair_id`, `task`, `primary.{model, success, content, in/out_tokens}`, `shadow.{..., error, latency_ms}`
+- **config/default.yml**: `openai_model_light_shadow: "gpt-5.4-mini"` 활성
+- **scripts/run_trader.py**: 시작 로그에 shadow 모델 표시
+  - 신규 로그: `[LLM] 모델 설정: ..., openai_light=gpt-5-mini, shadow=gpt-5.4-mini, ...`
+- **scripts/analyze_shadow.py**: shadow 로그 비교 분석 스크립트
+  - 성공률, JSON 파싱율, key overlap, 응답 크기/토큰/지연 비교
+  - `--days N`, `--json out.json` 옵션
+
+### 영향
+- light OpenAI 호출 시 추가 OpenAI 호출 1건 발생 (fire-and-forget, 본 응답 차단 없음)
+- 베이스라인 286건/주 → 추가 비용 estimated $0.3~0.6/주 (gpt-5.4-mini ≈ gpt-5-mini 단가 가정)
+- 비교 데이터 1주 누적 후 Phase 4 전환 결정
+
+### 검증
+- py_compile + restart 정상
+- 시작 로그: `[LLM] 모델 설정: ..., shadow=gpt-5.4-mini, ...` 확인
+
 ## 2026-06-17 — ✅ Phase 2 후속 모델 가용성 프로브: gpt-5.4-mini 확인 (마이그레이션 경로 확정)
 
 ### 추가

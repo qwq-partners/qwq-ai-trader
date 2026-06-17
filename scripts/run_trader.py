@@ -1936,9 +1936,13 @@ async def main():
             from src.utils.llm import LLMConfig as _LLMConfig, set_llm_config
             _llm_cfg = _LLMConfig.from_config(config.raw if hasattr(config, "raw") else {})
             set_llm_config(_llm_cfg)
+            _shadow_tag = (
+                f", shadow={_llm_cfg.openai_model_light_shadow}"
+                if _llm_cfg.openai_model_light_shadow else ", shadow=비활성"
+            )
             logger.info(
                 f"[LLM] 모델 설정: openai_heavy={_llm_cfg.openai_model_heavy}, "
-                f"openai_light={_llm_cfg.openai_model_light}, "
+                f"openai_light={_llm_cfg.openai_model_light}{_shadow_tag}, "
                 f"gemini_heavy={_llm_cfg.gemini_model_heavy}, "
                 f"gemini_light={_llm_cfg.gemini_model_light}"
             )
