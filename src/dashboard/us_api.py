@@ -80,8 +80,7 @@ class USAPIHandler:
         total_value = float(portfolio.total_equity)
         positions_value = float(portfolio.total_position_value)
         daily_pnl = float(portfolio.effective_daily_pnl)
-        initial = float(portfolio.initial_capital)
-        daily_pnl_pct = (daily_pnl / initial * 100) if initial else 0.0
+        daily_pnl_pct = (daily_pnl / total_value * 100) if total_value else 0.0
 
         return web.json_response({
             "cash": float(portfolio.cash),

@@ -18,7 +18,7 @@
 ### 일일 한도
 | 항목 | 값 | 비고 |
 |------|---|------|
-| 일일 최대 손실 | -5.0% | effective_daily_pnl **÷ initial_capital** 기준 (2026-04-18 분모 통일 — 대시보드 표시와 일치) |
+| 일일 최대 손실 | -5.0% | effective_daily_pnl **÷ total_equity** 기준 (2026-06-23 변경 — 외부 계좌 합산 시 .env INITIAL_CAPITAL 왜곡 회피, 대시보드와 일치) |
 | 일일 거래 횟수 | 10회 | daily_max_trades |
 | 최대 포지션 수 | 8개 | max_positions (잔여 비율 가중 카운트) |
 | 기본 포지션 비율 | 25% | equity 대비 |

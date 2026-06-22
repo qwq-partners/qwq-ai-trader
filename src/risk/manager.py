@@ -787,12 +787,11 @@ class RiskManager:
             return True  # equity 0 이하 → 거래 차단 (안전 장치)
 
         # effective_daily_pnl = 실현 + (현재 미실현 - 시작 미실현)
-        # 분모 통일: initial_capital 기준 — 대시보드(data_collector/equity_tracker)와
-        # 동일 분모 사용해 "표시값 -4.9%인데 차단된다" 같은 의사결정 혼선 방지.
-        # initial_capital이 0/음수면 fallback으로 equity 사용 (안전 장치).
+        # 분모: total_equity 기준 — 외부 계좌(KIS_EXT_ACCOUNTS) 합산 시
+        # .env의 INITIAL_CAPITAL이 실제 운용 자본을 반영하지 못해 비율 왜곡 발생.
+        # 대시보드(data_collector/equity_tracker)도 total_equity 기준으로 통일.
         effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
-        _denom = self.initial_capital if self.initial_capital and self.initial_capital > 0 else equity
-        daily_pnl_pct = float(effective_pnl / _denom * 100)
+        daily_pnl_pct = float(effective_pnl / equity * 100)
 
         if self.market == "KR":
             warn_start_pct = self.config.daily_max_loss_pct * 0.7  # 3.5% (경고 시작)

@@ -1,5 +1,23 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-23 — 일일 손익률 분모를 total_equity로 통일 (외부 계좌 합산 시 왜곡 수정)
+
+### 배경
+- 외부 계좌(KIS_EXT_ACCOUNTS) 합산 시 실제 운용 자본은 23.7M이지만, `.env` `INITIAL_CAPITAL=500,000` 이 분모로 사용되어 일일 손익률이 약 47배 부풀려 표시됨 (실제 -0.5% → 표시 -25%, 한도 5% 대비 사용률 500%).
+- 동일 분모를 사용하는 리스크 매니저의 일일 손실 차단 로직도 함께 오작동 가능.
+
+### 수정
+- **src/dashboard/data_collector.py**: `get_portfolio()` `daily_pnl_pct`, `get_risk()` `daily_loss_pct` — 분모 `portfolio.initial_capital` → `portfolio.total_equity`
+- **src/risk/manager.py:790-794**: `_is_daily_loss_limit_hit()` 분모 통일 (`initial_capital` → `total_equity`). 주석도 신정책으로 갱신.
+- **src/dashboard/us_api.py:83-84**: US `handle_portfolio` `daily_pnl_pct` — `total_value` 기준
+- **src/dashboard/sse.py:433-434**: US SSE `us_portfolio` 이벤트 — `total_value` 기준
+- **src/analytics/equity_tracker.py:90,142**: 폴백 경로 분모를 `total_equity` 기준으로 통일 (주 경로는 이미 `prev_snapshot.total_equity` 사용)
+
+### 영향
+- 대시보드 "오늘 -25.00%" 표시가 실제 비율(-0.5%대)로 정상화
+- 한도 -5% 차단 로직이 실제 자산 기준으로 동작 (이전엔 500k 기준으로 작은 손실에도 차단)
+- 외부 계좌 미사용 환경에선 `initial_capital ≈ total_equity` 이므로 행동 변화 없음
+
 ## 2026-06-17 — LLM 마이그레이션 자동화 (Phase 3→4 자동 전환 모니터)
 
 ### 추가

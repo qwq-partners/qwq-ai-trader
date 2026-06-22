@@ -87,7 +87,7 @@ class EquityTracker:
             return
         effective_pnl = float(portfolio.effective_daily_pnl)
         initial_capital = float(portfolio.initial_capital)
-        pnl_pct = (effective_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
+        pnl_pct = (effective_pnl / total_equity * 100) if total_equity > 0 else 0.0
 
         # 보유 포지션 상세
         positions_list = []
@@ -139,7 +139,7 @@ class EquityTracker:
             # 이전 스냅샷 없으면 실현+미실현 변동 폴백
             unrealized_delta = float(portfolio.total_unrealized_pnl - portfolio.daily_start_unrealized_pnl)
             effective_pnl = realized_pnl + unrealized_delta
-            pnl_pct = (effective_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
+            pnl_pct = (effective_pnl / total_equity * 100) if total_equity > 0 else 0.0
 
         # 포지션 수익률순 정렬 (높은->낮은)
         positions_list.sort(key=lambda x: x.get('pnl_pct', 0), reverse=True)

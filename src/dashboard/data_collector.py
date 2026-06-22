@@ -123,8 +123,8 @@ class DashboardDataCollector:
             "unrealized_pnl": portfolio.total_unrealized_pnl,
             "unrealized_pnl_net": total_unrealized_net,   # 수수료 포함 미실현 순손익
             "daily_pnl_pct": (
-                float(effective_pnl / portfolio.initial_capital * 100)
-                if portfolio.initial_capital > 0 else 0.0
+                float(effective_pnl / portfolio.total_equity * 100)
+                if portfolio.total_equity > 0 else 0.0
             ),
             "daily_trades": portfolio.daily_trades,
             "cash_ratio": portfolio.cash_ratio,
@@ -194,8 +194,8 @@ class DashboardDataCollector:
 
         effective_pnl = portfolio.effective_daily_pnl
         daily_loss_pct = (
-            float(effective_pnl / portfolio.initial_capital * 100)
-            if portfolio.initial_capital > 0 else 0.0
+            float(effective_pnl / portfolio.total_equity * 100)
+            if portfolio.total_equity > 0 else 0.0
         )
 
         config = engine.config.risk
