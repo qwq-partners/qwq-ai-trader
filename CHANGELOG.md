@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-23 — fix: 선제 stale 청산 SignalEvent import 버그 (폭락 방어 불능)
+
+### 배경
+- 6/23 KOSPI -9.99% 폭락 로그에서 발견: `batch_analyzer._preemptive_stale_exit_on_bear`가
+  `from ..core.types import ... SignalEvent ...`로 잘못 import → `SignalEvent`는 `core.event`에 있어 ImportError.
+- 결과: 약세장 진입 시 정체 손실 포지션 선제 청산 방어가 매번 예외로 실패(무해하나 방어 불능).
+
+### 수정
+- **src/core/batch_analyzer.py:1266**: 중복·오류 로컬 import 제거 (StrategyType/OrderSide/Signal/SignalStrength/SignalEvent는 이미 모듈 상단에서 정상 import됨).
+
 ## 2026-06-23 — 종목별 "절대 자동매도 금지(exit_exempt)" + 수동 풀매수 config화 (펩트론 087010)
 
 ### 배경

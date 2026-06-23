@@ -1263,7 +1263,8 @@ class BatchAnalyzer:
 
         목적: -5% stop_loss까지 가지 않고 본전 부근에서 빠져나가기
         """
-        from ..core.types import StrategyType, OrderSide, SignalEvent, Signal, SignalStrength
+        # StrategyType/OrderSide/Signal/SignalStrength/SignalEvent는 모듈 상단에서 import됨.
+        # (기존 버그: SignalEvent를 types에서 import 시도 → ImportError로 선제 stale 청산 실패)
         from datetime import date as _date
         try:
             from ..utils.session import is_kr_market_holiday
