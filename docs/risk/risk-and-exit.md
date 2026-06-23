@@ -126,6 +126,19 @@
 
 ## 청산 관리 (src/strategies/exit_manager.py)
 
+### 종목별 자동매도 절대 금지 (exit_exempt / no_auto_exit_symbols, 2026-06-23~)
+- **용도**: 수동 풀매수·장기보유 종목을 모든 자동매도 로직에서 영구 제외 (코어보다 강한 보호 — 코어는 리밸런싱 교체 가능하나 이건 그것도 면제).
+- **설정**: `config kr.no_auto_exit_symbols: ['087010', ...]` — 기동 시 `run_trader._initialize_kr`가 `exit_manager.add_exit_exempt()`로 복원(재시작에도 유지).
+- **차단 경로 (7개, 누락 시 손절/청산 발생)**:
+  1. ExitManager `update_price` 진입부(`_exit_exempt`) → 손절·트레일링·분할익절·stale·보유기간초과 일괄
+  2. `kr_scheduler._check_exit_signal` (WS 실시간) → 즉시 return
+  3. `kr_scheduler._run_position_eod_llm_check` → LLM 종가점검 청산 제외
+  4. `batch_analyzer.monitor_positions` 루프 → RSI2 청산·보유기간초과·ExitManager 릴레이 스킵
+  5. `batch_analyzer._preemptive_stale_exit_on_bear` → 약세장 선제 stale 청산 스킵
+  - 코어 경로(rebalance/stale/early-warning)는 `strategy == "core_holding"` 한정이라 strategy="manual" 종목엔 미적용.
+- **수동 매수**: `config kr.manual_buy_orders: [{symbol, name, exit_exempt}]` → 기동 시 1회 실행(보유 시 자동 스킵). KIS 시장가는 주문가능금액을 상한가 기준으로 계산하므로 marketable 지정가(현재가+0.6%)로 전액 체결.
+- ⚠️ **손절 부재 = 하락 100% 노출.** 청산은 전적으로 수동 판단. (펩트론 087010: 2026-06-23 사용자 지시로 전액 매수 + 손절 면제)
+
 ### 분할 익절 단계
 | 단계 | 조건 | 매도 비율 | 누적 |
 |------|------|----------|------|

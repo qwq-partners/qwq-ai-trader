@@ -632,6 +632,14 @@ class UnifiedTradingBot:
             ))
             logger.info("[KR] 분할 익절 관리자 초기화 완료")
 
+            # 절대 자동매도 금지 종목 복원 (config kr.no_auto_exit_symbols)
+            # in-memory exit_exempt는 재시작 시 소실되므로 config에서 매번 복원해 보호 유지.
+            _no_auto_exit = kr_cfg.get("no_auto_exit_symbols") or self.config.get("no_auto_exit_symbols") or []
+            for _sym in _no_auto_exit:
+                self.exit_manager.add_exit_exempt(str(_sym), reason="config: 자동매도 금지")
+            if _no_auto_exit:
+                logger.info(f"[KR] 자동매도 금지 종목 복원: {[str(s) for s in _no_auto_exit]}")
+
             # RiskManager에 ExitManager 참조 주입 (max_positions 가중 카운트용, 2026-05-06)
             if self.risk_manager and self.exit_manager:
                 self.risk_manager.set_exit_manager(self.exit_manager)

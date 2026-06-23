@@ -1,5 +1,25 @@
 # QWQ AI Trader - Changelog
 
+## 2026-06-23 — 종목별 "절대 자동매도 금지(exit_exempt)" + 수동 풀매수 config화 (펩트론 087010)
+
+### 배경
+- 사용자 지시: 펩트론(087010)을 가용현금 전액 매수 + 손절 등 모든 자동매도 영구 면제(코어보다 강한 보호).
+- 기존 `exit_exempt`(ExitManager)는 손절/트레일링/익절/stale만 차단하고, ExitManager를 거치지 않는 매도 경로(RSI2·보유기간·선제stale·LLM 종가점검·WS 실시간)는 막지 못함. 또 in-memory라 재시작 시 소실.
+
+### 수정
+- **config/default.yml (kr)**: `no_auto_exit_symbols: ['087010']` 추가 (재시작에도 유지되는 자동매도 금지 화이트리스트). `manual_buy_orders` 키 추가(로드용, 매수 후 비움).
+- **scripts/run_trader.py**: 기동 시 `kr.no_auto_exit_symbols`를 읽어 `exit_manager.add_exit_exempt()` 복원 (재시작 보호 유지).
+- **src/schedulers/kr_scheduler.py**:
+  - `__init__`: `_manual_buy_orders`를 `config.kr.manual_buy_orders`에서 로드
+  - `run_manual_buy_orders`: ①이미 보유 시 매수 스킵(재시작 안전) ②시장가→marketable 지정가(현재가+0.6%, KIS가 시장가 주문가능금액을 상한가 기준으로 계산해 전액 매수 불가했던 문제 해결) ③`send_alert(force=...)` 잘못된 kwarg 제거(기존 버그)
+  - `_check_exit_signal`(WS 실시간): exit_exempt 종목 즉시 return
+  - `_run_position_eod_llm_check`: exit_exempt 종목 LLM 청산 제외
+- **src/core/batch_analyzer.py**: `monitor_positions` 루프 + `_preemptive_stale_exit_on_bear`에 exit_exempt 가드 (RSI2·보유기간초과·선제stale 차단)
+
+### 결과
+- 087010 85주 @ 194,982원 체결(2026-06-23 12:56), exit_exempt 등록. 7개 자동매도 경로 전부 차단 확인.
+- ⚠️ 손절 부재 = 하락 100% 노출. 청산은 수동 판단 전용.
+
 ## 2026-06-23 — 일일 손익률 분모를 total_equity로 통일 (외부 계좌 합산 시 왜곡 수정)
 
 ### 배경

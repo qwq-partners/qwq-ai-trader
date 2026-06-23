@@ -55,8 +55,11 @@ class KRScheduler:
 
         # 수동 매수 예약 (1회성, 장 시작 시 실행)
         # 형식: [{"symbol": "123320", "name": "TIGER 레버리지", "exit_exempt": True}]
-        # 필요 시 여기에 추가하고, 실행 완료 후 비울 것
-        self._manual_buy_orders = []
+        # config kr.manual_buy_orders 에서 로드 (보유 시 자동 스킵 → 재시작 안전)
+        try:
+            self._manual_buy_orders = list(bot.config.get("kr", "manual_buy_orders") or [])
+        except Exception:
+            self._manual_buy_orders = []
 
         # 복합 트레일링용 캐시 (일봉 기반, 장중 불변)
         self._ma5_cache: Dict[str, float] = {}        # 종목별 5일 이동평균
@@ -581,6 +584,10 @@ class KRScheduler:
         """분할 익절/손절 신호 확인"""
         bot = self.bot
         if not bot.exit_manager or not bot.broker:
+            return
+
+        # 절대 자동매도 금지 종목 — 실시간 청산 체크 전면 스킵
+        if bot.exit_manager.is_exit_exempt(symbol):
             return
 
         # 자동 재개 체크
@@ -1226,6 +1233,10 @@ JSON:
                 symbol = llm_pos.get("symbol", "")
                 action = llm_pos.get("action", "hold")
                 reason = llm_pos.get("reason", "")
+
+                # 절대 자동매도 금지 종목은 LLM 종가점검 청산 대상 제외
+                if bot.exit_manager and bot.exit_manager.is_exit_exempt(symbol):
+                    continue
 
                 if action == "exit_today" and symbol in positions:
                     pos = positions[symbol]
@@ -5351,6 +5362,15 @@ JSON:
                 exit_exempt = order_spec.get("exit_exempt", False)
 
                 try:
+                    # 이미 보유 중이면 재매수 스킵 (재시작 안전) — 단 청산예외는 재확인
+                    if symbol in bot.engine.portfolio.positions:
+                        logger.info(f"[수동매수] {name}({symbol}) 이미 보유 — 매수 스킵")
+                        if exit_exempt and bot.exit_manager:
+                            bot.exit_manager.add_exit_exempt(
+                                symbol, reason=f"수동매수 청산예외(보유중): {name}"
+                            )
+                        continue
+
                     # 현재가 조회
                     quote = await bot.broker.get_quote(symbol)
                     price = quote.get("price", 0)
@@ -5360,34 +5380,48 @@ JSON:
 
                     price_d = Decimal(str(price))
 
-                    # 가용 현금으로 최대 수량 계산 (수수료 고려하여 99.5%)
+                    # KIS 시장가 매수는 주문가능금액을 '상한가' 기준으로 계산 → 전액 매수 불가.
+                    # 현재가 +0.6%의 marketable 지정가로 전액에 가깝게 즉시 체결.
+                    def _kr_tick(p: float) -> int:
+                        if p < 2000: return 1
+                        if p < 5000: return 5
+                        if p < 20000: return 10
+                        if p < 50000: return 50
+                        if p < 200000: return 100
+                        if p < 500000: return 500
+                        return 1000
+                    _raw_limit = int(float(price_d) * 1.006)
+                    _tick = _kr_tick(float(price_d))
+                    limit_price = Decimal(str(((_raw_limit // _tick) + 1) * _tick))  # tick 올림
+
+                    # 가용 현금의 99.5%로 지정가 기준 최대 수량 계산
                     available = bot.engine.get_available_cash() * Decimal("0.995")
                     if available <= 0:
                         logger.warning(f"[수동매수] 가용 현금 부족: {available}")
                         continue
 
-                    qty = int(available / price_d)
+                    qty = int(available / limit_price)
                     if qty <= 0:
                         logger.warning(
                             f"[수동매수] {name}({symbol}) 수량 0 "
-                            f"(가용={available}, 가격={price_d})"
+                            f"(가용={available}, 지정가={limit_price})"
                         )
                         continue
 
-                    total_amount = price_d * qty
+                    total_amount = limit_price * qty
                     logger.info(
-                        f"[수동매수] {name}({symbol}) 시장가 매수 "
-                        f"수량={qty}주, 가격≈{price_d:,.0f}원, "
+                        f"[수동매수] {name}({symbol}) 지정가 매수 "
+                        f"수량={qty}주, 지정가={limit_price:,.0f}원(현재가 {price_d:,.0f}), "
                         f"총액≈{total_amount:,.0f}원"
                     )
 
-                    # 시장가 매수 주문
+                    # marketable 지정가 매수 주문 (현재가 +0.6%)
                     order = Order(
                         symbol=symbol,
                         side=OrderSide.BUY,
-                        order_type=OrderType.MARKET,
+                        order_type=OrderType.LIMIT,
                         quantity=qty,
-                        price=None,
+                        price=limit_price,
                         strategy="manual",
                         reason=f"수동 풀매수: {name}",
                     )
@@ -5405,7 +5439,6 @@ JSON:
                             f"{name}({symbol})\n"
                             f"수량: {qty}주\n"
                             f"예상 금액: {total_amount:,.0f}원",
-                            force=True,
                         )
 
                         # 청산 예외 등록
@@ -5419,7 +5452,6 @@ JSON:
                         )
                         await send_alert(
                             f"⚠️ 수동 매수 실패\n{name}({symbol}): {order_id}",
-                            force=True,
                         )
                 except Exception as e:
                     logger.error(f"[수동매수] {name}({symbol}) 오류: {e}")

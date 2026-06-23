@@ -40,6 +40,12 @@ dashboard:
 
 # ── KR 마켓 ──
 kr:
+  # 절대 자동매도 금지 종목 (수동 풀매수/장기보유 등) — 재시작에도 유지
+  # ExitManager 손절·트레일링·익절·stale + batch_analyzer RSI2·보유기간·선제stale 전부 면제
+  no_auto_exit_symbols: ['087010']   # 펩트론 (2026-06-23 사용자 지시, 손절 면제 + 전액 보유)
+  # 수동 매수 예약 (1회성, 보유 시 자동 스킵). config kr.manual_buy_orders 로 로드.
+  # 형식: [{symbol, name, exit_exempt}]. 087010 매수 완료(2026-06-23)로 비움 — 재매수 방지.
+  manual_buy_orders: []
   trading:
     initial_capital: 10000000        # 초기 자본금 (1000만원 → .env INITIAL_CAPITAL 우선)
     market: KRX

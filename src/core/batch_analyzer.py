@@ -1277,6 +1277,9 @@ class BatchAnalyzer:
         today = _date.today()
         candidates = []
         for symbol, pos in portfolio.positions.items():
+            # 절대 자동매도 금지 종목 제외
+            if self._exit_manager and self._exit_manager.is_exit_exempt(symbol):
+                continue
             # 코어홀딩 제외
             if pos.strategy == "core_holding":
                 continue
@@ -1427,6 +1430,9 @@ class BatchAnalyzer:
 
         _exited_symbols: set = set()  # 이번 루프에서 청산 신호 발행된 종목 (중복 방지)
         for symbol, pos in list(self._engine.portfolio.positions.items()):
+            # 절대 자동매도 금지 종목 — RSI2/ExitManager/보유기간 등 모든 청산 체크 스킵
+            if self._exit_manager and self._exit_manager.is_exit_exempt(symbol):
+                continue
             try:
                 # REST API 현재가 조회
                 quote = await self._broker.get_quote(symbol)
