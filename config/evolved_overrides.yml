@@ -121,6 +121,14 @@ _meta:
       30:70이 백테스트상 최고였으나 core가 전체 35%가 되어 단일 전략 집중도가
       gap_and_go와 동급이 되므로 40:60(core 30%)으로 억제. 두 시나리오 모두 현행 대비 개선.
       ※ gap_and_go/strategic_swing은 백테스트 미지원이라 이 비교에 포함되지 않았다.
+  risk_config.strategy_allocation.vcp_breakout:
+    source: manual_review
+    timestamp: '2026-08-03T02:15:00'
+    note: >-
+      선행 발굴 라인(VCP 돌파) 신설에 따른 신규 배분 10%.
+      기존 합계 90% → 100%로, 다른 전략을 줄이지 않고 미배분분에 얹었다.
+      검증 전 라인이므로 보수적 배분이며, 표본 누적 후 백테스트로 재조정한다.
+      ※ 배분은 상한이지 의무가 아니며, 최소 현금 5%는 can_open_position이 별도로 강제한다.
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'

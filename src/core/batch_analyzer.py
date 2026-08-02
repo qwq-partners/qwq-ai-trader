@@ -944,6 +944,10 @@ class BatchAnalyzer:
         executed = 0
         skipped = 0
         valid_idx = 0  # 유효 시그널 실행 순번 (간격 적용용)
+        # 돌파 대기 시그널 이월 목록 (2026-08-03)
+        #   이 함수는 끝에서 self._pending을 통째로 비운다. 돌파 트리거 미달로
+        #   스킵한 시그널까지 같이 지워지면 "다음 윈도우에서 재확인"이 성립하지 않는다.
+        carry_over: List[PendingSignal] = []
 
         for sig in signals:
             try:
@@ -989,6 +993,7 @@ class BatchAnalyzer:
                             f"현재가 {current_price:,.0f} < 트리거 {_trigger:,.0f} "
                             f"(만료 전까지 유지)"
                         )
+                        carry_over.append(sig)
                         skipped += 1
                         continue
 
@@ -1213,7 +1218,12 @@ class BatchAnalyzer:
         logger.info(f"[배치분석] 실행 완료: 발행={executed}개, 스킵={skipped}개")
 
         # 실행 완료 후 시그널 파일 비우기 (재시작 시 중복 방지)
-        self._pending = []
+        # 단, 돌파 트리거 미달로 대기 중인 시그널은 남긴다 — 안 그러면 첫 윈도우에서
+        # 지워져 12:30·13:50 재확인이 성립하지 않는다. 재진입은 상단 '이미 보유 중'
+        # 체크가 막으므로 이월해도 중복 매수는 발생하지 않는다.
+        self._pending = [s for s in carry_over if not s.is_expired()]
+        if self._pending:
+            logger.info(f"[배치분석] 돌파 대기 {len(self._pending)}개 이월 (다음 윈도우 재확인)")
         self._save_json()
 
     async def _refresh_composite_cache(self):
