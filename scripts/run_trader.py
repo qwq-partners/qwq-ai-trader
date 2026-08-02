@@ -596,14 +596,24 @@ class UnifiedTradingBot:
                     self.config.raw if hasattr(self.config, "raw") else {}
                 )
                 if expert_cfg.enabled:
+                    # ⚠️ self.llm_manager는 어디에서도 설정되지 않는다.
+                    #    기존 getattr(self, "llm_manager", None)은 항상 None을 반환했고,
+                    #    그 결과 news_curator._classify_batch가 즉시 return되어
+                    #    **종목별 뉴스 sentiment 분류가 통째로 동작하지 않았다**
+                    #    (macro_economist/global_micro/kr_economy의 LLM 종합도 동일).
+                    #    싱글턴을 직접 주입한다. (2026-08-02 수정)
+                    from src.utils.llm import get_llm_manager as _get_llm_mgr
+                    _expert_llm = _get_llm_mgr()
                     self.expert_orchestrator = ExpertOrchestrator(
                         config=expert_cfg,
-                        llm_manager=getattr(self, "llm_manager", None),
+                        llm_manager=_expert_llm,
                     )
                     self.expert_orchestrator.register_all()
                     n_experts = len(self.expert_orchestrator.agents)
                     logger.info(
-                        f"[전문가] {n_experts}명 등록 완료 (예산 {expert_cfg.daily_call_budget}회/agent)"
+                        f"[전문가] {n_experts}명 등록 완료 "
+                        f"(예산 {expert_cfg.daily_call_budget}회/agent, "
+                        f"LLM={'연결' if _expert_llm else '없음'})"
                     )
                 else:
                     logger.info("[전문가] 비활성화됨 (config experts.enabled=false)")

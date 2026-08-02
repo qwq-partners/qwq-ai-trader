@@ -1,5 +1,37 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-02 — fix(P0): 전문가 8명 LLM 미연결 + Core Holding 비중 확대
+
+### 🐞 P0 — 전문가 시스템의 LLM이 통째로 죽어 있었다
+- `run_trader.py:601`이 `ExpertOrchestrator(llm_manager=getattr(self, "llm_manager", None))`인데
+  **`self.llm_manager`는 어디에서도 설정되지 않는다** → 항상 `None` 주입.
+- 영향 (전문가 4명의 LLM 기능 무력화):
+  | 대상 | 증상 |
+  |---|---|
+  | `news_curator._classify_batch` | `llm_manager is None` → **즉시 return. 종목별 뉴스 sentiment 분류 자체가 미동작** |
+  | `macro_economist._llm_synthesize` | 빈 문자열 반환 (거시 종합 없음) |
+  | `global_micro_expert` / `kr_economy_expert` | 동일 패턴 |
+- `get_symbol_sentiment()`가 항상 중립(score 0 / tags 없음)을 반환해 왔고,
+  이를 소비하는 신규 `NewsAnalyst`까지 연쇄로 무력화될 상황이었다.
+- **수정**: `get_llm_manager()` 싱글턴 직접 주입 + 초기화 로그에 `LLM=연결` 표기.
+- 검증: 수정 전 `llm_manager=None`(분류 불가) → 수정 후 `LLMManager`(분류 가능) 실측 대조.
+
+### Core Holding 비중 확대 (25% → 30%, sepa 25% → 20%)
+- ⚠️ 직전 보고에서 "백테스트상 50%까지 적정, 현재 25%"라고 한 것은 **단위 혼동**이었다.
+  백테스트의 50%는 3전략 내 상대비중, 25%는 전체 배분 중 비중이다.
+  RSI2 폐지분을 양분하면서 상대비중은 이미 50:50에 도달해 있었다.
+- RSI2 제거 상태에서 재측정 (6개월 × 60·120종목):
+  | sepa : core | 6개월/120 | 6개월/60 | 손익비 |
+  |---|---|---|---|
+  | 60 : 40 | -3.74% | +1.82% | 2.51 / 2.39 |
+  | 50 : 50 (기존) | +26.16% | +16.21% | 2.38 / 2.70 |
+  | **40 : 60 (채택)** | **+26.84%** | **+32.40%** | 2.40 / **2.98** |
+  | 30 : 70 | +31.96% | +31.85% | 2.46 / 2.98 |
+- 30:70이 백테스트상 최고였으나 core가 전체 35%가 되어 단일 전략 집중도가
+  gap_and_go(35%)와 동급이 된다 → **40:60(core 30%)으로 억제**. 두 시나리오 모두 개선.
+- ※ `gap_and_go`(35%)와 `strategic_swing`(5%)은 백테스트가 지원하지 않아 이 비교에서 빠져 있다.
+  전체 배분 최적화가 아니라 **3전략 내 상대비중 최적화**임에 유의.
+
 ## 2026-08-02 — feat: 종목 단위 에이전트 팀 (`src/agents/`) — TradingAgents 구조 도입
 
 ### 배경
