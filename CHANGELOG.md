@@ -1,5 +1,158 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-02 — fix/tune: 백테스트-실제 엔진 동기화 + 1차 익절 재조정 (백테스트 검증 기반)
+
+### 배경 — 백테스트가 실제 엔진과 달랐다
+- 실제 `exit_manager.py`는 **ATR 연동 트레일링**을 쓴다:
+  `effective_ts = min( max(config_ts, ATR% × 1.2), 6.0 )`, 코어홀딩 제외.
+- 그런데 `scripts/backtest_strategies.py`는 **고정 `trailing_stop_pct=3.0`**만 썼고,
+  기본값도 evolved 적용 전 값(익절비중 0.30, min/max stop 3.5/6.0)이었다.
+- 결과적으로 백테스트가 실제보다 **비관적**으로 나왔다 (SEPA 3개월 -12.02% vs 실제 설정 -7.19%).
+- ⚠️ 이 상태로 두면 신설 백테스트 게이트가 **실제와 다른 조건으로 A/B 판정**을 내렸을 것이다.
+
+### 수정 1) 백테스트 엔진 동기화
+- **scripts/backtest_strategies.py**:
+  - `BacktestConfig`에 `enable_atr_linked_trailing`(True) / `atr_link_multiplier`(1.2) / `atr_link_cap_pct`(6.0) 추가
+  - `BTExitManager.check_exit`에 실제 엔진과 동일한 ATR 연동 트레일링 공식 이식 (코어홀딩 제외)
+  - `BTPosition.atr_pct` 필드 추가 — `atr_stop_pct`는 min/max로 clamp돼 원본 ATR 역산이 불가능하므로 별도 보관
+
+### 수정 2) 1차 익절 재조정 (5.0%/20% → 10.0%/10%)
+- **근거**: SEPA 81건 청산 사유 분해 결과
+  | 청산 사유 | 비중 | 평균 손익 | 평균 보유 |
+  |---|---|---|---|
+  | 손절 | 39.5% | **-6.21%** | 2.2일 |
+  | 1차 익절 (+5%) | 27.2% | +5.20% | **1.9일** |
+  | 트레일링 | 25.9% | +6.26% | 2.6일 |
+  | 2차 익절 (+15%) | 3.7% | **+23.21%** | 3.3일 |
+  - 익절 +5.20% < 손절 -6.21% — "이익은 짧게, 손실은 길게"의 정반대 구조.
+  - 2차 익절까지 살아남은 소수가 +23.21% → 추세를 태우면 크게 번다.
+- **검증** (3·6개월 × 60·120종목 4개 시나리오): **손익비 전부 개선**
+  1.53→1.85 / 1.67→2.01 / 1.98→2.21 / 2.03→2.70, 수익률 3/4 개선
+  (6개월·60종목은 -3.87% → **+1.68%**로 전환). 3개월·120종목만 -19.67%→-21.41%로 악화.
+- **트레일링 완화는 백테스트가 반증** — TS 5.5/6.0%로 넓히니 오히려 악화(-7.28%, -7.56%).
+  현재 4.5% + cap 6.0%가 적정이므로 **변경하지 않음**.
+- **적용 지점** (4곳 모두 동기화 필요):
+  - `config/default.yml` `kr.exit_manager`: 5.0/0.30 → 10.0/0.10
+  - `config/evolved_overrides.yml` `exit_manager`: 5.0/0.2 → 10.0/0.1 (+ `_meta` 근거 기록)
+  - `src/strategies/exit_manager.py` `ExitConfig` 기본값: 10.0/0.10
+  - `src/strategies/exit_manager.py` `REGIME_EXIT_PARAMS` (레짐별 오버라이드가 config를 덮으므로 필수):
+    trending_bull 5→10, neutral 5→10, ranging 4→8, turning_point 4→8,
+    trending_bear 3→**5** (약세장은 조기 실현이 합리적이라 보수적 상향)
+
+### 검증
+- `AppConfig.load()`로 최종 병합값 확인: `first_exit_pct=10.0`, `first_exit_ratio=0.1`,
+  `trailing_stop_pct=4.5`, `max_stop_pct=8.0` (evolved_overrides 정상 오버라이드).
+- 재시작 후 ExitManager 정상 초기화, `exit_exempt`(087010 펩트론) 보호 유지 확인.
+
+### 한계 (정직한 기록)
+- 검증 구간이 2026-05~08 하락장에 집중돼 있다. 상승장 표본이 없다.
+- 3개월·120종목 시나리오에서는 악화했다 — 만능 개선이 아니다.
+- 손익비가 4/4에서 개선된 점을 근거로 채택했으나, **상승장 도래 시 재검증 필요**.
+
+## 2026-08-02 — feat: 킬스위치·감사원장·백테스트 게이트·게이트성능·적대적 검증 (외부 레포 벤치마킹)
+
+### 배경
+- 참고: HKUDS/Vibe-Trading, gameworkerkim/vibe-investing, maj34/financial-agent.
+- 비교 결과 에이전트 구성·메모리(trade_memory 3-Layer, Trade Wiki)·게이트(11규칙)는 우리가 더 깊었고,
+  실제 갭은 ①백테스트가 진화와 단절 ②킬스위치/감사원장 부재 ③확증 편향(단일 LLM `승인하시겠습니까?`)
+  ④차단 신호의 사후 검증 부재 4가지였다.
+
+### 1) 킬스위치 + 감사 원장 (Vibe-Trading의 mandate/kill switch 차용)
+- **src/risk/kill_switch.py** (신규): 파일 존재만으로 주문 차단. 봇 재시작 불필요.
+  - `~/.cache/ai_trader/KILL_SWITCH` → 신규 매수만 차단(청산 허용)
+  - `~/.cache/ai_trader/KILL_SWITCH_ALL` → 전면 동결
+  - 시장별 접미사(`_KR`/`_US`) 지원, 파일 내용은 차단 사유로 로그에 표시, TTL 2초 캐시
+  - 파일시스템 오류 시 차단하지 않음(오탐으로 거래 정지 방지)
+- **src/utils/audit_log.py** (신규): append-only JSONL 월별 감사 원장
+  (`~/.cache/ai_trader/audit/audit_YYYYMM.jsonl`). submit/accept/reject/blocked 기록.
+- **kis_kr.py `submit_order` / kis_us.py `_submit_order`**: 모든 주문이 통과하는 유일한 두 지점에 가드 삽입.
+- ⚠️ `KILL_SWITCH_ALL`은 손절까지 막으므로 하락 노출이 무한정 열린다. 포지션 정리 후 사용할 것.
+
+### 2) 백테스트 ↔ 진화 연결 (Research Autopilot 차용)
+- 기존 문제: `scripts/backtest_strategies.py`(1,580줄)가 존재하지만 `strategy_evolver`가 호출하지 않아
+  **실거래 5영업일/10건 표본만으로 파라미터를 변경** → 노이즈 학습 위험.
+- **src/core/evolution/backtest_gate.py** (신규): 변경 적용 전 동일 기간 A/B 백테스트
+  (baseline=현재값, candidate=제안값, 3개월/60종목 ≈ 42초).
+  - 통과 조건: 총수익률 개선 + MDD 악화 ≤1%p + 후보 거래 ≥10건
+  - 실패 시 **fail-closed**(변경 보류) — 검증 못 한 변경을 적용하느니 하루 미룬다
+  - `PARAM_MAP`으로 진화 파라미터 → BacktestConfig 필드 매핑, 미지원 파라미터는 게이트 생략
+  - `EVOLUTION_BACKTEST_GATE=0` 으로 비활성화 가능
+- **scripts/backtest_strategies.py**: `ResultAnalyzer.metrics()` 분리, `run(save_results=)` 결과 dict 반환
+  (기존 CLI 동작은 그대로).
+- **strategy_evolver.py**: `evolve()`에 게이트 연결, `EvolutionState`에 `total_rejected_by_backtest`,
+  `consecutive_gate_errors` 추가. 게이트 장애 3회 연속 시 텔레그램 알림(진화가 조용히 멈추는 것 방지).
+
+### 3) 게이트 성능 분석 (Shadow Account 차용)
+- **src/analytics/gate_performance.py** (신규): 차단된 신호의 20영업일 사후 수익률을 게이트별 집계.
+  post-exit review가 "판 뒤 올랐나"를 본다면 이건 "막은 게 옳았나"를 본다.
+- 토요일 09:30 `run_post_exit_review_scheduler`에 연결, 텔레그램 리포트.
+- **초회 실측 (최근 90일, 5,259건)**:
+  | 게이트 | 건수 | 차단 신호 20일 평균 | 회피성공 |
+  |---|---|---|---|
+  | G1_regime | 4,600 | **-9.28%** | 62% |
+  | G3_risk | 209 | -11.24% | 65% |
+  | G2_cross | 57 | **-13.21%** | 74% |
+  | G5_cash | 64 | -10.95% | 70% |
+  | G_intraday | 62 | -0.83% | 48% |
+  | **PASSED(대조군)** | **120** | **-2.88%** | 57% |
+  - 모든 게이트가 유효(차단 신호가 크게 하락). 특히 G2_cross가 가장 정확.
+  - ⚠️ **다만 통과 신호조차 20영업일 평균 -2.88%** — 게이트가 아니라 진입 전략의 문제.
+  - G_intraday만 효과 불명확(-0.83%, 기회손실 39%) → 재검토 대상.
+
+### 4) 적대적 검증 + 멀티 LLM 합의 (vibe-investing 차용)
+- 기존 `llm_second_check` 프롬프트는 "이 매수 시그널을 승인하시겠습니까?" — 승인을 기본값으로 깔아 확증 편향 유발.
+- **src/core/adversarial_validator.py** (신규): 역할 분리 + 교차 검증
+  - Bull(OpenAI): 지지 근거 평가 / Bear(Gemini): **실패 시나리오 제시 강제**("문제 없음" 답변 금지)
+  - 만장일치 승인/거부 → confidence 1.0, 불일치 → 0.5(기본은 통과, `STRICT_ON_DISAGREEMENT`로 전환 가능)
+  - fail-open: LLM 장애 시 기존 단일 LLM 경로로 폴백
+- **src/utils/llm.py**: `complete_with(provider=...)` 추가(폴백 없이 provider 고정 — 모델 간 비교용),
+  gpt-5 계열 `reasoning_effort` 파라미터 지원.
+- ⚠️ **중요 발견**: gpt-5-mini는 추론 모델이라 `max_tokens`가 작으면 추론 토큰만 쓰고
+  **본문이 빈 문자열로 온다(success=True, content='')**. 실측 120·400 모두 빈 응답 →
+  `reasoning_effort="low"` + `MAX_TOKENS=400`으로 해결. 이 값을 줄이지 말 것.
+- **cross_validator.py**: 적대검증 연결. LLM을 2회 호출하므로 일일 한도 카운터도 2회 증가시킴.
+
+### 5) 리뷰에서 발견한 기존 버그 수정 (P0)
+- **trade_memory.py:578 / trading_principles.py:329**: `from ..utils.llm import LLMTask` →
+  `src/core/evolution/`에서 `..utils`는 `src.core.utils`(존재하지 않음) → **호출 시마다 ImportError**.
+  `...utils`로 수정. 영향: 주간 L1→L2→L3 메모리 압축(`_llm_structured_review`)과
+  주간 원칙 인사이트(`_generate_llm_weekly_insight`)가 그동안 동작하지 않았음.
+
+### 검증
+- 전체 py_compile 통과, 봇 재시작 후 `[진화] 백테스트 게이트 활성` 확인, DB/임포트 에러 없음.
+- 킬스위치: 매수만 차단/전면 동결/해제 3케이스 실측 확인.
+- 적대검증: 과열 신호(RSI 78.5, MA200 +32%, bear) → 만장일치 거부 / 건전 신호 → 만장일치 승인.
+
+## 2026-08-02 — chore: 스토리지 정리 (DB 레거시 테이블 제거 + journald 상한 + retention 자동화)
+
+### 배경
+- 장기 미관리로 스토리지 누적: `ai_db` 1.34GB, journald 1.8GB (상한 미설정).
+- DB에는 구 프로젝트 잔재 스키마(`ai`/`market`/`marts`/`ref`/`sim`)와 `public` 레거시 테이블이 남아 있었음.
+  현 봇 코드가 실제 참조하는 테이블은 7개(`trades`, `trade_events`, `kr_stock_master`, `news_articles`,
+  `theme_history`, `theme_stocks`, `signal_events`)뿐이며, 레거시 테이블은 마지막 데이터 2026-01 이전 + 인덱스 스캔 0회로 확인.
+
+### 수정
+- **DB (`ai_db`)** — 사용자 승인 후 백업 없이 DROP:
+  - 스키마 전체 제거: `ai`, `market`, `marts`, `ref`, `sim` (CASCADE)
+  - `public` 레거시 제거: `krx_minute`(539MB), `ats_trades`(102MB), `candles`, `market_context`,
+    `cli_summaries`, `daily_factors`, `strategy_audit`, `strategy_config`, `tech_filter_scores`,
+    `scouting_candidates`, `fundamental_reports`, `research_reports`, `kr_trading_calendar`,
+    `account_snapshot`, `assets`, 뷰 `bars`/`fills`
+  - 보존 기간 180일 적용: `news_articles` 20,466행 / `theme_history` 5,144행 삭제
+    (조회 코드의 기본 범위는 7일이라 180일이면 충분)
+  - 잔존 7개 테이블 `VACUUM FULL ANALYZE`
+- **pg_cron** (`postgres` DB의 `cron.job`):
+  - jobid 4·7 — 삭제된 테이블(`krx_minute`/`ats_trades`/`candles`) ANALYZE 참조 제거 → 잔존 테이블로 교체
+  - jobid 8 `retention-180d` 신규 등록 (매일 02:30, `schedule_in_database(... ,'ai_db')`) — 180일 초과 뉴스/테마 자동 삭제
+- **journald**: `/etc/systemd/journald.conf.d/99-qwq-limit.conf` 신규
+  (`SystemMaxUse=500M`, `MaxRetentionSec=30day`, `SystemMaxFileSize=50M`) + `--vacuum-size=500M` 1회 수행
+
+### 결과
+- `ai_db` 1.34GB → **318MB**, journald 1.8GB → **410MB**, 루트 파티션 12GB → **9.0GB** (16% → 12%)
+- 봇 무중단(재시작 없음), 정리 후 로그에 DB 관련 에러 없음
+- ⚠️ 미해결: `logs/` 날짜 디렉토리가 봇 기동일 기준으로 고정되어 여러 날 로그가 한 폴더에 누적됨
+  (예: `logs/20260729/`에 07-30~08-01 로그 존재). 용량은 14MB로 경미하나 로테이션 로직 점검 필요.
+
 ## 2026-06-23 — fix: 선제 stale 청산 SignalEvent import 버그 (폭락 방어 불능)
 
 ### 배경

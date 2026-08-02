@@ -30,6 +30,9 @@ from typing import Dict, List, Optional, Any
 import aiohttp
 from loguru import logger
 
+from ...risk import kill_switch
+from ...utils import audit_log
+
 
 # 거래소 코드 매핑
 EXCHANGE_MAP = {
@@ -298,6 +301,24 @@ class KISUSBroker:
         if qty <= 0:
             return {"success": False, "message": "수량은 1 이상이어야 합니다"}
 
+        # 킬스위치 — 모든 US 주문이 반드시 통과하는 지점
+        side = "buy" if side_name == "매수" else "sell"
+        allowed, block_reason = kill_switch.check(side, market="US")
+        if not allowed:
+            logger.error(
+                f"[킬스위치] US 주문 차단: {symbol} {side} {qty}주 — {block_reason}"
+            )
+            audit_log.record_blocked(
+                market="US", symbol=symbol, side=side,
+                reason=block_reason, qty=qty, price=price,
+            )
+            return {"success": False, "message": block_reason}
+
+        audit_log.record(
+            audit_log.EV_SUBMIT, market="US", symbol=symbol, side=side,
+            qty=qty, price=price, exchange=exchange,
+        )
+
         # KIS 해외주식 주문 구분:
         # ORD_DVSN="00" (지정가), OVRS_ORD_UNPR="0"이면 시장가로 처리됨
         ord_dvsn = "00"
@@ -325,6 +346,10 @@ class KISUSBroker:
             output = data.get("output", {})
             order_no = output.get("ODNO", "")
             logger.info(f"[{side_name}] {symbol} {qty}주 주문 성공 (주문번호: {order_no})")
+            audit_log.record(
+                audit_log.EV_ACCEPT, market="US", symbol=symbol, side=side,
+                qty=qty, price=price, order_id=order_no,
+            )
             return {
                 "success": True,
                 "order_no": order_no,
@@ -336,6 +361,10 @@ class KISUSBroker:
         else:
             msg = data.get("msg1", "알 수 없는 오류")
             logger.error(f"[{side_name}] {symbol} {qty}주 주문 실패: {msg}")
+            audit_log.record(
+                audit_log.EV_REJECT, market="US", symbol=symbol, side=side,
+                qty=qty, reason=msg,
+            )
             return {"success": False, "message": msg}
 
     async def cancel_order(self, order_no: str, exchange: str = "NASD",

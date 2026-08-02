@@ -65,9 +65,18 @@ class ExitStage(Enum):
 # 기대 효과 (종목 +40% 달성 기준):
 #   변경 전: 30%×5% + 35%×10% + 17.5%×12% + 17.5%×37% = 13.6%
 #   변경 후: 20%×5% + 40%×15% + 20%×25% + 20%×37%     = 19.4%  (+42%)
+# ▶ 2026-08-02 백테스트 기반 재조정: first_exit_pct 전 레짐 상향
+#
+#   문제: SEPA 청산 사유를 분해하니 1차 익절이 27.2%를 차지하는데 **평균 1.9일**에 발동했다.
+#         평균 익절 +5.20% vs 평균 손절 -6.21% — "이익은 짧게, 손실은 길게"의 정반대.
+#         반면 2차 익절(+15%)까지 살아남은 건은 평균 +23.21%였다.
+#   검증: 3·6개월 × 60·120종목 4개 시나리오에서 +10%/비중10% 조합이
+#         손익비를 전부 개선(1.53→1.85, 1.67→2.01, 1.98→2.21, 2.03→2.70).
+#   적용: 레짐 특성은 유지한 채 비례 상향. 단 trending_bear는 조기 실현이 합리적이라
+#         2배가 아닌 3.0→5.0으로 보수적 조정.
 REGIME_EXIT_PARAMS: Dict[str, Dict] = {
     "trending_bull": {
-        "first_exit_pct":    5.0,
+        "first_exit_pct":   10.0,   # 5 → 10 (추세장에서 초입 절단 방지)
         "second_exit_pct":  15.0,   # 10 → 15
         "third_exit_pct":   25.0,   # 12 → 25
         "trailing_stop_pct":  4.0,  #  3 → 4 (KR ATR 5~7% 대비)
@@ -75,7 +84,7 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
         "stale_high_days":    7,
     },
     "neutral": {
-        "first_exit_pct":    5.0,
+        "first_exit_pct":   10.0,   # 5 → 10
         "second_exit_pct":  12.0,   #  8 → 12
         "third_exit_pct":   20.0,   # 10 → 20
         "trailing_stop_pct":  3.0,  # 2.5 → 3
@@ -83,7 +92,7 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
         "stale_high_days":    5,
     },
     "ranging": {
-        "first_exit_pct":    4.0,
+        "first_exit_pct":    8.0,   # 4 → 8
         "second_exit_pct":   8.0,   #  7 → 8
         "third_exit_pct":   14.0,   #  9 → 14
         "trailing_stop_pct":  2.5,
@@ -91,7 +100,7 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
         "stale_high_days":    4,
     },
     "turning_point": {          # 바닥 전환점 — 중간값
-        "first_exit_pct":    4.0,
+        "first_exit_pct":    8.0,   # 4 → 8
         "second_exit_pct":  10.0,   #  7 → 10
         "third_exit_pct":   18.0,   #  9 → 18
         "trailing_stop_pct":  3.0,  # 2.5 → 3
@@ -99,7 +108,7 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
         "stale_high_days":    5,
     },
     "trending_bear": {
-        "first_exit_pct":    3.0,
+        "first_exit_pct":    5.0,   # 3 → 5 (약세장은 조기 실현이 합리적이라 보수적 상향)
         "second_exit_pct":   8.0,   #  6 → 8 (bear에서도 추세 공간 확보)
         "third_exit_pct":   14.0,   #  8 → 14
         "trailing_stop_pct":  2.0,  # 1.5 → 2
@@ -140,9 +149,10 @@ class ExitConfig:
     # 분할 익절 설정
     enable_partial_exit: bool = True
 
-    # 1차 익절
-    first_exit_pct: float = 5.0       # 목표 수익률 (%)
-    first_exit_ratio: float = 0.30    # 청산 비율 (evolved_overrides에서 0.2로 오버라이드)
+    # 1차 익절 (2026-08-02 백테스트 기반: 5.0/0.30 → 10.0/0.10)
+    #   기존값은 평균 1.9일 만에 발동해 추세 초입을 절단했다.
+    first_exit_pct: float = 10.0      # 목표 수익률 (%)
+    first_exit_ratio: float = 0.10    # 청산 비율
 
     # 2차 익절
     second_exit_pct: float = 15.0     # 목표 수익률 (%) (10 → 15: P0-4)

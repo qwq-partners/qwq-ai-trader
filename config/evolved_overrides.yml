@@ -23,18 +23,18 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    strategic_swing: 34.0
-    momentum_breakout: 0.0
+    strategic_swing: 5.0
+    rsi2_reversal: 10.0
+    sepa_trend: 20.0
     theme_chasing: 0.0
-    sepa_trend: 5.0
-    gap_and_go: 28.0
-    rsi2_reversal: 9.0
+    momentum_breakout: 0.0
+    gap_and_go: 35.0
     core_holding: 20.0
 exit_manager:
   max_stop_pct: 8.0
   min_stop_pct: 4.0
-  first_exit_pct: 5.0
-  first_exit_ratio: 0.2
+  first_exit_pct: 10.0
+  first_exit_ratio: 0.1
   second_exit_ratio: 0.4
   third_exit_ratio: 0.35
   stop_loss_pct: 5.0
@@ -73,7 +73,6 @@ gap_and_go:
   enabled: true
   stop_loss_pct: 3.5
   min_volume_ratio: 3.0
-  min_score: 65.0
 sepa_trend:
   enabled: true
   weight: 60
@@ -88,9 +87,11 @@ _meta:
     timestamp: '2026-04-15T00:00:00'
     note: 3.5→5.0% trending_bull 기본값과 일치 (레짐 적용 전 초기값 정합성)
   exit_manager.first_exit_pct:
-    source: manual_review
-    timestamp: '2026-02-23T15:35:00'
-    note: 2.5→5.0% R:R 1:1→2:1 복원
+    source: manual_review_backtested
+    timestamp: '2026-08-02T21:00:00'
+    note: 5.0→10.0% + ratio 0.2→0.1. 백테스트 4개 시나리오(3·6개월 × 60·120종목)에서
+      손익비 전부 개선(1.53→1.85, 1.67→2.01, 1.98→2.21, 2.03→2.70), 수익률 3/4 개선.
+      기존 +5%/1.9일 익절이 추세 초입을 절단해 "이익은 짧게 손실은 길게"가 되던 문제 해소.
   exit_manager.trailing_activate_pct:
     source: manual_review_locked
     timestamp: '2026-03-07T23:40:00'
@@ -105,7 +106,7 @@ _meta:
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
     source: weekly_rebalance
-    timestamp: '2026-06-13T00:00:56.511666'
+    timestamp: '2026-07-25T00:00:22.682360'
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
@@ -136,9 +137,6 @@ _meta:
   risk_config.default_stop_loss_pct:
     source: llm
     timestamp: '2026-05-11T20:33:17.019911'
-  gap_and_go.min_score:
-    source: rule
-    timestamp: '2026-06-08T20:31:39.175444'
   risk_config.strategy_allocation.core_holding.20pct:
     source: manual_review
     timestamp: '2026-06-04T14:50:00'

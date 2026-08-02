@@ -226,8 +226,11 @@ kr:
 
   exit_manager:
     enable_partial_exit: true
-    first_exit_pct: 5.0
-    first_exit_ratio: 0.30
+    # 2026-08-02 백테스트 기반 조정: +5%/20% → +10%/10%
+    #   기존값은 평균 1.9일 만에 발동해 추세 초입을 절단했다(익절 +5.2% < 손절 -6.2%).
+    #   4개 시나리오(3·6개월 × 60·120종목) 전부에서 손익비 개선 확인.
+    first_exit_pct: 10.0
+    first_exit_ratio: 0.10
     second_exit_pct: 15.0
     second_exit_ratio: 0.50
     third_exit_pct: 25.0

@@ -63,6 +63,10 @@ class EvolutionState:
     total_applied: int = 0
     total_kept: int = 0
     total_rolled_back: int = 0
+    # 백테스트 게이트가 사전 기각한 횟수 (2026-08-02~)
+    total_rejected_by_backtest: int = 0
+    # 게이트 장애(타임아웃/예외) 연속 횟수 — 3회 이상이면 진화가 멈춘 것이므로 알림
+    consecutive_gate_errors: int = 0
 
     def to_dict(self) -> Dict:
         return {
@@ -72,6 +76,8 @@ class EvolutionState:
             "total_applied": self.total_applied,
             "total_kept": self.total_kept,
             "total_rolled_back": self.total_rolled_back,
+            "total_rejected_by_backtest": self.total_rejected_by_backtest,
+            "consecutive_gate_errors": self.consecutive_gate_errors,
         }
 
 
@@ -204,6 +210,16 @@ class StrategyEvolver:
         # 규칙
         self._rules = _build_rules()
 
+        # 백테스트 사전 검증 게이트 (초기화 실패해도 진화는 계속 동작)
+        self.backtest_gate = None
+        try:
+            from .backtest_gate import get_backtest_gate
+            enabled = os.getenv("EVOLUTION_BACKTEST_GATE", "1") != "0"
+            self.backtest_gate = get_backtest_gate(enabled=enabled)
+            logger.info(f"[진화] 백테스트 게이트 {'활성' if enabled else '비활성'}")
+        except Exception as e:
+            logger.warning(f"[진화] 백테스트 게이트 초기화 실패 (게이트 없이 진행): {e}")
+
         # 전략/컴포넌트 참조 (외부에서 설정)
         self._strategies: Dict[str, Any] = {}
         self._components: Dict[str, Any] = {}
@@ -274,6 +290,8 @@ class StrategyEvolver:
                 total_applied=data.get("total_applied", 0),
                 total_kept=data.get("total_kept", 0),
                 total_rolled_back=data.get("total_rolled_back", 0),
+                total_rejected_by_backtest=data.get("total_rejected_by_backtest", 0),
+                consecutive_gate_errors=data.get("consecutive_gate_errors", 0),
             )
 
             logger.info(
@@ -383,14 +401,67 @@ class StrategyEvolver:
             triggered = await self._get_llm_suggestion(review, days)
 
         if triggered and not dry_run:
+            # 5. 백테스트 사전 검증 — 과거 데이터로 개선이 확인된 변경만 적용
+            #    (실거래 5영업일/10건 표본만으로 파라미터를 바꾸면 잡음을 학습한다)
+            gate_result = None
+            if self.backtest_gate is not None:
+                gate = await self.backtest_gate.verify(triggered)
+                gate_result = gate.to_dict()
+                if not gate.passed:
+                    self.state.total_rejected_by_backtest += 1
+
+                    if gate.errored:
+                        # 장애로 검증을 못 한 경우 — 방치하면 진화가 조용히 멈춘다.
+                        # 연속 실패가 쌓이면 사람이 알아야 하므로 알림을 올린다.
+                        self.state.consecutive_gate_errors += 1
+                        logger.error(
+                            f"[진화] 백테스트 게이트 장애 "
+                            f"(연속 {self.state.consecutive_gate_errors}회): {gate.reason}"
+                        )
+                        if self.state.consecutive_gate_errors >= 3:
+                            await self._alert_gate_failure()
+                    else:
+                        self.state.consecutive_gate_errors = 0
+                        logger.warning(f"[진화] 백테스트 게이트 기각: {gate.reason}")
+
+                    self._save_state()
+                    return {
+                        "status": "gate_error" if gate.errored else "rejected_by_backtest",
+                        "change": triggered,
+                        "reason": gate.reason,
+                        "backtest": gate_result,
+                    }
+                self.state.consecutive_gate_errors = 0
+                if not gate.skipped:
+                    triggered = {**triggered, "backtest": gate_result}
+
             self._apply_change(triggered, review)
             self._save_state()
-            return {"status": "applied", "change": triggered}
+            return {"status": "applied", "change": triggered, "backtest": gate_result}
 
         if triggered and dry_run:
             return {"status": "dry_run", "change": triggered}
 
         return {"status": "no_change", "reason": "트리거 규칙 없음"}
+
+    async def _alert_gate_failure(self) -> None:
+        """
+        백테스트 게이트가 연속 실패할 때 알린다.
+
+        게이트는 fail-closed라서 검증에 실패하면 파라미터 변경을 보류한다.
+        의도한 안전 동작이지만, 장애가 계속되면 진화가 사실상 정지한 상태이므로
+        로그만 남기고 넘어가면 몇 주째 멈춰 있어도 아무도 모른다.
+        """
+        try:
+            from ...utils.telegram import send_alert
+            await send_alert(
+                "⚠️ 진화 백테스트 게이트 연속 장애\n"
+                f"연속 {self.state.consecutive_gate_errors}회 실패로 파라미터 변경이 보류 중입니다.\n"
+                "pykrx 데이터 소스 또는 scripts/backtest_strategies.py 확인이 필요합니다.\n"
+                "긴급 시 EVOLUTION_BACKTEST_GATE=0 으로 게이트를 끌 수 있습니다."
+            )
+        except Exception as e:
+            logger.warning(f"[진화] 게이트 장애 알림 실패: {e}")
 
     # ============================================================
     # 평가 로직

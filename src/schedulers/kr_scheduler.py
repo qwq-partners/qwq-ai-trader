@@ -4466,6 +4466,28 @@ JSON:
                                     )
                                 except Exception:
                                     pass
+
+                            # 게이트 성능 분석 (2026-08-02~)
+                            # post-exit가 "판 뒤 올랐나"를 본다면, 이건 "막은 게 옳았나"를 본다.
+                            # 차단 신호의 20영업일 사후 수익률로 게이트별 유효성을 측정한다.
+                            try:
+                                from ..analytics.gate_performance import (
+                                    get_gate_analyzer, GatePerformanceAnalyzer,
+                                )
+                                _ga = get_gate_analyzer()
+                                _ga_result = await _ga.analyze()
+                                if not _ga_result.get("error"):
+                                    _ga_msg = GatePerformanceAnalyzer.format_report(_ga_result)
+                                    if _ga_msg:
+                                        await send_alert(_ga_msg)
+                                    logger.info(
+                                        f"[게이트분석] 완료: 분석={_ga_result.get('total_analyzed')}건, "
+                                        f"게이트={len(_ga_result.get('gates', {}))}종"
+                                    )
+                                else:
+                                    logger.info(f"[게이트분석] 결과: {_ga_result.get('error')}")
+                            except Exception as _ga_e:
+                                logger.error(f"[게이트분석] 실행 실패: {_ga_e}")
                         except Exception as e:
                             logger.error(f"[후속복기] 실행 오류: {e}")
                             await self._send_error_alert(

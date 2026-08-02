@@ -67,6 +67,91 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `config/evolved_overrides.yml` | 진화 오버라이드 | **양쪽 모두 확인 필요** |
 | `.env` | API 키 | 커밋 금지 |
 
+## 킬스위치 (긴급 주문 차단, 2026-08-02~)
+
+파일 하나로 주문을 즉시 막는다. **봇 재시작이 필요 없고**, 엔진이 오작동 중이어도 동작한다
+(모든 주문이 통과하는 브로커 계층에서 검사).
+
+```bash
+# 신규 매수만 차단 (청산은 계속 허용) — 기본 대응
+touch ~/.cache/ai_trader/KILL_SWITCH
+
+# 사유를 적어두면 로그/감사원장에 함께 남는다
+echo "급락장 수동 개입" > ~/.cache/ai_trader/KILL_SWITCH
+
+# 매수·매도 전면 동결
+touch ~/.cache/ai_trader/KILL_SWITCH_ALL
+
+# 시장별 개별 차단
+touch ~/.cache/ai_trader/KILL_SWITCH_KR
+touch ~/.cache/ai_trader/KILL_SWITCH_US
+
+# 해제
+rm ~/.cache/ai_trader/KILL_SWITCH
+```
+
+> ⚠️ `KILL_SWITCH_ALL`은 **손절·트레일링까지 막는다.** 하락 노출이 무한정 열리므로,
+> 포지션을 정리한 뒤 동결하거나 매수만 막는 `KILL_SWITCH`를 쓸 것.
+> 반영까지 최대 2초(TTL 캐시).
+
+### 감사 원장
+
+`trade_journal`이 "체결된 거래"를 남긴다면, 감사 원장은 **시도된 모든 주문**을 남긴다
+(제출·접수·거부·차단). append-only.
+
+```bash
+# 이번 달 기록
+cat ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
+
+# 차단된 주문만
+grep '"blocked"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
+```
+
+## 스토리지 / DB 유지보수 (2026-08-02~)
+
+### 봇이 실제 사용하는 DB 테이블 (`ai_db`, 전부 `public` 스키마)
+
+`trades`, `trade_events`, `kr_stock_master`, `news_articles`, `theme_history`, `theme_stocks`, `signal_events`
+
+> 이 7개 외 테이블이 보이면 레거시다. 2026-08-02에 구 프로젝트 스키마(`ai`/`market`/`marts`/`ref`/`sim`)와
+> `public` 레거시 테이블(`krx_minute`, `ats_trades` 등)을 제거해 1.34GB → 318MB로 축소했다.
+
+### 자동화된 유지보수 (pg_cron, `postgres` DB의 `cron.job`)
+
+| jobid | 스케줄 | 내용 |
+|-------|--------|------|
+| 4 | 매일 02:00 | `news_articles`/`theme_history`/`kr_stock_master` ANALYZE |
+| 8 | 매일 02:30 | **retention-180d** — 180일 초과 뉴스/테마 자동 삭제 |
+| 7 | 일요일 03:00 | `trades`/`trade_events`/`signal_events`/`theme_stocks` ANALYZE |
+| 6 | 일요일 04:00 | `pg_stat_statements_reset()` |
+
+```bash
+# 잡 확인
+sudo -u postgres psql -d postgres -c "SELECT jobid,jobname,schedule,active,database FROM cron.job"
+
+# 잡 등록은 반드시 schedule_in_database (cron 확장은 postgres DB에만 설치됨)
+sudo -u postgres psql -d postgres -c "SELECT cron.schedule_in_database('name','0 2 * * *','SQL','ai_db')"
+```
+
+> ⚠️ 테이블을 DROP하면 pg_cron 잡의 ANALYZE 대상도 함께 정리할 것. 방치 시 매일 잡이 실패한다.
+
+### 용량 점검 명령
+
+```bash
+# DB 전체/테이블별
+sudo -u postgres psql -d ai_db -tc "SELECT pg_size_pretty(pg_database_size('ai_db'))"
+sudo -u postgres psql -d ai_db -c "SELECT schemaname||'.'||relname, n_live_tup, \
+  pg_size_pretty(pg_total_relation_size(relid)) FROM pg_stat_user_tables \
+  ORDER BY pg_total_relation_size(relid) DESC"
+
+# journald (상한 500M / 30일, drop-in: /etc/systemd/journald.conf.d/99-qwq-limit.conf)
+journalctl --disk-usage
+sudo journalctl --vacuum-size=500M
+```
+
+> 레거시 판별 기준: `pg_stat_user_tables`의 `idx_scan = 0` + 최신 데이터 시점이 수개월 전 →
+> 코드에서 `grep -rn "<테이블명>" src/ scripts/`로 미참조 확인 후 DROP.
+
 ## 주간 자동화 (토요일)
 
 | 시각 (KST) | 작업 | 위치 |

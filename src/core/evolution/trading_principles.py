@@ -326,7 +326,7 @@ class TradingPrinciplesManager:
         if not self._llm_manager or not self._trade_memory:
             return ""
 
-        from ..utils.llm import LLMTask
+        from ...utils.llm import LLMTask
 
         # Layer 1 + Layer 2에서 최근 데이터 수집
         recent = []

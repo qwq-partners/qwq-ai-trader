@@ -48,6 +48,16 @@ class CrossStrategyValidator:
         self._trade_wiki = trade_wiki  # 거래 위키 (교훈 컨텍스트)
         self._max_sector_positions = max_sector_positions  # 동일 섹터 최대 포지션 수 (설정 참조)
         self._expert_orchestrator = expert_orchestrator  # 2026-05-29 추가
+
+        # 적대적 교차 검증기 (2026-08-02 추가) — Bull/Bear 역할 분리 + 멀티 LLM 합의
+        # 초기화 실패해도 단일 LLM 경로로 폴백되므로 매매에 영향 없음
+        self._adversarial = None
+        if llm_manager is not None:
+            try:
+                from .adversarial_validator import get_adversarial_validator
+                self._adversarial = get_adversarial_validator(llm_manager)
+            except Exception as e:
+                logger.warning(f"[크로스검증] 적대검증기 초기화 실패 (단일 LLM으로 진행): {e}")
         # 2026-05-29: 규칙 #11 hit log 경로 (shadow mode 효과 측정용)
         self._rule11_log_path = (
             Path.home() / ".cache" / "ai_trader" / "rule11_shadow_log.jsonl"
@@ -712,7 +722,31 @@ class CrossStrategyValidator:
                 + risk_guide
                 + "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )
-            # GPT-5.4 (STRATEGY_ANALYSIS) — 추론 필요한 매수 판단
+            # 적대적 교차 검증 (2026-08-02~)
+            #   Bull(OpenAI) / Bear(Gemini)에게 서로 다른 역할을 주고 합의를 본다.
+            #   Bear는 "문제 없음" 답변이 금지되어 반증 책임을 진다 → 확증 편향 완화.
+            #   실패 시 아래 단일 LLM 경로로 폴백한다.
+            if self._adversarial is not None:
+                extra_ctx = "\n".join(filter(None, [
+                    f"최근 유사 거래 기억: {mem_context}" if mem_context else "",
+                    f"위키 교훈: {wiki_context}" if wiki_context else "",
+                    f"주간 매크로 리스크: {panel_risks}" if panel_risks else "",
+                ]))
+                adv = await self._adversarial.validate(
+                    symbol=symbol, strategy=strategy, score=score,
+                    indicators=indicators, market_regime=market_regime,
+                    sector=sector, extra_context=extra_ctx,
+                )
+                # 적대검증은 Bull+Bear로 LLM을 2회 호출한다.
+                # 위에서 이미 1회를 세었으므로 1회를 더 반영해야 한도가 실제 호출 수와 맞는다.
+                self._daily_llm_count += 1
+                if not adv.failed:
+                    if not adv.approved:
+                        logger.info(f"[크로스검증] 적대검증 거부: {symbol} — {adv.reason}")
+                    return adv.approved
+                # adv.failed면 폴백 (아래 단일 LLM 경로)
+
+            # 단일 LLM 폴백 — GPT-5.4 (STRATEGY_ANALYSIS)
             from ..utils.llm import LLMTask
             resp = await asyncio.wait_for(
                 self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100),

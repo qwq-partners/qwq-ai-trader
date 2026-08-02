@@ -233,6 +233,15 @@ class OpenAIClient(BaseLLMClient):
             if not is_thinking_no_temp:
                 body["temperature"] = temperature
 
+            # 추론 강도 (gpt-5 계열 전용).
+            # gpt-5는 추론 토큰을 max_completion_tokens 안에서 소비하므로,
+            # 판정(YES/NO)처럼 단순한 작업에 기본 추론 강도를 쓰면
+            # 토큰을 추론에만 다 쓰고 본문이 빈 문자열로 온다 (success=True, content='').
+            # 짧은 판정 작업은 reasoning_effort="low"로 호출할 것.
+            reasoning_effort = kwargs.get("reasoning_effort")
+            if is_gpt5 and reasoning_effort:
+                body["reasoning_effort"] = reasoning_effort
+
             async with session.post(
                 f"{self.base_url}/chat/completions",
                 headers={
@@ -573,6 +582,46 @@ class LLMManager:
         else:
             self.stats["error_count"] += 1
             logger.error(f"Fallback LLM도 실패 ({fallback_provider.value}): {response.error}")
+
+        return response
+
+    async def complete_with(
+        self,
+        prompt: str,
+        provider: LLMProvider,
+        weight: str = "light",
+        system: str = "",
+        **kwargs
+    ) -> LLMResponse:
+        """
+        특정 provider를 명시해 호출한다 (폴백 없음).
+
+        complete()는 task별 primary→fallback으로 "하나의 답"을 만든다.
+        서로 다른 모델의 판단을 **비교**하려면 provider를 고정해야 하므로
+        멀티-LLM 합의 검증(adversarial_validator)이 이 메서드를 쓴다.
+
+        Args:
+            provider: 사용할 provider (OPENAI / GEMINI)
+            weight: 모델 등급 ("light" | "heavy" 등, _get_model 규약을 따름)
+        """
+        self.stats["total_requests"] += 1
+
+        if not self._check_budget():
+            logger.warning("일일 LLM 예산 초과")
+            return LLMResponse(
+                content="", model="", provider=provider,
+                success=False, error="Daily budget exceeded"
+            )
+
+        client = self._get_client(provider)
+        model = self._get_model(provider, weight)
+        response = await client.complete(prompt, system, model=model, **kwargs)
+
+        if response.success:
+            self.stats["success_count"] += 1
+            self.daily_usage.add(response.input_tokens, response.output_tokens, response.model)
+        else:
+            self.stats["error_count"] += 1
 
         return response
 

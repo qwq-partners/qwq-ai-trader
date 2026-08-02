@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -131,6 +131,11 @@ class BacktestConfig:
     third_exit_ratio: float = 0.50
     trailing_stop_pct: float = 3.0
     trailing_activate_pct: float = 5.0
+    # ATR 연동 트레일링 (실제 엔진 exit_manager.py와 동일 공식)
+    #   effective_ts = min( max(trailing_stop_pct, ATR% × atr_link_multiplier), atr_link_cap_pct )
+    enable_atr_linked_trailing: bool = True
+    atr_link_multiplier: float = 1.2
+    atr_link_cap_pct: float = 6.0
     # ATR 동적 손절
     atr_multiplier: float = 2.0
     min_stop_pct: float = 3.5
@@ -155,6 +160,7 @@ class BTPosition:
     exit_stage: ExitStage = ExitStage.NONE
     remaining_quantity: int = 0
     atr_stop_pct: float = 5.0
+    atr_pct: float = 0.0          # 진입 시점 ATR%(원본) — ATR 연동 트레일링 계산용
     score_at_entry: float = 0.0
     trailing_activated: bool = False
     breakeven_activated: bool = False
@@ -835,6 +841,15 @@ class BTExitManager:
             trail_pct = self.config.trailing_stop_pct
             trail_activate = self.config.trailing_activate_pct
 
+            # ATR 연동 트레일링 — 실제 엔진(exit_manager.py:490~512)과 동일한 공식.
+            #   effective_ts = min( max(config_ts, ATR% × mult), cap )
+            # 고정 트레일링만 쓰면 변동성 큰 종목이 노이즈에 털려
+            # 백테스트가 실제보다 비관적으로 나온다 (코어홀딩은 실제와 동일하게 제외).
+            if self.config.enable_atr_linked_trailing and pos.atr_pct > 0:
+                atr_based = pos.atr_pct * self.config.atr_link_multiplier
+                trail_pct = min(max(trail_pct, atr_based),
+                                self.config.atr_link_cap_pct)
+
         _, peak_pnl = self.fee.net_pnl(entry, pos.highest_price, 1)
         if peak_pnl >= trail_activate:
             pos.trailing_activated = True
@@ -900,7 +915,19 @@ class BacktestEngine:
         self.daily_loss_locked: bool = False
         self.peak_equity: float = float(config.initial_capital)
 
-    def run(self):
+    def run(self, save_results: bool = True) -> Dict[str, Any]:
+        """
+        백테스트 실행.
+
+        Args:
+            save_results: results/ 에 CSV 저장 (게이트 호출 시 False)
+
+        Returns:
+            ResultAnalyzer.metrics() dict (데이터 없으면 빈 dict)
+
+        stdout 출력을 억제하려면 호출측에서 contextlib.redirect_stdout을 쓴다
+        (진화 게이트가 그렇게 사용).
+        """
         end_date = datetime.now()
         start_date = end_date - timedelta(days=self.config.months * 30)
         warmup_date = start_date - timedelta(days=400)
@@ -930,7 +957,7 @@ class BacktestEngine:
         trading_days = self._get_trading_days(start_str, end_str)
         if not trading_days:
             print("거래일 데이터 없음")
-            return
+            return {}
 
         print(f"\n시뮬레이션: {len(trading_days)}일")
         print("-" * 60)
@@ -980,7 +1007,9 @@ class BacktestEngine:
         # 결과
         analyzer = ResultAnalyzer(self.config, self.trades, self.equity_curve)
         analyzer.print_results()
-        analyzer.save_csv()
+        if save_results:
+            analyzer.save_csv()
+        return analyzer.metrics()
 
     def _get_trading_days(self, start: str, end: str) -> List[pd.Timestamp]:
         sample = self.universe.tickers[0] if self.universe.tickers else "005930"
@@ -1095,6 +1124,8 @@ class BacktestEngine:
 
             atr_pct = data.get('atr_pct')
             if not pd.isna(atr_pct) and float(atr_pct) > 0:
+                # 원본 ATR%도 보관 — atr_stop_pct는 min/max로 clamp되므로 역산이 불가능하다
+                pos.atr_pct = float(atr_pct)
                 pos.atr_stop_pct = max(
                     self.config.min_stop_pct,
                     min(self.config.max_stop_pct,
@@ -1307,10 +1338,15 @@ class ResultAnalyzer:
         self.trades = trades
         self.equity_curve = equity_curve
 
-    def print_results(self):
+    def metrics(self) -> Dict[str, Any]:
+        """
+        결과 지표를 dict로 반환 (출력 없음).
+
+        진화 백테스트 게이트(`src/core/evolution/backtest_gate.py`)가
+        A/B 비교에 사용하므로, 표시용 print_results와 분리해 둔다.
+        """
         if not self.equity_curve:
-            print("데이터 없음")
-            return
+            return {}
 
         initial = float(self.config.initial_capital)
         final = self.equity_curve[-1][1]
@@ -1333,6 +1369,48 @@ class ResultAnalyzer:
         pf = avg_w / avg_l if avg_l > 0 else float('inf')
         sharpe = self._calc_sharpe()
         total_fees = sum(t.fee for t in self.trades)
+
+        return {
+            "initial": initial,
+            "final": final,
+            "total_return_pct": total_ret,
+            "cagr_pct": cagr,
+            "mdd_pct": mdd,
+            "mdd_start": mdd_s,
+            "mdd_end": mdd_e,
+            "sharpe": sharpe,
+            "win_rate": wr,
+            "profit_factor": pf,
+            "total_trades": len(sells),
+            "wins": len(wins),
+            "losses": len(losses),
+            "total_fees": total_fees,
+            "start_date": start_d,
+            "end_date": end_d,
+            "avg_holding_days": (float(np.mean([t.holding_days for t in sells]))
+                                 if sells else 0.0),
+        }
+
+    def print_results(self):
+        m = self.metrics()
+        if not m:
+            print("데이터 없음")
+            return
+
+        initial = m["initial"]
+        final = m["final"]
+        total_ret = m["total_return_pct"]
+        start_d = m["start_date"]
+        end_d = m["end_date"]
+        cagr = m["cagr_pct"]
+        mdd, mdd_s, mdd_e = m["mdd_pct"], m["mdd_start"], m["mdd_end"]
+        wr = m["win_rate"]
+        pf = m["profit_factor"]
+        sharpe = m["sharpe"]
+        total_fees = m["total_fees"]
+
+        sells = [t for t in self.trades if t.side == "SELL"]
+        wins = [t for t in sells if t.pnl > 0]
 
         print("\n" + "=" * 60)
         print(f" 백테스트 결과 ({start_d} ~ {end_d})")

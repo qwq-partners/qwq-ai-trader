@@ -160,7 +160,9 @@ scripts/
 | 어닝스 드리프트 | `us/earnings_drift.py` | EPS 서프라이즈 후 모멘텀 |
 
 ### 청산 관리 (ExitManager)
-- **1차 익절**: +5% → 20% 매도 (evolved_overrides: first_exit_ratio=0.2)
+- **1차 익절**: +10% → 10% 매도 (2026-08-02 백테스트 검증으로 +5%/20%에서 조정)
+  - 기존값은 평균 1.9일에 발동해 추세 초입을 절단 (익절 +5.2% < 손절 -6.2%)
+  - ⚠️ 변경 시 4곳 동시 수정: `default.yml` / `evolved_overrides.yml` / `ExitConfig` / **`REGIME_EXIT_PARAMS`**
 - **2차 익절**: +15% → 잔여의 50% 매도
 - **3차 익절**: +25% → 잔여의 50% 매도 (기본값, 레짐별 REGIME_EXIT_PARAMS로 조정)
 - **트레일링**: 고점 대비 3% 하락, 수익 +5% 이상 시 활성화
@@ -362,13 +364,29 @@ INITIAL_CAPITAL (KR, 기본 500000)
 
 ---
 
+## 긴급 정지 (킬스위치, 2026-08-02~)
+
+파일 하나로 주문을 즉시 차단. **봇 재시작 불필요**, 브로커 계층에서 검사하므로 엔진 오작동 시에도 동작.
+
+```bash
+touch ~/.cache/ai_trader/KILL_SWITCH       # 신규 매수만 차단 (청산 허용)
+touch ~/.cache/ai_trader/KILL_SWITCH_ALL   # 전면 동결 (⚠️ 손절도 막힘)
+rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
+```
+
+- 시장별: `KILL_SWITCH_KR` / `KILL_SWITCH_US`, 파일 내용은 차단 사유로 기록됨 (반영 최대 2초)
+- 감사 원장: `~/.cache/ai_trader/audit/audit_YYYYMM.jsonl` (시도된 모든 주문 append-only)
+
 ## 진화 시스템
 
 - 매일 20:30 자동 실행 (KR)
-- `TradeReviewer` → `DailyReviewer` → `StrategyEvolver`
+- `TradeReviewer` → `DailyReviewer` → `StrategyEvolver` → **`BacktestGate`**
 - 최대 1개 파라미터만 변경 (race condition 방지)
 - 평가 기간: 5영업일 + 10건 이상 거래
 - 신뢰도 >= 0.6인 파라미터만 자동 적용
+- **백테스트 사전 검증 (2026-08-02~)**: 적용 전 A/B 백테스트(3개월/60종목)로 개선 확인.
+  수익률 개선 + MDD 악화 ≤1%p + 거래 ≥10건이어야 통과. 실패 시 **보류(fail-closed)**.
+  `EVOLUTION_BACKTEST_GATE=0`으로 비활성화 가능
 - 즉시 롤백: 손익비 < 1.0
 - 내장 규칙: 승률 < 40% → 진입 기준 +5, 승률 > 65% → 진입 기준 -5
 - 결과는 `evolved_overrides.yml`에 영속화

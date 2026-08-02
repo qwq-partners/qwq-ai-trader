@@ -575,7 +575,7 @@ class TradeMemory:
         if not self._llm_manager:
             return 0
 
-        from ..utils.llm import LLMTask
+        from ...utils.llm import LLMTask
 
         # 최근 거래 요약 (L1 전체 + L2 최근 10건)
         recent_trades = []

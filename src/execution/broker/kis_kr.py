@@ -23,6 +23,8 @@ from .base import BaseBroker
 from ...core.types import (
     Order, Fill, Position, OrderSide, OrderStatus, OrderType, MarketSession
 )
+from ...risk import kill_switch
+from ...utils import audit_log
 
 
 @dataclass
@@ -369,8 +371,33 @@ class KISBroker(BaseBroker):
 
     async def submit_order(self, order: Order) -> Tuple[bool, str]:
         """주문 제출"""
+        # 킬스위치 — 모든 KR 주문이 반드시 통과하는 지점 (봇 재시작 없이 즉시 발동)
+        allowed, block_reason = kill_switch.check(order.side.value, market="KR")
+        if not allowed:
+            logger.error(
+                f"[킬스위치] KR 주문 차단: {order.symbol} {order.side.value} "
+                f"{order.quantity}주 — {block_reason}"
+            )
+            audit_log.record_blocked(
+                market="KR", symbol=order.symbol, side=order.side.value,
+                reason=block_reason, qty=order.quantity,
+                price=order.price, strategy=order.strategy,
+            )
+            return False, block_reason
+
+        audit_log.record(
+            audit_log.EV_SUBMIT, market="KR", symbol=order.symbol,
+            side=order.side.value, qty=order.quantity, price=order.price,
+            order_type=order.order_type.value, strategy=order.strategy,
+            reason=order.reason,
+        )
+
         if not self.is_connected:
             if not await self.connect():
+                audit_log.record(
+                    audit_log.EV_REJECT, market="KR", symbol=order.symbol,
+                    side=order.side.value, qty=order.quantity, reason="연결 실패",
+                )
                 return False, "연결 실패"
 
         try:
@@ -442,6 +469,11 @@ class KISBroker(BaseBroker):
                 msg = data.get("msg1", "알 수 없는 오류")
                 msg_cd = data.get("msg_cd", "")
                 logger.error(f"주문 실패: [{msg_cd}] {msg}")
+                audit_log.record(
+                    audit_log.EV_REJECT, market="KR", symbol=order.symbol,
+                    side=order.side.value, qty=order.quantity,
+                    reason=f"[{msg_cd}] {msg}",
+                )
                 return False, f"[{msg_cd}] {msg}"
 
             # 주문번호 추출
@@ -469,10 +501,19 @@ class KISBroker(BaseBroker):
                 f"주문 제출 성공: {order.symbol} {order.side.value} "
                 f"{order.quantity}주 @ {ord_unpr}원 -> KIS#{kis_ord_no}"
             )
+            audit_log.record(
+                audit_log.EV_ACCEPT, market="KR", symbol=order.symbol,
+                side=order.side.value, qty=order.quantity, price=ord_unpr,
+                order_id=kis_ord_no, strategy=order.strategy,
+            )
             return True, kis_ord_no
 
         except Exception as e:
             logger.exception(f"주문 제출 오류: {e}")
+            audit_log.record(
+                audit_log.EV_REJECT, market="KR", symbol=order.symbol,
+                side=order.side.value, qty=order.quantity, reason=f"예외: {e}",
+            )
             # pending 좀비 방지: 예외 시 _pending_orders에서 제거
             self._pending_orders.pop(order.id, None)
             self._order_id_to_kis_no.pop(order.id, None)
