@@ -33,6 +33,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/themes", handler.get_themes)
     app.router.add_get("/api/screening", handler.get_screening)
     app.router.add_get("/api/config", handler.get_config)
+    app.router.add_get("/api/principles", handler.get_principles)
     app.router.add_get("/api/us-market", handler.get_us_market)
     app.router.add_get("/api/evolution", handler.get_evolution)
     app.router.add_get("/api/evolution/history", handler.get_evolution_history)
@@ -117,6 +118,12 @@ class KRAPIHandler:
 
     async def get_config(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_config())
+
+    async def get_principles(self, request: web.Request) -> web.Response:
+        """CORE_PRINCIPLES 원문을 그대로 반환 — 대시보드가 하드코딩하지 않도록."""
+        from ..core.evolution.trading_principles import CORE_PRINCIPLES
+        return web.json_response({"principles": CORE_PRINCIPLES,
+                                  "count": len(CORE_PRINCIPLES)})
 
     async def get_us_market(self, request: web.Request) -> web.Response:
         return web.json_response(await self.dc.get_us_market())

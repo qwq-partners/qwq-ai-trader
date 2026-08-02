@@ -539,14 +539,10 @@ class UnifiedTradingBot:
                 "sepa_trend": {
                     "stop_loss_pct": sepa_cfg.get("stop_loss_pct", 5.0),
                     "trailing_stop_pct": 3.0,
-                    # 코어+트레이더 구조: 분할 비율 축소 → 나머지 코어는 트레일링
-                    "first_exit_pct": 5.0,
-                    "first_exit_ratio": 0.20,     # 20% 매도 (기존 30%)
-                    "second_exit_pct": 10.0,
-                    "second_exit_ratio": 0.25,    # 25% 매도 (기존 50%)
-                    "third_exit_pct": 15.0,       # 15% 목표 (기존 12%)
-                    "third_exit_ratio": 0.25,     # 25% 매도 (기존 50%)
-                    # → 나머지 ~42% 코어는 트레일링으로 큰 추세 추종
+                    # 2026-08-03: 분할익절 하드코딩(+5%/20%) 제거 — config exit_manager 상속.
+                    #   2026-08-02 백테스트로 +10%/10%를 검증하고 default.yml을 고쳤는데,
+                    #   여기 전략별 오버라이드가 그대로 남아 검증값을 덮어쓰고 있었다.
+                    #   키를 비우면 register_position이 None → config 기본값을 쓴다.
                     "stale_high_days": 3,         # 3영업일 신고가 실패 → 추세 무효화
                 },
                 "strategic_swing": {

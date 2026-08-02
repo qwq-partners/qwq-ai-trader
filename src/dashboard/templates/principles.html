@@ -476,7 +476,7 @@
                         <div style="font-size: .82rem; font-weight: 700;">리스크 매니저</div>
                     </div>
                     <div style="font-size: .76rem; color: var(--text-secondary); line-height: 1.5;">
-                        <div>• 일일 손실 -5% 초과 → <span style="color: var(--accent-red);">당일 전면 중단</span></div>
+                        <div>• 일일 손실 -5% 초과 → <span style="color: var(--accent-red);">방어 전략만 허용</span> / -12.5% 이하 <span style="color: var(--accent-red);">전면 중단</span></div>
                         <div>• 당일 청산 종목 30분 쿨다운</div>
                         <div>• 포트폴리오 동기화 3회 실패 → 차단</div>
                     </div>
@@ -594,7 +594,7 @@
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
             <div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px;">
                 <div style="font-size: .72rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;">본전 보호</div>
-                <div style="font-size: .82rem; color: var(--text-primary); line-height: 1.5;">1차 익절 달성 후<br><span class="val-amber">진입가 -1.5%</span> 이탈 시 자동 청산</div>
+                <div style="font-size: .82rem; color: var(--text-primary); line-height: 1.5;">1차 익절 달성 후<br><span class="val-amber">진입가 -0.5%</span> 이탈 시 자동 청산<br><span style="font-size:.72rem;color:var(--text-muted);">(코어홀딩 -2.0%)</span></div>
                 <div style="font-size: .74rem; color: var(--text-secondary); margin-top: 4px;">익절했다가 손실 마감 방지</div>
             </div>
             <div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px;">
@@ -613,168 +613,11 @@
     <!-- ===== CORE PRINCIPLES ===== -->
     <div class="card" style="padding: 24px; margin-bottom: 28px;">
         <div class="section-label">핵심 불변 원칙</div>
-        <h2 style="font-size: 1rem; font-weight: 700; margin: 0 0 6px;">CORE PRINCIPLES — 21개</h2>
-        <p style="font-size: .8rem; color: var(--text-secondary); margin: 0 0 24px;">모든 매매에 적용되는 수정 불가 규칙입니다. 예외는 없습니다.</p>
+        <h2 style="font-size: 1rem; font-weight: 700; margin: 0 0 6px;">CORE PRINCIPLES — <span id="prin-count">…</span>개</h2>
+        <p style="font-size: .8rem; color: var(--text-secondary); margin: 0 0 24px;">엔진이 실제로 강제하는 규칙입니다. 아래 목록은 <code style="color:var(--accent-blue);">trading_principles.py</code>에서 직접 읽어오므로 코드와 항상 일치합니다.</p>
 
-        <!-- Risk -->
-        <div class="cat-header" style="background: rgba(248,113,113,0.05); border: 1px solid rgba(248,113,113,0.1);">
-            <div class="cat-icon" style="background: rgba(248,113,113,0.12);">🛡️</div>
-            <div>
-                <div style="font-weight: 700; font-size: .9rem; color: var(--accent-red);">리스크 관리</div>
-                <div style="font-size: .76rem; color: var(--text-muted);">생존이 수익보다 먼저다</div>
-            </div>
-            <div style="margin-left: auto; display: flex; gap: 6px;">
-                <span class="chip" style="background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.15); color: var(--accent-red);">4개</span>
-            </div>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 24px;">
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-red);">CORE-001 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">손절은 신성하다 — 예외 없이 즉시 청산</div>
-                <div class="principle-rationale">작은 손실 10번이 큰 손실 1번보다 낫다. ATR×2 동적 손절 (3.5~6%).</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-red);">CORE-002 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">일일 손실 -5% 초과 시 당일 매수 전면 중단</div>
-                <div class="principle-rationale">틸트 상태에서의 복구 매매는 손실을 키운다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-red);">CORE-003 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">단일 종목 비중 28% 초과 금지</div>
-                <div class="principle-rationale">분산이 생존이다. 한 종목 실패가 포트폴리오를 무너뜨리면 안 된다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-red);">CORE-013 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">포트폴리오 동기화 3회 연속 실패 시 매수 전면 차단</div>
-                <div class="principle-rationale">잔고를 모르는 상태에서 매수하면 과잉 노출된다.</div>
-            </div>
-        </div>
-
-        <!-- Entry -->
-        <div class="cat-header" style="background: rgba(99,102,241,0.05); border: 1px solid rgba(99,102,241,0.12);">
-            <div class="cat-icon" style="background: rgba(99,102,241,0.12);">🎯</div>
-            <div>
-                <div style="font-weight: 700; font-size: .9rem; color: var(--accent-blue);">진입 원칙</div>
-                <div style="font-size: .76rem; color: var(--text-muted);">들어갈 때가 모든 것을 결정한다</div>
-            </div>
-            <div style="margin-left: auto;">
-                <span class="chip" style="background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.15); color: var(--accent-blue);">8개</span>
-            </div>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 24px;">
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-004 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">추격 매수 금지 — ATR 1.2배 이상 급등 시 진입 금지</div>
-                <div class="principle-rationale">이미 오른 종목을 쫓으면 고점에 물린다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-005 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">기관+외국인 동시 순매도 테마주 진입 금지</div>
-                <div class="principle-rationale">개인만 매수하는 테마는 단기 급등 후 급락한다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-006 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">장초반(09:05~10:00) +4~5% 초과 급등 → 진입 보류</div>
-                <div class="principle-rationale">장초반 과열은 10시 이후 눌림이 온다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-007 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">약세장에서는 SEPA/RSI2만 허용 — 테마/갭 즉시 차단</div>
-                <div class="principle-rationale">약세장에서 공격적 전략은 손절 확률이 2배.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-014 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">RSI(14) &gt; 70 + SEPA 추세 진입 → -10점 감점</div>
-                <div class="principle-rationale">기술적 과매수에서 추세 진입은 고점 물림 위험.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-015 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">MA200 하방 종목 추세 진입 → -10점 감점</div>
-                <div class="principle-rationale">장기 하락 추세 종목의 단기 반등은 지속력이 약하다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-016 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">MA200 대비 +80% 과확장 종목 SEPA 진입 차단</div>
-                <div class="principle-rationale">60일 급등 후 추격은 고점 물림의 전형.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-blue);">CORE-017 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">시총 상위 20 대형주 → 테마 전략 제외</div>
-                <div class="principle-rationale">대형주는 테마 모멘텀이 약해 +2~3%가 한계.</div>
-            </div>
-        </div>
-
-        <!-- Exit -->
-        <div class="cat-header" style="background: rgba(52,211,153,0.05); border: 1px solid rgba(52,211,153,0.1);">
-            <div class="cat-icon" style="background: rgba(52,211,153,0.12);">📤</div>
-            <div>
-                <div style="font-weight: 700; font-size: .9rem; color: var(--accent-green);">청산 원칙</div>
-                <div style="font-size: .76rem; color: var(--text-muted);">나갈 때를 아는 것이 진짜 실력</div>
-            </div>
-            <div style="margin-left: auto;">
-                <span class="chip" style="background: rgba(52,211,153,0.08); border-color: rgba(52,211,153,0.15); color: var(--accent-green);">4개</span>
-            </div>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 24px;">
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-green);">CORE-008 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">1차 익절(+5%) 후 잔량은 MA5/전일저가 이탈 시에만 청산</div>
-                <div class="principle-rationale">추세 종목은 기술적 지지선에서만 판단해야 수익을 극대화한다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-green);">CORE-009 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">테마주 15:10 수익률 +1% 미만이면 당일 청산</div>
-                <div class="principle-rationale">테마주 오버나이트 갭 리스크는 수익보다 크다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-green);">CORE-018 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">1차 익절 후 본전 보호 -1.5% 적용</div>
-                <div class="principle-rationale">익절했는데 결국 손실로 마감하면 심리적 타격이 크다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-green);">CORE-019 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">테마주 최대 보유기간 3영업일</div>
-                <div class="principle-rationale">테마 모멘텀은 3일 이후 급격히 소멸한다.</div>
-            </div>
-        </div>
-
-        <!-- Portfolio -->
-        <div class="cat-header" style="background: rgba(167,139,250,0.05); border: 1px solid rgba(167,139,250,0.12);">
-            <div class="cat-icon" style="background: rgba(167,139,250,0.12);">📊</div>
-            <div>
-                <div style="font-weight: 700; font-size: .9rem; color: var(--accent-purple);">포트폴리오 & 시장</div>
-                <div style="font-size: .76rem; color: var(--text-muted);">맥락 없는 신호는 노이즈다</div>
-            </div>
-            <div style="margin-left: auto;">
-                <span class="chip" style="background: rgba(167,139,250,0.08); border-color: rgba(167,139,250,0.15); color: var(--accent-purple);">5개</span>
-            </div>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;">
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-purple);">CORE-010 <span class="regime-badge badge-high" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">HIGH</span></div>
-                <div class="principle-rule">동일 섹터 3종목 이상 보유 금지</div>
-                <div class="principle-rationale">섹터 집중은 분산의 적. 섹터 급락 시 연쇄 손절 발생.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-purple);">CORE-011 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">적자(PER&lt;0) + 고PBR(&gt;5) 종목 → -10점 감점</div>
-                <div class="principle-rationale">펀더멘탈 없는 급등은 급락으로 끝난다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-purple);">CORE-012 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">당일 청산 종목 30분 쿨다운 + 조건 확인 후 재진입</div>
-                <div class="principle-rationale">FOMO 재진입은 같은 실수를 반복한다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-purple);">CORE-020 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">아침 LLM 진단 [방어] → 강세에서 횡보로 하향 조정</div>
-                <div class="principle-rationale">숫자가 강세여도 뉴스/매크로가 약세면 사전 방어가 맞다.</div>
-            </div>
-            <div class="principle-card">
-                <div class="principle-id" style="color: var(--accent-purple);">CORE-021 <span class="regime-badge badge-medium" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">MED</span></div>
-                <div class="principle-rule">점수 85+ + 비강세장 → LLM 이중 검증 통과 필수</div>
-                <div class="principle-rationale">점수가 높아도 맥락이 나쁘면 진입하면 안 된다.</div>
-            </div>
+        <div id="principles-root">
+            <div style="font-size:.8rem; color:var(--text-muted); padding:12px;">원칙 불러오는 중…</div>
         </div>
     </div>
 
@@ -867,5 +710,82 @@
     </div>
 
 </div><!-- /main -->
+
+<script>
+// CORE PRINCIPLES 동적 렌더링 — 하드코딩 금지, trading_principles.py가 단일 소스
+const PRIN_CATS = [
+  {key: 'risk',      label: '리스크 관리', sub: '생존이 수익보다 먼저다',        icon: '🛡️', rgb: '248,113,113', css: 'var(--accent-red)'},
+  {key: 'entry',     label: '진입 규율',   sub: '사지 않을 이유부터 찾는다',      icon: '🎯', rgb: '99,102,241',  css: 'var(--accent-blue)'},
+  {key: 'exit',      label: '청산 원칙',   sub: '수익은 지키고 손실은 끊는다',    icon: '💰', rgb: '52,211,153',  css: 'var(--accent-green)'},
+  {key: 'portfolio', label: '포트폴리오',  sub: '한 종목이 전체를 무너뜨리지 않게', icon: '📊', rgb: '167,139,250', css: 'var(--accent-purple)'},
+  {key: 'market',    label: '시장 대응',   sub: '체제가 바뀌면 규칙도 바뀐다',    icon: '🌐', rgb: '167,139,250', css: 'var(--accent-purple)'},
+  {key: 'evolution', label: '자기 진화',   sub: '검증된 변화만 반영한다',        icon: '🧬', rgb: '167,139,250', css: 'var(--accent-purple)'},
+];
+
+function esc(t) {
+  const d = document.createElement('div');
+  d.textContent = t == null ? '' : String(t);
+  return d.innerHTML;
+}
+
+function renderPrinciples(list) {
+  const root = document.getElementById('principles-root');
+  if (!root) return;
+  const cnt = document.getElementById('prin-count');
+  if (cnt) cnt.textContent = list.length;
+
+  // 정의된 카테고리 순서로 렌더, 미정의 카테고리는 뒤에 자동 추가
+  const known = new Set(PRIN_CATS.map(c => c.key));
+  const cats = PRIN_CATS.concat(
+    [...new Set(list.map(p => p.category).filter(c => !known.has(c)))]
+      .map(k => ({key: k, label: k, sub: '', icon: '📌', rgb: '148,163,184', css: 'var(--text-secondary)'}))
+  );
+
+  let html = '';
+  for (const cat of cats) {
+    const items = list.filter(p => p.category === cat.key);
+    if (!items.length) continue;
+    html += `<div class="cat-header" style="background: rgba(${cat.rgb},0.05); border: 1px solid rgba(${cat.rgb},0.12);">
+        <div class="cat-icon" style="background: rgba(${cat.rgb},0.12);">${cat.icon}</div>
+        <div>
+            <div style="font-weight: 700; font-size: .9rem; color: ${cat.css};">${esc(cat.label)}</div>
+            <div style="font-size: .76rem; color: var(--text-muted);">${esc(cat.sub)}</div>
+        </div>
+        <div style="margin-left: auto; display: flex; gap: 6px;">
+            <span class="chip" style="background: rgba(${cat.rgb},0.08); border-color: rgba(${cat.rgb},0.15); color: ${cat.css};">${items.length}개</span>
+        </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 24px;">`;
+
+    for (const p of items) {
+      const hi = p.priority === 'high';
+      const scope = (p.scope && p.scope !== 'universal')
+        ? `<span class="regime-badge" style="margin-left:4px; font-size:.6rem; padding:1px 6px; background:rgba(148,163,184,0.12); color:var(--text-secondary);">${esc(p.scope)}</span>` : '';
+      html += `<div class="principle-card">
+            <div class="principle-id" style="color: ${cat.css};">${esc(p.id)}
+                <span class="regime-badge ${hi ? 'badge-high' : 'badge-medium'}" style="margin-left:4px; font-size:.6rem; padding:1px 6px;">${hi ? 'HIGH' : 'MED'}</span>${scope}
+            </div>
+            <div class="principle-rule">${esc(p.rule)}</div>
+            <div class="principle-rationale">${esc(p.rationale)}</div>
+            ${p.source ? `<div style="font-size:.68rem; color:var(--text-muted); margin-top:6px; line-height:1.4;">↳ ${esc(p.source)}</div>` : ''}
+        </div>`;
+    }
+    html += `</div>`;
+  }
+  root.innerHTML = html || '<div style="font-size:.8rem;color:var(--text-muted);padding:12px;">등록된 원칙이 없습니다.</div>';
+}
+
+(async () => {
+  try {
+    const r = await fetch('/api/principles');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    renderPrinciples(Array.isArray(d.principles) ? d.principles : []);
+  } catch (e) {
+    const root = document.getElementById('principles-root');
+    if (root) root.innerHTML = '<div style="font-size:.8rem;color:var(--accent-red);padding:12px;">원칙을 불러오지 못했습니다: ' + esc(e.message) + '</div>';
+  }
+})();
+</script>
 </body>
 </html>

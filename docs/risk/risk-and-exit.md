@@ -185,19 +185,28 @@
   (1.53→1.85 / 1.67→2.01 / 1.98→2.21 / 2.03→2.70), 수익률 3/4 개선.
 - **트레일링은 건드리지 않았다** — 5.5~6.0%로 완화하면 오히려 악화(-7.28%, -7.56%).
   현재 4.5% + cap 6.0%가 적정.
-- ⚠️ **변경 시 4곳을 모두 고칠 것**: `default.yml` / `evolved_overrides.yml` /
-  `ExitConfig` 기본값 / **`REGIME_EXIT_PARAMS`**(레짐별 값이 config를 덮어쓰므로 누락하면 무효화됨).
+- ⚠️ **변경 시 5곳을 모두 고칠 것**: `default.yml` / `evolved_overrides.yml` /
+  `ExitConfig` 기본값 / **`REGIME_EXIT_PARAMS`**(레짐별 값이 config를 덮어쓰므로 누락하면 무효화됨) /
+  **`run_trader.py`의 `_strategy_exit_params`**(전략별 오버라이드가 config보다 우선한다).
+- 🩹 **2026-08-03 후속**: 위 5번째를 놓쳐 `sepa_trend`에 `+5%/20%`가 남아 있었고,
+  검증한 `+10%/10%`가 SEPA에는 **한 번도 적용되지 않았다**. 해당 키를 제거해
+  `register_position(first_exit_pct=None)` → config 상속으로 되돌렸다.
+  같은 사고 방지를 위해, 전략별 오버라이드는 **그 전략만의 고유값**(stale_high_days 등)만 두고
+  공통 파라미터는 config에 맡긴다.
 - **한계**: 검증 구간이 2026-05~08 하락장에 집중. 3개월·120종목에서는 악화.
   상승장 도래 시 재검증 필요.
 
 ### 레짐별 파라미터 (trending_bull 예시)
-| 항목 | bull | bear | sideways |
-|------|------|------|---------|
-| SL | 5.0% | 3.0% | 4.0% |
-| TS | 4.0% | 2.5% | 3.0% |
-| TP1 | 5% | 3% | 4% |
-| TP2 | 15% | 8% | 10% |
-| TP3 | 25% | 15% | 20% |
+> 출처: `src/strategies/exit_manager.py` `REGIME_EXIT_PARAMS` (2026-08-02 반영 후 실제 값)
+
+| 항목 | trending_bull | neutral | ranging | turning_point | trending_bear |
+|------|------|------|------|------|------|
+| SL | 5.0% | 4.0% | 4.0% | 4.0% | 3.5% |
+| TS | 4.0% | 3.0% | 2.5% | 3.0% | 2.0% |
+| TP1 | 10% | 10% | 8% | 8% | 5% |
+| TP2 | 15% | 12% | 8% | 10% | 8% |
+| TP3 | 25% | 20% | 14% | 18% | 14% |
+| stale_high_days | 7 | 5 | 4 | 5 | 3 |
 
 ## 시장 체제별 동적 파라미터 (market_regime.py → engine.py)
 

@@ -831,7 +831,10 @@ class RiskManager:
                 if trend and trend.get("recovering"):
                     self._sidecar_active = False
                     # 시장 회복세 → 방어적 전략만 허용
-                    defensive_strategies = {'rsi2_reversal', 'core_holding', 'sepa_trend'}
+                    # 2026-08-03: rsi2_reversal 제거 — 전략 폐지(enabled=false, alloc 0%).
+                    #   폐지된 전략을 예외 목록에 남겨두면, 나중에 재활성화했을 때
+                    #   손실 한도 초과 구간에서 조용히 허용되는 사고가 난다.
+                    defensive_strategies = {'core_holding', 'sepa_trend'}
                     if strategy_type in defensive_strategies:
                         logger.debug(
                             f"[스마트사이드카] 한도초과 {daily_pnl_pct:.1f}% but 시장 회복세 "

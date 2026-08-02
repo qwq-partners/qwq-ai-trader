@@ -1,5 +1,59 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — refactor(principles): CORE PRINCIPLES 전면 개정(21→28) + 검증값 미적용 버그 3건
+
+### 배경
+전략이 단타 → 스윙/코어 중심으로 바뀌었는데 `CORE_PRINCIPLES`는 예전 문구 그대로였다.
+Codex 교차 검증에 붙여 보니 **원칙이 코드보다 강하게 쓰여 있었다** —
+"예외 없이", "전면 중단", "SEPA만", "필수"가 전부 실제 동작과 달랐다.
+원칙은 LLM 크로스검증 컨텍스트로 주입되므로, 틀린 원칙은 그대로 잘못된 판단 근거가 된다.
+
+### 원칙 개정 (`src/core/evolution/trading_principles.py`, 21 → 28개)
+- 헤더에 **"원칙은 불변이 아니다"** 명시 — 전략이 바뀌면 원칙도 바뀐다. 다만 근거 없이는 못 바꾼다.
+- 폐지 전략(`rsi2_reversal`·`theme_chasing`) 전제 원칙 삭제, 코어홀딩·팀 합의·진화 게이트 원칙 신설.
+- 코드와 어긋난 서술 정정 (Codex 3라운드 지적 반영):
+  | 원칙 | 개정 전 (사실과 다름) | 개정 후 |
+  |------|------|------|
+  | CORE-001 | "예외 없이 즉시 청산" | `exit_exempt`·`KILL_SWITCH_ALL` 2가지 예외 명시 |
+  | CORE-002 | "-5% 초과 시 전면 중단" | **시장 회복세일 때만** 방어 전략 허용, -12.5% 이하 전면 중단 |
+  | CORE-004 | universal | KR 전용 (ATR 1.2배 하드차단은 KR 자동진입 경로만, US엔 없음) |
+  | CORE-029 | "동시 보유 8종목" | 비코어 8슬롯(잔여비율 가중) **+ 코어 3개 별도** — 실제 보유는 11개 초과 가능 |
+- `scope="universal"` 8건을 `KR`로 분리 — US는 일일손실 -3%·10종목·35%·현금 10%로 값이 다르다.
+
+### 실효 버그 3건 (원칙 검증 과정에서 발견)
+1. **SEPA 1차 익절이 검증값을 한 번도 안 썼다** (`scripts/run_trader.py`)
+   2026-08-02 백테스트로 `+10%/10%`를 검증하고 `default.yml`을 고쳤는데,
+   `_strategy_exit_params["sepa_trend"]`에 `+5%/20%` 하드코딩이 남아 config를 덮어쓰고 있었다.
+   → 해당 키 제거, `register_position(first_exit_pct=None)` → config 상속.
+   (현재 보유는 `087010`(exit_exempt) 1건뿐이라 기존 포지션 영향 없음)
+2. **SEPA 14:30 차단이 15:00~15:29를 통과시켰다** (`src/core/batch_analyzer.py`)
+   `now.hour >= 14 and now.minute >= 30` → `minute=0 < 30`이라 15:00대가 거짓.
+   → `(now.hour, now.minute) >= (14, 30)` 튜플 비교로 수정. 오버나이트 갭 리스크 노출 구멍이었다.
+3. **폐지 전략이 손실한도 예외 목록에 잔류** (`src/risk/manager.py`)
+   `defensive_strategies`에 `rsi2_reversal`이 남아 있었다. 지금은 `enabled=false`라 무해하지만,
+   재활성화 시 -5% 초과 구간에서 조용히 허용된다. → 제거.
+
+### 대시보드 — 원칙 하드코딩 제거 (`/principles`)
+`principles.html`이 원칙 21개를 HTML에 직접 박아 두어 개정 전 상태로 굳어 있었다
+(삭제된 CORE-005/009/017/019 표시, 신규 22~032 누락).
+- `GET /api/principles` 신설 (`src/dashboard/kr_api.py`) — `CORE_PRINCIPLES` 원문 반환.
+- 카드 목록을 JS 동적 렌더링으로 교체. 카테고리 미등록 값도 자동 그룹 생성, 모든 문자열 `esc()` 이스케이프.
+- **코드가 단일 소스** — 앞으로 원칙을 고치면 대시보드가 자동으로 따라온다.
+- 청산/게이트 설명 섹션의 낡은 수치 2건도 정정 (`-1.5%` → `-0.5%`(코어 -2.0%), "전면 중단" → "방어 전략만 허용").
+
+### 문서
+- `docs/risk/risk-and-exit.md`
+  - 분할익절 변경 시 고칠 곳 **4 → 5곳** (`run_trader.py`의 `_strategy_exit_params` 추가).
+    이번 버그가 정확히 이 5번째를 놓쳐서 생겼다.
+  - 레짐별 파라미터 표를 실제 `REGIME_EXIT_PARAMS` 값으로 갱신 (표가 2026-08-02 이전 값이었다).
+
+### 검증
+- Codex 3라운드 교차 검증 (지적 → 수정 → 재검증). 마지막 라운드 지적 4건 전부 코드로 확인 후 반영.
+- Codex 오판 1건 확인: `daily_exit_cooldown_threshold`가 "기본 0이라 비활성"이라는 지적은 사실과 다름
+  (`RiskConfig` dataclass 기본값은 3, 분기 정상 동작).
+- 봇 재시작 후 에러 0건, `/api/principles` 28개 정상 서빙.
+
+
 ## 2026-08-03 — feat(dashboard): 가상 오피스 — 엔진 상태 픽셀아트 시각화 (`/office`)
 
 ### 배경
