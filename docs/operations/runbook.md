@@ -58,6 +58,25 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `~/.cache/ai_trader/journal/` | 거래 저널 + LLM 리뷰 |
 | `~/.cache/ai_trader/unified_trader.pid` | PID 파일 |
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
+| `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
+
+## 가상 오피스 (`/office`, 2026-08-03~)
+
+엔진 상태를 8명 캐릭터로 시각화. 대시보드 `/office` 또는 모바일 하단 nav "오피스".
+
+```bash
+# 상태 확인 (엔진 파생 + 외부 푸시 병합 결과)
+curl -s localhost:8080/api/office/status | python3 -m json.tool
+
+# 외부 도구에서 상태 밀어넣기 (5분 TTL, 이후 엔진 상태로 자동 복귀)
+curl -X POST localhost:8080/api/office/status \
+  -H 'Content-Type: application/json' -d '{"dev":"working","workflow":"수동 점검"}'
+
+# 화면이 안 뜰 때: 정적 번들 확인 → 없으면 재빌드
+ls src/dashboard/static/office/assets/ || bash tools/office/build.sh
+```
+
+> 역할 매핑·API 계약·재빌드 절차: `docs/operations/virtual-office.md`
 
 ## 설정 파일
 

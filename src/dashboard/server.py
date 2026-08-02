@@ -18,6 +18,7 @@ from .kr_api import setup_kr_api_routes
 from .us_api import setup_us_api_routes
 from .engine_api import setup_engine_api_routes
 from .system_api import setup_system_api_routes
+from .office_api import setup_office_api_routes
 from .data_collector import DashboardDataCollector
 from .sse import SSEManager
 
@@ -45,6 +46,11 @@ async def cors_middleware(request, handler):
 async def no_cache_middleware(request, handler):
     """정적 파일 캐시 방지 미들웨어"""
     response = await handler(request)
+    # 가상 오피스 번들은 파일명에 해시가 박혀 있어(index-<hash>.js) 캐시해도 안전.
+    # 매 진입마다 500KB를 다시 받지 않도록 예외 처리.
+    if request.path.startswith("/static/office/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
     if request.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
@@ -94,6 +100,9 @@ class DashboardServer:
         # 시스템 리소스 API (/api/system/*) — 인프라 다운사이징 검토용
         setup_system_api_routes(app)
 
+        # 가상 오피스 API (/api/office/*) — 픽셀아트 사무실 상태 브릿지
+        setup_office_api_routes(app, self.data_collector)
+
         # 통합 SSE 스트림
         app.router.add_get("/api/stream", self.sse_manager.handle_stream)
 
@@ -106,6 +115,7 @@ class DashboardServer:
         app.router.add_get("/settings", self._serve_page("settings.html"))
         app.router.add_get("/evolution", self._serve_page("evolution.html"))
         app.router.add_get("/engine", self._serve_page("engine.html"))
+        app.router.add_get("/office", self._serve_page("office.html"))
         app.router.add_get("/principles", self._serve_page("principles.html"))
         app.router.add_get("/settlement", lambda r: web.HTTPFound("/trades"))
 

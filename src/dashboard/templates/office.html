@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>가상 오피스 - QWQ AI Trader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        .nav-pill {
+            padding:6px 13px;border-radius:8px;font-size:.8rem;font-weight:500;
+            color:var(--text-muted);text-decoration:none;transition:all .18s;
+            border:1px solid transparent;white-space:nowrap;
+        }
+        .nav-pill:hover { color:var(--text-secondary); background:rgba(99,102,241,.06); border-color:var(--border-sub); }
+        .nav-pill.active { color:#fff; background:linear-gradient(135deg,var(--acc-blue),#818cf8); box-shadow:0 2px 12px rgba(99,102,241,.3); font-weight:600; }
+        .nav-logo-mark {
+            width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+            background:linear-gradient(135deg,var(--acc-blue),#818cf8);box-shadow:0 2px 10px rgba(99,102,241,.35);
+        }
+        .nav-brand-main { font-size:.9rem;font-weight:800;letter-spacing:.06em;background:linear-gradient(135deg,#fff,var(--acc-blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text; }
+        .nav-brand-sub { font-size:.65rem;font-weight:500;color:var(--text-muted);letter-spacing:.04em;margin-left:2px; }
+
+        /* ── Ticker strip ── */
+        .ticker-strip { background:rgba(11,11,20,.6);border-bottom:1px solid var(--border-sub);overflow:hidden;height:26px;position:relative; }
+        .ticker-strip-wrap { display:flex;align-items:center;height:100%;max-width:1280px;margin:0 auto;padding:0 20px;overflow:hidden; }
+        .nav-ticker-inner { display:inline-flex;align-items:center;white-space:nowrap;animation:ticker-scroll 30s linear infinite; }
+        @keyframes ticker-scroll { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }
+        .nav-ti { font-size:.58rem; font-weight:700; letter-spacing:.03em; padding:0 3px 0 8px; }
+        .nav-ti-kr { color:rgba(34,211,238,.8); }
+        .nav-ti-us { color:rgba(245,158,11,.8); }
+        .nav-tv { font-size:.58rem; font-family:'JetBrains Mono',monospace; color:var(--text-secondary); }
+        .nav-ts { font-size:.55rem; color:var(--text-muted); padding:0 2px; }
+        .nav-tv.up    { color:var(--acc-green); }
+        .nav-tv.dn    { color:var(--acc-red); }
+        .nav-tv.kr-up { color:#f87171; }
+        .nav-tv.kr-dn { color:#60a5fa; }
+
+        /* ─── 역할 범례 ─── */
+        .office-legend {
+            display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;
+        }
+        .office-chip {
+            display:inline-flex;align-items:center;gap:6px;
+            padding:5px 10px;border-radius:999px;
+            border:1px solid var(--border-sub);background:rgba(255,255,255,.02);
+            font-size:.72rem;color:var(--text-secondary);white-space:nowrap;
+        }
+        .office-chip .dot-role { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+        .office-chip b { color:var(--text-primary);font-weight:600; }
+        .office-chip span { color:var(--text-muted); }
+
+        /* ─── 오피스 프레임 ─── */
+        .office-frame-wrap {
+            position:relative;border:1px solid var(--border-sub);border-radius:14px;overflow:hidden;
+            background:#0b0e18;box-shadow:0 8px 32px rgba(0,0,0,.35);
+        }
+        #office-frame {
+            display:block;width:100%;height:calc(100vh - 260px);min-height:480px;border:0;
+        }
+        .office-note {
+            margin-top:10px;font-size:.7rem;color:var(--text-muted);line-height:1.7;
+        }
+        .office-note code {
+            font-family:'JetBrains Mono',monospace;font-size:.68rem;
+            background:rgba(99,102,241,.1);border:1px solid var(--border-sub);
+            padding:1px 5px;border-radius:4px;color:var(--text-secondary);
+        }
+        @media (max-width: 768px) {
+            /* 좁은 화면에선 오피스 장면이 가로폭에 맞춰 축소되므로,
+               높이를 폭에 비례시켜 위아래 빈 여백이 생기지 않게 한다. */
+            #office-frame { height:calc(100vw * 0.62 + 130px);max-height:calc(100vh - 210px);min-height:380px; }
+            .office-legend { gap:4px; }
+            .office-chip { font-size:.66rem;padding:4px 8px; }
+        }
+    </style>
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=4">
+    <link rel="stylesheet" href="/static/css/responsive.css?v=5">
+</head>
+<body>
+
+    <!-- ─────── Navigation ─────── -->
+    <nav style="border-bottom:1px solid var(--border-sub);background:rgba(11,11,20,.9);backdrop-filter:blur(14px);position:sticky;top:0;z-index:50;">
+        <div style="max-width:1280px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                <div class="nav-logo-mark">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                </div>
+                <div>
+                    <span class="nav-brand-main">QWQ</span>
+                    <span class="nav-brand-sub">AI&nbsp;Trader</span>
+                </div>
+            </div>
+
+            <div class="nav-links" style="display:flex;gap:3px;flex:1;">
+                <a href="/" class="nav-pill" data-page="index">실시간</a>
+                <a href="/trades" class="nav-pill" data-page="trades">거래</a>
+                <a href="/performance" class="nav-pill" data-page="performance">성과</a>
+                <a href="/themes" class="nav-pill" data-page="themes">테마</a>
+                <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
+                <a href="/engine" class="nav-pill" data-page="engine">엔진</a>
+                <a href="/office" class="nav-pill active" data-page="office">오피스</a>
+                <a href="/principles" class="nav-pill" data-page="principles">원칙</a>
+                <a href="/settings" class="nav-pill" data-page="settings">설정</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ─────── 지수 전광판 스트립 ─────── -->
+    <div class="ticker-strip">
+      <div class="ticker-strip-wrap">
+        <div class="nav-ticker-inner" id="nav-ticker-inner">
+            <span class="nav-ti nav-ti-kr">KOSPI</span><span class="nav-tv">--</span><span class="nav-ts">&middot;</span>
+            <span class="nav-ti nav-ti-kr">KOSDAQ</span><span class="nav-tv">--</span><span class="nav-ts">&middot;</span>
+            <span class="nav-ti nav-ti-us">S&amp;P500</span><span class="nav-tv">--</span><span class="nav-ts">&middot;</span>
+            <span class="nav-ti nav-ti-us">NASDAQ</span><span class="nav-tv">--</span><span class="nav-ts">&middot;</span>
+            <span class="nav-ti nav-ti-us">DOW</span><span class="nav-tv">--</span><span class="nav-ts">&middot;&nbsp;&nbsp;</span>
+        </div>
+      </div>
+    </div>
+
+    <main style="max-width:1280px;margin:0 auto;padding:16px 20px 32px;">
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+            <div>
+                <h1 style="font-size:1.1rem;font-weight:700;margin:0;">🏢 가상 오피스</h1>
+                <p style="font-size:.72rem;color:var(--text-muted);margin:4px 0 0;">
+                    트레이딩 엔진의 실시간 상태를 8명의 캐릭터로 시각화합니다. 캐릭터를 클릭하면 상세 상태가 열립니다.
+                </p>
+            </div>
+            <a href="/static/office/index.html" target="_blank" rel="noopener"
+               style="font-size:.72rem;color:var(--text-secondary);text-decoration:none;border:1px solid var(--border-sub);border-radius:8px;padding:6px 12px;">
+                전체 화면으로 열기 ↗
+            </a>
+        </div>
+
+        <!-- 역할 매핑 범례 -->
+        <div class="office-legend">
+            <div class="office-chip"><i class="dot-role" style="background:#378ADD"></i><b>총괄</b><span>엔진·스케줄러</span></div>
+            <div class="office-chip"><i class="dot-role" style="background:#7F77DD"></i><b>체제분석</b><span>시장 체제</span></div>
+            <div class="office-chip"><i class="dot-role" style="background:#1D9E75"></i><b>스크리너</b><span>스크리닝·시그널</span></div>
+            <div class="office-chip"><i class="dot-role" style="background:#BA7517"></i><b>검증관</b><span>크로스 검증</span></div>
+            <div class="office-chip"><i class="dot-role" style="background:#D85A30"></i><b>집행관</b><span>주문·체결</span></div>
+            <div class="office-chip"><i class="dot-role" style="background:#5DCAA5"></i><b>전문가팀</b><span>뉴스·거시·테마</span></div>
+            <div class="office-chip"><i class="dot-role" style="background:#9CA3AF"></i><b>리스크</b><span>한도·킬스위치</span></div>
+            <div class="office-chip"><i class="dot-role" style="background:#E879A6"></i><b>진화</b><span>복기·파라미터</span></div>
+        </div>
+
+        <div class="office-frame-wrap">
+            <iframe id="office-frame" src="/static/office/index.html?lang=ko"
+                    title="가상 오피스" loading="lazy"></iframe>
+        </div>
+
+        <p class="office-note">
+            상태 출처: 엔진 파생(<code>/api/office/status</code>) + 외부 푸시.
+            Claude Code·CI 등 외부 도구는 <code>POST /api/office/status</code>로 상태를 밀어넣을 수 있고,
+            푸시된 상태는 5분간 엔진 파생 상태를 덮어씁니다.
+            원본 프로젝트: <a href="https://github.com/KbWen/agent-virtual-office" target="_blank" rel="noopener"
+            style="color:var(--acc-blue);text-decoration:none;">KbWen/agent-virtual-office</a> (MIT)
+        </p>
+
+    </main>
+
+    <script src="/static/js/common.js?v=4"></script>
+</body>
+</html>

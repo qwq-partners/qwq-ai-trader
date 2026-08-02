@@ -133,6 +133,9 @@ src/
 scripts/
 ├── run_trader.py       # 통합 트레이더 (--market kr|us|both --dry-run)
 └── liquidate_all.py    # 긴급 전량 매도 (--market kr|us --force)
+
+tools/
+└── office/             # 가상 오피스 재빌드 (build.sh, ko.json) — 산출물은 static/office/
 ```
 
 ---
@@ -287,6 +290,17 @@ journalctl -u qwq-ai-trader -f                                 # 실시간 로�
 - `/api/portfolio`, `/api/positions`, `/api/orders`, `/api/risk` — KR
 - `/api/us/portfolio` — US
 - `/api/stream` — SSE 스트림
+- `/api/office/status` — 가상 오피스 상태 (GET 조회 / POST 외부 푸시)
+
+**페이지**: `/` 실시간 · `/trades` · `/performance` · `/themes` · `/evolution` ·
+`/engine` · `/office` 가상 오피스 · `/principles` · `/settings`
+
+### 가상 오피스 (`/office`, 2026-08-03~)
+엔진 상태를 8명 픽셀아트 캐릭터로 시각화 (총괄/체제분석/스크리너/검증관/집행관/전문가팀/리스크/진화).
+- 원본 [KbWen/agent-virtual-office](https://github.com/KbWen/agent-virtual-office)(MIT)를 정적 빌드로 통합 — **런타임 node 프로세스 없음**
+- 상태 브릿지 `src/dashboard/office_api.py` (엔진 파생 + POST + Claude Code 훅 파일, 외부 신호 5분 TTL)
+- 재빌드: `bash tools/office/build.sh` (`static/office/`는 빌드 산출물이므로 직접 수정 금지)
+- 상세: `docs/operations/virtual-office.md`
 
 ---
 

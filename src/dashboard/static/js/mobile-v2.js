@@ -38,6 +38,7 @@
       "/themes": "page-themes",
       "/evolution": "page-evolution",
       "/engine": "page-engine",
+      "/office": "page-office",
       "/principles": "page-principles",
       "/settings": "page-settings",
     };
@@ -55,6 +56,7 @@
     { href: "/performance", icon: "📊", label: "성과", match: /^\/performance/ },
     { href: "/themes", icon: "🔥", label: "테마", match: /^\/themes/ },
     { href: "/engine", icon: "⚙️", label: "엔진", match: /^\/engine/ },
+    { href: "/office", icon: "🏢", label: "오피스", match: /^\/office/ },
   ];
 
   function renderBottomNav() {
