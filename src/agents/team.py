@@ -26,7 +26,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -40,6 +42,11 @@ from .trader import TraderAgent
 from .types import PMDecision, Stance, TeamVerdict
 
 RESULT_DIR = Path.home() / ".cache" / "ai_trader" / "team_verdicts"
+
+# 결과 파일 저장 락은 **모듈 전역**이어야 한다.
+# 인스턴스별 락으로 두면 TradingTeam이 둘 이상 만들어졌을 때(KR/US 분리, 테스트 등)
+# 같은 일자 파일과 같은 .tmp를 동시에 read-modify-write해 결과가 유실된다.
+_SAVE_LOCK = asyncio.Lock()
 
 # 동시 심의 상한 — LLM rate limit 보호
 MAX_CONCURRENT = 3
@@ -79,8 +86,7 @@ class TradingTeam:
         self.pm = PortfolioManager(allow_override=allow_pm_override)
         self._expert_orch = expert_orchestrator
         self._sem = asyncio.Semaphore(max_concurrent)
-        # 결과 파일은 read-modify-write라 동시 심의 시 서로 덮어쓴다 → 직렬화 필요
-        self._save_lock = asyncio.Lock()
+        # 저장 직렬화는 모듈 전역 락(_SAVE_LOCK)을 쓴다 — 위 주석 참조
         self._cancelled_count = 0   # 타임아웃 취소 건수 (통계 정합성 확인용)
         RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -373,7 +379,7 @@ class TradingTeam:
         서로의 결과를 덮어쓴다 → Lock으로 직렬화한다.
         임시파일에 쓰고 교체해 중간 상태가 읽히는 것도 막는다.
         """
-        async with self._save_lock:
+        async with _SAVE_LOCK:
             try:
                 path = RESULT_DIR / f"verdicts_{datetime.now():%Y%m%d}.json"
                 existing: List[Dict[str, Any]] = []
@@ -393,7 +399,7 @@ class TradingTeam:
                 # 파일 비대화 방지
                 existing = existing[-100:]
 
-                tmp = path.with_suffix(".json.tmp")
+                tmp = path.with_suffix(f".json.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
                 tmp.write_text(
                     json.dumps(existing, ensure_ascii=False, indent=2, default=str),
                     encoding="utf-8",
@@ -411,6 +417,9 @@ class TradingTeam:
         try:
             rows = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(rows, list):
+                return []
+            # limit<=0이면 rows[-0:]가 전체를 반환한다 — 의도와 정반대다
+            if limit <= 0:
                 return []
             return rows[-limit:][::-1]
         except (json.JSONDecodeError, OSError):

@@ -158,6 +158,17 @@ class TechnicalAnalyst:
                 if df is not None and not df.empty:
                     from ..indicators.technical import compute_indicators
                     metrics = compute_indicators(df) or {}
+                    # 조회 시각이 아니라 **마지막 관측 시각**이 데이터의 나이다.
+                    # 일봉을 방금 받아왔다고 그 값이 실시간인 것은 아니다.
+                    try:
+                        last_idx = df.index[-1]
+                        obs = getattr(last_idx, "to_pydatetime", None)
+                        if obs is not None:
+                            as_of = obs()
+                        elif isinstance(last_idx, datetime):
+                            as_of = last_idx
+                    except (IndexError, AttributeError, TypeError, ValueError):
+                        pass    # 인덱스가 시각이 아니면 호출 시각을 유지
 
             if not metrics:
                 return AnalystReport.failed(

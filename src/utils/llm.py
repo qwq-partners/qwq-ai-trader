@@ -52,7 +52,8 @@ class LLMConfig:
 
     # 모델 선택
     # Heavy: 깊은 분석, 거래 복기에 사용 (GPT-5.4 최신 모델)
-    openai_model_heavy: str = "gpt-5.4"
+    # 2026-08-02: gpt-5.4 → gpt-5.6-sol (gpt-5.4 deprecated 예정, sol은 일반 API 동작 확인)
+    openai_model_heavy: str = "gpt-5.6-sol"
     # Light: 빠른 분류, 테마 탐지에 사용
     openai_model_light: str = "gpt-5-mini"
     gemini_model_heavy: str = "gemini-3.1-pro-preview"

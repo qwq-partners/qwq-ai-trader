@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
@@ -52,8 +53,21 @@ class AnalystReport:
 
     @property
     def age_minutes(self) -> float:
-        """근거 데이터의 나이(분)"""
-        return max(0.0, (datetime.now() - self.data_as_of).total_seconds() / 60.0)
+        """
+        근거 데이터의 나이(분).
+
+        `data_as_of`가 tz-aware로 들어오면 naive `datetime.now()`와 빼는 순간
+        TypeError가 나고, 이 프로퍼티는 종합 점수·프롬프트·저장 경로 전부에서 쓰이므로
+        심의 자체가 통째로 실패한다. 외부에서 어떤 시각이 들어와도 죽지 않게 정규화한다.
+        """
+        try:
+            as_of = self.data_as_of
+            now = datetime.now(as_of.tzinfo) if as_of.tzinfo is not None else datetime.now()
+            return max(0.0, (now - as_of).total_seconds() / 60.0)
+        except (TypeError, AttributeError, OverflowError):
+            # 시각을 신뢰할 수 없으면 "매우 오래된 것"으로 본다 —
+            # 알 수 없는 데이터를 신선하다고 가정하는 쪽이 더 위험하다.
+            return float("inf")
 
     def freshness_decayed_confidence(self, half_life_min: float = 60.0) -> float:
         """
@@ -63,12 +77,18 @@ class AnalystReport:
         6시간 전 수급 데이터와 방금 계산한 지표를 같은 무게로 합치면
         종합 점수가 과거를 반영하게 된다.
         """
-        if not self.ok or self.confidence <= 0:
+        # NaN은 모든 비교가 거짓이라 `<= 0` 검사를 통과해버린다 → 명시적으로 배제
+        conf = self.confidence
+        if not self.ok or not math.isfinite(conf) or conf <= 0:
             return 0.0
+        conf = min(1.0, conf)
         if half_life_min <= 0:
-            return self.confidence
-        decay = 0.5 ** (self.age_minutes / half_life_min)
-        return round(self.confidence * decay, 4)
+            return conf
+        age = self.age_minutes
+        if not math.isfinite(age):
+            return 0.0          # 시각 불명 → 가중치 제외
+        decay = 0.5 ** (age / half_life_min)
+        return round(conf * decay, 4)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)

@@ -1,5 +1,35 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-02 — fix: Codex(gpt-5.6-sol) 2차 리뷰 P1 4건/P2 2건 + LLM heavy 모델 교체
+
+### Codex gpt-5.6-sol 2차 리뷰 반영
+1차 리뷰(gpt-5.4)가 놓친 것을 상위 모델이 추가로 잡았다. 기존 수정 6건은 "모두 올바름" 확인.
+- **P1 `portfolio_manager.py`**: `gate_passed=True`인데 `blocked_gates`가 차 있으면
+  하드게이트(킬스위치·손실한도)가 걸린 건도 "통과" 플래그 하나로 **fail-open**됐다.
+  앞서 고친 P0(빈 목록 fail-closed)의 정반대 방향 구멍. → 모순은 차단으로 해석.
+- **P1 `portfolio_manager.py`**: `confidence`/`conviction`이 `NaN`이면 `<` 비교가 전부 거짓이라
+  **오버라이드 조건을 그냥 통과**하고 `size_multiplier`까지 NaN으로 번졌다.
+  → `math.isfinite()` + `[0,1]` 범위 검증, 위반 시 거부. 사이징도 폴백값 적용.
+- **P1 `team.py`**: 저장 락이 인스턴스별이라 `TradingTeam`이 둘이면 같은 파일·같은 `.tmp`를
+  동시에 read-modify-write. → 모듈 전역 `_SAVE_LOCK` + 임시파일명에 pid/uuid 부여.
+- **P1 `types.py`**: `data_as_of`가 tz-aware면 naive `datetime.now()`와 뺄셈에서 **TypeError**.
+  `age_minutes`는 점수·프롬프트·저장 전 경로에서 쓰여 심의가 통째로 실패한다.
+  → tzinfo 정규화, 계산 불가 시 `inf`(=가중치 0)로 처리.
+- **P2 `analysts.py`**: `price_provider` 조회 시 `data_as_of`가 조회 시각이라 일봉이 실시간으로
+  표시됐다. → DataFrame 마지막 관측 시각 사용.
+- **P2 `team.py`**: `load_today(limit=0)`이 `rows[-0:]`라 전체 반환. → `limit<=0`이면 `[]`.
+
+### LLM heavy 모델 교체 (gpt-5.4 → gpt-5.6-sol)
+- `gpt-5.4`는 deprecated 예정(Codex `models_cache`의 `upgrade.model = gpt-5.6-terra`).
+- `gpt-5.6-sol`(priority 1)이 **일반 OpenAI API에서도 동작**함을 실측 확인
+  (sol / terra / 5.5 / 5.4 / 5-mini 전부 200 응답).
+- **heavy만 교체**: `MARKET_ANALYSIS` / `TRADE_REVIEW` / `STRATEGY_ANALYSIS` —
+  거래 복기·전략 진화 등 하루 수십 회 수준의 중요 판단.
+- **light는 유지**(`gpt-5-mini`): Bull/Bear 토론이 종목당 2~4회씩 부르므로 호출량이 크다.
+  frontier 모델로 올리면 비용이 급증한다. (2026-12-10 deprecation 예정이라 후속 검토 필요)
+- ※ `.claude/agents/` 13개는 Claude Code 서브에이전트라 **Claude 모델만 지원**(haiku/sonnet/opus).
+  gpt로 대체 불가하며, Codex가 필요하면 `codex exec` 위임 경로를 쓴다.
+
 ## 2026-08-02 — feat/fix: 에이전트 데이터 신선도 관리 + Codex 독립 리뷰 반영
 
 ### 데이터 신선도 (모든 에이전트가 최신 정보로 판단하도록)
@@ -33,12 +63,17 @@
   → 기본 `PMDecision(approved=False, HOLD)` 채움.
 
 ### Codex CLI 연동 (참고)
-3번의 실패 원인이 각각 달랐다 — 재현 시 참고:
+실패 원인이 매번 달랐다 — 재현 시 참고:
 1. bubblewrap 샌드박스 차단(`bwrap: loopback: Failed RTM_NEWADDR`) → `-s danger-full-access`
-2. **stdin 대기로 25분 무한 정지** → `< /dev/null` 필수 (백그라운드 실행 시)
-3. 기본 모델 `gpt-5.6-sol`이 ChatGPT 계정 미지원 → `-m gpt-5.4` 명시
+2. **stdin 대기로 25분 무한 정지** → `< /dev/null` 필수 (백그라운드 실행 시).
+   출력도 `| tail`로 파이프하면 버퍼링돼 통째로 사라지므로 파일로 직접 리다이렉트할 것.
+3. 모델 거부 `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account`
+   → **일시적 현상이었다.** 로그인 직후 계정 정보 전파 전에만 발생하며,
+   이후 재확인 시 `gpt-5.6-sol / terra / luna / gpt-5.5` 모두 정상 동작.
+   영구 제약으로 단정하지 말고 재시도할 것.
 - ⚠️ 플러그인 companion(`codex-companion.mjs`)은 `sandbox: "read-only"`를 하드코딩하므로
   `~/.codex/config.toml`의 `sandbox_mode`가 무시된다. 이 환경에서는 `codex exec` 직접 호출이 필요.
+- ⚠️ `gpt-5.4`는 deprecated 예정(`upgrade.model = gpt-5.6-terra`). 기본·권장은 **`gpt-5.6-sol`**(priority 1).
 
 ## 2026-08-02 — fix(P0): 전문가 8명 LLM 미연결 + Core Holding 비중 확대
 

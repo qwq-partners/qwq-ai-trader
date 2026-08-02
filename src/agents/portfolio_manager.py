@@ -33,6 +33,7 @@ PM은 두 가지 일을 한다:
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import Any, Dict, List, Optional, Set
 
@@ -136,6 +137,21 @@ class PortfolioManager:
             )
 
         # ── 2) 게이트 통과 — PM이 거부할 수 있다 ──
+        # ⚠️ 통과라면서 차단 목록이 채워져 있으면 게이트 결과가 모순이다.
+        #    이걸 그대로 승인하면 하드게이트(킬스위치·손실한도)가 걸린 건도
+        #    "통과"라는 플래그 하나로 fail-open된다. 모순은 차단 쪽으로 해석한다.
+        if gate_passed and blocked:
+            self.stats["rejected"] += 1
+            logger.warning(
+                f"[PM] {symbol} 게이트 결과 모순 — passed=True인데 차단목록 {blocked} "
+                f"→ 보수적 거부"
+            )
+            return PMDecision(
+                symbol=symbol, approved=False, stance=Stance.HOLD,
+                reason=f"게이트 결과 모순 (passed=True + blocked={blocked}) — 보수적 거부",
+                proposal=proposal.to_dict(),
+            )
+
         if gate_passed:
             # 팀이 반대하는데 게이트만 통과한 경우는 PM이 막는다
             debate = proposal.debate or {}
@@ -197,15 +213,35 @@ class PortfolioManager:
             self.stats["rejected"] += 1
             return reject(f"일일 오버라이드 한도 소진 ({self.daily_limit}회)")
 
+        # NaN은 모든 비교가 거짓이라 `< 임계값` 검사를 그냥 통과한다.
+        # 즉 confidence=NaN, conviction=NaN이면 오버라이드 조건이 무력화되고
+        # size_multiplier까지 NaN으로 번져 주문 수량 계산이 오염된다.
+        # 유한하고 [0,1] 범위인 값만 신뢰한다.
+        def _valid_ratio(v: Any) -> Optional[float]:
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(f) or not (0.0 <= f <= 1.0):
+                return None
+            return f
+
         debate = proposal.debate or {}
-        if debate.get("consensus") is not True or float(debate.get("confidence", 0)) < 1.0:
+        debate_conf = _valid_ratio(debate.get("confidence", 0))
+        if debate.get("consensus") is not True or debate_conf is None or debate_conf < 1.0:
             self.stats["rejected"] += 1
             return reject("오버라이드 조건 미충족 — 토론 만장일치 지지 아님")
 
-        if proposal.conviction < self.min_conviction:
+        conviction = _valid_ratio(proposal.conviction)
+        if conviction is None:
             self.stats["rejected"] += 1
             return reject(
-                f"오버라이드 조건 미충족 — 확신도 {proposal.conviction:.2f} "
+                f"오버라이드 조건 미충족 — 확신도 값 비정상 ({proposal.conviction!r})"
+            )
+        if conviction < self.min_conviction:
+            self.stats["rejected"] += 1
+            return reject(
+                f"오버라이드 조건 미충족 — 확신도 {conviction:.2f} "
                 f"< {self.min_conviction}"
             )
 
@@ -214,7 +250,8 @@ class PortfolioManager:
         self._override_count += 1
         self.stats["overrode"] += 1
         self.stats["approved"] += 1
-        size = min(proposal.size_multiplier, 1.0) * 0.7
+        raw_size = _valid_ratio(min(max(proposal.size_multiplier, 0.0), 1.0))
+        size = (raw_size if raw_size is not None else 0.5) * 0.7
 
         logger.warning(
             f"[PM] {symbol} 게이트 오버라이드 승인 "

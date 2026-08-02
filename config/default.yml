@@ -16,8 +16,14 @@ llm:
   # 2026-06-16: 모델명 config override (Dec 10, 2026 OpenAI GPT-5 snapshot deprecation 대비)
   # 코드 변경 없이 evolved_overrides.yml 또는 default.yml에서 모델 교체 가능
   # 빈 문자열 또는 키 없으면 LLMConfig dataclass 기본값 사용
-  openai_model_heavy: "gpt-5.4"        # 거래 복기, 전략 진화 (heavy)
-  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약 (light) — 2026-12-10 deprecation
+  # 2026-08-02: heavy를 gpt-5.4 → gpt-5.6-sol로 교체
+  #   ① gpt-5.4는 deprecated 예정 (Codex models_cache의 upgrade.model = gpt-5.6-terra)
+  #   ② gpt-5.6-sol은 priority 1 최신 모델이며 일반 OpenAI API에서도 동작 확인
+  #   heavy는 거래 복기·전략 진화·시장 분석 등 하루 수십 회 수준의 중요 판단에만 쓰인다.
+  openai_model_heavy: "gpt-5.6-sol"    # 거래 복기, 전략 진화, 시장 분석 (heavy)
+  # light는 그대로 둔다 — Bull/Bear 토론이 종목당 2~4회씩 부르므로 호출량이 크다.
+  # frontier 모델로 올리면 비용이 급증한다. (2026-12-10 deprecation 예정이라 후속 검토 필요)
+  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약, Bull/Bear 토론 (light)
   gemini_model_heavy: "gemini-3.1-pro-preview"
   gemini_model_light: "gemini-3.1-flash-lite-preview"
   # 2026-06-17 Phase 3: Shadow A/B — gpt-5-mini 후속 비교
