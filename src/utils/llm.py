@@ -63,6 +63,17 @@ class LLMConfig:
     # 빈 문자열이면 비활성, 값이 있으면 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출
     openai_model_light_shadow: str = ""
 
+    # ── 로컬 Codex CLI 라우팅 (2026-08-02) ─────────────────────
+    # 배치성 작업을 OpenAI API 대신 로컬 codex로 처리해 API 과금을 구독 한도로 대체한다.
+    # 프로세스 기동 2~3초 + 응답 7~12초라 실시간 매매 경로에는 쓰지 않는다.
+    # 실패하면 기존 API 경로로 자동 폴백한다.
+    codex_enabled: bool = False
+    codex_model: str = "gpt-5.6-sol"
+    codex_timeout_sec: float = 240.0
+    codex_sandbox: str = "read-only"
+    # Codex로 보낼 LLMTask 값들 (배치성만)
+    codex_tasks: tuple = ("trade_review", "strategy_analysis")
+
     # 타임아웃 (Thinking 모델은 추론에 시간이 걸림)
     timeout_seconds: int = 120
 
@@ -96,7 +107,7 @@ class LLMConfig:
         return cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-            openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.4"),
+            openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
             openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
             gemini_model_heavy=(
                 llm_cfg.get("gemini_model_heavy") or "gemini-3.1-pro-preview"
@@ -105,6 +116,14 @@ class LLMConfig:
                 llm_cfg.get("gemini_model_light") or "gemini-3.1-flash-lite-preview"
             ),
             openai_model_light_shadow=(llm_cfg.get("openai_model_light_shadow") or ""),
+            codex_enabled=bool((llm_cfg.get("codex") or {}).get("enabled", False)),
+            codex_model=((llm_cfg.get("codex") or {}).get("model") or "gpt-5.6-sol"),
+            codex_timeout_sec=float((llm_cfg.get("codex") or {}).get("timeout_sec", 240.0)),
+            codex_sandbox=((llm_cfg.get("codex") or {}).get("sandbox") or "read-only"),
+            codex_tasks=tuple(
+                (llm_cfg.get("codex") or {}).get("tasks")
+                or ("trade_review", "strategy_analysis")
+            ),
         )
 
 
@@ -550,6 +569,15 @@ class LLMManager:
                 success=False, error="Daily budget exceeded"
             )
 
+        # ── 로컬 Codex 라우팅 (배치 태스크 한정) ──────────────────
+        # 구독 한도로 처리해 API 과금을 줄인다. 실패하면 아래 API 경로로 그대로 폴백한다.
+        # 실시간 경로(QUICK_*, THEME_*)는 codex_tasks에 넣지 않는다 — 기동+응답이 10초 이상이다.
+        if self.config.codex_enabled and task.value in self.config.codex_tasks:
+            codex_resp = await self._try_codex(prompt, system, task, kwargs)
+            if codex_resp is not None:
+                return codex_resp
+            # None이면 Codex 실패 → API 폴백 (로그는 _try_codex에서 남긴다)
+
         # 작업별 설정 가져오기
         task_config = self.TASK_CONFIG.get(task, self.TASK_CONFIG[LLMTask.QUICK_CLASSIFY])
 
@@ -585,6 +613,63 @@ class LLMManager:
             logger.error(f"Fallback LLM도 실패 ({fallback_provider.value}): {response.error}")
 
         return response
+
+    async def _try_codex(
+        self,
+        prompt: str,
+        system: str,
+        task: LLMTask,
+        kwargs: Dict[str, Any],
+    ) -> Optional[LLMResponse]:
+        """
+        로컬 Codex CLI로 처리를 시도한다.
+
+        Returns:
+            성공 시 LLMResponse, 실패 시 None (호출측이 API로 폴백)
+
+        Codex는 별도 프로세스라 API 예산·토큰 통계에 잡히지 않는다.
+        구독 한도를 쓰므로 과금이 없고, 그래서 daily_usage에도 더하지 않는다.
+        """
+        try:
+            from .codex_client import get_codex_client
+            client = get_codex_client(
+                model=self.config.codex_model,
+                timeout=self.config.codex_timeout_sec,
+                sandbox=self.config.codex_sandbox,
+            )
+            if not client.is_available():
+                logger.debug("[LLM] codex 실행 파일 없음 → API 사용")
+                return None
+
+            # system 프롬프트는 별도 인자가 없으므로 지시문 앞에 붙인다
+            full_prompt = f"{system}\n\n{prompt}" if system else prompt
+
+            resp = await client.complete(
+                full_prompt,
+                output_schema=kwargs.get("output_schema"),
+            )
+            if not resp.success or not resp.content:
+                logger.info(
+                    f"[LLM] Codex 실패({resp.error}) → API 폴백 (task={task.value})"
+                )
+                return None
+
+            self.stats["success_count"] += 1
+            self.stats["codex_count"] = self.stats.get("codex_count", 0) + 1
+            logger.info(
+                f"[LLM] Codex 처리 완료 (task={task.value}, "
+                f"{resp.latency_ms/1000:.1f}s, 과금 없음)"
+            )
+            return LLMResponse(
+                content=resp.content,
+                model=f"codex:{resp.model}",
+                provider=LLMProvider.OPENAI,
+                latency_ms=resp.latency_ms,
+                success=True,
+            )
+        except Exception as e:
+            logger.warning(f"[LLM] Codex 라우팅 오류 → API 폴백: {e}")
+            return None
 
     async def complete_with(
         self,

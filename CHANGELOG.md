@@ -1,5 +1,45 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-02 — feat(llm): 로컬 Codex CLI 라우팅 — 배치 작업 API 과금 → 구독 한도
+
+### 배경
+`codex exec`는 비대화형 실행을 지원하고 **최종 응답만 stdout으로** 내보낸다(진행 로그는 stderr).
+배치성 LLM 작업을 여기로 넘기면 **API 과금이 ChatGPT 구독 한도로 대체**된다.
+
+### 신규 — `src/utils/codex_client.py`
+- `codex exec` async subprocess 래퍼. `--ephemeral`(세션 미저장) 사용.
+- **`--output-schema` 지원** — JSON Schema로 응답 구조를 강제해 파싱 실패가 없다.
+  기존 정규식 파싱(`_extract_json`)보다 훨씬 안정적.
+- `input_data`를 stdin으로 넘기면 `<stdin>` 블록으로 첨부된다 (거래 내역 JSON 등 큰 입력용).
+
+### 라우팅 — `LLMManager.complete()`
+- config `llm.codex.tasks`에 있는 LLMTask만 Codex로 보낸다. **실패하면 기존 API로 자동 폴백.**
+- 기본 대상: `trade_review`(거래 복기), `strategy_analysis`(전략 진화·주간 복기)
+- Codex는 별도 프로세스라 API 토큰 통계·예산에 잡히지 않는다 (과금이 없으므로 daily_usage 미반영).
+
+### ⚠️ 실시간 경로에는 쓰지 않는다
+프로세스 기동 2~3초 + 응답 7~12초. 실측 비교:
+| 경로 | 처리 | 지연 |
+|---|---|---|
+| `strategy_analysis` (배치) | **Codex** | 8.9초 |
+| `quick_classify` (실시간) | API (Gemini) | 0.7초 |
+
+Bull/Bear 토론은 종목당 2~4회 × 다수 종목이라 Codex로 돌리면 수 분이 걸린다.
+`cross_validator` 2차 검증도 10초 타임아웃이라 프로세스 기동만으로 초과한다.
+→ `codex.tasks`에 `quick_*` / `theme_*` 계열을 넣지 말 것.
+
+### 실행 시 함정 (실측으로 확인, 코드 주석에도 기록)
+1. **stdin을 안 써도 반드시 닫아야 한다.** 안 그러면 `Reading additional input from stdin...`
+   상태로 무한 대기한다 (배경 실행에서 25분 소실).
+2. stdout/stderr를 합치지 말 것 — 합치면 진행 로그가 응답에 섞인다.
+3. 파일 접근이 필요하면 이 호스트에선 `danger-full-access` 필요(bubblewrap 차단).
+   데이터를 stdin으로 넘기는 순수 분석이면 `read-only`로 충분.
+
+### 검증
+- 배치 → `model=codex:gpt-5.6-sol`, 실시간 → API 라우팅 분리 확인
+- 폴백 2경로 실측: ① codex 실행파일 없음 ② 잘못된 모델 → 둘 다 API로 정상 폴백
+- 구조화 출력: 거래 복기 JSON 스키마 준수 확인 (7~12초)
+
 ## 2026-08-02 — fix: Codex(gpt-5.6-sol) 2차 리뷰 P1 4건/P2 2건 + LLM heavy 모델 교체
 
 ### Codex gpt-5.6-sol 2차 리뷰 반영
