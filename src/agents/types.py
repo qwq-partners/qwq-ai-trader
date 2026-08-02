@@ -110,6 +110,10 @@ class DebateTurn:
     side: str                        # "bull" | "bear"
     stance: Optional[bool]           # True=지지, False=반대, None=판정 불가
     text: str = ""
+    # 실제로 응답한 모델 — 폴백으로 바뀔 수 있어 요청 모델과 다를 수 있다.
+    # 모델 교체 전후 성과를 비교하려면 판단마다 이게 남아야 한다.
+    model: str = ""
+    provider: str = ""
 
 
 @dataclass
@@ -145,7 +149,8 @@ class DebateResult:
             "summary": self.summary,
             "turns": [
                 {"round": t.round_no, "side": t.side,
-                 "stance": t.stance, "text": t.text[:200]}
+                 "stance": t.stance, "text": t.text[:500],
+                 "model": t.model, "provider": t.provider}
                 for t in self.turns
             ],
         }

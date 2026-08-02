@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from .reproducibility import get_ledger, snapshot_reports
 from .types import AnalystReport, DebateResult, DebateTurn
 
 # 라운드당 타임아웃 (초)
@@ -73,6 +74,8 @@ class ResearchTeam:
         self.rounds = max(1, int(rounds))
         self.stats = {"total": 0, "consensus_buy": 0, "consensus_reject": 0,
                       "split": 0, "failed": 0, "flipped": 0, "one_sided": 0}
+        # 재현성 원장 — 모든 토론 호출을 append-only로 남긴다
+        self._ledger = get_ledger()
 
     def set_llm_manager(self, llm_manager) -> None:
         self._llm = llm_manager
@@ -104,15 +107,29 @@ class ResearchTeam:
         )
         return "\n".join(lines)
 
-    async def _ask(self, prompt: str, system: str, provider) -> str:
+    async def _ask(self, prompt: str, system: str, provider) -> Dict[str, Any]:
+        """
+        LLM 1회 호출.
+
+        문자열만 반환하면 **실제 응답 모델 ID와 지연이 유실**된다.
+        재현성 원장은 "무슨 모델이 답했는가"가 핵심이므로 메타를 함께 돌려준다
+        (폴백으로 모델이 바뀌었을 수 있어 요청 모델과 응답 모델이 다를 수 있다).
+        """
         resp = await self._llm.complete_with(
             prompt, provider=provider, weight="light",
             system=system, max_tokens=MAX_TOKENS,
             reasoning_effort="low",
         )
-        if not getattr(resp, "success", False):
-            return ""
-        return (resp.content or "").strip()
+        ok = bool(getattr(resp, "success", False))
+        return {
+            "text": (resp.content or "").strip() if ok else "",
+            "model": getattr(resp, "model", "") or "",
+            "provider": getattr(getattr(resp, "provider", None), "value",
+                                str(getattr(resp, "provider", ""))),
+            "latency_ms": float(getattr(resp, "latency_ms", 0.0) or 0.0),
+            "success": ok,
+            "error": getattr(resp, "error", None),
+        }
 
     # ── 토론 ───────────────────────────────────────────────
     async def debate(self, symbol: str, name: str,
@@ -137,6 +154,9 @@ class ResearchTeam:
         from ..utils.llm import LLMProvider
 
         base = self._context(symbol, name, reports, market_context)
+        # 입력 스냅샷 — 재실행 시 "같은 입력이었나"를 판정하는 기준.
+        # 나이는 호출마다 변하므로 제외한다 (snapshot_reports 참조).
+        input_snapshot = snapshot_reports(reports)
         bull_text = bear_text = ""
         bull_v = bear_v = None
 
@@ -182,17 +202,47 @@ class ResearchTeam:
             # 이번 라운드의 **원시 응답**을 분리해서 다룬다.
             #   직전 라운드 텍스트를 그대로 이번 turn에 기록하면, 응답이 비었던 라운드가
             #   "같은 말을 반복한 것"처럼 감사 로그에 남아 토론 이력이 오염된다.
-            round_bull = bull_new if isinstance(bull_new, str) and bull_new else ""
-            round_bear = bear_new if isinstance(bear_new, str) and bear_new else ""
+            bull_meta = bull_new if isinstance(bull_new, dict) else {}
+            bear_meta = bear_new if isinstance(bear_new, dict) else {}
+            round_bull = bull_meta.get("text") or ""
+            round_bear = bear_meta.get("text") or ""
 
             round_bull_v = _parse(round_bull, "APPROVE", "REJECT") if round_bull else None
             round_bear_v = _parse(round_bear, "ACCEPT", "REJECT") if round_bear else None
 
-            # 이력에는 이번 라운드에 실제로 나온 것만 남긴다
+            # ── 재현성 원장 기록 (append-only) ──
+            # 판단 근거를 사후에 재현·비교할 수 있어야 shadow 성과를 신뢰할 수 있다.
+            for _role, _meta, _p, _sys, _v in (
+                ("bull", bull_meta, bull_prompt, BULL_SYSTEM, round_bull_v),
+                ("bear", bear_meta, bear_prompt, BEAR_SYSTEM, round_bear_v),
+            ):
+                try:
+                    self._ledger.record(
+                        symbol=symbol, role=_role, round_no=rnd,
+                        prompt=_p, system=_sys,
+                        response=_meta.get("text", ""),
+                        provider=_meta.get("provider", ""),
+                        model=_meta.get("model", ""),
+                        params={"max_tokens": MAX_TOKENS,
+                                "reasoning_effort": "low", "weight": "light"},
+                        verdict=_v,
+                        input_snapshot=input_snapshot,
+                        latency_ms=_meta.get("latency_ms", 0.0),
+                        success=bool(_meta.get("success")),
+                        error=_meta.get("error"),
+                    )
+                except Exception as _le:
+                    logger.debug(f"[리서치팀] 원장 기록 실패: {_le}")
+
+            # 이력에는 이번 라운드에 실제로 나온 것만 남긴다 (모델 ID 포함)
             result.turns.append(DebateTurn(
-                rnd, "bull", round_bull_v, round_bull or "(응답 없음)"))
+                rnd, "bull", round_bull_v, round_bull or "(응답 없음)",
+                model=bull_meta.get("model", ""),
+                provider=bull_meta.get("provider", "")))
             result.turns.append(DebateTurn(
-                rnd, "bear", round_bear_v, round_bear or "(응답 없음)"))
+                rnd, "bear", round_bear_v, round_bear or "(응답 없음)",
+                model=bear_meta.get("model", ""),
+                provider=bear_meta.get("provider", "")))
             result.rounds_run = rnd
 
             # 다음 라운드 프롬프트와 최종 판정에는 마지막으로 확보된 응답을 이어 쓴다

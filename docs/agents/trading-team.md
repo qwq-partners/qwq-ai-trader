@@ -122,6 +122,32 @@ TeamVerdict → ~/.cache/ai_trader/team_verdicts/ → 대시보드
 
 오버라이드 시 사이징을 ×0.7로 낮추고, 감사 원장 기록 + 텔레그램 알림을 남긴다.
 
+## LLM 재현성 원장 (`reproducibility.py`, 2026-08-03)
+
+토론 결과는 Trader 점수를 `+20/-40` 바꾸고 매수 여부를 가른다. 그런데 LLM은 같은 입력에도
+다른 답을 낼 수 있다. 기록이 없으면 **"그날 왜 샀나"를 사후에 설명할 수 없고**,
+모델 교체 전후를 같은 전략으로 비교할 수도 없다.
+
+**남기는 것** (`~/.cache/ai_trader/llm_ledger/llm_YYYYMMDD.jsonl`, append-only)
+
+| 필드 | 용도 |
+|---|---|
+| `prompt` / `response` | 전문 (요약본으로는 재실행 비교 불가) |
+| `prompt_hash` | 재실행 시 **입력이 동일한지** 문자열 비교 없이 확인 |
+| `model` / `provider` | **실제 응답 모델** — 폴백으로 요청과 달라질 수 있다 |
+| `params` | max_tokens, reasoning_effort, weight |
+| `input_snapshot_hash` | 분석가 보고서 스냅샷 (나이는 제외 — 매번 변해 비교 불가) |
+| `verdict` / `latency_ms` | 판정과 지연 |
+
+`DebateTurn`에도 `model`/`provider`를 실어 verdict 파일만 봐도 어느 모델이 판단했는지 안다.
+
+**재현성 측정** — `LLMLedger.agreement_rate()`가 `prompt_hash`로 묶어
+동일 입력의 판정 일치율을 계산한다. 입력이 다르면 판정이 달라도 비재현이 아니므로 제외한다.
+
+> ⚠️ **첫 실측: 일치율 50%** (승격 기준 80% 미달).
+> 동일 입력 3회 중 Bull(`gpt-5-mini`)이 1회 무응답이었다.
+> 추론 모델의 빈 응답 문제가 재현성까지 갉아먹고 있다 — 승격 전 해결 필요.
+
 ## 데이터 신선도 (2026-08-02 추가)
 
 에이전트가 **오래된 데이터를 현재 정보로 착각하는 것**이 가장 위험하다.
@@ -227,7 +253,8 @@ kr:
 - [x] 적대적 리뷰 반영 (근거 fail-closed, PM 오버라이드 차단, 섹터 전달)
 - [x] **포트폴리오 단위 allocator** — `allocator.py`. 섹터 집중(동시 승인분 포함)·
       슬롯·현금·일일한도를 원자적으로 적용
-- [ ] LLM 재현성 계약 — 모델 snapshot·프롬프트 해시·응답 원문 append-only 기록
+- [x] LLM 재현성 계약 — `reproducibility.py`. 프롬프트/응답 전문·모델 ID·입력 스냅샷 해시
+      append-only 기록 + 동일 입력 판정 일치율 측정
 - [ ] 심의 결과 → Trade Wiki 학습 루프
 
 ## 튜닝 포인트

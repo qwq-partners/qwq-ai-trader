@@ -19,9 +19,11 @@ from .trader import TraderAgent
 from .portfolio_manager import PortfolioManager
 from .team import TradingTeam
 from .allocator import AllocationPlan, AllocationResult, PortfolioAllocator, get_allocator
+from .reproducibility import LLMCallRecord, LLMLedger, get_ledger, snapshot_reports
 
 __all__ = [
     "AllocationPlan", "AllocationResult", "PortfolioAllocator", "get_allocator",
+    "LLMCallRecord", "LLMLedger", "get_ledger", "snapshot_reports",
     "AnalystKind", "AnalystReport", "DebateResult", "DebateTurn",
     "PMDecision", "Stance", "TeamVerdict", "TradeProposal",
     "AnalystTeam", "FundamentalAnalyst", "NewsAnalyst", "TechnicalAnalyst",

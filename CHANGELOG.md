@@ -1,5 +1,41 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — feat(agents): LLM 재현성 원장 — 판단 근거 append-only 기록
+
+### 배경
+토론 결과는 Trader 점수를 `+20/-40` 바꾸고 매수 여부를 가른다. 그런데 LLM은 같은 입력에도
+다른 답을 낼 수 있다. 기록이 없으면 **"그날 왜 샀나"를 사후에 설명할 수 없고**,
+모델 교체 전후를 같은 전략으로 비교할 수 없으며, shadow 성과가 실력인지 운인지 구분할 수 없다.
+승격 기준의 "재현성 80%"는 측정 수단 없이는 확인 자체가 불가능했다.
+
+### 신규 `src/agents/reproducibility.py`
+`~/.cache/ai_trader/llm_ledger/llm_YYYYMMDD.jsonl` (append-only)
+
+| 필드 | 용도 |
+|---|---|
+| `prompt` / `response` | **전문** — 요약본으로는 재실행 비교가 불가능하다 |
+| `prompt_hash` | 재실행 시 입력 동일성 확인 (문자열 전체 비교 없이) |
+| `model` / `provider` | **실제 응답 모델** — 폴백으로 요청과 달라질 수 있다 |
+| `params` | max_tokens / reasoning_effort / weight |
+| `input_snapshot_hash` | 분석가 보고서 스냅샷. **나이는 제외** — 매번 변해 비교 불가 |
+| `verdict` / `latency_ms` | 판정·지연 |
+
+- `LLMLedger.agreement_rate()` — `prompt_hash`로 묶어 동일 입력의 판정 일치율 계산.
+  입력이 다르면 판정이 달라도 비재현이 아니므로 제외한다.
+- `LLMLedger.model_usage()` — 모델 교체·폴백 발생 추적.
+
+### 연결
+- `researchers._ask`가 문자열 대신 메타(dict) 반환 — 기존엔 **실제 응답 모델 ID와 지연이 유실**됐다.
+- `DebateTurn`에 `model`/`provider` 추가 → verdict 파일만 봐도 어느 모델이 판단했는지 안다.
+- turns 직렬화 200자 → 500자 (전문은 원장에 있으므로 요약은 이 정도면 충분).
+- `TradingTeam.get_stats()`에 `reproducibility` / `model_usage` 노출.
+
+### ⚠️ 첫 실측에서 바로 문제가 드러났다
+동일 입력 3회 실행 → **판정 일치율 50%** (승격 기준 80% 미달).
+Bull(`gpt-5-mini`)이 3회 중 1회 무응답이었다 — 추론 모델의 빈 응답 문제가
+재현성까지 갉아먹고 있다. **승격 전 해결 필요.**
+(최종 consensus는 3회 모두 동일했으나, 개별 호출 수준에서는 재현되지 않았다.)
+
 ## 2026-08-03 — feat(agents): 포트폴리오 배분기 — 동시 승인분 섹터 집중 차단
 
 ### 배경

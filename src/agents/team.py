@@ -437,7 +437,16 @@ class TradingTeam:
             return []
 
     def get_stats(self) -> Dict[str, Any]:
-        return {
+        stats: Dict[str, Any] = {
             "research": self.research.get_stats(),
             "pm": self.pm.get_stats(),
+            "cancelled": self._cancelled_count,
         }
+        # 재현성 — 승격 기준(동일 입력 판정 일치율 80%)을 상시 확인할 수 있게 노출한다
+        try:
+            from .reproducibility import LLMLedger
+            stats["reproducibility"] = LLMLedger.agreement_rate()
+            stats["model_usage"] = LLMLedger.model_usage()
+        except Exception as e:
+            logger.debug(f"[팀] 재현성 통계 조회 실패: {e}")
+        return stats
