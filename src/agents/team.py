@@ -179,6 +179,7 @@ class TradingTeam:
         unrealized_pnl_pct: Optional[float] = None,
         gate_checker: Optional[GateChecker] = None,
         indicators_as_of: Optional[datetime] = None,
+        sector: Optional[str] = None,
     ) -> TeamVerdict:
         started = time.monotonic()
         verdict = TeamVerdict(symbol=symbol, name=name)
@@ -188,6 +189,11 @@ class TradingTeam:
             reports = await self.analysts.run(
                 symbol, name, indicators, indicators_as_of=indicators_as_of
             )
+            # 섹터는 배분기(allocator)가 집중도를 계산하는 데 쓰므로 보고서에 실어 둔다
+            if sector:
+                for r in reports:
+                    if r.ok:
+                        r.metrics.setdefault("sector", sector)
             verdict.reports = reports
             logger.debug(
                 f"[팀] {symbol} 근거 신선도: "
@@ -264,6 +270,7 @@ class TradingTeam:
         indicators: Optional[Dict[str, Any]] = None,
         gate_checker: Optional[GateChecker] = None,
         indicators_as_of: Optional[datetime] = None,
+        sector: Optional[str] = None,
     ) -> TeamVerdict:
         """매수 후보 심의"""
         async with self._sem:
@@ -272,7 +279,8 @@ class TradingTeam:
                     self._deliberate(symbol, name, holding=False,
                                      indicators=indicators,
                                      gate_checker=gate_checker,
-                                     indicators_as_of=indicators_as_of),
+                                     indicators_as_of=indicators_as_of,
+                                     sector=sector),
                     timeout=DELIBERATION_TIMEOUT,
                 )
             except asyncio.TimeoutError:
@@ -326,6 +334,7 @@ class TradingTeam:
                 it["symbol"], it.get("name", ""),
                 it.get("indicators"), gate_checker,
                 indicators_as_of=it.get("indicators_as_of"),
+                sector=it.get("sector"),
             )
 
         results = await asyncio.gather(

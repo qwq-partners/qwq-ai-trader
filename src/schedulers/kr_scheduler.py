@@ -4532,6 +4532,30 @@ JSON:
             logger.info(f"[팀심의] 보유 {len(holdings)}종목 재평가")
             results += await team.deliberate_many(holdings, holding=True)
 
+        # ── 2.5) 포트폴리오 배분 ──────────────────────────────
+        # 종목별 심의는 서로를 보지 못한다. 같은 배치에서 동시에 승인된 건들의
+        # 섹터 집중·총 익스포저·잔여 슬롯을 여기서 한 번에 적용한다.
+        # (cross_validator의 섹터 규칙은 '이미 보유 중'만 세므로 동시 승인분을 못 막는다)
+        alloc_plan = None
+        try:
+            from ..agents.allocator import get_allocator
+            allocator = get_allocator(
+                risk_manager=getattr(bot, "risk_manager", None),
+                portfolio=getattr(bot, "portfolio", None),
+            )
+            _daily_used = 0
+            try:
+                _rm = getattr(bot, "risk_manager", None)
+                _daily_used = int(getattr(_rm, "_daily_new_buys", 0) or 0)
+            except (TypeError, ValueError):
+                _daily_used = 0
+
+            alloc_plan = allocator.allocate(results, daily_buys_used=_daily_used)
+            for note in alloc_plan.notes:
+                logger.info(f"[팀심의] 배분 상태: {note}")
+        except Exception as e:
+            logger.error(f"[팀심의] 포트폴리오 배분 실패: {e}", exc_info=True)
+
         # ── 3) 요약 알림 ──
         buys = [v for v in results
                 if v.decision and v.decision.approved
@@ -4557,6 +4581,19 @@ JSON:
                 )
             if overrides:
                 lines.append(f"⚠️ 게이트 오버라이드 {len(overrides)}건")
+
+            # 배분 결과 — 팀이 승인해도 포트폴리오 제약에 걸리면 여기서 잘린다
+            if alloc_plan is not None:
+                lines.append(
+                    f"— 배분: 승인 {len(alloc_plan.approved)} / "
+                    f"거부 {len(alloc_plan.rejected)} "
+                    f"(예산 {alloc_plan.total_budget_krw:,.0f}원)"
+                )
+                for a in alloc_plan.approved[:5]:
+                    lines.append(f"  ✅ {a.name or a.symbol} {a.budget_krw:,.0f}원 ×{a.size_multiplier:.2f}")
+                for r in alloc_plan.rejected[:5]:
+                    lines.append(f"  ⛔ {r.name or r.symbol} — {r.reason[:50]}")
+
             lines.append("※ shadow 단계 — 주문 미실행, 기록·검증 목적")
             await send_alert("\n".join(lines))
         except Exception as e:

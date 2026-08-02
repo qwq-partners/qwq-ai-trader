@@ -1,5 +1,35 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — feat(agents): 포트폴리오 배분기 — 동시 승인분 섹터 집중 차단
+
+### 배경
+적대적 리뷰의 최우선 지적: "이름과 달리 PortfolioManager가 포트폴리오를 관리하지 않는다."
+종목별 심의는 서로를 보지 못해 **후보 5개가 전부 같은 섹터여도 각각 승인**될 수 있었다.
+
+`cross_validator`의 섹터 규칙(규칙4)은 **이미 보유 중인** 포지션만 센다.
+같은 배치에서 동시에 승인된 후보들끼리는 서로를 볼 방법이 없었다.
+
+### 신규 `src/agents/allocator.py`
+심의 이후·주문 이전에 후보 **전체를 한 번에** 배분한다.
+- 확신도 높은 순으로 배정하며 배정할 때마다 누적 상태(섹터·현금·슬롯)를 즉시 갱신 (원자적 적용)
+- **한도는 새로 만들지 않는다** — `RiskConfig`(max_positions, max_position_pct,
+  min_cash_reserve_pct, max_daily_new_buys, max_positions_per_sector, min_position_value)와
+  `RiskManager._get_available_cash()`를 그대로 재사용. 숫자를 두 곳에 두면 언젠가 어긋난다.
+- **allocator 거부는 오버라이드 불가** — 포트폴리오 제약은 계좌 생존에 직결된다.
+
+### 연결
+- `kr_scheduler._run_team_deliberation_once`: 심의 → **배분** → 알림 순서로 연결
+- 후보에 `sector`를 실어 보내 `AnalystReport.metrics["sector"]`로 전달
+- 텔레그램 요약에 배분 승인/거부 내역 추가
+
+### 검증 (실측)
+| 시나리오 | 결과 |
+|---|---|
+| 반도체 4 + 바이오 1 동시 승인 | 반도체 **2건만 승인**, 2건 "동시 승인분 포함" 차단 |
+| 가용현금 300만 / 후보 4 | 예산 300만 초과 안 함, 나머지 최소금액 미달 거부 |
+| 일일 매수 5/5 소진 | 전건 거부 |
+| 포지션 7/8 보유 | 잔여 슬롯 1건만 승인 |
+
 ## 2026-08-03 — fix(P0): 적대적 리뷰 반영 — 신선도 fail-closed, PM 오버라이드 차단, 섹터 전달
 
 Codex(gpt-5.6-sol) 적대적 **설계** 리뷰 결과를 검증해 타당한 6건을 반영했다.
