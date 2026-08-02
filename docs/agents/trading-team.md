@@ -242,6 +242,26 @@ kr:
     max_concurrent: 3
 ```
 
+## shadow 관측 리포트 (2026-08-03~)
+
+```bash
+python scripts/shadow_report.py              # 오늘
+python scripts/shadow_report.py --days 7     # 최근 7일 누적
+python scripts/shadow_report.py --telegram   # 텔레그램 전송
+```
+
+승격 기준 달성도를 숫자로 보여준다 — 심의 건수·판정 분포·보류 사유·토론 합의·
+**재현성 일치율**·모델 사용 현황.
+
+**자동 알림 (crontab)**
+
+| 주기 | 내용 |
+|---|---|
+| 평일 16:00 | 일일 요약 (장 마감 15:30 + 14:00 심의 이후) |
+| 일요일 09:00 | 주간 누적 (`--days 7`, 승격 기준 점검) |
+
+로그: `~/.cache/ai_trader/shadow_report.log`
+
 ## shadow → 실주문 승격 기준 (2026-08-03 명문화)
 
 "며칠 관측"은 기준이 아니다. 아래를 **모두** 충족하고 운영자가 명시 승인해야 승격한다.
