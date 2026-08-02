@@ -165,6 +165,22 @@ class PortfolioManager:
             self.stats["rejected"] += 1
             return reject(f"게이트 차단 (오버라이드 비활성): {gate_reason[:80]}")
 
+        # ⚠️ 차단 근거가 비어 있으면 오버라이드를 검토하지 않는다 (fail-closed).
+        #   gate_passed=False인데 blocked_gates가 비었다면 게이트 결과와 근거가
+        #   불일치하는 상태다. 이때 아래 검사들은 빈 컬렉션이라 전부 통과해버려
+        #   하드 게이트 가드와 화이트리스트가 무력화되고 PM이 게이트를 그냥 뚫는다.
+        #   무엇이 막았는지 모르는 차단은 절대 뒤집지 않는다.
+        if not blocked:
+            self.stats["rejected"] += 1
+            logger.warning(
+                f"[PM] {symbol} 차단됐으나 게이트 목록이 비어 있음 "
+                f"— 오버라이드 불가 (fail-closed). 사유: {gate_reason[:80]}"
+            )
+            return reject(
+                f"게이트 차단 근거 불명 (blocked_gates 비어 있음) — 보수적 거부: "
+                f"{gate_reason[:60]}"
+            )
+
         # 하드 게이트가 하나라도 걸리면 즉시 거부
         hard_hit = [g for g in blocked if g in HARD_GATES]
         if hard_hit:

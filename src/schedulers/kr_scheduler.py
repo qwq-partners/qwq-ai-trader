@@ -2337,6 +2337,8 @@ JSON:
 
                     # REST 피드용 캐시
                     bot._last_screened = screened
+                    # 스크리닝 시각 — 팀 심의가 지표 신선도를 판단하는 데 쓴다
+                    bot._last_screened_at = datetime.now()
 
                 except Exception as e:
                     logger.warning(f"스크리닝 오류: {e}", exc_info=True)
@@ -4447,6 +4449,9 @@ JSON:
         team = bot.trading_team
 
         # ── 1) 매수 후보 상위 5 ──
+        # 스크리닝은 5분 주기라 심의 시점엔 지표가 이미 몇 분~수십 분 지난 값이다.
+        # 그 시각을 함께 넘겨야 분석가가 신선도를 반영해 가중치를 낮출 수 있다.
+        screened_at = getattr(bot, "_last_screened_at", None)
         candidates = []
         screened = getattr(bot, "_last_screened", None) or []
         for s in screened[:5]:
@@ -4456,6 +4461,7 @@ JSON:
                 "indicators": (getattr(s, "indicators", None)
                                or getattr(s, "metadata", {}).get("indicators")
                                if hasattr(s, "metadata") else None),
+                "indicators_as_of": screened_at,
             })
         candidates = [c for c in candidates if c["symbol"]]
 

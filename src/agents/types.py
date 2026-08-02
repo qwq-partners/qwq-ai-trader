@@ -41,14 +41,40 @@ class AnalystReport:
     metrics: Dict[str, Any] = field(default_factory=dict)   # 원자료 (지표값 등)
     confidence: float = 0.5          # 0.0 ~ 1.0
     error: Optional[str] = None
+    # 이 보고서가 근거로 삼은 **데이터의 시각** (보고서 생성 시각이 아니다).
+    # 캐시된 값을 썼다면 그 값이 만들어진 시점을 넣는다.
+    # 장중 판단에 몇 시간 전 데이터를 쓰면서 그 사실을 모르는 것이 가장 위험하다.
+    data_as_of: datetime = field(default_factory=datetime.now)
 
     @property
     def ok(self) -> bool:
         return self.error is None
 
+    @property
+    def age_minutes(self) -> float:
+        """근거 데이터의 나이(분)"""
+        return max(0.0, (datetime.now() - self.data_as_of).total_seconds() / 60.0)
+
+    def freshness_decayed_confidence(self, half_life_min: float = 60.0) -> float:
+        """
+        나이에 따라 감쇠시킨 신뢰도.
+
+        half_life_min 마다 절반으로 줄인다 (지수 감쇠).
+        6시간 전 수급 데이터와 방금 계산한 지표를 같은 무게로 합치면
+        종합 점수가 과거를 반영하게 된다.
+        """
+        if not self.ok or self.confidence <= 0:
+            return 0.0
+        if half_life_min <= 0:
+            return self.confidence
+        decay = 0.5 ** (self.age_minutes / half_life_min)
+        return round(self.confidence * decay, 4)
+
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["kind"] = self.kind.value
+        d["data_as_of"] = self.data_as_of.isoformat(timespec="seconds")
+        d["age_minutes"] = round(self.age_minutes, 1)
         return d
 
     @classmethod

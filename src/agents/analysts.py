@@ -18,6 +18,7 @@ Analyst 팀 — 종목 하나를 세 관점에서 병렬 분석한다 (팬아웃
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -112,10 +113,14 @@ class FundamentalAnalyst:
 
         score = max(-100, min(100, score))
         summary = "; ".join(findings[:3]) if findings else "특이사항 없음"
+        # stock_validator는 수급 30분 / 트렌드 2시간 캐시를 쓴다.
+        # 캐시 히트 시각을 알 수 없으므로 보수적으로 TTL 절반만큼 지난 것으로 본다
+        # (실제보다 신선하다고 가정해 과대평가하는 것보다 낫다).
         return AnalystReport(
             kind=AnalystKind.FUNDAMENTAL, symbol=symbol, score=score,
             summary=summary, findings=findings, metrics=metrics,
             confidence=confidence,
+            data_as_of=datetime.now() - timedelta(minutes=15),
         )
 
 
@@ -132,10 +137,19 @@ class TechnicalAnalyst:
         self._prices = price_provider
 
     async def analyze(self, symbol: str, name: str = "",
-                      indicators: Optional[Dict[str, Any]] = None) -> AnalystReport:
+                      indicators: Optional[Dict[str, Any]] = None,
+                      indicators_as_of: Optional[datetime] = None) -> AnalystReport:
+        """
+        Args:
+            indicators: 이미 계산된 지표 (스크리너 결과 재사용)
+            indicators_as_of: 그 지표가 계산된 시각.
+                스크리닝은 5분 주기라 심의 시점엔 최대 수십 분 지난 값일 수 있다.
+                None이면 현재로 간주하므로, 재사용 시 반드시 실제 시각을 넘길 것.
+        """
         findings: List[str] = []
         metrics: Dict[str, Any] = dict(indicators or {})
         score = 0
+        as_of = indicators_as_of or datetime.now()
 
         try:
             # 지표를 외부에서 받으면 그대로 쓴다 (스크리너가 이미 계산한 값 재사용)
@@ -201,6 +215,7 @@ class TechnicalAnalyst:
             kind=AnalystKind.TECHNICAL, symbol=symbol, score=score,
             summary=summary, findings=findings, metrics=metrics,
             confidence=0.7 if findings else 0.4,
+            data_as_of=as_of,
         )
 
 
@@ -259,11 +274,14 @@ class NewsAnalyst:
             else:
                 confidence = 0.5
 
+            # news_curator는 종목 sentiment를 1시간 TTL로 캐시한다 (_SYMBOL_TTL).
+            # 캐시 생성 시각을 알 수 없어 보수적으로 TTL 절반을 가정한다.
             return AnalystReport(
                 kind=AnalystKind.NEWS, symbol=symbol, score=score,
                 summary=summary[:200], findings=findings,
                 metrics={"score": score, "tags": list(tags), "items": items},
                 confidence=confidence,
+                data_as_of=datetime.now() - timedelta(minutes=30),
             )
         except Exception as e:
             logger.debug(f"[Analyst/news] {symbol} 실패: {e}")
@@ -280,7 +298,8 @@ class AnalystTeam:
         self.news = NewsAnalyst(orchestrator)
 
     async def run(self, symbol: str, name: str = "",
-                  indicators: Optional[Dict[str, Any]] = None) -> List[AnalystReport]:
+                  indicators: Optional[Dict[str, Any]] = None,
+                  indicators_as_of: Optional[datetime] = None) -> List[AnalystReport]:
         """
         세 관점을 동시에 수집한다.
 
@@ -297,26 +316,45 @@ class AnalystTeam:
 
         results = await asyncio.gather(
             _guard(self.fundamental.analyze(symbol, name), AnalystKind.FUNDAMENTAL),
-            _guard(self.technical.analyze(symbol, name, indicators), AnalystKind.TECHNICAL),
+            _guard(self.technical.analyze(symbol, name, indicators, indicators_as_of),
+                   AnalystKind.TECHNICAL),
             _guard(self.news.analyze(symbol, name), AnalystKind.NEWS),
         )
         return list(results)
 
     @staticmethod
-    def aggregate_score(reports: List[AnalystReport]) -> int:
+    def aggregate_score(reports: List[AnalystReport],
+                        apply_freshness_decay: bool = True) -> int:
         """
         신뢰도 가중 평균 점수 (-100 ~ +100).
 
         실패한 보고서(confidence=0)는 자동으로 배제된다.
+
+        apply_freshness_decay=True면 **데이터 나이에 따라 가중치를 감쇠**시킨다.
+        수급 캐시(최대 30분)와 뉴스 캐시(최대 1시간)와 방금 계산한 지표를
+        같은 무게로 합치면 종합 점수가 과거를 반영하게 되기 때문이다.
         """
         weighted = 0.0
         total_w = 0.0
         for r in reports:
             if not r.ok:
                 continue
-            w = max(0.0, r.confidence)
+            w = (r.freshness_decayed_confidence() if apply_freshness_decay
+                 else max(0.0, r.confidence))
             weighted += r.score * w
             total_w += w
         if total_w <= 0:
             return 0
         return int(round(weighted / total_w))
+
+    @staticmethod
+    def freshness_summary(reports: List[AnalystReport]) -> str:
+        """보고서별 데이터 나이 요약 (토론 프롬프트·로그용)"""
+        parts = []
+        for r in reports:
+            if not r.ok:
+                continue
+            age = r.age_minutes
+            parts.append(f"{r.kind.value} {age:.0f}분 전" if age >= 1
+                         else f"{r.kind.value} 실시간")
+        return ", ".join(parts)

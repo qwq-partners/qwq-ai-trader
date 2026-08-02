@@ -81,14 +81,27 @@ class ResearchTeam:
     @staticmethod
     def _context(symbol: str, name: str, reports: List[AnalystReport],
                  market_context: str = "") -> str:
+        """
+        토론 프롬프트용 컨텍스트.
+
+        각 근거의 **나이**를 함께 적는다. 30분 전 수급과 방금 계산한 지표를
+        구분 없이 제시하면 모델이 모두 현재 정보로 취급한다.
+        """
         lines = [f"종목: {name or symbol} ({symbol})"]
         for r in reports:
             if r.ok:
-                lines.append(f"- [{r.kind.value}] 점수 {r.score:+d}: {r.summary}")
+                age = r.age_minutes
+                stamp = "실시간" if age < 1 else f"{age:.0f}분 전"
+                lines.append(
+                    f"- [{r.kind.value}] 점수 {r.score:+d} ({stamp}): {r.summary}"
+                )
             else:
                 lines.append(f"- [{r.kind.value}] 수집 실패 ({r.error})")
         if market_context:
             lines.append(f"시장 컨텍스트: {market_context}")
+        lines.append(
+            "※ 괄호 안은 근거 데이터의 나이다. 오래된 근거는 그만큼 할인해서 판단하라."
+        )
         return "\n".join(lines)
 
     async def _ask(self, prompt: str, system: str, provider) -> str:
@@ -166,18 +179,29 @@ class ResearchTeam:
                 logger.warning(f"[리서치팀] {symbol} R{rnd} 예외: {e}")
                 break
 
-            if isinstance(bull_new, str) and bull_new:
-                bull_text = bull_new
-            if isinstance(bear_new, str) and bear_new:
-                bear_text = bear_new
+            # 이번 라운드의 **원시 응답**을 분리해서 다룬다.
+            #   직전 라운드 텍스트를 그대로 이번 turn에 기록하면, 응답이 비었던 라운드가
+            #   "같은 말을 반복한 것"처럼 감사 로그에 남아 토론 이력이 오염된다.
+            round_bull = bull_new if isinstance(bull_new, str) and bull_new else ""
+            round_bear = bear_new if isinstance(bear_new, str) and bear_new else ""
 
-            prev_bull, prev_bear = bull_v, bear_v
-            bull_v = _parse(bull_text, "APPROVE", "REJECT")
-            bear_v = _parse(bear_text, "ACCEPT", "REJECT")
+            round_bull_v = _parse(round_bull, "APPROVE", "REJECT") if round_bull else None
+            round_bear_v = _parse(round_bear, "ACCEPT", "REJECT") if round_bear else None
 
-            result.turns.append(DebateTurn(rnd, "bull", bull_v, bull_text))
-            result.turns.append(DebateTurn(rnd, "bear", bear_v, bear_text))
+            # 이력에는 이번 라운드에 실제로 나온 것만 남긴다
+            result.turns.append(DebateTurn(
+                rnd, "bull", round_bull_v, round_bull or "(응답 없음)"))
+            result.turns.append(DebateTurn(
+                rnd, "bear", round_bear_v, round_bear or "(응답 없음)"))
             result.rounds_run = rnd
+
+            # 다음 라운드 프롬프트와 최종 판정에는 마지막으로 확보된 응답을 이어 쓴다
+            # (한쪽이 한 라운드 실패했다고 그 관점을 통째로 버리지는 않는다)
+            prev_bull, prev_bear = bull_v, bear_v
+            if round_bull:
+                bull_text, bull_v = round_bull, round_bull_v
+            if round_bear:
+                bear_text, bear_v = round_bear, round_bear_v
 
             # 입장 변경 추적 — 토론이 실제로 작동했는지 보는 지표
             if rnd > 1 and (prev_bull != bull_v or prev_bear != bear_v):

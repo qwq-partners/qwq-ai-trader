@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from datetime import datetime
@@ -80,6 +81,7 @@ class TradingTeam:
         self._sem = asyncio.Semaphore(max_concurrent)
         # 결과 파일은 read-modify-write라 동시 심의 시 서로 덮어쓴다 → 직렬화 필요
         self._save_lock = asyncio.Lock()
+        self._cancelled_count = 0   # 타임아웃 취소 건수 (통계 정합성 확인용)
         RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
     def _exit_exempt_symbols(self) -> set:
@@ -103,24 +105,55 @@ class TradingTeam:
 
     # ── 시장 컨텍스트 ──────────────────────────────────────
     def _market_context(self) -> str:
-        """도메인 전문가 8명의 합의를 한 줄로 압축 (토론 프롬프트에 주입)"""
+        """
+        도메인 전문가 8명의 합의를 한 줄로 압축 (토론 프롬프트에 주입).
+
+        ⚠️ `orchestrator.snapshot()`은 **만료 여부와 무관하게** 캐시된 의견을 준다
+        (`ExpertAgent.cached()` 주석에 "만료 무관"이라 명시돼 있다).
+        전문가 의견 TTL은 6~24시간이라, 거르지 않으면 장중 판단에
+        어제 만들어진 시장 진단을 "현재 상황"으로 주입하게 된다.
+
+        여기서는 유효한 의견만 쓰고, 의견의 나이를 프롬프트에 명시해
+        LLM이 오래된 정보임을 알고 판단하도록 한다.
+        """
         if self._expert_orch is None:
             return ""
         try:
             snap = self._expert_orch.snapshot()
             if not snap:
                 return ""
-            score = self._expert_orch.aggregate_regime_score(snap)
-            bias = self._expert_orch.aggregate_bias(snap)
+
+            fresh = {k: op for k, op in snap.items()
+                     if getattr(op, "is_valid", False)}
+            stale_n = len(snap) - len(fresh)
+
+            if not fresh:
+                # 전부 만료 — 없는 것보다 나쁘다. 컨텍스트를 주지 않는다.
+                logger.info(
+                    f"[팀] 전문가 의견 {len(snap)}건이 모두 만료 — 시장 컨텍스트 생략"
+                )
+                return ""
+
+            score = self._expert_orch.aggregate_regime_score(fresh)
+            bias = self._expert_orch.aggregate_bias(fresh)
             bias_str = getattr(bias, "value", str(bias))
-            # 상위 findings 2개만 — 프롬프트 비대화 방지
+
+            # 가장 오래된 의견의 나이 — 컨텍스트 신선도의 하한
+            now = datetime.now()
+            ages = []
             findings: List[str] = []
-            for op in snap.values():
-                if getattr(op, "is_valid", False) and op.key_findings:
+            for op in fresh.values():
+                issued = getattr(op, "issued_at", None)
+                if issued is not None:
+                    ages.append((now - issued).total_seconds() / 60.0)
+                if op.key_findings and len(findings) < 2:
                     findings.append(op.key_findings[0][:70])
-                if len(findings) >= 2:
-                    break
-            ctx = f"전문가 합의 bias={bias_str}, 보정점수={score:+d}"
+
+            ctx = f"전문가 합의({len(fresh)}명) bias={bias_str}, 보정점수={score:+d}"
+            if ages:
+                ctx += f", 최신도 {min(ages):.0f}~{max(ages):.0f}분 전"
+            if stale_n:
+                ctx += f" (만료 {stale_n}건 제외)"
             if findings:
                 ctx += " | " + " ; ".join(findings)
             return ctx
@@ -137,14 +170,21 @@ class TradingTeam:
         indicators: Optional[Dict[str, Any]] = None,
         unrealized_pnl_pct: Optional[float] = None,
         gate_checker: Optional[GateChecker] = None,
+        indicators_as_of: Optional[datetime] = None,
     ) -> TeamVerdict:
         started = time.monotonic()
         verdict = TeamVerdict(symbol=symbol, name=name)
 
         try:
             # 1) Analyst 팀 (병렬, LLM 없음)
-            reports = await self.analysts.run(symbol, name, indicators)
+            reports = await self.analysts.run(
+                symbol, name, indicators, indicators_as_of=indicators_as_of
+            )
             verdict.reports = reports
+            logger.debug(
+                f"[팀] {symbol} 근거 신선도: "
+                f"{AnalystTeam.freshness_summary(reports)}"
+            )
 
             # 2) Research 팀 토론 (LLM)
             #    보유 종목이든 후보든 동일하게 "지금 사도 되는가"를 묻는다.
@@ -183,6 +223,22 @@ class TradingTeam:
             if decision.overrode_gate:
                 await self._alert_override(decision)
 
+        except asyncio.CancelledError:
+            # 바깥 wait_for() 타임아웃으로 취소된 경우.
+            # Exception만 잡으면 여기로 오지 않아 verdict 보정과 저장이 통째로 건너뛰어지고,
+            # 그 전에 이미 증가한 공유 통계(ResearchTeam.stats / PortfolioManager.stats)만
+            # 남아 "심의는 집계됐는데 결과는 없는" 상태가 된다.
+            # 최소한의 실패 결과를 남기고 취소는 그대로 전파한다 (삼키면 안 된다).
+            verdict.error = "취소됨(타임아웃)"
+            verdict.decision = PMDecision(
+                symbol=symbol, approved=False, stance=Stance.HOLD,
+                reason="심의 취소 — 타임아웃",
+            )
+            verdict.elapsed_sec = time.monotonic() - started
+            self._cancelled_count += 1
+            with contextlib.suppress(Exception):
+                await asyncio.shield(self._save(verdict))
+            raise
         except Exception as e:
             logger.exception(f"[팀] {symbol} 심의 실패: {e}")
             verdict.error = str(e)
@@ -199,6 +255,7 @@ class TradingTeam:
         self, symbol: str, name: str = "",
         indicators: Optional[Dict[str, Any]] = None,
         gate_checker: Optional[GateChecker] = None,
+        indicators_as_of: Optional[datetime] = None,
     ) -> TeamVerdict:
         """매수 후보 심의"""
         async with self._sem:
@@ -206,7 +263,8 @@ class TradingTeam:
                 return await asyncio.wait_for(
                     self._deliberate(symbol, name, holding=False,
                                      indicators=indicators,
-                                     gate_checker=gate_checker),
+                                     gate_checker=gate_checker,
+                                     indicators_as_of=indicators_as_of),
                     timeout=DELIBERATION_TIMEOUT,
                 )
             except asyncio.TimeoutError:
@@ -220,6 +278,7 @@ class TradingTeam:
         self, symbol: str, name: str = "",
         indicators: Optional[Dict[str, Any]] = None,
         unrealized_pnl_pct: Optional[float] = None,
+        indicators_as_of: Optional[datetime] = None,
     ) -> TeamVerdict:
         """보유 종목 재평가 — 게이트는 매수용이므로 적용하지 않는다"""
         async with self._sem:
@@ -227,7 +286,8 @@ class TradingTeam:
                 return await asyncio.wait_for(
                     self._deliberate(symbol, name, holding=True,
                                      indicators=indicators,
-                                     unrealized_pnl_pct=unrealized_pnl_pct),
+                                     unrealized_pnl_pct=unrealized_pnl_pct,
+                                     indicators_as_of=indicators_as_of),
                     timeout=DELIBERATION_TIMEOUT,
                 )
             except asyncio.TimeoutError:
@@ -252,10 +312,12 @@ class TradingTeam:
                 return await self.deliberate_holding(
                     it["symbol"], it.get("name", ""),
                     it.get("indicators"), it.get("pnl_pct"),
+                    indicators_as_of=it.get("indicators_as_of"),
                 )
             return await self.deliberate_candidate(
                 it["symbol"], it.get("name", ""),
                 it.get("indicators"), gate_checker,
+                indicators_as_of=it.get("indicators_as_of"),
             )
 
         results = await asyncio.gather(
@@ -263,9 +325,15 @@ class TradingTeam:
         )
         out: List[TeamVerdict] = []
         for it, r in zip(items, results):
-            if isinstance(r, Exception):
-                v = TeamVerdict(symbol=it.get("symbol", "?"),
-                                name=it.get("name", ""), error=str(r))
+            if isinstance(r, BaseException):
+                # 다른 모든 경로는 decision을 채운다. 여기만 None이면
+                # 호출측이 verdict.decision 존재를 전제할 때 이 경로만 깨진다.
+                sym = it.get("symbol", "?")
+                v = TeamVerdict(symbol=sym, name=it.get("name", ""), error=str(r))
+                v.decision = PMDecision(
+                    symbol=sym, approved=False, stance=Stance.HOLD,
+                    reason=f"심의 예외: {r}",
+                )
                 out.append(v)
             else:
                 out.append(r)

@@ -1,5 +1,45 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-02 — feat/fix: 에이전트 데이터 신선도 관리 + Codex 독립 리뷰 반영
+
+### 데이터 신선도 (모든 에이전트가 최신 정보로 판단하도록)
+- 🐞 **`orchestrator.snapshot()`이 만료 의견을 그대로 반환**했다.
+  `ExpertAgent.cached()`는 주석부터 "만료 무관"이고 `ExpertOpinion.is_valid`는 아무도 쓰지 않았다.
+  전문가 의견 TTL이 6~24시간이라, 팀이 토론 프롬프트에 **어제 만들어진 시장 진단**을
+  "현재 상황"으로 주입할 수 있었다.
+- **수정 4가지**:
+  1. `team._market_context()` — `is_valid` 필터, 전부 만료면 컨텍스트 생략, 의견 나이 표기
+  2. `AnalystReport.data_as_of` + `freshness_decayed_confidence()` — 반감기 60분 지수 감쇠
+     (실측: 30분 0.57배 / 2시간 0.25배 / 6시간 0.016배)
+  3. 토론 프롬프트에 근거별 나이 명시 + "오래된 근거는 할인해서 판단하라" 지시
+  4. `bot._last_screened_at` → `indicators_as_of` 전달로 지표 나이 실측
+- 효과 실측: 신선한 지표(+80)와 4시간 전 수급(-60) 조합에서 종합 점수 **+10 → +72**
+  (과거가 현재를 상쇄하던 문제 해소)
+- **축적형은 감쇠하지 않는다** — `trade_memory`(L1→L2→L3), `trade_wiki` 교훈은
+  오래됐다고 가치가 떨어지지 않는다. 감쇠는 시황성 데이터(시세·수급·뉴스·레짐)에만 적용.
+
+### Codex(gpt-5.4) 독립 리뷰 반영 — P0 1 / P1 1 / P2 2
+1차 리뷰에서 놓친 결함을 외부 모델이 지적했다. 전부 실제 결함이라 수정했다.
+- **P0 `portfolio_manager.py`**: `gate_passed=False`인데 `blocked_gates`가 비어 있으면
+  하드게이트 가드와 화이트리스트 검사가 **빈 컬렉션이라 전부 통과**해 PM이 게이트를 그냥 뚫었다.
+  → 근거 불명 차단은 fail-closed 거부. 정상 soft 게이트 오버라이드는 유지됨을 실측 확인.
+- **P1 `team.py`**: `_deliberate()`가 `Exception`만 잡아 `asyncio.CancelledError`(타임아웃)에서
+  verdict 저장이 통째로 건너뛰어졌다. 이미 증가한 공유 통계만 남아 오염.
+  → `CancelledError` 별도 처리 + `asyncio.shield`로 저장 후 재전파.
+- **P2 `researchers.py`**: 라운드 간 `bull_text`/`bear_text` 재사용으로, 응답이 빈 라운드에
+  직전 텍스트가 그대로 turn에 기록돼 토론 이력이 오염됐다.
+  → 라운드 원시 응답 분리, 무응답은 `(응답 없음)`/`stance=None`으로 명시.
+- **P2 `team.py`**: `deliberate_many()` 예외 폴백만 `decision=None`이라 결과 shape이 깨졌다.
+  → 기본 `PMDecision(approved=False, HOLD)` 채움.
+
+### Codex CLI 연동 (참고)
+3번의 실패 원인이 각각 달랐다 — 재현 시 참고:
+1. bubblewrap 샌드박스 차단(`bwrap: loopback: Failed RTM_NEWADDR`) → `-s danger-full-access`
+2. **stdin 대기로 25분 무한 정지** → `< /dev/null` 필수 (백그라운드 실행 시)
+3. 기본 모델 `gpt-5.6-sol`이 ChatGPT 계정 미지원 → `-m gpt-5.4` 명시
+- ⚠️ 플러그인 companion(`codex-companion.mjs`)은 `sandbox: "read-only"`를 하드코딩하므로
+  `~/.codex/config.toml`의 `sandbox_mode`가 무시된다. 이 환경에서는 `codex exec` 직접 호출이 필요.
+
 ## 2026-08-02 — fix(P0): 전문가 8명 LLM 미연결 + Core Holding 비중 확대
 
 ### 🐞 P0 — 전문가 시스템의 LLM이 통째로 죽어 있었다
