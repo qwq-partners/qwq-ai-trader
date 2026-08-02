@@ -136,6 +136,10 @@ class BacktestConfig:
     enable_atr_linked_trailing: bool = True
     atr_link_multiplier: float = 1.2
     atr_link_cap_pct: float = 6.0
+    # 레짐별 청산 파라미터 적용 (실제 엔진 REGIME_EXIT_PARAMS 대응)
+    enable_regime_exit: bool = True
+    # 레짐 판단 방식: "ma_stack"(MA20>60>200 정배열) | "ret20" | "ret60" | "ma200"
+    regime_mode: str = "ma_stack"
     # ATR 동적 손절
     atr_multiplier: float = 2.0
     min_stop_pct: float = 3.5
@@ -312,22 +316,42 @@ class MarketRegime:
         self.kospi_data: Optional[pd.DataFrame] = None
 
     def load(self, start: str, end: str):
-        """KOSPI 지수 또는 삼성전자 대리 지표로 레짐 판단"""
+        """KOSPI 지수로 레짐 판단 (pykrx → FDR → 개별주 대리 순 폴백)"""
         print("  시장 레짐 지표 로드 중...")
         df = None
-        # 1차: KOSPI 지수
+        # 1차: KOSPI 지수 (pykrx) — KRX 인증이 없으면 자주 실패한다
         try:
             df = pykrx_stock.get_index_ohlcv_by_date(start, end, "1001")
         except Exception:
             pass
 
-        # 2차: 삼성전자 OHLCV (대리 지표)
+        # 2차: FinanceDataReader KOSPI (KS11) — 인증 불필요
+        #   pykrx 지수 조회는 KRX_ID/KRX_PW가 없으면 실패하므로 이 경로가 사실상 주력이다.
+        if df is None or len(df) < 20:
+            try:
+                import FinanceDataReader as fdr
+                s = f"{start[:4]}-{start[4:6]}-{start[6:]}"
+                e = f"{end[:4]}-{end[4:6]}-{end[6:]}"
+                fdf = fdr.DataReader("KS11", s, e)
+                if fdf is not None and not fdf.empty:
+                    df = fdf.rename(columns={"Close": "종가", "Open": "시가",
+                                             "High": "고가", "Low": "저가",
+                                             "Volume": "거래량"})
+                    print("  KOSPI 지수(pykrx) 실패 → FDR KS11 사용")
+            except Exception:
+                pass
+
+        # 3차: 삼성전자 OHLCV (최후 폴백)
+        #   ⚠️ 개별주는 지수와 크게 괴리될 수 있다. 실제로 2026-05~08 구간에서
+        #      KOSPI -23%인데 삼성전자 +393%라 레짐이 100% bullish로 왜곡된 사례가 있었다.
+        #      이 경로로 떨어지면 레짐 기반 판단을 신뢰하지 말 것.
         if df is None or len(df) < 20:
             try:
                 df = pykrx_stock.get_market_ohlcv_by_date(
                     start, end, "005930")
                 if df is not None and len(df) > 0:
-                    print("  KOSPI 지수 실패 → 삼성전자 OHLCV 대리 사용")
+                    print("  ⚠️ KOSPI 지수·FDR 모두 실패 → 삼성전자 대리 사용 "
+                          "(레짐 판단 신뢰도 낮음)")
             except Exception:
                 pass
 
@@ -341,9 +365,39 @@ class MarketRegime:
         else:
             print("  레짐 지표 로드 실패 — NEUTRAL 고정")
 
-    def get_regime(self, date: str) -> RegimeType:
+    def get_regime(self, date: str, mode: str = "ma_stack") -> RegimeType:
+        """
+        시장 레짐 판단.
+
+        mode:
+          ma_stack — MA20>MA60>MA200 정배열 (중장기 추세, 기본)
+          ma200    — 종가의 MA200 상/하 (가장 단순·느림)
+          ret20    — 최근 20영업일 수익률 (단기)
+          ret60    — 최근 60영업일 수익률 (중기)
+
+        기간이 짧을수록 반응은 빠르지만 whipsaw(잦은 전환)가 늘어난다.
+        어느 쪽이 나은지는 시장에 따라 다르므로 백테스트로 고른다.
+        """
         if self.kospi_data is None:
             return RegimeType.NEUTRAL
+
+        if mode in ("ret20", "ret60"):
+            window = 20 if mode == "ret20" else 60
+            try:
+                mask = self.kospi_data.index <= pd.Timestamp(date)
+                hist = self.kospi_data.loc[mask, '종가'].astype(float)
+                if len(hist) < window + 1:
+                    return RegimeType.NEUTRAL
+                ret = (hist.iloc[-1] - hist.iloc[-window - 1]) / hist.iloc[-window - 1] * 100
+                # ±5% 밴드 — 이보다 작은 움직임은 추세로 보지 않는다
+                if ret >= 5.0:
+                    return RegimeType.BULLISH
+                if ret <= -5.0:
+                    return RegimeType.BEARISH
+                return RegimeType.NEUTRAL
+            except (KeyError, IndexError):
+                return RegimeType.NEUTRAL
+
         try:
             date_ts = pd.Timestamp(date)
             mask = self.kospi_data.index <= date_ts
@@ -364,6 +418,9 @@ class MarketRegime:
         ma20 = float(ma20) if not pd.isna(ma20) else close
         ma60 = float(ma60) if not pd.isna(ma60) else close
         ma200 = float(ma200)
+
+        if mode == "ma200":
+            return RegimeType.BULLISH if close > ma200 else RegimeType.BEARISH
 
         if close > ma20 > ma60 > ma200:
             return RegimeType.BULLISH
@@ -734,15 +791,41 @@ class StrategyScorer:
 
 
 # ─── 청산 관리 ──────────────────────────────────────────────
+# 레짐별 청산 파라미터 — src/strategies/exit_manager.py REGIME_EXIT_PARAMS와 동일해야 한다.
+# 백테스트 RegimeType(3종)을 실제 엔진 레짐(5종)에 매핑:
+#   BULLISH → trending_bull / NEUTRAL → neutral / BEARISH → trending_bear
+# ⚠️ 한쪽을 고치면 반드시 다른 쪽도 고칠 것 (게이트 판정이 어긋난다).
+BT_REGIME_EXIT_PARAMS: Dict[RegimeType, Dict] = {
+    RegimeType.BULLISH: {   # ↔ trending_bull
+        "first_exit_pct": 10.0, "second_exit_pct": 15.0, "third_exit_pct": 25.0,
+        "trailing_stop_pct": 4.0, "stop_loss_pct": 5.0,
+    },
+    RegimeType.NEUTRAL: {   # ↔ neutral
+        "first_exit_pct": 10.0, "second_exit_pct": 12.0, "third_exit_pct": 20.0,
+        "trailing_stop_pct": 3.0, "stop_loss_pct": 4.0,
+    },
+    RegimeType.BEARISH: {   # ↔ trending_bear
+        "first_exit_pct": 5.0, "second_exit_pct": 8.0, "third_exit_pct": 14.0,
+        "trailing_stop_pct": 2.0, "stop_loss_pct": 3.5,
+    },
+}
+
+
 class BTExitManager:
     def __init__(self, config: BacktestConfig):
         self.config = config
         self.fee = BTFeeCalculator()
 
     def check_exit(
-        self, pos: BTPosition, row: pd.Series
+        self, pos: BTPosition, row: pd.Series,
+        regime: Optional["RegimeType"] = None,
     ) -> List[Tuple[str, int, float, str]]:
-        """일봉 데이터로 청산 체크 → [(action, qty, price, reason)]"""
+        """일봉 데이터로 청산 체크 → [(action, qty, price, reason)]
+
+        Args:
+            regime: 당일 시장 레짐. 실제 엔진의 REGIME_EXIT_PARAMS와 동일하게
+                    익절/트레일링/손절 목표를 레짐별로 바꾼다 (None이면 config 기본값).
+        """
         actions = []
         high = float(row['고가'])
         low = float(row['저가'])
@@ -753,6 +836,12 @@ class BTExitManager:
 
         entry = pos.entry_price
         is_core = pos.strategy == StrategyType.CORE
+
+        # 레짐별 청산 파라미터 (실제 exit_manager.REGIME_EXIT_PARAMS와 동일 값)
+        # 코어홀딩은 실제 엔진과 마찬가지로 레짐 보정을 받지 않는다.
+        rp = None
+        if regime is not None and not is_core and self.config.enable_regime_exit:
+            rp = BT_REGIME_EXIT_PARAMS.get(regime)
 
         # 최고가 갱신
         if high > pos.highest_price:
@@ -774,6 +863,8 @@ class BTExitManager:
                     min(self.config.max_stop_pct,
                         float(atr_pct) * self.config.atr_multiplier)
                 )
+            elif rp:
+                stop_pct = rp["stop_loss_pct"]
             else:
                 stop_pct = (self.config.sepa_stop_loss_pct
                             if pos.strategy == StrategyType.SEPA
@@ -801,31 +892,36 @@ class BTExitManager:
         if not is_core:
             _, high_pnl = self.fee.net_pnl(entry, high, 1)
 
+            # 레짐 보정된 익절 목표 (rp가 None이면 config 기본값)
+            first_pct = rp["first_exit_pct"] if rp else self.config.first_exit_pct
+            second_pct = rp["second_exit_pct"] if rp else self.config.second_exit_pct
+            third_pct = rp["third_exit_pct"] if rp else self.config.third_exit_pct
+
             if (pos.exit_stage == ExitStage.NONE
-                    and high_pnl >= self.config.first_exit_pct):
+                    and high_pnl >= first_pct):
                 qty = max(1, int(pos.remaining_quantity
                                  * self.config.first_exit_ratio))
                 actions.append(("SELL", qty, close,
-                                f"1차 익절 +{self.config.first_exit_pct}%"))
+                                f"1차 익절 +{first_pct}%"))
                 pos.remaining_quantity -= qty
                 pos.exit_stage = ExitStage.FIRST
                 pos.breakeven_activated = True
 
             elif (pos.exit_stage == ExitStage.FIRST
-                  and high_pnl >= self.config.second_exit_pct):
+                  and high_pnl >= second_pct):
                 qty = max(1, int(pos.remaining_quantity
                                  * self.config.second_exit_ratio))
                 actions.append(("SELL", qty, close,
-                                f"2차 익절 +{self.config.second_exit_pct}%"))
+                                f"2차 익절 +{second_pct}%"))
                 pos.remaining_quantity -= qty
                 pos.exit_stage = ExitStage.SECOND
 
             elif (pos.exit_stage == ExitStage.SECOND
-                  and high_pnl >= self.config.third_exit_pct):
+                  and high_pnl >= third_pct):
                 qty = max(1, int(pos.remaining_quantity
                                  * self.config.third_exit_ratio))
                 actions.append(("SELL", qty, close,
-                                f"3차 익절 +{self.config.third_exit_pct}%"))
+                                f"3차 익절 +{third_pct}%"))
                 pos.remaining_quantity -= qty
                 pos.exit_stage = ExitStage.THIRD
 
@@ -838,7 +934,8 @@ class BTExitManager:
             trail_pct = self.config.core_trailing_stop_pct
             trail_activate = self.config.core_trailing_activate_pct
         else:
-            trail_pct = self.config.trailing_stop_pct
+            # 레짐 보정 트레일링 (실제 엔진은 REGIME_EXIT_PARAMS가 config_ts를 대체)
+            trail_pct = rp["trailing_stop_pct"] if rp else self.config.trailing_stop_pct
             trail_activate = self.config.trailing_activate_pct
 
             # ATR 연동 트레일링 — 실제 엔진(exit_manager.py:490~512)과 동일한 공식.
@@ -1155,7 +1252,8 @@ class BacktestEngine:
             if data is None:
                 continue
 
-            actions = self.exit_mgr.check_exit(pos, data)
+            day_regime = self.regime.get_regime(day_str, self.config.regime_mode)
+            actions = self.exit_mgr.check_exit(pos, data, regime=day_regime)
             for _, qty, price, reason in actions:
                 if qty <= 0:
                     continue
@@ -1200,7 +1298,7 @@ class BacktestEngine:
                      if p.remaining_quantity > 0}
         skip = pending_syms | held_syms
 
-        regime = self.regime.get_regime(day_str)
+        regime = self.regime.get_regime(day_str, self.config.regime_mode)
 
         # SEPA / RSI2
         if short_pos < self.config.max_positions_short:

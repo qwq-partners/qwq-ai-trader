@@ -1,5 +1,53 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-02 — feat: 종목 단위 에이전트 팀 (`src/agents/`) — TradingAgents 구조 도입
+
+### 배경
+- 참고: TauricResearch/TradingAgents, revfactory/harness.
+- 기존 `src/experts/` 8명은 **시장·섹터 레벨**만 판단했다. 개별 종목에 대해
+  "사도 되는가 / 계속 보유할 것인가"를 팀으로 논의하는 계층이 없었다.
+- ⚠️ **층 구분**: harness는 `.claude/agents/`(개발 보조, 13개 기존)를 만드는 플러그인이고,
+  이번 작업은 `src/`(런타임 매매)다. 서로 다른 층이다. harness의 6개 아키텍처 패턴은
+  런타임 팀 설계 언어로 차용했다.
+
+### 구조 (harness 패턴 매핑)
+```
+[전문가 풀]   도메인 전문가 8명 → 시장 컨텍스트     (기존 재사용)
+[팬아웃/팬인] Analyst 3인 병렬                      LLM 미사용
+[생성-검증]   Bull(OpenAI)/Bear(Gemini) 2R 토론     LLM 2~4회
+[감독자]      Trader 종합 → 방향+사이징             결정론적
+[생성-검증]   Risk게이트(11규칙) → PM 승인
+```
+- Analyst/Trader에 LLM을 쓰지 않은 이유: 지표 계산·점수 합산은 답이 정해진 일이라
+  확률적 모델을 넣으면 백테스트·감사·회귀 테스트가 불가능해진다.
+
+### 신규 파일
+- `src/agents/{types,analysts,researchers,trader,portfolio_manager,team}.py`
+- `docs/agents/trading-team.md`
+- 대시보드: `/api/team/verdicts`, `/api/team/stats` + `/engine` 페이지 카드
+
+### 코드리뷰 후 수정 (P0 3건 / P1 5건)
+- **P0-① 단독 응답 편향** (`researchers.py`): Bull이 죽고 Bear만 남으면 그 판정이 합의가 됐다.
+  Bear는 "실패 시나리오를 찾아라"는 역할이라 구조적 반대 편향이고, 반대로 Bear의 ACCEPT는
+  "감수 가능한 리스크"지 매수 추천이 아니다. **실측에서 실제 오판 발생**.
+  → 단독 반대는 존중(consensus=False), 단독 긍정은 합의 미승격(None, conf 0.3)으로 비대칭 처리.
+- **P0-② exit_exempt SELL 누출** (`portfolio_manager.py`): stance!=BUY면 게이트를 아예 보지 않아
+  자동매도 금지 종목(087010 펩트론)의 SELL 제안이 승인됐다. → PM이 무효화하도록 수정.
+- **P0-③ 결과 저장 race** (`team.py`): 동시 심의 3건이 같은 파일을 read-modify-write.
+  → asyncio.Lock + 임시파일 원자적 교체.
+- **P1**: NewsAnalyst가 실제 스키마(`{score,tags,items}`)와 어긋나 headlines를 찾던 문제 +
+  스케일 추정(`abs<=1이면 ×100`)이 0.5를 50으로 증폭시키는 위험 제거 /
+  데이터 소스 없는 분석가가 confidence 0.3으로 집계에 참여하던 문제(→0.0) /
+  토론 실패 시 사이징 무제한(→×0.7 상한) / 대시보드 CSS 클래스 오타(`badge-g`→`badge-green`)
+
+### 검증
+- 편측 응답 4케이스, exit_exempt SELL 차단, 토론실패 사이징 축소 각각 실측 확인.
+- 통합 실행: 2라운드 토론 정상(입장 변경 감지), one_sided=0, 회귀 없음.
+
+### ⚠️ 미완 — 아직 자동 동작하지 않는다
+- **스케줄러 미연결.** 팀은 구현·검증됐으나 `kr_scheduler`에서 호출하지 않는다.
+  후보 상위 5 심의 + 보유 전체 재평가(일 2회)를 붙여야 실동작한다.
+
 ## 2026-08-02 — fix/tune: 백테스트-실제 엔진 동기화 + 1차 익절 재조정 (백테스트 검증 기반)
 
 ### 배경 — 백테스트가 실제 엔진과 달랐다

@@ -52,6 +52,8 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
     app.router.add_post("/api/signals/execute", handler.execute_pending_signals)
     app.router.add_post("/api/scan/run", handler.run_morning_scan)
+    app.router.add_get("/api/team/verdicts", handler.get_team_verdicts)
+    app.router.add_get("/api/team/stats", handler.get_team_stats)
     app.router.add_get("/api/signal-events", handler.get_signal_events)
     app.router.add_get("/api/signal-events/stats", handler.get_signal_event_stats)
     app.router.add_post("/api/sync-trades", handler.sync_trades)
@@ -124,6 +126,79 @@ class KRAPIHandler:
 
     async def get_evolution_history(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_evolution_history())
+
+    async def get_team_verdicts(self, request: web.Request) -> web.Response:
+        """
+        종목 단위 팀 심의 결과 (src/agents).
+
+        Query:
+            limit    — 최대 건수 (기본 30)
+            approved — "1"이면 승인건만, "0"이면 거부건만
+        """
+        try:
+            limit = max(1, min(200, int(request.query.get("limit", "30"))))
+        except ValueError:
+            limit = 30
+
+        try:
+            from ..agents.team import TradingTeam
+            rows = TradingTeam.load_today(limit=limit)
+        except Exception as e:
+            logger.warning(f"[API] 팀 심의 결과 조회 실패: {e}")
+            return web.json_response({"verdicts": [], "error": str(e)})
+
+        approved_q = request.query.get("approved")
+        if approved_q in ("0", "1"):
+            want = approved_q == "1"
+            rows = [
+                r for r in rows
+                if bool((r.get("decision") or {}).get("approved")) is want
+            ]
+
+        # 목록 화면용 요약 — 토론 전문은 상세 필드에 그대로 남겨둔다
+        summary = []
+        for r in rows:
+            d = r.get("decision") or {}
+            p = r.get("proposal") or {}
+            deb = r.get("debate") or {}
+            summary.append({
+                "symbol": r.get("symbol"),
+                "name": r.get("name"),
+                "approved": d.get("approved"),
+                "stance": d.get("stance"),
+                "size_multiplier": d.get("size_multiplier"),
+                "overrode_gate": d.get("overrode_gate", False),
+                "overridden_gates": d.get("overridden_gates", []),
+                "reason": d.get("reason", "")[:200],
+                "conviction": p.get("conviction"),
+                "analyst_scores": p.get("analyst_scores", {}),
+                "debate_summary": deb.get("summary", "")[:200],
+                "debate_rounds": deb.get("rounds_run"),
+                "debate_consensus": deb.get("consensus"),
+                "disagreed": deb.get("disagreed", False),
+                "elapsed_sec": r.get("elapsed_sec"),
+                "saved_at": r.get("saved_at"),
+                "error": r.get("error"),
+            })
+
+        return web.json_response({
+            "verdicts": summary,
+            "count": len(summary),
+            "detail_available": True,
+        })
+
+    async def get_team_stats(self, request: web.Request) -> web.Response:
+        """팀 심의 통계 (토론 합의율/입장변경률, PM 승인·오버라이드)"""
+        bot = getattr(self.dc, "bot", None)
+        team = getattr(bot, "trading_team", None) if bot else None
+        if team is None:
+            return web.json_response({"available": False})
+        try:
+            stats = team.get_stats()
+            stats["available"] = True
+            return web.json_response(stats)
+        except Exception as e:
+            return web.json_response({"available": False, "error": str(e)})
 
     async def get_system_health(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_system_health())

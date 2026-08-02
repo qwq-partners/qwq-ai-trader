@@ -182,6 +182,85 @@ function toggleNoise() {
     fetchLogs();
 }
 
+// ─── 섹션⑥: 에이전트 팀 심의 (2026-08-02~) ───
+function stanceBadge(stance, approved) {
+    const s = (stance || '').toLowerCase();
+    if (!approved) return '<span class="badge badge-red">거부</span>';
+    if (s === 'buy') return '<span class="badge badge-green">매수</span>';
+    if (s === 'sell') return '<span class="badge badge-red">매도</span>';
+    return '<span class="badge badge-yellow">보유</span>';
+}
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function fetchTeamVerdicts() {
+    const el = document.getElementById('team-content');
+    if (!el) return;
+    try {
+        const [vr, sr] = await Promise.all([
+            fetch('/api/team/verdicts?limit=12'),
+            fetch('/api/team/stats')
+        ]);
+        const d = await vr.json();
+        const stats = await sr.json().catch(() => ({}));
+
+        const statEl = document.getElementById('team-stats');
+        if (statEl && stats && stats.available) {
+            const rs = stats.research || {};
+            const pm = stats.pm || {};
+            statEl.textContent =
+                `합의 ${rs.consensus_rate ?? '—'}% · 입장변경 ${rs.flip_rate ?? '—'}% · ` +
+                `오버라이드 잔여 ${pm.overrides_left_today ?? '—'}`;
+        }
+
+        const rows = d.verdicts || [];
+        if (!rows.length) {
+            el.innerHTML = '<div class="empty-msg">오늘 심의 기록 없음</div>';
+            return;
+        }
+
+        el.innerHTML = rows.map(v => {
+            const scores = v.analyst_scores || {};
+            const chips = ['fundamental', 'technical', 'news'].map(k => {
+                if (scores[k] === undefined) return '';
+                const val = scores[k];
+                const cls = val > 0 ? 'badge-g' : (val < 0 ? 'badge-r' : 'badge-y');
+                return `<span class="badge ${cls}" style="font-size:.6rem;">${k[0].toUpperCase()}${val >= 0 ? '+' : ''}${val}</span>`;
+            }).join(' ');
+
+            const override = v.overrode_gate
+                ? `<span class="badge badge-r" style="font-size:.6rem;">⚠ 게이트 오버라이드</span>` : '';
+            const split = v.disagreed
+                ? `<span class="badge badge-y" style="font-size:.6rem;">의견분열</span>` : '';
+
+            return `
+            <div style="padding:8px 0;border-bottom:1px solid var(--border,#222);">
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <strong style="font-size:.78rem;">${escapeHtml(v.name || v.symbol)}</strong>
+                    <span style="font-size:.64rem;color:var(--text-muted);">${escapeHtml(v.symbol)}</span>
+                    ${stanceBadge(v.stance, v.approved)}
+                    ${v.size_multiplier ? `<span style="font-size:.64rem;color:var(--text-muted);">×${v.size_multiplier}</span>` : ''}
+                    ${override} ${split}
+                </div>
+                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;">${chips}
+                    <span style="font-size:.62rem;color:var(--text-muted);margin-left:auto;">
+                        ${v.debate_rounds || 0}R · 확신 ${v.conviction ?? '—'} · ${v.elapsed_sec ?? '—'}s
+                    </span>
+                </div>
+                <div style="margin-top:4px;font-size:.66rem;color:var(--text-muted);line-height:1.4;">
+                    ${escapeHtml((v.debate_summary || v.reason || '').slice(0, 140))}
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        el.innerHTML = `<div class="empty-msg">조회 실패: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
 // ─── 섹션③: LLM 레짐 ───
 async function fetchRegime() {
     try {
@@ -390,8 +469,10 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchDailyBias();
     fetchFalseNegatives();
     fetchAILog();
+    fetchTeamVerdicts();
 
     setInterval(fetchHealerStatus, 5000);
     autoRefreshLog = setInterval(fetchLogs, 30000);
     setInterval(fetchAILog, 60000);
+    setInterval(fetchTeamVerdicts, 60000);
 });

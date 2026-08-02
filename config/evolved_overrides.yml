@@ -24,12 +24,12 @@ risk_config:
   max_positions: 8
   strategy_allocation:
     strategic_swing: 5.0
-    rsi2_reversal: 10.0
-    sepa_trend: 20.0
+    rsi2_reversal: 0.0
+    sepa_trend: 25.0
     theme_chasing: 0.0
     momentum_breakout: 0.0
     gap_and_go: 35.0
-    core_holding: 20.0
+    core_holding: 25.0
 exit_manager:
   max_stop_pct: 8.0
   min_stop_pct: 4.0
@@ -78,7 +78,11 @@ sepa_trend:
   weight: 60
   min_score: 60
 rsi2_reversal:
-  enabled: true
+  # 2026-08-02 폐지 — 백테스트 근거로 비활성화 (코드는 유지, 언제든 복구 가능)
+  #   단독 성과: -15.44%, 손익비 0.98 (3개월/60종목)
+  #   배분 실험: RSI2 제거 시 +26.16%/+16.21% (현행 +15.06%/+10.59%), 손익비 2.38/2.70
+  #   단기 반전 전략은 KR 왕복 수수료 0.227% 앞에서 기댓값 확보가 구조적으로 어렵다.
+  enabled: false
   weight: 40
   min_score: 60
 _meta:
@@ -105,8 +109,13 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: weekly_rebalance
-    timestamp: '2026-07-25T00:00:22.682360'
+    source: manual_review_backtested
+    timestamp: '2026-08-02T22:00:00'
+    note: rsi2_reversal 10→0 폐지, 그 예산을 sepa_trend 20→25 / core_holding 20→25에 배분.
+      백테스트 2개 시나리오(6개월 × 60·120종목)에서 RSI2 제거가 +26.16%/+16.21%로
+      현행(+15.06%/+10.59%) 대비 우위, 손익비 2.38/2.70, 수수료 6.07%→4.79%.
+      Core는 50%까지가 적정(60%는 역효과 확인). rsi2_reversal.enabled=false로
+      주간 리밸런싱 가드레일이 0%를 유지한다.
   risk_config.strategy_allocation.core_holding:
     source: manual_review
     timestamp: '2026-04-19T21:00:00'
