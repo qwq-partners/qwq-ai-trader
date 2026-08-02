@@ -268,10 +268,19 @@ class OpenAIClient(BaseLLMClient):
             # gpt-5는 추론 토큰을 max_completion_tokens 안에서 소비하므로,
             # 판정(YES/NO)처럼 단순한 작업에 기본 추론 강도를 쓰면
             # 토큰을 추론에만 다 쓰고 본문이 빈 문자열로 온다 (success=True, content='').
-            # 짧은 판정 작업은 reasoning_effort="low"로 호출할 것.
+            # 짧은 판정 작업은 reasoning_effort="minimal"로 호출할 것.
             reasoning_effort = kwargs.get("reasoning_effort")
             if is_gpt5 and reasoning_effort:
                 body["reasoning_effort"] = reasoning_effort
+
+            # 샘플링 시드 — 같은 입력에 같은 판정을 얻기 위한 유일한 수단이다.
+            #   gpt-5 계열은 temperature 커스텀을 막아놨으므로 seed가 아니면
+            #   동일 입력에도 판정이 뒤집힌다 (실측: seed 없이 6회 중 1회 반전,
+            #   seed=42로 6회 전부 일치).
+            #   OpenAI 문서상 best-effort라 100% 보장은 아니지만 실측 개선폭이 크다.
+            seed = kwargs.get("seed")
+            if seed is not None:
+                body["seed"] = int(seed)
 
             async with session.post(
                 f"{self.base_url}/chat/completions",
@@ -690,6 +699,7 @@ class LLMManager:
         provider: LLMProvider,
         weight: str = "light",
         system: str = "",
+        retry_on_empty: int = 0,
         **kwargs
     ) -> LLMResponse:
         """
@@ -702,6 +712,10 @@ class LLMManager:
         Args:
             provider: 사용할 provider (OPENAI / GEMINI)
             weight: 모델 등급 ("light" | "heavy" 등, _get_model 규약을 따름)
+            retry_on_empty: **success=True인데 본문이 빈** 경우의 재시도 횟수.
+                gpt-5 계열은 200 응답에 content만 비어 오는 경우가 실측으로 확인됐다
+                (6회 중 1회 수준). 판정용 호출은 빈 응답이 곧 판단 불가이므로,
+                재현성이 중요한 경로에서만 1 이상을 준다. 기본 0 = 기존 동작 유지.
         """
         self.stats["total_requests"] += 1
 
@@ -714,7 +728,19 @@ class LLMManager:
 
         client = self._get_client(provider)
         model = self._get_model(provider, weight)
+
         response = await client.complete(prompt, system, model=model, **kwargs)
+        attempts = 0
+        while (retry_on_empty > attempts
+               and response.success
+               and not (response.content or "").strip()):
+            attempts += 1
+            self.stats["empty_retry"] = self.stats.get("empty_retry", 0) + 1
+            logger.warning(
+                f"[LLM] {model} 빈 응답 (success=True, content='') "
+                f"— 재시도 {attempts}/{retry_on_empty}"
+            )
+            response = await client.complete(prompt, system, model=model, **kwargs)
 
         if response.success:
             self.stats["success_count"] += 1

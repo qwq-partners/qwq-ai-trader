@@ -37,6 +37,26 @@ ROUND_TIMEOUT = 20.0
 # (src/core/adversarial_validator.py MAX_TOKENS 주석 참조) 줄이지 말 것.
 MAX_TOKENS = 400
 
+# 추론 강도 — 2026-08-03 "low" → "minimal".
+#   토론은 APPROVE/REJECT 판정과 두 문장 근거가 전부라 깊은 추론이 필요 없다.
+#   실측(각 5회): low는 reasoning 128~320토큰을 소비하고 총 236~437토큰,
+#   minimal은 reasoning 0에 총 112~156토큰. 응답 품질 차이는 없었고
+#   토큰을 덜 쓸수록 본문이 잘려 빈 응답이 될 여지도 줄어든다.
+REASONING_EFFORT = "minimal"
+
+# 빈 응답 재시도 — gpt-5 계열은 200 응답에 content만 비어 오는 경우가 있다.
+#   실측: LLMManager 경유 6회 중 1회 발생. 판정 호출에서 빈 응답은 곧 판단 불가이고,
+#   그게 재현성 지표(동일 입력 일치율)를 직접 깎는다. 1회 재시도로 회복한다.
+EMPTY_RETRY = 1
+
+# 샘플링 시드 — 재현성의 핵심.
+#   gpt-5 계열은 temperature 커스텀이 막혀 있어 seed 말고는 판정을 고정할 방법이 없다.
+#   실측: seed 없이 동일 입력 6회 → 1회 반전(불일치), seed 고정 → 6회 전부 일치.
+#   값 자체에 의미는 없다. 입력이 다르면 출력도 달라진다 — 같은 입력의 재현만 보장한다.
+DEBATE_SEED = 20260803
+# Gemini는 temperature로 결정성을 확보한다 (0.3에서도 안정적이었지만 0으로 고정)
+DEBATE_TEMPERATURE = 0.0
+
 BULL_SYSTEM = (
     "당신은 매수 측 리서처다. 주어진 종목을 매수해야 하는 근거를 제시한다. "
     "다만 억지로 옹호하지 않는다 — 근거가 부실하면 솔직히 인정하고 반대한다. "
@@ -118,7 +138,10 @@ class ResearchTeam:
         resp = await self._llm.complete_with(
             prompt, provider=provider, weight="light",
             system=system, max_tokens=MAX_TOKENS,
-            reasoning_effort="low",
+            reasoning_effort=REASONING_EFFORT,
+            retry_on_empty=EMPTY_RETRY,
+            seed=DEBATE_SEED,
+            temperature=DEBATE_TEMPERATURE,
         )
         ok = bool(getattr(resp, "success", False))
         return {

@@ -46,6 +46,10 @@ LLM_TIMEOUT = 12.0
 #    줄이지 말 것.
 MAX_TOKENS = 400
 
+# 재현성 — gpt-5는 temperature 커스텀이 막혀 있어 seed로만 판정을 고정할 수 있다.
+# (실측: seed 없이 6회 중 1회 반전, seed 고정 시 6회 일치)
+VERDICT_SEED = 20260803
+
 BULL_SYSTEM = (
     "당신은 한국 주식 트레이딩 심사역이다. "
     "주어진 매수 후보의 **지지 근거**를 냉정하게 평가한다. "
@@ -152,7 +156,10 @@ class AdversarialValidator:
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.OPENAI, weight="light",
             system=BULL_SYSTEM, max_tokens=MAX_TOKENS,
-            reasoning_effort="low",  # 판정만 필요 — 추론에 토큰을 다 쓰면 본문이 빈다
+            # 판정만 필요하므로 추론을 최소화한다. 토큰을 덜 쓸수록 빈 응답 여지도 준다.
+            reasoning_effort="minimal",
+            retry_on_empty=1,   # 200 + 빈 content가 실측으로 확인됨 (6회 중 1회)
+            seed=VERDICT_SEED,
         )
 
     async def _ask_bear(self, context: str):
@@ -166,6 +173,8 @@ class AdversarialValidator:
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.GEMINI, weight="light",
             system=BEAR_SYSTEM, max_tokens=MAX_TOKENS,
+            retry_on_empty=1,
+            temperature=0.0,
         )
 
     # ── 검증 ───────────────────────────────────────────────

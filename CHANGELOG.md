@@ -1,5 +1,97 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — feat(dashboard): 가상 오피스 — 엔진 상태 픽셀아트 시각화 (`/office`)
+
+### 배경
+숫자 카드로는 "지금 봇이 뭘 하고 있는지"가 한눈에 안 들어온다.
+[KbWen/agent-virtual-office](https://github.com/KbWen/agent-virtual-office)(MIT)를 붙여
+엔진 상태를 **8명 캐릭터가 있는 사무실 한 장면**으로 보여준다.
+
+### 통합 방식 — 정적 번들 + Python 브릿지
+원본은 React 19 + Vite + 자체 node 서버(5174)다. 그대로 띄우면 프로세스와 포트가 늘어나
+**단일 포트 8080 원칙**이 깨진다. 그래서 한 번 빌드해 정적 파일로 넣고 상태 API만
+aiohttp로 다시 구현했다 — **런타임에 node 프로세스 없음**.
+
+| 파일 | 내용 |
+|---|---|
+| `src/dashboard/office_api.py` (신규) | 상태 브릿지. 엔진 파생 + POST + Claude Code 훅 파일 3소스 병합 |
+| `src/dashboard/templates/office.html` (신규) | `/office` 페이지 (nav + 역할 범례 + iframe) |
+| `src/dashboard/static/office/` (신규) | 빌드 산출물 (upstream `685e767`, v1.6.4) |
+| `tools/office/` (신규) | `build.sh` + `ko.json` — 재현 가능한 재빌드 |
+| `src/dashboard/server.py` | `/office` 라우트 + `/api/office/*` 등록, `/static/office/assets/` 캐시 예외 |
+| 템플릿 8개 + `mobile-v2.js` | 네비게이션에 "오피스" 추가 (상단 pill + 모바일 하단 nav) |
+
+### 역할 매핑 (운영 8명 + 전문가 7명 → 캐릭터 8명)
+| role | 캐릭터 | 소스 |
+|---|---|---|
+| pm | 총괄 | `bot.running` / `engine.paused` / 세션 |
+| arch | 체제분석 | `market_regime` (+LLM 코멘트) |
+| dev | 스크리너 | `screener._last_screened`, `signals_generated` |
+| qa | 검증관 | `cross_validator.get_stats()` |
+| ops | 집행관 | `_pending_orders`, `orders_submitted/filled`, KILL_SWITCH_ALL |
+| res | 전문가팀 | `expert_orchestrator.agents`, `theme_detector._themes` |
+| gate | 리스크 | `can_trade`, 킬스위치, 일일손실 |
+| designer | 진화 | `evolution/advice_*.json` → 없으면 `evolution_state.json` |
+
+mood는 킬스위치/일일손실/체결대기 건수로 결정 (`frustrated`/`stuck`/`intense`/`smooth`/`idle`).
+
+### upstream 패치 3가지
+1. **API 경로** `/api/status` → `/api/office/status` — 대시보드가 이미 `/api/status`를
+   KR 봇 상태로 쓰고 있어 **이름이 정면 충돌**했다.
+2. **한국어 로케일** `ko.json` 추가 + 기본 언어 `ko`. 캐릭터 이름도 트레이딩 역할명으로 교체
+   (개발자→스크리너, 문지기→리스크, 디자이너→진화 …). 말풍선도 트레이딩 맥락으로 다시 씀.
+3. `index.html` 제목/설명 한국어화 + 외부 OG 이미지 메타 제거.
+
+### 외부 신호 (Claude Code / CI)
+- `POST /api/office/status` — shorthand `{"dev":"working"}` / full format 모두 허용.
+  알 수 없는 role 폐기, 잘못된 status는 `idle`로 강등, 16KB 초과 413.
+  `OFFICE_STATUS_TOKEN` 설정 시 Bearer 인증 요구.
+- upstream 훅은 HTTP가 아니라 **파일**(`~/.claude/office-status*.json`)로 상태를 남긴다.
+  브릿지가 이 디렉토리를 스캔해 자동 병합하므로 훅 등록만 하면 된다.
+- 외부 신호는 **역할별 5분 TTL** — 만료되면 엔진 파생 상태로 자동 복귀.
+
+### 성능
+- GET은 ETag/304 지원 + 내용 무변경 시 `_seq` 유지 → 프론트 중복 렌더 없음
+- 파생 계산 3초 캐시, 훅 스캔 2초 캐시, 진화 파일 확인 60초 캐시
+- SSE는 변경 시에만 전송 (그 외 keepalive)
+- `/static/office/assets/`는 파일명 해시가 있어 `immutable` 캐시 허용 (500KB 재다운로드 방지)
+
+### 검증
+- 단독 aiohttp 서버로 9개 시나리오 통과 (GET/304/shorthand/full/병합/잘못된 JSON/lang/SSE/훅 파일)
+- 실서비스 재시작 후 `/office` 200, 8역할 실데이터 표시 (`장 마감 · 체제 중립`, 포지션 1/3, 전문가 8명, 테마 4건)
+- headless Chromium 렌더 확인 — 콘솔 오류 0건
+
+> 상세: `docs/operations/virtual-office.md`
+
+## 2026-08-03 — fix: LLM 재현성 50% → 100% (seed 고정 + 빈 응답 제거)
+
+원장을 만들자마자 드러난 재현성 미달을 해결했다. 원인이 **둘**이었고 각각 다르게 잡았다.
+
+### 원인 ① 빈 응답 — `success=True`인데 `content=''`
+- 직접 API 호출 20회에서는 재현되지 않았고, `LLMManager` 경유 6회 중 1회 발생.
+  예산·rate limit 문제가 아니라 gpt-5 계열이 200에 빈 본문을 주는 경우였다.
+- **해결**: `reasoning_effort` `"low"` → `"minimal"` + 빈 응답 시 1회 재시도.
+  실측(각 5회): low는 reasoning 128~320토큰/총 236~437, minimal은 reasoning 0/총 112~156.
+  품질 차이 없이 토큰만 줄었고 빈 응답 여지도 함께 줄었다.
+- `LLMManager.complete_with(retry_on_empty=)` 신설 (기본 0 = 기존 동작 유지).
+
+### 원인 ② 샘플링 비결정성 — 같은 입력에 판정이 뒤집힘
+빈 응답을 없앤 뒤에도 6회 중 1회 판정이 반전됐다. 이게 본질적 원인이었다.
+
+| 설정 | 동일 입력 6회 |
+|---|---|
+| OpenAI seed 없음 | REJECT×5, **APPROVE×1** → 불일치 |
+| **OpenAI seed 고정** | **REJECT×6 → 일치** |
+| Gemini temp 0.3 / 0.0 | 둘 다 일치 |
+
+- **gpt-5 계열은 temperature 커스텀이 막혀 있어 seed 말고는 고정 수단이 없다.**
+- **해결**: `OpenAIClient`에 `seed` 전달 추가, `DEBATE_SEED` 고정.
+  Gemini는 `temperature=0.0`. `adversarial_validator`에도 동일 적용.
+
+### 결과
+**일치율 50% → 100%** (동일 입력 6회, 응답 문구까지 동일). 빈 응답 0/12건.
+승격 기준(80%) 충족.
+
 ## 2026-08-03 — feat(agents): LLM 재현성 원장 — 판단 근거 append-only 기록
 
 ### 배경
