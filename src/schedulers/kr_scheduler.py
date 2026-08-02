@@ -4462,6 +4462,11 @@ JSON:
                                or getattr(s, "metadata", {}).get("indicators")
                                if hasattr(s, "metadata") else None),
                 "indicators_as_of": screened_at,
+                # 섹터를 반드시 넘겨야 한다 — cross_validator 규칙4(동일 섹터 과집중)는
+                # `metadata.get("sector")`로만 동작해서, 없으면 집중 검사가 통째로 스킵된다.
+                "sector": (getattr(s, "sector", None)
+                           or (getattr(s, "metadata", {}) or {}).get("sector")
+                           if hasattr(s, "metadata") else getattr(s, "sector", None)),
             })
         candidates = [c for c in candidates if c["symbol"]]
 
@@ -4491,6 +4496,16 @@ JSON:
             return
 
         # 게이트 조회 — 기존 cross_validator 결과를 그대로 쓴다
+        #   ⚠️ metadata를 비워 보내면 섹터 집중(규칙4)·지표 기반 규칙이 전부 스킵된다.
+        #      후보별 섹터/지표를 실어 보내야 게이트가 실제로 동작한다.
+        _meta_by_symbol = {
+            c["symbol"]: {
+                "sector": c.get("sector"),
+                "indicators": c.get("indicators") or {},
+            }
+            for c in candidates
+        }
+
         async def gate_checker(symbol: str, stance: str):
             cv = getattr(getattr(bot, "engine", None), "_cross_validator", None)
             if cv is None:
@@ -4498,9 +4513,10 @@ JSON:
                 return (False, ["gate_unavailable"], "cross_validator 미연결")
             try:
                 regime = getattr(bot.engine, "_market_regime", "neutral")
+                meta = _meta_by_symbol.get(symbol) or {}
                 passed, adj_score, reason = cv.validate(
                     symbol=symbol, side="buy", strategy="team",
-                    score=70.0, metadata={}, market_regime=regime,
+                    score=70.0, metadata=meta, market_regime=regime,
                 )
                 return (bool(passed), [] if passed else ["G2_cross"], reason or "")
             except Exception as e:

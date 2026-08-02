@@ -50,6 +50,13 @@ class TraderAgent:
         analyst_score = AnalystTeam.aggregate_score(reports)
         scores = {r.kind.value: r.score for r in reports if r.ok}
 
+        # ── 근거 충분성 검사 (fail-closed) ──────────────────────
+        # 가중평균은 상대 비중만 보므로 "근거가 얼마나 남았는가"를 반영하지 못한다.
+        # 모든 근거가 TTL을 넘겼는데도 종합 점수가 그대로 나오는 상황을 막는다.
+        # 근거가 부족하면 신규 매수는 금지하고, 보유분은 현상 유지한다
+        # (정보가 없다고 팔 이유는 없지만, 정보 없이 살 이유도 없다).
+        evidence_ok, evidence_reason, evidence_w = AnalystTeam.evidence_quality(reports)
+
         # 토론 결과를 점수에 반영
         #   만장일치 지지  → +20 / 만장일치 반대 → -40 (반대에 더 큰 가중)
         #   의견 분열      → -10 (불확실성 자체를 비용으로 본다)
@@ -68,8 +75,8 @@ class TraderAgent:
                 debate_adj = -10
                 conviction = 0.35
         else:
-            # 토론 실패(LLM 장애 등)는 fail-open이라 매수를 막지는 않는다.
-            # 다만 검증 없이 들어가는 것이므로 확신도를 낮춰 사이징을 줄인다.
+            # 토론 실패(LLM 장애 등) — 아래에서 신규 매수는 차단된다.
+            # 보유 종목 판단에는 계속 쓰이므로 확신도만 낮춰 둔다.
             conviction = 0.3
 
         total = max(-100, min(100, analyst_score + debate_adj))
@@ -87,21 +94,38 @@ class TraderAgent:
         else:
             stance = Stance.BUY if total >= BUY_THRESHOLD else Stance.HOLD
 
+        # ── 신규 매수 차단 조건 (fail-closed) ────────────────────
+        # 팀 심의는 "검증 계층"으로 도입했다. 검증이 성립하지 않았는데 매수를 허용하면
+        # 계층을 둔 의미가 없다. 두 경우 모두 BUY를 HOLD로 내린다.
+        block_reason = ""
+        if stance == Stance.BUY:
+            if not evidence_ok:
+                stance = Stance.HOLD
+                block_reason = f"근거 부족 — {evidence_reason}"
+            elif not debate_ok:
+                # 토론 실패 = 반대 논거 검증이 아예 이뤄지지 않은 상태.
+                # 예전에는 사이징만 줄여 통과시켰으나(fail-open), 그러면
+                # "안전 검증 계층"이라는 도입 목적과 모순된다.
+                stance = Stance.HOLD
+                block_reason = "토론 검증 실패 — 반대 논거 미검증 상태로 매수 불가"
+
+        if block_reason:
+            logger.info(f"[트레이더] {name or symbol} 매수 보류: {block_reason}")
+
         # ── 사이징 ──
         # 종합 점수와 확신도를 함께 반영하되, 상·하한을 둬서 한 종목에 몰리지 않게 한다.
         size_mult = 1.0
         if stance == Stance.BUY:
             size_mult = 0.5 + (total / 100.0) * 0.7 + (conviction - 0.5) * 0.6
             size_mult = max(MIN_SIZE_MULT, min(MAX_SIZE_MULT, round(size_mult, 2)))
-            if not debate_ok:
-                # 토론 검증 없이 들어가는 건이므로 상한을 눌러둔다
-                size_mult = min(size_mult, 0.7)
 
-        rationale_parts = [f"분석가 종합 {analyst_score:+d}"]
+        rationale_parts = [f"분석가 종합 {analyst_score:+d}(근거 {evidence_w:.2f})"]
+        if block_reason:
+            rationale_parts.append(block_reason)
         if debate_ok and debate is not None:
             rationale_parts.append(f"토론 {debate.summary[:60]}")
         else:
-            rationale_parts.append("토론 실패 — 사이징 축소")
+            rationale_parts.append("토론 실패")
         if debate_adj:
             rationale_parts.append(f"토론 보정 {debate_adj:+d}")
         rationale_parts.append(f"최종 {total:+d}")

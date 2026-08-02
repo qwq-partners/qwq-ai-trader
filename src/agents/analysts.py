@@ -28,6 +28,24 @@ from .types import AnalystKind, AnalystReport
 # 개별 분석가 타임아웃 (초) — 장중 경로이므로 짧게
 ANALYST_TIMEOUT = 15.0
 
+# ── 근거 신선도 하드 한계 (2026-08-03) ────────────────────────────
+# 상대 가중치 감쇠만으로는 부족하다. `aggregate_score`가 가중평균을 쓰기 때문에
+#   Σ(score×w/k) / Σ(w/k) = Σ(score×w) / Σ(w)
+# 로 감쇠가 **상쇄된다**. 실측: 전부 신선 +62 / 전부 4시간 전 +62 (동일).
+# 즉 모든 근거가 함께 낡으면 종합 점수는 전혀 변하지 않는다.
+#
+# 그래서 절대 기준을 둔다: TTL을 넘긴 근거는 아예 제외하고,
+# 남은 근거가 부족하면 매수 판단 자체를 못 하게 한다 (fail-closed).
+HARD_TTL_MIN: Dict[str, float] = {
+    "technical": 45.0,      # 지표 — 장중 가격 기반이라 가장 짧다
+    "fundamental": 180.0,   # 수급/공시 — 하루 단위로 갱신
+    "news": 180.0,          # 뉴스 sentiment
+}
+
+# 매수 판단에 필요한 최소 근거량
+MIN_VALID_SOURCES = 2       # 유효 보고서 수
+MIN_TOTAL_WEIGHT = 0.5      # 감쇠 후 가중치 합 (정보량의 절대 하한)
+
 
 class FundamentalAnalyst:
     """공시·수급·공매도 기반 펀더멘탈 관점"""
@@ -348,7 +366,7 @@ class AnalystTeam:
         weighted = 0.0
         total_w = 0.0
         for r in reports:
-            if not r.ok:
+            if not r.ok or AnalystTeam.is_expired(r):
                 continue
             w = (r.freshness_decayed_confidence() if apply_freshness_decay
                  else max(0.0, r.confidence))
@@ -357,6 +375,42 @@ class AnalystTeam:
         if total_w <= 0:
             return 0
         return int(round(weighted / total_w))
+
+    @staticmethod
+    def is_expired(report: AnalystReport) -> bool:
+        """소스별 hard TTL 초과 여부 — 초과분은 집계에서 통째로 제외한다"""
+        ttl = HARD_TTL_MIN.get(report.kind.value)
+        if ttl is None:
+            return False
+        return report.age_minutes > ttl
+
+    @staticmethod
+    def evidence_quality(reports: List[AnalystReport]) -> tuple:
+        """
+        매수 판단을 내려도 될 만큼 근거가 남아 있는지 검사한다.
+
+        가중평균은 상대 비중만 보므로 "정보가 얼마나 남았는가"를 알려주지 못한다.
+        여기서 절대량(유효 소스 수 + 감쇠 후 가중치 합)을 따로 확인한다.
+
+        Returns:
+            (ok: bool, reason: str, total_weight: float)
+        """
+        valid = [r for r in reports if r.ok and not AnalystTeam.is_expired(r)]
+        total_w = sum(r.freshness_decayed_confidence() for r in valid)
+
+        expired = [r.kind.value for r in reports
+                   if r.ok and AnalystTeam.is_expired(r)]
+        if len(valid) < MIN_VALID_SOURCES:
+            return (False,
+                    f"유효 근거 {len(valid)}개 < {MIN_VALID_SOURCES}개"
+                    + (f" (TTL 초과: {expired})" if expired else ""),
+                    total_w)
+        if total_w < MIN_TOTAL_WEIGHT:
+            return (False,
+                    f"근거 총량 부족 (가중치 {total_w:.2f} < {MIN_TOTAL_WEIGHT}) "
+                    f"— 남은 근거가 모두 낡음",
+                    total_w)
+        return (True, "", total_w)
 
     @staticmethod
     def freshness_summary(reports: List[AnalystReport]) -> str:

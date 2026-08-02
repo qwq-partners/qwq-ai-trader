@@ -31,6 +31,17 @@ class LLMProvider(str, Enum):
     GEMINI = "gemini"
 
 
+# 로컬 Codex로 보내도 되는 태스크 (2026-08-03 추가)
+#   Codex는 프로세스 기동 2~3초 + 응답 7~12초라 실시간 경로에 쓰면 매매가 지연된다.
+#   config에서 실수로 quick_*/theme_* 를 넣어도 이 allowlist가 막는다 —
+#   YAML 주석은 강제력이 없으므로 코드로 고정한다.
+CODEX_ALLOWED_TASKS = frozenset({
+    "trade_review",        # 거래 복기 (20:30 진화)
+    "strategy_analysis",   # 전략 분석/진화, 주간 복기
+    "market_analysis",     # 장전 시장 진단 (배치)
+})
+
+
 class LLMTask(str, Enum):
     """LLM 작업 유형 - 용도별 최적 모델 자동 선택"""
     THEME_DETECTION = "theme_detection"      # 테마 탐지 -> Gemini Flash
@@ -571,8 +582,10 @@ class LLMManager:
 
         # ── 로컬 Codex 라우팅 (배치 태스크 한정) ──────────────────
         # 구독 한도로 처리해 API 과금을 줄인다. 실패하면 아래 API 경로로 그대로 폴백한다.
-        # 실시간 경로(QUICK_*, THEME_*)는 codex_tasks에 넣지 않는다 — 기동+응답이 10초 이상이다.
-        if self.config.codex_enabled and task.value in self.config.codex_tasks:
+        # 실시간 태스크는 config에 잘못 넣어도 아래 allowlist가 막는다 (주석은 강제력이 없다).
+        if (self.config.codex_enabled
+                and task.value in self.config.codex_tasks
+                and task.value in CODEX_ALLOWED_TASKS):
             codex_resp = await self._try_codex(prompt, system, task, kwargs)
             if codex_resp is not None:
                 return codex_resp

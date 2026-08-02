@@ -134,11 +134,13 @@ class TradingTeam:
             stale_n = len(snap) - len(fresh)
 
             if not fresh:
-                # 전부 만료 — 없는 것보다 나쁘다. 컨텍스트를 주지 않는다.
-                logger.info(
-                    f"[팀] 전문가 의견 {len(snap)}건이 모두 만료 — 시장 컨텍스트 생략"
+                # 전부 만료 — 조용히 빈 문자열을 반환하면 "중립 시장"과 구분되지 않는다.
+                # 컨텍스트가 없다는 사실 자체를 프롬프트에 명시해 토론이 그걸 알고 판단하게 한다.
+                logger.warning(
+                    f"[팀] 전문가 의견 {len(snap)}건이 모두 만료 — 시장 컨텍스트 없음"
                 )
-                return ""
+                return ("⚠️ 시장 컨텍스트 없음 (전문가 의견 전부 만료). "
+                        "거시 상황을 모르는 상태이므로 보수적으로 판단하라.")
 
             score = self._expert_orch.aggregate_regime_score(fresh)
             bias = self._expert_orch.aggregate_bias(fresh)

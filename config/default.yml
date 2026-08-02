@@ -76,7 +76,13 @@ kr:
   trading_team:
     enabled: true
     debate_rounds: 2          # Bull/Bear 토론 라운드 (2 = 반박 1회)
-    allow_pm_override: true   # PM의 제한적 게이트 오버라이드 (HARD_GATES는 항상 불가)
+    # PM 게이트 오버라이드 — 2026-08-03 기본 비활성화.
+    #   게이트의 유효성은 실측됐다(차단 신호 20영업일 -3.7%~-13.2%).
+    #   반면 "LLM 만장일치 건은 그 성과를 역전한다"는 증거는 아직 없다.
+    #   게다가 만장일치면 conviction 0.9가 자동 부여돼 MIN_CONVICTION(0.75)이
+    #   자동 충족되므로, 조건이 사실상 걸림돌 역할을 못 한다.
+    #   shadow 표본으로 오버라이드 우위가 확인된 뒤에 게이트별로 열 것.
+    allow_pm_override: false
     max_concurrent: 3         # 동시 심의 상한 (LLM rate limit 보호)
   trading:
     initial_capital: 10000000        # 초기 자본금 (1000만원 → .env INITIAL_CAPITAL 우선)
