@@ -81,6 +81,7 @@ class DashboardServer:
         self._app: web.Application = None
         self._runner: web.AppRunner = None
         self._site: web.TCPSite = None
+        self._stopped: bool = False   # stop() 멱등 가드
 
     def _create_app(self) -> web.Application:
         """aiohttp 앱 생성"""
@@ -276,7 +277,9 @@ document.addEventListener("DOMContentLoaded", function() {
             logger.debug(f"[대시보드] SignalEventStorage SSE 연결 실패 (무시): {_e}")
 
         self._app = self._create_app()
-        self._runner = web.AppRunner(self._app)
+        # shutdown_timeout: 종료 시 열린 연결(특히 SSE 스트림)이 닫힐 때까지 기다리는 시간.
+        # 기본 60초라 재시작마다 대시보드 태스크가 마지막까지 남았다 → 5초로 단축.
+        self._runner = web.AppRunner(self._app, shutdown_timeout=5)
         await self._runner.setup()
 
         self._site = web.TCPSite(self._runner, self.host, self.port)
@@ -292,7 +295,17 @@ document.addEventListener("DOMContentLoaded", function() {
         logger.info(f"[대시보드] http://{self.host}:{self.port} 에서 실행 중 ({market_str})")
 
     async def stop(self):
-        """서버 중지"""
+        """서버 중지 (멱등)
+
+        run()의 finally와 봇 shutdown()이 각각 호출하므로 두 번 불린다.
+        두 번째 호출에서 site.stop()이 "Site is not registered in runner"로 터지던 것을
+        _stopped 플래그로 차단한다. (종료 경로가 정상화되기 전에는 SIGKILL이 먼저 나서
+        두 번째 호출 자체가 도달하지 않아 드러나지 않던 문제)
+        """
+        if getattr(self, "_stopped", False):
+            return
+        self._stopped = True
+
         await self.sse_manager.stop()
         if self._site:
             await self._site.stop()

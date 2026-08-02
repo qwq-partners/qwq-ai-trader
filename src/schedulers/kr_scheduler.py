@@ -5752,6 +5752,16 @@ JSON:
         # 빈 슬롯 매수 윈도우 (월초가 아닌 날에도 실행)
         fill_windows = [(9, 10, 14), (10, 0, 4), (13, 30, 34), (15, 0, 10)]
 
+        # 윈도우당 1회 시도 제한 (2026-08-03)
+        # 각 윈도우는 4~10분 구간인데 루프는 1분 주기라, 매수가 성사되지 않으면
+        # (현금 부족 등) last_fill_date가 설정되지 않아 윈도우 내내 매분
+        # execute_core_rebalance() → run_full_scan(유니버스 ~146종목 FDR)이 반복됐다.
+        # 실측: 7/31 15:00~15:09 구간에서 풀스캔 7회. 시도 자체를 윈도우 단위로 묶는다.
+        # 리밸런싱과 빈슬롯은 같은 루프에서 연달아 평가될 수 있어 키를 공유하면
+        # 뒤에 실행된 쪽이 앞의 "이미 시도함" 상태를 지워버린다 → 각각 분리
+        last_rb_attempt_key: Optional[str] = None
+        last_fill_attempt_key: Optional[str] = None
+
         while True:
             try:
                 await asyncio.sleep(60)  # 1분 주기
@@ -5806,11 +5816,15 @@ JSON:
                                 break
 
                     if first_biz_day is not None and today == first_biz_day:
-                        in_window = False
+                        # 리밸런싱도 동일하게 윈도우당 1회만 시도 (실패 시 다음 윈도우 재시도)
+                        rb_key = None
                         for wh, wm_start, wm_end in rebalance_windows:
                             if now.hour == wh and wm_start <= now.minute < wm_end:
-                                in_window = True
+                                rb_key = f"{today_str}:rb:{wh:02d}{wm_start:02d}"
                                 break
+                        in_window = rb_key is not None and last_rb_attempt_key != rb_key
+                        if rb_key is not None:
+                            last_rb_attempt_key = rb_key
 
                         if in_window:
                             is_monthly_rebalance = True
@@ -5838,14 +5852,18 @@ JSON:
                     if last_fill_date == today_str:
                         continue
 
-                    # 매수 윈도우 체크
-                    in_fill_window = False
+                    # 매수 윈도우 체크 (윈도우당 1회만 시도)
+                    attempt_key = None
                     for wh, wm_start, wm_end in fill_windows:
                         if now.hour == wh and wm_start <= now.minute < wm_end:
-                            in_fill_window = True
+                            attempt_key = f"{today_str}:fill:{wh:02d}{wm_start:02d}"
                             break
-                    if not in_fill_window:
+                    if attempt_key is None:
                         continue
+                    if last_fill_attempt_key == attempt_key:
+                        # 이 윈도우에서 이미 시도함 → 다음 윈도우까지 재스캔하지 않는다
+                        continue
+                    last_fill_attempt_key = attempt_key
 
                     # 코어 예산 여유 확인
                     equity = portfolio.total_equity

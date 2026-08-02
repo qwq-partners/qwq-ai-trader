@@ -135,6 +135,63 @@ RSI(2) 과매도 반전 진입. 상위 추세(MA200) 필터 결합.
 
 ---
 
+## 3-B. VCP Breakout (선행 발굴 라인, 2026-08-03~)
+
+### 개요
+Minervini VCP(Volatility Contraction Pattern) = 상승 전 변동성이 단계적으로 수축하고
+거래량이 마르는 구간. **아직 안 움직인 종목**을 잡는 유일한 라인이다.
+
+코드는 전략 클래스가 아니라 스크리너 라인으로 구현된다:
+- 탐지: `src/signals/strategic/vcp_detector.py` (기존)
+- 후보 생성: `swing_screener._filter_vcp_breakout()`
+- 시그널: `batch_analyzer._generate_vcp_signals()` → `StrategyType.VCP_BREAKOUT`
+
+### 왜 독립 라인인가
+도입 전 VCP는 **오버레이 가점**으로만 쓰였다. 그런데 오버레이는
+`candidate.score < 50`이면 스킵되고, candidates는 RSI2/SEPA 필터 통과자만이다.
+VCP는 정의상 "과매도도 아니고 추세 진행도 아닌" 구간이라 두 필터를 통과하기 어렵다.
+실측 2026-07-31: VCP 12종목 탐지 → 오버레이 반영 2종목.
+
+### 후보 게이트 (전부 AND)
+| 조건 | 값 | 근거 |
+|---|---|---|
+| VCP 점수 | ≥ 60 | 실측 분포상 70이면 하루 1~5개뿐 → 라인이 죽는다 |
+| MA 정배열 | 50 > 150 > 200 | 추세 기반 없는 수축은 하락 중 눌림과 구분 불가 |
+| 거래량 감소 | True | 수축의 핵심 조건 |
+| 수축 횟수 | ≥ 2 | 1회는 우연한 조정과 구분 불가 |
+| 우선주 | 제외 | 코드 끝자리≠0. 유동성 부족으로 돌파 슬리피지 과다 |
+| 중복 | RSI2/SEPA 후보면 제외 | 동일 종목 이중 노출 방지 |
+
+### 진입 / 청산
+- **진입**: 20일 고점 × (1 + 0.5%) 돌파 확인가 — `entry_mode="breakout"`
+  현재가가 트리거 미만이면 발행하지 않고 pending 유지 (09:01 / 12:30 / 13:50 재확인)
+- **손절**: 20일 최저 (단, 진입가 대비 최대 -8%)
+- **목표**: 진입가 +15% (실제 청산은 ExitManager 단계 익절이 담당)
+- **배분**: `strategy_allocation.vcp_breakout = 10%`, per-position 15%
+
+### 레짐 대응
+- 하락장(bear): SEPA와 함께 **전면 차단** (돌파 실패율 급등)
+- 주의장(caution): SEPA와 동일하게 min_score +10 상향
+
+### 계측
+스캔마다 탈락 사유가 집계된다:
+```
+[스윙스크리너] VCP 독립 라인: 18종목 중 채택 0개
+  (탈락: 중복 7, 점수미달 7, MA비정배열 2, 거래량미감소 1, 우선주 1)
+```
+과거 5일 캐시 검증: 평균 4.0개/일 통과(중복 제외 전), 중복률 39% 적용 시 실질 2~3개/일.
+
+### 설정 (`config/default.yml` → `kr.strategies.vcp_breakout`)
+```yaml
+vcp_breakout:
+  enabled: true
+  min_score: 60            # VCPDetector 점수 하한
+  min_signal_score: 60     # 복합 점수 하한 (시그널 발행)
+  breakout_buffer_pct: 0.5 # 돌파 확인 버퍼
+```
+
+---
+
 ## 4. Gap & Go (`src/strategies/kr/gap_and_go.py`)
 
 ### 개요

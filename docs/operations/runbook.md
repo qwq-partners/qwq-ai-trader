@@ -30,6 +30,12 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 
 **절대 금지**: `nohup python scripts/run_trader.py` 직접 실행 (systemd 충돌)
 
+**정상 재시작 소요: 15초 내외** (2026-08-03 기준).
+`journalctl`에 `State 'stop-sigterm' timed out. Killing.`이 보이면 종료 경로가 깨진 것이다.
+2026-08-03 이전에는 모든 재시작이 90초 SIGKILL로 끝났다 — `stop()`이 태스크를 취소하지
+않아 스케줄러 `sleep(5~10분)`과 대시보드 SSE 루프를 끝까지 기다렸기 때문.
+종료 로그에서 `[종료] 신호 수신 → 실행 중 태스크 즉시 취소`가 찍히는지 확인할 것.
+
 ## 긴급 전량 매도
 
 ```bash

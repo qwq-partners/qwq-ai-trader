@@ -85,6 +85,21 @@ UnifiedTradingBot (scripts/run_trader.py)
     risk_manager.record_exit() (재진입 제한)
 ```
 
+### 발굴 라인 3종 (2026-08-03 정리)
+
+| 라인 | 주기 | 유니버스 | 성격 |
+|---|---|---|---|
+| 실시간 스크리닝 `kr_screener.screen_all` | 5분 (장중) | 순위 API 8종 | **후행** — 이미 움직인 종목 |
+| 배치 스캔 `SwingScreener.run_full_scan` | 08:20 / 12:30 / 19:30 | 358종목 | RSI2·SEPA(준후행) + **VCP(선행)** |
+| 코어 스캔 `CoreScreener` | 격주 리밸런싱 | 113~146종목 | 장기 |
+
+배치 스캔 유니버스 통로:
+```
+후행: 등락률 상위 50 / 외국인 순매수 50 / 기관 순매수 50
+선행: 시총 상위 350 (2026-08-03 200→350) + 수급 누적 + 직전 VCP 수축 종목
+```
+`kr.universe_leading`으로 조정. 상세: `docs/strategies/kr-strategies.md` §3-B
+
 ## 신호 흐름 (US)
 
 ```

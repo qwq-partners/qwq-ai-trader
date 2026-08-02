@@ -91,6 +91,7 @@ class StrategyType(str, Enum):
     SEPA_TREND = "sepa_trend"                  # SEPA 추세 전략 (스윙)
     CORE_HOLDING = "core_holding"              # 코어홀딩 중장기 전략
     STRATEGIC_SWING = "strategic_swing"        # 전략적 스윙
+    VCP_BREAKOUT = "vcp_breakout"              # VCP 변동성수축 후 돌파 (선행 발굴)
 
     # US 전략
     ORB = "orb"                                # Opening Range Breakout

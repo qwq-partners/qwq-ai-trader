@@ -9,7 +9,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
@@ -33,7 +33,7 @@ class SwingCandidate:
 class SwingScreener:
     """스윙 모멘텀 종목 스크리너"""
 
-    def __init__(self, broker, kis_market_data, stock_master=None):
+    def __init__(self, broker, kis_market_data, stock_master=None, config: Optional[Dict] = None):
         self._broker = broker
         self._kis_market_data = kis_market_data
         self._stock_master = stock_master
@@ -42,6 +42,21 @@ class SwingScreener:
         # 5일 수급 스코어 (싱글턴 — 스캔 사이클마다 재생성하지 않도록 인스턴스 변수)
         from src.data.providers.supply_score import SupplyScoreProvider
         self._supply5d = SupplyScoreProvider()
+
+        # ── VCP 독립 발굴 라인 설정 (2026-08-03) ──
+        _cfg = config or {}
+        _vcp_cfg = _cfg.get("vcp_breakout", {}) if isinstance(_cfg, dict) else {}
+        self._vcp_line_enabled = bool(_vcp_cfg.get("enabled", True))
+        self._vcp_min_score = float(_vcp_cfg.get("min_score", 60.0))
+        self._vcp_breakout_buffer_pct = float(_vcp_cfg.get("breakout_buffer_pct", 0.5))
+
+        # ── 선행 유니버스 통로 설정 (2026-08-03) ──
+        _uni_cfg = _cfg.get("universe_leading", {}) if isinstance(_cfg, dict) else {}
+        self._leading_enabled = bool(_uni_cfg.get("enabled", True))
+        self._leading_limit = int(_uni_cfg.get("limit_per_channel", 60))
+        # 시총 상위 조회 한도 — 기존 200. 200위 밖 종목은 급등/수급 순위에 들어야만
+        # 유니버스에 진입해서 구조적으로 "오르기 전"에 잡을 수 없었다.
+        self._top_cap_limit = int(_uni_cfg.get("top_cap_limit", 350))
 
     async def run_full_scan(self) -> List[SwingCandidate]:
         """
@@ -74,29 +89,54 @@ class SwingScreener:
             f"[스윙스크리너] 필터 결과: RSI2={len(rsi2_candidates)}개, SEPA={len(sepa_candidates)}개"
         )
 
+        # 3.5단계: VCP 변동성수축 패턴 탐지 (FDR 데이터 재사용 → 캐시 저장)
+        # 2026-08-03: 오버레이 가점 전용이었던 VCP를 독립 발굴 라인으로 승격.
+        # 복합 점수 계산 전에 실행해야 VCP 후보도 수급/재무 점수를 받는다.
+        vcp_results: List[Any] = []
+        vcp_candidates: List[SwingCandidate] = []
+        try:
+            from src.signals.strategic.vcp_detector import VCPDetector
+            vcp_detector = VCPDetector()
+            # 300종목 이상 numpy 연산 → 동기 호출 시 이벤트 루프가 그만큼 멈춘다.
+            # (유니버스를 200→350으로 늘리면서 블로킹 시간도 함께 늘었다)
+            vcp_results = await asyncio.to_thread(
+                vcp_detector.detect_all, candidates_data
+            )
+            logger.info(f"[스윙스크리너] VCP 탐지: {len(vcp_results)}종목")
+
+            if self._vcp_line_enabled:
+                _existing = {c.symbol for c in (rsi2_candidates + sepa_candidates)}
+                vcp_candidates = self._filter_vcp_breakout(
+                    candidates_data,
+                    vcp_results,
+                    exclude=_existing,
+                    min_score=self._vcp_min_score,
+                    breakout_buffer_pct=self._vcp_breakout_buffer_pct,
+                )
+                if vcp_candidates:
+                    logger.info(
+                        f"[스윙스크리너] VCP 독립 후보: {len(vcp_candidates)}종목 "
+                        f"(RSI2/SEPA 미포착분)"
+                    )
+        except Exception as e:
+            logger.warning(f"[스윙스크리너] VCP 탐지 실패 (무시): {e}")
+
         # 4단계: 수급/재무 점수 + LCI z-score 계산
         # dedupe: 동일 종목이 RSI2(역추세) + SEPA(추세) 양쪽 통과 시 score 높은 전략 하나만 유지
         # — 같은 종목에 두 전략 동시 진입은 사실상 단일 사건의 이중 노출(allocation 50%+)
         _merged: Dict[str, SwingCandidate] = {}
-        for _c in rsi2_candidates + sepa_candidates:
+        for _c in rsi2_candidates + sepa_candidates + vcp_candidates:
             _prev = _merged.get(_c.symbol)
             if _prev is None or _c.score > _prev.score:
                 _merged[_c.symbol] = _c
-        _dup_count = (len(rsi2_candidates) + len(sepa_candidates)) - len(_merged)
+        _dup_count = (
+            len(rsi2_candidates) + len(sepa_candidates) + len(vcp_candidates)
+        ) - len(_merged)
         if _dup_count > 0:
-            logger.info(f"[스윙스크리너] 중복 제거: {_dup_count}건 (동일 종목 RSI2+SEPA 동시 통과)")
+            logger.info(f"[스윙스크리너] 중복 제거: {_dup_count}건 (동일 종목 복수 전략 동시 통과)")
         all_candidates = list(_merged.values())
         scored = await self._apply_composite_score(all_candidates)
         self._compute_lci_zscore(scored)  # 수급 데이터 주입 후 LCI 계산
-
-        # 4.5단계: VCP 변동성수축 패턴 탐지 (FDR 데이터 재사용 → 캐시 저장)
-        try:
-            from src.signals.strategic.vcp_detector import VCPDetector
-            vcp_detector = VCPDetector()
-            vcp_results = vcp_detector.detect_all(candidates_data)
-            logger.info(f"[스윙스크리너] VCP 탐지: {len(vcp_results)}종목")
-        except Exception as e:
-            logger.warning(f"[스윙스크리너] VCP 탐지 실패 (무시): {e}")
 
         # 5단계: 전략적 오버레이 (3계층 전략적 신호)
         scored = await self._apply_strategic_overlay(scored)
@@ -115,22 +155,24 @@ class SwingScreener:
 
     async def _build_universe(self) -> List[Dict[str, str]]:
         """
-        1단계: 유니버스 선정 (150-250종목)
+        1단계: 유니버스 선정
 
-        소스:
-        - KOSPI200 + KOSDAQ150 (거래대금 상위 200개)
-        - 등락률 상위
-        - 외국인/기관 순매수
+        후행 통로 (이미 움직인 종목):
+        - 등락률 상위 / 외국인 순매수 / 기관 순매수 (각 50)
 
-        필터:
-        - 거래대금 1억+, ETF 제외, 가격 2000원+
+        선행 통로 (아직 안 움직인 종목):
+        - 시총 상위 N개 (기본 350 — 2026-08-03 200에서 확대)
+        - 수급 누적 (SupplyTrendDetector: 연속 순매수 20일 분석)
+        - 직전 스캔 VCP 수축 종목 (순위 API에 안 잡혀 유니버스에서 탈락하는 것 방지)
+
+        필터: 거래대금 30일 평균 10억+, ETF 제외, 가격 2000원+
         """
         universe = {}  # symbol → {"symbol", "name"}
 
         # KOSPI200 + KOSDAQ150 (StockMaster) — 200종목으로 확대
         if self._stock_master:
             try:
-                top_stocks = await self._stock_master.get_top_stocks(limit=200)
+                top_stocks = await self._stock_master.get_top_stocks(limit=self._top_cap_limit)
                 for entry in top_stocks:
                     # get_top_stocks() 반환값: "종목명=코드" 형식
                     parts = entry.split("=")
@@ -195,7 +237,64 @@ class SwingScreener:
             except Exception as e:
                 logger.debug(f"[스윙스크리너] 기관 순매수 조회 실패: {e}")
 
+        # ── 선행 통로 (2026-08-03) ──────────────────────────────────────────
+        # 위 4개 통로는 전부 "시총 상위" 아니면 "이미 오른/이미 수급 들어온" 종목이다.
+        # 시총 200위 밖 종목은 급등하거나 수급 순위에 들어야만 유니버스에 진입하므로
+        # 구조적으로 "오르기 전"에 잡을 수 없었다. 아직 안 움직인 종목만 걸리는
+        # 통로를 추가한다 (SupplyTrendDetector 캐시 재사용 — 추가 API 호출 없음).
+        if self._leading_enabled:
+            before_leading = len(universe)
+            added_by_channel = await self._add_leading_universe(universe)
+            if len(universe) > before_leading:
+                logger.info(
+                    f"[스윙스크리너] 선행 통로 +{len(universe) - before_leading}종목 "
+                    f"({added_by_channel})"
+                )
+
         return list(universe.values())
+
+    async def _add_leading_universe(self, universe: Dict[str, Dict[str, str]]) -> str:
+        """선행 통로 3개로 유니버스 보강 (2026-08-03)
+
+        1) 수급 누적: 외국인/기관 연속 순매수 N일 — 단일일 순위가 아닌 '누적'
+        2) 거래량 수축: 최근 거래량이 20일 평균 대비 낮음 = 매물 소화 진행
+        3) 신고가 근접 미돌파: 52주 고점 3~10% 이내 횡보 = 돌파 대기
+
+        (2)(3)은 FDR 조회가 필요해 여기서는 이전 스캔에서 저장한 VCP 캐시를
+        재사용한다. VCP 캐시 자체가 "수축 + MA정배열 + 고점근접" 종목 목록이라
+        같은 성격의 선행 후보이며, 추가 네트워크 비용이 0이다.
+
+        Returns:
+            채널별 추가 건수 요약 문자열
+        """
+        counts = {"수급누적": 0, "VCP캐시": 0}
+        limit = self._leading_limit
+
+        # 1) 수급 누적 (SupplyTrendDetector 캐시)
+        try:
+            for st in self._load_supply_trends()[:limit]:
+                sym = getattr(st, "symbol", "")
+                name = getattr(st, "name", "") or sym
+                if not sym or sym in universe or self._should_exclude(name):
+                    continue
+                universe[sym] = {"symbol": sym, "name": name}
+                counts["수급누적"] += 1
+        except Exception as e:
+            logger.debug(f"[스윙스크리너] 선행 통로(수급누적) 스킵: {e}")
+
+        # 2)+3) 수축/고점근접 (직전 스캔의 VCP 캐시)
+        try:
+            for vcp in self._load_vcp_candidates()[:limit]:
+                sym = getattr(vcp, "symbol", "")
+                name = getattr(vcp, "name", "") or sym
+                if not sym or sym in universe or self._should_exclude(name):
+                    continue
+                universe[sym] = {"symbol": sym, "name": name}
+                counts["VCP캐시"] += 1
+        except Exception as e:
+            logger.debug(f"[스윙스크리너] 선행 통로(VCP캐시) 스킵: {e}")
+
+        return ", ".join(f"{k} {v}" for k, v in counts.items() if v)
 
     async def _calculate_all_indicators(
         self, universe: List[Dict[str, str]]
@@ -392,6 +491,127 @@ class SwingScreener:
 
         return results
 
+    def _filter_vcp_breakout(
+        self,
+        candidates_data: List[Dict[str, Any]],
+        vcp_results: List[Any],
+        exclude: Set[str],
+        min_score: float = 60.0,
+        breakout_buffer_pct: float = 0.5,
+    ) -> List[SwingCandidate]:
+        """VCP 독립 발굴 라인 (2026-08-03)
+
+        기존 구조에서 VCP는 RSI2/SEPA 통과자에 대한 가점(오버레이)으로만 쓰였다.
+        그런데 VCP는 "아직 안 움직였고 거래량도 줄어드는" 패턴이라 정의상
+        RSI2(과매도 반전)나 SEPA(추세 진행)의 필터를 통과하기 어렵다.
+        실측 2026-07-31: VCP 12종목 탐지 → 오버레이 반영 2종목.
+        선행 신호를 후행 게이트에 묶지 않도록 독립 후보 라인으로 분리한다.
+
+        진입은 수축 완료 후 "돌파 확인" 시점 — 최근 20일 고점 + buffer를 진입가로
+        삼아 batch_analyzer가 조건부 주문(돌파 시 진입)으로 처리한다.
+
+        Args:
+            candidates_data: _calculate_all_indicators() 결과
+            vcp_results: VCPDetector.detect_all() 결과
+            exclude: 이미 다른 전략 후보로 잡힌 종목 (중복 진입 방지)
+            min_score: VCP 점수 하한
+            breakout_buffer_pct: 돌파 확인 버퍼 (%)
+        """
+        if not vcp_results:
+            return []
+
+        by_symbol = {d["symbol"]: d for d in candidates_data}
+        results: List[SwingCandidate] = []
+        # 탈락 사유 집계 — "왜 후보가 안 나오는가"를 추측이 아니라 수치로 본다
+        drops = {"중복": 0, "우선주": 0, "점수미달": 0, "MA비정배열": 0,
+                 "거래량미감소": 0, "수축부족": 0, "데이터없음": 0}
+
+        for vcp in vcp_results:
+            sym = getattr(vcp, "symbol", None)
+            if not sym:
+                continue
+            if sym in exclude:
+                drops["중복"] += 1
+                continue
+            # 우선주 제외 (종목코드 끝자리가 0이 아니면 우선주/신주인수권 등)
+            # 실측 2026-08-03 VCP 목록에 삼성화재우·NH투자증권우가 섞였는데,
+            # 유동성이 낮아 돌파 진입/청산 슬리피지가 크다.
+            if len(sym) == 6 and not sym.endswith("0"):
+                drops["우선주"] += 1
+                continue
+            # 품질 게이트: 점수 + MA 정배열 + 거래량 감소 + 수축 2회 이상
+            if getattr(vcp, "score", 0) < min_score:
+                drops["점수미달"] += 1
+                continue
+            if not getattr(vcp, "ma_aligned", False):
+                drops["MA비정배열"] += 1
+                continue
+            if not getattr(vcp, "vol_declining", False):
+                drops["거래량미감소"] += 1
+                continue
+            if getattr(vcp, "contraction_count", 0) < 2:
+                drops["수축부족"] += 1
+                continue
+
+            data = by_symbol.get(sym)
+            if not data:
+                drops["데이터없음"] += 1
+                continue
+            ind = data["indicators"]
+            close = float(ind.get("close") or 0)
+            high_20d = float(ind.get("high_20d") or 0)
+            if close <= 0 or high_20d <= 0:
+                continue
+
+            # 진입: 20일 고점 돌파 확인가.
+            # 종가가 이미 그 위면 종가를 트리거로 쓴다 — 트리거가 현재가보다 낮으면
+            # "돌파 확인"이 아니라 즉시 시장가 매수가 되어 버리기 때문이다.
+            # 따라서 실효 트리거는 max(20일고점×(1+버퍼), 종가)이다.
+            entry = max(high_20d * (1 + breakout_buffer_pct / 100), close)
+            entry_price = Decimal(str(round(entry, 2)))
+
+            # 손절: 수축 구간 저점(20일 최저) — 단, 최대 -8%로 제한
+            low_20d = float(ind.get("low_20d") or 0)
+            floor_stop = entry * 0.92
+            stop = max(low_20d, floor_stop) if low_20d > 0 else floor_stop
+            if stop >= entry:  # 이상 데이터 방어
+                stop = entry * 0.95
+            stop_price = Decimal(str(round(stop, 2)))
+            target_price = Decimal(str(round(entry * 1.15, 2)))
+
+            reasons = list(getattr(vcp, "reasons", []) or [])
+            reasons.insert(
+                0,
+                f"VCP 수축 {getattr(vcp, 'contraction_count', 0)}회 "
+                f"(52주고점 {getattr(vcp, 'high_proximity', 0) * 100:.0f}% 지점)",
+            )
+            reasons.append(f"돌파 진입 {entry_price:,.0f} (20일고점 +{breakout_buffer_pct}%)")
+
+            candidate = SwingCandidate(
+                symbol=sym,
+                name=getattr(vcp, "name", "") or data.get("name", sym),
+                strategy="vcp_breakout",
+                score=0,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                target_price=target_price,
+                indicators=ind,
+                reasons=reasons,
+            )
+            # 조건부 진입 메타 (batch_analyzer가 돌파 주문으로 처리)
+            candidate.indicators["vcp_score"] = float(getattr(vcp, "score", 0))
+            candidate.indicators["breakout_trigger"] = float(entry_price)
+            candidate.indicators["entry_mode"] = "breakout"
+            results.append(candidate)
+
+        if vcp_results:
+            _drop_txt = ", ".join(f"{k} {v}" for k, v in drops.items() if v)
+            logger.info(
+                f"[스윙스크리너] VCP 독립 라인: {len(vcp_results)}종목 중 채택 {len(results)}개"
+                + (f" (탈락: {_drop_txt})" if _drop_txt else "")
+            )
+        return results
+
     async def _apply_composite_score(
         self, candidates: List[SwingCandidate]
     ) -> List[SwingCandidate]:
@@ -554,6 +774,26 @@ class SwingScreener:
             close = ind.get("close", 0)
             if ma200 is not None and ma200 > 0 and close is not None and close > ma200:
                 score += 10
+
+        elif strategy == "vcp_breakout":
+            # 수축 품질(VCP 점수)과 52주 고점 근접도로 기본 점수를 잡는다.
+            vcp_score = ind.get("vcp_score")
+            if vcp_score is not None:
+                # 편입 하한이 60이므로 기준점도 60이어야 한다.
+                # (기준을 70으로 두면 60~69점 후보가 편입 직후 감점되는 모순)
+                score += max(0.0, min((vcp_score - 60) * 0.375, 15))  # 60점=+0, 100점=+15
+            high_52w = ind.get("high_52w")
+            close = ind.get("close")
+            if high_52w and close and high_52w > 0:
+                from_high = (close - high_52w) / high_52w * 100
+                if from_high >= -10:
+                    score += 10
+                elif from_high >= -20:
+                    score += 5
+            # MA200 과확장 감점 (수축 패턴인데 이미 과열이면 실패 확률 상승)
+            ma200_dist = ind.get("ma200_distance_pct")
+            if ma200_dist is not None and ma200_dist > 40:
+                score -= 10
 
         elif strategy == "sepa_trend":
             if ind.get("sepa_pass"):
@@ -1038,7 +1278,8 @@ class SwingScreener:
                         layers_matched += 1  # 강한 신호만 계층 카운트
 
             # Layer 3: VCP 패턴 보너스
-            if sym in vcp_map:
+            # vcp_breakout 후보는 VCP 자체가 진입 근거이므로 이중 가점하지 않는다
+            if sym in vcp_map and candidate.strategy != "vcp_breakout":
                 vcp = vcp_map[sym]
                 bonus = min(int(vcp.score * 0.15), 15)  # 최대 +15
                 candidate.score += bonus

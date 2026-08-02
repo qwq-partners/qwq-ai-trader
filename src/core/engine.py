@@ -2022,6 +2022,7 @@ class RiskManager:
             strategy_position_pct = {
                 StrategyType.SEPA_TREND: 25.0,        # 핵심 전략: 공격적 배분 (CLAUDE.md)
                 StrategyType.STRATEGIC_SWING: 25.0,   # 전략적 스윙 (SEPA 동급, 복합 시그널)
+                StrategyType.VCP_BREAKOUT: 15.0,      # VCP 돌파: 선행 발굴 라인 (검증 전이므로 보수적)
                 StrategyType.RSI2_REVERSAL: 20.0,     # 단기 반전: 중간 배분
                 StrategyType.EARNINGS_DRIFT: 20.0,    # US 어닝스 드리프트
                 StrategyType.THEME_CHASING: 15.0,     # 테마: 집중 배분

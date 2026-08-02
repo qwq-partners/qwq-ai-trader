@@ -123,6 +123,7 @@ kr:
       gap_and_go: 10.0
       theme_chasing: 10.0
       strategic_swing: 0.0  # batch_analyzer가 동적 생성하는 복합신호 — engine.G5_budget 게이트 통과를 위해 키 등록 필요
+      vcp_breakout: 10.0    # 선행 발굴 라인 (2026-08-03 신설, 검증 전이므로 보수적 배분)
     hybrid:
       enabled: false
       day_trading_pct: 20.0
@@ -217,6 +218,18 @@ kr:
       min_score: 55
       weight: 40
 
+    # VCP 돌파 (2026-08-03 신설) — 선행 발굴 라인
+    # 변동성 수축(Minervini VCP) 완료 후 수축 구간 상단 돌파 시 진입.
+    # RSI2/SEPA는 "이미 움직인" 종목을 잡으므로 수축 종목을 통과시키지 못한다.
+    vcp_breakout:
+      enabled: true
+      # VCPDetector 점수 하한. 실측 분포(2026-07-28~08-03)에서 70점 이상은 하루 1~5개뿐이라
+      # 70이면 라인이 사실상 죽는다. MA정배열·거래량감소·수축2회는 별도 조건으로 이미
+      # 강제하므로 여기서 또 70을 요구하면 이중 게이트가 된다. → 60 (하루 2~6개)
+      min_score: 60
+      min_signal_score: 60     # 복합 점수 하한 (시그널 발행 기준)
+      breakout_buffer_pct: 0.5 # 20일 고점 대비 돌파 확인 버퍼
+
     core_holding:
       enabled: true
       max_positions: 3
@@ -291,6 +304,14 @@ kr:
     composite_trail_min_stage: "first"
     composite_ma5_buffer_pct: 0.5
     composite_prev_low_enabled: true
+
+  # 배치 스캔 유니버스 (2026-08-03)
+  # 기존 유니버스는 시총 상위 200 + 등락률/수급 순위(각 50)라 200위 밖 종목은
+  # "이미 오른 뒤"에야 편입됐다. 선행 통로를 열어 오르기 전 종목을 담는다.
+  universe_leading:
+    enabled: true
+    top_cap_limit: 350      # 시총 상위 조회 한도 (기존 200)
+    limit_per_channel: 60   # 수급누적/VCP캐시 통로별 상한
 
   batch:
     morning_scan_enabled: true

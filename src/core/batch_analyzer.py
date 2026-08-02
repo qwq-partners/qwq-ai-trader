@@ -52,6 +52,11 @@ class PendingSignal:
     ovtm_price_chg_pct: float = 0.0   # 시간외 가격 변동% (종가 대비)
     ovtm_vol_ratio: float = 0.0       # 시간외 거래량 / 정규장 거래량
     evening_score_adj: float = 0.0    # 19:30 스캔에서 적용된 스코어 보정치
+    # 조건부 돌파 진입 (2026-08-03, VCP 등 선행 발굴 라인)
+    #   "close"    = 기존 방식 (전일 종가 기준 진입 범위 판정)
+    #   "breakout" = 현재가가 breakout_trigger를 넘어야만 진입
+    entry_mode: str = "close"
+    breakout_trigger: float = 0.0
 
     def is_expired(self) -> bool:
         return datetime.now() > datetime.fromisoformat(self.expires_at)
@@ -67,6 +72,8 @@ class PendingSignal:
         data.setdefault("ovtm_price_chg_pct", 0.0)
         data.setdefault("ovtm_vol_ratio", 0.0)
         data.setdefault("evening_score_adj", 0.0)
+        data.setdefault("entry_mode", "close")
+        data.setdefault("breakout_trigger", 0.0)
         return cls(**data)
 
 
@@ -91,7 +98,7 @@ class BatchAnalyzer:
         self._sector_momentum = SectorMomentumProvider(broker=broker)
 
         # 스크리너
-        self._screener = SwingScreener(broker, kis_market_data, stock_master)
+        self._screener = SwingScreener(broker, kis_market_data, stock_master, config=self._config)
 
         # 전략 인스턴스
         rsi2_cfg = StrategyConfig(
@@ -261,6 +268,7 @@ class BatchAnalyzer:
         rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
         sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
         strategic_signals = self._generate_strategic_signals(candidates)
+        vcp_signals = self._generate_vcp_signals(candidates)
 
         # ── 시장 레짐 감지 및 적용 ───────────────────────────────────────────
         regime = "neutral"
@@ -272,10 +280,12 @@ class BatchAnalyzer:
 
         if regime == "bear":
             # 하락장: SEPA(추세추종) 전면 차단, STRATEGIC_SWING 차단
+            # VCP 돌파도 추세추종 계열이므로 동일하게 차단
             # RSI2(역추세)는 허용하되 최소 점수 상향
-            bear_sepa_blocked = len(sepa_signals) + len(strategic_signals)
+            bear_sepa_blocked = len(sepa_signals) + len(strategic_signals) + len(vcp_signals)
             sepa_signals = []
             strategic_signals = []
+            vcp_signals = []
             rsi2_signals = [s for s in rsi2_signals if s.score >= 70]  # RSI2 기준 강화
             logger.warning(
                 f"[배치분석] 🔴 하락장 감지 "
@@ -288,6 +298,12 @@ class BatchAnalyzer:
             # 주의장: SEPA 기준 상향 (+10점), STRATEGIC_SWING은 유지
             sepa_min_caution = self._sepa.config.min_score + 10
             sepa_signals = [s for s in sepa_signals if s.score >= sepa_min_caution]
+            # VCP 돌파도 추세 계열 → 기준 상향. 단 기준선은 VCP 자체 설정에서 읽는다
+            # (SEPA min_score에 얹으면 SEPA 튜닝이 VCP 문턱을 함께 바꿔버린다)
+            _vcp_caution_base = float(
+                (self._config.get("vcp_breakout") or {}).get("min_signal_score", 60)
+            )
+            vcp_signals = [s for s in vcp_signals if s.score >= _vcp_caution_base + 10]
             logger.info(
                 f"[배치분석] 🟡 주의장 감지 "
                 f"(KOSPI 5일={kospi_info.get('c5', 0):+.1f}%, "
@@ -303,7 +319,7 @@ class BatchAnalyzer:
             )
         # ────────────────────────────────────────────────────────────────────
 
-        all_signals = rsi2_signals + sepa_signals + strategic_signals
+        all_signals = rsi2_signals + sepa_signals + strategic_signals + vcp_signals
 
         # 동일 종목 중복 제거 (score 높은 것 우선)
         seen: dict = {}
@@ -367,6 +383,8 @@ class BatchAnalyzer:
                 created_at=now.isoformat(),
                 expires_at=expires.isoformat(),
                 atr_pct=float((sig.metadata or {}).get("atr_pct", 0)),
+                entry_mode=str((sig.metadata or {}).get("entry_mode", "close")),
+                breakout_trigger=float((sig.metadata or {}).get("breakout_trigger", 0) or 0),
             )
             result.append(pending)
 
@@ -780,6 +798,14 @@ class BatchAnalyzer:
                     validated.append(sig)
                     continue
 
+                # 돌파 모드는 entry_price가 "전일 종가"가 아니라 "돌파 트리거"라
+                # 프리장 대비 chg_pct가 항상 음수로 나온다. 이 검증들(갭다운 취소 /
+                # 반등 취소 / R-R 재계산)은 전부 entry=종가를 전제로 하므로 건너뛴다.
+                # 돌파 여부는 execute_pending_signals의 트리거 비교가 판정한다.
+                if getattr(sig, "entry_mode", "close") == "breakout":
+                    validated.append(sig)
+                    continue
+
                 chg_pct = (pre_price - sig.entry_price) / sig.entry_price * 100
 
                 # 1) 공통: 프리장 급락 → 악재 의심, 시그널 취소
@@ -950,6 +976,22 @@ class BatchAnalyzer:
                     skipped += 1
                     continue
 
+                # ── 조건부 돌파 진입 (2026-08-03) ──
+                # VCP 등 "아직 안 움직인" 종목은 종가가 아니라 수축 구간 상단을
+                # 넘어서는 순간이 진입 시점이다. 돌파 전이면 pending을 유지한 채
+                # 스킵하고, 이후 실행 윈도우(09:01 / 낮 스캔 / 13:50)에서 재확인한다.
+                _breakout_mode = getattr(sig, "entry_mode", "close") == "breakout"
+                if _breakout_mode:
+                    _trigger = float(getattr(sig, "breakout_trigger", 0) or sig.entry_price)
+                    if _trigger > 0 and current_price < _trigger:
+                        logger.info(
+                            f"[배치분석] {sig.symbol} 돌파 대기: "
+                            f"현재가 {current_price:,.0f} < 트리거 {_trigger:,.0f} "
+                            f"(만료 전까지 유지)"
+                        )
+                        skipped += 1
+                        continue
+
                 # 진입 범위 체크 (상단: 갭업 슬리피지)
                 if current_price > sig.max_entry_price:
                     logger.info(
@@ -960,8 +1002,10 @@ class BatchAnalyzer:
                     continue
 
                 # 갭다운/갭업 체크
+                # 돌파 모드는 트리거 통과 자체가 상승 확인이므로 갭 판정에서 제외한다
+                # (entry_price가 전일 종가가 아니라 돌파가라 gap_pct 의미가 다르다)
                 gap_pct = 0.0
-                if sig.entry_price > 0:
+                if sig.entry_price > 0 and not _breakout_mode:
                     gap_pct = (current_price - sig.entry_price) / sig.entry_price * 100
 
                     # 갭다운 스킵 (개장 급락 시 당일 추가 하락 위험)
@@ -1962,6 +2006,62 @@ class BatchAnalyzer:
             signals.append(signal)
 
         logger.info(f"[배치분석] 전략스윙 시그널 {len(signals)}개 생성")
+        return signals
+
+    def _generate_vcp_signals(self, candidates) -> List[Signal]:
+        """vcp_breakout 시그널 생성 (2026-08-03, 선행 발굴 라인)
+
+        VCP는 "아직 안 움직인" 종목을 잡는 패턴이라, 진입은 종가가 아니라
+        수축 구간 상단 돌파 시점이어야 한다. entry_price에 돌파 트리거가 들어있고
+        execute_pending_signals가 `entry_mode="breakout"`을 보고 돌파 확인 후 발행한다.
+        """
+        signals = []
+        min_score = float(
+            (self._config.get("vcp_breakout") or {}).get("min_signal_score", 60)
+        )
+        for c in candidates:
+            if c.strategy != "vcp_breakout":
+                continue
+            if c.score < min_score:
+                continue
+
+            # ATR 유효성 (손절폭 산출 불가 시 스킵)
+            # swing_screener가 쓰는 calculate_all()은 atr_pct가 아니라 atr_14를 만든다.
+            # (둘 다 % 단위이므로 환산 없이 대체 가능) — 확인한 값을 metadata에도 그대로
+            # 넘겨야 PendingSignal.atr_pct가 0으로 저장돼 ATR 사이징이 망가지지 않는다.
+            atr_check = c.indicators.get("atr_pct")
+            if atr_check is None:
+                atr_check = c.indicators.get("atr_14")
+            if atr_check is None or atr_check <= 0:
+                continue
+
+            entry_price = float(c.entry_price) if c.entry_price else 0
+            if entry_price <= 0:
+                continue
+
+            signal = Signal(
+                symbol=c.symbol,
+                side=OrderSide.BUY,
+                strength=SignalStrength.NORMAL,
+                strategy=StrategyType.VCP_BREAKOUT,
+                price=c.entry_price,
+                target_price=c.target_price,
+                stop_price=c.stop_price,
+                score=c.score,
+                confidence=min(c.score / 100.0, 1.0),
+                reason=f"VCP 돌파: {', '.join(c.reasons[:3])}",
+                metadata={
+                    "candidate_name": c.name,
+                    "atr_pct": atr_check,
+                    "vcp_score": c.indicators.get("vcp_score", 0),
+                    "entry_mode": "breakout",
+                    "breakout_trigger": c.indicators.get("breakout_trigger", entry_price),
+                },
+            )
+            signals.append(signal)
+
+        if signals:
+            logger.info(f"[배치분석] VCP 돌파 시그널 {len(signals)}개 생성")
         return signals
 
     async def _llm_rank_candidates(self, all_signals: list) -> list:

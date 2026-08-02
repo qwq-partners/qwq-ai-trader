@@ -24,6 +24,7 @@ risk_config:
   max_positions: 8
   strategy_allocation:
     strategic_swing: 5.0
+    vcp_breakout: 10.0
     rsi2_reversal: 0.0
     sepa_trend: 20.0
     theme_chasing: 0.0

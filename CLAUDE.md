@@ -146,7 +146,7 @@ tools/
 - 모든 전략은 `BaseStrategy` 상속, `generate_signal()` + `calculate_score()` 구현
 - Decimal 정밀 계산, 최소 주가 KR 1,000원 / US $5
 
-### KR 전략 (5개)
+### KR 전략 (6개)
 | 전략 | 파일 | 설명 |
 |------|------|------|
 | 모멘텀 | `kr/momentum.py` | 20일 고가 돌파 + 거래량 급증 |
@@ -154,6 +154,7 @@ tools/
 | 갭상승 | `kr/gap_and_go.py` | 갭상승 후 눌림목 매수 |
 | SEPA | `kr/sepa_trend.py` | SEPA 추세 전략 (스윙) |
 | RSI2 반전 | `kr/rsi2_reversal.py` | RSI(2) 과매도 반전 진입 |
+| VCP 돌파 | (배치 스캔 라인) | 변동성 수축 후 20일 고점 돌파 — **선행 발굴** (2026-08-03~) |
 
 ### US 전략 (3개)
 | 전략 | 파일 | 설명 |

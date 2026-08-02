@@ -218,6 +218,12 @@ class UnifiedTradingBot:
         self._kr_tasks: List[asyncio.Task] = []
         self._us_tasks: List[asyncio.Task] = []
 
+        # 종료 신호 전달용 (SIGTERM → run()의 대기를 즉시 깨움)
+        # 없으면 스케줄러 sleep(5~10분)/대시보드 루프가 끝날 때까지 gather가 대기해
+        # systemd TimeoutStopSec(90초)를 넘겨 매 재시작이 SIGKILL로 끝난다.
+        self._stop_event: Optional[asyncio.Event] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
         # 시그널 핸들러
         self._setup_signal_handlers()
 
@@ -893,6 +899,12 @@ class UnifiedTradingBot:
                             "rsi2_reversal": rsi2_cfg,
                             "sepa_trend": sepa_cfg,
                             "core_holding": core_cfg,
+                            # 선행 발굴 라인 (2026-08-03)
+                            "vcp_breakout": strategies_cfg.get("vcp_breakout") or {},
+                            "universe_leading": {
+                                **(self.config.get("universe_leading") or {}),
+                                **(kr_cfg.get("universe_leading") or {}),
+                            },
                             # evolved_overrides.batch + kr.batch 병합 (kr 우선)
                             "batch": {
                                 **(self.config.get("batch") or {}),
@@ -1423,14 +1435,27 @@ class UnifiedTradingBot:
 
     async def run(self):
         """봇 실행"""
+        # 초기화(DB/토큰/포지션 복원 등 수십 초)에도 SIGTERM에 응답해야 한다.
+        # 이 준비를 initialize() 뒤에 두면 초기화 중 들어온 종료 신호가 통째로 무시돼
+        # systemd 90초 타임아웃 → SIGKILL이 된다.
+        self._loop = asyncio.get_running_loop()
+        self._stop_event = asyncio.Event()
+
         if not await self.initialize():
+            return
+
+        if self._stop_event.is_set():
+            logger.warning("[종료] 초기화 중 종료 신호 수신 → 태스크 시작 없이 종료")
+            await self.shutdown()
             return
 
         self.running = True
         logger.info("=== QWQ AI Trader 통합 봇 시작 ===")
 
+        tasks: List[asyncio.Task] = []
+        gather_task = None      # 보조 Future — finally에서 예외 회수
+        stop_waiter = None
         try:
-            tasks = []
 
             # 1. 메인 엔진 실행 (이벤트 루프)
             tasks.append(asyncio.create_task(self.engine.run(), name="engine"))
@@ -1478,29 +1503,85 @@ class UnifiedTradingBot:
             # 모든 태스크 실행
             if tasks:
                 logger.info(f"총 {len(tasks)}개 태스크 시작")
-                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                # 핵심 태스크 예외 검사
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        task_name = tasks[i].get_name() if hasattr(tasks[i], 'get_name') else f"task-{i}"
-                        logger.error(f"[태스크 종료] {task_name} 예외 발생: {result}")
+                # 종료 신호를 받으면 태스크가 스스로 끝나기를 기다리지 않고 즉시 취소로 넘어간다.
+                # 스케줄러 루프 상당수가 sleep(5~10분) 중이고 대시보드 SSE 루프는 자체 종료
+                # 조건이 없어, gather만 기다리면 systemd 90초 타임아웃 → SIGKILL이 된다.
+                gather_task = asyncio.ensure_future(
+                    asyncio.gather(*tasks, return_exceptions=True)
+                )
+                stop_waiter = asyncio.ensure_future(self._stop_event.wait())
+                done, _ = await asyncio.wait(
+                    {gather_task, stop_waiter}, return_when=asyncio.FIRST_COMPLETED
+                )
+                stop_waiter.cancel()
+
+                if gather_task in done:
+                    # 핵심 태스크 예외 검사
+                    results = gather_task.result()
+                    for i, result in enumerate(results):
+                        if isinstance(result, Exception):
+                            task_name = tasks[i].get_name() if hasattr(tasks[i], 'get_name') else f"task-{i}"
+                            logger.error(f"[태스크 종료] {task_name} 예외 발생: {result}")
+                else:
+                    logger.info("[종료] 신호 수신 → 실행 중 태스크 즉시 취소")
+                    gather_task.cancel()
+
 
         except Exception as e:
             logger.exception(f"실행 오류: {e}")
         finally:
-            # 모든 태스크 안전 종료
+            # 모든 태스크 안전 종료 (취소에 응답하지 않는 태스크가 있어도 20초 후 진행)
             for task in tasks:
                 if not task.done():
                     task.cancel()
             if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+                # gather 대신 wait: 태스크 예외를 되던지지 않고 (done, pending)만 돌려주므로
+                # "무엇이 안 끝났는지"를 정확히 로깅할 수 있다.
+                try:
+                    _done, pending = await asyncio.wait(tasks, timeout=15)
+                    if pending:
+                        stuck = [t.get_name() for t in pending]
+                        logger.warning(
+                            f"[종료] 15초 내 미종료 태스크 {len(stuck)}개 → 강제 진행: {stuck[:5]}"
+                        )
+                except Exception as e:
+                    logger.debug(f"[종료] 태스크 정리 중 예외 (무시): {e}")
+
+            # 보조 Future(gather/stop_waiter)에 담긴 CancelledError를 읽어 회수한다.
+            # asyncio.wait는 "끝났는지"만 알려줄 뿐 예외를 꺼내지 않아, 회수하지 않으면
+            # GC 시점에 "_GatheringFuture exception was never retrieved"가 남는다.
+            # 자식 태스크 정리가 끝난 이 시점이라야 실제로 done 상태다.
+            for _fut in (gather_task, stop_waiter):
+                if _fut is None:
+                    continue
+                if not _fut.done():
+                    _fut.cancel()
+                    try:
+                        await asyncio.wait({_fut}, timeout=2)
+                    except Exception:
+                        pass
+                if _fut.done():
+                    try:
+                        _fut.result()
+                    except BaseException:
+                        pass
+
             await self.shutdown()
 
     def stop(self):
-        """봇 중지"""
+        """봇 중지 (시그널 핸들러에서 호출되므로 블로킹 금지)"""
         self.running = False
         self.engine.stop()
+
+        # run()이 gather를 기다리는 중이면 즉시 깨워 취소 경로로 보낸다.
+        ev = self._stop_event
+        if ev is not None and not ev.is_set():
+            loop = self._loop
+            if loop is not None and not loop.is_closed():
+                loop.call_soon_threadsafe(ev.set)
+            else:
+                ev.set()
 
     async def shutdown(self):
         """종료 처리"""
