@@ -46,6 +46,15 @@ kr:
   # 수동 매수 예약 (1회성, 보유 시 자동 스킵). config kr.manual_buy_orders 로 로드.
   # 형식: [{symbol, name, exit_exempt}]. 087010 매수 완료(2026-06-23)로 비움 — 재매수 방지.
   manual_buy_orders: []
+  # 종목 단위 에이전트 팀 (2026-08-02~, src/agents)
+  #   Analyst 3인 → Bull/Bear 토론 → Trader → Risk게이트 → PM
+  #   ⚠️ shadow 단계 — 장중 10:30/14:00에 심의·기록·알림만 하고 주문은 내지 않는다.
+  #   판정 품질을 며칠 관측한 뒤 주문 경로 연결 여부를 결정한다.
+  trading_team:
+    enabled: true
+    debate_rounds: 2          # Bull/Bear 토론 라운드 (2 = 반박 1회)
+    allow_pm_override: true   # PM의 제한적 게이트 오버라이드 (HARD_GATES는 항상 불가)
+    max_concurrent: 3         # 동시 심의 상한 (LLM rate limit 보호)
   trading:
     initial_capital: 10000000        # 초기 자본금 (1000만원 → .env INITIAL_CAPITAL 우선)
     market: KRX

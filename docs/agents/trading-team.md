@@ -103,12 +103,36 @@ TeamVerdict → ~/.cache/ai_trader/team_verdicts/ → 대시보드
 | `GET /api/team/verdicts?limit=&approved=` | 오늘 심의 목록 |
 | `GET /api/team/stats` | 합의율·입장변경률·오버라이드 잔여 |
 
-## 현재 상태 / 남은 작업
+## 실행 (2026-08-02~)
+
+`kr_scheduler.run_team_deliberation` — 장중 **10:30 / 14:00** 2회.
+
+| 대상 | 범위 |
+|---|---|
+| 매수 후보 | 최근 스크리닝 상위 5 (`bot._last_screened`) |
+| 보유 종목 | 전체 재평가 (`portfolio.positions`) |
+
+> ⚠️ **shadow 단계 — 주문을 내지 않는다.**
+> 심의 결과를 저장·알림만 한다. 팀은 2026-08-02 신설이라 실전 데이터가 없고,
+> 첫 통합 테스트에서 P0 결함이 3건 나왔다. 규칙 #11을 shadow_mode로 시작했던 것과
+> 같은 방식으로, 며칠 관측해 판정 품질을 확인한 뒤 주문 경로 연결을 결정한다.
+
+설정: `config/default.yml` → `kr.trading_team`
+```yaml
+kr:
+  trading_team:
+    enabled: true
+    debate_rounds: 2
+    allow_pm_override: true
+    max_concurrent: 3
+```
+
+## 남은 작업
 
 - [x] 파이프라인 구현 + 단위·통합 검증
 - [x] 대시보드 카드 + API
-- [ ] **스케줄러 연결 (미완)** — 아직 자동 호출되지 않는다.
-      후보 상위 5 심의 + 보유 전체 재평가(일 2회)를 `kr_scheduler`에 붙여야 실동작한다.
+- [x] 스케줄러 연결 (shadow)
+- [ ] **shadow 관측 후 주문 경로 연결 판단** — 승인된 BUY를 실제 시그널로 태울지 결정
 - [ ] 심의 결과 → Trade Wiki 학습 루프
 
 ## 튜닝 포인트

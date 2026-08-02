@@ -44,9 +44,26 @@
 - 편측 응답 4케이스, exit_exempt SELL 차단, 토론실패 사이징 축소 각각 실측 확인.
 - 통합 실행: 2라운드 토론 정상(입장 변경 감지), one_sided=0, 회귀 없음.
 
-### ⚠️ 미완 — 아직 자동 동작하지 않는다
-- **스케줄러 미연결.** 팀은 구현·검증됐으나 `kr_scheduler`에서 호출하지 않는다.
-  후보 상위 5 심의 + 보유 전체 재평가(일 2회)를 붙여야 실동작한다.
+### 스케줄러 연결 (같은 날 추가)
+- **`kr_scheduler.run_team_deliberation`** — 장중 10:30 / 14:00 2회.
+  매수 후보 상위 5(`_last_screened`) + 보유 종목 전체 재평가.
+- **`run_trader.py`**: `self.trading_team` 초기화 (stock_validator·dart_checker·
+  expert_orchestrator·exit_manager 주입). 초기화 실패해도 매매 무영향
+  (팀이 None이면 스케줄러 태스크를 띄우지 않음).
+- **config `kr.trading_team`** 신설 (enabled / debate_rounds / allow_pm_override / max_concurrent).
+- 🐞 연결 중 발견: `self.llm_manager`는 어디에서도 설정되지 않아
+  `getattr(self, "llm_manager", None)`이 항상 None을 반환한다 →
+  팀에는 `get_llm_manager()` 싱글턴을 직접 주입. (expert_orchestrator도 같은 패턴을
+  쓰고 있어 별도 점검 필요.)
+
+> ⚠️ **shadow 단계 — 주문을 내지 않는다.** 심의·기록·알림만 수행.
+> 팀이 신설이라 실전 데이터가 없고 첫 통합 테스트에서 P0 3건이 나왔으므로,
+> 며칠 관측 후 주문 경로 연결을 판단한다.
+
+### 재시작 반영
+이 재시작으로 앞선 커밋의 미적용분(RSI2 폐지, 배분 sepa 25/core 25, 1차 익절 +10%/10%)이
+함께 적용됐다. 실측 확인: `rsi2_reversal alloc=0.0% enabled=False`,
+`first_exit_pct=10.0 / ratio=0.1`, `exit_exempt 087010 복원`, 스케줄러 태스크 21개.
 
 ## 2026-08-02 — fix/tune: 백테스트-실제 엔진 동기화 + 1차 익절 재조정 (백테스트 검증 기반)
 

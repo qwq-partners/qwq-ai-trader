@@ -645,6 +645,38 @@ class UnifiedTradingBot:
                 self.risk_manager.set_exit_manager(self.exit_manager)
                 logger.info("[KR] RiskManager ↔ ExitManager 연결 (max_positions 가중 카운트)")
 
+            # 종목 단위 에이전트 팀 (2026-08-02~)
+            #   Analyst 3인 → Bull/Bear 2R 토론 → Trader → Risk게이트 → PM
+            #   ⚠️ shadow 단계: 스케줄러가 심의·기록·알림만 하고 주문은 내지 않는다.
+            #   초기화 실패해도 매매에는 영향 없다 (스케줄러가 None이면 태스크를 띄우지 않음).
+            self.trading_team = None
+            try:
+                _team_cfg = kr_cfg.get("trading_team", {}) or {}
+                if _team_cfg.get("enabled", True):
+                    from src.agents import TradingTeam
+                    from src.utils.llm import get_llm_manager
+                    # self.llm_manager는 설정되지 않는다 — 싱글턴을 직접 가져온다.
+                    # None이 들어가면 Bull/Bear 토론이 통째로 실패한다.
+                    self.trading_team = TradingTeam(
+                        llm_manager=get_llm_manager(),
+                        stock_validator=getattr(self, "_stock_validator", None),
+                        dart_checker=getattr(
+                            getattr(self, "_stock_validator", None), "dart_checker", None
+                        ),
+                        expert_orchestrator=getattr(self, "expert_orchestrator", None),
+                        debate_rounds=int(_team_cfg.get("debate_rounds", 2)),
+                        allow_pm_override=bool(_team_cfg.get("allow_pm_override", True)),
+                        max_concurrent=int(_team_cfg.get("max_concurrent", 3)),
+                        exit_manager=self.exit_manager,
+                    )
+                    logger.info(
+                        f"[KR] 에이전트 팀 초기화 완료 "
+                        f"(토론 {_team_cfg.get('debate_rounds', 2)}라운드, shadow 단계)"
+                    )
+            except Exception as e:
+                logger.warning(f"[KR] 에이전트 팀 초기화 실패 (팀 심의 비활성): {e}")
+                self.trading_team = None
+
             # 10-0. (순서 중요) ExitManager register_position 전에 DB 연결 + 포지션 전략 복원
             # ★ 버그 방지 (2026-04-20 SK텔레콤/KT/삼성생명 사고):
             #   과거에는 step 11(자가 진화 초기화)에서 DB 연결 후 metadata 복원 →

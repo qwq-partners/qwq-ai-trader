@@ -144,6 +144,12 @@ class KRScheduler:
             self.run_post_exit_review_scheduler(), name="kr_post_exit_review"
         ))
 
+        # 종목 단위 에이전트 팀 심의 (2026-08-02~, 장중 2회)
+        if getattr(self.bot, "trading_team", None) is not None:
+            tasks.append(asyncio.create_task(
+                self.run_team_deliberation(), name="kr_team_deliberation"
+            ))
+
         # 로그 정리
         tasks.append(asyncio.create_task(
             self.run_log_cleanup(), name="kr_log_cleanup"
@@ -4369,6 +4375,170 @@ JSON:
             pass
         except Exception as e:
             logger.error(f"주간 리밸런싱 스케줄러 오류: {e}")
+
+    async def run_team_deliberation(self):
+        """
+        종목 단위 에이전트 팀 심의 — 장중 2회 (10:30 / 14:00).
+
+        대상:
+          - 매수 후보: 최근 스크리닝 상위 5
+          - 보유 종목: 전체 재평가
+
+        ⚠️ **shadow 단계** — 심의 결과를 기록·알림만 하고 주문은 내지 않는다.
+        팀은 2026-08-02 신설이라 실전 데이터가 없고, 첫 통합 테스트에서
+        P0 결함이 3건 나왔다. 규칙 #11을 shadow_mode로 시작했던 것과 같은 방식으로,
+        며칠 관측해 판정 품질을 확인한 뒤 주문 경로에 연결한다.
+
+        결과: ~/.cache/ai_trader/team_verdicts/ + 대시보드 /engine + 텔레그램 요약
+        """
+        bot = self.bot
+        team = getattr(bot, "trading_team", None)
+        if team is None:
+            return
+
+        # 실행 시각 (분 단위 창으로 중복 방지)
+        SLOTS = [(10, 30), (14, 0)]
+        done_today: set = set()
+        last_date = None
+
+        try:
+            while bot.running:
+                now = datetime.now()
+
+                if last_date != now.date():
+                    done_today = set()
+                    last_date = now.date()
+
+                slot = next(
+                    (s for s in SLOTS
+                     if s[0] == now.hour and s[1] <= now.minute < s[1] + 10),
+                    None,
+                )
+                if slot is None or slot in done_today:
+                    await asyncio.sleep(60)
+                    continue
+
+                # 휴장일/장 마감이면 건너뛴다
+                try:
+                    if self._get_current_session() == MarketSession.CLOSED:
+                        done_today.add(slot)
+                        await asyncio.sleep(60)
+                        continue
+                except Exception:
+                    pass
+
+                done_today.add(slot)
+                logger.info(f"[팀심의] {slot[0]:02d}:{slot[1]:02d} 슬롯 시작")
+
+                try:
+                    await self._run_team_deliberation_once()
+                except Exception as e:
+                    logger.error(f"[팀심의] 실행 오류: {e}", exc_info=True)
+
+                await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[팀심의] 스케줄러 오류: {e}", exc_info=True)
+
+    async def _run_team_deliberation_once(self):
+        """팀 심의 1회 실행 (후보 + 보유)"""
+        bot = self.bot
+        team = bot.trading_team
+
+        # ── 1) 매수 후보 상위 5 ──
+        candidates = []
+        screened = getattr(bot, "_last_screened", None) or []
+        for s in screened[:5]:
+            candidates.append({
+                "symbol": getattr(s, "symbol", ""),
+                "name": getattr(s, "name", ""),
+                "indicators": (getattr(s, "indicators", None)
+                               or getattr(s, "metadata", {}).get("indicators")
+                               if hasattr(s, "metadata") else None),
+            })
+        candidates = [c for c in candidates if c["symbol"]]
+
+        # ── 2) 보유 종목 전체 ──
+        holdings = []
+        try:
+            positions = bot.portfolio.positions
+            for sym, pos in list(positions.items()):
+                pnl_pct = None
+                try:
+                    if pos.avg_price and float(pos.avg_price) > 0 and pos.current_price:
+                        pnl_pct = ((float(pos.current_price) - float(pos.avg_price))
+                                   / float(pos.avg_price) * 100)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pnl_pct = None
+                holdings.append({
+                    "symbol": sym,
+                    "name": getattr(pos, "name", "") or sym,
+                    "indicators": None,
+                    "pnl_pct": pnl_pct,
+                })
+        except Exception as e:
+            logger.warning(f"[팀심의] 보유 종목 수집 실패: {e}")
+
+        if not candidates and not holdings:
+            logger.info("[팀심의] 심의 대상 없음")
+            return
+
+        # 게이트 조회 — 기존 cross_validator 결과를 그대로 쓴다
+        async def gate_checker(symbol: str, stance: str):
+            cv = getattr(getattr(bot, "engine", None), "_cross_validator", None)
+            if cv is None:
+                # 게이트를 확인할 수 없으면 보수적으로 차단 (PM이 미분류로 거부)
+                return (False, ["gate_unavailable"], "cross_validator 미연결")
+            try:
+                regime = getattr(bot.engine, "_market_regime", "neutral")
+                passed, adj_score, reason = cv.validate(
+                    symbol=symbol, side="buy", strategy="team",
+                    score=70.0, metadata={}, market_regime=regime,
+                )
+                return (bool(passed), [] if passed else ["G2_cross"], reason or "")
+            except Exception as e:
+                return (False, ["gate_error"], str(e))
+
+        results = []
+        if candidates:
+            logger.info(f"[팀심의] 매수 후보 {len(candidates)}종목 심의")
+            results += await team.deliberate_many(
+                candidates, holding=False, gate_checker=gate_checker
+            )
+        if holdings:
+            logger.info(f"[팀심의] 보유 {len(holdings)}종목 재평가")
+            results += await team.deliberate_many(holdings, holding=True)
+
+        # ── 3) 요약 알림 ──
+        buys = [v for v in results
+                if v.decision and v.decision.approved
+                and v.decision.stance.value == "buy"]
+        sells = [v for v in results
+                 if v.decision and v.decision.approved
+                 and v.decision.stance.value == "sell"]
+        overrides = [v for v in results if v.decision and v.decision.overrode_gate]
+
+        logger.info(
+            f"[팀심의] 완료 — 총 {len(results)}건 "
+            f"(매수판정 {len(buys)}, 매도판정 {len(sells)}, 오버라이드 {len(overrides)})"
+        )
+
+        try:
+            lines = [f"🧑‍💼 에이전트 팀 심의 ({datetime.now():%H:%M}) — shadow"]
+            lines.append(f"심의 {len(results)}건 / 매수판정 {len(buys)} / 매도판정 {len(sells)}")
+            for v in (buys + sells)[:6]:
+                d = v.decision
+                lines.append(
+                    f"· {v.name or v.symbol} {d.stance.value.upper()} "
+                    f"×{d.size_multiplier} — {(v.debate.summary if v.debate else '')[:60]}"
+                )
+            if overrides:
+                lines.append(f"⚠️ 게이트 오버라이드 {len(overrides)}건")
+            lines.append("※ shadow 단계 — 주문 미실행, 기록·검증 목적")
+            await send_alert("\n".join(lines))
+        except Exception as e:
+            logger.warning(f"[팀심의] 알림 실패: {e}")
 
     async def run_post_exit_review_scheduler(self):
         """매주 토요일 09:00 KST 매도 후속 복기
