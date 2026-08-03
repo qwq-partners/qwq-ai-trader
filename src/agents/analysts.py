@@ -75,36 +75,37 @@ class FundamentalAnalyst:
             # 1) 종합 검증기 (수급/공매도/뉴스/공시를 한 번에)
             if self._validator is not None:
                 result = await self._validator.validate(symbol, name or symbol)
-                passed = getattr(result, "passed", None)
-                reason = getattr(result, "reason", "") or ""
+                # ⚠️ 2026-08-03: 아래 이름들이 전부 ValidationResult와 어긋나 있었다.
+                #    passed→approved, reason→block_reason,
+                #    supply_demand→supply_demand_result, short_selling→short_selling_result.
+                #    getattr 기본값이 조용히 삼켜서 이 분석가는 **항상 score=0**을 내면서
+                #    confidence=0.7을 주장했다. 가중평균에서 뉴스 점수를 절반으로
+                #    희석시키기만 하는 유령 근거였다 (심의 13건 전부 score 0).
+                #    하위 필드도 숫자가 아니라 bool이다 — 순매수 "여부"만 알 수 있다.
+                passed = getattr(result, "approved", None)
+                reason = getattr(result, "block_reason", "") or ""
 
-                sd = getattr(result, "supply_demand", None)
+                sd = getattr(result, "supply_demand_result", None)
                 if sd is not None:
-                    foreign = getattr(sd, "foreign_net", None)
-                    inst = getattr(sd, "institution_net", None)
-                    metrics["foreign_net"] = foreign
-                    metrics["institution_net"] = inst
-                    # 외국인·기관 동반 순매수는 강한 신호
-                    net_positive = sum(
-                        1 for v in (foreign, inst) if v is not None and v > 0
-                    )
-                    if net_positive == 2:
+                    foreign = bool(getattr(sd, "foreign_net_buying", False))
+                    inst = bool(getattr(sd, "institutional_net_buying", False))
+                    metrics["foreign_net_buying"] = foreign
+                    metrics["institutional_net_buying"] = inst
+                    # 외국인·기관 동반 순매수는 강한 신호.
+                    # 반대쪽(순매도)은 감점하지 않는다 — bool은 "순매수 아님"까지만
+                    # 말해주고 순매도인지 관망인지는 구분하지 못한다.
+                    if foreign and inst:
                         score += 30
                         findings.append("외국인·기관 동반 순매수")
-                    elif net_positive == 1:
+                    elif foreign or inst:
                         score += 10
-                        findings.append("기관 또는 외국인 순매수")
-                    elif foreign is not None and inst is not None:
-                        score -= 20
-                        findings.append("외국인·기관 동반 순매도")
+                        findings.append("외국인" if foreign else "기관")
 
-                ss = getattr(result, "short_selling", None)
-                if ss is not None:
-                    ratio = getattr(ss, "short_ratio", None)
-                    metrics["short_ratio"] = ratio
-                    if ratio is not None and ratio > 5.0:
-                        score -= 15
-                        findings.append(f"공매도 비중 높음 ({ratio:.1f}%)")
+                ss = getattr(result, "short_selling_result", None)
+                if ss is not None and bool(getattr(ss, "in_top50", False)):
+                    metrics["short_top50"] = True
+                    score -= 15
+                    findings.append("공매도 상위 50종목")
 
                 if passed is False:
                     score -= 25

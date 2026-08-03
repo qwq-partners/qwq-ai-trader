@@ -1,5 +1,60 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — fix(agents): 팀 심의가 매수로 이어지지 않던 원인 2건 (입력 기아)
+
+심의 13건(8/2~8/3)이 전부 `stance=hold`, 신규 매수 0건이었다.
+**예산 문제가 아니다** — `TraderAgent.propose()`에는 현금이 인자로도 들어가지 않는다.
+분석가 입력이 굶고 있었다.
+
+### 인과 사슬
+지표 미전달 + 펀더멘탈 no-op → 유효 근거가 news 하나뿐 → Bull이 "근거 없음"을
+이유로 REJECT(13/13) → 만장일치 반대 → `debate_adj = -40` → 총점 < `BUY_THRESHOLD(20)`.
+분석가 점수만 보면 **3/9건이 이미 매수 기준을 넘겼는데** 토론 -40에 전부 뒤집혔다.
+
+### 버그 1 — 지표가 한 번도 전달되지 않았다 (`kr_scheduler.py`)
+```python
+"indicators": (getattr(s, "indicators", None)
+               or getattr(s, "metadata", {}).get("indicators")
+               if hasattr(s, "metadata") else None),
+```
+파이썬은 `(A or B) if hasattr(...) else None`으로 묶는다. `SwingCandidate`에는
+`metadata`가 없어서 **indicators를 갖고 있어도 항상 None**이었다.
+기술적 분석가가 "지표 없음"으로 전량 실패(8/3 9건 중 9건). 보유 종목은 아예
+`"indicators": None` 하드코딩.
+→ `객체 → metadata → 스크리너 지표 캐시` 순으로 추출. 보유 종목도 캐시에서 채운다.
+
+### 버그 2 — 펀더멘탈 분석가가 필드명을 전부 잘못 읽었다 (`analysts.py`)
+`passed`/`reason`/`supply_demand`/`short_selling` → 실제는
+`approved`/`block_reason`/`supply_demand_result`/`short_selling_result`.
+하위 필드도 숫자가 아니라 bool(`foreign_net_buying`, `in_top50`)이었다.
+`getattr(obj, name, default)`가 조용히 삼켜서 **항상 score=0**을 내면서
+`confidence=0.7`을 주장했다 — 실패보다 나쁘다. 가중평균에서 뉴스 점수를
+절반으로 희석시키기만 하는 유령 근거였다(13건 전부 score 0).
+→ 실제 스키마로 재작성. 순매도 감점은 제거(bool은 "순매수 아님"까지만 말해준다).
+
+### 실측 — 토론은 근거에 반응한다
+동일 종목·프롬프트로 근거만 바꿔 실제 LLM 토론을 돌렸다.
+
+| 근거 | Bull | Bear | 판정 | 보정 |
+|---|---|---|---|---|
+| fund 0 + news만 (수정 전 재현) | 반대 | 반대 | 만장일치 반대 | **-40** |
+| fund 40 + tech 35 + news 61 | 지지 | 반대 | 의견 분열 | **-10** |
+
+30점 스윙. 8/3 9건 재계산 시 1건이 HOLD→BUY(삼성E&A, total -10 → 22).
+
+### ⚠️ 남은 구조적 제약 (설계 판단 필요, 이번에 건드리지 않음)
+`-40`은 현실적 분석가 점수 범위(0~40)보다 크다. **만장일치 반대가 나오면 어떤
+근거로도 매수가 불가능**하다. 의도된 fail-closed지만 캘리브레이션 재검토가 필요하다.
+입력을 고쳤으니 며칠 관측 후 판단할 것 — 표본 없이 임계값부터 낮추면
+검증 계층을 무력화하는 것과 같다.
+
+### 검증
+- 삼항 우선순위 버그 실증: `SwingCandidate`에 지표가 있어도 구버전은 `None` 반환.
+- 수정 후 기술적 분석가가 `score=35 conf=0.7` 정상 산출.
+- 펀더멘탈 5개 시나리오(기본/동반순매수/한쪽/공매도상위/검증실패) 점수 정상 분기.
+- 봇 재시작 에러 0건.
+
+
 ## 2026-08-03 — feat(office): 에이전트 활동 타임라인 + 캐릭터 상세 + SSE 실시간 브리지
 
 "가상 오피스에 인터랙션이 없고 실제 에이전트가 뭘 하는지 안 보인다"는 지적에서 출발.

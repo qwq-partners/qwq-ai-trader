@@ -4452,21 +4452,51 @@ JSON:
         # 스크리닝은 5분 주기라 심의 시점엔 지표가 이미 몇 분~수십 분 지난 값이다.
         # 그 시각을 함께 넘겨야 분석가가 신선도를 반영해 가중치를 낮출 수 있다.
         screened_at = getattr(bot, "_last_screened_at", None)
+
+        # 지표 캐시 — 스크리너가 계산해 둔 값을 재사용한다 (추가 조회 없음).
+        # 후보 객체에 indicators가 비어 있거나 보유 종목처럼 애초에 없는 경우의 보루.
+        def _cached_indicators(sym: str):
+            for holder in (getattr(bot, "batch_analyzer", None), bot):
+                scr = getattr(holder, "_screener", None) or getattr(holder, "screener", None)
+                cache = getattr(getattr(scr, "_indicators", None), "_cache", None)
+                if isinstance(cache, dict):
+                    got = cache.get(sym)
+                    if got:
+                        return dict(got)
+            return None
+
+        def _indicators_of(obj, sym: str):
+            """지표 추출 — 객체 → metadata → 스크리너 캐시 순
+
+            ⚠️ 예전 코드는 `A or B if hasattr(s,'metadata') else None`이었다.
+               파이썬은 이를 `(A or B) if hasattr(...) else None`으로 묶는다.
+               SwingCandidate에는 metadata가 없으므로 **indicators를 갖고 있어도
+               항상 None**이 됐고, 기술적 분석가가 "지표 없음"으로 전량 실패했다
+               (2026-08-03 심의 9건 중 9건). 근거가 비면 Bull이 반대로 돌아서
+               토론이 만장일치 반대(-40점)가 되고 매수가 원천 차단된다.
+            """
+            direct = getattr(obj, "indicators", None)
+            if direct:
+                return dict(direct)
+            meta = getattr(obj, "metadata", None)
+            if isinstance(meta, dict) and meta.get("indicators"):
+                return dict(meta["indicators"])
+            return _cached_indicators(sym)
+
         candidates = []
         screened = getattr(bot, "_last_screened", None) or []
         for s in screened[:5]:
+            _sym = getattr(s, "symbol", "")
+            _meta = getattr(s, "metadata", None)
             candidates.append({
-                "symbol": getattr(s, "symbol", ""),
+                "symbol": _sym,
                 "name": getattr(s, "name", ""),
-                "indicators": (getattr(s, "indicators", None)
-                               or getattr(s, "metadata", {}).get("indicators")
-                               if hasattr(s, "metadata") else None),
+                "indicators": _indicators_of(s, _sym),
                 "indicators_as_of": screened_at,
                 # 섹터를 반드시 넘겨야 한다 — cross_validator 규칙4(동일 섹터 과집중)는
                 # `metadata.get("sector")`로만 동작해서, 없으면 집중 검사가 통째로 스킵된다.
                 "sector": (getattr(s, "sector", None)
-                           or (getattr(s, "metadata", {}) or {}).get("sector")
-                           if hasattr(s, "metadata") else getattr(s, "sector", None)),
+                           or (_meta.get("sector") if isinstance(_meta, dict) else None)),
             })
         candidates = [c for c in candidates if c["symbol"]]
 
@@ -4485,7 +4515,9 @@ JSON:
                 holdings.append({
                     "symbol": sym,
                     "name": getattr(pos, "name", "") or sym,
-                    "indicators": None,
+                    # 보유 종목도 근거 없이 재평가하면 토론이 "정보 부족 → 반대"로
+                    # 기울어 청산 쪽 판단이 왜곡된다. 캐시된 지표라도 실어 보낸다.
+                    "indicators": _cached_indicators(sym),
                     "pnl_pct": pnl_pct,
                 })
         except Exception as e:
