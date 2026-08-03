@@ -725,6 +725,8 @@ class KISMarketData:
                     "bps": float(output.get("bps", 0) or 0),
                     "price": float(output.get("stck_prpr", 0) or 0),
                     "change_pct": float(output.get("prdy_ctrt", 0) or 0),
+                    # 업종명 — 밸류코어 섹터 캡/금융 제외용 (2026-08-04)
+                    "sector": output.get("bstp_kor_isnm", "") or "",
                 }
 
                 self._set_cache(cache_key, result)

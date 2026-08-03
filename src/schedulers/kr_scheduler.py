@@ -184,6 +184,12 @@ class KRScheduler:
                 self.run_core_rebalance_scheduler(), name="kr_core_rebalance"
             ))
 
+        # 밸류코어 shadow 스캔 (2026-08-04, 주 1회 관측 전용)
+        if bot.batch_analyzer and getattr(bot.batch_analyzer, '_vg_screener', None):
+            tasks.append(asyncio.create_task(
+                self.run_value_growth_shadow_scheduler(), name="kr_value_growth_shadow"
+            ))
+
         # 헬스 모니터
         if bot.health_monitor:
             tasks.append(asyncio.create_task(
@@ -5755,6 +5761,131 @@ JSON:
             pass
         except Exception as e:
             logger.error(f"[수동매수] 오류: {e}")
+
+    async def run_value_growth_shadow_scheduler(self):
+        """밸류코어(가치·성장 장기보유) shadow 스캔 — 주 1회, 주문 없음 (2026-08-04)
+
+        설계: docs/strategies/value-growth-core-design.md §8 Phase 4 (shadow 관측)
+        퀀트 스크리닝 → LLM 정성 검증 → 결과 영속화 + 텔레그램 보고만 수행한다.
+        실배분 전환(shadow_mode: false + 주문 배선)은 관측 2~4주 후 별도 결정.
+        """
+        bot = self.bot
+        state_path = Path.home() / ".cache" / "ai_trader" / "value_growth_shadow.json"
+        last_scan_week: Optional[str] = None
+        try:
+            if state_path.exists():
+                last_scan_week = json.loads(state_path.read_text()).get("scan_week")
+        except Exception:
+            pass
+
+        logger.info("[밸류코어] shadow 스케줄러 시작 (주 1회 스캔, 주문 없음)")
+
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = datetime.now()
+                today = now.date()
+                if today.weekday() >= 5 or is_kr_market_holiday(today):
+                    continue
+
+                cfg = bot.batch_analyzer._config.get("value_growth_core", {})
+                # 주 1회: 기본 월요일, 공휴일이면 그 주 다음 영업일로 폴백 (ISO 주 기준)
+                iso = today.isocalendar()
+                this_week = f"{iso[0]}-W{iso[1]:02d}"
+                if last_scan_week == this_week:
+                    continue
+                if today.weekday() < int(cfg.get("scan_weekday", 0)):
+                    continue
+                # 16:10~16:19 윈도우 — 장 마감 후 (장중 KIS rate limit 경합 회피,
+                # 수급 5일 데이터도 당일 확정치 사용)
+                if not (now.hour == 16 and 10 <= now.minute <= 19):
+                    continue
+
+                screener = getattr(bot.batch_analyzer, "_vg_screener", None)
+                if screener is None:
+                    continue
+                # 주당 1회 시도 (실패해도 당주 재시도 안 함 — 풀스캔 반복 방지)
+                last_scan_week = this_week
+
+                candidates = await screener.run_full_scan()
+                min_score = float(cfg.get("min_score", 70))
+                passed = [c for c in candidates if c.score >= min_score]
+                # LLM 검증 대상: 버킷별 top N/2 (한 버킷 독식 방지 — 리뷰 P1-3)
+                _top_n = int(cfg.get("llm_top_n", 8))
+                _per_bucket = max(1, _top_n // 2)
+                _by_bucket = {"value": [], "growth": []}
+                for c in passed:
+                    _by_bucket.setdefault(
+                        c.indicators.get("bucket", "value"), []).append(c)
+                top = (_by_bucket["value"][:_per_bucket]
+                       + _by_bucket["growth"][:_per_bucket])
+                logger.info(
+                    f"[밸류코어] 퀀트 통과 {len(passed)}개 (컷 {min_score:.0f}) "
+                    f"→ LLM 검증 대상 {len(top)}개 "
+                    f"(가치 {min(len(_by_bucket['value']), _per_bucket)} · "
+                    f"성장 {min(len(_by_bucket['growth']), _per_bucket)})"
+                )
+
+                verdicts = {}
+                if top:
+                    try:
+                        from ..signals.fundamentals.value_qualitative import (
+                            ValueQualitativeValidator,
+                        )
+                        from ..utils.llm import get_llm_manager
+                        validator = ValueQualitativeValidator(get_llm_manager(), cfg)
+                        verdicts = await validator.validate(top)
+                    except Exception as e:
+                        logger.warning(f"[밸류코어] LLM 검증 실패 — 전 종목 보류: {e}")
+
+                final = [
+                    c for c in top
+                    if c.symbol in verdicts and verdicts[c.symbol].passed
+                ]
+
+                # 결과 영속화 (대시보드/다음 스캔 참조용)
+                try:
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_text(json.dumps({
+                        "scan_date": today.isoformat(),
+                        "scan_week": this_week,
+                        "quant_passed": [
+                            {"symbol": c.symbol, "name": c.name,
+                             "score": round(c.score, 1),
+                             "bucket": c.indicators.get("bucket"),
+                             "reasons": c.reasons[:5]}
+                            for c in passed
+                        ],
+                        "llm_verdicts": {
+                            s: {"total": v.total, "passed": v.passed,
+                                "one_line": v.detail.get("one_line", "")}
+                            for s, v in verdicts.items()
+                        },
+                        "final": [c.symbol for c in final],
+                    }, ensure_ascii=False, indent=1))
+                except Exception as e:
+                    logger.warning(f"[밸류코어] 결과 저장 실패: {e}")
+
+                # 텔레그램 보고
+                if final:
+                    lines = [
+                        f"• {c.name}({c.symbol}) [{c.indicators.get('bucket')}] "
+                        f"{c.score:.0f}점 / LLM {verdicts[c.symbol].total:.0f}점"
+                        for c in final
+                    ]
+                    body = "\n".join(lines)
+                else:
+                    body = "최종 후보 없음"
+                await send_alert(
+                    f"🔍 [밸류코어 shadow] 주간 스캔 완료\n"
+                    f"퀀트 통과 {len(passed)} → LLM 통과 {len(final)}\n{body}\n"
+                    f"(관측 전용 — 매수 없음)"
+                )
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"[밸류코어] shadow 스케줄러 오류: {e}\n{traceback.format_exc()}")
 
     async def run_core_rebalance_scheduler(self):
         """코어홀딩 리밸런싱 + 빈 슬롯 즉시 매수 스케줄러

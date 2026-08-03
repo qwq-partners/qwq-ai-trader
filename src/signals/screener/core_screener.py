@@ -125,7 +125,9 @@ class CoreScreener:
         if self._stock_master:
             try:
                 # get_top_stocks() → ["삼성전자=005930", ...]
-                top_stocks = await self._stock_master.get_top_stocks(limit=150)
+                # universe_limit: 밸류코어는 300 (소외 중형주 포함), 코어홀딩 기본 150
+                _limit = int(self._config.get("universe_limit", 150))
+                top_stocks = await self._stock_master.get_top_stocks(limit=_limit)
                 if top_stocks:
                     for item in top_stocks:
                         if "=" in item:
@@ -227,6 +229,7 @@ class CoreScreener:
                 "bps": bps,
                 "rank": rank_map.get(code, 999),  # 실제 시총 기준 순위
                 "market_cap_eok": market_caps.get(code, 0),
+                "sector": val.get("sector", ""),  # 업종명 (밸류코어 섹터 캡용)
             })
 
         logger.info(f"[코어스크리너] 최종 유니버스: {len(universe)}개 (가격필터 후)")
@@ -367,6 +370,7 @@ class CoreScreener:
             ind["bps"] = item.get("bps", 0)
             ind["rank"] = item.get("rank", 999)
             ind["market_cap_eok"] = item.get("market_cap_eok", 0)
+            ind["sector"] = item.get("sector", "")
 
             candidate = CoreCandidate(
                 symbol=symbol,

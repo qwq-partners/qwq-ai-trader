@@ -155,6 +155,7 @@ tools/
 | SEPA | `kr/sepa_trend.py` | SEPA 추세 전략 (스윙) |
 | RSI2 반전 | `kr/rsi2_reversal.py` | RSI(2) 과매도 반전 진입 |
 | VCP 돌파 | (배치 스캔 라인) | 변동성 수축 후 20일 고점 돌파 — **선행 발굴** (2026-08-03~) |
+| 밸류코어 | `value_growth_screener.py` | 가치·성장 2버킷 장기보유 — 🔍 **shadow 관측 중** (2026-08-04~, 주문 없음, 설계 `docs/strategies/value-growth-core-design.md`) |
 
 ### US 전략 (4개)
 | 전략 | 파일 | 설명 |

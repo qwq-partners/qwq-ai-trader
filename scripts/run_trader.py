@@ -899,6 +899,8 @@ class UnifiedTradingBot:
                             "rsi2_reversal": rsi2_cfg,
                             "sepa_trend": sepa_cfg,
                             "core_holding": core_cfg,
+                            # 밸류코어 장기보유 라인 (2026-08-04, shadow)
+                            "value_growth_core": strategies_cfg.get("value_growth_core") or {},
                             # 선행 발굴 라인 (2026-08-03)
                             "vcp_breakout": strategies_cfg.get("vcp_breakout") or {},
                             "universe_leading": {

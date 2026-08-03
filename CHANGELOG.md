@@ -1,5 +1,70 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-04 — feat(kr): 밸류코어(가치·성장 장기보유) 신설 — shadow 관측 개시
+
+사용자 요청("가치주·성장주 30~40% 투자, 장기 보유")로 신규 라인 구축.
+설계 문서: `docs/strategies/value-growth-core-design.md` (LLM 정성 검증 단계 포함 승인).
+
+### Phase 0 — 백테스트 검증 (`quick_backtest --idea kr_value / kr_growth` 신설)
+KOSPI 시총 상위 300 × 5개년(2021~2025 매년 4/1 리밸런스, 12개월 보유), DART 실데이터
+1,282 종목-연도 관측치 (⚠️ 현재 시점 유니버스 — 생존 편향, 상대 비교 한정):
+- **성장 버킷 채택**: 매출≥15%+영익≥25%+PER<25 → **+33.7% vs 베이스라인 +26.0%
+  (+7.7%p, t=3.04, 연도승 4/5)**
+- **가치 버킷 조건부**: B/M 최저평가 승률 61.7% vs 고평가 46.3% (구조 확인)이나
+  평균 초과 +0.9%p로 약함, 퀄리티 결합 연도승 2/5 → shadow 관측으로 최종 판단
+- 발견: 성장 버킷에서 "2년 흑자" 필터가 +34.1%→+24.9%로 수익 절삭 (턴어라운드 배제)
+  — min_profit_years 완화는 shadow 관측 후 재검토
+- pykrx 히스토리 펀더는 KRX 인증 장애로 불가 → DART+FDR+yfinance 조합 (실운용과 동일 소스)
+
+### 구현 (Phase 1~3)
+- **`src/signals/fundamentals/financials.py`** — `FinancialsProvider`:
+  fnlttSinglAcnt 1콜 = 3개년 매출/영익/순익/자산/부채/자본 + 파생지표(YoY/ROE/부채비율/
+  흑자연수/마진개선). 30일 캐시(실패 1일), asset_growth 패턴 미러링
+  - ⚠️ DART 실측 함정 2건: 순이익 계정명 **"당기순이익(손실)"**(접두 매칭 필수),
+    **fs_div 파라미터 무시**(항상 CFS+OFS 동시 반환 → 파싱에서 행 필터).
+    1차 백테스트에서 이 버그로 퀄리티 표본 0건 → 수정 후 재실행
+- **`src/signals/screener/value_growth_screener.py`** — CoreScreener 상속.
+  사전필터(유동성·MA200×0.9·60일≥-15%·금융/지주 제외) → DART 재무 fail-closed →
+  자격필터(2년 흑자·부채<200%) → 가치/성장 2버킷 스코어링(각 100점, 컷 70) →
+  섹터 캡(업종당 1, 저PBR 쏠림 방지). PBR/PER은 후보군 내 상대 분위 배점
+- **`src/signals/fundamentals/value_qualitative.py`** — LLM 정성 검증 (gpt-5.4):
+  사이클 피크/이익의 질/디스카운트 성격/재평가 촉매 4항목×25점, 컷 60, fail-closed.
+  판정은 `~/.cache/ai_trader/value_qualitative/`에 영속 (다음 분기 컨텍스트 재사용)
+- **스케줄러**: `run_value_growth_shadow_scheduler` (kr_scheduler) — 매주 월 10:40,
+  스캔→LLM→`~/.cache/ai_trader/value_growth_shadow.json` 저장→텔레그램 보고. **주문 없음**
+- **`kis_market_data.fetch_stock_valuation`**: 업종명(`bstp_kor_isnm`) 필드 추가 (섹터 캡용)
+- **`config/default.yml`**: `kr.strategies.value_growth_core` 블록 (shadow_mode: true)
+
+### 운영 계획 (설계 §2·§8)
+- shadow 2~4주 → 실배분 15% → 1분기 후 30% (배분 재편은 실배분 전환 시:
+  gap 35→20, core 30→25, sepa 20→15, swing 5→0 — 전환 시점에 최종 재확인)
+- 실배분 전환 시 필수: 주문 배선 + ExitManager 레짐 제외 등록(REGIME_EXIT_PARAMS
+  덮어쓰기 사고 방지) + cross_validator 수급 규칙 예외 + strategy_allocation 키 등록
+
+### 코드리뷰 반영 (P0 0 · P1 3 · P2 8 — P1 전건 + P2 5건 수정)
+P1은 모두 "shadow 관측 데이터의 대표성" 훼손 유형이라 관측 시작 전 수정:
+- **P1-1 유니버스**: 상속받은 `get_top_stocks(150)`이 설계(시총 3000억+)보다 좁음
+  → `universe_limit` 설정화, 밸류코어 300 (코어홀딩은 기존 150 유지)
+- **P1-2 배당 10점 미배선**: DIV 소스 부재로 실효 만점 90점이던 것을 배점 재분배
+  (PBR 분위 20→25, 이익 안정성 10→15). 소스 확보 시 재도입 주석 명기
+- **P1-3 LLM 대상 버킷 쏠림**: 글로벌 top-8 → **버킷별 top-4** (상대분위 기반 가치
+  버킷이 구조적으로 고득점해 성장 버킷이 관측에서 밀리는 문제)
+- P2: `x and x/1e8` 금지 패턴 제거 · 캐시 스키마 변경 시 TypeError → 무효화 처리 ·
+  reasons 버킷 혼재 분리 · 월요일 공휴일 시 ISO 주 기준 다음 영업일 폴백 ·
+  스캔 윈도우 10:40(장중) → **16:10(장외)** 이동 (KIS rate limit 경합 회피) ·
+  LLM max_tokens 300→1000 (reasoning 토큰 절단으로 인한 오탈락 방지)
+- 미수정 P2 (기록): `_FIN_MAX_CONSEC_FAIL` 가드가 사실상 불활성 (프로바이더가 예외를
+  삼키고 None 반환 — 시간 예산 가드가 실질 방어선, fail-closed 방향이라 안전) ·
+  quick_backtest 연구 스크립트 내 0-falsy 패턴 잔존
+
+수정: `scripts/quick_backtest.py`, `src/signals/fundamentals/financials.py`(신규),
+`src/signals/fundamentals/value_qualitative.py`(신규),
+`src/signals/screener/value_growth_screener.py`(신규), `src/signals/screener/core_screener.py`,
+`src/data/providers/kis_market_data.py`, `src/core/batch_analyzer.py`,
+`src/schedulers/kr_scheduler.py`, `config/default.yml`
+문서: `docs/strategies/value-growth-core-design.md`(신규), `docs/strategies/kr-strategies.md`,
+`CLAUDE.md`
+
 ## 2026-08-03 — chore(us): earnings_drift 재활성화 **보류 종결** (pending-decisions #6)
 
 EPS 서프라이즈 가드 배선 + 통계 검증까지 마쳤으나 **활성화하지 않고 종결**한다.

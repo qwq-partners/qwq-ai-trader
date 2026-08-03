@@ -275,6 +275,34 @@ kr:
       trim_min_value: 200000             # 최소 트림 금액 (원, 수수료 대비)
       individual_max_pct: 20.0           # 개별 종목 트림 기준 (총자산 대비 %)
 
+    # 밸류코어 — 가치·성장 장기보유 라인 (2026-08-04 신설, shadow 관측부터)
+    # 설계: docs/strategies/value-growth-core-design.md
+    value_growth_core:
+      enabled: true
+      shadow_mode: true            # ⚠️ 관측 전용 — 주문 없음. 실배분 전환 시 별도 배선 필요
+      max_positions: 4             # 가치 2 + 성장 2
+      position_pct: 8.0
+      max_position_pct: 10.0
+      min_score: 70
+      scan_weekday: 0              # 월요일 주 1회 (10:40 윈도우)
+      # LLM 정성 검증 (value_qualitative.py)
+      llm_top_n: 8
+      llm_pass_score: 60
+      # 유니버스/자격 필터
+      universe_limit: 300          # KOSPI500+KOSDAQ150 풀 시총 상위 300 (소외 중형주 포함)
+      min_market_cap_b: 0.3        # 3000억
+      min_price: 5000
+      min_avg_trading_value: 1000000000
+      min_profit_years: 2
+      max_debt_ratio_pct: 200
+      trend_gate_ma200_mult: 0.9   # value trap 방어: MA200×0.9 이상
+      trend_gate_min_60d_pct: -15.0
+      max_per_sector: 1            # 저PBR 업종 쏠림 방지
+      exclude_financials: true     # v1 금융/지주 제외
+      # 청산 (실배분 단계에서 사용 — 장기 보유: 분할익절/트레일링/stale 없음)
+      stop_loss_pct: 20.0
+      rebalance_months: [4, 5, 8, 11]   # 분기보고서 공시 반영 리밸런스
+
   exit_manager:
     enable_partial_exit: true
     # 2026-08-02 백테스트 기반 조정: +5%/20% → +10%/10%

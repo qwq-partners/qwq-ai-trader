@@ -282,6 +282,28 @@ Asset Growth Effect(재현 Sharpe 0.835, 연간 리밸런싱) 응용 — 역시 
 
 ---
 
+## 7. 밸류코어 — 가치·성장 장기보유 (`value_growth_screener.py`, 2026-08-04~) 🔍 shadow
+
+> **상세 설계: `docs/strategies/value-growth-core-design.md`** (승인·구현 완료, shadow 관측 중)
+
+- **현재 상태: shadow 관측 전용** — 주 1회(월요일 10:40) 스캔 + LLM 검증 + 텔레그램 보고만.
+  주문 없음. 관측 2~4주 후 실배분(15%→30%) 전환은 별도 결정
+- **철학**: 코어홀딩(모멘텀 코어)과 정반대 — "싸게 사서 기다린다". 가치/성장 2버킷,
+  분기 재무 기반, stale 없음, 청산은 펀더멘탈 훼손 기준
+- **파이프라인**: 유니버스(시총 3000억+) → 사전 필터(유동성 + MA200×0.9 + 60일 ≥-15%,
+  금융/지주 제외) → **DART 재무 보강 (fail-closed)** → 자격 필터(2년 흑자·부채<200%)
+  → 2버킷 스코어링(컷 70) → 섹터 캡(업종당 1) → **LLM 정성 검증**(gpt-5.4, 60점 컷)
+- **데이터**: `FinancialsProvider`(`fnlttSinglAcnt` 1콜 = 3개년 매출/영익/순익/자산/부채/자본)
+  - ⚠️ DART 실측 함정 2건: 순이익 계정명은 **"당기순이익(손실)"** (접두 매칭 필수),
+    `fs_div` 파라미터는 **API가 무시** (항상 CFS+OFS 30행 반환 → 파싱에서 행 필터)
+- **LLM 정성 검증** (`value_qualitative.py`): 사이클 피크/이익의 질/디스카운트 성격/촉매
+  4항목 × 25점, fail-closed. 판정은 `~/.cache/ai_trader/value_qualitative/`에 영속
+- **백테스트 (Phase 0, 2026-08-04)**: KOSPI 300 × 5년 (DART 실데이터, 생존 편향 주의)
+  — 결과는 `results/quickbt_kr_value_*.csv` / CHANGELOG 참조
+- shadow 결과: `~/.cache/ai_trader/value_growth_shadow.json`
+
+---
+
 ## 캘린더 시즈널리티 오버레이 (`src/utils/calendar_seasonality.py`, 2026-08-03~)
 
 독립 전략이 아니라 **모든 전략의 매수 사이징 배율**로 동작하는 오버레이.

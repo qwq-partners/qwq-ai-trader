@@ -359,6 +359,235 @@ def idea_earnings_drift(months: int, hold_days: int):
 
 
 # ════════════════════════════════════════════════════════════════
+# 아이디어 3: KR 밸류코어 (가치/성장 버킷) — value-growth-core-design.md Phase 0
+# ════════════════════════════════════════════════════════════════
+
+_DART_ACCOUNTS = {"자산총계", "부채총계", "자본총계", "매출액", "영업이익", "당기순이익"}
+
+
+def _load_dart_corp_map() -> dict:
+    """운영 캐시(dart_corp_code.xml)에서 종목코드→corp_code 매핑 로드"""
+    import xml.etree.ElementTree as ET
+
+    xml_path = Path.home() / ".cache" / "ai_trader" / "dart_corp_code.xml"
+    if not xml_path.exists():
+        sys.exit(f"corp_code 캐시 없음: {xml_path} — 운영 봇이 생성한 파일 필요")
+    mapping = {}
+    for el in ET.parse(xml_path).getroot().iter("list"):
+        stock = (el.findtext("stock_code") or "").strip()
+        corp = (el.findtext("corp_code") or "").strip()
+        if len(stock) == 6 and corp:
+            mapping[stock] = corp
+    return mapping
+
+
+def _fetch_kr_financials_dart(symbols, years) -> pd.DataFrame:
+    """DART fnlttSinglAcnt 연간 재무 (CFS 우선, 30일 디스크 캐시).
+
+    실운용 FinancialsProvider와 동일 소스 — 백테스트/실전 데이터 정합성 확보.
+    """
+    import requests
+
+    key = _load_env_key("DART_API_KEY")
+    if not key:
+        sys.exit("DART_API_KEY 없음 — .env 확인")
+
+    cache_path = KR_CACHE_DIR.parent / "research" / "dart_financials.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache = {}
+    if cache_path.exists() and time.time() - cache_path.stat().st_mtime < 30 * 86400:
+        cache = json.loads(cache_path.read_text())
+
+    corp_map = _load_dart_corp_map()
+    rows, fetched = [], 0
+    total = len(symbols) * len(years)
+    for sym in sorted(symbols):
+        corp = corp_map.get(sym)
+        if not corp:
+            continue
+        for yr in years:
+            ck = f"{sym}_{yr}"
+            if ck in cache:
+                rec = cache[ck]
+            else:
+                rec = {}
+                try:
+                    r = requests.get(
+                        "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json",
+                        params={"crtfc_key": key, "corp_code": corp,
+                                "bsns_year": str(yr), "reprt_code": "11011"},
+                        timeout=15,
+                    )
+                    data = r.json()
+                    if data.get("status") == "000":
+                        # CFS(연결) 우선, 없으면 OFS(별도)
+                        for fs_div in ("CFS", "OFS"):
+                            got = {}
+                            for it in data.get("list", []):
+                                if it.get("fs_div") != fs_div:
+                                    continue
+                                nm = it.get("account_nm", "").strip()
+                                # 실측: 순이익 계정명은 "당기순이익(손실)" — 접두 정규화
+                                if nm.startswith("당기순이익"):
+                                    nm = "당기순이익"
+                                if nm in _DART_ACCOUNTS:
+                                    try:
+                                        got[nm] = float(
+                                            it["thstrm_amount"].replace(",", ""))
+                                    except (ValueError, KeyError, AttributeError):
+                                        pass
+                            if "자본총계" in got:
+                                rec = got
+                                break
+                except Exception:
+                    rec = {}
+                cache[ck] = rec
+                fetched += 1
+                time.sleep(0.06)   # DART 분당 1,000건 한도 내
+                if fetched % 200 == 0:
+                    print(f"  DART 재무 조회 {fetched}건 (계 {total})")
+                    cache_path.write_text(json.dumps(cache, ensure_ascii=False))
+            if rec.get("자본총계"):
+                rows.append({
+                    "symbol": sym, "year": yr,
+                    "equity": rec.get("자본총계"), "liab": rec.get("부채총계"),
+                    "revenue": rec.get("매출액"), "op": rec.get("영업이익"),
+                    "net": rec.get("당기순이익"),
+                })
+    cache_path.write_text(json.dumps(cache, ensure_ascii=False))
+    return pd.DataFrame(rows)
+
+
+def _kr_value_growth_base(top_n: int = 300):
+    """공통 데이터 준비: 유니버스·재무·가격·리밸런스 시점별 지표 테이블"""
+    import FinanceDataReader as fdr
+    import yfinance as yf
+
+    listing = fdr.StockListing("KOSPI")
+    listing = listing[listing["Code"].str.endswith("0")]        # 보통주만
+    listing = listing.nlargest(top_n, "Marcap")
+    shares = dict(zip(listing["Code"], listing["Stocks"]))
+    print(f"유니버스: KOSPI 시총 상위 {len(listing)}종목 "
+          f"(⚠️ 현재 시점 구성 — 생존 편향 존재, 1차 스크리닝 한정)")
+
+    years = list(range(2019, 2026))
+    fin = _fetch_kr_financials_dart(listing["Code"].tolist(), years)
+    print(f"DART 재무: {fin['symbol'].nunique()}종목 × {len(years)}개년, {len(fin)}행")
+
+    tickers = [f"{c}.KS" for c in fin["symbol"].unique()]
+    px = yf.download(tickers, start="2020-06-01", auto_adjust=True,
+                     progress=False, threads=True)["Close"]
+    px.columns = [c.replace(".KS", "") for c in px.columns]
+    px = px.dropna(axis=1, how="all")
+    print(f"가격 데이터: {px.shape[1]}종목 × {px.shape[0]}일")
+
+    f = fin.set_index(["symbol", "year"])
+
+    def _get(sym, yr, col):
+        try:
+            v = f.at[(sym, yr), col]
+            return None if pd.isna(v) else v
+        except KeyError:
+            return None
+
+    # 리밸런스: 매년 4/1 (직전 사업연도 보고서 제출 마감 직후) → 12개월 보유
+    frames = []
+    for ry in range(2021, 2026):
+        rb = pd.Timestamp(f"{ry}-04-01")
+        pos0 = px.index.searchsorted(rb)
+        pos1 = px.index.searchsorted(rb + pd.DateOffset(years=1))
+        if pos1 >= len(px.index):
+            pos1 = len(px.index) - 1
+        d0, d1 = px.index[pos0], px.index[pos1]
+        fy = ry - 1
+        for sym in px.columns:
+            p0, p1 = px[sym].get(d0), px[sym].get(d1)
+            eq, net = _get(sym, fy, "equity"), _get(sym, fy, "net")
+            if any(v is None or pd.isna(v) or v <= 0 for v in (p0, eq)) \
+                    or p1 is None or pd.isna(p1):
+                continue
+            net_p, liab = _get(sym, fy - 1, "net"), _get(sym, fy, "liab")
+            rev, rev_p = _get(sym, fy, "revenue"), _get(sym, fy - 1, "revenue")
+            op, op_p = _get(sym, fy, "op"), _get(sym, fy - 1, "op")
+            mcap = p0 * shares.get(sym, 0)
+            if mcap <= 0:
+                continue
+            frames.append({
+                "year": ry, "symbol": sym,
+                "bm": eq / mcap,                               # B/M (PBR 역수)
+                "per": (mcap / net) if net and net > 0 else None,
+                "roe": (net / eq * 100) if net is not None else None,
+                "debt": (liab / eq * 100) if liab is not None else None,
+                "profit2y": bool(net and net > 0 and net_p and net_p > 0),
+                "rev_yoy": (rev / rev_p - 1) * 100 if rev and rev_p and rev_p > 0 else None,
+                "op_yoy": (op / op_p - 1) * 100 if op and op_p and op_p > 0 else None,
+                "fwd": (p1 / p0 - 1) * 100,                    # 12개월 포워드
+            })
+    df = pd.DataFrame(frames)
+    print(f"종목-연도 관측치: {len(df)}건 ({df['year'].nunique()}개 리밸런스)")
+    return df
+
+
+def _vg_stat(df, mask, label):
+    sub = df[mask]
+    if len(sub) < 20:
+        print(f"  {label:<40} n={len(sub)} (표본 부족)")
+        return None
+    t = sub["fwd"].mean() / (sub["fwd"].std() / np.sqrt(len(sub)))
+    yearly = sub.groupby("year")["fwd"].mean()
+    base_yearly = df.groupby("year")["fwd"].mean()
+    wins = int((yearly > base_yearly.reindex(yearly.index)).sum())
+    print(f"  {label:<40} n={len(sub):>4} | 평균 {sub['fwd'].mean():+.2f}% | "
+          f"승률 {(sub['fwd'] > 0).mean()*100:.1f}% | t={t:.2f} | "
+          f"연도승 {wins}/{len(yearly)}")
+    return sub["fwd"].mean()
+
+
+def idea_kr_value(top_n: int):
+    """가치 버킷: B/M 분위 × 퀄리티(2년 흑자 + 부채<200%) — 12개월 포워드"""
+    df = _kr_value_growth_base(top_n)
+    quality = df["profit2y"] & df["debt"].notna() & (df["debt"] < 200)
+
+    print(f"\n[가치 버킷] B/M 5분위 (연도 내 상대 분위):")
+    df["bm_q"] = df.groupby("year")["bm"].transform(
+        lambda s: pd.qcut(s, 5, labels=False, duplicates="drop"))
+    base = df["fwd"].mean()
+    print(f"  베이스라인(전체): 평균 {base:+.2f}%")
+    for q in range(4, -1, -1):
+        _vg_stat(df, df["bm_q"] == q, f"B/M Q{5-q} ({'최저평가' if q == 4 else '고평가' if q == 0 else ''})")
+    print(f"\n[가치+퀄리티 결합]")
+    _vg_stat(df, (df["bm_q"] == 4) & quality, "B/M 최저평가 + 퀄리티")
+    _vg_stat(df, (df["bm_q"] == 4) & quality & (df["roe"] >= 8), "저평가+퀄리티+ROE≥8%")
+    _vg_stat(df, (df["bm_q"] == 0), "고평가 Q5 (반례)")
+
+    out = PROJECT_ROOT / "results" / f"quickbt_kr_value_{date.today():%Y%m%d}.csv"
+    df.to_csv(out, index=False)
+    print(f"\n상세 저장: {out}")
+    print("판정 가이드: 저평가+퀄리티 버킷이 베이스라인 대비 유의(+, t≥2) & 연도승 3/5 이상")
+
+
+def idea_kr_growth(top_n: int):
+    """성장 버킷: 매출/영업이익 YoY 성장 + 가격 체크(PER) — 12개월 포워드"""
+    df = _kr_value_growth_base(top_n)
+    base = df["fwd"].mean()
+    print(f"\n[성장 버킷] 베이스라인(전체): 평균 {base:+.2f}%")
+    grow = (df["rev_yoy"].notna() & (df["rev_yoy"] >= 15)
+            & df["op_yoy"].notna() & (df["op_yoy"] >= 25))
+    _vg_stat(df, df["rev_yoy"].notna() & (df["rev_yoy"] >= 15), "매출 YoY ≥15%")
+    _vg_stat(df, df["op_yoy"].notna() & (df["op_yoy"] >= 25), "영업이익 YoY ≥25%")
+    _vg_stat(df, grow, "매출≥15% + 영업이익≥25% (설계 조건)")
+    _vg_stat(df, grow & df["profit2y"], "설계 조건 + 2년 흑자")
+    _vg_stat(df, grow & df["per"].notna() & (df["per"] < 25), "설계 조건 + PER<25 (가격 체크)")
+    _vg_stat(df, df["rev_yoy"].notna() & (df["rev_yoy"] < 0)
+             & df["op_yoy"].notna() & (df["op_yoy"] < 0), "역성장 (반례)")
+
+    out = PROJECT_ROOT / "results" / f"quickbt_kr_growth_{date.today():%Y%m%d}.csv"
+    df.to_csv(out, index=False)
+    print(f"\n상세 저장: {out}")
+    print("판정 가이드: 설계 조건 버킷이 베이스라인 대비 유의(+, t≥2) & 연도승 3/5 이상")
+
+
+# ════════════════════════════════════════════════════════════════
 # 아이디어 2: turn-of-month (시즈널리티 오버레이 검증)
 # ════════════════════════════════════════════════════════════════
 
@@ -449,7 +678,8 @@ def idea_lowvol(months: int):
 def main():
     ap = argparse.ArgumentParser(description="신규 전략 아이디어 1차 스크리닝")
     ap.add_argument("--idea", required=True,
-                    choices=["earnings_reversal", "earnings_drift", "tom", "lowvol"])
+                    choices=["earnings_reversal", "earnings_drift", "tom", "lowvol",
+                             "kr_value", "kr_growth"])
     ap.add_argument("--months", type=int, default=12)
     ap.add_argument("--symbol", default="SPY", help="tom 전용 (SPY | QQQ | KOSPI)")
     ap.add_argument("--pre-drop", type=float, default=5.0,
@@ -464,6 +694,10 @@ def main():
         idea_earnings_reversal(args.months, args.pre_drop, args.hold_days, args.source)
     elif args.idea == "earnings_drift":
         idea_earnings_drift(args.months, args.hold_days)
+    elif args.idea == "kr_value":
+        idea_kr_value(300)
+    elif args.idea == "kr_growth":
+        idea_kr_growth(300)
     elif args.idea == "tom":
         idea_tom(args.symbol, args.months)
     elif args.idea == "lowvol":

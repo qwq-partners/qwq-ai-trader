@@ -178,6 +178,23 @@ class BatchAnalyzer:
             except Exception as e:
                 logger.warning(f"[배치분석기] 코어홀딩 초기화 실패 (무시): {e}")
 
+        # 밸류코어(가치·성장 장기보유) 스크리너 — 2026-08-04, shadow 관측부터 시작
+        self._vg_screener = None
+        vg_cfg_raw = self._config.get("value_growth_core", {})
+        if vg_cfg_raw.get("enabled", False):
+            try:
+                from ..signals.screener.value_growth_screener import ValueGrowthScreener
+                self._vg_screener = ValueGrowthScreener(
+                    broker=broker,
+                    kis_market_data=kis_market_data,
+                    stock_master=stock_master,
+                    config=vg_cfg_raw,
+                )
+                logger.info("[배치분석기] 밸류코어 스크리너 초기화 완료 "
+                            f"(shadow={vg_cfg_raw.get('shadow_mode', True)})")
+            except Exception as e:
+                logger.warning(f"[배치분석기] 밸류코어 초기화 실패 (무시): {e}")
+
         # 코어홀딩 상태 영속화 파일
         self._core_state_path = Path.home() / ".cache" / "ai_trader" / "core_holding_state.json"
 
