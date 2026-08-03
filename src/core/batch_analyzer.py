@@ -57,6 +57,10 @@ class PendingSignal:
     #   "breakout" = 현재가가 breakout_trigger를 넘어야만 진입
     entry_mode: str = "close"
     breakout_trigger: float = 0.0
+    # 이월 재시도 횟수 (2026-08-03) — 일시적 사유로 스킵된 시그널이 다음 실행
+    # 윈도우로 넘어간 횟수. 재시작이 반복되면 윈도우 수와 무관하게 늘 수 있어
+    # MAX_CARRY_RETRIES로 상한을 둔다.
+    retry_count: int = 0
 
     def is_expired(self) -> bool:
         return datetime.now() > datetime.fromisoformat(self.expires_at)
@@ -74,7 +78,38 @@ class PendingSignal:
         data.setdefault("evening_score_adj", 0.0)
         data.setdefault("entry_mode", "close")
         data.setdefault("breakout_trigger", 0.0)
+        data.setdefault("retry_count", 0)
         return cls(**data)
+
+
+# ── 대기 시그널 이월 정책 (2026-08-03) ────────────────────────────────────────
+# execute_pending_signals()는 끝에서 pending을 통째로 비운다. 그래서 09:01 이후의
+# 실행 윈도우(12:30 낮스캔·13:50 자본활용률 체크)는 사실상 빈 파일을 읽고 있었다.
+# 스킵 사유를 "상태가 바뀌면 통과할 수 있는가"로 나눠, 그런 것만 다음 윈도우로 넘긴다.
+#
+#   이월(재시도) — 시각·시세·포지션이 바뀌면 결과가 달라지는 사유
+#     quote_fail      현재가 조회 실패 / 이상값 → 일시적 API 장애
+#     breakout_wait   돌파 트리거 미달 → 장중 돌파 가능
+#     above_band      현재가 > max_entry_price → 눌리면 밴드 복귀 가능
+#     gap_up_score    갭업 요구점수 미달 → 갭이 줄면 요구치도 낮아짐
+#     intraday_gate   장중 급락 게이트 → 급락 상태 해제 시 통과
+#     strategy_limit  전략별 동시보유 한도 → 청산되면 슬롯 발생
+#     error           실행 중 예외 → 일시적
+#
+#   폐기 — 같은 날 다시 시도해도 통과할 수 없거나, 통과해선 안 되는 사유
+#     expired         만료. 시간이 지나면 더 확실히 만료된다
+#     sepa_late       SEPA 14:30+ 차단. 이후 시각은 더 늦어질 뿐이고,
+#                     익일로 넘기면 하루 지난 근거로 진입하게 된다
+#     gap_down        개장 갭다운. 게이트의 취지가 "악재 의심 종목은 당일 손대지 않는다"이므로
+#                     오후에 반등해도 진입 근거(전일 종가 기준 스캔)는 이미 무효다
+#     already_held    이미 보유 중. 재시도 대상이 아니다
+CARRY_REASONS = frozenset({
+    "quote_fail", "breakout_wait", "above_band",
+    "gap_up_score", "intraday_gate", "strategy_limit", "error",
+})
+# 이월 상한 — 재시작이 반복되면 윈도우 수와 무관하게 재시도가 누적될 수 있다.
+# 만료(익영업일 15:30)가 1차 방어선이고, 이건 그 안에서의 폭주 방지선이다.
+MAX_CARRY_RETRIES = 8
 
 
 class BatchAnalyzer:
@@ -944,10 +979,27 @@ class BatchAnalyzer:
         executed = 0
         skipped = 0
         valid_idx = 0  # 유효 시그널 실행 순번 (간격 적용용)
-        # 돌파 대기 시그널 이월 목록 (2026-08-03)
-        #   이 함수는 끝에서 self._pending을 통째로 비운다. 돌파 트리거 미달로
-        #   스킵한 시그널까지 같이 지워지면 "다음 윈도우에서 재확인"이 성립하지 않는다.
+
+        # ── 스킵 시그널 이월 (2026-08-03) ──
+        # 이 함수는 끝에서 self._pending을 통째로 비운다. 일시적 사유로 스킵된
+        # 시그널까지 지워지면 12:30·13:50 윈도우가 빈 파일을 읽게 된다.
+        # 분류 근거는 모듈 상단 CARRY_REASONS 주석 참조.
         carry_over: List[PendingSignal] = []
+        carry_stats: Dict[str, int] = {}
+
+        def _carry(_sig: PendingSignal, reason: str) -> None:
+            """재시도 가치가 있는 스킵만 다음 윈도우로 이월"""
+            if reason not in CARRY_REASONS:
+                return
+            if _sig.retry_count >= MAX_CARRY_RETRIES:
+                logger.warning(
+                    f"[배치분석] {_sig.symbol} 이월 상한 도달 "
+                    f"({_sig.retry_count}회, 최종 사유={reason}) → 폐기"
+                )
+                return
+            _sig.retry_count += 1
+            carry_over.append(_sig)
+            carry_stats[reason] = carry_stats.get(reason, 0) + 1
 
         for sig in signals:
             try:
@@ -972,11 +1024,13 @@ class BatchAnalyzer:
                 quote = await self._broker.get_quote(sig.symbol)
                 if not quote:
                     logger.warning(f"[배치분석] {sig.symbol} 현재가 조회 실패")
+                    _carry(sig, "quote_fail")
                     skipped += 1
                     continue
 
                 current_price = float(quote.get("price", 0))
                 if current_price <= 0:
+                    _carry(sig, "quote_fail")
                     skipped += 1
                     continue
 
@@ -993,7 +1047,7 @@ class BatchAnalyzer:
                             f"현재가 {current_price:,.0f} < 트리거 {_trigger:,.0f} "
                             f"(만료 전까지 유지)"
                         )
-                        carry_over.append(sig)
+                        _carry(sig, "breakout_wait")
                         skipped += 1
                         continue
 
@@ -1003,6 +1057,8 @@ class BatchAnalyzer:
                         f"[배치분석] {sig.symbol} 진입 스킵: "
                         f"현재가 {current_price:,.0f} > 최대진입가 {sig.max_entry_price:,.0f}"
                     )
+                    # 장중 눌리면 밴드 안으로 돌아올 수 있다
+                    _carry(sig, "above_band")
                     skipped += 1
                     continue
 
@@ -1023,6 +1079,8 @@ class BatchAnalyzer:
                             f"{gap_pct:+.1f}% (기준 {gap_down_threshold:+.1f}%) "
                             f"전일종가={sig.entry_price:,.0f} 현재={current_price:,.0f}"
                         )
+                        # 이월하지 않는다 — 게이트 취지가 "악재 의심 종목은 당일 손대지 않는다"이고,
+                        # 오후에 반등해도 전일 종가 기준으로 잡은 진입 근거는 이미 무효다
                         skipped += 1
                         continue
 
@@ -1041,6 +1099,8 @@ class BatchAnalyzer:
                                 f"갭={gap_pct:+.1f}% 점수={sig.score:.0f} "
                                 f"(필요={_batch_min + _gap_extra:.0f})"
                             )
+                            # 갭이 줄면 요구 점수도 낮아져 통과 가능
+                            _carry(sig, "gap_up_score")
                             skipped += 1
                             continue
 
@@ -1083,6 +1143,8 @@ class BatchAnalyzer:
                             metadata={"intraday_state": self._intraday_state,
                                       "kospi_pct": round(self._intraday_kospi_pct, 2)},
                         ))
+                        # 급락 상태가 해제되면 통과 가능
+                        _carry(sig, "intraday_gate")
                         skipped += 1
                         continue
                 # ──────────────────────────────────────────────────────
@@ -1112,6 +1174,8 @@ class BatchAnalyzer:
                         f"[배치분석] {sig.symbol} 전략 한도 초과: "
                         f"{sig.strategy} {strategy_count}/{max_for_strategy}개, 스킵"
                     )
+                    # 보유분이 청산되면 슬롯이 생긴다
+                    _carry(sig, "strategy_limit")
                     skipped += 1
                     continue
 
@@ -1213,17 +1277,20 @@ class BatchAnalyzer:
 
             except Exception as e:
                 logger.error(f"[배치분석] {sig.symbol} 실행 오류: {e}")
+                _carry(sig, "error")
                 skipped += 1
 
         logger.info(f"[배치분석] 실행 완료: 발행={executed}개, 스킵={skipped}개")
 
-        # 실행 완료 후 시그널 파일 비우기 (재시작 시 중복 방지)
-        # 단, 돌파 트리거 미달로 대기 중인 시그널은 남긴다 — 안 그러면 첫 윈도우에서
-        # 지워져 12:30·13:50 재확인이 성립하지 않는다. 재진입은 상단 '이미 보유 중'
-        # 체크가 막으므로 이월해도 중복 매수는 발생하지 않는다.
+        # 실행 완료 후 시그널 파일 정리 (재시작 시 중복 방지)
+        # 전량 삭제가 아니라, 재시도 가치가 있는 스킵만 남긴다 (CARRY_REASONS 참조).
+        # 재진입 중복은 상단 '이미 보유 중' 체크가 막으므로 이월해도 중복 매수는 없다.
         self._pending = [s for s in carry_over if not s.is_expired()]
         if self._pending:
-            logger.info(f"[배치분석] 돌파 대기 {len(self._pending)}개 이월 (다음 윈도우 재확인)")
+            _stat = ", ".join(f"{k} {v}" for k, v in sorted(carry_stats.items()))
+            logger.info(
+                f"[배치분석] 다음 윈도우 이월 {len(self._pending)}개 ({_stat})"
+            )
         self._save_json()
 
     async def _refresh_composite_cache(self):

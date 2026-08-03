@@ -310,3 +310,25 @@ PGPASSWORD=... psql -U postgres -d ai_db -c \
 2. `TradeStorage.record_entry()` TypeError (`BUY journal 기록 실패` 로그 grep)
 3. `DB 직접 기록 실패: 오픈 포지션 없음` (부분매도 로직 문제)
 4. `sync_from_kis`에서 `매도 복구 대상 trade 없음` (cross-day partial 쿼리 누락)
+
+
+## 대기 시그널이 실행되지 않을 때 (배치)
+
+`pending_signals.json`은 `execute_pending_signals()` 실행 후 **스킵 사유별로 선별 유지**된다
+(2026-08-03~). 파일이 비어 있다고 곧바로 이상은 아니다.
+
+```bash
+# 남아 있는 대기 시그널과 이월 횟수 확인
+python3 -c "import json,pathlib; \
+  d=json.loads(pathlib.Path.home().joinpath('.cache/ai_trader/pending_signals.json').read_text()); \
+  [print(s['symbol'], s['strategy'], 'retry=', s.get('retry_count',0), s.get('entry_mode')) for s in d]"
+
+# 이월 사유 집계
+journalctl -u qwq-ai-trader --since today | grep "다음 윈도우 이월"
+```
+
+- `retry_count`가 8(`MAX_CARRY_RETRIES`)에 닿으면 폐기되며 `이월 상한 도달` 경고가 남는다.
+- 갭다운·이미 보유·만료·SEPA 14:30+ 로 스킵된 건은 **의도적으로 이월하지 않는다**.
+  분류 근거는 `docs/strategies/kr-strategies.md`의 이월 정책 표 참조.
+- 13:50 자본활용률 체크는 `현금 비중 > 25%`일 때만 추가 진입을 시도한다.
+  현금이 적으면 이월분이 있어도 실행되지 않는다.
