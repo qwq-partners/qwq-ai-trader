@@ -13,6 +13,9 @@
   - 총수익률이 baseline 이상 (MIN_RETURN_GAIN 이상 개선)
   - MDD가 baseline 대비 MAX_MDD_WORSENING 이상 악화되지 않음
   - 후보의 거래 수가 MIN_TRADES 이상 (표본 부족한 결과는 신뢰하지 않음)
+  - walk-forward: 기간을 3구간으로 나눠 2구간 이상에서 baseline을 이겨야 함
+    (단일 구간 전체 수익률만 보면 특정 레짐에 우연히 맞은 파라미터가 통과한다.
+     구간 다수결은 "여러 시장 국면에서 고르게 나은가"를 본다 — 2026-08-03 도입)
 
 실행 실패(데이터 없음/예외/타임아웃) 시에는 **변경을 보류**한다.
 파라미터 변경은 급할 이유가 없으므로, 검증 못 한 변경을 적용하는 것보다
@@ -38,13 +41,19 @@ _BACKTEST_PATH = _PROJECT_ROOT / "scripts" / "backtest_strategies.py"
 
 # ── 게이트 설정 ────────────────────────────────────────────────
 # 매일 20:30 진화에서 2회 실행하므로 가볍게 유지한다 (40종목 2개월 ≈ 25초/회)
-BT_MONTHS = 3
+# walk-forward 도입으로 3→6개월 확장 (2개월×3구간). OHLCV는 캐시되므로
+# 콜드 캐시 첫 실행만 느리다 — 타임아웃을 여유 있게 잡는다.
+BT_MONTHS = 6
 BT_UNIVERSE_SIZE = 60
-BT_TIMEOUT_SEC = 600
+BT_TIMEOUT_SEC = 900
 
 MIN_RETURN_GAIN = 0.0      # 총수익률 개선 최소치 (%p). 동률은 통과시키지 않음
 MAX_MDD_WORSENING = 1.0    # MDD 악화 허용 한도 (%p)
 MIN_TRADES = 10            # 후보 백테스트 최소 거래 수
+
+WF_SEGMENTS = 3            # walk-forward 구간 수 (6개월 → 2개월×3)
+WF_MIN_WINS = 2            # 후보가 이겨야 하는 최소 구간 수
+WF_MIN_POINTS = 30         # 구간 판정에 필요한 최소 거래일 수 (미만이면 WF 생략)
 
 
 # 진화 파라미터 -> BacktestConfig 필드 매핑
@@ -184,7 +193,11 @@ class BacktestGate:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             metrics = engine.run(save_results=False)
-        return metrics or {}
+        metrics = metrics or {}
+        if metrics:
+            # walk-forward 구간 판정용 자산 곡선 (to_dict의 keep 목록에 없어 외부 노출 안 됨)
+            metrics["_equity_curve"] = list(engine.equity_curve)
+        return metrics
 
     async def verify(self, change: Dict[str, Any]) -> GateResult:
         """
@@ -252,6 +265,28 @@ class BacktestGate:
         return self._judge(baseline, candidate, strategy, parameter,
                            old_value, new_value)
 
+    # ── walk-forward 구간 수익률 ───────────────────────────
+    @staticmethod
+    def _segment_returns(curve, n_segments: int):
+        """자산 곡선을 n등분해 구간별 수익률(%) 리스트를 반환.
+
+        baseline/candidate는 동일 유니버스·동일 거래일로 시뮬레이션되므로
+        인덱스 등분만으로 두 곡선의 구간이 날짜 단위로 정렬된다.
+        """
+        if not curve or len(curve) < WF_MIN_POINTS:
+            return None
+        size = len(curve) // n_segments
+        if size < 2:
+            return None
+        rets = []
+        for i in range(n_segments):
+            lo = i * size
+            hi = (i + 1) * size if i < n_segments - 1 else len(curve)
+            start_eq = curve[lo][1]
+            end_eq = curve[hi - 1][1]
+            rets.append((end_eq - start_eq) / start_eq * 100 if start_eq > 0 else 0.0)
+        return rets
+
     # ── 판정 ───────────────────────────────────────────────
     def _judge(self, baseline: Dict, candidate: Dict, strategy: str,
                parameter: str, old_value: Any, new_value: Any) -> GateResult:
@@ -280,6 +315,26 @@ class BacktestGate:
             reason = f"수익률 개선 없음 ({gain:+.2f}%p) — 변경 기각 | {summary}"
             logger.info(f"[백테게이트] 기각: {reason}")
             return GateResult(False, reason, baseline=baseline, candidate=candidate)
+
+        # walk-forward: 전체 수익률이 좋아도 특정 구간에 몰빵된 개선이면 기각
+        b_seg = self._segment_returns(baseline.get("_equity_curve"), WF_SEGMENTS)
+        c_seg = self._segment_returns(candidate.get("_equity_curve"), WF_SEGMENTS)
+        if b_seg is not None and c_seg is not None:
+            wins = sum(1 for b, c in zip(b_seg, c_seg) if c > b)
+            seg_txt = (
+                f"구간승 {wins}/{WF_SEGMENTS} "
+                f"(base {['%.1f' % r for r in b_seg]} vs "
+                f"cand {['%.1f' % r for r in c_seg]})"
+            )
+            summary += f" | {seg_txt}"
+            if wins < WF_MIN_WINS:
+                reason = (f"walk-forward 미달 ({seg_txt}, 최소 {WF_MIN_WINS}구간) "
+                          f"— 변경 기각 | {summary}")
+                logger.info(f"[백테게이트] 기각: {reason}")
+                return GateResult(False, reason, baseline=baseline, candidate=candidate)
+        else:
+            # 자산 곡선이 짧으면(거래일 부족) WF는 생략하고 기존 기준만 적용
+            logger.warning("[백테게이트] 자산 곡선 부족 — walk-forward 판정 생략")
 
         if mdd_delta > MAX_MDD_WORSENING:
             reason = (f"MDD 악화 ({mdd_delta:+.2f}%p > {MAX_MDD_WORSENING}%p) "

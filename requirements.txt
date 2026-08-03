@@ -53,6 +53,9 @@ exchange-calendars>=4.5.0
 # === 데이터베이스 ===
 asyncpg>=0.29.0
 
+# === 성과 분석 ===
+quantstats>=0.0.75
+
 # === 유틸리티 ===
 tenacity>=8.2.0
 python-dateutil>=2.8.0

@@ -314,6 +314,20 @@ class CoreScreener:
                 var20 = sum((x - mean20) ** 2 for x in closes[-20:]) / 20
                 ind["volatility_20d"] = (var20 ** 0.5) / mean20 * 100 if mean20 > 0 else 0
 
+            # 일별 수익률 변동성 (60일) — 저변동성 팩터 감점용 (2026-08-03)
+            # volatility_20d는 가격 수준의 분산이라 추세 종목에서 과대평가된다.
+            # 급락형 종목 배제에는 일수익률 σ가 맞다.
+            if len(closes) >= 61:
+                rets = [
+                    (closes[i] - closes[i - 1]) / closes[i - 1] * 100
+                    for i in range(len(closes) - 60, len(closes))
+                    if closes[i - 1] > 0
+                ]
+                if len(rets) >= 30:
+                    mean_r = sum(rets) / len(rets)
+                    var_r = sum((r - mean_r) ** 2 for r in rets) / len(rets)
+                    ind["ret_vol_60d"] = var_r ** 0.5
+
             # 거래대금 평균 (20일)
             if len(volumes) >= 20 and len(closes) >= 20:
                 trading_values = [closes[-(20-j)] * volumes[-(20-j)] for j in range(20)]
@@ -472,10 +486,38 @@ class CoreScreener:
             rs_score = self._score_rs_rating(ind, reasons)
             score += rs_score
 
-            c.score = min(score, 100.0)
+            # ── 저변동성 감점 (0 ~ -10, 2026-08-03) ──
+            # Low Volatility Factor (Sharpe 0.717) 응용 — 가점 없이 감점만 둔다.
+            # 코어홀딩은 장기 보유라 급등락형이 들어오면 stale/손절 사고로 이어진다
+            # (2026-06-04 -263k 사례). 기존 min_score 보정을 흔들지 않도록 감점 전용.
+            vol_penalty = self._score_low_vol_penalty(ind, reasons)
+            score += vol_penalty
+
+            c.score = max(0.0, min(score, 100.0))
             c.reasons = reasons
 
         return candidates
+
+    @staticmethod
+    def _score_low_vol_penalty(ind: Dict, reasons: List[str]) -> float:
+        """일별 수익률 변동성(60일 σ) 기반 감점.
+
+        KR 대형주 일수익률 σ는 보통 1.5~2.5%. 3% 이상은 테마성 급등락 구간이다.
+        데이터 없으면 감점하지 않는다 (신규 상장 등 — 다른 필터가 거른다).
+        """
+        vol = ind.get("ret_vol_60d")
+        if vol is None:
+            return 0.0
+        if vol >= 4.0:
+            penalty = -10.0
+        elif vol >= 3.0:
+            penalty = -6.0
+        elif vol >= 2.5:
+            penalty = -3.0
+        else:
+            return 0.0
+        reasons.append(f"고변동성 σ{vol:.1f}%({penalty:+.0f})")
+        return penalty
 
     def _score_trend(self, ind: Dict, reasons: List[str]) -> float:
         """추세 안정성 (20점, 2026-05-11 A안 축소)

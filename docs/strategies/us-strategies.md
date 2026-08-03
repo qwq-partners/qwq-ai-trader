@@ -87,3 +87,15 @@ KR 엔진의 3대 기능을 이식:
 
 bear 국면에서 XLP(필수소비재)/XLV(헬스케어) 가산, XLY(경기소비재)/XLK(기술) 감점이
 목적. finviz_meta.sector → ETF 매핑은 14개 섹터 명칭 지원.
+
+## 캘린더 시즈널리티 오버레이 (2026-08-03 적용)
+
+`src/utils/calendar_seasonality.py` — KR과 공용 모듈. US 매수 사이징에 캘린더 배율 적용.
+
+- **turn-of-month** (월말 2거래일 + 월초 3거래일): ×1.10
+- **옵션만기주** (3번째 금요일 낀 주 월~금): ×1.05 — US 전용 (논문 근거가 미국 시장)
+- 적용 지점: `us_scheduler.py` 매수 사이징 — `ATR배율 × 체제배율 × 캘린더배율` 통합
+- 날짜 기준: `eng.session.now_et()` 미 동부 날짜 (KST 새벽 세션의 날짜 어긋남 방지)
+- ATR배율 ≤1.0 · 체제배율 ≤1.0이므로 최대 부스트 ×1.155로도 max_position_pct(35%) 이내
+- 비활성화: `CALENDAR_SEASONALITY=0`
+- 상세: `docs/strategies/kr-strategies.md`의 오버레이 섹션 참조

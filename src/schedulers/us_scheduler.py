@@ -1083,7 +1083,7 @@ class USScheduler:
             logger.info(f"[US 시그널] {symbol} — 리스크 체크 실패: {reject_reason}")
             return False
 
-        # ── ATR 기반 포지션 사이징 + 체제 배율 ────────────────────────
+        # ── ATR 기반 포지션 사이징 + 체제 배율 + 캘린더 시즈널리티 ──────
         _pos_mult = 1.0
         if signal.metadata:
             _pos_mult = signal.metadata.get("position_multiplier", 1.0)
@@ -1091,13 +1091,21 @@ class USScheduler:
         _regime_boost = 1.0
         if getattr(eng, 'market_regime', None):
             _regime_boost = eng.market_regime.params.get("position_mult_boost", 1.0)
-        _total_mult = _pos_mult * _regime_boost
+        # 캘린더 시즈널리티 (월말월초 + 옵션만기주) — 날짜는 미 동부 기준
+        _cal_mult = 1.0
+        try:
+            from src.utils.calendar_seasonality import calendar_multiplier
+            _cal_mult, _ = calendar_multiplier(eng.session.now_et().date(), "us")
+        except Exception as _cal_err:
+            logger.debug(f"[US 사이징] 시즈널리티 계산 실패 (무시): {_cal_err}")
+        _total_mult = _pos_mult * _regime_boost * _cal_mult
         if _total_mult != 1.0 and qty > 1:
             adjusted = max(1, int(qty * _total_mult))
             if adjusted != qty:
                 logger.info(
                     f"[US 사이징] {symbol} {qty}→{adjusted}주 "
-                    f"(ATR={_pos_mult:.2f} × 체제={_regime_boost:.2f})"
+                    f"(ATR={_pos_mult:.2f} × 체제={_regime_boost:.2f} "
+                    f"× 캘린더={_cal_mult:.2f})"
                 )
                 qty = adjusted
 

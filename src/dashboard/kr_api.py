@@ -65,6 +65,8 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/market/indices", handler.get_market_indices)
     app.router.add_get("/api/core-holdings", handler.get_core_holdings)
     app.router.add_get("/api/benchmark", handler.get_benchmark)
+    app.router.add_get("/api/performance/quantstats", handler.get_quantstats_report)
+    app.router.add_get("/api/performance/quantstats/status", handler.get_quantstats_status)
 
 
 def _cap_text(value, limit: int):
@@ -813,6 +815,31 @@ class KRAPIHandler:
         except Exception as e:
             logger.debug(f"[벤치마크] KOSPI 조회 오류: {e}")
             return web.json_response([])
+
+    # ────────────────────────────────────────────────────────────
+    # quantstats 성과 tear sheet
+    # ────────────────────────────────────────────────────────────
+
+    async def get_quantstats_report(self, request: web.Request) -> web.Response:
+        """GET /api/performance/quantstats?refresh=1 — tear sheet HTML 서빙"""
+        from ..analytics.quantstats_report import generate_quantstats_report
+        force = request.query.get("refresh") == "1"
+        try:
+            # 생성은 무겁다(pykrx 벤치마크 조회 + 차트 렌더링, 수십 초) — 스레드로 격리
+            path = await asyncio.to_thread(generate_quantstats_report, force)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except Exception as e:
+            logger.exception(f"[성과리포트] 생성 실패: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+        return web.FileResponse(
+            path, headers={"Content-Type": "text/html; charset=utf-8"}
+        )
+
+    async def get_quantstats_status(self, request: web.Request) -> web.Response:
+        """GET /api/performance/quantstats/status — 리포트 존재/신선도"""
+        from ..analytics.quantstats_report import report_status
+        return web.json_response(report_status())
 
     # ────────────────────────────────────────────────────────────
     # 시그널 이벤트 API (매수 차단/통과 이력 + 통계)

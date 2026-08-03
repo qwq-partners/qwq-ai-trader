@@ -1,5 +1,51 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — feat(quant): awesome-systematic-trading 검토 반영 4건 (P0×2 + P1×2)
+
+[paperswithbacktest/awesome-systematic-trading](https://github.com/paperswithbacktest/awesome-systematic-trading)
+(논문 전략 40여 개 재현 백테스트 + 라이브러리 카탈로그)를 전체 분석한 뒤,
+우리 제약(KR 왕복 수수료 0.227%, 공매도 불가, 소자본, T+1)에 맞는 것만 선별 도입.
+Qlib/FinRL 등 RL 계열·pairs trading·프레임워크 교체는 명시적으로 기각
+(LLM 진화 시스템과의 해석가능성 충돌, 수수료 구조 불일치).
+
+### P0-1. quantstats 성과 tear sheet (`src/analytics/quantstats_report.py` 신설)
+- equity 스냅샷 108일치의 `daily_pnl_pct` → 일별 수익률 시계열 → quantstats HTML 리포트
+  (자산 곡선 차분이 아니므로 입출금/외부계좌 편입에 왜곡 없음)
+- 벤치마크: FDR KOSPI 1차 → pykrx 폴백 (KRX 인증 이슈는 2026-04-21 stock_master 사고와 동일 패턴)
+- API: `GET /api/performance/quantstats`(6h 캐시, `?refresh=1`), `/status` — `kr_api.py`
+- `/performance` 페이지에 📊 퀀트 리포트 버튼. `requirements.txt`에 quantstats 추가
+- 검증: 생성 4.4초/393KB, 엔드포인트 200 확인
+
+### P0-2. BacktestGate walk-forward 확장 (`backtest_gate.py`)
+- 기간 3→6개월, 판정에 **구간승 기준 추가**: 2개월×3구간 중 2구간 이상 baseline 초과
+- 단일 구간 총수익률만 보면 특정 레짐에 우연히 맞은 파라미터가 통과하는
+  과적합 취약점(López de Prado) 보완. 한 구간에 개선이 몰린 후보는 총수익률이 좋아도 기각
+- `_run_once`가 `_equity_curve`를 회수(외부 직렬화에는 미노출), `_segment_returns` 정적 메서드
+- 타임아웃 600→900s. 실측: 6개월×2회 49초(캐시 워밍). 합성 곡선 단위 검증 +
+  실데이터 e2e 검증(sepa.min_score 60→65 후보를 -28.5%p로 정상 기각) 완료
+
+### P1-1. 캘린더 시즈널리티 오버레이 (`src/utils/calendar_seasonality.py` 신설)
+- 독립 전략이 아닌 **사이징 배율 오버레이**: turn-of-month(월말 2+월초 3거래일) KR/US ×1.10,
+  US 옵션만기주(3째 금요일 주) ×1.05. 부스트만 있고 차단/축소 없음
+- KR: `engine.py` 사이징에 적용 후 max_position_pct 상한 재적용.
+  US: `us_scheduler.py` ATR×체제×캘린더 통합(최대 ×1.155로 35% 상한 이내), 미 동부 날짜 기준
+- KR 옵션만기주는 미적용 (논문 근거가 미국 시장). `CALENDAR_SEASONALITY=0`으로 비활성화
+- 검증: 2026-07/08 경계일 11케이스 판정 정확
+
+### P1-2. 코어홀딩 저변동성 감점 (`core_screener.py`)
+- 일별 수익률 60일 σ(`ret_vol_60d`) 신설 — 기존 volatility_20d는 가격 수준 분산이라
+  추세 종목에서 과대평가됨
+- 감점 전용(σ≥4% -10 / ≥3% -6 / ≥2.5% -3): min_score 보정을 흔들지 않고 급등락형만 배제.
+  2026-06-04 코어홀딩 -263k 사고(급락형 종목 stale 사각지대)의 진입 단계 예방
+- reasons에 `고변동성 σx.x%(-N)` 태그 → 대시보드에서 감점 사유 확인 가능
+
+수정: `src/analytics/quantstats_report.py`(신설), `src/utils/calendar_seasonality.py`(신설),
+`src/core/evolution/backtest_gate.py`, `src/core/engine.py`, `src/schedulers/us_scheduler.py`,
+`src/signals/screener/core_screener.py`, `src/dashboard/kr_api.py`,
+`src/dashboard/templates/performance.html`, `requirements.txt`
+문서: `docs/evolution/evolution-system.md`, `docs/strategies/kr-strategies.md`,
+`docs/strategies/us-strategies.md`, `docs/operations/runbook.md`
+
 ## 2026-08-03 — fix(agents): 팀 심의가 매수로 이어지지 않던 원인 2건 (입력 기아)
 
 심의 13건(8/2~8/3)이 전부 `stance=hold`, 신규 매수 0건이었다.

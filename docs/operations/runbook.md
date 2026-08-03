@@ -66,6 +66,26 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
 | `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
 
+## 퀀트 성과 리포트 (quantstats tear sheet, 2026-08-03~)
+
+`/performance` 페이지의 **📊 퀀트 리포트** 버튼 → `/api/performance/quantstats`.
+Sharpe/Sortino/Calmar, 월별 히트맵, KOSPI 대비 알파·베타를 담은 HTML tear sheet.
+
+```bash
+# 강제 재생성 (기본 6시간 캐시)
+curl "http://localhost:8080/api/performance/quantstats?refresh=1" -o /dev/null
+
+# 리포트 존재/신선도 확인
+curl http://localhost:8080/api/performance/quantstats/status
+```
+
+- 원천: `~/.cache/ai_trader/journal/equity_*.json`의 `daily_pnl_pct`
+  (자산 곡선 차분이 아니라서 입출금·외부계좌 편입에 왜곡되지 않음)
+- 산출물: `~/.cache/ai_trader/reports/quantstats_kr.html` (원자적 교체)
+- 벤치마크: FDR KOSPI(KS11) 1차 → pykrx 폴백 → 실패 시 벤치마크 없이 생성
+- 표본 20거래일 미만이면 400 응답 (통계 무의미)
+- 구현: `src/analytics/quantstats_report.py`
+
 ## 가상 오피스 (`/office`, 2026-08-03~)
 
 엔진 상태를 8명 캐릭터로 시각화. 대시보드 `/office` 또는 모바일 하단 nav "오피스".

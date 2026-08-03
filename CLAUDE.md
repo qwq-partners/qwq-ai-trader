@@ -176,9 +176,16 @@ tools/
 ### 코어홀딩 A안 (2026-05-11~ "장기 추세 캐처")
 - **진입 필터**: MA200 위 + 60일 ≥+5% + 신고가 80% 이내 → 박스권 자동 배제
 - **점수 (100점)**: 추세 20 + 펀더 20 + 수급 20 + 모멘텀 30 + RS등급 10
+  + **저변동성 감점** 0~-10 (일수익률 60일 σ 기준, 2026-08-03~, 급등락형 배제)
 - **청산**: stop_loss 10%, trailing 12% (느슨), 분할익절 OFF, max_holding 무제한
 - **stale**: Tier1 20영업일±3%, Tier2 30영업일±3% OR 20영업일±2%+거래량50%
 - **리밸런싱**: 격주 (rebalance_interval_weeks=2)
+
+### 캘린더 시즈널리티 오버레이 (2026-08-03~)
+- `src/utils/calendar_seasonality.py` — 전 전략 매수 **사이징 배율** (독립 전략 아님)
+- turn-of-month(월말 2+월초 3거래일) KR/US ×1.10, US 옵션만기주 ×1.05 (KR 만기주 미적용)
+- 부스트 전용(차단·축소 없음), 상한(max_position_pct)은 재적용됨
+- 비활성화: `CALENDAR_SEASONALITY=0`
 
 ---
 
@@ -292,6 +299,7 @@ journalctl -u qwq-ai-trader -f                                 # 실시간 로�
 - `/api/us/portfolio` — US
 - `/api/stream` — SSE 스트림
 - `/api/office/status` — 가상 오피스 상태 (GET 조회 / POST 외부 푸시)
+- `/api/performance/quantstats` — quantstats tear sheet HTML (6h 캐시, `?refresh=1`)
 
 **페이지**: `/` 실시간 · `/trades` · `/performance` · `/themes` · `/evolution` ·
 `/engine` · `/office` 가상 오피스 · `/principles` · `/settings`
@@ -399,8 +407,9 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 - 최대 1개 파라미터만 변경 (race condition 방지)
 - 평가 기간: 5영업일 + 10건 이상 거래
 - 신뢰도 >= 0.6인 파라미터만 자동 적용
-- **백테스트 사전 검증 (2026-08-02~)**: 적용 전 A/B 백테스트(3개월/60종목)로 개선 확인.
-  수익률 개선 + MDD 악화 ≤1%p + 거래 ≥10건이어야 통과. 실패 시 **보류(fail-closed)**.
+- **백테스트 사전 검증 (2026-08-02~)**: 적용 전 A/B 백테스트(6개월/60종목)로 개선 확인.
+  수익률 개선 + **walk-forward 구간승 2/3** (2개월×3구간, 2026-08-03~) + MDD 악화 ≤1%p
+  + 거래 ≥10건이어야 통과. 실패 시 **보류(fail-closed)**.
   `EVOLUTION_BACKTEST_GATE=0`으로 비활성화 가능
 - 즉시 롤백: 손익비 < 1.0
 - 내장 규칙: 승률 < 40% → 진입 기준 +5, 승률 > 65% → 진입 기준 -5

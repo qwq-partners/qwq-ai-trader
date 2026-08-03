@@ -2108,6 +2108,17 @@ class RiskManager:
         if position_multiplier != 1.0:
             position_value *= Decimal(str(position_multiplier))
 
+        # 캘린더 시즈널리티 부스트 (월말월초) — 개별 포지션 상한(max_value)은 재적용
+        try:
+            from ..utils.calendar_seasonality import calendar_multiplier
+            _cal_mult, _ = calendar_multiplier(date.today(), "kr")
+            if _cal_mult != 1.0:
+                position_value = min(
+                    position_value * Decimal(str(_cal_mult)), max_value
+                )
+        except Exception as _cal_err:
+            logger.debug(f"[리스크] 시즈널리티 계산 실패 (무시): {_cal_err}")
+
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))
         if position_value < min_val:
