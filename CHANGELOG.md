@@ -1,5 +1,50 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — feat(quant): P2 3건 — 연구 백테스터·어닝 리버설(비활성)·자산증가율 감점
+
+P0/P1(ae22214)에 이어 awesome-systematic-trading 검토의 P2 항목 구현.
+핵심 설계: **"아이디어 → quick_backtest 1차 검증 → 정식 백테스터 → BacktestGate"
+3단 깔때기**를 만들고, 신규 전략은 검증 통과 전 활성화하지 않는다.
+
+### P2-3. 신규 전략 1차 스크리닝 도구 (`scripts/quick_backtest.py` 신설)
+- **연구 전용 venv 분리** (`venv-research/`, gitignore): vectorbt+numba를 운영 venv에
+  설치하면 numpy(2.4.4) 충돌로 실거래 엔진이 깨질 수 있어 완전 격리
+- 내장 아이디어 3종 + 실행 결과:
+  - `tom` (turn-of-month): **10년 유효** (SPY 윈도우 일평균 +0.092% vs +0.052%,
+    KOSPI/QQQ 동일 방향) but **최근 3년 소멸** → P1-1 오버레이는 소폭(×1.10)이므로
+    유지하되 분기 재검증 필요 항목으로 문서화
+  - `lowvol` (KR 저변동성 quintile): **P1-2 강한 지지** — Q5 고변동군 20일 포워드
+    +0.41%·승률 39.6% vs Q1 +5.63%·66.1%. 감점 임계 σ≥4% = Q5 경계와 일치
+  - `earnings_reversal`: **기각** — 아래 P2-1 참조
+- 판정 가이드가 출력에 포함됨 (채택/기각 기준 명시)
+
+### P2-1. US 어닝 리버설 전략 — 구현 후 **검증 기각** (`us/earnings_reversal.py`, enabled: false 고정)
+- 발표 전 5거래일 낙폭 ≥5% → 발표 전 매수 → 발표 후 3일 내 청산 (드리프트의 거울)
+- `eng._earnings_upcoming` 신설 (finnhub 캘린더 오늘~+2일, 일 1회 갱신) —
+  스케줄러 양쪽 스캔 경로에서 발표 예정 종목만 평가 허용, **캘린더 없으면 발화 금지
+  (fail-closed)**. 발표 관통 갭 리스크로 사이징 ATR×0.5 고정 절반
+- **검증 결과 (깔때기가 첫 실전에서 작동)**: finnhub 소표본(90건)은 방향성 지지처럼
+  보였으나(낙폭군 +2.99%), yfinance 어닝 이력으로 표본을 3,711건으로 늘리자
+  **낙폭과대군 -0.33%·승률 46.8% < 베이스라인 +0.36% — 리버설 엣지 없음, 기각.**
+  오히려 급등군 +0.97%(t=2.01)로 드리프트 방향이 유효 → earnings_drift 재활성화
+  (EPS surprise 가드 부착) 검토 근거로 기록
+- 코드·캘린더 인프라는 유지 (레짐 변화 대비 + 어닝 데이터 파이프라인 재사용).
+  전용 StrategyType.EARNINGS_REVERSAL 추가 (EARNINGS_DRIFT 재사용 시 재시작 복원과
+  청산 설정이 드리프트로 오귀속되는 버그 — 리뷰에서 발견·수정)
+
+### P2-2. 코어홀딩 자산 확장 감점 (`fundamentals/asset_growth.py` 신설)
+- DART `fnlttSinglAcnt` 자산총계(당기/전기) → 전년 대비 증가율. CFS→OFS 폴백,
+  30일 디스크 캐시, corp_code 맵은 기존 DartChecker 재사용
+- 감점 전용: ≥50% → -5 / ≥30% → -3 (데이터 없으면 0, fail-open)
+- `run_full_scan` 4.5단계 `_enrich_asset_growth` (수급 보강과 동일 패턴)
+- 실조회 검증: 삼성전자 +10.2%(감점 없음), SK하이닉스 +46.9%(-3), 카카오 +7.8%
+
+수정: `scripts/quick_backtest.py`(신설), `src/strategies/us/earnings_reversal.py`(신설),
+`src/signals/fundamentals/asset_growth.py`(신설), `src/signals/screener/core_screener.py`,
+`src/schedulers/us_scheduler.py`, `scripts/run_trader.py`, `config/default.yml`, `.gitignore`
+문서: `docs/strategies/kr-strategies.md`, `docs/strategies/us-strategies.md`,
+`docs/operations/runbook.md`, `CLAUDE.md`
+
 ## 2026-08-03 — fix(agents): Bear 판정 기준 캘리브레이션 — 매수 경로 병목의 실체
 
 입력 기아 수정(fdba63c) 후 전체 사이클을 정밀 추적한 결과, 더 깊은 병목이 나왔다.

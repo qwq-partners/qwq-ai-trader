@@ -267,6 +267,18 @@ Low Volatility Factor(재현 Sharpe 0.717) 응용 — 코어홀딩 후보 점수
 - 가점 없이 감점만: 기존 min_score(70) 보정을 흔들지 않으면서 급등락형 종목만 배제
 - 배경: 코어홀딩은 장기 보유라 급등락형이 들어오면 stale/손절 사고로 직결
   (2026-06-04 -263k 사례)
+- **검증 (quick_backtest --idea lowvol, KR 60종목 12개월 워킹포워드)**:
+  Q5 고변동군(σ4.3~9.1%) 20일 포워드 +0.41%·승률 39.6% vs
+  Q1 저변동군 +5.63%·66.1% — 감점 임계 σ≥4%가 Q5 경계와 일치, 설계 타당 확인
+
+### 자산 확장 감점 (`core_screener.py` + `fundamentals/asset_growth.py`, 2026-08-03~)
+Asset Growth Effect(재현 Sharpe 0.835, 연간 리밸런싱) 응용 — 역시 **감점 전용**.
+- 데이터: DART `fnlttSinglAcnt` 사업보고서 자산총계 (당기/전기) → 전년 대비 증가율
+  - 연결(CFS) 우선 → 별도(OFS) 폴백, 30일 디스크 캐시 (연 단위 데이터)
+  - corp_code 맵은 기존 DartChecker 인프라 재사용
+- 감점: 증가율 ≥50% → -5 / ≥30% → -3 / 그 외 0 (데이터 없으면 감점 없음, fail-open)
+- 근거: 증자·차입·인수로 총자산을 급격히 불린 기업의 후속 수익률 저하 (퀄리티 팩터)
+- 스캔 흐름: `run_full_scan` 4.5단계 `_enrich_asset_growth` (수급 보강과 동일 패턴)
 
 ---
 
@@ -286,6 +298,10 @@ awesome-systematic-trading 재현 백테스트의 저변동 캘린더 이상현�
   US `us_scheduler.py` (ATR×체제×캘린더 통합 배율, 날짜는 미 동부 기준)
 - 비활성화: 환경변수 `CALENDAR_SEASONALITY=0`
 - KR 거래일 판정은 `is_kr_market_holiday()`, US는 주말 제외 근사(공휴일 미스는 ±1일 오차)
+- **검증 (quick_backtest --idea tom)**: 10년 기준 ToM 윈도우 일평균이 그 외 대비
+  SPY +0.092% vs +0.052% / KOSPI +0.086% vs +0.048% / QQQ +0.115% vs +0.074%로
+  유효. 단 **최근 3년은 효과 소멸** (윈도우가 오히려 낮음) — 장기 유효·최근 약화로
+  판단해 ×1.10 소폭 부스트만 유지. 분기마다 재검증하고 계속 부진하면 제거할 것.
 
 ---
 

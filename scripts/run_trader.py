@@ -1113,6 +1113,16 @@ class UnifiedTradingBot:
             except Exception as e:
                 logger.warning(f"[US] EarningsDrift 전략 로드 실패: {e}")
 
+            try:
+                from src.strategies.us.earnings_reversal import EarningsReversalStrategy
+                us_er_cfg = us_strategies_cfg.get("earnings_reversal", {})
+                # 검증 전 전략 — 명시적 enabled: true 없이는 로드하지 않는다
+                if us_er_cfg.get("enabled", False):
+                    us_engine.strategies.append(EarningsReversalStrategy(config=us_er_cfg))
+                    logger.info("[US] EarningsReversal 전략 로드")
+            except Exception as e:
+                logger.warning(f"[US] EarningsReversal 전략 로드 실패: {e}")
+
             logger.info(f"[US] 전략 로드: {[s.name for s in us_engine.strategies]}")
 
             # 5. US 리스크 매니저
@@ -1920,6 +1930,7 @@ class _USEngineBundle:
         self._stopped_today: Set[str] = set()        # 당일 손절/트레일링 청산 종목 (재매수 방지)
         self._order_fail_blacklist: Set[str] = set() # 주문 영구실패 종목 (ETP미신청, 매수불가 등)
         self._earnings_today: Set[str] = set()
+        self._earnings_upcoming: Set[str] = set()    # 오늘~+2일 발표 예정 (리버설 진입 대상)
         self._earnings_last_refresh: Optional[date] = None
         self._finviz_last_refresh: Optional[date] = None
         self._last_screen_result = None

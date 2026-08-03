@@ -482,6 +482,23 @@ us:
       stop_loss_pct: 5.5
       max_holding_days: 20
 
+    earnings_reversal:
+      # 어닝 발표 전 낙폭과대 → 발표 후 반등 (재현 Sharpe 0.785의 long-only 변형)
+      # ⛔ 2026-08-03 검증 기각 — 활성화 금지 (재검증 없이 true로 바꾸지 말 것):
+      #   quick_backtest 24개월 S&P500 3,711 이벤트에서 낙폭과대군(pre5d≤-5%)
+      #   3일 수익률 -0.33%·승률 46.8% < 베이스라인 +0.36%. 리버설 엣지 없음.
+      #   오히려 급등군 +0.97%(t=2.01) — 드리프트 방향이 유효 (earnings_drift
+      #   재활성화 검토 근거). 코드는 레짐 변화 대비 + 캘린더 인프라 재사용용으로 유지.
+      enabled: false
+      time_horizon: swing
+      min_pre_drop_pct: 5.0      # 발표 전 5거래일 낙폭 기준
+      max_day_drop_pct: 8.0      # 당일 이 이상 폭락 중이면 진입 금지 (떨어지는 칼)
+      min_score: 65
+      min_rr_ratio: 1.2
+      stop_loss_pct: 5.0
+      take_profit_pct: 6.0
+      max_holding_days: 3        # 발표 후 반등은 단기 — 3일 내 청산
+
   exit_manager:
     enable_partial_exit: true
     first_exit_pct: 3.0

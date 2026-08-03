@@ -608,6 +608,17 @@ class USScheduler:
                 if eng.earnings_provider and eng._earnings_last_refresh != today:
                     try:
                         eng._earnings_today = await eng.earnings_provider.get_today_earnings(today)
+                        # 발표 예정(오늘~+2일) — EarningsReversal 진입 대상
+                        try:
+                            _upcoming_map = await eng.earnings_provider.get_earnings_calendar(
+                                today, today + timedelta(days=2)
+                            )
+                            eng._earnings_upcoming = (
+                                set().union(*_upcoming_map.values()) if _upcoming_map else set()
+                            )
+                        except Exception as e:
+                            logger.warning(f"[US Earnings] 발표예정 갱신 실패: {e}")
+                            eng._earnings_upcoming = set()
                         eng._earnings_last_refresh = today
                     except Exception as e:
                         logger.warning(f"[US Earnings] 갱신 실패: {e}")
@@ -834,6 +845,12 @@ class USScheduler:
                         strategy.name == "earnings_drift"
                         and eng._earnings_today
                         and symbol not in eng._earnings_today
+                    ):
+                        continue
+                    # 리버설은 발표 예정 종목에서만 — 캘린더 없으면 발화 금지 (fail-closed)
+                    if (
+                        strategy.name == "earnings_reversal"
+                        and symbol not in getattr(eng, "_earnings_upcoming", set())
                     ):
                         continue
 
@@ -2587,14 +2604,24 @@ class USScheduler:
             if pos.highest_price is None:
                 pos.highest_price = pos.current_price
             # 전략의 time_horizon 찾기
+            _matched_strat = None
             for strat in eng.strategies:
                 if strat.strategy_type.value == pos.strategy:
                     pos.time_horizon = strat.time_horizon
+                    _matched_strat = strat
                     break
 
             # ExitManager에 포지션 등록
+            # earnings_reversal만 전략별 max_holding(3일)을 전달한다 — 다른 전략까지
+            # 일괄 전달하면 글로벌 기본(10일)로 돌던 기존 포지션 동작이 바뀐다
             try:
-                eng.exit_manager.register_position(pos)
+                _mh = None
+                if _matched_strat is not None and _matched_strat.name == "earnings_reversal":
+                    _mh = getattr(_matched_strat, "max_holding_days", None)
+                if _mh:
+                    eng.exit_manager.register_position(pos, max_holding_days=_mh)
+                else:
+                    eng.exit_manager.register_position(pos)
             except Exception as e:
                 logger.debug(f"[US 체결] {symbol} ExitManager 등록 실패: {e}")
 
@@ -3135,6 +3162,12 @@ class USScheduler:
                     strategy.name == "earnings_drift"
                     and eng._earnings_today
                     and symbol not in eng._earnings_today
+                ):
+                    continue
+                # 리버설은 발표 예정 종목에서만 — 캘린더 없으면 발화 금지 (fail-closed)
+                if (
+                    strategy.name == "earnings_reversal"
+                    and symbol not in getattr(eng, "_earnings_upcoming", set())
                 ):
                     continue
 

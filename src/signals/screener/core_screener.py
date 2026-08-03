@@ -90,6 +90,9 @@ class CoreScreener:
         # 4단계: 수급 데이터 보강
         await self._enrich_supply_demand(filtered)
 
+        # 4.5단계: 총자산 증가율 보강 (Asset Growth 퀄리티 감점용, 2026-08-03)
+        await self._enrich_asset_growth(filtered)
+
         # 5단계: 스코어링
         scored = self._score_candidates(filtered)
 
@@ -415,6 +418,51 @@ class CoreScreener:
         except Exception as e:
             logger.warning(f"[코어스크리너] 수급 데이터 조회 실패: {e}")
 
+    # 자산증가율 보강 가드 — DART 장애 시 스캔 전체가 늘어지는 것 방지
+    _AG_TIME_BUDGET_SEC = 90.0    # 첫 스캔(캐시 없음)도 이 안에 끝나야 한다
+    _AG_MAX_CONSEC_FAIL = 5
+
+    async def _enrich_asset_growth(self, candidates: List[CoreCandidate]) -> None:
+        """DART 총자산 증가율 보강 — 실패해도 스캔은 계속 (감점만 생략됨)"""
+        try:
+            from ..fundamentals.asset_growth import get_asset_growth_provider
+            provider = get_asset_growth_provider()
+        except Exception as e:
+            logger.debug(f"[코어스크리너] 자산증가율 프로바이더 로드 실패 (생략): {e}")
+            return
+
+        import time as _time
+        started = _time.monotonic()
+        enriched = 0
+        consec_fail = 0
+        for i, c in enumerate(candidates):
+            if _time.monotonic() - started > self._AG_TIME_BUDGET_SEC:
+                logger.warning(
+                    f"[코어스크리너] 자산증가율 시간 예산 초과 — "
+                    f"{i}/{len(candidates)}개에서 중단 (나머지는 감점 생략)"
+                )
+                break
+            try:
+                growth = await provider.get_asset_growth(c.symbol)
+                consec_fail = 0
+            except Exception as e:
+                logger.debug(f"[코어스크리너] {c.symbol} 자산증가율 조회 실패: {e}")
+                consec_fail += 1
+                if consec_fail >= self._AG_MAX_CONSEC_FAIL:
+                    logger.warning(
+                        f"[코어스크리너] 자산증가율 연속 {consec_fail}회 실패 — 중단"
+                    )
+                    break
+                continue
+            if growth is not None:
+                c.indicators["asset_growth_pct"] = growth
+                enriched += 1
+        if candidates:
+            logger.info(
+                f"[코어스크리너] 자산증가율 보강: {enriched}/{len(candidates)}개 "
+                f"({_time.monotonic() - started:.1f}s)"
+            )
+
     def _apply_base_filter(self, candidates: List[CoreCandidate]) -> List[CoreCandidate]:
         """기본 필터 + 진입 모멘텀 필터 (2026-05-11 A안)
 
@@ -493,10 +541,35 @@ class CoreScreener:
             vol_penalty = self._score_low_vol_penalty(ind, reasons)
             score += vol_penalty
 
+            # ── 자산 확장 감점 (0 ~ -5, 2026-08-03) ──
+            # Asset Growth Effect (Sharpe 0.835) 응용 — 총자산 급증 기업 감점.
+            ag_penalty = self._score_asset_growth_penalty(ind, reasons)
+            score += ag_penalty
+
             c.score = max(0.0, min(score, 100.0))
             c.reasons = reasons
 
         return candidates
+
+    @staticmethod
+    def _score_asset_growth_penalty(ind: Dict, reasons: List[str]) -> float:
+        """총자산 증가율(전년 대비) 기반 감점.
+
+        논문: 자산 증가율 하위 기업이 상위 기업을 장기 아웃퍼폼.
+        증자·차입·인수로 몸집을 급격히 불린 기업의 후속 수익률이 나쁘다.
+        데이터 없으면 감점하지 않는다 (DART 미커버 종목 등).
+        """
+        growth = ind.get("asset_growth_pct")
+        if growth is None:
+            return 0.0
+        if growth >= 50.0:
+            penalty = -5.0
+        elif growth >= 30.0:
+            penalty = -3.0
+        else:
+            return 0.0
+        reasons.append(f"자산급증 +{growth:.0f}%({penalty:+.0f})")
+        return penalty
 
     @staticmethod
     def _score_low_vol_penalty(ind: Dict, reasons: List[str]) -> float:

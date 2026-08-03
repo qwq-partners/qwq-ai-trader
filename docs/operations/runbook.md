@@ -66,6 +66,24 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
 | `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
 
+## 신규 전략 1차 스크리닝 (quick_backtest, 2026-08-03~)
+
+정식 백테스터에 올리기 전에 아이디어를 빠르게 기각/채택하는 연구 도구.
+**운영 venv가 아니라 연구 venv로 실행** (vectorbt/numba의 numpy 충돌 방지 —
+운영 venv에 vectorbt를 설치하지 말 것):
+
+```bash
+./venv-research/bin/python scripts/quick_backtest.py --idea tom --symbol SPY --months 120
+./venv-research/bin/python scripts/quick_backtest.py --idea lowvol
+./venv-research/bin/python scripts/quick_backtest.py --idea earnings_reversal --months 24
+```
+
+- 깔때기: 아이디어 → quick_backtest → 통과 시 backtest_strategies.py 정식 구현 → BacktestGate
+- `venv-research/`는 gitignore 대상 (재생성: `python3 -m venv venv-research &&
+  ./venv-research/bin/pip install vectorbt pykrx finance-datareader yfinance`)
+- lowvol 아이디어는 정식 백테스터의 OHLCV 캐시를 재활용하므로 캐시가 없으면
+  `backtest_strategies.py`를 먼저 1회 실행
+
 ## 퀀트 성과 리포트 (quantstats tear sheet, 2026-08-03~)
 
 `/performance` 페이지의 **📊 퀀트 리포트** 버튼 → `/api/performance/quantstats`.

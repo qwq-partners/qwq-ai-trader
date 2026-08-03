@@ -99,3 +99,23 @@ bear 국면에서 XLP(필수소비재)/XLV(헬스케어) 가산, XLY(경기소�
 - ATR배율 ≤1.0 · 체제배율 ≤1.0이므로 최대 부스트 ×1.155로도 max_position_pct(35%) 이내
 - 비활성화: `CALENDAR_SEASONALITY=0`
 - 상세: `docs/strategies/kr-strategies.md`의 오버레이 섹션 참조
+
+## 4. Earnings Reversal (`src/strategies/us/earnings_reversal.py`) — **⛔ 검증 기각 (비활성 고정)**
+
+- **현재 상태: `enabled: false` — 2026-08-03 검증에서 기각, 재검증 없이 활성화 금지**
+- **기각 근거 (quick_backtest, 24개월 S&P500 3,711 이벤트, yfinance 어닝 이력)**:
+  낙폭과대군(pre5d≤-5%, n=233) 발표 후 3일 평균 **-0.33%·승률 46.8%** <
+  베이스라인 +0.36%. 낙폭군(≤-3%)도 +0.40%로 엣지 없음.
+  **오히려 급등군(≥+5%, n=449)이 +0.97% (t=2.01)** — 리버설이 아니라 드리프트
+  (추세 지속) 방향이 유효. 소표본(finnhub 90건)의 방향성은 노이즈였다.
+- 후속: 급등군 유의성은 earnings_drift 재활성화(EPS surprise 가드 부착) 검토 근거.
+  코드·`_earnings_upcoming` 캘린더 인프라는 레짐 변화 대비로 유지
+- 논문: Reversal During Earnings-Announcements (재현 Sharpe 0.785) long-only 변형.
+  발표 직전 5거래일 낙폭 ≥5% 종목을 발표 전 매수 → 발표 후 3일 내 청산
+- **fail-closed 게이트**: `eng._earnings_upcoming`(오늘~+2일 발표 예정, finnhub) 종목만 평가.
+  캘린더가 비어 있으면 전략 자체가 발화하지 않는다 (발표일을 모르면 전제 불성립)
+- 발표 관통 갭 리스크 → `position_multiplier = ATR배율 × 0.5` 고정 절반
+- 가드: 당일 -8% 이상 폭락 중 진입 금지(떨어지는 칼), min_rr 1.2, 최소 $5
+- 1차 검증 (2026-08-03, finnhub 캘린더 표본 90건): 방향성 확인 —
+  낙폭군(pre5d≤-3%) +2.99% vs 전체 +0.52% vs 급등군 -2.41% (3일 보유).
+  단 핵심 버킷 n=5로 표본 부족 → yfinance 어닝 이력으로 표본 확대 재검증 중

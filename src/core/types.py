@@ -97,6 +97,7 @@ class StrategyType(str, Enum):
     ORB = "orb"                                # Opening Range Breakout
     VWAP_BOUNCE = "vwap_bounce"                # VWAP 반등
     EARNINGS_DRIFT = "earnings_drift"          # Post-Earnings Drift
+    EARNINGS_REVERSAL = "earnings_reversal"    # 발표 전 낙폭과대 반등 (2026-08-03)
 
 
 class TimeHorizon(str, Enum):

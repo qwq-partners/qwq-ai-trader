@@ -111,3 +111,24 @@
 ## 처리 이력
 
 - 2026-04-21: 4건 등록 (사용자 승인). N≥10건/전략 누적 후 재검토 합의.
+
+---
+
+## 항목 #6 — earnings_drift 재활성화 검토 (2026-08-03 등록)
+
+**제안**: US earnings_drift(현재 enabled: false)를 EPS surprise 가드(finnhub `epsActual` vs
+`epsEstimate` ≥10%) 부착 후 재활성화
+
+**근거**:
+- earnings_reversal 기각 검증(quick_backtest, 24개월 S&P500 3,711 이벤트)의 부산물:
+  발표 전 급등군(pre5d≥+5%, n=449)의 발표 후 3일 수익률 **+0.97% (t=2.01, 승률 54.1%)**
+  — 어닝 구간에서 리버설이 아니라 **드리프트(강세 지속)** 방향이 통계적으로 유의
+- 기존 비활성 사유였던 "EPS surprise API 미연동"은 finnhub 캘린더의
+  epsActual/epsEstimate 필드로 해소 가능 (`_earnings_upcoming` 인프라 재사용)
+
+**재검토 트리거**: 사용자 요청 시. 활성화 전 quick_backtest로
+"발표 후 갭업 + EPS beat" 조합의 표본 검증 선행할 것 (pre5d 급등 ≠ 갭업+서프라이즈).
+
+**관련 파일**:
+- `src/strategies/us/earnings_drift.py`, `src/data/providers/earnings.py`
+- `results/quickbt_earnings_reversal_20260803.csv` (이벤트 원본 데이터)
