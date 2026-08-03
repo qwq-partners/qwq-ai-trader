@@ -831,6 +831,13 @@ class ExitManager:
             sl_pct = state.stop_loss_pct
         else:
             sl_pct = self.config.stop_loss_pct
+        # 장중 급락 활성 시 크래시 SL을 상한으로 캡 (2026-08-04 재리뷰 P1-3)
+        # — 상태 변형이 아닌 판정 시점 적용이라 해제 시 자동 원복되고,
+        #   min_stop 클램프(ATR 경로)를 우회해 설계값 2.0~3.0%가 실효한다.
+        if not state.is_core and self._intraday_crash_level in INTRADAY_CRASH_PARAMS:
+            _crash_sl = INTRADAY_CRASH_PARAMS[self._intraday_crash_level]["stop_loss_pct"]
+            if sl_pct > _crash_sl:
+                sl_pct = _crash_sl
         if net_pnl_pct <= -sl_pct:
             atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct is not None else ""
             return self._create_exit(
@@ -1347,10 +1354,9 @@ class ExitManager:
             if state.stop_loss_pct is None or state.stop_loss_pct > new_sl:
                 state.stop_loss_pct = new_sl   # 더 타이트할 때만 덮어씀
                 changed.append(f"SL={new_sl}%")
-            # ATR 동적 손절이 있으면 그쪽도 조여야 실효 (판정은 dynamic 우선)
-            if state.dynamic_stop_pct is not None and state.dynamic_stop_pct > new_sl:
-                state.dynamic_stop_pct = new_sl
-                changed.append(f"dynSL={new_sl}%")
+            # dynamic_stop_pct는 여기서 건드리지 않는다 (2026-08-04 재리뷰 P1-2:
+            # 조이면 해제 경로에 복원 로직이 없어 영구 잔류). ATR 포지션의 급락
+            # SL 강화는 check_exit의 판정 시점 캡으로 처리 — 해제 시 자동 원복.
             if state.trailing_stop_pct is None or state.trailing_stop_pct > new_ts:
                 state.trailing_stop_pct = new_ts
                 changed.append(f"TS={new_ts}%")

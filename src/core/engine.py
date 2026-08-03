@@ -913,9 +913,20 @@ class UnifiedEngine:
             )
             if row and row["cnt"] > 0:
                 self.portfolio.daily_pnl = Decimal(str(row["total_pnl"]))
-                self.portfolio.daily_trades = max(
-                    self.portfolio.daily_trades, int(row["cnt"])
-                )
+                # daily_trades는 런타임에 BUY만 카운트 — 매도 건수로 백필하면
+                # daily_max_trades 게이트가 부당 소진된다 (2026-08-04 재리뷰 P1-4)
+                try:
+                    _buy_row = await pool.fetchrow(
+                        "SELECT COUNT(*) AS cnt FROM trade_events "
+                        "WHERE event_type='BUY' AND event_time::date = $1",
+                        today,
+                    )
+                    if _buy_row is not None:
+                        self.portfolio.daily_trades = max(
+                            self.portfolio.daily_trades, int(_buy_row["cnt"])
+                        )
+                except Exception as _be:
+                    logger.debug(f"[DailyStats] BUY 건수 백필 실패 (무시): {_be}")
                 logger.info(
                     f"[DailyStats] DB 백필 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원 "
                     f"({row['cnt']}건)"

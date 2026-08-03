@@ -1,5 +1,36 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-04 — fix(engine): 수정분 적대적 재리뷰 반영 — P1 4건 + P2 3건
+
+같은 날 P0/P1·P2 수정 커밋(2988646, edc5b67)에 대한 재검증 리뷰 결과 반영.
+
+### P1 (수정이 만든 문제 / 미달 수정)
+1. **장중 리셋 가드의 기준선 공백**: "새 거래일 + 장중 첫 기동"(정상 시나리오)도 가드에
+   걸려 `daily_start_unrealized_pnl=0` 잔류 → 누적 미실현 전체가 당일 손익으로 계산되어
+   일일손실 한도 오발동 → 가드 스킵 시 기동 시점 미실현으로 기준선 재설정
+2. **급락 dynamic SL 조임의 영구 잔류**: 해제 경로에 복원 로직이 없어 ATR 손절이
+   조여진 채 보유 종료까지 잔류 → 상태 변형 제거
+3. **급락 SL이 min_stop 클램프에 여전히 무효** (ATR 포지션): check_exit **판정 시점 캡**
+   방식으로 전환 — 급락 활성 중 크래시 SL(2.0~3.0%)이 클램프 우회로 실효,
+   해제 시 자동 원복 (2·3번은 동일 원인의 재설계)
+4. **daily_trades DB 백필 의미 불일치**: 매도 건수로 백필돼 재도입된 daily_max_trades
+   게이트가 부당 소진 → BUY 건수 별도 조회로 백필
+
+### P2
+- `atomic_io` encoding="utf-8" 명시 (locale 의존 제거)
+- 팀 심의 allocator의 `bot.portfolio` 오참조 잔존 1건 → `bot.engine.portfolio`
+- 슈퍼바이저 재기동 백오프 (60초→최대 30분 배증 — 즉시 재발 예외의 알림 스팸 방지)
+
+### 재리뷰 통과 확인 (16개 수정 항목 중 나머지)
+폴백 수량(_pending_quantities 부분체결 갱신과 정합)·exit_exempt 주입 순서·섹터맵
+라이프사이클·pending 만료의 이중매도 안전성(엔진 pending 가드가 차단)·rollback no-op
+전환(호출자 6곳 반환값 미사용)·batch_signal 이월 유지·KOFR 언패킹·철강 117680 등 통과.
+잔존 기록: cancel_all 인메모리 의존(P2)·급락 중 레짐 재분류 시 effective TS 완화(P2)·
+영문 reason "stop" 오분류 잠재 경로(현재 KR reason 전부 한국어라 무해)
+
+수정: `src/core/engine.py`, `src/strategies/exit_manager.py`,
+`src/schedulers/kr_scheduler.py`, `src/utils/atomic_io.py`
+
 ## 2026-08-04 — fix(engine): 리뷰 잔여분 일괄 처리 — 보류 정책 2건 + P2 12건
 
 전체 엔진 리뷰(같은 날 P0/P1 커밋)의 후속. 사용자 지시로 잔여 건 전부 진행.

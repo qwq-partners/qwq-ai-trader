@@ -74,6 +74,7 @@ class KRScheduler:
         """루프 슈퍼바이저 (2026-08-04 P1) — 미포착 예외로 스케줄러가 조용히
         영구 사망하던 9개 루프(outer except 패턴)를 60초 후 재기동한다.
         HealthMonitor는 태스크 생존성을 감시하지 않으므로 이 래퍼가 유일한 방어선."""
+        backoff = 60
         while True:
             try:
                 await coro_fn()
@@ -81,12 +82,13 @@ class KRScheduler:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"[슈퍼바이저] {name} 루프 예외 사망 — 60초 후 재기동: {e}")
+                logger.error(f"[슈퍼바이저] {name} 루프 예외 사망 — {backoff}초 후 재기동: {e}")
                 try:
-                    await send_alert(f"⚠️ [스케줄러] {name} 예외로 재기동됨: {e}")
+                    await send_alert(f"⚠️ [스케줄러] {name} 예외로 재기동됨 ({backoff}초 후): {e}")
                 except Exception:
                     pass
-                await asyncio.sleep(60)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 1800)   # 즉시 재발 예외의 알림 스팸 방지
 
     def create_tasks(self):
         """모든 KR 스케줄러 태스크 생성 → 리스트 반환
@@ -3932,10 +3934,26 @@ JSON:
                                 "풀 리셋/미체결 취소 생략 (fail-safe). daily_pnl은 "
                                 "run_trader 기동 시 DB 백필값 유지"
                             )
+                            # 미실현 기준선 보정 (2026-08-04 재리뷰 P1-1): 파일 미복원 시
+                            # daily_start_unrealized_pnl=0으로 남아 보유 포지션의 누적
+                            # 미실현 전체가 "오늘 손익"으로 계산 → 일일손실 한도 오발동.
+                            # 새 거래일 장중 첫 기동(전일 파일)도 이 경로로 오므로 필수.
+                            try:
+                                _pf = bot.engine.portfolio
+                                if _pf.daily_start_unrealized_pnl == 0 and _pf.positions:
+                                    _pf.daily_start_unrealized_pnl = _pf.total_unrealized_pnl
+                                    bot.engine._save_daily_stats()
+                                    logger.warning(
+                                        f"[DailyStats] 미실현 기준선 재설정: "
+                                        f"{_pf.daily_start_unrealized_pnl:+,.0f}원 (기동 시점 기준)"
+                                    )
+                            except Exception as _ble:
+                                logger.warning(f"[DailyStats] 기준선 보정 실패: {_ble}")
                             try:
                                 await send_alert(
-                                    "⚠️ [DailyStats] 통계 파일 파손 의심 — 장중 리셋을 "
-                                    "생략했습니다. 일일손실 집계 확인 필요"
+                                    "⚠️ [DailyStats] 오늘 통계 파일 미복원(전일 정지 또는 파손) — "
+                                    "장중 리셋을 생략하고 미실현 기준선만 재설정했습니다. "
+                                    "일일손실 집계 확인 필요"
                                 )
                             except Exception:
                                 pass
@@ -4664,7 +4682,7 @@ JSON:
             from ..agents.allocator import get_allocator
             allocator = get_allocator(
                 risk_manager=getattr(bot, "risk_manager", None),
-                portfolio=getattr(bot, "portfolio", None),
+                portfolio=getattr(getattr(bot, "engine", None), "portfolio", None),
             )
             _daily_used = 0
             try:
