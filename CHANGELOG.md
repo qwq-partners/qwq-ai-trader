@@ -1,5 +1,47 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — feat(agents): 심의 슬롯 2→4 확대 + 4개월 잠자던 NameError 발굴
+
+### 슬롯 확대 (10:30 / 11:30 / 13:00 / 14:00)
+승격 기준 200표본까지 ~17영업일이 걸려 관측 기간 단축 목적.
+~12건/일 → ~24건/일, 200표본까지 **~8영업일**.
+- 슬롯 창(분+10, 시 경계) 겹침 없음 자체 검증. `done_today` set이 슬롯별 중복 방지.
+- 13:00은 13:50 자본활용률 체크·13:30 빈슬롯 윈도우와 무관 (심의는 shadow).
+
+### 리뷰 중 발굴 — `run_market_trend_monitor` NameError (P1)
+Pyright 지적을 추적하니 실제 버그였다. `now`가 정의된 적 없는 스코프에서
+`now.strftime(...)` 호출 (`e92e829`, 2026-03-30 도입).
+바깥 `except Exception → logger.debug`가 삼켜서 저널에 한 줄도 남지 않았고,
+그 뒤에 있는 **08:50 LLM 장전 진단이 4개월간 한 번도 실행되지 않았다**
+(로그 grep 실측 0건). 체제 갱신 자체는 NameError 이전에 완료돼 무사했다.
+- `now = datetime.now()` 정의 추가.
+- 삼킨 핸들러를 debug→warning + 예외 타입 포함으로 격상 —
+  debug 레벨은 NameError를 4개월 숨겼다.
+
+### 검증
+- Codex 리뷰: P2 1건(주석 "장중 2회" 잔존)만 지적 → 반영. 그 외 이상 없음 확인.
+- 슬롯 창 겹침·시 경계 자체 검증 통과, py_compile 통과, 재시작 에러 0건.
+
+
+## 2026-08-03 — fix(us-exit): 전략별 max_holding_days 배선 갭 해소
+
+P2 리뷰에서 발견한 기존 갭의 후속 정리. US 전략 config의 `max_holding_days`
+(SEPA 20일 등)가 ExitManager에 전달되지 않아 **전 전략이 글로벌 기본 10영업일**로
+강제 청산되고 있었다. earnings_reversal 한정 임시 배선을 일반화했다.
+
+- `us_scheduler._strategy_max_holding()` 헬퍼 신설 — strategy 문자열로 전략
+  인스턴스의 max_holding_days 조회 (미매칭/미설정 None → 글로벌, **0은 무제한
+  의미라 falsy 판정 없이 그대로 전달**)
+- 배선 2곳: 매수 체결 등록 + 재시작 복구 재등록(pos.strategy → _symbol_strategy
+  폴백). 상태 파일이 max_holding을 영속화하므로 재시작에도 유지
+- sync_detected(전략 불명 외부 진입)는 의도적으로 글로벌 유지 — 주석 명시
+- **행동 변화**: SEPA 신규 매수 보유 한도 10→20영업일 (config 의도값 복원).
+  momentum은 config 미설정이라 종전대로 10일. 기존 오픈 포지션은 저장된 상태
+  유지(신규 매수부터 적용)
+- 검증: 헬퍼 단위 7케이스(0=무제한 포함) + 재시작 후 에러 0건
+
+수정: `src/schedulers/us_scheduler.py` / 문서: `docs/risk/risk-and-exit.md`
+
 ## 2026-08-03 — feat(quant): P2 3건 — 연구 백테스터·어닝 리버설(비활성)·자산증가율 감점
 
 P0/P1(ae22214)에 이어 awesome-systematic-trading 검토의 P2 항목 구현.

@@ -144,7 +144,7 @@ class KRScheduler:
             self.run_post_exit_review_scheduler(), name="kr_post_exit_review"
         ))
 
-        # 종목 단위 에이전트 팀 심의 (2026-08-02~, 장중 2회)
+        # 종목 단위 에이전트 팀 심의 (2026-08-02~, 장중 4회: 10:30/11:30/13:00/14:00)
         if getattr(self.bot, "trading_team", None) is not None:
             tasks.append(asyncio.create_task(
                 self.run_team_deliberation(), name="kr_team_deliberation"
@@ -3304,6 +3304,10 @@ JSON:
                             bot.engine._market_regime = bot.engine._regime_adapter.regime
 
                             # 08:50 LLM 장 시작 전 시장 진단 (1회/일)
+                            # ⚠️ 2026-08-03: `now` 미정의 NameError 수정 (e92e829가 도입).
+                            #    바깥 except가 debug 레벨로 삼켜 4개월간 이 진단이
+                            #    한 번도 실행되지 않았다 (로그 grep 실측 0건).
+                            now = datetime.now()
                             _now_hm = now.strftime("%H:%M")
                             if "08:48" <= _now_hm <= "08:55":
                                 _ra = bot.engine._regime_adapter
@@ -3397,7 +3401,8 @@ JSON:
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.debug(f"[시장추세] 갱신 오류 (무시): {e}")
+                    # debug 레벨은 NameError를 4개월 숨겼다 — 타입까지 warning으로 노출
+                    logger.warning(f"[시장추세] 갱신 오류 (무시): {type(e).__name__}: {e}")
 
                 await asyncio.sleep(120)  # 2분 주기
 
@@ -4380,7 +4385,7 @@ JSON:
 
     async def run_team_deliberation(self):
         """
-        종목 단위 에이전트 팀 심의 — 장중 2회 (10:30 / 14:00).
+        종목 단위 에이전트 팀 심의 — 장중 4회 (10:30 / 11:30 / 13:00 / 14:00).
 
         대상:
           - 매수 후보: 최근 스크리닝 상위 5
@@ -4399,7 +4404,11 @@ JSON:
             return
 
         # 실행 시각 (분 단위 창으로 중복 방지)
-        SLOTS = [(10, 30), (14, 0)]
+        # 2026-08-03 슬롯 2→4 확대: 승격 기준 200표본까지 ~17영업일이 걸려
+        #   관측 기간 단축 목적. ~12건/일 → ~24건/일, 200표본까지 ~8영업일.
+        #   13:00은 13:50 자본활용률 체크·13:30 빈슬롯 윈도우와 겹치지 않는다
+        #   (심의는 shadow라 주문 경로와 무관하지만, 로그 해석 혼선을 피한다).
+        SLOTS = [(10, 30), (11, 30), (13, 0), (14, 0)]
         done_today: set = set()
         last_date = None
 

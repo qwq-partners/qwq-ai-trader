@@ -35,6 +35,21 @@ from src.indicators.technical import compute_indicators
 from src.utils.telegram import send_alert
 
 
+def _strategy_max_holding(eng, strategy_value: str):
+    """전략별 max_holding_days 조회 (2026-08-03 배선).
+
+    포지션의 strategy 문자열로 로드된 전략 인스턴스를 찾아 max_holding_days를
+    반환한다. 전략 미매칭/속성 없음이면 None → ExitManager 글로벌 기본(10영업일).
+    0은 '무제한'의 의미가 있으므로 그대로 전달한다 (falsy 판정 금지).
+    """
+    if not strategy_value:
+        return None
+    for strat in eng.strategies:
+        if strat.strategy_type.value == strategy_value:
+            return getattr(strat, "max_holding_days", None)
+    return None
+
+
 class USScheduler:
     """US 시장 백그라운드 스케줄러
 
@@ -1818,7 +1833,13 @@ class USScheduler:
                 # ExitManager에 미등록된 기존 포지션 등록 (재시작 후 누락 방지)
                 if symbol not in eng.exit_manager._states:
                     try:
-                        eng.exit_manager.register_position(pos)
+                        # 전략별 max_holding 배선 — 상태 파일 유실 시에도 전략 한도 유지
+                        _strat_val = pos.strategy or eng._symbol_strategy.get(symbol)
+                        _mh = _strategy_max_holding(eng, _strat_val)
+                        if _mh is not None:
+                            eng.exit_manager.register_position(pos, max_holding_days=_mh)
+                        else:
+                            eng.exit_manager.register_position(pos)
                         logger.info(f"[US 동기화] {symbol} ExitManager 재등록 (재시작 복구)")
                     except Exception as e:
                         logger.warning(f"[US 동기화] {symbol} ExitManager 재등록 실패: {e}")
@@ -1906,6 +1927,8 @@ class USScheduler:
                 new_pos = eng.portfolio.positions[symbol]
                 try:
                     # sync_detected 포지션: 타이트한 손절/짧은 유예
+                    # (전략 불명 외부 진입이므로 max_holding도 의도적으로 글로벌 10일 —
+                    #  전략별 배선 대상 아님, 2026-08-03 배선 작업에서 제외)
                     eng.exit_manager.register_position(
                         new_pos,
                         stop_loss_pct=3.0,
@@ -2611,14 +2634,13 @@ class USScheduler:
                     _matched_strat = strat
                     break
 
-            # ExitManager에 포지션 등록
-            # earnings_reversal만 전략별 max_holding(3일)을 전달한다 — 다른 전략까지
-            # 일괄 전달하면 글로벌 기본(10일)로 돌던 기존 포지션 동작이 바뀐다
+            # ExitManager에 포지션 등록 — 전략별 max_holding 배선 (2026-08-03)
+            # 이전에는 전 전략이 글로벌 기본(10영업일)로 돌아 SEPA의 config 20일이
+            # 무시됐다. None(전략 미설정/미매칭)이면 기존대로 글로벌 적용.
             try:
-                _mh = None
-                if _matched_strat is not None and _matched_strat.name == "earnings_reversal":
-                    _mh = getattr(_matched_strat, "max_holding_days", None)
-                if _mh:
+                _mh = (getattr(_matched_strat, "max_holding_days", None)
+                       if _matched_strat is not None else None)
+                if _mh is not None:
                     eng.exit_manager.register_position(pos, max_holding_days=_mh)
                 else:
                     eng.exit_manager.register_position(pos)

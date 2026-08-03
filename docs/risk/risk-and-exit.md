@@ -126,6 +126,22 @@
 
 ## 청산 관리 (src/strategies/exit_manager.py)
 
+### US 전략별 max_holding_days 배선 (2026-08-03~)
+
+이전에는 US 전략 config의 `max_holding_days`(예: SEPA 20일)가 ExitManager에
+전달되지 않아 **전 전략이 글로벌 기본 10영업일**로 강제 청산됐다 (배선 갭).
+
+- `us_scheduler._strategy_max_holding(eng, strategy_value)` — 포지션의 strategy
+  문자열로 전략 인스턴스의 `max_holding_days`를 조회. 미매칭/미설정이면 None → 글로벌
+- **배선 지점 (2곳)**: ① 매수 체결 등록 ② 재시작 복구 재등록
+  (`pos.strategy or _symbol_strategy` 폴백). ExitManager 상태 파일이
+  `max_holding_days`를 영속화하므로 재시작에도 유지된다
+- **제외**: sync_detected 포지션(전략 불명 외부 진입)은 의도적으로 글로벌 10일 유지
+- `0`은 '무제한' 의미이므로 falsy 판정 없이 그대로 전달 (`is not None` 비교)
+- 적용 결과: SEPA 신규 매수 10→**20영업일**, earnings_reversal(비활성) 3일,
+  momentum은 config에 값이 없어 종전대로 글로벌 10일. **기존 오픈 포지션은
+  상태가 이미 저장돼 있어 종전 10일 유지** — 신규 매수부터 적용
+
 ### 종목별 자동매도 절대 금지 (exit_exempt / no_auto_exit_symbols, 2026-06-23~)
 - **용도**: 수동 풀매수·장기보유 종목을 모든 자동매도 로직에서 영구 제외 (코어보다 강한 보호 — 코어는 리밸런싱 교체 가능하나 이건 그것도 면제).
 - **설정**: `config kr.no_auto_exit_symbols: ['087010', ...]` — 기동 시 `run_trader._initialize_kr`가 `exit_manager.add_exit_exempt()`로 복원(재시작에도 유지).
