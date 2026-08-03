@@ -59,6 +59,15 @@
         #office-frame {
             display:block;width:100%;height:calc(100vh - 260px);min-height:480px;border:0;
         }
+        .office-live {
+            display:inline-flex;align-items:center;gap:6px;
+            font-size:.68rem;color:var(--text-muted);
+            border:1px solid var(--border-sub);border-radius:999px;padding:3px 10px;
+        }
+        .office-live i { width:7px;height:7px;border-radius:50%;background:#6b7280;transition:background .2s; }
+        .office-live.on  i { background:#34d399;box-shadow:0 0 6px rgba(52,211,153,.6);animation:live-pulse 2s ease-in-out infinite; }
+        .office-live.off i { background:#f87171; }
+        @keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
         .office-note {
             margin-top:10px;font-size:.7rem;color:var(--text-muted);line-height:1.7;
         }
@@ -67,6 +76,77 @@
             background:rgba(99,102,241,.1);border:1px solid var(--border-sub);
             padding:1px 5px;border-radius:4px;color:var(--text-secondary);
         }
+
+        /* ─── 에이전트 활동 타임라인 (2026-08-03) ─── */
+        .tl-head { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:22px 0 10px; }
+        .tl-head h2 { font-size:.95rem;font-weight:700;margin:0; }
+        .tl-sum { font-size:.72rem;color:var(--text-muted); }
+        .tl-sum b { color:var(--text-secondary);font-weight:600; }
+        .tl-date {
+            margin-left:auto;background:rgba(255,255,255,.03);color:var(--text-secondary);
+            border:1px solid var(--border-sub);border-radius:8px;padding:5px 10px;
+            font-size:.72rem;font-family:inherit;cursor:pointer;
+        }
+        .tl-list { display:flex;flex-direction:column;gap:8px; }
+        .tl-card {
+            border:1px solid var(--border-sub);border-radius:12px;
+            background:rgba(255,255,255,.02);overflow:hidden;
+        }
+        .tl-row {
+            display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+            padding:11px 14px;cursor:pointer;transition:background .15s;
+        }
+        .tl-row:hover { background:rgba(99,102,241,.05); }
+        .tl-time { font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--text-muted);flex-shrink:0; }
+        .tl-name { font-weight:600;font-size:.82rem;color:var(--text-primary); }
+        .tl-code { font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-muted); }
+        .tl-badge {
+            font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:999px;letter-spacing:.02em;
+        }
+        .tl-ok   { background:rgba(52,211,153,.12);color:#34d399;border:1px solid rgba(52,211,153,.25); }
+        .tl-no   { background:rgba(248,113,113,.12);color:#f87171;border:1px solid rgba(248,113,113,.25); }
+        .tl-hold { background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.25); }
+        .tl-meta { font-size:.68rem;color:var(--text-muted);display:flex;gap:10px;flex-wrap:wrap;margin-left:auto; }
+        .tl-meta b { color:var(--text-secondary);font-weight:600; }
+        .tl-caret { color:var(--text-muted);font-size:.7rem;transition:transform .2s;flex-shrink:0; }
+        .tl-card.open .tl-caret { transform:rotate(90deg); }
+        .tl-body { display:none;padding:0 14px 14px;border-top:1px solid var(--border-sub); }
+        .tl-card.open .tl-body { display:block; }
+        .tl-sec { margin-top:12px; }
+        .tl-sec-t {
+            font-size:.66rem;font-weight:700;color:var(--text-muted);
+            letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;
+        }
+        .tl-turn {
+            border-left:2px solid var(--border-sub);padding:6px 0 6px 10px;margin-bottom:6px;
+            font-size:.74rem;color:var(--text-secondary);line-height:1.6;
+        }
+        .tl-turn.bull { border-left-color:#34d399; }
+        .tl-turn.bear { border-left-color:#f87171; }
+        .tl-turn-h { font-size:.66rem;margin-bottom:3px;display:flex;gap:7px;align-items:center;flex-wrap:wrap; }
+        .tl-side { font-weight:700; }
+        .tl-side.bull { color:#34d399; }
+        .tl-side.bear { color:#f87171; }
+        .tl-model {
+            font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--text-muted);
+            background:rgba(255,255,255,.03);border:1px solid var(--border-sub);
+            padding:0 5px;border-radius:4px;
+        }
+        .tl-rep {
+            display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;
+            font-size:.73rem;color:var(--text-secondary);padding:5px 0;
+            border-bottom:1px dashed var(--border-sub);line-height:1.55;
+        }
+        .tl-rep:last-child { border-bottom:0; }
+        .tl-kind { font-weight:600;color:var(--text-primary);min-width:78px; }
+        .tl-stale { color:#fbbf24; }
+        .tl-quote {
+            font-size:.75rem;color:var(--text-secondary);line-height:1.65;
+            background:rgba(255,255,255,.02);border:1px solid var(--border-sub);
+            border-radius:8px;padding:9px 11px;
+        }
+        .tl-empty { font-size:.75rem;color:var(--text-muted);padding:18px;text-align:center; }
+
         @media (max-width: 768px) {
             /* 좁은 화면에선 오피스 장면이 가로폭에 맞춰 축소되므로,
                높이를 폭에 비례시켜 위아래 빈 여백이 생기지 않게 한다. */
@@ -129,6 +209,9 @@
                     트레이딩 엔진의 실시간 상태를 8명의 캐릭터로 시각화합니다. 캐릭터를 클릭하면 상세 상태가 열립니다.
                 </p>
             </div>
+            <span class="office-live" id="office-live" title="실시간 스트림 상태">
+                <i></i><span id="office-live-t">연결 중…</span>
+            </span>
             <a href="/static/office/index.html" target="_blank" rel="noopener"
                style="font-size:.72rem;color:var(--text-secondary);text-decoration:none;border:1px solid var(--border-sub);border-radius:8px;padding:6px 12px;">
                 전체 화면으로 열기 ↗
@@ -152,6 +235,22 @@
                     title="가상 오피스" loading="lazy"></iframe>
         </div>
 
+
+        <!-- ── 에이전트 활동 타임라인 ── -->
+        <div class="tl-head">
+            <h2>🧠 에이전트 팀 활동</h2>
+            <span class="tl-sum" id="tl-sum">불러오는 중…</span>
+            <select class="tl-date" id="tl-date"></select>
+        </div>
+        <div class="tl-list" id="tl-list"></div>
+        <p class="office-note" style="margin-top:8px;">
+            분석가 3인이 종목을 채점하고 → Bull·Bear가 서로 다른 모델로 토론하고 →
+            트레이더가 제안하면 → PM이 최종 승인·거부합니다.
+            카드를 클릭하면 실제 발언 원문과 분석가 리포트가 펼쳐집니다.
+            <br><b style="color:var(--text-secondary);">보류</b>는 PM이 승인했지만 제안 자체가 <code>hold</code>라
+            신규 매수로 이어지지 않은 건입니다 — 승인 건수와 매수 건수는 다릅니다.
+        </p>
+
         <p class="office-note">
             상태 출처: 엔진 파생(<code>/api/office/status</code>) + 외부 푸시.
             Claude Code·CI 등 외부 도구는 <code>POST /api/office/status</code>로 상태를 밀어넣을 수 있고,
@@ -163,5 +262,226 @@
     </main>
 
     <script src="/static/js/common.js?v=4"></script>
+
+<script>
+// ── 에이전트 팀 활동 타임라인 (2026-08-03) ──
+// /api/team/verdicts 목록 → 카드, 펼치면 /api/team/verdict/detail 로 발언 원문 조회
+(function () {
+  const listEl = document.getElementById('tl-list');
+  const sumEl  = document.getElementById('tl-sum');
+  const dateEl = document.getElementById('tl-date');
+  if (!listEl) return;
+
+  const esc = t => { const d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; };
+  const hhmm = iso => { const m = /T(\d{2}:\d{2})/.exec(String(iso || '')); return m ? m[1] : '--:--'; };
+  const ymd  = d => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+  const num  = (v, d = 2) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(d) : '–';
+
+  const KIND_KR = { technical: '기술적', fundamental: '펀더멘탈', news: '뉴스' };
+
+  function scoreText(scores) {
+    const e = Object.entries(scores || {});
+    if (!e.length) return '–';
+    return e.map(([k, v]) => `${KIND_KR[k] || k} ${v > 0 ? '+' : ''}${v}`).join(' · ');
+  }
+
+  // approved=true는 "PM이 제안을 승인했다"일 뿐, stance=hold면 신규 매수는 없다.
+  // 둘을 뭉뚱그리면 "승인 9건"이 매수 9건으로 읽힌다.
+  function outcome(v) {
+    if (!v.approved) return { cls: 'tl-no', text: '거부' };
+    if (v.stance === 'buy')  return { cls: 'tl-ok', text: '매수' };
+    if (v.stance === 'sell') return { cls: 'tl-no', text: '매도' };
+    return { cls: 'tl-hold', text: '보류' };
+  }
+
+  function cardHTML(v, i) {
+    const oc = outcome(v);
+    const hasDetail = (v.turn_count || 0) + (v.report_count || 0) > 0;
+    return `<div class="tl-card" data-i="${i}" data-symbol="${esc(v.symbol)}" data-at="${esc(v.saved_at)}">
+      <div class="tl-row">
+        <span class="tl-time">${esc(hhmm(v.saved_at))}</span>
+        <span class="tl-name">${esc(v.name || v.symbol)}</span>
+        <span class="tl-code">${esc(v.symbol)}</span>
+        <span class="tl-badge ${oc.cls}">${oc.text}</span>
+        ${v.overrode_gate ? '<span class="tl-badge tl-no">게이트 오버라이드</span>' : ''}
+        <span class="tl-meta">
+          <span>분석가 <b>${esc(scoreText(v.analyst_scores))}</b></span>
+          <span>토론 <b>${esc(v.debate_rounds ?? '–')}R</b>${v.debate_consensus ? ' 합의' : ''}</span>
+          <span>확신 <b>${num(v.conviction)}</b></span>
+          <span><b>${num(v.elapsed_sec, 1)}</b>초</span>
+        </span>
+        ${hasDetail ? '<span class="tl-caret">▶</span>' : ''}
+      </div>
+      <div class="tl-body" data-loaded="0">
+        <div class="tl-empty">불러오는 중…</div>
+      </div>
+    </div>`;
+  }
+
+  function detailHTML(d) {
+    let h = '';
+    const dec = d.decision || {}, prop = d.proposal || {}, deb = d.debate || {};
+
+    if (dec.reason) {
+      h += `<div class="tl-sec"><div class="tl-sec-t">PM 최종 판단</div>
+            <div class="tl-quote">${esc(dec.reason)}</div></div>`;
+    }
+    if ((deb.turns || []).length) {
+      h += `<div class="tl-sec"><div class="tl-sec-t">Bull · Bear 토론 (${esc(deb.rounds_run ?? '–')}라운드${deb.consensus ? ', 합의' : ', 미합의'})</div>`;
+      for (const t of deb.turns) {
+        const side = t.side === 'bull' ? 'bull' : 'bear';
+        h += `<div class="tl-turn ${side}">
+          <div class="tl-turn-h">
+            <span class="tl-side ${side}">${side === 'bull' ? '🐂 Bull' : '🐻 Bear'}</span>
+            <span class="tl-code">R${esc(t.round)} · ${t.stance ? '찬성' : '반대'}</span>
+            ${t.model ? `<span class="tl-model">${esc(t.model)}</span>` : ''}
+          </div>${esc(t.text)}</div>`;
+      }
+      h += '</div>';
+    }
+    if ((d.reports || []).length) {
+      h += '<div class="tl-sec"><div class="tl-sec-t">분석가 리포트</div>';
+      for (const r of d.reports) {
+        // 신선도 — age_minutes가 크면 그 근거는 오래된 데이터로 매긴 점수다
+        const age = (typeof r.age_minutes === 'number')
+          ? `<span class="${r.age_minutes > 60 ? 'tl-stale' : ''}">${r.age_minutes.toFixed(0)}분 전</span>` : '';
+        h += `<div class="tl-rep">
+          <span class="tl-kind">${esc(KIND_KR[r.kind] || r.kind)}</span>
+          <span>점수 <b>${esc(r.score ?? '–')}</b></span>
+          <span>확신 ${num(r.confidence)}</span>
+          ${age}
+          <span style="flex:1 1 220px;">${esc(r.summary || '')}</span>
+          ${r.error ? `<span style="color:#f87171;">오류: ${esc(r.error)}</span>` : ''}
+        </div>`;
+      }
+      h += '</div>';
+    }
+    if (prop.rationale) {
+      h += `<div class="tl-sec"><div class="tl-sec-t">트레이더 제안 근거 (확신도 ${num(prop.conviction)})</div>
+            <div class="tl-quote">${esc(prop.rationale)}</div></div>`;
+    }
+    return h || '<div class="tl-empty">상세 내용이 없습니다.</div>';
+  }
+
+  async function toggle(card) {
+    const body = card.querySelector('.tl-body');
+    if (!body) return;
+    const opening = !card.classList.contains('open');
+    card.classList.toggle('open', opening);
+    if (!opening || body.dataset.loaded === '1') return;
+    try {
+      const q = new URLSearchParams({ symbol: card.dataset.symbol, at: card.dataset.at });
+      const day = dateEl && dateEl.value;
+      if (day) q.set('date', day);
+      const r = await fetch('/api/team/verdict/detail?' + q.toString());
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      body.innerHTML = detailHTML(await r.json());
+      body.dataset.loaded = '1';
+    } catch (e) {
+      body.innerHTML = `<div class="tl-empty" style="color:#f87171;">상세를 불러오지 못했습니다: ${esc(e.message)}</div>`;
+    }
+  }
+
+  async function load(day) {
+    listEl.innerHTML = '<div class="tl-empty">불러오는 중…</div>';
+    try {
+      const q = new URLSearchParams({ limit: '60' });
+      if (day) q.set('date', day);
+      const r = await fetch('/api/team/verdicts?' + q.toString());
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const v = Array.isArray(d.verdicts) ? d.verdicts : [];
+
+      // 날짜 선택지 (최초 1회만 채운다 — 재선택 시 값이 튀지 않도록)
+      if (dateEl && !dateEl.options.length && Array.isArray(d.dates)) {
+        dateEl.innerHTML = d.dates.map(x =>
+          `<option value="${esc(x)}"${x === d.date ? ' selected' : ''}>${esc(ymd(x))}</option>`).join('');
+      }
+
+      const c = { 매수: 0, 보류: 0, 거부: 0, 매도: 0 };
+      v.forEach(x => { c[outcome(x).text]++; });
+      sumEl.textContent = v.length
+        ? `총 ${v.length}건 — 매수 ${c.매수} · 보류 ${c.보류} · 거부 ${c.거부 + c.매도}`
+        : '심의 기록 없음';
+      listEl.innerHTML = v.length
+        ? v.map(cardHTML).join('')
+        : '<div class="tl-empty">이 날짜에는 팀 심의 기록이 없습니다. 장중 스크리닝이 후보를 올려야 팀이 소집됩니다.</div>';
+
+      listEl.querySelectorAll('.tl-row').forEach(row =>
+        row.addEventListener('click', () => toggle(row.closest('.tl-card'))));
+    } catch (e) {
+      sumEl.textContent = '조회 실패';
+      listEl.innerHTML = `<div class="tl-empty" style="color:#f87171;">활동 이력을 불러오지 못했습니다: ${esc(e.message)}</div>`;
+    }
+  }
+
+  if (dateEl) dateEl.addEventListener('change', () => load(dateEl.value));
+  load();
+  // 장중에는 새 심의가 계속 쌓인다 — 열어둔 카드가 닫히지 않도록 목록만 주기 갱신
+  setInterval(() => { if (!listEl.querySelector('.tl-card.open')) load(dateEl && dateEl.value); }, 60000);
+})();
+</script>
+
+<script>
+// ── SSE 실시간 브리지 (2026-08-03) ──
+// iframe 안의 앱은 HTTPS + 비localhost에서 EventSource를 스스로 비활성화한다
+//   (번들: protocol==='https:' && hostname!=='localhost' → return null)
+// 그래서 공개 도메인에서는 폴링으로만 돌고 유휴 시 백오프까지 걸려 반응이 느렸다.
+// 부모 창이 대신 SSE를 받아 iframe으로 postMessage 한다 — 앱의 message 리스너는
+// same-origin이거나 source===window.parent면 수신하므로 그대로 통한다.
+(function () {
+  const frame = document.getElementById('office-frame');
+  const pill  = document.getElementById('office-live');
+  const pillT = document.getElementById('office-live-t');
+  if (!frame || typeof EventSource === 'undefined') return;
+
+  let ready = false, last = null, es = null, retry = 2000, closed = false;
+
+  frame.addEventListener('load', () => {
+    ready = true;
+    if (last) push(last);          // 로드 전에 받아둔 마지막 상태를 즉시 반영
+  });
+
+  function mark(on, text) {
+    if (!pill) return;
+    pill.classList.toggle('on', on);
+    pill.classList.toggle('off', !on);
+    if (pillT) pillT.textContent = text;
+  }
+
+  function push(payload) {
+    last = payload;
+    if (!ready || !frame.contentWindow) return;
+    try {
+      frame.contentWindow.postMessage(payload, window.location.origin);
+    } catch (e) {
+      // 크로스오리진 등으로 실패해도 iframe 자체 폴링이 백업으로 남는다
+      mark(false, '전달 실패');
+    }
+  }
+
+  function connect() {
+    if (closed) return;
+    try { es = new EventSource('/api/office/status/stream'); }
+    catch (e) { mark(false, '연결 불가'); return; }
+
+    es.addEventListener('open', () => { retry = 2000; mark(true, '실시간'); });
+    es.addEventListener('status', ev => {
+      try { push(JSON.parse(ev.data)); mark(true, '실시간'); }
+      catch (e) { /* 파싱 실패 건은 건너뛴다 — 다음 이벤트로 복구된다 */ }
+    });
+    es.addEventListener('error', () => {
+      mark(false, '재연결 중…');
+      try { es.close(); } catch (e) {}
+      // 지수 백오프 (최대 30초) — 서버 재시작 중 연결 폭주 방지
+      setTimeout(connect, retry);
+      retry = Math.min(retry * 2, 30000);
+    });
+  }
+
+  window.addEventListener('beforeunload', () => { closed = true; try { es && es.close(); } catch (e) {} });
+  connect();
+})();
+</script>
 </body>
 </html>

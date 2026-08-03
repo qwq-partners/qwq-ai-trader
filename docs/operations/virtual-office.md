@@ -176,3 +176,61 @@ echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
 | 화면 우측 하단 "status api offline" | `/api/office/status` 응답 실패. `curl localhost:8080/api/office/status` 확인 |
 | 번들이 매번 새로 받아짐 | `server.py`의 `no_cache_middleware`에서 `/static/office/assets/`는 예외 처리돼 있어야 한다 |
 | 페이지가 HTTPS 도메인에서 비어 보임 | upstream 프론트는 HTTPS + non-localhost에서 폴링을 스킵한다 (혼합 콘텐츠 방지 로직) |
+
+
+---
+
+## 에이전트 활동 타임라인 (2026-08-03 추가)
+
+`/office` 하단에 팀 심의 이력을 시간순으로 렌더링한다. 캐릭터는 "지금" 상태만
+보여주므로, 지나간 판단을 보려면 별도 뷰가 필요했다.
+
+### 데이터 경로
+| 엔드포인트 | 용도 |
+|---|---|
+| `GET /api/team/verdicts?limit=&date=&approved=` | 목록 요약 + `dates`(보관 일자) |
+| `GET /api/team/verdict/detail?symbol=&at=&date=` | Bull/Bear 발언 원문 + 분석가 리포트 |
+
+- 저장소: `~/.cache/ai_trader/team_verdicts/verdicts_YYYYMMDD.json`
+- `TradingTeam.load_date(day, limit)` / `available_dates()` — `load_today`는 이 위에 얹혀 있다.
+- 카드는 접힌 상태로 렌더되고, 펼칠 때만 상세를 조회한다 (오늘 파일이 100KB를 넘는다).
+
+### ⚠️ 승인 ≠ 매수
+`decision.approved=true`는 **PM이 트레이더 제안을 승인했다**는 뜻이다.
+제안이 `stance=hold`면 승인돼도 신규 매수는 0건이다.
+실제로 2026-08-03 심의 9건은 전부 `approved=true` + `stance=hold`였다.
+
+목록·캐릭터 모두 **stance 기준**으로 표기한다 — 매수 / 보류 / 거부.
+`approved` 하나만 세면 "승인 9건"이 매수 9건으로 오독된다.
+
+## 캐릭터 상세 필드 (2026-08-03)
+
+상위 앱은 클릭 시 `label`·`hint`·`activeFile`·`skill`·`reasonCode`를 상세 패널에 쓴다.
+도입 초기에는 `task` 한 줄만 채워 클릭해도 빈칸이었다. 지금 채우는 값:
+
+| 역할 | activeFile | skill | label |
+|---|---|---|---|
+| `qa` 검증관 | 심의 종목 | `팀 심의 · 매수/보류/거부` | 토론 요약 |
+| `res` 전문가팀 | 심의 종목 | `분석가 N인` | 분석가 채점 내역 |
+| `arch`·`dev`·`designer` | – | `체제 판단`/`스크리닝`/`자가 진화` | – |
+
+`_team_snapshot()`은 심의 파일을 **mtime 기준으로 캐시**한다. SSE가 2초마다
+파생을 호출하므로 매번 파싱하면 낭비다.
+
+## SSE 실시간 브리지
+
+iframe 번들에는 이런 가드가 있다:
+
+```js
+if (protocol === 'https:' && hostname !== 'localhost') return null   // EventSource 비활성
+```
+
+즉 `https://qwq.ai.kr`에서는 앱이 **SSE를 스스로 끄고** 폴링만 쓰며, 유휴 시
+백오프까지 걸려 반응이 느렸다. 서버(`/api/office/status/stream`)는 정상 동작 중이었다.
+
+→ 부모 창(`office.html`)이 SSE를 받아 iframe으로 `postMessage` 한다.
+앱의 message 리스너는 same-origin이거나 `source === window.parent`면 수신하므로
+번들을 수정하지 않고 우회된다. 페이지 상단 라이브 배지로 연결 상태를 표시한다.
+
+- 재연결: 지수 백오프 2초 → 최대 30초 (서버 재시작 중 연결 폭주 방지)
+- iframe 자체 폴링은 그대로 백업으로 남는다 — 브리지가 죽어도 화면은 갱신된다

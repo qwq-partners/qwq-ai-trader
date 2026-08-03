@@ -54,6 +54,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_post("/api/signals/execute", handler.execute_pending_signals)
     app.router.add_post("/api/scan/run", handler.run_morning_scan)
     app.router.add_get("/api/team/verdicts", handler.get_team_verdicts)
+    app.router.add_get("/api/team/verdict/detail", handler.get_team_verdict_detail)
     app.router.add_get("/api/team/stats", handler.get_team_stats)
     app.router.add_get("/api/signal-events", handler.get_signal_events)
     app.router.add_get("/api/signal-events/stats", handler.get_signal_event_stats)
@@ -64,6 +65,14 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/market/indices", handler.get_market_indices)
     app.router.add_get("/api/core-holdings", handler.get_core_holdings)
     app.router.add_get("/api/benchmark", handler.get_benchmark)
+
+
+def _cap_text(value, limit: int):
+    """None 안전 문자열 절단 — 잘렸을 때만 말줄임표를 붙인다"""
+    if value is None:
+        return None
+    t = str(value)
+    return t if len(t) <= limit else t[:limit] + "…"
 
 
 class KRAPIHandler:
@@ -141,18 +150,22 @@ class KRAPIHandler:
         Query:
             limit    — 최대 건수 (기본 30)
             approved — "1"이면 승인건만, "0"이면 거부건만
+            date     — YYYYMMDD (미지정 시 오늘)
         """
         try:
             limit = max(1, min(200, int(request.query.get("limit", "30"))))
         except ValueError:
             limit = 30
 
+        day = (request.query.get("date") or "").strip()
         try:
             from ..agents.team import TradingTeam
-            rows = TradingTeam.load_today(limit=limit)
+            rows = (TradingTeam.load_date(day, limit=limit) if day
+                    else TradingTeam.load_today(limit=limit))
+            dates = TradingTeam.available_dates()
         except Exception as e:
             logger.warning(f"[API] 팀 심의 결과 조회 실패: {e}")
-            return web.json_response({"verdicts": [], "error": str(e)})
+            return web.json_response({"verdicts": [], "dates": [], "error": str(e)})
 
         approved_q = request.query.get("approved")
         if approved_q in ("0", "1"):
@@ -186,12 +199,113 @@ class KRAPIHandler:
                 "elapsed_sec": r.get("elapsed_sec"),
                 "saved_at": r.get("saved_at"),
                 "error": r.get("error"),
+                # 상세 패널이 펼칠 내용이 있는지 — 없으면 프런트가 토글을 숨긴다
+                "turn_count": len(deb.get("turns") or []),
+                "report_count": len(r.get("reports") or []),
             })
 
         return web.json_response({
             "verdicts": summary,
             "count": len(summary),
+            "date": day or f"{datetime.now():%Y%m%d}",
+            "dates": dates,
             "detail_available": True,
+        })
+
+    async def get_team_verdict_detail(self, request: web.Request) -> web.Response:
+        """팀 심의 1건의 전문 — Bull/Bear 발언과 분석가 리포트 원문.
+
+        목록(`/api/team/verdicts`)은 요약만 준다. 오피스 타임라인에서 카드를 펼칠 때
+        "실제로 누가 무슨 말을 했는지"를 보여주려면 turns/reports 원문이 필요하다.
+
+        Query:
+            symbol — 종목코드 (필수)
+            at     — saved_at ISO 문자열. 같은 종목이 하루에 여러 번 심의될 수 있어
+                     이 값으로 특정한다. 생략 시 해당 종목의 가장 최근 건.
+            date   — YYYYMMDD (미지정 시 오늘)
+        """
+        symbol = (request.query.get("symbol") or "").strip()
+        if not symbol:
+            return web.json_response({"error": "symbol 필요"}, status=400)
+        at = (request.query.get("at") or "").strip()
+        day = (request.query.get("date") or "").strip()
+
+        try:
+            from ..agents.team import TradingTeam
+            rows = (TradingTeam.load_date(day, limit=200) if day
+                    else TradingTeam.load_today(limit=200))
+        except Exception as e:
+            logger.warning(f"[API] 팀 심의 상세 조회 실패: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+
+        # load_date는 최신순이므로 첫 매치가 가장 최근 건이다
+        row = next(
+            (r for r in rows
+             if r.get("symbol") == symbol and (not at or str(r.get("saved_at")) == at)),
+            None,
+        )
+        if row is None:
+            return web.json_response({"error": "해당 심의 없음"}, status=404)
+
+        deb = row.get("debate") or {}
+        turns = []
+        for t in (deb.get("turns") or []):
+            turns.append({
+                "round": t.get("round"),
+                "side": t.get("side"),          # bull / bear
+                "stance": t.get("stance"),      # True=찬성
+                "text": _cap_text(t.get("text"), 1200),
+                "model": t.get("model"),
+                "provider": t.get("provider"),
+            })
+
+        reports = []
+        for rep in (row.get("reports") or []):
+            reports.append({
+                "kind": rep.get("kind"),        # technical / fundamental / news
+                "score": rep.get("score"),
+                "summary": _cap_text(rep.get("summary"), 600),
+                "findings": [_cap_text(f, 200) for f in (rep.get("findings") or [])][:8],
+                "confidence": rep.get("confidence"),
+                "data_as_of": rep.get("data_as_of"),
+                "age_minutes": rep.get("age_minutes"),
+                "error": rep.get("error"),
+            })
+
+        d = row.get("decision") or {}
+        prop = row.get("proposal") or {}
+        return web.json_response({
+            "symbol": row.get("symbol"),
+            "name": row.get("name"),
+            "saved_at": row.get("saved_at"),
+            "elapsed_sec": row.get("elapsed_sec"),
+            "decision": {
+                "approved": d.get("approved"),
+                "stance": d.get("stance"),
+                "size_multiplier": d.get("size_multiplier"),
+                "reason": _cap_text(d.get("reason"), 1200),
+                "overrode_gate": d.get("overrode_gate", False),
+                "overridden_gates": d.get("overridden_gates", []),
+            },
+            "proposal": {
+                "stance": prop.get("stance"),
+                "conviction": prop.get("conviction"),
+                "rationale": _cap_text(prop.get("rationale"), 1200),
+                "analyst_scores": prop.get("analyst_scores", {}),
+            },
+            "debate": {
+                "summary": _cap_text(deb.get("summary"), 900),
+                "rounds_run": deb.get("rounds_run"),
+                "consensus": deb.get("consensus"),
+                "disagreed": deb.get("disagreed", False),
+                "failed": deb.get("failed", False),
+                "confidence": deb.get("confidence"),
+                "bull_final": deb.get("bull_final"),
+                "bear_final": deb.get("bear_final"),
+                "turns": turns,
+            },
+            "reports": reports,
+            "error": row.get("error"),
         })
 
     async def get_team_stats(self, request: web.Request) -> web.Response:

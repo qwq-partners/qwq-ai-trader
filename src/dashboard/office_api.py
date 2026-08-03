@@ -292,6 +292,9 @@ class OfficeAPIHandler:
         self.store = OfficeStatusStore()
         self._derive_cache: Optional[Dict[str, Any]] = None
         self._derive_cache_ts: float = 0.0
+        # 팀 심의 파일 캐시 (mtime 기반 — 파일이 커서 매 파생마다 파싱하면 낭비)
+        self._team_cache: Optional[Dict[str, Any]] = None
+        self._team_cache_mtime: float = -1.0
         self._evolution_cache: Optional[Dict[str, Any]] = None
         self._evolution_cache_ts: float = 0.0
         self._hook_cache: Optional[Dict[str, Any]] = None
@@ -350,6 +353,67 @@ class OfficeAPIHandler:
         self._derive_cache_ts = now
         return result
 
+
+    # ── 에이전트 팀 심의 스냅샷 ──────────────────────────────────────────
+    def _team_snapshot(self) -> Dict[str, Any]:
+        """오늘 팀 심의 요약 (2026-08-03)
+
+        캐릭터가 "엔진이 켜져 있다"만 말하면 볼 게 없다. 실제로 분석가가 채점하고
+        Bull·Bear가 토론하고 PM이 승인/거부한 결과를 캐릭터에 얹는다.
+
+        오늘 파일은 100KB를 넘길 수 있고 SSE가 2초마다 파생을 호출하므로,
+        mtime이 바뀌지 않으면 재파싱하지 않는다.
+        """
+        try:
+            from ..agents.team import RESULT_DIR
+            path = RESULT_DIR / f"verdicts_{datetime.now():%Y%m%d}.json"
+            if not path.exists():
+                return {"total": 0}
+            mtime = path.stat().st_mtime
+            if self._team_cache is not None and self._team_cache_mtime == mtime:
+                return self._team_cache
+            rows = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(rows, list) or not rows:
+                snap: Dict[str, Any] = {"total": 0}
+            else:
+                # ⚠️ approved=True는 "PM이 제안을 승인했다"는 뜻이지 매수가 아니다.
+                #    stance=hold 제안을 승인해도 신규 매수는 0건이다.
+                #    이 둘을 뭉뚱그리면 대시보드가 "승인 9건"을 매수 9건으로 오독시킨다.
+                approved = sum(1 for r in rows if (r.get("decision") or {}).get("approved"))
+                buys = sum(1 for r in rows
+                           if (r.get("decision") or {}).get("approved")
+                           and (r.get("decision") or {}).get("stance") == "buy")
+                holds = sum(1 for r in rows
+                            if (r.get("decision") or {}).get("approved")
+                            and (r.get("decision") or {}).get("stance") in ("hold", None))
+                last = rows[-1]
+                dec = last.get("decision") or {}
+                deb = last.get("debate") or {}
+                scores = (last.get("proposal") or {}).get("analyst_scores") or {}
+                snap = {
+                    "total": len(rows),
+                    "approved": approved,
+                    "rejected": len(rows) - approved,
+                    "buys": buys,
+                    "holds": holds,
+                    "last_symbol": last.get("symbol"),
+                    "last_name": last.get("name") or last.get("symbol"),
+                    "last_approved": bool(dec.get("approved")),
+                    "last_stance": dec.get("stance"),
+                    "last_summary": deb.get("summary") or dec.get("reason"),
+                    "last_rounds": deb.get("rounds_run"),
+                    "last_consensus": deb.get("consensus"),
+                    "last_at": str(last.get("saved_at") or "")[11:16],
+                    "report_kinds": len(last.get("reports") or []),
+                    "analyst_scores": scores,
+                }
+            self._team_cache = snap
+            self._team_cache_mtime = mtime
+            return snap
+        except Exception as e:
+            logger.debug(f"[오피스] 팀 심의 스냅샷 실패 (무시): {e}")
+            return {"total": 0}
+
     def _derive_agents_uncached(self) -> Dict[str, Any]:
         bot = self._bot()
         if bot is None:
@@ -382,6 +446,9 @@ class OfficeAPIHandler:
         except Exception as e:
             logger.debug(f"[오피스] 리스크 조회 실패 (무시): {e}")
 
+        # 에이전트 팀 심의 (분석가 → Bull/Bear 토론 → 트레이더 → PM)
+        team = self._team_snapshot()
+
         # 킬스위치
         ks: Dict[str, Any] = {}
         try:
@@ -409,7 +476,7 @@ class OfficeAPIHandler:
         regime_kr = REGIME_KR.get(regime, regime)
         regime_llm = str(risk.get("market_regime_llm") or "")
         if not running or session == "closed":
-            agents.append(_agent("arch", "idle", f"체제: {regime_kr}"))
+            agents.append(_agent("arch", "idle", f"체제: {regime_kr}", skill="체제 판단"))
         elif session == "pre_market":
             agents.append(_agent("arch", "planning", f"체제 진단: {regime_kr}",
                                  hint=regime_llm or None))
@@ -426,7 +493,7 @@ class OfficeAPIHandler:
             pass
         signals = _int(getattr(stats, "signals_generated", None)) if stats else 0
         if not running or session == "closed":
-            agents.append(_agent("dev", "idle", f"오늘 신호 {signals}건"))
+            agents.append(_agent("dev", "idle", f"오늘 신호 {signals}건", skill="스크리닝"))
         elif screened > 0:
             agents.append(_agent("dev", "working", f"스크리닝 {screened}종목",
                                  hint=f"신호 {signals}건"))
@@ -438,15 +505,39 @@ class OfficeAPIHandler:
         cv_total = _int(cv.get("total"))
         cv_passed = _int(cv.get("passed"))
         cv_blocked = _int(cv.get("blocked"))
-        if cv_total == 0:
+        # 팀 심의(PM 최종 승인/거부)가 있으면 그쪽이 더 구체적이므로 우선 노출한다.
+        # 크로스검증은 규칙 게이트, 팀 심의는 LLM 합의 — 둘 다 "검증관"의 일이다.
+        _t_total = _int(team.get("total"))
+        if _t_total > 0:
+            _qa_extra = {
+                "label": _cap(team.get("last_summary"), 200),
+                "activeFile": f"{team.get('last_name')}({team.get('last_symbol')})",
+                "skill": ("팀 심의 · " + {"buy": "매수", "hold": "보류", "sell": "매도"}.get(
+                    str(team.get("last_stance")), "거부")),
+                "hint": (f"토론 {team.get('last_rounds')}R"
+                         f"{' 합의' if team.get('last_consensus') else ' 미합의'}"
+                         f" · {team.get('last_at')}"),
+            }
+            _buys, _holds = _int(team.get("buys")), _int(team.get("holds"))
+            _rej = _int(team.get("rejected"))
+            _qa_task = f"심의 {_t_total}건 — 매수 {_buys} · 보류 {_holds} · 거부 {_rej}"
+            if _buys == 0 and _t_total >= 3:
+                agents.append(_agent("qa", "blocked", _qa_task,
+                                     reasonCode="blocked-unknown", **_qa_extra))
+            else:
+                agents.append(_agent("qa", "working" if market_open else "done",
+                                     _qa_task, **_qa_extra))
+        elif cv_total == 0:
             agents.append(_agent("qa", "idle" if not market_open else "working",
-                                 "검증 대기" if not market_open else "검증 준비"))
+                                 "검증 대기" if not market_open else "검증 준비",
+                                 skill="크로스검증"))
         elif cv_passed == 0 and cv_blocked >= 3:
             agents.append(_agent("qa", "blocked", f"{cv_blocked}건 전량 거부",
-                                 reasonCode="blocked-unknown",
+                                 reasonCode="blocked-unknown", skill="크로스검증",
                                  hint="검증 규칙에 걸려 통과 신호 없음"))
         else:
             agents.append(_agent("qa", "working", f"검증 {cv_total}건",
+                                 skill="크로스검증",
                                  hint=f"통과 {cv_passed} · 거부 {cv_blocked}"))
 
         # ── ops: 주문 집행 ──
@@ -506,19 +597,34 @@ class OfficeAPIHandler:
             theme_cnt = len(getattr(detector, "_themes", {}) or {})
         except Exception:
             pass
+        # 마지막 심의의 분석가 점수를 얹는다 — "무엇을 근거로 채점했는지"가 보여야 한다
+        _scores = team.get("analyst_scores") or {}
+        _kind_kr = {"technical": "기술", "fundamental": "펀더", "news": "뉴스"}
+        _score_txt = " · ".join(
+            f"{_kind_kr.get(k, k)} {v:+d}" if isinstance(v, int) else f"{_kind_kr.get(k, k)} {v}"
+            for k, v in _scores.items()
+        )
+        _res_extra: Dict[str, Any] = {}
+        if _score_txt:
+            _res_extra = {
+                "label": f"{team.get('last_name')} 분석가 채점 — {_score_txt}",
+                "activeFile": f"{team.get('last_name')}({team.get('last_symbol')})",
+                "skill": f"분석가 {_int(team.get('report_kinds'))}인",
+            }
         if expert_cnt == 0:
-            agents.append(_agent("res", "idle", "전문가 미가동"))
+            agents.append(_agent("res", "idle", "전문가 미가동", **_res_extra))
         elif session == "closed":
             agents.append(_agent("res", "idle", f"전문가 {expert_cnt}명 대기",
-                                 hint=f"테마 {theme_cnt}건"))
+                                 hint=f"테마 {theme_cnt}건", **_res_extra))
         else:
             agents.append(_agent("res", "working", f"전문가 {expert_cnt}명 분석",
-                                 hint=f"테마 {theme_cnt}건"))
+                                 hint=f"테마 {theme_cnt}건", **_res_extra))
 
         # ── designer: 자가 진화 ──
         evo = self._evolution_state()
         if evo["today"]:
-            agents.append(_agent("designer", "done", "복기 완료", hint=f"{evo['date']} 적용"))
+            agents.append(_agent("designer", "done", "복기 완료",
+                                 hint=f"{evo['date']} 적용", skill="자가 진화"))
         elif evo["date"]:
             agents.append(_agent("designer", "idle", "복기 대기", hint=f"최근 {evo['date']}"))
         else:
@@ -532,6 +638,9 @@ class OfficeAPIHandler:
             mood = "frustrated"
         elif loss_pct <= -loss_limit * 0.5:
             mood = "stuck"
+        elif _t_total >= 3 and _int(team.get("buys")) == 0:
+            # 심의는 돌았는데 매수로 이어진 게 없다 (전부 보류/거부)
+            mood = "stuck"
         elif pending >= 3:
             mood = "intense"
         elif loss_pct >= 1.0:
@@ -540,6 +649,8 @@ class OfficeAPIHandler:
             mood = "rushing"
 
         workflow = f"{session_kr} · 체제 {regime_kr}"
+        if _t_total > 0:
+            workflow += f" · 심의 {_t_total}건"
         return {"agents": agents, "workflow": workflow, "mood": mood}
 
     # ── Claude Code 훅 파일 스캔 ──────────────────────────────────────────

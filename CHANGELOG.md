@@ -1,5 +1,54 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — feat(office): 에이전트 활동 타임라인 + 캐릭터 상세 + SSE 실시간 브리지
+
+"가상 오피스에 인터랙션이 없고 실제 에이전트가 뭘 하는지 안 보인다"는 지적에서 출발.
+점검해 보니 **배관은 멀쩡하고 내용이 비어 있었다** — API·SSE·정적 자산 모두 200이고
+폴링도 정상인데, 보여주는 게 엔진 컴포넌트 8개의 한 줄 상태뿐이었다.
+
+정작 트레이딩 팀은 매일 심의를 돌리고 있었다. 2026-08-03 기준 9건, 파일 101KB.
+분석가 3인 채점 → Bull·Bear 토론(서로 다른 모델) → 트레이더 제안 → PM 승인.
+이게 오피스에 한 글자도 안 나왔다.
+
+### (B) 에이전트 활동 타임라인 — `/office` 하단
+- `GET /api/team/verdict/detail` 신설 — Bull/Bear 발언 원문, 분석가 리포트(점수·확신도·데이터 신선도).
+  목록 API는 `detail_available: true`를 반환하면서 정작 상세 경로가 없었다.
+- `GET /api/team/verdicts`에 `date` 파라미터 + `dates`(보관 일자) 추가.
+  `TradingTeam.load_date()` / `available_dates()` 신설, `load_today`는 그 위에 얹었다.
+- 카드 클릭 시 상세 조회(지연 로딩). 토론 라운드별 발언을 Bull(초록)/Bear(빨강)로 구분,
+  사용 모델(`gpt-5-mini` / `gemini-3.1-flash-lite`)까지 표시.
+- 분석가 리포트는 `age_minutes > 60`이면 노란색 — 오래된 데이터로 매긴 점수임을 드러낸다.
+
+### (A) 캐릭터 상세 — 클릭해도 빈칸이던 문제
+상위 앱은 `label`(번들 116회 참조)·`reasonCode`·`hint`·`activeFile`·`skill`을 상세 패널에 쓰는데
+우리는 `hint`만 가끔 채우고 나머지는 항상 null이었다. `office.html`은 "캐릭터를 클릭하면
+상세 상태가 열립니다"라고 안내하고 있었다.
+- `_team_snapshot()` 신설 — 심의 파일을 **mtime 기준 캐시**(SSE가 2초마다 파생을 호출한다).
+- `qa` 검증관 = 팀 심의 결과(종목·토론 요약·합의 여부), `res` 전문가팀 = 분석가 채점 내역.
+- `arch`·`dev`·`designer`에 `skill` 부여. `workflow`에 심의 건수, `mood`에 "매수 0건" 반영.
+
+### (SSE) 실시간 브리지
+iframe 번들에 `protocol==='https:' && hostname!=='localhost' → EventSource 비활성` 가드가 있어
+공개 도메인에서는 앱이 **SSE를 스스로 끄고** 폴링만 쓰고 있었다(유휴 시 백오프까지).
+서버 `/api/office/status/stream`은 멀쩡히 동작 중이었다.
+- 부모 창이 SSE를 받아 iframe으로 `postMessage`. 앱 리스너가 `source===window.parent`를
+  허용하므로 번들 수정 없이 우회된다. 재연결은 지수 백오프(2초→최대 30초).
+- 상단에 라이브 배지 추가. iframe 자체 폴링은 백업으로 유지된다.
+
+### ⚠️ 표기 정정 — 승인 ≠ 매수
+심의 9건이 전부 `approved=true`인데 `stance`는 전부 `hold`였다.
+`approved`는 "PM이 제안을 승인했다"는 뜻이고, `hold` 제안을 승인해도 **신규 매수는 0건**이다.
+초안은 이를 "승인 9 · 거부 0"으로 표시했는데 매수 9건으로 오독된다.
+→ 목록·캐릭터 모두 **stance 기준**으로 바꿨다: `매수 0 · 보류 9 · 거부 0`.
+`mood`의 "일은 했는데 성과 없음" 판정도 `approved==0`에서 `buys==0`으로 정정했다.
+
+### 검증
+- `/office`·`/api/office/status/stream`·`/api/team/verdicts`·`/api/team/verdict/detail`
+  전부 공개 도메인에서 200, SSE 실수신 확인.
+- 상세 API가 토론 4턴(라운드별 Bull/Bear + 모델명)과 분석가 리포트 3건을 정상 반환.
+- HTML 구조 검증(미닫힌 태그 0), 봇 재시작 에러 0건.
+
+
 ## 2026-08-03 — fix(batch): 대기 시그널 이월을 스킵 사유별로 분리 (13:50 윈도우 복구)
 
 직전 커밋(`b27790b`)에서 돌파 대기분만 이월했는데, 남은 문제를 사유별로 마저 정리했다.

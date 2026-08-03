@@ -420,9 +420,16 @@ class TradingTeam:
                 logger.warning(f"[팀] 심의 결과 저장 실패: {e}")
 
     @staticmethod
-    def load_today(limit: int = 50) -> List[Dict[str, Any]]:
-        """오늘 심의 결과 조회 (대시보드용)"""
-        path = RESULT_DIR / f"verdicts_{datetime.now():%Y%m%d}.json"
+    def load_date(day: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """특정 일자 심의 결과 조회 (대시보드 타임라인용)
+
+        Args:
+            day: YYYYMMDD. 형식이 어긋나면 빈 목록 (경로 조작 방지도 겸한다)
+            limit: 최신순 최대 건수
+        """
+        if not (isinstance(day, str) and len(day) == 8 and day.isdigit()):
+            return []
+        path = RESULT_DIR / f"verdicts_{day}.json"
         if not path.exists():
             return []
         try:
@@ -435,6 +442,23 @@ class TradingTeam:
             return rows[-limit:][::-1]
         except (json.JSONDecodeError, OSError):
             return []
+
+    @staticmethod
+    def available_dates(limit: int = 30) -> List[str]:
+        """심의 결과가 남아 있는 날짜 목록 (최신순 YYYYMMDD)"""
+        try:
+            days = sorted(
+                (p.stem.replace("verdicts_", "") for p in RESULT_DIR.glob("verdicts_*.json")),
+                reverse=True,
+            )
+            return [d for d in days if len(d) == 8 and d.isdigit()][:max(1, limit)]
+        except OSError:
+            return []
+
+    @staticmethod
+    def load_today(limit: int = 50) -> List[Dict[str, Any]]:
+        """오늘 심의 결과 조회 (대시보드용)"""
+        return TradingTeam.load_date(f"{datetime.now():%Y%m%d}", limit=limit)
 
     def get_stats(self) -> Dict[str, Any]:
         stats: Dict[str, Any] = {
