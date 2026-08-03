@@ -1,5 +1,59 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-04 — fix(engine): 전체 엔진 흐름 합동 리뷰 — P0 4건 + P1 8건 수정
+
+4개 영역(시그널 경로·청산 경로·스케줄러·리스크) 병렬 심층 리뷰 → 전 P0/핵심 P1을
+본 세션에서 직접 코드 재검증 후 수정. 공통 패턴: **"로그에는 작동하는 것처럼 보이지만
+실제로는 꺼져 있는 무음 실패"**.
+
+### P0 (4건 — 전건 검증 후 수정)
+1. **매도 폴백 전량 청산** (`engine.py`): 부분 매도(분할익절 10%·코어 트림) 지정가가
+   90초 미체결 시 시장가 폴백 수량이 `pos.quantity` 전량 하드코딩
+   → `_pending_quantities` 원 주문 수량으로 클램프
+2. **포지션 교체 축출의 exit_exempt 가드 부재** (`engine.py`): 7개 청산 가드 중
+   유일하게 누락. 자동매도 금지 087010(펩트론)이 정렬상 1순위 축출 후보였다
+   → `exit_manager._exit_exempt` live set을 엔진 RiskManager에 주입 + 후보 제외
+3. **당일 손절 재진입 금지 전면 미작동** (`risk/manager.py`): `_stop_loss_today` 등록
+   코드의 호출자가 0건 (영속 파일이 디스크에 존재한 적 없음이 물증). V자 재돌파 요구·
+   당일 1회 제한·스크리닝 제외 3중 방어가 전부 데드 코드
+   → `record_exit(exit_type=stop_loss)`에서 등록 + 스크리닝 제외 참조를
+   `bot.risk_manager`(실데이터)로 교정 (기존엔 항상 빈 engine 쪽 set 참조)
+4. **daily_stats 파손 시 장중 풀 리셋** (`engine.py` + `kr_scheduler.py`): 비원자적
+   쓰기 파일이 파손되면 재시작 시 일일손실 기준선 0 리셋 + 미체결 전량 취소 강행
+   → 원자적 쓰기(tmp+os.replace) + 장중(08:50~15:40) 복원 실패 시 리셋 생략 fail-safe
+
+### P1 (8건 수정)
+- **min_stop_pct 클램프 축소** (`exit_manager.py`): 4% 하한이 급락 오버라이드(2.0~3.0%)·
+  전략별 타이트 손절까지 무력화 → ATR 산출값(dynamic)에만 적용
+- **장중급락 파라미터의 None TypeError + effective 트레일링 미동기화**: None 가드 추가,
+  dynamic SL·effective TS 동시 조임, 레짐 적용 시 effective TS 동기화,
+  vcp_breakout `_strategy_exit_params` 등록(기존 None 등록이 TypeError 원인)
+- **섹터 맵 누수** (`engine.py`): 등록을 전 체크 통과 후로 이동 + 거부/clear_pending
+  경로에서 엔진 맵 pop + 자정 리셋 clear (누적 시 섹터 한도 오차단)
+- **`_idx_change` 데드코드** (`kr_scheduler.py`): 가중 등락률 대입 — 약세 주의구간
+  (-0.5~-1.0%) "85점 컷 강화"가 4개월+ 미작동이었다
+- **stale 매도 pending 잠김**: 취소 0건(이미 소멸)을 실패로 취급해 예약현금 1.015배가
+  익일까지 잠기던 것 → 0건은 해제, API 예외만 유지-재시도
+- **휴장일 from-import 스테일**: 월간 갱신이 낡은 스냅샷과 병합해 직전 갱신분 유실
+  (2개월+ 무중단 시 추석 등 소실) → 모듈 속성 참조로 교체
+- **스케줄러 루프 슈퍼바이저 신설**: outer-except 패턴 10개 루프(자정 리셋·배치 등)가
+  예외 1건에 조용히 영구 사망 → `_supervised()` 래퍼로 60초 후 재기동 + 텔레그램 경보
+- **팀 심의 배선 2건**: `bot.portfolio`(부재 속성)→`bot.engine.portfolio`,
+  `engine._cross_validator`(오참조)→`engine.risk_manager._cross_validator`
+  — shadow 표본이 "전 후보 게이트 차단"으로 무효 수집되고 있었다
+- **ExitManager stage 파일**: 파일명을 저장 시점 날짜로 재계산(7일+ 무중단 후 재시작 시
+  전량 소실 방지) + 빈 파일을 유효 상태로 취급(전일 stale stage 오복원 방지)
+
+### 기록만 (수정 보류)
+- `daily_max_trades`(10회) 미강제 — engine.py:753에 의도적 제거 주석 존재, 실제 제동은
+  현금 게이트+max_daily_new_buys(5). 정책 재확인 필요
+- 배치 T+1 전략(sepa/rsi2/vcp)의 09:30 실행 -8 페널티, neutral/sideways sepa 하드 차단
+  (레짐 체계 이원화) — 설계 의도 확인 필요한 정책 사안
+- P2 약 30건 상세는 리뷰 보고 참조 (수수료 하드코딩, 캐시 축적, 비원자 쓰기 잔여 등)
+
+수정: `src/core/engine.py`, `src/risk/manager.py`, `src/schedulers/kr_scheduler.py`,
+`src/strategies/exit_manager.py`, `scripts/run_trader.py`
+
 ## 2026-08-04 — feat(kr): 밸류코어(가치·성장 장기보유) 신설 — shadow 관측 개시
 
 사용자 요청("가치주·성장주 30~40% 투자, 장기 보유")로 신규 라인 구축.

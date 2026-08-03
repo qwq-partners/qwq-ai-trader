@@ -24,7 +24,8 @@ from typing import Optional, Dict, Set
 
 from loguru import logger
 
-from ..core.engine import is_kr_market_holiday, set_kr_market_holidays, _kr_market_holidays
+from ..core.engine import is_kr_market_holiday, set_kr_market_holidays
+from ..core import engine as _engine_mod   # 휴장일 전역의 최신 참조용 (from-import 스테일 방지)
 from ..core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent, MarketDataEvent
 from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, StrategyType, MarketSession
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
@@ -69,6 +70,24 @@ class KRScheduler:
         # 매수 체결 후 ExitManager 등록 실패 종목 (다음 fill_check 주기에 재시도)
         self._pending_exit_registrations: Set[str] = set()
 
+    async def _supervised(self, coro_fn, name: str):
+        """루프 슈퍼바이저 (2026-08-04 P1) — 미포착 예외로 스케줄러가 조용히
+        영구 사망하던 9개 루프(outer except 패턴)를 60초 후 재기동한다.
+        HealthMonitor는 태스크 생존성을 감시하지 않으므로 이 래퍼가 유일한 방어선."""
+        while True:
+            try:
+                await coro_fn()
+                return   # 루프가 정상 반환하면 종료 의도로 간주
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"[슈퍼바이저] {name} 루프 예외 사망 — 60초 후 재기동: {e}")
+                try:
+                    await send_alert(f"⚠️ [스케줄러] {name} 예외로 재기동됨: {e}")
+                except Exception:
+                    pass
+                await asyncio.sleep(60)
+
     def create_tasks(self):
         """모든 KR 스케줄러 태스크 생성 → 리스트 반환
 
@@ -81,7 +100,7 @@ class KRScheduler:
         # 테마 탐지
         if bot.theme_detector:
             tasks.append(asyncio.create_task(
-                self.run_theme_detection(), name="kr_theme_detector"
+                self._supervised(self.run_theme_detection, "kr_theme_detector"), name="kr_theme_detector"
             ))
 
         # 체결 확인
@@ -125,23 +144,23 @@ class KRScheduler:
 
         # 일일 레포트
         tasks.append(asyncio.create_task(
-            self.run_daily_report_scheduler(), name="kr_report_scheduler"
+            self._supervised(self.run_daily_report_scheduler, "kr_report_scheduler"), name="kr_report_scheduler"
         ))
 
         # 진화 (LLM 리뷰)
         tasks.append(asyncio.create_task(
-            self.run_evolution_scheduler(), name="kr_evolution_scheduler"
+            self._supervised(self.run_evolution_scheduler, "kr_evolution_scheduler"), name="kr_evolution_scheduler"
         ))
 
         # 주간 리밸런싱
         if bot.strategy_evolver:
             tasks.append(asyncio.create_task(
-                self.run_weekly_rebalance_scheduler(), name="kr_weekly_rebalance"
+                self._supervised(self.run_weekly_rebalance_scheduler, "kr_weekly_rebalance"), name="kr_weekly_rebalance"
             ))
 
         # 주간 매도 후속 복기 (토요일 09:00)
         tasks.append(asyncio.create_task(
-            self.run_post_exit_review_scheduler(), name="kr_post_exit_review"
+            self._supervised(self.run_post_exit_review_scheduler, "kr_post_exit_review"), name="kr_post_exit_review"
         ))
 
         # 종목 단위 에이전트 팀 심의 (2026-08-02~, 장중 4회: 10:30/11:30/13:00/14:00)
@@ -152,30 +171,30 @@ class KRScheduler:
 
         # 로그 정리
         tasks.append(asyncio.create_task(
-            self.run_log_cleanup(), name="kr_log_cleanup"
+            self._supervised(self.run_log_cleanup, "kr_log_cleanup"), name="kr_log_cleanup"
         ))
 
         # 2026-05-18 P1: 약세장 안전자산(TIGER KOFR) 자동 운용
         tasks.append(asyncio.create_task(
-            self.run_safe_asset_loop(), name="kr_safe_asset"
+            self._supervised(self.run_safe_asset_loop, "kr_safe_asset"), name="kr_safe_asset"
         ))
 
         # 종목 마스터 갱신
         if bot.stock_master:
             tasks.append(asyncio.create_task(
-                self.run_stock_master_refresh(), name="kr_stock_master_refresh"
+                self._supervised(self.run_stock_master_refresh, "kr_stock_master_refresh"), name="kr_stock_master_refresh"
             ))
 
         # 일봉 갱신
         if bot.broker:
             tasks.append(asyncio.create_task(
-                self.run_daily_candle_refresh(), name="kr_daily_candle_refresh"
+                self._supervised(self.run_daily_candle_refresh, "kr_daily_candle_refresh"), name="kr_daily_candle_refresh"
             ))
 
         # 배치 분석
         if bot.batch_analyzer:
             tasks.append(asyncio.create_task(
-                self.run_batch_scheduler(), name="kr_batch_scheduler"
+                self._supervised(self.run_batch_scheduler, "kr_batch_scheduler"), name="kr_batch_scheduler"
             ))
 
         # 코어홀딩 월초 리밸런싱
@@ -2357,7 +2376,7 @@ JSON:
                 elif hasattr(bot, 'engine') and bot.engine and hasattr(bot.engine, 'strategy_manager'):
                     _enabled = set(bot.engine.strategy_manager.enabled_strategies)
                 _screening_allowed = bool(_enabled)
-                _idx_change = None
+                _idx_change = None   # 아래 레짐 블록에서 가중 등락률로 채움 (2026-08-04 P1)
 
                 if (screened
                         and _screening_allowed
@@ -2393,6 +2412,9 @@ JSON:
 
                             # 가중 평균: KOSPI 60% + KOSDAQ 40%
                             _weighted_chg = _kospi_chg * 0.6 + _kosdaq_chg * 0.4
+                            # 주의구간(-0.5~-1.0%) 점수 상향 판정용 (2026-08-04 P1 —
+                            # 미대입으로 "85점 컷 강화"가 데드코드였다)
+                            _idx_change = _weighted_chg
 
                             # 차단 조건: 가중 평균 ≤ -1.0% 또는 어느 한쪽 ≤ -2.5%
                             if _weighted_chg <= -1.0 or _kospi_chg <= -2.5 or _kosdaq_chg <= -2.5:
@@ -2452,7 +2474,10 @@ JSON:
                             held = set(bot.engine.portfolio.positions.keys())
                             rm = bot.engine.risk_manager
                             pending = set(rm._pending_orders) if rm else set()
-                            stopped_today = set(rm._stop_loss_today) if rm and hasattr(rm, '_stop_loss_today') else set()
+                            # 당일 손절 목록은 bot.risk_manager 소유 (2026-08-04 P0 —
+                            # engine.risk_manager 쪽 동명 set은 항상 비어 있던 오참조)
+                            stopped_today = (set(bot.risk_manager._stop_loss_today)
+                                             if bot.risk_manager else set())
                             exclude = held | pending | stopped_today
 
                             # 가용 현금 확인
@@ -2877,7 +2902,9 @@ JSON:
                         else:
                             _ib_held = set(bot.engine.portfolio.positions.keys())
                             _ib_rm = bot.engine.risk_manager
-                            _ib_stopped = set(_ib_rm._stop_loss_today) if _ib_rm and hasattr(_ib_rm, '_stop_loss_today') else set()
+                            # 당일 손절 목록은 bot.risk_manager 소유 (2026-08-04 P0)
+                            _ib_stopped = (set(bot.risk_manager._stop_loss_today)
+                                           if bot.risk_manager else set())
                             _ib_pending = set(_ib_rm._pending_orders) if _ib_rm and hasattr(_ib_rm, '_pending_orders') else set()
                             _ib_exclude = _ib_held | _ib_stopped | _ib_pending
 
@@ -3871,7 +3898,9 @@ JSON:
                         try:
                             h = await bot.kis_market_data.fetch_holidays(next_month)
                             if h:
-                                set_kr_market_holidays(_kr_market_holidays | h)
+                                # 모듈 속성으로 최신 전역을 읽는다 (2026-08-04 P1 —
+                                # from-import 스냅샷과 병합하면 직전 갱신분이 유실됐다)
+                                set_kr_market_holidays(_engine_mod._kr_market_holidays | h)
                                 logger.info(f"[휴장일] 익월({next_month}) 휴장일 {len(h)}일 추가 로드")
                             last_holiday_refresh_month = next_month
                         except Exception as e:
@@ -3890,6 +3919,27 @@ JSON:
                                 last_daily_reset = today
                         except Exception:
                             pass
+                        # 장중 재시작 + 통계 파일 미복원(파손/유실) → 풀 리셋 강행 금지
+                        # (2026-08-04 P0: 리셋이 일일손실 기준선을 0으로 만들고
+                        #  진행 중이던 청산 주문까지 전량 취소하던 fail-open 경로)
+                        _hm = datetime.now().hour * 100 + datetime.now().minute
+                        if (last_daily_reset != today
+                                and 850 <= _hm <= 1540
+                                and today.weekday() < 5
+                                and not is_kr_market_holiday(today)):
+                            logger.critical(
+                                "[DailyStats] 장중 재시작인데 오늘 통계 파일 복원 실패 — "
+                                "풀 리셋/미체결 취소 생략 (fail-safe). daily_pnl은 "
+                                "run_trader 기동 시 DB 백필값 유지"
+                            )
+                            try:
+                                await send_alert(
+                                    "⚠️ [DailyStats] 통계 파일 파손 의심 — 장중 리셋을 "
+                                    "생략했습니다. 일일손실 집계 확인 필요"
+                                )
+                            except Exception:
+                                pass
+                            last_daily_reset = today
 
                 if last_daily_reset != today:
                     try:
@@ -3945,6 +3995,9 @@ JSON:
                             bot.engine._reserved_by_order.clear()
                         if hasattr(bot.engine, '_pending_fallback_count'):
                             bot.engine._pending_fallback_count.clear()
+                        # 섹터 임시 맵 정리 (2026-08-04 P1 — 누수 잔여분 일일 청소)
+                        if hasattr(bot.engine, '_pending_sector_map'):
+                            bot.engine._pending_sector_map.clear()
                         if bot.engine.risk_manager:
                             if hasattr(bot.engine.risk_manager, '_reserved_by_order'):
                                 bot.engine.risk_manager._reserved_by_order.clear()
@@ -4518,7 +4571,8 @@ JSON:
         # ── 2) 보유 종목 전체 ──
         holdings = []
         try:
-            positions = bot.portfolio.positions
+            # bot에는 portfolio 속성이 없다 — engine.portfolio가 정본 (2026-08-04 P1)
+            positions = bot.engine.portfolio.positions
             for sym, pos in list(positions.items()):
                 pnl_pct = None
                 try:
@@ -4554,7 +4608,10 @@ JSON:
         }
 
         async def gate_checker(symbol: str, stance: str):
-            cv = getattr(getattr(bot, "engine", None), "_cross_validator", None)
+            # _cross_validator는 engine이 아니라 engine.risk_manager 소유 (2026-08-04 P1
+            # — 오참조로 모든 후보가 gate_unavailable 차단 기록되어 shadow 표본이 무효였다)
+            _rm = getattr(getattr(bot, "engine", None), "risk_manager", None)
+            cv = getattr(_rm, "_cross_validator", None)
             if cv is None:
                 # 게이트를 확인할 수 없으면 보수적으로 차단 (PM이 미분류로 거부)
                 return (False, ["gate_unavailable"], "cross_validator 미연결")

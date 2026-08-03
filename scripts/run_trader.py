@@ -558,6 +558,13 @@ class UnifiedTradingBot:
                     "second_exit_pct": 10.0,
                     "third_exit_pct": 20.0,  # 12→20% 상향 (추세 추종 공간 확보)
                 },
+                # 2026-08-04 P1: vcp_breakout 항목 부재로 SL/TS가 None 등록되어
+                # 장중급락 파라미터 적용 시 TypeError를 유발했다 (브레이크아웃 계열 기본값)
+                "vcp_breakout": {
+                    "stop_loss_pct": 4.0,
+                    "trailing_stop_pct": 2.5,
+                    "stale_high_days": 3,   # 돌파 후 신고가 실패 → 추세 무효화
+                },
                 "core_holding": {
                     # 2026-05-11 A안: "장기 추세 캐처" — 3~6개월 +30~50% 노림
                     # 분할익절 완전 비활성, 손절 -10%, 트레일링 -12% (느슨)
@@ -847,10 +854,15 @@ class UnifiedTradingBot:
                 validator_config=_validator_cfg,
             )
             self.engine.risk_manager = engine_risk_manager
+            # 자동매도 금지 종목 세트 주입 — 포지션 교체 축출 경로 가드 (2026-08-04 P0)
+            # live set 참조라 이후 add/remove_exit_exempt 변경도 즉시 반영된다.
+            if self.exit_manager:
+                engine_risk_manager._exit_exempt_ref = self.exit_manager._exit_exempt
             logger.info(
                 f"[KR] 엔진 리스크 매니저 등록 완료 "
                 f"(validator: LLM 범위={engine_risk_manager._LLM_CHECK_MIN}~{engine_risk_manager._LLM_BYPASS_AT}, "
-                f"교체 임계={engine_risk_manager._REPLACEMENT_MIN_SCORE})"
+                f"교체 임계={engine_risk_manager._REPLACEMENT_MIN_SCORE}, "
+                f"축출면제={len(getattr(engine_risk_manager, '_exit_exempt_ref', set()))}종목)"
             )
 
             # 16. WebSocket 피드 초기화

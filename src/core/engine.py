@@ -13,6 +13,7 @@ KR(ai-trader-v2) + US(ai-trader-us) 시장을 단일 이벤트 루프에서 운�
 import asyncio
 import heapq
 import json
+import os
 from collections import deque
 from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation
@@ -786,10 +787,6 @@ class UnifiedEngine:
                     f"[리스크] 동일 섹터 추가 진입 경고: {symbol} → {sector} "
                     f"(기존+pending {existing}, {same_sector+1}/{max_per_sector})"
                 )
-        # 통과 시 sector 임시 저장 → on_fill에서 position.sector 설정에 사용
-        if sector:
-            self._pending_sector_map[symbol] = sector
-
         # 4. 포지션 크기 제한
         position_value = price * quantity
         max_position_value = self.portfolio.total_equity * Decimal(str(risk.max_position_pct / 100))
@@ -802,6 +799,11 @@ class UnifiedEngine:
             available = self.get_available_cash() - reserved_cash
             if required_cash > available:
                 return False, f"현금 부족 ({available:,.0f} < {required_cash:,.0f})"
+
+        # 전체 체크 통과 시에만 sector 임시 저장 → on_fill에서 position.sector 설정
+        # (2026-08-04 P1: 크기/현금 거부 시에도 등록돼 섹터 한도 오차단이 누적되던 누수)
+        if sector:
+            self._pending_sector_map[symbol] = sector
 
         return True, ""
 
@@ -852,8 +854,12 @@ class UnifiedEngine:
                 "daily_start_unrealized_pnl": str(self.portfolio.daily_start_unrealized_pnl),
                 "daily_trades": self.portfolio.daily_trades,
             }
-            with open(self._DAILY_STATS_PATH, "w") as f:
+            # 원자적 쓰기 (2026-08-04 P0) — 쓰기 도중 크래시로 파손된 파일이
+            # 재시작 시 "장중 풀 리셋"을 트리거하던 경로 차단
+            _tmp = self._DAILY_STATS_PATH.with_suffix(".tmp")
+            with open(_tmp, "w") as f:
                 json.dump(data, f)
+            os.replace(_tmp, self._DAILY_STATS_PATH)
         except Exception as e:
             logger.warning(f"[DailyStats] 저장 실패: {e}")
 
@@ -1130,6 +1136,8 @@ class RiskManager:
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
 
+        # 자동매도 금지 종목 (run_trader에서 exit_manager._exit_exempt live set 주입)
+        self._exit_exempt_ref: set = set()
         # 섹터 임시 캐시 (clear_pending에서 참조 — UnifiedEngine._pending_sector_map과 호환 목적)
         # ★ 버그 방지 (2026-04-20 08:00 AttributeError):
         #   clear_pending(line ~1552), _on_order_failure(line ~1475, 1492)에서 참조하는데
@@ -1206,6 +1214,10 @@ class RiskManager:
                 if pos.strategy == "core_holding":
                     continue
                 if sym in self._pending_orders:
+                    continue
+                # 자동매도 금지 종목은 축출 불가 (2026-08-04 P0 — 7개 청산 가드 중
+                # 이 경로만 누락돼 있었다. run_trader에서 exit_manager 세트 주입)
+                if sym in getattr(self, "_exit_exempt_ref", set()):
                     continue
                 pnl_pct = float(getattr(pos, 'unrealized_pnl_pct', 0) or 0)
                 if pnl_pct > 0:
@@ -1451,11 +1463,17 @@ class RiskManager:
                 if 1520 <= time_val < 1530:
                     logger.info(f"[리스크] 동시호가 시간대 시장가 불가: {s} → 지정가 유지")
                     continue
+                # 원 주문 수량 유지 — 분할 익절/트림 폴백이 전량 매도로 번지는 것 방지
+                # (2026-08-04 P0: 부분 매도 미체결 시 pos.quantity 전량이 시장가로 나가던 버그)
+                _orig_qty = self._pending_quantities.get(s)
+                _fb_qty = (min(_orig_qty, pos.quantity)
+                           if _orig_qty is not None and _orig_qty > 0
+                           else pos.quantity)
                 fallback_order = Order(
                     symbol=s,
                     side=OrderSide.SELL,
                     order_type=OrderType.MARKET,
-                    quantity=pos.quantity,
+                    quantity=_fb_qty,
                     reason="미체결 폴백: 시장가 전환",
                 )
                 try:
@@ -1464,7 +1482,7 @@ class RiskManager:
                         self._pending_timestamps[s] = datetime.now()
                         self._pending_sides[s] = OrderSide.SELL
                         self._pending_fallback_count[s] = fallback_cnt + 1
-                    logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
+                    logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {_fb_qty}주/보유 {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
                 except Exception as e:
                     logger.error(f"[리스크] 시장가 폴백 주문 실패: {s} - {e}")
                     await self.clear_pending(s)
@@ -1481,9 +1499,14 @@ class RiskManager:
             if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
                 try:
                     cancelled = await self.engine.broker.cancel_all_for_symbol(s)
+                    # 취소 0건 = 브로커가 더 이상 추적하지 않는 주문(이미 소멸)
+                    # → 해제해야 한다 (2026-08-04 P1: 0건을 실패로 취급해 pending과
+                    #   예약현금 1.015배가 익일 리셋까지 잠기던 버그). API 예외만 유지-재시도.
                     if cancelled:
                         logger.info(f"[리스크] stale 주문 거래소 취소 완료: {s}")
-                        cancel_ok = True
+                    else:
+                        logger.info(f"[리스크] stale 주문 취소 대상 없음(이미 소멸): {s} → pending 해제")
+                    cancel_ok = True
                 except Exception as e:
                     logger.warning(f"[리스크] stale 주문 거래소 취소 실패: {s} - {e}")
             else:
@@ -1761,6 +1784,7 @@ class RiskManager:
                     self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                                   block_reason=reason)
                     self._pending_sector_map.pop(order.symbol, None)
+                    self.engine._pending_sector_map.pop(order.symbol, None)
                     return None
 
             # 비코어 전략: reserved_cash에 코어 예약금 포함 (코어 30% 예산 보호)
@@ -1778,6 +1802,7 @@ class RiskManager:
                 self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                               block_reason=reason)
                 self._pending_sector_map.pop(order.symbol, None)
+                self.engine._pending_sector_map.pop(order.symbol, None)
                 return None
 
         # ── 모든 게이트 통과 → passed 기록 (BUY만)
@@ -1845,6 +1870,8 @@ class RiskManager:
             self._pending_fallback_count.pop(symbol, None)
             self._pending_signal_cache.pop(symbol, None)
             self._pending_sector_map.pop(symbol, None)
+            # 엔진 쪽 섹터 맵도 함께 정리 (2026-08-04 P1 — 누수 시 섹터 한도 오차단)
+            self.engine._pending_sector_map.pop(symbol, None)
 
     async def on_order(self, event: OrderEvent) -> Optional[List[Event]]:
         """ORDER 이벤트 처리 → 브로커에 주문 제출"""

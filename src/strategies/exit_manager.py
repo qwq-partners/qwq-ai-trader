@@ -324,12 +324,14 @@ class ExitManager:
             try:
                 with open(candidate, "r") as f:
                     data = json.load(f)
-                if data:
-                    logger.info(
-                        f"[ExitManager] stage 복원 파일 로드: {len(data)}종목 "
-                        f"({candidate.name})"
-                    )
-                    return data
+                # 빈 dict도 유효한 상태다 (전 포지션 청산 후 정상) — 여기서 더 옛날
+                # 파일로 폴백하면 당일 청산→재매수 종목에 stale stage가 복원된다
+                # (2026-08-04 P1). 존재하는 최신 파일에서 탐색 종료.
+                logger.info(
+                    f"[ExitManager] stage 복원 파일 로드: {len(data)}종목 "
+                    f"({candidate.name})"
+                )
+                return data
             except Exception as e:
                 logger.warning(f"[ExitManager] stage 파일 로드 실패({candidate.name}): {e}")
         return {}
@@ -384,6 +386,13 @@ class ExitManager:
                     entry["initial_qty"] = existing
             data[sym] = entry
         try:
+            # 파일명은 저장 시점 날짜로 재계산 (2026-08-04 P1 — 프로세스 시작일로
+            # 고정되면 7일+ 무중단 운영 후 재시작 시 폴백 스캔(7일) 밖으로 밀려
+            # stage/고점/코어 파라미터가 전량 소실된다)
+            _suffix = f"_{self.market.lower()}" if self.market != "KR" else ""
+            self._stage_file = self._stage_file.parent / (
+                f"exit_stages{_suffix}_{date.today().isoformat()}.json"
+            )
             with open(self._stage_file, "w") as f:
                 json.dump(data, f)
         except Exception as e:
@@ -807,8 +816,15 @@ class ExitManager:
                 )
 
         # 1. 손절 체크
-        sl_pct = state.dynamic_stop_pct if state.dynamic_stop_pct is not None else (state.stop_loss_pct if state.stop_loss_pct is not None else self.config.stop_loss_pct)
-        sl_pct = max(sl_pct, self.config.min_stop_pct)
+        # min_stop_pct 하한 클램프는 ATR 산출값(dynamic)에만 적용 (2026-08-04 P1)
+        # — 기존에는 전략별/레짐별/급락 오버라이드의 타이트 손절(2.0~3.5%)까지
+        #   일괄 4%로 되돌려 "장중 급락 SL 강화"가 통째로 무력화됐었다.
+        if state.dynamic_stop_pct is not None:
+            sl_pct = max(state.dynamic_stop_pct, self.config.min_stop_pct)
+        elif state.stop_loss_pct is not None:
+            sl_pct = state.stop_loss_pct
+        else:
+            sl_pct = self.config.stop_loss_pct
         if net_pnl_pct <= -sl_pct:
             atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct is not None else ""
             return self._create_exit(
@@ -1208,6 +1224,10 @@ class ExitManager:
 
             if state.trailing_stop_pct != params["trailing_stop_pct"]:
                 state.trailing_stop_pct = params["trailing_stop_pct"]
+                # ATR-linked effective 트레일링이 판정에 우선 사용되므로 동기화
+                # (2026-08-04 P1 — 미동기화 시 레짐 TS 조정이 판정에 반영 안 됨)
+                if state.effective_trailing_stop_pct is not None:
+                    state.effective_trailing_stop_pct = params["trailing_stop_pct"]
                 changed.append(f"TS={state.trailing_stop_pct}%")
 
             if state.stale_high_days != params["stale_high_days"]:
@@ -1308,12 +1328,23 @@ class ExitManager:
             if state.is_core:
                 continue  # 코어홀딩 제외
             changed: List[str] = []
-            if state.stop_loss_pct > new_sl:   # 더 타이트할 때만 덮어씀
-                state.stop_loss_pct = new_sl
+            # None 가드 (2026-08-04 P1): SL/TS 미지정 포지션(vcp 등)에서
+            # `None > float` TypeError로 급락 대응 전체가 무음 중단되던 버그
+            if state.stop_loss_pct is None or state.stop_loss_pct > new_sl:
+                state.stop_loss_pct = new_sl   # 더 타이트할 때만 덮어씀
                 changed.append(f"SL={new_sl}%")
-            if state.trailing_stop_pct > new_ts:
+            # ATR 동적 손절이 있으면 그쪽도 조여야 실효 (판정은 dynamic 우선)
+            if state.dynamic_stop_pct is not None and state.dynamic_stop_pct > new_sl:
+                state.dynamic_stop_pct = new_sl
+                changed.append(f"dynSL={new_sl}%")
+            if state.trailing_stop_pct is None or state.trailing_stop_pct > new_ts:
                 state.trailing_stop_pct = new_ts
                 changed.append(f"TS={new_ts}%")
+            # ATR-linked effective 트레일링이 판정에 우선 사용되므로 함께 조임
+            if (state.effective_trailing_stop_pct is not None
+                    and state.effective_trailing_stop_pct > new_ts):
+                state.effective_trailing_stop_pct = new_ts
+                changed.append(f"effTS={new_ts}%")
             if changed:
                 updated += 1
                 logger.warning(

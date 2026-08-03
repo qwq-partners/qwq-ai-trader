@@ -579,6 +579,14 @@ class RiskManager:
                 }
                 self._save_exited_today()
 
+        # 당일 손절 종목 등록 — 강화 재진입 정책(V자 재돌파 + 1일 1회) 발동 (2026-08-04 P0)
+        # 기존에는 check_position_stops(호출자 0건)만 등록해 이 정책 전체가 데드 코드였다.
+        if self.market == "KR" and exit_type in ("stop_loss", "emergency_stop"):
+            if symbol not in self._stop_loss_today:
+                self._stop_loss_today.add(symbol)
+                self._save_stop_loss_today()
+                logger.info(f"[리스크] 당일 손절 등록: {symbol} → 재진입 강화 정책 적용")
+
     def _check_stop_loss_rebound(self, symbol: str, current_price: float) -> tuple:
         """손절 종목 V자 반등 재진입 가능 여부 (KR 전용)
 
