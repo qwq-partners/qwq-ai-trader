@@ -1931,6 +1931,7 @@ class _USEngineBundle:
         self._order_fail_blacklist: Set[str] = set() # 주문 영구실패 종목 (ETP미신청, 매수불가 등)
         self._earnings_today: Set[str] = set()
         self._earnings_upcoming: Set[str] = set()    # 오늘~+2일 발표 예정 (리버설 진입 대상)
+        self._earnings_surprise: Dict[str, float] = {}  # 어제~오늘 EPS 서프라이즈% (드리프트 가드)
         self._earnings_last_refresh: Optional[date] = None
         self._finviz_last_refresh: Optional[date] = None
         self._last_screen_result = None

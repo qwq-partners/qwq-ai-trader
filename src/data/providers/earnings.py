@@ -121,6 +121,66 @@ class EarningsProvider:
         )
         return result
 
+    async def get_recent_surprises(self, today: date = None) -> Dict[str, float]:
+        """
+        어제~오늘 발표분의 EPS 서프라이즈 % 맵 (2026-08-03, earnings_drift 가드용).
+
+        - 어제 장후(amc) 발표 → 오늘 반응 / 오늘 장전(bmo) 발표 → 오늘 반응
+        - surprise% = (actual - estimate) / |estimate| × 100
+        - estimate가 0 근처(<0.01)면 왜곡이 커서 제외
+        - 캐시 1일. API 실패 시 빈 dict — 호출측(드리프트 게이트)은 fail-closed로
+          해석해 진입을 막는다 (EPS 미확인 매수가 원래 비활성 사유였다)
+        """
+        if today is None:
+            from zoneinfo import ZoneInfo
+            today = datetime.now(ZoneInfo("America/New_York")).date()
+
+        cache_path = CACHE_DIR / f"surprises_{today.isoformat()}.json"
+        if cache_path.exists():
+            try:
+                return {k: float(v) for k, v in json.loads(cache_path.read_text()).items()}
+            except Exception:
+                pass
+
+        if not self._api_key:
+            return {}
+
+        yesterday = today - timedelta(days=1)
+        session = await self._get_session()
+        try:
+            async with session.get(
+                f"{self.BASE_URL}/calendar/earnings",
+                params={"from": yesterday.isoformat(), "to": today.isoformat(),
+                        "token": self._api_key},
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[Earnings] 서프라이즈 조회 HTTP {resp.status}")
+                    return {}
+                data = await resp.json()
+        except Exception as e:
+            logger.error(f"[Earnings] 서프라이즈 조회 실패: {e}")
+            return {}
+
+        surprises: Dict[str, float] = {}
+        for item in data.get("earningsCalendar", []):
+            symbol = (item.get("symbol") or "").strip()
+            actual = item.get("epsActual")
+            estimate = item.get("epsEstimate")
+            if not symbol or actual is None or estimate is None:
+                continue
+            if abs(float(estimate)) < 0.01:
+                continue
+            surprises[symbol] = round(
+                (float(actual) - float(estimate)) / abs(float(estimate)) * 100, 2
+            )
+
+        try:
+            cache_path.write_text(json.dumps(surprises))
+        except Exception as e:
+            logger.debug(f"[Earnings] 서프라이즈 캐시 저장 실패: {e}")
+        logger.info(f"[Earnings] EPS 서프라이즈 {len(surprises)}종목 (어제~오늘 발표)")
+        return surprises
+
     async def get_today_earnings(self, today: date = None) -> Set[str]:
         """
         오늘 + 어제 어닝 발표 종목 반환.

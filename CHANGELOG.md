@@ -1,5 +1,35 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-03 — chore(us): earnings_drift 재활성화 **보류 종결** (pending-decisions #6)
+
+EPS 서프라이즈 가드 배선 + 통계 검증까지 마쳤으나 **활성화하지 않고 종결**한다.
+
+### 검증은 통과했다 (`quick_backtest.py --idea earnings_drift` 신설)
+24개월 S&P500 3,561 이벤트 / 반응일 종가 매수 후 10일 보유:
+- 갭≥3%만(EPS 무관, 기존 프록시 방식) **+0.39% < 베이스라인 +0.76%** —
+  2026-04-18 비활성 사유("갭만 보면 sell-the-news 무방비")를 데이터가 확인
+- **EPS beat≥10% + 갭≥5% + 갭유지 +1.71% · 승률 61.0% (t=2.13, n=123)** — 조건부 통과
+- 원본: `results/quickbt_earnings_drift_20260803.csv`
+
+### 그럼에도 보류한 이유 2가지
+1. **US 미운용** — 사용자가 미국 시장 투자 계획 없음을 확인. 실제로 systemd 서비스는
+   `--market kr`이라 US 스케줄러가 기동조차 하지 않는다. 켜도 실행되지 않는 코드였다
+2. **finnhub EPS 커버리지 부족** — 실측(2026-08-03) 어제~오늘 발표분 중
+   actual+estimate를 모두 가진 종목이 **18개뿐**(전부 S&P500 밖), 원본 재조회 시 504.
+   가드가 fail-closed라 켜도 거의 발화하지 못한다. 재활성화 전 선결 과제로 기록
+
+### 남긴 것 / 되돌린 것
+- **되돌림**: `config/default.yml` earnings_drift `enabled: true → false`
+- **유지**: `EarningsProvider.get_recent_surprises()`(finnhub 어제~오늘 EPS 서프라이즈,
+  1일 캐시, |estimate|<0.01 제외), 스케줄러 스캔 경로 2곳의 fail-closed 가드,
+  `_USEngineBundle._earnings_surprise`, quick_backtest 검증 아이디어,
+  튜닝값(min_gap_pct 5.0 / max_holding_days 10) — 재개 시 그대로 사용
+- 봇 재시작 불필요: 현재 서비스는 KR 전용이라 US 전략 설정이 로드되지 않는다
+
+수정: `config/default.yml`, `scripts/quick_backtest.py`, `scripts/run_trader.py`,
+`src/data/providers/earnings.py`, `src/schedulers/us_scheduler.py`
+문서: `docs/strategies/us-strategies.md`, `docs/strategies/pending-decisions.md`, `CLAUDE.md`
+
 ## 2026-08-03 — feat(agents): 심의 슬롯 2→4 확대 + 4개월 잠자던 NameError 발굴
 
 ### 슬롯 확대 (10:30 / 11:30 / 13:00 / 14:00)

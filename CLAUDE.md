@@ -161,7 +161,7 @@ tools/
 |------|------|------|
 | 모멘텀 | `us/momentum.py` | 20일 고가 돌파 브레이크아웃 |
 | SEPA | `us/sepa_trend.py` | SEPA 추세 (RS 등급 기반) |
-| 어닝스 드리프트 | `us/earnings_drift.py` | EPS 서프라이즈 후 모멘텀 (🚫 비활성) |
+| 어닝스 드리프트 | `us/earnings_drift.py` | EPS 서프라이즈 후 모멘텀 (🚫 비활성 — 2026-08-03 검증 통과했으나 US 미운용·EPS 커버리지 부족으로 보류) |
 | 어닝스 리버설 | `us/earnings_reversal.py` | 발표 전 낙폭과대 반등 (⛔ 검증 기각 2026-08-03 — 활성화 금지) |
 
 ### 청산 관리 (ExitManager)

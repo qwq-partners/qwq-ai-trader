@@ -634,6 +634,14 @@ class USScheduler:
                         except Exception as e:
                             logger.warning(f"[US Earnings] 발표예정 갱신 실패: {e}")
                             eng._earnings_upcoming = set()
+                        # EPS 서프라이즈 (어제~오늘 발표) — EarningsDrift 가드
+                        try:
+                            eng._earnings_surprise = (
+                                await eng.earnings_provider.get_recent_surprises(today)
+                            )
+                        except Exception as e:
+                            logger.warning(f"[US Earnings] 서프라이즈 갱신 실패: {e}")
+                            eng._earnings_surprise = {}
                         eng._earnings_last_refresh = today
                     except Exception as e:
                         logger.warning(f"[US Earnings] 갱신 실패: {e}")
@@ -856,12 +864,15 @@ class USScheduler:
 
                 # ── 전략 선택 필터 ──────────────────────────────────
                 for strategy in eng.strategies:
-                    if (
-                        strategy.name == "earnings_drift"
-                        and eng._earnings_today
-                        and symbol not in eng._earnings_today
-                    ):
-                        continue
+                    if strategy.name == "earnings_drift":
+                        if eng._earnings_today and symbol not in eng._earnings_today:
+                            continue
+                        # EPS 서프라이즈 가드 (2026-08-03, fail-closed) — 갭만 보고
+                        # 진입하던 것이 비활성 사유였다. 서프라이즈 미확인이면 차단.
+                        _surp = getattr(eng, "_earnings_surprise", {}).get(symbol)
+                        _min_surp = getattr(strategy, "min_eps_surprise_pct", 10)
+                        if _surp is None or _surp < _min_surp:
+                            continue
                     # 리버설은 발표 예정 종목에서만 — 캘린더 없으면 발화 금지 (fail-closed)
                     if (
                         strategy.name == "earnings_reversal"
@@ -3180,12 +3191,14 @@ class USScheduler:
                 pass
 
             for strategy in eng.strategies:
-                if (
-                    strategy.name == "earnings_drift"
-                    and eng._earnings_today
-                    and symbol not in eng._earnings_today
-                ):
-                    continue
+                if strategy.name == "earnings_drift":
+                    if eng._earnings_today and symbol not in eng._earnings_today:
+                        continue
+                    # EPS 서프라이즈 가드 (2026-08-03, fail-closed)
+                    _surp = getattr(eng, "_earnings_surprise", {}).get(symbol)
+                    _min_surp = getattr(strategy, "min_eps_surprise_pct", 10)
+                    if _surp is None or _surp < _min_surp:
+                        continue
                 # 리버설은 발표 예정 종목에서만 — 캘린더 없으면 발화 금지 (fail-closed)
                 if (
                     strategy.name == "earnings_reversal"

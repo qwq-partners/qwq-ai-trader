@@ -29,13 +29,26 @@ KR 엔진의 3대 기능을 이식:
 - `position_multiplier` metadata 전달
 - `from loguru import logger` 필수 (P0 수정 완료)
 
-## 3. Earnings Drift (`src/strategies/us/earnings_drift.py`) — **2026-04-18 비활성화 중**
+## 3. Earnings Drift (`src/strategies/us/earnings_drift.py`) — **🚫 비활성 (검증 통과 · 보류)**
 
-- **현재 상태: `config/default.yml` `enabled: false`**
-- 비활성화 사유: EPS surprise / 매출 성장률 API 미연동 상태. 갭+거래량 프록시만으로는
-  "sell-the-news"(부진 발표 후 일시 갭업) 위험 무방비. finnhub/polygon earnings
-  calendar 연동 + EPS surprise ≥10% 가드 추가 후 재활성화 예정.
-- 기존 설정(참고): 갭 7.0%+, 거래량 3.5x+, close>open, ATR 0/None 시 0.8x 폴백, bear 허용
+- **현재 상태: `enabled: false`** — 2026-08-03 EPS 가드 부착 + 통계 검증까지 마쳤으나
+  **US 미운용 결정으로 보류 종결** (pending-decisions #6). 재개 조건은 해당 문서 참조
+- ⚠️ **재활성화 전 선결**: finnhub 무료 티어 EPS 커버리지 부족 (2026-08-03 실측 —
+  어제~오늘 발표분 중 actual+estimate 확보 18종목뿐, 전부 S&P500 밖 + 원본 재조회 504).
+  가드가 fail-closed라 지금 켜도 거의 발화하지 못한다
+- **검증 결과 (quick_backtest, 24개월 S&P500 3,561 이벤트, 10일 보유)**:
+  - 갭≥3%만(EPS 무관, 기존 프록시 방식): **+0.39% < 베이스라인 +0.76%** —
+    "갭만 보고 진입은 sell-the-news 무방비"라던 비활성 사유를 데이터가 확인
+  - **EPS beat≥10% + 갭≥5% + 갭유지: +1.71% · 승률 61.0% (t=2.13, n=123)** —
+    베이스라인 대비 +0.95%p 초과. 갭≥7%는 +1.95%지만 n=84로 표본 약함 → 5% 채택
+  - 베이스라인 대비 초과분 자체의 t는 ~1.2로 압도적이지 않음 — 재개 시 shadow 관측
+    또는 진화 시스템 표본(거래 ≥10건) 누적 후 평가 필요
+- **EPS surprise 가드 (fail-closed)**: 스케줄러가 `eng._earnings_surprise`
+  (`EarningsProvider.get_recent_surprises` — finnhub 어제~오늘 발표분, 1일 캐시,
+  |estimate|<0.01 제외)에서 서프라이즈 ≥10% 확인 안 되면 진입 차단.
+  API 장애 = 빈 맵 = 전면 차단 (EPS 미확인 매수가 원래 비활성 사유)
+- 설정값: min_gap_pct 7.0→**5.0**, max_holding_days 20→**10** (검증 기준에 맞춰 튜닝만
+  해두고 비활성 유지 — 재개 시 그대로 사용. max_holding은 배선 완료로 실제 집행됨)
 
 ## US 시장 체제 (`src/core/us_market_regime.py`)
 

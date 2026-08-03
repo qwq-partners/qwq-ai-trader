@@ -469,18 +469,25 @@ us:
       min_rs_rating: 70
 
     earnings_drift:
-      # 비활성화: EPS surprise / 매출 성장률 API 미연동 상태 — 갭+거래량 프록시만으로
-      # 운용하면 sell-the-news(어닝 부진 발표 후 갭업) 위험 무방비.
-      # finnhub/polygon earnings calendar 연동 + EPS surprise ≥10% 가드 추가 후 재활성화.
+      # 🚫 비활성 유지 — 2026-08-03 통계 검증은 통과했으나 US 미운용 결정으로 보류
+      # (pending-decisions #6 종결). 재활성화 전 아래 커버리지 문제 먼저 해결할 것.
+      # 검증 (quick_backtest 24개월 S&P500 3,561 이벤트, 10일 보유):
+      #   갭만(EPS 무관) +0.39% < 베이스라인 +0.76% → 기존 프록시 방식 비활성화가 옳았음
+      #   EPS beat≥10% + 갭≥5% + 갭유지: +1.71% · 승률 61.0% (t=2.13) → 조건부 통과
+      # 가드는 배선 완료: 스케줄러가 eng._earnings_surprise(finnhub 어제~오늘 발표분)에서
+      #   서프라이즈 ≥ min_eps_surprise_pct 확인 안 되면 진입 차단 (fail-closed)
+      # ⚠️ 미해결: finnhub 무료 티어 EPS 커버리지 부족 (2026-08-03 실측 어제~오늘
+      #   18종목만 actual+estimate 확보, 전부 S&P500 밖 + 원본 재조회 시 504).
+      #   fail-closed 가드라 켜도 거의 발화하지 못한다 — 유료 티어/대체 소스 선결 과제.
       enabled: false
       time_horizon: swing
       min_eps_surprise_pct: 10
-      min_gap_pct: 7.0
+      min_gap_pct: 5.0           # 검증 최적 균형 (7%는 n=84로 표본 약함)
       min_volume_surge: 3.5
       min_revenue_growth_pct: 15
       min_score: 70
       stop_loss_pct: 5.5
-      max_holding_days: 20
+      max_holding_days: 10       # 검증 보유 기준과 일치 (배선 완료로 실제 집행됨)
 
     earnings_reversal:
       # 어닝 발표 전 낙폭과대 → 발표 후 반등 (재현 Sharpe 0.785의 long-only 변형)

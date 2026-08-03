@@ -111,10 +111,14 @@
 ## 처리 이력
 
 - 2026-04-21: 4건 등록 (사용자 승인). N≥10건/전략 누적 후 재검토 합의.
+- 2026-08-03: #6 등록 → 같은 날 검증 수행 후 **보류 종결** (US 미운용 + EPS 커버리지 부족).
 
 ---
 
-## 항목 #6 — earnings_drift 재활성화 검토 (2026-08-03 등록)
+## 항목 #6 — earnings_drift 재활성화 검토 (2026-08-03 등록 → **2026-08-03 보류 종결**)
+
+> **결론: 보류 (enabled: false 유지).** 통계 검증은 통과했으나 사용자의 **US 미운용 결정**으로
+> 활성화하지 않는다. 검증·가드 코드는 남기되 설정은 비활성. 재개하려면 아래 "재개 조건" 참조.
 
 **제안**: US earnings_drift(현재 enabled: false)를 EPS surprise 가드(finnhub `epsActual` vs
 `epsEstimate` ≥10%) 부착 후 재활성화
@@ -126,9 +130,30 @@
 - 기존 비활성 사유였던 "EPS surprise API 미연동"은 finnhub 캘린더의
   epsActual/epsEstimate 필드로 해소 가능 (`_earnings_upcoming` 인프라 재사용)
 
-**재검토 트리거**: 사용자 요청 시. 활성화 전 quick_backtest로
-"발표 후 갭업 + EPS beat" 조합의 표본 검증 선행할 것 (pre5d 급등 ≠ 갭업+서프라이즈).
+**검증 결과 (2026-08-03 수행, quick_backtest 24개월 S&P500 3,561 이벤트 / 10일 보유)**:
+- 갭≥3%만(EPS 무관, 기존 프록시 방식): **+0.39% < 베이스라인 +0.76%** —
+  "갭만 보고 진입은 sell-the-news 무방비"라던 2026-04-18 비활성 사유를 데이터가 확인
+- **EPS beat≥10% + 갭≥5% + 갭유지: +1.71% · 승률 61.0% (t=2.13, n=123)** — 조건부 통과
+  (갭≥7%는 +1.95%지만 n=84로 표본 약함). 다만 베이스라인 초과분 자체의 t는 ~1.2로 압도적이지 않음
+- 원본: `results/quickbt_earnings_drift_20260803.csv`
+
+**보류 사유 (2026-08-03 종결)**:
+1. **US 미운용** — 사용자가 미국 시장 투자 계획 없음을 확인. systemd 서비스도
+   `--market kr`로 US 스케줄러 자체가 기동하지 않는다 (활성화해도 실행되지 않는 코드)
+2. **finnhub EPS 커버리지 부족** — 실측 결과 어제~오늘 발표분 중 actual+estimate가
+   모두 있는 종목이 18개뿐(전부 S&P500 밖), 원본 재조회 시 504. 가드가 fail-closed라
+   켜도 거의 발화하지 못한다
+
+**남긴 것 / 되돌린 것**:
+- 유지: `EarningsProvider.get_recent_surprises()`, 스케줄러 EPS 서프라이즈 가드 배선,
+  `quick_backtest.py --idea earnings_drift` 검증 도구, 튜닝값(min_gap_pct 5.0 / max_holding_days 10)
+- 되돌림: `config/default.yml` `enabled: true → false`
+
+**재개 조건**: (1) US 시장 운용 재개 결정 **그리고** (2) EPS 데이터 소스 커버리지 확보
+(finnhub 유료 티어 또는 대체 소스). 둘 다 충족 시 백테스트 재실행 없이 `enabled: true`만으로
+재개 가능하나, 최소 1주 shadow 관측 권장.
 
 **관련 파일**:
 - `src/strategies/us/earnings_drift.py`, `src/data/providers/earnings.py`
-- `results/quickbt_earnings_reversal_20260803.csv` (이벤트 원본 데이터)
+- `src/schedulers/us_scheduler.py` (스캔 경로 2곳의 서프라이즈 가드)
+- `results/quickbt_earnings_reversal_20260803.csv`, `results/quickbt_earnings_drift_20260803.csv`
