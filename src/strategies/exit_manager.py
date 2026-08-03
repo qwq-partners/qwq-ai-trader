@@ -247,6 +247,9 @@ class PositionExitState:
     # 분할 익절 신호 발행됨, fill 대기 중 (재시작 시 None → current_stage 유지, 재발행 방지)
     # 파일에 저장 안 함: 재시작 시 None → current_stage=NONE이면 자동 재발행
     pending_stage: Optional[ExitStage] = None
+    # pending_stage 설정 시각 — 5분 초과 시 자동 만료 (2026-08-04 P2:
+    # rollback이 호출되지 않는 경로에서 pending 영구 잔류 → 익절 불능 방지)
+    pending_since: Optional[datetime] = None
     # 포지션 최초 진입 수량 (부분 매도 후에도 유지 — 재시작 정합성 검증용)
     # 파일의 initial_qty에서 복원, 없으면 original_quantity로 초기화
     initial_quantity: int = 0
@@ -382,6 +385,9 @@ class ExitManager:
                 )
             else:
                 existing = self._persisted.get(sym, {}).get("initial_qty")
+                if existing is None and state.initial_quantity is not None:
+                    # 당일 매수 후 당일 익절: 로드 스냅샷에 없다 — state 값 사용 (2026-08-04 P2)
+                    existing = int(state.initial_quantity)
                 if existing is not None:
                     entry["initial_qty"] = existing
             data[sym] = entry
@@ -393,8 +399,8 @@ class ExitManager:
             self._stage_file = self._stage_file.parent / (
                 f"exit_stages{_suffix}_{date.today().isoformat()}.json"
             )
-            with open(self._stage_file, "w") as f:
-                json.dump(data, f)
+            from ..utils.atomic_io import atomic_write_json
+            atomic_write_json(self._stage_file, data)
         except Exception as e:
             logger.warning(f"[ExitManager] stage 파일 저장 실패: {e}")
 
@@ -1044,6 +1050,19 @@ class ExitManager:
         if first_ratio <= 0 and second_ratio <= 0 and third_ratio <= 0:
             return None
 
+        # pending_stage 자동 만료 (2026-08-04 P2): 시그널이 engine에서 거부됐는데
+        # rollback이 호출되지 않는 경로(batch monitor 등)에서 pending이 영구 잔류해
+        # 분할 익절이 재시작 전까지 재발행 불가였다. 정상 fill은 수십 초 내 해제되므로
+        # 5분 초과 시 클리어 → 다음 판정 주기에 자연 재발행.
+        if (state.pending_stage is not None and state.pending_since is not None
+                and (datetime.now() - state.pending_since).total_seconds() > 300):
+            logger.warning(
+                f"[ExitManager] {state.symbol} pending_stage 자동 만료: "
+                f"{state.pending_stage.value} (5분 초과 — 주문 거부/유실 추정)"
+            )
+            state.pending_stage = None
+            state.pending_since = None
+
         # 1차 익절
         # pending_stage가 이미 있으면 fill 대기 중 → 중복 신호 방지
         if state.current_stage == ExitStage.NONE and state.pending_stage is None:
@@ -1057,6 +1076,7 @@ class ExitManager:
                 # ★ stage는 fill 확인 후(on_fill)에만 advance
                 # 재시작 시 pending_stage=None → current_stage=NONE → 자동 재발행 보장
                 state.pending_stage = ExitStage.FIRST
+                state.pending_since = datetime.now()
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -1072,6 +1092,7 @@ class ExitManager:
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.pending_stage = ExitStage.SECOND
+                state.pending_since = datetime.now()
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -1087,6 +1108,7 @@ class ExitManager:
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.pending_stage = ExitStage.THIRD
+                state.pending_since = datetime.now()
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -1148,22 +1170,14 @@ class ExitManager:
             )
             return True
 
-        # pending 없는 레거시 케이스: current_stage 한 단계 롤백
-        prev_stage = state.current_stage
-        stage_order = self.STAGE_ORDER
-        try:
-            idx = stage_order.index(state.current_stage)
-        except ValueError:
-            return False
-
-        if idx > 0:
-            state.current_stage = stage_order[idx - 1]
-            self._persist_states()
-            logger.warning(
-                f"[ExitManager] {symbol} stage 롤백: {prev_stage.value} -> {state.current_stage.value} "
-                f"(주문 실패로 복원, 영속화 완료)"
-            )
-            return True
+        # pending_stage 없는 케이스 = 손절/트레일링 등 sell_all 계열 실패 (2026-08-04 P2)
+        # 기존 레거시 다운그레이드(FIRST→NONE)는 stage를 부당 하락시켜 가격 회복 시
+        # 1차 익절이 재발동(중복 부분매도)하던 버그 — 분할 익절은 모두 pending_stage를
+        # 세팅하므로 여기 도달하면 stage 변경 없이 no-op이 옳다.
+        logger.debug(
+            f"[ExitManager] {symbol} rollback 호출 (pending 없음, sell_all 계열) → "
+            f"stage 변경 없음 (current={state.current_stage.value})"
+        )
         return False
 
     def apply_regime_params(self, regime: str, *, force: bool = False) -> int:

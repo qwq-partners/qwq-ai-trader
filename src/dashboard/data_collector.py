@@ -1559,10 +1559,12 @@ class DashboardDataCollector:
     # 일일 정산 (KIS 체결 기반)
     # ----------------------------------------------------------
 
-    # 수수료율 상수
-    BUY_FEE_RATE = 0.000141   # 매수 수수료 0.0141%
-    SELL_FEE_RATE = 0.000131  # 매도 수수료 0.0131%
-    SELL_TAX_RATE = 0.002     # 증권거래세 0.20%
+    # 수수료율 — FeeConfig 단일 출처 파생 (2026-08-04 P2: 하드코딩 금지 규칙 준수,
+    # 기존 상수 0.000141/0.000131은 FeeConfig 0.000140527/0.000130527과 미세 불일치)
+    from ..utils.fee_calculator import FeeConfig as _FeeConfig
+    BUY_FEE_RATE = float(_FeeConfig.buy_commission_rate)
+    SELL_FEE_RATE = float(_FeeConfig.sell_commission_rate)
+    SELL_TAX_RATE = float(_FeeConfig.sell_tax_rate)
 
     async def get_daily_settlement(self, target_date: date = None) -> Dict[str, Any]:
         """

@@ -245,7 +245,13 @@ class CrossStrategyValidator:
             # 09:30~10:30 -8점 페널티 (변동성 방향 미확정 구간)
             # core_holding/strategic_swing은 배치(T+1) 전략 — 09:30 시작이 정상 동작이므로 예외.
             # 주의: strategic_swing이 미래에 장중 진입 추가 시 이 면제 재검토 필수.
-            if 930 <= now_hm < 1030 and strategy not in ("core_holding", "strategic_swing"):
+            # 2026-08-04 P1: 배치 실행 시그널(metadata batch_signal — sepa/rsi2/vcp 09:30
+            # T+1 집행)도 동일 근거로 면제. 기존엔 -8 + 지표결손 감점 합산으로 55~64점대
+            # 배치 시그널이 계통적으로 차단·유실됐다. 장중 자동진입 sepa는 마커가 없어
+            # 페널티가 그대로 적용된다 (의도).
+            _is_batch = bool((metadata or {}).get("batch_signal"))
+            if (930 <= now_hm < 1030 and not _is_batch
+                    and strategy not in ("core_holding", "strategic_swing")):
                 adjusted_score -= 8
                 penalties.append("장초반 변동성 -8 (09:30~10:30)")
             # 12:30~13:00 +5 보너스 (점심 batch 추세 확정 후 진입 sweet spot)

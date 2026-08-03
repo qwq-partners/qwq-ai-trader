@@ -4182,7 +4182,23 @@ JSON:
     async def run_evolution_scheduler(self):
         """LLM 거래 리뷰 스케줄러 — 매일 20:30 LLM 종합평가 생성"""
         bot = self.bot
+        # 실행 이력 영속화 (2026-08-04 P2) — 20:30~20:44 윈도우 내 재시작 시
+        # LLM 종합평가·evolve() 중복 실행 방지 (weekly/post-exit과 동일 패턴)
+        _evo_state_path = Path.home() / ".cache" / "ai_trader" / "evolution_state.json"
         last_review_date: Optional[date] = None
+        try:
+            if _evo_state_path.exists():
+                _d = json.loads(_evo_state_path.read_text()).get("last_review_date")
+                if _d:
+                    last_review_date = date.fromisoformat(_d)
+        except Exception:
+            pass
+
+        def _persist_evo_date(d: date):
+            try:
+                _evo_state_path.write_text(json.dumps({"last_review_date": d.isoformat()}))
+            except Exception:
+                pass
 
         sched_cfg = bot.config.get("kr", "scheduler") or {}
         evo_time_str = sched_cfg.get("evolution_time", "20:30")
@@ -4273,6 +4289,7 @@ JSON:
                                 )
 
                                 last_review_date = today
+                                _persist_evo_date(today)
 
                             except Exception as e:
                                 logger.error(f"[거래리뷰] LLM 평가 생성 실패: {e}")
@@ -4282,8 +4299,10 @@ JSON:
                                     traceback.format_exc()
                                 )
                                 last_review_date = today
+                                _persist_evo_date(today)
                         else:
                             last_review_date = today
+                            _persist_evo_date(today)
 
                         # 전략 진화 실행 (LLM 복기 직후)
                         # 가드레일: 1개 파라미터/5영업일+10건 평가/악화 시 즉시 롤백
@@ -4990,7 +5009,12 @@ JSON:
                             strategy="safe_asset",
                             reason=f"안전자산 자동 매수: 약세장 자본 활용",
                         )
-                        await bot.broker.submit_order(order)
+                        _ok, _oid = await bot.broker.submit_order(order)
+                        # 제출 실패 시 상태 저장 금지 (2026-08-04 P2 — 실패에도
+                        # entry_date가 저장돼 미보유 상태를 보유로 오인하던 버그)
+                        if not _ok:
+                            logger.warning(f"[안전자산] KOFR 매수 제출 실패 (주문 거부)")
+                            continue
                         state_data["entry_date"] = today.isoformat()
                         state_data["entry_qty"] = qty
                         state_data["entry_price"] = price
@@ -5049,7 +5073,10 @@ JSON:
                                 strategy="safe_asset",
                                 reason=f"안전자산 자동 매도: {sell_reason}",
                             )
-                            await bot.broker.submit_order(order)
+                            _ok, _oid = await bot.broker.submit_order(order)
+                            if not _ok:
+                                logger.warning("[안전자산] KOFR 매도 제출 실패 — 상태 유지, 다음 주기 재시도")
+                                continue
                             logger.info(
                                 f"[안전자산] KOFR 매도: {kofr_pos.quantity}주 — {sell_reason}"
                             )

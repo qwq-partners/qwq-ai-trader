@@ -53,18 +53,17 @@ class EvolvedConfigManager:
             return {}
 
     def _save(self):
-        """evolved_overrides.yml 저장"""
+        """evolved_overrides.yml 저장 (원자적 — 파손 시 진화 파라미터 전체가 default 회귀)"""
         try:
-            self._config_dir.mkdir(parents=True, exist_ok=True)
+            from ...utils.atomic_io import atomic_write_text
             snapshot = copy.deepcopy(self._overrides)
-            with open(self._override_file, "w", encoding="utf-8") as f:
-                yaml.dump(
-                    snapshot,
-                    f,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False,
-                )
+            content = yaml.dump(
+                snapshot,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+            atomic_write_text(self._override_file, content)
             logger.debug(f"진화 오버라이드 저장: {self._override_file}")
         except Exception as e:
             logger.error(f"진화 오버라이드 저장 실패: {e}")

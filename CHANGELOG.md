@@ -1,5 +1,40 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-04 — fix(engine): 리뷰 잔여분 일괄 처리 — 보류 정책 2건 + P2 12건
+
+전체 엔진 리뷰(같은 날 P0/P1 커밋)의 후속. 사용자 지시로 잔여 건 전부 진행.
+
+### 정책 결정 2건
+- **daily_max_trades 재도입**: 과거 "가용 현금이 게이트"로 제거됐으나 문서·대시보드가
+  계속 한도를 표기 → 문서화된 동작으로 복원. BUY만 차단, 청산 무제한 (`engine.py`)
+- **배치 T+1 시그널의 09:30~10:30 -8 페널티 면제**: `metadata.batch_signal` 마커 기반
+  (sepa/rsi2/vcp 09:30 집행은 설계상 정상 — core_holding 면제와 동일 근거).
+  장중 자동진입 sepa는 마커가 없어 페널티 유지. neutral 장 sepa 하드 차단(규칙 3-3)은
+  **변경 보류** — 매수 빈도에 직접 영향이라 별도 데이터 검토 필요
+
+### P2 수정 12건
+- 진화 스케줄러 실행일 영속화 (`evolution_state.json`) — 20:30 윈도우 재시작 중복 방지
+- 안전자산(KOFR) 매수/매도 제출 결과 확인 — 실패 시 상태 저장/clear 금지
+- `SECTOR_ETF_MAP` 철강 069500(KODEX 200!) → **117680**(KODEX 철강) — 시장 전체
+  상승을 철강 급등으로 오인하던 매핑 오류
+- 대시보드 정산 수수료율 하드코딩 제거 → `FeeConfig` 파생 (0.000141→0.000140527)
+- `modify_order` 킬스위치 검사 추가 (매수 정정 추격 차단) + `or` falsy 패턴 제거
+- `position_multiplier` 적용 후 max_value 재클램프 — 부스트가 G3 전체 거부로
+  변질되던 것 (시즈널리티 경로와 동일 패턴)
+- **원자적 쓰기 헬퍼** `src/utils/atomic_io.py` 신설 → `evolved_overrides.yml`·
+  exit stage 파일·`pending_signals.json`·`core_holding_state.json` 적용
+  (파손 시 진화 파라미터 default 회귀/stage 소실 방지)
+- ExitManager: ① 당일 매수 후 당일 익절 포지션의 initial_qty 영속화 폴백
+  ② rollback_stage 레거시 다운그레이드 제거 (sell_all 실패 시 stage 부당 하락 →
+  1차 익절 중복 매도 경로 차단) ③ **pending_stage 5분 자동 만료** (`pending_since`
+  신설 — rollback 미호출 경로에서 분할 익절 영구 불능이던 무음 실패 해소)
+
+수정: `src/core/engine.py`, `src/core/cross_validator.py`, `src/core/batch_analyzer.py`,
+`src/core/evolution/config_persistence.py`, `src/schedulers/kr_scheduler.py`,
+`src/strategies/exit_manager.py`, `src/execution/broker/kis_kr.py`,
+`src/dashboard/data_collector.py`, `src/data/providers/sector_momentum.py`,
+`src/utils/atomic_io.py`(신규)
+
 ## 2026-08-04 — fix(engine): 전체 엔진 흐름 합동 리뷰 — P0 4건 + P1 8건 수정
 
 4개 영역(시그널 경로·청산 경로·스케줄러·리스크) 병렬 심층 리뷰 → 전 P0/핵심 P1을

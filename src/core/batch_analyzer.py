@@ -2339,8 +2339,8 @@ class BatchAnalyzer:
         """대기 시그널 JSON 저장"""
         try:
             data = [p.to_dict() for p in self._pending]
-            with open(self._signals_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            from ..utils.atomic_io import atomic_write_json
+            atomic_write_json(self._signals_path, data, indent=2)
             logger.debug(f"[배치분석] {len(self._pending)}개 시그널 저장: {self._signals_path}")
         except Exception as e:
             logger.error(f"[배치분석] JSON 저장 실패: {e}")
@@ -2762,7 +2762,8 @@ class BatchAnalyzer:
             if self._core_state_path.exists():
                 existing = json.loads(self._core_state_path.read_text())
             existing.update(data)
-            self._core_state_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2))
+            from ..utils.atomic_io import atomic_write_json
+            atomic_write_json(self._core_state_path, existing, indent=2)
         except Exception as e:
             logger.warning(f"[코어홀딩] 상태 저장 실패: {e}")
 

@@ -864,6 +864,14 @@ class KISBroker(BaseBroker):
             logger.warning(f"수정할 주문을 찾을 수 없음: {order_id}")
             return False
 
+        # 킬스위치 (2026-08-04 P2) — 정정도 매수 추격 수단이므로 검사.
+        # KILL_SWITCH(신규 매수 차단) 발동 중 매수 주문 정정 차단, 매도 정정은 허용.
+        _mod_order = self._pending_orders[order_id]
+        allowed, block_reason = kill_switch.check(_mod_order.side.value, market="KR")
+        if not allowed:
+            logger.warning(f"[킬스위치] 주문 정정 차단: {order_id} — {block_reason}")
+            return False
+
         if not self.is_connected:
             if not await self.connect():
                 return False
@@ -885,7 +893,7 @@ class KISBroker(BaseBroker):
                 "ORGN_ODNO": kis_ord_no,
                 "ORD_DVSN": "00",
                 "RVSE_CNCL_DVSN_CD": "01",  # 정정
-                "ORD_QTY": str(new_quantity or order.quantity),
+                "ORD_QTY": str(new_quantity if new_quantity is not None else order.quantity),
                 "ORD_UNPR": str(self.round_to_tick(float(new_price))) if new_price else "0",
                 "QTY_ALL_ORD_YN": "N",
             }

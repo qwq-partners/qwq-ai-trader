@@ -751,7 +751,14 @@ class UnifiedEngine:
         if effective_with_unrealized <= -hard_cap_pct:
             return False, f"일일 손실 하드캡 초과 (미실현포함={effective_with_unrealized:.1f}%, 한도={-hard_cap_pct:.1f}%)"
 
-        # 2. (일일 거래 횟수 제한 제거 — 가용 현금이 게이트)
+        # 2. 일일 거래 횟수 상한 (2026-08-04 재도입 — 폭주 브레이크)
+        # 과거 "가용 현금이 게이트"로 제거했으나 문서·대시보드는 계속 한도를 표기해 왔고,
+        # 리뷰에서 미강제 확인 → 문서화된 동작으로 복원. BUY만 차단 (청산은 무제한).
+        if side == OrderSide.BUY and self.portfolio.daily_trades >= risk.daily_max_trades:
+            return False, (
+                f"일일 거래 횟수 한도 초과 "
+                f"({self.portfolio.daily_trades}/{risk.daily_max_trades})"
+            )
 
         # 3. 포지션 수 로깅 (하드 제한 없음 — 가용 현금이 게이트)
         if symbol not in self.portfolio.positions:
@@ -2133,7 +2140,12 @@ class RiskManager:
         if signal.signal and signal.signal.metadata:
             position_multiplier = signal.signal.metadata.get("position_multiplier", 1.0)
         if position_multiplier != 1.0:
-            position_value *= Decimal(str(position_multiplier))
+            # 배율 적용 후 개별 포지션 상한 재클램프 (2026-08-04 P2 — 미클램프 시
+            # max_position_pct 초과 값이 G3에서 사이즈 축소가 아닌 전체 거부로 이어져
+            # 부스트 의도가 신호 유실로 변질됐다. 시즈널리티 경로와 동일 패턴)
+            position_value = min(
+                position_value * Decimal(str(position_multiplier)), max_value
+            )
 
         # 캘린더 시즈널리티 부스트 (월말월초) — 개별 포지션 상한(max_value)은 재적용
         try:
