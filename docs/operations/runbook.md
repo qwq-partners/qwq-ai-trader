@@ -290,6 +290,14 @@ rm -f ~/.cache/ai_trader/*.lock ~/.cache/ai_trader/*.pid
 echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 ```
 
+### WebSocket 중복 프로세스
+- "ALREADY IN USE appkey" → `pkill -9 -f "run_trader.py"` 후 단일 재시작
+
+### 포트폴리오 동기화 이슈 (유령 포지션)
+- KIS API 응답 지연(수 분) → 유령 포지션 발생 가능
+- 청산 실패 시 `broker.get_positions()`로 실제 보유 확인 후 정리
+- 동기화 주기: KR 30초, US 30초
+
 ### 매수 미실행 체크리스트
 1. 가용 현금 확인 (`get_available_cash()`)
 2. 일일 손실 한도 (-5% KR, -3% US)

@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-05 — docs: /doctor 문서 정리 — CLAUDE.md 트림 + 지연 로딩 마이그레이션 (미커밋)
+
+코드 변경 없음. 세션마다 로드되는 CLAUDE.md에서 코드로 파생 가능한 내용을 제거해
+상주 컨텍스트 est. ~1.9k 토큰 절감.
+
+- **CLAUDE.md**: 아키텍처 다이어그램·스케줄러 표·디렉토리 구조·WebSocket 피드·
+  운영 모니터링 표·의존성 목록·에이전트 명단 상세 삭제 (docs/ 및 소스로 파생 가능,
+  포인터로 대체). `/home/user/...` 낡은 경로 3곳 → `/home/ubuntu/...` 수정.
+  트러블슈팅 → `docs/operations/runbook.md` 포인터로 교체.
+  대시보드 개발 패턴 → `.claude/skills/dashboard-feature/SKILL.md` 신설 이전.
+- **docs/operations/runbook.md**: CLAUDE.md에만 있던 트러블슈팅 2건 병합
+  (WebSocket 중복 프로세스, 유령 포지션/포트폴리오 동기화).
+- **.claude/skills/dashboard-feature/SKILL.md**: 신설 (대시보드 작업 시에만 로드).
+
 ## 2026-08-04 — fix(engine): 수정분 적대적 재리뷰 반영 — P1 4건 + P2 3건
 
 같은 날 P0/P1·P2 수정 커밋(2988646, edc5b67)에 대한 재검증 리뷰 결과 반영.

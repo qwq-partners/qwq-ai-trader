@@ -1,5 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
-> 최종 업데이트: 2026-04-18 (3인 합동 전체 검증 P0~P2 18건 반영)
+> 최종 업데이트: 2026-08-05 (/doctor 문서 정리 — 코드 파생 가능 내용 제거, 상세는 docs/ 참조)
 
 ## 세션 시작 시 필수 읽기
 
@@ -26,26 +26,10 @@
 - Always commit and push together unless explicitly told otherwise.
 - `gh auth login` interactive mode does NOT work in this environment.
 
-## 에이전트 팀 (15명 — 운영 8명 + 전문가 7명)
-
-### 운영·분석 팀 (8명, 기존)
-- 거래 분석: trade-analyst / 시장 분석: market-analyst
-- 전략 조언: strategy-advisor / 엔진 점검: engine-monitor
-- 리스크 감사: risk-auditor / 파라미터 최적화: param-optimizer
-- 코드 리뷰: code-reviewer / 디버깅: debugger
-
-### 도메인 전문가 팀 (7명, 2026-05-29 추가)
-- **news-curator** — 한·미·글로벌 뉴스 sentiment + 이벤트 태그 (30분 주기)
-- **macro-economist** — Fed/금리/환율/원자재 거시 (일 3회)
-- **kr-market-expert** — KOSPI 수급·섹터 로테이션 (일 3회)
-- **us-market-expert** — SPY/QQQ/VIX/섹터 ETF/어닝 (일 3회)
-- **kr-economy-expert** — 한국 거시 (한은/수출입/PF, 일 2회)
-- **global-micro-expert** — 반도체·2차전지·바이오·조선 공급망 (일 2회)
-- **earnings-expert** — 어닝 캘린더·서프라이즈·드리프트 (일 2회)
-
-> 전문가 시스템 상세: `docs/agents/expert-system.md`
-> 코드: `src/experts/` (orchestrator·base·7명 모듈)
-> 출력: `ExpertOpinion` (score/bias/confidence/findings) → market_regime + cross_validator
+## 에이전트 팀 (15명 — 운영·분석 8명 + 도메인 전문가 7명)
+- 명단·역할·주기: `.claude/agents/` 디렉토리 참조
+- 전문가 시스템 상세: `docs/agents/expert-system.md` / 코드: `src/experts/`
+- 출력: `ExpertOpinion` (score/bias/confidence/findings) → market_regime + cross_validator
 
 ## 프로젝트 개요
 - KR+US 통합 트레이딩 엔진 (Full Rewrite)
@@ -55,7 +39,7 @@
 - 크로스 전략 검증 게이트 + 시장 체제 사전 적응
 
 ## 프로젝트 경로
-- 소스: `/home/user/projects/qwq-ai-trader`
+- 소스: `/home/ubuntu/projects/qwq-ai-trader`
 - 가상환경: `venv/` (.venv 아님)
 - 설정: `config/default.yml` (kr: + us: 섹션) + `config/evolved_overrides.yml`
 - 환경변수: `.env`
@@ -71,72 +55,9 @@
 > 설정 변경 시 양쪽 모두 확인 필요. evolved_overrides가 default를 덮어쓰므로,
 > default.yml만 바꿔도 evolved_overrides에 같은 키가 있으면 적용 안 됨.
 
-## 핵심 아키텍처
-```
-UnifiedEngine (단일 엔진)
-  ├── contexts: Dict[str, MarketContext]
-  │   ├── "kr": MarketContext (KRBroker, KRSession, Portfolio(KRW), ...)
-  │   └── "us": MarketContext (USBroker, USSession, Portfolio(USD), ...)
-  ├── shared: KISTokenManager, TelegramNotifier, LLMManager
-  ├── expert_orchestrator: 7명 전문가 (2026-05-29~)
-  └── dashboard: DashboardServer (포트 8080)
-```
-
-### 실행 흐름
-
-**KR 스케줄러** (`kr_scheduler.py`):
-| 태스크 | 간격 | 설명 |
-|--------|------|------|
-| `run_screening()` | 5분 | 종목 스크리닝 → 자동 시그널 |
-| `run_fill_check()` | 10초 | 체결 확인 + WS 구독 갱신 |
-| `run_portfolio_sync()` | 30초 | 포트폴리오 동기화 |
-| `run_rest_price_feed()` | 20초 | REST 시세 피드 (WS 백업) |
-| `run_theme_detection()` | 10분 | 테마 탐지 (뉴스 분석) |
-| `run_pending_cleanup()` | 1분 | 교착 pending 정리 |
-| `run_supply_demand_cache()` | 5분 | 수급 캐시 갱신 |
-
-**KR 배치**:
-- 08:20 `morning_scan` — 전략별 일일 스캔
-- 09:30 `execute` — 전일 시그널 실행 (T+1, 장초반 30분 변동성 회피)
-- 19:30 `evening_scan` — 넥스트장 데이터로 스코어 보정
-- 20:30 `evolve` — 자가 진화 (복기 → 파라미터 조정)
-
-**US 스케줄러** (`us_scheduler.py`):
-| 태스크 | 간격 | 설명 |
-|--------|------|------|
-| `screening_loop()` | 15분 | 유니버스 스캔 → 전략 신호 → 주문 |
-| `exit_check_loop()` | 15초 | 보유 포지션 청산 체크 |
-| `portfolio_sync_loop()` | 30초 | 잔고 동기화 |
-| `order_check_loop()` | 10초 | 미체결 주문 상태 폴링 |
-| `eod_close_loop()` | 30초 | 마감 15분 전 DAY 포지션 청산 |
-| `screener_loop()` | 60분 | S&P500+400 점수 계산 |
-| `watchlist_loop()` | 5분 | 상위 25 + 보유 종목 모니터링 |
-| `theme_detection_loop()` | 30분 | US 테마 탐지 |
-| `heartbeat_loop()` | 5분 | 상태 로깅 |
-
-## 디렉토리 구조
-```
-src/
-├── core/           # UnifiedEngine, MarketContext, types, event, evolution/
-├── execution/      # broker/ (base, kis_kr, kis_us)
-├── strategies/     # base, exit_manager, kr/ (5개), us/ (3개)
-├── risk/           # manager.py (통합 RiskManager)
-├── data/           # feeds/, providers/, storage/, universe.py
-├── signals/        # screener/ (kr, us, swing), sentiment/, fundamentals/, strategic/
-├── monitoring/     # health_monitor.py
-├── dashboard/      # server, kr_api, us_api, sse, data_collector, static/
-├── analytics/      # daily_report.py
-├── indicators/     # atr.py, technical.py
-├── schedulers/     # kr_scheduler, us_scheduler
-└── utils/          # config, token_manager, session, logger, telegram, llm, fee_calculator
-
-scripts/
-├── run_trader.py       # 통합 트레이더 (--market kr|us|both --dry-run)
-└── liquidate_all.py    # 긴급 전량 매도 (--market kr|us --force)
-
-tools/
-└── office/             # 가상 오피스 재빌드 (build.sh, ko.json) — 산출물은 static/office/
-```
+## 아키텍처 & 실행 흐름
+- UnifiedEngine 구조·스케줄러 태스크 주기·KR 배치 시각: `docs/architecture/system-overview.md` 및 `src/schedulers/` 소스 참조
+- 디렉토리 구조는 `src/` 하위 `ls`로 확인 (모듈별 한 줄 설명은 위 아키텍처 문서)
 
 ---
 
@@ -223,21 +144,6 @@ tools/
 
 ---
 
-## WebSocket 피드
-
-### KR WebSocket (`kis_websocket.py`)
-- **TR ID**: H0STCNT0 (실시간 체결가), H0STASP0 (호가)
-- **서버**: ws://ops.koreainvestment.com:21000 (실전), :31000 (모의)
-- **재연결**: 5초 지연 (exponential backoff, 최대 120초)
-
-### US WebSocket (`kis_us_price_ws.py`)
-- **TR ID**: HDFSCNT0 (해외주식 실시간체결)
-- **tr_key**: {exchange}{symbol} (예: NASDAAPL, NYSEMSFT)
-- **최대 구독**: 30종목
-- **필드**: LAST(현재가), EVOL(체결량), VBID/VASK(호가잔량)
-
----
-
 ## 검증 프로토콜 (절대 규칙)
 코드 수정 후 반드시 아래 순서 수행:
 1. `python3 -m py_compile <수정파일>` — 문법 검증
@@ -249,7 +155,7 @@ tools/
 
 ```bash
 # 문법 검증 (전체)
-cd /home/user/projects/qwq-ai-trader
+cd /home/ubuntu/projects/qwq-ai-trader
 source venv/bin/activate
 find src/ scripts/ -name "*.py" -size +0c -exec python3 -m py_compile {} \;
 
@@ -288,43 +194,9 @@ journalctl -u qwq-ai-trader -f                                 # 실시간 로�
 
 ---
 
-## 대시보드 개발 패턴
-
-새 기능 추가 시 아래 순서를 따름:
-1. `data_collector.py` — 데이터 수집 메서드 추가
-2. `kr_api.py` / `us_api.py` — REST 엔드포인트 추가
-3. `sse.py` — 실시간 이벤트 추가 (필요 시)
-4. HTML 템플릿 — 카드/페이지 추가
-5. JS — 렌더링 함수 + SSE 핸들러
-
-**주요 API 라우트**:
-- `/api/portfolio`, `/api/positions`, `/api/orders`, `/api/risk` — KR
-- `/api/us/portfolio` — US
-- `/api/stream` — SSE 스트림
-- `/api/office/status` — 가상 오피스 상태 (GET 조회 / POST 외부 푸시)
-- `/api/performance/quantstats` — quantstats tear sheet HTML (6h 캐시, `?refresh=1`)
-
-**페이지**: `/` 실시간 · `/trades` · `/performance` · `/themes` · `/evolution` ·
-`/engine` · `/office` 가상 오피스 · `/principles` · `/settings`
-
-### 가상 오피스 (`/office`, 2026-08-03~)
-엔진 상태를 8명 픽셀아트 캐릭터로 시각화 (총괄/체제분석/스크리너/검증관/집행관/전문가팀/리스크/진화).
-- 원본 [KbWen/agent-virtual-office](https://github.com/KbWen/agent-virtual-office)(MIT)를 정적 빌드로 통합 — **런타임 node 프로세스 없음**
-- 상태 브릿지 `src/dashboard/office_api.py` (엔진 파생 + POST + Claude Code 훅 파일, 외부 신호 5분 TTL)
-- 재빌드: `bash tools/office/build.sh` (`static/office/`는 빌드 산출물이므로 직접 수정 금지)
-- 상세: `docs/operations/virtual-office.md`
-
----
-
-## 운영 모니터링 (HealthMonitor)
-
-| 계층 | 주기 | 체크 항목 |
-|------|------|----------|
-| Critical | 15초 (장중) | 이벤트 루프 스톨, WS 피드 단절 |
-| Important | 60초 | 포트폴리오 불일치, 브로커 연결, 리스크 제한 위반 |
-| Periodic | 5분 | 로그 파일 크기, 캐시 정리, 리소스 사용량 |
-
-**알림 쿨다운**: Critical 5분, Warning 15분, Info 1시간
+## 대시보드 개발
+- 새 기능 추가 절차·API 라우트·페이지 목록: `.claude/skills/dashboard-feature/SKILL.md` (대시보드 작업 시 로드)
+- 가상 오피스 `/office`: 재빌드 `bash tools/office/build.sh` — **`static/office/`는 빌드 산출물이므로 직접 수정 금지** (상세: `docs/operations/virtual-office.md`)
 
 ---
 
@@ -372,15 +244,6 @@ OPENAI_API_KEY, GEMINI_API_KEY
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 INITIAL_CAPITAL (KR, 기본 500000)
 ```
-
-## 의존성
-- Python 3.11+
-- 핵심: aiohttp, websockets, loguru, pyyaml, pydantic
-- 데이터: pandas, numpy, scipy, pykrx, yfinance, finnhub-python
-- LLM: openai, google-generativeai
-- 모니터링: psutil
-- 알림: python-telegram-bot
-- US: exchange-calendars, asyncpg
 
 ## LLM 모델 선택
 | 작업 | Primary | Fallback |
@@ -448,44 +311,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 ---
 
 ## 트러블슈팅
-
-### 봇이 응답 없거나 이상할 때
-```bash
-systemctl status qwq-ai-trader.service
-journalctl -u qwq-ai-trader -n 50 --no-pager
-
-# 재시작
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
-
-# 싱글톤 락 파일 충돌 시
-echo 'user123!' | sudo -S -k systemctl stop qwq-ai-trader
-rm -f ~/.cache/ai_trader/*.lock ~/.cache/ai_trader/*.pid
-echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
-```
-
-### 포트폴리오 동기화 이슈
-- KIS API 응답 지연(수 분) → 유령 포지션 발생 가능
-- 청산 실패 시 `broker.get_positions()`로 실제 보유 확인 후 정리
-- 동기화 주기: KR 30초, US 30초
-
-### WebSocket 중복 프로세스
-- "ALREADY IN USE appkey" → `pkill -9 -f "run_trader.py"` 후 단일 재시작
-
-### 매수가 실행되지 않을 때
-1. 가용 현금 확인 (`get_available_cash()`)
-2. 일일 손실 한도 도달 여부 (KR -5%, US -3%)
-3. 스크리닝 쿨다운 확인
-4. 일일 거래 횟수 한도 (KR 10회)
-5. 로그에서 `[스크리닝]` 항목 확인
-
-### 긴급 전량 매도
-```bash
-cd /home/user/projects/qwq-ai-trader
-source venv/bin/activate
-python scripts/liquidate_all.py --market kr    # KR 전량 매도
-python scripts/liquidate_all.py --market us    # US 전량 매도
-python scripts/liquidate_all.py --force        # 확인 없이 즉시 실행
-```
+- **전체 절차는 `docs/operations/runbook.md` 참조** — 봇 미응답, 싱글톤 락 충돌, 매수 미실행 체크리스트, 유령 포지션, WebSocket 중복 프로세스, DB 좀비 정리, 긴급 전량 매도
 
 ## 실행 방법
 ```bash
