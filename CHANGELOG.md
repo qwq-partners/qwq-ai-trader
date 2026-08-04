@@ -1,6 +1,6 @@
 # QWQ AI Trader - Changelog
 
-## 2026-08-05 — fix(engine): P2 일괄 처리 32건 + rsi2 폐지 완결 + trade_events market (미커밋)
+## 2026-08-05 — fix(engine): P2 일괄 처리 32건 + rsi2 폐지 완결 + trade_events market (c66e9da)
 
 같은 날 P1 커밋(79ce79c)의 후속. 사용자 지시로 P2 전량 수정 → 최종 적대적 리뷰
 (신규 P0/P1 없음, 지적 P2 1건 반영) → 재시작 검증 완료.
@@ -59,7 +59,7 @@ asset_growth fs_div 이중 API 호출 제거(DART 호출량 절반)
 `src/execution/broker/kis_kr.py`, `src/signals/fundamentals/asset_growth.py`,
 `src/data/storage/trade_storage.py`, `config/default.yml`
 
-## 2026-08-05 — fix(engine): 전체 엔진 재리뷰 — P1 14건 + 재리뷰 P1 2건·P2 2건 수정 (미커밋)
+## 2026-08-05 — fix(engine): 전체 엔진 재리뷰 — P1 14건 + 재리뷰 P1 2건·P2 2건 수정 (79ce79c)
 
 5개 영역(엔진 시그널·주문 / 청산 ExitManager / KR 스케줄러 / US 스케줄러·run_trader /
 리스크·검증·유틸) 병렬 심층 리뷰 → 전 P1을 본 세션에서 코드 재검증 후 수정 →
