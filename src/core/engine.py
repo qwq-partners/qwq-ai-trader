@@ -174,6 +174,10 @@ class UnifiedEngine:
         # 리스크 메트릭스
         self.risk_metrics = RiskMetrics()
 
+        # daily_trades 주문 단위 카운트용 — 부분체결(FillEvent 증분)마다
+        # 중복 카운트되는 것 방지 (2026-08-05 P1). 자정 리셋 시 clear.
+        self._counted_buy_order_ids: set = set()
+
         # 통계 — 공유
         self.stats = EngineStats()
 
@@ -662,8 +666,15 @@ class UnifiedEngine:
                 del self.portfolio.positions[symbol]
 
         # 매수 체결만 일일 거래 횟수로 카운트 (분할 익절 매도가 한도를 소모하지 않도록)
+        # 주문 단위 카운트: 동일 주문의 부분체결 증분 Fill은 1회만 (2026-08-05 P1)
         if fill.side == OrderSide.BUY:
-            self.portfolio.daily_trades += 1
+            _oid = getattr(fill, "order_id", "") or ""
+            if not _oid or _oid not in self._counted_buy_order_ids:
+                if _oid:
+                    self._counted_buy_order_ids.add(_oid)
+                self.portfolio.daily_trades += 1
+            # BUY도 즉시 영속화 — 매수만 있던 날 재시작 시 카운터 유실 방지
+            self._save_daily_stats()
 
     def update_position_price(self, symbol: str, current_price: Decimal):
         """
@@ -839,6 +850,7 @@ class UnifiedEngine:
         self.portfolio.daily_start_unrealized_pnl = self.portfolio.total_unrealized_pnl
         self.portfolio.daily_pnl = Decimal("0")
         self.portfolio.daily_trades = 0
+        self._counted_buy_order_ids.clear()
         self.risk_metrics = RiskMetrics()
         logger.info(
             f"일일 통계 초기화 (시작 미실현손익: {self.portfolio.daily_start_unrealized_pnl:+,.0f}원)"
@@ -899,8 +911,35 @@ class UnifiedEngine:
         restore_daily_stats() 호출 후 daily_pnl == 0 이면 DB에서 조회해 복원.
         이미 JSON에서 복원된 경우(daily_pnl != 0)는 건너뜀.
         """
+        # trade_events에는 market 컬럼이 없고 US 스케줄러도 같은 테이블에 기록
+        # → KR 6자리 숫자 심볼로 한정 (US 야간 거래의 건수/USD pnl 혼입 방지, 2026-08-05 P1)
+        _KR_SYMBOL_COND = " AND symbol ~ '^[0-9]{6}$'"
+
+        # BUY 건수 백필 — SELL 존재/daily_pnl 복원 여부와 무관하게 항상 실행
+        # (매수만 있던 날 장중 재시작 시 daily_max_trades 브레이크 유실 방지, 2026-08-05 P1)
+        # daily_trades는 런타임에 BUY만 카운트 — 매도 건수 백필 금지 (2026-08-04 재리뷰 P1-4)
+        _trades_backfilled = False
+        try:
+            today = date.today()
+            _buy_row = await pool.fetchrow(
+                "SELECT COUNT(*) AS cnt FROM trade_events "
+                "WHERE event_type='BUY' AND event_time::date = $1" + _KR_SYMBOL_COND,
+                today,
+            )
+            if _buy_row is not None and int(_buy_row["cnt"]) > self.portfolio.daily_trades:
+                logger.info(
+                    f"[DailyStats] BUY 건수 백필: {self.portfolio.daily_trades} → "
+                    f"{int(_buy_row['cnt'])}건"
+                )
+                self.portfolio.daily_trades = int(_buy_row["cnt"])
+                _trades_backfilled = True
+        except Exception as _be:
+            logger.debug(f"[DailyStats] BUY 건수 백필 실패 (무시): {_be}")
+
         if self.portfolio.daily_pnl != Decimal("0"):
             logger.debug("[DailyStats] daily_pnl 이미 복원됨 → DB 백필 생략")
+            if _trades_backfilled:
+                self._save_daily_stats()
             return False
         try:
             today = date.today()
@@ -908,25 +947,11 @@ class UnifiedEngine:
                 "SELECT COALESCE(SUM(pnl), 0) AS total_pnl, "
                 "COUNT(*) FILTER (WHERE pnl IS NOT NULL) AS cnt "
                 "FROM trade_events WHERE event_type='SELL' "
-                "AND event_time::date = $1",
+                "AND event_time::date = $1" + _KR_SYMBOL_COND,
                 today,
             )
             if row and row["cnt"] > 0:
                 self.portfolio.daily_pnl = Decimal(str(row["total_pnl"]))
-                # daily_trades는 런타임에 BUY만 카운트 — 매도 건수로 백필하면
-                # daily_max_trades 게이트가 부당 소진된다 (2026-08-04 재리뷰 P1-4)
-                try:
-                    _buy_row = await pool.fetchrow(
-                        "SELECT COUNT(*) AS cnt FROM trade_events "
-                        "WHERE event_type='BUY' AND event_time::date = $1",
-                        today,
-                    )
-                    if _buy_row is not None:
-                        self.portfolio.daily_trades = max(
-                            self.portfolio.daily_trades, int(_buy_row["cnt"])
-                        )
-                except Exception as _be:
-                    logger.debug(f"[DailyStats] BUY 건수 백필 실패 (무시): {_be}")
                 logger.info(
                     f"[DailyStats] DB 백필 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원 "
                     f"({row['cnt']}건)"
@@ -934,8 +959,12 @@ class UnifiedEngine:
                 self._save_daily_stats()  # 파일에도 저장 (다음 재시작 대비)
                 return True
             logger.info("[DailyStats] DB 조회 결과 오늘 SELL 체결 없음 → daily_pnl=0 유지")
+            if _trades_backfilled:
+                self._save_daily_stats()
         except Exception as e:
             logger.warning(f"[DailyStats] DB 백필 실패: {e}")
+            if _trades_backfilled:
+                self._save_daily_stats()
         return False
 
 

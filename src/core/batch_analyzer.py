@@ -1647,6 +1647,11 @@ class BatchAnalyzer:
                             score=100,
                             confidence=1.0,
                             reason=reason,
+                            metadata={
+                                "source": "position_monitor",
+                                "quantity": qty,
+                                "exit_action": action,
+                            },
                         )
                         event = SignalEvent.from_signal(signal, source="position_monitor")
                         _rm = getattr(self._engine, 'risk_manager', None)

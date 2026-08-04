@@ -108,7 +108,7 @@ class KRScheduler:
         # 체결 확인
         if bot.broker:
             tasks.append(asyncio.create_task(
-                self.run_fill_check(), name="kr_fill_checker"
+                self._supervised(self.run_fill_check, "kr_fill_checker"), name="kr_fill_checker"
             ))
 
         # 포트폴리오 동기화
@@ -117,21 +117,21 @@ class KRScheduler:
                 self.run_portfolio_sync(), name="kr_portfolio_sync"
             ))
 
-        # 종목 스크리닝
+        # 종목 스크리닝 (inter-block 무방비 구간이 커 예외 1건에 사망 가능 → 감독)
         if bot.screener:
             tasks.append(asyncio.create_task(
-                self.run_screening(), name="kr_screener"
+                self._supervised(self.run_screening, "kr_screener"), name="kr_screener"
             ))
 
         # REST 시세 피드
         if bot.broker:
             tasks.append(asyncio.create_task(
-                self.run_rest_price_feed(), name="kr_rest_price_feed"
+                self._supervised(self.run_rest_price_feed, "kr_rest_price_feed"), name="kr_rest_price_feed"
             ))
 
         # 시장 추세 모니터 (사이드카 연동)
         tasks.append(asyncio.create_task(
-            self.run_market_trend_monitor(), name="kr_market_trend"
+            self._supervised(self.run_market_trend_monitor, "kr_market_trend"), name="kr_market_trend"
         ))
 
         # 교착 pending 정리
@@ -168,7 +168,7 @@ class KRScheduler:
         # 종목 단위 에이전트 팀 심의 (2026-08-02~, 장중 4회: 10:30/11:30/13:00/14:00)
         if getattr(self.bot, "trading_team", None) is not None:
             tasks.append(asyncio.create_task(
-                self.run_team_deliberation(), name="kr_team_deliberation"
+                self._supervised(self.run_team_deliberation, "kr_team_deliberation"), name="kr_team_deliberation"
             ))
 
         # 로그 정리
@@ -214,7 +214,7 @@ class KRScheduler:
         # 헬스 모니터
         if bot.health_monitor:
             tasks.append(asyncio.create_task(
-                self.run_health_monitor(), name="kr_health_monitor"
+                self._supervised(self.run_health_monitor, "kr_health_monitor"), name="kr_health_monitor"
             ))
 
         # 수동 매수 예약 (1회성)
@@ -570,15 +570,42 @@ class KRScheduler:
         stale_cutoff = now_time - timedelta(minutes=stale_minutes)
         stale = [s for s, t in bot._exit_pending_timestamps.items() if t < stale_cutoff]
 
+        # 취소 재시도 스로틀 — 이 함수는 WS 틱마다 호출되므로, 예외-유지 상태에서
+        # 매 틱 취소 API를 때리면 KIS rate limit을 스스로 소진한다 (2026-08-05 재리뷰 P1)
+        if not hasattr(self, '_stale_cancel_last_try'):
+            self._stale_cancel_last_try: Dict[str, datetime] = {}
+
         for s in stale:
             # KIS 미체결 주문 먼저 취소
+            # 취소 0건 = 주문 이미 소멸 → 해제 진행. API 예외 = 원 주문 생존 가능
+            # → 해제하면 다음 tick에 동일 물량 SELL 재발행(이중 매도) 위험이므로
+            #   유지 후 다음 사이클 재시도 (engine.py 폴백 경로와 동일 정책).
+            #   단 15분 초과 시 영구 교착 방지 위해 강제 해제.
             if bot.broker and hasattr(bot.broker, 'cancel_all_for_symbol'):
+                _last_try = self._stale_cancel_last_try.get(s)
+                if _last_try is not None and (now_time - _last_try).total_seconds() < 60:
+                    continue  # 60초 스로틀 — pending 유지, API 재호출 억제
+                self._stale_cancel_last_try[s] = now_time
                 try:
                     cancelled = await bot.broker.cancel_all_for_symbol(s)
+                    self._stale_cancel_last_try.pop(s, None)
                     if cancelled:
                         logger.info(f"[청산 pending] {s} KIS 주문 {cancelled}건 취소 완료")
                 except Exception as e:
-                    logger.warning(f"[청산 pending] {s} KIS 주문 취소 실패: {e}")
+                    _pending_age_min = (
+                        now_time - bot._exit_pending_timestamps.get(s, now_time)
+                    ).total_seconds() / 60
+                    if _pending_age_min < 15:
+                        logger.warning(
+                            f"[청산 pending] {s} KIS 주문 취소 실패 — 원 주문 생존 가능, "
+                            f"pending 유지 후 재시도 ({_pending_age_min:.0f}분 경과): {e}"
+                        )
+                        continue
+                    logger.error(
+                        f"[청산 pending] {s} 취소 실패 15분 초과 — 강제 해제 "
+                        f"(수동 확인 필요): {e}"
+                    )
+                    self._stale_cancel_last_try.pop(s, None)
             bot._exit_pending_symbols.discard(s)
             bot._exit_pending_timestamps.pop(s, None)
             # RiskManager pending도 동기화 해제
@@ -600,12 +627,19 @@ class KRScheduler:
                         and bot._exit_pending_timestamps.get(s, now_time) < stale_cutoff]
             for s in orphaned:
                 if bot.broker and hasattr(bot.broker, 'cancel_all_for_symbol'):
+                    _lt = self._stale_cancel_last_try.get(s)
+                    if _lt is not None and (now_time - _lt).total_seconds() < 60:
+                        continue  # 60초 스로틀 (API 해머링 방지)
+                    self._stale_cancel_last_try[s] = now_time
                     try:
                         cancelled = await bot.broker.cancel_all_for_symbol(s)
+                        self._stale_cancel_last_try.pop(s, None)
                         if cancelled:
                             logger.info(f"[청산 pending] {s} 고아 KIS 주문 {cancelled}건 취소 완료")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # API 예외 = 원 주문 생존 가능 → 유지 후 다음 사이클 재시도
+                        logger.warning(f"[청산 pending] {s} 고아 주문 취소 실패 — 유지: {e}")
+                        continue
                 bot._exit_pending_symbols.discard(s)
                 bot._exit_pending_timestamps.pop(s, None)
                 if bot.exit_manager:
@@ -889,6 +923,13 @@ class KRScheduler:
                         )
                     if symbol not in bot._watch_symbols:
                         bot._watch_symbols.append(symbol)
+                    # V자 반등 재진입 1회권 소진 — fill_check가 체결을 못 잡고
+                    # sync로만 포지션이 반영되는 경로 보강 (2026-08-05 재리뷰 P2)
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'on_buy_filled'):
+                        try:
+                            bot.risk_manager.on_buy_filled(symbol)
+                        except Exception as _obe:
+                            logger.debug(f"[동기화] on_buy_filled 오류 (무시): {_obe}")
 
                 # 기존 포지션 수량/가격 업데이트
                 common_symbols = bot_symbols & kis_symbols
@@ -1743,6 +1784,32 @@ JSON:
                                         Decimal(str(fill.price))
                                     )
 
+                                # 재진입 제한 등록 — 저널 기록과 독립 실행 (2026-08-05 P1)
+                                # 기존엔 저널 record_exit 성공 이후에만 도달해, 저널 예외
+                                # (과거 kwarg 불일치 TypeError 사고) 시 _stop_loss_today
+                                # 미등록 → 당일 재매수→재손절 반복이 열려 있었다.
+                                if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
+                                    try:
+                                        _rr_etype = self._classify_exit_type(_exit_reason_snap)
+                                        _rr_sector = getattr(_sell_pos_snap, 'sector', '') if _sell_pos_snap else ''
+                                        # 스냅샷 부재 시 보수적으로 전량 취급 (과차단 방향)
+                                        _rr_full = (
+                                            True if _sell_pos_snap is None
+                                            else fill.quantity >= getattr(_sell_pos_snap, 'quantity', 0)
+                                        )
+                                        # 다중 부분체결 배치 보강: 직전 on_fill로 ExitManager
+                                        # 상태가 소멸했으면 전량 청산 (스냅샷 지연 오분류 방지)
+                                        if (not _rr_full and bot.exit_manager
+                                                and fill.symbol not in bot.exit_manager._states):
+                                            _rr_full = True
+                                        bot.risk_manager.record_exit(
+                                            fill.symbol, float(fill.price),
+                                            sector=_rr_sector, exit_type=_rr_etype,
+                                            is_full_exit=_rr_full,
+                                        )
+                                    except Exception as _ree:
+                                        logger.error(f"[체결] {fill.symbol} 재진입 제한 등록 실패: {_ree}")
+
                                 # trade journal SELL 기록
                                 if bot.trade_journal and _sell_pos_snap:
                                     try:
@@ -1766,14 +1833,7 @@ JSON:
                                                 avg_entry_price=float(_sell_pos_snap.avg_price),
                                             )
                                             logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
-                                            # 재진입 제한: 청산 종목 기록 (섹터 + 타입 포함)
-                                            # 2026-04-24: exit_type 전달 → 손실청산(stop_loss/breakeven)만 쿨다운 카운트
-                                            if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
-                                                _exit_sector = getattr(_sell_pos_snap, 'sector', '')
-                                                bot.risk_manager.record_exit(
-                                                    fill.symbol, float(fill.price),
-                                                    sector=_exit_sector, exit_type=_etype,
-                                                )
+                                            # 재진입 제한 등록은 저널 앞 독립 블록으로 이동 (2026-08-05 P1)
                                             # 거래 메모리: Layer 1 기록
                                             if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
                                                 try:
@@ -1924,12 +1984,7 @@ JSON:
                                                             f"누적청산={_new_exit_qty}/{_db_entry_qty}, "
                                                             f"{'전량' if _is_full_exit else '부분'})"
                                                         )
-                                                        if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
-                                                            # 2026-04-24: DB 직접 기록 경로도 exit_type 전달
-                                                            bot.risk_manager.record_exit(
-                                                                fill.symbol, float(fill.price),
-                                                                exit_type=_etype2,
-                                                            )
+                                                        # 재진입 제한 등록은 저널 앞 독립 블록으로 이동 (2026-08-05 P1)
                                                     else:
                                                         logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: 오픈 포지션 없음")
                                                 except Exception as _dbe:
@@ -1941,6 +1996,12 @@ JSON:
 
                             # 매수 체결 시 ExitManager 등록 + WS 우선 구독 + trade journal 기록
                             if fill.side == OrderSide.BUY:
+                                # V자 반등 재진입 1회권 소모 — 체결 확인 시점 (2026-08-05 P1)
+                                if bot.risk_manager and hasattr(bot.risk_manager, 'on_buy_filled'):
+                                    try:
+                                        bot.risk_manager.on_buy_filled(fill.symbol)
+                                    except Exception as _obe:
+                                        logger.debug(f"[재진입] on_buy_filled 오류 (무시): {_obe}")
                                 # engine.emit()은 큐에만 넣고 리턴 → FillEvent 처리 전에
                                 # portfolio.positions에 포지션이 없을 수 있음.
                                 # 엔진 루프가 처리할 때까지 최대 1초 대기.
@@ -4195,7 +4256,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"레포트 스케줄러 오류: {e}")
+            raise
 
     async def run_evolution_scheduler(self):
         """LLM 거래 리뷰 스케줄러 — 매일 20:30 LLM 종합평가 생성"""
@@ -4351,7 +4414,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"거래 리뷰 스케줄러 오류: {e}")
+            raise
 
     async def run_weekly_rebalance_scheduler(self):
         """매주 토요일 00:00 전략 예산 리밸런싱
@@ -4477,7 +4542,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"주간 리밸런싱 스케줄러 오류: {e}")
+            raise
 
     async def run_team_deliberation(self):
         """
@@ -4546,7 +4613,9 @@ JSON:
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"[팀심의] 스케줄러 오류: {e}", exc_info=True)
+            raise
 
     async def _run_team_deliberation_once(self):
         """팀 심의 1회 실행 (후보 + 보유)"""
@@ -4872,7 +4941,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"매도 후속 복기 스케줄러 오류: {e}")
+            raise
 
     async def run_safe_asset_loop(self):
         """P1 (2026-05-18): TIGER KOFR 안전자산 자동 운용
@@ -5105,7 +5176,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"[안전자산] 루프 오류: {e}")
+            raise
 
     async def run_log_cleanup(self):
         """로그/캐시 정리 스케줄러 — 매일 00:05"""
@@ -5147,7 +5220,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"로그 정리 스케줄러 오류: {e}")
+            raise
 
     async def run_stock_master_refresh(self):
         """종목 마스터 갱신 스케줄러 — 매일 18:00"""
@@ -5210,7 +5285,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"[종목마스터] 스케줄러 오류: {e}")
+            raise
 
     async def run_daily_candle_refresh(self):
         """일봉 데이터 갱신 스케줄러 — 장 마감 후(15:40, 20:40)"""
@@ -5329,7 +5406,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"[일봉갱신] 스케줄러 오류: {e}")
+            raise
 
     async def run_batch_scheduler(self):
         """스윙 모멘텀 배치 스케줄러
@@ -5724,7 +5803,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"[배치스케줄러] 스케줄러 오류: {e}")
+            raise
 
     async def run_health_monitor(self):
         """헬스 모니터링 루프"""
@@ -5735,7 +5816,9 @@ JSON:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"[HealthMonitor] 루프 종료: {e}")
+            raise
 
     async def run_manual_buy_orders(self):
         """수동 매수 예약 실행 (장 시작 09:00 이후 1회성)"""

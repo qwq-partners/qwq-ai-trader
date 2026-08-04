@@ -666,8 +666,9 @@ class USScheduler:
                         dynamic = await fz.discover_dynamic()
                         eng._dynamic_last_refresh = today
                         if dynamic:
+                            # config_raw는 이미 us: 섹션 자체 (2026-08-05 P1)
                             _cfg_excl = set(
-                                eng.config_raw.get("us", {}).get("universe", {})
+                                eng.config_raw.get("universe", {})
                                 .get("excluded_symbols", [])
                             ) if hasattr(eng, "config_raw") else set()
                             new_syms = set(dynamic) - set(eng._universe) - _cfg_excl
@@ -1014,8 +1015,10 @@ class USScheduler:
             return False
 
         # config excluded_symbols (해외ETP 미신청 등 영구 제외 종목)
+        # config_raw는 이미 us: 섹션 자체 (run_trader에서 us_cfg 주입) —
+        # .get("us")를 또 타면 항상 빈 집합이 되어 가드 무력화 (2026-08-05 P1)
         _cfg_excluded = set(
-            (eng.config_raw.get("us", {}) if hasattr(eng, "config_raw") else {})
+            (eng.config_raw if hasattr(eng, "config_raw") else {})
             .get("universe", {}).get("excluded_symbols", [])
         )
         if symbol in _cfg_excluded:
@@ -1340,7 +1343,10 @@ class USScheduler:
                             f"[KIS US WS] KR 정규장 시간({kst_now.strftime('%H:%M')} KST) — "
                             f"approval_key 충돌 방지 위해 US WS 강제 종료 (포지션 {len(eng.portfolio.positions)}개)"
                         )
-                        await self._maybe_stop_us_price_ws()
+                        # force=True: 포지션 보유 중에도 종료 (2026-08-05 P1 —
+                        # 기존엔 포지션 있으면 no-op → KR WS와 approval_key 충돌 방치.
+                        # US는 어차피 장외라 REST 폴링이 백업)
+                        await self._maybe_stop_us_price_ws(force=True)
                         _ws_prestarted = False
 
             except asyncio.CancelledError:
@@ -1383,12 +1389,12 @@ class USScheduler:
         )
         logger.info("[KIS US WS] WS 시작 (보유 포지션 진입)")
 
-    async def _maybe_stop_us_price_ws(self):
-        """보유 포지션이 모두 청산됐을 때 WS 종료"""
+    async def _maybe_stop_us_price_ws(self, force: bool = False):
+        """보유 포지션이 모두 청산됐을 때 WS 종료 (force=True면 포지션 무관 강제 종료)"""
         eng = self.engine
         if not eng.us_price_ws:
             return
-        if eng.portfolio.positions:
+        if eng.portfolio.positions and not force:
             return  # 아직 포지션 남아 있음
         if not eng.us_price_ws.is_connected:
             # 태스크만 남은 경우 취소
@@ -1937,18 +1943,45 @@ class USScheduler:
                 # ExitManager에 포지션 등록 (sync 포지션은 보수적 리스크 적용)
                 new_pos = eng.portfolio.positions[symbol]
                 try:
-                    # sync_detected 포지션: 타이트한 손절/짧은 유예
-                    # (전략 불명 외부 진입이므로 max_holding도 의도적으로 글로벌 10일 —
-                    #  전략별 배선 대상 아님, 2026-08-03 배선 작업에서 제외)
-                    eng.exit_manager.register_position(
-                        new_pos,
-                        stop_loss_pct=3.0,
-                        trailing_stop_pct=2.0,
-                        first_exit_pct=3.0,
-                        second_exit_pct=5.0,
-                        third_exit_pct=8.0,
-                        stale_high_days=2,
-                    )
+                    # 봇 자신의 매수 pending이 있으면 외부 진입이 아니라 체결 선반영이다
+                    # (KIS 이력 빈 응답 quirk 시 sync(30초)가 _check_orders보다 먼저
+                    #  포지션을 생성). 이때 "_sync" 타이트 파라미터로 등록하면
+                    #  register_position이 기존 심볼은 파라미터를 안 덮어쓰므로
+                    #  전략 의도(SL/TS/max_holding)가 영구 고착된다 (2026-08-05 P1)
+                    _has_buy_pending = False
+                    _pend_strat = ""
+                    for _pd in eng._pending_orders.values():
+                        if _pd.get("symbol") == symbol and _pd.get("side") == "buy":
+                            _has_buy_pending = True
+                            _pend_strat = _pd.get("strategy") or ""
+                            break
+                    if _has_buy_pending:
+                        _strat_val2 = _pend_strat or (restored_strat or "")
+                        if _strat_val2 and not new_pos.strategy:
+                            new_pos.strategy = _strat_val2
+                            eng._symbol_strategy[symbol] = _strat_val2
+                        _mh2 = _strategy_max_holding(eng, _strat_val2)
+                        if _mh2 is not None:
+                            eng.exit_manager.register_position(new_pos, max_holding_days=_mh2)
+                        else:
+                            eng.exit_manager.register_position(new_pos)
+                        logger.info(
+                            f"[US 동기화] {symbol} 매수 pending 체결 선반영 — "
+                            f"전략 파라미터로 등록 (strategy={_strat_val2 or 'unknown'})"
+                        )
+                    else:
+                        # sync_detected 포지션: 타이트한 손절/짧은 유예
+                        # (전략 불명 외부 진입이므로 max_holding도 의도적으로 글로벌 10일 —
+                        #  전략별 배선 대상 아님, 2026-08-03 배선 작업에서 제외)
+                        eng.exit_manager.register_position(
+                            new_pos,
+                            stop_loss_pct=3.0,
+                            trailing_stop_pct=2.0,
+                            first_exit_pct=3.0,
+                            second_exit_pct=5.0,
+                            third_exit_pct=8.0,
+                            stale_high_days=2,
+                        )
                 except Exception as e:
                     logger.debug(f"[US 동기화] {symbol} ExitManager 등록 실패: {e}")
 
@@ -2321,15 +2354,24 @@ class USScheduler:
                             f"[US 주문 체크] {order_no} ({symbol}) "
                             f"매도 주문 — 포지션 소멸, 체결로 간주하여 pending 정리"
                         )
+                        # 포지션 소멸 → ExitManager 상태도 제거 (stage 잔류 방지)
+                        if eng.exit_manager:
+                            eng.exit_manager.remove_position(symbol)
                         eng._pending_symbols.discard(symbol)
                         del eng._pending_orders[order_no]
                         continue
                     elif expected_qty and "orig_qty" in pending and pos.quantity < pending["orig_qty"]:
                         # 부분 매도 체결 — 수량 감소 확인 (orig_qty 기록된 주문만)
+                        sold_qty = int(pending["orig_qty"]) - int(pos.quantity)
                         logger.info(
                             f"[US 주문 체크] {order_no} ({symbol}) "
                             f"매도 주문 — 수량 감소 확인 ({pos.quantity}주 남음), 체결로 간주"
                         )
+                        # 체결 간주 시 on_fill 필수: 미호출이면 pending_stage 5분 만료 후
+                        # current_stage=NONE 잔류 → 동일 분할 익절 재발행(이중 매도)
+                        if eng.exit_manager and sold_qty > 0:
+                            _fp = pending.get("price") or float(pos.current_price)
+                            eng.exit_manager.on_fill(symbol, sold_qty, Decimal(str(_fp)))
                         eng._pending_symbols.discard(symbol)
                         del eng._pending_orders[order_no]
                         continue
@@ -2379,13 +2421,25 @@ class USScheduler:
                     del eng._pending_orders[order_no]
                     eng._pending_symbols.discard(symbol)
 
-                    # 매도 주문 취소 시 ExitManager stage 롤백 + 적극 지정가 재시도
-                    if side == "sell" and cancel_ok:
-                        if eng.exit_manager:
-                            eng.exit_manager.rollback_stage(symbol)
-                            logger.info(
-                                f"[US 주문 체크] {symbol} 매도 취소 → stage 롤백"
+                    # 취소 실패 = 이미 체결 추정 → on_fill로 stage 승격
+                    # (미호출 시 pending_stage 5분 만료 후 동일 익절 재발행 → 이중 매도)
+                    if side == "sell" and not cancel_ok and not is_local and eng.exit_manager:
+                        _af_qty = int(pending.get("qty", 0) or 0)
+                        _af_pos = eng.portfolio.positions.get(symbol)
+                        _af_price = pending.get("price") or (
+                            float(_af_pos.current_price) if _af_pos else 0
+                        )
+                        if _af_qty > 0 and _af_price > 0:
+                            eng.exit_manager.on_fill(
+                                symbol, _af_qty, Decimal(str(_af_price))
                             )
+
+                    # 매도 주문 취소 성공 시 적극 지정가 재시도
+                    # pending_stage는 재제출 성공 시 유지(폴백이 동일 stage의 연장),
+                    # 재제출 포기 시에만 롤백 — 즉시 롤백하면 폴백 체결 후 stage
+                    # 미승격 상태로 남아 동일 분할 익절이 중복 발동한다
+                    if side == "sell" and cancel_ok:
+                        _resubmitted = False
                         # 폴백 재시도 횟수 제한 (최대 3회)
                         _retry_cnt = getattr(self, '_sell_retry_count', {})
                         if not hasattr(self, '_sell_retry_count'):
@@ -2429,13 +2483,16 @@ class USScheduler:
                                             "symbol": symbol,
                                             "side": "sell",
                                             "qty": p_qty,
+                                            "orig_qty": pending.get("orig_qty", 0),
                                             "price": _fallback_price,
                                             "strategy": pending.get("strategy", ""),
                                             "reason": f"sell_fallback_{_retry_cnt[symbol]}({pending.get('reason', '')})",
+                                            "exit_type": pending.get("exit_type", ""),
                                             "exchange": p_exchange,
                                             "submitted_at": datetime.now(),
                                         }
                                         eng._pending_symbols.add(symbol)
+                                        _resubmitted = True
                                     else:
                                         logger.error(
                                             f"[US 주문 체크] {symbol} 적극지정가 폴백 실패: "
@@ -2443,6 +2500,12 @@ class USScheduler:
                                         )
                                 except Exception as e:
                                     logger.error(f"[US 주문 체크] {symbol} 적극지정가 폴백 예외: {e}")
+                        # 재제출 포기(횟수 초과/장외/제출 실패) 시에만 stage 롤백
+                        if not _resubmitted and eng.exit_manager:
+                            eng.exit_manager.rollback_stage(symbol)
+                            logger.info(
+                                f"[US 주문 체크] {symbol} 매도 폴백 미제출 → stage 롤백"
+                            )
                 continue
 
             if info["status"] == "filled":

@@ -319,8 +319,9 @@ class RiskManager:
                 f"[재진입] {symbol} 손절 후 V자 반등 감지 — 재진입 허용 ({rebound_reason})"
             )
             stop_loss_rebound_passed = True
-            # 1회 제한 마킹 — 재손절 시 당일 영구 차단
-            self._stop_loss_rebound_used.add(symbol)
+            # 1회 제한 마킹은 체결 확인 시점(on_buy_filled)으로 이동 (2026-08-05 P1)
+            # — 검증 통과 후 후속 게이트(현금/포지션 수/브로커 거부)에서 매수가
+            #   무산돼도 1회권이 소진돼 당일 영구 차단되던 문제
 
         # 1.2. 동일 종목 재진입 제한 (KR): 눌림/재돌파 확인형
         # V자 반등 통과한 stop_loss 종목은 단축 통과 (이미 +5% 재돌파 검증됨)
@@ -523,6 +524,17 @@ class RiskManager:
     #   기존엔 청산 종류 무관 전부 카운트 → 수익 청산 3건으로도 쿨다운 발동(오탐).
     #   4/14 사고(대부분 손절 연쇄) 방지는 유지하되, 손실성 청산만 카운트.
     _LOSS_EXIT_TYPES = {"stop_loss", "breakeven"}
+
+    def on_buy_filled(self, symbol: str):
+        """매수 체결 확인 훅 — V자 반등 재진입 1회권을 체결 시점에 소모 (2026-08-05 P1).
+
+        can_open_position 검증 시점 마킹은 후속 게이트에서 매수가 무산돼도
+        1회권이 소진되는 오차단을 만들었다. 실제 재진입(체결)에만 소모한다.
+        """
+        if self.market == "KR" and symbol in self._stop_loss_today:
+            if symbol not in self._stop_loss_rebound_used:
+                self._stop_loss_rebound_used.add(symbol)
+                logger.info(f"[재진입] {symbol} V자 반등 재진입 체결 — 당일 1회권 소진")
 
     def record_exit(self, symbol: str, exit_price: float, sector: str = "",
                     is_full_exit: bool = True, exit_type: str = ""):

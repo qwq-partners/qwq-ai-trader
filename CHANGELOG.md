@@ -1,5 +1,88 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-05 — fix(engine): 전체 엔진 재리뷰 — P1 14건 + 재리뷰 P1 2건·P2 2건 수정 (미커밋)
+
+5개 영역(엔진 시그널·주문 / 청산 ExitManager / KR 스케줄러 / US 스케줄러·run_trader /
+리스크·검증·유틸) 병렬 심층 리뷰 → 전 P1을 본 세션에서 코드 재검증 후 수정 →
+적대적 재리뷰로 수정분 검증(발견 P1 2건 즉시 반영) → 재시작·로그 확인 완료.
+
+### A. 이중/과잉 매도 방지 (4건)
+1. **batch monitor 분할 익절이 전량 매도로 변질** (`batch_analyzer.py`): position_monitor
+   경로의 SELL Signal에 `metadata.quantity` 누락 → engine이 전량 폴백. WS 공백 구간에서
+   30분 모니터가 먼저 +10% 감지 시 10% 대신 100% 매도되던 것 → metadata 추가
+2. **US 체결 간주 경로의 on_fill 누락 → 이중 부분 매도** (`us_scheduler.py`): 포지션
+   소멸(→`remove_position`)·수량 감소(→감소분 `on_fill`)·취소 실패=체결 추정(→주문수량
+   `on_fill`) 3경로 모두 ExitManager 미반영 → pending 5분 만료 후 동일 익절 재발행이던 것.
+   부수: 매도 취소 후 폴백 재제출 시 stage 롤백을 "재제출 포기 시에만"으로 이동
+   (즉시 롤백 시 폴백 체결 후 stage 미승격 → 익절 중복 발동), 폴백 pending에
+   `orig_qty`/`exit_type` 전파
+3. **KR stale pending 취소 예외 시 무조건 해제 → 이중 매도 경로** (`kr_scheduler.py`):
+   취소 API 예외(원 주문 생존 가능) 시 pending 유지-재시도로 전환 (0건 취소=해제 유지,
+   15분 초과 시 강제 해제). 재리뷰 반영: WS 틱마다 재호출되는 함수라 **60초 스로틀**
+   추가 (KIS rate limit 자가 소진 방지)
+4. **US 재시작 정합성 리셋이 restore_stages에 의해 무효화** (`exit_manager.py`):
+   register의 "익절 미실행 감지 → NONE 리셋"을 hp_cache 복원이 업그레이드로 되돌리던 것
+   → `_integrity_reset_symbols` 마킹 후 restore_stages 스킵
+
+### B. 스케줄러 슈퍼바이저 무효화 (kr_scheduler.py)
+- 8/4 신설된 `_supervised()`가 실제로는 **10개 중 1개 루프만** 재기동 가능했다 —
+  나머지 9개는 outer `except Exception`이 예외를 삼키고 정상 반환 → "종료 의도"로 간주.
+  9곳 전부 `raise` 추가 (자정 리셋 루프 영구 사망 = 다음 날 일일손실 게이트 왜곡 방지)
+- 미래핑 루프 6개 추가 래핑: fill_check / screening / rest_price_feed / market_trend /
+  team_deliberation / health_monitor (+ health_monitor·team_deliberation outer except
+  raise — 후자는 적대적 재리뷰 발견분)
+
+### C. daily_trades 정합 (engine.py — 8/4 daily_max_trades 재도입의 후속 결함)
+1. **부분체결 중복 카운트**: FillEvent 증분마다 +1이던 것 → `_counted_buy_order_ids`로
+   주문 단위 카운트 (자정 리셋 clear)
+2. **BUY 미영속 + 백필의 SELL 종속**: BUY 체결 시에도 `_save_daily_stats()`, DB 백필을
+   SELL 존재·JSON 복원 여부와 독립 실행 (매수만 있던 날 재시작 시 브레이크 유실 방지)
+3. **백필 쿼리 market 미구분**: trade_events에 market 컬럼이 없어 US 야간 거래
+   건수/USD pnl이 KR에 혼입 가능 → KR 6자리 심볼 필터 (`symbol ~ '^[0-9]{6}$'`)
+
+### D. 재진입 게이트 (risk/manager.py + kr_scheduler.py)
+1. **V자 반등 1회권이 검증 시점에 소모**: can_open_position 통과 직후 마킹 → 후속
+   게이트(현금/포지션 수/브로커 거부)에서 매수 무산 시에도 당일 영구 차단이던 것
+   → `on_buy_filled()` 신설, 체결 확인 시점(fill_check BUY + KR sync 신규 포지션)에 소모
+2. **`_stop_loss_today` 등록이 저널 성공에 종속**: 유일한 라이브 등록 경로가 저널
+   record_exit 이후 같은 try 안 → 저널 예외(과거 TypeError 사고 전례) 시 손절 재진입
+   차단 통째로 무음 실패 → 저널 앞 독립 블록으로 이동 + `is_full_exit` 전달
+   (스냅샷 수량 비교 + on_fill 후 상태 소멸 보강, 기존 이중 호출 2곳 제거)
+
+### E. US·레짐 (us_scheduler.py + exit_manager.py)
+1. **KR 정규장 US WS 강제 종료가 no-op**: `_maybe_stop_us_price_ws()`가 포지션 보유 시
+   즉시 반환 — 오버나이트 US 포지션 보유 시 매 KR 장마다 approval_key 충돌 방치
+   → `force=True` 파라미터
+2. **config_raw 경로 오류 2곳**: `config_raw`는 이미 us: 섹션인데 `.get("us")` 재호출
+   → excluded_symbols(IXC/GUSH 등) 가드가 항상 빈 집합
+3. **sync 선점 등록 파라미터 고착**: 매수 pending 중 KIS 이력 빈 응답 시 sync가 먼저
+   포지션 생성 → "_sync" 타이트 파라미터(SL3/TS2/stale2일)로 등록되고 이후 복원 불가
+   → 매수 pending 감지 시 전략 파라미터로 등록
+4. **레짐 TS 적용이 ATR 연동 소실** (8/4 수정이 만든 역방향 버그): effective TS를
+   레짐값으로 단순 치환 → `min(max(레짐TS, ATR×mult), cap)` 재계산으로 전환
+
+### 기록만 (P2 잔여 — 후속 배치 처리 대상)
+- **[우선] trade_events US INSERT가 부재 컬럼(market) 참조** — US SELL 이벤트 기록이
+  전부 실패 중일 가능성 (적대적 재리뷰가 라이브 DB로 확인, 기존 버그)
+- **[의도 확인 필요] evolved_overrides `rsi2_reversal: 0.0`** — 코드상 0.0은 "예산 무제한"
+  (문서상 17.5%와 배치). 폐지 의도였다면 정반대 동작
+- 엔진: entry_signal_score 항상 0(축출 점수 게이트 무력)·폴백 submit_order 반환 미확인·
+  부분체결 예약금 미차감·코어 예약 사이징/게이트 불일치·LLM soft-reject 소액 전락·
+  SELL 쿨다운 사이드 무관·daily_max TOCTOU·백필 기준선 0 저장·daily stats 복원의
+  evolution 종속·`_counted_buy_order_ids` 미영속
+- ExitManager: US ExitConfig 배선 누락(min/max_stop, stale)·추가매수 initial_qty 미갱신·
+  breakeven 분기 crash TS 무력화·KR/US sync 수량 보정의 remaining 미반영·US 취소실패
+  on_fill 오판 가능성(사유 미구분)
+- 리스크/유틸: rebound_used 미영속·emergency_stop 데드 조건·atomic_io fsync 부재·
+  daily_stats/stop_loss_today 비원자 쓰기·config_persistence 롤백 데드코드·
+  asset_growth fs_div 중복 호출·modify_order 데드코드·밸류코어 스캔 시각 주석 불일치
+- KR 스케줄러: 코어 빈슬롯 pending 오참조(set을 dict로)·섹션3 continue 스킵(금요 트림
+  불능)·장중품질 RT cap 무효화·팀심의 cv 통계 오염·수동매수 장마감 후 즉시 제출
+- US: run_trader 재시작 등록 max_holding 미배선·earnings_drift 기본값 True footgun
+
+수정: `src/core/engine.py`, `src/core/batch_analyzer.py`, `src/schedulers/kr_scheduler.py`,
+`src/schedulers/us_scheduler.py`, `src/strategies/exit_manager.py`, `src/risk/manager.py`
+
 ## 2026-08-05 — docs: /doctor 문서 정리 — CLAUDE.md 트림 + 지연 로딩 마이그레이션 (미커밋)
 
 코드 변경 없음. 세션마다 로드되는 CLAUDE.md에서 코드로 파생 가능한 내용을 제거해

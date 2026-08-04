@@ -295,6 +295,9 @@ class ExitManager:
 
         # 청산 예외 종목 (수동 매수 등)
         self._exit_exempt: set = set()
+        # 재시작 정합성 검증이 stage를 NONE으로 리셋한 심볼 (세션 스코프)
+        # — restore_stages(hp_cache)의 업그레이드가 리셋을 되돌리는 것 방지
+        self._integrity_reset_symbols: set = set()
 
         # 보유기간 체크용 (포지션별 진입 시간)
         self._entry_times: Dict[str, datetime] = {}
@@ -620,6 +623,9 @@ class ExitManager:
                         )
                         initial_stage = ExitStage.NONE
                         breakeven_was = False
+                        # restore_stages(hp_cache 복원)가 이 리셋을 업그레이드로
+                        # 되돌리면 익절 미실행 감지가 무효화됨 → 심볼 마킹
+                        self._integrity_reset_symbols.add(position.symbol)
 
                 logger.info(
                     f"[ExitManager] {position.symbol} stage 파일 복원: "
@@ -1247,8 +1253,17 @@ class ExitManager:
                 state.trailing_stop_pct = params["trailing_stop_pct"]
                 # ATR-linked effective 트레일링이 판정에 우선 사용되므로 동기화
                 # (2026-08-04 P1 — 미동기화 시 레짐 TS 조정이 판정에 반영 안 됨)
+                # 단, 레짐 TS로 단순 치환하면 ATR 성분이 영구 소실 (2026-08-05 P1)
+                # → 등록 시 공식과 동일하게 min(max(레짐TS, ATR×mult), cap) 재계산
                 if state.effective_trailing_stop_pct is not None:
-                    state.effective_trailing_stop_pct = params["trailing_stop_pct"]
+                    if state.atr_pct is not None and state.atr_pct > 0:
+                        _atr_based = float(state.atr_pct) * float(self.config.atr_link_multiplier)
+                        state.effective_trailing_stop_pct = min(
+                            max(float(params["trailing_stop_pct"]), _atr_based),
+                            float(self.config.atr_link_cap_pct),
+                        )
+                    else:
+                        state.effective_trailing_stop_pct = params["trailing_stop_pct"]
                 changed.append(f"TS={state.trailing_stop_pct}%")
 
             if state.stale_high_days != params["stale_high_days"]:
@@ -1522,6 +1537,14 @@ class ExitManager:
         """
         for sym, stage_idx in stages.items():
             if sym in self._states and 0 <= stage_idx < len(self.STAGE_ORDER):
+                # 재시작 정합성 검증이 NONE으로 리셋한 심볼은 업그레이드 금지
+                # (익절 미실행 감지 → 재발행 예약을 hp_cache 복원이 무효화하는 것 방지)
+                if sym in self._integrity_reset_symbols:
+                    logger.warning(
+                        f"[ExitManager] {sym} restore_stages 스킵 — "
+                        f"정합성 리셋(익절 미실행 감지) 유지"
+                    )
+                    continue
                 try:
                     current_idx = self.STAGE_ORDER.index(self._states[sym].current_stage)
                 except ValueError:
