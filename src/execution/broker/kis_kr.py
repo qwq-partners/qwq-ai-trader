@@ -886,6 +886,16 @@ class KISBroker(BaseBroker):
 
             tr_id = "TTTC0803U"  # 정정취소
 
+            # 정정 단가 결정: new_price 미지정 시 기존 주문가 유지
+            # (KIS 정정 스펙상 지정가(ORD_DVSN=00) + ORD_UNPR=0 조합은 불가 — 수량만 정정 시 방어)
+            _eff_price = new_price if new_price is not None else order.price
+            if _eff_price is None or _eff_price <= 0:
+                logger.error(
+                    f"주문 수정 불가: {order_id} — 정정 단가 없음 "
+                    f"(new_price 미지정 + 기존 주문가 없음)"
+                )
+                return False
+
             params = {
                 "CANO": self.config.account_no,
                 "ACNT_PRDT_CD": self.config.account_product_cd,
@@ -894,7 +904,7 @@ class KISBroker(BaseBroker):
                 "ORD_DVSN": "00",
                 "RVSE_CNCL_DVSN_CD": "01",  # 정정
                 "ORD_QTY": str(new_quantity if new_quantity is not None else order.quantity),
-                "ORD_UNPR": str(self.round_to_tick(float(new_price))) if new_price else "0",
+                "ORD_UNPR": str(self.round_to_tick(float(_eff_price))),
                 "QTY_ALL_ORD_YN": "N",
             }
 
@@ -911,10 +921,10 @@ class KISBroker(BaseBroker):
                 logger.error(f"주문 수정 실패: {msg}")
                 return False
 
-            # 주문 정보 업데이트
-            if new_quantity:
+            # 주문 정보 업데이트 (0 falsy 함정 방지 — is not None)
+            if new_quantity is not None:
                 order.quantity = new_quantity
-            if new_price:
+            if new_price is not None:
                 order.price = new_price
             order.updated_at = datetime.now()
 

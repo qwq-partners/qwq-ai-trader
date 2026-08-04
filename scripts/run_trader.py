@@ -1121,7 +1121,8 @@ class UnifiedTradingBot:
             try:
                 from src.strategies.us.earnings_drift import EarningsDriftStrategy
                 us_ed_cfg = us_strategies_cfg.get("earnings_drift", {})
-                if us_ed_cfg.get("enabled", True):
+                # 보류 전략 (2026-08-03 EPS 커버리지 부족) — 명시적 enabled: true 없이는 로드하지 않는다 (fail-closed)
+                if us_ed_cfg.get("enabled", False):
                     us_engine.strategies.append(EarningsDriftStrategy(config=us_ed_cfg))
                     logger.info("[US] EarningsDrift 전략 로드")
             except Exception as e:
@@ -1161,6 +1162,14 @@ class UnifiedTradingBot:
                 stop_loss_pct=us_exit_cfg.get("stop_loss_pct", 5.0),
                 trailing_stop_pct=us_exit_cfg.get("trailing_stop_pct", 3.0),
                 trailing_activate_pct=us_exit_cfg.get("trailing_activate_pct", 5.0),
+                # ATR 동적 손절 배선 (기존에 미전달 → dataclass 기본값 사용되던 버그 수정)
+                enable_dynamic_stop=us_exit_cfg.get("enable_dynamic_stop", True),
+                atr_multiplier=us_exit_cfg.get("atr_multiplier", 2.0),
+                min_stop_pct=us_exit_cfg.get("min_stop_pct", 4.0),
+                max_stop_pct=us_exit_cfg.get("max_stop_pct", 7.0),
+                # 횡보 조기 청산 배선
+                stale_exit_days=us_exit_cfg.get("stale_exit_days", 5),
+                stale_exit_pnl_pct=us_exit_cfg.get("stale_exit_pnl_pct", 2.0),
                 include_fees=False,  # US: zero-commission
                 eod_close=us_exit_cfg.get("eod_close", False),
             ), market="US")
@@ -1385,7 +1394,10 @@ class UnifiedTradingBot:
             # (ExitManager 초기화 후 여기서 일괄 등록 — 초기 30초간 손절 누락 방지)
             if us_engine.portfolio.positions and us_engine.exit_manager:
                 try:
-                    from src.schedulers.us_scheduler import USScheduler as _USSched
+                    from src.schedulers.us_scheduler import (
+                        USScheduler as _USSched,
+                        _strategy_max_holding as _us_strat_mh,
+                    )
                     _tmp_sched = _USSched(us_engine)
                     hp_cache = _tmp_sched._load_highest_prices()
                     stages_cache = _tmp_sched._load_exit_stages()
@@ -1393,7 +1405,14 @@ class UnifiedTradingBot:
                         cached_hp = hp_cache.get(sym, 0.0)
                         if cached_hp > float(pos.current_price):
                             pos.highest_price = Decimal(str(cached_hp))
-                        us_engine.exit_manager.register_position(pos)
+                        # 전략별 max_holding 배선 (us_scheduler sync 경로와 동일 로직 —
+                        # 초기 등록에서 글로벌 10영업일로 고착되던 문제 수정)
+                        _strat_val = pos.strategy or us_engine._symbol_strategy.get(sym)
+                        _mh = _us_strat_mh(us_engine, _strat_val)
+                        if _mh is not None:
+                            us_engine.exit_manager.register_position(pos, max_holding_days=_mh)
+                        else:
+                            us_engine.exit_manager.register_position(pos)
                     # restore_stages는 register_position 후 실행 (_states가 채워진 뒤)
                     if stages_cache:
                         us_engine.exit_manager.restore_stages(stages_cache)

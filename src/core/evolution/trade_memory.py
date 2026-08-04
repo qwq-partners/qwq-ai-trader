@@ -377,7 +377,7 @@ class TradeMemory:
             return 0  # 표본 부족
 
         for o in all_outcomes:
-            if o.exit_type not in ("stop_loss", "trailing"):
+            if o.exit_type not in ("stop_loss", "trailing", "emergency_stop"):
                 continue
             try:
                 exit_dt = _dt.strptime(o.exit_date, "%Y-%m-%d")

@@ -182,6 +182,7 @@ class CrossStrategyValidator:
         score: float,
         metadata: dict,
         market_regime: str = "neutral",
+        count_stats: bool = True,
     ) -> Tuple[bool, float, str]:
         """
         시그널 교차 검증
@@ -193,10 +194,16 @@ class CrossStrategyValidator:
             score: 전략 점수
             metadata: 시그널 메타데이터 (indicators, atr_pct, sector 등)
             market_regime: 시장 체제 ("bull", "bear", "sideways", "neutral")
+            count_stats: False면 일일 통계(_stats) 미집계 (2026-08-05 P2 —
+                팀 심의 shadow 게이트 조회가 실거래 통계를 오염시키던 문제)
 
         Returns:
             (통과 여부, 조정된 점수, 사유)
         """
+        # 통계 집계 헬퍼 — shadow 호출(count_stats=False)은 카운트하지 않는다
+        def _bump(key: str) -> None:
+            if count_stats:
+                self._stats[key] += 1
         # 일일 통계 리셋
         today = datetime.now().date()
         if self._stats_date != today:
@@ -214,11 +221,11 @@ class CrossStrategyValidator:
         # gap_and_go 장막판 진입 후보 (통과 시 카운터 증가)
         _late_gap_entry = False
 
-        self._stats["total"] += 1
+        _bump("total")
 
         # 매도 시그널은 검증 없이 통과 (청산은 항상 허용)
         if side != "buy":
-            self._stats["passed"] += 1
+            _bump("passed")
             return True, score, ""
 
         indicators = metadata.get("indicators") or {}
@@ -236,7 +243,7 @@ class CrossStrategyValidator:
             # 09:00~09:29 하드 차단 (장초반 30분 모든 매수 신호 차단)
             # 단, core_holding은 별도 배치(09:30 execute)로 처리되므로 영향 없음
             if 900 <= now_hm < 930 and strategy != "core_holding":
-                self._stats["blocked"] += 1
+                _bump("blocked")
                 logger.info(
                     f"[크로스검증] {symbol} 차단: 09:00~09:29 장초반 변동성 회피 "
                     f"({strategy}, KR 30일 -440k 패턴)"
@@ -322,7 +329,7 @@ class CrossStrategyValidator:
             if foreign_net is not None and inst_net is not None:
                 if foreign_net < 0 and inst_net < 0:
                     if strategy in ("theme_chasing", "momentum_breakout", "gap_and_go"):
-                        self._stats["blocked"] += 1
+                        _bump("blocked")
                         logger.info(
                             f"[크로스검증] {symbol} 차단: {strategy} 매수 + 기관/외국인 동시 순매도"
                         )
@@ -340,7 +347,7 @@ class CrossStrategyValidator:
         if self._market == "US":
             _bear_block = ("momentum_breakout",)  # US bear: 모멘텀만 차단, SEPA/어닝은 허용
         if market_regime == "bear" and strategy in _bear_block:
-            self._stats["blocked"] += 1
+            _bump("blocked")
             logger.info(
                 f"[크로스검증] {symbol} 차단: 약세장 + {strategy}"
             )
@@ -352,7 +359,7 @@ class CrossStrategyValidator:
         if (self._market == "KR"
                 and market_regime == "caution"
                 and strategy == "gap_and_go"):
-            self._stats["blocked"] += 1
+            _bump("blocked")
             logger.info(
                 f"[크로스검증] {symbol} 차단: 주의장 + gap_and_go (변동성 회피)"
             )
@@ -365,7 +372,7 @@ class CrossStrategyValidator:
         if (self._market == "KR"
                 and market_regime in ("sideways", "neutral")
                 and strategy == "sepa_trend"):
-            self._stats["blocked"] += 1
+            _bump("blocked")
             logger.info(
                 f"[크로스검증] {symbol} 차단: 횡보장({market_regime}) + sepa_trend "
                 f"(추세 부적합, 6/12 -272k 사고 재발 방지)"
@@ -382,7 +389,7 @@ class CrossStrategyValidator:
             _now_hm = datetime.now().hour * 100 + datetime.now().minute
             if _now_hm >= 1430:
                 if self._gap_late_count >= 2:
-                    self._stats["blocked"] += 1
+                    _bump("blocked")
                     logger.info(
                         f"[크로스검증] {symbol} 차단: gap_and_go 장막판 진입 "
                         f"{self._gap_late_count}/2 도달 (14:30+ 오버나잇 risk 캡)"
@@ -399,7 +406,7 @@ class CrossStrategyValidator:
                 if getattr(p, 'sector', None) == sector
             )
             if same_sector_count >= self._max_sector_positions:
-                self._stats["blocked"] += 1
+                _bump("blocked")
                 logger.info(
                     f"[크로스검증] {symbol} 차단: 섹터 과집중 ({sector}: {same_sector_count}종목)"
                 )
@@ -533,7 +540,7 @@ class CrossStrategyValidator:
                         )
                         # 통과 — 점수만 정상 반환
                     else:
-                        self._stats["blocked"] += 1
+                        _bump("blocked")
                         logger.info(
                             f"[크로스검증] {symbol} 차단: 전문가 BEAR 합의 "
                             f"(규칙#11, 유효 의견 {valid_n}명)"
@@ -546,7 +553,7 @@ class CrossStrategyValidator:
                     f"[크로스검증] 규칙#11 평가 실패 {symbol}: {_e} (fail_open={_fail_open})"
                 )
                 if not _fail_open:
-                    self._stats["blocked"] += 1
+                    _bump("blocked")
                     return False, adjusted_score, "전문가 시스템 평가 실패 (fail_closed)"
 
         # === 누적 감점 cap (2026-05-03 P0-1) ===
@@ -566,7 +573,7 @@ class CrossStrategyValidator:
 
         # 감점 적용 결과
         if penalties:
-            self._stats["penalized"] += 1
+            _bump("penalized")
             penalty_str = ", ".join(penalties)
             logger.info(
                 f"[크로스검증] {symbol} 감점: {score:.0f}→{adjusted_score:.0f} ({penalty_str})"
@@ -574,7 +581,7 @@ class CrossStrategyValidator:
 
         # 감점 후 최소 점수 미달이면 차단
         if adjusted_score < self._MIN_PASS_SCORE:
-            self._stats["blocked"] += 1
+            _bump("blocked")
             logger.info(
                 f"[크로스검증] {symbol} 차단: 감점 후 {adjusted_score:.0f} < {self._MIN_PASS_SCORE}"
             )
@@ -587,7 +594,7 @@ class CrossStrategyValidator:
                 f"[크로스검증] gap_and_go 장막판 카운터: {self._gap_late_count}/2"
             )
 
-        self._stats["passed"] += 1
+        _bump("passed")
         return True, adjusted_score, ""
 
     def _log_rule11_hit(

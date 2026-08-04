@@ -469,10 +469,18 @@ class ExitManager:
                     if pct_added >= 0.10:
                         state.current_stage = ExitStage.NONE
                         state.breakeven_activated = False
+                        # initial_quantity도 새 수량으로 갱신 (2026-08-05 P2)
+                        # — 구 initial_qty가 남으면 재시작 정합성 검증이
+                        #   "익절 미실행" 오탐 → TP1 이중 발행 위험
+                        state.initial_quantity = position.quantity
+                        _p_entry = self._persisted.get(position.symbol)
+                        if _p_entry is not None and "initial_qty" in _p_entry:
+                            _p_entry["initial_qty"] = int(position.quantity)
                         logger.info(
                             f"[ExitManager] 추가매수 확인: {position.symbol} "
                             f"{old_qty}→{position.quantity}주 (+{pct_added*100:.0f}%), stage→NONE, BE→False"
                         )
+                        self._persist_states()
                     else:
                         logger.debug(
                             f"[ExitManager] 수량 소폭 증가(sync): {position.symbol} "
@@ -898,6 +906,14 @@ class ExitManager:
             else:
                 ts_pct_used = max(atr_trail, float(base_trail))
                 _trail_src = "ATR트레일링"
+            # 장중 급락 활성 시 크래시 TS를 상한으로 캡 (2026-08-05 P2)
+            # — max(atr_trail, ...)가 crash 조임을 무시하던 구멍 봉합.
+            #   SL 캡(판정 시점 적용)과 동일 방식이라 해제 시 자동 원복.
+            if not state.is_core and self._intraday_crash_level in INTRADAY_CRASH_PARAMS:
+                _crash_ts = INTRADAY_CRASH_PARAMS[self._intraday_crash_level]["trailing_stop_pct"]
+                if ts_pct_used > _crash_ts:
+                    ts_pct_used = _crash_ts
+                    _trail_src = f"급락TS캡({self._intraday_crash_level})"
             trail_from_high = float((current_price - state.highest_price) / state.highest_price * 100)
 
             if trail_from_high <= -ts_pct_used:

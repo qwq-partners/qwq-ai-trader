@@ -7,7 +7,7 @@
 | 전략 | 배분 | 상태 | 포지션 크기 |
 |------|------|------|-----------|
 | SEPA Trend | **49.2%** | 활성 | 25% equity |
-| RSI2 Reversal | **12.5%** | 활성 | 20% equity |
+| RSI2 Reversal | **0%** | 🚫 **폐지** (2026-08-02) | — |
 | Strategic Swing | **18.8%** | 활성 ⚠️ | 25% equity (SEPA급) |
 | Gap & Go | 9.5% | 활성 | 15% equity |
 | Core Holding | 10% | locked | 10% equity |
@@ -77,6 +77,13 @@
 ---
 
 ## 2. RSI2 Reversal (`src/strategies/kr/rsi2_reversal.py`)
+
+> 🚫 **폐지 (2026-08-02)** — 백테스트 근거: 단독 -15.44%/손익비 0.98 (3개월/60종목),
+> 제거 시 포트폴리오 +26.16%/+16.21%. 단기 반전은 KR 왕복 수수료 0.227% 앞에서
+> 기댓값 확보가 구조적으로 어려움. `evolved_overrides.yml`: `enabled: false` +
+> `strategy_allocation: 0.0` (+ `_meta` 근거 기록). 2026-08-05: 배치 T+1 라인이
+> enabled를 무시하던 갭을 게이트로 봉합 — 코드·설정 모두 폐지 상태 완결.
+> 재활성화 시: enabled=true + allocation 배분 + 아래 스펙 참조 (코드는 유지).
 
 ### 개요
 RSI(2) 과매도 반전 진입. 상위 추세(MA200) 필터 결합.

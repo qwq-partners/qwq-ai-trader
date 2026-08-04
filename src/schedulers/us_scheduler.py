@@ -1783,6 +1783,25 @@ class USScheduler:
                 if symbol not in eng._pending_symbols:
                     pos.quantity = new_qty
 
+                    # ExitManager remaining_quantity도 KIS 수량으로 보정 (2026-08-05 P2)
+                    # — 체결 누락 등으로 괴리 시 분할 익절 수량 과다 산출 방지.
+                    #   pending 매도 진행 중이면 이 블록 자체가 스킵되므로 안전.
+                    #   감소 방향만 보정: balance 스냅샷이 stale이면 (조회 후 fill 처리)
+                    #   매도 전 수량으로 remaining을 되돌려 초과 매도를 만들 수 있다
+                    #   (2026-08-05 재리뷰 P2 — 상향 복원 race 차단, 상향 괴리는
+                    #    다음 sync에서 fresh 스냅샷으로 자연 해소)
+                    _ex_state = eng.exit_manager._states.get(symbol) if eng.exit_manager else None
+                    if _ex_state is not None and _ex_state.remaining_quantity > new_qty:
+                        logger.warning(
+                            f"[US 동기화] {symbol} ExitManager remaining 보정: "
+                            f"{_ex_state.remaining_quantity}→{new_qty}주 (KIS 기준)"
+                        )
+                        _ex_state.remaining_quantity = new_qty
+                        try:
+                            eng.exit_manager._persist_states()
+                        except Exception as _pe:
+                            logger.debug(f"[US 동기화] {symbol} remaining 보정 영속화 실패: {_pe}")
+
                     # 수량 감소 감지 → 부분/전량 매도 기록 (체결 누락 보완)
                     if new_qty < old_qty and eng.trade_storage:
                         sold_qty = old_qty - new_qty

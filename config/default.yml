@@ -284,7 +284,7 @@ kr:
       position_pct: 8.0
       max_position_pct: 10.0
       min_score: 70
-      scan_weekday: 0              # 월요일 주 1회 (10:40 윈도우)
+      scan_weekday: 0              # 월요일 주 1회 (16:10~16:19 윈도우, 장 마감 후)
       # LLM 정성 검증 (value_qualitative.py)
       llm_top_n: 8
       llm_pass_score: 60

@@ -74,7 +74,7 @@
 | 테마추종 | `kr/theme_chasing.py` | 🚫 **폐지** (2026-05-04, allocation 0%) |
 | 갭상승 | `kr/gap_and_go.py` | 갭상승 후 눌림목 매수 |
 | SEPA | `kr/sepa_trend.py` | SEPA 추세 전략 (스윙) |
-| RSI2 반전 | `kr/rsi2_reversal.py` | RSI(2) 과매도 반전 진입 |
+| RSI2 반전 | `kr/rsi2_reversal.py` | 🚫 **폐지** (2026-08-02, enabled=false + allocation 0% — 백테스트 단독 -15.44%, 근거는 evolved_overrides `_meta`) |
 | VCP 돌파 | (배치 스캔 라인) | 변동성 수축 후 20일 고점 돌파 — **선행 발굴** (2026-08-03~) |
 | 밸류코어 | `value_growth_screener.py` | 가치·성장 2버킷 장기보유 — 🔍 **shadow 관측 중** (2026-08-04~, 주문 없음, 설계 `docs/strategies/value-growth-core-design.md`) |
 

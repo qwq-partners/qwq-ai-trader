@@ -168,6 +168,11 @@ class TradeStorage:
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market)"
             )
+            # 마이그레이션: trade_events.market (2026-08-05 — us_scheduler 직접 INSERT
+            # 2곳이 이 컬럼을 참조하는데 스키마에 없어 US SELL 이벤트 기록이 무음 실패)
+            await conn.execute(
+                "ALTER TABLE trade_events ADD COLUMN IF NOT EXISTS market VARCHAR(5) NOT NULL DEFAULT 'KR'"
+            )
         logger.info("[TradeStorage] 테이블 확인/생성 완료")
 
     @staticmethod

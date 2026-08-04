@@ -66,7 +66,11 @@ class EvolvedConfigManager:
             atomic_write_text(self._override_file, content)
             logger.debug(f"진화 오버라이드 저장: {self._override_file}")
         except Exception as e:
+            # 2026-08-05 P2: 예외를 삼키면 save_override의 persist-first 롤백이
+            # 데드코드가 됨 (저장 실패해도 런타임 값만 변경된 채 유지) → 재전파.
+            # 모든 호출자(strategy_evolver 3곳, kr_api 1곳)는 try/except 보유 확인됨.
             logger.error(f"진화 오버라이드 저장 실패: {e}")
+            raise
 
     def save_override(self, component: str, param: str, value: Any, source: str = "evolution", note: str = ""):
         """

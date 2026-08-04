@@ -479,6 +479,7 @@ class KRScheduler:
         모든 reason 패턴을 커버한다.
 
         패턴 우선순위 (위에서 아래):
+          0. 긴급 청산 (킬스위치/긴급전량청산 — 손절보다 먼저 판별)
           1. 손절
           2. 트레일링
           3. 본전 이탈 (breakeven)
@@ -489,6 +490,12 @@ class KRScheduler:
           8. 테마 EOD / fill_detected / 기타 → manual
         """
         r = reason or ""
+        # 2026-08-05 P2: "긴급전량청산" 등이 manual로 오분류되던 데드 조건 복원.
+        # risk/manager.record_exit가 ("stop_loss","emergency_stop")를 당일 손절
+        # 등록 대상으로 취급하므로 emergency_stop 반환 시 재진입 강화 정책이 걸린다.
+        # (소비처 확인: DB VARCHAR(30)/저널/메모리/위키 모두 자유 문자열 — 안전)
+        if "긴급" in r or "emergency" in r.lower():
+            return "emergency_stop"
         if "손절" in r or "stop" in r.lower():
             return "stop_loss"
         if "트레일링" in r or "trailing" in r.lower():
@@ -3074,10 +3081,14 @@ JSON:
                                 _ib_rt_price = _ib_quote["price"]
                                 _ib_rt_change = _ib_quote.get("change_pct", 0)
 
-                                if not (0.0 <= _ib_rt_change <= _ib_max_change):
+                                # 2026-08-05 P2: 후보 필터와 동일하게 ATR 동적 상한 적용
+                                # (기존 고정 _ib_max_change는 ATR cap으로 통과한 후보를
+                                #  재확인 단계에서 다시 떨어뜨려 동적 상한을 무효화했다)
+                                _ib_rt_cap = _ib_get_cap(_ib_stock)
+                                if not (0.0 <= _ib_rt_change <= _ib_rt_cap):
                                     logger.info(
                                         f"[장중품질] {_ib_stock.symbol} 탈락: "
-                                        f"실시간 등락 {_ib_rt_change:+.1f}% ≠ 0~{_ib_max_change}%"
+                                        f"실시간 등락 {_ib_rt_change:+.1f}% ≠ 0~{_ib_rt_cap:.1f}%"
                                     )
                                     continue
 
@@ -4727,6 +4738,8 @@ JSON:
                 passed, adj_score, reason = cv.validate(
                     symbol=symbol, side="buy", strategy="team",
                     score=70.0, metadata=meta, market_regime=regime,
+                    # 팀 심의는 shadow 조회 — 실거래 일일 통계(_stats) 오염 방지
+                    count_stats=False,
                 )
                 return (bool(passed), [] if passed else ["G2_cross"], reason or "")
             except Exception as e:
@@ -5832,8 +5845,17 @@ JSON:
                 return
 
             # 09:00까지 대기
+            # 2026-08-05 P2: 15:30 장 마감 이후 기동 시 기존 로직은 now >= target이라
+            # 대기 없이 즉시 주문 제출(장외 시간 주문) → 다음 영업일 09:00:05로 이월
             now = datetime.now()
             target = now.replace(hour=9, minute=0, second=5, microsecond=0)
+            if now >= now.replace(hour=15, minute=30, second=0, microsecond=0):
+                next_day = today + timedelta(days=1)
+                # 주말/공휴일 순연 (is_kr_market_holiday가 주말 포함 판정)
+                while is_kr_market_holiday(next_day):
+                    next_day += timedelta(days=1)
+                target = datetime(next_day.year, next_day.month, next_day.day, 9, 0, 5)
+                logger.info(f"[수동매수] 장 마감 후 기동 — {next_day} 09:00:05로 이월")
             if now < target:
                 wait_secs = (target - now).total_seconds()
                 logger.info(f"[수동매수] 09:00:05까지 {wait_secs:.0f}초 대기")
@@ -6203,86 +6225,11 @@ JSON:
                             except Exception as e:
                                 logger.error(f"[코어홀딩스케줄러] 리밸런싱 오류 (다음 윈도우 재시도): {e}", exc_info=True)
 
-                # ── 2) 빈 슬롯 즉시 매수 (코어 미보유 또는 슬롯 여유 시) ──
-                if not is_monthly_rebalance and core_count < max_core_positions:
-                    # 오늘 이미 빈슬롯 매수 시도했으면 스킵
-                    if last_fill_date == today_str:
-                        continue
-
-                    # 매수 윈도우 체크 (윈도우당 1회만 시도)
-                    attempt_key = None
-                    for wh, wm_start, wm_end in fill_windows:
-                        if now.hour == wh and wm_start <= now.minute < wm_end:
-                            attempt_key = f"{today_str}:fill:{wh:02d}{wm_start:02d}"
-                            break
-                    if attempt_key is None:
-                        continue
-                    if last_fill_attempt_key == attempt_key:
-                        # 이 윈도우에서 이미 시도함 → 다음 윈도우까지 재스캔하지 않는다
-                        continue
-                    last_fill_attempt_key = attempt_key
-
-                    # 코어 예산 여유 확인
-                    equity = portfolio.total_equity
-                    if equity <= 0:
-                        continue
-                    alloc = getattr(bot.engine.config, 'risk', None)
-                    core_alloc_pct = 30.0  # 기본값
-                    if alloc and hasattr(alloc, 'strategy_allocation'):
-                        core_alloc_pct = alloc.strategy_allocation.get("core_holding", 30.0)
-                    core_budget = equity * Decimal(str(core_alloc_pct / 100))
-                    current_core_value = portfolio.get_strategy_allocation("core_holding")
-                    remaining_budget = core_budget - current_core_value
-                    min_position_value = Decimal(str(core_cfg.get("min_position_value", 200000)))
-
-                    if remaining_budget < min_position_value:
-                        continue
-
-                    empty_slots = max_core_positions - core_count
-                    logger.info(
-                        f"[코어홀딩스케줄러] 빈슬롯 매수 시도: {empty_slots}슬롯 비어있음, "
-                        f"예산 잔여 {remaining_budget:,.0f}원 ({now.hour}:{now.minute:02d})"
-                    )
-                    try:
-                        # allow_replace=False: 빈슬롯 채우기만, 기존 코어 종목 교체 없음
-                        # 교체(replace_threshold)는 월초 풀 리밸런싱에서만 허용
-                        success = await bot.batch_analyzer.execute_core_rebalance(allow_replace=False)
-                        if success:
-                            # ── 실제 주문 제출 여부 검증 ──
-                            # 포지션 수 재확인 + pending 코어 주문 확인
-                            await asyncio.sleep(0.5)  # 이벤트 루프 처리 대기
-                            new_core_count = sum(
-                                1 for p in portfolio.positions.values()
-                                if p.strategy == "core_holding"
-                            )
-                            pending_core = sum(
-                                1 for sym, info in getattr(bot.engine, '_pending_orders', {}).items()
-                                if info.get('strategy') == 'core_holding'
-                                   or getattr(portfolio.positions.get(sym), 'strategy', '') == 'core_holding'
-                            )
-                            actually_filled = (new_core_count > core_count) or (pending_core > 0)
-                            if actually_filled:
-                                last_fill_date = today_str
-                                logger.info(
-                                    f"[코어홀딩스케줄러] 빈슬롯 매수 성공 "
-                                    f"(포지션 {core_count}→{new_core_count}, pending={pending_core})"
-                                )
-                                bot.batch_analyzer._save_core_state({"last_fill_date": today_str})
-                            else:
-                                # 시그널 발행됐지만 실제 주문 미제출 (현금 부족 등)
-                                # → last_fill_date 미설정, 다음 윈도우에서 재시도
-                                logger.warning(
-                                    f"[코어홀딩스케줄러] 빈슬롯 매수 미체결 "
-                                    f"(포지션 변화 없음, pending=0) → 다음 윈도우 재시도"
-                                )
-                        else:
-                            # 실패 시 last_fill_date 미설정 → 다음 윈도우에서 재시도
-                            logger.info("[코어홀딩스케줄러] 빈슬롯 매수 실패 (후보 없음 등) → 다음 윈도우 재시도")
-                    except Exception as e:
-                        # 예외 시에도 재시도 허용 (last_fill_date 미설정)
-                        logger.error(f"[코어홀딩스케줄러] 빈슬롯 매수 오류: {e}", exc_info=True)
-
-                # ── 3) 코어 초과 비중 감지 + 트림 ──
+                # ── 2) 코어 초과 비중 감지 + 트림 ──
+                # 2026-08-05 P2: 기존엔 섹션 3(빈슬롯 매수)보다 뒤에 있어 빈슬롯 매수의
+                # continue 5곳(윈도우 밖/이미 시도/예산 부족 등)이 매번 이 섹션을 스킵
+                # → 초과비중 경고·금요 14:00 트림이 사실상 실행 불가였다. 순서만 교체
+                # (양쪽 로직 무변경 — 빈슬롯 매수의 continue는 이제 루프 말미로만 이동).
                 core_cfg_ow = bot.batch_analyzer._config.get("core_holding", {})
                 _ow_alert_pct = core_cfg_ow.get("overweight_alert_pct", 35.0)
                 _trim_threshold_pct = core_cfg_ow.get("trim_threshold_pct", 40.0)
@@ -6416,6 +6363,93 @@ JSON:
                                     await send_alert(_trim_msg)
                                 except Exception:
                                     pass
+
+                # ── 3) 빈 슬롯 즉시 매수 (코어 미보유 또는 슬롯 여유 시) ──
+                # (2026-08-05 P2: 구 섹션 2 — 트림 섹션 뒤로 이동, 내부 continue는 이제 안전)
+                if not is_monthly_rebalance and core_count < max_core_positions:
+                    # 오늘 이미 빈슬롯 매수 시도했으면 스킵
+                    if last_fill_date == today_str:
+                        continue
+
+                    # 매수 윈도우 체크 (윈도우당 1회만 시도)
+                    attempt_key = None
+                    for wh, wm_start, wm_end in fill_windows:
+                        if now.hour == wh and wm_start <= now.minute < wm_end:
+                            attempt_key = f"{today_str}:fill:{wh:02d}{wm_start:02d}"
+                            break
+                    if attempt_key is None:
+                        continue
+                    if last_fill_attempt_key == attempt_key:
+                        # 이 윈도우에서 이미 시도함 → 다음 윈도우까지 재스캔하지 않는다
+                        continue
+                    last_fill_attempt_key = attempt_key
+
+                    # 코어 예산 여유 확인
+                    equity = portfolio.total_equity
+                    if equity <= 0:
+                        continue
+                    alloc = getattr(bot.engine.config, 'risk', None)
+                    core_alloc_pct = 30.0  # 기본값
+                    if alloc and hasattr(alloc, 'strategy_allocation'):
+                        core_alloc_pct = alloc.strategy_allocation.get("core_holding", 30.0)
+                    core_budget = equity * Decimal(str(core_alloc_pct / 100))
+                    current_core_value = portfolio.get_strategy_allocation("core_holding")
+                    remaining_budget = core_budget - current_core_value
+                    min_position_value = Decimal(str(core_cfg.get("min_position_value", 200000)))
+
+                    if remaining_budget < min_position_value:
+                        continue
+
+                    empty_slots = max_core_positions - core_count
+                    logger.info(
+                        f"[코어홀딩스케줄러] 빈슬롯 매수 시도: {empty_slots}슬롯 비어있음, "
+                        f"예산 잔여 {remaining_budget:,.0f}원 ({now.hour}:{now.minute:02d})"
+                    )
+                    try:
+                        # allow_replace=False: 빈슬롯 채우기만, 기존 코어 종목 교체 없음
+                        # 교체(replace_threshold)는 월초 풀 리밸런싱에서만 허용
+                        success = await bot.batch_analyzer.execute_core_rebalance(allow_replace=False)
+                        if success:
+                            # ── 실제 주문 제출 여부 검증 ──
+                            # 포지션 수 재확인 + pending 코어 주문 확인
+                            await asyncio.sleep(0.5)  # 이벤트 루프 처리 대기
+                            new_core_count = sum(
+                                1 for p in portfolio.positions.values()
+                                if p.strategy == "core_holding"
+                            )
+                            # 2026-08-05 P2: bot.engine._pending_orders는 존재하지 않는
+                            # 속성(항상 {})이라 pending 검증이 데드코드였다. 실제 pending은
+                            # engine.risk_manager._pending_orders(Set[str])이고, 매수 시그널
+                            # 메타(전략 포함)는 _pending_signal_cache(Dict[sym, {strategy,...}])에
+                            # 있으므로 둘을 결합해 코어 pending 매수를 판별한다.
+                            _rm_core = getattr(bot.engine, 'risk_manager', None)
+                            _pending_syms = set(getattr(_rm_core, '_pending_orders', None) or set())
+                            _sig_cache_core = getattr(_rm_core, '_pending_signal_cache', None) or {}
+                            pending_core = sum(
+                                1 for sym in _pending_syms
+                                if _sig_cache_core.get(sym, {}).get('strategy') == 'core_holding'
+                            )
+                            actually_filled = (new_core_count > core_count) or (pending_core > 0)
+                            if actually_filled:
+                                last_fill_date = today_str
+                                logger.info(
+                                    f"[코어홀딩스케줄러] 빈슬롯 매수 성공 "
+                                    f"(포지션 {core_count}→{new_core_count}, pending={pending_core})"
+                                )
+                                bot.batch_analyzer._save_core_state({"last_fill_date": today_str})
+                            else:
+                                # 시그널 발행됐지만 실제 주문 미제출 (현금 부족 등)
+                                # → last_fill_date 미설정, 다음 윈도우에서 재시도
+                                logger.warning(
+                                    f"[코어홀딩스케줄러] 빈슬롯 매수 미체결 "
+                                    f"(포지션 변화 없음, pending=0) → 다음 윈도우 재시도"
+                                )
+                        else:
+                            # 실패 시 last_fill_date 미설정 → 다음 윈도우에서 재시도
+                            logger.info("[코어홀딩스케줄러] 빈슬롯 매수 실패 (후보 없음 등) → 다음 윈도우 재시도")
+                    except Exception as e:
+                        # 예외 시에도 재시도 허용 (last_fill_date 미설정)
+                        logger.error(f"[코어홀딩스케줄러] 빈슬롯 매수 오류: {e}", exc_info=True)
 
             except asyncio.CancelledError:
                 break

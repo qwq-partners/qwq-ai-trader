@@ -178,6 +178,10 @@ class UnifiedEngine:
         # 중복 카운트되는 것 방지 (2026-08-05 P1). 자정 리셋 시 clear.
         self._counted_buy_order_ids: set = set()
 
+        # 일일 통계 JSON 복원 성공 여부 (2026-08-05 P2)
+        # — 미복원 시 restore_daily_pnl_from_db에서 미실현 기준선 백필 수행
+        self._daily_stats_restored: bool = False
+
         # 통계 — 공유
         self.stats = EngineStats()
 
@@ -648,7 +652,9 @@ class UnifiedEngine:
                 sell_fee = Decimal("0")
 
             # 실현 손익 = (매도가 - 평균단가) x 수량 - 매도비용(수수료+거래세)
-            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - sell_fee
+            # 2026-08-05 P2: 초과수량 보정(sell_qty) 후에도 미보정 fill.quantity로
+            # 계산해 이상 fill 시 daily_pnl이 과대/과소 반영되던 문제 → sell_qty 사용
+            realized_pnl = (fill.price - pos.avg_price) * Decimal(str(sell_qty)) - sell_fee
 
             # 현금 증가 = 매도 대금 - 매도비용
             self.portfolio.cash += fill.total_value - sell_fee
@@ -765,11 +771,22 @@ class UnifiedEngine:
         # 2. 일일 거래 횟수 상한 (2026-08-04 재도입 — 폭주 브레이크)
         # 과거 "가용 현금이 게이트"로 제거했으나 문서·대시보드는 계속 한도를 표기해 왔고,
         # 리뷰에서 미강제 확인 → 문서화된 동작으로 복원. BUY만 차단 (청산은 무제한).
-        if side == OrderSide.BUY and self.portfolio.daily_trades >= risk.daily_max_trades:
-            return False, (
-                f"일일 거래 횟수 한도 초과 "
-                f"({self.portfolio.daily_trades}/{risk.daily_max_trades})"
-            )
+        if side == OrderSide.BUY:
+            # TOCTOU 보정 (2026-08-05 P2): 체결 전(pending) BUY 주문도 합산
+            # — 신호 버스트 시 daily_trades 반영 전에 한도를 초과해 주문이 나가던 틈 차단.
+            #   부분체결 중엔 카운트+pending이 겹쳐 보수적으로 일찍 막힐 수 있으나 브레이크 성격상 허용.
+            _pending_buys = 0
+            _rm = self.risk_manager
+            if _rm is not None and hasattr(_rm, "_pending_sides"):
+                _pending_buys = sum(
+                    1 for _sd in _rm._pending_sides.values() if _sd == OrderSide.BUY
+                )
+            if self.portfolio.daily_trades + _pending_buys >= risk.daily_max_trades:
+                return False, (
+                    f"일일 거래 횟수 한도 초과 "
+                    f"(체결 {self.portfolio.daily_trades} + 진행중 {_pending_buys}"
+                    f"/{risk.daily_max_trades})"
+                )
 
         # 3. 포지션 수 로깅 (하드 제한 없음 — 가용 현금이 게이트)
         if symbol not in self.portfolio.positions:
@@ -872,6 +889,8 @@ class UnifiedEngine:
                 "daily_pnl": str(self.portfolio.daily_pnl),
                 "daily_start_unrealized_pnl": str(self.portfolio.daily_start_unrealized_pnl),
                 "daily_trades": self.portfolio.daily_trades,
+                # 2026-08-05 P2: 재시작 시 부분체결 중복 카운트 방지 세트도 복원 대상
+                "counted_buy_order_ids": sorted(self._counted_buy_order_ids),
             }
             # 원자적 쓰기 (2026-08-04 P0) — 쓰기 도중 크래시로 파손된 파일이
             # 재시작 시 "장중 풀 리셋"을 트리거하던 경로 차단
@@ -897,6 +916,9 @@ class UnifiedEngine:
             self.portfolio.daily_pnl = Decimal(data["daily_pnl"])
             self.portfolio.daily_start_unrealized_pnl = Decimal(data["daily_start_unrealized_pnl"])
             self.portfolio.daily_trades = int(data.get("daily_trades", 0))
+            # 같은 날짜일 때만 복원 (위에서 날짜 불일치 시 이미 return)
+            self._counted_buy_order_ids = set(data.get("counted_buy_order_ids", []))
+            self._daily_stats_restored = True  # 기준선 백필(restore_daily_pnl_from_db) 스킵 플래그
             logger.info(
                 f"[DailyStats] 복원 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원, "
                 f"시작미실현={self.portfolio.daily_start_unrealized_pnl:+,.0f}원, "
@@ -935,6 +957,24 @@ class UnifiedEngine:
                 _trades_backfilled = True
         except Exception as _be:
             logger.debug(f"[DailyStats] BUY 건수 백필 실패 (무시): {_be}")
+
+        # 미실현 기준선 백필 (2026-08-05 P2): JSON 미복원 상태로 기동하면
+        # daily_start_unrealized_pnl=0 → 보유 포지션의 "누적" 미실현 손익 전체가
+        # 오늘 발생분(effective_daily_pnl)으로 계산돼 일일손실 게이트를 오염시킨다.
+        # 현재 시점 미실현 손익을 오늘 시작 기준선으로 재설정 후 저장.
+        # current_price는 기동 시 KIS 잔고에서 복원됨(_load_existing_positions가
+        # 이 함수보다 먼저 실행) — 미확보 시 avg_price라 미실현=0 → 백필 no-op으로 안전.
+        if (not self._daily_stats_restored
+                and self.portfolio.daily_start_unrealized_pnl == Decimal("0")
+                and self.portfolio.positions):
+            _baseline = self.portfolio.total_unrealized_pnl
+            if _baseline != Decimal("0"):
+                self.portfolio.daily_start_unrealized_pnl = _baseline
+                logger.info(
+                    f"[DailyStats] 미실현 기준선 백필: {_baseline:+,.0f}원 "
+                    f"(JSON 미복원 → 일일손실 게이트 오염 방지)"
+                )
+                self._save_daily_stats()
 
         if self.portfolio.daily_pnl != Decimal("0"):
             logger.debug("[DailyStats] daily_pnl 이미 복원됨 → DB 백필 생략")
@@ -1185,11 +1225,8 @@ class RiskManager:
 
         # 자동매도 금지 종목 (run_trader에서 exit_manager._exit_exempt live set 주입)
         self._exit_exempt_ref: set = set()
-        # 섹터 임시 캐시 (clear_pending에서 참조 — UnifiedEngine._pending_sector_map과 호환 목적)
-        # ★ 버그 방지 (2026-04-20 08:00 AttributeError):
-        #   clear_pending(line ~1552), _on_order_failure(line ~1475, 1492)에서 참조하는데
-        #   RiskManager.__init__에 초기화 누락 상태였음 → 주문 제출 실패 시 AttributeError 폭주
-        self._pending_sector_map: Dict[str, str] = {}
+        # (2026-08-05 P2 제거) RiskManager._pending_sector_map은 쓰기 지점이 전무한
+        # 죽은 dict였음 — 섹터 캐시는 UnifiedEngine._pending_sector_map 단일 소유로 정리.
 
         # 당일 손절 종목 (재진입 방지)
         self._stop_loss_today: Set[str] = set()
@@ -1524,12 +1561,29 @@ class RiskManager:
                     reason="미체결 폴백: 시장가 전환",
                 )
                 try:
-                    await self.engine.broker.submit_order(fallback_order)
-                    async with self._pending_lock:
-                        self._pending_timestamps[s] = datetime.now()
-                        self._pending_sides[s] = OrderSide.SELL
-                        self._pending_fallback_count[s] = fallback_cnt + 1
-                    logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {_fb_qty}주/보유 {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
+                    # 2026-08-05 P2: 반환값 미확인으로 제출 실패가 성공 취급되던 버그
+                    # — 실패 시 타임스탬프를 갱신하지 않아 다음 주기에 즉시 재감지·재시도
+                    _fb_ok, _fb_msg = await self.engine.broker.submit_order(fallback_order)
+                    if _fb_ok:
+                        async with self._pending_lock:
+                            self._pending_timestamps[s] = datetime.now()
+                            self._pending_sides[s] = OrderSide.SELL
+                            self._pending_fallback_count[s] = fallback_cnt + 1
+                        logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {_fb_qty}주/보유 {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
+                    else:
+                        async with self._pending_lock:
+                            self._pending_fallback_count[s] = fallback_cnt + 1
+                        if fallback_cnt + 1 >= _MAX_FALLBACK:
+                            logger.critical(
+                                f"[리스크] 매도 시장가 폴백 최종 포기: {s} — {_fb_msg} "
+                                f"(청산 시그널 소실 — 수동 매도 확인 필요)"
+                            )
+                            await self.clear_pending(s)
+                        else:
+                            logger.error(
+                                f"[리스크] 시장가 폴백 제출 실패: {s} — {_fb_msg} "
+                                f"(재시도 {fallback_cnt + 1}/{_MAX_FALLBACK}, 다음 주기 재감지)"
+                            )
                 except Exception as e:
                     logger.error(f"[리스크] 시장가 폴백 주문 실패: {s} - {e}")
                     await self.clear_pending(s)
@@ -1725,8 +1779,9 @@ class RiskManager:
                                                f"사용={float(_current):,.0f})")
                     return None
 
-        # 주문 실패 쿨다운 체크
-        if event.symbol in self._order_fail_cooldown:
+        # 주문 실패 쿨다운 체크 (BUY만 — 2026-08-05 P2)
+        # SELL(청산) 신호까지 5분 차단하면 손절/익절 시그널이 소실됨 → 매도는 항상 통과
+        if event.side == OrderSide.BUY and event.symbol in self._order_fail_cooldown:
             cooldown_start = self._order_fail_cooldown[event.symbol]
             elapsed = (datetime.now() - cooldown_start).total_seconds()
             if elapsed < self._COOLDOWN_SECONDS:
@@ -1830,7 +1885,6 @@ class RiskManager:
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
                     self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                                   block_reason=reason)
-                    self._pending_sector_map.pop(order.symbol, None)
                     self.engine._pending_sector_map.pop(order.symbol, None)
                     return None
 
@@ -1848,7 +1902,6 @@ class RiskManager:
                 logger.warning(f"주문 거부: {order.symbol} - {reason}")
                 self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                               block_reason=reason)
-                self._pending_sector_map.pop(order.symbol, None)
                 self.engine._pending_sector_map.pop(order.symbol, None)
                 return None
 
@@ -1916,8 +1969,7 @@ class RiskManager:
             self._reserved_by_order.pop(symbol, None)
             self._pending_fallback_count.pop(symbol, None)
             self._pending_signal_cache.pop(symbol, None)
-            self._pending_sector_map.pop(symbol, None)
-            # 엔진 쪽 섹터 맵도 함께 정리 (2026-08-04 P1 — 누수 시 섹터 한도 오차단)
+            # 엔진 쪽 섹터 맵 정리 (2026-08-04 P1 — 누수 시 섹터 한도 오차단)
             self.engine._pending_sector_map.pop(symbol, None)
 
     async def on_order(self, event: OrderEvent) -> Optional[List[Event]]:
@@ -1946,7 +1998,10 @@ class RiskManager:
             else:
                 logger.warning(f"[리스크] 주문 제출 실패: {order.symbol} — {order_id}")
                 await self.clear_pending(event.symbol)
-                self.block_symbol(event.symbol)
+                # 쿨다운 등록은 BUY 실패만 (2026-08-05 P2) — SELL 실패는 재시도가
+                # 필요하고, 반복 실패는 아래 좀비 감지(APBK0400)가 별도 처리
+                if order.side == OrderSide.BUY:
+                    self.block_symbol(event.symbol)
 
                 # KIS "주문 가능 수량 초과" → 좀비 포지션 의심 (2026-06-09 추가)
                 _err = str(order_id) if order_id else ""
@@ -1998,6 +2053,21 @@ class RiskManager:
         except Exception as e:
             logger.error(f"[리스크] 포지션 업데이트 실패: {event.symbol} — {e}")
 
+        # 1-1) 교체 축출 게이트용 진입 점수 부착 (2026-08-05 P2)
+        # _try_evict_weakest_position이 읽는 entry_signal_score를 대입하는 곳이
+        # 없어 "+5점 우위" 비교가 항상 0 기준으로 무력화됐다.
+        # 한계: 재시작으로 복원된 포지션은 0으로 남음 (허용).
+        try:
+            if event.side == OrderSide.BUY:
+                _pos = self.engine.portfolio.positions.get(event.symbol)
+                _sig_cache = self._pending_signal_cache.get(event.symbol)
+                if _pos is not None and _sig_cache is not None:
+                    _cached_score = _sig_cache.get("score")
+                    if _cached_score is not None:
+                        setattr(_pos, "entry_signal_score", float(_cached_score))
+        except Exception as _es_err:
+            logger.debug(f"[리스크] entry_signal_score 부착 실패 (무시): {_es_err}")
+
         # 2) pending 추적 정리
         async with self._pending_lock:
             if event.quantity is None:
@@ -2016,6 +2086,16 @@ class RiskManager:
                 self._pending_signal_cache.pop(event.symbol, None)
             else:
                 self._pending_quantities[event.symbol] = remaining
+                # 부분체결분 예약현금 비례 차감 (2026-08-05 P2)
+                # — 미차감 시 이미 체결(현금 차감 완료)된 몫까지 예약으로 이중 잠겨
+                #   후속 매수 게이트/사이징의 가용현금이 과소평가됨 (예약은 BUY만 존재)
+                _rsv = self._reserved_by_order.get(event.symbol)
+                if _rsv is not None and event.quantity is not None and event.quantity > 0:
+                    _prev_qty = remaining + event.quantity  # 체결 전 잔여 수량
+                    if _prev_qty > 0:
+                        self._reserved_by_order[event.symbol] = (
+                            _rsv * Decimal(str(remaining)) / Decimal(str(_prev_qty))
+                        )
                 logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
 
         # 일일 손실 체크 (실현 + 미실현 손익 합산)
@@ -2144,8 +2224,13 @@ class RiskManager:
         pct_value = pool_equity * Decimal(str(position_pct))
 
         # 가용 현금 (수수료 여유분, 예약 현금 차감)
-        # 주의: 비코어 전략은 pool_equity에서 이미 코어 예약분 차감됨 → available에서 이중 차감 금지
+        # 2026-08-05 P2: 비코어는 코어 예약분도 차감 — G3 게이트(can_open_position의
+        # reserved_cash = _reserved_cash + _get_core_reserve())와 동일 기준으로 정합.
+        # 기존엔 사이징은 큰 값 → 게이트에서 "축소 대신 전면 거부"되는 구간이 있었다.
+        # (pool_equity의 코어 차감은 비율 기반 상한, available은 현금 상한 — 역할 상이)
         available = self.engine.get_available_cash() - self._reserved_cash
+        if not _is_core:
+            available -= self._get_core_reserve()
         if available <= 0:
             return 0
 
@@ -2175,6 +2260,9 @@ class RiskManager:
             if daily_pnl_pct <= half_limit:
                 position_value *= Decimal("0.5")
 
+        # 배율 적용 전 값 보존 (2026-08-05 P2: min_position_value 바닥 클램프 판단용)
+        _pre_mult_value = position_value
+
         # 전략별 포지션 배율
         position_multiplier = 1.0
         if signal.signal and signal.signal.metadata:
@@ -2201,7 +2289,18 @@ class RiskManager:
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))
         if position_value < min_val:
-            return 0
+            # 2026-08-05 P2: LLM soft-reject 50% 축소 등 배율 적용으로만 미달한 경우
+            # min_val로 바닥 클램프 — "사이즈 축소" 의도가 전면 차단으로 변질되는 것 방지.
+            # 단, 가용현금/개별 상한(max_value) 이내일 때만.
+            if (_pre_mult_value >= min_val
+                    and min_val <= available and min_val <= max_value):
+                logger.info(
+                    f"[리스크] {signal.symbol} 배율 축소로 최소 금액 미달 "
+                    f"({position_value:,.0f} < {min_val:,.0f}) → 최소 금액으로 클램프"
+                )
+                position_value = min_val
+            else:
+                return 0
 
         # 수량 계산 (시장가 주문 시 상한가 +30% 증거금 고려)
         quantity = int(position_value / price)

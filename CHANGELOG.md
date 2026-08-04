@@ -1,5 +1,64 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-05 — fix(engine): P2 일괄 처리 32건 + rsi2 폐지 완결 + trade_events market (미커밋)
+
+같은 날 P1 커밋(79ce79c)의 후속. 사용자 지시로 P2 전량 수정 → 최종 적대적 리뷰
+(신규 P0/P1 없음, 지적 P2 1건 반영) → 재시작 검증 완료.
+
+### 정책 조사 결과 2건 (사용자 요청)
+- **rsi2 `strategy_allocation: 0.0`은 의도된 폐지가 맞음**: evolved `_meta` 2026-08-02
+  기록 확인 (단독 -15.44%/손익비 0.98, 제거 시 +26.16%; core 30/sepa 20 재배분 동반).
+  실거래도 폐지 후 0건 (마지막 6/23). 단 배치 T+1 라인이 `enabled`를 무시해 이론상
+  시그널 생성 가능 + allocation 0.0=무제한이라 상한도 없던 이중 부실
+  → **배치 라인에 enabled 게이트 추가** (키 부재 시 경고 후 비활성 취급, fail-closed).
+  0.0=통과 시맨틱 자체는 strategic_swing 용례가 있어 전역 변경하지 않음.
+  CLAUDE.md 전략 표에 폐지 표기 (17.5% 기재는 낡은 문서였음).
+- **trade_events.market 컬럼 부재**: us_scheduler 직접 INSERT 2곳(부분 익절·전량 청산
+  SELL)이 부재 컬럼 참조로 무음 실패 중이었음 → `_ensure_tables()`에 ALTER 마이그레이션
+  추가 + 라이브 DB 즉시 적용 + 기존 US 심볼 행 399건 market='US' 백필.
+
+### engine.py (11건)
+교체 축출 entry_signal_score 부착(fill 시 시그널 캐시 score) / 매도 폴백 submit_order
+반환 검사(실패 시 재시도, 2회 초과 CRITICAL) / 부분체결 예약현금 비례 차감 / 사이징
+available에 코어 예약 차감(G3 정합 — "축소 대신 전면 거부" 제거) / 배율 축소의
+min_position_value 바닥 클램프 / realized_pnl sell_qty 사용 / DB 백필 기준선 재설정
+(_daily_stats_restored 플래그) / SELL 쿨다운 면제(BUY 한정) / daily_max_trades pending
+BUY 합산(TOCTOU) / RiskManager 쪽 죽은 _pending_sector_map 제거 / _counted_buy_order_ids
+JSON 영속화
+
+### risk·유틸 (5건)
+`_stop_loss_rebound_used` 파일 영속화(재시작 시 1회 제한 우회 방지) / daily_stats·
+stop_loss_today·exited_today 원자적 쓰기 / atomic_io fsync+tmp 정리 / config_persistence
+_save 예외 재전파(persist-first 롤백 데드코드 활성화) / `_LOSS_EXIT_TYPES`·trade_memory
+손실 패턴에 emergency_stop 추가
+
+### 청산·US (7건)
+US ExitConfig 6필드 배선(min/max_stop·stale·ATR — 기존엔 YAML 무시하고 dataclass 기본값)
+/ 재시작 등록 전략별 max_holding 배선 / 추가매수 시 initial_quantity 갱신(재시작 정합성
+오탐→TP1 이중 발행 차단) / breakeven 분기 급락 TS 판정 시점 캡 / US sync 수량 보정 시
+ExitManager remaining 동기화(**감소 방향만** — stale 스냅샷 상향 복원 race 차단, 최종
+리뷰 반영) / earnings_drift 기본값 fail-closed / kis_kr.modify_order 최소 방어
+
+### KR 스케줄러·검증 (7건)
+코어 빈슬롯 pending 집계 실데이터화(_pending_orders set+시그널 캐시) / 코어 스케줄러
+섹션 순서 교체(빈슬롯 continue가 금요 트림·초과비중 경고를 스킵하던 것) / 장중품질 RT
+재확인에 ATR 동적 상한 적용 / cross_validator.validate(count_stats) — 팀 심의 shadow가
+게이트 통계 오염하던 것 / 수동매수 15:30 이후 기동 시 다음 영업일 대기 /
+_classify_exit_type에 emergency_stop 분류 복원(긴급 전량 매도가 manual로 오분류) /
+asset_growth fs_div 이중 API 호출 제거(DART 호출량 절반)
+
+### 보류 1건
+- US 취소실패=체결 추정의 사유 구분: kis_us.cancel_order가 msg_cd를 반환하지 않아 구분
+  불가. 현행(체결 추정 on_fill)이 이중 매도 방지 방향으로 보수적이므로 유지.
+  kis_us.py에 msg_cd 반환 추가 시 재검토.
+
+수정: `src/core/engine.py`, `src/risk/manager.py`, `src/utils/atomic_io.py`,
+`src/core/evolution/config_persistence.py`, `src/core/evolution/trade_memory.py`,
+`src/strategies/exit_manager.py`, `scripts/run_trader.py`, `src/schedulers/us_scheduler.py`,
+`src/schedulers/kr_scheduler.py`, `src/core/cross_validator.py`, `src/core/batch_analyzer.py`,
+`src/execution/broker/kis_kr.py`, `src/signals/fundamentals/asset_growth.py`,
+`src/data/storage/trade_storage.py`, `config/default.yml`
+
 ## 2026-08-05 — fix(engine): 전체 엔진 재리뷰 — P1 14건 + 재리뷰 P1 2건·P2 2건 수정 (미커밋)
 
 5개 영역(엔진 시그널·주문 / 청산 ExitManager / KR 스케줄러 / US 스케줄러·run_trader /

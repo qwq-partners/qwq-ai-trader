@@ -95,21 +95,21 @@ class AssetGrowthProvider:
         today = date.today()
         year = today.year - 1 if today.month >= 4 else today.year - 2
 
-        for fs_div in ("CFS", "OFS"):   # 연결 우선, 별도 폴백
-            for bsns_year in (year, year - 1):
-                growth = await self._fetch_once(corp_code, bsns_year, fs_div)
-                if growth is not None:
-                    return growth
+        # fs_div별 이중 호출 제거 (2026-08-05 P2) — financials.py 실측 기준
+        # fs_div 파라미터는 API가 무시하고 항상 CFS+OFS 전 행을 반환하므로
+        # 연도당 1회 호출 후 파싱에서 행 필터 (DART 호출량 절반 절감)
+        for bsns_year in (year, year - 1):
+            growth = await self._fetch_once(corp_code, bsns_year)
+            if growth is not None:
+                return growth
         return None
 
-    async def _fetch_once(self, corp_code: str, bsns_year: int,
-                          fs_div: str) -> Optional[float]:
+    async def _fetch_once(self, corp_code: str, bsns_year: int) -> Optional[float]:
         params = {
             "crtfc_key": self._api_key,
             "corp_code": corp_code,
             "bsns_year": str(bsns_year),
-            "reprt_code": "11011",   # 사업보고서
-            "fs_div": fs_div,
+            "reprt_code": "11011",   # 사업보고서 (CFS+OFS 전 행이 한 번에 온다)
         }
         try:
             timeout = aiohttp.ClientTimeout(total=15)
@@ -125,16 +125,20 @@ class AssetGrowthProvider:
         if data.get("status") != "000":
             return None
 
-        for row in data.get("list", []):
-            if row.get("account_nm") != "자산총계":
-                continue
-            try:
-                cur = float(str(row.get("thstrm_amount", "")).replace(",", ""))
-                prev = float(str(row.get("frmtrm_amount", "")).replace(",", ""))
-            except (ValueError, TypeError):
-                continue
-            if prev > 0 and cur > 0:
-                return (cur / prev - 1.0) * 100.0
+        rows = data.get("list", [])
+        for fs_div in ("CFS", "OFS"):   # 연결 우선, 별도 폴백 (응답 내 행 필터)
+            for row in rows:
+                if row.get("fs_div") != fs_div:
+                    continue
+                if row.get("account_nm") != "자산총계":
+                    continue
+                try:
+                    cur = float(str(row.get("thstrm_amount", "")).replace(",", ""))
+                    prev = float(str(row.get("frmtrm_amount", "")).replace(",", ""))
+                except (ValueError, TypeError):
+                    continue
+                if prev > 0 and cur > 0:
+                    return (cur / prev - 1.0) * 100.0
         return None
 
 

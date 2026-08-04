@@ -16,6 +16,8 @@ from loguru import logger
 import json
 from pathlib import Path
 
+from ..utils.atomic_io import atomic_write_json
+
 from ..core.types import (
     Order, Position, Portfolio, RiskMetrics, RiskConfig,
     OrderSide, SignalStrength, Signal
@@ -88,7 +90,9 @@ class RiskManager:
         # V자 반등 재진입 1회 제한 (2026-05-04 P0-A, risk-auditor)
         # 손절 후 V자 반등으로 재진입한 종목을 기록 → 재손절 시 영구 차단
         # 같은 종목 당일 2회 손절(daily_max 6.25%) 방지
-        self._stop_loss_rebound_used: set = set()
+        # 2026-08-05 P2: 파일 영속화 — 재시작 시 리셋되어 당일 2회 손절 방지가 무력화되던 문제
+        self._stop_loss_rebound_used_path = cache_dir / f"stop_loss_rebound_used{market_suffix}.json"
+        self._stop_loss_rebound_used: set = self._load_stop_loss_rebound_used()
 
         # 연속 손실 카운터 (US 적응형 사이징)
         self._consecutive_losses: int = 0
@@ -523,7 +527,8 @@ class RiskManager:
     # 2026-04-24: 손절성 청산 타입 (익절/트레일링/stale은 카운트 제외)
     #   기존엔 청산 종류 무관 전부 카운트 → 수익 청산 3건으로도 쿨다운 발동(오탐).
     #   4/14 사고(대부분 손절 연쇄) 방지는 유지하되, 손실성 청산만 카운트.
-    _LOSS_EXIT_TYPES = {"stop_loss", "breakeven"}
+    # emergency_stop: 긴급 전량 매도 (2026-08-05 — _classify_exit_type 분류 복원에 맞춰 추가)
+    _LOSS_EXIT_TYPES = {"stop_loss", "breakeven", "emergency_stop"}
 
     def on_buy_filled(self, symbol: str):
         """매수 체결 확인 훅 — V자 반등 재진입 1회권을 체결 시점에 소모 (2026-08-05 P1).
@@ -534,6 +539,7 @@ class RiskManager:
         if self.market == "KR" and symbol in self._stop_loss_today:
             if symbol not in self._stop_loss_rebound_used:
                 self._stop_loss_rebound_used.add(symbol)
+                self._save_stop_loss_rebound_used()  # 재시작 대비 즉시 영속화
                 logger.info(f"[재진입] {symbol} V자 반등 재진입 체결 — 당일 1회권 소진")
 
     def record_exit(self, symbol: str, exit_price: float, sector: str = "",
@@ -1050,6 +1056,7 @@ class RiskManager:
         self.metrics.can_trade = True
         self._stop_loss_today.clear()
         self._stop_loss_rebound_used.clear()  # P0-A: 일일 V자 재진입 사용 기록 리셋
+        self._save_stop_loss_rebound_used()   # 파일도 날짜 경계에서 함께 리셋
         self._exited_today.clear()
         # 연속 손실 카운터 일일 리셋 — 전일 4연패가 익일 첫 거래 전 사이징 50% 축소를
         # 잘못 끌고 가지 않도록. (record_trade_result의 승리 시 즉시 리셋과 별개로 날짜 경계 보강)
@@ -1148,8 +1155,9 @@ class RiskManager:
                 "consecutive_losses": self.daily_stats.consecutive_losses,
                 "peak_equity": str(self.daily_stats.peak_equity),
             }
-            with open(self._daily_stats_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            # 원자적 쓰기 (2026-08-05 P2) — 쓰기 도중 크래시 시 파손 파일이
+            # 재시작에서 일일 통계 리셋으로 번지는 경로 차단
+            atomic_write_json(self._daily_stats_path, data, indent=2)
             logger.debug(f"일일 손익 저장 완료: {data['total_pnl']}")
         except Exception as e:
             logger.error(f"일일 손익 저장 실패: {e}")
@@ -1216,10 +1224,37 @@ class RiskManager:
                 "date": date.today().isoformat(),
                 "symbols": list(self._stop_loss_today)
             }
-            with open(self._stop_loss_today_path, 'w') as f:
-                json.dump(data, f)
+            atomic_write_json(self._stop_loss_today_path, data)  # 원자적 쓰기 (2026-08-05 P2)
         except Exception as e:
             logger.error(f"손절 종목 저장 실패: {e}")
+
+    def _load_stop_loss_rebound_used(self) -> set:
+        """V자 재진입 1회권 사용 기록 복원 (당일 한정, _stop_loss_today 패턴 준용)"""
+        try:
+            if not self._stop_loss_rebound_used_path.exists():
+                return set()
+            with open(self._stop_loss_rebound_used_path, 'r') as f:
+                data = json.load(f)
+            if data.get("date", "") != date.today().isoformat():
+                return set()
+            symbols = set(data.get("symbols", []))
+            if symbols:
+                logger.info(f"[리스크] V자 재진입 사용 기록 복원: {symbols}")
+            return symbols
+        except Exception as e:
+            logger.error(f"V자 재진입 기록 로드 실패: {e}")
+            return set()
+
+    def _save_stop_loss_rebound_used(self):
+        """V자 재진입 1회권 사용 기록을 파일에 저장 (원자적)"""
+        try:
+            data = {
+                "date": date.today().isoformat(),
+                "symbols": list(self._stop_loss_rebound_used),
+            }
+            atomic_write_json(self._stop_loss_rebound_used_path, data)
+        except Exception as e:
+            logger.error(f"V자 재진입 기록 저장 실패: {e}")
 
     def _load_exited_today(self) -> Dict[str, Dict]:
         """당일 청산 종목을 파일에서 복원"""
@@ -1245,7 +1280,6 @@ class RiskManager:
                 "date": date.today().isoformat(),
                 "entries": self._exited_today,
             }
-            with open(self._exited_today_path, 'w') as f:
-                json.dump(data, f)
+            atomic_write_json(self._exited_today_path, data)  # 원자적 쓰기 (2026-08-05 P2)
         except Exception as e:
             logger.error(f"청산 종목 저장 실패: {e}")

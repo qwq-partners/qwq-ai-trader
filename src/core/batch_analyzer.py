@@ -293,7 +293,20 @@ class BatchAnalyzer:
             return None
 
         # 전략별 시그널 생성
-        rsi2_candidates = [c for c in candidates if c.strategy == "rsi2_reversal"]
+        # rsi2: enabled=false(2026-08-02 폐지, evolved_overrides) 시 배치 라인도 차단
+        # — 기존엔 이 라인이 enabled를 무시해 폐지 후에도 시그널 생성 가능했다 (2026-08-05)
+        if "enabled" not in self._config.get("rsi2_reversal", {}):
+            # 수동 배선 dict라 키 누락 시 무음 차단됨 (밸류코어 2026-08-04 사례와 동일 패턴)
+            logger.warning("[배치분석] rsi2_reversal config에 enabled 키 부재 — 비활성 취급 (배선 확인 필요)")
+        _rsi2_enabled = bool(self._config.get("rsi2_reversal", {}).get("enabled", False))
+        rsi2_candidates = (
+            [c for c in candidates if c.strategy == "rsi2_reversal"]
+            if _rsi2_enabled else []
+        )
+        if not _rsi2_enabled:
+            _n_rsi2 = sum(1 for c in candidates if c.strategy == "rsi2_reversal")
+            if _n_rsi2:
+                logger.info(f"[배치분석] rsi2_reversal 비활성(폐지) — 후보 {_n_rsi2}개 스킵")
         sepa_candidates = [c for c in candidates if c.strategy == "sepa_trend"]
 
         # -- Phase 3: SEPA 후보에 섹터 모멘텀 점수 주입 --

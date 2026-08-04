@@ -64,7 +64,8 @@
   1. 청산 후 30분 이상 경과 (즉시 추격 방지)
   2. 청산가 대비 +5% 이상 재돌파 (명확한 반등 확인)
 - **1회 제한 (5/4 P0-A)**: V자 재진입 사용 후 재손절 → 당일 영구 차단
-  - `_stop_loss_rebound_used` set으로 마킹
+  - `_stop_loss_rebound_used` set으로 마킹 (8/5: `stop_loss_rebound_used.json`
+    파일 영속화 — 재시작 시 1회 제한 우회 방지)
   - daily_max worst case 6.25% (1종목 2회 손절) → 5.0% 회귀
   - **1회권 소모 시점 = 매수 체결 확인 (8/5 P1)**: `on_buy_filled()` —
     can_open_position 검증 통과 시점 마킹은 후속 게이트(현금/브로커 거부)에서
