@@ -1,5 +1,25 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-05 — fix(data): KOSPI200 야간선물 수집 복구 — 종목코드 신형식 + 야간 시장구분 CM
+
+텔레그램 문의("야간선물 제대로 수집되고 있는지")로 조사 — **도입(2026-06-07) 이래 단 한 번도
+성공한 적 없었음** (성공 로그 0건, 아침마다 HTTP 500/빈 응답 → US 지수로 무음 폴백).
+`src/data/providers/kis_market_data.py` 3중 결함 수정:
+
+- **종목코드 체계 개편 미반영**: 구형 `101{연도문자}{월코드}` 생성 → KRX 개편 후
+  신형 `A01 + 연도끝1자리 + 월2자리` (2026년 9월물 = `A01609`).
+  KIS 마스터 `fo_idx_code_mts.mst` 실측으로 확인. 구형 코드는 rt_cd=0에 output1 빈 값.
+- **야간 세션 시장구분 누락**: `FID_COND_MRKT_DIV_CODE=F`는 주간 시세만 반환.
+  야간(18:00~05:00)은 `CM` — CM 우선 조회 후 빈 응답이면 F 폴백.
+  야간 응답의 `futs_sdpr`(기준가)=주간 종가라 `futs_prdy_ctrt`가 곧 밤사이 변동률.
+- **응답 필드 키 불일치**: `prdy_vrss`/`prdy_ctrt`로 읽었으나 실제 키는
+  `futs_prdy_vrss`/`futs_prdy_ctrt` (코드가 맞았어도 변동률 0으로 나왔을 결함).
+  구키는 폴백으로 유지. 결과에 `session`(night/day) 필드 추가.
+- 실측 검증: `A01609` 야간 1028.75 (-1.28%, 주간종가 1042.05 대비) — 외부 제보값
+  (야간 시가 1023.75, 주간 대비 -1%대 조정)과 일치. 재시작 검증 완료.
+- 소비처: `kr_scheduler.py` 아침 스크리닝(선행지표, US 지수보다 우선) + `scripts/futures_monitor.py`
+  — 익일 아침 로그의 `[KIS] KOSPI200 야간선물` 라인으로 최종 확인 예정.
+
 ## 2026-08-05 — feat(llm): 배치 LLM 라우팅 Codex CLI → Manus API 전환
 
 GPT를 API가 아닌 client(로컬 Codex CLI, ChatGPT 구독)로 쓰던 배치 경로를

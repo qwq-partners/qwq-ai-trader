@@ -808,10 +808,10 @@ class KISMarketData:
         """
         KOSPI200 선물 근월물 종목코드 자동 계산
 
-        코드 체계: 101 + 연도코드 + 월코드
-          - 연도코드: A=2007, B=2008, ... S=2025, T=2026, U=2027 ...
-          - 월코드: 3=Mar, 6=Jun, 9=Sep, C=Dec (분기 만기)
-          - 만기일: 만기월 두 번째 목요일
+        코드 체계 (KRX 개편 후, KIS 마스터 fo_idx_code_mts.mst 실측 2026-08-05):
+          - "A01" + 연도 끝 1자리 + 월 2자리 → 2026년 9월물 = "A01609"
+          - 구형 "101T9000" 체계는 폐지됨 (조회 시 rt_cd=0이지만 output1 빈 값)
+          - 만기: 3/6/9/12월 분기물, 만기일은 두 번째 목요일
 
         만기일 경과 시 자동으로 다음 분기물로 롤오버
         """
@@ -819,8 +819,6 @@ class KISMarketData:
         year, month, day = now.year, now.month, now.day
 
         _QUARTER_MONTHS = [3, 6, 9, 12]
-        _MONTH_CODES = {3: "3", 6: "6", 9: "9", 12: "C"}
-        _YEAR_BASE = 2007  # A=2007
 
         def _second_thursday(y: int, m: int) -> int:
             """해당 월의 두 번째 목요일 날짜 반환"""
@@ -851,9 +849,7 @@ class KISMarketData:
             expiry_year = year + 1
             expiry_month = 3
 
-        year_code = chr(ord("A") + (expiry_year - _YEAR_BASE))
-        code = f"101{year_code}{_MONTH_CODES[expiry_month]}"
-        return code
+        return f"A01{expiry_year % 10}{expiry_month:02d}"
 
     async def get_night_futures_quote(
         self,
@@ -880,78 +876,87 @@ class KISMarketData:
         try:
             session = await self._get_session()
             headers = await self._get_headers("FHMIF10000000")
-            params = {
-                "FID_COND_MRKT_DIV_CODE": "F",
-                "FID_INPUT_ISCD": symbol,
-            }
-
             base_url = self._token_manager.base_url
             url = f"{base_url}/uapi/domestic-futureoption/v1/quotations/inquire-price"
 
-            async with session.get(url, headers=headers, params=params) as resp:
-                if resp.status != 200:
-                    logger.warning(f"[KIS] 야간선물 시세 조회 실패: HTTP {resp.status}")
-                    return None
-
-                data = await resp.json()
-                rt_cd = data.get("rt_cd", "")
-                if rt_cd != "0":
-                    msg = data.get("msg1", "")
-                    logger.warning(f"[KIS] 야간선물 시세 오류: rt_cd={rt_cd} {msg}")
-                    return None
-
-                output = data.get("output1") or data.get("output", {})
-                if not output:
-                    return None
-
-                # output이 리스트인 경우 첫 번째 항목 사용
-                if isinstance(output, list):
-                    output = output[0] if output else {}
-
-                price = float(output.get("futs_prpr", 0) or output.get("stck_prpr", 0) or 0)
-                prev_close = float(output.get("futs_sdpr", 0) or output.get("stck_sdpr", 0) or 0)
-                change = float(output.get("prdy_vrss", 0) or 0)
-                change_pct = float(output.get("prdy_ctrt", 0) or 0)
-                volume = int(output.get("acml_vol", 0) or 0)
-                high = float(output.get("stck_hgpr", 0) or output.get("futs_hgpr", 0) or 0)
-                low = float(output.get("stck_lwpr", 0) or output.get("futs_lwpr", 0) or 0)
-                open_price = float(output.get("stck_oprc", 0) or output.get("futs_oprc", 0) or 0)
-
-                if price <= 0:
-                    logger.debug(f"[KIS] 야간선물 시세: 가격=0 (장외시간)")
-                    # 장외시간 네거티브 캐시 — 불필요한 반복 API 호출 방지
-                    # TTL을 역산하여 60초 후 만료되도록 설정
-                    _neg_ttl = max(cache_ttl - 60, 60)
-                    self._cache[cache_key] = None
-                    self._cache_ts[cache_key] = datetime.now() - timedelta(seconds=_neg_ttl)
-                    return None
-
-                result = {
-                    "price": price,
-                    "prev_close": prev_close,
-                    "change": change,
-                    "change_pct": change_pct,
-                    "volume": volume,
-                    "high": high,
-                    "low": low,
-                    "open": open_price,
-                    "symbol": symbol,
+            # CM=야간(글로벌) 세션 → 없으면 F=주간 세션 폴백
+            # 야간 응답의 futs_sdpr(기준가)=주간 종가이므로 futs_prdy_ctrt가
+            # 곧 "주간 종가 대비 밤사이 변동률" — 아침 선행지표에 정확히 부합
+            output: Dict[str, Any] = {}
+            session_div = ""
+            for mrkt_div in ("CM", "F"):
+                params = {
+                    "FID_COND_MRKT_DIV_CODE": mrkt_div,
+                    "FID_INPUT_ISCD": symbol,
                 }
+                async with session.get(url, headers=headers, params=params) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            f"[KIS] 야간선물 시세 조회 실패: HTTP {resp.status} "
+                            f"(div={mrkt_div})"
+                        )
+                        continue
+                    data = await resp.json()
+                    if data.get("rt_cd", "") != "0":
+                        logger.warning(
+                            f"[KIS] 야간선물 시세 오류: rt_cd={data.get('rt_cd')} "
+                            f"{data.get('msg1', '')} (div={mrkt_div})"
+                        )
+                        continue
+                    out = data.get("output1") or data.get("output") or {}
+                    if isinstance(out, list):
+                        out = out[0] if out else {}
+                    # 세션 미개장 등으로 빈 응답이면 다음 시장구분 시도
+                    if out and float(out.get("futs_prpr", 0) or 0) > 0:
+                        output = out
+                        session_div = mrkt_div
+                        break
 
-                # 심리 판단 (야간선물 등락률 기반)
-                if change_pct <= -1.0:
-                    result["sentiment"] = "bearish"
-                elif change_pct >= 1.0:
-                    result["sentiment"] = "bullish"
-                else:
-                    result["sentiment"] = "neutral"
+            price = float(output.get("futs_prpr", 0) or output.get("stck_prpr", 0) or 0)
+            prev_close = float(output.get("futs_sdpr", 0) or output.get("stck_sdpr", 0) or 0)
+            change = float(output.get("futs_prdy_vrss", 0) or output.get("prdy_vrss", 0) or 0)
+            change_pct = float(output.get("futs_prdy_ctrt", 0) or output.get("prdy_ctrt", 0) or 0)
+            volume = int(output.get("acml_vol", 0) or 0)
+            high = float(output.get("stck_hgpr", 0) or output.get("futs_hgpr", 0) or 0)
+            low = float(output.get("stck_lwpr", 0) or output.get("futs_lwpr", 0) or 0)
+            open_price = float(output.get("stck_oprc", 0) or output.get("futs_oprc", 0) or 0)
 
-                self._set_cache(cache_key, result)
-                logger.info(
-                    f"[KIS] KOSPI200 야간선물: {price:.2f} ({change_pct:+.2f}%) "
-                    f"→ {result['sentiment']}"
-                )
-                return result
+            if price <= 0:
+                logger.debug(f"[KIS] 야간선물 시세: 가격=0 (장외시간)")
+                # 장외시간 네거티브 캐시 — 불필요한 반복 API 호출 방지
+                # TTL을 역산하여 60초 후 만료되도록 설정
+                _neg_ttl = max(cache_ttl - 60, 60)
+                self._cache[cache_key] = None
+                self._cache_ts[cache_key] = datetime.now() - timedelta(seconds=_neg_ttl)
+                return None
+
+            result = {
+                "price": price,
+                "prev_close": prev_close,
+                "change": change,
+                "change_pct": change_pct,
+                "volume": volume,
+                "high": high,
+                "low": low,
+                "open": open_price,
+                "symbol": symbol,
+                "session": "night" if session_div == "CM" else "day",
+            }
+
+            # 심리 판단 (야간선물 등락률 기반)
+            if change_pct <= -1.0:
+                result["sentiment"] = "bearish"
+            elif change_pct >= 1.0:
+                result["sentiment"] = "bullish"
+            else:
+                result["sentiment"] = "neutral"
+
+            self._set_cache(cache_key, result)
+            logger.info(
+                f"[KIS] KOSPI200 야간선물: {price:.2f} ({change_pct:+.2f}%) "
+                f"→ {result['sentiment']} (세션={result['session']})"
+            )
+            return result
 
         except Exception as e:
             logger.warning(f"[KIS] 야간선물 시세 조회 오류: {e}")

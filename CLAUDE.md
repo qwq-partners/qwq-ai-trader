@@ -250,7 +250,7 @@ INITIAL_CAPITAL (KR, 기본 500000)
 | 작업 | Primary | Fallback |
 |------|---------|----------|
 | 테마 탐지, 뉴스 요약 | Gemini 3.1 Flash Lite | OpenAI gpt-5-mini |
-| 거래 복기, 전략 진화 | OpenAI gpt-5.4 | Gemini 3.1 Pro |
+| 거래 복기, 전략 진화 | Manus API (manus-1.6, 2026-08-05~) | OpenAI gpt-5.6-sol → Gemini 3.1 Pro |
 
 ---
 

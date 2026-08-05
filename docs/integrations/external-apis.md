@@ -20,6 +20,12 @@
 - KR: H0STCNT0(실시간 체결가), H0STASP0(호가)
 - US: HDFSCNT0(해외 실시간 체결), H0GSCNI0(체결통보)
 
+### KOSPI200 선물 시세 (kis_market_data.py, FHMIF10000000)
+- 종목코드 신형식: `A01 + 연도끝1자리 + 월2자리` (예: 2026년 9월물 `A01609`) —
+  구형 `101T9000` 체계 폐지됨 (2026-08-05 확인, 마스터 `fo_idx_code_mts.mst` 기준)
+- 시장구분: `CM`=야간(18:00~05:00, 기준가=주간 종가 → prdy_ctrt=밤사이 변동률), `F`=주간
+- 아침 스크리닝 선행지표로 사용 (US 지수보다 우선, kr_scheduler)
+
 ## 데이터 — pykrx
 
 - KR 종목 마스터 (stock_list)
