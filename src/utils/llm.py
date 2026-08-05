@@ -31,11 +31,11 @@ class LLMProvider(str, Enum):
     GEMINI = "gemini"
 
 
-# 로컬 Codex로 보내도 되는 태스크 (2026-08-03 추가)
-#   Codex는 프로세스 기동 2~3초 + 응답 7~12초라 실시간 경로에 쓰면 매매가 지연된다.
+# Manus로 보내도 되는 태스크 (2026-08-03 Codex용 추가 → 2026-08-05 Manus 전환)
+#   Manus는 태스크 기반 에이전트라 응답이 수십 초~수 분 — 실시간 경로에 쓰면 매매가 지연된다.
 #   config에서 실수로 quick_*/theme_* 를 넣어도 이 allowlist가 막는다 —
 #   YAML 주석은 강제력이 없으므로 코드로 고정한다.
-CODEX_ALLOWED_TASKS = frozenset({
+MANUS_ALLOWED_TASKS = frozenset({
     "trade_review",        # 거래 복기 (20:30 진화)
     "strategy_analysis",   # 전략 분석/진화, 주간 복기
     "market_analysis",     # 장전 시장 진단 (배치)
@@ -74,16 +74,15 @@ class LLMConfig:
     # 빈 문자열이면 비활성, 값이 있으면 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출
     openai_model_light_shadow: str = ""
 
-    # ── 로컬 Codex CLI 라우팅 (2026-08-02) ─────────────────────
-    # 배치성 작업을 OpenAI API 대신 로컬 codex로 처리해 API 과금을 구독 한도로 대체한다.
-    # 프로세스 기동 2~3초 + 응답 7~12초라 실시간 매매 경로에는 쓰지 않는다.
+    # ── Manus API 라우팅 (2026-08-05, Codex CLI 대체) ──────────
+    # 배치성 작업을 OpenAI API 대신 Manus 에이전트 API로 처리한다.
+    # 태스크 기반 비동기 API라 응답이 수십 초~수 분 — 실시간 매매 경로에는 쓰지 않는다.
     # 실패하면 기존 API 경로로 자동 폴백한다.
-    codex_enabled: bool = False
-    codex_model: str = "gpt-5.6-sol"
-    codex_timeout_sec: float = 240.0
-    codex_sandbox: str = "read-only"
-    # Codex로 보낼 LLMTask 값들 (배치성만)
-    codex_tasks: tuple = ("trade_review", "strategy_analysis")
+    manus_enabled: bool = False
+    manus_agent_profile: str = "manus-1.6"
+    manus_timeout_sec: float = 600.0
+    # Manus로 보낼 LLMTask 값들 (배치성만)
+    manus_tasks: tuple = ("trade_review", "strategy_analysis")
 
     # 타임아웃 (Thinking 모델은 추론에 시간이 걸림)
     timeout_seconds: int = 120
@@ -127,12 +126,13 @@ class LLMConfig:
                 llm_cfg.get("gemini_model_light") or "gemini-3.1-flash-lite-preview"
             ),
             openai_model_light_shadow=(llm_cfg.get("openai_model_light_shadow") or ""),
-            codex_enabled=bool((llm_cfg.get("codex") or {}).get("enabled", False)),
-            codex_model=((llm_cfg.get("codex") or {}).get("model") or "gpt-5.6-sol"),
-            codex_timeout_sec=float((llm_cfg.get("codex") or {}).get("timeout_sec", 240.0)),
-            codex_sandbox=((llm_cfg.get("codex") or {}).get("sandbox") or "read-only"),
-            codex_tasks=tuple(
-                (llm_cfg.get("codex") or {}).get("tasks")
+            manus_enabled=bool((llm_cfg.get("manus") or {}).get("enabled", False)),
+            manus_agent_profile=(
+                (llm_cfg.get("manus") or {}).get("agent_profile") or "manus-1.6"
+            ),
+            manus_timeout_sec=float((llm_cfg.get("manus") or {}).get("timeout_sec", 600.0)),
+            manus_tasks=tuple(
+                (llm_cfg.get("manus") or {}).get("tasks")
                 or ("trade_review", "strategy_analysis")
             ),
         )
@@ -589,16 +589,16 @@ class LLMManager:
                 success=False, error="Daily budget exceeded"
             )
 
-        # ── 로컬 Codex 라우팅 (배치 태스크 한정) ──────────────────
-        # 구독 한도로 처리해 API 과금을 줄인다. 실패하면 아래 API 경로로 그대로 폴백한다.
+        # ── Manus 라우팅 (배치 태스크 한정) ──────────────────────
+        # 배치 작업을 Manus 에이전트로 처리한다. 실패하면 아래 API 경로로 그대로 폴백한다.
         # 실시간 태스크는 config에 잘못 넣어도 아래 allowlist가 막는다 (주석은 강제력이 없다).
-        if (self.config.codex_enabled
-                and task.value in self.config.codex_tasks
-                and task.value in CODEX_ALLOWED_TASKS):
-            codex_resp = await self._try_codex(prompt, system, task, kwargs)
-            if codex_resp is not None:
-                return codex_resp
-            # None이면 Codex 실패 → API 폴백 (로그는 _try_codex에서 남긴다)
+        if (self.config.manus_enabled
+                and task.value in self.config.manus_tasks
+                and task.value in MANUS_ALLOWED_TASKS):
+            manus_resp = await self._try_manus(prompt, system, task, kwargs)
+            if manus_resp is not None:
+                return manus_resp
+            # None이면 Manus 실패 → API 폴백 (로그는 _try_manus에서 남긴다)
 
         # 작업별 설정 가져오기
         task_config = self.TASK_CONFIG.get(task, self.TASK_CONFIG[LLMTask.QUICK_CLASSIFY])
@@ -636,7 +636,7 @@ class LLMManager:
 
         return response
 
-    async def _try_codex(
+    async def _try_manus(
         self,
         prompt: str,
         system: str,
@@ -644,23 +644,21 @@ class LLMManager:
         kwargs: Dict[str, Any],
     ) -> Optional[LLMResponse]:
         """
-        로컬 Codex CLI로 처리를 시도한다.
+        Manus API로 처리를 시도한다.
 
         Returns:
             성공 시 LLMResponse, 실패 시 None (호출측이 API로 폴백)
 
-        Codex는 별도 프로세스라 API 예산·토큰 통계에 잡히지 않는다.
-        구독 한도를 쓰므로 과금이 없고, 그래서 daily_usage에도 더하지 않는다.
+        Manus는 별도 과금 체계(크레딧)라 OpenAI 토큰 통계·daily_usage에 더하지 않는다.
         """
         try:
-            from .codex_client import get_codex_client
-            client = get_codex_client(
-                model=self.config.codex_model,
-                timeout=self.config.codex_timeout_sec,
-                sandbox=self.config.codex_sandbox,
+            from .manus_client import get_manus_client
+            client = get_manus_client(
+                agent_profile=self.config.manus_agent_profile,
+                timeout=self.config.manus_timeout_sec,
             )
             if not client.is_available():
-                logger.debug("[LLM] codex 실행 파일 없음 → API 사용")
+                logger.debug("[LLM] MANUS_API_KEY 미설정 → API 사용")
                 return None
 
             # system 프롬프트는 별도 인자가 없으므로 지시문 앞에 붙인다
@@ -672,25 +670,25 @@ class LLMManager:
             )
             if not resp.success or not resp.content:
                 logger.info(
-                    f"[LLM] Codex 실패({resp.error}) → API 폴백 (task={task.value})"
+                    f"[LLM] Manus 실패({resp.error}) → API 폴백 (task={task.value})"
                 )
                 return None
 
             self.stats["success_count"] += 1
-            self.stats["codex_count"] = self.stats.get("codex_count", 0) + 1
+            self.stats["manus_count"] = self.stats.get("manus_count", 0) + 1
             logger.info(
-                f"[LLM] Codex 처리 완료 (task={task.value}, "
-                f"{resp.latency_ms/1000:.1f}s, 과금 없음)"
+                f"[LLM] Manus 처리 완료 (task={task.value}, "
+                f"{resp.latency_ms/1000:.1f}s)"
             )
             return LLMResponse(
                 content=resp.content,
-                model=f"codex:{resp.model}",
+                model=f"manus:{resp.model}",
                 provider=LLMProvider.OPENAI,
                 latency_ms=resp.latency_ms,
                 success=True,
             )
         except Exception as e:
-            logger.warning(f"[LLM] Codex 라우팅 오류 → API 폴백: {e}")
+            logger.warning(f"[LLM] Manus 라우팅 오류 → API 폴백: {e}")
             return None
 
     async def complete_with(

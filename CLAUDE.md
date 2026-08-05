@@ -241,6 +241,7 @@ result = value if value is not None else default
 KIS_APPKEY, KIS_APPSECRET, KIS_CANO, KIS_ENV (prod/dev)
 KIS_EXT_ACCOUNTS (외부 계좌, 형식: 이름:CANO:ACNT_PRDT_CD 쉼표 구분)
 OPENAI_API_KEY, GEMINI_API_KEY
+MANUS_API_KEY (배치 LLM 라우팅 — 거래 복기/전략 진화, 2026-08-05 Codex CLI 대체)
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 INITIAL_CAPITAL (KR, 기본 500000)
 ```

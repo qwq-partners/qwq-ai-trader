@@ -32,20 +32,19 @@ llm:
   # 빈 문자열 = 비활성, "gpt-5.4-mini" = 활성 비교
   openai_model_light_shadow: "gpt-5.4-mini"
 
-  # 로컬 Codex CLI 라우팅 (2026-08-02)
-  #   배치성 작업을 OpenAI API 대신 로컬 `codex exec`로 처리해
-  #   API 과금을 ChatGPT 구독 한도로 대체한다. 실패 시 API로 자동 폴백.
+  # Manus API 라우팅 (2026-08-05, Codex CLI 대체)
+  #   배치성 작업을 OpenAI API 대신 Manus 에이전트 API로 처리한다.
+  #   인증: .env MANUS_API_KEY. 실패 시 API로 자동 폴백.
   #
   #   ⚠️ 실시간 매매 경로에는 쓰지 않는다.
-  #      프로세스 기동 2~3초 + 응답 7~12초라 종목당 수 초를 요구하는
+  #      태스크 기반 비동기 API라 응답이 수십 초~수 분 —
   #      Bull/Bear 토론이나 cross_validator 2차 검증에는 맞지 않는다.
   #      아래 tasks에 quick_*/theme_* 계열을 넣지 말 것.
-  codex:
+  manus:
     enabled: true
-    model: "gpt-5.6-sol"
-    timeout_sec: 240
-    sandbox: "read-only"      # 데이터를 프롬프트로 넘기는 순수 분석이면 충분
-    tasks:                    # 이 LLMTask만 Codex로 라우팅 (배치성)
+    agent_profile: "manus-1.6"   # manus-1.6 | manus-1.6-lite | manus-1.6-max
+    timeout_sec: 600
+    tasks:                    # 이 LLMTask만 Manus로 라우팅 (배치성)
       - trade_review          # 거래 복기 (20:30 진화)
       - strategy_analysis     # 전략 분석/진화, 주간 복기
 

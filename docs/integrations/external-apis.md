@@ -90,6 +90,19 @@
 - `_fetch_perplexity_context()` in market_regime.py
 - 타임아웃 15초, API 키: PERPLEXITY_API_KEY
 
+## LLM — Manus API (2026-08-05, Codex CLI 대체)
+
+- 배치성 작업(거래 복기·전략 진화·주간 분석)을 OpenAI API 대신 Manus 에이전트로 처리
+- `src/utils/manus_client.py` — 태스크 기반 비동기 API:
+  `POST /v2/task.create` → `GET /v2/task.listMessages` 5초 폴링 →
+  `agent_status=stopped` 시 assistant_message / structured_output_result 추출
+- 인증: `x-manus-api-key` 헤더, API 키: MANUS_API_KEY
+- agent_profile: manus-1.6 (기본) | manus-1.6-lite | manus-1.6-max — `llm.manus.agent_profile`
+- 라우팅: `llm.py`의 `MANUS_ALLOWED_TASKS` allowlist(trade_review/strategy_analysis/market_analysis)
+  ∩ config `llm.manus.tasks`. 실패 시 OpenAI/Gemini API 자동 폴백
+- **응답 수십 초~수 분 — 실시간 매매 경로 사용 금지** (배치 전용)
+- waiting(추가 입력 요구)·타임아웃(기본 600s) 시 `task.stop` 호출로 크레딧 낭비 방지
+
 ## 알림 — Telegram Bot
 
 - 체결 알림 (매수/매도)

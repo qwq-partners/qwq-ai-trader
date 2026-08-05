@@ -1,5 +1,27 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-05 — feat(llm): 배치 LLM 라우팅 Codex CLI → Manus API 전환
+
+GPT를 API가 아닌 client(로컬 Codex CLI, ChatGPT 구독)로 쓰던 배치 경로를
+Manus API v2로 교체. 실 API 스모크 테스트(11.9s, manus-1.6-lite) + 재시작 검증 완료.
+
+- **신규 `src/utils/manus_client.py`**: task.create → task.listMessages 폴링(5s) →
+  `agent_status=stopped` 시 assistant_message / structured_output_result 추출.
+  기존 CodexResponse 호환 인터페이스(`complete(prompt, input_data, output_schema)`,
+  `.json()`) 유지. waiting(추가 입력 요구)·타임아웃 시 task.stop으로 크레딧 낭비 방지,
+  실패 시 기존 OpenAI/Gemini API 경로로 자동 폴백 (fail-open 라우팅은 기존과 동일).
+- **`src/utils/llm.py`**: `_try_codex` → `_try_manus`, `LLMConfig` codex_* →
+  manus_*(enabled/agent_profile/timeout_sec/tasks), `CODEX_ALLOWED_TASKS` →
+  `MANUS_ALLOWED_TASKS` (allowlist 동일: trade_review/strategy_analysis/market_analysis).
+  통계 키 `codex_count` → `manus_count`, 모델 라벨 `manus:<profile>`.
+- **`config/default.yml`**: `llm.codex` → `llm.manus` (agent_profile manus-1.6,
+  timeout 600s — 태스크 기반 비동기라 Codex 240s보다 여유). evolved_overrides에
+  codex 키 없음 확인 (머지 충돌 없음).
+- **삭제**: `src/utils/codex_client.py` (참조처 llm.py 1곳뿐이었음)
+- **.env**: `MANUS_API_KEY` 추가 (인증 헤더 `x-manus-api-key`)
+- 실시간 매매 경로 금지 원칙 유지 — 응답이 수십 초~수 분이라 배치 전용.
+- 문서: `docs/integrations/external-apis.md` Manus 섹션 추가
+
 ## 2026-08-05 — fix(scheduler): 엔진 모니터링 발견 P2 3건 수정 (안전자산 영구 비활성·텔레그램 HTML·시장추세 AttributeError)
 
 텔레그램 요청 엔진 모니터링에서 발견된 경고 3건 수정. 재시작 검증 완료.
