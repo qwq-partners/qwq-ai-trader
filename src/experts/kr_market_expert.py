@@ -234,11 +234,24 @@ class KRMarketExpert(ExpertAgent):
     async def _fetch_kospi200_futures(self) -> Dict[str, Any]:
         """KOSPI200 야간선물 변동률.
 
-        yfinance에서 직접 KS200=F가 안 잡히는 경우가 많아 폴백 체계:
-        1) KS200=F (있으면 우선)
-        2) ^KS200 (KOSPI 200 cash 지수, 갭 환산용)
-        3) NKD=F (니케이 spillover proxy, KOSPI와 0.6~0.8 상관)
+        1) KIS 야간선물 직접 시세 (A01609/CM, 주간 종가 대비 밤사이 변동률 — 2026-08-06~)
+           ※ yfinance KS200=F는 상장폐지(404), ^KS200은 시간봉 부족으로 항상 실패라
+             기존 체인은 사실상 NKD 프록시만 동작했음
+        2) yfinance 폴백: KS200=F/^KS200 → NKD=F (니케이 spillover proxy ×0.7)
         """
+        # 1) KIS 직접 시세 — kr_scheduler 아침 스크리닝과 동일 경로 재사용
+        try:
+            from src.data.providers.kis_market_data import get_kis_market_data
+            q = await get_kis_market_data().get_night_futures_quote()
+            if q and q.get("change_pct") is not None:
+                return {
+                    "overnight_chg_pct": q["change_pct"],
+                    "source": f"KIS:{q.get('symbol')}",
+                    "last": q.get("price"),
+                }
+        except Exception as e:
+            logger.debug(f"[KR시장] KIS 야간선물 실패 → yfinance 폴백: {e}")
+
         def _sync_fetch():
             import yfinance as yf
             result: Dict[str, Any] = {}
