@@ -1,5 +1,28 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-05 — fix(scheduler): 엔진 모니터링 발견 P2 3건 수정 (안전자산 영구 비활성·텔레그램 HTML·시장추세 AttributeError)
+
+텔레그램 요청 엔진 모니터링에서 발견된 경고 3건 수정. 재시작 검증 완료.
+
+- **안전자산 루프 일시 장애 → 영구 비활성 오판** (`kr_scheduler.py run_safe_asset_loop`):
+  09:33 KIS HTTP 500 장애 시점에 후보 4종목 이름 조회가 전부 실패하자 키워드 미매칭과
+  동일하게 취급해 루프를 영구 종료. `_names_fetched` 카운터 추가 — 이름 조회 0건이면
+  일시 장애로 간주해 다음 5분 주기 재검증, 영구 비활성은 이름 조회 성공 후 키워드
+  미매칭인 경우에만 발동. 후보 검증 예외 로그 debug→warning 승격.
+- **텔레그램 HTML 파싱 실패로 알림 유실** (`utils/telegram.py`, `kr_scheduler.py` 팀심의):
+  팀심의 요약 알림의 배분 거부 사유(`최소 포지션 금액 미달 (0 < 200,000)`)와 LLM 요약의
+  원시 `<`가 Telegram HTML 파서를 깨뜨려 11:31/13:00/14:01 3건 전량 유실 (400
+  can't parse entities는 재시도 3회도 동일 실패). ① 팀심의 알림 동적 필드
+  `html.escape()` 적용, ② `send_message`/`send_alert` 공통: 해당 400 감지 시
+  `parse_mode` 제거 후 plain text 폴백 재발송 (전 발신 경로 안전망).
+- **시장추세 갱신 AttributeError** (`kr_scheduler.py run_market_trend_monitor`):
+  `bot.engine.risk_manager`(engine.py 신호 관리자)에서 `update_market_trend`를 호출
+  — 해당 메서드는 `risk/manager.py`의 RiskManager(`bot.risk_manager`) 소속 (동명
+  클래스 혼동, MEMORY.md 기록 패턴). 2분 주기 KOSPI/KOSDAQ 장중 추세 갱신이 계속
+  no-op이었음 → 참조 수정으로 recovering/하락세 판정 정상화.
+- 문서: `docs/integrations/external-apis.md`(텔레그램 폴백),
+  `docs/operations/monitoring-checkpoints.md`(안전자산 재검증 정책)
+
 ## 2026-08-05 — fix(engine): P2 일괄 처리 32건 + rsi2 폐지 완결 + trade_events market (c66e9da)
 
 같은 날 P1 커밋(79ce79c)의 후속. 사용자 지시로 P2 전량 수정 → 최종 적대적 리뷰

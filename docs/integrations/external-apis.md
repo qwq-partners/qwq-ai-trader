@@ -98,6 +98,11 @@
 - 주간 원칙 리포트 (토요일)
 - 주간 리밸런싱 결과
 - 환경변수: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+- **HTML 파싱 실패 폴백 (2026-08-05~)**: `parse_mode=HTML` 발송이 400
+  `can't parse entities`로 거부되면 `parse_mode` 제거 후 plain text로 자동 재발송
+  (`send_message`/`send_alert` 공통). 근본 대책은 발신부에서 동적 문자열
+  `html.escape()` — 미이스케이프 `<` 포함 메시지(예: `0 < 200,000`)가 3회 재시도
+  전량 실패하던 문제의 안전망.
 
 ## 수수료
 

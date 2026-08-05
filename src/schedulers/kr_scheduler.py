@@ -12,6 +12,7 @@ ai-trader-v2의 SchedulerMixin(bot_schedulers.py)에서 추출한 독립 모듈.
 
 import asyncio
 import aiohttp
+import html
 import json
 import os
 import re
@@ -3379,7 +3380,9 @@ JSON:
                         await asyncio.sleep(120)
                         continue
 
-                    rm = getattr(bot.engine, 'risk_manager', None)
+                    # bot.engine.risk_manager는 engine.py의 신호 관리자 — update_market_trend는
+                    # risk/manager.py의 RiskManager(bot.risk_manager)에 있음 (동명 클래스 혼동 주의)
+                    rm = getattr(bot, 'risk_manager', None)
                     kis_md = getattr(bot, 'kis_market_data', None)
                     if not rm or not kis_md:
                         await asyncio.sleep(120)
@@ -4799,8 +4802,8 @@ JSON:
             for v in (buys + sells)[:6]:
                 d = v.decision
                 lines.append(
-                    f"· {v.name or v.symbol} {d.stance.value.upper()} "
-                    f"×{d.size_multiplier} — {(v.debate.summary if v.debate else '')[:60]}"
+                    f"· {html.escape(v.name or v.symbol)} {d.stance.value.upper()} "
+                    f"×{d.size_multiplier} — {html.escape((v.debate.summary if v.debate else '')[:60])}"
                 )
             if overrides:
                 lines.append(f"⚠️ 게이트 오버라이드 {len(overrides)}건")
@@ -4813,9 +4816,10 @@ JSON:
                     f"(예산 {alloc_plan.total_budget_krw:,.0f}원)"
                 )
                 for a in alloc_plan.approved[:5]:
-                    lines.append(f"  ✅ {a.name or a.symbol} {a.budget_krw:,.0f}원 ×{a.size_multiplier:.2f}")
+                    lines.append(f"  ✅ {html.escape(a.name or a.symbol)} {a.budget_krw:,.0f}원 ×{a.size_multiplier:.2f}")
                 for r in alloc_plan.rejected[:5]:
-                    lines.append(f"  ⛔ {r.name or r.symbol} — {r.reason[:50]}")
+                    # 거부 사유에 '0 < 200,000' 등 원시 '<' 포함 가능 — HTML 파싱 깨짐 방지
+                    lines.append(f"  ⛔ {html.escape(r.name or r.symbol)} — {html.escape(r.reason[:50])}")
 
             lines.append("※ shadow 단계 — 주문 미실행, 기록·검증 목적")
             await send_alert("\n".join(lines))
@@ -5021,6 +5025,7 @@ JSON:
 
                 # 2026-05-19 P0 사고 정정: 종목 키워드 검증 (지연 초기화)
                 if not SAFE_VALIDATED:
+                    _names_fetched = 0  # 이름 조회 성공 건수 — 0이면 API 장애로 간주해 재시도
                     for _cand_sym, _keywords in SAFE_CANDIDATES:
                         try:
                             q = await bot.broker.get_quote(_cand_sym)
@@ -5029,6 +5034,7 @@ JSON:
                             _name = (q.get("name") or q.get("hts_kor_isnm") or "").strip()
                             if not _name:
                                 continue
+                            _names_fetched += 1
                             # 키워드 매칭 검증
                             _matched = any(kw in _name for kw in _keywords)
                             if _matched:
@@ -5046,8 +5052,15 @@ JSON:
                                     f"키워드({_keywords}) 미매칭"
                                 )
                         except Exception as _ve:
-                            logger.debug(f"[안전자산] 후보 {_cand_sym} 검증 실패: {_ve}")
+                            logger.warning(f"[안전자산] 후보 {_cand_sym} 검증 실패 (일시 오류 가능): {_ve}")
                     if not SAFE_VALIDATED:
+                        if _names_fetched == 0:
+                            # 2026-08-05 사고 정정: KIS HTTP 500 등 일시 장애로 이름 조회가
+                            # 전부 실패한 경우까지 영구 비활성 처리하던 문제 — 다음 주기 재검증
+                            logger.warning(
+                                "[안전자산] 후보 이름 조회 전부 실패 (API 장애 추정) → 다음 주기 재검증"
+                            )
+                            continue
                         logger.error(
                             "[안전자산] 모든 후보 검증 실패 → 자동 운용 영구 비활성 (수동 조사 필요)"
                         )

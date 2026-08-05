@@ -83,6 +83,16 @@ class TelegramNotifier:
                     return True
                 else:
                     data = await resp.json()
+                    # HTML 엔티티 파싱 실패는 재시도해도 동일 — parse_mode 제거 후 plain text 폴백
+                    if (resp.status == 400
+                            and "can't parse entities" in str(data.get("description", ""))
+                            and "parse_mode" in payload):
+                        logger.warning("텔레그램 메시지 HTML 파싱 실패 → plain text 폴백 재발송")
+                        payload.pop("parse_mode", None)
+                        async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp2:
+                            if resp2.status == 200:
+                                return True
+                            data = await resp2.json()
                     logger.error(f"텔레그램 발송 실패: {data}")
                     return False
 
@@ -199,6 +209,13 @@ class TelegramNotifier:
                         data = await resp.json()
                         last_error = f"HTTP {resp.status}: {data}"
                         logger.warning(f"텔레그램 알림 발송 실패 (시도 {attempt + 1}/{1 + max_retries}): {data}")
+                        # HTML 엔티티 파싱 실패는 재시도해도 동일 — parse_mode 제거 후 plain text 폴백
+                        if (resp.status == 400
+                                and "can't parse entities" in str(data.get("description", ""))
+                                and "parse_mode" in payload):
+                            logger.warning("텔레그램 알림 HTML 파싱 실패 → plain text 폴백 재발송")
+                            payload.pop("parse_mode", None)
+                            continue
 
             except Exception as e:
                 last_error = str(e)
