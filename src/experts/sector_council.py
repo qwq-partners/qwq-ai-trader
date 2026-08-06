@@ -84,6 +84,9 @@ class SectorCouncilExpert(ExpertAgent):
                 "score": int(max(-100, min(100, final))),
                 "momentum": round(mom, 2) if isinstance(mom, (int, float)) else None,
                 "reason": str(q_entry.get("reason", ""))[:80],
+                # 정량 축 부재 = 뉴스 단독 점수 — 소비처에서 낮게 신뢰해야 함
+                # (2026-08-07 반도체 +49 사례: ETF 캐시 부재로 뉴스 반등론만 반영)
+                "qual_only": quant is None,
             }
 
         if not scores:
@@ -102,6 +105,10 @@ class SectorCouncilExpert(ExpertAgent):
             else RegimeBias.NEUTRAL
         )
         confidence = min(0.85, 0.30 + 0.04 * len(scores) + (0.1 if qual else 0.0))
+        # 정량(ETF 모멘텀) 전멸 = 뉴스 단독 분석 — 신뢰도 상한 0.5 (2026-08-07)
+        quant_n = sum(1 for v in scores.values() if v["momentum"] is not None)
+        if quant_n == 0:
+            confidence = min(confidence, 0.5)
 
         ranked = sorted(scores.items(), key=lambda x: -x[1]["score"])
         findings: List[str] = []
@@ -127,7 +134,9 @@ class SectorCouncilExpert(ExpertAgent):
     @staticmethod
     def _fmt_finding(icon: str, sector: str, v: Dict[str, Any]) -> str:
         mom = v.get("momentum")
-        mom_txt = f", ETF {mom:+.1f}%" if isinstance(mom, (int, float)) else ""
+        mom_txt = (
+            f", ETF {mom:+.1f}%" if isinstance(mom, (int, float)) else ", 뉴스 단독"
+        )
         reason = v.get("reason") or ""
         reason_txt = f" — {reason[:40]}" if reason else ""
         return f"{icon} {sector} {v['score']:+d}{mom_txt}{reason_txt}"
