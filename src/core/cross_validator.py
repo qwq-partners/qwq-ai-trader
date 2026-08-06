@@ -767,6 +767,11 @@ class CrossStrategyValidator:
             if self._trade_wiki:
                 wiki_context = self._trade_wiki.query(strategy, sector, market_regime)
 
+            # 종목 노트 (2026-08-07 — 이 종목의 과거 거래 교훈 + 최근 리서치)
+            symbol_wiki = ""
+            if self._trade_wiki and hasattr(self._trade_wiki, "query_symbol"):
+                symbol_wiki = self._trade_wiki.query_symbol(symbol)
+
             # 패널 risk_factors 컨텍스트 (2026-05-03 P1 통합, 5/4 토큰 cap 완화)
             self._load_panel_outlook()
             panel_risks = ""
@@ -791,6 +796,7 @@ class CrossStrategyValidator:
                 f"수급={'+' if (indicators.get('foreign_net_buy') if indicators.get('foreign_net_buy') is not None else 0) > 0 else '-'}.\n"
                 + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
                 + (f"위키 교훈: {wiki_context}\n" if wiki_context else "")
+                + (f"종목 노트 (과거 거래·최근 리서치):\n{symbol_wiki}\n" if symbol_wiki else "")
                 + (f"주간 매크로 리스크 (전문가 패널): {panel_risks}\n" if panel_risks else "")
                 + "\n이 매수 시그널을 승인하시겠습니까? "
                 + risk_guide

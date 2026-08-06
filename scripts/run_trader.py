@@ -870,6 +870,14 @@ class UnifiedTradingBot:
                 f"축출면제={len(getattr(engine_risk_manager, '_exit_exempt_ref', set()))}종목)"
             )
 
+            # 종목 위키 배선 (2026-08-07) — 전문가 affected_symbols → 리서치 노트.
+            # 엔진 TradeWiki 단일 인스턴스 공유 (이중 인스턴스 시 asyncio.Lock 무력화)
+            if self.expert_orchestrator is not None:
+                _tw = getattr(engine_risk_manager, "_trade_wiki", None)
+                if _tw is not None:
+                    self.expert_orchestrator.trade_wiki = _tw
+                    logger.info("[전문가] 종목 위키 리서치 노트 배선 완료")
+
             # 16. WebSocket 피드 초기화
             if not self.dry_run:
                 try:

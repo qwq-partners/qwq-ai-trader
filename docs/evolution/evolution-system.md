@@ -55,11 +55,22 @@ wiki/
 │   └── ...
 ├── sectors/
 │   └── {섹터명}.md       — 섹터별 거래 패턴
-└── regimes/
-    ├── bull.md           — 강세장 학습
-    ├── bear.md
-    └── sideways.md
+├── regimes/
+│   ├── bull.md           — 강세장 학습
+│   ├── bear.md
+│   └── sideways.md
+└── symbols/              — 종목별 (2026-08-07~)
+    ├── {종목코드}.md      — 거래 이력·교훈 + 전문가 리서치 노트
+    └── archive/          — 180일 미갱신 페이지 (토요일 Lint 이동)
 ```
+
+### 종목 페이지 (2026-08-07 신설)
+- **거래 교훈 축**: 매도 ingest 시 거래 이력 테이블 + LLM 교훈 (파일명=종목코드 고정)
+- **리서치 노트 축**: orchestrator가 전문가 9명의 affected_symbols(각 최대 5종목)를
+  `note_research()`로 fire-and-forget 기록 — 같은 날 같은 출처 dedup, 30개 롤링,
+  리서치 전용 신규 페이지 상한 200 (거래 페이지는 무제한)
+- **query_symbol(symbol)**: 거래 통계 + 교훈 3개 + 최근 리서치 5개 (600자) —
+  크로스검증 LLM 프롬프트에 "종목 노트:"로 주입
 
 ### 3가지 오퍼레이션
 

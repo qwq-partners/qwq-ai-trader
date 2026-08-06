@@ -293,12 +293,15 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 
 ## Trade Wiki (Karpathy LLM Wiki 패턴)
 
-- 거래 교훈을 전략/섹터/시장체제별 마크다운 위키로 축적
+- 거래 교훈을 전략/섹터/시장체제/**종목**별 마크다운 위키로 축적 (종목 차원 2026-08-07~)
 - 위치: `~/.cache/ai_trader/wiki/`
 - 3가지 오퍼레이션:
   - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM(Gemini Flash) 교훈 추출
-  - **Query**: 크로스검증 시 전략/섹터/체제별 축적 교훈 컨텍스트 반환
-  - **Lint**: 토요일 주간 헬스체크 (stale/저조 페이지 감지)
+  - **Query**: 크로스검증 시 전략/섹터/체제별 교훈 + **종목 노트**(query_symbol) 컨텍스트 반환
+  - **Lint**: 토요일 주간 헬스체크 (stale/저조 페이지 감지 + 180일 종목 페이지 아카이브)
+- **종목 페이지** (`symbols/<코드>.md`): 거래 이력·교훈 + 전문가 리서치 노트
+  (orchestrator가 9명 전문가 affected_symbols를 fire-and-forget 기록, 일일 출처 dedup,
+  30개 롤링, 리서치 전용 신규 페이지 상한 200)
 - 동시성: `asyncio.Lock`, fire-and-forget (매매 비차단)
 - 크기 제한: 페이지 200줄, 로그 500줄, 전체 ~1MB
 

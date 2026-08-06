@@ -26,6 +26,10 @@ WIKI_DIR = Path.home() / ".cache" / "ai_trader" / "wiki"
 MAX_PAGE_LINES = 200
 MAX_LOG_LINES = 500
 MAX_TRADE_TABLE_ROWS = 30
+# 종목 페이지 (2026-08-07 추가)
+MAX_RESEARCH_ROWS = 30      # 리서치 노트 롤링 개수
+MAX_SYMBOL_PAGES = 200      # 리서치가 새 페이지를 만들 수 있는 상한 (거래는 무제한)
+MAX_LESSON_ROWS = 20
 
 
 def _sanitize_filename(name: str) -> str:
@@ -43,6 +47,7 @@ class TradeWiki:
         (self._dir / "strategies").mkdir(exist_ok=True)
         (self._dir / "regimes").mkdir(exist_ok=True)
         (self._dir / "sectors").mkdir(exist_ok=True)
+        (self._dir / "symbols").mkdir(exist_ok=True)   # 종목별 (2026-08-07)
         self._lock = asyncio.Lock()  # 동시 ingest 방지
 
     # ================================================================
@@ -79,6 +84,9 @@ class TradeWiki:
                 lesson = ""
                 if self._llm:
                     lesson = await self._extract_lesson(trade)
+
+                # 4.5 종목 페이지 업데이트 (2026-08-07 — 거래 이력 + 교훈)
+                await self._update_symbol_page(trade, lesson)
 
                 # 5. 로그 추가
                 self._append_log(trade, lesson)
@@ -163,6 +171,125 @@ class TradeWiki:
         page = self._replace_frontmatter(page, fm)
         self._write_page(path, page)
 
+    async def _update_symbol_page(self, trade: Dict, lesson: str = ""):
+        """종목 위키 페이지 업데이트 (2026-08-07 — 거래 이력 + 거래 교훈)
+
+        파일명은 종목코드 고정 (이름은 frontmatter) — 이름 미상 시 이중 생성 방지.
+        거래 ingest는 페이지 상한을 적용하지 않는다 (거래 교훈이 최우선 가치).
+        """
+        symbol = trade.get("symbol", "") or "unknown"
+        name = trade.get("name", "") or symbol
+        path = self._dir / "symbols" / f"{_sanitize_filename(symbol)}.md"
+        page = self._read_or_create(path, self._symbol_template(symbol, name))
+
+        fm = self._parse_frontmatter(page)
+        fm["trade_count"] = fm.get("trade_count", 0) + 1
+        wins = fm.get("wins", 0) + (1 if trade.get("pnl_pct", 0) > 0 else 0)
+        fm["wins"] = wins
+        fm["win_rate"] = round(wins / fm["trade_count"] * 100, 1)
+        fm["name"] = name
+        fm["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        row = (
+            f"| {trade.get('strategy','')} | {trade.get('pnl_pct',0):+.1f}% | "
+            f"{trade.get('exit_type','')} | {trade.get('holding_days',0)}일 | "
+            f"{trade.get('market_regime','?')} | "
+            f"{datetime.now().strftime('%m/%d')} |"
+        )
+        page = self._append_to_section(page, "## 거래 이력", row, MAX_TRADE_TABLE_ROWS)
+        if lesson:
+            page = self._append_to_section(
+                page, "## 거래 교훈",
+                f"- [{datetime.now().strftime('%m/%d')}] {lesson[:100]}",
+                MAX_LESSON_ROWS,
+            )
+        page = self._replace_frontmatter(page, fm)
+        self._write_page(path, page)
+
+    async def note_research(self, symbol: str, name: str = "",
+                            source: str = "", text: str = "") -> None:
+        """전문가/뉴스 수집 시 종목 리서치 노트 기록 (fire-and-forget 안전)
+
+        - 새 페이지 생성은 MAX_SYMBOL_PAGES 상한 내에서만 (거래 페이지는 무제한)
+        - 같은 날 같은 source 중복 기록 스킵
+        - 최근 MAX_RESEARCH_ROWS개 롤링
+        """
+        if not symbol or not text:
+            return
+        # 내부 개행이 마크다운 행 구조를 깨뜨림 — 한 줄로 정규화 (리뷰 P1-2)
+        text = " ".join(text.split())
+        async with self._lock:
+            try:
+                path = self._dir / "symbols" / f"{_sanitize_filename(symbol)}.md"
+                if not path.exists():
+                    # 상한은 리서치 전용 페이지(trade_count=0)만 계수 — 거래 페이지가
+                    # 늘어나도 리서치 신규 생성이 막히지 않게 (리뷰 P1-1)
+                    research_only = 0
+                    for p in (self._dir / "symbols").glob("*.md"):
+                        try:
+                            fm_p = self._parse_frontmatter(
+                                p.read_text(encoding="utf-8")
+                            )
+                            if fm_p.get("trade_count", 0) == 0:
+                                research_only += 1
+                        except OSError:
+                            continue
+                    if research_only >= MAX_SYMBOL_PAGES:
+                        logger.debug(
+                            f"[Wiki] 리서치 페이지 상한({MAX_SYMBOL_PAGES}) — {symbol} 생성 스킵"
+                        )
+                        return
+                page = self._read_or_create(path, self._symbol_template(symbol, name))
+
+                # 연도 포함 — 1년 뒤 같은 날짜 오탐 스킵 방지 (리뷰 P2-5)
+                today = datetime.now().strftime("%Y-%m-%d")
+                marker = f"[{today}] [{source}]"
+                if marker in self._extract_section(page, "## 리서치 노트"):
+                    return  # 같은 날 같은 출처 중복
+                page = self._append_to_section(
+                    page, "## 리서치 노트",
+                    f"- {marker} {text[:100]}",
+                    MAX_RESEARCH_ROWS,
+                )
+                fm = self._parse_frontmatter(page)
+                fm["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                if name:
+                    fm["name"] = name
+                page = self._replace_frontmatter(page, fm)
+                self._write_page(path, page)
+            except Exception as e:
+                logger.debug(f"[Wiki] 리서치 노트 실패 (ignored): {e}")
+
+    def query_symbol(self, symbol: str) -> str:
+        """종목 페이지 컨텍스트 (거래 통계 + 교훈 3개 + 최근 리서치 5개, 최대 600자)
+
+        cross_validator LLM 2차 검증 프롬프트 주입용 — 파일 읽기만, LLM 불필요.
+        """
+        try:
+            path = self._dir / "symbols" / f"{_sanitize_filename(symbol)}.md"
+            if not path.exists():
+                return ""
+            content = path.read_text(encoding="utf-8")
+            fm = self._parse_frontmatter(content)
+            parts = []
+            if fm.get("trade_count", 0):
+                parts.append(
+                    f"[이력] {fm.get('trade_count',0)}건 승률{fm.get('win_rate',0):.0f}%"
+                )
+            lessons = self._extract_section(content, "## 거래 교훈")
+            if lessons:
+                parts += [
+                    l for l in lessons.split("\n") if l.strip().startswith("-")
+                ][:3]
+            notes = self._extract_section(content, "## 리서치 노트")
+            if notes:
+                parts += [
+                    l for l in notes.split("\n") if l.strip().startswith("-")
+                ][:5]
+            return "\n".join(parts)[:600]
+        except Exception:
+            return ""
+
     async def _extract_lesson(self, trade: Dict) -> str:
         """LLM으로 교훈 1~2줄 추출"""
         try:
@@ -188,7 +315,8 @@ class TradeWiki:
             )
 
             resp = await self._llm.complete(prompt, task=LLMTask.WIKI_INGEST, max_tokens=150)
-            lesson = (resp.content if resp.success else "").strip()
+            # 개행 정규화 — 마크다운 행 구조 보호 (리뷰 P1-2)
+            lesson = " ".join((resp.content if resp.success else "").split())
             if lesson:
                 # 전략 페이지 교훈 섹션에 추가
                 page = self._read_or_create(strat_path, "")
@@ -230,8 +358,9 @@ class TradeWiki:
                         f"승률{fm.get('win_rate',0):.0f}%"
                     )
                 if lessons:
-                    # 최근 3개 교훈만
-                    recent = [l for l in lessons.split("\n") if l.strip().startswith("-")][-3:]
+                    # 최근 3개 교훈만 — 새 행이 섹션 상단에 삽입되므로 앞쪽이 최신
+                    # (기존 [-3:]는 가장 오래된 3개를 집던 버그, 리뷰 P2-6)
+                    recent = [l for l in lessons.split("\n") if l.strip().startswith("-")][:3]
                     parts.extend(recent)
 
             # 섹터 페이지
@@ -281,6 +410,8 @@ class TradeWiki:
             for page_path in all_pages:
                 if page_path.name in ("index.md", "log.md"):
                     continue
+                if "archive" in page_path.parts:
+                    continue  # 아카이브는 검사 제외 (2026-08-07)
                 content = page_path.read_text(encoding="utf-8")
                 fm = self._parse_frontmatter(content)
 
@@ -300,10 +431,30 @@ class TradeWiki:
                 if tc >= 5 and wr < 30:
                     report["low_winrate"].append(f"{page_path.name} ({wr:.0f}%)")
 
+            # 종목 페이지 아카이브 — 마지막 갱신 180일 초과 (2026-08-07)
+            # ingest/note_research와 rename 경합 방지를 위해 락 보유 (리뷰 P2-1)
+            report["archived"] = []
+            async with self._lock:
+                sym_dir = self._dir / "symbols"
+                archive_dir = sym_dir / "archive"
+                for p in sym_dir.glob("*.md"):
+                    try:
+                        fm = self._parse_frontmatter(p.read_text(encoding="utf-8"))
+                        lu = str(fm.get("last_updated", ""))[:10]
+                        if lu and (
+                            datetime.now() - datetime.strptime(lu, "%Y-%m-%d")
+                        ).days > 180:
+                            archive_dir.mkdir(exist_ok=True)
+                            p.rename(archive_dir / p.name)
+                            report["archived"].append(p.name)
+                    except (ValueError, OSError):
+                        continue
+
             logger.info(
                 f"[Wiki Lint] {report['total_pages']}페이지, "
                 f"Stale={len(report['stale_pages'])}, "
-                f"저조={len(report['low_winrate'])}"
+                f"저조={len(report['low_winrate'])}, "
+                f"아카이브={len(report['archived'])}"
             )
         except Exception as e:
             logger.debug(f"[Wiki Lint] 실패: {e}")
@@ -351,7 +502,7 @@ class TradeWiki:
         """index.md 재생성"""
         lines = ["# Trade Wiki Index", "", f"*갱신: {datetime.now().strftime('%Y-%m-%d %H:%M')}*", ""]
 
-        for category, subdir in [("전략", "strategies"), ("섹터", "sectors"), ("시장체제", "regimes")]:
+        for category, subdir in [("전략", "strategies"), ("섹터", "sectors"), ("시장체제", "regimes"), ("종목", "symbols")]:
             cat_dir = self._dir / subdir
             pages = sorted(cat_dir.glob("*.md"))
             if pages:
@@ -422,12 +573,7 @@ class TradeWiki:
         if section_start == -1:
             return content + f"\n{row}\n"
 
-        # 테이블 헤더 건너뛰고 데이터 행 위치 찾기
-        insert_at = section_start + 1
-        while insert_at < len(lines) and (lines[insert_at].startswith("|--") or lines[insert_at].startswith("| ")):
-            insert_at += 1
-        # 데이터 행 바로 앞에 삽입 (헤더 다음)
-        # 사실 테이블 헤더 직후에 새 행 추가
+        # 테이블 헤더+구분선 직후가 삽입 위치 (리뷰 P2-4: 미사용 insert_at 루프 제거)
         table_data_start = section_start + 1
         # 테이블 헤더+구분선 건너뛰기
         while table_data_start < len(lines) and lines[table_data_start].startswith("|"):
@@ -494,6 +640,28 @@ last_updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 ## 최근 거래
 | 종목 | 이름 | 수익률 | 청산유형 | 보유 | 체제 | 날짜 |
 |------|------|--------|---------|------|------|------|
+"""
+
+    def _symbol_template(self, symbol: str, name: str = "") -> str:
+        display = name or symbol
+        return f"""---
+symbol: {symbol}
+name: {display}
+trade_count: 0
+wins: 0
+win_rate: 0
+last_updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+---
+
+# {display} ({symbol})
+
+## 거래 교훈
+
+## 리서치 노트
+
+## 거래 이력
+| 전략 | 수익률 | 청산유형 | 보유 | 체제 | 날짜 |
+|------|--------|---------|------|------|------|
 """
 
     def _sector_template(self, sector: str) -> str:

@@ -28,6 +28,8 @@ class ExpertOrchestrator:
         self.perplexity_key = os.getenv("PERPLEXITY_API_KEY", "")
         self.agents: Dict[str, ExpertAgent] = {}
         self._last_run: Dict[str, datetime] = {}
+        # 종목 위키 리서치 노트용 TradeWiki (run_trader에서 엔진 인스턴스 배선, 2026-08-07)
+        self.trade_wiki = None
 
     def register(self, agent: ExpertAgent) -> None:
         self.agents[agent.name] = agent
@@ -66,6 +68,24 @@ class ExpertOrchestrator:
                 perplexity_key=self.perplexity_key,
             )
             self.register(agent)
+
+    async def _note_symbols(self, op: ExpertOpinion) -> None:
+        """전문가가 지목한 종목을 종목 위키 리서치 노트에 기록 (fire-and-forget)
+
+        전문가당 최대 5종목 — note_research가 일일 중복·페이지 상한을 알아서 거른다.
+        """
+        try:
+            text = (op.key_findings[0] if op.key_findings else "").strip()
+            if not text:
+                text = f"{op.expert} 지목"
+            for sym in op.affected_symbols[:5]:
+                await self.trade_wiki.note_research(
+                    symbol=str(sym),
+                    source=op.expert,
+                    text=f"{op.regime_bias.value}({op.score:+d}) {text}",
+                )
+        except Exception as e:
+            logger.debug(f"[Orchestrator] 종목 노트 기록 실패 (무시): {e}")
 
     # ─────────────────────────────────────────
     # 단일 호출
@@ -115,6 +135,9 @@ class ExpertOrchestrator:
                 if result.is_valid:
                     save_opinion(result)
                     asyncio.create_task(wiki_mod.ingest_opinion(result))
+                    # 지목 종목을 종목 위키 리서치 노트에 기록 (2026-08-07)
+                    if self.trade_wiki is not None and result.affected_symbols:
+                        asyncio.create_task(self._note_symbols(result))
             else:
                 # defensive: 예기치 못한 반환 타입
                 logger.warning(
