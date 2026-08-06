@@ -5,9 +5,10 @@
   평일에도 야간(미국장 진행 중) 캡처용으로 동작.
 
 데이터 소스 (신규 키 0개):
+  - KIS: KOSPI200 야간선물 직접 시세 (A01609/CM, 2026-08-06~ — KR 갭 직접)
   - yfinance:
     · ES=F, NQ=F : S&P/NASDAQ 선물 (KR 갭 1차 동력)
-    · KS200=F or NKD=F : 한국/일본 야간선물 (KR 갭 직접)
+    · NKD=F : 니케이 야간선물 (KIS 실패 시 ×0.7 프록시 폴백)
     · KRW=X : 원/달러 (외환 risk)
     · ^VIX : 변동성
     · BTC-USD : risk sentiment proxy
@@ -60,8 +61,10 @@ class WeekendSignalExpert(ExpertAgent):
                 findings.append(f"⚠️ NASDAQ 야간선물 {nq:+.2f}% — IT 약세")
             elif nq <= -0.7:
                 score -= 6
+                findings.append(f"NASDAQ 야간선물 {nq:+.2f}% (약세)")
             elif nq >= 1.5:
                 score += 8
+                findings.append(f"🟢 NASDAQ 야간선물 {nq:+.2f}% (강세)")
 
         # 2) KOSPI200/니케이 야간선물 — KR 갭 직접
         kr = signals.get("kr_futures_pct")
@@ -88,6 +91,7 @@ class WeekendSignalExpert(ExpertAgent):
                 findings.append(f"KRW {krw_last:.0f}원 ({krw_pct:+.2f}%) — 약세")
             elif krw_pct <= -0.5:
                 score += 5
+                findings.append(f"KRW {krw_last:.0f}원 ({krw_pct:+.2f}%) — 원화 강세")
 
         # 4) VIX 절대치
         vix = signals.get("vix_last")
@@ -97,8 +101,10 @@ class WeekendSignalExpert(ExpertAgent):
                 findings.append(f"VIX {vix:.1f} — 변동성 체제")
             elif vix >= 20:
                 score -= 6
+                findings.append(f"VIX {vix:.1f} — 경계")
             elif vix <= 14:
                 score += 5
+                findings.append(f"VIX {vix:.1f} — 안정")
 
         # 5) BTC (risk sentiment proxy)
         btc_pct = signals.get("btc_pct")
@@ -108,6 +114,7 @@ class WeekendSignalExpert(ExpertAgent):
                 findings.append(f"BTC {btc_pct:+.2f}% — 글로벌 risk-off")
             elif btc_pct >= 5.0:
                 score += 5
+                findings.append(f"BTC {btc_pct:+.2f}% — risk-on")
 
         # 6) 30년 채권 (안전자산 수요 — bond up + equity down 동조)
         zb_pct = signals.get("zb_pct")
@@ -136,11 +143,20 @@ class WeekendSignalExpert(ExpertAgent):
         )
         confidence = min(0.85, 0.30 + valid_signals * 0.08)
 
+        # findings 부재 ≠ 데이터 부족 — 전 신호 중립 구간이면 findings가 비므로
+        # 수집 성공 여부로 문구를 구분한다 (2026-08-06, 브리핑 오표기 수정)
+        if not findings:
+            findings = (
+                [f"야간 신호 중립 (수집 {valid_signals}/7, 특이사항 없음)"]
+                if valid_signals >= 3
+                else ["야간/주말 신호 데이터 부족"]
+            )
+
         return self._build_opinion(
             score=int(score),
             bias=bias,
             confidence=confidence,
-            findings=findings or ["야간/주말 신호 데이터 부족"],
+            findings=findings,
             sectors=[],
             raw=dict(signals=signals, is_weekend=is_weekend),
             valid_hours=2,   # 빠르게 만료 (시장 변동 빠름)
@@ -176,11 +192,10 @@ class WeekendSignalExpert(ExpertAgent):
             except Exception:
                 return {"last": None, "pct": None}
 
-        # 병렬 fetch
-        es, nq, ks_f, nkd, krw, vix, btc, zb = await asyncio.gather(
+        # 병렬 fetch (KS200=F는 야후 상장폐지로 제거 — 2026-08-06)
+        es, nq, nkd, krw, vix, btc, zb = await asyncio.gather(
             _pct("ES=F"),
             _pct("NQ=F"),
-            _pct("KS200=F"),
             _pct("NKD=F"),
             _pct("KRW=X", period="5d", interval="1h"),
             _pct("^VIX", period="5d", interval="1d"),
@@ -200,12 +215,17 @@ class WeekendSignalExpert(ExpertAgent):
         out["nq_pct"] = _safe(nq, "pct")
         out["nq_last"] = _safe(nq, "last")
 
-        # KR 야간선물: KS200=F 우선, 없으면 NKD=F × 0.7 계수
-        ks_pct = _safe(ks_f, "pct")
-        if isinstance(ks_pct, (int, float)):
-            out["kr_futures_pct"] = ks_pct
-            out["kr_futures_source"] = "KS200=F"
-        else:
+        # KR 야간선물: KIS 직접 시세 우선 (주간 종가 대비 밤사이 변동률, 2026-08-06~)
+        # 실패 시 NKD=F × 0.7 프록시 폴백 (프록시는 실제 대비 신호가 희석됨)
+        try:
+            from src.data.providers.kis_market_data import get_kis_market_data
+            q = await get_kis_market_data().get_night_futures_quote()
+            if q and q.get("change_pct") is not None:
+                out["kr_futures_pct"] = q["change_pct"]
+                out["kr_futures_source"] = f"KIS:{q.get('symbol')}"
+        except Exception as e:
+            logger.debug(f"[갭risk] KIS 야간선물 실패 → NKD 프록시: {e}")
+        if "kr_futures_pct" not in out:
             nkd_pct = _safe(nkd, "pct")
             if isinstance(nkd_pct, (int, float)):
                 out["kr_futures_pct"] = round(nkd_pct * 0.7, 2)
