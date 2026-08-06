@@ -68,7 +68,9 @@ _KEYWORD_SECTOR: List[Tuple[List[str], str]] = [
 # ── 캐시 경로 ─────────────────────────────────────────────────────────────────
 _CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 _SECTOR_MAP_CACHE = _CACHE_DIR / "sector_map.json"     # stock → sector (7일)
-_ETF_MOMENTUM_CACHE = _CACHE_DIR / "etf_momentum.json" # ETF 수익률 (30분)
+_ETF_MOMENTUM_CACHE = _CACHE_DIR / "etf_momentum.json" # ETF 20일 수익률 (30분, 레거시 형식)
+# 5일+20일 멀티 수익률 (2026-08-07 섹터 카운슬 블렌드용) — {"섹터": {"r5": %, "r20": %}}
+_ETF_MOMENTUM_MULTI_CACHE = _CACHE_DIR / "etf_momentum_multi.json"
 
 # ── TTL 상수 ──────────────────────────────────────────────────────────────────
 _SECTOR_MAP_TTL = 7 * 24 * 3600   # 7일 (pykrx WICS)
@@ -121,6 +123,8 @@ class SectorMomentumProvider:
         self._broker = broker
         self._sector_map: Dict[str, str] = {}     # ticker → sector_name
         self._etf_momentum: Dict[str, float] = {} # sector_name → 20d_pct
+        # sector_name → {"r5": 5d_pct, "r20": 20d_pct} (2026-08-07)
+        self._etf_momentum_multi: Dict[str, Dict[str, float]] = {}
         self._etf_last_fetch: float = 0.0
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -174,6 +178,14 @@ class SectorMomentumProvider:
         """전체 섹터 ETF 모멘텀 맵 반환 (섹터명 → 20d 수익률%)."""
         await self._refresh_etf_momentum()
         return dict(self._etf_momentum)
+
+    async def get_all_sector_momentum_multi(self) -> Dict[str, Dict[str, float]]:
+        """전체 섹터 5일+20일 수익률 맵 (섹터명 → {"r5": %, "r20": %})
+
+        2026-08-07 섹터 카운슬 블렌드용. 구버전 캐시만 있으면 r20만 채워진다.
+        """
+        await self._refresh_etf_momentum()
+        return {k: dict(v) for k, v in self._etf_momentum_multi.items()}
 
     async def get_sector_map_batch(self, symbols: List[str]) -> Dict[str, str]:
         """
@@ -336,7 +348,7 @@ class SectorMomentumProvider:
         return self._etf_momentum.get(sector)
 
     async def _refresh_etf_momentum(self) -> None:
-        """ETF 모멘텀 갱신 (30분 캐시)."""
+        """ETF 모멘텀 갱신 (30분 캐시) — 20일 레거시 + 5일/20일 멀티 동시 관리."""
         now = time.time()
         if now - self._etf_last_fetch < _ETF_MOMENTUM_TTL:
             return  # 캐시 유효
@@ -345,6 +357,11 @@ class SectorMomentumProvider:
         cached = _load_json_cache(_ETF_MOMENTUM_CACHE, _ETF_MOMENTUM_TTL)
         if cached:
             self._etf_momentum = cached
+            cached_multi = _load_json_cache(_ETF_MOMENTUM_MULTI_CACHE, _ETF_MOMENTUM_TTL)
+            # 멀티 캐시 부재(구버전 파일만 존재) → 레거시 20일로 합성 (r5 없음)
+            self._etf_momentum_multi = cached_multi or {
+                s: {"r20": v} for s, v in cached.items()
+            }
             self._etf_last_fetch = now
             return
 
@@ -353,25 +370,29 @@ class SectorMomentumProvider:
             return
 
         results: Dict[str, float] = {}
+        results_multi: Dict[str, Dict[str, float]] = {}
         for sector, etf_ticker in SECTOR_ETF_MAP.items():
             try:
-                momentum = await self._calc_etf_momentum(etf_ticker)
-                if momentum is not None:
-                    results[sector] = momentum
+                rets = await self._calc_etf_returns(etf_ticker)
+                if rets is not None:
+                    results[sector] = rets["r20"]
+                    results_multi[sector] = rets
             except Exception as e:
                 logger.debug(f"[SectorMomentum] {sector}({etf_ticker}) 실패: {e}")
 
         if results:
             self._etf_momentum = results
+            self._etf_momentum_multi = results_multi
             self._etf_last_fetch = now
             _save_json_cache(_ETF_MOMENTUM_CACHE, results)
+            _save_json_cache(_ETF_MOMENTUM_MULTI_CACHE, results_multi)
             logger.info(
                 f"[SectorMomentum] ETF 모멘텀 갱신: {len(results)}개 섹터 | "
                 + " ".join(f"{s}={v:+.1f}%" for s, v in sorted(results.items(), key=lambda x: -x[1])[:5])
             )
 
-    async def _calc_etf_momentum(self, etf_ticker: str) -> Optional[float]:
-        """ETF 20일 수익률 계산 (KIS get_daily_prices 사용)."""
+    async def _calc_etf_returns(self, etf_ticker: str) -> Optional[Dict[str, float]]:
+        """ETF 5일/20일 수익률 계산 (KIS get_daily_prices 1회 조회)."""
         try:
             prices = await self._broker.get_daily_prices(etf_ticker, days=25)
             if not prices or len(prices) < 2:
@@ -383,14 +404,25 @@ class SectorMomentumProvider:
             if current_price <= 0:
                 return None
 
-            # 20일 전 종가 (인덱스 기준 최대 20번째)
-            idx_20d = min(20, len(prices) - 1)
-            old = prices[idx_20d]
-            old_price = float(old.get("stck_clpr") or old.get("close") or 0)
-            if old_price <= 0:
-                return None
+            def _ret(n_days: int) -> Optional[float]:
+                idx = min(n_days, len(prices) - 1)
+                old_price = float(
+                    prices[idx].get("stck_clpr") or prices[idx].get("close") or 0
+                )
+                if old_price <= 0:
+                    return None
+                return (current_price - old_price) / old_price * 100
 
-            return (current_price - old_price) / old_price * 100
+            r20 = _ret(20)
+            if r20 is None:
+                return None
+            out = {"r20": r20}
+            # 이력 6봉 미만이면 r5가 r20과 같은 인덱스로 수렴해 라벨이 왜곡됨 → 생략
+            if len(prices) >= 6:
+                r5 = _ret(5)
+                if r5 is not None:
+                    out["r5"] = r5
+            return out
 
         except Exception as e:
             logger.debug(f"[SectorMomentum] ETF {etf_ticker} 가격 조회 실패: {e}")

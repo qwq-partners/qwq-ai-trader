@@ -8,8 +8,11 @@
   - 종목 단위 판단(크로스검증 규칙#12 shadow)과 브리핑 섹터 섹션에만 사용
 
 신호 구성 (섹터당):
-  - 정량 60%: 섹터 ETF 20일 수익률 (SectorMomentumProvider 재사용 — KIS/30분 파일캐시)
-  - 정성 40%: Perplexity 1회 호출로 전 섹터 뉴스 동향 JSON (실패 시 정량만, 가중 0.8)
+  - 정량 60%: 섹터 ETF 수익률 블렌드 = 5일 40% + 20일 60% (2026-08-07 개편 —
+    단일 20일은 V자 반등을, 단일 5일은 추세를 놓침. 반도체 2주 -15%/1주 +18% 사례)
+  - 정성 40%: Perplexity 1회 호출 — **뉴스 재료만** 평가 (수주·실적·정책·사고).
+    주가 등락 채점은 금지: 가격 추세는 정량 축 담당 (이중 계산 방지)
+  - 정성 단독(정량 캐시 부재)이면 ×0.6 축소 + qual_only 표기 + 신뢰도 상한 0.5
 
 소비처:
   - cross_validator 규칙#12: `sector_of_cached()` + `sector_score()` (동기 — validate가 sync)
@@ -33,8 +36,11 @@ from .types import ExpertOpinion, RegimeBias
 
 # 강한 약세 임계 — 규칙#12 shadow 감지 기준 (관측 후 조정)
 SECTOR_BEAR_THRESHOLD = -40
-# 정량(ETF 모멘텀%) → 점수 배율: 20일 ±10% ≈ ±100점
+# 정량(ETF 수익률%) → 점수 배율: 블렌드 ±10% ≈ ±100점
 _QUANT_SCALE = 10.0
+# 정량 블렌드 가중 — 5일(단기 반등) 40% + 20일(추세) 60% (2026-08-07)
+_R5_WEIGHT = 0.4
+_R20_WEIGHT = 0.6
 
 
 class SectorCouncilExpert(ExpertAgent):
@@ -56,15 +62,25 @@ class SectorCouncilExpert(ExpertAgent):
     # 분석
     # ─────────────────────────────────────────
     async def _analyze(self) -> ExpertOpinion:
-        momentum = await self._provider.get_all_sector_momentum()  # {섹터: 20d%}
+        momentum = await self._provider.get_all_sector_momentum_multi()  # {섹터: {r5, r20}}
         qual = await self._fetch_qual_signals()                    # {섹터: {score, reason}}
 
         scores: Dict[str, Dict[str, Any]] = {}
         for sector in SECTOR_ETF_MAP:
-            mom = momentum.get(sector)
+            rets = momentum.get(sector) or {}
+            r20 = rets.get("r20")
+            r5 = rets.get("r5")
+            # 블렌드: 5일 40% + 20일 60% (r5 없는 구버전 캐시면 20일 단독)
+            if isinstance(r20, (int, float)):
+                if isinstance(r5, (int, float)):
+                    mom = _R5_WEIGHT * r5 + _R20_WEIGHT * r20
+                else:
+                    mom = r20
+            else:
+                mom = None
             quant = (
                 max(-100.0, min(100.0, mom * _QUANT_SCALE))
-                if isinstance(mom, (int, float)) else None
+                if mom is not None else None
             )
             q_entry = qual.get(sector) or {}
             q_score = q_entry.get("score")
@@ -82,7 +98,9 @@ class SectorCouncilExpert(ExpertAgent):
 
             scores[sector] = {
                 "score": int(max(-100, min(100, final))),
-                "momentum": round(mom, 2) if isinstance(mom, (int, float)) else None,
+                "momentum": round(mom, 2) if mom is not None else None,  # 블렌드값
+                "r5": round(r5, 2) if isinstance(r5, (int, float)) else None,
+                "r20": round(r20, 2) if isinstance(r20, (int, float)) else None,
                 "reason": str(q_entry.get("reason", ""))[:80],
                 # 정량 축 부재 = 뉴스 단독 점수 — 소비처에서 낮게 신뢰해야 함
                 # (2026-08-07 반도체 +49 사례: ETF 캐시 부재로 뉴스 반등론만 반영)
@@ -147,10 +165,12 @@ class SectorCouncilExpert(ExpertAgent):
     async def _fetch_qual_signals(self) -> Dict[str, Dict[str, Any]]:
         sectors = list(SECTOR_ETF_MAP.keys())
         prompt = (
-            "한국 주식시장의 다음 섹터별 최근 1주일 동향(뉴스·수급·업황)을 평가해 "
-            "JSON만 출력해줘. 형식: {\"섹터명\": {\"score\": -100~100 정수, "
-            "\"reason\": \"한 줄 근거\"}}. 다른 텍스트 없이 JSON만. "
-            f"섹터: {', '.join(sectors)}"
+            "한국 주식시장의 다음 섹터별 최근 1주일 '뉴스 재료'를 평가해 JSON만 출력해줘. "
+            "주의: 주가 등락률·수익률·수급 강도 같은 가격 데이터는 점수에 반영하지 마 "
+            "(가격 추세는 별도 정량 모델이 계산한다 — 가격을 채점하면 이중 계산이 된다). "
+            "수주·실적 발표·정책/규제·기술 이벤트·사고 등 재료의 방향과 강도만 평가해. "
+            "형식: {\"섹터명\": {\"score\": -100~100 정수, \"reason\": \"한 줄 근거\"}}. "
+            f"다른 텍스트 없이 JSON만. 섹터: {', '.join(sectors)}"
         )
         text = await self._perplexity_search(prompt, max_tokens=900)
         if not text:
