@@ -106,6 +106,7 @@ class ExpertConfig:
         "global_micro_expert": True,
         "earnings_expert": True,
         "weekend_signal_expert": True,   # 2026-06-07 추가
+        "sector_council": True,          # 2026-08-07 추가 — 종목 단위 판단 전용
     })
 
     # 가중치 (품질 검증으로 자동 조정)

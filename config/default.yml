@@ -597,6 +597,7 @@ experts:
     kr_economy_expert: true
     global_micro_expert: true
     earnings_expert: true
+    sector_council: true         # 2026-08-07 — 섹터 카운슬 (종목 판단 전용, 체제 집계 제외)
   weights:
     news_curator: 1.0
     macro_economist: 1.0

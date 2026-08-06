@@ -1,5 +1,31 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-07 — feat(experts): 섹터 카운슬 전문가 도입 (9번째, 종목 판단 전용) + 코드리뷰 반영
+
+사용자 요청("섹터/업종별 전문가 — 조사 결과를 종목 매수/매도 판단에 반영"). 섹터별
+전문가 다수 대신 **단일 전문가가 13개 섹터를 내부 분석**하는 카운슬 설계 — 체제 집계
+희석 방지 + 비용 1명분 유지. shadow 관측 후 실반영 예정.
+
+- **신규 `src/experts/sector_council.py`**: 반도체·IT·자동차·2차전지·바이오·건설·조선·
+  철강·은행·증권·보험·화학·방산 13개. 섹터당 정량 60%(ETF 20일 모멘텀,
+  SectorMomentumProvider 재사용) + 정성 40%(Perplexity 1회 호출 → 섹터별 정규식
+  파싱 — 통짜 json.loads는 LLM 응답에서 자주 깨져 부분 복구 방식). valid_hours=3.
+- **체제 집계 3종 제외**: `NON_REGIME_EXPERTS` — aggregate_bias·bear_consensus에서
+  스킵 (regime_score는 허용목록이라 자동 제외). 브리핑 분포 카운트에서도 제외.
+- **cross_validator 규칙#12 (shadow)**: BUY 종목 섹터 점수 ≤ -40이면 감지만 기록
+  (`rule12_shadow_log.jsonl`, 일일 dedup). 규칙#11과 동일하게 적중률 관측 후 전환.
+- **브리핑 "섹터 동향" 섹션**: 강세/약세 상위 3개 표시 (±15 이상만).
+- **SECTOR_ETF_MAP 확장**: KODEX 증권(102970)·보험(140700) + 키워드 폴백 추가.
+- **run_trader**: sector_council에 KIS 브로커 주입 (장전 ETF 캐시 만료 대비).
+- **코드리뷰 (python-reviewer 에이전트, P0 0건·P1 2건·P2 4건 → P1 전량+P2 2건 수정)**:
+  ① 섹터 동기 조회를 `SectorMomentumProvider.sector_of_cached()` 공식 메서드로 승격
+  — 파일캐시 히트 시 인메모리 메모이즈 (validate() sync 핫패스 반복 디스크 I/O 제거),
+  private 헬퍼(_keyword_sector 등) 크로스모듈 임포트 제거. ② 규칙#12가 규칙#4의
+  해석된 sector 변수 재사용. ③ refresh_minutes 주석 정정 (실제 TTL은 valid_hours).
+  잔여 P2 2건(provider 이중 인스턴스 ETF 캐시 경합·protected 접근)은 낮은 위험으로 보류.
+- 검증: 라이브 스모크 13개 섹터 분석 성공 (qual 파싱 정상), 메모이즈 assert 통과,
+  재시작 후 "[전문가] 9명 등록 완료" 확인. 문서: `docs/agents/expert-system.md` 갱신.
+
 ## 2026-08-06 — fix(experts): 갭risk 전문가 "데이터 부족" 오표기 + KIS 야간선물 3번째 적용
 
 브리핑 제보("야간 신호 데이터 부족한데 신뢰도 78%?") 조사 — 실제로는 신호 6/7 수집

@@ -358,10 +358,13 @@ class KRScheduler:
                 "earnings_expert": "실적",
                 "weekend_signal_expert": "갭risk",
             }
-            # 카테고리별 카운트
-            bull_n = sum(1 for o in ops.values() if o.is_valid and o.regime_bias.value == "bull")
-            neut_n = sum(1 for o in ops.values() if o.is_valid and o.regime_bias.value == "neutral")
-            bear_n = sum(1 for o in ops.values() if o.is_valid and o.regime_bias.value == "bear")
+            # 카테고리별 카운트 — sector_council은 체제 집계 제외라 분포에서도 뺀다
+            _regime_ops = {
+                n: o for n, o in ops.items() if n != "sector_council"
+            }
+            bull_n = sum(1 for o in _regime_ops.values() if o.is_valid and o.regime_bias.value == "bull")
+            neut_n = sum(1 for o in _regime_ops.values() if o.is_valid and o.regime_bias.value == "neutral")
+            bear_n = sum(1 for o in _regime_ops.values() if o.is_valid and o.regime_bias.value == "bear")
             valid_n = bull_n + neut_n + bear_n
 
             # 종합 score 해석
@@ -412,6 +415,28 @@ class KRScheduler:
                     if len(finding) > 110:
                         finding = finding[:110] + "..."
                     lines.append(f"   └ <i>{finding}</i>")
+
+            # 섹터 동향 (sector_council — 체제 집계 미반영, 종목 판단 참고용) 2026-08-07
+            _sc_op = ops.get("sector_council")
+            if _sc_op is not None and _sc_op.is_valid:
+                _sec_scores = (_sc_op.raw_evidence or {}).get("sector_scores") or {}
+                if _sec_scores:
+                    _ranked = sorted(
+                        _sec_scores.items(), key=lambda x: -x[1].get("score", 0)
+                    )
+                    _strong = [(s, v) for s, v in _ranked[:3] if v.get("score", 0) >= 15]
+                    _weak = [(s, v) for s, v in _ranked[::-1][:3] if v.get("score", 0) <= -15]
+                    lines.append("")
+                    lines.append(f"━━━━━━━━━━━━━━━")
+                    lines.append(
+                        f"<b>섹터 동향</b> <i>({len(_sec_scores)}개 분석 · 종목 판단용, 체제 미반영)</i>"
+                    )
+                    for s, v in _strong:
+                        lines.append(f"🟢 {s} {v.get('score', 0):+d}")
+                    for s, v in _weak:
+                        lines.append(f"🔴 {s} {v.get('score', 0):+d}")
+                    if not _strong and not _weak:
+                        lines.append("⚪ 전 섹터 중립")
 
             # 아침 슬롯이면 추가 핵심 발견 (2번째 항목, 브리프형)
             if use_report_channel:

@@ -1,6 +1,6 @@
 # 전문가 시스템 (Expert System)
 
-> 도입일: 2026-05-29 (7명) → 2026-06-07 weekend_signal_expert 추가 (총 8명)
+> 도입일: 2026-05-29 (7명) → 2026-06-07 weekend_signal_expert → 2026-08-07 sector_council 추가 (총 9명)
 > 위치: `src/experts/`
 > 정의서: `.claude/agents/*-expert*.md`, `news-curator.md`, `macro-economist.md`
 
@@ -20,7 +20,8 @@
 | **kr-economy-expert** | 한국 거시 (한은/수출입/PF) | 한국 특화 거시 점수 |
 | **global-micro-expert** | 반도체/2차전지/바이오/조선 공급망 | 산업 점수 + 수혜 종목 |
 | **earnings-expert** | 어닝 캘린더·서프라이즈·드리프트 | 임박 어닝 + 평균 surprise |
-| **weekend-signal-expert** (2026-06-07~) | ES=F/NQ=F/KS200=F/NKD=F/KRW=X/VIX/BTC/ZB=F | 갭 risk 점수 |
+| **weekend-signal-expert** (2026-06-07~) | ES=F/NQ=F/KIS 야간선물/NKD=F/KRW=X/VIX/BTC/ZB=F | 갭 risk 점수 |
+| **sector-council** (2026-08-07~) | KR 13개 섹터 (반도체~방산·증권·보험) — ETF 모멘텀 60% + Perplexity 뉴스 40% | 섹터별 점수 — **체제 집계 제외**, 종목 판단 전용 (규칙#12 shadow·브리핑) |
 
 ## 슬롯 (2026-06-07 확장)
 
@@ -88,6 +89,12 @@ class ExpertOpinion:
 - BUY 신호에 한해 작동
 - `expert_orchestrator.bear_consensus(0.7, 2)` 참이면 **즉시 차단**
 - 기존 10개 규칙과 독립
+
+### 2-1) cross_validator 규칙 #12 (2026-08-07, shadow 전용)
+- BUY 신호의 소속 섹터 카운슬 점수 ≤ -40이면 감지 기록 (차단 없음)
+- hit log: `~/.cache/ai_trader/rule12_shadow_log.jsonl` — 적중률 관측 후 실차단 전환 판단
+- 섹터 해석: 규칙#4의 metadata sector 재사용 → 없으면 `sector_of_cached()` (동기·메모이즈)
+- sector_council은 `NON_REGIME_EXPERTS` — 체제 보정·다수결·BEAR 합의 3종 집계에서 제외
 
 ### 3) 진화 시스템 (daily_reviewer)
 - LLM 프롬프트에 "## 오늘 전문가 의견" 섹션 추가

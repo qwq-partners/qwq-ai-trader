@@ -618,6 +618,11 @@ class UnifiedTradingBot:
                         llm_manager=_expert_llm,
                     )
                     self.expert_orchestrator.register_all()
+                    # 섹터 카운슬에 KIS 브로커 주입 — ETF 모멘텀 장전 직접 조회용
+                    # (BatchAnalyzer config 수동 배선 패턴과 동일 — MEMORY.md 참조)
+                    _sc_agent = self.expert_orchestrator.agents.get("sector_council")
+                    if _sc_agent is not None and self.broker is not None:
+                        _sc_agent.set_broker(self.broker)
                     n_experts = len(self.expert_orchestrator.agents)
                     logger.info(
                         f"[전문가] {n_experts}명 등록 완료 "

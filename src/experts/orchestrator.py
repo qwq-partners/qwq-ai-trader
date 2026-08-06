@@ -34,7 +34,11 @@ class ExpertOrchestrator:
         logger.info(f"[Orchestrator] 등록: {agent.name}")
 
     def register_all(self) -> None:
-        """기본 8명 전문가를 모두 등록 (2026-06-07 weekend_signal_expert 추가)"""
+        """기본 9명 전문가를 모두 등록
+
+        (2026-06-07 weekend_signal_expert, 2026-08-07 sector_council 추가)
+        sector_council은 종목 단위 판단 전용 — 시장 체제 집계 3종에서 제외된다.
+        """
         from .news_curator import NewsCurator
         from .macro_economist import MacroEconomist
         from .kr_market_expert import KRMarketExpert
@@ -43,6 +47,7 @@ class ExpertOrchestrator:
         from .global_micro_expert import GlobalMicroExpert
         from .earnings_expert import EarningsExpert
         from .weekend_signal_expert import WeekendSignalExpert
+        from .sector_council import SectorCouncilExpert
 
         for cls in (
             NewsCurator,
@@ -53,6 +58,7 @@ class ExpertOrchestrator:
             GlobalMicroExpert,
             EarningsExpert,
             WeekendSignalExpert,
+            SectorCouncilExpert,
         ):
             agent = cls(
                 config=self.config,
@@ -167,16 +173,19 @@ class ExpertOrchestrator:
         # ±100 → ±30으로 스케일링
         return int(max(-30, min(30, avg * 0.3)))
 
+    # 시장 체제 집계에서 제외되는 전문가 (종목 단위 판단 전용)
+    NON_REGIME_EXPERTS = frozenset({"sector_council"})
+
     def aggregate_bias(
         self,
         opinions: Optional[Dict[str, ExpertOpinion]] = None,
     ) -> RegimeBias:
-        """다수결 bias"""
+        """다수결 bias (sector_council 제외 — 섹터 의견이 시장 판단 희석 방지)"""
         if opinions is None:
             opinions = self.snapshot()
         counts = {RegimeBias.BULL: 0.0, RegimeBias.NEUTRAL: 0.0, RegimeBias.BEAR: 0.0}
         for op in opinions.values():
-            if not op.is_valid:
+            if not op.is_valid or op.expert in self.NON_REGIME_EXPERTS:
                 continue
             w = self.config.weights.get(op.expert, 1.0) * op.confidence
             counts[op.regime_bias] += w
@@ -197,6 +206,7 @@ class ExpertOrchestrator:
         bear_strong = [
             op for op in opinions.values()
             if op.is_valid
+            and op.expert not in self.NON_REGIME_EXPERTS
             and op.regime_bias == RegimeBias.BEAR
             and op.confidence >= threshold_confidence
         ]

@@ -43,6 +43,8 @@ SECTOR_ETF_MAP: Dict[str, str] = {
     "조선":       "105370",  # KODEX 조선
     "철강":       "117680",  # KODEX 철강 (2026-08-04 수정 — 069500은 KODEX 200이라 시장 전체를 철강 급등으로 오인)
     "은행":       "091170",  # KODEX 은행
+    "증권":       "102970",  # KODEX 증권 (2026-08-07 섹터 카운슬 추가)
+    "보험":       "140700",  # KODEX 보험 (2026-08-07 섹터 카운슬 추가)
     "화학":       "117460",  # KODEX 에너지화학
     "방산":       "475330",  # KODEX K-방산
 }
@@ -56,6 +58,8 @@ _KEYWORD_SECTOR: List[Tuple[List[str], str]] = [
     (["조선", "현대중공업", "한화오션", "삼성중공업", "HJ중공업"], "조선"),
     (["철강", "포스코", "현대제철", "동국제강"], "철강"),
     (["은행", "하나금융", "KB금융", "신한지주", "우리금융", "NH금융", "카카오뱅크"], "은행"),
+    (["증권", "미래에셋", "키움", "삼성증권", "NH투자", "한국금융지주", "메리츠"], "증권"),
+    (["보험", "삼성생명", "삼성화재", "DB손해", "현대해상", "한화생명", "코리안리"], "보험"),
     (["화학", "롯데케미칼", "금호석유", "SK이노베이션", "에너지"], "화학"),
     (["한화", "방산", "항공우주", "한국항공", "LIG넥스", "현대로템"], "방산"),
     (["건설", "현대건설", "GS건설", "대우건설", "HDC", "포스코건설"], "건설"),
@@ -144,6 +148,27 @@ class SectorMomentumProvider:
     async def get_sector(self, symbol: str, name: str = "") -> Optional[str]:
         """종목의 섹터명 반환 (외부 호출용)."""
         return await self._get_sector(symbol, name)
+
+    def sector_of_cached(self, symbol: str, name: str = "") -> Optional[str]:
+        """종목 → 섹터 **동기** 조회 (네트워크 없음 — 캐시·키워드만)
+
+        cross_validator.validate() 같은 sync 경로용 (2026-08-07 섹터 카운슬).
+        인메모리 → 파일캐시(7일, 히트 시 인메모리 승격) → 종목명 키워드 순.
+        파일캐시에 없는 종목은 pykrx 조회를 하지 않으므로 None일 수 있다 —
+        전체 매핑은 비동기 get_sector()/get_sector_map_batch()가 채운다.
+        """
+        if symbol in self._sector_map:
+            return self._sector_map[symbol]
+        cached = _load_json_cache(_SECTOR_MAP_CACHE, _SECTOR_MAP_TTL)
+        if cached and symbol in cached:
+            self._sector_map[symbol] = cached[symbol]  # 메모이즈 — 반복 디스크 IO 방지
+            return cached[symbol]
+        if name:
+            sector = _keyword_sector(name)
+            if sector:
+                self._sector_map[symbol] = sector
+                return sector
+        return None
 
     async def get_all_sector_momentum(self) -> Dict[str, float]:
         """전체 섹터 ETF 모멘텀 맵 반환 (섹터명 → 20d 수익률%)."""

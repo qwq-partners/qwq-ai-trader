@@ -62,6 +62,11 @@ class CrossStrategyValidator:
         self._rule11_log_path = (
             Path.home() / ".cache" / "ai_trader" / "rule11_shadow_log.jsonl"
         )
+        # 2026-08-07: 규칙 #12 (섹터 카운슬 약세) shadow hit log
+        self._rule12_log_path = (
+            Path.home() / ".cache" / "ai_trader" / "rule12_shadow_log.jsonl"
+        )
+        self._rule12_logged_today: set = set()
 
         # YAML 토글 적용 (None이면 클래스 상수 사용)
         if min_pass_score is not None:
@@ -213,6 +218,7 @@ class CrossStrategyValidator:
         # 2026-06-14 추가: 규칙 #11 dedup / gap 장막판 카운터 일일 리셋
         if self._rule11_dedup_date != today:
             self._rule11_logged_today = set()
+            self._rule12_logged_today = set()   # 규칙#12도 동일 주기 리셋 (2026-08-07)
             self._rule11_dedup_date = today
         if self._gap_late_count_date != today:
             self._gap_late_count = 0
@@ -556,6 +562,30 @@ class CrossStrategyValidator:
                     _bump("blocked")
                     return False, adjusted_score, "전문가 시스템 평가 실패 (fail_closed)"
 
+        # === 규칙 12: 섹터 카운슬 약세 게이트 (2026-08-07 추가, shadow 전용) ===
+        # 종목 소속 섹터의 카운슬 점수가 강한 약세면 감지만 기록 (차단 없음).
+        # 규칙#11과 동일 절차 — hit rate 관측 후 실차단 전환 여부 결정.
+        if is_buy_signal and self._expert_orchestrator is not None:
+            try:
+                from src.experts.sector_council import SECTOR_BEAR_THRESHOLD
+                _sc = self._expert_orchestrator.agents.get("sector_council")
+                if _sc is not None:
+                    # 규칙 4에서 이미 해석한 sector 재사용, 없을 때만 캐시 조회
+                    _sector = sector or _sc.sector_of_cached(
+                        symbol,
+                        (metadata or {}).get("name", "")
+                        or (metadata or {}).get("stock_name", ""),
+                    )
+                    _s_score = _sc.sector_score(_sector) if _sector else None
+                    if _s_score is not None and _s_score <= SECTOR_BEAR_THRESHOLD:
+                        self._log_rule12_hit(symbol, _sector, _s_score, score)
+                        logger.info(
+                            f"[크로스검증] {symbol} SHADOW: 섹터 약세 감지 "
+                            f"(규칙#12, {_sector} {_s_score:+d}, 차단 안 함)"
+                        )
+            except Exception as _e:
+                logger.debug(f"[크로스검증] 규칙#12 평가 실패 {symbol}: {_e}")
+
         # === 누적 감점 cap (2026-05-03 P0-1) ===
         # 시간대 -8 + 지표결손 -8 + MA200 -5 + 극단PER -5 = 최대 -26 누적 가능
         # 60-70점대 종목이 자동 차단되는 역설(이전 분석: 91.7% 승률 영역) 방지
@@ -642,6 +672,37 @@ class CrossStrategyValidator:
             self._rule11_logged_today.add(dedup_key)
         except Exception as e:
             logger.debug(f"[크로스검증] hit_log 기록 실패: {e}")
+
+    def _log_rule12_hit(
+        self,
+        symbol: str,
+        sector: str,
+        sector_score: int,
+        score: float,
+    ) -> None:
+        """규칙 #12 섹터 약세 감지 시 hit_log 기록 (규칙#11과 동일 방식)
+
+        shadow 운영 — 후속 가격 변동으로 hit rate를 측정해 실차단 전환을 판단한다.
+        같은 날 같은 종목은 첫 hit만 기록.
+        """
+        dedup_key = (datetime.now().date(), symbol)
+        if dedup_key in self._rule12_logged_today:
+            return
+        try:
+            self._rule12_log_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "market": self._market,
+                "sector": sector,
+                "sector_score": int(sector_score),
+                "score": float(score),
+            }
+            with self._rule12_log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._rule12_logged_today.add(dedup_key)
+        except Exception as e:
+            logger.debug(f"[크로스검증] 규칙#12 hit_log 기록 실패: {e}")
 
     async def llm_second_check(
         self,
