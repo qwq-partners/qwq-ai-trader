@@ -432,9 +432,11 @@ class KRScheduler:
                         f"<b>섹터 동향</b> <i>({len(_sec_scores)}개 분석 · 종목 판단용, 체제 미반영)</i>"
                     )
                     for s, v in _strong:
-                        lines.append(f"🟢 {s} {v.get('score', 0):+d}")
+                        _tag = " (뉴스단독)" if v.get("qual_only") else ""
+                        lines.append(f"🟢 {s} {v.get('score', 0):+d}{_tag}")
                     for s, v in _weak:
-                        lines.append(f"🔴 {s} {v.get('score', 0):+d}")
+                        _tag = " (뉴스단독)" if v.get("qual_only") else ""
+                        lines.append(f"🔴 {s} {v.get('score', 0):+d}{_tag}")
                     if not _strong and not _weak:
                         lines.append("⚪ 전 섹터 중립")
 

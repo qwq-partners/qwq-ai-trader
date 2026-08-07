@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-07 — fix/feat: 리포트 점검 후속 4건 — 데이터 순서 감사 + 표기·심의 개선
+
+ETF 시점 역전 발견(직전 커밋) 후속으로 사용자 승인 4건 일괄 처리. 코드리뷰
+(python-reviewer) P1 1건·P2 1건 발견 → 전량 반영.
+
+- **④ get_daily_prices(오래된 순) 호출처 9곳 감사**: 정상 5곳(kr_screener 3·
+  core_screener·swing_screener — 전부 [-N:] 관례), **결함 3곳 수정**:
+  ① `batch_analyzer` MA200이 `[:200]`으로 **가장 오래된 200일** 평균이던 버그 →
+  `[-200:]` (코어홀딩 MA200 이탈 경보 정상화).
+  ② `batch_analyzer` 코어 stale 거래량 20일 창이 "index 0=최신" 가정으로 옛 구간
+  계산 + 당일 제외 무효이던 버그 → 끝 기준 윈도우 (경계 3케이스 리뷰 검증).
+  ③ `run_trader._preload_price_history`가 존재하지 않는 `count=` 파라미터로
+  **도입 이래 TypeError 무동작** → `days=`. 리뷰가 활성화 회귀 P1 추가 발견:
+  봉 timestamp가 전부 now()로 찍혀 당일 덮어쓰기 로직이 시계열을 오염시킬 문제
+  → `date`(YYYYMMDD) 파싱, 날짜 없는 봉 제외. 재시작 후 "1종목 사전 로드" 첫 동작 확인.
+- **① 환율 기준 표기 통일**: 거시 finding "KRW N원 — 절대수준 1,400 초과" 명시,
+  한국경제 LLM 프롬프트에 "기준 없는 강세/약세 표현 금지" 지침 (브리핑 모순 해소).
+- **② 브리핑 섹터 동향**: qual_only 시 "(뉴스단독)" 태그 표시.
+- **③ 팀 심의 컨텍스트 보강**: `TradingTeam._symbol_context()` — 종목 위키 노트
+  (300자) + 섹터 카운슬 점수를 Bull/Bear 토론 컨텍스트에 결합 (캐시 읽기만, 비차단).
+
 ## 2026-08-07 — fix(data): ETF 수익률 시점 역전 결함 — get_daily_prices 오름차순 미반영 (P1)
 
 브리핑 리포트 점검 요청("반도체 +64가 맞나") 중 발견. `_calc_etf_returns`(및 전신

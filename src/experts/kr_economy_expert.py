@@ -116,6 +116,8 @@ class KREconomyExpert(ExpertAgent):
             from src.utils.llm import LLMTask
             prompt = (
                 "한국 거시 지표를 보고 KR 주식시장에 미치는 영향을 한국어 한 줄로 요약하세요.\n"
+                "환율을 언급할 때는 비교 기준을 반드시 명시하세요 (예: '20일 평균 대비 -2.9%'). "
+                "기준 없는 '원화 강세/약세' 표현 금지 — 거시 전문가는 절대수준 기준이라 모순돼 보일 수 있음.\n"
                 f"매크로: {macro_text[:400]}\n"
                 f"환율 상태: {json.dumps(krw_state, ensure_ascii=False)}"
             )

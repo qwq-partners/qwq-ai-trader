@@ -1771,7 +1771,9 @@ class BatchAnalyzer:
                     daily_prices = await self._broker.get_daily_prices(symbol, days=250)
                     if daily_prices is not None and len(daily_prices) >= 200:
                         # MA200 계산: 최근 200일 종가 평균
-                        closes = [float(d.get("close", d.get("stck_clpr", 0))) for d in daily_prices[:200]]
+                        # get_daily_prices는 오래된 순 — 최근 200일 = 마지막 200개
+                        # (2026-08-07 수정: 기존 [:200]은 가장 오래된 구간이었음)
+                        closes = [float(d.get("close", d.get("stck_clpr", 0))) for d in daily_prices[-200:]]
                         if all(c > 0 for c in closes):
                             ma200 = sum(closes) / len(closes)
                             current = float(pos.current_price) if pos.current_price is not None else 0
@@ -1940,21 +1942,23 @@ class BatchAnalyzer:
                 volume_collapsed = False
                 if auto_sell_enabled and business_days >= cond_based_days:
                     try:
-                        # P0-3: 25일 요청 → 첫 인덱스가 당일이면 1번부터 사용 (당일 거래량 왜곡 회피)
+                        # P0-3: 25일 요청 → 마지막 봉이 당일이면 제외 (당일 거래량 왜곡 회피)
                         daily = await self._broker.get_daily_prices(symbol, days=25)
                         if daily and len(daily) >= 21:
-                            # 가장 최근 = index 0 가정 (KIS), 당일 봉 제외하기 위해 [1:21]
-                            first_day = str(daily[0].get("date", "") or daily[0].get("stck_bsop_date", ""))
+                            # get_daily_prices는 **오래된 순** — 최신 봉이 마지막
+                            # (2026-08-07 수정: 기존 "index 0=최신" 가정은 반대라
+                            #  20일 평균이 옛날 구간으로 계산되던 결함)
+                            last_day = str(daily[-1].get("date", "") or daily[-1].get("stck_bsop_date", ""))
                             today_str_kr = today.strftime("%Y%m%d")
-                            offset = 1 if today_str_kr in first_day else 0
+                            end = len(daily) - 1 if today_str_kr in last_day else len(daily)
                             volumes = [
                                 float(d.get("volume", d.get("acml_vol", 0)))
-                                for d in daily[offset:offset + 20]
+                                for d in daily[max(0, end - 20):end]
                             ]
                             if len(volumes) == 20 and all(v >= 0 for v in volumes):
                                 avg20 = sum(volumes) / 20
                                 recent_n = min(vol_check_days, len(volumes))
-                                recent = volumes[:recent_n]
+                                recent = volumes[-recent_n:]  # 최신 n일 (리스트 끝)
                                 avg_recent = sum(recent) / recent_n if recent_n > 0 else 0
                                 if avg20 > 0 and avg_recent / avg20 < vol_ratio_threshold:
                                     volume_collapsed = True

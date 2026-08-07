@@ -256,7 +256,11 @@ class MacroEconomist(ExpertAgent):
         if isinstance(krw, (int, float)):
             if krw > _THRESHOLDS["krw_high"]:
                 score -= 12
-                findings.append(f"KRW {krw:.0f} — 외환 위험 구간")
+                # 기준 명시 — 한국경제 전문가는 20일 평균 대비(추세)로 판정하므로
+                # 같은 환율이 "약세/강세"로 갈릴 수 있음 (2026-08-07 브리핑 모순 제보)
+                findings.append(
+                    f"KRW {krw:.0f}원 — 절대수준 {_THRESHOLDS['krw_high']:.0f} 초과 (외환 위험 구간)"
+                )
             elif krw < 1300:
                 score += 5
 

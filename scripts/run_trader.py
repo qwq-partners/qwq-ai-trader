@@ -1853,14 +1853,24 @@ class UnifiedTradingBot:
             loaded = 0
             for symbol in self._watch_symbols[:50]:  # 최대 50종목
                 try:
-                    history = await self.broker.get_daily_prices(symbol, count=100)
+                    # 2026-08-07: count= 는 존재하지 않는 파라미터 (TypeError로
+                    # 프리로드가 무동작이었음) → days= 로 수정
+                    history = await self.broker.get_daily_prices(symbol, days=100)
                     if history and self.strategy_manager:
                         from src.core.types import Price
                         prices = []
                         for bar in history:
+                            # "date"(YYYYMMDD)를 실제 봉 날짜로 파싱 — now()로 찍으면
+                            # 과거 봉 전부가 "오늘"이 되어 당일 봉 덮어쓰기 로직이
+                            # 프리로드 마지막 봉을 오염시킴 (2026-08-07 리뷰 P1)
+                            _bar_date = str(bar.get("date", "") or "")
+                            try:
+                                _ts = datetime.strptime(_bar_date, "%Y%m%d")
+                            except ValueError:
+                                continue  # 날짜 없는 봉은 프리로드 제외 (오염 방지)
                             prices.append(Price(
                                 symbol=symbol,
-                                timestamp=bar.get("timestamp", datetime.now()),
+                                timestamp=_ts,
                                 open=Decimal(str(bar.get("open", 0))),
                                 high=Decimal(str(bar.get("high", 0))),
                                 low=Decimal(str(bar.get("low", 0))),

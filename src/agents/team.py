@@ -169,6 +169,32 @@ class TradingTeam:
             logger.debug(f"[팀] 시장 컨텍스트 수집 실패: {e}")
             return ""
 
+    def _symbol_context(self, symbol: str, name: str, sector: Optional[str]) -> str:
+        """종목 위키 노트 + 섹터 카운슬 점수 (2026-08-07 — 심의 근거 보강)
+
+        둘 다 캐시/파일 읽기만 — LLM·네트워크 없음. 실패 시 빈 문자열 (심의 비차단).
+        """
+        parts: List[str] = []
+        try:
+            tw = getattr(self._expert_orch, "trade_wiki", None)
+            if tw is not None and hasattr(tw, "query_symbol"):
+                note = tw.query_symbol(symbol)
+                if note:
+                    parts.append(f"종목 노트(과거 거래·최근 리서치): {note[:300]}")
+        except Exception:
+            pass
+        try:
+            if self._expert_orch is not None:
+                sc = self._expert_orch.agents.get("sector_council")
+                if sc is not None:
+                    sec = sector or sc.sector_of_cached(symbol, name)
+                    s_score = sc.sector_score(sec) if sec else None
+                    if sec and s_score is not None:
+                        parts.append(f"섹터 카운슬: {sec} {s_score:+d} (-100~+100)")
+        except Exception:
+            pass
+        return " | ".join(parts)
+
     # ── 핵심 심의 ──────────────────────────────────────────
     async def _deliberate(
         self,
@@ -203,8 +229,13 @@ class TradingTeam:
             # 2) Research 팀 토론 (LLM)
             #    보유 종목이든 후보든 동일하게 "지금 사도 되는가"를 묻는다.
             #    보유 종목에 대해 "매수 불가" 결론이 나오면 곧 청산 근거가 된다.
+            #    2026-08-07: 종목 위키·섹터 카운슬 컨텍스트를 시장 컨텍스트에 결합
+            _ctx = self._market_context()
+            _sym_ctx = self._symbol_context(symbol, name, sector)
+            if _sym_ctx:
+                _ctx = (_ctx + "\n" if _ctx else "") + _sym_ctx
             debate = await self.research.debate(
-                symbol, name, reports, self._market_context()
+                symbol, name, reports, _ctx
             )
             verdict.debate = debate
 
