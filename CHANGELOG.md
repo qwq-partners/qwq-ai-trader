@@ -1,5 +1,20 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-07 — fix(data): ETF 수익률 시점 역전 결함 — get_daily_prices 오름차순 미반영 (P1)
+
+브리핑 리포트 점검 요청("반도체 +64가 맞나") 중 발견. `_calc_etf_returns`(및 전신
+`_calc_etf_momentum` — **도입 이래 동일 결함**)가 `get_daily_prices` 반환을
+최신순으로 가정했으나 실제는 **오래된 순서**(docstring 명시) → 수익률이 시점
+역전된 쓰레기 값. 실측: 반도체 ETF 20세션 -23.4%(KRX)가 +40.5%로 산출.
+
+- 영향: 섹터 카운슬 정량 축(오늘 브리핑 반도체 +64 오염) + **기존 SEPA 섹터
+  점수(0~10pt)·스크리닝 로테이션 보너스(상위 3섹터 +10점)도 같은 값 사용** —
+  강세/약세 섹터가 뒤집힌 채 가점됐을 수 있음.
+- 수정: 최신가=prices[-1], n세션 전=끝에서 n+1번째. 합성 데이터 검증 통과.
+  오염 캐시(etf_momentum.json·multi) 삭제 — 다음 갱신 시 정상값 재생성.
+- 후속 필요: `get_daily_prices` 다른 호출처 9곳(batch_analyzer·kr_screener·
+  core_screener·swing_screener 등)의 순서 가정 감사.
+
 ## 2026-08-07 — feat(wiki): 종목별 위키 차원 신설 — 거래 교훈 + 전문가 리서치 노트
 
 사용자 요청("투자 종목별 llm위키 + 전문가 수집 시 투자정보도 축적"). 기존 TradeWiki

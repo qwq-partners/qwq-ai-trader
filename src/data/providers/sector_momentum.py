@@ -392,20 +392,26 @@ class SectorMomentumProvider:
             )
 
     async def _calc_etf_returns(self, etf_ticker: str) -> Optional[Dict[str, float]]:
-        """ETF 5일/20일 수익률 계산 (KIS get_daily_prices 1회 조회)."""
+        """ETF 5일/20일 수익률 계산 (KIS get_daily_prices 1회 조회).
+
+        ⚠️ get_daily_prices는 **오래된 순서**(oldest-first)로 반환한다 (docstring 명시).
+        2026-08-07 이전 코드는 prices[0]을 최신가로 가정해 수익률이 시점 역전됐었음
+        (반도체 실측 -23.4%가 +40.5%로 산출되던 결함 — 브리핑 제보로 발견).
+        """
         try:
             prices = await self._broker.get_daily_prices(etf_ticker, days=25)
             if not prices or len(prices) < 2:
                 return None
 
-            # 최신 종가
-            latest = prices[0]
+            # 최신 종가 = 리스트 마지막 (oldest-first)
+            latest = prices[-1]
             current_price = float(latest.get("stck_clpr") or latest.get("close") or 0)
             if current_price <= 0:
                 return None
 
             def _ret(n_days: int) -> Optional[float]:
-                idx = min(n_days, len(prices) - 1)
+                # n_days 세션 전 = 끝에서 n_days+1번째
+                idx = max(0, len(prices) - 1 - n_days)
                 old_price = float(
                     prices[idx].get("stck_clpr") or prices[idx].get("close") or 0
                 )
