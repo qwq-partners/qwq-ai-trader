@@ -1,5 +1,29 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-08 — feat(analytics): Codex 전략 리뷰 3대 과제 착수 — 성과 원장·counterfactual·배분 재조정
+
+Codex 딥 다이브 결론("수익 엔진은 Gap/SEPA 규칙, AI 계층은 수익 기여 미증명,
+성과 계측이 최우선") 승인 후 실행.
+
+- **과제① 포지션 단위 성과 원장** (`src/analytics/position_ledger.py`):
+  분할익절이 매도 이벤트마다 별도 승리로 집계돼 승률·손익비가 부풀려지던 문제
+  (위키·진화 입력 오염)의 근본 해결. BUY fill → open 누적(수량가중 평단·수수료) →
+  부분매도 누적 → 전량 청산 시 확정 레코드 (`position_ledger.jsonl`, 순손익·
+  수수료 총액·MFE·보유일·부분청산 내역). engine fill 경로 훅 (실패 시 매매 비차단).
+  `stats_by_strategy()`로 포지션 단위 승률/PF 집계 — 향후 배분·진화 평가의 유일 기준.
+- **과제①/③ counterfactual 추적기** (`src/analytics/counterfactual_tracker.py`):
+  rule11/12 shadow 차단 후보의 "만약 거래했다면" r1/r5/r20 수익률을 일일 추적
+  (품질검증 20:25 잡에 배선, 가상 진입가=감지일 종가). 토요일 주간 성적표 텔레그램 —
+  "5일 뒤 하락 적중률"로 AI 게이트의 실제 손실 방어 기여를 증명/반증.
+- **과제② 배분 재조정** (evolved_overrides): core_holding 30→15%
+  (11건 승률 27%·이벤트 기대값 -2.3% — 신필터 shadow 검증 후 재승격 경로),
+  sepa_trend 20→25% (실적 최상위 추세 전략 재배분). 잔여 5%p 현금 버퍼.
+  kr-strategies.md 배분 표를 실값으로 동기화 (49.2% 등 낡은 표 폐기).
+- 분기 후속 과제 (문서화만): Strategic Swing→SEPA conviction 오버레이 흡수,
+  TCA(체결 슬리피지 계측), 팩터 버킷 위험예산, 팀 심의 counterfactual 소스 추가.
+- 검증: 원장 오프라인 테스트 (분할 2회→포지션 1건, 순손익·MFE 정확),
+  CF추적 합성 테스트 (r1/r5 계산·적중 요약) 통과. 재시작 정상.
+
 ## 2026-08-08 — fix: 주말 Codex 심층 리뷰 3단계 일괄 반영 (P0 1 + P1 13 + P2 반영)
 
 주말 Codex(gpt-5.6-sol) 전략·엔진 병렬 심층 리뷰 → 검증된 23건을 3단계로 수정

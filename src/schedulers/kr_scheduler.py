@@ -4418,6 +4418,29 @@ JSON:
                         except Exception as _qv_err:
                             logger.warning(f"[품질검증] 실행 실패 (무시): {_qv_err}")
 
+                        # counterfactual 추적 갱신 (2026-08-08 과제① — AI 게이트가
+                        # 차단한 후보의 "만약 거래했다면" 수익률을 일일 추적)
+                        try:
+                            from ..analytics.counterfactual_tracker import (
+                                get_counterfactual_tracker,
+                            )
+                            _cf = get_counterfactual_tracker()
+                            await _cf.update(bot.broker)
+                            # 토요일: 주간 성적표 텔레그램
+                            if datetime.now().weekday() == 5:
+                                _cf_summary = _cf.summary()
+                                from src.utils.telegram import get_telegram_notifier
+                                _cf_notifier = get_telegram_notifier()
+                                if _cf_notifier and _cf_summary:
+                                    await _cf_notifier.send_message(
+                                        "📐 AI 게이트 counterfactual 주간 성적표\n"
+                                        "━━━━━━━━━━━━━━━\n"
+                                        f"{_cf_summary}\n"
+                                        "※ '5일 뒤 하락 적중' = 차단이 손실을 막은 비율"
+                                    )
+                        except Exception as _cf_err:
+                            logger.debug(f"[CF추적] 갱신 실패 (무시): {_cf_err}")
+
                         daily_reviewer = bot.daily_reviewer
                         if daily_reviewer:
                             logger.info("[거래리뷰] LLM 종합평가 생성 시작...")

@@ -26,11 +26,14 @@ risk_config:
     strategic_swing: 5.0
     vcp_breakout: 10.0
     rsi2_reversal: 0.0
-    sepa_trend: 20.0
+    # 2026-08-08 Codex 전략 리뷰 과제②: core 30→15 (실적 11건 승률 27%,
+    # 이벤트 기대값 -2.3% — 8월 초 필터 개선의 shadow 검증 후 재승격),
+    # sepa 20→25 (실적 최상위 추세 전략에 재배분). 잔여 5%p는 현금 버퍼.
+    sepa_trend: 25.0
     theme_chasing: 0.0
     momentum_breakout: 0.0
     gap_and_go: 35.0
-    core_holding: 30.0
+    core_holding: 15.0
 exit_manager:
   max_stop_pct: 8.0
   min_stop_pct: 4.0

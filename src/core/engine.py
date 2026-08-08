@@ -635,6 +635,20 @@ class UnifiedEngine:
             if pos.highest_price is None or pos.highest_price < fill.price:
                 pos.highest_price = fill.price
 
+            # 포지션 단위 성과 원장 기록 (2026-08-08 과제① — 실패해도 매매 비차단)
+            try:
+                from ..analytics.position_ledger import get_position_ledger
+                _lg_mkt = "KR" if getattr(pos, "currency", "KRW") == "KRW" else "US"
+                _buy_fee = fill.total_cost - fill.price * Decimal(str(fill.quantity))
+                get_position_ledger(_lg_mkt).on_buy(
+                    symbol, fill.quantity, fill.price,
+                    fee=max(_buy_fee, Decimal("0")),
+                    strategy=str(pos.strategy or ""),
+                    name=pos.name or "", sector=pos.sector or "",
+                )
+            except Exception as _lg_e:
+                logger.debug(f"[원장] BUY 기록 실패 (무시): {_lg_e}")
+
         else:
             # 매도 — fill 수량이 보유 수량 초과 시 보정 (음수 수량 방지)
             sell_qty = fill.quantity
@@ -667,6 +681,17 @@ class UnifiedEngine:
             self.portfolio.cash += fill.total_value - sell_fee
             self.portfolio.daily_pnl += realized_pnl
             self._save_daily_stats()  # 실현손익 즉시 영속화
+
+            # 포지션 단위 성과 원장 기록 (2026-08-08 과제① — 전량 청산 시 자동 확정)
+            try:
+                from ..analytics.position_ledger import get_position_ledger
+                _lg_mkt = "KR" if getattr(pos, "currency", "KRW") == "KRW" else "US"
+                get_position_ledger(_lg_mkt).on_sell(
+                    symbol, sell_qty, fill.price, fee=sell_fee,
+                    highest_price=pos.highest_price,
+                )
+            except Exception as _lg_e:
+                logger.debug(f"[원장] SELL 기록 실패 (무시): {_lg_e}")
 
             # 포지션 종료 시 제거
             if pos.quantity < 0:

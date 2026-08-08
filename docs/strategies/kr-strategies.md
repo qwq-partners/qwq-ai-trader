@@ -1,21 +1,20 @@
 # KR 전략 상세
 
-> 최종 갱신: 2026-05-04 (theme_chasing 폐지, rsi2/gap 단기 회전 분기, 전문가 패널 통합)
+> 최종 갱신: 2026-08-08 (Codex 전략 리뷰 — 배분 표 실값 동기화 + core 30→15 축소)
 
-## 전략 배분 (evolved_overrides.yml 기준)
+## 전략 배분 (evolved_overrides.yml 기준, 2026-08-08~)
 
-| 전략 | 배분 | 상태 | 포지션 크기 |
-|------|------|------|-----------|
-| SEPA Trend | **49.2%** | 활성 | 25% equity |
-| RSI2 Reversal | **0%** | 🚫 **폐지** (2026-08-02) | — |
-| Strategic Swing | **18.8%** | 활성 ⚠️ | 25% equity (SEPA급) |
-| Gap & Go | 9.5% | 활성 | 15% equity |
-| Core Holding | 10% | locked | 10% equity |
-| **Theme Chasing** | **0%** | 🚫 폐지 | - |
-| Momentum Breakout | 0% | 비활성 | - |
+| 전략 | 배분 | 상태 | 비고 |
+|------|------|------|------|
+| Gap & Go | **35%** | 활성 | 실적 최상위 (92건, 이벤트 승률 64%) |
+| SEPA Trend | **25%** | 활성 | 20→25 (2026-08-08, 코어 축소분 재배분) |
+| Core Holding | **15%** | 활성 | 30→15 (승률 27%·기대값 음수 — 신필터 shadow 검증 후 재승격) |
+| VCP Breakout | 10% | 선행 발굴 | 실적 미검증 예약 예산 |
+| Strategic Swing | 5% | 활성 ⚠️ | 독립 알파 아님 — SEPA 오버레이 흡수 검토 대상 (분기 과제) |
+| RSI2 / Theme / Momentum | 0% | 🚫 폐지·비활성 | — |
 
-⚠️ Strategic Swing: trending_bull에서 28.6% 승률 (param-optimizer DB) — bull 전환 시 18.8%
-노출이 역풍 가능성. ranging 레짐에서 85.7% 우수.
+※ 위 이벤트 승률은 분할익절 중복 집계 — 2026-08-08부터 `position_ledger.jsonl`
+(포지션 단위 원장)이 정확한 승률/손익비를 축적한다. 평가는 원장 기준으로 전환할 것.
 
 ## 1차 익절 분기 (단기/중기 회전 차등) — 2026-05-03 추가
 
