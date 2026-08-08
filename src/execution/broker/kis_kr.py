@@ -1924,6 +1924,13 @@ class KISBroker(BaseBroker):
                         )
                         fills.append(fill)
 
+                        # TCA 슬리피지 계측 (2026-08-08 — 결정가 vs 체결가, 실패 무시)
+                        try:
+                            from ...analytics.tca import record_fill_tca
+                            record_fill_tca(order, fill, market="KR")
+                        except Exception as _tca_e:
+                            logger.debug(f"[TCA] 계측 실패 (무시): {_tca_e}")
+
                         # 체결 상태 업데이트 (누적값으로 설정)
                         order.filled_quantity = ccld_qty
                         order.filled_price = Decimal(str(ccld_price))

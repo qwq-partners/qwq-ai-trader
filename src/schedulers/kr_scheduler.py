@@ -4971,6 +4971,23 @@ JSON:
                             except Exception as _cf_err:
                                 logger.debug(f"[CF추적] 주간 성적표 실패 (무시): {_cf_err}")
 
+                            # 주간 TCA 체결 비용 요약 (2026-08-08 후속 과제② —
+                            # 결정가 대비 슬리피지, tca.jsonl 기반)
+                            try:
+                                from ..analytics.tca import tca_summary
+                                _tca_msg = tca_summary(days=7, market="KR")
+                                from src.utils.telegram import get_telegram_notifier
+                                _tca_notifier = get_telegram_notifier()
+                                if _tca_notifier and _tca_msg:
+                                    await _tca_notifier.send_message(
+                                        "🧾 주간 TCA 체결 비용 (전략/방향, +bps = 불리)\n"
+                                        "━━━━━━━━━━━━━━━\n"
+                                        f"{_tca_msg}\n"
+                                        "※ SELL 지정가는 0 근처가 정상 (음수 = 가격 개선)"
+                                    )
+                            except Exception as _tca_err:
+                                logger.debug(f"[TCA] 주간 요약 실패 (무시): {_tca_err}")
+
                             if report.get("status") == "ok":
                                 msg = report.get("telegram_message", "")
                                 if msg:

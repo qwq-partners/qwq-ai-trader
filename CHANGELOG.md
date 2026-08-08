@@ -1,5 +1,27 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-08 — feat(analytics): TCA 체결 슬리피지 계측 (Codex 후속 과제②)
+
+주문 결정가 대비 실제 체결가의 비용(bps)을 계측. 우려했던 "엔진 여러 지점
+배관"은 불필요 — 모든 KR 주문 경로(엔진·배치·안전자산·수동·폴백)가
+`broker.submit_order → _pending_orders → check_fills()`로 수렴하므로
+브로커 체결 매칭 지점 한 곳에만 훅.
+
+- **`src/analytics/tca.py` 신규**: `record_fill_tca(order, fill)` —
+  cost_bps(+ = 불리, BUY/SELL 부호 통일)·detect_delay_sec·전략·주문유형을
+  `~/.cache/ai_trader/tca.jsonl`에 append. 50bps 이상 이탈은 즉시 WARNING.
+  `tca_summary(days)` — 전략×방향별 n/평균/최악 bps.
+- **`kis_kr.py check_fills()`**: Fill 생성 직후 계측 훅 (부분 체결은 증분마다
+  1레코드, 실패는 전부 삼킴 — 매매 비차단). 체결 간주(assumed fill) 경로는
+  check_fills를 타지 않아 자연 배제 (실체결가만 계측).
+- **`kr_scheduler.py` 토요일 성적표**: counterfactual 성적표 직후 주간 TCA
+  요약 텔레그램 발송 (데이터 없으면 침묵).
+- 부호 규칙: BUY (fill−decision)/decision, SELL (decision−fill)/decision ×10000.
+  SELL 지정가는 decision=매수1호가라 0 근처가 정상, 음수 = 가격 개선.
+- US는 `_USEngineBundle` 별도 경로 — US 원장 훅 후속 작업 시 함께 배선 예정.
+- 검증: 합성 Order/Fill 셀프체크 (BUY +50bps/SELL 부호/None 가격 스킵/요약
+  집계) 통과, py_compile 3파일, 재시작 정상.
+
 ## 2026-08-08 — feat(analytics): Codex 전략 리뷰 3대 과제 착수 — 성과 원장·counterfactual·배분 재조정
 
 Codex 딥 다이브 결론("수익 엔진은 Gap/SEPA 규칙, AI 계층은 수익 기여 미증명,
