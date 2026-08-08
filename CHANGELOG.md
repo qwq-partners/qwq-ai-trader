@@ -1,5 +1,20 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-08 — feat(analytics): US 포지션 원장 훅 배선 (Codex 후속, 백로그 완료)
+
+KR과 동일한 포지션 단위 성과 원장을 US 체결 경로에 배선.
+
+- **`us_scheduler.py _on_order_filled()`**: BUY(전략/이름/섹터 세팅 후)·SELL
+  (TradeResult 직후) 지점에 `get_position_ledger("US")` 훅 —
+  `position_ledger_us.jsonl` / `position_ledger_open_us.json` 축적 시작.
+  US는 zero-commission이라 fee=0.
+- 한계 (의도): 체결 간주(assumed fill·포트폴리오 기반 감지) 경로는
+  `_on_order_filled`를 타지 않아 미기록 — 수량 불일치 발생 시 원장이
+  unreliable 처리해 통계에서 자동 배제 (KR 리뷰 P1과 동일 메커니즘).
+- US TCA는 보류 — US는 KIS 시장가 미지원(전량 지정가)이라 슬리피지 정보량이
+  낮고 현재 US 미운용. US 재가동 시 `_on_order_filled`에 함께 배선.
+- engine.py의 "US 훅 후속 작업" 주석 현행화.
+
 ## 2026-08-08 — refactor(strategy): Strategic Swing 폐지 → SEPA conviction 오버레이 흡수 (Codex 후속)
 
 Codex 재분류("strategic_swing은 독립 알파가 아니라 SEPA 부분집합") 반영.

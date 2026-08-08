@@ -2740,6 +2740,19 @@ class USScheduler:
             except Exception as e:
                 logger.debug(f"[US 체결] {symbol} ExitManager 등록 실패: {e}")
 
+            # 포지션 단위 성과 원장 (2026-08-08 후속 — KR과 동일 원장, US 접미사)
+            # 주의: 체결 간주(assumed fill) 경로는 이 함수를 타지 않아 미기록 —
+            # 수량 불일치 시 원장이 unreliable 처리해 통계에서 자동 배제된다.
+            try:
+                from ..analytics.position_ledger import get_position_ledger
+                get_position_ledger("US").on_buy(
+                    symbol, filled_qty, Decimal(str(filled_price)),
+                    strategy=str(pos.strategy or ""),
+                    name=pos.name or "", sector=pos.sector or "",
+                )
+            except Exception as _lg_e:
+                logger.debug(f"[원장US] BUY 기록 실패 (무시): {_lg_e}")
+
             # TradeStorage DB + 캐시 기록
             if eng.trade_storage:
                 _raw_score = pending.get("signal_score", 0)
@@ -2847,6 +2860,17 @@ class USScheduler:
                     reason=pending.get("reason", ""),
                 )
                 eng.risk_manager.record_trade_result(is_win=trade.is_win)
+
+                # 포지션 단위 성과 원장 (2026-08-08 후속 — 전량 청산 시 자동 확정)
+                try:
+                    from ..analytics.position_ledger import get_position_ledger
+                    get_position_ledger("US").on_sell(
+                        symbol, filled_qty, Decimal(str(filled_price)),
+                        reason=pending.get("reason", ""),
+                        highest_price=pos.highest_price,
+                    )
+                except Exception as _lg_e:
+                    logger.debug(f"[원장US] SELL 기록 실패 (무시): {_lg_e}")
 
                 # TradeStorage DB 기록
                 trade_id = getattr(pos, 'trade_id', None)

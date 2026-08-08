@@ -636,8 +636,7 @@ class UnifiedEngine:
                 pos.highest_price = fill.price
 
             # 포지션 단위 성과 원장 기록 (2026-08-08 과제① — 실패해도 매매 비차단)
-            # ⚠️ 현재 KR 전용 — US는 _USEngineBundle 별도 경로라 이 훅을 타지 않음
-            # (US 훅은 후속 작업, 리뷰 P2)
+            # US는 _USEngineBundle 별도 경로 — us_scheduler._on_order_filled에 동일 훅 배선됨
             try:
                 from ..analytics.position_ledger import get_position_ledger
                 _lg_mkt = "KR" if getattr(pos, "currency", "KRW") == "KRW" else "US"
