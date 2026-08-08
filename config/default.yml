@@ -123,6 +123,21 @@ kr:
       theme_chasing: 10.0
       strategic_swing: 0.0  # 🚫 폐지 (2026-08-08 — SEPA conviction 오버레이로 흡수, 기존 포지션 청산 경로용 키 유지)
       vcp_breakout: 10.0    # 선행 발굴 라인 (2026-08-03 신설, 검증 전이므로 보수적 배분)
+    # 팩터 버킷 위험예산 (2026-08-08, Codex 로드맵 Phase 2 — shadow 관측 먼저)
+    # 상관 전략들이 개별 캡 합만큼 동시 배치되는 것을 팩터 단위로 제한.
+    # enforce=false: 초과 시 로그만 (G5_factor shadow), 관측 후 true로 승격
+    factor_budgets:
+      enforce: false
+      buckets:
+        trend:      # 추세추종 계열 — 개별 캡 합 75%보다 낮게 (동시 만석 방지)
+          max_pct: 65.0
+          strategies: [sepa_trend, gap_and_go, momentum_breakout, vcp_breakout, strategic_swing]
+        quality:    # 장기·퀄리티 계열
+          max_pct: 20.0
+          strategies: [core_holding, value_growth]
+        reversion:  # 역추세 계열 (현재 전부 폐지 — 재활성 대비 예약)
+          max_pct: 10.0
+          strategies: [rsi2_reversal, theme_chasing]
     hybrid:
       enabled: false
       day_trading_pct: 20.0

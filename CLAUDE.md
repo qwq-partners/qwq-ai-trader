@@ -138,6 +138,10 @@
 | 최소 포지션 금액 | $50 | |
 | 연속 손실 중단 | 3회 | 사이징 50% 축소 |
 
+### 팩터 버킷 위험예산 (2026-08-08~, shadow 관측 중)
+- trend 65% / quality 20% / reversion 10% — 상관 전략 묶음 총 노출 캡 (`default.yml factor_budgets`)
+- 현재 `enforce: false` (초과 시 로그만) — 2주 관측 후 승격, 상세 `docs/risk/risk-and-exit.md`
+
 ### 수수료
 - **KR** (한투 BanKIS, 2026년~): 매수 0.014%, 매도 0.213% (수수료+거래세 0.20%), 왕복 약 0.227%
 - **US** (KIS 해외주식): Zero-commission

@@ -1304,6 +1304,45 @@ class RiskManager:
         """코어홀딩 실제 점유 금액 (비코어 풀 보호용)"""
         return self.engine.portfolio.get_strategy_allocation("core_holding")
 
+    def _check_factor_budget(self, strategy_name: str) -> Optional[str]:
+        """팩터 버킷 위험예산 초과 검사 (2026-08-08, Codex 로드맵 Phase 2)
+
+        strategy_name이 속한 버킷의 전략들 시장가치 합이 버킷 캡(% of equity)
+        이상이면 사유 문자열, 아니면 None. 설정 부재/오류 시 None (fail-open —
+        관측용 상위 캡이므로 G5_budget 개별 캡이 1차 방어선).
+        """
+        try:
+            _fb = self.config.factor_budgets or {}
+            buckets = _fb.get("buckets") or {}
+            if not buckets:
+                return None
+            equity = self.engine.portfolio.total_equity
+            if equity <= 0:
+                return None
+            for name, bucket in buckets.items():
+                strategies = bucket.get("strategies") or []
+                if strategy_name not in strategies:
+                    continue
+                max_pct = float(bucket.get("max_pct", 0) or 0)
+                if max_pct <= 0:
+                    return None
+                cap = equity * Decimal(str(max_pct / 100))
+                used = sum(
+                    (self.engine.portfolio.get_strategy_allocation(s)
+                     for s in strategies),
+                    Decimal("0"),
+                )
+                if used >= cap:
+                    return (
+                        f"팩터 '{name}' 예산 소진 "
+                        f"(캡 {max_pct:.0f}%={float(cap):,.0f}, "
+                        f"사용 {float(used):,.0f}, 신규 {strategy_name})"
+                    )
+                return None  # 전략은 첫 매칭 버킷에만 귀속
+        except Exception as e:
+            logger.debug(f"[리스크] 팩터 예산 검사 실패 (무시): {e}")
+        return None
+
     async def _try_evict_weakest_position(
         self, *, new_symbol: str, new_score: float, new_reason: str
     ) -> Optional[str]:
@@ -1811,6 +1850,19 @@ class RiskManager:
                                                f"(한도={float(_budget_cap):,.0f}, "
                                                f"사용={float(_current):,.0f})")
                     return None
+
+            # 팩터 버킷 위험예산 (2026-08-08 — Codex 로드맵 Phase 2)
+            # 상관 전략 묶음(추세/퀄리티/역추세)의 총 노출을 팩터 단위로 캡.
+            # enforce=false 동안은 shadow: 초과를 로그로만 남겨 캡 적정성 관측.
+            _fb_reason = self._check_factor_budget(_strat_name)
+            if _fb_reason is not None:
+                _fb = self.config.factor_budgets or {}
+                if _fb.get("enforce", False):
+                    logger.warning(f"[리스크] 팩터 예산 차단: {_fb_reason}")
+                    self._log_sig(event, event_type="blocked", block_gate="G5_factor",
+                                  block_reason=_fb_reason)
+                    return None
+                logger.info(f"[리스크] (shadow) 팩터 예산 초과 관측: {_fb_reason} — 통과")
 
         # 주문 실패 쿨다운 체크 (BUY만 — 2026-08-05 P2)
         # SELL(청산) 신호까지 5분 차단하면 손절/익절 시그널이 소실됨 → 매도는 항상 통과

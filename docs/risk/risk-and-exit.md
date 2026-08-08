@@ -31,6 +31,24 @@
 
 ## KR 리스크 (src/risk/manager.py + engine.py)
 
+### 팩터 버킷 위험예산 (2026-08-08~, shadow 관측 중)
+
+상관 전략 묶음의 총 노출을 팩터 단위로 캡 — 개별 전략 캡(G5_budget) 합만큼
+동시 만석되는 것을 방지하는 상위 게이트 (`engine.RiskManager._check_factor_budget`,
+게이트명 `G5_factor`).
+
+| 버킷 | 캡 (% equity) | 전략 |
+|------|------------|------|
+| trend | 65% | sepa_trend, gap_and_go, momentum_breakout, vcp_breakout, strategic_swing (개별 합 75%) |
+| quality | 20% | core_holding, value_growth |
+| reversion | 10% | rsi2_reversal, theme_chasing (전부 폐지 — 예약) |
+
+- 설정: `default.yml risk.kr.factor_budgets` (`RiskConfig.factor_budgets`)
+- **`enforce: false`(현재)**: 초과 시 `(shadow) 팩터 예산 초과 관측` 로그만 남기고 통과
+  — 캡 적정성 관측 후 true로 승격
+- fail-open: 설정 부재/오류 시 통과 (개별 전략 캡이 1차 방어선)
+- 전략은 첫 매칭 버킷에만 귀속
+
 ### 일일 한도
 | 항목 | 값 | 비고 |
 |------|---|------|

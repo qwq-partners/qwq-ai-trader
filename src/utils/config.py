@@ -79,6 +79,7 @@ def _build_risk_config(risk_cfg: Dict[str, Any]) -> RiskConfig:
         flex_extra_positions=int(risk_cfg.get("flex_extra_positions", 2)),
         flex_cash_threshold_pct=float(risk_cfg.get("flex_cash_threshold_pct", 10.0)),
         max_positions_per_sector=int(risk_cfg.get("max_positions_per_sector", 3)),
+        factor_budgets=risk_cfg.get("factor_budgets", {}) or {},
         strategy_allocation=risk_cfg.get("strategy_allocation", {
             "core_holding": 30.0,
             "sepa_trend": 30.0,

@@ -618,6 +618,11 @@ class RiskConfig:
     # 하이브리드 전략 (KR)
     hybrid: HybridConfig = field(default_factory=HybridConfig)
 
+    # 팩터 버킷 위험예산 (2026-08-08 — 상관 전략 묶음의 총 노출 캡)
+    # {"enforce": bool, "buckets": {이름: {"max_pct": float, "strategies": [...]}}}
+    # enforce=false면 shadow (초과 시 로그만). 빈 dict = 기능 비활성.
+    factor_budgets: Dict[str, Any] = field(default_factory=dict)
+
     # 전략별 총 예산 배분 (% of total_equity, 0=제한없음)
     strategy_allocation: Dict[str, float] = field(default_factory=lambda: {
         "core_holding": 30.0,

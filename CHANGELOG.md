@@ -1,5 +1,23 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-08 — feat(risk): 팩터 버킷 위험예산 도입 — shadow 관측 모드 (Codex 로드맵 Phase 2 착수)
+
+상관 전략 묶음(추세/퀄리티/역추세)의 총 노출을 팩터 단위로 캡하는 상위
+게이트. 개별 전략 캡(G5_budget)의 합(trend 75%)만큼 동시 만석되는 것을 방지.
+
+- **`RiskConfig.factor_budgets`** 신규 필드 + `_build_risk_config` 배선 +
+  `default.yml risk.kr.factor_budgets` (trend 65% / quality 20% / reversion 10%)
+- **`engine.RiskManager._check_factor_budget()`**: 버킷 전략들 시장가치 합 ≥
+  캡이면 사유 반환. on_signal G5_budget 직후 검사 — **enforce=false(현재)면
+  shadow 로그만** 남기고 통과, true면 G5_factor 차단 + 시그널 로그 기록.
+- fail-open 설계: 설정 부재/오류 시 통과 (개별 캡이 1차 방어선인 관측용
+  상위 캡이므로 — 안전자산 루프 fail-closed 교훈과 반대 방향이 맞는 케이스).
+- 승격 경로: 2주 shadow 관측(모니터링 체크포인트 등록) → 캡 확정 → enforce.
+- 검증: 합성 포트폴리오 셀프체크 5케이스(정확 도달 차단·미달 통과·미소속
+  통과·quality 캡·설정 부재 fail-open) 통과, py_compile, 재시작 정상.
+- **이로써 2026-08-08 Codex 후속 백로그 4건 전부 완료** (TCA → Swing 오버레이
+  → US 원장 훅 → 팩터 위험예산).
+
 ## 2026-08-08 — feat(analytics): US 포지션 원장 훅 배선 (Codex 후속, 백로그 완료)
 
 KR과 동일한 포지션 단위 성과 원장을 US 체결 경로에 배선.
