@@ -30,6 +30,8 @@ _SOURCES = {
     "rule11": _CACHE_DIR / "rule11_shadow_log.jsonl",
     "rule12": _CACHE_DIR / "rule12_shadow_log.jsonl",
 }
+# 팀 심의 판정 (2026-08-08 후속 — HOLD/거부 후보의 기회비용 추적)
+_TEAM_VERDICT_DIR = _CACHE_DIR / "team_verdicts"
 _HORIZONS = (("r1", 1), ("r5", 5), ("r20", 20))
 
 
@@ -85,6 +87,42 @@ class CounterfactualTracker:
                         continue
             except Exception as e:
                 logger.debug(f"[CF추적] {source} 읽기 실패: {e}")
+
+        # 팀 심의 HOLD/거부 판정 (2026-08-08 후속) — "심의가 막은 후보"의 후속 추적
+        try:
+            for vf in sorted(_TEAM_VERDICT_DIR.glob("verdicts_*.json")):
+                day_raw = vf.stem.replace("verdicts_", "")
+                if len(day_raw) != 8:
+                    continue
+                day = f"{day_raw[:4]}-{day_raw[4:6]}-{day_raw[6:]}"
+                try:
+                    verdicts = json.loads(vf.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                for v in (verdicts if isinstance(verdicts, list) else []):
+                    try:
+                        sym = v.get("symbol", "")
+                        dec = v.get("decision") or {}
+                        stance = str(dec.get("stance", "")).lower()
+                        # 매수 승인은 실거래로 추적됨 — 막힌 후보만 counterfactual
+                        if not sym or (dec.get("approved") and stance == "buy"):
+                            continue
+                        key = f"team_hold|{sym}|{day}"
+                        if key in self._state:
+                            continue
+                        self._state[key] = {
+                            "symbol": sym,
+                            "source": "team_hold",
+                            "date": day,
+                            "sector": None,
+                            "entry_px": None,
+                            "r1": None, "r5": None, "r20": None,
+                        }
+                        added += 1
+                    except (TypeError, AttributeError):
+                        continue
+        except Exception as e:
+            logger.debug(f"[CF추적] 팀 심의 읽기 실패: {e}")
         return added
 
     # ── 갱신 ───────────────────────────────────────────────
