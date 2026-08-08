@@ -91,6 +91,16 @@ class CounterfactualTracker:
     async def update(self, broker) -> Dict[str, int]:
         """미완성 항목의 가상 진입가·후속 수익률 채움 (일일 1회 호출)"""
         added = self._ingest_sources()
+        # 완료(r20 채움) 후 180일 지난 항목 정리 — 무한 누적 방지 (리뷰 P2)
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            _cut = (_dt.now() - _td(days=180)).strftime("%Y-%m-%d")
+            _old = [k for k, v in self._state.items()
+                    if v.get("r20") is not None and str(v.get("date", "")) < _cut]
+            for k in _old:
+                del self._state[k]
+        except Exception:
+            pass
         filled = 0
         pending = [
             (k, v) for k, v in self._state.items()

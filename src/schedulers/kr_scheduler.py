@@ -4426,18 +4426,9 @@ JSON:
                             )
                             _cf = get_counterfactual_tracker()
                             await _cf.update(bot.broker)
-                            # 토요일: 주간 성적표 텔레그램
-                            if datetime.now().weekday() == 5:
-                                _cf_summary = _cf.summary()
-                                from src.utils.telegram import get_telegram_notifier
-                                _cf_notifier = get_telegram_notifier()
-                                if _cf_notifier and _cf_summary:
-                                    await _cf_notifier.send_message(
-                                        "📐 AI 게이트 counterfactual 주간 성적표\n"
-                                        "━━━━━━━━━━━━━━━\n"
-                                        f"{_cf_summary}\n"
-                                        "※ '5일 뒤 하락 적중' = 차단이 손실을 막은 비율"
-                                    )
+                            # 주간 성적표는 토요일 후속복기 루프에서 발송 —
+                            # 이 루프는 is_kr_market_holiday 게이트로 주말에 돌지 않음
+                            # (최종 리뷰 P0: 여기 두면 영원히 미발송)
                         except Exception as _cf_err:
                             logger.debug(f"[CF추적] 갱신 실패 (무시): {_cf_err}")
 
@@ -4958,6 +4949,27 @@ JSON:
                             report = await reviewer.run_weekly()
                             last_run_week = iso_week
                             _save_last_week(iso_year, iso_week)
+
+                            # AI 게이트 counterfactual 주간 성적표 (2026-08-08 —
+                            # 토요일에 도는 이 루프에서 발송; 저녁 잡은 주말 미동작)
+                            try:
+                                from ..analytics.counterfactual_tracker import (
+                                    get_counterfactual_tracker,
+                                )
+                                _cf = get_counterfactual_tracker()
+                                await _cf.update(bot.broker)
+                                _cf_summary = _cf.summary()
+                                from src.utils.telegram import get_telegram_notifier
+                                _cf_notifier = get_telegram_notifier()
+                                if _cf_notifier and _cf_summary:
+                                    await _cf_notifier.send_message(
+                                        "📐 AI 게이트 counterfactual 주간 성적표\n"
+                                        "━━━━━━━━━━━━━━━\n"
+                                        f"{_cf_summary}\n"
+                                        "※ '5일 뒤 하락 적중' = 차단이 손실을 막은 비율"
+                                    )
+                            except Exception as _cf_err:
+                                logger.debug(f"[CF추적] 주간 성적표 실패 (무시): {_cf_err}")
 
                             if report.get("status") == "ok":
                                 msg = report.get("telegram_message", "")

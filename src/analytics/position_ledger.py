@@ -59,9 +59,13 @@ class PositionLedger:
         return {}
 
     def _save_open(self) -> None:
+        # fill 콜백(이벤트 루프)에서 호출됨 — fsync 포함 atomic_write는 디스크
+        # 컨텐션 시 수십 ms 블로킹 가능 (리뷰 P1). open 상태는 유실돼도
+        # 'unreliable 스킵'으로 자가 회복되는 분석 데이터라 plain write 사용.
         try:
-            from ..utils.atomic_io import atomic_write_json
-            atomic_write_json(self._open_path, self._open)
+            self._open_path.write_text(
+                json.dumps(self._open, ensure_ascii=False), encoding="utf-8"
+            )
         except Exception as e:
             logger.warning(f"[원장] open 상태 저장 실패: {e}")
 
@@ -114,14 +118,26 @@ class PositionLedger:
                 # 원장 도입 전 진입한 포지션 등 — 추적 불가, 조용히 스킵
                 logger.debug(f"[원장] {symbol} open 레코드 없음 — 매도 기록 스킵")
                 return
-            rec["exits"].append({
-                "time": datetime.now().isoformat(),
-                "qty": int(qty),
-                "price": str(price),
-                "fee": str(fee),
-                "reason": reason[:80],
-            })
-            rec["remaining_qty"] = max(0, int(rec.get("remaining_qty", 0)) - int(qty))
+            # 원장 잔량 초과분은 기록하지 않는다 (리뷰 P1: 도입 전 보유+이후 추가매수
+            # 케이스에서 초과 수량이 proceeds에 들어가 손익이 왜곡됐음).
+            # 불일치 발생 시 레코드에 unreliable 표시 → 통계에서 배제.
+            _rem = int(rec.get("remaining_qty", 0))
+            _qty_eff = min(int(qty), _rem)
+            if _qty_eff < int(qty):
+                logger.warning(
+                    f"[원장] {symbol} 수량 불일치: 매도 {qty} > 원장 잔량 {_rem} "
+                    f"— 초과분 미기록, 레코드 unreliable 처리"
+                )
+                rec["unreliable"] = True
+            if _qty_eff > 0:
+                rec["exits"].append({
+                    "time": datetime.now().isoformat(),
+                    "qty": _qty_eff,
+                    "price": str(price),
+                    "fee": str(fee),
+                    "reason": reason[:80],
+                })
+            rec["remaining_qty"] = max(0, _rem - int(qty))
             if highest_price is not None:
                 prev_high = _dec(rec.get("highest_price", "0"))
                 if _dec(highest_price) > prev_high:
@@ -164,6 +180,7 @@ class PositionLedger:
                 "symbol", "name", "strategy", "sector", "market",
                 "entry_time", "avg_entry_price", "initial_qty", "exits",
             )},
+            "unreliable": bool(rec.get("unreliable", False)),
             "buy_fees": str(buy_fees),
             "sell_fees": str(sell_fees),
             "fees_total": str(buy_fees + sell_fees),
@@ -174,8 +191,11 @@ class PositionLedger:
             "closed_at": datetime.now().isoformat(),
         }
         try:
+            import os as _os
             with self._ledger_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f.flush()
+                _os.fsync(f.fileno())  # 확정 레코드는 내구성 보장 (리뷰 P2)
             logger.info(
                 f"[원장] {symbol} 포지션 확정: {net_pnl:+,.0f}원 ({net_pnl_pct:+.2f}%), "
                 f"부분청산 {len(rec.get('exits', []))}회, 보유 {holding_days}일"
@@ -196,6 +216,8 @@ class PositionLedger:
             for line in self._ledger_path.read_text(encoding="utf-8").splitlines():
                 try:
                     r = json.loads(line)
+                    if r.get("unreliable"):
+                        continue  # 수량 불일치 레코드는 통계 제외 (리뷰 P1)
                     closed = datetime.fromisoformat(r.get("closed_at", "")).timestamp()
                     if closed < cutoff:
                         continue
