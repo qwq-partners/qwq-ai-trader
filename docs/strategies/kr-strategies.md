@@ -1,16 +1,16 @@
 # KR 전략 상세
 
-> 최종 갱신: 2026-08-08 (Codex 전략 리뷰 — 배분 표 실값 동기화 + core 30→15 축소)
+> 최종 갱신: 2026-08-08 (Strategic Swing 폐지 — SEPA conviction 오버레이 흡수)
 
 ## 전략 배분 (evolved_overrides.yml 기준, 2026-08-08~)
 
 | 전략 | 배분 | 상태 | 비고 |
 |------|------|------|------|
 | Gap & Go | **35%** | 활성 | 실적 최상위 (92건, 이벤트 승률 64%) |
-| SEPA Trend | **25%** | 활성 | 20→25 (2026-08-08, 코어 축소분 재배분) |
+| SEPA Trend | **30%** | 활성 | 25→30 (2026-08-08, Strategic Swing 흡수분 +5) |
 | Core Holding | **15%** | 활성 | 30→15 (승률 27%·기대값 음수 — 신필터 shadow 검증 후 재승격) |
 | VCP Breakout | 10% | 선행 발굴 | 실적 미검증 예약 예산 |
-| Strategic Swing | 5% | 활성 ⚠️ | 독립 알파 아님 — SEPA 오버레이 흡수 검토 대상 (분기 과제) |
+| Strategic Swing | 0% | 🚫 폐지 (2026-08-08) | Codex 재분류 "SEPA 부분집합" — 2계층 이상 복합신호는 SEPA 시그널 +5점 conviction 오버레이로 흡수 (`batch_analyzer._apply_swing_conviction_overlay`). 기존 포지션 청산 경로는 유지 |
 | RSI2 / Theme / Momentum | 0% | 🚫 폐지·비활성 | — |
 
 ※ 위 이벤트 승률은 분할익절 중복 집계 — 2026-08-08부터 `position_ledger.jsonl`

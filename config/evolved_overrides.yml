@@ -23,13 +23,16 @@ risk_config:
   base_position_pct: 25.0
   max_positions: 8
   strategy_allocation:
-    strategic_swing: 5.0
+    # 2026-08-08 후속: strategic_swing 폐지 — Codex 재분류 "SEPA 부분집합,
+    # 독립 알파 아님" → batch_analyzer SEPA conviction 오버레이(+5점)로 흡수,
+    # 배분 5%p는 sepa_trend로 이동 (25→30)
+    strategic_swing: 0.0
     vcp_breakout: 10.0
     rsi2_reversal: 0.0
     # 2026-08-08 Codex 전략 리뷰 과제②: core 30→15 (실적 11건 승률 27%,
     # 이벤트 기대값 -2.3% — 8월 초 필터 개선의 shadow 검증 후 재승격),
     # sepa 20→25 (실적 최상위 추세 전략에 재배분). 잔여 10%p는 현금 버퍼 (합계 90).
-    sepa_trend: 25.0
+    sepa_trend: 30.0
     theme_chasing: 0.0
     momentum_breakout: 0.0
     gap_and_go: 35.0

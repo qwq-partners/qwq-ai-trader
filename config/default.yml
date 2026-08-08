@@ -121,7 +121,7 @@ kr:
       momentum_breakout: 0.0
       gap_and_go: 10.0
       theme_chasing: 10.0
-      strategic_swing: 0.0  # batch_analyzer가 동적 생성하는 복합신호 — engine.G5_budget 게이트 통과를 위해 키 등록 필요
+      strategic_swing: 0.0  # 🚫 폐지 (2026-08-08 — SEPA conviction 오버레이로 흡수, 기존 포지션 청산 경로용 키 유지)
       vcp_breakout: 10.0    # 선행 발굴 라인 (2026-08-03 신설, 검증 전이므로 보수적 배분)
     hybrid:
       enabled: false

@@ -198,11 +198,6 @@ class BatchAnalyzer:
         # 코어홀딩 상태 영속화 파일
         self._core_state_path = Path.home() / ".cache" / "ai_trader" / "core_holding_state.json"
 
-        # strategic_swing 최소 점수 (2계층 이상 복합 시그널만)
-        self._strategic_min_score = self._config.get(
-            "strategic_swing", {}
-        ).get("min_score", 70.0)
-
         # 대기 시그널
         self._pending: List[PendingSignal] = []
         self._signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
@@ -332,7 +327,10 @@ class BatchAnalyzer:
 
         rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
         sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
-        strategic_signals = self._generate_strategic_signals(candidates)
+        # strategic_swing 폐지 → SEPA conviction 오버레이로 흡수 (2026-08-08
+        # Codex 재분류: 독립 알파가 아니라 SEPA 부분집합). 2계층 이상 복합신호는
+        # 별도 시그널 대신 동일 종목 SEPA 시그널에 +5점 보너스.
+        self._apply_swing_conviction_overlay(sepa_signals, candidates)
         vcp_signals = self._generate_vcp_signals(candidates)
 
         # ── 시장 레짐 감지 및 적용 ───────────────────────────────────────────
@@ -344,23 +342,22 @@ class BatchAnalyzer:
         self._market_regime = regime
 
         if regime == "bear":
-            # 하락장: SEPA(추세추종) 전면 차단, STRATEGIC_SWING 차단
+            # 하락장: SEPA(추세추종) 전면 차단
             # VCP 돌파도 추세추종 계열이므로 동일하게 차단
             # RSI2(역추세)는 허용하되 최소 점수 상향
-            bear_sepa_blocked = len(sepa_signals) + len(strategic_signals) + len(vcp_signals)
+            bear_sepa_blocked = len(sepa_signals) + len(vcp_signals)
             sepa_signals = []
-            strategic_signals = []
             vcp_signals = []
             rsi2_signals = [s for s in rsi2_signals if s.score >= 70]  # RSI2 기준 강화
             logger.warning(
                 f"[배치분석] 🔴 하락장 감지 "
                 f"(KOSPI 5일={kospi_info.get('c5', 0):+.1f}%, "
                 f"20일={kospi_info.get('c20', 0):+.1f}%) "
-                f"→ SEPA/전략스윙 {bear_sepa_blocked}개 차단, "
+                f"→ SEPA/VCP {bear_sepa_blocked}개 차단, "
                 f"RSI2만 허용(score≥70): {len(rsi2_signals)}개"
             )
         elif regime == "caution":
-            # 주의장: SEPA 기준 상향 (+10점), STRATEGIC_SWING은 유지
+            # 주의장: SEPA 기준 상향 (+10점)
             sepa_min_caution = self._sepa.config.min_score + 10
             sepa_signals = [s for s in sepa_signals if s.score >= sepa_min_caution]
             # VCP 돌파도 추세 계열 → 기준 상향. 단 기준선은 VCP 자체 설정에서 읽는다
@@ -384,7 +381,7 @@ class BatchAnalyzer:
             )
         # ────────────────────────────────────────────────────────────────────
 
-        all_signals = rsi2_signals + sepa_signals + strategic_signals + vcp_signals
+        all_signals = rsi2_signals + sepa_signals + vcp_signals
 
         # 동일 종목 중복 제거 (score 높은 것 우선)
         seen: dict = {}
@@ -455,11 +452,10 @@ class BatchAnalyzer:
 
         logger.info(
             f"[배치분석] 스캔 완료: "
-            f"RSI2={len(rsi2_signals)}개, SEPA={len(sepa_signals)}개, "
-            f"전략스윙={len(strategic_signals)}개 -> "
+            f"RSI2={len(rsi2_signals)}개, SEPA={len(sepa_signals)}개 -> "
             f"시그널 {len(result)}개"
         )
-        return result, rsi2_signals, sepa_signals, strategic_signals
+        return result
 
     async def run_daily_scan(self):
         """[15:40] 전일 마감 후 일일 배치 스캔 (morning_scan_enabled=false 시 사용)"""
@@ -468,7 +464,7 @@ class BatchAnalyzer:
             result = await self._scan_and_build(expire_today=False)
             if result is None:
                 return
-            pending_list, rsi2_signals, sepa_signals, strategic_signals = result
+            pending_list = result
 
             self._pending = pending_list
             self._save_json()
@@ -498,7 +494,7 @@ class BatchAnalyzer:
             result = await self._scan_and_build(expire_today=True)
             if result is None:
                 return
-            pending_list, rsi2_signals, sepa_signals, strategic_signals = result
+            pending_list = result
 
             # 2. 미국 오버나이트 점수 보정
             us_adj = 0.0
@@ -2077,52 +2073,37 @@ class BatchAnalyzer:
             except Exception:
                 pass
 
-    def _generate_strategic_signals(self, candidates) -> List[Signal]:
-        """strategic_swing 시그널 생성: 2계층 이상 복합신호 종목"""
-        signals = []
-        for c in candidates:
-            # 2계층 이상 복합신호 확인 (구조화된 메타데이터 기반)
-            layers = c.indicators.get("strategic_layers", 0)
+    # strategic_swing conviction 보너스 (2026-08-08 — 구 standalone 전략 흡수분)
+    _SWING_CONVICTION_BONUS = 5.0
+
+    def _apply_swing_conviction_overlay(self, sepa_signals: List[Signal], candidates) -> None:
+        """구 strategic_swing 조건(2계층 이상 복합신호)을 SEPA conviction 보너스로 흡수
+
+        2026-08-08 Codex 재분류: strategic_swing은 독립 알파가 아니라 SEPA
+        부분집합 → 별도 시그널·배분 폐지, 동일 종목 SEPA 시그널에 +5점.
+        복합신호만 있고 SEPA 후보가 아닌 종목은 의도적으로 버린다
+        (독립 진입 근거 없음이 폐지 사유).
+        """
+        layers_by_symbol = {
+            c.symbol: int(c.indicators.get("strategic_layers", 0) or 0)
+            for c in candidates
+        }
+        boosted = 0
+        for sig in sepa_signals:
+            layers = layers_by_symbol.get(sig.symbol, 0)
             if layers < 2:
                 continue
-            if c.score < self._strategic_min_score:
-                continue
-
-            # ATR 유효성 검증 (0/None이면 손절가 산출 불가)
-            atr_check = c.indicators.get("atr_pct")
-            if atr_check is None:
-                atr_check = c.indicators.get("atr_14")
-            if atr_check is None or atr_check <= 0:
-                continue
-
-            entry_price = float(c.entry_price) if c.entry_price else 0
-            if entry_price <= 0:
-                continue
-
-            signal = Signal(
-                symbol=c.symbol,
-                side=OrderSide.BUY,
-                strength=SignalStrength.STRONG,
-                strategy=StrategyType.STRATEGIC_SWING,
-                price=c.entry_price,
-                target_price=c.target_price,
-                stop_price=c.stop_price,
-                score=c.score,
-                confidence=min(c.score / 100.0, 1.0),
-                reason=f"전략적 스윙: {', '.join(c.reasons[:3])}",
-                metadata={
-                    "candidate_name": c.name,
-                    "atr_pct": c.indicators.get("atr_pct", 0),
-                    "strategic_layers": sum(
-                        1 for r in c.reasons
-                        if any(kw in r for kw in ["전문가패널", "수급추세", "VCP"])
-                    ),
-                },
+            sig.score += self._SWING_CONVICTION_BONUS
+            sig.confidence = min(sig.score / 100.0, 1.0)
+            sig.reason = f"{sig.reason} +복합신호 {layers}계층"
+            sig.reasons.append(f"복합신호 {layers}계층 (구 strategic_swing)")
+            sig.metadata["swing_conviction_layers"] = layers
+            boosted += 1
+        if boosted:
+            logger.info(
+                f"[배치분석] SEPA conviction 오버레이: {boosted}개 시그널 "
+                f"+{self._SWING_CONVICTION_BONUS:.0f}점 (구 strategic_swing 흡수)"
             )
-            signals.append(signal)
-
-        logger.info(f"[배치분석] 전략스윙 시그널 {len(signals)}개 생성")
-        return signals
 
     def _generate_vcp_signals(self, candidates) -> List[Signal]:
         """vcp_breakout 시그널 생성 (2026-08-03, 선행 발굴 라인)

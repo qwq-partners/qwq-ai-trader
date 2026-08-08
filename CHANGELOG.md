@@ -1,5 +1,22 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-08 — refactor(strategy): Strategic Swing 폐지 → SEPA conviction 오버레이 흡수 (Codex 후속)
+
+Codex 재분류("strategic_swing은 독립 알파가 아니라 SEPA 부분집합") 반영.
+
+- **`batch_analyzer.py`**: `_generate_strategic_signals()` 삭제 →
+  `_apply_swing_conviction_overlay()` 신규. 2계층 이상 복합신호(strategic_layers)
+  종목의 SEPA 시그널에 +5점 conviction 보너스 (confidence 재계산,
+  reasons에 "복합신호 N계층" 추가, metadata.swing_conviction_layers).
+  복합신호만 있고 SEPA 후보가 아닌 종목은 의도적으로 미발행 (독립 진입 근거
+  없음이 폐지 사유). `_scan_and_build` 반환을 pending 리스트 단일로 단순화
+  (시그널 리스트 3종은 하류 미사용이었음). `_strategic_min_score` 제거.
+- **배분** (evolved_overrides): strategic_swing 5→0%, sepa_trend 25→30% (합계 90 유지).
+- **하위호환 유지**: StrategyType enum·표시명·exit_manager 분기·KOFR 청산
+  트리거의 strategic_swing 참조는 기존 보유 포지션/pending 레코드용으로 존치.
+- 검증: 오버레이 합성 테스트 (3계층 +5점/1계층 미부스트/비SEPA 버림) 통과,
+  py_compile, 재시작 정상.
+
 ## 2026-08-08 — feat(analytics): TCA 체결 슬리피지 계측 (Codex 후속 과제②)
 
 주문 결정가 대비 실제 체결가의 비용(bps)을 계측. 우려했던 "엔진 여러 지점
