@@ -777,6 +777,10 @@ class KRScheduler:
             # ScreenedStock(장중 스크리너)에는 RSI(2) 없음 → batch_analyzer.monitor_positions에서
             # FDR 일봉 데이터로 30분마다 체크 (정확한 RSI(2) 계산)
 
+            # pending 만료 대사 (2026-08-08 P0): 5분 초과 pending은 거래소 미체결
+            # 확인 후에만 해제 — 살아있는 주문 위 재발행(이중 매도) 방지
+            await bot.exit_manager.maybe_expire_pending(symbol)
+
             # ExitManager.update_price() → Optional[Tuple[action, quantity, reason]]
             exit_result = bot.exit_manager.update_price(symbol, current_price, market_data=market_data)
 

@@ -244,12 +244,16 @@ class PositionExitState:
     # 신고가 실패 무효화 (추세 소멸 감지)
     last_new_high_date: Optional[date] = None
     stale_high_days: Optional[int] = None           # None이면 글로벌 ExitConfig 사용
-    # 분할 익절 신호 발행됨, fill 대기 중 (재시작 시 None → current_stage 유지, 재발행 방지)
-    # 파일에 저장 안 함: 재시작 시 None → current_stage=NONE이면 자동 재발행
+    # 분할 익절 신호 발행됨, fill 대기 중
+    # 2026-08-08 P0: 파일에 영속화됨 — 재시작 직후 거래소에 살아있는 주문 위에
+    # 같은 물량을 재발행하던 이중 매도 결함 수정 (만료는 미체결 확인 후에만)
     pending_stage: Optional[ExitStage] = None
-    # pending_stage 설정 시각 — 5분 초과 시 자동 만료 (2026-08-04 P2:
-    # rollback이 호출되지 않는 경로에서 pending 영구 잔류 → 익절 불능 방지)
+    # pending_stage 설정 시각 — 5분 초과 시 만료 처리 대상 (2026-08-04 P2)
+    # verifier 배선 시: 거래소 미체결 확인 후에만 해제 (maybe_expire_pending)
     pending_since: Optional[datetime] = None
+    # 2026-08-08 P1: 부분 체결 누적 — 목표수량 도달 시에만 stage 승격
+    pending_target_qty: int = 0
+    pending_filled_qty: int = 0
     # 포지션 최초 진입 수량 (부분 매도 후에도 유지 — 재시작 정합성 검증용)
     # 파일의 initial_qty에서 복원, 없으면 original_quantity로 초기화
     initial_quantity: int = 0
@@ -314,6 +318,9 @@ class ExitManager:
         self._current_regime: str = "neutral"
         # 장중 급락 오버라이드 상태 ("normal" | "caution" | "crash" | "severe")
         self._intraday_crash_level: str = "normal"
+        # 2026-08-08 P0: pending 만료 검증자 — async fn(symbol) -> Optional[bool]
+        # True=거래소 미체결 존재(대기 연장), False=없음(해제 허용), None=판단 불가(유지)
+        self._pending_verifier = None
 
     # ------------------------------------------------------------------ #
     # Stage 영속화                                                        #
@@ -393,6 +400,13 @@ class ExitManager:
                     existing = int(state.initial_quantity)
                 if existing is not None:
                     entry["initial_qty"] = existing
+            # 2026-08-08 P0: pending 영속화 — 재시작 직후 자동 재발행(이중 매도) 방지
+            if state.pending_stage is not None:
+                entry["pending_stage"] = state.pending_stage.value
+                if state.pending_since is not None:
+                    entry["pending_since"] = state.pending_since.isoformat()
+                entry["pending_target_qty"] = int(state.pending_target_qty)
+                entry["pending_filled_qty"] = int(state.pending_filled_qty)
             data[sym] = entry
         try:
             # 파일명은 저장 시점 날짜로 재계산 (2026-08-04 P1 — 프로세스 시작일로
@@ -610,27 +624,46 @@ class ExitManager:
                         saved_high = current_price
 
                 # ★ 재시작 정합성 검증 (initial_qty가 파일에 있을 때만)
-                # stage=FIRST/SECOND/THIRD인데 KIS 실제 잔고가 1차 익절 이후 예상 잔고보다 많으면
-                # = 해당 stage의 매도가 실행되지 않은 것 → NONE으로 리셋해 재발행
+                # 2026-08-08 P1: 단계별 누적 예상 잔고로 검증 — 기존엔 1차 예상 잔고만
+                # 비교해 SECOND/THIRD 매도 누락을 못 잡았고, 실패 시 무조건 NONE으로
+                # 내려가 이미 체결된 1차를 재발행할 수 있었다. 잔고와 부합하는
+                # "가장 깊은 확실한 단계"로 강등한다 (강등만, 승격 없음).
                 if (
                     saved_initial_qty > 0
-                    and initial_stage not in (ExitStage.NONE, ExitStage.TRAILING)
+                    and initial_stage != ExitStage.NONE
                 ):
-                    eff_first_ratio = first_exit_ratio if first_exit_ratio is not None else self.config.first_exit_ratio
-                    expected_after_first = saved_initial_qty - max(
-                        1, int(saved_initial_qty * eff_first_ratio)
-                    )
+                    _r1 = first_exit_ratio if first_exit_ratio is not None else self.config.first_exit_ratio
+                    _r2 = second_exit_ratio if second_exit_ratio is not None else self.config.second_exit_ratio
+                    _r3 = third_exit_ratio if third_exit_ratio is not None else self.config.third_exit_ratio
+                    _qty_after = saved_initial_qty
+                    _expected: Dict[ExitStage, int] = {ExitStage.NONE: saved_initial_qty}
+                    for _stg, _ratio in (
+                        (ExitStage.FIRST, _r1),
+                        (ExitStage.SECOND, _r2),
+                        (ExitStage.THIRD, _r3),
+                    ):
+                        if _ratio is not None and _ratio > 0:
+                            _qty_after -= min(max(1, int(_qty_after * _ratio)), _qty_after)
+                        _expected[_stg] = _qty_after
+                    _expected[ExitStage.TRAILING] = _expected[ExitStage.THIRD]
                     # 부분체결 허용: 5% 버퍼 (KIS 부분체결 시 수량 소폭 불일치 허용)
                     tolerance_qty = max(1, int(saved_initial_qty * 0.05))
-                    if position.quantity > expected_after_first + tolerance_qty:
+                    if position.quantity > _expected[initial_stage] + tolerance_qty:
+                        _inferred = ExitStage.NONE
+                        for _stg in (ExitStage.FIRST, ExitStage.SECOND, ExitStage.THIRD):
+                            if position.quantity <= _expected[_stg] + tolerance_qty:
+                                _inferred = _stg
+                            else:
+                                break
                         logger.warning(
                             f"[ExitManager] {position.symbol} 재시작 정합성 실패: "
-                            f"KIS qty={position.quantity} > expected_after_1st={expected_after_first} "
-                            f"(initial_qty={saved_initial_qty}, stage={initial_stage.value}) "
-                            f"→ NONE 리셋 (익절 미실행 감지, 재발행 예정)"
+                            f"KIS qty={position.quantity} > expected[{initial_stage.value}]="
+                            f"{_expected[initial_stage]} (initial_qty={saved_initial_qty}) "
+                            f"→ {_inferred.value} 강등 (미실행 단계 재발행 예정)"
                         )
-                        initial_stage = ExitStage.NONE
-                        breakeven_was = False
+                        initial_stage = _inferred
+                        if _inferred == ExitStage.NONE:
+                            breakeven_was = False
                         # restore_stages(hp_cache 복원)가 이 리셋을 업그레이드로
                         # 되돌리면 익절 미실행 감지가 무효화됨 → 심볼 마킹
                         self._integrity_reset_symbols.add(position.symbol)
@@ -639,15 +672,49 @@ class ExitManager:
                     f"[ExitManager] {position.symbol} stage 파일 복원: "
                     f"stage={initial_stage.value} / 고점={saved_high:,.0f} / BE={breakeven_was}"
                 )
+
+                # 2026-08-08 P0: pending 복원 — 재시작 직후 자동 재발행 방지.
+                # 정합성 강등된 심볼은 제외 (pending이 옛 단계 소속), 30분 초과
+                # pending은 장기 다운타임으로 간주해 복원하지 않음 (만료 경로가 처리).
+                _restored_pending: Optional[ExitStage] = None
+                _restored_pending_since: Optional[datetime] = None
+                _restored_target = 0
+                _restored_filled = 0
+                if (
+                    "pending_stage" in persisted
+                    and position.symbol not in self._integrity_reset_symbols
+                ):
+                    try:
+                        _p_since = datetime.fromisoformat(persisted.get("pending_since", ""))
+                        if (datetime.now() - _p_since).total_seconds() < 1800:
+                            _restored_pending = ExitStage(persisted["pending_stage"])
+                            _restored_pending_since = _p_since
+                            _restored_target = int(persisted.get("pending_target_qty", 0))
+                            _restored_filled = int(persisted.get("pending_filled_qty", 0))
+                            logger.warning(
+                                f"[ExitManager] {position.symbol} pending 복원: "
+                                f"{_restored_pending.value} (체결 {_restored_filled}/"
+                                f"{_restored_target}) — 미체결 확인 전 재발행 금지"
+                            )
+                    except (ValueError, TypeError):
+                        pass
             except Exception as e:
                 logger.warning(f"[ExitManager] {position.symbol} stage 복원 실패({e}), 추정으로 폴백")
                 initial_stage = ExitStage.NONE
                 saved_high = current_price
                 breakeven_was = False
+                _restored_pending = None
+                _restored_pending_since = None
+                _restored_target = 0
+                _restored_filled = 0
         else:
             saved_high = current_price
             breakeven_was = False
             initial_stage = ExitStage.NONE
+            _restored_pending = None
+            _restored_pending_since = None
+            _restored_target = 0
+            _restored_filled = 0
             # 주의: persisted 없는 신규 포지션은 항상 NONE에서 시작
             # stage 추정 점프는 실제 매도 없이 stage만 올려 익절 누락 유발
 
@@ -681,6 +748,14 @@ class ExitManager:
             trailing_activate_pct=trailing_activate_pct,
             strategy_name=strategy_name or getattr(position, "strategy", None),
         )
+
+        # 2026-08-08 P0: 복원된 pending 적용 — 거래소 미체결 확인 전 재발행 차단
+        if _restored_pending is not None:
+            _st = self._states[position.symbol]
+            _st.pending_stage = _restored_pending
+            _st.pending_since = _restored_pending_since
+            _st.pending_target_qty = _restored_target
+            _st.pending_filled_qty = _restored_filled
 
         # ── 장중 급락 active 시: 신규 포지션에도 즉시 crash SL/TS 적용 ──
         # apply_intraday_crash_params()는 중복 레벨 시 스킵되므로, 신규 등록 포지션은
@@ -1079,18 +1154,22 @@ class ExitManager:
         if first_ratio <= 0 and second_ratio <= 0 and third_ratio <= 0:
             return None
 
-        # pending_stage 자동 만료 (2026-08-04 P2): 시그널이 engine에서 거부됐는데
-        # rollback이 호출되지 않는 경로(batch monitor 등)에서 pending이 영구 잔류해
-        # 분할 익절이 재시작 전까지 재발행 불가였다. 정상 fill은 수십 초 내 해제되므로
-        # 5분 초과 시 클리어 → 다음 판정 주기에 자연 재발행.
-        if (state.pending_stage is not None and state.pending_since is not None
-                and (datetime.now() - state.pending_since).total_seconds() > 300):
-            logger.warning(
-                f"[ExitManager] {state.symbol} pending_stage 자동 만료: "
-                f"{state.pending_stage.value} (5분 초과 — 주문 거부/유실 추정)"
-            )
-            state.pending_stage = None
-            state.pending_since = None
+        # pending_stage 만료 (2026-08-04 P2 → 2026-08-08 P0 개편):
+        # verifier가 배선돼 있으면 만료는 maybe_expire_pending(거래소 미체결 확인)이
+        # 담당한다 — 여기서는 30분 하드 만료만 (sweeper 미동작 대비 최후 방어).
+        # verifier가 없으면(레거시/US) 기존 5분 클리어 유지.
+        if state.pending_stage is not None and state.pending_since is not None:
+            _pending_age = (datetime.now() - state.pending_since).total_seconds()
+            _hard_limit = 1800 if self._pending_verifier is not None else 300
+            if _pending_age > _hard_limit:
+                logger.warning(
+                    f"[ExitManager] {state.symbol} pending_stage 자동 만료: "
+                    f"{state.pending_stage.value} ({_hard_limit//60}분 초과 — 주문 거부/유실 추정)"
+                )
+                state.pending_stage = None
+                state.pending_since = None
+                state.pending_target_qty = 0
+                state.pending_filled_qty = 0
 
         # 1차 익절
         # pending_stage가 이미 있으면 fill 대기 중 → 중복 신호 방지
@@ -1103,9 +1182,11 @@ class ExitManager:
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 # ★ stage는 fill 확인 후(on_fill)에만 advance
-                # 재시작 시 pending_stage=None → current_stage=NONE → 자동 재발행 보장
+                # 2026-08-08 P0: pending은 영속화됨 — 재시작 시 미체결 확인 후에만 재발행
                 state.pending_stage = ExitStage.FIRST
                 state.pending_since = datetime.now()
+                state.pending_target_qty = exit_qty
+                state.pending_filled_qty = 0
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -1122,6 +1203,8 @@ class ExitManager:
 
                 state.pending_stage = ExitStage.SECOND
                 state.pending_since = datetime.now()
+                state.pending_target_qty = exit_qty
+                state.pending_filled_qty = 0
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -1138,6 +1221,8 @@ class ExitManager:
 
                 state.pending_stage = ExitStage.THIRD
                 state.pending_since = datetime.now()
+                state.pending_target_qty = exit_qty
+                state.pending_filled_qty = 0
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
@@ -1192,6 +1277,9 @@ class ExitManager:
         if state.pending_stage is not None:
             prev_pending = state.pending_stage
             state.pending_stage = None
+            state.pending_since = None
+            state.pending_target_qty = 0
+            state.pending_filled_qty = 0
             self._persist_states()
             logger.warning(
                 f"[ExitManager] {symbol} pending_stage 클리어: {prev_pending.value} "
@@ -1446,15 +1534,32 @@ class ExitManager:
         state.remaining_quantity -= sold_quantity
 
         # ★ fill 확인 후 pending_stage → current_stage 승격
-        # 이 시점이 stage가 실제로 advance되는 유일한 지점
+        # 2026-08-08 P1: 부분 체결 누적 — 목표수량 도달 시에만 승격 (기존엔 1주만
+        # 체결돼도 승격돼 나머지 물량이 다음 단계 조건까지 방치됐다)
         if state.pending_stage is not None:
-            prev_stage = state.current_stage
-            state.current_stage = state.pending_stage
-            state.pending_stage = None
-            logger.info(
-                f"[ExitManager] {symbol} fill 확인 → stage 승격: "
-                f"{prev_stage.value} → {state.current_stage.value}"
-            )
+            state.pending_filled_qty += sold_quantity
+            if (
+                state.pending_target_qty > 0
+                and state.pending_filled_qty < state.pending_target_qty
+            ):
+                # 부분 체결 진행 중 — 주문이 살아있다는 증거이므로 만료 타이머 연장
+                state.pending_since = datetime.now()
+                logger.info(
+                    f"[ExitManager] {symbol} 부분 체결 누적: "
+                    f"{state.pending_filled_qty}/{state.pending_target_qty}주 "
+                    f"(stage={state.current_stage.value} 유지, 잔량 체결 대기)"
+                )
+            else:
+                prev_stage = state.current_stage
+                state.current_stage = state.pending_stage
+                state.pending_stage = None
+                state.pending_since = None
+                state.pending_target_qty = 0
+                state.pending_filled_qty = 0
+                logger.info(
+                    f"[ExitManager] {symbol} fill 확인 → stage 승격: "
+                    f"{prev_stage.value} → {state.current_stage.value}"
+                )
 
         logger.info(
             f"[ExitManager] {symbol} 청산: {sold_quantity}주 @ {fill_price:,.0f}, "
@@ -1469,6 +1574,55 @@ class ExitManager:
             logger.info(f"[ExitManager] {symbol} 완전 청산, 총 실현손익: {total_pnl:+,.0f}")
 
         self._persist_states()
+
+    # ------------------------------------------------------------------ #
+    # pending 만료 검증 (2026-08-08 P0 — 이중 매도 방지)                     #
+    # ------------------------------------------------------------------ #
+
+    def set_pending_verifier(self, fn) -> None:
+        """pending 만료 검증자 배선.
+
+        fn: async (symbol) -> Optional[bool]
+          True  = 거래소에 해당 종목 SELL 미체결 존재 → pending 대기 연장
+          False = 미체결 없음 → pending 해제 (재발행 허용)
+          None  = 판단 불가 (API 오류 등) → pending 유지 (fail-safe)
+        """
+        self._pending_verifier = fn
+
+    async def maybe_expire_pending(self, symbol: str) -> None:
+        """5분 초과 pending을 거래소 미체결 확인 후 해제 (호출부: 청산 판정 직전).
+
+        verifier 미배선이면 no-op — update_price의 레거시 5분 만료가 처리한다.
+        """
+        if self._pending_verifier is None:
+            return
+        state = self._states.get(symbol)
+        if state is None or state.pending_stage is None or state.pending_since is None:
+            return
+        if (datetime.now() - state.pending_since).total_seconds() <= 300:
+            return
+        try:
+            outstanding = await self._pending_verifier(symbol)
+        except Exception as e:
+            logger.debug(f"[ExitManager] {symbol} pending 검증 실패 (유지): {e}")
+            return
+        if outstanding is True:
+            state.pending_since = datetime.now()
+            logger.info(
+                f"[ExitManager] {symbol} pending 연장: 거래소 미체결 확인 "
+                f"({state.pending_stage.value}, 체결 대기 지속)"
+            )
+        elif outstanding is False:
+            logger.warning(
+                f"[ExitManager] {symbol} pending 만료 해제: 거래소 미체결 없음 "
+                f"({state.pending_stage.value} — 주문 거부/취소 추정, 재발행 허용)"
+            )
+            state.pending_stage = None
+            state.pending_since = None
+            state.pending_target_qty = 0
+            state.pending_filled_qty = 0
+            self._persist_states()
+        # None: 판단 불가 — pending 유지 (fail-safe, 다음 주기 재시도)
 
     def get_state(self, symbol: str) -> Optional[PositionExitState]:
         """포지션 청산 상태 조회"""
