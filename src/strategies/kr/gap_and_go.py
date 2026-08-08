@@ -127,6 +127,9 @@ class GapAndGoStrategy(BaseStrategy):
             }
             logger.info(f"[Gap&Go] 갭상승 감지: {symbol} +{gap_pct:.1f}%")
         else:
+            # ORB 돌파 판정용 — 갱신 전 고점 보존 (2026-08-08 P2: 갱신 후 비교라
+            # price > orb_high가 항상 거짓 → ORB 보너스가 한 번도 발동 안 됐음)
+            self._gap_stocks[symbol]["prev_high_price"] = self._gap_stocks[symbol]["high_price"]
             if current_price > self._gap_stocks[symbol]["high_price"]:
                 self._gap_stocks[symbol]["high_price"] = current_price
             if current_price < self._gap_stocks[symbol].get("low_price", current_price):
@@ -176,7 +179,8 @@ class GapAndGoStrategy(BaseStrategy):
 
         # ORB (Opening Range Breakout) 확인 보너스
         orb_bonus = 0.0
-        orb_high = float(gap_info["high_price"])
+        # 갱신 전 고점 기준 돌파 판정 (첫 감지 틱은 prev 부재 → 현재 고점)
+        orb_high = float(gap_info.get("prev_high_price", gap_info["high_price"]))
         orb_low = float(gap_info.get("low_price", price))
         orb_range = orb_high - orb_low if orb_high > orb_low else 0
         if orb_range > 0 and price > orb_high:

@@ -509,6 +509,19 @@ class BaseStrategy(ABC):
         if risk <= 0:
             return False  # 손절가 >= 진입가: 잘못된 설정 → 진입 차단
 
+        # 2026-08-08 P2: 왕복 수수료 반영 순 R/R — gross 기준은 경계값(2.0)을
+        # 과대평가 (KR 왕복 ~0.227%). US는 zero-commission이라 비용 0.
+        try:
+            from ..utils.fee_calculator import get_fee_calculator
+            _fc = get_fee_calculator(getattr(self, "market", "KR"))
+            _rt_cost = float(
+                _fc.calculate_buy_fee(entry_price) + _fc.calculate_sell_fee(entry_price)
+            )
+        except Exception:
+            _rt_cost = 0.0
+        reward -= _rt_cost
+        risk += _rt_cost
+
         rr_ratio = reward / risk
         if rr_ratio < min_rr:
             logger.debug(

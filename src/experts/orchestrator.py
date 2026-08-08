@@ -69,6 +69,12 @@ class ExpertOrchestrator:
             )
             self.register(agent)
 
+    @staticmethod
+    def _log_task_exception(task) -> None:
+        """백그라운드 태스크 예외 회수 (2026-08-08 P2)"""
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning(f"[Orchestrator] 백그라운드 태스크 예외: {task.exception()}")
+
     async def _note_symbols(self, op: ExpertOpinion) -> None:
         """전문가가 지목한 종목을 종목 위키 리서치 노트에 기록 (fire-and-forget)
 
@@ -134,10 +140,14 @@ class ExpertOrchestrator:
                 opinions[name] = result
                 if result.is_valid:
                     save_opinion(result)
-                    asyncio.create_task(wiki_mod.ingest_opinion(result))
+                    # 2026-08-08 P2: fire-and-forget 예외 관찰 — 미회수 예외가
+                    # 'Task exception was never retrieved'로만 남던 문제
+                    _t1 = asyncio.create_task(wiki_mod.ingest_opinion(result))
+                    _t1.add_done_callback(self._log_task_exception)
                     # 지목 종목을 종목 위키 리서치 노트에 기록 (2026-08-07)
                     if self.trade_wiki is not None and result.affected_symbols:
-                        asyncio.create_task(self._note_symbols(result))
+                        _t2 = asyncio.create_task(self._note_symbols(result))
+                        _t2.add_done_callback(self._log_task_exception)
             else:
                 # defensive: 예기치 못한 반환 타입
                 logger.warning(

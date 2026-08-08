@@ -851,7 +851,8 @@ class ExitManager:
         # 보유기간 초과 체크 (포지션별 max_holding_days 우선 적용)
         eff_max_holding = state.max_holding_days if state.max_holding_days is not None else self._max_holding_days
         if biz_days > 0 and eff_max_holding > 0:
-            if biz_days > eff_max_holding:
+            # 2026-08-08 P2: > → >= ("최대 N일"이 N+1일째 발동하던 오프바이원)
+            if biz_days >= eff_max_holding:
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,
                     f"보유기간 초과: {biz_days}영업일 (최대 {eff_max_holding}영업일)"

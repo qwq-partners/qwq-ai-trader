@@ -827,6 +827,8 @@ class CrossStrategyValidator:
                 # adv.failed면 폴백 (아래 단일 LLM 경로)
 
             # 단일 LLM 폴백 — GPT-5.4 (STRATEGY_ANALYSIS)
+            # 2026-08-08 P2: 적대검증 실패 후 폴백도 실호출 1회로 계수 (한도 정합)
+            self._daily_llm_count += 1
             from ..utils.llm import LLMTask
             resp = await asyncio.wait_for(
                 self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100),

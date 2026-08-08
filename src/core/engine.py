@@ -651,10 +651,17 @@ class UnifiedEngine:
             except ImportError:
                 sell_fee = Decimal("0")
 
-            # 실현 손익 = (매도가 - 평균단가) x 수량 - 매도비용(수수료+거래세)
+            # 실현 손익 = (매도가 - 평균단가) x 수량 - 매도비용 - 매수비용(매도분 귀속)
             # 2026-08-05 P2: 초과수량 보정(sell_qty) 후에도 미보정 fill.quantity로
             # 계산해 이상 fill 시 daily_pnl이 과대/과소 반영되던 문제 → sell_qty 사용
-            realized_pnl = (fill.price - pos.avg_price) * Decimal(str(sell_qty)) - sell_fee
+            # 2026-08-08 P2: 매수 수수료 누락으로 일일손실 게이트가 낙관 계산되던 보정
+            try:
+                buy_fee = fee_calc.calculate_buy_fee(pos.avg_price * Decimal(str(sell_qty)))
+            except Exception:
+                buy_fee = Decimal("0")
+            realized_pnl = (
+                (fill.price - pos.avg_price) * Decimal(str(sell_qty)) - sell_fee - buy_fee
+            )
 
             # 현금 증가 = 매도 대금 - 매도비용
             self.portfolio.cash += fill.total_value - sell_fee
@@ -2024,12 +2031,17 @@ class RiskManager:
                                 _pos = self.engine.portfolio.positions.get(sym)
                                 _name = getattr(_pos, "name", "?") if _pos else "?"
                                 _qty = getattr(_pos, "quantity", "?") if _pos else "?"
-                                asyncio.create_task(send_alert(
+                                _alert_task = asyncio.create_task(send_alert(
                                     f"⚠️ <b>좀비 포지션 감지</b>\n"
                                     f"{sym} {_name} (엔진 {_qty}주)\n"
                                     f"KIS 매도 수량초과 {cnt}회 연속 — 실제 잔고 0주 의심\n"
                                     f"다음 portfolio_sync에서 자동 제거됩니다"
                                 ))
+                                # 2026-08-08 P2: 발송 예외 관찰 (미회수 예외 방지)
+                                _alert_task.add_done_callback(
+                                    lambda t: t.cancelled() or t.exception() is None
+                                    or logger.warning(f"[엔진] 좀비 경보 발송 실패: {t.exception()}")
+                                )
                             except Exception:
                                 pass
 
