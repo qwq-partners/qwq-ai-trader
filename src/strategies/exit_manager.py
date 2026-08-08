@@ -1173,6 +1173,8 @@ class ExitManager:
                 state.pending_since = None
                 state.pending_target_qty = 0
                 state.pending_filled_qty = 0
+                # 클리어 즉시 영속화 — 크래시 시 파일의 stale pending 복원 방지 (최종 리뷰 P2)
+                self._persist_states()
 
         # 1차 익절
         # pending_stage가 이미 있으면 fill 대기 중 → 중복 신호 방지

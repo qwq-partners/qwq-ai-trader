@@ -945,8 +945,50 @@ class KISBroker(BaseBroker):
             return self._pending_orders[order_id].status
         return None
 
+    async def get_exchange_open_orders(self) -> Optional[List[Dict[str, Any]]]:
+        """거래소 실 미체결 주문 조회 (정정취소가능주문, TTTC8036R)
+
+        로컬 `_pending_orders` 캐시와 달리 **재시작 후에도 유효** — ExitManager
+        pending 만료 검증용 (2026-08-08 최종 리뷰 P0: 로컬 캐시는 재시작 후 비어
+        항상 '미체결 없음'을 반환해 이중 매도 방지가 무력화됐다).
+
+        Returns:
+            [{"symbol": 종목코드, "side": "sell"|"buy", "qty": 미체결수량}]
+            조회 실패 시 None (호출측이 판단 불가로 처리해야 함 — fail-safe)
+        """
+        if not self.is_connected:
+            if not await self.connect():
+                return None
+        try:
+            tr_id = "TTTC8036R"
+            url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+            params = {
+                "CANO": self.config.account_no,
+                "ACNT_PRDT_CD": self.config.account_product_cd,
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+                "INQR_DVSN_1": "0",
+                "INQR_DVSN_2": "0",
+            }
+            data = await self._api_get(url, tr_id, params)
+            if str(data.get("rt_cd", "")) != "0":
+                logger.warning(f"실 미체결 조회 실패: {data.get('msg1', '')}")
+                return None
+            rows: List[Dict[str, Any]] = []
+            for item in (data.get("output", []) or []):
+                rows.append({
+                    "symbol": str(item.get("pdno", "")).lstrip("A"),
+                    "side": "sell" if str(item.get("sll_buy_dvsn_cd", "")) == "01" else "buy",
+                    "qty": int(item.get("rmn_qty", 0) or 0),
+                })
+            return rows
+        except Exception as e:
+            logger.warning(f"실 미체결 조회 오류: {e}")
+            return None
+
     async def get_open_orders(self) -> List[Order]:
-        """미체결 주문 목록"""
+        """미체결 주문 목록 (⚠️ 인메모리 캐시 — 재시작 후 비어 있음, 실 조회는
+        get_exchange_open_orders 사용)"""
         return list(self._pending_orders.values())
 
     async def get_positions(self) -> Dict[str, Position]:

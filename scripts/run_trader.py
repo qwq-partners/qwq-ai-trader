@@ -868,18 +868,21 @@ class UnifiedTradingBot:
             # 5분 초과 pending은 거래소 SELL 미체결 존재 여부 확인 후에만 해제
             if self.exit_manager and self.broker:
                 async def _sell_outstanding(_sym: str, _b=self.broker):
+                    # 2026-08-08 최종 리뷰 P0 반영: 거래소 실 미체결 조회(TTTC8036R).
+                    # 로컬 get_open_orders() 캐시는 재시작 후 비어 항상 False가 되어
+                    # 이중 매도 방지가 무력화됐었다. 조회 실패는 None(pending 유지).
                     try:
-                        _orders = await _b.get_open_orders()
+                        _rows = await _b.get_exchange_open_orders()
+                        if _rows is None:
+                            return None  # 판단 불가 — pending 유지 (fail-safe)
                         return any(
-                            getattr(_o, "symbol", None) == _sym
-                            and str(getattr(getattr(_o, "side", None), "value",
-                                            getattr(_o, "side", ""))).lower() == "sell"
-                            for _o in (_orders or [])
+                            r.get("symbol") == _sym and r.get("side") == "sell"
+                            for r in _rows
                         )
                     except Exception:
-                        return None  # 판단 불가 — pending 유지 (fail-safe)
+                        return None
                 self.exit_manager.set_pending_verifier(_sell_outstanding)
-                logger.info("[KR] ExitManager pending 검증자 배선 완료 (미체결 대사)")
+                logger.info("[KR] ExitManager pending 검증자 배선 완료 (거래소 실 미체결 대사)")
             logger.info(
                 f"[KR] 엔진 리스크 매니저 등록 완료 "
                 f"(validator: LLM 범위={engine_risk_manager._LLM_CHECK_MIN}~{engine_risk_manager._LLM_BYPASS_AT}, "
