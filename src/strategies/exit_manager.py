@@ -85,8 +85,10 @@ REGIME_EXIT_PARAMS: Dict[str, Dict] = {
     },
     "neutral": {
         "first_exit_pct":   10.0,   # 5 → 10
-        "second_exit_pct":  12.0,   #  8 → 12
-        "third_exit_pct":   20.0,   # 10 → 20
+        # 2026-08-08 P1: 12/20 → 15/25 — 기본 레짐이 문서·ExitConfig 계약(10/15/25)과
+        # 달라 조기 청산되던 불일치 해소 (bull과 동일값, bear/ranging 보수 조정은 유지)
+        "second_exit_pct":  15.0,
+        "third_exit_pct":   25.0,
         "trailing_stop_pct":  3.0,  # 2.5 → 3
         "stop_loss_pct":      4.0,
         "stale_high_days":    5,
@@ -167,7 +169,7 @@ class ExitConfig:
     enable_dynamic_stop: bool = True  # ATR 기반 동적 손절 활성화
     atr_multiplier: float = 2.0       # ATR 배수
     min_stop_pct: float = 4.0         # 최소 손절폭 (%)
-    max_stop_pct: float = 7.0         # 최대 손절폭 (%)
+    max_stop_pct: float = 8.0         # 최대 손절폭 (%) — 2026-08-08: 7→8 evolved 실효값 정렬
 
     # 트레일링 스탑
     trailing_stop_pct: float = 3.0    # 고점 대비 하락률 (%)

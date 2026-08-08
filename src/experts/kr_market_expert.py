@@ -243,7 +243,8 @@ class KRMarketExpert(ExpertAgent):
         try:
             from src.data.providers.kis_market_data import get_kis_market_data
             q = await get_kis_market_data().get_night_futures_quote()
-            if q and q.get("change_pct") is not None:
+            # 야간(CM) 세션 결과만 사용 — F(주간) 폴백은 밤사이 신호가 아님 (2026-08-08)
+            if q and q.get("session") == "night" and q.get("change_pct") is not None:
                 return {
                     "overnight_chg_pct": q["change_pct"],
                     "source": f"KIS:{q.get('symbol')}",

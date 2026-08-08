@@ -317,7 +317,7 @@ kr:
     enable_dynamic_stop: true
     atr_multiplier: 2.0
     min_stop_pct: 4.0
-    max_stop_pct: 7.0
+    max_stop_pct: 8.0    # 2026-08-08: 7→8 — evolved_overrides 실효값과 정렬
     trailing_stop_pct: 3.0
     trailing_activate_pct: 5.0
     include_fees: true

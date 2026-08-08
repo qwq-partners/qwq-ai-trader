@@ -49,6 +49,9 @@ class TradeWiki:
         (self._dir / "sectors").mkdir(exist_ok=True)
         (self._dir / "symbols").mkdir(exist_ok=True)   # 종목별 (2026-08-07)
         self._lock = asyncio.Lock()  # 동시 ingest 방지
+        # 리서치 전용 페이지 수 캐시 (2026-08-08 P1 — 신규 페이지마다 200개 파일을
+        # 이벤트 루프에서 동기 순회하던 문제; 최초 1회만 스캔, 이후 메모리 증감)
+        self._research_page_count: Optional[int] = None
 
     # ================================================================
     # Ingest: 매도 체결 후 관련 위키 페이지 업데이트
@@ -183,6 +186,9 @@ class TradeWiki:
         page = self._read_or_create(path, self._symbol_template(symbol, name))
 
         fm = self._parse_frontmatter(page)
+        # 리서치 전용 → 거래 페이지 전환 시 카운터 차감 (2026-08-08)
+        if fm.get("trade_count", 0) == 0 and self._research_page_count is not None:
+            self._research_page_count = max(0, self._research_page_count - 1)
         fm["trade_count"] = fm.get("trade_count", 0) + 1
         wins = fm.get("wins", 0) + (1 if trade.get("pnl_pct", 0) > 0 else 0)
         fm["wins"] = wins
@@ -221,25 +227,30 @@ class TradeWiki:
         async with self._lock:
             try:
                 path = self._dir / "symbols" / f"{_sanitize_filename(symbol)}.md"
-                if not path.exists():
+                creating = not path.exists()
+                if creating:
                     # 상한은 리서치 전용 페이지(trade_count=0)만 계수 — 거래 페이지가
-                    # 늘어나도 리서치 신규 생성이 막히지 않게 (리뷰 P1-1)
-                    research_only = 0
-                    for p in (self._dir / "symbols").glob("*.md"):
-                        try:
-                            fm_p = self._parse_frontmatter(
-                                p.read_text(encoding="utf-8")
-                            )
-                            if fm_p.get("trade_count", 0) == 0:
-                                research_only += 1
-                        except OSError:
-                            continue
-                    if research_only >= MAX_SYMBOL_PAGES:
+                    # 늘어나도 리서치 신규 생성이 막히지 않게 (리뷰 P1-1).
+                    # 2026-08-08 P1: 디스크 전수 스캔은 최초 1회만, 이후 메모리 카운터.
+                    if self._research_page_count is None:
+                        _cnt = 0
+                        for p in (self._dir / "symbols").glob("*.md"):
+                            try:
+                                if self._parse_frontmatter(
+                                    p.read_text(encoding="utf-8")
+                                ).get("trade_count", 0) == 0:
+                                    _cnt += 1
+                            except OSError:
+                                continue
+                        self._research_page_count = _cnt
+                    if self._research_page_count >= MAX_SYMBOL_PAGES:
                         logger.debug(
                             f"[Wiki] 리서치 페이지 상한({MAX_SYMBOL_PAGES}) — {symbol} 생성 스킵"
                         )
                         return
                 page = self._read_or_create(path, self._symbol_template(symbol, name))
+                if creating and self._research_page_count is not None:
+                    self._research_page_count += 1
 
                 # 연도 포함 — 1년 뒤 같은 날짜 오탐 스킵 방지 (리뷰 P2-5)
                 today = datetime.now().strftime("%Y-%m-%d")

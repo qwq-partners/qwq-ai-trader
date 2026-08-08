@@ -249,6 +249,7 @@ class KRScheduler:
         from datetime import datetime as _dt
         logger.info("[전문가] 브리핑 스케줄러 시작 (5개 슬롯)")
         ran_today = set()
+        _slot_fail_counts: dict = {}  # 슬롯별 브리핑 실패 횟수 (3회까지 재시도, 2026-08-08)
         slots = {
             "morning": "07:30",            # 평일
             "midday": "13:00",             # 평일
@@ -317,9 +318,22 @@ class KRScheduler:
                                 slot_labels[slot_name], ops, agg, bias, bear_consensus,
                                 use_report_channel=use_channel,
                             )
+                            # 성공 시에만 완료 처리 (2026-08-08 P1 — 일시 장애를
+                            # 영구 완료로 확정하던 fail-closed 위반, 8/5 사고 패턴)
+                            ran_today.add(key)
+                            _slot_fail_counts.pop(key, None)
                         except Exception as e:
-                            logger.warning(f"[전문가] {slot_name} 브리핑 실패: {e}")
-                        ran_today.add(key)
+                            _slot_fail_counts[key] = _slot_fail_counts.get(key, 0) + 1
+                            if _slot_fail_counts[key] >= 3:
+                                logger.warning(
+                                    f"[전문가] {slot_name} 브리핑 3회 실패 — 이 슬롯 포기: {e}"
+                                )
+                                ran_today.add(key)
+                            else:
+                                logger.warning(
+                                    f"[전문가] {slot_name} 브리핑 실패 "
+                                    f"({_slot_fail_counts[key]}/3) — 60초 후 재시도: {e}"
+                                )
                 if len(ran_today) > 10:
                     ran_today = {k for k in ran_today if k.startswith(today)}
                 await _aio.sleep(60)
@@ -2402,6 +2416,13 @@ JSON:
                             _kis_md = get_kis_market_data()
 
                         _ngt_quote = await _kis_md.get_night_futures_quote()
+                        # 2026-08-08 P2-4: 야간(CM) 세션 결과만 오버나이트 신호로 사용.
+                        # F(주간) 폴백은 정규장 중 당일 움직임이라 "밤사이 신호"가 아님.
+                        if _ngt_quote and _ngt_quote.get("session") != "night":
+                            logger.info(
+                                f"[스크리닝] 야간선물 주간(F) 폴백 감지 — 오버나이트 신호 미적용"
+                            )
+                            _ngt_quote = None
                         if _ngt_quote:
                             _ngt_sentiment = _ngt_quote.get("sentiment")
                             _ngt_change = _ngt_quote.get("change_pct", 0)
@@ -5155,6 +5176,26 @@ JSON:
                             strategy="safe_asset",
                             reason=f"안전자산 자동 매수: 약세장 자본 활용",
                         )
+                        # 2026-08-08 P1: 리스크 게이트 경유 — 일일손실·포지션 한도·
+                        # 동기화 장애 상태에서 안전자산 매수가 우회되지 않도록 (리뷰 #8,
+                        # 킬스위치는 브로커 계층에서 별도 검사됨)
+                        _rm = getattr(bot, "risk_manager", None)
+                        _pf = getattr(getattr(bot, "engine", None), "portfolio", None)
+                        if _rm is not None and _pf is not None:
+                            try:
+                                _can, _deny = _rm.can_open_position(
+                                    SAFE_SYMBOL, OrderSide.BUY, qty,
+                                    Decimal(str(price)), _pf,
+                                    strategy_type="safe_asset",
+                                )
+                            except Exception as _rg_err:
+                                _can, _deny = False, f"게이트 조회 실패: {_rg_err}"
+                            if not _can:
+                                logger.warning(
+                                    f"[안전자산] 리스크 게이트 거부 — 매수 스킵: {_deny}"
+                                )
+                                continue
+
                         _ok, _oid = await bot.broker.submit_order(order)
                         # 제출 실패 시 상태 저장 금지 (2026-08-04 P2 — 실패에도
                         # entry_date가 저장돼 미보유 상태를 보유로 오인하던 버그)

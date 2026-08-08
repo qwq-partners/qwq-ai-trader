@@ -1803,6 +1803,9 @@ class StockScreener:
             소스 수를 추적하여 최종 점수 정규화 시 반영합니다.
             """
             if stock.symbol not in all_stocks:
+                # 2026-08-08 P1: 첫 소스에도 가중치 적용 — 기존엔 첫 발견이면
+                # weight 무시로 전액 반영돼 호출 순서에 따라 점수가 달라졌다
+                stock.score = stock.score * weight
                 all_stocks[stock.symbol] = stock
                 source_counts[stock.symbol] = 1
             else:
@@ -2182,13 +2185,19 @@ class StockScreener:
             min_score = min(scores)
             max_score = max(scores)
 
-            if max_score > min_score:
+            # 2026-08-08 P1: 상대 정규화는 오버플로(최고점 100 초과) 압축 목적일 때만.
+            # 저품질 장(예: 최고 13점)에서도 1등을 100점으로 승격시켜 절대 품질
+            # 게이트(min_score)를 무력화하던 문제 — 100 이하면 절대 점수 유지+clamp.
+            if max_score > min_score and max_score > 100:
                 for stock in result:
                     # 정규화: 바닥 30점 보장 (30~100 범위)
                     stock.score = 30 + (stock.score - min_score) / (max_score - min_score) * 70
                 logger.debug(
                     f"[Screener] 점수 정규화 완료: {min_score:.1f}~{max_score:.1f} → 30~100"
                 )
+            else:
+                for stock in result:
+                    stock.score = max(0.0, min(100.0, stock.score))
 
         result.sort(key=lambda x: x.score, reverse=True)
 

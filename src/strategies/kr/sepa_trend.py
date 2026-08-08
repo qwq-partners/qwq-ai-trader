@@ -118,8 +118,10 @@ class SEPATrendStrategy(BaseStrategy):
                 target_pct = self.config.take_profit_pct
                 if atr is not None and atr > 0:
                     stop_pct = max(_min_stop, min(_max_stop, atr * 2.0))
-                    # target: stop × 1.5 이상 보장 + 최대 20% (추세 추종 공간 확보)
-                    target_pct = max(stop_pct * 1.5, min(20.0, atr * 3.0))
+                    # target: stop × 2.0 이상 보장 + 최대 20% (추세 추종 공간 확보)
+                    # 2026-08-08 P1: ×1.5 → ×2.0 — 아래 min_rr=2.0 게이트와 정합.
+                    # 기존엔 ATR 2~3.5% 후보의 R/R이 1.5로 계산돼 전부 차단됐다.
+                    target_pct = max(stop_pct * 2.0, min(20.0, atr * 3.0))
                 candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                 candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 

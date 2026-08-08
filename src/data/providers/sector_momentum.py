@@ -122,6 +122,8 @@ class SectorMomentumProvider:
     def __init__(self, broker=None):
         self._broker = broker
         self._sector_map: Dict[str, str] = {}     # ticker → sector_name
+        # 동기 조회 미스 메모이즈 (2026-08-08 P1 — validate() 핫패스 반복 디스크 I/O 방지)
+        self._sector_miss: set = set()
         self._etf_momentum: Dict[str, float] = {} # sector_name → 20d_pct
         # sector_name → {"r5": 5d_pct, "r20": 20d_pct} (2026-08-07)
         self._etf_momentum_multi: Dict[str, Dict[str, float]] = {}
@@ -163,6 +165,9 @@ class SectorMomentumProvider:
         """
         if symbol in self._sector_map:
             return self._sector_map[symbol]
+        # 미스도 메모이즈 — 같은 종목의 반복 파일 조회 방지 (2026-08-08 P1)
+        if symbol in self._sector_miss:
+            return _keyword_sector(name) if name else None
         cached = _load_json_cache(_SECTOR_MAP_CACHE, _SECTOR_MAP_TTL)
         if cached and symbol in cached:
             self._sector_map[symbol] = cached[symbol]  # 메모이즈 — 반복 디스크 IO 방지
@@ -172,6 +177,7 @@ class SectorMomentumProvider:
             if sector:
                 self._sector_map[symbol] = sector
                 return sector
+        self._sector_miss.add(symbol)
         return None
 
     async def get_all_sector_momentum(self) -> Dict[str, float]:
@@ -224,6 +230,7 @@ class SectorMomentumProvider:
         pykrx_map = await self._fetch_pykrx_sector_map()
         if pykrx_map:
             self._sector_map.update(pykrx_map)
+            self._sector_miss.clear()  # 새 매핑 반영 — 미스 캐시 무효화 (2026-08-08)
             _save_json_cache(_SECTOR_MAP_CACHE, {**(cached or {}), **pykrx_map})
             for s in still_missing:
                 if s in pykrx_map:
@@ -390,6 +397,11 @@ class SectorMomentumProvider:
                 f"[SectorMomentum] ETF 모멘텀 갱신: {len(results)}개 섹터 | "
                 + " ".join(f"{s}={v:+.1f}%" for s, v in sorted(results.items(), key=lambda x: -x[1])[:5])
             )
+        else:
+            # 전체 실패 네거티브 캐시 (2026-08-08 P1): 2분 후 재시도 — 장애 중
+            # 호출마다 13개 ETF API를 반복 조회하던 폭주 방지
+            self._etf_last_fetch = now - _ETF_MOMENTUM_TTL + 120
+            logger.warning("[SectorMomentum] ETF 모멘텀 전체 실패 — 2분 후 재시도")
 
     async def _calc_etf_returns(self, etf_ticker: str) -> Optional[Dict[str, float]]:
         """ETF 5일/20일 수익률 계산 (KIS get_daily_prices 1회 조회).
