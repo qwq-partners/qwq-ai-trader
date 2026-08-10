@@ -5044,6 +5044,50 @@ JSON:
                             except Exception as _gr_err:
                                 logger.debug(f"[게이트재생] 주간 실행 실패 (무시): {_gr_err}")
 
+                            # Phase 3 shadow 리포트 3종 (2026-08-10 — 관측 전용,
+                            # 주문·설정 불변): 전문가 calibration / bandit 배분 제안 /
+                            # REGIME_EXIT shadow 제안
+                            try:
+                                from ..analytics.shadow_lab import (
+                                    bandit_shadow_report, expert_calibration_report,
+                                )
+                                _sl_parts = []
+                                _ec = await expert_calibration_report(bot.broker)
+                                if _ec:
+                                    _sl_parts.append(
+                                        "👥 전문가 bias 5일 적중률 (KODEX200 기준)\n" + _ec
+                                    )
+                                _bs = bandit_shadow_report()
+                                if _bs:
+                                    _sl_parts.append(
+                                        "🎰 bandit shadow 배분 제안 (적용 없음)\n" + _bs
+                                    )
+                                # REGIME_EXIT shadow: 체제별 이익 반납 패턴 → 제안만
+                                _re_lines = [
+                                    f"· REGIME_EXIT[{_f['regime']}] trailing 축소 검토 "
+                                    f"(이익반납 n={_f['sample_size']}, "
+                                    f"손실합 {_f['loss_sum']:+,.0f}원)"
+                                    for _f in (_wm_failures or [])
+                                    if _f.get("pattern") == "exit_profit_giveback"
+                                    and _f.get("sample_size", 0) >= 5
+                                ]
+                                if _re_lines:
+                                    _sl_parts.append(
+                                        "⚙️ REGIME_EXIT shadow 제안 (적용 없음)\n"
+                                        + "\n".join(_re_lines)
+                                    )
+                                if _sl_parts:
+                                    from src.utils.telegram import get_telegram_notifier
+                                    _sl_notifier = get_telegram_notifier()
+                                    if _sl_notifier:
+                                        await _sl_notifier.send_message(
+                                            "🧪 주간 shadow 리포트 (하네스 Phase 3)\n"
+                                            "━━━━━━━━━━━━━━━\n"
+                                            + "\n\n".join(_sl_parts)
+                                        )
+                            except Exception as _sl_err:
+                                logger.debug(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
+
                             if report.get("status") == "ok":
                                 msg = report.get("telegram_message", "")
                                 if msg:

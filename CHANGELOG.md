@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-10 — feat(harness): 하네스 Phase 3 — bounded 확장 (전부 shadow/계측)
+
+- **PIT 유니버스 스냅샷**: `batch_analyzer._save_pit_snapshot` — 매 스캔일
+  스크리닝 유니버스를 `pit_universe/YYYY-MM-DD.json`으로 동결 (하루 1회).
+  생존편향 없는 백테스트의 전제 — 커버리지 축적 후 gate/replay가 소비 예정.
+- **validator 감점 폭 외부화**: `CrossStrategyValidator(rule_penalties=)` +
+  `_pen()` 헬퍼 — 6개 비안전성 감점(장초반8/SEPA추격10/RSI5/수급10/급등추격15/
+  적자고PBR10)을 `default.yml validator.rule_penalties`로 이동 (기본값 동일 —
+  동작 불변). 안전성 규칙(차단·킬스위치)은 영구 하드코딩. 자동 진화는
+  장기 shadow 후에만 (설계 §3).
+- **`shadow_lab.py` 신규** (관측 전용, 주문·설정 불변):
+  ① 전문가 calibration — 전문가별 regime_bias의 5거래일 방향 적중률
+  (KODEX200 기준, 가중 자동 조정의 전제 데이터)
+  ② bandit shadow — 원장 기반 Thompson 샘플링 배분 제안 (일 단위 seed 재현성)
+- **REGIME_EXIT shadow 제안**: 체제별 이익반납 패턴(n≥5) → 텔레그램 제안만.
+- **토요일 "주간 shadow 리포트"** 텔레그램 신설 (3종 통합).
+- 자체 리뷰 P0 수정: `_pen` 도입 편집이 validator `__init__` 후반부(통계·LLM
+  한도·패널 캐시 초기화)를 unreachable로 만들던 문제 — 즉시 원복 후 재배치.
+- 검증: validator 스모크(기본값/오버라이드/미지 키), bandit 합성 원장
+  (75% 전략에 93% 제안), py_compile 6파일, 재시작 정상.
+
 ## 2026-08-10 — feat(wiki): 하네스 Phase 2 — Wiki ACE 격상 (정규화 lesson store)
 
 - **`lesson_store.py` 신규**: 정규화 교훈 저장소 — `wiki/lessons.json`이

@@ -1186,6 +1186,7 @@ class RiskManager:
             missing_indicator_penalty_step=_vcfg.get("missing_indicator_penalty_step"),
             missing_indicator_penalty_cap=_vcfg.get("missing_indicator_penalty_cap"),
             llm_daily_max=_vcfg.get("llm_daily_max"),
+            rule_penalties=_vcfg.get("rule_penalties"),
             trade_memory=self._trade_memory,
             llm_manager=_llm_mgr,
             trade_wiki=self._trade_wiki,

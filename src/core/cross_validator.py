@@ -39,7 +39,10 @@ class CrossStrategyValidator:
                  missing_indicator_penalty_step: Optional[int] = None,
                  missing_indicator_penalty_cap: Optional[int] = None,
                  llm_daily_max: Optional[int] = None,
-                 expert_orchestrator=None):
+                 expert_orchestrator=None,
+                 # 2026-08-10 하네스 Phase 3: 비안전성 규칙 감점 폭 외부화
+                 # (버전된 정책 — 장기 shadow 최적화의 전제. 부재 시 코드 기본값)
+                 rule_penalties: Optional[Dict[str, float]] = None):
         self._portfolio = portfolio
         self._risk_manager = risk_manager
         self._trade_memory = trade_memory
@@ -67,6 +70,9 @@ class CrossStrategyValidator:
             Path.home() / ".cache" / "ai_trader" / "rule12_shadow_log.jsonl"
         )
         self._rule12_logged_today: set = set()
+
+        # 비안전성 규칙 감점 폭 (키 부재 시 코드 기본값 — 안전성 규칙은 제외)
+        self._rule_penalties: Dict[str, float] = dict(rule_penalties or {})
 
         # YAML 토글 적용 (None이면 클래스 상수 사용)
         if min_pass_score is not None:
@@ -107,6 +113,15 @@ class CrossStrategyValidator:
         self._panel_recommended: Dict[str, Any] = {}
         self._panel_risk_factors: List[str] = []
         self._panel_regime: str = ""
+
+    def _pen(self, key: str, default: float) -> float:
+        """비안전성 규칙 감점 폭 조회 (2026-08-10 Phase 3 외부화)
+        — 설정 키 부재/오류 시 코드 기본값. 안전성 규칙(킬스위치·손실한도)은
+        이 메커니즘 대상이 아님 (영구 하드코딩)."""
+        try:
+            return float(self._rule_penalties.get(key, default))
+        except (TypeError, ValueError):
+            return default
 
     def _load_panel_outlook(self) -> None:
         """전문가 패널 결과 로드 (성공 6h, 실패/None 30min 캐시)
@@ -265,8 +280,9 @@ class CrossStrategyValidator:
             _is_batch = bool((metadata or {}).get("batch_signal"))
             if (930 <= now_hm < 1030 and not _is_batch
                     and strategy not in ("core_holding", "strategic_swing")):
-                adjusted_score -= 8
-                penalties.append("장초반 변동성 -8 (09:30~10:30)")
+                _p = self._pen("early_session", 8)
+                adjusted_score -= _p
+                penalties.append(f"장초반 변동성 -{_p:.0f} (09:30~10:30)")
             # 12:30~13:00 +5 보너스 (점심 batch 추세 확정 후 진입 sweet spot)
             if 1230 <= now_hm <= 1300:
                 adjusted_score += 5
@@ -276,8 +292,9 @@ class CrossStrategyValidator:
         # 90일 데이터 역설: 80~90점 승률 31.8% / -636k, 60~70점 승률 82.4% / +937k
         # 고점수가 오히려 추격매수 함정 → 90+ -10점 페널티
         if side == "buy" and strategy == "sepa_trend" and score >= 90:
-            adjusted_score -= 10
-            penalties.append("SEPA 90+ 추격매수 -10")
+            _p = self._pen("sepa_chase", 10)
+            adjusted_score -= _p
+            penalties.append(f"SEPA 90+ 추격매수 -{_p:.0f}")
 
         # 2026-04-23 추가: 지표 결손 시 보수적 감점 (risk-auditor 감사 결과)
         # atr_pct 78.6%, PER/PBR 87.7%, 수급 78.6% 결손 → R6/R7/R8/R2 사실상 비활성.
@@ -325,8 +342,9 @@ class CrossStrategyValidator:
         if (rsi_14 is not None and rsi_14 > 70
                 and market_regime != "bull"
                 and strategy in ("sepa_trend", "momentum_breakout")):
-            adjusted_score -= 5
-            penalties.append(f"RSI과매수({rsi_14:.0f}>70) -5")
+            _p = self._pen("rsi_overbought", 5)
+            adjusted_score -= _p
+            penalties.append(f"RSI과매수({rsi_14:.0f}>70) -{_p:.0f}")
 
         # === 규칙 2: 기관+외국인 동시 순매도 (KR 전용 — US는 수급 데이터 없음) ===
         if self._market == "KR":
@@ -342,8 +360,9 @@ class CrossStrategyValidator:
                         return False, 0, "수급 불일치: 기관+외국인 동시 순매도"
                     # sepa_trend: 배치(T+1) 특성상 완전 차단 대신 감점 처리
                     if strategy == "sepa_trend":
-                        adjusted_score -= 10
-                        penalties.append(f"[규칙2] 기관+외국인 동시 순매도 — SEPA 감점 -10")
+                        _p = self._pen("supply_dual_sell", 10)
+                        adjusted_score -= _p
+                        penalties.append(f"[규칙2] 기관+외국인 동시 순매도 — SEPA 감점 -{_p:.0f}")
 
         # === 규칙 3: 약세 체제에서 공격적/역추세 전략 차단 ===
         # KR: rsi2_reversal 추가 — Connors 원전 규칙(지수 약세 시 RSI(2) 진입 금지) 준수,
@@ -450,8 +469,9 @@ class CrossStrategyValidator:
         if atr_pct is not None and atr_pct > 0 and rt_change is not None and rt_change > 0:
             surge_ratio = rt_change / atr_pct
             if surge_ratio > 1.5:
-                adjusted_score -= 15
-                penalties.append(f"추격매수(등락/ATR={surge_ratio:.1f}x) -15")
+                _p = self._pen("surge_chase", 15)
+                adjusted_score -= _p
+                penalties.append(f"추격매수(등락/ATR={surge_ratio:.1f}x) -{_p:.0f}")
 
         # === 규칙 7: MA200 하방에서 추세 추종 (SEPA/테마) ===
         # 중복 감점 주의: swing_screener._base_technical_score에서도 MA200 상방이 보너스 조건.
@@ -471,8 +491,9 @@ class CrossStrategyValidator:
         if per is not None and pbr is not None:
             # 적자(PER<0) + 고PBR(>5) = 투기적 고평가
             if per < 0 and pbr > 5:
-                adjusted_score -= 10
-                penalties.append(f"적자+고PBR({pbr:.1f}) -10")
+                _p = self._pen("deficit_high_pbr", 10)
+                adjusted_score -= _p
+                penalties.append(f"적자+고PBR({pbr:.1f}) -{_p:.0f}")
             # PER > 50 = 극단 고평가 (성장주 프리미엄 감안해도 과도)
             elif per > 50:
                 adjusted_score -= 5

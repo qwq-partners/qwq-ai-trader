@@ -325,6 +325,13 @@ class BatchAnalyzer:
             except Exception as _sm_e:
                 logger.debug(f"[배치분석] 섹터 모멘텀 주입 실패 (폴백 사용): {_sm_e}")
 
+        # PIT 유니버스 스냅샷 (2026-08-10 하네스 Phase 3 — 생존편향 없는
+        # 백테스트의 전제. 오늘의 스크리닝 유니버스를 날짜별 파일로 동결)
+        try:
+            self._save_pit_snapshot(candidates)
+        except Exception as _pit_e:
+            logger.debug(f"[배치분석] PIT 스냅샷 실패 (무시): {_pit_e}")
+
         rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
         sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
         # strategic_swing 폐지 → SEPA conviction 오버레이로 흡수 (2026-08-08
@@ -2072,6 +2079,30 @@ class BatchAnalyzer:
                 )
             except Exception:
                 pass
+
+    def _save_pit_snapshot(self, candidates) -> None:
+        """당일 스크리닝 유니버스 동결 (point-in-time) — 파일이 이미 있으면 스킵
+
+        ~/.cache/ai_trader/pit_universe/YYYY-MM-DD.json
+        향후 backtest_gate/gate_replay가 해당 날짜 스냅샷을 우선 사용해
+        생존편향·시점 누수를 제거한다 (커버리지 축적 전에는 pit=false 폴백).
+        """
+        pit_dir = Path.home() / ".cache" / "ai_trader" / "pit_universe"
+        path = pit_dir / f"{datetime.now().strftime('%Y-%m-%d')}.json"
+        if path.exists():
+            return  # 하루 1회 (아침/점심 스캔 중복 방지 — 첫 스냅샷 우선)
+        pit_dir.mkdir(parents=True, exist_ok=True)
+        snapshot = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "created_at": datetime.now().isoformat(),
+            "candidates": [
+                {"symbol": c.symbol, "strategy": getattr(c, "strategy", ""),
+                 "score": float(getattr(c, "score", 0) or 0)}
+                for c in candidates
+            ],
+        }
+        path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+        logger.info(f"[배치분석] PIT 유니버스 스냅샷: {len(snapshot['candidates'])}종목 → {path.name}")
 
     # strategic_swing conviction 보너스 (2026-08-08 — 구 standalone 전략 흡수분)
     _SWING_CONVICTION_BONUS = 5.0

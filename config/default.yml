@@ -151,6 +151,15 @@ kr:
     missing_indicator_penalty_step: 2     # 지표 1개 결손당 감점
     missing_indicator_penalty_cap: 8      # 최대 감점 (4개 결손부터 적용)
     llm_daily_max: 10                     # LLM 이중검증 하루 최대 호출수
+    # 비안전성 규칙 감점 폭 (2026-08-10 하네스 Phase 3 외부화 — 미지정 키는
+    # 코드 기본값. 값 변경은 counterfactual 성적표 근거로만, 자동 진화는 장기 shadow 후)
+    rule_penalties:
+      early_session: 8        # 장초반 변동성 (09:30~10:30)
+      sepa_chase: 10          # SEPA 90+ 추격매수
+      rsi_overbought: 5       # RSI>70 비강세장
+      supply_dual_sell: 10    # 기관+외국인 동시 순매도 (SEPA 감점)
+      surge_chase: 15         # 등락/ATR > 1.5x 추격
+      deficit_high_pbr: 10    # 적자 + PBR>5
     # G4 LLM 트리거 (engine RiskManager)
     llm_check_score_min: 85               # 이 이상에서 LLM 호출 시작
     llm_bypass_score: 95                  # 이 이상에선 LLM 우회 (강한 모멘텀 신뢰)
