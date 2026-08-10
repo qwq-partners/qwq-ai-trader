@@ -1,5 +1,23 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-10 — docs(architecture): 하네스 엔지니어링 적용 설계 (Claude+Codex 협업)
+
+Lilian Weng "Harness Engineering for Self-Improvement" (2026-07-04) 프레임워크를
+현 시스템에 대조·적용한 설계 문서 (`docs/architecture/harness-evolution-design.md`).
+
+- 현황: Self-Improving 3단계 중 ②bounded 제안·③백테스트 게이트는 이미 모범적,
+  **①약점 마이닝(검증자 기반 실패 군집화)이 최대 갭**.
+- 기존 인식 정정: evolve() 호출 경로는 존재 (kr_scheduler 20:30) — 실제 단절은
+  LLM 자유서술 복기가 진화 규칙 트리거의 구조화 입력으로 연결되지 않는 것.
+- 핵심 설계: weakness_miner(2층: 결정론 cohort + verifier 판정), 진화 후보·기각
+  불변 원장 + 사후 반사실 calibration, Wiki ACE 격상(정규화 lesson store +
+  결정론 dedup + Reflector), 편집 표면 정책(REGIME_EXIT_PARAMS 1순위,
+  프롬프트·게이트·kill switch 영구 금지).
+- 로드맵 4페이즈: 측정 신뢰성(+과거 오염 지표 감사) → 실패 분류 → 기억 구조화 →
+  bounded 확장 (point-in-time이 표면 확장의 전제).
+- 하지 말 것 8항 합의 (Meta-Harness·프롬프트 자동 진화·evolutionary search 등).
+- 문서만 — 코드 변경 없음. 사용자 승인 후 Phase 0 착수.
+
 ## 2026-08-10 — fix(experts): sector_council 정성 점수 ±50 클램프 (이중 계산 완화)
 
 사용자 제보(반도체 -88 vs 미장 반도체 호조 괴리)로 검증한 결과:

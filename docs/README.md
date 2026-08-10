@@ -6,6 +6,7 @@
 
 ### Architecture (아키텍처)
 - [system-overview.md](architecture/system-overview.md) — 전체 시스템 구조, 신호 흐름(KR/US), 비동기 아키텍처, 핵심 파일
+- [harness-evolution-design.md](architecture/harness-evolution-design.md) — 하네스 엔지니어링 적용 설계 (2026-08-10, Claude+Codex 협업): weakness_miner·기각 후보 원장·Wiki ACE 격상·편집 표면 정책·4페이즈 로드맵
 
 ### Strategies (전략)
 - [kr-strategies.md](strategies/kr-strategies.md) — KR 6개 전략: SEPA, RSI2, Theme, Gap, Strategic Swing, Core (스코어링, 가드, 사이징)
