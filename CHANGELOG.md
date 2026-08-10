@@ -1,5 +1,29 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-10 — feat(evolution): 하네스 Phase 1 — weakness_miner + 게이트 반사실 재생
+
+- **`src/analytics/weakness_miner.py` 신규**: 원장 확정 레코드의 검증자 기반
+  실패 군집화. 2층 구조 — 결정론 cohort(전략×진입체제×패턴) + verifier 판정
+  (exit_profit_giveback/fast_stop_cluster/slow_bleed/data_quality). LLM 무관.
+  severity(손실합)·recency 별도 축 (빈도 편향 방지, Codex 보완). 표본 3 미만
+  미확정, `failures.jsonl` 주간 스냅샷 (일일 트리거 조회는 persist=False).
+- **원장 진입 체제 캡처**: `position_ledger.on_buy(regime=)` +
+  engine 훅에서 `_market_regime` 전달 — cohort 축 완성.
+- **evolve() 3.5단계**: `_find_weakness_trigger()` — 최상위 실패 패턴
+  (recent·표본5+)을 bounded 제안 1건으로 변환. 매핑 2종만:
+  entry계열→min_score+5 (게이트 검증 가능 전략 한정), exit계열→trailing-0.5
+  (신규 바운드 2.0~8.0). 내장 규칙보다 후순위, LLM 자유 제안보다 선순위.
+  최근 14일 기각 이력 재시도 차단 (보상 해킹 방어). trigger_failure_ids가
+  후보 원장에 연결.
+- **`gate_replay.py` 신규**: 만기(future_eval_due_at) 후보의 사후 반사실 재생
+  — 결정 이후 구간 A/B 백테스트로 게이트 판단의 방향 적중 여부(calibration)
+  축적. 회당 최대 2건, pit=false 명시 (Phase 3 PIT 후 개선).
+- **토요일 배선**: 약점 마이닝 요약 + 게이트 재생 결과 텔레그램.
+- **P1 (자체 리뷰)**: PARAM_MAP에 전체 전략명 별칭 6키 추가 — 원장 전략명
+  (sepa_trend 등)으로 제안 시 게이트 skip→무검증 적용되던 구멍 봉쇄.
+- 검증: weakness_miner 합성 원장 셀프체크 (4패턴 분류·severity 정렬·소표본
+  보류·top_failure 임계), 게이트 별칭 3케이스, py_compile 6파일, 재시작 정상.
+
 ## 2026-08-10 — feat(evolution): 하네스 Phase 0 — 오염 지표 감사 + 진화 후보 불변 원장
 
 하네스 설계(harness-evolution-design.md) 승인 후 Phase 0 착수 (사용자 "가보자~").

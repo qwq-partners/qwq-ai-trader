@@ -71,8 +71,12 @@ class PositionLedger:
 
     # ── 기록 ───────────────────────────────────────────────
     def on_buy(self, symbol: str, qty: int, price: Decimal, fee: Decimal = Decimal("0"),
-               strategy: str = "", name: str = "", sector: str = "") -> None:
-        """매수 체결 — open 누적 (추가 매수는 수량가중 평단)"""
+               strategy: str = "", name: str = "", sector: str = "",
+               regime: str = "") -> None:
+        """매수 체결 — open 누적 (추가 매수는 수량가중 평단)
+
+        regime: 진입 시점 시장 체제 (2026-08-10, weakness_miner cohort 축)
+        """
         try:
             if qty <= 0:
                 return
@@ -84,6 +88,7 @@ class PositionLedger:
                     "strategy": strategy,
                     "sector": sector,
                     "market": self.market,
+                    "entry_regime": regime,
                     "entry_time": datetime.now().isoformat(),
                     "avg_entry_price": str(price),
                     "initial_qty": int(qty),
@@ -178,7 +183,7 @@ class PositionLedger:
         record = {
             **{k: rec.get(k) for k in (
                 "symbol", "name", "strategy", "sector", "market",
-                "entry_time", "avg_entry_price", "initial_qty", "exits",
+                "entry_regime", "entry_time", "avg_entry_price", "initial_qty", "exits",
             )},
             "unreliable": bool(rec.get("unreliable", False)),
             "buy_fees": str(buy_fees),

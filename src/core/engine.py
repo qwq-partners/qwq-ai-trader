@@ -646,6 +646,7 @@ class UnifiedEngine:
                     fee=max(_buy_fee, Decimal("0")),
                     strategy=str(pos.strategy or ""),
                     name=pos.name or "", sector=pos.sector or "",
+                    regime=str(getattr(self, "_market_regime", "") or ""),
                 )
             except Exception as _lg_e:
                 logger.debug(f"[원장] BUY 기록 실패 (무시): {_lg_e}")

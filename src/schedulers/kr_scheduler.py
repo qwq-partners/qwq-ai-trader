@@ -4988,6 +4988,41 @@ JSON:
                             except Exception as _tca_err:
                                 logger.debug(f"[TCA] 주간 요약 실패 (무시): {_tca_err}")
 
+                            # 주간 약점 마이닝 + 게이트 반사실 재생 (2026-08-10
+                            # 하네스 Phase 1 — 원장 기반 실패 군집 + calibration)
+                            try:
+                                from ..analytics.weakness_miner import (
+                                    format_summary, mine,
+                                )
+                                _wm_failures = mine(days=30)
+                                _wm_msg = format_summary(_wm_failures)
+                                from src.utils.telegram import get_telegram_notifier
+                                _wm_notifier = get_telegram_notifier()
+                                if _wm_notifier and _wm_msg:
+                                    await _wm_notifier.send_message(
+                                        "🔍 주간 약점 마이닝 (원장 검증자 기반)\n"
+                                        "━━━━━━━━━━━━━━━\n"
+                                        f"{_wm_msg}\n"
+                                        "※ 표본 5+ & 최근 14일 패턴은 진화 트리거 후보"
+                                    )
+                            except Exception as _wm_err:
+                                logger.debug(f"[약점마이너] 주간 실행 실패 (무시): {_wm_err}")
+
+                            try:
+                                from ..core.evolution.gate_replay import run_due_replays
+                                _gr_msg = await run_due_replays()
+                                if _gr_msg:
+                                    from src.utils.telegram import get_telegram_notifier
+                                    _gr_notifier = get_telegram_notifier()
+                                    if _gr_notifier:
+                                        await _gr_notifier.send_message(
+                                            "🎯 게이트 반사실 재생 (예측력 검증)\n"
+                                            "━━━━━━━━━━━━━━━\n"
+                                            f"{_gr_msg}"
+                                        )
+                            except Exception as _gr_err:
+                                logger.debug(f"[게이트재생] 주간 실행 실패 (무시): {_gr_err}")
+
                             if report.get("status") == "ok":
                                 msg = report.get("telegram_message", "")
                                 if msg:

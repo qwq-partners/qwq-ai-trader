@@ -245,6 +245,8 @@ class StrategyEvolver:
             "max_atr_pct": (3.0, 8.0),
             "min_change_pct": (1.0, 5.0),
             "min_volume_ratio": (1.0, 5.0),
+            # 2026-08-10 weakness_miner exit 제안용 (미등록 시 무한 하향 가능)
+            "trailing_stop_pct": (2.0, 8.0),
         }
 
         logger.info(f"StrategyEvolver 초기화: 규칙 {len(self._rules)}개, 저장소 {self.storage_dir}")
@@ -396,6 +398,12 @@ class StrategyEvolver:
         # 3. 규칙 기반 트리거 확인 (한 번에 1개만)
         triggered = self._find_triggered_rule(review)
 
+        # 3.5 약점 마이너 트리거 (2026-08-10 하네스 Phase 1 — 검증자 기반)
+        #     내장 규칙보다 후순위(전역 지표가 우선), LLM 자유 제안보다 선순위
+        #     (원장 근거가 있는 구조화 제안이 자유서술보다 신뢰 가능)
+        if not triggered:
+            triggered = self._find_weakness_trigger()
+
         # 4. 규칙 없으면 LLM 보조 분석 (선택적)
         if not triggered and self.strategist and not dry_run:
             triggered = await self._get_llm_suggestion(review, days)
@@ -436,6 +444,7 @@ class StrategyEvolver:
                             source=triggered.get("source", ""),
                             reason=gate.reason,
                             gate=gate_result,
+                            trigger_failure_ids=triggered.get("trigger_failure_ids"),
                         )
                     except Exception as _cl_e:
                         logger.debug(f"[후보원장] 기각 기록 실패 (무시): {_cl_e}")
@@ -461,6 +470,7 @@ class StrategyEvolver:
                     source=triggered.get("source", ""),
                     reason=triggered.get("reason", ""),
                     gate=gate_result,
+                    trigger_failure_ids=triggered.get("trigger_failure_ids"),
                 )
             except Exception as _cl_e:
                 logger.debug(f"[후보원장] 적용 기록 실패 (무시): {_cl_e}")
@@ -709,6 +719,84 @@ class StrategyEvolver:
                 logger.warning(f"[진화] 규칙 체크 오류 ({rule.name}): {e}")
 
         return None
+
+    def _find_weakness_trigger(self) -> Optional[Dict]:
+        """약점 마이너 기반 트리거 (2026-08-10 하네스 Phase 1)
+
+        원장 검증자가 확정한 최상위 실패 패턴(recent·표본5+·손실 최대)을
+        bounded 파라미터 제안 1건으로 변환. 매핑은 보수적 2종만:
+          entry 계열 (fast_stop_cluster/slow_bleed) → 해당 전략 min_score +5
+          exit 계열 (exit_profit_giveback)          → exit_manager trailing_stop_pct -0.5
+
+        가드: 잠금 파라미터 스킵, _clamp_value 범위 제한, 동일 파라미터가
+        최근 14일 내 게이트 기각된 경우 재시도 차단 (보상 해킹 §3.2 방어).
+        """
+        try:
+            from src.analytics.weakness_miner import top_failure
+            failure = top_failure(days=30)
+        except Exception as e:
+            logger.debug(f"[진화] 약점 마이너 조회 실패 (무시): {e}")
+            return None
+        if not failure:
+            return None
+
+        mechanism = failure.get("mechanism")
+        strategy = failure.get("strategy") or ""
+        # entry 계열은 게이트가 백테스트로 검증 가능한 전략만 제안 (무검증
+        # 적용 방지 — gap_and_go 등 미지원 전략의 실패는 주간 요약으로만 노출)
+        _GATE_VERIFIABLE = ("sepa_trend", "rsi2_reversal", "core_holding")
+        if (mechanism == "entry" and strategy in self._strategies
+                and strategy in _GATE_VERIFIABLE):
+            target_strategy, param = strategy, "min_score"
+            adjust = lambda v: v + 5  # noqa: E731
+        elif mechanism == "exit":
+            target_strategy, param = "exit_manager", "trailing_stop_pct"
+            adjust = lambda v: v - 0.5  # noqa: E731
+        else:
+            return None
+
+        if param in self._locked_params:
+            return None
+        current = self._get_param_value(target_strategy, param)
+        if current is None:
+            return None
+        new_value = self._clamp_value(param, adjust(current), current)
+        if new_value == current:
+            return None
+
+        # 최근 14일 내 동일 파라미터 기각 이력 → 재시도 차단
+        try:
+            from .candidate_ledger import load_candidates
+            param_key = f"{target_strategy}.{param}"
+            for c in load_candidates(days=14):
+                if (c.get("parameter") == param_key
+                        and c.get("event") == "rejected_by_backtest"):
+                    logger.info(
+                        f"[진화] 약점 트리거 억제: {param_key} 최근 기각 이력 (재시도 차단)"
+                    )
+                    return None
+        except Exception:
+            pass
+
+        logger.info(
+            f"[진화] 약점 트리거: {failure['pattern']} "
+            f"[{failure['cohort_key']}] n={failure['sample_size']}, "
+            f"손실합 {failure['loss_sum']:+,.0f} → {target_strategy}.{param} "
+            f"{current} -> {new_value}"
+        )
+        return {
+            "strategy": target_strategy,
+            "parameter": param,
+            "old_value": current,
+            "new_value": new_value,
+            "reason": (
+                f"약점 마이너: {failure['pattern']} "
+                f"(표본 {failure['sample_size']}건, 손실합 {failure['loss_sum']:+,.0f}원, "
+                f"평균 {failure['effect_size']:+.1f}%)"
+            ),
+            "source": "weakness_miner",
+            "trigger_failure_ids": [failure["failure_id"]],
+        }
 
     def _resolve_param_targets(self, param_pattern: str) -> List[Tuple[str, str]]:
         """파라미터 패턴 해석: "*.min_score" -> [(strategy1, min_score), ...]"""

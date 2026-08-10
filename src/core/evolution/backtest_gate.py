@@ -66,6 +66,14 @@ PARAM_MAP: Dict[str, str] = {
     "rsi2.min_score": "rsi2_min_score",
     "core.min_score": "core_min_score",
     "core_holding.min_score": "core_min_score",
+    # 전체 전략명 별칭 (2026-08-10 — 원장/weakness_miner는 전체명을 쓰므로
+    # 별칭 부재 시 게이트가 skip돼 무검증 적용되던 구멍을 막는다)
+    "sepa_trend.min_score": "sepa_min_score",
+    "rsi2_reversal.min_score": "rsi2_min_score",
+    "sepa_trend.stop_loss_pct": "sepa_stop_loss_pct",
+    "rsi2_reversal.stop_loss_pct": "rsi2_stop_loss_pct",
+    "sepa_trend.max_holding_days": "sepa_max_holding_days",
+    "rsi2_reversal.max_holding_days": "rsi2_max_holding_days",
     # 손절
     "sepa.stop_loss_pct": "sepa_stop_loss_pct",
     "rsi2.stop_loss_pct": "rsi2_stop_loss_pct",
