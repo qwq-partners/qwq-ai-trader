@@ -19,6 +19,9 @@ identifier = pattern|mechanism|strategy|regime|v1 (정규화 키 — 종목명·
 from __future__ import annotations
 
 import json
+import os
+import threading
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -47,6 +50,9 @@ def make_identifier(pattern: str, mechanism: str, strategy: str, regime: str) ->
 class LessonStore:
     def __init__(self, path: Path = _STORE_PATH):
         self._path = path
+        # 최종 리뷰 블로커 #2 (Codex): 뮤테이션 직렬화 — 현재는 단일 이벤트 루프라
+        # 이론적 위험이지만, 향후 스레드 호출자가 생겨도 lost update가 없도록
+        self._lock = threading.Lock()
         self._data: Dict[str, Dict[str, Any]] = self._load()
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
@@ -59,11 +65,11 @@ class LessonStore:
 
     def _save(self) -> None:
         # 통합 리뷰 P0-3 (Codex): temp+os.replace 원자 교체 — 저장 도중 프로세스
-        # 종료 시 잘린 JSON이 진실 원천을 파손하는 것을 방지
+        # 종료 시 잘린 JSON이 진실 원천을 파손하는 것을 방지.
+        # 블로커 #2 반영: writer별 고유 임시 파일 (고정 .tmp 경쟁 제거)
         try:
-            import os
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(".json.tmp")
+            tmp = self._path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:6]}.tmp")
             tmp.write_text(
                 json.dumps(self._data, ensure_ascii=False, indent=1),
                 encoding="utf-8",
@@ -79,6 +85,16 @@ class LessonStore:
                effect_size: Optional[float] = None) -> None:
         """동일 identifier면 근거·통계만 병합 (설명 재작성 없음 — context collapse 방지)"""
         try:
+            with self._lock:
+                self._upsert_locked(pattern, mechanism, strategy, regime,
+                                    evidence_ref, supporting, sample_size, effect_size)
+        except Exception as e:
+            logger.warning(f"[교훈스토어] upsert 실패 (무시): {e}")
+
+    def _upsert_locked(self, pattern: str, mechanism: str, strategy: str, regime: str,
+                       evidence_ref: str, supporting: bool,
+                       sample_size: Optional[int], effect_size: Optional[float]) -> None:
+        if True:
             key = make_identifier(pattern, mechanism, strategy, regime)
             now = datetime.now().isoformat()
             rec = self._data.get(key)
@@ -110,25 +126,24 @@ class LessonStore:
             )
             rec["last_seen"] = now
             self._save()
-        except Exception as e:
-            logger.warning(f"[교훈스토어] upsert 실패 (무시): {e}")
 
     # ── Curator: 주간 상태 전이 ─────────────────────────────────
     def curate(self) -> Dict[str, int]:
         """candidate→active(표본 5+), 60일 무보강→deprecated. 삭제는 없음 (반례 보존)"""
         moved = {"activated": 0, "deprecated": 0}
         try:
-            cutoff = (datetime.now() - timedelta(days=DEPRECATE_AFTER_DAYS)).isoformat()
-            for rec in self._data.values():
-                n = int(rec.get("verifier", {}).get("sample_size", 0) or 0)
-                status = rec.get("status", "candidate")
-                if status == "candidate" and n >= ACTIVE_MIN_SAMPLES:
-                    rec["status"] = "active"
-                    moved["activated"] += 1
-                elif status == "active" and rec.get("last_seen", "") < cutoff:
-                    rec["status"] = "deprecated"
-                    moved["deprecated"] += 1
-            self._save()
+            with self._lock:
+                cutoff = (datetime.now() - timedelta(days=DEPRECATE_AFTER_DAYS)).isoformat()
+                for rec in self._data.values():
+                    n = int(rec.get("verifier", {}).get("sample_size", 0) or 0)
+                    status = rec.get("status", "candidate")
+                    if status == "candidate" and n >= ACTIVE_MIN_SAMPLES:
+                        rec["status"] = "active"
+                        moved["activated"] += 1
+                    elif status == "active" and rec.get("last_seen", "") < cutoff:
+                        rec["status"] = "deprecated"
+                        moved["deprecated"] += 1
+                self._save()
         except Exception as e:
             logger.warning(f"[교훈스토어] curate 실패: {e}")
         return moved

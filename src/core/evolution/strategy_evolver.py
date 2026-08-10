@@ -411,6 +411,16 @@ class StrategyEvolver:
         if triggered and not dry_run:
             # 5. 백테스트 사전 검증 — 과거 데이터로 개선이 확인된 변경만 적용
             #    (실거래 5영업일/10건 표본만으로 파라미터를 바꾸면 잡음을 학습한다)
+            # 최종 리뷰 블로커 #1 (Codex): 게이트 객체 부재 시 source 무관
+            # fail-closed — "검증 없으면 적용 없음"이 기본 계약. (실운영은 항상
+            # 주입되므로 이 분기는 미주입 구성 방어)
+            if self.backtest_gate is None:
+                logger.warning("[진화] 백테스트 게이트 미주입 — fail-closed 기각")
+                return {
+                    "status": "rejected_by_backtest",
+                    "change": triggered,
+                    "reason": "게이트 미주입 (fail-closed)",
+                }
             gate_result = None
             if self.backtest_gate is not None:
                 gate = await self.backtest_gate.verify(triggered)
@@ -455,14 +465,18 @@ class StrategyEvolver:
                         "backtest": gate_result,
                     }
                 self.state.consecutive_gate_errors = 0
-                # 통합 리뷰 P0-1 (Codex): 게이트가 미지원 파라미터로 skip한 경우,
-                # 기계 생성 제안(weakness_miner/llm)은 fail-closed로 기각한다.
-                # 검증 불가능한 표면을 기계가 열어가는 것이 보상 해킹의 첫 경로.
-                # (내장 rule 제안의 skip 허용은 기존 동작 유지 — 별도 결정 사항)
-                if gate.skipped and triggered.get("source") in ("weakness_miner", "llm"):
+                # 최종 리뷰 블로커 #1 (Codex, allowlist 반전): skip이면 source
+                # 무관 기각이 기본 — "검증 불가 = 적용 불가". 유일한 예외는
+                # 게이트를 사람이 명시적으로 끈 경우(EVOLUTION_BACKTEST_GATE=0,
+                # enabled=False)로, 이는 무검증 진화를 선택한 인간 의도이므로
+                # 기존 흐름을 유지한다. 미지원 파라미터·값 누락 skip은 전부 기각.
+                # (과거 오염 결정 7건 다수가 무게이트 min_score 변경이었음 — 감사 참조)
+                _gate_off_by_human = not self.backtest_gate.enabled
+                if gate.skipped and not _gate_off_by_human:
                     logger.warning(
-                        f"[진화] 게이트 미지원 파라미터 — 기계 생성 제안 fail-closed 기각: "
-                        f"{triggered.get('strategy')}.{triggered.get('parameter')}"
+                        f"[진화] 게이트 검증 불가(skip) — fail-closed 기각: "
+                        f"{triggered.get('strategy')}.{triggered.get('parameter')} "
+                        f"(source={triggered.get('source', '')}, 사유={gate.reason})"
                     )
                     try:
                         from .candidate_ledger import record_candidate
@@ -472,7 +486,7 @@ class StrategyEvolver:
                             old_value=triggered.get("old_value"),
                             new_value=triggered.get("new_value"),
                             source=triggered.get("source", ""),
-                            reason="게이트 미지원 파라미터 — 기계 생성 제안 fail-closed",
+                            reason=f"게이트 검증 불가 fail-closed ({gate.reason})",
                             trigger_failure_ids=triggered.get("trigger_failure_ids"),
                         )
                     except Exception:
@@ -480,7 +494,7 @@ class StrategyEvolver:
                     return {
                         "status": "rejected_by_backtest",
                         "change": triggered,
-                        "reason": "게이트 미지원 파라미터 (기계 생성 제안 fail-closed)",
+                        "reason": f"게이트 검증 불가 fail-closed ({gate.reason})",
                     }
                 if not gate.skipped:
                     triggered = {**triggered, "backtest": gate_result}

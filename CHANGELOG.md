@@ -1,5 +1,25 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-11 — fix(harness): 최종 리뷰 2차 — Codex 보류 판정 블로커 2건 해소
+
+diff 원문 기반 Codex 재심(1차 반영분 0ce5ce6에 대해 "보류" 판정) 블로커 수용:
+
+- **블로커 #1 (allowlist 반전)**: 게이트 skip 시 source 무관 **전면 fail-closed**
+  — 기존 "weakness/llm만 차단"은 rule·수동·오타 source가 무검증 적용되는 구멍.
+  유일한 예외는 사람이 명시적으로 게이트를 끈 경우(`EVOLUTION_BACKTEST_GATE=0`,
+  enabled=False — 무검증 진화를 선택한 인간 의도)뿐. 게이트 객체 미주입도
+  source 무관 기각. 효과: gap_and_go/theme 등 백테스트 미지원 전략의 내장 rule
+  min_score 자동 변경이 이제 기각됨 (candidates.jsonl에 기록되어 토요일 가시화
+  — 과거 오염 결정 7건 다수가 바로 이 무게이트 경로였음).
+- **블로커 #2 (LessonStore 동시성)**: `threading.Lock`으로 upsert/curate 뮤테이션
+  직렬화 + writer별 고유 임시 파일(pid+uuid) — 고정 .tmp 경쟁·lost update 제거.
+- 수정 중 자체 P0 1건: upsert lock 리팩토링이 dangling except를 남김 → 즉시 정리
+  (curate lock 재들여쓰기 포함).
+- Codex "확인 불가" 4항목 실측 완료: trailing_stop_pct 백테스트 소비(line 132·135),
+  applied_date 상시 세팅(618·985), _pen 주입 반영 스모크, malformed tail 방어.
+- 검증: 스토어 회귀(중복 병합·활성 전이·재로드·tmp 잔존 없음), evolver 소스
+  계약 assert, py_compile, 재시작 정상.
+
 ## 2026-08-10 — fix(harness): 최종 통합 리뷰 반영 — Codex 교차 리뷰 확정 4건
 
 Codex 정적 리뷰(P0 3·P1 12·P2 5) 전건을 실코드 대조 검증 — 확정 4건 수정,
