@@ -207,6 +207,24 @@ class PositionLedger:
             )
         except Exception as e:
             logger.warning(f"[원장] 확정 레코드 기록 실패: {e}")
+
+        # ACE Generator (2026-08-10 Phase 2): 확정 포지션을 결정론 분류해
+        # 교훈 후보 등록 — LLM 무관, 실패 시 무시
+        try:
+            from src.analytics.weakness_miner import _PATTERN_MECHANISM, _classify
+            from src.core.evolution.lesson_store import get_lesson_store
+            _pattern = _classify(record)
+            if _pattern is not None:
+                get_lesson_store().upsert(
+                    pattern=_pattern,
+                    mechanism=_PATTERN_MECHANISM.get(_pattern, "unknown"),
+                    strategy=str(record.get("strategy") or ""),
+                    regime=str(record.get("entry_regime") or ""),
+                    evidence_ref=f"{symbol}@{record.get('closed_at', '')[:10]}",
+                )
+        except Exception as _ls_e:
+            logger.debug(f"[원장] 교훈 후보 등록 실패 (무시): {_ls_e}")
+
         self._open.pop(symbol, None)
         self._save_open()
 

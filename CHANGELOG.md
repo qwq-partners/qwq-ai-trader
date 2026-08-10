@@ -1,5 +1,24 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-10 — feat(wiki): 하네스 Phase 2 — Wiki ACE 격상 (정규화 lesson store)
+
+- **`lesson_store.py` 신규**: 정규화 교훈 저장소 — `wiki/lessons.json`이
+  진실 원천, Markdown 위키는 projection. identifier =
+  pattern|mechanism|전략|체제|v1 (자유문장·종목명 금지). 결정론 dedup
+  (동일 키 = 근거·통계만 병합, 설명 재작성 없음 — context collapse 방지).
+  지지/반례 evidence 롤링 50, confidence = 0.3 +0.06/지지 -0.1/반례.
+- **ACE 역할 배선**:
+  Generator — `position_ledger._finalize`가 확정 포지션을 weakness_miner
+  분류기로 결정론 분류 → 교훈 후보 등록 (LLM 무관).
+  Reflector — 토요일 weakness 집계로 표본·효과크기 갱신.
+  Curator — `curate()`: candidate(n<5)→active(n≥5)→deprecated(60일 무보강).
+  삭제 없음 (반례 보존).
+- **소비**: `trade_wiki.query()`에 active 교훈 추가 — 크로스검증·리밸런스
+  LLM 컨텍스트에 검증자 기반 구조화 교훈이 자유 문장보다 우선 공급.
+- 팩터 예산 shadow 승격 판단은 관측 대기 (8/24 체크포인트).
+- 검증: 스토어 셀프체크 (중복 근거 병합·상태 전이·재로드 영속성·컨텍스트
+  필터), py_compile 4파일, 재시작 정상.
+
 ## 2026-08-10 — feat(evolution): 하네스 Phase 1 — weakness_miner + 게이트 반사실 재생
 
 - **`src/analytics/weakness_miner.py` 신규**: 원장 확정 레코드의 검증자 기반

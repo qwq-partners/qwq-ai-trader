@@ -398,6 +398,18 @@ class TradeWiki:
                         f"승률{fm.get('win_rate',0):.0f}%"
                     )
 
+            # 정규화 교훈 스토어의 active 교훈 (2026-08-10 Phase 2 — 검증자
+            # 기반 구조화 교훈이 자유 문장보다 우선 신뢰)
+            try:
+                from .lesson_store import get_lesson_store
+                _ls_ctx = get_lesson_store().format_context(
+                    strategy=strategy, regime=regime
+                )
+                if _ls_ctx:
+                    parts.append(_ls_ctx)
+            except Exception:
+                pass
+
             result = "\n".join(parts)
             return result[:500] if result else ""
         except Exception:

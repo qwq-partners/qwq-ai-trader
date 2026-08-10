@@ -4990,6 +4990,7 @@ JSON:
 
                             # 주간 약점 마이닝 + 게이트 반사실 재생 (2026-08-10
                             # 하네스 Phase 1 — 원장 기반 실패 군집 + calibration)
+                            _wm_failures = []
                             try:
                                 from ..analytics.weakness_miner import (
                                     format_summary, mine,
@@ -5007,6 +5008,26 @@ JSON:
                                     )
                             except Exception as _wm_err:
                                 logger.debug(f"[약점마이너] 주간 실행 실패 (무시): {_wm_err}")
+
+                            # ACE Reflector+Curator (2026-08-10 Phase 2):
+                            # 주간 실패 집계 → 교훈 통계 갱신 + 상태 전이
+                            try:
+                                from ..core.evolution.lesson_store import get_lesson_store
+                                _ls = get_lesson_store()
+                                for _f in (_wm_failures or []):
+                                    _ls.upsert(
+                                        pattern=_f["pattern"],
+                                        mechanism=_f["mechanism"],
+                                        strategy=_f["strategy"],
+                                        regime=_f["regime"],
+                                        sample_size=_f["sample_size"],
+                                        effect_size=_f["effect_size"],
+                                    )
+                                _moved = _ls.curate()
+                                if _moved.get("activated") or _moved.get("deprecated"):
+                                    logger.info(f"[교훈스토어] curate: {_moved}")
+                            except Exception as _ls_err:
+                                logger.debug(f"[교훈스토어] 주간 갱신 실패 (무시): {_ls_err}")
 
                             try:
                                 from ..core.evolution.gate_replay import run_due_replays
