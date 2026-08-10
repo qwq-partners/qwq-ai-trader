@@ -138,6 +138,14 @@ StrategyEvolver가 좁은 수치 변경 하나를 제안하고 → 독립 게이
 7. **위험예산·bandit 동시 활성화** — 효과 식별 불가. 하나씩 shadow→canary→적용
 8. **분산 서브에이전트 인프라** — 현 규모엔 주간 배치 + 파일 원장으로 충분
 
+## 6.5 최종 판정 (2026-08-11 Codex): **조건부 승인**
+
+> 조건: **LessonStore는 단일 프로세스·단일 인스턴스 writer여야 한다.**
+> 현행 보장: ① 봇은 systemd 싱글톤 + PID 락(unified_trader.pid)으로 단일 프로세스
+> ② 모든 소비자(position_ledger·kr_scheduler·trade_wiki)가 모듈 싱글톤
+> `get_lesson_store()` 경유. **다중 프로세스에서 lessons.json을 쓰는 코드를
+> 추가하지 말 것** (필요해지면 파일 lock 또는 이벤트 스풀로 전환 — §7 참조).
+
 ## 7. 통합 리뷰 후 장기 이관 과제 (2026-08-10 Codex 지적 — 타당하나 현 단계 초과)
 
 - 게이트 반환을 PASS/PERFORMANCE_REJECT/INFRA_HOLD/UNSUPPORTED/INSUFFICIENT
