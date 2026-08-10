@@ -77,6 +77,10 @@ _PATTERN_MECHANISM = {
     "data_quality": "data",
 }
 
+# 공개 API (통합 리뷰 P2-4 — position_ledger 등 외부 소비자용, private 결합 금지)
+classify_position_record = _classify
+PATTERN_MECHANISM = _PATTERN_MECHANISM
+
 
 def mine(days: int = 30, market: str = "KR", persist: bool = True) -> List[Dict[str, Any]]:
     """최근 N일 확정 포지션에서 failure 패턴 추출 (결정론 — LLM 무관)

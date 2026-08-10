@@ -58,12 +58,17 @@ class LessonStore:
         return {}
 
     def _save(self) -> None:
+        # 통합 리뷰 P0-3 (Codex): temp+os.replace 원자 교체 — 저장 도중 프로세스
+        # 종료 시 잘린 JSON이 진실 원천을 파손하는 것을 방지
         try:
+            import os
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(
+            tmp = self._path.with_suffix(".json.tmp")
+            tmp.write_text(
                 json.dumps(self._data, ensure_ascii=False, indent=1),
                 encoding="utf-8",
             )
+            os.replace(tmp, self._path)
         except Exception as e:
             logger.warning(f"[교훈스토어] 저장 실패: {e}")
 

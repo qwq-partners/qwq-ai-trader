@@ -2,7 +2,8 @@
 
 > 작성: 2026-08-10 (Claude 독립 분석 + Codex 협업 설계 병합)
 > 참조: Lilian Weng, "Harness Engineering for Self-Improvement" (2026-07-04)
-> 상태: **설계 확정 대기** (사용자 승인 후 로드맵 착수)
+> 상태: **4페이즈 1차 구현 완료** (2026-08-10, 커밋 2ef5f7a→961b7bf→2ca9c75→d820b23
+> + 통합 리뷰 반영. 페이즈별 상세는 CHANGELOG). 남은 장기 과제는 하단 §7 참조.
 
 ## 0. 한 줄 결론
 
@@ -136,6 +137,16 @@ StrategyEvolver가 좁은 수치 변경 하나를 제안하고 → 독립 게이
 6. **게이트 통과율을 목적함수로** — 조작 가능 proxy. 목적함수는 비용 차감 손익·MDD·calibration
 7. **위험예산·bandit 동시 활성화** — 효과 식별 불가. 하나씩 shadow→canary→적용
 8. **분산 서브에이전트 인프라** — 현 규모엔 주간 배치 + 파일 원장으로 충분
+
+## 7. 통합 리뷰 후 장기 이관 과제 (2026-08-10 Codex 지적 — 타당하나 현 단계 초과)
+
+- 게이트 반환을 PASS/PERFORMANCE_REJECT/INFRA_HOLD/UNSUPPORTED/INSUFFICIENT
+  enum 계약으로 전면 개편 (현재: 기계 생성 제안만 skip 시 fail-closed로 부분 대응)
+- evolvable 파라미터 단일 registry (proposer·bounds·gate 매핑·applier 공유)
+- lesson 생성의 이벤트 스풀 분리 (현재: fill 경로 동기 upsert — 예외 격리됨)
+- PIT 스냅샷 manifest (code SHA·config hash) + gate/replay의 PIT 소비
+- candidate_id를 제안 시 1회 생성한 UUID로 (현재: 내용 해시 — 동일일 재시도 충돌 가능)
+- 전문가 calibration의 Brier score·자산별 벤치마크 (현재: 방향 적중률 휴리스틱)
 
 ## 부록 — 협업 이력
 

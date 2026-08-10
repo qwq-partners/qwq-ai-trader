@@ -103,7 +103,10 @@ async def _replay_one(gate: BacktestGate, cand: Dict[str, Any]) -> str:
     cand_ret = float((candi or {}).get("total_return_pct", 0) or 0)
     helped = cand_ret > base_ret
     was_applied = cand.get("event") == "applied"
-    gate_correct = (was_applied and helped) or (not was_applied and not helped)
+    # 통합 리뷰 P1-8 (Codex): "gate_correct"는 오용 위험 — 이것은 pit=false
+    # 사후 재생의 방향 일치일 뿐, 당시 시점 예측력의 증명이 아니다.
+    # 진단 전용 필드이며 자동 승격·가중치 보상으로 사용 금지.
+    agreement = (was_applied and helped) or (not was_applied and not helped)
 
     record_candidate(
         event="replay", parameter=param_key,
@@ -114,11 +117,12 @@ async def _replay_one(gate: BacktestGate, cand: Dict[str, Any]) -> str:
             "replay_months": months, "pit": False,
             "base_return_pct": base_ret, "cand_return_pct": cand_ret,
             "original_event": cand.get("event"),
-            "gate_correct": gate_correct,
+            "directional_agreement": agreement,
+            "usage": "diagnostic_only",
         },
         candidate_id=cand.get("candidate_id", ""),
     )
-    verdict = "✅ 게이트 판단 적중" if gate_correct else "❌ 게이트 판단 빗나감"
+    verdict = "✅ 방향 일치 (진단용)" if agreement else "❌ 방향 불일치 (진단용)"
     return (
         f"· {param_key} {cand.get('old_value')}→{cand.get('new_value')} "
         f"[{cand.get('event')}] 재생 {months}개월: "

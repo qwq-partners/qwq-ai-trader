@@ -1,5 +1,27 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-10 — fix(harness): 최종 통합 리뷰 반영 — Codex 교차 리뷰 확정 4건
+
+Codex 정적 리뷰(P0 3·P1 12·P2 5) 전건을 실코드 대조 검증 — 확정 4건 수정,
+기각 11건은 실코드로 반증 (예외 격리·중앙 바운드·async 처리 등 기구현 확인).
+
+- **P0-1+P1-5 (보상 해킹 잔여 구멍)**: 게이트가 미지원 파라미터로 skip 시
+  **기계 생성 제안(weakness_miner/llm)은 fail-closed 기각** + 후보 원장 기록.
+  검증 불가 표면을 기계가 여는 경로 차단. 내장 rule의 skip 허용은 기존 동작
+  유지 (변경 시 gap_and_go 등 미지원 전략 진화가 멈춤 — 별도 결정 사항).
+- **P0-3**: lessons.json 저장을 temp+os.replace 원자 교체로 — 저장 중 종료 시
+  진실 원천 파손 방지.
+- **P1-8**: gate_replay `gate_correct` → `directional_agreement` +
+  `usage: diagnostic_only` — pit=false 사후 재생을 예측력 증명으로 오용 금지.
+- **P2-4**: weakness_miner 공개 API (`classify_position_record`,
+  `PATTERN_MECHANISM`) — position_ledger의 private 결합 해소.
+- 미채택 (근거와 함께 기각): P0-2 fill 경로 예외 전파(이미 try/except 격리),
+  P1-10 토요일 블로킹(전부 async/to_thread), P1-6 바운드 국소성(_clamp_value
+  중앙 공유), P1-1 부분기록(malformed tail skip 기존) 등.
+- 장기 과제로 이관 (Codex 지적 타당하나 현 규모 초과): 게이트 enum 반환 계약
+  전면 개편, evolvable 파라미터 단일 registry, lesson 이벤트 스풀 분리,
+  PIT manifest — harness-evolution-design.md 후속 섹션 참조.
+
 ## 2026-08-10 — feat(harness): 하네스 Phase 3 — bounded 확장 (전부 shadow/계측)
 
 - **PIT 유니버스 스냅샷**: `batch_analyzer._save_pit_snapshot` — 매 스캔일

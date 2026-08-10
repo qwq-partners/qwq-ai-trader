@@ -455,6 +455,33 @@ class StrategyEvolver:
                         "backtest": gate_result,
                     }
                 self.state.consecutive_gate_errors = 0
+                # 통합 리뷰 P0-1 (Codex): 게이트가 미지원 파라미터로 skip한 경우,
+                # 기계 생성 제안(weakness_miner/llm)은 fail-closed로 기각한다.
+                # 검증 불가능한 표면을 기계가 열어가는 것이 보상 해킹의 첫 경로.
+                # (내장 rule 제안의 skip 허용은 기존 동작 유지 — 별도 결정 사항)
+                if gate.skipped and triggered.get("source") in ("weakness_miner", "llm"):
+                    logger.warning(
+                        f"[진화] 게이트 미지원 파라미터 — 기계 생성 제안 fail-closed 기각: "
+                        f"{triggered.get('strategy')}.{triggered.get('parameter')}"
+                    )
+                    try:
+                        from .candidate_ledger import record_candidate
+                        record_candidate(
+                            event="rejected_by_backtest",
+                            parameter=f"{triggered.get('strategy')}.{triggered.get('parameter')}",
+                            old_value=triggered.get("old_value"),
+                            new_value=triggered.get("new_value"),
+                            source=triggered.get("source", ""),
+                            reason="게이트 미지원 파라미터 — 기계 생성 제안 fail-closed",
+                            trigger_failure_ids=triggered.get("trigger_failure_ids"),
+                        )
+                    except Exception:
+                        pass
+                    return {
+                        "status": "rejected_by_backtest",
+                        "change": triggered,
+                        "reason": "게이트 미지원 파라미터 (기계 생성 제안 fail-closed)",
+                    }
                 if not gate.skipped:
                     triggered = {**triggered, "backtest": gate_result}
 
