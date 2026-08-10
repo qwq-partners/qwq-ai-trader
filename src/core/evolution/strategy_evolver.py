@@ -425,6 +425,20 @@ class StrategyEvolver:
                         logger.warning(f"[진화] 백테스트 게이트 기각: {gate.reason}")
 
                     self._save_state()
+                    # Phase 0: 기각/보류 상세를 불변 원장에 영속화 (기존엔 카운터만)
+                    try:
+                        from .candidate_ledger import record_candidate
+                        record_candidate(
+                            event="gate_error" if gate.errored else "rejected_by_backtest",
+                            parameter=f"{triggered.get('strategy')}.{triggered.get('parameter')}",
+                            old_value=triggered.get("old_value"),
+                            new_value=triggered.get("new_value"),
+                            source=triggered.get("source", ""),
+                            reason=gate.reason,
+                            gate=gate_result,
+                        )
+                    except Exception as _cl_e:
+                        logger.debug(f"[후보원장] 기각 기록 실패 (무시): {_cl_e}")
                     return {
                         "status": "gate_error" if gate.errored else "rejected_by_backtest",
                         "change": triggered,
@@ -437,6 +451,19 @@ class StrategyEvolver:
 
             self._apply_change(triggered, review)
             self._save_state()
+            try:
+                from .candidate_ledger import record_candidate
+                record_candidate(
+                    event="applied",
+                    parameter=f"{triggered.get('strategy')}.{triggered.get('parameter')}",
+                    old_value=triggered.get("old_value"),
+                    new_value=triggered.get("new_value"),
+                    source=triggered.get("source", ""),
+                    reason=triggered.get("reason", ""),
+                    gate=gate_result,
+                )
+            except Exception as _cl_e:
+                logger.debug(f"[후보원장] 적용 기록 실패 (무시): {_cl_e}")
             return {"status": "applied", "change": triggered, "backtest": gate_result}
 
         if triggered and dry_run:
@@ -561,6 +588,21 @@ class StrategyEvolver:
             f"[진화] 롤백: {change.strategy}.{change.parameter} "
             f"= {change.new_value} -> {change.old_value}"
         )
+        try:
+            from .candidate_ledger import make_candidate_id, record_candidate
+            record_candidate(
+                event="rollback",
+                parameter=f"{change.strategy}.{change.parameter}",
+                old_value=change.old_value, new_value=change.new_value,
+                source=change.source, reason=change.reason,
+                # applied 시점 ID와 일치시켜 원장에서 생애주기 추적 가능하게
+                candidate_id=make_candidate_id(
+                    f"{change.strategy}.{change.parameter}",
+                    change.old_value, change.new_value, change.applied_date,
+                ),
+            )
+        except Exception as _cl_e:
+            logger.debug(f"[후보원장] 롤백 기록 실패 (무시): {_cl_e}")
 
     def _finalize_active_change(self, review: ReviewResult):
         """활성 변경 확정 (유지)"""
@@ -581,6 +623,23 @@ class StrategyEvolver:
             f"[진화] 확정 유지: {change.strategy}.{change.parameter} "
             f"= {change.new_value}"
         )
+        try:
+            from .candidate_ledger import make_candidate_id, record_candidate
+            record_candidate(
+                event="keep",
+                parameter=f"{change.strategy}.{change.parameter}",
+                old_value=change.old_value, new_value=change.new_value,
+                source=change.source, reason=change.reason,
+                gate={"win_rate_after": change.win_rate_after,
+                      "profit_factor_after": change.profit_factor_after,
+                      "trades_after": change.trades_after},
+                candidate_id=make_candidate_id(
+                    f"{change.strategy}.{change.parameter}",
+                    change.old_value, change.new_value, change.applied_date,
+                ),
+            )
+        except Exception as _cl_e:
+            logger.debug(f"[후보원장] 확정 기록 실패 (무시): {_cl_e}")
 
     # ============================================================
     # 규칙 기반 트리거

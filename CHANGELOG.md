@@ -1,5 +1,25 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-10 — feat(evolution): 하네스 Phase 0 — 오염 지표 감사 + 진화 후보 불변 원장
+
+하네스 설계(harness-evolution-design.md) 승인 후 Phase 0 착수 (사용자 "가보자~").
+
+- **`candidate_ledger.py` 신규**: evolve()의 모든 후보 결정을
+  `~/.cache/ai_trader/evolution/candidates.jsonl`에 append-only 기록
+  (applied/rejected_by_backtest/gate_error/rollback/keep). 기존엔
+  `total_rejected_by_backtest` 카운터만 남아 기각 상세가 소실됐음.
+  candidate_id = sha1(파라미터|old|new|적용일) — rollback/keep이 applied와
+  동일 ID로 연결돼 생애주기 추적 가능 (자체 리뷰 P1 수정).
+  기각/적용 건은 `future_eval_due_at`(+28일) — Phase 1 반사실 재생 예정일.
+- **`scripts/audit_metric_contamination.py`**: 과거 오염 지표 감사 (일회성,
+  재실행 안전). 결과: **진화 결정 7건 전부 v1_event(분할익절 부풀림) 지표 기반**
+  → `metric_contamination_audit.json` 불변 기록 + **Wiki 전략 페이지 7개에
+  경고 배너 삽입** (weekly rebalance LLM이 부풀린 승률을 그대로 소비하지
+  않도록 — frontmatter는 불변, 마커 주석으로 idempotent).
+  상태 파일 인라인 태깅은 하지 않음 (로더가 미지 필드 폐기 → 저장 시 소실).
+- 검증: 원장 셀프체크(3이벤트·decision_type·due date·ID 연속성), 감사 재실행
+  idempotent(배너 0개 추가), py_compile, 재시작 정상.
+
 ## 2026-08-10 — docs(architecture): 하네스 엔지니어링 적용 설계 (Claude+Codex 협업)
 
 Lilian Weng "Harness Engineering for Self-Improvement" (2026-07-04) 프레임워크를
