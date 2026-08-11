@@ -332,6 +332,16 @@ class BatchAnalyzer:
         except Exception as _pit_e:
             logger.debug(f"[배치분석] PIT 스냅샷 실패 (무시): {_pit_e}")
 
+        # 공시 종목 캐시 갱신 (2026-08-11 — LLM 랭킹/크로스검증 보조 컨텍스트,
+        # TTL 6h 내 재호출은 no-op, 실패 무시)
+        try:
+            from ..data.providers.disclosure_feed import refresh_disclosure_cache
+            _n_disc = await refresh_disclosure_cache()
+            if _n_disc:
+                logger.info(f"[배치분석] 공시 캐시 갱신: {_n_disc}건")
+        except Exception as _disc_e:
+            logger.debug(f"[배치분석] 공시 캐시 갱신 실패 (무시): {_disc_e}")
+
         rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
         sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
         # strategic_swing 폐지 → SEPA conviction 오버레이로 흡수 (2026-08-08
@@ -2298,8 +2308,19 @@ class BatchAnalyzer:
                     for i, sig in enumerate(sorted(all_signals, key=lambda s: -s.score)[:20], 1):
                         name = sig.metadata.get("candidate_name", sig.symbol) if sig.metadata else sig.symbol
                         strategy = sig.strategy.value if hasattr(sig.strategy, 'value') else str(sig.strategy)
+                        # 최근 공시 태그 (2026-08-11 — 보조 참고, 캐시 미적재 시 생략)
+                        _disc_tag = ""
+                        try:
+                            from ..data.providers.disclosure_feed import (
+                                get_symbol_disclosure_context,
+                            )
+                            _d = get_symbol_disclosure_context(sig.symbol)
+                            if _d:
+                                _disc_tag = f" | 공시: {_d[:70]}"
+                        except Exception:
+                            pass
                         cand_lines.append(
-                            f"{i}. {name}({sig.symbol}) {strategy} score={sig.score:.0f}"
+                            f"{i}. {name}({sig.symbol}) {strategy} score={sig.score:.0f}{_disc_tag}"
                         )
                     candidates_text = "\n".join(cand_lines)
 

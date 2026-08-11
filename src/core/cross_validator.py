@@ -793,6 +793,17 @@ class CrossStrategyValidator:
             if self._trade_wiki and hasattr(self._trade_wiki, "query_symbol"):
                 symbol_wiki = self._trade_wiki.query_symbol(symbol)
 
+            # 최근 공시 (2026-08-11 — AIK 피드, 보조 참고 전용. 캐시 미적재 시
+            # 빈 문자열 = fail-open. 점수·차단에 직접 사용 금지)
+            disclosure_ctx = ""
+            try:
+                from ..data.providers.disclosure_feed import (
+                    get_symbol_disclosure_context,
+                )
+                disclosure_ctx = get_symbol_disclosure_context(symbol)
+            except Exception:
+                pass
+
             # 패널 risk_factors 컨텍스트 (2026-05-03 P1 통합, 5/4 토큰 cap 완화)
             self._load_panel_outlook()
             panel_risks = ""
@@ -818,6 +829,7 @@ class CrossStrategyValidator:
                 + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
                 + (f"위키 교훈: {wiki_context}\n" if wiki_context else "")
                 + (f"종목 노트 (과거 거래·최근 리서치):\n{symbol_wiki}\n" if symbol_wiki else "")
+                + (f"최근 공시 (보조 참고): {disclosure_ctx}\n" if disclosure_ctx else "")
                 + (f"주간 매크로 리스크 (전문가 패널): {panel_risks}\n" if panel_risks else "")
                 + "\n이 매수 시그널을 승인하시겠습니까? "
                 + risk_guide
@@ -831,6 +843,7 @@ class CrossStrategyValidator:
                 extra_ctx = "\n".join(filter(None, [
                     f"최근 유사 거래 기억: {mem_context}" if mem_context else "",
                     f"위키 교훈: {wiki_context}" if wiki_context else "",
+                    f"최근 공시 (보조 참고): {disclosure_ctx}" if disclosure_ctx else "",
                     f"주간 매크로 리스크: {panel_risks}" if panel_risks else "",
                 ]))
                 adv = await self._adversarial.validate(

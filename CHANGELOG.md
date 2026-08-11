@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-11 — feat(data): 공시 피드를 매매 LLM 보조 컨텍스트로 확장 (사용자 요청)
+
+아침 브리핑 전용이던 AIK 공시 피드를 종목 단위 보조 소스로 확장.
+
+- **`disclosure_feed.py`**: 종목별 메모리 캐시(TTL 6h) + 동기 getter
+  `get_symbol_disclosure_context(code)` (validate 계열이 동기라 async 갱신
+  `refresh_disclosure_cache`와 분리 — 배치 스캔 시 갱신). 캐시 미적재 =
+  빈 컨텍스트 fail-open.
+- **크로스검증 `llm_second_check`**: 프롬프트·적대검증 extra_ctx에
+  "최근 공시 (보조 참고)" 한 줄 — 유형·중요도·장구분·일자.
+- **배치 LLM 랭킹(Gemini)**: 후보 라인에 `| 공시: [...]` 태그.
+- 원칙 유지: **LLM 참고용 한 줄만 — 점수·차단에 직접 사용 금지** (T+1 보조
+  소스). 실 엔드포인트 셀프체크 385건 캐시·getter·TTL no-op 통과, 재시작 정상.
+
 ## 2026-08-11 — feat(data): 아침 브리핑에 공시 요약 섹션 (AIK Stock Data)
 
 GeekNews 소개 서비스(aikstockdata.com) 검토 후 사용자 승인분만 적용.

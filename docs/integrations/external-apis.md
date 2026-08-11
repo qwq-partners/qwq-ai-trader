@@ -71,8 +71,11 @@
 
 - `https://aikstockdata.com/data/public/disclosures.json` — DART 공공데이터
   재가공 공시 피드 (중요도 점수·유형 라벨·장구분 태깅), 무키·무인증
-- 소비: `src/data/providers/disclosure_feed.py` → 아침 브리핑(07:30 슬롯)에
-  "최근 공시 중요도 상위 5건" 섹션
+- 소비: `src/data/providers/disclosure_feed.py`
+  ① 아침 브리핑(07:30 슬롯) — "최근 공시 중요도 상위 5건" 섹션
+  ② 크로스검증 `llm_second_check` — 종목별 "최근 공시 (보조 참고)" 컨텍스트
+  ③ 배치 LLM 랭킹(Gemini) — 후보 라인 공시 태그
+  (②③은 배치 스캔 시 갱신되는 메모리 캐시(TTL 6h) 동기 조회 — 캐시 미적재 시 생략)
 - ⚠️ **개인 운영 무료 서비스 — 지속성·정확성 무보증. fail-open 필수**
   (실패 시 빈 문자열, 브리핑에서 섹션 생략). 매매 판단 경로에 연결 금지
   (T+1 데이터). 출처 표기 조건부 라이선스 — 브리핑에 출처 명시함
