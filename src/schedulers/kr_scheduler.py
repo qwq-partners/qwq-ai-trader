@@ -454,6 +454,21 @@ class KRScheduler:
                     if not _strong and not _weak:
                         lines.append("⚪ 전 섹터 중립")
 
+            # 최근 공시 요약 (2026-08-11 — AIK 공개 JSON, 아침 슬롯만, fail-open)
+            if use_report_channel:
+                try:
+                    from ..data.providers.disclosure_feed import (
+                        fetch_disclosure_summary,
+                    )
+                    _disc = await fetch_disclosure_summary(top_n=5, days=2)
+                    if _disc:
+                        lines.append("")
+                        lines.append(f"━━━━━━━━━━━━━━━")
+                        lines.append("<b>최근 공시 (중요도 상위)</b>")
+                        lines.append(_disc)
+                except Exception as _disc_e:
+                    logger.debug(f"[공시피드] 브리핑 삽입 실패 (무시): {_disc_e}")
+
             # 아침 슬롯이면 추가 핵심 발견 (2번째 항목, 브리프형)
             if use_report_channel:
                 lines.append("")

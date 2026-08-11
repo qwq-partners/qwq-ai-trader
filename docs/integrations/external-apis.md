@@ -67,6 +67,16 @@
 - 호재 공시 보너스 (자사주 매입 등)
 - `_apply_dart_catalyst()` in kr_screener.py
 
+## 데이터 — AIK Stock Data (공시 요약, 2026-08-11~)
+
+- `https://aikstockdata.com/data/public/disclosures.json` — DART 공공데이터
+  재가공 공시 피드 (중요도 점수·유형 라벨·장구분 태깅), 무키·무인증
+- 소비: `src/data/providers/disclosure_feed.py` → 아침 브리핑(07:30 슬롯)에
+  "최근 공시 중요도 상위 5건" 섹션
+- ⚠️ **개인 운영 무료 서비스 — 지속성·정확성 무보증. fail-open 필수**
+  (실패 시 빈 문자열, 브리핑에서 섹션 생략). 매매 판단 경로에 연결 금지
+  (T+1 데이터). 출처 표기 조건부 라이선스 — 브리핑에 출처 명시함
+
 ## LLM — OpenAI (GPT-5.4)
 
 ### 용도 (heavy 작업)
