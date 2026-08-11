@@ -460,7 +460,9 @@ class KRScheduler:
                     from ..data.providers.disclosure_feed import (
                         fetch_disclosure_summary,
                     )
-                    _disc = await fetch_disclosure_summary(top_n=5, days=2)
+                    # days=3: 월요일 아침에 금요일 공시가 컷오프되지 않도록
+                    # (days=2면 월-2=토요일 기준이라 금요일 공시 누락 — 리뷰 P2)
+                    _disc = await fetch_disclosure_summary(top_n=5, days=3)
                     if _disc:
                         lines.append("")
                         lines.append(f"━━━━━━━━━━━━━━━")
