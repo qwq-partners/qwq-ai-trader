@@ -5110,6 +5110,38 @@ JSON:
                             except Exception as _sl_err:
                                 logger.debug(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
 
+                            # 수확 shadow 주간 성과 (2026-08-13 G4 관측 — 가상 원장)
+                            try:
+                                import json as _hs_json
+                                _hs_path = (Path.home() / ".cache" / "ai_trader"
+                                            / "harvest_shadow" / "ledger.jsonl")
+                                if _hs_path.exists():
+                                    _hs_rs = []
+                                    _hs_cut = (datetime.now() - timedelta(days=7)).isoformat()
+                                    for _ln in _hs_path.read_text(encoding="utf-8").splitlines():
+                                        try:
+                                            _r = _hs_json.loads(_ln)
+                                            if _r.get("time", "") >= _hs_cut:
+                                                _hs_rs.append(float(_r.get("r", 0)))
+                                        except Exception:
+                                            continue
+                                    if _hs_rs:
+                                        _hs_total = sum(_hs_rs)
+                                        _hs_wins = sum(1 for v in _hs_rs if v > 0)
+                                        from src.utils.telegram import get_telegram_notifier
+                                        _hs_notifier = get_telegram_notifier()
+                                        if _hs_notifier:
+                                            await _hs_notifier.send_message(
+                                                "🌾 수확 shadow 주간 성과 (가상)\n"
+                                                "━━━━━━━━━━━━━━━\n"
+                                                f"청산 {len(_hs_rs)}건 · 승 {_hs_wins} · "
+                                                f"합계 {_hs_total:+.2f}R · "
+                                                f"평균 {_hs_total / len(_hs_rs):+.2f}R\n"
+                                                "※ G4 승격 기준: 누적 30체결 + 기대값 >0R"
+                                            )
+                            except Exception as _hs_err:
+                                logger.debug(f"[수확shadow] 주간 요약 실패 (무시): {_hs_err}")
+
                             if report.get("status") == "ok":
                                 msg = report.get("telegram_message", "")
                                 if msg:
