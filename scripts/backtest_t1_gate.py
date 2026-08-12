@@ -147,6 +147,134 @@ def simulate_exit(d: pd.DataFrame, ei: int, entry: float) -> float:
     return (exit_px - entry) / entry * 100 - FEE_RT
 
 
+def simulate_exit_engine(d: pd.DataFrame, ei: int, entry: float) -> float:
+    """현행 엔진 청산 근사 (G2 비교군): 분할익절 +10%/10%·+15%/잔여50%·+25%/잔여50%
+    + 고점 -4.5% 트레일링(+5% 활성) + 보유 20영업일 상한. 손절 -4% (채널군과 동일 R).
+    반환: 가중평균 순수익% (비용 차감)"""
+    stop = entry * 0.96
+    remaining = 1.0
+    realized = 0.0  # sum(비중 × 수익%)
+    stage = 0
+    highest = entry
+    n = len(d)
+    end = min(ei + 20, n - 1)  # 보유 상한 20영업일
+    opens, highs, lows, closes = (d["Open"].to_numpy(), d["High"].to_numpy(),
+                                  d["Low"].to_numpy(), d["Close"].to_numpy())
+    for j in range(ei + 1, end + 1):
+        # 1) 손절 (갭 관통 포함)
+        px = opens[j] if opens[j] <= stop else (stop if lows[j] <= stop else None)
+        if px is not None:
+            realized += remaining * (px - entry) / entry * 100
+            remaining = 0.0
+            break
+        highest = max(highest, highs[j])
+        # 2) 분할 익절 (지정가 체결 근사)
+        for tgt, ratio, st in ((1.10, 0.10, 1), (1.15, 0.50, 2), (1.25, 0.50, 3)):
+            if stage < st and highs[j] >= entry * tgt and remaining > 0:
+                sell = remaining * ratio if st > 1 else 0.10  # 1차는 총량의 10%
+                sell = min(sell, remaining)
+                realized += sell * (entry * tgt - entry) / entry * 100
+                remaining -= sell
+                stage = st
+        # 3) 트레일링 (+5% 활성, 고점 -4.5%)
+        if highest >= entry * 1.05 and remaining > 0:
+            trail = highest * 0.955
+            if lows[j] <= trail:
+                realized += remaining * (max(trail, stop) - entry) / entry * 100
+                remaining = 0.0
+                break
+    if remaining > 0:
+        realized += remaining * (closes[end] - entry) / entry * 100
+    return realized - FEE_RT
+
+
+def _regime_ok_dates(start: str) -> set:
+    """체제 게이트 (전략 §2A): KOSPI 지수 종가 > 20일선인 날짜 집합 (D0 판정용)"""
+    import FinanceDataReader as fdr
+    ks = fdr.DataReader("KS11", start)
+    ma20 = ks["Close"].rolling(20).mean()
+    ok = ks.index[ks["Close"] > ma20]
+    return {str(d)[:10] for d in ok}
+
+
+def run_g2(start: str, max_universe: int, holdout_months: int = 18,
+           regime_gate: bool = True):
+    """G2: 진입 B 고정, 청산 A/B (채널 vs 현행 엔진) + 홀드아웃/MDD/연패
+    regime_gate: 전략 §2A 체제 게이트 — D0가 지수 20일선 위인 날만 신호 채택"""
+    codes = load_universe(max_universe)
+    ok_dates = _regime_ok_dates(start) if regime_gate else None
+    print(f"[G2] 유니버스 {len(codes)}종목, 진입 B 고정, "
+          f"홀드아웃 {holdout_months}개월, 체제게이트={regime_gate}")
+    rows = []
+    for k, code in enumerate(codes):
+        df = load_ohlcv(code, start)
+        if df is None:
+            continue
+        d = prep(df)
+        for i in find_d0_signals(d, relaxed=True):
+            if ok_dates is not None and str(d.index[i])[:10] not in ok_dates:
+                continue  # 체제 게이트: 지수 20일선 아래 D0는 미채택
+            d0_close = d["Close"].iloc[i]
+            trigger = max(d["High"].iloc[i], d["high20"].iloc[i]) * TRIGGER_BUF
+            for j in range(i + 1, min(i + 1 + PENDING_DAYS, len(d))):
+                gap = (d["Open"].iloc[j] - d0_close) / d0_close * 100
+                if gap > GAP_MAX:
+                    continue
+                if (d["High"].iloc[j] >= trigger
+                        and d["value"].iloc[j] >= VALUE_GATE_MULT * d["val_med20"].iloc[j]):
+                    entry = max(d["Open"].iloc[j], trigger)
+                    rows.append({
+                        "date": str(d.index[j])[:10],
+                        "ch": simulate_exit(d, j, entry) / RISK_PCT,
+                        "en": simulate_exit_engine(d, j, entry) / RISK_PCT,
+                    })
+                    break
+        if (k + 1) % 100 == 0:
+            print(f"  {k + 1}/{len(codes)}, 체결 {len(rows)}건")
+
+    t = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+    cutoff = (pd.Timestamp.now() - pd.DateOffset(months=holdout_months)).strftime("%Y-%m-%d")
+
+    def seq_stats(s: pd.Series) -> dict:
+        s = s.astype(float)
+        cum = s.cumsum()
+        mdd = float((cum.cummax() - cum).max())  # R 단위 MDD
+        streak = best = 0
+        for v in s:
+            streak = streak + 1 if v < 0 else 0
+            best = max(best, streak)
+        top10_n = max(1, int(len(s) * 0.1))
+        total = s.sum()
+        return {
+            "n": len(s), "expectancy_R": round(s.mean(), 3),
+            "win_rate": round((s > 0).mean() * 100, 1),
+            "total_R": round(total, 1), "mdd_R": round(mdd, 1),
+            "max_losing_streak": best,
+            "top10pct_contrib": round(s.nlargest(top10_n).sum() / total * 100, 1)
+            if total > 0 else None,
+        }
+
+    ins, oos = t[t["date"] < cutoff], t[t["date"] >= cutoff]
+    result = {
+        "run_at": datetime.now().isoformat(), "entry_policy": "B(trigger+value gate)",
+        "holdout_cutoff": cutoff, "n_total": len(t),
+        "in_sample": {"channel": seq_stats(ins["ch"]), "engine": seq_stats(ins["en"])},
+        "holdout": {"channel": seq_stats(oos["ch"]), "engine": seq_stats(oos["en"])},
+        "gate_criteria": {"oos_min_R": 0.15, "mdd_note": "R단위 — 자본% 환산은 리스크 1%/건 곱"},
+    }
+    ch_oos = result["holdout"]["channel"]["expectancy_R"]
+    en_oos = result["holdout"]["engine"]["expectancy_R"]
+    result["verdict"] = {
+        "oos_channel_ok": bool(ch_oos >= 0.15),
+        "oos_engine_ok": bool(en_oos >= 0.15),
+        "winner_exit": "channel" if ch_oos >= en_oos else "engine",
+    }
+    out = CACHE / "g2_result.json"
+    out.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    print(f"\n저장: {out}")
+
+
 def run(start: str, max_universe: int, relaxed: bool = False):
     codes = load_universe(max_universe)
     print(f"유니버스 {len(codes)}종목, 기간 {start}~ (relaxed={relaxed})")
@@ -257,5 +385,8 @@ if __name__ == "__main__":
     p.add_argument("--start", default="2019-01-01")
     p.add_argument("--max-universe", type=int, default=400)
     p.add_argument("--relaxed", action="store_true")
+    p.add_argument("--g2", action="store_true", help="G2: 진입 B 고정 + 청산 A/B")
     a = p.parse_args()
+    if a.g2:
+        sys.exit(run_g2(a.start, a.max_universe))
     sys.exit(run(a.start, a.max_universe, relaxed=a.relaxed))
