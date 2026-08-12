@@ -212,6 +212,11 @@ class KRScheduler:
                 self.run_value_growth_shadow_scheduler(), name="kr_value_growth_shadow"
             ))
 
+        # 비대칭 수확 shadow (2026-08-13 G3 — 일 1회 관측 전용, 주문 없음)
+        tasks.append(asyncio.create_task(
+            self.run_harvest_shadow_scheduler(), name="kr_harvest_shadow"
+        ))
+
         # 헬스 모니터
         if bot.health_monitor:
             tasks.append(asyncio.create_task(
@@ -6222,6 +6227,47 @@ JSON:
             pass
         except Exception as e:
             logger.error(f"[수동매수] 오류: {e}")
+
+    async def run_harvest_shadow_scheduler(self):
+        """비대칭 수확 shadow — 매 거래일 08:40 1회, 전일 확정 일봉 기준 (G3)
+
+        실전 경로 완전 분리 (Codex 협의): 엔진·원장·리스크 무접촉, 가상 원장 전용.
+        설계: docs/strategies/asymmetric-harvest-strategy.md
+        """
+        state_path = Path.home() / ".cache" / "ai_trader" / "harvest_shadow" / "last_run.json"
+        last_run_date: Optional[str] = None
+        try:
+            if state_path.exists():
+                last_run_date = json.loads(state_path.read_text()).get("date")
+        except Exception:
+            pass
+        logger.info("[수확shadow] 스케줄러 시작 (매 거래일 08:40, 주문 없음)")
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = datetime.now()
+                today = now.date()
+                if today.weekday() >= 5 or is_kr_market_holiday(today):
+                    continue
+                if not (now.hour == 8 and 40 <= now.minute < 55):
+                    continue
+                if last_run_date == today.isoformat():
+                    continue
+                from ..strategies.harvest_shadow import run_daily_shadow_scan
+                summary = await run_daily_shadow_scan()
+                last_run_date = today.isoformat()
+                try:
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_text(json.dumps({"date": last_run_date}))
+                except Exception:
+                    pass
+                if summary:
+                    await send_alert(summary)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[수확shadow] 루프 오류 (계속): {e}")
+                await asyncio.sleep(300)
 
     async def run_value_growth_shadow_scheduler(self):
         """밸류코어(가치·성장 장기보유) shadow 스캔 — 주 1회, 주문 없음 (2026-08-04)

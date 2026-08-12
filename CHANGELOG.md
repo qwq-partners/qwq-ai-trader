@@ -1,5 +1,24 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-13 — feat(strategy): 비대칭 수확 G3 — 독립 shadow 실행기 가동
+
+G1·G2 백테스트 통과(진입 B +0.375R, 채널 청산 OOS +0.828R vs 엔진 청산 기각)
+후 Codex 협의 반영 구현. **실전 경로 완전 분리** — Codex 최대 우려(경로 오염)
+원천 제거: 엔진·exit_manager·risk·position_ledger 무접촉, 주문 구조적 불가.
+
+- **`src/strategies/harvest_shadow.py` 신규**: 매 거래일 08:40, FDR 전일 확정
+  일봉 기준 지연 판정. D0 감지(체제 게이트 포함) → D1~D3 상태기계
+  (pending.json — detected_date/trigger/val_med20/attempts/status, Codex 조건 3)
+  → 가상 체결 → -4% 손절+채널 트레일링 청산 → 전용 shadow ledger
+  (조건 2 — 실원장 분리, execution_mode=shadow 명기).
+- **정의 단일 원천** (조건 4): 백테스트 모듈(backtest_t1_gate.py)의
+  prep/상수를 importlib로 직접 재사용 — 백테스트-실행 정의 불일치 차단.
+- kr_scheduler `run_harvest_shadow_scheduler` 태스크 등록 (실전 접촉은 이것뿐).
+- is_core 논쟁·피라미딩 리스크 게이트(조건 1·5)는 G5 승격 전 결정으로 이연
+  (shadow는 엔진 미접촉이라 해당 없음 — 설계 문서 §7에 기록).
+- 검증: 실데이터 스모크 1사이클 (397종목 로드·D0 2건 감지·pending 등록),
+  py_compile, 재시작 정상 (스케줄러 기동 로그 확인).
+
 ## 2026-08-11 — feat(data): 공시 피드를 매매 LLM 보조 컨텍스트로 확장 (사용자 요청)
 
 아침 브리핑 전용이던 AIK 공시 피드를 종목 단위 보조 소스로 확장.
