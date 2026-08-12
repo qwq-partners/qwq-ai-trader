@@ -75,13 +75,17 @@ def _save(path: Path, data: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-async def run_daily_shadow_scan() -> Optional[str]:
-    """일일 shadow 사이클. 반환: 텔레그램 요약 (이벤트 없으면 None)"""
+async def run_daily_shadow_scan() -> tuple:
+    """일일 shadow 사이클. 반환: (성공 여부, 텔레그램 요약 or None)
+
+    성공 여부 분리 (Codex 리뷰): 실패한 날을 성공으로 dedup 기록하면
+    당일 재시도가 차단됨 — 스케줄러는 success=True일 때만 날짜를 기록한다.
+    """
     try:
-        return await _run()
+        return True, await _run()
     except Exception as e:
-        logger.warning(f"[수확shadow] 일일 사이클 실패 (무시): {e}")
-        return None
+        logger.warning(f"[수확shadow] 일일 사이클 실패 (재시도 가능): {e}")
+        return False, None
 
 
 async def _run() -> Optional[str]:

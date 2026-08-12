@@ -154,6 +154,22 @@ Phase 0 지표는 6개월·200건까지 계속 누적 (기존 주간 잡이 자�
   서킷·전략 allocation 상한이 시뮬에 미반영 (매 신호 전부 거래 가정).
   리스크 계층 없이는 실전 생존 불가.
 
+## 6.7 G3 구현 완료 (2026-08-13) + Codex 최종 판정 "조건부 승인"
+
+- `src/strategies/harvest_shadow.py` — **EOD simulation shadow** (실시간 execution
+  shadow 아님, Codex 명명 정정 수용): 매 거래일 08:40+ 전일 확정 일봉 지연 판정,
+  실전 경로 완전 분리 (주문 구조적 불가), 실패 시 dedup 미기록·10분 재시도,
+  창 놓친 날 catch-up.
+- 실코드 대조로 반박된 Codex 지적: runner 당일 전환·채널 shift(1)·ratchet stop은
+  백테스트와 동일 (동일 prep·동일 순서), 원장 소비자는 명시 경로만 읽어 격리 확인.
+
+**G4/병합 전 이월 조건 (Codex — 추적 필수)**:
+1. 백테스트↔shadow 청산 parity test (골든 케이스 비교)
+2. pending·positions·ledger 3파일 트랜잭션성 또는 event_id 멱등 복구
+3. 실주문 호출 불가를 테스트로 보장 (현재는 구조적 부재로만 보장)
+4. G4 실시간 승격 시: 장중 슬리피지·미체결 실측 (EOD 근사의 한계 해소)
+5. A~D 엔진 병합 시: is_core 대신 명시적 exit policy 필드 + 피라미딩 리스크 게이트
+
 ## 7. 다음 액션
 
 1. **G1 백테스트 구현·실행** (착수 대기): backtest_strategies.py에 T1 시뮬 추가 —

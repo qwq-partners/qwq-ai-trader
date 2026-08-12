@@ -6249,12 +6249,17 @@ JSON:
                 today = now.date()
                 if today.weekday() >= 5 or is_kr_market_holiday(today):
                     continue
-                if not (now.hour == 8 and 40 <= now.minute < 55):
+                # 08:40 이후면 언제든 (창 놓친 날 catch-up — Codex 리뷰),
+                # dedup이 1일 1회를 보장
+                if now.hour < 8 or (now.hour == 8 and now.minute < 40):
                     continue
                 if last_run_date == today.isoformat():
                     continue
                 from ..strategies.harvest_shadow import run_daily_shadow_scan
-                summary = await run_daily_shadow_scan()
+                ok, summary = await run_daily_shadow_scan()
+                if not ok:
+                    await asyncio.sleep(600)  # 실패 — 기록하지 않고 10분 후 재시도
+                    continue
                 last_run_date = today.isoformat()
                 try:
                     state_path.parent.mkdir(parents=True, exist_ok=True)
