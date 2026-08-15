@@ -189,6 +189,69 @@ def test_no_order_call_sites():
             )
 
 
+# ── 주간 진행 리포트 (2026-08-16) ──────────────────────────────────────
+
+def _with_state(tmp, monkey_files, now):
+    """모듈의 상태 경로를 tmp로 갈아끼우고 weekly_progress 실행"""
+    import src.strategies.harvest_shadow as hs
+    saved = (hs._DIR, hs._PENDING, hs._POSITIONS, hs._LEDGER)
+    hs._DIR = tmp
+    hs._PENDING, hs._POSITIONS, hs._LEDGER = (
+        tmp / "pending.json", tmp / "positions.json", tmp / "ledger.jsonl",
+    )
+    try:
+        tmp.mkdir(parents=True, exist_ok=True)
+        for fname, body in monkey_files.items():
+            (tmp / fname).write_text(body, encoding="utf-8")
+        return hs.weekly_progress(now=now)
+    finally:
+        hs._DIR, hs._PENDING, hs._POSITIONS, hs._LEDGER = saved
+
+
+def test_weekly_progress_reports_when_no_exits(tmp_path):
+    """청산 0건이어도 발송 — 무소식과 스캐너 정지를 구분하기 위한 핵심 요건"""
+    from datetime import datetime as _dt
+    out = _with_state(tmp_path, {
+        "positions.json": '{"000000": {}, "111111": {}}',
+        "pending.json": "{}",
+        "last_run.json": '{"date": "2026-08-14"}',
+    }, now=_dt(2026, 8, 15))
+    assert "진행 0/30체결" in out, out
+    assert "보유 2" in out and "대기 0" in out, out
+    assert "금주 청산 없음" in out, out
+    assert "⚠️" not in out, f"2일 전 스캔은 stale이 아니다: {out}"
+
+
+def test_weekly_progress_flags_stale_scanner(tmp_path):
+    """스캔이 3일 넘게 멈추면 경고 — 리포트가 항상 오므로 명시가 필요하다"""
+    from datetime import datetime as _dt
+    out = _with_state(tmp_path, {
+        "last_run.json": '{"date": "2026-08-01"}',
+    }, now=_dt(2026, 8, 15))
+    assert "⚠️" in out and "2026-08-01" in out, out
+
+    out2 = _with_state(tmp_path, {"last_run.json": "{}"}, now=_dt(2026, 8, 15))
+    assert "⚠️" in out2 and "기록 없음" in out2, out2
+
+
+def test_weekly_progress_counts_and_splits_window(tmp_path):
+    """누적은 전체, 금주는 7일 이내 — 30체결 게이트는 누적 기준"""
+    from datetime import datetime as _dt
+    ledger = "\n".join([
+        '{"time": "2026-07-01T09:00:00", "r": 2.0}',    # 오래됨 → 누적만
+        '{"time": "2026-08-12T09:00:00", "r": 1.0}',    # 금주
+        '{"time": "2026-08-13T09:00:00", "r": -1.0}',   # 금주 (패)
+        'not json',                                      # 깨진 줄 → 무시
+    ])
+    out = _with_state(tmp_path, {
+        "ledger.jsonl": ledger,
+        "last_run.json": '{"date": "2026-08-14"}',
+    }, now=_dt(2026, 8, 15))
+    assert "진행 3/30체결" in out, out
+    assert "금주 청산 2건 · 승 1 · 합계 +0.00R" in out, out
+    assert "누적 +2.00R" in out, out
+
+
 def test_ledger_marks_shadow_mode():
     """원장 기록에 execution_mode=shadow가 남아야 실원장과 구분된다 (조건 2)"""
     src = (ROOT / "src" / "strategies" / "harvest_shadow.py").read_text(encoding="utf-8")

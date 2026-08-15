@@ -26,7 +26,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -97,6 +97,59 @@ def exit_step(pos: Dict[str, Any], bar) -> tuple:
             return float(bar["Close"]), "채널이탈"
         pos["stop"] = max(stop, ch * 0.999)  # 채널 승급 (백테스트 동일)
     return None, ""
+
+
+def weekly_progress(now: Optional[datetime] = None) -> str:
+    """토요일 리포트용 G4 진행 요약 (2026-08-16).
+
+    청산 0건이어도 항상 문자열을 반환한다 — 무소식이면 "표본 미도달"인지
+    "스캐너 정지"인지 구분할 수 없다. 그래서 누적 체결 수(30 게이트)와
+    최근 스캔일 stale 가드를 함께 싣는다.
+    """
+    now = now or datetime.now()
+    cut = (now - timedelta(days=7)).isoformat()
+    all_r, week_r = [], []
+    if _LEDGER.exists():
+        for line in _LEDGER.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+                r = float(rec.get("r", 0))
+            except Exception:
+                continue
+            all_r.append(r)
+            if str(rec.get("time", "")) >= cut:
+                week_r.append(r)
+
+    def _count(path: Path) -> int:
+        obj = _load(path)
+        return len(obj) if isinstance(obj, dict) else 0
+
+    lines = [
+        f"진행 {len(all_r)}/30체결 · 보유 {_count(_POSITIONS)} · 대기 {_count(_PENDING)}"
+    ]
+    if week_r:
+        lines.append(
+            f"금주 청산 {len(week_r)}건 · 승 {sum(1 for v in week_r if v > 0)} · "
+            f"합계 {sum(week_r):+.2f}R"
+        )
+    else:
+        lines.append("금주 청산 없음")
+    if all_r:
+        lines.append(f"누적 {sum(all_r):+.2f}R · 평균 {sum(all_r) / len(all_r):+.2f}R")
+
+    last = str(_load(_DIR / "last_run.json").get("date", ""))
+    try:
+        stale = (now.date() - datetime.strptime(last, "%Y-%m-%d").date()).days > 3
+    except ValueError:
+        stale = True  # 기록 없음·형식 파손 — 정상으로 볼 수 없다
+    lines.append(f"{'⚠️ ' if stale else ''}최근 스캔 {last or '기록 없음'}")
+
+    return (
+        "🌾 수확 shadow 주간 (가상 — 주문 없음)\n"
+        "━━━━━━━━━━━━━━━\n"
+        + "\n".join(lines)
+        + "\n※ G4 승격 기준: 누적 30체결 + 기대값 >0R"
+    )
 
 
 async def run_daily_shadow_scan() -> tuple:
