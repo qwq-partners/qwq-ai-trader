@@ -164,11 +164,40 @@ Phase 0 지표는 6개월·200건까지 계속 누적 (기존 주간 잡이 자�
   백테스트와 동일 (동일 prep·동일 순서), 원장 소비자는 명시 경로만 읽어 격리 확인.
 
 **G4/병합 전 이월 조건 (Codex — 추적 필수)**:
-1. 백테스트↔shadow 청산 parity test (골든 케이스 비교)
-2. pending·positions·ledger 3파일 트랜잭션성 또는 event_id 멱등 복구
-3. 실주문 호출 불가를 테스트로 보장 (현재는 구조적 부재로만 보장)
-4. G4 실시간 승격 시: 장중 슬리피지·미체결 실측 (EOD 근사의 한계 해소)
-5. A~D 엔진 병합 시: is_core 대신 명시적 exit policy 필드 + 피라미딩 리스크 게이트
+1. ✅ **해소 (2026-08-16)** 백테스트↔shadow 청산 parity test
+2. ⏳ pending·positions·ledger 3파일 트랜잭션성 또는 event_id 멱등 복구
+3. ✅ **해소 (2026-08-16)** 실주문 호출 불가를 테스트로 보장
+4. ⏳ G4 실시간 승격 시: 장중 슬리피지·미체결 실측 (EOD 근사의 한계 해소)
+5. ⏳ A~D 엔진 병합 시: is_core 대신 명시적 exit policy 필드 + 피라미딩 리스크 게이트
+
+### 6.7.1 조건 #1·#3 해소 — `tests/test_harvest_shadow.py` (2026-08-16)
+
+**전제 리팩토링**: 청산 판정이 `_run()` 안에 인라인이라 검증 불가였다 →
+1봉 판정만 순수 함수 `exit_step(pos, bar)`로 추출 (동작 동치, 호출부 1곳).
+`pos`의 `runner`·`stop`을 in-place 갱신하는 계약은 기존과 동일.
+
+**조건 #1 (청산 parity, 6건)**: shadow의 증분 청산(1봉씩)과 백테스트
+`simulate_exit`(전 구간 일괄)의 손익을 1e-9 이내로 대조.
+- 손절 / 갭관통(시가 체결) / 채널이탈 / runner 승격(10일→20일) 4개 골든 케이스
+- **무작위 경로 200개** (고정 시드 20260816) — 손절·채널·runner가 뒤섞인 형태
+- 미청산 시 보유 유지 + stop 역행 없음
+
+**조건 #3 (실주문 불가, 3건)**: shadow가 런타임에 도달하는 파일 전부
+(`harvest_shadow.py` + importlib로 로드하는 `backtest_t1_gate.py`)를 AST 파싱.
+- 금지 임포트 스캔 — `broker/execution/exit_manager/risk/engine/position_ledger/
+  portfolio/order/kis` (함수 내부 지역 임포트 포함)
+- 주문성 호출명 스캔 — `place_order/send_order/buy/sell/submit_order/...`
+- 원장 `execution_mode="shadow"` 표식 존재 (조건 2 부분 확인)
+
+**변이 테스트로 실효성 확인** (통과하는 테스트가 감시 기능을 하는지 역검증):
+채널 승급 계수 0.999→0.995 / runner 임계 1.30→1.50 / 갭관통 체결가를 손절선으로 /
+`from ..execution.broker import kis_kr` 추가 — **4종 전부 검출**.
+
+미포함(의도): 진입(D1 트리거·대금 게이트) parity — 조건 #1이 청산만 지목.
+프로덕션 상태 파일·네트워크 무접촉, 봉 데이터는 전부 합성.
+
+> ⚠️ `exit_step`과 `backtest_t1_gate.simulate_exit`는 **함께 수정할 것**.
+> 한쪽만 바꾸면 parity test가 즉시 실패한다 (그것이 이 테스트의 목적).
 
 ## 7. 다음 액션
 

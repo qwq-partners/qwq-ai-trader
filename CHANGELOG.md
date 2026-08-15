@@ -1,5 +1,29 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-16 — test(strategy): 수확 shadow — Codex 이월 조건 #1·#3 해소
+
+G3 조건부 승인의 미이행 항목 2건을 테스트로 마감. 그간 검증은 실데이터 스모크
+1사이클 + py_compile뿐이었고, 저장소에 `tests/` 디렉토리 자체가 없었다.
+
+- **전제 리팩토링** (`src/strategies/harvest_shadow.py`): 청산 판정이 `_run()`
+  안에 인라인이라 검증 불가 → 1봉 판정만 순수 함수 `exit_step(pos, bar)`로
+  추출. 동작 동치(호출부 1곳), `pos`의 runner·stop in-place 갱신 계약 불변.
+- **`tests/test_harvest_shadow.py` 신규 (9건)**:
+  - 조건 #1 청산 parity (6건) — shadow 증분 청산 vs 백테스트 `simulate_exit`
+    일괄 청산을 1e-9 이내 대조. 손절·갭관통·채널이탈·runner 승격 골든 케이스
+    + **무작위 경로 200개**(고정 시드) + 미청산 시 보유 유지·stop 역행 없음.
+  - 조건 #3 실주문 불가 (3건) — 도달 가능 파일 전부(shadow + importlib로 로드
+    하는 backtest_t1_gate) AST 파싱, 금지 임포트(broker/execution/exit_manager/
+    risk/engine/order/kis 등, 지역 임포트 포함)·주문성 호출명 스캔 + 원장
+    `execution_mode="shadow"` 표식 확인. 기존엔 "그런 코드가 없다"는 구조적
+    근거뿐이었다.
+- **변이 테스트로 실효성 역검증**: 채널 승급 계수 0.999→0.995 / runner 임계
+  1.30→1.50 / 갭관통 체결가를 손절선으로 / 브로커 임포트 추가 — 4종 전부 검출.
+- 잔여 이월 조건 3건(#2 3파일 트랜잭션성·#4 장중 실측·#5 exit policy 필드)은
+  G4 실시간 승격·엔진 병합 시점 과제로 유지.
+- 검증: py_compile, pytest 9건 통과, 재시작 정상(traceback 0, shadow 스케줄러
+  기동 확인). G4 표본 현황 — 가상 보유 2건, 청산 0건(0/30).
+
 ## 2026-08-13 — feat(strategy): 비대칭 수확 G3 — 독립 shadow 실행기 가동
 
 G1·G2 백테스트 통과(진입 B +0.375R, 채널 청산 OOS +0.828R vs 엔진 청산 기각)

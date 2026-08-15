@@ -75,6 +75,30 @@ def _save(path: Path, data: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def exit_step(pos: Dict[str, Any], bar) -> tuple:
+    """1봉 청산 판정 — 백테스트 `simulate_exit` 루프 1회분과 동치.
+
+    `pos`를 in-place 갱신한다 (runner 승격·stop 승급). 반환: (청산가 or None, 사유).
+    백테스트와의 동치는 `tests/test_harvest_shadow.py` parity test가 보장한다
+    (Codex 이월 조건 #1) — 이 함수와 backtest.simulate_exit는 함께 수정할 것.
+    """
+    entry = float(pos["entry"])
+    stop = float(pos["stop"])
+    if float(bar["Open"]) <= stop:
+        return float(bar["Open"]), "손절(갭관통)"
+    if float(bar["Low"]) <= stop:
+        return stop, "손절"
+    if float(bar["High"]) >= entry * 1.30:
+        pos["runner"] = True
+    ch = float(bar["low20"] if pos.get("runner") else bar["low10"])
+    if ch == ch:  # not NaN
+        ch = max(ch, stop)
+        if float(bar["Close"]) < ch:
+            return float(bar["Close"]), "채널이탈"
+        pos["stop"] = max(stop, ch * 0.999)  # 채널 승급 (백테스트 동일)
+    return None, ""
+
+
 async def run_daily_shadow_scan() -> tuple:
     """일일 shadow 사이클. 반환: (성공 여부, 텔레그램 요약 or None)
 
@@ -125,22 +149,7 @@ async def _run() -> Optional[str]:
         if last_date <= str(pos.get("entry_date", "")):
             continue  # 진입일 이후 새 봉 없음
         entry = float(pos["entry"])
-        stop = float(pos["stop"])
-        exit_px, reason = None, ""
-        if float(last["Open"]) <= stop:
-            exit_px, reason = float(last["Open"]), "손절(갭관통)"
-        elif float(last["Low"]) <= stop:
-            exit_px, reason = stop, "손절"
-        else:
-            if float(last["High"]) >= entry * 1.30:
-                pos["runner"] = True
-            ch = float(last["low20"] if pos.get("runner") else last["low10"])
-            if ch == ch:  # not NaN
-                ch = max(ch, stop)
-                if float(last["Close"]) < ch:
-                    exit_px, reason = float(last["Close"]), "채널이탈"
-                else:
-                    pos["stop"] = max(stop, ch * 0.999)  # 채널 승급 (백테스트 동일)
+        exit_px, reason = exit_step(pos, last)
         if exit_px is not None:
             pnl_pct = (exit_px - entry) / entry * 100 - bt.FEE_RT
             rec = {
