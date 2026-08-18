@@ -126,3 +126,16 @@ def test_remote_deploy_rolls_back_when_target_health_fails(tmp_path):
     assert result.returncode != 0
     assert git(repo, "rev-parse", "HEAD") == old_sha
     assert "롤백 완료" in result.stdout + result.stderr
+
+
+def test_remote_deploy_rolls_back_when_verification_fails(tmp_path):
+    repo, old_sha, target_sha = make_remote_fixture(tmp_path)
+    env = remote_env(tmp_path, repo, target_sha) | {
+        "QWQ_DEPLOY_VERIFY_COMMAND": "false",
+    }
+
+    result = run(["bash", str(REMOTE_SCRIPT), "--deploy", target_sha], env=env)
+
+    assert result.returncode != 0
+    assert git(repo, "rev-parse", "HEAD") == old_sha
+    assert "롤백 완료" in result.stdout + result.stderr

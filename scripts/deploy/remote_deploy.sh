@@ -68,17 +68,17 @@ restart_and_wait() {
 PREVIOUS_SHA=$(git rev-parse HEAD)
 
 apply_target() {
-  git reset --hard --quiet "$TARGET_SHA"
-  install_dependencies
-  verify_target
-  restart_and_wait
+  git reset --hard --quiet "$TARGET_SHA" || return
+  install_dependencies || return
+  verify_target || return
+  restart_and_wait || return
 }
 
 rollback() {
   printf '[복구] 이전 커밋 %.12s로 롤백합니다.\n' "$PREVIOUS_SHA" >&2
-  git reset --hard --quiet "$PREVIOUS_SHA"
-  install_dependencies
-  restart_and_wait
+  git reset --hard --quiet "$PREVIOUS_SHA" || return
+  install_dependencies || return
+  restart_and_wait || return
 }
 
 if (set -e; apply_target); then

@@ -30,6 +30,7 @@ def run_bootstrap(
     python.chmod(0o755)
     env = os.environ | {
         "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "QWQ_BOOTSTRAP_REQUIRED_TOOLS": " ".join(TOOLS),
         "QWQ_BOOTSTRAP_CHECK_ONLY": "1",
         "QWQ_PYTHON_BIN": str(python),
         "QWQ_VENV_DIR": str(tmp_path / "venv"),
@@ -58,10 +59,24 @@ def test_bootstrap_rejects_old_python(tmp_path):
 
 
 def test_bootstrap_reports_missing_required_tool(tmp_path):
-    result = run_bootstrap(tmp_path, omitted_tool="codex")
+    missing_tool = "qwq-tool-that-does-not-exist"
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        cwd=ROOT,
+        env=(
+            os.environ
+            | {
+                "QWQ_BOOTSTRAP_CHECK_ONLY": "1",
+                "QWQ_BOOTSTRAP_REQUIRED_TOOLS": missing_tool,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
     assert result.returncode != 0
-    assert "codex" in result.stderr
+    assert missing_tool in result.stderr
 
 
 def test_check_only_does_not_replace_existing_venv(tmp_path):
