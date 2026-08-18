@@ -4454,6 +4454,14 @@ JSON:
                         except Exception as _cf_err:
                             logger.debug(f"[CF추적] 갱신 실패 (무시): {_cf_err}")
 
+                        # 팩터 버킷 노출 일일 스냅샷 (2026-08-19 —
+                        # 초과 이벤트만으로는 캡 적정성 판단 불가, enforce 승격 근거용)
+                        try:
+                            if bot.engine and bot.engine.risk_manager:
+                                bot.engine.risk_manager.log_factor_exposure_snapshot()
+                        except Exception as _fx_err:
+                            logger.debug(f"[리스크] 팩터 스냅샷 실패 (무시): {_fx_err}")
+
                         daily_reviewer = bot.daily_reviewer
                         if daily_reviewer:
                             logger.info("[거래리뷰] LLM 종합평가 생성 시작...")

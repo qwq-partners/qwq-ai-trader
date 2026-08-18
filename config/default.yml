@@ -30,7 +30,10 @@ llm:
   # 활성화 시 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출 (fire-and-forget)
   # 로그: ~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl
   # 빈 문자열 = 비활성, "gpt-5.4-mini" = 활성 비교
-  openai_model_light_shadow: "gpt-5.4-mini"
+  # 2026-08-19 비활성화: shadow는 primary가 OpenAI light일 때만 발화하는데
+  #   light 작업 primary는 Gemini Flash + 배치는 Manus(8/5~)로 이관되어
+  #   8/3 이후 표본 0건 — 휴면 설정 정리. 재개하려면 발화 조건 재설계 필요.
+  openai_model_light_shadow: ""
 
   # Manus API 라우팅 (2026-08-05, Codex CLI 대체)
   #   배치성 작업을 OpenAI API 대신 Manus 에이전트 API로 처리한다.

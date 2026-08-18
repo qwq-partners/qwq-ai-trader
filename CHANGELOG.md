@@ -1,5 +1,27 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-19 — chore: 섀도우 관측 전수 점검 후속 (LLM Shadow 비활성 + 팩터 노출 스냅샷)
+
+운영 서버(Lightsail) 섀도우 9개 항목 전수 점검 결과의 후속 조치.
+핵심 발견: **8월 매수 주문 0건** (주문가능금액 78,238원, 완전 투자 상태) —
+팩터 버킷 초과 로그 0건·규칙 #11/#12 hit 정체·audit 원장 공백은 전부 이것이 원인
+(버그 아님).
+
+- `config/default.yml`: `openai_model_light_shadow: ""` — LLM Shadow A/B 비활성화.
+  shadow는 primary가 OpenAI light(gpt-5-mini)일 때만 발화하는데, light 작업
+  primary는 Gemini Flash이고 배치 작업은 Manus API(8/5)로 이관되어 8/3 이후
+  표본 0건. 휴면 설정 정리 (재개 시 발화 조건 재설계 필요).
+- `src/core/engine.py`: `RiskManager.log_factor_exposure_snapshot()` 신규 —
+  팩터 버킷별 노출(used/cap %)을 `~/.cache/ai_trader/factor_exposure_log.jsonl`에
+  일일 기록. 초과 이벤트(G5_factor)는 매수 신호가 있어야만 평가되므로
+  "초과 0건"과 "표본 부재"를 구분 못하는 관측 공백을 보완.
+- `src/schedulers/kr_scheduler.py`: 저녁 품질검증 잡(counterfactual 갱신 직후)에서
+  위 스냅샷 호출. 실패는 삼킴 (매매 비차단).
+- `factor_budgets.enforce` 승격 **보류**: 예정(2주 관측)대로면 이번 주 승격이나
+  표본이 없어 근거 부족 — 스냅샷 2주 축적 후 재판단.
+- 문서: `CLAUDE.md` 섀도우 관측 현황표(9개) 신설, `docs/risk/risk-and-exit.md`
+  스냅샷 항목 추가.
+
 ## 2026-08-19 — feat(dev): Codex 교차 리뷰 스크립트 + 저장소 정리
 
 - `scripts/dev/codex_review.sh` 신규: Claude Code가 구현한 feature 브랜치를 Codex가
