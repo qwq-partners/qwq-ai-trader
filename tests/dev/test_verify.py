@@ -81,3 +81,16 @@ def test_verify_rejects_private_key(tmp_path):
 
     assert result.returncode != 0
     assert "비밀정보" in result.stdout
+
+
+def test_verify_does_not_echo_detected_secret_value(tmp_path):
+    init_repo(tmp_path)
+    token = "AKIA" + "ABCDEFGHIJKLMNOP"
+    (tmp_path / "leak.txt").write_text(f"credential={token}\n", encoding="utf-8")
+    track_all(tmp_path)
+
+    result = run_verify(tmp_path)
+
+    assert result.returncode != 0
+    assert "leak.txt" in result.stdout
+    assert token not in result.stdout

@@ -40,7 +40,7 @@ run_tests() {
 scan_secrets() {
   printf '[검증] 비밀정보 의심 패턴 검사\n'
   local pattern='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}'
-  if git -C "$ROOT" grep -nEI -e "$pattern" -- ':!docs/superpowers/plans/*'; then
+  if git -C "$ROOT" grep -lEI -e "$pattern" -- ':!docs/superpowers/plans/*'; then
     printf '[실패] 비밀정보 의심 패턴을 발견했습니다. 값은 커밋하지 말고 해당 파일을 확인하세요.\n'
     return 1
   fi
