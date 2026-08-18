@@ -34,15 +34,8 @@ fi
 command -v "$CODEX_BIN" >/dev/null 2>&1 || \
   fail "Codex CLI를 찾지 못했습니다: $CODEX_BIN (설치: docs/operations/local-development.md 2절)"
 
-# CLAUDE.md 코드 리뷰 프로토콜과 동일한 출력 형식을 요구한다.
-REVIEW_PROMPT='리뷰어 관점에서 변경 사항을 검토하라.
-- 이슈는 P0(치명적)/P1(중요)/P2(경미)로 분류하고, 각 이슈에 파일명·라인번호·구체적 문제·수정방안을 제시하라.
-- 트레이딩 로직 변경은 리스크 한도와 기존 전략 동작이 보존되는지 반드시 확인하라.
-- CLAUDE.md의 "절대 금지 패턴"(0/0.0/"" falsy 처리, or 기본값)과 Decimal 정밀 계산 규칙 위반을 점검하라.
-- 코드 변경에 상응하는 CHANGELOG.md 및 docs/ 갱신이 포함됐는지 확인하라.
-- 결론에 병합 가능 여부를 명시하라. 답변은 한국어로 작성하라.'
-
-ARGS=(exec --sandbox read-only review)
+# codex exec review는 --base/--uncommitted와 커스텀 프롬프트를 함께 받지 못하므로
+# (0.147.0 기준) 일반 exec + 읽기 전용 샌드박스에 diff 지시를 포함한 프롬프트를 쓴다.
 if [[ $MODE == --branch ]]; then
   CURRENT_BRANCH=$(git -C "$ROOT" branch --show-current)
   [[ -n "$CURRENT_BRANCH" ]] || fail "브랜치를 확인할 수 없습니다 (detached HEAD)."
@@ -50,11 +43,20 @@ if [[ $MODE == --branch ]]; then
     fail "현재 브랜치가 기준 브랜치($BASE_BRANCH)와 같습니다. feature 브랜치에서 실행해 주세요."
   git -C "$ROOT" rev-parse --verify --quiet "$BASE_BRANCH" >/dev/null || \
     fail "기준 브랜치를 찾지 못했습니다: $BASE_BRANCH"
-  ARGS+=(--base "$BASE_BRANCH")
+  SCOPE_PROMPT="git diff $BASE_BRANCH...HEAD 와 git log $BASE_BRANCH..HEAD --oneline 으로 현재 브랜치의 변경을 파악한 뒤,"
 else
-  ARGS+=(--uncommitted)
+  SCOPE_PROMPT="git status --porcelain 과 git diff HEAD (미추적 파일 포함)로 커밋되지 않은 변경을 파악한 뒤,"
 fi
-ARGS+=("$REVIEW_PROMPT")
+
+# CLAUDE.md 코드 리뷰 프로토콜과 동일한 출력 형식을 요구한다.
+REVIEW_PROMPT="$SCOPE_PROMPT 리뷰어 관점에서 검토하라.
+- 이슈는 P0(치명적)/P1(중요)/P2(경미)로 분류하고, 각 이슈에 파일명·라인번호·구체적 문제·수정방안을 제시하라.
+- 트레이딩 로직 변경은 리스크 한도와 기존 전략 동작이 보존되는지 반드시 확인하라.
+- CLAUDE.md의 \"절대 금지 패턴\"(0/0.0/\"\" falsy 처리, or 기본값)과 Decimal 정밀 계산 규칙 위반을 점검하라.
+- 코드 변경에 상응하는 CHANGELOG.md 및 docs/ 갱신이 포함됐는지 확인하라.
+- 결론에 병합 가능 여부를 명시하라. 답변은 한국어로 작성하라."
+
+ARGS=(exec --sandbox read-only "$REVIEW_PROMPT")
 
 printf '[리뷰] Codex 읽기 전용 교차 리뷰를 시작합니다 (모드: %s, 기준: %s)\n' "${MODE#--}" "$BASE_BRANCH"
 cd "$ROOT"

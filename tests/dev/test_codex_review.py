@@ -83,9 +83,9 @@ def test_branch_mode_runs_read_only_review_against_base(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     args = (tmp_path / "codex_args.txt").read_text(encoding="utf-8").splitlines()
     assert args[:3] == ["exec", "--sandbox", "read-only"]
-    assert "review" in args
-    base_idx = args.index("--base")
-    assert args[base_idx + 1] == "main"
+    prompt = "\n".join(args[3:])
+    assert "main...HEAD" in prompt
+    assert "P0" in prompt
 
 
 def test_uncommitted_mode_allows_base_branch(tmp_path):
@@ -96,8 +96,10 @@ def test_uncommitted_mode_allows_base_branch(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     args = (tmp_path / "codex_args.txt").read_text(encoding="utf-8").splitlines()
-    assert "--uncommitted" in args
-    assert "--base" not in args
+    assert args[:3] == ["exec", "--sandbox", "read-only"]
+    prompt = "\n".join(args[3:])
+    assert "커밋되지 않은 변경" in prompt
+    assert "main...HEAD" not in prompt
 
 
 def test_rejects_unknown_option(tmp_path):
