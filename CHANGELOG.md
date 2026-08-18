@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-19 — ci: GitHub PR 품질 관문 추가
+
+- `.github/workflows/verify.yml`: `main` PR/push에서 Python 3.12 환경을 준비하고
+  `scripts/dev/verify.sh`를 실행하는 읽기 전용 `verify` job 추가.
+- 동일 PR의 이전 실행 자동 취소, 15분 timeout, pip cache 적용.
+- 운영 secret, SSH, systemd, 주문 및 배포 경로는 workflow에서 사용하지 않음.
+- `docs/operations/github-quality-gate.md`: 실패 확인·재실행과 `main` 보호 설정 문서화.
+
 ## 2026-08-19 — feat(dev): WSL 로컬 개발 Control Plane 구축
 
 운영 서버에서 직접 개발하던 흐름을 WSL2의 로컬 작업본과 feature 브랜치 기반
