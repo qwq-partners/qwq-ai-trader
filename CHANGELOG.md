@@ -1,5 +1,25 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-19 — feat(dev): WSL 로컬 개발 Control Plane 구축
+
+운영 서버에서 직접 개발하던 흐름을 WSL2의 로컬 작업본과 feature 브랜치 기반
+PR 흐름으로 분리했다. 이번 변경은 개발환경만 다루며 GitHub CI, Lightsail 배포,
+운영 systemd 설정은 변경하지 않았다.
+
+- **에이전트 안전 경계**: `AGENTS.md`에 `CLAUDE.md` 우선 참조, 명시되지 않은
+  실거래·운영 SSH·`systemctl`·배포 금지, 테스트와 문서 동반 규칙을 추가.
+- **재실행 가능한 준비 명령**: `scripts/dev/bootstrap.sh`가 Python 3.11+, Git,
+  Node/npm, GitHub CLI, Claude Code, Codex의 실제 실행 가능 여부를 검사하고 기존
+  `venv`와 `.env`를 보존한 채 의존성을 설치.
+- **단일 검증 명령**: `scripts/dev/verify.sh`가 Git 추적 Python 문법 검사,
+  `tests/` pytest, 개인키·AWS 키·GitHub 토큰 패턴 검사를 순서대로 수행. `.env`,
+  SSH, systemd, 주문 스크립트는 호출하지 않음.
+- **TDD 검증**: `tests/dev/test_bootstrap.py`, `tests/dev/test_verify.py`에 Python
+  버전 경계·도구 누락·환경 보존·문법 실패·pytest 실패·비밀 감지 테스트 추가.
+- **안전한 설정과 문서**: 비밀값이 비어 있는 `.env.example`과
+  `docs/operations/local-development.md`를 추가하고 `docs/README.md`에 연결.
+- 검증: `bash scripts/dev/verify.sh` — 20건 통과, 비밀정보 의심 패턴 없음.
+
 ## 2026-08-16 — fix(strategy): 수확 shadow 주간 리포트 무소식 문제 (관측 가능성)
 
 토요일 09:00 리포트가 `if _hs_rs:`(주간 청산 ≥1건)일 때만 발송돼, 청산 0건인
