@@ -1345,6 +1345,55 @@ class RiskManager:
             logger.debug(f"[리스크] 팩터 예산 검사 실패 (무시): {e}")
         return None
 
+    def log_factor_exposure_snapshot(self) -> None:
+        """팩터 버킷 일일 노출 스냅샷 (2026-08-19 — shadow 관측 보강)
+
+        초과 이벤트(G5_factor)는 매수 신호가 있어야만 평가되므로,
+        "초과 0건"만으로는 캡 적정성을 판단할 수 없다 (표본 부재와 구분 불가).
+        실제 노출 수준을 매일 기록해 enforce 승격 판단의 기반 데이터를 쌓는다.
+        관측 전용 — 주문·차단 무관, 실패는 삼킨다.
+
+        출력: ~/.cache/ai_trader/factor_exposure_log.jsonl (append-only)
+        """
+        try:
+            _fb = self.config.factor_budgets or {}
+            buckets = _fb.get("buckets") or {}
+            if not buckets:
+                return
+            equity = self.engine.portfolio.total_equity
+            if equity <= 0:
+                return
+            row: Dict[str, Any] = {
+                "date": date.today().isoformat(),
+                "equity": float(equity),
+                "enforce": bool(_fb.get("enforce", False)),
+                "buckets": {},
+            }
+            for name, bucket in buckets.items():
+                strategies = bucket.get("strategies") or []
+                max_pct = float(bucket.get("max_pct", 0) or 0)
+                used = sum(
+                    (self.engine.portfolio.get_strategy_allocation(s)
+                     for s in strategies),
+                    Decimal("0"),
+                )
+                row["buckets"][name] = {
+                    "cap_pct": max_pct,
+                    "used_pct": round(float(used / equity * 100), 2),
+                    "used": float(used),
+                }
+            path = Path.home() / ".cache" / "ai_trader" / "factor_exposure_log.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            _summary = ", ".join(
+                f"{n} {b['used_pct']:.1f}/{b['cap_pct']:.0f}%"
+                for n, b in row["buckets"].items()
+            )
+            logger.info(f"[리스크] 팩터 노출 스냅샷: {_summary}")
+        except Exception as e:
+            logger.debug(f"[리스크] 팩터 노출 스냅샷 실패 (무시): {e}")
+
     async def _try_evict_weakest_position(
         self, *, new_symbol: str, new_score: float, new_reason: str
     ) -> Optional[str]:

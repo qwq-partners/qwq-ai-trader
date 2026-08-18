@@ -140,7 +140,24 @@
 
 ### 팩터 버킷 위험예산 (2026-08-08~, shadow 관측 중)
 - trend 65% / quality 20% / reversion 10% — 상관 전략 묶음 총 노출 캡 (`default.yml factor_budgets`)
-- 현재 `enforce: false` (초과 시 로그만) — 2주 관측 후 승격, 상세 `docs/risk/risk-and-exit.md`
+- 현재 `enforce: false` (초과 시 로그만) — 상세 `docs/risk/risk-and-exit.md`
+- **승격 보류 (2026-08-19)**: 8월 매수 0건으로 초과 이벤트 표본 부재 →
+  일일 노출 스냅샷(`factor_exposure_log.jsonl`, 저녁 품질검증 잡) 2주 축적 후 재판단
+
+### 섀도우 관측 현황 (2026-08-19 운영 서버 점검 기준)
+관측 전용(주문 무관) 항목 전체 목록 — 상세는 각 문서 참조:
+
+| 항목 | 시작 | 상태 |
+|------|------|------|
+| 밸류코어 (`value_growth_core.shadow_mode`) | 08-04 | ✅ 주 1회 스캔 축적 중 |
+| 비대칭 수확 G3 (`harvest_shadow.py`) | 08-13 | ✅ 매일 08:40 실행 중 |
+| 에이전트 팀 심의 (`trading_team`) | 08-02 | ✅ 장중 10:30/14:00 verdicts 축적 중 |
+| 규칙 #11 전문가 BEAR (`experts.shadow_mode`) | 08-02 | ✅ 13건 축적 (hit rate 분석 대기) |
+| 규칙 #12 섹터 카운슬 | 08-07 | ⏸ hit 0건 (BEAR 섹터 매수 후보 없음) |
+| 팩터 버킷 (`factor_budgets.enforce: false`) | 08-08 | ⏸ 초과 표본 없음 → 노출 스냅샷으로 보완 (08-19~) |
+| Counterfactual 추적 | 08-08 | ✅ 102건 추적 중 |
+| Shadow Lab (calibration/bandit) | 08-10 | ✅ 주기 리포트 발송 중 |
+| LLM Shadow A/B (`openai_model_light_shadow`) | 06-17 | 🚫 **비활성화 (08-19)** — 발화 경로 소멸로 8/3 이후 표본 0 |
 
 ### 수수료
 - **KR** (한투 BanKIS, 2026년~): 매수 0.014%, 매도 0.213% (수수료+거래세 0.20%), 왕복 약 0.227%
