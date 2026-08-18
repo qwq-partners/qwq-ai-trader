@@ -28,6 +28,7 @@ data/prices/
 .vscode/
 .idea/
 .worktrees/
+.claude/worktrees/
 *.swp
 *.swo
 

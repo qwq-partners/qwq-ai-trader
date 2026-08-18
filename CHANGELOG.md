@@ -1,5 +1,39 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-19 — feat(dev): Codex 교차 리뷰 스크립트 + 저장소 정리
+
+- `scripts/dev/codex_review.sh` 신규: Claude Code가 구현한 feature 브랜치를 Codex가
+  읽기 전용 샌드박스에서 교차 리뷰(`codex exec --sandbox read-only review --base main`).
+  P0/P1/P2 분류, 절대 금지 패턴·Decimal 규칙·문서 동반 갱신 점검을 프롬프트로 강제.
+  `--uncommitted` 모드, `QWQ_REVIEW_BASE`/`QWQ_REVIEW_CODEX_BIN` 재정의 지원.
+  `main`에서 branch 리뷰 시도 시 거부(fail-closed).
+- `tests/dev/test_codex_review.py` 신규 (5건): Codex 미설치 거부 / main 리뷰 거부 /
+  read-only·--base 인자 검증(stub) / --uncommitted 통과 / 알 수 없는 옵션 거부.
+- `docs/operations/local-development.md` 9절, `AGENTS.md`에 교차 리뷰 절차 문서화.
+- `.gitignore`에 `.claude/worktrees/` 추가, 병합 완료된 `.worktrees/` 3개 제거.
+- CHANGELOG 소급 기재: 아래 PR #3·#4 항목 (병합 당시 누락).
+
+## 2026-08-19 — fix(deploy): 배포 실패 전파·자동 롤백 강제 (PR #4)
+
+- `scripts/deploy/remote_deploy.sh`: `set -e`가 함수 호출 문맥에서 무효화되어 서버
+  테스트 실패가 배포 실패로 전파되지 않던 셸 동작 결함 수정 — `apply_target()`의
+  각 단계(`git reset`/의존성/검증/재시작)가 `|| return`으로 실패를 명시 반환.
+- 대상 적용 후 실패 시 이전 SHA로 자동 롤백(의존성·서비스 복구 포함), 롤백도
+  실패하면 `[긴급]` 경고와 함께 exit 2.
+- `tests/deploy/test_deploy_scripts.py`: 검증 실패 시 이전 SHA 복귀 회귀 테스트 추가,
+  서버에 전역 Codex가 설치된 환경에서 깨지던 부트스트랩 테스트 격리.
+
+## 2026-08-19 — feat(deploy): Lightsail 안전 배포 워크플로 (PR #3)
+
+- `scripts/deploy/deploy_lightsail.sh` 신규: WSL에서 수동 시작하는 배포 실행기.
+  로컬 `main`=`origin/main` 일치 확인 후 `origin/main` SHA를 고정해 서버에 전달.
+  기본은 읽기 전용 점검(`--check`), `--deploy`일 때만 변경.
+- `scripts/deploy/remote_deploy.sh` 신규: 서버 측 실행기 — `flock` 동시 배포 잠금,
+  작업 트리 청결 검사, 대상 SHA 적용, 의존성 동기화, 전체 저장소 검증,
+  `qwq-ai-trader.service` 재시작, `/api/health` 확인.
+- SSH 개인키는 로컬 WSL에만 보관(기본 `~/.ssh/lightsail_qwq`), GitHub에 저장하지 않음.
+- `docs/operations/lightsail-deployment.md` 신규, `docs/README.md` 인덱스 연결.
+
 ## 2026-08-19 — ci: GitHub PR 품질 관문 추가
 
 - `.github/workflows/verify.yml`: `main` PR/push에서 Python 3.12 환경을 준비하고
