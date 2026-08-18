@@ -109,7 +109,12 @@
 - `_fetch_perplexity_context()` in market_regime.py
 - 타임아웃 15초, API 키: PERPLEXITY_API_KEY
 
-## LLM — Manus API (2026-08-05, Codex CLI 대체)
+## LLM — Manus API (2026-08-05 도입 → 2026-08-19 비활성)
+
+> ⚠️ **2026-08-19 구독 해지로 비활성** (`llm.manus.enabled: false`).
+> 배치 작업(trade_review/strategy_analysis)은 기존 API 경로로 회귀 —
+> OpenAI gpt-5.6-sol primary, Gemini 3.1 Pro 폴백. 클라이언트 코드는 보존,
+> 재구독 시 enabled만 되돌리면 복원. 아래는 도입 당시 스펙.
 
 - 배치성 작업(거래 복기·전략 진화·주간 분석)을 OpenAI API 대신 Manus 에이전트로 처리
 - `src/utils/manus_client.py` — 태스크 기반 비동기 API:

@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-19 — chore: Manus API 라우팅 비활성 (구독 해지)
+
+- `config/default.yml`: `llm.manus.enabled: false` — Manus 구독 해지에 따라
+  배치 LLM 라우팅 중단. 거래 복기(trade_review)·전략 진화(strategy_analysis)는
+  기존 API 경로로 회귀: **OpenAI gpt-5.6-sol primary → Gemini 3.1 Pro 폴백**
+  (llm.py TASK_CONFIG 기본 체인, 코드 변경 없음 — enabled 플래그가 라우팅 전체를 게이트).
+- `manus_client.py`·allowlist 코드는 보존 (재구독 시 enabled만 복원).
+- 문서: CLAUDE.md LLM 모델 표·환경변수(MANUS_API_KEY 미사용 표기),
+  `docs/integrations/external-apis.md` 비활성 배너.
+
 ## 2026-08-19 — chore: 섀도우 관측 전수 점검 후속 (LLM Shadow 비활성 + 팩터 노출 스냅샷)
 
 운영 서버(Lightsail) 섀도우 9개 항목 전수 점검 결과의 후속 조치.
