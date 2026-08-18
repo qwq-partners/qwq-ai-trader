@@ -262,7 +262,7 @@ result = value if value is not None else default
 KIS_APPKEY, KIS_APPSECRET, KIS_CANO, KIS_ENV (prod/dev)
 KIS_EXT_ACCOUNTS (외부 계좌, 형식: 이름:CANO:ACNT_PRDT_CD 쉼표 구분)
 OPENAI_API_KEY, GEMINI_API_KEY
-MANUS_API_KEY (배치 LLM 라우팅 — 거래 복기/전략 진화, 2026-08-05 Codex CLI 대체)
+MANUS_API_KEY (미사용 — 2026-08-19 구독 해지, manus.enabled=false)
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 INITIAL_CAPITAL (KR, 기본 500000)
 ```
@@ -271,7 +271,7 @@ INITIAL_CAPITAL (KR, 기본 500000)
 | 작업 | Primary | Fallback |
 |------|---------|----------|
 | 테마 탐지, 뉴스 요약 | Gemini 3.1 Flash Lite | OpenAI gpt-5-mini |
-| 거래 복기, 전략 진화 | Manus API (manus-1.6, 2026-08-05~) | OpenAI gpt-5.6-sol → Gemini 3.1 Pro |
+| 거래 복기, 전략 진화 | OpenAI gpt-5.6-sol (2026-08-19~ Manus 해지로 회귀) | Gemini 3.1 Pro |
 
 ---
 

@@ -43,8 +43,11 @@ llm:
   #      태스크 기반 비동기 API라 응답이 수십 초~수 분 —
   #      Bull/Bear 토론이나 cross_validator 2차 검증에는 맞지 않는다.
   #      아래 tasks에 quick_*/theme_* 계열을 넣지 말 것.
+  # 2026-08-19 비활성화: Manus 구독 해지 — 배치 작업은 기존 API 경로로 회귀
+  #   (trade_review/strategy_analysis → OpenAI gpt-5.6-sol primary, Gemini 3.1 Pro 폴백).
+  #   재구독 시 enabled: true만 되돌리면 라우팅 복원.
   manus:
-    enabled: true
+    enabled: false
     agent_profile: "manus-1.6"   # manus-1.6 | manus-1.6-lite | manus-1.6-max
     timeout_sec: 600
     tasks:                    # 이 LLMTask만 Manus로 라우팅 (배치성)
