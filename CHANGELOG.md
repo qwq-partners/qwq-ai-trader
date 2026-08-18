@@ -18,7 +18,8 @@ PR 흐름으로 분리했다. 이번 변경은 개발환경만 다루며 GitHub 
   버전 경계·도구 누락·환경 보존·문법 실패·pytest 실패·비밀 감지 테스트 추가.
 - **안전한 설정과 문서**: 비밀값이 비어 있는 `.env.example`과
   `docs/operations/local-development.md`를 추가하고 `docs/README.md`에 연결.
-- 검증: `bash scripts/dev/verify.sh` — 20건 통과, 비밀정보 의심 패턴 없음.
+- 검증: `bash scripts/dev/verify.sh` — 21건 통과, 비밀정보 의심 패턴 없음.
+  의심 항목 발견 시 값은 숨기고 파일명만 출력하는 회귀 테스트 포함.
 
 ## 2026-08-16 — fix(strategy): 수확 shadow 주간 리포트 무소식 문제 (관측 가능성)
 
