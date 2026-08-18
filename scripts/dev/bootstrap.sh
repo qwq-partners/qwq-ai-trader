@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 PYTHON_BIN=${QWQ_PYTHON_BIN:-python3}
 VENV_DIR=${QWQ_VENV_DIR:-$ROOT/venv}
-REQUIRED_TOOLS=(git node npm gh claude codex)
+read -r -a REQUIRED_TOOLS <<< "${QWQ_BOOTSTRAP_REQUIRED_TOOLS:-git node npm gh claude codex}"
 
 fail() {
   printf '[실패] %s\n' "$1" >&2
