@@ -40,43 +40,12 @@
 
 **Files:**
 - Create: `AGENTS.md`
-- Test: `tests/dev/test_agents_policy.py`
 
 **Interfaces:**
 - Consumes: 기존 `CLAUDE.md`, `CHANGELOG.md`, `docs/README.md` 규칙.
 - Produces: Codex가 읽을 루트 지침 파일 `AGENTS.md`.
 
-- [ ] **Step 1: Write the failing policy test**
-
-```python
-from pathlib import Path
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_agents_policy_contains_required_boundaries():
-    policy = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    for required in (
-        "CLAUDE.md",
-        "CHANGELOG.md",
-        "docs/README.md",
-        "실거래 주문",
-        "운영 서버",
-        "systemctl",
-        "배포",
-        "테스트",
-    ):
-        assert required in policy
-```
-
-- [ ] **Step 2: Run the test and verify it fails**
-
-Run: `venv/bin/python -m pytest tests/dev/test_agents_policy.py -v`
-
-Expected: FAIL because `AGENTS.md` does not exist.
-
-- [ ] **Step 3: Add the minimal root policy**
+- [ ] **Step 1: Add the minimal root policy**
 
 Create `AGENTS.md` with these exact sections:
 
@@ -101,16 +70,14 @@ Create `AGENTS.md` with these exact sections:
 - 구현자와 최종 리뷰어 역할을 가능하면 분리하고 동일 파일을 동시에 수정하지 않는다.
 ```
 
-- [ ] **Step 4: Run the policy test**
+- [ ] **Step 2: Review the policy against the approved safety boundary**
 
-Run: `venv/bin/python -m pytest tests/dev/test_agents_policy.py -v`
+Read `AGENTS.md` together with the design spec. Confirm it delegates detailed project rules to `CLAUDE.md`, prohibits unrequested live trading and operations, requires `feature/*`, and contains no credential values.
 
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add AGENTS.md tests/dev/test_agents_policy.py
+git add AGENTS.md
 git commit -m "docs: Codex 로컬 안전 규칙 추가"
 ```
 
@@ -356,59 +323,16 @@ git commit -m "feat: 로컬 검증 게이트 추가"
 - Create: `.env.example`
 - Create: `docs/operations/local-development.md`
 - Modify: `docs/README.md`
-- Test: `tests/dev/test_local_docs.py`
 
 **Interfaces:**
 - Consumes: `scripts/dev/bootstrap.sh`, `scripts/dev/verify.sh`, existing `CLAUDE.md` environment-variable list.
 - Produces: secret-free environment template and complete local setup/runbook entry.
 
-- [ ] **Step 1: Write failing documentation tests**
-
-```python
-from pathlib import Path
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_env_example_is_safe_and_complete():
-    sample = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert "KIS_ENV=dev" in sample
-    assert "KIS_APPKEY=" in sample
-    assert "KIS_APPSECRET=" in sample
-    assert "OPENAI_API_KEY=" in sample
-    assert "user123!" not in sample
-
-
-def test_local_runbook_covers_complete_flow():
-    guide = (ROOT / "docs/operations/local-development.md").read_text(encoding="utf-8")
-    for required in (
-        "~/projects/qwq-ai-trader",
-        "scripts/dev/bootstrap.sh",
-        "scripts/dev/verify.sh",
-        "feature/",
-        "--dry-run",
-        "운영 서버",
-    ):
-        assert required in guide
-
-
-def test_docs_index_links_local_runbook():
-    index = (ROOT / "docs/README.md").read_text(encoding="utf-8")
-    assert "operations/local-development.md" in index
-```
-
-- [ ] **Step 2: Run documentation tests and verify they fail**
-
-Run: `venv/bin/python -m pytest tests/dev/test_local_docs.py -v`
-
-Expected: FAIL because the template and local runbook do not exist.
-
-- [ ] **Step 3: Create the secret-free `.env.example`**
+- [ ] **Step 1: Create the secret-free `.env.example`**
 
 Group variables by KIS, LLM, Telegram, and local behavior. Use empty values for every credential, set only `KIS_ENV=dev`, and add comments stating that the template does not authorize order execution and `.env` must never be committed.
 
-- [ ] **Step 4: Write the local runbook and index entry**
+- [ ] **Step 2: Write the local runbook and index entry**
 
 Document exact commands for clone, `cd`, bootstrap, tool version checks, `gh auth status`, Claude/Codex start, `git switch -c feature/<name>`, verification, push, and PR creation. Put dry-run in a separate warning section requiring an explicit user decision and `--dry-run`; state that the guide never instructs the user to copy production `.env`, cache, or logs.
 
@@ -418,16 +342,14 @@ Add this exact list item under Operations in `docs/README.md`:
 - `operations/local-development.md` — WSL2 기반 Claude Code·Codex 로컬 개발환경 구성과 안전한 PR 흐름
 ```
 
-- [ ] **Step 5: Run documentation tests**
+- [ ] **Step 3: Review the artifacts for safety and completeness**
 
-Run: `venv/bin/python -m pytest tests/dev/test_local_docs.py -v`
+Read `.env.example`, the local runbook, and the index entry. Confirm credentials are empty, `KIS_ENV=dev`, the runbook uses `~/projects/qwq-ai-trader`, every normal workflow command stays local, dry-run requires `--dry-run`, and no production `.env`, cache, or logs are copied.
 
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add .env.example docs/operations/local-development.md docs/README.md tests/dev/test_local_docs.py
+git add .env.example docs/operations/local-development.md docs/README.md
 git commit -m "docs: WSL 로컬 개발 절차 추가"
 ```
 
