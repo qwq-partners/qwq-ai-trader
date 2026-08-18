@@ -122,6 +122,17 @@ python scripts/run_trader.py --market kr --dry-run
 
 `--dry-run`이 없는 `run_trader.py`, `liquidate_all.py`, 운영 서버 SSH, `systemctl` 명령은 이 로컬 개발 절차에서 실행하지 않는다.
 
+## 9. Codex 교차 리뷰
+
+한 에이전트가 구현한 변경은 다른 에이전트가 최종 검토한다. Claude Code가 구현한 feature 브랜치는 PR 생성 전에 Codex로 교차 리뷰한다.
+
+```bash
+bash scripts/dev/codex_review.sh                # 현재 feature 브랜치 vs main
+bash scripts/dev/codex_review.sh --uncommitted  # 커밋 전 변경만
+```
+
+리뷰는 읽기 전용 샌드박스에서 실행되어 파일을 수정하거나 명령을 실행하지 않는다. 지적 사항은 P0(치명적)/P1(중요)/P2(경미)로 분류된다. P0·P1을 수정한 뒤 `bash scripts/dev/verify.sh`를 다시 통과시키고 push한다. 반대로 Codex가 구현한 변경은 Claude Code가 리뷰한다. 기준 브랜치는 `QWQ_REVIEW_BASE`로 재정의할 수 있다.
+
 ## 문제 해결
 
 - `venv`가 손상되었다면 자동 삭제하지 말고 먼저 이름을 바꾸어 보존한 뒤 부트스트랩을 다시 실행한다.
