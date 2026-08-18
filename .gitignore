@@ -27,6 +27,7 @@ data/prices/
 # IDE
 .vscode/
 .idea/
+.worktrees/
 *.swp
 *.swo
 
