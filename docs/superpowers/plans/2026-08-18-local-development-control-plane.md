@@ -1,6 +1,6 @@
 # Local Development Control Plane Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** WSL2의 `~/projects/qwq-ai-trader`에서 Claude Code와 Codex가 운영 환경을 건드리지 않고 재현 가능한 개발·검증 흐름을 사용할 수 있게 한다.
 
@@ -45,7 +45,7 @@
 - Consumes: 기존 `CLAUDE.md`, `CHANGELOG.md`, `docs/README.md` 규칙.
 - Produces: Codex가 읽을 루트 지침 파일 `AGENTS.md`.
 
-- [ ] **Step 1: Add the minimal root policy**
+- [x] **Step 1: Add the minimal root policy**
 
 Create `AGENTS.md` with these exact sections:
 
@@ -70,11 +70,11 @@ Create `AGENTS.md` with these exact sections:
 - 구현자와 최종 리뷰어 역할을 가능하면 분리하고 동일 파일을 동시에 수정하지 않는다.
 ```
 
-- [ ] **Step 2: Review the policy against the approved safety boundary**
+- [x] **Step 2: Review the policy against the approved safety boundary**
 
 Read `AGENTS.md` together with the design spec. Confirm it delegates detailed project rules to `CLAUDE.md`, prohibits unrequested live trading and operations, requires `feature/*`, and contains no credential values.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add AGENTS.md
@@ -91,7 +91,7 @@ git commit -m "docs: Codex 로컬 안전 규칙 추가"
 - Consumes: repository root, `requirements.txt`, optional environment variables `QWQ_BOOTSTRAP_CHECK_ONLY`, `QWQ_PYTHON_BIN`, `QWQ_VENV_DIR` used only for testability.
 - Produces: executable `scripts/dev/bootstrap.sh`; exit 0 on a usable environment, non-zero with a Korean diagnostic on failure.
 
-- [ ] **Step 1: Write failing tests for Python validation and environment preservation**
+- [x] **Step 1: Write failing tests for Python validation and environment preservation**
 
 ```python
 import os
@@ -154,13 +154,13 @@ def test_check_only_does_not_replace_existing_venv(tmp_path):
     assert marker.read_text(encoding="utf-8") == "preserve"
 ```
 
-- [ ] **Step 2: Run the bootstrap tests and verify they fail**
+- [x] **Step 2: Run the bootstrap tests and verify they fail**
 
 Run: `venv/bin/python -m pytest tests/dev/test_bootstrap.py -v`
 
 Expected: FAIL because `scripts/dev/bootstrap.sh` does not exist.
 
-- [ ] **Step 3: Implement the bootstrap script**
+- [x] **Step 3: Implement the bootstrap script**
 
 Implement `scripts/dev/bootstrap.sh` with `set -euo pipefail`, repository-root discovery from the script location, Linux/WSL validation, required command checks, version parsing from `$QWQ_PYTHON_BIN --version`, and an early successful exit when `QWQ_BOOTSTRAP_CHECK_ONLY=1`.
 
@@ -176,19 +176,19 @@ fi
 
 Tool validation must execute `--version`, not only `command -v`, so a broken Windows PATH shim such as the current Codex entry is reported as unusable. The final message must print `scripts/dev/verify.sh` as the next command and must never print token or environment values.
 
-- [ ] **Step 4: Run bootstrap tests**
+- [x] **Step 4: Run bootstrap tests**
 
 Run: `venv/bin/python -m pytest tests/dev/test_bootstrap.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Run check-only against the real WSL environment**
+- [x] **Step 5: Run check-only against the real WSL environment**
 
 Run: `QWQ_BOOTSTRAP_CHECK_ONLY=1 bash scripts/dev/bootstrap.sh`
 
 Expected: either PASS, or a precise actionable failure identifying the broken Codex installation without changing `venv`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/dev/bootstrap.sh tests/dev/test_bootstrap.py
@@ -205,7 +205,7 @@ git commit -m "feat: WSL 개발환경 부트스트랩 추가"
 - Consumes: repository root; Git-tracked files; `QWQ_VERIFY_ROOT`, `QWQ_VERIFY_PYTHON`, `QWQ_VERIFY_SKIP_TESTS` for isolated tests.
 - Produces: executable `scripts/dev/verify.sh`; sequential syntax, pytest, and secret-scan stages with non-zero exit on any failure.
 
-- [ ] **Step 1: Write failing verification tests**
+- [x] **Step 1: Write failing verification tests**
 
 ```python
 import os
@@ -266,13 +266,13 @@ def test_verify_rejects_private_key(tmp_path):
     assert "비밀정보" in result.stdout
 ```
 
-- [ ] **Step 2: Run the verification tests and verify they fail**
+- [x] **Step 2: Run the verification tests and verify they fail**
 
 Run: `venv/bin/python -m pytest tests/dev/test_verify.py -v`
 
 Expected: FAIL because `scripts/dev/verify.sh` does not exist.
 
-- [ ] **Step 3: Implement the verification script**
+- [x] **Step 3: Implement the verification script**
 
 Implement three explicit functions and call them in order:
 
@@ -298,19 +298,19 @@ scan_secrets() {
 
 Before these stages, require a Git worktree and an executable Python. Do not source `.env`. Never invoke SSH, `systemctl`, `run_trader.py`, or `liquidate_all.py`.
 
-- [ ] **Step 4: Run isolated verification tests**
+- [x] **Step 4: Run isolated verification tests**
 
 Run: `venv/bin/python -m pytest tests/dev/test_verify.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Run the real verification gate**
+- [x] **Step 5: Run the real verification gate**
 
 Run: `bash scripts/dev/verify.sh`
 
 Expected: PASS after compiling tracked Python files, running all local tests, and scanning tracked files.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/dev/verify.sh tests/dev/test_verify.py
@@ -328,11 +328,11 @@ git commit -m "feat: 로컬 검증 게이트 추가"
 - Consumes: `scripts/dev/bootstrap.sh`, `scripts/dev/verify.sh`, existing `CLAUDE.md` environment-variable list.
 - Produces: secret-free environment template and complete local setup/runbook entry.
 
-- [ ] **Step 1: Create the secret-free `.env.example`**
+- [x] **Step 1: Create the secret-free `.env.example`**
 
 Group variables by KIS, LLM, Telegram, and local behavior. Use empty values for every credential, set only `KIS_ENV=dev`, and add comments stating that the template does not authorize order execution and `.env` must never be committed.
 
-- [ ] **Step 2: Write the local runbook and index entry**
+- [x] **Step 2: Write the local runbook and index entry**
 
 Document exact commands for clone, `cd`, bootstrap, tool version checks, `gh auth status`, Claude/Codex start, `git switch -c feature/<name>`, verification, push, and PR creation. Put dry-run in a separate warning section requiring an explicit user decision and `--dry-run`; state that the guide never instructs the user to copy production `.env`, cache, or logs.
 
@@ -342,11 +342,11 @@ Add this exact list item under Operations in `docs/README.md`:
 - `operations/local-development.md` — WSL2 기반 Claude Code·Codex 로컬 개발환경 구성과 안전한 PR 흐름
 ```
 
-- [ ] **Step 3: Review the artifacts for safety and completeness**
+- [x] **Step 3: Review the artifacts for safety and completeness**
 
 Read `.env.example`, the local runbook, and the index entry. Confirm credentials are empty, `KIS_ENV=dev`, the runbook uses `~/projects/qwq-ai-trader`, every normal workflow command stays local, dry-run requires `--dry-run`, and no production `.env`, cache, or logs are copied.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .env.example docs/operations/local-development.md docs/README.md
@@ -363,29 +363,29 @@ git commit -m "docs: WSL 로컬 개발 절차 추가"
 - Consumes: all deliverables from Tasks 1–4.
 - Produces: auditable change record and a clean, pushed feature branch.
 
-- [ ] **Step 1: Add the changelog entry**
+- [x] **Step 1: Add the changelog entry**
 
 At the top of the current changelog section, add a 2026-08-18 entry listing `AGENTS.md`, both development scripts, their tests, `.env.example`, and the local development runbook. State explicitly that deployment and production service configuration were not changed.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run: `venv/bin/python -m pytest tests/dev -v`
 
 Expected: PASS for every development-control-plane test.
 
-- [ ] **Step 3: Run the complete verification command**
+- [x] **Step 3: Run the complete verification command**
 
 Run: `bash scripts/dev/verify.sh`
 
 Expected: PASS with successful syntax, pytest, and secret-scan stages.
 
-- [ ] **Step 4: Inspect the final diff**
+- [x] **Step 4: Inspect the final diff**
 
 Run: `git diff --check && git status --short && git diff --stat origin/main...HEAD`
 
 Expected: no whitespace errors; only the files named in this plan are changed.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add CHANGELOG.md docs/superpowers/plans/2026-08-18-local-development-control-plane.md
@@ -393,7 +393,7 @@ git commit -m "docs: 로컬 개발환경 변경 이력 기록"
 git push origin feature/local-dev-control-plane
 ```
 
-- [ ] **Step 6: Prepare the PR**
+- [x] **Step 6: Prepare the PR**
 
 Use this title:
 
