@@ -141,12 +141,17 @@ def vol_targeting_multiplier(strategy: str) -> Tuple[float, str]:
 
     state = _load_state()
     _raw_mult = state.get("mult")
-    mult = float(_raw_mult) if _raw_mult is not None else 1.0
-    # 방어: 캐시 오염으로 0 이하가 와도 전면 차단하지 않는다 (하한 MIN_MULT)
-    if mult <= 0:
-        mult = MIN_MULT
+    try:
+        mult = float(_raw_mult) if _raw_mult is not None else 1.0
+    except (ValueError, TypeError):
+        return 1.0, ""
+    # 방어 (Codex P2): NaN/inf는 fail-open, 정상값은 [MIN_MULT, 1.0]로 clamp —
+    # 오염된 캐시가 Decimal 금액 계산으로 전파되는 것을 차단
+    if not math.isfinite(mult):
+        return 1.0, ""
     if mult >= 1.0:
         return 1.0, ""
+    mult = max(mult, MIN_MULT)
 
     # 캐시 노후 검사 — 오래된 고변동 판정으로 계속 축소하지 않는다
     try:

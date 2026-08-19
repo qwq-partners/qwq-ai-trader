@@ -1,5 +1,25 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-20 — fix: Codex 소급 교차 리뷰 반영 (P1 4건 + P2 3건)
+
+PR #6~#11 + 승격 점검 브랜치 전체(48023ac..HEAD)를 gpt-5.6-terra/xhigh로
+소급 리뷰한 결과 반영 (P0 없음).
+
+- **P1 전략 캡 초과**: 부스트(전략 배율/시즈널리티/conviction)가 개별 상한만
+  재클램프하고 전략 배분 잔여 한도를 초과 가능 → 부스트 후
+  `_strategy_remaining` 재클램프 추가 (`engine.calculate_position_size`).
+- **P1 밸류코어 승격 판정 하방 가드 누락**: §9-3(하위 25% ≥ -15%) 미구현 +
+  pooled 평균이 종목 수 많은 주를 과대 가중 → `evaluate_vg_history()` 순수
+  함수로 재작성 (주 단위 동일 가중 + 하방 가드 필수 조건화, 테스트 주입 가능).
+- **P1 회귀 테스트 부재**: `tests/test_sizing_overlays.py` 신설 (11건) —
+  변동성 배율 경계값(하한/노후/NaN), conviction 티어(hold/미승인/미달 포함),
+  승격 평가(통과/하방차단/동일가중/포워드창 미달). 전체 41건 통과.
+- **P1 팀 문서 모순**: `docs/agents/trading-team.md` — conviction 부스트가
+  기존 매수 주문 금액을 조정한다는 부분 승격 사실 명기.
+- **P2**: falsy/`or` 기본값 패턴 제거 (team_conviction·factor 스냅샷),
+  변동성 캐시 NaN/inf fail-open + `[MIN_MULT, 1.0]` clamp,
+  docs/README.md 리서치 인덱스 + system-overview 스케줄러 목록 갱신.
+
 ## 2026-08-20 — feat: 섀도우 승격 기준 자동 점검 + 밸류코어 주간 이력 보존
 
 "기준 차면 승격 진행" 요청의 기반 작업 — 승격 판단을 사람이 잊지 않도록

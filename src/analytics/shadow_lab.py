@@ -122,6 +122,63 @@ def bandit_shadow_report(days: int = 90) -> str:
         return ""
 
 
+def evaluate_vg_history(snapshots: List[dict], closes_map: dict) -> Optional[dict]:
+    """밸류코어 shadow 이력의 20영업일 포워드 평가 (순수 함수 — 테스트 주입 가능)
+
+    설계 §9 기준 구현 (2026-08-20 Codex P1 반영):
+      · 동일 가중: 주차별로 픽 수익률을 먼저 평균 → 주차 평균들의 평균
+        (종목 수 많은 주가 과대 가중되는 pooled 평균 금지)
+      · 하방 가드: 전체 픽의 **원시**(초과 아님) 20일 수익률 25분위수 >= -15%
+      · ok = 주간 초과수익 평균 > 0 AND 하방 가드 통과 (평가 주 >= 6 필요)
+
+    Args:
+        snapshots: value_growth_history 주차 스냅샷 리스트 ({scan_date, final})
+        closes_map: {symbol: 종가 Series (DatetimeIndex)} — "069500" 벤치마크 필수
+    Returns:
+        {n_eval_weeks, mean_week_excess, q25_raw, ok} 또는 벤치마크 부재 시 None
+    """
+    bench = closes_map.get("069500")
+    if bench is None:
+        return None
+    week_excesses: List[float] = []
+    raw_rets: List[float] = []
+    for snap in snapshots:
+        scan_d = snap.get("scan_date", "")
+        picks = snap.get("final")
+        if not scan_d or not isinstance(picks, list) or not picks:
+            continue
+        b = bench[bench.index >= scan_d]
+        if len(b) < 21:
+            continue  # 포워드 창 미경과
+        bench_ret = float(b.iloc[20] / b.iloc[0] - 1) * 100
+        week_raws: List[float] = []
+        for sym in picks:
+            c = closes_map.get(sym)
+            if c is None:
+                continue
+            c = c[c.index >= scan_d]
+            if len(c) >= 21:
+                week_raws.append(float(c.iloc[20] / c.iloc[0] - 1) * 100)
+        if not week_raws:
+            continue
+        raw_rets.extend(week_raws)
+        week_excesses.append(sum(week_raws) / len(week_raws) - bench_ret)
+    if not week_excesses:
+        return {"n_eval_weeks": 0, "mean_week_excess": 0.0, "q25_raw": 0.0, "ok": False}
+    mean_week_excess = sum(week_excesses) / len(week_excesses)
+    # 하위 25% 분위 — 표본 소규모라 보수적으로 버림 인덱스 사용
+    _sorted = sorted(raw_rets)
+    q25_raw = _sorted[int(len(_sorted) * 0.25)] if _sorted else 0.0
+    n_eval = len(week_excesses)
+    ok = n_eval >= 6 and mean_week_excess > 0 and q25_raw >= -15.0
+    return {
+        "n_eval_weeks": n_eval,
+        "mean_week_excess": mean_week_excess,
+        "q25_raw": q25_raw,
+        "ok": ok,
+    }
+
+
 async def promotion_readiness_report() -> str:
     """섀도우 승격 기준 주간 점검 (2026-08-20 — 관측 전용, 설정 불변)
 
@@ -157,7 +214,6 @@ async def promotion_readiness_report() -> str:
         n_weeks = len(weeks)
         _vg_line = f"· 밸류코어: 이력 {n_weeks}/8주"
         if n_weeks >= 8:
-            # 20영업일 포워드 평가 (스캔일 + 28일 경과한 주차만)
             try:
                 import FinanceDataReader as fdr
                 import asyncio as _aio
@@ -165,44 +221,32 @@ async def promotion_readiness_report() -> str:
                 def _closes(sym: str):
                     return fdr.DataReader(sym, "2026-08-01")["Close"]
 
-                bench = await _aio.to_thread(_closes, "069500")
-                evals: List[float] = []
-                n_eval_weeks = 0
-                for wf in weeks:
-                    snap = json.loads(wf.read_text())
-                    scan_d = snap.get("scan_date", "")
-                    picks = snap.get("final") or []
-                    if not scan_d or not picks:
+                # 픽 종가를 미리 로드해 순수 평가 함수에 주입 (블로킹은 스레드로)
+                snapshots = [json.loads(wf.read_text()) for wf in weeks]
+                _syms = {"069500"}
+                for s in snapshots:
+                    _syms.update(s.get("final") or [])
+                closes_map = {}
+                for sym in _syms:
+                    try:
+                        closes_map[sym] = await _aio.to_thread(_closes, sym)
+                    except Exception:
                         continue
-                    b = bench[bench.index >= scan_d]
-                    if len(b) < 21:
-                        continue  # 포워드 창 미경과
-                    bench_ret = float(b.iloc[20] / b.iloc[0] - 1) * 100
-                    week_rets = []
-                    for sym in picks:
-                        try:
-                            c = await _aio.to_thread(_closes, sym)
-                            c = c[c.index >= scan_d]
-                            if len(c) >= 21:
-                                week_rets.append(
-                                    float(c.iloc[20] / c.iloc[0] - 1) * 100 - bench_ret
-                                )
-                        except Exception:
-                            continue
-                    if week_rets:
-                        n_eval_weeks += 1
-                        evals.extend(week_rets)
-                if n_eval_weeks >= 6 and evals:
-                    excess = sum(evals) / len(evals)
-                    _vg_ok = excess > 0
+                result = evaluate_vg_history(snapshots, closes_map)
+                if result is None:
+                    _vg_line += " — ⏳ 포워드 창 대기"
+                elif result["n_eval_weeks"] < 6:
+                    _vg_line += f", 평가 가능 {result['n_eval_weeks']}/6주 — ⏳ 포워드 창 대기"
+                else:
+                    _vg_ok = result["ok"]
                     if _vg_ok:
                         ready.append("밸류코어 실배분 승격 준비")
                     _vg_line += (
-                        f", 평가 {n_eval_weeks}주 초과수익 {excess:+.2f}%p "
-                        f"→ {'✅ 기준 충족' if _vg_ok else '❌ 벤치마크 열위'}"
+                        f", 평가 {result['n_eval_weeks']}주 "
+                        f"주간 초과수익 {result['mean_week_excess']:+.2f}%p / "
+                        f"하위25% {result['q25_raw']:+.1f}% "
+                        f"→ {'✅ 기준 충족' if _vg_ok else '❌ 기준 미달'}"
                     )
-                else:
-                    _vg_line += f", 평가 가능 {n_eval_weeks}/6주 — ⏳ 포워드 창 대기"
             except Exception as _e:
                 _vg_line += f" (포워드 평가 실패: {str(_e)[:40]})"
         else:

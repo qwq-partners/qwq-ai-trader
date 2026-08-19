@@ -1356,9 +1356,9 @@ class RiskManager:
         출력: ~/.cache/ai_trader/factor_exposure_log.jsonl (append-only)
         """
         try:
-            _fb = self.config.factor_budgets or {}
-            buckets = _fb.get("buckets") or {}
-            if not buckets:
+            _fb = self.config.factor_budgets if self.config.factor_budgets is not None else {}
+            buckets = _fb.get("buckets")
+            if not isinstance(buckets, dict) or not buckets:
                 return
             equity = self.engine.portfolio.total_equity
             if equity <= 0:
@@ -1370,8 +1370,11 @@ class RiskManager:
                 "buckets": {},
             }
             for name, bucket in buckets.items():
-                strategies = bucket.get("strategies") or []
-                max_pct = float(bucket.get("max_pct", 0) or 0)
+                strategies = bucket.get("strategies")
+                if not isinstance(strategies, list):
+                    strategies = []
+                _raw_pct = bucket.get("max_pct")
+                max_pct = float(_raw_pct) if _raw_pct is not None else 0.0
                 used = sum(
                     (self.engine.portfolio.get_strategy_allocation(s)
                      for s in strategies),
@@ -2380,6 +2383,7 @@ class RiskManager:
         position_value = min(pct_value, max_value, available)
 
         # 전략 예산 한도 — 잔여 예산으로 포지션 제한
+        _strategy_remaining: Optional[Decimal] = None  # 부스트 후 재클램프용 (Codex P1)
         if signal.strategy:
             _alloc = self.config.strategy_allocation
             _strat_name = signal.strategy.value
@@ -2392,6 +2396,7 @@ class RiskManager:
                     return 0
                 if position_value > _remaining:
                     position_value = _remaining
+                _strategy_remaining = _remaining
 
         # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
         effective_pnl = self.engine.portfolio.effective_daily_pnl
@@ -2451,6 +2456,11 @@ class RiskManager:
                 )
         except Exception as _tc_err:
             logger.debug(f"[리스크] 팀 conviction 계산 실패 (무시): {_tc_err}")
+
+        # 부스트(전략 배율/시즈널리티/conviction) 후 전략 예산 잔여 재클램프
+        # (2026-08-20 Codex P1 — max_value만 재적용하면 부스트가 전략 캡을 초과)
+        if _strategy_remaining is not None and position_value > _strategy_remaining:
+            position_value = _strategy_remaining
 
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))

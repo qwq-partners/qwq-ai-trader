@@ -60,8 +60,12 @@ def _load_today_verdicts() -> dict:
         verdicts = {}
         for row in rows if isinstance(rows, list) else []:
             sym = row.get("symbol")
-            decision = row.get("decision") or {}
-            proposal = decision.get("proposal") or {}
+            decision = row.get("decision")
+            if not isinstance(decision, dict):
+                continue
+            proposal = decision.get("proposal")
+            if not isinstance(proposal, dict):
+                continue
             conv = proposal.get("conviction")
             if sym is None or conv is None:
                 continue
