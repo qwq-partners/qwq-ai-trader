@@ -5195,6 +5195,22 @@ JSON:
                             except Exception as _sl_err:
                                 logger.debug(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
 
+                            # 섀도우 승격 기준 주간 점검 (2026-08-20 — 기준 충족 시
+                            # 🚀 마커로 통보, 승격 실행은 사용자 지시로 진행)
+                            try:
+                                from ..analytics.shadow_lab import promotion_readiness_report
+                                _pr = await promotion_readiness_report()
+                                if _pr:
+                                    from src.utils.telegram import get_telegram_notifier
+                                    _pr_notifier = get_telegram_notifier()
+                                    if _pr_notifier:
+                                        await _pr_notifier.send_message(
+                                            "📋 주간 승격 기준 점검\n"
+                                            "━━━━━━━━━━━━━━━\n" + _pr
+                                        )
+                            except Exception as _pr_err:
+                                logger.debug(f"[승격점검] 주간 실행 실패 (무시): {_pr_err}")
+
                             # 수확 shadow 주간 성과 (2026-08-13 G4 관측 — 가상 원장)
                             # 2026-08-16: 청산 0건이어도 항상 발송한다 — 무소식이면
                             # "표본 미도달"인지 "스캐너 정지"인지 구분할 수 없었다.
@@ -6589,7 +6605,7 @@ JSON:
                 # 결과 영속화 (대시보드/다음 스캔 참조용)
                 try:
                     state_path.parent.mkdir(parents=True, exist_ok=True)
-                    state_path.write_text(json.dumps({
+                    _vg_payload = json.dumps({
                         "scan_date": today.isoformat(),
                         "scan_week": this_week,
                         "quant_passed": [
@@ -6605,7 +6621,15 @@ JSON:
                             for s, v in verdicts.items()
                         },
                         "final": [c.symbol for c in final],
-                    }, ensure_ascii=False, indent=1))
+                    }, ensure_ascii=False, indent=1)
+                    state_path.write_text(_vg_payload)
+                    # 주간 이력 보존 (2026-08-20 — 승격 판단 데이터)
+                    # 최신 파일만 덮어쓰면 과거 픽의 포워드 성과를 평가할 수 없어
+                    # 실배분 승격 기준(관측 8주+ & 픽 성과 벤치마크 우위)을
+                    # 영원히 검증 못 한다. 주차별 스냅샷을 별도 보존한다.
+                    _hist_dir = state_path.parent / "value_growth_history"
+                    _hist_dir.mkdir(parents=True, exist_ok=True)
+                    (_hist_dir / f"{this_week}.json").write_text(_vg_payload)
                 except Exception as e:
                     logger.warning(f"[밸류코어] 결과 저장 실패: {e}")
 
