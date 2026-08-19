@@ -618,6 +618,11 @@ experts:
   # Shadow mode: 규칙 #11 BUY 차단을 비활성화하고 로그만 기록.
   # 1주일 운영 후 ~/.cache/ai_trader/rule11_shadow_log.jsonl 분석으로 hit rate 확인.
   # 검증 후 false로 전환하여 실제 차단 활성화.
+  #
+  # 승격 기준 명문화 (2026-08-20 — counterfactual 실측 기반):
+  #   CF 추적 표본 >= 20건 AND r5(5일 후) 방향 정확도 >= 55% → false 전환 검토.
+  #   2026-08-19 현재: 표본 9건, r5 평균 -5.30%, 정확도 56% — 방향 유효하나 표본 부족.
+  #   r20은 +0.77%로 장기 중립 → 승격 시에도 차단은 "5일 재평가" 단서 부착 권장.
   shadow_mode: true
   agents:
     news_curator: true

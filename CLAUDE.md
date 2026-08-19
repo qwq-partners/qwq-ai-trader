@@ -119,6 +119,13 @@
 - 축소 전용(레버리지 없음), 일수익률 |12%| 초과는 데이터 오류로 제외
 - 비활성화: `VOL_TARGETING=0` / 상세: `docs/research/ai-trading-research-2026-08.md`
 
+### 팀 심의 conviction 부스트 (2026-08-20~)
+- `src/utils/team_conviction.py` — 팀 심의(BUY 승인 + conviction ≥0.75/0.90)
+  종목의 신규 매수 사이징 ×1.10/×1.20 **부스트 전용**
+- HOLD/REJECT는 사이징에 미반영 — CF 실측(47건): HOLD 차단 후보가 5일 +6.31%
+  (차단·감액 용도는 손해로 판명)
+- 비활성화: `TEAM_CONVICTION=0`
+
 ---
 
 ## 리스크 관리

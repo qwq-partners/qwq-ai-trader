@@ -4742,6 +4742,9 @@ JSON:
         팀은 2026-08-02 신설이라 실전 데이터가 없고, 첫 통합 테스트에서
         P0 결함이 3건 나왔다. 규칙 #11을 shadow_mode로 시작했던 것과 같은 방식으로,
         며칠 관측해 판정 품질을 확인한 뒤 주문 경로에 연결한다.
+        (2026-08-20 부분 승격: BUY 승인 + 고conviction verdicts는
+        utils/team_conviction.py를 통해 신규 매수 사이징 부스트로만 소프트 반영 —
+        주문 발행·차단 권한은 여전히 없음)
 
         결과: ~/.cache/ai_trader/team_verdicts/ + 대시보드 /engine + 텔레그램 요약
         """
