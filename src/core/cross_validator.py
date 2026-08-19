@@ -96,10 +96,10 @@ class CrossStrategyValidator:
         self._rule11_logged_today: set = set()
         self._rule11_dedup_date = None
 
-        # 2026-06-14 추가: gap_and_go 장막판(14:30+) 일일 진입 카운터
-        # 6/12 14:09~14:57 5건 집중 → 오버나잇 risk 풀 사고 재발 방지
-        self._gap_late_count: int = 0
-        self._gap_late_count_date = None
+        # (규칙 3-4 폐지, 2026-08-19) gap_and_go 장막판 진입 캡 제거 —
+        # 6월 부검: 14:30+ 진입 5건은 +138k 흑자, 실제 사고(6/11)의 진입은
+        # 이틀 전 오전이었음. 원인은 진입 시각이 아니라 손실 오버나잇 →
+        # kr_scheduler의 gap_and_go EOD 가드(15:10+ 손실 청산)로 대체.
 
         # LLM 이중 검증 일일 한도 (비용 폭발 방지)
         self._daily_llm_count: int = 0
@@ -235,13 +235,6 @@ class CrossStrategyValidator:
             self._rule11_logged_today = set()
             self._rule12_logged_today = set()   # 규칙#12도 동일 주기 리셋 (2026-08-07)
             self._rule11_dedup_date = today
-        if self._gap_late_count_date != today:
-            self._gap_late_count = 0
-            self._gap_late_count_date = today
-
-        # gap_and_go 장막판 진입 후보 (통과 시 카운터 증가)
-        _late_gap_entry = False
-
         _bump("total")
 
         # 매도 시그널은 검증 없이 통과 (청산은 항상 허용)
@@ -404,24 +397,9 @@ class CrossStrategyValidator:
             )
             return False, 0, f"체제 부적합: 횡보장({market_regime})에서 sepa_trend 차단"
 
-        # === 규칙 3-4 (2026-06-14): gap_and_go 장막판(14:30+) 일일 진입 캡 (KR) ===
-        # 6/12 14:09~14:57 5건 집중 진입 → 다음날 오버나잇 손실 -175k 사고
-        # 장 막판 30분 진입은 추세 확정 부족 + 익일 갭하락 노출 구조
-        # 일 2건으로 제한 → 추가 진입은 차단
-        if (self._market == "KR"
-                and side == "buy"
-                and strategy == "gap_and_go"):
-            _now_hm = datetime.now().hour * 100 + datetime.now().minute
-            if _now_hm >= 1430:
-                if self._gap_late_count >= 2:
-                    _bump("blocked")
-                    logger.info(
-                        f"[크로스검증] {symbol} 차단: gap_and_go 장막판 진입 "
-                        f"{self._gap_late_count}/2 도달 (14:30+ 오버나잇 risk 캡)"
-                    )
-                    return False, 0, "장막판 gap_and_go 일일 한도(2건) 도달"
-                # 통과 후보 — 최종 패스 시 카운터 증가
-                _late_gap_entry = True
+        # === (규칙 3-4 폐지, 2026-08-19) ===
+        # gap_and_go 14:30+ 진입 캡 제거 — 6월 부검 결과 14:30+ 진입은 흑자였고
+        # 사고 원인은 손실 오버나잇. gap_and_go EOD 가드(kr_scheduler)로 대체.
 
         # === 규칙 4: 동일 섹터 과집중 ===
         sector = metadata.get("sector")
@@ -637,13 +615,6 @@ class CrossStrategyValidator:
                 f"[크로스검증] {symbol} 차단: 감점 후 {adjusted_score:.0f} < {self._MIN_PASS_SCORE}"
             )
             return False, adjusted_score, f"크로스 감점 후 점수 부족 ({adjusted_score:.0f})"
-
-        # 2026-06-14: 장막판 gap_and_go 통과 시 일일 카운터 증가 (규칙 3-4)
-        if _late_gap_entry:
-            self._gap_late_count += 1
-            logger.debug(
-                f"[크로스검증] gap_and_go 장막판 카운터: {self._gap_late_count}/2"
-            )
 
         _bump("passed")
         return True, adjusted_score, ""
