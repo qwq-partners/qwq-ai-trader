@@ -222,6 +222,11 @@ class KRScheduler:
             self.run_vol_targeting_scheduler(), name="kr_vol_targeting"
         ))
 
+        # 보유 종목 DART 공시 경보 (2026-08-20 — 장중 10분 주기, 경보 전용)
+        tasks.append(asyncio.create_task(
+            self.run_dart_alert_scheduler(), name="kr_dart_alert"
+        ))
+
         # 헬스 모니터
         if bot.health_monitor:
             tasks.append(asyncio.create_task(
@@ -6390,6 +6395,111 @@ JSON:
                 raise
             except Exception as e:
                 logger.warning(f"[변동성타게팅] 루프 오류 (계속): {e}")
+                await asyncio.sleep(300)
+
+    async def run_dart_alert_scheduler(self):
+        """보유 종목 DART 공시 경보 — 장중 10분 주기, 경보 전용 (2026-08-20)
+
+        리서치 #3 (docs/research/ai-trading-research-2026-08.md): 텍스트 이벤트
+        해석이 LLM/자동화 엣지의 가장 강한 실증 영역. 1단계는 기존 DartChecker의
+        키워드 분류(BLOCK/WARNING)를 재사용해 **보유 종목의 신규 위험 공시**를
+        텔레그램으로 즉시 경보한다. 주문·청산 자동화 없음 (사용자 판단 보조) —
+        LLM 정성 해석·자동 대응은 경보 정확도 관측 후 별도 승격.
+
+        비용: 최대 8포지션 × 6회/시 = 시간당 48콜 (DART 한도 20,000/일 대비 미미)
+        """
+        from ..signals.fundamentals.dart_checker import DartChecker
+        checker = DartChecker()
+        try:
+            await checker.ensure_corp_code_map()
+        except Exception as e:
+            logger.warning(f"[공시경보] corp_code 맵 로드 실패 — 비활성: {e}")
+            return
+        if not getattr(checker, "_enabled", False):
+            logger.info("[공시경보] DART_API_KEY 미설정 — 스케줄러 종료")
+            return
+
+        bot = self.bot
+        # (symbol, 공시제목) → 최초 감지일. days=1 조회창이 전일~당일을 포함하므로
+        # 일일 리셋이 아니라 3일 보존으로 익일 재경보를 막는다 (리뷰 P1).
+        alerted: Dict[tuple, str] = {}
+        last_poll_key: Optional[str] = None
+        _map_retry_hour: Optional[str] = None
+        logger.info("[공시경보] 스케줄러 시작 (장중 10분 주기, 보유 종목 위험 공시)")
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = datetime.now()
+                today = now.date()
+                if today.weekday() >= 5 or is_kr_market_holiday(today):
+                    continue
+                # 장전 08:00 ~ 장후 16:00 (공시는 장후에도 나온다)
+                if not ("08:00" <= now.strftime("%H:%M") <= "16:00"):
+                    continue
+                poll_key = f"{today.isoformat()}:{now.hour:02d}{now.minute // 10}"
+                if poll_key == last_poll_key:
+                    continue
+                last_poll_key = poll_key
+
+                # corp_code 맵이 비면 매시 1회 재시도 (리뷰 P2 — 조용한 무동작 방지)
+                if not getattr(checker, "_corp_code_map", None):
+                    _hour_key = f"{today.isoformat()}:{now.hour}"
+                    if _map_retry_hour != _hour_key:
+                        _map_retry_hour = _hour_key
+                        logger.warning("[공시경보] corp_code 맵 비어있음 — 재로드 시도")
+                        try:
+                            await checker.ensure_corp_code_map()
+                        except Exception:
+                            pass
+                    if not getattr(checker, "_corp_code_map", None):
+                        continue
+
+                # 3일 지난 dedup 엔트리 정리
+                _cutoff = (today - timedelta(days=3)).isoformat()
+                for _k in [k for k, d in alerted.items() if d < _cutoff]:
+                    alerted.pop(_k, None)
+
+                portfolio = bot.engine.portfolio if bot.engine else None
+                if portfolio is None or not portfolio.positions:
+                    continue
+
+                for symbol, pos in list(portfolio.positions.items()):
+                    try:
+                        result = await checker.check_disclosures(
+                            symbol, days=1, use_cache=False
+                        )
+                    except Exception as _dc_err:
+                        logger.debug(f"[공시경보] {symbol} 조회 실패 (무시): {_dc_err}")
+                        continue
+                    if not result.risk_disclosures:
+                        continue
+                    fresh = [
+                        t for t in result.risk_disclosures
+                        if (symbol, t) not in alerted
+                    ]
+                    if not fresh:
+                        continue
+                    _pos_name = getattr(pos, "name", "") or symbol
+                    _lvl = "🚨 위험" if result.risk_level == "block" else "⚠️ 주의"
+                    logger.warning(
+                        f"[공시경보] {_pos_name}({symbol}) 신규 위험 공시 "
+                        f"{len(fresh)}건 ({result.risk_level}): {fresh}"
+                    )
+                    _sent = await send_alert(
+                        f"{_lvl} 보유 종목 공시 경보\n"
+                        f"{_pos_name}({symbol}) — 미실현 "
+                        f"{float(getattr(pos, 'unrealized_pnl_pct', 0)):+.1f}%\n"
+                        + "\n".join(f"· {t}" for t in fresh[:5])
+                        + "\n(자동 매도 없음 — 확인 후 판단)"
+                    )
+                    # 발송 성공 시에만 dedup 마킹 — 실패 시 다음 폴에서 재시도 (리뷰 P1)
+                    if _sent is not False:
+                        for t in fresh:
+                            alerted[(symbol, t)] = today.isoformat()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[공시경보] 루프 오류 (계속): {e}")
                 await asyncio.sleep(300)
 
     async def run_value_growth_shadow_scheduler(self):

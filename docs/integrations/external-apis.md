@@ -66,6 +66,12 @@
 - 위험 공시 차단 (유상증자, 소송 등)
 - 호재 공시 보너스 (자사주 매입 등)
 - `_apply_dart_catalyst()` in kr_screener.py
+- **보유 종목 공시 경보 (2026-08-20~)**: `kr_scheduler.run_dart_alert_scheduler` —
+  장중~장후(08:00~16:00) 10분 주기로 보유 종목의 당일 신규 위험 공시
+  (DartChecker BLOCK/WARNING 키워드)를 감지, 텔레그램 즉시 경보.
+  경보 전용(자동 매도 없음), 일중 dedup, 캐시 우회(`use_cache=False`).
+  비용 최대 48콜/시 (DART 한도 20,000/일). LLM 정성 해석·자동 대응은
+  경보 정확도 관측 후 승격 (리서치 #3, docs/research/ai-trading-research-2026-08.md)
 
 ## 데이터 — AIK Stock Data (공시 요약, 2026-08-11~)
 

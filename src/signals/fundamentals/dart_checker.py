@@ -165,14 +165,21 @@ class DartChecker:
                 mapping[stock_code] = corp_code
         self._corp_code_map = mapping
 
-    async def check_disclosures(self, symbol: str, days: int = 7) -> DartCheckResult:
-        """최근 공시 확인"""
+    async def check_disclosures(
+        self, symbol: str, days: int = 7, use_cache: bool = True
+    ) -> DartCheckResult:
+        """최근 공시 확인
+
+        Args:
+            use_cache: False면 30분 캐시를 우회하고 항상 신규 조회
+                (장중 보유 종목 공시 경보 폴러용, 2026-08-20)
+        """
         if not self._enabled or not self._corp_code_map:
             return DartCheckResult()
 
         # 캐시 확인
         now = datetime.now()
-        if symbol in self._cache:
+        if use_cache and symbol in self._cache:
             cached_result, cached_time = self._cache[symbol]
             if now - cached_time < self._cache_ttl:
                 return cached_result
