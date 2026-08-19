@@ -2440,6 +2440,18 @@ class RiskManager:
         except Exception as _vt_err:
             logger.debug(f"[리스크] 변동성 타게팅 계산 실패 (무시): {_vt_err}")
 
+        # 팀 심의 conviction 부스트 (2026-08-20) — BUY 승인 + 고conviction 종목만
+        # 소폭 증액 (부스트 전용 — CF 실측상 HOLD 차단은 손해). 상한 재적용.
+        try:
+            from ..utils.team_conviction import team_conviction_multiplier
+            _tc_mult, _ = team_conviction_multiplier(signal.symbol)
+            if _tc_mult > 1.0:
+                position_value = min(
+                    position_value * Decimal(str(_tc_mult)), max_value
+                )
+        except Exception as _tc_err:
+            logger.debug(f"[리스크] 팀 conviction 계산 실패 (무시): {_tc_err}")
+
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))
         if position_value < min_val:

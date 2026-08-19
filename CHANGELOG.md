@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-20 — feat: 팀 심의 conviction 사이징 부스트 + 검증 규율 명문화 (리서치 후속 #4)
+
+- `src/utils/team_conviction.py` 신규 — shadow 팀 심의의 소프트 연결:
+  BUY 승인 + conviction ≥0.90 → 신규 매수 ×1.20, ≥0.75 → ×1.10 (**부스트 전용**,
+  mtime 캐시로 핫패스 I/O 최소화, `TEAM_CONVICTION=0` 비활성).
+  CF 실측(표본 47건)상 HOLD 차단 후보가 5일 평균 +6.31% — 차단/감액 방향은
+  손해로 판명되어 역방향(증액)만 연결. 주문 권한 부여 아님 (±20% 배율).
+- `engine.calculate_position_size`: 변동성 타게팅 직후 부스트 적용 (상한 재적용).
+- **규칙 #11 승격 기준 명문화** (`default.yml` 주석): CF 표본 ≥20건 + r5 방향
+  정확도 ≥55% → shadow_mode false 전환 검토 (현재 9건/56% — 표본 부족).
+- **검증 규율 명문화** (`docs/evolution/evolution-system.md`): 전략 승격/폐기
+  최소 표본 60거래일+30건, LLM 오염 방어(컷오프 이후 구간), 분기 총괄 A/B,
+  게이트 승격은 CF 표본 기반.
+
 ## 2026-08-20 — feat: 보유 종목 DART 공시 실시간 경보 (리서치 후속 #3)
 
 - `kr_scheduler.run_dart_alert_scheduler` 신규 — 장중~장후(08:00~16:00) 10분
