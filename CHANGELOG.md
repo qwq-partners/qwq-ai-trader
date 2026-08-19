@@ -1,5 +1,24 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-20 — feat: 조건부 변동성 타게팅 사이징 오버레이 (리서치 후속 #1)
+
+`docs/research/ai-trading-research-2026-08.md` 적용 1순위. 모멘텀 계열 전략의
+신규 매수 사이징에 KOSPI 실현변동성 기반 축소 배율 적용.
+
+- `src/utils/volatility_targeting.py` 신규 — KOSPI 20일 실현변동성 > 25%
+  (전체 거래일의 ~11% 극단 국면)일 때만 모멘텀 계열(sepa/gap/momentum/vcp)
+  매수 사이즈 ×(25/vol), 하한 0.4. 축소 전용, 캐시 노후 시 fail-open.
+- 검증 (KODEX200 2015~2026.08, shift(1) 룩어헤드 방지): 바이앤홀드 Sharpe
+  0.721/MDD -40.8% → 채택안 0.787/-34.8% (CAGR 15.6→13.5%). **주의: 고변동
+  국면은 평균 수익이 오히려 높고(반등 포함) 꼬리만 2배 나쁨 — 논문 임계(18%)
+  그대로면 CAGR 희생 과다라 25%로 상향** (데이터 근거 조정).
+- 일수익률 |12%| 초과 이상치 제외 — FDR 069500에서 +24.2%/일 오염 실측.
+  KS11 차단 시 KODEX200 폴백.
+- `engine.calculate_position_size`: 시즈널리티 직후 배율 적용.
+  `kr_scheduler.run_vol_targeting_scheduler` 신규 (매 거래일 08:30 캐시 갱신).
+- 참고: 배포 시점 실측 변동성 75~94%(8월 급변동 장세) — 가동 즉시 ×0.40 적용됨.
+- 문서: CLAUDE.md 오버레이 섹션, docs/risk/risk-and-exit.md.
+
 ## 2026-08-19 — fix: 6월 손실 부검 후속 T1~T3 (갭 관통 봉인 + 워치독 + 규칙 3-4 교체)
 
 6월 실현손실(-148.6만) 전수 부검 결과의 구조적 결함 수정 3건.

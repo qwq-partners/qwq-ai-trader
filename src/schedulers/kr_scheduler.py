@@ -217,6 +217,11 @@ class KRScheduler:
             self.run_harvest_shadow_scheduler(), name="kr_harvest_shadow"
         ))
 
+        # 변동성 타게팅 캐시 갱신 (2026-08-19 — 일 1회, KOSPI 실현변동성)
+        tasks.append(asyncio.create_task(
+            self.run_vol_targeting_scheduler(), name="kr_vol_targeting"
+        ))
+
         # 헬스 모니터
         if bot.health_monitor:
             tasks.append(asyncio.create_task(
@@ -6356,6 +6361,35 @@ JSON:
                 raise
             except Exception as e:
                 logger.warning(f"[수확shadow] 루프 오류 (계속): {e}")
+                await asyncio.sleep(300)
+
+    async def run_vol_targeting_scheduler(self):
+        """조건부 변동성 타게팅 캐시 갱신 — 매 거래일 08:30 이후 1회 (2026-08-19)
+
+        KOSPI 20일 실현변동성을 계산해 ~/.cache/ai_trader/vol_targeting.json에 저장.
+        사이징 핫패스(engine.calculate_position_size)는 이 캐시만 읽는다.
+        상세: src/utils/volatility_targeting.py + docs/research/ai-trading-research-2026-08.md
+        """
+        last_run_date: Optional[str] = None
+        logger.info("[변동성타게팅] 스케줄러 시작 (매 거래일 08:30 이후 1회)")
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = datetime.now()
+                today = now.date()
+                if today.weekday() >= 5 or is_kr_market_holiday(today):
+                    continue
+                if now.hour < 8 or (now.hour == 8 and now.minute < 30):
+                    continue
+                if last_run_date == today.isoformat():
+                    continue
+                from ..utils.volatility_targeting import refresh_vol_state
+                await refresh_vol_state()
+                last_run_date = today.isoformat()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[변동성타게팅] 루프 오류 (계속): {e}")
                 await asyncio.sleep(300)
 
     async def run_value_growth_shadow_scheduler(self):

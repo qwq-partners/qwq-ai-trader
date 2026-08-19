@@ -54,6 +54,21 @@
   버킷별 노출(used_pct/cap_pct)을 `~/.cache/ai_trader/factor_exposure_log.jsonl`에
   매일 기록. **enforce 승격은 이 스냅샷 2주 축적 후 재판단** (2026-08-19 보류 결정)
 
+### 조건부 변동성 타게팅 (2026-08-19~)
+모멘텀 계열 전략(sepa_trend/gap_and_go/momentum_breakout/vcp_breakout)의 신규 매수
+사이징에 KOSPI 실현변동성 기반 축소 배율 적용 (`utils/volatility_targeting.py`,
+`engine.calculate_position_size` 시즈널리티 직후).
+
+- 근거: Bongaerts et al. (FAJ 2020) — 조건부 타게팅이 모멘텀 Sharpe ~2배 개선.
+  단 로컬 검증(KODEX200 2015~26)에서 **고변동 국면의 평균 수익은 오히려 높고
+  꼬리만 2배 나쁨**(fwd20 하위5% -11.2% vs -6.4%) → 임계를 25%로 올려 재앙 국면만
+  개입 (18% 임계는 CAGR 희생 과다). 채택안: Sharpe 0.721→0.787, MDD -40.8→-34.8%,
+  CAGR -2.1%p.
+- 동작: vol ≤ 25% 무개입 / vol > 25% → ×max(0.4, 25/vol). 축소 전용, 청산 무관.
+- 캐시 일 1회 갱신(08:30, `run_vol_targeting_scheduler`), 노후 3일+ 시 fail-open(×1.0).
+- 일수익률 |12%| 초과 이상치 제외 (FDR 데이터 오염 실측 대응).
+- 비활성화: `VOL_TARGETING=0`
+
 ### 손절선 초과 방치 워치독 (2026-08-19~)
 저녁 품질검증 잡에서 미실현손실 **-12% 미만**(최대 명목 손절 10% + 여유) 포지션을
 감지하면 WARNING 로그 + 텔레그램 경보. 6월 sync_detected 청산 급증(5월 3건 →

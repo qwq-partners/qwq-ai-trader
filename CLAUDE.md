@@ -111,6 +111,14 @@
 - 부스트 전용(차단·축소 없음), 상한(max_position_pct)은 재적용됨
 - 비활성화: `CALENDAR_SEASONALITY=0`
 
+### 조건부 변동성 타게팅 오버레이 (2026-08-19~)
+- `src/utils/volatility_targeting.py` — 모멘텀 계열(sepa/gap/momentum/vcp) 매수 **사이징 축소 배율**
+- KOSPI 20일 실현변동성 > **25%**(전체 거래일의 ~11% 극단 국면)일 때만 ×(25/vol), 하한 0.4
+- 검증: KODEX200 2015~26 — Sharpe 0.721→0.787, MDD -40.8→-34.8% (CAGR -2.1%p 비용)
+- 캐시: `~/.cache/ai_trader/vol_targeting.json` (매 거래일 08:30 갱신, 노후 3일+ 시 무개입)
+- 축소 전용(레버리지 없음), 일수익률 |12%| 초과는 데이터 오류로 제외
+- 비활성화: `VOL_TARGETING=0` / 상세: `docs/research/ai-trading-research-2026-08.md`
+
 ---
 
 ## 리스크 관리
