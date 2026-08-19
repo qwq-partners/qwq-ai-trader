@@ -1,5 +1,22 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-20 — feat: 섀도우 승격 기준 자동 점검 + 밸류코어 주간 이력 보존
+
+"기준 차면 승격 진행" 요청의 기반 작업 — 승격 판단을 사람이 잊지 않도록
+엔진이 매주 토요일 기준 충족 여부를 계산해 텔레그램으로 통보한다
+(충족 시 🚀 마커, 승격 실행 자체는 지시 후 진행).
+
+- `shadow_lab.promotion_readiness_report()` 신규 — ① 규칙 #11: CF 표본/r5
+  정확도 vs 기준(≥20건/≥55%), ② 밸류코어: 이력 주수 + 8주 도달 시 final 픽의
+  20영업일 포워드 초과수익(KODEX200 대비, 평가 ≥6주) 자동 평가.
+- `kr_scheduler`: 주간 shadow 리포트 블록에 승격 점검 발송 추가.
+- **밸류코어 주간 이력 보존**: 기존엔 `value_growth_shadow.json` 최신 1건만
+  덮어써 과거 픽의 포워드 성과 평가가 불가능했다(승격 기준 검증 불능 상태) →
+  `value_growth_history/YYYY-WNN.json` 주차별 스냅샷 추가.
+- `docs/strategies/value-growth-core-design.md` §9 신설 — 실배분 승격 기준
+  명문화 (8주 관측 + 픽 초과수익 + 하방 가드 + 자본/배선 전제, 첫 실배분은
+  설계값 절반 4%로 시작).
+
 ## 2026-08-20 — feat: 팀 심의 conviction 사이징 부스트 + 검증 규율 명문화 (리서치 후속 #4)
 
 - `src/utils/team_conviction.py` 신규 — shadow 팀 심의의 소프트 연결:

@@ -120,3 +120,99 @@ def bandit_shadow_report(days: int = 90) -> str:
     except Exception as e:
         logger.warning(f"[bandit-shadow] 실패: {e}")
         return ""
+
+
+async def promotion_readiness_report() -> str:
+    """섀도우 승격 기준 주간 점검 (2026-08-20 — 관측 전용, 설정 불변)
+
+    기준 출처:
+      · 규칙 #11: default.yml experts.shadow_mode 주석 — CF 표본 >=20 & r5 정확도 >=55%
+      · 밸류코어: docs/strategies/value-growth-core-design.md §9 —
+        관측 8주+ & 픽 20영업일 포워드 평균이 KODEX200 우위 (평가 가능 >=6주)
+    기준 충족 시 맨 앞에 🚀 마커 — 사용자가 보고 승격 작업을 지시하는 트리거.
+    """
+    lines: List[str] = []
+    ready: List[str] = []
+    try:
+        # ── 규칙 #11 ──
+        cf_path = _CACHE / "counterfactual_state.json"
+        n_r5, acc = 0, 0.0
+        if cf_path.exists():
+            cf = json.loads(cf_path.read_text())
+            r5 = [v["r5"] for v in cf.values()
+                  if v.get("source") == "rule11" and v.get("r5") is not None]
+            n_r5 = len(r5)
+            acc = (sum(1 for x in r5 if x < 0) / n_r5 * 100) if n_r5 else 0.0
+        _r11_ok = n_r5 >= 20 and acc >= 55.0
+        if _r11_ok:
+            ready.append("규칙#11 실차단 전환")
+        lines.append(
+            f"· 규칙#11: CF 표본 {n_r5}/20건, r5 정확도 {acc:.0f}%/55% "
+            f"→ {'✅ 기준 충족' if _r11_ok else '⏳ 축적 중'}"
+        )
+
+        # ── 밸류코어 ──
+        hist_dir = _CACHE / "value_growth_history"
+        weeks = sorted(hist_dir.glob("*.json")) if hist_dir.exists() else []
+        n_weeks = len(weeks)
+        _vg_line = f"· 밸류코어: 이력 {n_weeks}/8주"
+        if n_weeks >= 8:
+            # 20영업일 포워드 평가 (스캔일 + 28일 경과한 주차만)
+            try:
+                import FinanceDataReader as fdr
+                import asyncio as _aio
+
+                def _closes(sym: str):
+                    return fdr.DataReader(sym, "2026-08-01")["Close"]
+
+                bench = await _aio.to_thread(_closes, "069500")
+                evals: List[float] = []
+                n_eval_weeks = 0
+                for wf in weeks:
+                    snap = json.loads(wf.read_text())
+                    scan_d = snap.get("scan_date", "")
+                    picks = snap.get("final") or []
+                    if not scan_d or not picks:
+                        continue
+                    b = bench[bench.index >= scan_d]
+                    if len(b) < 21:
+                        continue  # 포워드 창 미경과
+                    bench_ret = float(b.iloc[20] / b.iloc[0] - 1) * 100
+                    week_rets = []
+                    for sym in picks:
+                        try:
+                            c = await _aio.to_thread(_closes, sym)
+                            c = c[c.index >= scan_d]
+                            if len(c) >= 21:
+                                week_rets.append(
+                                    float(c.iloc[20] / c.iloc[0] - 1) * 100 - bench_ret
+                                )
+                        except Exception:
+                            continue
+                    if week_rets:
+                        n_eval_weeks += 1
+                        evals.extend(week_rets)
+                if n_eval_weeks >= 6 and evals:
+                    excess = sum(evals) / len(evals)
+                    _vg_ok = excess > 0
+                    if _vg_ok:
+                        ready.append("밸류코어 실배분 승격 준비")
+                    _vg_line += (
+                        f", 평가 {n_eval_weeks}주 초과수익 {excess:+.2f}%p "
+                        f"→ {'✅ 기준 충족' if _vg_ok else '❌ 벤치마크 열위'}"
+                    )
+                else:
+                    _vg_line += f", 평가 가능 {n_eval_weeks}/6주 — ⏳ 포워드 창 대기"
+            except Exception as _e:
+                _vg_line += f" (포워드 평가 실패: {str(_e)[:40]})"
+        else:
+            _vg_line += " — ⏳ 축적 중"
+        lines.append(_vg_line)
+    except Exception as e:
+        logger.warning(f"[승격점검] 실패: {e}")
+        return ""
+
+    head = ""
+    if ready:
+        head = "🚀 승격 기준 충족 — Claude에게 진행 지시: " + ", ".join(ready) + "\n"
+    return head + "\n".join(lines)
