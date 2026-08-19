@@ -2427,6 +2427,19 @@ class RiskManager:
         except Exception as _cal_err:
             logger.debug(f"[리스크] 시즈널리티 계산 실패 (무시): {_cal_err}")
 
+        # 조건부 변동성 타게팅 (2026-08-19) — KOSPI 극단 변동성(>25%) 국면에서
+        # 모멘텀 계열 신규 매수 축소 (downscale-only, 캐시 노후/부재 시 무개입).
+        # 근거·검증: docs/research/ai-trading-research-2026-08.md + 모듈 docstring
+        try:
+            from ..utils.volatility_targeting import vol_targeting_multiplier
+            _vt_mult, _ = vol_targeting_multiplier(
+                signal.strategy.value if signal.strategy else ""
+            )
+            if _vt_mult < 1.0:
+                position_value = position_value * Decimal(str(_vt_mult))
+        except Exception as _vt_err:
+            logger.debug(f"[리스크] 변동성 타게팅 계산 실패 (무시): {_vt_err}")
+
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))
         if position_value < min_val:
