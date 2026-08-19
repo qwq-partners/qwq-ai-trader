@@ -346,12 +346,13 @@ CORE_PRINCIPLES = [
     },
     {
         "id": "CORE-032",
-        "rule": "gap_and_go는 14:30 이후 하루 2건까지만 진입",
-        "category": "entry",
+        "rule": "gap_and_go 손실 포지션은 밤을 넘기지 않는다 (15:10 이후 장마감 전 청산)",
+        "category": "exit",
         "priority": "medium",
         "scope": "gap_and_go",
-        "rationale": "장 막판 갭 전략은 되돌림 위험이 커서 건수 자체를 제한한다",
-        "source": "cross_validator.py — 장막판 gap_and_go 일일 한도 2건",
+        "rationale": "갭하락은 장중 스톱을 관통한다 — 손실 오버나잇이 사고의 원인이었고 "
+                     "(2026-06 부검), 진입 시각 제한(구 규칙 3-4)은 흑자 구간을 막는 오진이었다",
+        "source": "kr_scheduler.py — 갭EOD 손실 오버나잇 가드 (2026-08-19)",
     },
 ]
 

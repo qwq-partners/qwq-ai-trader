@@ -806,6 +806,37 @@ class KRScheduler:
                     await bot.engine.emit(_eod_event)
                     return
 
+            # gap_and_go 손실 오버나잇 가드 (2026-08-19 — 규칙 3-4 대체)
+            # 6월 부검: 6/11 오버나잇 사고(-175k)의 원인은 14:30+ 진입(기존 규칙 3-4의
+            # 전제)이 아니라 손실 상태로 밤을 넘긴 것. 갭하락은 손절선을 관통하므로
+            # (스톱은 장중에만 유효) 손실 포지션은 장마감 전에 정리한다.
+            # 수익 포지션은 오버나잇 허용 — 추세 지속 가설이 유효한 상태.
+            if position.strategy == "gap_and_go" and _now_hm >= "15:10":
+                _gap_pnl_pct = float(position.unrealized_pnl_pct)
+                if _gap_pnl_pct < 0.0:
+                    logger.info(
+                        f"[갭EOD] {symbol} 장마감 전 청산: "
+                        f"수익률={_gap_pnl_pct:+.1f}% < 0% (손실 오버나잇 금지)"
+                    )
+                    _gap_qty = position.quantity
+                    bot._exit_pending_symbols.add(symbol)
+                    bot._exit_pending_timestamps[symbol] = datetime.now()
+                    bot._exit_reasons[symbol] = f"갭EOD: 수익률 {_gap_pnl_pct:+.1f}%"
+                    _gap_signal = Signal(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        strength=SignalStrength.STRONG,
+                        strategy=(StrategyType(position.strategy) if position.strategy in {e.value for e in StrategyType} else StrategyType.GAP_AND_GO),
+                        price=current_price,
+                        score=100.0,
+                        confidence=1.0,
+                        reason=f"갭EOD: 수익률 {_gap_pnl_pct:+.1f}%",
+                        metadata={"source": "gap_eod", "quantity": _gap_qty},
+                    )
+                    _gap_event = SignalEvent.from_signal(_gap_signal, source="gap_eod")
+                    await bot.engine.emit(_gap_event)
+                    return
+
             # 전략별 청산 파라미터 적용
             exit_params = bot._strategy_exit_params.get(position.strategy, {}) if position.strategy else {}
 
@@ -4462,6 +4493,39 @@ JSON:
                         except Exception as _fx_err:
                             logger.debug(f"[리스크] 팩터 스냅샷 실패 (무시): {_fx_err}")
 
+                        # 손절선 초과 방치 워치독 (2026-08-19 — 6월 부검 T2)
+                        # 6월 sync_detected 청산 13건(코어 2건은 5~13일 방치) 재발 감시.
+                        # 원인 계열(재시작 등록 누락·코어 파라미터 소실)은 8월 초 보강으로
+                        # 해소됐으나, 청산 경로가 또 침묵할 경우를 잡는 최후 감시망.
+                        # -12%는 최대 명목 손절(코어 10%, ATR 상한 8%)에 여유를 더한 값.
+                        try:
+                            _pf_wd = bot.engine.portfolio if bot.engine else None
+                            if _pf_wd is not None:
+                                _breaches = [
+                                    (s, p) for s, p in _pf_wd.positions.items()
+                                    if float(getattr(p, "unrealized_pnl_pct", 0)) < -12.0
+                                ]
+                                if _breaches:
+                                    _wd_lines = [
+                                        f"  {s} {getattr(p, 'strategy', '?')} "
+                                        f"{float(p.unrealized_pnl_pct):+.1f}%"
+                                        for s, p in _breaches
+                                    ]
+                                    logger.warning(
+                                        "[워치독] 손절선 초과 방치 의심 포지션 "
+                                        f"{len(_breaches)}건:\n" + "\n".join(_wd_lines)
+                                    )
+                                    from src.utils.telegram import get_telegram_notifier
+                                    _wd_notifier = get_telegram_notifier()
+                                    if _wd_notifier:
+                                        await _wd_notifier.send_message(
+                                            "🚨 손절선 초과 방치 의심 (-12% 미만)\n"
+                                            + "\n".join(_wd_lines)
+                                            + "\n청산 경로 점검 필요 (exit_manager 등록 여부)"
+                                        )
+                        except Exception as _wd_err:
+                            logger.debug(f"[워치독] 검사 실패 (무시): {_wd_err}")
+
                         daily_reviewer = bot.daily_reviewer
                         if daily_reviewer:
                             logger.info("[거래리뷰] LLM 종합평가 생성 시작...")
@@ -6454,7 +6518,11 @@ JSON:
         rebalance_windows = [(9, 5, 9), (9, 30, 34), (10, 0, 4), (13, 0, 4)]
 
         # 빈 슬롯 매수 윈도우 (월초가 아닌 날에도 실행)
-        fill_windows = [(9, 10, 14), (10, 0, 4), (13, 30, 34), (15, 0, 10)]
+        # 2026-08-19: 15:00~15:10 윈도우 제거 — 6월 부검에서 종가매수 3건이
+        # 익일 갭하락으로 명목 손절선(10%)을 관통(-15.9%~-19.2%, 합계 -772k).
+        # 종가 진입은 장중 검증 시간 없이 오버나잇 갭에 전면 노출되므로 금지.
+        # 빈 슬롯은 다음 영업일 오전 윈도우(09:10~)에서 채운다.
+        fill_windows = [(9, 10, 14), (10, 0, 4), (13, 30, 34)]
 
         # 윈도우당 1회 시도 제한 (2026-08-03)
         # 각 윈도우는 4~10분 구간인데 루프는 1분 주기라, 매수가 성사되지 않으면
