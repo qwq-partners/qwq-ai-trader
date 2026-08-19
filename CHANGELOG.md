@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-20 — feat: 보유 종목 DART 공시 실시간 경보 (리서치 후속 #3)
+
+- `kr_scheduler.run_dart_alert_scheduler` 신규 — 장중~장후(08:00~16:00) 10분
+  주기로 **보유 종목**의 당일 신규 위험 공시를 감지해 텔레그램 즉시 경보.
+  기존 DartChecker 키워드 분류(BLOCK: 유증·감자·소송 등 / WARNING) 재사용,
+  일중 (종목,제목) dedup, 경보 전용 — 자동 매도 없음 (관측 후 승격).
+- `dart_checker.check_disclosures`에 `use_cache` 파라미터 추가 (폴러는 30분
+  캐시 우회 — 경보 지연 방지).
+- 참고: 리서치 #2(수급 팩터)는 감사 결과 **기구현 확인**으로 스킵 —
+  supply_trend.py(외국인/기관 연속 순매수 streak·가속), 수급누적 가점(+15),
+  크로스검증 규칙 2(동시 순매도 차단)가 이미 커버. SEPA는 RS등급(상대강도)
+  기반이라 잔차 모멘텀 취지도 반영돼 있음.
+- 문서: docs/integrations/external-apis.md DART 섹션.
+
 ## 2026-08-20 — feat: 조건부 변동성 타게팅 사이징 오버레이 (리서치 후속 #1)
 
 `docs/research/ai-trading-research-2026-08.md` 적용 1순위. 모멘텀 계열 전략의
