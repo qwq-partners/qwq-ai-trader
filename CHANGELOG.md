@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-08-30 — fix: 승격 점검 발송 가시성 — INFO 로그 추가
+
+- 배경: 8/22·8/29 토요일 승격 점검이 "발송됐는지" 저널로 확인 불가 —
+  텔레그램 발송 성공 로그가 DEBUG 레벨뿐이고(`telegram.py:82`), 승격점검
+  블록도 성공 시 무로그였다. 수동 재발송 테스트로 경로 자체는 정상 확인
+  (2026-08-30, send_message → True).
+- `kr_scheduler` 승격점검 블록: 발송 완료/실패를 리포트 요약과 함께 INFO
+  기록, notifier 부재 시 WARNING, 실행 실패도 debug → **warning** 승격
+  (조용한 무동작 재발 방지 — audit/G5_factor에서 반복된 패턴).
+- 참고: 토요일 09:30 주간 블록에서 KIS API HTTP 500 반복 관측 (주말 KIS
+  점검 시간) — CF 성적표·전문가 calibration의 주말 가격 조회 실패 원인.
+  비차단이므로 유지하되, 추후 FDR 폴백 검토 대상으로 기록.
+
 ## 2026-08-20 — fix: Codex 소급 교차 리뷰 반영 (P1 4건 + P2 3건)
 
 PR #6~#11 + 승격 점검 브랜치 전체(48023ac..HEAD)를 gpt-5.6-terra/xhigh로
