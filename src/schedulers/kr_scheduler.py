@@ -5197,6 +5197,8 @@ JSON:
 
                             # 섀도우 승격 기준 주간 점검 (2026-08-20 — 기준 충족 시
                             # 🚀 마커로 통보, 승격 실행은 사용자 지시로 진행)
+                            # 2026-08-30: 실행/발송 로그를 INFO로 — 텔레그램 성공이
+                            # DEBUG뿐이라 "발송됐는지"를 저널로 확인 불가했던 문제
                             try:
                                 from ..analytics.shadow_lab import promotion_readiness_report
                                 _pr = await promotion_readiness_report()
@@ -5204,12 +5206,19 @@ JSON:
                                     from src.utils.telegram import get_telegram_notifier
                                     _pr_notifier = get_telegram_notifier()
                                     if _pr_notifier:
-                                        await _pr_notifier.send_message(
+                                        _pr_sent = await _pr_notifier.send_message(
                                             "📋 주간 승격 기준 점검\n"
                                             "━━━━━━━━━━━━━━━\n" + _pr
                                         )
+                                        logger.info(
+                                            f"[승격점검] 주간 리포트 발송 "
+                                            f"{'완료' if _pr_sent else '실패'}: "
+                                            + _pr.replace("\n", " | ")
+                                        )
+                                    else:
+                                        logger.warning("[승격점검] notifier 없음 — 미발송")
                             except Exception as _pr_err:
-                                logger.debug(f"[승격점검] 주간 실행 실패 (무시): {_pr_err}")
+                                logger.warning(f"[승격점검] 주간 실행 실패 (무시): {_pr_err}")
 
                             # 수확 shadow 주간 성과 (2026-08-13 G4 관측 — 가상 원장)
                             # 2026-08-16: 청산 0건이어도 항상 발송한다 — 무소식이면
