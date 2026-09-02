@@ -119,6 +119,8 @@ class SectorMomentumProvider:
         # → 0~10 점 (SEPA 항목 5)
     """
 
+    _PYKRX_FAIL_BACKOFF_SEC = 6 * 3600
+
     def __init__(self, broker=None):
         self._broker = broker
         self._sector_map: Dict[str, str] = {}     # ticker → sector_name
@@ -128,6 +130,10 @@ class SectorMomentumProvider:
         # sector_name → {"r5": 5d_pct, "r20": 20d_pct} (2026-08-07)
         self._etf_momentum_multi: Dict[str, Dict[str, float]] = {}
         self._etf_last_fetch: float = 0.0
+        # pykrx 업종분류 실패 백오프 만료 시각 (monotonic) — KRX 인증 등 구조적 실패 시
+        # 5분마다 재시도하며 pykrx 내부 stderr("Error occurred in get_market_sector_classifications")
+        # 를 반복 출력하던 문제 (2026-09-03)
+        self._pykrx_fail_until: float = 0.0
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -275,7 +281,9 @@ class SectorMomentumProvider:
         return None
 
     async def _fetch_pykrx_sector_map(self) -> Dict[str, str]:
-        """pykrx WICS 업종 분류 조회 (ticker → 한글 섹터명)."""
+        """pykrx WICS 업종 분류 조회 (ticker → 한글 섹터명). 실패 시 6시간 백오프."""
+        if time.monotonic() < self._pykrx_fail_until:
+            return {}
         try:
             from pykrx import stock as pykrx_stock
 
@@ -314,9 +322,16 @@ class SectorMomentumProvider:
             await asyncio.gather(_fetch("KOSPI"), _fetch("KOSDAQ"), return_exceptions=True)
             if sector_map:
                 logger.info(f"[SectorMomentum] pykrx WICS 조회 완료: {len(sector_map)}종목")
+            else:
+                self._pykrx_fail_until = time.monotonic() + self._PYKRX_FAIL_BACKOFF_SEC
+                logger.warning(
+                    "[SectorMomentum] pykrx 업종분류 조회 실패 (KRX 인증/차단 추정) → "
+                    f"{self._PYKRX_FAIL_BACKOFF_SEC // 3600}시간 재시도 중단, 키워드/캐시 매핑 사용"
+                )
             return sector_map
 
         except Exception as e:
+            self._pykrx_fail_until = time.monotonic() + self._PYKRX_FAIL_BACKOFF_SEC
             logger.debug(f"[SectorMomentum] pykrx 로드 실패: {e}")
             return {}
 

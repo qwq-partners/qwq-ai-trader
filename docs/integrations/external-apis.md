@@ -9,6 +9,12 @@
 - 주문 실행 (매수/매도), 체결 확인
 - 포지션/잔고 조회
 - 넥스트장/프리장 시세 (FHPST02300000)
+- **원장 TR 초당 1건 제한** (2026-09-03): 잔고 TTTC8434R·체결 TTTC8001R·미체결 TTTC8036R은
+  KIS 원장 서버가 계좌당 초당 1건 초과 시 HTTP 500 `EGW00201`("원장에서 허용 가능한 초당
+  거래건수를 초과")를 반환한다. 전역 리미터(18/s)와 별개라 `_rate_limit(tr_id)`가 원장 TR
+  간 1.05초 간격을 강제한다 (주문 POST는 미적용). 포트폴리오 동기화가 잔고+포지션을 연속
+  호출해 30초마다 HTTP 500이 나던 것이 원인이었음 (일 ~4,000건 재시도 경고).
+- 재시도 경고 형식: `[API] HTTP 500 TTTC8434R EGW00201 …, 1회 재시도` — `tr_id`로 호출 주체 식별
 
 ### US (src/execution/broker/kis_us.py)
 - 해외주식 주문/체결
@@ -32,6 +38,10 @@
 - 일봉 OHLCV
 - `await asyncio.to_thread()` 필수 (동기 블로킹)
 - **간헐적 실패** → DB 캐시 폴백
+- 종목 마스터: pykrx 실패 시 FDR `StockListing("KRX")` 폴백
+  (`storage/stock_master.py` 2026-04-21, `dashboard/data_collector.py` 2026-09-03)
+- `get_market_sector_classifications`(WICS 업종): KRX 인증 없이는 항상 JSON 오류 →
+  `sector_momentum`이 실패 시 **6시간 백오프** 후 키워드/파일 캐시 매핑 사용 (2026-09-03)
 
 ## 데이터 — yfinance
 

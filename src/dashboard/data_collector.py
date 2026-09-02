@@ -304,7 +304,27 @@ class DashboardDataCollector:
             except Exception as e:
                 logger.error(f"Failed to load stock master from pykrx: {e}")
 
-        # pykrx 실패 시 로컬 캐시 폴백
+        # pykrx 실패 시 FDR 폴백 — KRX 인증 불필요 (storage/stock_master.py 와 동일 패턴, 2026-09-03)
+        if not pykrx_success:
+            try:
+                import json as _json
+                import FinanceDataReader as fdr
+                _df = fdr.StockListing("KRX")
+                if _df is not None and not _df.empty and {"Code", "Name"} <= set(_df.columns):
+                    for _code, _name in zip(_df["Code"], _df["Name"]):
+                        _code = str(_code).zfill(6)
+                        if _name and _code not in cls._stock_master_cache:
+                            cls._stock_master_cache[_code] = str(_name)
+                if cls._stock_master_cache:
+                    pykrx_success = True
+                    cls._stock_master_loaded = True
+                    logger.info(f"Stock master loaded from FDR: {len(cls._stock_master_cache)} stocks")
+                    _cache_dir.mkdir(parents=True, exist_ok=True)
+                    _cache_file.write_text(_json.dumps(cls._stock_master_cache, ensure_ascii=False))
+            except Exception as _fdr_e:
+                logger.warning(f"Stock master FDR 폴백 실패: {_fdr_e}")
+
+        # FDR도 실패 시 로컬 캐시 폴백
         if not pykrx_success:
             try:
                 import json as _json

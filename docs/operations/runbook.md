@@ -299,7 +299,8 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - 동기화 주기: KR 30초, US 30초
 
 ### 매수 미실행 체크리스트
-1. 가용 현금 확인 (`get_available_cash()`)
+1. 가용 현금 확인 (`get_available_cash()` / `curl -s localhost:8080/api/portfolio` → `cash_ratio`)
+   — exit_exempt 수동 풀매수 종목이 있으면 여기서 끝 (2026-07~ 펩트론 사례: 현금 0.4%)
 2. 일일 손실 한도 (-5% KR, -3% US)
 3. 포지션 수 한도 (8 KR, 10 US)
 4. 일일 거래 횟수 (10회 KR)
@@ -313,7 +314,10 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - 지속 시: 포트폴리오 수동 확인 → ExitManager stage 리셋
 
 ### 알려진 이슈
-- **pykrx 간헐적 실패**: `Stock master: pykrx failed` → DB 폴백 자동 전환
+- **pykrx 간헐적 실패**: `Stock master: pykrx failed` → FDR → 72h 캐시 폴백 자동 전환
+- **KIS HTTP 500 반복** (`[API] HTTP 500 <tr_id> EGW00201 …`): 원장 TR 초당 1건 초과.
+  야간에도 30초 주기로 반복되면 같은 원장 TR 연속 호출 코드가 원인 — 경고의 `tr_id`로
+  호출 주체를 추적한다 (2026-09-03 `_rate_limit` 원장 간격으로 해결)
 - **MCP 모듈 없음**: `No module named 'mcp'` → 기능 영향 없음 (폴백 동작)
 - **Yahoo Finance 지연**: KOSPI 데이터 2~3일 지연 → KIS 실시간 보충
 
