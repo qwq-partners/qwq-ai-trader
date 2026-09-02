@@ -36,6 +36,10 @@
 - 전문가 calibration 리포트(`shadow_lab.expert_calibration_report`): 하루 3회 저장분이
   같은 5일 창으로 3~5배 중복 집계되던 것 → (전문가, 일자) 1건으로 dedup.
 - 테스트 61건 통과 (신규 20건). 미반영: US 스케줄러 부스트 후 현금 재클램프(P2, US 미운용).
+- **배포 (2026-09-03 07:49 KST)**: PR 머지 전 운영 서버에서 `remote_deploy.sh` 절차를 수동
+  미러링해 `fe31c7d`를 **detached HEAD**로 체크아웃·검증·재시작 (이전 076ee97, 헬스체크 정상).
+  ⚠️ 운영 체크아웃이 detached 상태 — PR 머지 후 `git checkout main && git pull --ff-only origin main`
+  으로 복귀할 것 (deploy 스크립트는 `git reset --hard`라 그대로 써도 동작은 함).
 
 ## 2026-09-03 — fix: 운영 리뷰 — KIS 원장 TR HTTP 500 폭주 원인 제거 + 관측 잡음 4건
 
