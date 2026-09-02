@@ -297,6 +297,7 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - KIS API 응답 지연(수 분) → 유령 포지션 발생 가능
 - 청산 실패 시 `broker.get_positions()`로 실제 보유 확인 후 정리
 - 동기화 주기: KR 30초, US 30초
+- KIS 포지션 0건 응답은 잔고 `stock_value > 0`일 때만 API 오류로 간주 — 수동 전량 매도 등 진짜 빈 계좌는 유령 정리로 진행 (2026-09-03)
 
 ### 매수 미실행 체크리스트
 1. 가용 현금 확인 (`get_available_cash()` / `curl -s localhost:8080/api/portfolio` → `cash_ratio`)
@@ -318,6 +319,12 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - **KIS HTTP 500 반복** (`[API] HTTP 500 <tr_id> EGW00201 …`): 원장 TR 초당 1건 초과.
   야간에도 30초 주기로 반복되면 같은 원장 TR 연속 호출 코드가 원인 — 경고의 `tr_id`로
   호출 주체를 추적한다 (2026-09-03 `_rate_limit` 원장 간격으로 해결)
+- **EGW00133 연속 (토큰 재발급 1분 제한)**: 다른 컴포넌트가 토큰을 회전한 직후 브로커가
+  EGW00123을 받고 무효화하던 락아웃 — 2026-09-03 회전 토큰 채택으로 해결. 재발 시
+  `journalctl | grep -c EGW00133`로 빈도 확인, `[토큰] 매니저 토큰이 이미 회전됨` 로그가 정상 경로
+- **주문 POST 실패 후 포지션 불일치**: 주문 접수/정정은 재전송하지 않으므로(중복 주문 방지)
+  응답 유실 시 봇은 실패로 보고 KIS에는 체결이 있을 수 있다 → 30초 동기화의 `sync_detected`가
+  정합하며, 그 전까지 대시보드 포지션이 KIS와 잠시 다를 수 있음 (정상)
 - **MCP 모듈 없음**: `No module named 'mcp'` → 기능 영향 없음 (폴백 동작)
 - **Yahoo Finance 지연**: KOSPI 데이터 2~3일 지연 → KIS 실시간 보충
 

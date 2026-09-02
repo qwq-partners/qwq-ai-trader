@@ -119,7 +119,8 @@ class SectorMomentumProvider:
         # → 0~10 점 (SEPA 항목 5)
     """
 
-    _PYKRX_FAIL_BACKOFF_SEC = 6 * 3600
+    _PYKRX_BACKOFF_MIN_SEC = 15 * 60      # 첫 실패 15분 (일시 장애)
+    _PYKRX_BACKOFF_MAX_SEC = 6 * 3600     # 연속 실패 시 ×2, 상한 6시간 (KRX 인증 등 구조적)
 
     def __init__(self, broker=None):
         self._broker = broker
@@ -134,6 +135,7 @@ class SectorMomentumProvider:
         # 5분마다 재시도하며 pykrx 내부 stderr("Error occurred in get_market_sector_classifications")
         # 를 반복 출력하던 문제 (2026-09-03)
         self._pykrx_fail_until: float = 0.0
+        self._pykrx_backoff_sec: int = self._PYKRX_BACKOFF_MIN_SEC
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -281,7 +283,7 @@ class SectorMomentumProvider:
         return None
 
     async def _fetch_pykrx_sector_map(self) -> Dict[str, str]:
-        """pykrx WICS 업종 분류 조회 (ticker → 한글 섹터명). 실패 시 6시간 백오프."""
+        """pykrx WICS 업종 분류 조회 (ticker → 한글 섹터명). 실패 시 점진 백오프(15분~6시간)."""
         if time.monotonic() < self._pykrx_fail_until:
             return {}
         try:
@@ -321,19 +323,23 @@ class SectorMomentumProvider:
 
             await asyncio.gather(_fetch("KOSPI"), _fetch("KOSDAQ"), return_exceptions=True)
             if sector_map:
+                self._pykrx_backoff_sec = self._PYKRX_BACKOFF_MIN_SEC
                 logger.info(f"[SectorMomentum] pykrx WICS 조회 완료: {len(sector_map)}종목")
             else:
-                self._pykrx_fail_until = time.monotonic() + self._PYKRX_FAIL_BACKOFF_SEC
-                logger.warning(
-                    "[SectorMomentum] pykrx 업종분류 조회 실패 (KRX 인증/차단 추정) → "
-                    f"{self._PYKRX_FAIL_BACKOFF_SEC // 3600}시간 재시도 중단, 키워드/캐시 매핑 사용"
-                )
+                self._note_pykrx_failure("빈 결과 (KRX 인증/차단 추정)")
             return sector_map
 
         except Exception as e:
-            self._pykrx_fail_until = time.monotonic() + self._PYKRX_FAIL_BACKOFF_SEC
-            logger.debug(f"[SectorMomentum] pykrx 로드 실패: {e}")
+            self._note_pykrx_failure(str(e))
             return {}
+
+    def _note_pykrx_failure(self, why: str) -> None:
+        self._pykrx_fail_until = time.monotonic() + self._pykrx_backoff_sec
+        logger.warning(
+            f"[SectorMomentum] pykrx 업종분류 조회 실패 → {self._pykrx_backoff_sec // 60}분 재시도 중단, "
+            f"키워드/캐시 매핑 사용 ({why[:80]})"
+        )
+        self._pykrx_backoff_sec = min(self._pykrx_backoff_sec * 2, self._PYKRX_BACKOFF_MAX_SEC)
 
     def _normalize_sector(self, raw: str) -> Optional[str]:
         """pykrx 업종명 → 내부 섹터명 정규화."""

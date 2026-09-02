@@ -1,5 +1,41 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-03 — fix: 다중 에이전트 적대 검증 반영 — 주문 재전송 금지(P0)·토큰 락아웃·전략 캡 누수 외
+
+같은 날 운영 리뷰의 2차분. 최근 PR(#8~#13) 코드 + 1차 수정 diff를 5개 차원(사이징·섀도우·
+스케줄러·브로커·diff)으로 탐색하고 P0/P1 후보 11건을 각 2명의 독립 반박자로 검증
+(23 에이전트, 전부 refute 시에만 기각). 확정 P0 1 + P1 6, 미검증 P2 8건 중 값싼 것 동시 반영.
+
+- **P0 주문 POST 재전송** (`kis_kr._api_post`): 타임아웃/연결 끊김/5xx 시 동일 order-cash
+  본문을 최대 3회 재전송 → 응답만 유실된 경우 중복 매수/분할익절 이중 매도 가능
+  (hashkey는 멱등키가 아님). `retry=False`로 접수/정정은 재전송 금지, 실패 반환 →
+  호출자가 pending 해제, 30초 동기화가 실제 체결분을 sync_detected로 정합. 취소는 유지.
+- **P1 토큰 회전 락아웃** (`kis_kr`): kis_market_data/kr_screener가 공유 매니저로 토큰을
+  회전시키면 브로커는 stale 토큰을 보내 EGW00123 → 무조건 `invalidate()`로 새 토큰까지
+  삭제 → 재발급 1분 제한 EGW00133 → ~60초 전 KIS 호출·주문 불능 (8월 6회, 238줄 실측).
+  `_get_headers`가 매니저 토큰을 즉시 채택 + `_recover_token()`이 회전 토큰 존재 시 무효화 생략.
+- **P1 전략 예산 캡이 미체결 주문 미포함** (`engine`): 장중 자동진입이 0.3초 간격으로
+  같은 전략 시그널을 연속 발행하면 체결 전이라 캡이 N배 초과 (gap 35% 캡에 ~50%).
+  `_pending_strategy` 귀속 + `_pending_strategy_notional()`을 G5 조기차단·사이징 양쪽에 합산.
+- **P1 3주 최소수량 보정이 캡 우회** (`engine.calculate_position_size`): 보정 조건에
+  `_strategy_remaining` 추가 (변동성 축소·일손실 반감 뒤 다시 3주로 부풀리던 경로 차단).
+- **P1 수확 shadow 드라이버 봉 누락** (`harvest_shadow`): 최신 봉 1개만 판정해 실행이
+  하루 빠지면(FDR 장애·봇 다운·유니버스 이탈) 손절·체결·D0가 영구 누락 → `_process()`
+  순수 함수로 분리, `cursor.json` 봉 커서 이후 전 봉 순회, 당일 진행 봉 배제
+  (`_drop_incomplete_bar`), 보유·대기 종목 유니버스 이탈 시에도 데이터 로드, 10봉 재신호
+  억제(백테스트 find_d0_signals 동일). 드라이버 테스트 6건 신설 (`tests/test_harvest_driver.py`).
+- **P1 FDR 폴백 동기 경로** (`data_collector`, 1차 수정 diff 지적): `_build_name_cache`의
+  루프 위 동기 호출은 `allow_network=False`(로컬 캐시만) — 기존 pykrx 동기 호출도 함께 제거.
+- **P2 일괄**: 코어 빈슬롯 예산에 `get_available_cash()` 반영(현금 0원 풀스캔 제거) /
+  손절 워치독 exit_exempt 제외(펩트론 상시 오경보) / 변동성 캐시 갱신 실패 시 당일
+  재시도(`refresh_vol_state → bool`) / 공시경보 dedup `dart_alerted.json` 영속화(재시작
+  재발송 방지) / 동기화가 정상 빈 계좌를 API 오류로 오판하던 것(잔고 stock_value로 구분) /
+  매수가능조회 rt_cd 실패 시 예수금 폴백(기동 시 cash=0 방지) / 원장 TR 응답 시각 재스탬프 /
+  pykrx 백오프 점진화(15분→×2→6h) / `last_rebalance`는 풀 리밸런싱만 기록(빈슬롯은
+  `last_fill_attempt`) / 밸류코어 승격 라인에 조회 실패·픽 없는 주 표시.
+- 테스트 61건 통과 (신규 20건). 미반영: US 스케줄러 부스트 후 현금 재클램프(P2, US 미운용),
+  전문가 calibration 일 3회 중복 집계(P2 — 관측 리포트 전용, 별도 처리 예정).
+
 ## 2026-09-03 — fix: 운영 리뷰 — KIS 원장 TR HTTP 500 폭주 원인 제거 + 관측 잡음 4건
 
 오랜만의 운영 점검(2026-09-03 01:30 KST). 봇 정상 가동·테스트 41건 통과였으나

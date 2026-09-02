@@ -59,7 +59,7 @@ def _enabled() -> bool:
     return os.getenv("VOL_TARGETING", "1") != "0"
 
 
-async def refresh_vol_state() -> None:
+async def refresh_vol_state() -> bool:
     """KOSPI 실현변동성 갱신 (하루 1회, 장전 스케줄러에서 호출).
 
     실패는 삼킨다 — 캐시가 노후하면 사이징 쪽이 알아서 1.0으로 폴백한다.
@@ -90,7 +90,7 @@ async def refresh_vol_state() -> None:
         rets = rets.tail(LOOKBACK_DAYS)
         if len(rets) < LOOKBACK_DAYS // 2:
             logger.warning(f"[변동성타게팅] 수익률 표본 부족 ({len(rets)}) — 갱신 생략")
-            return
+            return False
         realized = float(rets.std() * math.sqrt(252) * 100)
 
         if realized > VOL_THRESHOLD:
@@ -111,8 +111,10 @@ async def refresh_vol_state() -> None:
             f"[변동성타게팅] KOSPI 20일 실현변동성 {realized:.1f}% "
             f"(임계 {VOL_THRESHOLD:.0f}%) → 모멘텀 사이징 ×{mult:.2f}"
         )
+        return True
     except Exception as e:
         logger.warning(f"[변동성타게팅] 갱신 실패 (무시): {e}")
+        return False
 
 
 def _load_state() -> dict:

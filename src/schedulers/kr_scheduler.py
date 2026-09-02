@@ -934,7 +934,10 @@ class KRScheduler:
             # 2. API 빈 결과 방어: lock 밖에서 재시도 (lock 내 sleep 방지)
             bot_symbols = set(bot.engine.portfolio.positions.keys())
             kis_symbols = set(kis_positions.keys()) if kis_positions else set()
-            if bot_symbols and not kis_symbols:
+            # 잔고 응답의 주식평가액이 0이면 진짜 빈 계좌(수동 전량 매도 등) — 유령 정리로 진행.
+            # 평가액 > 0 인데 포지션 0건일 때만 API 오류로 본다 (2026-09-03)
+            _kis_stock_value = float(balance.get("stock_value") or 0)
+            if bot_symbols and not kis_symbols and _kis_stock_value > 0:
                 logger.warning(
                     "[동기화] KIS 포지션 조회 결과 0건 (봇 보유 "
                     f"{len(bot_symbols)}건) → 5초 후 재시도"
@@ -4511,9 +4514,11 @@ JSON:
                         try:
                             _pf_wd = bot.engine.portfolio if bot.engine else None
                             if _pf_wd is not None:
+                                # exit_exempt(자동매도 금지) 종목은 침묵이 사용자 지시 — 제외 (2026-09-03)
                                 _breaches = [
                                     (s, p) for s, p in _pf_wd.positions.items()
                                     if float(getattr(p, "unrealized_pnl_pct", 0)) < -12.0
+                                    and not (bot.exit_manager and bot.exit_manager.is_exit_exempt(s))
                                 ]
                                 if _breaches:
                                     _wd_lines = [
@@ -6417,8 +6422,8 @@ JSON:
                 if last_run_date == today.isoformat():
                     continue
                 from ..utils.volatility_targeting import refresh_vol_state
-                await refresh_vol_state()
-                last_run_date = today.isoformat()
+                if await refresh_vol_state():
+                    last_run_date = today.isoformat()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -6450,10 +6455,29 @@ JSON:
         bot = self.bot
         # (symbol, 공시제목) → 최초 감지일. days=1 조회창이 전일~당일을 포함하므로
         # 일일 리셋이 아니라 3일 보존으로 익일 재경보를 막는다 (리뷰 P1).
+        # 재시작 시 전일~당일 공시가 전부 "신규"로 재경보되지 않도록 파일 영속화 (2026-09-03)
+        _alerted_path = Path.home() / ".cache" / "ai_trader" / "dart_alerted.json"
         alerted: Dict[tuple, str] = {}
+        try:
+            if _alerted_path.exists():
+                for _k, _d in json.loads(_alerted_path.read_text(encoding="utf-8")).items():
+                    _sym, _, _title = _k.partition("|")
+                    alerted[(_sym, _title)] = str(_d)
+        except Exception as _le:
+            logger.debug(f"[공시경보] dedup 상태 로드 실패 (무시): {_le}")
+
+        def _save_alerted() -> None:
+            try:
+                _alerted_path.write_text(
+                    json.dumps({f"{k[0]}|{k[1]}": d for k, d in alerted.items()}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception as _se:
+                logger.debug(f"[공시경보] dedup 상태 저장 실패 (무시): {_se}")
+
         last_poll_key: Optional[str] = None
         _map_retry_hour: Optional[str] = None
-        logger.info("[공시경보] 스케줄러 시작 (장중 10분 주기, 보유 종목 위험 공시)")
+        logger.info(f"[공시경보] 스케줄러 시작 (장중 10분 주기, 보유 종목 위험 공시, dedup {len(alerted)}건 복원)")
         while True:
             try:
                 await asyncio.sleep(60)
@@ -6524,6 +6548,7 @@ JSON:
                     if _sent is not False:
                         for t in fresh:
                             alerted[(symbol, t)] = today.isoformat()
+                            _save_alerted()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -6967,10 +6992,18 @@ JSON:
                         core_alloc_pct = alloc.strategy_allocation.get("core_holding", 30.0)
                     core_budget = equity * Decimal(str(core_alloc_pct / 100))
                     current_core_value = portfolio.get_strategy_allocation("core_holding")
-                    remaining_budget = core_budget - current_core_value
+                    # equity 기준 예산뿐 아니라 실제 가용현금(5% 예비금 반영)도 봐야 한다 —
+                    # 현금 0원인데 매일 3회 풀스캔+"미체결" 경고를 내던 잡음 (2026-09-03)
+                    remaining_budget = min(
+                        core_budget - current_core_value, bot.engine.get_available_cash()
+                    )
                     min_position_value = Decimal(str(core_cfg.get("min_position_value", 200000)))
 
                     if remaining_budget < min_position_value:
+                        logger.debug(
+                            f"[코어홀딩스케줄러] 빈슬롯 매수 생략: 가용 {remaining_budget:,.0f}원 "
+                            f"< 최소 {min_position_value:,.0f}원"
+                        )
                         continue
 
                     empty_slots = max_core_positions - core_count

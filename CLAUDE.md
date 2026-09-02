@@ -277,6 +277,8 @@ result = value if value is not None else default
 - **파일 수정 시 연관 체크**: types.py ↔ engine.py, exit_manager.py ↔ schedulers, config.py ↔ YAML
 - **수수료 계산**: `FeeCalculator` 단일 사용 — data_collector/storage 내 하드코딩 금지
 - **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
+- **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일
+- **원장 TR(잔고/체결/미체결)은 계좌당 초당 1건**: 새 원장 TR은 `kis_kr._LEDGER_TR_IDS`에 추가 (HTTP 500 EGW00201 방지)
 
 ---
 

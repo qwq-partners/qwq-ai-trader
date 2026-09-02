@@ -54,6 +54,14 @@
   버킷별 노출(used_pct/cap_pct)을 `~/.cache/ai_trader/factor_exposure_log.jsonl`에
   매일 기록. **enforce 승격은 이 스냅샷 2주 축적 후 재판단** (2026-08-19 보류 결정)
 
+### 전략 예산 캡 — 미체결 주문 포함 + 최소수량 보정 캡 (2026-09-03~)
+- `strategy_allocation` 캡 계산(`engine` G5 조기차단·`calculate_position_size` 재클램프)에
+  체결된 포지션뿐 아니라 **pending BUY 예약금**(`_pending_strategy_notional`)을 합산한다.
+  장중 자동진입이 0.3초 간격으로 같은 전략 시그널을 연속 발행하면 체결 전이라 캡이
+  N배 초과되던 누수 (gap_and_go 35% 캡에 ~50%).
+- 분할익절용 **3주 최소수량 보정**은 `_strategy_remaining`도 만족할 때만 적용 —
+  변동성 축소·일손실 반감·전략 캡으로 1~2주가 된 수량을 3주로 되돌리던 우회 경로 차단.
+
 ### 조건부 변동성 타게팅 (2026-08-19~)
 모멘텀 계열 전략(sepa_trend/gap_and_go/momentum_breakout/vcp_breakout)의 신규 매수
 사이징에 KOSPI 실현변동성 기반 축소 배율 적용 (`utils/volatility_targeting.py`,
@@ -70,6 +78,7 @@
 - 비활성화: `VOL_TARGETING=0`
 
 ### 손절선 초과 방치 워치독 (2026-08-19~)
+- exit_exempt(자동매도 금지) 종목은 제외 (2026-09-03) — 침묵이 사용자 지시인 종목의 상시 오경보 방지
 저녁 품질검증 잡에서 미실현손실 **-12% 미만**(최대 명목 손절 10% + 여유) 포지션을
 감지하면 WARNING 로그 + 텔레그램 경보. 6월 sync_detected 청산 급증(5월 3건 →
 6월 13건, 코어 2건은 5~13일 방치 후 -20% 수준 발견) 재발 감시용 최후 안전망 —

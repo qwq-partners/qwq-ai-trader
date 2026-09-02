@@ -248,8 +248,12 @@ class DashboardDataCollector:
     _stock_master_max_attempts: int = 3
 
     @classmethod
-    def _load_stock_master_sync(cls) -> None:
-        """종목 마스터 동기 로드 (pykrx 블로킹 I/O, 실패 시 로컬 캐시 폴백)"""
+    def _load_stock_master_sync(cls, allow_network: bool = True) -> None:
+        """종목 마스터 동기 로드 (pykrx 블로킹 I/O, 실패 시 FDR → 로컬 캐시 폴백)
+
+        allow_network=False: 이벤트 루프 위 동기 호출(_build_name_cache) 전용 — 타임아웃 없는
+        pykrx/FDR 네트워크 I/O로 트레이딩 루프를 막지 않도록 로컬 캐시만 읽는다 (2026-09-03).
+        """
         if cls._stock_master_loaded:
             return
 
@@ -262,7 +266,7 @@ class DashboardDataCollector:
         _cache_file = _cache_dir / "stock_master.json"
 
         pykrx_success = False
-        if PYKRX_AVAILABLE:
+        if PYKRX_AVAILABLE and allow_network:
             try:
                 logger.info("Loading stock master from pykrx...")
 
@@ -305,7 +309,7 @@ class DashboardDataCollector:
                 logger.error(f"Failed to load stock master from pykrx: {e}")
 
         # pykrx 실패 시 FDR 폴백 — KRX 인증 불필요 (storage/stock_master.py 와 동일 패턴, 2026-09-03)
-        if not pykrx_success:
+        if not pykrx_success and allow_network:
             try:
                 import json as _json
                 import FinanceDataReader as fdr
@@ -362,9 +366,9 @@ class DashboardDataCollector:
         if self._name_cache_updated and (now - self._name_cache_updated).total_seconds() < 60:
             return self._name_cache
 
-        # 종목 마스터 로드 (1회만, sync 폴백)
+        # 종목 마스터 로드 (1회만, sync 폴백 — 루프 위이므로 로컬 캐시만, 네트워크 금지)
         if not self._stock_master_loaded:
-            self._load_stock_master_sync()
+            self._load_stock_master_sync(allow_network=False)
 
         cache: Dict[str, str] = {}
 

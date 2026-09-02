@@ -227,14 +227,20 @@ async def promotion_readiness_report() -> str:
                 for s in snapshots:
                     _syms.update(s.get("final") or [])
                 closes_map = {}
+                _failed: List[str] = []
                 for sym in _syms:
                     try:
                         closes_map[sym] = await _aio.to_thread(_closes, sym)
-                    except Exception:
-                        continue
+                    except Exception as _ce:
+                        _failed.append(sym)
+                        logger.warning(f"[승격점검] 밸류코어 종가 조회 실패 {sym}: {_ce}")
+                if _failed:
+                    _vg_line += f" (조회 실패 {len(_failed)}종목{' — 벤치마크 포함' if '069500' in _failed else ''})"
                 result = evaluate_vg_history(snapshots, closes_map)
+                _n_pick_weeks = sum(1 for _s in snapshots if _s.get("final"))
                 if result is None:
-                    _vg_line += " — ⏳ 포워드 창 대기"
+                    _vg_line += (" — ❌ 벤치마크 조회 실패" if "069500" in _failed
+                                 else f" — 픽 있는 주 {_n_pick_weeks}/8 ⏳ 포워드 창 대기")
                 elif result["n_eval_weeks"] < 6:
                     _vg_line += f", 평가 가능 {result['n_eval_weeks']}/6주 — ⏳ 포워드 창 대기"
                 else:
