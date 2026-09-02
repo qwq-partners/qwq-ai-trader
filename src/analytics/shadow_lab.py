@@ -57,6 +57,10 @@ async def expert_calibration_report(broker, days: int = 28) -> str:
 
         stats: Dict[str, Dict[str, int]] = {}
         cutoff = datetime.now() - timedelta(days=days)
+        # (전문가, 일자) → 그날 마지막 bias. 하루 3회(07:30/13:00/16:30, 월요일 5회) 저장분이
+        # 같은 5일 창으로 3~5배 중복 집계돼 n·적중률이 부풀고 n>=3 게이트가 하루 만에
+        # 충족되던 문제 — 일 단위 1건으로 dedup (2026-09-03)
+        latest: Dict[tuple, str] = {}
         for f in sorted(_CACHE.glob("experts/*.jsonl")):
             for line in f.read_text(encoding="utf-8").splitlines():
                 try:
@@ -65,20 +69,23 @@ async def expert_calibration_report(broker, days: int = 28) -> str:
                     if issued < cutoff:
                         continue
                     bias = str(op.get("regime_bias", "")).lower()
-                    r5 = r5_after(issued.strftime("%Y%m%d"))
-                    if r5 is None or not bias:
-                        continue
-                    if "bull" in bias:
-                        hit = r5 > 0
-                    elif "bear" in bias:
-                        hit = r5 < 0
-                    else:
-                        hit = abs(r5) < _NEUTRAL_BAND
-                    s = stats.setdefault(op.get("expert", "?"), {"n": 0, "hits": 0})
-                    s["n"] += 1
-                    s["hits"] += 1 if hit else 0
+                    if bias:
+                        latest[(op.get("expert", "?"), issued.strftime("%Y%m%d"))] = bias
                 except (KeyError, ValueError, json.JSONDecodeError):
                     continue
+        for (expert, day), bias in latest.items():
+            r5 = r5_after(day)
+            if r5 is None:
+                continue
+            if "bull" in bias:
+                hit = r5 > 0
+            elif "bear" in bias:
+                hit = r5 < 0
+            else:
+                hit = abs(r5) < _NEUTRAL_BAND
+            s = stats.setdefault(expert, {"n": 0, "hits": 0})
+            s["n"] += 1
+            s["hits"] += 1 if hit else 0
 
         rows = [(k, v) for k, v in stats.items() if v["n"] >= 3]
         if not rows:
