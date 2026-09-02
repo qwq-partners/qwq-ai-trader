@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Tuple, Any
 import aiohttp
 from loguru import logger
 
+from ...utils import kis_rate_limit
+
 from .base import BaseBroker
 from ...core.types import (
     Order, Fill, Position, OrderSide, OrderStatus, OrderType, MarketSession
@@ -92,15 +94,9 @@ class KISBroker(BaseBroker):
         # 토큰 매니저
         self._token_mgr = token_manager
 
-        # API 레이트 리미터 (초당 max_rps 호출 제한)
-        self._rate_limit_lock = asyncio.Lock()
-        self._api_call_times: collections.deque = collections.deque(maxlen=20)
-        self._max_rps = 18  # KIS API 초당 최대 호출 수 (안전 마진 포함)
-        # 원장(계좌) 조회 TR 마지막 호출 시각 — 원장 서버는 계좌당 초당 1건 초과 시
-        # HTTP 500 EGW00201("원장에서 허용 가능한 초당 거래건수를 초과") 반환.
-        # 2026-09-03: 포트폴리오 동기화가 잔고+포지션(TTTC8434R×2)을 연속 호출해
-        # 30초마다 HTTP 500 1건 → 일 ~4,000건 재시도 경보의 원인이었음
-        self._ledger_last_call: float = 0.0
+        # API 레이트 리미터 — 프로세스 공용 (src/utils/kis_rate_limit.py, 2026-09-03):
+        # 시세·스크리너 모듈이 같은 appkey로 별도 세션을 쓰므로 초당 한도는 합산으로 걸린다.
+        # 원장(계좌) TR 초당 1건 간격(EGW00215)도 같은 모듈이 보장한다.
 
         # 검증
         if not self.config.app_key or not self.config.app_secret:
@@ -117,33 +113,9 @@ class KISBroker(BaseBroker):
     # API 레이트 리미팅
     # ============================================================
 
-    # 원장 조회 TR (잔고/체결/미체결) — 계좌당 초당 1건 간격 강제
-    _LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8001R", "TTTC8036R", "TTTS3012R", "VTTS3012R"})
-    _LEDGER_MIN_INTERVAL = 1.05
-
     async def _rate_limit(self, tr_id: str = ""):
-        """API 호출 전 레이트 리미트 대기 (슬라이딩 윈도우 + 원장 TR 간격, Lock 밖에서 sleep)"""
-        ledger = tr_id in self._LEDGER_TR_IDS
-        while True:
-            async with self._rate_limit_lock:
-                now = time.monotonic()
-                # 1초 이내 호출 기록만 유지
-                while self._api_call_times and now - self._api_call_times[0] > 1.0:
-                    self._api_call_times.popleft()
-                wait_time = 0.0
-                if len(self._api_call_times) >= self._max_rps:
-                    wait_time = 1.0 - (now - self._api_call_times[0])
-                elif ledger and now - self._ledger_last_call < self._LEDGER_MIN_INTERVAL:
-                    wait_time = self._LEDGER_MIN_INTERVAL - (now - self._ledger_last_call)
-                # 한도 미달 시 즉시 등록 후 통과
-                if wait_time <= 0:
-                    self._api_call_times.append(now)
-                    if ledger:
-                        self._ledger_last_call = now
-                    return
-            # Lock 해제 후 sleep (다른 코루틴 블로킹 방지)
-            logger.debug(f"[레이트 리밋] {wait_time:.3f}초 대기 (초당 {self._max_rps}건 제한, 원장={ledger})")
-            await asyncio.sleep(wait_time)
+        """API 호출 전 레이트 리미트 대기 — 프로세스 공용 슬라이딩 윈도우 + 원장 TR 간격"""
+        await kis_rate_limit.acquire(tr_id)
 
     # ============================================================
     # 연결 관리
@@ -269,8 +241,8 @@ class KISBroker(BaseBroker):
                 await self._rate_limit(tr_id)
                 headers = self._get_headers(tr_id)
                 async with self._session.get(url, headers=headers, params=params) as resp:
-                    if tr_id in self._LEDGER_TR_IDS:
-                        self._ledger_last_call = time.monotonic()  # 응답 수신 시각 기준 재스탬프
+                    if kis_rate_limit.is_ledger(tr_id):
+                        kis_rate_limit.stamp_ledger()  # 응답 수신 시각 기준 재스탬프
                     if resp.status == 401 and attempt < 2:
                         logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
                         await self._recover_token()

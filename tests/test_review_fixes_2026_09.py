@@ -7,7 +7,6 @@
 """
 
 import asyncio
-import collections
 import sys
 import time
 from pathlib import Path
@@ -21,17 +20,14 @@ if str(ROOT) not in sys.path:
 from src.analytics.monitoring_runner import MonitoringRunner  # noqa: E402
 from src.data.providers import sector_momentum  # noqa: E402
 from src.execution.broker.kis_kr import KISBroker  # noqa: E402
+from src.utils import kis_rate_limit  # noqa: E402
 
 
-# ── KIS 원장 TR 간격 ─────────────────────────────────────────────────────────
+# ── KIS 공용 리미터: 원장 TR 간격 ─────────────────────────────────────────────
 
 def _bare_broker() -> KISBroker:
-    b = object.__new__(KISBroker)
-    b._rate_limit_lock = asyncio.Lock()
-    b._api_call_times = collections.deque(maxlen=20)
-    b._max_rps = 18
-    b._ledger_last_call = 0.0
-    return b
+    kis_rate_limit.reset()
+    return object.__new__(KISBroker)
 
 
 def test_ledger_tr_calls_are_spaced_one_second():
@@ -40,7 +36,7 @@ def test_ledger_tr_calls_are_spaced_one_second():
     async def run():
         t0 = time.monotonic()
         await b._rate_limit("TTTC8434R")  # 잔고
-        await b._rate_limit("TTTC8434R")  # 포지션 (동일 원장 TR 연속 호출)
+        await b._rate_limit("TTTC8908R")  # 매수가능조회 (다른 원장 TR도 같은 간격)
         return time.monotonic() - t0
 
     assert asyncio.run(run()) >= 1.0
@@ -52,9 +48,22 @@ def test_non_ledger_tr_is_not_spaced():
     async def run():
         for _ in range(5):
             await b._rate_limit("FHKST01010100")  # 현재가
+        await kis_rate_limit.acquire()             # 시세 모듈 경로(tr_id 없음)도 같은 윈도우
 
     asyncio.run(run())
-    assert len(b._api_call_times) == 5 and b._ledger_last_call == 0.0  # 원장 간격 미적용(sleep 없음)
+    assert len(kis_rate_limit._calls) == 6 and kis_rate_limit._state["ledger_last"] == 0.0
+
+
+def test_shared_window_blocks_burst_over_max_rps():
+    kis_rate_limit.reset()
+
+    async def run():
+        t0 = time.monotonic()
+        for _ in range(kis_rate_limit.MAX_RPS + 1):
+            await kis_rate_limit.acquire()
+        return time.monotonic() - t0
+
+    assert asyncio.run(run()) >= 0.9  # 19번째 호출은 1초 윈도우가 지나야 통과
 
 
 # ── 주문 POST 재전송 금지 / 토큰 회전 채택 ─────────────────────────────────────

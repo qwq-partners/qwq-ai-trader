@@ -278,7 +278,7 @@ result = value if value is not None else default
 - **수수료 계산**: `FeeCalculator` 단일 사용 — data_collector/storage 내 하드코딩 금지
 - **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
 - **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일
-- **원장 TR(잔고/체결/미체결)은 계좌당 초당 1건**: 새 원장 TR은 `kis_kr._LEDGER_TR_IDS`에 추가 (HTTP 500 EGW00201 방지)
+- **KIS 직접 호출은 `await kis_rate_limit.acquire(tr_id)` 선행**: 브로커·시세·스크리너가 같은 appkey라 초당 한도는 합산(EGW00201). 원장 TR(잔고/매수가능/체결/미체결)은 계좌당 초당 1건(EGW00215) — 새 원장 TR은 `utils/kis_rate_limit.LEDGER_TR_IDS`에 추가
 
 ---
 
