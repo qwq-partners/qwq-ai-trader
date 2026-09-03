@@ -30,7 +30,28 @@ LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R", "
 LEDGER_MIN_INTERVAL = 1.05
 
 _calls: collections.deque = collections.deque(maxlen=MAX_RPS)
-_state = {"ledger_last": 0.0, "last_send": 0.0}
+HOLD_AFTER_REJECT = 1.0   # EGW00201 수신 후 전역 정지 (서버 1초 버킷 파일온 방지)
+
+_state = {"ledger_last": 0.0, "last_send": 0.0, "hold_until": 0.0, "rejections": 0}
+
+
+def note_rejection(tr_id: str = "") -> None:
+    """게이트웨이 초당 한도 거절(EGW00201) 기록 — 우리 측 밀도를 함께 남겨 원인 판별.
+
+    10/s 정속에서도 스크리닝 중 거절이 남아(2026-09-03 15:58, 21초 ~100건에 3건) 송신률이
+    원인인지 서버측 요인인지 구분이 필요했다. 거절 시점의 최근 1초 호출 수와 직전 간격을 남기고
+    HOLD_AFTER_REJECT 동안 전역 정지한다.
+    """
+    from loguru import logger
+    now = time.monotonic()
+    recent = sum(1 for t in _calls if now - t <= 1.0)
+    gap_ms = (now - _state["last_send"]) * 1000
+    _state["rejections"] += 1
+    _state["hold_until"] = now + HOLD_AFTER_REJECT
+    logger.warning(
+        f"[KIS리미터] EGW00201 #{_state['rejections']} {tr_id}: 최근 1초 송신 {recent}건 "
+        f"(상한 {MAX_RPS}), 직전 송신 {gap_ms:.0f}ms 전 → {HOLD_AFTER_REJECT:.1f}초 전역 정지"
+    )
 
 
 def is_ledger(tr_id: str) -> bool:
@@ -50,7 +71,9 @@ async def acquire(tr_id: str = "") -> None:
         while _calls and now - _calls[0] > 1.0:
             _calls.popleft()
         wait = 0.0
-        if len(_calls) >= MAX_RPS:
+        if now < _state["hold_until"]:
+            wait = _state["hold_until"] - now
+        elif len(_calls) >= MAX_RPS:
             wait = 1.0 - (now - _calls[0])
         elif ledger and now - _state["ledger_last"] < LEDGER_MIN_INTERVAL:
             wait = LEDGER_MIN_INTERVAL - (now - _state["ledger_last"])
@@ -70,3 +93,5 @@ def reset() -> None:
     _calls.clear()
     _state["ledger_last"] = 0.0
     _state["last_send"] = 0.0
+    _state["hold_until"] = 0.0
+    _state["rejections"] = 0

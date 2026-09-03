@@ -78,6 +78,20 @@ def test_calls_are_paced_not_bursted():
     assert asyncio.run(run()) >= 3 * kis_rate_limit.MIN_GAP * 0.9  # 연속 호출은 최소 간격으로 분산
 
 
+def test_rejection_holds_all_callers(monkeypatch):
+    kis_rate_limit.reset()
+    monkeypatch.setattr(kis_rate_limit, "HOLD_AFTER_REJECT", 0.3)
+
+    async def run():
+        await kis_rate_limit.acquire()
+        kis_rate_limit.note_rejection("FHKST03010100")
+        t0 = time.monotonic()
+        await kis_rate_limit.acquire()  # hold 동안 대기
+        return time.monotonic() - t0
+
+    assert asyncio.run(run()) >= 0.25 and kis_rate_limit._state["rejections"] == 1
+
+
 # ── 주문 POST 재전송 금지 / 토큰 회전 채택 ─────────────────────────────────────
 
 class _FakeResp:
