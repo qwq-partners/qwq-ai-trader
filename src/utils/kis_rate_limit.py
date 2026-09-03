@@ -9,7 +9,9 @@ kis_market_data 쪽은 재시도가 없어 업종지수·외국인 동향 조회
 - 슬라이딩 윈도우 15/s — check-and-append 사이에 await가 없어 asyncio 단일 루프에서 Lock 없이
   원자적이다. 18/s로도 재시작 스크리닝 버스트에서 EGW00201 7건/3분이 남았다(2026-09-03 15:42
   실측): 윈도우는 전송 시각 기준이라 도착 지터(±수백 ms)로 서버측 1초 버킷에서 20을 넘는다.
-  ponytail: 고정 15/s — 스크리닝이 느려지면 EGW00201 수신 시 0.5초 전역 hold(적응형)로 격상.
+  15/s로 낮춰도 같은 버스트에서 8건 재현(15:46) → 총량이 아니라 **집중도**가 문제: 스크리너
+  gather가 허용치 15건을 수십 ms 안에 몰아 보낸다. 호출 간 최소 간격(1/MAX_RPS)으로 고르게 편다.
+  ponytail: 고정 페이싱 — 스크리닝이 느려지면 EGW00201 수신 시 전역 hold(적응형)로 격상.
 - 원장(계좌) TR은 계좌당 초당 1건 추가 제한(EGW00215) → 원장 TR 간 1.05초 간격.
   응답 수신 시각으로 재스탬프하려면 `stamp_ledger()`.
 """
@@ -21,12 +23,13 @@ import collections
 import time
 
 MAX_RPS = 15
+MIN_GAP = 1.0 / MAX_RPS   # 연속 호출 최소 간격 — 버스트를 초당 한도 안에서 고르게 분산
 # 원장 조회 TR: 잔고 TTTC8434R / 매수가능 TTTC8908R / 체결 TTTC8001R / 미체결 TTTC8036R / 해외잔고
 LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R", "TTTS3012R", "VTTS3012R"})
 LEDGER_MIN_INTERVAL = 1.05
 
 _calls: collections.deque = collections.deque(maxlen=MAX_RPS)
-_state = {"ledger_last": 0.0}
+_state = {"ledger_last": 0.0, "last_send": 0.0}
 
 
 def is_ledger(tr_id: str) -> bool:
@@ -50,8 +53,11 @@ async def acquire(tr_id: str = "") -> None:
             wait = 1.0 - (now - _calls[0])
         elif ledger and now - _state["ledger_last"] < LEDGER_MIN_INTERVAL:
             wait = LEDGER_MIN_INTERVAL - (now - _state["ledger_last"])
+        elif now - _state["last_send"] < MIN_GAP:
+            wait = MIN_GAP - (now - _state["last_send"])
         if wait <= 0:
             _calls.append(now)
+            _state["last_send"] = now
             if ledger:
                 _state["ledger_last"] = now
             return
@@ -62,3 +68,4 @@ def reset() -> None:
     """테스트 전용 — 윈도우·원장 시각 초기화"""
     _calls.clear()
     _state["ledger_last"] = 0.0
+    _state["last_send"] = 0.0

@@ -63,7 +63,19 @@ def test_shared_window_blocks_burst_over_max_rps():
             await kis_rate_limit.acquire()
         return time.monotonic() - t0
 
-    assert asyncio.run(run()) >= 0.9  # 19번째 호출은 1초 윈도우가 지나야 통과
+    assert asyncio.run(run()) >= 0.9  # MAX_RPS+1 번째 호출은 1초 윈도우가 지나야 통과
+
+
+def test_calls_are_paced_not_bursted():
+    kis_rate_limit.reset()
+
+    async def run():
+        t0 = time.monotonic()
+        for _ in range(4):
+            await kis_rate_limit.acquire()
+        return time.monotonic() - t0
+
+    assert asyncio.run(run()) >= 3 * kis_rate_limit.MIN_GAP * 0.9  # 연속 호출은 최소 간격으로 분산
 
 
 # ── 주문 POST 재전송 금지 / 토큰 회전 채택 ─────────────────────────────────────
