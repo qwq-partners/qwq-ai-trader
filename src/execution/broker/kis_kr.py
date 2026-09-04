@@ -242,7 +242,7 @@ class KISBroker(BaseBroker):
                 headers = self._get_headers(tr_id)
                 async with self._session.get(url, headers=headers, params=params) as resp:
                     if kis_rate_limit.is_ledger(tr_id):
-                        kis_rate_limit.stamp_ledger()  # 응답 수신 시각 기준 재스탬프
+                        kis_rate_limit.release_ledger()  # 원장 응답 수신 — 다음 원장 호출 허용(+1.05초)
                     if resp.status == 401 and attempt < 2:
                         logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
                         await self._recover_token()
@@ -277,6 +277,8 @@ class KISBroker(BaseBroker):
                         continue
                     return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if kis_rate_limit.is_ledger(tr_id):
+                    kis_rate_limit.release_ledger()  # 응답 없이 실패 — busy 해제
                 if attempt < 2:
                     wait = 2 ** attempt
                     logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도 ({wait}초 대기): {e}")

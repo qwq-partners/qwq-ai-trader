@@ -3539,7 +3539,8 @@ JSON:
                             _now_hm = now.strftime("%H:%M")
                             if "08:48" <= _now_hm <= "08:55":
                                 _ra = bot.engine._regime_adapter
-                                if _ra._llm_assessment_date != now.date():
+                                # LLM 장전 진단 전에는 속성이 없다 — 매일 08:49 AttributeError(무시)로 갱신 1회 누락 (2026-09-04)
+                                if getattr(_ra, "_llm_assessment_date", None) != now.date():
                                     try:
                                         from ..utils.llm import get_llm_manager
 

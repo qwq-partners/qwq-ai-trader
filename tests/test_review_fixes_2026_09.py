@@ -36,10 +36,43 @@ def test_ledger_tr_calls_are_spaced_one_second():
     async def run():
         t0 = time.monotonic()
         await b._rate_limit("TTTC8434R")  # 잔고
+        kis_rate_limit.release_ledger()   # 응답 수신
         await b._rate_limit("TTTC8908R")  # 매수가능조회 (다른 원장 TR도 같은 간격)
         return time.monotonic() - t0
 
     assert asyncio.run(run()) >= 1.0
+
+
+def test_ledger_calls_are_serialized_until_response():
+    kis_rate_limit.reset()
+
+    async def run():
+        await kis_rate_limit.acquire("TTTC8434R")      # 응답 대기 중(busy)
+
+        async def _respond_later():
+            await asyncio.sleep(0.3)
+            kis_rate_limit.release_ledger()
+
+        asyncio.get_running_loop().create_task(_respond_later())
+        t0 = time.monotonic()
+        await kis_rate_limit.acquire("TTTC8001R")      # 응답(0.3s) + 1.05s 뒤에야 통과
+        return time.monotonic() - t0
+
+    assert asyncio.run(run()) >= 0.3 + kis_rate_limit.LEDGER_MIN_INTERVAL - 0.05
+
+
+def test_ledger_busy_is_released_after_timeout(monkeypatch):
+    kis_rate_limit.reset()
+    monkeypatch.setattr(kis_rate_limit, "LEDGER_BUSY_TIMEOUT", 0.2)
+    monkeypatch.setattr(kis_rate_limit, "LEDGER_MIN_INTERVAL", 0.0)
+
+    async def run():
+        await kis_rate_limit.acquire("TTTC8434R")  # 응답 누락 가정 (release 없음)
+        t0 = time.monotonic()
+        await kis_rate_limit.acquire("TTTC8434R")  # stale 가드로 0.2s 뒤 통과
+        return time.monotonic() - t0
+
+    assert 0.15 <= asyncio.run(run()) < 1.0
 
 
 def test_non_ledger_tr_is_not_spaced():

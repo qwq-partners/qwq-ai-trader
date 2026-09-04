@@ -13,8 +13,10 @@ kis_market_data 쪽은 재시도가 없어 업종지수·외국인 동향 조회
   ~250건 중 3% 거절) → 총량·집중도가 아니라 정속 15/s 자체가 게이트웨이 실효 한도(도착 지터
   포함)를 넘는다. 10/s(100ms 간격)로 하향 — 스크리닝 ~19s → ~28s.
   ponytail: 고정 10/s — 더 줄여야 하면 EGW00201 수신 시 전역 hold(적응형)로 격상.
-- 원장(계좌) TR은 계좌당 초당 1건 추가 제한(EGW00215) → 원장 TR 간 1.05초 간격.
-  응답 수신 시각으로 재스탬프하려면 `stamp_ledger()`.
+- 원장(계좌) TR은 계좌당 초당 1건 추가 제한(EGW00215) → 원장 호출은 **직렬화**: 이전 원장
+  응답을 받은 뒤(`release_ledger()`) 1.05초 지나야 다음 원장 호출. 전송 시각 간격만으로는
+  개장 직후 잔고 응답이 1초를 넘길 때 다음 호출이 응답 전에 나가 겹쳤다 (2026-09-04 09:01~
+  09:13 EGW00215 13건, 그 외 시간 0건). 응답 없이 10초가 지나면 stale로 보고 해제한다.
 """
 
 from __future__ import annotations
@@ -31,8 +33,10 @@ LEDGER_MIN_INTERVAL = 1.05
 
 _calls: collections.deque = collections.deque(maxlen=MAX_RPS)
 HOLD_AFTER_REJECT = 1.0   # EGW00201 수신 후 전역 정지 (서버 1초 버킷 파일온 방지)
+LEDGER_BUSY_TIMEOUT = 10.0  # 원장 응답 없이 이 시간이 지나면 busy 해제 (예외 누락 방어)
 
-_state = {"ledger_last": 0.0, "last_send": 0.0, "hold_until": 0.0, "rejections": 0}
+_state = {"ledger_last": 0.0, "last_send": 0.0, "hold_until": 0.0, "rejections": 0,
+          "ledger_busy_since": 0.0}
 
 
 def note_rejection(tr_id: str = "") -> None:
@@ -58,9 +62,13 @@ def is_ledger(tr_id: str) -> bool:
     return tr_id in LEDGER_TR_IDS
 
 
-def stamp_ledger() -> None:
-    """원장 TR 응답 수신 시각 기록 (전송 시각만 쓰면 서버 도착 간격이 1초 미만이 될 수 있음)"""
+def release_ledger() -> None:
+    """원장 TR 응답 수신(또는 실패) — busy 해제 + 간격 기준 시각을 응답 시각으로 갱신"""
+    _state["ledger_busy_since"] = 0.0
     _state["ledger_last"] = time.monotonic()
+
+
+stamp_ledger = release_ledger  # 구 이름 호환
 
 
 async def acquire(tr_id: str = "") -> None:
@@ -75,6 +83,11 @@ async def acquire(tr_id: str = "") -> None:
             wait = _state["hold_until"] - now
         elif len(_calls) >= MAX_RPS:
             wait = 1.0 - (now - _calls[0])
+        elif ledger and _state["ledger_busy_since"]:
+            if now - _state["ledger_busy_since"] > LEDGER_BUSY_TIMEOUT:
+                _state["ledger_busy_since"] = 0.0  # 응답 누락 — stale 해제
+            else:
+                wait = 0.05  # 이전 원장 응답 대기 중 — 짧게 폴링
         elif ledger and now - _state["ledger_last"] < LEDGER_MIN_INTERVAL:
             wait = LEDGER_MIN_INTERVAL - (now - _state["ledger_last"])
         elif now - _state["last_send"] < MIN_GAP:
@@ -84,6 +97,7 @@ async def acquire(tr_id: str = "") -> None:
             _state["last_send"] = now
             if ledger:
                 _state["ledger_last"] = now
+                _state["ledger_busy_since"] = now
             return
         await asyncio.sleep(wait)
 
@@ -95,3 +109,4 @@ def reset() -> None:
     _state["last_send"] = 0.0
     _state["hold_until"] = 0.0
     _state["rejections"] = 0
+    _state["ledger_busy_since"] = 0.0
