@@ -56,6 +56,10 @@
   `release_ledger()`(응답 수신) 전까지 다음 원장 호출 대기 + 10초 stale 가드.
 - `kr_scheduler.run_market_trend_monitor`: LLM 장전 진단 전 `_llm_assessment_date` 미존재로
   매일 08:49 AttributeError(무시) 1회 — 9/1부터 반복되던 기존 버그, `getattr` 처리.
+- **토요일 09:30 블록 가시성 (9/5 점검)**: 승격 점검 발송은 INFO로 첫 확인됐으나 🧪 Shadow Lab·
+  🌾 수확 shadow 주간 리포트는 성공 무로그·실패 DEBUG — 09:30:29 calibration 가격 조회가 KIS
+  거절(EGW00201)을 맞아 🧪 리포트가 조용히 빠졌을 가능성. 두 블록 모두 발송 완료/실패/표본 없음/
+  notifier 없음을 INFO·WARNING으로 남기도록 통일 (2026-08-30 승격점검 패턴).
   원장 세트에 매수가능조회
   `TTTC8908R` 추가 (잔고 직후 연속 호출로 `EGW00215` 1건 실측). 토큰 회전(08:23:50)은
   EGW00123/00133 0건으로 채택 경로 정상 확인.

@@ -5189,17 +5189,27 @@ JSON:
                                         "⚙️ REGIME_EXIT shadow 제안 (적용 없음)\n"
                                         + "\n".join(_re_lines)
                                     )
+                                # 2026-09-05: 발송/미발송/실패를 INFO·WARNING으로 — 승격점검(8/30)과 동일.
+                                # calibration의 KIS 가격 조회가 거절되면 리포트 전체가 조용히 빠졌다.
                                 if _sl_parts:
                                     from src.utils.telegram import get_telegram_notifier
                                     _sl_notifier = get_telegram_notifier()
                                     if _sl_notifier:
-                                        await _sl_notifier.send_message(
+                                        _sl_sent = await _sl_notifier.send_message(
                                             "🧪 주간 shadow 리포트 (하네스 Phase 3)\n"
                                             "━━━━━━━━━━━━━━━\n"
                                             + "\n\n".join(_sl_parts)
                                         )
+                                        logger.info(
+                                            f"[shadow-lab] 주간 리포트 발송 {'완료' if _sl_sent else '실패'}: "
+                                            f"{len(_sl_parts)}개 섹션 ({', '.join(_p.split(chr(10))[0][:12] for _p in _sl_parts)})"
+                                        )
+                                    else:
+                                        logger.warning("[shadow-lab] notifier 없음 — 미발송")
+                                else:
+                                    logger.info("[shadow-lab] 주간 리포트 표본 없음 — 미발송")
                             except Exception as _sl_err:
-                                logger.debug(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
+                                logger.warning(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
 
                             # 섀도우 승격 기준 주간 점검 (2026-08-20 — 기준 충족 시
                             # 🚀 마커로 통보, 승격 실행은 사용자 지시로 진행)
@@ -5233,10 +5243,17 @@ JSON:
                                 from ..strategies.harvest_shadow import weekly_progress
                                 from src.utils.telegram import get_telegram_notifier
                                 _hs_notifier = get_telegram_notifier()
+                                _hs_text = weekly_progress()
                                 if _hs_notifier:
-                                    await _hs_notifier.send_message(weekly_progress())
+                                    _hs_sent = await _hs_notifier.send_message(_hs_text)
+                                    logger.info(
+                                        f"[수확shadow] 주간 요약 발송 {'완료' if _hs_sent else '실패'}: "
+                                        + " | ".join(_hs_text.splitlines()[2:5])
+                                    )
+                                else:
+                                    logger.warning("[수확shadow] notifier 없음 — 주간 요약 미발송")
                             except Exception as _hs_err:
-                                logger.debug(f"[수확shadow] 주간 요약 실패 (무시): {_hs_err}")
+                                logger.warning(f"[수확shadow] 주간 요약 실패 (무시): {_hs_err}")
 
                             if report.get("status") == "ok":
                                 msg = report.get("telegram_message", "")
