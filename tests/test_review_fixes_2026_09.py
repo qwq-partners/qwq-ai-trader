@@ -61,6 +61,21 @@ def test_ledger_calls_are_serialized_until_response():
     assert asyncio.run(run()) >= 0.3 + kis_rate_limit.LEDGER_MIN_INTERVAL - 0.05
 
 
+def test_ledger_rejection_backs_off_next_ledger_call(monkeypatch):
+    kis_rate_limit.reset()
+    monkeypatch.setattr(kis_rate_limit, "LEDGER_HOLD_AFTER_REJECT", 0.4)
+
+    async def run():
+        await kis_rate_limit.acquire("TTTC8434R")
+        kis_rate_limit.note_ledger_rejection("TTTC8434R")  # 500 EGW00215 수신
+        kis_rate_limit.release_ledger()                     # 응답 처리 끝 — 백오프를 앞당기지 않음
+        t0 = time.monotonic()
+        await kis_rate_limit.acquire("TTTC8001R")
+        return time.monotonic() - t0
+
+    assert asyncio.run(run()) >= 0.35 and kis_rate_limit._state["ledger_rejections"] == 1
+
+
 def test_ledger_busy_is_released_after_timeout(monkeypatch):
     kis_rate_limit.reset()
     monkeypatch.setattr(kis_rate_limit, "LEDGER_BUSY_TIMEOUT", 0.2)

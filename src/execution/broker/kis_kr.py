@@ -260,6 +260,8 @@ class KISBroker(BaseBroker):
                                 _err_msg = f" {err_data.get('msg_cd', '')} {str(err_data.get('msg1', '')).strip()}"
                                 if str(err_data.get("msg_cd", "")) == "EGW00201":
                                     kis_rate_limit.note_rejection(tr_id)
+                                elif str(err_data.get("msg_cd", "")) == "EGW00215":
+                                    kis_rate_limit.note_ledger_rejection(tr_id)
                             except Exception:
                                 pass
                         wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초

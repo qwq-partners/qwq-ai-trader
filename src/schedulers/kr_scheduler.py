@@ -2379,7 +2379,9 @@ JSON:
                                 _retry_done.add(_retry_sym)
                         self._pending_exit_registrations -= _retry_done
 
-                    check_interval = 2 if open_orders else 5
+                    # 유휴(미체결 없음) 시 15초 — 5초 폴링이 개장 직후 원장 TR 트래픽의 대부분이라
+                    # EGW00215 충돌을 키웠다 (2026-09-07). 포지션 변화는 30초 동기화가 커버한다.
+                    check_interval = 2 if open_orders else 15
 
                     if _fill_check_errors > 0:
                         _fill_check_errors = 0

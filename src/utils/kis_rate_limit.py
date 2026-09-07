@@ -34,9 +34,10 @@ LEDGER_MIN_INTERVAL = 1.05
 _calls: collections.deque = collections.deque(maxlen=MAX_RPS)
 HOLD_AFTER_REJECT = 1.0   # EGW00201 수신 후 전역 정지 (서버 1초 버킷 파일온 방지)
 LEDGER_BUSY_TIMEOUT = 10.0  # 원장 응답 없이 이 시간이 지나면 busy 해제 (예외 누락 방어)
+LEDGER_HOLD_AFTER_REJECT = 2.0  # EGW00215 수신 후 다음 원장 호출까지 최소 대기 (재시도 쌍 충돌 방지)
 
 _state = {"ledger_last": 0.0, "last_send": 0.0, "hold_until": 0.0, "rejections": 0,
-          "ledger_busy_since": 0.0}
+          "ledger_busy_since": 0.0, "ledger_rejections": 0}
 
 
 def note_rejection(tr_id: str = "") -> None:
@@ -62,10 +63,27 @@ def is_ledger(tr_id: str) -> bool:
     return tr_id in LEDGER_TR_IDS
 
 
+def note_ledger_rejection(tr_id: str = "") -> None:
+    """원장 초과(EGW00215) 기록 — 다음 원장 호출을 LEDGER_HOLD_AFTER_REJECT 뒤로 민다.
+
+    직렬화(응답 후 1.05초) 이후에도 개장 직후 09:00~09:13에만 집중 발생(2026-09-07 29건) —
+    우리 간격이 병목이 아니라 개장 시 원장 부하/외부 클라이언트로 판단. 재시도가 1초 뒤
+    같은 벽에 부딪히는 쌍(:07/:08)을 줄이기 위해 백오프만 더한다.
+    """
+    from loguru import logger
+    _state["ledger_rejections"] += 1
+    _state["ledger_last"] = time.monotonic() + LEDGER_HOLD_AFTER_REJECT - LEDGER_MIN_INTERVAL
+    logger.warning(
+        f"[KIS리미터] EGW00215 원장 초과 #{_state['ledger_rejections']} {tr_id} → "
+        f"원장 호출 {LEDGER_HOLD_AFTER_REJECT:.0f}초 백오프"
+    )
+
+
 def release_ledger() -> None:
     """원장 TR 응답 수신(또는 실패) — busy 해제 + 간격 기준 시각을 응답 시각으로 갱신"""
     _state["ledger_busy_since"] = 0.0
-    _state["ledger_last"] = time.monotonic()
+    # 거절 백오프로 미래 시각이 잡혀 있으면 앞당기지 않는다
+    _state["ledger_last"] = max(_state["ledger_last"], time.monotonic())
 
 
 stamp_ledger = release_ledger  # 구 이름 호환
@@ -110,3 +128,4 @@ def reset() -> None:
     _state["hold_until"] = 0.0
     _state["rejections"] = 0
     _state["ledger_busy_since"] = 0.0
+    _state["ledger_rejections"] = 0
