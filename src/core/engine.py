@@ -1257,6 +1257,9 @@ class RiskManager:
 
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
+        # pending BUY의 전략 귀속 (symbol → 전략명) — 전략 예산 캡이 미체결 주문을 세지 못해
+        # 같은 사이클의 연속 시그널(장중 자동진입 0.3초 간격 등)이 캡을 N배 초과하던 문제 (2026-09-03 P1)
+        self._pending_strategy: Dict[str, str] = {}
 
         # 자동매도 금지 종목 (run_trader에서 exit_manager._exit_exempt live set 주입)
         self._exit_exempt_ref: set = set()
@@ -1893,7 +1896,8 @@ class RiskManager:
             if _cap_pct > 0:
                 _equity = self.engine.portfolio.total_equity
                 _budget_cap = _equity * Decimal(str(_cap_pct / 100))
-                _current = self.engine.portfolio.get_strategy_allocation(_strat_name)
+                _current = (self.engine.portfolio.get_strategy_allocation(_strat_name)
+                            + self._pending_strategy_notional(_strat_name))
                 if _current >= _budget_cap:
                     logger.info(
                         f"[리스크] 전략 예산 소진: {_strat_name} "
@@ -2081,6 +2085,9 @@ class RiskManager:
 
             if order.side == OrderSide.BUY and order.price and order.quantity:
                 self._reserved_by_order[order.symbol] = order.price * order.quantity * Decimal("1.015")
+                self._pending_strategy[order.symbol] = (
+                    event.strategy.value if event.strategy else (order.strategy or "")
+                )
 
         return [OrderEvent.from_order(order, source="risk_manager")]
 
@@ -2098,6 +2105,14 @@ class RiskManager:
             return fallback_price
         return None
 
+    def _pending_strategy_notional(self, strategy_name: str) -> Decimal:
+        """미체결 BUY 주문의 전략별 예약 금액 합 — 전략 예산 캡 계산 시 체결분에 더한다"""
+        return sum(
+            (self._reserved_by_order.get(sym, Decimal("0"))
+             for sym, st in self._pending_strategy.items() if st == strategy_name),
+            Decimal("0"),
+        )
+
     async def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):
         """주문 완료/실패 시 pending 해제 (외부에서 호출) - Lock 보호"""
         async with self._pending_lock:
@@ -2106,6 +2121,7 @@ class RiskManager:
             self._pending_timestamps.pop(symbol, None)
             self._pending_sides.pop(symbol, None)
             self._reserved_by_order.pop(symbol, None)
+            self._pending_strategy.pop(symbol, None)
             self._pending_fallback_count.pop(symbol, None)
             self._pending_signal_cache.pop(symbol, None)
             # 엔진 쪽 섹터 맵 정리 (2026-08-04 P1 — 누수 시 섹터 한도 오차단)
@@ -2225,6 +2241,7 @@ class RiskManager:
                 self._pending_timestamps.pop(event.symbol, None)
                 self._pending_sides.pop(event.symbol, None)
                 self._reserved_by_order.pop(event.symbol, None)
+                self._pending_strategy.pop(event.symbol, None)
                 self._pending_fallback_count.pop(event.symbol, None)
                 self._pending_exit_reasons.pop(event.symbol, None)
                 self._pending_signal_cache.pop(event.symbol, None)
@@ -2390,7 +2407,8 @@ class RiskManager:
             _cap_pct = _alloc.get(_strat_name, 0)
             if _cap_pct > 0:
                 _budget_cap = equity * Decimal(str(_cap_pct / 100))
-                _current = self.engine.portfolio.get_strategy_allocation(_strat_name)
+                _current = (self.engine.portfolio.get_strategy_allocation(_strat_name)
+                            + self._pending_strategy_notional(_strat_name))
                 _remaining = _budget_cap - _current
                 if _remaining <= 0:
                     return 0
@@ -2488,7 +2506,9 @@ class RiskManager:
         MIN_QTY_FOR_PARTIAL_EXIT = 3
         if quantity < MIN_QTY_FOR_PARTIAL_EXIT:
             cost_for_min = price * MIN_QTY_FOR_PARTIAL_EXIT * Decimal("1.001")
-            if cost_for_min <= available and cost_for_min <= max_value:
+            # 전략 잔여 예산도 존중 — 보정이 캡 재클램프를 우회하던 문제 (2026-09-03 P1)
+            if (cost_for_min <= available and cost_for_min <= max_value
+                    and (_strategy_remaining is None or cost_for_min <= _strategy_remaining)):
                 quantity = MIN_QTY_FOR_PARTIAL_EXIT
             elif quantity >= 1:
                 pass

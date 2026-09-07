@@ -176,6 +176,7 @@ def cleanup_old_cache(max_days: int = 7):
 
     - ~/.cache/ai_trader/journal/trades_*.json
     - ~/.cache/ai_trader/evolution/advice_*.json
+    - ~/.cache/ai_trader/daily_entry_count_*.json
     """
     cache_base = Path.home() / ".cache" / "ai_trader"
     if not cache_base.exists():
@@ -187,6 +188,7 @@ def cleanup_old_cache(max_days: int = 7):
     patterns = [
         cache_base / "journal" / "trades_*.json",
         cache_base / "evolution" / "advice_*.json",
+        cache_base / "daily_entry_count_*.json",  # 일별 진입 카운트 (2026-09-03: 3월분부터 누적 방치)
     ]
 
     for pattern in patterns:

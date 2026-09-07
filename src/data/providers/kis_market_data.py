@@ -20,6 +20,7 @@ import aiohttp
 from loguru import logger
 
 from src.utils.token_manager import get_token_manager
+from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
 
 
 class KISMarketData:
@@ -108,6 +109,7 @@ class KISMarketData:
                 "CTX_AREA_FK": "",
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.error(f"휴장일 조회 실패: HTTP {resp.status}")
@@ -174,6 +176,7 @@ class KISMarketData:
                 "FID_BLNG_CLS_CODE": "0",
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.error(f"업종지수 조회 실패: HTTP {resp.status}")
@@ -250,6 +253,7 @@ class KISMarketData:
                 "fid_rsfl_rate2": "",
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.error(f"등락률 순위 조회 실패: HTTP {resp.status}")
@@ -332,6 +336,7 @@ class KISMarketData:
                 "FID_ETC_CLS_CODE": investor,
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.error(f"{investor_name} 매매동향 조회 실패: HTTP {resp.status}")
@@ -415,6 +420,7 @@ class KISMarketData:
                 "FID_RANK_SORT_CLS_CODE": sort_cls,
                 "FID_RANK_SORT_CLS_CODE_2": "0",
             }
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.debug(f"[KIS] 외국계가집계 HTTP {resp.status}")
@@ -492,6 +498,7 @@ class KISMarketData:
                 "FID_COND_MRKT_DIV_CODE": "J",
                 "FID_INPUT_ISCD": symbol,
             }
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     return result
@@ -599,6 +606,7 @@ class KISMarketData:
             headers = await self._get_headers("HHPTJ04160200")
             url = f"{self._token_manager.base_url}/uapi/domestic-stock/v1/quotations/investor-trend-estimate"
             params = {"MKSC_SHRN_ISCD": symbol}
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.debug(f"[KIS] 추정가집계({symbol}) HTTP {resp.status}")
@@ -704,6 +712,7 @@ class KISMarketData:
                 "FID_INPUT_ISCD": symbol,
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     return None
@@ -889,6 +898,7 @@ class KISMarketData:
                     "FID_COND_MRKT_DIV_CODE": mrkt_div,
                     "FID_INPUT_ISCD": symbol,
                 }
+                await kis_rate_limit.acquire()
                 async with session.get(url, headers=headers, params=params) as resp:
                     if resp.status != 200:
                         logger.warning(
@@ -995,6 +1005,7 @@ class KISMarketData:
                 "FID_COND_MRKT_DIV_CODE": "U",  # 업종지수 (U=업종, US시장 코드 아님)
                 "FID_INPUT_ISCD": index_code,
             }
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.debug(f"[KIS 지수] {label} HTTP {resp.status}")

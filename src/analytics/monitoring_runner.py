@@ -113,6 +113,12 @@ class MonitoringRunner:
 
     # SQL 화이트리스트 — read-only만 허용 (운영 DB 파괴 방지)
     _SAFE_SQL_RE = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+    # 선행 `-- 주석` 줄은 무시 (체크포인트 SQL 12건 중 3건이 주석으로 시작해 매주 차단됨, 2026-09-03)
+    _LEADING_COMMENT_RE = re.compile(r"^(\s*--[^\n]*\n)+")
+
+    @classmethod
+    def _is_read_only_sql(cls, sql: str) -> bool:
+        return bool(cls._SAFE_SQL_RE.match(cls._LEADING_COMMENT_RE.sub("", sql)))
 
     async def _execute_checkpoint(self, ckp: Dict[str, Any]) -> List[Dict[str, Any]]:
         """체크포인트의 SQL을 실행해 결과 반환
@@ -133,7 +139,7 @@ class MonitoringRunner:
         try:
             conn = await asyncpg.connect(self._db_url)
             for sql in sql_list:
-                if not self._SAFE_SQL_RE.match(sql):
+                if not self._is_read_only_sql(sql):
                     logger.warning(
                         f"[모니터링] 비-read-only SQL 차단 (SELECT/WITH 강제): {sql[:80]}"
                     )

@@ -934,7 +934,10 @@ class KRScheduler:
             # 2. API 빈 결과 방어: lock 밖에서 재시도 (lock 내 sleep 방지)
             bot_symbols = set(bot.engine.portfolio.positions.keys())
             kis_symbols = set(kis_positions.keys()) if kis_positions else set()
-            if bot_symbols and not kis_symbols:
+            # 잔고 응답의 주식평가액이 0이면 진짜 빈 계좌(수동 전량 매도 등) — 유령 정리로 진행.
+            # 평가액 > 0 인데 포지션 0건일 때만 API 오류로 본다 (2026-09-03)
+            _kis_stock_value = float(balance.get("stock_value") or 0)
+            if bot_symbols and not kis_symbols and _kis_stock_value > 0:
                 logger.warning(
                     "[동기화] KIS 포지션 조회 결과 0건 (봇 보유 "
                     f"{len(bot_symbols)}건) → 5초 후 재시도"
@@ -2376,7 +2379,9 @@ JSON:
                                 _retry_done.add(_retry_sym)
                         self._pending_exit_registrations -= _retry_done
 
-                    check_interval = 2 if open_orders else 5
+                    # 유휴(미체결 없음) 시 15초 — 5초 폴링이 개장 직후 원장 TR 트래픽의 대부분이라
+                    # EGW00215 충돌을 키웠다 (2026-09-07). 포지션 변화는 30초 동기화가 커버한다.
+                    check_interval = 2 if open_orders else 15
 
                     if _fill_check_errors > 0:
                         _fill_check_errors = 0
@@ -3536,7 +3541,8 @@ JSON:
                             _now_hm = now.strftime("%H:%M")
                             if "08:48" <= _now_hm <= "08:55":
                                 _ra = bot.engine._regime_adapter
-                                if _ra._llm_assessment_date != now.date():
+                                # LLM 장전 진단 전에는 속성이 없다 — 매일 08:49 AttributeError(무시)로 갱신 1회 누락 (2026-09-04)
+                                if getattr(_ra, "_llm_assessment_date", None) != now.date():
                                     try:
                                         from ..utils.llm import get_llm_manager
 
@@ -4511,9 +4517,11 @@ JSON:
                         try:
                             _pf_wd = bot.engine.portfolio if bot.engine else None
                             if _pf_wd is not None:
+                                # exit_exempt(자동매도 금지) 종목은 침묵이 사용자 지시 — 제외 (2026-09-03)
                                 _breaches = [
                                     (s, p) for s, p in _pf_wd.positions.items()
                                     if float(getattr(p, "unrealized_pnl_pct", 0)) < -12.0
+                                    and not (bot.exit_manager and bot.exit_manager.is_exit_exempt(s))
                                 ]
                                 if _breaches:
                                     _wd_lines = [
@@ -5183,17 +5191,27 @@ JSON:
                                         "⚙️ REGIME_EXIT shadow 제안 (적용 없음)\n"
                                         + "\n".join(_re_lines)
                                     )
+                                # 2026-09-05: 발송/미발송/실패를 INFO·WARNING으로 — 승격점검(8/30)과 동일.
+                                # calibration의 KIS 가격 조회가 거절되면 리포트 전체가 조용히 빠졌다.
                                 if _sl_parts:
                                     from src.utils.telegram import get_telegram_notifier
                                     _sl_notifier = get_telegram_notifier()
                                     if _sl_notifier:
-                                        await _sl_notifier.send_message(
+                                        _sl_sent = await _sl_notifier.send_message(
                                             "🧪 주간 shadow 리포트 (하네스 Phase 3)\n"
                                             "━━━━━━━━━━━━━━━\n"
                                             + "\n\n".join(_sl_parts)
                                         )
+                                        logger.info(
+                                            f"[shadow-lab] 주간 리포트 발송 {'완료' if _sl_sent else '실패'}: "
+                                            f"{len(_sl_parts)}개 섹션 ({', '.join(_p.split(chr(10))[0][:12] for _p in _sl_parts)})"
+                                        )
+                                    else:
+                                        logger.warning("[shadow-lab] notifier 없음 — 미발송")
+                                else:
+                                    logger.info("[shadow-lab] 주간 리포트 표본 없음 — 미발송")
                             except Exception as _sl_err:
-                                logger.debug(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
+                                logger.warning(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
 
                             # 섀도우 승격 기준 주간 점검 (2026-08-20 — 기준 충족 시
                             # 🚀 마커로 통보, 승격 실행은 사용자 지시로 진행)
@@ -5227,10 +5245,17 @@ JSON:
                                 from ..strategies.harvest_shadow import weekly_progress
                                 from src.utils.telegram import get_telegram_notifier
                                 _hs_notifier = get_telegram_notifier()
+                                _hs_text = weekly_progress()
                                 if _hs_notifier:
-                                    await _hs_notifier.send_message(weekly_progress())
+                                    _hs_sent = await _hs_notifier.send_message(_hs_text)
+                                    logger.info(
+                                        f"[수확shadow] 주간 요약 발송 {'완료' if _hs_sent else '실패'}: "
+                                        + " | ".join(_hs_text.splitlines()[2:5])
+                                    )
+                                else:
+                                    logger.warning("[수확shadow] notifier 없음 — 주간 요약 미발송")
                             except Exception as _hs_err:
-                                logger.debug(f"[수확shadow] 주간 요약 실패 (무시): {_hs_err}")
+                                logger.warning(f"[수확shadow] 주간 요약 실패 (무시): {_hs_err}")
 
                             if report.get("status") == "ok":
                                 msg = report.get("telegram_message", "")
@@ -6417,8 +6442,8 @@ JSON:
                 if last_run_date == today.isoformat():
                     continue
                 from ..utils.volatility_targeting import refresh_vol_state
-                await refresh_vol_state()
-                last_run_date = today.isoformat()
+                if await refresh_vol_state():
+                    last_run_date = today.isoformat()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -6450,10 +6475,29 @@ JSON:
         bot = self.bot
         # (symbol, 공시제목) → 최초 감지일. days=1 조회창이 전일~당일을 포함하므로
         # 일일 리셋이 아니라 3일 보존으로 익일 재경보를 막는다 (리뷰 P1).
+        # 재시작 시 전일~당일 공시가 전부 "신규"로 재경보되지 않도록 파일 영속화 (2026-09-03)
+        _alerted_path = Path.home() / ".cache" / "ai_trader" / "dart_alerted.json"
         alerted: Dict[tuple, str] = {}
+        try:
+            if _alerted_path.exists():
+                for _k, _d in json.loads(_alerted_path.read_text(encoding="utf-8")).items():
+                    _sym, _, _title = _k.partition("|")
+                    alerted[(_sym, _title)] = str(_d)
+        except Exception as _le:
+            logger.debug(f"[공시경보] dedup 상태 로드 실패 (무시): {_le}")
+
+        def _save_alerted() -> None:
+            try:
+                _alerted_path.write_text(
+                    json.dumps({f"{k[0]}|{k[1]}": d for k, d in alerted.items()}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception as _se:
+                logger.debug(f"[공시경보] dedup 상태 저장 실패 (무시): {_se}")
+
         last_poll_key: Optional[str] = None
         _map_retry_hour: Optional[str] = None
-        logger.info("[공시경보] 스케줄러 시작 (장중 10분 주기, 보유 종목 위험 공시)")
+        logger.info(f"[공시경보] 스케줄러 시작 (장중 10분 주기, 보유 종목 위험 공시, dedup {len(alerted)}건 복원)")
         while True:
             try:
                 await asyncio.sleep(60)
@@ -6524,6 +6568,7 @@ JSON:
                     if _sent is not False:
                         for t in fresh:
                             alerted[(symbol, t)] = today.isoformat()
+                            _save_alerted()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -6967,10 +7012,18 @@ JSON:
                         core_alloc_pct = alloc.strategy_allocation.get("core_holding", 30.0)
                     core_budget = equity * Decimal(str(core_alloc_pct / 100))
                     current_core_value = portfolio.get_strategy_allocation("core_holding")
-                    remaining_budget = core_budget - current_core_value
+                    # equity 기준 예산뿐 아니라 실제 가용현금(5% 예비금 반영)도 봐야 한다 —
+                    # 현금 0원인데 매일 3회 풀스캔+"미체결" 경고를 내던 잡음 (2026-09-03)
+                    remaining_budget = min(
+                        core_budget - current_core_value, bot.engine.get_available_cash()
+                    )
                     min_position_value = Decimal(str(core_cfg.get("min_position_value", 200000)))
 
                     if remaining_budget < min_position_value:
+                        logger.debug(
+                            f"[코어홀딩스케줄러] 빈슬롯 매수 생략: 가용 {remaining_budget:,.0f}원 "
+                            f"< 최소 {min_position_value:,.0f}원"
+                        )
                         continue
 
                     empty_slots = max_core_positions - core_count

@@ -57,6 +57,10 @@ async def expert_calibration_report(broker, days: int = 28) -> str:
 
         stats: Dict[str, Dict[str, int]] = {}
         cutoff = datetime.now() - timedelta(days=days)
+        # (전문가, 일자) → 그날 마지막 bias. 하루 3회(07:30/13:00/16:30, 월요일 5회) 저장분이
+        # 같은 5일 창으로 3~5배 중복 집계돼 n·적중률이 부풀고 n>=3 게이트가 하루 만에
+        # 충족되던 문제 — 일 단위 1건으로 dedup (2026-09-03)
+        latest: Dict[tuple, str] = {}
         for f in sorted(_CACHE.glob("experts/*.jsonl")):
             for line in f.read_text(encoding="utf-8").splitlines():
                 try:
@@ -65,20 +69,23 @@ async def expert_calibration_report(broker, days: int = 28) -> str:
                     if issued < cutoff:
                         continue
                     bias = str(op.get("regime_bias", "")).lower()
-                    r5 = r5_after(issued.strftime("%Y%m%d"))
-                    if r5 is None or not bias:
-                        continue
-                    if "bull" in bias:
-                        hit = r5 > 0
-                    elif "bear" in bias:
-                        hit = r5 < 0
-                    else:
-                        hit = abs(r5) < _NEUTRAL_BAND
-                    s = stats.setdefault(op.get("expert", "?"), {"n": 0, "hits": 0})
-                    s["n"] += 1
-                    s["hits"] += 1 if hit else 0
+                    if bias:
+                        latest[(op.get("expert", "?"), issued.strftime("%Y%m%d"))] = bias
                 except (KeyError, ValueError, json.JSONDecodeError):
                     continue
+        for (expert, day), bias in latest.items():
+            r5 = r5_after(day)
+            if r5 is None:
+                continue
+            if "bull" in bias:
+                hit = r5 > 0
+            elif "bear" in bias:
+                hit = r5 < 0
+            else:
+                hit = abs(r5) < _NEUTRAL_BAND
+            s = stats.setdefault(expert, {"n": 0, "hits": 0})
+            s["n"] += 1
+            s["hits"] += 1 if hit else 0
 
         rows = [(k, v) for k, v in stats.items() if v["n"] >= 3]
         if not rows:
@@ -227,14 +234,20 @@ async def promotion_readiness_report() -> str:
                 for s in snapshots:
                     _syms.update(s.get("final") or [])
                 closes_map = {}
+                _failed: List[str] = []
                 for sym in _syms:
                     try:
                         closes_map[sym] = await _aio.to_thread(_closes, sym)
-                    except Exception:
-                        continue
+                    except Exception as _ce:
+                        _failed.append(sym)
+                        logger.warning(f"[승격점검] 밸류코어 종가 조회 실패 {sym}: {_ce}")
+                if _failed:
+                    _vg_line += f" (조회 실패 {len(_failed)}종목{' — 벤치마크 포함' if '069500' in _failed else ''})"
                 result = evaluate_vg_history(snapshots, closes_map)
+                _n_pick_weeks = sum(1 for _s in snapshots if _s.get("final"))
                 if result is None:
-                    _vg_line += " — ⏳ 포워드 창 대기"
+                    _vg_line += (" — ❌ 벤치마크 조회 실패" if "069500" in _failed
+                                 else f" — 픽 있는 주 {_n_pick_weeks}/8 ⏳ 포워드 창 대기")
                 elif result["n_eval_weeks"] < 6:
                     _vg_line += f", 평가 가능 {result['n_eval_weeks']}/6주 — ⏳ 포워드 창 대기"
                 else:

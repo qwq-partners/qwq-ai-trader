@@ -2520,6 +2520,15 @@ class BatchAnalyzer:
     # 코어홀딩 스캔/리밸런싱
     # ================================================================
 
+    def _rb_stamp(self, allow_replace: bool) -> dict:
+        """코어 상태 타임스탬프 — 풀 리밸런싱만 last_rebalance를 갱신한다.
+
+        빈슬롯 매수 시도(allow_replace=False)까지 last_rebalance를 덮어쓰면 재시작 후
+        복원된 격주 리밸런싱 기준일이 시도 때마다 뒤로 밀린다 (2026-09-03).
+        """
+        key = "last_rebalance" if allow_replace else "last_fill_attempt"
+        return {key: datetime.now().isoformat()}
+
     async def execute_core_rebalance(self, allow_replace: bool = True) -> bool:
         """코어홀딩 리밸런싱 실행
 
@@ -2606,7 +2615,7 @@ class BatchAnalyzer:
                     buy_count += 1
                     logger.info(f"[코어홀딩] 재시도 매수: {sym} {pb.get('name', '')}")
                 # pending 해제
-                self._save_core_state({"pending_core_buys": None, "last_rebalance": datetime.now().isoformat()})
+                self._save_core_state({"pending_core_buys": None, **self._rb_stamp(allow_replace)})
                 if buy_count > 0:
                     logger.info(f"[코어홀딩] 재시도 매수 {buy_count}개 발행 완료")
                     return True
@@ -2641,10 +2650,10 @@ class BatchAnalyzer:
                         )
                         await self._engine.emit(event)
                         logger.info(f"[코어홀딩] 후보 없음에서도 매도: {sym} ({reason})")
-                    self._save_core_state({"last_rebalance": datetime.now().isoformat()})
+                    self._save_core_state(self._rb_stamp(allow_replace))
                     return True
                 logger.info("[코어홀딩] 기존 포지션 이상 없음 → 유지")
-                self._save_core_state({"last_rebalance": datetime.now().isoformat()})
+                self._save_core_state(self._rb_stamp(allow_replace))
                 return True
 
             # 후보 스코어 맵
@@ -2753,7 +2762,7 @@ class BatchAnalyzer:
                 self._save_core_state({
                     "sold": [s for s, _ in sell_targets],
                     "pending_core_buys": pending_buy_data,
-                    "last_rebalance": datetime.now().isoformat(),
+                    **self._rb_stamp(allow_replace),
                 })
                 logger.info(
                     f"[코어홀딩] 매도 {len(sell_targets)}개 발행. "
@@ -2792,7 +2801,7 @@ class BatchAnalyzer:
 
             # 상태 저장
             self._save_core_state({
-                "last_rebalance": datetime.now().isoformat(),
+                **self._rb_stamp(allow_replace),
                 "sold": [s for s, _ in sell_targets],
                 "bought": [c.symbol for c in actual_buys[:buy_count]],
                 "pending_core_buys": None,

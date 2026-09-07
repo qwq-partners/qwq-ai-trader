@@ -28,6 +28,7 @@ from bs4 import BeautifulSoup
 from loguru import logger
 
 from src.utils.token_manager import get_token_manager
+from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
 from src.data.providers.kis_market_data import KISMarketData, get_kis_market_data
 from src.indicators.atr import calculate_atr
 from src.indicators.technical import TechnicalIndicators
@@ -266,6 +267,7 @@ class StockScreener:
                 "FID_INPUT_DATE_1": "",
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.error(f"거래량 순위 조회 실패: {resp.status}")
@@ -449,6 +451,7 @@ class StockScreener:
                 "FID_INPUT_DATE_1": "",
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.error(f"신고가 종목 조회 실패: {resp.status}")
@@ -1422,6 +1425,7 @@ class StockScreener:
                 "Accept-Language": "ko-KR,ko;q=0.9",
             }
 
+            await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.warning(f"네이버 금융 크롤링 실패: {resp.status}")

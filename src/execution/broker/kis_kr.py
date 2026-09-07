@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Tuple, Any
 import aiohttp
 from loguru import logger
 
+from ...utils import kis_rate_limit
+
 from .base import BaseBroker
 from ...core.types import (
     Order, Fill, Position, OrderSide, OrderStatus, OrderType, MarketSession
@@ -92,10 +94,9 @@ class KISBroker(BaseBroker):
         # 토큰 매니저
         self._token_mgr = token_manager
 
-        # API 레이트 리미터 (초당 max_rps 호출 제한)
-        self._rate_limit_lock = asyncio.Lock()
-        self._api_call_times: collections.deque = collections.deque(maxlen=20)
-        self._max_rps = 18  # KIS API 초당 최대 호출 수 (안전 마진 포함)
+        # API 레이트 리미터 — 프로세스 공용 (src/utils/kis_rate_limit.py, 2026-09-03):
+        # 시세·스크리너 모듈이 같은 appkey로 별도 세션을 쓰므로 초당 한도는 합산으로 걸린다.
+        # 원장(계좌) TR 초당 1건 간격(EGW00215)도 같은 모듈이 보장한다.
 
         # 검증
         if not self.config.app_key or not self.config.app_secret:
@@ -112,23 +113,9 @@ class KISBroker(BaseBroker):
     # API 레이트 리미팅
     # ============================================================
 
-    async def _rate_limit(self):
-        """API 호출 전 레이트 리미트 대기 (슬라이딩 윈도우, Lock 밖에서 sleep)"""
-        while True:
-            async with self._rate_limit_lock:
-                now = time.monotonic()
-                # 1초 이내 호출 기록만 유지
-                while self._api_call_times and now - self._api_call_times[0] > 1.0:
-                    self._api_call_times.popleft()
-                # 초당 호출 한도 미달 시 즉시 등록 후 통과
-                if len(self._api_call_times) < self._max_rps:
-                    self._api_call_times.append(time.monotonic())
-                    return
-                wait_time = 1.0 - (now - self._api_call_times[0])
-            # Lock 해제 후 sleep (다른 코루틴 블로킹 방지)
-            if wait_time > 0:
-                logger.debug(f"[레이트 리밋] {wait_time:.3f}초 대기 (초당 {self._max_rps}건 제한)")
-                await asyncio.sleep(wait_time)
+    async def _rate_limit(self, tr_id: str = ""):
+        """API 호출 전 레이트 리미트 대기 — 프로세스 공용 슬라이딩 윈도우 + 원장 TR 간격"""
+        await kis_rate_limit.acquire(tr_id)
 
     # ============================================================
     # 연결 관리
@@ -200,12 +187,31 @@ class KISBroker(BaseBroker):
         logger.error("[토큰] 3회 재시도 후에도 토큰 발급 실패")
         return False
 
+    async def _recover_token(self) -> None:
+        """토큰 오류 응답 후 복구 — 매니저가 이미 회전한 토큰이 있으면 채택, 아니면 무효화 후 재발급
+
+        2026-09-03 P1: kis_market_data/kr_screener가 공유 토큰매니저로 토큰을 회전시키면
+        브로커는 stale 토큰을 계속 보내 EGW00123을 받고, 무조건 invalidate()로 새 토큰까지
+        지워 재발급 1분 제한(EGW00133)에 걸렸다 — 8월 6회, 회당 ~60초 전 KIS 호출 불능.
+        """
+        cur = getattr(self._token_mgr, "_access_token", None)
+        if cur and cur != self._token and self._token_mgr._is_token_valid():
+            logger.warning("[토큰] 매니저 토큰이 이미 회전됨 → 채택 (무효화 생략)")
+            self._token = cur
+            return
+        self._token_mgr.invalidate()
+        await self._ensure_token()
+
     # ============================================================
     # HTTP 헬퍼
     # ============================================================
 
     def _get_headers(self, tr_id: str) -> Dict[str, str]:
         """API 호출 헤더 생성"""
+        # 다른 컴포넌트가 회전시킨 토큰을 즉시 채택 (stale 토큰 전송 → EGW00123 → 락아웃 예방)
+        _cur = getattr(self._token_mgr, "_access_token", None)
+        if _cur and _cur != self._token:
+            self._token = _cur
         return {
             "Content-Type": "application/json; charset=utf-8",
             "authorization": f"Bearer {self._token}",
@@ -232,28 +238,34 @@ class KISBroker(BaseBroker):
                 return {"rt_cd": "-1", "msg1": "토큰 발급 실패"}
         for attempt in range(3):
             try:
-                await self._rate_limit()
+                await self._rate_limit(tr_id)
                 headers = self._get_headers(tr_id)
                 async with self._session.get(url, headers=headers, params=params) as resp:
+                    if kis_rate_limit.is_ledger(tr_id):
+                        kis_rate_limit.release_ledger()  # 원장 응답 수신 — 다음 원장 호출 허용(+1.05초)
                     if resp.status == 401 and attempt < 2:
                         logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
-                        self._token_mgr.invalidate()
-                        await self._ensure_token()
+                        await self._recover_token()
                         continue
                     if resp.status in (429, 500, 502, 503) and attempt < 2:
                         # HTTP 500 본문에 토큰 오류가 포함될 수 있음
+                        _err_msg = ""
                         if resp.status == 500:
                             try:
                                 err_data = await resp.json()
                                 if self._is_token_error(err_data):
                                     logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
-                                    self._token_mgr.invalidate()
-                                    await self._ensure_token()
+                                    await self._recover_token()
                                     continue
+                                _err_msg = f" {err_data.get('msg_cd', '')} {str(err_data.get('msg1', '')).strip()}"
+                                if str(err_data.get("msg_cd", "")) == "EGW00201":
+                                    kis_rate_limit.note_rejection(tr_id)
+                                elif str(err_data.get("msg_cd", "")) == "EGW00215":
+                                    kis_rate_limit.note_ledger_rejection(tr_id)
                             except Exception:
                                 pass
                         wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
-                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도 ({wait}초 대기)")
+                        logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, {attempt+1}회 재시도 ({wait}초 대기)")
                         await asyncio.sleep(wait)
                         continue
                     try:
@@ -263,11 +275,12 @@ class KISBroker(BaseBroker):
                         return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
                     if self._is_token_error(data) and attempt < 2:
                         logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
-                        self._token_mgr.invalidate()
-                        await self._ensure_token()
+                        await self._recover_token()
                         continue
                     return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if kis_rate_limit.is_ledger(tr_id):
+                    kis_rate_limit.release_ledger()  # 응답 없이 실패 — busy 해제
                 if attempt < 2:
                     wait = 2 ** attempt
                     logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도 ({wait}초 대기): {e}")
@@ -278,8 +291,14 @@ class KISBroker(BaseBroker):
         return {"rt_cd": "-1", "msg1": "API 호출 실패 (최대 재시도 초과)"}
 
     async def _api_post(self, url: str, tr_id: str, json_data: dict,
-                        extra_headers: Optional[dict] = None) -> dict:
-        """API POST 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)"""
+                        extra_headers: Optional[dict] = None, retry: bool = True) -> dict:
+        """API POST 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)
+
+        retry=False: 주문 접수(order-cash)·정정처럼 비멱등 요청. 5xx/타임아웃/연결 끊김 시
+        이미 접수됐을 수 있어 같은 본문을 재전송하지 않는다 (2026-09-03 P0 — 중복 주문 방지).
+        실패 응답을 받은 호출자가 pending을 해제하고, 30초 포트폴리오 동기화가 실제 체결분을
+        sync_detected로 정합한다. 토큰 오류(401/EGW00123)는 접수 전 거절이라 재전송 허용.
+        """
         if not self._session or self._session.closed:
             logger.warning("[API] 세션 없음, 재연결 시도")
             if not await self.connect():
@@ -297,23 +316,23 @@ class KISBroker(BaseBroker):
                 async with self._session.post(url, headers=headers, json=json_data) as resp:
                     if resp.status == 401 and attempt < 2:
                         logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
-                        self._token_mgr.invalidate()
-                        await self._ensure_token()
+                        await self._recover_token()
                         continue
-                    if resp.status in (429, 500, 502, 503) and attempt < 2:
+                    if resp.status in (429, 500, 502, 503) and attempt < 2 and retry:
                         # HTTP 500 본문에 토큰 오류가 포함될 수 있음
+                        _err_msg = ""
                         if resp.status == 500:
                             try:
                                 err_data = await resp.json()
                                 if self._is_token_error(err_data):
                                     logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
-                                    self._token_mgr.invalidate()
-                                    await self._ensure_token()
+                                    await self._recover_token()
                                     continue
+                                _err_msg = f" {err_data.get('msg_cd', '')} {str(err_data.get('msg1', '')).strip()}"
                             except Exception:
                                 pass
                         wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
-                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도 ({wait}초 대기)")
+                        logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, {attempt+1}회 재시도 ({wait}초 대기)")
                         await asyncio.sleep(wait)
                         continue
                     try:
@@ -323,11 +342,13 @@ class KISBroker(BaseBroker):
                         return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
                     if self._is_token_error(data) and attempt < 2:
                         logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
-                        self._token_mgr.invalidate()
-                        await self._ensure_token()
+                        await self._recover_token()
                         continue
                     return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if not retry:
+                    logger.error(f"[API] POST {tr_id} 네트워크 오류 — 재전송 금지 (중복 주문 방지): {e}")
+                    return {"rt_cd": "-1", "msg1": f"네트워크 오류(재전송 금지): {e}"}
                 if attempt < 2:
                     wait = 2 ** attempt
                     logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도 ({wait}초 대기): {e}")
@@ -462,7 +483,7 @@ class KISBroker(BaseBroker):
 
             # API 호출
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-cash"
-            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey})
+            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False)
 
             rt_cd = data.get("rt_cd", "")
             if str(rt_cd) != "0":
@@ -913,7 +934,7 @@ class KISBroker(BaseBroker):
                 return False
 
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
-            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey})
+            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False)
 
             rt_cd = data.get("rt_cd", "")
             if str(rt_cd) != "0":
@@ -1462,6 +1483,11 @@ class KISBroker(BaseBroker):
                     output = data2.get("output", {})
                     # 미수 없는 매수가능금액 (실제 주문 가능 금액)
                     available_cash = float(output.get("nrcvb_buy_amt", "0") or "0")
+                else:
+                    # rt_cd 실패(재시도 소진 등)도 예외 경로와 동일하게 예수금 폴백 —
+                    # 0원으로 성공 반환하면 기동 시 portfolio.cash=0/initial_capital 과소 (2026-09-03 P2)
+                    logger.debug(f"매수가능조회 rt_cd 실패 → 예수금 폴백: {data2.get('msg1', '')}")
+                    available_cash = deposit
             except Exception as e:
                 logger.debug(f"매수가능조회 실패: {e}")
                 # 실패시 예수금 사용
