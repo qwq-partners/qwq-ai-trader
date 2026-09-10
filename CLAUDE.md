@@ -210,6 +210,10 @@ systemctl is-active qwq-ai-trader                              # 상태
 journalctl -u qwq-ai-trader -f                                 # 실시간 로그
 ```
 
+### 운영 스킬 (2026-09-10~)
+- `/ops-check` 운영 점검 요약 (`scripts/dev/ops_check.sh`) · `/deploy-local` 서버 측 배포 (`scripts/deploy/local_deploy.sh`, 자동 롤백) · `/pr-merge` gh 기반 PR→verify→머지
+- `main`은 보호 브랜치 — 직접 push 불가, 반드시 PR + `verify` 통과
+
 ## 코드 리뷰 프로토콜
 사용자가 "리뷰해봐" 요청 시:
 1. 변경된 모든 파일 재읽기 (캐시 의존 금지)

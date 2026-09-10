@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-10 — feat: 운영 스킬 3종 (ops-check · deploy-local · pr-merge) + gh CLI
+
+9/3~9/8 운영 리뷰 중 손으로 반복한 절차를 저장소로 고정.
+- `scripts/dev/ops_check.sh` + `.claude/skills/ops-check` — journalctl 오류·KIS 거절(EGW00201/00215/
+  토큰) 집계, 리미터 계측 분포, 동기화 경고, 아침 잡·토요일 주간 블록 로그, 수확 커서·변동성 캐시,
+  포트폴리오/pending을 한 번에. 해석 기준(개장 직후 원장 초과는 관측 유지 등) 포함.
+- `scripts/deploy/local_deploy.sh` + `.claude/skills/deploy-local` — 스크래치패드에서 6회 쓰던
+  서버 측 배포 스크립트 승격 (fetch → detached checkout → verify → restart → 헬스체크 → 실패 시
+  자동 롤백, 장중 금지·pending 가드 명문화).
+- `.claude/skills/pr-merge` — `gh` CLI(서버에 apt 설치, `~/.gh_token` 인증) 기반 PR 생성 → verify
+  대기 → 머지 → 운영 체크아웃 갱신. `main` 직접 push는 보호 규칙(GH006)으로 거부됨을 명시.
+- CLAUDE.md 운영 스킬 절, runbook 코드 변경 프로토콜에 포인터.
+
 ## 2026-09-08 — docs: 개장 직후 원장 초과(EGW00215)는 코드로 해결 불가 — 관측 유지 결론
 
 9/3~9/8 KIS 호출 계층 실측의 마무리. 원장 TR 직렬화(응답 후 1.05초)·매수가능조회 원장 세트
