@@ -288,3 +288,20 @@ def test_pending_strategy_notional_sums_reserved_cash():
     rm._pending_strategy = {"A": "sepa_trend", "B": "sepa_trend", "C": "gap_and_go"}
     assert rm._pending_strategy_notional("sepa_trend") == Decimal("3500")
     assert rm._pending_strategy_notional("core_holding") == Decimal("0")
+
+
+def test_balance_tr_uses_longer_ledger_interval(monkeypatch):
+    kis_rate_limit.reset()
+    monkeypatch.setattr(kis_rate_limit, "LEDGER_MIN_INTERVAL", 0.05)
+    monkeypatch.setitem(kis_rate_limit.LEDGER_TR_INTERVALS, "TTTC8434R", 0.4)
+
+    async def run():
+        await kis_rate_limit.acquire("TTTC8434R"); kis_rate_limit.release_ledger()
+        t0 = time.monotonic()
+        await kis_rate_limit.acquire("TTTC8434R"); kis_rate_limit.release_ledger()   # 잔고 TR: 0.4s 간격
+        t1 = time.monotonic()
+        await kis_rate_limit.acquire("TTTC8001R"); kis_rate_limit.release_ledger()   # 체결 TR: 기본 0.05s
+        return t1 - t0, time.monotonic() - t1
+
+    a, b = asyncio.run(run())
+    assert a >= 0.38 and b < 0.3

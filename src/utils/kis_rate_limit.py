@@ -30,6 +30,11 @@ MIN_GAP = 1.0 / MAX_RPS   # 연속 호출 최소 간격 — 버스트를 초당 
 # 원장 조회 TR: 잔고 TTTC8434R / 매수가능 TTTC8908R / 체결 TTTC8001R / 미체결 TTTC8036R / 해외잔고
 LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R", "TTTS3012R", "VTTS3012R"})
 LEDGER_MIN_INTERVAL = 1.05
+# TR별 간격 상향 (2026-09-10): 9/3~9/10 장중 원장 거절 495건/일이 전부 잔고조회 TTTC8434R —
+# 동기화가 30초마다 8434R을 두 번(잔고→포지션) 호출하고 두 번째가 ~50% 거절(≈780쌍 중 387).
+# 체결 8001R·매수가능 8908R은 거의 거절되지 않으므로 inquire-balance만 ~2초 간격을 요구한다는 가설.
+# ponytail: 간격만 올려 내일 시간대별 건수로 검증 — 맞으면 _sync_portfolio의 8434R 중복 호출 제거가 다음 단계.
+LEDGER_TR_INTERVALS = {"TTTC8434R": 2.1}
 
 _calls: collections.deque = collections.deque(maxlen=MAX_RPS)
 HOLD_AFTER_REJECT = 1.0   # EGW00201 수신 후 전역 정지 (서버 1초 버킷 파일온 방지)
@@ -106,8 +111,8 @@ async def acquire(tr_id: str = "") -> None:
                 _state["ledger_busy_since"] = 0.0  # 응답 누락 — stale 해제
             else:
                 wait = 0.05  # 이전 원장 응답 대기 중 — 짧게 폴링
-        elif ledger and now - _state["ledger_last"] < LEDGER_MIN_INTERVAL:
-            wait = LEDGER_MIN_INTERVAL - (now - _state["ledger_last"])
+        elif ledger and now - _state["ledger_last"] < LEDGER_TR_INTERVALS.get(tr_id, LEDGER_MIN_INTERVAL):
+            wait = LEDGER_TR_INTERVALS.get(tr_id, LEDGER_MIN_INTERVAL) - (now - _state["ledger_last"])
         elif now - _state["last_send"] < MIN_GAP:
             wait = MIN_GAP - (now - _state["last_send"])
         if wait <= 0:
