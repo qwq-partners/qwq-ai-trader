@@ -340,7 +340,12 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - **주문 POST 실패 후 포지션 불일치**: 주문 접수/정정은 재전송하지 않으므로(중복 주문 방지)
   응답 유실 시 봇은 실패로 보고 KIS에는 체결이 있을 수 있다 → 30초 동기화의 `sync_detected`가
   정합하며, 그 전까지 대시보드 포지션이 KIS와 잠시 다를 수 있음 (정상)
-- **MCP 모듈 없음**: `No module named 'mcp'` → 기능 영향 없음 (폴백 동작)
+- **MCP 모듈 없음**: `No module named 'mcp'` → 기능 영향 없음 (폴백 동작). `mcp`만 설치해도 소용없음 —
+  `pykrx-mcp` 바이너리와 `npx naver-search-mcp`(부팅마다 npm 다운로드, 30초 타임아웃)가 필요하고 소비처
+  (stock_validator 수급/버즈 보정)는 KIS 수급 데이터와 중복·미검증이라 **의도적으로 방치** (2026-09-10 평가)
+- **운영 서버 RAM(3.8GB)은 Claude 플러그인 데몬과 공유됨**: 2026-09-10 `claude-mem` bun 워커가 RSS 1.3GB로
+  스왑 2GB를 전부 채워 가용 118MB까지 떨어졌음(봇 460MB의 3배) → 플러그인 비활성화·데몬 종료로 가용 1.5GB 회복.
+  상주 데몬을 두는 플러그인(메모리 DB, 브라우저 등)은 이 서버에 설치하지 말 것. 점검: `free -m`, `ps --sort=-rss`
 - **Yahoo Finance 지연**: KOSPI 데이터 2~3일 지연 → KIS 실시간 보충
 
 ### 거래 로그 누락 감지 (대시보드 vs KIS API 대조)
