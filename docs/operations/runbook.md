@@ -23,6 +23,11 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 
 ## 코드 변경 프로토콜
 
+> 서버 안에서의 배포·점검·PR은 프로젝트 스킬로 고정됨 (2026-09-10): `/deploy-local`
+> (`scripts/deploy/local_deploy.sh <SHA>` — verify→재시작→헬스체크→실패 시 자동 롤백),
+> `/ops-check` (`scripts/dev/ops_check.sh` — 오류·KIS 거절·아침 잡·포트폴리오 요약),
+> `/pr-merge` (`gh` CLI, `~/.gh_token`). WSL에서의 정식 경로는 lightsail-deployment.md.
+
 1. `python3 -m py_compile <수정파일>` — 문법 검증
 2. 봇 재시작 (위 명령)
 3. `systemctl is-active qwq-ai-trader` — 상태 확인
