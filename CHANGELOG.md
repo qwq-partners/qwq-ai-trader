@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-10 — ops: Claude 환경 정리 — 메모리 압박 해소·플러그인 감사·gh CLI
+
+코드 변경 없음(운영 서버 환경). 3-에이전트 조사(마켓플레이스 후보 / 설치 플러그인 비용·중복 감사 /
+`mcp` 패키지 영향) 결과 반영.
+- **메모리**: `claude-mem` 상주 bun 워커(36일)가 RSS 1.3GB·스왑 1.3GB로 서버 스왑 2GB 전량 소진, 가용 118MB
+  → 플러그인 비활성화 + 데몬 종료 → 가용 1,540MB·스왑 645MB. 봇 무중단.
+- **설치**: `gh` 2.45(apt) + `~/.gh_token` 인증 → PR 생성·머지를 서버에서 처리(`/pr-merge`).
+  `context7` 사용자 스코프 재설치 — 한투 open-trading-api·pykrx 문서 인덱스(기존 설치는 stale 경로로 꺼져 있었음).
+- **설치 안 함**: 한투 kis-quant-plugin(엔진과 중복·Docker 필요), pykrx/krx MCP(venv로 충분), duckdb/dx(주간 사용 불확실),
+  `mcp` 파이썬 패키지(소비처 중복·미검증). 감사 결과 `ecc`(플러그인 컨텍스트의 ~90%, 매 툴 호출 훅 spawn,
+  4주간 명시 호출 0) · `superpowers@superpowers-marketplace` · `commit-commands` 비활성화 권고 — 사용자 확인 대기.
+
 ## 2026-09-10 — fix: 수확 shadow 유니버스 캐시 폴백 — FDR 리스팅 404로 이틀 정지
 
 - 새 `/ops-check` 첫 실행이 잡은 문제: `[수확shadow] 일일 사이클 실패: HTTP Error 404` 가 9/9 08:40부터
