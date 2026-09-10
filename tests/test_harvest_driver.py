@@ -116,3 +116,26 @@ def test_drop_incomplete_bar_removes_today():
     out = hs._drop_incomplete_bar(d, date(2026, 9, 1))
     assert list(out.index.strftime("%Y-%m-%d")) == [DAYS[0]]
     assert hs._drop_incomplete_bar(None, date(2026, 9, 1)) is None
+
+
+def test_load_universe_falls_back_to_cache_when_fdr_fails(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(hs, "_UNIVERSE", tmp_path / "universe.json")
+
+    class _BtOK:
+        @staticmethod
+        def load_universe(n):
+            return ["5930", "000660"]
+
+    class _BtDown:
+        @staticmethod
+        def load_universe(n):
+            raise OSError("HTTP Error 404: Not Found")
+
+    assert hs._load_universe(_BtOK()) == ["005930", "000660"]          # 성공 → zfill + 캐시 기록
+    assert (tmp_path / "universe.json").exists()
+    assert hs._load_universe(_BtDown()) == ["005930", "000660"]        # 실패 → 캐시 사용
+    (tmp_path / "universe.json").unlink()
+    import pytest as _pt
+    with _pt.raises(RuntimeError):
+        hs._load_universe(_BtDown())                                    # 캐시도 없으면 예외 (스케줄러 재시도)

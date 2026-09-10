@@ -321,6 +321,10 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 
 ### 알려진 이슈
 - **pykrx 간헐적 실패**: `Stock master: pykrx failed` → FDR → 72h 캐시 폴백 자동 전환
+- **FDR `StockListing("KRX")` 404** (2026-09-09~, 업스트림 GitHub 캐시 소실, 0.9.202도 동일):
+  수확 shadow 유니버스는 `harvest_shadow/universe.json` 캐시로 폴백(부트스트랩은 DB
+  `kr_stock_master` 시총 1,000~50,000억). `[수확shadow] 유니버스 조회 실패 → 캐시 … 사용` 경고가
+  정상 경로. data_collector/stock_master의 FDR 폴백도 같은 영향 — DB 경로가 살아 있어 무해
 - **KIS HTTP 500 반복** (`[API] HTTP 500 <tr_id> EGW00201 …`): 원장 TR 초당 1건 초과.
   야간에도 30초 주기로 반복되면 같은 원장 TR 연속 호출 코드가 원인 — 경고의 `tr_id`로
   호출 주체를 추적한다 (2026-09-03 `_rate_limit` 원장 간격으로 해결)

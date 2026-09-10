@@ -38,6 +38,7 @@ _PENDING = _DIR / "pending.json"
 _POSITIONS = _DIR / "positions.json"
 _LEDGER = _DIR / "ledger.jsonl"
 _CURSOR = _DIR / "cursor.json"   # {"last_bar": 마지막 판정 봉, "last_d0": {code: D0일}}
+_UNIVERSE = _DIR / "universe.json"  # {"date", "codes"} — 마지막 성공 유니버스 (FDR 리스팅 장애 폴백)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _BT_PATH = _PROJECT_ROOT / "scripts" / "backtest_t1_gate.py"
@@ -165,6 +166,36 @@ async def run_daily_shadow_scan() -> tuple:
     except Exception as e:
         logger.warning(f"[수확shadow] 일일 사이클 실패 (재시도 가능): {e}")
         return False, None
+
+
+def _load_universe(bt, max_n: int = 400) -> list:
+    """시총 유니버스 — FDR 성공 시 캐시 갱신, 실패 시 마지막 성공분 사용.
+
+    2026-09-09~ FDR `StockListing("KRX")`가 업스트림 GitHub 캐시 소실로 404(최신 0.9.202도 동일)
+    → 일일 스캔이 11분마다 실패하며 커서가 멈췄다. 유니버스는 천천히 변하므로 며칠~몇 주 묵은
+    캐시로도 관측 목적엔 충분하다 (14일 초과 시 경고). 캐시도 없으면 예외 → 스케줄러 재시도.
+    """
+    try:
+        codes = [str(c).zfill(6) for c in bt.load_universe(max_n)]
+        if codes:
+            _save(_UNIVERSE, {"date": datetime.now().strftime("%Y-%m-%d"), "codes": codes})
+            return codes
+        err = "빈 결과"
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+    cached = _load(_UNIVERSE)
+    codes = list(cached.get("codes") or [])
+    if not codes:
+        raise RuntimeError(f"유니버스 조회 실패 + 캐시 없음 ({err})")
+    try:
+        age = (datetime.now().date() - datetime.strptime(str(cached.get("date")), "%Y-%m-%d").date()).days
+    except ValueError:
+        age = -1
+    logger.warning(
+        f"[수확shadow] 유니버스 조회 실패({err[:80]}) → 캐시 {cached.get('date')} "
+        f"({age}일 전, {len(codes)}종목) 사용{' ⚠️ 14일 초과' if age > 14 else ''}"
+    )
+    return codes
 
 
 def _drop_incomplete_bar(df, today):
@@ -315,7 +346,7 @@ async def _run() -> Optional[str]:
     # 데이터 로드는 스레드로 (FDR 동기 I/O — 이벤트 루프 비차단)
     def _fetch_all():
         import FinanceDataReader as fdr
-        universe = list(bt.load_universe(400))
+        universe = _load_universe(bt)
         ok_dates = bt._regime_ok_dates("2024-01-01")
         today = datetime.now().date()
         data = {}
