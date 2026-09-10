@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-10 — fix: 수확 shadow 유니버스 캐시 폴백 — FDR 리스팅 404로 이틀 정지
+
+- 새 `/ops-check` 첫 실행이 잡은 문제: `[수확shadow] 일일 사이클 실패: HTTP Error 404` 가 9/9 08:40부터
+  11분 간격 152회, 커서 9/7에서 정지. 원인은 FDR 0.9.110 `StockListing("KRX")`의 업스트림 GitHub
+  캐시(`FinanceData/fdr_krx_data_cache`) 소실 — **최신 0.9.202도 동일 404**라 업그레이드로는 불가
+  (스크래치패드 venv 실측). 9/3 적대 검증이 예고한 시나리오(FDR issue #277).
+- `harvest_shadow._load_universe()`: 성공 시 `harvest_shadow/universe.json` 갱신, 실패 시 마지막
+  성공분 사용(14일 초과 경고), 캐시도 없으면 예외 → 스케줄러 재시도 유지. 커서가 있어 복구 시
+  놓친 봉을 순서대로 따라잡는다. 첫 캐시는 DB `kr_stock_master`(시총 억원, KOSPI/KOSDAQ,
+  1,000~50,000억, 우선주/스팩/리츠 제외, 상위 400)로 부트스트랩. 테스트 1건 추가.
+- runbook 알려진 이슈, asymmetric-harvest-strategy §6.7.3 갱신.
+
 ## 2026-09-10 — feat: 운영 스킬 3종 (ops-check · deploy-local · pr-merge) + gh CLI
 
 9/3~9/8 운영 리뷰 중 손으로 반복한 절차를 저장소로 고정.
