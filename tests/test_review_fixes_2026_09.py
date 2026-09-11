@@ -305,3 +305,36 @@ def test_balance_tr_uses_longer_ledger_interval(monkeypatch):
 
     a, b = asyncio.run(run())
     assert a >= 0.38 and b < 0.3
+
+
+def test_sync_pair_calls_inquire_balance_once(monkeypatch):
+    """잔고 조회 직후 포지션 조회는 같은 응답을 재사용 — 원장 TTTC8434R 1회 (2026-09-11)"""
+    from types import SimpleNamespace
+    b = _bare_broker()
+    b._session = SimpleNamespace(closed=False)
+    b._token = "t"
+    b._token_mgr = SimpleNamespace(_access_token="t", _is_token_valid=lambda: True, invalidate=lambda: None)
+    b.config = SimpleNamespace(base_url="http://x", account_no="1", account_product_cd="01", env="prod")
+    b._balance_snapshot = None
+    calls = []
+
+    async def fake_get(url, tr_id, params):
+        calls.append(tr_id)
+        if tr_id == "TTTC8434R":
+            return {"rt_cd": "0", "ctx_area_fk100": "", "ctx_area_nk100": "",
+                    "output1": [{"pdno": "5930", "hldg_qty": "3", "pchs_avg_pric": "70000", "prpr": "71000", "prdt_name": "삼성전자"}],
+                    "output2": [{"dnca_tot_amt": "1000", "scts_evlu_amt": "213000", "evlu_pfls_smtl_amt": "3000",
+                                 "pchs_amt_smtl_amt": "210000", "tot_evlu_amt": "214000"}]}
+        return {"rt_cd": "0", "output": {"nrcvb_buy_amt": "1000"}}
+
+    b._api_get = fake_get
+
+    async def run():
+        bal = await b.get_account_balance()
+        pos = await b.get_positions()          # 스냅샷 재사용 → 8434R 재호출 없음
+        pos2 = await b.get_positions()         # 1회용 소진 → 실제 재조회
+        return bal, pos, pos2
+
+    bal, pos, pos2 = asyncio.run(run())
+    assert bal and pos["005930"].quantity == 3 and pos2["005930"].quantity == 3
+    assert calls.count("TTTC8434R") == 2 and calls.count("TTTC8908R") == 1

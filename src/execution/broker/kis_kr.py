@@ -94,6 +94,10 @@ class KISBroker(BaseBroker):
         # 토큰 매니저
         self._token_mgr = token_manager
 
+        # 잔고 응답(output1) 1회용 스냅샷 — get_account_balance → get_positions 연속 호출에서
+        # inquire-balance(TTTC8434R)를 두 번 치던 것을 한 번으로 (2026-09-11: 장중 원장 초과의 주범)
+        self._balance_snapshot: Optional[tuple] = None
+
         # API 레이트 리미터 — 프로세스 공용 (src/utils/kis_rate_limit.py, 2026-09-03):
         # 시세·스크리너 모듈이 같은 appkey로 별도 세션을 쓰므로 초당 한도는 합산으로 걸린다.
         # 원장(계좌) TR 초당 1건 간격(EGW00215)도 같은 모듈이 보장한다.
@@ -1012,11 +1016,42 @@ class KISBroker(BaseBroker):
         get_exchange_open_orders 사용)"""
         return list(self._pending_orders.values())
 
+    _BALANCE_SNAPSHOT_TTL = 5.0
+
+    @staticmethod
+    def _parse_positions(output1) -> Dict[str, Position]:
+        """inquire-balance output1 → {symbol: Position} (수량 0 제외)"""
+        positions: Dict[str, Position] = {}
+        for item in output1 or []:
+            symbol = str(item.get("pdno", "")).zfill(6)
+            qty = int(item.get("hldg_qty", "0") or "0")
+            if qty > 0:
+                avg_price = Decimal(str(item.get("pchs_avg_pric", "0") or "0"))
+                current_price = Decimal(str(item.get("prpr", "0") or "0"))
+                name = str(item.get("prdt_name", "") or "").strip()
+                positions[symbol] = Position(
+                    symbol=symbol,
+                    name=name,
+                    quantity=qty,
+                    avg_price=avg_price,
+                    current_price=current_price if current_price > 0 else avg_price,
+                )
+        return positions
+
     async def get_positions(self) -> Dict[str, Position]:
         """보유 포지션 조회 (페이지네이션 포함)"""
         if not self.is_connected:
             if not await self.connect():
                 return {}
+
+        # 직전 잔고 조회(get_account_balance)의 output1이 신선하면 재사용 — 원장 8434R 재호출 생략
+        snap = self._balance_snapshot
+        if snap is not None and time.monotonic() - snap[0] < self._BALANCE_SNAPSHOT_TTL:
+            self._balance_snapshot = None  # 1회용 — 재시도 경로는 실제 재조회
+            positions = self._parse_positions(snap[1])
+            logger.debug(f"포지션 조회 완료(잔고 스냅샷 재사용): {len(positions)}개")
+            return positions
+        self._balance_snapshot = None
 
         positions = {}
 
@@ -1051,23 +1086,7 @@ class KISBroker(BaseBroker):
                     break
 
                 output1 = data.get("output1", []) or []
-
-                for item in output1:
-                    symbol = str(item.get("pdno", "")).zfill(6)
-                    qty = int(item.get("hldg_qty", "0") or "0")
-
-                    if qty > 0:
-                        avg_price = Decimal(str(item.get("pchs_avg_pric", "0") or "0"))
-                        current_price = Decimal(str(item.get("prpr", "0") or "0"))
-                        name = str(item.get("prdt_name", "") or "").strip()
-
-                        positions[symbol] = Position(
-                            symbol=symbol,
-                            name=name,
-                            quantity=qty,
-                            avg_price=avg_price,
-                            current_price=current_price if current_price > 0 else avg_price,
-                        )
+                positions.update(self._parse_positions(output1))
 
                 # 연속 조회 키 확인 — 비어있으면 마지막 페이지
                 ctx_fk = (data.get("ctx_area_fk100") or "").strip()
@@ -1446,6 +1465,10 @@ class KISBroker(BaseBroker):
             output2 = data.get("output2", [])
             if not output2:
                 return {}
+
+            # 같은 응답의 output1(포지션 1페이지)을 5초간 보관 — 다음 페이지가 있으면(대량 보유) 보관 안 함
+            _ctx_more = bool((data.get("ctx_area_fk100") or "").strip() or (data.get("ctx_area_nk100") or "").strip())
+            self._balance_snapshot = None if _ctx_more else (time.monotonic(), data.get("output1", []) or [])
 
             account_info = output2[0] if isinstance(output2, list) else output2
 

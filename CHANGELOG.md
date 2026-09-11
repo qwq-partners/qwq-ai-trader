@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-11 — fix: 동기화의 inquire-balance 중복 호출 제거 (잔고 응답 스냅샷 재사용)
+
+- 9/10 배포한 8434R 2.1초 간격의 9/11 검증: 09~12시 EGW00215 236→171건(−28%; 10·11시 −40%, 09시 불변),
+  여전히 전부 `TTTC8434R`. 간격은 부분 원인 — 구조적 원인은 `_sync_portfolio`가 30초마다
+  `get_account_balance`(8434R)→`get_positions`(8434R)로 같은 inquire-balance를 두 번 치는 것.
+- `kis_kr`: 잔고 응답의 `output1`을 5초 스냅샷(다음 페이지 있으면 미보관) → 바로 이어지는 `get_positions`가
+  재호출 없이 파싱(1회용, 5초 후 재시도 경로는 실제 재조회). 파싱 루프는 `_parse_positions()`로 공유.
+  테스트 1건(8434R 호출 횟수). 문서: runbook·external-apis.
+- 운영 메모: 운영 체크아웃이 다른 세션(`feature/architecture-doc-sync`, 문서 3개 미커밋)에 있어 배포는
+  트리가 깨끗해진 뒤 장 마감 후 진행.
+
 ## 2026-09-10 — fix: 잔고조회 TR 간격 2.1초 — 원장 초과가 "개장 직후만"이 아니라 장중 내내였음 (결론 정정)
 
 - `/ops-check` 하루치 집계에서 EGW00215 996라인 발견 → 시간대 분포 재조사: 9/3부터 매일 09:00~15:30
