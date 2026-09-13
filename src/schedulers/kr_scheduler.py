@@ -32,6 +32,7 @@ from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, St
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
 from ..utils.telegram import send_alert
+from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 
@@ -227,6 +228,11 @@ class KRScheduler:
         # 보유 종목 DART 공시 경보 (2026-08-20 — 장중 10분 주기, 경보 전용)
         tasks.append(asyncio.create_task(
             self.run_dart_alert_scheduler(), name="kr_dart_alert"
+        ))
+
+        # 루프 하트비트 감시 (2026-09-13 — 살아 있지만 일을 못 하는 루프 탐지)
+        tasks.append(asyncio.create_task(
+            self._supervised(self.run_heartbeat_monitor, "kr_heartbeat_monitor"), name="kr_heartbeat_monitor"
         ))
 
         # 헬스 모니터
@@ -1133,6 +1139,7 @@ class KRScheduler:
             # 동기화 성공 → 리스크 매니저에 알림
             if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                 bot.risk_manager.set_sync_status(True)
+            _hb.beat("kr_portfolio_sync")
 
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
@@ -2406,6 +2413,7 @@ JSON:
                     # 유휴(미체결 없음) 시 15초 — 5초 폴링이 개장 직후 원장 TR 트래픽의 대부분이라
                     # EGW00215 충돌을 키웠다 (2026-09-07). 포지션 변화는 30초 동기화가 커버한다.
                     check_interval = 2 if open_orders else 15
+                    _hb.beat("kr_fill_checker")
 
                     if _fill_check_errors > 0:
                         _fill_check_errors = 0
@@ -2579,6 +2587,7 @@ JSON:
                     bot._last_screened = screened
                     # 스크리닝 시각 — 팀 심의가 지표 신선도를 판단하는 데 쓴다
                     bot._last_screened_at = datetime.now()
+                    _hb.beat("kr_screener")
 
                 except Exception as e:
                     logger.warning(f"스크리닝 오류: {e}", exc_info=True)
@@ -3544,6 +3553,7 @@ JSON:
 
                     if kospi_data or kosdaq_data:
                         rm.update_market_trend(kospi_data, kosdaq_data)
+                        _hb.beat("kr_market_trend")
 
                         # 시장 체제 갱신 (크로스 검증 게이트에서 참조)
                         if bot.engine:
@@ -3953,6 +3963,8 @@ JSON:
                                     f"[{_session_label}] 전광판 {pm_ok}/{len(premarket_targets)}개 갱신 "
                                     f"(NXT대상, watch+pending)"
                                 )
+
+                    _hb.beat("kr_rest_price_feed")
 
                 except Exception as e:
                     logger.warning(f"[REST피드] 오류: {e}", exc_info=True)
@@ -4624,6 +4636,7 @@ JSON:
                                     logger.debug(f"[진화] {evo_status}: {evo_result.get('reason', '')}")
                             except Exception as evo_err:
                                 logger.warning(f"[진화] 실행 실패 (무시): {evo_err}")
+                        _hb.beat("kr_evolution_scheduler")
 
                 await asyncio.sleep(60)
 
@@ -6250,6 +6263,28 @@ JSON:
             logger.error(f"[배치스케줄러] 스케줄러 오류: {e}")
             raise
 
+    async def run_heartbeat_monitor(self):
+        """루프 하트비트 감시 (2026-09-13) — 살아 있지만 성공 반복이 없는 루프를 60초마다 점검.
+        판정 규칙은 utils/loop_heartbeat.check (장중 루프는 정규장에만, 일 1회 잡은 거래일 종일).
+        정체 시 WARNING + 루프별 시간당 1회 텔레그램. 재기동은 하지 않는다 (원인 확인이 먼저)."""
+        last_alert: Dict[str, float] = {}
+        while self.bot.running:
+            await asyncio.sleep(60)
+            try:
+                stale = _hb.check()
+            except Exception as e:
+                logger.warning(f"[하트비트] 점검 오류 (무시): {e}")
+                continue
+            now = time.time()
+            for name, age in stale.items():
+                logger.warning(f"[하트비트] {name} {int(age)}초 정체")
+                if now - last_alert.get(name, 0.0) >= 3600:
+                    last_alert[name] = now
+                    try:
+                        await send_alert(f"⚠️ [하트비트] {name} 루프 {int(age // 60)}분 정체 — 살아 있으나 성공 반복 없음")
+                    except Exception:
+                        pass
+
     async def run_health_monitor(self):
         """헬스 모니터링 루프"""
         bot = self.bot
@@ -6432,6 +6467,7 @@ JSON:
                     await asyncio.sleep(600)  # 실패 — 기록하지 않고 10분 후 재시도
                     continue
                 last_run_date = today.isoformat()
+                _hb.beat("kr_harvest_shadow")
                 try:
                     state_path.parent.mkdir(parents=True, exist_ok=True)
                     state_path.write_text(json.dumps({"date": last_run_date}))
@@ -6468,6 +6504,7 @@ JSON:
                 from ..utils.volatility_targeting import refresh_vol_state
                 if await refresh_vol_state():
                     last_run_date = today.isoformat()
+                    _hb.beat("kr_vol_targeting")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -6555,6 +6592,7 @@ JSON:
                 for _k in [k for k, d in alerted.items() if d < _cutoff]:
                     alerted.pop(_k, None)
 
+                _hb.beat("kr_dart_alert")
                 portfolio = bot.engine.portfolio if bot.engine else None
                 if portfolio is None or not portfolio.positions:
                     continue

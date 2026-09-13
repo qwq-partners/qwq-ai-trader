@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from ..utils import loop_heartbeat as _hb
+
 # pykrx: lazy import (동기 블로킹 방지)
 # 실제 사용하는 함수 내부에서 import
 PYKRX_AVAILABLE = True
@@ -1575,6 +1577,8 @@ class DashboardDataCollector:
             "broker": broker_stats,
             "risk_manager": risk_stats,
             "stock_name_cache_size": len(getattr(bot, 'stock_name_cache', {})),
+            "loops": _hb.snapshot(),        # 루프별 마지막 성공 반복 이후 경과(초)
+            "stale_loops": _hb.check(),     # 운영 규칙 적용 정체 루프 (2026-09-13)
             "watch_symbols_count": len(getattr(bot, '_watch_symbols', [])),
             "timestamp": datetime.now(),
         })
