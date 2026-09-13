@@ -220,3 +220,33 @@ def test_atr_dynamic_keeps_entry_stop_and_initial_risk_frozen():
     assert p.remaining_quantity == p.quantity
     assert p.atr_stop_pct == s0 and p.initial_risk == r0
     assert eng.trades[0].stop_pct == s0 and eng.trades[0].initial_risk == pytest.approx(r0)
+
+
+# ── 통합 보완 (2026-09-14 리뷰 advisory) ─────────────────────────────────────
+def test_open_fill_highest_price_starts_at_open_not_fill_day_high():
+    """T+1 시가 체결 직후 최고가는 시가 — 체결일 고가는 시가 시점에 모르는 정보."""
+    eng = _engine({"X": _frame(overrides=FUTURE_BAR_WILD)})
+    eng.pending_buys = [_order("X")]
+    eng._execute_pending_buys(FILL_DAY)
+    p = eng.positions["X"]
+    day_high = float(eng.universe.ohlcv["X"].loc[pd.Timestamp(FILL_DAY), "고가"])
+    assert p.highest_price == p.entry_price
+    assert day_high > p.entry_price          # 고가로 초기화했다면 여기서 달라졌을 것
+
+
+def test_config_rejects_bad_entry_stop_mode_at_construction():
+    with pytest.raises(ValueError):
+        bt.BacktestConfig(entry_stop_mode="typo")     # 엔진 없이 직접 생성해도 한 곳에서 검증
+
+
+def test_position_r_is_pnl_over_initial_risk():
+    buy = bt.Trade(symbol="X", name="X", strategy="sepa", side="BUY", date="2026-02-02",
+                   price=10000.0, quantity=100, amount=1_000_000.0, fee=140.0,
+                   stop_pct=5.0, initial_risk=50_007.0)
+    sell = bt.Trade(symbol="X", name="X", strategy="sepa", side="SELL", date="2026-02-10",
+                    price=11000.0, quantity=100, amount=1_100_000.0, fee=2343.0, reason="익절")
+    an = bt.ResultAnalyzer(bt.BacktestConfig(), [buy, sell],
+                           [("2026-02-02", 10_000_000.0), ("2026-02-10", 10_100_000.0)])
+    (p,) = an.positions()
+    assert p["initial_risk"] == 50_007.0
+    assert p["r"] == pytest.approx(p["pnl"] / 50_007.0)      # pnl% / stop% 가 아니라 최초 확정 위험금액 기준

@@ -167,6 +167,11 @@ class BacktestConfig:
     #                 이후 손절 변경은 레짐 전환(BT_REGIME_EXIT_PARAMS, 실엔진 apply_regime_params 미러)뿐
     entry_stop_mode: str = "atr_dynamic"
 
+    def __post_init__(self):
+        # 어디서 생성되든(엔진·BTExitManager 직접 생성·dataclasses.replace) 한 곳에서 검증 (2026-09-14 리뷰 P2)
+        if self.entry_stop_mode not in ENTRY_STOP_MODES:
+            raise ValueError(f"entry_stop_mode 는 {ENTRY_STOP_MODES} 중 하나: {self.entry_stop_mode!r}")
+
 
 ENTRY_STOP_MODES = ("atr_dynamic", "live_policy")
 
@@ -1166,8 +1171,7 @@ class BacktestEngine:
         self.exit_mgr = BTExitManager(config)
         self.regime = MarketRegime()
         self.fee = BTFeeCalculator()
-        if config.entry_stop_mode not in ENTRY_STOP_MODES:
-            raise ValueError(f"entry_stop_mode 는 {ENTRY_STOP_MODES} 중 하나: {config.entry_stop_mode!r}")
+        # entry_stop_mode 검증은 BacktestConfig.__post_init__ (한 곳)
         # sizing=risk 는 종목당 위험이 작아 동시 보유 상한을 별도로 둔다 (리뷰 권고 3)
         self.max_short: int = (config.risk_max_positions if config.sizing == "risk"
                                else config.max_positions_short)
@@ -1403,7 +1407,8 @@ class BacktestEngine:
                 symbol=symbol, name=name, strategy=strategy,
                 entry_date=day_str, entry_price=exec_price,
                 quantity=quantity, cost_basis=total_cost,
-                highest_price=float(data.get('고가', exec_price)),
+                # T+1 시가 체결의 최고가는 시가로 초기화 — 체결일 고가는 시가 시점에 모르는 정보 (2026-09-14 리뷰 P2)
+                highest_price=float(data.get('고가', exec_price)) if use_close else exec_price,
                 score_at_entry=order.get('score', 0),
             )
 
@@ -1760,7 +1765,12 @@ class ResultAnalyzer:
             if p['sold'] >= p['quantity']:
                 p['pnl'] = p['proceeds'] - p['cost']
                 p['pnl_pct'] = p['pnl'] / p['cost'] * 100 if p['cost'] > 0 else 0.0
-                p['r'] = p['pnl_pct'] / p['stop_pct'] if p['stop_pct'] > 0 else 0.0
+                # 포지션 R = 순손익 ÷ 최초 확정 위험금액 (T0 회계 단위). 구 기록(initial_risk 없음)은 pnl%/stop% 폴백
+                _ir = p.get('initial_risk')
+                if _ir is not None and _ir > 0:
+                    p['r'] = p['pnl'] / _ir
+                else:
+                    p['r'] = p['pnl_pct'] / p['stop_pct'] if p['stop_pct'] > 0 else 0.0
                 out.append(open_.pop(t.symbol))
         return out
 
