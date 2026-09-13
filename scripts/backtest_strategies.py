@@ -149,6 +149,42 @@ class BacktestConfig:
     stale_exit_pnl_pct: float = 2.0
     stale_high_days: int = 7
     stale_high_min_pnl_pct: float = 1.0
+    # ── A/B 축 (2026-09 청산 정책 리뷰, docs/research/exit-policy-ab-2026-09.md) ──
+    #   기본값은 전부 기존 동작(ladder / nominal, 보유 규칙 미변경)을 유지한다 — 게이트 호환.
+    exit_policy: str = "ladder"       # ladder(분할익절+본전+트레일링) | channel(ATR 하드스톱+10/20일 저가 채널)
+    sizing: str = "nominal"           # nominal(base_position_pct) | risk(equity×risk_per_trade_pct / stop_pct)
+    risk_per_trade_pct: float = 0.7
+    risk_max_position_pct: float = 18.0
+    risk_max_positions: int = 7       # sizing=risk 일 때 단기 전략 동시 보유 상한
+    min_holding_days: int = 0         # 이 보유일 전엔 손절(채널 이탈 포함) 외 청산 금지
+    # ladder 실엔진 미러 (기본 off — 게이트 기본 동작 보존). A/B 러너가 켠다.
+    enable_composite_exit: bool = False   # 1차 익절 후 MA5-0.5% / 전일저가 이탈 → 전량 청산
+    post_exit_stale_days: int = 0         # 1차 익절 후 N일 보유 & 0<수익<post_exit_stale_pnl_pct → 청산 (0=off)
+    post_exit_stale_pnl_pct: float = 3.0
+
+
+# 보유(회전) 정책 프리셋 — 리뷰 §2-1 실엔진 값(current) vs 권고 2(extended).
+HOLDING_POLICIES: Dict[str, Dict[str, Any]] = {
+    "current": dict(stale_exit_days=5, stale_exit_pnl_pct=2.0,
+                    stale_high_days=3, stale_high_min_pnl_pct=3.0,
+                    sepa_max_holding_days=10, rsi2_max_holding_days=10,
+                    min_holding_days=0),
+    "extended": dict(stale_exit_days=10, stale_exit_pnl_pct=3.0,
+                     stale_high_days=10, stale_high_min_pnl_pct=3.0,
+                     sepa_max_holding_days=20, rsi2_max_holding_days=20,
+                     min_holding_days=2),
+    # 보충 실험용: 보유 규칙 전부 해제 (청산 정책 자체의 효과 격리 — G2 비교와 같은 조건)
+    "none": dict(stale_exit_days=999, stale_exit_pnl_pct=0.0,
+                 stale_high_days=999, stale_high_min_pnl_pct=0.0,
+                 sepa_max_holding_days=999, rsi2_max_holding_days=999,
+                 min_holding_days=2),
+}
+
+
+def apply_holding_policy(cfg: "BacktestConfig", name: str) -> "BacktestConfig":
+    for k, v in HOLDING_POLICIES[name].items():
+        setattr(cfg, k, v)
+    return cfg
 
 
 @dataclass
@@ -170,6 +206,8 @@ class BTPosition:
     breakeven_activated: bool = False
     holding_days: int = 0
     days_since_high: int = 0
+    stop_price: float = 0.0       # channel: 하드스톱 → 채널 승급 (진입 시 초기화)
+    runner: bool = False          # channel: +30% 도달 후 20일 채널
 
     def __post_init__(self):
         if self.remaining_quantity == 0:
@@ -191,6 +229,7 @@ class Trade:
     pnl: float = 0.0
     pnl_pct: float = 0.0
     holding_days: int = 0
+    stop_pct: float = 0.0
 
 
 # ─── 수수료 계산 ────────────────────────────────────────────
@@ -266,6 +305,11 @@ class BTIndicators:
         ], axis=1).max(axis=1)
         df['atr_14'] = tr.ewm(alpha=1 / 14, min_periods=14).mean()
         df['atr_pct'] = (df['atr_14'] / c * 100).replace([np.inf, -np.inf], np.nan)
+
+        # 채널 청산용 선행 N일 저가(당일 제외) + 전일 저가(복합 청산 미러)
+        df['low10'] = low.rolling(10).min().shift(1)
+        df['low20'] = low.rolling(20).min().shift(1)
+        df['prev_low'] = low.shift(1)
 
         # MACD
         ema12 = c.ewm(span=12).mean()
@@ -811,10 +855,71 @@ BT_REGIME_EXIT_PARAMS: Dict[RegimeType, Dict] = {
 }
 
 
+def channel_exit(pos: BTPosition, row: pd.Series) -> Optional[Tuple[float, str]]:
+    """채널 청산 1봉 판정 — src/strategies/harvest_shadow.exit_step 과 동일 의미 (EOD 근사).
+
+    하드스톱 pos.stop_price 는 진입 시 ATR×2(min/max_stop_pct 클램프)로 고정. 갭 관통이면 시가,
+    저가 관통이면 스탑가 체결. +30% 도달 후엔 20일 저가 채널로 승격(runner). 채널(선행 N일 저가,
+    당일 제외)을 종가가 하향 이탈하면 종가 청산, 아니면 채널×0.999로 스탑 승급.
+    분할 익절·본전보호·복합 MA5·고정 트레일링 없음. 반환: (청산가, 사유) 또는 None.
+    """
+    entry = pos.entry_price
+    stop = pos.stop_price
+    o, h, lo, c = (float(row['시가']), float(row['고가']),
+                   float(row['저가']), float(row['종가']))
+    if o <= stop:
+        return o, "손절(갭관통)"
+    if lo <= stop:
+        return stop, "손절"
+    if h >= entry * 1.30:
+        pos.runner = True
+    ch = row.get('low20' if pos.runner else 'low10')
+    if ch is not None and not pd.isna(ch):
+        ch = max(float(ch), stop)
+        if c < ch:
+            return c, f"채널이탈 ({20 if pos.runner else 10}일 저가 {ch:,.0f})"
+        pos.stop_price = max(stop, ch * 0.999)
+    return None
+
+
 class BTExitManager:
     def __init__(self, config: BacktestConfig):
         self.config = config
         self.fee = BTFeeCalculator()
+
+    def _holding_rules(self, pos: BTPosition, close: float,
+                       actions: List[Tuple[str, int, float, str]]):
+        """보유(회전) 규칙 — 최대 보유일 / 횡보 / 신고가 실패. ladder·channel 공통."""
+        entry = pos.entry_price
+        # ── 5. 최대 보유일 (SEPA/RSI2) ──
+        max_days = (self.config.sepa_max_holding_days
+                    if pos.strategy == StrategyType.SEPA
+                    else self.config.rsi2_max_holding_days)
+        if pos.holding_days >= max_days:
+            actions.append(("SELL", pos.remaining_quantity, close,
+                            f"보유기간 초과 ({pos.holding_days}일)"))
+            pos.remaining_quantity = 0
+            return actions
+
+        # ── 6. 횡보 청산 ──
+        if pos.holding_days >= self.config.stale_exit_days:
+            _, pnl_pct = self.fee.net_pnl(entry, close, 1)
+            if abs(pnl_pct) < self.config.stale_exit_pnl_pct:
+                actions.append(("SELL", pos.remaining_quantity, close,
+                                f"횡보 청산 ({pos.holding_days}일)"))
+                pos.remaining_quantity = 0
+                return actions
+
+        # ── 7. 추세 무효화 (신고가 갱신 실패) ──
+        if pos.days_since_high >= self.config.stale_high_days:
+            _, pnl_pct = self.fee.net_pnl(entry, close, 1)
+            if pnl_pct < self.config.stale_high_min_pnl_pct:
+                actions.append(("SELL", pos.remaining_quantity, close,
+                                f"추세 무효화 ({pos.days_since_high}일 "
+                                f"신고가 없음)"))
+                pos.remaining_quantity = 0
+                return actions
+        return actions
 
     def check_exit(
         self, pos: BTPosition, row: pd.Series,
@@ -852,6 +957,17 @@ class BTExitManager:
 
         pos.holding_days += 1
 
+        # ── channel 정책: 하드스톱→채널 트레일링만 (사다리·본전·복합·고정 트레일링 없음) ──
+        if self.config.exit_policy == "channel" and not is_core:
+            hit = channel_exit(pos, row)
+            if hit is not None:
+                actions.append(("SELL", pos.remaining_quantity, hit[0], hit[1]))
+                pos.remaining_quantity = 0
+                return actions
+            if pos.holding_days < self.config.min_holding_days:
+                return actions
+            return self._holding_rules(pos, close, actions)
+
         # ── 1. 손절 (저가 기준) ──
         if is_core:
             stop_pct = self.config.core_stop_loss_pct
@@ -877,6 +993,10 @@ class BTExitManager:
             actions.append(("SELL", pos.remaining_quantity, sell_price,
                             f"손절 -{stop_pct:.1f}%"))
             pos.remaining_quantity = 0
+            return actions
+
+        # 손절 외 청산 금지 구간 (holding_policy=extended: 2일 전 청산 금지)
+        if pos.holding_days < self.config.min_holding_days:
             return actions
 
         # ── 2. 본전 보호 ──
@@ -960,38 +1080,39 @@ class BTExitManager:
                 pos.remaining_quantity = 0
                 return actions
 
-        # ── 5. 최대 보유일 (SEPA/RSI2) ──
-        if not is_core:
-            max_days = (self.config.sepa_max_holding_days
-                        if pos.strategy == StrategyType.SEPA
-                        else self.config.rsi2_max_holding_days)
-            if pos.holding_days >= max_days:
-                actions.append(("SELL", pos.remaining_quantity, close,
-                                f"보유기간 초과 ({pos.holding_days}일)"))
+        if is_core:
+            return actions
+
+        # ── 4b. 복합 청산 (실엔진 _check_composite_trailing 미러, 1차 익절 이후) ──
+        if (self.config.enable_composite_exit
+                and pos.exit_stage != ExitStage.NONE
+                and pos.remaining_quantity > 0):
+            ma5 = row.get('ma5')
+            prev_low = row.get('prev_low')
+            reason = None
+            if ma5 is not None and not pd.isna(ma5) and close < float(ma5) * 0.995:
+                reason = f"복합청산 MA5({float(ma5):,.0f})-0.5% 이탈"
+            elif (prev_low is not None and not pd.isna(prev_low)
+                  and low < float(prev_low) and close < float(prev_low)):
+                reason = f"복합청산 전일저가({float(prev_low):,.0f}) 이탈"
+            if reason:
+                actions.append(("SELL", pos.remaining_quantity, close, reason))
                 pos.remaining_quantity = 0
                 return actions
 
-        # ── 6. 횡보 청산 ──
-        if not is_core and pos.holding_days >= self.config.stale_exit_days:
+        # ── 4c. 익절 후 저효율 (실엔진: 1차 익절 후 N일 & 0<수익<X% & 신고가 3일 실패) ──
+        if (self.config.post_exit_stale_days > 0
+                and pos.exit_stage in (ExitStage.FIRST, ExitStage.SECOND)
+                and pos.holding_days >= self.config.post_exit_stale_days
+                and pos.days_since_high >= 3):
             _, pnl_pct = self.fee.net_pnl(entry, close, 1)
-            if abs(pnl_pct) < self.config.stale_exit_pnl_pct:
+            if 0 < pnl_pct < self.config.post_exit_stale_pnl_pct:
                 actions.append(("SELL", pos.remaining_quantity, close,
-                                f"횡보 청산 ({pos.holding_days}일)"))
+                                f"익절후 저효율 ({pos.holding_days}일, {pnl_pct:+.1f}%)"))
                 pos.remaining_quantity = 0
                 return actions
 
-        # ── 7. 추세 무효화 (신고가 갱신 실패) ──
-        if (not is_core
-                and pos.days_since_high >= self.config.stale_high_days):
-            _, pnl_pct = self.fee.net_pnl(entry, close, 1)
-            if pnl_pct < self.config.stale_high_min_pnl_pct:
-                actions.append(("SELL", pos.remaining_quantity, close,
-                                f"추세 무효화 ({pos.days_since_high}일 "
-                                f"신고가 없음)"))
-                pos.remaining_quantity = 0
-                return actions
-
-        return actions
+        return self._holding_rules(pos, close, actions)
 
 
 # ─── 백테스트 엔진 ─────────────────────────────────────────
@@ -1003,6 +1124,9 @@ class BacktestEngine:
         self.exit_mgr = BTExitManager(config)
         self.regime = MarketRegime()
         self.fee = BTFeeCalculator()
+        # sizing=risk 는 종목당 위험이 작아 동시 보유 상한을 별도로 둔다 (리뷰 권고 3)
+        self.max_short: int = (config.risk_max_positions if config.sizing == "risk"
+                               else config.max_positions_short)
 
         self.cash: float = float(config.initial_capital)
         self.positions: Dict[str, BTPosition] = {}
@@ -1149,7 +1273,7 @@ class BacktestEngine:
 
             # 포지션 수 제한
             if strategy in (StrategyType.SEPA, StrategyType.RSI2):
-                if short_count >= self.config.max_positions_short:
+                if short_count >= self.max_short:
                     continue
             elif strategy == StrategyType.CORE:
                 if core_count >= self.config.max_positions_core:
@@ -1180,9 +1304,17 @@ class BacktestEngine:
                 if gap < -3.5:
                     continue
 
+            # 진입 손절폭 (ATR×2 클램프) — 위험 기반 사이징·채널 하드스톱·R 계산의 기준
+            atr_pct = data.get('atr_pct')
+            has_atr = not pd.isna(atr_pct) and float(atr_pct) > 0
+            stop_pct = (max(self.config.min_stop_pct,
+                            min(self.config.max_stop_pct,
+                                float(atr_pct) * self.config.atr_multiplier))
+                        if has_atr else 5.0)
+
             # 사이징
             equity = self._calc_equity(day_str)
-            pos_value = self._calc_position_size(equity, strategy)
+            pos_value = self._calc_position_size(equity, strategy, stop_pct)
             if pos_value < self.config.min_position_value:
                 continue
 
@@ -1219,21 +1351,19 @@ class BacktestEngine:
                 score_at_entry=order.get('score', 0),
             )
 
-            atr_pct = data.get('atr_pct')
-            if not pd.isna(atr_pct) and float(atr_pct) > 0:
+            if has_atr:
                 # 원본 ATR%도 보관 — atr_stop_pct는 min/max로 clamp되므로 역산이 불가능하다
                 pos.atr_pct = float(atr_pct)
-                pos.atr_stop_pct = max(
-                    self.config.min_stop_pct,
-                    min(self.config.max_stop_pct,
-                        float(atr_pct) * self.config.atr_multiplier))
+                pos.atr_stop_pct = stop_pct
+            pos.stop_price = exec_price * (1 - pos.atr_stop_pct / 100)
 
             self.positions[symbol] = pos
             self.trades.append(Trade(
                 symbol=symbol, name=name, strategy=strategy.value,
                 side="BUY", date=day_str, price=exec_price,
                 quantity=quantity, amount=buy_amount, fee=buy_fee,
-                reason=f"진입 (점수 {order.get('score', 0):.0f})"
+                reason=f"진입 (점수 {order.get('score', 0):.0f})",
+                stop_pct=pos.atr_stop_pct,
             ))
 
             if strategy in (StrategyType.SEPA, StrategyType.RSI2):
@@ -1301,7 +1431,7 @@ class BacktestEngine:
         regime = self.regime.get_regime(day_str, self.config.regime_mode)
 
         # SEPA / RSI2
-        if short_pos < self.config.max_positions_short:
+        if short_pos < self.max_short:
             signals = []
             for ticker in self.universe.tickers:
                 if ticker in skip:
@@ -1332,7 +1462,7 @@ class BacktestEngine:
                         })
 
             signals.sort(key=lambda x: x['score'], reverse=True)
-            available = self.config.max_positions_short - short_pos
+            available = self.max_short - short_pos
             seen = set()
             for sig in signals:
                 if sig['symbol'] not in seen and available > 0:
@@ -1377,12 +1507,21 @@ class BacktestEngine:
         return day_dt.day <= 3
 
     def _calc_position_size(self, equity: float,
-                            strategy: StrategyType) -> float:
+                            strategy: StrategyType,
+                            stop_pct: Optional[float] = None) -> float:
         base = equity * self.config.base_position_pct / 100
         max_sz = equity * self.config.max_position_pct / 100
         min_reserve = equity * self.config.min_cash_reserve_pct / 100
         available = max(0, self.cash - min_reserve)
         pos_val = min(base, max_sz, available)
+
+        # 위험 기반 사이징: 건당 자본 위험 = risk_per_trade_pct (equity×r% / stop% → % 약분)
+        if (self.config.sizing == "risk" and strategy != StrategyType.CORE
+                and stop_pct is not None and stop_pct > 0):
+            risk_val = equity * self.config.risk_per_trade_pct / stop_pct
+            pos_val = min(risk_val,
+                          equity * self.config.risk_max_position_pct / 100,
+                          available)
 
         if strategy == StrategyType.CORE:
             core_budget = equity * self.config.allocation.get("core", 0.30)
@@ -1487,6 +1626,84 @@ class ResultAnalyzer:
             "end_date": end_d,
             "avg_holding_days": (float(np.mean([t.holding_days for t in sells]))
                                  if sells else 0.0),
+            "position_level": self.position_metrics(),
+        }
+
+    # ── 포지션(왕복) 단위 ─────────────────────────────────
+    def positions(self) -> List[Dict[str, Any]]:
+        """이벤트(부분 매도) 단위 trades → 포지션(왕복) 단위로 합산.
+
+        리뷰 §6 "이벤트 승률 지표 사용 금지 → 포지션 단위 R" 대응. 한 종목은 동시에 한
+        포지션만 가지므로 BUY 를 구분자로 삼는다. R = 순손익% / 진입 손절폭%.
+        """
+        open_: Dict[str, dict] = {}
+        out: List[Dict[str, Any]] = []
+        for t in self.trades:
+            if t.side == "BUY":
+                open_[t.symbol] = dict(
+                    symbol=t.symbol, name=t.name, strategy=t.strategy,
+                    entry_date=t.date, exit_date=t.date, entry_price=t.price,
+                    quantity=t.quantity, sold=0, cost=t.amount + t.fee,
+                    proceeds=0.0, fees=t.fee, notional=t.amount,
+                    stop_pct=t.stop_pct, holding_days=0, reasons=[])
+                continue
+            p = open_.get(t.symbol)
+            if p is None:
+                continue
+            p['proceeds'] += t.amount - t.fee
+            p['fees'] += t.fee
+            p['notional'] += t.amount
+            p['sold'] += t.quantity
+            p['exit_date'] = t.date
+            p['holding_days'] = t.holding_days
+            p['reasons'].append(t.reason)
+            if p['sold'] >= p['quantity']:
+                p['pnl'] = p['proceeds'] - p['cost']
+                p['pnl_pct'] = p['pnl'] / p['cost'] * 100 if p['cost'] > 0 else 0.0
+                p['r'] = p['pnl_pct'] / p['stop_pct'] if p['stop_pct'] > 0 else 0.0
+                out.append(open_.pop(t.symbol))
+        return out
+
+    def position_metrics(self, positions: Optional[List[Dict[str, Any]]] = None
+                         ) -> Dict[str, Any]:
+        """포지션 단위 지표 (A/B 비교용). positions 를 주면 그 부분집합만 집계."""
+        ps = self.positions() if positions is None else positions
+        eqs = [e for _, e in self.equity_curve] or [float(self.config.initial_capital)]
+        avg_eq = float(np.mean(eqs))
+        days = ((pd.Timestamp(self.equity_curve[-1][0]) - pd.Timestamp(self.equity_curve[0][0])).days
+                if len(self.equity_curve) > 1 else 0)
+        wins = [p for p in ps if p['pnl'] > 0]
+        losses = [p for p in ps if p['pnl'] <= 0]
+        avg_w = float(np.mean([p['pnl_pct'] for p in wins])) if wins else 0.0
+        avg_l = float(np.mean([p['pnl_pct'] for p in losses])) if losses else 0.0
+        gross_w = sum(p['pnl'] for p in wins)
+        gross_l = abs(sum(p['pnl'] for p in losses))
+        streak = worst = 0
+        for p in sorted(ps, key=lambda x: (x['exit_date'], x['entry_date'])):
+            streak = streak + 1 if p['pnl'] <= 0 else 0
+            worst = max(worst, streak)
+        reasons: Dict[str, int] = {}
+        for p in ps:
+            for r in p['reasons']:
+                key = r.split(' (')[0].split(' +')[0].split(' -')[0]
+                reasons[key] = reasons.get(key, 0) + 1
+        notional = sum(p['notional'] for p in ps)
+        return {
+            "trades": len(ps),
+            "win_rate": len(wins) / len(ps) * 100 if ps else 0.0,
+            "avg_win_pct": avg_w,
+            "avg_loss_pct": avg_l,
+            "payoff": (avg_w / abs(avg_l)) if avg_l < 0 else (float('inf') if wins else 0.0),
+            "expectancy_pct": float(np.mean([p['pnl_pct'] for p in ps])) if ps else 0.0,
+            "expectancy_r": float(np.mean([p['r'] for p in ps])) if ps else 0.0,
+            "profit_factor": (gross_w / gross_l) if gross_l > 0 else (float('inf') if gross_w > 0 else 0.0),
+            "net_pnl": sum(p['pnl'] for p in ps),
+            "max_consec_losses": worst,
+            "median_holding_days": float(np.median([p['holding_days'] for p in ps])) if ps else 0.0,
+            "turnover": notional / avg_eq if avg_eq > 0 else 0.0,
+            "turnover_annual": (notional / avg_eq * 365 / days) if (avg_eq > 0 and days > 0) else 0.0,
+            "fee_drag_pct": sum(p['fees'] for p in ps) / avg_eq * 100 if avg_eq > 0 else 0.0,
+            "exit_reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
         }
 
     def print_results(self):
@@ -1735,10 +1952,20 @@ def main():
                         help='OHLCV 캐시 무시')
     parser.add_argument('--no-t1', action='store_true',
                         help='T+1 비활성화 (당일 종가 체결)')
+    parser.add_argument('--exit-policy', choices=['ladder', 'channel'], default='ladder',
+                        help='청산 정책 (기본 ladder=현행 사다리)')
+    parser.add_argument('--holding-policy', choices=list(HOLDING_POLICIES), default=None,
+                        help='보유 규칙 프리셋 (미지정 시 YAML 값 그대로)')
+    parser.add_argument('--sizing', choices=['nominal', 'risk'], default='nominal',
+                        help='사이징 (기본 nominal=25%%)')
     args = parser.parse_args()
 
     yaml_cfg = load_config_from_yaml()
     config = build_config(yaml_cfg, args)
+    config.exit_policy = args.exit_policy
+    config.sizing = args.sizing
+    if args.holding_policy:
+        apply_holding_policy(config, args.holding_policy)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if not config.use_cache:

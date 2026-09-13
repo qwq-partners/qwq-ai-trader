@@ -27,6 +27,7 @@
 - [virtual-office.md](operations/virtual-office.md) — 가상 오피스(`/office`) 픽셀아트 시각화: 역할 매핑, 상태 API, 재빌드
 
 ### Research (리서치)
+- [exit-policy-ab-2026-09.md](research/exit-policy-ab-2026-09.md) — 청산(ladder/channel)×보유(current/extended)×사이징(nominal/risk) 2×2×2 백테스트 A/B (2026-09-13, 리뷰 권고 1~3 동시 검증): 포지션 단위 R·PF·WF 3구간·KODEX200 초과, 승자 셀과 게이트 경유 권고 파라미터
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)

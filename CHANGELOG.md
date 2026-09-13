@@ -1,5 +1,24 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-13 — research: 청산·회전·사이징 2×2×2 백테스트 A/B (리뷰 권고 1~3 동시 검증)
+
+`docs/research/exit-policy-ab-2026-09.md` · 원본 `results/ab_exit_policy_2026-09.json` · 브랜치 `research/exit-policy-ab`.
+- **백테스터 3축** (`scripts/backtest_strategies.py`, 기본값 전부 기존 동작 → 진화 게이트 호환): `exit_policy`
+  ladder|channel(ATR×2 하드스톱→10/20일 저가 채널, `channel_exit()` = harvest_shadow.exit_step 미러), `holding_policy`
+  프리셋 current|extended|none(`apply_holding_policy`), `sizing` nominal|risk(equity×0.7%/stop, 상한 18%, 동시 7).
+  ladder 실엔진 미러 옵션 `enable_composite_exit`/`post_exit_stale_days`(기본 off), `min_holding_days`.
+  **포지션(왕복) 단위 집계** `ResultAnalyzer.positions()/position_metrics()` (R·PF·최대연패·회전·수수료 드래그),
+  `metrics()["position_level"]`. CLI `--exit-policy/--holding-policy/--sizing`.
+- **러너** `scripts/ab_exit_policy.py`: 2×2×2(+보충 none) × 6·12개월 × {sepa, sepa+rsi2} = 48셀 437초, WF 3구간
+  (`BacktestGate._segment_returns` 재사용), KODEX200 초과수익, 판정(기대값·PF > 기준 AND WF≥2/3 AND MDD 악화 ≤3pp, 전 윈도우).
+- **결과**: 본 그리드에서 두 윈도우 모두 통과한 셀은 sepa 단독 **`ladder/current/risk`**(사이징만 위험 기반) 하나 —
+  MDD -21.6→-5.9%·-28.7→-11.2%, PF 1.06→1.29·1.17→1.39, 회전 78→34~43배, top3 제외 순손익 양수 유일.
+  채널 청산은 현행 보유 규칙과 결합 시 개선 없음, 보유 규칙 해제(none) 시에만 +5~6%/건이나 상위 3건이 이익의 58~72%·
+  n 36/77·nominal 쌍둥이 -22~-33% → 채택 불가(shadow 유지). extended(회전 억제)는 ladder에서 전 윈도우 악화 → 기각.
+  **권고: 위험 기반 사이징(0.7%/stop, 18%, 7)만 canary·게이트 경유; ExitConfig·REGIME_EXIT_PARAMS 변경 없음.** src/ 무변경.
+- 테스트 `tests/test_backtest_exit_policy.py` 8건(갭관통·스탑·채널 이탈·runner 승격·NaN·정책 분기·min_holding·왕복 집계).
+  docs/README Research 링크, CLAUDE.md 리뷰 절 갱신. 교훈: sepa 단독+혼합 두 그리드 필수(rsi2 혼합이 승자 뒤집음),
+  백테스터 기본 ladder는 실엔진보다 관대(복합·익절후 stale off) — 미러 옵션으로 켜야 함.
 ## 2026-09-13 — docs: 청산 문서 드리프트 3건 정정 (ExitManager 특성화 테스트가 발견)
 
 `tests/test_exit_manager_characterization.py`(PR #26) 작성 중 코드와 어긋난 문서 — 코드 변경 없음.
