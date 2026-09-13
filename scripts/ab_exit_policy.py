@@ -11,9 +11,11 @@ KIS API 무접촉 — OHLCV는 pykrx/FDR + ~/.cache/ai_trader/backtest 캐시.
 
 import argparse
 import contextlib
+import hashlib
 import io
 import itertools
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -25,6 +27,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import backtest_strategies as bt  # noqa: E402
 from src.core.evolution.backtest_gate import BacktestGate, WF_SEGMENTS  # noqa: E402
+from src.utils.config import effective_config_hash, load_effective_config  # noqa: E402
 
 AXES = [("ladder", "channel"), ("current", "extended"), ("nominal", "risk")]
 BASELINE = "ladder/current/nominal"
@@ -33,11 +36,18 @@ WF_MIN_WINS = 2
 
 
 def make_config(months: int, exit_policy: str, holding: str, sizing: str,
-                strategies: str, universe: int) -> "bt.BacktestConfig":
-    ns = argparse.Namespace(months=months, initial_capital=10_000_000,
-                            strategies=strategies, universe_size=universe,
-                            no_cache=False, no_t1=False)
-    cfg = bt.build_config(bt.load_config_from_yaml(), ns)   # 실엔진 YAML(+overrides) 값
+                strategies: str, universe: int, args: argparse.Namespace,
+                effective: dict) -> "bt.BacktestConfig":
+    """유효 설정 builder(T6)로 셀 설정 생성 — 운영 게이트와 같은 기준군을 쓴다.
+
+    A/B 축(exit_policy·holding·sizing)과 러너 옵션(초기 손절·슬롯·offline·종료일)만 덮어쓴다.
+    """
+    cfg = bt.build_backtest_config_from_effective(
+        effective, months=months, strategies=strategies.split(","),
+        universe_size=universe, use_cache=True,
+        entry_stop_mode=args.entry_stop_mode, slot_policy=args.slot_policy,
+        offline=args.offline, end_date=args.end_date,
+    )
     cfg.exit_policy = exit_policy
     cfg.sizing = sizing
     bt.apply_holding_policy(cfg, holding)
@@ -48,7 +58,63 @@ def make_config(months: int, exit_policy: str, holding: str, sizing: str,
     return cfg
 
 
-def run_cell(cfg, shared: dict) -> dict:
+def _repo_sha() -> str:
+    """통합 SHA (실행 시점 HEAD). 저장소 밖에서 실행되면 unknown."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
+                             check=True, capture_output=True, text=True)
+        return out.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def _file_hash(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def build_manifest(args: argparse.Namespace, effective: dict, *,
+                   universe=None, cache_files=()) -> dict:
+    """실행 입력 고정 기록 (T7-A).
+
+    통합 SHA·설정 snapshot/hash·계산기 버전·유니버스·OHLCV 캐시 hash·난수 사용 여부·CLI 인자를
+    남겨 같은 결과를 다시 만들 수 있게 한다.
+    """
+    return {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "integration_sha": _repo_sha(),
+        "calculator_version": bt.CALC_VERSION,
+        "cli_args": vars(args),
+        "offline": bool(args.offline),
+        "end_date": args.end_date,
+        "entry_stop_mode": args.entry_stop_mode,
+        "slot_policy": args.slot_policy,
+        "config_source": args.effective_config or "config/default.yml + evolved_overrides.yml",
+        "config_hash": effective_config_hash(effective),
+        "config_snapshot": effective,
+        "universe": {"size": args.universe_size, "tickers": list(universe or [])},
+        "ohlcv_cache": {Path(f).name: _file_hash(Path(f)) for f in cache_files},
+        # 백테스터는 난수를 쓰지 않는다 (같은 입력 → 같은 결과)
+        "random_used": False,
+    }
+
+
+def save_cell_outputs(outdir: Path, cell: str, cfg, engine, analyzer) -> Path:
+    """셀 원자료 저장 — 저장 데이터만으로 R·PF·비용·회전·상위3 제외를 재계산할 수 있어야 한다."""
+    d = outdir / cell.replace("/", "_")
+    d.mkdir(parents=True, exist_ok=True)
+    dumps = lambda o: json.dumps(o, ensure_ascii=False, indent=1, default=str)  # noqa: E731
+    (d / "positions.json").write_text(dumps(analyzer.positions()), encoding="utf-8")
+    (d / "fills.json").write_text(dumps([vars(t) for t in engine.trades]), encoding="utf-8")
+    (d / "equity.json").write_text(dumps(engine.equity_curve), encoding="utf-8")
+    (d / "config.json").write_text(dumps(vars(cfg)), encoding="utf-8")
+    return d
+
+
+def run_cell(cfg, shared: dict, outdir: Path = None, cell: str = "") -> dict:
     engine = bt.BacktestEngine(cfg)
     # 유니버스·레짐 지표는 셀 간 동일 → 첫 셀만 네트워크, 이후 재사용
     if shared.get("tickers"):
@@ -68,6 +134,11 @@ def run_cell(cfg, shared: dict) -> dict:
         raise RuntimeError("백테스트 결과 없음:\n" + buf.getvalue()[-2000:])
 
     an = bt.ResultAnalyzer(cfg, engine.trades, engine.equity_curve)
+    if outdir is not None and cell:
+        save_cell_outputs(outdir, cell, cfg, engine, an)
+    shared.setdefault("cache_files", [])
+    shared["cache_files"] = sorted({*shared["cache_files"], *map(str, engine.universe.cache_files),
+                                    *map(str, engine.regime.cache_files)})
     ps = an.positions()
     per_strategy = {
         s: an.position_metrics([p for p in ps if p["strategy"] == s])
@@ -149,7 +220,7 @@ def md_strategy_table(cells: dict) -> str:
     return "\n".join(rows)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="청산×보유×사이징 2×2×2 A/B")
     ap.add_argument("--months", default="6,12")
     ap.add_argument("--strategies", nargs="+", default=["sepa,rsi2", "sepa"],
@@ -157,8 +228,29 @@ def main():
     ap.add_argument("--universe-size", type=int, default=60)
     ap.add_argument("--holding", default="current,extended",
                     help="보유 정책 축 (기본 2×2×2; 'none' 추가 시 보유 규칙 해제 보충 셀)")
-    ap.add_argument("--out", default=str(bt.RESULTS_DIR / "ab_exit_policy_2026-09.json"))
-    args = ap.parse_args()
+    ap.add_argument("--out", default=str(bt.RESULTS_DIR / "ab_exit_policy_2026-09.json"),
+                    help="요약 JSON 경로 (기존 형식 유지)")
+    # ── T7-A 실행 입력 고정 ────────────────────────────────────────────────
+    ap.add_argument("--offline", action="store_true",
+                    help="캐시에 없는 입력은 다운로드하지 않고 데이터 부족으로 종료 (네트워크 무접촉)")
+    ap.add_argument("--end-date", default="2026-09-11",
+                    help="마지막 완결 거래일 (기존 연구와 동일, 기본 2026-09-11)")
+    ap.add_argument("--output-dir", default=str(bt.RESULTS_DIR / "ab_exit_policy_review_v2"),
+                    help="manifest·summary·positions·fills·equity 저장 디렉터리")
+    ap.add_argument("--entry-stop-mode", choices=list(bt.ENTRY_STOP_MODES), default="live_policy",
+                    help="신규 진입 초기 손절 (기본 live_policy=실엔진 미러)")
+    ap.add_argument("--slot-policy", choices=list(bt.SLOT_POLICIES), default="live_weighted",
+                    help="동시 보유 슬롯 (기본 live_weighted=실엔진 잔여비율 가중)")
+    ap.add_argument("--effective-config", default=None,
+                    help="유효 설정 YAML 경로 (미지정 시 config/default.yml + evolved_overrides.yml)")
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
+    effective = load_effective_config(args.effective_config)
+    outdir = Path(args.output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
 
     axes = [AXES[0], tuple(args.holding.split(",")), AXES[2]]
     windows = [int(m) for m in args.months.split(",")]
@@ -177,8 +269,10 @@ def main():
             for ex, ho, sz in itertools.product(*axes):
                 name = f"{ex}/{ho}/{sz}"
                 t1 = time.time()
-                cells[name] = run_cell(make_config(months, ex, ho, sz, strategies,
-                                                   args.universe_size), shared)
+                cells[name] = run_cell(
+                    make_config(months, ex, ho, sz, strategies, args.universe_size,
+                                args, effective),
+                    shared, outdir=outdir / f"{strategies}_{months}m", cell=name)
                 p = cells[name]["position"]
                 print(f"[{strategies} {months}m] {name:<28} 거래 {p['trades']:>3} 기대값 {p['expectancy_pct']:+.2f}% "
                       f"PF {p['profit_factor']:.2f} 수익 {cells[name]['total_return_pct']:+.2f}% "
@@ -224,7 +318,15 @@ def main():
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
-    print(f"저장: {out}  (총 {time.time() - t0:.0f}s)")
+
+    # 실행 입력·요약 보존 (T7-A). 기존 결과 파일은 덮어쓰지 않는다 — --out 과 별도 디렉터리.
+    manifest = build_manifest(args, effective, universe=shared.get("tickers"),
+                              cache_files=shared.get("cache_files", []))
+    (outdir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    (outdir / "summary.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    print(f"저장: {out} · {outdir}  (총 {time.time() - t0:.0f}s)")
 
 
 if __name__ == "__main__":

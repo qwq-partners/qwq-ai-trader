@@ -187,7 +187,48 @@
   channel/none 셀은 n=34~77.
 - **백테스터 기본값 ≠ 실엔진**: 게이트 기본 설정(복합 청산 off, stale_high 7일 <1%)으로 돌리면 혼합 6m이 -3.3%인데 실엔진 미러
   (`apply_holding_policy("current")` + composite + post_exit_stale)로는 -14.7% — 게이트가 실엔진보다 관대한 청산을 검증해 왔다는 뜻.
-  후속: 게이트 `_build_config`에 미러 옵션을 켤지 별도 판단.
+  **해소(2026-09-14 T6)**: 게이트가 유효 설정 builder(`build_backtest_config_from_effective`)로
+  기준군을 만들면서 복합 청산·익절후 저효율·stale_high 3일·risk 사이징이 기본으로 켜진다 (§5-1·§5-2).
+
+## 5-1. 실엔진 parity (2026-09-14, 리뷰 후속 T6)
+
+같은 합성 주문·가격 시퀀스를 실엔진과 백테스터에 넣어 비교했다
+(`tests/test_live_backtest_parity.py`, 네트워크·운영 상태 파일 무접촉).
+
+| 항목 | 결과 |
+|---|---|
+| 초기 손절 | ✅ 일치 — 양쪽 모두 전략 고정 SL(sepa 5%). 백테스터는 `--entry-stop-mode live_policy` |
+| 수량 | ✅ 일치 — 백테스터도 실엔진과 같은 `src/utils/sizing.risk_quantity_cap`(매수수수료 포함) 적용. SL 5%/4%/3%(상한 18% 구간) 모두 동일 (139/174/180주) |
+| 진입 비용·R 분모 | ✅ 일치 — `cost_basis = 가격×수량 + 매수수수료`, `initial_risk = cost_basis × SL%` |
+| 익절 수량·단계 | ✅ 일치 — `max(1, int(잔여×ratio))`, 1차 익절 후 FIRST 단계 (실엔진은 체결 확인 후 승급) |
+| 수수료 | ✅ 일치 — 요율 동일(0.0140527% / 0.2130527%), 실엔진만 원 단위 반올림(차이 <1원) |
+| 슬롯 | ✅ 일치 — `--slot-policy live_weighted`가 실엔진 `RiskManager._get_position_weight`(잔여비율, TRAILING ×0.5·SECOND/THIRD ×0.7, floor 0.1/0.15/0.2)를 그대로 쓰고 코어 제외 가중 합 ≤ `max_positions`(8) |
+| **손절 발동 시점** | ⚠️ **미해소 차이** — 백테스터는 가격 하락률(`entry×(1-SL%)`), 실엔진은 **수수료 포함 순손익률**. 실엔진이 약 0.22%p 먼저 발동한다 (왕복 수수료 0.227% 이내) |
+| **익절 접촉 판정** | ⚠️ **미해소 차이** — 백테스터는 일봉 **고가** 접촉으로 판정하고 종가에 체결, 실엔진은 현재가 기준. 장중 고가만 목표를 넘긴 봉에서 결과가 갈린다 (일봉 근사의 구조적 한계) |
+
+두 미해소 차이는 `xfail(strict=True)` 테스트로 고정했다 — 조용히 통과시키지 않는다.
+청산 판정 의미 변경은 이번 범위 밖이므로, **손절 타이밍·장중 접촉이 결과를 좌우하는 범위의
+승격은 보류**한다. 사이징 축(수량·R 분모)은 parity가 확인된 범위다.
+
+## 5-2. 러너 옵션 (T7-A, 실행 입력 고정)
+
+`scripts/ab_exit_policy.py`는 유효 설정 builder(T6)로 셀 설정을 만든다 — 운영 게이트와 같은 기준군.
+
+| 옵션 | 기본값 | 뜻 |
+|---|---|---|
+| `--offline` | off | 캐시에 없는 OHLCV·레짐은 다운로드하지 않고 `BacktestDataUnavailable`로 종료 (네트워크 무접촉) |
+| `--end-date` | `2026-09-11` | 마지막 완결 거래일 (기존 연구와 동일 창) |
+| `--output-dir` | `results/ab_exit_policy_review_v2` | manifest·summary·셀별 positions/fills/equity/config |
+| `--entry-stop-mode` | `live_policy` | 신규 진입 초기 손절 (실엔진 미러). `atr_dynamic`은 별도 연구 축 |
+| `--slot-policy` | `live_weighted` | 실엔진 잔여비율 가중 슬롯. `fixed`는 기존 5/7 슬롯 |
+| `--effective-config` | (없음) | 유효 설정 YAML 경로. 미지정 시 `config/default.yml + evolved_overrides.yml` |
+| `--out` | `results/ab_exit_policy_2026-09.json` | 기존 요약 파일 경로 (원본 결과는 덮어쓰지 않는다 — 별도 `--out` 사용) |
+
+`manifest.json`: 통합 SHA · 계산기 버전(`CALC_VERSION`) · CLI 인자 전체 · 설정 snapshot/hash ·
+유니버스 · OHLCV 캐시 파일 hash · 난수 사용 여부(백테스터는 난수 없음).
+CLI 인자와 manifest 일치는 `tests/test_backtest_gate_config.py::test_runner_manifest_matches_cli_args`가 고정한다.
+
+> `--slot-policy fixed`(단순 5/7 슬롯) 실행 결과는 운영 검증이라고 부르지 않는다 — 실효 슬롯은 `live_weighted`다.
 
 ## 6. 재현
 
@@ -196,5 +237,8 @@ cd /home/ubuntu/projects/qwq-ai-trader
 venv/bin/python scripts/ab_exit_policy.py --months 6,12 --strategies sepa,rsi2 sepa --holding current,extended,none
 venv/bin/python scripts/backtest_strategies.py --months 6 --universe-size 60 --strategies sepa \
     --exit-policy channel --holding-policy extended --sizing risk        # 단일 셀
-venv/bin/python -m pytest tests/test_backtest_exit_policy.py -q         # channel_exit·포지션 집계 테스트
+venv/bin/python scripts/ab_exit_policy.py --offline --months 6 --strategies sepa \
+    --end-date 2026-09-11 --entry-stop-mode live_policy --slot-policy live_weighted   # T7 재검증(오프라인)
+venv/bin/python -m pytest tests/test_backtest_exit_policy.py tests/test_backtest_point_in_time.py \
+    tests/test_backtest_gate_config.py tests/test_live_backtest_parity.py -q          # 청산·시점·설정·parity
 ```

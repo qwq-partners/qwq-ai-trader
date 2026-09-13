@@ -200,7 +200,9 @@ def test_live_policy_uses_fixed_strategy_stop_and_freezes_initial_risk(sizing):
     assert p.atr_pct > 0                               # ATR 은 트레일링 연동용으로만 보관
     assert p.initial_risk == pytest.approx(p.cost_basis * 0.05)
     if sizing == "risk":
-        assert p.quantity == 140                       # equity×0.7% / 5% = 14% → 140주
+        # 2026-09-14 T6 parity: 실엔진과 같은 risk_quantity_cap(매수수수료 포함) 적용 →
+        # 근사식 140주(equity×0.7%/5%)가 아니라 139주 (140주는 계획 위험 70,009.85 > 70,000)
+        assert p.quantity == 139
     buy = eng.trades[0]
     assert buy.stop_pct == 5.0 and buy.initial_risk == pytest.approx(p.initial_risk)
     # 이후 봉의 ATR 이 커져도 손절·초기 위험은 소급 변경되지 않는다

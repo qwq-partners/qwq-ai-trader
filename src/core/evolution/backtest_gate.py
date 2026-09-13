@@ -26,14 +26,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import importlib.util
 import io
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
+
+from src.utils.config import effective_config_hash, load_effective_config
 
 # 백테스트 스크립트 경로 (scripts/ 는 패키지가 아니라 파일 경로로 로드한다)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -102,6 +105,22 @@ PARAM_MAP: Dict[str, str] = {
     "exit_manager.stale_exit_pnl_pct": "stale_exit_pnl_pct",
 }
 
+# 실운영 전략 ↔ 백테스터 전략 키. 여기 없는 전략(gap_and_go·vcp_breakout 등)은 백테스터가
+# 모사하지 못하므로 게이트가 판정할 수 없다 — "생략 후 통과"가 아니라 **보류**로 다룬다 (2026-09-14 T6).
+_STRATEGY_KEYS: Dict[str, str] = {
+    "sepa": "sepa", "sepa_trend": "sepa",
+    "rsi2": "rsi2", "rsi2_reversal": "rsi2",
+    "core": "core", "core_holding": "core",
+}
+# 전략 무관(전역) 파라미터 접두어 — 활성 전략 전부로 검증한다
+_GLOBAL_SCOPES = ("exit_manager", "risk", "*", "all")
+# 실운영에는 있으나 백테스터가 모사하지 못하는 전략 — 게이트 판정 불가 → 보류
+_UNSUPPORTED_STRATEGIES = (
+    "gap_and_go", "gap", "vcp_breakout", "vcp", "momentum_breakout", "momentum",
+    "theme_chasing", "theme", "strategic_swing", "value_growth_core", "value_growth",
+    "earnings_drift", "earnings_reversal",
+)
+
 # exit_manager.stop_loss_pct 는 전략별 손절 3개에 동시 반영해야 한다
 _FANOUT: Dict[str, tuple] = {
     "exit_manager.stop_loss_pct": (
@@ -123,6 +142,11 @@ class GateResult:
     baseline: Dict[str, Any] = field(default_factory=dict)
     candidate: Dict[str, Any] = field(default_factory=dict)
     wf: Dict[str, Any] = field(default_factory=dict)  # walk-forward 구간 수익률·구간승 (2026-09-13 구조화)
+    # 2026-09-14 T6 — 어떤 설정 위에서 무엇을 검증했는지 재현용
+    config_hash: str = ""                                   # 유효 설정 hash (비밀정보 제외)
+    diff: Dict[str, Any] = field(default_factory=dict)      # baseline → candidate 필드 diff
+    supported_scope: Dict[str, Any] = field(default_factory=dict)   # 모사한 전략·미지원 범위
+    coverage: Dict[str, Any] = field(default_factory=dict)          # WF 구간 수·자산곡선 길이 등
 
     def to_dict(self) -> Dict[str, Any]:
         keep = ("total_return_pct", "mdd_pct", "win_rate",
@@ -133,6 +157,10 @@ class GateResult:
             "errored": self.errored,
             "reason": self.reason,
             "wf": self.wf,
+            "config_hash": self.config_hash,
+            "diff": self.diff,
+            "supported_scope": self.supported_scope,
+            "coverage": self.coverage,
             "baseline": {k: self.baseline.get(k) for k in keep if k in self.baseline},
             "candidate": {k: self.candidate.get(k) for k in keep if k in self.candidate},
         }
@@ -172,19 +200,44 @@ class BacktestGate:
         return module
 
     # ── 설정 구성 ──────────────────────────────────────────
-    def _build_config(self, module, overrides: Dict[str, Any]):
-        """BacktestConfig 생성 + 파라미터 오버라이드 적용"""
-        cfg = module.BacktestConfig(
-            months=BT_MONTHS,
-            universe_size=BT_UNIVERSE_SIZE,
-            use_cache=True,
+    def _base_config(self, module, strategies: List[str], months: int = BT_MONTHS):
+        """실운영 유효 설정으로 baseline BacktestConfig 생성 (2026-09-14 T6 — F7).
+
+        기본 BacktestConfig(nominal·TP1 5%·sepa .6/rsi2 .1/core .3)가 아니라
+        default.yml + evolved_overrides.yml 병합값을 쓴다. 그래야 risk 파라미터 변경이
+        실제로 포지션 금액을 바꾸고, 판정이 운영 기준군 위에서 이뤄진다.
+        """
+        effective = load_effective_config()
+        cfg = module.build_backtest_config_from_effective(
+            effective, months=months, strategies=strategies,
+            universe_size=BT_UNIVERSE_SIZE, use_cache=True,
         )
+        return cfg, effective_config_hash(effective)
+
+    def _config_from_overrides(self, module, overrides: Dict[str, Any]):
+        """overrides dict → 유효 설정 기준군 + 요청 필드 (사후 재생 gate_replay 호환 경로)."""
+        ov = dict(overrides)
+        months = int(ov.pop("months", BT_MONTHS))
+        cfg, _ = self._base_config(module, ["sepa", "rsi2", "core"], months=months)
+        return self._apply_overrides(cfg, ov)
+
+    @staticmethod
+    def _apply_overrides(cfg, overrides: Dict[str, Any]):
+        """candidate 에 요청 변경 필드만 적용. 알 수 없는 필드는 검증 불가 → 예외(보류)."""
+        cand = copy.deepcopy(cfg)
         for field_name, value in overrides.items():
-            if not hasattr(cfg, field_name):
-                logger.warning(f"[백테게이트] 알 수 없는 config 필드 무시: {field_name}")
-                continue
-            setattr(cfg, field_name, value)
-        return cfg
+            if not hasattr(cand, field_name):
+                raise AttributeError(f"알 수 없는 config 필드: {field_name}")
+            setattr(cand, field_name, value)
+        return cand
+
+    def _strategies_for(self, strategy: str) -> Optional[List[str]]:
+        """검증에 쓸 백테스터 전략 목록. 모사 불가 전략이면 None (→ 보류)."""
+        if strategy in _GLOBAL_SCOPES:
+            # 전역 파라미터: 모사 가능한 전략 전부 요청 — 배분 0%는 builder 가 제외한다
+            return ["sepa", "rsi2", "core"]
+        key = _STRATEGY_KEYS.get(strategy)
+        return [key] if key else None
 
     def _resolve_fields(self, strategy: str, parameter: str) -> list:
         """진화 파라미터를 BacktestConfig 필드명 목록으로 변환"""
@@ -200,9 +253,14 @@ class BacktestGate:
         return []
 
     # ── 실행 ───────────────────────────────────────────────
-    def _run_once(self, module, overrides: Dict[str, Any]) -> Dict[str, Any]:
-        """백테스트 1회 실행 (동기, stdout 억제)"""
-        cfg = self._build_config(module, overrides)
+    def _run_once(self, module, cfg) -> Dict[str, Any]:
+        """백테스트 1회 실행 (동기, stdout 억제).
+
+        cfg 는 BacktestConfig. dict 를 주면 유효 설정 기준군에 그 필드만 얹는다
+        (사후 재생 `gate_replay` 호환 — 재생도 같은 기준군을 쓴다).
+        """
+        if isinstance(cfg, dict):
+            cfg = self._config_from_overrides(module, cfg)
         engine = module.BacktestEngine(cfg)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -233,6 +291,14 @@ class BacktestGate:
         old_value = change.get("old_value")
         new_value = change.get("new_value")
 
+        # 모사 불가 전략(gap_and_go·vcp_breakout 등)의 파라미터는 매핑 부재를 이유로
+        # "생략 후 통과"시키지 않는다 — 검증할 수 없으면 보류 (2026-09-14 T6)
+        if strategy in _UNSUPPORTED_STRATEGIES:
+            reason = (f"백테스트 미지원 전략 ({strategy}) — {strategy}.{parameter} 검증 불가로 "
+                      f"변경 보류 (모사 가능: sepa/rsi2/core)")
+            logger.warning(f"[백테게이트] 보류: {reason}")
+            return GateResult(False, reason, errored=True)
+
         fields = self._resolve_fields(strategy, parameter)
         if not fields:
             # 백테스트가 모사하지 못하는 파라미터 (예: 배분 비율, 알림 설정)
@@ -244,40 +310,70 @@ class BacktestGate:
         if old_value is None or new_value is None:
             return GateResult(True, "old/new 값 없음 — 게이트 생략", skipped=True)
 
+        # 모사 불가 전략(gap_and_go·vcp_breakout 등)은 "생략 후 통과"가 아니라 보류 (2026-09-14 T6)
+        strategies = self._strategies_for(strategy)
+        if strategies is None:
+            reason = (f"백테스트 미지원 전략 ({strategy}) — {strategy}.{parameter} 검증 불가로 "
+                      f"변경 보류 (모사 가능: sepa/rsi2/core)")
+            logger.warning(f"[백테게이트] 보류: {reason}")
+            return GateResult(False, reason, errored=True)
+
+        config_hash = ""
+        scope: Dict[str, Any] = {}
         try:
             module = await asyncio.to_thread(self._load_module)
 
-            base_overrides = {f: old_value for f in fields}
-            cand_overrides = {f: new_value for f in fields}
+            base_cfg, config_hash = await asyncio.to_thread(
+                self._base_config, module, strategies)
+            scope = dict(getattr(base_cfg, "supported_scope", {}) or {})
+            cand_cfg = self._apply_overrides(base_cfg, {f: new_value for f in fields})
+            diff = {f: [getattr(base_cfg, f), new_value] for f in fields}
 
             logger.info(
                 f"[백테게이트] 검증 시작: {strategy}.{parameter} "
-                f"{old_value} -> {new_value} (필드 {fields}, "
+                f"{old_value} -> {new_value} (필드 {fields}, 유효설정 {config_hash}, "
+                f"전략 {scope.get('strategies_simulated')}, "
                 f"{BT_MONTHS}개월/{BT_UNIVERSE_SIZE}종목)"
             )
+            for f in fields:
+                if getattr(base_cfg, f) != old_value:
+                    logger.warning(
+                        f"[백테게이트] baseline 유효설정({f}={getattr(base_cfg, f)})이 "
+                        f"제안 old_value({old_value})와 다름 — 기준군은 유효설정 값을 쓴다")
 
             baseline = await asyncio.wait_for(
-                asyncio.to_thread(self._run_once, module, base_overrides),
+                asyncio.to_thread(self._run_once, module, base_cfg),
                 timeout=BT_TIMEOUT_SEC,
             )
             candidate = await asyncio.wait_for(
-                asyncio.to_thread(self._run_once, module, cand_overrides),
+                asyncio.to_thread(self._run_once, module, cand_cfg),
                 timeout=BT_TIMEOUT_SEC,
             )
+        except AttributeError as e:
+            reason = f"백테스트 설정 매핑 실패 ({e}) — 변경 보류"
+            logger.error(f"[백테게이트] 보류: {reason}")
+            return GateResult(False, reason, errored=True, config_hash=config_hash)
+        except ValueError as e:          # UnsupportedBacktestConfig 포함 (백테스터 모사 불가)
+            reason = f"유효 설정 미지원 ({e}) — 변경 보류"
+            logger.error(f"[백테게이트] 보류: {reason}")
+            return GateResult(False, reason, errored=True, config_hash=config_hash)
         except asyncio.TimeoutError:
             logger.error(f"[백테게이트] 타임아웃 ({BT_TIMEOUT_SEC}s) — 변경 보류")
             return GateResult(False, f"백테스트 타임아웃 ({BT_TIMEOUT_SEC}s) — 변경 보류",
-                              errored=True)
+                              errored=True, config_hash=config_hash, supported_scope=scope)
         except Exception as e:
             logger.exception(f"[백테게이트] 실행 실패 — 변경 보류: {e}")
-            return GateResult(False, f"백테스트 실행 실패 ({e}) — 변경 보류", errored=True)
+            return GateResult(False, f"백테스트 실행 실패 ({e}) — 변경 보류", errored=True,
+                              config_hash=config_hash, supported_scope=scope)
 
         if not baseline or not candidate:
             return GateResult(False, "백테스트 결과 없음 (데이터 부족) — 변경 보류",
-                              errored=True, baseline=baseline, candidate=candidate)
+                              errored=True, baseline=baseline, candidate=candidate,
+                              config_hash=config_hash, supported_scope=scope)
 
         return self._judge(baseline, candidate, strategy, parameter,
-                           old_value, new_value)
+                           old_value, new_value,
+                           config_hash=config_hash, diff=diff, scope=scope)
 
     # ── walk-forward 구간 수익률 ───────────────────────────
     @staticmethod
@@ -303,7 +399,9 @@ class BacktestGate:
 
     # ── 판정 ───────────────────────────────────────────────
     def _judge(self, baseline: Dict, candidate: Dict, strategy: str,
-               parameter: str, old_value: Any, new_value: Any) -> GateResult:
+               parameter: str, old_value: Any, new_value: Any, *,
+               config_hash: str = "", diff: Optional[Dict[str, Any]] = None,
+               scope: Optional[Dict[str, Any]] = None) -> GateResult:
         b_ret = float(baseline.get("total_return_pct", 0.0))
         c_ret = float(candidate.get("total_return_pct", 0.0))
         b_mdd = abs(float(baseline.get("mdd_pct", 0.0)))
@@ -312,6 +410,20 @@ class BacktestGate:
 
         gain = c_ret - b_ret
         mdd_delta = c_mdd - b_mdd
+
+        # 결과 재현용 메타 (유효 설정 hash·변경 diff·모사 범위·평가 커버리지)
+        b_curve = baseline.get("_equity_curve") or []
+        c_curve = candidate.get("_equity_curve") or []
+        coverage: Dict[str, Any] = {
+            "months": BT_MONTHS, "universe_size": BT_UNIVERSE_SIZE,
+            "equity_points_baseline": len(b_curve), "equity_points_candidate": len(c_curve),
+            "wf_segments": WF_SEGMENTS, "wf_min_points": WF_MIN_POINTS,
+            "wf_windows_evaluated": 0,
+            "baseline_trades": int(baseline.get("total_trades", 0)),
+            "candidate_trades": c_trades,
+        }
+        meta = {"config_hash": config_hash, "diff": dict(diff or {}),
+                "supported_scope": dict(scope or {}), "coverage": coverage}
 
         summary = (
             f"{strategy}.{parameter} {old_value}->{new_value} | "
@@ -323,18 +435,19 @@ class BacktestGate:
         if c_trades < MIN_TRADES:
             reason = f"표본 부족 (거래 {c_trades}건 < {MIN_TRADES}건) — 변경 보류 | {summary}"
             logger.warning(f"[백테게이트] 기각: {reason}")
-            return GateResult(False, reason, baseline=baseline, candidate=candidate)
+            return GateResult(False, reason, baseline=baseline, candidate=candidate, **meta)
 
         if gain <= MIN_RETURN_GAIN:
             reason = f"수익률 개선 없음 ({gain:+.2f}%p) — 변경 기각 | {summary}"
             logger.info(f"[백테게이트] 기각: {reason}")
-            return GateResult(False, reason, baseline=baseline, candidate=candidate)
+            return GateResult(False, reason, baseline=baseline, candidate=candidate, **meta)
 
         # walk-forward: 전체 수익률이 좋아도 특정 구간에 몰빵된 개선이면 기각
         _wf: Dict[str, Any] = {}
         b_seg = self._segment_returns(baseline.get("_equity_curve"), WF_SEGMENTS)
         c_seg = self._segment_returns(candidate.get("_equity_curve"), WF_SEGMENTS)
         if b_seg is not None and c_seg is not None:
+            coverage["wf_windows_evaluated"] = WF_SEGMENTS
             wins = sum(1 for b, c in zip(b_seg, c_seg) if c > b)
             _wf = {"base": [round(float(r), 2) for r in b_seg], "cand": [round(float(r), 2) for r in c_seg],
                    "wins": wins, "min_wins": WF_MIN_WINS}  # 원장 reason 300자 절단과 무관하게 보존
@@ -348,20 +461,25 @@ class BacktestGate:
                 reason = (f"walk-forward 미달 ({seg_txt}, 최소 {WF_MIN_WINS}구간) "
                           f"— 변경 기각 | {summary}")
                 logger.info(f"[백테게이트] 기각: {reason}")
-                return GateResult(False, reason, baseline=baseline, candidate=candidate, wf=_wf)
+                return GateResult(False, reason, baseline=baseline, candidate=candidate, wf=_wf, **meta)
         else:
-            # 자산 곡선이 짧으면(거래일 부족) WF는 생략하고 기존 기준만 적용
-            logger.warning("[백테게이트] 자산 곡선 부족 — walk-forward 판정 생략")
+            # 자산 곡선이 짧으면(거래일 부족) walk-forward 를 평가할 수 없다 →
+            # 2026-09-14 T6: 생략 후 통과가 아니라 **보류**. WF 미평가가 승인 근거가 되면 안 된다.
+            reason = (f"walk-forward 평가 불가 (자산곡선 {len(b_curve)}/{len(c_curve)}일 "
+                      f"< 최소 {WF_MIN_POINTS}일) — 변경 보류 | {summary}")
+            logger.warning(f"[백테게이트] 보류: {reason}")
+            return GateResult(False, reason, errored=True, baseline=baseline,
+                              candidate=candidate, **meta)
 
         if mdd_delta > MAX_MDD_WORSENING:
             reason = (f"MDD 악화 ({mdd_delta:+.2f}%p > {MAX_MDD_WORSENING}%p) "
                       f"— 변경 기각 | {summary}")
             logger.info(f"[백테게이트] 기각: {reason}")
-            return GateResult(False, reason, baseline=baseline, candidate=candidate, wf=_wf)
+            return GateResult(False, reason, baseline=baseline, candidate=candidate, wf=_wf, **meta)
 
         reason = f"검증 통과 | {summary}"
         logger.info(f"[백테게이트] 통과: {reason}")
-        return GateResult(True, reason, baseline=baseline, candidate=candidate, wf=_wf)
+        return GateResult(True, reason, baseline=baseline, candidate=candidate, wf=_wf, **meta)
 
 
 _gate: Optional[BacktestGate] = None
