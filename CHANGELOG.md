@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — fix: 운영 게이트 기준군을 유효 설정으로·실거래 parity·A/B 러너 옵션 (계획서 T6, F7)
+
+F7(D 재현): BacktestGate baseline 이 기본 BacktestConfig(nominal, TP1 5/0.30, stop 3.5/6, allocation sepa .6/rsi2 .1/core .3)라 `risk.*` 변경이 포지션 금액을 못 바꾸고 무조건 기각, WF 미평가도 승인.
+- `src/utils/config.load_effective_config()/effective_config_hash()`(비밀 제외, .env 미로드) + `scripts/backtest_strategies.build_backtest_config_from_effective()` 공용 builder — 게이트·A/B 러너 공용.
+  baseline = 유효 설정 deepcopy, candidate = 요청 필드만(0.7→0.8 이 139→159주, 상한 18→10 이 180→100주).
+- `GateResult.unsupported`(구조적 미지원: 모사 불가 전략 gap/vcp 등·PARAM_MAP 밖 필드·미지원 유효 설정·배분 0%) vs `errored`(타임아웃·예외·데이터 부족·WF 평가 불가) 분리, 둘 다 passed=False 보류.
+  `strategy_evolver._handle_gate_rejection`: unsupported 는 rejected_by_backtest(14일 억제)로 기록, 장애 카운터·알림 미발동(종전 skipped→fail-closed 기각과 동일 효과, 억제 추가). `config_hash`·`diff`·`supported_scope`(allocation_covered_pct)·`coverage`(wf_windows_evaluated) 기록. 판정 함수(총수익 개선·WF 2/3·MDD ≤1pp·거래 ≥10) 불변.
+- parity(`tests/test_live_backtest_parity.py`): 백테스터 risk 사이징 = 실엔진 `risk_quantity_cap`(매수수수료 포함, 140→139주), `slot_policy=live_weighted`(실엔진 `_get_position_weight` 대조, 집계 범위는 비코어 전체 vs sepa/rsi2 로 다름),
+  `budget_cap`(전략 예산 캡, engine 미러 — 원비율 0.40, 보유 노출은 진입원가×잔여비율 근사). 미해소 2건 xfail(strict): 손절 발동 기준(백테스터 가격 하락률 vs 실엔진 net-pnl, ~0.22%p 선발동), 익절 일봉 고가 접촉 vs 현재가.
+- A/B 러너(`scripts/ab_exit_policy.py`): `--offline`(캐시 없으면 종료, 다운로드 없음)/`--end-date 2026-09-11`/`--output-dir`/`--entry-stop-mode live_policy`/`--slot-policy`/`--effective-config`, manifest(통합 SHA·설정 hash·계산기 버전·캐시 hash·missing_tickers·CLI),
+  셀별 positions/fills/equity 저장, `--out` 기본 `<output-dir>/summary.json`, 원본 `results/ab_exit_policy_2026-09.json` 은 `--overwrite` 없이 거부. 레짐 캐시 source 태그(지수/개별주 대리).
+- 잔여: gap/vcp 백테스터 미구현 → SEPA 단독 부분 검증(유효 배분 65% 중 40% 커버, KR 전체 정책 통과로 해석 불가); 기존 연구 §2 수치는 캡·시점 수정 전 결과 — T7 재계산 필요; `gate_replay` 는 배분 0% 전략 필드를 "재생 불가"로만 표시.
+
 ## 2026-09-14 — feat: 진입 위험 스냅샷·원장 연결 — 엔진·저장·exporter 측 (계획서 T3, F4)
 
 F4(D 재현): risk 태그가 원본 Signal.metadata 에만 있고 event.metadata(별개 dict)·주문 캐시·signal_events·체결 원장(market_context)에는 없었다.
