@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — feat: 체결 경로 entry_risk 배선 — 초기 위험 확정·원장 병합·부분체결 누적 (계획서 T3 A)
+
+`src/schedulers/kr_scheduler.py`(+ `trade_journal.py`/`trade_storage.py` 의 `update_market_context`, `scripts/export_risk_ledger.py` 매수 leg 보정). 테스트 `tests/test_entry_risk_wiring.py` 15건.
+- BUY 체결 → `register_position` 성공 직후 실제 등록 SL(`ExitManager.resolve_stop(dynamic=None, fixed=exit_params.stop_loss_pct, apply_crash_cap=False)`)로 `confirm_initial_risk` → `set_initial_risk`(최초 1회) → `merge_confirmed_risk` 를
+  `market_context.entry_risk` 에 병합해 `record_entry`. 스냅샷 없으면 키를 만들지 않음(legacy-unmeasured).
+- 부분체결: 주문 단위 lot(`_entry_fill_lots`)에 누적, `check_fills` 직후 미체결 목록에서 사라지면 완결로 보고 1회 확정. 다중 부분체결로 `record_entry` 가 앞선 경우 `update_market_context`(JSON + JSONB UPDATE 큐, 기존 kwargs 시그니처 불변)로 갱신.
+  완결 판정 불가·조회 실패는 확정 보류(과소 분모 금지). 주문 종료(취소·일자 전환)로 lot 을 버릴 땐 등록된 종목이면 누적 체결로 확정, 불가면 `[위험계측] … 주문 종료 — 초기 위험 미확정` 경고.
+- `_pending_signal_cache` 는 스케줄러가 pop 하지 않고 FillEvent emit 전 복사본을 lot 에 보관(엔진 `on_fill` 의 pop 과 경합 회피). 등록 재시도(`_pending_exit_registrations`) 성공 시 재확정(멱등).
+- 계획 SL ≠ 실제 SL 이면 `stop_pct` 는 보존하고 `actual_stop_pct` 에 실제값 → canary `stop_pct_mismatch` 발화(무음 통과 금지).
+- 리뷰 반영: 같은 종목 2차 BUY 주문 lot 이 기존 거래의 `entry_risk.initial_risk_amount` 를 덮어쓰던 blocking → `em_confirmed`(set_initial_risk 반환) + `get_trade` 기존값 이중 가드.
+  exporter 는 스냅샷 `filled_quantity`/`entry_cost` 로 매수 leg 를 보정(다중 부분체결 canary technical passed). 계측 호출은 try/except 로 격리(계측 예외가 체결·등록·저널·WS 구독을 끊지 않음, 테스트).
+- 한계(문서화): 완결 판정이 브로커 인메모리 `_pending_orders` 의존 — 재시작 직후 체결분은 canary `initial_risk_mismatch` 로 사후 확인; 취소 직전 ≤2초 증분 체결은 lot 에 없을 수 있음(무음, 종전보다 나쁘지 않음);
+  같은 배치에서 취소+2차 매수가 겹치는 극단 순서 경합(엔진이 보유 종목 BUY 를 차단해 도달성 극히 낮음). 운영 원장의 entry_risk 는 배포 + 매수 재개 후에만 채워짐. canary 미시작, 배포 없음.
+
 ## 2026-09-14 — research: 위험 사이징 재검증 (계획서 T7) — 6셀 오프라인 재실행, 승격 보류
 
 통합 SHA 441bfd3 에서 `scripts/ab_exit_policy.py --offline --end-date 2026-09-11 --entry-stop-mode live_policy --slot-policy live_weighted` (유효 설정 builder, 예산 캡 40%).
@@ -34,8 +48,7 @@ F4(D 재현): risk 태그가 원본 Signal.metadata 에만 있고 event.metadata
 - `scripts/export_risk_ledger.py`(신규, 오프라인): 거래 원장 + ExitManager 상태 → `review_risk_canary` 원장. net_pnl 은 저널 누적 pnl, 매도 leg 는 `--source db` 의 trade_events SELL 행에서 복원
   (journal 소스 분할 매도는 `exits_aggregated` → `lots_ambiguous` 로 표본 제외). closed 포지션의 확정 분모는 원장 스냅샷만, ExitManager 상태는 open 한정(종목 키 오귀속 방지). 스냅샷 없음 = legacy-unmeasured.
 - 테스트 24건. docs/risk/risk-and-exit.md 에 계약·R 정의·legacy 분류·A 배선 지점.
-- **잔여(A 배선, 다음 PR)**: kr_scheduler 체결 경로 `confirm_initial_risk → set_initial_risk → merge_confirmed_risk` 를 `market_context.entry_risk` 에 병합해 `record_entry`; `_pending_signal_cache` 는 첫 부분체결에서 pop 되므로
-  주문 완결까지 유지 필요. 배선 전 운영 원장은 전부 legacy-unmeasured. config_hash 는 RiskConfig 만(ExitConfig·전략 SL 미포함), 주문/포지션 식별자는 exporter 의 trade.id 대체. canary 판정 원장은 `--source db`.
+- **A 배선은 같은 날 후속 PR(체결 경로 entry_risk 배선)로 완료** — 아래 항목 참조. 배선 전(운영 배포본 de111b7) 거래는 전부 legacy-unmeasured. config_hash 는 RiskConfig 만(ExitConfig·전략 SL 미포함), 주문/포지션 식별자는 exporter 의 trade.id 대체. canary 판정 원장은 `--source db`.
   canary 허용치(1원)는 3 leg 이상 분할 매도에서 반올림 누적으로 경계값 — 필요 시 max(1, 0.5×(leg+1)) 검토.
 ## 2026-09-14 — fix: 하트비트가 성공·실패·유휴를 구분 (계획서 T4, F5)
 

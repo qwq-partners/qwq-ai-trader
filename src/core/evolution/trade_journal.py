@@ -552,6 +552,21 @@ class TradeJournal:
         """거래 조회"""
         return self._trades.get(trade_id)
 
+    def update_market_context(self, trade_id: str, patch: Dict[str, Any]) -> bool:
+        """기존 레코드의 `market_context` 에 patch 를 **병합**한다 (2026-09-14 T3 A 배선).
+
+        용도: 첫 매수 주문이 여러 번에 걸쳐 부분체결될 때, 첫 체결에 이미 `record_entry` 로
+        기록된 레코드의 `entry_risk` 를 주문 완결 시 확정값으로 덮어쓴다. 기존 키는 보존된다.
+        """
+        trade = self._trades.get(trade_id)
+        if trade is None or not patch:
+            return False
+        trade.market_context = {**(trade.market_context or {}), **patch}
+        trade.updated_at = datetime.now()
+        if trade.entry_time:
+            self._save_trades(trade.entry_time.date())
+        return True
+
     def get_today_trades(self) -> List[TradeRecord]:
         """오늘 거래 목록"""
         return [self._trades[tid] for tid in self._today_trades if tid in self._trades]

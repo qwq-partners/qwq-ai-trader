@@ -109,6 +109,36 @@ curl http://localhost:8080/api/performance/quantstats/status
 - 표본 20거래일 미만이면 400 응답 (통계 무의미)
 - 구현: `src/analytics/quantstats_report.py`
 
+## 위험 사이징 canary 원장 추출 (오프라인, 2026-09-14~)
+
+`risk.sizing_mode: risk` 의 첫 30건 판정용 원장·리포트를 만든다. **읽기 전용** — 주문·설정·상태파일을
+바꾸지 않는다. 네트워크는 DB 조회만 쓰고 KIS/LLM 은 건드리지 않는다.
+
+```bash
+cd /home/ubuntu/projects/qwq-ai-trader
+source venv/bin/activate
+
+# 1) 원장 추출 — 판정용은 반드시 --source db (분할 매도 leg 이 trade_events 에만 있다)
+venv/bin/python scripts/export_risk_ledger.py --source db --output /tmp/ledger.json --days 90
+
+# 2) canary 리포트 (벤치마크는 선택 — 없으면 초과수익 null, 0 으로 대체하지 않는다)
+venv/bin/python scripts/review_risk_canary.py --input /tmp/ledger.json \
+    --cohort risk-sepa_trend-v1 --output /tmp/canary.json --min-sample 30
+```
+
+- `--source journal` 은 JSON 저널만 읽어 DB 없이도 돌지만, 분할 매도가
+  `exits_aggregated`/`lots_ambiguous` 로 표본에서 빠진다 — **점검용으로만** 쓴다.
+- 출력 `technical_status` 가 `failed` 면 성과 판정 이전에 계측을 먼저 고친다.
+  주요 항목: `stop_pct_mismatch`(계획 SL ≠ 실제 등록 SL), `missing_field`,
+  `initial_risk_mismatch`(체결 재계산 ≠ 원장 분모), `net_pnl_mismatch`.
+- `excluded.legacy_unmeasured` 는 체결 경로 배선(2026-09-14) 이전 거래다. 정상이며,
+  현재 설정으로 초기 위험을 추정해 표본에 넣지 않는다.
+- `status` 는 `insufficient_sample` / `hold_expansion` / `further_review` 뿐이다 —
+  **nominal 자동 복귀 권고는 출력되지 않는다**(모드 전환은 사람이 판단).
+- 확정이 보류된 건: 로그에서 `[위험계측] ... 주문 완결 판정 불가` / `... 확정 생략` /
+  `... 주문 종료 — 초기 위험 미확정` 을 확인한다. 이 경우 스냅샷의 `initial_risk_amount` 는 비고,
+  원장 분모는 **exporter 가 저널 체결 × 계획 SL 로 재계산**한다(계획 위험만 남는 것이 아니다).
+
 ## 가상 오피스 (`/office`, 2026-08-03~)
 
 엔진 상태를 8명 캐릭터로 시각화. 대시보드 `/office` 또는 모바일 하단 nav "오피스".

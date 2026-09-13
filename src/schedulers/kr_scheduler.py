@@ -21,7 +21,7 @@ import traceback
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional, Dict, Set
+from typing import Optional, Dict, List, Set, Tuple
 
 from loguru import logger
 
@@ -35,6 +35,7 @@ from ..utils.telegram import send_alert
 from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
+from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
 
 
 class KRScheduler:
@@ -1908,6 +1909,211 @@ JSON:
         except asyncio.CancelledError:
             pass
 
+    # ── 진입 위험 확정 (계획서 T3 A 배선, 2026-09-14) ────────────────────────────
+    # 전부 계측 전용이다. 어떤 실패도 매수·등록·청산 경로에 영향을 주지 않는다(경고 로그 후 생략).
+
+    @property
+    def _entry_fill_lots(self) -> Dict[str, Dict]:
+        """진입 위험 확정용 매수 체결 누적 — 주문 단위 key `"<order_id>|<symbol>"`.
+
+        값: `{"symbol", "signal"(체결 시점 시그널 메타 복사본), "fills":[{price,quantity,fee}],
+        "confirmed", "em_confirmed"(ExitManager 가 이 lot 으로 분모를 처음 박았는가),
+        "exit_params"(등록에 쓴 청산 설정 — 주문 취소 정리 시 확정용),
+        "initial_risk_amount", "actual_stop_pct", "journal_synced"}`.
+        `__init__` 을 거치지 않고 생성되는 특성화 테스트의 스케줄러와도 맞물리도록 지연 생성한다.
+        """
+        lots = self.__dict__.get("_entry_fill_lots_store")
+        if lots is None:
+            lots = self.__dict__["_entry_fill_lots_store"] = {}
+        return lots
+
+    @staticmethod
+    def _entry_lot_key(fill) -> str:
+        """주문 단위 키 — 같은 종목의 추가 매수 주문은 위험을 분리 기록한다."""
+        return f"{getattr(fill, 'order_id', '') or ''}|{fill.symbol}"
+
+    @staticmethod
+    def _open_order_ids(orders) -> Optional[Set[str]]:
+        """미체결 주문 id 집합. 하나라도 id 를 읽을 수 없으면 None = **완결 판정 불가**."""
+        ids: Set[str] = set()
+        for order in orders or []:
+            oid = getattr(order, "id", None)
+            if oid is None:
+                return None
+            ids.add(str(oid))
+        return ids
+
+    def _capture_entry_fill(self, fill) -> Optional[Dict]:
+        """매수 체결을 주문 단위로 누적하고 첫 체결에서 시그널 메타 스냅샷을 확보한다.
+
+        엔진 `on_fill` 이 **주문 완결 시** `_pending_signal_cache` 를 비우므로, FillEvent emit 전에
+        스케줄러 소유 복사본을 만들어 둔다. 이후 저널·위험 계측 경로는 전부 이 복사본을 읽는다
+        (엔진 캐시는 pop 하지 않는다 — 정리는 엔진 on_fill/clear_pending 한 곳).
+        """
+        try:
+            key = self._entry_lot_key(fill)
+            lot = self._entry_fill_lots.get(key)
+            if lot is None:
+                _rm = getattr(self.bot.engine, 'risk_manager', None)
+                _cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
+                lot = {
+                    "symbol": fill.symbol,
+                    "signal": dict(_cache.get(fill.symbol) or {}),
+                    "fills": [],
+                    "confirmed": False,
+                    "em_confirmed": False,
+                    "exit_params": None,
+                    "initial_risk_amount": None,
+                    "actual_stop_pct": None,
+                    "journal_synced": False,
+                }
+                self._entry_fill_lots[key] = lot
+            lot["fills"].append({
+                "price": Decimal(str(fill.price)),
+                "quantity": int(fill.quantity),
+                "fee": Decimal(str(getattr(fill, "commission", 0) or 0)),
+            })
+            return lot
+        except Exception as e:
+            logger.warning(f"[위험계측] {getattr(fill, 'symbol', '?')} 체결 누적 실패 (계측만 생략): {e}")
+            return None
+
+    def _confirm_entry_risk(self, symbol: str, lot: Optional[Dict], exit_params: Dict,
+                            order_complete: Optional[bool]) -> None:
+        """주문 완결 시 **1회** — 실제 등록 SL 로 초기 위험금액(R 분모)을 확정한다.
+
+        `order_complete` 가 None(판정 불가)이면 확정하지 않는다 — 위험을 과소 분모로 박아
+        canary 판정을 오염시키느니 스냅샷의 `initial_risk_amount` 를 비워 둔다(로그로 남긴다).
+        exporter 는 그 경우 저널 체결 × 계획 SL 로 분모를 재계산한다.
+        ExitManager 등록이 성공한 직후에만 호출한다(등록 재시도 성공 경로 포함, 재호출 멱등).
+        """
+        if lot is None or lot.get("confirmed"):
+            return
+        # 등록에 쓴 청산 설정을 남긴다 — 주문 취소·일자 전환 정리(`_prune_entry_lots`)에서
+        # 누적 체결로 확정할 때 같은 설정·같은 창구를 쓰기 위함
+        lot["exit_params"] = exit_params
+        if not order_complete:
+            if order_complete is None:
+                logger.warning(f"[위험계측] {symbol} 주문 완결 판정 불가 — 초기 위험금액 확정 보류")
+            return
+        em = self.bot.exit_manager
+        if em is None:
+            return
+        try:
+            # 등록에 쓴 것과 같은 설정·같은 창구(ExitManager.resolve_stop) — 사이징 분모와 동일 규칙
+            stop_pct = em.resolve_stop(
+                dynamic_stop_pct=None,
+                fixed_stop_pct=exit_params.get("stop_loss_pct"),
+                is_core=exit_params.get("is_core", False),
+                apply_crash_cap=False,
+            ).stop_pct
+            amount, _cost = confirm_initial_risk(lot["fills"], stop_pct)
+        except Exception as e:
+            logger.warning(f"[위험계측] {symbol} 초기 위험금액 확정 생략 (손절 설정·체결 무효): {e}")
+            return
+        try:
+            # False = 이 종목 분모는 이미 다른(먼저 온) 주문으로 확정됨 → 저널도 건드리지 않는다
+            lot["em_confirmed"] = bool(em.set_initial_risk(symbol, amount, stop_pct))
+        except Exception as e:
+            lot["em_confirmed"] = False
+            logger.warning(f"[위험계측] {symbol} ExitManager 초기 위험 기록 실패: {e}")
+        lot["confirmed"] = True
+        lot["initial_risk_amount"] = amount
+        lot["actual_stop_pct"] = stop_pct
+        logger.info(
+            f"[위험계측] {symbol} 초기 위험 확정: {amount:,.0f}원 "
+            f"(실제 SL {stop_pct}%, 누적 {sum(f['quantity'] for f in lot['fills'])}주)"
+        )
+
+    def _entry_risk_context(self, lot: Optional[Dict], sig_metadata: Dict) -> Optional[Dict]:
+        """`market_context["entry_risk"]` 에 넣을 dict. 스냅샷이 없으면 None(키를 만들지 않는다)."""
+        snapshot = (sig_metadata or {}).get("entry_risk")
+        if not snapshot:
+            return None
+        lot = lot or {}
+        try:
+            return merge_confirmed_risk(snapshot, lot.get("initial_risk_amount"),
+                                        lot.get("actual_stop_pct"), lot.get("fills", []))
+        except Exception as e:
+            logger.warning(f"[위험계측] entry_risk 병합 실패 (계획값 사용): {e}")
+            return dict(snapshot)
+
+    def _sync_journal_entry_risk(self, symbol: str, lot: Optional[Dict]) -> None:
+        """첫 체결에 이미 `record_entry` 된 레코드의 `entry_risk` 를 확정값으로 갱신한다.
+
+        단일 체결로 완결되는 일반 경로는 `record_entry` 가 확정값을 바로 넣으므로 여기서 할 일이
+        없다(그 시점엔 `trade_id` 미설정). 부분체결·등록 재시도로 확정이 늦어진 경우만 동작한다.
+
+        **완료한 진입의 초기 위험금액은 바꾸지 않는다** (계획서 T3). 같은 종목의 두 번째 매수 주문은
+        자기 lot 으로 확정을 시도하지만, 기존 거래(`pos.trade_id`)의 분모를 덮어쓰면 안 되므로
+        ① ExitManager 가 이 lot 으로 처음 박은 경우(`em_confirmed`)가 아니거나
+        ② 저널 레코드에 이미 `initial_risk_amount` 가 있으면 갱신을 건너뛴다.
+        """
+        if lot is None or not lot.get("confirmed") or lot.get("journal_synced"):
+            return
+        if not lot.get("em_confirmed"):
+            lot["journal_synced"] = True     # 분모는 먼저 온 주문이 확정 — 추가 매수는 기록하지 않는다
+            return
+        pos = self.bot.engine.portfolio.positions.get(symbol)
+        trade_id = getattr(pos, "trade_id", None) if pos is not None else None
+        journal = getattr(self.bot, "trade_journal", None)
+        updater = getattr(journal, "update_market_context", None)
+        if not trade_id or updater is None:
+            return
+        getter = getattr(journal, "get_trade", None)
+        try:
+            record = getter(trade_id) if getter is not None else None
+        except Exception:
+            record = None
+        if record is not None:
+            _ctx = getattr(record, "market_context", None)
+            _prev = (_ctx or {}).get("entry_risk") if isinstance(_ctx, dict) else None
+            if isinstance(_prev, dict) and _prev.get("initial_risk_amount") is not None:
+                lot["journal_synced"] = True
+                return
+        merged = self._entry_risk_context(lot, (lot.get("signal") or {}).get("metadata", {}))
+        if not merged:
+            return
+        try:
+            if updater(trade_id, {"entry_risk": merged}):
+                lot["journal_synced"] = True
+                logger.info(f"[위험계측] {symbol} 저널 entry_risk 확정 갱신 (trade_id={trade_id})")
+        except Exception as e:
+            logger.warning(f"[위험계측] {symbol} 저널 entry_risk 갱신 실패: {e}")
+
+    def _entry_lots_for(self, symbol: str) -> List[Tuple[str, Dict]]:
+        return [(k, v) for k, v in self._entry_fill_lots.items() if v.get("symbol") == symbol]
+
+    def _prune_entry_lots(self, open_ids: Optional[Set[str]]) -> None:
+        """완결·취소된 주문의 체결 누적을 정리한다 (캐시 누수 방지).
+
+        ExitManager 등록 재시도 대기 중인 종목의 미확정 lot 은 확정 기회를 남기려 보관한다.
+        부분체결 뒤 잔여가 취소·만료돼도 **주문 종료 = 주문 완료**이므로, 이미 등록된 종목은
+        여기서 누적 체결로 확정한다. 확정할 수 없으면 경고를 남긴다(runbook 의 '로그로 확인').
+        """
+        if open_ids is None:
+            return
+        for key, lot in list(self._entry_fill_lots.items()):
+            if key.split("|", 1)[0] in open_ids:
+                continue   # 잔여 미체결 있음 — 주문 진행 중
+            if not lot.get("confirmed") and lot.get("symbol") in self._pending_exit_registrations:
+                continue
+            if not lot.get("confirmed"):
+                _sym = lot.get("symbol") or "?"
+                try:
+                    if lot.get("exit_params") is not None:
+                        self._confirm_entry_risk(_sym, lot, lot["exit_params"], True)
+                        self._sync_journal_entry_risk(_sym, lot)
+                except Exception as e:
+                    logger.warning(f"[위험계측] {_sym} 주문 종료 정리 중 확정 실패 (계측만 생략): {e}")
+                if not lot.get("confirmed"):
+                    logger.warning(
+                        f"[위험계측] {_sym} 주문 종료 — 초기 위험 미확정 "
+                        f"(누적 {sum(f['quantity'] for f in lot.get('fills') or [])}주, "
+                        f"원장 분모는 exporter 가 저널 체결 × 계획 SL 로 재계산)"
+                    )
+            self._entry_fill_lots.pop(key, None)
+
     async def run_fill_check(self):
         """체결 확인 루프 (적응형 폴링: 미체결 유무에 따라 2초/5초)"""
         bot = self.bot
@@ -1922,9 +2128,18 @@ JSON:
                     # 재시도 대상은 이전 주기까지 쌓인 것만 — 이번 주기에 "포지션 미생성"으로 막 넣은 종목을
                     # 같은 주기 아래 재시도 블록이 '포지션 없음 = 삭제됨'으로 즉시 버리던 결함 방지 (2026-09-14)
                     _retry_syms = list(self._pending_exit_registrations)
+                    # 미체결 주문이 하나도 없으면 진행 중인 진입 주문도 없다 → 전부 완결로 본다
+                    _open_ids: Optional[Set[str]] = set()
 
                     if open_orders:
                         fills = await bot.broker.check_fills()
+                        # 주문 완결 판정 (진입 위험 확정용) — check_fills 가 완결 주문을 지운 뒤의
+                        # 인메모리 미체결 목록. 조회 실패·id 식별 불가는 None(확정 보류).
+                        try:
+                            _open_ids = self._open_order_ids(await bot.broker.get_open_orders())
+                        except Exception as _ooe:
+                            logger.warning(f"[위험계측] 미체결 주문 조회 실패 — 완결 판정 보류: {_ooe}")
+                            _open_ids = None
 
                         for fill in fills:
                             logger.info(
@@ -1943,6 +2158,15 @@ JSON:
                                     _rm = getattr(bot.engine, 'risk_manager', None)
                                     _per = getattr(_rm, '_pending_exit_reasons', {}) if _rm else {}
                                     _exit_reason_snap = _per.pop(fill.symbol, "")
+
+                            # ── BUY: 진입 위험 계측용 체결 누적 + 시그널 메타 스냅샷 ──
+                            # 엔진 on_fill 이 주문 완결 시 _pending_signal_cache 를 비우므로 emit 전에 복사
+                            _entry_lot = None
+                            _order_done: Optional[bool] = None
+                            if fill.side == OrderSide.BUY:
+                                _entry_lot = self._capture_entry_fill(fill)
+                                _order_done = (None if _open_ids is None else
+                                               str(getattr(fill, 'order_id', '') or '') not in _open_ids)
 
                             event = FillEvent.from_fill(fill, source="kis_broker")
                             await bot.engine.emit(event)
@@ -2193,17 +2417,19 @@ JSON:
                                         pos.strategy, {}
                                     ) if pos.strategy else {}
                                     # 시그널 캐시에서 atr_pct hint 추출 (ATR-linked trailing용)
-                                    # 주의: pop하지 않음 — 아래 trade journal 블록이 동일 캐시를 pop()함
+                                    # 체결 시점 스냅샷이 정본 — 엔진이 주문 완결 시 캐시를 비운다
                                     _atr_hint: Optional[float] = None
                                     try:
                                         _rm_h = getattr(bot.engine, 'risk_manager', None)
                                         _sig_cache_h = getattr(_rm_h, '_pending_signal_cache', {}) if _rm_h else {}
-                                        _sig_meta_h = _sig_cache_h.get(fill.symbol, {})
+                                        _sig_meta_h = ((_entry_lot or {}).get("signal")
+                                                       or _sig_cache_h.get(fill.symbol, {}))
                                         _atr_meta = _sig_meta_h.get("metadata", {}).get("atr_pct")
                                         if _atr_meta is not None and float(_atr_meta) > 0:
                                             _atr_hint = float(_atr_meta)
                                     except Exception:
                                         _atr_hint = None
+                                    _registered_ok = False
                                     try:
                                         bot.exit_manager.register_position(
                                             pos,
@@ -2221,11 +2447,21 @@ JSON:
                                             trailing_activate_pct=exit_params.get("trailing_activate_pct"),
                                             atr_pct_hint=_atr_hint,
                                         )
+                                        _registered_ok = True
                                         logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%, ATR-hint={_atr_hint})")
                                     except Exception as e:
                                         # 포지션은 있는데 등록만 실패 = 손절 부재 → 다음 주기 재시도 대기열 (2026-09-14)
                                         self._pending_exit_registrations.add(fill.symbol)
                                         logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열: {e}")
+                                    # 등록 성공 직후 초기 위험 확정 (주문 완결 시 1회, 계측 전용)
+                                    # 계측 예외가 이후 저널 기록·WS 구독을 끊지 못하게 통째로 감싼다
+                                    if _registered_ok:
+                                        try:
+                                            self._confirm_entry_risk(fill.symbol, _entry_lot,
+                                                                     exit_params, _order_done)
+                                            self._sync_journal_entry_risk(fill.symbol, _entry_lot)
+                                        except Exception as _ere:
+                                            logger.warning(f"[위험계측] {fill.symbol} 진입 위험 확정 생략 (매매 영향 없음): {_ere}")
                                 else:
                                     # 포지션 미생성 — 다음 fill_check 주기에 재시도
                                     self._pending_exit_registrations.add(fill.symbol)
@@ -2243,7 +2479,11 @@ JSON:
                                         # ── 시그널 캐시에서 메타데이터 추출 ──────────────
                                         _rm = getattr(bot.engine, 'risk_manager', None)
                                         _sig_cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
-                                        _sig_meta = _sig_cache.pop(fill.symbol, {})
+                                        # 체결 시점 스냅샷이 정본. 엔진 캐시는 pop 하지 않는다 —
+                                        # 부분체결 잔여분·등록 재시도가 빈 메타를 쓰지 않도록 수명을
+                                        # 엔진 pending 정리(on_fill 완결·clear_pending)에 맞춘다 (2026-09-14 T3)
+                                        _sig_meta = ((_entry_lot or {}).get("signal")
+                                                     or _sig_cache.get(fill.symbol, {}))
                                         _sig_reason = _sig_meta.get("reason", "")
                                         _sig_reasons_list = _sig_meta.get("reasons", []) or []
                                         _sig_score_breakdown = _sig_meta.get("score_breakdown", {}) or {}
@@ -2357,6 +2597,13 @@ JSON:
                                         if _sig_context_snapshot:
                                             _market_ctx = {**(_market_ctx or {}), **_sig_context_snapshot}
 
+                                        # 진입 위험 스냅샷 (T3) — 스냅샷이 있을 때만 키를 만든다.
+                                        # 계획 SL ≠ 실제 SL 이면 stop_pct 는 그대로 두고 actual_stop_pct 에
+                                        # 실제값이 들어간다 → canary technical check(stop_pct_mismatch) 발화
+                                        _er_ctx = self._entry_risk_context(_entry_lot, _sig_metadata)
+                                        if _er_ctx:
+                                            _market_ctx["entry_risk"] = _er_ctx
+
                                         _rec = bot.trade_journal.record_entry(
                                             trade_id=_tid,
                                             symbol=fill.symbol,
@@ -2375,6 +2622,8 @@ JSON:
                                             market="KR",
                                         )
                                         pos.trade_id = _rec.id
+                                        if _entry_lot is not None and _entry_lot.get("confirmed"):
+                                            _entry_lot["journal_synced"] = True   # 확정값이 이미 레코드에 들어감
                                         logger.info(
                                             f"[체결] {fill.symbol} BUY journal 기록 완료 "
                                             f"(id={_rec.id}, 전략={_sig_strategy}, 태그={len(_tags)}개)"
@@ -2432,6 +2681,16 @@ JSON:
                                     )
                                     _retry_done.add(_retry_sym)
                                     logger.info(f"[체결] {_retry_sym} ExitManager 재시도 등록 성공")
+                                    # 등록이 늦어 미뤄둔 초기 위험 확정 (멱등 — 이미 확정분은 건너뜀).
+                                    # 계측 예외가 재시도 처리·나머지 종목을 끊지 못하게 감싼다.
+                                    try:
+                                        for _lot_key, _lot in self._entry_lots_for(_retry_sym):
+                                            _lot_done = (None if _open_ids is None else
+                                                         _lot_key.split("|", 1)[0] not in _open_ids)
+                                            self._confirm_entry_risk(_retry_sym, _lot, _retry_params, _lot_done)
+                                            self._sync_journal_entry_risk(_retry_sym, _lot)
+                                    except Exception as _ere:
+                                        logger.warning(f"[위험계측] {_retry_sym} 진입 위험 확정 생략 (매매 영향 없음): {_ere}")
                                 except Exception as _re:
                                     logger.warning(f"[체결] {_retry_sym} ExitManager 재시도 등록 실패: {_re}")
                             elif _retry_sym not in bot.engine.portfolio.positions:
@@ -2445,6 +2704,9 @@ JSON:
                         self._pending_exit_registrations -= _retry_done
                         for _done_sym in _retry_done:
                             self._pending_exit_registration_misses.pop(_done_sym, None)
+
+                    # 완결·취소된 주문의 체결 누적 정리 (등록 재시도 대기분은 보관)
+                    self._prune_entry_lots(_open_ids)
 
                     # 유휴(미체결 없음) 시 15초 — 5초 폴링이 개장 직후 원장 TR 트래픽의 대부분이라
                     # EGW00215 충돌을 키웠다 (2026-09-07). 포지션 변화는 30초 동기화가 커버한다.

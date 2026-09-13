@@ -461,24 +461,55 @@ venv/bin/python scripts/review_risk_canary.py --input ledger.json --cohort risk-
 (`TradeJournal.sync_from_db` 는 그 컬럼을 조회하지 않아 스냅샷이 유실된다).
 
 **배선 현황(2026-09-14)**: 엔진(스냅샷 생성·양쪽 메타·`_log_sig` allowlist)·저장(TradeStorage JSONB / TradeJournal JSON
-그대로 직렬화)·ExitManager 영속·exporter·canary 왕복은 완료. **남은 지점은 `src/schedulers/kr_scheduler.py`
-체결 경로(담당 A)** — 이 브랜치만 배포되면 운영 원장의 `entry_risk` 는 전부 비어 `legacy-unmeasured` 로 나온다.
+그대로 직렬화)·ExitManager 영속·exporter·canary 왕복에 이어 **KR 체결 경로(`src/schedulers/kr_scheduler.py`)까지 배선 완료**.
+배선 이전에 체결된 거래의 원장은 그대로 `legacy-unmeasured` 다(소급 추정하지 않는다).
 
-A 배선 계약 (`_check_fills` 의 BUY 체결 분기, origin/main 기준):
-1. `confirm_initial_risk(fills, actual_stop_pct)` → `(initial_risk_amount, entry_cost)`.
-   `fills` 는 그 주문의 매수 체결 `[{price, quantity, fee}]` 누적, `actual_stop_pct` 는
-   `ExitManager.resolve_stop(...)` 이 실제로 쓴 값(계획 SL 이 아니라 등록된 SL).
-2. `ExitManager.set_initial_risk(symbol, initial_risk_amount, actual_stop_pct)` — 최초 1회만 기록
-   (등록 전 호출 시 False + 경고 로그, `_pending_exit_registrations` 재시도 뒤 다시 호출).
-3. `record_entry(market_context=...)` 의 dict 에
-   `"entry_risk": merge_confirmed_risk(_sig_metadata.get("entry_risk"), initial_risk_amount,
-   actual_stop_pct, fills)` 를 넣는다(스냅샷이 없으면 `{}` 반환 — 키를 만들지 않는다).
-   `_sig_context_snapshot` 머지 이후에 넣어 덮어쓰이지 않게 한다.
-4. **`_pending_signal_cache` 수명**: BUY journal 기록 분기가 `_sig_cache.pop(fill.symbol, {})` 로
-   캐시를 소비한다. 부분체결이면 첫 체결에서 스냅샷이 사라져 잔여 체결·재시도 경로가 빈 메타를 쓴다.
-   → 주문이 완결(`pending` 해제)될 때까지는 `pop` 대신 `get` 으로 읽고, 주문 종료·pending 만료
-   처리에서 한 번만 제거할 것. 확정 자체는 2·3 모두 멱등(재호출해도 분모 불변·중복 키 없음)이다.
-테스트: `tests/test_entry_risk_lifecycle.py` (from_signal → 사이징 → 주문 캐시 → signal_events → 저장/복원 → exporter → canary 왕복).
+### A 배선 (`run_fill_check` 의 BUY 체결 분기)
+
+주문 단위 누적 `_entry_fill_lots[f"{order_id}|{symbol}"]` 하나가 전 과정을 운반한다.
+전부 **계측 전용** — 어떤 실패도 매수·등록·청산에 영향을 주지 않는다(경고 로그 후 생략).
+
+1. **체결 누적·스냅샷 확보** (`_capture_entry_fill`, FillEvent emit **전**):
+   `{price, quantity, fee}` 를 주문별로 쌓고, 첫 체결에서 `_pending_signal_cache[symbol]` 을 복사해 둔다.
+   엔진 `on_fill` 이 **주문 완결 시** 그 캐시를 비우므로(부분체결은 유지) emit 이후에 읽으면 이미 늦다.
+   ATR hint·저널 메타·`entry_risk` 는 전부 이 복사본을 읽고, 엔진 캐시는 **pop 하지 않는다**
+   (수명은 엔진 `on_fill` 완결·`clear_pending` 한 곳에 맡긴다).
+2. **완결 판정**: `check_fills()` 직후의 `broker.get_open_orders()`(인메모리) 에 주문 id 가 없으면 완결.
+   단일 체결로 끝나는 일반 경로는 첫 체결에서 바로 확정된다. 주문 id 를 읽을 수 없거나 조회가 실패하면
+   **확정하지 않는다** — 과소 분모를 박느니 스냅샷의 `initial_risk_amount` 를 비워 두고 경고를 남긴다.
+   그 경우 원장 분모는 **exporter 가 저널 체결 × 계획 SL 로 재계산**한다(`export_risk_ledger.py` 3순위).
+3. **확정** (`_confirm_entry_risk`, ExitManager 등록 성공 **직후**, 주문당 1회):
+   `resolve_stop(dynamic_stop_pct=None, fixed_stop_pct=exit_params["stop_loss_pct"],
+   is_core=..., apply_crash_cap=False).stop_pct` — **등록에 쓴 것과 같은 설정·같은 창구**.
+   → `confirm_initial_risk(fills, stop_pct)` → `ExitManager.set_initial_risk(...)`.
+   `ValueError`(무효 손절·체결 0) 는 확정만 생략한다.
+4. **원장 기록** (`_entry_risk_context`): `_sig_context_snapshot` 머지 **이후**,
+   `record_entry` **이전**에 `market_context["entry_risk"] = merge_confirmed_risk(...)`.
+   스냅샷이 없으면 키 자체를 만들지 않는다(exporter 가 `legacy-unmeasured` 로 분류).
+   확정 전이면 계획값만 들어가고, 확정 시 `initial_risk_amount`/`actual_stop_pct`/`filled_quantity`/
+   `entry_cost`/`planned_vs_filled_risk_delta` 가 붙는다.
+5. **부분체결 뒤늦은 확정** (`_sync_journal_entry_risk`): 첫 체결에 이미 `record_entry` 된 레코드는
+   `trade_journal.update_market_context(trade_id, {"entry_risk": ...})` 로 갱신한다
+   (`TradeJournal` JSON 캐시 + `TradeStorage` 의 `UPDATE trades SET market_context=$1` 큐 — 기존 kwargs 시그니처 불변).
+   멱등: `merge_confirmed_risk` 가 이미 확정값이 있으면 그대로 돌려주고, `journal_synced` 로 중복 갱신을 막는다.
+   **완료한 진입의 분모 불변**: 같은 종목의 두 번째 매수 주문 lot 은 `set_initial_risk` 가 False 를 돌려주므로
+   (`em_confirmed=False`) 저널을 건드리지 않고, 레코드에 이미 `initial_risk_amount` 가 있으면 갱신을 건너뛴다.
+6. **등록 재시도**(`_pending_exit_registrations`) 성공 시 같은 확정을 재호출한다(멱등).
+   그때까지 해당 종목의 미확정 누적은 정리하지 않는다.
+7. **계획 SL ≠ 실제 SL**: 스냅샷의 `stop_pct`(계획)는 덮어쓰지 않고 `actual_stop_pct` 에 실제값을 둔다.
+   → canary 기술 검증 `stop_pct_mismatch` 가 발화한다(무음 통과 금지).
+8. **누수 방지**(`_prune_entry_lots`): 매 주기 끝에 미체결 목록에 없는 주문(완결·취소·만료)의 누적을 버린다.
+   단, ExitManager 등록 재시도 대기 중인 종목의 미확정 누적은 남긴다. 완결 판정 불가 시에는 정리하지 않는다.
+   버리기 전에 **주문 종료 = 주문 완료**로 보고 누적 체결로 확정한다(부분체결 뒤 잔여 취소·일자 전환).
+   등록 설정이 없어 확정할 수 없으면 `[위험계측] ... 주문 종료 — 초기 위험 미확정` 경고를 남긴다.
+
+> 다중 부분체결 진입은 저널 `entry_quantity`/`entry_price` 가 **첫 체결**로 고정된다(BUY 블록은
+> `trade_id` 미설정 시에만 돌고 갱신 API 가 없다). exporter 는 스냅샷에 `filled_quantity`/`entry_cost` 가
+> 있으면 매수 fill 을 그 값으로 만들어 `initial_risk_mismatch` 오탐을 막는다.
+
+테스트: `tests/test_entry_risk_lifecycle.py`(from_signal → 사이징 → 주문 캐시 → signal_events → 저장/복원 → exporter → canary),
+`tests/test_entry_risk_wiring.py`(단일 체결 확정 139주×10,000×5%=69,500원 · 부분체결 1회 확정·저널 갱신 ·
+등록 재시도 후 확정 · 스냅샷 없음 · 손절 무효 · 완결 판정 불가 · 캐시 수명 · SL 불일치 · exporter→canary 왕복).
 
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 
