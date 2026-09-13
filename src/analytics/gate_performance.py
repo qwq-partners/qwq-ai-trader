@@ -45,7 +45,10 @@ AVOIDANCE_THRESHOLD = -3.0    # -3% 이하 → 회피 성공
 # 분석 기본값
 DEFAULT_HORIZON_DAYS = 20     # 사후 추적 기간 (영업일)
 DEFAULT_LOOKBACK_DAYS = 90    # 조회 범위 (달력일)
-MIN_SAMPLES_PER_GATE = 5      # 게이트별 최소 표본 (미만이면 통계 무의미)
+MIN_SAMPLES_PER_GATE = 30     # 게이트별 최소 표본 — 고유 symbol-day 기준 (2026-09-13: 5는 n=6에도 판정을 냈음)
+STOP_CLIP_PCT = -5.0          # '회피한 손실'은 손절 구조상 이 아래로 실현되지 않는다 — 클립 수익률로 판정
+BENCH_SYMBOL = "069500"       # KODEX200 — 절대수익 대신 초과수익으로 판정 (베타 혼동 방지)
+CAPACITY_GATES = ("G5_",)     # 예산·현금 게이트는 선별이 아니라 용량 제약 — 판정 대상 아님
 
 
 def _is_kr_symbol(symbol: str) -> bool:
@@ -90,7 +93,7 @@ class GatePerformanceAnalyzer:
                        market_regime, event_time, metadata
                 FROM signal_events
                 WHERE side = 'buy'
-                  AND event_type IN ('blocked', 'passed')
+                  AND event_type IN ('blocked', 'passed', 'penalized')
                   AND event_time BETWEEN $1 AND $2
                 ORDER BY event_time
                 """,
@@ -182,9 +185,11 @@ class GatePerformanceAnalyzer:
 
         logger.info(f"[게이트분석] 가격 조회: {len(symbols)}종목 ({start}~{end})")
         prices = await asyncio.to_thread(self._load_prices, symbols, start, end)
+        bench_df = (await asyncio.to_thread(self._load_prices, [BENCH_SYMBOL], start, end)).get(BENCH_SYMBOL)
 
-        # 게이트별 집계
+        # 게이트별 집계 — 고유 (게이트, 종목, 일) 1건 (G1은 5분마다 상위 5개를 재기록해 13배 부풀렸음)
         buckets: Dict[str, List[Dict]] = defaultdict(list)
+        seen: set = set()
         for s in kr_signals:
             df = prices.get(s["symbol"])
             if df is None:
@@ -192,9 +197,12 @@ class GatePerformanceAnalyzer:
             ret = self._forward_return(df, s["event_time"])
             if ret is None:
                 continue
+            bench_ret = self._forward_return(bench_df, s["event_time"]) if bench_df is not None else None
 
             if s["event_type"] == "passed":
                 gate = "PASSED(대조군)"
+            elif s["event_type"] == "penalized":
+                gate = f"PEN_{s.get('block_gate') or 'UNKNOWN'}"   # 감점·soft-reject (G4 LLM 등) — 이전엔 미측정
             else:
                 gate = s.get("block_gate") or "UNKNOWN"
             # 2026-09-13 WikiSkill 계측: G4 LLM 2차 검증에 위키 컨텍스트가 있었던 건은 별도 버킷
@@ -208,6 +216,10 @@ class GatePerformanceAnalyzer:
             if isinstance(_wc, dict) and _wc.get("wiki"):
                 gate = f"{gate}|wiki"
 
+            dkey = (gate, s["symbol"], s["event_time"].date())
+            if dkey in seen:
+                continue
+            seen.add(dkey)
             buckets[gate].append({
                 "symbol": s["symbol"],
                 "name": s.get("name") or "",
@@ -217,6 +229,8 @@ class GatePerformanceAnalyzer:
                 "reason": (s.get("block_reason") or "")[:80],
                 "event_time": s["event_time"].isoformat(),
                 "forward_return": round(ret, 2),
+                "forward_excess": round(ret - bench_ret, 2) if bench_ret is not None else None,
+                "forward_clipped": round(max(ret, STOP_CLIP_PCT), 2),
             })
 
         gates: Dict[str, Any] = {}
@@ -226,9 +240,13 @@ class GatePerformanceAnalyzer:
             opportunity = [r for r in rets if r >= OPPORTUNITY_THRESHOLD]
             avoided = [r for r in rets if r <= AVOIDANCE_THRESHOLD]
 
+            _xs = [x["forward_excess"] for x in items if x.get("forward_excess") is not None]
+            _cl = [x["forward_clipped"] for x in items]
             gates[gate] = {
                 "samples": n,
                 "avg_return": round(sum(rets) / n, 2) if n else 0.0,
+                "avg_excess": round(sum(_xs) / len(_xs), 2) if _xs else None,
+                "avg_clipped": round(sum(_cl) / len(_cl), 2) if _cl else None,
                 "median_return": round(sorted(rets)[n // 2], 2) if n else 0.0,
                 "opportunity_loss_cnt": len(opportunity),
                 "opportunity_loss_pct": round(len(opportunity) / n * 100, 1) if n else 0.0,
@@ -256,34 +274,43 @@ class GatePerformanceAnalyzer:
         control = gates.get("PASSED(대조군)")
         control_avg = control["avg_return"] if control and control["samples"] >= MIN_SAMPLES_PER_GATE else None
 
+        # 판정 지표: 초과수익(KODEX200 대비)이 있으면 그것, 없으면 절대수익 (2026-09-13)
+        use_excess = control is not None and control.get("avg_excess") is not None
+        if use_excess:
+            control_avg = control["avg_excess"] if control["samples"] >= MIN_SAMPLES_PER_GATE else None
         for gate, g in sorted(gates.items(), key=lambda kv: -kv[1]["samples"]):
             if gate.startswith("PASSED"):
                 continue
             n = g["samples"]
+            if gate.startswith(CAPACITY_GATES):
+                verdicts.append(f"{gate}: 용량 게이트(예산·현금) — 선별 판정 대상 아님 ({n}건, 평균 {g['avg_return']:+.2f}%)")
+                continue
             if n < MIN_SAMPLES_PER_GATE:
-                verdicts.append(f"{gate}: 표본 부족 ({n}건) — 판단 보류")
+                verdicts.append(f"{gate}: 표본 부족 ({n}건 < {MIN_SAMPLES_PER_GATE}) — 판단 보류")
                 continue
 
-            avg = g["avg_return"]
+            avg = g["avg_excess"] if (use_excess and g.get("avg_excess") is not None) else g["avg_return"]
             opp = g["opportunity_loss_pct"]
 
-            if avg > 0 and (control_avg is None or avg > control_avg):
+            _lbl = "초과" if use_excess else "절대"
+            _clip = f", 손절클립 {g['avg_clipped']:+.2f}%" if g.get("avg_clipped") is not None else ""
+            if control_avg is not None and avg > control_avg and avg > 0:
                 verdicts.append(
-                    f"⚠️ {gate}: 차단한 신호가 평균 {avg:+.2f}% 상승 "
-                    f"(기회손실 {opp:.0f}%, {n}건) — 게이트가 수익을 버리고 있음. 완화 검토"
+                    f"⚠️ {gate}: 차단 신호 {_lbl} {avg:+.2f}% > 통과 {control_avg:+.2f}% "
+                    f"(기회손실 {opp:.0f}%, {n}건{_clip}) — 게이트가 수익을 버리고 있음. 완화 검토"
                 )
-            elif avg <= AVOIDANCE_THRESHOLD:
+            elif avg <= AVOIDANCE_THRESHOLD and (control_avg is None or avg < control_avg):
                 verdicts.append(
-                    f"✅ {gate}: 차단한 신호가 평균 {avg:+.2f}% 하락 "
-                    f"(회피성공 {g['avoided_pct']:.0f}%, {n}건) — 게이트가 제 역할 중"
+                    f"✅ {gate}: 차단 신호 {_lbl} {avg:+.2f}% < 통과 {control_avg if control_avg is not None else 0:+.2f}% "
+                    f"(회피 {g['avoided_pct']:.0f}%, {n}건{_clip}) — 선별 효과 있음"
                 )
             else:
                 verdicts.append(
-                    f"➖ {gate}: 평균 {avg:+.2f}% ({n}건) — 유의미한 효과 불명확"
+                    f"➖ {gate}: {_lbl} {avg:+.2f}% vs 통과 {control_avg if control_avg is not None else 0:+.2f}% ({n}건{_clip}) — 효과 불명확"
                 )
 
         if control_avg is not None:
-            verdicts.insert(0, f"[대조군] 통과 신호 평균 {control_avg:+.2f}% ({control['samples']}건)")
+            verdicts.insert(0, f"[대조군] 통과 신호 {'초과' if use_excess else '절대'} {control_avg:+.2f}% ({control['samples']}건, 고유 symbol-day)")
         return verdicts
 
     def _save(self, result: Dict[str, Any]) -> None:

@@ -127,6 +127,46 @@ class CounterfactualTracker:
         return added
 
     # ── 갱신 ───────────────────────────────────────────────
+    def summary(self) -> str:
+        """소스별 요약 + KODEX200 대비 초과수익(x5) 한 줄 — 판정은 초과수익 기준으로 읽을 것"""
+        base = self._summary_base()
+        try:
+            groups: Dict[str, List[float]] = {}
+            for v in self._state.values():
+                if v.get("x5") is not None:
+                    groups.setdefault(str(v.get("source")), []).append(float(v["x5"]))
+            if groups:
+                parts = [
+                    f"{src} n={len(xs)} x5 {sum(xs) / len(xs):+.2f}% (음수 {sum(1 for x in xs if x < 0) / len(xs) * 100:.0f}%)"
+                    for src, xs in sorted(groups.items())
+                ]
+                base += "\n· KODEX200 대비 초과(r5): " + " | ".join(parts)
+        except Exception:
+            pass
+        return base
+
+    @staticmethod
+    def _rows(prices) -> List[tuple]:
+        """get_daily_prices 응답(오래된 순) → [(YYYY-MM-DD, 종가)]"""
+        rows: List[tuple] = []
+        for bar in prices or []:
+            d = str(bar.get("date", "") or bar.get("stck_bsop_date", ""))
+            c = float(bar.get("close", 0) or bar.get("stck_clpr", 0) or 0)
+            if len(d) == 8 and c > 0:
+                rows.append((f"{d[:4]}-{d[4:6]}-{d[6:]}", c))
+        return rows
+
+    @staticmethod
+    def _pending_order(state: Dict[str, Dict[str, Any]]) -> List[tuple]:
+        """미완성 항목 처리 순서 — 아직 가격도 없는 항목(entry_px None) 먼저, 그다음 오래된 순.
+
+        2026-09-13 리뷰: 삽입순 상위 50개만 처리해 r20 대기 항목이 슬롯을 점유 → 08-24 이후
+        신규 126건이 한 번도 가격 조회되지 않아 승격 지표가 8/2~8/24 코호트에 동결됐던 결함.
+        """
+        pending = [(k, v) for k, v in state.items() if v.get("r20") is None]
+        pending.sort(key=lambda kv: (kv[1].get("entry_px") is not None, str(kv[1].get("date", ""))))
+        return pending
+
     async def update(self, broker) -> Dict[str, int]:
         """미완성 항목의 가상 진입가·후속 수익률 채움 (일일 1회 호출)"""
         added = self._ingest_sources()
@@ -141,11 +181,16 @@ class CounterfactualTracker:
         except Exception:
             pass
         filled = 0
-        pending = [
-            (k, v) for k, v in self._state.items()
-            if v.get("r20") is None  # r20까지 완성되면 종료
-        ]
-        for key, entry in pending[:50]:  # 호출당 상한 (API 보호)
+        pending = self._pending_order(self._state)
+        # 벤치마크(KODEX200) 일봉 1회 — r5/r20에 대응하는 초과수익 x5/x20 (2026-09-13 리뷰:
+        # 절대수익 판정이 시장 베타에 휘둘려 04-23·08-20 결정이 뒤집힌 문제)
+        bench_rows: List[tuple] = []
+        try:
+            _b = await broker.get_daily_prices("069500", days=45)
+            bench_rows = self._rows(_b or [])
+        except Exception as _be:
+            logger.debug(f"[CF추적] 벤치마크 조회 실패 (초과수익 생략): {_be}")
+        for key, entry in pending[:150]:  # 호출당 상한 — 시세 TR(원장 무관), 공용 리미터 10/s 하에서 ~15초
             try:
                 prices = await broker.get_daily_prices(entry["symbol"], days=45)
                 if not prices or len(prices) < 2:
@@ -166,12 +211,23 @@ class CounterfactualTracker:
                 if entry.get("entry_px") is None:
                     entry["entry_px"] = rows[idx0][1]
                 base = entry["entry_px"]
+                # 벤치마크 기준점 (같은 감지일)
+                bidx0 = next((i for i, (d, _) in enumerate(bench_rows) if d >= entry["date"]), None) if bench_rows else None
                 for field, n in _HORIZONS:
                     if entry.get(field) is None and idx0 + n < len(rows):
                         entry[field] = round(
                             (rows[idx0 + n][1] - base) / base * 100, 2
                         )
                         filled += 1
+                # KODEX200 대비 초과수익 (x1/x5/x20) — 판정은 이 값과 손절 클립을 우선 사용
+                if bench_rows and bidx0 is not None:
+                    for field, n in _HORIZONS:
+                        xf = "x" + field[1:]
+                        if entry.get(xf) is None and entry.get(field) is not None and bidx0 + n < len(bench_rows):
+                            _bb = bench_rows[bidx0][1]
+                            if _bb > 0:
+                                _br = (bench_rows[bidx0 + n][1] - _bb) / _bb * 100
+                                entry[xf] = round(float(entry[field]) - _br, 2)
             except Exception as e:
                 logger.debug(f"[CF추적] {key} 갱신 실패: {e}")
         if added or filled:
@@ -180,7 +236,7 @@ class CounterfactualTracker:
         return {"added": added, "filled": filled}
 
     # ── 요약 (주간 성적표) ──────────────────────────────────
-    def summary(self) -> str:
+    def _summary_base(self) -> str:
         """소스별 차단 정확도 요약 — rN < 0 이면 '손실 회피 적중'"""
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for v in self._state.values():
