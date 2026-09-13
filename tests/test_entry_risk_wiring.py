@@ -66,21 +66,28 @@ class _Order:
 
 
 class _Journal:
-    """record_entry / update_market_context 만 가진 가짜 저널."""
+    """record_entry / get_trade / update_market_context 만 가진 가짜 저널."""
 
     def __init__(self):
         self.entries = []          # record_entry kwargs
         self.updates = []          # (trade_id, patch)
+        self.records = {}          # trade_id → SimpleNamespace(market_context)
 
     def record_entry(self, **kw):
         self.entries.append(kw)
-        return SimpleNamespace(id=f"T_{len(self.entries)}")
+        rec = SimpleNamespace(id=f"T_{len(self.entries)}",
+                              market_context=dict(kw.get("market_context") or {}))
+        self.records[rec.id] = rec
+        return rec
+
+    def get_trade(self, trade_id):
+        return self.records.get(trade_id)
 
     def update_market_context(self, trade_id, patch):
         self.updates.append((trade_id, patch))
-        for e in self.entries:
-            if e.get("trade_id") and e["trade_id"].startswith("005930"):
-                pass
+        rec = self.records.get(trade_id)
+        if rec is not None:
+            rec.market_context.update(patch)
         return True
 
 
@@ -377,6 +384,8 @@ def test_second_order_gets_its_own_lot(monkeypatch):
     _drive(monkeypatch, sched, bot, sleeps,
            [_buy_fill(SYM, qty=QTY, price=str(PRICE))], open_after=[])
     first = list(bot.exit_manager.initial_risks)
+    er_first = _entry_risk_of(bot.trade_journal)
+    assert Decimal(er_first["initial_risk_amount"]) == Decimal("69500")
 
     bot.engine.portfolio.positions[SYM].trade_id = "T_1"
     second = Fill(order_id="o2", symbol=SYM, side=OrderSide.BUY, quantity=10, price=PRICE)
@@ -384,4 +393,80 @@ def test_second_order_gets_its_own_lot(monkeypatch):
 
     # 두 번째 주문도 자기 체결만으로 확정하지만 ExitManager 분모는 최초 1회로 불변
     assert bot.exit_manager.initial_risks == first
+    assert sched._entry_fill_lots == {}
+    # 원장 계층도 불변 — 기존 거래(T_1)의 entry_risk 를 두 번째 lot 이 덮어쓰지 않는다
+    assert bot.trade_journal.updates == []
+    assert bot.trade_journal.get_trade("T_1").market_context["entry_risk"] == er_first
+
+
+# ── 11. 다중 부분체결 → exporter → canary 왕복 (technical passed) ───────────────
+
+def test_multi_partial_fill_roundtrips_to_canary_technical_passed(tmp_path, monkeypatch):
+    """저널 entry_quantity 는 첫 체결(100주)로 고정 — exporter 가 스냅샷 누적으로 보정해야 한다."""
+    sched, bot, sleeps = _setup(monkeypatch, snapshot=_snapshot())
+    order_id = f"o-{SYM}"
+    _drive(monkeypatch, sched, bot, sleeps,
+           [_buy_fill(SYM, qty=100, price=str(PRICE))], open_after=[order_id])
+    bot.engine.portfolio.positions[SYM].trade_id = "T_1"
+    _drive(monkeypatch, sched, bot, sleeps,
+           [_buy_fill(SYM, qty=39, price=str(PRICE))], open_after=[])
+
+    e = bot.trade_journal.entries[-1]
+    assert e["entry_quantity"] == 100                       # 저널은 첫 체결로 고정
+    er = bot.trade_journal.get_trade("T_1").market_context["entry_risk"]
+    assert er["filled_quantity"] == QTY                     # 확정값은 누적 139주
+
+    trade = SimpleNamespace(
+        id="T_1", symbol=e["symbol"], name=e["name"], entry_time=datetime(2026, 9, 14, 10, 30),
+        entry_price=e["entry_price"], entry_quantity=e["entry_quantity"],
+        entry_strategy=e["entry_strategy"], market_context={"entry_risk": er},
+        exit_time=None, exit_price=None, exit_quantity=0, exit_reason="", exit_type="", pnl=None,
+    )
+    ledger = exporter.build_ledger([trade], {}, applied_sha=SHA)
+    buys = [f for f in ledger["positions"][0]["fills"] if f["side"] == "buy"]
+    assert [b["quantity"] for b in buys] == [QTY]
+    assert Decimal(buys[0]["price"]) * QTY == PRICE * QTY
+
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, default=str), encoding="utf-8")
+    out = tmp_path / "report.json"
+    assert canary.main(["--input", str(ledger_path), "--cohort", "risk-sepa_trend-v1",
+                        "--output", str(out), "--sha", SHA]) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["technical_status"] == "passed", report["technical_issues"]
+
+
+# ── 12. 계측 예외는 체결 처리·저널을 끊지 않는다 ───────────────────────────────
+
+def test_confirmation_exception_does_not_break_fill_processing(monkeypatch):
+    sched, bot, sleeps = _setup(monkeypatch, snapshot=_snapshot())
+
+    def _boom(*a, **kw):
+        raise RuntimeError("계측 경로 예외")
+
+    monkeypatch.setattr(sched, "_confirm_entry_risk", _boom)
+    _drive(monkeypatch, sched, bot, sleeps,
+           [_buy_fill(SYM, qty=QTY, price=str(PRICE))], open_after=[])
+
+    assert bot.exit_manager.registered                  # 등록 완료
+    assert len(bot.trade_journal.entries) == 1          # 저널 BUY 기록까지 진행
+    assert bot.exit_manager.initial_risks == []         # 계측만 생략
+    assert sched._pending_exit_registrations == set()
+
+
+# ── 13. 부분체결 후 잔여 취소 → 누적 체결로 확정 (주문 종료 = 완료) ────────────
+
+def test_cancelled_remainder_confirms_with_accumulated_fills(monkeypatch):
+    sched, bot, sleeps = _setup(monkeypatch, snapshot=_snapshot())
+    _drive(monkeypatch, sched, bot, sleeps,
+           [_buy_fill(SYM, qty=100, price=str(PRICE))], open_after=[f"o-{SYM}"])
+    assert bot.exit_manager.initial_risks == []
+    bot.engine.portfolio.positions[SYM].trade_id = "T_1"
+
+    # 잔여 39주가 취소·만료돼 미체결 목록에서 사라짐 (추가 체결 없음)
+    _drive(monkeypatch, sched, bot, sleeps, [], open_after=[])
+
+    assert bot.exit_manager.initial_risks == [(SYM, Decimal("50000"), STOP)]   # 체결 100주 기준
+    assert bot.trade_journal.updates and bot.trade_journal.updates[0][0] == "T_1"
+    assert Decimal(bot.trade_journal.updates[0][1]["entry_risk"]["initial_risk_amount"]) == Decimal("50000")
     assert sched._entry_fill_lots == {}

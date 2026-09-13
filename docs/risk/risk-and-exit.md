@@ -476,7 +476,8 @@ venv/bin/python scripts/review_risk_canary.py --input ledger.json --cohort risk-
    (수명은 엔진 `on_fill` 완결·`clear_pending` 한 곳에 맡긴다).
 2. **완결 판정**: `check_fills()` 직후의 `broker.get_open_orders()`(인메모리) 에 주문 id 가 없으면 완결.
    단일 체결로 끝나는 일반 경로는 첫 체결에서 바로 확정된다. 주문 id 를 읽을 수 없거나 조회가 실패하면
-   **확정하지 않는다** — 계획 위험을 과소 분모로 박느니 exporter 가 계획값으로 남기게 두고 경고를 남긴다.
+   **확정하지 않는다** — 과소 분모를 박느니 스냅샷의 `initial_risk_amount` 를 비워 두고 경고를 남긴다.
+   그 경우 원장 분모는 **exporter 가 저널 체결 × 계획 SL 로 재계산**한다(`export_risk_ledger.py` 3순위).
 3. **확정** (`_confirm_entry_risk`, ExitManager 등록 성공 **직후**, 주문당 1회):
    `resolve_stop(dynamic_stop_pct=None, fixed_stop_pct=exit_params["stop_loss_pct"],
    is_core=..., apply_crash_cap=False).stop_pct` — **등록에 쓴 것과 같은 설정·같은 창구**.
@@ -491,12 +492,20 @@ venv/bin/python scripts/review_risk_canary.py --input ledger.json --cohort risk-
    `trade_journal.update_market_context(trade_id, {"entry_risk": ...})` 로 갱신한다
    (`TradeJournal` JSON 캐시 + `TradeStorage` 의 `UPDATE trades SET market_context=$1` 큐 — 기존 kwargs 시그니처 불변).
    멱등: `merge_confirmed_risk` 가 이미 확정값이 있으면 그대로 돌려주고, `journal_synced` 로 중복 갱신을 막는다.
+   **완료한 진입의 분모 불변**: 같은 종목의 두 번째 매수 주문 lot 은 `set_initial_risk` 가 False 를 돌려주므로
+   (`em_confirmed=False`) 저널을 건드리지 않고, 레코드에 이미 `initial_risk_amount` 가 있으면 갱신을 건너뛴다.
 6. **등록 재시도**(`_pending_exit_registrations`) 성공 시 같은 확정을 재호출한다(멱등).
    그때까지 해당 종목의 미확정 누적은 정리하지 않는다.
 7. **계획 SL ≠ 실제 SL**: 스냅샷의 `stop_pct`(계획)는 덮어쓰지 않고 `actual_stop_pct` 에 실제값을 둔다.
    → canary 기술 검증 `stop_pct_mismatch` 가 발화한다(무음 통과 금지).
 8. **누수 방지**(`_prune_entry_lots`): 매 주기 끝에 미체결 목록에 없는 주문(완결·취소·만료)의 누적을 버린다.
    단, ExitManager 등록 재시도 대기 중인 종목의 미확정 누적은 남긴다. 완결 판정 불가 시에는 정리하지 않는다.
+   버리기 전에 **주문 종료 = 주문 완료**로 보고 누적 체결로 확정한다(부분체결 뒤 잔여 취소·일자 전환).
+   등록 설정이 없어 확정할 수 없으면 `[위험계측] ... 주문 종료 — 초기 위험 미확정` 경고를 남긴다.
+
+> 다중 부분체결 진입은 저널 `entry_quantity`/`entry_price` 가 **첫 체결**로 고정된다(BUY 블록은
+> `trade_id` 미설정 시에만 돌고 갱신 API 가 없다). exporter 는 스냅샷에 `filled_quantity`/`entry_cost` 가
+> 있으면 매수 fill 을 그 값으로 만들어 `initial_risk_mismatch` 오탐을 막는다.
 
 테스트: `tests/test_entry_risk_lifecycle.py`(from_signal → 사이징 → 주문 캐시 → signal_events → 저장/복원 → exporter → canary),
 `tests/test_entry_risk_wiring.py`(단일 체결 확정 139주×10,000×5%=69,500원 · 부분체결 1회 확정·저널 갱신 ·

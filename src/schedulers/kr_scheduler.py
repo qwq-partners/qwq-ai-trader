@@ -1917,7 +1917,9 @@ JSON:
         """진입 위험 확정용 매수 체결 누적 — 주문 단위 key `"<order_id>|<symbol>"`.
 
         값: `{"symbol", "signal"(체결 시점 시그널 메타 복사본), "fills":[{price,quantity,fee}],
-        "confirmed", "initial_risk_amount", "actual_stop_pct", "journal_synced"}`.
+        "confirmed", "em_confirmed"(ExitManager 가 이 lot 으로 분모를 처음 박았는가),
+        "exit_params"(등록에 쓴 청산 설정 — 주문 취소 정리 시 확정용),
+        "initial_risk_amount", "actual_stop_pct", "journal_synced"}`.
         `__init__` 을 거치지 않고 생성되는 특성화 테스트의 스케줄러와도 맞물리도록 지연 생성한다.
         """
         lots = self.__dict__.get("_entry_fill_lots_store")
@@ -1959,6 +1961,8 @@ JSON:
                     "signal": dict(_cache.get(fill.symbol) or {}),
                     "fills": [],
                     "confirmed": False,
+                    "em_confirmed": False,
+                    "exit_params": None,
                     "initial_risk_amount": None,
                     "actual_stop_pct": None,
                     "journal_synced": False,
@@ -1979,11 +1983,15 @@ JSON:
         """주문 완결 시 **1회** — 실제 등록 SL 로 초기 위험금액(R 분모)을 확정한다.
 
         `order_complete` 가 None(판정 불가)이면 확정하지 않는다 — 위험을 과소 분모로 박아
-        canary 판정을 오염시키느니 exporter 가 계획값으로 남기게 둔다(로그로 남긴다).
+        canary 판정을 오염시키느니 스냅샷의 `initial_risk_amount` 를 비워 둔다(로그로 남긴다).
+        exporter 는 그 경우 저널 체결 × 계획 SL 로 분모를 재계산한다.
         ExitManager 등록이 성공한 직후에만 호출한다(등록 재시도 성공 경로 포함, 재호출 멱등).
         """
         if lot is None or lot.get("confirmed"):
             return
+        # 등록에 쓴 청산 설정을 남긴다 — 주문 취소·일자 전환 정리(`_prune_entry_lots`)에서
+        # 누적 체결로 확정할 때 같은 설정·같은 창구를 쓰기 위함
+        lot["exit_params"] = exit_params
         if not order_complete:
             if order_complete is None:
                 logger.warning(f"[위험계측] {symbol} 주문 완결 판정 불가 — 초기 위험금액 확정 보류")
@@ -2004,8 +2012,10 @@ JSON:
             logger.warning(f"[위험계측] {symbol} 초기 위험금액 확정 생략 (손절 설정·체결 무효): {e}")
             return
         try:
-            em.set_initial_risk(symbol, amount, stop_pct)
+            # False = 이 종목 분모는 이미 다른(먼저 온) 주문으로 확정됨 → 저널도 건드리지 않는다
+            lot["em_confirmed"] = bool(em.set_initial_risk(symbol, amount, stop_pct))
         except Exception as e:
+            lot["em_confirmed"] = False
             logger.warning(f"[위험계측] {symbol} ExitManager 초기 위험 기록 실패: {e}")
         lot["confirmed"] = True
         lot["initial_risk_amount"] = amount
@@ -2033,14 +2043,34 @@ JSON:
 
         단일 체결로 완결되는 일반 경로는 `record_entry` 가 확정값을 바로 넣으므로 여기서 할 일이
         없다(그 시점엔 `trade_id` 미설정). 부분체결·등록 재시도로 확정이 늦어진 경우만 동작한다.
+
+        **완료한 진입의 초기 위험금액은 바꾸지 않는다** (계획서 T3). 같은 종목의 두 번째 매수 주문은
+        자기 lot 으로 확정을 시도하지만, 기존 거래(`pos.trade_id`)의 분모를 덮어쓰면 안 되므로
+        ① ExitManager 가 이 lot 으로 처음 박은 경우(`em_confirmed`)가 아니거나
+        ② 저널 레코드에 이미 `initial_risk_amount` 가 있으면 갱신을 건너뛴다.
         """
         if lot is None or not lot.get("confirmed") or lot.get("journal_synced"):
             return
+        if not lot.get("em_confirmed"):
+            lot["journal_synced"] = True     # 분모는 먼저 온 주문이 확정 — 추가 매수는 기록하지 않는다
+            return
         pos = self.bot.engine.portfolio.positions.get(symbol)
         trade_id = getattr(pos, "trade_id", None) if pos is not None else None
-        updater = getattr(getattr(self.bot, "trade_journal", None), "update_market_context", None)
+        journal = getattr(self.bot, "trade_journal", None)
+        updater = getattr(journal, "update_market_context", None)
         if not trade_id or updater is None:
             return
+        getter = getattr(journal, "get_trade", None)
+        try:
+            record = getter(trade_id) if getter is not None else None
+        except Exception:
+            record = None
+        if record is not None:
+            _ctx = getattr(record, "market_context", None)
+            _prev = (_ctx or {}).get("entry_risk") if isinstance(_ctx, dict) else None
+            if isinstance(_prev, dict) and _prev.get("initial_risk_amount") is not None:
+                lot["journal_synced"] = True
+                return
         merged = self._entry_risk_context(lot, (lot.get("signal") or {}).get("metadata", {}))
         if not merged:
             return
@@ -2058,6 +2088,8 @@ JSON:
         """완결·취소된 주문의 체결 누적을 정리한다 (캐시 누수 방지).
 
         ExitManager 등록 재시도 대기 중인 종목의 미확정 lot 은 확정 기회를 남기려 보관한다.
+        부분체결 뒤 잔여가 취소·만료돼도 **주문 종료 = 주문 완료**이므로, 이미 등록된 종목은
+        여기서 누적 체결로 확정한다. 확정할 수 없으면 경고를 남긴다(runbook 의 '로그로 확인').
         """
         if open_ids is None:
             return
@@ -2066,6 +2098,20 @@ JSON:
                 continue   # 잔여 미체결 있음 — 주문 진행 중
             if not lot.get("confirmed") and lot.get("symbol") in self._pending_exit_registrations:
                 continue
+            if not lot.get("confirmed"):
+                _sym = lot.get("symbol") or "?"
+                try:
+                    if lot.get("exit_params") is not None:
+                        self._confirm_entry_risk(_sym, lot, lot["exit_params"], True)
+                        self._sync_journal_entry_risk(_sym, lot)
+                except Exception as e:
+                    logger.warning(f"[위험계측] {_sym} 주문 종료 정리 중 확정 실패 (계측만 생략): {e}")
+                if not lot.get("confirmed"):
+                    logger.warning(
+                        f"[위험계측] {_sym} 주문 종료 — 초기 위험 미확정 "
+                        f"(누적 {sum(f['quantity'] for f in lot.get('fills') or [])}주, "
+                        f"원장 분모는 exporter 가 저널 체결 × 계획 SL 로 재계산)"
+                    )
             self._entry_fill_lots.pop(key, None)
 
     async def run_fill_check(self):
@@ -2408,10 +2454,14 @@ JSON:
                                         self._pending_exit_registrations.add(fill.symbol)
                                         logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열: {e}")
                                     # 등록 성공 직후 초기 위험 확정 (주문 완결 시 1회, 계측 전용)
+                                    # 계측 예외가 이후 저널 기록·WS 구독을 끊지 못하게 통째로 감싼다
                                     if _registered_ok:
-                                        self._confirm_entry_risk(fill.symbol, _entry_lot,
-                                                                 exit_params, _order_done)
-                                        self._sync_journal_entry_risk(fill.symbol, _entry_lot)
+                                        try:
+                                            self._confirm_entry_risk(fill.symbol, _entry_lot,
+                                                                     exit_params, _order_done)
+                                            self._sync_journal_entry_risk(fill.symbol, _entry_lot)
+                                        except Exception as _ere:
+                                            logger.warning(f"[위험계측] {fill.symbol} 진입 위험 확정 생략 (매매 영향 없음): {_ere}")
                                 else:
                                     # 포지션 미생성 — 다음 fill_check 주기에 재시도
                                     self._pending_exit_registrations.add(fill.symbol)
@@ -2631,12 +2681,16 @@ JSON:
                                     )
                                     _retry_done.add(_retry_sym)
                                     logger.info(f"[체결] {_retry_sym} ExitManager 재시도 등록 성공")
-                                    # 등록이 늦어 미뤄둔 초기 위험 확정 (멱등 — 이미 확정분은 건너뜀)
-                                    for _lot_key, _lot in self._entry_lots_for(_retry_sym):
-                                        _lot_done = (None if _open_ids is None else
-                                                     _lot_key.split("|", 1)[0] not in _open_ids)
-                                        self._confirm_entry_risk(_retry_sym, _lot, _retry_params, _lot_done)
-                                        self._sync_journal_entry_risk(_retry_sym, _lot)
+                                    # 등록이 늦어 미뤄둔 초기 위험 확정 (멱등 — 이미 확정분은 건너뜀).
+                                    # 계측 예외가 재시도 처리·나머지 종목을 끊지 못하게 감싼다.
+                                    try:
+                                        for _lot_key, _lot in self._entry_lots_for(_retry_sym):
+                                            _lot_done = (None if _open_ids is None else
+                                                         _lot_key.split("|", 1)[0] not in _open_ids)
+                                            self._confirm_entry_risk(_retry_sym, _lot, _retry_params, _lot_done)
+                                            self._sync_journal_entry_risk(_retry_sym, _lot)
+                                    except Exception as _ere:
+                                        logger.warning(f"[위험계측] {_retry_sym} 진입 위험 확정 생략 (매매 영향 없음): {_ere}")
                                 except Exception as _re:
                                     logger.warning(f"[체결] {_retry_sym} ExitManager 재시도 등록 실패: {_re}")
                             elif _retry_sym not in bot.engine.portfolio.positions:

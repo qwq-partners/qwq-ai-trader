@@ -135,8 +135,9 @@ venv/bin/python scripts/review_risk_canary.py --input /tmp/ledger.json \
   현재 설정으로 초기 위험을 추정해 표본에 넣지 않는다.
 - `status` 는 `insufficient_sample` / `hold_expansion` / `further_review` 뿐이다 —
   **nominal 자동 복귀 권고는 출력되지 않는다**(모드 전환은 사람이 판단).
-- 확정이 보류된 건: 로그에서 `[위험계측] ... 주문 완결 판정 불가` / `... 확정 생략` 을 확인한다.
-  이 경우 원장에는 계획 위험만 남는다.
+- 확정이 보류된 건: 로그에서 `[위험계측] ... 주문 완결 판정 불가` / `... 확정 생략` /
+  `... 주문 종료 — 초기 위험 미확정` 을 확인한다. 이 경우 스냅샷의 `initial_risk_amount` 는 비고,
+  원장 분모는 **exporter 가 저널 체결 × 계획 SL 로 재계산**한다(계획 위험만 남는 것이 아니다).
 
 ## 가상 오피스 (`/office`, 2026-08-03~)
 

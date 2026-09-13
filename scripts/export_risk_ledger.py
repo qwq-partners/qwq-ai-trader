@@ -19,6 +19,9 @@
   → ②**보유 중(open)** 포지션에 한해 ExitManager 영속 상태 → ③매수 체결 × `entry_risk.stop_pct`.
   ExitManager 상태는 완전 청산 시 삭제되므로 closed 거래에는 적용하지 않는다 —
   같은 종목을 재보유 중이면 현재 포지션 값이 옛 거래에 오귀속된다.
+- 매수 leg: 저널 `entry_price`/`entry_quantity` 는 **첫 체결**로 고정되므로, 확정 스냅샷에
+  `filled_quantity`/`entry_cost` 가 있으면 그 값(수량=`filled_quantity`,
+  가격=`entry_cost`/`filled_quantity`)으로 만든다 — 다중 부분체결 진입의 `initial_risk_mismatch` 방지.
 - `net_pnl` 은 원장의 누적 `trade.pnl`(수수료 포함)이 정본이다. 분할 매도는 저널이
   `exit_price` 를 마지막 leg 로 덮어쓰므로 체결 재구성값을 쓰면 체계적으로 틀린다.
 - 매도 leg: `--source db` 는 `trade_events` SELL 행에서 그대로 복원한다. journal 소스에서
@@ -122,15 +125,35 @@ def _reconstructed_sell(trade: Any, pnl: Decimal, buy_amount: Decimal, buy_fee: 
     }
 
 
-def _fills_and_exits(trade: Any, fee_calc, closed: bool):
+def _buy_leg(trade: Any, snapshot: Optional[Dict[str, Any]]):
+    """(수량, 가격) — 다중 부분체결 진입은 저널이 아니라 스냅샷의 누적 체결이 정본.
+
+    저널 `entry_quantity`/`entry_price` 는 **첫 체결**로 고정된다(BUY 블록은 `trade_id` 미설정
+    시에만 돌고 갱신 API 가 없다). 반면 `entry_risk.initial_risk_amount` 는 주문 전체의 누적
+    수량으로 확정되므로, 매수 fill 을 저널 값으로 만들면 canary 가 `initial_risk_mismatch` 를
+    발화한다. 확정 스냅샷에 `filled_quantity`/`entry_cost` 가 있으면 그 쪽을 쓴다.
+    """
+    quantity = _positive_int(trade.entry_quantity)
+    price = _dec(trade.entry_price)
+    if isinstance(snapshot, dict):
+        filled = _positive_int(snapshot.get("filled_quantity"))
+        cost = _dec(snapshot.get("entry_cost"))
+        if filled > 0 and cost is not None and cost > 0 and filled != quantity:
+            return filled, cost / filled
+    return quantity, (price if price is not None else Decimal("0"))
+
+
+def _fills_and_exits(trade: Any, fee_calc, closed: bool,
+                     snapshot: Optional[Dict[str, Any]] = None):
     """(fills, exits, exits_aggregated) — 매수 1건 + 매도 leg 들."""
-    buy_amount = Decimal(str(trade.entry_price)) * int(trade.entry_quantity)
+    buy_quantity, buy_price = _buy_leg(trade, snapshot)
+    buy_amount = buy_price * buy_quantity
     buy_fee = fee_calc.calculate_buy_fee(buy_amount)
     fills = [{
         "ts": _iso(trade.entry_time),
         "side": "buy",
-        "price": str(Decimal(str(trade.entry_price))),
-        "quantity": int(trade.entry_quantity),
+        "price": str(buy_price),
+        "quantity": buy_quantity,
         "fee": str(buy_fee),
     }]
     exits: List[Dict[str, Any]] = []
@@ -208,7 +231,7 @@ def build_ledger(trades: Sequence[Any], exit_states: Dict[str, Dict],
         if not isinstance(snapshot, dict):
             snapshot = None
         closed = _positive_int(trade.exit_quantity) >= int(trade.entry_quantity) > 0
-        fills, exits, aggregated = _fills_and_exits(trade, fee_calc, closed)
+        fills, exits, aggregated = _fills_and_exits(trade, fee_calc, closed, snapshot)
 
         # ExitManager 상태는 **보유 중인 포지션의 것**이다 — 완전 청산 시 삭제되므로
         # closed 거래에 남아 있을 수 없고, 같은 종목 재보유 중이면 현재 포지션 값을
