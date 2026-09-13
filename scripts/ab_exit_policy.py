@@ -11,6 +11,7 @@ KIS API 무접촉 — OHLCV는 pykrx/FDR + ~/.cache/ai_trader/backtest 캐시.
 
 import argparse
 import contextlib
+import dataclasses
 import hashlib
 import io
 import itertools
@@ -26,13 +27,21 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import backtest_strategies as bt  # noqa: E402
-from src.core.evolution.backtest_gate import BacktestGate, WF_SEGMENTS  # noqa: E402
+from src.core.evolution.backtest_gate import (  # noqa: E402
+    MAX_MDD_WORSENING, MIN_RETURN_GAIN, MIN_TRADES, BacktestGate, WF_SEGMENTS)
+from src.core.evolution.backtest_gate import WF_MIN_WINS as GATE_WF_MIN_WINS  # noqa: E402
 from src.utils.config import effective_config_hash, load_effective_config  # noqa: E402
 
 AXES = [("ladder", "channel"), ("current", "extended"), ("nominal", "risk")]
 BASELINE = "ladder/current/nominal"
 MDD_TOLERANCE_PP = 3.0
 WF_MIN_WINS = 2
+
+# 사전 등록 대조군(T7-B): 고정 명목 비중 = 위험률 0.7% ÷ 동시 5슬롯 = 14%.
+# risk 모드의 "노출 축소" 효과를 사이징 공식과 분리해 보기 위한 축이며,
+# 결과를 보고 값을 바꾸지 않는다.
+FIXED_NOMINAL_PCT = 14.0
+SIZING_MODES = ("nominal", "risk", "nominal14")
 
 
 def make_config(months: int, exit_policy: str, holding: str, sizing: str,
@@ -49,7 +58,13 @@ def make_config(months: int, exit_policy: str, holding: str, sizing: str,
         offline=args.offline, end_date=args.end_date,
     )
     cfg.exit_policy = exit_policy
-    cfg.sizing = sizing
+    if sizing == "nominal14":
+        # 대조군: 명목 사이징이되 비중을 0.7/5 = 14% 로 고정 (base=max 로 상한도 같이 내린다)
+        cfg.sizing = "nominal"
+        cfg.base_position_pct = FIXED_NOMINAL_PCT
+        cfg.max_position_pct = FIXED_NOMINAL_PCT
+    else:
+        cfg.sizing = sizing
     bt.apply_holding_policy(cfg, holding)
     if exit_policy == "ladder":
         # 실엔진 미러: TP1이 무장하는 복합 MA5-0.5%/전일저가 청산 + 익절후 저효율 (리뷰 §2-2)
@@ -77,7 +92,8 @@ def _file_hash(path: Path) -> str:
 
 
 def build_manifest(args: argparse.Namespace, effective: dict, *,
-                   universe=None, cache_files=(), missing_tickers=()) -> dict:
+                   universe=None, cache_files=(), missing_tickers=(),
+                   cache_substitutes=None, regime_sources=None) -> dict:
     """실행 입력 고정 기록 (T7-A).
 
     통합 SHA·설정 snapshot/hash·계산기 버전·유니버스·OHLCV 캐시 hash·난수 사용 여부·CLI 인자를
@@ -101,6 +117,12 @@ def build_manifest(args: argparse.Namespace, effective: dict, *,
                      "tickers": list(universe if universe is not None else []),
                      "missing_tickers": list(missing_tickers)},
         "ohlcv_cache": {Path(f).name: _file_hash(Path(f)) for f in cache_files},
+        # substitutes: 정확한 파일명(종료일 포함) 캐시가 없어 **구간을 포함하는** 다른 캐시를
+        # 잘라 쓴 종목. 어떤 파일을 대신 썼는지 남겨야 같은 결과를 다시 만들 수 있다.
+        "ohlcv_cache_substitutes": dict(cache_substitutes or {}),
+        # 레짐 시계열 출처 — 지수(kospi_pykrx/kospi_fdr) vs 개별주 대리(samsung_proxy) 구분.
+        # 캐시가 없어 이번 실행 범위에서 새로 만들었다면 생성 시각·출처가 함께 남는다.
+        "regime_sources": dict(regime_sources or {}),
         # 백테스터는 난수를 쓰지 않는다 (같은 입력 → 같은 결과)
         "random_used": False,
     }
@@ -128,6 +150,7 @@ def run_cell(cfg, shared: dict, outdir: Path = None, cell: str = "") -> dict:
     regime_key = ("regime", cfg.months)
     if regime_key in shared:
         engine.regime.kospi_data = shared[regime_key]
+        engine.regime.source = shared["regime_sources"][f"{cfg.months}m"]
         engine.regime.load = lambda s, e: None
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -145,6 +168,8 @@ def run_cell(cfg, shared: dict, outdir: Path = None, cell: str = "") -> dict:
                                     *map(str, engine.regime.cache_files)})
     shared["missing_tickers"] = sorted({*shared.get("missing_tickers", []),
                                         *engine.universe.missing_tickers})
+    shared.setdefault("cache_substitutes", {}).update(engine.universe.cache_substitutes)
+    shared.setdefault("regime_sources", {})[f"{cfg.months}m"] = engine.regime.source
     ps = an.positions()
     per_strategy = {
         s: an.position_metrics([p for p in ps if p["strategy"] == s])
@@ -155,6 +180,9 @@ def run_cell(cfg, shared: dict, outdir: Path = None, cell: str = "") -> dict:
         "n_days": len(engine.equity_curve),
         "total_return_pct": m["total_return_pct"], "mdd_pct": m["mdd_pct"],
         "sharpe": m["sharpe"], "total_fees": m["total_fees"],
+        # 운영 게이트의 최소 거래 수는 이벤트(매도) 단위다 — 포지션 단위와 구분해 함께 남긴다
+        "total_trades": m["total_trades"],
+        "avg_equity": float(sum(e for _, e in engine.equity_curve) / len(engine.equity_curve)),
         "position": m["position_level"], "per_strategy": per_strategy,
         "segments": BacktestGate._segment_returns(engine.equity_curve, WF_SEGMENTS),
         "config": {k: getattr(cfg, k) for k in (
@@ -168,8 +196,23 @@ def run_cell(cfg, shared: dict, outdir: Path = None, cell: str = "") -> dict:
     }
 
 
-def benchmark_return(start: str, end: str) -> dict:
-    """KODEX200(069500) 매수보유 수익률 — 리뷰 판정 기준(초과수익). 실패 시 KS11 폴백."""
+def benchmark_return(start: str, end: str, *, offline: bool = False) -> dict:
+    """KODEX200(069500) 매수보유 수익률 — 리뷰 판정 기준(초과수익). 실패 시 KS11 폴백.
+
+    offline 에서는 KODEX200 이 개별 종목이라 다운로드하지 않는다. 캐시가 있으면 쓰고,
+    없으면 초과수익은 **미측정(null)** 이다 — 0 으로 채워 통과시키지 않는다 (계획서 T8).
+    """
+    if offline:
+        um = bt.UniverseManager(size=1, offline=True)
+        hit = um._find_covering_cache("069500", start, end)
+        if hit is not None:
+            df, path = hit
+            c = df["종가"].astype(float)
+            return {"code": "069500", "return_pct": (c.iloc[-1] / c.iloc[0] - 1) * 100,
+                    "start": str(df.index[0])[:10], "end": str(df.index[-1])[:10],
+                    "source": f"cache:{path.name}"}
+        return {"code": None, "return_pct": None,
+                "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"}
     import FinanceDataReader as fdr
     for code in ("069500", "KS11"):
         try:
@@ -183,8 +226,49 @@ def benchmark_return(start: str, end: str) -> dict:
     return {"code": None, "return_pct": None}
 
 
+def index_proxy_return(kospi_df, start: str, end: str, source: str) -> dict:
+    """레짐 캐시의 KOSPI 지수 매수보유 수익률 — KODEX200 이 없을 때의 **참고** 지표.
+
+    ETF(보수·추적오차·배당)와 지수는 같지 않으므로 KODEX200 초과수익을 이것으로 대체하지
+    않는다. 같은 윈도우의 모든 셀에 같은 값이 빠지므로 셀 간 비교에는 영향이 없다.
+    """
+    if kospi_df is None or "종가" not in getattr(kospi_df, "columns", []):
+        return {"code": None, "return_pct": None, "source": source}
+    import pandas as pd
+    win = kospi_df.loc[(kospi_df.index >= pd.Timestamp(start)) & (kospi_df.index <= pd.Timestamp(end))]
+    if len(win) < 2:
+        return {"code": None, "return_pct": None, "source": source}
+    c = win["종가"].astype(float)
+    return {"code": "KOSPI", "return_pct": (c.iloc[-1] / c.iloc[0] - 1) * 100,
+            "start": str(win.index[0])[:10], "end": str(win.index[-1])[:10],
+            "source": source}
+
+
+def ops_gate(cell: dict, base: dict) -> dict:
+    """운영 게이트 판정 (`backtest_gate` 와 같은 임계, 연구 판정과 **다른 기준**).
+
+    총수익 개선 > 0pp AND MDD 악화 ≤ 1pp AND WF 승수 ≥ 2/3 AND 거래(매도 이벤트) ≥ 10.
+    임계는 게이트 모듈에서 그대로 가져온다 — 여기서 완화하지 않는다.
+    """
+    gain = cell["total_return_pct"] - base["total_return_pct"]
+    mdd_delta = abs(cell["mdd_pct"]) - abs(base["mdd_pct"])
+    wf = (sum(1 for c, b in zip(cell["segments"] or [], base["segments"] or []) if c > b)
+          if cell["segments"] and base["segments"] else None)
+    checks = {
+        "trades": cell["total_trades"] >= MIN_TRADES,
+        "return_gain": gain > MIN_RETURN_GAIN,
+        "wf": (wf is not None and wf >= GATE_WF_MIN_WINS),
+        "mdd": mdd_delta <= MAX_MDD_WORSENING,
+    }
+    return {"gain_pp": gain, "mdd_delta_pp": mdd_delta, "wf_wins": wf,
+            "checks": checks, "passed": all(checks.values()),
+            "thresholds": {"min_return_gain_pp": MIN_RETURN_GAIN,
+                           "max_mdd_worsening_pp": MAX_MDD_WORSENING,
+                           "min_trades": MIN_TRADES, "wf_min_wins": GATE_WF_MIN_WINS}}
+
+
 def judge(cell: dict, base: dict) -> dict:
-    """baseline 대비 판정: 기대값·PF 우위 AND WF≥2/3 AND MDD 악화 ≤3pp."""
+    """baseline 대비 **연구** 판정: 기대값·PF 우위 AND WF≥2/3 AND MDD 악화 ≤3pp."""
     cp, bp = cell["position"], base["position"]
     wf = (sum(1 for c, b in zip(cell["segments"] or [], base["segments"] or []) if c > b)
           if cell["segments"] and base["segments"] else None)
@@ -199,21 +283,24 @@ def judge(cell: dict, base: dict) -> dict:
 
 def md_table(cells: dict) -> str:
     hdr = ("| 셀 | 거래 | 승률 | 평균익 | 평균손 | 손익비 | 기대값% | 기대값R | PF | 수익률 | 초과(KODEX200) | Sharpe | MDD | 최대연패 "
-           "| 보유중앙 | 회전(연) | 수수료드래그 | WF승 | 판정 |")
-    sep = "|" + "---|" * 19
+           "| 보유중앙 | 회전(연) | 수수료드래그 | WF승 | 연구판정 | 운영게이트 |")
+    sep = "|" + "---|" * 20
     rows = [hdr, sep]
     for name, c in cells.items():
         p, j = c["position"], c["judge"]
         wf = "—" if name == BASELINE else (f"{j['wf_wins']}/3" if j["wf_wins"] is not None else "n/a")
         verdict = "기준" if name == BASELINE else ("**통과**" if j["beats_baseline"] else
                   "미달(" + ",".join(k for k, v in j["checks"].items() if not v) + ")")
+        g = c.get("ops_gate")
+        ops = "기준" if name == BASELINE or not g else (
+            "**통과**" if g["passed"] else "미달(" + ",".join(k for k, v in g["checks"].items() if not v) + ")")
         ex = c.get("excess_return_pct")
         rows.append(
             f"| {name} | {p['trades']} | {p['win_rate']:.1f}% | {p['avg_win_pct']:+.2f}% | {p['avg_loss_pct']:+.2f}% "
             f"| {p['payoff']:.2f} | {p['expectancy_pct']:+.2f}% | {p['expectancy_r']:+.2f} | {p['profit_factor']:.2f} "
             f"| {c['total_return_pct']:+.2f}% | {'n/a' if ex is None else f'{ex:+.2f}pp'} | {c['sharpe']:.2f} "
             f"| {c['mdd_pct']:.2f}% | {p['max_consec_losses']} | {p['median_holding_days']:.0f}일 "
-            f"| {p['turnover_annual']:.1f}x | {p['fee_drag_pct']:.2f}% | {wf} | {verdict} |")
+            f"| {p['turnover_annual']:.1f}x | {p['fee_drag_pct']:.2f}% | {wf} | {verdict} | {ops} |")
     return "\n".join(rows)
 
 
@@ -224,6 +311,61 @@ def md_strategy_table(cells: dict) -> str:
             rows.append(f"| {name} | {s} | {p['trades']} | {p['win_rate']:.1f}% | {p['expectancy_pct']:+.2f}% "
                         f"| {p['expectancy_r']:+.2f} | {p['profit_factor']:.2f} | {p['net_pnl']:+,.0f} | {p['median_holding_days']:.0f}일 |")
     return "\n".join(rows)
+
+
+def recompute_from_saved(cell_dir: Path) -> dict:
+    """저장된 `fills/equity/config` **만으로** 포지션 지표를 다시 계산한다 (T7-B 필수 조건).
+
+    요약 JSON 을 신뢰하지 않고 원자료에서 R·PF·비용·회전·상위3 제외를 되만들 수 있는지
+    확인하는 경로다. 독립 리뷰어도 같은 함수로 표를 재계산할 수 있다.
+    """
+    names = {f.name for f in dataclasses.fields(bt.BacktestConfig)}
+    raw = json.loads((cell_dir / "config.json").read_text(encoding="utf-8"))
+    cfg = bt.BacktestConfig(**{k: v for k, v in raw.items() if k in names})
+    fills = [bt.Trade(**f) for f in json.loads((cell_dir / "fills.json").read_text(encoding="utf-8"))]
+    curve = [(d, float(e)) for d, e in json.loads((cell_dir / "equity.json").read_text(encoding="utf-8"))]
+    an = bt.ResultAnalyzer(cfg, fills, curve)
+    ps = an.positions()
+    m = an.metrics()
+    top3 = sorted(ps, key=lambda p: -p["pnl"])[:3]
+    return {
+        "positions": ps,
+        "position_metrics": an.position_metrics(ps),
+        "total_return_pct": m["total_return_pct"], "mdd_pct": m["mdd_pct"],
+        "total_trades": m["total_trades"], "total_fees": m["total_fees"],
+        "net_pnl_excl_top3": sum(p["pnl"] for p in ps) - sum(p["pnl"] for p in top3),
+        "segments": BacktestGate._segment_returns(curve, WF_SEGMENTS),
+    }
+
+
+def verify_saved_outputs(outdir: Path, tol: float = 1e-6) -> dict:
+    """`--verify-dir`: 저장된 셀 원자료 재계산 결과와 summary.json 을 대조한다."""
+    summary = json.loads((outdir / "summary.json").read_text(encoding="utf-8"))
+    saved = {}
+    for slabel, grid in summary["grids"].items():
+        for wname, w in grid["windows"].items():
+            for cell, c in w["cells"].items():
+                saved[(f"{slabel}_{wname}", cell)] = c
+    checks, mismatches = {}, []
+    for (wname, cell), c in saved.items():
+        d = outdir / wname / cell.replace("/", "_")
+        if not d.exists():
+            mismatches.append(f"{wname} {cell}: 원자료 디렉터리 없음 ({d})")
+            continue
+        r = recompute_from_saved(d)
+        diffs = {k: (c[k], v) for k, v in (
+            ("total_return_pct", r["total_return_pct"]), ("mdd_pct", r["mdd_pct"]),
+            ("total_trades", r["total_trades"]), ("total_fees", r["total_fees"]),
+        ) if abs(float(c[k]) - float(v)) > tol}
+        for k in ("trades", "expectancy_r", "profit_factor", "net_pnl", "turnover_annual"):
+            if abs(float(c["position"][k]) - float(r["position_metrics"][k])) > tol:
+                diffs[f"position.{k}"] = (c["position"][k], r["position_metrics"][k])
+        checks[f"{wname}/{cell}"] = {"ok": not diffs, "diffs": diffs,
+                                     "net_pnl_excl_top3": r["net_pnl_excl_top3"]}
+        if diffs:
+            mismatches.append(f"{wname} {cell}: {diffs}")
+    return {"checked": len(checks), "all_match": not mismatches,
+            "mismatches": mismatches, "cells": checks}
 
 
 # 저장소에 커밋된 연구 원본 — 재실행이 조용히 덮어쓰면 안 된다 (2026-09-14 리뷰 blocking #3)
@@ -247,6 +389,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--universe-size", type=int, default=60)
     ap.add_argument("--holding", default="current,extended",
                     help="보유 정책 축 (기본 2×2×2; 'none' 추가 시 보유 규칙 해제 보충 셀)")
+    ap.add_argument("--exit-policy", default=",".join(AXES[0]),
+                    help="청산 정책 축 (기본 ladder,channel)")
+    ap.add_argument("--sizing", default=",".join(AXES[2]),
+                    help=f"사이징 축 (기본 nominal,risk; 선택 nominal14 = 고정 {FIXED_NOMINAL_PCT}% 명목 대조군)")
+    ap.add_argument("--verify-dir", default=None,
+                    help="실행하지 않고, 저장된 셀 원자료로 summary.json 을 재계산해 대조한다")
     ap.add_argument("--out", default=None,
                     help="요약 JSON 경로 (기본: <output-dir>/summary.json). "
                          "원본 결과 파일을 가리키면 --overwrite 없이는 거부한다")
@@ -270,18 +418,37 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main():
     args = build_parser().parse_args()
+    if args.verify_dir:
+        report = verify_saved_outputs(Path(args.verify_dir))
+        path = Path(args.verify_dir) / "recompute_check.json"
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=1, default=str),
+                        encoding="utf-8")
+        print(f"재계산 대조 {report['checked']}셀 → {'일치' if report['all_match'] else '불일치'}: {path}")
+        for m in report["mismatches"]:
+            print("  " + m)
+        raise SystemExit(0 if report["all_match"] else 1)
+
     effective = load_effective_config(args.effective_config)
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
     out = resolve_out_path(args)          # 원본 덮어쓰기는 실행 전에 거부한다
 
-    axes = [AXES[0], tuple(args.holding.split(",")), AXES[2]]
+    sizings = tuple(args.sizing.split(","))
+    unknown = [s for s in sizings if s not in SIZING_MODES]
+    if unknown:
+        raise SystemExit(f"거부: 알 수 없는 사이징 축 {unknown} (가능: {list(SIZING_MODES)})")
+    axes = [tuple(args.exit_policy.split(",")), tuple(args.holding.split(",")), sizings]
     windows = [int(m) for m in args.months.split(",")]
     result = {"run_at": datetime.now().isoformat(timespec="seconds"),
               "universe_size": args.universe_size, "baseline": BASELINE,
               "axes": {"exit_policy": axes[0], "holding_policy": axes[1], "sizing": axes[2]},
               "gate": {"wf_min_wins": WF_MIN_WINS, "mdd_tolerance_pp": MDD_TOLERANCE_PP,
                        "rule": "기대값%·PF > baseline AND WF≥2/3 AND MDD 악화 ≤3pp, 모든 윈도우"},
+              "ops_gate": {"rule": "총수익 개선 >0pp AND MDD 악화 ≤1pp AND WF≥2/3 AND 거래(매도 이벤트) ≥10",
+                           "thresholds": {"min_return_gain_pp": MIN_RETURN_GAIN,
+                                          "max_mdd_worsening_pp": MAX_MDD_WORSENING,
+                                          "min_trades": MIN_TRADES,
+                                          "wf_min_wins": GATE_WF_MIN_WINS}},
               "grids": {}}
     shared: dict = {}
     t0 = time.time()
@@ -303,16 +470,24 @@ def main():
             base = cells[BASELINE]
             bench_key = ("bench", base["start_date"], base["end_date"])
             if bench_key not in shared:
-                shared[bench_key] = benchmark_return(base["start_date"], base["end_date"])
+                shared[bench_key] = benchmark_return(base["start_date"], base["end_date"],
+                                                     offline=args.offline)
             bench = shared[bench_key]
+            proxy = index_proxy_return(shared.get(("regime", months)), base["start_date"],
+                                       base["end_date"],
+                                       shared.get("regime_sources", {}).get(f"{months}m", "unknown"))
             for name, c in cells.items():
                 c["judge"] = judge(c, base)
+                c["ops_gate"] = ops_gate(c, base)
                 c["benchmark"] = bench
                 c["excess_return_pct"] = (c["total_return_pct"] - bench["return_pct"]
                                           if bench["return_pct"] is not None else None)
+                c["benchmark_proxy"] = proxy
+                c["excess_return_proxy_pct"] = (c["total_return_pct"] - proxy["return_pct"]
+                                                if proxy["return_pct"] is not None else None)
             grid["windows"][f"{months}m"] = {
                 "period": [base["start_date"], base["end_date"]], "n_days": base["n_days"],
-                "benchmark": bench, "cells": cells,
+                "benchmark": bench, "benchmark_proxy": proxy, "cells": cells,
                 "table_md": md_table(cells), "strategy_table_md": md_strategy_table(cells),
             }
         # 모든 윈도우 통과 셀 → 기대값R 평균 최대
@@ -325,7 +500,10 @@ def main():
                               for w in grid["windows"].values())
         main = [n for n in names if n.split("/")[1] in ("current", "extended")]  # 본 그리드 2×2×2
         main_pass = [n for n in passing if n in main]
+        ops_passing = [n for n in names if n != BASELINE
+                       and all(w["cells"][n]["ops_gate"]["passed"] for w in grid["windows"].values())]
         grid["verdict"] = {"passing_cells": passing,
+                           "ops_gate_passing_cells": ops_passing,
                            "winner": max(passing, key=score) if passing else None,
                            "rank_by_expectancy_r": rank,
                            "main_grid": {"cells": main, "passing_cells": main_pass,
@@ -336,7 +514,8 @@ def main():
         for wname, w in grid["windows"].items():
             print(f"\n### {strategies} — {wname} ({w['period'][0]} ~ {w['period'][1]}, {w['n_days']}일)\n")
             print(w["table_md"]); print(); print(w["strategy_table_md"])
-        print(f"\n[{strategies}] 통과 셀: {passing or '없음'} → winner: {grid['verdict']['winner']}\n")
+        print(f"\n[{strategies}] 연구 통과 셀: {passing or '없음'} → winner: {grid['verdict']['winner']}")
+        print(f"[{strategies}] 운영 게이트 통과 셀: {ops_passing or '없음'}\n")
 
     payload = json.dumps(result, ensure_ascii=False, indent=1, default=str)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -345,7 +524,9 @@ def main():
     # 실행 입력·요약 보존 (T7-A). 커밋된 원본 결과는 --overwrite 없이 건드리지 않는다.
     manifest = build_manifest(args, effective, universe=shared.get("tickers"),
                               cache_files=shared.get("cache_files", []),
-                              missing_tickers=shared.get("missing_tickers", []))
+                              missing_tickers=shared.get("missing_tickers", []),
+                              cache_substitutes=shared.get("cache_substitutes", {}),
+                              regime_sources=shared.get("regime_sources", {}))
     (outdir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     if out.resolve() != (outdir / "summary.json").resolve():

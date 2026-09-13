@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — research: 위험 사이징 재검증 (계획서 T7) — 6셀 오프라인 재실행, 승격 보류
+
+통합 SHA 441bfd3 에서 `scripts/ab_exit_policy.py --offline --end-date 2026-09-11 --entry-stop-mode live_policy --slot-policy live_weighted` (유효 설정 builder, 예산 캡 40%).
+- 데이터: OHLCV 기존 캐시 60종목(다운로드 0, 구간 포함 캐시를 잘라 재사용·manifest 기록), 레짐은 KOSPI 지수(FDR KS11)만 1회 온라인 생성(개별 종목 금지) — provenance 문서화. KODEX200 캐시 없음 → 초과수익 null(KOSPI 지수 참고치만).
+- 결과(`docs/research/risk-sizing-revalidation-2026-09.md`, `results/ab_exit_policy_review_v2/`): 6m nominal -7.45% / risk -1.38% / 대조군14 -1.87%, 12m +4.20% / +11.62% / +6.68%. 기술 필수(point-in-time·게이트·경계값·저장 원장 재계산 6/6) 통과,
+  parity xfail 2건 잔존. 운영 게이트 4조건은 risk 양 윈도우 충족 — **그러나 사전 등록 대조군(고정 14%)도 동일 통과**, live_policy 에서 SEPA SL 5% 단일값이라 risk = 고정 14% 명목(상한 18% 미발동) → **승격 보류**.
+  검증된 것은 노출 축소 효과(노출·회전·비용·MDD 개선). 전 셀 KOSPI 대비 -26~-96pp, 상위 3건 제외 순손익 전 셀 음수. 결과 후 기준·셀·윈도우 변경 없음(윈도우 시작 1~2일 편차는 러너 산식, 고지).
+- 독립 리뷰: raw 파일 재계산 6/6 일치·원본 JSON 무변경·캐시 hash 62/62 일치 → approve. 반영: 판정 표제 "승격 후보"→"조건 충족(승격 보류)", 진입 비중 윈도우 명시, 평균노출 정의, provenance 수동 기록 명시, 대조군 최소금액 결함(parity 항목), 재현 경로.
+- 잔여: risk 고유 효과 분리(전략별 SL 이 다른 gap/VCP 그리드 또는 atr_dynamic 연구 축), gap/VCP 백테스터, KODEX200 벤치마크 캐시, `--start-date`/`--regime-online-once` 옵션, T7-D 16셀. canary 미시작. 배포 없음.
+
 ## 2026-09-14 — fix: 운영 게이트 기준군을 유효 설정으로·실거래 parity·A/B 러너 옵션 (계획서 T6, F7)
 
 F7(D 재현): BacktestGate baseline 이 기본 BacktestConfig(nominal, TP1 5/0.30, stop 3.5/6, allocation sepa .6/rsi2 .1/core .3)라 `risk.*` 변경이 포지션 금액을 못 바꾸고 무조건 기각, WF 미평가도 승인.

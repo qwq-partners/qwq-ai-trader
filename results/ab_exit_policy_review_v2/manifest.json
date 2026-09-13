@@ -1,0 +1,1001 @@
+{
+ "created_at": "2026-09-14T03:36:41",
+ "integration_sha": "441bfd378ba724a50a69877e48700c6c92a5a4d0",
+ "calculator_version": "2026-09-14.t7",
+ "cli_args": {
+  "months": "6,12",
+  "strategies": [
+   "sepa"
+  ],
+  "universe_size": 60,
+  "holding": "current",
+  "exit_policy": "ladder",
+  "sizing": "nominal,risk,nominal14",
+  "verify_dir": null,
+  "out": null,
+  "overwrite": false,
+  "offline": true,
+  "end_date": "2026-09-11",
+  "output_dir": "results/ab_exit_policy_review_v2",
+  "entry_stop_mode": "live_policy",
+  "slot_policy": "live_weighted",
+  "effective_config": null
+ },
+ "offline": true,
+ "end_date": "2026-09-11",
+ "entry_stop_mode": "live_policy",
+ "slot_policy": "live_weighted",
+ "config_source": "config/default.yml + evolved_overrides.yml",
+ "config_hash": "91a816502f3f",
+ "config_snapshot": {
+  "kis": {
+   "env": "prod"
+  },
+  "telegram": {
+   "enabled": true
+  },
+  "llm": {
+   "primary": "gemini_flash_lite",
+   "fallback": "openai_gpt5_mini",
+   "daily_budget": 5.0,
+   "openai_model_heavy": "gpt-5.6-sol",
+   "openai_model_light": "gpt-5-mini",
+   "gemini_model_heavy": "gemini-3.1-pro-preview",
+   "gemini_model_light": "gemini-3.1-flash-lite-preview",
+   "openai_model_light_shadow": "",
+   "manus": {
+    "enabled": false,
+    "agent_profile": "manus-1.6",
+    "timeout_sec": 600,
+    "tasks": [
+     "trade_review",
+     "strategy_analysis"
+    ]
+   }
+  },
+  "logging": {
+   "level": "INFO",
+   "file_enabled": true,
+   "file_path": "./logs",
+   "rotation": "1 day",
+   "retention": "7 days"
+  },
+  "dashboard": {
+   "enabled": true,
+   "host": "0.0.0.0",
+   "port": 8080
+  },
+  "kr": {
+   "no_auto_exit_symbols": [
+    "087010"
+   ],
+   "manual_buy_orders": [],
+   "trading_team": {
+    "enabled": true,
+    "debate_rounds": 2,
+    "allow_pm_override": false,
+    "max_concurrent": 3
+   },
+   "trading": {
+    "initial_capital": 10000000,
+    "market": "KRX",
+    "enable_pre_market": true,
+    "enable_next_market": true,
+    "pre_market_slippage_buffer_pct": 3.0,
+    "fees": {
+     "buy_rate": 0.00014,
+     "sell_rate": 0.00213
+    },
+    "slippage": {
+     "expected_ticks": 1,
+     "max_ticks": 3
+    }
+   },
+   "risk": {
+    "daily_max_loss_pct": 5.0,
+    "daily_max_trades": 10,
+    "max_daily_new_buys": 5,
+    "base_position_pct": 25.0,
+    "max_position_pct": 28.0,
+    "max_positions": 8,
+    "sizing_mode": "risk",
+    "risk_per_trade_pct": 0.7,
+    "risk_max_position_pct": 18.0,
+    "min_cash_reserve_pct": 5.0,
+    "min_position_value": 200000,
+    "dynamic_max_positions": true,
+    "default_stop_loss_pct": 2.8,
+    "default_take_profit_pct": 10.0,
+    "trailing_stop_pct": 2.5,
+    "hot_theme_position_pct": 50.0,
+    "momentum_multiplier": 1.5,
+    "flex_extra_positions": 2,
+    "flex_cash_threshold_pct": 10.0,
+    "max_positions_per_sector": 2,
+    "strategy_allocation": {
+     "core_holding": 0.0,
+     "sepa_trend": 40.0,
+     "rsi2_reversal": 0.0,
+     "momentum_breakout": 0.0,
+     "gap_and_go": 15.0,
+     "theme_chasing": 0.0,
+     "strategic_swing": 0.0,
+     "vcp_breakout": 10.0
+    },
+    "factor_budgets": {
+     "enforce": false,
+     "buckets": {
+      "trend": {
+       "max_pct": 65.0,
+       "strategies": [
+        "sepa_trend",
+        "gap_and_go",
+        "momentum_breakout",
+        "vcp_breakout",
+        "strategic_swing"
+       ]
+      },
+      "quality": {
+       "max_pct": 20.0,
+       "strategies": [
+        "core_holding",
+        "value_growth"
+       ]
+      },
+      "reversion": {
+       "max_pct": 10.0,
+       "strategies": [
+        "rsi2_reversal",
+        "theme_chasing"
+       ]
+      }
+     }
+    },
+    "hybrid": {
+     "enabled": false,
+     "day_trading_pct": 20.0,
+     "short_term_pct": 30.0,
+     "swing_pct": 50.0
+    }
+   },
+   "validator": {
+    "min_pass_score": 50,
+    "missing_indicator_penalty_step": 2,
+    "missing_indicator_penalty_cap": 8,
+    "llm_daily_max": 10,
+    "rule_penalties": {
+     "early_session": 8,
+     "sepa_chase": 10,
+     "rsi_overbought": 5,
+     "supply_dual_sell": 10,
+     "surge_chase": 15,
+     "deficit_high_pbr": 10
+    },
+    "llm_check_score_min": 85,
+    "llm_bypass_score": 95,
+    "llm_reject_size_mult": 0.5,
+    "replacement_min_score": 85,
+    "replacement_cooldown_sec": 600
+   },
+   "strategies": {
+    "defaults": {
+     "holding_period_days": 3,
+     "stop_loss_pct": 4.0,
+     "take_profit_pct": 10.0,
+     "trailing_stop_pct": 2.5,
+     "min_volume_ratio": 2.0,
+     "min_score": 60.0,
+     "position_size_multiplier": 1.0,
+     "min_rr_ratio": 2.0
+    },
+    "momentum_breakout": {
+     "enabled": false,
+     "time_horizon": "swing",
+     "holding_period_days": 3,
+     "breakout_period": 20,
+     "confirm_candles": 2,
+     "min_breakout_pct": 0.8,
+     "volume_surge_ratio": 2.5,
+     "stop_loss_pct": 3.5,
+     "take_profit_pct": 10.0,
+     "trailing_stop_pct": 3.0,
+     "min_volume_ratio": 2.5,
+     "trading_start_time": "10:30",
+     "min_score": 75.0
+    },
+    "theme_chasing": {
+     "enabled": false,
+     "time_horizon": "short_term",
+     "holding_period_days": 2,
+     "min_theme_score": 70,
+     "entry_window_minutes": 20,
+     "stop_loss_pct": 3.5,
+     "take_profit_pct": 8.0,
+     "trailing_stop_pct": 2.0,
+     "min_trading_value": 500000000,
+     "min_theme_breadth": 3,
+     "theme_breadth_change_pct": 1.0,
+     "max_high_retreat_pct": 3.0,
+     "max_atr_pct": 5.5,
+     "min_volume_ratio": 2.3,
+     "trading_start_time": "09:30",
+     "min_change_pct": 2.5,
+     "min_score": 75.0
+    },
+    "gap_and_go": {
+     "enabled": true,
+     "time_horizon": "short_term",
+     "holding_period_days": 2,
+     "min_gap_pct": 2.0,
+     "max_gap_pct": 10.0,
+     "entry_delay_minutes": 20,
+     "pullback_pct": 0.8,
+     "min_volume_ratio": 3.0,
+     "stop_loss_pct": 3.5,
+     "take_profit_pct": 8.0,
+     "trailing_stop_pct": 2.0
+    },
+    "rsi2_reversal": {
+     "enabled": false,
+     "rsi_period": 2,
+     "rsi_entry": 10,
+     "rsi_exit": 70,
+     "ma_trend_period": 200,
+     "bb_period": 20,
+     "bb_std": 2.0,
+     "stop_loss_pct": 5.0,
+     "max_holding_days": 10,
+     "min_score": 60,
+     "weight": 40
+    },
+    "sepa_trend": {
+     "enabled": true,
+     "stop_loss_pct": 5.0,
+     "max_holding_days": 10,
+     "min_score": 60,
+     "weight": 60
+    },
+    "vcp_breakout": {
+     "enabled": true,
+     "min_score": 60,
+     "min_signal_score": 60,
+     "breakout_buffer_pct": 0.5
+    },
+    "core_holding": {
+     "enabled": true,
+     "max_positions": 3,
+     "position_pct": 10.0,
+     "max_position_pct": 15.0,
+     "min_score": 70,
+     "replace_threshold": 15,
+     "min_market_cap_b": 0.5,
+     "min_price": 5000,
+     "min_avg_trading_value": 1000000000,
+     "stop_loss_pct": 15.0,
+     "trailing_stop_pct": 8.0,
+     "trailing_activate_pct": 10.0,
+     "max_holding_days": 0,
+     "stale_exit_days": 0,
+     "stale_high_days": 0,
+     "emergency_stop_pct": 15.0,
+     "rebalance_day": 1,
+     "rebalance_exclude": [
+      "263750"
+     ],
+     "ma200_break_days": 5,
+     "early_ma200_alert_days": 3,
+     "early_loss_alert_pct": -12.0,
+     "stale_alert_enabled": true,
+     "core_stale_days": 20,
+     "core_stale_pnl_band_pct": 7.0,
+     "core_stale_cooldown_days": 5,
+     "core_stale_auto_sell_enabled": true,
+     "core_stale_auto_sell_days": 30,
+     "core_stale_strict_days": 20,
+     "core_stale_strict_band_pct": 5.0,
+     "core_stale_volume_ratio": 0.5,
+     "core_stale_volume_days": 5,
+     "early_rescore_alert": 40.0,
+     "overweight_alert_pct": 35.0,
+     "trim_threshold_pct": 40.0,
+     "trim_ratio": 0.5,
+     "trim_min_value": 200000,
+     "individual_max_pct": 20.0,
+     "rebalance_interval_weeks": 2
+    },
+    "value_growth_core": {
+     "enabled": true,
+     "shadow_mode": true,
+     "max_positions": 4,
+     "position_pct": 8.0,
+     "max_position_pct": 10.0,
+     "min_score": 70,
+     "scan_weekday": 0,
+     "llm_top_n": 8,
+     "llm_pass_score": 60,
+     "universe_limit": 300,
+     "min_market_cap_b": 0.3,
+     "min_price": 5000,
+     "min_avg_trading_value": 1000000000,
+     "min_profit_years": 2,
+     "max_debt_ratio_pct": 200,
+     "trend_gate_ma200_mult": 0.9,
+     "trend_gate_min_60d_pct": -15.0,
+     "max_per_sector": 1,
+     "exclude_financials": true,
+     "stop_loss_pct": 20.0,
+     "rebalance_months": [
+      4,
+      5,
+      8,
+      11
+     ]
+    }
+   },
+   "exit_manager": {
+    "enable_partial_exit": true,
+    "first_exit_pct": 10.0,
+    "first_exit_ratio": 0.1,
+    "second_exit_pct": 15.0,
+    "second_exit_ratio": 0.4,
+    "third_exit_pct": 25.0,
+    "third_exit_ratio": 0.35,
+    "stop_loss_pct": 5.0,
+    "enable_dynamic_stop": true,
+    "atr_multiplier": 2.0,
+    "min_stop_pct": 4.0,
+    "max_stop_pct": 8.0,
+    "trailing_stop_pct": 4.5,
+    "trailing_activate_pct": 5.0,
+    "include_fees": true,
+    "stale_exit_days": 5,
+    "stale_exit_pnl_pct": 2.0,
+    "post_exit_stale_days": 5,
+    "post_exit_stale_pnl_pct": 3.0,
+    "enable_composite_trailing": true,
+    "composite_trail_min_stage": "first",
+    "composite_ma5_buffer_pct": 0.5,
+    "composite_prev_low_enabled": true
+   },
+   "universe_leading": {
+    "enabled": true,
+    "top_cap_limit": 350,
+    "limit_per_channel": 60
+   },
+   "batch": {
+    "morning_scan_enabled": true,
+    "morning_scan_time": "08:20",
+    "daily_scan_time": "15:40",
+    "execute_time": "09:30",
+    "signal_interval_sec": 30,
+    "position_update_interval": 10,
+    "max_entry_slippage_pct": {
+     "bull": 5.0,
+     "neutral": 3.0,
+     "caution": 3.0,
+     "bear": 3.0
+    },
+    "max_holding_days": 10,
+    "evening_scan_enabled": true,
+    "evening_scan_time": "19:30",
+    "evening_scan": {
+     "ovtm_vol_threshold": 0.01,
+     "price_bonus_pct": 2.0,
+     "price_penalty_pct": -3.0
+    },
+    "premarket_revalidation": {
+     "rsi2_bounce_cancel_pct": 3.0,
+     "gap_down_cancel_pct": -5.0,
+     "min_rr_ratio": 1.3,
+     "gap_remove_pct": 8.0,
+     "score_bonus": 10.0,
+     "score_penalty": -15.0,
+     "min_score_after": 60.0
+    }
+   },
+   "screener": {
+    "scan_interval_minutes": 5,
+    "min_volume_ratio": 2.0,
+    "min_change_pct": 1.0,
+    "max_change_pct": 15.0,
+    "min_trading_value": 100000000,
+    "min_market_cap": 1000
+   },
+   "intraday_buy": {
+    "enabled": true,
+    "min_score": 90,
+    "max_change_pct": 3.0,
+    "min_cash_ratio": 0.2,
+    "max_daily_entries": 3,
+    "trading_start_time": "10:00",
+    "trading_end_time": "14:30",
+    "llm_verify_enabled": true
+   },
+   "sector_surge": {
+    "enabled": true,
+    "sector_min_change_pct": 2.0,
+    "min_score": 60.0,
+    "max_rs_ratio": 1.0
+   },
+   "theme_detector": {
+    "scan_interval_minutes": 10,
+    "min_news_count": 3,
+    "min_theme_score": 70.0
+   },
+   "us_market": {
+    "enabled": true,
+    "fetch_time": "07:30",
+    "cache_ttl_hours": 24
+   },
+   "evolution": {
+    "enabled": true,
+    "analysis_days": 7,
+    "min_trades_for_evolution": 5,
+    "min_confidence_to_apply": 0.6,
+    "auto_rollback_threshold": -2.0,
+    "evaluation_period_days": 7,
+    "send_telegram": false
+   },
+   "llm_ops": {
+    "regime_classifier_enabled": true,
+    "batch_llm_filter_enabled": true,
+    "daily_bias_enabled": true,
+    "position_eod_check_enabled": true,
+    "false_negative_analysis_enabled": true,
+    "regime_conflict_guard_enabled": true
+   },
+   "stock_master": {
+    "enabled": true,
+    "refresh_time": "18:00",
+    "skip_weekends": true,
+    "auto_initial_refresh": true,
+    "cache_ttl_hours": 24
+   },
+   "scheduler": {
+    "morning_report_time": "08:25",
+    "evening_report_time": "16:00",
+    "evolution_time": "20:30",
+    "candle_refresh_times": [
+     "15:40",
+     "20:40"
+    ],
+    "candle_refresh_max_symbols": 50
+   },
+   "broker": {
+    "type": "kis",
+    "timeout_seconds": 15
+   },
+   "data": {
+    "realtime_source": "rest_polling",
+    "history": {
+     "lookback_days": 60,
+     "cache_enabled": true
+    }
+   }
+  },
+  "us": {
+   "trading": {
+    "initial_capital": 700,
+    "market": "US",
+    "enable_pre_market": false,
+    "enable_after_hours": false,
+    "commission": {
+     "type": "kis",
+     "rate": 0.0,
+     "min": 0.0
+    },
+    "slippage": {
+     "model": "percentage",
+     "rate": 0.05
+    }
+   },
+   "risk": {
+    "daily_max_loss_pct": 3.0,
+    "max_positions": 10,
+    "base_position_pct": 25.0,
+    "max_position_pct": 35.0,
+    "min_cash_reserve_pct": 10.0,
+    "min_position_value": 50,
+    "max_positions_per_sector": 3,
+    "stop_loss_pct": 4.0,
+    "take_profit_pct": 6.0,
+    "trailing_stop_pct": 3.0,
+    "consecutive_loss_threshold": 3,
+    "consecutive_loss_size_factor": 0.5
+   },
+   "strategies": {
+    "momentum": {
+     "enabled": true,
+     "time_horizon": "swing",
+     "breakout_period": 20,
+     "min_breakout_pct": 2.0,
+     "volume_surge_ratio": 2.5,
+     "min_score": 65,
+     "stop_loss_pct": 5.0,
+     "take_profit_pct": 15.0
+    },
+    "sepa": {
+     "enabled": true,
+     "time_horizon": "swing",
+     "min_score": 70,
+     "stop_loss_pct": 5.0,
+     "take_profit_pct": 15.0,
+     "max_holding_days": 20,
+     "min_rs_rating": 70
+    },
+    "earnings_drift": {
+     "enabled": false,
+     "time_horizon": "swing",
+     "min_eps_surprise_pct": 10,
+     "min_gap_pct": 5.0,
+     "min_volume_surge": 3.5,
+     "min_revenue_growth_pct": 15,
+     "min_score": 70,
+     "stop_loss_pct": 5.5,
+     "max_holding_days": 10
+    },
+    "earnings_reversal": {
+     "enabled": false,
+     "time_horizon": "swing",
+     "min_pre_drop_pct": 5.0,
+     "max_day_drop_pct": 8.0,
+     "min_score": 65,
+     "min_rr_ratio": 1.2,
+     "stop_loss_pct": 5.0,
+     "take_profit_pct": 6.0,
+     "max_holding_days": 3
+    }
+   },
+   "exit_manager": {
+    "enable_partial_exit": true,
+    "first_exit_pct": 3.0,
+    "first_exit_ratio": 0.4,
+    "second_exit_pct": 6.0,
+    "second_exit_ratio": 0.5,
+    "third_exit_pct": 10.0,
+    "third_exit_ratio": 0.5,
+    "stop_loss_pct": 4.0,
+    "trailing_stop_pct": 3.0,
+    "trailing_activate_pct": 3.0,
+    "enable_dynamic_stop": true,
+    "atr_multiplier": 2.0,
+    "min_stop_pct": 2.0,
+    "max_stop_pct": 6.0,
+    "eod_close": true,
+    "stale_exit_days": 7,
+    "stale_exit_pnl_pct": 3.0
+   },
+   "universe": {
+    "pools": [
+     "sp500",
+     "sp400"
+    ],
+    "min_price": 5.0,
+    "max_price": 200.0,
+    "min_avg_volume_usd": 5000000,
+    "min_market_cap_mm": 300,
+    "excluded_symbols": [
+     "IXC",
+     "GUSH"
+    ]
+   },
+   "live": {
+    "broker": "kis",
+    "env": "prod",
+    "screening_interval_min": 15,
+    "max_screen_symbols": 100,
+    "max_signals_per_cycle": 3,
+    "signal_cooldown_sec": 300,
+    "position_sync_sec": 30,
+    "exit_check_sec": 30,
+    "order_check_sec": 10,
+    "heartbeat_sec": 300,
+    "default_exchange": "NASD"
+   }
+  },
+  "experts": {
+   "enabled": true,
+   "fail_open": true,
+   "daily_call_budget": 50,
+   "cache_ttl_hours": 6,
+   "shadow_mode": true,
+   "agents": {
+    "news_curator": true,
+    "macro_economist": true,
+    "kr_market_expert": true,
+    "us_market_expert": true,
+    "kr_economy_expert": true,
+    "global_micro_expert": true,
+    "earnings_expert": true,
+    "sector_council": true
+   },
+   "weights": {
+    "news_curator": 1.0,
+    "macro_economist": 1.0,
+    "kr_market_expert": 1.0,
+    "us_market_expert": 1.0,
+    "kr_economy_expert": 0.8,
+    "global_micro_expert": 0.8,
+    "earnings_expert": 1.0
+   }
+  },
+  "batch": {
+   "min_score": 55.0,
+   "strategy_limits": {
+    "sepa_trend": 10,
+    "rsi2_reversal": 5,
+    "strategic_swing": 5,
+    "gap_and_go": 3,
+    "theme_chasing": 0
+   },
+   "default_strategy_limit": 3,
+   "gap_down_skip_pct": -3.5,
+   "daily_max_new_buys": 7,
+   "max_entry_slippage_pct": {
+    "bull": 5.0,
+    "neutral": 3.0,
+    "caution": 3.0,
+    "bear": 3.0
+   },
+   "lunchtime_scan": {
+    "enabled": true,
+    "time": "13:30"
+   }
+  },
+  "risk": {
+   "daily_max_trades": 10,
+   "default_stop_loss_pct": 2.8,
+   "base_position_pct": 25.0,
+   "max_positions": 8,
+   "strategy_allocation": {
+    "strategic_swing": 0.0,
+    "vcp_breakout": 10.0,
+    "rsi2_reversal": 0.0,
+    "sepa_trend": 40.0,
+    "theme_chasing": 0.0,
+    "momentum_breakout": 0.0,
+    "gap_and_go": 15.0,
+    "core_holding": 0.0
+   }
+  },
+  "exit_manager": {
+   "max_stop_pct": 8.0,
+   "min_stop_pct": 4.0,
+   "first_exit_pct": 10.0,
+   "first_exit_ratio": 0.1,
+   "second_exit_ratio": 0.4,
+   "third_exit_ratio": 0.35,
+   "stop_loss_pct": 5.0,
+   "trailing_activate_pct": 5.0,
+   "trailing_stop_pct": 4.5
+  },
+  "strategies": {
+   "core_holding": {
+    "rebalance_exclude": [
+     "263750"
+    ],
+    "core_stale_days": 20,
+    "core_stale_pnl_band_pct": 7.0,
+    "core_stale_cooldown_days": 5,
+    "core_stale_auto_sell_enabled": true,
+    "core_stale_auto_sell_days": 30,
+    "core_stale_strict_days": 20,
+    "core_stale_strict_band_pct": 5.0,
+    "core_stale_volume_ratio": 0.5,
+    "core_stale_volume_days": 5,
+    "rebalance_interval_weeks": 2
+   },
+   "momentum_breakout": {
+    "enabled": false,
+    "stop_loss_pct": 3.5,
+    "min_volume_ratio": 2.5,
+    "trading_start_time": "10:30",
+    "min_score": 75.0,
+    "min_breakout_pct": 0.8
+   },
+   "theme_chasing": {
+    "enabled": false,
+    "stop_loss_pct": 3.5,
+    "min_volume_ratio": 2.3,
+    "trading_start_time": "09:30",
+    "entry_window_minutes": 20,
+    "max_atr_pct": 5.5,
+    "min_change_pct": 2.5,
+    "min_score": 75.0
+   },
+   "gap_and_go": {
+    "enabled": true,
+    "stop_loss_pct": 3.5,
+    "min_volume_ratio": 3.0
+   },
+   "sepa_trend": {
+    "enabled": true,
+    "weight": 60,
+    "min_score": 60
+   },
+   "rsi2_reversal": {
+    "enabled": false,
+    "weight": 40,
+    "min_score": 60
+   },
+   "_meta": {
+    "exit_manager.stop_loss_pct": {
+     "source": "manual_review",
+     "timestamp": "2026-04-15T00:00:00",
+     "note": "3.5→5.0% trending_bull 기본값과 일치 (레짐 적용 전 초기값 정합성)"
+    },
+    "exit_manager.first_exit_pct": {
+     "source": "manual_review_backtested",
+     "timestamp": "2026-08-02T21:00:00",
+     "note": "5.0→10.0% + ratio 0.2→0.1. 백테스트 4개 시나리오(3·6개월 × 60·120종목)에서 손익비 전부 개선(1.53→1.85, 1.67→2.01, 1.98→2.21, 2.03→2.70), 수익률 3/4 개선. 기존 +5%/1.9일 익절이 추세 초입을 절단해 \"이익은 짧게 손실은 길게\"가 되던 문제 해소."
+    },
+    "exit_manager.trailing_activate_pct": {
+     "source": "manual_review_locked",
+     "timestamp": "2026-03-07T23:40:00",
+     "note": "2.5→5.0% 1차 익절과 동일 (분할익절 우선, 조기 트레일링 방지)"
+    },
+    "exit_manager.trailing_stop_pct": {
+     "source": "manual_review_locked",
+     "timestamp": "2026-03-07T23:40:00",
+     "note": "2.5→3.0% noise 탈출 방지 (주간 5% 목표 손익비 최적화)"
+    },
+    "risk_config.base_position_pct": {
+     "source": "manual_review_locked",
+     "timestamp": "2026-03-07T23:40:00",
+     "note": "10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)"
+    },
+    "risk_config.strategy_allocation": {
+     "source": "review_evidence_based",
+     "timestamp": "2026-09-13T12:00:00",
+     "note": "2026-09-13 종합 리뷰 — core 15→0 (실거래 PF 0.44·승률 26%), gap 35→15 (기대값 -0.41%/건·백테 미지원), sepa 30→40. 합계 65 (잔여 현금). 이전 2026-08-08 배분(core 30→15, sepa 25→30)은 이벤트 단위 통계·in-sample 백테스트 기반이었음. 복원 기준은 포지션 원장 30건+ AND 백테스트 게이트 통과."
+    },
+    "risk_config.strategy_allocation.vcp_breakout": {
+     "source": "manual_review",
+     "timestamp": "2026-08-03T02:15:00",
+     "note": "선행 발굴 라인(VCP 돌파) 신설에 따른 신규 배분 10%. 기존 합계 90% → 100%로, 다른 전략을 줄이지 않고 미배분분에 얹었다. 검증 전 라인이므로 보수적 배분이며, 표본 누적 후 백테스트로 재조정한다. ※ 배분은 상한이지 의무가 아니며, 최소 현금 5%는 can_open_position이 별도로 강제한다."
+    },
+    "risk_config.strategy_allocation.core_holding": {
+     "source": "manual_review",
+     "timestamp": "2026-04-19T21:00:00",
+     "note": "30→10% 축소 (PF 0.03 확정 손실, SK스퀘어 -12.9% 등). strategic_swing 10→25% 승격(승률 81% 검증), sepa_trend 25→30%"
+    },
+    "exit_manager.second_exit_ratio": {
+     "source": "manual_review",
+     "timestamp": "2026-04-19T21:00:00",
+     "note": "0.5→0.4 (+15% 도달 시 익절 확대, trailing 되돌림 방지)"
+    },
+    "exit_manager.third_exit_ratio": {
+     "source": "manual_review",
+     "timestamp": "2026-04-19T21:00:00",
+     "note": "0.5→0.35 (+25% 도달 시 총 실현 22.5%로 확대, +40% 시 +16% 개선)"
+    },
+    "momentum_breakout.enabled": {
+     "source": "manual_review",
+     "timestamp": "2026-03-07T11:00:00",
+     "note": "03-04 대참사 이후 강제 비활성화 (35% 승률, -1.07M 손실)"
+    },
+    "theme_chasing.min_score": {
+     "source": "manual_review",
+     "timestamp": "2026-05-03T01:00:00",
+     "note": "65→75. (2026-05-04 param-optimizer 검증 후 전략 자체 폐지로 무효화 — enabled:false)"
+    },
+    "theme_chasing.enabled": {
+     "source": "manual_review_locked",
+     "timestamp": "2026-05-04T00:00:00",
+     "note": "param-optimizer DB 검증: 75-85점 구간 11~21% 승률(-1.0%~-1.08%) 최악. 75 임계 역효과 판명. 누적 44건 -300k 손실, 보유 0일 78%, manual 청산 67%, 1일+ 잔류만 66.7% 승률 → 전략 구조적 부적합 → 폐지. 5% allocation은 sepa_trend로 재배분. 재활성화 시 보유 기간 필터(4일+) 도입 검토."
+    },
+    "risk_config.default_stop_loss_pct": {
+     "source": "llm",
+     "timestamp": "2026-05-11T20:33:17.019911"
+    },
+    "risk_config.strategy_allocation.core_holding.20pct": {
+     "source": "manual_review",
+     "timestamp": "2026-06-04T14:50:00",
+     "note": "10→20% 상향, strategic_swing 38.4→28.4 상쇄. 4/19 30→10 축소 이후 강세장 복귀 (KOSPI 5일 +9.4%, 20일 +33.4%) + 6/4 오리온/SK 추세 진입 실패 손절 후 빈슬롯 즉시 채우기 위한 예산 정상화."
+    },
+    "core_holding.core_stale_band": {
+     "source": "manual_review",
+     "timestamp": "2026-06-04T14:50:00",
+     "note": "pnl_band 3→7%, strict_band 2→5%. 6/4 오리온(-5.4%, 32영업일)·SK(-6.9%, 6영업일) 추세 진입 실패 종목이 stale 사각지대(±3%)에 갇혀 자동청산 불가했던 사고 후속 보완. 느린 손실 패턴 자동 컷."
+    }
+   }
+  }
+ },
+ "universe": {
+  "size": 60,
+  "tickers": [
+   "005930",
+   "000660",
+   "373220",
+   "207940",
+   "005935",
+   "006400",
+   "051910",
+   "005380",
+   "000270",
+   "068270",
+   "035420",
+   "035720",
+   "105560",
+   "055550",
+   "012330",
+   "003670",
+   "066570",
+   "096770",
+   "028260",
+   "032830",
+   "034730",
+   "086790",
+   "003550",
+   "015760",
+   "011200",
+   "034020",
+   "259960",
+   "018260",
+   "009150",
+   "316140",
+   "033780",
+   "024110",
+   "010130",
+   "009540",
+   "017670",
+   "030200",
+   "010950",
+   "036570",
+   "329180",
+   "003490",
+   "247540",
+   "403870",
+   "068760",
+   "196170",
+   "377300",
+   "041510",
+   "145020",
+   "263750",
+   "328130",
+   "357780",
+   "086520",
+   "039030",
+   "035900",
+   "383310",
+   "336260",
+   "067310",
+   "020150",
+   "112040",
+   "360750",
+   "323410"
+  ],
+  "missing_tickers": []
+ },
+ "ohlcv_cache": {
+  "ohlcv_000270_20240814_20260913.pkl": "608205efac9e2c51",
+  "ohlcv_000660_20240814_20260913.pkl": "b67e50a3e37fcbfa",
+  "ohlcv_003490_20240814_20260913.pkl": "8d3ea24008b2ad6b",
+  "ohlcv_003550_20240814_20260913.pkl": "26e5b0abce801e6e",
+  "ohlcv_003670_20240814_20260913.pkl": "875fcc0f5a4d4aa0",
+  "ohlcv_005380_20240814_20260913.pkl": "f90314178a8f9eb0",
+  "ohlcv_005930_20240814_20260913.pkl": "59338900818921a0",
+  "ohlcv_005935_20240814_20260913.pkl": "0adcbab1c20b6ca1",
+  "ohlcv_006400_20240814_20260913.pkl": "98f0757e7fe720fd",
+  "ohlcv_009150_20240814_20260913.pkl": "f2087aa0df576982",
+  "ohlcv_009540_20240814_20260913.pkl": "e26c36790f693422",
+  "ohlcv_010130_20240814_20260913.pkl": "e7554168e0e469c5",
+  "ohlcv_010950_20240814_20260913.pkl": "45f8d1a6b33f84f4",
+  "ohlcv_011200_20240814_20260913.pkl": "e307cf3602ed94c9",
+  "ohlcv_012330_20240814_20260913.pkl": "55aaf0299608a99d",
+  "ohlcv_015760_20240814_20260913.pkl": "0299a51d25943863",
+  "ohlcv_017670_20240814_20260913.pkl": "36b78a3e7860090e",
+  "ohlcv_018260_20240814_20260913.pkl": "276158fe20ddf61f",
+  "ohlcv_020150_20240814_20260913.pkl": "ddf067a6d30d140c",
+  "ohlcv_024110_20240814_20260913.pkl": "fa667fbb425294e8",
+  "ohlcv_028260_20240814_20260913.pkl": "743dd16e1d547e39",
+  "ohlcv_030200_20240814_20260913.pkl": "1c71ac8cb25da82e",
+  "ohlcv_032830_20240814_20260913.pkl": "fe0beebc588848f9",
+  "ohlcv_033780_20240814_20260913.pkl": "dcb514df21f0f1e4",
+  "ohlcv_034020_20240814_20260913.pkl": "c3919a34ecd6aca5",
+  "ohlcv_034730_20240814_20260913.pkl": "904b5240f0178b43",
+  "ohlcv_035420_20240814_20260913.pkl": "ecba2126740b5cff",
+  "ohlcv_035720_20240814_20260913.pkl": "d26b37982faf7a7e",
+  "ohlcv_035900_20240814_20260913.pkl": "48a0e08cdcbcf1d4",
+  "ohlcv_036570_20240814_20260913.pkl": "8ff80f5dbb97487e",
+  "ohlcv_039030_20240814_20260913.pkl": "ba7d34e63f792226",
+  "ohlcv_041510_20240814_20260913.pkl": "ee8985a7a6b2ac54",
+  "ohlcv_051910_20240814_20260913.pkl": "d933845ef89e3d49",
+  "ohlcv_055550_20240814_20260913.pkl": "ca81c0e0b32c79f1",
+  "ohlcv_066570_20240814_20260913.pkl": "6797efeaf10a4498",
+  "ohlcv_067310_20240814_20260913.pkl": "2579d3aa79038790",
+  "ohlcv_068270_20240814_20260913.pkl": "50be8039ca63c179",
+  "ohlcv_068760_20240814_20260913.pkl": "404ef8a1c6307ef3",
+  "ohlcv_086520_20240814_20260913.pkl": "d8e6d6fb263e5d77",
+  "ohlcv_086790_20240814_20260913.pkl": "b3f38e61eef7e680",
+  "ohlcv_096770_20240814_20260913.pkl": "a8a9fc016fdd7588",
+  "ohlcv_105560_20240814_20260913.pkl": "f00ea6df95027600",
+  "ohlcv_112040_20240814_20260913.pkl": "fb45f930ed92c222",
+  "ohlcv_145020_20240814_20260913.pkl": "2c37ec556b95f0c0",
+  "ohlcv_196170_20240814_20260913.pkl": "826c7e7690d56159",
+  "ohlcv_207940_20240814_20260913.pkl": "fe8130329a7052ae",
+  "ohlcv_247540_20240814_20260913.pkl": "7e08aaa2f62ee2d3",
+  "ohlcv_259960_20240814_20260913.pkl": "0a1ec93c10aa8407",
+  "ohlcv_263750_20240814_20260913.pkl": "e55d66d06b92315f",
+  "ohlcv_316140_20240814_20260913.pkl": "d8b0b3e54fc969e3",
+  "ohlcv_323410_20240814_20260913.pkl": "1d14125be3c600cd",
+  "ohlcv_328130_20240814_20260913.pkl": "003689a63c2da61f",
+  "ohlcv_329180_20240814_20260913.pkl": "365d17f91b0c96d1",
+  "ohlcv_336260_20240814_20260913.pkl": "7336c26cb6c4b307",
+  "ohlcv_357780_20240814_20260913.pkl": "d856edf1dc4f3a15",
+  "ohlcv_360750_20240814_20260913.pkl": "786e4e783223916e",
+  "ohlcv_373220_20240814_20260913.pkl": "0d49953d084ff288",
+  "ohlcv_377300_20240814_20260913.pkl": "185980d705bd74ce",
+  "ohlcv_383310_20240814_20260913.pkl": "52325ab75e6258e7",
+  "ohlcv_403870_20240814_20260913.pkl": "05c5902eef920704",
+  "regime_20240812_20260911.pkl": "c523eb8827afddb1",
+  "regime_20250208_20260911.pkl": "1d12d091a2110139"
+ },
+ "ohlcv_cache_substitutes": {
+  "005930": "ohlcv_005930_20240814_20260913.pkl",
+  "000660": "ohlcv_000660_20240814_20260913.pkl",
+  "373220": "ohlcv_373220_20240814_20260913.pkl",
+  "207940": "ohlcv_207940_20240814_20260913.pkl",
+  "005935": "ohlcv_005935_20240814_20260913.pkl",
+  "006400": "ohlcv_006400_20240814_20260913.pkl",
+  "051910": "ohlcv_051910_20240814_20260913.pkl",
+  "005380": "ohlcv_005380_20240814_20260913.pkl",
+  "000270": "ohlcv_000270_20240814_20260913.pkl",
+  "068270": "ohlcv_068270_20240814_20260913.pkl",
+  "035420": "ohlcv_035420_20240814_20260913.pkl",
+  "035720": "ohlcv_035720_20240814_20260913.pkl",
+  "105560": "ohlcv_105560_20240814_20260913.pkl",
+  "055550": "ohlcv_055550_20240814_20260913.pkl",
+  "012330": "ohlcv_012330_20240814_20260913.pkl",
+  "003670": "ohlcv_003670_20240814_20260913.pkl",
+  "066570": "ohlcv_066570_20240814_20260913.pkl",
+  "096770": "ohlcv_096770_20240814_20260913.pkl",
+  "028260": "ohlcv_028260_20240814_20260913.pkl",
+  "032830": "ohlcv_032830_20240814_20260913.pkl",
+  "034730": "ohlcv_034730_20240814_20260913.pkl",
+  "086790": "ohlcv_086790_20240814_20260913.pkl",
+  "003550": "ohlcv_003550_20240814_20260913.pkl",
+  "015760": "ohlcv_015760_20240814_20260913.pkl",
+  "011200": "ohlcv_011200_20240814_20260913.pkl",
+  "034020": "ohlcv_034020_20240814_20260913.pkl",
+  "259960": "ohlcv_259960_20240814_20260913.pkl",
+  "018260": "ohlcv_018260_20240814_20260913.pkl",
+  "009150": "ohlcv_009150_20240814_20260913.pkl",
+  "316140": "ohlcv_316140_20240814_20260913.pkl",
+  "033780": "ohlcv_033780_20240814_20260913.pkl",
+  "024110": "ohlcv_024110_20240814_20260913.pkl",
+  "010130": "ohlcv_010130_20240814_20260913.pkl",
+  "009540": "ohlcv_009540_20240814_20260913.pkl",
+  "017670": "ohlcv_017670_20240814_20260913.pkl",
+  "030200": "ohlcv_030200_20240814_20260913.pkl",
+  "010950": "ohlcv_010950_20240814_20260913.pkl",
+  "036570": "ohlcv_036570_20240814_20260913.pkl",
+  "329180": "ohlcv_329180_20240814_20260913.pkl",
+  "003490": "ohlcv_003490_20240814_20260913.pkl",
+  "247540": "ohlcv_247540_20240814_20260913.pkl",
+  "403870": "ohlcv_403870_20240814_20260913.pkl",
+  "068760": "ohlcv_068760_20240814_20260913.pkl",
+  "196170": "ohlcv_196170_20240814_20260913.pkl",
+  "377300": "ohlcv_377300_20240814_20260913.pkl",
+  "041510": "ohlcv_041510_20240814_20260913.pkl",
+  "145020": "ohlcv_145020_20240814_20260913.pkl",
+  "263750": "ohlcv_263750_20240814_20260913.pkl",
+  "328130": "ohlcv_328130_20240814_20260913.pkl",
+  "357780": "ohlcv_357780_20240814_20260913.pkl",
+  "086520": "ohlcv_086520_20240814_20260913.pkl",
+  "039030": "ohlcv_039030_20240814_20260913.pkl",
+  "035900": "ohlcv_035900_20240814_20260913.pkl",
+  "383310": "ohlcv_383310_20240814_20260913.pkl",
+  "336260": "ohlcv_336260_20240814_20260913.pkl",
+  "067310": "ohlcv_067310_20240814_20260913.pkl",
+  "020150": "ohlcv_020150_20240814_20260913.pkl",
+  "112040": "ohlcv_112040_20240814_20260913.pkl",
+  "360750": "ohlcv_360750_20240814_20260913.pkl",
+  "323410": "ohlcv_323410_20240814_20260913.pkl"
+ },
+ "regime_sources": {
+  "6m": "kospi_fdr",
+  "12m": "kospi_fdr"
+ },
+ "random_used": false
+}

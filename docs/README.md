@@ -28,6 +28,7 @@
 
 ### Research (리서치)
 - [exit-policy-ab-2026-09.md](research/exit-policy-ab-2026-09.md) — 청산(ladder/channel)×보유(current/extended)×사이징(nominal/risk) 2×2×2 백테스트 A/B (2026-09-13, 리뷰 권고 1~3 동시 검증): 포지션 단위 R·PF·WF 3구간·KODEX200 초과, 승자 셀과 게이트 경유 권고 파라미터
+- [risk-sizing-revalidation-2026-09.md](research/risk-sizing-revalidation-2026-09.md) — 위험 사이징 재검증 (2026-09-14, 계획서 T7): 미래정보 제거·유효 설정·예산 캡 조건에서 nominal/risk/고정 14% 대조군 6셀 오프라인 재실행 — 운영 게이트 조건 충족이나 대조군 동일 통과·parity 미해소로 **승격 보류**, 검증된 것은 노출 축소 효과
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
