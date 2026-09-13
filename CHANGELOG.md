@@ -36,6 +36,17 @@
 - 운영 메모: 운영 체크아웃이 다른 세션(`feature/architecture-doc-sync`, 문서 3개 미커밋)에 있어 배포는
   트리가 깨끗해진 뒤 장 마감 후 진행.
 
+## 2026-09-10 — docs: 실행 소스 기준 시스템 아키텍처 최신화
+
+- docs/architecture/system-overview.md를 현재 진입점과 컴포넌트 배선 기준으로 전면 갱신했다.
+- KR의 UnifiedEngine 이벤트 경로와 US의 _USEngineBundle·USScheduler 직접 주문 경로를 구분하고,
+  MarketContext가 공통 디스패처가 아닌 시장별 의존성 경계임을 명확히 했다.
+- default.yml과 evolved_overrides.yml의 병합 규칙, KR batch의 추가 우선순위, 현재 일일·주간
+  스케줄과 KR/US 폴링 주기를 실제 조건문 기준으로 정리했다.
+- KIS 공용 토큰·호출 제한, 런타임 상태 저장, 대시보드, 전문가·진화·shadow 경계를 추가하고
+  쉽게 낡는 파일 줄 수 표를 역할 중심 변경 가이드로 교체했다.
+- docs/README.md의 아키텍처 문서 설명을 새 범위에 맞췄다. 실행 코드 변경은 없다.
+
 ## 2026-09-10 — fix: 잔고조회 TR 간격 2.1초 — 원장 초과가 "개장 직후만"이 아니라 장중 내내였음 (결론 정정)
 
 - `/ops-check` 하루치 집계에서 EGW00215 996라인 발견 → 시간대 분포 재조사: 9/3부터 매일 09:00~15:30
