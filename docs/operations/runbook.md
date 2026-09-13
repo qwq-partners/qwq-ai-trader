@@ -303,6 +303,9 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - 청산 실패 시 `broker.get_positions()`로 실제 보유 확인 후 정리
 - 동기화 주기: KR 30초, US 30초
 - KIS 포지션 0건 응답은 잔고 `stock_value > 0`일 때만 API 오류로 간주 — 수동 전량 매도 등 진짜 빈 계좌는 유령 정리로 진행 (2026-09-03)
+- **부분 누락**(봇 보유 중 일부만 응답에서 빠짐, 매도 pending 제외)도 5초 후 1회 재시도 → 재시도에도 없으면 유령 정리 (2026-09-13)
+- **exit_exempt 종목**은 재시도 포함 **3주기(≈90초) 연속 누락**일 때만 제거 — 로그 `KIS 응답 누락 n/3회 — exit_exempt 종목이라 유령 제거 보류`가 3회 이어지면 실제 부재(수동 매도)로 본 것
+- 잔고 조회 실패 시 포지션 조회 없이 종료(원장 TR 절약), sync 경로 ExitManager 등록 실패는 `_pending_exit_registrations`로 fill_check 주기에 재시도
 
 ### 매수 미실행 체크리스트
 1. 가용 현금 확인 (`get_available_cash()` / `curl -s localhost:8080/api/portfolio` → `cash_ratio`)
