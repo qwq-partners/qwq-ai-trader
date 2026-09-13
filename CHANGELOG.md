@@ -14,6 +14,18 @@ F4(D 재현): risk 태그가 원본 Signal.metadata 에만 있고 event.metadata
 - **잔여(A 배선, 다음 PR)**: kr_scheduler 체결 경로 `confirm_initial_risk → set_initial_risk → merge_confirmed_risk` 를 `market_context.entry_risk` 에 병합해 `record_entry`; `_pending_signal_cache` 는 첫 부분체결에서 pop 되므로
   주문 완결까지 유지 필요. 배선 전 운영 원장은 전부 legacy-unmeasured. config_hash 는 RiskConfig 만(ExitConfig·전략 SL 미포함), 주문/포지션 식별자는 exporter 의 trade.id 대체. canary 판정 원장은 `--source db`.
   canary 허용치(1원)는 3 leg 이상 분할 매도에서 반올림 누적으로 경계값 — 필요 시 max(1, 0.5×(leg+1)) 검토.
+## 2026-09-14 — fix: 하트비트가 성공·실패·유휴를 구분 (계획서 T4, F5)
+
+F5(D 재현): DART 조회 전 beat, REST 실패 후 beat, 진화 evolve() 예외를 삼킨 뒤 beat → 40분 전부 실패해도 정체로 잡히지 않았다.
+- `src/utils/loop_heartbeat.py`: `record_attempt/record_success/record_failure/record_idle/set_enabled/annotate` API(`beat()`는 record_success 별칭).
+  **last_success 는 record_success 만 갱신**(유휴는 정체 기준 `_beats` 만). `loop_status`(enabled/idle_reason/last_attempt/last_success/consecutive_failures/next_due).
+  일일 잡은 `DAILY_SCHEDULE` 예정시각 + 60분 grace(진화는 config `evolution_time` 동기화) — 09-13 "직전 거래일 자정" 규칙 대체.
+- kr_scheduler 9개 루프 재배선: DART 전부 실패=실패·일부=degraded(note)·보유 0=유휴·API 키 없음=disabled(초기화 실패는 disabled 로 위장 안 함);
+  REST 대상 있음·성공 0=실패, 대상 0/WS 커버=유휴, 분류 후 블록 예외는 note 만; 진화는 evolve() 예외만 실패; 재시작 시 상태 파일로 "오늘 완료" 복원.
+- `/api/health` `loop_status`, `ops_check.sh` 실패 누적·degraded 표시·disabled 제외. 테스트 24건(통합 5 + 단위), runbook 경보 창(예정시각+60분~자정) 명시.
+- 통합 보완: `annotate` 는 note 덧붙이기, `harvest_shadow.run_daily_shadow_scan` 실패 사유를 failure_reason 에 노출.
+- 잔여(advisory): evolve() 이전 단계(품질검증·CF·LLM 복기) 예외 삼킴은 note 미표기, 예정시각 이후 재시작 + 지속 실패는 consecutive_failures 로만 노출,
+  harvest/vol/DART 스케줄러는 `_supervised` 없이 create_task(기존). 배포 없음.
 
 ## 2026-09-14 — fix: 백테스터 정보 시점·초기 손절 수정 (계획서 T5, F2·F8)
 
@@ -104,6 +116,8 @@ CLAUDE.md 에 "하위 에이전트 위임 규칙"(작업별 모델·effort 명�
   본전 보호 -1.5% → **-0.5%**(NONE -2.0%). `CLAUDE.md` ATR 손절 범위 3.5~8 → **4~8**.
 
 ## 2026-09-13 — feat: 루프 하트비트 — 살아 있지만 일을 못 하는 스케줄러 루프 정체 알림
+
+> → 09-14 T4/F5 후속으로 API(record_*)·일일 잡 판정 규칙(예정시각+60분 grace)이 대체됨. 아래는 도입 당시 기록.
 
 종합 리뷰(2026-09-13) "조용한 열화" 항목. `_supervised`는 예외로 죽은 루프만 재기동해, 돌지만 성공하지 못하는
 루프(HTTP 500 재시도 폭풍 14일·수확 shadow 2일 무동작·daily_bias 7/2 정체)를 못 봤다. 루프 로직 변경 없음.

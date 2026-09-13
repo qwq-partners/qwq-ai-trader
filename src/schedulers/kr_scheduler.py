@@ -940,6 +940,7 @@ class KRScheduler:
         if not bot.broker:
             return
 
+        _hb.record_attempt("kr_portfolio_sync")
         try:
             # 1. KIS API에서 실제 잔고/포지션 조회 (lock 밖에서 수행 - IO 작업)
             balance = await bot.broker.get_account_balance()
@@ -947,6 +948,7 @@ class KRScheduler:
                 logger.warning("포트폴리오 동기화: 잔고 조회 실패")
                 if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                     bot.risk_manager.set_sync_status(False)
+                _hb.record_failure("kr_portfolio_sync", "잔고 조회 실패")
                 return
             kis_positions = await bot.broker.get_positions()
 
@@ -982,6 +984,7 @@ class KRScheduler:
                     )
                     if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                         bot.risk_manager.set_sync_status(False)
+                    _hb.record_failure("kr_portfolio_sync", _why)
                     return
 
             # 3. lock 내에서 포트폴리오 수정
@@ -1157,12 +1160,13 @@ class KRScheduler:
             # 동기화 성공 → 리스크 매니저에 알림
             if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                 bot.risk_manager.set_sync_status(True)
-            _hb.beat("kr_portfolio_sync")
+            _hb.record_success("kr_portfolio_sync")
 
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
             if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                 bot.risk_manager.set_sync_status(False)
+            _hb.record_failure("kr_portfolio_sync", str(e))
 
     async def _run_strategic_prescan(self):
         """15:35 전략적 사전분석 (배치 스캔 직전 수급 추세 + VCP 탐지)"""
@@ -1912,6 +1916,7 @@ JSON:
 
         try:
             while bot.running:
+                _hb.record_attempt("kr_fill_checker")
                 try:
                     open_orders = await bot.broker.get_open_orders()
                     # 재시도 대상은 이전 주기까지 쌓인 것만 — 이번 주기에 "포지션 미생성"으로 막 넣은 종목을
@@ -2444,7 +2449,7 @@ JSON:
                     # 유휴(미체결 없음) 시 15초 — 5초 폴링이 개장 직후 원장 TR 트래픽의 대부분이라
                     # EGW00215 충돌을 키웠다 (2026-09-07). 포지션 변화는 30초 동기화가 커버한다.
                     check_interval = 2 if open_orders else 15
-                    _hb.beat("kr_fill_checker")
+                    _hb.record_success("kr_fill_checker")
 
                     if _fill_check_errors > 0:
                         _fill_check_errors = 0
@@ -2452,6 +2457,7 @@ JSON:
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     logger.warning(f"체결 확인 네트워크 오류: {e}")
                     _fill_check_errors += 1
+                    _hb.record_failure("kr_fill_checker", str(e))
                     if _fill_check_errors >= 3:
                         if bot.broker:
                             await bot.broker._ensure_token()
@@ -2466,6 +2472,7 @@ JSON:
                 except Exception as e:
                     logger.warning(f"체결 확인 오류: {e}")
                     _fill_check_errors += 1
+                    _hb.record_failure("kr_fill_checker", str(e))
                     if _fill_check_errors >= 5:
                         await self._send_error_alert(
                             "ERROR",
@@ -2503,9 +2510,11 @@ JSON:
                 _overnight_sentiment = None
                 _overnight_volatility = None
                 try:
+                    _hb.record_attempt("kr_screener")
                     # 세션 확인
                     current_session = self._get_current_session()
                     if current_session == MarketSession.CLOSED:
+                        _hb.record_idle("kr_screener", "장외 세션")
                         await asyncio.sleep(bot._screening_interval)
                         continue
 
@@ -2618,11 +2627,12 @@ JSON:
                     bot._last_screened = screened
                     # 스크리닝 시각 — 팀 심의가 지표 신선도를 판단하는 데 쓴다
                     bot._last_screened_at = datetime.now()
-                    _hb.beat("kr_screener")
+                    _hb.record_success("kr_screener")
 
                 except Exception as e:
                     logger.warning(f"스크리닝 오류: {e}", exc_info=True)
                     screened = []
+                    _hb.record_failure("kr_screener", str(e))
 
                 # === 장중 자동 시그널 발행 (스크리닝과 별도 예외 처리) ===
                 _enabled = set()
@@ -3559,8 +3569,10 @@ JSON:
 
             while bot.running:
                 try:
+                    _hb.record_attempt("kr_market_trend")
                     current_session = self._get_current_session()
                     if current_session not in (MarketSession.REGULAR, MarketSession.PRE_MARKET):
+                        _hb.record_idle("kr_market_trend", "장외 세션")
                         await asyncio.sleep(120)
                         continue
 
@@ -3569,6 +3581,7 @@ JSON:
                     rm = getattr(bot, 'risk_manager', None)
                     kis_md = getattr(bot, 'kis_market_data', None)
                     if not rm or not kis_md:
+                        _hb.record_failure("kr_market_trend", "risk_manager/kis_market_data 미초기화")
                         await asyncio.sleep(120)
                         continue
 
@@ -3584,7 +3597,7 @@ JSON:
 
                     if kospi_data or kosdaq_data:
                         rm.update_market_trend(kospi_data, kosdaq_data)
-                        _hb.beat("kr_market_trend")
+                        _hb.record_success("kr_market_trend")
 
                         # 시장 체제 갱신 (크로스 검증 게이트에서 참조)
                         if bot.engine:
@@ -3693,12 +3706,15 @@ JSON:
 
                                     except Exception as _lmd_e:
                                         logger.debug(f"[시장체제] LLM 장전 진단 실패 (무시): {_lmd_e}")
+                    else:
+                        _hb.record_failure("kr_market_trend", "KOSPI/KOSDAQ 지수 조회 실패")
 
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     # debug 레벨은 NameError를 4개월 숨겼다 — 타입까지 warning으로 노출
                     logger.warning(f"[시장추세] 갱신 오류 (무시): {type(e).__name__}: {e}")
+                    _hb.record_failure("kr_market_trend", f"{type(e).__name__}: {e}")
 
                 await asyncio.sleep(120)  # 2분 주기
 
@@ -3810,9 +3826,12 @@ JSON:
             _nxt_symbols: set = set()   # NXT 대상 종목 캐시
 
             while bot.running:
+                _rest_classified = False   # 분류(record_success/idle/failure) 완료 여부
                 try:
+                    _hb.record_attempt("kr_rest_price_feed")
                     current_session = self._get_current_session()
                     if current_session == MarketSession.CLOSED:
+                        _hb.record_idle("kr_rest_price_feed", "장외 세션")
                         await asyncio.sleep(20)
                         continue
 
@@ -3903,6 +3922,27 @@ JSON:
                             logger.debug(f"[REST피드] {symbol} 시세 조회 실패: {e}")
 
                         await asyncio.sleep(0.15)
+
+                    # 하트비트 분류 (2026-09-14 리뷰 F5): 조회 대상이 있는데 성공 0건은 실패,
+                    # 대상 0건(포지션 없음 또는 WS 전량 커버)은 사유 있는 유휴 — 실패를 유휴로 위장하지 않는다.
+                    if not holding_symbols:
+                        _hb.record_idle("kr_rest_price_feed", "보유종목 0건 또는 WS 전량 커버")
+                    elif success_count == 0:
+                        _hb.record_failure(
+                            "kr_rest_price_feed",
+                            f"보유종목 시세조회 {len(holding_symbols)}종목 전부 실패",
+                        )
+                    else:
+                        _hb.record_success(
+                            "kr_rest_price_feed",
+                            note=(
+                                f"{len(holding_symbols) - success_count}/{len(holding_symbols)} 실패"
+                                if success_count < len(holding_symbols) else None
+                            ),
+                        )
+                    # 이후 블록(프리장 전광판 폴링 등)의 예외는 이미 확정한 분류를
+                    # 덮어쓰지 않는다 — 아래 except에서 note로만 남긴다 (리뷰 advisory (e))
+                    _rest_classified = True
 
                     if success_count > 0:
                         ws_info = f", WS={len(ws_covered)}종목" if ws_covered else ""
@@ -3995,10 +4035,14 @@ JSON:
                                     f"(NXT대상, watch+pending)"
                                 )
 
-                    _hb.beat("kr_rest_price_feed")
-
                 except Exception as e:
                     logger.warning(f"[REST피드] 오류: {e}", exc_info=True)
+                    if _rest_classified:
+                        # 보유종목 시세 분류는 이미 성공/유휴/실패로 확정됐다 — 프리장
+                        # 전광판 등 후속 블록의 예외로 그 판정을 실패로 덮어쓰지 않는다.
+                        _hb.annotate("kr_rest_price_feed", f"후속 블록 오류: {e}")
+                    else:
+                        _hb.record_failure("kr_rest_price_feed", str(e))
 
                 await asyncio.sleep(20)
 
@@ -4476,6 +4520,9 @@ JSON:
                     last_review_date = date.fromisoformat(_d)
         except Exception:
             pass
+        if last_review_date == date.today():
+            # 재시작 전 오늘 이미 완료 — 정체 오탐 방지 (2026-09-14 리뷰 T4)
+            _hb.record_success("kr_evolution_scheduler", note="재시작 전 완료 복원")
 
         def _persist_evo_date(d: date):
             try:
@@ -4486,6 +4533,8 @@ JSON:
         sched_cfg = bot.config.get("kr", "scheduler") or {}
         evo_time_str = sched_cfg.get("evolution_time", "20:30")
         evo_hour, evo_min = (int(x) for x in evo_time_str.split(":"))
+        # 설정이 스케줄 시각의 단일 출처 — 하트비트 grace 판정도 같은 값을 쓴다 (2026-09-14 리뷰 T4)
+        _hb.DAILY_SCHEDULE["kr_evolution_scheduler"] = (evo_hour, evo_min)
 
         try:
             while bot.running:
@@ -4498,6 +4547,7 @@ JSON:
 
                 if now.hour == evo_hour and evo_min <= now.minute < evo_min + 15:
                     if last_review_date != today:
+                        _hb.record_attempt("kr_evolution_scheduler")
                         # 품질 검증 (evolve 직전)
                         try:
                             from ..core.evolution.quality_validator import QualityValidator
@@ -4665,9 +4715,18 @@ JSON:
                                     logger.debug(f"[진화] 평가 대기 중: {evo_result.get('reason', '')}")
                                 else:
                                     logger.debug(f"[진화] {evo_status}: {evo_result.get('reason', '')}")
+                                # waiting/keep/applied/rollback/기타 상태 전부 정상 완료 — evolve() 자체가
+                                # 성공적으로 반환했다는 뜻 (2026-09-14 리뷰 F5: 예외를 삼킨 뒤 무조건 beat 하던
+                                # 경로 제거 — 아래 except 에서만 실패로 기록한다)
+                                _hb.record_success("kr_evolution_scheduler")
                             except Exception as evo_err:
                                 logger.warning(f"[진화] 실행 실패 (무시): {evo_err}")
-                        _hb.beat("kr_evolution_scheduler")
+                                _hb.record_failure("kr_evolution_scheduler", str(evo_err))
+                        else:
+                            # strategy_evolver 미배선(설정으로 진화 비활성 또는 컴포넌트 미초기화)이어도
+                            # 이 블록의 나머지(품질검증·CF추적·일일복기)는 정상 완료했다 — evolve() 부재
+                            # 자체를 하트비트 실패로 확대하지 않는다 (F5 범위: 예외 삼킴만 제거)
+                            _hb.record_success("kr_evolution_scheduler")
 
                 await asyncio.sleep(60)
 
@@ -6478,6 +6537,9 @@ JSON:
                 last_run_date = json.loads(state_path.read_text()).get("date")
         except Exception:
             pass
+        if last_run_date == date.today().isoformat():
+            # 재시작 전 오늘 이미 완료 — 다음 예정시각까지 정체로 오탐하지 않도록 복원 (2026-09-14 리뷰 T4)
+            _hb.record_success("kr_harvest_shadow", note="재시작 전 완료 복원")
         logger.info("[수확shadow] 스케줄러 시작 (매 거래일 08:40, 주문 없음)")
         while True:
             try:
@@ -6486,19 +6548,23 @@ JSON:
                 today = now.date()
                 if today.weekday() >= 5 or is_kr_market_holiday(today):
                     continue
-                # 08:40 이후면 언제든 (창 놓친 날 catch-up — Codex 리뷰),
-                # dedup이 1일 1회를 보장
-                if now.hour < 8 or (now.hour == 8 and now.minute < 40):
+                # 예정시각(loop_heartbeat.DAILY_SCHEDULE 과 동일 출처) 이후면 언제든
+                # (창 놓친 날 catch-up — Codex 리뷰), dedup이 1일 1회를 보장
+                _sched_h, _sched_m = _hb.DAILY_SCHEDULE["kr_harvest_shadow"]
+                if (now.hour, now.minute) < (_sched_h, _sched_m):
                     continue
                 if last_run_date == today.isoformat():
                     continue
+                _hb.record_attempt("kr_harvest_shadow")
                 from ..strategies.harvest_shadow import run_daily_shadow_scan
                 ok, summary = await run_daily_shadow_scan()
                 if not ok:
-                    await asyncio.sleep(600)  # 실패 — 기록하지 않고 10분 후 재시도
+                    # 실패 — dedup 날짜는 기록하지 않고 10분 후 재시도
+                    _hb.record_failure("kr_harvest_shadow", summary or "run_daily_shadow_scan 실패")
+                    await asyncio.sleep(600)
                     continue
                 last_run_date = today.isoformat()
-                _hb.beat("kr_harvest_shadow")
+                _hb.record_success("kr_harvest_shadow")
                 try:
                     state_path.parent.mkdir(parents=True, exist_ok=True)
                     state_path.write_text(json.dumps({"date": last_run_date}))
@@ -6510,6 +6576,7 @@ JSON:
                 raise
             except Exception as e:
                 logger.warning(f"[수확shadow] 루프 오류 (계속): {e}")
+                _hb.record_failure("kr_harvest_shadow", str(e))
                 await asyncio.sleep(300)
 
     async def run_vol_targeting_scheduler(self):
@@ -6520,26 +6587,47 @@ JSON:
         상세: src/utils/volatility_targeting.py + docs/research/ai-trading-research-2026-08.md
         """
         last_run_date: Optional[str] = None
+        _cache_file = Path.home() / ".cache" / "ai_trader" / "vol_targeting.json"
+        try:
+            if _cache_file.exists():
+                _cached = json.loads(_cache_file.read_text())
+                if _cached.get("date") == date.today().isoformat():
+                    # 재시작 전 오늘 이미 완료 — 정체 오탐 방지 (2026-09-14 리뷰 T4)
+                    last_run_date = _cached["date"]
+                    _hb.record_success("kr_vol_targeting", note="재시작 전 완료 복원")
+        except Exception:
+            pass
         logger.info("[변동성타게팅] 스케줄러 시작 (매 거래일 08:30 이후 1회)")
         while True:
             try:
                 await asyncio.sleep(60)
+                # VOL_TARGETING=0 이면 refresh_vol_state()가 항상 실패로 보이는 None을
+                # 반환해 영구 정체로 잡혔다 — 설정으로 꺼진 상태는 enabled=False로 구분 (F5 후속)
+                if os.getenv("VOL_TARGETING", "1") == "0":
+                    _hb.set_enabled("kr_vol_targeting", False, "VOL_TARGETING=0")
+                    continue
+                _hb.set_enabled("kr_vol_targeting", True)
                 now = datetime.now()
                 today = now.date()
                 if today.weekday() >= 5 or is_kr_market_holiday(today):
                     continue
-                if now.hour < 8 or (now.hour == 8 and now.minute < 30):
+                _sched_h, _sched_m = _hb.DAILY_SCHEDULE["kr_vol_targeting"]
+                if (now.hour, now.minute) < (_sched_h, _sched_m):
                     continue
                 if last_run_date == today.isoformat():
                     continue
+                _hb.record_attempt("kr_vol_targeting")
                 from ..utils.volatility_targeting import refresh_vol_state
                 if await refresh_vol_state():
                     last_run_date = today.isoformat()
-                    _hb.beat("kr_vol_targeting")
+                    _hb.record_success("kr_vol_targeting")
+                else:
+                    _hb.record_failure("kr_vol_targeting", "refresh_vol_state 실패")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.warning(f"[변동성타게팅] 루프 오류 (계속): {e}")
+                _hb.record_failure("kr_vol_targeting", str(e))
                 await asyncio.sleep(300)
 
     async def run_dart_alert_scheduler(self):
@@ -6562,6 +6650,7 @@ JSON:
             return
         if not getattr(checker, "_enabled", False):
             logger.info("[공시경보] DART_API_KEY 미설정 — 스케줄러 종료")
+            _hb.set_enabled("kr_dart_alert", False, "DART_API_KEY 미설정")
             return
 
         bot = self.bot
@@ -6623,18 +6712,25 @@ JSON:
                 for _k in [k for k, d in alerted.items() if d < _cutoff]:
                     alerted.pop(_k, None)
 
-                _hb.beat("kr_dart_alert")
+                _hb.record_attempt("kr_dart_alert")
                 portfolio = bot.engine.portfolio if bot.engine else None
                 if portfolio is None or not portfolio.positions:
+                    _hb.record_idle("kr_dart_alert", "보유 종목 없음")
                     continue
 
+                # 하트비트 분류 (2026-09-14 리뷰 F5): 조회 전에 beat 하면 보유 종목 전부가
+                # 실패해도 정체로 안 잡힌다 — 전부 성공/일부 실패(degraded)/전부 실패를 구분한다.
+                _dart_ok = 0
+                _dart_fail = 0
                 for symbol, pos in list(portfolio.positions.items()):
                     try:
                         result = await checker.check_disclosures(
                             symbol, days=1, use_cache=False
                         )
+                        _dart_ok += 1
                     except Exception as _dc_err:
                         logger.debug(f"[공시경보] {symbol} 조회 실패 (무시): {_dc_err}")
+                        _dart_fail += 1
                         continue
                     if not result.risk_disclosures:
                         continue
@@ -6662,10 +6758,22 @@ JSON:
                         for t in fresh:
                             alerted[(symbol, t)] = today.isoformat()
                             _save_alerted()
+
+                if _dart_fail and _dart_ok == 0:
+                    _hb.record_failure(
+                        "kr_dart_alert", f"공시 조회 {_dart_fail}종목 전부 실패"
+                    )
+                elif _dart_fail:
+                    _hb.record_success(
+                        "kr_dart_alert", note=f"{_dart_fail}/{_dart_ok + _dart_fail} 실패"
+                    )
+                else:
+                    _hb.record_success("kr_dart_alert")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.warning(f"[공시경보] 루프 오류 (계속): {e}")
+                _hb.record_failure("kr_dart_alert", str(e))
                 await asyncio.sleep(300)
 
     async def run_value_growth_shadow_scheduler(self):
