@@ -141,7 +141,7 @@ class LLMStrategist:
 - 승률 55% 이상 + 손익비 1.5 이상 조합으로 일 1% 도달
 - 1건당 평균 수익 +2~3% / 손실 -1.5~2% 범위 유지
 - 하루 2~5건 거래로 수익 분산
-- 장 초반(09:00~10:00) 모멘텀 + 장중 테마 추종 병행
+- 장 초반(09:00~10:00) 모멘텀 중심 (테마추종 전략은 2026-05-04 폐지)
 
 응답 형식:
 - JSON 형식으로 구조화하여 응답
@@ -168,6 +168,7 @@ class LLMStrategist:
         self,
         days: int = 7,
         include_parameter_suggestions: bool = True,
+        extra_context: str = "",
     ) -> StrategyAdvice:
         """
         거래 분석 및 조언 생성
@@ -201,7 +202,8 @@ class LLMStrategist:
             logger.debug(f"[LLM 전략가] 매크로 컨텍스트 수집 실패: {e}")
 
         # 3. LLM 프롬프트 구성
-        prompt = self._build_analysis_prompt(review, include_parameter_suggestions, market_context)
+        prompt = self._build_analysis_prompt(review, include_parameter_suggestions, market_context,
+                                             extra_context=extra_context)
 
         # 4. LLM 호출
         try:
@@ -236,6 +238,7 @@ class LLMStrategist:
         review: ReviewResult,
         include_params: bool,
         market_context: Optional[Dict] = None,
+        extra_context: str = "",
     ) -> str:
         """LLM 분석 프롬프트 구성"""
         # 분석 기간의 일수와 일평균 수익률 계산
@@ -354,6 +357,17 @@ class LLMStrategist:
             "}",
             "```",
         ])
+
+        # 2026-09-13 WikiSkill 정렬 — 검증된 교훈(lesson_store)과 기각·롤백 이력은 제안자에게만 제공
+        try:
+            from .lesson_store import get_lesson_store
+            _lessons = get_lesson_store().format_context(max_items=5)
+            if _lessons:
+                prompt_parts.extend(["## 검증된 교훈 (lesson_store)", _lessons, ""])
+        except Exception:
+            pass
+        if extra_context:
+            prompt_parts.extend([extra_context, ""])
 
         return "\n".join(prompt_parts)
 

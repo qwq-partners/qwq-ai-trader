@@ -819,21 +819,9 @@ class DailyReviewer:
         regime_hint = "neutral"
         top_lesson = ""
 
-        for suggestion in param_suggestions:
-            param = suggestion.get("parameter", "")
-            current = suggestion.get("current_value", 0)
-            suggested = suggestion.get("suggested_value", 0)
-            confidence = suggestion.get("confidence", 0)
-
-            if confidence < 0.6:
-                continue
-
-            if param == "min_score" and "sepa" in suggestion.get("strategy", "").lower():
-                delta = int(suggested) - int(current) if current is not None and suggested is not None else 0
-                sepa_boost = max(-10, min(10, delta))
-            elif param == "min_score" and "rsi2" in suggestion.get("strategy", "").lower():
-                delta = int(suggested) - int(current) if current is not None and suggested is not None else 0
-                rsi2_boost = max(-10, min(10, delta))
+        # 2026-09-13 WikiSkill 정렬: parameter_suggestions는 더 이상 런타임 점수 부스트로 게이트를
+        # 우회하지 않는다 — StrategyEvolver._find_daily_review_trigger가 백테스트 게이트 경유 제안으로
+        # 소비한다 (논문의 실패 모드: 검증 없는 지식이 런타임에 직접 주입). assessment 기반 보정만 유지.
 
         # 전체 평가 기반 기본 바이어스
         if assessment == "poor":

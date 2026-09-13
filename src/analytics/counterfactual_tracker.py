@@ -113,6 +113,7 @@ class CounterfactualTracker:
                         self._state[key] = {
                             "symbol": sym,
                             "source": "team_hold",
+                            "wiki_context_used": v.get("wiki_context_used"),  # 2026-09-13 분리 집계
                             "date": day,
                             "sector": None,
                             "entry_px": None,
@@ -184,7 +185,10 @@ class CounterfactualTracker:
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for v in self._state.values():
             if v.get("r5") is not None:
-                groups.setdefault(v["source"], []).append(v)
+                _g = v["source"]
+                if v.get("wiki_context_used") is not None:  # 2026-09-13 위키 노출 유무로 분리
+                    _g = f"{_g}|wiki={'Y' if v['wiki_context_used'] else 'N'}"
+                groups.setdefault(_g, []).append(v)
         if not groups:
             return "counterfactual 표본 없음 (r5 완성 건 0)"
         lines = []

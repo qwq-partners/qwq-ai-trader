@@ -20,6 +20,35 @@
 4. **게이트 승격은 counterfactual 표본 기반**: 예) 규칙 #11 — CF 표본 ≥20건
    + r5 방향 정확도 ≥55% 충족 시에만 실차단 전환 (default.yml 주석 참조).
 
+## WikiSkill 대조 (2026-09-13)
+
+WikiSkill(Tang et al., Google Research, arXiv 2608.27454, 2026-08-27)은 에이전트 경험을
+**raw/(불변 실행기록) → wiki/(누적 지식, 리셋 없음) → skills/(런타임이 쓰는 절차, 게이트 통과 시만 갱신·롤백 가능)**
+3계층으로 컴파일하고, "위키 관리자 → 스킬 제안자(원자적 1건) → 고정 검증셋 게이트 → 채택/롤백" 루프로 진화시킨다.
+핵심 ablation: 위키를 **런타임 에이전트에게 주면 오히려 하락**(63.7→60.9)하고 스킬 유효성 신호가 오염된다 —
+위키는 제안자에게만. 권고 5: ①회고를 스킬에 직접 쓰지 않기 ②기각 제안 기록·재제안 금지 ③고정 검증셋 게이트
+④큰 모델로 진화·작은 모델에 이식 ⑤런타임은 스킬만.
+
+| 논문 | 우리 구현 | 2026-09-13 상태 |
+|---|---|---|
+| raw/ | position_ledger·candidates.jsonl·failures.jsonl·signal_events (append-only) | ✅ |
+| wiki/ | Trade Wiki + LessonStore (curate는 deprecate만, 삭제 없음) | ✅ (논문 한계인 가지치기도 있음) |
+| skills/ | evolved_overrides.yml(_meta 출처) + 규칙·REGIME_EXIT_PARAMS | ✅ |
+| 원자적 제안 1건 | active_change 단일 슬롯, 하루 1회 20:30 | ✅ |
+| 게이트 채택/롤백 | BacktestGate A/B + WF 2/3 + MDD 가드(fail-closed) + 실거래 5영업일 2차 게이트 | ✅ 논문보다 엄격 |
+| 기각 기록 → 재제안 금지 | candidate_ledger 기록은 전 경로, **읽기는 weakness 경로만** | 🔧 소스 무관 억제로 확장 (`evolve()` 4.5, 기각+롤백 14일) |
+| 제안자가 위키·이력을 읽음 | LLM 제안자 프롬프트에 위키·교훈·기각 이력 없음 | 🔧 lesson_store 교훈 + 기각·롤백 목록(결정·사유만, 게이트 수치 비공개) 주입 |
+| 회고 → 제안자 (게이트 경유) | 일일 LLM 복기의 parameter_suggestions가 **daily_bias 점수 부스트로 게이트 우회** | 🔧 부스트 경로 제거, `_find_daily_review_trigger`로 게이트 경유 제안 (MEMORY 갭 "LLM 복기→구조화 입력 미연결" 해소) |
+| 런타임 무위키 | 규칙#9 메모리 보정(±3, 하드 게이트 입력)·G4 LLM 2차·팀 심의가 위키/메모리 소비, 스위치·계측 없음 | 🔧 `RUNTIME_WIKI=0` 스위치(기본 켜짐) + `memory_adj`/`wiki_context_used` 태그 → gate_performance G4 `|wiki` 버킷, CF `team_hold|wiki=Y/N` 분리 — **끄기는 측정 후** (검증 규율 4) |
+| 고정 검증셋 | 6개월 슬라이딩 + 시총 상위 60 (생존편향, PIT 미소비) | ⏸ 쌍대 비교라 유효; 표본 생기면 최근 7일 holdout 제외 검토 |
+| 단기 효과만 측정(논문 한계) | +28일 반사실 재생(gate_replay, diagnostic_only) | ✅ 앞섬 — 누적 방향 일치율 한 줄 추가 |
+
+동시에 정리한 것: 주간 배분 리밸런싱이 자기 이력을 못 보던 문제(최근 4회 이력 주입 + 원장 `allocation_rebalance` 기록),
+폐지된 strategic_swing이 5% 하한으로 되살아나는 잠복 버그(하드 비활성), 도달 불가 규칙 `bad_profit_factor`(잠금 파라미터) 삭제,
+`_GATE_VERIFIABLE`에서 rsi2 제외, GateResult.wf 구조화(원장 reason 300자 절단 대비), 롤백 기준 문서-코드 불일치 정정.
+
+**롤백 기준(코드)**: 적용 후 5영업일+10건 실거래에서 승률 -5%p 또는 손익비 -0.3 악화 → 롤백; 10영업일 초과·10건 미달 → 보수적 롤백.
+
 ## 전체 구조
 
 ```

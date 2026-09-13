@@ -177,7 +177,8 @@ class TradingTeam:
         parts: List[str] = []
         try:
             tw = getattr(self._expert_orch, "trade_wiki", None)
-            if tw is not None and hasattr(tw, "query_symbol"):
+            # RUNTIME_WIKI=0 이면 심의에도 위키 노트 비노출 (2026-09-13, engine과 동일 스위치)
+            if tw is not None and hasattr(tw, "query_symbol") and os.getenv("RUNTIME_WIKI", "1") != "0":
                 note = tw.query_symbol(symbol)
                 if note:
                     parts.append(f"종목 노트(과거 거래·최근 리서치): {note[:300]}")
@@ -232,6 +233,7 @@ class TradingTeam:
             #    2026-08-07: 종목 위키·섹터 카운슬 컨텍스트를 시장 컨텍스트에 결합
             _ctx = self._market_context()
             _sym_ctx = self._symbol_context(symbol, name, sector)
+            verdict.wiki_context_used = bool(_sym_ctx and "종목 노트" in _sym_ctx)  # CF 분리 집계용
             if _sym_ctx:
                 _ctx = (_ctx + "\n" if _ctx else "") + _sym_ctx
             debate = await self.research.debate(
