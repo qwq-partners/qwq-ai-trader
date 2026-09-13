@@ -17,6 +17,16 @@
 - `scripts/dev/ops_check.sh`: 하트비트 줄(정체 루프·최장 대기) 추가.
 - `tests/test_loop_heartbeat.py` (신규, 6건): 레지스트리·임계·floor·정규장 창·주말/공휴일 갭·재시작 기산.
 - 문서: `docs/operations/runbook.md` 알려진 이슈에 하트비트 절.
+## 2026-09-13 — fix: _sync_portfolio 유령 제거 안전화 (exit_exempt 3주기 가드·부분 누락 재시도·등록 실패 대기열)
+
+특성화 테스트(`tests/test_sync_portfolio_characterization.py`, 리뷰 권고 ⑧)가 드러낸 결함 4건 — `src/schedulers/kr_scheduler.py`.
+- **exit_exempt 즉시 삭제**: KIS가 부분 응답(평가액>0, 다른 종목은 있음)을 주면 펩트론 087010(자산 99.6%)도 그 자리에서
+  `del positions` + `ExitManager.remove_position` → 3주기 연속 누락(`_exempt_missing_count`)에서만 제거, 재등장 시 리셋.
+- **부분 누락 미재시도**: 재시도가 "0건 응답"에서만 발동 → 일부 종목 누락(매도 pending 제외)도 5초 후 1회 재시도, 그래도 없으면 유령.
+- **등록 실패 전파**: sync 경로 `register_position` 예외가 바깥 except로 올라가 수량·현금 동기화까지 중단 →
+  포지션 유지 + `_pending_exit_registrations` 대기열(fill_check 재시도), 나머지 동기화 계속.
+- **잔고 실패 후 포지션 조회**: 판정 전에 `get_positions()`까지 호출(원장 TR 낭비) → 잔고 실패면 즉시 반환.
+- 테스트 7→11건(xfail 해소), runbook·risk-and-exit 갱신.
 
 ## 2026-09-13 — config: 리뷰 1단계 반영 — 배분 재편(core 0·gap 15·sepa 40) + 팀 conviction 부스트 비활성
 

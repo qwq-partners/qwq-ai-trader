@@ -230,6 +230,7 @@
   4. `batch_analyzer.monitor_positions` 루프 → RSI2 청산·보유기간초과·ExitManager 릴레이 스킵
   5. `batch_analyzer._preemptive_stale_exit_on_bear` → 약세장 선제 stale 청산 스킵
   - 코어 경로(rebalance/stale/early-warning)는 `strategy == "core_holding"` 한정이라 strategy="manual" 종목엔 미적용.
+  6. `kr_scheduler._sync_portfolio` 유령 제거 — KIS 부분 응답 1회로는 제거하지 않고 3주기 연속 누락에서만 (2026-09-13, 이전엔 부분 응답 시 즉시 삭제 + ExitManager 상태 소실)
 - **수동 매수**: `config kr.manual_buy_orders: [{symbol, name, exit_exempt}]` → 기동 시 1회 실행(보유 시 자동 스킵). KIS 시장가는 주문가능금액을 상한가 기준으로 계산하므로 marketable 지정가(현재가+0.6%)로 전액 체결.
 - ⚠️ **손절 부재 = 하락 100% 노출.** 청산은 전적으로 수동 판단. (펩트론 087010: 2026-06-23 사용자 지시로 전액 매수 + 손절 면제)
 
