@@ -354,18 +354,43 @@ bull 시 효과: max_positions 8→10, 현금 5→3%, 비중 25→30% → **현�
 리뷰 권고 ③. 근거는 `docs/research/exit-policy-ab-2026-09.md` — 청산(ladder/channel) × 보유(current/extended) × 사이징(nominal/risk)
 2×2×2 백테스트에서 **사이징 축만** sepa 6m·12m 두 윈도우 모두 게이트 통과 (MDD -21.6→-5.9 / -28.7→-11.2, 회전 78→34~43배, PF 1.06→1.29 / 1.17→1.39).
 
+> **2026-09-14 정정 (리뷰 후속 F1/T2, 계획 `docs/superpowers/plans/2026-09-13-review-remediation.md`)**: 이전 구현은 분모를
+> ATR×2(4~8 클램프)로 만들었지만 **신규 체결 등록(`kr_scheduler` register_position)은 price_history 없이 호출되어 ATR 동적 손절이
+> 생기지 않고 전략 고정 SL 이 적용**된다 (SEPA ATR 1%에서 분모 4% vs 실제 5%). 사이징 분모를 실제 손절 해석으로 교체했다.
+> 선택지 A — ATR hint 로 동적 손절을 새로 켜지 않는다 (청산 전략 불변). 기존 12개월 A/B 결과는 이 정합 후 재계산 전까지 확정 근거가 아니다.
+
 ```
-position_value = total_equity × risk_per_trade_pct(0.7%) / 진입 손절폭(%)
-진입 손절폭     = clamp(ATR% × atr_multiplier(2.0), min_stop 4.0, max_stop 8.0)   ← ExitManager 와 동일 규칙
-                 (run_trader 가 ExitConfig 값을 engine.risk_manager._exit_stop_params 로 주입, ATR 없으면 default_stop_loss_pct 4.0)
-상한            = total_equity × risk_max_position_pct(18%)      → 종목당 8.75%(ATR 6%+) ~ 17.5%(ATR ≤2%)
+분모(진입 손절)  = ExitManager.resolve_stop(dynamic=None, fixed=_strategy_exit_params[strategy].stop_loss_pct, is_core)
+                  = src/utils/stop_policy.resolve_effective_stop:  dynamic(min_stop 하한) > strategy(미클램프) > ExitConfig.stop_loss_pct,
+                    비코어는 INTRADAY_CRASH_PARAMS[현재 급락 레벨].stop_loss_pct 를 상한으로 cap  ← update_price 손절 판정과 같은 함수
+                  실효값: sepa 5.0 (default.yml) / gap 3.5 (evolved) / vcp 4.0 (run_trader 하드코딩) / 전략 SL 없으면 글로벌 5.0
+                  ⚠ risk_config.default_stop_loss_pct(evolved 2.8)는 ExitManager 손절이 아니므로 쓰지 않는다. ATR·atr_pct_hint 는 분모에 무관.
+1차 금액        = total_equity × risk_per_trade_pct(0.7%) / 분모(%)      상한 = total_equity × risk_max_position_pct(18%)
+최종 불변조건    = 모든 오버레이(강도·전략 배율·캘린더·변동성·팀 부스트)·전략 예산·최소금액·최소 3주 보정이 끝난 수량 q 에 대해
+                  planned_risk(q) = (price×q + FeeCalculator.calculate_buy_fee(price×q)) × 분모/100 ≤ total_equity × 0.7%
+                  초과 시 q 를 줄인다 (src/utils/sizing.risk_quantity_cap). 예) 1천만·1만원·SL 5% → 139주 (140주 = 70,009.85 > 70,000)
 ```
-- 코어홀딩 제외. 신호 강도 배율·전략별 기본 비율(sepa 25/vcp 15/gap 15)은 **쓰지 않는다** (백테스트 조건과 동일).
-  메타 `position_multiplier`가 ATR 배율 그대로면 이중 축소 방지를 위해 무시, 다른 값(LLM 감액 등)이면 그대로 곱함.
-- 이후 단계(전략 예산 캡·시즈널리티·변동성 타게팅·최소 금액·증거금 1.3배)는 기존과 동일하게 적용된다.
-- 계측: 신호 메타 `sizing_mode="risk"`, `risk_stop_pct` — **canary**: 매수 재개 후 첫 30건을 포지션 원장 R·KODEX200 초과수익으로
-  판정, 미달이면 `sizing_mode: nominal` 복귀. 파라미터 3종은 BacktestGate `PARAM_MAP`(`risk.*`)에 매핑돼 진화 제안도 게이트 경유.
+- 분모는 `engine.risk_manager._resolve_entry_stop(strategy)` 콜백 — `run_trader` 가 `stop_policy.make_entry_stop_resolver(exit_manager,
+  _strategy_exit_params)` 로 배선. **콜백 미배선 또는 실제 SL 까지 무효(0·음수·NaN)면 신규 매수 거부(수량 0, pending 미생성)** —
+  nominal 자동 복귀 없음 (계획 §2.2). 로그 `[리스크] ... 진입 손절 해석기 미배선 / 진입 손절 해석 실패`.
+- 증액 오버레이(캘린더 1.10·팀 1.10/1.20·LLM 배율)는 상한을 넘기지 못하고, 축소 오버레이(변동성 타게팅·LLM 감액)는 되돌리지 않는다.
+  상한 내 1~2주는 허용하되 **재클램프 결과가 `min_position_value` 미달이면 명시 거부**. 왕복 수수료를 SL% 에 다시 더하지 않는다
+  (KR 손절 판정은 매수 비용 대비 net 손익률). 시장가 증거금 1.3배는 별도 현금 제약.
+- 코어홀딩 제외(nominal 경로 그대로). 신호 강도 배율·전략별 기본 비율(sepa 25/vcp 15/gap 15)은 **쓰지 않는다**.
+  메타 `position_multiplier`가 ATR 배율 그대로면 무시(백테스트 risk 공식에 없음), 다른 값(LLM 감액 등)이면 그대로 곱함.
+- 급락 cap 은 주문 시점의 레벨로 해석한다. 체결 시점에 레벨·레짐이 바뀌면 등록 SL 이 달라질 수 있다 — 차이는 T3 원장 스냅샷에 기록.
+- 계측: 신호 메타 `sizing_mode="risk"`, `risk_stop_pct`, `stop_source`(strategy/global/dynamic) — T3 가 `entry_risk` 스냅샷으로 확장.
+  **canary**: 매수 재개 후 첫 30건을 포지션 원장 R·KODEX200 초과수익으로 판정(자동 nominal 복귀 없음). 파라미터 3종은 BacktestGate
+  `PARAM_MAP`(`risk.*`)에 매핑돼 진화 제안도 게이트 경유.
+- 실제 고정 SL 기준이라 risk 모드는 전략별 거의 고정 비중(sepa 14%·gap 18% 상한·vcp 17.5%)이 된다 — ATR 적응 효과로 해석하지 않는다.
 - 백테스트 nominal(25% 고정)은 실엔진 nominal(전략 비율×강도×ATR 배율 ≈ 23~28%)과 완전 동일하진 않다 — 상대 비교로만 해석.
+
+- **급락 cap 은 분모에 적용하지 않는다** (`resolve_stop(apply_crash_cap=False)`, 2026-09-14 리뷰 P2): cap 은 해제되면 SL 이 원래 값으로
+  돌아가므로 임시 SL 2.5 로 나누면 급락 중 포지션이 커지고(180주) 해제 후 계획 위험 0.9% 가 된다. 신호 메타 `stop_crash_active` 로 주문 시점 cap 활성만 표시.
+- **손절 설정 무효 시 청산 판정은 멈추지 않는다**: `resolve_effective_stop` 은 0·음수·NaN 을 ValueError 로 거부하지만 `update_price` 는 이를 잡아
+  T2 이전 우선순위(무효 항목은 ExitConfig 기본값)로 폴백해 손절·익절·트레일링을 계속 판정한다(경고 1회). 사이징 경로는 그대로 거부(fail-closed).
+- **한계(명시)**: 계획 위험 상한은 주문 시점 보장이다. 레짐 전환 시 `apply_regime_params` 가 비코어 포지션 SL 을 레짐값으로 덮어쓰는 기존 청산 정책
+  (gap 3.5 → bull 5.0 이면 위험 0.9%)과 갭·슬리피지는 포함하지 않는다 — T3 원장 스냅샷(`planned_vs_filled_risk_delta`)과 canary 판정 기준에서 별도 분류.
 
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 

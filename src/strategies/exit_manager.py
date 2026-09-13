@@ -17,6 +17,7 @@ ATR 기반 동적 손절:
 """
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from decimal import Decimal
@@ -27,6 +28,7 @@ from loguru import logger
 
 from ..core.types import Position, OrderSide, Signal, SignalStrength
 from ..utils.fee_calculator import FeeCalculator, get_fee_calculator
+from ..utils.stop_policy import StopDecision, resolve_effective_stop, stop_pct_or_none
 from ..indicators.atr import calculate_atr, calculate_dynamic_stop_loss
 
 
@@ -301,6 +303,7 @@ class ExitManager:
 
         # 청산 예외 종목 (수동 매수 등)
         self._exit_exempt: set = set()
+        self._stop_fallback_warned: bool = False   # 손절 설정 무효 폴백 경고 1회 (2026-09-14)
         # 재시작 정합성 검증이 stage를 NONE으로 리셋한 심볼 (세션 스코프)
         # — restore_stages(hp_cache)의 업그레이드가 리셋을 되돌리는 것 방지
         self._integrity_reset_symbols: set = set()
@@ -806,6 +809,58 @@ class ExitManager:
 
         self._persist_states()
 
+    def resolve_stop(self, *, dynamic_stop_pct: Optional[float], fixed_stop_pct: Optional[float],
+                     is_core: bool, apply_crash_cap: bool = True) -> StopDecision:
+        """손절폭 해석 단일 창구 (2026-09-14 T2) — update_price 판정과 엔진 위험 사이징 분모가 같은 값을 쓴다.
+
+        dynamic(min_stop 하한) > strategy(미클램프) > config.stop_loss_pct, 비코어는 현재 장중 급락 레벨의
+        SL 을 상한으로 cap. 신규 fill 사이징은 dynamic=None 으로 호출한다 (등록 시 price_history 없음).
+        무효 설정(0·음수·NaN)은 ValueError.
+
+        apply_crash_cap=False (사이징 분모용): 급락 cap 을 값에 적용하지 않고 `crash_capped` 로 '지금 cap 이
+        걸릴 상태'만 알린다 — cap 은 해제되면 SL 이 원래 값으로 돌아가므로, 타이트한 임시 SL 로 나누면 급락 중에
+        포지션이 커지고 해제 후 계획 위험이 예산을 넘긴다 (2026-09-14 리뷰 P2, 보수적 선택).
+        """
+        crash = INTRADAY_CRASH_PARAMS.get(self._intraday_crash_level, {}).get("stop_loss_pct")
+        crash_d = stop_pct_or_none(crash)
+        decision = resolve_effective_stop(
+            dynamic_stop_pct=stop_pct_or_none(dynamic_stop_pct),
+            fixed_stop_pct=stop_pct_or_none(fixed_stop_pct),
+            global_stop_pct=Decimal(str(self.config.stop_loss_pct)),
+            min_dynamic_stop_pct=Decimal(str(self.config.min_stop_pct)),
+            crash_stop_pct=crash_d if apply_crash_cap else None,
+            is_core=is_core,
+        )
+        if not apply_crash_cap and not is_core and crash_d is not None and decision.stop_pct > crash_d:
+            decision = StopDecision(decision.stop_pct, decision.source, True)
+        return decision
+
+    def _legacy_stop_pct(self, state: "PositionExitState") -> float:
+        """손절 설정 무효(ValueError) 시 청산 판정용 폴백 — T2 이전 우선순위를 무효값 없이 재현.
+        dynamic(min_stop 하한) > strategy > global, 비코어 급락 cap. 무효한 항목은 ExitConfig 기본값(min 4.0 / global 5.0)으로."""
+        def _valid(v: Any) -> Optional[float]:
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return f if math.isfinite(f) and f > 0 else None
+
+        min_stop = _valid(self.config.min_stop_pct)
+        min_stop = min_stop if min_stop is not None else 4.0
+        global_stop = _valid(self.config.stop_loss_pct)
+        global_stop = global_stop if global_stop is not None else 5.0
+        dynamic, fixed = _valid(state.dynamic_stop_pct), _valid(state.stop_loss_pct)
+        if dynamic is not None:
+            value = max(dynamic, min_stop)
+        elif fixed is not None:
+            value = fixed
+        else:
+            value = global_stop
+        crash = _valid(INTRADAY_CRASH_PARAMS.get(self._intraday_crash_level, {}).get("stop_loss_pct"))
+        if not state.is_core and crash is not None and value > crash:
+            value = crash
+        return value
+
     def update_price(self, symbol: str, current_price: Decimal,
                      market_data: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, int, str]]:
         """
@@ -913,23 +968,24 @@ class ExitManager:
                     f"수익률 {net_pnl_pct:+.2f}% (< {self.config.stale_high_min_pnl_pct}%)"
                 )
 
-        # 1. 손절 체크
+        # 1. 손절 체크 — 우선순위·급락 cap 은 resolve_stop (stop_policy 공통 함수, 2026-09-14 T2)
         # min_stop_pct 하한 클램프는 ATR 산출값(dynamic)에만 적용 (2026-08-04 P1)
         # — 기존에는 전략별/레짐별/급락 오버라이드의 타이트 손절(2.0~3.5%)까지
         #   일괄 4%로 되돌려 "장중 급락 SL 강화"가 통째로 무력화됐었다.
-        if state.dynamic_stop_pct is not None:
-            sl_pct = max(state.dynamic_stop_pct, self.config.min_stop_pct)
-        elif state.stop_loss_pct is not None:
-            sl_pct = state.stop_loss_pct
-        else:
-            sl_pct = self.config.stop_loss_pct
-        # 장중 급락 활성 시 크래시 SL을 상한으로 캡 (2026-08-04 재리뷰 P1-3)
-        # — 상태 변형이 아닌 판정 시점 적용이라 해제 시 자동 원복되고,
-        #   min_stop 클램프(ATR 경로)를 우회해 설계값 2.0~3.0%가 실효한다.
-        if not state.is_core and self._intraday_crash_level in INTRADAY_CRASH_PARAMS:
-            _crash_sl = INTRADAY_CRASH_PARAMS[self._intraday_crash_level]["stop_loss_pct"]
-            if sl_pct > _crash_sl:
-                sl_pct = _crash_sl
+        # 장중 급락 cap 은 상태 변형이 아닌 판정 시점 적용이라 해제 시 자동 원복 (2026-08-04 재리뷰 P1-3)
+        try:
+            sl_pct = float(self.resolve_stop(
+                dynamic_stop_pct=state.dynamic_stop_pct, fixed_stop_pct=state.stop_loss_pct,
+                is_core=state.is_core,
+            ).stop_pct)
+        except ValueError as _sl_err:
+            # 설정값 하나(예: config.stop_loss_pct 0)가 무효해도 청산 판정을 건너뛰지 않는다 — 기존 우선순위로 폴백.
+            # 사이징 경로는 그대로 ValueError → 신규 매수 거부(fail-closed). (2026-09-14 리뷰 P1: 예외가 update_price
+            # 밖으로 나가면 [청산] 체크 오류로 손절·익절·트레일링 전부 스킵되는 fail-open 이 됐다)
+            if not self._stop_fallback_warned:
+                logger.error(f"[ExitManager] 손절 설정 무효 → 기존 우선순위 폴백으로 판정 계속: {_sl_err}")
+                self._stop_fallback_warned = True
+            sl_pct = self._legacy_stop_pct(state)
         if net_pnl_pct <= -sl_pct:
             atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct is not None else ""
             return self._create_exit(

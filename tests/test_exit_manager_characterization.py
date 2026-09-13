@@ -186,6 +186,29 @@ def test_stop_loss_precedence_without_atr(home, reg_kw, expected_sl):
     assert sig[0] == "sell_all" and sig[2].endswith(f"(SL={expected_sl:.2f}%)")
 
 
+@pytest.mark.parametrize("fixed,crash_level,is_core,expected_sl,source,capped", [
+    (5.0, "normal", False, 5.0, "strategy", False),
+    (None, "normal", False, 5.0, "global", False),
+    (5.0, "crash", False, 2.5, "strategy", True),      # 급락 cap: 등록 시 state SL 조임 + 판정 시 cap 동일값
+    (None, "caution", False, 3.0, "global", False),    # apply_intraday_crash_params 가 config.stop_loss_pct 를 3.0 으로 이미 갱신 → cap 미발동
+    (10.0, "crash", True, 10.0, "strategy", False),    # 코어는 cap 제외
+])
+def test_resolve_stop_matches_update_price_for_entry_without_history(
+        home, fixed, crash_level, is_core, expected_sl, source, capped):
+    """2026-09-14 T2: 신규 fill 등록(price_history 없음) 시점의 resolve_stop == update_price 판정 SL."""
+    em = ExitManager()
+    if crash_level != "normal":
+        em.apply_intraday_crash_params(crash_level)
+    decision = em.resolve_stop(dynamic_stop_pct=None, fixed_stop_pct=fixed, is_core=is_core)
+    assert (float(decision.stop_pct), decision.source, decision.crash_capped) == (expected_sl, source, capped)
+
+    em.register_position(_pos(), stop_loss_pct=fixed, is_core=is_core, atr_pct_hint=1.0)
+    assert em.get_state(SYM).dynamic_stop_pct is None   # hint 는 트레일링용 — 동적 손절을 만들지 않는다
+    assert em.update_price(SYM, D(int(10000 * (1 - (expected_sl - 0.3) / 100)))) is None
+    sig = em.update_price(SYM, D(int(10000 * (1 - (expected_sl + 0.7) / 100))))
+    assert sig[0] == "sell_all" and f"(SL={expected_sl:.2f}%" in sig[2]
+
+
 def test_breakeven_protection_after_first(home):
     em = ExitManager()
     st = _to_first(em)

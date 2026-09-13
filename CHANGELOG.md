@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — fix: 위험 사이징을 실제 신규 체결 손절 기준으로 정합화 (계획서 T2, F1) + 최종 위험 상한
+
+리뷰 후속 계획서 T2. 09-13 PR #30 의 risk 모드는 분모를 ATR×2(4~8 클램프)로 만들었지만 실제 신규 체결 등록은 price_history 없이
+호출돼 ATR 동적 손절이 생기지 않고 전략별 고정 SL(sepa 5 / gap 3.5 / vcp 4)이 적용됐다(F1 재현: SEPA ATR 1% → 175주, 실제 위험 0.875%; ATR 없음 → 2.8 폴백 0.90%).
+- `src/utils/stop_policy.py`(신규): `StopDecision` / `resolve_effective_stop`(dynamic(min 하한) > strategy > global, 비코어 급락 cap, 무효값 ValueError) /
+  `make_entry_stop_resolver`. `ExitManager.resolve_stop()` 단일 창구 — `update_price` 손절 우선순위 블록만 교체(익절·레짐·보유 규칙·hint 트레일링 불변, 특성화 35건 통과).
+- 엔진 risk 모드 분모 = `_resolve_entry_stop(strategy)` 콜백(run_trader 배선, dynamic=None). `_exit_stop_params`·`risk_position_value`·2.8 폴백 제거.
+  콜백 미배선·SL 무효는 수량 0(주문·pending 미생성, nominal 자동 복귀 없음).
+- **최종 위험 상한** `risk_quantity_cap`: 모든 오버레이·최소금액·3주 보정 뒤 `entry_cost(q)=price×q+매수수수료`, `planned_risk(q)=entry_cost×net SL ≤ equity×0.7%` 로 수량 재클램프
+  (1천만·1만원·SL 5% → 139주, 140주는 9.85원 초과; 캘린더 1.1 부스트도 상한 내). 축소 오버레이는 되키우지 않음.
+- 통합 보완(리뷰 advisory): ① `update_price` 는 ValueError 를 잡아 기존 우선순위로 폴백 — 설정값 하나가 무효해도 청산 판정을 건너뛰지 않음(사이징은 여전히 거부).
+  ② 급락 cap 은 사이징 분모에 미적용(`apply_crash_cap=False`, 메타 `stop_crash_active`) — cap 해제 후 위험이 예산을 넘는 역효과 방지(계획서 '동일 해석' 행의 의도적 보수 편차).
+- 신호 메타 `sizing_mode`·`risk_stop_pct`·`stop_source`·`stop_crash_active`. 테스트 76건(stop_policy·risk_sizing·특성화). 문서: risk-and-exit·CLAUDE.md·default.yml 주석.
+- 한계: 상한은 주문 시점 보장. 레짐 전환 SL 덮어쓰기·갭·슬리피지는 T3 원장·canary 에서 분류. 재시작 등록의 `price_history` 는 List[Price] 라 ExitManager dict API 와 불일치해 dynamic 손절이 어디서도 생기지 않음(기존 동작, D 재현) — 고정 SL 이 실제 정책.
 ## 2026-09-14 — fix: 동기화 빈 응답 방어 복구·등록 재시도 정책 통일 (계획서 T1, F3·F6)
 
 리뷰 후속 계획서 T1 — `src/schedulers/kr_scheduler.py`, 특성화 테스트 11→21건, runbook 유령 포지션 절.

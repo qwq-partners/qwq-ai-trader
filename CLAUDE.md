@@ -144,7 +144,7 @@
 | 일일 거래 횟수 | 10회 | daily_max_trades |
 | 일일 신규 매수 | 5개 | max_daily_new_buys |
 | 최대 포지션 수 | 8개 | max_positions |
-| 기본 포지션 비율 | 25% | nominal 모드만. **2026-09-13~ `sizing_mode: risk`** — equity×0.7%/진입 손절폭(ATR×2, 4~8%) = 종목당 8.75~17.5% |
+| 기본 포지션 비율 | 25% | nominal 모드만. **`sizing_mode: risk`(2026-09-13~, 09-14 정합화)** — equity×0.7% ÷ **신규 체결 실제 고정 SL**(sepa 5 / gap 3.5 / vcp 4, 급락 cap 미적용) → sepa 14%·gap 18%(상한)·vcp 17.5%. 모든 오버레이·3주 보정 뒤 매수수수료 포함 계획 위험 ≤ 0.7% 를 최종 상한으로 재클램프(1천만·1만원·SL5% → 139주) |
 | 최대 포지션 비율 | 28% | nominal 상한 / risk 모드는 `risk_max_position_pct` 18% |
 | 최소 현금 보유 | 5% | total_equity 대비 |
 | 최소 포지션 금액 | 20만원 | 미달 시 매수 거부 |

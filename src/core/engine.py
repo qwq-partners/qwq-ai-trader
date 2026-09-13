@@ -24,7 +24,8 @@ import sys
 
 from loguru import logger
 
-from ..utils.sizing import atr_position_multiplier, risk_position_value
+from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
+from ..utils.stop_policy import StopDecision
 from src.data.storage.signal_event_storage import SignalEventStorage as _SigLog
 
 from .event import (
@@ -1199,6 +1200,11 @@ class RiskManager:
             max_sector_positions=config.max_positions_per_sector,
             expert_orchestrator=getattr(engine, "expert_orchestrator", None),
         )
+
+        # 위험 기반 사이징 분모용 진입 손절 해석기 (2026-09-14 T2) — run_trader 가
+        # stop_policy.make_entry_stop_resolver(exit_manager, _strategy_exit_params) 로 배선.
+        # 미배선 상태에서 sizing_mode=risk 면 신규 매수를 거부한다 (fail-closed, nominal 자동 복귀 없음).
+        self._resolve_entry_stop: Optional[Callable[[Optional[str]], StopDecision]] = None
 
         # 주문 실패 쿨다운 추적 (종목별)
         self._order_fail_cooldown: Dict[str, datetime] = {}
@@ -2422,9 +2428,13 @@ class RiskManager:
 
         # 위험 기반 사이징 (2026-09-13 리뷰 권고 ③ — 백테스트 A/B에서 두 윈도우 모두 게이트를 통과한
         # 유일한 축, docs/research/exit-policy-ab-2026-09.md). 건당 자본 위험 = risk_per_trade_pct.
-        # 손절폭은 ExitManager와 같은 규칙(run_trader가 ExitConfig 값을 _exit_stop_params 로 주입)이라
-        # 사이징↔손절 정합. 강도 배율·전략별 비율은 쓰지 않는다(백테스트 조건과 동일).
+        # 분모 = 신규 fill 이 실제로 받을 손절 (2026-09-14 T2/F1): ExitManager.resolve_stop 을
+        # _resolve_entry_stop 콜백으로 조회 — 신규 등록은 price_history 없이 호출되므로 ATR 동적 손절이
+        # 없고 전략 고정 SL(sepa 5/gap 3.5/vcp 4) > ExitConfig 글로벌, 비코어는 급락 cap. ATR 은 분모에
+        # 쓰지 않는다 (hint 는 트레일링 용도). risk_config.default_stop_loss_pct 는 ExitManager 손절이 아님.
+        # 강도 배율·전략별 비율은 쓰지 않는다(백테스트 조건과 동일).
         _risk_atr: Optional[float] = None
+        _stop_decision: Optional[StopDecision] = None
         if getattr(self.config, "sizing_mode", "nominal") == "risk" and not _is_core:
             _meta = signal.signal.metadata if (signal.signal is not None
                                                and signal.signal.metadata is not None) else {}
@@ -2434,22 +2444,34 @@ class RiskManager:
                     _risk_atr = float(_raw_atr)
                 except (TypeError, ValueError):
                     _risk_atr = None
-            _risk_value, _risk_stop = risk_position_value(
-                equity, _risk_atr,
-                risk_per_trade_pct=self.config.risk_per_trade_pct,
-                max_position_pct=self.config.risk_max_position_pct,
-                stop_params=getattr(self, "_exit_stop_params", None) or (2.0, 4.0, 8.0),
-                fallback_stop_pct=self.config.default_stop_loss_pct,
-            )
+            _resolver = getattr(self, "_resolve_entry_stop", None)
+            if _resolver is None:
+                logger.error(
+                    f"[리스크] {signal.symbol} risk 모드 진입 손절 해석기 미배선 → 신규 매수 거부 "
+                    f"(fail-closed, nominal 자동 복귀 없음)"
+                )
+                return 0
+            try:
+                _stop_decision = _resolver(signal.strategy.value if signal.strategy else None)
+            except Exception as _stop_err:
+                # 실제 SL 까지 무효(0·음수·NaN)면 주문을 만들지 않는다 — pending 미생성
+                logger.error(f"[리스크] {signal.symbol} 진입 손절 해석 실패 → 신규 매수 거부: {_stop_err}")
+                return 0
+            _risk_stop = _stop_decision.stop_pct
+            _risk_value = equity * Decimal(str(self.config.risk_per_trade_pct)) / _risk_stop
             max_value = min(max_value, equity * Decimal(str(self.config.risk_max_position_pct / 100)))
-            position_value = min(_risk_value, available)
+            position_value = min(_risk_value, max_value, available)
             if signal.signal is not None:
                 # canary 계측 태그 — signal_events/trades 메타로 risk 모드 체결을 골라내 원장 R·초과수익 판정
+                # (T3 가 entry_risk 스냅샷으로 확장 예정 — 키 충돌 없음)
                 _meta["sizing_mode"] = "risk"
-                _meta["risk_stop_pct"] = round(_risk_stop, 2)
+                _meta["risk_stop_pct"] = round(float(_risk_stop), 2)
+                _meta["stop_source"] = _stop_decision.source
+                _meta["stop_crash_active"] = bool(_stop_decision.crash_capped)   # 주문 시점 급락 cap 활성 여부 (분모엔 미적용)
                 signal.signal.metadata = _meta
             logger.info(
-                f"[리스크] {signal.symbol} 위험 사이징: 손절 {_risk_stop:.1f}% · 위험 "
+                f"[리스크] {signal.symbol} 위험 사이징: 손절 {float(_risk_stop):.2f}%({_stop_decision.source}"
+                f"{', 급락cap 활성(분모 미적용)' if _stop_decision.crash_capped else ''}) · 위험 "
                 f"{self.config.risk_per_trade_pct}% → {position_value:,.0f}원 "
                 f"({float(position_value / equity * 100):.1f}%, ATR={_risk_atr})"
             )
@@ -2486,9 +2508,9 @@ class RiskManager:
         position_multiplier = 1.0
         if signal.signal and signal.signal.metadata:
             position_multiplier = signal.signal.metadata.get("position_multiplier", 1.0)
-        if (_risk_atr is not None and position_multiplier != 1.0
+        if (_stop_decision is not None and _risk_atr is not None and position_multiplier != 1.0
                 and abs(position_multiplier - atr_position_multiplier(_risk_atr)) < 1e-6):
-            # risk 모드: ATR 축소 배율은 손절폭에 이미 반영 — 이중 축소 방지
+            # risk 모드: ATR 배율은 백테스트 risk 공식(equity×위험%/손절)에 없으므로 미적용 (연구 조건 동일)
             # ponytail: 배율에 LLM 감액 등이 곱해져 ATR 배율과 다르면 그대로 적용(보수적 이중 축소 허용)
             position_multiplier = 1.0
         if position_multiplier != 1.0:
@@ -2574,6 +2596,29 @@ class RiskManager:
                 pass
             else:
                 return 0
+
+        # 위험 모드 최종 불변조건 (2026-09-14 T2): 모든 오버레이(강도·전략 배율·캘린더·변동성·팀)·
+        # 최소금액·최소 3주 보정이 끝난 뒤 planned_risk(q) = (price×q + 매수수수료) × net SL% ≤ equity × 위험%.
+        # 초과 시 줄이기만 한다 — 증액 오버레이가 0.7% 를 못 넘고, 축소 오버레이는 되돌리지 않는다.
+        # 상한 내 1~2주는 허용, 축소 결과가 최소 금액 미달이면 명시 거부. 시장가 증거금 1.3배는 위 현금 제약.
+        if _stop_decision is not None and quantity > 0:
+            _q_cap = risk_quantity_cap(
+                equity, price, _stop_decision.stop_pct,
+                risk_per_trade_pct=self.config.risk_per_trade_pct,
+            )
+            if quantity > _q_cap:
+                logger.info(
+                    f"[리스크] {signal.symbol} 위험 상한 재클램프: {quantity}→{_q_cap}주 "
+                    f"(예산 {equity * Decimal(str(self.config.risk_per_trade_pct)) / 100:,.0f}원, "
+                    f"net SL {float(_stop_decision.stop_pct):.2f}%, 매수수수료 포함)"
+                )
+                quantity = _q_cap
+                if quantity * price < min_val:
+                    logger.info(
+                        f"[리스크] {signal.symbol} 위험 상한 축소 후 최소 금액 미달 "
+                        f"({quantity * price:,.0f} < {min_val:,.0f}) → 매수 거부"
+                    )
+                    return 0
 
         return max(quantity, 0)
 
