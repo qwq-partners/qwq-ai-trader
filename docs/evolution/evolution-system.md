@@ -19,6 +19,10 @@
    분기마다 "진화 적용분 전체 vs 미적용 기준선" A/B 총괄 리포트로 재검증.
 4. **게이트 승격은 counterfactual 표본 기반**: 예) 규칙 #11 — CF 표본 ≥20건
    + r5 방향 정확도 ≥55% 충족 시에만 실차단 전환 (default.yml 주석 참조).
+5. **판정은 절대수익이 아니라 KODEX200 대비 초과수익 + 손절 클립 기준** (2026-09-13 리뷰):
+   04-23 G4 약화("차단 40건 +5.72%")·08-20 팀 부스트("HOLD 후보 +6.31%")는 강세장 베타였고 초과수익으로는
+   각각 -15.1pp·-1.0pp로 결론이 뒤집혔다. gate_performance(`PEN_` 버킷·symbol-day dedup·`avg_excess`)와
+   counterfactual summary(`x5`)가 이 기준을 제공한다. 표본은 고유 symbol-day ≥30. 상세: docs/reviews/.
 
 ## WikiSkill 대조 (2026-09-13)
 
