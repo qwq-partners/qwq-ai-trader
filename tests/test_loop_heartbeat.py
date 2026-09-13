@@ -168,6 +168,22 @@ def test_record_idle_is_not_a_failure_and_clears_stale_age():
     assert "kr_screener" in hb._beats   # 유휴는 정체가 아니다 — 기준을 갱신한다
 
 
+def test_record_idle_does_not_update_last_success():
+    """성공 시각(last_success)은 record_success만 갱신한다(계획서 T4 계약).
+
+    유휴는 정체 기준(_beats)은 갱신하되 '실제로 완수'와 구분되어야 한다 — 그렇지 않으면
+    유휴 이후 실제 실패가 이어져도 last_success가 '정상 동작한 적 있음'처럼 보인다
+    (리뷰 blocking #1).
+    """
+    hb.record_idle("kr_screener", "장외 세션")
+    st = hb.loop_status()["kr_screener"]
+    assert st["last_success"] is None
+    assert "kr_screener" in hb._beats   # 정체 기준은 여전히 갱신된다
+
+    hb.record_success("kr_screener")
+    assert hb.loop_status()["kr_screener"]["last_success"] is not None
+
+
 def test_record_success_clears_idle_reason():
     hb.record_idle("kr_screener", "장외 세션")
     hb.record_success("kr_screener")
