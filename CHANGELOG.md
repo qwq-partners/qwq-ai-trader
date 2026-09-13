@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — fix: 백테스터 정보 시점·초기 손절 수정 (계획서 T5, F2·F8)
+
+리뷰 후속 계획서 T5 — `scripts/backtest_strategies.py`, 테스트 30건(`tests/test_backtest_point_in_time.py` 신규 16 + exit_policy 갱신). 기존 A/B 결과 JSON 은 보존.
+- **F2** T+1 시가 주문의 진입 ATR 이 체결일 전체 봉(당일 고저)을 사용 → `_entry_atr(symbol, day_str)` 는 체결일 **이전** 마지막 확정 봉만(T+0 종가 체결만 당일 포함).
+  재현: 미래 고저만 바꾸면 손절 4.4→6.0%, risk 159→116주 → 수정 후 동일.
+- **F8** 시가 체결 사이징의 equity 가 당일 종가 평가(nominal 기준군 포함) → `_calc_equity(day_str, phase="open"|"close")` 분리, 시가 체결은 시가(봉 없는 보유 종목은 마지막 확정 종가). 재현: 미래 종가만 바꾸면 250→275주 → 수정 후 250.
+- 체결일 봉이 없는 신규 종목은 체결하지 않음(이전 봉 시가 대체 제거). `pending_buys` 에 `signal_date`·`indicator_asof` 기록, 체결일보다 앞서지 않으면 ValueError(fail-closed).
+- `entry_stop_mode` 축: `atr_dynamic`(기본 = 기존 동작, 게이트 호환) / `live_policy`(전략별 고정 SL 만, ATR 동적 손절 없음 — 실엔진 신규 fill 미러, 이후 SL 변경은 레짐 전환만).
+  진입 시 `initial_risk`(R 분모)·초기 손절을 고정하고 매일 ATR 재계산으로 소급 변경하지 않음. 기본값·CLI·metrics 키 불변을 테스트로 고정.
+- 체결 순서 보수 규칙(전 셀 동일): 같은 봉 익절·손절 동시 접촉 → 손절 우선, 갭 관통(시가 ≤ 손절가) → **시가 체결**(종전 ladder 는 손절가 체결 = 낙관 편향), 나머지는 종가 판정.
+- 통합 보완(리뷰 advisory): T+1 체결 최고가를 체결일 고가가 아닌 시가로 초기화, `entry_stop_mode` 검증을 `BacktestConfig.__post_init__` 로, 포지션 R = pnl ÷ initial_risk.
+- 한계: `atr_dynamic` 모드의 EOD 손절 판정은 기존대로 당일 ATR(연구 축). 이 SHA 이전 게이트 결과·`results/ab_exit_policy_2026-09.json` 과 비교 불가 — 재계산은 T6 parity 후 T7.
+
 ## 2026-09-14 — fix: 위험 사이징을 실제 신규 체결 손절 기준으로 정합화 (계획서 T2, F1) + 최종 위험 상한
 
 리뷰 후속 계획서 T2. 09-13 PR #30 의 risk 모드는 분모를 ATR×2(4~8 클램프)로 만들었지만 실제 신규 체결 등록은 price_history 없이
