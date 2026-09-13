@@ -1,0 +1,37 @@
+{
+ "checked": 6,
+ "all_match": true,
+ "mismatches": [],
+ "cells": {
+  "sepa_6m/ladder/current/nominal": {
+   "ok": true,
+   "diffs": {},
+   "net_pnl_excl_top3": -2093243.0827914414
+  },
+  "sepa_6m/ladder/current/risk": {
+   "ok": true,
+   "diffs": {},
+   "net_pnl_excl_top3": -1465160.272958663
+  },
+  "sepa_6m/ladder/current/nominal14": {
+   "ok": true,
+   "diffs": {},
+   "net_pnl_excl_top3": -1437827.9243876874
+  },
+  "sepa_12m/ladder/current/nominal": {
+   "ok": true,
+   "diffs": {},
+   "net_pnl_excl_top3": -1424029.1949995104
+  },
+  "sepa_12m/ladder/current/risk": {
+   "ok": true,
+   "diffs": {},
+   "net_pnl_excl_top3": -319171.0748669612
+  },
+  "sepa_12m/ladder/current/nominal14": {
+   "ok": true,
+   "diffs": {},
+   "net_pnl_excl_top3": -769086.8543541539
+  }
+ }
+}

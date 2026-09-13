@@ -176,3 +176,133 @@ def test_live_policy_stop_changes_only_on_regime_transition():
     acts = mgr.check_exit(p, bar, regime=bt.RegimeType.BEARISH)           # 전환 → SL 3.5%
     assert acts and acts[0][3] == "손절 -3.5%" and acts[0][2] == 9650
     assert p.atr_stop_pct == 5.0 and p.live_stop_pct == 3.5              # 진입 손절(R 분모)은 불변
+
+
+# ── T7 재검증 실행에 필요한 러너·캐시 경로 (2026-09-14) ──────────────────────────
+def _load_ab():
+    spec = importlib.util.spec_from_file_location(
+        "_ab_exit_policy_for_t7_test", ROOT / "scripts" / "ab_exit_policy.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+ab = _load_ab()
+
+
+def _write_cache(dirpath, ticker, first, last, price=10000.0):
+    idx = pd.bdate_range(first, last)
+    df = pd.DataFrame({"시가": price, "고가": price, "저가": price, "종가": price,
+                       "거래량": 1000}, index=idx)
+    path = dirpath / f"ohlcv_{ticker}_{idx[0]:%Y%m%d}_{idx[-1]:%Y%m%d}.pkl"
+    df.to_pickle(path)
+    return path
+
+
+def test_offline_reuses_superset_cache_and_slices_to_window(tmp_path, monkeypatch):
+    """캐시 파일명이 실행 날짜 범위를 담고 있어도, 구간을 포함하는 캐시는 잘라서 재사용한다."""
+    monkeypatch.setattr(bt, "CACHE_DIR", tmp_path)
+    _write_cache(tmp_path, "005930", "2024-01-02", "2026-09-11")
+    um = bt.UniverseManager(size=1, offline=True)
+    hit = um._find_covering_cache("005930", "20250208", "20260911")
+    assert hit is not None
+    df, path = hit
+    assert df.index.min() >= pd.Timestamp("2025-02-08")     # 요청 구간 밖 과거는 잘라낸다
+    assert df.index.max() == pd.Timestamp("2026-09-11")     # 종료일 이후 미래 봉 없음
+    assert path.name.endswith(".pkl")
+
+
+def test_offline_rejects_cache_that_ends_early_or_starts_late(tmp_path, monkeypatch):
+    monkeypatch.setattr(bt, "CACHE_DIR", tmp_path)
+    um = bt.UniverseManager(size=1, offline=True)
+    _write_cache(tmp_path, "000660", "2024-01-02", "2026-08-03")     # 종료일 전에 끝남
+    assert um._find_covering_cache("000660", "20250208", "20260911") is None
+    _write_cache(tmp_path, "000270", "2025-03-01", "2026-09-11")     # 워밍업이 한참 늦게 시작
+    assert um._find_covering_cache("000270", "20250208", "20260911") is None
+
+
+def test_offline_load_ohlcv_records_substitute(tmp_path, monkeypatch):
+    monkeypatch.setattr(bt, "CACHE_DIR", tmp_path)
+    src = _write_cache(tmp_path, "005930", "2024-01-02", "2026-09-11")
+    um = bt.UniverseManager(size=1, offline=True)
+    um.tickers = ["005930"]
+    um.load_ohlcv("20250208", "20260911")
+    assert um.cache_substitutes == {"005930": src.name}      # 어떤 파일을 대신 썼는지 manifest 용
+    assert um.missing_tickers == [] and "005930" in um.ohlcv
+
+
+def test_fixed_nominal_control_cell_is_14pct():
+    """사전 등록 대조군: 0.7/5 = 14% 고정 명목. nominal/risk 셀의 비중은 건드리지 않는다."""
+    ns = ab.build_parser().parse_args(["--offline"])
+    eff = {"kr": {"risk": {"sizing_mode": "risk", "strategy_allocation": {"sepa_trend": 40.0},
+                           "base_position_pct": 25.0, "max_position_pct": 28.0}}}
+
+    def mk(sz):
+        return ab.make_config(6, "ladder", "current", sz, "sepa", 60, ns, eff)
+
+    ctrl = mk("nominal14")
+    assert ctrl.sizing == "nominal"
+    assert ctrl.base_position_pct == ab.FIXED_NOMINAL_PCT == 14.0
+    assert ctrl.max_position_pct == ab.FIXED_NOMINAL_PCT
+    assert (mk("nominal").base_position_pct, mk("nominal").max_position_pct) == (25.0, 28.0)
+    assert mk("risk").sizing == "risk" and mk("risk").base_position_pct == 25.0
+
+
+def test_axis_options_default_to_full_grid():
+    ns = ab.build_parser().parse_args([])
+    assert ns.exit_policy == "ladder,channel" and ns.sizing == "nominal,risk"
+    assert ns.holding == "current,extended" and ns.verify_dir is None
+
+
+def _cell(total_return, mdd, trades, segments, expectancy=0.0, pf=1.0):
+    return {"total_return_pct": total_return, "mdd_pct": mdd, "total_trades": trades,
+            "segments": segments,
+            "position": {"expectancy_pct": expectancy, "profit_factor": pf}}
+
+
+def test_ops_gate_is_stricter_than_research_judgement():
+    """운영 게이트(총수익·MDD 1pp)와 연구 판정(기대값·PF·MDD 3pp)은 다른 기준이다."""
+    base = _cell(10.0, -10.0, 100, [1.0, 1.0, 1.0], expectancy=0.5, pf=1.0)
+    # 기대값·PF 는 좋아졌지만 총수익은 나빠진 셀 → 연구 통과, 운영 미달
+    cand = _cell(9.0, -10.0, 100, [1.1, 1.1, 0.9], expectancy=0.9, pf=1.2)
+    assert ab.judge(cand, base)["beats_baseline"] is True
+    g = ab.ops_gate(cand, base)
+    assert g["passed"] is False and g["checks"]["return_gain"] is False
+    # 총수익이 개선돼도 MDD 가 1pp 넘게 악화되면 운영 게이트는 기각 (연구는 3pp 허용)
+    worse_mdd = _cell(12.0, -12.0, 100, [1.1, 1.1, 0.9], expectancy=0.9, pf=1.2)
+    assert ab.judge(worse_mdd, base)["beats_baseline"] is True
+    assert ab.ops_gate(worse_mdd, base)["checks"]["mdd"] is False
+    # 표본 부족은 성과와 무관하게 미달
+    assert ab.ops_gate(_cell(20.0, -9.0, 9, [2.0, 2.0, 2.0]), base)["checks"]["trades"] is False
+
+
+def test_recompute_from_saved_reproduces_position_metrics(tmp_path):
+    """저장된 fills/equity/config 만으로 포지션 지표를 되만들 수 있어야 한다 (원장 재계산)."""
+    import json
+
+    cfg = bt.BacktestConfig()
+    T = bt.Trade
+    trades = [
+        T("X", "X", "sepa", "BUY", "2026-01-02", 10000, 100, 1_000_000, 140.5,
+          stop_pct=5.0, initial_risk=50_007.0),
+        T("X", "X", "sepa", "SELL", "2026-01-08", 10500, 100, 1_050_000, 2237.0, holding_days=5),
+    ]
+    curve = [("2026-01-02", 10_000_000), ("2026-01-08", 10_050_000)]
+    an = bt.ResultAnalyzer(cfg, trades, curve)
+    d = tmp_path / "ladder_current_risk"
+    d.mkdir()
+
+    def dumps(o):
+        return json.dumps(o, ensure_ascii=False, default=str)
+
+    (d / "fills.json").write_text(dumps([vars(t) for t in trades]), encoding="utf-8")
+    (d / "equity.json").write_text(dumps(curve), encoding="utf-8")
+    (d / "config.json").write_text(dumps(vars(cfg)), encoding="utf-8")
+    (d / "positions.json").write_text(dumps(an.positions()), encoding="utf-8")
+
+    r = ab.recompute_from_saved(d)
+    assert r["position_metrics"]["trades"] == 1
+    assert abs(r["position_metrics"]["net_pnl"] - an.position_metrics()["net_pnl"]) < 1e-9
+    assert abs(r["positions"][0]["r"] - an.positions()[0]["r"]) < 1e-9
+    assert r["net_pnl_excl_top3"] == 0.0          # 포지션이 3건 이하면 전부 제외된다

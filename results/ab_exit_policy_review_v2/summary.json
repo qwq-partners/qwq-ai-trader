@@ -1,0 +1,967 @@
+{
+ "run_at": "2026-09-14T03:35:34",
+ "universe_size": 60,
+ "baseline": "ladder/current/nominal",
+ "axes": {
+  "exit_policy": [
+   "ladder"
+  ],
+  "holding_policy": [
+   "current"
+  ],
+  "sizing": [
+   "nominal",
+   "risk",
+   "nominal14"
+  ]
+ },
+ "gate": {
+  "wf_min_wins": 2,
+  "mdd_tolerance_pp": 3.0,
+  "rule": "기대값%·PF > baseline AND WF≥2/3 AND MDD 악화 ≤3pp, 모든 윈도우"
+ },
+ "ops_gate": {
+  "rule": "총수익 개선 >0pp AND MDD 악화 ≤1pp AND WF≥2/3 AND 거래(매도 이벤트) ≥10",
+  "thresholds": {
+   "min_return_gain_pp": 0.0,
+   "max_mdd_worsening_pp": 1.0,
+   "min_trades": 10,
+   "wf_min_wins": 2
+  }
+ },
+ "grids": {
+  "sepa": {
+   "windows": {
+    "6m": {
+     "period": [
+      "2026-03-16",
+      "2026-09-11"
+     ],
+     "n_days": 124,
+     "benchmark": {
+      "code": null,
+      "return_pct": null,
+      "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+     },
+     "benchmark_proxy": {
+      "code": "KOSPI",
+      "return_pct": 24.506247916610356,
+      "start": "2026-03-16",
+      "end": "2026-09-11",
+      "source": "kospi_fdr"
+     },
+     "cells": {
+      "ladder/current/nominal": {
+       "start_date": "2026-03-16",
+       "end_date": "2026-09-11",
+       "n_days": 124,
+       "total_return_pct": -7.446140444311425,
+       "mdd_pct": -11.096048244188298,
+       "sharpe": -1.2485676769537821,
+       "total_fees": 221789.044431141,
+       "total_trades": 68,
+       "avg_equity": 9693318.690399118,
+       "position": {
+        "trades": 56,
+        "win_rate": 26.785714285714285,
+        "avg_win_pct": 9.27114991741494,
+        "avg_loss_pct": -4.369331355742236,
+        "payoff": 2.121869266159149,
+        "expectancy_pct": -0.7156310147179925,
+        "expectancy_r": -0.1431262029435985,
+        "profit_factor": 0.762256795286331,
+        "net_pnl": -744614.0444311409,
+        "max_consec_losses": 9,
+        "median_holding_days": 2.5,
+        "turnover": 20.197033570546832,
+        "turnover_annual": 41.1838952695508,
+        "fee_drag_pct": 2.28806099866308,
+        "exit_reasons": {
+         "손절": 31,
+         "트레일링": 12,
+         "1차 익절": 9,
+         "횡보 청산": 5,
+         "추세 무효화": 4,
+         "2차 익절": 3,
+         "복합청산 MA5(476,100)-0.5% 이탈": 1,
+         "3차 익절": 1,
+         "보유기간 초과": 1,
+         "복합청산 전일저가(29,950) 이탈": 1
+        }
+       },
+       "per_strategy": {
+        "sepa": {
+         "trades": 56,
+         "win_rate": 26.785714285714285,
+         "avg_win_pct": 9.27114991741494,
+         "avg_loss_pct": -4.369331355742236,
+         "payoff": 2.121869266159149,
+         "expectancy_pct": -0.7156310147179925,
+         "expectancy_r": -0.1431262029435985,
+         "profit_factor": 0.762256795286331,
+         "net_pnl": -744614.0444311409,
+         "max_consec_losses": 9,
+         "median_holding_days": 2.5,
+         "turnover": 20.197033570546832,
+         "turnover_annual": 41.1838952695508,
+         "fee_drag_pct": 2.28806099866308,
+         "exit_reasons": {
+          "손절": 31,
+          "트레일링": 12,
+          "1차 익절": 9,
+          "횡보 청산": 5,
+          "추세 무효화": 4,
+          "2차 익절": 3,
+          "복합청산 MA5(476,100)-0.5% 이탈": 1,
+          "3차 익절": 1,
+          "보유기간 초과": 1,
+          "복합청산 전일저가(29,950) 이탈": 1
+         }
+        }
+       },
+       "segments": [
+        0.10921627071205527,
+        -2.2596676838379093,
+        -4.047132807578474
+       ],
+       "config": {
+        "exit_policy": "ladder",
+        "sizing": "nominal",
+        "min_holding_days": 0,
+        "stale_exit_days": 5,
+        "stale_exit_pnl_pct": 2.0,
+        "stale_high_days": 3,
+        "stale_high_min_pnl_pct": 3.0,
+        "sepa_max_holding_days": 10,
+        "min_stop_pct": 4.0,
+        "max_stop_pct": 8.0,
+        "atr_multiplier": 2.0,
+        "first_exit_pct": 10.0,
+        "first_exit_ratio": 0.1,
+        "trailing_stop_pct": 4.5,
+        "base_position_pct": 25.0,
+        "max_position_pct": 28.0,
+        "risk_per_trade_pct": 0.7,
+        "risk_max_position_pct": 18.0,
+        "risk_max_positions": 7,
+        "max_positions_short": 5,
+        "enable_composite_exit": true,
+        "post_exit_stale_days": 5
+       },
+       "judge": {
+        "wf_wins": 0,
+        "checks": {
+         "expectancy": false,
+         "profit_factor": false,
+         "wf": false,
+         "mdd": true
+        },
+        "beats_baseline": false
+       },
+       "ops_gate": {
+        "gain_pp": 0.0,
+        "mdd_delta_pp": 0.0,
+        "wf_wins": 0,
+        "checks": {
+         "trades": true,
+         "return_gain": false,
+         "wf": false,
+         "mdd": true
+        },
+        "passed": false,
+        "thresholds": {
+         "min_return_gain_pp": 0.0,
+         "max_mdd_worsening_pp": 1.0,
+         "min_trades": 10,
+         "wf_min_wins": 2
+        }
+       },
+       "benchmark": {
+        "code": null,
+        "return_pct": null,
+        "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+       },
+       "excess_return_pct": null,
+       "benchmark_proxy": {
+        "code": "KOSPI",
+        "return_pct": 24.506247916610356,
+        "start": "2026-03-16",
+        "end": "2026-09-11",
+        "source": "kospi_fdr"
+       },
+       "excess_return_proxy_pct": -31.95238836092178
+      },
+      "ladder/current/risk": {
+       "start_date": "2026-03-16",
+       "end_date": "2026-09-11",
+       "n_days": 124,
+       "total_return_pct": -1.3751344847765565,
+       "mdd_pct": -7.987957643231361,
+       "sharpe": -0.49135505316219213,
+       "total_fees": 189328.1484776629,
+       "total_trades": 87,
+       "avg_equity": 10073160.50637437,
+       "position": {
+        "trades": 68,
+        "win_rate": 29.411764705882355,
+        "avg_win_pct": 11.201941505246598,
+        "avg_loss_pct": -4.490625474756176,
+        "payoff": 2.494516981702826,
+        "expectancy_pct": 0.12483540171522822,
+        "expectancy_r": 0.024967080343045695,
+        "profit_factor": 0.947974021398128,
+        "net_pnl": -137513.44847766266,
+        "max_consec_losses": 9,
+        "median_holding_days": 2.5,
+        "turnover": 16.54754955949722,
+        "turnover_annual": 33.74220999562282,
+        "fee_drag_pct": 1.8795307426885006,
+        "exit_reasons": {
+         "손절": 37,
+         "트레일링": 16,
+         "1차 익절": 11,
+         "2차 익절": 6,
+         "추세 무효화": 6,
+         "횡보 청산": 5,
+         "보유기간 초과": 2,
+         "3차 익절": 2,
+         "복합청산 MA5(476,100)-0.5% 이탈": 1,
+         "복합청산 전일저가(29,950) 이탈": 1
+        }
+       },
+       "per_strategy": {
+        "sepa": {
+         "trades": 68,
+         "win_rate": 29.411764705882355,
+         "avg_win_pct": 11.201941505246598,
+         "avg_loss_pct": -4.490625474756176,
+         "payoff": 2.494516981702826,
+         "expectancy_pct": 0.12483540171522822,
+         "expectancy_r": 0.024967080343045695,
+         "profit_factor": 0.947974021398128,
+         "net_pnl": -137513.44847766266,
+         "max_consec_losses": 9,
+         "median_holding_days": 2.5,
+         "turnover": 16.54754955949722,
+         "turnover_annual": 33.74220999562282,
+         "fee_drag_pct": 1.8795307426885006,
+         "exit_reasons": {
+          "손절": 37,
+          "트레일링": 16,
+          "1차 익절": 11,
+          "2차 익절": 6,
+          "추세 무효화": 6,
+          "횡보 청산": 5,
+          "보유기간 초과": 2,
+          "3차 익절": 2,
+          "복합청산 MA5(476,100)-0.5% 이탈": 1,
+          "복합청산 전일저가(29,950) 이탈": 1
+         }
+        }
+       },
+       "segments": [
+        3.369263106118329,
+        -2.683454350277843,
+        -2.9534228550591894
+       ],
+       "config": {
+        "exit_policy": "ladder",
+        "sizing": "risk",
+        "min_holding_days": 0,
+        "stale_exit_days": 5,
+        "stale_exit_pnl_pct": 2.0,
+        "stale_high_days": 3,
+        "stale_high_min_pnl_pct": 3.0,
+        "sepa_max_holding_days": 10,
+        "min_stop_pct": 4.0,
+        "max_stop_pct": 8.0,
+        "atr_multiplier": 2.0,
+        "first_exit_pct": 10.0,
+        "first_exit_ratio": 0.1,
+        "trailing_stop_pct": 4.5,
+        "base_position_pct": 25.0,
+        "max_position_pct": 28.0,
+        "risk_per_trade_pct": 0.7,
+        "risk_max_position_pct": 18.0,
+        "risk_max_positions": 7,
+        "max_positions_short": 5,
+        "enable_composite_exit": true,
+        "post_exit_stale_days": 5
+       },
+       "judge": {
+        "wf_wins": 2,
+        "checks": {
+         "expectancy": true,
+         "profit_factor": true,
+         "wf": true,
+         "mdd": true
+        },
+        "beats_baseline": true
+       },
+       "ops_gate": {
+        "gain_pp": 6.071005959534868,
+        "mdd_delta_pp": -3.1080906009569365,
+        "wf_wins": 2,
+        "checks": {
+         "trades": true,
+         "return_gain": true,
+         "wf": true,
+         "mdd": true
+        },
+        "passed": true,
+        "thresholds": {
+         "min_return_gain_pp": 0.0,
+         "max_mdd_worsening_pp": 1.0,
+         "min_trades": 10,
+         "wf_min_wins": 2
+        }
+       },
+       "benchmark": {
+        "code": null,
+        "return_pct": null,
+        "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+       },
+       "excess_return_pct": null,
+       "benchmark_proxy": {
+        "code": "KOSPI",
+        "return_pct": 24.506247916610356,
+        "start": "2026-03-16",
+        "end": "2026-09-11",
+        "source": "kospi_fdr"
+       },
+       "excess_return_proxy_pct": -25.88138240138691
+      },
+      "ladder/current/nominal14": {
+       "start_date": "2026-03-16",
+       "end_date": "2026-09-11",
+       "n_days": 124,
+       "total_return_pct": -1.8664676402169278,
+       "mdd_pct": -7.9567859242931664,
+       "sharpe": -0.5731496176842116,
+       "total_fees": 185449.764021687,
+       "total_trades": 85,
+       "avg_equity": 10026125.441402994,
+       "position": {
+        "trades": 68,
+        "win_rate": 29.411764705882355,
+        "avg_win_pct": 10.95475453004327,
+        "avg_loss_pct": -4.398046074091007,
+        "payoff": 2.4908230485755904,
+        "expectancy_pct": 0.11748351536025094,
+        "expectancy_r": 0.0234967030720502,
+        "profit_factor": 0.9277835603662447,
+        "net_pnl": -186646.76402168724,
+        "max_consec_losses": 9,
+        "median_holding_days": 2.5,
+        "turnover": 16.289151971466495,
+        "turnover_annual": 33.21530988595123,
+        "fee_drag_pct": 1.8496653079550567,
+        "exit_reasons": {
+         "손절": 36,
+         "트레일링": 16,
+         "1차 익절": 11,
+         "추세 무효화": 6,
+         "2차 익절": 5,
+         "횡보 청산": 5,
+         "보유기간 초과": 2,
+         "3차 익절": 2,
+         "복합청산 MA5(476,100)-0.5% 이탈": 1,
+         "복합청산 전일저가(29,950) 이탈": 1
+        }
+       },
+       "per_strategy": {
+        "sepa": {
+         "trades": 68,
+         "win_rate": 29.411764705882355,
+         "avg_win_pct": 10.95475453004327,
+         "avg_loss_pct": -4.398046074091007,
+         "payoff": 2.4908230485755904,
+         "expectancy_pct": 0.11748351536025094,
+         "expectancy_r": 0.0234967030720502,
+         "profit_factor": 0.9277835603662447,
+         "net_pnl": -186646.76402168724,
+         "max_consec_losses": 9,
+         "median_holding_days": 2.5,
+         "turnover": 16.289151971466495,
+         "turnover_annual": 33.21530988595123,
+         "fee_drag_pct": 1.8496653079550567,
+         "exit_reasons": {
+          "손절": 36,
+          "트레일링": 16,
+          "1차 익절": 11,
+          "추세 무효화": 6,
+          "2차 익절": 5,
+          "횡보 청산": 5,
+          "보유기간 초과": 2,
+          "3차 익절": 2,
+          "복합청산 MA5(476,100)-0.5% 이탈": 1,
+          "복합청산 전일저가(29,950) 이탈": 1
+         }
+        }
+       },
+       "segments": [
+        3.7395516315088426,
+        -1.3207956917313084,
+        -2.9104266139397876
+       ],
+       "config": {
+        "exit_policy": "ladder",
+        "sizing": "nominal",
+        "min_holding_days": 0,
+        "stale_exit_days": 5,
+        "stale_exit_pnl_pct": 2.0,
+        "stale_high_days": 3,
+        "stale_high_min_pnl_pct": 3.0,
+        "sepa_max_holding_days": 10,
+        "min_stop_pct": 4.0,
+        "max_stop_pct": 8.0,
+        "atr_multiplier": 2.0,
+        "first_exit_pct": 10.0,
+        "first_exit_ratio": 0.1,
+        "trailing_stop_pct": 4.5,
+        "base_position_pct": 14.0,
+        "max_position_pct": 14.0,
+        "risk_per_trade_pct": 0.7,
+        "risk_max_position_pct": 18.0,
+        "risk_max_positions": 7,
+        "max_positions_short": 5,
+        "enable_composite_exit": true,
+        "post_exit_stale_days": 5
+       },
+       "judge": {
+        "wf_wins": 3,
+        "checks": {
+         "expectancy": true,
+         "profit_factor": true,
+         "wf": true,
+         "mdd": true
+        },
+        "beats_baseline": true
+       },
+       "ops_gate": {
+        "gain_pp": 5.579672804094497,
+        "mdd_delta_pp": -3.1392623198951313,
+        "wf_wins": 3,
+        "checks": {
+         "trades": true,
+         "return_gain": true,
+         "wf": true,
+         "mdd": true
+        },
+        "passed": true,
+        "thresholds": {
+         "min_return_gain_pp": 0.0,
+         "max_mdd_worsening_pp": 1.0,
+         "min_trades": 10,
+         "wf_min_wins": 2
+        }
+       },
+       "benchmark": {
+        "code": null,
+        "return_pct": null,
+        "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+       },
+       "excess_return_pct": null,
+       "benchmark_proxy": {
+        "code": "KOSPI",
+        "return_pct": 24.506247916610356,
+        "start": "2026-03-16",
+        "end": "2026-09-11",
+        "source": "kospi_fdr"
+       },
+       "excess_return_proxy_pct": -26.372715556827284
+      }
+     },
+     "table_md": "| 셀 | 거래 | 승률 | 평균익 | 평균손 | 손익비 | 기대값% | 기대값R | PF | 수익률 | 초과(KODEX200) | Sharpe | MDD | 최대연패 | 보유중앙 | 회전(연) | 수수료드래그 | WF승 | 연구판정 | 운영게이트 |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| ladder/current/nominal | 56 | 26.8% | +9.27% | -4.37% | 2.12 | -0.72% | -0.14 | 0.76 | -7.45% | n/a | -1.25 | -11.10% | 9 | 2일 | 41.2x | 2.29% | — | 기준 | 기준 |\n| ladder/current/risk | 68 | 29.4% | +11.20% | -4.49% | 2.49 | +0.12% | +0.02 | 0.95 | -1.38% | n/a | -0.49 | -7.99% | 9 | 2일 | 33.7x | 1.88% | 2/3 | **통과** | **통과** |\n| ladder/current/nominal14 | 68 | 29.4% | +10.95% | -4.40% | 2.49 | +0.12% | +0.02 | 0.93 | -1.87% | n/a | -0.57 | -7.96% | 9 | 2일 | 33.2x | 1.85% | 3/3 | **통과** | **통과** |",
+     "strategy_table_md": "| 셀 | 전략 | 거래 | 승률 | 기대값% | 기대값R | PF | 순손익 | 보유중앙 |\n|---|---|---|---|---|---|---|---|---|\n| ladder/current/nominal | sepa | 56 | 26.8% | -0.72% | -0.14 | 0.76 | -744,614 | 2일 |\n| ladder/current/risk | sepa | 68 | 29.4% | +0.12% | +0.02 | 0.95 | -137,513 | 2일 |\n| ladder/current/nominal14 | sepa | 68 | 29.4% | +0.12% | +0.02 | 0.93 | -186,647 | 2일 |"
+    },
+    "12m": {
+     "period": [
+      "2025-09-16",
+      "2026-09-11"
+     ],
+     "n_days": 241,
+     "benchmark": {
+      "code": null,
+      "return_pct": null,
+      "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+     },
+     "benchmark_proxy": {
+      "code": "KOSPI",
+      "return_pct": 100.30930943118372,
+      "start": "2025-09-16",
+      "end": "2026-09-11",
+      "source": "kospi_fdr"
+     },
+     "cells": {
+      "ladder/current/nominal": {
+       "start_date": "2025-09-16",
+       "end_date": "2026-09-11",
+       "n_days": 241,
+       "total_return_pct": 4.2048173712718855,
+       "mdd_pct": -12.80714707275916,
+       "sharpe": 0.13347288076915204,
+       "total_fees": 466578.26287280803,
+       "total_trades": 146,
+       "avg_equity": 10626051.422365503,
+       "position": {
+        "trades": 113,
+        "win_rate": 34.51327433628318,
+        "avg_win_pct": 9.148713941278597,
+        "avg_loss_pct": -4.389388332851476,
+        "payoff": 2.0842799149956557,
+        "expectancy_pct": 0.28305404494562963,
+        "expectancy_r": 0.05661080898912595,
+        "profit_factor": 1.0700415736490543,
+        "net_pnl": 420481.73712719034,
+        "max_consec_losses": 9,
+        "median_holding_days": 3.0,
+        "turnover": 38.59515521793917,
+        "turnover_annual": 39.13119904041055,
+        "fee_drag_pct": 4.390890315952765,
+        "exit_reasons": {
+         "손절": 59,
+         "트레일링": 26,
+         "1차 익절": 22,
+         "2차 익절": 11,
+         "보유기간 초과": 7,
+         "추세 무효화": 7,
+         "횡보 청산": 7,
+         "3차 익절": 3,
+         "복합청산 전일저가(73,500) 이탈": 1,
+         "복합청산 전일저가(458,500) 이탈": 1,
+         "복합청산 MA5(476,100)-0.5% 이탈": 1,
+         "복합청산 전일저가(29,950) 이탈": 1
+        }
+       },
+       "per_strategy": {
+        "sepa": {
+         "trades": 113,
+         "win_rate": 34.51327433628318,
+         "avg_win_pct": 9.148713941278597,
+         "avg_loss_pct": -4.389388332851476,
+         "payoff": 2.0842799149956557,
+         "expectancy_pct": 0.28305404494562963,
+         "expectancy_r": 0.05661080898912595,
+         "profit_factor": 1.0700415736490543,
+         "net_pnl": 420481.73712719034,
+         "max_consec_losses": 9,
+         "median_holding_days": 3.0,
+         "turnover": 38.59515521793917,
+         "turnover_annual": 39.13119904041055,
+         "fee_drag_pct": 4.390890315952765,
+         "exit_reasons": {
+          "손절": 59,
+          "트레일링": 26,
+          "1차 익절": 22,
+          "2차 익절": 11,
+          "보유기간 초과": 7,
+          "추세 무효화": 7,
+          "횡보 청산": 7,
+          "3차 익절": 3,
+          "복합청산 전일저가(73,500) 이탈": 1,
+          "복합청산 전일저가(458,500) 이탈": 1,
+          "복합청산 MA5(476,100)-0.5% 이탈": 1,
+          "복합청산 전일저가(29,950) 이탈": 1
+         }
+        }
+       },
+       "segments": [
+        2.217976239433661,
+        9.379235144081493,
+        -5.890113667438956
+       ],
+       "config": {
+        "exit_policy": "ladder",
+        "sizing": "nominal",
+        "min_holding_days": 0,
+        "stale_exit_days": 5,
+        "stale_exit_pnl_pct": 2.0,
+        "stale_high_days": 3,
+        "stale_high_min_pnl_pct": 3.0,
+        "sepa_max_holding_days": 10,
+        "min_stop_pct": 4.0,
+        "max_stop_pct": 8.0,
+        "atr_multiplier": 2.0,
+        "first_exit_pct": 10.0,
+        "first_exit_ratio": 0.1,
+        "trailing_stop_pct": 4.5,
+        "base_position_pct": 25.0,
+        "max_position_pct": 28.0,
+        "risk_per_trade_pct": 0.7,
+        "risk_max_position_pct": 18.0,
+        "risk_max_positions": 7,
+        "max_positions_short": 5,
+        "enable_composite_exit": true,
+        "post_exit_stale_days": 5
+       },
+       "judge": {
+        "wf_wins": 0,
+        "checks": {
+         "expectancy": false,
+         "profit_factor": false,
+         "wf": false,
+         "mdd": true
+        },
+        "beats_baseline": false
+       },
+       "ops_gate": {
+        "gain_pp": 0.0,
+        "mdd_delta_pp": 0.0,
+        "wf_wins": 0,
+        "checks": {
+         "trades": true,
+         "return_gain": false,
+         "wf": false,
+         "mdd": true
+        },
+        "passed": false,
+        "thresholds": {
+         "min_return_gain_pp": 0.0,
+         "max_mdd_worsening_pp": 1.0,
+         "min_trades": 10,
+         "wf_min_wins": 2
+        }
+       },
+       "benchmark": {
+        "code": null,
+        "return_pct": null,
+        "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+       },
+       "excess_return_pct": null,
+       "benchmark_proxy": {
+        "code": "KOSPI",
+        "return_pct": 100.30930943118372,
+        "start": "2025-09-16",
+        "end": "2026-09-11",
+        "source": "kospi_fdr"
+       },
+       "excess_return_proxy_pct": -96.10449205991183
+      },
+      "ladder/current/risk": {
+       "start_date": "2025-09-16",
+       "end_date": "2026-09-11",
+       "n_days": 241,
+       "total_return_pct": 11.61582785574235,
+       "mdd_pct": -9.76678796218275,
+       "sharpe": 0.7299401076580664,
+       "total_fees": 411379.0144257606,
+       "total_trades": 188,
+       "avg_equity": 10932129.642327545,
+       "position": {
+        "trades": 141,
+        "win_rate": 35.46099290780142,
+        "avg_win_pct": 9.703550836062474,
+        "avg_loss_pct": -4.369836874292358,
+        "payoff": 2.220575072984583,
+        "expectancy_pct": 0.620726143563966,
+        "expectancy_r": 0.12414522871279317,
+        "profit_factor": 1.2302831830209644,
+        "net_pnl": 1161582.7855742387,
+        "max_consec_losses": 10,
+        "median_holding_days": 3.0,
+        "turnover": 33.01295992709805,
+        "turnover_annual": 33.47147325941886,
+        "fee_drag_pct": 3.7630272223717833,
+        "exit_reasons": {
+         "손절": 71,
+         "트레일링": 33,
+         "1차 익절": 29,
+         "2차 익절": 15,
+         "추세 무효화": 12,
+         "보유기간 초과": 10,
+         "횡보 청산": 9,
+         "3차 익절": 5,
+         "복합청산 전일저가(73,500) 이탈": 1,
+         "복합청산 전일저가(458,500) 이탈": 1,
+         "복합청산 MA5(476,100)-0.5% 이탈": 1,
+         "복합청산 전일저가(29,950) 이탈": 1
+        }
+       },
+       "per_strategy": {
+        "sepa": {
+         "trades": 141,
+         "win_rate": 35.46099290780142,
+         "avg_win_pct": 9.703550836062474,
+         "avg_loss_pct": -4.369836874292358,
+         "payoff": 2.220575072984583,
+         "expectancy_pct": 0.620726143563966,
+         "expectancy_r": 0.12414522871279317,
+         "profit_factor": 1.2302831830209644,
+         "net_pnl": 1161582.7855742387,
+         "max_consec_losses": 10,
+         "median_holding_days": 3.0,
+         "turnover": 33.01295992709805,
+         "turnover_annual": 33.47147325941886,
+         "fee_drag_pct": 3.7630272223717833,
+         "exit_reasons": {
+          "손절": 71,
+          "트레일링": 33,
+          "1차 익절": 29,
+          "2차 익절": 15,
+          "추세 무효화": 12,
+          "보유기간 초과": 10,
+          "횡보 청산": 9,
+          "3차 익절": 5,
+          "복합청산 전일저가(73,500) 이탈": 1,
+          "복합청산 전일저가(458,500) 이탈": 1,
+          "복합청산 MA5(476,100)-0.5% 이탈": 1,
+          "복합청산 전일저가(29,950) 이탈": 1
+         }
+        }
+       },
+       "segments": [
+        3.014261900331341,
+        17.040975100754732,
+        -6.072654106913266
+       ],
+       "config": {
+        "exit_policy": "ladder",
+        "sizing": "risk",
+        "min_holding_days": 0,
+        "stale_exit_days": 5,
+        "stale_exit_pnl_pct": 2.0,
+        "stale_high_days": 3,
+        "stale_high_min_pnl_pct": 3.0,
+        "sepa_max_holding_days": 10,
+        "min_stop_pct": 4.0,
+        "max_stop_pct": 8.0,
+        "atr_multiplier": 2.0,
+        "first_exit_pct": 10.0,
+        "first_exit_ratio": 0.1,
+        "trailing_stop_pct": 4.5,
+        "base_position_pct": 25.0,
+        "max_position_pct": 28.0,
+        "risk_per_trade_pct": 0.7,
+        "risk_max_position_pct": 18.0,
+        "risk_max_positions": 7,
+        "max_positions_short": 5,
+        "enable_composite_exit": true,
+        "post_exit_stale_days": 5
+       },
+       "judge": {
+        "wf_wins": 2,
+        "checks": {
+         "expectancy": true,
+         "profit_factor": true,
+         "wf": true,
+         "mdd": true
+        },
+        "beats_baseline": true
+       },
+       "ops_gate": {
+        "gain_pp": 7.411010484470464,
+        "mdd_delta_pp": -3.040359110576409,
+        "wf_wins": 2,
+        "checks": {
+         "trades": true,
+         "return_gain": true,
+         "wf": true,
+         "mdd": true
+        },
+        "passed": true,
+        "thresholds": {
+         "min_return_gain_pp": 0.0,
+         "max_mdd_worsening_pp": 1.0,
+         "min_trades": 10,
+         "wf_min_wins": 2
+        }
+       },
+       "benchmark": {
+        "code": null,
+        "return_pct": null,
+        "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+       },
+       "excess_return_pct": null,
+       "benchmark_proxy": {
+        "code": "KOSPI",
+        "return_pct": 100.30930943118372,
+        "start": "2025-09-16",
+        "end": "2026-09-11",
+        "source": "kospi_fdr"
+       },
+       "excess_return_proxy_pct": -88.69348157544137
+      },
+      "ladder/current/nominal14": {
+       "start_date": "2025-09-16",
+       "end_date": "2026-09-11",
+       "n_days": 241,
+       "total_return_pct": 6.682719994551446,
+       "mdd_pct": -10.036633893385114,
+       "sharpe": 0.33669673808809386,
+       "total_fees": 407270.9005448523,
+       "total_trades": 189,
+       "avg_equity": 10608894.745524481,
+       "position": {
+        "trades": 146,
+        "win_rate": 35.61643835616438,
+        "avg_win_pct": 9.168246893299454,
+        "avg_loss_pct": -4.418566059039352,
+        "payoff": 2.074937156262124,
+        "expectancy_pct": 0.42057280069775693,
+        "expectancy_r": 0.08411456013955136,
+        "profit_factor": 1.1305014282098567,
+        "net_pnl": 668271.9994551458,
+        "max_consec_losses": 10,
+        "median_holding_days": 3.0,
+        "turnover": 33.71887679919809,
+        "turnover_annual": 34.18719453252029,
+        "fee_drag_pct": 3.8389569348556836,
+        "exit_reasons": {
+         "손절": 75,
+         "트레일링": 34,
+         "1차 익절": 28,
+         "2차 익절": 14,
+         "추세 무효화": 11,
+         "보유기간 초과": 10,
+         "횡보 청산": 9,
+         "3차 익절": 4,
+         "복합청산 전일저가(73,500) 이탈": 1,
+         "복합청산 전일저가(458,500) 이탈": 1,
+         "복합청산 MA5(476,100)-0.5% 이탈": 1,
+         "복합청산 전일저가(29,950) 이탈": 1
+        }
+       },
+       "per_strategy": {
+        "sepa": {
+         "trades": 146,
+         "win_rate": 35.61643835616438,
+         "avg_win_pct": 9.168246893299454,
+         "avg_loss_pct": -4.418566059039352,
+         "payoff": 2.074937156262124,
+         "expectancy_pct": 0.42057280069775693,
+         "expectancy_r": 0.08411456013955136,
+         "profit_factor": 1.1305014282098567,
+         "net_pnl": 668271.9994551458,
+         "max_consec_losses": 10,
+         "median_holding_days": 3.0,
+         "turnover": 33.71887679919809,
+         "turnover_annual": 34.18719453252029,
+         "fee_drag_pct": 3.8389569348556836,
+         "exit_reasons": {
+          "손절": 75,
+          "트레일링": 34,
+          "1차 익절": 28,
+          "2차 익절": 14,
+          "추세 무효화": 11,
+          "보유기간 초과": 10,
+          "횡보 청산": 9,
+          "3차 익절": 4,
+          "복합청산 전일저가(73,500) 이탈": 1,
+          "복합청산 전일저가(458,500) 이탈": 1,
+          "복합청산 MA5(476,100)-0.5% 이탈": 1,
+          "복합청산 전일저가(29,950) 이탈": 1
+         }
+        }
+       },
+       "segments": [
+        2.6396256926682593,
+        12.909418170322159,
+        -6.527665883335926
+       ],
+       "config": {
+        "exit_policy": "ladder",
+        "sizing": "nominal",
+        "min_holding_days": 0,
+        "stale_exit_days": 5,
+        "stale_exit_pnl_pct": 2.0,
+        "stale_high_days": 3,
+        "stale_high_min_pnl_pct": 3.0,
+        "sepa_max_holding_days": 10,
+        "min_stop_pct": 4.0,
+        "max_stop_pct": 8.0,
+        "atr_multiplier": 2.0,
+        "first_exit_pct": 10.0,
+        "first_exit_ratio": 0.1,
+        "trailing_stop_pct": 4.5,
+        "base_position_pct": 14.0,
+        "max_position_pct": 14.0,
+        "risk_per_trade_pct": 0.7,
+        "risk_max_position_pct": 18.0,
+        "risk_max_positions": 7,
+        "max_positions_short": 5,
+        "enable_composite_exit": true,
+        "post_exit_stale_days": 5
+       },
+       "judge": {
+        "wf_wins": 2,
+        "checks": {
+         "expectancy": true,
+         "profit_factor": true,
+         "wf": true,
+         "mdd": true
+        },
+        "beats_baseline": true
+       },
+       "ops_gate": {
+        "gain_pp": 2.4779026232795607,
+        "mdd_delta_pp": -2.7705131793740456,
+        "wf_wins": 2,
+        "checks": {
+         "trades": true,
+         "return_gain": true,
+         "wf": true,
+         "mdd": true
+        },
+        "passed": true,
+        "thresholds": {
+         "min_return_gain_pp": 0.0,
+         "max_mdd_worsening_pp": 1.0,
+         "min_trades": 10,
+         "wf_min_wins": 2
+        }
+       },
+       "benchmark": {
+        "code": null,
+        "return_pct": null,
+        "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"
+       },
+       "excess_return_pct": null,
+       "benchmark_proxy": {
+        "code": "KOSPI",
+        "return_pct": 100.30930943118372,
+        "start": "2025-09-16",
+        "end": "2026-09-11",
+        "source": "kospi_fdr"
+       },
+       "excess_return_proxy_pct": -93.62658943663227
+      }
+     },
+     "table_md": "| 셀 | 거래 | 승률 | 평균익 | 평균손 | 손익비 | 기대값% | 기대값R | PF | 수익률 | 초과(KODEX200) | Sharpe | MDD | 최대연패 | 보유중앙 | 회전(연) | 수수료드래그 | WF승 | 연구판정 | 운영게이트 |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| ladder/current/nominal | 113 | 34.5% | +9.15% | -4.39% | 2.08 | +0.28% | +0.06 | 1.07 | +4.20% | n/a | 0.13 | -12.81% | 9 | 3일 | 39.1x | 4.39% | — | 기준 | 기준 |\n| ladder/current/risk | 141 | 35.5% | +9.70% | -4.37% | 2.22 | +0.62% | +0.12 | 1.23 | +11.62% | n/a | 0.73 | -9.77% | 10 | 3일 | 33.5x | 3.76% | 2/3 | **통과** | **통과** |\n| ladder/current/nominal14 | 146 | 35.6% | +9.17% | -4.42% | 2.07 | +0.42% | +0.08 | 1.13 | +6.68% | n/a | 0.34 | -10.04% | 10 | 3일 | 34.2x | 3.84% | 2/3 | **통과** | **통과** |",
+     "strategy_table_md": "| 셀 | 전략 | 거래 | 승률 | 기대값% | 기대값R | PF | 순손익 | 보유중앙 |\n|---|---|---|---|---|---|---|---|---|\n| ladder/current/nominal | sepa | 113 | 34.5% | +0.28% | +0.06 | 1.07 | +420,482 | 3일 |\n| ladder/current/risk | sepa | 141 | 35.5% | +0.62% | +0.12 | 1.23 | +1,161,583 | 3일 |\n| ladder/current/nominal14 | sepa | 146 | 35.6% | +0.42% | +0.08 | 1.13 | +668,272 | 3일 |"
+    }
+   },
+   "verdict": {
+    "passing_cells": [
+     "ladder/current/risk",
+     "ladder/current/nominal14"
+    ],
+    "ops_gate_passing_cells": [
+     "ladder/current/risk",
+     "ladder/current/nominal14"
+    ],
+    "winner": "ladder/current/risk",
+    "rank_by_expectancy_r": [
+     "ladder/current/risk",
+     "ladder/current/nominal14",
+     "ladder/current/nominal"
+    ],
+    "main_grid": {
+     "cells": [
+      "ladder/current/nominal",
+      "ladder/current/risk",
+      "ladder/current/nominal14"
+     ],
+     "passing_cells": [
+      "ladder/current/risk",
+      "ladder/current/nominal14"
+     ],
+     "winner": "ladder/current/risk"
+    },
+    "supplement_none": {
+     "passing_cells": []
+    }
+   }
+  }
+ }
+}

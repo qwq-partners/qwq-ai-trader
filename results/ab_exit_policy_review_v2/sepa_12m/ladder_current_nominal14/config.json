@@ -1,0 +1,83 @@
+{
+ "months": 12,
+ "initial_capital": 10000000,
+ "strategies": [
+  "sepa"
+ ],
+ "universe_size": 60,
+ "use_cache": true,
+ "use_t1": true,
+ "allocation": {
+  "sepa": 0.4
+ },
+ "budget_cap": true,
+ "max_positions_short": 5,
+ "max_positions_core": 3,
+ "base_position_pct": 14.0,
+ "max_position_pct": 14.0,
+ "min_cash_reserve_pct": 5.0,
+ "daily_max_loss_pct": 5.0,
+ "min_position_value": 200000,
+ "sepa_min_score": 60.0,
+ "sepa_stop_loss_pct": 5.0,
+ "sepa_max_holding_days": 10,
+ "rsi2_min_score": 60.0,
+ "rsi2_stop_loss_pct": 5.0,
+ "rsi2_max_holding_days": 10,
+ "core_min_score": 70.0,
+ "core_stop_loss_pct": 15.0,
+ "core_trailing_stop_pct": 8.0,
+ "core_trailing_activate_pct": 10.0,
+ "first_exit_pct": 10.0,
+ "first_exit_ratio": 0.1,
+ "second_exit_pct": 15.0,
+ "second_exit_ratio": 0.4,
+ "third_exit_pct": 25.0,
+ "third_exit_ratio": 0.35,
+ "trailing_stop_pct": 4.5,
+ "trailing_activate_pct": 5.0,
+ "enable_atr_linked_trailing": true,
+ "atr_link_multiplier": 1.2,
+ "atr_link_cap_pct": 6.0,
+ "enable_regime_exit": true,
+ "regime_mode": "ma_stack",
+ "atr_multiplier": 2.0,
+ "min_stop_pct": 4.0,
+ "max_stop_pct": 8.0,
+ "stale_exit_days": 5,
+ "stale_exit_pnl_pct": 2.0,
+ "stale_high_days": 3,
+ "stale_high_min_pnl_pct": 3.0,
+ "exit_policy": "ladder",
+ "sizing": "nominal",
+ "risk_per_trade_pct": 0.7,
+ "risk_max_position_pct": 18.0,
+ "risk_max_positions": 7,
+ "min_holding_days": 0,
+ "enable_composite_exit": true,
+ "post_exit_stale_days": 5,
+ "post_exit_stale_pnl_pct": 3.0,
+ "entry_stop_mode": "live_policy",
+ "slot_policy": "live_weighted",
+ "max_positions_weighted": 8.0,
+ "offline": true,
+ "end_date": "2026-09-11",
+ "supported_scope": {
+  "strategies_requested": [
+   "sepa"
+  ],
+  "strategies_simulated": [
+   "sepa"
+  ],
+  "excluded_zero_allocation": [],
+  "unsupported_allocated": {
+   "gap_and_go": 15.0,
+   "vcp_breakout": 10.0
+  },
+  "allocation_covered_pct": 61.5,
+  "budget_cap_modeled": true,
+  "entry_stop_mode": "live_policy",
+  "slot_policy": "live_weighted",
+  "calculator_version": "2026-09-14.t7"
+ }
+}

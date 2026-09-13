@@ -200,7 +200,11 @@ ENTRY_STOP_MODES = ("atr_dynamic", "live_policy")
 SLOT_POLICIES = ("fixed", "live_weighted")
 
 # 백테스트 계산기 버전 — 결과 manifest 재현 키. 체결·사이징·청산 계산이 바뀌면 올린다.
-CALC_VERSION = "2026-09-14.t6"
+CALC_VERSION = "2026-09-14.t7"
+
+# offline 캐시 재사용 허용 오차(일). 워밍업 시작이 이만큼 늦은 캐시까지는 같은 구간으로 본다
+# — 워밍업은 400일이고 MA200 확보에는 ≈290일이면 충분하다 (UniverseManager._find_covering_cache).
+OFFLINE_CACHE_START_TOLERANCE_DAYS = 7
 
 
 class BacktestDataUnavailable(RuntimeError):
@@ -594,6 +598,8 @@ class UniverseManager:
         self.cache_files: List[Path] = []
         # OHLCV 확보 실패 종목 — manifest 에 명시해 생존편향·부분 캐시를 유추로 남기지 않는다
         self.missing_tickers: List[str] = []
+        # offline 에서 정확한 파일명 대신 재사용한 캐시 {종목: 파일명} (재현용)
+        self.cache_substitutes: Dict[str, str] = {}
 
     def build_universe(self, ref_date: str):
         print(f"\n유니버스 구성 (기준일: {ref_date})...")
@@ -640,6 +646,38 @@ class UniverseManager:
             time.sleep(0.05)
         print(f"  총 {len(self.tickers)}종목 유니버스 구성 완료")
 
+    def _find_covering_cache(self, ticker: str, start: str, end: str
+                             ) -> Optional[Tuple["pd.DataFrame", Path]]:
+        """offline 재사용: 요청 구간을 **포함하는** 기존 OHLCV 캐시를 찾아 잘라 쓴다.
+
+        캐시 파일명이 실행 날짜 범위(`ohlcv_{종목}_{워밍업}_{종료}.pkl`)를 그대로 담고 있어,
+        같은 데이터를 갖고도 종료일만 달라지면 offline 실행이 데이터 부족으로 끝난다.
+        포함 조건은 두 가지뿐이다.
+
+          · 마지막 봉 ≥ 요청 종료일 (짧은 캐시로 조용히 기간이 줄지 않게)
+          · 첫 봉 ≤ 요청 워밍업 시작일 + 허용 오차 (400일 워밍업의 며칠 차이는
+            MA200(≈290일) 확보에 영향이 없다. 그 이상 늦은 캐시는 재사용하지 않는다)
+
+        반환 전 요청 구간으로 잘라내므로 종료일 이후 미래 봉이 유입되지 않는다.
+        실제로 어떤 파일을 대신 썼는지는 manifest(`cache_substitutes`)에 남는다.
+        """
+        start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
+        limit = start_ts + pd.Timedelta(days=OFFLINE_CACHE_START_TOLERANCE_DAYS)
+        for path in sorted(CACHE_DIR.glob(f"ohlcv_{ticker}_*.pkl")):
+            try:
+                with open(path, "rb") as f:
+                    df = pickle.load(f)
+            except Exception:
+                continue
+            if df is None or len(df) == 0:
+                continue
+            if df.index.min() > limit or df.index.max() < end_ts:
+                continue
+            sliced = df.loc[(df.index >= start_ts) & (df.index <= end_ts)]
+            if len(sliced) > 20:
+                return sliced, path
+        return None
+
     def load_ohlcv(self, start: str, end: str):
         print(f"\nOHLCV 데이터 로드 ({start} ~ {end})...")
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -661,6 +699,14 @@ class UniverseManager:
                     pass
 
             if self.offline:
+                sub = self._find_covering_cache(ticker, start, end)
+                if sub is not None:
+                    df, src = sub
+                    self.ohlcv[ticker] = BTIndicators.compute(df)
+                    self.cache_files.append(src)
+                    self.cache_substitutes[ticker] = src.name
+                    cached += 1
+                    continue
                 failed += 1
                 self.missing_tickers.append(ticker)
                 continue
