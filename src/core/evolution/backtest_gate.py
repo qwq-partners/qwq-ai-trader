@@ -134,11 +134,16 @@ class GateResult:
     """게이트 판정 결과"""
     passed: bool
     reason: str
-    skipped: bool = False           # 검증 대상 아님 (매핑 없음 등) → 게이트 미적용
-    # 백테스트를 돌리지 못해 보류한 경우 (타임아웃/예외/데이터 없음).
-    # "성능이 나빠서 기각"과 구분해야 한다 — 전자는 장애이므로 사람이 알아야 하고,
+    skipped: bool = False           # 검증 대상 아님 (게이트를 사람이 끈 경우 등) → 게이트 미적용
+    # 백테스트를 돌리지 못해 보류한 경우 (타임아웃/예외/데이터 없음/WF 평가 불가).
+    # "성능이 나빠서 기각"과 구분해야 한다 — 전자는 **일시 장애**이므로 사람이 알아야 하고,
     # 후자는 게이트가 제 역할을 한 정상 동작이다.
     errored: bool = False
+    # 구조적 판정 불가 (모사 불가 전략·PARAM_MAP 밖 필드·백테스터 미지원 유효 설정).
+    # 재시도해도 결과가 같으므로 장애가 아니다 — 소비자(strategy_evolver)는 기각 계열로
+    # 기록해 연속 장애 카운터·알림을 건드리지 않고 14일 재제안 억제 대상으로 남긴다
+    # (2026-09-14 리뷰 blocking #1, MEMORY '일시 장애 vs 영구 비활성 구분').
+    unsupported: bool = False
     baseline: Dict[str, Any] = field(default_factory=dict)
     candidate: Dict[str, Any] = field(default_factory=dict)
     wf: Dict[str, Any] = field(default_factory=dict)  # walk-forward 구간 수익률·구간승 (2026-09-13 구조화)
@@ -155,6 +160,7 @@ class GateResult:
             "passed": self.passed,
             "skipped": self.skipped,
             "errored": self.errored,
+            "unsupported": self.unsupported,
             "reason": self.reason,
             "wf": self.wf,
             "config_hash": self.config_hash,
@@ -239,18 +245,54 @@ class BacktestGate:
         key = _STRATEGY_KEYS.get(strategy)
         return [key] if key else None
 
+    @staticmethod
+    def _simulatable_strategies() -> set:
+        """유효 설정에서 실제로 모사되는 전략 키 집합 (배분 0%는 기준군에서 빠진다).
+
+        배분 0% 전략의 필드는 baseline == candidate 가 되어 비교가 무의미하다 —
+        사후 재생(gate_replay)이 '재생 불가'로 마킹하도록 필드 목록에서 제외한다
+        (2026-09-14 리뷰 advisory). 설정을 읽지 못하면 기존 동작(전부 허용)을 유지한다.
+        """
+        try:
+            risk = (load_effective_config().get("kr", {}) or {}).get("risk", {}) or {}
+            alloc = risk.get("strategy_allocation", {}) or {}
+        except Exception:
+            return set(_STRATEGY_KEYS.values())
+        live = {"sepa": "sepa_trend", "rsi2": "rsi2_reversal", "core": "core_holding"}
+        out = set()
+        for key, live_key in live.items():
+            value = alloc.get(live_key)
+            if value is not None and float(value) > 0:
+                out.add(key)
+        return out
+
     def _resolve_fields(self, strategy: str, parameter: str) -> list:
-        """진화 파라미터를 BacktestConfig 필드명 목록으로 변환"""
+        """진화 파라미터를 BacktestConfig 필드명 목록으로 변환 (모사 범위 밖이면 빈 목록)"""
+        simulatable = self._simulatable_strategies()
         key = f"{strategy}.{parameter}"
+
+        # "*.min_score" 처럼 전략이 와일드카드로 넘어오는 경우
+        if strategy in ("*", "all"):
+            return [v for k, v in PARAM_MAP.items()
+                    if k.endswith(f".{parameter}")
+                    and _STRATEGY_KEYS.get(k.split(".", 1)[0], "") in simulatable]
+
+        strategy_key = _STRATEGY_KEYS.get(strategy)
+        if strategy_key is not None and strategy_key not in simulatable:
+            return []                       # 배분 0% — 기준군에 없는 전략
         if key in _FANOUT:
             return list(_FANOUT[key])
         if key in PARAM_MAP:
             return [PARAM_MAP[key]]
-
-        # "*.min_score" 처럼 전략이 와일드카드로 넘어오는 경우
-        if strategy in ("*", "all"):
-            return [v for k, v in PARAM_MAP.items() if k.endswith(f".{parameter}")]
         return []
+
+    @staticmethod
+    def _unsupported(reason: str, *, config_hash: str = "",
+                     scope: Optional[Dict[str, Any]] = None) -> GateResult:
+        """구조적 판정 불가 → 보류. 장애(errored)가 아니므로 연속 장애 알림을 유발하지 않는다."""
+        logger.warning(f"[백테게이트] 보류(미지원): {reason}")
+        return GateResult(False, reason, unsupported=True, config_hash=config_hash,
+                          supported_scope=dict(scope or {}))
 
     # ── 실행 ───────────────────────────────────────────────
     def _run_once(self, module, cfg) -> Dict[str, Any]:
@@ -294,18 +336,16 @@ class BacktestGate:
         # 모사 불가 전략(gap_and_go·vcp_breakout 등)의 파라미터는 매핑 부재를 이유로
         # "생략 후 통과"시키지 않는다 — 검증할 수 없으면 보류 (2026-09-14 T6)
         if strategy in _UNSUPPORTED_STRATEGIES:
-            reason = (f"백테스트 미지원 전략 ({strategy}) — {strategy}.{parameter} 검증 불가로 "
-                      f"변경 보류 (모사 가능: sepa/rsi2/core)")
-            logger.warning(f"[백테게이트] 보류: {reason}")
-            return GateResult(False, reason, errored=True)
+            return self._unsupported(
+                f"백테스트 미지원 전략 ({strategy}) — {strategy}.{parameter} 검증 불가로 "
+                f"변경 보류 (모사 가능: sepa/rsi2/core)")
 
         fields = self._resolve_fields(strategy, parameter)
         if not fields:
-            # 백테스트가 모사하지 못하는 파라미터 (예: 배분 비율, 알림 설정)
-            return GateResult(
-                True, f"백테스트 미지원 파라미터 ({strategy}.{parameter}) — 게이트 생략",
-                skipped=True,
-            )
+            # 백테스트가 모사하지 못하는 파라미터(배분 비율·알림 설정)이거나 기준군에 없는 전략.
+            # "생략 후 통과"가 아니라 보류로 통일한다 (2026-09-14 리뷰 advisory)
+            return self._unsupported(
+                f"백테스트 미지원 파라미터 ({strategy}.{parameter}) — 모사 범위 밖이라 변경 보류")
 
         if old_value is None or new_value is None:
             return GateResult(True, "old/new 값 없음 — 게이트 생략", skipped=True)
@@ -313,10 +353,9 @@ class BacktestGate:
         # 모사 불가 전략(gap_and_go·vcp_breakout 등)은 "생략 후 통과"가 아니라 보류 (2026-09-14 T6)
         strategies = self._strategies_for(strategy)
         if strategies is None:
-            reason = (f"백테스트 미지원 전략 ({strategy}) — {strategy}.{parameter} 검증 불가로 "
-                      f"변경 보류 (모사 가능: sepa/rsi2/core)")
-            logger.warning(f"[백테게이트] 보류: {reason}")
-            return GateResult(False, reason, errored=True)
+            return self._unsupported(
+                f"백테스트 미지원 전략 ({strategy}) — {strategy}.{parameter} 검증 불가로 "
+                f"변경 보류 (모사 가능: sepa/rsi2/core)")
 
         config_hash = ""
         scope: Dict[str, Any] = {}
@@ -350,13 +389,12 @@ class BacktestGate:
                 timeout=BT_TIMEOUT_SEC,
             )
         except AttributeError as e:
-            reason = f"백테스트 설정 매핑 실패 ({e}) — 변경 보류"
-            logger.error(f"[백테게이트] 보류: {reason}")
-            return GateResult(False, reason, errored=True, config_hash=config_hash)
+            # PARAM_MAP 이 가리키는 필드가 BacktestConfig 에 없음 — 재시도해도 같다(구조적)
+            return self._unsupported(f"백테스트 설정 매핑 실패 ({e}) — 변경 보류",
+                                     config_hash=config_hash)
         except ValueError as e:          # UnsupportedBacktestConfig 포함 (백테스터 모사 불가)
-            reason = f"유효 설정 미지원 ({e}) — 변경 보류"
-            logger.error(f"[백테게이트] 보류: {reason}")
-            return GateResult(False, reason, errored=True, config_hash=config_hash)
+            return self._unsupported(f"유효 설정 미지원 ({e}) — 변경 보류",
+                                     config_hash=config_hash, scope=scope)
         except asyncio.TimeoutError:
             logger.error(f"[백테게이트] 타임아웃 ({BT_TIMEOUT_SEC}s) — 변경 보류")
             return GateResult(False, f"백테스트 타임아웃 ({BT_TIMEOUT_SEC}s) — 변경 보류",

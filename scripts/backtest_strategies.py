@@ -101,10 +101,16 @@ class BacktestConfig:
     universe_size: int = 150
     use_cache: bool = True
     use_t1: bool = True
-    # 전략 배분
+    # 전략 배분. budget_cap=False(기본)면 코어 예산 계산에만 쓰는 정규화 비율,
+    # True 면 실엔진 `risk.strategy_allocation` 과 같은 **전략 총노출 예산 비율**이다.
     allocation: Dict[str, float] = field(default_factory=lambda: {
         "sepa": 0.60, "rsi2": 0.10, "core": 0.30
     })
+    # 전략 예산 캡 모사 (2026-09-14 리뷰 blocking #2 — src/core/engine.py 미러).
+    #   잔여 = equity×allocation[전략] − 해당 전략 보유 노출 − 같은 날 체결분,
+    #   잔여 ≤ 0 이면 매수 스킵, 아니면 매수 금액을 잔여로 제한한다.
+    # 기본 False = 기존 CLI/게이트 동작(캡 없음). 유효 설정 builder 가 True 로 켠다.
+    budget_cap: bool = False
     # 리스크
     max_positions_short: int = 5
     max_positions_core: int = 3
@@ -421,6 +427,8 @@ class MarketRegime:
         self.kospi_data: Optional[pd.DataFrame] = None
         self.offline = offline
         self.cache_files: List[Path] = []
+        # 레짐 출처: kospi_pykrx | kospi_fdr | samsung_proxy | unknown (캐시에도 함께 저장)
+        self.source: str = "unknown"
 
     def load(self, start: str, end: str):
         """KOSPI 지수로 레짐 판단 (pykrx → FDR → 개별주 대리 순 폴백).
@@ -435,7 +443,12 @@ class MarketRegime:
                 with open(cache_file, "rb") as f:
                     self.kospi_data = pickle.load(f)
                 self.cache_files.append(cache_file)
-                print(f"  레짐 지표 캐시 {len(self.kospi_data)}일 사용")
+                # source: 지수 기반인지 개별주 대리 폴백인지 — 폴백 캐시를 지수로 오인하지 않게 표시
+                src = (self.kospi_data.attrs or {}).get("source", "unknown")
+                self.source = src
+                print(f"  레짐 지표 캐시 {len(self.kospi_data)}일 사용 (source={src})")
+                if src == "samsung_proxy":
+                    print("  ⚠️ 캐시가 개별주 대리로 만들어졌다 — 레짐 기반 판단을 신뢰하지 말 것")
                 return
             except Exception:
                 pass
@@ -443,9 +456,12 @@ class MarketRegime:
             raise BacktestDataUnavailable(
                 f"레짐 지표 캐시 없음: {cache_file} — offline 실행 종료 (다운로드 금지)")
         df = None
+        source = "unknown"
         # 1차: KOSPI 지수 (pykrx) — KRX 인증이 없으면 자주 실패한다
         try:
             df = pykrx_stock.get_index_ohlcv_by_date(start, end, "1001")
+            if df is not None and len(df) >= 20:
+                source = "kospi_pykrx"
         except Exception:
             pass
 
@@ -461,6 +477,7 @@ class MarketRegime:
                     df = fdf.rename(columns={"Close": "종가", "Open": "시가",
                                              "High": "고가", "Low": "저가",
                                              "Volume": "거래량"})
+                    source = "kospi_fdr"
                     print("  KOSPI 지수(pykrx) 실패 → FDR KS11 사용")
             except Exception:
                 pass
@@ -474,6 +491,7 @@ class MarketRegime:
                 df = pykrx_stock.get_market_ohlcv_by_date(
                     start, end, "005930")
                 if df is not None and len(df) > 0:
+                    source = "samsung_proxy"
                     print("  ⚠️ KOSPI 지수·FDR 모두 실패 → 삼성전자 대리 사용 "
                           "(레짐 판단 신뢰도 낮음)")
             except Exception:
@@ -484,6 +502,10 @@ class MarketRegime:
             df['ma20'] = c.rolling(20).mean()
             df['ma60'] = c.rolling(60).mean()
             df['ma200'] = c.rolling(200).mean()
+            # 캐시에도 출처를 심는다 — 폴백으로 만든 레짐이 그 창의 영구 캐시가 되면
+            # 이후 offline 실행이 지수 기반인지 구분할 수 없다 (2026-09-14 리뷰 advisory)
+            df.attrs["source"] = source
+            self.source = source
             self.kospi_data = df
             try:
                 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -570,6 +592,8 @@ class UniverseManager:
         self.names: Dict[str, str] = {}
         self.ohlcv: Dict[str, pd.DataFrame] = {}
         self.cache_files: List[Path] = []
+        # OHLCV 확보 실패 종목 — manifest 에 명시해 생존편향·부분 캐시를 유추로 남기지 않는다
+        self.missing_tickers: List[str] = []
 
     def build_universe(self, ref_date: str):
         print(f"\n유니버스 구성 (기준일: {ref_date})...")
@@ -638,6 +662,7 @@ class UniverseManager:
 
             if self.offline:
                 failed += 1
+                self.missing_tickers.append(ticker)
                 continue
 
             try:
@@ -649,8 +674,10 @@ class UniverseManager:
                     loaded += 1
                 else:
                     failed += 1
+                    self.missing_tickers.append(ticker)
             except Exception:
                 failed += 1
+                self.missing_tickers.append(ticker)
 
             if (i + 1) % 10 == 0:
                 print(f"  진행: {i+1}/{len(self.tickers)} "
@@ -659,6 +686,10 @@ class UniverseManager:
 
         print(f"  완료: 신규 {loaded} + 캐시 {cached} = "
               f"{loaded + cached}종목 (실패 {failed})")
+        if self.missing_tickers:
+            print(f"  ⚠️ OHLCV 없음 {len(self.missing_tickers)}종목: "
+                  f"{', '.join(self.missing_tickers[:20])}"
+                  f"{' …' if len(self.missing_tickers) > 20 else ''}")
 
         if self.offline and cached == 0:
             raise BacktestDataUnavailable(
@@ -1413,6 +1444,7 @@ class BacktestEngine:
         orders = sorted(self.pending_buys, key=lambda x: x.get('score', 0),
                         reverse=True)
         self.pending_buys = []
+        day_filled: Dict[str, float] = {}      # 같은 날 체결분 (실엔진 pending notional 대응)
 
         for order in orders:
             symbol = order['symbol']
@@ -1466,6 +1498,14 @@ class BacktestEngine:
             # 사이징 — 시가 체결은 시가 평가 equity (당일 종가 미래정보 배제) — F8
             equity = self._calc_equity(day_str, phase="close" if use_close else "open")
             pos_value = self._calc_position_size(equity, strategy, stop_pct)
+
+            # 전략 예산 캡 — 실엔진 미러 (코어는 _calc_position_size 가 이미 예산으로 나눈다)
+            if self.config.budget_cap and strategy != StrategyType.CORE:
+                remaining = self._strategy_budget_remaining(strategy, equity, day_filled)
+                if remaining <= 0:
+                    continue
+                pos_value = min(pos_value, remaining)
+
             if pos_value < self.config.min_position_value:
                 continue
 
@@ -1537,10 +1577,29 @@ class BacktestEngine:
                 stop_pct=stop_pct, initial_risk=pos.initial_risk,
             ))
 
+            day_filled[strategy.value] = day_filled.get(strategy.value, 0.0) + total_cost
             if strategy in (StrategyType.SEPA, StrategyType.RSI2):
                 short_count += 1
             else:
                 core_count += 1
+
+    def _strategy_budget_remaining(self, strategy: StrategyType, equity: float,
+                                   day_filled: Dict[str, float]) -> float:
+        """전략 잔여 예산 (실엔진 src/core/engine.py `_calculate_position_size` 미러).
+
+        실엔진은 보유 노출을 **시장가**로 재는데, 백테스터는 진입원가(cost_basis)를
+        잔여수량 비율로 환산해 쓴다 — 일봉 단위라 체결 시점 시장가가 없다. 평가손익만큼의
+        근사 차이가 있고, 캡을 걸지 않던 기존(노출 2배 초과)보다 실엔진에 가깝다.
+        """
+        pct = self.config.allocation.get(strategy.value, 0.0)
+        if pct <= 0:
+            return 0.0
+        held = sum(
+            p.cost_basis * p.remaining_quantity / max(p.quantity, 1)
+            for p in self.positions.values()
+            if p.strategy == strategy and p.remaining_quantity > 0
+        )
+        return equity * pct - held - day_filled.get(strategy.value, 0.0)
 
     def _short_slot_usage(self) -> float:
         """단기(비코어) 슬롯 사용량. fixed=포지션 수, live_weighted=잔여비율·단계 가중 합."""
@@ -2094,7 +2153,8 @@ def build_backtest_config_from_effective(
     매핑:
       사이징    risk.sizing_mode → sizing, risk_per_trade_pct, risk_max_position_pct,
                 base_position_pct, max_position_pct
-      전략·배분 risk.strategy_allocation → allocation (0% 전략은 제외), strategies
+      전략·배분 risk.strategy_allocation → allocation (0% 전략은 제외, 원비율 유지) + budget_cap=True
+                (전략 총노출 ≤ equity×배분% — 실엔진 예산 캡 미러)
       초기 손절 entry_stop_mode="live_policy" + 전략별 stop_loss_pct (실엔진 신규 fill 미러)
       청산      exit_manager.* (분할익절·트레일링·ATR·stale) + 복합 청산·익절후 저효율 ON,
                 stale_high 는 실엔진 전략 파라미터(run_trader._strategy_exit_params sepa=3일)
@@ -2105,11 +2165,18 @@ def build_backtest_config_from_effective(
         UnsupportedBacktestConfig — 백테스터가 모사할 수 없는 유효 설정 (미지원 사이징 모드,
         수수료 모델 불일치, 모사 가능한 활성 전략 없음). 게이트는 이를 보류(passed=False)로 다룬다.
     """
-    kr = effective_config.get("kr", {}) or {}
-    risk = kr.get("risk", {}) or {}
-    em = kr.get("exit_manager", {}) or {}
-    strats = kr.get("strategies", {}) or {}
-    alloc_raw = risk.get("strategy_allocation", {}) or {}
+    def _section(parent: Dict[str, Any], key: str) -> Dict[str, Any]:
+        value = parent.get(key)
+        return value if isinstance(value, dict) else {}
+
+    def _pct(value: Any) -> float:
+        return 0.0 if value is None else float(value)
+
+    kr = _section(effective_config, "kr")
+    risk = _section(kr, "risk")
+    em = _section(kr, "exit_manager")
+    strats = _section(kr, "strategies")
+    alloc_raw = _section(risk, "strategy_allocation")
 
     # 수수료: 백테스터 상수 = FeeCalculator(실엔진 단일 출처) 여야 한다
     fee = get_fee_calculator("KR")
@@ -2129,37 +2196,41 @@ def build_backtest_config_from_effective(
     unknown = [s for s in requested if s not in BT_STRATEGY_KEYS]
     if unknown:
         raise UnsupportedBacktestConfig(f"백테스터 미지원 전략: {unknown}")
-    zero = [s for s in requested if float(alloc_raw.get(BT_STRATEGY_KEYS[s], 0) or 0) <= 0]
+    zero = [s for s in requested if _pct(alloc_raw.get(BT_STRATEGY_KEYS[s])) <= 0]
     active = [s for s in requested if s not in zero]
     if not active:
         raise UnsupportedBacktestConfig(
             f"모사 가능한 활성 전략 없음 — 요청 {requested} 의 배분이 모두 0% "
-            f"(유효 배분: { {k: v for k, v in alloc_raw.items() if v} })")
-    total_a = sum(float(alloc_raw[BT_STRATEGY_KEYS[s]]) for s in active)
-    alloc = {s: float(alloc_raw[BT_STRATEGY_KEYS[s]]) / total_a for s in active}
+            f"(유효 배분: { {k: v for k, v in alloc_raw.items() if _pct(v) > 0} })")
+    total_a = sum(_pct(alloc_raw[BT_STRATEGY_KEYS[s]]) for s in active)
+    # 정규화하지 않는다 — 실엔진 strategy_allocation 은 전략 **총노출 예산 비율**이라
+    # 원비율(40% → 0.40)을 그대로 넘기고 budget_cap 으로 캡을 건다 (리뷰 blocking #2)
+    alloc = {s: _pct(alloc_raw[BT_STRATEGY_KEYS[s]]) / 100 for s in active}
 
     unsupported_alloc = {k: float(v) for k, v in alloc_raw.items()
-                         if float(v or 0) > 0 and k not in BT_STRATEGY_KEYS.values()}
-    alloc_total = sum(float(v or 0) for v in alloc_raw.values())
+                         if _pct(v) > 0 and k not in BT_STRATEGY_KEYS.values()}
+    alloc_total = sum(_pct(v) for v in alloc_raw.values())
     scope = {
         "strategies_requested": requested,
         "strategies_simulated": active,
         "excluded_zero_allocation": zero,
         "unsupported_allocated": unsupported_alloc,
         "allocation_covered_pct": round(total_a / alloc_total * 100, 1) if alloc_total > 0 else 0.0,
+        "budget_cap_modeled": True,          # 전략 총노출 ≤ 배분 예산 (실엔진 미러)
         "entry_stop_mode": "live_policy",
         "slot_policy": "live_weighted",
         "calculator_version": CALC_VERSION,
     }
 
-    sepa = strats.get("sepa_trend", {}) or {}
-    rsi2 = strats.get("rsi2_reversal", {}) or {}
-    core = strats.get("core_holding", {}) or {}
+    sepa = _section(strats, "sepa_trend")
+    rsi2 = _section(strats, "rsi2_reversal")
+    core = _section(strats, "core_holding")
 
     cfg = BacktestConfig(
         months=months,
         strategies=active,
         allocation=alloc,
+        budget_cap=True,
         supported_scope=scope,
         # 사이징
         sizing=sizing,

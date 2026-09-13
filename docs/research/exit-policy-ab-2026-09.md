@@ -202,9 +202,14 @@
 | 진입 비용·R 분모 | ✅ 일치 — `cost_basis = 가격×수량 + 매수수수료`, `initial_risk = cost_basis × SL%` |
 | 익절 수량·단계 | ✅ 일치 — `max(1, int(잔여×ratio))`, 1차 익절 후 FIRST 단계 (실엔진은 체결 확인 후 승급) |
 | 수수료 | ✅ 일치 — 요율 동일(0.0140527% / 0.2130527%), 실엔진만 원 단위 반올림(차이 <1원) |
-| 슬롯 | ✅ 일치 — `--slot-policy live_weighted`가 실엔진 `RiskManager._get_position_weight`(잔여비율, TRAILING ×0.5·SECOND/THIRD ×0.7, floor 0.1/0.15/0.2)를 그대로 쓰고 코어 제외 가중 합 ≤ `max_positions`(8) |
+| 슬롯 | ⚠️ **공식만 일치 · 집계 범위 다름** — `--slot-policy live_weighted`가 실엔진 `RiskManager._get_position_weight`(잔여비율, TRAILING ×0.5·SECOND/THIRD ×0.7, floor 0.1/0.15/0.2)를 그대로 쓰고 코어 제외 가중 합 ≤ `max_positions`(8). 다만 실엔진은 **코어 제외 전 비코어 포지션**(gap·vcp·`manual` 펩트론 포함, `src/risk/manager.py:427-435`)을 세고 백테스터는 모사 가능한 sepa/rsi2 만 센다 — 백테스터 쪽 슬롯이 더 비어 있다 |
+| 전략 예산 | ✅ 일치 (2026-09-14 리뷰 반영) — `budget_cap`으로 전략 총노출 ≤ `equity×배분%`(sepa 40%), 보유 노출·당일 체결분 차감. 보유 노출을 실엔진은 시장가, 백테스터는 진입원가×잔여비율로 재는 근사 차이 |
 | **손절 발동 시점** | ⚠️ **미해소 차이** — 백테스터는 가격 하락률(`entry×(1-SL%)`), 실엔진은 **수수료 포함 순손익률**. 실엔진이 약 0.22%p 먼저 발동한다 (왕복 수수료 0.227% 이내) |
 | **익절 접촉 판정** | ⚠️ **미해소 차이** — 백테스터는 일봉 **고가** 접촉으로 판정하고 종가에 체결, 실엔진은 현재가 기준. 장중 고가만 목표를 넘긴 봉에서 결과가 갈린다 (일봉 근사의 구조적 한계) |
+
+> §2 표의 수치는 **전략 예산 캡을 모사하기 전**(2026-09-14 리뷰 반영 이전) 실행 결과다.
+> 캡이 걸리면 sepa 노출이 40% 이내로 줄어 절대 수익률·MDD가 달라진다 — 승격 판단 전
+> 위 재현 명령으로 다시 돌려 셀 순위가 유지되는지 확인할 것.
 
 두 미해소 차이는 `xfail(strict=True)` 테스트로 고정했다 — 조용히 통과시키지 않는다.
 청산 판정 의미 변경은 이번 범위 밖이므로, **손절 타이밍·장중 접촉이 결과를 좌우하는 범위의
@@ -222,10 +227,14 @@
 | `--entry-stop-mode` | `live_policy` | 신규 진입 초기 손절 (실엔진 미러). `atr_dynamic`은 별도 연구 축 |
 | `--slot-policy` | `live_weighted` | 실엔진 잔여비율 가중 슬롯. `fixed`는 기존 5/7 슬롯 |
 | `--effective-config` | (없음) | 유효 설정 YAML 경로. 미지정 시 `config/default.yml + evolved_overrides.yml` |
-| `--out` | `results/ab_exit_policy_2026-09.json` | 기존 요약 파일 경로 (원본 결과는 덮어쓰지 않는다 — 별도 `--out` 사용) |
+| `--out` | `<output-dir>/summary.json` | 요약 JSON 경로. 커밋된 원본 `results/ab_exit_policy_2026-09.json`을 가리키면 **`--overwrite` 없이는 실행 전에 거부**한다 (2026-09-14 리뷰 blocking #3 — 이전 기본값이 원본이라 재현 명령이 그대로 원본을 파괴했다) |
+| `--overwrite` | off | 보호된 원본 결과 파일 덮어쓰기 허용 |
 
 `manifest.json`: 통합 SHA · 계산기 버전(`CALC_VERSION`) · CLI 인자 전체 · 설정 snapshot/hash ·
-유니버스 · OHLCV 캐시 파일 hash · 난수 사용 여부(백테스터는 난수 없음).
+유니버스(**OHLCV를 못 얻어 빠진 `missing_tickers` 포함** — 생존편향·부분 캐시를 명시) ·
+OHLCV 캐시 파일 hash · 난수 사용 여부(백테스터는 난수 없음).
+레짐 캐시에는 출처 태그(`kospi_pykrx`/`kospi_fdr`/`samsung_proxy`)가 함께 저장돼,
+개별주 대리 폴백으로 만들어진 캐시를 지수 기반으로 오인하지 않는다.
 CLI 인자와 manifest 일치는 `tests/test_backtest_gate_config.py::test_runner_manifest_matches_cli_args`가 고정한다.
 
 > `--slot-policy fixed`(단순 5/7 슬롯) 실행 결과는 운영 검증이라고 부르지 않는다 — 실효 슬롯은 `live_weighted`다.
@@ -234,11 +243,14 @@ CLI 인자와 manifest 일치는 `tests/test_backtest_gate_config.py::test_runne
 
 ```bash
 cd /home/ubuntu/projects/qwq-ai-trader
-venv/bin/python scripts/ab_exit_policy.py --months 6,12 --strategies sepa,rsi2 sepa --holding current,extended,none
+# 요약은 --output-dir 아래 summary.json 에 쓴다 (원본 results/ab_exit_policy_2026-09.json 은 보존)
+venv/bin/python scripts/ab_exit_policy.py --months 6,12 --strategies sepa,rsi2 sepa \
+    --holding current,extended,none --output-dir results/ab_exit_policy_rerun
 venv/bin/python scripts/backtest_strategies.py --months 6 --universe-size 60 --strategies sepa \
     --exit-policy channel --holding-policy extended --sizing risk        # 단일 셀
 venv/bin/python scripts/ab_exit_policy.py --offline --months 6 --strategies sepa \
-    --end-date 2026-09-11 --entry-stop-mode live_policy --slot-policy live_weighted   # T7 재검증(오프라인)
+    --end-date 2026-09-11 --entry-stop-mode live_policy --slot-policy live_weighted \
+    --output-dir results/ab_exit_policy_offline                          # T7 재검증(오프라인)
 venv/bin/python -m pytest tests/test_backtest_exit_policy.py tests/test_backtest_point_in_time.py \
     tests/test_backtest_gate_config.py tests/test_live_backtest_parity.py -q          # 청산·시점·설정·parity
 ```

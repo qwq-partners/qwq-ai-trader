@@ -49,6 +49,22 @@ def _build(effective=None, *, months=6, strategies=("sepa",), **kw):
         months=months, strategies=list(strategies), **kw)
 
 
+def _synthetic_effective(allocation=None, **risk_kw):
+    """배분·사이징 기대값을 고정한 합성 유효 설정.
+
+    저장소 `evolved_overrides.yml` 이 바뀌어도 배분 의존 테스트가 깨지지 않게 한다
+    (2026-09-14 리뷰 advisory). 배분 외 필드는 실제 유효 설정을 그대로 쓴다.
+    """
+    eff = copy.deepcopy(EFFECTIVE)
+    risk = eff.setdefault("kr", {}).setdefault("risk", {})
+    risk["strategy_allocation"] = dict(
+        {"sepa_trend": 40.0, "gap_and_go": 15.0, "vcp_breakout": 10.0,
+         "rsi2_reversal": 0.0, "core_holding": 0.0}
+        if allocation is None else allocation)
+    risk.update(risk_kw)
+    return eff
+
+
 # ── 유효 설정 → BacktestConfig 매핑 ────────────────────────────────────────────
 
 def test_builder_mirrors_live_sizing_exit_and_fees():
@@ -75,15 +91,17 @@ def test_builder_mirrors_live_sizing_exit_and_fees():
 
 
 def test_builder_drops_zero_allocation_and_reports_unsupported_strategies():
-    cfg = _build(strategies=("sepa", "rsi2", "core"))
+    cfg = _build(_synthetic_effective(), strategies=("sepa", "rsi2", "core"))
     assert cfg.strategies == ["sepa"]                     # rsi2·core 배분 0%
-    assert cfg.allocation == {"sepa": 1.0}
+    # 배분은 정규화하지 않는다 — 실엔진처럼 전략 총노출 예산 비율(40%)로 쓰인다
+    assert cfg.allocation == {"sepa": 0.40} and cfg.budget_cap is True
     scope = cfg.supported_scope
     assert scope["strategies_simulated"] == ["sepa"]
     assert scope["excluded_zero_allocation"] == ["rsi2", "core"]
     # 배분이 있지만 백테스터가 모사하지 못하는 라인은 결과에 남는다 (부분 검증임을 감춘다 X)
     assert scope["unsupported_allocated"] == {"gap_and_go": 15.0, "vcp_breakout": 10.0}
     assert 0 < scope["allocation_covered_pct"] < 100
+    assert scope["budget_cap_modeled"] is True
 
 
 def test_builder_requires_at_least_one_supported_active_strategy():
@@ -241,16 +259,6 @@ def test_gate_judgment_rules_unchanged(monkeypatch):
     assert _verify(g).passed is True
 
 
-def test_gate_holds_when_effective_config_is_unsupported(monkeypatch):
-    g, _ = _gate_with(monkeypatch, [])
-    eff = copy.deepcopy(EFFECTIVE)
-    eff["kr"]["risk"]["strategy_allocation"] = {"gap_and_go": 15.0}
-    monkeypatch.setattr(gate_mod, "load_effective_config", lambda: eff)
-    r = _verify(g, strategy="risk", parameter="risk_per_trade_pct",
-                old_value=0.7, new_value=0.8)
-    assert r.passed is False and r.errored is True and "배분" in r.reason
-
-
 def test_gate_replay_override_dict_uses_effective_baseline(monkeypatch):
     """사후 재생(gate_replay)이 넘기는 overrides dict 도 유효 설정 기준군 위에서 돈다."""
     g = gate_mod.BacktestGate(enabled=True)
@@ -340,3 +348,148 @@ def test_runner_offline_regime_requires_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(bt.pykrx_stock, "get_index_ohlcv_by_date", boom)
     with pytest.raises(bt.BacktestDataUnavailable):
         bt.MarketRegime(offline=True).load("20250101", "20260911")
+
+
+# ── 리뷰 반영: 구조적 미지원 vs 장애 (blocking #1) ────────────────────────────
+#   errored=True 는 소비자(strategy_evolver)가 "일시 장애"로 읽어 연속 장애 카운터를 올리고
+#   3회면 텔레그램 알림을 보낸다. 모사 불가 전략·미매핑 필드·미지원 유효 설정은 장애가 아니라
+#   구조적 판정 불가이므로 unsupported(=기각 계열, 14일 재제안 억제 대상)로 구분한다.
+
+def test_unsupported_strategy_is_rejection_not_gate_failure(monkeypatch):
+    g, _ = _gate_with(monkeypatch, [])
+    r = _verify(g, strategy="gap_and_go", parameter="stop_loss_pct",
+                old_value=3.5, new_value=3.0)
+    assert (r.passed, r.skipped, r.errored, r.unsupported) == (False, False, False, True)
+    assert r.to_dict()["unsupported"] is True
+
+
+def test_unsupported_effective_config_is_rejection_not_gate_failure(monkeypatch):
+    g, _ = _gate_with(monkeypatch, [])
+    monkeypatch.setattr(gate_mod, "load_effective_config",
+                        lambda: _synthetic_effective(allocation={"gap_and_go": 15.0}))
+    r = _verify(g, strategy="risk", parameter="risk_per_trade_pct",
+                old_value=0.7, new_value=0.8)
+    assert (r.passed, r.errored, r.unsupported) == (False, False, True)
+    assert "배분" in r.reason
+
+
+def test_unmapped_config_field_is_rejection_not_gate_failure(monkeypatch):
+    g, _ = _gate_with(monkeypatch, [])
+    monkeypatch.setitem(gate_mod.PARAM_MAP, "sepa.min_score", "not_a_field")
+    r = _verify(g)
+    assert (r.passed, r.errored, r.unsupported) == (False, False, True)
+
+
+def test_unmapped_parameter_is_held_not_skipped(monkeypatch):
+    """PARAM_MAP 밖 파라미터도 '생략 후 통과'가 아니라 보류(미지원)로 통일한다."""
+    g, _ = _gate_with(monkeypatch, [])
+    r = _verify(g, strategy="sepa", parameter="weight", old_value=1, new_value=2)
+    assert (r.passed, r.skipped, r.errored, r.unsupported) == (False, False, False, True)
+
+
+def test_inactive_strategy_field_is_not_replayable(monkeypatch):
+    """배분 0% 전략의 필드는 유효 설정 기준군에서 base==cand — gate_replay 가 '재생 불가'로 마킹하도록 빈 목록."""
+    g = gate_mod.BacktestGate(enabled=True)
+    monkeypatch.setattr(gate_mod, "load_effective_config",
+                        lambda: _synthetic_effective(allocation={"sepa_trend": 40.0}))
+    assert g._resolve_fields("rsi2", "min_score") == []
+    assert g._resolve_fields("sepa", "min_score") == ["sepa_min_score"]
+
+
+def test_real_failures_still_report_errored(monkeypatch):
+    """타임아웃·예외·데이터 부족·WF 평가 불가는 그대로 장애(errored)다."""
+    short = _curve(n=10)
+    g, _ = _gate_with(monkeypatch, [_metrics(ret=5.0, curve=short),
+                                    _metrics(ret=9.0, curve=short)])
+    r = _verify(g)
+    assert r.errored is True and r.unsupported is False
+
+    g, _ = _gate_with(monkeypatch, [{}, {}])
+    r = _verify(g)
+    assert r.errored is True and r.unsupported is False
+
+
+def test_evolver_records_unsupported_as_suppressible_rejection(monkeypatch):
+    """소비부: unsupported 는 gate_error 가 아니라 rejected_by_backtest — 카운터·알림 없음."""
+    from src.core.evolution import candidate_ledger
+    from src.core.evolution.strategy_evolver import EvolutionState, StrategyEvolver
+
+    rows = []
+    monkeypatch.setattr(candidate_ledger, "record_candidate", lambda **kw: rows.append(kw))
+
+    ev = StrategyEvolver.__new__(StrategyEvolver)
+    ev.state = EvolutionState()
+    ev._save_state = lambda: None
+    alerts = []
+
+    async def _alert():
+        alerts.append(1)
+
+    ev._alert_gate_failure = _alert
+    change = {"strategy": "gap_and_go", "parameter": "stop_loss_pct",
+              "old_value": 3.5, "new_value": 3.0, "source": "rule"}
+
+    unsupported = gate_mod.GateResult(False, "미지원 전략", unsupported=True)
+    out = asyncio.run(ev._handle_gate_rejection(unsupported, change))
+    assert out["status"] == "rejected_by_backtest"
+    assert rows[-1]["event"] == "rejected_by_backtest"
+    assert rows[-1]["event"] in StrategyEvolver._SUPPRESS_EVENTS      # 14일 재제안 억제 대상
+    assert ev.state.consecutive_gate_errors == 0 and not alerts
+
+    errored = gate_mod.GateResult(False, "타임아웃", errored=True)
+    out = asyncio.run(ev._handle_gate_rejection(errored, change))
+    assert out["status"] == "gate_error" and rows[-1]["event"] == "gate_error"
+    assert ev.state.consecutive_gate_errors == 1
+
+
+# ── 리뷰 반영: 전략 예산 캡 모사 (blocking #2) ────────────────────────────────
+
+def test_strategy_budget_cap_limits_exposure():
+    """6종목 동시 sepa 신호에서도 sepa 총노출은 배분 예산(40%)을 넘지 않는다 (실엔진 미러)."""
+    import pandas as pd
+    idx = pd.bdate_range("2026-01-05", periods=40)
+    close = 10000.0
+    df = pd.DataFrame({"시가": close, "고가": close * 1.011, "저가": close * 0.989,
+                       "종가": close, "거래량": 1_000_000.0}, index=idx)
+    cfg = _build(_synthetic_effective(), strategies=("sepa",))
+    cfg.sizing = "nominal"                      # 명목 25%×6 = 150% → 캡이 없으면 초과
+    eng = bt.BacktestEngine(cfg)
+    syms = [f"S{i}" for i in range(6)]
+    eng.universe.tickers = syms
+    eng.universe.names = {s: s for s in syms}
+    eng.universe.ohlcv = {s: bt.BTIndicators.compute(df.copy()) for s in syms}
+    eng.regime.kospi_data = None
+    eng.cash = 10_000_000.0
+    eng.pending_buys = [
+        {"symbol": s, "strategy": bt.StrategyType.SEPA, "score": 80.0 - i,
+         "signal_close": close, "signal_date": "2026-02-13",
+         "indicator_asof": "2026-02-13"} for i, s in enumerate(syms)]
+    eng._execute_pending_buys("2026-02-16")
+
+    exposure = sum(p.cost_basis for p in eng.positions.values())
+    assert exposure > 0
+    assert exposure <= 10_000_000.0 * 0.40 + 1
+    assert cfg.supported_scope["budget_cap_modeled"] is True
+
+
+def test_cli_path_keeps_normalized_allocation_without_budget_cap():
+    """기본 CLI 경로는 기존 동작(정규화 비율·캡 없음) 그대로 — 게이트 기본값 불변."""
+    assert bt.BacktestConfig().budget_cap is False
+
+
+# ── 리뷰 반영: 원본 결과 덮어쓰기 방지 (blocking #3) ──────────────────────────
+
+def test_runner_out_defaults_to_output_dir_summary(tmp_path):
+    ns = ab.build_parser().parse_args(["--output-dir", str(tmp_path)])
+    assert ns.out is None
+    assert ab.resolve_out_path(ns) == tmp_path / "summary.json"
+
+
+def test_runner_refuses_overwriting_original_results(tmp_path):
+    original = str(bt.RESULTS_DIR / "ab_exit_policy_2026-09.json")
+    ns = ab.build_parser().parse_args(["--output-dir", str(tmp_path), "--out", original])
+    with pytest.raises(SystemExit):
+        ab.resolve_out_path(ns)
+    ns2 = ab.build_parser().parse_args(
+        ["--output-dir", str(tmp_path), "--out", original, "--overwrite"])
+    assert ab.resolve_out_path(ns2) == Path(original)

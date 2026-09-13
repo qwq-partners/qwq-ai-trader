@@ -77,7 +77,7 @@ def _file_hash(path: Path) -> str:
 
 
 def build_manifest(args: argparse.Namespace, effective: dict, *,
-                   universe=None, cache_files=()) -> dict:
+                   universe=None, cache_files=(), missing_tickers=()) -> dict:
     """실행 입력 고정 기록 (T7-A).
 
     통합 SHA·설정 snapshot/hash·계산기 버전·유니버스·OHLCV 캐시 hash·난수 사용 여부·CLI 인자를
@@ -95,7 +95,11 @@ def build_manifest(args: argparse.Namespace, effective: dict, *,
         "config_source": args.effective_config or "config/default.yml + evolved_overrides.yml",
         "config_hash": effective_config_hash(effective),
         "config_snapshot": effective,
-        "universe": {"size": args.universe_size, "tickers": list(universe or [])},
+        # missing: OHLCV 를 못 얻어 시뮬레이션에서 빠진 종목 (offline 부분 캐시·상장폐지 등).
+        # 생존편향·데이터 누락을 유추가 아니라 명시로 남긴다 (T7-A, 2026-09-14 리뷰 advisory).
+        "universe": {"size": args.universe_size,
+                     "tickers": list(universe if universe is not None else []),
+                     "missing_tickers": list(missing_tickers)},
         "ohlcv_cache": {Path(f).name: _file_hash(Path(f)) for f in cache_files},
         # 백테스터는 난수를 쓰지 않는다 (같은 입력 → 같은 결과)
         "random_used": False,
@@ -139,6 +143,8 @@ def run_cell(cfg, shared: dict, outdir: Path = None, cell: str = "") -> dict:
     shared.setdefault("cache_files", [])
     shared["cache_files"] = sorted({*shared["cache_files"], *map(str, engine.universe.cache_files),
                                     *map(str, engine.regime.cache_files)})
+    shared["missing_tickers"] = sorted({*shared.get("missing_tickers", []),
+                                        *engine.universe.missing_tickers})
     ps = an.positions()
     per_strategy = {
         s: an.position_metrics([p for p in ps if p["strategy"] == s])
@@ -220,6 +226,19 @@ def md_strategy_table(cells: dict) -> str:
     return "\n".join(rows)
 
 
+# 저장소에 커밋된 연구 원본 — 재실행이 조용히 덮어쓰면 안 된다 (2026-09-14 리뷰 blocking #3)
+PROTECTED_RESULTS = (bt.RESULTS_DIR / "ab_exit_policy_2026-09.json",)
+
+
+def resolve_out_path(args: argparse.Namespace) -> Path:
+    """요약 JSON 저장 경로. 기본은 <output-dir>/summary.json, 원본 경로는 --overwrite 필수."""
+    out = Path(args.out) if args.out is not None else Path(args.output_dir) / "summary.json"
+    if not args.overwrite and out.resolve() in {p.resolve() for p in PROTECTED_RESULTS}:
+        raise SystemExit(
+            f"거부: {out} 는 커밋된 연구 원본이다. 다른 --out 을 쓰거나 --overwrite 를 명시할 것.")
+    return out
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="청산×보유×사이징 2×2×2 A/B")
     ap.add_argument("--months", default="6,12")
@@ -228,8 +247,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--universe-size", type=int, default=60)
     ap.add_argument("--holding", default="current,extended",
                     help="보유 정책 축 (기본 2×2×2; 'none' 추가 시 보유 규칙 해제 보충 셀)")
-    ap.add_argument("--out", default=str(bt.RESULTS_DIR / "ab_exit_policy_2026-09.json"),
-                    help="요약 JSON 경로 (기존 형식 유지)")
+    ap.add_argument("--out", default=None,
+                    help="요약 JSON 경로 (기본: <output-dir>/summary.json). "
+                         "원본 결과 파일을 가리키면 --overwrite 없이는 거부한다")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="보호된 원본 결과 파일 덮어쓰기 허용 (기본 금지)")
     # ── T7-A 실행 입력 고정 ────────────────────────────────────────────────
     ap.add_argument("--offline", action="store_true",
                     help="캐시에 없는 입력은 다운로드하지 않고 데이터 부족으로 종료 (네트워크 무접촉)")
@@ -251,6 +273,7 @@ def main():
     effective = load_effective_config(args.effective_config)
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
+    out = resolve_out_path(args)          # 원본 덮어쓰기는 실행 전에 거부한다
 
     axes = [AXES[0], tuple(args.holding.split(",")), AXES[2]]
     windows = [int(m) for m in args.months.split(",")]
@@ -315,17 +338,18 @@ def main():
             print(w["table_md"]); print(); print(w["strategy_table_md"])
         print(f"\n[{strategies}] 통과 셀: {passing or '없음'} → winner: {grid['verdict']['winner']}\n")
 
-    out = Path(args.out)
+    payload = json.dumps(result, ensure_ascii=False, indent=1, default=str)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    out.write_text(payload, encoding="utf-8")
 
-    # 실행 입력·요약 보존 (T7-A). 기존 결과 파일은 덮어쓰지 않는다 — --out 과 별도 디렉터리.
+    # 실행 입력·요약 보존 (T7-A). 커밋된 원본 결과는 --overwrite 없이 건드리지 않는다.
     manifest = build_manifest(args, effective, universe=shared.get("tickers"),
-                              cache_files=shared.get("cache_files", []))
+                              cache_files=shared.get("cache_files", []),
+                              missing_tickers=shared.get("missing_tickers", []))
     (outdir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
-    (outdir / "summary.json").write_text(
-        json.dumps(result, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    if out.resolve() != (outdir / "summary.json").resolve():
+        (outdir / "summary.json").write_text(payload, encoding="utf-8")
     print(f"저장: {out} · {outdir}  (총 {time.time() - t0:.0f}s)")
 
 
