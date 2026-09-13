@@ -131,14 +131,8 @@ def _build_rules() -> List[AutoTuningRule]:
             reason_template="승률 {win_rate:.0f}% > 65% -> 진입 기준 -5",
         ),
 
-        # 손익비 < 1.0 → 손절 축소
-        AutoTuningRule(
-            name="bad_profit_factor",
-            condition=lambda r: r.profit_factor < 1.0 and r.total_trades >= 5,
-            parameter="exit_manager.stop_loss_pct",
-            adjustment=lambda v: max(v - 0.5, 3.0),
-            reason_template="손익비 {profit_factor:.2f} < 1.0 -> 손절 -0.5%",
-        ),
+        # (삭제 2026-09-13) bad_profit_factor → exit_manager.stop_loss_pct: 잠금 파라미터라 영원히
+        #  skip되던 도달 불가 규칙. 손절 축소는 수동 조정만 허용(_locked_params).
 
         # 거래 부족 → 진입 기준 완화
         AutoTuningRule(
@@ -230,7 +224,7 @@ class StrategyEvolver:
             "base_position_pct",       # 포지션 크기: 25% 고정
             "trailing_stop_pct",       # 트레일링 스탑: 3.0% 고정
             "trailing_activate_pct",   # 트레일링 활성화: 5.0% 고정
-            "first_exit_pct",          # 1차 익절: 5.0% 고정
+            "first_exit_pct",          # 1차 익절: 10.0% (2026-08-02 백테스트 검증), 수동 조정만
             "stop_loss_pct",           # 손절 비율: 수동 조정만 허용
         }
 
@@ -404,9 +398,30 @@ class StrategyEvolver:
         if not triggered:
             triggered = self._find_weakness_trigger()
 
+        # 3.7 일일 LLM 복기의 파라미터 제안 (2026-09-13 WikiSkill 정렬) — 게이트를 거치는 정규 제안
+        #     경로. 이전엔 daily_bias 점수 부스트로 게이트를 우회해 런타임에 직접 반영됐다.
+        if not triggered:
+            triggered = self._find_daily_review_trigger()
+
         # 4. 규칙 없으면 LLM 보조 분석 (선택적)
         if not triggered and self.strategist and not dry_run:
             triggered = await self._get_llm_suggestion(review, days)
+
+        # 4.5 재제안 억제 — 최근 14일 기각·롤백 이력이 있는 파라미터는 소스 무관 차단
+        #     (2026-09-13 WikiSkill 정렬: 기각 원장→제안자 연결이 weakness 경로에만 있어
+        #      gap_and_go.min_score 60→65가 5/20·6/8 두 번 제안돼 7/1 롤백된 실측)
+        if triggered:
+            _pk = f"{triggered['strategy']}.{triggered['parameter']}"
+            if self._recently_decided_against(_pk):
+                logger.info(f"[진화] 재제안 억제: {_pk} 최근 14일 기각·롤백 이력 (source={triggered.get('source')})")
+                try:
+                    from .candidate_ledger import record_candidate
+                    record_candidate(event="suppressed", parameter=_pk,
+                                     old_value=triggered.get("old_value"), new_value=triggered.get("new_value"),
+                                     source=triggered.get("source", ""), reason="14일 내 기각·롤백 이력")
+                except Exception:
+                    pass
+                return {"status": "suppressed", "change": triggered, "reason": "최근 기각·롤백 이력"}
 
         if triggered and not dry_run:
             # 5. 백테스트 사전 검증 — 과거 데이터로 개선이 확인된 변경만 적용
@@ -785,7 +800,7 @@ class StrategyEvolver:
         strategy = failure.get("strategy") or ""
         # entry 계열은 게이트가 백테스트로 검증 가능한 전략만 제안 (무검증
         # 적용 방지 — gap_and_go 등 미지원 전략의 실패는 주간 요약으로만 노출)
-        _GATE_VERIFIABLE = ("sepa_trend", "rsi2_reversal", "core_holding")
+        _GATE_VERIFIABLE = ("sepa_trend", "core_holding")  # rsi2_reversal 폐지(2026-08-02) 제외
         if (mechanism == "entry" and strategy in self._strategies
                 and strategy in _GATE_VERIFIABLE):
             target_strategy, param = strategy, "min_score"
@@ -805,19 +820,10 @@ class StrategyEvolver:
         if new_value == current:
             return None
 
-        # 최근 14일 내 동일 파라미터 기각 이력 → 재시도 차단
-        try:
-            from .candidate_ledger import load_candidates
-            param_key = f"{target_strategy}.{param}"
-            for c in load_candidates(days=14):
-                if (c.get("parameter") == param_key
-                        and c.get("event") == "rejected_by_backtest"):
-                    logger.info(
-                        f"[진화] 약점 트리거 억제: {param_key} 최근 기각 이력 (재시도 차단)"
-                    )
-                    return None
-        except Exception:
-            pass
+        # 최근 14일 내 동일 파라미터 기각·롤백 이력 → 재시도 차단 (evolve() 4.5에서 소스 무관 재확인)
+        if self._recently_decided_against(f"{target_strategy}.{param}"):
+            logger.info(f"[진화] 약점 트리거 억제: {target_strategy}.{param} 최근 기각·롤백 이력")
+            return None
 
         logger.info(
             f"[진화] 약점 트리거: {failure['pattern']} "
@@ -903,13 +909,95 @@ class StrategyEvolver:
     # LLM 보조 분석 (선택적)
     # ============================================================
 
+    # ── WikiSkill 정렬 헬퍼 (2026-09-13) ──────────────────────────────
+    _SUPPRESS_EVENTS = ("rejected_by_backtest", "rollback")
+    _REBALANCE_HISTORY_PATH = Path.home() / ".cache" / "ai_trader" / "evolution" / "rebalance_history.json"
+
+    def _recently_decided_against(self, param_key: str, days: int = 14) -> bool:
+        """최근 N일 내 같은 파라미터가 게이트 기각 또는 롤백됐으면 True (재제안 억제, 소스 무관)"""
+        try:
+            from .candidate_ledger import load_candidates
+            return any(
+                c.get("parameter") == param_key and c.get("event") in self._SUPPRESS_EVENTS
+                for c in load_candidates(days=days)
+            )
+        except Exception:
+            return False
+
+    @classmethod
+    def _build_rejection_context(cls, days: int = 60, limit: int = 8) -> str:
+        """LLM 제안자용 '최근 기각·롤백 후보' — 결정·사유만 (게이트 수치는 비공개, 설계 §4 held-out 누출 방지)"""
+        try:
+            from .candidate_ledger import load_candidates
+            rows = [c for c in load_candidates(days=days) if c.get("event") in cls._SUPPRESS_EVENTS]
+        except Exception:
+            return ""
+        if not rows:
+            return ""
+        lines = [
+            f"- {c.get('parameter')} {c.get('old_value')}→{c.get('new_value')} "
+            f"[{c.get('event')}] {str(c.get('reason', ''))[:80]}"
+            for c in rows[-limit:]
+        ]
+        return "## 최근 기각·롤백 후보 (재제안 금지)\n" + "\n".join(lines)
+
+    def _recent_rebalance_context(self, n: int = 4) -> str:
+        """주간 배분 제안자용 최근 n회 배분 이력 (진동 방지 — 자기 이력을 보지 못하던 문제)"""
+        try:
+            data = json.loads(self._REBALANCE_HISTORY_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        rows = data[-n:] if isinstance(data, list) else []
+        return "\n".join(
+            f"- {str(e.get('timestamp', ''))[:10]}: {e.get('before')} → {e.get('after')} "
+            f"({str(e.get('reasoning', ''))[:120]})"
+            for e in rows if isinstance(e, dict)
+        )
+
+    def _find_daily_review_trigger(self) -> Optional[Dict]:
+        """오늘 일일 LLM 복기(llm_review_YYYYMMDD.json)의 parameter_suggestions → 게이트 대상 제안 1건"""
+        try:
+            from .daily_reviewer import get_daily_reviewer
+            review = get_daily_reviewer().load_llm_review(date.today().isoformat())
+        except Exception as e:
+            logger.debug(f"[진화] 일일 복기 로드 실패 (무시): {e}")
+            return None
+        for s in (review or {}).get("parameter_suggestions") or []:
+            try:
+                if float(s.get("confidence", 0) or 0) < 0.6:
+                    continue
+                strat, param = str(s.get("strategy", "") or ""), str(s.get("parameter", "") or "")
+                if not strat or not param or param in self._locked_params:
+                    continue
+                targets = self._resolve_param_targets(f"{strat}.{param}")
+                if not targets:
+                    continue
+                strategy_name, param_name = targets[0]
+                current = self._get_param_value(strategy_name, param_name)
+                if current is None or s.get("suggested_value") is None:
+                    continue
+                new_value = self._clamp_value(param_name, s.get("suggested_value"), current)
+                if new_value == current:
+                    continue
+                return {
+                    "strategy": strategy_name, "parameter": param_name,
+                    "old_value": current, "new_value": new_value,
+                    "reason": f"일일 복기 제안: {str(s.get('reason', ''))[:120]}",
+                    "source": "daily_review",
+                }
+            except Exception:
+                continue
+        return None
+
     async def _get_llm_suggestion(self, review: ReviewResult, days: int) -> Optional[Dict]:
         """LLM에게 파라미터 조정 제안 받기 (실패해도 무방)"""
         if not self.strategist:
             return None
 
         try:
-            advice = await self.strategist.analyze_and_advise(days)
+            advice = await self.strategist.analyze_and_advise(
+                days, extra_context=self._build_rejection_context()
+            )
             if not advice or not advice.parameter_adjustments:
                 return None
 
@@ -1263,6 +1351,12 @@ class StrategyEvolver:
             wiki_ctx = self._build_wiki_context(list(current.keys()))
             if wiki_ctx:
                 user_prompt += f"\n\n=== 📚 누적 교훈 (Trade Wiki + 직전 주 매도후 복기) ===\n{wiki_ctx}"
+            # 2026-09-13: 자기 이력 없이 매주 제안하던 문제 — 최근 4회 배분 이력 제공 (진동 방지)
+            _hist_ctx = self._recent_rebalance_context()
+            if _hist_ctx:
+                user_prompt += (
+                    "\n\n=== 최근 4회 배분 이력 (직전 방향을 되돌리려면 근거를 명시) ===\n" + _hist_ctx
+                )
 
             result = await llm.complete_json(
                 prompt=user_prompt,
@@ -1301,6 +1395,14 @@ class StrategyEvolver:
             config_mgr.save_override(
                 "risk_config", "strategy_allocation", adjusted, "weekly_rebalance"
             )
+            # 원장 기록 (2026-09-13) — 활성 진화 변경의 5영업일 평가 창과 겹치는 배분 변경을 식별 가능하게
+            try:
+                from .candidate_ledger import record_candidate
+                record_candidate(event="allocation_rebalance", parameter="risk_config.strategy_allocation",
+                                 old_value=current, new_value=adjusted, source="weekly_rebalance",
+                                 reason=str(reasoning)[:300])
+            except Exception as _le:
+                logger.debug(f"[리밸런싱] 원장 기록 실패 (무시): {_le}")
         except Exception as e:
             logger.error(f"[리밸런싱] 영속화 실패: {e}")
 
@@ -1464,6 +1566,8 @@ class StrategyEvolver:
                     _disabled.add(strat)
         # 폴백: engine.py에서 비활성 하드코딩된 전략
         _disabled.add("momentum_breakout")  # 03-04 대참사 이후 영구 비활성
+        _disabled.add("strategic_swing")    # 2026-08-08 폐지 — enabled:false 없이 allocation 0이라
+                                            # 5% 하한(_ALLOC_MIN_PCT)으로 되살아나던 잠복 버그 (2026-09-13)
 
         # 현재 키 + 제안 키 합집합 (유효 전략만)
         all_keys = (set(current.keys()) | set(proposed.keys())) & self._VALID_STRATEGIES

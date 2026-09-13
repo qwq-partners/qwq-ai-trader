@@ -209,11 +209,13 @@ class TeamVerdict:
     proposal: Optional[TradeProposal] = None
     elapsed_sec: float = 0.0
     error: Optional[str] = None
+    wiki_context_used: bool = False  # 심의 컨텍스트에 종목 위키 노트 포함 여부 (2026-09-13 WikiSkill 계측)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "symbol": self.symbol,
             "name": self.name,
+            "wiki_context_used": self.wiki_context_used,
             "decision": self.decision.to_dict() if self.decision else None,
             "reports": [r.to_dict() for r in self.reports],
             "debate": self.debate.to_dict() if self.debate else None,

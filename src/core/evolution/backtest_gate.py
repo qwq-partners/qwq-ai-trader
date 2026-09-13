@@ -118,6 +118,7 @@ class GateResult:
     errored: bool = False
     baseline: Dict[str, Any] = field(default_factory=dict)
     candidate: Dict[str, Any] = field(default_factory=dict)
+    wf: Dict[str, Any] = field(default_factory=dict)  # walk-forward 구간 수익률·구간승 (2026-09-13 구조화)
 
     def to_dict(self) -> Dict[str, Any]:
         keep = ("total_return_pct", "mdd_pct", "win_rate",
@@ -127,6 +128,7 @@ class GateResult:
             "skipped": self.skipped,
             "errored": self.errored,
             "reason": self.reason,
+            "wf": self.wf,
             "baseline": {k: self.baseline.get(k) for k in keep if k in self.baseline},
             "candidate": {k: self.candidate.get(k) for k in keep if k in self.candidate},
         }
@@ -325,10 +327,13 @@ class BacktestGate:
             return GateResult(False, reason, baseline=baseline, candidate=candidate)
 
         # walk-forward: 전체 수익률이 좋아도 특정 구간에 몰빵된 개선이면 기각
+        _wf: Dict[str, Any] = {}
         b_seg = self._segment_returns(baseline.get("_equity_curve"), WF_SEGMENTS)
         c_seg = self._segment_returns(candidate.get("_equity_curve"), WF_SEGMENTS)
         if b_seg is not None and c_seg is not None:
             wins = sum(1 for b, c in zip(b_seg, c_seg) if c > b)
+            _wf = {"base": [round(float(r), 2) for r in b_seg], "cand": [round(float(r), 2) for r in c_seg],
+                   "wins": wins, "min_wins": WF_MIN_WINS}  # 원장 reason 300자 절단과 무관하게 보존
             seg_txt = (
                 f"구간승 {wins}/{WF_SEGMENTS} "
                 f"(base {['%.1f' % r for r in b_seg]} vs "
@@ -339,7 +344,7 @@ class BacktestGate:
                 reason = (f"walk-forward 미달 ({seg_txt}, 최소 {WF_MIN_WINS}구간) "
                           f"— 변경 기각 | {summary}")
                 logger.info(f"[백테게이트] 기각: {reason}")
-                return GateResult(False, reason, baseline=baseline, candidate=candidate)
+                return GateResult(False, reason, baseline=baseline, candidate=candidate, wf=_wf)
         else:
             # 자산 곡선이 짧으면(거래일 부족) WF는 생략하고 기존 기준만 적용
             logger.warning("[백테게이트] 자산 곡선 부족 — walk-forward 판정 생략")
@@ -348,11 +353,11 @@ class BacktestGate:
             reason = (f"MDD 악화 ({mdd_delta:+.2f}%p > {MAX_MDD_WORSENING}%p) "
                       f"— 변경 기각 | {summary}")
             logger.info(f"[백테게이트] 기각: {reason}")
-            return GateResult(False, reason, baseline=baseline, candidate=candidate)
+            return GateResult(False, reason, baseline=baseline, candidate=candidate, wf=_wf)
 
         reason = f"검증 통과 | {summary}"
         logger.info(f"[백테게이트] 통과: {reason}")
-        return GateResult(True, reason, baseline=baseline, candidate=candidate)
+        return GateResult(True, reason, baseline=baseline, candidate=candidate, wf=_wf)
 
 
 _gate: Optional[BacktestGate] = None

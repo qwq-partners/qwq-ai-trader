@@ -87,7 +87,7 @@ class GatePerformanceAnalyzer:
                 """
                 SELECT symbol, name, strategy, score, adjusted_score,
                        event_type, block_gate, block_reason,
-                       market_regime, event_time
+                       market_regime, event_time, metadata
                 FROM signal_events
                 WHERE side = 'buy'
                   AND event_type IN ('blocked', 'passed')
@@ -197,6 +197,16 @@ class GatePerformanceAnalyzer:
                 gate = "PASSED(대조군)"
             else:
                 gate = s.get("block_gate") or "UNKNOWN"
+            # 2026-09-13 WikiSkill 계측: G4 LLM 2차 검증에 위키 컨텍스트가 있었던 건은 별도 버킷
+            _md = s.get("metadata")
+            if isinstance(_md, str):
+                try:
+                    _md = json.loads(_md)
+                except Exception:
+                    _md = {}
+            _wc = (_md or {}).get("wiki_context_used") or {}
+            if isinstance(_wc, dict) and _wc.get("wiki"):
+                gate = f"{gate}|wiki"
 
             buckets[gate].append({
                 "symbol": s["symbol"],

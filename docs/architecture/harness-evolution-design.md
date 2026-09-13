@@ -25,6 +25,7 @@ StrategyEvolver가 좁은 수치 변경 하나를 제안하고 → 독립 게이
 | Self-Improving ③ 검증·병합 | BacktestGate: A/B + walk-forward 2/3 + MDD 가드, fail-closed | 🟡 기각 후보 원장·held-in/out 계약·실현 대조 부재 |
 | ACE (Generator/Reflector/Curator) | Wiki Ingest / LLM 교훈 추출 / Lint | 🟡 Reflector 계층 사실상 부재, 교훈 비구조·dedup 없음 |
 | Verifier 구축 | 원장·TCA·counterfactual (2026-08-08 신설) | ✅ 정확한 선행 투자였음 |
+| WikiSkill (Tang et al. 2026-08) raw/wiki/skills + 기각원장→제안자 + 런타임 무위키 | 원장/저널 · Trade Wiki+LessonStore · evolved_overrides+규칙 · candidate_ledger | ✅ 2026-09-13 정렬 — `docs/evolution/evolution-system.md` "WikiSkill 대조" |
 
 **기존 인식 정정** (Codex 검증): `evolve()` 호출 경로는 존재한다 (kr_scheduler 20:30 진화 루프).
 실제 단절은 **TradeReviewer의 자유서술 복기가 진화 규칙 트리거의 구조화 입력으로

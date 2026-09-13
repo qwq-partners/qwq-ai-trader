@@ -10,7 +10,7 @@ evolve()의 모든 후보 결정(적용/기각/보류/롤백/확정)을 append-o
   applied              — 게이트 통과, 적용됨
   rejected_by_backtest — 게이트 성능 기각 (decision_type=performance_reject)
   gate_error           — 게이트 장애 보류 (decision_type=infra_hold)
-  rollback             — 적용 후 평가에서 롤백 (손익비<1.0 등)
+  rollback             — 적용 후 평가에서 롤백 (승률 -5%p 또는 손익비 -0.3 악화 / 10영업일 초과 10건 미달)
   keep                 — 적용 후 평가에서 유지 확정
 
 metric_version: "v2_position" (2026-08-10~, 포지션 원장 기준).

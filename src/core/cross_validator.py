@@ -51,6 +51,10 @@ class CrossStrategyValidator:
         self._trade_wiki = trade_wiki  # 거래 위키 (교훈 컨텍스트)
         self._max_sector_positions = max_sector_positions  # 동일 섹터 최대 포지션 수 (설정 참조)
         self._expert_orchestrator = expert_orchestrator  # 2026-05-29 추가
+        # 지식층 사용 귀속 태그 (2026-09-13 WikiSkill 정렬) — 엔진이 신호 이벤트 metadata에 복사해
+        # 게이트 성적표·CF에서 위키/메모리 영향을 분리 집계한다
+        self.last_memory_adj: int = 0
+        self.last_llm_context: Dict[str, bool] = {}
 
         # 적대적 교차 검증기 (2026-08-02 추가) — Bull/Bear 역할 분리 + 멀티 LLM 합의
         # 초기화 실패해도 단일 LLM 경로로 폴백되므로 매매에 영향 없음
@@ -483,6 +487,7 @@ class CrossStrategyValidator:
             if memory_adj != 0:
                 adjusted_score += memory_adj
                 penalties.append(f"메모리보정({memory_adj:+d})")
+                self.last_memory_adj = memory_adj
 
         # === 규칙 10: 전문가 패널 추천 보너스 (2026-05-03 P0 통합) ===
         # 일요일 21:00 갱신, 14일 이내 신선도 가중. 모든 전략에 일관 적용.
@@ -763,6 +768,8 @@ class CrossStrategyValidator:
             symbol_wiki = ""
             if self._trade_wiki and hasattr(self._trade_wiki, "query_symbol"):
                 symbol_wiki = self._trade_wiki.query_symbol(symbol)
+            self.last_llm_context = {"memory": bool(mem_context), "wiki": bool(wiki_context),
+                                     "symbol_wiki": bool(symbol_wiki)}
 
             # 최근 공시 (2026-08-11 — AIK 피드, 보조 참고 전용. 캐시 미적재 시
             # 빈 문자열 = fail-open. 점수·차단에 직접 사용 금지)

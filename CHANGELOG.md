@@ -1,5 +1,30 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-13 — feat: WikiSkill 정렬 — 기각 원장→제안자 연결, 일일복기 게이트 경유, 런타임 위키 스위치·계측
+
+사용자가 공유한 WikiSkill 논문(Tang et al., Google Research, arXiv 2608.27454) 리뷰를 우리 진화
+파이프라인과 대조(3 에이전트, file:line). 3계층·원자적 제안·게이트·롤백·기각 원장·반사실 재생은 이미
+논문 이상. 실제 갭 4개를 최소 변경으로 메움 (`docs/evolution/evolution-system.md` "WikiSkill 대조").
+
+- **재제안 억제 소스 무관** (`strategy_evolver.evolve()` 4.5): 14일 내 기각·롤백 파라미터는 규칙·약점·
+  일일복기·LLM 어느 경로든 차단(`_recently_decided_against`, 원장 event=suppressed). 실측: gap_and_go
+  .min_score 60→65가 5/20·6/8 두 번 제안돼 7/1 롤백된 사례 재발 방지.
+- **일일 복기 → 게이트 경유** (`_find_daily_review_trigger`, step 3.7): llm_review의 parameter_suggestions를
+  정규 제안으로 소비. `daily_reviewer._save_daily_bias`의 **게이트 우회 점수 부스트 루프 제거**(논문의
+  실패 모드 — 검증 없는 지식의 런타임 직접 주입; daily_bias.json은 7/2에 멈춰 있어 현재 무효).
+  MEMORY 갭 "LLM 복기→구조화 입력 미연결" 해소.
+- **LLM 제안자 입력**: lesson_store 검증 교훈 + 최근 60일 기각·롤백 목록(결정·사유만, 게이트 수치 비공개)
+  주입 (`llm_strategist.analyze_and_advise(extra_context=)`).
+- **런타임 위키 스위치·계측**: `RUNTIME_WIKI=0`이면 규칙#9 메모리 보정·G4 LLM 2차·팀 심의에 위키/메모리
+  비노출(기본 켜짐). 신호 이벤트 metadata에 `memory_adj`·`wiki_context_used`, 팀 verdict에
+  `wiki_context_used` → gate_performance G4 `|wiki` 버킷, CF `team_hold|wiki=Y/N` 분리 집계.
+  검증 규율 4(CF 표본 기반)에 따라 **측정 후** 끄기 여부 결정.
+- 주간 배분 리밸런싱: 최근 4회 이력 프롬프트 주입 + 원장 `allocation_rebalance` 기록; **잠복 버그**
+  strategic_swing(8/8 폐지)이 5% 하한으로 되살아나던 것 하드 비활성.
+- 정리: 도달 불가 규칙 bad_profit_factor 삭제, `_GATE_VERIFIABLE` rsi2 제외, stale 프롬프트 문구,
+  GateResult.wf 구조화, gate_replay 누적 방향 일치율, 롤백 기준 문서 정정(CLAUDE.md·candidate_ledger).
+- 테스트 6건 (`tests/test_wikiskill_alignment.py`).
+
 ## 2026-09-11 — fix: 동기화의 inquire-balance 중복 호출 제거 (잔고 응답 스냅샷 재사용)
 
 - 9/10 배포한 8434R 2.1초 간격의 9/11 검증: 09~12시 EGW00215 236→171건(−28%; 10·11시 −40%, 09시 불변),

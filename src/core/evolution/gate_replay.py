@@ -64,6 +64,14 @@ async def run_due_replays(gate: Optional[BacktestGate] = None) -> str:
                 lines.append(result)
         except Exception as e:
             logger.warning(f"[게이트재생] {c.get('candidate_id')} 실패 (무시): {e}")
+    # 누적 방향 일치율 — 진단 전용 (P1-8: pit=false 재생은 게이트 예측력의 증명이 아님, 임계값 자동 조정 금지)
+    try:
+        _rep = [c for c in load_candidates(days=365) if c.get("event") == "replay"]
+        if _rep:
+            _agree = sum(1 for c in _rep if (c.get("gate") or {}).get("directional_agreement"))
+            lines.append(f"· 누적 방향 일치 {_agree}/{len(_rep)} (진단용)")
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

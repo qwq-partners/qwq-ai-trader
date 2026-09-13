@@ -1187,9 +1187,13 @@ class RiskManager:
             missing_indicator_penalty_cap=_vcfg.get("missing_indicator_penalty_cap"),
             llm_daily_max=_vcfg.get("llm_daily_max"),
             rule_penalties=_vcfg.get("rule_penalties"),
-            trade_memory=self._trade_memory,
+            # RUNTIME_WIKI=0: 런타임(규칙#9 메모리 보정·G4 LLM 2차 검증)에 지식층 비노출
+            # (2026-09-13 WikiSkill 정렬 — 논문 ablation: 런타임에 위키를 주면 63.7→60.9.
+            #  기본 켜짐: CF·게이트 성적표의 wiki 분리 집계로 영향 측정 후 결정. env 패턴은
+            #  CALENDAR_SEASONALITY/VOL_TARGETING/TEAM_CONVICTION과 동일)
+            trade_memory=self._trade_memory if os.getenv("RUNTIME_WIKI", "1") != "0" else None,
             llm_manager=_llm_mgr,
-            trade_wiki=self._trade_wiki,
+            trade_wiki=self._trade_wiki if os.getenv("RUNTIME_WIKI", "1") != "0" else None,
             max_sector_positions=config.max_positions_per_sector,
             expert_orchestrator=getattr(engine, "expert_orchestrator", None),
         )
@@ -1566,6 +1570,9 @@ class RiskManager:
                 metadata={
                     "reason": getattr(event, "reason", ""),
                     "indicators": meta.get("indicators", {}),
+                    # 지식층 노출 태그 (2026-09-13) — gate_performance가 G4를 wiki 유무로 분리 집계
+                    "memory_adj": meta.get("memory_adj"),
+                    "wiki_context_used": meta.get("wiki_context_used"),
                 },
             )
         )
@@ -1806,6 +1813,13 @@ class RiskManager:
                 metadata=_meta,
                 market_regime=_regime,
             )
+            # 규칙#9 메모리 보정 귀속 태그 (2026-09-13 — 게이트 성적표에서 지식층 영향 분리용)
+            _mem_adj = getattr(self._cross_validator, "last_memory_adj", 0)
+            self._cross_validator.last_memory_adj = 0
+            if _mem_adj:
+                if event.metadata is None:
+                    event.metadata = {}
+                event.metadata["memory_adj"] = _mem_adj
             # 원본 점수 보존 (로그/DB 추적용)
             _orig_score = float(event.score) if event.score is not None else 0.0
             if not _cv_pass:
@@ -1844,6 +1858,11 @@ class RiskManager:
                     market_regime=_regime,
                     sector=_meta.get("sector", ""),
                 )
+                _llm_ctx = dict(getattr(self._cross_validator, "last_llm_context", {}) or {})
+                if _llm_ctx:
+                    if event.metadata is None:
+                        event.metadata = {}
+                    event.metadata["wiki_context_used"] = _llm_ctx
                 if not _llm_ok:
                     # 차단 대신 사이즈 50% 축소 (기회 손실 최소화)
                     # 2026-04-23 코드리뷰 보강: event.signal.metadata None 방어
