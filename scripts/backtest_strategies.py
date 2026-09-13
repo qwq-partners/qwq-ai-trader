@@ -161,6 +161,14 @@ class BacktestConfig:
     enable_composite_exit: bool = False   # 1차 익절 후 MA5-0.5% / 전일저가 이탈 → 전량 청산
     post_exit_stale_days: int = 0         # 1차 익절 후 N일 보유 & 0<수익<post_exit_stale_pnl_pct → 청산 (0=off)
     post_exit_stale_pnl_pct: float = 3.0
+    # 신규 진입 초기 손절 정책 (2026-09 T5). 기본값은 기존 동작(게이트 호환) — A/B 러너·T6 가 live_policy 를 명시.
+    #   atr_dynamic — 진입 ATR×atr_multiplier(min~max 클램프), 이후 매일 당일 ATR 로 손절 재계산 (연구 축)
+    #   live_policy — 전략별 고정 SL(sepa/rsi2/core_stop_loss_pct)만, ATR 동적 손절 없음 (실엔진 신규 fill 미러, T2 정합)
+    #                 이후 손절 변경은 레짐 전환(BT_REGIME_EXIT_PARAMS, 실엔진 apply_regime_params 미러)뿐
+    entry_stop_mode: str = "atr_dynamic"
+
+
+ENTRY_STOP_MODES = ("atr_dynamic", "live_policy")
 
 
 # 보유(회전) 정책 프리셋 — 리뷰 §2-1 실엔진 값(current) vs 권고 2(extended).
@@ -199,8 +207,11 @@ class BTPosition:
     highest_price: float
     exit_stage: ExitStage = ExitStage.NONE
     remaining_quantity: int = 0
-    atr_stop_pct: float = 5.0
-    atr_pct: float = 0.0          # 진입 시점 ATR%(원본) — ATR 연동 트레일링 계산용
+    atr_stop_pct: float = 5.0     # 진입 시 확정한 초기 손절폭(%) — R 분모, 체결 후 불변 (매일 ATR 재계산으로 소급 변경 금지)
+    atr_pct: float = 0.0          # 진입 시점 ATR%(원본, 체결일 이전 확정 봉) — ATR 연동 트레일링 계산용
+    initial_risk: float = 0.0     # 초기 위험금액(원) = cost_basis × atr_stop_pct/100, 체결 후 불변
+    live_stop_pct: float = 0.0    # live_policy: 레짐 전환으로 바뀐 현재 손절폭 (0 = 진입 손절 그대로)
+    regime_seen: Optional[RegimeType] = None   # live_policy: 마지막으로 관측한 레짐 (전환 감지용)
     score_at_entry: float = 0.0
     trailing_activated: bool = False
     breakeven_activated: bool = False
@@ -230,6 +241,7 @@ class Trade:
     pnl_pct: float = 0.0
     holding_days: int = 0
     stop_pct: float = 0.0
+    initial_risk: float = 0.0     # BUY: 진입 시 확정한 위험금액(원)
 
 
 # ─── 수수료 계산 ────────────────────────────────────────────
@@ -570,6 +582,16 @@ class UniverseManager:
             return df.loc[mask].iloc[-1]
         except (KeyError, IndexError):
             return None
+
+    def get_last_bar_before(self, ticker: str, date: str) -> Optional[pd.Series]:
+        """date 보다 앞선 마지막 확정 봉 (당일 제외 — 시가 체결 시점에 알려진 정보)"""
+        df = self.ohlcv.get(ticker)
+        if df is None:
+            return None
+        mask = df.index < pd.Timestamp(date)
+        if not mask.any():
+            return None
+        return df.loc[mask].iloc[-1]
 
     def get_row_on_date(self, ticker: str, date: str) -> Optional[pd.Series]:
         """정확히 해당 날짜의 데이터 (거래일이 아니면 None)"""
@@ -930,8 +952,19 @@ class BTExitManager:
         Args:
             regime: 당일 시장 레짐. 실제 엔진의 REGIME_EXIT_PARAMS와 동일하게
                     익절/트레일링/손절 목표를 레짐별로 바꾼다 (None이면 config 기본값).
+
+        체결 순서 규칙 (일봉으로는 장중 순서를 알 수 없으므로 보수적으로 고정, 전 셀 동일 적용):
+          ① 손절 우선 — 같은 봉에서 익절 목표와 손절가를 모두 접촉하면 손절로 전량 청산.
+          ② 갭 관통 — 시가 ≤ 손절가면 손절가가 아닌 **시가** 체결 (channel_exit 와 동일).
+             그 외 저가 ≤ 손절가면 손절가 체결.
+          ③ 손절 미접촉 시 본전보호 → 분할 익절(봉당 한 단계) → 트레일링 → 복합 청산 →
+             익절후 저효율 → 보유 규칙(최대 보유일·횡보·추세 무효화) 순, 모두 종가 체결.
+          ④ 손절폭: entry_stop_mode=atr_dynamic 은 당일 ATR 로 재계산(연구 축), live_policy 는
+             진입 시 확정한 고정 SL(레짐 전환 시에만 상태 전이). 어느 쪽도 pos.atr_stop_pct
+             (진입 초기 손절·R 분모)를 다시 쓰지 않는다.
         """
         actions = []
+        open_ = float(row['시가'])
         high = float(row['고가'])
         low = float(row['저가'])
         close = float(row['종가'])
@@ -971,7 +1004,16 @@ class BTExitManager:
         # ── 1. 손절 (저가 기준) ──
         if is_core:
             stop_pct = self.config.core_stop_loss_pct
+        elif self.config.entry_stop_mode == "live_policy":
+            # 실엔진 신규 fill 미러: 진입 시 확정한 고정 SL. 이후 변경은 레짐 전환 상태 전이뿐
+            # (apply_regime_params — 레짐이 바뀌면 기존 포지션 SL 을 레짐값으로 덮어씀).
+            if rp is not None and regime != pos.regime_seen:
+                if pos.regime_seen is not None:
+                    pos.live_stop_pct = rp["stop_loss_pct"]
+                pos.regime_seen = regime
+            stop_pct = pos.live_stop_pct if pos.live_stop_pct > 0 else pos.atr_stop_pct
         else:
+            # atr_dynamic(연구 축): 당일 ATR 로 재계산. 진입 초기 손절(pos.atr_stop_pct)은 다시 쓰지 않는다.
             atr_pct = row.get('atr_pct')
             if not pd.isna(atr_pct) and float(atr_pct) > 0:
                 stop_pct = max(
@@ -985,11 +1027,11 @@ class BTExitManager:
                 stop_pct = (self.config.sepa_stop_loss_pct
                             if pos.strategy == StrategyType.SEPA
                             else self.config.rsi2_stop_loss_pct)
-            pos.atr_stop_pct = stop_pct
 
         stop_price = entry * (1 - stop_pct / 100)
         if low <= stop_price:
-            sell_price = stop_price
+            # 갭 관통(시가 ≤ 손절가)이면 시가 체결 — 시장에 없던 손절가 체결 금지 (보수 규칙 ②)
+            sell_price = min(open_, stop_price) if open_ > 0 else stop_price
             actions.append(("SELL", pos.remaining_quantity, sell_price,
                             f"손절 -{stop_pct:.1f}%"))
             pos.remaining_quantity = 0
@@ -1124,6 +1166,8 @@ class BacktestEngine:
         self.exit_mgr = BTExitManager(config)
         self.regime = MarketRegime()
         self.fee = BTFeeCalculator()
+        if config.entry_stop_mode not in ENTRY_STOP_MODES:
+            raise ValueError(f"entry_stop_mode 는 {ENTRY_STOP_MODES} 중 하나: {config.entry_stop_mode!r}")
         # sizing=risk 는 종목당 위험이 작아 동시 보유 상한을 별도로 둔다 (리뷰 권고 3)
         self.max_short: int = (config.risk_max_positions if config.sizing == "risk"
                                else config.max_positions_short)
@@ -1246,7 +1290,15 @@ class BacktestEngine:
         return []
 
     def _execute_pending_buys(self, day_str: str, use_close: bool = False):
-        """T+1 대기 주문 실행"""
+        """T+1 대기 주문 실행 (시가 체결). use_close=True 는 T+0 당일 종가 체결.
+
+        정보 시점 규칙 (2026-09 T5, F2·F8):
+          - 시가 체결에 쓰는 정보는 체결일 시가까지 알려진 것만: 진입 ATR 은 체결일 **이전** 확정 봉
+            (`_entry_atr`), 사이징 equity 는 시가 평가(`_calc_equity(phase="open")`).
+          - 체결일 봉이 없는 종목(거래정지·누락봉)은 체결하지 않는다 (이전 봉 시가 대체 금지).
+          - 주문의 signal_date·indicator_asof 는 체결일보다 앞서야 한다 (T+0 종가 체결은 당일 허용).
+          - 진입 시 초기 손절·위험금액(R 분모)을 포지션에 고정한다.
+        """
         if not self.pending_buys:
             return
 
@@ -1284,9 +1336,16 @@ class BacktestEngine:
                     and self.positions[symbol].remaining_quantity > 0):
                 continue
 
+            # 정보 시점 검사 — 신호·지표 날짜는 체결일보다 앞서야 한다 (휴일·거래정지·누락봉 포함)
+            if not use_close:
+                for tag in ("signal_date", "indicator_asof"):
+                    d = order.get(tag)
+                    if d is not None and str(d) >= day_str:
+                        raise ValueError(f"[백테스트] {symbol} {tag}={d} 가 체결일 {day_str} 보다 "
+                                         f"앞서지 않음 — 정보 시점 위반")
+
+            # 체결일 봉이 없으면(거래정지·누락봉) 체결 없음 — 이전 봉 시가로 대체하지 않는다
             data = self.universe.get_row_on_date(symbol, day_str)
-            if data is None:
-                data = self.universe.get_data(symbol, day_str)
             if data is None:
                 continue
 
@@ -1304,16 +1363,13 @@ class BacktestEngine:
                 if gap < -3.5:
                     continue
 
-            # 진입 손절폭 (ATR×2 클램프) — 위험 기반 사이징·채널 하드스톱·R 계산의 기준
-            atr_pct = data.get('atr_pct')
-            has_atr = not pd.isna(atr_pct) and float(atr_pct) > 0
-            stop_pct = (max(self.config.min_stop_pct,
-                            min(self.config.max_stop_pct,
-                                float(atr_pct) * self.config.atr_multiplier))
-                        if has_atr else 5.0)
+            # 진입 손절폭 — 위험 기반 사이징·채널 하드스톱·R 계산의 기준.
+            # ATR 은 체결 시점까지 확정된 봉만 (T+1 시가: 전일까지 / T+0 종가: 당일 포함) — F2
+            atr_pct = self._entry_atr(symbol, day_str, include_day=use_close)
+            stop_pct = self._entry_stop_pct(strategy, atr_pct)
 
-            # 사이징
-            equity = self._calc_equity(day_str)
+            # 사이징 — 시가 체결은 시가 평가 equity (당일 종가 미래정보 배제) — F8
+            equity = self._calc_equity(day_str, phase="close" if use_close else "open")
             pos_value = self._calc_position_size(equity, strategy, stop_pct)
             if pos_value < self.config.min_position_value:
                 continue
@@ -1351,11 +1407,17 @@ class BacktestEngine:
                 score_at_entry=order.get('score', 0),
             )
 
-            if has_atr:
-                # 원본 ATR%도 보관 — atr_stop_pct는 min/max로 clamp되므로 역산이 불가능하다
-                pos.atr_pct = float(atr_pct)
-                pos.atr_stop_pct = stop_pct
-            pos.stop_price = exec_price * (1 - pos.atr_stop_pct / 100)
+            if atr_pct is not None:
+                # 원본 ATR%도 보관(트레일링 연동용) — atr_stop_pct는 clamp되므로 역산이 불가능하다
+                pos.atr_pct = atr_pct
+            # 초기 손절·위험금액(R 분모) 고정 — 이후 ATR 재계산·레짐 전환으로 소급 변경하지 않는다
+            pos.atr_stop_pct = stop_pct
+            pos.initial_risk = total_cost * stop_pct / 100
+            pos.stop_price = exec_price * (1 - stop_pct / 100)
+            # live_policy 레짐 전환 감지 기준 — 시가 시점에 알려진 레짐(전일 종가까지)
+            asof = (day_str if use_close
+                    else (pd.Timestamp(day_str) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+            pos.regime_seen = self.regime.get_regime(asof, self.config.regime_mode)
 
             self.positions[symbol] = pos
             self.trades.append(Trade(
@@ -1363,7 +1425,7 @@ class BacktestEngine:
                 side="BUY", date=day_str, price=exec_price,
                 quantity=quantity, amount=buy_amount, fee=buy_fee,
                 reason=f"진입 (점수 {order.get('score', 0):.0f})",
-                stop_pct=pos.atr_stop_pct,
+                stop_pct=stop_pct, initial_risk=pos.initial_risk,
             ))
 
             if strategy in (StrategyType.SEPA, StrategyType.RSI2):
@@ -1444,22 +1506,12 @@ class BacktestEngine:
                         and regime != RegimeType.BEARISH):
                     s = self.scorer.score_sepa(data)
                     if s >= self.config.sepa_min_score:
-                        signals.append({
-                            'symbol': ticker,
-                            'strategy': StrategyType.SEPA,
-                            'score': s,
-                            'signal_close': float(data.get('종가', 0))
-                        })
+                        signals.append(self._signal(ticker, StrategyType.SEPA, s, data, day_str))
 
                 if "rsi2" in self.config.strategies:
                     s = self.scorer.score_rsi2(data)
                     if s >= self.config.rsi2_min_score:
-                        signals.append({
-                            'symbol': ticker,
-                            'strategy': StrategyType.RSI2,
-                            'score': s,
-                            'signal_close': float(data.get('종가', 0))
-                        })
+                        signals.append(self._signal(ticker, StrategyType.RSI2, s, data, day_str))
 
             signals.sort(key=lambda x: x['score'], reverse=True)
             available = self.max_short - short_pos
@@ -1483,16 +1535,50 @@ class BacktestEngine:
                         continue
                     s = self.scorer.score_core(data)
                     if s >= self.config.core_min_score:
-                        core_sigs.append({
-                            'symbol': ticker,
-                            'strategy': StrategyType.CORE,
-                            'score': s,
-                            'signal_close': float(data.get('종가', 0))
-                        })
+                        core_sigs.append(self._signal(ticker, StrategyType.CORE, s, data, day_str))
                 core_sigs.sort(key=lambda x: x['score'], reverse=True)
                 avail = self.config.max_positions_core - core_pos
                 for sig in core_sigs[:avail]:
                     self.pending_buys.append(sig)
+
+    @staticmethod
+    def _signal(ticker: str, strategy: StrategyType, score: float,
+                data: pd.Series, day_str: str) -> dict:
+        """pending_buys 항목. signal_date=신호 생성일(종가 이후), indicator_asof=지표에 쓴 마지막 봉 날짜
+        (거래정지·누락봉이면 신호일보다 앞설 수 있다) — 체결 시 체결일보다 앞서는지 검사한다."""
+        asof = data.name
+        return {
+            'symbol': ticker, 'strategy': strategy, 'score': score,
+            'signal_close': float(data.get('종가', 0)),
+            'signal_date': day_str,
+            'indicator_asof': (asof.strftime("%Y-%m-%d") if isinstance(asof, pd.Timestamp)
+                               else str(asof)),
+        }
+
+    def _entry_atr(self, symbol: str, day_str: str, *, include_day: bool = False) -> Optional[float]:
+        """진입 ATR%(원본). 체결 시점까지 확정된 마지막 거래봉만 사용 — F2.
+        include_day=False(T+1 시가 체결): day_str **이전** 봉 / True(T+0 종가 체결): 당일 봉 포함.
+        미산출(워밍업)·비양수·봉 없음이면 None."""
+        row = (self.universe.get_data(symbol, day_str) if include_day
+               else self.universe.get_last_bar_before(symbol, day_str))
+        if row is None:
+            return None
+        atr_pct = row.get('atr_pct')
+        if atr_pct is None or pd.isna(atr_pct) or float(atr_pct) <= 0:
+            return None
+        return float(atr_pct)
+
+    def _entry_stop_pct(self, strategy: StrategyType, atr_pct: Optional[float]) -> float:
+        """신규 진입 초기 손절폭(%) — entry_stop_mode 참조 (BacktestConfig 주석).
+        live_policy: 전략별 고정 SL (ATR 무관). atr_dynamic: ATR×배수 클램프, ATR 없으면 5.0(기존 동작)."""
+        if self.config.entry_stop_mode == "live_policy":
+            return {StrategyType.SEPA: self.config.sepa_stop_loss_pct,
+                    StrategyType.RSI2: self.config.rsi2_stop_loss_pct,
+                    StrategyType.CORE: self.config.core_stop_loss_pct}[strategy]
+        if atr_pct is None:
+            return 5.0
+        return max(self.config.min_stop_pct,
+                   min(self.config.max_stop_pct, atr_pct * self.config.atr_multiplier))
 
     def _is_month_start(self, day_str: str) -> bool:
         day_dt = pd.Timestamp(day_str)
@@ -1530,17 +1616,30 @@ class BacktestEngine:
 
         return pos_val
 
-    def _calc_equity(self, day_str: str) -> float:
+    def _calc_equity(self, day_str: str, *, phase: str = "close") -> float:
+        """평가 자산. phase="close": 당일 종가(없으면 마지막 봉 종가) — EOD 성과 기록.
+        phase="open": 당일 시가만 사용, 당일 봉이 없는 보유 종목은 마지막 확정(전일 이전) 종가 —
+        시가 체결 사이징용 (당일 종가 미래정보 배제, F8)."""
+        if phase not in ("open", "close"):
+            raise ValueError(f"phase 는 open|close: {phase!r}")
         equity = self.cash
         for pos in self.positions.values():
             if pos.remaining_quantity <= 0:
                 continue
-            data = self.universe.get_data(pos.symbol, day_str)
-            if data is not None:
-                close = float(data.get('종가', pos.entry_price))
-                equity += close * pos.remaining_quantity
+            price = None
+            if phase == "open":
+                row = self.universe.get_row_on_date(pos.symbol, day_str)
+                if row is not None and not pd.isna(row.get('시가')) and float(row['시가']) > 0:
+                    price = float(row['시가'])
+                else:
+                    prev = self.universe.get_last_bar_before(pos.symbol, day_str)
+                    if prev is not None:
+                        price = float(prev.get('종가', pos.entry_price))
             else:
-                equity += pos.entry_price * pos.remaining_quantity
+                data = self.universe.get_data(pos.symbol, day_str)
+                if data is not None:
+                    price = float(data.get('종가', pos.entry_price))
+            equity += (price if price is not None else pos.entry_price) * pos.remaining_quantity
         return equity
 
     def _close_all(self, day_str: str):
@@ -1645,7 +1744,8 @@ class ResultAnalyzer:
                     entry_date=t.date, exit_date=t.date, entry_price=t.price,
                     quantity=t.quantity, sold=0, cost=t.amount + t.fee,
                     proceeds=0.0, fees=t.fee, notional=t.amount,
-                    stop_pct=t.stop_pct, holding_days=0, reasons=[])
+                    stop_pct=t.stop_pct, initial_risk=t.initial_risk,
+                    holding_days=0, reasons=[])
                 continue
             p = open_.get(t.symbol)
             if p is None:
@@ -1938,7 +2038,7 @@ def build_config(yaml_cfg: dict, args: argparse.Namespace) -> BacktestConfig:
 
 
 # ─── CLI ───────────────────────────────────────────────────
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="KR 전략 백테스트 엔진")
     parser.add_argument('--months', type=int, default=6,
                         help='백테스트 기간 (월, 기본 6)')
@@ -1958,12 +2058,19 @@ def main():
                         help='보유 규칙 프리셋 (미지정 시 YAML 값 그대로)')
     parser.add_argument('--sizing', choices=['nominal', 'risk'], default='nominal',
                         help='사이징 (기본 nominal=25%%)')
-    args = parser.parse_args()
+    parser.add_argument('--entry-stop-mode', choices=list(ENTRY_STOP_MODES), default='atr_dynamic',
+                        help='신규 진입 초기 손절 (기본 atr_dynamic=기존 동작, live_policy=전략 고정 SL·실엔진 미러)')
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     yaml_cfg = load_config_from_yaml()
     config = build_config(yaml_cfg, args)
     config.exit_policy = args.exit_policy
     config.sizing = args.sizing
+    config.entry_stop_mode = args.entry_stop_mode
     if args.holding_policy:
         apply_holding_policy(config, args.holding_policy)
 

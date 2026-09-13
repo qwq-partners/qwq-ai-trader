@@ -121,3 +121,58 @@ def test_position_level_roundtrip_aggregation():
     assert abs(ps[0]["r"] - ps[0]["pnl_pct"] / 5.0) < 1e-9
     m = an.position_metrics(ps)
     assert m["trades"] == 1 and m["win_rate"] == 100.0 and m["max_consec_losses"] == 0
+
+
+# ── 체결 순서 모호성 (일봉 근사) — 보수 규칙, 전 셀 동일 적용 (2026-09 T5) ──────────
+# 규칙: ① 손절 우선(익절과 같은 봉 접촉 시) ② 갭 관통(시가 ≤ 손절가)은 시가 체결
+#       ③ 익절→트레일링→복합→익절후 저효율→보유 규칙 순, 모두 종가 체결, 익절은 봉당 한 단계
+def _mgr(**kw):
+    return bt.BTExitManager(bt.BacktestConfig(**kw))
+
+
+def test_ladder_same_bar_take_profit_and_stop_prefers_stop():
+    p = _pos()   # atr_pct 2.5 → 손절 5% = 9,500 / 1차 익절 5%(config 기본)
+    acts = _mgr().check_exit(p, _bar(10000, 11200, 9400, 10800), regime=None)
+    assert len(acts) == 1 and acts[0][3].startswith("손절")
+    assert acts[0][1] == 100 and acts[0][2] == 9500 and p.remaining_quantity == 0
+
+
+def test_ladder_gap_through_stop_fills_at_open():
+    p = _pos()
+    acts = _mgr().check_exit(p, _bar(9200, 9400, 9000, 9300), regime=None)
+    assert acts[0][3].startswith("손절") and acts[0][2] == 9200   # 시장에 없는 9,500 체결 금지
+
+
+def test_ladder_partial_then_trailing_same_bar_order():
+    p = _pos()
+    acts = _mgr(first_exit_pct=10.0).check_exit(p, _bar(10500, 11500, 10400, 10900), regime=None)
+    assert [a[3].split(" ")[0] for a in acts] == ["1차", "트레일링"]
+    assert (acts[0][1], acts[0][2]) == (30, 10900) and (acts[1][1], acts[1][2]) == (70, 10900)
+    assert p.remaining_quantity == 0
+
+
+def test_ladder_composite_precedes_holding_rules():
+    p = _pos()
+    p.exit_stage = bt.ExitStage.FIRST
+    mgr = _mgr(enable_composite_exit=True, sepa_max_holding_days=1)
+    acts = mgr.check_exit(p, _bar(10000, 10100, 9900, 9950, ma5=10100), regime=None)
+    assert len(acts) == 1 and acts[0][3].startswith("복합청산")
+
+
+def test_check_exit_does_not_rewrite_entry_stop():
+    p = _pos(stop_pct=4.0)
+    _mgr().check_exit(p, _bar(10000, 10100, 9900, 10050, atr_pct=3.0), regime=None)  # 당일 ATR 3%→6%
+    assert p.atr_stop_pct == 4.0
+
+
+def test_live_policy_stop_changes_only_on_regime_transition():
+    """live_policy: 진입 고정 SL 5% 유지, 레짐이 바뀔 때만 레짐 SL 로 상태 전이 (실엔진 apply_regime_params 미러)."""
+    mgr = _mgr(entry_stop_mode="live_policy")
+    p = _pos(stop_pct=5.0)
+    p.regime_seen = bt.RegimeType.NEUTRAL
+    bar = _bar(9700, 9750, 9620, 9700, atr_pct=1.0)     # 저가 -3.8%: 5% 미접촉 / bear 3.5% 접촉
+    assert mgr.check_exit(p, bar, regime=bt.RegimeType.NEUTRAL) == []     # 같은 레짐 → 전이 없음
+    assert p.atr_stop_pct == 5.0 and p.live_stop_pct == 0.0
+    acts = mgr.check_exit(p, bar, regime=bt.RegimeType.BEARISH)           # 전환 → SL 3.5%
+    assert acts and acts[0][3] == "손절 -3.5%" and acts[0][2] == 9650
+    assert p.atr_stop_pct == 5.0 and p.live_stop_pct == 3.5              # 진입 손절(R 분모)은 불변
