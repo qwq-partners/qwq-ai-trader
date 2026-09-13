@@ -3826,7 +3826,6 @@ JSON:
             _nxt_symbols: set = set()   # NXT 대상 종목 캐시
 
             while bot.running:
-                _rest_classified = False   # 분류(record_success/idle/failure) 완료 여부
                 try:
                     _hb.record_attempt("kr_rest_price_feed")
                     current_session = self._get_current_session()
@@ -3940,9 +3939,6 @@ JSON:
                                 if success_count < len(holding_symbols) else None
                             ),
                         )
-                    # 이후 블록(프리장 전광판 폴링 등)의 예외는 이미 확정한 분류를
-                    # 덮어쓰지 않는다 — 아래 except에서 note로만 남긴다 (리뷰 advisory (e))
-                    _rest_classified = True
 
                     if success_count > 0:
                         ws_info = f", WS={len(ws_covered)}종목" if ws_covered else ""
@@ -4037,12 +4033,7 @@ JSON:
 
                 except Exception as e:
                     logger.warning(f"[REST피드] 오류: {e}", exc_info=True)
-                    if _rest_classified:
-                        # 보유종목 시세 분류는 이미 성공/유휴/실패로 확정됐다 — 프리장
-                        # 전광판 등 후속 블록의 예외로 그 판정을 실패로 덮어쓰지 않는다.
-                        _hb.annotate("kr_rest_price_feed", f"후속 블록 오류: {e}")
-                    else:
-                        _hb.record_failure("kr_rest_price_feed", str(e))
+                    _hb.record_failure("kr_rest_price_feed", str(e))
 
                 await asyncio.sleep(20)
 

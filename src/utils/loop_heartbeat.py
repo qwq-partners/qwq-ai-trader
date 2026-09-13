@@ -100,29 +100,14 @@ def record_failure(name: str, reason: Optional[str] = None) -> None:
 
 
 def record_idle(name: str, reason: str) -> None:
-    """할 일이 없어 정상적으로 아무것도 하지 않았을 때 호출 — 실패가 아니라 정체 기준 갱신.
-
-    `last_success`는 갱신하지 않는다(리뷰 blocking #1) — 성공 시각은 `record_success`만
-    갱신한다. 유휴와 실제 완수를 last_success로 구분해야, 유휴 이후 실제 실패가 이어질 때
-    '정상 동작한 적 있음'처럼 보이지 않는다.
-    """
+    """할 일이 없어 정상적으로 아무것도 하지 않았을 때 호출 — 실패가 아니라 정체 기준 갱신."""
     now = time.time()
     _beats[name] = now
     st = _state(name)
+    st.last_success = now
     st.consecutive_failures = 0
     st.idle_reason = reason
     st.note = None
-
-
-def annotate(name: str, note: str) -> None:
-    """방금 기록한 success/idle/failure 판정을 덮어쓰지 않고 참고용 note만 덧붙인다.
-
-    분류(record_success/idle/failure)가 이미 끝난 뒤, 같은 반복의 후속 블록에서 발생한
-    부차적 예외를 다시 record_failure로 기록하면 이미 확정한 성공/유휴 판정을 실패로
-    덮어써 버린다(리뷰 advisory (e)). 그런 경우 이 함수로 note만 남긴다 — 정체 기준·
-    consecutive_failures·idle_reason은 건드리지 않는다.
-    """
-    _state(name).note = note
 
 
 def set_enabled(name: str, enabled: bool, reason: Optional[str] = None) -> None:
