@@ -439,6 +439,27 @@ class TradeStorage:
     def get_trade(self, trade_id: str) -> Optional[TradeRecord]:
         return self._journal.get_trade(trade_id)
 
+    def update_market_context(self, trade_id: str, patch: Dict[str, Any]) -> bool:
+        """JSON 저널 + DB(JSONB) 양쪽의 `market_context` 를 병합 갱신 (2026-09-14 T3 A 배선).
+
+        부분체결 주문이 뒤늦게 완결됐을 때 이미 기록된 레코드의 `entry_risk` 를 확정값으로
+        바꾸는 용도다. 기존 `record_entry`/`record_exit` 시그니처는 그대로 둔다.
+        """
+        if not self._journal.update_market_context(trade_id, patch):
+            return False
+        trade = self._journal.get_trade(trade_id)
+        if trade is None:
+            return False
+        self._enqueue(
+            "UPDATE trades SET market_context=$1, updated_at=$2 WHERE id=$3",
+            (
+                json.dumps(trade.market_context, default=str, ensure_ascii=False),
+                trade.updated_at,
+                trade_id,
+            ),
+        )
+        return True
+
     def get_today_trades(self) -> List[TradeRecord]:
         return self._journal.get_today_trades()
 
