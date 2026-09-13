@@ -1579,6 +1579,7 @@ class DashboardDataCollector:
             "stock_name_cache_size": len(getattr(bot, 'stock_name_cache', {})),
             "loops": _hb.snapshot(),        # 루프별 마지막 성공 반복 이후 경과(초)
             "stale_loops": _hb.check(),     # 운영 규칙 적용 정체 루프 (2026-09-13)
+            "loop_status": _hb.loop_status(),  # 성공/실패/유휴 구분 상세 (2026-09-14 리뷰 T4)
             "watch_symbols_count": len(getattr(bot, '_watch_symbols', [])),
             "timestamp": datetime.now(),
         })

@@ -165,7 +165,7 @@ async def run_daily_shadow_scan() -> tuple:
         return True, await _run()
     except Exception as e:
         logger.warning(f"[수확shadow] 일일 사이클 실패 (재시도 가능): {e}")
-        return False, None
+        return False, f"run_daily_shadow_scan 실패: {e}"   # 하트비트 failure_reason 에 원인 노출 (2026-09-14)
 
 
 def _load_universe(bt, max_n: int = 400) -> list:
