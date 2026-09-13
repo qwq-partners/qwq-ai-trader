@@ -19,11 +19,12 @@ from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Coroutine, Set
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 import sys
 
 from loguru import logger
 
+from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
 from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
 from ..utils.stop_policy import StopDecision
 from src.data.storage.signal_event_storage import SignalEventStorage as _SigLog
@@ -1581,6 +1582,8 @@ class RiskManager:
                     # 지식층 노출 태그 (2026-09-13) — gate_performance가 G4를 wiki 유무로 분리 집계
                     "memory_adj": meta.get("memory_adj"),
                     "wiki_context_used": meta.get("wiki_context_used"),
+                    # 진입 위험 스냅샷 (2026-09-14 T3) — signal_events 에서 risk 모드 주문을 골라낸다
+                    "entry_risk": meta.get("entry_risk"),
                 },
             )
         )
@@ -2620,7 +2623,45 @@ class RiskManager:
                     )
                     return 0
 
+        # 진입 위험 스냅샷 (2026-09-14 T3/F4) — 최종 수량이 확정된 뒤 event.metadata 와
+        # event.signal.metadata **양쪽 별개 복사본**에 넣는다. 주문 캐시(_pending_signal_cache)는
+        # dict(event.metadata) 를 복사하고, 체결 시 A 배선이 market_context.entry_risk 로 원장에 병합한다.
+        # 수량 0(주문·pending 미생성)에는 남기지 않는다 — 주문 없는 계측 태그 방지.
+        if _stop_decision is not None and quantity > 0:
+            _snapshot = build_entry_risk_snapshot(
+                strategy=signal.strategy.value if signal.strategy else None,
+                stop_decision=_stop_decision,
+                equity=equity,
+                price=price,
+                quantity=quantity,
+                risk_per_trade_pct=self.config.risk_per_trade_pct,
+                applied_sha=applied_sha(),
+                config_hash=self._entry_risk_config_hash(),
+                signal_ts=(signal.timestamp.isoformat() if signal.timestamp is not None
+                           else datetime.now().isoformat()),
+            )
+            if signal.metadata is None:
+                signal.metadata = {}
+            signal.metadata["entry_risk"] = dict(_snapshot)
+            if signal.signal is not None:
+                if signal.signal.metadata is None:
+                    signal.signal.metadata = {}
+                signal.signal.metadata["entry_risk"] = dict(_snapshot)
+
         return max(quantity, 0)
+
+    def _entry_risk_config_hash(self) -> str:
+        """유효 설정 hash (자격증명 제외 allowlist, 인스턴스 1회 캐시)."""
+        cached = getattr(self, "_entry_risk_cfg_hash", None)
+        if cached is None:
+            try:
+                cfg = (asdict(self.config) if is_dataclass(self.config)
+                       else dict(vars(self.config)))
+            except Exception:
+                cfg = {}
+            cached = effective_config_hash({"risk": cfg})
+            self._entry_risk_cfg_hash = cached
+        return cached
 
 
 # ============================================================
