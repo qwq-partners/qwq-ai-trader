@@ -1,5 +1,20 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — fix: 동기화 빈 응답 방어 복구·등록 재시도 정책 통일 (계획서 T1, F3·F6)
+
+리뷰 후속 계획서 T1 — `src/schedulers/kr_scheduler.py`, 특성화 테스트 11→21건, runbook 유령 포지션 절.
+- **F3**: 09-13 부분 누락 재시도(`_missing`, 매도 pending 제외)가 "평가액>0·포지션 0건" 전체 빈 응답 방어를 pending 종목에 대해
+  우회 → 봇 보유 전부가 매도 pending 이고 KIS 가 빈 응답을 주면 재시도 없이 유령 루프로 가 pending 31분 종목을 강제 삭제(재현).
+  재시도 조건을 `empty_inconsistent`(전체 빈 응답, pending 무관) / `partial_missing`(pending 제외) 로 분리, 재조회에도 평가액 양수·0건이면
+  `set_sync_status(False)` 로 포지션·익절 단계·현금·pending 전부 보존. pending 시간·좀비 후보는 이 방어 앞에서 우회 불가.
+- **F6**: sync 등록 실패의 fill_check 재시도가 `_strategy_exit_params.get(strategy, {})` 로 `_sync` 폴백을 잃어 SL/TS/TP 전부 None 으로
+  재등록 → `KRScheduler._resolve_registration_params(strategy)`(복사본, strategy → `_sync` → {}) 를 최초 sync 등록·재시도 양쪽의 단일 조회점으로.
+- **대기열 정책**: BUY 체결 `register_position` 예외도 `_pending_exit_registrations` 진입(손절 부재 방치 방지); 재시도 대상은 주기 시작 스냅샷만
+  (같은 주기에 넣은 미생성 포지션을 즉시 버리던 결함); 포지션 부재는 **3주기 연속**일 때만 삭제된 것으로 정리(`_pending_exit_registration_misses`,
+  엔진 핸들러 지연 대응 — 리뷰 advisory 반영).
+- 독립 리뷰 승인(blocking 0). 남은 advisory: BUY 체결 최초 등록 경로는 `.get(strategy, {})` 유지(엔진 사이징 해석기와 동일 규칙, 운영 전략은 전부 테이블에 있어 실효 차이 없음),
+  재시도 영구 실패 시 알림 없음(warning 반복만). 배포 없음.
+
 ## 2026-09-14 — feat: 위험 사이징 canary 오프라인 리포트 CLI (`scripts/review_risk_canary.py`) + 하위 에이전트 위임 규칙
 
 리뷰 후속 계획서(`docs/superpowers/plans/2026-09-13-review-remediation.md`) T8. 원장 JSON·벤치마크 CSV만 읽는 오프라인 도구 —
