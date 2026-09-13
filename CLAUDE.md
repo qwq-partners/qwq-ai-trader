@@ -176,8 +176,8 @@
 
 ### 전략·아키텍처 종합 리뷰 (2026-09-13) — `docs/reviews/strategy-architecture-review-2026-09.md`
 - **1단계 반영(2026-09-13)**: 배분 core 0 / gap 15 / sepa 40 / vcp 10 (합 65, 잔여 현금) · `TEAM_CONVICTION=0` · 계측 기준 교체
-- **2단계 반영(2026-09-13)**: 백테스트 A/B(`docs/research/exit-policy-ab-2026-09.md`, 48셀) — 청산 단일화(channel)·보유 연장 **기각**, **위험 기반 사이징만 채택** (`risk.sizing_mode: risk`, 0.7%/건, 상한 18%). canary: 매수 재개 후 첫 30건 원장 R·KODEX200 초과로 판정. 특성화 테스트(ExitManager 35·sync 11)·루프 하트비트·`_sync_portfolio` 유령 제거 안전화 배포
-- **2단계 A/B 완료(2026-09-13, `docs/research/exit-policy-ab-2026-09.md`)**: 청산(ladder/channel)×보유(current/extended)×사이징(nominal/risk) 2×2×2, 6·12개월, 포지션 단위 R — 두 윈도우 모두 통과한 셀은 sepa `ladder/current/risk`(**위험 기반 사이징만**, MDD 절반·회전 절반) 하나. 채널 청산·회전 억제는 기각(채널은 보유 규칙 해제 시에만 개선이나 아웃라이어 의존 → shadow 유지). 권고 파라미터: equity×0.7%/stop, 상한 18%, 동시 7 — canary·게이트 경유, ExitConfig/REGIME_EXIT_PARAMS 변경 없음. 백테스터 축: `scripts/backtest_strategies.py --exit-policy/--holding-policy/--sizing` (기본값 불변)
+- **2단계 반영(2026-09-13) → 후속 수정(2026-09-14, `docs/superpowers/plans/2026-09-13-review-remediation.md`)**: 09-13 배포본(de111b7)의 위험 사이징은 분모가 실제 신규 체결 SL(고정 sepa 5/gap 3.5/vcp 4)과 달랐고(F1) 근거 A/B 는 미래정보 포함(F2·F8). PR #33~#38 로 F1~F8 수정(동기화 빈 응답 방어·실제 SL 기준 사이징+0.7% 최종 상한·백테스터 시점·하트비트 성공/실패 구분·entry_risk 원장·유효 설정 게이트·parity). **운영 서버는 아직 de111b7(수정 미배포)** — 배포는 사용자 실행 범위 지시 필요.
+- **재검증(2026-09-14, `docs/research/risk-sizing-revalidation-2026-09.md`)**: SEPA 단독 6셀(nominal/risk/고정 14% 대조군 × 6m/12m) 오프라인 재실행 — risk 는 운영 게이트 4조건 충족이나 **대조군도 동일 통과**·parity 미해소 2건 → **승격 보류**. live_policy 에서 SEPA SL 5% 단일값이라 risk = 고정 14% 명목(상한 18% 미발동). 검증된 것은 노출 축소(노출 26~30→21~26%, 회전 39~41→33~34배, MDD 3pp). 전 셀 KOSPI 대비 -26~-96pp, 상위 3건 제외 순손익 전 셀 음수 — 엣지 미입증 유지. canary(`scripts/review_risk_canary.py`, 원장 `scripts/export_risk_ledger.py --source db`) **미시작**. 자동 nominal 복귀 금지.
 - 실거래 266건: 수수료 전 총손익 ≈ 0, 차감 후 -139만, t=-0.18, KOSPI +37% vs 자산 -7.5% — **엣지 미입증**
 - 구조 원인: 연 91배 회전(수수료 = 손실 전부) · 1차 익절이 타이트 청산 무장(p90 +4.9%) · 명목 사이징 3~4종목 집중 · 배분 55%가 근거 없는 라인 · 레짐 4겹 후행
 - 판정 기준은 **KODEX200 초과수익 + 손절 클립** (절대수익 판정으로 04-23·08-20 결정이 뒤집힘). 권고 1~8·금지 목록은 리뷰 §5~6
