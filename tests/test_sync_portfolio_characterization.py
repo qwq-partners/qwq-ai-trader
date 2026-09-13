@@ -6,6 +6,8 @@
 
 이 파일은 "현재 코드가 실제로 하는 일"을 고정한다. 동작을 바꾸면 여기가 깨져야 한다.
 2026-09-13: 특성화로 드러난 4건(exit_exempt 즉시 삭제·부분 누락 미재시도·등록 실패 전파·잔고 실패 후 TR 낭비) 수정 후 기대치 갱신.
+2026-09-14: 리뷰 F3(전부 매도 pending일 때 빈 응답 방어 우회)·F6(등록 재시도가 _sync 폴백 상실) 회귀 테스트 추가 —
+            run_fill_check() 재시도 경로까지 실제 구동(sleep 패치로 1회 반복 후 탈출).
 
 실행: venv/bin/python -m pytest tests/test_sync_portfolio_characterization.py -q
 프로덕션 캐시·네트워크 무접촉 — 브로커/ExitManager/RiskManager는 전부 기록용 가짜.
@@ -39,6 +41,13 @@ class _Broker:
         self.balance = balance
         self.positions_seq = list(positions_seq)
         self.get_positions_calls = 0
+        self.fills_seq = []   # run_fill_check용: check_fills() 호출마다 하나씩 소비
+
+    async def get_open_orders(self):
+        return ["open"] if self.fills_seq else []
+
+    async def check_fills(self):
+        return self.fills_seq.pop(0) if self.fills_seq else []
 
     async def get_account_balance(self):
         return self.balance
@@ -96,6 +105,9 @@ def _make(monkeypatch, *, bot_positions, balance, kis_seq, cash="100000",
     monkeypatch.setattr(kr_scheduler, "trading_logger",
                         SimpleNamespace(log_portfolio_sync=lambda **kw: None))
 
+    async def _emit(event):
+        pass
+
     portfolio = Portfolio(cash=Decimal(cash),
                           positions={p.symbol: p for p in bot_positions})
     bot = SimpleNamespace(
@@ -104,7 +116,12 @@ def _make(monkeypatch, *, bot_positions, balance, kis_seq, cash="100000",
             portfolio=portfolio,
             risk_manager=SimpleNamespace(_zombie_candidate_symbols=set(),
                                          _kis_qty_mismatch_count={}),
+            emit=_emit,
         ),
+        running=False,
+        trade_journal=None,
+        ws_feed=None,
+        _exit_reasons={},
         exit_manager=_ExitManager(exempt),
         risk_manager=_RiskManager(),
         _portfolio_lock=asyncio.Lock(),
@@ -118,12 +135,52 @@ def _make(monkeypatch, *, bot_positions, balance, kis_seq, cash="100000",
     sched = object.__new__(KRScheduler)
     sched.bot = bot
     sched._pending_exit_registrations = set()
+    sched._pending_exit_registration_misses = {}
     sched._exempt_missing_count = {}
     return sched, bot, sleeps
 
 
 def _run(sched):
     asyncio.run(sched._sync_portfolio())
+
+
+_SYNC_PARAMS = {"stop_loss_pct": 3.0, "trailing_stop_pct": 2.0, "first_exit_pct": 3.0,
+                "stale_high_days": 2}   # run_trader "_sync" 보수 설정과 동일 값
+
+
+def _fill_check_once(monkeypatch, sched, sleeps):
+    """run_fill_check()를 실제로 1회 반복시키고 탈출 — 주기 sleep(≥1초)에서 running=False."""
+    bot = sched.bot
+
+    async def _sleep(sec):
+        sleeps.append(sec)
+        if sec >= 1:
+            bot.running = False
+
+    monkeypatch.setattr(kr_scheduler.asyncio, "sleep", _sleep)
+    bot.running = True
+    asyncio.run(sched.run_fill_check())
+
+
+def _fail_n_times(exit_manager, n):
+    """register_position 을 처음 n회만 실패시키고 이후는 정상 기록."""
+    calls = {"n": 0}
+    real = exit_manager.register_position
+
+    def _reg(position, **kw):
+        calls["n"] += 1
+        if calls["n"] <= n:
+            raise RuntimeError(f"register 실패 #{calls['n']}")
+        real(position, **kw)
+
+    exit_manager.register_position = _reg
+    return calls
+
+
+def _buy_fill(symbol, qty=10, price="10000"):
+    from src.core.types import Fill, OrderSide
+    return Fill(order_id=f"o-{symbol}", symbol=symbol, side=OrderSide.BUY,
+                quantity=qty, price=Decimal(price))
 
 
 # ── 1. KIS 에만 있는 포지션 → sync 등록 (전략/is_core 는 캐시에서 복원) ─────────
@@ -359,3 +416,191 @@ def test_exit_exempt_missing_counter_resets_when_symbol_reappears(monkeypatch):
     _run(sched)
     assert sched._exempt_missing_count == {}
     assert "087010" in bot.engine.portfolio.positions and bot.exit_manager.removed == []
+
+
+# ── 8. F3: 봇 보유 전부가 매도 pending + KIS 0건 + 평가액 > 0 → 빈 응답 방어(재시도)는 우회되면 안 됨 ──
+
+def test_empty_reply_with_stale_sell_pending_is_retried(monkeypatch):
+    p = _pos("005930")
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[p],
+        balance={"stock_value": 105000, "available_cash": 100000},
+        kis_seq=[{}, {"005930": p}],
+    )
+    bot._exit_pending_symbols.add("005930")
+    bot._exit_pending_timestamps["005930"] = datetime.now() - timedelta(minutes=31)
+    _run(sched)
+    assert bot.broker.get_positions_calls == 2
+    assert sleeps == [5]
+    assert "005930" in bot.engine.portfolio.positions
+    assert bot.exit_manager.removed == []
+
+
+def test_empty_reply_persisting_with_stale_pending_and_zombie_keeps_state(monkeypatch):
+    """재시도에도 평가액>0·0건이면 동기화 실패 기록 + 상태 보존 — pending 31분·좀비 후보도 방어를 못 넘는다."""
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[_pos("005930"), _pos("000660")],
+        balance={"stock_value": 210_000, "available_cash": 50_000},
+        kis_seq=[{}, {}],
+    )
+    for s in ("005930", "000660"):
+        bot._exit_pending_symbols.add(s)
+        bot._exit_pending_timestamps[s] = datetime.now() - timedelta(minutes=31)
+    bot.engine.risk_manager._zombie_candidate_symbols.add("000660")
+    _run(sched)
+
+    assert sleeps == [5] and bot.broker.get_positions_calls == 2
+    assert set(bot.engine.portfolio.positions) == {"005930", "000660"}
+    assert bot.exit_manager.removed == []
+    assert bot.risk_manager.sync_status == [False]
+    assert bot.engine.portfolio.cash == Decimal("100000")   # 현금 동기화도 보류
+    assert bot._exit_pending_symbols == {"005930", "000660"}  # pending 상태 보존
+
+
+# ── 9. F6: 등록 파라미터 조회 단일화 — strategy → _sync → {} (복사본) ─────────────
+
+def test_resolve_registration_params_priority_and_copy(monkeypatch):
+    sched, bot, _ = _make(
+        monkeypatch, bot_positions=[], balance={"stock_value": 0}, kis_seq=[],
+        exit_params={"sepa_trend": {"stop_loss_pct": 5.0}, "_sync": dict(_SYNC_PARAMS)},
+    )
+    assert sched._resolve_registration_params("sepa_trend") == {"stop_loss_pct": 5.0}
+    assert sched._resolve_registration_params("unknown_strategy") == _SYNC_PARAMS
+    assert sched._resolve_registration_params(None) == _SYNC_PARAMS
+    got = sched._resolve_registration_params(None)
+    got["stop_loss_pct"] = 99.0
+    assert bot._strategy_exit_params["_sync"]["stop_loss_pct"] == 3.0   # 복사본이라 원본 불변
+
+    bot._strategy_exit_params = {}
+    assert sched._resolve_registration_params("sepa_trend") == {}
+    assert sched._resolve_registration_params(None) == {}
+
+
+def test_sync_registration_failure_is_retried_by_fill_check_with_sync_params(monkeypatch):
+    """전략 불명 sync 포지션: 최초 등록 1회 실패 → run_fill_check 재시도 — 양쪽 다 _sync 설정."""
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[],
+        balance={"stock_value": 105_000, "available_cash": 100_000},
+        kis_seq=[{"005930": _pos("005930")}],
+        exit_params={"sepa_trend": {"stop_loss_pct": 5.0}, "_sync": dict(_SYNC_PARAMS)},
+    )
+    calls = _fail_n_times(bot.exit_manager, 1)
+    _run(sched)
+    assert sched._pending_exit_registrations == {"005930"}
+    assert bot.exit_manager.registered == []
+
+    _fill_check_once(monkeypatch, sched, sleeps)
+
+    assert calls["n"] == 2
+    assert sched._pending_exit_registrations == set()
+    (pos, kw), = bot.exit_manager.registered
+    assert pos.symbol == "005930"
+    assert (kw["stop_loss_pct"], kw["trailing_stop_pct"], kw["first_exit_pct"],
+            kw["stale_high_days"]) == (3.0, 2.0, 3.0, 2)
+    assert kw["is_core"] is False and kw["atr_pct_hint"] is None
+    assert sleeps[-1] == 15   # 유휴 폴링 주기
+
+
+def test_sync_registration_uses_strategy_params_on_both_attempts(monkeypatch):
+    """전략이 알려진 sync 포지션은 최초·재시도 모두 전략 설정(_sync 아님)."""
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[],
+        balance={"stock_value": 105_000, "available_cash": 100_000},
+        kis_seq=[{"005930": _pos("005930")}],
+        symbol_strategy={"005930": "sepa_trend"},
+        exit_params={"sepa_trend": {"stop_loss_pct": 5.0, "atr_pct": 1.5},
+                     "_sync": dict(_SYNC_PARAMS)},
+    )
+    _fail_n_times(bot.exit_manager, 1)
+    _run(sched)
+    _fill_check_once(monkeypatch, sched, sleeps)
+
+    (pos, kw), = bot.exit_manager.registered
+    assert pos.strategy == "sepa_trend"
+    assert kw["stop_loss_pct"] == 5.0 and kw["trailing_stop_pct"] is None
+    assert kw["atr_pct_hint"] is None   # 재시도 ATR hint 는 시그널 캐시에서만 (기존 동작 유지)
+    assert sched._pending_exit_registrations == set()
+
+
+# ── 10. fill_check 대기열: BUY 등록 예외·포지션 지연·반복 실패·삭제된 포지션 ─────────
+
+def test_buy_fill_registration_exception_is_queued_then_retried(monkeypatch):
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[_pos("005930", strategy="sepa_trend")],
+        balance={}, kis_seq=[],
+        exit_params={"sepa_trend": {"stop_loss_pct": 5.0}, "_sync": dict(_SYNC_PARAMS)},
+    )
+    bot.broker.fills_seq = [[_buy_fill("005930")]]
+    calls = _fail_n_times(bot.exit_manager, 2)   # BUY 등록 + 다음 주기 1차 재시도 모두 실패
+    _fill_check_once(monkeypatch, sched, sleeps)
+
+    assert calls["n"] == 1                                   # 같은 주기엔 재시도하지 않음
+    assert sched._pending_exit_registrations == {"005930"}   # 실패 중에는 대기열 유지
+    assert bot.exit_manager.registered == []
+    assert bot.risk_manager.buy_filled == ["005930"]
+    assert sleeps[-1] == 2   # 미체결 있음 → 2초 폴링
+
+    _fill_check_once(monkeypatch, sched, sleeps)             # 1차 재시도 실패 → 대기열 유지
+    assert calls["n"] == 2 and sched._pending_exit_registrations == {"005930"}
+
+    _fill_check_once(monkeypatch, sched, sleeps)             # 2차 재시도 성공
+    assert calls["n"] == 3
+    assert sched._pending_exit_registrations == set()
+    (pos, kw), = bot.exit_manager.registered
+    assert pos.symbol == "005930" and kw["stop_loss_pct"] == 5.0
+
+
+def test_buy_fill_with_delayed_position_is_registered_when_position_appears(monkeypatch):
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[], balance={}, kis_seq=[],
+        exit_params={"_sync": dict(_SYNC_PARAMS)},
+    )
+    bot.broker.fills_seq = [[_buy_fill("005930")]]
+    _fill_check_once(monkeypatch, sched, sleeps)
+
+    assert sleeps.count(0.1) == 10                     # 포지션 생성 최대 1초 대기
+    assert sched._pending_exit_registrations == {"005930"}
+    assert bot.exit_manager.registered == []
+
+    bot.engine.portfolio.positions["005930"] = _pos("005930")   # 엔진이 뒤늦게 포지션 생성 (전략 불명)
+    _fill_check_once(monkeypatch, sched, sleeps)
+    assert sched._pending_exit_registrations == set()
+    (pos, kw), = bot.exit_manager.registered
+    assert pos.symbol == "005930" and kw["stop_loss_pct"] == 3.0   # 전략 불명 → _sync 폴백
+
+
+def test_retry_keeps_failing_symbol_and_drops_deleted_position(monkeypatch):
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[_pos("005930")], balance={}, kis_seq=[],
+    )
+    sched._pending_exit_registrations = {"005930", "000660"}   # 000660 은 이미 삭제된 포지션
+
+    def _boom(position, **kw):
+        raise RuntimeError("register 실패")
+
+    bot.exit_manager.register_position = _boom
+    _fill_check_once(monkeypatch, sched, sleeps)
+    assert sched._pending_exit_registrations == {"005930", "000660"}   # 부재 1주기: 아직 보류
+    _fill_check_once(monkeypatch, sched, sleeps)              # 반복 실패해도 대기열 유지, 부재 2주기
+    assert sched._pending_exit_registrations == {"005930", "000660"}
+    _fill_check_once(monkeypatch, sched, sleeps)              # 부재 3주기 연속 → 삭제된 것으로 정리
+    assert sched._pending_exit_registrations == {"005930"}
+    assert sched._pending_exit_registration_misses == {}
+    assert sleeps.count(15) == 3
+
+
+def test_delayed_position_within_three_cycles_is_still_registered(monkeypatch):
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[], balance={}, kis_seq=[],
+        exit_params={"_sync": {"stop_loss_pct": 3.0}},
+    )
+    sched._pending_exit_registrations = {"005930"}
+    _fill_check_once(monkeypatch, sched, sleeps)
+    _fill_check_once(monkeypatch, sched, sleeps)              # 2주기 부재 — 아직 대기열 유지
+    assert sched._pending_exit_registrations == {"005930"}
+    bot.engine.portfolio.positions["005930"] = _pos("005930")   # 엔진이 뒤늦게 포지션 생성
+    _fill_check_once(monkeypatch, sched, sleeps)
+    assert sched._pending_exit_registrations == set()
+    assert sched._pending_exit_registration_misses == {}
+    (pos, kw), = bot.exit_manager.registered
+    assert pos.symbol == "005930" and kw["stop_loss_pct"] == 3.0
