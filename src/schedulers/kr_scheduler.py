@@ -71,6 +71,8 @@ class KRScheduler:
 
         # 매수 체결 후 ExitManager 등록 실패 종목 (다음 fill_check 주기에 재시도)
         self._pending_exit_registrations: Set[str] = set()
+        # 대기열 종목의 포지션 부재 연속 주기 수 — 3주기 연속이면 삭제된 것으로 보고 정리 (2026-09-14)
+        self._pending_exit_registration_misses: Dict[str, int] = {}
         # exit_exempt 종목의 KIS 응답 연속 누락 횟수 (부분 응답 1회로 유령 제거하지 않기 위함)
         self._exempt_missing_count: Dict[str, int] = {}
 
@@ -2392,6 +2394,7 @@ JSON:
                         for _retry_sym in _retry_syms:
                             _retry_pos = bot.engine.portfolio.positions.get(_retry_sym)
                             if _retry_pos:
+                                self._pending_exit_registration_misses.pop(_retry_sym, None)
                                 # 최초 sync 등록과 동일 조회점 (strategy → _sync → {}) — 리뷰 F6
                                 _retry_params = self._resolve_registration_params(_retry_pos.strategy)
                                 # 시그널 캐시에서 atr_pct hint 추출 (ATR-linked trailing용)
@@ -2427,9 +2430,16 @@ JSON:
                                 except Exception as _re:
                                     logger.warning(f"[체결] {_retry_sym} ExitManager 재시도 등록 실패: {_re}")
                             elif _retry_sym not in bot.engine.portfolio.positions:
-                                # 포지션이 사라졌으면 (수동 매도 등) 대기열에서 제거
-                                _retry_done.add(_retry_sym)
+                                # 포지션 부재가 3주기 연속이면 삭제된 것(수동 매도 등)으로 보고 정리 — 엔진 핸들러
+                                # 지연으로 체결 후 포지션 생성이 한 주기를 넘길 수 있어 즉시 버리지 않는다 (2026-09-14 리뷰)
+                                _miss = self._pending_exit_registration_misses.get(_retry_sym, 0) + 1
+                                self._pending_exit_registration_misses[_retry_sym] = _miss
+                                if _miss >= 3:
+                                    _retry_done.add(_retry_sym)
+                                    logger.info(f"[체결] {_retry_sym} 포지션 {_miss}주기 연속 부재 → ExitManager 등록 대기열 정리")
                         self._pending_exit_registrations -= _retry_done
+                        for _done_sym in _retry_done:
+                            self._pending_exit_registration_misses.pop(_done_sym, None)
 
                     # 유휴(미체결 없음) 시 15초 — 5초 폴링이 개장 직후 원장 TR 트래픽의 대부분이라
                     # EGW00215 충돌을 키웠다 (2026-09-07). 포지션 변화는 30초 동기화가 커버한다.

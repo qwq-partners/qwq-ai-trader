@@ -135,6 +135,7 @@ def _make(monkeypatch, *, bot_positions, balance, kis_seq, cash="100000",
     sched = object.__new__(KRScheduler)
     sched.bot = bot
     sched._pending_exit_registrations = set()
+    sched._pending_exit_registration_misses = {}
     sched._exempt_missing_count = {}
     return sched, bot, sleeps
 
@@ -579,7 +580,27 @@ def test_retry_keeps_failing_symbol_and_drops_deleted_position(monkeypatch):
 
     bot.exit_manager.register_position = _boom
     _fill_check_once(monkeypatch, sched, sleeps)
+    assert sched._pending_exit_registrations == {"005930", "000660"}   # 부재 1주기: 아직 보류
+    _fill_check_once(monkeypatch, sched, sleeps)              # 반복 실패해도 대기열 유지, 부재 2주기
+    assert sched._pending_exit_registrations == {"005930", "000660"}
+    _fill_check_once(monkeypatch, sched, sleeps)              # 부재 3주기 연속 → 삭제된 것으로 정리
     assert sched._pending_exit_registrations == {"005930"}
-    _fill_check_once(monkeypatch, sched, sleeps)              # 반복 실패해도 대기열 유지
+    assert sched._pending_exit_registration_misses == {}
+    assert sleeps.count(15) == 3
+
+
+def test_delayed_position_within_three_cycles_is_still_registered(monkeypatch):
+    sched, bot, sleeps = _make(
+        monkeypatch, bot_positions=[], balance={}, kis_seq=[],
+        exit_params={"_sync": {"stop_loss_pct": 3.0}},
+    )
+    sched._pending_exit_registrations = {"005930"}
+    _fill_check_once(monkeypatch, sched, sleeps)
+    _fill_check_once(monkeypatch, sched, sleeps)              # 2주기 부재 — 아직 대기열 유지
     assert sched._pending_exit_registrations == {"005930"}
-    assert sleeps.count(15) == 2
+    bot.engine.portfolio.positions["005930"] = _pos("005930")   # 엔진이 뒤늦게 포지션 생성
+    _fill_check_once(monkeypatch, sched, sleeps)
+    assert sched._pending_exit_registrations == set()
+    assert sched._pending_exit_registration_misses == {}
+    (pos, kw), = bot.exit_manager.registered
+    assert pos.symbol == "005930" and kw["stop_loss_pct"] == 3.0
