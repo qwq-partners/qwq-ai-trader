@@ -584,6 +584,14 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
   - [ ] stop_loss 종목 재진입 발생 시 로그: `[재진입] {symbol} 손절 후 V자 반등 감지 — 재진입 허용 (V자 반등 +X.X% (>=+5%))`
   - [ ] 부분 청산 후 `_exited_today` 미등록 확인 (잔여분 손절 시 정상 등록)
 
+### 2026-09-14~ — 위험 사이징 canary 리포트 (`scripts/review_risk_canary.py`, 오프라인)
+- **도구**: `venv/bin/python scripts/review_risk_canary.py --input <검증용 포지션 원장.json> --benchmark <kodex200.csv> --cohort risk-sepa-v1 --output <report.json> [--sha <적용SHA>] [--min-sample 30] [--as-of YYYY-MM-DD]` — 주문·설정 변경 없음, 네트워크·`~/.cache` 무접촉. 원장 스키마는 모듈 docstring(T3 exporter 계약, `entry_risk` 12키).
+- **종료 코드**: 2 = 파일 누락·JSON 파싱 실패·필수 필드 오류(부족 항목 stderr) / 0 = 데이터 정상. **종료 코드로 성과를 판단하지 않는다.**
+- **status**: `insufficient_sample`(완결 < 30, 판정 보류 — 표본을 만들려고 거래를 늘리거나 사이징 모드를 자동 전환하지 않음) / `hold_expansion`(완결 ≥30 이고 평균 R≤0 또는 PF≤1 또는 평균 동일기간 초과수익≤0 → 확대 보류) / `further_review`(그 외 — 자동 승격 아님). 통계적 유의성 판정이 아닌 보수적 확대 검토 규칙. **어떤 상태에서도 nominal 자동 복귀를 권고하지 않는다.**
+- **technical_status**(성과와 별개): `entry_risk` 필수키·`actual_stop_pct`·`exits` 누락, `position_id` 중복, 계획 위험 > 예산, 계획 SL ≠ 실제 SL, `initial_risk_amount` ≠ 진입비용×실제 SL(1원 허용), `net_pnl` ≠ Σ매도−Σ매수−Σ수수료(1원 허용) → 한 건이라도 `failed`.
+- **체크포인트**: 첫 5건 `technical_status=passed` / 10건 재계산 불일치 0건 / 30건 status 보고. 벤치마크는 일 종가(진입일·청산일) 기준이며 장중 체결가와의 시점 차이는 가정으로 기록. 벤치마크 결손 포지션의 초과수익은 null(0 대체 없음).
+- 제외 집계: `cohort_mismatch`(cohort/SHA 불일치) · `legacy_unmeasured`(`entry_risk` null 또는 sizing_mode≠risk) · `open` · `lots_ambiguous` · `missing_initial_risk`.
+
 ## 완료된 체크포인트
 
 (검증 완료 시 ✅ + 1줄 요약으로 여기에 이동)

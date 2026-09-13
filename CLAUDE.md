@@ -31,6 +31,13 @@
 - 전문가 시스템 상세: `docs/agents/expert-system.md` / 코드: `src/experts/`
 - 출력: `ExpertOpinion` (score/bias/confidence/findings) → market_regime + cross_validator
 
+## 하위 에이전트 위임 규칙 (2026-09-14 사용자 지시)
+- Agent/Workflow 로 하위 에이전트를 띄울 때는 기본값을 쓰지 말고 **작업 성격에 맞춰 모델·effort 를 매번 명시**한다.
+  - 기계적·저위험(복사·포맷·grep 요약·단순 테스트 실행) → haiku/sonnet, low~medium
+  - 일반 구현·특성화 테스트·문서 초안 → sonnet(또는 세션 기본), medium~high
+  - 돈이 걸린 경로(사이징·주문·청산·동기화)·백테스트 판정·보안·독립/적대적 리뷰·최종 통합 판단 → opus/세션 최상위, high~xhigh
+- 같은 워크플로 안에서도 단계별로 다르게 지정하고, 선택 근거를 label/프롬프트 첫 줄에 남긴다.
+
 ## 프로젝트 개요
 - KR+US 통합 트레이딩 엔진 (Full Rewrite)
 - 단일 KIS appkey로 국내+해외 주식 동시 운영
