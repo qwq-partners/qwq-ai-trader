@@ -20,7 +20,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from enum import Enum
@@ -267,6 +267,10 @@ class PositionExitState:
     trailing_activate_pct: Optional[float] = None  # None이면 글로벌 ExitConfig 사용
     # 2026-05-18 P2-a: 전략별 청산 차등 (composite trailing 버퍼 조정용)
     strategy_name: Optional[str] = None  # rsi2_reversal, sepa_trend, gap_and_go 등
+    # 2026-09-14 T3: 체결로 확정된 초기 위험금액(R 분모)과 그때의 실제 초기 SL.
+    # 부분매도·레짐 전환·재시작으로 바뀌지 않는다 (stage 파일에 영속, 없으면 None = 미계측).
+    initial_risk_amount: Optional[Decimal] = None
+    actual_stop_pct: Optional[Decimal] = None
 
 
 class ExitManager:
@@ -377,6 +381,11 @@ class ExitManager:
                 entry["effective_trailing_stop_pct"] = state.effective_trailing_stop_pct
             if state.atr_pct is not None:
                 entry["atr_pct"] = state.atr_pct
+            # 확정 R 분모 (2026-09-14 T3) — 재시작 후에도 초기 위험금액이 바뀌지 않게 보존
+            if state.initial_risk_amount is not None:
+                entry["initial_risk_amount"] = str(state.initial_risk_amount)
+            if state.actual_stop_pct is not None:
+                entry["actual_stop_pct"] = str(state.actual_stop_pct)
             # 코어 포지션의 전용 파라미터 영속화 (재시작 시 strategy=None 폴백 방어)
             if state.is_core:
                 if state.stop_loss_pct is not None:
@@ -754,6 +763,19 @@ class ExitManager:
             strategy_name=strategy_name or getattr(position, "strategy", None),
         )
 
+        # 확정 R 분모 복원 (2026-09-14 T3) — 구 스키마 파일에 키가 없으면 None 유지(미계측)
+        _p_risk = self._persisted.get(position.symbol) or {}
+        if _p_risk.get("initial_risk_amount") is not None:
+            try:
+                _st_risk = self._states[position.symbol]
+                _st_risk.initial_risk_amount = Decimal(str(_p_risk["initial_risk_amount"]))
+                if _p_risk.get("actual_stop_pct") is not None:
+                    _st_risk.actual_stop_pct = Decimal(str(_p_risk["actual_stop_pct"]))
+            except (InvalidOperation, ValueError, TypeError) as _ir_err:
+                logger.warning(
+                    f"[ExitManager] {position.symbol} 초기 위험금액 복원 실패(무시): {_ir_err}"
+                )
+
         # 2026-08-08 P0: 복원된 pending 적용 — 거래소 미체결 확인 전 재발행 차단
         if _restored_pending is not None:
             _st = self._states[position.symbol]
@@ -808,6 +830,38 @@ class ExitManager:
         )
 
         self._persist_states()
+
+    def set_initial_risk(self, symbol: str, initial_risk_amount: Any,
+                         actual_stop_pct: Any) -> bool:
+        """체결 확정 초기 위험금액(R 분모)을 **최초 1회만** 기록한다 (2026-09-14 T3).
+
+        첫 매수 주문이 완료된 시점에 호출한다. 이미 값이 있으면 덮어쓰지 않고 False 를 돌려준다 —
+        부분매도·레짐 전환·재등록·재시작으로 R 분모가 바뀌면 canary 판정이 무의미해진다.
+        """
+        state = self._states.get(symbol)
+        if state is None:
+            logger.warning(f"[ExitManager] {symbol} 미등록 포지션 — 초기 위험금액 기록 생략")
+            return False
+        if state.initial_risk_amount is not None:
+            return False
+        try:
+            amount = Decimal(str(initial_risk_amount))
+            stop = Decimal(str(actual_stop_pct))
+        except (InvalidOperation, ValueError, TypeError) as e:
+            logger.warning(f"[ExitManager] {symbol} 초기 위험금액 값 오류(기록 생략): {e}")
+            return False
+        if not amount.is_finite() or amount <= 0 or not stop.is_finite() or stop <= 0:
+            logger.warning(
+                f"[ExitManager] {symbol} 초기 위험금액/SL 무효(기록 생략): {amount} / {stop}"
+            )
+            return False
+        state.initial_risk_amount = amount
+        state.actual_stop_pct = stop
+        self._persist_states()
+        logger.info(
+            f"[ExitManager] {symbol} 초기 위험금액 확정: {amount:,.0f}원 (실제 SL {stop}%)"
+        )
+        return True
 
     def resolve_stop(self, *, dynamic_stop_pct: Optional[float], fixed_stop_pct: Optional[float],
                      is_core: bool, apply_crash_cap: bool = True) -> StopDecision:

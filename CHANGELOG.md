@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — feat: 진입 위험 스냅샷·원장 연결 — 엔진·저장·exporter 측 (계획서 T3, F4)
+
+F4(D 재현): risk 태그가 원본 Signal.metadata 에만 있고 event.metadata(별개 dict)·주문 캐시·signal_events·체결 원장(market_context)에는 없었다.
+- `src/utils/entry_risk.py`(신규): `build_entry_risk_snapshot` / `confirm_initial_risk`(Σ매수 price×qty, 수수료 제외 × **실제 등록 SL**) / `merge_confirmed_risk`(원본 불변·멱등) /
+  `planned_vs_filled_delta` / `effective_config_hash`(비밀 제외 allowlist) / `applied_sha`(모듈 로드 시 선계산, 이벤트 루프 내 subprocess 없음). 스냅샷 키 고정
+  (version, cohort_id `risk-<전략>-v1`, sizing_mode, strategy, stop_basis, stop_pct, stop_source, stop_crash_active, equity_at_decision, risk_budget_amount, planned_price, planned_quantity, planned_risk_amount, signal_ts, applied_sha, config_hash).
+- 엔진: 최종 수량 확정 후 `event.metadata`·`event.signal.metadata` **양쪽 별개 복사본**에 `entry_risk`(수량 0 이면 없음), `_log_sig` allowlist. ExitManager 에 `initial_risk_amount`/`actual_stop_pct` 상태 +
+  `set_initial_risk`(최초 1회, 덮어쓰기 거부) + stage 파일 영속·복원 → 재시작·부분매도·레짐 전환에도 R 분모 불변.
+- `scripts/export_risk_ledger.py`(신규, 오프라인): 거래 원장 + ExitManager 상태 → `review_risk_canary` 원장. net_pnl 은 저널 누적 pnl, 매도 leg 는 `--source db` 의 trade_events SELL 행에서 복원
+  (journal 소스 분할 매도는 `exits_aggregated` → `lots_ambiguous` 로 표본 제외). closed 포지션의 확정 분모는 원장 스냅샷만, ExitManager 상태는 open 한정(종목 키 오귀속 방지). 스냅샷 없음 = legacy-unmeasured.
+- 테스트 24건. docs/risk/risk-and-exit.md 에 계약·R 정의·legacy 분류·A 배선 지점.
+- **잔여(A 배선, 다음 PR)**: kr_scheduler 체결 경로 `confirm_initial_risk → set_initial_risk → merge_confirmed_risk` 를 `market_context.entry_risk` 에 병합해 `record_entry`; `_pending_signal_cache` 는 첫 부분체결에서 pop 되므로
+  주문 완결까지 유지 필요. 배선 전 운영 원장은 전부 legacy-unmeasured. config_hash 는 RiskConfig 만(ExitConfig·전략 SL 미포함), 주문/포지션 식별자는 exporter 의 trade.id 대체. canary 판정 원장은 `--source db`.
+  canary 허용치(1원)는 3 leg 이상 분할 매도에서 반올림 누적으로 경계값 — 필요 시 max(1, 0.5×(leg+1)) 검토.
 ## 2026-09-14 — fix: 하트비트가 성공·실패·유휴를 구분 (계획서 T4, F5)
 
 F5(D 재현): DART 조회 전 beat, REST 실패 후 beat, 진화 evolve() 예외를 삼킨 뒤 beat → 40분 전부 실패해도 정체로 잡히지 않았다.
