@@ -34,5 +34,20 @@ echo "--- 포트폴리오 ---"
 curl -s -m 5 http://localhost:8080/api/portfolio | python3 -c "import json,sys; d=json.load(sys.stdin); print({k:d.get(k) for k in ('cash','cash_ratio','total_equity','unrealized_pnl','position_count','daily_trades')})" 2>/dev/null || echo "대시보드 API 응답 없음"
 echo "pending: $(curl -s -m 5 http://localhost:8080/api/orders/pending | head -c 200)"
 
-echo "--- 루프 하트비트 (성공 반복 없는 루프, 2026-09-13) ---"
-curl -s -m 5 http://localhost:8080/api/health | python3 -c "import json,sys; d=json.load(sys.stdin); s=d.get('stale_loops') or {}; print('정체 없음' if not s else ' '.join(f'{k}={int(v)}s' for k,v in s.items()), '· 최장 대기', max(d.get('loops',{}).items(), key=lambda kv: kv[1], default=('-',0)))" 2>/dev/null || echo "대시보드 API 응답 없음"
+echo "--- 루프 하트비트 (성공/실패/유휴 구분, 2026-09-14 리뷰 T4) ---"
+curl -s -m 5 http://localhost:8080/api/health | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+s = d.get('stale_loops') or {}
+print('정체:', '없음' if not s else ' '.join(f'{k}={int(v)}s' for k, v in s.items()),
+      '· 최장 대기', max(d.get('loops', {}).items(), key=lambda kv: kv[1], default=('-', 0)))
+st = d.get('loop_status') or {}
+failing = {k: v for k, v in st.items() if v.get('consecutive_failures')}
+degraded = {k: v.get('note') for k, v in st.items() if v.get('note')}
+disabled = [k for k, v in st.items() if not v.get('enabled')]
+print('실패 누적:', '없음' if not failing else ' '.join(f\"{k}={v['consecutive_failures']}회({v.get('failure_reason','')})\" for k, v in failing.items()))
+if degraded:
+    print('부분 실패(degraded):', ' '.join(f'{k}={v}' for k, v in degraded.items()))
+if disabled:
+    print('비활성:', ' '.join(disabled))
+" 2>/dev/null || echo "대시보드 API 응답 없음"

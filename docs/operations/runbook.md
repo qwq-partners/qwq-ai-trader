@@ -332,15 +332,39 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - 지속 시: 포트폴리오 수동 확인 → ExitManager stage 리셋
 
 ### 알려진 이슈
-- **루프 정체(살아 있지만 일을 못 하는 루프) 탐지 — 하트비트** (2026-09-13~): `_supervised`는 죽은 루프만
-  재기동하므로 HTTP 500 재시도 폭풍(14일 방치)·수확 shadow 2일 무동작·daily_bias 정체 같은 "조용한 열화"는
-  못 봤다. 이제 장중 루프 6개(체결확인·동기화·스크리닝·REST시세·시장추세·공시경보)와 일 1회 잡 3개(수확
-  shadow·변동성타게팅·진화)가 **성공한 반복**마다 `src/utils/loop_heartbeat.beat()`를 찍고, `kr_heartbeat_monitor`가
-  60초마다 `check()`로 판정한다: 장중 루프는 거래일 정규장(09:00~15:20)에만 주기×3(최소 120초, 09:00 기산),
-  일 1회 잡은 직전 거래일 자정 이후 beat 없으면 정체(주말·공휴일 오탐 없음). 정체 시 `[하트비트] <루프> N초 정체`
-  WARNING + 루프별 시간당 1회 텔레그램, **자동 재기동은 없음**(원인 확인이 먼저: 해당 루프의 오류 로그·KIS 거절을
-  본다). 확인: `curl -s localhost:8080/api/health | jq '.loops, .stale_loops'` 또는 `ops_check.sh`의 하트비트 줄.
-  주기를 바꾸면 `loop_heartbeat.PERIODS`도 함께 갱신. 재시작 직후 기산점은 프로세스 시작 시각.
+- **루프 정체(살아 있지만 일을 못 하는 루프) 탐지 — 하트비트** (2026-09-13~, 2026-09-14 리뷰 F5 후속으로
+  성공/실패/유휴 구분): `_supervised`는 죽은 루프만 재기동하므로 HTTP 500 재시도 폭풍(14일 방치)·수확 shadow
+  2일 무동작·daily_bias 정체 같은 "조용한 열화"는 못 봤다. 09-13 최초 버전은 **조회 전에 beat 하거나
+  예외를 삼킨 뒤 beat 하는 경로**가 있어(DART 공시조회 전 beat, REST 전량 실패에도 beat, 진화 스케줄러
+  evolve() 예외 삼킴 후 beat) 40분간 5회 전부 실패해도 정체로 안 잡히는 결함이 있었다(F5) — 이번 버전은
+  각 루프가 실제로 **완수(success)**했을 때만 정체 판정 기준을 갱신하고, 실패(failure)는 기준을 갱신하지
+  않아 나이가 계속 쌓이며, 할 일이 없는 정상 상황은 유휴(idle, 사유 포함)로 별도 구분한다.
+  - 장중 루프 6개(체결확인·동기화·스크리닝·REST시세·시장추세·공시경보)와 일 1회 잡 3개(수확
+    shadow·변동성타게팅·진화)가 대상. 각 반복은 `src/utils/loop_heartbeat.record_attempt(name)`으로 시작해
+    `record_success(name)`(완수)/`record_failure(name, reason)`(실패)/`record_idle(name, reason)`(할 일 없음,
+    예: 장외 세션·보유 종목 0건·WS 전량 커버) 중 하나로 끝난다. `beat(name)`은 `record_success`의 별칭으로 호환 유지.
+  - REST 분류: 조회 대상(보유 종목)이 있는데 성공 0건이면 실패, 대상 0건 또는 WS 전량 커버면 유휴.
+    DART 분류: 보유 종목 전부 조회 실패면 실패, 일부만 실패면 성공이되 `note`에 degraded 표시(실패 종목 수),
+    보유 0종목이면 유휴. 진화 스케줄러: `evolve()`가 waiting/keep/applied/rollback 등 정상 반환이면 성공,
+    예외면 실패(예외를 삼킨 직후 무조건 beat 하던 경로 제거).
+  - 설정으로 꺼진 기능(`VOL_TARGETING=0`, `DART_API_KEY` 미설정)은 `set_enabled(name, False, reason)`으로
+    표시해 정체 경보에서 제외한다. **초기화 실패는 disabled로 위장하지 않는다** — 예를 들어 DART corp_code
+    맵 로드 실패는 enabled=True인 채로 beat가 영영 안 찍혀 정체로 드러난다.
+  - `kr_heartbeat_monitor`가 60초마다 `check()`로 판정한다: 장중 루프는 거래일 정규장(09:00~15:20)에만
+    주기×3(최소 120초, 09:00 기산). 일 1회 잡은 **해당 거래일 예정시각(수확 08:40·변동성 08:30·진화
+    20:30, `loop_heartbeat.DAILY_SCHEDULE`이 단일 출처 — 진화는 `config.kr.scheduler.evolution_time`으로
+    기동 시 동기화) + 60분(`DAILY_GRACE_MINUTES`) grace** 이후에도 그날 예정시각 이후 성공/유휴가 없으면
+    정체다(기존 "직전 거래일 자정 이후" 기준은 예정시각 전에도 오탐하고, 실패를 24시간 넘게 늦게 잡았다).
+    주말·공휴일은 점검 자체를 하지 않는다(휴장일 진입 시 즉시 반환). 재시작 시 각 스케줄러가 자신의
+    상태 파일(harvest `last_run.json`, vol_targeting `vol_targeting.json`, 진화 `evolution_state.json`)에서
+    "오늘 이미 완료"를 읽으면 `record_success(..., note="재시작 전 완료 복원")`으로 즉시 복원한다.
+  - 정체 시 `[하트비트] <루프> N초 정체` WARNING + 루프별 시간당 1회 텔레그램, **자동 재기동은 없음**
+    (원인 확인이 먼저: 해당 루프의 오류 로그·KIS 거절을 본다).
+  - 확인: `curl -s localhost:8080/api/health | jq '.loops, .stale_loops, .loop_status'`
+    (`loop_status`는 `enabled`/`idle_reason`/`last_attempt`/`last_success`/`consecutive_failures`/`next_due`
+    + 실패 사유(`failure_reason`)·degraded 메모(`note`)) 또는 `ops_check.sh`의 하트비트 3줄(정체/실패 누적/
+    degraded·비활성). 주기를 바꾸면 `loop_heartbeat.PERIODS`도 함께 갱신. 재시작 직후 기산점(beat 미기록 루프)은
+    프로세스 시작 시각.
 - **pykrx 간헐적 실패**: `Stock master: pykrx failed` → FDR → 72h 캐시 폴백 자동 전환
 - **FDR `StockListing("KRX")` 404** (2026-09-09~, 업스트림 GitHub 캐시 소실, 0.9.202도 동일):
   수확 shadow 유니버스는 `harvest_shadow/universe.json` 캐시로 폴백(부트스트랩은 DB
