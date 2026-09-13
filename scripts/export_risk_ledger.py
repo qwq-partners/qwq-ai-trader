@@ -15,9 +15,18 @@
 분류 규칙:
 - `market_context.entry_risk` 가 없는 과거 거래·수동 포지션은 `entry_risk: null`,
   `cohort_id: "legacy-unmeasured"` (현재 설정으로 초기 위험을 추정하지 않는다 — canary 가 제외).
-- `initial_risk_amount` 는 ExitManager 영속 상태(체결 시 확정)를 우선 쓰고, 없으면 매수 체결과
-  실제 초기 SL 로 재계산한다(`entry_risk.stop_pct`). 둘 다 없으면 null.
+- `initial_risk_amount` 우선순위: ①체결 시 스냅샷에 병합된 확정값(`merge_confirmed_risk`)
+  → ②**보유 중(open)** 포지션에 한해 ExitManager 영속 상태 → ③매수 체결 × `entry_risk.stop_pct`.
+  ExitManager 상태는 완전 청산 시 삭제되므로 closed 거래에는 적용하지 않는다 —
+  같은 종목을 재보유 중이면 현재 포지션 값이 옛 거래에 오귀속된다.
+- `net_pnl` 은 원장의 누적 `trade.pnl`(수수료 포함)이 정본이다. 분할 매도는 저널이
+  `exit_price` 를 마지막 leg 로 덮어쓰므로 체결 재구성값을 쓰면 체계적으로 틀린다.
+- 매도 leg: `--source db` 는 `trade_events` SELL 행에서 그대로 복원한다. journal 소스에서
+  leg 을 복원할 수 없는 분할 매도는 `exits_aggregated: true` + `lots_ambiguous: true`
+  (canary 표본 제외). **canary 판정용 원장은 `--source db` 로 뽑을 것.**
 - 같은 종목의 보유 구간이 겹치면(추가 매수로 lot 구분 불가) `lots_ambiguous: true`.
+- 집계 시 signal_events 는 `event_type=passed` 로 거른다 — G3 리스크 거부 이벤트에도
+  스냅샷이 남으므로 blocked 행을 세면 주문 없는 계획 위험이 섞인다.
 
 종료 코드: 0 정상 / 2 입력·쓰기 오류.
 """
@@ -80,41 +89,110 @@ def _ambiguous_ids(trades: Sequence[Any]) -> set:
     return ambiguous
 
 
-def _fills_and_exits(trade: Any, fee_calc) -> (List[Dict[str, Any]], List[Dict[str, Any]]):
+def _positive_int(value: Any) -> int:
+    if value is None:
+        return 0
+    try:
+        q = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return q if q > 0 else 0
+
+
+def _reconstructed_sell(trade: Any, pnl: Decimal, buy_amount: Decimal, buy_fee: Decimal,
+                        quantity: int, fee_calc) -> Dict[str, Any]:
+    """leg 이 없는 분할 매도 — 저널 누적 pnl 이 함의하는 평균 체결가 1건으로 되돌린다.
+
+    저널은 `exit_price` 를 마지막 leg 값으로 덮어쓰고 `exit_quantity` 만 누적하므로
+    (trade_journal.py record_exit) 마지막 가격 × 누적 수량은 실제 매도대금이 아니다.
+    누적 pnl 은 leg 별로 정확히 쌓이므로, 그 pnl 과 정합인 평균가·수수료로 복원한다.
+    수수료는 잔차로 맞춰 canary 의 net_pnl 재계산이 원장값과 정확히 일치하게 한다.
+    이 포지션은 `exits_aggregated`·`lots_ambiguous` 로 표본에서 제외된다.
+    """
+    gross = (pnl + buy_amount + buy_fee) / (Decimal("1") - fee_calc.config.total_sell_rate)
+    price = (gross / quantity).quantize(Decimal("0.0001"))
+    notional = price * quantity
+    return {
+        "ts": _iso(trade.exit_time),
+        "price": str(price),
+        "quantity": quantity,
+        "fee": str(notional - buy_amount - buy_fee - pnl),
+        "reason": trade.exit_type or trade.exit_reason or "",
+        "derived": True,
+    }
+
+
+def _fills_and_exits(trade: Any, fee_calc, closed: bool):
+    """(fills, exits, exits_aggregated) — 매수 1건 + 매도 leg 들."""
     buy_amount = Decimal(str(trade.entry_price)) * int(trade.entry_quantity)
+    buy_fee = fee_calc.calculate_buy_fee(buy_amount)
     fills = [{
         "ts": _iso(trade.entry_time),
         "side": "buy",
         "price": str(Decimal(str(trade.entry_price))),
         "quantity": int(trade.entry_quantity),
-        "fee": str(fee_calc.calculate_buy_fee(buy_amount)),
+        "fee": str(buy_fee),
     }]
     exits: List[Dict[str, Any]] = []
-    if trade.exit_quantity and trade.exit_price:
-        sell_amount = Decimal(str(trade.exit_price)) * int(trade.exit_quantity)
+    exit_quantity = _positive_int(trade.exit_quantity)
+    exit_price = _dec(trade.exit_price)
+    if exit_quantity == 0 or exit_price is None or exit_price <= 0:
+        return fills, exits, False
+
+    legs = getattr(trade, "sell_legs", None)          # --source db: trade_events SELL 행
+    aggregated = False
+    if isinstance(legs, list) and len(legs) > 0:
+        for leg in legs:
+            q = _positive_int(leg.get("quantity"))
+            p = _dec(leg.get("price"))
+            if q == 0 or p is None:
+                continue
+            exits.append({
+                "ts": _iso(leg.get("ts")),
+                "price": str(p),
+                "quantity": q,
+                "fee": str(fee_calc.calculate_sell_fee(p * q)),
+                "reason": leg.get("reason") or "",
+            })
+    if len(exits) == 0:
         sell = {
             "ts": _iso(trade.exit_time),
-            "price": str(Decimal(str(trade.exit_price))),
-            "quantity": int(trade.exit_quantity),
-            "fee": str(fee_calc.calculate_sell_fee(sell_amount)),
+            "price": str(exit_price),
+            "quantity": exit_quantity,
+            "fee": str(fee_calc.calculate_sell_fee(exit_price * exit_quantity)),
             "reason": trade.exit_type or trade.exit_reason or "",
         }
+        pnl = _dec(getattr(trade, "pnl", None))
+        # 완결 포지션인데 단일 leg 재구성이 저널 누적 pnl 과 어긋나면 분할 매도다.
+        if closed and pnl is not None:
+            recomputed = (Decimal(sell["price"]) * exit_quantity - Decimal(sell["fee"])
+                          - buy_amount - buy_fee)
+            if abs(recomputed - pnl) > Decimal("1"):
+                aggregated = True
+                sell = _reconstructed_sell(trade, pnl, buy_amount, buy_fee,
+                                           exit_quantity, fee_calc)
         exits.append(sell)
-        fills.append({**{k: sell[k] for k in ("ts", "price", "quantity", "fee")}, "side": "sell"})
-    return fills, exits
+
+    for e in exits:
+        fills.append({**{k: e[k] for k in ("ts", "price", "quantity", "fee")}, "side": "sell"})
+    return fills, exits, aggregated
 
 
 def _net_pnl(trade: Any, fills: List[Dict[str, Any]]) -> Optional[str]:
-    """수수료 포함 순손익 — 체결에서 재계산(canary 기술 검증과 같은 식)."""
-    sells = [f for f in fills if f["side"] == "sell"]
-    if not sells:
+    """수수료 포함 순손익 — **저널·DB 의 누적 `trade.pnl` 이 정본**.
+
+    분할 매도는 leg 별 pnl 이 누적되므로(trade_journal.record_exit) 원장 값이 정확하다.
+    체결 재구성값을 쓰면 마지막 leg 가격으로 전량을 판 것으로 계산돼 체계적으로 틀린다.
+    """
+    if not any(f["side"] == "sell" for f in fills):
         return None
-    buys = [f for f in fills if f["side"] == "buy"]
+    pnl = _dec(getattr(trade, "pnl", None))
+    if pnl is not None:
+        return str(pnl)
     total = Decimal("0")
-    for f in sells:
-        total += Decimal(f["price"]) * f["quantity"] - Decimal(f["fee"])
-    for f in buys:
-        total -= Decimal(f["price"]) * f["quantity"] + Decimal(f["fee"])
+    for f in fills:
+        amount = Decimal(f["price"]) * f["quantity"]
+        total += (amount - Decimal(f["fee"])) if f["side"] == "sell" else -(amount + Decimal(f["fee"]))
     return str(total)
 
 
@@ -129,17 +207,28 @@ def build_ledger(trades: Sequence[Any], exit_states: Dict[str, Dict],
         snapshot = ctx.get("entry_risk") if isinstance(ctx, dict) else None
         if not isinstance(snapshot, dict):
             snapshot = None
-        fills, exits = _fills_and_exits(trade, fee_calc)
-        closed = bool(trade.exit_quantity) and int(trade.exit_quantity) >= int(trade.entry_quantity)
-        state = exit_states.get(trade.symbol) or {}
+        closed = _positive_int(trade.exit_quantity) >= int(trade.entry_quantity) > 0
+        fills, exits, aggregated = _fills_and_exits(trade, fee_calc, closed)
+
+        # ExitManager 상태는 **보유 중인 포지션의 것**이다 — 완전 청산 시 삭제되므로
+        # closed 거래에 남아 있을 수 없고, 같은 종목 재보유 중이면 현재 포지션 값을
+        # 옛 거래에 오귀속하게 된다. closed 의 확정 분모는 체결 시 병합된 스냅샷에서 읽는다.
+        state = exit_states.get(trade.symbol) if not closed else None
+        if not isinstance(state, dict):
+            state = {}
 
         initial_risk: Optional[Decimal] = None
         actual_stop: Optional[Decimal] = None
         if snapshot is not None:
-            actual_stop = _dec(state.get("actual_stop_pct"))
+            # 1순위 체결 확정값(merge_confirmed_risk) → 2순위 보유 중 상태 → 3순위 계획 SL 재계산
+            actual_stop = _dec(snapshot.get("actual_stop_pct"))
+            if actual_stop is None:
+                actual_stop = _dec(state.get("actual_stop_pct"))
             if actual_stop is None:
                 actual_stop = _dec(snapshot.get("stop_pct"))
-            initial_risk = _dec(state.get("initial_risk_amount"))
+            initial_risk = _dec(snapshot.get("initial_risk_amount"))
+            if initial_risk is None:
+                initial_risk = _dec(state.get("initial_risk_amount"))
             if initial_risk is None and actual_stop is not None:
                 try:
                     initial_risk, _ = confirm_initial_risk(
@@ -165,7 +254,9 @@ def build_ledger(trades: Sequence[Any], exit_states: Dict[str, Dict],
             "exits": exits,
             "net_pnl": _net_pnl(trade, fills) if closed else None,
             "actual_stop_pct": str(actual_stop) if actual_stop is not None else None,
-            "lots_ambiguous": trade.id in ambiguous,
+            # 분할 매도 leg 복원 불가 → lot 구분 불가와 같은 취급(canary 표본 제외)
+            "lots_ambiguous": trade.id in ambiguous or aggregated,
+            "exits_aggregated": aggregated,
         })
 
     return {
@@ -249,6 +340,24 @@ async def _load_from_db(storage: Any, days: int) -> List[Any]:
                 holding_minutes=int(row["holding_minutes"] or 0),
                 market_context=ctx if isinstance(ctx, dict) else {},
             ))
+        # 분할 매도 leg 복원 — trades 는 마지막 매도가만 남기므로 trade_events SELL 행을 붙인다
+        legs = await storage.pool.fetch(
+            """SELECT trade_id, event_time, price, quantity, exit_type, exit_reason
+               FROM trade_events
+               WHERE event_type = 'SELL' AND trade_id = ANY($1::varchar[])
+               ORDER BY event_time""",
+            [t.id for t in trades],
+        )
+        by_trade: Dict[str, List[Dict[str, Any]]] = {}
+        for leg in legs:
+            by_trade.setdefault(leg["trade_id"], []).append({
+                "ts": leg["event_time"],
+                "price": leg["price"],
+                "quantity": leg["quantity"],
+                "reason": leg["exit_type"] or leg["exit_reason"] or "",
+            })
+        for t in trades:
+            t.sell_legs = by_trade.get(t.id, [])
         return trades
     finally:
         await storage.disconnect()

@@ -136,28 +136,6 @@ def test_confirm_initial_risk_rejects_invalid_stop():
         confirm_initial_risk([{"price": "1", "quantity": 1, "fee": "0"}], Decimal("0"))
 
 
-def test_applied_sha_is_cached(monkeypatch):
-    import src.utils.entry_risk as er
-    calls = []
-    monkeypatch.setattr(er, "_APPLIED_SHA", None)
-    monkeypatch.setattr(er.subprocess, "check_output",
-                        lambda *a, **k: calls.append(a) or "deadbeef\n")
-    assert applied_sha() == "deadbeef"
-    assert applied_sha() == "deadbeef"
-    assert len(calls) == 1
-
-
-def test_applied_sha_unknown_on_failure(monkeypatch):
-    import src.utils.entry_risk as er
-
-    def _boom(*a, **k):
-        raise OSError("git 없음")
-
-    monkeypatch.setattr(er, "_APPLIED_SHA", None)
-    monkeypatch.setattr(er.subprocess, "check_output", _boom)
-    assert applied_sha() == "unknown"
-
-
 # ── 엔진: 이벤트 복사본 양쪽에 스냅샷 ──────────────────────────────────────────
 
 def test_snapshot_lands_in_both_metadata_copies(home, monkeypatch):
@@ -384,7 +362,9 @@ def test_exporter_ledger_passes_canary(tmp_path, monkeypatch, home):
     _register(em)
     em.set_initial_risk(SYM, Decimal("69500"), Decimal("5.0"))
 
-    ledger = build_ledger(list(j._trades.values()), em._persisted, applied_sha=SHA)
+    # 실제 stage 파일 경유 (closed 포지션은 상태를 읽지 않고 자기 체결로 재계산한다)
+    ledger = build_ledger(list(j._trades.values()),
+                          exporter.load_exit_states(em._stage_file), applied_sha=SHA)
     pos = ledger["positions"][0]
     assert pos["status"] == "closed"
     assert pos["cohort_id"] == "risk-sepa_trend-v1"
@@ -434,3 +414,153 @@ def test_exporter_cli_writes_ledger(tmp_path, monkeypatch, home):
     assert rc == 0
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["version"] == 1 and len(data["positions"]) == 1
+
+
+# ── 리뷰 반영(2026-09-14): 분할 매도 net_pnl · 상태 오귀속 회귀 ────────────────
+
+from datetime import datetime as _dt  # noqa: E402
+
+from src.core.evolution.trade_journal import TradeRecord  # noqa: E402
+from src.utils.entry_risk import merge_confirmed_risk  # noqa: E402
+
+
+def _partial_exit_journal(tmp_path, monkeypatch, trade_id="P1"):
+    """139주 매수 → 13주 @11,000 + 126주 @10,700 분할 매도 (리뷰 blocking #1 재현값)."""
+    j = _journal(tmp_path, monkeypatch)
+    j.record_entry(trade_id=trade_id, symbol=SYM, name="삼성전자", entry_price=10000,
+                   entry_quantity=139, entry_reason="돌파", entry_strategy="sepa_trend",
+                   market_context={"entry_risk": _snapshot()}, entry_tags=["a", "b", "c"])
+    j.record_exit(trade_id=trade_id, exit_price=11000, exit_quantity=13,
+                  exit_reason="1차익절", exit_type="take_profit_1")
+    j.record_exit(trade_id=trade_id, exit_price=10700, exit_quantity=126,
+                  exit_reason="트레일링", exit_type="trailing")
+    return j._trades[trade_id]
+
+
+def _run_canary(tmp_path, ledger, name="c"):
+    lp, out = tmp_path / f"{name}_ledger.json", tmp_path / f"{name}_report.json"
+    lp.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
+    assert canary.main(["--input", str(lp), "--cohort", "risk-sepa_trend-v1",
+                        "--output", str(out), "--sha", SHA]) == 0
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_partial_exit_net_pnl_uses_journal_total(tmp_path, monkeypatch, home):
+    """저널 소스: 마지막 leg 가격 × 누적 수량으로 재구성하면 net_pnl 이 3,892원 틀린다."""
+    trade = _partial_exit_journal(tmp_path, monkeypatch)
+    assert round(trade.pnl) == 97828                       # 저널 누적(수수료 포함)
+    ledger = exporter.build_ledger([trade], {}, applied_sha=SHA)
+    pos = ledger["positions"][0]
+    assert Decimal(pos["net_pnl"]) == Decimal(str(trade.pnl))
+    assert pos["exits_aggregated"] is True                  # leg 복원 불가
+    assert pos["lots_ambiguous"] is True                    # → canary 표본 제외
+    report = _run_canary(tmp_path, ledger, "agg")
+    assert report["technical_status"] == "passed", report["technical_issues"]
+    assert report["sample"]["excluded"]["lots_ambiguous"] == 1
+
+
+def test_partial_exit_db_legs_reconstruct_fills(tmp_path, monkeypatch, home):
+    """--source db: trade_events SELL 행으로 leg 복원 → 표본에 포함되고 R 도 정확."""
+    trade = _partial_exit_journal(tmp_path, monkeypatch, trade_id="P2")
+    trade.market_context["entry_risk"] = merge_confirmed_risk(
+        trade.market_context["entry_risk"], Decimal("69500"), Decimal("5.0"),
+        [{"price": "10000", "quantity": 139, "fee": "195"}])
+    trade.sell_legs = [
+        {"ts": "2026-09-15T10:00:00", "price": "11000", "quantity": 13,
+         "reason": "take_profit_1"},
+        {"ts": "2026-09-16T10:00:00", "price": "10700", "quantity": 126,
+         "reason": "trailing"},
+    ]
+    ledger = exporter.build_ledger([trade], {}, applied_sha=SHA)
+    pos = ledger["positions"][0]
+    assert pos["exits_aggregated"] is False
+    assert len(pos["exits"]) == 2 and pos["lots_ambiguous"] is False
+    assert Decimal(pos["net_pnl"]) == Decimal(str(trade.pnl))
+    report = _run_canary(tmp_path, ledger, "legs")
+    assert report["technical_status"] == "passed", report["technical_issues"]
+    assert report["sample"]["closed"] == 1
+
+
+def _record(trade_id, *, entry, exit_=None, ctx=None, qty=139, price=10000,
+            exit_price=10500, pnl=0.0):
+    return TradeRecord(
+        id=trade_id, symbol=SYM, name="삼성전자", entry_time=entry, entry_price=price,
+        entry_quantity=qty, entry_reason="돌파", entry_strategy="sepa_trend",
+        exit_time=exit_, exit_price=exit_price if exit_ is not None else 0.0,
+        exit_quantity=qty if exit_ is not None else 0, exit_type="trailing",
+        pnl=pnl, market_context=ctx if ctx is not None else {},
+    )
+
+
+def test_closed_trade_does_not_borrow_current_position_state(home):
+    """같은 종목 재보유 시 옛 closed 거래가 현재 포지션의 확정 분모를 빌려오면 안 된다."""
+    em = _em()
+    _register(em)
+    em.set_initial_risk(SYM, Decimal("30000"), Decimal("4.0"))
+    states = exporter.load_exit_states(em._stage_file)
+    assert states[SYM]["initial_risk_amount"] == "30000"     # 실제 stage 파일 경유
+
+    old = _record("T_OLD", entry=_dt(2026, 9, 1, 9, 5), exit_=_dt(2026, 9, 3, 14, 0),
+                  ctx={"entry_risk": _snapshot()}, pnl=66197.0)
+    new = _record("T_NEW", entry=_dt(2026, 9, 10, 9, 5), ctx={"entry_risk": _snapshot()})
+    ledger = exporter.build_ledger([old, new], states, applied_sha=SHA)
+    by_id = {p["position_id"]: p for p in ledger["positions"]}
+
+    # closed: 현재 포지션 상태(30,000/4.0) 오귀속 금지 → 자기 체결로 재계산
+    assert by_id["T_OLD"]["status"] == "closed"
+    assert Decimal(by_id["T_OLD"]["initial_risk_amount"]) == Decimal("69500")
+    assert Decimal(by_id["T_OLD"]["actual_stop_pct"]) == Decimal("5.0")
+    # open: ExitManager 확정 상태 우선 (폴백 69,500 과 다른 값이 실제로 쓰인다)
+    assert Decimal(by_id["T_NEW"]["initial_risk_amount"]) == Decimal("30000")
+    assert Decimal(by_id["T_NEW"]["actual_stop_pct"]) == Decimal("4.0")
+
+
+def test_closed_trade_prefers_confirmed_snapshot(home):
+    """체결 확정값이 market_context.entry_risk 에 병합돼 있으면 그것을 우선 읽는다."""
+    ctx = {"entry_risk": merge_confirmed_risk(
+        _snapshot(), Decimal("69000"), Decimal("5.0"),
+        [{"price": "10000", "quantity": 139, "fee": "195"}])}
+    old = _record("T_C", entry=_dt(2026, 9, 1, 9, 5), exit_=_dt(2026, 9, 3, 14, 0),
+                  ctx=ctx, pnl=66197.0)
+    ledger = exporter.build_ledger([old], {SYM: {"initial_risk_amount": "30000",
+                                                 "actual_stop_pct": "4.0"}}, applied_sha=SHA)
+    pos = ledger["positions"][0]
+    assert Decimal(pos["initial_risk_amount"]) == Decimal("69000")
+    assert Decimal(pos["actual_stop_pct"]) == Decimal("5.0")
+    assert Decimal(pos["planned_vs_filled_risk_delta"]) == (
+        Decimal("69000") - Decimal("69509.75"))
+
+
+def test_merge_confirmed_risk_is_idempotent_across_partial_fills():
+    """복수 부분체결에서 2회차 호출이 R 분모를 바꾸거나 중복 기록하지 않는다."""
+    snap = _snapshot()
+    first = [{"price": "10000", "quantity": 100, "fee": "140"}]
+    both = first + [{"price": "10050", "quantity": 39, "fee": "55"}]
+    ir1, _ = confirm_initial_risk(both, Decimal("5.0"))
+    merged = merge_confirmed_risk(snap, ir1, Decimal("5.0"), both)
+    assert snap.get("initial_risk_amount") is None          # 원본 불변
+    assert Decimal(merged["initial_risk_amount"]) == Decimal("69597.50")
+    assert merged["filled_quantity"] == 139
+    assert Decimal(merged["entry_cost"]) == Decimal("1391950")
+
+    # 2회차(첫 부분체결만으로 재호출) — 분모 불변, 키 추가 없음
+    ir2, _ = confirm_initial_risk(first, Decimal("5.0"))
+    again = merge_confirmed_risk(merged, ir2, Decimal("5.0"), first)
+    assert again == merged
+
+
+def test_applied_sha_is_precomputed_without_subprocess(monkeypatch):
+    """엔진 경로(사이징)는 캐시만 읽는다 — 이벤트 루프에서 subprocess 를 띄우지 않는다."""
+    import src.utils.entry_risk as er
+
+    def _boom(*a, **k):
+        raise AssertionError("applied_sha() 가 subprocess 를 호출했다")
+
+    monkeypatch.setattr(er.subprocess, "check_output", _boom)
+    assert isinstance(applied_sha(), str) and applied_sha() != ""
+
+
+def test_applied_sha_unknown_when_detection_fails(monkeypatch):
+    import src.utils.entry_risk as er
+    monkeypatch.setattr(er, "_APPLIED_SHA", None)
+    assert applied_sha() == "unknown"

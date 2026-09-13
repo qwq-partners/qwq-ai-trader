@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
@@ -29,9 +29,9 @@ from .sizing import planned_risk
 from .stop_policy import StopDecision
 
 __all__ = [
-    "ENTRY_RISK_REQUIRED", "ENTRY_RISK_VERSION", "build_entry_risk_snapshot",
-    "confirm_initial_risk", "planned_vs_filled_delta", "effective_config_hash", "applied_sha",
-    "cohort_id",
+    "ENTRY_RISK_REQUIRED", "ENTRY_RISK_VERSION", "CONFIRMED_RISK_KEYS",
+    "build_entry_risk_snapshot", "confirm_initial_risk", "merge_confirmed_risk",
+    "planned_vs_filled_delta", "effective_config_hash", "applied_sha", "cohort_id",
 ]
 
 ENTRY_RISK_VERSION = 1
@@ -132,6 +132,61 @@ def confirm_initial_risk(
     return cost * stop / 100, cost
 
 
+def merge_confirmed_risk(
+    entry_risk: Mapping[str, Any],
+    initial_risk_amount: Any,
+    actual_stop_pct: Any,
+    fills: Sequence[Mapping[str, Any]],
+) -> dict:
+    """체결 확정값을 진입 스냅샷에 병합한 **새 dict** (원본 불변).
+
+    A 배선: 첫 매수 주문의 체결이 확정된 시점에
+    `record_entry(market_context={..., "entry_risk": merge_confirmed_risk(...)})` 로 원장에 남긴다.
+    거래별로 분모가 원장에 박히므로, 같은 종목을 재보유해도 옛 거래에 현재 포지션 값이
+    오귀속되지 않는다(ExitManager 상태는 완전 청산 시 삭제된다).
+
+    **이미 확정값이 있으면 그대로 돌려준다** — 복수 부분체결에서 2회차 이후 호출이
+    R 분모를 바꾸거나 키를 중복 기록하지 않는다(ExitManager.set_initial_risk 와 같은 규약).
+    """
+    merged = dict(entry_risk) if isinstance(entry_risk, Mapping) else {}
+    if merged.get("initial_risk_amount") is not None:
+        return merged
+    try:
+        amount = Decimal(str(initial_risk_amount))
+        stop = Decimal(str(actual_stop_pct))
+    except (InvalidOperation, ValueError, TypeError):
+        return merged
+    if not amount.is_finite() or amount <= 0 or not stop.is_finite() or stop <= 0:
+        return merged
+
+    quantity = 0
+    cost = Decimal("0")
+    for f in fills:
+        q = int(f["quantity"])
+        if q <= 0:
+            continue
+        quantity += q
+        cost += Decimal(str(f["price"])) * q
+    if quantity <= 0:
+        return merged
+
+    merged["initial_risk_amount"] = str(amount)
+    merged["actual_stop_pct"] = str(stop)
+    merged["filled_quantity"] = quantity
+    merged["entry_cost"] = str(cost)
+    planned = merged.get("planned_risk_amount")
+    if planned is not None:
+        merged["planned_vs_filled_risk_delta"] = str(planned_vs_filled_delta(planned, amount))
+    return merged
+
+
+# 체결 확정 시 스냅샷에 추가되는 키 (exporter 가 closed 포지션의 분모로 우선 읽는다)
+CONFIRMED_RISK_KEYS: Tuple[str, ...] = (
+    "initial_risk_amount", "actual_stop_pct", "filled_quantity", "entry_cost",
+    "planned_vs_filled_risk_delta",
+)
+
+
 def planned_vs_filled_delta(planned_risk_amount: Any, initial_risk_amount: Any) -> Decimal:
     """확정 − 계획 (음수 = 계획보다 작은 위험으로 체결)."""
     return Decimal(str(initial_risk_amount)) - Decimal(str(planned_risk_amount))
@@ -157,17 +212,27 @@ def _is_secret_key(key: Any) -> bool:
     return any(token in name for token in _SECRET_TOKENS)
 
 
+def _detect_applied_sha() -> str:
+    """`git rev-parse HEAD` — **모듈 로드 시 1회만** 실행한다."""
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            stderr=subprocess.DEVNULL, text=True, timeout=5,
+        )
+        sha = out.strip()
+        return sha if sha else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def applied_sha() -> str:
-    """현재 체크아웃 SHA (1회 캐시). 조회 실패는 "unknown"."""
-    global _APPLIED_SHA
-    if _APPLIED_SHA is None:
-        try:
-            out = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(Path(__file__).resolve().parents[2]),
-                stderr=subprocess.DEVNULL, text=True, timeout=5,
-            )
-            _APPLIED_SHA = out.strip() or "unknown"
-        except Exception:
-            _APPLIED_SHA = "unknown"
-    return _APPLIED_SHA
+    """현재 체크아웃 SHA. **캐시만 읽는다** — 사이징 경로(이벤트 루프)에서 프로세스를 띄우지 않는다.
+
+    값은 모듈 로드 시점(프로세스 시작)에 선계산된다. 캐시가 비어 있으면 "unknown".
+    """
+    return _APPLIED_SHA if _APPLIED_SHA is not None else "unknown"
+
+
+# 모듈 로드 시 선계산 (import 는 프로세스 시작 시점 — asyncio 루프 밖)
+_APPLIED_SHA = _detect_applied_sha()

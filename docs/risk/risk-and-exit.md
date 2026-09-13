@@ -412,7 +412,12 @@ risk 모드 체결을 골라낼 수 없었다. 이제 스냅샷을 `event.metada
 ```
 - `cohort_id` = `risk-<strategy>-v1`. 금액은 문자열 Decimal, 시각은 ISO8601, 수량은 int.
 - `config_hash` 는 **자격증명 제외 allowlist**(`risk`/`kr`/`us`/`exit`/`strategies`/`factor_budgets` 등 섹션 +
-  key/secret/token/cano/url 류 키 제외)만 sha256 한다. `applied_sha` 는 현재 체크아웃 SHA 1회 캐시(조회 실패 시 `unknown`).
+  key/secret/token/cano/url 류 키 제외)만 sha256 한다. `applied_sha` 는 현재 체크아웃 SHA —
+  **모듈 로드 시(프로세스 시작) 1회 선계산**하고 `applied_sha()` 는 캐시만 읽는다(조회 실패 시 `unknown`).
+  사이징은 동기 경로라 이벤트 루프에서 `git` 프로세스를 띄우지 않는다.
+- **집계 시 `signal_events` 는 `event_type=passed` 로 거른다.** G3 리스크 검증(`_risk_validator`/
+  `can_open_position`)에서 거부된 이벤트에도 스냅샷이 남으므로(수량 0 만 제외 대상) blocked 행을 세면
+  주문 없는 계획 위험이 섞인다 — 엔진 동작은 그대로 두고 집계 쪽에서 거른다.
 - 생성 시점은 **모든 오버레이·최소금액·3주 보정·위험 상한이 끝난 최종 수량 확정 후**. 수량 0(주문·pending 미생성)에는
   스냅샷을 남기지 않는다 — 주문 없는 계측 태그 금지.
 
@@ -426,22 +431,53 @@ risk 모드 체결을 골라낼 수 없었다. 이제 스냅샷을 `event.metada
   stage 파일(`exit_stages_YYYY-MM-DD.json`)의 `initial_risk_amount`·`actual_stop_pct` 로 영속화·복원된다(구 파일에 키가
   없으면 None = 미계측, 기존 스키마 호환).
 - 별도 추가 매수는 주문별 위험을 분리 기록한다. 원장에서 lot 구분이 불가능하면 `lots_ambiguous: true` 로 표본에서 제외.
+- 확정값은 **체결 시 `merge_confirmed_risk(entry_risk, initial_risk_amount, actual_stop_pct, fills)`
+  로 스냅샷에 병합해 `market_context.entry_risk` 에 저장한다**(`initial_risk_amount`/`actual_stop_pct`/
+  `filled_quantity`/`entry_cost`/`planned_vs_filled_risk_delta` 추가). 순수 함수·원본 불변이고,
+  이미 확정값이 있으면 그대로 돌려주므로 복수 부분체결에서 2회차 이후 호출이 분모를 바꾸거나 중복 기록하지 않는다.
+  ExitManager 상태는 완전 청산 시 삭제되므로 **closed 거래의 분모는 원장 스냅샷이 유일한 출처**다.
+
+**exporter 의 분모·순손익 규칙** (`scripts/export_risk_ledger.py`)
+- `initial_risk_amount` 우선순위: ①스냅샷 확정값 → ②**open 포지션에 한해** ExitManager 영속 상태 →
+  ③매수 체결 × `entry_risk.stop_pct` 재계산. closed 에 상태를 적용하면 같은 종목 재보유 시
+  현재 포지션 값이 옛 거래에 오귀속된다.
+- `net_pnl` 은 **원장의 누적 `trade.pnl`(수수료 포함)** 이 정본. 저널 `record_exit` 는 `exit_price` 를
+  마지막 leg 로 덮어쓰고 `exit_quantity` 만 누적하므로, 체결 재구성값을 쓰면 분할 매도 건이 체계적으로 틀린다
+  (재현: 139주 @10,000 → 13주 @11,000 + 126주 @10,700 에서 97,828 vs 93,936, R 1.408 vs 1.352).
+- 매도 leg 은 `--source db` 에서 `trade_events` SELL 행으로 복원한다. journal 소스라 복원이 불가능한
+  분할 매도는 `exits_aggregated: true` + `lots_ambiguous: true` 로 **표본에서 제외**한다
+  (fills 는 누적 pnl 과 정합인 평균 체결가로 되돌려 기술 검증만 통과시킨다).
+  → **canary 판정용 원장은 `--source db` 로 뽑을 것.**
 
 **legacy/unmeasured**: 과거 거래·수동 포지션처럼 `market_context.entry_risk` 가 없는 건은 원장에 `entry_risk: null` /
 `cohort_id: "legacy-unmeasured"` 로 내보낸다. **현재 설정으로 초기 위험을 추정해 canary 표본에 넣지 않는다.**
 
 **원장 만들기(오프라인, 주문·설정 변경 없음)**
 ```bash
-venv/bin/python scripts/export_risk_ledger.py --source journal --output ledger.json --days 90
+venv/bin/python scripts/export_risk_ledger.py --source db --output ledger.json --days 90
 venv/bin/python scripts/review_risk_canary.py --input ledger.json --cohort risk-sepa_trend-v1 --output report.json
 ```
 `--source db` 는 `TradeStorage` 연결을 재사용하되 `market_context` 를 포함해 직접 SELECT 한다
 (`TradeJournal.sync_from_db` 는 그 컬럼을 조회하지 않아 스냅샷이 유실된다).
 
 **배선 현황(2026-09-14)**: 엔진(스냅샷 생성·양쪽 메타·`_log_sig` allowlist)·저장(TradeStorage JSONB / TradeJournal JSON
-그대로 직렬화)·ExitManager 영속·exporter·canary 왕복은 완료. **남은 지점은 `src/schedulers/kr_scheduler.py` 체결 경로**:
-`_sig_metadata["entry_risk"]` 를 `record_entry(market_context=...)` 에 병합하고, 매수 주문 완료 시
-`confirm_initial_risk` → `ExitManager.set_initial_risk` 로 R 분모를 확정한다(담당 A).
+그대로 직렬화)·ExitManager 영속·exporter·canary 왕복은 완료. **남은 지점은 `src/schedulers/kr_scheduler.py`
+체결 경로(담당 A)** — 이 브랜치만 배포되면 운영 원장의 `entry_risk` 는 전부 비어 `legacy-unmeasured` 로 나온다.
+
+A 배선 계약 (`_check_fills` 의 BUY 체결 분기, origin/main 기준):
+1. `confirm_initial_risk(fills, actual_stop_pct)` → `(initial_risk_amount, entry_cost)`.
+   `fills` 는 그 주문의 매수 체결 `[{price, quantity, fee}]` 누적, `actual_stop_pct` 는
+   `ExitManager.resolve_stop(...)` 이 실제로 쓴 값(계획 SL 이 아니라 등록된 SL).
+2. `ExitManager.set_initial_risk(symbol, initial_risk_amount, actual_stop_pct)` — 최초 1회만 기록
+   (등록 전 호출 시 False + 경고 로그, `_pending_exit_registrations` 재시도 뒤 다시 호출).
+3. `record_entry(market_context=...)` 의 dict 에
+   `"entry_risk": merge_confirmed_risk(_sig_metadata.get("entry_risk"), initial_risk_amount,
+   actual_stop_pct, fills)` 를 넣는다(스냅샷이 없으면 `{}` 반환 — 키를 만들지 않는다).
+   `_sig_context_snapshot` 머지 이후에 넣어 덮어쓰이지 않게 한다.
+4. **`_pending_signal_cache` 수명**: BUY journal 기록 분기가 `_sig_cache.pop(fill.symbol, {})` 로
+   캐시를 소비한다. 부분체결이면 첫 체결에서 스냅샷이 사라져 잔여 체결·재시도 경로가 빈 메타를 쓴다.
+   → 주문이 완결(`pending` 해제)될 때까지는 `pop` 대신 `get` 으로 읽고, 주문 종료·pending 만료
+   처리에서 한 번만 제거할 것. 확정 자체는 2·3 모두 멱등(재호출해도 분모 불변·중복 키 없음)이다.
 테스트: `tests/test_entry_risk_lifecycle.py` (from_signal → 사이징 → 주문 캐시 → signal_events → 저장/복원 → exporter → canary 왕복).
 
 ## ATR 포지션 사이징 (src/utils/sizing.py)
