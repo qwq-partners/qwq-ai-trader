@@ -169,6 +169,7 @@
 
 ### 전략·아키텍처 종합 리뷰 (2026-09-13) — `docs/reviews/strategy-architecture-review-2026-09.md`
 - **1단계 반영(2026-09-13)**: 배분 core 0 / gap 15 / sepa 40 / vcp 10 (합 65, 잔여 현금) · `TEAM_CONVICTION=0` · 계측 기준 교체. 2단계(청산 단일화·회전 억제·위험 사이징)는 백테스터 exit_policy A/B 후 게이트 경유
+- **2단계 A/B 완료(2026-09-13, `docs/research/exit-policy-ab-2026-09.md`)**: 청산(ladder/channel)×보유(current/extended)×사이징(nominal/risk) 2×2×2, 6·12개월, 포지션 단위 R — 두 윈도우 모두 통과한 셀은 sepa `ladder/current/risk`(**위험 기반 사이징만**, MDD 절반·회전 절반) 하나. 채널 청산·회전 억제는 기각(채널은 보유 규칙 해제 시에만 개선이나 아웃라이어 의존 → shadow 유지). 권고 파라미터: equity×0.7%/stop, 상한 18%, 동시 7 — canary·게이트 경유, ExitConfig/REGIME_EXIT_PARAMS 변경 없음. 백테스터 축: `scripts/backtest_strategies.py --exit-policy/--holding-policy/--sizing` (기본값 불변)
 - 실거래 266건: 수수료 전 총손익 ≈ 0, 차감 후 -139만, t=-0.18, KOSPI +37% vs 자산 -7.5% — **엣지 미입증**
 - 구조 원인: 연 91배 회전(수수료 = 손실 전부) · 1차 익절이 타이트 청산 무장(p90 +4.9%) · 명목 사이징 3~4종목 집중 · 배분 55%가 근거 없는 라인 · 레짐 4겹 후행
 - 판정 기준은 **KODEX200 초과수익 + 손절 클립** (절대수익 판정으로 04-23·08-20 결정이 뒤집힘). 권고 1~8·금지 목록은 리뷰 §5~6
