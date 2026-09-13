@@ -5,7 +5,7 @@
 ## 문서 목록
 
 ### Architecture (아키텍처)
-- [system-overview.md](architecture/system-overview.md) — 전체 시스템 구조, 신호 흐름(KR/US), 비동기 아키텍처, 핵심 파일
+- [system-overview.md](architecture/system-overview.md) — 실행 수명주기, KR 이벤트 경로와 US 직접 스케줄러 경로, 설정·스케줄·상태 경계
 - [harness-evolution-design.md](architecture/harness-evolution-design.md) — 하네스 엔지니어링 적용 설계 (2026-08-10, Claude+Codex 협업): weakness_miner·기각 후보 원장·Wiki ACE 격상·편집 표면 정책·4페이즈 로드맵
 
 ### Strategies (전략)
