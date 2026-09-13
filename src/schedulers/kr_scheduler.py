@@ -922,6 +922,16 @@ class KRScheduler:
                 except Exception:
                     pass
 
+    def _resolve_registration_params(self, strategy):
+        """sync 경로 ExitManager 등록 파라미터 — 우선순위 strategy → _sync → {} (복사본 반환).
+
+        최초 sync 등록과 fill_check 재시도가 같은 청산 정책을 쓰게 하는 단일 조회점
+        (2026-09-14 리뷰 F6: 재시도가 `_sync` 폴백을 잃고 빈 설정으로 등록하던 결함).
+        """
+        params = self.bot._strategy_exit_params
+        fallback = params.get("_sync", {})
+        return dict(params.get(strategy, fallback) if strategy else fallback)
+
     async def _sync_portfolio(self):
         """KIS API와 포트폴리오 동기화"""
         bot = self.bot
@@ -944,19 +954,27 @@ class KRScheduler:
             # 잔고 응답의 주식평가액이 0이면 진짜 빈 계좌(수동 전량 매도 등) — 유령 정리로 진행.
             # 평가액 > 0 인데 포지션 0건일 때만 API 오류로 본다 (2026-09-03)
             _kis_stock_value = float(balance.get("stock_value") or 0)
-            # 부분 누락(일부 종목만 빠진 응답)도 1회 재시도 — 매도 pending 종목은 정상 누락이라 제외 (2026-09-13)
-            _missing = {
-                s for s in bot_symbols - kis_symbols if s not in bot._exit_pending_symbols
-            }
-            if _missing and _kis_stock_value > 0:
-                logger.warning(
-                    f"[동기화] KIS 포지션 응답에 봇 보유 {len(_missing)}/{len(bot_symbols)}건 누락"
-                    f"({', '.join(sorted(_missing))}) → 5초 후 재시도"
+            # 재시도 조건 두 갈래 (2026-09-14 리뷰 F3): 전체 빈 응답은 매도 pending 여부와 무관하게 방어하고,
+            # 부분 누락(일부 종목만 빠짐)만 매도 pending 종목을 정상 누락으로 제외한다 (2026-09-13).
+            # 기존엔 pending 제외 집합 하나로 판정해 봇 보유 전부가 매도 pending이면 빈 응답을 재조회 없이
+            # 유령 루프로 넘겼고, pending 31분이면 실제 포지션을 삭제했다.
+            empty_inconsistent = bool(bot_symbols) and not kis_symbols and _kis_stock_value > 0
+            partial_missing = (bot_symbols - kis_symbols) - bot._exit_pending_symbols
+            needs_retry = empty_inconsistent or (bool(partial_missing) and _kis_stock_value > 0)
+            if needs_retry:
+                _why = (
+                    f"KIS 포지션 0건 응답(주식평가액 {_kis_stock_value:,.0f}원, 봇 보유 {len(bot_symbols)}건)"
+                    if empty_inconsistent else
+                    f"KIS 포지션 응답에 봇 보유 {len(partial_missing)}/{len(bot_symbols)}건 누락"
+                    f"({', '.join(sorted(partial_missing))})"
                 )
+                logger.warning(f"[동기화] {_why} → 5초 후 재시도")
                 await asyncio.sleep(5)
                 kis_positions = await bot.broker.get_positions()
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
-                if bot_symbols and not kis_symbols:
+                # 재시도에도 평가액 양수·전체 빈 응답이면 동기화 실패 기록 + 상태 보존
+                # (pending 경과 시간·좀비 후보 마킹은 이 방어를 우회하지 못한다)
+                if bool(bot_symbols) and not kis_symbols and _kis_stock_value > 0:
                     logger.warning(
                         "[동기화] 재시도에도 KIS 포지션 0건 → API 오류로 간주, 동기화 건너뜀"
                     )
@@ -1045,10 +1063,8 @@ class KRScheduler:
                         f"전략={pos.strategy or '?'})"
                     )
                     if bot.exit_manager:
-                        # 전략별 청산 파라미터 (sync 포지션은 _sync 폴백)
-                        _ep = bot._strategy_exit_params.get(
-                            pos.strategy, bot._strategy_exit_params.get("_sync", {})
-                        ) if pos.strategy else bot._strategy_exit_params.get("_sync", {})
+                        # 전략별 청산 파라미터 (sync 포지션은 _sync 폴백) — 재시도와 같은 조회점
+                        _ep = self._resolve_registration_params(pos.strategy)
                         try:
                             bot.exit_manager.register_position(
                                 pos,
@@ -1896,6 +1912,9 @@ JSON:
             while bot.running:
                 try:
                     open_orders = await bot.broker.get_open_orders()
+                    # 재시도 대상은 이전 주기까지 쌓인 것만 — 이번 주기에 "포지션 미생성"으로 막 넣은 종목을
+                    # 같은 주기 아래 재시도 블록이 '포지션 없음 = 삭제됨'으로 즉시 버리던 결함 방지 (2026-09-14)
+                    _retry_syms = list(self._pending_exit_registrations)
 
                     if open_orders:
                         fills = await bot.broker.check_fills()
@@ -2197,7 +2216,9 @@ JSON:
                                         )
                                         logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%, ATR-hint={_atr_hint})")
                                     except Exception as e:
-                                        logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패: {e}")
+                                        # 포지션은 있는데 등록만 실패 = 손절 부재 → 다음 주기 재시도 대기열 (2026-09-14)
+                                        self._pending_exit_registrations.add(fill.symbol)
+                                        logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열: {e}")
                                 else:
                                     # 포지션 미생성 — 다음 fill_check 주기에 재시도
                                     self._pending_exit_registrations.add(fill.symbol)
@@ -2364,15 +2385,15 @@ JSON:
                                     except Exception as e:
                                         logger.debug(f"[체결] {fill.symbol} WS 구독 갱신 실패: {e}")
 
-                    # 미등록 종목 재시도 (이전 주기에서 포지션 미생성으로 실패한 종목)
-                    if self._pending_exit_registrations and bot.exit_manager:
+                    # 미등록 종목 재시도 (이전 주기에서 포지션 미생성·등록 예외로 실패한 종목)
+                    # 성공한 등록만 완료 처리, 실패 중에는 대기열 유지, 포지션이 사라진 종목만 정리
+                    if _retry_syms and bot.exit_manager:
                         _retry_done = set()
-                        for _retry_sym in list(self._pending_exit_registrations):
+                        for _retry_sym in _retry_syms:
                             _retry_pos = bot.engine.portfolio.positions.get(_retry_sym)
                             if _retry_pos:
-                                _retry_params = bot._strategy_exit_params.get(
-                                    _retry_pos.strategy, {}
-                                ) if _retry_pos.strategy else {}
+                                # 최초 sync 등록과 동일 조회점 (strategy → _sync → {}) — 리뷰 F6
+                                _retry_params = self._resolve_registration_params(_retry_pos.strategy)
                                 # 시그널 캐시에서 atr_pct hint 추출 (ATR-linked trailing용)
                                 _retry_atr_hint: Optional[float] = None
                                 try:
