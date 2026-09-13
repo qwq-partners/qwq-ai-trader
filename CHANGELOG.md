@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — feat: 위험 사이징 canary 오프라인 리포트 CLI (`scripts/review_risk_canary.py`) + 하위 에이전트 위임 규칙
+
+리뷰 후속 계획서(`docs/superpowers/plans/2026-09-13-review-remediation.md`) T8. 원장 JSON·벤치마크 CSV만 읽는 오프라인 도구 —
+주문·설정 변경 기능 없음. R = net_pnl ÷ 최초 진입 확정 위험금액, 벤치마크는 부분청산 수량 가중, 결손 시 null.
+status(`insufficient_sample`/`hold_expansion`/`further_review`)와 technical_status 분리, nominal 복귀는 절대 출력하지 않음.
+테스트 18건 (`tests/test_risk_canary_report.py`). 원장 exporter 는 T3 에서 구현 예정(스키마는 모듈 docstring 이 계약).
+CLAUDE.md 에 "하위 에이전트 위임 규칙"(작업별 모델·effort 명시) 추가.
+
 ## 2026-09-13 — feat: 위험 기반 사이징 (`risk.sizing_mode: risk`) — 리뷰 2단계, 백테스트 A/B 승자 축 적용
 
 `docs/research/exit-policy-ab-2026-09.md`(PR #29)에서 두 윈도우 모두 게이트를 통과한 유일 축을 실엔진에 구현.
