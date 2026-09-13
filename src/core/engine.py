@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 import sys
 
 from loguru import logger
+
+from ..utils.sizing import atr_position_multiplier, risk_position_value
 from src.data.storage.signal_event_storage import SignalEventStorage as _SigLog
 
 from .event import (
@@ -2418,6 +2420,40 @@ class RiskManager:
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
         position_value = min(pct_value, max_value, available)
 
+        # 위험 기반 사이징 (2026-09-13 리뷰 권고 ③ — 백테스트 A/B에서 두 윈도우 모두 게이트를 통과한
+        # 유일한 축, docs/research/exit-policy-ab-2026-09.md). 건당 자본 위험 = risk_per_trade_pct.
+        # 손절폭은 ExitManager와 같은 규칙(run_trader가 ExitConfig 값을 _exit_stop_params 로 주입)이라
+        # 사이징↔손절 정합. 강도 배율·전략별 비율은 쓰지 않는다(백테스트 조건과 동일).
+        _risk_atr: Optional[float] = None
+        if getattr(self.config, "sizing_mode", "nominal") == "risk" and not _is_core:
+            _meta = signal.signal.metadata if (signal.signal is not None
+                                               and signal.signal.metadata is not None) else {}
+            _raw_atr = _meta.get("atr_pct")
+            if _raw_atr is not None:
+                try:
+                    _risk_atr = float(_raw_atr)
+                except (TypeError, ValueError):
+                    _risk_atr = None
+            _risk_value, _risk_stop = risk_position_value(
+                equity, _risk_atr,
+                risk_per_trade_pct=self.config.risk_per_trade_pct,
+                max_position_pct=self.config.risk_max_position_pct,
+                stop_params=getattr(self, "_exit_stop_params", None) or (2.0, 4.0, 8.0),
+                fallback_stop_pct=self.config.default_stop_loss_pct,
+            )
+            max_value = min(max_value, equity * Decimal(str(self.config.risk_max_position_pct / 100)))
+            position_value = min(_risk_value, available)
+            if signal.signal is not None:
+                # canary 계측 태그 — signal_events/trades 메타로 risk 모드 체결을 골라내 원장 R·초과수익 판정
+                _meta["sizing_mode"] = "risk"
+                _meta["risk_stop_pct"] = round(_risk_stop, 2)
+                signal.signal.metadata = _meta
+            logger.info(
+                f"[리스크] {signal.symbol} 위험 사이징: 손절 {_risk_stop:.1f}% · 위험 "
+                f"{self.config.risk_per_trade_pct}% → {position_value:,.0f}원 "
+                f"({float(position_value / equity * 100):.1f}%, ATR={_risk_atr})"
+            )
+
         # 전략 예산 한도 — 잔여 예산으로 포지션 제한
         _strategy_remaining: Optional[Decimal] = None  # 부스트 후 재클램프용 (Codex P1)
         if signal.strategy:
@@ -2450,6 +2486,11 @@ class RiskManager:
         position_multiplier = 1.0
         if signal.signal and signal.signal.metadata:
             position_multiplier = signal.signal.metadata.get("position_multiplier", 1.0)
+        if (_risk_atr is not None and position_multiplier != 1.0
+                and abs(position_multiplier - atr_position_multiplier(_risk_atr)) < 1e-6):
+            # risk 모드: ATR 축소 배율은 손절폭에 이미 반영 — 이중 축소 방지
+            # ponytail: 배율에 LLM 감액 등이 곱해져 ATR 배율과 다르면 그대로 적용(보수적 이중 축소 허용)
+            position_multiplier = 1.0
         if position_multiplier != 1.0:
             # 배율 적용 후 개별 포지션 상한 재클램프 (2026-08-04 P2 — 미클램프 시
             # max_position_pct 초과 값이 G3에서 사이즈 축소가 아닌 전체 거부로 이어져

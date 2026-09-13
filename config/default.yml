@@ -109,6 +109,12 @@ kr:
     base_position_pct: 25.0
     max_position_pct: 28.0
     max_positions: 8
+    # 위험 기반 사이징 (2026-09-13~, 리뷰 권고 ③): 종목당 금액 = equity × 0.7% / 진입 손절폭(ATR×2, 4~8% 클램프)
+    # → 종목당 8.75~17.5%. 근거: docs/research/exit-policy-ab-2026-09.md (sepa 6m/12m 게이트 통과, MDD 절반·회전 절반).
+    # nominal 로 되돌리면 전략별 비율(sepa 25/vcp 15/gap 15)×ATR 배율 사이징. canary: 매수 재개 후 첫 30건.
+    sizing_mode: risk
+    risk_per_trade_pct: 0.7
+    risk_max_position_pct: 18.0
     min_cash_reserve_pct: 5.0
     min_position_value: 200000       # 20만원
     dynamic_max_positions: true

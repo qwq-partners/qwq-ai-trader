@@ -615,6 +615,11 @@ class RiskConfig:
     # 코어홀딩 (KR)
     max_core_positions: int = 3            # 코어홀딩 최대 동시 보유 수
 
+    # 위험 기반 사이징 (2026-09-13 리뷰 권고 ③ — 백테스트 A/B에서 두 윈도우 모두 게이트 통과한 유일 축)
+    sizing_mode: str = "nominal"           # nominal(전략별 비율×배율) | risk(equity×risk_per_trade_pct/손절폭)
+    risk_per_trade_pct: float = 0.7        # 건당 자본 위험 (%) — 7종목 × 0.7% = 4.9% < 일일 -5% 한도
+    risk_max_position_pct: float = 18.0    # risk 모드 종목당 상한 (%) — 손절 4%면 17.5%로 자연 상한
+
     # 하이브리드 전략 (KR)
     hybrid: HybridConfig = field(default_factory=HybridConfig)
 

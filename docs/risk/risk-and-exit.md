@@ -349,6 +349,24 @@ bull 시 효과: max_positions 8→10, 현금 5→3%, 비중 25→30% → **현�
 **예산 (2026-06-04 정상화)**: 20% (이전 10%, KOSPI 강세장 복귀로 30% 시절 수준 복원
 검토 차 우선 20% 단계 적용. strategic_swing 38.4→28.4 상쇄)
 
+## 위험 기반 사이징 (2026-09-13~, `risk.sizing_mode: risk`)
+
+리뷰 권고 ③. 근거는 `docs/research/exit-policy-ab-2026-09.md` — 청산(ladder/channel) × 보유(current/extended) × 사이징(nominal/risk)
+2×2×2 백테스트에서 **사이징 축만** sepa 6m·12m 두 윈도우 모두 게이트 통과 (MDD -21.6→-5.9 / -28.7→-11.2, 회전 78→34~43배, PF 1.06→1.29 / 1.17→1.39).
+
+```
+position_value = total_equity × risk_per_trade_pct(0.7%) / 진입 손절폭(%)
+진입 손절폭     = clamp(ATR% × atr_multiplier(2.0), min_stop 4.0, max_stop 8.0)   ← ExitManager 와 동일 규칙
+                 (run_trader 가 ExitConfig 값을 engine.risk_manager._exit_stop_params 로 주입, ATR 없으면 default_stop_loss_pct 4.0)
+상한            = total_equity × risk_max_position_pct(18%)      → 종목당 8.75%(ATR 6%+) ~ 17.5%(ATR ≤2%)
+```
+- 코어홀딩 제외. 신호 강도 배율·전략별 기본 비율(sepa 25/vcp 15/gap 15)은 **쓰지 않는다** (백테스트 조건과 동일).
+  메타 `position_multiplier`가 ATR 배율 그대로면 이중 축소 방지를 위해 무시, 다른 값(LLM 감액 등)이면 그대로 곱함.
+- 이후 단계(전략 예산 캡·시즈널리티·변동성 타게팅·최소 금액·증거금 1.3배)는 기존과 동일하게 적용된다.
+- 계측: 신호 메타 `sizing_mode="risk"`, `risk_stop_pct` — **canary**: 매수 재개 후 첫 30건을 포지션 원장 R·KODEX200 초과수익으로
+  판정, 미달이면 `sizing_mode: nominal` 복귀. 파라미터 3종은 BacktestGate `PARAM_MAP`(`risk.*`)에 매핑돼 진화 제안도 게이트 경유.
+- 백테스트 nominal(25% 고정)은 실엔진 nominal(전략 비율×강도×ATR 배율 ≈ 23~28%)과 완전 동일하진 않다 — 상대 비교로만 해석.
+
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 
 ```
@@ -358,6 +376,8 @@ ATR  8%   → 0.4x (60% 축소)
 ATR ≥ 10% → 0.3x (70% 축소)
 구간 내: 선형 보간
 ```
+
+- `sizing_mode: risk`(2026-09-13~)에서는 이 배율이 손절폭에 흡수되므로 사이징엔 적용되지 않는다 (위 절).
 
 ### ATR=0 가드 (전 전략 통일)
 - SEPA, RSI2, Gap&Go, US Momentum, US SEPA → ATR 0/None 시 **진입 차단**
