@@ -33,6 +33,7 @@
 
 ### Reviews (리뷰)
 - [strategy-architecture-review-2026-09.md](reviews/strategy-architecture-review-2026-09.md) — 전략·아키텍처 종합 리뷰 (2026-09-13): 트랙레코드 실측(수수료 전 총손익 ≈ 0), 청산·회전·사이징·배분 구조 원인, 게이트 스택 가치(베타 혼동), 코드 건전성, 권고 8·금지 목록
+- [remediation-2026-09-14.md](reviews/remediation-2026-09-14.md) — 리뷰 후속 수정·재검증 결과 보고 (2026-09-14): F1~F8 수정 원장(PR #33~#38, #40), 검증 SHA, 6셀 재검증 → **승격 보류**, 운영 미배포(de111b7)·canary 미시작, 잔여 advisory·다음 단계
 
 ### Integrations (연동)
 - [external-apis.md](integrations/external-apis.md) — KIS, pykrx, yfinance, Finnhub, Finviz, LLM(OpenAI/Gemini/Perplexity), Telegram, DART

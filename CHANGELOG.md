@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — docs: 리뷰 후속 수정·재검증 결과 보고 (`docs/reviews/remediation-2026-09-14.md`)
+
+계획서 §4 형식으로 정리: F1~F8 별 재현 관측·수정 PR/SHA·먼저 실패한 테스트·수정 후·미해결, main `8f5580a` verify 334 passed/2 xfailed, 유효 설정 hash `91a816502f3f`(운영 설정값 변경 없음),
+6셀 재검증 요약과 **승격 보류** 판정(대조군 동일 통과·parity 2건), 한계, 운영 변경 없음(운영 서버는 de111b7 — F1·F3·F5 수정 미배포), canary 미시작, 잔여 advisory, 사용자 결정이 필요한 다음 단계 3건.
+
 ## 2026-09-14 — feat: 체결 경로 entry_risk 배선 — 초기 위험 확정·원장 병합·부분체결 누적 (계획서 T3 A)
 
 `src/schedulers/kr_scheduler.py`(+ `trade_journal.py`/`trade_storage.py` 의 `update_market_context`, `scripts/export_risk_ledger.py` 매수 leg 보정). 테스트 `tests/test_entry_risk_wiring.py` 15건.
