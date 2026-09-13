@@ -39,12 +39,16 @@ curl -s -m 5 http://localhost:8080/api/health | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 s = d.get('stale_loops') or {}
-print('정체:', '없음' if not s else ' '.join(f'{k}={int(v)}s' for k, v in s.items()),
-      '· 최장 대기', max(d.get('loops', {}).items(), key=lambda kv: kv[1], default=('-', 0)))
 st = d.get('loop_status') or {}
+disabled = [k for k, v in st.items() if not v.get('enabled')]
+# 비활성 루프는 disable 시점 1회만 beat가 찍혀 나이가 계속 쌓인다 — 최장 대기·정체
+# 집계에서 제외해야 '정체'처럼 보이지 않는다 (리뷰 advisory (d))
+loops_active = {k: v for k, v in d.get('loops', {}).items() if k not in disabled}
+s_active = {k: v for k, v in s.items() if k not in disabled}
+print('정체:', '없음' if not s_active else ' '.join(f'{k}={int(v)}s' for k, v in s_active.items()),
+      '· 최장 대기', max(loops_active.items(), key=lambda kv: kv[1], default=('-', 0)))
 failing = {k: v for k, v in st.items() if v.get('consecutive_failures')}
 degraded = {k: v.get('note') for k, v in st.items() if v.get('note')}
-disabled = [k for k, v in st.items() if not v.get('enabled')]
 print('실패 누적:', '없음' if not failing else ' '.join(f\"{k}={v['consecutive_failures']}회({v.get('failure_reason','')})\" for k, v in failing.items()))
 if degraded:
     print('부분 실패(degraded):', ' '.join(f'{k}={v}' for k, v in degraded.items()))

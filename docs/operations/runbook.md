@@ -355,6 +355,9 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
     20:30, `loop_heartbeat.DAILY_SCHEDULE`이 단일 출처 — 진화는 `config.kr.scheduler.evolution_time`으로
     기동 시 동기화) + 60분(`DAILY_GRACE_MINUTES`) grace** 이후에도 그날 예정시각 이후 성공/유휴가 없으면
     정체다(기존 "직전 거래일 자정 이후" 기준은 예정시각 전에도 오탐하고, 실패를 24시간 넘게 늦게 잡았다).
+    즉 일일 잡의 정체 경보 창은 **당일 예정시각+60분 ~ 자정**이다 — 자정이 지나면 `sched`가 다음 거래일
+    예정시각으로 다시 계산되어 grace가 재시작되므로, 자정 이후에는(다음 날 예정시각+60분 전까지) 전날
+    미완료 건에 대한 정체 경보가 새로 뜨지 않는다(리뷰 advisory (g)).
     주말·공휴일은 점검 자체를 하지 않는다(휴장일 진입 시 즉시 반환). 재시작 시 각 스케줄러가 자신의
     상태 파일(harvest `last_run.json`, vol_targeting `vol_targeting.json`, 진화 `evolution_state.json`)에서
     "오늘 이미 완료"를 읽으면 `record_success(..., note="재시작 전 완료 복원")`으로 즉시 복원한다.
