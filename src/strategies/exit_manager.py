@@ -27,6 +27,7 @@ from loguru import logger
 
 from ..core.types import Position, OrderSide, Signal, SignalStrength
 from ..utils.fee_calculator import FeeCalculator, get_fee_calculator
+from ..utils.stop_policy import StopDecision, resolve_effective_stop, stop_pct_or_none
 from ..indicators.atr import calculate_atr, calculate_dynamic_stop_loss
 
 
@@ -806,6 +807,24 @@ class ExitManager:
 
         self._persist_states()
 
+    def resolve_stop(self, *, dynamic_stop_pct: Optional[float], fixed_stop_pct: Optional[float],
+                     is_core: bool) -> StopDecision:
+        """손절폭 해석 단일 창구 (2026-09-14 T2) — update_price 판정과 엔진 위험 사이징 분모가 같은 값을 쓴다.
+
+        dynamic(min_stop 하한) > strategy(미클램프) > config.stop_loss_pct, 비코어는 현재 장중 급락 레벨의
+        SL 을 상한으로 cap. 신규 fill 사이징은 dynamic=None 으로 호출한다 (등록 시 price_history 없음).
+        무효 설정(0·음수·NaN)은 ValueError.
+        """
+        crash = INTRADAY_CRASH_PARAMS.get(self._intraday_crash_level, {}).get("stop_loss_pct")
+        return resolve_effective_stop(
+            dynamic_stop_pct=stop_pct_or_none(dynamic_stop_pct),
+            fixed_stop_pct=stop_pct_or_none(fixed_stop_pct),
+            global_stop_pct=Decimal(str(self.config.stop_loss_pct)),
+            min_dynamic_stop_pct=Decimal(str(self.config.min_stop_pct)),
+            crash_stop_pct=stop_pct_or_none(crash),
+            is_core=is_core,
+        )
+
     def update_price(self, symbol: str, current_price: Decimal,
                      market_data: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, int, str]]:
         """
@@ -913,23 +932,15 @@ class ExitManager:
                     f"수익률 {net_pnl_pct:+.2f}% (< {self.config.stale_high_min_pnl_pct}%)"
                 )
 
-        # 1. 손절 체크
+        # 1. 손절 체크 — 우선순위·급락 cap 은 resolve_stop (stop_policy 공통 함수, 2026-09-14 T2)
         # min_stop_pct 하한 클램프는 ATR 산출값(dynamic)에만 적용 (2026-08-04 P1)
         # — 기존에는 전략별/레짐별/급락 오버라이드의 타이트 손절(2.0~3.5%)까지
         #   일괄 4%로 되돌려 "장중 급락 SL 강화"가 통째로 무력화됐었다.
-        if state.dynamic_stop_pct is not None:
-            sl_pct = max(state.dynamic_stop_pct, self.config.min_stop_pct)
-        elif state.stop_loss_pct is not None:
-            sl_pct = state.stop_loss_pct
-        else:
-            sl_pct = self.config.stop_loss_pct
-        # 장중 급락 활성 시 크래시 SL을 상한으로 캡 (2026-08-04 재리뷰 P1-3)
-        # — 상태 변형이 아닌 판정 시점 적용이라 해제 시 자동 원복되고,
-        #   min_stop 클램프(ATR 경로)를 우회해 설계값 2.0~3.0%가 실효한다.
-        if not state.is_core and self._intraday_crash_level in INTRADAY_CRASH_PARAMS:
-            _crash_sl = INTRADAY_CRASH_PARAMS[self._intraday_crash_level]["stop_loss_pct"]
-            if sl_pct > _crash_sl:
-                sl_pct = _crash_sl
+        # 장중 급락 cap 은 상태 변형이 아닌 판정 시점 적용이라 해제 시 자동 원복 (2026-08-04 재리뷰 P1-3)
+        sl_pct = float(self.resolve_stop(
+            dynamic_stop_pct=state.dynamic_stop_pct, fixed_stop_pct=state.stop_loss_pct,
+            is_core=state.is_core,
+        ).stop_pct)
         if net_pnl_pct <= -sl_pct:
             atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct is not None else ""
             return self._create_exit(
