@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-13 — config: 리뷰 1단계 반영 — 배분 재편(core 0·gap 15·sepa 40) + 팀 conviction 부스트 비활성
+
+종합 리뷰 권고 ④·⑤의 즉시 실행분 (사용자 위임 "니가 판단해서 진행").
+- `evolved_overrides.yml strategy_allocation`: core_holding 15→**0**, gap_and_go 35→**15**, sepa_trend 30→**40**,
+  vcp 10 유지 → 합 65, 잔여 35%p 현금/KOFR. `_meta` 근거 갱신. 복원 기준: 원장 30건+ AND 게이트 통과.
+- 운영 `.env`에 `TEAM_CONVICTION=0` (부스트 근거가 베타 혼동, 승인 BUY가 HOLD보다 열위).
+- 2단계(청산 단일화·회전 억제·위험 기반 사이징)는 백테스터 `exit_policy` 축 A/B(2×2×2) 후 게이트 경유 적용 예정.
+  병행 착수: ExitManager·_sync_portfolio 특성화 테스트, 루프 하트비트 staleness 알림.
+
 ## 2026-09-13 — review: 전략·아키텍처 종합 리뷰 + 계측 결함 2건 수정
 
 - **리뷰** `docs/reviews/strategy-architecture-review-2026-09.md` (4개 독립 분석 교차 검증): 실거래 266건

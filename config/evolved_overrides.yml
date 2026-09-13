@@ -32,11 +32,16 @@ risk_config:
     # 2026-08-08 Codex 전략 리뷰 과제②: core 30→15 (실적 11건 승률 27%,
     # 이벤트 기대값 -2.3% — 8월 초 필터 개선의 shadow 검증 후 재승격),
     # sepa 20→25 (실적 최상위 추세 전략에 재배분). 잔여 10%p는 현금 버퍼 (합계 90).
-    sepa_trend: 30.0
+    # 2026-09-13 종합 리뷰(docs/reviews/strategy-architecture-review-2026-09.md §2-4·§5-4):
+    # 배분을 포지션 원장 근거로 재편 — core_holding 15→0 (실거래 23건 승률 26%, PF 0.44,
+    # 6월 부검 최대 손실원; 신필터 shadow 재검증 전 신규 진입 중단), gap_and_go 35→15
+    # (백테스터 미지원, 실거래 기대값 -0.41%/건, EOD 가드 포함 재검증 전 축소),
+    # sepa_trend 30→40 (백테·실거래 데이터가 있는 유일한 라인). 합계 65, 잔여 35%p는 현금/KOFR.
+    sepa_trend: 40.0
     theme_chasing: 0.0
     momentum_breakout: 0.0
-    gap_and_go: 35.0
-    core_holding: 15.0
+    gap_and_go: 15.0
+    core_holding: 0.0
 exit_manager:
   max_stop_pct: 8.0
   min_stop_pct: 4.0
@@ -116,17 +121,11 @@ _meta:
     timestamp: '2026-03-07T23:40:00'
     note: 10→25% 포지션 크기 복원 (수익 레버리지 확보, 진화 잠금)
   risk_config.strategy_allocation:
-    source: manual_review_backtested
-    timestamp: '2026-08-02T22:40:00'
-    note: >-
-      ① rsi2_reversal 10→0 폐지 (단독 -15.44%/손익비 0.98, 제거 시 +26.16%/+16.21%).
-      rsi2_reversal.enabled=false로 주간 리밸런싱 가드레일이 0%를 유지한다.
-      ② core_holding 25→30 / sepa_trend 25→20 (상대비중 50:50 → 40:60).
-      RSI2 제거 상태에서 재측정: 60:40 -3.74%/+1.82%, 50:50 +26.16%/+16.21%,
-      40:60 +26.84%/+32.40%(손익비 2.40/2.98), 30:70 +31.96%/+31.85%.
-      30:70이 백테스트상 최고였으나 core가 전체 35%가 되어 단일 전략 집중도가
-      gap_and_go와 동급이 되므로 40:60(core 30%)으로 억제. 두 시나리오 모두 현행 대비 개선.
-      ※ gap_and_go/strategic_swing은 백테스트 미지원이라 이 비교에 포함되지 않았다.
+    source: review_evidence_based
+    timestamp: '2026-09-13T12:00:00'
+    note: 2026-09-13 종합 리뷰 — core 15→0 (실거래 PF 0.44·승률 26%), gap 35→15 (기대값 -0.41%/건·백테 미지원),
+      sepa 30→40. 합계 65 (잔여 현금). 이전 2026-08-08 배분(core 30→15, sepa 25→30)은 이벤트 단위
+      통계·in-sample 백테스트 기반이었음. 복원 기준은 포지션 원장 30건+ AND 백테스트 게이트 통과.
   risk_config.strategy_allocation.vcp_breakout:
     source: manual_review
     timestamp: '2026-08-03T02:15:00'
