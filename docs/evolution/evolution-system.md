@@ -197,9 +197,62 @@ _VALID_STRATEGIES = {
 ```
 규칙/LLM 제안 → [백테스트 게이트] → 통과 시에만 _apply_change()
                       ↓
-        baseline(현재값) vs candidate(제안값) A/B 백테스트
+        baseline(유효 설정 그대로) vs candidate(요청 변경 필드만) A/B 백테스트
         6개월 / 60종목 / 약 49초 (2회 실행, 캐시 워밍 기준)
 ```
+
+**기준군 = 실운영 유효 설정 (2026-09-14~, 리뷰 후속 T6/F7)**
+
+이전에는 게이트가 `BacktestConfig()` 기본값(nominal 사이징·TP1 5%/30%·손절 3.5~6%·
+배분 sepa .6/rsi2 .1/core .3)으로 baseline/candidate를 만들었다. 실운영(risk 0.7%/상한 18%·
+TP1 10%/10%·손절 4~8%·배분 sepa 40/gap 15/vcp 10)과 다른 기준군이라
+**`risk.risk_per_trade_pct` 0.7→0.8, `risk_max_position_pct` 18→10 변경이 포지션 금액을
+전혀 바꾸지 못하고(양쪽 다 nominal) "수익률 개선 없음"으로 자동 기각**됐다.
+
+- `src/utils/config.load_effective_config()` — `default.yml` + `evolved_overrides.yml`을
+  실제 우선순위로 병합한 dict (`.env`·자격증명 미접촉). `effective_config_hash()`로 12자 hash.
+- `scripts/backtest_strategies.build_backtest_config_from_effective(effective, months=, strategies=)`
+  — 운영 게이트와 A/B 러너가 **같은 builder**를 쓴다. 매핑:
+
+| 영역 | 유효 설정 → BacktestConfig |
+|------|---------------------------|
+| 사이징 | `risk.sizing_mode`→`sizing`, `risk_per_trade_pct`, `risk_max_position_pct`, `base/max_position_pct` |
+| 전략·배분 | `risk.strategy_allocation` → `allocation`/`strategies` (**배분 0%는 제외**, 원비율 유지) + `budget_cap=True` — 전략 총노출 ≤ `equity×배분%`(보유 노출·당일 체결분 차감), 실엔진 `engine._calculate_position_size` 미러 (2026-09-14). 정규화 비율만 넘기던 이전 동작은 sepa 노출이 실엔진 40% 대비 2배 이상으로 부풀었다 |
+| 초기 손절 | `entry_stop_mode="live_policy"` + 전략별 `stop_loss_pct` (실엔진 신규 fill 미러) |
+| 청산 | `exit_manager.*` (분할익절·트레일링·ATR·stale) + 복합 청산·익절후 저효율 ON, `stale_high_days`는 전략값(sepa 3일) |
+| 현금·슬롯 | `min_cash_reserve_pct`, `min_position_value`, `risk.max_positions` → `slot_policy="live_weighted"` 가중 슬롯 |
+| 수수료 | `FeeCalculator` 단일 출처와 같아야 함 (다르면 미지원으로 보류) |
+
+- baseline은 유효 설정 **그대로**, candidate는 baseline을 deepcopy해 **요청 변경 필드만** 적용한다
+  (제안 `old_value`가 유효 설정과 달라도 기준군은 유효 설정 값을 쓰고 경고를 남긴다).
+- 위험 수량 상한은 실엔진과 같은 `src/utils/sizing.risk_quantity_cap`(매수수수료 포함)을 쓴다.
+
+**지원 범위와 보류 (조용한 통과 금지)**
+
+보류에는 두 종류가 있고 **소비자(`strategy_evolver`)가 다르게 다룬다**:
+
+- `unsupported=True` — **구조적 판정 불가**. 재시도해도 결과가 같으므로 장애가 아니다.
+  원장 이벤트 `rejected_by_backtest`(= `_SUPPRESS_EVENTS`)로 남아 14일 재제안 억제가 걸리고,
+  `consecutive_gate_errors`를 올리지 않으며 장애 알림도 보내지 않는다.
+- `errored=True` — **일시 장애**. 연속 카운터가 올라가고 3회면 텔레그램 알림, 원장 이벤트는 `gate_error`.
+
+| 상황 | 결과 |
+|------|------|
+| 백테스터 미지원 전략(gap_and_go·vcp_breakout·theme·momentum·strategic_swing·value_growth) 파라미터 | `passed=False, unsupported=True` (skip 통과 금지) |
+| 유효 설정 미지원 (모사 가능한 활성 전략 없음·알 수 없는 사이징 모드·수수료 모델 불일치) | `passed=False, unsupported=True` |
+| PARAM_MAP이 가리키는 `BacktestConfig` 필드 부재 | `passed=False, unsupported=True` (예전엔 경고 후 무시) |
+| PARAM_MAP 밖 파라미터 / 배분 0% 전략의 필드 (기준군에 없어 base==cand) | `passed=False, unsupported=True` (예전엔 skip 통과 시도 → evolver가 기각) |
+| 타임아웃·예외·백테스트 결과 없음(데이터 부족) | `passed=False, errored=True` |
+| 자산 곡선 부족으로 walk-forward 평가 불가 | `passed=False, errored=True` (**2026-09-14 변경** — 예전엔 WF 생략 후 통과 가능) |
+
+> 2026-09-14 리뷰 반영: 구조적 미지원을 `errored=True`로 돌려주던 초판은 gap 15%·vcp 10%
+> 활성 라인의 제안이 올 때마다 "게이트 연속 장애" 거짓 알림을 띄우고 14일 재제안 억제를
+> 빠뜨렸다 (MEMORY "일시 장애 vs 영구 비활성 구분").
+
+결과 dict(`GateResult.to_dict()`)에는 `config_hash`·`diff`·`supported_scope`
+(모사한 전략·배분 0% 제외·미지원 배분·커버 배분 %)·`coverage`
+(`wf_windows_evaluated`, 자산곡선 길이, baseline/candidate 거래 수)가 함께 기록된다.
+SEPA 단독 부분 검증으로 KR 전체 정책이 통과했다고 보고하지 않기 위한 최소 표시다.
 
 **통과 조건 (모두 만족)**
 | 조건 | 기준 |
@@ -212,17 +265,19 @@ _VALID_STRATEGIES = {
 **walk-forward 도입 배경 (2026-08-03)**: 단일 구간 총수익률만 보면 특정 레짐
 (예: 최근 급등장)에 우연히 맞은 파라미터가 통과한다 — López de Prado가 지적하는
 전형적 백테스트 과적합. 구간 다수결은 "여러 시장 국면에서 고르게 나은가"를 본다.
-자산 곡선이 30거래일 미만이면 WF 판정은 생략하고 기존 3기준만 적용한다 (fail-open은
-WF 항목만 — 나머지 기준은 그대로 fail-closed).
+자산 곡선이 30거래일 미만이면 WF를 평가할 수 없다 → **변경 보류**
+(2026-09-14 T6: 이전의 "WF 생략 후 통과" 경로는 WF 미평가를 승인 근거로 만들었다).
 
 **실패 시 동작 — fail-closed**
-- 타임아웃·예외·데이터 없음 → **변경 보류**. 검증 못 한 변경을 적용하느니 하루 미룬다.
-- 연속 3회 장애 시 텔레그램 알림 (진화가 조용히 멈추는 것 방지).
-- `EVOLUTION_BACKTEST_GATE=0` 환경변수로 비활성화 가능.
+- 타임아웃·예외·데이터 없음 → **변경 보류**(`errored`). 검증 못 한 변경을 적용하느니 하루 미룬다.
+- 연속 3회 **장애**(`errored`)에만 텔레그램 알림 — 구조적 미지원(`unsupported`)은 세지 않는다.
+- `EVOLUTION_BACKTEST_GATE=0` 환경변수로 비활성화 가능 (이 경우만 `skipped=True` 통과).
 
 **파라미터 매핑 (`PARAM_MAP`)**
 진화의 `strategy.parameter`를 `BacktestConfig` 필드로 변환한다.
-매핑에 없는 파라미터(예: 전략 배분 비율)는 백테스트가 모사할 수 없으므로 게이트를 생략한다.
+매핑에 없는 파라미터(알림·배치 설정 등)와 **배분 0%라 기준군에 없는 전략**의 필드는
+빈 목록이 되어 `unsupported` 보류다 — `gate_replay`도 같은 목록을 써서 "재생 불가"로 마킹한다
+(base==cand 재생은 방향 진단을 왜곡한다).
 `exit_manager.stop_loss_pct`처럼 전략별 필드 여러 개에 반영해야 하는 것은 `_FANOUT`으로 처리.
 
 **상태 추적**: `EvolutionState.total_rejected_by_backtest`, `consecutive_gate_errors`

@@ -13,6 +13,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,6 +26,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from pykrx import stock as pykrx_stock
+
+from src.utils.fee_calculator import get_fee_calculator
+from src.utils.sizing import risk_quantity_cap
 
 # ─── 상수 ───────────────────────────────────────────────────
 CACHE_DIR = Path.home() / ".cache" / "ai_trader" / "backtest"
@@ -97,10 +101,16 @@ class BacktestConfig:
     universe_size: int = 150
     use_cache: bool = True
     use_t1: bool = True
-    # 전략 배분
+    # 전략 배분. budget_cap=False(기본)면 코어 예산 계산에만 쓰는 정규화 비율,
+    # True 면 실엔진 `risk.strategy_allocation` 과 같은 **전략 총노출 예산 비율**이다.
     allocation: Dict[str, float] = field(default_factory=lambda: {
         "sepa": 0.60, "rsi2": 0.10, "core": 0.30
     })
+    # 전략 예산 캡 모사 (2026-09-14 리뷰 blocking #2 — src/core/engine.py 미러).
+    #   잔여 = equity×allocation[전략] − 해당 전략 보유 노출 − 같은 날 체결분,
+    #   잔여 ≤ 0 이면 매수 스킵, 아니면 매수 금액을 잔여로 제한한다.
+    # 기본 False = 기존 CLI/게이트 동작(캡 없음). 유효 설정 builder 가 True 로 켠다.
+    budget_cap: bool = False
     # 리스크
     max_positions_short: int = 5
     max_positions_core: int = 3
@@ -166,14 +176,54 @@ class BacktestConfig:
     #   live_policy — 전략별 고정 SL(sepa/rsi2/core_stop_loss_pct)만, ATR 동적 손절 없음 (실엔진 신규 fill 미러, T2 정합)
     #                 이후 손절 변경은 레짐 전환(BT_REGIME_EXIT_PARAMS, 실엔진 apply_regime_params 미러)뿐
     entry_stop_mode: str = "atr_dynamic"
+    # 동시 보유 슬롯 정책 (2026-09-14 T6 parity)
+    #   fixed        — 기존 동작: 단순 포지션 수 ≤ max_positions_short(또는 risk_max_positions)
+    #   live_weighted— 실엔진 미러: 비코어 포지션의 잔여비율·익절단계 가중 합 ≤ max_positions_weighted
+    #                  (src/risk/manager.py::_get_position_weight, docs/risk/risk-and-exit.md)
+    slot_policy: str = "fixed"
+    max_positions_weighted: float = 8.0
+    # 실행 환경 (T7-A). offline=True 면 캐시에 없는 입력을 다운로드하지 않고 데이터 부족으로 종료한다.
+    offline: bool = False
+    end_date: Optional[str] = None    # "YYYY-MM-DD" (미지정 시 실행 시각)
+    # 유효 설정에서 만들어질 때 기록되는 지원 범위 (게이트·manifest 가 그대로 보고)
+    supported_scope: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         # 어디서 생성되든(엔진·BTExitManager 직접 생성·dataclasses.replace) 한 곳에서 검증 (2026-09-14 리뷰 P2)
         if self.entry_stop_mode not in ENTRY_STOP_MODES:
             raise ValueError(f"entry_stop_mode 는 {ENTRY_STOP_MODES} 중 하나: {self.entry_stop_mode!r}")
+        if self.slot_policy not in SLOT_POLICIES:
+            raise ValueError(f"slot_policy 는 {SLOT_POLICIES} 중 하나: {self.slot_policy!r}")
 
 
 ENTRY_STOP_MODES = ("atr_dynamic", "live_policy")
+SLOT_POLICIES = ("fixed", "live_weighted")
+
+# 백테스트 계산기 버전 — 결과 manifest 재현 키. 체결·사이징·청산 계산이 바뀌면 올린다.
+CALC_VERSION = "2026-09-14.t6"
+
+
+class BacktestDataUnavailable(RuntimeError):
+    """오프라인 실행에 필요한 입력(OHLCV·레짐 캐시)이 없음 — 다운로드로 자동 전환하지 않는다."""
+
+
+class UnsupportedBacktestConfig(ValueError):
+    """실운영 유효 설정 중 백테스터가 모사할 수 없는 항목 — 운영 게이트는 보류(passed=False)."""
+
+
+def live_slot_weight(remaining: int, original: int, stage: str) -> float:
+    """실엔진 슬롯 가중치 미러 (src/risk/manager.py::_get_position_weight).
+
+    weight = 잔여/원본, TRAILING ×0.5(floor 0.1), SECOND·THIRD ×0.7(floor 0.15), 그 외 floor 0.2.
+    """
+    orig = max(int(original), 1)
+    remain = max(int(remaining), 0)
+    weight = remain / orig
+    if stage == "trailing":
+        return max(0.1, min(1.0, weight * 0.5))
+    if stage in ("second", "third"):
+        return max(0.15, min(1.0, weight * 0.7))
+    return max(0.2, min(1.0, weight))
 
 
 # 보유(회전) 정책 프리셋 — 리뷰 §2-1 실엔진 값(current) vs 권고 2(extended).
@@ -373,16 +423,45 @@ class BTIndicators:
 
 # ─── 시장 레짐 판단 ─────────────────────────────────────────
 class MarketRegime:
-    def __init__(self):
+    def __init__(self, offline: bool = False):
         self.kospi_data: Optional[pd.DataFrame] = None
+        self.offline = offline
+        self.cache_files: List[Path] = []
+        # 레짐 출처: kospi_pykrx | kospi_fdr | samsung_proxy | unknown (캐시에도 함께 저장)
+        self.source: str = "unknown"
 
     def load(self, start: str, end: str):
-        """KOSPI 지수로 레짐 판단 (pykrx → FDR → 개별주 대리 순 폴백)"""
+        """KOSPI 지수로 레짐 판단 (pykrx → FDR → 개별주 대리 순 폴백).
+
+        offline=True 면 캐시(regime_{start}_{end}.pkl)만 쓰고, 없으면 데이터 부족으로 종료한다
+        (레짐 미로드는 NEUTRAL 고정으로 결과를 조용히 바꾸므로 오프라인에선 허용하지 않는다).
+        """
         print("  시장 레짐 지표 로드 중...")
+        cache_file = CACHE_DIR / f"regime_{start}_{end}.pkl"
+        if cache_file.exists():
+            try:
+                with open(cache_file, "rb") as f:
+                    self.kospi_data = pickle.load(f)
+                self.cache_files.append(cache_file)
+                # source: 지수 기반인지 개별주 대리 폴백인지 — 폴백 캐시를 지수로 오인하지 않게 표시
+                src = (self.kospi_data.attrs or {}).get("source", "unknown")
+                self.source = src
+                print(f"  레짐 지표 캐시 {len(self.kospi_data)}일 사용 (source={src})")
+                if src == "samsung_proxy":
+                    print("  ⚠️ 캐시가 개별주 대리로 만들어졌다 — 레짐 기반 판단을 신뢰하지 말 것")
+                return
+            except Exception:
+                pass
+        if self.offline:
+            raise BacktestDataUnavailable(
+                f"레짐 지표 캐시 없음: {cache_file} — offline 실행 종료 (다운로드 금지)")
         df = None
+        source = "unknown"
         # 1차: KOSPI 지수 (pykrx) — KRX 인증이 없으면 자주 실패한다
         try:
             df = pykrx_stock.get_index_ohlcv_by_date(start, end, "1001")
+            if df is not None and len(df) >= 20:
+                source = "kospi_pykrx"
         except Exception:
             pass
 
@@ -398,6 +477,7 @@ class MarketRegime:
                     df = fdf.rename(columns={"Close": "종가", "Open": "시가",
                                              "High": "고가", "Low": "저가",
                                              "Volume": "거래량"})
+                    source = "kospi_fdr"
                     print("  KOSPI 지수(pykrx) 실패 → FDR KS11 사용")
             except Exception:
                 pass
@@ -411,6 +491,7 @@ class MarketRegime:
                 df = pykrx_stock.get_market_ohlcv_by_date(
                     start, end, "005930")
                 if df is not None and len(df) > 0:
+                    source = "samsung_proxy"
                     print("  ⚠️ KOSPI 지수·FDR 모두 실패 → 삼성전자 대리 사용 "
                           "(레짐 판단 신뢰도 낮음)")
             except Exception:
@@ -421,7 +502,18 @@ class MarketRegime:
             df['ma20'] = c.rolling(20).mean()
             df['ma60'] = c.rolling(60).mean()
             df['ma200'] = c.rolling(200).mean()
+            # 캐시에도 출처를 심는다 — 폴백으로 만든 레짐이 그 창의 영구 캐시가 되면
+            # 이후 offline 실행이 지수 기반인지 구분할 수 없다 (2026-09-14 리뷰 advisory)
+            df.attrs["source"] = source
+            self.source = source
             self.kospi_data = df
+            try:
+                CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                with open(cache_file, "wb") as f:
+                    pickle.dump(df, f)
+                self.cache_files.append(cache_file)
+            except Exception:
+                pass
             print(f"  레짐 지표 {len(df)}일 로드 완료")
         else:
             print("  레짐 지표 로드 실패 — NEUTRAL 고정")
@@ -492,18 +584,30 @@ class MarketRegime:
 
 # ─── 유니버스 관리 ──────────────────────────────────────────
 class UniverseManager:
-    def __init__(self, size: int = 150, use_cache: bool = True):
+    def __init__(self, size: int = 150, use_cache: bool = True, offline: bool = False):
         self.size = size
         self.use_cache = use_cache
+        self.offline = offline          # True면 네트워크 호출 없이 캐시·하드코딩 유니버스만 사용
         self.tickers: List[str] = []
         self.names: Dict[str, str] = {}
         self.ohlcv: Dict[str, pd.DataFrame] = {}
+        self.cache_files: List[Path] = []
+        # OHLCV 확보 실패 종목 — manifest 에 명시해 생존편향·부분 캐시를 유추로 남기지 않는다
+        self.missing_tickers: List[str] = []
 
     def build_universe(self, ref_date: str):
         print(f"\n유니버스 구성 (기준일: {ref_date})...")
         kospi_n = int(self.size * 2 / 3)
         kosdaq_n = self.size - kospi_n
         tickers = []
+
+        if self.offline:
+            # 오프라인: 고정 유니버스(하드코딩)만 사용 — 시총 조회·종목명 조회 모두 네트워크다
+            self.tickers = (DEFAULT_UNIVERSE["KOSPI"][:kospi_n]
+                            + DEFAULT_UNIVERSE["KOSDAQ"][:kosdaq_n])[:self.size]
+            self.names = {t: t for t in self.tickers}
+            print(f"  offline: 고정 유니버스 {len(self.tickers)}종목")
+            return
 
         # 1차: pykrx 시총 기반
         for market, n in [("KOSPI", kospi_n), ("KOSDAQ", kosdaq_n)]:
@@ -550,10 +654,16 @@ class UniverseManager:
                         df = pickle.load(f)
                     if df is not None and len(df) > 20:
                         self.ohlcv[ticker] = BTIndicators.compute(df)
+                        self.cache_files.append(cache_file)
                         cached += 1
                         continue
                 except Exception:
                     pass
+
+            if self.offline:
+                failed += 1
+                self.missing_tickers.append(ticker)
+                continue
 
             try:
                 df = pykrx_stock.get_market_ohlcv_by_date(start, end, ticker)
@@ -564,8 +674,10 @@ class UniverseManager:
                     loaded += 1
                 else:
                     failed += 1
+                    self.missing_tickers.append(ticker)
             except Exception:
                 failed += 1
+                self.missing_tickers.append(ticker)
 
             if (i + 1) % 10 == 0:
                 print(f"  진행: {i+1}/{len(self.tickers)} "
@@ -574,6 +686,15 @@ class UniverseManager:
 
         print(f"  완료: 신규 {loaded} + 캐시 {cached} = "
               f"{loaded + cached}종목 (실패 {failed})")
+        if self.missing_tickers:
+            print(f"  ⚠️ OHLCV 없음 {len(self.missing_tickers)}종목: "
+                  f"{', '.join(self.missing_tickers[:20])}"
+                  f"{' …' if len(self.missing_tickers) > 20 else ''}")
+
+        if self.offline and cached == 0:
+            raise BacktestDataUnavailable(
+                f"offline 실행에 쓸 OHLCV 캐시 없음 ({CACHE_DIR}, {start}~{end}, "
+                f"{len(self.tickers)}종목) — 다운로드로 전환하지 않고 종료")
 
     def get_data(self, ticker: str, date: str) -> Optional[pd.Series]:
         df = self.ohlcv.get(ticker)
@@ -1166,15 +1287,19 @@ class BTExitManager:
 class BacktestEngine:
     def __init__(self, config: BacktestConfig):
         self.config = config
-        self.universe = UniverseManager(config.universe_size, config.use_cache)
+        self.universe = UniverseManager(config.universe_size, config.use_cache,
+                                        offline=config.offline)
         self.scorer = StrategyScorer(config)
         self.exit_mgr = BTExitManager(config)
-        self.regime = MarketRegime()
+        self.regime = MarketRegime(offline=config.offline)
         self.fee = BTFeeCalculator()
-        # entry_stop_mode 검증은 BacktestConfig.__post_init__ (한 곳)
-        # sizing=risk 는 종목당 위험이 작아 동시 보유 상한을 별도로 둔다 (리뷰 권고 3)
-        self.max_short: int = (config.risk_max_positions if config.sizing == "risk"
-                               else config.max_positions_short)
+        # entry_stop_mode·slot_policy 검증은 BacktestConfig.__post_init__ (한 곳)
+        # fixed: sizing=risk 는 종목당 위험이 작아 동시 보유 상한을 별도로 둔다 (리뷰 권고 3)
+        # live_weighted: 실엔진과 같은 잔여비율 가중 슬롯 (사이징 방식과 무관하게 동일 상한)
+        self.max_short: float = (
+            config.max_positions_weighted if config.slot_policy == "live_weighted"
+            else (config.risk_max_positions if config.sizing == "risk"
+                  else config.max_positions_short))
 
         self.cash: float = float(config.initial_capital)
         self.positions: Dict[str, BTPosition] = {}
@@ -1197,7 +1322,8 @@ class BacktestEngine:
         stdout 출력을 억제하려면 호출측에서 contextlib.redirect_stdout을 쓴다
         (진화 게이트가 그렇게 사용).
         """
-        end_date = datetime.now()
+        end_date = (datetime.strptime(self.config.end_date, "%Y-%m-%d")
+                    if self.config.end_date else datetime.now())
         start_date = end_date - timedelta(days=self.config.months * 30)
         warmup_date = start_date - timedelta(days=400)
 
@@ -1306,12 +1432,8 @@ class BacktestEngine:
         if not self.pending_buys:
             return
 
-        # 포지션 수 카운트
-        short_count = len([
-            p for p in self.positions.values()
-            if p.strategy in (StrategyType.SEPA, StrategyType.RSI2)
-            and p.remaining_quantity > 0
-        ])
+        # 포지션 수 카운트 (live_weighted 는 잔여비율·익절단계 가중 합 — 실엔진 미러)
+        short_count = self._short_slot_usage()
         core_count = len([
             p for p in self.positions.values()
             if p.strategy == StrategyType.CORE
@@ -1322,6 +1444,7 @@ class BacktestEngine:
         orders = sorted(self.pending_buys, key=lambda x: x.get('score', 0),
                         reverse=True)
         self.pending_buys = []
+        day_filled: Dict[str, float] = {}      # 같은 날 체결분 (실엔진 pending notional 대응)
 
         for order in orders:
             symbol = order['symbol']
@@ -1375,12 +1498,33 @@ class BacktestEngine:
             # 사이징 — 시가 체결은 시가 평가 equity (당일 종가 미래정보 배제) — F8
             equity = self._calc_equity(day_str, phase="close" if use_close else "open")
             pos_value = self._calc_position_size(equity, strategy, stop_pct)
+
+            # 전략 예산 캡 — 실엔진 미러 (코어는 _calc_position_size 가 이미 예산으로 나눈다)
+            if self.config.budget_cap and strategy != StrategyType.CORE:
+                remaining = self._strategy_budget_remaining(strategy, equity, day_filled)
+                if remaining <= 0:
+                    continue
+                pos_value = min(pos_value, remaining)
+
             if pos_value < self.config.min_position_value:
                 continue
 
             quantity = int(pos_value / exec_price)
             if quantity <= 0:
                 continue
+
+            # 위험 모드 최종 상한 — 실엔진과 같은 함수(src.utils.sizing.risk_quantity_cap):
+            # (가격×수량 + 매수수수료) × net SL% ≤ equity × 위험% (2026-09-14 T6 parity).
+            # 수수료를 뺀 근사(equity×r%/SL%)보다 1주가량 작다 — 실거래 주문과 같은 수량을 만든다.
+            if (self.config.sizing == "risk" and strategy != StrategyType.CORE
+                    and stop_pct > 0):
+                cap = risk_quantity_cap(
+                    Decimal(str(equity)), Decimal(str(exec_price)), Decimal(str(stop_pct)),
+                    risk_per_trade_pct=self.config.risk_per_trade_pct)
+                if cap < quantity:
+                    quantity = cap
+                if quantity <= 0 or exec_price * quantity < self.config.min_position_value:
+                    continue
 
             buy_amount = exec_price * quantity
             buy_fee = self.fee.buy_fee(buy_amount)
@@ -1433,10 +1577,39 @@ class BacktestEngine:
                 stop_pct=stop_pct, initial_risk=pos.initial_risk,
             ))
 
+            day_filled[strategy.value] = day_filled.get(strategy.value, 0.0) + total_cost
             if strategy in (StrategyType.SEPA, StrategyType.RSI2):
                 short_count += 1
             else:
                 core_count += 1
+
+    def _strategy_budget_remaining(self, strategy: StrategyType, equity: float,
+                                   day_filled: Dict[str, float]) -> float:
+        """전략 잔여 예산 (실엔진 src/core/engine.py `_calculate_position_size` 미러).
+
+        실엔진은 보유 노출을 **시장가**로 재는데, 백테스터는 진입원가(cost_basis)를
+        잔여수량 비율로 환산해 쓴다 — 일봉 단위라 체결 시점 시장가가 없다. 평가손익만큼의
+        근사 차이가 있고, 캡을 걸지 않던 기존(노출 2배 초과)보다 실엔진에 가깝다.
+        """
+        pct = self.config.allocation.get(strategy.value, 0.0)
+        if pct <= 0:
+            return 0.0
+        held = sum(
+            p.cost_basis * p.remaining_quantity / max(p.quantity, 1)
+            for p in self.positions.values()
+            if p.strategy == strategy and p.remaining_quantity > 0
+        )
+        return equity * pct - held - day_filled.get(strategy.value, 0.0)
+
+    def _short_slot_usage(self) -> float:
+        """단기(비코어) 슬롯 사용량. fixed=포지션 수, live_weighted=잔여비율·단계 가중 합."""
+        shorts = [p for p in self.positions.values()
+                  if p.strategy in (StrategyType.SEPA, StrategyType.RSI2)
+                  and p.remaining_quantity > 0]
+        if self.config.slot_policy != "live_weighted":
+            return float(len(shorts))
+        return sum(live_slot_weight(p.remaining_quantity, p.quantity,
+                                    p.exit_stage.name.lower()) for p in shorts)
 
     def _check_exits(self, day_str: str):
         to_remove = []
@@ -1959,31 +2132,166 @@ class ResultAnalyzer:
 
 # ─── 설정 로드 ─────────────────────────────────────────────
 def load_config_from_yaml() -> dict:
-    config_dir = PROJECT_ROOT / "config"
-    result = {}
-    default_f = config_dir / "default.yml"
-    if default_f.exists():
-        with open(default_f, 'r', encoding='utf-8') as f:
-            result = yaml.safe_load(f) or {}
+    """유효 설정(default.yml + evolved_overrides.yml) — 병합은 src/utils/config 단일 출처."""
+    from src.utils.config import load_effective_config
+    return load_effective_config()
 
-    override_f = config_dir / "evolved_overrides.yml"
-    if override_f.exists():
-        with open(override_f, 'r', encoding='utf-8') as f:
-            overrides = yaml.safe_load(f) or {}
-        if 'exit_manager' in overrides:
-            em = result.get('kr', {}).get('exit_manager', {})
-            em.update(overrides['exit_manager'])
-        if 'risk_config' in overrides:
-            rk = result.get('kr', {}).get('risk', {})
-            rk.update(overrides['risk_config'])
-        for strat in ['sepa_trend', 'rsi2_reversal']:
-            if strat in overrides:
-                st = result.get('kr', {}).get('strategies', {}).get(strat, {})
-                st.update(overrides[strat])
-    return result
+
+# 백테스터가 모사하는 전략 ↔ 실운영 전략 키
+BT_STRATEGY_KEYS = {"sepa": "sepa_trend", "rsi2": "rsi2_reversal", "core": "core_holding"}
+
+
+def build_backtest_config_from_effective(
+    effective_config: Dict[str, Any], *, months: int, strategies: List[str],
+    **overrides: Any,
+) -> BacktestConfig:
+    """유효 설정(default.yml + evolved_overrides.yml 병합) → BacktestConfig (2026-09-14 T6).
+
+    운영 게이트(backtest_gate)와 A/B 러너가 **같은 builder**를 써서, 백테스트 기준군이
+    실운영 설정과 갈라지지 않게 한다 (F7: 기본 nominal·TP1 5% 기준군에서 risk 변경을 판정하던 결함).
+
+    매핑:
+      사이징    risk.sizing_mode → sizing, risk_per_trade_pct, risk_max_position_pct,
+                base_position_pct, max_position_pct
+      전략·배분 risk.strategy_allocation → allocation (0% 전략은 제외, 원비율 유지) + budget_cap=True
+                (전략 총노출 ≤ equity×배분% — 실엔진 예산 캡 미러)
+      초기 손절 entry_stop_mode="live_policy" + 전략별 stop_loss_pct (실엔진 신규 fill 미러)
+      청산      exit_manager.* (분할익절·트레일링·ATR·stale) + 복합 청산·익절후 저효율 ON,
+                stale_high 는 실엔진 전략 파라미터(run_trader._strategy_exit_params sepa=3일)
+      현금·슬롯 min_cash_reserve_pct, min_position_value, risk.max_positions(가중 슬롯)
+      수수료    FeeCalculator 단일 출처와 동일해야 한다 (다르면 UnsupportedBacktestConfig)
+
+    Raises:
+        UnsupportedBacktestConfig — 백테스터가 모사할 수 없는 유효 설정 (미지원 사이징 모드,
+        수수료 모델 불일치, 모사 가능한 활성 전략 없음). 게이트는 이를 보류(passed=False)로 다룬다.
+    """
+    def _section(parent: Dict[str, Any], key: str) -> Dict[str, Any]:
+        value = parent.get(key)
+        return value if isinstance(value, dict) else {}
+
+    def _pct(value: Any) -> float:
+        return 0.0 if value is None else float(value)
+
+    kr = _section(effective_config, "kr")
+    risk = _section(kr, "risk")
+    em = _section(kr, "exit_manager")
+    strats = _section(kr, "strategies")
+    alloc_raw = _section(risk, "strategy_allocation")
+
+    # 수수료: 백테스터 상수 = FeeCalculator(실엔진 단일 출처) 여야 한다
+    fee = get_fee_calculator("KR")
+    if (abs(float(fee.config.buy_commission_rate) - BUY_FEE_RATE) > 1e-12
+            or abs(float(fee.config.total_sell_rate) - SELL_FEE_RATE) > 1e-12):
+        raise UnsupportedBacktestConfig(
+            f"수수료 모델 불일치: 백테스터 {BUY_FEE_RATE}/{SELL_FEE_RATE} vs "
+            f"FeeCalculator {float(fee.config.buy_commission_rate)}/"
+            f"{float(fee.config.total_sell_rate)}")
+
+    sizing = str(risk.get("sizing_mode", "nominal"))
+    if sizing not in ("nominal", "risk"):
+        raise UnsupportedBacktestConfig(f"백테스터 미지원 사이징 모드: {sizing!r}")
+
+    # 전략 활성·배분 — 배분 0%(또는 미설정)는 제외, 백테스터 미지원 라인은 범위로 기록
+    requested = [s for s in strategies]
+    unknown = [s for s in requested if s not in BT_STRATEGY_KEYS]
+    if unknown:
+        raise UnsupportedBacktestConfig(f"백테스터 미지원 전략: {unknown}")
+    zero = [s for s in requested if _pct(alloc_raw.get(BT_STRATEGY_KEYS[s])) <= 0]
+    active = [s for s in requested if s not in zero]
+    if not active:
+        raise UnsupportedBacktestConfig(
+            f"모사 가능한 활성 전략 없음 — 요청 {requested} 의 배분이 모두 0% "
+            f"(유효 배분: { {k: v for k, v in alloc_raw.items() if _pct(v) > 0} })")
+    total_a = sum(_pct(alloc_raw[BT_STRATEGY_KEYS[s]]) for s in active)
+    # 정규화하지 않는다 — 실엔진 strategy_allocation 은 전략 **총노출 예산 비율**이라
+    # 원비율(40% → 0.40)을 그대로 넘기고 budget_cap 으로 캡을 건다 (리뷰 blocking #2)
+    alloc = {s: _pct(alloc_raw[BT_STRATEGY_KEYS[s]]) / 100 for s in active}
+
+    unsupported_alloc = {k: float(v) for k, v in alloc_raw.items()
+                         if _pct(v) > 0 and k not in BT_STRATEGY_KEYS.values()}
+    alloc_total = sum(_pct(v) for v in alloc_raw.values())
+    scope = {
+        "strategies_requested": requested,
+        "strategies_simulated": active,
+        "excluded_zero_allocation": zero,
+        "unsupported_allocated": unsupported_alloc,
+        "allocation_covered_pct": round(total_a / alloc_total * 100, 1) if alloc_total > 0 else 0.0,
+        "budget_cap_modeled": True,          # 전략 총노출 ≤ 배분 예산 (실엔진 미러)
+        "entry_stop_mode": "live_policy",
+        "slot_policy": "live_weighted",
+        "calculator_version": CALC_VERSION,
+    }
+
+    sepa = _section(strats, "sepa_trend")
+    rsi2 = _section(strats, "rsi2_reversal")
+    core = _section(strats, "core_holding")
+
+    cfg = BacktestConfig(
+        months=months,
+        strategies=active,
+        allocation=alloc,
+        budget_cap=True,
+        supported_scope=scope,
+        # 사이징
+        sizing=sizing,
+        risk_per_trade_pct=float(risk.get("risk_per_trade_pct", 0.7)),
+        risk_max_position_pct=float(risk.get("risk_max_position_pct", 18.0)),
+        base_position_pct=float(risk.get("base_position_pct", 25.0)),
+        max_position_pct=float(risk.get("max_position_pct", 28.0)),
+        # 슬롯 — 실엔진은 코어 제외 가중 합 ≤ max_positions
+        slot_policy="live_weighted",
+        max_positions_weighted=float(risk.get("max_positions", 8)),
+        max_positions_short=int(risk.get("max_positions", 8)) - int(core.get("max_positions", 3)),
+        max_positions_core=int(core.get("max_positions", 3)),
+        # 현금·최소금액·일일 손실
+        min_cash_reserve_pct=float(risk.get("min_cash_reserve_pct", 5.0)),
+        min_position_value=int(risk.get("min_position_value", 200_000)),
+        daily_max_loss_pct=float(risk.get("daily_max_loss_pct", 5.0)),
+        # 초기 손절 — 실엔진 신규 fill 은 전략별 고정 SL (ATR 동적 손절 없음)
+        entry_stop_mode="live_policy",
+        sepa_min_score=float(sepa.get("min_score", 60.0)),
+        sepa_stop_loss_pct=float(sepa.get("stop_loss_pct", 5.0)),
+        sepa_max_holding_days=int(sepa.get("max_holding_days", 10)),
+        rsi2_min_score=float(rsi2.get("min_score", 60.0)),
+        rsi2_stop_loss_pct=float(rsi2.get("stop_loss_pct", 5.0)),
+        rsi2_max_holding_days=int(rsi2.get("max_holding_days", 10)),
+        core_min_score=float(core.get("min_score", 70.0)),
+        core_stop_loss_pct=float(core.get("stop_loss_pct", 15.0)),
+        core_trailing_stop_pct=float(core.get("trailing_stop_pct", 8.0)),
+        core_trailing_activate_pct=float(core.get("trailing_activate_pct", 10.0)),
+        # 청산 사다리·트레일링·ATR
+        first_exit_pct=float(em.get("first_exit_pct", 10.0)),
+        first_exit_ratio=float(em.get("first_exit_ratio", 0.10)),
+        second_exit_pct=float(em.get("second_exit_pct", 15.0)),
+        second_exit_ratio=float(em.get("second_exit_ratio", 0.50)),
+        third_exit_pct=float(em.get("third_exit_pct", 25.0)),
+        third_exit_ratio=float(em.get("third_exit_ratio", 0.50)),
+        trailing_stop_pct=float(em.get("trailing_stop_pct", 3.0)),
+        trailing_activate_pct=float(em.get("trailing_activate_pct", 5.0)),
+        atr_multiplier=float(em.get("atr_multiplier", 2.0)),
+        min_stop_pct=float(em.get("min_stop_pct", 4.0)),
+        max_stop_pct=float(em.get("max_stop_pct", 8.0)),
+        # 복합 청산·익절후 저효율·정체 (실엔진 값)
+        enable_composite_exit=bool(em.get("enable_composite_trailing", True)),
+        post_exit_stale_days=int(em.get("post_exit_stale_days", 5)),
+        post_exit_stale_pnl_pct=float(em.get("post_exit_stale_pnl_pct", 3.0)),
+        stale_exit_days=int(em.get("stale_exit_days", 5)),
+        stale_exit_pnl_pct=float(em.get("stale_exit_pnl_pct", 2.0)),
+        # 신고가 실패(추세 무효화)는 실엔진에서 전략 파라미터 — sepa/vcp 3영업일
+        stale_high_days=int(sepa.get("stale_high_days", 3)),
+        stale_high_min_pnl_pct=float(em.get("stale_high_min_pnl_pct", 3.0)),
+    )
+
+    for key, value in overrides.items():
+        if not hasattr(cfg, key):
+            raise UnsupportedBacktestConfig(f"알 수 없는 BacktestConfig 필드: {key}")
+        setattr(cfg, key, value)
+    cfg.__post_init__()          # 오버라이드된 모드 값도 한 곳에서 검증
+    return cfg
 
 
 def build_config(yaml_cfg: dict, args: argparse.Namespace) -> BacktestConfig:
+    """CLI 경로 설정 빌더 — 기존 기본 동작(atr_dynamic·fixed 슬롯) 유지."""
     kr = yaml_cfg.get('kr', {})
     risk = kr.get('risk', {})
     em = kr.get('exit_manager', {})

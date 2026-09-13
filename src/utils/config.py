@@ -291,6 +291,25 @@ def _merge_evolved_overrides(raw: Dict[str, Any], config_path: Optional[str] = N
         return raw
 
 
+def load_effective_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """유효 설정(default.yml + evolved_overrides.yml 실제 우선순위 병합)을 dict 로 반환 — 순수 함수.
+
+    `.env`·환경변수·자격증명을 읽지 않는다 (YAML 에는 비밀정보를 두지 않는다).
+    백테스트 게이트·A/B 러너가 실운영과 같은 설정으로 실행하기 위한 단일 출처 (2026-09-14 T6).
+    AppConfig.load 와 같은 병합 함수를 쓰므로 병합 규칙이 갈라지지 않는다.
+    """
+    return _merge_evolved_overrides(load_yaml_config(config_path), config_path)
+
+
+def effective_config_hash(effective: Dict[str, Any]) -> str:
+    """유효 설정의 재현용 hash (sha256 앞 12자). 키 순서·형식 차이에 흔들리지 않는다."""
+    import hashlib
+    import json
+
+    payload = json.dumps(effective, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 @dataclass
 class AppConfig:
     """애플리케이션 전체 설정"""

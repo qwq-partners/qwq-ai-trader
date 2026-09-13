@@ -441,44 +441,7 @@ class StrategyEvolver:
                 gate = await self.backtest_gate.verify(triggered)
                 gate_result = gate.to_dict()
                 if not gate.passed:
-                    self.state.total_rejected_by_backtest += 1
-
-                    if gate.errored:
-                        # 장애로 검증을 못 한 경우 — 방치하면 진화가 조용히 멈춘다.
-                        # 연속 실패가 쌓이면 사람이 알아야 하므로 알림을 올린다.
-                        self.state.consecutive_gate_errors += 1
-                        logger.error(
-                            f"[진화] 백테스트 게이트 장애 "
-                            f"(연속 {self.state.consecutive_gate_errors}회): {gate.reason}"
-                        )
-                        if self.state.consecutive_gate_errors >= 3:
-                            await self._alert_gate_failure()
-                    else:
-                        self.state.consecutive_gate_errors = 0
-                        logger.warning(f"[진화] 백테스트 게이트 기각: {gate.reason}")
-
-                    self._save_state()
-                    # Phase 0: 기각/보류 상세를 불변 원장에 영속화 (기존엔 카운터만)
-                    try:
-                        from .candidate_ledger import record_candidate
-                        record_candidate(
-                            event="gate_error" if gate.errored else "rejected_by_backtest",
-                            parameter=f"{triggered.get('strategy')}.{triggered.get('parameter')}",
-                            old_value=triggered.get("old_value"),
-                            new_value=triggered.get("new_value"),
-                            source=triggered.get("source", ""),
-                            reason=gate.reason,
-                            gate=gate_result,
-                            trigger_failure_ids=triggered.get("trigger_failure_ids"),
-                        )
-                    except Exception as _cl_e:
-                        logger.debug(f"[후보원장] 기각 기록 실패 (무시): {_cl_e}")
-                    return {
-                        "status": "gate_error" if gate.errored else "rejected_by_backtest",
-                        "change": triggered,
-                        "reason": gate.reason,
-                        "backtest": gate_result,
-                    }
+                    return await self._handle_gate_rejection(gate, triggered)
                 self.state.consecutive_gate_errors = 0
                 # 최종 리뷰 블로커 #1 (Codex, allowlist 반전): skip이면 source
                 # 무관 기각이 기본 — "검증 불가 = 적용 불가". 유일한 예외는
@@ -536,6 +499,53 @@ class StrategyEvolver:
             return {"status": "dry_run", "change": triggered}
 
         return {"status": "no_change", "reason": "트리거 규칙 없음"}
+
+    async def _handle_gate_rejection(self, gate, triggered: Dict) -> Dict[str, Any]:
+        """게이트 비통과 처리 — 원장 기록·카운터·알림.
+
+        구분 (2026-09-14 리뷰 blocking #1):
+          - `errored`      일시 장애(타임아웃·예외·데이터 부족·WF 평가 불가). 방치하면 진화가
+                           조용히 멈추므로 연속 장애 카운터를 올리고 3회면 사람에게 알린다.
+          - `unsupported`  구조적 판정 불가(모사 불가 전략·미매핑 필드·미지원 유효 설정).
+                           재시도해도 같으므로 **기각 계열**로 기록한다 — 장애 카운터·알림 없이
+                           `rejected_by_backtest`(=`_SUPPRESS_EVENTS`)라 14일 재제안 억제가 걸린다.
+          - 그 외          성능 미달 기각 (게이트가 제 역할을 한 정상 동작).
+        """
+        gate_result = gate.to_dict()
+        is_failure = bool(gate.errored) and not getattr(gate, "unsupported", False)
+        self.state.total_rejected_by_backtest += 1
+
+        if is_failure:
+            self.state.consecutive_gate_errors += 1
+            logger.error(
+                f"[진화] 백테스트 게이트 장애 "
+                f"(연속 {self.state.consecutive_gate_errors}회): {gate.reason}"
+            )
+            if self.state.consecutive_gate_errors >= 3:
+                await self._alert_gate_failure()
+        else:
+            self.state.consecutive_gate_errors = 0
+            logger.warning(f"[진화] 백테스트 게이트 기각: {gate.reason}")
+
+        self._save_state()
+        status = "gate_error" if is_failure else "rejected_by_backtest"
+        # Phase 0: 기각/보류 상세를 불변 원장에 영속화 (기존엔 카운터만)
+        try:
+            from .candidate_ledger import record_candidate
+            record_candidate(
+                event=status,
+                parameter=f"{triggered.get('strategy')}.{triggered.get('parameter')}",
+                old_value=triggered.get("old_value"),
+                new_value=triggered.get("new_value"),
+                source=triggered.get("source", ""),
+                reason=gate.reason,
+                gate=gate_result,
+                trigger_failure_ids=triggered.get("trigger_failure_ids"),
+            )
+        except Exception as _cl_e:
+            logger.debug(f"[후보원장] 기각 기록 실패 (무시): {_cl_e}")
+        return {"status": status, "change": triggered,
+                "reason": gate.reason, "backtest": gate_result}
 
     async def _alert_gate_failure(self) -> None:
         """
