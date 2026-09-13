@@ -253,17 +253,19 @@ def test_engine_risk_mode_respects_cash_and_strategy_cap(home, monkeypatch):
 
 # ── 급락 cap: 사이징 분모와 ExitManager 판정이 같은 해석 ──────────────────────────
 
-def test_crash_cap_same_interpretation_as_exit_manager(home, monkeypatch):
+def test_crash_cap_not_applied_to_sizing_denominator_but_flagged(home, monkeypatch):
+    """급락 cap 은 청산 판정엔 그대로, 사이징 분모엔 미적용(보수적) — cap 해제 후 SL 이 원래 값으로
+    돌아가므로 2.5 로 나누면 180주(해제 후 위험 0.9%) 가 된다 (2026-09-14 리뷰 P2)."""
     em = _em()
-    em.apply_intraday_crash_params("crash")             # SL cap 2.5
+    em.apply_intraday_crash_params("crash")             # 청산 SL cap 2.5
     rm = _rm(monkeypatch, mode="risk", em=em)
     sig = _sig(2.5)
-    # 0.7/2.5 = 28% → 상한 18% = 1,800,000 → 180주 (위험 45,006 ≤ 70,000)
-    assert rm._calculate_position_size(sig) == 180
-    assert (sig.signal.metadata["risk_stop_pct"], sig.signal.metadata["stop_source"]) == (2.5, "strategy")
+    assert rm._calculate_position_size(sig) == 139      # 분모 = 전략 SL 5% (cap 무시)
+    m = sig.signal.metadata
+    assert (m["risk_stop_pct"], m["stop_source"], m["stop_crash_active"]) == (5.0, "strategy", True)
 
-    st = _register_like_scheduler(em, "sepa_trend", 180, 2.5)
-    above, below = _net_stop_price(2.5)
+    st = _register_like_scheduler(em, "sepa_trend", 139, 2.5)
+    above, below = _net_stop_price(2.5)                 # 청산은 여전히 cap 2.5 로 판정
     assert em.update_price(SYM, above) is None
     assert "(SL=2.50%" in em.update_price(SYM, below)[2]
 
@@ -271,4 +273,21 @@ def test_crash_cap_same_interpretation_as_exit_manager(home, monkeypatch):
     core = _sig(2.5, StrategyType.CORE_HOLDING)
     assert rm._calculate_position_size(core) == 95     # nominal 경로 (10% × ATR 배율 0.956)
     assert "risk_stop_pct" not in core.signal.metadata
-    assert em.resolve_stop(dynamic_stop_pct=10.0, fixed_stop_pct=None, is_core=True).crash_capped is False
+    assert em.resolve_stop(dynamic_stop_pct=10.0, fixed_stop_pct=None, is_core=True,
+                           apply_crash_cap=False).crash_capped is False
+    # 판정용(apply_crash_cap=True) 은 기존대로 값 자체를 cap
+    d = em.resolve_stop(dynamic_stop_pct=None, fixed_stop_pct=5.0, is_core=False)
+    assert (float(d.stop_pct), d.crash_capped) == (2.5, True)
+
+
+def test_invalid_global_stop_does_not_skip_exit_checks(home, monkeypatch):
+    """config.stop_loss_pct 가 0 이어도 전략 SL 이 있는 포지션의 손절 판정은 계속돼야 한다 —
+    ValueError 가 update_price 밖으로 나가면 청산 전체가 스킵되는 fail-open (2026-09-14 리뷰 P1)."""
+    em = ExitManager(ExitConfig(stop_loss_pct=0.0, min_stop_pct=4.0, max_stop_pct=8.0))
+    _register_like_scheduler(em, "sepa_trend", 100, 2.5)   # 전략 고정 SL 5%
+    above, below = _net_stop_price(5.0)
+    assert em.update_price(SYM, above) is None
+    assert "(SL=5.00%" in em.update_price(SYM, below)[2]
+    assert em._stop_fallback_warned is True
+    with pytest.raises(ValueError):                    # 사이징 경로는 여전히 거부(fail-closed)
+        em.resolve_stop(dynamic_stop_pct=None, fixed_stop_pct=5.0, is_core=False)

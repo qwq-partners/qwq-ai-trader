@@ -63,12 +63,15 @@ def make_entry_stop_resolver(exit_manager: Any,
 
     kr_scheduler 의 신규 fill 등록(register_position)과 같은 전략별 설정(run_trader._strategy_exit_params)을
     조회한다. 신규 등록은 price_history 없이 호출되므로 ATR 동적 손절이 생기지 않는다 → dynamic 은 항상 None
-    (atr_pct_hint 는 트레일링 용도). 급락 cap·글로벌·min 은 ExitManager.resolve_stop 이 현재 상태로 해석한다.
+    (atr_pct_hint 는 트레일링 용도). 글로벌·min 은 ExitManager.resolve_stop 이 현재 상태로 해석한다.
+    급락 cap 은 **분모에 적용하지 않는다**(apply_crash_cap=False) — cap 은 해제되면 SL 이 원래 값으로 돌아가므로
+    타이트한 임시 SL 로 나누면 급락 중 포지션이 커진다. `crash_capped` 는 '주문 시점에 cap 활성' 표시로만 쓴다.
     """
     def resolve(strategy: Optional[str]) -> StopDecision:
         params = strategy_exit_params.get(strategy, {}) if strategy else {}
         is_core = bool(params.get("is_core", False)) or strategy == "core_holding"
         return exit_manager.resolve_stop(
             dynamic_stop_pct=None, fixed_stop_pct=params.get("stop_loss_pct"), is_core=is_core,
+            apply_crash_cap=False,
         )
     return resolve

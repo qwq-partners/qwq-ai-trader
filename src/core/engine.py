@@ -2467,10 +2467,11 @@ class RiskManager:
                 _meta["sizing_mode"] = "risk"
                 _meta["risk_stop_pct"] = round(float(_risk_stop), 2)
                 _meta["stop_source"] = _stop_decision.source
+                _meta["stop_crash_active"] = bool(_stop_decision.crash_capped)   # 주문 시점 급락 cap 활성 여부 (분모엔 미적용)
                 signal.signal.metadata = _meta
             logger.info(
                 f"[리스크] {signal.symbol} 위험 사이징: 손절 {float(_risk_stop):.2f}%({_stop_decision.source}"
-                f"{', 급락cap' if _stop_decision.crash_capped else ''}) · 위험 "
+                f"{', 급락cap 활성(분모 미적용)' if _stop_decision.crash_capped else ''}) · 위험 "
                 f"{self.config.risk_per_trade_pct}% → {position_value:,.0f}원 "
                 f"({float(position_value / equity * 100):.1f}%, ATR={_risk_atr})"
             )

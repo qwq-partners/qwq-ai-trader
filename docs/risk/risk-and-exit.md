@@ -385,6 +385,13 @@ bull 시 효과: max_positions 8→10, 현금 5→3%, 비중 25→30% → **현�
 - 실제 고정 SL 기준이라 risk 모드는 전략별 거의 고정 비중(sepa 14%·gap 18% 상한·vcp 17.5%)이 된다 — ATR 적응 효과로 해석하지 않는다.
 - 백테스트 nominal(25% 고정)은 실엔진 nominal(전략 비율×강도×ATR 배율 ≈ 23~28%)과 완전 동일하진 않다 — 상대 비교로만 해석.
 
+- **급락 cap 은 분모에 적용하지 않는다** (`resolve_stop(apply_crash_cap=False)`, 2026-09-14 리뷰 P2): cap 은 해제되면 SL 이 원래 값으로
+  돌아가므로 임시 SL 2.5 로 나누면 급락 중 포지션이 커지고(180주) 해제 후 계획 위험 0.9% 가 된다. 신호 메타 `stop_crash_active` 로 주문 시점 cap 활성만 표시.
+- **손절 설정 무효 시 청산 판정은 멈추지 않는다**: `resolve_effective_stop` 은 0·음수·NaN 을 ValueError 로 거부하지만 `update_price` 는 이를 잡아
+  T2 이전 우선순위(무효 항목은 ExitConfig 기본값)로 폴백해 손절·익절·트레일링을 계속 판정한다(경고 1회). 사이징 경로는 그대로 거부(fail-closed).
+- **한계(명시)**: 계획 위험 상한은 주문 시점 보장이다. 레짐 전환 시 `apply_regime_params` 가 비코어 포지션 SL 을 레짐값으로 덮어쓰는 기존 청산 정책
+  (gap 3.5 → bull 5.0 이면 위험 0.9%)과 갭·슬리피지는 포함하지 않는다 — T3 원장 스냅샷(`planned_vs_filled_risk_delta`)과 canary 판정 기준에서 별도 분류.
+
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 
 ```

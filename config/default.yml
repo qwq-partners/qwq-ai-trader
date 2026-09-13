@@ -109,9 +109,11 @@ kr:
     base_position_pct: 25.0
     max_position_pct: 28.0
     max_positions: 8
-    # 위험 기반 사이징 (2026-09-13~, 리뷰 권고 ③): 종목당 금액 = equity × 0.7% / 진입 손절폭(ATR×2, 4~8% 클램프)
-    # → 종목당 8.75~17.5%. 근거: docs/research/exit-policy-ab-2026-09.md (sepa 6m/12m 게이트 통과, MDD 절반·회전 절반).
-    # nominal 로 되돌리면 전략별 비율(sepa 25/vcp 15/gap 15)×ATR 배율 사이징. canary: 매수 재개 후 첫 30건.
+    # 위험 기반 사이징 (2026-09-13~, 09-14 정합화): 종목당 금액 = equity × 0.7% / 신규 체결에 실제 적용되는 고정 SL
+    # (sepa 5 / gap 3.5 / vcp 4 — ExitManager 와 같은 해석, ATR 동적 손절은 신규 fill 에 없음, 급락 cap 은 분모 미적용)
+    # → sepa 14% · gap 18%(상한) · vcp 17.5%. 오버레이·3주 보정 뒤 매수수수료 포함 계획 위험 ≤ 0.7% 로 최종 재클램프.
+    # 근거·재검증 상태: docs/superpowers/plans/2026-09-13-review-remediation.md (기존 A/B 는 미래정보 포함 — 재계산 전).
+    # 미달 시 nominal 자동 복귀 없음(명목 비중이 더 큼) — 신규 진입 보류·원인 확인 우선. canary: 매수 재개 후 첫 5·10·30건.
     sizing_mode: risk
     risk_per_trade_pct: 0.7
     risk_max_position_pct: 18.0
