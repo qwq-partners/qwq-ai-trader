@@ -392,6 +392,58 @@ bull 시 효과: max_positions 8→10, 현금 5→3%, 비중 25→30% → **현�
 - **한계(명시)**: 계획 위험 상한은 주문 시점 보장이다. 레짐 전환 시 `apply_regime_params` 가 비코어 포지션 SL 을 레짐값으로 덮어쓰는 기존 청산 정책
   (gap 3.5 → bull 5.0 이면 위험 0.9%)과 갭·슬리피지는 포함하지 않는다 — T3 원장 스냅샷(`planned_vs_filled_risk_delta`)과 canary 판정 기준에서 별도 분류.
 
+## 진입 위험 스냅샷 원장 (`entry_risk`, 2026-09-14~ 계획서 T3/F4)
+
+risk 모드 주문의 계획 위험을 **고정 스키마 JSON**으로 만들어 신호 → 주문 캐시 → `signal_events` →
+체결 원장(`market_context.entry_risk`) → canary 원장까지 같은 값으로 흘린다. 코드: `src/utils/entry_risk.py`
+(순수 함수, 네트워크·DB 없음) / 원장 생성 `scripts/export_risk_ledger.py` / 판정 `scripts/review_risk_canary.py`.
+
+**기준 결함(F4)**: 09-13 risk 태그(`sizing_mode`/`risk_stop_pct`/`stop_source`/`stop_crash_active`)가 원본
+`Signal.metadata` 에만 있고 **별개 dict 인 `event.metadata`**·주문 캐시·체결 원장에는 없어 원장에서
+risk 모드 체결을 골라낼 수 없었다. 이제 스냅샷을 `event.metadata` 와 `event.signal.metadata`
+**양쪽 별개 복사본**에 넣는다(이벤트를 공유 참조로 바꾸지 않는다).
+
+```json
+{"version": 1, "cohort_id": "risk-sepa_trend-v1", "sizing_mode": "risk", "strategy": "sepa_trend",
+ "stop_basis": "net_pnl", "stop_pct": "5.0", "stop_source": "strategy", "stop_crash_active": false,
+ "equity_at_decision": "10000000", "risk_budget_amount": "70000.0", "planned_price": "10000",
+ "planned_quantity": 139, "planned_risk_amount": "69509.75",
+ "signal_ts": "2026-09-14T10:30:00+09:00", "applied_sha": "<체크아웃 SHA>", "config_hash": "<sha256>"}
+```
+- `cohort_id` = `risk-<strategy>-v1`. 금액은 문자열 Decimal, 시각은 ISO8601, 수량은 int.
+- `config_hash` 는 **자격증명 제외 allowlist**(`risk`/`kr`/`us`/`exit`/`strategies`/`factor_budgets` 등 섹션 +
+  key/secret/token/cano/url 류 키 제외)만 sha256 한다. `applied_sha` 는 현재 체크아웃 SHA 1회 캐시(조회 실패 시 `unknown`).
+- 생성 시점은 **모든 오버레이·최소금액·3주 보정·위험 상한이 끝난 최종 수량 확정 후**. 수량 0(주문·pending 미생성)에는
+  스냅샷을 남기지 않는다 — 주문 없는 계측 태그 금지.
+
+**R 정의**: 완결 포지션의 순손익(수수료 포함) ÷ **최초 진입 주문 완료 시 확정한 위험금액**.
+- `planned_risk_amount` = (price×q + 매수수수료) × net SL% — T2 사이징 상한과 같은 식(주문 시점 계획값).
+- `initial_risk_amount` = 체결 후 `confirm_initial_risk(fills, actual_stop_pct)` = Σ(체결가×수량) × 실제 초기 SL%.
+  canary 의 `entry_cost`(수수료 제외 Σ price×quantity) 정의와 같은 분모라 기술 검증이 재계산으로 대조할 수 있고,
+  매수수수료만큼의 차이는 `planned_vs_filled_risk_delta` 에 남는다(원장 예시 -9.75).
+- 부분체결은 주문이 끝날 때까지 누적해 한 번에 확정한다. **확정된 분모는 부분매도·레짐 전환·재시작으로 바뀌지 않는다**:
+  `ExitManager.set_initial_risk(symbol, amount, stop_pct)` 는 최초 1회만 기록하고(이미 있으면 False),
+  stage 파일(`exit_stages_YYYY-MM-DD.json`)의 `initial_risk_amount`·`actual_stop_pct` 로 영속화·복원된다(구 파일에 키가
+  없으면 None = 미계측, 기존 스키마 호환).
+- 별도 추가 매수는 주문별 위험을 분리 기록한다. 원장에서 lot 구분이 불가능하면 `lots_ambiguous: true` 로 표본에서 제외.
+
+**legacy/unmeasured**: 과거 거래·수동 포지션처럼 `market_context.entry_risk` 가 없는 건은 원장에 `entry_risk: null` /
+`cohort_id: "legacy-unmeasured"` 로 내보낸다. **현재 설정으로 초기 위험을 추정해 canary 표본에 넣지 않는다.**
+
+**원장 만들기(오프라인, 주문·설정 변경 없음)**
+```bash
+venv/bin/python scripts/export_risk_ledger.py --source journal --output ledger.json --days 90
+venv/bin/python scripts/review_risk_canary.py --input ledger.json --cohort risk-sepa_trend-v1 --output report.json
+```
+`--source db` 는 `TradeStorage` 연결을 재사용하되 `market_context` 를 포함해 직접 SELECT 한다
+(`TradeJournal.sync_from_db` 는 그 컬럼을 조회하지 않아 스냅샷이 유실된다).
+
+**배선 현황(2026-09-14)**: 엔진(스냅샷 생성·양쪽 메타·`_log_sig` allowlist)·저장(TradeStorage JSONB / TradeJournal JSON
+그대로 직렬화)·ExitManager 영속·exporter·canary 왕복은 완료. **남은 지점은 `src/schedulers/kr_scheduler.py` 체결 경로**:
+`_sig_metadata["entry_risk"]` 를 `record_entry(market_context=...)` 에 병합하고, 매수 주문 완료 시
+`confirm_initial_risk` → `ExitManager.set_initial_risk` 로 R 분모를 확정한다(담당 A).
+테스트: `tests/test_entry_risk_lifecycle.py` (from_signal → 사이징 → 주문 캐시 → signal_events → 저장/복원 → exporter → canary 왕복).
+
 ## ATR 포지션 사이징 (src/utils/sizing.py)
 
 ```
