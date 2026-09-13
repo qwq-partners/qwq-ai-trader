@@ -863,6 +863,10 @@ class UnifiedTradingBot:
             # live set 참조라 이후 add/remove_exit_exempt 변경도 즉시 반영된다.
             if self.exit_manager:
                 engine_risk_manager._exit_exempt_ref = self.exit_manager._exit_exempt
+                # 위험 기반 사이징의 진입 손절폭 규칙을 ExitManager와 동일하게 (2026-09-13)
+                _emc = self.exit_manager.config
+                engine_risk_manager._exit_stop_params = (
+                    float(_emc.atr_multiplier), float(_emc.min_stop_pct), float(_emc.max_stop_pct))
 
             # pending 만료 검증자 배선 (2026-08-08 P0 — 이중 매도 방지)
             # 5분 초과 pending은 거래소 SELL 미체결 존재 여부 확인 후에만 해제
@@ -887,7 +891,11 @@ class UnifiedTradingBot:
                 f"[KR] 엔진 리스크 매니저 등록 완료 "
                 f"(validator: LLM 범위={engine_risk_manager._LLM_CHECK_MIN}~{engine_risk_manager._LLM_BYPASS_AT}, "
                 f"교체 임계={engine_risk_manager._REPLACEMENT_MIN_SCORE}, "
-                f"축출면제={len(getattr(engine_risk_manager, '_exit_exempt_ref', set()))}종목)"
+                f"축출면제={len(getattr(engine_risk_manager, '_exit_exempt_ref', set()))}종목, "
+                f"사이징={getattr(engine_risk_manager.config, 'sizing_mode', 'nominal')} "
+                f"위험 {engine_risk_manager.config.risk_per_trade_pct}%/종목 상한 "
+                f"{engine_risk_manager.config.risk_max_position_pct}%/손절폭 규칙 "
+                f"{getattr(engine_risk_manager, '_exit_stop_params', None)})"
             )
 
             # 종목 위키 배선 (2026-08-07) — 전문가 affected_symbols → 리서치 노트.

@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-13 — feat: 위험 기반 사이징 (`risk.sizing_mode: risk`) — 리뷰 2단계, 백테스트 A/B 승자 축 적용
+
+`docs/research/exit-policy-ab-2026-09.md`(PR #29)에서 두 윈도우 모두 게이트를 통과한 유일 축을 실엔진에 구현.
+- `src/utils/sizing.py risk_position_value`: `equity × risk_per_trade_pct / 진입 손절폭`, 손절폭은 `calculate_dynamic_stop_loss`
+  (ATR×배수, min~max 클램프)로 ExitManager와 동일 규칙, 상한 `risk_max_position_pct`.
+- `engine._calculate_position_size`: `sizing_mode == "risk"`(코어 제외)면 전략 비율·강도 배율 대신 위 값 사용, 메타 `position_multiplier`가
+  ATR 배율 그대로면 무시(이중 축소 방지), 신호 메타에 `sizing_mode`/`risk_stop_pct` 태그(canary 계측). 이후 예산 캡·부스트·최소 금액은 기존 동일.
+- `run_trader`: ExitConfig(atr_multiplier/min/max_stop)를 `engine.risk_manager._exit_stop_params`로 주입, 기동 로그에 사이징 모드.
+- `RiskConfig`/`config.py`/`default.yml kr.risk`: `sizing_mode: risk`, `risk_per_trade_pct: 0.7`, `risk_max_position_pct: 18.0` (US는 nominal 유지).
+- `BacktestGate.PARAM_MAP`에 `risk.sizing_mode/risk_per_trade_pct/risk_max_position_pct` 매핑 — 진화 제안도 게이트 경유.
+- 테스트 `tests/test_risk_sizing.py` 6건 (헬퍼 클램프·폴백·캡, 엔진 risk vs nominal, 주입 파라미터·강도 무시, 현금·전략 캡).
+- 현금 0.4% 상태라 실거래 발동은 매수 재개 후. canary 30건 미달 시 `sizing_mode: nominal` 복귀.
+
 ## 2026-09-13 — research: 청산·회전·사이징 2×2×2 백테스트 A/B (리뷰 권고 1~3 동시 검증)
 
 `docs/research/exit-policy-ab-2026-09.md` · 원본 `results/ab_exit_policy_2026-09.json` · 브랜치 `research/exit-policy-ab`.

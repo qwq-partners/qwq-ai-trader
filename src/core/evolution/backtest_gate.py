@@ -91,6 +91,10 @@ PARAM_MAP: Dict[str, str] = {
     # 트레일링
     "exit_manager.trailing_stop_pct": "trailing_stop_pct",
     "exit_manager.trailing_activate_pct": "trailing_activate_pct",
+    # 사이징 (2026-09-13 — 위험 기반 사이징 파라미터도 게이트 경유)
+    "risk.sizing_mode": "sizing",
+    "risk.risk_per_trade_pct": "risk_per_trade_pct",
+    "risk.risk_max_position_pct": "risk_max_position_pct",
     # 보유기간/정체
     "sepa.max_holding_days": "sepa_max_holding_days",
     "rsi2.max_holding_days": "rsi2_max_holding_days",

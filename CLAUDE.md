@@ -137,8 +137,8 @@
 | 일일 거래 횟수 | 10회 | daily_max_trades |
 | 일일 신규 매수 | 5개 | max_daily_new_buys |
 | 최대 포지션 수 | 8개 | max_positions |
-| 기본 포지션 비율 | 25% | equity 대비 |
-| 최대 포지션 비율 | 28% | 개별 포지션 상한 |
+| 기본 포지션 비율 | 25% | nominal 모드만. **2026-09-13~ `sizing_mode: risk`** — equity×0.7%/진입 손절폭(ATR×2, 4~8%) = 종목당 8.75~17.5% |
+| 최대 포지션 비율 | 28% | nominal 상한 / risk 모드는 `risk_max_position_pct` 18% |
 | 최소 현금 보유 | 5% | total_equity 대비 |
 | 최소 포지션 금액 | 20만원 | 미달 시 매수 거부 |
 
@@ -168,7 +168,8 @@
   로그는 equity 기준 예산이라 현금과 무관 — 0건 반복은 정상.
 
 ### 전략·아키텍처 종합 리뷰 (2026-09-13) — `docs/reviews/strategy-architecture-review-2026-09.md`
-- **1단계 반영(2026-09-13)**: 배분 core 0 / gap 15 / sepa 40 / vcp 10 (합 65, 잔여 현금) · `TEAM_CONVICTION=0` · 계측 기준 교체. 2단계(청산 단일화·회전 억제·위험 사이징)는 백테스터 exit_policy A/B 후 게이트 경유
+- **1단계 반영(2026-09-13)**: 배분 core 0 / gap 15 / sepa 40 / vcp 10 (합 65, 잔여 현금) · `TEAM_CONVICTION=0` · 계측 기준 교체
+- **2단계 반영(2026-09-13)**: 백테스트 A/B(`docs/research/exit-policy-ab-2026-09.md`, 48셀) — 청산 단일화(channel)·보유 연장 **기각**, **위험 기반 사이징만 채택** (`risk.sizing_mode: risk`, 0.7%/건, 상한 18%). canary: 매수 재개 후 첫 30건 원장 R·KODEX200 초과로 판정. 특성화 테스트(ExitManager 35·sync 11)·루프 하트비트·`_sync_portfolio` 유령 제거 안전화 배포
 - **2단계 A/B 완료(2026-09-13, `docs/research/exit-policy-ab-2026-09.md`)**: 청산(ladder/channel)×보유(current/extended)×사이징(nominal/risk) 2×2×2, 6·12개월, 포지션 단위 R — 두 윈도우 모두 통과한 셀은 sepa `ladder/current/risk`(**위험 기반 사이징만**, MDD 절반·회전 절반) 하나. 채널 청산·회전 억제는 기각(채널은 보유 규칙 해제 시에만 개선이나 아웃라이어 의존 → shadow 유지). 권고 파라미터: equity×0.7%/stop, 상한 18%, 동시 7 — canary·게이트 경유, ExitConfig/REGIME_EXIT_PARAMS 변경 없음. 백테스터 축: `scripts/backtest_strategies.py --exit-policy/--holding-policy/--sizing` (기본값 불변)
 - 실거래 266건: 수수료 전 총손익 ≈ 0, 차감 후 -139만, t=-0.18, KOSPI +37% vs 자산 -7.5% — **엣지 미입증**
 - 구조 원인: 연 91배 회전(수수료 = 손실 전부) · 1차 익절이 타이트 청산 무장(p90 +4.9%) · 명목 사이징 3~4종목 집중 · 배분 55%가 근거 없는 라인 · 레짐 4겹 후행
