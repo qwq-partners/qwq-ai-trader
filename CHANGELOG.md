@@ -19,6 +19,39 @@
 - 테스트 `tests/test_backtest_exit_policy.py` 8건(갭관통·스탑·채널 이탈·runner 승격·NaN·정책 분기·min_holding·왕복 집계).
   docs/README Research 링크, CLAUDE.md 리뷰 절 갱신. 교훈: sepa 단독+혼합 두 그리드 필수(rsi2 혼합이 승자 뒤집음),
   백테스터 기본 ladder는 실엔진보다 관대(복합·익절후 stale off) — 미러 옵션으로 켜야 함.
+## 2026-09-13 — docs: 청산 문서 드리프트 3건 정정 (ExitManager 특성화 테스트가 발견)
+
+`tests/test_exit_manager_characterization.py`(PR #26) 작성 중 코드와 어긋난 문서 — 코드 변경 없음.
+- `docs/risk/risk-and-exit.md` 분할 익절 표 1차 +5%/20% → **+10%/10%** (누적 10/55/77.5%), `min_stop_pct` 3.5 → **4.0**,
+  본전 보호 -1.5% → **-0.5%**(NONE -2.0%). `CLAUDE.md` ATR 손절 범위 3.5~8 → **4~8**.
+
+## 2026-09-13 — feat: 루프 하트비트 — 살아 있지만 일을 못 하는 스케줄러 루프 정체 알림
+
+종합 리뷰(2026-09-13) "조용한 열화" 항목. `_supervised`는 예외로 죽은 루프만 재기동해, 돌지만 성공하지 못하는
+루프(HTTP 500 재시도 폭풍 14일·수확 shadow 2일 무동작·daily_bias 7/2 정체)를 못 봤다. 루프 로직 변경 없음.
+- `src/utils/loop_heartbeat.py` (신규): `beat(name)` / `snapshot()` / `stale(now, thresholds, floor)` /
+  `check()` — `PERIODS`(장중 6개, 정체 = 주기×3·최소 120초) + `DAILY`(3개, 직전 거래일 자정 이후 beat 없음).
+  장중 루프는 거래일 정규장 09:00~15:20에만 점검하고 09:00을 기산점으로 삼아 개장 직후 오탐을 막는다.
+- `src/schedulers/kr_scheduler.py`: 성공 반복 지점에 `beat` 9곳 — `_sync_portfolio`(sync_status True),
+  `run_fill_check`(폴링 완료), `run_screening`(스캔 완료), `run_rest_price_feed`(try 본문 끝),
+  `run_market_trend_monitor`(추세 갱신), `run_dart_alert_scheduler`(폴 도달), `run_harvest_shadow_scheduler`·
+  `run_vol_targeting_scheduler`(일일 성공), `run_evolution_scheduler`(20:30 블록 완주).
+  새 감독 루프 `run_heartbeat_monitor`(`kr_heartbeat_monitor`): 60초마다 `check()` → `[하트비트] <루프> N초 정체`
+  WARNING + 루프별 시간당 1회 `send_alert`. 재기동 없음.
+- `src/dashboard/data_collector.py`: `/api/health`에 `loops{루프: 경과초}` · `stale_loops{루프: 경과초}` 추가.
+- `scripts/dev/ops_check.sh`: 하트비트 줄(정체 루프·최장 대기) 추가.
+- `tests/test_loop_heartbeat.py` (신규, 6건): 레지스트리·임계·floor·정규장 창·주말/공휴일 갭·재시작 기산.
+- 문서: `docs/operations/runbook.md` 알려진 이슈에 하트비트 절.
+## 2026-09-13 — fix: _sync_portfolio 유령 제거 안전화 (exit_exempt 3주기 가드·부분 누락 재시도·등록 실패 대기열)
+
+특성화 테스트(`tests/test_sync_portfolio_characterization.py`, 리뷰 권고 ⑧)가 드러낸 결함 4건 — `src/schedulers/kr_scheduler.py`.
+- **exit_exempt 즉시 삭제**: KIS가 부분 응답(평가액>0, 다른 종목은 있음)을 주면 펩트론 087010(자산 99.6%)도 그 자리에서
+  `del positions` + `ExitManager.remove_position` → 3주기 연속 누락(`_exempt_missing_count`)에서만 제거, 재등장 시 리셋.
+- **부분 누락 미재시도**: 재시도가 "0건 응답"에서만 발동 → 일부 종목 누락(매도 pending 제외)도 5초 후 1회 재시도, 그래도 없으면 유령.
+- **등록 실패 전파**: sync 경로 `register_position` 예외가 바깥 except로 올라가 수량·현금 동기화까지 중단 →
+  포지션 유지 + `_pending_exit_registrations` 대기열(fill_check 재시도), 나머지 동기화 계속.
+- **잔고 실패 후 포지션 조회**: 판정 전에 `get_positions()`까지 호출(원장 TR 낭비) → 잔고 실패면 즉시 반환.
+- 테스트 7→11건(xfail 해소), runbook·risk-and-exit 갱신.
 
 ## 2026-09-13 — config: 리뷰 1단계 반영 — 배분 재편(core 0·gap 15·sepa 40) + 팀 conviction 부스트 비활성
 

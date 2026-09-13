@@ -230,26 +230,29 @@
   4. `batch_analyzer.monitor_positions` 루프 → RSI2 청산·보유기간초과·ExitManager 릴레이 스킵
   5. `batch_analyzer._preemptive_stale_exit_on_bear` → 약세장 선제 stale 청산 스킵
   - 코어 경로(rebalance/stale/early-warning)는 `strategy == "core_holding"` 한정이라 strategy="manual" 종목엔 미적용.
+  6. `kr_scheduler._sync_portfolio` 유령 제거 — KIS 부분 응답 1회로는 제거하지 않고 3주기 연속 누락에서만 (2026-09-13, 이전엔 부분 응답 시 즉시 삭제 + ExitManager 상태 소실)
 - **수동 매수**: `config kr.manual_buy_orders: [{symbol, name, exit_exempt}]` → 기동 시 1회 실행(보유 시 자동 스킵). KIS 시장가는 주문가능금액을 상한가 기준으로 계산하므로 marketable 지정가(현재가+0.6%)로 전액 체결.
 - ⚠️ **손절 부재 = 하락 100% 노출.** 청산은 전적으로 수동 판단. (펩트론 087010: 2026-06-23 사용자 지시로 전액 매수 + 손절 면제)
 
 ### 분할 익절 단계
 | 단계 | 조건 | 매도 비율 | 누적 |
 |------|------|----------|------|
-| 1차 (FIRST) | +5% | **20%** | 20% |
-| 2차 (SECOND) | +15% | 25% | 45% |
-| 3차 (THIRD) | +25% | 50% | 72.5% |
+| 1차 (FIRST) | +10% | **10%** | 10% |
+| 2차 (SECOND) | +15% | 잔여의 50% (=45%) | 55% |
+| 3차 (THIRD) | +25% | 잔여의 50% (=22.5%) | 77.5% |
 | 트레일링 | 3차 후 | 잔여 전량 | 100% |
+
+(코드 `ExitConfig` 기본값 기준 — 2026-09-13 문서 정정. 1차 +5%/20%는 2026-08-02 백테스트로 +10%/10%로 바뀐 값이 문서에 남아 있었음)
 
 ### ATR 동적 손절
 - 공식: `max(min_stop, min(max_stop, ATR × multiplier))`
-- `min_stop_pct`: 3.5%
+- `min_stop_pct`: **4.0%** (`ExitConfig`·`default.yml`·`evolved_overrides.yml` 모두 4.0 — 2026-09-13 문서 정정, 3.5는 구값)
 - `max_stop_pct`: **8.0%** (기존 6.0에서 확대)
 - `atr_multiplier`: 2.0
-- 예: ATR 6% → max(3.5, min(8.0, 12.0)) = **8.0%**
+- 예: ATR 6% → max(4.0, min(8.0, 12.0)) = **8.0%**, ATR 1% → **4.0%**
 
 ### 본전 보호
-- FIRST 단계 이후: -1.5% 도달 시 본전 청산
+- FIRST 단계 이후: **-0.5%** 도달 시 본전 청산 (코드 `sell_fee_buffer` — 2026-09-13 문서 정정, -1.5는 구값. NONE 단계는 -2.0%)
 
 ### ATR 연동 트레일링 (ATR-linked trailing)
 - **배경**: SK하이닉스 4/13 일시 저점에서 고정 3% 트레일링에 조기 청산 → 4/14~ +16% 반등 누락. 매크로 노이즈에 과민.

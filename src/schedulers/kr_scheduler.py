@@ -32,6 +32,7 @@ from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, St
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
 from ..utils.telegram import send_alert
+from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 
@@ -70,6 +71,8 @@ class KRScheduler:
 
         # 매수 체결 후 ExitManager 등록 실패 종목 (다음 fill_check 주기에 재시도)
         self._pending_exit_registrations: Set[str] = set()
+        # exit_exempt 종목의 KIS 응답 연속 누락 횟수 (부분 응답 1회로 유령 제거하지 않기 위함)
+        self._exempt_missing_count: Dict[str, int] = {}
 
     async def _supervised(self, coro_fn, name: str):
         """루프 슈퍼바이저 (2026-08-04 P1) — 미포착 예외로 스케줄러가 조용히
@@ -225,6 +228,11 @@ class KRScheduler:
         # 보유 종목 DART 공시 경보 (2026-08-20 — 장중 10분 주기, 경보 전용)
         tasks.append(asyncio.create_task(
             self.run_dart_alert_scheduler(), name="kr_dart_alert"
+        ))
+
+        # 루프 하트비트 감시 (2026-09-13 — 살아 있지만 일을 못 하는 루프 탐지)
+        tasks.append(asyncio.create_task(
+            self._supervised(self.run_heartbeat_monitor, "kr_heartbeat_monitor"), name="kr_heartbeat_monitor"
         ))
 
         # 헬스 모니터
@@ -923,13 +931,12 @@ class KRScheduler:
         try:
             # 1. KIS API에서 실제 잔고/포지션 조회 (lock 밖에서 수행 - IO 작업)
             balance = await bot.broker.get_account_balance()
-            kis_positions = await bot.broker.get_positions()
-
             if not balance:
                 logger.warning("포트폴리오 동기화: 잔고 조회 실패")
                 if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                     bot.risk_manager.set_sync_status(False)
                 return
+            kis_positions = await bot.broker.get_positions()
 
             # 2. API 빈 결과 방어: lock 밖에서 재시도 (lock 내 sleep 방지)
             bot_symbols = set(bot.engine.portfolio.positions.keys())
@@ -937,10 +944,14 @@ class KRScheduler:
             # 잔고 응답의 주식평가액이 0이면 진짜 빈 계좌(수동 전량 매도 등) — 유령 정리로 진행.
             # 평가액 > 0 인데 포지션 0건일 때만 API 오류로 본다 (2026-09-03)
             _kis_stock_value = float(balance.get("stock_value") or 0)
-            if bot_symbols and not kis_symbols and _kis_stock_value > 0:
+            # 부분 누락(일부 종목만 빠진 응답)도 1회 재시도 — 매도 pending 종목은 정상 누락이라 제외 (2026-09-13)
+            _missing = {
+                s for s in bot_symbols - kis_symbols if s not in bot._exit_pending_symbols
+            }
+            if _missing and _kis_stock_value > 0:
                 logger.warning(
-                    "[동기화] KIS 포지션 조회 결과 0건 (봇 보유 "
-                    f"{len(bot_symbols)}건) → 5초 후 재시도"
+                    f"[동기화] KIS 포지션 응답에 봇 보유 {len(_missing)}/{len(bot_symbols)}건 누락"
+                    f"({', '.join(sorted(_missing))}) → 5초 후 재시도"
                 )
                 await asyncio.sleep(5)
                 kis_positions = await bot.broker.get_positions()
@@ -965,7 +976,21 @@ class KRScheduler:
                     bot.engine.risk_manager, "_zombie_candidate_symbols", set()
                 ) if hasattr(bot.engine, "risk_manager") else set()
                 ghost_symbols = bot_symbols - kis_symbols
+                for _s in list(self._exempt_missing_count):
+                    if _s in kis_symbols:
+                        del self._exempt_missing_count[_s]
                 for symbol in ghost_symbols:
+                    # exit_exempt(자동매도 금지) 종목은 부분 응답 1회로 제거하지 않는다 —
+                    # 재시도 포함 3주기 연속 누락일 때만 실제 부재로 본다 (2026-09-13, 펩트론 사고 예방)
+                    if bot.exit_manager and bot.exit_manager.is_exit_exempt(symbol):
+                        _miss = self._exempt_missing_count.get(symbol, 0) + 1
+                        self._exempt_missing_count[symbol] = _miss
+                        if _miss < 3:
+                            logger.warning(
+                                f"[동기화] {symbol} KIS 응답 누락 {_miss}/3회 — exit_exempt 종목이라 유령 제거 보류"
+                            )
+                            continue
+                        self._exempt_missing_count.pop(symbol, None)
                     # 좀비 후보 마킹된 경우 즉시 제거 (KIS 수량초과 N회 누적)
                     _forced_remove = symbol in _zombie_candidates
                     if not _forced_remove and symbol in bot._exit_pending_symbols:
@@ -1024,22 +1049,27 @@ class KRScheduler:
                         _ep = bot._strategy_exit_params.get(
                             pos.strategy, bot._strategy_exit_params.get("_sync", {})
                         ) if pos.strategy else bot._strategy_exit_params.get("_sync", {})
-                        bot.exit_manager.register_position(
-                            pos,
-                            stop_loss_pct=_ep.get("stop_loss_pct"),
-                            trailing_stop_pct=_ep.get("trailing_stop_pct"),
-                            first_exit_pct=_ep.get("first_exit_pct"),
-                            second_exit_pct=_ep.get("second_exit_pct"),
-                            third_exit_pct=_ep.get("third_exit_pct"),
-                            first_exit_ratio=_ep.get("first_exit_ratio"),
-                            second_exit_ratio=_ep.get("second_exit_ratio"),
-                            third_exit_ratio=_ep.get("third_exit_ratio"),
-                            stale_high_days=_ep.get("stale_high_days"),
-                            is_core=_ep.get("is_core", False),
-                            max_holding_days=_ep.get("max_holding_days"),
-                            trailing_activate_pct=_ep.get("trailing_activate_pct"),
-                            atr_pct_hint=_ep.get("atr_pct"),
-                        )
+                        try:
+                            bot.exit_manager.register_position(
+                                pos,
+                                stop_loss_pct=_ep.get("stop_loss_pct"),
+                                trailing_stop_pct=_ep.get("trailing_stop_pct"),
+                                first_exit_pct=_ep.get("first_exit_pct"),
+                                second_exit_pct=_ep.get("second_exit_pct"),
+                                third_exit_pct=_ep.get("third_exit_pct"),
+                                first_exit_ratio=_ep.get("first_exit_ratio"),
+                                second_exit_ratio=_ep.get("second_exit_ratio"),
+                                third_exit_ratio=_ep.get("third_exit_ratio"),
+                                stale_high_days=_ep.get("stale_high_days"),
+                                is_core=_ep.get("is_core", False),
+                                max_holding_days=_ep.get("max_holding_days"),
+                                trailing_activate_pct=_ep.get("trailing_activate_pct"),
+                                atr_pct_hint=_ep.get("atr_pct"),
+                            )
+                        except Exception as _reg_e:
+                            # 등록 실패해도 포지션은 유지하고 fill_check 주기에 재시도 (미등록 = 손절 부재)
+                            self._pending_exit_registrations.add(symbol)
+                            logger.warning(f"[동기화] {symbol} ExitManager 등록 실패 → 재시도 대기열: {_reg_e}")
                     if symbol not in bot._watch_symbols:
                         bot._watch_symbols.append(symbol)
                     # V자 반등 재진입 1회권 소진 — fill_check가 체결을 못 잡고
@@ -1109,6 +1139,7 @@ class KRScheduler:
             # 동기화 성공 → 리스크 매니저에 알림
             if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                 bot.risk_manager.set_sync_status(True)
+            _hb.beat("kr_portfolio_sync")
 
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
@@ -2382,6 +2413,7 @@ JSON:
                     # 유휴(미체결 없음) 시 15초 — 5초 폴링이 개장 직후 원장 TR 트래픽의 대부분이라
                     # EGW00215 충돌을 키웠다 (2026-09-07). 포지션 변화는 30초 동기화가 커버한다.
                     check_interval = 2 if open_orders else 15
+                    _hb.beat("kr_fill_checker")
 
                     if _fill_check_errors > 0:
                         _fill_check_errors = 0
@@ -2555,6 +2587,7 @@ JSON:
                     bot._last_screened = screened
                     # 스크리닝 시각 — 팀 심의가 지표 신선도를 판단하는 데 쓴다
                     bot._last_screened_at = datetime.now()
+                    _hb.beat("kr_screener")
 
                 except Exception as e:
                     logger.warning(f"스크리닝 오류: {e}", exc_info=True)
@@ -3520,6 +3553,7 @@ JSON:
 
                     if kospi_data or kosdaq_data:
                         rm.update_market_trend(kospi_data, kosdaq_data)
+                        _hb.beat("kr_market_trend")
 
                         # 시장 체제 갱신 (크로스 검증 게이트에서 참조)
                         if bot.engine:
@@ -3929,6 +3963,8 @@ JSON:
                                     f"[{_session_label}] 전광판 {pm_ok}/{len(premarket_targets)}개 갱신 "
                                     f"(NXT대상, watch+pending)"
                                 )
+
+                    _hb.beat("kr_rest_price_feed")
 
                 except Exception as e:
                     logger.warning(f"[REST피드] 오류: {e}", exc_info=True)
@@ -4600,6 +4636,7 @@ JSON:
                                     logger.debug(f"[진화] {evo_status}: {evo_result.get('reason', '')}")
                             except Exception as evo_err:
                                 logger.warning(f"[진화] 실행 실패 (무시): {evo_err}")
+                        _hb.beat("kr_evolution_scheduler")
 
                 await asyncio.sleep(60)
 
@@ -6226,6 +6263,28 @@ JSON:
             logger.error(f"[배치스케줄러] 스케줄러 오류: {e}")
             raise
 
+    async def run_heartbeat_monitor(self):
+        """루프 하트비트 감시 (2026-09-13) — 살아 있지만 성공 반복이 없는 루프를 60초마다 점검.
+        판정 규칙은 utils/loop_heartbeat.check (장중 루프는 정규장에만, 일 1회 잡은 거래일 종일).
+        정체 시 WARNING + 루프별 시간당 1회 텔레그램. 재기동은 하지 않는다 (원인 확인이 먼저)."""
+        last_alert: Dict[str, float] = {}
+        while self.bot.running:
+            await asyncio.sleep(60)
+            try:
+                stale = _hb.check()
+            except Exception as e:
+                logger.warning(f"[하트비트] 점검 오류 (무시): {e}")
+                continue
+            now = time.time()
+            for name, age in stale.items():
+                logger.warning(f"[하트비트] {name} {int(age)}초 정체")
+                if now - last_alert.get(name, 0.0) >= 3600:
+                    last_alert[name] = now
+                    try:
+                        await send_alert(f"⚠️ [하트비트] {name} 루프 {int(age // 60)}분 정체 — 살아 있으나 성공 반복 없음")
+                    except Exception:
+                        pass
+
     async def run_health_monitor(self):
         """헬스 모니터링 루프"""
         bot = self.bot
@@ -6408,6 +6467,7 @@ JSON:
                     await asyncio.sleep(600)  # 실패 — 기록하지 않고 10분 후 재시도
                     continue
                 last_run_date = today.isoformat()
+                _hb.beat("kr_harvest_shadow")
                 try:
                     state_path.parent.mkdir(parents=True, exist_ok=True)
                     state_path.write_text(json.dumps({"date": last_run_date}))
@@ -6444,6 +6504,7 @@ JSON:
                 from ..utils.volatility_targeting import refresh_vol_state
                 if await refresh_vol_state():
                     last_run_date = today.isoformat()
+                    _hb.beat("kr_vol_targeting")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -6531,6 +6592,7 @@ JSON:
                 for _k in [k for k, d in alerted.items() if d < _cutoff]:
                     alerted.pop(_k, None)
 
+                _hb.beat("kr_dart_alert")
                 portfolio = bot.engine.portfolio if bot.engine else None
                 if portfolio is None or not portfolio.positions:
                     continue

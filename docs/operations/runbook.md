@@ -303,6 +303,9 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - 청산 실패 시 `broker.get_positions()`로 실제 보유 확인 후 정리
 - 동기화 주기: KR 30초, US 30초
 - KIS 포지션 0건 응답은 잔고 `stock_value > 0`일 때만 API 오류로 간주 — 수동 전량 매도 등 진짜 빈 계좌는 유령 정리로 진행 (2026-09-03)
+- **부분 누락**(봇 보유 중 일부만 응답에서 빠짐, 매도 pending 제외)도 5초 후 1회 재시도 → 재시도에도 없으면 유령 정리 (2026-09-13)
+- **exit_exempt 종목**은 재시도 포함 **3주기(≈90초) 연속 누락**일 때만 제거 — 로그 `KIS 응답 누락 n/3회 — exit_exempt 종목이라 유령 제거 보류`가 3회 이어지면 실제 부재(수동 매도)로 본 것
+- 잔고 조회 실패 시 포지션 조회 없이 종료(원장 TR 절약), sync 경로 ExitManager 등록 실패는 `_pending_exit_registrations`로 fill_check 주기에 재시도
 
 ### 매수 미실행 체크리스트
 1. 가용 현금 확인 (`get_available_cash()` / `curl -s localhost:8080/api/portfolio` → `cash_ratio`)
@@ -320,6 +323,15 @@ echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
 - 지속 시: 포트폴리오 수동 확인 → ExitManager stage 리셋
 
 ### 알려진 이슈
+- **루프 정체(살아 있지만 일을 못 하는 루프) 탐지 — 하트비트** (2026-09-13~): `_supervised`는 죽은 루프만
+  재기동하므로 HTTP 500 재시도 폭풍(14일 방치)·수확 shadow 2일 무동작·daily_bias 정체 같은 "조용한 열화"는
+  못 봤다. 이제 장중 루프 6개(체결확인·동기화·스크리닝·REST시세·시장추세·공시경보)와 일 1회 잡 3개(수확
+  shadow·변동성타게팅·진화)가 **성공한 반복**마다 `src/utils/loop_heartbeat.beat()`를 찍고, `kr_heartbeat_monitor`가
+  60초마다 `check()`로 판정한다: 장중 루프는 거래일 정규장(09:00~15:20)에만 주기×3(최소 120초, 09:00 기산),
+  일 1회 잡은 직전 거래일 자정 이후 beat 없으면 정체(주말·공휴일 오탐 없음). 정체 시 `[하트비트] <루프> N초 정체`
+  WARNING + 루프별 시간당 1회 텔레그램, **자동 재기동은 없음**(원인 확인이 먼저: 해당 루프의 오류 로그·KIS 거절을
+  본다). 확인: `curl -s localhost:8080/api/health | jq '.loops, .stale_loops'` 또는 `ops_check.sh`의 하트비트 줄.
+  주기를 바꾸면 `loop_heartbeat.PERIODS`도 함께 갱신. 재시작 직후 기산점은 프로세스 시작 시각.
 - **pykrx 간헐적 실패**: `Stock master: pykrx failed` → FDR → 72h 캐시 폴백 자동 전환
 - **FDR `StockListing("KRX")` 404** (2026-09-09~, 업스트림 GitHub 캐시 소실, 0.9.202도 동일):
   수확 shadow 유니버스는 `harvest_shadow/universe.json` 캐시로 폴백(부트스트랩은 DB
