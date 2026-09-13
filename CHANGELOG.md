@@ -1,5 +1,23 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-13 — feat: 루프 하트비트 — 살아 있지만 일을 못 하는 스케줄러 루프 정체 알림
+
+종합 리뷰(2026-09-13) "조용한 열화" 항목. `_supervised`는 예외로 죽은 루프만 재기동해, 돌지만 성공하지 못하는
+루프(HTTP 500 재시도 폭풍 14일·수확 shadow 2일 무동작·daily_bias 7/2 정체)를 못 봤다. 루프 로직 변경 없음.
+- `src/utils/loop_heartbeat.py` (신규): `beat(name)` / `snapshot()` / `stale(now, thresholds, floor)` /
+  `check()` — `PERIODS`(장중 6개, 정체 = 주기×3·최소 120초) + `DAILY`(3개, 직전 거래일 자정 이후 beat 없음).
+  장중 루프는 거래일 정규장 09:00~15:20에만 점검하고 09:00을 기산점으로 삼아 개장 직후 오탐을 막는다.
+- `src/schedulers/kr_scheduler.py`: 성공 반복 지점에 `beat` 9곳 — `_sync_portfolio`(sync_status True),
+  `run_fill_check`(폴링 완료), `run_screening`(스캔 완료), `run_rest_price_feed`(try 본문 끝),
+  `run_market_trend_monitor`(추세 갱신), `run_dart_alert_scheduler`(폴 도달), `run_harvest_shadow_scheduler`·
+  `run_vol_targeting_scheduler`(일일 성공), `run_evolution_scheduler`(20:30 블록 완주).
+  새 감독 루프 `run_heartbeat_monitor`(`kr_heartbeat_monitor`): 60초마다 `check()` → `[하트비트] <루프> N초 정체`
+  WARNING + 루프별 시간당 1회 `send_alert`. 재기동 없음.
+- `src/dashboard/data_collector.py`: `/api/health`에 `loops{루프: 경과초}` · `stale_loops{루프: 경과초}` 추가.
+- `scripts/dev/ops_check.sh`: 하트비트 줄(정체 루프·최장 대기) 추가.
+- `tests/test_loop_heartbeat.py` (신규, 6건): 레지스트리·임계·floor·정규장 창·주말/공휴일 갭·재시작 기산.
+- 문서: `docs/operations/runbook.md` 알려진 이슈에 하트비트 절.
+
 ## 2026-09-13 — config: 리뷰 1단계 반영 — 배분 재편(core 0·gap 15·sepa 40) + 팀 conviction 부스트 비활성
 
 종합 리뷰 권고 ④·⑤의 즉시 실행분 (사용자 위임 "니가 판단해서 진행").
