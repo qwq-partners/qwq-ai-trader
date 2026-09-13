@@ -93,7 +93,7 @@
 - **2차 익절**: +15% → 잔여의 50% 매도
 - **3차 익절**: +25% → 잔여의 50% 매도 (기본값, 레짐별 REGIME_EXIT_PARAMS로 조정)
 - **트레일링**: 고점 대비 3% 하락, 수익 +5% 이상 시 활성화
-- **ATR 동적 손절**: 기본 5%, ATR×2, 범위 3.5~8% (evolved_overrides)
+- **ATR 동적 손절**: 기본 5%, ATR×2, 범위 4~8% (evolved_overrides, min_stop 4.0)
 - **포지션 상태**: `PositionExitState` — NONE/FIRST/SECOND/THIRD/TRAILING 단계 추적
 
 ### 코어홀딩 A안 (2026-05-11~ "장기 추세 캐처")

@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-13 — docs: 청산 문서 드리프트 3건 정정 (ExitManager 특성화 테스트가 발견)
+
+`tests/test_exit_manager_characterization.py`(PR #26) 작성 중 코드와 어긋난 문서 — 코드 변경 없음.
+- `docs/risk/risk-and-exit.md` 분할 익절 표 1차 +5%/20% → **+10%/10%** (누적 10/55/77.5%), `min_stop_pct` 3.5 → **4.0**,
+  본전 보호 -1.5% → **-0.5%**(NONE -2.0%). `CLAUDE.md` ATR 손절 범위 3.5~8 → **4~8**.
+
 ## 2026-09-13 — feat: 루프 하트비트 — 살아 있지만 일을 못 하는 스케줄러 루프 정체 알림
 
 종합 리뷰(2026-09-13) "조용한 열화" 항목. `_supervised`는 예외로 죽은 루프만 재기동해, 돌지만 성공하지 못하는
