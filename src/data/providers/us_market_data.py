@@ -755,7 +755,12 @@ class USMarketData:
         sentiment_kr = {"bullish": "강세", "bearish": "약세", "neutral": "보합"}.get(
             sentiment, "보합"
         )
-        summary_parts.append(f"US 시장 {sentiment_kr} 마감")
+        if idx_pcts:
+            summary_parts.append(f"US 시장 {sentiment_kr} 마감")
+        else:
+            # 지수 시세가 한 건도 없으면 '보합 마감' 으로 포장하지 않는다 (T10 INT-2 advisory).
+            # sentiment 는 소비자 계약(테마 부스트 없음)상 neutral 을 유지한다.
+            summary_parts.append("US 시장 지수 시세 미수집 (마감 방향 판단 불가)")
 
         # 지수 요약
         idx_strs = []
@@ -775,6 +780,7 @@ class USMarketData:
             "sentiment": sentiment,
             "indices": indices,
             "indices_normalized": indices_normalized,
+            "indices_missing": not idx_pcts,   # 지수 4종 전부 결측 — sentiment neutral 은 판단이 아니라 결측
             "sector_signals": sector_signals,
             "summary": " ".join(summary_parts),
         }

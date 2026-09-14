@@ -528,10 +528,15 @@ class KRScheduler:
 
             # 자료 부족 표시 (C: orchestrator.data_status_summary) — 결측을 감추지 않는다
             _data_status_lines: List[str] = []
+            _coverage_n = valid_n   # 집계 요약이 없으면 편향 분포 합계로 폴백
             try:
                 _orch = getattr(self.bot, "expert_orchestrator", None)
                 _summary_fn = getattr(_orch, "data_status_summary", None)
                 _ds = _summary_fn(ops) if callable(_summary_fn) else None
+                # 발송 기록용 커버리지 — 편향 분포 합계(valid_n)가 아니라 집계가 실제로
+                # 가중 반영하는 전문가 수 (insufficient/unknown 제외, T10 통합 리뷰 advisory)
+                if isinstance(_ds, dict) and _ds.get("valid_n") is not None:
+                    _coverage_n = int(_ds["valid_n"])
             except Exception as _ds_e:
                 _ds = None
                 logger.debug(f"[전문가] data_status 집계 실패 (무시): {_ds_e}")
@@ -707,7 +712,7 @@ class KRScheduler:
                             kr_date=_now_kst().date().isoformat(),
                             sent_text=msg,
                             expert_consensus={
-                                "score": agg, "bias": bias, "valid_n": valid_n,
+                                "score": agg, "bias": bias, "valid_n": _coverage_n,
                             },
                             status="sent" if ok else "failed",
                             conflict_note=_conflict,
@@ -6950,8 +6955,13 @@ JSON:
                             if kospi_data and "change_pct" in kospi_data:
                                 _pct = float(kospi_data["change_pct"])
                                 _level = await bot.batch_analyzer.update_intraday_state(_pct)
-                                # 유효 레짐(MarketRegimeAdapter)도 같은 급락 상태를 본다
-                                self._push_intraday_risk(_level, _pct, _now_kst())
+                                # 유효 레짐(MarketRegimeAdapter)도 같은 급락 상태를 본다.
+                                # 등락률이 NaN 등 결측이면 감지기는 이전 상태를 돌려주므로
+                                # 그것을 '지금 관측' 으로 재각인하지 않는다 (T10 통합 리뷰 advisory)
+                                if classify_intraday_level(_pct) is not None:
+                                    self._push_intraday_risk(_level, _pct, _now_kst())
+                                else:
+                                    logger.warning(f"[장중급락] KOSPI 등락률 결측/비정상({_pct!r}) — 어댑터 갱신 생략")
                     except Exception as _e:
                         logger.debug(f"[장중급락] KOSPI 조회 실패 (무시): {_e}")
                     last_crash_check_ts = time.time()

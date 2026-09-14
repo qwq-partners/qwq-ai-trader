@@ -274,3 +274,29 @@ def test_f18_overnight_signal_vix_missing_flag_not_false(monkeypatch):
     assert vix.get("reason"), f"결측 사유가 없다: {vix}"
     assert signal["indices_normalized"]["SP500"]["missing"] is False
     assert signal["indices_normalized"]["SP500"]["change_pct"] == 0.5
+
+
+def test_f18_overnight_signal_all_indices_missing_is_not_flat(monkeypatch):
+    """지수 4종이 전부 결측(개별 종목만 응답)이면 summary 가 'US 시장 보합 마감' 으로
+    포장되지 않고 indices_missing=True 를 낸다 (2026-09-15 T10 통합 리뷰 INT-2 advisory).
+    sentiment 는 소비자 계약(테마 부스트 없음)상 neutral 유지."""
+    from src.data.providers.us_market_data import USMarketData
+
+    umd = USMarketData()
+    payload = {"quoteResponse": {"result": [
+        {"symbol": "AAPL", "regularMarketPrice": 230.0, "regularMarketChange": 1.0,
+         "regularMarketChangePercent": 0.4, "regularMarketTime": 1757900000},
+        {"symbol": "^VIX", "regularMarketTime": 1757900000},
+    ]}}
+
+    async def _fake_get_session():
+        return _FakeSession(payload)
+
+    monkeypatch.setattr(umd, "_get_session", _fake_get_session)
+    signal = asyncio.run(umd.get_overnight_signal())
+
+    assert signal["indices_missing"] is True
+    assert "보합 마감" not in signal["summary"], signal["summary"]
+    assert "미수집" in signal["summary"], signal["summary"]
+    assert signal["sentiment"] == "neutral"
+    assert all(v["missing"] for v in signal["indices_normalized"].values())

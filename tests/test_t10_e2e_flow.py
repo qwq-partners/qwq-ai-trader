@@ -286,7 +286,9 @@ def _run_morning_to_noon(monkeypatch, tmp_path):
     assert len(archive["dispatch"]) == 1
     assert archive["dispatch"][0]["status"] == "sent"
     assert archive["dispatch"][0]["expert_consensus"] == {
-        "score": 2, "bias": "neutral", "valid_n": 0,
+        # valid_n 은 편향 분포 합계(ops={} → 0)가 아니라 집계 커버리지(data_status_summary
+        # valid_n=6) — 2026-09-15 T10 통합 리뷰 advisory 반영
+        "score": 2, "bias": "neutral", "valid_n": 6,
     }
 
     # ── 12:00: 장중 재분류 → ExitManager 실적용 ──

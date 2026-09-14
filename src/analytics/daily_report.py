@@ -27,8 +27,6 @@ MORNING_BRIEF_LEDGER_PATH = _REC_CACHE_DIR / "morning_brief_eval.jsonl"
 # 날짜·버전별 원문/발송문 아카이브 (2026-09-15 T10 F22) — 최신 캐시(위 두 경로)는
 # 조회 편의용이고, 이 아카이브가 감사 가능한 원본이다. <kr_date>.json 1개 파일에
 # generated[](07:00 생성본, 재생성해도 누적) / dispatch[](07:30 발송 attempt, 누적).
-MORNING_BRIEF_ARCHIVE_DIR = _REC_CACHE_DIR / "morning_brief"
-
 
 def _today() -> date:
     """테스트 주입용 단일 시계 진입점 — 브리프 kr_date·평가 기준일·과거 일자 가드가 같은 날짜를 본다"""
@@ -316,7 +314,7 @@ def extract_brief_claims(
 def _brief_archive_path(kr_date: str, archive_dir=None) -> Path:
     """archive_dir 미지정 시 최신 캐시(MORNING_BRIEF_PATH) 옆 morning_brief/ —
     save_morning_brief/evaluate_morning_brief 가 brief_path 에서 유도하는 규칙과
-    같은 값이라(운영 기본 경로 = MORNING_BRIEF_ARCHIVE_DIR) 세 진입점의 기본
+    같은 값이라(운영 기본 경로 = ~/.cache/ai_trader/morning_brief) 세 진입점의 기본
     아카이브가 한 곳으로 모인다. 호출 시점의 모듈 전역을 읽으므로 테스트가
     MORNING_BRIEF_PATH 를 바꾸면 record_morning_brief_dispatch 도 따라간다
     (2026-09-15 T10 통합 — D 재현 F19: 두 규칙이 갈라져 발송 기록이 유실됐다)."""
@@ -1250,8 +1248,15 @@ class DailyReportGenerator:
             else:
                 idx_lines.append(f"  ▪️ {name}  0.00%  ({price:,.1f})")
 
-        avg_pct = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
-        if avg_pct >= 1.0:
+        # 지수 4종이 전부 결측이면(개별 종목만 살아남는 부분 응답) avg_pct=0 으로 떨어져
+        # "+0.00% 보합권 마감" 이라는 없는 사실이 세 발송 경로로 나갔다 — 결측을 0·보합으로
+        # 포장하지 않는다 (2026-09-15 T10 통합 리뷰 INT-2 blocking). avg_pct 는 하위
+        # 호출부 타입 호환을 위해 0.0 을 유지하되 문구는 idx_missing 으로만 결정한다.
+        idx_missing = not idx_pcts
+        avg_pct = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0.0
+        if idx_missing:
+            mood = "⚠️ 지수 시세 미수집"
+        elif avg_pct >= 1.0:
             mood = "📈 강세 마감"
         elif avg_pct <= -1.0:
             mood = "📉 약세 마감"
@@ -1333,7 +1338,10 @@ class DailyReportGenerator:
         # brief_scope() 는 build_morning_brief 의 LLM 스코프 판정과 동일한
         # 함수라 두 판정이 어긋나지 않는다 (scope 는 위에서 sector_header 와
         # 함께 이미 계산했다).
-        if scope == SCOPE_WITH_KR:
+        if idx_missing:
+            # 지수 시세가 한 건도 없으면 미국 마감 방향도 단정하지 않는다 (0 포장 금지)
+            market_msg = "⚠️ 미국 지수 시세 미수집 — 마감 방향 판단 불가 (한국 개장 방향 판단 보류)"
+        elif scope == SCOPE_WITH_KR:
             if avg_pct >= 1.5:
                 market_msg = "💡 강한 상승 — 한국 관련 테마주 갭업 가능성"
             elif avg_pct >= 0.5:
@@ -1774,9 +1782,9 @@ class DailyReportGenerator:
                 수집하지 않는다 (현재가 API라 과거 시점 재현 불가).
             brief_path: 구버전 단일 캐시 폴백 경로 (기본 llm_morning_brief.json)
             ledger_path: 평가 원장 경로 (기본 morning_brief_eval.jsonl)
-            archive_dir: 날짜별 아카이브 디렉터리 (기본 brief_path 기준 또는
-                MORNING_BRIEF_ARCHIVE_DIR — 하위 호환을 위해 brief_path 를 명시
-                전달하면 그 옆의 morning_brief/ 를 먼저 본다)
+            archive_dir: 날짜별 아카이브 디렉터리 (기본 brief_path 옆의 morning_brief/
+                — record_morning_brief_dispatch 의 기본(MORNING_BRIEF_PATH 옆)과
+                같은 규칙, 단일 출처)
 
         Returns:
             원장에 기록한(또는 이미 있던) 평가 레코드. 브리프가 없으면 None.

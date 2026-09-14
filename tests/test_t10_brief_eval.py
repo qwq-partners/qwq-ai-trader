@@ -335,6 +335,27 @@ def test_f21_strong_us_up_without_kr_inputs_defers_kr_direction(monkeypatch):
     assert "판단 보류" in report
 
 
+def test_f21_all_index_quotes_missing_does_not_fabricate_flat_close(monkeypatch):
+    """지수 4종이 전부 결측이고 개별 종목만 살아남은 부분 응답에서 avg_pct=0 이
+    '+0.00% 보합권 마감' 이라는 없는 사실을 만들면 안 된다 — 결측은 미수집으로
+    표기하고 마감 방향을 단정하지 않는다 (2026-09-15 T10 통합 리뷰 INT-2 blocking)."""
+    monkeypatch.setattr(dr, "get_telegram_notifier", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "get_screener", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "get_theme_detector", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "NewsCollector", lambda: SimpleNamespace())
+    gen = dr.DailyReportGenerator()
+    gen._us_market_data = _FakeUMD(
+        {"AAPL": {"price": 230.0, "change": 1.0, "change_pct": 0.4, "name": "Apple", "volume": 1}},
+    )
+
+    report = asyncio.run(gen.generate_us_market_report(send_telegram=False))
+
+    for fabricated in ("+0.00%", "보합권 마감", "보합 마감", "갭업 가능성"):
+        assert fabricated not in report, fabricated
+    assert "지수 시세 미수집" in report
+    assert "판단 보류" in report or "판단 불가" in report
+
+
 def test_f21_sector_mapping_header_marks_scope_without_kr_inputs(monkeypatch):
     """리뷰 advisory(F21): '■ 한국 시장 영향' 섹터 매핑 블록은 방향을 단정하진
     않지만 대상 시장·시간범위 표기가 없었다 — kr_inputs 없이는 헤더가 '미국

@@ -102,3 +102,57 @@ D(독립 리뷰어)가 de111b7 에서 합성 입력만으로 8건 전부 재현�
 - 검증: main `a5de546` verify **456 passed / 2 xfailed**. 각 브랜치 독립 리뷰 → blocking 반영 → 재리뷰 approve(T9 A 는 CHANGELOG 만 잔여 → 통합 시 반영). 통합 시 재리뷰 advisory 반영: 어댑터 `effective_regime` 당일 게이트(시계 주입), KIS 폴백 이중 계상 가드, KOFR 루프 당일 스냅샷, 상충 문구 중복 방지, aggregate_bias 동표 NEUTRAL, '상승 갭 출발' 패턴.
 - 실경로 의미 변경(문서화): apply_expert_adjustment score 경로가 유효 시장체제 전문가 <4명이면 무보정(bear_consensus 만 동작), partial 확신 상한 0.7(양방향), 유효 레짐 급락 캡 활성화. 주문·청산·급락 임계값·게이트 코드 무변경.
 - 잔여: `kr_inputs` 미전달(야간선물 시장 시각 없음 → 운영 scope 는 us_close_only 유지), macro/us_market/kr_economy/global_micro/weekend 전문가 data_status 미설정, brief_tone/claims 휴리스틱(claims=None 비율로 확장 판단), `update_regime` 결측 0 채움(기존), v8 spark 시장 시각 미매핑, 팀 컨텍스트 자료부족 표시. **운영 미배포(de111b7)** — 배포 시 첫 장중 검증 포인트는 monitoring-checkpoints "장중 레짐 입력 신선도·급락 캡" 절.
+
+## 11. T10 — T9 후속 교차 리뷰 수정 (2026-09-15, 연결 경로 일관성)
+
+**목표:** 자료 수집 → 결측·신선도 검증 → 레짐 판단 → 실제 소비자 적용 → 장전 발송 → 장후 평가 의 연결 경로 일관성. 기준 main `dcec010`(리뷰 시점 = 최신 main, 후속 변경 없음) → 통합 브랜치 `feature/t10-crossreview`. 명세는 계획서 T10(F13~F22). "T10 코드 수정 완료" 이며 **운영 배포·예측 품질 개선 입증과는 별개**다.
+
+### 11.1 안전 경계 실행 결과
+- 운영 체크아웃(`/home/ubuntu/projects/qwq-ai-trader`, de111b7)·운영 캐시·`.env`·주문·킬스위치·systemd: 개발·검증 단계에서 무접촉. 배포는 §11.7 의 별도 실행 범위.
+- 테스트 격리: `tests/conftest.py` 신설 — import 시점부터 루프백 외 socket **+ curl_cffi(yfinance 백엔드, C 레벨 curl 이라 socket 패치 우회 — D 재현 중 실측 발견)** 차단, `~/.cache/ai_trader(_us)`·운영 `.env`/logs/results 접근 차단(PermissionError, 테스트 ID 와 함께 세션 요약 출력), HOME 미변조. 기준 스위트에서 누출 4파일(체결 경로 레짐 캐시 stat 14건, ExitManager/DailyReportGenerator 생성자 mkdir 3건, 날짜 고정 테스트 1건) 수정 후 기준선 456 passed / 위반 0.
+
+### 11.2 항목별 결과 (독립 재현 / 수정 / 인수 테스트 / 독립 리뷰 / 잔여)
+| ID | D 독립 재현(기준 a59e29f) | 수정 | 인수 테스트 | 독립 리뷰 | 잔여 제한 |
+|---|---|---|---|---|---|
+| F13 정오 당일 봉 교체 | 재현 (c5 +4.0 유지) | 교체/추가/보류 3분기(`_today_bar_action`, `_prev_trading_day`), 현재 지수 as_of 와 봉 기준 as_of 분리, 로컬 계산으로 멱등 | `test_t10_regime_path.py` 7건 + 기존 2건 정정 + D 1건 + E2E | R-A 1회 승인, INT-1 승인 | 공휴일은 `is_kr_market_holiday` 기준(폴백 캘린더) |
+| F14 최신 실측 급락 캡 | 재현 (감지기 normal/None 2변형) | `classify_intraday_level`/`max_intraday_level` 단일 규칙, 감지기·이번 조회·**어댑터 당일 관측** 3소스 보수 병합(분류기·30분 sync), 어댑터 역순/as_of 없는 값 거부, 파일 날짜·감지기 게이트 시계 `_now_kst` 통일 | 12건 + D 2건 + E2E 3건(전일 상태·역순·조회 실패) | R-A 승인 → **통합에서 D 재현이 어댑터 미병합 잔여 발견 → 수정** → INT-1 승인 | 완화 방향 덮어쓰기 없음. 12:00 이후 장중 회복 시 ExitManager 는 파일 실측(12:00) 기준 캡 유지·G2/사이징은 어댑터로 회복 — 보수적 비대칭(advisory) |
+| F15 소비자 통일 | 재현 (stale 5→7 복귀, G2 복사본 bull) | `monitor_positions` 재적용 블록 제거(같은 `run_batch_scheduler` 루프의 30분 sync 로 일원화 — 시각 조건 없이 매 30분), G2 `_resolve_market_regime` 어댑터 우선 | 3건 + D 2건(실제 ExitManager·on_signal 인자 캡처) + E2E | R-A·INT-1 승인 | 레짐 파라미터 적용 주기 10분(원본)→30분(캡 반영); 급락 SL/TS 조임은 5분 감지기·재적용 블록으로 유지. `engine._market_regime` 복사본을 읽는 설명용 지점 2곳 잔존 |
+| F16 무자료 전문가 | 재현 (valid_n 4·보정 +12) | 6명 data_status 판정(점수 규칙 입력 기준), `from_dict` unknown, 집계 allowlist(ok/partial) | 7건 + D 1건 | R-B 3라운드 승인(macro_context 만으로 partial 승격 blocking 등 4건 반영), INT-2 승인 | unknown 은 브리핑 문구에 합산; `us_market_expert` sox 당일값은 판정 대상 밖(advisory) |
+| F17 신선도 연결 | 재현 (+12 가산·ok) | 세션 기반 as_of(`kr_night_futures_as_of`)·TTL·미래 거부, 전문가 게이트 | 11건 + D 2건 | R-B 승인, INT-2 승인 | **정책값**: KRX 야간 세션 18:00~05:00, 종료 후 as_of=05:00, 유효기간 다음 개장 전, 주말 확장, **공휴일 미반영**; yfinance 프록시 폴백(NKD/KS200=F)은 게이트 미적용 |
+| F18 부분 응답 0 변환 | 재현 (price 0·missing False) | v7/v8 결측 None, price/change_pct 결측 심볼 quotes 제외+`_seen_missing` 사유, `missing_fields` | 7건 + D 3건 + E2E | R-B 승인(소비자 None 파손 blocking 반영), INT-2: **지수 4종 전부 결측 시 avg_pct=0 → "+0.00% 보합권 마감" blocking → 통합에서 수정** | v7 응답 성공·전 심볼 결측이면 v8 폴백 미시도 |
+| F19 발송 판단 연결 | 재현 (전문가 축 미기록) | `record_morning_brief_dispatch`(C) + 07:30 **morning 슬롯만** 배선(A, `record_dispatch`) + 발송 스냅샷 우선 평가 | 4건(C)+5건(A)+D 1건+E2E | R-C 2라운드 승인 → **통합에서 아카이브 경로 규칙 불일치 발견 → 단일화** → INT-1/2 승인 | evaluated=False 레코드는 영구 고정(재평가 불가, advisory); 발송 valid_n 은 커버리지 기준으로 정정 |
+| F20 테마 식별자 | 재현 (전부 미수집) | `BRIEF_THEME_EVAL_TARGETS`(AI/반도체→전기전자, 바이오→의약품), claims.sectors dict(theme/eval_targets/agg/supported/reason), `summarize` 제외 사유 집계 | 1건 + D 1건 + E2E | R-C·INT-2 승인 | 매핑 2건 외 unsupported(확장은 승인 필요), 업종명 완전일치 |
+| F21 발송 범위 | 재현 (갭업 문구) | `brief_scope` 단일 판정, 고정 문구 시장·시간범위 분리, 지수 전부 결측이면 "지수 시세 미수집 — 판단 불가" | 2건 + 통합 1건 + D 1건 + E2E | R-C·INT-1 승인, INT-2 blocking 반영 | — |
+| F22 원문 보존 | 재현 (원문 유실·참조 없음) | 날짜별 아카이브(generated/dispatch, raw_text·body_full·제거 문장·입력·모델), brief_ref, 과거일 실측 미수집, 원자적 쓰기·손상본 보존 | 3건 + D 1건 + E2E | R-C 승인(raw 절단 blocking 반영), INT-2 승인 | 아카이브 보존 정책 없음(하루 1파일 누적) |
+
+### 11.3 통합 단계에서 D 재현·최종 리뷰가 잡은 것
+- D 재현 6건이 통합 트리에서 실패 → 분류: **실제 잔여 결함 2건**(F14 어댑터 미병합, F19 아카이브 경로 이원화) 수정; **내부 표현 단정 4건**(F17 fetch 반환 형태, F18 quotes 포함 여부·주입 층, F20 sectors 문자열) 은 관찰 결과 기준으로 테스트 조정(근거를 테스트 주석에 기록).
+- 최종 리뷰 INT-1(돈 경로, opus xhigh): 승인, blocking 0, advisory 9. INT-2(자료→평가, opus xhigh): blocking 1(지수 전부 결측 0 포장) → 수정·회귀 테스트 2건 추가. 반영한 advisory: 5분 루프 NaN 시 어댑터 재각인 방지, 발송 기록 valid_n 커버리지 기준, 아카이브 상수 이중 출처 제거. 미반영(잔여 기록): sox 당일값 판정, 12:00 이후 회복 비대칭, `guard_enabled=false` 시 캡 동반 비활성(기존 구조), 07:30 공휴일 가드, `_cache_ts` 갱신, 아카이브 보존 정책.
+- D 통합 E2E(`tests/test_t10_e2e_flow.py` 8건): 07:00→07:30→12:00→20:30 고정 시계·메모리 공급자 — F13/F14/F15/F19/F20/F21 한 파이프라인 통과, 재시작·재실행 원장 1건, 전일 감지기·역순 도착·조회 실패·발송 실패·Yahoo 부분 응답·curl_cffi 차단 각 1건.
+
+### 11.4 검증 (실제 실행)
+- `venv/bin/python -m pytest tests -q -p no:cacheprovider` (통합 최종): **552 passed / 2 xfailed(parity strict, 기존) / 격리 위반 0건**. 구성: 기준 456 + A 27 + B 19 + C 10 + D 재현 14 + E2E 8 + 통합 회귀 등.
+- D 재현 3파일 14건: 기준 a59e29f 에서 14 실패(기대) → 통합에서 14 통과.
+- `scripts/dev/verify.sh`(문법·전체 테스트·비밀정보 검사): §11.7 커밋 후 실행 결과를 PR 본문에 기재.
+- **Codex 교차 리뷰 미실행**: `scripts/dev/codex_review.sh --branch`(기준 origin/main) 가 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` 로 샌드박스 초기화에 실패(exit 0 이나 리뷰 없음). Claude opus/xhigh 독립 리뷰(브랜치별 R-A/R-B/R-C + 통합 2렌즈)로 대체 — Codex 성공을 주장하지 않는다.
+
+### 11.5 축별 평가 가능 범위 (E2E 실측)
+| 축 | 유효 표본 | 상태 |
+|---|---|---|
+| 개장 방향 | 0 | **정상 기권** — 운영 경로는 `kr_inputs` 미전달 → scope=us_close_only → 개장 주장 없음 |
+| 종가 방향 | 0 | 정상 기권(동일 사유). 실측 종가는 수집됨 |
+| 전문가 종합 방향 | 1 | 07:30 발송 스냅샷(+2 → flat) vs -3.26%(down) → hit False (결측 아님) |
+| 언급 업종 상대성과 | 1 | AI/반도체→전기전자 평가, 2차전지는 "평가 대상 미합의" 로 제외 사유 기록 |
+- 평가 레코드 수 ≠ 유효 표본 수: `summarize` 가 축별 n·제외 사유별 건수를 낸다.
+
+### 11.6 임계값 변경 여부와 실제 동작 의미 변경
+- 임계값·게이트 기준 변경: **없음**(두 최종 리뷰어 diff 확인, threshold_changes_found=[]).
+- 의미 변경(문서화, CHANGELOG 동일): 급락 캡이 감지기 상태 외에 이번 조회 실측·어댑터 당일 관측에도 걸림 / 분류기가 어댑터에 관측을 밀어 넣어 G2·사이징이 분류 시점에 강등될 수 있음 / `monitor_positions` 재적용 제거(30분 sync 일원화) / G2 어댑터 유효 레짐 우선 / `update_intraday_state` 결측 시 상태 미갱신 / 6명 전문가 data_status 판정으로 partial 확신 상한 0.7 발동 범위 확대·`from_dict` unknown 집계 제외 / 야간선물은 세션 as_of 확인 시만 집계(낮 시간·yfinance 프록시 경로 차이) / Yahoo 결측 None 보존·결측 심볼 quotes 제외 / 07:00 문구 미국 세션 사실로 한정(지수 결측이면 미수집 표기) / claims.sectors 스키마 변경 / 모닝브리프 날짜별 아카이브 신설·최신 캐시에서 raw 제외.
+
+### 11.7 PR 준비 상태와 승인 필요 사항
+- PR: `feature/t10-crossreview` → main, 제목 "fix: T9 후속 교차 리뷰 수정 — 연결 경로 일관성 (계획서 T10, F13~F22)". 머지 전 필요: `verify` CI 통과.
+- 사용자 승인이 필요한 정책값(코드 주석에 '정책 승인 필요' 로 표시): ① KRX 야간선물 세션 규칙(18:00~05:00, 공휴일 미반영) ② `ExpertOpinion.from_dict` 기본 unknown(구 저장 레코드 집계 제외) ③ 테마-업종 매핑 2건만 지원.
+- 운영 배포·재기동: 사용자의 최종 지시("완료되면 문서업데이트 커밋 푸쉬 그리고 재기동까지 검증")를 실행 범위로 보고 §11.8 에 결과를 기록한다.
+
+### 11.8 운영 변경 기록
+- (커밋·PR·배포 후 갱신)
