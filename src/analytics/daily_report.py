@@ -29,6 +29,11 @@ MORNING_BRIEF_LEDGER_PATH = _REC_CACHE_DIR / "morning_brief_eval.jsonl"
 # generated[](07:00 생성본, 재생성해도 누적) / dispatch[](07:30 발송 attempt, 누적).
 MORNING_BRIEF_ARCHIVE_DIR = _REC_CACHE_DIR / "morning_brief"
 
+
+def _today() -> date:
+    """테스트 주입용 단일 시계 진입점 — 브리프 kr_date·평가 기준일·과거 일자 가드가 같은 날짜를 본다"""
+    return date.today()
+
 # 브리프 주장 범위 (T9 요청 3)
 SCOPE_US_ONLY = "us_close_only"
 SCOPE_WITH_KR = "with_kr_inputs"
@@ -309,7 +314,13 @@ def extract_brief_claims(
 
 
 def _brief_archive_path(kr_date: str, archive_dir=None) -> Path:
-    base = Path(archive_dir) if archive_dir is not None else MORNING_BRIEF_ARCHIVE_DIR
+    """archive_dir 미지정 시 최신 캐시(MORNING_BRIEF_PATH) 옆 morning_brief/ —
+    save_morning_brief/evaluate_morning_brief 가 brief_path 에서 유도하는 규칙과
+    같은 값이라(운영 기본 경로 = MORNING_BRIEF_ARCHIVE_DIR) 세 진입점의 기본
+    아카이브가 한 곳으로 모인다. 호출 시점의 모듈 전역을 읽으므로 테스트가
+    MORNING_BRIEF_PATH 를 바꾸면 record_morning_brief_dispatch 도 따라간다
+    (2026-09-15 T10 통합 — D 재현 F19: 두 규칙이 갈라져 발송 기록이 유실됐다)."""
+    base = Path(archive_dir) if archive_dir is not None else (MORNING_BRIEF_PATH.parent / "morning_brief")
     return base / f"{kr_date}.json"
 
 
@@ -320,7 +331,13 @@ def _load_brief_archive(kr_date: str, archive_dir=None) -> Dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
-        logger.warning(f"[모닝브리프] 아카이브 파싱 실패 ({path}) — 빈 아카이브로 취급: {e}")
+        # 손상본을 덮어써 지우지 않는다 — 옆에 보존하고 빈 아카이브로 새로 시작 (R-C advisory)
+        aside = path.with_name(f"{path.name}.corrupt-{datetime.now():%Y%m%dT%H%M%S}")
+        try:
+            os.replace(path, aside)
+            logger.warning(f"[모닝브리프] 아카이브 파싱 실패 ({path}) — {aside.name} 로 보존 후 새 아카이브: {e}")
+        except OSError as mv_err:
+            logger.warning(f"[모닝브리프] 아카이브 파싱 실패 ({path}), 보존도 실패({mv_err}) — 빈 아카이브로 취급: {e}")
         return {"kr_date": kr_date, "generated": [], "dispatch": []}
     data.setdefault("generated", [])
     data.setdefault("dispatch", [])
@@ -330,7 +347,10 @@ def _load_brief_archive(kr_date: str, archive_dir=None) -> Dict:
 def _save_brief_archive(kr_date: str, data: Dict, archive_dir=None) -> Path:
     path = _brief_archive_path(kr_date, archive_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 원자적 교체 — 쓰는 도중 프로세스가 죽어도 감사 원본이 반쪽으로 남지 않는다
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
     return path
 
 
@@ -1663,7 +1683,7 @@ class DailyReportGenerator:
         return {
             "us_date": us_date_str,
             # 평가 대상 KR 거래일 — 저녁 평가가 전날 브리프를 오늘 실측과 대조하지 않도록
-            "kr_date": date.today().isoformat(),
+            "kr_date": _today().isoformat(),
             "title": title,
             "text": header + body[:3800],
             "raw_text": raw_text,
@@ -1763,7 +1783,7 @@ class DailyReportGenerator:
         """
         from . import morning_brief_eval
 
-        report_date = report_date or date.today()
+        report_date = report_date or _today()
         kr_date = report_date.isoformat()
         brief_path = Path(brief_path) if brief_path is not None else MORNING_BRIEF_PATH
         ledger_path = (
@@ -1812,7 +1832,7 @@ class DailyReportGenerator:
         (2026-09-15 T10 F22 — 과거 날짜 재평가 시 오늘 실측을 그 날짜로
         재라벨링하면 안 된다).
         """
-        if report_date is not None and report_date != date.today():
+        if report_date is not None and report_date != _today():
             logger.info(
                 f"[브리프평가] {report_date} 과거 날짜 재평가 — 현재가 API라 실측 미수집"
             )

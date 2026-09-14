@@ -5,7 +5,8 @@
 KIS/Yahoo/LLM 으로 나간다. worktree 격리만으로는 부족하므로 conftest 가 import
 시점부터 다음을 강제한다.
 
-1. 네트워크 — 루프백(127.0.0.1/::1/localhost)·UNIX 소켓 외 모든 connect/getaddrinfo 차단.
+1. 네트워크 — 루프백(127.0.0.1/::1/localhost)·UNIX 소켓 외 모든 connect/getaddrinfo 차단 +
+   curl_cffi(yfinance 백엔드, C 레벨 curl 이라 socket 패치를 우회) 의 perform/request 차단.
 2. 운영 상태 파일 — ``~/.cache/ai_trader``, ``~/.cache/ai_trader_us``, ``~/.gh_token``,
    운영 체크아웃의 ``.env``/``logs``/``results`` 에 대한 open/stat/scandir/mkdir/
    rename/unlink 등을 차단 (``PermissionError`` 로 크게 실패).
@@ -176,6 +177,36 @@ socket.getaddrinfo = _getaddrinfo
 def pytest_runtest_protocol(item, nextitem):
     _CURRENT_TEST[0] = item.nodeid
     return None
+
+
+# ── curl_cffi (yfinance 백엔드) — C 레벨 curl 이라 socket 패치를 우회한다 (D 재현 중 실측 발견, 2026-09-15)
+try:
+    import curl_cffi.curl as _curl_mod
+    from curl_cffi import requests as _curl_requests
+except Exception:  # 미설치 환경
+    _curl_mod = None
+    _curl_requests = None
+
+if _curl_mod is not None:
+    def _curl_perform(self, *args, **kwargs):
+        _deny_net("curl_cffi.perform", "?")
+
+    _curl_mod.Curl.perform = _curl_perform  # type: ignore[assignment]
+    if hasattr(_curl_mod, "AsyncCurl"):
+        _orig_add_handle = getattr(_curl_mod.AsyncCurl, "add_handle", None)
+        if _orig_add_handle is not None:
+            def _curl_add_handle(self, curl, *args, **kwargs):
+                _deny_net("curl_cffi.AsyncCurl", "?")
+            _curl_mod.AsyncCurl.add_handle = _curl_add_handle  # type: ignore[assignment]
+    if _curl_requests is not None:
+        def _curl_request(self, method, url, *args, **kwargs):
+            _deny_net("curl_cffi.request", str(url))
+
+        _curl_requests.Session.request = _curl_request  # type: ignore[assignment]
+        if hasattr(_curl_requests, "AsyncSession"):
+            async def _curl_arequest(self, method, url, *args, **kwargs):
+                _deny_net("curl_cffi.arequest", str(url))
+            _curl_requests.AsyncSession.request = _curl_arequest  # type: ignore[assignment]
 
 
 # ── 리포트 ───────────────────────────────────────────────────────────────────

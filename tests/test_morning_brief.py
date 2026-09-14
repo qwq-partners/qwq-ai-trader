@@ -434,7 +434,11 @@ def test_evaluate_morning_brief_writes_ledger(tmp_path):
     assert json.loads(ledger_path.read_text(encoding="utf-8").strip())["date"] == today.isoformat()
 
 
-def test_evaluate_morning_brief_records_failure_when_index_missing(tmp_path):
+def test_evaluate_morning_brief_records_failure_when_index_missing(tmp_path, monkeypatch):
+    """지수 조회 실패 → evaluated=False 로 기록. 평가일을 브리프 기준일로 고정해 과거일
+    가드(실측 미수집)가 아니라 실제 '조회 실패' 분기를 타게 한다 (2026-09-15 R-C advisory:
+    이전에는 과거일 가드가 먼저 걸려 공허하게 통과했다)."""
+    monkeypatch.setattr(dr, "_today", lambda: date(2026, 9, 14))
     brief_path = tmp_path / "llm_morning_brief.json"
     ledger_path = tmp_path / "morning_brief_eval.jsonl"
     _write_brief(brief_path, BRIEF_0914)

@@ -94,6 +94,11 @@ class _LLM:
         return dict(self._result)
 
 
+def _real_adapter():
+    from src.core.market_regime import MarketRegimeAdapter
+    return MarketRegimeAdapter()
+
+
 def _make_bot(*, screener, kis_responses=None, intraday_state=None,
               intraday_pct=None, updated_at=None):
     ba = _BatchAnalyzer(screener, intraday_state, intraday_pct, updated_at)
@@ -101,10 +106,11 @@ def _make_bot(*, screener, kis_responses=None, intraday_state=None,
         batch_analyzer=ba,
         kis_market_data=_KisMarketData(kis_responses or {}),
         exit_manager=_ExitManagerStub(),
-        engine=SimpleNamespace(_regime_adapter=SimpleNamespace(
-            calls=[],
-            set_intraday_risk=lambda *a, **k: None,
-        )),
+        # 실제 어댑터 — 5분 감지기·12:00 분류기·30분 sync 가 공유하는 장중 위험 상태.
+        # 가짜(no-op)로 두면 "분류기가 어댑터에 밀어 넣은 crash" 라는 공통 근거가 사라져
+        # F14 의 두 번째 단계(input_meta 없는 캐시 + 감지기 normal)를 재현할 수 없다
+        # (2026-09-15 통합 조정 — 관찰 대상은 ExitManager 가 받은 레짐 그대로).
+        engine=SimpleNamespace(_regime_adapter=_real_adapter()),
         config={"kr": {"llm_ops": {"regime_conflict_guard_enabled": True}}},
     )
 

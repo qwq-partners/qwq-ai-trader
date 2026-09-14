@@ -521,7 +521,7 @@ class USMarketData:
                 prev_close = _clean_num(item.get("chartPreviousClose"))
                 if prev_close is None:
                     prev_close = _clean_num(item.get("previousClose"))
-                if current is None or not prev_close:
+                if current is None or prev_close is None or prev_close <= 0:
                     continue
 
                 change = current - prev_close

@@ -65,15 +65,23 @@ def classify_intraday_level(change_pct: Optional[float]) -> Optional[str]:
     `batch_analyzer.update_intraday_state` 와 12:00/08:10 레짐 분류기가 **같은 함수**를
     써야 "감지기는 normal 인데 이번 조회는 -3%" 같은 어긋남이 생기지 않는다 (T10 F14).
 
-    결측(None)은 0·normal 로 채우지 않고 None 을 돌려준다.
+    결측(None)은 0·normal 로 채우지 않고 None 을 돌려준다. 비숫자(문자열·bool·NaN)도
+    결측이다 — 파일(input_meta)에서 읽은 값이 손상돼도 예외로 sync 전체를 죽이지 않는다
+    (2026-09-15 R-A advisory).
     """
-    if change_pct is None:
+    if change_pct is None or isinstance(change_pct, bool):
         return None
-    if change_pct <= -3.5:
+    try:
+        value = float(change_pct)
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN
+        return None
+    if value <= -3.5:
         return "severe"
-    if change_pct <= -2.5:
+    if value <= -2.5:
         return "crash"
-    if change_pct <= -1.5:
+    if value <= -1.5:
         return "caution"
     return "normal"
 
@@ -224,6 +232,10 @@ class MarketRegimeAdapter:
                 f"{self._horizons.intraday_risk}@{prev_as_of}"
             )
             return
+        if as_of is None:
+            # 결측 as_of 는 effective_regime 의 당일 게이트에서 걸러져 캡을 걸지 못한다 —
+            # 조용히 무효가 되지 않게 남긴다 (2026-09-15 R-A advisory)
+            logger.warning(f"[레짐] 장중 위험 {level} 을 as_of 없이 기록 — 유효 레짐 캡에 쓰이지 않는다")
         self._horizons = replace(
             self._horizons, intraday_risk=level, intraday_change_pct=change_pct,
             intraday_risk_as_of=as_of,

@@ -172,11 +172,25 @@ def test_f17_kr_market_expert_futures_fetch_discards_no_as_of_value(monkeypatch)
     monkeypatch.setattr(kmd_mod, "get_kis_market_data", lambda: _StaleNightFutures())
 
     expert = KRMarketExpert(ExpertConfig())
-    futures_state = asyncio.run(expert._fetch_kospi200_futures())
 
-    assert futures_state.get("overnight_chg_pct") is None, (
-        f"기준시각(as_of) 없는 야간선물 값을 그대로 overnight_chg_pct 에 실었다: {futures_state}"
+    # 2026-09-15 통합 조정: 수정 후 구현은 fetch 결과에 값+as_of(None) 을 함께 실어 두고
+    # _analyze 의 신선도 게이트에서 판단에 쓰지 않는다 — 내부 표현이 아니라 관찰 결과
+    # (점수·유효 입력·data_status)로 판정한다. 다른 세 입력은 결측으로 두어 야간선물이
+    # 유일한 후보가 되게 한다: 세면 partial+점수, 안 세면 insufficient+0.
+    async def _empty(*a, **kw):
+        return {}
+    monkeypatch.setattr(expert, "_fetch_investor_flows", _empty)
+    monkeypatch.setattr(expert, "_fetch_kospi_state", _empty)
+    monkeypatch.setattr(expert, "_fetch_short_balance", _empty)
+
+    op = asyncio.run(expert._analyze())
+
+    assert op.score == 0, f"as_of 없는 야간선물 +2% 가 점수에 가산됐다: {op.score} {op.key_findings}"
+    assert op.data_status == "insufficient", (
+        f"as_of 없는 야간선물이 유효 입력으로 세어져 data_status={op.data_status!r}: {op.missing_inputs}"
     )
+    assert any("야간선물" in m for m in op.missing_inputs), op.missing_inputs
+    assert not any("갭업" in f for f in op.key_findings), op.key_findings
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -207,28 +221,36 @@ class _FakeSession:
         return _FakeResp(200, self._payload)
 
 
+def _v7_payload_with_priceless_vix():
+    """명세 F18 인수 입력: 지수 4종은 정상, VIX 는 종목·시각만 (가격·변동률 없음)"""
+    def _q(sym, price, chg, pct):
+        return {"symbol": sym, "regularMarketPrice": price, "regularMarketChange": chg,
+                "regularMarketChangePercent": pct, "regularMarketTime": 1757900000}
+    return {"quoteResponse": {"result": [
+        _q("^GSPC", 6000.0, 30.0, 0.5), _q("^IXIC", 20000.0, 120.0, 0.6),
+        _q("^SOX", 5500.0, 90.0, 1.6), _q("^DJI", 44000.0, 100.0, 0.2),
+        {"symbol": "^VIX", "regularMarketTime": 1757900000},
+    ]}}
+
+
 def test_f18_v7_missing_price_defaults_to_zero_not_none(monkeypatch):
     from src.data.providers.us_market_data import USMarketData
 
     umd = USMarketData()
-    payload = {
-        "quoteResponse": {
-            "result": [
-                {"symbol": "^VIX", "regularMarketTime": 1757900000},
-            ]
-        }
-    }
 
     async def _fake_get_session():
-        return _FakeSession(payload)
+        return _FakeSession(_v7_payload_with_priceless_vix())
 
     monkeypatch.setattr(umd, "_get_session", _fake_get_session)
 
     result = asyncio.run(umd._fetch_via_v7())
 
-    assert result is not None and "^VIX" in result
-    assert result["^VIX"]["price"] is None, (
-        f"regularMarketPrice 가 없는 응답인데 price 가 0 으로 채워졌다(결측 위장): {result['^VIX']}"
+    # 2026-09-15 통합 조정: 수정 후 파서는 가격·변동률이 둘 다 없는 심볼을 quotes 에서
+    # 빼고(소비자 f-string/비교 보호) 결측 사유를 별도로 보존한다 — "price 가 0 이 아니다"
+    # 라는 관찰 결과로 판정한다(심볼이 남아 있다면 price 는 None 이어야 한다).
+    assert result is not None and "^GSPC" in result
+    assert result.get("^VIX", {}).get("price") is None, (
+        f"regularMarketPrice 가 없는 응답인데 price 가 0 으로 채워졌다(결측 위장): {result.get('^VIX')}"
     )
 
 
@@ -237,12 +259,10 @@ def test_f18_overnight_signal_vix_missing_flag_not_false(monkeypatch):
 
     umd = USMarketData()
 
-    async def _fake_summary(force_refresh=False):
-        # _fetch_via_v7 이 정확히 만들어내는(현재 버그) 구조를 그대로 재현
-        return {"^VIX": {"price": 0, "change": 0, "change_pct": 0,
-                          "name": "^VIX", "volume": 0, "market_time": 1757900000}}
+    async def _fake_get_session():
+        return _FakeSession(_v7_payload_with_priceless_vix())
 
-    monkeypatch.setattr(umd, "fetch_us_market_summary", _fake_summary)
+    monkeypatch.setattr(umd, "_get_session", _fake_get_session)
 
     signal = asyncio.run(umd.get_overnight_signal())
     vix = signal["indices_normalized"]["VIX"]
@@ -251,3 +271,6 @@ def test_f18_overnight_signal_vix_missing_flag_not_false(monkeypatch):
         f"가격 없이 종목·시각만 있는 VIX 응답이 missing=False 로 표시됐다: {vix}"
     )
     assert vix["price"] is None, f"VIX price 가 0 으로 위장됐다: {vix}"
+    assert vix.get("reason"), f"결측 사유가 없다: {vix}"
+    assert signal["indices_normalized"]["SP500"]["missing"] is False
+    assert signal["indices_normalized"]["SP500"]["change_pct"] == 0.5

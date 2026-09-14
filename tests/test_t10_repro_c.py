@@ -124,6 +124,9 @@ def test_f19_expert_direction_axis_never_recorded(monkeypatch, tmp_path):
     assert brief is not None, "브리프 생성 실패 — LLM 대역 확인 필요"
 
     brief_path = tmp_path / ".cache" / "ai_trader" / "llm_morning_brief.json"
+    # 07:30 배선(kr_scheduler)은 경로를 넘기지 않으므로 모듈 기본 경로를 tmp 로 돌린다 —
+    # save/evaluate/record 세 진입점이 같은 아카이브를 봐야 한다 (2026-09-15 통합 조정)
+    monkeypatch.setattr(dr_mod, "MORNING_BRIEF_PATH", brief_path)
     dr_mod.save_morning_brief(brief, path=brief_path)
 
     # 2) 07:30 발송 — 이 시점에는 실제 전문가 종합점수(+2, 중립)가 계산된다
@@ -149,6 +152,7 @@ def test_f19_expert_direction_axis_never_recorded(monkeypatch, tmp_path):
     sched.bot = SimpleNamespace(expert_orchestrator=_Orch())
     asyncio.run(sched._send_expert_briefing_telegram(
         "🌅 장전", {}, 2, "neutral", False, use_report_channel=True,
+        record_dispatch=True,   # 07:30 morning 슬롯 (일요일 저녁·월요일 장전 슬롯은 기록 안 함)
     ))
     assert notifier.sent, "07:30 발송이 이뤄지지 않았다"
 
@@ -180,7 +184,9 @@ def test_f20_sector_claim_vs_actual_name_mismatch_leaves_all_unscored():
     claims = dr_mod.extract_brief_claims(
         text, sector_signals, scope=dr_mod.SCOPE_US_ONLY, basis=["미국 지수"],
     )
-    assert set(claims["sectors"]) == {"AI/반도체", "바이오"}, claims
+    # 2026-09-15 통합 조정: claims.sectors 는 생성 시점에 평가 대상을 고정한 dict 목록
+    # (명세 F20 이 허용한 스키마 변경) — 테마명 집합으로 비교한다
+    assert {s["theme"] for s in claims["sectors"]} == {"AI/반도체", "바이오"}, claims
 
     brief = {
         "kr_date": "2026-09-14", "generated_at": "2026-09-14T07:00:00",

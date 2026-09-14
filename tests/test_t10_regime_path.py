@@ -534,15 +534,7 @@ def test_g2_gate_reads_effective_regime_from_adapter():
     adapter.set_intraday_risk("crash", -3.0, datetime.now())
     assert adapter.regime == "sideways"
 
-    captured = {}
-
-    class _CV:
-        last_memory_adj = 0
-
-        def validate(self, **kwargs):
-            captured.update(kwargs)
-            return False, kwargs["score"], "테스트 차단"
-
+    # (G2 가 실제로 넘기는 인자 캡처는 tests/test_t10_repro_a.py 의 on_signal 재현이 담당)
     rm = object.__new__(RiskManager)
     rm.engine = SimpleNamespace(_regime_adapter=adapter, _market_regime="bull")
     assert RiskManager._resolve_market_regime(rm) == "sideways"
@@ -580,7 +572,8 @@ class _Notifier:
         return self.ok
 
 
-def _run_morning_briefing(monkeypatch, tmp_path, *, recorder=None, ok=True):
+def _run_morning_briefing(monkeypatch, tmp_path, *, recorder=None, ok=True,
+                          record_dispatch=True):
     import src.utils.telegram as tg_mod
     import src.data.providers.disclosure_feed as disc_mod
     import src.analytics.daily_report as dr_mod
@@ -604,7 +597,8 @@ def _run_morning_briefing(monkeypatch, tmp_path, *, recorder=None, ok=True):
     sched = object.__new__(KRScheduler)
     sched.bot = SimpleNamespace(expert_orchestrator=None)
     asyncio.run(sched._send_expert_briefing_telegram(
-        "🌅 장전", {}, 7, "neutral", False, use_report_channel=True))
+        "🌅 장전", {}, 7, "neutral", False, use_report_channel=True,
+        record_dispatch=record_dispatch))   # 07:30 morning 슬롯만 True (2026-09-15 통합)
     return notifier
 
 
@@ -628,6 +622,17 @@ def test_dispatch_record_marks_failed_send(monkeypatch, tmp_path):
     _run_morning_briefing(monkeypatch, tmp_path,
                           recorder=lambda **kw: calls.append(kw), ok=False)
     assert calls and calls[0]["status"] == "failed", calls
+
+
+def test_dispatch_not_recorded_for_non_morning_channel_slots(monkeypatch, tmp_path):
+    """일요일 저녁·월요일 장전 슬롯도 채널 발송이지만 평가 대상 kr_date 가 아니다 —
+    기록하지 않는다 (R-A advisory, 2026-09-15 통합)."""
+    calls = []
+    notifier = _run_morning_briefing(
+        monkeypatch, tmp_path, recorder=lambda **kw: calls.append(kw),
+        record_dispatch=False)
+    assert notifier.sent
+    assert calls == []
 
 
 def test_dispatch_record_absent_is_skipped(monkeypatch, tmp_path):

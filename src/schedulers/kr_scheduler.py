@@ -457,6 +457,7 @@ class KRScheduler:
                             await self._send_expert_briefing_telegram(
                                 slot_labels[slot_name], ops, agg, bias, bear_consensus,
                                 use_report_channel=use_channel,
+                                record_dispatch=(slot_name == "morning"),
                             )
                             # 성공 시에만 완료 처리 (2026-08-08 P1 — 일시 장애를
                             # 영구 완료로 확정하던 fail-closed 위반, 8/5 사고 패턴)
@@ -484,11 +485,15 @@ class KRScheduler:
     async def _send_expert_briefing_telegram(
         self, label: str, ops: dict, agg: int, bias: str, bear_consensus: bool,
         use_report_channel: bool = False,
+        record_dispatch: bool = False,
     ):
         """전문가 브리핑 텔레그램 전송
 
         use_report_channel=True → LLM 모닝브리프 채널(report_chat_id)로 발송
         use_report_channel=False → 기본 채널(chat_id, DM)
+        record_dispatch=True → 07:30 morning 슬롯에서만: 발송 스냅샷을 장후 평가 아카이브에
+            기록한다 (일요일 저녁·월요일 장전 슬롯은 평가 대상 kr_date 가 아니므로 제외,
+            2026-09-15 T10 통합 — R-A advisory)
         """
         try:
             from src.utils.telegram import get_telegram_notifier
@@ -697,7 +702,7 @@ class KRScheduler:
                 try:
                     from ..analytics import daily_report as _dr
                     _rec = getattr(_dr, "record_morning_brief_dispatch", None)
-                    if callable(_rec):
+                    if callable(_rec) and record_dispatch:
                         _rec(
                             kr_date=_now_kst().date().isoformat(),
                             sent_text=msg,
@@ -1546,7 +1551,9 @@ class KRScheduler:
             # 사실이다 → 둘 중 **더 보수적인 쪽**이 최종 캡 입력 (T10 F14).
             # 반대로 분류기가 감지기를 완화 방향으로 덮어쓰지는 않는다(max 이므로).
             observed_level = classify_intraday_level(kospi_today_pct)
-            cap_level = max_intraday_level(crash_level, observed_level)
+            cap_level = max_intraday_level(
+                crash_level, observed_level, self._adapter_intraday_snapshot()
+            )
             if observed_level is not None:
                 # 어댑터(유효 레짐)에도 같은 판단을 전달 — 이번 조회가 있을 때만 보낸다
                 # (조회 실패 시 감지기 값을 now 로 재각인하지 않는다).
@@ -1694,6 +1701,22 @@ class KRScheduler:
         return (level, (float(pct) if pct is not None else None),
                 updated_at.isoformat(timespec="seconds"))
 
+    def _adapter_intraday_snapshot(self) -> Optional[str]:
+        """MarketRegimeAdapter 가 들고 있는 장중 위험(당일 관측만).
+
+        5분 감지기와 12:00 분류기가 같은 어댑터에 쓰므로 "가장 최근에 관측된 급락 수준" 의
+        공통 출처다. D 재현(T10 F14): input_meta 없는 캐시 + 감지기 normal 인 상태에서는
+        분류기가 어댑터에 밀어 넣은 crash 만이 남은 근거인데 그것을 읽지 않으면
+        trending_bull 이 그대로 ExitManager 에 적용된다 (2026-09-15 통합 수정).
+        """
+        adapter = getattr(getattr(self.bot, "engine", None), "_regime_adapter", None)
+        h = getattr(adapter, "_horizons", None)
+        level = getattr(h, "intraday_risk", None)
+        as_of = getattr(h, "intraday_risk_as_of", None)
+        if level is None or as_of is None or as_of.date() != _now_kst().date():
+            return None
+        return level
+
     def _push_intraday_risk(self, level: str, change_pct: Optional[float] = None,
                             as_of: Optional[datetime] = None) -> None:
         """급락 감지기 상태를 MarketRegimeAdapter 에 전달 (유효 레짐 캡의 입력).
@@ -1825,7 +1848,8 @@ class KRScheduler:
                 _observed = classify_intraday_level(
                     (data.get("input_meta") or {}).get("kospi_today_pct")
                 )
-                _cap_level = max_intraday_level(_crash_level, _observed)
+                _adapter_level = self._adapter_intraday_snapshot()
+                _cap_level = max_intraday_level(_crash_level, _observed, _adapter_level)
 
                 original_regime = regime
                 regime = self._resolve_regime_conflict(kospi_regime, regime, _cap_level)
@@ -1833,7 +1857,8 @@ class KRScheduler:
                     logger.info(
                         f"[레짐동기화] 충돌 해소: LLM={original_regime} → 조정={regime} "
                         f"(KOSPI 기술={kospi_regime}, 장중급락={_cap_level or '결측'} "
-                        f"— 감지기={_crash_level or '결측'}, 파일실측={_observed or '결측'})"
+                        f"— 감지기={_crash_level or '결측'}, 파일실측={_observed or '결측'}, "
+                        f"어댑터={_adapter_level or '결측'})"
                     )
 
             exit_mgr = getattr(self.bot, "exit_manager", None)
