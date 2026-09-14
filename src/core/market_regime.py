@@ -53,6 +53,11 @@ _BULL_BLOCKING_RISK = ("crash", "severe")
 _BULL_DEMOTION = {"bull": "sideways", "trending_bull": "neutral"}
 
 
+def _now() -> datetime:
+    """테스트 주입용 단일 시계 진입점 (유효 레짐의 장중 위험 당일 게이트)"""
+    return datetime.now()
+
+
 def cap_regime_by_intraday_risk(regime: str, intraday_risk: Optional[str]) -> str:
     """장중 위험이 crash/severe 이면 강세 레짐을 강등한다.
 
@@ -193,8 +198,14 @@ class MarketRegimeAdapter:
 
     @property
     def effective_regime(self) -> str:
-        """게이트·사이징이 읽는 유효 레짐 — 장중 위험이 오래된 강세 전망을 이긴다"""
-        return cap_regime_by_intraday_risk(self.mid_trend, self._horizons.intraday_risk)
+        """게이트·사이징이 읽는 유효 레짐 — 장중 위험이 오래된 강세 전망을 이긴다.
+        장중 위험은 **당일** 관측만 인정 — 전일 15:3x crash 가 다음 날 장전(PRE_MARKET 2분 루프)까지
+        강등을 거는 잔존 경로 차단 (2026-09-14 재리뷰). as_of 없음/다른 날짜 = 결측(None)."""
+        risk = self._horizons.intraday_risk
+        as_of = self._horizons.intraday_risk_as_of
+        if risk is not None and (as_of is None or as_of.date() != _now().date()):
+            risk = None
+        return cap_regime_by_intraday_risk(self.mid_trend, risk)
 
     def _horizons_summary(self, now: Optional[datetime] = None) -> Dict:
         """관점별 값·기준시각·결측 사유 — 결측을 0·중립으로 채우지 않는다"""

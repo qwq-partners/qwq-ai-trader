@@ -291,6 +291,24 @@ KRScheduler.create_tasks()가 기능 존재 여부와 설정에 따라 태스크
 | 18:00 | 종목 마스터 갱신 |
 | 20:30 | 일일 진화 리뷰 |
 
+#### 레짐 입력 흐름 (2026-09-14 갱신)
+
+`_run_llm_regime_classifier()`는 실행 시각에 따라 서로 다른 KR 지수 자료를 쓴다.
+
+| 실행 | KR 지수 출처 | as_of |
+|---|---|---|
+| 08:10 (장 시작 전) | 아침 스크리너 벤치마크 종가열(`_screener._kospi_closes`)로 5일·20일 계산 | 스크리너 벤치마크 **로드 시각**(`_kospi_loaded_at`) |
+| 08:10, 종가열 없음(재시작 직후) | 없음 — c5/c20을 **0.0%로 채우지 않고 결측** 처리 | `스크리너 캐시 없음` + `missing_fields`에 `KOSPI_c5`/`KOSPI_c20` |
+| 12:00 (장중, 09:00~15:35 창) | `kis_market_data.fetch_index_price("0001"/"1001")` 재조회 → 당일 등락률 + 종가열에 당일 지수를 덧붙여 5일·20일 재계산 | 조회 시각 ISO8601 |
+| 12:00, 벤치마크 마지막 봉이 이미 오늘(`_kospi_last_bar_date`) | 당일 지수를 **덧붙이지 않는다**(catch-up 스캔이 장중에 로드한 경우의 이중 계상 방지) | 조회 시각 ISO8601 |
+| 12:00, 조회 실패 | 아침 캐시로 폴백 | `<로드 시각> — 장중 갱신 실패` + `missing_fields`에 `KOSPI당일` |
+
+- 미국 지수는 공급자(`us_market_data`)의 **정규화 키**(`indices_normalized`의 `SP500`/`NASDAQ`/`SOX`/`VIX`, VIX는 `price`)를 우선 읽고, 없으면 표시명 별칭(`_index_field`)으로 폴백한다. `missing: true`이거나 값이 없으면 **None → 프롬프트 "결측"**이며 0으로 채우지 않는다. `us_as_of`는 `마감 <as_of>, 조회 <fetched_at>` 형태로 **체결 시각과 조회 시각을 구분**한다.
+- 장중 급락 감지기 상태(`batch_analyzer._intraday_state`)가 프롬프트에 포함되지만, **당일 갱신(`_intraday_updated_at`)이 없으면 결측**으로 둔다 — 감지기는 일일 리셋이 없어 전일 상태가 남기 때문이다(`missing_fields`에 `급락감지기(당일 갱신 없음)`). as_of는 스냅샷 시각이 아니라 감지기 갱신 시각이다.
+- `crash`/`severe`면 LLM이 `trending_bull`을 반환해도 저장 전에 `neutral`로 제한된다(`cap_regime_by_intraday_risk` 단일 출처 — 스케줄러 자체 캡 표는 제거). 원본은 `llm_regime_raw`·`confidence_raw`, 제한 사실은 `regime_capped: true`로 남아 대시보드·`_market_ctx`가 알 수 있다. 같은 급락 상태를 `_apply_regime_to_exit_manager()`의 충돌 방지 장치도 쓴다.
+- 5분 급락 감지 루프는 `update_intraday_state()` 직후 `bot.engine._regime_adapter.set_intraday_risk(level, change_pct, as_of)`로 같은 상태를 **유효 레짐(§10.1)** 에도 전달한다(어댑터 부재 시 조용히 스킵, 등락률 결측은 `None`).
+- 모든 입력의 `as_of`·`source`·`missing_fields`·`kospi_c5`/`kospi_c20`는 `llm_regime_today.json`의 `input_meta`에 남는다.
+
 morning_scan_enabled가 false인 대체 모드에서는 15:35 사전분석 → 15:40 일일 스캔 → 19:30 저녁 보정 스캔을 사용하고, 다음 거래일 실행 시간은 설정값을 따른다.
 
 주간 작업에는 토요일 00:00 예산 리밸런싱, 토요일 09:30~09:44 매도 후 복기, 일요일 21:00 전문가 패널이 있다. KR 전문가 정기 브리핑에는 일요일 22:00과 월요일 06:00 슬롯도 있다. core 리밸런싱과 value-growth shadow는 각각의 주기·중복 방지 상태를 별도로 관리한다.
@@ -392,6 +410,8 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 
 - `DailyReportGenerator.build_morning_brief()`는 입력 자료의 범위를 `scope`로 고정한다. 미국 마감 자료뿐이면 `us_close_only`로 제목을 "미국시장 마감 요약"으로 제한하고, 프롬프트에서 한국장 개장 방향·갭·시가 대응 전략을 금지한 뒤 **응답 후 검사**(`sanitize_brief_claims`)로 남은 단정 문장을 `국내 자료 없음 — 개장 방향 판단 불가`로 대체한다.
 - 기준시각(`as_of`)이 있는 국내 자료를 넘기면 `with_kr_inputs`가 되고 "개장 관찰 포인트"가 허용되지만 반대 근거를 함께 요구한다. `as_of` 없는 국내 자료는 유효 자료로 인정하지 않는다.
+- 07:30 전문가 브리핑(`kr_scheduler._send_expert_briefing_telegram`)이 모닝브리프 캐시를 결합할 때 `build_expert_conflict_note(tone|text, {"score": agg})`를 호출해 상충 문구를 브리프 끝에 붙이고, `orchestrator.data_status_summary()`의 `자료 부족 N명`·커버리지 부족(`체제 점수 무보정`)을 전문가 종합 줄에 표시한다.
+- 저녁 20:30 진화 잡이 `evaluate_morning_brief(day)`를 1일 1회 호출한다(120초 상한, 실패·미구현은 로그만). 결과는 `kr_evolution_scheduler` 하트비트 note로 남는다.
 - 전문가 종합점수와 브리프 톤이 상충하면 본문 끝에 `⚠️ 전문가 종합판단(+2 중립)과 상충` 표시가 붙는다. `build_expert_conflict_note(tone_or_text, expert_consensus)`는 순수 함수로, 첫 인자에 레코드의 `tone` 또는 본문 `text`(톤 값이 아니면 `brief_tone()`으로 판정)를, 둘째 인자에 `{"score": int}` 또는 `{"bias": "bull"|"bear"|"neutral"}`을 받아 문구 또는 `None`을 돌려준다. 07:30 결합부(`kr_scheduler`)가 그대로 호출한다.
 - 사후 검사·주장 추출은 **KR 주어 가드**를 쓴다. 문장에 `KOSPI/코스피/코스닥/국내/한국/오늘 장…`이 있고 개장·갭·출발 단정이 있으면 미국 근거가 같은 문장에 섞여 있어도 제거·대체 대상이다("미국 반도체 랠리를 반영해 오늘 KOSPI는 갭상승 출발이 예상된다"). KR 주어가 없는 미국 마감 문장은 보존한다. 문장 분리는 마침표 뒤에 공백·문장끝이 올 때만 끊어 `+0.97%`·`S&P500 +0.8%` 같은 소수점에서 본문이 훼손되지 않는다. `extract_brief_claims()`도 같은 가드를 써 미국 마감 서술(`S&P500은 상승 마감했다`)을 KOSPI 주장으로 원장에 기록하지 않는다.
 - 캐시(`~/.cache/ai_trader/llm_morning_brief.json`)는 `us_date`/`kr_date`/`text`/`generated_at`/`model`/`scope`/`inputs`/`claims`/`removed_claims` 고정 스키마로 저장된다. `kr_date`는 평가 대상 KR 거래일이다. 07:30 전문가 브리핑은 기존대로 `text`·`generated_at`만 읽는다.

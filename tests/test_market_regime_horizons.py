@@ -32,11 +32,13 @@ def _adapter(base_regime: str = "bull") -> MarketRegimeAdapter:
 
 # ── 유효 레짐 우선순위 ────────────────────────────────────────────────────────
 
-def test_crash_does_not_let_stale_bull_stand():
+def test_crash_does_not_let_stale_bull_stand(monkeypatch):
     """09-14 사례: 아침 자료 기준 bull 인데 장중 crash → 유효 레짐이 bull 이면 안 된다."""
     adapter = _adapter("bull")
     assert adapter.regime == "bull"
 
+    import src.core.market_regime as _mr
+    monkeypatch.setattr(_mr, "_now", lambda: datetime(2026, 9, 14, 12, 30))   # as_of 와 같은 날
     adapter.set_intraday_risk("crash", change_pct=-3.34, as_of=datetime(2026, 9, 14, 12, 0))
 
     assert adapter.regime == "sideways"
@@ -221,3 +223,14 @@ def test_llm_defense_diagnosis_still_demotes_bull(monkeypatch):
     adapter = _adapter("bull")
     asyncio.run(adapter.llm_morning_diagnosis(_LLM()))
     assert adapter._current_regime == "sideways"
+
+
+def test_previous_day_intraday_risk_does_not_cap_next_morning(monkeypatch):
+    """전일 15:3x crash 가 어댑터에 남아도 다음 날 장전 유효 레짐을 강등하지 않는다 (2026-09-14 재리뷰)."""
+    import src.core.market_regime as _mr
+    adapter = _adapter("bull")
+    adapter.set_intraday_risk("crash", change_pct=-3.26, as_of=datetime(2026, 9, 14, 15, 34))
+    monkeypatch.setattr(_mr, "_now", lambda: datetime(2026, 9, 15, 8, 20))
+    assert adapter.regime == "bull"                       # 전일 위험은 결측 취급
+    monkeypatch.setattr(_mr, "_now", lambda: datetime(2026, 9, 14, 15, 40))
+    assert adapter.regime == "sideways"                   # 당일이면 강등
