@@ -131,6 +131,41 @@ class ExpertOpinion:
   대신 `indices_normalized["SP500"/"SOX"/"VIX"]["price"|"change_pct"]`를 읽도록 바뀔
   예정(F10 A측 작업) — 필드명은 `"value"`가 아니라 `"price"`.
 
+## data_status 6명 확장·from_dict unknown·야간선물 세션 규칙 (2026-09-15, T10 F16·F17)
+
+T9(위 절)에서 `kr_market_expert` 한 명뿐이던 `data_status` 판정이 시장체제 집계
+대상 6명 전원(`macro_economist`·`us_market_expert`·`kr_economy_expert`·
+`global_micro_expert`·`weekend_signal_expert`·`kr_market_expert`)으로 확장됐다.
+공통 원칙: **score/confidence 를 실제로 움직이는 입력만** 판정 대상 — 결과에 영향을
+주지 않는 텍스트 컨텍스트(Perplexity 검색 등)는 결측이어도 등급을 낮추지 않는다.
+
+| 전문가 | insufficient(≤0.2) | partial(≤0.7) | ok |
+|---|---|---|---|
+| `macro_economist` | 5개 핵심 지표(`_REQUIRED_SCORE_FIELDS`) 전부 결측 + `cpi_yoy`/`semis_basket_5d_pct` 도 없음 | 핵심 지표 일부만 결측(선택 보너스 필드만 없으면 ok로 승격) | 핵심 5개 전부 확보 |
+| `us_market_expert` | VIX·지수·SOX 5일추세(core 3종) 전부 결측 | core 일부 또는 섹터 RS(bonus) 결측 | core 3종 + 섹터 RS 전부 확보 |
+| `kr_economy_expert` | 원/달러 환율 + 한국 거시 컨텍스트(검색) 둘 다 결측 | 둘 중 하나만 결측 | 둘 다 확보 |
+| `global_micro_expert` | 섹터 수익률 5개 필드 + 글로벌 산업 컨텍스트 전부 결측 | 일부만 결측 | 전부 확보 |
+| `weekend_signal_expert` | 7개 신호(ES/NQ/KRW/VIX/BTC/ZB+KR야간선물) 전부 결측(유효 0개) | 1~6개만 유효 | 7개 전부 유효(KR야간선물은 세션 as_of 확인 시만 유효로 카운트, F17) |
+| `kr_market_expert` | 수급·공매도 원자료 둘 다 결측(코스피·야간선물은 별도 취급) | 하나만 결측 | 둘 다 확보 |
+
+- **`ExpertOpinion.from_dict` unknown 기본값** (`src/experts/types.py`) — `data_status`
+  필드가 아예 없는 구 레코드(T9 이전 저장분)를 읽을 때 "ok"를 기본값으로 채우면
+  "충분했다"는 근거 없는 판정을 만들어낸다. 대신 `"unknown"`으로 남기고,
+  orchestrator 집계(`_market_expert_contributions`)가 `ok`/`partial`만 허용하는
+  allowlist라 자연히 제외되게 한다. 같은 세션에서 저장된 정상 레코드(`data_status`
+  키가 명시적으로 "ok")는 그대로 "ok" 유지.
+- **야간선물 세션 as_of 규칙** (`src/utils/data_freshness.kr_night_futures_as_of`,
+  **정책값 — 사용자 승인 필요**): KRX 야간선물(CM) 세션은 월~금 18:00~익일 05:00
+  KST에만 개장한다고 가정한다(요일 가드로 주말 "세션 없는 시간대"를 개장 중으로
+  오판하지 않음). 세션 중 조회는 as_of=조회 시각(실시간 호가), 세션 종료 후
+  조회는 as_of=직전 세션 종료 시각(05:00, 주말은 역산 시 건너뜀). 유효기간은
+  다음 세션 개장(18:00, 토/일이면 다음 평일로 자연 확장)까지. **공휴일 캘린더는
+  미반영**이며 필요해지면 `src.utils.session.is_kr_market_holiday` 연동을 검토
+  (정책 승인 필요, 미착수). `weekend_signal_expert`/`kr_market_expert`는 이 as_of가
+  없거나 세션이 "night"가 아니면(주간 폴백·미상) 값이 있어도 결측으로 처리한다.
+  NKD 프록시 폴백 경로는 as_of 개념이 없어 세션 규칙이 **미적용**(값 존재만으로
+  유효 취급, 잔여).
+
 ## 호출 흐름
 
 ```

@@ -615,6 +615,21 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
 - 20:30 하트비트 `kr_evolution_scheduler` note 에 `모닝브리프 평가:` 가 붙는지(없으면 report_generator 미초기화·타임아웃 120초·브리프 파일 없음 중 하나 — 로그로 구분).
 - 07:30 전문가 브리핑에 `자료 부족 N명`·`커버리지 부족` 표시와 브리프 상충 문구가 조건대로 나오는지.
 
+### 2026-09-15~ — T10 연결 경로 일관성 (배포 후 확인)
+
+T10(F13~F22, 통합 SHA `a6d81d0`)은 단계별 수정이 아니라 자료 수집→검증→레짐→소비자→발송→평가 **연결 경로**를 다룬다 — 각 단계가 옳아도 다음 단계가 옛 값을 읽으면 원점이므로, 배포 후에는 아래 항목을 개별이 아니라 하루치 흐름으로 함께 확인한다.
+
+- **12:00 레짐 재분류**: `~/.cache/ai_trader/llm_regime_today.json` 의 `input_meta` 에 `kospi_bars_as_of`(봉 기반 지표 as_of, `kr_as_of` 와 분리) · `intraday_cap_level`(급락 캡이 실제로 어느 레벨로 제한했는지) · `missing_fields` 가 채워지는지.
+- **30분 sync 로그**: `journalctl -u qwq-ai-trader | grep "레짐동기화"` 에 `충돌 해소 ... 어댑터=` 형태로 어댑터 값이 병합 근거로 찍히는지 — 감지기 상태만으로 결정되면 F14 회귀.
+- **`monitor_positions` 무음 확인**: 30분 포지션 모니터 루프가 더 이상 레짐 재적용 로그를 내지 않는지(레짐 적용 로그는 `_apply_regime_to_exit_manager` 한 곳에서만 나와야 함, F15 회귀 시 stale_high_days 가 아침 값으로 되돌아옴).
+- **07:30 아카이브**: `~/.cache/ai_trader/morning_brief/<kr_date>.json` 이 생성되고 `dispatch[]` 에 07:30 morning 슬롯 항목(status=sent/failed)이 붙는지 — 다른 슬롯(midday/after 등)은 기록하지 않는 것이 정상.
+- **20:30 원장**: `morning_brief_eval.jsonl` 최신 줄의 `dispatched: true`·`brief_ref` 가 위 아카이브 경로를 가리키는지.
+- **전문가 브리핑 결측 표시**: "자료 부족 N명" 또는 "unknown" 표시가 실제 결측 상황(수급·공매도 등 원자료 부재)에서만 나오는지, 정상 자료 있는 날은 안 나오는지.
+- **야간선물 결측 빈도**: `missing_inputs` 에 `KR/JP 야간선물(as_of 미상 또는 만료)` 이 낮 시간 호출(세션 외)에서는 정상 발생 — 야간 세션 중(18:00~05:00) 반복되면 F17 회귀 의심.
+- **Yahoo VIX 결측 표시**: US 지수 조회 실패 시 `indices_normalized.VIX` 가 `0` 이 아니라 `missing: true` 로 표시되는지.
+
+20건 누적 전에는 위 관측을 근거로 임계값·판정 규칙을 바꾸지 않는다(`morning_brief_eval.summarize()` 표본 수 우선 확인).
+
 ## 완료된 체크포인트
 
 (검증 완료 시 ✅ + 1줄 요약으로 여기에 이동)
