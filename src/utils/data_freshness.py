@@ -64,6 +64,12 @@ def is_fresh(dp: DataPoint, now: Optional[datetime] = None) -> bool:
     if dp.is_missing or dp.as_of is None:
         return False
     now = now or datetime.now()
+    # 2026-09-15 (T10 B 리뷰 반영·2차 advisory): 미래 시각 as_of는 ttl 유무와
+    # 무관하게 거부한다 — F17은 "미래 시각 자료는 정상 자료로 세지 않는다"를
+    # 무조건 요구하는데, ttl_seconds가 없는 자료(예: 수동 오버라이드)는 이 검사
+    # 없이는 age 계산 자체를 건너뛰어 미래 as_of도 fresh로 통과했었다.
+    if dp.as_of > now:
+        return False
     if dp.ttl_seconds is None:
         return True
     age = (now - dp.as_of).total_seconds()

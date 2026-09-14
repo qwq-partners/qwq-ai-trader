@@ -137,16 +137,27 @@ class USMarketExpert(ExpertAgent):
         # 2026-09-15 (T10 F16): score가 실제로 참조하는 핵심 입력(SPY 지수·VIX·SOX
         # 5일 추세) 3종이 전부 결측이면 "모른다"는 뜻 — insufficient로 표시한다.
         # 섹터 RS/어닝 surprise는 score에 대한 기여가 부수적(있으면 가점, 없어도
-        # 나머지 3종만으로 판단 가능)이라 core에서 제외했다.
-        missing_inputs: List[str] = []
+        # 나머지 3종만으로 판단 가능)이라 insufficient 판정 기준(core)에서는 뺐다.
+        core_missing: List[str] = []
         if not isinstance(spy_ma50, (int, float)) and not isinstance(spy_ma200, (int, float)):
-            missing_inputs.append("SPY 지수(MA50/MA200)")
+            core_missing.append("SPY 지수(MA50/MA200)")
         if not isinstance(vix, (int, float)):
-            missing_inputs.append("VIX")
+            core_missing.append("VIX")
         if not isinstance(sox_5d, (int, float)):
-            missing_inputs.append("반도체(SOX) 5일 추세")
+            core_missing.append("반도체(SOX) 5일 추세")
 
-        if len(missing_inputs) == 3:
+        # 2026-09-15 (T10 B 리뷰 반영·2차 advisory): 섹터 RS(XLE/XLF 강세 +5)도
+        # score를 실제로 움직이는 입력이므로(macro_economist의 cpi_yoy/semis_basket과
+        # 동일한 "부수적이지만 score에 기여" 성격), core 3종이 다 있어도 섹터 RS가
+        # 없으면 ok가 아니라 partial로 남긴다 — 6명 사이의 "score 기여 필드는 판정
+        # 대상" 기준을 맞춘다. 어닝 surprise는 비수기에 정상적으로 비므로(연중 상시
+        # 수집 불가) 판정 대상에서 계속 제외한다.
+        bonus_missing: List[str] = []
+        if not sectors:
+            bonus_missing.append("섹터 RS")
+        missing_inputs = core_missing + bonus_missing
+
+        if len(core_missing) == 3:
             data_status = "insufficient"
         elif missing_inputs:
             data_status = "partial"

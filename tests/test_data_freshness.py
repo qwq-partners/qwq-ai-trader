@@ -43,6 +43,19 @@ def test_no_ttl_means_no_expiry_but_needs_as_of():
     assert is_fresh(dp, NOW) is True
 
 
+def test_no_ttl_future_as_of_is_rejected():
+    """T10 B 리뷰 advisory — ttl_seconds가 없으면 age 검사 자체가 생략되어
+    미래 as_of도 fresh로 통과하던 결함. F17은 '미래 시각 자료는 정상 자료로
+    세지 않는다'를 ttl 유무와 무관하게 요구한다."""
+    dp = DataPoint(value=1.0, as_of=NOW + timedelta(hours=6), source="x", ttl_seconds=None)
+    assert is_fresh(dp, NOW) is False
+
+
+def test_with_ttl_future_as_of_is_rejected():
+    dp = DataPoint(value=1.0, as_of=NOW + timedelta(minutes=5), source="x", ttl_seconds=3600)
+    assert is_fresh(dp, NOW) is False
+
+
 def test_missing_is_never_fresh():
     dp = missing(source="kospi", reason="조회 실패")
     assert dp.is_missing is True

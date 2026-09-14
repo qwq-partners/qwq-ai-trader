@@ -110,6 +110,37 @@ def test_us_market_expert_fully_empty_is_insufficient(monkeypatch):
     assert op.score == 0
 
 
+def test_us_market_expert_core_three_present_sectors_missing_is_partial_not_ok(monkeypatch):
+    """T10 B 리뷰 advisory — SPY/VIX/SOX(core 3종)가 전부 있어도 섹터 RS가 없으면
+    ok가 아니라 partial이어야 한다. 섹터 RS는 XLE/XLF 강세 시 +5로 score를 실제로
+    움직이는 입력이라(macro_economist의 cpi_yoy/semis_basket과 동일 성격) 판정
+    기준에서 빠지면 안 된다."""
+    expert = USMarketExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _indices():
+        return {"SPY": {"vs_ma50_pct": 3.0, "vs_ma200_pct": 5.0}}
+
+    async def _empty_dict():
+        return {}
+
+    async def _vix():
+        return 14.0
+
+    async def _semis():
+        return {"sox_5d_pct": 1.0}
+
+    monkeypatch.setattr(expert, "_fetch_index_states", _indices)
+    monkeypatch.setattr(expert, "_fetch_sector_rs", _empty_dict)  # 섹터만 결측
+    monkeypatch.setattr(expert, "_fetch_vix", _vix)
+    monkeypatch.setattr(expert, "_fetch_earnings_season", _empty_dict)
+    monkeypatch.setattr(expert, "_fetch_semis_state", _semis)
+
+    op = asyncio.run(expert._analyze())
+    assert op.data_status == "partial"
+    assert "섹터 RS" in op.missing_inputs
+    assert op.score != 0  # core 3종은 정상 — score는 실제로 움직였다
+
+
 def test_kr_economy_expert_fully_empty_is_insufficient(monkeypatch):
     expert = KREconomyExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
 
@@ -176,8 +207,14 @@ def test_from_dict_missing_data_status_key_is_unknown_and_excluded():
         "kr_economy_expert": _opinion("kr_economy_expert", 5, 0.6),
     }
     # unknown이 집계에 끼어들었다면 score=90 때문에 valid_n=4가 되고 보정도 커졌을 것.
-    assert orch.data_status_summary(opinions)["valid_n"] == 3
+    summary = orch.data_status_summary(opinions)
+    assert summary["valid_n"] == 3
     assert orch.aggregate_regime_score(opinions) == 0  # valid_n=3 < MIN_VALID_EXPERTS(4)
+    # T10 B 리뷰 advisory: "자료 부족 N명" 표시가 insufficient뿐 아니라 unknown도
+    # 세야 valid_n(3)이 낮은데 note가 "0명"으로 보이는 표시 불일치가 안 생긴다.
+    assert summary["note"] == "자료 부족 1명"
+    assert summary["unknown_experts"] == ["macro_economist"]
+    assert summary["insufficient_experts"] == []
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -419,10 +456,14 @@ def test_symbol_present_but_price_field_missing_is_none_not_zero():
 def test_partial_field_missing_soxs_price_present_change_pct_nan():
     """일부 필드만 결측(NaN) — price는 유효, change_pct는 NaN → change_pct만 None.
 
-    price가 유효하면 missing=False로 보존한다(kr_scheduler._norm이 entry.get("missing")를
-    먼저 게이트로 보므로, 여기서 missing=True로 전부 버리면 VIX처럼 price만 필요한
-    소비자까지 값을 잃는다) — missing_fields로 결측 필드만 알린다."""
-    from src.data.providers.us_market_data import USMarketData
+    price가 유효하면 indices_normalized는 missing=False로 보존한다(kr_scheduler._norm이
+    entry.get("missing")를 먼저 게이트로 보므로, 여기서 missing=True로 전부 버리면
+    VIX처럼 price만 필요한 소비자까지 값을 잃는다) — missing_fields로 결측 필드만
+    알린다. 단 quotes(self._cache) 자체에는 ^SOX를 넣지 않는다 — 2026-09-15 T10 F18
+    2차 blocking 재현: 1차 수정은 "완전 결측"만 quotes에서 제외했는데, 이 "부분
+    결측"(price만 유효) 심볼은 그대로 quotes에 None을 담아 daily_report.py의
+    `pct = q["change_pct"]; pct > 0` 같은 가드 없는 소비 패턴에서 TypeError를 냈다."""
+    from src.data.providers.us_market_data import USMarketData, INDEX_SYMBOLS
 
     umd = USMarketData()
 
@@ -440,8 +481,26 @@ def test_partial_field_missing_soxs_price_present_change_pct_nan():
 
     umd._get_session = fake_get_session  # type: ignore[assignment]
 
+    quotes = asyncio.run(umd.fetch_us_market_summary(force_refresh=True))
+    # 부분 결측 심볼도 완전 결측과 동일하게 quotes(self._cache)에서 빠진다
+    # (fetch_sp500_stocks의 "price is None or change_pct is None" 제외 기준과 일치).
+    assert "^SOX" not in quotes
+
+    # daily_report.generate_us_market_report(1046~1060)의 실제 패턴 그대로 재현 —
+    # 가드 없이 q["change_pct"]에 접근해도 예외 없이 끝까지 돌아야 한다.
+    rendered = []
+    for sym in INDEX_SYMBOLS:
+        q = quotes.get(sym)
+        if not q:
+            continue
+        pct = q["change_pct"]
+        rendered.append((sym, pct > 0))
+    assert rendered == []  # ^SOX가 유일한 심볼이었고 quotes에서 빠졌으므로 아무것도 렌더 안 됨
+
     signal = asyncio.run(umd.get_overnight_signal())
     sox = signal["indices_normalized"]["SOX"]
+    # quotes에서는 빠졌지만 indices_normalized는 seen_missing에 보존된 값으로
+    # price를 살려낸다(missing=False + missing_fields).
     assert sox["price"] == 5200.0
     assert sox["change_pct"] is None
     assert sox["missing"] is False
@@ -449,6 +508,7 @@ def test_partial_field_missing_soxs_price_present_change_pct_nan():
     # change_pct가 없으므로 idx_pcts/레거시 indices(표시명) 딕셔너리에는 빠져야 한다
     # (round() 예외 방지 + 심리 평균에 결측을 0으로 섞지 않기 위함)
     assert "반도체(SOX)" not in signal["indices"]
+    assert isinstance(signal["summary"], str) and signal["summary"]
 
 
 def test_normal_zero_pct_change_is_not_missing():
@@ -523,6 +583,56 @@ def test_fully_missing_symbol_excluded_from_quotes_but_reason_preserved():
     dow = signal["indices_normalized"]["DOW"]
     assert dow["missing"] is True
     assert "필드 결측" in dow["reason"]
+    assert isinstance(signal["summary"], str) and signal["summary"]
+
+
+def test_mixed_full_partial_and_fully_missing_symbols_no_crash():
+    """실운영에 가까운 혼합 응답(정상/부분 결측/완전 결측 3종 동시) — 리뷰 blocking
+    재현 시나리오(GSPC 정상, SOX 부분 결측, DJI 완전 결측)를 그대로 섞어 quotes/
+    self._seen_missing 분리와 daily_report 소비 패턴 무예외를 함께 확인한다.
+    2026-09-15 (T10 F18 2차): 이 '결과가 비어있지 않은' 혼합 케이스는 1차 수정
+    당시에도 통과했었다 — v7이 None을 반환하지 않았기 때문. 단일 심볼(전부
+    부분/완전 결측)만 응답에 오는 극단값에서만 v8 폴백·seen_missing 초기화가
+    트리거돼 조용히 정보가 사라지는 회귀가 있었다(위 v7 리턴 로직 수정으로 해결)."""
+    from src.data.providers.us_market_data import USMarketData, INDEX_SYMBOLS
+
+    umd = USMarketData()
+
+    def _responder(url, params):
+        quotes = [
+            {"symbol": "^GSPC", "regularMarketPrice": 6500.0,
+             "regularMarketChange": 78.0, "regularMarketChangePercent": 1.2,
+             "regularMarketTime": 1757900000},
+            {"symbol": "^SOX", "regularMarketPrice": 5200.0,
+             "regularMarketChangePercent": float("nan"),
+             "regularMarketTime": 1757900000},
+            {"symbol": "^DJI", "regularMarketTime": 1757900000},
+        ]
+        return 200, {"quoteResponse": {"result": quotes}}
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    umd._get_session = fake_get_session  # type: ignore[assignment]
+
+    quotes = asyncio.run(umd.fetch_us_market_summary(force_refresh=True))
+    assert set(quotes.keys()) == {"^GSPC"}  # 부분·완전 결측 둘 다 quotes에서 제외
+
+    rendered = []
+    for sym in INDEX_SYMBOLS:
+        q = quotes.get(sym)
+        if not q:
+            continue
+        pct = q["change_pct"]
+        rendered.append((sym, pct > 0))
+    assert rendered == [("^GSPC", True)]
+
+    signal = asyncio.run(umd.get_overnight_signal())
+    norm = signal["indices_normalized"]
+    assert norm["SP500"]["missing"] is False and norm["SP500"]["price"] == 6500.0
+    assert norm["SOX"]["missing"] is False and norm["SOX"]["price"] == 5200.0
+    assert norm["SOX"]["missing_fields"] == ["change_pct"]
+    assert norm["DOW"]["missing"] is True and "필드 결측" in norm["DOW"]["reason"]
     assert isinstance(signal["summary"], str) and signal["summary"]
 
 
@@ -615,6 +725,37 @@ def test_macro_semis_basket_only_is_partial_not_insufficient(monkeypatch):
     assert op_.score == -8
 
 
+def test_macro_core_five_present_cpi_absent_is_ok_not_capped(monkeypatch):
+    """T10 B 리뷰 advisory — 5개 핵심 yfinance 지표(+반도체 바스켓)가 전부 정상이면,
+    cpi_yoy(수동 오버라이드, 평시 미설정)가 없어도 partial로 강등되면 안 된다.
+    cpi_yoy는 '미입력인 선택적 수동값'이지 '수집 실패한 결측'이 아니다 — 이 상태가
+    매일 반복되는 평시 상태이므로, 여기서 partial이면 raw confidence(0.72)가 매일
+    CONFIDENCE_CAP_PARTIAL(0.7)에 눌린다(6개 지표 → 0.3+6*0.07=0.72 > 0.7이라
+    캡이 실제로 발동하는 지점으로 골랐다)."""
+    macro = MacroEconomist(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _prices():
+        return {"us10y": 4.2, "dxy": 103.0, "krw_usd": 1350.0, "vix": 15.0, "wti": 70.0}
+
+    async def _semis():
+        return {"avg_5d_pct": 1.0}  # 중립 범위(±3.0 미만) — score는 안 움직이되 필드는 채움
+
+    async def _noctx():
+        return ""
+
+    monkeypatch.setattr(macro, "_fetch_yfinance_indicators", _prices)
+    monkeypatch.setattr(macro, "_fetch_semis_basket_5d", _semis)
+    monkeypatch.setattr(macro, "_fetch_macro_context", _noctx)
+    monkeypatch.setattr(macro, "_load_manual_overrides", lambda: {})
+
+    op_ = asyncio.run(macro._analyze())
+    assert op_.data_status == "ok"
+    assert op_.confidence == 0.72  # 캡(0.7) 미적용 — raw 그대로
+    # cpi_yoy는 여전히 missing_inputs에 남아 관측 가능해야 한다
+    # (data_status만 ok로 승격, 결측 사실 자체는 숨기지 않는다).
+    assert "CPI(수동 오버라이드)" in op_.missing_inputs
+
+
 # ─────────────────────────────────────────────────────────────────
 # F17-5 재검증 — KRX 야간선물(CM) 세션 판정은 요일을 봐야 한다(주말엔 세션 없음)
 # ─────────────────────────────────────────────────────────────────
@@ -657,3 +798,27 @@ def test_night_session_weekday_evenings_and_mornings_stay_in_session():
         assert as_of == now, f"{label}: as_of={as_of} (실시간 세션인데 과거로 밀림)"
         assert note is None
         assert ttl is not None and ttl > 0
+
+
+def test_night_session_monday_morning_composes_with_is_fresh():
+    """T10 B 리뷰 advisory — F17의 '주말·휴장·미국 전일 마감 자료의 정상 사용(월요일
+    07:30에 토요일 05:00 종료 세션값)'을 kr_night_futures_as_of의 반환값만이 아니라
+    실제 소비 경로가 쓰는 is_fresh(DataPoint, now)까지 합성해 고정한다. 전문가
+    _analyze()는 now를 주입받을 인터페이스가 없어(구조적 제약) 이 조합은 여기서
+    순수 함수로만 검증한다."""
+    from datetime import datetime as dt
+
+    from src.utils.data_freshness import DataPoint, is_fresh, kr_night_futures_as_of
+
+    monday_0730 = dt(2026, 9, 14, 7, 30)  # 2026-09-14는 월요일
+    as_of, note, ttl = kr_night_futures_as_of(monday_0730, "night")
+    assert as_of == dt(2026, 9, 12, 5, 0)  # 금요일(09-11) 야간 세션 종료 = 토요일 05:00
+    assert note is None
+
+    dp = DataPoint(value=2.0, as_of=as_of, source="kis_night_futures",
+                    session="night", ttl_seconds=ttl)
+    assert is_fresh(dp, monday_0730) is True  # 아직 다음 세션(월 18:00) 전이라 유효
+
+    # 대조: 다음 세션 개장 이후(월요일 19:00)는 같은 값이 더 이상 유효하지 않다.
+    monday_evening = dt(2026, 9, 14, 19, 0)
+    assert is_fresh(dp, monday_evening) is False

@@ -284,16 +284,26 @@ class ExpertOrchestrator:
             opinions = self.snapshot()
         counts = {"ok": 0, "partial": 0, "insufficient": 0}
         insufficient_experts: List[str] = []
+        unknown_experts: List[str] = []
         for op in opinions.values():
             status = getattr(op, "data_status", "ok") or "ok"
             counts[status] = counts.get(status, 0) + 1
             if status == "insufficient":
                 insufficient_experts.append(op.expert)
-        note = f"자료 부족 {counts['insufficient']}명" if counts["insufficient"] else None
+            elif status == "unknown":
+                unknown_experts.append(op.expert)
+        # 2026-09-15 (T10 B 리뷰 반영·2차 advisory): "자료 부족 N명" 표시는 insufficient
+        # 뿐 아니라 unknown(from_dict가 data_status 없는 구 레코드에 매기는 값)도 같이
+        # 센다 — valid_n은 이미 이 둘을 함께 제외하는데 note만 insufficient만 세면
+        # "자료 부족 0명"인데 valid_n만 낮아 보이는 표시 불일치가 생긴다.
+        unknown_n = counts.get("unknown", 0)
+        short_n = counts["insufficient"] + unknown_n
+        note = f"자료 부족 {short_n}명" if short_n else None
         valid_n = len(self._market_expert_contributions(opinions))
         return {
             "counts": counts,
             "insufficient_experts": insufficient_experts,
+            "unknown_experts": unknown_experts,
             "note": note,
             "valid_n": valid_n,
             "insufficient_coverage": valid_n < self.MIN_VALID_EXPERTS,

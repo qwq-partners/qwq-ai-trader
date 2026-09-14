@@ -111,12 +111,21 @@ class MacroEconomist(ExpertAgent):
             for key, label in self._SCORE_FIELD_LABELS.items()
             if not isinstance(prices.get(key), (int, float))
         ]
-        if len(missing_inputs) == len(self._SCORE_FIELD_LABELS):
+        missing_required = [
+            k for k in self._REQUIRED_SCORE_FIELDS if not isinstance(prices.get(k), (int, float))
+        ]
+        has_optional = any(
+            isinstance(prices.get(k), (int, float)) for k in self._OPTIONAL_BONUS_FIELDS
+        )
+        if len(missing_required) == len(self._REQUIRED_SCORE_FIELDS) and not has_optional:
             data_status = "insufficient"
-        elif missing_inputs:
-            data_status = "partial"
-        else:
+        elif not missing_required:
+            # 2026-09-15 (T10 B 2차 advisory): 핵심 5개 지표가 전부 있으면 cpi_yoy(수동
+            # 오버라이드, 평시 미입력)가 없어도 "ok" — 선택적 미입력을 수집 실패로
+            # 착각해 매일 confidence 상한(0.7)이 걸리는 것을 막는다.
             data_status = "ok"
+        else:
+            data_status = "partial"
 
         return self._build_opinion(
             score=score,
@@ -146,6 +155,16 @@ class MacroEconomist(ExpertAgent):
         "cpi_yoy": "CPI(수동 오버라이드)",
         "semis_basket_5d_pct": "반도체 바스켓 5일",
     }
+
+    # 2026-09-15 (T10 B 리뷰 반영·2차 advisory): _SCORE_FIELD_LABELS를 그대로 "다
+    # 있어야 ok" 기준으로 쓰면, 평시(수동 오버라이드 미설정) cpi_yoy가 항상 결측이라
+    # yfinance 5종+반도체 바스켓이 전부 정상이어도 매일 partial로 강등된다 — "미입력인
+    # 선택적 수동값"과 "수집 실패한 결측"을 구분해야 한다. _REQUIRED_SCORE_FIELDS(5개
+    # 핵심 yfinance 지표)가 전부 있으면 ok, 전부 없고 _OPTIONAL_BONUS_FIELDS(cpi_yoy/
+    # semis_basket_5d_pct)도 전부 없으면 insufficient, 그 사이는 partial — F16 필수
+    # 인수(전부 결측→insufficient, cpi/semis 단독→partial)는 그대로 유지된다.
+    _REQUIRED_SCORE_FIELDS = ("us10y", "dxy", "krw_usd", "vix", "wti")
+    _OPTIONAL_BONUS_FIELDS = ("cpi_yoy", "semis_basket_5d_pct")
 
     # ─────────────────────────────────────────
     # yfinance — to_thread로 비동기화
