@@ -65,11 +65,22 @@ class _FakeLLM:
         return _FakeResp(self._content)
 
 
+@pytest.fixture(autouse=True)
+def _stub_report_collaborators(monkeypatch):
+    """DailyReportGenerator 생성자가 실제 스크리너·테마감지기·뉴스수집기·텔레그램을 만들면
+    운영 캐시(~/.cache/ai_trader) 에 mkdir 까지 한다 — 모듈 전체에서 협력자를 대역으로
+    바꾼다 (2026-09-15 tests/conftest.py 격리 가드가 발견)."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(dr, "get_telegram_notifier", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "get_screener", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "get_theme_detector", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "NewsCollector", lambda: SimpleNamespace())
+
+
 @pytest.fixture
 def gen(monkeypatch):
     """LLM 호출을 mock 한 DailyReportGenerator"""
-    g = dr.DailyReportGenerator()
-    return g
+    return dr.DailyReportGenerator()
 
 
 def _patch_llm(monkeypatch, llm):

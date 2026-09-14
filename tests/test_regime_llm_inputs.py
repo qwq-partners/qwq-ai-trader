@@ -282,6 +282,9 @@ def test_conflict_guard_uses_intraday_crash_state(monkeypatch, tmp_path):
     bot = _make_bot(screener=screener, intraday_state="crash",
                     intraday_pct=-3.34, crash_level="crash")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # 감지기 갱신 시각(고정 2026-09-14)과 같은 날로 시계를 고정 — 실제 날짜가 넘어가면
+    # 당일 게이트가 "전일 상태" 로 판정해 테스트가 날짜에 따라 깨진다 (2026-09-15 격리 점검)
+    monkeypatch.setattr(kr_scheduler, "_now_kst", lambda: datetime(2026, 9, 14, 10, 0, 0))
     cache = tmp_path / ".cache" / "ai_trader"
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "llm_regime_today.json").write_text(
