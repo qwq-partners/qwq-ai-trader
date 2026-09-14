@@ -376,14 +376,15 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 
 | 필드 | 의미 | 설정 | 유효 기간 |
 |---|---|---|---|
-| `mid_trend` | 5/20일 중기 추세 | `set_mid_trend()` (미설정이면 `update_regime()` 결과) | 갱신까지 |
+| `mid_trend` | 5/20일 중기 추세 | `update_regime()` 결과(`_current_regime`) — **단일 출처, 오버라이드 세터 없음** | 다음 `update_regime()`까지 (기준시각 `_last_update`) |
 | `open_expectation` | 장전 개장 예상 | `set_open_expectation()` · LLM 장전 진단이 자동 기록 | **09:30 만료**, 다음 날 무효 |
 | `intraday_risk` | 장중 급락 상태(`normal`/`caution`/`crash`/`severe`)와 당일 등락률 | `set_intraday_risk()` — 급락 감지기(`batch_analyzer._intraday_state`) 상태를 전달 | 갱신까지 |
 
 - 게이트·사이징이 읽는 **유효 레짐**은 `adapter.regime`(= `effective_regime`)이다. `intraday_risk`가 `crash`/`severe`이면 `mid_trend`가 `bull`이어도 강세로 취급하지 않는다(`bull → sideways`). 기존 VIX Fear 강등·레짐충돌가드와 같은 방향의 강등이며 **새 차단을 추가하지 않는다**. `caution`/`normal`, 강세가 아닌 레짐은 원본 그대로다.
+- `mid_trend`에 별도 설정 경로를 두지 않는 이유: 아침에 한 번 써둔 값이 2분 주기 `update_regime()`·VIX Fear 강등·전문가 BEAR 합의·LLM `[방어]` 강등을 영구히 가려, 이 절이 막으려는 "오래된 강세가 실시간 판단을 덮는" 패턴을 그대로 재현하기 때문이다(2026-09-14 리뷰). 실시간 판단이 항상 이긴다.
 - `open_expectation`은 어떤 경우에도 유효 레짐을 움직이지 않는다. 개장 30분 뒤에는 예상이 아니라 실측으로 판단한다.
 - LLM 분류기 어휘(`trending_bull` 등)는 `cap_regime_by_intraday_risk(regime, intraday_risk)` 순수 함수로 같은 규칙을 적용한다(`trending_bull → neutral`). `REGIME_EXIT_PARAMS`·`apply_regime_params()`의 의미는 바뀌지 않았다.
-- 결측은 0·중립으로 채우지 않는다. `get_summary()["horizons"]`는 값이 없으면 `value=None` + `missing=True` + 사유와 `as_of`를 함께 낸다.
+- 결측은 0·중립으로 채우지 않는다. `get_summary()["horizons"]`는 값이 없으면 `value=None` + `missing=True` + 사유와 `as_of`를 함께 낸다. `mid_trend`는 `update_regime()`이 한 번도 돌지 않았으면(`_last_update is None`) 기본 `neutral` 값을 그대로 내되 `missing=True` + 사유를 붙인다. LLM 장전 진단 프롬프트의 지수 등락도 미수집이면 `+0.0%`가 아니라 `미수집`으로 넣는다.
 
 배경: 2026-09-14 아침 자료(KOSPI 5일 +3.3%) 기준 강세 판단이 당일 -3.34% 급락 중 12:00에도 그대로 유효 레짐으로 쓰였다.
 
@@ -391,9 +392,10 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 
 - `DailyReportGenerator.build_morning_brief()`는 입력 자료의 범위를 `scope`로 고정한다. 미국 마감 자료뿐이면 `us_close_only`로 제목을 "미국시장 마감 요약"으로 제한하고, 프롬프트에서 한국장 개장 방향·갭·시가 대응 전략을 금지한 뒤 **응답 후 검사**(`sanitize_brief_claims`)로 남은 단정 문장을 `국내 자료 없음 — 개장 방향 판단 불가`로 대체한다.
 - 기준시각(`as_of`)이 있는 국내 자료를 넘기면 `with_kr_inputs`가 되고 "개장 관찰 포인트"가 허용되지만 반대 근거를 함께 요구한다. `as_of` 없는 국내 자료는 유효 자료로 인정하지 않는다.
-- 전문가 종합점수와 브리프 톤이 상충하면 본문 끝에 `⚠️ 전문가 종합판단(+2 중립)과 상충` 표시가 붙는다(`build_expert_conflict_note`).
-- 캐시(`~/.cache/ai_trader/llm_morning_brief.json`)는 `us_date`/`text`/`generated_at`/`model`/`scope`/`inputs`/`claims`/`removed_claims` 고정 스키마로 저장된다. 07:30 전문가 브리핑은 기존대로 `text`·`generated_at`만 읽는다.
-- 장후 평가: `DailyReportGenerator.evaluate_morning_brief(date)` → `src/analytics/morning_brief_eval.py`가 개장 방향·종가 방향·언급 업종 상대성과·전문가 종합 방향을 판정해 `~/.cache/ai_trader/morning_brief_eval.jsonl`에 누적한다. 주장이나 실측이 없으면 `hit=None` + 사유이며, **하루 결과로 규칙·임계값을 바꾸지 않는다**(누적 표본은 `summarize()`).
+- 전문가 종합점수와 브리프 톤이 상충하면 본문 끝에 `⚠️ 전문가 종합판단(+2 중립)과 상충` 표시가 붙는다. `build_expert_conflict_note(tone_or_text, expert_consensus)`는 순수 함수로, 첫 인자에 레코드의 `tone` 또는 본문 `text`(톤 값이 아니면 `brief_tone()`으로 판정)를, 둘째 인자에 `{"score": int}` 또는 `{"bias": "bull"|"bear"|"neutral"}`을 받아 문구 또는 `None`을 돌려준다. 07:30 결합부(`kr_scheduler`)가 그대로 호출한다.
+- 사후 검사·주장 추출은 **KR 주어 가드**를 쓴다. 문장에 `KOSPI/코스피/코스닥/국내/한국/오늘 장…`이 있고 개장·갭·출발 단정이 있으면 미국 근거가 같은 문장에 섞여 있어도 제거·대체 대상이다("미국 반도체 랠리를 반영해 오늘 KOSPI는 갭상승 출발이 예상된다"). KR 주어가 없는 미국 마감 문장은 보존한다. 문장 분리는 마침표 뒤에 공백·문장끝이 올 때만 끊어 `+0.97%`·`S&P500 +0.8%` 같은 소수점에서 본문이 훼손되지 않는다. `extract_brief_claims()`도 같은 가드를 써 미국 마감 서술(`S&P500은 상승 마감했다`)을 KOSPI 주장으로 원장에 기록하지 않는다.
+- 캐시(`~/.cache/ai_trader/llm_morning_brief.json`)는 `us_date`/`kr_date`/`text`/`generated_at`/`model`/`scope`/`inputs`/`claims`/`removed_claims` 고정 스키마로 저장된다. `kr_date`는 평가 대상 KR 거래일이다. 07:30 전문가 브리핑은 기존대로 `text`·`generated_at`만 읽는다.
+- 장후 평가: `DailyReportGenerator.evaluate_morning_brief(date)` → `src/analytics/morning_brief_eval.py`가 개장 방향·종가 방향·언급 업종 상대성과·전문가 종합 방향을 판정해 `~/.cache/ai_trader/morning_brief_eval.jsonl`에 누적한다. 주장이나 실측이 없으면 `hit=None` + 사유이며, 브리프의 `kr_date`가 평가일과 다르면(07:00 생성이 실패한 날) `evaluated=False` + 사유로만 기록해 **전날 브리프를 오늘 실측과 대조하지 않는다**. **하루 결과로 규칙·임계값을 바꾸지 않는다**(누적 표본은 `summarize()`).
 
 ## 11. 변경 시 확인할 경계
 

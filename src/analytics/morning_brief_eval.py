@@ -6,6 +6,7 @@
 원칙:
 - 모르는 것은 채우지 않는다. 주장이 없거나 실측이 없으면 `hit=None` + 사유.
 - 하루 결과로 규칙·임계값을 바꾸지 않는다. 누적 표본(`summarize`)으로만 판단한다.
+- 브리프 기준일(`kr_date`)과 평가일이 다르면 평가하지 않는다(`evaluated=False` + 사유).
 
 순수 함수(`evaluate`)와 원장 입출력(`append_ledger`/`summarize`)만 제공하며
 시세 조회는 호출자(DailyReportGenerator.evaluate_morning_brief)가 담당한다.
@@ -78,6 +79,30 @@ def evaluate(brief: Dict, actual: Dict) -> Dict:
                  "kosdaq": {...},                      # 선택
                  "sectors": {"업종명": 등락률, ...}}     # 선택
     """
+    # 기준일 대조 — 07:00 생성이 실패한 날 전날 브리프를 오늘 실측과 대조하지 않는다
+    brief_date = brief.get("kr_date") or (brief.get("generated_at") or "")[:10]
+    actual_date = actual.get("date")
+    if brief_date and actual_date and brief_date != actual_date:
+        reason = (
+            f"브리프 기준일({brief_date}) ≠ 평가일({actual_date}) — "
+            f"전날 브리프를 오늘 실측과 대조하지 않는다"
+        )
+        skipped = {"claimed": None, "actual": None, "actual_pct": None,
+                   "hit": None, "reason": reason}
+        return {
+            "date": actual_date,
+            "scope": brief.get("scope"),
+            "brief_generated_at": brief.get("generated_at"),
+            "brief_date": brief_date,
+            "evaluated_at": datetime.now().isoformat(),
+            "evaluated": False,
+            "reason": reason,
+            "open_direction": dict(skipped),
+            "close_direction": dict(skipped),
+            "expert_direction": dict(skipped),
+            "sectors": [],
+        }
+
     claims = brief.get("claims") or {}
     kospi = actual.get("kospi") or {}
     open_pct = kospi.get("open_change_pct")
@@ -118,9 +143,10 @@ def evaluate(brief: Dict, actual: Dict) -> Dict:
         })
 
     return {
-        "date": actual.get("date") or brief.get("date"),
+        "date": actual_date or brief.get("date"),
         "scope": brief.get("scope"),
         "brief_generated_at": brief.get("generated_at"),
+        "brief_date": brief_date or None,
         "evaluated_at": datetime.now().isoformat(),
         "evaluated": evaluated,
         "reason": "" if evaluated else "당일 KOSPI 시가·종가 실측 없음",

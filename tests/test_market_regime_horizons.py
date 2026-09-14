@@ -70,18 +70,42 @@ def test_crash_does_not_upgrade_non_bull_regimes():
         assert adapter.regime == base, base
 
 
-def test_mid_trend_override_is_used_as_effective_base():
-    adapter = _adapter("neutral")
-    adapter.set_mid_trend("bull", as_of=datetime(2026, 9, 14, 8, 20))
-    assert adapter.regime == "bull"
-    adapter.set_intraday_risk("crash", change_pct=-3.3)
-    assert adapter.regime == "sideways"
+def test_realtime_regime_change_is_not_masked_by_stale_view(monkeypatch):
+    """실시간 update_regime 이 bear 로 바뀌면 유효 레짐·파라미터가 즉시 bear 다.
+
+    (아침에 만들어진 강세 관점이 실시간 판단을 덮는 오버라이드가 있으면 실패한다)
+    """
+    import src.core.market_regime as mr
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 14, 12, 0)
+
+    monkeypatch.setattr(mr, "datetime", _FixedDatetime)
+
+    adapter = _adapter("bull")
+    adapter._load_vix_cache_or_refresh = lambda: None
+    # bear 전환 확인(30분) 이미 충족된 상태
+    adapter._pending_regime = "bear"
+    adapter._pending_since = datetime(2026, 9, 14, 10, 0)
+
+    bear_data = {"change_pct": -3.3, "price": 96.0, "open": 100.0}
+    adapter.update_regime(bear_data, bear_data)
+
+    assert adapter._current_regime == "bear"
+    assert adapter.regime == "bear"
+    assert adapter.mid_trend == "bear"
+    assert adapter.params["max_daily_new_buys"] == 1
+    summary = adapter.get_summary()
+    assert summary["horizons"]["mid_trend"]["value"] == "bear"
+    assert summary["horizons"]["mid_trend"]["missing"] is False
+    assert summary["horizons"]["mid_trend"]["as_of"] is not None
 
 
-def test_mid_trend_rejects_unknown_vocabulary():
-    adapter = _adapter("neutral")
-    with pytest.raises(ValueError):
-        adapter.set_mid_trend("trending_bull")
+def test_no_mid_trend_override_setter_exists():
+    """mid_trend 는 update_regime 결과 단일 출처 — 별도 설정 경로를 두지 않는다."""
+    assert not hasattr(MarketRegimeAdapter, "set_mid_trend")
 
 
 def test_intraday_risk_rejects_unknown_level():
@@ -130,8 +154,10 @@ def test_missing_horizons_are_none_with_reason_not_zero():
         assert horizons[key]["reason"], key
     # intraday 등락률도 0 으로 채우지 않는다
     assert horizons["intraday_risk"]["change_pct"] is None
-    # mid_trend 는 update_regime 결과가 기본값 — 출처를 표시한다
-    assert horizons["mid_trend"]["value"] == "neutral"
+    # update_regime 이 한 번도 안 돌았으면 mid_trend 도 결측이다 (기본 neutral 로 포장 금지)
+    assert horizons["mid_trend"]["missing"] is True
+    assert horizons["mid_trend"]["reason"]
+    assert horizons["mid_trend"]["as_of"] is None
     assert horizons["mid_trend"]["source"] == "update_regime"
 
 

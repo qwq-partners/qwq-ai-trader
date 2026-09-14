@@ -36,7 +36,12 @@ _OPEN_CLAIM_PATTERNS = (
     "상승 개장", "하락 개장", "갭업", "갭다운",
     "시가 매수", "시초가 매수", "매수 대응", "매도 대응",
 )
-# 위 표현이 미국 시장을 가리키는 문장이면 제거하지 않는다
+# 국내 장을 주어로 삼는 토큰 — 하나라도 있으면 미국 근거가 섞여 있어도 국내 단정으로 본다
+_KR_SUBJECT_TOKENS = (
+    "KOSPI", "코스피", "KOSDAQ", "코스닥", "국내", "한국", "국장",
+    "오늘 장", "오늘 개장", "우리 증시", "원화",
+)
+# KR 주어가 없고 미국 시장을 가리키는 문장이면 제거하지 않는다
 _US_MARKET_TOKENS = (
     "미국", "美", "S&P", "SP500", "나스닥", "NASDAQ", "다우", "DOW",
     "SOX", "VIX", "뉴욕", "빅테크", "필라델피아", "뉴욕증시",
@@ -46,7 +51,9 @@ _BEAR_TONE_TOKENS = ("약세", "하락", "부진", "조정", "급락", "위축",
 # 브리프 톤 판정 임계 (강세/약세 토큰 수 차이) — 한쪽으로 2회 이상 기울 때만 방향으로 본다
 _TONE_MARGIN = 2
 
-_SENTENCE_SPLIT_RE = re.compile(r"([.!?]+\s*|\n)")
+# 마침표 뒤에 공백·문장끝이 와야 문장 경계로 본다 — "+0.97%", "S&P500 +0.8%" 가 쪼개지면
+# KR 주어와 단정이 서로 다른 조각으로 갈려 검사·본문이 모두 훼손된다 (2026-09-14 리뷰)
+_SENTENCE_SPLIT_RE = re.compile(r"([.!?]+(?:\s+|$)|\n)")
 # 구분자에서 문장부호만 떼고 공백·줄바꿈은 남기기 위한 패턴
 _SEP_WHITESPACE_RE = re.compile(r"[.!?]+")
 
@@ -105,10 +112,22 @@ def _split_sentences(text: str) -> List[Tuple[str, str]]:
     return pairs
 
 
+def _has_kr_subject(sentence: str) -> bool:
+    """국내 장을 주어로 삼는 문장인가"""
+    return any(tok in sentence for tok in _KR_SUBJECT_TOKENS)
+
+
 def _is_kr_open_claim(sentence: str) -> bool:
-    """국내 개장 방향·대응 전략 단정 문장인가 (미국 시장 문장은 제외)"""
+    """국내 개장 방향·대응 전략 단정 문장인가
+
+    KR 주어가 있으면 미국 근거가 같은 문장에 섞여 있어도 국내 단정으로 본다
+    ("미국 반도체 랠리를 반영해 오늘 KOSPI는 갭상승 출발이 예상된다" 형태 차단).
+    KR 주어가 없을 때만 미국 시장 문장으로 보고 면제한다.
+    """
     if not any(pat in sentence for pat in _OPEN_CLAIM_PATTERNS):
         return False
+    if _has_kr_subject(sentence):
+        return True
     return not any(tok in sentence for tok in _US_MARKET_TOKENS)
 
 
@@ -164,19 +183,37 @@ def _expert_label(score: int) -> str:
     return "중립"
 
 
-def build_expert_conflict_note(tone: str, expert_consensus: Optional[Dict]) -> Optional[str]:
-    """브리프 톤과 전문가 종합판단이 상충하면 표시 문구를 만든다 (없으면 None)"""
-    if not expert_consensus:
+def build_expert_conflict_note(
+    tone_or_text: Optional[str], expert_consensus: Optional[Dict],
+) -> Optional[str]:
+    """브리프 톤과 전문가 종합판단이 상충하면 표시 문구를 만든다 (없으면 None).
+
+    07:30 결합부(kr_scheduler)가 그대로 호출할 수 있는 순수 함수다.
+
+    Args:
+        tone_or_text: 브리프 레코드의 `tone`("bull"/"bear"/"neutral") 또는 본문 `text`
+                      (톤 값이 아니면 본문으로 보고 brief_tone() 으로 판정한다)
+        expert_consensus: {"score": int} 또는 {"bias": "bull"|"bear"|"neutral"}
+    Returns:
+        표시 문구, 또는 상충이 없거나 전문가 판단이 없으면 None
+    """
+    if not expert_consensus or not tone_or_text:
         return None
+    tone = tone_or_text if tone_or_text in ("bull", "bear", "neutral") else brief_tone(tone_or_text)
     score = expert_consensus.get("score")
-    if score is None:
-        return None
-    label = _expert_label(score)
-    expert_dir = "bull" if score >= 5 else ("bear" if score <= -5 else "neutral")
+    if score is not None:
+        label = _expert_label(score)
+        expert_dir = "bull" if score >= 5 else ("bear" if score <= -5 else "neutral")
+        score_txt = f"{score:+d} {label}"
+    else:
+        expert_dir = expert_consensus.get("bias")
+        if expert_dir not in ("bull", "bear", "neutral"):
+            return None
+        score_txt = {"bull": "강세 우위", "bear": "약세 우위", "neutral": "중립"}[expert_dir]
     if tone == "neutral" or tone == expert_dir:
         return None
     tone_kr = "강세" if tone == "bull" else "약세"
-    return f"⚠️ 전문가 종합판단({score:+d} {label})과 상충 — 브리프 톤은 {tone_kr}"
+    return f"⚠️ 전문가 종합판단({score_txt})과 상충 — 브리프 톤은 {tone_kr}"
 
 
 def extract_brief_claims(
@@ -186,16 +223,21 @@ def extract_brief_claims(
     open_direction = None
     close_direction = None
     if scope == SCOPE_WITH_KR:
-        if any(p in text for p in ("상승 출발", "갭상승", "갭 상승", "상승 개장", "갭업", "강세 출발")):
+        # 미국 마감 서술("S&P500은 상승 마감했다")을 KOSPI 주장으로 원장에 남기지 않는다
+        kr_text = "\n".join(
+            body + sep for body, sep in _split_sentences(text)
+            if _has_kr_subject(body + sep)
+        )
+        if any(p in kr_text for p in ("상승 출발", "갭상승", "갭 상승", "상승 개장", "갭업", "강세 출발")):
             open_direction = "up"
-        elif any(p in text for p in ("하락 출발", "갭하락", "갭 하락", "하락 개장", "갭다운", "약세 출발")):
+        elif any(p in kr_text for p in ("하락 출발", "갭하락", "갭 하락", "하락 개장", "갭다운", "약세 출발")):
             open_direction = "down"
-        elif "보합 출발" in text:
+        elif "보합 출발" in kr_text:
             open_direction = "flat"
 
-        if any(p in text for p in ("상승 마감", "반등 마감", "상승 전환 마감")):
+        if any(p in kr_text for p in ("상승 마감", "반등 마감", "상승 전환 마감")):
             close_direction = "up"
-        elif any(p in text for p in ("하락 마감", "약세 마감")):
+        elif any(p in kr_text for p in ("하락 마감", "약세 마감")):
             close_direction = "down"
 
     sectors = [name for name in (sector_signals or {}) if name and name in text]
@@ -1413,6 +1455,8 @@ class DailyReportGenerator:
         # Telegram 메시지 길이 제한 (~4096자) 안전 마진
         return {
             "us_date": us_date_str,
+            # 평가 대상 KR 거래일 — 저녁 평가가 전날 브리프를 오늘 실측과 대조하지 않도록
+            "kr_date": date.today().isoformat(),
             "title": title,
             "text": header + body[:3800],
             "generated_at": datetime.now().isoformat(),

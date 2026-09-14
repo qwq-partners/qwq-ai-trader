@@ -601,8 +601,11 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
   - [ ] `scope=us_close_only`인 날 본문에 "갭 출발/상승 출발/시가 매수" 단정이 없는가 (`removed_claims` 건수 로그)
   - [ ] 07:30 통합 메시지가 기존대로 브리프 본문을 결합하는가 (`text` 키 호환)
   - [ ] 저녁에 원장 1줄이 추가되고 `evaluated=true`인가 (지수 조회 실패일은 `evaluated=false` + 사유)
+  - [ ] 원장 줄의 `brief_date`가 그날 `date`와 같은가 — 다르면 `evaluated=false`(전날 브리프 재사용)이며 07:00 브리프 생성 실패를 함께 확인한다
+  - [ ] `claims.open_direction`/`close_direction`이 미국 마감 서술에서 잡히지 않았는가 (KR 주어 가드 — `scope=us_close_only`인 날은 항상 `null`)
   - [ ] 급락일(`intraday_risk=crash/severe`)에 유효 레짐이 `bull`/`trending_bull`로 남지 않는가
   - [ ] 09:30 이후 `open_expectation`이 만료로 표시되는가 (`get_summary()["horizons"]`)
+  - [ ] `horizons.mid_trend`가 실시간 `update_regime()` 결과와 일치하는가 (`missing=true`면 지수 미수집 — 오래된 값이 남지 않는다)
 - **판정 규칙**: 20건 이상 누적 전에는 적중률로 프롬프트·임계값을 바꾸지 않는다. `summarize()`의 표본 수를 먼저 본다. 하루 결과(예: 09-14 개장·종가 동시 miss)로 규칙을 바꾸지 않는다.
 
 ## 완료된 체크포인트

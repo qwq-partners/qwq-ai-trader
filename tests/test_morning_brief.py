@@ -223,6 +223,7 @@ def test_sanitize_is_noop_with_kr_inputs():
 
 BRIEF_0914 = {
     "us_date": "2026-09-12",
+    "kr_date": "2026-09-14",
     "generated_at": "2026-09-14T07:01:00",
     "scope": "with_kr_inputs",
     "claims": {
@@ -263,6 +264,7 @@ def test_evaluate_0914_case_is_miss_on_open_and_close():
 
 def test_evaluate_hit_case():
     brief = json.loads(json.dumps(BRIEF_0914))
+    brief["kr_date"] = "2026-09-15"
     actual = {
         "date": "2026-09-15",
         "kospi": {"open_change_pct": 1.2, "close_change_pct": 1.8},
@@ -292,6 +294,7 @@ def test_evaluate_missing_actual_is_not_evaluated():
 
 def test_evaluate_flat_band():
     brief = json.loads(json.dumps(BRIEF_0914))
+    brief["kr_date"] = "2026-09-15"
     brief["claims"]["open_direction"] = "flat"
     brief["claims"]["close_direction"] = "flat"
     actual = {"date": "2026-09-15", "kospi": {"open_change_pct": 0.1, "close_change_pct": -0.2}}
@@ -306,6 +309,7 @@ def test_append_ledger_and_summarize(tmp_path):
     path = tmp_path / "sub" / "morning_brief_eval.jsonl"
     mbe.append_ledger(path, mbe.evaluate(BRIEF_0914, ACTUAL_0914))
     hit_brief = json.loads(json.dumps(BRIEF_0914))
+    hit_brief["kr_date"] = "2026-09-15"
     hit_actual = {"date": "2026-09-15",
                   "kospi": {"open_change_pct": 1.2, "close_change_pct": 1.8},
                   "sectors": {"반도체": 3.5}}
@@ -325,8 +329,10 @@ def test_append_ledger_and_summarize(tmp_path):
 def test_summarize_last_n(tmp_path):
     path = tmp_path / "morning_brief_eval.jsonl"
     mbe.append_ledger(path, mbe.evaluate(BRIEF_0914, ACTUAL_0914))
+    next_day = json.loads(json.dumps(BRIEF_0914))
+    next_day["kr_date"] = "2026-09-15"
     mbe.append_ledger(path, mbe.evaluate(
-        json.loads(json.dumps(BRIEF_0914)),
+        next_day,
         {"date": "2026-09-15", "kospi": {"open_change_pct": 1.2, "close_change_pct": 1.8}},
     ))
     summary = mbe.summarize(path, last_n=1)
@@ -420,3 +426,116 @@ def test_evaluate_summary_line(tmp_path):
     line = mbe.summary_line(ledger_path)
     assert "개장" in line and "종가" in line
     assert "1건" in line or "n=1" in line
+
+
+# ── B 리뷰 반영: KR 주어 가드 · 소수점 문장 분리 · 기준일 대조 ──────────────────
+
+@pytest.mark.parametrize("sentence", [
+    "미국 반도체 랠리를 반영해 오늘 KOSPI는 갭상승 출발이 예상된다.",
+    "미국 증시 호조로 코스피 상승 출발 가능성이 높다.",
+    "S&P500 강세를 이어받아 국내 증시는 갭상승 출발할 전망이다.",
+])
+def test_sanitize_removes_kr_claims_even_with_us_evidence(sentence):
+    """미국 근거 + 국내 결론이 한 문장에 있어도 국내 단정은 제거한다."""
+    text, removed = dr.sanitize_brief_claims(sentence, scope="us_close_only")
+    assert removed == [sentence]
+    assert dr.NO_KR_INPUT_NOTE in text
+
+
+def test_sanitize_does_not_split_decimals():
+    """소수점에서 문장이 쪼개져 본문이 훼손되면 안 된다."""
+    text = "S&P500 +0.8% 로 마감했다."
+    out, removed = dr.sanitize_brief_claims(text, scope="us_close_only")
+    assert removed == []
+    assert out == text
+
+
+def test_sanitize_decimal_does_not_detach_claim_from_kr_subject():
+    """소수점 분리 때문에 KR 주어와 단정이 서로 다른 '문장'으로 쪼개지면 안 된다."""
+    src = "코스피는 S&P500 +0.8% 를 반영해 갭상승 출발이 예상된다."
+    out, removed = dr.sanitize_brief_claims(src, scope="us_close_only")
+    assert removed == [src]
+    assert "+0" not in out and "S&P500" not in out
+    assert out.strip() == dr.NO_KR_INPUT_NOTE
+
+
+def test_sanitize_keeps_us_sentence_intact_while_removing_kr_claim():
+    src = (
+        "S&P500 +0.8% 로 마감했다. "
+        "이를 반영해 오늘 KOSPI는 갭상승 출발이 예상된다. "
+        "나스닥은 +1.25% 상승했다."
+    )
+    out, removed = dr.sanitize_brief_claims(src, scope="us_close_only")
+    assert len(removed) == 1
+    assert "오늘 KOSPI는 갭상승 출발" in removed[0]
+    assert "S&P500 +0.8% 로 마감했다." in out
+    assert "나스닥은 +1.25% 상승했다." in out
+    assert dr.NO_KR_INPUT_NOTE in out
+
+
+def test_extract_claims_ignores_us_close_sentences():
+    """미국 마감 서술을 KOSPI 주장으로 원장에 기록하지 않는다."""
+    claims = dr.extract_brief_claims(
+        "S&P500은 상승 마감했다. 미국 증시는 갭상승 출발 후 상승 마감했다.",
+        {"반도체": 1}, "with_kr_inputs", basis=["미국 지수"],
+    )
+    assert claims["open_direction"] is None
+    assert claims["close_direction"] is None
+
+
+def test_extract_claims_reads_kr_subject_sentences():
+    claims = dr.extract_brief_claims(
+        "S&P500은 상승 마감했다. 오늘 코스피는 상승 출발 후 상승 마감할 전망이다.",
+        {"반도체": 1}, "with_kr_inputs", basis=["야간선물"],
+    )
+    assert claims["open_direction"] == "up"
+    assert claims["close_direction"] == "up"
+
+
+def test_brief_record_has_kr_date(gen, monkeypatch):
+    record, _ = _brief(gen, monkeypatch, OPTIMISTIC_TEXT)
+    assert record["kr_date"] == date.today().isoformat()
+
+
+def test_evaluate_skips_when_brief_is_from_another_day():
+    """전날 브리프를 오늘 실측과 대조하지 않는다."""
+    brief = json.loads(json.dumps(BRIEF_0914))
+    brief["kr_date"] = "2026-09-11"
+    result = mbe.evaluate(brief, ACTUAL_0914)
+    assert result["evaluated"] is False
+    assert "2026-09-11" in result["reason"]
+    for axis in ("open_direction", "close_direction", "expert_direction"):
+        assert result[axis]["hit"] is None
+
+
+def test_evaluate_morning_brief_stale_cache_is_not_scored(tmp_path):
+    brief_path = tmp_path / "llm_morning_brief.json"
+    ledger_path = tmp_path / "morning_brief_eval.jsonl"
+    stale = json.loads(json.dumps(BRIEF_0914))
+    stale["kr_date"] = "2026-09-11"
+    stale["generated_at"] = "2026-09-11T07:01:00"
+    _write_brief(brief_path, stale)
+
+    kmd = _FakeKMD(
+        indices={"0001": {"label": "KOSPI", "price": 3095.68, "open": 3099.52,
+                          "change": -104.32, "change_pct": -3.26}},
+        sectors=[],
+    )
+    g = dr.DailyReportGenerator(kis_market_data=kmd)
+    record = asyncio.run(g.evaluate_morning_brief(
+        date(2026, 9, 14), brief_path=brief_path, ledger_path=ledger_path))
+
+    assert record["evaluated"] is False
+    assert record["close_direction"]["hit"] is None
+    assert "2026-09-11" in record["reason"]
+
+
+def test_expert_conflict_note_accepts_brief_text():
+    """07:30 결합부가 레코드 tone 또는 본문 어느 쪽을 넘겨도 동작한다."""
+    note_from_tone = dr.build_expert_conflict_note("bull", {"score": 2})
+    note_from_text = dr.build_expert_conflict_note(OPTIMISTIC_TEXT, {"score": 2})
+    assert note_from_tone and note_from_text
+    assert note_from_text == dr.build_expert_conflict_note(
+        dr.brief_tone(OPTIMISTIC_TEXT), {"score": 2})
+    assert dr.build_expert_conflict_note("bull", {"bias": "bear"}) is not None
+    assert dr.build_expert_conflict_note("bull", None) is None

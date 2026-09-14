@@ -66,10 +66,13 @@ def cap_regime_by_intraday_risk(regime: str, intraday_risk: Optional[str]) -> st
 
 @dataclass(frozen=True)
 class RegimeHorizons:
-    """시간 범위별 레짐 관점 — 값이 없으면 None (0·중립으로 채우지 않는다)"""
+    """시간 범위별 레짐 관점 — 값이 없으면 None (0·중립으로 채우지 않는다)
 
-    mid_trend: Optional[str] = None
-    mid_trend_as_of: Optional[datetime] = None
+    mid_trend 는 여기 담지 않는다. 중기 추세의 단일 출처는 `update_regime()` 결과
+    (`_current_regime`)이며, 별도 오버라이드를 두면 2분 주기 실시간 판단·VIX 강등·
+    전문가 BEAR 합의·LLM [방어] 결과를 오래된 값이 영구히 가린다 (2026-09-14 리뷰).
+    """
+
     open_expectation: Optional[str] = None
     open_expectation_as_of: Optional[datetime] = None
     intraday_risk: Optional[str] = None
@@ -148,17 +151,6 @@ class MarketRegimeAdapter:
         """원본 관점 스냅샷 (만료 필터 미적용)"""
         return self._horizons
 
-    def set_mid_trend(self, regime: str, as_of: Optional[datetime] = None) -> None:
-        """5/20일 중기 추세 관점을 설정한다 (유효 레짐의 기준값이 된다)."""
-        if regime not in self.REGIME_PARAMS:
-            raise ValueError(
-                f"mid_trend 는 {tuple(self.REGIME_PARAMS)} 중 하나여야 합니다: {regime!r}"
-            )
-        self._horizons = replace(
-            self._horizons, mid_trend=regime,
-            mid_trend_as_of=as_of if as_of is not None else datetime.now(),
-        )
-
     def set_open_expectation(self, expectation: str, as_of: Optional[datetime] = None) -> None:
         """장전 개장 예상을 기록한다 — 09:30 이후에는 읽을 때 무효 처리된다."""
         self._horizons = replace(
@@ -184,9 +176,7 @@ class MarketRegimeAdapter:
 
     @property
     def mid_trend(self) -> str:
-        """중기 추세 관점 — 명시 설정이 없으면 update_regime 결과를 쓴다"""
-        if self._horizons.mid_trend is not None:
-            return self._horizons.mid_trend
+        """중기 추세 관점 — update_regime() 결과 단일 출처 (기준시각 = _last_update)"""
         return self._current_regime
 
     def open_expectation(self, now: Optional[datetime] = None) -> Optional[str]:
@@ -224,10 +214,13 @@ class MarketRegimeAdapter:
 
         return {
             "mid_trend": {
+                # 값은 실제 게이트가 쓰는 _current_regime 그대로 내되, 미갱신이면 missing 으로 표시
                 "value": self.mid_trend,
-                "as_of": _iso(h.mid_trend_as_of),
-                "missing": False,
-                "source": "set_mid_trend" if h.mid_trend is not None else "update_regime",
+                "as_of": _iso(self._last_update),
+                "missing": self._last_update is None,
+                "reason": "update_regime 미실행 (지수 시세 미수집)"
+                          if self._last_update is None else "",
+                "source": "update_regime",
             },
             "open_expectation": {
                 "value": expectation,
@@ -477,11 +470,16 @@ class MarketRegimeAdapter:
 
         from ..utils.llm import LLMTask
 
+        def _pct(key: str) -> str:
+            """결측을 +0.0% 로 포장하지 않는다 — 값이 없으면 '미수집'"""
+            value = self._regime_data.get(key)
+            return f"{value:+.1f}%" if value is not None else "미수집"
+
         regime_info = (
             f"현재 체제: {self._current_regime}\n"
-            f"KOSPI 등락: {self._regime_data.get('kospi_change', 0):+.1f}%\n"
-            f"KOSDAQ 등락: {self._regime_data.get('kosdaq_change', 0):+.1f}%\n"
-            f"시가대비: {self._regime_data.get('avg_vs_open', 0):+.1f}%"
+            f"KOSPI 등락: {_pct('kospi_change')}\n"
+            f"KOSDAQ 등락: {_pct('kosdaq_change')}\n"
+            f"시가대비: {_pct('avg_vs_open')}"
         )
 
         # 넥스트장 데이터 추가
