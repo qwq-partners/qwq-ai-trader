@@ -58,6 +58,50 @@ def _now() -> datetime:
     return datetime.now()
 
 
+def classify_intraday_level(change_pct: Optional[float]) -> Optional[str]:
+    """KOSPI 당일 등락률 → 장중 급락 단계 (단일 출처).
+
+    임계값은 `INTRADAY_CRASH_PARAMS` 문서와 동일 (-1.5 / -2.5 / -3.5).
+    `batch_analyzer.update_intraday_state` 와 12:00/08:10 레짐 분류기가 **같은 함수**를
+    써야 "감지기는 normal 인데 이번 조회는 -3%" 같은 어긋남이 생기지 않는다 (T10 F14).
+
+    결측(None)은 0·normal 로 채우지 않고 None 을 돌려준다. 비숫자(문자열·bool·NaN)도
+    결측이다 — 파일(input_meta)에서 읽은 값이 손상돼도 예외로 sync 전체를 죽이지 않는다
+    (2026-09-15 R-A advisory).
+    """
+    if change_pct is None or isinstance(change_pct, bool):
+        return None
+    try:
+        value = float(change_pct)
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN
+        return None
+    if value <= -3.5:
+        return "severe"
+    if value <= -2.5:
+        return "crash"
+    if value <= -1.5:
+        return "caution"
+    return "normal"
+
+
+def max_intraday_level(*levels: Optional[str]) -> Optional[str]:
+    """여러 장중 위험 관측 중 **더 보수적인(심한) 쪽**을 고른다.
+
+    전부 결측이면 None — 결측을 normal 로 승격시키지 않는다 (캡 근거가 없다는 뜻).
+    """
+    best: Optional[str] = None
+    best_idx = -1
+    for level in levels:
+        if level not in INTRADAY_RISK_LEVELS:
+            continue
+        idx = INTRADAY_RISK_LEVELS.index(level)
+        if idx > best_idx:
+            best, best_idx = level, idx
+    return best
+
+
 def cap_regime_by_intraday_risk(regime: str, intraday_risk: Optional[str]) -> str:
     """장중 위험이 crash/severe 이면 강세 레짐을 강등한다.
 
@@ -169,14 +213,32 @@ class MarketRegimeAdapter:
         change_pct: Optional[float] = None,
         as_of: Optional[datetime] = None,
     ) -> None:
-        """장중 위험(급락 감지기 상태)과 당일 등락률을 기록한다."""
+        """장중 위험(급락 감지기 상태)과 당일 등락률을 기록한다.
+
+        **역순 도착 거부** (2026-09-15 T10 F14): 5분 감지기·12:00 분류기·재시도가
+        같은 어댑터에 쓰므로, 늦게 도착한 **과거** 관측(as_of 가 기존보다 이르거나
+        아예 없는 값)이 최신 crash 를 normal 로 덮으면 안 된다. as_of 없는 값은
+        "지금 관측"으로 취급하지 않는다 — 기존 관측이 있으면 무시하고, 없으면
+        as_of=None(결측)으로 저장해 `effective_regime` 의 당일 게이트에서 걸러진다.
+        """
         if level not in INTRADAY_RISK_LEVELS:
             raise ValueError(
                 f"intraday_risk 는 {INTRADAY_RISK_LEVELS} 중 하나여야 합니다: {level!r}"
             )
+        prev_as_of = self._horizons.intraday_risk_as_of
+        if prev_as_of is not None and (as_of is None or as_of < prev_as_of):
+            logger.debug(
+                f"[레짐] 역순 장중 위험 무시: {level}@{as_of} ≤ 기존 "
+                f"{self._horizons.intraday_risk}@{prev_as_of}"
+            )
+            return
+        if as_of is None:
+            # 결측 as_of 는 effective_regime 의 당일 게이트에서 걸러져 캡을 걸지 못한다 —
+            # 조용히 무효가 되지 않게 남긴다 (2026-09-15 R-A advisory)
+            logger.warning(f"[레짐] 장중 위험 {level} 을 as_of 없이 기록 — 유효 레짐 캡에 쓰이지 않는다")
         self._horizons = replace(
             self._horizons, intraday_risk=level, intraday_change_pct=change_pct,
-            intraday_risk_as_of=as_of if as_of is not None else datetime.now(),
+            intraday_risk_as_of=as_of,
         )
 
     @property

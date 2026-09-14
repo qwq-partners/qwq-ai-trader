@@ -309,6 +309,10 @@ KRScheduler.create_tasks()가 기능 존재 여부와 설정에 따라 태스크
 - 5분 급락 감지 루프는 `update_intraday_state()` 직후 `bot.engine._regime_adapter.set_intraday_risk(level, change_pct, as_of)`로 같은 상태를 **유효 레짐(§10.1)** 에도 전달한다(어댑터 부재 시 조용히 스킵, 등락률 결측은 `None`).
 - 모든 입력의 `as_of`·`source`·`missing_fields`·`kospi_c5`/`kospi_c20`는 `llm_regime_today.json`의 `input_meta`에 남는다.
 
+**급락 캡 3소스 병합 (2026-09-15, T10 F14)**: 급락 캡(`cap_regime_by_intraday_risk`가 아니라 레벨 결정 자체)은 서로 다른 시점의 세 소스 중 **가장 보수적인(위험이 큰) 레벨**로 정해진다 — ① 감지기의 당일 누적 상태(`_intraday_crash_snapshot()`), ② 이번 조회에서 막 계산한 실측(`kospi_today_pct` 기반), ③ 어댑터가 5분 루프로 이미 반영해 둔 당일 관측(`_adapter_intraday_snapshot()`). 공통 순수 함수 `market_regime.classify_intraday_level`(단일 등락률 → 레벨)과 `max_intraday_level`(여러 레벨 중 보수적인 쪽 선택)이 분류기(`_run_llm_regime_classifier`)와 30분 sync(`_apply_regime_to_exit_manager`) 양쪽에서 동일하게 쓰인다 — 한쪽만 최신 값을 반영하고 다른 쪽이 옛 값을 쓰면 그 사이에 완화된 레짐이 새어나간다(통합 커밋에서 발견된 F14 잔여 결함). 완화 방향으로는 덮어쓰지 않으며(보수적인 쪽이 항상 이김), 임계값(-1.5/-2.5/-3.5)은 불변이다.
+
+**소비자 통일 (2026-09-15, T10 F15)**: 레짐을 ExitManager에 적용하는 경로는 `kr_scheduler._apply_regime_to_exit_manager()`(30분 sync) **하나**다. `batch_analyzer.monitor_positions()`(같은 30분 주기지만 별도 루프)는 과거에 캐시 원본 레짐을 직접 재적용해 방금 sync가 낮춘 값을 아침 강세로 되살리는 레이스가 있었다 — 해당 블록 제거. G2 크로스검증(`engine.RiskManager._resolve_market_regime`)도 2분 주기 `engine._market_regime` 복사본 대신 어댑터의 유효 레짐(`effective_regime`)을 우선 읽어 같은 종류의 지연을 없앴다(어댑터 부재 시에만 복사본으로 폴백).
+
 morning_scan_enabled가 false인 대체 모드에서는 15:35 사전분석 → 15:40 일일 스캔 → 19:30 저녁 보정 스캔을 사용하고, 다음 거래일 실행 시간은 설정값을 따른다.
 
 주간 작업에는 토요일 00:00 예산 리밸런싱, 토요일 09:30~09:44 매도 후 복기, 일요일 21:00 전문가 패널이 있다. KR 전문가 정기 브리핑에는 일요일 22:00과 월요일 06:00 슬롯도 있다. core 리밸런싱과 value-growth shadow는 각각의 주기·중복 방지 상태를 별도로 관리한다.
@@ -416,6 +420,14 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 - 사후 검사·주장 추출은 **KR 주어 가드**를 쓴다. 문장에 `KOSPI/코스피/코스닥/국내/한국/오늘 장…`이 있고 개장·갭·출발 단정이 있으면 미국 근거가 같은 문장에 섞여 있어도 제거·대체 대상이다("미국 반도체 랠리를 반영해 오늘 KOSPI는 갭상승 출발이 예상된다"). KR 주어가 없는 미국 마감 문장은 보존한다. 문장 분리는 마침표 뒤에 공백·문장끝이 올 때만 끊어 `+0.97%`·`S&P500 +0.8%` 같은 소수점에서 본문이 훼손되지 않는다. `extract_brief_claims()`도 같은 가드를 써 미국 마감 서술(`S&P500은 상승 마감했다`)을 KOSPI 주장으로 원장에 기록하지 않는다.
 - 캐시(`~/.cache/ai_trader/llm_morning_brief.json`)는 `us_date`/`kr_date`/`text`/`generated_at`/`model`/`scope`/`inputs`/`claims`/`removed_claims` 고정 스키마로 저장된다. `kr_date`는 평가 대상 KR 거래일이다. 07:30 전문가 브리핑은 기존대로 `text`·`generated_at`만 읽는다.
 - 장후 평가: `DailyReportGenerator.evaluate_morning_brief(date)` → `src/analytics/morning_brief_eval.py`가 개장 방향·종가 방향·언급 업종 상대성과·전문가 종합 방향을 판정해 `~/.cache/ai_trader/morning_brief_eval.jsonl`에 누적한다. 주장이나 실측이 없으면 `hit=None` + 사유이며, 브리프의 `kr_date`가 평가일과 다르면(07:00 생성이 실패한 날) `evaluated=False` + 사유로만 기록해 **전날 브리프를 오늘 실측과 대조하지 않는다**. **하루 결과로 규칙·임계값을 바꾸지 않는다**(누적 표본은 `summarize()`).
+
+**발송 스냅샷·날짜별 아카이브 (2026-09-15, T10 F19·F22)**: 위 평가는 07:00 생성본이 아니라 **실제로 발송된 내용**을 기준으로 해야 한다 — 07:00 생성 직후에는 전문가 종합판단(07:30 결합 시점에만 확정)이 없고, 최신 캐시(`llm_morning_brief.json`)는 계속 덮어써져 저녁 평가 시점에는 원문이 남지 않는다. `daily_report.record_morning_brief_dispatch(kr_date, sent_text, expert_consensus, status, conflict_note=None, archive_dir=None)`를 `kr_scheduler._send_expert_briefing_telegram()`의 07:30 **morning 슬롯**(`record_dispatch=True`) 발송 직후에만 호출해 `~/.cache/ai_trader/morning_brief/<kr_date>.json`에 append한다(`generated[]`: 원문·본문·제거문장·입력·모델·주장, `dispatch[]`: 시도별 status="sent"/"failed"). `evaluate_morning_brief`는 이 날짜별 아카이브의 발송 스냅샷을 우선 읽고(`dispatched`/`brief_ref`/`dispatch_reason`), 같은 날짜를 재평가하지 않으며, 원장 쓰기는 원자적(임시 파일 후 rename)이라 손상된 아카이브가 있어도 이전 내용을 잃지 않는다.
+
+**테마 평가 대상 사전 고정 (2026-09-15, T10 F20)**: `extract_brief_claims()`가 만드는 `claims["sectors"]`는 테마명 문자열이 아니라 `{theme, eval_targets, agg, supported, reason}` 딕셔너리 목록이다 — `BRIEF_THEME_EVAL_TARGETS`(AI/반도체→전기전자, 바이오→의약품만 등재, 근거는 모듈 주석)에 없는 테마는 `supported=False`로 **생성 시점에** 미평가 확정한다. 저녁 평가가 실측 결과를 본 뒤 대상을 고르는 경로는 없다.
+
+**07:00 고정 문구 범위 분리 (2026-09-15, T10 F21)**: LLM 프롬프트뿐 아니라 `generate_us_market_report()`의 고정 문구(`market_msg`, 정상/차트동반/폴백 3경로 공용)도 `brief_scope(kr_inputs)`(위 LLM 스코프 판정과 동일 함수) 기준으로 분기한다. `scope=us_close_only`이면 "한국 관련 테마주 갭업 가능성" 같은 한국 방향 단정 대신 "미국 지수 평균 …% 마감 (전일 미국 세션) — 국내 자료 없음, 한국 개장 방향 판단 보류" 형태로 발송한다.
+
+**정오 당일 봉 교체 규칙 (2026-09-15, T10 F13)**: `_today_bar_action(last_bar, today)`가 스크리너 종가열의 마지막 봉과 오늘 날짜를 비교해 판정한다 — 마지막 봉이 오늘이면 **교체**(재계산에 이중 계상 없이 반영), 직전 거래일이면 **추가**, 그 외(날짜 미상·중간 결측)는 최신으로 위장하지 않고 그대로 유지 + 사유 기록. 현재 지수 as_of(`kr_as_of`)와 5/20일 봉 기반 지표의 as_of(`kospi_bars_as_of`)는 분리해 `input_meta`에 남긴다.
 
 ## 11. 변경 시 확인할 경계
 

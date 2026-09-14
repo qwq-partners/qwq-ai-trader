@@ -47,8 +47,9 @@ def test_crash_does_not_let_stale_bull_stand(monkeypatch):
 
 
 def test_severe_also_blocks_bull_and_summary_marks_cap():
+    # as_of 는 관측 시각 — 없으면 "최신"으로 취급하지 않는다 (2026-09-15 T10 F14)
     adapter = _adapter("bull")
-    adapter.set_intraday_risk("severe", change_pct=-5.1)
+    adapter.set_intraday_risk("severe", change_pct=-5.1, as_of=datetime.now())
     summary = adapter.get_summary()
     assert adapter.regime == "sideways"
     assert summary["regime"] == "sideways"
@@ -60,7 +61,7 @@ def test_caution_and_normal_do_not_add_new_blocking():
     """새 차단을 추가하지 않는다 — caution/normal 에서는 기존 레짐 그대로."""
     for level in ("normal", "caution"):
         adapter = _adapter("bull")
-        adapter.set_intraday_risk(level, change_pct=-0.9)
+        adapter.set_intraday_risk(level, change_pct=-0.9, as_of=datetime.now())
         assert adapter.regime == "bull", level
 
 
@@ -68,7 +69,7 @@ def test_crash_does_not_upgrade_non_bull_regimes():
     """crash 는 강세 강등만 한다 — bear/sideways 를 더 낮추지 않는다."""
     for base in ("bear", "sideways", "neutral"):
         adapter = _adapter(base)
-        adapter.set_intraday_risk("crash", change_pct=-3.3)
+        adapter.set_intraday_risk("crash", change_pct=-3.3, as_of=datetime.now())
         assert adapter.regime == base, base
 
 
@@ -197,7 +198,7 @@ def test_llm_attack_diagnosis_does_not_upgrade_during_crash(monkeypatch):
             return _Resp()
 
     adapter = _adapter("bear")
-    adapter.set_intraday_risk("crash", change_pct=-3.3)
+    adapter.set_intraday_risk("crash", change_pct=-3.3, as_of=datetime.now())
     asyncio.run(adapter.llm_morning_diagnosis(_LLM()))
 
     assert adapter._current_regime == "bear"

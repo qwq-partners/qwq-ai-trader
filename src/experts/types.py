@@ -33,6 +33,9 @@ class ExpertOpinion:
     error: Optional[str] = None
     # 2026-09-14 (T9 요청 4): "자료 조회 성공"과 "판단에 쓸 만큼 충분"을 구분.
     # "ok" | "partial" | "insufficient" — insufficient는 orchestrator 집계에서 가중 0 제외.
+    # 새로 생성되는 의견의 기본값은 "ok"(전문가가 명시적으로 판정하지 않으면 정상
+    # 취급). from_dict가 구 레코드(이 필드가 아예 없던 T9 이전 저장분)를 읽을 때는
+    # 이 기본값을 쓰지 않는다 — 아래 from_dict 참조 (T10 F16).
     data_status: str = "ok"
     missing_inputs: List[str] = field(default_factory=list)      # 결측/부족 입력 목록
 
@@ -74,7 +77,12 @@ class ExpertOpinion:
             valid_until=valid_until,
             raw_evidence=dict(d.get("raw_evidence", {})),
             error=d.get("error"),
-            data_status=str(d.get("data_status", "ok") or "ok"),
+            # 2026-09-15 (T10 F16): 이 키가 아예 없는 레코드(T9 이전 저장분)에
+            # "ok"를 기본값으로 채우면 "충분했다"는 근거 없는 판정을 만들어낸다.
+            # "unknown"으로 남겨 orchestrator 집계(_market_expert_contributions)가
+            # ok/partial만 허용하는 allowlist로 자연히 제외하게 한다 — 키가 명시적으로
+            # "ok"인 레코드(같은 세션에서 저장된 정상 레코드)는 그대로 "ok" 유지.
+            data_status=str(d.get("data_status", "unknown") or "unknown"),
             missing_inputs=list(d.get("missing_inputs", [])),
         )
 

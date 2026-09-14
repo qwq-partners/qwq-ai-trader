@@ -482,6 +482,54 @@ venv/bin/python -m pytest tests/test_backtest_point_in_time.py tests/test_backte
 
 **완료 조건:** 합성 실패 주입(오래된 캐시·결측·만료 자료)에서 프롬프트와 결과에 기준시각·결측·유효 여부가 드러나고, 급락 중 오래된 강세 전망이 유효 레짐을 덮지 못하며, 브리프가 입력 범위 밖을 단정하지 않는다. 운영 배포는 별도 실행 범위.
 
+## T10. T9 후속 교차 리뷰 수정 — 자료 수집→검증→레짐→소비자→발송→평가 연결 경로 일관성 (2026-09-15 추가)
+
+**계기:** T9(PR #42~#46, main `dcec010`) 이후 교차 리뷰가 "각 단계는 고쳤으나 단계 사이 연결이 끊긴" 결함 10건을 지적. 기준 SHA `dcec010`(= 2026-09-15 00:00 시점 최신 main, 후속 변경 없음). 리뷰 주장은 무조건 수용하지 않고 실제 코드 경로 확인 + D의 격리 재현으로 확정한다.
+
+**목표는 테스트 개수가 아니라 연결 경로의 일관성:** 자료 수집 → 결측·신선도 검증 → 레짐 판단 → 실제 소비자 적용 → 장전 발송 → 장후 평가.
+
+**안전 경계(§0):** 운영 체크아웃(`/home/ubuntu/projects/qwq-ai-trader`, de111b7)·운영 캐시·`.env`·주문·킬스위치·systemd 무접촉. `tests/conftest.py`가 import 시점부터 외부 네트워크와 운영 상태 파일 접근을 차단하고 시도 목록을 세션 요약에 출력한다(HOME 미변조, tmp_path 명시 주입). 임계값(급락 -1.5/-2.5/-3.5, 커버리지 4명, 확신 상한 0.2/0.7, 방향 밴드 0.3)은 결과에 맞춰 바꾸지 않는다.
+
+### 추적 ID와 항목별 명세 (F13~F22)
+
+| ID | 리뷰 주장 | 실제 코드 경로 (dcec010) | 최소 재현 입력 | 현재 결과 → 기대 결과 | 담당 / 리뷰어 | 동작 의미 변경 |
+|---|---|---|---|---|---|---|
+| F13 (A1) | 정오 지수를 조회해도 스크리너에 오늘 봉이 있으면 c5/c20 재계산을 생략하면서 `kr_as_of`만 최신으로 갱신 | `kr_scheduler.py:1420-1446` `_has_today_bar` 분기: `kr_as_of=now` 후 재계산 skip | 이전 29봉=100, 오전 당일 봉=104, 정오 가격=97 | c5/c20 **+4%**·as_of=12:00 → **-3%**; 오늘 봉은 교체·직전 거래일이면 추가·날짜 미상/중간 결측은 최신으로 위장 금지·현재 지수 as_of 와 봉 기반 지표 as_of 분리·같은 날 재실행 중복 추가 없음 | A / R-A(opus xhigh) | 없음(입력 정직성) |
+| F14 (A2) | 최신 KOSPI -3%를 받아도 감지기의 이전 normal/None 상태로 캡을 결정해 `trending_bull` 저장 | `kr_scheduler.py:1465,1522-1533,1727-1730` — 캡 입력이 `_intraday_crash_snapshot()`(감지기 상태)만, 이번 조회 `kospi_today_pct` 미사용; 분류 규칙은 `batch_analyzer.update_intraday_state:1515-1522`에만 존재 | 최신 KOSPI -3.0%, 감지기 normal(당일) 또는 None, LLM trending_bull | 파일·ExitManager 에 trending_bull → 공통 규칙(`classify_intraday_level`)으로 crash → **neutral 로 제한**; 당일 crash 이미면 유지, 전일 crash 는 결측, 늦게 도착한 과거 normal 이 최신 crash 를 덮지 않음(as_of 역순 거부), 조회 실패는 결측 명시 | A / R-A | 급락 캡이 "이번 조회값"에도 걸림(같은 임계값, 새 차단 아님) |
+| F15 (A3) | `batch_analyzer.monitor_positions` 가 캐시 원본 LLM 레짐을 ExitManager 에 직접 적용, G2 는 어댑터와 다른 복사값 | `batch_analyzer.py:1586-1600`(원본 파일→`apply_regime_params`), `engine.py:1818`(`engine._market_regime` 2분 복사본), `kr_scheduler.py:4233`(복사 시점) | 아침 trending_bull 캐시 → 장중 crash → 30분 sync 로 neutral(stale 5d) → `monitor_positions` | stale_high_days **7 로 복귀**·TP 도 bull 로 복귀 → 보정 전 bull 재적용 없음, ExitManager·G2·사이징이 실제 소비한 값 = 공통 유효 레짐, 급락 SL/TS 보호 유지 | A / R-A | 없음(소비자 통일) |
+| F16 (B1) | 거시 자료·검색·오버라이드가 모두 비어도 macro 의견이 score 0·conf 0.3·`data_status=ok` → 4번째 유효 전문가로 집계 | `macro_economist.py:60-105` (`_build_opinion` data_status 기본 "ok"), 다른 집계 전문가(us_market/kr_economy/global_micro/weekend) 도 미판정, `types.from_dict` 기본 "ok" | 유효 3명(score 40, conf 0.8) + 완전 무자료 macro | valid_n 4·보정 **+12**(40×0.3, ±30 클램프 — 초안의 '+10' 은 산술 오기, 09-15 정정) → valid_n 3·커버리지 부족·무보정 0; 정상 4번째가 있으면 +12 정상 집계 | B / R-B(opus xhigh) | 없음(기존 커버리지 정책의 정직한 적용) |
+| F17 (B2) | `DataPoint/is_fresh` 는 있으나 야간선물 점수는 숫자·dict 존재만 확인 | `weekend_signal_expert.py:60-70,141-146`, `kr_market_expert.py:90-103,132`, 공급자 `kis_market_data.get_night_futures_quote`(시장 시각 미제공, `as_of=None`) | 야간선물 +2%, as_of=None, value_unchanged_minutes=570 | +12 가산·유효 신호 카운트·ok → **미집계**(결측 사유 기록); 정상 관측 시각·night 세션이면 기존 점수 규칙 그대로; 결측≠0% | B / R-B | 야간선물은 관측 시각·세션이 확인될 때만 유효(세션 시각 도출 규칙은 보고서에 명시, 새 TTL 은 승인 분리) |
+| F18 (B3) | Yahoo 응답에 VIX 종목·시각만 있고 가격이 없어도 price=0, missing=False | `us_market_data.py:348-355`(`q.get(...,0)`), `:585-596`(`missing=False`), v8 `_parse_v8_spark_data` 0 채움 | `{"symbol":"^VIX","regularMarketTime":...}` | VIX 0.0·missing False → **None + missing True + reason**, `missing_fields` 에 VIX, round/float 예외 없음; 정상 0% 변동은 0 유지 | B / R-B | 없음 |
+| F19 (C1) | 07:00 생성본에 expert_consensus 없음, 07:30 은 발송문에만 붙여 저녁 평가가 "미기록" | `daily_report.py:1232-1240`(consensus 미전달), `kr_scheduler.py:616-650`(발송문만), `evaluate_morning_brief:1473-1522`(캐시만 읽음) | 07:00 생성 → 07:30 전문가 +2 중립 결합·발송 → 20:30 종가 -3.26% | 전문가 축 hit=None("미기록") → 실제 발송 판단(+2 → flat) 기준으로 평가; 생성본/발송본/발송 성공·실패·재시도 구분, 재실행 시 원본 덮어쓰기·분모 중복 없음 | C(+A 배선) / R-C(opus xhigh) | 없음 |
+| F20 (C2) | 주장 키 `AI/반도체·바이오` vs 실측 키 `전기전자·의약품` exact match 실패 | `daily_report.extract_brief_claims:243`(테마명 그대로), `_collect_brief_actuals:1566`(KIS 업종명), `morning_brief_eval.evaluate:150-165` | 생산자 키 AI/반도체·바이오, provider 키 전기전자·의약품 | 전부 "업종 수익률 미수집" → 생성 시점에 평가 대상·집계 규칙을 기록(합의 매핑만), 미지원 테마는 사유 명시 미평가, 결과 본 뒤 대상 선택 금지 | C / R-C | 없음 |
+| F21 (C3) | 07:00 고정 문구가 미국 지수 평균만으로 "한국 관련 테마주 갭업 가능성" 발송 | `daily_report.py:1129-1137` (`market_msg`), 차트 동반 1215, 텍스트 폴백 1221 | avg_pct ≥ 1.5, kr_inputs 없음 | 한국 방향 전망 발송 → 미국 마감 사실과 한국 전망 분리(대상 시장·시간범위 명시), unsupported 전망이 어느 발송 경로로도 새지 않음 | C / R-C | 없음 |
+| F22 (C4) | 최신 캐시 하나를 덮어쓰고 평가 원장에 원문 참조가 없음 | `daily_report.save_morning_brief:252-257`, `morning_brief_eval.append_ledger` | 같은 날 2회 생성·다음 날 재검증 | 원문 유실 → 날짜·버전별 원문·발송문·입력(as_of/source)·모델·주장·전문가 판단 감사 보존(비밀 제외), 최신 캐시는 조회용, 기준일 불일치·실측 결측은 적중/0% 변환 금지 | C / R-C | 없음 |
+
+### 파일 소유권과 인터페이스 계약
+
+- **A**(레짐 경로): `src/schedulers/kr_scheduler.py`(단독 소유), `src/core/market_regime.py`, `src/core/batch_analyzer.py`, `src/core/engine.py`, `src/strategies/exit_manager.py`, `src/signals/screener/swing_screener.py`, `tests/test_regime_llm_inputs.py`, `tests/test_market_regime_horizons.py`, 신규 `tests/test_t10_regime_path.py`.
+- **B**(자료 유효성·전문가): `src/utils/data_freshness.py`, `src/data/providers/us_market_data.py`, `src/data/providers/kis_market_data.py`, `src/experts/*`, `tests/test_expert_missing_inputs.py`, `tests/test_data_freshness.py`, 신규 `tests/test_t10_data_validity.py`.
+- **C**(발송·평가): `src/analytics/daily_report.py`, `src/analytics/morning_brief_eval.py`, `tests/test_morning_brief.py`, 신규 `tests/test_t10_brief_eval.py`. `kr_theme_detector.py` 는 읽기만(매핑 참고).
+- **D**(독립 검증): 신규 `tests/test_t10_repro_*.py`(기준 SHA 재현), 통합 후 `tests/test_t10_e2e_flow.py`(07:00→07:30→12:00→20:30 고정 시계·메모리 공급자).
+- **C→A 배선 계약(F19)**: C 는 `src/analytics/daily_report.py` 에 `record_morning_brief_dispatch(*, kr_date: str, sent_text: str, expert_consensus: dict | None, status: str, conflict_note: str | None = None, archive_dir=None) -> Path` 를 제공한다(같은 날 여러 attempt 를 덧붙이고 생성 원본은 덮어쓰지 않는다; status 는 "sent"/"failed"). A 는 `kr_scheduler.py` 07:30 발송 지점(`_send_expert_briefing_telegram`, `ok = await notifier.send_report(msg)` 직후)에서 `getattr(daily_report_module, "record_morning_brief_dispatch", None)` 이 있으면 `expert_consensus={"score": agg, "bias": <aggregate_bias>, "valid_n": <valid_n>}` 로 호출한다(예외 격리). `evaluate_morning_brief(date)` 는 C 가 날짜별 아카이브(발송 스냅샷 우선)를 읽도록 바꾸며 시그니처는 유지한다. D 의 E2E 테스트가 통합 후 실제 배선을 검증한다.
+- **모델·effort**: 구현 A(돈 경로: 청산 파라미터·G2) opus/high, B·C sonnet/high, D 재현 sonnet/medium, 독립 리뷰 R-A·R-B·R-C opus/xhigh, 통합 최종 리뷰 opus/xhigh. 구현자 ≠ 리뷰어.
+
+### 진행 순서
+1. 안전한 테스트 환경(`tests/conftest.py`) → 기준 스위트로 누출 검사.
+2. 인터페이스·소유권 합의(위).
+3. 병렬: D 기준 SHA 재현 / A·B·C 실패 테스트→최소 수정→통과.
+4. 브랜치별 독립 리뷰 → blocking 반영 → 재리뷰.
+5. 통합 브랜치 `feature/t10-crossreview` 에 순차 머지 → D 통합 E2E·격리 확인 → verify(문법·전체 테스트·비밀정보) → Codex 교차 리뷰(`scripts/dev/codex_review.sh`, 샌드박스 실패 시 미실행 기록).
+6. CHANGELOG·본 계획서·리뷰 보고서 §11·monitoring-checkpoints 갱신 → 로컬 커밋 → PR 준비.
+
+- [x] F13 / - [x] F14 / - [x] F15 / - [x] F16 / - [x] F17 / - [x] F18 / - [x] F19 / - [x] F20 / - [x] F21 / - [x] F22
+
+### 진행 결과 (2026-09-15)
+
+- **통합 SHA**: `a6d81d0` (통합 브랜치 `feature/t10-crossreview`, 기준 `dcec010`).
+- **리뷰 라운드**: A(레짐 경로) 1회 승인 / B(자료 유효성·전문가 집계) 3라운드(초안 → blocking 반영 1차 → blocking 반영 2차) / C(발송·평가) 2라운드(초안 → blocking 반영) / D(독립 재현) 기준 SHA 재현 3종 + 통합 후 E2E, 총 14건 통과.
+- **통합 수정 요약**: 브랜치별 병합 직후 D 재현 6건이 실패해 원인별 조치 — F14 잔여(어댑터 당일 관측이 캡 병합에서 빠져 있던 것 추가), F19 통합 결함(아카이브 경로 규칙 이원화 → `_brief_archive_path` 단일화), F17/F18/F20 D 테스트 조정(내부 표현이 아니라 관찰 결과 기준으로), 리뷰 advisory 일괄 반영(07:30 슬롯만 발송 기록, NaN 가드, 아카이브 원자적 쓰기, 계획서 F16 산술 정정), `tests/conftest.py`에 curl_cffi 차단 추가. 최종 전체 스위트 552 passed(통합 최종, E2E 8건·회귀 2건 포함) / 2 xfailed, 격리 위반 0건. 운영 미배포(`de111b7`).
+
 ## 4. 공통 검증과 최종 전달 형식
 
 각 구현 PR은 아래 순서를 따른다. 테스트 수를 임의로 목표로 삼지 않고 위 인수 사례가 모두 들어갔는지 확인한다.

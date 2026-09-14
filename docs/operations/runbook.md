@@ -105,6 +105,8 @@ journalctl -u qwq-ai-trader --since today | grep -E "LLM레짐|레짐충돌가�
 > `MarketRegimeAdapter.set_intraday_risk()` 에도 함께 전달된다 — 유효 레짐(`adapter.regime`)이
 > crash/severe 에서 강세를 강세로 취급하지 않는다.
 
+> **T10 배포 후 확인(2026-09-15~)**: 위 표는 레짐 입력 단계만 다룬다. 자료 수집→레짐→소비자→발송→평가 전체 연결 경로 확인은 `monitoring-checkpoints.md`의 "2026-09-15~ — T10 연결 경로 일관성" 절을 참고한다.
+
 ## 신규 전략 1차 스크리닝 (quick_backtest, 2026-08-03~)
 
 정식 백테스터에 올리기 전에 아이디어를 빠르게 기각/채택하는 연구 도구.

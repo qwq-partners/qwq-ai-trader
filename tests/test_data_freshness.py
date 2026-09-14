@@ -43,6 +43,19 @@ def test_no_ttl_means_no_expiry_but_needs_as_of():
     assert is_fresh(dp, NOW) is True
 
 
+def test_no_ttl_future_as_of_is_rejected():
+    """T10 B 리뷰 advisory — ttl_seconds가 없으면 age 검사 자체가 생략되어
+    미래 as_of도 fresh로 통과하던 결함. F17은 '미래 시각 자료는 정상 자료로
+    세지 않는다'를 ttl 유무와 무관하게 요구한다."""
+    dp = DataPoint(value=1.0, as_of=NOW + timedelta(hours=6), source="x", ttl_seconds=None)
+    assert is_fresh(dp, NOW) is False
+
+
+def test_with_ttl_future_as_of_is_rejected():
+    dp = DataPoint(value=1.0, as_of=NOW + timedelta(minutes=5), source="x", ttl_seconds=3600)
+    assert is_fresh(dp, NOW) is False
+
+
 def test_missing_is_never_fresh():
     dp = missing(source="kospi", reason="조회 실패")
     assert dp.is_missing is True
@@ -255,10 +268,12 @@ def _make_kis_provider():
     return provider
 
 
-def test_night_futures_fetched_at_is_query_time_as_of_is_none():
-    """KIS 야간선물 조회 API는 체결시각 필드를 안 준다 — fetched_at(조회 시각)만
-    채우고, as_of(시장 시각)는 조회 시각으로 대신 포장하지 않고 None+사유를 남긴다
-    (2026-09-14 리뷰 advisory)."""
+def test_night_futures_in_session_query_as_of_is_query_time():
+    """KIS 야간선물 조회 API는 체결시각 필드를 안 준다. 대신 세션(CM=night) 여부는
+    알 수 있으므로, 세션 개장 중(18:00~익일 05:00 KST) 조회는 실시간 호가로 보고
+    as_of=조회 시각을 채운다(T10 F17, 2026-09-15 — 세션 규칙으로 as_of/fetched_at을
+    분리하되 세션 중에는 두 값이 같아진다. 2026-09-14 리뷰 advisory의 후속 수정 —
+    "항상 as_of=None"은 세션 정보를 활용하지 않은 과보수였다)."""
     provider = _make_kis_provider()
 
     def _responder(url, params):
@@ -269,17 +284,72 @@ def test_night_futures_fetched_at_is_query_time_as_of_is_none():
 
     provider._get_session = fake_get_session  # type: ignore[assignment]
 
-    before = datetime.now()
-    quote = asyncio.run(provider.get_night_futures_quote(symbol="TEST01", cache_ttl=0))
-    after = datetime.now()
+    # 세션 개장 중 시각을 명시 주입(now=20:00) — 실 서버 시계에 좌우되지 않게 결정적으로 고정.
+    now = datetime(2026, 9, 14, 20, 0, 0)
+    quote = asyncio.run(
+        provider.get_night_futures_quote(symbol="TEST01", cache_ttl=0, now=now)
+    )
 
     assert quote is not None
-    fetched_at = datetime.fromisoformat(quote["fetched_at"])
-    assert before <= fetched_at <= after
-    assert quote["as_of"] is None
-    assert quote["as_of_note"]
+    assert quote["session"] == "night"
+    assert quote["fetched_at"] == now.isoformat()
+    assert quote["as_of"] == now.isoformat()
+    assert "as_of_note" not in quote  # 세션 개장 중은 사유 없음(정상)
+    assert quote["as_of_ttl_seconds"] > 0
     assert quote["value_changed_at"] is not None
     assert quote["value_unchanged_minutes"] == 0.0
+
+
+def test_night_futures_post_session_query_as_of_is_session_end():
+    """세션 종료 후(05:00~18:00) 조회는 직전 세션의 마지막 체결가이므로
+    as_of=그 세션 종료 시각(05:00) — 조회 시각(fetched_at)과 달라야 한다(T10 F17)."""
+    provider = _make_kis_provider()
+
+    def _responder(url, params):
+        return 200, _futures_json(410.5, 0.61)
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    provider._get_session = fake_get_session  # type: ignore[assignment]
+
+    now = datetime(2026, 9, 15, 7, 30, 0)  # 화요일 07:30 — 월요일 밤 세션은 05:00 종료
+    quote = asyncio.run(
+        provider.get_night_futures_quote(symbol="TEST01", cache_ttl=0, now=now)
+    )
+
+    assert quote is not None
+    assert quote["fetched_at"] == now.isoformat()
+    assert quote["as_of"] == datetime(2026, 9, 15, 5, 0, 0).isoformat()
+    assert quote["as_of"] != quote["fetched_at"]
+    assert quote["as_of_ttl_seconds"] > 0
+
+
+def test_night_futures_day_session_fallback_as_of_is_none():
+    """CM(야간) 세션 데이터가 없어 F(주간)로 폴백하면 시장 시각을 알 수 없다 —
+    as_of=None + 사유(as_of_note)를 남긴다(기존 "체결시각 필드 없음" 방어와 동일 결)."""
+    provider = _make_kis_provider()
+
+    def _responder(url, params):
+        if params.get("FID_COND_MRKT_DIV_CODE") == "CM":
+            # 야간 세션 미개장 — 빈 응답(가격 0)
+            return 200, {"rt_cd": "0", "msg1": "", "output1": {}}
+        return 200, _futures_json(410.5, 0.61)
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    provider._get_session = fake_get_session  # type: ignore[assignment]
+
+    quote = asyncio.run(
+        provider.get_night_futures_quote(symbol="TEST01", cache_ttl=0)
+    )
+
+    assert quote is not None
+    assert quote["session"] == "day"
+    assert quote["as_of"] is None
+    assert quote["as_of_note"]
+    assert quote["as_of_ttl_seconds"] is None
 
 
 def test_night_futures_repeated_value_keeps_original_changed_at():

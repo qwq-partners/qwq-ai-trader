@@ -193,9 +193,12 @@ class ExpertOrchestrator:
             op = opinions.get(name)
             if op is None or not op.is_valid:
                 continue
-            # 2026-09-14 (T9 요청 4): 자료 부족(insufficient)은 confidence 상한만으로도
-            # 기여가 작아지지만, "가중 0으로 완전 제외"를 명시적으로 보장한다.
-            if getattr(op, "data_status", "ok") == "insufficient":
+            # 2026-09-14 (T9 요청 4)/2026-09-15 (T10 F16): 자료 부족(insufficient)은
+            # confidence 상한만으로도 기여가 작아지지만, "가중 0으로 완전 제외"를
+            # 명시적으로 보장한다. allowlist(ok/partial만 허용)로 바꿔 "unknown"
+            # (from_dict가 data_status 필드 없는 구 레코드에 매기는 값)도 같이
+            # 제외한다 — "모른다"를 "ok"로 착각해 집계에 새어들지 않게 한다.
+            if getattr(op, "data_status", "ok") not in ("ok", "partial"):
                 continue
             # P0-4 (2026-05-29 리뷰): 음수 가중치/confidence 방어
             cfg_w = max(0.0, float(self.config.weights.get(name, 1.0)))
@@ -249,9 +252,10 @@ class ExpertOrchestrator:
         for op in opinions.values():
             if not op.is_valid or op.expert in self.NON_REGIME_EXPERTS:
                 continue
-            # 2026-09-14 (T9 리뷰 blocking): aggregate_regime_score와 동일 기준으로
-            # insufficient를 제외한다 — "모른다"가 NEUTRAL 표로 집계되지 않게.
-            if getattr(op, "data_status", "ok") == "insufficient":
+            # 2026-09-14 (T9 리뷰 blocking)/2026-09-15 (T10 F16): aggregate_regime_score와
+            # 동일한 allowlist(ok/partial만 허용)로 insufficient·unknown을 제외한다 —
+            # "모른다"가 NEUTRAL 표로 집계되지 않게.
+            if getattr(op, "data_status", "ok") not in ("ok", "partial"):
                 continue
             w = self.config.weights.get(op.expert, 1.0) * op.confidence
             counts[op.regime_bias] += w
@@ -280,16 +284,26 @@ class ExpertOrchestrator:
             opinions = self.snapshot()
         counts = {"ok": 0, "partial": 0, "insufficient": 0}
         insufficient_experts: List[str] = []
+        unknown_experts: List[str] = []
         for op in opinions.values():
             status = getattr(op, "data_status", "ok") or "ok"
             counts[status] = counts.get(status, 0) + 1
             if status == "insufficient":
                 insufficient_experts.append(op.expert)
-        note = f"자료 부족 {counts['insufficient']}명" if counts["insufficient"] else None
+            elif status == "unknown":
+                unknown_experts.append(op.expert)
+        # 2026-09-15 (T10 B 리뷰 반영·2차 advisory): "자료 부족 N명" 표시는 insufficient
+        # 뿐 아니라 unknown(from_dict가 data_status 없는 구 레코드에 매기는 값)도 같이
+        # 센다 — valid_n은 이미 이 둘을 함께 제외하는데 note만 insufficient만 세면
+        # "자료 부족 0명"인데 valid_n만 낮아 보이는 표시 불일치가 생긴다.
+        unknown_n = counts.get("unknown", 0)
+        short_n = counts["insufficient"] + unknown_n
+        note = f"자료 부족 {short_n}명" if short_n else None
         valid_n = len(self._market_expert_contributions(opinions))
         return {
             "counts": counts,
             "insufficient_experts": insufficient_experts,
+            "unknown_experts": unknown_experts,
             "note": note,
             "valid_n": valid_n,
             "insufficient_coverage": valid_n < self.MIN_VALID_EXPERTS,

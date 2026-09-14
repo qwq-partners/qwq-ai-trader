@@ -48,6 +48,14 @@ QTY = 139
 STOP = Decimal("5.0")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    """운영 캐시(~/.cache/ai_trader) 무접촉 — ExitManager 생성자·체결 경로의 레짐 캐시 조회가
+    실제 HOME 을 읽던 누출을 tests/conftest.py 격리 가드가 잡았다 (2026-09-15).
+    HOME 환경변수는 건드리지 않고 Path.home() 만 이 테스트 프로세스 안에서 바꾼다."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+
 def _snapshot(quantity=QTY, stop="5.0", price=PRICE):
     return build_entry_risk_snapshot(
         strategy="sepa_trend",
