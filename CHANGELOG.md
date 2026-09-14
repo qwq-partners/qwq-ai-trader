@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — fix: 자료 신선도·전문가 결측 상태·수동 거시 만료·VIX 수집 (계획서 T9 요청 4, F12)
+
+계기: 09-14 KR시장 전문가는 수급·공매도 원자료가 전부 비어 있어도 점수 0 중립·기본 confidence 0.4 로 보고됐고, 야간선물 +0.97% 가 아침~장후 반복돼도 관측 시각을 알 수 없었으며, 거시 수동 오버라이드에 5/29 설정이 만료 없이 남아 있었다.
+- `src/utils/data_freshness.py`(신규): `DataPoint(value, as_of, source, session, ttl_seconds)`·`is_fresh`·`freshness_label`·`missing` — "조회 성공" 과 "현재 판단에 유효" 를 구분하는 단일 출처. 상수 `CONFIDENCE_CAP_INSUFFICIENT=0.2`, `CONFIDENCE_CAP_PARTIAL=0.7`(bear_consensus 임계와 동일 — 부분 자료로도 방어 합의는 가능, 양방향 완화), `DEFAULT_OVERRIDE_TTL_DAYS=14`.
+- 전문가: `ExpertOpinion.data_status`(ok/partial/insufficient)·`missing_inputs`(to_dict/from_dict 하위 호환), confidence 상한은 `ExpertAgent._build_opinion` 한 곳에서 강제. KR시장 전문가는 수급+공매도 모두 결측 → insufficient, 하나만 → partial(findings 에 경고).
+  orchestrator: `aggregate_regime_score`·`aggregate_bias` 모두 insufficient 제외(재리뷰 회귀: 전부 제외돼 동표가 되면 dict 첫 키 BULL 로 떨어지던 것 → NEUTRAL 고정), `MIN_VALID_EXPERTS=4` 커버리지 게이트(미만이면 0 무보정 + INFO 로그), `data_status_summary()`("자료 부족 N명", valid_n, insufficient_coverage).
+  **실경로 의미 변경**: `apply_expert_adjustment`(2분 주기, shadow 비게이트)의 score 경로가 유효 시장체제 전문가 <4명이면 무발화(bear_consensus 만 동작). 주문·청산·급락 방어·게이트 코드 무변경.
+- `macro_economist` 수동 오버라이드: `{value, valid_until}` 스키마(날짜만이면 그날 23:59:59 까지 포함), 구형 flat 항목은 파일 mtime+14일로 만료, 만료 시 경고 로그 후 제외(일정 내용의 과거 여부는 미검사 — 문서 정정). 실제 `~/.cache` 파일은 읽기만.
+- 공급자: `us_market_data` `US_INDEX_KEYS` 상수·`^VIX` 수집·`get_overnight_signal()['indices_normalized']`(SP500/NASDAQ/DOW/SOX/VIX 고정 키, 결측 `missing:true+price:None`, `fetched_at` 조회 시각·`as_of` 실제 체결 시각(Yahoo regularMarketTime, 없으면 None+note)); 기존 `indices`(표시명) 스키마는 불변. `kis_market_data.get_night_futures_quote()`에 `fetched_at`·`as_of`(KIS 응답에 체결시각 없어 None+사유)·`value_changed_at`·`value_unchanged_minutes` — 고착 여부를 단정하지 않고 판단 자료만 제공.
+- 테스트 33건(`tests/test_data_freshness.py`, `tests/test_expert_missing_inputs.py`), `docs/agents/expert-system.md` 신선도·결측 절.
+- 잔여: `data_status_summary` 의 07:30 브리핑·팀 컨텍스트 노출과 `indices_normalized` 소비는 A(스케줄러) 후속 PR; macro/us_market/kr_economy/global_micro/weekend 전문가의 data_status 미설정; v8 spark 폴백의 시장 시각 미매핑. 배포 없음.
+
 ## 2026-09-14 — docs: 리뷰 후속 수정·재검증 결과 보고 (`docs/reviews/remediation-2026-09-14.md`)
 
 계획서 §4 형식으로 정리: F1~F8 별 재현 관측·수정 PR/SHA·먼저 실패한 테스트·수정 후·미해결, main `8f5580a` verify 334 passed/2 xfailed, 유효 설정 hash `91a816502f3f`(운영 설정값 변경 없음),

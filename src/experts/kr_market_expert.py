@@ -118,6 +118,28 @@ class KRMarketExpert(ExpertAgent):
         )
         confidence = min(0.85, 0.4 + len(findings) * 0.08)
 
+        # 2026-09-14 (F12/T9 요청 4): 수급·공매도·지수·야간선물 4개 원자료 중 어느 게
+        # 비어 있는지 기록. 이 전문가의 존재 이유(수급·체결)인 flows+short_balance가
+        # 둘 다 비면 score=0(중립)이 "시장이 중립"이 아니라 "우리가 모른다"는 뜻이므로
+        # insufficient로 표시해 종합점수 가중을 0으로 만든다(orchestrator에서 처리).
+        missing_inputs: List[str] = []
+        if not flows:
+            missing_inputs.append("외국인/기관 수급")
+        if not short_balance:
+            missing_inputs.append("공매도 잔고")
+        if not kospi_state:
+            missing_inputs.append("KOSPI 지수")
+        if not futures_state:
+            missing_inputs.append("KOSPI200 야간선물")
+
+        if not flows and not short_balance:
+            data_status = "insufficient"
+            findings.insert(0, "⚠️ 자료 부족 — 수급·공매도 원자료 결측, 종합점수 가중 제외")
+        elif missing_inputs:
+            data_status = "partial"
+        else:
+            data_status = "ok"
+
         sectors = await self._detect_rotation_sectors()
 
         return self._build_opinion(
@@ -134,6 +156,8 @@ class KRMarketExpert(ExpertAgent):
                 has_market_ctx=bool(market_ctx),
             ),
             valid_hours=4,
+            data_status=data_status,
+            missing_inputs=missing_inputs,
         )
 
     # ─────────────────────────────────────────
@@ -249,6 +273,13 @@ class KRMarketExpert(ExpertAgent):
                     "overnight_chg_pct": q["change_pct"],
                     "source": f"KIS:{q.get('symbol')}",
                     "last": q.get("price"),
+                    # 2026-09-14 (T9 요청 4): raw_evidence에 기준시각을 남겨 "조회 성공"과
+                    # "같은 값이 계속 유지"를 구분할 수 있게 한다(가격만 두면 소실됨).
+                    # fetched_at=조회 시각, as_of=실제 시장 시각(현재 소스는 미제공이라
+                    # None) — 조회 시각을 시장 시각처럼 표시하지 않는다(리뷰 advisory).
+                    "fetched_at": q.get("fetched_at"),
+                    "as_of": q.get("as_of"),
+                    "value_unchanged_minutes": q.get("value_unchanged_minutes"),
                 }
         except Exception as e:
             logger.debug(f"[KR시장] KIS 야간선물 실패 → yfinance 폴백: {e}")
