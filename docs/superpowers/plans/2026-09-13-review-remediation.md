@@ -472,11 +472,11 @@ venv/bin/python -m pytest tests/test_backtest_point_in_time.py tests/test_backte
 
 **원칙:** "같은 시점의 유효한 자료로 판단하고, 모르는 것을 중립·0·높은 확신으로 포장하지 않는다." 이 작업은 판단 입력의 신선도·정직성 수정이지 전략 변경이 아니다. 오늘 하루 결과에 맞춰 임계값·규칙을 바꾸지 않고 누적 표본으로 확인한다.
 
-- [ ] **요청 1 — 정오 데이터 갱신·필드 오류 (A, C)**: 12:00 분류 전에 최신 KR 지수(당일 등락·5/20일 재계산)·급락 상태를 확보하고 입력마다 `as_of`·`source` 표시. 결측은 0 이 아닌 `None + missing` 표식. 공급자 키 상수(`US_INDEX_KEYS`)·VIX 수집 추가. crash/severe 중 LLM 이 bull 을 돌려줘도 적용하지 않는다(기존 급락 방어와 같은 방향, 새 차단 아님).
-- [ ] **요청 2 — 판단 시간 범위 분리 (B)**: 레짐 결과에 `mid_trend`(5/20일)·`open_expectation`(장전에만 유효, 09:30 만료)·`intraday_risk`(crash 레벨·당일 등락)를 별도 필드로. 게이트가 읽는 유효 레짐은 intraday_risk 가 crash/severe 이면 bull 로 취급하지 않는다. REGIME_EXIT_PARAMS·apply_regime_params 의미 불변.
-- [ ] **요청 3 — 모닝브리프 주장 범위 (B)**: 미국 마감 자료뿐이면 "미국시장 마감 요약" 으로 제한하고 한국장 개장 방향·갭·대응 전략 문장 금지(프롬프트 규칙 + 응답 후 검사). 최신 국내 자료(as_of 포함)가 있을 때만 개장 관찰 포인트 + 반대 근거. 전문가 종합판단과 상충하면 표시. 브리프 JSON 에 `inputs`·`claims`·`scope`·`generated_at` 고정 저장.
-- [ ] **요청 4 — 자료별 기준시각·세션·유효기간 (C)**: `src/utils/data_freshness.DataPoint(value, as_of, source, session, ttl)` 로 "조회 성공" 과 "현재 판단에 유효" 를 구분. 야간선물 원시 거래일·체결시각 보존(반복 값이 고착인지 정상 유지인지 자료로 구분). 전문가 결측은 `data_status=insufficient/partial` + confidence 상한, 종합점수에서 가중 0·"자료 부족 N명" 표시. 수동 거시 오버라이드는 `valid_until` 필수(구 항목은 작성일+14일), 만료·과거 일정 무시.
-- [ ] **요청 5 — 장전 전망의 장후 평가 (B, A 훅)**: 브리프 원문·입력을 고정 저장하고 저녁에 개장 방향·종가 방향·언급 업종 상대성과·전문가 종합 방향을 각각 평가해 JSONL 원장에 누적(`src/analytics/morning_brief_eval.py`, `DailyReporter.evaluate_morning_brief(date)`, 스케줄러 저녁 훅). 하루 결과로 규칙을 바꾸지 않는다.
+- [x] **요청 1 — 정오 데이터 갱신·필드 오류 (A, C)**: 12:00 분류 전에 최신 KR 지수(당일 등락·5/20일 재계산)·급락 상태를 확보하고 입력마다 `as_of`·`source` 표시. 결측은 0 이 아닌 `None + missing` 표식. 공급자 키 상수(`US_INDEX_KEYS`)·VIX 수집 추가. crash/severe 중 LLM 이 bull 을 돌려줘도 적용하지 않는다(기존 급락 방어와 같은 방향, 새 차단 아님).
+- [x] **요청 2 — 판단 시간 범위 분리 (B)**: 레짐 결과에 `mid_trend`(5/20일)·`open_expectation`(장전에만 유효, 09:30 만료)·`intraday_risk`(crash 레벨·당일 등락)를 별도 필드로. 게이트가 읽는 유효 레짐은 intraday_risk 가 crash/severe 이면 bull 로 취급하지 않는다. REGIME_EXIT_PARAMS·apply_regime_params 의미 불변.
+- [x] **요청 3 — 모닝브리프 주장 범위 (B)**: 미국 마감 자료뿐이면 "미국시장 마감 요약" 으로 제한하고 한국장 개장 방향·갭·대응 전략 문장 금지(프롬프트 규칙 + 응답 후 검사). 최신 국내 자료(as_of 포함)가 있을 때만 개장 관찰 포인트 + 반대 근거. 전문가 종합판단과 상충하면 표시. 브리프 JSON 에 `inputs`·`claims`·`scope`·`generated_at` 고정 저장.
+- [x] **요청 4 — 자료별 기준시각·세션·유효기간 (C)**: `src/utils/data_freshness.DataPoint(value, as_of, source, session, ttl)` 로 "조회 성공" 과 "현재 판단에 유효" 를 구분. 야간선물 원시 거래일·체결시각 보존(반복 값이 고착인지 정상 유지인지 자료로 구분). 전문가 결측은 `data_status=insufficient/partial` + confidence 상한, 종합점수에서 가중 0·"자료 부족 N명" 표시. 수동 거시 오버라이드는 `valid_until` 필수(구 항목은 작성일+14일), 만료·과거 일정 무시.
+- [x] **요청 5 — 장전 전망의 장후 평가 (B, A 훅)**: 브리프 원문·입력을 고정 저장하고 저녁에 개장 방향·종가 방향·언급 업종 상대성과·전문가 종합 방향을 각각 평가해 JSONL 원장에 누적(`src/analytics/morning_brief_eval.py`, `DailyReporter.evaluate_morning_brief(date)`, 스케줄러 저녁 훅). 하루 결과로 규칙을 바꾸지 않는다.
 
 **검증:** 항목마다 실패 테스트 먼저(② 12:00 아침 값 재사용, ③ 0 전달, ④ 결측 0 중립, 만료 오버라이드 적용). LLM·시세는 mock, 운영 캐시 파일(`llm_morning_brief.json`, `manual_macro_overrides.json`) 무접촉. 담당 테스트 + verify + 독립 리뷰. 파일 소유: A `kr_scheduler.py` / B `market_regime.py`·`daily_report.py`·`morning_brief_eval.py` / C `data_freshness.py`·providers·experts.
 
