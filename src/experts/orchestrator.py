@@ -221,6 +221,9 @@ class ExpertOrchestrator:
 
         contributions = self._market_expert_contributions(opinions)
         if len(contributions) < self.MIN_VALID_EXPERTS:
+            logger.info(
+                f"[Orchestrator] 커버리지 부족: 유효 시장체제 전문가 {len(contributions)}명 < {self.MIN_VALID_EXPERTS} → 체제 점수 무보정(0)"
+            )
             return 0
 
         weighted_sum = sum(score * w for _, score, w in contributions)
@@ -252,6 +255,9 @@ class ExpertOrchestrator:
                 continue
             w = self.config.weights.get(op.expert, 1.0) * op.confidence
             counts[op.regime_bias] += w
+        if not any(counts.values()):
+            # 유효 표가 0 이면 dict 첫 키(BULL)로 떨어지던 동표 회귀 방지 — '모른다' 는 NEUTRAL (2026-09-14 재리뷰)
+            return RegimeBias.NEUTRAL
         return max(counts.items(), key=lambda x: x[1])[0]
 
     def data_status_summary(

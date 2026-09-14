@@ -75,7 +75,7 @@ class ExpertOpinion:
   도달할 수 있어야 하고, 그 이상의 확신은 완전한 자료 없이 금지한다는 뜻. 값
   자체는 표본 축적 전 정책 상수이며 하루 결과로 바꾸지 않는다.
 - **`data_status`/`missing_inputs`** — `ExpertAgent._build_opinion()`(`src/experts/base.py`)
-  이 confidence 상한을 단일 지점에서 강제한다(`insufficient`→≤0.2, `partial`→≤0.5).
+  이 confidence 상한을 단일 지점에서 강제한다(`insufficient`→≤0.2, `partial`→≤0.7 — bear_consensus 임계와 동일, 양방향 완화).
   각 전문가는 `data_status`·`missing_inputs`만 넘기면 되고 캡을 스스로 계산할 필요 없다.
   `ExpertOpinion.error_opinion()`도 `data_status="insufficient"`로 정직하게 표시한다.
 - **`kr_market_expert`** — 존재 이유인 수급(`_fetch_investor_flows`)·공매도

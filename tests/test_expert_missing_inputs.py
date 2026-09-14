@@ -357,3 +357,20 @@ def test_legacy_flat_override_within_default_ttl_is_applied(tmp_path, monkeypatc
     result = macro._load_manual_overrides()
 
     assert result["fed_decision"] == "hold"
+
+
+def test_aggregate_bias_all_insufficient_is_neutral_not_bull():
+    """재리뷰 회귀: 유효 표가 전부 insufficient 로 제외되면 동표(0,0,0)가 dict 첫 키 BULL 로
+    떨어졌다 — '모른다' 는 NEUTRAL 이어야 한다."""
+    orch = ExpertOrchestrator(ExpertConfig())
+    opinions = {
+        "kr_market_expert": _opinion("kr_market_expert", score=0, confidence=0.2,
+                                     data_status="insufficient", bias=RegimeBias.NEUTRAL),
+    }
+    assert orch.aggregate_bias(opinions) == RegimeBias.NEUTRAL
+    assert orch.data_status_summary(opinions)["insufficient_coverage"] is True
+
+
+def test_aggregate_bias_empty_snapshot_is_neutral():
+    orch = ExpertOrchestrator(ExpertConfig())
+    assert orch.aggregate_bias({}) == RegimeBias.NEUTRAL
