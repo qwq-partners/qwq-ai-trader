@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from .types import ExpertOpinion, ExpertConfig, RegimeBias
+from ..utils.data_freshness import CONFIDENCE_CAP_INSUFFICIENT, CONFIDENCE_CAP_PARTIAL
 
 
 # P0-6 (2026-05-29 리뷰): yfinance 동시 호출 상한 (429 throttling 방지)
@@ -212,19 +213,30 @@ class ExpertAgent(ABC):
         symbols: Optional[list] = None,
         raw: Optional[Dict[str, Any]] = None,
         valid_hours: Optional[int] = None,
+        data_status: str = "ok",
+        missing_inputs: Optional[list] = None,
     ) -> ExpertOpinion:
         ttl = valid_hours if valid_hours is not None else self.config.cache_ttl_hours
         # P2-2: issued_at 기준 TTL 계산 (build 시점이 아닌 통일된 기준)
         now = datetime.now()
+        conf = max(0.0, min(1.0, float(confidence)))
+        # 2026-09-14 (T9 요청 4): 자료 부족을 confidence로 정직하게 제한 — 단일 지점에서
+        # 강제해 각 전문가가 개별적으로 클램프를 잊어도 새어나가지 않게 한다.
+        if data_status == "insufficient":
+            conf = min(conf, CONFIDENCE_CAP_INSUFFICIENT)
+        elif data_status == "partial":
+            conf = min(conf, CONFIDENCE_CAP_PARTIAL)
         return ExpertOpinion(
             expert=self.name,
             score=max(-100, min(100, int(score))),
             regime_bias=bias,
-            confidence=max(0.0, min(1.0, float(confidence))),
+            confidence=conf,
             key_findings=list(findings)[:5],
             affected_sectors=list(sectors or [])[:10],
             affected_symbols=list(symbols or [])[:20],
             issued_at=now,
             valid_until=now + timedelta(hours=ttl),
             raw_evidence=raw or {},
+            data_status=data_status,
+            missing_inputs=list(missing_inputs or [])[:10],
         )
