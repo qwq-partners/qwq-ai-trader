@@ -1606,6 +1606,19 @@ class RiskManager:
 
         task.add_done_callback(_on_log_done)
 
+    def _resolve_market_regime(self) -> str:
+        """G2 크로스검증이 읽는 시장 체제 — 어댑터의 **유효 레짐**이 단일 출처.
+
+        `engine._market_regime` 은 2분 루프가 남긴 복사본이라 그 사이 장중 급락으로
+        어댑터가 bull → sideways 로 강등돼도 bull 로 남는다 (T10 F15).
+        어댑터가 없거나 값이 없을 때만 복사본으로 폴백한다.
+        """
+        adapter = getattr(self.engine, "_regime_adapter", None)
+        regime = getattr(adapter, "regime", None) if adapter is not None else None
+        if regime is None:
+            regime = getattr(self.engine, "_market_regime", "neutral")
+        return regime
+
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
         logger.info(f"[리스크] 신호 수신: {event.symbol} {event.side.value} 가격={event.price} 점수={event.score:.1f}")
@@ -1815,7 +1828,7 @@ class RiskManager:
         # 크로스 전략 검증 게이트 (매수만)
         if event.side == OrderSide.BUY:
             _meta = event.metadata if event.metadata is not None else {}
-            _regime = getattr(self.engine, '_market_regime', 'neutral')
+            _regime = self._resolve_market_regime()
             _cv_pass, _cv_score, _cv_reason = self._cross_validator.validate(
                 symbol=event.symbol,
                 side="buy",
