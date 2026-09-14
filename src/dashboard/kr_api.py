@@ -251,7 +251,8 @@ class KRAPIHandler:
             d = r.get("decision") or {}
             p = r.get("proposal") or {}
             deb = r.get("debate") or {}
-            a = r.get("assessment") or {}  # T11 (2026-09-15) shadow 판단 — 없으면 구 레코드
+            a = r.get("assessment")  # T11 (2026-09-15) shadow 판단 — 없으면 구 레코드
+            a = a if isinstance(a, dict) else {}  # 손상 레코드(문자열 등) 1건이 전체 목록을 막지 않도록
             summary.append({
                 "symbol": r.get("symbol"),
                 "name": r.get("name"),

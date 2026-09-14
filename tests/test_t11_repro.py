@@ -54,6 +54,8 @@ def test_11_approved_buy_without_fill_is_never_silently_dropped(tmp_path, monkey
     ]), encoding="utf-8")
     monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tv_dir)
     monkeypatch.setattr(cf_mod, "_SOURCES", {})
+    # 콜백 미주입 폴백(trade_journal_kr.json)이 운영 캐시를 건드리지 않도록 존재하지 않는 tmp 경로로 격리
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_PATH", tmp_path / "trade_journal_kr.json")
 
     tracker = object.__new__(cf_mod.CounterfactualTracker)
     tracker._state = {}
@@ -83,6 +85,8 @@ def test_12_retry_with_identical_input_does_not_inflate_ledger_or_cf(tmp_path, m
     ]), encoding="utf-8")
     monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tv_dir)
     monkeypatch.setattr(cf_mod, "_SOURCES", {})
+    # 콜백 미주입 폴백(trade_journal_kr.json)이 운영 캐시를 건드리지 않도록 존재하지 않는 tmp 경로로 격리
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_PATH", tmp_path / "trade_journal_kr.json")
     tracker = object.__new__(cf_mod.CounterfactualTracker)
     tracker._state = {}
     tracker._fill_evidence_check = None

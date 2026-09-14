@@ -35,6 +35,31 @@ _SOURCES = {
 # 팀 심의 판정 (2026-08-08 후속 — HOLD/거부 후보의 기회비용 추적)
 _TEAM_VERDICT_DIR = _CACHE_DIR / "team_verdicts"
 _HORIZONS = (("r1", 1), ("r5", 5), ("r20", 20))
+# 콜백 미주입 시 기본 체결 증거원 (CLAUDE.md 명시 경로) — advisory(2026-09-15):
+# 운영에서 콜백 없이 생성되면 실제 체결분까지 전부 team_buy_unfilled 로 잘못 등록되던 문제
+_TRADE_JOURNAL_PATH = _CACHE_DIR / "trade_journal_kr.json"
+
+
+def _read_trade_journal_buy_symbols(day: str, path: Path) -> Optional[set]:
+    """당일(day, YYYY-MM-DD) entry_time 매수 기록 종목 집합 — 파일 없거나 손상 시 None(폴백 실패)."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    trades = data.get("trades") if isinstance(data, dict) else data
+    if not isinstance(trades, list):
+        return None
+    symbols = set()
+    for t in trades:
+        if not isinstance(t, dict):
+            continue
+        entry_time = str(t.get("entry_time") or "")
+        sym = t.get("symbol")
+        if sym and entry_time[:10] == day:
+            symbols.add(sym)
+    return symbols
 
 
 class CounterfactualTracker:
@@ -51,14 +76,28 @@ class CounterfactualTracker:
         self._fill_evidence_check = fill_evidence_check
 
     def _has_fill_evidence(self, symbol: str, day: str) -> bool:
-        """승인 BUY 의 실제 체결 증거 — 콜백 없으면 보수적으로 '없음'(미체결)"""
-        if self._fill_evidence_check is None:
-            return False
+        """승인 BUY 의 실제 체결 증거.
+
+        콜백이 주입되면 그것을 우선한다(콜백 실패 시엔 기존과 동일하게 보수적으로 '없음' —
+        폴백으로 더 파고들지 않는다, 기존 계약 유지). 콜백이 아예 없을 때만
+        trade_journal_kr.json 당일 매수 기록을 기본 증거원으로 읽는다(advisory 2026-09-15 —
+        콜백 미배선 상태로는 실제 체결분까지 전부 미체결로 등록되던 문제). 그마저 실패하면
+        보수적으로 '없음'(미체결).
+        """
+        if self._fill_evidence_check is not None:
+            try:
+                return bool(self._fill_evidence_check(symbol, day))
+            except Exception as e:
+                logger.debug(f"[CF추적] 체결 증거 콜백 실패 ({symbol}/{day}, 미체결로 간주): {e}")
+                return False
         try:
-            return bool(self._fill_evidence_check(symbol, day))
+            symbols = _read_trade_journal_buy_symbols(day, _TRADE_JOURNAL_PATH)
         except Exception as e:
-            logger.debug(f"[CF추적] 체결 증거 조회 실패 ({symbol}/{day}, 미체결로 간주): {e}")
+            logger.debug(f"[CF추적] 거래저널 폴백 조회 실패 ({symbol}/{day}, 미체결로 간주): {e}")
             return False
+        if symbols is None:
+            return False
+        return symbol in symbols
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
         try:
@@ -175,8 +214,12 @@ class CounterfactualTracker:
                 if v.get("x5") is not None:
                     groups.setdefault(str(v.get("source")), []).append(float(v["x5"]))
             if groups:
+                # advisory(2026-09-15): team_buy_unfilled 는 음수=팀 판단이 틀림(다른 소스는 음수=적중) —
+                # _summary_base 와 프레이밍이 반대이므로 이 줄에서도 명시한다.
                 parts = [
-                    f"{src} n={len(xs)} x5 {sum(xs) / len(xs):+.2f}% (음수 {sum(1 for x in xs if x < 0) / len(xs) * 100:.0f}%)"
+                    f"{src} n={len(xs)} x5 {sum(xs) / len(xs):+.2f}% "
+                    f"(음수 {sum(1 for x in xs if x < 0) / len(xs) * 100:.0f}%"
+                    f"{'·팀 판단이 틀림' if src.split('|', 1)[0] == 'team_buy_unfilled' else ''})"
                     for src, xs in sorted(groups.items())
                 ]
                 base += "\n· KODEX200 대비 초과(r5): " + " | ".join(parts)
@@ -316,10 +359,11 @@ class CounterfactualTracker:
             if avg_r20 is not None:
                 line += f" | 평균 r20 {avg_r20:+.1f}%"
             lines.append(line)
-        if self._fill_evidence_check is None and any(
+        if (self._fill_evidence_check is None and not _TRADE_JOURNAL_PATH.exists() and any(
             source.split("|", 1)[0] == "team_buy_unfilled" for source in groups
-        ):
-            lines.append("※ 체결 대조 미배선 — team_buy_unfilled 에 실제 체결분도 섞여 있을 수 있음")
+        )):
+            lines.append("※ 체결 대조 미배선(콜백 없음·거래저널 파일 없음) — "
+                          "team_buy_unfilled 에 실제 체결분도 섞여 있을 수 있음")
         return "\n".join(lines)
 
 

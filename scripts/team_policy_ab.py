@@ -108,6 +108,14 @@ PRE_REGISTERED = {
         "모델의 사후 지식(hindsight)이 섞였을 수 있다 — 스냅샷이 실시간 원장(team_ledger)에서 "
         "온 것이 아니라 사후 재평가로 만들어졌다면 이 한계가 적용된다."
     ),
+    "known_limitations": (
+        "(1) MAX_HOLD_DAYS 안에 청산 안 된 포지션은 완결 표본에서 제외한다(incomplete) — "
+        "손실은 대부분 손절로 빨리 종결되고 꾸준히 오르는 승자는 미완결로 빠지기 쉬워 중앙값 R이 "
+        "하방 편향될 수 있다. results 의 incomplete 건수를 함께 확인할 것. "
+        "(2) simulate_exit 은 같은 봉의 고가로 트레일링을 무장하고 같은 봉의 저가로 발동시킨다 — "
+        "일봉만으로는 장중 고가·저가 선후를 알 수 없어 절대 R 수치는 근사치다(정책·팔 간 상대 "
+        "비교는 동일 로직이라 편향이 작지만, 절대 수치를 승격 근거로 쓰지 말 것)."
+    ),
 }
 
 
@@ -256,11 +264,17 @@ def _risk_pct(entry_price: float, stop_price: Optional[float]) -> float:
 
 
 def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float,
-                   stop_price: Optional[float]) -> Optional[Dict[str, Any]]:
+                   stop_price: Optional[float], skip_entry_bar: bool = False) -> Optional[Dict[str, Any]]:
     """분할 익절(1/2/3차) + 트레일링 + 손절 — CLAUDE.md 청산정책 그대로 미러.
 
     같은 봉에서 손절가와 익절 라인이 함께 걸리면 낙관적 체결을 만들지 않도록 손절을 우선한다.
     MAX_HOLD_DAYS 안에 전량 청산되지 않으면 미완결(None) — 완결 포지션만 판정에 쓴다.
+
+    skip_entry_bar: 체결이 그 봉의 **종가**(예: EntryPlan)일 때 True로 둔다 — 체결 이전에
+    지나간 그 봉의 저가·고가로 손절·익절·트레일링을 판정하면 아직 일어나지 않은 가격으로
+    청산을 만들게 된다(리뷰 blocking, 2026-09-15). 시가 체결(existing_open)은 봉 시작이
+    곧 체결 시점이라 그 봉부터 스캔해도 선행정보가 아니다 — 기본 False 로 둔다.
+    holding_days 는 두 방식이 같은 의미가 되도록 항상 entry_idx 기준으로 유지한다.
     """
     if entry_price <= 0:
         return None
@@ -271,7 +285,8 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
     trail_armed = False
     stop_px = stop_price if (stop_price is not None and 0 < stop_price < entry_price) else None
     end = min(entry_idx + MAX_HOLD_DAYS, len(bars))
-    for i in range(entry_idx, end):
+    start = entry_idx + 1 if skip_entry_bar else entry_idx
+    for i in range(start, end):
         bar = bars[i]
         try:
             lo, hi = float(bar["low"]), float(bar["high"])
@@ -285,12 +300,9 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
             realized += remaining * _net_pct(entry_price, stop_px)
             return {"exit_date": bar.get("date"), "holding_days": i - entry_idx,
                     "net_pct": realized, "exit_reason": "stop_loss"}
-        if trail_armed:
-            trail_stop = high_wm * (1 - TRAIL_DD_PCT / 100)
-            if lo <= trail_stop:
-                realized += remaining * _net_pct(entry_price, trail_stop)
-                return {"exit_date": bar.get("date"), "holding_days": i - entry_idx,
-                        "net_pct": realized, "exit_reason": "trailing"}
+        # 익절 사다리를 트레일링 발동 검사보다 먼저 평가한다(advisory 2026-09-15) — 순서가 반대면
+        # 같은 봉에서 무장·발동이 겹칠 때 +10% 1차 익절을 건너뛰고 트레일링으로 전량 종결돼
+        # live 청산 사다리(분할 익절 우선) 미러와 어긋난다.
         for stage_no, pct, frac in ((1, TP1_PCT, TP1_FRAC), (2, TP2_PCT, TP2_FRAC), (3, TP3_PCT, TP3_FRAC)):
             if stage < stage_no and chg_high >= pct and remaining > 1e-9:
                 # CLAUDE.md: 1차는 "10% 매도"(remaining=1.0 시점이라 원금 대비=잔여 대비 동일),
@@ -303,6 +315,12 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
         if remaining <= 1e-9:
             return {"exit_date": bar.get("date"), "holding_days": i - entry_idx,
                     "net_pct": realized, "exit_reason": f"take_profit_{stage}"}
+        if trail_armed:
+            trail_stop = high_wm * (1 - TRAIL_DD_PCT / 100)
+            if lo <= trail_stop:
+                realized += remaining * _net_pct(entry_price, trail_stop)
+                return {"exit_date": bar.get("date"), "holding_days": i - entry_idx,
+                        "net_pct": realized, "exit_reason": "trailing"}
     return None  # 관찰 창 안에 청산 안 됨 — 미완결
 
 
@@ -359,7 +377,8 @@ def _entry_plan_fill(c: Candidate, start_idx: int) -> Tuple[Optional[int], Optio
             now = datetime.now()
         check = check_entry_plan(plan, quote, now)
         if check.status == "allow":
-            fill = check.expected_fill_price or price
+            efp = check.expected_fill_price
+            fill = efp if (efp is not None and efp > 0) else price
             return i, float(fill), None
         if check.status == "reject":
             return None, None, "|".join(check.reasons) or "reject"
@@ -484,7 +503,8 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
                                 opportunity_cost.append(bres["net_pct"] / brisk)
                     continue
                 wait_days.append(idx - start_idx)
-            res = simulate_exit(c.prices, idx, entry_px, c.plan.get("stop_price"))
+            res = simulate_exit(c.prices, idx, entry_px, c.plan.get("stop_price"),
+                                 skip_entry_bar=(mode == "entry_plan"))
             if res is None:
                 incomplete += 1
                 continue
@@ -500,7 +520,11 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
         deduped, excluded = _dedupe_correlated(positions)
         summary = _summarize_positions(mode, selected, deduped, no_data, incomplete, excluded)
         summary["unfilled"] = unfilled
-        summary["fill_rate"] = round(len(deduped) / len(selected), 4) if selected else None
+        # 체결률 = (선정 - 미체결 - 데이터없음) / 선정 — dedup·미완결 제외는 별도 필드(completed_positions/
+        # excluded_correlated)로만 집계한다(advisory, 2026-09-15: dedup 분자를 쓰면 체결률이 실제보다 낮게 보임)
+        summary["fill_rate"] = (
+            round((len(selected) - unfilled - no_data) / len(selected), 4) if selected else None
+        )
         summary["avg_wait_days"] = round(sum(wait_days) / len(wait_days), 2) if wait_days else None
         summary["unfilled_opportunity_cost_median_r"] = (
             round(statistics.median(opportunity_cost), 4) if opportunity_cost else None
@@ -567,6 +591,8 @@ def build_report_md(manifest: Dict[str, Any], results: Dict[str, Any]) -> str:
                       "실배분 승격은 별도 사용자 승인이 필요하다.")
     lines.append("")
     lines.append(PRE_REGISTERED["llm_reeval_limitation"])
+    lines.append("")
+    lines.append("**알려진 한계**: " + PRE_REGISTERED["known_limitations"])
     lines.append("")
     for key, stat in results.items():
         lines.append(f"## {key}")

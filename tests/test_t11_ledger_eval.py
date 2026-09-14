@@ -50,6 +50,8 @@ def test_approved_buy_without_fill_evidence_is_tracked_not_dropped(tmp_path, mon
     tv_dir = tmp_path / "team_verdicts"
     monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tv_dir)
     monkeypatch.setattr(cf_mod, "_SOURCES", {})  # rule11/12 소스는 이 테스트와 무관
+    # 콜백 미주입 폴백(trade_journal_kr.json)이 운영 캐시를 건드리지 않도록 존재하지 않는 tmp 경로로 격리
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_PATH", tmp_path / "trade_journal_kr.json")
     _write_verdicts(tv_dir, "20260915", [
         {"symbol": "005930", "decision": {"approved": True, "stance": "buy"}},
         {"symbol": "000660", "decision": {"approved": True, "stance": "hold"}},  # 기존 team_hold 경로
@@ -158,6 +160,28 @@ def test_get_team_verdicts_exposes_assessment_and_conviction_label(tmp_path, mon
     assert v["assessment"]["risk_acceptable"] is True
     assert "확률 미보정" in v["conviction_label"]
     assert v["execution_state"] == "candidate"   # 원장 기록 없음 → candidate
+
+
+def test_get_team_verdicts_survives_non_dict_assessment_field(tmp_path, monkeypatch):
+    """advisory(2026-09-15) 재발 방지 — assessment 가 dict 가 아닌 손상 레코드 1건이 있어도
+    /api/team/verdicts 전체가 500 으로 죽으면 안 된다(그 행만 assessment=None 으로 낮춘다)."""
+    day = "20260915"
+    bad_row = _base_verdict_row(symbol="000660")
+    bad_row["assessment"] = "판단 불가"  # dict 아닌 손상값
+    monkeypatch.setattr(team_mod, "RESULT_DIR", tmp_path / "team_verdicts")
+    _write_verdicts(tmp_path / "team_verdicts", day, [_base_verdict_row(), bad_row])
+    monkeypatch.setattr(ledger_mod, "LEDGER_DIR", tmp_path / "team_ledger")
+
+    dc = SimpleNamespace(bot=None)
+    handler = KRAPIHandler(dc)
+    req = make_mocked_request("GET", f"/api/team/verdicts?date={day}")
+    resp = asyncio.run(handler.get_team_verdicts(req))
+
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["count"] == 2
+    bad = next(v for v in body["verdicts"] if v["symbol"] == "000660")
+    assert bad["assessment"] is None
 
 
 def test_execution_state_downgrades_without_fill_evidence(tmp_path, monkeypatch):
@@ -298,6 +322,62 @@ def test_entry_plan_and_existing_open_use_the_same_first_bar_when_checker_allows
     assert plan_idx == open_idx, (
         "EntryPlan 이 existing_open 과 다른(더 이른) 봉에서 체결되면 선행정보 우위가 생긴다"
     )
+
+
+def test_simulate_exit_skip_entry_bar_does_not_leak_pre_fill_high_into_take_profit_or_trailing():
+    """리뷰 blocking(2026-09-15) 재발 방지 고정, 방향 A — 종가 체결(EntryPlan)인데 그 봉의
+    저가/고가로 스캔을 시작하면 체결 이전에 지나간 장중 고가로 익절·트레일링이 발동해
+    아직 일어나지 않은 가격으로 청산을 만든다. skip_entry_bar=True 면 발동하지 않아야 한다."""
+    bars = [
+        {"date": "2026-08-04", "open": 10000.0, "high": 11200.0, "low": 9990.0, "close": 10000.0},
+        {"date": "2026-08-05", "open": 9700.0, "high": 9750.0, "low": 9600.0, "close": 9650.0},
+    ]
+    # skip_entry_bar=True(EntryPlan 경로) — 체결 봉(idx0)의 장중 고가 11200 은 스캔 대상이 아니다.
+    res_fixed = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=True)
+    assert res_fixed is None, "체결 이전 고가로 익절/트레일링이 발동해선 안 된다(관찰창 안에 실제 트리거 없음)"
+    # 대조군: skip_entry_bar=False(existing_open 처럼 체결 봉부터 스캔)면 같은 봉 고가로
+    # 트레일링이 무장·발동해 holding_days=0 에 양(+)의 수익이 나온다 — 버그가 실재했음을 보여준다.
+    res_leaky = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=False)
+    assert res_leaky is not None
+    assert res_leaky["holding_days"] == 0
+    assert res_leaky["net_pct"] > 0
+
+
+def test_simulate_exit_skip_entry_bar_does_not_leak_pre_fill_low_into_stop_loss():
+    """리뷰 blocking(2026-09-15) 재발 방지 고정, 방향 B — 체결 봉의 장중 저가가 체결(종가) 이전에
+    손절가를 건드렸어도, 종가 체결이라면 실제로는 손절이 발동하지 않았을 수 있다.
+    skip_entry_bar=True 면 그 봉의 저가로 손절을 만들면 안 된다."""
+    bars = [
+        {"date": "2026-08-04", "open": 10000.0, "high": 10050.0, "low": 9400.0, "close": 10000.0},
+        {"date": "2026-08-05", "open": 10000.0, "high": 10100.0, "low": 9950.0, "close": 10050.0},
+    ]
+    res_fixed = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=True)
+    assert res_fixed is None, "체결 이전 저가로 손절이 발동해선 안 된다(다음 봉은 저가 9950 로 손절가 미달)"
+    # 대조군: skip_entry_bar=False 면 체결 봉 자체의 저가 9400 으로 holding_days=0 손절이 잡힌다.
+    res_leaky = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=False)
+    assert res_leaky is not None
+    assert res_leaky["holding_days"] == 0
+    assert res_leaky["exit_reason"] == "stop_loss"
+
+
+def test_run_timing_experiment_entry_plan_mode_passes_skip_entry_bar_through(tmp_path, monkeypatch):
+    """리뷰 blocking(2026-09-15) 배선 확인 — run_timing_experiment 의 entry_plan 팔이 실제로
+    skip_entry_bar=True 를 simulate_exit 에 전달하는지(호출부 회귀 방지). checker 를 항상
+    allow(체결가=봉 종가)로 대체해 담당 C 구현 완료 상황을 모사한다."""
+    monkeypatch.setattr(tpab, "check_entry_plan",
+                         lambda plan, quote, now, **kw: SimpleNamespace(
+                             status="allow", expected_fill_price=None, reasons=[]))
+    snap = tmp_path / "snap.jsonl"
+    cand = _mk_candidate("000001")
+    # 후보일 다음 거래일(체결 봉)에 장중 고가 스파이크를 심어 leak 이 있으면 trailing 으로 잡히게 한다
+    cand["prices"][1]["high"] = cand["prices"][1]["open"] * 1.15
+    cand["prices"][1]["low"] = cand["prices"][1]["open"] * 0.999
+    _write_snapshot(snap, [cand])
+    rows = tpab.load_snapshot(snap)
+    results = tpab.run_timing_experiment(rows, fixed_policy="A", max_new=5)
+    entry_plan_positions = results["entry_plan"]
+    # 완결/미완결 어느 쪽이든, 체결 봉 자체의 고가로 holding_days=0 트레일링이 나오면 안 된다
+    assert entry_plan_positions["completed_positions"] == 0 or entry_plan_positions["avg_holding_days"] != 0
 
 
 def test_dedupe_correlated_excludes_same_week_symbol_and_overlapping_holding_period():
