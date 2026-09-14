@@ -287,8 +287,10 @@ def test_conflict_guard_uses_intraday_crash_state(monkeypatch, tmp_path):
     monkeypatch.setattr(kr_scheduler, "_now_kst", lambda: datetime(2026, 9, 14, 10, 0, 0))
     cache = tmp_path / ".cache" / "ai_trader"
     cache.mkdir(parents=True, exist_ok=True)
+    # 파일 기준일도 고정 시계와 같은 날 — 소비자의 당일 게이트가 _now_kst 로 통일됐다
+    # (2026-09-15 T10 F14: date.today() 와 _now_kst() 이중 시계 제거)
     (cache / "llm_regime_today.json").write_text(
-        json.dumps({"regime": "trending_bull", "date": date.today().isoformat()}),
+        json.dumps({"regime": "trending_bull", "date": "2026-09-14"}),
         encoding="utf-8",
     )
 
@@ -434,7 +436,7 @@ def test_stale_crash_state_does_not_cap_conflict_guard(monkeypatch, tmp_path):
     cache = tmp_path / ".cache" / "ai_trader"
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "llm_regime_today.json").write_text(
-        json.dumps({"regime": "trending_bull", "date": date.today().isoformat()}),
+        json.dumps({"regime": "trending_bull", "date": "2026-09-14"}),
         encoding="utf-8",
     )
 
@@ -467,8 +469,15 @@ def test_update_intraday_state_records_updated_at():
 
 # ── advisory (d): 당일 봉이 이미 있으면 장중 지수를 덧붙이지 않는다 ─────────────
 
-def test_intraday_recompute_skips_when_last_bar_is_today(monkeypatch, tmp_path):
-    """catch-up 스캔이 장중에 벤치마크를 로드하면 당일 봉이 이미 있다 → 이중 계상 금지."""
+def test_intraday_recompute_replaces_today_bar(monkeypatch, tmp_path):
+    """catch-up 스캔이 장중에 로드한 당일 봉은 **교체**한다 (이중 계상도, 오전 값 유지도 아님).
+
+    2026-09-15 정정: 이 테스트는 원래 `skips_when_last_bar_is_today` 라는 이름으로
+    "오전 봉을 그대로 두고 c5/c20 재계산을 생략" 하는 동작을 정답으로 고정했다.
+    그 경로는 `kr_as_of` 만 now 로 갱신해 오전 값을 최신 값처럼 보이게 했고
+    (T10 F13 재현 입력: 오전 봉 104 → 정오 97 인데 c5 가 +4% 로 실림),
+    12:00 재분류가 급락을 놓친 원인 중 하나였다. 올바른 동작은 교체다.
+    """
     from src.schedulers.kr_scheduler import _pct_change
 
     closes = [2400.0 + i for i in range(30)]
@@ -488,8 +497,10 @@ def test_intraday_recompute_skips_when_last_bar_is_today(monkeypatch, tmp_path):
     asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
 
     meta = _regime_file(tmp_path).get("input_meta", {})
-    assert meta.get("kospi_c5") == _pct_change(closes, 5), meta
+    assert meta.get("kospi_c5") == _pct_change(closes[:-1] + [2100.0], 5), meta
     assert meta.get("kospi_today_pct") == -3.34, meta
+    # 당일 봉이 중복 누적되지 않는다 (스크리너 메모리 무변형)
+    assert screener._kospi_closes == closes
 
 
 def test_intraday_recompute_appends_when_last_bar_is_previous_day(monkeypatch, tmp_path):
@@ -719,12 +730,29 @@ def test_briefing_shows_data_status_note(monkeypatch, tmp_path):
     assert "무보정" in msg, f"커버리지 부족 표시 누락:\n{msg}"
 
 
-def test_intraday_recompute_skipped_when_last_bar_date_unknown():
-    """KIS 폴백 로드처럼 마지막 봉 날짜를 모르면(None) 당일 지수를 덧붙이지 않는 분기 조건을 고정한다
-    (이중 계상 위험, 2026-09-14 재리뷰 advisory)."""
-    import src.schedulers.kr_scheduler as _ks
-    closes = [10000.0, 10100.0, 10200.0, 10300.0, 10400.0, 10500.0, 10600.0]
-    _lb = None
-    _has_today_bar = _lb == date(2026, 9, 14)
-    assert (not _has_today_bar) and _lb is None            # 재계산 생략 분기
-    assert _ks._pct_change(closes, 5) is not None          # 기존 종가열 값은 그대로 계산 가능
+def test_intraday_recompute_skipped_when_last_bar_date_unknown(monkeypatch, tmp_path):
+    """KIS 폴백 로드처럼 마지막 봉 날짜를 모르면(None) 당일 지수를 덧붙이지 않는다.
+
+    2026-09-15 정정: 이전 판은 분기 조건식을 테스트 안에서 재현했을 뿐 실제 함수를
+    부르지 않아, 구현이 바뀌어도 통과했다. 이제 분류기를 실행해 결과를 검증한다.
+    """
+    from src.schedulers.kr_scheduler import _pct_change
+
+    closes = [2400.0 + i for i in range(30)]
+    screener = _Screener(c5=0.0, c20=0.0, level=closes[-1], closes=closes)
+    screener._kospi_last_bar_date = None   # _Screener 기본값(전 거래일) 대신 "날짜 미상"
+    bot = _make_bot(
+        screener=screener,
+        kis_responses={"0001": {"price": 2100.0, "change_pct": -3.34},
+                       "1001": {"change_pct": -2.78}},
+    )
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 12, 0, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
+
+    meta = _regime_file(tmp_path).get("input_meta", {})
+    assert meta.get("kospi_c5") == _pct_change(closes, 5), meta   # 로드 시각 기준 값 그대로
+    assert any("미상" in m for m in (meta.get("missing_fields") or [])), meta

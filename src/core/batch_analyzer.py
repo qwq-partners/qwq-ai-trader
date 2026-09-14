@@ -1512,15 +1512,15 @@ class BatchAnalyzer:
         Returns:
             새 상태 문자열
         """
-        # 상태 결정
-        if kospi_pct <= -3.5:
-            new_state = "severe"
-        elif kospi_pct <= -2.5:
-            new_state = "crash"
-        elif kospi_pct <= -1.5:
-            new_state = "caution"
-        else:
-            new_state = "normal"
+        # 상태 결정 — 임계값 단일 출처(market_regime.classify_intraday_level).
+        # 레짐 분류기도 같은 함수를 쓴다 (T10 F14: 분류 규칙이 여기에만 있어
+        # 12:00 재분류가 이번 조회 -3% 를 급락으로 보지 못했다).
+        from .market_regime import classify_intraday_level
+
+        new_state = classify_intraday_level(kospi_pct)
+        if new_state is None:
+            logger.warning("[장중급락] KOSPI 등락률 결측 → 상태 갱신 생략 (0 으로 채우지 않음)")
+            return self._intraday_state
 
         prev_state = self._intraday_state
         self._intraday_state = new_state
@@ -1580,24 +1580,13 @@ class BatchAnalyzer:
         # 복합 트레일링 캐시 갱신 (일 1회)
         await self._refresh_composite_cache()
 
-        # 레짐 기반 ExitManager 파라미터 동기화
-        # → 구체적인 조정은 kr_scheduler._apply_regime_to_exit_manager() + REGIME_EXIT_PARAMS 에서 처리.
-        # 여기서는 LLM 레짐 캐시를 읽어 ExitManager에 위임 (30분 주기 monitor와 동기화).
-        if self._exit_manager:
-            try:
-                import json
-                from pathlib import Path
-                from datetime import date as _date
-                from ..strategies.exit_manager import REGIME_EXIT_PARAMS
-                _regime_path = Path.home() / ".cache" / "ai_trader" / "llm_regime_today.json"
-                if _regime_path.exists():
-                    _rd = json.loads(_regime_path.read_text(encoding="utf-8"))
-                    if _rd.get("date") == _date.today().isoformat():
-                        _llm_regime = _rd.get("regime", "neutral")
-                        if _llm_regime in REGIME_EXIT_PARAMS:
-                            self._exit_manager.apply_regime_params(_llm_regime)
-            except Exception as _e:
-                logger.debug(f"[포지션모니터] 레짐 동기화 오류 (무시): {_e}")
+        # 레짐 기반 ExitManager 파라미터 동기화은 여기서 하지 않는다 (T10 F15).
+        # 2026-09-15 이전에는 여기서 llm_regime_today.json 의 **원본** 레짐을 그대로
+        # apply_regime_params 에 넘겼다 → 30분 sync 가 장중 급락으로 neutral 로 낮춘 직후
+        # monitor 가 아침 trending_bull 을 되살려 stale_high_days 가 5→7 로 복귀했다.
+        # 적용 경로는 `kr_scheduler._apply_regime_to_exit_manager()` 하나뿐이며
+        # (같은 run_batch_scheduler 루프에서 30분 주기로 실행) 거기서 KOSPI 기술 레짐·
+        # 장중 급락 캡을 먼저 병합한다. 캐시 원본은 감사·설명용으로만 읽는다.
 
         _exited_symbols: set = set()  # 이번 루프에서 청산 신호 발행된 종목 (중복 방지)
         for symbol, pos in list(self._engine.portfolio.positions.items()):
