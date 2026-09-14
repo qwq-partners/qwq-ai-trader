@@ -63,7 +63,7 @@ D(독립 리뷰어)가 de111b7 에서 합성 입력만으로 8건 전부 재현�
 
 ## 6. 운영 변경
 
-**없음 — 배포 전.** 운영 서버(`/home/ubuntu/projects/qwq-ai-trader`, systemd `qwq-ai-trader`)는 09-13 배포본 **de111b7** 을 실행 중이다. 즉 F1(분모 불일치)·F3(빈 응답 방어 우회)·F5(하트비트) 등의 수정은 **운영에 반영되지 않았다**. 현금 0.4% 라 신규 매수 발동 가능성은 낮지만 계획서대로 이를 안전장치로 보지 않는다.
+**(09-14 시점) 없음 — 배포 전.** 운영 서버(`/home/ubuntu/projects/qwq-ai-trader`, systemd `qwq-ai-trader`)는 09-13 배포본 **de111b7** 을 실행 중이었다. → **2026-09-15 03:08 KST main `3f6b1bf`(F1~F22 전부 포함) 배포·재기동 완료 — §11.8 참조.** 즉 F1(분모 불일치)·F3(빈 응답 방어 우회)·F5(하트비트) 등의 수정은 **운영에 반영되지 않았다**. 현금 0.4% 라 신규 매수 발동 가능성은 낮지만 계획서대로 이를 안전장치로 보지 않는다.
 
 배포 실행 범위가 명시되면: 기존 절차(`/deploy-local`, 장외 시간, pending 가드·verify·헬스체크·자동 롤백)로 main `8f5580a` 이상을 반영하고, 계획서 §2.2 권고(검증 전 risk 경로 신규 진입 보류 — 매수 전용 킬스위치 `KILL_SWITCH_KR` 검토, 청산 유지)의 채택 여부를 배포안에 명시한다. 배포 후 기동 확인(KIS 연결·엔진 시작·`loop_status`)과 다음 거래일 09:00~09:30 장중 관측(KIS 코드별 오류·동기화 보류·pending age·하트비트 실패)을 별도 상태로 보고한다.
 
@@ -157,4 +157,7 @@ D(독립 리뷰어)가 de111b7 에서 합성 입력만으로 8건 전부 재현�
 ### 11.8 운영 변경 기록
 - PR #47 (`feature/t10-crossreview` → main) 머지: main `8c8a6bf` (CI verify success).
 - **배포 1차 시도 03:03 KST — 자동 롤백**: `local_deploy.sh 8c8a6bf` 가 운영 체크아웃 verify 단계에서 실패(pytest rootdir 스캔이 운영 `.env`/logs 를 stat → 격리 가드가 차단 → 수집 오류). 신코드 미기동, `de111b7` 로 롤백·재시작, 서비스 active·pending 0 확인. 원인은 conftest 가드의 과잉 차단(메타데이터까지)이며 코드 결함이 아니다 → 핫픽스 PR 로 정정 후 2차 배포.
-- 2차 배포 결과: (아래 갱신)
+- **2차 배포 03:08:21 KST — 성공**: 핫픽스 PR #48 머지 후 main `3f6b1bf` 를 `local_deploy.sh` 로 배포. 운영 체크아웃 verify(552 passed / 격리 위반 0 — 운영 `.env` 가 있는 환경에서도 0건) → systemd 재시작 → 헬스 통과. 기동 로그: `KIS API 연결 완료` 03:08:57, `통합 트레이딩 엔진 시작` 03:09:24. ERROR 1건은 구 프로세스 종료 시 `Unclosed client session`(기존 종료 잡음, 신코드 무관), WARNING 은 MCP 미설치(기존)·종료 알림뿐. pending 0, 열린 포지션 펩트론 087010 120주(exit_exempt) 그대로. 운영 체크아웃은 `main@3f6b1bf` 로 복귀(트리 동일, 재시작 불필요).
+- ops-check 03:12:24(재시작 +150s): 서비스 active·`3f6b1bf`, KIS 오류(HTTP 500/EGW00201/EGW00215/토큰) 0, 오류·트레이스백 0, 루프 하트비트 정체 없음·실패 누적 없음, pending 없음, 포트폴리오 현금 83,536원(0.5%)·펩트론 120주 미실현 -6,432,300원(기존 상태 그대로).
+- 첫 장중 검증 포인트(09-15 09:00~): monitoring-checkpoints "2026-09-15~ T10 연결 경로 일관성" 절 — 12:00 `llm_regime_today.json` 의 `input_meta`(kospi_bars_as_of·intraday_cap_level·missing_fields), 30분 sync 로그 "어댑터=", 07:30 아카이브 `morning_brief/2026-09-15.json` dispatch[], 20:30 원장 `dispatched=True`.
+- 이번 작업으로 입증된 것은 "연결 경로의 정직성·일관성(결측을 0/ok 로 포장하지 않음)" 이며, 전략 엣지·예측 정확도 개선은 **입증되지 않았다**(누적 원장 20건 전 규칙 변경 금지).
