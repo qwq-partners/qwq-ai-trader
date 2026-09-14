@@ -186,7 +186,8 @@ function toggleNoise() {
 function stanceBadge(stance, approved) {
     const s = (stance || '').toLowerCase();
     if (!approved) return '<span class="badge badge-red">거부</span>';
-    if (s === 'buy') return '<span class="badge badge-green">매수</span>';
+    // T11 (2026-09-15): PM 승인은 "매수 제안"일 뿐 실주문이 아니다 — 실행 상태는 별도 표시
+    if (s === 'buy') return '<span class="badge badge-green">매수(제안)</span>';
     if (s === 'sell') return '<span class="badge badge-red">매도</span>';
     return '<span class="badge badge-yellow">보유</span>';
 }
@@ -248,7 +249,7 @@ async function fetchTeamVerdicts() {
                 </div>
                 <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;">${chips}
                     <span style="font-size:.62rem;color:var(--text-muted);margin-left:auto;">
-                        ${v.debate_rounds || 0}R · 확신 ${v.conviction ?? '—'} · ${v.elapsed_sec ?? '—'}s
+                        ${v.debate_rounds || 0}R · <span title="${escapeHtml(v.conviction_label || '합의 기반 지표 · 확률 미보정')}">확신 ${v.conviction ?? '—'}</span> · ${v.elapsed_sec ?? '—'}s
                     </span>
                 </div>
                 <div style="margin-top:4px;font-size:.66rem;color:var(--text-muted);line-height:1.4;">

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
@@ -38,8 +38,25 @@ _HORIZONS = (("r1", 1), ("r5", 5), ("r20", 20))
 class CounterfactualTracker:
     """shadow 차단 후보의 가상 성과 추적"""
 
-    def __init__(self):
+    def __init__(self, fill_evidence_check: Optional[Callable[[str, str], bool]] = None):
+        """
+        Args:
+            fill_evidence_check: 승인 BUY 종목이 당일 실제로 체결됐는지 확인하는 콜백
+                (symbol, day) -> bool. T11 E1 (2026-09-15) — 주입 전용, 기본 None 이면
+                항상 "증거 없음"(미체결)으로 본다(보수적). 운영 배선은 이 트래커 밖에서 한다.
+        """
         self._state: Dict[str, Dict[str, Any]] = self._load()
+        self._fill_evidence_check = fill_evidence_check
+
+    def _has_fill_evidence(self, symbol: str, day: str) -> bool:
+        """승인 BUY 의 실제 체결 증거 — 콜백 없으면 보수적으로 '없음'(미체결)"""
+        if self._fill_evidence_check is None:
+            return False
+        try:
+            return bool(self._fill_evidence_check(symbol, day))
+        except Exception as e:
+            logger.debug(f"[CF추적] 체결 증거 조회 실패 ({symbol}/{day}, 미체결로 간주): {e}")
+            return False
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
         try:
@@ -102,10 +119,30 @@ class CounterfactualTracker:
                 for v in (verdicts if isinstance(verdicts, list) else []):
                     try:
                         sym = v.get("symbol", "")
+                        if not sym:
+                            continue
                         dec = v.get("decision") or {}
                         stance = str(dec.get("stance", "")).lower()
-                        # 매수 승인은 실거래로 추적됨 — 막힌 후보만 counterfactual
-                        if not sym or (dec.get("approved") and stance == "buy"):
+                        approved_buy = bool(dec.get("approved")) and stance == "buy"
+                        if approved_buy:
+                            # T11 E1 (2026-09-15): 승인 BUY 라도 실제 체결 증거가 없으면
+                            # 더는 조용히 제외하지 않고 "team_buy_unfilled" 로 별도 추적한다.
+                            # 체결 증거가 있으면(=실거래로 이미 추적됨) 기존과 동일하게 건너뛴다.
+                            if self._has_fill_evidence(sym, day):
+                                continue
+                            key = f"team_buy_unfilled|{sym}|{day}"
+                            if key in self._state:
+                                continue
+                            self._state[key] = {
+                                "symbol": sym,
+                                "source": "team_buy_unfilled",
+                                "wiki_context_used": v.get("wiki_context_used"),
+                                "date": day,
+                                "sector": None,
+                                "entry_px": None,
+                                "r1": None, "r5": None, "r20": None,
+                            }
+                            added += 1
                             continue
                         key = f"team_hold|{sym}|{day}"
                         if key in self._state:

@@ -269,6 +269,10 @@ async def promotion_readiness_report() -> str:
         logger.warning(f"[승격점검] 실패: {e}")
         return ""
 
+    # T11 (2026-09-15): 승격 기준 숫자는 그대로 두고 라벨만 추가 —
+    # 표본·정확도 체크리스트가 곧 엣지 증명은 아니라는 점을 매 리포트에서 반복 명시한다.
+    lines.append("※ 위 표본·정확도 충족은 엣지 증명이 아님 — 실배분 승격은 사용자 승인 필요")
+
     head = ""
     if ready:
         head = "🚀 승격 기준 충족 — Claude에게 진행 지시: " + ", ".join(ready) + "\n"

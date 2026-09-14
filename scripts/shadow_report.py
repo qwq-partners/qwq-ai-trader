@@ -115,9 +115,24 @@ def build_report(days: int = 1) -> str:
         if rounds:
             L.append(f"  평균 {sum(rounds)/len(rounds):.1f}라운드")
 
-    # ── 재현성 (승격 핵심 지표) ──
+    # T11 (2026-09-15): 원장(team_ledger) 표본 — 판단 건수(dedup) vs 레코드 수(재시도 포함)
     L.append("")
-    L.append("■ 재현성")
+    L.append("■ 판단 표본 (team_ledger)")
+    try:
+        from src.agents.team_ledger import load_day
+        raw_total = 0
+        dedup_total = 0
+        for i in range(days):
+            d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            raw_total += len(load_day(d, dedup=False))
+            dedup_total += len(load_day(d, dedup=True))
+        L.append(f"  판단(중복 제거) {dedup_total}건 / 원장 레코드(재시도 포함) {raw_total}건")
+    except Exception as e:
+        L.append(f"  원장 조회 실패 (무시): {e}")
+
+    # ── 재현성 (승격 핵심 지표) — LLM 프로세스 품질일 뿐 투자 성능이 아니다 ──
+    L.append("")
+    L.append("■ 재현성 · 합의율 — LLM 프로세스 품질 지표 (투자 성능·P&L 미측정)")
     if ledger:
         groups = {}
         empty = 0
@@ -144,7 +159,7 @@ def build_report(days: int = 1) -> str:
     else:
         L.append("  원장 기록 없음")
 
-    # ── 승격 기준 달성도 ──
+    # ── 승격 기준 달성도 (기준 숫자는 변경하지 않는다 — 라벨만 추가) ──
     L.append("")
     L.append("■ 실주문 승격 기준")
     L.append(f"  {'✅' if len(verdicts) >= MIN_SAMPLES else '⬜'} 표본 {len(verdicts)}/{MIN_SAMPLES}건")
@@ -152,6 +167,7 @@ def build_report(days: int = 1) -> str:
     L.append("  ⬜ 비용 반영 shadow P&L (+)")
     L.append("  ⬜ 기존 경로 대비 증분 효과")
     L.append("  ⬜ 장애 시 주문 0건 증명")
+    L.append("  ※ 표본·합의율은 엣지 증명이 아님 — P&L·초과수익 검증 전까지 위 체크리스트는 승격 사유가 되지 않는다")
     L.append("")
     L.append("※ shadow 단계 — 실제 주문은 나가지 않습니다.")
     return "\n".join(L)

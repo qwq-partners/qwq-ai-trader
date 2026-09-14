@@ -83,6 +83,45 @@ class KRAPIHandler:
     def __init__(self, data_collector):
         self.dc = data_collector
 
+    # ── T11 (2026-09-15) 팀 심의 실행 상태 — 계약 2.4 execution_state ──────────
+    _EXEC_STATES = ("candidate", "waiting_trigger", "shadow_ready", "order_submitted", "filled")
+
+    def _execution_state(self, row: dict, day: str) -> str:
+        """팀 판단(candidate) ~ 실제 체결(filled) 중 화면에 보여줄 단계.
+
+        team_ledger 행이 order_submitted/filled 라고 적어도, 실제 주문·체결 증거
+        (trade_journal)가 없으면 그 값을 그대로 믿지 않고 shadow_ready 로 낮춘다 —
+        팀 BUY 합의와 실제 주문·체결을 화면에서 혼동시키지 않기 위함이다.
+        """
+        symbol = str(row.get("symbol") or "")
+        state = "candidate"
+        try:
+            from ..agents.team_ledger import history_for_symbol
+            hist = history_for_symbol(symbol, day)
+            if hist:
+                state = str(hist[-1].get("execution_state") or "candidate")
+        except Exception as e:
+            logger.debug(f"[API] 팀 원장 조회 실패 (candidate 로 표시): {e}")
+        if state not in self._EXEC_STATES:
+            state = "candidate"
+        if state in ("order_submitted", "filled") and not self._has_fill_evidence(symbol, day):
+            return "shadow_ready"
+        return state
+
+    def _has_fill_evidence(self, symbol: str, day: str) -> bool:
+        """당일 실제 매수 체결 증거 — 이미 메모리에 로드된 trade_journal 만 본다
+        (새 인스턴스를 만들어 파일을 다시 읽지 않는다). 증거 없으면 보수적으로 False."""
+        try:
+            bot = getattr(self.dc, "bot", None)
+            tj = getattr(bot, "trade_journal", None)
+            if tj is None:
+                return False
+            y, m, d = int(day[:4]), int(day[4:6]), int(day[6:])
+            trade_date = date(y, m, d)
+            return any(getattr(t, "symbol", None) == symbol for t in tj.get_trades_by_date(trade_date))
+        except Exception:
+            return False
+
     async def get_status(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_status())
 
@@ -177,12 +216,15 @@ class KRAPIHandler:
                 if bool((r.get("decision") or {}).get("approved")) is want
             ]
 
+        verdict_day = day or f"{datetime.now():%Y%m%d}"
+
         # 목록 화면용 요약 — 토론 전문은 상세 필드에 그대로 남겨둔다
         summary = []
         for r in rows:
             d = r.get("decision") or {}
             p = r.get("proposal") or {}
             deb = r.get("debate") or {}
+            a = r.get("assessment") or {}  # T11 (2026-09-15) shadow 판단 — 없으면 구 레코드
             summary.append({
                 "symbol": r.get("symbol"),
                 "name": r.get("name"),
@@ -193,6 +235,7 @@ class KRAPIHandler:
                 "overridden_gates": d.get("overridden_gates", []),
                 "reason": d.get("reason", "")[:200],
                 "conviction": p.get("conviction"),
+                "conviction_label": "합의 기반 지표 · 확률 미보정",
                 "analyst_scores": p.get("analyst_scores", {}),
                 "debate_summary": deb.get("summary", "")[:200],
                 "debate_rounds": deb.get("rounds_run"),
@@ -204,6 +247,18 @@ class KRAPIHandler:
                 # 상세 패널이 펼칠 내용이 있는지 — 없으면 프런트가 토글을 숨긴다
                 "turn_count": len(deb.get("turns") or []),
                 "report_count": len(r.get("reports") or []),
+                # T11 (2026-09-15) — 신규 shadow 판단 요약 (계약 2.2). 구 레코드는 assessment 가 없어 None.
+                "assessment": {
+                    "stance_v2": a.get("stance_v2"),
+                    "merit_status": a.get("merit_status"),
+                    "risk_acceptable": a.get("risk_acceptable"),
+                    "data_sufficiency": a.get("data_sufficiency"),
+                    "entry_ready": a.get("entry_ready"),
+                    "consensus_level": a.get("consensus_level"),
+                    "calibration_status": a.get("calibration_status"),
+                } if a else None,
+                # 실행 상태 5단계 — 팀 판단과 실제 주문·체결을 화면에서 혼동하지 않도록 분리 (계약 2.4)
+                "execution_state": self._execution_state(r, verdict_day),
             })
 
         return web.json_response({
