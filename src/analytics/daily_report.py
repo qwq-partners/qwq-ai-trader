@@ -27,7 +27,7 @@ MORNING_BRIEF_LEDGER_PATH = _REC_CACHE_DIR / "morning_brief_eval.jsonl"
 # 브리프 주장 범위 (T9 요청 3)
 SCOPE_US_ONLY = "us_close_only"
 SCOPE_WITH_KR = "with_kr_inputs"
-NO_KR_INPUT_NOTE = "국내 자료 없음 — 개장 방향 판단 불가"
+NO_KR_INPUT_NOTE = "국내 자료 없음 — 개장 방향 판단 불가."
 
 # 국내 개장 방향·대응 전략 단정 표현 — 국내 자료 없이 쓰이면 제거한다
 _OPEN_CLAIM_PATTERNS = (
@@ -53,7 +53,7 @@ _TONE_MARGIN = 2
 
 # 마침표 뒤에 공백·문장끝이 와야 문장 경계로 본다 — "+0.97%", "S&P500 +0.8%" 가 쪼개지면
 # KR 주어와 단정이 서로 다른 조각으로 갈려 검사·본문이 모두 훼손된다 (2026-09-14 리뷰)
-_SENTENCE_SPLIT_RE = re.compile(r"([.!?]+(?:\s+|$)|\n)")
+_SENTENCE_SPLIT_RE = re.compile(r"([.!?]+(?:\s+|$|(?=<))|\n)")   # 마침표 직후 태그(.<b>)도 경계 (2026-09-14 재리뷰)
 # 구분자에서 문장부호만 떼고 공백·줄바꿈은 남기기 위한 패턴
 _SEP_WHITESPACE_RE = re.compile(r"[.!?]+")
 
@@ -228,9 +228,9 @@ def extract_brief_claims(
             body + sep for body, sep in _split_sentences(text)
             if _has_kr_subject(body + sep)
         )
-        if any(p in kr_text for p in ("상승 출발", "갭상승", "갭 상승", "상승 개장", "갭업", "강세 출발")):
+        if any(p in kr_text for p in ("상승 출발", "갭상승", "갭 상승", "상승 갭", "상승 개장", "갭업", "강세 출발")):
             open_direction = "up"
-        elif any(p in kr_text for p in ("하락 출발", "갭하락", "갭 하락", "하락 개장", "갭다운", "약세 출발")):
+        elif any(p in kr_text for p in ("하락 출발", "갭하락", "갭 하락", "하락 갭", "하락 개장", "갭다운", "약세 출발")):
             open_direction = "down"
         elif "보합 출발" in kr_text:
             open_direction = "flat"

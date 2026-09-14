@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — feat: 레짐 판단 시간범위 분리·모닝브리프 주장 범위 제한·장전 전망 사후 평가 (계획서 T9 요청 2·3·5, F11)
+
+계기: 09-14 07:01 모닝브리프가 미국 마감 자료만으로 "반도체 중심 상승 갭 출발 가능성 높음" 을 단정(실제 -3.14% 출발), 같은 메시지의 전문가 종합 +2 중립과 충돌 미검토.
+- `src/core/market_regime.py`: `RegimeHorizons`(open_expectation·as_of, intraday_risk·as_of·change_pct) + `set_intraday_risk(level, change_pct, as_of)`, `set_open_expectation`(09:30·익일 만료), 순수 함수 `cap_regime_by_intraday_risk`.
+  유효 레짐 `effective_regime` — intraday_risk 가 crash/severe 이면 bull→sideways(LLM 어휘 trending_bull→neutral)만 강등, 나머지 원본 유지(새 차단 아님). `regime/params/get_params` 가 유효 레짐을 읽고 기존 호출부 수정 불필요.
+  mid_trend 는 실시간 `update_regime` 결과 단일 출처(리뷰 blocking: 오버라이드 세터가 VIX·전문가·LLM 강등 결과를 영구히 가리던 것 제거), `get_summary().horizons` 는 결측을 None+사유로. `llm_morning_diagnosis` 는 결측 지수를 "+0.0%" 대신 "미수집". REGIME_EXIT_PARAMS·apply_regime_params 불변. **호출자(A 배선) 전까지 운영 동작 동일.**
+- `src/analytics/daily_report.py`: `build_morning_brief(...)` — 입력 목록(kind/as_of/source/valid)을 기록하고 as_of 있는 국내 자료가 없으면 `scope=us_close_only`·제목 "미국시장 마감 요약"·프롬프트가 한국장 개장 방향/갭/대응 전략을 금지, 응답 후 `sanitize_brief_claims` 가 KR 주어(코스피/KOSPI/국내/오늘 장 등)+개장 단정 문장을 제거·"국내 자료 없음 — 개장 방향 판단 불가." 로 대체(미국 근거가 섞여도 제거, 소수점·`.<b>` 태그 경계 보존).
+  `with_kr_inputs` 프롬프트는 관찰 포인트마다 반대 근거 요구. `build_expert_conflict_note(tone_or_text, {"score"|"bias"})` 가 브리프 톤과 전문가 종합판단 상충 시 문구 반환. 캐시 `llm_morning_brief.json` 에 `kr_date/scope/inputs/claims/removed_claims/tone/expert_consensus/expert_conflict/model` 고정 저장(07:30 브리핑이 읽는 `text/generated_at` 불변). `extract_brief_claims` 는 KR 주어 문장만 읽음(미국 마감 서술을 KOSPI 주장으로 기록하지 않음), 09-14 실문장 "상승 갭 출발" 패턴 포함.
+- `src/analytics/morning_brief_eval.py`(신규): `evaluate(brief, actual)` — 개장 방향·종가 방향·전문가 종합 방향(±5 밴드)·언급 업종 상대성과 4축, 주장/실측 없으면 hit=None+사유(0 대체 없음), 브리프 kr_date≠평가일이면 evaluated=False. `append_ledger`(JSONL `morning_brief_eval.jsonl`)·`summarize(last_n)`(적중률·표본 수, "하루 결과로 규칙을 바꾸지 않는다")·`summary_line`. `DailyReportGenerator.evaluate_morning_brief(date)` 가 브리프 캐시 + KOSPI/KOSDAQ 시가·종가·업종 수익률로 평가·기록(지수 조회 실패 시 evaluated=False).
+- 테스트 65건(`tests/test_market_regime_horizons.py`, `tests/test_morning_brief.py`). 문서: system-overview §10.1/§10.2, monitoring-checkpoints(20건 누적 전 규칙 변경 금지).
+- 잔여(A 후속 PR): `adapter.set_intraday_risk` 주입, 저녁 `evaluate_morning_brief` 훅, 07:30 결합부 `build_expert_conflict_note`·`data_status_summary` 부착, `kr_inputs` 전달(현재 운영 scope 는 항상 us_close_only). brief_tone·claims 는 패턴 휴리스틱(없는 주장을 만들지 않는 방향, claims=None 비율로 확장 판단). `update_regime` 의 결측 0 채움(기존 코드)은 별도. 배포 없음.
+
 ## 2026-09-14 — fix: 자료 신선도·전문가 결측 상태·수동 거시 만료·VIX 수집 (계획서 T9 요청 4, F12)
 
 계기: 09-14 KR시장 전문가는 수급·공매도 원자료가 전부 비어 있어도 점수 0 중립·기본 confidence 0.4 로 보고됐고, 야간선물 +0.97% 가 아침~장후 반복돼도 관측 시각을 알 수 없었으며, 거시 수동 오버라이드에 5/29 설정이 만료 없이 남아 있었다.

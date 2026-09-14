@@ -539,3 +539,19 @@ def test_expert_conflict_note_accepts_brief_text():
         dr.brief_tone(OPTIMISTIC_TEXT), {"score": 2})
     assert dr.build_expert_conflict_note("bull", {"bias": "bear"}) is not None
     assert dr.build_expert_conflict_note("bull", None) is None
+
+
+def test_extract_claims_reads_real_0914_sentence():
+    """T9 계기 문장(09-14 07:01 실캐시) — '상승 갭 출발' 패턴이 원장에 open=up 으로 잡혀야 한다 (재리뷰 advisory)."""
+    claims = dr.extract_brief_claims(
+        "KOSPI·KOSDAQ은 반도체 중심의 상승 갭 출발 가능성이 높다.",
+        {"반도체": 1}, "with_kr_inputs", basis=["야간선물"],
+    )
+    assert claims["open_direction"] == "up"
+
+
+def test_sanitize_treats_tag_after_period_as_boundary():
+    text = "오늘 KOSPI는 갭상승 출발 가능성이 높다.<b>■ 미국 섹터</b> S&P500 +0.8% 마감."
+    out, removed = dr.sanitize_brief_claims(text, "us_close_only")
+    assert removed and "갭상승 출발" not in out
+    assert "S&P500 +0.8% 마감" in out
