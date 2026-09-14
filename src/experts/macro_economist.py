@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -17,7 +18,7 @@ from loguru import logger
 
 from .base import ExpertAgent
 from .types import ExpertOpinion, RegimeBias
-
+from ..utils.data_freshness import DEFAULT_OVERRIDE_TTL_DAYS
 
 _MANUAL_OVERRIDE_PATH = Path.home() / ".cache" / "ai_trader" / "manual_macro_overrides.json"
 
@@ -199,17 +200,61 @@ class MacroEconomist(ExpertAgent):
     # 수동 오버라이드 (사용자가 FOMC/CPI 발표일 직접 입력)
     # ─────────────────────────────────────────
     def _load_manual_overrides(self) -> Dict[str, Any]:
+        """수동 오버라이드 로드 — 항목별 valid_until 만료 시 제외 (2026-09-14 F12).
+
+        스키마 2종 지원(하위 호환):
+          - 신규: {"cpi_yoy": {"value": 3.2, "valid_until": "2026-09-30"}}
+          - 구형(flat): {"cpi_yoy": 3.2, "fed_decision": "hold"} — valid_until 없음 →
+            파일 mtime(작성일 근사)+기본 TTL(DEFAULT_OVERRIDE_TTL_DAYS)로 만료 판정.
+        만료·파싱 불가 항목은 조용히 버리지 않고 경고 로그를 남긴다.
+        """
         if not _MANUAL_OVERRIDE_PATH.exists():
             return {}
         try:
             with _MANUAL_OVERRIDE_PATH.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            # {"cpi_yoy": 3.2, "fed_decision": "hold", ...} 형식
-            if isinstance(data, dict):
-                return data
         except Exception as e:
             logger.warning(f"[거시] manual_overrides 로드 실패: {e}")
-        return {}
+            return {}
+        if not isinstance(data, dict):
+            return {}
+
+        try:
+            file_written_at = datetime.fromtimestamp(_MANUAL_OVERRIDE_PATH.stat().st_mtime)
+        except OSError:
+            file_written_at = datetime.now()
+        default_deadline = file_written_at + timedelta(days=DEFAULT_OVERRIDE_TTL_DAYS)
+        now = datetime.now()
+
+        result: Dict[str, Any] = {}
+        for key, raw in data.items():
+            if isinstance(raw, dict) and "value" in raw:
+                value = raw["value"]
+                valid_until_str = raw.get("valid_until")
+                if valid_until_str:
+                    try:
+                        deadline = datetime.fromisoformat(str(valid_until_str))
+                    except ValueError:
+                        logger.warning(
+                            f"[거시] manual_overrides '{key}' valid_until 파싱 실패"
+                            f"({valid_until_str!r}) — 기본 TTL 적용"
+                        )
+                        deadline = default_deadline
+                else:
+                    deadline = default_deadline
+            else:
+                # 구형 flat 스키마 — 값 자체가 valid_until 없음
+                value = raw
+                deadline = default_deadline
+
+            if now > deadline:
+                logger.warning(
+                    f"[거시] manual_overrides '{key}' 만료(valid_until={deadline.date()}) — 무시"
+                )
+                continue
+            result[key] = value
+
+        return result
 
     # ─────────────────────────────────────────
     # Perplexity 매크로 컨텍스트

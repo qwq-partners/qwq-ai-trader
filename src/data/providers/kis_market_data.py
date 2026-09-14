@@ -34,6 +34,10 @@ class KISMarketData:
         # 캐시 maxsize — 코스닥 1500종목 + 매크로/섹터/휴장일 등 여유 포함
         # 초과 시 가장 오래된 10%를 LRU 방식으로 제거 (메모리 무한 증가 방지)
         self._cache_maxsize: int = 2000
+        # 야간선물 값 반복 감지용 (2026-09-14 T9 요청 4) — 심볼별 마지막으로 값이
+        # "바뀐" 시각. 가격이 같은 채로 반복 조회되는 게 고착인지 정상 유지(장외/무변동)
+        # 인지는 이 데이터(마지막 변경 이후 경과)로만 판단하고 여기서 단정하지 않는다.
+        self._night_futures_last_change: Dict[str, Dict[str, Any]] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -940,6 +944,17 @@ class KISMarketData:
                 self._cache_ts[cache_key] = datetime.now() - timedelta(seconds=_neg_ttl)
                 return None
 
+            now = datetime.now()
+            # 값 반복(고착) 여부 판단 자료 — 단정하지 않고 "마지막 변경 시각"만 기록
+            # (2026-09-14 T9 요청 4). price+change_pct 조합이 직전과 같으면 유지, 다르면 갱신.
+            value_sig = (price, change_pct)
+            prev = self._night_futures_last_change.get(symbol)
+            if prev is None or prev.get("sig") != value_sig:
+                changed_at = now
+            else:
+                changed_at = prev["changed_at"]
+            self._night_futures_last_change[symbol] = {"sig": value_sig, "changed_at": changed_at}
+
             result = {
                 "price": price,
                 "prev_close": prev_close,
@@ -951,6 +966,12 @@ class KISMarketData:
                 "open": open_price,
                 "symbol": symbol,
                 "session": "night" if session_div == "CM" else "day",
+                # 조회(체결 반영) 시각 — KIS 응답에 체결시각 필드가 없어 쿼리 시각을 사용.
+                # "조회 성공"과 "그 값이 여전히 유효"를 구분하려면 as_of + 아래 두 필드를
+                # 함께 봐야 한다(가격만 남겨두면 고착/정상유지를 구분할 자료가 없어진다).
+                "as_of": now.isoformat(),
+                "value_changed_at": changed_at.isoformat(),
+                "value_unchanged_minutes": round((now - changed_at).total_seconds() / 60, 1),
             }
 
             # 심리 판단 (야간선물 등락률 기반)

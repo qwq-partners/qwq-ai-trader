@@ -224,6 +224,10 @@ class WeekendSignalExpert(ExpertAgent):
             if q and q.get("session") == "night" and q.get("change_pct") is not None:
                 out["kr_futures_pct"] = q["change_pct"]
                 out["kr_futures_source"] = f"KIS:{q.get('symbol')}"
+                # 2026-09-14 (T9 요청 4): 기준시각을 raw_evidence까지 보존 — 반복 값이
+                # 고착인지 정상 유지인지는 여기 담긴 자료로만 판단(이 자리에서 단정 안 함).
+                out["kr_futures_as_of"] = q.get("as_of")
+                out["kr_futures_unchanged_minutes"] = q.get("value_unchanged_minutes")
         except Exception as e:
             logger.debug(f"[갭risk] KIS 야간선물 실패 → NKD 프록시: {e}")
         if "kr_futures_pct" not in out:

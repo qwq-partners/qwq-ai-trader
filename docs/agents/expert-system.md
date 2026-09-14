@@ -52,7 +52,57 @@ class ExpertOpinion:
     valid_until: datetime    # 기본 cache_ttl_hours
     raw_evidence: Dict
     error: Optional[str]
+    data_status: str = "ok"        # "ok" | "partial" | "insufficient" (2026-09-14~)
+    missing_inputs: List[str]      # 결측/부족 입력 목록 (2026-09-14~)
 ```
+
+## 데이터 신선도·결측 처리 (2026-09-14, T9 요청 4)
+
+계기: 2026-09-14 모닝브리프·12:00 레짐 재분류가 08:20 스크리너 메모리를 그대로
+재사용해 당일 -3.34% 급락 중에도 `trending_bull` 0.85를 냈다. KR시장 전문가는
+수급·공매도 원자료가 전부 비어 있어도 score=0(중립)·confidence≈0.4로 보고해
+"모른다"가 "중립이다"로 둔갑했다. 원칙: **같은 시점의 유효한 자료로 판단하고,
+모르는 것을 중립·0·높은 확신으로 포장하지 않는다.**
+
+- **`src/utils/data_freshness.py`** — "조회 성공"과 "현재 판단에 유효"를 구분하는
+  단일 출처. `DataPoint(value, as_of, source, session, ttl_seconds, missing_reason)` +
+  `is_fresh(dp, now)` + `freshness_label(dp, now)`(`"as_of 08:20 · 3h 전 · 만료"`) +
+  `missing(source, reason)`. `CONFIDENCE_CAP_INSUFFICIENT=0.2` /
+  `CONFIDENCE_CAP_PARTIAL=0.5` 상수도 여기 있다(값의 근거는 모듈 주석 — 표본 축적 전
+  임의 상수이며 하루 결과로 바꾸지 않는다).
+- **`data_status`/`missing_inputs`** — `ExpertAgent._build_opinion()`(`src/experts/base.py`)
+  이 confidence 상한을 단일 지점에서 강제한다(`insufficient`→≤0.2, `partial`→≤0.5).
+  각 전문가는 `data_status`·`missing_inputs`만 넘기면 되고 캡을 스스로 계산할 필요 없다.
+  `ExpertOpinion.error_opinion()`도 `data_status="insufficient"`로 정직하게 표시한다.
+- **`kr_market_expert`** — 존재 이유인 수급(`_fetch_investor_flows`)·공매도
+  (`_fetch_short_balance`) 원자료가 **둘 다** 비면 `insufficient`(kospi/야간선물은
+  다른 전문가가 이미 다루므로 별개), 하나라도 결측이면 `partial`.
+- **`ExpertOrchestrator.aggregate_regime_score()`** — `data_status=="insufficient"`인
+  전문가는 confidence 캡으로 기여가 작아지는 것과 별개로 **가중 0으로 완전 제외**한다.
+  `data_status_summary(opinions)` → `{"counts": {...}, "insufficient_experts": [...],
+  "note": "자료 부족 N명"}` — 대시보드/알림에서 "왜 이 판단이 약한 근거인지" 표시용.
+- **`macro_economist` 수동 오버라이드** — `~/.cache/ai_trader/manual_macro_overrides.json`
+  항목마다 `valid_until`(ISO 날짜) 필수. 신규 스키마 `{"cpi_yoy": {"value": 3.2,
+  "valid_until": "2026-09-30"}}`. 구형 flat 스키마(`{"cpi_yoy": 3.2}`)는 하위 호환
+  유지하되 파일 mtime(작성일 근사) + 기본 14일(`DEFAULT_OVERRIDE_TTL_DAYS`)로 만료
+  판정. 만료·과거 일정 항목은 조용히 버리지 않고 경고 로그(`[거시] manual_overrides
+  '<key>' 만료(...) — 무시`) 후 제외.
+- **야간선물 as_of** — `kis_market_data.get_night_futures_quote()`가 `as_of`(조회
+  시각 — KIS 응답에 체결시각 필드가 없어 쿼리 시각을 씀), `value_changed_at`(값이
+  마지막으로 바뀐 시각), `value_unchanged_minutes`를 반환에 추가. 같은 값이 반복돼도
+  이 자리에서 "고착"이라 단정하지 않고, 판단은 자료(경과 시간)로 소비측에 넘긴다.
+  `kr_market_expert`·`weekend_signal_expert`의 야간선물 사용부가 이 필드를
+  raw_evidence까지 전달한다.
+- **US 지수 정규화 키** — `us_market_data.US_INDEX_KEYS`(`^GSPC→SP500`,
+  `^IXIC→NASDAQ`, `^DJI→DOW`, `^SOX→SOX`, `^VIX→VIX`)가 `get_overnight_signal()`의
+  `indices_normalized` 필드 키를 정한다. 기존 `indices`(표시명 "S&P500"/"반도체(SOX)"
+  기반, daily_report.py 등 기존 소비자용)는 스키마 불변. `indices_normalized`는 결측
+  시 0이 아니라 `{"missing": True, "reason": "..."}` — VIX는 2026-09-14부터 수집
+  대상(`US_SYMBOLS`)에 포함됐고 방향성 지표가 아니므로 심리 평균(`idx_pcts`)에는
+  섞지 않는다.
+- **소비 예정(다른 담당)**: `kr_scheduler.py` 12:00 레짐 재분류가 `overnight["indices"]`
+  대신 `indices_normalized["SP500"/"SOX"/"VIX"]["price"|"change_pct"]`를 읽도록 바뀔
+  예정(F10 A측 작업) — 필드명은 `"value"`가 아니라 `"price"`.
 
 ## 호출 흐름
 

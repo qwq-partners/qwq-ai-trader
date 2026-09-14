@@ -29,7 +29,7 @@ from loguru import logger
 # ──────────────────────────────────────────────────────────────────
 US_SYMBOLS: List[str] = [
     # 주요 지수
-    "^GSPC", "^IXIC", "^SOX", "^DJI",
+    "^GSPC", "^IXIC", "^SOX", "^DJI", "^VIX",
     # 섹터 ETF
     "XLK", "SMH", "SOXX", "XLV", "XLE", "ICLN", "URNM", "IBB", "XBI",
     "LIT", "TAN", "BOTZ", "ITA",
@@ -87,13 +87,26 @@ US_KOREA_SECTOR_MAP: Dict[str, Dict] = {
     },
 }
 
-# 지수 심볼 (종합 심리 판단용)
+# 지수 심볼 (종합 심리 판단용) — 표시명 기반, 기존 소비자(daily_report.py 등) 호환 유지
 INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^SOX", "^DJI"]
 INDEX_NAMES = {
     "^GSPC": "S&P500",
     "^IXIC": "NASDAQ",
     "^SOX": "반도체(SOX)",
     "^DJI": "다우",
+}
+
+# 정규화 키 — LLM 레짐 분류 등 코드 소비측이 안정적으로 찾을 단일 출처 (2026-09-14 F10)
+# 재현된 버그: 소비측(kr_scheduler.py)은 indices.get("SP500")/("SOX")/("VIX")를 찾는데
+# 위 INDEX_NAMES는 "S&P500"/"반도체(SOX)" 같은 표시명이고 VIX는 수집 대상에도 없어
+# 전부 0으로 전달됐다. get_overnight_signal()의 indices_normalized가 이 키를 쓴다.
+# VIX는 레벨 지표라 등락 심리 평균(idx_pcts)에는 넣지 않는다(방향성 지표가 아님).
+US_INDEX_KEYS: Dict[str, str] = {
+    "^GSPC": "SP500",
+    "^IXIC": "NASDAQ",
+    "^DJI": "DOW",
+    "^SOX": "SOX",
+    "^VIX": "VIX",
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -518,11 +531,23 @@ class USMarketData:
             return {
                 "sentiment": "neutral",
                 "indices": {},
+                "indices_normalized": {
+                    key: {
+                        "price": None, "change": None, "change_pct": None,
+                        "as_of": None, "source": "yahoo_finance",
+                        "missing": True, "reason": "US 시장 데이터 조회 실패",
+                    }
+                    for key in US_INDEX_KEYS.values()
+                },
                 "sector_signals": {},
                 "summary": "US 시장 데이터 조회 실패",
             }
 
-        # 1. 지수 등락률
+        # as_of는 실제 체결시각이 아닌 "쿼리 성공 시각"(캐시 기록 시각) — Yahoo 응답에
+        # 개별 지수 체결시각 필드를 안 쓰므로 이게 유일하게 검증 가능한 기준시각이다.
+        fetch_as_of = (self._cache_ts or datetime.now()).isoformat()
+
+        # 1. 지수 등락률 (표시명 기반 — 기존 소비자 호환, 필드 스키마 불변)
         indices: Dict[str, Dict] = {}
         idx_pcts: List[float] = []
         for sym in INDEX_SYMBOLS:
@@ -535,6 +560,26 @@ class USMarketData:
                     "change_pct": round(q["change_pct"], 2),
                 }
                 idx_pcts.append(q["change_pct"])
+
+        # 1-2. 정규화 키 (F10) — 결측은 0이 아닌 명시적 missing 표식
+        indices_normalized: Dict[str, Dict] = {}
+        for sym, key in US_INDEX_KEYS.items():
+            q = quotes.get(sym)
+            if q:
+                indices_normalized[key] = {
+                    "price": q["price"],
+                    "change": round(q["change"], 2),
+                    "change_pct": round(q["change_pct"], 2),
+                    "as_of": fetch_as_of,
+                    "source": "yahoo_finance",
+                    "missing": False,
+                }
+            else:
+                indices_normalized[key] = {
+                    "price": None, "change": None, "change_pct": None,
+                    "as_of": None, "source": "yahoo_finance",
+                    "missing": True, "reason": f"{sym} 조회 실패 또는 응답에 없음",
+                }
 
         # 2. 시장 심리 판단
         if idx_pcts:
@@ -576,6 +621,7 @@ class USMarketData:
         return {
             "sentiment": sentiment,
             "indices": indices,
+            "indices_normalized": indices_normalized,
             "sector_signals": sector_signals,
             "summary": " ".join(summary_parts),
         }

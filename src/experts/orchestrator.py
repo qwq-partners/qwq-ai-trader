@@ -190,6 +190,10 @@ class ExpertOrchestrator:
             op = opinions.get(name)
             if op is None or not op.is_valid:
                 continue
+            # 2026-09-14 (T9 요청 4): 자료 부족(insufficient)은 confidence 상한만으로도
+            # 기여가 작아지지만, "가중 0으로 완전 제외"를 명시적으로 보장한다.
+            if getattr(op, "data_status", "ok") == "insufficient":
+                continue
             # P0-4 (2026-05-29 리뷰): 음수 가중치/confidence 방어
             cfg_w = max(0.0, float(self.config.weights.get(name, 1.0)))
             conf = max(0.0, min(1.0, float(op.confidence)))
@@ -223,6 +227,23 @@ class ExpertOrchestrator:
             w = self.config.weights.get(op.expert, 1.0) * op.confidence
             counts[op.regime_bias] += w
         return max(counts.items(), key=lambda x: x[1])[0]
+
+    def data_status_summary(
+        self,
+        opinions: Optional[Dict[str, ExpertOpinion]] = None,
+    ) -> Dict[str, Any]:
+        """전문가별 data_status 집계 — "자료 부족 N명" 표시용 (2026-09-14 T9 요청 4)"""
+        if opinions is None:
+            opinions = self.snapshot()
+        counts = {"ok": 0, "partial": 0, "insufficient": 0}
+        insufficient_experts: List[str] = []
+        for op in opinions.values():
+            status = getattr(op, "data_status", "ok") or "ok"
+            counts[status] = counts.get(status, 0) + 1
+            if status == "insufficient":
+                insufficient_experts.append(op.expert)
+        note = f"자료 부족 {counts['insufficient']}명" if counts["insufficient"] else None
+        return {"counts": counts, "insufficient_experts": insufficient_experts, "note": note}
 
     # ─────────────────────────────────────────
     # cross_validator 게이트
