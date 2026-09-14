@@ -301,8 +301,9 @@ def test_night_futures_in_session_query_as_of_is_query_time():
 
 
 def test_night_futures_post_session_query_as_of_is_session_end():
-    """세션 종료 후(05:00~18:00) 조회는 직전 세션의 마지막 체결가이므로
-    as_of=그 세션 종료 시각(05:00) — 조회 시각(fetched_at)과 달라야 한다(T10 F17)."""
+    """[2026-09-15 정정] KRX 야간거래 시간은 18:00~익일 06:00 (KRX 야간거래 안내·FAQ 2025-04-28) — 초안의 05:00 기대값을 06:00 으로 바로잡음.
+    세션 종료 후(06:00~18:00) 조회는 직전 세션의 마지막 체결가이므로
+    as_of=그 세션 종료 시각(06:00) — 조회 시각(fetched_at)과 달라야 한다(T10 F17)."""
     provider = _make_kis_provider()
 
     def _responder(url, params):
@@ -313,14 +314,14 @@ def test_night_futures_post_session_query_as_of_is_session_end():
 
     provider._get_session = fake_get_session  # type: ignore[assignment]
 
-    now = datetime(2026, 9, 15, 7, 30, 0)  # 화요일 07:30 — 월요일 밤 세션은 05:00 종료
+    now = datetime(2026, 9, 15, 7, 30, 0)  # 화요일 07:30 — 월요일 밤 세션은 06:00 종료
     quote = asyncio.run(
         provider.get_night_futures_quote(symbol="TEST01", cache_ttl=0, now=now)
     )
 
     assert quote is not None
     assert quote["fetched_at"] == now.isoformat()
-    assert quote["as_of"] == datetime(2026, 9, 15, 5, 0, 0).isoformat()
+    assert quote["as_of"] == datetime(2026, 9, 15, 6, 0, 0).isoformat()   # KRX 현행 06:00 종료
     assert quote["as_of"] != quote["fetched_at"]
     assert quote["as_of_ttl_seconds"] > 0
 

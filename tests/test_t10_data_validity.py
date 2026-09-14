@@ -760,7 +760,7 @@ def test_macro_core_five_present_cpi_absent_is_ok_not_capped(monkeypatch):
 # F17-5 재검증 — KRX 야간선물(CM) 세션 판정은 요일을 봐야 한다(주말엔 세션 없음)
 # ─────────────────────────────────────────────────────────────────
 def test_night_session_weekend_evenings_are_not_in_session():
-    """토요일 18:00~일요일 05:00, 일요일 18:00~월요일 05:00은 세션이 없는 시간대다
+    """토요일 18:00~일요일 06:00, 일요일 18:00~월요일 06:00은 세션이 없는 시간대다
     (KRX 야간선물은 월~금 저녁에만 개장). 요일을 보지 않으면 이 구간이 '개장 중'
     으로 오판돼 사흘 묵은 금요일 체결가가 as_of=조회시각(실시간)으로 찍힌다
     (리뷰 F17 blocking). 실제 운영 슬롯 sunday_evening(일 22:00)이 이 구간이다."""
@@ -768,7 +768,7 @@ def test_night_session_weekend_evenings_are_not_in_session():
 
     from src.utils.data_freshness import kr_night_futures_as_of
 
-    friday_close = dt(2026, 9, 12, 5, 0)  # 금요일(09-11) 저녁 세션 종료 = 토요일 05:00
+    friday_close = dt(2026, 9, 12, 6, 0)  # 금요일(09-11) 저녁 세션 종료 = 토요일 06:00 (KRX 현행, 2026-09-15 정정)
 
     for label, now in [
         ("일요일 22:00 (sunday_evening 슬롯)", dt(2026, 9, 13, 22, 0)),
@@ -781,7 +781,7 @@ def test_night_session_weekend_evenings_are_not_in_session():
 
 
 def test_night_session_weekday_evenings_and_mornings_stay_in_session():
-    """월~금 저녁(18:00~), 화~토 새벽(~05:00, 전날 저녁 세션의 연장)은 정상적으로
+    """월~금 저녁(18:00~), 화~토 새벽(~06:00, 전날 저녁 세션의 연장)은 정상적으로
     개장 중으로 판정되어 as_of=조회 시각(실시간 호가)이어야 한다 — 주말 수정이
     평일 정상 케이스를 깨면 안 된다."""
     from datetime import datetime as dt
@@ -802,7 +802,7 @@ def test_night_session_weekday_evenings_and_mornings_stay_in_session():
 
 def test_night_session_monday_morning_composes_with_is_fresh():
     """T10 B 리뷰 advisory — F17의 '주말·휴장·미국 전일 마감 자료의 정상 사용(월요일
-    07:30에 토요일 05:00 종료 세션값)'을 kr_night_futures_as_of의 반환값만이 아니라
+    07:30에 토요일 06:00 종료 세션값)'을 kr_night_futures_as_of의 반환값만이 아니라
     실제 소비 경로가 쓰는 is_fresh(DataPoint, now)까지 합성해 고정한다. 전문가
     _analyze()는 now를 주입받을 인터페이스가 없어(구조적 제약) 이 조합은 여기서
     순수 함수로만 검증한다."""
@@ -812,7 +812,7 @@ def test_night_session_monday_morning_composes_with_is_fresh():
 
     monday_0730 = dt(2026, 9, 14, 7, 30)  # 2026-09-14는 월요일
     as_of, note, ttl = kr_night_futures_as_of(monday_0730, "night")
-    assert as_of == dt(2026, 9, 12, 5, 0)  # 금요일(09-11) 야간 세션 종료 = 토요일 05:00
+    assert as_of == dt(2026, 9, 12, 6, 0)  # 금요일(09-11) 야간 세션 종료 = 토요일 06:00 (KRX 현행)
     assert note is None
 
     dp = DataPoint(value=2.0, as_of=as_of, source="kis_night_futures",
@@ -822,3 +822,52 @@ def test_night_session_monday_morning_composes_with_is_fresh():
     # 대조: 다음 세션 개장 이후(월요일 19:00)는 같은 값이 더 이상 유효하지 않다.
     monday_evening = dt(2026, 9, 14, 19, 0)
     assert is_fresh(dp, monday_evening) is False
+
+
+# ─────────────────────────────────────────────────────────────────
+# 2026-09-15 사용자 승인 — 야간 세션 규칙에 공휴일 캘린더 연동 (KRX 개시일 기준)
+# ─────────────────────────────────────────────────────────────────
+def test_night_session_holiday_calendar_start_day_rule(monkeypatch):
+    """KRX 야간거래 안내: 휴장 여부는 야간거래 **개시일** 기준. 거래일 저녁이면 익일이
+    공휴일이어도 개장(연휴 전날), 공휴일 당일 저녁은 휴장, 거래시간 18:00~익일 06:00.
+    2026 내장 폴백 캘린더: 09-24·09-25 추석, 10-09 한글날(금)."""
+    from datetime import datetime as dt
+
+    import src.utils.session as session_mod
+    from src.utils.data_freshness import kr_night_futures_as_of
+
+    monkeypatch.setattr(session_mod, "_kr_market_holidays", set())   # 내장 폴백 캘린더 사용
+
+    # 연휴 전날(09-23 수, 거래일) 20:00 — 개장 중 (as_of=now), 다음 개장은 09-28(월) 18:00
+    as_of, note, ttl = kr_night_futures_as_of(dt(2026, 9, 23, 20, 0), "night")
+    assert as_of == dt(2026, 9, 23, 20, 0) and note is None
+    assert dt(2026, 9, 23, 20, 0) + __import__("datetime").timedelta(seconds=ttl) == dt(2026, 9, 28, 18, 0)
+
+    # 09-24(추석 전날, 공휴일) 04:00 — 09-23 세션의 연장 → 개장 중
+    as_of, _, _ = kr_night_futures_as_of(dt(2026, 9, 24, 4, 0), "night")
+    assert as_of == dt(2026, 9, 24, 4, 0)
+
+    # 09-24(공휴일) 20:00 — 개시일이 휴장일 → 세션 없음 → 직전 세션(09-23) 종료 09-24 06:00
+    as_of, _, ttl = kr_night_futures_as_of(dt(2026, 9, 24, 20, 0), "night")
+    assert as_of == dt(2026, 9, 24, 6, 0)
+    assert as_of + __import__("datetime").timedelta(seconds=ttl) == dt(2026, 9, 28, 18, 0)
+
+    # 09-25(추석, 금) 07:30 — 같은 값, 월요일(09-28) 07:30 까지도 그대로 유효
+    as_of, _, ttl = kr_night_futures_as_of(dt(2026, 9, 25, 7, 30), "night")
+    assert as_of == dt(2026, 9, 24, 6, 0)
+    as_of2, _, ttl2 = kr_night_futures_as_of(dt(2026, 9, 28, 7, 30), "night")
+    assert as_of2 == dt(2026, 9, 24, 6, 0) and ttl2 > 0
+
+    # 10-09(한글날, 금) 20:00 — 휴장, 직전 세션은 10-08(목) → 종료 10-09 06:00, 다음 개장 10-12(월)
+    as_of, _, ttl = kr_night_futures_as_of(dt(2026, 10, 9, 20, 0), "night")
+    assert as_of == dt(2026, 10, 9, 6, 0)
+    assert as_of + __import__("datetime").timedelta(seconds=ttl) == dt(2026, 10, 12, 18, 0)
+    # 10-12(월) 04:00 — 전날(일) 세션 없음 → 여전히 10-09 06:00
+    as_of, _, _ = kr_night_futures_as_of(dt(2026, 10, 12, 4, 0), "night")
+    assert as_of == dt(2026, 10, 9, 6, 0)
+
+    # 06:00 정정 — 05:30 은 아직 세션 중(실시간), 06:30 은 세션 종료 후(06:00 고정)
+    as_of, _, _ = kr_night_futures_as_of(dt(2026, 9, 15, 5, 30), "night")
+    assert as_of == dt(2026, 9, 15, 5, 30)
+    as_of, _, _ = kr_night_futures_as_of(dt(2026, 9, 15, 6, 30), "night")
+    assert as_of == dt(2026, 9, 15, 6, 0)
