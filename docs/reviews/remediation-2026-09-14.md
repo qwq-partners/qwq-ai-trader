@@ -85,3 +85,20 @@ D(독립 리뷰어)가 de111b7 에서 합성 입력만으로 8건 전부 재현�
 1. 배포 실행 범위 지시 여부(main `8f5580a`, 장외 시간) 및 검증 전 risk 신규 진입 보류 여부.
 2. 위험 사이징의 고유 효과를 분리할 연구 축(gap/VCP 백테스터 구현 또는 `atr_dynamic` 연구 축)과 KODEX200 벤치마크 캐시 확보를 별도 연구 계획으로 등록할지.
 3. 펩트론 087010(자산 99.6%)·현금 결정 — 매수 재개 없이는 canary 표본이 생기지 않는다.
+
+## 10. T9 추가분 (2026-09-14 저녁, 모닝브리프↔실제 장 괴리 분석 반영)
+
+계기: 09-14 07:01 모닝브리프 "반도체 중심 상승 갭 출발 가능성 높음" vs 실제 KOSPI -3.14% 출발·-3.26% 마감; 12:00 장중 레짐이 08:20 데이터를 재사용해 `trending_bull` 0.85; LLM 입력 필드명 불일치(S&P500·SOX·VIX 가 0 으로); 결측이 중립·0·높은 확신으로 포장. 급락 방어(09:05 crash, 09:30 SEPA 차단, 10:20 severe)는 작동.
+
+| ID | 재현(D, main 5634fb8) | PR / 머지 SHA | 수정 |
+|---|---|---|---|
+| F9 12:00 재분류가 아침 캐시 재사용, 급락 상태 미전달 | get_kospi_change() 만 호출, `_intraday_state` 미참조 → LLM mock 이 캐시 수치로 bull 0.85 저장 | #45 `a5de546` | 분류 전 당일 지수 재조회·5/20일 재계산(당일 봉 이중 계상 가드), 급락 감지 상태(당일 갱신 시각 게이트) 프롬프트 포함, crash/severe 면 bull 미적용(`cap_regime_by_intraday_risk` 단일 출처), 입력마다 as_of·source, 결측은 '결측'·`missing_fields`, `regime_capped`/`confidence_raw` |
+| F10 지수 키 불일치·VIX 미수집 | sp500=0(실제 -1.0), sox=0(실제 -3.2), vix=0 항상 | #43 `?`·#45 | 공급자 `US_INDEX_KEYS`·`^VIX` 수집·`indices_normalized`(결측 None+missing, 마감/조회 시각 분리), 소비자 별칭 조회 `_index_field`(없으면 None) |
+| F11 브리프가 미국 자료로 한국장 갭 단정, 전문가 충돌 미검토 | 프롬프트 입력 5개 전부 US 파생, 출력 형식이 KOSPI 갭·대응 전략 요구 | #44 `fd58684` | `build_morning_brief` scope(us_close_only 면 "미국시장 마감 요약"·개장 단정 금지 + 응답 후 `sanitize_brief_claims`), 국내 자료(as_of)가 있을 때만 관찰 포인트+반대 근거, `build_expert_conflict_note` 상충 표시(07:30 결합부 배선 #45), 캐시 JSON 고정 스키마(kr_date/scope/inputs/claims) |
+| F12 결측·오래된 자료가 중립/높은 확신 | 수급·공매도 빈 dict → score 0·conf 0.4; 수동 오버라이드 만료 검사 없음; 야간선물 as_of 없음 | #43 | `DataPoint`/`is_fresh`, ExpertOpinion `data_status`(insufficient ≤0.2·partial ≤0.7 — bear_consensus 임계와 동일)·`missing_inputs`, 집계에서 insufficient 제외 + MIN_VALID_EXPERTS=4 커버리지 게이트("자료 부족 N명" 07:30 표시 #45), 수동 오버라이드 `valid_until`(구 항목 mtime+14일), 야간선물 `fetched_at`/`value_changed_at`/`value_unchanged_minutes` |
+
+- 요청 2(판단 시간 범위 분리): `RegimeHorizons`(open_expectation 09:30 만료·intraday_risk as_of 당일 게이트) + `effective_regime` — 장중 위험이 crash/severe 이면 bull 을 sideways 로만 강등(새 차단 아님), mid_trend 는 실시간 `update_regime` 단일 출처(리뷰 blocking: 오버라이드 세터가 실시간 판단을 영구히 가리던 것 제거). **운영에서 유효 레짐 캡이 처음 활성화되는 실경로**(5분 급락 루프 → `set_intraday_risk`).
+- 요청 5(사후 평가): `morning_brief_eval.evaluate`(개장·종가·전문가 방향·업종 상대성과, 결측 hit=None, 브리프 kr_date≠평가일이면 미채점)·JSONL 원장·`summarize`("하루 결과로 규칙 변경 금지")·20:30 훅(120초 상한). 09-14 사례는 원장에 open=miss·close=miss 로 기록될 형태(배포 후부터 누적).
+- 검증: main `a5de546` verify **456 passed / 2 xfailed**. 각 브랜치 독립 리뷰 → blocking 반영 → 재리뷰 approve(T9 A 는 CHANGELOG 만 잔여 → 통합 시 반영). 통합 시 재리뷰 advisory 반영: 어댑터 `effective_regime` 당일 게이트(시계 주입), KIS 폴백 이중 계상 가드, KOFR 루프 당일 스냅샷, 상충 문구 중복 방지, aggregate_bias 동표 NEUTRAL, '상승 갭 출발' 패턴.
+- 실경로 의미 변경(문서화): apply_expert_adjustment score 경로가 유효 시장체제 전문가 <4명이면 무보정(bear_consensus 만 동작), partial 확신 상한 0.7(양방향), 유효 레짐 급락 캡 활성화. 주문·청산·급락 임계값·게이트 코드 무변경.
+- 잔여: `kr_inputs` 미전달(야간선물 시장 시각 없음 → 운영 scope 는 us_close_only 유지), macro/us_market/kr_economy/global_micro/weekend 전문가 data_status 미설정, brief_tone/claims 휴리스틱(claims=None 비율로 확장 판단), `update_regime` 결측 0 채움(기존), v8 spark 시장 시각 미매핑, 팀 컨텍스트 자료부족 표시. **운영 미배포(de111b7)** — 배포 시 첫 장중 검증 포인트는 monitoring-checkpoints "장중 레짐 입력 신선도·급락 캡" 절.
