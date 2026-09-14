@@ -134,6 +134,25 @@ class USMarketExpert(ExpertAgent):
             top = sorted(sectors.items(), key=lambda x: -x[1])[:3]
             affected = [s for s, _ in top]
 
+        # 2026-09-15 (T10 F16): score가 실제로 참조하는 핵심 입력(SPY 지수·VIX·SOX
+        # 5일 추세) 3종이 전부 결측이면 "모른다"는 뜻 — insufficient로 표시한다.
+        # 섹터 RS/어닝 surprise는 score에 대한 기여가 부수적(있으면 가점, 없어도
+        # 나머지 3종만으로 판단 가능)이라 core에서 제외했다.
+        missing_inputs: List[str] = []
+        if not isinstance(spy_ma50, (int, float)) and not isinstance(spy_ma200, (int, float)):
+            missing_inputs.append("SPY 지수(MA50/MA200)")
+        if not isinstance(vix, (int, float)):
+            missing_inputs.append("VIX")
+        if not isinstance(sox_5d, (int, float)):
+            missing_inputs.append("반도체(SOX) 5일 추세")
+
+        if len(missing_inputs) == 3:
+            data_status = "insufficient"
+        elif missing_inputs:
+            data_status = "partial"
+        else:
+            data_status = "ok"
+
         return self._build_opinion(
             score=score,
             bias=bias,
@@ -148,6 +167,8 @@ class USMarketExpert(ExpertAgent):
                 semis=semis,
             ),
             valid_hours=4,
+            data_status=data_status,
+            missing_inputs=missing_inputs,
         )
 
     # ─────────────────────────────────────────

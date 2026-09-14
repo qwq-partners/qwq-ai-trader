@@ -16,6 +16,7 @@ from loguru import logger
 
 from .base import ExpertAgent
 from .types import ExpertOpinion, RegimeBias
+from ..utils.data_freshness import DataPoint, is_fresh
 
 
 class KRMarketExpert(ExpertAgent):
@@ -87,8 +88,24 @@ class KRMarketExpert(ExpertAgent):
 
         # KOSPI200 야간선물 (월요일 갭 risk + 야간 spillover 캡처)
         # 2026-06-07 추가: KS200=F 또는 KOSPI futures 대용 지표
+        # 2026-09-15 (T10 F17): KIS 경로는 값 존재만으로 유효 신호로 세지 않는다 —
+        # as_of(세션 규칙 기반)가 없거나 만료됐으면 판단 근거로 쓰지 않는다. yfinance
+        # 폴백(KS200=F/NKD 프록시)은 as_of 개념이 없어 기존처럼 값 존재만으로 취급.
         nf_chg = futures_state.get("overnight_chg_pct")
-        if isinstance(nf_chg, (int, float)):
+        nf_has_as_of_field = "as_of" in futures_state
+        if nf_has_as_of_field:
+            _nf_as_of_raw = futures_state.get("as_of")
+            nf_dp = DataPoint(
+                value=nf_chg,
+                as_of=datetime.fromisoformat(_nf_as_of_raw) if _nf_as_of_raw else None,
+                source=futures_state.get("source", "kis_night_futures"),
+                session="night",
+                ttl_seconds=futures_state.get("as_of_ttl_seconds"),
+            )
+            nf_fresh = isinstance(nf_chg, (int, float)) and is_fresh(nf_dp)
+        else:
+            nf_fresh = isinstance(nf_chg, (int, float))
+        if nf_fresh:
             if nf_chg <= -2.0:
                 score -= 18
                 findings.append(f"⚠️ KOSPI200 야간선물 {nf_chg:+.2f}% (갭다운 위험)")
@@ -131,6 +148,9 @@ class KRMarketExpert(ExpertAgent):
             missing_inputs.append("KOSPI 지수")
         if not futures_state:
             missing_inputs.append("KOSPI200 야간선물")
+        elif not nf_fresh:
+            # 값은 왔지만 as_of(세션 규칙 기반) 결측/만료 — 판단에 쓰지 않았다 (T10 F17)
+            missing_inputs.append("KOSPI200 야간선물(as_of 미상 또는 만료)")
 
         if not flows and not short_balance:
             data_status = "insufficient"
@@ -275,10 +295,11 @@ class KRMarketExpert(ExpertAgent):
                     "last": q.get("price"),
                     # 2026-09-14 (T9 요청 4): raw_evidence에 기준시각을 남겨 "조회 성공"과
                     # "같은 값이 계속 유지"를 구분할 수 있게 한다(가격만 두면 소실됨).
-                    # fetched_at=조회 시각, as_of=실제 시장 시각(현재 소스는 미제공이라
-                    # None) — 조회 시각을 시장 시각처럼 표시하지 않는다(리뷰 advisory).
+                    # as_of/as_of_ttl_seconds는 kr_night_futures_as_of(세션 규칙, T10 F17)로
+                    # 도출된 값 — _analyze()의 신선도 게이트가 이 필드로 유효 신호 여부를 정한다.
                     "fetched_at": q.get("fetched_at"),
                     "as_of": q.get("as_of"),
+                    "as_of_ttl_seconds": q.get("as_of_ttl_seconds"),
                     "value_unchanged_minutes": q.get("value_unchanged_minutes"),
                 }
         except Exception as e:

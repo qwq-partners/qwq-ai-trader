@@ -17,11 +17,28 @@ API 호출 횟수: 하루 1회 (Yahoo Finance)
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 from loguru import logger
+
+
+def _clean_num(value: Any) -> Optional[float]:
+    """숫자만 통과시키고 나머지는 결측(None)으로 — 0으로 채우지 않는다 (T10 F18).
+
+    Yahoo 응답에 필드가 아예 없거나(None), 문자열/NaN/inf처럼 계산에 쓸 수 없는
+    값이면 전부 None. 정상적인 0.0(무변동)은 그대로 유지한다.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    if not math.isfinite(value):
+        return None
+    return value
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -252,12 +269,14 @@ class USMarketData:
             for sym, _, _ in stocks
         ]
 
-        # 기존 캐시 활용
+        # 기존 캐시 활용 — 가격/등락률이 결측(None)인 캐시 항목은 재사용하지 않는다
+        # (T10 F18: docstring이 약속하는 "조회 실패한 심볼은 누락" 계약을 유지).
         result: Dict[str, Dict] = {}
         missing = []
         for sym in all_syms:
-            if sym in self._cache:
-                result[sym] = self._cache[sym]
+            cached = self._cache.get(sym)
+            if cached and cached.get("price") is not None and cached.get("change_pct") is not None:
+                result[sym] = cached
             else:
                 missing.append(sym)
 
@@ -283,12 +302,17 @@ class USMarketData:
                             data = await resp.json()
                             for q in data.get("quoteResponse", {}).get("result", []):
                                 sym = q.get("symbol", "")
-                                if sym:
-                                    result[sym] = {
-                                        "price":      q.get("regularMarketPrice", 0),
-                                        "change_pct": q.get("regularMarketChangePercent", 0),
-                                        "name":       q.get("shortName", sym),
-                                    }
+                                if not sym:
+                                    continue
+                                price = _clean_num(q.get("regularMarketPrice"))
+                                change_pct = _clean_num(q.get("regularMarketChangePercent"))
+                                if price is None or change_pct is None:
+                                    continue  # 결측 — 0으로 채우지 않고 누락 계약 유지 (T10 F18)
+                                result[sym] = {
+                                    "price":      price,
+                                    "change_pct": change_pct,
+                                    "name":       q.get("shortName", sym),
+                                }
                 except Exception:
                     pass
 
@@ -345,9 +369,14 @@ class USMarketData:
                 if not symbol:
                     continue
                 result[symbol] = {
-                    "price": q.get("regularMarketPrice", 0),
-                    "change": q.get("regularMarketChange", 0),
-                    "change_pct": q.get("regularMarketChangePercent", 0),
+                    # 2026-09-15 (T10 F18): 응답에 심볼은 있어도 가격 필드가 없거나
+                    # (예: {"symbol":"^VIX","regularMarketTime":...}) 비숫자/NaN/inf면
+                    # 0으로 채우지 않고 None(결측)으로 보존한다 — 소비 지점
+                    # (get_overnight_signal/_index_field)이 0을 "무변동"으로 오판하지
+                    # 않게 한다. 정상적인 0.0 변동은 그대로 유지된다.
+                    "price": _clean_num(q.get("regularMarketPrice")),
+                    "change": _clean_num(q.get("regularMarketChange")),
+                    "change_pct": _clean_num(q.get("regularMarketChangePercent")),
                     "name": q.get("shortName", symbol),
                     "volume": q.get("regularMarketVolume", 0),
                     # epoch seconds(UTC) 또는 결측(v7가 안 주면 None) — 그대로 보존,
@@ -396,7 +425,12 @@ class USMarketData:
 
     @staticmethod
     def _parse_v8_spark_data(data: Dict, result: Dict[str, Dict]):
-        """v8 spark 응답 파싱 (flat / nested 형식 자동 감지)"""
+        """v8 spark 응답 파싱 (flat / nested 형식 자동 감지).
+
+        2026-09-15 (T10 F18): 가격/전일종가가 없거나 비숫자/NaN/inf면 change/
+        change_pct를 0으로 채우지 않는다 — 계산 자체가 불가하므로 심볼을 result에
+        아예 넣지 않는다(fetch_sp500_stocks 등 "조회 실패=누락" 기존 계약과 동일).
+        """
         if "spark" in data:
             # 레거시 형식: {"spark": {"result": [...]}}
             items = data.get("spark", {}).get("result", [])
@@ -404,18 +438,20 @@ class USMarketData:
                 return
             for item in items:
                 symbol = item.get("symbol", "")
+                if not symbol:
+                    continue
                 response_data = item.get("response", [{}])
                 if not response_data:
                     continue
                 meta = response_data[0].get("meta", {})
-                prev_close = meta.get("chartPreviousClose", 0) or meta.get("previousClose", 0)
-                current = meta.get("regularMarketPrice", 0)
-                if prev_close and current:
-                    change = current - prev_close
-                    change_pct = (change / prev_close) * 100
-                else:
-                    change = 0
-                    change_pct = 0
+                prev_close = _clean_num(meta.get("chartPreviousClose"))
+                if prev_close is None:
+                    prev_close = _clean_num(meta.get("previousClose"))
+                current = _clean_num(meta.get("regularMarketPrice"))
+                if current is None or not prev_close:
+                    continue
+                change = current - prev_close
+                change_pct = (change / prev_close) * 100
                 result[symbol] = {
                     "price": current,
                     "change": change,
@@ -429,15 +465,15 @@ class USMarketData:
                 if not isinstance(item, dict):
                     continue
                 closes = item.get("close", [])
-                current = closes[-1] if closes else 0
-                prev_close = item.get("chartPreviousClose", 0) or item.get("previousClose", 0)
+                current = _clean_num(closes[-1]) if closes else None
+                prev_close = _clean_num(item.get("chartPreviousClose"))
+                if prev_close is None:
+                    prev_close = _clean_num(item.get("previousClose"))
+                if current is None or not prev_close:
+                    continue
 
-                if prev_close and current:
-                    change = current - prev_close
-                    change_pct = (change / prev_close) * 100
-                else:
-                    change = 0
-                    change_pct = 0
+                change = current - prev_close
+                change_pct = (change / prev_close) * 100
 
                 result[symbol] = {
                     "price": current,
@@ -471,7 +507,8 @@ class USMarketData:
             pcts: List[Tuple[str, float]] = []
             for sym in symbols:
                 q = quotes.get(sym)
-                if q:
+                # T10 F18: change_pct가 None(결측)이면 섹터 평균 계산에서 제외
+                if q and q.get("change_pct") is not None:
                     pcts.append((sym, q["change_pct"]))
 
             if not pcts:
@@ -541,6 +578,7 @@ class USMarketData:
                         "price": None, "change": None, "change_pct": None,
                         "fetched_at": None, "as_of": None, "source": "yahoo_finance",
                         "missing": True, "reason": "US 시장 데이터 조회 실패",
+                        "missing_fields": ["price", "change_pct"],
                     }
                     for key in US_INDEX_KEYS.values()
                 },
@@ -555,24 +593,39 @@ class USMarketData:
         fetch_as_of = (self._cache_ts or datetime.now()).isoformat()
 
         # 1. 지수 등락률 (표시명 기반 — 기존 소비자 호환, 필드 스키마 불변)
+        # 2026-09-15 (T10 F18): price/change_pct가 결측(None)이면 이 딕셔너리에서
+        # 제외한다 — round()/f-string이 None에서 예외를 내는 것도 막고, 0으로
+        # 채워 "무변동"으로 오판되는 것도 막는다.
         indices: Dict[str, Dict] = {}
         idx_pcts: List[float] = []
         for sym in INDEX_SYMBOLS:
             q = quotes.get(sym)
-            if q:
-                display_name = INDEX_NAMES.get(sym, sym)
-                indices[display_name] = {
-                    "price": q["price"],
-                    "change": round(q["change"], 2),
-                    "change_pct": round(q["change_pct"], 2),
-                }
-                idx_pcts.append(q["change_pct"])
+            if not q or q.get("price") is None or q.get("change_pct") is None:
+                continue
+            display_name = INDEX_NAMES.get(sym, sym)
+            change = q.get("change")
+            indices[display_name] = {
+                "price": q["price"],
+                "change": round(change, 2) if change is not None else None,
+                "change_pct": round(q["change_pct"], 2),
+            }
+            idx_pcts.append(q["change_pct"])
 
         # 1-2. 정규화 키 (F10) — 결측은 0이 아닌 명시적 missing 표식
+        # 2026-09-15 (T10 F18): 심볼이 응답에 "있었지만" price/change_pct 필드가
+        # 없거나 비숫자였던 경우도(예: {"symbol":"^VIX","regularMarketTime":...})
+        # "완전히 없었던" 경우와 구분한다. price/change_pct 중 하나라도 유효하면
+        # missing=False로 그 값을 보존하고(kr_scheduler._norm이 blanket으로
+        # entry.get("missing")부터 검사하므로, 여기서 전부 결측 처리하면 VIX의
+        # price(_norm("VIX","price"))처럼 실제로는 쓸 수 있는 값까지 같이 버려진다)
+        # missing_fields로 결측 필드만 표시한다. 둘 다 없을 때만 missing=True.
         indices_normalized: Dict[str, Dict] = {}
         for sym, key in US_INDEX_KEYS.items():
             q = quotes.get(sym)
-            if q:
+            price = q.get("price") if q else None
+            change_pct = q.get("change_pct") if q else None
+            if q and (price is not None or change_pct is not None):
+                change = q.get("change")
                 market_time = q.get("market_time")
                 as_of_val = None
                 as_of_note = "시장 시각 미제공"
@@ -586,9 +639,9 @@ class USMarketData:
                         as_of_val = None
                         as_of_note = "시장 시각 파싱 실패"
                 indices_normalized[key] = {
-                    "price": q["price"],
-                    "change": round(q["change"], 2),
-                    "change_pct": round(q["change_pct"], 2),
+                    "price": price,
+                    "change": round(change, 2) if change is not None else None,
+                    "change_pct": round(change_pct, 2) if change_pct is not None else None,
                     "fetched_at": fetch_as_of,
                     "as_of": as_of_val,
                     "source": "yahoo_finance",
@@ -596,11 +649,25 @@ class USMarketData:
                 }
                 if as_of_note:
                     indices_normalized[key]["as_of_note"] = as_of_note
+                missing_fields = [
+                    f for f, v in (("price", price), ("change_pct", change_pct)) if v is None
+                ]
+                if missing_fields:
+                    indices_normalized[key]["missing_fields"] = missing_fields
+            elif q:
+                indices_normalized[key] = {
+                    "price": None, "change": None, "change_pct": None,
+                    "fetched_at": None, "as_of": None, "source": "yahoo_finance",
+                    "missing": True,
+                    "reason": f"{sym} 필드 결측(price, change_pct)",
+                    "missing_fields": ["price", "change_pct"],
+                }
             else:
                 indices_normalized[key] = {
                     "price": None, "change": None, "change_pct": None,
                     "fetched_at": None, "as_of": None, "source": "yahoo_finance",
                     "missing": True, "reason": f"{sym} 조회 실패 또는 응답에 없음",
+                    "missing_fields": ["price", "change_pct"],
                 }
 
         # 2. 시장 심리 판단

@@ -1,0 +1,477 @@
+"""T10 담당 B — 자료 유효성·신선도·전문가 집계 인수 테스트 (F16/F17/F18, 2026-09-15)
+
+docs/superpowers/plans/2026-09-13-review-remediation.md의 "## T10" 절 F16~F18 인수
+사례를 고정한다. 네트워크·DB·운영 캐시(~/.cache/ai_trader) 접근 없음 — 전부
+monkeypatch/tmp_path 또는 순수 함수 호출.
+
+실행: venv/bin/python -m pytest tests/test_t10_data_validity.py -q
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.experts.global_micro_expert import GlobalMicroExpert  # noqa: E402
+from src.experts.kr_economy_expert import KREconomyExpert  # noqa: E402
+from src.experts.kr_market_expert import KRMarketExpert  # noqa: E402
+from src.experts.macro_economist import MacroEconomist  # noqa: E402
+from src.experts.orchestrator import ExpertOrchestrator  # noqa: E402
+from src.experts.types import ExpertConfig, ExpertOpinion, RegimeBias  # noqa: E402
+from src.experts.us_market_expert import USMarketExpert  # noqa: E402
+from src.experts.weekend_signal_expert import WeekendSignalExpert  # noqa: E402
+
+
+def _opinion(expert: str, score: int, confidence: float, data_status: str = "ok") -> ExpertOpinion:
+    return ExpertOpinion(
+        expert=expert, score=score,
+        regime_bias=RegimeBias.BULL if score > 0 else RegimeBias.NEUTRAL,
+        confidence=confidence, data_status=data_status,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# F16 — 무자료 전문가의 coverage 충족 방지
+# ─────────────────────────────────────────────────────────────────
+def test_macro_economist_fully_empty_is_insufficient_and_excluded(monkeypatch):
+    """실제 MacroEconomist._analyze를 완전 무자료(빈 fetch·빈 컨텍스트·빈 오버라이드)로
+    실행한 의견 + 유효 3명(score 40, confidence 0.8, 동일 가중치)이면 valid_n=3·
+    insufficient_coverage=True·aggregate_regime_score=0(무자료 의견의 +보정 없음).
+    4번째 정상 전문가를 추가하면 valid_n=4로 커버리지를 충족하고 무보정이 풀린다."""
+    macro = MacroEconomist(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty_prices():
+        return {}
+
+    async def _empty_semis():
+        return {}
+
+    async def _empty_ctx():
+        return ""
+
+    monkeypatch.setattr(macro, "_fetch_yfinance_indicators", _empty_prices)
+    monkeypatch.setattr(macro, "_fetch_semis_basket_5d", _empty_semis)
+    monkeypatch.setattr(macro, "_fetch_macro_context", _empty_ctx)
+    monkeypatch.setattr(macro, "_load_manual_overrides", lambda: {})
+
+    macro_op = asyncio.run(macro._analyze())
+    macro_op.expert = "macro_economist"
+
+    assert macro_op.data_status == "insufficient"
+    assert macro_op.score == 0
+
+    orch = ExpertOrchestrator(ExpertConfig())
+    three_valid = {
+        "macro_economist": macro_op,
+        "kr_market_expert": _opinion("kr_market_expert", 40, 0.8),
+        "us_market_expert": _opinion("us_market_expert", 40, 0.8),
+        "kr_economy_expert": _opinion("kr_economy_expert", 40, 0.8),
+    }
+    summary = orch.data_status_summary(three_valid)
+    assert summary["valid_n"] == 3
+    assert summary["insufficient_coverage"] is True
+    assert orch.aggregate_regime_score(three_valid) == 0
+
+    four_valid = dict(three_valid)
+    four_valid["global_micro_expert"] = _opinion("global_micro_expert", 40, 0.8)
+    summary4 = orch.data_status_summary(four_valid)
+    assert summary4["valid_n"] == 4
+    assert summary4["insufficient_coverage"] is False
+    # 커버리지 충족 후에는 무자료 macro가 빠진 4명 전부 score=40 균일 →
+    # 가중평균도 40, ±30 스케일 규칙(avg*0.3, 클램프) 그대로 적용됨을 직접 계산해 검증.
+    expected = int(max(-30, min(30, 40 * 0.3)))
+    assert orch.aggregate_regime_score(four_valid) == expected
+    assert expected != 0  # 무보정(0)에서 벗어났다는 사실 자체가 핵심
+
+
+def test_us_market_expert_fully_empty_is_insufficient(monkeypatch):
+    expert = USMarketExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty_dict():
+        return {}
+
+    async def _empty_vix():
+        return None
+
+    monkeypatch.setattr(expert, "_fetch_index_states", _empty_dict)
+    monkeypatch.setattr(expert, "_fetch_sector_rs", _empty_dict)
+    monkeypatch.setattr(expert, "_fetch_vix", _empty_vix)
+    monkeypatch.setattr(expert, "_fetch_earnings_season", _empty_dict)
+    monkeypatch.setattr(expert, "_fetch_semis_state", _empty_dict)
+
+    op = asyncio.run(expert._analyze())
+    assert op.data_status == "insufficient"
+    assert op.score == 0
+
+
+def test_kr_economy_expert_fully_empty_is_insufficient(monkeypatch):
+    expert = KREconomyExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty_text(*a, **kw):
+        return ""
+
+    async def _empty_dict():
+        return {}
+
+    monkeypatch.setattr(expert, "_perplexity_search", _empty_text)
+    monkeypatch.setattr(expert, "_fetch_krw_state", _empty_dict)
+
+    op = asyncio.run(expert._analyze())
+    assert op.data_status == "insufficient"
+    assert op.score == 0
+
+
+def test_global_micro_expert_fully_empty_is_insufficient(monkeypatch):
+    expert = GlobalMicroExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty_text(*a, **kw):
+        return ""
+
+    async def _empty_dict():
+        return {}
+
+    monkeypatch.setattr(expert, "_perplexity_search", _empty_text)
+    monkeypatch.setattr(expert, "_fetch_sector_etf_returns", _empty_dict)
+
+    op = asyncio.run(expert._analyze())
+    assert op.data_status == "insufficient"
+    assert op.score == 0
+
+
+def test_weekend_signal_expert_fully_empty_is_insufficient(monkeypatch):
+    expert = WeekendSignalExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty_signals():
+        return {}
+
+    monkeypatch.setattr(expert, "_fetch_all_signals", _empty_signals)
+
+    op = asyncio.run(expert._analyze())
+    assert op.data_status == "insufficient"
+    assert op.score == 0
+
+
+def test_from_dict_missing_data_status_key_is_unknown_and_excluded():
+    """T9 이전(이 필드가 없던) 저장 레코드를 from_dict로 읽으면 "ok"로 가장하지
+    않고 "unknown"이 되어 orchestrator 집계에서 자연히 제외된다(F16)."""
+    legacy = {
+        "expert": "macro_economist", "score": 90, "regime_bias": "bull",
+        "confidence": 0.9,
+        # data_status 키 자체가 없음 — T9 이전 레코드 시뮬레이션
+    }
+    op = ExpertOpinion.from_dict(legacy)
+    assert op.data_status == "unknown"
+
+    orch = ExpertOrchestrator(ExpertConfig())
+    opinions = {
+        "macro_economist": op,
+        "kr_market_expert": _opinion("kr_market_expert", 5, 0.6),
+        "us_market_expert": _opinion("us_market_expert", 5, 0.6),
+        "kr_economy_expert": _opinion("kr_economy_expert", 5, 0.6),
+    }
+    # unknown이 집계에 끼어들었다면 score=90 때문에 valid_n=4가 되고 보정도 커졌을 것.
+    assert orch.data_status_summary(opinions)["valid_n"] == 3
+    assert orch.aggregate_regime_score(opinions) == 0  # valid_n=3 < MIN_VALID_EXPERTS(4)
+
+
+# ─────────────────────────────────────────────────────────────────
+# F17 — 야간선물 as_of 신선도 게이트 (weekend_signal_expert / kr_market_expert)
+# ─────────────────────────────────────────────────────────────────
+def test_weekend_expert_kr_futures_as_of_none_is_not_counted(monkeypatch):
+    """야간선물 +2%, as_of=None, value_unchanged_minutes=570 — 점수 미가산·
+    유효 신호 미포함(partial), "ok"로 잡히지 않는다."""
+    _base_signals = {
+        "es_pct": 0.1, "nq_pct": 0.1,
+        "krw_pct": 0.1, "krw_last": 1350.0, "vix_last": 16.0,
+        "btc_pct": 0.5, "zb_pct": 0.1,
+    }
+
+    expert = WeekendSignalExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _signals_with_kr():
+        return dict(
+            _base_signals,
+            kr_futures_pct=2.0, kr_futures_source="KIS:TEST",
+            kr_futures_as_of=None, kr_futures_as_of_ttl_seconds=None,
+            kr_futures_unchanged_minutes=570,
+        )
+
+    monkeypatch.setattr(expert, "_fetch_all_signals", _signals_with_kr)
+    op = asyncio.run(expert._analyze())
+
+    assert op.data_status == "partial"
+    assert any("야간선물" in m for m in op.missing_inputs)
+
+    # kr(+2.0%)이 반영됐다면 kr>=1.5 규칙으로 score에 +12가 더해졌을 것 — 그 기여가 없어야
+    # 하므로, kr_futures 키 자체가 없는(NKD 프록시 미작동) 케이스와 점수가 같아야 한다.
+    other_only = WeekendSignalExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _signals_no_kr():
+        return dict(_base_signals)
+
+    monkeypatch.setattr(other_only, "_fetch_all_signals", _signals_no_kr)
+    op_without_kr = asyncio.run(other_only._analyze())
+    assert op.score == op_without_kr.score  # kr as_of=None → score에 기여 0, 있으나 없으나 동일
+
+
+def test_weekend_expert_kr_futures_fresh_as_of_applies_existing_rule(monkeypatch):
+    """세션 개장 중 관측(as_of=now)·유효기간 내 +2% → 기존 kr>=1.5 규칙(+12) 그대로."""
+    expert = WeekendSignalExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+    now = datetime.now()
+
+    async def _signals():
+        return {
+            "kr_futures_pct": 2.0, "kr_futures_source": "KIS:TEST",
+            "kr_futures_as_of": now.isoformat(),
+            "kr_futures_as_of_ttl_seconds": 3600,
+            "kr_futures_unchanged_minutes": 0.0,
+        }
+
+    monkeypatch.setattr(expert, "_fetch_all_signals", _signals)
+    op = asyncio.run(expert._analyze())
+
+    assert op.score == 12
+    assert any("KR/JP 야간선물" in f and "갭업" in f for f in op.key_findings)
+
+
+def test_weekend_expert_kr_futures_expired_as_of_is_not_counted(monkeypatch):
+    """as_of는 있지만 ttl을 넘겨 만료된 자료는 유효 신호로 세지 않는다."""
+    expert = WeekendSignalExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+    stale_as_of = datetime.now() - timedelta(hours=10)
+
+    async def _signals():
+        return {
+            "kr_futures_pct": 2.0, "kr_futures_source": "KIS:TEST",
+            "kr_futures_as_of": stale_as_of.isoformat(),
+            "kr_futures_as_of_ttl_seconds": 3600,  # 1시간 유효 — 10시간 전은 만료
+        }
+
+    monkeypatch.setattr(expert, "_fetch_all_signals", _signals)
+    op = asyncio.run(expert._analyze())
+
+    assert op.score == 0
+    assert any("만료" in m or "as_of" in m for m in op.missing_inputs)
+
+
+def test_weekend_expert_kr_futures_future_as_of_is_not_counted(monkeypatch):
+    """미래 시각 as_of(시계 역전/오염 데이터)도 유효 신호로 세지 않는다."""
+    expert = WeekendSignalExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+    future_as_of = datetime.now() + timedelta(hours=2)
+
+    async def _signals():
+        return {
+            "kr_futures_pct": 2.0, "kr_futures_source": "KIS:TEST",
+            "kr_futures_as_of": future_as_of.isoformat(),
+            "kr_futures_as_of_ttl_seconds": 3600,
+        }
+
+    monkeypatch.setattr(expert, "_fetch_all_signals", _signals)
+    op = asyncio.run(expert._analyze())
+    assert op.score == 0
+
+
+def test_weekend_expert_zero_pct_is_valid_signal_not_missing(monkeypatch):
+    """결측(None)과 실제 0% 변동은 구분 — 0%는 유효 신호로 카운트(가산은 0)."""
+    expert = WeekendSignalExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+    now = datetime.now()
+
+    async def _signals():
+        return {
+            "kr_futures_pct": 0.0, "kr_futures_source": "KIS:TEST",
+            "kr_futures_as_of": now.isoformat(),
+            "kr_futures_as_of_ttl_seconds": 3600,
+        }
+
+    monkeypatch.setattr(expert, "_fetch_all_signals", _signals)
+    op = asyncio.run(expert._analyze())
+    assert not any("KR/JP" in m for m in op.missing_inputs)  # 유효 신호로 잡힘(0%는 결측이 아님)
+
+
+def test_kr_market_expert_futures_stale_as_of_not_counted(monkeypatch):
+    """kr_market_expert도 동일 게이트 — as_of 만료 시 nf_chg 규칙 미적용."""
+    expert = KRMarketExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty(*a, **kw):
+        return {}
+
+    async def _futures():
+        stale = datetime.now() - timedelta(hours=10)
+        return {
+            "overnight_chg_pct": -2.5, "source": "KIS:TEST",
+            "as_of": stale.isoformat(), "as_of_ttl_seconds": 3600,
+        }
+
+    monkeypatch.setattr(expert, "_fetch_investor_flows", _empty)
+    monkeypatch.setattr(expert, "_fetch_short_balance", _empty)
+    monkeypatch.setattr(expert, "_fetch_kospi_state", _empty)
+    monkeypatch.setattr(expert, "_fetch_kospi200_futures", _futures)
+
+    op = asyncio.run(expert._analyze())
+    # 야간선물(-2.5%, 갭다운 위험 -18)이 반영됐다면 score<=-18이었을 것 — 만료라 미반영.
+    assert not any(f.startswith("⚠️ KOSPI200 야간선물") for f in op.key_findings)
+    assert any("야간선물" in m for m in op.missing_inputs)
+
+
+def test_kr_market_expert_futures_fresh_as_of_applies_rule(monkeypatch):
+    expert = KRMarketExpert(ExpertConfig(), llm_manager=None, perplexity_key="")
+    now = datetime.now()
+
+    async def _empty(*a, **kw):
+        return {}
+
+    async def _futures():
+        return {
+            "overnight_chg_pct": -2.5, "source": "KIS:TEST",
+            "as_of": now.isoformat(), "as_of_ttl_seconds": 3600,
+        }
+
+    monkeypatch.setattr(expert, "_fetch_investor_flows", _empty)
+    monkeypatch.setattr(expert, "_fetch_short_balance", _empty)
+    monkeypatch.setattr(expert, "_fetch_kospi_state", _empty)
+    monkeypatch.setattr(expert, "_fetch_kospi200_futures", _futures)
+
+    op = asyncio.run(expert._analyze())
+    assert any(f.startswith("⚠️ KOSPI200 야간선물") for f in op.key_findings)
+
+
+# ─────────────────────────────────────────────────────────────────
+# F18 — us_market_data 공급자 부분 응답의 0 변환 제거
+# ─────────────────────────────────────────────────────────────────
+class _FakeResp:
+    def __init__(self, status: int, data: dict):
+        self.status = status
+        self._data = data
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def json(self):
+        return self._data
+
+
+class _FakeSession:
+    def __init__(self, responder):
+        self._responder = responder
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        status, data = self._responder(url, params)
+        return _FakeResp(status, data)
+
+    async def close(self):
+        pass
+
+
+def test_clean_num_rejects_non_numeric_and_keeps_zero():
+    from src.data.providers.us_market_data import _clean_num
+
+    assert _clean_num(None) is None
+    assert _clean_num("1.5") is None       # 문자열은 결측 취급 (정책 — 명시)
+    assert _clean_num(float("nan")) is None
+    assert _clean_num(float("inf")) is None
+    assert _clean_num(True) is None        # bool은 int 서브클래스라 별도 차단
+    assert _clean_num(0.0) == 0.0           # 정상 0.0 변동은 유지
+    assert _clean_num(-1.23) == -1.23
+
+
+def test_symbol_present_but_price_field_missing_is_none_not_zero():
+    """F18 재현: {"symbol":"^VIX","regularMarketTime":...}만 오면 VIX price/change_pct
+    가 0이 아니라 None + missing=True + missing_fields로 어느 필드가 빠졌는지 남는다."""
+    from src.data.providers.us_market_data import USMarketData
+
+    umd = USMarketData()
+
+    def _responder(url, params):
+        quotes = [
+            {"symbol": "^GSPC", "regularMarketPrice": 6500.0,
+             "regularMarketChange": 78.0, "regularMarketChangePercent": 1.2,
+             "regularMarketTime": 1757900000},
+            {"symbol": "^VIX", "regularMarketTime": 1757900000},  # 가격 필드 전부 없음
+        ]
+        return 200, {"quoteResponse": {"result": quotes}}
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    umd._get_session = fake_get_session  # type: ignore[assignment]
+
+    signal = asyncio.run(umd.get_overnight_signal())  # 예외 없이 반환돼야 함(summary 포함)
+
+    vix = signal["indices_normalized"]["VIX"]
+    assert vix["price"] is None
+    assert vix["change_pct"] is None
+    assert vix["missing"] is True
+    assert "price" in vix["missing_fields"] and "change_pct" in vix["missing_fields"]
+    assert vix["reason"]
+
+    assert signal["indices_normalized"]["SP500"]["price"] == 6500.0
+    assert isinstance(signal["summary"], str) and signal["summary"]
+
+
+def test_partial_field_missing_soxs_price_present_change_pct_nan():
+    """일부 필드만 결측(NaN) — price는 유효, change_pct는 NaN → change_pct만 None.
+
+    price가 유효하면 missing=False로 보존한다(kr_scheduler._norm이 entry.get("missing")를
+    먼저 게이트로 보므로, 여기서 missing=True로 전부 버리면 VIX처럼 price만 필요한
+    소비자까지 값을 잃는다) — missing_fields로 결측 필드만 알린다."""
+    from src.data.providers.us_market_data import USMarketData
+
+    umd = USMarketData()
+
+    def _responder(url, params):
+        quotes = [
+            {"symbol": "^SOX", "regularMarketPrice": 5200.0,
+             "regularMarketChange": float("nan"),
+             "regularMarketChangePercent": float("nan"),
+             "regularMarketTime": 1757900000},
+        ]
+        return 200, {"quoteResponse": {"result": quotes}}
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    umd._get_session = fake_get_session  # type: ignore[assignment]
+
+    signal = asyncio.run(umd.get_overnight_signal())
+    sox = signal["indices_normalized"]["SOX"]
+    assert sox["price"] == 5200.0
+    assert sox["change_pct"] is None
+    assert sox["missing"] is False
+    assert sox["missing_fields"] == ["change_pct"]
+    # change_pct가 없으므로 idx_pcts/레거시 indices(표시명) 딕셔너리에는 빠져야 한다
+    # (round() 예외 방지 + 심리 평균에 결측을 0으로 섞지 않기 위함)
+    assert "반도체(SOX)" not in signal["indices"]
+
+
+def test_normal_zero_pct_change_is_not_missing():
+    """정상적인 0.0% 변동(무변동)은 결측으로 오판되면 안 된다."""
+    from src.data.providers.us_market_data import USMarketData
+
+    umd = USMarketData()
+
+    def _responder(url, params):
+        quotes = [
+            {"symbol": "^DJI", "regularMarketPrice": 41000.0,
+             "regularMarketChange": 0.0, "regularMarketChangePercent": 0.0,
+             "regularMarketTime": 1757900000},
+        ]
+        return 200, {"quoteResponse": {"result": quotes}}
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    umd._get_session = fake_get_session  # type: ignore[assignment]
+
+    signal = asyncio.run(umd.get_overnight_signal())
+    dow = signal["indices_normalized"]["DOW"]
+    assert dow["missing"] is False
+    assert dow["change_pct"] == 0.0
+    assert signal["indices"]["다우"]["change_pct"] == 0.0

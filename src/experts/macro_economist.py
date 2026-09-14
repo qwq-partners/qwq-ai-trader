@@ -98,6 +98,27 @@ class MacroEconomist(ExpertAgent):
 
         affected = self._affected_sectors(prices)
 
+        # 2026-09-15 (T10 F16): _score_indicators가 참조하는 5개 핵심 지표가 전부
+        # 결측이고 매크로 컨텍스트(Perplexity)도 비어 있으면 "점수 계산에 쓸 수 있는
+        # 숫자 입력이 하나도 없다" — score=0이 "시장이 중립"이 아니라 "모른다"는 뜻이므로
+        # insufficient로 표시해 orchestrator 집계 가중을 0으로 만든다(cross-review F16).
+        missing_inputs = [
+            label
+            for key, label in self._CORE_FIELD_LABELS.items()
+            if not isinstance(prices.get(key), (int, float))
+        ]
+        has_context = bool(macro_context)
+        if len(missing_inputs) == len(self._CORE_FIELD_LABELS):
+            if has_context:
+                data_status = "partial"
+            else:
+                data_status = "insufficient"
+                missing_inputs = missing_inputs + ["매크로 컨텍스트(검색)"]
+        elif missing_inputs:
+            data_status = "partial"
+        else:
+            data_status = "ok"
+
         return self._build_opinion(
             score=score,
             bias=bias,
@@ -110,7 +131,19 @@ class MacroEconomist(ExpertAgent):
                 manual_override_keys=list(overrides.keys()),
             ),
             valid_hours=4,
+            data_status=data_status,
+            missing_inputs=missing_inputs,
         )
+
+    # _score_indicators가 실제로 참조하는 핵심 필드 (cpi_yoy는 수동 오버라이드 전용
+    # 보너스 신호라 core에서 제외 — T10 F16)
+    _CORE_FIELD_LABELS: Dict[str, str] = {
+        "us10y": "US10Y",
+        "dxy": "DXY",
+        "krw_usd": "원/달러",
+        "vix": "VIX",
+        "wti": "WTI",
+    }
 
     # ─────────────────────────────────────────
     # yfinance — to_thread로 비동기화

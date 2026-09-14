@@ -193,9 +193,12 @@ class ExpertOrchestrator:
             op = opinions.get(name)
             if op is None or not op.is_valid:
                 continue
-            # 2026-09-14 (T9 요청 4): 자료 부족(insufficient)은 confidence 상한만으로도
-            # 기여가 작아지지만, "가중 0으로 완전 제외"를 명시적으로 보장한다.
-            if getattr(op, "data_status", "ok") == "insufficient":
+            # 2026-09-14 (T9 요청 4)/2026-09-15 (T10 F16): 자료 부족(insufficient)은
+            # confidence 상한만으로도 기여가 작아지지만, "가중 0으로 완전 제외"를
+            # 명시적으로 보장한다. allowlist(ok/partial만 허용)로 바꿔 "unknown"
+            # (from_dict가 data_status 필드 없는 구 레코드에 매기는 값)도 같이
+            # 제외한다 — "모른다"를 "ok"로 착각해 집계에 새어들지 않게 한다.
+            if getattr(op, "data_status", "ok") not in ("ok", "partial"):
                 continue
             # P0-4 (2026-05-29 리뷰): 음수 가중치/confidence 방어
             cfg_w = max(0.0, float(self.config.weights.get(name, 1.0)))
@@ -249,9 +252,10 @@ class ExpertOrchestrator:
         for op in opinions.values():
             if not op.is_valid or op.expert in self.NON_REGIME_EXPERTS:
                 continue
-            # 2026-09-14 (T9 리뷰 blocking): aggregate_regime_score와 동일 기준으로
-            # insufficient를 제외한다 — "모른다"가 NEUTRAL 표로 집계되지 않게.
-            if getattr(op, "data_status", "ok") == "insufficient":
+            # 2026-09-14 (T9 리뷰 blocking)/2026-09-15 (T10 F16): aggregate_regime_score와
+            # 동일한 allowlist(ok/partial만 허용)로 insufficient·unknown을 제외한다 —
+            # "모른다"가 NEUTRAL 표로 집계되지 않게.
+            if getattr(op, "data_status", "ok") not in ("ok", "partial"):
                 continue
             w = self.config.weights.get(op.expert, 1.0) * op.confidence
             counts[op.regime_bias] += w
