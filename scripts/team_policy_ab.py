@@ -75,8 +75,11 @@ PRE_REGISTERED = {
     "mde": "중앙값 R +0.10 (≈ 왕복 수수료 0.227%의 SL 5% 대비 2배)",
     "holding_assumption": f"최대 관찰 {MAX_HOLD_DAYS}거래일, 이 안에 청산 트리거 없으면 미완결로 제외",
     "exit_assumption": (
-        f"1차 +{TP1_PCT}%→{TP1_FRAC*100:.0f}%매도, 2차 +{TP2_PCT}%→{TP2_FRAC*100:.0f}%, "
-        f"3차 +{TP3_PCT}%→{TP3_FRAC*100:.0f}% · 트레일링 +{TRAIL_ARM_PCT}%↑ 고점대비 -{TRAIL_DD_PCT}% · "
+        f"1차 +{TP1_PCT}%→{TP1_FRAC*100:.0f}%(원금 대비=잔여 대비, 시점상 동일) 매도, "
+        f"2차 +{TP2_PCT}%→잔여의 {TP2_FRAC*100:.0f}%, 3차 +{TP3_PCT}%→잔여의 {TP3_FRAC*100:.0f}% "
+        f"(1·2·3차 모두 마쳐도 잔여 {((1-TP1_FRAC)*(1-TP2_FRAC)*(1-TP3_FRAC))*100:.1f}% 남아 "
+        f"트레일링·손절로만 종결 가능 — live 미러) · "
+        f"트레일링 +{TRAIL_ARM_PCT}%↑ 고점대비 -{TRAIL_DD_PCT}% · "
         f"손절 plan.stop_price(없으면 {DEFAULT_SL_PCT}%) · 같은 날 손절·익절 동시 충족 시 손절 우선(보수적)"
     ),
     "cost_assumption": "FeeCalculator 왕복(매수 0.0140527% + 매도 0.0130527%+세금0.20%) — KR 기본",
@@ -88,10 +91,18 @@ PRE_REGISTERED = {
     "sample_requirement": "완결 포지션 ≥30건/정책, 시간순 홀드아웃(마지막 1/3)에서 중앙값 R 부호 유지",
     "leakage_guard": (
         "판단 시각(date) 이전 필드만 사용 — evidence/votes/plan 은 후보일 스냅샷, prices 는 이후 봉만 읽는다. "
-        "종목-주 단위 클러스터링(같은 종목·같은 주 후보는 완전 독립 표본으로 세지 않는다). "
-        "겹치는 보유기간의 포지션을 독립 표본으로 취급하지 않는다(같은 종목 중복 보유기간은 표본 dedup)."
+        "체결 시작점(existing_open·EntryPlan 공통)은 후보일 다음 첫 거래일 봉이다 — 후보일 당일 종가로 "
+        "체결하지 않는다(판단 재료였던 봉으로 체결하면 미래정보가 된다). "
+        "종목-주(ISO 연-주) 단위 클러스터링(같은 종목·같은 주 후보는 먼저 잡힌 것만 독립 표본으로 센다). "
+        "겹치는 보유기간의 포지션을 독립 표본으로 취급하지 않는다(직전 포지션 보유기간과 겹치는 "
+        "같은 종목 후속 진입은 표본에서 제외 — _dedupe_correlated, results 의 excluded_correlated 로 집계)."
     ),
-    "benchmark": "KODEX200(069500) — 로컬 가격 캐시가 없으면 null",
+    "benchmark": "KODEX200(069500) — 로컬 가격 캐시가 없으면 null. 초과수익은 계산하지 않는다(경로만 기록).",
+    "policy_bc_implementation": (
+        "정책 B/C 는 이 SHA 시점에 src.agents.judgment.assess 가 없어 이 러너 자체 구현"
+        "(r1_assess/_usable_reports/unanimous_r2)을 근사치로 쓴다 — 실제 배포된 judgment.assess 결과와 "
+        "다를 수 있다. 통합 후에는 judgment.assess 로 재배선해야 한다."
+    ),
     "llm_reeval_limitation": (
         "과거 판단을 재현하는 R1/R2 표결·근거는 스냅샷 시점에 실제로 LLM 이 낸 결과가 아니라면 "
         "모델의 사후 지식(hindsight)이 섞였을 수 있다 — 스냅샷이 실시간 원장(team_ledger)에서 "
@@ -239,7 +250,7 @@ def _net_pct(entry_price: float, exit_price: float) -> float:
 def _risk_pct(entry_price: float, stop_price: Optional[float]) -> float:
     if entry_price <= 0:
         return DEFAULT_SL_PCT
-    if stop_price and 0 < stop_price < entry_price:
+    if stop_price is not None and 0 < stop_price < entry_price:
         return (entry_price - stop_price) / entry_price * 100
     return DEFAULT_SL_PCT
 
@@ -258,7 +269,7 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
     stage = 0
     high_wm = entry_price
     trail_armed = False
-    stop_px = stop_price if (stop_price and 0 < stop_price < entry_price) else None
+    stop_px = stop_price if (stop_price is not None and 0 < stop_price < entry_price) else None
     end = min(entry_idx + MAX_HOLD_DAYS, len(bars))
     for i in range(entry_idx, end):
         bar = bars[i]
@@ -282,7 +293,9 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
                         "net_pct": realized, "exit_reason": "trailing"}
         for stage_no, pct, frac in ((1, TP1_PCT, TP1_FRAC), (2, TP2_PCT, TP2_FRAC), (3, TP3_PCT, TP3_FRAC)):
             if stage < stage_no and chg_high >= pct and remaining > 1e-9:
-                sell_frac = min(frac, remaining)
+                # CLAUDE.md: 1차는 "10% 매도"(remaining=1.0 시점이라 원금 대비=잔여 대비 동일),
+                # 2·3차는 "잔여의 50%" — frac 은 항상 잔여 대비 비율로 적용한다(원금 대비 절대 비율 아님).
+                sell_frac = min(remaining * frac, remaining)
                 exit_px = entry_price * (1 + pct / 100)
                 realized += sell_frac * _net_pct(entry_price, exit_px)
                 remaining -= sell_frac
@@ -300,13 +313,25 @@ def _find_bar_index(prices: List[Dict[str, Any]], on_or_after: str) -> Optional[
     return None
 
 
-def _next_open_entry(c: Candidate) -> Optional[Tuple[int, float]]:
-    """후보일 다음 거래일 시가 — 후보일 당일 봉은 판단 재료일 뿐 체결 대상이 아니다."""
+def _first_tradable_idx(c: Candidate) -> Optional[int]:
+    """후보일 다음 거래일 봉 인덱스 — 후보일 당일 봉은 판단 재료일 뿐 체결 대상이 아니다.
+
+    existing_open·EntryPlan 두 체결 방식이 반드시 이 같은 인덱스에서 스캔을 시작해야
+    timing 실험에서 어느 쪽도 상대에게 없는 선행정보(후보일 당일 종가 등)를 얻지 않는다.
+    """
     idx = _find_bar_index(c.prices, c.date)
     if idx is None:
         return None
     nxt = idx + 1 if str(c.prices[idx].get("date")) == c.date else idx
     if nxt >= len(c.prices):
+        return None
+    return nxt
+
+
+def _next_open_entry(c: Candidate) -> Optional[Tuple[int, float]]:
+    """후보일 다음 거래일 시가."""
+    nxt = _first_tradable_idx(c)
+    if nxt is None:
         return None
     try:
         return nxt, float(c.prices[nxt]["open"])
@@ -341,6 +366,53 @@ def _entry_plan_fill(c: Candidate, start_idx: int) -> Tuple[Optional[int], Optio
     return None, None, "no_fill_in_window"
 
 
+# ── 표본 독립성(leakage_guard) ──────────────────────────────────────────
+def _week_key(date_str: str) -> str:
+    """ISO 연-주 키 — 같은 종목·같은 주 후보를 하나의 클러스터로 묶기 위함.
+
+    날짜 파싱이 안 되면(빈 값 등) 원본 문자열을 그대로 키로 써서 클러스터를 나누지 않는
+    (=서로 다른 표본으로 잘못 합치지 않는) 쪽으로 보수적으로 처리한다.
+    """
+    try:
+        y, w, _ = _date.fromisoformat(date_str).isocalendar()
+        return f"{y}-W{w:02d}"
+    except (ValueError, TypeError):
+        return date_str
+
+
+def _dedupe_correlated(positions: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """leakage_guard 이행 — 종목-주 클러스터·보유기간 겹침 표본을 독립 표본에서 제외한다.
+
+    날짜순으로 먼저 잡힌 진입만 남긴다: 같은 종목이 같은 ISO 주에 다시 후보로 잡히거나,
+    직전 포지션의 보유기간(entry~entry+holding_days)과 겹치는 후속 진입은 사실상 같은
+    베팅의 반복이라 독립 표본으로 세지 않는다(§2.5 사전등록 표본 요건의 전제).
+    """
+    ordered = sorted(positions, key=lambda p: (p["symbol"], p["date"]))
+    kept: List[Dict[str, Any]] = []
+    excluded = 0
+    last_by_symbol: Dict[str, Dict[str, Any]] = {}
+    seen_week: set = set()
+    for p in ordered:
+        wk = (p["symbol"], p.get("week"))
+        prev = last_by_symbol.get(p["symbol"])
+        overlap = False
+        if prev is not None:
+            try:
+                prev_entry = _date.fromisoformat(prev["date"])
+                cur_entry = _date.fromisoformat(p["date"])
+                prev_end = prev_entry.toordinal() + int(prev.get("holding_days") or 0)
+                overlap = cur_entry.toordinal() <= prev_end
+            except (ValueError, TypeError):
+                overlap = False
+        if wk in seen_week or overlap:
+            excluded += 1
+            continue
+        seen_week.add(wk)
+        last_by_symbol[p["symbol"]] = p
+        kept.append(p)
+    return kept, excluded
+
+
 # ── 실험 실행 ────────────────────────────────────────────────────────────
 def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new: int) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -348,6 +420,7 @@ def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new
         selected = select_candidates(rows, policy, max_new)
         positions: List[Dict[str, Any]] = []
         no_data = 0
+        incomplete = 0
         for c in selected:
             entry = _next_open_entry(c)
             if entry is None:
@@ -356,17 +429,20 @@ def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new
             idx, entry_px = entry
             res = simulate_exit(c.prices, idx, entry_px, c.plan.get("stop_price"))
             if res is None:
-                continue  # 관찰 창 안에 미청산 — 완결 표본에서 제외(사전등록)
+                incomplete += 1  # 관찰 창 안에 미청산 — 완결 표본에서 제외(사전등록)
+                continue
             risk = _risk_pct(entry_px, c.plan.get("stop_price"))
             r = res["net_pct"] / risk if risk > 0 else None
             if r is None:
+                incomplete += 1
                 continue
             positions.append({
-                "symbol": c.symbol, "date": c.date, "week": c.date[:8],  # 종목-주 클러스터 키
+                "symbol": c.symbol, "date": c.date, "week": _week_key(c.date),
                 "entry_price": entry_px, "net_pct": res["net_pct"], "r": r,
                 "holding_days": res["holding_days"], "exit_reason": res["exit_reason"],
             })
-        out[policy] = _summarize_positions(policy, selected, positions, no_data)
+        deduped, excluded = _dedupe_correlated(positions)
+        out[policy] = _summarize_positions(policy, selected, deduped, no_data, incomplete, excluded)
     return out
 
 
@@ -375,20 +451,26 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
     out: Dict[str, Any] = {}
     for mode in ("existing_open", "entry_plan"):
         positions: List[Dict[str, Any]] = []
+        no_data = 0
+        incomplete = 0
         unfilled = 0
         wait_days: List[int] = []
         opportunity_cost: List[float] = []
         for c in selected:
-            base_idx = _find_bar_index(c.prices, c.date)
-            if base_idx is None:
+            # 두 체결 방식이 반드시 같은 첫 관찰 봉(start_idx)에서 스캔을 시작한다 —
+            # EntryPlan 쪽이 후보일 당일 봉(판단 재료)으로 체결해 선행정보 우위를 얻지 않도록.
+            start_idx = _first_tradable_idx(c)
+            if start_idx is None:
+                no_data += 1
                 continue
             if mode == "existing_open":
                 entry = _next_open_entry(c)
                 if entry is None:
+                    no_data += 1
                     continue
                 idx, entry_px = entry
             else:
-                idx, entry_px, _reason = _entry_plan_fill(c, base_idx)
+                idx, entry_px, _reason = _entry_plan_fill(c, start_idx)
                 if idx is None or entry_px is None:
                     unfilled += 1
                     # 미체결 기회비용 — 기존 방식(다음 시가) 이었다면 얻었을 R을 참고용으로 기록
@@ -397,25 +479,28 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
                         bidx, bpx = base_entry
                         bres = simulate_exit(c.prices, bidx, bpx, c.plan.get("stop_price"))
                         if bres is not None:
-                            risk = _risk_pct(bpx, c.plan.get("stop_price"))
-                            if risk > 0:
-                                opportunity_cost.append(bres["net_pct"] / risk)
+                            brisk = _risk_pct(bpx, c.plan.get("stop_price"))
+                            if brisk > 0:
+                                opportunity_cost.append(bres["net_pct"] / brisk)
                     continue
-                wait_days.append(idx - base_idx)
+                wait_days.append(idx - start_idx)
             res = simulate_exit(c.prices, idx, entry_px, c.plan.get("stop_price"))
             if res is None:
+                incomplete += 1
                 continue
             risk = _risk_pct(entry_px, c.plan.get("stop_price"))
             if risk <= 0:
+                incomplete += 1
                 continue
             positions.append({
-                "symbol": c.symbol, "date": c.date, "entry_price": entry_px,
+                "symbol": c.symbol, "date": c.date, "week": _week_key(c.date), "entry_price": entry_px,
                 "net_pct": res["net_pct"], "r": res["net_pct"] / risk,
                 "holding_days": res["holding_days"], "exit_reason": res["exit_reason"],
             })
-        summary = _summarize_positions(mode, selected, positions, 0)
+        deduped, excluded = _dedupe_correlated(positions)
+        summary = _summarize_positions(mode, selected, deduped, no_data, incomplete, excluded)
         summary["unfilled"] = unfilled
-        summary["fill_rate"] = round(len(positions) / len(selected), 4) if selected else None
+        summary["fill_rate"] = round(len(deduped) / len(selected), 4) if selected else None
         summary["avg_wait_days"] = round(sum(wait_days) / len(wait_days), 2) if wait_days else None
         summary["unfilled_opportunity_cost_median_r"] = (
             round(statistics.median(opportunity_cost), 4) if opportunity_cost else None
@@ -425,7 +510,7 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
 
 
 def _summarize_positions(label: str, selected: List[Candidate], positions: List[Dict[str, Any]],
-                          no_data: int) -> Dict[str, Any]:
+                          no_data: int, incomplete: int, excluded_correlated: int) -> Dict[str, Any]:
     n = len(positions)
     rs = [p["r"] for p in positions]
     # 표본요건: 시간순 정렬 후 마지막 1/3을 홀드아웃으로 분리해 부호 유지 확인
@@ -442,7 +527,9 @@ def _summarize_positions(label: str, selected: List[Candidate], positions: List[
         "label": label,
         "candidates_selected": len(selected),
         "completed_positions": n,
-        "no_data_or_incomplete": no_data + (len(selected) - n - no_data),
+        "no_data": no_data,                       # 체결 대상 봉 자체가 없음(데이터 끝 등)
+        "incomplete": incomplete,                  # 관찰 창 안에 청산 안 됨 / 위험값 계산 불가
+        "excluded_correlated": excluded_correlated,  # leakage_guard: 종목-주 클러스터·보유기간 겹침 제외
         "median_r": round(statistics.median(rs), 4) if rs else None,
         "mean_r": round(sum(rs) / n, 4) if rs else None,
         "net_pnl_pct_sum": round(sum(p["net_pct"] for p in positions), 2) if positions else None,
@@ -462,7 +549,8 @@ def build_manifest(policies: List[str], experiment: str, snapshot_path: str,
         "policies": policies,
         "experiment": experiment,
         "pre_registered": PRE_REGISTERED,
-        "benchmark_kodex200": benchmark_path or None,
+        # computed=False — 경로만 기록하고 초과수익은 계산하지 않는다(계산이 이뤄진 것처럼 읽히지 않게).
+        "benchmark_kodex200": {"path": benchmark_path, "computed": False} if benchmark_path else None,
         "note": "이 도구는 승격 판정을 하지 않는다 — 사전등록 지표를 보고할 뿐이다.",
         "all_rows_synthetic": all_synthetic,
     }

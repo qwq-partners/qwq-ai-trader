@@ -114,7 +114,7 @@ def _mk_candidate(symbol: str, day: str = "2026-08-01"):
     )
 
 
-def test_13_policies_see_identical_candidate_universe_and_selection_never_reads_outcome():
+def test_13_policies_see_identical_candidate_universe_and_selection_never_reads_outcome(monkeypatch):
     """정책 A/B/C 는 같은 날짜·후보 풀에서 출발해야 하고, 선정 함수는 prices(결과)를
     전혀 들여다보지 않아야 한다 — 사후 선별을 원천적으로 배제한다."""
     rows = [_mk_candidate("000001"), _mk_candidate("000002"), _mk_candidate("000003")]
@@ -125,14 +125,12 @@ def test_13_policies_see_identical_candidate_universe_and_selection_never_reads_
     for forbidden in (".prices", "net_pct", "exit_reason"):
         assert forbidden not in src, f"선정 로직이 결과({forbidden})를 참조하면 사후 선별이 된다"
 
-    universe_by_policy = {}
-    for policy in ("A", "B", "C"):
-        by_day = {}
-        for c in rows:
-            by_day.setdefault(c.date, []).append(c.symbol)
-        universe_by_policy[policy] = by_day
-    # 세 정책의 "입력 후보 풀"(선정 이전) 자체는 완전히 동일해야 한다
-    assert universe_by_policy["A"] == universe_by_policy["B"] == universe_by_policy["C"]
+    # 세 정책의 "입력 후보 풀"(게이트 적용 전) 자체가 실제로 동일한지 계측 — select_candidates 가
+    # 받는 rows 는 정책과 무관하게 항상 같은 객체다. 게이트를 전부 통과시켜 세 정책의 최종 선정
+    # 결과까지 동일해지는지도 함께 확인한다(구현이 정책별로 다른 입력을 몰래 넣으면 여기서 깨진다).
+    monkeypatch.setattr(tpab, "GATES", {"A": lambda c: True, "B": lambda c: True, "C": lambda c: True})
+    selections = {p: [c.symbol for c in tpab.select_candidates(rows, p, max_new=5)] for p in ("A", "B", "C")}
+    assert selections["A"] == selections["B"] == selections["C"] == ["000001", "000002", "000003"]
 
 
 def test_13_exit_and_cost_assumptions_identical_across_policies(tmp_path):

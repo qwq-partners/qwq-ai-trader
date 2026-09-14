@@ -110,7 +110,7 @@ def build_report(days: int = 1) -> str:
             rounds.append(deb["rounds_run"])
     if consensus:
         L.append("")
-        L.append("■ 토론")
+        L.append("■ 토론 (합의율) — LLM 프로세스 품질 지표 (투자 성능·P&L 미측정)")
         L.append("  " + " / ".join(f"{k} {n}" for k, n in consensus.most_common()))
         if rounds:
             L.append(f"  평균 {sum(rounds)/len(rounds):.1f}라운드")

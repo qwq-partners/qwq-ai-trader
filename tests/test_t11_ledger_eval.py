@@ -279,6 +279,46 @@ def test_timing_experiment_defers_to_canonical_entry_plan_checker(tmp_path):
     assert results["entry_plan"]["fill_rate"] == 0.0
 
 
+def test_entry_plan_and_existing_open_use_the_same_first_bar_when_checker_allows(tmp_path, monkeypatch):
+    """리뷰 blocking#1(2026-09-15) 재발 방지 고정 — EntryPlan 체결이 후보일 당일 봉(판단 재료)으로
+    이뤄지면 existing_open(다음 거래일 시가) 보다 먼저·유리하게 체결되는 선행정보 우위가 생긴다.
+    checker 를 항상 allow 로 대체해(담당 C 구현 완료 상황을 모사) 두 팔이 반드시 같은 첫
+    관찰 봉에서 출발하는지 고정한다."""
+    monkeypatch.setattr(tpab, "check_entry_plan",
+                         lambda plan, quote, now, **kw: SimpleNamespace(
+                             status="allow", expected_fill_price=None, reasons=[]))
+    snap = tmp_path / "snap.jsonl"
+    _write_snapshot(snap, [_mk_candidate("000001")])
+    rows = tpab.load_snapshot(snap)
+    c = rows[0]
+    start_idx = tpab._first_tradable_idx(c)
+    open_idx, _open_px = tpab._next_open_entry(c)
+    plan_idx, _plan_px, _reason = tpab._entry_plan_fill(c, start_idx)
+    assert start_idx == open_idx, "existing_open 조차 후보일 당일 봉을 쓰면 안 된다(기준 자체 확인)"
+    assert plan_idx == open_idx, (
+        "EntryPlan 이 existing_open 과 다른(더 이른) 봉에서 체결되면 선행정보 우위가 생긴다"
+    )
+
+
+def test_dedupe_correlated_excludes_same_week_symbol_and_overlapping_holding_period():
+    """리뷰 blocking#2(2026-09-15) 재발 방지 고정 — leakage_guard 사전등록(종목-주 클러스터·
+    보유기간 겹침 dedup)이 실제로 표본을 줄이는지 확인한다. 잘못된 'week': date[:8] (월 접두사)
+    구현이었다면 이 제외가 전혀 일어나지 않았다."""
+    positions = [
+        {"symbol": "000001", "date": "2026-08-01", "week": tpab._week_key("2026-08-01"),
+         "holding_days": 5, "r": 0.2},
+        {"symbol": "000001", "date": "2026-08-03", "week": tpab._week_key("2026-08-03"),
+         "holding_days": 5, "r": 0.5},  # 08-01 보유기간(~08-06)과 겹침 + 같은 ISO 주
+        {"symbol": "000002", "date": "2026-08-01", "week": tpab._week_key("2026-08-01"),
+         "holding_days": 5, "r": 0.3},  # 다른 종목 — 영향 없음
+    ]
+    kept, excluded = tpab._dedupe_correlated(positions)
+    assert excluded == 1
+    assert {(p["symbol"], p["date"]) for p in kept} == {
+        ("000001", "2026-08-01"), ("000002", "2026-08-01"),
+    }
+
+
 def test_cli_end_to_end_writes_synthetic_only_status(tmp_path):
     snap = tmp_path / "snap.jsonl"
     _write_snapshot(snap, [_mk_candidate("000001")])
@@ -327,7 +367,8 @@ def test_shadow_report_labels_process_quality_and_shows_ledger_samples(tmp_path,
 
     report = sr.build_report(days=1)
 
-    assert "MIN_SAMPLES" not in report  # 숫자는 그대로, 이름만 라벨링
+    assert sr.MIN_SAMPLES == 200  # 승격 기준 숫자 자체(변수)가 바뀌지 않았는지 직접 확인
+    assert "MIN_SAMPLES" not in report  # 리포트엔 변수명이 아니라 값만 보인다(이름 노출 안 함)
     assert "200건" in report  # 기존 승격 기준 숫자(MIN_SAMPLES) 불변
     assert "LLM 프로세스 품질 지표" in report and "P&L 미측정" in report
     assert "엣지 증명이 아님" in report

@@ -13,7 +13,9 @@ AI 게이트가 차단·감지한 매수 후보의 "만약 거래했다면" 후�
   · 가상 진입가 = 감지일(이후 첫 거래일) 종가, rN = N세션 후 종가 대비 수익률(%)
   · 갱신은 저녁 품질검증 잡에서 1일 1회 (KIS get_daily_prices — 오래된 순 반환)
 
-해석: 차단 후보의 rN이 음수(-) = 게이트가 손실을 막았다 (정확한 차단).
+해석: 차단(rule11/rule12/team_hold) 후보의 rN이 음수(-) = 게이트가 손실을 막았다(정확한 차단).
+반대로 team_buy_unfilled(팀이 승인한 매수, T11 E1 2026-09-15~)는 rN이 음수면 팀 판단이
+틀렸다는 뜻이다 — 같은 부호라도 두 소스의 "적중"은 정반대 의미이므로 요약에서 섞어 읽지 않는다.
 """
 
 from __future__ import annotations
@@ -274,7 +276,12 @@ class CounterfactualTracker:
 
     # ── 요약 (주간 성적표) ──────────────────────────────────
     def _summary_base(self) -> str:
-        """소스별 차단 정확도 요약 — rN < 0 이면 '손실 회피 적중'"""
+        """소스별 요약 — 차단 계열(rN<0="적중")과 승인 BUY 계열(rN<0="팀 판단이 틀림")을 분리해 표기한다.
+
+        team_buy_unfilled 는 "게이트가 막은 후보"가 아니라 "팀이 승인한 매수"다. rN 이 음수라는
+        같은 사실이 차단 계열에선 '정확한 차단'을, 승인 계열에선 '틀린 매수 판단'을 뜻하므로
+        같은 "적중" 프레이밍으로 섞어 보고하면 오해를 낳는다(T11 담당D 리뷰 2026-09-15 반영).
+        """
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for v in self._state.values():
             if v.get("r5") is not None:
@@ -287,20 +294,32 @@ class CounterfactualTracker:
         lines = []
         for source, items in sorted(groups.items()):
             n = len(items)
-            avoided = sum(1 for i in items if (i.get("r5") or 0) < 0)
+            base_source = source.split("|", 1)[0]
             avg_r5 = sum((i.get("r5") or 0) for i in items) / n
             r20_items = [i for i in items if i.get("r20") is not None]
             avg_r20 = (
                 sum(i["r20"] for i in r20_items) / len(r20_items)
                 if r20_items else None
             )
-            line = (
-                f"{source}: {n}건 | 5일 뒤 하락 {avoided}건 ({avoided/n*100:.0f}% 적중) "
-                f"| 평균 r5 {avg_r5:+.1f}%"
-            )
+            if base_source == "team_buy_unfilled":
+                wrong = sum(1 for i in items if (i.get("r5") or 0) < 0)
+                line = (
+                    f"{source}: 승인 BUY 미체결 {n}건 | 5일 뒤 하락 {wrong}건 "
+                    f"(팀 판단이 틀린 비율 {wrong/n*100:.0f}%) | 평균 r5 {avg_r5:+.1f}%"
+                )
+            else:
+                avoided = sum(1 for i in items if (i.get("r5") or 0) < 0)
+                line = (
+                    f"{source}: {n}건 | 5일 뒤 하락 {avoided}건 ({avoided/n*100:.0f}% 적중) "
+                    f"| 평균 r5 {avg_r5:+.1f}%"
+                )
             if avg_r20 is not None:
                 line += f" | 평균 r20 {avg_r20:+.1f}%"
             lines.append(line)
+        if self._fill_evidence_check is None and any(
+            source.split("|", 1)[0] == "team_buy_unfilled" for source in groups
+        ):
+            lines.append("※ 체결 대조 미배선 — team_buy_unfilled 에 실제 체결분도 섞여 있을 수 있음")
         return "\n".join(lines)
 
 

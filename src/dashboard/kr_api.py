@@ -9,6 +9,7 @@ import os
 import time
 import asyncio
 from datetime import date, datetime
+from typing import Dict, Optional
 
 import aiohttp as aiohttp_client
 from aiohttp import web
@@ -86,18 +87,43 @@ class KRAPIHandler:
     # ── T11 (2026-09-15) 팀 심의 실행 상태 — 계약 2.4 execution_state ──────────
     _EXEC_STATES = ("candidate", "waiting_trigger", "shadow_ready", "order_submitted", "filled")
 
-    def _execution_state(self, row: dict, day: str) -> str:
+    def _load_ledger_index(self, day: str) -> Dict[str, list]:
+        """하루치 팀 원장을 요청당 한 번만 읽어 종목별로 인덱싱 (N+1 파일 I/O 방지).
+
+        행마다 history_for_symbol(→ load_day)을 다시 부르면 목록 한 번 요청에 원장 파일을
+        건수만큼 반복해서 read_text 한다 — 여기서 한 번만 읽어 나눠 쓴다.
+        """
+        try:
+            from ..agents.team_ledger import load_day
+            rows = load_day(day)
+        except Exception as e:
+            logger.debug(f"[API] 팀 원장 조회 실패 (candidate 로 표시): {e}")
+            return {}
+        index: Dict[str, list] = {}
+        for r in rows:
+            index.setdefault(str(r.get("symbol") or ""), []).append(r)
+        for lst in index.values():
+            lst.sort(key=lambda r: str(r.get("decided_at", "")))
+        return index
+
+    def _execution_state(self, row: dict, day: str, ledger_index: Optional[Dict[str, list]] = None) -> str:
         """팀 판단(candidate) ~ 실제 체결(filled) 중 화면에 보여줄 단계.
 
         team_ledger 행이 order_submitted/filled 라고 적어도, 실제 주문·체결 증거
         (trade_journal)가 없으면 그 값을 그대로 믿지 않고 shadow_ready 로 낮춘다 —
         팀 BUY 합의와 실제 주문·체결을 화면에서 혼동시키지 않기 위함이다.
+
+        ledger_index 를 주면(get_team_verdicts 가 요청당 한 번 로드) 그걸 쓰고, 없으면
+        (단독 호출 등) 기존처럼 그때그때 history_for_symbol 로 조회한다.
         """
         symbol = str(row.get("symbol") or "")
         state = "candidate"
         try:
-            from ..agents.team_ledger import history_for_symbol
-            hist = history_for_symbol(symbol, day)
+            if ledger_index is not None:
+                hist = ledger_index.get(symbol) or []
+            else:
+                from ..agents.team_ledger import history_for_symbol
+                hist = history_for_symbol(symbol, day)
             if hist:
                 state = str(hist[-1].get("execution_state") or "candidate")
         except Exception as e:
@@ -217,6 +243,7 @@ class KRAPIHandler:
             ]
 
         verdict_day = day or f"{datetime.now():%Y%m%d}"
+        ledger_index = self._load_ledger_index(verdict_day)  # 요청당 1회 — 행마다 다시 읽지 않는다
 
         # 목록 화면용 요약 — 토론 전문은 상세 필드에 그대로 남겨둔다
         summary = []
@@ -258,7 +285,7 @@ class KRAPIHandler:
                     "calibration_status": a.get("calibration_status"),
                 } if a else None,
                 # 실행 상태 5단계 — 팀 판단과 실제 주문·체결을 화면에서 혼동하지 않도록 분리 (계약 2.4)
-                "execution_state": self._execution_state(r, verdict_day),
+                "execution_state": self._execution_state(r, verdict_day, ledger_index),
             })
 
         return web.json_response({

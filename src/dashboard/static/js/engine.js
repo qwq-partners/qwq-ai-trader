@@ -192,6 +192,18 @@ function stanceBadge(stance, approved) {
     return '<span class="badge badge-yellow">보유</span>';
 }
 
+// T11 (2026-09-15): 실행 상태 5단계 배지 — 팀 BUY 합의(제안)와 실제 주문·체결을 시각적으로도 분리
+const EXEC_STATE_LABEL = {
+    candidate: '판단', waiting_trigger: '트리거 대기', shadow_ready: 'shadow(체결 미확인)',
+    order_submitted: '주문 접수', filled: '체결',
+};
+function execStateBadge(state) {
+    const label = EXEC_STATE_LABEL[state] || state;
+    const cls = state === 'filled' ? 'badge-green'
+        : state === 'order_submitted' ? 'badge-yellow' : 'badge-blue';
+    return `<span class="badge ${cls}" style="font-size:.6rem;">${escapeHtml(label)}</span>`;
+}
+
 function escapeHtml(s) {
     return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -244,6 +256,7 @@ async function fetchTeamVerdicts() {
                     <strong style="font-size:.78rem;">${escapeHtml(v.name || v.symbol)}</strong>
                     <span style="font-size:.64rem;color:var(--text-muted);">${escapeHtml(v.symbol)}</span>
                     ${stanceBadge(v.stance, v.approved)}
+                    ${v.execution_state ? execStateBadge(v.execution_state) : ''}
                     ${v.size_multiplier ? `<span style="font-size:.64rem;color:var(--text-muted);">×${v.size_multiplier}</span>` : ''}
                     ${override} ${split}
                 </div>
