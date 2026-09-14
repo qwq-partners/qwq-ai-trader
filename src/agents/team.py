@@ -218,6 +218,7 @@ class TradingTeam:
         slot: str = "",
         current_price: Optional[float] = None,
         quote_as_of: Optional[datetime] = None,
+        intraday_level: Optional[str] = None,
     ) -> TeamVerdict:
         started = time.monotonic()
         verdict = TeamVerdict(symbol=symbol, name=name, slot=slot)
@@ -283,6 +284,7 @@ class TradingTeam:
             self._attach_assessment(
                 verdict, entry_plan=entry_plan,
                 current_price=current_price, quote_as_of=quote_as_of,
+                intraday_level=intraday_level,
             )
 
             if decision.overrode_gate:
@@ -326,6 +328,7 @@ class TradingTeam:
         slot: str = "",
         current_price: Optional[float] = None,
         quote_as_of: Optional[datetime] = None,
+        intraday_level: Optional[str] = None,
     ) -> TeamVerdict:
         """매수 후보 심의"""
         async with self._sem:
@@ -338,7 +341,8 @@ class TradingTeam:
                                      sector=sector,
                                      entry_plan=entry_plan, slot=slot,
                                      current_price=current_price,
-                                     quote_as_of=quote_as_of),
+                                     quote_as_of=quote_as_of,
+                                     intraday_level=intraday_level),
                     timeout=DELIBERATION_TIMEOUT,
                 )
             except asyncio.TimeoutError:
@@ -353,15 +357,22 @@ class TradingTeam:
         indicators: Optional[Dict[str, Any]] = None,
         unrealized_pnl_pct: Optional[float] = None,
         indicators_as_of: Optional[datetime] = None,
+        slot: str = "",
     ) -> TeamVerdict:
-        """보유 종목 재평가 — 게이트는 매수용이므로 적용하지 않는다"""
+        """보유 종목 재평가 — 게이트는 매수용이므로 적용하지 않는다
+
+        slot: 같은 날 여러 시점(10:30/14:00 등) 재평가를 구분한다 — 비워 두면
+        같은 날 보고서 스냅샷이 같을 때 deliberation_id가 충돌해(team_ledger)
+        하나로 접힐 수 있다(호출측이 슬롯을 넘기지 않으면 여전히 발생 가능).
+        """
         async with self._sem:
             try:
                 return await asyncio.wait_for(
                     self._deliberate(symbol, name, holding=True,
                                      indicators=indicators,
                                      unrealized_pnl_pct=unrealized_pnl_pct,
-                                     indicators_as_of=indicators_as_of),
+                                     indicators_as_of=indicators_as_of,
+                                     slot=slot),
                     timeout=DELIBERATION_TIMEOUT,
                 )
             except asyncio.TimeoutError:
@@ -389,6 +400,7 @@ class TradingTeam:
                     it["symbol"], it.get("name", ""),
                     it.get("indicators"), it.get("pnl_pct"),
                     indicators_as_of=it.get("indicators_as_of"),
+                    slot=it.get("slot", ""),
                 )
             return await self.deliberate_candidate(
                 it["symbol"], it.get("name", ""),
@@ -398,6 +410,7 @@ class TradingTeam:
                 entry_plan=it.get("entry_plan"), slot=it.get("slot", ""),
                 current_price=it.get("current_price"),
                 quote_as_of=it.get("quote_as_of"),
+                intraday_level=it.get("intraday_level"),
             )
 
         results = await asyncio.gather(
@@ -452,6 +465,7 @@ class TradingTeam:
         entry_plan: Optional[Dict[str, Any]] = None,
         current_price: Optional[float] = None,
         quote_as_of: Optional[datetime] = None,
+        intraday_level: Optional[str] = None,
     ) -> None:
         """T11 (2026-09-15) shadow 판단 부착.
 
@@ -468,9 +482,10 @@ class TradingTeam:
             try:
                 from ..execution.entry_plan import check_entry_plan
                 quote = {"price": current_price, "as_of": quote_as_of} if current_price is not None else None
-                pc = check_entry_plan(entry_plan, quote, now)
+                pc = check_entry_plan(entry_plan, quote, now, intraday_level=intraday_level)
                 entry_check = pc.to_dict()
-                verdict.entry_plan_id = str(entry_check.get("plan_id") or "")
+                _pid = entry_check.get("plan_id")
+                verdict.entry_plan_id = str(_pid) if _pid is not None else ""
             except Exception as e:
                 logger.debug(f"[팀] {verdict.symbol} EntryPlan shadow 검증 실패(무시): {e}")
                 check_note = f"entry_check 실패: {e}"
@@ -528,7 +543,17 @@ class TradingTeam:
                     except (json.JSONDecodeError, OSError):
                         existing = []
 
-                row = verdict.to_dict()
+                # B2: assessment(shadow) 직렬화 실패가 이 레거시 행 저장을 통째로 날리면
+                # team_conviction.team_conviction_multiplier()의 유일한 입력이 비어
+                # 사이징 결과가 기준선과 달라진다 — shadow만 떼고 다시 만든다.
+                try:
+                    row = verdict.to_dict()
+                except Exception as e:
+                    logger.warning(
+                        f"[팀] {verdict.symbol} verdict 직렬화 실패(assessment 제외 후 재시도): {e}"
+                    )
+                    verdict.assessment = None
+                    row = verdict.to_dict()
                 row["saved_at"] = datetime.now().isoformat(timespec="seconds")
                 # 같은 종목은 최신 것만 유지
                 existing = [e for e in existing if e.get("symbol") != verdict.symbol]
@@ -545,30 +570,36 @@ class TradingTeam:
             except Exception as e:
                 logger.warning(f"[팀] 심의 결과 저장 실패: {e}")
 
-            # T11 (2026-09-15) — append-only 심의 원장. 기존 파일과 별개(덮어쓰지 않음),
-            # 저장 실패는 warning만(부가 기능, 돈 경로 무관). 플래그 off면 아예 안 만든다.
-            if not v2_enabled:
-                return
-            try:
-                row = verdict.to_dict()
-                row["decided_at"] = datetime.now().isoformat(timespec="seconds")
-                row["input_snapshot_hash"] = snap_hash
-                row["prompt_version"] = _DEBATE_PROMPT_VERSION
-                row["policy_version"] = (
-                    verdict.assessment.policy_version if verdict.assessment
-                    else ASSESSMENT_POLICY_VERSION
-                )
-                row["model_calls"] = [
-                    {"role": t.side, "round": t.round_no, "model": t.model, "provider": t.provider}
-                    for t in (verdict.debate.turns if verdict.debate else [])
-                ]
-                entry_check = (verdict.assessment.entry_check if verdict.assessment else None) or {}
-                row["execution_state"] = {
-                    "allow": "shadow_ready", "wait": "waiting_trigger",
-                }.get(entry_check.get("status"), "candidate")
-                team_ledger.append_deliberation(row)
-            except Exception as e:
-                logger.debug(f"[팀] {verdict.symbol} 심의 원장 기록 실패(무시): {e}")
+        # T11 (2026-09-15) — append-only 심의 원장. 기존 파일과 별개(덮어쓰지 않음),
+        # 저장 실패는 warning만(부가 기능, 돈 경로 무관). 플래그 off면 아예 안 만든다.
+        # 락 밖으로 뺀다 — JSONL append는 자체적으로 원자적이라 _SAVE_LOCK(레거시 파일
+        # read-modify-write 직렬화용)까지 붙들고 있을 필요가 없다(리뷰 advisory).
+        if not v2_enabled:
+            return
+        try:
+            row = verdict.to_dict()
+        except Exception as e:
+            logger.debug(f"[팀] {verdict.symbol} 심의 원장 직렬화 실패(무시): {e}")
+            return
+        try:
+            row["decided_at"] = datetime.now().isoformat(timespec="seconds")
+            row["input_snapshot_hash"] = snap_hash
+            row["prompt_version"] = _DEBATE_PROMPT_VERSION
+            row["policy_version"] = (
+                verdict.assessment.policy_version if verdict.assessment
+                else ASSESSMENT_POLICY_VERSION
+            )
+            row["model_calls"] = [
+                {"role": t.side, "round": t.round_no, "model": t.model, "provider": t.provider}
+                for t in (verdict.debate.turns if verdict.debate else [])
+            ]
+            entry_check = (verdict.assessment.entry_check if verdict.assessment else None) or {}
+            row["execution_state"] = {
+                "allow": "shadow_ready", "wait": "waiting_trigger",
+            }.get(entry_check.get("status"), "candidate")
+            team_ledger.append_deliberation(row)
+        except Exception as e:
+            logger.debug(f"[팀] {verdict.symbol} 심의 원장 기록 실패(무시): {e}")
 
     @staticmethod
     def load_date(day: str, limit: int = 50) -> List[Dict[str, Any]]:

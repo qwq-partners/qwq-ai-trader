@@ -135,6 +135,56 @@ def test_expired_zero_confidence_and_error_reports_excluded():
     assert a.evidence_quality["expired"] >= 1
 
 
+def test_expired_reports_do_not_inflate_data_sufficiency():
+    """리뷰 blocking B1(A): 만료된 'full' 보고서가 data_sufficiency를 부풀리면 안 된다.
+
+    technical(TTL 45분 초과)·fundamental(TTL 180분 초과) 둘 다 만료 → 신선한 news
+    1건(partial)만 유효 → 'full'이 아니라 'partial'이어야 한다.
+    """
+    from datetime import timedelta
+
+    now = datetime.now()
+    ev = [_ev("x", 1, dedup_key="k")]
+    technical = _report(AnalystKind.TECHNICAL, 90, confidence=0.9, evidence=ev,
+                        positive_basis=True, data_status="full")
+    technical.data_as_of = now - timedelta(minutes=120)   # TTL 45분 초과
+    fundamental = _report(AnalystKind.FUNDAMENTAL, 90, confidence=0.9, evidence=ev,
+                          positive_basis=True, data_status="full")
+    fundamental.data_as_of = now - timedelta(minutes=600)  # TTL 180분 초과
+    news = _report(AnalystKind.NEWS, 30, confidence=0.9, evidence=ev,
+                   positive_basis=True, data_status="partial")
+    news.data_as_of = now
+
+    a = judgment.assess(
+        "005930", [technical, fundamental, news],
+        DebateResult(symbol="005930", bull_final=True, bear_final=True,
+                    consensus=True, confidence=1.0),
+        entry_check={"status": "allow"}, now=now,
+    )
+    assert a.data_sufficiency == "partial"          # 'full'이면 만료가 충분성을 부풀린 것
+    assert a.evidence_quality["unique_sources"] == 1
+    assert a.evidence_quality["expired"] == 2
+    assert a.merit_score == 30                       # 살아남은 근거는 news 1건뿐
+
+
+def test_all_reports_zero_confidence_abstains_instead_of_weak():
+    """리뷰 blocking B1(B): 유효 근거 0인데 fallback aggregate_score(0)를 'weak'로 포장 금지.
+
+    모든 보고서 confidence=0(결측/실패)이면 merit_status는 'abstain'이어야 하고,
+    abstained=True로 남아야 한다(중립 매력으로 둔갑시키지 않는다).
+    """
+    zero1 = _report(AnalystKind.NEWS, 0, confidence=0.0, data_status="full")
+    zero2 = _report(AnalystKind.TECHNICAL, 0, confidence=0.0, data_status="full")
+    debate = DebateResult(symbol="x", bull_final=True, bear_final=True,
+                          consensus=True, confidence=1.0)
+    a = judgment.assess("x", [zero1, zero2], debate)
+    assert a.merit_score is None
+    assert a.merit_status == "abstain"
+    assert a.abstained is True
+    assert a.evidence_quality["unique_sources"] == 0
+    assert a.evidence_quality["weight"] == 0.0
+
+
 def test_data_sufficiency_buckets():
     full2 = [_report(AnalystKind.FUNDAMENTAL, 1, data_status="full"),
              _report(AnalystKind.TECHNICAL, 1, data_status="full")]
@@ -387,6 +437,36 @@ def test_now_is_injected_so_expired_evidence_is_excluded_via_team(monkeypatch):
     # now가 실제로 전달돼야 usable_facts가 비어 total_w=0 → merit_score=None.
     assert v.assessment.merit_score is None
     assert v.assessment.evidence_quality["unique_sources"] == 0
+
+
+def test_assessment_serialization_failure_does_not_drop_legacy_row(monkeypatch):
+    """리뷰 blocking B2: assessment.to_dict()가 터져도 레거시 verdicts 행은 저장돼야 한다.
+
+    team_conviction.team_conviction_multiplier()의 유일한 입력이 이 파일이므로,
+    shadow 직렬화 실패로 행이 통째로 사라지면 사이징이 플래그 off와 달라진다
+    (여기서는 team_conviction 모듈을 직접 건드리지 않고 — 그 모듈은 소유 범위 밖이고
+    운영 캐시 경로를 상수로 가진다 — 레거시 verdicts 행이 살아남는지만 직접 검증한다).
+    """
+    monkeypatch.setenv("TEAM_ASSESSMENT_V2", "1")
+    team = _make_team()
+
+    class _BoomAssessment:
+        def to_dict(self):
+            raise RuntimeError("직렬화 고장 주입")
+
+    real_assess = team_mod._assess_team
+
+    def _patched(*a, **kw):
+        real_assess(*a, **kw)     # 정상 계산은 그대로 돌리고
+        return _BoomAssessment()  # 반환만 고장난 객체로 바꿔치기
+
+    monkeypatch.setattr(team_mod, "_assess_team", _patched)
+
+    v = asyncio.run(team.deliberate_candidate("005930", "삼성전자", slot="10:30"))
+    assert v.decision is not None and v.error is None   # 돈 경로 결과는 정상
+
+    rows = team_mod.TradingTeam.load_today()
+    assert any(r.get("symbol") == "005930" for r in rows), "레거시 행이 소멸하면 안 된다"
 
 
 def test_deliberation_id_is_stable_for_same_input_and_ledger_row_has_execution_state(monkeypatch):

@@ -25,12 +25,37 @@ from .trader import BUY_THRESHOLD
 from .types import AnalystReport, DebateResult, TeamAssessment
 
 
+def _valid_reports(reports: List[AnalystReport]) -> List[AnalystReport]:
+    """merit/data_sufficiency 판단에 공통으로 쓰는 '유효 보고서' 필터.
+
+    ok·신뢰도(감쇠후)>0·TTL 미초과 — `_evidence_merit`의 배제 규칙과 반드시 같게
+    유지한다. 여기서 걸러진 보고서(만료·confidence=0·error)는 data_sufficiency
+    집계에서도 빠져야 한다 — 결측·만료가 "자료 충분"으로 둔갑하면 안 된다.
+    """
+    from .analysts import AnalystTeam  # 지연 임포트 — 읽기 전용 의존성
+
+    out = []
+    for r in reports:
+        if not r.ok:
+            continue
+        if r.freshness_decayed_confidence() <= 0:
+            continue
+        if AnalystTeam.is_expired(r):
+            continue
+        out.append(r)
+    return out
+
+
 def _evidence_merit(reports: List[AnalystReport], now: Optional[datetime]) -> tuple:
     """evidence 기반 매수 매력 점수.
 
     기존 분석가 score를 그대로 재사용하되(새 임계값을 만들지 않는다),
     "검증 통과"만 있고 긍정 근거가 없는 보고서는 그 +10 가산분만 취소한다
     (계약 2.2 — risk_clear는 매력에 미가산, positive_basis만 가산).
+
+    dedup은 evidence 항목이 아니라 reports 순서를 기준으로 한다 — 같은 dedup_key가
+    여러 보고서에 걸쳐 있으면 reports 리스트에서 먼저 나온 보고서가 그 근거를 갖는다
+    (결정론적이지만 호출측 순서에 의존한다).
 
     Returns:
         (merit_score: Optional[int], unique_sources, weight, dedup_removed, expired, any_evidence)
@@ -76,6 +101,11 @@ def _evidence_merit(reports: List[AnalystReport], now: Optional[datetime]) -> tu
         score = r.score
         if r.risk_clear is True and r.positive_basis is not True:
             score -= 10                       # "검증 통과"만의 가산 취소 — 긍정 근거가 아니다
+        # 리뷰 advisory: risk_clear=True·positive_basis=True 가 함께 확인된 보고서는
+        # 이 조건에 걸리지 않아 +10이 남는다 — "검증 통과 자체는 미가산"의 엄격한
+        # 해석과 다른 여지가 있다(관대한 해석: 긍정 근거가 실제로 있으면 굳이 깎지 않음).
+        # 두 해석 모두 계약 문구("근거 없는 검증 통과는 미가산")와 상충하지 않아
+        # 로직은 유지하고 통합 단계에서 확정하도록 남겨 둔다.
         weighted += score * w
         total_w += w
 
@@ -100,8 +130,14 @@ def _merit_status(score: Optional[int], *, abstain_unknown: bool) -> tuple:
 
 
 def _data_sufficiency(reports: List[AnalystReport]) -> str:
-    full = sum(1 for r in reports if r.ok and r.data_status == "full")
-    usable = sum(1 for r in reports if r.ok and r.data_status in ("full", "partial"))
+    """자료 충분성 — 만료·confidence=0·error 보고서는 유효 소스로 세지 않는다(B1 수정).
+
+    data_status 라벨만 보면 만료된 'full' 보고서가 자료 완비로 둔갑한다 —
+    `_valid_reports`로 `_evidence_merit`과 같은 배제 규칙을 적용한 뒤 집계한다.
+    """
+    valid = _valid_reports(reports)
+    full = sum(1 for r in valid if r.data_status == "full")
+    usable = sum(1 for r in valid if r.data_status in ("full", "partial"))
     if full >= 2:
         return "full"
     if usable >= 1:
@@ -112,6 +148,8 @@ def _data_sufficiency(reports: List[AnalystReport]) -> str:
 def _consensus_level(debate: Optional[DebateResult]) -> str:
     if debate is None or debate.failed:
         return "failed"
+    if debate.bull_final is None and debate.bear_final is None:
+        return "failed"           # 양측 무응답 — 단독(one_sided)이 아니라 합의 미성립
     if debate.bull_final is None or debate.bear_final is None:
         return "one_sided"
     return "unanimous" if debate.bull_final == debate.bear_final else "split"
@@ -179,6 +217,7 @@ def assess(
     LLM은 해석·반증만 담당했고(토론 단계), 여기서는 수치 계산만 한다 — 결정론적.
     """
     reports = list(reports or [])
+    valid_reports = _valid_reports(reports)   # ok·신뢰도>0·TTL 이내 — B1: fallback도 이 기준을 따른다
 
     merit_score, unique_sources, weight, dedup_removed, expired_n, any_evidence = \
         _evidence_merit(reports, now)
@@ -192,12 +231,22 @@ def assess(
         except Exception:
             merit_score = None
 
+    # B1: 보고서는 있는데 전부 만료·오류·신뢰도 0 이면(valid_reports 비어 있음),
+    # fallback의 aggregate_score()가 돌려주는 0을 "중립(weak)"으로 포장하지 않는다 —
+    # 정보가 전혀 없는 것과 "약한 매력(0점)"은 다르다.
+    no_valid_reports = bool(reports) and not valid_reports
+    if no_valid_reports:
+        merit_score = None
+
     all_unknown = (not reports) or all(
         r.data_status == "unknown" for r in reports if r.ok
     )
     merit_status, merit_reason = _merit_status(
         merit_score, abstain_unknown=(used_fallback and all_unknown)
     )
+    if no_valid_reports:
+        merit_status = "abstain"
+        merit_reason = "유효 근거 0 — 전 보고서 만료·오류·신뢰도 0"
 
     risk_acceptable = _risk_acceptable(debate)
     data_suff = _data_sufficiency(reports)
