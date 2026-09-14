@@ -24,6 +24,7 @@ import sys
 
 from loguru import logger
 
+from ..execution.entry_plan import check_entry_plan
 from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
 from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
 from ..utils.stop_policy import StopDecision
@@ -1542,6 +1543,7 @@ class RiskManager:
         adjusted_score: Optional[float] = None,
         original_score: Optional[float] = None,
         regime: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """시그널 이벤트를 DB에 fire-and-forget으로 기록 (BUY만)
 
@@ -1563,6 +1565,18 @@ class RiskManager:
             _score = _event_score
         _adj_score = float(adjusted_score) if adjusted_score is not None else _event_score
         _regime = regime if regime else getattr(self.engine, "_market_regime", "")
+        _meta_extra = {
+            "reason": getattr(event, "reason", ""),
+            "indicators": meta.get("indicators", {}),
+            # 지식층 노출 태그 (2026-09-13) — gate_performance가 G4를 wiki 유무로 분리 집계
+            "memory_adj": meta.get("memory_adj"),
+            "wiki_context_used": meta.get("wiki_context_used"),
+            # 진입 위험 스냅샷 (2026-09-14 T3) — signal_events 에서 risk 모드 주문을 골라낸다
+            "entry_risk": meta.get("entry_risk"),
+        }
+        if metadata:
+            # 호출자가 준 항목이 우선 (shadow_plan_check 의 PlanCheck 등)
+            _meta_extra.update(metadata)
         task = asyncio.create_task(
             _SigLog.get().log(
                 symbol=event.symbol,
@@ -1576,15 +1590,7 @@ class RiskManager:
                 block_reason=block_reason,
                 market_regime=_regime,
                 sector=meta.get("sector", ""),
-                metadata={
-                    "reason": getattr(event, "reason", ""),
-                    "indicators": meta.get("indicators", {}),
-                    # 지식층 노출 태그 (2026-09-13) — gate_performance가 G4를 wiki 유무로 분리 집계
-                    "memory_adj": meta.get("memory_adj"),
-                    "wiki_context_used": meta.get("wiki_context_used"),
-                    # 진입 위험 스냅샷 (2026-09-14 T3) — signal_events 에서 risk 모드 주문을 골라낸다
-                    "entry_risk": meta.get("entry_risk"),
-                },
+                metadata=_meta_extra,
             )
         )
 
@@ -1605,6 +1611,38 @@ class RiskManager:
                 RiskManager._sig_log_consecutive_failures = 0
 
         task.add_done_callback(_on_log_done)
+
+    def _shadow_plan_check(self, event: SignalEvent) -> None:
+        """조건부 진입계획 shadow 검증 — 기록만 하고 주문 경로에 영향을 주지 않는다.
+
+        플래그 `ENTRY_PLAN_SHADOW`(기본 "1"). "0" 이면 검증기를 호출하지 않는다.
+        계획(`metadata["entry_plan"]`)이 없으면 아무것도 하지 않는다 — 현재가로 그럴듯한
+        계획을 지어내지 않는다.
+
+        호가 시각: 이 지점에는 재조회한 호가가 없다. `event.price` 는 배치 실행 시점 값이라
+        시각을 `now` 로 채우면 신선도 세탁이 된다 → `as_of=None` 으로 넘겨 QUOTE_STALE 이
+        정직하게 기록되게 한다.
+        """
+        if os.getenv("ENTRY_PLAN_SHADOW", "1") == "0":
+            return
+        try:
+            meta = event.metadata or {}
+            plan = meta.get("entry_plan")
+            if not plan:
+                return
+            quote = {
+                "price": float(event.price) if event.price is not None else None,
+                "as_of": None,
+            }
+            check = check_entry_plan(
+                plan, quote, datetime.now(),
+                intraday_level=meta.get("intraday_state"),
+            )
+            self._log_sig(event, event_type="shadow_plan_check",
+                          metadata=check.to_dict())
+        except Exception as e:
+            # shadow 장애는 돈 경로에 전파되지 않는다
+            logger.warning(f"[진입계획] shadow 검증 실패 (주문은 계속): {event.symbol} — {e}")
 
     def _resolve_market_regime(self) -> str:
         """G2 크로스검증이 읽는 시장 체제 — 어댑터의 **유효 레짐**이 단일 출처.
@@ -1997,6 +2035,12 @@ class RiskManager:
             )
             self._last_signal_time[event.symbol] = datetime.now()
             return None
+
+        # ── 조건부 진입계획 shadow 검증 (T11, 2026-09-15) ──────────────────────
+        # 주문 생성 **직전**에 계획과 최신 값으로 판정해 기록만 한다.
+        # 결과로 주문을 허용/차단하지 않는다(shadow 전용). 계획이 없으면 호출하지 않는다.
+        if event.side == OrderSide.BUY:
+            self._shadow_plan_check(event)
 
         # 주문 생성: 매도는 매수1호가 지정가, 매수는 시장가
         if event.side == OrderSide.SELL:
