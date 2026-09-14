@@ -34,7 +34,11 @@ US_QUOTES = {
     "^SOX": {"change_pct": 2.4, "price": 5800.0},
     "^VIX": {"change_pct": -3.0, "price": 14.2},
 }
-SECTOR_SIGNALS = {"반도체": {"boost": 5, "us_avg_pct": 2.4, "top_movers": ["NVDA", "AMD"]}}
+# 키는 실제 US_KOREA_SECTOR_MAP/BRIEF_THEME_EVAL_TARGETS 키("AI/반도체")와 맞춘다
+# — "반도체"는 실제 생산 경로에 없는 키라 extract_brief_claims 매핑이 항상
+# supported=False 로만 통과해 스키마 테스트가 공허하게 통과했다 (2026-09-15
+# T10 리뷰 advisory, test_brief_json_schema_is_fixed 참조)
+SECTOR_SIGNALS = {"AI/반도체": {"boost": 5, "us_avg_pct": 2.4, "top_movers": ["NVDA", "AMD"]}}
 
 # 09-14 실제 브리프와 같은 형태 — 미국 자료만으로 한국장 개장을 단정한 문장 포함
 OPTIMISTIC_TEXT = (
@@ -43,7 +47,7 @@ OPTIMISTIC_TEXT = (
     "<b>■ 한국시장 시사점</b>\n"
     "오늘 KOSPI는 반도체 중심 상승 갭 출발 가능성이 높다. 시가 매수 대응을 권고한다.\n"
     "<b>■ 섹터 흐름</b>\n"
-    "반도체 강세, 방어주 약세.\n"
+    "AI/반도체 강세, 방어주 약세.\n"
 )
 
 
@@ -180,6 +184,12 @@ def test_brief_json_schema_is_fixed(gen, monkeypatch, tmp_path):
     # 미국 자료만이면 개장 방향 주장은 남지 않는다
     assert data["claims"]["open_direction"] is None
     assert data["claims"]["sectors"]
+    # 매핑 성공 분기(T10 F20)까지 스키마 테스트가 실제로 통과시킨다 — 매핑
+    # 없는 테마만 있으면 supported=False 항목만으로 공허하게 통과할 수 있다
+    sector = data["claims"]["sectors"][0]
+    assert sector["theme"] == "AI/반도체"
+    assert sector["eval_targets"] == ["전기전자"]
+    assert sector["supported"] is True
 
 
 def test_llm_failure_returns_none(gen, monkeypatch):

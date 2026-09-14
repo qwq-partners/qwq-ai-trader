@@ -335,6 +335,27 @@ def test_f21_strong_us_up_without_kr_inputs_defers_kr_direction(monkeypatch):
     assert "판단 보류" in report
 
 
+def test_f21_sector_mapping_header_marks_scope_without_kr_inputs(monkeypatch):
+    """리뷰 advisory(F21): '■ 한국 시장 영향' 섹터 매핑 블록은 방향을 단정하진
+    않지만 대상 시장·시간범위 표기가 없었다 — kr_inputs 없이는 헤더가 '미국
+    섹터 → 국내 테마 매핑 (전일 미국 세션 기준, 국내 개장 반영 아님)'으로
+    바뀌어야 한다(정상 경로·차트동반 경로 모두 같은 sector_header 를 쓴다)."""
+    monkeypatch.setattr(dr, "get_telegram_notifier", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "get_screener", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "get_theme_detector", lambda: SimpleNamespace())
+    monkeypatch.setattr(dr, "NewsCollector", lambda: SimpleNamespace())
+    gen = dr.DailyReportGenerator()
+    gen._us_market_data = _FakeUMD(
+        US_QUOTES_STRONG_UP,
+        sector_signals={"AI/반도체": {"boost": 10, "us_avg_pct": 2.2, "top_movers": ["NVDA"]}},
+    )
+
+    report = asyncio.run(gen.generate_us_market_report(send_telegram=False))
+    assert "미국 섹터 → 국내 테마 매핑" in report
+    assert "국내 개장 반영 아님" in report
+    assert "<b>■ 한국 시장 영향</b>" not in report
+
+
 def test_f21_strong_us_up_with_kr_inputs_keeps_existing_wording(monkeypatch):
     """kr_inputs(as_of 포함)가 있으면 기존 관찰 포인트 문구를 허용한다 — 근거가
     있는 주장은 막지 않는다."""
@@ -383,6 +404,63 @@ def test_f22_two_generations_same_day_both_preserved_latest_cache_is_second(monk
 
     cache = json.loads(brief_path.read_text(encoding="utf-8"))
     assert "두 번째" in cache["text"], "최신 캐시는 2번째 생성본이어야 한다"
+
+
+def test_f22_raw_llm_response_and_full_body_preserved_in_archive(monkeypatch, tmp_path):
+    """리뷰 blocking(F22-4/§ acceptance F22-4): archive['generated'] 에 절단 없는
+    원문(raw_text)과 sanitize 후 전체 본문(body_full)이 남아야 sanitize 가 무엇을
+    지웠는지·3800자 초과분이 무엇이었는지 사후 검증할 수 있다. 최신 캐시
+    (llm_morning_brief.json)는 지금처럼 절단본(text)만 유지한다."""
+    gen = _make_gen(monkeypatch)
+    long_sentence = "미국 빅테크가 동반 강세를 보이며 지수를 끌어올렸다. " * 200  # 3800자 훌쩍 초과
+    _patch_llm(monkeypatch, _FakeLLM(f"<b>■ 시장 종합 평가</b>\n{long_sentence}\n"))
+
+    record = asyncio.run(gen.build_morning_brief(
+        quotes=US_QUOTES_FLAT, sector_signals={}, avg_pct=0.2,
+        us_date_str=date.today().isoformat(), mood="보합",
+    ))
+    assert len(record["text"]) < len(record["raw_text"]), "text 는 절단본이어야 한다"
+    assert long_sentence.strip() in record["raw_text"]
+    assert long_sentence.strip() in record["body_full"]
+
+    brief_path = tmp_path / "llm_morning_brief.json"
+    archive_dir = tmp_path / "morning_brief"
+    dr.save_morning_brief(record, brief_path, archive_dir=archive_dir)
+
+    archive = json.loads((archive_dir / f"{record['kr_date']}.json").read_text(encoding="utf-8"))
+    entry = archive["generated"][0]
+    assert long_sentence.strip() in entry["raw_text"], "아카이브 원문은 절단되면 안 된다"
+    assert long_sentence.strip() in entry["body_full"]
+    assert len(entry["text"]) <= 3800 + 200, "발송용 text 필드 자체는 여전히 절단본"
+
+    # 최신 캐시는 raw_text/body_full 을 담지 않는다(조회 편의용, 감사 원본이 아님)
+    cache = json.loads(brief_path.read_text(encoding="utf-8"))
+    assert "raw_text" not in cache
+    assert "body_full" not in cache
+
+
+def test_f22_dispatch_brief_ref_includes_archive_path(monkeypatch, tmp_path):
+    """리뷰 advisory(F22): brief_ref 에 archive 경로가 없으면 archive_dir 를
+    운영 기본값 밖으로 주입해 운용할 때 원장 레코드만으로 원본 파일을 특정할
+    수 없다."""
+    gen = _make_gen(monkeypatch)
+    _patch_llm(monkeypatch, _FakeLLM("<b>■ 시장 종합 평가</b>\n보합권 마감했다.\n"))
+    record = asyncio.run(gen.build_morning_brief(
+        quotes=US_QUOTES_FLAT, sector_signals={}, avg_pct=0.1,
+        us_date_str=date.today().isoformat(), mood="보합",
+    ))
+    brief_path = tmp_path / "llm_morning_brief.json"
+    archive_dir = tmp_path / "morning_brief"
+    dr.save_morning_brief(record, brief_path, archive_dir=archive_dir)
+
+    dispatch_path = dr.record_morning_brief_dispatch(
+        kr_date=record["kr_date"], sent_text="(결합 발송문)",
+        expert_consensus={"score": 1, "bias": "neutral", "valid_n": 5},
+        status="sent", archive_dir=archive_dir,
+    )
+    archive = json.loads(dispatch_path.read_text(encoding="utf-8"))
+    ref = archive["dispatch"][0]["brief_ref"]
+    assert ref["archive_path"] == str(archive_dir / f"{record['kr_date']}.json")
 
 
 def test_f22_past_report_date_actuals_not_collected(monkeypatch, tmp_path):

@@ -344,7 +344,10 @@ def save_morning_brief(record: Dict, path=None, archive_dir=None) -> Path:
     """
     path = Path(path) if path is not None else MORNING_BRIEF_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 최신 캐시는 조회 편의용 — raw_text/body_full(절단 없는 원문·전체 본문)은
+    # 아카이브 전용이라 캐시엔 담지 않는다(2026-09-15 T10 F22 blocking).
+    cache_record = {k: v for k, v in record.items() if k not in ("raw_text", "body_full")}
+    path.write_text(json.dumps(cache_record, ensure_ascii=False, indent=2), encoding="utf-8")
 
     kr_date = record.get("kr_date")
     if kr_date:
@@ -398,6 +401,9 @@ def record_morning_brief_dispatch(
             "text_sha256": last.get("text_sha256"),
             "generated_at": last.get("generated_at"),
             "model": last.get("model"),
+            # archive_dir 를 운영 기본값 밖으로 주입해도 원장 레코드만으로 원본
+            # 아카이브 파일을 특정할 수 있게 경로를 남긴다 (advisory F22)
+            "archive_path": str(_brief_archive_path(kr_date, archive_dir)),
         }
 
     dispatch_entry = {
@@ -1232,6 +1238,16 @@ class DailyReportGenerator:
         else:
             mood = "➡️ 보합 마감"
 
+        # brief_scope() 와 동일 판정 — market_msg 뿐 아니라 섹터 매핑 헤더도
+        # 이 값을 써야 대상 시장·시간범위 표기가 market_msg 와 어긋나지 않는다
+        # (2026-09-15 T10 F21 advisory — 헤더는 방향 단정은 아니었지만 대상
+        # 시장·시간범위가 없어 F21 이 요구한 문장 단위 명시 기준에서 비어 있었다)
+        scope = brief_scope(kr_inputs)
+        sector_header = (
+            "<b>■ 미국 섹터 → 국내 테마 매핑 (전일 미국 세션 기준, 국내 개장 반영 아님)</b>"
+            if scope == SCOPE_US_ONLY else "<b>■ 한국 시장 영향</b>"
+        )
+
         lines = [
             f"🇺🇸 <b>미국증시 마감 리포트</b>",
             f"<i>{us_date_str} NY 마감 (KST {kst_date_str} 07:00 수신)</i>",
@@ -1270,7 +1286,7 @@ class DailyReportGenerator:
         # ── 섹터 ETF + 개별종목 (테마 매핑) ──
         sector_signals = await umd.get_sector_signals()
         if sector_signals:
-            lines.append(f"<b>■ 한국 시장 영향</b>")
+            lines.append(sector_header)
             for theme, sig in sorted(
                 sector_signals.items(),
                 key=lambda x: abs(x[1]["boost"]),
@@ -1295,8 +1311,8 @@ class DailyReportGenerator:
         # 폴백 세 경로 모두 이 market_msg 를 그대로 발송). 국내 자료(kr_inputs)
         # 없이는 문장 대상을 "미국 세션"으로 한정하고 한국 판단은 보류한다.
         # brief_scope() 는 build_morning_brief 의 LLM 스코프 판정과 동일한
-        # 함수라 두 판정이 어긋나지 않는다.
-        scope = brief_scope(kr_inputs)
+        # 함수라 두 판정이 어긋나지 않는다 (scope 는 위에서 sector_header 와
+        # 함께 이미 계산했다).
         if scope == SCOPE_WITH_KR:
             if avg_pct >= 1.5:
                 market_msg = "💡 강한 상승 — 한국 관련 테마주 갭업 가능성"
@@ -1379,7 +1395,7 @@ class DailyReportGenerator:
                         detail_lines.append("  " + "  ".join(bt_lines[i:i + 4]))
                     detail_lines.append("")
                 if sector_signals:
-                    detail_lines.append("<b>■ 한국 시장 영향</b>")
+                    detail_lines.append(sector_header)
                     for theme, sig in sorted(
                         sector_signals.items(),
                         key=lambda x: abs(x[1]["boost"]),
@@ -1639,13 +1655,19 @@ class DailyReportGenerator:
         )
 
         header = f"{title}\n<i>{us_date_str} 미국 마감 기반</i>\n\n"
-        # Telegram 메시지 길이 제한 (~4096자) 안전 마진
+        # Telegram 메시지 길이 제한 (~4096자) 안전 마진 — 발송/캐시용 "text" 는
+        # 잘라내되(save_morning_brief 가 최신 캐시엔 이 절단본만 쓴다), 원문·
+        # 정제 전체 본문은 raw_text/body_full 에 그대로 담아 아카이브에서
+        # 사후 검증할 수 있게 한다 (2026-09-15 T10 F22 blocking — 절단 이상으로
+        # sanitize 가 무엇을 지웠는지도 원문 대조 없이는 알 수 없었다).
         return {
             "us_date": us_date_str,
             # 평가 대상 KR 거래일 — 저녁 평가가 전날 브리프를 오늘 실측과 대조하지 않도록
             "kr_date": date.today().isoformat(),
             "title": title,
             "text": header + body[:3800],
+            "raw_text": raw_text,
+            "body_full": body,
             "generated_at": datetime.now().isoformat(),
             "model": getattr(result, "model", None) or "unknown",
             "scope": scope,
