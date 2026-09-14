@@ -17,11 +17,28 @@ API 호출 횟수: 하루 1회 (Yahoo Finance)
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 from loguru import logger
+
+
+def _clean_num(value: Any) -> Optional[float]:
+    """숫자만 통과시키고 나머지는 결측(None)으로 — 0으로 채우지 않는다 (T10 F18).
+
+    Yahoo 응답에 필드가 아예 없거나(None), 문자열/NaN/inf처럼 계산에 쓸 수 없는
+    값이면 전부 None. 정상적인 0.0(무변동)은 그대로 유지한다.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    if not math.isfinite(value):
+        return None
+    return value
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -186,6 +203,13 @@ class USMarketData:
         self._session: Optional[aiohttp.ClientSession] = None
         self._cache: Dict[str, Any] = {}
         self._cache_ts: Optional[datetime] = None
+        # 2026-09-15 (T10 F18 2차 blocking 재수정): v7 응답에 "심볼은 있었지만
+        # price/change_pct 중 하나 이상이 결측"이었던 종목 →
+        # {"fields": [결측 필드명...], "data": {살아남은 값 포함 원본 dict}}.
+        # _cache(=quotes)에는 넣지 않아(daily_report 등 기존 blind 소비자 보호)
+        # get_overnight_signal의 indices_normalized가 "조회 실패"와 "필드만
+        # 결측"을 구분하고, 살아남은 값(예: price)은 잃지 않게 하는 데 쓴다.
+        self._seen_missing: Dict[str, Dict[str, Any]] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -222,18 +246,26 @@ class USMarketData:
             return self._cache
 
         result = await self._fetch_via_v7()
-        if not result:
+        # 2026-09-15 (T10 F18 2차): None(=v7 자체 실패)일 때만 v8 폴백. result가
+        # {}(모든 심볼이 부분/완전 결측이지만 API 호출은 성공)인 경우는 이미
+        # self._seen_missing에 유효한 사유가 채워져 있으므로 폴백·초기화하지 않는다.
+        if result is None:
             logger.debug("[USMarket] v7 API 실패, v8 spark 폴백 시도")
             result = await self._fetch_via_v8_spark()
+            # v8 spark는 "응답에서 봤지만 필드만 결측"을 추적하지 않으므로(자체적으로
+            # 완전 결측 심볼을 건너뜀), v7 시도에서 남은 seen_missing을 그대로 두면
+            # 실제로 이번 조회를 수행하지 않은 경로의 사유가 섞인다 — 초기화한다.
+            self._seen_missing = {}
+            result = result or {}
 
         if result:
             self._cache = result
             self._cache_ts = datetime.now()
             logger.info(f"[USMarket] {len(result)}개 심볼 시세 조회 완료")
-        else:
+        elif not self._seen_missing:
             logger.warning("[USMarket] US 시장 데이터 조회 실패")
 
-        return result or {}
+        return result
 
     async def fetch_sp500_stocks(self) -> Dict[str, Dict]:
         """
@@ -252,12 +284,14 @@ class USMarketData:
             for sym, _, _ in stocks
         ]
 
-        # 기존 캐시 활용
+        # 기존 캐시 활용 — 가격/등락률이 결측(None)인 캐시 항목은 재사용하지 않는다
+        # (T10 F18: docstring이 약속하는 "조회 실패한 심볼은 누락" 계약을 유지).
         result: Dict[str, Dict] = {}
         missing = []
         for sym in all_syms:
-            if sym in self._cache:
-                result[sym] = self._cache[sym]
+            cached = self._cache.get(sym)
+            if cached and cached.get("price") is not None and cached.get("change_pct") is not None:
+                result[sym] = cached
             else:
                 missing.append(sym)
 
@@ -283,12 +317,17 @@ class USMarketData:
                             data = await resp.json()
                             for q in data.get("quoteResponse", {}).get("result", []):
                                 sym = q.get("symbol", "")
-                                if sym:
-                                    result[sym] = {
-                                        "price":      q.get("regularMarketPrice", 0),
-                                        "change_pct": q.get("regularMarketChangePercent", 0),
-                                        "name":       q.get("shortName", sym),
-                                    }
+                                if not sym:
+                                    continue
+                                price = _clean_num(q.get("regularMarketPrice"))
+                                change_pct = _clean_num(q.get("regularMarketChangePercent"))
+                                if price is None or change_pct is None:
+                                    continue  # 결측 — 0으로 채우지 않고 누락 계약 유지 (T10 F18)
+                                result[sym] = {
+                                    "price":      price,
+                                    "change_pct": change_pct,
+                                    "name":       q.get("shortName", sym),
+                                }
                 except Exception:
                     pass
 
@@ -340,21 +379,61 @@ class USMarketData:
                 return None
 
             result: Dict[str, Dict] = {}
+            seen_missing: Dict[str, Dict[str, Any]] = {}
             for q in quotes:
                 symbol = q.get("symbol", "")
                 if not symbol:
                     continue
+                price = _clean_num(q.get("regularMarketPrice"))
+                change_pct = _clean_num(q.get("regularMarketChangePercent"))
+                change = _clean_num(q.get("regularMarketChange"))
+                name = q.get("shortName", symbol)
+                volume = q.get("regularMarketVolume", 0)
+                # epoch seconds(UTC) 또는 결측(v7가 안 주면 None) — 그대로 보존,
+                # 시장 시각으로 변환/가공은 소비 지점(get_overnight_signal)에서.
+                market_time = q.get("regularMarketTime")
+                if price is None or change_pct is None:
+                    # 2026-09-15 (T10 F18 2차 blocking 재수정): 완전 결측뿐 아니라
+                    # "일부"만 결측이어도(price만 NaN 등) quotes(=self._cache)에는 넣지
+                    # 않는다 — fetch_sp500_stocks(318행)의 "price is None or change_pct
+                    # is None" 제외 기준과 맞춘다. daily_report/us_market_chart 등
+                    # quotes[sym]["change_pct"]를 가드 없이 바로 쓰는 기존 소비자가
+                    # None에서 TypeError를 내는 것을 막기 위함(리뷰 F18 blocking 2차).
+                    # 살아남은 값(예: price)과 market_time은 seen_missing에 그대로
+                    # 보존해 get_overnight_signal의 indices_normalized가 "price는
+                    # 살리고 missing_fields로 change_pct만 표시"할 수 있게 한다.
+                    seen_missing[symbol] = {
+                        "fields": [
+                            f for f, v in (("price", price), ("change_pct", change_pct))
+                            if v is None
+                        ],
+                        "data": {
+                            "price": price,
+                            "change": change,
+                            "change_pct": change_pct,
+                            "name": name,
+                            "volume": volume,
+                            "market_time": market_time,
+                        },
+                    }
+                    continue
                 result[symbol] = {
-                    "price": q.get("regularMarketPrice", 0),
-                    "change": q.get("regularMarketChange", 0),
-                    "change_pct": q.get("regularMarketChangePercent", 0),
-                    "name": q.get("shortName", symbol),
-                    "volume": q.get("regularMarketVolume", 0),
-                    # epoch seconds(UTC) 또는 결측(v7가 안 주면 None) — 그대로 보존,
-                    # 시장 시각으로 변환/가공은 소비 지점(get_overnight_signal)에서.
-                    "market_time": q.get("regularMarketTime"),
+                    # 정상적인 0.0 변동은 그대로 유지된다(0-fill과 구분).
+                    "price": price,
+                    "change": change,
+                    "change_pct": change_pct,
+                    "name": name,
+                    "volume": volume,
+                    "market_time": market_time,
                 }
-            return result if result else None
+            self._seen_missing = seen_missing
+            # 2026-09-15 (T10 F18 2차): API 호출 자체는 성공했으면(quotes 비어있지
+            # 않음) result가 {}(모든 심볼이 부분/완전 결측)여도 None을 반환하지
+            # 않는다 — None은 "v7 자체가 실패"(HTTP 오류·빈 응답·예외) 전용이다.
+            # None을 반환하면 fetch_us_market_summary가 v8 폴백을 트리거하며
+            # 위에서 채운 seen_missing까지 지워버려, 부분 결측 정보(예: SOX
+            # price)가 통째로 사라진다.
+            return result
 
         except Exception as e:
             logger.debug(f"[USMarket] v7 조회 오류: {e}")
@@ -396,7 +475,12 @@ class USMarketData:
 
     @staticmethod
     def _parse_v8_spark_data(data: Dict, result: Dict[str, Dict]):
-        """v8 spark 응답 파싱 (flat / nested 형식 자동 감지)"""
+        """v8 spark 응답 파싱 (flat / nested 형식 자동 감지).
+
+        2026-09-15 (T10 F18): 가격/전일종가가 없거나 비숫자/NaN/inf면 change/
+        change_pct를 0으로 채우지 않는다 — 계산 자체가 불가하므로 심볼을 result에
+        아예 넣지 않는다(fetch_sp500_stocks 등 "조회 실패=누락" 기존 계약과 동일).
+        """
         if "spark" in data:
             # 레거시 형식: {"spark": {"result": [...]}}
             items = data.get("spark", {}).get("result", [])
@@ -404,18 +488,22 @@ class USMarketData:
                 return
             for item in items:
                 symbol = item.get("symbol", "")
+                if not symbol:
+                    continue
                 response_data = item.get("response", [{}])
                 if not response_data:
                     continue
                 meta = response_data[0].get("meta", {})
-                prev_close = meta.get("chartPreviousClose", 0) or meta.get("previousClose", 0)
-                current = meta.get("regularMarketPrice", 0)
-                if prev_close and current:
-                    change = current - prev_close
-                    change_pct = (change / prev_close) * 100
-                else:
-                    change = 0
-                    change_pct = 0
+                prev_close = _clean_num(meta.get("chartPreviousClose"))
+                if prev_close is None:
+                    prev_close = _clean_num(meta.get("previousClose"))
+                current = _clean_num(meta.get("regularMarketPrice"))
+                # prev_close<=0은 분모로 쓸 수 없어 결측과 동일 취급
+                # (T10 F18 advisory — 0 truthiness 금지 패턴 회피).
+                if current is None or prev_close is None or prev_close <= 0:
+                    continue
+                change = current - prev_close
+                change_pct = (change / prev_close) * 100
                 result[symbol] = {
                     "price": current,
                     "change": change,
@@ -429,15 +517,15 @@ class USMarketData:
                 if not isinstance(item, dict):
                     continue
                 closes = item.get("close", [])
-                current = closes[-1] if closes else 0
-                prev_close = item.get("chartPreviousClose", 0) or item.get("previousClose", 0)
+                current = _clean_num(closes[-1]) if closes else None
+                prev_close = _clean_num(item.get("chartPreviousClose"))
+                if prev_close is None:
+                    prev_close = _clean_num(item.get("previousClose"))
+                if current is None or not prev_close:
+                    continue
 
-                if prev_close and current:
-                    change = current - prev_close
-                    change_pct = (change / prev_close) * 100
-                else:
-                    change = 0
-                    change_pct = 0
+                change = current - prev_close
+                change_pct = (change / prev_close) * 100
 
                 result[symbol] = {
                     "price": current,
@@ -471,7 +559,8 @@ class USMarketData:
             pcts: List[Tuple[str, float]] = []
             for sym in symbols:
                 q = quotes.get(sym)
-                if q:
+                # T10 F18: change_pct가 None(결측)이면 섹터 평균 계산에서 제외
+                if q and q.get("change_pct") is not None:
                     pcts.append((sym, q["change_pct"]))
 
             if not pcts:
@@ -532,7 +621,11 @@ class USMarketData:
             }
         """
         quotes = await self.fetch_us_market_summary()
-        if not quotes:
+        # 2026-09-15 (T10 F18 2차): quotes가 비어도 self._seen_missing에 부분/완전
+        # 결측 사유가 남아 있으면 "완전 실패" 지름길로 빠지지 않고 아래 정상 경로에서
+        # indices_normalized를 seen_missing 기반으로 구성한다(예: 유일한 응답
+        # 심볼이 price만 살아남은 경우).
+        if not quotes and not self._seen_missing:
             return {
                 "sentiment": "neutral",
                 "indices": {},
@@ -541,6 +634,7 @@ class USMarketData:
                         "price": None, "change": None, "change_pct": None,
                         "fetched_at": None, "as_of": None, "source": "yahoo_finance",
                         "missing": True, "reason": "US 시장 데이터 조회 실패",
+                        "missing_fields": ["price", "change_pct"],
                     }
                     for key in US_INDEX_KEYS.values()
                 },
@@ -555,25 +649,44 @@ class USMarketData:
         fetch_as_of = (self._cache_ts or datetime.now()).isoformat()
 
         # 1. 지수 등락률 (표시명 기반 — 기존 소비자 호환, 필드 스키마 불변)
+        # 2026-09-15 (T10 F18): price/change_pct가 결측(None)이면 이 딕셔너리에서
+        # 제외한다 — round()/f-string이 None에서 예외를 내는 것도 막고, 0으로
+        # 채워 "무변동"으로 오판되는 것도 막는다.
         indices: Dict[str, Dict] = {}
         idx_pcts: List[float] = []
         for sym in INDEX_SYMBOLS:
             q = quotes.get(sym)
-            if q:
-                display_name = INDEX_NAMES.get(sym, sym)
-                indices[display_name] = {
-                    "price": q["price"],
-                    "change": round(q["change"], 2),
-                    "change_pct": round(q["change_pct"], 2),
-                }
-                idx_pcts.append(q["change_pct"])
+            if not q or q.get("price") is None or q.get("change_pct") is None:
+                continue
+            display_name = INDEX_NAMES.get(sym, sym)
+            change = q.get("change")
+            indices[display_name] = {
+                "price": q["price"],
+                "change": round(change, 2) if change is not None else None,
+                "change_pct": round(q["change_pct"], 2),
+            }
+            idx_pcts.append(q["change_pct"])
 
         # 1-2. 정규화 키 (F10) — 결측은 0이 아닌 명시적 missing 표식
+        # 2026-09-15 (T10 F18): 심볼이 응답에 "있었지만" price/change_pct 필드가
+        # 없거나 비숫자였던 경우도(예: {"symbol":"^VIX","regularMarketTime":...})
+        # "완전히 없었던" 경우와 구분한다. price/change_pct 중 하나라도 유효하면
+        # missing=False로 그 값을 보존하고(kr_scheduler._norm이 blanket으로
+        # entry.get("missing")부터 검사하므로, 여기서 전부 결측 처리하면 VIX의
+        # price(_norm("VIX","price"))처럼 실제로는 쓸 수 있는 값까지 같이 버려진다)
+        # missing_fields로 결측 필드만 표시한다. 둘 다 없을 때만 missing=True.
+        # 2026-09-15 (T10 F18 2차): 일부 결측 심볼은 quotes(self._cache)에서 빠지므로
+        # (위 _fetch_via_v7 참조) self._seen_missing["data"]에서 살아남은 값을 읽는다.
         indices_normalized: Dict[str, Dict] = {}
         for sym, key in US_INDEX_KEYS.items():
             q = quotes.get(sym)
-            if q:
-                market_time = q.get("market_time")
+            seen = self._seen_missing.get(sym)
+            src = q if q is not None else (seen["data"] if seen else None)
+            price = src.get("price") if src else None
+            change_pct = src.get("change_pct") if src else None
+            if src and (price is not None or change_pct is not None):
+                change = src.get("change")
+                market_time = src.get("market_time")
                 as_of_val = None
                 as_of_note = "시장 시각 미제공"
                 if isinstance(market_time, (int, float)) and market_time > 0:
@@ -586,9 +699,9 @@ class USMarketData:
                         as_of_val = None
                         as_of_note = "시장 시각 파싱 실패"
                 indices_normalized[key] = {
-                    "price": q["price"],
-                    "change": round(q["change"], 2),
-                    "change_pct": round(q["change_pct"], 2),
+                    "price": price,
+                    "change": round(change, 2) if change is not None else None,
+                    "change_pct": round(change_pct, 2) if change_pct is not None else None,
                     "fetched_at": fetch_as_of,
                     "as_of": as_of_val,
                     "source": "yahoo_finance",
@@ -596,11 +709,29 @@ class USMarketData:
                 }
                 if as_of_note:
                     indices_normalized[key]["as_of_note"] = as_of_note
+                missing_fields = [
+                    f for f, v in (("price", price), ("change_pct", change_pct)) if v is None
+                ]
+                if missing_fields:
+                    indices_normalized[key]["missing_fields"] = missing_fields
+            elif seen is not None:
+                # 2026-09-15 (T10 F18 2차 blocking 재수정): 심볼이 v7 응답에는 있었지만
+                # price/change_pct가 둘 다 결측이어서 quotes(self._cache)에는 넣지
+                # 않은 경우 — "조회 실패"와 구분해 사유를 남긴다. quotes에서는 빠졌지만
+                # (daily_report 등 blind 소비자 보호) 여기서는 여전히 구분 가능하다.
+                indices_normalized[key] = {
+                    "price": None, "change": None, "change_pct": None,
+                    "fetched_at": None, "as_of": None, "source": "yahoo_finance",
+                    "missing": True,
+                    "reason": f"{sym} 필드 결측(price, change_pct)",
+                    "missing_fields": ["price", "change_pct"],
+                }
             else:
                 indices_normalized[key] = {
                     "price": None, "change": None, "change_pct": None,
                     "fetched_at": None, "as_of": None, "source": "yahoo_finance",
                     "missing": True, "reason": f"{sym} 조회 실패 또는 응답에 없음",
+                    "missing_fields": ["price", "change_pct"],
                 }
 
         # 2. 시장 심리 판단

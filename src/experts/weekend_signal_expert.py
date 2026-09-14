@@ -29,6 +29,7 @@ from loguru import logger
 
 from .base import ExpertAgent
 from .types import ExpertOpinion, RegimeBias
+from ..utils.data_freshness import DataPoint, is_fresh
 
 
 class WeekendSignalExpert(ExpertAgent):
@@ -67,8 +68,33 @@ class WeekendSignalExpert(ExpertAgent):
                 findings.append(f"🟢 NASDAQ 야간선물 {nq:+.2f}% (강세)")
 
         # 2) KOSPI200/니케이 야간선물 — KR 갭 직접
+        # 2026-09-15 (T10 F17): 값 존재만으로 유효 신호로 세지 않는다 — KIS 경로는
+        # as_of(세션 규칙 기반, kr_night_futures_as_of)가 없거나 만료됐으면 판단
+        # 근거로 쓰지 않는다("조회 성공" ≠ "지금 판단에 유효"). NKD 프록시 폴백은
+        # as_of 개념이 없는 별도 경로라 기존처럼 값 존재만으로 유효 취급한다.
         kr = signals.get("kr_futures_pct")
-        if isinstance(kr, (int, float)):
+        kr_has_as_of_field = "kr_futures_as_of" in signals
+        if kr_has_as_of_field:
+            _kr_as_of_raw = signals.get("kr_futures_as_of")
+            try:
+                _kr_as_of = datetime.fromisoformat(_kr_as_of_raw) if _kr_as_of_raw else None
+            except (ValueError, TypeError):
+                # 2026-09-15 (T10 리뷰 advisory, kr_market_expert와 동일 가드): as_of
+                # 문자열 손상으로 _analyze() 전체가 실패해 다른 유효 신호(S&P/NASDAQ
+                # 야간선물 등)까지 잃지 않게 None(미집계)으로 정직하게 처리한다.
+                logger.warning(f"[주말신호] KR 야간선물 as_of 파싱 실패: {_kr_as_of_raw!r}")
+                _kr_as_of = None
+            kr_dp = DataPoint(
+                value=kr,
+                as_of=_kr_as_of,
+                source=signals.get("kr_futures_source", "kis_night_futures"),
+                session="night",
+                ttl_seconds=signals.get("kr_futures_as_of_ttl_seconds"),
+            )
+            kr_fresh = isinstance(kr, (int, float)) and is_fresh(kr_dp)
+        else:
+            kr_fresh = isinstance(kr, (int, float))
+        if kr_fresh:
             if kr <= -2.0:
                 score -= 25
                 findings.append(f"⚠️ KR/JP 야간선물 {kr:+.2f}% — 월요일 갭다운 큰 위험")
@@ -135,13 +161,30 @@ class WeekendSignalExpert(ExpertAgent):
             else RegimeBias.NEUTRAL
         )
 
-        # 데이터 수집 신뢰도
-        valid_signals = sum(
-            1 for k in ("es_pct", "nq_pct", "kr_futures_pct", "krw_pct",
-                        "vix_last", "btc_pct", "zb_pct")
-            if isinstance(signals.get(k), (int, float))
-        )
+        # 데이터 수집 신뢰도 — kr_futures_pct는 원시값 존재가 아니라 kr_fresh(신선도
+        # 검사 통과)로 센다(T10 F17): 값은 있는데 as_of가 없거나 만료된 결측은
+        # "유효 신호"로 잡히면 안 된다.
+        _signal_labels = {
+            "es_pct": "S&P 야간선물", "nq_pct": "NASDAQ 야간선물",
+            "krw_pct": "원/달러", "vix_last": "VIX", "btc_pct": "BTC", "zb_pct": "미 30년채",
+        }
+        missing_inputs: List[str] = [
+            label for k, label in _signal_labels.items()
+            if not isinstance(signals.get(k), (int, float))
+        ]
+        if not kr_fresh:
+            missing_inputs.append(
+                "KR/JP 야간선물(결측)" if kr is None else "KR/JP 야간선물(as_of 미상 또는 만료)"
+            )
+        valid_signals = 7 - len(missing_inputs)
         confidence = min(0.85, 0.30 + valid_signals * 0.08)
+
+        if valid_signals == 0:
+            data_status = "insufficient"
+        elif missing_inputs:
+            data_status = "partial"
+        else:
+            data_status = "ok"
 
         # findings 부재 ≠ 데이터 부족 — 전 신호 중립 구간이면 findings가 비므로
         # 수집 성공 여부로 문구를 구분한다 (2026-08-06, 브리핑 오표기 수정)
@@ -160,6 +203,8 @@ class WeekendSignalExpert(ExpertAgent):
             sectors=[],
             raw=dict(signals=signals, is_weekend=is_weekend),
             valid_hours=2,   # 빠르게 만료 (시장 변동 빠름)
+            data_status=data_status,
+            missing_inputs=missing_inputs,
         )
 
     # ─────────────────────────────────────────
@@ -226,10 +271,11 @@ class WeekendSignalExpert(ExpertAgent):
                 out["kr_futures_source"] = f"KIS:{q.get('symbol')}"
                 # 2026-09-14 (T9 요청 4): 기준시각을 raw_evidence까지 보존 — 반복 값이
                 # 고착인지 정상 유지인지는 여기 담긴 자료로만 판단(이 자리에서 단정 안 함).
-                # kr_futures_fetched_at=조회 시각(현재 소스는 시장 시각 미제공 — as_of는
-                # None, 조회 시각을 시장 시각처럼 표시하지 않는다. 리뷰 advisory).
+                # as_of/as_of_ttl_seconds는 kr_night_futures_as_of(세션 규칙, T10 F17)로
+                # 도출된 값 — _analyze()의 신선도 게이트가 이 필드로 유효 신호 여부를 정한다.
                 out["kr_futures_fetched_at"] = q.get("fetched_at")
                 out["kr_futures_as_of"] = q.get("as_of")
+                out["kr_futures_as_of_ttl_seconds"] = q.get("as_of_ttl_seconds")
                 out["kr_futures_unchanged_minutes"] = q.get("value_unchanged_minutes")
         except Exception as e:
             logger.debug(f"[갭risk] KIS 야간선물 실패 → NKD 프록시: {e}")

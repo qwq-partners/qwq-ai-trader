@@ -78,6 +78,21 @@ class KREconomyExpert(ExpertAgent):
         )
         confidence = min(0.7, 0.3 + len(findings) * 0.08)
 
+        # 2026-09-15 (T10 F16): score가 실제로 참조하는 두 입력(원/달러, 한국 거시
+        # 컨텍스트)이 둘 다 결측이면 "모른다"는 뜻 — insufficient로 표시한다.
+        missing_inputs: List[str] = []
+        if not isinstance(krw, (int, float)):
+            missing_inputs.append("원/달러 환율")
+        if not macro_text:
+            missing_inputs.append("한국 거시 컨텍스트(검색)")
+
+        if len(missing_inputs) == 2:
+            data_status = "insufficient"
+        elif missing_inputs:
+            data_status = "partial"
+        else:
+            data_status = "ok"
+
         return self._build_opinion(
             score=score,
             bias=bias,
@@ -89,6 +104,8 @@ class KREconomyExpert(ExpertAgent):
                 krw=krw_state,
             ),
             valid_hours=8,
+            data_status=data_status,
+            missing_inputs=missing_inputs,
         )
 
     async def _fetch_krw_state(self) -> Dict[str, float]:

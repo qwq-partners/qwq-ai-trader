@@ -21,6 +21,7 @@ from loguru import logger
 
 from src.utils.token_manager import get_token_manager
 from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
+from src.utils.data_freshness import kr_night_futures_as_of  # T10 F17 (2026-09-15)
 
 
 class KISMarketData:
@@ -959,6 +960,18 @@ class KISMarketData:
                 changed_at = prev["changed_at"]
             self._night_futures_last_change[symbol] = {"sig": value_sig, "changed_at": changed_at}
 
+            # 2026-09-15 (T10 리뷰 advisory): 위 aiohttp 세션(`session` 변수, 894행)과
+            # 이름이 겹치는 섀도잉을 피하려고 별도 이름을 쓴다 — 현재는 재할당 이후
+            # aiohttp 세션 사용처가 없어 무해하지만, 재시도 등 추가 호출이 생기면
+            # AttributeError로 즉시 드러난다.
+            session_label = "night" if session_div == "CM" else "day"
+            # fetched_at = 조회(쿼리) 시각(항상 채워짐). as_of = 시장 시각 — KIS 야간선물
+            # 조회 API(inquire-price)는 체결시각 필드를 안 주므로 조회 시각을 그대로
+            # 시장 시각처럼 표시하지 않고, 세션 규칙(kr_night_futures_as_of, T10 F17)으로
+            # 역산한다: 세션 개장 중이면 조회=실시간 호가(as_of=now), 세션 종료 후면
+            # 직전 세션 종료 시각(마지막 체결가), F(주간)/미상이면 None(미집계).
+            as_of, as_of_note, as_of_ttl_seconds = kr_night_futures_as_of(now, session_label)
+
             result = {
                 "price": price,
                 "prev_close": prev_close,
@@ -969,19 +982,17 @@ class KISMarketData:
                 "low": low,
                 "open": open_price,
                 "symbol": symbol,
-                "session": "night" if session_div == "CM" else "day",
-                # fetched_at = 조회(쿼리) 시각. KIS 야간선물 조회 API(inquire-price)
-                # 응답에 체결시각 필드가 없어 실제 시장 시각(as_of)은 얻을 수 없으므로
-                # 조회 시각을 시장 시각처럼 표시하지 않고 None + 사유로 남긴다
-                # (2026-09-14 T9 리뷰 advisory — as_of/fetched_at 의미 분리).
+                "session": session_label,
+                "fetched_at": now.isoformat(),
+                "as_of": as_of.isoformat() if as_of is not None else None,
                 # "조회 성공"과 "그 값이 여전히 유효"를 구분하려면 fetched_at + 아래 두
                 # 필드를 함께 봐야 한다(가격만 남겨두면 고착/정상유지를 구분할 자료가 없다).
-                "fetched_at": now.isoformat(),
-                "as_of": None,
-                "as_of_note": "시장 시각 미제공(KIS 야간선물 조회 API에 체결시각 필드 없음)",
+                "as_of_ttl_seconds": as_of_ttl_seconds,
                 "value_changed_at": changed_at.isoformat(),
                 "value_unchanged_minutes": round((now - changed_at).total_seconds() / 60, 1),
             }
+            if as_of_note:
+                result["as_of_note"] = as_of_note
 
             # 심리 판단 (야간선물 등락률 기반)
             if change_pct <= -1.0:

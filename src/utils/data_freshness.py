@@ -12,8 +12,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Optional
+from datetime import datetime, timedelta
+from typing import Any, Optional, Tuple
 
 # 전문가 confidence 상한 — 자료 상태별 (2026-09-14 T9 요청 4)
 # 근거: insufficient(핵심 입력 전부 결측)는 사실상 추측이므로 0.2 이상 확신 금지.
@@ -64,6 +64,12 @@ def is_fresh(dp: DataPoint, now: Optional[datetime] = None) -> bool:
     if dp.is_missing or dp.as_of is None:
         return False
     now = now or datetime.now()
+    # 2026-09-15 (T10 B 리뷰 반영·2차 advisory): 미래 시각 as_of는 ttl 유무와
+    # 무관하게 거부한다 — F17은 "미래 시각 자료는 정상 자료로 세지 않는다"를
+    # 무조건 요구하는데, ttl_seconds가 없는 자료(예: 수동 오버라이드)는 이 검사
+    # 없이는 age 계산 자체를 건너뛰어 미래 as_of도 fresh로 통과했었다.
+    if dp.as_of > now:
+        return False
     if dp.ttl_seconds is None:
         return True
     age = (now - dp.as_of).total_seconds()
@@ -101,6 +107,68 @@ def _format_age(seconds: float) -> str:
     return f"{hours / 24:.1f}일"
 
 
+# ─────────────────────────────────────────────────────────────────
+# KRX 야간선물(CM) 세션 as_of 도출 (T10 F17, 2026-09-15 — 정책값·승인 필요)
+#
+# 근거: KIS 야간선물 조회 API(inquire-price)는 체결시각 필드를 주지 않는다. 대신
+# 어느 시장구분(CM=야간/F=주간)이 응답했는지는 알 수 있다. 세션 개장 중(18:00~
+# 익일 05:00 KST) 조회는 실시간 호가이므로 as_of=조회 시각. 세션 종료 후 조회는
+# 직전 완료된 세션의 마지막 체결가이므로 as_of=그 세션 종료 시각(05:00) — 주말에는
+# 세션이 없으므로 역산 시 건너뛴다(금요일 야간 세션 → 토요일 05:00, 월요일 아침
+# 조회까지 그대로 유효). 유효기간(ttl)은 as_of부터 다음 세션 개장(18:00)까지이며
+# 그 경계가 토/일이면 다음 평일로 자연 확장된다. 공휴일 캘린더(휴장일)는 미반영—
+# 필요해지면 `src.utils.session.is_kr_market_holiday` 연동을 검토한다(정책 승인 필요).
+# ─────────────────────────────────────────────────────────────────
+KR_NIGHT_SESSION_START_HOUR = 18   # KST, 세션 개장
+KR_NIGHT_SESSION_END_HOUR = 5      # KST, 익일 세션 종료
+
+
+def kr_night_futures_as_of(
+    now: datetime, session: Optional[str]
+) -> Tuple[Optional[datetime], Optional[str], Optional[int]]:
+    """KRX 야간선물 세션 규칙으로 (as_of, as_of_note, ttl_seconds)를 도출한다.
+
+    session이 "night"가 아니면(F/주간 폴백·미상) 시장 시각을 알 수 없으므로
+    (None, 사유, None)을 반환한다 — 조회 시각을 시장 시각처럼 포장하지 않는다.
+    """
+    if session != "night":
+        return None, "주간(F)/미상 세션 — 야간 시장 시각 아님", None
+
+    # 2026-09-15 (T10 F17 blocking 재수정): KRX 야간선물(CM) 세션은 월~금 저녁에만
+    # 개장한다(주말엔 세션 자체가 없다) — 요일을 보지 않으면 토요일 18:00~일요일
+    # 05:00, 일요일 18:00~월요일 05:00처럼 "세션이 없는 시간대"도 개장 중으로
+    # 오판해 사흘 묵은 금요일 체결가가 "0분 전 실시간 호가"로 찍힌다(리뷰 F17
+    # blocking). weekday(): 0=월 ... 6=일.
+    #   - 저녁(hour>=18): 월~금(0~4) 저녁만 개장.
+    #   - 새벽(hour<5): 화~토(1~5)만 개장 — 각각 전날(월~금) 저녁 세션의 연장.
+    #     월요일 새벽(0)은 일요일 저녁 세션이 없으므로 제외.
+    weekday = now.weekday()
+    if now.hour >= KR_NIGHT_SESSION_START_HOUR:
+        in_session = weekday <= 4
+    elif now.hour < KR_NIGHT_SESSION_END_HOUR:
+        in_session = 1 <= weekday <= 5
+    else:
+        in_session = False
+    if in_session:
+        as_of = now
+    else:
+        # 직전 완료된 세션의 종료 시각(05:00)을 역산 — 주말은 세션이 없으므로 건너뛴다.
+        d = (now - timedelta(days=1)).date()
+        while d.weekday() >= 5:  # 토(5)/일(6)
+            d -= timedelta(days=1)
+        as_of = datetime.combine(d, datetime.min.time()) + timedelta(
+            days=1, hours=KR_NIGHT_SESSION_END_HOUR
+        )
+
+    next_open = as_of.replace(hour=KR_NIGHT_SESSION_START_HOUR, minute=0, second=0, microsecond=0)
+    if next_open <= as_of:
+        next_open += timedelta(days=1)
+    while next_open.weekday() >= 5:
+        next_open += timedelta(days=1)
+    ttl_seconds = int((next_open - as_of).total_seconds())
+    return as_of, None, ttl_seconds
+
+
 def demo() -> None:
     """비-테스트 환경에서 수동 확인용 self-check (pytest 없이 python -m 실행 가능)."""
     now = datetime(2026, 9, 14, 12, 0, 0)
@@ -114,6 +182,17 @@ def demo() -> None:
     assert "만료" not in freshness_label(fresh, now)
     assert "만료" in freshness_label(stale, now)
     assert "결측" in freshness_label(gone, now)
+
+    # kr_night_futures_as_of — 세션 규칙 self-check
+    assert kr_night_futures_as_of(now, "day") == (None, "주간(F)/미상 세션 — 야간 시장 시각 아님", None)
+    # 세션 개장 중(20:00) 조회 — 실시간 호가, as_of=now
+    live = kr_night_futures_as_of(datetime(2026, 9, 14, 20, 0), "night")
+    assert live[0] == datetime(2026, 9, 14, 20, 0) and live[2] > 0
+    # 월요일(2026-09-14는 월) 07:30 조회 — 금요일(09-11) 야간 세션이 토요일 05:00에 종료,
+    # 주말엔 세션이 없으므로 그 값이 월요일 아침까지 그대로 유효해야 한다.
+    monday_morning = kr_night_futures_as_of(datetime(2026, 9, 14, 7, 30), "night")
+    assert monday_morning[0] == datetime(2026, 9, 12, 5, 0)  # 09-12(토) 05:00 = 금요일 세션 종료
+    assert monday_morning[2] > 0  # 아직 만료 전(ttl>0)
     print("data_freshness demo OK")
 
 
