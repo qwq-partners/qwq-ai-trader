@@ -9,11 +9,28 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from typing import Dict
 
+import pytest
+
+from src.agents import reproducibility
 from src.agents.analysts import AnalystTeam, MIN_TOTAL_WEIGHT, MIN_VALID_SOURCES
+from src.agents.researchers import ResearchTeam
 from src.agents.trader import BUY_THRESHOLD, SELL_THRESHOLD, TraderAgent
 from src.agents.types import AnalystKind, AnalystReport, DebateResult, Stance
+from src.utils.llm import LLMProvider, LLMResponse
+
+
+# ResearchTeam.debate()는 재현성 원장(reproducibility.py)에 기록한다 — 운영 캐시
+# 무접촉을 위해 이 파일의 모든 테스트에 대해 LEDGER_DIR을 tmp로 리다이렉트한다
+# (test_t11_judgment.py의 _isolated_paths와 동일 패턴).
+@pytest.fixture(autouse=True)
+def _isolated_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr(reproducibility, "LEDGER_DIR", tmp_path / "llm_ledger")
+    monkeypatch.setattr(reproducibility, "_ledger", None)
+    yield
 
 
 def _report(kind: AnalystKind, score: int, confidence: float) -> AnalystReport:
@@ -109,3 +126,83 @@ def test_propose_debate_failed_is_fail_open_for_holding():
     p = TraderAgent().propose("005930", "삼성전자", weak, debate, holding=True)
     assert p.conviction == 0.3
     assert p.stance == Stance.SELL   # 토론 실패에도 불구하고 보유 판단은 그대로 진행된다
+
+
+# ── ResearchTeam 판정표 — 만장일치/분열/단독/실패 4상태 (리뷰 blocking #3) ────────
+#
+# researchers.py는 이번 T11 작업에서 실제로 수정된 파일(프롬프트·change_reason·원장
+# params)이다. 그 판정표 — 특히 단독 응답의 비대칭(단독 반대는 존중, 단독 지지는
+# 보류)과 실패(confidence 0.0) — 는 기존(main) 동작이므로 여기서 기준선으로 고정한다.
+# LLM은 FakeLLM으로 대체 — 네트워크·운영 캐시 접촉 없음.
+
+
+class _FakeLLM:
+    """provider별 라운드 순서대로 응답을 내는 스텁 (test_t11_judgment.py와 동일 패턴)."""
+
+    def __init__(self, script: Dict[LLMProvider, list]):
+        self._script = {k: list(v) for k, v in script.items()}
+        self._idx: Dict[LLMProvider, int] = {}
+
+    async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
+                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None):
+        i = self._idx.get(provider, 0)
+        items = self._script[provider]
+        text = items[min(i, len(items) - 1)]
+        self._idx[provider] = i + 1
+        return LLMResponse(content=text, model="fake-model", provider=provider, success=True)
+
+
+def test_research_team_both_silent_is_failed_with_zero_confidence():
+    """양측 무응답 → failed=True, confidence=0.0, stats['failed'] 증가."""
+    fake = _FakeLLM({LLMProvider.OPENAI: [""], LLMProvider.GEMINI: [""]})
+    team = ResearchTeam(llm_manager=fake, rounds=1)
+    result = asyncio.run(team.debate("005930", "삼성전자", []))
+    assert result.failed is True
+    assert result.confidence == 0.0
+    assert result.bull_final is None and result.bear_final is None
+    assert team.stats["failed"] == 1
+
+
+def test_research_team_bull_alone_reject_is_respected_as_consensus_false():
+    """Bull 단독 응답 + REJECT, Bear 무응답 → 단독 반대는 존중(consensus False, conf 0.5)."""
+    fake = _FakeLLM({LLMProvider.OPENAI: ["REJECT 단독 반대"], LLMProvider.GEMINI: [""]})
+    team = ResearchTeam(llm_manager=fake, rounds=1)
+    result = asyncio.run(team.debate("005930", "삼성전자", []))
+    assert result.consensus is False
+    assert result.confidence == 0.5
+    assert team.stats["one_sided"] == 1
+
+
+def test_research_team_bear_alone_accept_is_held_as_consensus_none():
+    """Bear 단독 응답 + ACCEPT, Bull 무응답 → 단독 지지는 합의로 승격하지 않는다(consensus None, conf 0.3)."""
+    fake = _FakeLLM({LLMProvider.OPENAI: [""], LLMProvider.GEMINI: ["ACCEPT 단독 지지"]})
+    team = ResearchTeam(llm_manager=fake, rounds=1)
+    result = asyncio.run(team.debate("005930", "삼성전자", []))
+    assert result.consensus is None
+    assert result.confidence == 0.3
+    assert team.stats["one_sided"] == 1
+
+
+def test_research_team_split_opinion_is_consensus_none_with_half_confidence():
+    """Bull APPROVE / Bear REJECT(의견 분열) → consensus None, confidence 0.5."""
+    fake = _FakeLLM({LLMProvider.OPENAI: ["APPROVE 근거"], LLMProvider.GEMINI: ["REJECT 근거"]})
+    team = ResearchTeam(llm_manager=fake, rounds=1)
+    result = asyncio.run(team.debate("005930", "삼성전자", []))
+    assert result.consensus is None
+    assert result.confidence == 0.5
+    assert team.stats["split"] == 1
+
+
+def test_research_team_unanimous_support_and_reject_stats():
+    """만장일치 지지/반대 — stats['consensus_buy']·['consensus_reject'] 카운터 고정."""
+    support = _FakeLLM({LLMProvider.OPENAI: ["APPROVE 지지"], LLMProvider.GEMINI: ["ACCEPT 지지"]})
+    team_support = ResearchTeam(llm_manager=support, rounds=1)
+    r1 = asyncio.run(team_support.debate("005930", "삼성전자", []))
+    assert r1.consensus is True and r1.confidence == 1.0
+    assert team_support.stats["consensus_buy"] == 1
+
+    reject = _FakeLLM({LLMProvider.OPENAI: ["REJECT 반대"], LLMProvider.GEMINI: ["REJECT 반대"]})
+    team_reject = ResearchTeam(llm_manager=reject, rounds=1)
+    r2 = asyncio.run(team_reject.debate("005930", "삼성전자", []))
+    assert r2.consensus is False and r2.confidence == 1.0
+    assert team_reject.stats["consensus_reject"] == 1

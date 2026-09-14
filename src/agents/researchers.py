@@ -73,8 +73,10 @@ _CHANGE_REASON_INSTRUCTION = (
 )
 
 # "변경사유: 새근거 — ..." / "변경사유: 이전해석오류 — ..." 파싱
+# 사유는 한 줄만 캡처한다([^\n]+) — 프롬프트도 "한 줄"을 지시한다. re.S로 두면
+# 사유 줄 뒤에 딸려오는 잡담까지 텍스트에 섞인다(리뷰 advisory b).
 _CHANGE_REASON_RE = re.compile(
-    r"변경사유\s*[:：]\s*(새근거|이전해석오류)\s*[—\-–]\s*(.+)", re.S
+    r"변경사유\s*[:：]\s*(새근거|이전해석오류)\s*[—\-–]\s*([^\n]+)"
 )
 
 
@@ -311,8 +313,12 @@ class ResearchTeam:
             # 입장 변경 이유 — R2(rnd>1)에서 직전 라운드와 판정이 달라졌을 때만 채운다.
             # 이 시점에서 bull_v/bear_v는 아직 "직전 라운드"의 최종값이다
             # (몇 줄 아래에서 이번 라운드 값으로 덮어쓴다) — 그래서 여기서 비교해야 한다.
-            bull_changed = rnd > 1 and round_bull_v is not None and round_bull_v != bull_v
-            bear_changed = rnd > 1 and round_bear_v is not None and round_bear_v != bear_v
+            # 직전 라운드가 무응답/파싱 실패(None)였다면 "변경"이 아니라 "첫 판정"이다 —
+            # bull_v/bear_v가 None이면 변경으로 치지 않는다(리뷰 advisory a).
+            bull_changed = (rnd > 1 and bull_v is not None
+                            and round_bull_v is not None and round_bull_v != bull_v)
+            bear_changed = (rnd > 1 and bear_v is not None
+                            and round_bear_v is not None and round_bear_v != bear_v)
             bull_reason = (_extract_change_reason(round_bull) or {"kind": "unrecorded"}) if bull_changed else None
             bear_reason = (_extract_change_reason(round_bear) or {"kind": "unrecorded"}) if bear_changed else None
 

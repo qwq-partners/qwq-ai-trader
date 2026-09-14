@@ -461,13 +461,14 @@ class TradingTeam:
         if os.getenv(TEAM_ASSESSMENT_V2_ENV, "1") == "0":
             return
 
+        now = datetime.now()
         entry_check: Optional[Dict[str, Any]] = None
         check_note = ""
         if entry_plan is not None:
             try:
                 from ..execution.entry_plan import check_entry_plan
                 quote = {"price": current_price, "as_of": quote_as_of} if current_price is not None else None
-                pc = check_entry_plan(entry_plan, quote, datetime.now())
+                pc = check_entry_plan(entry_plan, quote, now)
                 entry_check = pc.to_dict()
                 verdict.entry_plan_id = str(entry_check.get("plan_id") or "")
             except Exception as e:
@@ -475,8 +476,11 @@ class TradingTeam:
                 check_note = f"entry_check 실패: {e}"
 
         try:
+            # now를 넘기지 않으면 judgment._evidence_merit의 근거 만료(valid_until) 배제가
+            # 항상 no-op이 된다(리뷰 blocking #2) — 만료된 근거가 유효로 취급돼선 안 된다.
             assessment = _assess_team(
-                verdict.symbol, verdict.reports, verdict.debate, entry_check=entry_check
+                verdict.symbol, verdict.reports, verdict.debate,
+                entry_check=entry_check, now=now,
             )
             if check_note:
                 assessment.notes.append(check_note)
@@ -493,20 +497,25 @@ class TradingTeam:
         서로의 결과를 덮어쓴다 → Lock으로 직렬화한다.
         임시파일에 쓰고 교체해 중간 상태가 읽히는 것도 막는다.
         """
+        # T11 shadow 스위치 — "0"이면 deliberation_id 부여도, 원장 기록도 하지 않는다
+        # (레거시 verdicts_*.json 저장만 그대로 진행). _attach_assessment와 같은 게이트.
+        v2_enabled = os.getenv(TEAM_ASSESSMENT_V2_ENV, "1") != "0"
+
         async with _SAVE_LOCK:
             # T11 (2026-09-15): 레거시 파일과 신규 원장이 같은 deliberation_id를 갖도록
             # 먼저 확정한다 — 실패해도 무시(아래 두 저장 경로는 각자 독립적으로 계속된다).
             snap_hash = ""
-            try:
-                from .reproducibility import sha256_short, snapshot_reports
-                snap_hash = sha256_short(snapshot_reports(verdict.reports))
-                if not verdict.deliberation_id:
-                    day = f"{datetime.now():%Y-%m-%d}"
-                    verdict.deliberation_id = team_ledger.make_deliberation_id(
-                        verdict.symbol, day, verdict.slot, snap_hash
-                    )
-            except Exception as e:
-                logger.debug(f"[팀] {verdict.symbol} deliberation_id 계산 실패(무시): {e}")
+            if v2_enabled:
+                try:
+                    from .reproducibility import sha256_short, snapshot_reports
+                    snap_hash = sha256_short(snapshot_reports(verdict.reports))
+                    if not verdict.deliberation_id:
+                        day = f"{datetime.now():%Y-%m-%d}"
+                        verdict.deliberation_id = team_ledger.make_deliberation_id(
+                            verdict.symbol, day, verdict.slot, snap_hash
+                        )
+                except Exception as e:
+                    logger.debug(f"[팀] {verdict.symbol} deliberation_id 계산 실패(무시): {e}")
 
             try:
                 path = RESULT_DIR / f"verdicts_{datetime.now():%Y%m%d}.json"
@@ -537,7 +546,9 @@ class TradingTeam:
                 logger.warning(f"[팀] 심의 결과 저장 실패: {e}")
 
             # T11 (2026-09-15) — append-only 심의 원장. 기존 파일과 별개(덮어쓰지 않음),
-            # 저장 실패는 warning만(부가 기능, 돈 경로 무관).
+            # 저장 실패는 warning만(부가 기능, 돈 경로 무관). 플래그 off면 아예 안 만든다.
+            if not v2_enabled:
+                return
             try:
                 row = verdict.to_dict()
                 row["decided_at"] = datetime.now().isoformat(timespec="seconds")

@@ -340,6 +340,55 @@ def test_ledger_append_failure_does_not_raise_or_affect_decision(monkeypatch):
     assert v.error is None
 
 
+def test_flag_off_never_writes_ledger_or_assigns_deliberation_id(monkeypatch):
+    """리뷰 blocking #1: 플래그 off면 원장 기록도 deliberation_id 부여도 없어야 한다."""
+    monkeypatch.setenv("TEAM_ASSESSMENT_V2", "0")
+    team = _make_team()
+    v = asyncio.run(team.deliberate_candidate("005930", "삼성전자", slot="10:30"))
+    assert v.deliberation_id == ""
+
+    rows = team_ledger.load_day(f"{datetime.now():%Y-%m-%d}", ledger_dir=team_ledger.LEDGER_DIR)
+    assert rows == []
+
+
+def test_now_is_injected_so_expired_evidence_is_excluded_via_team(monkeypatch):
+    """리뷰 blocking #2: team.py가 now를 넘기지 않으면 만료된 evidence가 merit에 가산된다.
+
+    team._attach_assessment가 now를 judgment.assess에 실제로 전달하는지를
+    entry_plan 경로가 아니라 verdict.assessment 결과로 직접 검증한다.
+    """
+    from datetime import timedelta
+
+    from src.agents.types import EvidenceItem
+
+    monkeypatch.setenv("TEAM_ASSESSMENT_V2", "1")
+    team = _make_team()
+
+    expired_ev = EvidenceItem(
+        source="test", metric="m1", value=1, kind="fact", status="full",
+        dedup_key="k1", valid_until=datetime.now() - timedelta(hours=1),
+    )
+    report = AnalystReport(
+        kind=AnalystKind.FUNDAMENTAL, symbol="005930", score=60, confidence=0.9,
+        data_as_of=datetime.now(), evidence=[expired_ev], positive_basis=True,
+        data_status="full",
+    )
+
+    async def _run():
+        v = await team.deliberate_candidate("005930", "삼성전자")
+        v.reports = [report]           # 실제 analysts.run() 결과를 대체(합성 근거 주입)
+        v.assessment = None
+        team._attach_assessment(v)     # now가 실제로 전달되는지 직접 검증
+        return v
+
+    v = asyncio.run(_run())
+    assert v.assessment is not None
+    # now가 전달되지 않으면(패치 전 버그) 만료된 근거도 유효로 잡혀 merit_score=60이 된다.
+    # now가 실제로 전달돼야 usable_facts가 비어 total_w=0 → merit_score=None.
+    assert v.assessment.merit_score is None
+    assert v.assessment.evidence_quality["unique_sources"] == 0
+
+
 def test_deliberation_id_is_stable_for_same_input_and_ledger_row_has_execution_state(monkeypatch):
     monkeypatch.setenv("TEAM_ASSESSMENT_V2", "1")
     team = _make_team()

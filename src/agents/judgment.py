@@ -74,7 +74,7 @@ def _evidence_merit(reports: List[AnalystReport], now: Optional[datetime]) -> tu
 
         unique_sources += 1
         score = r.score
-        if r.risk_clear is True and not r.positive_basis:
+        if r.risk_clear is True and r.positive_basis is not True:
             score -= 10                       # "검증 통과"만의 가산 취소 — 긍정 근거가 아니다
         weighted += score * w
         total_w += w
