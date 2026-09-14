@@ -592,6 +592,19 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
 - **체크포인트**: 첫 5건 `technical_status=passed` / 10건 재계산 불일치 0건 / 30건 status 보고. 벤치마크는 일 종가(진입일·청산일) 기준이며 장중 체결가와의 시점 차이는 가정으로 기록. 벤치마크 결손 포지션의 초과수익은 null(0 대체 없음).
 - 제외 집계: `cohort_mismatch`(cohort/SHA 불일치) · `legacy_unmeasured`(`entry_risk` null 또는 sizing_mode≠risk) · `open` · `lots_ambiguous` · `missing_initial_risk`.
 
+### 2026-09-14~ — 장전 전망 사후 평가 원장 (모닝브리프 scope + 레짐 시간 범위)
+
+- **대상**: `src/analytics/morning_brief_eval.py`, `DailyReportGenerator.evaluate_morning_brief()`, `MarketRegimeAdapter` 시간 범위 분리
+- **원장**: `~/.cache/ai_trader/morning_brief_eval.jsonl` (1일 1줄, 저녁 리포트 시각에 기록)
+- **확인 항목**:
+  - [ ] 브리프 캐시에 `scope`·`inputs`·`claims`·`model`이 저장되는가 (07:00 생성 직후 파일 확인)
+  - [ ] `scope=us_close_only`인 날 본문에 "갭 출발/상승 출발/시가 매수" 단정이 없는가 (`removed_claims` 건수 로그)
+  - [ ] 07:30 통합 메시지가 기존대로 브리프 본문을 결합하는가 (`text` 키 호환)
+  - [ ] 저녁에 원장 1줄이 추가되고 `evaluated=true`인가 (지수 조회 실패일은 `evaluated=false` + 사유)
+  - [ ] 급락일(`intraday_risk=crash/severe`)에 유효 레짐이 `bull`/`trending_bull`로 남지 않는가
+  - [ ] 09:30 이후 `open_expectation`이 만료로 표시되는가 (`get_summary()["horizons"]`)
+- **판정 규칙**: 20건 이상 누적 전에는 적중률로 프롬프트·임계값을 바꾸지 않는다. `summarize()`의 표본 수를 먼저 본다. 하루 결과(예: 09-14 개장·종가 동시 miss)로 규칙을 바꾸지 않는다.
+
 ## 완료된 체크포인트
 
 (검증 완료 시 ✅ + 1줄 요약으로 여기에 이동)

@@ -20,6 +20,36 @@ from loguru import logger
 # 추천 종목 캐시 경로
 _REC_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 
+# 모닝브리프 캐시·평가 원장 경로 (2026-09-14 T9 요청 3·5)
+MORNING_BRIEF_PATH = _REC_CACHE_DIR / "llm_morning_brief.json"
+MORNING_BRIEF_LEDGER_PATH = _REC_CACHE_DIR / "morning_brief_eval.jsonl"
+
+# 브리프 주장 범위 (T9 요청 3)
+SCOPE_US_ONLY = "us_close_only"
+SCOPE_WITH_KR = "with_kr_inputs"
+NO_KR_INPUT_NOTE = "국내 자료 없음 — 개장 방향 판단 불가"
+
+# 국내 개장 방향·대응 전략 단정 표현 — 국내 자료 없이 쓰이면 제거한다
+_OPEN_CLAIM_PATTERNS = (
+    "갭 출발", "갭출발", "갭상승", "갭 상승", "갭하락", "갭 하락",
+    "상승 출발", "하락 출발", "보합 출발", "강세 출발", "약세 출발",
+    "상승 개장", "하락 개장", "갭업", "갭다운",
+    "시가 매수", "시초가 매수", "매수 대응", "매도 대응",
+)
+# 위 표현이 미국 시장을 가리키는 문장이면 제거하지 않는다
+_US_MARKET_TOKENS = (
+    "미국", "美", "S&P", "SP500", "나스닥", "NASDAQ", "다우", "DOW",
+    "SOX", "VIX", "뉴욕", "빅테크", "필라델피아", "뉴욕증시",
+)
+_BULL_TONE_TOKENS = ("강세", "상승", "호조", "반등", "랠리", "훈풍", "급등")
+_BEAR_TONE_TOKENS = ("약세", "하락", "부진", "조정", "급락", "위축", "충격")
+# 브리프 톤 판정 임계 (강세/약세 토큰 수 차이) — 한쪽으로 2회 이상 기울 때만 방향으로 본다
+_TONE_MARGIN = 2
+
+_SENTENCE_SPLIT_RE = re.compile(r"([.!?]+\s*|\n)")
+# 구분자에서 문장부호만 떼고 공백·줄바꿈은 남기기 위한 패턴
+_SEP_WHITESPACE_RE = re.compile(r"[.!?]+")
+
 # 프로젝트 내 모듈
 from ..utils.telegram import get_telegram_notifier, TelegramNotifier
 from ..signals.screener.kr_screener import get_screener, ScreenedStock
@@ -61,6 +91,128 @@ class RecommendedStock:
     # 결과 (오후 리포트용)
     result_price: Optional[float] = None
     result_pct: Optional[float] = None
+
+
+def _split_sentences(text: str) -> List[Tuple[str, str]]:
+    """(문장, 구분자) 목록 — 그대로 이어붙이면 원문이 복원된다"""
+    tokens = _SENTENCE_SPLIT_RE.split(text)
+    pairs: List[Tuple[str, str]] = []
+    for i in range(0, len(tokens), 2):
+        body = tokens[i]
+        sep = tokens[i + 1] if i + 1 < len(tokens) else ""
+        if body or sep:
+            pairs.append((body, sep))
+    return pairs
+
+
+def _is_kr_open_claim(sentence: str) -> bool:
+    """국내 개장 방향·대응 전략 단정 문장인가 (미국 시장 문장은 제외)"""
+    if not any(pat in sentence for pat in _OPEN_CLAIM_PATTERNS):
+        return False
+    return not any(tok in sentence for tok in _US_MARKET_TOKENS)
+
+
+def sanitize_brief_claims(text: str, scope: str) -> Tuple[str, List[str]]:
+    """국내 자료 없이 개장 방향을 단정한 문장을 제거한다.
+
+    Returns: (정제된 본문, 제거된 문장 목록)
+    scope 가 with_kr_inputs 이면 원문을 그대로 둔다 (근거가 있는 주장).
+    """
+    if scope != SCOPE_US_ONLY or not text:
+        return text, []
+
+    out: List[str] = []
+    removed: List[str] = []
+    note_emitted_for_run = False
+    for body, sep in _split_sentences(text):
+        sentence = (body + sep).strip()
+        if body.strip() and _is_kr_open_claim(sentence):
+            removed.append(sentence)
+            if not note_emitted_for_run:
+                out.append(NO_KR_INPUT_NOTE)
+                note_emitted_for_run = True
+            # 문장은 지우되 줄바꿈·공백은 보존한다 (문단 구조 유지)
+            out.append(_SEP_WHITESPACE_RE.sub("", sep))
+            continue
+        note_emitted_for_run = False
+        out.append(body + sep)
+    # 문장을 지우며 남은 줄 끝 공백 정리
+    return re.sub(r"[ \t]+\n", "\n", "".join(out)), removed
+
+
+def brief_tone(text: str) -> str:
+    """브리프 톤 — bull / bear / neutral (근거 없는 확신을 만들지 않도록 여유 폭 적용)"""
+    bull = sum(text.count(tok) for tok in _BULL_TONE_TOKENS)
+    bear = sum(text.count(tok) for tok in _BEAR_TONE_TOKENS)
+    if bull - bear >= _TONE_MARGIN:
+        return "bull"
+    if bear - bull >= _TONE_MARGIN:
+        return "bear"
+    return "neutral"
+
+
+def _expert_label(score: int) -> str:
+    """전문가 종합점수 라벨 (07:30 브리핑과 동일 기준)"""
+    if score >= 15:
+        return "강세 우위"
+    if score >= 5:
+        return "약상승"
+    if score <= -15:
+        return "약세 우위"
+    if score <= -5:
+        return "약하락"
+    return "중립"
+
+
+def build_expert_conflict_note(tone: str, expert_consensus: Optional[Dict]) -> Optional[str]:
+    """브리프 톤과 전문가 종합판단이 상충하면 표시 문구를 만든다 (없으면 None)"""
+    if not expert_consensus:
+        return None
+    score = expert_consensus.get("score")
+    if score is None:
+        return None
+    label = _expert_label(score)
+    expert_dir = "bull" if score >= 5 else ("bear" if score <= -5 else "neutral")
+    if tone == "neutral" or tone == expert_dir:
+        return None
+    tone_kr = "강세" if tone == "bull" else "약세"
+    return f"⚠️ 전문가 종합판단({score:+d} {label})과 상충 — 브리프 톤은 {tone_kr}"
+
+
+def extract_brief_claims(
+    text: str, sector_signals: Optional[Dict], scope: str, basis: List[str],
+) -> Dict:
+    """브리프 주장을 구조화한다 — 근거 없는 축은 None (기본값으로 채우지 않는다)"""
+    open_direction = None
+    close_direction = None
+    if scope == SCOPE_WITH_KR:
+        if any(p in text for p in ("상승 출발", "갭상승", "갭 상승", "상승 개장", "갭업", "강세 출발")):
+            open_direction = "up"
+        elif any(p in text for p in ("하락 출발", "갭하락", "갭 하락", "하락 개장", "갭다운", "약세 출발")):
+            open_direction = "down"
+        elif "보합 출발" in text:
+            open_direction = "flat"
+
+        if any(p in text for p in ("상승 마감", "반등 마감", "상승 전환 마감")):
+            close_direction = "up"
+        elif any(p in text for p in ("하락 마감", "약세 마감")):
+            close_direction = "down"
+
+    sectors = [name for name in (sector_signals or {}) if name and name in text]
+    return {
+        "open_direction": open_direction,
+        "close_direction": close_direction,
+        "sectors": sectors,
+        "basis": list(basis),
+    }
+
+
+def save_morning_brief(record: Dict, path=None) -> Path:
+    """모닝브리프 레코드를 고정 스키마로 저장한다 (07:30 브리핑이 text 키를 읽는다)"""
+    path = Path(path) if path is not None else MORNING_BRIEF_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 class DailyReportGenerator:
@@ -1035,44 +1187,46 @@ class DailyReportGenerator:
             # 07:30 전문가 브리핑(_send_expert_briefing_telegram)이 캐시를 읽어
             # 하나의 통합 메시지로 발송한다.
             try:
-                llm_brief = await self._generate_llm_market_brief(
+                brief_record = await self.build_morning_brief(
                     quotes=quotes,
                     sector_signals=sector_signals,
                     avg_pct=avg_pct,
                     us_date_str=us_date_str,
                     mood=mood,
                 )
-                if llm_brief:
-                    import json as _json
-                    from pathlib import Path as _Path
-                    cache_path = _Path.home() / ".cache" / "ai_trader" / "llm_morning_brief.json"
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_text(
-                        _json.dumps({
-                            "us_date": us_date_str,
-                            "text": llm_brief,
-                            "generated_at": datetime.now().isoformat(),
-                        }, ensure_ascii=False),
-                        encoding="utf-8",
+                if brief_record:
+                    cache_path = save_morning_brief(brief_record)
+                    logger.info(
+                        f"[레포트] LLM 모닝브리프 캐시 저장 → {cache_path} "
+                        f"(scope={brief_record['scope']}, "
+                        f"제거된 단정 {len(brief_record['removed_claims'])}건)"
                     )
-                    logger.info(f"[레포트] LLM 모닝브리프 캐시 저장 → {cache_path}")
             except Exception as brief_err:
                 logger.error(f"[레포트] LLM 모닝브리프 생성/캐시 실패: {brief_err}", exc_info=True)
 
         return report
 
-    async def _generate_llm_market_brief(
+    async def build_morning_brief(
         self,
+        *,
         quotes: Dict,
         sector_signals: Dict,
         avg_pct: float,
         us_date_str: str,
         mood: str,
-    ) -> Optional[str]:
-        """LLM 증권사 모닝브리프 생성 (2026-05-13 신규)
+        kr_inputs: Optional[List[Dict]] = None,
+        expert_consensus: Optional[Dict] = None,
+    ) -> Optional[Dict]:
+        """LLM 모닝브리프 생성 (2026-05-13 신규, 2026-09-14 주장 범위 제한)
 
-        US 마감 데이터를 GPT-5.4(MARKET_ANALYSIS)로 분석.
-        증권사 morning brief 형태로 한국 투자자 시사점 도출.
+        입력이 미국 마감 자료뿐이면 제목·본문을 "미국시장 마감 요약"으로 제한하고
+        한국장 개장 방향·갭·대응 전략 단정을 금지한다 (프롬프트 규칙 + 응답 후 검사).
+        기준시각(as_of)이 있는 국내 자료가 주어질 때만 "개장 관찰 포인트"를 허용하되
+        반대 근거를 함께 요구한다.
+
+        Returns:
+            고정 스키마 레코드 (us_date/text/generated_at/model/scope/inputs/claims/…)
+            또는 실패 시 None
         """
         try:
             from ..utils.llm import get_llm_manager, LLMTask
@@ -1080,7 +1234,7 @@ class DailyReportGenerator:
             logger.warning(f"[모닝브리프] LLM 모듈 로드 실패: {e}")
             return None
 
-        # 지수 데이터 정리
+        # ── 입력 정리 (사용 자료와 기준시각을 레코드에 고정 저장) ──
         index_list = ["^GSPC", "^IXIC", "^DJI", "^SOX", "^VIX"]
         index_names_map = {
             "^GSPC": "S&P500", "^IXIC": "NASDAQ", "^DJI": "DOW",
@@ -1096,7 +1250,6 @@ class DailyReportGenerator:
             price = q.get("price", 0.0)
             idx_lines.append(f"  - {name}: {pct:+.2f}% ({price:,.1f})")
 
-        # 빅테크
         bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
         bt_lines = []
         for sym in bigtech:
@@ -1104,7 +1257,6 @@ class DailyReportGenerator:
             if q:
                 bt_lines.append(f"{sym} {q.get('change_pct', 0):+.1f}%")
 
-        # 섹터 영향
         sector_lines = []
         if sector_signals:
             for theme, sig in sorted(
@@ -1119,7 +1271,55 @@ class DailyReportGenerator:
                     f"  - {theme}: 부스트 {boost:+d}점, 평균 {avg_s:+.1f}%, {', '.join(movers)}"
                 )
 
-        prompt = f"""한국 투자자용 미국증시 마감 모닝브리프 작성.
+        inputs: List[Dict] = [
+            {"name": "미국 지수", "kind": "us", "as_of": us_date_str,
+             "source": "us_market_data", "valid": bool(idx_lines),
+             "detail": f"{len(idx_lines)}종"},
+            {"name": "빅테크", "kind": "us", "as_of": us_date_str,
+             "source": "us_market_data", "valid": bool(bt_lines),
+             "detail": f"{len(bt_lines)}종"},
+            {"name": "US섹터→KR테마 매핑", "kind": "us", "as_of": us_date_str,
+             "source": "us_market_data", "valid": bool(sector_lines),
+             "detail": f"{len(sector_lines)}건"},
+        ]
+
+        # 국내 자료는 as_of 가 있을 때만 유효로 인정한다 (기준시각 없는 값은 신선도 미상)
+        valid_kr: List[Dict] = []
+        for item in (kr_inputs or []):
+            entry = {
+                "name": item.get("name"), "kind": "kr",
+                "as_of": item.get("as_of"), "source": item.get("source"),
+                "value": item.get("value"),
+                "valid": bool(item.get("as_of")),
+            }
+            if not entry["valid"]:
+                entry["reason"] = "as_of 없음 — 유효 국내 자료로 인정하지 않음"
+            else:
+                valid_kr.append(entry)
+            inputs.append(entry)
+
+        scope = SCOPE_WITH_KR if valid_kr else SCOPE_US_ONLY
+
+        if scope == SCOPE_WITH_KR:
+            kr_block = "\n".join(
+                f"  - {i['name']}: {i.get('value')} (기준시각 {i['as_of']}, 출처 {i.get('source')})"
+                for i in valid_kr
+            )
+            scope_rules = (
+                "5. <b>■ 개장 관찰 포인트</b>: 위 국내 자료(기준시각 명시)로만 관찰 포인트 2건.\n"
+                "   각 포인트마다 <b>반대 근거</b>를 반드시 함께 쓸 것. 단정 대신 조건부로 서술."
+            )
+            title = "🧠 <b>LLM 모닝브리프</b> — 미국시장 마감 + 국내 장전 자료"
+        else:
+            kr_block = ""
+            scope_rules = (
+                "5. <b>■ 판단 보류</b>: 국내 수급·선물·환율·장전 뉴스가 입력에 없다.\n"
+                "   따라서 한국장 <b>개장 방향·갭·시가 대응 전략을 쓰지 말 것</b>.\n"
+                f"   대신 '{NO_KR_INPUT_NOTE}' 라고만 쓸 것."
+            )
+            title = "🧠 <b>LLM 모닝브리프</b> — 미국시장 마감 요약"
+
+        prompt = f"""{'한국 장전 자료를 포함한 미국증시 마감 브리프' if scope == SCOPE_WITH_KR else '미국시장 마감 요약'} 작성.
 
 [기준일] {us_date_str} 미국시장 마감
 
@@ -1131,17 +1331,21 @@ class DailyReportGenerator:
 [빅테크]
   {' / '.join(bt_lines) if bt_lines else '(데이터 없음)'}
 
-[한국 시장 영향 (US 섹터→KR 테마 매핑)]
+[US 섹터 → KR 테마 매핑]
 {chr(10).join(sector_lines) if sector_lines else '  (영향 미미)'}
+{f'{chr(10)}[국내 장전 자료]{chr(10)}{kr_block}' if kr_block else ''}
 
-위 데이터를 바탕으로 증권사 morning brief 형태로 작성. Telegram HTML 태그(<b>, <i>) 사용 가능.
+★ 자료 범위 규칙 (반드시 준수):
+- 위에 주어진 자료로 확인되는 것만 쓴다. 없는 자료를 추정해 단정하지 않는다.
+- 국내 수급·공매도·최신 선물·환율·장전 뉴스는 {'일부만 주어졌다' if scope == SCOPE_WITH_KR else '주어지지 않았다'}.
+- 근거가 없으면 "추가 확인 필요"라고 쓴다. 중립·확신으로 포장하지 않는다.
 
-출력 형식 (꼭 이 5개 섹션 순서로):
-1. <b>■ 시장 종합 평가</b>: 2~3문장 (전반적 분위기, 변동성, 주요 동력)
-2. <b>■ 핵심 이슈 분석</b>: 데이터에서 추론 가능한 핵심 이슈 2~3건 (이벤트/실적/지표/지정학 — 명시 단서 없으면 "추가 확인 필요" 명시)
-3. <b>■ 섹터 흐름</b>: 강세 섹터 2~3개 + 약세 섹터 2~3개 (이유 포함)
-4. <b>■ 한국시장 시사점</b>: 오늘 KOSPI/KOSDAQ 갭/모멘텀 영향 + 주목 섹터 + 회피 섹터
-5. <b>■ 투자 전략 시사점</b>: 시나리오 2건 (강세 시나리오 / 약세 시나리오)
+출력 형식 (이 순서):
+1. <b>■ 미국시장 종합 평가</b>: 2~3문장 (분위기, 변동성, 동력)
+2. <b>■ 핵심 이슈 분석</b>: 자료에서 추론 가능한 이슈 2~3건 (단서 없으면 "추가 확인 필요")
+3. <b>■ 미국 섹터 흐름</b>: 강세 2~3개 + 약세 2~3개 (이유 포함)
+4. <b>■ 한국 테마 연결</b>: 위 매핑에 나온 테마만 언급. {'개장 방향은 단정하지 않는다.' if scope == SCOPE_US_ONLY else '조건부로만 서술한다.'}
+{scope_rules}
 
 500~800자 권장. 마지막에 "<i>※ 본 분석은 LLM 자동 생성. 투자 판단 본인 책임.</i>" 추가.
 """
@@ -1151,7 +1355,10 @@ class DailyReportGenerator:
             result = await asyncio.wait_for(
                 llm.complete(
                     prompt=prompt,
-                    system="당신은 한국 증권사 리서치센터 미국시장 담당 애널리스트. 한국 투자자 관점에서 핵심을 짚어 간결하게 작성.",
+                    system=(
+                        "당신은 한국 증권사 리서치센터 미국시장 담당 애널리스트. "
+                        "주어진 자료 범위 밖을 단정하지 않는다."
+                    ),
                     task=LLMTask.MARKET_ANALYSIS,
                     max_tokens=1200,
                 ),
@@ -1167,32 +1374,157 @@ class DailyReportGenerator:
         if not result:
             return None
 
-        # LLMResponse 객체에서 content 추출
-        text = getattr(result, "content", None)
-        if text is None:
-            if isinstance(result, dict):
-                text = result.get("content") or result.get("text") or ""
-            else:
-                text = str(result)
-
-        text = (text or "").strip()
-        if not text:
-            logger.warning("[모닝브리프] LLM 응답 빈값")
-            return None
-
         # 성공 여부 확인 (LLMResponse 우선)
         if hasattr(result, "success") and not result.success:
             err = getattr(result, "error", "unknown")
             logger.warning(f"[모닝브리프] LLM 호출 실패: {err}")
             return None
 
-        header = (
-            f"🧠 <b>LLM 모닝브리프</b> — 한국 투자자용\n"
-            f"<i>{us_date_str} 미국 마감 기반</i>\n\n"
+        text = getattr(result, "content", None)
+        if text is None:
+            if isinstance(result, dict):
+                text = result.get("content") or result.get("text") or ""
+            else:
+                text = str(result)
+        raw_text = (text or "").strip()
+        if not raw_text:
+            logger.warning("[모닝브리프] LLM 응답 빈값")
+            return None
+
+        # ── 응답 후 검사: 국내 자료 없이 나온 개장 방향 단정 제거 ──
+        body, removed = sanitize_brief_claims(raw_text, scope)
+        if removed:
+            logger.warning(
+                f"[모닝브리프] 국내 자료 없는 개장 단정 {len(removed)}건 제거: "
+                f"{removed[0][:60]}"
+            )
+
+        tone = brief_tone(raw_text)
+        conflict = build_expert_conflict_note(tone, expert_consensus)
+        if conflict:
+            body = body.rstrip() + "\n\n" + conflict
+
+        claims = extract_brief_claims(
+            body, sector_signals, scope,
+            basis=[i["name"] for i in inputs if i.get("valid")],
         )
+
+        header = f"{title}\n<i>{us_date_str} 미국 마감 기반</i>\n\n"
         # Telegram 메시지 길이 제한 (~4096자) 안전 마진
-        body = text[:3800]
-        return header + body
+        return {
+            "us_date": us_date_str,
+            "title": title,
+            "text": header + body[:3800],
+            "generated_at": datetime.now().isoformat(),
+            "model": getattr(result, "model", None) or "unknown",
+            "scope": scope,
+            "inputs": inputs,
+            "claims": claims,
+            "removed_claims": removed,
+            "tone": tone,
+            "expert_consensus": expert_consensus,
+            "expert_conflict": conflict,
+        }
+
+    async def evaluate_morning_brief(
+        self,
+        report_date: Optional[date] = None,
+        *,
+        brief_path=None,
+        ledger_path=None,
+    ) -> Optional[Dict]:
+        """장전 브리프의 장후 평가 (2026-09-14 T9 요청 5).
+
+        당일 브리프 캐시 + KOSPI/KOSDAQ 시가·종가 + 업종 수익률을 모아
+        morning_brief_eval.evaluate() 로 판정하고 JSONL 원장에 누적한다.
+
+        Args:
+            report_date: 평가 대상일 (기본 오늘)
+            brief_path: 브리프 캐시 경로 (기본 ~/.cache/ai_trader/llm_morning_brief.json)
+            ledger_path: 평가 원장 경로 (기본 ~/.cache/ai_trader/morning_brief_eval.jsonl)
+
+        Returns:
+            원장에 기록한 평가 레코드. 브리프가 없으면 None (원장도 쓰지 않는다).
+        """
+        from . import morning_brief_eval
+
+        report_date = report_date or date.today()
+        brief_path = Path(brief_path) if brief_path is not None else MORNING_BRIEF_PATH
+        ledger_path = (
+            Path(ledger_path) if ledger_path is not None else MORNING_BRIEF_LEDGER_PATH
+        )
+
+        if not brief_path.exists():
+            logger.info(f"[브리프평가] 브리프 캐시 없음 → 스킵 ({brief_path})")
+            return None
+        try:
+            brief = json.loads(brief_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"[브리프평가] 브리프 캐시 파싱 실패 → 스킵: {e}")
+            return None
+
+        actual = {"date": report_date.isoformat()}
+        try:
+            actual.update(await self._collect_brief_actuals())
+        except Exception as e:
+            logger.warning(f"[브리프평가] 실측 수집 실패: {e}")
+
+        record = morning_brief_eval.evaluate(brief, actual)
+        morning_brief_eval.append_ledger(ledger_path, record)
+        logger.info(
+            f"[브리프평가] {record['date']} evaluated={record['evaluated']} "
+            f"개장={record['open_direction']['hit']} 종가={record['close_direction']['hit']}"
+        )
+        return record
+
+    async def _collect_brief_actuals(self) -> Dict:
+        """평가용 실측 — KOSPI/KOSDAQ 시가·종가 방향 + 업종 수익률
+
+        결측은 키를 만들지 않는다 (0 으로 채우면 미평가가 적중으로 둔갑한다).
+        """
+        kmd = self._kis_market_data
+        if not kmd:
+            from ..data.providers.kis_market_data import get_kis_market_data
+            kmd = get_kis_market_data()
+
+        out: Dict = {}
+        for code, key in (("0001", "kospi"), ("1001", "kosdaq")):
+            try:
+                data = await kmd.fetch_index_price(code)
+            except Exception as e:
+                logger.debug(f"[브리프평가] 지수 조회 실패 {key}: {e}")
+                continue
+            if not data:
+                continue
+            price = data.get("price")
+            change = data.get("change")
+            open_price = data.get("open")
+            close_pct = data.get("change_pct")
+            index_actual: Dict = {}
+            if close_pct is not None:
+                index_actual["close_change_pct"] = close_pct
+            # 시가 방향 = (시가 - 전일종가) / 전일종가. 전일종가 = 현재가 - 전일대비
+            if price is not None and change is not None and open_price is not None:
+                prev_close = price - change
+                if prev_close > 0 and open_price > 0:
+                    index_actual["open_change_pct"] = round(
+                        (open_price - prev_close) / prev_close * 100, 4
+                    )
+            if index_actual:
+                out[key] = index_actual
+
+        try:
+            sectors = await kmd.fetch_sector_indices()
+        except Exception as e:
+            logger.debug(f"[브리프평가] 업종 조회 실패: {e}")
+            sectors = None
+        if sectors:
+            out["sectors"] = {
+                s.get("name"): s.get("change_pct")
+                for s in sectors
+                if s.get("name") and s.get("change_pct") is not None
+            }
+        return out
 
     def _format_morning_report(
         self,

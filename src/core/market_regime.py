@@ -12,7 +12,8 @@ QWQ AI Trader - 시장 체제 사전 적응
 import os
 import json
 import asyncio
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Dict, Optional
 import aiohttp
@@ -24,6 +25,56 @@ _VIX_CACHE_PATH = Path.home() / ".cache" / "ai_trader" / "vix_cache.json"
 _VIX_CACHE_TTL_SEC = 6 * 3600  # 6시간
 _VIX_FEAR_THRESHOLD = 30.0
 _VIX_COMPLACENCY_THRESHOLD = 15.0
+
+
+# ============================================================
+# 판단 시간 범위 분리 (2026-09-14 리뷰 후속 T9 요청 2)
+#
+# 09-14 사고: 08:20 스크리너 메모리(KOSPI 5일 +3.3%)로 만든 강세 판단이
+# 당일 -3.34% 급락 중 12:00 에도 그대로 유효 레짐으로 쓰였다.
+# 세 관점을 섞지 않고 별도 필드로 보관한다:
+#   mid_trend        — 5/20일 중기 추세 (느리게 변함)
+#   open_expectation — 장전 개장 예상 (09:30 이후 무효)
+#   intraday_risk    — 현재 장중 위험 (급락 감지기 상태 + 당일 등락)
+# ============================================================
+
+# 장전 개장 예상의 유효 종료 시각 — 개장 30분 뒤에는 예상이 아니라 사실로 판단한다
+OPEN_EXPECTATION_EXPIRY = dtime(9, 30)
+
+# 급락 감지기 상태 (batch_analyzer._intraday_state 와 동일 어휘)
+INTRADAY_RISK_LEVELS = ("normal", "caution", "crash", "severe")
+
+# 강세를 강세로 취급하지 않는 장중 위험 수준
+_BULL_BLOCKING_RISK = ("crash", "severe")
+
+# 강등 표 — "bull 로 취급하지 않는" 최소 강등만 한다 (새 차단 추가 아님).
+# bull → sideways 는 기존 VIX Fear 강등과 같은 방향,
+# trending_bull → neutral 은 기존 레짐충돌가드(_KOSPI_CAP["bear"]) 와 같은 방향.
+_BULL_DEMOTION = {"bull": "sideways", "trending_bull": "neutral"}
+
+
+def cap_regime_by_intraday_risk(regime: str, intraday_risk: Optional[str]) -> str:
+    """장중 위험이 crash/severe 이면 강세 레짐을 강등한다.
+
+    두 어휘(엔진 bull/bear/sideways, LLM 분류기 trending_bull/…)를 모두 받는다.
+    강세가 아닌 레짐·정상 장세는 원본을 그대로 돌려준다 (새 차단 없음).
+    """
+    if intraday_risk not in _BULL_BLOCKING_RISK:
+        return regime
+    return _BULL_DEMOTION.get(regime, regime)
+
+
+@dataclass(frozen=True)
+class RegimeHorizons:
+    """시간 범위별 레짐 관점 — 값이 없으면 None (0·중립으로 채우지 않는다)"""
+
+    mid_trend: Optional[str] = None
+    mid_trend_as_of: Optional[datetime] = None
+    open_expectation: Optional[str] = None
+    open_expectation_as_of: Optional[datetime] = None
+    intraday_risk: Optional[str] = None
+    intraday_risk_as_of: Optional[datetime] = None
+    intraday_change_pct: Optional[float] = None
 
 
 class MarketRegimeAdapter:
@@ -81,10 +132,119 @@ class MarketRegimeAdapter:
         self._vix_value: Optional[float] = None
         self._vix_state: str = "normal"  # "fear" / "complacency" / "normal"
         self._vix_last_fetch: Optional[datetime] = None
+        # 시간 범위별 관점 (2026-09-14 T9 요청 2)
+        self._horizons = RegimeHorizons()
 
     def get_params(self) -> Dict:
         """현재 체제의 파라미터 반환"""
-        return self.REGIME_PARAMS.get(self._current_regime, self.REGIME_PARAMS["neutral"])
+        return self.params
+
+    # ============================================================
+    # 시간 범위별 관점 (2026-09-14 리뷰 후속 T9 요청 2)
+    # ============================================================
+
+    @property
+    def horizons(self) -> RegimeHorizons:
+        """원본 관점 스냅샷 (만료 필터 미적용)"""
+        return self._horizons
+
+    def set_mid_trend(self, regime: str, as_of: Optional[datetime] = None) -> None:
+        """5/20일 중기 추세 관점을 설정한다 (유효 레짐의 기준값이 된다)."""
+        if regime not in self.REGIME_PARAMS:
+            raise ValueError(
+                f"mid_trend 는 {tuple(self.REGIME_PARAMS)} 중 하나여야 합니다: {regime!r}"
+            )
+        self._horizons = replace(
+            self._horizons, mid_trend=regime,
+            mid_trend_as_of=as_of if as_of is not None else datetime.now(),
+        )
+
+    def set_open_expectation(self, expectation: str, as_of: Optional[datetime] = None) -> None:
+        """장전 개장 예상을 기록한다 — 09:30 이후에는 읽을 때 무효 처리된다."""
+        self._horizons = replace(
+            self._horizons, open_expectation=expectation,
+            open_expectation_as_of=as_of if as_of is not None else datetime.now(),
+        )
+
+    def set_intraday_risk(
+        self,
+        level: str,
+        change_pct: Optional[float] = None,
+        as_of: Optional[datetime] = None,
+    ) -> None:
+        """장중 위험(급락 감지기 상태)과 당일 등락률을 기록한다."""
+        if level not in INTRADAY_RISK_LEVELS:
+            raise ValueError(
+                f"intraday_risk 는 {INTRADAY_RISK_LEVELS} 중 하나여야 합니다: {level!r}"
+            )
+        self._horizons = replace(
+            self._horizons, intraday_risk=level, intraday_change_pct=change_pct,
+            intraday_risk_as_of=as_of if as_of is not None else datetime.now(),
+        )
+
+    @property
+    def mid_trend(self) -> str:
+        """중기 추세 관점 — 명시 설정이 없으면 update_regime 결과를 쓴다"""
+        if self._horizons.mid_trend is not None:
+            return self._horizons.mid_trend
+        return self._current_regime
+
+    def open_expectation(self, now: Optional[datetime] = None) -> Optional[str]:
+        """장전 개장 예상 — 09:30 이후·다음 날에는 None (만료)"""
+        h = self._horizons
+        if h.open_expectation is None or h.open_expectation_as_of is None:
+            return None
+        now = now if now is not None else datetime.now()
+        if now.date() != h.open_expectation_as_of.date():
+            return None
+        if now.time() >= OPEN_EXPECTATION_EXPIRY:
+            return None
+        return h.open_expectation
+
+    @property
+    def effective_regime(self) -> str:
+        """게이트·사이징이 읽는 유효 레짐 — 장중 위험이 오래된 강세 전망을 이긴다"""
+        return cap_regime_by_intraday_risk(self.mid_trend, self._horizons.intraday_risk)
+
+    def _horizons_summary(self, now: Optional[datetime] = None) -> Dict:
+        """관점별 값·기준시각·결측 사유 — 결측을 0·중립으로 채우지 않는다"""
+        h = self._horizons
+        effective = self.effective_regime
+
+        def _iso(dt: Optional[datetime]) -> Optional[str]:
+            return dt.isoformat() if dt is not None else None
+
+        expectation = self.open_expectation(now=now)
+        if h.open_expectation is None:
+            expectation_reason = "장전 진단 미수집"
+        elif expectation is None:
+            expectation_reason = "09:30 만료 (개장 후에는 예상이 아니라 실측으로 판단)"
+        else:
+            expectation_reason = ""
+
+        return {
+            "mid_trend": {
+                "value": self.mid_trend,
+                "as_of": _iso(h.mid_trend_as_of),
+                "missing": False,
+                "source": "set_mid_trend" if h.mid_trend is not None else "update_regime",
+            },
+            "open_expectation": {
+                "value": expectation,
+                "as_of": _iso(h.open_expectation_as_of),
+                "missing": expectation is None,
+                "reason": expectation_reason,
+            },
+            "intraday_risk": {
+                "value": h.intraday_risk,
+                "as_of": _iso(h.intraday_risk_as_of),
+                "change_pct": h.intraday_change_pct,
+                "missing": h.intraday_risk is None,
+                "reason": "급락 감지 상태 미전달" if h.intraday_risk is None else "",
+            },
+            "effective_regime": effective,
+            "capped_by_intraday_risk": effective != self.mid_trend,
+        }
 
     def update_regime(self, kospi_data: dict, kosdaq_data: dict):
         """
@@ -182,11 +342,12 @@ class MarketRegimeAdapter:
 
     @property
     def regime(self) -> str:
-        return self._current_regime
+        """유효 레짐 — 장중 crash/severe 중에는 강세로 취급하지 않는다"""
+        return self.effective_regime
 
     @property
     def params(self) -> Dict:
-        return self.REGIME_PARAMS.get(self._current_regime, self.REGIME_PARAMS["neutral"])
+        return self.REGIME_PARAMS.get(self.effective_regime, self.REGIME_PARAMS["neutral"])
 
     def get_adjusted_min_score(self, base_min_score: float) -> float:
         """체제 반영 min_score"""
@@ -267,12 +428,14 @@ class MarketRegimeAdapter:
         self._regime_data["expert_score"] = score
         self._regime_data["expert_bear_consensus"] = bear_consensus
 
-    def get_summary(self) -> Dict:
-        """현재 체제 요약"""
+    def get_summary(self, now: Optional[datetime] = None) -> Dict:
+        """현재 체제 요약 (유효 레짐 + 시간 범위별 관점)"""
         return {
-            "regime": self._current_regime,
+            "regime": self.effective_regime,
+            "base_regime": self._current_regime,
             "params": self.params,
             "data": self._regime_data,
+            "horizons": self._horizons_summary(now=now),
             "last_update": self._last_update.isoformat() if self._last_update else None,
             "llm_assessment": getattr(self, '_llm_assessment', ''),
         }
@@ -363,6 +526,8 @@ class MarketRegimeAdapter:
             if resp.success and resp.content:
                 self._llm_assessment = resp.content.strip()
                 self._llm_assessment_date = today
+                # 장전 진단은 "오늘 개장 예상" — 09:30 이후에는 만료된다 (T9 요청 2)
+                self.set_open_expectation(self._llm_assessment)
 
                 # 체제 미세 조정 (LLM이 [방어]인데 체제가 bull이면 sideways로)
                 if "[방어]" in self._llm_assessment and self._current_regime == "bull":
@@ -372,11 +537,18 @@ class MarketRegimeAdapter:
                         f"{self._llm_assessment[:60]}"
                     )
                 elif "[공격]" in self._llm_assessment and self._current_regime == "bear":
-                    self._current_regime = "sideways"
-                    logger.info(
-                        f"[시장체제] LLM 진단으로 bear → sideways 조정: "
-                        f"{self._llm_assessment[:60]}"
-                    )
+                    # 장중 급락 중에는 장전 낙관 진단으로 상향하지 않는다 (T9 요청 2)
+                    if self._horizons.intraday_risk in _BULL_BLOCKING_RISK:
+                        logger.warning(
+                            f"[시장체제] LLM [공격] 진단이지만 장중 위험="
+                            f"{self._horizons.intraday_risk} → bear 유지"
+                        )
+                    else:
+                        self._current_regime = "sideways"
+                        logger.info(
+                            f"[시장체제] LLM 진단으로 bear → sideways 조정: "
+                            f"{self._llm_assessment[:60]}"
+                        )
 
                 logger.info(f"[시장체제] LLM 장전 진단: {self._llm_assessment[:80]}")
             else:
