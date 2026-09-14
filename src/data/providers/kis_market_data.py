@@ -960,13 +960,17 @@ class KISMarketData:
                 changed_at = prev["changed_at"]
             self._night_futures_last_change[symbol] = {"sig": value_sig, "changed_at": changed_at}
 
-            session = "night" if session_div == "CM" else "day"
+            # 2026-09-15 (T10 리뷰 advisory): 위 aiohttp 세션(`session` 변수, 894행)과
+            # 이름이 겹치는 섀도잉을 피하려고 별도 이름을 쓴다 — 현재는 재할당 이후
+            # aiohttp 세션 사용처가 없어 무해하지만, 재시도 등 추가 호출이 생기면
+            # AttributeError로 즉시 드러난다.
+            session_label = "night" if session_div == "CM" else "day"
             # fetched_at = 조회(쿼리) 시각(항상 채워짐). as_of = 시장 시각 — KIS 야간선물
             # 조회 API(inquire-price)는 체결시각 필드를 안 주므로 조회 시각을 그대로
             # 시장 시각처럼 표시하지 않고, 세션 규칙(kr_night_futures_as_of, T10 F17)으로
             # 역산한다: 세션 개장 중이면 조회=실시간 호가(as_of=now), 세션 종료 후면
             # 직전 세션 종료 시각(마지막 체결가), F(주간)/미상이면 None(미집계).
-            as_of, as_of_note, as_of_ttl_seconds = kr_night_futures_as_of(now, session)
+            as_of, as_of_note, as_of_ttl_seconds = kr_night_futures_as_of(now, session_label)
 
             result = {
                 "price": price,
@@ -978,7 +982,7 @@ class KISMarketData:
                 "low": low,
                 "open": open_price,
                 "symbol": symbol,
-                "session": session,
+                "session": session_label,
                 "fetched_at": now.isoformat(),
                 "as_of": as_of.isoformat() if as_of is not None else None,
                 # "조회 성공"과 "그 값이 여전히 유효"를 구분하려면 fetched_at + 아래 두

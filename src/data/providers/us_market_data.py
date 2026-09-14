@@ -203,6 +203,11 @@ class USMarketData:
         self._session: Optional[aiohttp.ClientSession] = None
         self._cache: Dict[str, Any] = {}
         self._cache_ts: Optional[datetime] = None
+        # 2026-09-15 (T10 F18 blocking 재수정): v7 응답에 "심볼은 있었지만 price/
+        # change_pct가 둘 다 결측"이었던 종목 → 필드명. _cache(=quotes)에는 넣지
+        # 않아(daily_report 등 기존 blind 소비자 보호) get_overnight_signal의
+        # indices_normalized가 "조회 실패"와 "필드만 결측"을 구분하는 데만 쓴다.
+        self._seen_missing: Dict[str, List[str]] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -242,6 +247,10 @@ class USMarketData:
         if not result:
             logger.debug("[USMarket] v7 API 실패, v8 spark 폴백 시도")
             result = await self._fetch_via_v8_spark()
+            # v8 spark는 "응답에서 봤지만 필드만 결측"을 추적하지 않으므로(자체적으로
+            # 완전 결측 심볼을 건너뜀), v7 시도에서 남은 seen_missing을 그대로 두면
+            # 실제로 이번 조회를 수행하지 않은 경로의 사유가 섞인다 — 초기화한다.
+            self._seen_missing = {}
 
         if result:
             self._cache = result
@@ -364,25 +373,39 @@ class USMarketData:
                 return None
 
             result: Dict[str, Dict] = {}
+            seen_missing: Dict[str, List[str]] = {}
             for q in quotes:
                 symbol = q.get("symbol", "")
                 if not symbol:
                     continue
+                price = _clean_num(q.get("regularMarketPrice"))
+                change_pct = _clean_num(q.get("regularMarketChangePercent"))
+                if price is None and change_pct is None:
+                    # 2026-09-15 (T10 F18 blocking 재수정): 응답에 심볼은 있어도 가격
+                    # 필드가 둘 다 없거나(예: {"symbol":"^VIX","regularMarketTime":...})
+                    # 비숫자/NaN/inf면 quotes(=self._cache)에 아예 넣지 않는다 —
+                    # fetch_sp500_stocks와 같은 "조회 실패 심볼은 누락" 계약. daily_report/
+                    # us_market_chart 등 quotes[sym]를 가드 없이 바로 쓰는 기존 소비자가
+                    # None에서 TypeError를 내는 것을 막는다(리뷰 F18 blocking). "응답에서
+                    # 봤지만 필드만 결측"이라는 구분은 seen_missing에 별도 보존해
+                    # get_overnight_signal의 indices_normalized가 reason/missing_fields
+                    # 를 그대로 낼 수 있게 한다.
+                    seen_missing[symbol] = [
+                        f for f, v in (("price", price), ("change_pct", change_pct)) if v is None
+                    ]
+                    continue
                 result[symbol] = {
-                    # 2026-09-15 (T10 F18): 응답에 심볼은 있어도 가격 필드가 없거나
-                    # (예: {"symbol":"^VIX","regularMarketTime":...}) 비숫자/NaN/inf면
-                    # 0으로 채우지 않고 None(결측)으로 보존한다 — 소비 지점
-                    # (get_overnight_signal/_index_field)이 0을 "무변동"으로 오판하지
-                    # 않게 한다. 정상적인 0.0 변동은 그대로 유지된다.
-                    "price": _clean_num(q.get("regularMarketPrice")),
+                    # 정상적인 0.0 변동은 그대로 유지된다(0-fill과 구분).
+                    "price": price,
                     "change": _clean_num(q.get("regularMarketChange")),
-                    "change_pct": _clean_num(q.get("regularMarketChangePercent")),
+                    "change_pct": change_pct,
                     "name": q.get("shortName", symbol),
                     "volume": q.get("regularMarketVolume", 0),
                     # epoch seconds(UTC) 또는 결측(v7가 안 주면 None) — 그대로 보존,
                     # 시장 시각으로 변환/가공은 소비 지점(get_overnight_signal)에서.
                     "market_time": q.get("regularMarketTime"),
                 }
+            self._seen_missing = seen_missing
             return result if result else None
 
         except Exception as e:
@@ -654,7 +677,11 @@ class USMarketData:
                 ]
                 if missing_fields:
                     indices_normalized[key]["missing_fields"] = missing_fields
-            elif q:
+            elif sym in self._seen_missing:
+                # 2026-09-15 (T10 F18 blocking 재수정): 심볼이 v7 응답에는 있었지만
+                # price/change_pct가 둘 다 결측이어서 quotes(self._cache)에는 넣지
+                # 않은 경우 — "조회 실패"와 구분해 사유를 남긴다. quotes에서는 빠졌지만
+                # (daily_report 등 blind 소비자 보호) 여기서는 여전히 구분 가능하다.
                 indices_normalized[key] = {
                     "price": None, "change": None, "change_pct": None,
                     "fetched_at": None, "as_of": None, "source": "yahoo_finance",

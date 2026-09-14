@@ -95,9 +95,18 @@ class KRMarketExpert(ExpertAgent):
         nf_has_as_of_field = "as_of" in futures_state
         if nf_has_as_of_field:
             _nf_as_of_raw = futures_state.get("as_of")
+            try:
+                _nf_as_of = datetime.fromisoformat(_nf_as_of_raw) if _nf_as_of_raw else None
+            except (ValueError, TypeError):
+                # 2026-09-15 (T10 리뷰 advisory): as_of 문자열이 손상됐다고 야간선물
+                # 하나 때문에 _analyze() 전체를 실패(error_opinion)시켜 수급·공매도
+                # 등 다른 유효 신호까지 통째로 버리지 않는다 — as_of=None(미집계)으로
+                # 정직하게 처리하고 missing_inputs에 사유를 남긴다(0/중립 대체 금지).
+                logger.warning(f"[KR시장] 야간선물 as_of 파싱 실패: {_nf_as_of_raw!r}")
+                _nf_as_of = None
             nf_dp = DataPoint(
                 value=nf_chg,
-                as_of=datetime.fromisoformat(_nf_as_of_raw) if _nf_as_of_raw else None,
+                as_of=_nf_as_of,
                 source=futures_state.get("source", "kis_night_futures"),
                 session="night",
                 ttl_seconds=futures_state.get("as_of_ttl_seconds"),

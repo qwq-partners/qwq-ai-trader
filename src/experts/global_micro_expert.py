@@ -34,6 +34,15 @@ class GlobalMicroExpert(ExpertAgent):
     refresh_minutes = 360   # 6시간
     cost_per_call_usd = 0.01
 
+    # score가 실제로 참조하는 sector_returns 필드 (T10 리뷰 advisory)
+    _SECTOR_FIELD_LABELS: Dict[str, str] = {
+        "semiconductors": "반도체 ETF(SMH)",
+        "battery": "배터리 ETF",
+        "biotech": "바이오 ETF",
+        "copper": "구리",
+        "wti": "WTI",
+    }
+
     async def _analyze(self) -> ExpertOpinion:
         # 1) 글로벌 산업 공급망 (Perplexity 배치)
         industry_text = await self._perplexity_search(
@@ -122,15 +131,20 @@ class GlobalMicroExpert(ExpertAgent):
         )
         confidence = min(0.75, 0.35 + len(findings) * 0.07)
 
-        # 2026-09-15 (T10 F16): score가 실제로 참조하는 두 입력(섹터 ETF/원자재
-        # 수익률, 글로벌 산업 컨텍스트)이 둘 다 결측이면 "모른다"는 뜻 — insufficient.
-        missing_inputs: List[str] = []
-        if not sector_returns:
-            missing_inputs.append("섹터 ETF/원자재 수익률")
+        # 2026-09-15 (T10 F16, 리뷰 advisory 재수정): "sector_returns 딕셔너리가
+        # 비었는가" 한 단계뿐이면 5개 필드 중 1개만 있어도 ok가 돼버린다(partial을
+        # 건너뜀) — score가 실제로 참조하는 필드별로 결측을 판정한다(macro_economist
+        # 와 동일 원칙). industry_text는 "산업 텍스트 단서" 절에서 score에 직접
+        # 기여하므로(macro_context와 달리) 판정 대상에 포함한다.
+        missing_inputs: List[str] = [
+            label
+            for key, label in self._SECTOR_FIELD_LABELS.items()
+            if not isinstance(sector_returns.get(key), (int, float))
+        ]
         if not industry_text:
             missing_inputs.append("글로벌 산업 컨텍스트(검색)")
 
-        if len(missing_inputs) == 2:
+        if len(missing_inputs) == len(self._SECTOR_FIELD_LABELS) + 1:
             data_status = "insufficient"
         elif missing_inputs:
             data_status = "partial"

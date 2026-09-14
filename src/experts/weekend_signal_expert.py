@@ -76,9 +76,17 @@ class WeekendSignalExpert(ExpertAgent):
         kr_has_as_of_field = "kr_futures_as_of" in signals
         if kr_has_as_of_field:
             _kr_as_of_raw = signals.get("kr_futures_as_of")
+            try:
+                _kr_as_of = datetime.fromisoformat(_kr_as_of_raw) if _kr_as_of_raw else None
+            except (ValueError, TypeError):
+                # 2026-09-15 (T10 리뷰 advisory, kr_market_expert와 동일 가드): as_of
+                # 문자열 손상으로 _analyze() 전체가 실패해 다른 유효 신호(S&P/NASDAQ
+                # 야간선물 등)까지 잃지 않게 None(미집계)으로 정직하게 처리한다.
+                logger.warning(f"[주말신호] KR 야간선물 as_of 파싱 실패: {_kr_as_of_raw!r}")
+                _kr_as_of = None
             kr_dp = DataPoint(
                 value=kr,
-                as_of=datetime.fromisoformat(_kr_as_of_raw) if _kr_as_of_raw else None,
+                as_of=_kr_as_of,
                 source=signals.get("kr_futures_source", "kis_night_futures"),
                 session="night",
                 ttl_seconds=signals.get("kr_futures_as_of_ttl_seconds"),

@@ -128,7 +128,21 @@ def kr_night_futures_as_of(
     if session != "night":
         return None, "주간(F)/미상 세션 — 야간 시장 시각 아님", None
 
-    in_session = now.hour >= KR_NIGHT_SESSION_START_HOUR or now.hour < KR_NIGHT_SESSION_END_HOUR
+    # 2026-09-15 (T10 F17 blocking 재수정): KRX 야간선물(CM) 세션은 월~금 저녁에만
+    # 개장한다(주말엔 세션 자체가 없다) — 요일을 보지 않으면 토요일 18:00~일요일
+    # 05:00, 일요일 18:00~월요일 05:00처럼 "세션이 없는 시간대"도 개장 중으로
+    # 오판해 사흘 묵은 금요일 체결가가 "0분 전 실시간 호가"로 찍힌다(리뷰 F17
+    # blocking). weekday(): 0=월 ... 6=일.
+    #   - 저녁(hour>=18): 월~금(0~4) 저녁만 개장.
+    #   - 새벽(hour<5): 화~토(1~5)만 개장 — 각각 전날(월~금) 저녁 세션의 연장.
+    #     월요일 새벽(0)은 일요일 저녁 세션이 없으므로 제외.
+    weekday = now.weekday()
+    if now.hour >= KR_NIGHT_SESSION_START_HOUR:
+        in_session = weekday <= 4
+    elif now.hour < KR_NIGHT_SESSION_END_HOUR:
+        in_session = 1 <= weekday <= 5
+    else:
+        in_session = False
     if in_session:
         as_of = now
     else:

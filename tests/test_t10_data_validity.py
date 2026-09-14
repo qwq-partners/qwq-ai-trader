@@ -475,3 +475,185 @@ def test_normal_zero_pct_change_is_not_missing():
     assert dow["missing"] is False
     assert dow["change_pct"] == 0.0
     assert signal["indices"]["다우"]["change_pct"] == 0.0
+
+
+def test_fully_missing_symbol_excluded_from_quotes_but_reason_preserved():
+    """F16 리뷰 blocking(B 파일): 응답에 심볼은 있어도 price/change_pct가 둘 다
+    결측이면 quotes(self._cache)에서 아예 빠져야 한다 — daily_report.py/
+    us_market_chart.py처럼 `q = quotes.get(sym); if not q: continue` 뒤
+    `q["change_pct"]`를 가드 없이 바로 쓰는 기존 소비자가 None에서 TypeError를
+    내지 않게 하기 위해서다(fetch_sp500_stocks의 '조회 실패 심볼은 누락' 계약과
+    동일). 그래도 indices_normalized의 reason/missing_fields는 그대로 남아야 한다
+    (self._seen_missing로 별도 보존)."""
+    from src.data.providers.us_market_data import USMarketData, INDEX_SYMBOLS
+
+    umd = USMarketData()
+
+    def _responder(url, params):
+        quotes = [
+            {"symbol": "^GSPC", "regularMarketPrice": 6500.0,
+             "regularMarketChange": 78.0, "regularMarketChangePercent": 1.2,
+             "regularMarketTime": 1757900000},
+            {"symbol": "^DJI", "regularMarketTime": 1757900000},  # 가격 필드 전부 없음
+        ]
+        return 200, {"quoteResponse": {"result": quotes}}
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    umd._get_session = fake_get_session  # type: ignore[assignment]
+
+    quotes = asyncio.run(umd.fetch_us_market_summary(force_refresh=True))
+    assert "^DJI" not in quotes  # 완전 결측 심볼은 quotes에서 제외
+    assert "^GSPC" in quotes
+
+    # daily_report.generate_us_market_report(1046~1060)의 실제 패턴 그대로 재현 —
+    # 예외 없이 끝까지 돌아야 한다.
+    rendered = []
+    for sym in INDEX_SYMBOLS:
+        q = quotes.get(sym)
+        if not q:
+            continue
+        pct = q["change_pct"]
+        rendered.append((sym, pct > 0))
+    assert rendered == [("^GSPC", True)]
+
+    # indices_normalized는 quotes에서 빠진 ^DJI에 대해서도 "필드 결측" 사유를 유지한다
+    signal = asyncio.run(umd.get_overnight_signal())
+    dow = signal["indices_normalized"]["DOW"]
+    assert dow["missing"] is True
+    assert "필드 결측" in dow["reason"]
+    assert isinstance(signal["summary"], str) and signal["summary"]
+
+
+# ─────────────────────────────────────────────────────────────────
+# F16-6 재검증 — score에 기여하지 않는 macro_context는 insufficient→partial 승격
+# 근거가 아니고, score에 실제로 기여하는 cpi_yoy/semis_basket은 판정 대상이다.
+# ─────────────────────────────────────────────────────────────────
+def test_macro_context_alone_does_not_promote_insufficient_to_partial(monkeypatch):
+    """숫자 지표(us10y/dxy/krw_usd/vix/wti/cpi_yoy/semis_basket)가 전부 결측이고
+    매크로 컨텍스트(Perplexity 텍스트)만 있으면 여전히 insufficient다 —
+    macro_context는 _score_indicators의 score를 전혀 바꾸지 않으므로(findings
+    문자열만 추가) score=0은 "모른다"이지 "중립"이 아니다. 커버리지 계산에서도
+    빠져야 한다(valid_n=3, aggregate_regime_score=0)."""
+    macro = MacroEconomist(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty():
+        return {}
+
+    async def _ctx():
+        return "연준은 금리를 동결했습니다."
+
+    monkeypatch.setattr(macro, "_fetch_yfinance_indicators", _empty)
+    monkeypatch.setattr(macro, "_fetch_semis_basket_5d", _empty)
+    monkeypatch.setattr(macro, "_fetch_macro_context", _ctx)
+    monkeypatch.setattr(macro, "_load_manual_overrides", lambda: {})
+
+    op_ = asyncio.run(macro._analyze())
+    op_.expert = "macro_economist"
+
+    assert op_.data_status == "insufficient"
+    assert op_.score == 0
+    assert op_.confidence <= 0.2  # CONFIDENCE_CAP_INSUFFICIENT
+
+    orch = ExpertOrchestrator(ExpertConfig())
+    ops = {
+        "macro_economist": op_,
+        "kr_market_expert": _opinion("kr_market_expert", 40, 0.8),
+        "us_market_expert": _opinion("us_market_expert", 40, 0.8),
+        "kr_economy_expert": _opinion("kr_economy_expert", 40, 0.8),
+    }
+    summary = orch.data_status_summary(ops)
+    assert summary["valid_n"] == 3
+    assert summary["insufficient_coverage"] is True
+    assert orch.aggregate_regime_score(ops) == 0
+
+
+def test_macro_cpi_override_only_is_partial_not_insufficient(monkeypatch):
+    """5개 핵심 지표가 전부 결측이어도 cpi_yoy 수동 오버라이드만 있으면 score가
+    실제로 -8만큼 움직인다 — insufficient(추측)가 아니라 partial(일부 결측)이어야
+    한다(리뷰 advisory A3)."""
+    macro = MacroEconomist(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty():
+        return {}
+
+    async def _noctx():
+        return ""
+
+    monkeypatch.setattr(macro, "_fetch_yfinance_indicators", _empty)
+    monkeypatch.setattr(macro, "_fetch_semis_basket_5d", _empty)
+    monkeypatch.setattr(macro, "_fetch_macro_context", _noctx)
+    monkeypatch.setattr(macro, "_load_manual_overrides", lambda: {"cpi_yoy": 4.2})
+
+    op_ = asyncio.run(macro._analyze())
+    assert op_.data_status == "partial"
+    assert op_.score == -8
+
+
+def test_macro_semis_basket_only_is_partial_not_insufficient(monkeypatch):
+    """5개 핵심 지표가 전부 결측이어도 반도체 바스켓 5일 평균만 있으면 score가
+    실제로 움직인다 — partial이어야 한다(리뷰 advisory A3)."""
+    macro = MacroEconomist(ExpertConfig(), llm_manager=None, perplexity_key="")
+
+    async def _empty():
+        return {}
+
+    async def _semis():
+        return {"avg_5d_pct": -5.0}
+
+    async def _noctx():
+        return ""
+
+    monkeypatch.setattr(macro, "_fetch_yfinance_indicators", _empty)
+    monkeypatch.setattr(macro, "_fetch_semis_basket_5d", _semis)
+    monkeypatch.setattr(macro, "_fetch_macro_context", _noctx)
+    monkeypatch.setattr(macro, "_load_manual_overrides", lambda: {})
+
+    op_ = asyncio.run(macro._analyze())
+    assert op_.data_status == "partial"
+    assert op_.score == -8
+
+
+# ─────────────────────────────────────────────────────────────────
+# F17-5 재검증 — KRX 야간선물(CM) 세션 판정은 요일을 봐야 한다(주말엔 세션 없음)
+# ─────────────────────────────────────────────────────────────────
+def test_night_session_weekend_evenings_are_not_in_session():
+    """토요일 18:00~일요일 05:00, 일요일 18:00~월요일 05:00은 세션이 없는 시간대다
+    (KRX 야간선물은 월~금 저녁에만 개장). 요일을 보지 않으면 이 구간이 '개장 중'
+    으로 오판돼 사흘 묵은 금요일 체결가가 as_of=조회시각(실시간)으로 찍힌다
+    (리뷰 F17 blocking). 실제 운영 슬롯 sunday_evening(일 22:00)이 이 구간이다."""
+    from datetime import datetime as dt
+
+    from src.utils.data_freshness import kr_night_futures_as_of
+
+    friday_close = dt(2026, 9, 12, 5, 0)  # 금요일(09-11) 저녁 세션 종료 = 토요일 05:00
+
+    for label, now in [
+        ("일요일 22:00 (sunday_evening 슬롯)", dt(2026, 9, 13, 22, 0)),
+        ("토요일 20:00", dt(2026, 9, 12, 20, 0)),
+        ("월요일 03:00", dt(2026, 9, 14, 3, 0)),
+    ]:
+        as_of, _note, ttl = kr_night_futures_as_of(now, "night")
+        assert as_of == friday_close, f"{label}: as_of={as_of} (실시간으로 오판되면 안 됨)"
+        assert ttl is not None and ttl > 0
+
+
+def test_night_session_weekday_evenings_and_mornings_stay_in_session():
+    """월~금 저녁(18:00~), 화~토 새벽(~05:00, 전날 저녁 세션의 연장)은 정상적으로
+    개장 중으로 판정되어 as_of=조회 시각(실시간 호가)이어야 한다 — 주말 수정이
+    평일 정상 케이스를 깨면 안 된다."""
+    from datetime import datetime as dt
+
+    from src.utils.data_freshness import kr_night_futures_as_of
+
+    for label, now in [
+        ("금요일 20:00", dt(2026, 9, 11, 20, 0)),
+        ("월요일 20:00", dt(2026, 9, 14, 20, 0)),
+        ("화요일 03:00 (월요일 저녁 세션 연장)", dt(2026, 9, 15, 3, 0)),
+        ("토요일 03:00 (금요일 저녁 세션 연장)", dt(2026, 9, 12, 3, 0)),
+    ]:
+        as_of, note, ttl = kr_night_futures_as_of(now, "night")
+        assert as_of == now, f"{label}: as_of={as_of} (실시간 세션인데 과거로 밀림)"
+        assert note is None
+        assert ttl is not None and ttl > 0

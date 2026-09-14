@@ -98,22 +98,21 @@ class MacroEconomist(ExpertAgent):
 
         affected = self._affected_sectors(prices)
 
-        # 2026-09-15 (T10 F16): _score_indicators가 참조하는 5개 핵심 지표가 전부
-        # 결측이고 매크로 컨텍스트(Perplexity)도 비어 있으면 "점수 계산에 쓸 수 있는
-        # 숫자 입력이 하나도 없다" — score=0이 "시장이 중립"이 아니라 "모른다"는 뜻이므로
-        # insufficient로 표시해 orchestrator 집계 가중을 0으로 만든다(cross-review F16).
+        # 2026-09-15 (T10 F16, 리뷰 F16-6 재수정): 판정은 "실제로 score에 기여할 수
+        # 있는 숫자 입력"만 봐야 한다 — macro_context(Perplexity 텍스트)는 findings
+        # 문자열만 추가할 뿐 _score_indicators의 score를 전혀 바꾸지 않으므로(존재해도
+        # score=0은 여전히 "모른다") insufficient→partial 승격 근거에서 제외한다.
+        # 반대로 cpi_yoy(수동 오버라이드, _score_indicators에서 ±8)와
+        # semis_basket_5d_pct(위 4-2에서 ±8/+5)는 score를 실제로 움직이므로 판정
+        # 대상에 포함한다 — 이 둘만 있고 5개 핵심 지표가 전부 없어도 score가
+        # 실제로 움직였으므로 insufficient가 아니라 partial이어야 한다.
         missing_inputs = [
             label
-            for key, label in self._CORE_FIELD_LABELS.items()
+            for key, label in self._SCORE_FIELD_LABELS.items()
             if not isinstance(prices.get(key), (int, float))
         ]
-        has_context = bool(macro_context)
-        if len(missing_inputs) == len(self._CORE_FIELD_LABELS):
-            if has_context:
-                data_status = "partial"
-            else:
-                data_status = "insufficient"
-                missing_inputs = missing_inputs + ["매크로 컨텍스트(검색)"]
+        if len(missing_inputs) == len(self._SCORE_FIELD_LABELS):
+            data_status = "insufficient"
         elif missing_inputs:
             data_status = "partial"
         else:
@@ -135,14 +134,17 @@ class MacroEconomist(ExpertAgent):
             missing_inputs=missing_inputs,
         )
 
-    # _score_indicators가 실제로 참조하는 핵심 필드 (cpi_yoy는 수동 오버라이드 전용
-    # 보너스 신호라 core에서 제외 — T10 F16)
-    _CORE_FIELD_LABELS: Dict[str, str] = {
+    # score에 실제로 기여하는 전체 숫자 필드 — _score_indicators의 5개 핵심 지표 +
+    # cpi_yoy(오버라이드, ±8) + semis_basket_5d_pct(4-2 반도체 바스켓, ±8/+5).
+    # macro_context는 findings만 추가하고 score를 바꾸지 않으므로 제외 — T10 F16(리뷰 F16-6)
+    _SCORE_FIELD_LABELS: Dict[str, str] = {
         "us10y": "US10Y",
         "dxy": "DXY",
         "krw_usd": "원/달러",
         "vix": "VIX",
         "wti": "WTI",
+        "cpi_yoy": "CPI(수동 오버라이드)",
+        "semis_basket_5d_pct": "반도체 바스켓 5일",
     }
 
     # ─────────────────────────────────────────
