@@ -233,7 +233,14 @@ class MacroEconomist(ExpertAgent):
                 valid_until_str = raw.get("valid_until")
                 if valid_until_str:
                     try:
-                        deadline = datetime.fromisoformat(str(valid_until_str))
+                        vus = str(valid_until_str)
+                        deadline = datetime.fromisoformat(vus)
+                        # 날짜만 적은 값("YYYY-MM-DD")은 자정(00:00)으로 파싱되어
+                        # 그날 낮에 이미 만료된 것처럼 보인다. "그날까지 유효"라는
+                        # 사용자 의도에 맞춰 해당 날짜 23:59:59까지 포함으로 해석한다
+                        # (2026-09-14 리뷰 advisory — 문서 §데이터 신선도 절 동기화).
+                        if len(vus) == 10:
+                            deadline = deadline.replace(hour=23, minute=59, second=59)
                     except ValueError:
                         logger.warning(
                             f"[거시] manual_overrides '{key}' valid_until 파싱 실패"

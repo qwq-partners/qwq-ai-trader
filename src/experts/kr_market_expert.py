@@ -275,6 +275,9 @@ class KRMarketExpert(ExpertAgent):
                     "last": q.get("price"),
                     # 2026-09-14 (T9 요청 4): raw_evidence에 기준시각을 남겨 "조회 성공"과
                     # "같은 값이 계속 유지"를 구분할 수 있게 한다(가격만 두면 소실됨).
+                    # fetched_at=조회 시각, as_of=실제 시장 시각(현재 소스는 미제공이라
+                    # None) — 조회 시각을 시장 시각처럼 표시하지 않는다(리뷰 advisory).
+                    "fetched_at": q.get("fetched_at"),
                     "as_of": q.get("as_of"),
                     "value_unchanged_minutes": q.get("value_unchanged_minutes"),
                 }

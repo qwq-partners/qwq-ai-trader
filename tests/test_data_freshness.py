@@ -113,8 +113,11 @@ class _FakeSession:
         self.closed = True
 
 
-def _quote(symbol: str, price: float, change_pct: float) -> dict:
-    return {
+_MARKET_TIME_EPOCH = 1757836800  # 2025-09-14T08:00:00Z — 테스트용 고정 체결시각
+
+
+def _quote(symbol: str, price: float, change_pct: float, market_time=_MARKET_TIME_EPOCH) -> dict:
+    d = {
         "symbol": symbol,
         "regularMarketPrice": price,
         "regularMarketChange": round(price * change_pct / 100, 2),
@@ -122,6 +125,9 @@ def _quote(symbol: str, price: float, change_pct: float) -> dict:
         "shortName": symbol,
         "regularMarketVolume": 1000,
     }
+    if market_time is not None:
+        d["regularMarketTime"] = market_time
+    return d
 
 
 def test_vix_is_collected_and_normalized_key_stable():
@@ -154,7 +160,11 @@ def test_vix_is_collected_and_normalized_key_stable():
     norm = signal["indices_normalized"]
     assert norm["VIX"]["price"] == 18.5
     assert norm["VIX"]["missing"] is False
+    # fetched_at=조회 시각(항상 채워짐), as_of=실제 체결시각(regularMarketTime 기반)
+    # — 두 개념을 분리해 조회 시각을 시장 시각처럼 표시하지 않는다(리뷰 advisory).
+    assert norm["VIX"]["fetched_at"] is not None
     assert norm["VIX"]["as_of"] is not None
+    assert "as_of_note" not in norm["VIX"]
     assert norm["SP500"]["change_pct"] == 1.2
     assert norm["SOX"]["change_pct"] == 2.0
     # 기존 표시명 기반 indices/심리 평균은 그대로(VIX는 등락 심리에 안 섞임 — 레벨 지표라
@@ -181,8 +191,33 @@ def test_vix_missing_is_none_not_zero():
 
     assert vix["missing"] is True
     assert vix["price"] is None
+    assert vix["fetched_at"] is None
     assert vix["as_of"] is None
     assert vix["reason"]
+
+
+def test_index_found_without_market_time_leaves_as_of_none_with_note():
+    """Yahoo 응답에 regularMarketTime이 없으면(v8 spark 폴백 등) 조회 시각을
+    시장 시각처럼 as_of에 채우지 않는다 — fetched_at만 채우고 as_of=None+사유."""
+    from src.data.providers.us_market_data import USMarketData
+
+    umd = USMarketData()
+
+    def _responder(url, params):
+        return 200, {"quoteResponse": {"result": [_quote("^GSPC", 6500.0, 1.0, market_time=None)]}}
+
+    async def fake_get_session():
+        return _FakeSession(_responder)
+
+    umd._get_session = fake_get_session  # type: ignore[assignment]
+
+    signal = asyncio.run(umd.get_overnight_signal())
+    sp500 = signal["indices_normalized"]["SP500"]
+
+    assert sp500["missing"] is False
+    assert sp500["fetched_at"] is not None
+    assert sp500["as_of"] is None
+    assert sp500["as_of_note"] == "시장 시각 미제공"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -220,7 +255,10 @@ def _make_kis_provider():
     return provider
 
 
-def test_night_futures_as_of_is_query_time_not_kis_tick():
+def test_night_futures_fetched_at_is_query_time_as_of_is_none():
+    """KIS 야간선물 조회 API는 체결시각 필드를 안 준다 — fetched_at(조회 시각)만
+    채우고, as_of(시장 시각)는 조회 시각으로 대신 포장하지 않고 None+사유를 남긴다
+    (2026-09-14 리뷰 advisory)."""
     provider = _make_kis_provider()
 
     def _responder(url, params):
@@ -236,8 +274,10 @@ def test_night_futures_as_of_is_query_time_not_kis_tick():
     after = datetime.now()
 
     assert quote is not None
-    as_of = datetime.fromisoformat(quote["as_of"])
-    assert before <= as_of <= after
+    fetched_at = datetime.fromisoformat(quote["fetched_at"])
+    assert before <= fetched_at <= after
+    assert quote["as_of"] is None
+    assert quote["as_of_note"]
     assert quote["value_changed_at"] is not None
     assert quote["value_unchanged_minutes"] == 0.0
 
@@ -253,13 +293,17 @@ def test_night_futures_repeated_value_keeps_original_changed_at():
 
     provider._get_session = fake_get_session  # type: ignore[assignment]
 
-    q1 = asyncio.run(provider.get_night_futures_quote(symbol="TEST02", cache_ttl=0))
-    q2 = asyncio.run(provider.get_night_futures_quote(symbol="TEST02", cache_ttl=0))
+    # 마이크로초 전진에 의존하지 않도록 now를 주입해 fetched_at을 결정적으로 고정
+    # (2026-09-14 리뷰 advisory — 단일 시계 진입점).
+    t1 = datetime(2026, 9, 14, 8, 0, 0)
+    t2 = datetime(2026, 9, 14, 8, 5, 0)
+    q1 = asyncio.run(provider.get_night_futures_quote(symbol="TEST02", cache_ttl=0, now=t1))
+    q2 = asyncio.run(provider.get_night_futures_quote(symbol="TEST02", cache_ttl=0, now=t2))
 
     # 값(가격+등락률)이 그대로면 "새로 바뀐 시각"은 갱신되지 않아야
     # 고착 여부를 나중에 unchanged_minutes로 판단할 수 있다(0으로 리셋되면 구분 불가)
     assert q1["value_changed_at"] == q2["value_changed_at"]
-    assert q2["as_of"] != q1["as_of"]  # 조회 자체는 매번 갱신
+    assert q2["fetched_at"] != q1["fetched_at"]  # 조회 자체는 매번 갱신
     assert q2["value_unchanged_minutes"] >= 0.0
 
 

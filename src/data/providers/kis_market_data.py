@@ -868,6 +868,7 @@ class KISMarketData:
         self,
         symbol: Optional[str] = None,
         cache_ttl: int = 300,
+        now: Optional[datetime] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         KOSPI200 야간선물 현재가 조회 (KRX 야간거래)
@@ -875,6 +876,9 @@ class KISMarketData:
         Args:
             symbol: 선물 종목코드 (None이면 근월물 자동 계산)
             cache_ttl: 캐시 유효 시간 (초, 기본 5분)
+            now: 조회 시각 주입용(테스트 전용) — None이면 datetime.now() 사용.
+                두 호출 사이 마이크로초 전진에 의존하지 않고 fetched_at을
+                결정적으로 만들기 위한 단일 시계 진입점(2026-09-14 리뷰 advisory).
 
         Returns:
             dict: {price, change, change_pct, volume, high, low, open, sentiment} 또는 None
@@ -944,7 +948,7 @@ class KISMarketData:
                 self._cache_ts[cache_key] = datetime.now() - timedelta(seconds=_neg_ttl)
                 return None
 
-            now = datetime.now()
+            now = now or datetime.now()
             # 값 반복(고착) 여부 판단 자료 — 단정하지 않고 "마지막 변경 시각"만 기록
             # (2026-09-14 T9 요청 4). price+change_pct 조합이 직전과 같으면 유지, 다르면 갱신.
             value_sig = (price, change_pct)
@@ -966,10 +970,15 @@ class KISMarketData:
                 "open": open_price,
                 "symbol": symbol,
                 "session": "night" if session_div == "CM" else "day",
-                # 조회(체결 반영) 시각 — KIS 응답에 체결시각 필드가 없어 쿼리 시각을 사용.
-                # "조회 성공"과 "그 값이 여전히 유효"를 구분하려면 as_of + 아래 두 필드를
-                # 함께 봐야 한다(가격만 남겨두면 고착/정상유지를 구분할 자료가 없어진다).
-                "as_of": now.isoformat(),
+                # fetched_at = 조회(쿼리) 시각. KIS 야간선물 조회 API(inquire-price)
+                # 응답에 체결시각 필드가 없어 실제 시장 시각(as_of)은 얻을 수 없으므로
+                # 조회 시각을 시장 시각처럼 표시하지 않고 None + 사유로 남긴다
+                # (2026-09-14 T9 리뷰 advisory — as_of/fetched_at 의미 분리).
+                # "조회 성공"과 "그 값이 여전히 유효"를 구분하려면 fetched_at + 아래 두
+                # 필드를 함께 봐야 한다(가격만 남겨두면 고착/정상유지를 구분할 자료가 없다).
+                "fetched_at": now.isoformat(),
+                "as_of": None,
+                "as_of_note": "시장 시각 미제공(KIS 야간선물 조회 API에 체결시각 필드 없음)",
                 "value_changed_at": changed_at.isoformat(),
                 "value_unchanged_minutes": round((now - changed_at).total_seconds() / 60, 1),
             }

@@ -17,10 +17,14 @@ from typing import Any, Optional
 
 # 전문가 confidence 상한 — 자료 상태별 (2026-09-14 T9 요청 4)
 # 근거: insufficient(핵심 입력 전부 결측)는 사실상 추측이므로 0.2 이상 확신 금지.
-# partial(일부 결측)은 판단은 가능하나 과신 방지로 0.5 상한. 값 자체는 임의 상수이며
-# 하루 결과가 아닌 이 정책 문서(T9)에 근거 — 표본 축적 후 재검토 가능.
+# partial(일부 결측)은 판단은 가능하되 과신 방지 상한을 둔다. 상한값은 임의가 아니라
+# cross_validator의 bear_consensus 임계(orchestrator.bear_consensus 기본
+# threshold_confidence=0.7)와 동일하게 맞춘다 — 부분 결측 상태에서도 "위험 방향으로
+# 안전하게 강등"하는 방어 합의는 여전히 도달 가능해야 하고(과소 방어 금지), 반면
+# 완전한 자료 없이 그 이상(0.7 초과)의 확신은 금지한다. 값 자체는 이 정책 문서(T9)에
+# 근거 — 표본 축적 후 재검토 가능(2026-09-14 리뷰 advisory 반영, 0.5→0.7).
 CONFIDENCE_CAP_INSUFFICIENT = 0.2
-CONFIDENCE_CAP_PARTIAL = 0.5
+CONFIDENCE_CAP_PARTIAL = 0.7
 
 # 수동 오버라이드 등 valid_until이 없는 항목의 기본 유효기간
 DEFAULT_OVERRIDE_TTL_DAYS = 14

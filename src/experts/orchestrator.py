@@ -163,30 +163,33 @@ class ExpertOrchestrator:
     # ─────────────────────────────────────────
     # 집계 — 시장 체제 보정값
     # ─────────────────────────────────────────
-    def aggregate_regime_score(
+
+    # aggregate_regime_score/data_status_summary 공용 — 시장체제 집계 대상 전문가
+    MARKET_REGIME_EXPERTS = (
+        "macro_economist",
+        "kr_market_expert",
+        "us_market_expert",
+        "kr_economy_expert",
+        "global_micro_expert",
+        "weekend_signal_expert",   # 2026-06-07 추가 — 갭 risk 종합 반영
+    )
+
+    # 규칙#11 valid_n 가드(cross_validator.py:540, valid_n>=4)와 동일 값.
+    # 남은 유효 전문가가 이 미만이면 소수 표만으로 ±20까지 흔들릴 수 있어
+    # aggregate_regime_score를 0(무보정)으로 고정한다 (2026-09-14 T9 리뷰 반영).
+    MIN_VALID_EXPERTS = 4
+
+    def _market_expert_contributions(
         self,
-        opinions: Optional[Dict[str, ExpertOpinion]] = None,
-    ) -> int:
-        """시장체제 보정 점수 (-30 ~ +30)
+        opinions: Dict[str, ExpertOpinion],
+    ) -> List[tuple]:
+        """MARKET_REGIME_EXPERTS 중 가중 반영되는 (name, score, weight) 목록.
 
-        가중 평균 점수에 시장 관련 전문가만 반영.
-        market_regime.py가 호출하여 base regime 점수를 보정.
+        aggregate_regime_score의 커버리지 게이트(MIN_VALID_EXPERTS)와
+        data_status_summary의 valid_n이 같은 기준을 쓰도록 단일 지점에 둔다.
         """
-        if opinions is None:
-            opinions = self.snapshot()
-
-        market_experts = (
-            "macro_economist",
-            "kr_market_expert",
-            "us_market_expert",
-            "kr_economy_expert",
-            "global_micro_expert",
-            "weekend_signal_expert",   # 2026-06-07 추가 — 갭 risk 종합 반영
-        )
-
-        weighted_sum = 0.0
-        weight_total = 0.0
-        for name in market_experts:
+        out: List[tuple] = []
+        for name in self.MARKET_REGIME_EXPERTS:
             op = opinions.get(name)
             if op is None or not op.is_valid:
                 continue
@@ -200,9 +203,28 @@ class ExpertOrchestrator:
             w = cfg_w * conf
             if w <= 0:
                 continue
-            weighted_sum += op.score * w
-            weight_total += w
+            out.append((name, op.score, w))
+        return out
 
+    def aggregate_regime_score(
+        self,
+        opinions: Optional[Dict[str, ExpertOpinion]] = None,
+    ) -> int:
+        """시장체제 보정 점수 (-30 ~ +30)
+
+        가중 평균 점수에 시장 관련 전문가만 반영. 유효 전문가가
+        MIN_VALID_EXPERTS 미만이면 0(무보정) — 소수 표로 ±20 도달 방지.
+        market_regime.py가 호출하여 base regime 점수를 보정.
+        """
+        if opinions is None:
+            opinions = self.snapshot()
+
+        contributions = self._market_expert_contributions(opinions)
+        if len(contributions) < self.MIN_VALID_EXPERTS:
+            return 0
+
+        weighted_sum = sum(score * w for _, score, w in contributions)
+        weight_total = sum(w for _, _, w in contributions)
         if weight_total <= 0:
             return 0
 
@@ -217,12 +239,16 @@ class ExpertOrchestrator:
         self,
         opinions: Optional[Dict[str, ExpertOpinion]] = None,
     ) -> RegimeBias:
-        """다수결 bias (sector_council 제외 — 섹터 의견이 시장 판단 희석 방지)"""
+        """다수결 bias (sector_council·insufficient 제외 — 섹터 의견·자료 부족 희석 방지)"""
         if opinions is None:
             opinions = self.snapshot()
         counts = {RegimeBias.BULL: 0.0, RegimeBias.NEUTRAL: 0.0, RegimeBias.BEAR: 0.0}
         for op in opinions.values():
             if not op.is_valid or op.expert in self.NON_REGIME_EXPERTS:
+                continue
+            # 2026-09-14 (T9 리뷰 blocking): aggregate_regime_score와 동일 기준으로
+            # insufficient를 제외한다 — "모른다"가 NEUTRAL 표로 집계되지 않게.
+            if getattr(op, "data_status", "ok") == "insufficient":
                 continue
             w = self.config.weights.get(op.expert, 1.0) * op.confidence
             counts[op.regime_bias] += w
@@ -232,7 +258,18 @@ class ExpertOrchestrator:
         self,
         opinions: Optional[Dict[str, ExpertOpinion]] = None,
     ) -> Dict[str, Any]:
-        """전문가별 data_status 집계 — "자료 부족 N명" 표시용 (2026-09-14 T9 요청 4)"""
+        """전문가별 data_status 집계 — "자료 부족 N명" 표시용 (2026-09-14 T9 요청 4)
+
+        Returns:
+            counts: {"ok": int, "partial": int, "insufficient": int} — 등록된 전체
+                전문가(sector_council 포함) 기준 data_status 분포.
+            insufficient_experts: insufficient로 표시된 전문가 이름 목록.
+            note: "자료 부족 N명" 또는 결측 0건이면 None.
+            valid_n: aggregate_regime_score가 실제로 가중 반영하는 시장체제
+                전문가 수(MARKET_REGIME_EXPERTS 범위, insufficient/무효 제외).
+            insufficient_coverage: valid_n < MIN_VALID_EXPERTS면 True — 이 경우
+                aggregate_regime_score는 0(무보정)을 반환한다.
+        """
         if opinions is None:
             opinions = self.snapshot()
         counts = {"ok": 0, "partial": 0, "insufficient": 0}
@@ -243,7 +280,14 @@ class ExpertOrchestrator:
             if status == "insufficient":
                 insufficient_experts.append(op.expert)
         note = f"자료 부족 {counts['insufficient']}명" if counts["insufficient"] else None
-        return {"counts": counts, "insufficient_experts": insufficient_experts, "note": note}
+        valid_n = len(self._market_expert_contributions(opinions))
+        return {
+            "counts": counts,
+            "insufficient_experts": insufficient_experts,
+            "note": note,
+            "valid_n": valid_n,
+            "insufficient_coverage": valid_n < self.MIN_VALID_EXPERTS,
+        }
 
     # ─────────────────────────────────────────
     # cross_validator 게이트
