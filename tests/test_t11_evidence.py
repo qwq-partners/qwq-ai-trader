@@ -90,6 +90,68 @@ def test_fundamental_no_validator_is_insufficient_with_no_positive_evidence():
     assert report.evidence == []
 
 
+class _FakeDart:
+    def __init__(self, result):
+        self._result = result
+
+    async def check_disclosures(self, symbol, days=7):
+        return self._result
+
+
+def test_fundamental_dart_risk_overrides_validator_risk_clear_and_reads_correct_key():
+    """리뷰 blocking B1/B2 (2026-09-15) 재현: validator는 위험을 못 찾아
+    approved=True(risk_clear 후보 True)지만, DART가 별도 공시 위험을 발견하면
+    - B1: 생산자 키는 risk_disclosures 다 — metrics['dart_risk_items']가
+      실제 건수(3)를 반영해야 한다(이전엔 존재하지 않는 risk_items를 읽어 항상 0).
+    - B2: '검증 통과'를 risk_clear=True로 남겨두면 안 된다 — DART 위험 발견 시
+      risk_clear는 False로 내려가고, 앞서 쌓인 '위험 미발견' evidence도 정정된다.
+    """
+    validator_result = _validation_result(approved=True, validated=True, data_status="full")
+    dart_result = SimpleNamespace(
+        has_risk=True,
+        risk_disclosures=["유상증자 결정", "최대주주 변경", "감자 결정"],
+        risk_level="warning",
+    )
+    fa = FundamentalAnalyst(
+        stock_validator=_FakeValidator(validator_result),
+        dart_checker=_FakeDart(dart_result),
+    )
+    report = asyncio.run(fa.analyze("005930", "테스트"))
+
+    assert report.metrics["dart_risk_items"] == 3
+    assert report.risk_clear is False
+    assert not any(
+        e.metric == "risk_clear" and e.value is True for e in report.evidence
+    ), "DART 위험 발견 후에도 '위험 미발견' 근거가 True로 남아있으면 안 된다"
+    assert report.score == -20  # validator 통과 +10, DART 위험 -30
+
+
+def test_dart_checker_producer_key_set_covers_analyst_consumer_keys():
+    """required_fix (B1 재발 차단): technical 계약 테스트와 같은 패턴 —
+    DartCheckResult 필드 집합이 analysts.py의 소비 키(has_risk, risk_disclosures)를
+    전부 포함해야 한다. risk_items 같은 존재하지 않는 키로 되돌아가면 여기서 잡힌다."""
+    import dataclasses
+
+    from src.signals.fundamentals.dart_checker import DartCheckResult
+
+    producer_fields = {f.name for f in dataclasses.fields(DartCheckResult)}
+    consumer_keys = {"has_risk", "risk_disclosures"}
+    assert consumer_keys <= producer_fields
+
+
+def test_fundamental_dart_risk_without_details_is_partial_not_zero_fact():
+    """required_fix: has_risk=True인데 risk_disclosures가 비었으면 0건이라는
+    '사실'을 만들어내지 않고 결측(status=partial, value=None)으로 남긴다."""
+    dart_result = SimpleNamespace(has_risk=True, risk_disclosures=[], risk_level="warning")
+    fa = FundamentalAnalyst(stock_validator=None, dart_checker=_FakeDart(dart_result))
+    report = asyncio.run(fa.analyze("005930", "테스트"))
+
+    dart_ev = [e for e in report.evidence if e.source == "dart_checker"]
+    assert len(dart_ev) == 1
+    assert dart_ev[0].status == "partial"
+    assert dart_ev[0].value is None
+
+
 # ── 인수 조건 #2: confidence=0/만료/오류가 evidence_quality 유효 소스에서 빠짐 ──
 
 def test_evidence_quality_excludes_zero_confidence_expired_and_error():
@@ -196,6 +258,34 @@ def test_news_curator_symbol_sentiment_dedups_same_url_article():
     assert data["items"] == 1
     assert data["dedup_removed"] == 1
     assert data["item_ids"] == ["https://n.news/1"]
+
+
+def test_news_curator_market_analyze_shares_url_dedup_fix():
+    """advisory(2026-09-15): _deduplicate 에 넣은 URL 선행 dedup 은 종목별 경로뿐
+    아니라 시장 뉴스 경로(_analyze → ExpertOpinion.raw['item_count'])도 함께 쓴다
+    (news_curator.py 주석 참조). 방향은 '덜 세는' 쪽으로만 바뀌므로 특성화 테스트로
+    그 값을 고정해 둔다 — 같은 URL 기사 2건이 1건으로 집계돼야 한다."""
+    from src.experts.news_curator import NewsCurator, NewsItem
+
+    curator = NewsCurator(ExpertConfig())
+    dup_items = [
+        NewsItem(title="삼성전자 3분기 영업이익 급증", summary="반도체 회복",
+                  url="https://n.news/1", source="naver"),
+        NewsItem(title="[속보] 반도체 대장주 어닝 서프라이즈 기록", summary="시장 기대치 상회",
+                  url="https://n.news/1", source="naver"),
+    ]
+
+    async def _kr(self=None):
+        return dup_items
+
+    async def _global(self=None):
+        return []
+
+    curator._fetch_kr_market_news = _kr
+    curator._fetch_global_speculative = _global
+
+    opinion = asyncio.run(curator._analyze())
+    assert opinion.raw_evidence["item_count"] == 1
 
 
 def test_news_analyst_evidence_and_limitations_reflect_dedup():

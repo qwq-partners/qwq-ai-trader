@@ -47,6 +47,18 @@ MIN_VALID_SOURCES = 2       # 유효 보고서 수
 MIN_TOTAL_WEIGHT = 0.5      # 감쇠 후 가중치 합 (정보량의 절대 하한)
 
 
+def _failed_report(kind: AnalystKind, symbol: str, error: str) -> AnalystReport:
+    """AnalystReport.failed()에 data_status="error"를 얹는다.
+
+    T11 리뷰 반영(2026-09-15 advisory): failed()의 기본값은 "unknown"(미판정)이라
+    "오류로 실패"와 "아직 판정 안 함"이 구분되지 않는다. types.py는 다른 담당
+    소유라 시그니처를 바꾸지 않고, 이 파일 안에서만 명시적으로 error로 올린다.
+    """
+    report = AnalystReport.failed(kind, symbol, error)
+    report.data_status = "error"
+    return report
+
+
 class FundamentalAnalyst:
     """공시·수급·공매도 기반 펀더멘탈 관점"""
 
@@ -172,30 +184,59 @@ class FundamentalAnalyst:
                 else:
                     # 실제로 검증을 수행하지 못했다 — 긍정 근거도 위험 미발견도 주장하지 않는다.
                     data_status = v_status
+                    # T11 리뷰 반영(2026-09-15 advisory): EvidenceItem.status 어휘는
+                    # EVIDENCE_STATUS(full/partial/insufficient/error)뿐이다 — 보고서
+                    # 수준 data_status만 허용하는 "unknown"을 여기 그대로 흘리지 않는다.
                     evidence.append(EvidenceItem(
                         source="stock_validator", metric="validated", value=False,
-                        status=v_status, kind="fact", note="검증 미수행 또는 실패",
+                        status=v_status if v_status != "unknown" else "insufficient",
+                        kind="fact", note="검증 미수행 또는 실패",
                     ))
 
             # 2) 공시 이상 징후 (self._validator와 독립적인 별도 직접 조회)
+            #    T11 리뷰 반영(2026-09-15 blocking B1): 생산자 DartCheckResult
+            #    (dart_checker.py:25-31)는 risk_disclosures를 낸다. risk_items는
+            #    이 파일에만 있던 존재하지 않는 키라 getattr 기본값(빈 리스트)이
+            #    조용히 삼켜 위험 건수가 항상 0으로 "사실" 처리됐다.
             if self._dart is not None:
                 dart = await self._dart.check_disclosures(symbol, days=7)
                 risky = getattr(dart, "has_risk", None)
-                items = getattr(dart, "risk_items", None) or []
+                items = getattr(dart, "risk_disclosures", None) or []
                 metrics["dart_risk_items"] = len(items)
                 if risky:
                     score -= 30
-                    findings.append(f"공시 위험 신호 {len(items)}건")
                     confidence = max(confidence, 0.8)
-                    evidence.append(EvidenceItem(
-                        source="dart_checker", metric="dart_risk_items", value=len(items),
-                        unit="count", status="full", kind="fact",
-                        note=f"공시 위험 신호 {len(items)}건",
-                    ))
+                    if items:
+                        findings.append(f"공시 위험 신호 {len(items)}건")
+                        evidence.append(EvidenceItem(
+                            source="dart_checker", metric="dart_risk_items", value=len(items),
+                            unit="count", status="full", kind="fact",
+                            note=f"공시 위험 신호 {len(items)}건",
+                        ))
+                    else:
+                        # has_risk=True인데 세부 항목이 비었다 — 0건이라는 "사실"이
+                        # 아니라 결측이다. value=None/status=partial로 정직하게 남긴다.
+                        findings.append("공시 위험 신호 감지(세부 항목 미상)")
+                        evidence.append(EvidenceItem(
+                            source="dart_checker", metric="dart_risk_items", value=None,
+                            unit="count", status="partial", kind="fact",
+                            note="공시 위험 감지되었으나 세부 항목 미상",
+                        ))
+                    # T11 리뷰 반영(2026-09-15 blocking B2): stock_validator가 앞서
+                    # '검증 통과 — 위험 미발견'으로 risk_clear=True를 적재했더라도,
+                    # DART가 별도 위험을 발견하면 그 주장은 더 이상 성립하지 않는다.
+                    # 두 소스는 서로 다른 위험을 보므로 한쪽 통과가 다른 쪽 위험을
+                    # 지우지 않는다 — risk_clear를 내리고 모순되는 근거를 정정한다.
+                    risk_clear = False
+                    for ev in evidence:
+                        if ev.source == "stock_validator" and ev.metric == "risk_clear" \
+                                and ev.value is True:
+                            ev.value = False
+                            ev.note = "검증 통과 — 그러나 별도 공시 위험 발견(위험 미발견 아님)"
 
         except Exception as e:
             logger.debug(f"[Analyst/fundamental] {symbol} 실패: {e}")
-            return AnalystReport.failed(AnalystKind.FUNDAMENTAL, symbol, str(e))
+            return _failed_report(AnalystKind.FUNDAMENTAL, symbol, str(e))
 
         score = max(-100, min(100, score))
         summary = "; ".join(findings[:3]) if findings else "특이사항 없음"
@@ -269,7 +310,7 @@ class TechnicalAnalyst:
                         pass    # 인덱스가 시각이 아니면 호출 시각을 유지 (as_of_known 그대로)
 
             if not metrics:
-                return AnalystReport.failed(
+                return _failed_report(
                     AnalystKind.TECHNICAL, symbol, "지표 없음"
                 )
 
@@ -342,7 +383,7 @@ class TechnicalAnalyst:
 
         except Exception as e:
             logger.debug(f"[Analyst/technical] {symbol} 실패: {e}")
-            return AnalystReport.failed(AnalystKind.TECHNICAL, symbol, str(e))
+            return _failed_report(AnalystKind.TECHNICAL, symbol, str(e))
 
         score = max(-100, min(100, score))
         summary = "; ".join(findings[:3]) if findings else "지표 중립"
@@ -368,7 +409,7 @@ class NewsAnalyst:
 
     async def analyze(self, symbol: str, name: str = "") -> AnalystReport:
         if self._orch is None:
-            return AnalystReport.failed(AnalystKind.NEWS, symbol, "orchestrator 없음")
+            return _failed_report(AnalystKind.NEWS, symbol, "orchestrator 없음")
 
         try:
             data = await self._orch.get_news_sentiment(symbol)
@@ -438,14 +479,17 @@ class NewsAnalyst:
                          "dedup_removed": dedup_removed},
                 confidence=confidence,
                 data_as_of=datetime.now() - timedelta(minutes=30),
-                data_status="full" if items > 0 else "insufficient",
+                # T11 리뷰 반영(2026-09-15 advisory): 기사가 있어도 observed_at은
+                # 여전히 모르고 헤드라인 한정 판단이다 — technical의 "시각 미상=partial"
+                # 기준과 맞춰 full을 주장하지 않는다.
+                data_status="partial" if items > 0 else "insufficient",
                 evidence=evidence,
                 observed_at=None,  # 기사 게재 시각을 모른다 — 캐시 조회 시각으로 세탁 금지
                 limitations=["헤드라인 기반", "캐시 시각 미제공"],
             )
         except Exception as e:
             logger.debug(f"[Analyst/news] {symbol} 실패: {e}")
-            return AnalystReport.failed(AnalystKind.NEWS, symbol, str(e))
+            return _failed_report(AnalystKind.NEWS, symbol, str(e))
 
 
 class AnalystTeam:
@@ -470,9 +514,9 @@ class AnalystTeam:
             try:
                 return await asyncio.wait_for(coro, timeout=ANALYST_TIMEOUT)
             except asyncio.TimeoutError:
-                return AnalystReport.failed(kind, symbol, f"타임아웃({ANALYST_TIMEOUT}s)")
+                return _failed_report(kind, symbol, f"타임아웃({ANALYST_TIMEOUT}s)")
             except Exception as e:
-                return AnalystReport.failed(kind, symbol, str(e))
+                return _failed_report(kind, symbol, str(e))
 
         results = await asyncio.gather(
             _guard(self.fundamental.analyze(symbol, name), AnalystKind.FUNDAMENTAL),

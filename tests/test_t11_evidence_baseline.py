@@ -36,11 +36,17 @@ def test_aggregate_score_review_case_plus28():
 
 
 def test_technical_analyst_volume_surge_bug_fix():
-    """C5 (버그 수정, 근거): technical.py 생산자(compute_indicators/compute_indicators_all
-    및 TechnicalIndicators.calculate_all 두 경로 모두)는 거래량 지표 키로 'vol_ratio' 를
-    낸다. 수정 전 analysts.py의 TechnicalAnalyst 는 존재하지 않는 'volume_ratio' 키를
+    """C5 (버그 수정, 근거): 운영 경로(kr_scheduler._cached_indicators → 스크리너)가
+    실제로 쓰는 생산자는 TechnicalIndicators.calculate_all이며, 거래량 지표 키로
+    'vol_ratio'를 낸다 (별도 계약 테스트:
+    test_technical_indicator_producer_key_set_covers_analyst_consumer_keys).
+    수정 전 analysts.py의 TechnicalAnalyst는 존재하지 않는 'volume_ratio' 키를
     읽었기 때문에 vol_ratio 값과 무관하게 거래량 급증(+15) 신호가 절대 발동하지 않았다.
-    이 테스트는 수정 전에는 실패했다(findings에 '거래량 급증'이 없고 score==0).
+    이 테스트는 그 소비 키 자체를 vol_ratio 로 직접 검증한다 — 수정 전에는
+    실패했다(findings에 '거래량 급증'이 없고 score==0). 모듈 함수
+    compute_indicators(technical.py:144~168)는 rsi/atr_pct 이름이 달라 이
+    계약 밖이며(advisory, 2026-09-15), 운영에서 이 dict가 팀에 들어오는 경로는
+    현재 없다.
     """
     import asyncio
 
