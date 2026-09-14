@@ -16,7 +16,7 @@ AI Trading Bot v2 - 배치 분석 엔진
 
 import asyncio
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import field, dataclass, asdict
 from datetime import datetime, timedelta, time, date
 from decimal import Decimal
 from pathlib import Path
@@ -61,6 +61,23 @@ class PendingSignal:
     # 윈도우로 넘어간 횟수. 재시작이 반복되면 윈도우 수와 무관하게 늘 수 있어
     # MAX_CARRY_RETRIES로 상한을 둔다.
     retry_count: int = 0
+    # ── T11 조건부 진입계획(EntryPlan) 계약 2.3 (2026-09-15) — PendingSignal 이 단일 정본.
+    #    기존 entry_price/max_entry_price/stop_price/target_price/expires_at/entry_mode/
+    #    breakout_trigger 는 그대로 정본이고 아래는 식별·근거·조건·가정 메타다.
+    #    기본값이라 이전 JSON 과 호환되며, 값이 없으면 "" / {} / [] 로 남긴다(자동 생성 금지).
+    plan_id: str = ""                 # 계획 식별자 (생성 시 uuid)
+    plan_version: int = 1
+    candidate_id: str = ""            # 후보(스크리닝) 식별자
+    setup: str = ""                   # sepa_pullback | vcp_breakout | gap_vwap | rsi2_reversal | momentum | manual | ""
+    decided_at: str = ""              # 판단 기준시각 (ISO)
+    inputs_ref: Dict[str, Any] = field(default_factory=dict)      # 입력 스냅샷/근거 참조 (지표 키·as_of·evidence 해시)
+    entry_band_low: float = 0.0       # 허용 진입 하한 (0 = 하한 없음)
+    trigger: Dict[str, Any] = field(default_factory=dict)         # {"type": "none|breakout|vwap", "level": float, "satisfied": bool|None, "satisfied_at": str|None}
+    invalidation: Dict[str, Any] = field(default_factory=dict)    # {"stop_price", "below_price", "intraday_levels": [...], "expires_at"}
+    required_inputs: List[str] = field(default_factory=list)
+    missing_inputs: List[str] = field(default_factory=list)
+    assumptions: Dict[str, Any] = field(default_factory=dict)     # {"fee_bps", "slippage_bps", "liquidity_ok": bool|None, "expected_fill_price": float|None}
+    exit_policy_ref: str = ""         # 예: "exit_manager:sepa_trend" — 손절·목표는 기존 청산 정책 참조
 
     def is_expired(self) -> bool:
         return datetime.now() > datetime.fromisoformat(self.expires_at)
@@ -79,7 +96,23 @@ class PendingSignal:
         data.setdefault("entry_mode", "close")
         data.setdefault("breakout_trigger", 0.0)
         data.setdefault("retry_count", 0)
-        return cls(**data)
+        # T11 EntryPlan 확장 필드 — 구 JSON 호환
+        data.setdefault("plan_id", "")
+        data.setdefault("plan_version", 1)
+        data.setdefault("candidate_id", "")
+        data.setdefault("setup", "")
+        data.setdefault("decided_at", "")
+        data.setdefault("inputs_ref", {})
+        data.setdefault("entry_band_low", 0.0)
+        data.setdefault("trigger", {})
+        data.setdefault("invalidation", {})
+        data.setdefault("required_inputs", [])
+        data.setdefault("missing_inputs", [])
+        data.setdefault("assumptions", {})
+        data.setdefault("exit_policy_ref", "")
+        # 알 수 없는 키(미래 버전)는 버리지 않고 무시 — dataclass 생성자가 받지 않으므로 걸러낸다
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 # ── 대기 시그널 이월 정책 (2026-08-03) ────────────────────────────────────────
