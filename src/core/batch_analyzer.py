@@ -210,6 +210,9 @@ class BatchAnalyzer:
         # "normal" | "caution" | "crash" | "severe"
         self._intraday_state: str = "normal"
         self._intraday_kospi_pct: float = 0.0
+        # 마지막 갱신 시각 — 일일 리셋이 없어 전일 상태가 남으므로, 소비자가
+        # "당일 갱신 여부"를 판별할 수 있어야 한다 (2026-09-14 리뷰 blocking#2)
+        self._intraday_updated_at: Optional[datetime] = None
         # 2026-05-28 P1-B: caution → normal 전환 직후 5분 cooldown
         # 5/28 사고: 09:53 잠시 normal 회복 → gap_and_go 3건 진입 → 즉시 손절
         self._intraday_recovery_until: Optional[datetime] = None
@@ -1522,6 +1525,7 @@ class BatchAnalyzer:
         prev_state = self._intraday_state
         self._intraday_state = new_state
         self._intraday_kospi_pct = kospi_pct
+        self._intraday_updated_at = datetime.now()
 
         # 2026-05-28 P2-C: 약세장(crash/severe) 진입 시 stale 종목 선제 청산
         # 5/28 사고: 셀트리온 6일 보유 → 약세장 진입 시 -5% 손절(-289k)

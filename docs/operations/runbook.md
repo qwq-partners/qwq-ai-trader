@@ -90,13 +90,20 @@ journalctl -u qwq-ai-trader --since today | grep -E "LLM레짐|레짐충돌가�
 |---|---|---|
 | `input_meta.kr_as_of` 가 당일 12시대 ISO8601 | 정상 — 최신 지수로 판단 | 없음 |
 | `kr_as_of` 에 `장중 갱신 실패` | KIS 지수 조회 실패 → 아침 캐시로 판단 | KIS 연결·초당 한도(EGW00201) 확인. 반복되면 12:00 레짐 신뢰하지 말 것 |
-| `input_meta.missing_fields` 가 `["VIX"]` | 현재 정상 — VIX는 공급 대상 아님 | 없음 |
-| `missing_fields` 에 `KOSPI_c5`/`KOSPI_c20` | 아침 스크리너 미실행 | 08:20 배치 스캔 실행 여부 확인 |
-| `llm_regime_raw` 존재 + `regime_capped_reason` | 급락 중 낙관 레짐이 제한됨(정상 방어) | 없음 — 제한 전 값은 `llm_regime_raw` |
-| `intraday_crash_level` 이 `null` | 급락 감지기에 접근 못 함 | batch_analyzer 초기화 확인 (레짐 방어 미작동 상태) |
+| `missing_fields` 에 `VIX` | US 지수 공급 실패 — 정상 운영에서는 `indices_normalized.VIX.price` 가 실린다 | 반복되면 `us_market_data` 조회 실패 확인 |
+| `missing_fields` 에 `KOSPI_c5`/`KOSPI_c20` + `kr_as_of` 가 `스크리너 캐시 없음` | 아침 스크리너 미실행(재시작 직후 08:10 등) — 0.0%로 채우지 않는다 | 08:20 배치 스캔 실행 여부 확인 |
+| `missing_fields` 에 `KOSPI_c20` 만 | 벤치마크 종가열이 21일 미만(KIS 폴백 로드) | 정상 — 20일 변화율은 판단에서 제외됨 |
+| `missing_fields` 에 `급락감지기(당일 갱신 없음)` | 09:00~15:35 5분 루프가 아직/한 번도 안 돌았음. 전일 상태는 쓰지 않는다 | 08:10 실행이면 정상. 장중이면 KOSPI 지수 조회 실패 확인 |
+| `llm_regime_raw` 존재 + `regime_capped` / `regime_capped_reason` | 급락 중 낙관 레짐이 제한됨(정상 방어) | 없음 — 제한 전 값은 `llm_regime_raw`, LLM 원본 확신도는 `confidence_raw` |
+| `input_meta.intraday_crash_as_of` | **감지기가 실제 갱신된 시각**(스냅샷 시각 아님) | 당일이 아니면 값 자체가 실리지 않는다 |
+| `input_meta.us_as_of` 가 `마감 …, 조회 …` | 정상 — 마감(체결) 시각과 조회 시각을 구분 표기 | 없음 |
+| `us_as_of` 가 `조회 … (시장 시각 미제공)` | 공급자가 시장 시각을 못 줌 | 참고용 — 전 거래일 마감치일 수 있음 |
 
 > 결측은 0/중립으로 채우지 않는다. 프롬프트에 `결측`으로 표기되고 `missing_fields`에 집계된다.
-> 08:10 실행은 장 시작 전이라 재조회하지 않는 것이 정상이다(`kr_as_of` = `08:20 (아침 스크리너 캐시)`).
+> 08:10 실행은 장 시작 전이라 재조회하지 않는 것이 정상이다(`kr_as_of` = 스크리너 벤치마크 로드 시각).
+> 장중 급락 상태는 5분 루프가 `batch_analyzer.update_intraday_state()` 로 갱신할 때
+> `MarketRegimeAdapter.set_intraday_risk()` 에도 함께 전달된다 — 유효 레짐(`adapter.regime`)이
+> crash/severe 에서 강세를 강세로 취급하지 않는다.
 
 ## 신규 전략 1차 스크리닝 (quick_backtest, 2026-08-03~)
 

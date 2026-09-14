@@ -34,13 +34,21 @@ from src.schedulers.kr_scheduler import KRScheduler  # noqa: E402
 
 # ── 가짜 협력자 ────────────────────────────────────────────────────────────────
 
+_UNSET = object()
+
+
 class _Screener:
     """08:20 아침 스캔이 남긴 메모리 — 장중에는 갱신되지 않는다."""
 
-    def __init__(self, c5, c20, level=2500.0, regime="bull", closes=None):
+    def __init__(self, c5, c20, level=2500.0, regime="bull", closes=None,
+                 loaded_at=None, last_bar_date=None):
         self._kospi = {"c5": c5, "c20": c20, "level": level}
         self._regime = regime
-        self._kospi_closes = list(closes) if closes else [level] * 30
+        self._kospi_closes = list(closes) if closes is not None else [level] * 30
+        self._kospi_loaded_at = loaded_at or datetime(2026, 9, 14, 8, 20, 0)
+        self._kospi_last_bar_date = (
+            last_bar_date if last_bar_date is not None else date(2026, 9, 13)
+        )
 
     def get_kospi_change(self):
         return dict(self._kospi)
@@ -50,10 +58,15 @@ class _Screener:
 
 
 class _BatchAnalyzer:
-    def __init__(self, screener, intraday_state="normal", intraday_pct=0.0):
+    def __init__(self, screener, intraday_state="normal", intraday_pct=0.0,
+                 updated_at=_UNSET):
         self._screener = screener
         self._intraday_state = intraday_state
         self._intraday_kospi_pct = intraday_pct
+        # 기본값: 오늘 갱신된 상태 (일자 가드 통과)
+        self._intraday_updated_at = (
+            datetime(2026, 9, 14, 9, 5, 0) if updated_at is _UNSET else updated_at
+        )
 
 
 class _KisMarketData:
@@ -88,18 +101,31 @@ class _LLM:
         return dict(self._result)
 
 
+class _RegimeAdapter:
+    """B(market_regime.MarketRegimeAdapter) 대역 — set_intraday_risk 인자만 기록."""
+
+    def __init__(self):
+        self.calls = []
+
+    def set_intraday_risk(self, level, change_pct=None, as_of=None):
+        if level not in ("normal", "caution", "crash", "severe"):
+            raise ValueError(level)
+        self.calls.append((level, change_pct, as_of))
+
+
 def _make_bot(*, screener, intraday_state="normal", intraday_pct=0.0,
-              kis_responses=None, crash_level="normal"):
-    ba = _BatchAnalyzer(screener, intraday_state, intraday_pct)
+              kis_responses=None, crash_level="normal", updated_at=_UNSET):
+    ba = _BatchAnalyzer(screener, intraday_state, intraday_pct, updated_at=updated_at)
     return SimpleNamespace(
         batch_analyzer=ba,
         kis_market_data=_KisMarketData(kis_responses or {}),
         exit_manager=_ExitManager(crash_level),
+        engine=SimpleNamespace(_regime_adapter=_RegimeAdapter()),
         config={"kr": {"llm_ops": {"regime_conflict_guard_enabled": True}}},
     )
 
 
-def _patch_env(monkeypatch, tmp_path, bot, llm, *, indices, now):
+def _patch_env(monkeypatch, tmp_path, bot, llm, *, indices, now, normalized=None):
     """Path.home()·LLM·US 공급자·시계를 전부 가짜로 교체."""
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
@@ -110,7 +136,10 @@ def _patch_env(monkeypatch, tmp_path, bot, llm, *, indices, now):
 
     class _UMD:
         async def get_overnight_signal(self):
-            return {"indices": dict(indices)}
+            payload = {"indices": dict(indices)}
+            if normalized is not None:
+                payload["indices_normalized"] = dict(normalized)
+            return payload
 
     monkeypatch.setattr(umd_mod, "get_us_market_data", lambda: _UMD())
     monkeypatch.setattr(kr_scheduler, "_now_kst", lambda: now, raising=False)
@@ -187,7 +216,8 @@ def test_noon_index_fetch_failure_falls_back_with_stale_label(monkeypatch, tmp_p
 
     prompt = llm.prompts[0]
     assert "장중 갱신 실패" in prompt, f"폴백 라벨 누락:\n{prompt}"
-    assert "08:20" in prompt, f"아침 캐시 기준 시각 표기 누락:\n{prompt}"
+    # 고정 문자열이 아니라 스크리너가 벤치마크를 실제로 로드한 시각이 실린다
+    assert "2026-09-14 08:20" in prompt, f"스크리너 로드 시각 표기 누락:\n{prompt}"
 
 
 def test_morning_run_does_not_fetch_intraday_index(monkeypatch, tmp_path):
@@ -271,7 +301,8 @@ def test_conflict_guard_uses_intraday_crash_state(monkeypatch, tmp_path):
 
 # ── 요청5: 저녁 모닝브리프 사후 평가 훅 ───────────────────────────────────────
 
-def test_evening_brief_eval_hook_calls_once_when_available():
+def test_evening_brief_eval_hook_calls_once_when_available(monkeypatch):
+    monkeypatch.setattr(KRScheduler, "_morning_brief_eval_date", None)
     calls = []
 
     class _RG:
@@ -286,17 +317,396 @@ def test_evening_brief_eval_hook_calls_once_when_available():
     assert calls == [today], f"1회만 호출해야 한다: {calls}"
 
 
-def test_evening_brief_eval_hook_skips_when_method_absent():
+def test_evening_brief_eval_hook_skips_when_method_absent(monkeypatch):
+    # 클래스 속성 누수로 날짜 가드에 걸려 테스트가 무효화되지 않게 매번 초기화
+    monkeypatch.setattr(KRScheduler, "_morning_brief_eval_date", None)
     bot = SimpleNamespace(report_generator=SimpleNamespace())
     asyncio.run(KRScheduler._run_morning_brief_evaluation(bot, date(2026, 9, 14)))
+    monkeypatch.setattr(KRScheduler, "_morning_brief_eval_date", None)
     bot2 = SimpleNamespace(report_generator=None)
     asyncio.run(KRScheduler._run_morning_brief_evaluation(bot2, date(2026, 9, 14)))
 
 
-def test_evening_brief_eval_hook_isolates_exception():
+def test_evening_brief_eval_hook_isolates_exception(monkeypatch):
+    monkeypatch.setattr(KRScheduler, "_morning_brief_eval_date", None)
+    called = []
+
     class _RG:
         async def evaluate_morning_brief(self, day):
-            raise RuntimeError("B 구현 미완")
+            called.append(day)
+            raise RuntimeError("평가 실패")
 
     bot = SimpleNamespace(report_generator=_RG())
     asyncio.run(KRScheduler._run_morning_brief_evaluation(bot, date(2026, 9, 14)))
+    assert called, "날짜 가드에 걸려 실제 경로에 도달하지 못했다"
+
+
+def test_evening_brief_eval_hook_times_out(monkeypatch):
+    """평가가 지연되면 저녁 잡을 막지 않고 타임아웃으로 빠져나온다."""
+    monkeypatch.setattr(KRScheduler, "_morning_brief_eval_date", None)
+    monkeypatch.setattr(kr_scheduler, "_MORNING_BRIEF_EVAL_TIMEOUT", 0.05, raising=False)
+
+    class _RG:
+        async def evaluate_morning_brief(self, day):
+            await asyncio.sleep(5)
+
+    bot = SimpleNamespace(report_generator=_RG())
+    asyncio.run(KRScheduler._run_morning_brief_evaluation(bot, date(2026, 9, 14)))
+
+
+# ── blocking #1: 스크리너 종가열이 비면 c5/c20 은 0 이 아니라 결측 ──────────────
+
+def test_empty_screener_cache_reports_missing_not_zero(monkeypatch, tmp_path):
+    """재시작 직후 08:10 — 종가열이 비면 '+0.0%' 가 아니라 결측으로 실린다."""
+    screener = _Screener(c5=0.0, c20=0.0, level=0.0, closes=[])
+    bot = _make_bot(screener=screener)
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 8, 10, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="08:10"))
+
+    prompt = llm.prompts[0]
+    assert "+0.0%" not in prompt, f"빈 캐시를 0.0% 로 포장했다:\n{prompt}"
+    assert "스크리너 캐시 없음" in prompt, f"캐시 없음 표기 누락:\n{prompt}"
+    missing = _regime_file(tmp_path).get("input_meta", {}).get("missing_fields") or []
+    assert "KOSPI_c5" in missing and "KOSPI_c20" in missing, f"결측 집계 누락: {missing}"
+
+
+def test_short_close_series_reports_c20_missing(monkeypatch, tmp_path):
+    """종가열이 6개 이상 21개 미만이면 c5 만 유효, c20 은 결측 (0 금지)."""
+    screener = _Screener(c5=1.0, c20=0.0, level=2500.0,
+                         closes=[2400.0 + i for i in range(10)])
+    bot = _make_bot(screener=screener)
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 8, 10, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="08:10"))
+
+    missing = _regime_file(tmp_path).get("input_meta", {}).get("missing_fields") or []
+    assert "KOSPI_c20" in missing, f"20일 결측 집계 누락: {missing}"
+    assert "KOSPI_c5" not in missing, f"5일은 계산 가능한데 결측 처리됨: {missing}"
+
+
+# ── blocking #2: 전일 급락 상태가 다음 날 최신 사실로 실리면 안 된다 ────────────
+
+def test_stale_crash_state_from_previous_day_is_ignored(monkeypatch, tmp_path):
+    """전일 15:34 crash 잔존 → 다음 날 08:10 에는 결측 처리·캡 미발동."""
+    screener = _Screener(c5=3.3, c20=1.4)
+    bot = _make_bot(screener=screener, intraday_state="crash", intraday_pct=-3.26,
+                    updated_at=datetime(2026, 9, 13, 15, 34, 0))
+    llm = _LLM({"regime": "trending_bull", "confidence": 0.8})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 8, 10, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="08:10"))
+
+    prompt = llm.prompts[0]
+    assert "상태: crash" not in prompt, f"전일 급락 상태가 당일 사실로 실렸다:\n{prompt}"
+    saved = _regime_file(tmp_path)
+    assert saved.get("regime") == "trending_bull", f"전일 상태로 캡이 걸렸다: {saved}"
+    meta = saved.get("input_meta", {})
+    assert meta.get("intraday_crash_level") is None
+    assert any("급락감지기" in m for m in (meta.get("missing_fields") or [])), meta
+
+
+def test_stale_crash_state_does_not_cap_conflict_guard(monkeypatch, tmp_path):
+    """충돌 방지 장치도 전일 급락 상태로는 캡을 걸지 않는다."""
+    import json
+
+    screener = _Screener(c5=0.2, c20=0.1, regime="neutral")
+    bot = _make_bot(screener=screener, intraday_state="crash", intraday_pct=-3.26,
+                    updated_at=datetime(2026, 9, 13, 15, 34, 0))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(kr_scheduler, "_now_kst",
+                        lambda: datetime(2026, 9, 14, 8, 10, 0), raising=False)
+    cache = tmp_path / ".cache" / "ai_trader"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "llm_regime_today.json").write_text(
+        json.dumps({"regime": "trending_bull", "date": date.today().isoformat()}),
+        encoding="utf-8",
+    )
+
+    sched = object.__new__(KRScheduler)
+    sched.bot = bot
+    asyncio.run(sched._apply_regime_to_exit_manager())
+
+    assert bot.exit_manager.applied[-1] == "trending_bull", (
+        f"전일 급락 상태로 캡이 걸렸다: {bot.exit_manager.applied}"
+    )
+
+
+def test_update_intraday_state_records_updated_at():
+    """batch_analyzer 가 감지기 갱신 시각을 기록한다 (스냅샷 일자 가드의 근거)."""
+    from src.core.batch_analyzer import BatchAnalyzer
+
+    ba = object.__new__(BatchAnalyzer)
+    ba._intraday_state = "normal"
+    ba._intraday_kospi_pct = 0.0
+    ba._intraday_updated_at = None
+    ba._exit_manager = None
+    ba._intraday_recovery_until = None
+
+    before = datetime.now()
+    state = asyncio.run(ba.update_intraday_state(-2.6))
+    assert state == "crash"
+    assert ba._intraday_updated_at is not None
+    assert ba._intraday_updated_at >= before
+
+
+# ── advisory (d): 당일 봉이 이미 있으면 장중 지수를 덧붙이지 않는다 ─────────────
+
+def test_intraday_recompute_skips_when_last_bar_is_today(monkeypatch, tmp_path):
+    """catch-up 스캔이 장중에 벤치마크를 로드하면 당일 봉이 이미 있다 → 이중 계상 금지."""
+    from src.schedulers.kr_scheduler import _pct_change
+
+    closes = [2400.0 + i for i in range(30)]
+    screener = _Screener(c5=0.0, c20=0.0, level=closes[-1], closes=closes,
+                         loaded_at=datetime(2026, 9, 14, 10, 5, 0),
+                         last_bar_date=date(2026, 9, 14))
+    bot = _make_bot(
+        screener=screener,
+        kis_responses={"0001": {"price": 2100.0, "change_pct": -3.34},
+                       "1001": {"change_pct": -2.78}},
+    )
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 12, 0, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
+
+    meta = _regime_file(tmp_path).get("input_meta", {})
+    assert meta.get("kospi_c5") == _pct_change(closes, 5), meta
+    assert meta.get("kospi_today_pct") == -3.34, meta
+
+
+def test_intraday_recompute_appends_when_last_bar_is_previous_day(monkeypatch, tmp_path):
+    """마지막 봉이 전 거래일이면 당일 지수를 덧붙여 5일 변화율을 갱신한다."""
+    from src.schedulers.kr_scheduler import _pct_change
+
+    closes = [2400.0 + i for i in range(30)]
+    screener = _Screener(c5=0.0, c20=0.0, level=closes[-1], closes=closes,
+                         last_bar_date=date(2026, 9, 11))
+    bot = _make_bot(
+        screener=screener,
+        kis_responses={"0001": {"price": 2100.0, "change_pct": -3.34},
+                       "1001": {"change_pct": -2.78}},
+    )
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 12, 0, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
+
+    meta = _regime_file(tmp_path).get("input_meta", {})
+    assert meta.get("kospi_c5") == _pct_change(closes + [2100.0], 5), meta
+
+
+# ── 배선 1: 급락 감지기 갱신 → 레짐 어댑터 set_intraday_risk ────────────────────
+
+def test_intraday_risk_is_pushed_to_regime_adapter():
+    """crash 전이 시 어댑터에 (level, change_pct, as_of) 를 전달한다."""
+    bot = _make_bot(screener=_Screener(c5=0.0, c20=0.0))
+    sched = object.__new__(KRScheduler)
+    sched.bot = bot
+    as_of = datetime(2026, 9, 14, 9, 5, 0)
+
+    sched._push_intraday_risk("crash", -3.34, as_of)
+    assert bot.engine._regime_adapter.calls == [("crash", -3.34, as_of)]
+
+    # 결측 등락률은 0 이 아니라 None 으로 전달
+    sched._push_intraday_risk("caution")
+    assert bot.engine._regime_adapter.calls[-1] == ("caution", None, None)
+
+
+def test_push_intraday_risk_is_silent_without_adapter():
+    """어댑터·메서드가 없으면 조용히 건너뛴다 (급락 감지 루프를 막지 않는다)."""
+    bot = _make_bot(screener=_Screener(c5=0.0, c20=0.0))
+    bot.engine = SimpleNamespace()
+    sched = object.__new__(KRScheduler)
+    sched.bot = bot
+    sched._push_intraday_risk("crash", -3.34)  # 예외 없이 통과
+
+    bot.engine = SimpleNamespace(_regime_adapter=SimpleNamespace())
+    sched._push_intraday_risk("crash", -3.34)
+
+
+def test_cap_uses_shared_market_regime_function():
+    """스케줄러 자체 캡 표 제거 — B 의 cap_regime_by_intraday_risk 를 쓴다."""
+    from src.core.market_regime import cap_regime_by_intraday_risk
+
+    assert not hasattr(KRScheduler, "_cap_by_intraday_crash")
+    assert not hasattr(KRScheduler, "_CRASH_CAP")
+    sched = object.__new__(KRScheduler)
+    # 기존 의미 보존: crash/severe 에서만 trending_bull → neutral
+    assert cap_regime_by_intraday_risk("trending_bull", "crash") == "neutral"
+    assert cap_regime_by_intraday_risk("turning_point", "crash") == "turning_point"
+    assert cap_regime_by_intraday_risk("trending_bull", "caution") == "trending_bull"
+    assert sched._resolve_regime_conflict("neutral", "trending_bull", "crash") == "neutral"
+    assert sched._resolve_regime_conflict("neutral", "trending_bull", None) == "trending_bull"
+    assert sched._resolve_regime_conflict("bear", "trending_bull", None) == "neutral"
+
+
+# ── 배선 3: US 지수는 C 의 indices_normalized 우선 ─────────────────────────────
+
+_NORMALIZED = {
+    "SP500": {"price": 6000.0, "change": -60.0, "change_pct": -1.0,
+              "as_of": "2026-09-12T20:00:00+00:00", "fetched_at": "2026-09-14T07:01:00",
+              "source": "yahoo_finance", "missing": False},
+    "NASDAQ": {"price": 20000.0, "change": -250.0, "change_pct": -1.25,
+               "as_of": "2026-09-12T20:00:00+00:00", "fetched_at": "2026-09-14T07:01:00",
+               "source": "yahoo_finance", "missing": False},
+    "SOX": {"price": 5500.0, "change": -180.0, "change_pct": -3.2,
+            "as_of": "2026-09-12T20:00:00+00:00", "fetched_at": "2026-09-14T07:01:00",
+            "source": "yahoo_finance", "missing": False},
+    "VIX": {"price": 22.5, "change": 2.0, "change_pct": 9.8,
+            "as_of": "2026-09-12T20:00:00+00:00", "fetched_at": "2026-09-14T07:01:00",
+            "source": "yahoo_finance", "missing": False},
+    "DOW": {"price": None, "change": None, "change_pct": None,
+            "as_of": None, "fetched_at": None, "source": "yahoo_finance",
+            "missing": True, "reason": "^DJI 조회 실패"},
+}
+
+
+def test_us_indices_read_from_normalized_keys(monkeypatch, tmp_path):
+    """indices_normalized 의 SP500/SOX/VIX 가 실제 값으로 실리고 as_of 는 마감·조회 구분."""
+    screener = _Screener(c5=0.5, c20=0.2)
+    bot = _make_bot(screener=screener)
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES, normalized=_NORMALIZED,
+                       now=datetime(2026, 9, 14, 8, 10, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="08:10"))
+
+    prompt = llm.prompts[0]
+    assert "-1.00" in prompt, f"SP500 정규화 값 누락:\n{prompt}"
+    assert "-3.20" in prompt, f"SOX 정규화 값 누락:\n{prompt}"
+    assert "22.5" in prompt, f"VIX 레벨(price) 누락:\n{prompt}"
+    saved = _regime_file(tmp_path)
+    us_as_of = saved.get("input_meta", {}).get("us_as_of") or ""
+    assert "마감" in us_as_of and "조회" in us_as_of, f"as_of/fetched_at 구분 표기 누락: {us_as_of}"
+    assert "VIX" not in (saved.get("input_meta", {}).get("missing_fields") or [])
+
+
+def test_normalized_missing_entry_is_not_zero(monkeypatch, tmp_path):
+    """missing=True 항목은 0 이 아니라 결측으로 집계된다."""
+    screener = _Screener(c5=0.5, c20=0.2)
+    bot = _make_bot(screener=screener)
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    norm = dict(_NORMALIZED)
+    norm["SOX"] = {"price": None, "change_pct": None, "as_of": None,
+                   "fetched_at": None, "missing": True, "reason": "^SOX 조회 실패"}
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices={}, normalized=norm,
+                       now=datetime(2026, 9, 14, 8, 10, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="08:10"))
+
+    missing = _regime_file(tmp_path).get("input_meta", {}).get("missing_fields") or []
+    assert "SOX" in missing, f"결측 집계 누락: {missing}"
+    assert "SOX: 0" not in llm.prompts[0]
+
+
+# ── advisory (g): 캡 적용 시 원본 confidence 를 보존한다 ───────────────────────
+
+def test_capped_regime_records_raw_confidence_and_flag(monkeypatch, tmp_path):
+    screener = _Screener(c5=3.3, c20=1.4)
+    bot = _make_bot(screener=screener, intraday_state="crash", intraday_pct=-3.34,
+                    crash_level="crash")
+    llm = _LLM({"regime": "trending_bull", "confidence": 0.85})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 12, 0, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
+
+    saved = _regime_file(tmp_path)
+    assert saved.get("regime_capped") is True, saved
+    assert saved.get("confidence_raw") == 0.85, saved
+    assert saved.get("confidence") == 0.85, "적용 레짐 confidence 는 그대로 둔다"
+
+
+# ── 배선 4: 07:30 전문가 브리핑 — 상충 문구 + 자료 부족 표시 ───────────────────
+
+class _Orchestrator:
+    def __init__(self, summary):
+        self._summary = summary
+
+    def data_status_summary(self, opinions=None):
+        return dict(self._summary)
+
+
+class _Notifier:
+    def __init__(self):
+        self.sent = []
+
+    async def send_report(self, msg):
+        self.sent.append(msg)
+        return True
+
+    async def send_message(self, msg):
+        self.sent.append(msg)
+        return True
+
+
+def _run_briefing(monkeypatch, tmp_path, *, brief, summary, agg):
+    import json as _json
+    import src.utils.telegram as tg_mod
+
+    import src.data.providers.disclosure_feed as disc_mod
+
+    notifier = _Notifier()
+    monkeypatch.setattr(tg_mod, "get_telegram_notifier", lambda: notifier)
+
+    async def _no_disclosure(top_n=5, days=3):
+        return ""
+
+    monkeypatch.setattr(disc_mod, "fetch_disclosure_summary", _no_disclosure)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    cache = tmp_path / ".cache" / "ai_trader"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "llm_morning_brief.json").write_text(
+        _json.dumps(brief, ensure_ascii=False), encoding="utf-8")
+
+    sched = object.__new__(KRScheduler)
+    sched.bot = SimpleNamespace(expert_orchestrator=_Orchestrator(summary))
+    asyncio.run(sched._send_expert_briefing_telegram(
+        "🌅 장전", {}, agg, "neutral", False, use_report_channel=True))
+    assert notifier.sent, "브리핑이 전송되지 않았다"
+    return notifier.sent[0]
+
+
+def test_briefing_appends_expert_conflict_note(monkeypatch, tmp_path):
+    """낙관 브리프 + 전문가 종합 +2(중립) → 상충 문구가 브리프 끝에 붙는다."""
+    brief = {
+        "text": "미국 증시 강세 마감. 반도체 랠리가 이어졌다.",
+        "tone": "bull",
+        "generated_at": datetime.now().isoformat(),
+    }
+    msg = _run_briefing(monkeypatch, tmp_path, brief=brief,
+                        summary={"counts": {"ok": 6, "partial": 0, "insufficient": 0},
+                                 "insufficient_experts": [], "note": None,
+                                 "valid_n": 6, "insufficient_coverage": False},
+                        agg=2)
+    assert "상충" in msg, f"전문가 상충 문구 누락:\n{msg}"
+
+
+def test_briefing_shows_data_status_note(monkeypatch, tmp_path):
+    """자료 부족 N명·커버리지 부족이 전문가 종합 줄에 표시된다."""
+    brief = {"text": "미국 증시 혼조 마감.", "tone": "neutral",
+             "generated_at": datetime.now().isoformat()}
+    msg = _run_briefing(monkeypatch, tmp_path, brief=brief,
+                        summary={"counts": {"ok": 2, "partial": 1, "insufficient": 3},
+                                 "insufficient_experts": ["macro_economist"],
+                                 "note": "자료 부족 3명",
+                                 "valid_n": 2, "insufficient_coverage": True},
+                        agg=0)
+    assert "자료 부족 3명" in msg, f"자료 부족 표시 누락:\n{msg}"
+    assert "무보정" in msg, f"커버리지 부족 표시 누락:\n{msg}"

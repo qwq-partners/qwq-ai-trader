@@ -39,6 +39,10 @@ class SwingScreener:
         self._stock_master = stock_master
         self._indicators = TechnicalIndicators()
         self._kospi_closes: List[float] = []  # 벤치마크 KOSPI 종가 (MRS용)
+        # 벤치마크 로드 시각·마지막 봉 날짜 — 소비자(LLM 레짐 분류기)가 "이 종가열이
+        # 언제 자료인지"와 "당일 봉이 이미 포함됐는지"를 판별한다 (2026-09-14 리뷰)
+        self._kospi_loaded_at: Optional[datetime] = None
+        self._kospi_last_bar_date = None
         # 5일 수급 스코어 (싱글턴 — 스캔 사이클마다 재생성하지 않도록 인스턴스 변수)
         from src.data.providers.supply_score import SupplyScoreProvider
         self._supply5d = SupplyScoreProvider()
@@ -904,13 +908,28 @@ class SwingScreener:
             )
             if kospi_df is not None and len(kospi_df) >= 50:
                 self._kospi_closes = [float(row["Close"]) for _, row in kospi_df.iterrows()]
-                logger.info(f"[스윙스크리너] KOSPI 벤치마크 로드: {len(self._kospi_closes)}일")
+                self._kospi_loaded_at = datetime.now()
+                # FDR 은 end 없이 조회하면 당일 부분봉을 포함한다 — 마지막 봉 날짜를
+                # 남겨 소비자가 당일 지수를 또 덧붙이지 않게 한다
+                try:
+                    _last = kospi_df.index[-1]
+                    self._kospi_last_bar_date = (
+                        _last.date() if hasattr(_last, "date") else None
+                    )
+                except Exception:
+                    self._kospi_last_bar_date = None
+                logger.info(
+                    f"[스윙스크리너] KOSPI 벤치마크 로드: {len(self._kospi_closes)}일 "
+                    f"(마지막 봉 {self._kospi_last_bar_date})"
+                )
                 return
         except Exception as e:
             logger.warning(f"[스윙스크리너] KOSPI 벤치마크 FDR 로드 오류: {e}")
 
         # 2차: KIS API 폴백 (KOSPI 지수 최근 20일)
         self._kospi_closes = []
+        self._kospi_loaded_at = None
+        self._kospi_last_bar_date = None  # 봉 날짜 미상 — 소비자는 결측으로 취급
         if self._broker:
             try:
                 history = await self._broker.get_daily_prices("0001", days=20)
@@ -919,6 +938,7 @@ class SwingScreener:
                         float(bar.get("close", 0)) for bar in history
                         if float(bar.get("close", 0)) > 0
                     ]
+                    self._kospi_loaded_at = datetime.now()
                     logger.info(
                         f"[스윙스크리너] KOSPI 벤치마크 KIS API 폴백: {len(self._kospi_closes)}일"
                     )

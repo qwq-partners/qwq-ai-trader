@@ -29,6 +29,7 @@ from loguru import logger
 from ..core.engine import is_kr_market_holiday, set_kr_market_holidays
 from ..core import engine as _engine_mod   # 휴장일 전역의 최신 참조용 (from-import 스테일 방지)
 from ..core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent, MarketDataEvent
+from ..core.market_regime import cap_regime_by_intraday_risk
 from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, StrategyType, MarketSession
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
@@ -94,6 +95,25 @@ def _fmt_num(value: Optional[float], digits: int = 1) -> str:
     if value is None:
         return "결측"
     return f"{value:.{digits}f}"
+
+
+def _pct_change(series: List[float], lookback: int) -> Optional[float]:
+    """종가열의 n일 변화율(%) — 표본이 부족하면 0 이 아니라 None(결측).
+
+    `SwingScreener.get_kospi_change()` 는 종가열이 없거나 짧으면 0.0 을 돌려준다
+    (재시작 직후 08:10 = 당일 첫 스캔 이전). 그 0.0 이 프롬프트에 "+0.0%" 로 실려
+    우선순위 규칙 4(c5 ≥ +1%)가 가짜 값 위에서 평가됐다 (2026-09-14 리뷰 blocking#1).
+    """
+    if not series or len(series) <= lookback:
+        return None
+    prev = series[-1 - lookback]
+    if not prev:
+        return None
+    return round((series[-1] - prev) / prev * 100, 2)
+
+
+# 모닝브리프 사후 평가 훅의 최대 대기 시간 (LLM 지연이 20:30 진화 잡을 밀지 않게)
+_MORNING_BRIEF_EVAL_TIMEOUT = 120.0
 
 
 class KRScheduler:
@@ -465,6 +485,26 @@ class KRScheduler:
             bear_n = sum(1 for o in _regime_ops.values() if o.is_valid and o.regime_bias.value == "bear")
             valid_n = bull_n + neut_n + bear_n
 
+            # 자료 부족 표시 (C: orchestrator.data_status_summary) — 결측을 감추지 않는다
+            _data_status_lines: List[str] = []
+            try:
+                _orch = getattr(self.bot, "expert_orchestrator", None)
+                _summary_fn = getattr(_orch, "data_status_summary", None)
+                _ds = _summary_fn(ops) if callable(_summary_fn) else None
+            except Exception as _ds_e:
+                _ds = None
+                logger.debug(f"[전문가] data_status 집계 실패 (무시): {_ds_e}")
+            if _ds:
+                if _ds.get("note"):
+                    _data_status_lines.append(
+                        f"<b>자료 상태</b>: {_ds['note']} "
+                        f"(유효 {_ds.get('valid_n', 0)}명)"
+                    )
+                if _ds.get("insufficient_coverage"):
+                    _data_status_lines.append(
+                        "<i>※ 커버리지 부족 — 체제 점수 무보정(score=0)</i>"
+                    )
+
             # 종합 score 해석
             if agg >= 15:
                 agg_label = "🟢 강세 우위"
@@ -482,6 +522,7 @@ class KRScheduler:
                 f"━━━━━━━━━━━━━━━",
                 f"<b>종합 bias</b>: {bias.upper()} {agg_label}",
                 f"<b>체제 보정</b>: score={agg:+d} (-30~+30 스케일, market_regime 반영)",
+                *_data_status_lines,
                 f"<b>분포</b>: 🟢{bull_n} ⚪{neut_n} 🔴{bear_n} (총 {valid_n}명)",
                 f"<b>BEAR 합의</b>: {'⚠️ YES (BUY 차단)' if bear_consensus else '✓ NO (정상매매)'}",
                 f"<i>※ 합의 기준: 신뢰도 ≥70%인 BEAR 의견 2명 이상</i>",
@@ -589,6 +630,19 @@ class KRScheduler:
                         llm_text = data.get("text", "")
                         if llm_text and age_h < 6:
                             sep = "\n\n━━━━━━━━━━━━━━━\n\n"
+                            # 브리프 톤과 전문가 종합판단이 상충하면 본문 끝에 표시
+                            try:
+                                from ..analytics.daily_report import (
+                                    build_expert_conflict_note,
+                                )
+                                _conflict = build_expert_conflict_note(
+                                    data.get("tone") or llm_text, {"score": agg}
+                                )
+                            except Exception as _cf_e:
+                                _conflict = None
+                                logger.debug(f"[전문가] 상충 문구 생성 실패 (무시): {_cf_e}")
+                            if _conflict:
+                                llm_text = f"{llm_text}\n\n{_conflict}"
                             msg = llm_text + sep + msg
                             logger.info(
                                 f"[전문가] LLM 모닝브리프 결합 (cache age={age_h:.1f}h)"
@@ -1273,7 +1327,7 @@ class KRScheduler:
             now = _now_kst()
             missing_fields: List[str] = []
 
-            # 2. US 마감 데이터 조회 (공급자/소비자 표기 불일치 → _index_field 로 흡수)
+            # 2. US 마감 데이터 — 공급자(C)의 정규화 키 우선, 없으면 표시명 별칭 폴백
             #    결측은 0 이 아니라 None — 프롬프트에 "결측" 으로 실린다 (2026-09-14 리뷰 ③)
             sp500_pct = nasdaq_pct = sox_pct = vix = None
             us_as_of = None
@@ -1283,14 +1337,46 @@ class KRScheduler:
                 umd = get_us_market_data()
                 overnight = await umd.get_overnight_signal()
                 indices = overnight.get("indices", {})
-                sp500_pct = _index_field(indices, "SP500", "S&P500")
-                nasdaq_pct = _index_field(indices, "NASDAQ")
-                sox_pct = _index_field(indices, "SOX", "반도체(SOX)")
-                # VIX 는 현재 공급 대상이 아니다 (us_market_data.INDEX_SYMBOLS 미포함) —
-                # 공급이 추가되면 어느 표기로 오든 받도록 별칭·값 필드를 함께 둔다
-                vix = _index_field(indices, "VIX", "VIX(공포지수)",
-                                   fields=("value", "price"))
-                us_as_of = now.isoformat(timespec="seconds")
+                norm = overnight.get("indices_normalized") or {}
+
+                def _norm(key: str, field: str = "change_pct") -> Optional[float]:
+                    entry = norm.get(key)
+                    if not isinstance(entry, dict) or entry.get("missing"):
+                        return None
+                    value = entry.get(field)
+                    try:
+                        return float(value) if value is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                sp500_pct = _norm("SP500")
+                if sp500_pct is None:
+                    sp500_pct = _index_field(indices, "SP500", "S&P500")
+                nasdaq_pct = _norm("NASDAQ")
+                if nasdaq_pct is None:
+                    nasdaq_pct = _index_field(indices, "NASDAQ")
+                sox_pct = _norm("SOX")
+                if sox_pct is None:
+                    sox_pct = _index_field(indices, "SOX", "반도체(SOX)")
+                # VIX 는 레벨 지표라 price 필드를 쓴다
+                vix = _norm("VIX", "price")
+                if vix is None:
+                    vix = _index_field(indices, "VIX", "VIX(공포지수)",
+                                       fields=("value", "price"))
+
+                # as_of(실제 체결 시각)와 fetched_at(조회 시각)을 구분 표기한다.
+                # 월요일 07:00 조회한 금요일 마감치를 "신선" 으로 읽으면 안 된다.
+                _ref = next(
+                    (e for k in ("SP500", "NASDAQ", "SOX")
+                     if isinstance((e := norm.get(k)), dict) and not e.get("missing")),
+                    None,
+                )
+                _fetched_at = (_ref or {}).get("fetched_at") or now.isoformat(timespec="seconds")
+                _market_time = (_ref or {}).get("as_of")
+                us_as_of = (
+                    f"마감 {_market_time}, 조회 {_fetched_at}" if _market_time
+                    else f"조회 {_fetched_at} (시장 시각 미제공)"
+                )
             except Exception as e:
                 logger.debug(f"[LLM레짐] US 데이터 조회 실패: {e}")
                 us_source = f"조회 실패({type(e).__name__})"
@@ -1303,19 +1389,26 @@ class KRScheduler:
             #    2026-09-14: 12:00 재분류가 아침 캐시만 보고 당일 -3.34% 급락을 놓쳤다.
             c5 = c20 = None
             kospi_today_pct = kosdaq_today_pct = None
-            kr_as_of = "08:20 (아침 스크리너 캐시)"
-            kr_source = "batch_analyzer._screener.get_kospi_change"
+            kr_as_of = "스크리너 캐시 없음"
+            kr_source = "batch_analyzer._screener._kospi_closes"
             _closes: List[float] = []
+            _last_bar_date = None
             try:
                 _screener = getattr(self.bot.batch_analyzer, "_screener", None) \
                     if getattr(self.bot, "batch_analyzer", None) else None
                 if _screener is not None:
-                    kospi = _screener.get_kospi_change()
-                    _c5 = kospi.get("c5")
-                    _c20 = kospi.get("c20")
-                    c5 = float(_c5) if _c5 is not None else None
-                    c20 = float(_c20) if _c20 is not None else None
                     _closes = [float(x) for x in (getattr(_screener, "_kospi_closes", None) or [])]
+                    _last_bar_date = getattr(_screener, "_kospi_last_bar_date", None)
+                    # 종가열이 없으면 get_kospi_change() 는 0.0 을 준다 — 쓰지 않는다
+                    c5 = _pct_change(_closes, 5)
+                    c20 = _pct_change(_closes, 20)
+                    _loaded_at = getattr(_screener, "_kospi_loaded_at", None)
+                    # 계산 가능한 종가열이 있을 때만 기준 시각을 붙인다 (빈 캐시·0 종가 제외)
+                    if c5 is not None or c20 is not None:
+                        kr_as_of = (
+                            f"{_loaded_at:%Y-%m-%d %H:%M} (스크리너 벤치마크 로드)"
+                            if _loaded_at is not None else "로드 시각 미상 (스크리너 캐시)"
+                        )
             except Exception as e:
                 logger.debug(f"[LLM레짐] KOSPI 캐시 조회 실패: {e}")
 
@@ -1339,19 +1432,21 @@ class KRScheduler:
                     _level = _fetched["0001"].get("price")
                     kr_as_of = now.isoformat(timespec="seconds")
                     kr_source = "kis_market_data.fetch_index_price(0001/1001)"
-                    # 당일 지수를 잠정 종가로 덧붙여 5일·20일 재계산
-                    # ponytail: 아침 캐시(_kospi_closes)에 당일 봉이 없다는 전제 —
-                    #           장중 실행에서만 호출하므로 성립. 장 마감 후 재사용 금지.
-                    if _level is not None and len(_closes) >= 6:
+                    # 당일 지수를 잠정 종가로 덧붙여 5일·20일 재계산.
+                    # 단, 벤치마크 마지막 봉이 이미 오늘이면(catch-up 스캔이 장중에
+                    # 로드한 경우) 덧붙이지 않는다 — 당일 이중 계상 방지 (리뷰 advisory d).
+                    _lb = (_last_bar_date.date() if isinstance(_last_bar_date, datetime)
+                           else _last_bar_date)
+                    _has_today_bar = _lb == now.date()
+                    if _level is not None and len(_closes) >= 6 and not _has_today_bar:
                         try:
                             _series = _closes + [float(_level)]
-                            c5 = round((_series[-1] - _series[-6]) / _series[-6] * 100, 2)
-                            if len(_series) >= 21:
-                                c20 = round((_series[-1] - _series[-21]) / _series[-21] * 100, 2)
+                            c5 = _pct_change(_series, 5)
+                            c20 = _pct_change(_series, 20)
                         except (TypeError, ValueError, ZeroDivisionError) as e:
                             logger.debug(f"[LLM레짐] 5일/20일 재계산 실패: {e}")
                 else:
-                    kr_as_of = "08:20 (장중 갱신 실패 — 아침 스크리너 캐시)"
+                    kr_as_of = f"{kr_as_of} — 장중 갱신 실패"
                     missing_fields.append("KOSPI당일")
                     logger.warning(
                         "[LLM레짐] 장중 최신 지수 조회 실패 → 08:20 캐시 사용 (프롬프트에 명시)"
@@ -1367,7 +1462,7 @@ class KRScheduler:
             # 4. 장중 급락 감지기 상태 (LLM 입력에 없어 12:00 판단이 급락을 못 봤다)
             crash_level, crash_pct, crash_as_of = self._intraday_crash_snapshot()
             if crash_level is None:
-                missing_fields.append("급락감지기")
+                missing_fields.append("급락감지기(당일 갱신 없음)")
 
             # 4. Gemini Flash 레짐 분류 요청
             # 2026-05-28 P2-D: KR 5일/20일 기술적 우선 명시 (5/28 사고 후 강화)
@@ -1425,11 +1520,15 @@ class KRScheduler:
                 regime_path = cache_dir / "llm_regime_today.json"
                 # 장중 급락 중에는 LLM 이 trending_bull 을 줘도 적용하지 않는다 (원본은 보존)
                 _raw_regime = result.get("regime")
-                _capped = self._cap_by_intraday_crash(_raw_regime, crash_level)
+                _capped = cap_regime_by_intraday_risk(_raw_regime, crash_level)
                 if _capped != _raw_regime:
                     result["regime"] = _capped
                     result["llm_regime_raw"] = _raw_regime
+                    result["regime_capped"] = True
                     result["regime_capped_reason"] = f"장중급락({crash_level})"
+                    # 확신도는 LLM 이 낸 레짐에 대한 값이다 — 적용 레짐에 그대로 물려
+                    # 쓰되(임계값 변경 없음) 원본임을 소비자가 알 수 있게 남긴다
+                    result["confidence_raw"] = result.get("confidence")
                     logger.warning(
                         f"[LLM레짐] 장중급락({crash_level}) — LLM={_raw_regime} → {_capped} 로 제한 "
                         f"(KOSPI 당일 {_fmt_pct(kospi_today_pct)})"
@@ -1443,6 +1542,8 @@ class KRScheduler:
                     "kr_source": kr_source,
                     "kospi_today_pct": kospi_today_pct,
                     "kosdaq_today_pct": kosdaq_today_pct,
+                    "kospi_c5": c5,
+                    "kospi_c20": c20,
                     "intraday_crash_level": crash_level,
                     "intraday_crash_as_of": crash_as_of,
                     "missing_fields": missing_fields,
@@ -1476,34 +1577,41 @@ class KRScheduler:
         "neutral": "trending_bull",  # 제한 없음
         "bull":    "trending_bull",  # 제한 없음
     }
-    # 장중 급락 감지기 캡 (2026-09-14) — 08:20 스크리너 레짐은 당일 급락을 모른다.
-    # crash/severe 에서 trending_bull 만 차단한다 (그 이상 조이지 않음 — 전략 변경 아님).
-    _CRASH_CAP = {
-        "crash":  "neutral",
-        "severe": "neutral",
-    }
+    # 장중 급락 캡은 `market_regime.cap_regime_by_intraday_risk` 단일 출처를 쓴다
+    # (crash/severe 에서 trending_bull → neutral — 기존 _KOSPI_CAP["bear"] 와 같은 방향)
 
     def _intraday_crash_snapshot(self) -> Tuple[Optional[str], Optional[float], Optional[str]]:
         """장중 급락 감지기 상태 스냅샷 → (level, KOSPI 등락률, as_of ISO8601).
 
-        감지기에 접근할 수 없으면 (None, None, None) — "normal" 로 포장하지 않는다.
+        as_of 는 **감지기가 실제로 갱신된 시각**이다. 감지기 상태는 5분 루프에서만
+        갱신되고 일일 리셋이 없어, 전일 15:34 의 crash 가 다음 날 08:10 까지 남는다
+        — 당일 갱신이 없으면 최신 사실처럼 전달하지 않고 결측으로 둔다
+        (2026-09-14 리뷰 blocking#2). 감지기에 접근할 수 없을 때도 마찬가지.
         """
         ba = getattr(self.bot, "batch_analyzer", None)
         level = getattr(ba, "_intraday_state", None) if ba is not None else None
-        if level is None:
+        updated_at = getattr(ba, "_intraday_updated_at", None) if ba is not None else None
+        if level is None or updated_at is None or updated_at.date() != _now_kst().date():
             return None, None, None
         pct = getattr(ba, "_intraday_kospi_pct", None)
-        return level, (float(pct) if pct is not None else None), _now_kst().isoformat(timespec="seconds")
+        return (level, (float(pct) if pct is not None else None),
+                updated_at.isoformat(timespec="seconds"))
 
-    def _cap_by_intraday_crash(self, llm_regime: Optional[str],
-                               crash_level: Optional[str]) -> Optional[str]:
-        """장중 급락 상태에서 과도한 낙관 레짐을 제한한다 (제한 없으면 원본 그대로)."""
-        cap = self._CRASH_CAP.get(crash_level or "")
-        if cap is None or llm_regime not in self._LLM_OPTIMISM_ORDER:
-            return llm_regime
-        if self._LLM_OPTIMISM_ORDER.index(llm_regime) > self._LLM_OPTIMISM_ORDER.index(cap):
-            return cap
-        return llm_regime
+    def _push_intraday_risk(self, level: str, change_pct: Optional[float] = None,
+                            as_of: Optional[datetime] = None) -> None:
+        """급락 감지기 상태를 MarketRegimeAdapter 에 전달 (유효 레짐 캡의 입력).
+
+        어댑터·메서드가 아직 없으면 조용히 건너뛴다 — 급락 감지 루프를 막지 않는다.
+        등락률이 없으면 0 이 아니라 None 으로 넘긴다.
+        """
+        adapter = getattr(getattr(self.bot, "engine", None), "_regime_adapter", None)
+        setter = getattr(adapter, "set_intraday_risk", None)
+        if not callable(setter):
+            return
+        try:
+            setter(level, change_pct, as_of)
+        except Exception as e:
+            logger.debug(f"[장중급락] 레짐 어댑터 전달 실패 (무시): {e}")
 
     def _resolve_regime_conflict(self, kospi_regime: str, llm_regime: str,
                                  crash_level: Optional[str] = None) -> str:
@@ -1512,18 +1620,14 @@ class KRScheduler:
         kospi_regime 은 08:20 배치 기준이므로 당일 급락을 모른다 — 장중 급락 감지기
         상태(crash_level)를 함께 받아 둘 중 더 보수적인 캡을 적용한다 (2026-09-14).
         """
-        caps = [self._KOSPI_CAP.get(kospi_regime, "neutral")]
-        _crash_cap = self._CRASH_CAP.get(crash_level or "")
-        if _crash_cap is not None:
-            caps.append(_crash_cap)
-        cap_idx = min(
-            self._LLM_OPTIMISM_ORDER.index(c) if c in self._LLM_OPTIMISM_ORDER else 3
-            for c in caps
-        )
-        cap = self._LLM_OPTIMISM_ORDER[cap_idx]
+        cap = self._KOSPI_CAP.get(kospi_regime, "neutral")
+        cap_idx = self._LLM_OPTIMISM_ORDER.index(cap) if cap in self._LLM_OPTIMISM_ORDER else 3
         llm_idx = self._LLM_OPTIMISM_ORDER.index(llm_regime) if llm_regime in self._LLM_OPTIMISM_ORDER else 3
-        if llm_idx > cap_idx:
-            adjusted = cap
+        # 두 캡을 차례로 적용한다 (둘 중 더 보수적인 쪽이 남는다 — 기존 min() 과 동일)
+        adjusted = cap_regime_by_intraday_risk(
+            cap if llm_idx > cap_idx else llm_regime, crash_level
+        )
+        if adjusted != llm_regime:
             logger.warning(
                 f"[레짐충돌가드] KOSPI={kospi_regime} 급락={crash_level or '결측'} vs "
                 f"LLM={llm_regime} → {adjusted}로 조정 (낙관도 캡 적용)"
@@ -1535,7 +1639,7 @@ class KRScheduler:
     _morning_brief_eval_date: Optional[date] = None
 
     @classmethod
-    async def _run_morning_brief_evaluation(cls, bot, day: date) -> None:
+    async def _run_morning_brief_evaluation(cls, bot, day: date) -> Optional[str]:
         """모닝브리프 사후 평가 훅 (2026-09-14 리뷰 요청5).
 
         07:01 모닝브리프의 갭 예측이 실제 장과 맞았는지 장 마감 후 1회 채점한다.
@@ -1543,23 +1647,32 @@ class KRScheduler:
         여기서는 **있으면 호출, 없으면 스킵, 예외는 warning 만** — 저녁 잡을 막지 않는다.
         """
         if cls._morning_brief_eval_date == day:
-            return
+            return None
         cls._morning_brief_eval_date = day
 
         reporter = getattr(bot, "report_generator", None)
         eval_fn = getattr(reporter, "evaluate_morning_brief", None) if reporter is not None else None
         if not callable(eval_fn):
             logger.debug("[모닝브리프평가] evaluate_morning_brief 미구현 → 스킵")
-            return
+            return None
 
         try:
             outcome = eval_fn(day)
             if inspect.isawaitable(outcome):
-                outcome = await outcome
+                # 평가가 LLM 을 부르면 20:30 진화 잡 전체가 밀린다 — 상한을 둔다
+                outcome = await asyncio.wait_for(
+                    outcome, timeout=_MORNING_BRIEF_EVAL_TIMEOUT
+                )
             logger.info(f"[모닝브리프평가] 완료: {outcome}")
-            _hb.annotate("kr_evolution_scheduler", f"모닝브리프 평가: {outcome}")
+            # 하트비트 note 는 반환값으로 넘겨 record_success(note=None) 에 덮이지 않게 한다
+            return f"모닝브리프 평가: {outcome}"
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[모닝브리프평가] {_MORNING_BRIEF_EVAL_TIMEOUT:.0f}초 초과 → 중단 (무시)"
+            )
         except Exception as e:
             logger.warning(f"[모닝브리프평가] 실행 실패 (무시): {e}")
+        return None
 
     async def _apply_regime_to_exit_manager(self) -> None:
         """llm_regime_today.json 에서 레짐을 읽어 ExitManager 파라미터를 실시간 갱신.
@@ -5112,7 +5225,7 @@ JSON:
 
                         # 모닝브리프 사후 평가 (2026-09-14 리뷰 요청5 — 낙관 브리프와
                         # 실제 장 결과의 대조를 누적 표본으로 남긴다)
-                        await self._run_morning_brief_evaluation(bot, today)
+                        _brief_eval_note = await self._run_morning_brief_evaluation(bot, today)
 
                         # counterfactual 추적 갱신 (2026-08-08 과제① — AI 게이트가
                         # 차단한 후보의 "만약 거래했다면" 수익률을 일일 추적)
@@ -5228,7 +5341,7 @@ JSON:
                                 # waiting/keep/applied/rollback/기타 상태 전부 정상 완료 — evolve() 자체가
                                 # 성공적으로 반환했다는 뜻 (2026-09-14 리뷰 F5: 예외를 삼킨 뒤 무조건 beat 하던
                                 # 경로 제거 — 아래 except 에서만 실패로 기록한다)
-                                _hb.record_success("kr_evolution_scheduler")
+                                _hb.record_success("kr_evolution_scheduler", note=_brief_eval_note)
                             except Exception as evo_err:
                                 logger.warning(f"[진화] 실행 실패 (무시): {evo_err}")
                                 _hb.record_failure("kr_evolution_scheduler", str(evo_err))
@@ -5236,7 +5349,7 @@ JSON:
                             # strategy_evolver 미배선(설정으로 진화 비활성 또는 컴포넌트 미초기화)이어도
                             # 이 블록의 나머지(품질검증·CF추적·일일복기)는 정상 완료했다 — evolve() 부재
                             # 자체를 하트비트 실패로 확대하지 않는다 (F5 범위: 예외 삼킴만 제거)
-                            _hb.record_success("kr_evolution_scheduler")
+                            _hb.record_success("kr_evolution_scheduler", note=_brief_eval_note)
 
                 await asyncio.sleep(60)
 
@@ -6697,7 +6810,9 @@ JSON:
                             kospi_data = await _kis_md.fetch_index_price("0001")
                             if kospi_data and "change_pct" in kospi_data:
                                 _pct = float(kospi_data["change_pct"])
-                                await bot.batch_analyzer.update_intraday_state(_pct)
+                                _level = await bot.batch_analyzer.update_intraday_state(_pct)
+                                # 유효 레짐(MarketRegimeAdapter)도 같은 급락 상태를 본다
+                                self._push_intraday_risk(_level, _pct, _now_kst())
                     except Exception as _e:
                         logger.debug(f"[장중급락] KOSPI 조회 실패 (무시): {_e}")
                     last_crash_check_ts = time.time()
