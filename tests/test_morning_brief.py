@@ -34,7 +34,11 @@ US_QUOTES = {
     "^SOX": {"change_pct": 2.4, "price": 5800.0},
     "^VIX": {"change_pct": -3.0, "price": 14.2},
 }
-SECTOR_SIGNALS = {"반도체": {"boost": 5, "us_avg_pct": 2.4, "top_movers": ["NVDA", "AMD"]}}
+# 키는 실제 US_KOREA_SECTOR_MAP/BRIEF_THEME_EVAL_TARGETS 키("AI/반도체")와 맞춘다
+# — "반도체"는 실제 생산 경로에 없는 키라 extract_brief_claims 매핑이 항상
+# supported=False 로만 통과해 스키마 테스트가 공허하게 통과했다 (2026-09-15
+# T10 리뷰 advisory, test_brief_json_schema_is_fixed 참조)
+SECTOR_SIGNALS = {"AI/반도체": {"boost": 5, "us_avg_pct": 2.4, "top_movers": ["NVDA", "AMD"]}}
 
 # 09-14 실제 브리프와 같은 형태 — 미국 자료만으로 한국장 개장을 단정한 문장 포함
 OPTIMISTIC_TEXT = (
@@ -43,7 +47,7 @@ OPTIMISTIC_TEXT = (
     "<b>■ 한국시장 시사점</b>\n"
     "오늘 KOSPI는 반도체 중심 상승 갭 출발 가능성이 높다. 시가 매수 대응을 권고한다.\n"
     "<b>■ 섹터 흐름</b>\n"
-    "반도체 강세, 방어주 약세.\n"
+    "AI/반도체 강세, 방어주 약세.\n"
 )
 
 
@@ -180,6 +184,12 @@ def test_brief_json_schema_is_fixed(gen, monkeypatch, tmp_path):
     # 미국 자료만이면 개장 방향 주장은 남지 않는다
     assert data["claims"]["open_direction"] is None
     assert data["claims"]["sectors"]
+    # 매핑 성공 분기(T10 F20)까지 스키마 테스트가 실제로 통과시킨다 — 매핑
+    # 없는 테마만 있으면 supported=False 항목만으로 공허하게 통과할 수 있다
+    sector = data["claims"]["sectors"][0]
+    assert sector["theme"] == "AI/반도체"
+    assert sector["eval_targets"] == ["전기전자"]
+    assert sector["supported"] is True
 
 
 def test_llm_failure_returns_none(gen, monkeypatch):
@@ -232,6 +242,13 @@ def test_sanitize_is_noop_with_kr_inputs():
 
 # ── 요청 5: 사후 평가 ─────────────────────────────────────────────────────────
 
+# claims["sectors"] 는 2026-09-15 T10 F20 부터 문자열 목록이 아니라
+# {"theme","eval_targets","agg","supported"} 딕셔너리 목록이다 — 생성 시점에
+# 평가 대상(KIS 업종지수명)을 고정해, 저녁 평가가 생산자 테마명("AI/반도체")과
+# KIS 실측 업종명("전기전자")의 불일치로 전부 "업종 수익률 미수집" 되던 문제를
+# 고친다(daily_report.BRIEF_THEME_EVAL_TARGETS). "반도체"는 실제 US_KOREA_SECTOR_MAP
+# 키가 아니라(실제 키는 "AI/반도체") 옛 테스트 픽스처의 단순화였으므로 실제
+# 테마명으로 교체한다.
 BRIEF_0914 = {
     "us_date": "2026-09-12",
     "kr_date": "2026-09-14",
@@ -240,7 +257,9 @@ BRIEF_0914 = {
     "claims": {
         "open_direction": "up",
         "close_direction": "up",
-        "sectors": ["반도체"],
+        "sectors": [
+            {"theme": "AI/반도체", "eval_targets": ["전기전자"], "agg": "mean", "supported": True},
+        ],
         "basis": ["미국 지수", "빅테크"],
     },
     "expert_consensus": {"score": 2, "bias": "neutral"},
@@ -250,7 +269,8 @@ ACTUAL_0914 = {
     "date": "2026-09-14",
     "kospi": {"open_change_pct": -3.14, "close_change_pct": -3.26},
     "kosdaq": {"open_change_pct": -2.80, "close_change_pct": -3.01},
-    "sectors": {"반도체": -4.20, "은행": -1.10},
+    # KIS 실측 업종명 (hts_kor_isnm) — 생산자 테마명과 다른 식별자임을 그대로 반영
+    "sectors": {"전기전자": -4.20, "은행": -1.10},
 }
 
 
@@ -268,7 +288,7 @@ def test_evaluate_0914_case_is_miss_on_open_and_close():
     assert result["expert_direction"]["hit"] is False
     # 언급 업종 상대성과: 반도체 -4.20% vs 시장 -3.26% → 언더퍼폼
     sector = result["sectors"][0]
-    assert sector["name"] == "반도체"
+    assert sector["name"] == "AI/반도체"
     assert sector["relative_pct"] == pytest.approx(-0.94)
     assert sector["outperformed"] is False
 
@@ -279,7 +299,7 @@ def test_evaluate_hit_case():
     actual = {
         "date": "2026-09-15",
         "kospi": {"open_change_pct": 1.2, "close_change_pct": 1.8},
-        "sectors": {"반도체": 3.5},
+        "sectors": {"전기전자": 3.5},
     }
     result = mbe.evaluate(brief, actual)
     assert result["open_direction"]["hit"] is True
@@ -323,7 +343,7 @@ def test_append_ledger_and_summarize(tmp_path):
     hit_brief["kr_date"] = "2026-09-15"
     hit_actual = {"date": "2026-09-15",
                   "kospi": {"open_change_pct": 1.2, "close_change_pct": 1.8},
-                  "sectors": {"반도체": 3.5}}
+                  "sectors": {"전기전자": 3.5}}
     mbe.append_ledger(path, mbe.evaluate(hit_brief, hit_actual))
 
     assert len(path.read_text(encoding="utf-8").strip().splitlines()) == 2
@@ -379,9 +399,18 @@ def _write_brief(path: Path, brief: dict):
 
 
 def test_evaluate_morning_brief_writes_ledger(tmp_path):
+    """실측 수집(_collect_brief_actuals)은 report_date != 오늘이면 미수집으로
+    바뀌었다(F22) — 이 테스트는 "오늘" 실측 수집 경로를 검증하는 것이 목적이므로
+    브리프 kr_date 와 평가일을 실행 시점의 오늘로 맞춘다(과거 고정일이면 아래
+    test_evaluate_morning_brief_skips_actual_collection_for_past_date 가 검증하는
+    미수집 경로로 빠져 버린다)."""
+    today = date.today()
+    brief = json.loads(json.dumps(BRIEF_0914))
+    brief["kr_date"] = today.isoformat()
+
     brief_path = tmp_path / "llm_morning_brief.json"
     ledger_path = tmp_path / "morning_brief_eval.jsonl"
-    _write_brief(brief_path, BRIEF_0914)
+    _write_brief(brief_path, brief)
 
     # KOSPI 전일종가 3200 → 시가 3099.5(-3.14%), 종가 3095.7(-3.26%)
     kmd = _FakeKMD(
@@ -391,18 +420,18 @@ def test_evaluate_morning_brief_writes_ledger(tmp_path):
             "1001": {"label": "KOSDAQ", "price": 780.0, "open": 782.0,
                      "change": -24.2, "change_pct": -3.01},
         },
-        sectors=[{"name": "반도체", "change_pct": -4.20}, {"name": "은행", "change_pct": -1.10}],
+        sectors=[{"name": "전기전자", "change_pct": -4.20}, {"name": "은행", "change_pct": -1.10}],
     )
     g = dr.DailyReportGenerator(kis_market_data=kmd)
     record = asyncio.run(g.evaluate_morning_brief(
-        date(2026, 9, 14), brief_path=brief_path, ledger_path=ledger_path))
+        today, brief_path=brief_path, ledger_path=ledger_path))
 
     assert record["evaluated"] is True
     assert record["open_direction"]["hit"] is False
     assert record["close_direction"]["hit"] is False
     assert record["open_direction"]["actual_pct"] == pytest.approx(-3.14, abs=0.02)
     assert ledger_path.exists()
-    assert json.loads(ledger_path.read_text(encoding="utf-8").strip())["date"] == "2026-09-14"
+    assert json.loads(ledger_path.read_text(encoding="utf-8").strip())["date"] == today.isoformat()
 
 
 def test_evaluate_morning_brief_records_failure_when_index_missing(tmp_path):

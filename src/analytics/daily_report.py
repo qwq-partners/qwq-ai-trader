@@ -7,6 +7,7 @@ AI Trading Bot v2 - 일일 투자 레포트 시스템
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -23,11 +24,34 @@ _REC_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 # 모닝브리프 캐시·평가 원장 경로 (2026-09-14 T9 요청 3·5)
 MORNING_BRIEF_PATH = _REC_CACHE_DIR / "llm_morning_brief.json"
 MORNING_BRIEF_LEDGER_PATH = _REC_CACHE_DIR / "morning_brief_eval.jsonl"
+# 날짜·버전별 원문/발송문 아카이브 (2026-09-15 T10 F22) — 최신 캐시(위 두 경로)는
+# 조회 편의용이고, 이 아카이브가 감사 가능한 원본이다. <kr_date>.json 1개 파일에
+# generated[](07:00 생성본, 재생성해도 누적) / dispatch[](07:30 발송 attempt, 누적).
+MORNING_BRIEF_ARCHIVE_DIR = _REC_CACHE_DIR / "morning_brief"
 
 # 브리프 주장 범위 (T9 요청 3)
 SCOPE_US_ONLY = "us_close_only"
 SCOPE_WITH_KR = "with_kr_inputs"
 NO_KR_INPUT_NOTE = "국내 자료 없음 — 개장 방향 판단 불가."
+
+# 브리프 테마 → 평가 대상 KIS 업종지수명 (2026-09-15 T10 F20)
+# extract_brief_claims 의 테마명(US_KOREA_SECTOR_MAP 키)과 _collect_brief_actuals 의
+# 업종명(KIS hts_kor_isnm)이 서로 달라 exact match 가 항상 실패하던 문제 — 근거가
+# 분명한 항목만 올린다(kr_theme_detector.THEME_SECTOR_MAP 은 스코어 보정용 광범위
+# 매핑이라 그대로 재사용하지 않는다). 매핑에 없는 테마는 "평가 대상 미합의"로 미평가.
+# 집계 규칙은 mean 고정(다대다 매핑 대비, 현재는 전부 1:1).
+BRIEF_THEME_EVAL_TARGETS: Dict[str, Dict] = {
+    "AI/반도체": {
+        "sectors": ["전기전자"],
+        "agg": "mean",
+        "basis": "KRX 업종분류상 삼성전자·SK하이닉스 등 반도체 대형주가 전기전자 업종",
+    },
+    "바이오": {
+        "sectors": ["의약품"],
+        "agg": "mean",
+        "basis": "KRX 업종분류상 바이오/제약 종목이 의약품 업종",
+    },
+}
 
 # 국내 개장 방향·대응 전략 단정 표현 — 국내 자료 없이 쓰이면 제거한다
 _OPEN_CLAIM_PATTERNS = (
@@ -216,10 +240,31 @@ def build_expert_conflict_note(
     return f"⚠️ 전문가 종합판단({score_txt})과 상충 — 브리프 톤은 {tone_kr}"
 
 
+def valid_kr_inputs(kr_inputs: Optional[List[Dict]]) -> List[Dict]:
+    """as_of 가 있는 국내 자료만 유효로 인정한다 (신선도 미상 값은 근거로 쓰지 않는다)"""
+    return [item for item in (kr_inputs or []) if item and item.get("as_of")]
+
+
+def brief_scope(kr_inputs: Optional[List[Dict]]) -> str:
+    """국내 자료 유무로 장전 발송 범위를 판정하는 단일 지점 (2026-09-15 T10 F21).
+
+    build_morning_brief(LLM 프롬프트 제약) 와 generate_us_market_report 의 고정
+    문구(market_msg)가 이 함수 하나를 공유해야 판정이 어긋나지 않는다.
+    """
+    return SCOPE_WITH_KR if valid_kr_inputs(kr_inputs) else SCOPE_US_ONLY
+
+
 def extract_brief_claims(
     text: str, sector_signals: Optional[Dict], scope: str, basis: List[str],
 ) -> Dict:
-    """브리프 주장을 구조화한다 — 근거 없는 축은 None (기본값으로 채우지 않는다)"""
+    """브리프 주장을 구조화한다 — 근거 없는 축은 None (기본값으로 채우지 않는다)
+
+    claims["sectors"] 는 2026-09-15(T10 F20)부터 테마명 문자열이 아니라
+    {"theme", "eval_targets", "agg", "supported", "reason"} 딕셔너리 목록이다.
+    평가 대상(KIS 업종지수명)을 생성 시점에 고정해, 저녁 평가가 결과를 본 뒤
+    대상을 고르지 못하게 한다. BRIEF_THEME_EVAL_TARGETS 에 없는 테마는
+    supported=False + "평가 대상 미합의"로 남기고 미평가 처리한다.
+    """
     open_direction = None
     close_direction = None
     if scope == SCOPE_WITH_KR:
@@ -240,7 +285,21 @@ def extract_brief_claims(
         elif any(p in kr_text for p in ("하락 마감", "약세 마감")):
             close_direction = "down"
 
-    sectors = [name for name in (sector_signals or {}) if name and name in text]
+    sectors: List[Dict] = []
+    for name in (sector_signals or {}):
+        if not name or name not in text:
+            continue
+        target = BRIEF_THEME_EVAL_TARGETS.get(name)
+        if target:
+            sectors.append({
+                "theme": name, "eval_targets": list(target["sectors"]),
+                "agg": target["agg"], "supported": True,
+            })
+        else:
+            sectors.append({
+                "theme": name, "eval_targets": [], "agg": None,
+                "supported": False, "reason": "평가 대상 미합의",
+            })
     return {
         "open_direction": open_direction,
         "close_direction": close_direction,
@@ -249,12 +308,115 @@ def extract_brief_claims(
     }
 
 
-def save_morning_brief(record: Dict, path=None) -> Path:
-    """모닝브리프 레코드를 고정 스키마로 저장한다 (07:30 브리핑이 text 키를 읽는다)"""
+def _brief_archive_path(kr_date: str, archive_dir=None) -> Path:
+    base = Path(archive_dir) if archive_dir is not None else MORNING_BRIEF_ARCHIVE_DIR
+    return base / f"{kr_date}.json"
+
+
+def _load_brief_archive(kr_date: str, archive_dir=None) -> Dict:
+    path = _brief_archive_path(kr_date, archive_dir)
+    if not path.exists():
+        return {"kr_date": kr_date, "generated": [], "dispatch": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"[모닝브리프] 아카이브 파싱 실패 ({path}) — 빈 아카이브로 취급: {e}")
+        return {"kr_date": kr_date, "generated": [], "dispatch": []}
+    data.setdefault("generated", [])
+    data.setdefault("dispatch", [])
+    return data
+
+
+def _save_brief_archive(kr_date: str, data: Dict, archive_dir=None) -> Path:
+    path = _brief_archive_path(kr_date, archive_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def save_morning_brief(record: Dict, path=None, archive_dir=None) -> Path:
+    """모닝브리프 레코드를 고정 스키마로 저장한다 (07:30 브리핑이 text 키를 읽는다)
+
+    최신 캐시(`path`, 기본 llm_morning_brief.json)는 조회 편의용 단일 파일이라
+    재생성 시 덮어써진다. 감사 원본은 날짜별 아카이브의 generated[] 에 매번
+    추가한다 — 같은 날 여러 번 생성해도 이전 버전이 사라지지 않는다
+    (2026-09-15 T10 F22).
+    """
     path = Path(path) if path is not None else MORNING_BRIEF_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 최신 캐시는 조회 편의용 — raw_text/body_full(절단 없는 원문·전체 본문)은
+    # 아카이브 전용이라 캐시엔 담지 않는다(2026-09-15 T10 F22 blocking).
+    cache_record = {k: v for k, v in record.items() if k not in ("raw_text", "body_full")}
+    path.write_text(json.dumps(cache_record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    kr_date = record.get("kr_date")
+    if kr_date:
+        # archive_dir 미지정 시 캐시 파일과 같은 디렉터리 밑 (테스트가 tmp_path 로
+        # path 를 넘기면 아카이브도 그 밑으로 격리된다 — 운영 캐시 오염 방지)
+        _archive_dir = Path(archive_dir) if archive_dir is not None else (path.parent / "morning_brief")
+        try:
+            archive = _load_brief_archive(kr_date, _archive_dir)
+            text = record.get("text") or ""
+            entry = dict(record)
+            entry["version"] = len(archive["generated"]) + 1
+            entry["text_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            entry["archived_at"] = datetime.now().isoformat()
+            archive["generated"].append(entry)
+            _save_brief_archive(kr_date, archive, _archive_dir)
+        except Exception as e:
+            logger.warning(f"[모닝브리프] 아카이브 저장 실패 (최신 캐시는 저장됨): {e}")
     return path
+
+
+def record_morning_brief_dispatch(
+    *,
+    kr_date: str,
+    sent_text: str,
+    expert_consensus: Optional[Dict],
+    status: str,
+    conflict_note: Optional[str] = None,
+    archive_dir=None,
+) -> Path:
+    """07:30 발송 결과를 날짜별 아카이브에 기록한다 (2026-09-15 T10 F19 C→A 배선 계약).
+
+    kr_scheduler._send_expert_briefing_telegram 의 `ok = await notifier.send_report(msg)`
+    직후 호출된다. 같은 날 여러 attempt(재시도 포함)를 dispatch[] 에 덧붙이며,
+    generated[] 의 생성 원본은 절대 덮어쓰지 않는다. evaluate_morning_brief 가
+    이 스냅샷을 발송 판단의 근거로 우선 사용한다.
+
+    Args:
+        status: "sent" 또는 "failed"만 허용.
+        conflict_note: build_expert_conflict_note() 결과(있으면).
+    """
+    if status not in ("sent", "failed"):
+        raise ValueError(f"[모닝브리프] 알 수 없는 발송 status: {status!r} (sent/failed만 허용)")
+
+    archive = _load_brief_archive(kr_date, archive_dir)
+    generated = archive.get("generated") or []
+    brief_ref = None
+    if generated:
+        last = generated[-1]
+        brief_ref = {
+            "version": last.get("version"),
+            "text_sha256": last.get("text_sha256"),
+            "generated_at": last.get("generated_at"),
+            "model": last.get("model"),
+            # archive_dir 를 운영 기본값 밖으로 주입해도 원장 레코드만으로 원본
+            # 아카이브 파일을 특정할 수 있게 경로를 남긴다 (advisory F22)
+            "archive_path": str(_brief_archive_path(kr_date, archive_dir)),
+        }
+
+    dispatch_entry = {
+        "attempt": len(archive.get("dispatch") or []) + 1,
+        "sent_at": datetime.now().isoformat(),
+        "sent_text": sent_text,
+        "expert_consensus": expert_consensus,
+        "status": status,
+        "conflict_note": conflict_note,
+        "brief_ref": brief_ref,
+    }
+    archive.setdefault("dispatch", []).append(dispatch_entry)
+    return _save_brief_archive(kr_date, archive, archive_dir)
 
 
 class DailyReportGenerator:
@@ -1009,12 +1171,20 @@ class DailyReportGenerator:
             logger.warning(f"[레포트] US 시장 요약 조회 실패: {e}")
             return []
 
-    async def generate_us_market_report(self, send_telegram: bool = True) -> str:
+    async def generate_us_market_report(
+        self, send_telegram: bool = True, kr_inputs: Optional[List[Dict]] = None,
+    ) -> str:
         """
         미국증시 마감 레포트 생성 (매일 07:00)
 
         Yahoo Finance 데이터 기반으로 지수, 섹터 ETF, 개별 종목 등락을
         한눈에 보기 좋게 정리하여 텔레그램 발송.
+
+        Args:
+            kr_inputs: 국내 장전 자료(as_of 포함) — build_morning_brief 와 동일한
+                형식. 없으면(현재 기본 경로) 고정 문구(market_msg)도 한국 개장
+                방향을 단정하지 않는다 (2026-09-15 T10 F21 — scope 판정을
+                brief_scope() 한 곳으로 통일, LLM 브리프와 반드시 같은 값을 쓴다).
         """
         from ..data.providers.us_market_data import (
             get_us_market_data, US_KOREA_SECTOR_MAP, INDEX_SYMBOLS, INDEX_NAMES,
@@ -1068,6 +1238,16 @@ class DailyReportGenerator:
         else:
             mood = "➡️ 보합 마감"
 
+        # brief_scope() 와 동일 판정 — market_msg 뿐 아니라 섹터 매핑 헤더도
+        # 이 값을 써야 대상 시장·시간범위 표기가 market_msg 와 어긋나지 않는다
+        # (2026-09-15 T10 F21 advisory — 헤더는 방향 단정은 아니었지만 대상
+        # 시장·시간범위가 없어 F21 이 요구한 문장 단위 명시 기준에서 비어 있었다)
+        scope = brief_scope(kr_inputs)
+        sector_header = (
+            "<b>■ 미국 섹터 → 국내 테마 매핑 (전일 미국 세션 기준, 국내 개장 반영 아님)</b>"
+            if scope == SCOPE_US_ONLY else "<b>■ 한국 시장 영향</b>"
+        )
+
         lines = [
             f"🇺🇸 <b>미국증시 마감 리포트</b>",
             f"<i>{us_date_str} NY 마감 (KST {kst_date_str} 07:00 수신)</i>",
@@ -1106,7 +1286,7 @@ class DailyReportGenerator:
         # ── 섹터 ETF + 개별종목 (테마 매핑) ──
         sector_signals = await umd.get_sector_signals()
         if sector_signals:
-            lines.append(f"<b>■ 한국 시장 영향</b>")
+            lines.append(sector_header)
             for theme, sig in sorted(
                 sector_signals.items(),
                 key=lambda x: abs(x[1]["boost"]),
@@ -1125,16 +1305,37 @@ class DailyReportGenerator:
 
         # ── 공포/탐욕 지표 대용: VIX ──
         # VIX는 US_SYMBOLS에 없으므로 별도 조회 불필요, 지수 평균으로 대체
-        if avg_pct >= 1.5:
-            market_msg = "💡 강한 상승 — 한국 관련 테마주 갭업 가능성"
-        elif avg_pct >= 0.5:
-            market_msg = "💡 소폭 상승 — 반도체·IT 섹터 긍정적"
-        elif avg_pct <= -1.5:
-            market_msg = "⚠️ 강한 하락 — 한국 시장 하방 압력 주의"
-        elif avg_pct <= -0.5:
-            market_msg = "⚠️ 소폭 하락 — 보수적 접근 권장"
+        #
+        # 2026-09-15 T10 F21: 이 고정 문구가 미국 지수 평균만으로 "한국 관련
+        # 테마주 갭업 가능성" 같은 국내 개장 방향을 단정해 왔다(정상/차트동반/
+        # 폴백 세 경로 모두 이 market_msg 를 그대로 발송). 국내 자료(kr_inputs)
+        # 없이는 문장 대상을 "미국 세션"으로 한정하고 한국 판단은 보류한다.
+        # brief_scope() 는 build_morning_brief 의 LLM 스코프 판정과 동일한
+        # 함수라 두 판정이 어긋나지 않는다 (scope 는 위에서 sector_header 와
+        # 함께 이미 계산했다).
+        if scope == SCOPE_WITH_KR:
+            if avg_pct >= 1.5:
+                market_msg = "💡 강한 상승 — 한국 관련 테마주 갭업 가능성"
+            elif avg_pct >= 0.5:
+                market_msg = "💡 소폭 상승 — 반도체·IT 섹터 긍정적"
+            elif avg_pct <= -1.5:
+                market_msg = "⚠️ 강한 하락 — 한국 시장 하방 압력 주의"
+            elif avg_pct <= -0.5:
+                market_msg = "⚠️ 소폭 하락 — 보수적 접근 권장"
+            else:
+                market_msg = "💡 변동 미미 — 국내 자체 재료에 주목"
         else:
-            market_msg = "💡 변동 미미 — 국내 자체 재료에 주목"
+            if avg_pct >= 1.5:
+                mkt_fact = f"💡 미국 지수 평균 {avg_pct:+.2f}% 강한 상승 마감 (전일 미국 세션)"
+            elif avg_pct >= 0.5:
+                mkt_fact = f"💡 미국 지수 평균 {avg_pct:+.2f}% 소폭 상승 마감 (전일 미국 세션)"
+            elif avg_pct <= -1.5:
+                mkt_fact = f"⚠️ 미국 지수 평균 {avg_pct:+.2f}% 강한 하락 마감 (전일 미국 세션)"
+            elif avg_pct <= -0.5:
+                mkt_fact = f"⚠️ 미국 지수 평균 {avg_pct:+.2f}% 소폭 하락 마감 (전일 미국 세션)"
+            else:
+                mkt_fact = f"➡️ 미국 지수 평균 {avg_pct:+.2f}% 보합권 마감 (전일 미국 세션)"
+            market_msg = f"{mkt_fact} — 국내 자료 없음, 한국 개장 방향 판단 보류"
 
         lines.append(f"<b>■ 오늘의 포인트</b>")
         lines.append(f"  {market_msg}")
@@ -1194,7 +1395,7 @@ class DailyReportGenerator:
                         detail_lines.append("  " + "  ".join(bt_lines[i:i + 4]))
                     detail_lines.append("")
                 if sector_signals:
-                    detail_lines.append("<b>■ 한국 시장 영향</b>")
+                    detail_lines.append(sector_header)
                     for theme, sig in sorted(
                         sector_signals.items(),
                         key=lambda x: abs(x[1]["boost"]),
@@ -1235,6 +1436,7 @@ class DailyReportGenerator:
                     avg_pct=avg_pct,
                     us_date_str=us_date_str,
                     mood=mood,
+                    kr_inputs=kr_inputs,
                 )
                 if brief_record:
                     cache_path = save_morning_brief(brief_record)
@@ -1340,7 +1542,8 @@ class DailyReportGenerator:
                 valid_kr.append(entry)
             inputs.append(entry)
 
-        scope = SCOPE_WITH_KR if valid_kr else SCOPE_US_ONLY
+        # brief_scope() 와 같은 as_of 판정을 쓴다 (F21 — 고정 문구와 단일 지점 공유)
+        scope = brief_scope(kr_inputs)
 
         if scope == SCOPE_WITH_KR:
             kr_block = "\n".join(
@@ -1452,13 +1655,19 @@ class DailyReportGenerator:
         )
 
         header = f"{title}\n<i>{us_date_str} 미국 마감 기반</i>\n\n"
-        # Telegram 메시지 길이 제한 (~4096자) 안전 마진
+        # Telegram 메시지 길이 제한 (~4096자) 안전 마진 — 발송/캐시용 "text" 는
+        # 잘라내되(save_morning_brief 가 최신 캐시엔 이 절단본만 쓴다), 원문·
+        # 정제 전체 본문은 raw_text/body_full 에 그대로 담아 아카이브에서
+        # 사후 검증할 수 있게 한다 (2026-09-15 T10 F22 blocking — 절단 이상으로
+        # sanitize 가 무엇을 지웠는지도 원문 대조 없이는 알 수 없었다).
         return {
             "us_date": us_date_str,
             # 평가 대상 KR 거래일 — 저녁 평가가 전날 브리프를 오늘 실측과 대조하지 않도록
             "kr_date": date.today().isoformat(),
             "title": title,
             "text": header + body[:3800],
+            "raw_text": raw_text,
+            "body_full": body,
             "generated_at": datetime.now().isoformat(),
             "model": getattr(result, "model", None) or "unknown",
             "scope": scope,
@@ -1470,62 +1679,145 @@ class DailyReportGenerator:
             "expert_conflict": conflict,
         }
 
+    def _resolve_brief_for_eval(self, kr_date: str, brief_path: Path, archive_dir=None):
+        """평가에 쓸 브리프를 고른다 — 발송 스냅샷 우선 (2026-09-15 T10 F19/F22).
+
+        우선순위: 1) 07:30 발송 성공(status=sent) 스냅샷의 expert_consensus로
+        평가 2) 발송이 실패만 했으면 생성본은 쓰되 전문가 축은 평가하지 않음
+        3) 발송 기록이 아예 없으면 생성본만 쓰고 전문가 축은 "발송 기록 없음"
+        4) 아카이브 자체가 없으면(구버전 호환) 단일 캐시 파일로 폴백.
+
+        Returns:
+            (brief, dispatched, brief_ref, dispatch_reason)
+        """
+        archive = _load_brief_archive(kr_date, archive_dir)
+        generated = archive.get("generated") or []
+        dispatches = archive.get("dispatch") or []
+
+        def _find_generated(ref):
+            if not ref:
+                return None
+            for g in generated:
+                if g.get("version") == ref.get("version"):
+                    return g
+            return None
+
+        sent = next((d for d in reversed(dispatches) if d.get("status") == "sent"), None)
+        if sent is not None:
+            base = _find_generated(sent.get("brief_ref")) or (generated[-1] if generated else {})
+            brief = dict(base)
+            brief["kr_date"] = kr_date
+            brief["expert_consensus"] = sent.get("expert_consensus")
+            return brief, True, sent.get("brief_ref"), None
+
+        failed = next((d for d in reversed(dispatches) if d.get("status") == "failed"), None)
+        dispatch_reason = "07:30 발송 실패 — 전문가 판단 미평가" if failed else "07:30 발송 기록 없음"
+        if generated:
+            brief = dict(generated[-1])
+            brief["kr_date"] = kr_date
+            brief["expert_consensus"] = None
+            return brief, False, None, dispatch_reason
+
+        if failed is not None:
+            # 발송 시도는 있었지만 생성본이 없다 (LLM 실패 등) — 평가할 본문 자체가 없다
+            return None, False, None, dispatch_reason
+
+        # 아카이브 없음 (구버전 단일 캐시 호환)
+        if brief_path.exists():
+            try:
+                brief = json.loads(brief_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning(f"[브리프평가] 브리프 캐시 파싱 실패 → 스킵: {e}")
+                return None, False, None, None
+            return brief, False, None, dispatch_reason
+
+        return None, False, None, None
+
     async def evaluate_morning_brief(
         self,
         report_date: Optional[date] = None,
         *,
         brief_path=None,
         ledger_path=None,
+        archive_dir=None,
     ) -> Optional[Dict]:
-        """장전 브리프의 장후 평가 (2026-09-14 T9 요청 5).
+        """장전 브리프의 장후 평가 (2026-09-14 T9 요청 5, 2026-09-15 T10 F19/F22 갱신).
 
-        당일 브리프 캐시 + KOSPI/KOSDAQ 시가·종가 + 업종 수익률을 모아
-        morning_brief_eval.evaluate() 로 판정하고 JSONL 원장에 누적한다.
+        날짜별 아카이브(발송 스냅샷 우선)에서 브리프를 읽어 실제 발송 판단을
+        평가하고, KOSPI/KOSDAQ 시가·종가 + 업종 수익률을 모아
+        morning_brief_eval.evaluate() 로 판정한 뒤 JSONL 원장에 누적한다.
+        같은 날짜 레코드가 이미 원장에 있으면 재기록하지 않는다 (평가 분모
+        중복 증가 방지 — 재실행/재시도 대비).
 
         Args:
-            report_date: 평가 대상일 (기본 오늘)
-            brief_path: 브리프 캐시 경로 (기본 ~/.cache/ai_trader/llm_morning_brief.json)
-            ledger_path: 평가 원장 경로 (기본 ~/.cache/ai_trader/morning_brief_eval.jsonl)
+            report_date: 평가 대상일 (기본 오늘). 오늘이 아니면 실측을 새로
+                수집하지 않는다 (현재가 API라 과거 시점 재현 불가).
+            brief_path: 구버전 단일 캐시 폴백 경로 (기본 llm_morning_brief.json)
+            ledger_path: 평가 원장 경로 (기본 morning_brief_eval.jsonl)
+            archive_dir: 날짜별 아카이브 디렉터리 (기본 brief_path 기준 또는
+                MORNING_BRIEF_ARCHIVE_DIR — 하위 호환을 위해 brief_path 를 명시
+                전달하면 그 옆의 morning_brief/ 를 먼저 본다)
 
         Returns:
-            원장에 기록한 평가 레코드. 브리프가 없으면 None (원장도 쓰지 않는다).
+            원장에 기록한(또는 이미 있던) 평가 레코드. 브리프가 없으면 None.
         """
         from . import morning_brief_eval
 
         report_date = report_date or date.today()
+        kr_date = report_date.isoformat()
         brief_path = Path(brief_path) if brief_path is not None else MORNING_BRIEF_PATH
         ledger_path = (
             Path(ledger_path) if ledger_path is not None else MORNING_BRIEF_LEDGER_PATH
         )
+        # archive_dir 미지정 시 brief_path 와 같은 디렉터리 밑 — save_morning_brief 의
+        # 기본 규칙과 동일해서 운영 기본 경로끼리는 자동으로 일치하고, 테스트가
+        # tmp_path 로 brief_path 를 넘기면 아카이브 조회도 같이 격리된다.
+        archive_dir = Path(archive_dir) if archive_dir is not None else (brief_path.parent / "morning_brief")
 
-        if not brief_path.exists():
-            logger.info(f"[브리프평가] 브리프 캐시 없음 → 스킵 ({brief_path})")
-            return None
-        try:
-            brief = json.loads(brief_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.warning(f"[브리프평가] 브리프 캐시 파싱 실패 → 스킵: {e}")
+        existing = morning_brief_eval.find_ledger_record(ledger_path, kr_date)
+        if existing is not None:
+            logger.info(f"[브리프평가] {kr_date} 이미 평가됨 → 재기록 스킵")
+            return existing
+
+        brief, dispatched, brief_ref, dispatch_reason = self._resolve_brief_for_eval(
+            kr_date, brief_path, archive_dir,
+        )
+        if brief is None:
+            logger.info(f"[브리프평가] 브리프 없음 → 스킵 ({kr_date})")
             return None
 
-        actual = {"date": report_date.isoformat()}
+        actual = {"date": kr_date}
         try:
-            actual.update(await self._collect_brief_actuals())
+            actual.update(await self._collect_brief_actuals(report_date))
         except Exception as e:
             logger.warning(f"[브리프평가] 실측 수집 실패: {e}")
 
-        record = morning_brief_eval.evaluate(brief, actual)
+        record = morning_brief_eval.evaluate(
+            brief, actual,
+            dispatched=dispatched, brief_ref=brief_ref, dispatch_reason=dispatch_reason,
+        )
         morning_brief_eval.append_ledger(ledger_path, record)
         logger.info(
             f"[브리프평가] {record['date']} evaluated={record['evaluated']} "
-            f"개장={record['open_direction']['hit']} 종가={record['close_direction']['hit']}"
+            f"개장={record['open_direction']['hit']} 종가={record['close_direction']['hit']} "
+            f"dispatched={dispatched}"
         )
         return record
 
-    async def _collect_brief_actuals(self) -> Dict:
+    async def _collect_brief_actuals(self, report_date: Optional[date] = None) -> Dict:
         """평가용 실측 — KOSPI/KOSDAQ 시가·종가 방향 + 업종 수익률
 
         결측은 키를 만들지 않는다 (0 으로 채우면 미평가가 적중으로 둔갑한다).
+        현재가 조회 API 라 report_date 가 오늘이 아니면 실측을 수집하지 않는다
+        (2026-09-15 T10 F22 — 과거 날짜 재평가 시 오늘 실측을 그 날짜로
+        재라벨링하면 안 된다).
         """
+        if report_date is not None and report_date != date.today():
+            logger.info(
+                f"[브리프평가] {report_date} 과거 날짜 재평가 — 현재가 API라 실측 미수집"
+            )
+            return {"note": "과거 날짜 재평가 — 현재가 API라 당시 실측을 재수집할 수 없음"}
+
         kmd = self._kis_market_data
         if not kmd:
             from ..data.providers.kis_market_data import get_kis_market_data
