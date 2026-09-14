@@ -130,10 +130,17 @@ _SETUP_BY_STRATEGY = {
 
 
 def setup_for_strategy(strategy: str, entry_mode: str = "close") -> str:
-    """전략·진입모드 → setup. 모르는 전략은 ""(빈값) — 지어내지 않는다."""
-    if entry_mode == "breakout":
-        return "vcp_breakout"
-    return _SETUP_BY_STRATEGY.get(str(strategy or ""), "")
+    """전략·진입모드 → setup. 모르는 전략은 ""(빈값) — 지어내지 않는다.
+
+    전략 매핑이 **우선**이다. breakout 모드가 전략 고유 setup 을 덮어쓰면, 예컨대
+    gap_and_go 에 돌파 모드가 생겼을 때 setup 이 gap_vwap → vcp_breakout 으로 바뀌며
+    VWAP 필수 조건이 조용히 사라진다 (1차 리뷰 advisory). 현재 breakout 은 VCP 라인
+    전용이라 운영 결과는 같다.
+    """
+    mapped = _SETUP_BY_STRATEGY.get(str(strategy or ""), "")
+    if mapped:
+        return mapped
+    return "vcp_breakout" if entry_mode == "breakout" else ""
 
 
 # setup 이 진입 판정에 반드시 필요로 하는 입력 (검증기가 호가·계획에서 찾는다)
@@ -552,6 +559,14 @@ class BatchAnalyzer:
 
         indicators = meta.get("indicators") or {}
         _ind_as_of = indicators.get("as_of") if isinstance(indicators, dict) else None
+        if _ind_as_of is None:
+            # 지표 dict 에는 시각이 없다(TechnicalIndicators.calculate_all 이 'as_of' 를
+            # 만들지 않는다) — 실제 계산 시각은 캐시 타임스탬프가 정본이다.
+            _ts_map = getattr(getattr(getattr(self, "_screener", None), "_indicators", None),
+                              "_cache_ts", None)
+            _ts = _ts_map.get(sig.symbol) if isinstance(_ts_map, dict) else None
+            # 없으면 None 유지 — now·수집 시각으로 채우면 신선도 세탁이 된다
+            _ind_as_of = _ts.isoformat() if isinstance(_ts, datetime) else None
 
         return PendingSignal(
             symbol=sig.symbol,
@@ -595,6 +610,9 @@ class BatchAnalyzer:
             assumptions={
                 # 매수 수수료 bps (FeeCalculator 단일 출처 — 하드코딩 금지)
                 "fee_bps": float(get_fee_calculator("KR").config.buy_commission_rate) * 10000,
+                # 매수측 비용만 반영했음을 소비자에게 명시한다 — 왕복(매도 수수료+거래세
+                # 포함 0.227%)을 쓸지는 정책 결정이라 값은 바꾸지 않는다 (1차 리뷰 advisory)
+                "fee_side": "buy_only",
                 "slippage_bps": None,    # 실측 없음
                 "liquidity_ok": None,    # 미판정
                 "expected_fill_price": None,
@@ -992,6 +1010,9 @@ class BatchAnalyzer:
 
             try:
                 quote = await self._broker.get_quote(sig.symbol)
+                # REST 스냅샷에는 거래소 시각이 없다 — 조회 시각이 우리가 아는
+                # 유일한 실측 시각이고, shadow 검증기의 신선도 판정 입력이 된다.
+                _quote_at = datetime.now()
                 if not quote:
                     validated.append(sig)
                     continue
@@ -1193,6 +1214,9 @@ class BatchAnalyzer:
                     continue
 
                 quote = await self._broker.get_quote(sig.symbol)
+                # REST 스냅샷에는 거래소 시각이 없다 — 조회 시각이 우리가 아는
+                # 유일한 실측 시각이고, shadow 검증기의 신선도 판정 입력이 된다.
+                _quote_at = datetime.now()
                 if not quote:
                     logger.warning(f"[배치분석] {sig.symbol} 현재가 조회 실패")
                     _carry(sig, "quote_fail")
@@ -1417,6 +1441,8 @@ class BatchAnalyzer:
                         "gap_pct": round(gap_pct, 2),
                         # LLM 이중검증용 지표 주입 (스크리너 캐시)
                         "indicators": self._screener._indicators._cache.get(sig.symbol, {}),
+                        # 현재가 조회 시각 (T11) — shadow 검증기가 호가 신선도를 판정한다
+                        "quote_as_of": _quote_at.isoformat(),
                         # 조건부 진입계획 원본 (T11) — 주문 직전 shadow 검증기가 읽는다.
                         # Signal.price 는 여기서 현재가로 고정되지만 계획의 상한·만료·트리거는
                         # 그대로 실어 보내 이후 경로에서 유실되지 않게 한다.

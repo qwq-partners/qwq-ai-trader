@@ -29,6 +29,8 @@ REASON_CODES = (
     "PLAN_EXPIRED", "PRICE_ABOVE_CAP", "PRICE_BELOW_BAND", "TRIGGER_NOT_MET",
     "QUOTE_MISSING", "QUOTE_STALE", "INPUT_MISSING", "INTRADAY_BLOCK", "INVALIDATED",
     "RISK_BUDGET", "SLOT_FULL", "DAILY_LIMIT", "COST_RR_LOW", "CHECKER_ERROR",
+    # 계약 상수. 본문 구현(2026-09-15) 이후 어떤 경로에서도 생성되지 않는다 —
+    # 원장 소비자는 "미구현 상태가 있다"고 읽지 말 것. 제거는 계약 소유자와 함께.
     "CHECKER_NOT_IMPLEMENTED",
 )
 
@@ -43,7 +45,12 @@ class PlanCheck:
     status: str                                   # allow | wait | reject
     reasons: List[str] = field(default_factory=list)
     expected_fill_price: Optional[float] = None
-    cost_adjusted_rr: Optional[float] = None      # (목표-예상체결-비용)/(예상체결-손절+비용); 계산 불가면 None
+    # (목표-예상체결-비용)/(예상체결-손절+비용); 계산 불가면 None.
+    # ⚠️ 비용은 계획 assumptions 가 준 것만 반영한다 — 현재 생산자는 **매수 수수료만**
+    #    싣는다(assumptions.fee_side="buy_only"). 왕복 비용(매도 수수료+거래세 포함 0.227%)
+    #    을 쓸지는 정책 결정이므로 여기서 임의로 더하지 않는다. 컷오프를 정할 때 이 낙관
+    #    편향을 반드시 감안할 것 (1차 리뷰 advisory).
+    cost_adjusted_rr: Optional[float] = None
     checked_at: Optional[datetime] = None
     quote_as_of: Optional[datetime] = None
     missing_inputs: List[str] = field(default_factory=list)
@@ -130,6 +137,8 @@ def check_entry_plan(
         - 사유는 모아서 전부 돌려준다. 조기 반환은 호가가 없거나 노후해 **가격 판정 자체가
           불가능할 때**만 한다(노후 호가로 무효화를 판정하면 근거 없는 reject 가 된다).
         - `COST_RR_LOW` 는 사유만 부착하고 status 를 바꾸지 않는다 — 컷오프 정책값 미정.
+        - `required_inputs` 는 **수치 입력만** 받는다(숫자로 변환되지 않으면 결측 처리).
+          등급 문자열·불리언 근거는 여기 넣지 말 것.
         - 어떤 경우에도 예외를 밖으로 내지 않는다(CHECKER_ERROR).
     """
     try:
@@ -224,6 +233,9 @@ def check_entry_plan(
             # 이월 불가 계획이어도 reject 하지 않는다 — 장중 눌리면 밴드로 복귀할 수 있고,
             # 폐기 판정은 기존 batch_analyzer CARRY_REASONS 소관이다
             _add("wait", "PRICE_ABOVE_CAP")
+        # ⚠️ 현재 어떤 생산자도 entry_band_low 를 채우지 않는다(sepa_pullback 의 눌림목
+        #    하한이 아직 정의되지 않음) → 운영에서 PRICE_BELOW_BAND 는 발화하지 않는다.
+        #    상한(max_entry_price)만 유효하다 (1차 리뷰 advisory).
         band_low = _as_float(p.get("entry_band_low"))
         if band_low is not None and band_low > 0 and price < band_low:
             _add("wait", "PRICE_BELOW_BAND")

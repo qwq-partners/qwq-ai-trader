@@ -260,7 +260,10 @@ def test_legacy_json_without_plan_fields_still_loads():
 @pytest.mark.parametrize("strategy,entry_mode,expected", [
     ("sepa_trend", "close", "sepa_pullback"),
     ("vcp_breakout", "breakout", "vcp_breakout"),
-    ("sepa_trend", "breakout", "vcp_breakout"),
+    # 전략 매핑이 먼저다 — breakout 모드가 전략 고유 setup 을 덮어쓰면
+    # gap_and_go 에 돌파 모드가 생겼을 때 vwap 필수 조건이 조용히 사라진다
+    ("sepa_trend", "breakout", "sepa_pullback"),
+    ("무명전략", "breakout", "vcp_breakout"),
     ("gap_and_go", "close", "gap_vwap"),
     ("rsi2_reversal", "close", "rsi2_reversal"),
     ("momentum_breakout", "close", "momentum"),
@@ -302,7 +305,7 @@ def test_generated_plan_fields(monkeypatch, tmp_path):
                  reason="VCP 돌파",
                  metadata={"candidate_name": "삼성전자", "atr_pct": 2.5,
                            "entry_mode": "breakout", "breakout_trigger": 10200.0,
-                           "indicators": {"rs_rating": 88, "as_of": "2026-09-15T09:00:00"}})
+                           "indicators": {"rs_rating": 88}})
     p = BatchAnalyzer._to_pending_signal(ba, sig, now=NOW,
                                          expires=NOW + timedelta(hours=5), slippage_pct=3.0)
     assert len(p.plan_id) == 12 and p.plan_version == 1
@@ -319,12 +322,42 @@ def test_generated_plan_fields(monkeypatch, tmp_path):
     # 모르는 값은 지어내지 않는다
     assert p.assumptions["slippage_bps"] is None and p.assumptions["liquidity_ok"] is None
     assert p.inputs_ref["score"] == 72.0
-    assert set(p.inputs_ref["indicator_keys"]) == {"rs_rating", "as_of"}
-    assert p.inputs_ref["indicators_as_of"] == "2026-09-15T09:00:00"
+    assert set(p.inputs_ref["indicator_keys"]) == {"rs_rating"}
+    # 출처가 없으면 None — now 로 채우지 않는다
+    assert p.inputs_ref["indicators_as_of"] is None
+    assert p.assumptions["fee_side"] == "buy_only"   # 매수측 비용만 반영했음을 명시
     # 계획 id 는 후보마다 다르다
     p2 = BatchAnalyzer._to_pending_signal(ba, sig, now=NOW,
                                           expires=NOW + timedelta(hours=5), slippage_pct=3.0)
     assert p2.plan_id != p.plan_id
+
+
+def test_plan_indicators_as_of_from_indicator_cache(monkeypatch, tmp_path):
+    """지표 dict 에 'as_of' 가 없으면 실제 출처인 TechnicalIndicators._cache_ts 를 읽는다.
+
+    운영 생산자(calculate_all)는 'as_of' 키를 만들지 않는다 — 1차 리뷰 blocking 2.
+    """
+    from decimal import Decimal
+    from src.core.batch_analyzer import BatchAnalyzer
+    from src.core.types import OrderSide, Signal, SignalStrength, StrategyType
+    from src.indicators.technical import TechnicalIndicators
+
+    ti = TechnicalIndicators()
+    bars = [{"date": f"2026{m:02d}{d:02d}", "open": 100.0 + d, "high": 102.0 + d,
+             "low": 99.0 + d, "close": 101.0 + d, "volume": 10000 + d}
+            for m in (1, 2, 3, 4, 5, 6, 7, 8) for d in range(1, 29)]
+    ti.calculate_all(SYM, bars)                       # 캐시 시각이 여기서 채워진다
+    calc_at = ti._cache_ts[SYM]
+
+    ba = _analyzer(monkeypatch, tmp_path)
+    ba._screener = SimpleNamespace(_indicators=ti)
+    sig = Signal(symbol=SYM, side=OrderSide.BUY, strength=SignalStrength.STRONG,
+                 strategy=StrategyType.SEPA_TREND, price=Decimal("10000"),
+                 stop_price=Decimal("9600"), target_price=Decimal("11000"), score=70.0,
+                 reason="추세", metadata={"indicators": ti._cache[SYM]})
+    p = BatchAnalyzer._to_pending_signal(ba, sig, now=NOW,
+                                         expires=NOW + timedelta(hours=5), slippage_pct=3.0)
+    assert p.inputs_ref["indicators_as_of"] == calc_at.isoformat()
 
 
 def test_plan_reaches_signal_metadata_and_event(monkeypatch):
@@ -347,6 +380,31 @@ def test_plan_reaches_signal_metadata_and_event(monkeypatch):
         assert json.loads(json.dumps(d, default=str))
     assert json.loads(json.dumps(plan))
     assert isinstance(ev, SignalEvent)
+
+
+def test_signal_metadata_carries_quote_as_of(monkeypatch):
+    """변환부가 현재가 **조회 시각**을 함께 싣는다 — shadow 신선도 게이트의 입력."""
+    before = datetime.now()
+    events = _run_execute(monkeypatch, [_plan()])
+    after = datetime.now()
+    q = events[0].signal.metadata["quote_as_of"]
+    assert before <= datetime.fromisoformat(q) <= after
+
+
+def test_shadow_uses_quote_as_of_and_sees_price_reasons(home, monkeypatch):
+    """호가 시각이 있으면 QUOTE_STALE 조기반환이 아니라 가격 계열 사유가 관측된다."""
+    from test_risk_sizing import _em, _rm
+    monkeypatch.setenv("ENTRY_PLAN_SHADOW", "1")
+    rm = _rm(monkeypatch, mode="nominal", em=_em())
+    logs = _order_env(monkeypatch, rm)
+    plan = _plan(max_entry_price=9000.0).to_dict()     # 현재가 10000 > 상한
+    ev = _buy_signal(plan, quote_as_of=datetime.now().isoformat())
+    asyncio.run(rm.on_signal(ev))
+    rec = next(r for r in logs if r["event_type"] == "shadow_plan_check")
+    assert rec["metadata"]["status"] == "wait"
+    assert "PRICE_ABOVE_CAP" in rec["metadata"]["reasons"]
+    assert "QUOTE_STALE" not in rec["metadata"]["reasons"]
+    assert rec["metadata"]["expected_fill_price"] == 10000.0
 
 
 def _run_execute(monkeypatch, pending_list, quote_price=10100.0):
@@ -511,16 +569,35 @@ def test_shadow_hook_reject_still_orders(home, monkeypatch):
 
 # ── 4) kr_scheduler 계약 (§4 #3 보유 indicators_as_of, 후보 dict 키) ──────────
 
-def _sched_bot(pending=None, screened_at=None):
+_SAME = object()
+
+
+def _sched_bot(pending=None, screened_at=None, stock_at=_SAME, indicators_at=None,
+               candidate=None):
+    """스케줄러 구동용 최소 bot.
+
+    후보는 **운영 실제 타입**(`ScreenedStock`)으로 만든다. SimpleNamespace 로 필드명을
+    지어내면 존재하지 않는 속성을 읽는 배선 누락이 테스트에 가려진다 (1차 리뷰 blocking 1:
+    구현이 `current_price`/`entry_price` 만 봐서 운영에서 항상 None 이었다).
+    지표 시각도 실제 출처인 `TechnicalIndicators._cache_ts` 에 넣는다.
+    """
     from src.core.types import Position
+    from src.indicators.technical import TechnicalIndicators
+    from src.signals.screener.kr_screener import ScreenedStock
     from decimal import Decimal
 
     pos = Position(symbol=SYM, quantity=10, avg_price=Decimal("10000"),
                    current_price=Decimal("10500"), strategy="sepa_trend")
-    cand = SimpleNamespace(symbol=SYM, name="삼성전자", strategy="sepa_trend", score=70.0,
-                           entry_price=Decimal("10000"), sector="반도체",
-                           indicators={"rs_rating": 88})
-    screener = SimpleNamespace(_indicators=SimpleNamespace(_cache={SYM: {"ma20": 9800}}))
+    if candidate is None:
+        candidate = ScreenedStock(
+            symbol=SYM, name="삼성전자", price=71000.0, change_pct=1.2, volume=100,
+            score=72.0, screened_at=(screened_at if stock_at is _SAME else stock_at),
+        )
+    ti = TechnicalIndicators()
+    ti._cache = {SYM: {"ma20": 9800}}
+    ti._cache_ts = {} if indicators_at is None else {SYM: indicators_at}
+    screener = SimpleNamespace(_indicators=ti)
+    cand = candidate
     return SimpleNamespace(
         trading_team=None,
         _last_screened=[cand],
@@ -550,10 +627,13 @@ def _collect_deliberations(monkeypatch, bot, slot="10:30"):
 
 
 def test_holding_dict_carries_indicators_as_of(monkeypatch):
+    """보유 재평가는 지표 캐시의 **실제 계산 시각**(_cache_ts)을 넘긴다 (C3)."""
     at = datetime(2026, 9, 15, 10, 25)
-    calls = _collect_deliberations(monkeypatch, _sched_bot(screened_at=at))
+    ind_at = datetime(2026, 9, 15, 8, 40)
+    calls = _collect_deliberations(
+        monkeypatch, _sched_bot(screened_at=at, indicators_at=ind_at))
     holding = next(c for c in calls if c["holding"])["items"][0]
-    assert "indicators_as_of" in holding, "보유 재평가도 지표 시각을 넘겨야 한다 (C3)"
+    assert holding["indicators_as_of"] == ind_at
 
 
 def test_holding_indicators_as_of_is_none_when_unknown(monkeypatch):
@@ -564,6 +644,7 @@ def test_holding_indicators_as_of_is_none_when_unknown(monkeypatch):
 
 
 def test_candidate_dict_key_contract(monkeypatch):
+    """ScreenedStock 의 실제 가격 필드(`price`)·시각(`screened_at`)을 읽는다."""
     at = datetime(2026, 9, 15, 10, 25)
     plan = _plan()
     calls = _collect_deliberations(monkeypatch, _sched_bot(pending=[plan], screened_at=at),
@@ -571,13 +652,39 @@ def test_candidate_dict_key_contract(monkeypatch):
     cand = next(c for c in calls if not c["holding"])["items"][0]
     assert cand["slot"] == "10:30"
     assert cand["entry_plan"]["plan_id"] == "abc123def456"
-    assert cand["current_price"] == 10000.0
+    assert cand["current_price"] == 71000.0
     assert cand["quote_as_of"] == at
-    assert cand["indicators_as_of"] == at
+
+
+def test_candidate_quote_as_of_prefers_stock_time(monkeypatch):
+    """종목별 실측 시각이 사이클 시각보다 우선한다 (사이클 시각은 폴백)."""
+    cycle_at = datetime(2026, 9, 15, 10, 25)
+    stock_at = datetime(2026, 9, 15, 10, 21)
+    calls = _collect_deliberations(
+        monkeypatch, _sched_bot(screened_at=cycle_at, stock_at=stock_at))
+    cand = next(c for c in calls if not c["holding"])["items"][0]
+    assert cand["quote_as_of"] == stock_at
+
+
+def test_candidate_swing_candidate_price(monkeypatch):
+    """SwingCandidate(가격 필드가 entry_price, 시각 없음)도 그대로 배선된다."""
+    from decimal import Decimal
+    from src.signals.screener.swing_screener import SwingCandidate
+
+    cycle_at = datetime(2026, 9, 15, 10, 25)
+    sc = SwingCandidate(symbol=SYM, name="삼성전자", strategy="sepa_trend", score=70.0,
+                        entry_price=Decimal("10000"), stop_price=Decimal("9500"),
+                        target_price=Decimal("11000"), indicators={"rs_rating": 88})
+    calls = _collect_deliberations(
+        monkeypatch, _sched_bot(screened_at=cycle_at, candidate=sc))
+    cand = next(c for c in calls if not c["holding"])["items"][0]
+    assert cand["current_price"] == 10000.0
+    assert cand["quote_as_of"] == cycle_at
 
 
 def test_candidate_without_pending_plan_gets_none(monkeypatch):
-    calls = _collect_deliberations(monkeypatch, _sched_bot(pending=[], screened_at=None))
+    calls = _collect_deliberations(
+        monkeypatch, _sched_bot(pending=[], screened_at=None, stock_at=None))
     cand = next(c for c in calls if not c["holding"])["items"][0]
     assert cand["entry_plan"] is None
     assert cand["quote_as_of"] is None

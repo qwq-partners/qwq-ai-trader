@@ -5781,18 +5781,25 @@ JSON:
             _sym = getattr(s, "symbol", "")
             _meta = getattr(s, "metadata", None)
             # 후보의 최신 가격은 스크리닝 시점 값이다 — 그 시각을 같이 넘긴다.
-            # 시각을 모르면(스크리닝 시각 미기록) None (now 로 채우지 않는다).
+            # 가격 필드는 타입마다 다르다: ScreenedStock=price, SwingCandidate=entry_price.
+            # (예전엔 운영에 없는 current_price/entry_price 만 봐서 항상 None 이었다)
             _price = None
             try:
-                _raw_price = getattr(s, "current_price", None)
-                if _raw_price is None:
-                    _raw_price = getattr(s, "entry_price", None)
-                if _raw_price is not None:
+                for _attr in ("current_price", "price", "entry_price"):
+                    _raw_price = getattr(s, _attr, None)
+                    if _raw_price is None:
+                        continue
                     _price = float(_raw_price)
                     if _price <= 0:
                         _price = None
+                    break
             except (TypeError, ValueError):
                 _price = None
+            # 시각은 종목별 실측(ScreenedStock.screened_at)이 우선, 없으면 사이클 시각.
+            # 둘 다 없으면 None (now 로 채우지 않는다 — 신선도 세탁 금지).
+            _price_at = getattr(s, "screened_at", None)
+            if _price_at is None:
+                _price_at = screened_at
             candidates.append({
                 "symbol": _sym,
                 "name": getattr(s, "name", ""),
@@ -5802,7 +5809,7 @@ JSON:
                 "slot": slot,
                 "entry_plan": _plans_by_symbol.get(_sym),
                 "current_price": _price,
-                "quote_as_of": screened_at if _price is not None else None,
+                "quote_as_of": _price_at if _price is not None else None,
                 # 섹터를 반드시 넘겨야 한다 — cross_validator 규칙4(동일 섹터 과집중)는
                 # `metadata.get("sector")`로만 동작해서, 없으면 집중 검사가 통째로 스킵된다.
                 "sector": (getattr(s, "sector", None)

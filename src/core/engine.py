@@ -1544,6 +1544,7 @@ class RiskManager:
         original_score: Optional[float] = None,
         regime: str = "",
         metadata: Optional[Dict[str, Any]] = None,
+        count_failures: bool = True,
     ) -> None:
         """시그널 이벤트를 DB에 fire-and-forget으로 기록 (BUY만)
 
@@ -1595,10 +1596,16 @@ class RiskManager:
         )
 
         def _on_log_done(t):
-            """fire-and-forget 예외 무음 + 연속 실패 카운터"""
+            """fire-and-forget 예외 무음 + 연속 실패 카운터
+
+            `count_failures=False`(shadow 기록)는 카운터를 건드리지 않는다. shadow 성공이
+            실주문 로깅의 연속 실패를 0 으로 리셋하면 실제 장애가 가려진다 (1차 리뷰 advisory).
+            """
             if t.cancelled():
                 return
             exc = t.exception()
+            if not count_failures:
+                return
             if exc is not None:
                 RiskManager._sig_log_consecutive_failures += 1
                 if RiskManager._sig_log_consecutive_failures >= 10:
@@ -1619,9 +1626,9 @@ class RiskManager:
         계획(`metadata["entry_plan"]`)이 없으면 아무것도 하지 않는다 — 현재가로 그럴듯한
         계획을 지어내지 않는다.
 
-        호가 시각: 이 지점에는 재조회한 호가가 없다. `event.price` 는 배치 실행 시점 값이라
-        시각을 `now` 로 채우면 신선도 세탁이 된다 → `as_of=None` 으로 넘겨 QUOTE_STALE 이
-        정직하게 기록되게 한다.
+        호가 시각: 배치 변환부가 현재가를 조회한 시각(`metadata["quote_as_of"]`)을 쓴다.
+        그 값이 없으면 `now` 로 채우지 않고 None 을 넘겨 QUOTE_STALE 이 정직하게 기록되게
+        한다 — 시각을 지어내면 신선도 세탁이 된다.
         """
         if os.getenv("ENTRY_PLAN_SHADOW", "1") == "0":
             return
@@ -1632,14 +1639,14 @@ class RiskManager:
                 return
             quote = {
                 "price": float(event.price) if event.price is not None else None,
-                "as_of": None,
+                "as_of": meta.get("quote_as_of"),
             }
             check = check_entry_plan(
                 plan, quote, datetime.now(),
                 intraday_level=meta.get("intraday_state"),
             )
             self._log_sig(event, event_type="shadow_plan_check",
-                          metadata=check.to_dict())
+                          metadata=check.to_dict(), count_failures=False)
         except Exception as e:
             # shadow 장애는 돈 경로에 전파되지 않는다
             logger.warning(f"[진입계획] shadow 검증 실패 (주문은 계속): {event.symbol} — {e}")
