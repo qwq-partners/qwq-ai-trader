@@ -53,6 +53,11 @@ class ValidationResult:
     supply_demand_result: Optional[SupplyDemandResult] = None
     short_selling_result: Optional[ShortSellingResult] = None
     trend_buzz_result: Optional[TrendBuzzResult] = None
+    # ── T11 근거 계약 (2026-09-15) — 기존 approved 의미·기본값·소비자(batch 검증 흐름)
+    #    동작은 그대로 둔다. 신규 소비자(에이전트 팀 분석가)만 이 두 필드로
+    #    "실제 검증을 수행했는가"를 approved 와 분리해 판단한다.
+    validated: bool = True        # 실제 검증 수행 여부 (미연결·예외 시 False)
+    data_status: str = "full"     # full | insufficient | error
 
 
 class StockValidator:
@@ -116,7 +121,7 @@ class StockValidator:
                 self._safe_check_trend_buzz(stock_name),
             )
 
-            # DART block 공시 → 즉시 차단
+            # DART block 공시 → 즉시 차단 (실제 위험을 발견한 확정 판단이므로 validated=True)
             if dart_result.risk_level == "block":
                 reason = f"위험 공시 감지: {', '.join(dart_result.risk_disclosures[:3])}"
                 logger.info(f"[종목검증] {symbol} {stock_name} 차단: {reason}")
@@ -129,6 +134,8 @@ class StockValidator:
                     supply_demand_result=sd_result,
                     short_selling_result=ss_result,
                     trend_buzz_result=tb_result,
+                    validated=True,
+                    data_status="full",
                 )
 
             # confidence 조정 합산 (범위 제한: -0.30 ~ +0.25)
@@ -141,6 +148,12 @@ class StockValidator:
             )
             total_adj = max(-0.30, min(0.25, total_adj))
 
+            # T11: 수급 검증(공매도·순매수)은 MCP(pykrx) 연결이 있어야 실제로 수행된다.
+            # MCP 미연결이면 _safe_check_supply_demand가 예외 없이 "순매수 없음" 기본값을
+            # 조용히 돌려주므로, approved만 보면 "검증해서 통과"와 "확인 못 함"을 구분할 수
+            # 없다 — 그 구분을 validated/data_status로 명시한다 (approved 자체는 불변).
+            mcp_ok = bool(self._mcp_manager) and self._mcp_manager.is_server_available("pykrx")
+
             return ValidationResult(
                 approved=True,
                 confidence_adjustment=total_adj,
@@ -149,12 +162,16 @@ class StockValidator:
                 supply_demand_result=sd_result,
                 short_selling_result=ss_result,
                 trend_buzz_result=tb_result,
+                validated=mcp_ok,
+                data_status="full" if mcp_ok else "insufficient",
             )
 
         except Exception as e:
-            # 예외 시 통과 (API 실패가 거래를 막지 않음)
+            # 예외 시 통과 (API 실패가 거래를 막지 않음) — 단, 실제로 검증하지 못했음을
+            # validated=False/data_status="error"로 남겨 소비자가 "정보 없음"과
+            # "위험 미발견"을 혼동하지 않게 한다.
             logger.debug(f"[종목검증] {symbol} 검증 예외 (통과): {e}")
-            return ValidationResult(approved=True)
+            return ValidationResult(approved=True, validated=False, data_status="error")
 
     # ───────────────────── 기존 검증 (뉴스/DART) ─────────────────────
 

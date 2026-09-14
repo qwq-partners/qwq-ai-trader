@@ -158,14 +158,24 @@ class NewsCurator(ExpertAgent):
         try:
             items = await self._fetch_symbol_news(symbol)
             if not items:
-                result = {"score": 0, "tags": [], "items": 0}
+                result = {"score": 0, "tags": [], "items": 0, "item_ids": [], "dedup_removed": 0}
             else:
+                # T11 (2026-09-15, C6): _analyze()는 시장 뉴스에 _deduplicate를 쓰지만
+                # 이 경로는 빠져 있었다 — 같은 기사가 여러 검색어로 재수집되면
+                # sentiment·tags가 같은 기사 재인용만으로 부풀려진다.
+                fetched_count = len(items)
+                items = self._deduplicate(items)
                 await self._classify_batch(items)
                 self._inc_call_count()  # LLM 분류 1회 카운트
                 scores = [i.sentiment for i in items if i.sentiment != 0]
                 avg = int(sum(scores) / len(scores)) if scores else 0
                 tags = sorted(set(t for it in items for t in it.event_tags))
-                result = {"score": avg, "tags": tags, "items": len(items)}
+                # 원자료 식별자 — url이 없으면(perplexity 속보 등) source+제목으로 대체 식별
+                item_ids = [it.url or f"{it.source}:{it.title[:60]}" for it in items]
+                result = {
+                    "score": avg, "tags": tags, "items": len(items),
+                    "item_ids": item_ids, "dedup_removed": fetched_count - len(items),
+                }
 
             self._symbol_cache[symbol] = (result, datetime.now())
             return result
