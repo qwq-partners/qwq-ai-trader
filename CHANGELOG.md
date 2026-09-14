@@ -1,5 +1,27 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — fix: T9 후속 교차 리뷰 수정 (계획서 T10, F13~F22)
+
+계기: T9(PR #42~#46, main `dcec010`) 이후 교차 리뷰가 "각 단계는 고쳤으나 단계 사이 연결이 끊긴" 결함 10건을 지적(기준 SHA `dcec010`). D(독립 재현)로 실제 코드 경로를 먼저 확인한 뒤 A(레짐 경로)·B(자료 유효성)·C(발송·평가) 세 갈래로 병렬 수정, 통합 브랜치에서 재발견된 잔여 결함 2건을 추가 조치.
+
+- **F13** (`kr_scheduler.py` `_run_llm_regime_classifier`): 정오 재분류가 마지막 봉이 오늘이면 재계산을 건너뛰던 것을 `_today_bar_action`/`_prev_trading_day`로 분기 — 당일 봉이면 **교체**, 직전 거래일이면 **추가**, 날짜 미상·중간 결측이면 최신으로 위장하지 않고 사유 기록. 현재 지수 as_of(`kr_as_of`)와 봉 기반 지표 as_of(`kospi_bars_as_of`)를 분리.
+- **F14** (`market_regime.py`/`kr_scheduler.py`): 급락 캡 판단이 감지기의 이전 당일 상태만 보고 이번 조회 실측(`kospi_today_pct`)을 반영하지 않던 것을 공통 순수 함수 `classify_intraday_level`/`max_intraday_level`로 통일해 두 값(및 어댑터 당일 관측, 통합 커밋에서 추가)을 병합. as_of 역순 값은 거부.
+- **F15** (`batch_analyzer.py`/`engine.py`): `monitor_positions`가 캐시 원본 LLM 레짐을 ExitManager에 직접 재적용하던 블록을 제거 — 30분 sync(`kr_scheduler._apply_regime_to_exit_manager`) 단일 경로로 일원화. `engine.RiskManager._resolve_market_regime`(G2)는 2분 주기 복사본이 아니라 어댑터의 유효 레짐(`effective_regime`)을 우선한다.
+- **F16** (`types.py`/`orchestrator.py`/전문가 6종): `macro_economist`/`us_market_expert`/`kr_economy_expert`/`global_micro_expert`/`weekend_signal_expert`/`kr_market_expert`가 score에 실제 기여하는 입력 기준으로 `data_status`(ok/partial/insufficient)를 판정. `ExpertOpinion.from_dict`는 이 필드가 없는 구 레코드를 "ok"가 아니라 "unknown"으로 남겨 orchestrator 집계 allowlist(ok/partial만 허용)가 자연히 제외.
+- **F17** (`data_freshness.py`/`weekend_signal_expert.py`/`kr_market_expert.py`): 야간선물 신호가 숫자 존재만으로 유효 처리되던 것을 `kr_night_futures_as_of(now, session)`(KRX 야간세션 18:00~익일05:00 KST, 요일 가드, 세션 종료 후 as_of=05:00, 유효기간=다음 개장 전, 주말 확장)로 세션·as_of 확인 시에만 집계하도록 변경. NKD 프록시 폴백 경로는 as_of 개념이 없어 기존처럼 값 존재만으로 유효 취급(잔여).
+- **F18** (`us_market_data.py`): Yahoo v7/v8 응답에서 VIX 등 지수 값이 없어도 0으로 채우던 것을 `None` + `missing: true` + 사유로 보존(`indices_normalized`, `missing_fields`). 부분 결측 심볼은 quotes에서 제외.
+- **F19** (`daily_report.py`/`kr_scheduler.py`): 07:00 생성본에는 `expert_consensus`가 없고 07:30 발송문에만 붙어 저녁 평가가 "미기록"이던 것을 `record_morning_brief_dispatch(kr_date, sent_text, expert_consensus, status, ...)`로 07:30 morning 슬롯 발송 직후 날짜별 아카이브(`morning_brief/<kr_date>.json`)에 기록. `evaluate_morning_brief`는 발송 스냅샷을 우선 읽는다.
+- **F20** (`daily_report.py`): 주장 키(AI/반도체·바이오)와 실측 업종명(전기전자·의약품)이 달라 항상 매칭에 실패하던 것을 `BRIEF_THEME_EVAL_TARGETS`(AI/반도체→전기전자, 바이오→의약품만 근거 명시)로 생성 시점에 평가 대상을 고정. `claims["sectors"]`는 테마명 문자열이 아니라 `{theme, eval_targets, agg, supported, reason}` 딕셔너리 목록으로 스키마 변경. 매핑에 없는 테마는 "평가 대상 미합의"로 미평가.
+- **F21** (`daily_report.py`): 07:00 고정 문구(`market_msg`, 정상/차트동반/폴백 3경로 공용)가 미국 지수 평균만으로 "한국 관련 테마주 갭업 가능성" 같은 한국 개장 방향을 단정하던 것을 `brief_scope(kr_inputs)`(build_morning_brief의 LLM 스코프 판정과 동일 함수) 기준으로 분리 — 국내 자료 없으면 "미국 세션 마감 요약" 사실만 발송, 한국 판단은 보류 문구.
+- **F22** (`daily_report.py`/`morning_brief_eval.py`): 최신 캐시 하나를 매번 덮어써 평가 원장에 원문 참조가 없던 것을 날짜별 아카이브(`generated[]`: raw_text/body_full/제거문장/입력/모델/주장, `dispatch[]`: attempt별 status(sent/failed)·brief_ref)로 원자적 쓰기 보존. 같은 날 재기록 시 생성 원본은 덮어쓰지 않음.
+- **통합 브랜치 수정 2건** (마지막 커밋 `a6d81d0`): (1) F14 잔여 — `_apply_regime_to_exit_manager`가 파일 input_meta·감지기만 병합하고 분류기가 어댑터에 넣은 이번 조회 급락 관측(`_adapter_intraday_snapshot()`)은 읽지 않아, input_meta 없는 캐시+감지기 normal이면 trending_bull이 ExitManager에 그대로 적용되던 잔여 결함 → 분류기·30분 sync 양쪽의 `max_intraday_level` 병합에 어댑터 당일 관측 추가(완화 방향 덮어쓰기 없음, 임계값 불변). (2) F19 통합 결함 — `record_morning_brief_dispatch`는 import 시점 상수(`MORNING_BRIEF_ARCHIVE_DIR`)를, save/evaluate는 `path.parent` 유도 경로를 각각 써서 아카이브 경로 규칙이 둘로 갈려 발송 기록이 유실 → `_brief_archive_path` 기본값을 `MORNING_BRIEF_PATH.parent/morning_brief`(호출 시점 전역)로 단일화. 그 외 advisory: 발송 기록은 07:30 morning 슬롯만(`record_dispatch`), `classify_intraday_level` 비숫자/NaN 가드, `set_intraday_risk` as_of 없는 첫 관측 경고 로그, 아카이브 원자적 쓰기+손상본 보존, `daily_report._today()` 시계 훅, v8 nested `prev_close` 0/음수 가드, F16 계획서 산술 오기(+10→+12) 정정. `tests/conftest.py`: yfinance가 curl_cffi(C 레벨 curl이라 socket 패치 우회)로 네트워크 가드를 우회하던 사각지대(D 재현 중 발견)를 차단.
+- **테스트**: 전체 스위트 542 passed / 2 xfailed, 테스트 격리(`tests/conftest.py`) 위반 0건. D 독립 재현(`tests/test_t10_repro_{a,b,c}.py`, 기준 SHA `a59e29f`) 14건 통과.
+- **실경로 의미 변경**: 급락 캡이 감지기 상태뿐 아니라 이번 조회 실측·어댑터 당일 관측에도 걸림(같은 임계값, 새 차단 아님) / `monitor_positions`의 레짐 재적용 제거 → 30분 sync 단일 경로 / G2가 2분 복사본 대신 어댑터 유효 레짐 우선 / 6명 전문가 `data_status` 판정으로 partial 확신 상한(0.7) 발동 범위 확대, `from_dict` unknown 레코드는 집계에서 제외 / 야간선물은 세션 as_of 확인 시에만 집계(낮 시간 호출·yfinance 프록시 경로는 여전히 다른 취급) / Yahoo 지수 결측이 0이 아니라 None으로 보존 / 07:00 고정 문구의 한국 방향 단정 제거 / `claims.sectors` 스키마 변경(문자열 목록 → 딕셔너리 목록) / 모닝브리프 날짜별 아카이브 신설.
+- **정책 결정이 필요한 항목**: 야간선물 세션 규칙(공휴일 미반영, 정책값)·`from_dict` unknown 기본값 채택·테마-업종 매핑 2건(AI/반도체→전기전자, 바이오→의약품)은 근거가 코드 주석에 남아 있으나 사용자 승인 대상.
+- **잔여**: yfinance 프록시 폴백(NKD)은 세션 신선도 미적용 / `kr_inputs`(국내 as_of 자료)는 여전히 브리프 프롬프트에 미전달 / canary 원장의 `evaluated=False`는 재시도 없이 영구 고정 / 업종명은 완전일치만 지원(매핑 미등록 테마는 평가 제외).
+- 예측 품질(적중률) 개선이 입증됐다는 근거는 없음 — 이번 변경은 연결 경로의 정직성(결측을 0/ok로 위장하지 않음)을 다룬다.
+- **운영 미배포** — 운영 서버는 여전히 `de111b7`. 상세: `docs/reviews/remediation-2026-09-14.md` §11(통합 담당 작성 예정), `docs/superpowers/plans/2026-09-13-review-remediation.md` T10 절.
+
 ## 2026-09-14 — docs: T9 결과 반영 (보고서 §10·CLAUDE.md·계획서 체크)
 
 `docs/reviews/remediation-2026-09-14.md` §10(F9~F12 재현·수정 PR #43~#45·검증 main a5de546 456 passed·실경로 의미 변경·잔여·운영 미배포), CLAUDE.md 리뷰 절 T9 줄, 계획서 T9 요청 1~5 체크. 코드 변경 없음.
