@@ -351,7 +351,11 @@ def test_evening_brief_eval_hook_times_out(monkeypatch):
             await asyncio.sleep(5)
 
     bot = SimpleNamespace(report_generator=_RG())
-    asyncio.run(KRScheduler._run_morning_brief_evaluation(bot, date(2026, 9, 14)))
+    import time as _t
+    _t0 = _t.monotonic()
+    result = asyncio.run(KRScheduler._run_morning_brief_evaluation(bot, date(2026, 9, 14)))
+    assert result is None                       # 타임아웃 경로: note 없음
+    assert _t.monotonic() - _t0 < 1.0            # 5초 sleep 을 기다리지 않았다
 
 
 # ── blocking #1: 스크리너 종가열이 비면 c5/c20 은 0 이 아니라 결측 ──────────────
@@ -710,3 +714,14 @@ def test_briefing_shows_data_status_note(monkeypatch, tmp_path):
                         agg=0)
     assert "자료 부족 3명" in msg, f"자료 부족 표시 누락:\n{msg}"
     assert "무보정" in msg, f"커버리지 부족 표시 누락:\n{msg}"
+
+
+def test_intraday_recompute_skipped_when_last_bar_date_unknown():
+    """KIS 폴백 로드처럼 마지막 봉 날짜를 모르면(None) 당일 지수를 덧붙이지 않는 분기 조건을 고정한다
+    (이중 계상 위험, 2026-09-14 재리뷰 advisory)."""
+    import src.schedulers.kr_scheduler as _ks
+    closes = [10000.0, 10100.0, 10200.0, 10300.0, 10400.0, 10500.0, 10600.0]
+    _lb = None
+    _has_today_bar = _lb == date(2026, 9, 14)
+    assert (not _has_today_bar) and _lb is None            # 재계산 생략 분기
+    assert _ks._pct_change(closes, 5) is not None          # 기존 종가열 값은 그대로 계산 가능

@@ -641,7 +641,7 @@ class KRScheduler:
                             except Exception as _cf_e:
                                 _conflict = None
                                 logger.debug(f"[전문가] 상충 문구 생성 실패 (무시): {_cf_e}")
-                            if _conflict:
+                            if _conflict and not data.get("expert_conflict"):   # 브리프가 이미 붙였으면 중복 방지
                                 llm_text = f"{llm_text}\n\n{_conflict}"
                             msg = llm_text + sep + msg
                             logger.info(
@@ -1438,7 +1438,9 @@ class KRScheduler:
                     _lb = (_last_bar_date.date() if isinstance(_last_bar_date, datetime)
                            else _last_bar_date)
                     _has_today_bar = _lb == now.date()
-                    if _level is not None and len(_closes) >= 6 and not _has_today_bar:
+                    # 마지막 봉 날짜 미상(KIS 폴백 로드)이면 당일 봉 포함 여부를 모르므로 덧붙이지 않는다
+                    # — 이중 계상 위험 (2026-09-14 재리뷰). 이 경우 c5/c20 은 로드 시각 기준 값 그대로.
+                    if _level is not None and len(_closes) >= 6 and not _has_today_bar and _lb is not None:
                         try:
                             _series = _closes + [float(_level)]
                             c5 = _pct_change(_series, 5)
@@ -6200,7 +6202,9 @@ JSON:
 
                 cash_ratio = cash / equity if equity > 0 else 0
                 ba = bot.batch_analyzer
-                intraday_state = getattr(ba, "_intraday_state", "normal") if ba else "normal"
+                # 전일 급락 상태가 다음 날 장전 판정에 남지 않게 당일 게이트 스냅샷 사용 (2026-09-14 재리뷰)
+                _snap_level = self._intraday_crash_snapshot()[0] if ba else None
+                intraday_state = _snap_level if _snap_level is not None else "normal"
                 regime = getattr(ba, "_market_regime", "neutral") if ba else "neutral"
 
                 # 현재 보유 KOFR 확인

@@ -608,6 +608,13 @@ GROUP BY 1, 2 ORDER BY 3 DESC;
   - [ ] `horizons.mid_trend`가 실시간 `update_regime()` 결과와 일치하는가 (`missing=true`면 지수 미수집 — 오래된 값이 남지 않는다)
 - **판정 규칙**: 20건 이상 누적 전에는 적중률로 프롬프트·임계값을 바꾸지 않는다. `summarize()`의 표본 수를 먼저 본다. 하루 결과(예: 09-14 개장·종가 동시 miss)로 규칙을 바꾸지 않는다.
 
+### 2026-09-14~ — 장중 레짐 입력 신선도·급락 캡 (T9 A)
+- `~/.cache/ai_trader/llm_regime_today.json` 의 `input_meta`: 08:10 실행은 `kr_as_of` 가 스크리너 벤치마크 **로드 시각**(고정 문자열 아님), 12:00 실행은 `kospi_today_pct`·`intraday_crash_level`·`intraday_crash_as_of`(감지기 갱신 시각)가 채워져야 한다. `missing_fields` 에 `KOSPI_c5/KOSPI_c20` 이면 스크리너 캐시 없음, `급락감지기(당일 갱신 없음)` 이면 5분 루프 전 또는 전일 상태(08:10 실행에서는 정상).
+- `regime_capped: true`·`confidence_raw` 가 있으면 LLM 원본이 급락 캡으로 neutral 이 된 것 — 대시보드 confidence 는 원본 확신도가 아님.
+- 5분 급락 루프 후 `adapter.regime`(`/api/engine/regime` 의 `horizons.effective_regime`)이 crash/severe 에서 bull→sideways 로 강등되는지, 다음 날 장전에는 전일 crash 가 남지 않는지(`intraday_risk` as_of 당일 게이트).
+- 20:30 하트비트 `kr_evolution_scheduler` note 에 `모닝브리프 평가:` 가 붙는지(없으면 report_generator 미초기화·타임아웃 120초·브리프 파일 없음 중 하나 — 로그로 구분).
+- 07:30 전문가 브리핑에 `자료 부족 N명`·`커버리지 부족` 표시와 브리프 상충 문구가 조건대로 나오는지.
+
 ## 완료된 체크포인트
 
 (검증 완료 시 ✅ + 1줄 요약으로 여기에 이동)

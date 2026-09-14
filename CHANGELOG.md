@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-14 — fix: 장중 레짐 입력 신선도·결측 정직성 + B·C 인터페이스 배선 (계획서 T9 A, F9·F10)
+
+계기: 09-14 12:00 장중 레짐 재분류가 08:20 스크리너 메모리(KOSPI 5일 +3.3%/20일 +1.4%)를 재사용해 당일 -3.34% 급락(09:05 crash) 중 `trending_bull` 0.85; LLM 입력이 `SP500/SOX/VIX` 키를 찾지만 공급자는 `S&P500/반도체(SOX)`·VIX 없음 → 0 으로 전달.
+- `src/schedulers/kr_scheduler.py`(`_run_llm_regime_classifier` 입력 경로): 12:00 실행은 분류 전 `fetch_index_price` 로 KOSPI/KOSDAQ 당일 등락을 재조회하고 스크리너 종가열에 덧붙여 5/20일 재계산(마지막 봉이 오늘이거나 날짜 미상(KIS 폴백)이면 덧붙이지 않음 — 이중 계상 방지). 조회 실패 시 스크리너 **로드 시각** + "장중 갱신 실패" 표기.
+  `_pct_change` 는 표본 부족·기준가 0 을 None 으로(get_kospi_change 의 0.0 불사용) → 빈 캐시는 `missing_fields` `KOSPI_c5/c20`·`스크리너 캐시 없음`. 급락 감지 상태는 `batch_analyzer._intraday_updated_at` 당일 게이트(`_intraday_crash_snapshot`, as_of=갱신 시각; 전일 상태는 결측)로 프롬프트에 포함, crash/severe 면 LLM `trending_bull` 을 적용하지 않음 — `market_regime.cap_regime_by_intraday_risk` 단일 출처(스케줄러 캡 표 삭제), `_resolve_regime_conflict(kospi, llm, crash_level)` 도 동일. 모든 입력에 as_of·source, 결측은 '결측'(0 금지), `llm_regime_today.json` 에 `input_meta`(us/kr as_of·source·kospi_c5/c20·kospi_today_pct·intraday_crash_level·missing_fields)·`regime_capped`·`confidence_raw`(임계값 불변).
+- F10: `_index_field(indices, *aliases, fields)` 별칭 조회(없으면 None) + C 의 `overnight["indices_normalized"]` 우선 소비(VIX 는 price, missing 가드), `us_as_of` 를 마감 시각/조회 시각으로 구분 표기.
+- 배선: 5분 급락 루프 → `bot.engine._regime_adapter.set_intraday_risk(level, pct, as_of)`(**운영에서 유효 레짐 캡이 처음 활성화** — crash/severe 에서 bull→sideways 강등 전용, 어댑터 `effective_regime` 도 as_of 당일 게이트·시계 주입 `_now`); 07:30 전문가 브리핑에 `build_expert_conflict_note(tone|text, {"score": agg})` 문구(브리프가 이미 붙였으면 중복 방지)·`data_status_summary()`("자료 부족 N명", 커버리지 부족 시 "체제 점수 무보정"); 20:30 진화 잡에 `evaluate_morning_brief(date)` 훅(`asyncio.wait_for` 120초, 하트비트 note, 날짜당 1회). KOFR 안전자산 루프도 당일 게이트 스냅샷 사용.
+- 테스트 `tests/test_regime_llm_inputs.py` 27건(수정 전 15건 실패 확인) + regime 1건. runbook "장중 레짐 입력 as_of·결측 확인", system-overview 레짐 입력 흐름, monitoring-checkpoints 항목.
+- 의미 불변: 주문·청산·급락 임계값(update_intraday_state 분기)·REGIME_EXIT_PARAMS·게이트 코드 무변경. 12:00 에 KIS 지수 TR 2건 추가(원장 TR 아님). 잔여: `kr_inputs` 미전달(야간선물 시장 시각 없음), swing_screener KIS 폴백은 마지막 봉 날짜 미기록, `_morning_brief_eval_date` 는 타임아웃에도 소진(1일 1회). 운영 미배포.
+
 ## 2026-09-14 — feat: 레짐 판단 시간범위 분리·모닝브리프 주장 범위 제한·장전 전망 사후 평가 (계획서 T9 요청 2·3·5, F11)
 
 계기: 09-14 07:01 모닝브리프가 미국 마감 자료만으로 "반도체 중심 상승 갭 출발 가능성 높음" 을 단정(실제 -3.14% 출발), 같은 메시지의 전문가 종합 +2 중립과 충돌 미검토.
@@ -10,7 +20,7 @@
   `with_kr_inputs` 프롬프트는 관찰 포인트마다 반대 근거 요구. `build_expert_conflict_note(tone_or_text, {"score"|"bias"})` 가 브리프 톤과 전문가 종합판단 상충 시 문구 반환. 캐시 `llm_morning_brief.json` 에 `kr_date/scope/inputs/claims/removed_claims/tone/expert_consensus/expert_conflict/model` 고정 저장(07:30 브리핑이 읽는 `text/generated_at` 불변). `extract_brief_claims` 는 KR 주어 문장만 읽음(미국 마감 서술을 KOSPI 주장으로 기록하지 않음), 09-14 실문장 "상승 갭 출발" 패턴 포함.
 - `src/analytics/morning_brief_eval.py`(신규): `evaluate(brief, actual)` — 개장 방향·종가 방향·전문가 종합 방향(±5 밴드)·언급 업종 상대성과 4축, 주장/실측 없으면 hit=None+사유(0 대체 없음), 브리프 kr_date≠평가일이면 evaluated=False. `append_ledger`(JSONL `morning_brief_eval.jsonl`)·`summarize(last_n)`(적중률·표본 수, "하루 결과로 규칙을 바꾸지 않는다")·`summary_line`. `DailyReportGenerator.evaluate_morning_brief(date)` 가 브리프 캐시 + KOSPI/KOSDAQ 시가·종가·업종 수익률로 평가·기록(지수 조회 실패 시 evaluated=False).
 - 테스트 65건(`tests/test_market_regime_horizons.py`, `tests/test_morning_brief.py`). 문서: system-overview §10.1/§10.2, monitoring-checkpoints(20건 누적 전 규칙 변경 금지).
-- 잔여(A 후속 PR): `adapter.set_intraday_risk` 주입, 저녁 `evaluate_morning_brief` 훅, 07:30 결합부 `build_expert_conflict_note`·`data_status_summary` 부착, `kr_inputs` 전달(현재 운영 scope 는 항상 us_close_only). brief_tone·claims 는 패턴 휴리스틱(없는 주장을 만들지 않는 방향, claims=None 비율로 확장 판단). `update_regime` 의 결측 0 채움(기존 코드)은 별도. 배포 없음.
+- A 배선은 같은 날 후속 항목(장중 레짐 입력 신선도, T9 A)에서 반영: `adapter.set_intraday_risk` 주입, 저녁 `evaluate_morning_brief` 훅, 07:30 결합부 `build_expert_conflict_note`·`data_status_summary` 부착. `kr_inputs` 전달은 미배선(야간선물은 시장 시각이 없어 as_of 없음 → 운영 scope 는 여전히 us_close_only). brief_tone·claims 는 패턴 휴리스틱(없는 주장을 만들지 않는 방향, claims=None 비율로 확장 판단). `update_regime` 의 결측 0 채움(기존 코드)은 별도. 배포 없음.
 
 ## 2026-09-14 — fix: 자료 신선도·전문가 결측 상태·수동 거시 만료·VIX 수집 (계획서 T9 요청 4, F12)
 
@@ -22,7 +32,7 @@
 - `macro_economist` 수동 오버라이드: `{value, valid_until}` 스키마(날짜만이면 그날 23:59:59 까지 포함), 구형 flat 항목은 파일 mtime+14일로 만료, 만료 시 경고 로그 후 제외(일정 내용의 과거 여부는 미검사 — 문서 정정). 실제 `~/.cache` 파일은 읽기만.
 - 공급자: `us_market_data` `US_INDEX_KEYS` 상수·`^VIX` 수집·`get_overnight_signal()['indices_normalized']`(SP500/NASDAQ/DOW/SOX/VIX 고정 키, 결측 `missing:true+price:None`, `fetched_at` 조회 시각·`as_of` 실제 체결 시각(Yahoo regularMarketTime, 없으면 None+note)); 기존 `indices`(표시명) 스키마는 불변. `kis_market_data.get_night_futures_quote()`에 `fetched_at`·`as_of`(KIS 응답에 체결시각 없어 None+사유)·`value_changed_at`·`value_unchanged_minutes` — 고착 여부를 단정하지 않고 판단 자료만 제공.
 - 테스트 33건(`tests/test_data_freshness.py`, `tests/test_expert_missing_inputs.py`), `docs/agents/expert-system.md` 신선도·결측 절.
-- 잔여: `data_status_summary` 의 07:30 브리핑·팀 컨텍스트 노출과 `indices_normalized` 소비는 A(스케줄러) 후속 PR; macro/us_market/kr_economy/global_micro/weekend 전문가의 data_status 미설정; v8 spark 폴백의 시장 시각 미매핑. 배포 없음.
+- 잔여: `data_status_summary` 07:30 브리핑 노출과 `indices_normalized` 소비는 같은 날 T9 A 항목에서 반영(팀 컨텍스트 노출은 미반영); macro/us_market/kr_economy/global_micro/weekend 전문가의 data_status 미설정; v8 spark 폴백의 시장 시각 미매핑. 배포 없음.
 
 ## 2026-09-14 — docs: 리뷰 후속 수정·재검증 결과 보고 (`docs/reviews/remediation-2026-09-14.md`)
 
