@@ -7,9 +7,10 @@ KIS/Yahoo/LLM 으로 나간다. worktree 격리만으로는 부족하므로 conf
 
 1. 네트워크 — 루프백(127.0.0.1/::1/localhost)·UNIX 소켓 외 모든 connect/getaddrinfo 차단 +
    curl_cffi(yfinance 백엔드, C 레벨 curl 이라 socket 패치를 우회) 의 perform/request 차단.
-2. 운영 상태 파일 — ``~/.cache/ai_trader``, ``~/.cache/ai_trader_us``, ``~/.gh_token``,
-   운영 체크아웃의 ``.env``/``logs``/``results`` 에 대한 open/stat/scandir/mkdir/
-   rename/unlink 등을 차단 (``PermissionError`` 로 크게 실패).
+2. 운영 상태 파일 — ``~/.cache/ai_trader``, ``~/.cache/ai_trader_us``, ``~/.gh_token`` 은
+   open/stat/scandir/mkdir/rename/unlink 등 전부 차단, 운영 체크아웃의 ``.env``/``logs``/
+   ``results`` 는 내용 읽기·변경만 차단(메타데이터는 허용 — 운영 체크아웃에서 verify 가 돌 때
+   pytest 의 rootdir 스캔이 막히면 배포가 롤백된다) (``PermissionError`` 로 크게 실패).
 3. HOME 등 시스템 환경변수는 **덮어쓰지 않는다** — 테스트가 tmp_path 를 명시 주입한다.
 
 차단 시도는 모두 기록해 세션 요약에 출력한다 (프로덕션 코드가 삼킨 예외도 보이게).
@@ -29,16 +30,25 @@ from typing import List
 # ── 차단 대상 (import 시점에 실제 HOME 으로 계산 — 이후 monkeypatch 무관) ──────────
 _HOME = Path.home()
 _PROD_ROOT = Path(os.environ.get("QWQ_PROD_ROOT", "/home/ubuntu/projects/qwq-ai-trader"))
+# 전면 차단(메타데이터 포함) — 운영 캐시·원장·상태, 토큰
 BLOCKED_PATH_PREFIXES = tuple(
     str(p) for p in (
         _HOME / ".cache" / "ai_trader",
         _HOME / ".cache" / "ai_trader_us",
         _HOME / ".gh_token",
+    )
+)
+# 내용 접근·변경만 차단(stat/scandir 등 메타데이터는 허용) — 운영 체크아웃 안에서 verify 가 돌 때
+# pytest 가 rootdir 항목(.env 의 pyvenv.cfg 검사, logs/·results/ 디렉터리 판정)을 stat 하는 것까지 막으면
+# 수집 자체가 실패해 배포가 롤백된다 (2026-09-15 03:03 local_deploy 실측). 자격증명 읽기(open)와 쓰기는 여전히 차단.
+BLOCKED_CONTENT_PREFIXES = tuple(
+    str(p) for p in (
         _PROD_ROOT / ".env",
         _PROD_ROOT / "logs",
         _PROD_ROOT / "results",
     )
 )
+_METADATA_FUNCS = {"stat", "lstat", "listdir", "scandir", "access"}
 _LOOPBACK_HOSTS = {"", "localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 VIOLATIONS: List[str] = []
@@ -53,7 +63,8 @@ class NetworkBlocked(ConnectionRefusedError):
     """테스트 중 외부 네트워크 접근 시도."""
 
 
-def _blocked_path(p) -> str | None:
+def _blocked_path(p, *, metadata_only: bool = False) -> str | None:
+    """차단 대상이면 절대 경로를 돌려준다. metadata_only=True(stat/scandir 등)면 내용 차단 그룹은 통과."""
     if isinstance(p, int):
         return None
     try:
@@ -65,18 +76,22 @@ def _blocked_path(p) -> str | None:
     if not s:
         return None
     a = os.path.abspath(s)
-    for prefix in BLOCKED_PATH_PREFIXES:
-        if a == prefix or a.startswith(prefix + os.sep):
-            return a
+    groups = (BLOCKED_PATH_PREFIXES,) if metadata_only else (BLOCKED_PATH_PREFIXES, BLOCKED_CONTENT_PREFIXES)
+    for group in groups:
+        for prefix in group:
+            if a == prefix or a.startswith(prefix + os.sep):
+                return a
     return None
 
 
 def _guard_fs(mod, name, path_arg_index=0):
     original = getattr(mod, name)
 
+    metadata_only = name in _METADATA_FUNCS
+
     def guarded(*args, **kwargs):
         target = args[path_arg_index] if len(args) > path_arg_index else kwargs.get("path")
-        hit = _blocked_path(target)
+        hit = _blocked_path(target, metadata_only=metadata_only)
         if hit is not None:
             VIOLATIONS.append(f"{_CURRENT_TEST[0]} :: {mod.__name__}.{name}({hit})")
             raise IsolationViolation(
