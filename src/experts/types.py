@@ -31,6 +31,10 @@ class ExpertOpinion:
     )
     raw_evidence: Dict[str, Any] = field(default_factory=dict)   # 원본 데이터
     error: Optional[str] = None
+    # 2026-09-14 (T9 요청 4): "자료 조회 성공"과 "판단에 쓸 만큼 충분"을 구분.
+    # "ok" | "partial" | "insufficient" — insufficient는 orchestrator 집계에서 가중 0 제외.
+    data_status: str = "ok"
+    missing_inputs: List[str] = field(default_factory=list)      # 결측/부족 입력 목록
 
     @property
     def is_valid(self) -> bool:
@@ -70,6 +74,8 @@ class ExpertOpinion:
             valid_until=valid_until,
             raw_evidence=dict(d.get("raw_evidence", {})),
             error=d.get("error"),
+            data_status=str(d.get("data_status", "ok") or "ok"),
+            missing_inputs=list(d.get("missing_inputs", [])),
         )
 
     @classmethod
@@ -81,6 +87,8 @@ class ExpertOpinion:
             regime_bias=RegimeBias.NEUTRAL,
             confidence=0.0,
             error=error,
+            data_status="insufficient",
+            missing_inputs=[error],
         )
 
 

@@ -17,7 +17,7 @@ API 호출 횟수: 하루 1회 (Yahoo Finance)
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -29,7 +29,7 @@ from loguru import logger
 # ──────────────────────────────────────────────────────────────────
 US_SYMBOLS: List[str] = [
     # 주요 지수
-    "^GSPC", "^IXIC", "^SOX", "^DJI",
+    "^GSPC", "^IXIC", "^SOX", "^DJI", "^VIX",
     # 섹터 ETF
     "XLK", "SMH", "SOXX", "XLV", "XLE", "ICLN", "URNM", "IBB", "XBI",
     "LIT", "TAN", "BOTZ", "ITA",
@@ -87,13 +87,26 @@ US_KOREA_SECTOR_MAP: Dict[str, Dict] = {
     },
 }
 
-# 지수 심볼 (종합 심리 판단용)
+# 지수 심볼 (종합 심리 판단용) — 표시명 기반, 기존 소비자(daily_report.py 등) 호환 유지
 INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^SOX", "^DJI"]
 INDEX_NAMES = {
     "^GSPC": "S&P500",
     "^IXIC": "NASDAQ",
     "^SOX": "반도체(SOX)",
     "^DJI": "다우",
+}
+
+# 정규화 키 — LLM 레짐 분류 등 코드 소비측이 안정적으로 찾을 단일 출처 (2026-09-14 F10)
+# 재현된 버그: 소비측(kr_scheduler.py)은 indices.get("SP500")/("SOX")/("VIX")를 찾는데
+# 위 INDEX_NAMES는 "S&P500"/"반도체(SOX)" 같은 표시명이고 VIX는 수집 대상에도 없어
+# 전부 0으로 전달됐다. get_overnight_signal()의 indices_normalized가 이 키를 쓴다.
+# VIX는 레벨 지표라 등락 심리 평균(idx_pcts)에는 넣지 않는다(방향성 지표가 아님).
+US_INDEX_KEYS: Dict[str, str] = {
+    "^GSPC": "SP500",
+    "^IXIC": "NASDAQ",
+    "^DJI": "DOW",
+    "^SOX": "SOX",
+    "^VIX": "VIX",
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -309,9 +322,11 @@ class USMarketData:
             url = f"{self.YAHOO_BASE_URL}/v7/finance/quote"
             params = {
                 "symbols": symbols_str,
+                # regularMarketTime: 실제 체결(마감) 시각(epoch, UTC) — 조회 시각과
+                # 구분해 as_of를 채우는 데 쓴다(2026-09-14 T9 리뷰 advisory).
                 "fields": "symbol,shortName,regularMarketPrice,"
                           "regularMarketChange,regularMarketChangePercent,"
-                          "regularMarketVolume",
+                          "regularMarketVolume,regularMarketTime",
             }
 
             async with session.get(url, params=params) as resp:
@@ -335,6 +350,9 @@ class USMarketData:
                     "change_pct": q.get("regularMarketChangePercent", 0),
                     "name": q.get("shortName", symbol),
                     "volume": q.get("regularMarketVolume", 0),
+                    # epoch seconds(UTC) 또는 결측(v7가 안 주면 None) — 그대로 보존,
+                    # 시장 시각으로 변환/가공은 소비 지점(get_overnight_signal)에서.
+                    "market_time": q.get("regularMarketTime"),
                 }
             return result if result else None
 
@@ -518,11 +536,25 @@ class USMarketData:
             return {
                 "sentiment": "neutral",
                 "indices": {},
+                "indices_normalized": {
+                    key: {
+                        "price": None, "change": None, "change_pct": None,
+                        "fetched_at": None, "as_of": None, "source": "yahoo_finance",
+                        "missing": True, "reason": "US 시장 데이터 조회 실패",
+                    }
+                    for key in US_INDEX_KEYS.values()
+                },
                 "sector_signals": {},
                 "summary": "US 시장 데이터 조회 실패",
             }
 
-        # 1. 지수 등락률
+        # fetched_at은 "쿼리 성공 시각"(캐시 기록 시각). as_of는 실제 체결(마감) 시각을
+        # 채우려 시도하고, Yahoo v7이 regularMarketTime을 안 주면(v8 spark 폴백 등)
+        # 조회 시각을 시장 시각처럼 보이지 않도록 None + 사유를 남긴다
+        # (2026-09-14 T9 리뷰 advisory — as_of/fetched_at 의미 분리).
+        fetch_as_of = (self._cache_ts or datetime.now()).isoformat()
+
+        # 1. 지수 등락률 (표시명 기반 — 기존 소비자 호환, 필드 스키마 불변)
         indices: Dict[str, Dict] = {}
         idx_pcts: List[float] = []
         for sym in INDEX_SYMBOLS:
@@ -535,6 +567,41 @@ class USMarketData:
                     "change_pct": round(q["change_pct"], 2),
                 }
                 idx_pcts.append(q["change_pct"])
+
+        # 1-2. 정규화 키 (F10) — 결측은 0이 아닌 명시적 missing 표식
+        indices_normalized: Dict[str, Dict] = {}
+        for sym, key in US_INDEX_KEYS.items():
+            q = quotes.get(sym)
+            if q:
+                market_time = q.get("market_time")
+                as_of_val = None
+                as_of_note = "시장 시각 미제공"
+                if isinstance(market_time, (int, float)) and market_time > 0:
+                    try:
+                        as_of_val = datetime.fromtimestamp(
+                            market_time, tz=timezone.utc
+                        ).isoformat()
+                        as_of_note = None
+                    except (OSError, OverflowError, ValueError):
+                        as_of_val = None
+                        as_of_note = "시장 시각 파싱 실패"
+                indices_normalized[key] = {
+                    "price": q["price"],
+                    "change": round(q["change"], 2),
+                    "change_pct": round(q["change_pct"], 2),
+                    "fetched_at": fetch_as_of,
+                    "as_of": as_of_val,
+                    "source": "yahoo_finance",
+                    "missing": False,
+                }
+                if as_of_note:
+                    indices_normalized[key]["as_of_note"] = as_of_note
+            else:
+                indices_normalized[key] = {
+                    "price": None, "change": None, "change_pct": None,
+                    "fetched_at": None, "as_of": None, "source": "yahoo_finance",
+                    "missing": True, "reason": f"{sym} 조회 실패 또는 응답에 없음",
+                }
 
         # 2. 시장 심리 판단
         if idx_pcts:
@@ -576,6 +643,7 @@ class USMarketData:
         return {
             "sentiment": sentiment,
             "indices": indices,
+            "indices_normalized": indices_normalized,
             "sector_signals": sector_signals,
             "summary": " ".join(summary_parts),
         }
