@@ -291,6 +291,20 @@ KRScheduler.create_tasks()가 기능 존재 여부와 설정에 따라 태스크
 | 18:00 | 종목 마스터 갱신 |
 | 20:30 | 일일 진화 리뷰 |
 
+#### 레짐 입력 흐름 (2026-09-14 갱신)
+
+`_run_llm_regime_classifier()`는 실행 시각에 따라 서로 다른 KR 지수 자료를 쓴다.
+
+| 실행 | KR 지수 출처 | as_of |
+|---|---|---|
+| 08:10 (장 시작 전) | 08:20 이전 아침 스크리너 메모리(`_screener.get_kospi_change()`) | `08:20 (아침 스크리너 캐시)` |
+| 12:00 (장중, 09:00~15:35 창) | `kis_market_data.fetch_index_price("0001"/"1001")` 재조회 → 당일 등락률 + 아침 종가열에 당일 지수를 덧붙여 5일·20일 재계산 | 조회 시각 ISO8601 |
+| 12:00, 조회 실패 | 아침 캐시로 폴백 | `08:20 (장중 갱신 실패 — 아침 스크리너 캐시)` + `missing_fields`에 `KOSPI당일` |
+
+- 미국 지수는 `_index_field()`가 공급자 표기("S&P500", "반도체(SOX)")와 소비자 표기("SP500","SOX")를 모두 받는다. 없으면 **None → 프롬프트 "결측"**이며 0으로 채우지 않는다. VIX는 현재 `us_market_data.INDEX_SYMBOLS`에 없어 항상 결측으로 표기된다.
+- 장중 급락 감지기 상태(`batch_analyzer._intraday_state`)가 프롬프트에 포함되고, `crash`/`severe`면 LLM이 `trending_bull`을 반환해도 저장 전에 `neutral`로 제한된다(원본은 `llm_regime_raw`에 보존). 같은 급락 상태를 `_apply_regime_to_exit_manager()`의 충돌 방지 장치도 사용하므로, 08:20 스크리너 레짐이 bull이어도 장중 급락이면 낙관 레짐이 적용되지 않는다.
+- 모든 입력의 `as_of`·`source`·`missing_fields`는 `llm_regime_today.json`의 `input_meta`에 남는다.
+
 morning_scan_enabled가 false인 대체 모드에서는 15:35 사전분석 → 15:40 일일 스캔 → 19:30 저녁 보정 스캔을 사용하고, 다음 거래일 실행 시간은 설정값을 따른다.
 
 주간 작업에는 토요일 00:00 예산 리밸런싱, 토요일 09:30~09:44 매도 후 복기, 일요일 21:00 전문가 패널이 있다. KR 전문가 정기 브리핑에는 일요일 22:00과 월요일 06:00 슬롯도 있다. core 리밸런싱과 value-growth shadow는 각각의 주기·중복 방지 상태를 별도로 관리한다.

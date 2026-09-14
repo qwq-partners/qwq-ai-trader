@@ -71,6 +71,33 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
 | `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
 
+## 장중 레짐 입력 as_of·결측 확인 (2026-09-14~)
+
+12:00 장중 레짐 재분류가 **아침(08:20) 자료로 판단하지 않았는지**, 결측을 0으로 채우지 않았는지 확인한다.
+(2026-09-14: 당일 -3.34% 급락에도 12:00 `trending_bull` 0.85가 나온 사고의 점검 절차)
+
+```bash
+# 1) 오늘 레짐 파일의 입력 메타 — as_of / 결측 / 급락 상태
+python3 -c "import json,pathlib;d=json.load(open(pathlib.Path.home()/'.cache/ai_trader/llm_regime_today.json'));print(json.dumps({k:d.get(k) for k in ('regime','llm_regime_raw','regime_capped_reason','confidence','input_meta')},ensure_ascii=False,indent=2))"
+
+# 2) 로그로 재조회·결측·제한 발화 확인
+journalctl -u qwq-ai-trader --since today | grep -E "LLM레짐|레짐충돌가드|레짐동기화"
+```
+
+판정 기준:
+
+| 관측 | 의미 | 조치 |
+|---|---|---|
+| `input_meta.kr_as_of` 가 당일 12시대 ISO8601 | 정상 — 최신 지수로 판단 | 없음 |
+| `kr_as_of` 에 `장중 갱신 실패` | KIS 지수 조회 실패 → 아침 캐시로 판단 | KIS 연결·초당 한도(EGW00201) 확인. 반복되면 12:00 레짐 신뢰하지 말 것 |
+| `input_meta.missing_fields` 가 `["VIX"]` | 현재 정상 — VIX는 공급 대상 아님 | 없음 |
+| `missing_fields` 에 `KOSPI_c5`/`KOSPI_c20` | 아침 스크리너 미실행 | 08:20 배치 스캔 실행 여부 확인 |
+| `llm_regime_raw` 존재 + `regime_capped_reason` | 급락 중 낙관 레짐이 제한됨(정상 방어) | 없음 — 제한 전 값은 `llm_regime_raw` |
+| `intraday_crash_level` 이 `null` | 급락 감지기에 접근 못 함 | batch_analyzer 초기화 확인 (레짐 방어 미작동 상태) |
+
+> 결측은 0/중립으로 채우지 않는다. 프롬프트에 `결측`으로 표기되고 `missing_fields`에 집계된다.
+> 08:10 실행은 장 시작 전이라 재조회하지 않는 것이 정상이다(`kr_as_of` = `08:20 (아침 스크리너 캐시)`).
+
 ## 신규 전략 1차 스크리닝 (quick_backtest, 2026-08-03~)
 
 정식 백테스터에 올리기 전에 아이디어를 빠르게 기각/채택하는 연구 도구.
