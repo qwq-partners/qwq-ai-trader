@@ -121,7 +121,15 @@ class StockValidator:
                 self._safe_check_trend_buzz(stock_name),
             )
 
-            # DART block 공시 → 즉시 차단 (실제 위험을 발견한 확정 판단이므로 validated=True)
+            # T11: 수급 검증(공매도·순매수)은 MCP(pykrx) 연결이 있어야 실제로 수행된다.
+            # MCP 미연결이면 _safe_check_supply_demand가 예외 없이 "순매수 없음" 기본값을
+            # 조용히 돌려주므로, approved만 보면 "검증해서 통과"와 "확인 못 함"을 구분할 수
+            # 없다 — 그 구분을 validated/data_status로 명시한다 (approved 자체는 불변).
+            mcp_ok = bool(self._mcp_manager) and self._mcp_manager.is_server_available("pykrx")
+
+            # DART block 공시 → 즉시 차단 (DART 자체는 실제 위험을 발견한 확정 판단이라
+            # validated=True 고정이지만, 같이 조회된 supply_demand/short_selling 은
+            # mcp_ok 가 아니면 실제 조회된 값이 아니다 — data_status 는 그대로 반영)
             if dart_result.risk_level == "block":
                 reason = f"위험 공시 감지: {', '.join(dart_result.risk_disclosures[:3])}"
                 logger.info(f"[종목검증] {symbol} {stock_name} 차단: {reason}")
@@ -135,7 +143,7 @@ class StockValidator:
                     short_selling_result=ss_result,
                     trend_buzz_result=tb_result,
                     validated=True,
-                    data_status="full",
+                    data_status="full" if mcp_ok else "insufficient",
                 )
 
             # confidence 조정 합산 (범위 제한: -0.30 ~ +0.25)
@@ -147,12 +155,6 @@ class StockValidator:
                 + tb_result.confidence_adjustment
             )
             total_adj = max(-0.30, min(0.25, total_adj))
-
-            # T11: 수급 검증(공매도·순매수)은 MCP(pykrx) 연결이 있어야 실제로 수행된다.
-            # MCP 미연결이면 _safe_check_supply_demand가 예외 없이 "순매수 없음" 기본값을
-            # 조용히 돌려주므로, approved만 보면 "검증해서 통과"와 "확인 못 함"을 구분할 수
-            # 없다 — 그 구분을 validated/data_status로 명시한다 (approved 자체는 불변).
-            mcp_ok = bool(self._mcp_manager) and self._mcp_manager.is_server_available("pykrx")
 
             return ValidationResult(
                 approved=True,

@@ -93,8 +93,12 @@ class FundamentalAnalyst:
                 reason = getattr(result, "block_reason", "") or ""
                 # T11: validate()가 실제로 수행됐는지 여부 — approved는 불변 의미로 두고
                 # (기존 score/confidence 산식이 그대로 읽는다), 이 두 값만 근거 신뢰도 판단에 쓴다.
-                validated_ok = bool(getattr(result, "validated", True))
-                v_status = getattr(result, "data_status", None) or "full"
+                # T11 리뷰(2026-09-15 advisory): 필드 부재를 낙관값(True/"full")으로
+                # 올리면 계약 위반 객체(덕타이핑 validator)가 "검증했고 위험 없음"으로
+                # 포장된다 — 결측은 보수값(False/"unknown")으로 떨어뜨린다.
+                validated_ok = bool(getattr(result, "validated", False))
+                _v_status = getattr(result, "data_status", None)
+                v_status = _v_status if _v_status else "unknown"
 
                 sd = getattr(result, "supply_demand_result", None)
                 foreign = inst = False
@@ -113,6 +117,8 @@ class FundamentalAnalyst:
                         score += 10
                         findings.append("외국인" if foreign else "기관")
 
+                # 리뷰 참고(2026-09-15): pykrx-mcp에 공매도 도구가 없어(stock_validator._safe_check_short_selling)
+                # in_top50은 현재 항상 기본값(False)이다 — 아래 감점·evidence는 도구 제공 시 활성화될 사문 경로.
                 ss = getattr(result, "short_selling_result", None)
                 ss_top50 = ss is not None and bool(getattr(ss, "in_top50", False))
                 if ss_top50:
@@ -229,6 +235,8 @@ class TechnicalAnalyst:
             indicators_as_of: 그 지표가 계산된 시각.
                 스크리닝은 5분 주기라 심의 시점엔 최대 수십 분 지난 값일 수 있다.
                 None이면 현재로 간주하므로, 재사용 시 반드시 실제 시각을 넘길 것.
+                보유 재평가 경로(kr_scheduler)는 T11-C에서 실제 시각을 전달할
+                예정이다 — 그전까지 미전달 경로는 data_status="partial"로 남는다.
         """
         findings: List[str] = []
         metrics: Dict[str, Any] = dict(indicators or {})

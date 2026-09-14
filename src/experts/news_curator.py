@@ -132,13 +132,15 @@ class NewsCurator(ExpertAgent):
         )
 
     # ─────────────────────────────────────────
-    # 종목별 sentiment (engine.on_signal에서 호출)
+    # 종목별 sentiment (orchestrator.get_news_sentiment → agents.analysts.NewsAnalyst 에서 호출)
     # ─────────────────────────────────────────
     async def get_symbol_sentiment(self, symbol: str) -> Optional[Dict[str, Any]]:
         """종목별 24h sentiment + 이벤트 태그
 
         Returns:
-            {"score": -50, "tags": ["earnings_warning"], "items": 3} or None
+            {"score": -50, "tags": ["earnings_warning"], "items": 3,
+             "item_ids": [...], "dedup_removed": 0} or None
+            (item_ids/dedup_removed는 T11, 2026-09-15 추가 — 근거 원자료 식별자 + dedup 제거 건수)
 
         P1-4 (2026-05-29 리뷰): LLM 호출이 daily_call_budget를 우회하지 않도록
         budget 체크 + call count 증가.
@@ -171,7 +173,7 @@ class NewsCurator(ExpertAgent):
                 avg = int(sum(scores) / len(scores)) if scores else 0
                 tags = sorted(set(t for it in items for t in it.event_tags))
                 # 원자료 식별자 — url이 없으면(perplexity 속보 등) source+제목으로 대체 식별
-                item_ids = [it.url or f"{it.source}:{it.title[:60]}" for it in items]
+                item_ids = [it.url if it.url else f"{it.source}:{it.title[:60]}" for it in items]
                 result = {
                     "score": avg, "tags": tags, "items": len(items),
                     "item_ids": item_ids, "dedup_removed": fetched_count - len(items),
@@ -315,9 +317,25 @@ class NewsCurator(ExpertAgent):
         return items[:5]
 
     # ─────────────────────────────────────────
-    # 중복 제거 (Jaccard ≥ 0.6)
+    # 중복 제거 (URL 동일 + Jaccard ≥ 0.6)
     # ─────────────────────────────────────────
     def _deduplicate(self, items: List[NewsItem]) -> List[NewsItem]:
+        if len(items) <= 1:
+            return items
+        # T11 (2026-09-15, C6 리뷰 반영): 같은 URL 기사가 헤드라인만 바뀌어
+        # 재수집되면 토큰 Jaccard 유사도로 못 거르는 경우가 있다(리뷰 blocking) —
+        # URL이 있는 기사는 먼저 URL 기준으로 1건만 남긴다. 이 함수는 시장 뉴스
+        # (_analyze)와 종목별 뉴스(get_symbol_sentiment) 양쪽이 공유하므로
+        # 여기 한 곳만 고치면 두 경로 모두 수정된다.
+        seen_urls: Set[str] = set()
+        url_deduped: List[NewsItem] = []
+        for it in items:
+            if it.url:
+                if it.url in seen_urls:
+                    continue
+                seen_urls.add(it.url)
+            url_deduped.append(it)
+        items = url_deduped
         if len(items) <= 1:
             return items
         kept: List[NewsItem] = []

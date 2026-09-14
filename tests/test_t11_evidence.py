@@ -176,10 +176,14 @@ def test_news_curator_symbol_sentiment_dedups_same_url_article():
     from src.experts.news_curator import NewsCurator, NewsItem
 
     curator = NewsCurator(ExpertConfig())
+    # 리뷰 지적(2026-09-15): 헤드라인이 비슷하면 토큰 Jaccard 유사도만으로도
+    # 우연히 dedup 되어 URL 기준 dedup 이 실제로 배선됐는지 못 가린다.
+    # 아래 두 헤드라인은 토큰 교집합이 1개("반도체")뿐이라 Jaccard < 0.6 —
+    # 같은 URL 이라는 사실만으로 dedup 되는지를 검증한다.
     dup_items = [
-        NewsItem(title="삼성전자 실적 서프라이즈", summary="영업이익 급증",
+        NewsItem(title="삼성전자 3분기 영업이익 급증", summary="반도체 회복",
                   url="https://n.news/1", source="naver"),
-        NewsItem(title="삼성전자 실적 서프라이즈 단신", summary="영업이익 급증 요약",
+        NewsItem(title="[속보] 반도체 대장주 어닝 서프라이즈 기록", summary="시장 기대치 상회 전망 우세",
                   url="https://n.news/1", source="naver"),
     ]
 
