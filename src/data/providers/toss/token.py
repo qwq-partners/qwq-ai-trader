@@ -27,6 +27,7 @@ class TokenManager:
         self.now = now
         self._blocked = None
         self._seen_generation = 0
+        self._token_generations = {}
 
     def _check(self, deadline):
         if not self.enabled:
@@ -71,6 +72,8 @@ class TokenManager:
 
     def _return(self, record):
         self._seen_generation = max(self._seen_generation, record.generation)
+        digest = self._digest(record.access_token)
+        self._token_generations[digest] = max(self._token_generations.get(digest, 0), record.generation)
         return record.access_token
 
     def _due(self, record):
@@ -127,14 +130,17 @@ class TokenManager:
                         or (self.now() - record.issued_at).total_seconds() < 60):
                     raise TokenError("auth_unavailable")
                 return await self._issue(record.generation + 1, deadline)
+            failed_digest = self._digest(failed_token)
+            failed_generation = self._token_generations.get(failed_digest, 0)
             if (self._valid(record) and record.access_token != failed_token
-                    and record.generation > self._seen_generation):
+                    and record.generation > failed_generation
+                    and record.generation >= self._seen_generation):
                 self._state(record)
                 return self._return(record)
             generation = max(self._seen_generation, record.generation if record else 0,
                              state["generation"] if state else 0)
             try:
-                self.store.save_state("auth_unavailable", generation, self._digest(failed_token))
+                self.store.save_state("auth_unavailable", generation, failed_digest)
             except TokenError:
                 self._blocked = "auth_unavailable"
                 raise TokenError("auth_unavailable") from None

@@ -326,3 +326,52 @@ def test_malformed_auth_state_fails_closed_with_safe_error(tmp_path, field, valu
     with pytest.raises(token.TokenError):
         run(manager.bootstrap(approved=True, deadline=deadline()))
     assert issued == []
+
+
+@pytest.mark.parametrize("digest", ["", "f" * 63, "g" * 64])
+def test_revoked_state_requires_valid_digest_across_restart_and_expiry(tmp_path, digest):
+    import json
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+    from test_toss_token_contract import setup, run, deadline
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    now = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    manager.now = lambda: now
+    first = replace(record(storage), issued_at=now - timedelta(hours=1), expires_at=now + timedelta(hours=1))
+    store.save(first)
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(manager.recover("token-revoked", first.access_token, deadline=deadline()))
+    # 같은 bearer에 세대만 높여도 정상 지문이 있으면 절대 해제되지 않는다.
+    store.save(replace(first, generation=2))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(manager.get_token(deadline=deadline()))
+    path = store.directory / "toss_auth_state.json"
+    data = json.loads(path.read_text())
+    data["failed_digest"] = digest
+    path.write_text(json.dumps(data))
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True, now=lambda: now)
+    for candidate in (manager, restarted):
+        with pytest.raises(token.TokenError, match="auth_unavailable"):
+            run(candidate.get_token(deadline=deadline()))
+    now += timedelta(hours=2)
+    for candidate in (manager, restarted):
+        with pytest.raises(token.TokenError, match="auth_unavailable"):
+            run(candidate.get_token(deadline=deadline()))
+    assert issued == []
+    assert json.loads(path.read_text())["kind"] == "auth_unavailable"
+
+
+@pytest.mark.parametrize("kind", ["ready", "issuance_unknown"])
+def test_nonrevoked_state_rejects_unexpected_failed_digest(tmp_path, kind):
+    import json
+    token, storage = modules()
+    store = storage.SecureTokenStore(tmp_path / "toss", "offline-client")
+    store.save_state(kind, 1)
+    assert store.load_state()["kind"] == kind
+    path = store.directory / "toss_auth_state.json"
+    data = json.loads(path.read_text())
+    data["failed_digest"] = "a" * 64
+    path.write_text(json.dumps(data))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        store.load_state()

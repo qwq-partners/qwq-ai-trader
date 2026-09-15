@@ -207,8 +207,9 @@ class SecureTokenStore:
                 or data["kind"] not in {"ready", "auth_unavailable", "issuance_unknown"}
                 or type(data["generation"]) is not int or data["generation"] < 0
                 or not isinstance(data["failed_digest"], str)
-                or (data["failed_digest"] and (len(data["failed_digest"]) != 64
-                    or any(c not in "0123456789abcdef" for c in data["failed_digest"])))):
+                or (data["kind"] == "auth_unavailable" and (len(data["failed_digest"]) != 64
+                    or any(c not in "0123456789abcdef" for c in data["failed_digest"])))
+                or (data["kind"] != "auth_unavailable" and data["failed_digest"] != "")):
             raise TokenError("auth_unavailable")
         return data
 

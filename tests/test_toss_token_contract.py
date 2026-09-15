@@ -354,3 +354,54 @@ def test_very_short_expiry_cannot_bypass_minimum_refresh_interval(tmp_path):
     now += timedelta(seconds=57)
     assert run(manager.get_token(deadline=deadline())) == "synthetic-new-bearer"
     assert issued == ["issued", "issued"]
+
+
+def test_late_revoked_response_uses_current_token_already_returned_by_same_manager(tmp_path):
+    from dataclasses import replace
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    now = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    manager.now = lambda: now
+    store.save(replace(record(storage), issued_at=now - timedelta(hours=1),
+        expires_at=now + timedelta(minutes=31)))
+    first = run(manager.get_token(deadline=deadline()))
+    assert first == "synthetic-old-bearer"
+    now += timedelta(minutes=2)
+    second = run(manager.get_token(deadline=deadline()))
+    assert second == "synthetic-new-bearer"
+    assert issued == ["issued"]
+    assert run(manager.recover("token-revoked", first, deadline=deadline())) == second
+    assert run(manager.get_token(deadline=deadline())) == second
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True, now=lambda: now)
+    assert run(restarted.get_token(deadline=deadline())) == second
+    assert issued == ["issued"]
+
+
+@pytest.mark.parametrize("candidate,generation", [("synthetic-old-bearer", 4),
+    ("synthetic-stale-bearer", 2), ("synthetic-same-generation-bearer", 1)])
+def test_late_revoked_does_not_accept_same_bearer_or_generation_rollback(tmp_path, candidate, generation):
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    store.save(record(storage))
+    first = run(manager.get_token(deadline=deadline()))
+    store.save(record(storage, value="synthetic-current-bearer", generation=3))
+    assert run(manager.get_token(deadline=deadline())) == "synthetic-current-bearer"
+    # ready 원장 없이도 manager가 이미 본 최신 세대보다 후퇴할 수 없다.
+    store.save(record(storage, value=candidate, generation=generation))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(manager.recover("token-revoked", first, deadline=deadline()))
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True)
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    assert issued == []
+
+
+def test_revoked_different_bearer_must_advance_failed_tokens_generation(tmp_path):
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    store.save(record(storage))
+    first = run(manager.get_token(deadline=deadline()))
+    store.save(record(storage, value="synthetic-other-bearer", generation=1))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(manager.recover("token-revoked", first, deadline=deadline()))
+    assert issued == []
