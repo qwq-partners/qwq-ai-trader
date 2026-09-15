@@ -194,7 +194,7 @@ def test_timeout_persists_unknown_without_exception_secret(tmp_path):
         await asyncio.sleep(2)
     manager = token.TokenManager(store, role="issuer", issuer=issuer, enabled=True)
     with pytest.raises(token.TokenError, match="issuance_unknown"):
-        run(manager.bootstrap(approved=True, deadline=time.monotonic() + 0.05))
+        run(manager.bootstrap(approved=True, deadline=time.monotonic() + 1))
     restarted = token.TokenManager(store, role="issuer", issuer=issuer, enabled=True)
     with pytest.raises(token.TokenError, match="issuance_unknown") as caught:
         run(restarted.get_token(deadline=deadline()))
@@ -405,3 +405,139 @@ def test_revoked_different_bearer_must_advance_failed_tokens_generation(tmp_path
     with pytest.raises(token.TokenError, match="auth_unavailable"):
         run(manager.recover("token-revoked", first, deadline=deadline()))
     assert issued == []
+
+
+@pytest.mark.parametrize("interruption", ["deadline", "cancel"])
+def test_revocation_survives_deadline_or_cancel_before_lock(tmp_path, interruption):
+    from dataclasses import replace
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    now = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    manager.now = lambda: now
+    store.save(replace(record(storage), issued_at=now - timedelta(hours=1), expires_at=now + timedelta(hours=1)))
+    store.save_state("ready", 1)
+    failed = run(manager.get_token(deadline=deadline()))
+    async def scenario():
+        if interruption == "deadline":
+            with pytest.raises(token.TokenError, match="deadline_exceeded"):
+                await manager.recover("token-revoked", failed, deadline=time.monotonic() - 1)
+        else:
+            async with store.lock(deadline=deadline()):
+                task = asyncio.create_task(manager.recover("token-revoked", failed, deadline=deadline()))
+                await asyncio.sleep(0.02)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+    run(scenario())
+    now += timedelta(hours=2)
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True, now=lambda: now)
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.bootstrap(approved=True, deadline=deadline()))
+    assert issued == []
+
+
+def test_sync_observation_is_disabled_without_io(tmp_path):
+    token, store, manager, issued = setup(tmp_path, enabled=False)
+    assert callable(getattr(manager, "observe_revocation", None)), "sync observation API missing"
+    with pytest.raises(token.TokenError, match="disabled"):
+        manager.observe_revocation("synthetic-old-bearer")
+    assert not store.directory.exists()
+    assert issued == []
+
+
+def test_observed_old_token_resolves_to_new_cache_and_later_renews(tmp_path):
+    from dataclasses import replace
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    now = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    manager.now = lambda: now
+    first = replace(record(storage), issued_at=now - timedelta(hours=1), expires_at=now + timedelta(hours=1))
+    store.save(first)
+    run(manager.get_token(deadline=deadline()))
+    second = replace(first, access_token="synthetic-second-bearer", generation=2)
+    store.save(second)
+    assert run(manager.get_token(deadline=deadline())) == second.access_token
+    assert callable(getattr(manager, "observe_revocation", None)), "sync observation API missing"
+    manager.observe_revocation(first.access_token)
+    assert run(manager.get_token(deadline=deadline())) == second.access_token
+    # 동일 관측은 이미 저장된 해결 증거를 무효화하지 않는다.
+    manager.observe_revocation(first.access_token)
+    now += timedelta(hours=2)
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True, now=lambda: now)
+    assert run(restarted.get_token(deadline=deadline())) == "synthetic-new-bearer"
+    assert issued == ["issued"]
+    # 해결 이후에도 폐기된 bearer의 세대 숫자만 높여 재사용할 수 없다.
+    store.save(replace(first, generation=4, issued_at=now - timedelta(hours=1), expires_at=now + timedelta(hours=1)))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    assert issued == ["issued"]
+
+
+@pytest.mark.parametrize("cache", ["absent", "expired", "corrupt"])
+def test_unknown_observed_generation_needs_valid_new_cache_before_mint(tmp_path, cache):
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    assert callable(getattr(manager, "observe_revocation", None)), "sync observation API missing"
+    manager.observe_revocation("synthetic-unknown-bearer")
+    if cache != "absent":
+        store.save(record(storage, value="synthetic-different-bearer", generation=2, expired=True))
+        if cache == "corrupt":
+            (store.directory / "toss_token.json").write_text("broken")
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True)
+    for action in (restarted.get_token(deadline=deadline()), restarted.bootstrap(approved=True, deadline=deadline())):
+        with pytest.raises(token.TokenError):
+            run(action)
+    assert issued == []
+
+
+def test_sync_observation_does_not_overwrite_inflight_unknown(tmp_path):
+    token, store, manager, issued = setup(tmp_path)
+    assert callable(getattr(manager, "observe_revocation", None)), "sync observation API missing"
+    store.save_state("issuance_unknown", 2)
+    manager.observe_revocation("synthetic-old-bearer")
+    assert store.load_state()["kind"] == "issuance_unknown"
+    with pytest.raises(token.TokenError, match="issuance_unknown"):
+        run(manager.get_token(deadline=deadline()))
+    assert issued == []
+
+
+def test_issuance_admission_rechecks_deadline_after_observation_scan(tmp_path, monkeypatch):
+    token, store, manager, issued = setup(tmp_path)
+    clock = [0.0]
+    manager.clock = lambda: clock[0]
+    original = store.load_revocations
+    def scan():
+        observations = original()
+        state = store.load_state()
+        if state and state["kind"] == "issuance_unknown":
+            clock[0] = 2.0
+        return observations
+    monkeypatch.setattr(store, "load_revocations", scan)
+    with pytest.raises(token.TokenError):
+        run(manager.bootstrap(approved=True, deadline=1.0))
+    assert issued == []
+
+
+def test_inflight_issuance_cannot_publish_a_newly_observed_bearer(tmp_path):
+    token, store, _, issued = setup(tmp_path)
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def issuer():
+            issued.append("issued")
+            started.set()
+            await release.wait()
+            return {"access_token": "synthetic-newly-revoked", "expires_in": 86400, "token_type": "Bearer"}
+        manager = token.TokenManager(store, role="issuer", issuer=issuer, enabled=True)
+        task = asyncio.create_task(manager.bootstrap(approved=True, deadline=deadline()))
+        await asyncio.wait_for(started.wait(), 1)
+        manager.observe_revocation("synthetic-newly-revoked")
+        release.set()
+        with pytest.raises(token.TokenError, match="issuance_unknown"):
+            await task
+        restarted = token.TokenManager(store, role="issuer", issuer=issuer, enabled=True)
+        with pytest.raises(token.TokenError, match="issuance_unknown"):
+            await restarted.get_token(deadline=deadline())
+    run(scenario())
+    assert issued == ["issued"]

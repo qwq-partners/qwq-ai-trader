@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timedelta
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,8 @@ import uuid
 ORIGIN = "https://openapi.tossinvest.com"
 MAX_BYTES = 65536
 MAX_LIFETIME = 366 * 86400
+REVOCATION_SLOTS = 256
+REVOCATION_BYTES = 1024
 
 
 class TokenError(Exception):
@@ -102,7 +105,7 @@ class SecureTokenStore:
             if fd is not None:
                 os.close(fd)
 
-    def _read(self, name):
+    def _read(self, name, *, limit=MAX_BYTES):
         with self._directory() as directory:
             fd = None
             try:
@@ -112,15 +115,15 @@ class SecureTokenStore:
                     return None
                 metadata = os.fstat(fd)
                 self._check(metadata)
-                if metadata.st_size > MAX_BYTES:
+                if metadata.st_size > limit:
                     raise TokenError("invalid_cache")
                 payload = bytearray()
-                while len(payload) <= MAX_BYTES:
-                    chunk = os.read(fd, min(8192, MAX_BYTES + 1 - len(payload)))
+                while len(payload) <= limit:
+                    chunk = os.read(fd, min(8192, limit + 1 - len(payload)))
                     if not chunk:
                         break
                     payload.extend(chunk)
-                if len(payload) > MAX_BYTES:
+                if len(payload) > limit:
                     raise TokenError("invalid_cache")
                 data = json.loads(payload)
                 if not isinstance(data, dict):
@@ -216,6 +219,148 @@ class SecureTokenStore:
     def save_state(self, kind, generation=0, failed_digest=""):
         self._write("toss_auth_state.json", {"schema_version": 1, "client_identity": self.client_identity,
                     "origin": ORIGIN, "kind": kind, "generation": generation, "failed_digest": failed_digest})
+
+    @staticmethod
+    def _digest_ok(value):
+        return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+    @staticmethod
+    def _observation_id(digest, generation):
+        return hashlib.sha256(f"{digest}:{generation}".encode()).hexdigest()
+
+    def _observation(self, data):
+        if (set(data) != {"schema_version", "client_identity", "origin", "failed_digest", "generation"}
+                or type(data["schema_version"]) is not int or data["schema_version"] != 1
+                or data["client_identity"] != self.client_identity or data["origin"] != ORIGIN
+                or not self._digest_ok(data["failed_digest"])
+                or type(data["generation"]) is not int or data["generation"] < 0):
+            raise TokenError("auth_unavailable")
+        return self._observation_id(data["failed_digest"], data["generation"])
+
+    def _publish_immutable(self, name, data):
+        """완성된 파일만 link로 게시한다. 경쟁자의 동일 슬롯을 덮어쓰지 않는다."""
+        payload = json.dumps(data, allow_nan=False, separators=(",", ":")).encode()
+        if len(payload) > REVOCATION_BYTES:
+            raise TokenError("auth_unavailable")
+        with self._directory() as directory:
+            temporary = ".token-" + uuid.uuid4().hex
+            fd = None
+            created = False
+            try:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o600, dir_fd=directory)
+                created = True
+                self._check(os.fstat(fd))
+                offset = 0
+                while offset < len(payload):
+                    written = os.write(fd, payload[offset:])
+                    if written <= 0:
+                        raise TokenError("storage_failed")
+                    offset += written
+                os.fsync(fd)
+                os.close(fd)
+                fd = None
+                try:
+                    os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                except FileExistsError:
+                    return False
+                # 두 링크가 남는 짧은 구간은 독자가 안전 오류로 거부할 수 있다.
+                os.unlink(temporary, dir_fd=directory)
+                created = False
+                os.fsync(directory)
+                return True
+            except OSError:
+                raise TokenError("storage_failed") from None
+            finally:
+                if fd is not None:
+                    os.close(fd)
+                if created:
+                    try:
+                        os.unlink(temporary, dir_fd=directory)
+                    except OSError:
+                        pass
+
+    def _sync_existing(self, name):
+        # 경쟁자의 link 직후 중복 관측도 durable 완료를 확인한다.
+        with self._directory() as directory:
+            fd = None
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+                self._check(os.fstat(fd))
+                os.fsync(fd)
+                os.fsync(directory)
+            except OSError:
+                raise TokenError("storage_failed") from None
+            finally:
+                if fd is not None:
+                    os.close(fd)
+
+    def block_revocations(self):
+        """관측 유실/포화 시 보수적 영속 차단. 자동 해제 API는 없다."""
+        name = "toss_revoked_overflow.json"
+        if not self._publish_immutable(name, {"schema_version": 1, "overflow": True,
+                "client_identity": self.client_identity, "origin": ORIGIN}):
+            self._sync_existing(name)
+
+    def observe_revocation(self, digest, generation):
+        if self._read("toss_revoked_overflow.json", limit=REVOCATION_BYTES) is not None:
+            raise TokenError("auth_unavailable")
+        data = {"schema_version": 1, "client_identity": self.client_identity, "origin": ORIGIN,
+                "failed_digest": digest, "generation": generation}
+        observation_id = self._observation(data)
+        start = int(observation_id[:8], 16) % REVOCATION_SLOTS
+        for offset in range(REVOCATION_SLOTS):
+            name = f"toss_revoked_slot_{(start + offset) % REVOCATION_SLOTS:03d}.json"
+            existing = self._read(name, limit=REVOCATION_BYTES)
+            if existing is None:
+                if self._publish_immutable(name, data):
+                    return
+                existing = self._read(name, limit=REVOCATION_BYTES)
+            if existing is None:
+                raise TokenError("auth_unavailable")
+            if self._observation(existing) == observation_id:
+                self._sync_existing(name)
+                return
+        self.block_revocations()
+        raise TokenError("auth_unavailable")
+
+    def load_revocations(self):
+        if self._read("toss_revoked_overflow.json", limit=REVOCATION_BYTES) is not None:
+            raise TokenError("auth_unavailable")
+        observations = {}
+        for index in range(REVOCATION_SLOTS):
+            data = self._read(f"toss_revoked_slot_{index:03d}.json", limit=REVOCATION_BYTES)
+            if data is not None:
+                observation_id = self._observation(data)
+                if observation_id in observations:
+                    raise TokenError("auth_unavailable")
+                observations[observation_id] = data
+        # overflow 게시가 실패했어도 포화 슬롯 자체가 재시작 후 발급을 막는다.
+        if len(observations) == REVOCATION_SLOTS:
+            raise TokenError("auth_unavailable")
+        return observations
+
+    def load_revocation_resolutions(self):
+        data = self._read("toss_revoked_resolutions.json")
+        if data is None:
+            return {}
+        if (set(data) != {"schema_version", "client_identity", "origin", "resolutions"}
+                or type(data["schema_version"]) is not int or data["schema_version"] != 1
+                or data["client_identity"] != self.client_identity or data["origin"] != ORIGIN
+                or not isinstance(data["resolutions"], dict) or len(data["resolutions"]) > REVOCATION_SLOTS):
+            raise TokenError("auth_unavailable")
+        for observation_id, proof in data["resolutions"].items():
+            if (not self._digest_ok(observation_id) or not isinstance(proof, dict)
+                    or set(proof) != {"cache_digest", "generation"}
+                    or not self._digest_ok(proof["cache_digest"])
+                    or type(proof["generation"]) is not int or proof["generation"] < 1):
+                raise TokenError("auth_unavailable")
+        return data["resolutions"]
+
+    def save_revocation_resolutions(self, resolutions):
+        # 호출자는 issuer lock을 가진다. 관측 파일/issuance_unknown은 변경하지 않는다.
+        self._write("toss_revoked_resolutions.json", {"schema_version": 1,
+                    "client_identity": self.client_identity, "origin": ORIGIN, "resolutions": resolutions})
 
     @asynccontextmanager
     async def lock(self, *, deadline, clock=time.monotonic):

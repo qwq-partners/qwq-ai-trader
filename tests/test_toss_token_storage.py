@@ -375,3 +375,181 @@ def test_nonrevoked_state_rejects_unexpected_failed_digest(tmp_path, kind):
     path.write_text(json.dumps(data))
     with pytest.raises(token.TokenError, match="auth_unavailable"):
         store.load_state()
+
+
+def test_observation_is_idempotent_private_and_preserves_auth_state(tmp_path):
+    from test_toss_token_contract import setup
+    _, store, manager, _ = setup(tmp_path)
+    store.save_state("ready", 1)
+    previous = (store.directory / "toss_auth_state.json").read_bytes()
+    for _ in range(3):
+        manager.observe_revocation("synthetic-observed-bearer")
+    paths = list(store.directory.glob("toss_revoked_slot_*.json"))
+    assert len(paths) == 1
+    assert stat.S_IMODE(paths[0].stat().st_mode) == 0o600
+    assert paths[0].stat().st_size <= 1024
+    assert "synthetic-observed-bearer" not in paths[0].read_text()
+    assert (store.directory / "toss_auth_state.json").read_bytes() == previous
+    assert not list(store.directory.glob(".token-*"))
+
+
+@pytest.mark.parametrize("damage", ["json", "large", "symlink", "mode", "owner"])
+@pytest.mark.parametrize("surface", ["observation", "resolution"])
+def test_observation_and_resolution_damage_blocks_restart(tmp_path, monkeypatch, damage, surface):
+    from test_toss_token_contract import setup, run, deadline
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    manager.observe_revocation("synthetic-old-bearer")
+    store.save(record(storage, value="synthetic-different-bearer", generation=2))
+    assert run(manager.get_token(deadline=deadline())) == "synthetic-different-bearer"
+    path = (next(store.directory.glob("toss_revoked_slot_*.json")) if surface == "observation"
+            else store.directory / "toss_revoked_resolutions.json")
+    if damage == "json":
+        path.write_text("broken")
+    elif damage == "large":
+        path.write_bytes(b" " * (1025 if surface == "observation" else 65537))
+    elif damage == "symlink":
+        target = tmp_path / "untouched"
+        path.unlink()
+        path.symlink_to(target)
+    elif damage == "mode":
+        path.chmod(0o644)
+    else:
+        inode = path.stat().st_ino
+        original = os.fstat
+        def wrong_owner(fd):
+            data = original(fd)
+            if data.st_ino == inode:
+                values = list(data)
+                values[4] += 1
+                return os.stat_result(values)
+            return data
+        monkeypatch.setattr(os, "fstat", wrong_owner)
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True)
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    assert issued == []
+
+
+def test_revocation_slots_are_bounded_and_overflow_blocks_restart(tmp_path):
+    from test_toss_token_contract import setup, run, deadline
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    for index in range(256):
+        manager.observe_revocation(f"synthetic-distinct-{index}")
+    assert len(list(store.directory.glob("toss_revoked_slot_*.json"))) == 256
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        manager.observe_revocation("synthetic-overflow")
+    assert (store.directory / "toss_revoked_overflow.json").exists()
+    assert len(list(store.directory.glob("toss_revoked_slot_*.json"))) == 256
+    store.save(record(storage, value="synthetic-different-bearer", generation=300, expired=True))
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True)
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    assert issued == []
+
+
+@pytest.mark.parametrize("failure", ["write", "link", "file_fsync", "directory_fsync"])
+def test_failed_observation_publication_is_fail_closed(tmp_path, monkeypatch, failure):
+    from test_toss_token_contract import setup, run, deadline
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    store.save(record(storage, expired=True))
+    original_fsync = os.fsync
+    failures = []
+    def fail_once(*args, **kwargs):
+        failures.append(1)
+        if len(failures) == 1:
+            raise OSError("FAKE_OBSERVATION_STORAGE_SECRET")
+        return original_operation(*args, **kwargs)
+    def fsync(fd):
+        is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+        if is_directory == (failure == "directory_fsync") and not failures:
+            failures.append(1)
+            raise OSError("FAKE_OBSERVATION_STORAGE_SECRET")
+        return original_fsync(fd)
+    with monkeypatch.context() as patch:
+        if failure in {"write", "link"}:
+            original_operation = getattr(os, failure)
+            patch.setattr(os, failure, fail_once)
+        else:
+            patch.setattr(os, "fsync", fsync)
+        with pytest.raises(token.TokenError, match="auth_unavailable"):
+            manager.observe_revocation("synthetic-old-bearer")
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True)
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    assert issued == []
+
+
+def test_new_observation_outside_resolution_snapshot_is_not_acknowledged(tmp_path, monkeypatch):
+    from test_toss_token_contract import setup, run, deadline
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    store.save(record(storage, value="synthetic-current-bearer", generation=2))
+    manager.observe_revocation("synthetic-old-bearer")
+    original = store.load_revocations
+    def append_after_snapshot():
+        snapshot = original()
+        manager.observe_revocation("synthetic-current-bearer")
+        return snapshot
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "load_revocations", append_after_snapshot)
+        assert run(manager.get_token(deadline=deadline())) == "synthetic-current-bearer"
+    assert len(store.load_revocations()) == 2
+    assert len(store.load_revocation_resolutions()) == 1
+    restarted = token.TokenManager(store, role="issuer", issuer=manager.issuer, enabled=True)
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    assert issued == []
+
+
+def _observe_process(directory, digest, barrier, results):
+    import conftest  # noqa: F401
+    from pathlib import Path
+    _, storage = modules()
+    store = storage.SecureTokenStore(Path(directory), "offline-client")
+    barrier.wait(timeout=3)
+    store.observe_revocation(digest, 1)
+    store.observe_revocation(digest, 1)
+    results.put("observed")
+
+
+@pytest.mark.parametrize("same", [True, False])
+def test_two_process_observations_are_idempotent_and_never_clobber(tmp_path, same):
+    import hashlib
+    import multiprocessing
+    _, storage = modules()
+    store = storage.SecureTokenStore(tmp_path / "toss", "offline-client")
+    first = hashlib.sha256(b"synthetic-first").hexdigest()
+    slot = int(hashlib.sha256(f"{first}:1".encode()).hexdigest()[:8], 16) % 256
+    second = first
+    if not same:
+        for index in range(10000):
+            candidate = hashlib.sha256(f"synthetic-collision-{index}".encode()).hexdigest()
+            if int(hashlib.sha256(f"{candidate}:1".encode()).hexdigest()[:8], 16) % 256 == slot:
+                second = candidate
+                break
+        assert second != first
+    ctx = multiprocessing.get_context("spawn")
+    barrier, results = ctx.Barrier(2), ctx.Queue()
+    processes = [ctx.Process(target=_observe_process, args=(str(store.directory), digest, barrier, results))
+                 for digest in (first, second)]
+    try:
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=5)
+            assert process.exitcode == 0
+        assert [results.get(timeout=1) for _ in range(2)] == ["observed", "observed"]
+        observations = store.load_revocations()
+        assert len(observations) == (1 if same else 2)
+        assert {item["failed_digest"] for item in observations.values()} == {first, second}
+        assert not list(store.directory.glob(".token-*"))
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
+        results.close()
+        results.join_thread()

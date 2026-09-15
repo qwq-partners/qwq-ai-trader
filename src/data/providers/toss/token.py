@@ -54,6 +54,52 @@ class TokenManager:
     def _digest(token):
         return hashlib.sha256(token.encode()).hexdigest()
 
+    def observe_revocation(self, failed_token):
+        """호출자가 401을 해석한 직후, 첫 await/deadline 검사보다 먼저 호출한다."""
+        if not self.enabled:
+            raise TokenError("disabled")
+        try:
+            digest = self._digest(failed_token)
+            self.store.observe_revocation(digest, self._token_generations.get(digest, 0))
+        except Exception:
+            self._blocked = "auth_unavailable"
+            try:
+                self.store.block_revocations()
+            except Exception:
+                pass
+            raise TokenError("auth_unavailable") from None
+
+    def _revocation_gate(self, record):
+        """issuer lock 안에서 정확한 관측 스냅샷만 유효 최신 캐시로 해결한다."""
+        try:
+            observations = self.store.load_revocations()
+            resolutions = self.store.load_revocation_resolutions()
+            if not set(resolutions).issubset(observations):
+                raise TokenError("auth_unavailable")
+            if not observations:
+                return
+            if record is None or record.issued_at > self.now():
+                raise TokenError("auth_unavailable")
+            digest = self._digest(record.access_token)
+            if any(item["failed_digest"] == digest for item in observations.values()):
+                raise TokenError("auth_unavailable")
+            updated = dict(resolutions)
+            for observation_id, observation in observations.items():
+                proof = resolutions.get(observation_id)
+                if (self._valid(record) and record.generation > observation["generation"]
+                        and record.generation >= self._seen_generation
+                        and (proof is None or record.generation > proof["generation"]
+                             or (record.generation == proof["generation"] and digest == proof["cache_digest"]))):
+                    updated[observation_id] = {"cache_digest": digest, "generation": record.generation}
+                elif (proof is None or proof["cache_digest"] != digest
+                      or proof["generation"] != record.generation
+                      or proof["generation"] <= observation["generation"]):
+                    raise TokenError("auth_unavailable")
+            if updated != resolutions:
+                self.store.save_revocation_resolutions(updated)
+        except TokenError:
+            raise TokenError("auth_unavailable") from None
+
     def _state(self, record):
         state = self.store.load_state()
         if state is None:
@@ -88,6 +134,7 @@ class TokenManager:
             self._check(deadline)
             record = self._load()
             self._state(record)
+            self._revocation_gate(record)
             if self._valid(record) and (self.role == "reader" or not self._due(record)):
                 return self._return(record)
             if (record is None or (self.now() - record.issued_at).total_seconds() < 60
@@ -106,6 +153,7 @@ class TokenManager:
             # 손상 파일은 초기 부재가 아니므로 bootstrap으로 우회하지 않는다.
             self._state(self._load())
             record = self.store.load()
+            self._revocation_gate(record)
             if record is not None:
                 if self._valid(record):
                     return self._return(record)
@@ -113,6 +161,8 @@ class TokenManager:
             return await self._issue(1, deadline)
 
     async def recover(self, error_code, failed_token, *, deadline):
+        if error_code == "token-revoked":
+            self.observe_revocation(failed_token)
         self._check(deadline)
         if error_code not in {"token-revoked", "expired-token"}:
             raise TokenError("auth_unavailable")
@@ -124,6 +174,7 @@ class TokenManager:
                 raise TokenError("issuance_unknown")
             if error_code == "expired-token":
                 self._state(record)
+                self._revocation_gate(record)
                 if self._valid(record) and record.access_token != failed_token:
                     return self._return(record)
                 if (record is None or self.role != "issuer" or self.issuer is None
@@ -136,6 +187,7 @@ class TokenManager:
                     and record.generation > failed_generation
                     and record.generation >= self._seen_generation):
                 self._state(record)
+                self._revocation_gate(record)
                 return self._return(record)
             generation = max(self._seen_generation, record.generation if record else 0,
                              state["generation"] if state else 0)
@@ -148,9 +200,16 @@ class TokenManager:
 
     async def _issue(self, generation, deadline):
         self._check(deadline)
+        record = self._load()
+        self._state(record)
+        self._revocation_gate(record)
         # intent 게시 성공 전에는 외부 발급자를 절대 호출하지 않는다.
         self.store.save_state("issuance_unknown", generation)
         try:
+            # admission scan 시작 전에 durable 게시된 관측은 모두 검사한다.
+            # scan 중/후 관측은 이미 허용한 외부 발급을 취소하지 못하며,
+            # 새 토큰 게시/이후 반환·갱신에서 다시 검사한다.
+            self._revocation_gate(record)
             remaining = self._check(deadline)
             response = await asyncio.wait_for(self.issuer(), timeout=remaining)
             if not isinstance(response, dict):
@@ -165,6 +224,7 @@ class TokenManager:
                 client_identity=self.store.client_identity)
             self._check(deadline)
             self.store.save(record)
+            self._revocation_gate(record)
             self.store.save_state("ready", generation)
             return self._return(record)
         except asyncio.CancelledError:
