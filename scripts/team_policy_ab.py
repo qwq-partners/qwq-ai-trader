@@ -140,7 +140,8 @@ PRE_REGISTERED = {
         "결정 시각의 KST 날짜가 후보일과 다르면 기권한다(이월계획 시간 모델 미지원). "
         "보고서 신선도는 원본 data_as_of 우선, 키가 없을 때만 판단 시각-age_minutes 로 복원한다. "
         "복원할 시각이 없거나 손상되면 유효 보고서에서 제외한다. 근거 observed_at/valid_until은 "
-        "원본을 유지하고 같은 판단 시각에서 만료를 검사하며, 판단 이후 observed_at 근거는 제외한다. "
+        "원본을 유지하고 같은 판단 시각에서 만료를 검사하며, 판단 이후 observed_at이 포함된 "
+        "보고서는 종합 score를 안전하게 분해할 수 없어 통째로 제외한다. 다른 유효 보고서는 유지한다. "
         "results.evidence_items_without_age_all_rows 카운터 — 선정·dedup 이전 입력 전체의 "
         "evidence 항목 수라 정책/모드 간 동일한 스냅샷 품질 지표다. C 는 gate_b(R1 bear ACCEPT)를 전제로 하므로 "
         "R1 REJECT→R2 ACCEPT 전향 후보는 C 에서 제외된다(=live 팀 최종 판정보다 엄격) — "
@@ -334,6 +335,14 @@ def _to_analyst_report(d: Dict[str, Any], now: Optional[datetime] = None) -> Ana
     rep.data_as_of = as_of
     if as_of is None:
         rep.limitations.append("snapshot_report_time_missing_or_invalid")
+    if now is not None and any(
+        item.observed_at is not None and _as_kst(item.observed_at) > _as_kst(now)
+        for item in nested
+    ):
+        # 항목 status만 바꾸면 미래 근거가 기여한 보고서 종합 score는 그대로 남는다.
+        # 항목별 점수 분해 계약이 없으므로 이 보고서를 제외하고 별도 유효 보고서만 쓴다.
+        rep.error = rep.error or "snapshot_evidence_after_decision"
+        rep.limitations.append("snapshot_report_score_contains_future_evidence")
     return rep
 
 

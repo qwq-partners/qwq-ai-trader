@@ -91,6 +91,10 @@ class ExpertOpinion:
   `MIN_VALID_EXPERTS=4`(규칙#11 `valid_n>=4` 가드와 동일값) — `aggregate_regime_score`는
   가중 반영되는 시장체제 전문가가 이 미만이면 소수 표로 ±20까지 흔들리지 않도록
   0(무보정)을 반환한다.
+  장후 `morning_brief_eval`도 같은 `MIN_VALID_EXPERTS`를 사용한다(2026-09-15 교차 리뷰 후속).
+  발송 스냅샷 `expert_consensus.valid_n`이 4 미만이거나 미기록/무효면
+  `claimed=None, hit=None`과 사유를 남겨 방향 적중률 분모에서 제외한다.
+  구버전 커버리지 미기록도 평가 보류하며, 유효 4명 이상인 진짜 중립 예측만 보합으로 센다.
   `data_status_summary(opinions)` → `{"counts": {...}, "insufficient_experts": [...],
   "note": "자료 부족 N명", "valid_n": int, "insufficient_coverage": bool}` —
   `valid_n`/`insufficient_coverage`는 위 커버리지 게이트와 같은 기준(시장체제

@@ -194,7 +194,7 @@ def test_future_evidence_observation_cannot_be_laundered_by_old_report_age(obser
     assert report.evidence[0].status == "insufficient"
 
 
-def test_future_evidence_exclusion_keeps_independent_historical_fact_usable():
+def test_mixed_future_evidence_cannot_leave_its_aggregate_report_score_usable():
     candidate = _candidate(age=10)
     candidate.evidence[0]["evidence"].append({
         "source": "future", "metric": "later_quote", "value": 1, "kind": "fact",
@@ -202,4 +202,18 @@ def test_future_evidence_exclusion_keeps_independent_historical_fact_usable():
     })
     report = replay._to_analyst_report(candidate.evidence[0], now=datetime(2026, 8, 3, 10))
     assert [item.usable for item in report.evidence] == [True, False]
+    # 사실 하나를 제외해도 score=30에 그 미래 관측이 얼마나 기여했는지 알 수 없다.
+    assert replay.gate_b(candidate) is False
+
+
+def test_future_report_exclusion_preserves_separate_historical_report():
+    candidate = _candidate(age=10)
+    historical = dict(candidate.evidence[0], evidence=list(candidate.evidence[0]["evidence"]))
+    candidate.evidence[0]["evidence"].append({
+        "source": "future", "metric": "later_quote", "value": 1, "kind": "fact",
+        "status": "full", "observed_at": "2026-08-03T10:01:00+09:00",
+    })
+    candidate.evidence[0]["score"] = 100
+    candidate.evidence.append(historical)
     assert replay.gate_b(candidate) is True
+    assert replay._assess(candidate, 1).merit_score == 30

@@ -1,6 +1,7 @@
 """Codex review fixes: acquisition, validation bonus, and historical clock contracts."""
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -281,3 +282,11 @@ def test_missing_data_as_of_remains_fail_closed_and_serializable():
 
     assert report.age_minutes_at(datetime(2026, 9, 10, 10, 0)) == float("inf")
     assert report.to_dict()["data_as_of"] is None
+
+
+def test_missing_report_time_serializes_as_json_null_not_infinity():
+    report = _report()
+    report.data_as_of = None
+    restored = json.loads(json.dumps(report.to_dict(), allow_nan=False))
+    assert restored["data_as_of"] is None
+    assert restored["age_minutes"] is None

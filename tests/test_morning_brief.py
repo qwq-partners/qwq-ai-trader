@@ -262,7 +262,8 @@ BRIEF_0914 = {
         ],
         "basis": ["미국 지수", "빅테크"],
     },
-    "expert_consensus": {"score": 2, "bias": "neutral"},
+    # 유효 커버리지가 있는 중립 주장. 미기록 커버리지는 별도 기권 테스트 대상이다.
+    "expert_consensus": {"score": 2, "bias": "neutral", "valid_n": 4},
 }
 
 ACTUAL_0914 = {

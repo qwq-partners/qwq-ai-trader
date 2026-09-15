@@ -183,7 +183,8 @@ class AnalystReport:
         d["kind"] = self.kind.value
         d["data_as_of"] = (self.data_as_of.isoformat(timespec="seconds")
                             if isinstance(self.data_as_of, datetime) else None)
-        d["age_minutes"] = round(self.age_minutes, 1)
+        age = self.age_minutes
+        d["age_minutes"] = round(age, 1) if math.isfinite(age) else None
         d["evidence"] = [e.to_dict() for e in self.evidence]
         d["observed_at"] = (self.observed_at.isoformat(timespec="seconds")
                             if isinstance(self.observed_at, datetime) else None)

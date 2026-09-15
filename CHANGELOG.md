@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — fix: Codex 금일 커밋 리뷰 R1~R8 후속 (로컬 브랜치, Claude 리뷰 대기)
+
+기준 `1aba7d7`, `feature/codex-review-fixes-20260915`. 사용자 승인에 따라 병렬 격리 구현(Astra/high: 동기화·A/B, Terra/high: 근거 계약, 주 에이전트: 평가·CF·통합). 배포·재시작·주문·설정·원격 push·main 변경 없음.
+
+- R1 `kr_scheduler`: 장외 300초 수면을 거래일 08:00까지 남은 시간으로 제한. 응답 유실 체결의 동기화 공백을 줄이고 30초/300초 정책 유지.
+- R2/R3 `team_policy_ab`, `agents/types·analysts·judgment`: 손절·활성 트레일 갭은 시가 체결. replay 기준은 계획 결정 시각; TTL·감쇠·만료까지 now 전달, naive KST/aware UTC 정합화. 후보일과 다른 계획·미래 보고서/관측은 배제. 미래 관측이 종합 score에 섞인 보고서는 통째로 제외해 항목 필터만으로 점수가 살아남는 누수도 차단. 미상 시각은 null 직렬화. 구형 date-only는 명시적 KST 자정 폴백, no-age 신선 가정 제거. 원본 연구 결과는 재계산하거나 덮어쓰지 않음.
+- R4/R5 `stock_validator·dart_checker`: MCP None/isError/파싱·스키마 실패는 미획득·미캐시, 정상 0/중립은 보존. 정상 중립 DART 공시도 fetched=True.
+- R6 `FundamentalAnalyst·AnalystReport·judgment`: `validation_pass_bonus`를 독립 보존해 위험 경고 뒤에도 검증 통과 +10을 v2 merit에서 취소. legacy score/주문 임계값 불변; 구버전 필드 None은 기존 추정 폴백.
+- R7 `morning_brief_eval`: 유효 전문가 4명 미만 또는 커버리지 미상/무효는 hit=None+사유, 보합 적중률 분모에서 제외.
+- R8 `counterfactual_tracker`: 날짜별 불변 심의 원장 우선, 원장 없는 날짜만 최신 판정 파일 호환. 오전 BUY→오후 HOLD 유실 방지, 종목·날짜 1표본 및 deliberation_ids 보존, 재분류 시 가격 성과 보존·체결 대조 재확인·변경만 있어도 저장.
+- 테스트: `test_codex_{sync_boundary,evidence_contract,policy_replay,evaluation_sources}.py` 신규 106건, 기존 fixture의 시각·새 원장 경로 격리 보완. 통합 verify **902 passed / 2 xfailed / 기존 pykrx 경고 1**, 문법·비밀패턴 검사 통과, 외부/운영 접근 시도 0. 문서: 기술 문서·CLAUDE.md·MEMORY.md·`docs/reviews/codex-remediation-2026-09-15.md`(최종 검증·Claude 인계). 투자 성능 검증/운영 승격/독립 최종 리뷰 완료를 뜻하지 않음.
+
 ## 2026-09-15 — feat: 에이전트 팀 근거 정합성 개선 + 조건부 진입계획(EntryPlan) shadow 통합 (T11, F-agent A~E)
 
 계기: 팀이 "BUY 에 합의하는 시스템" 이었다 — 만장일치가 +20·conviction 0.90 으로 확률처럼 쓰이고(A1/A2), Bear 의 ACCEPT(위험 허용)가 매수 찬성과 합쳐지며(B1), 펀더멘털 '검증 통과'·예외가 긍정 근거/approved 로 흡수되고(C1/C2), confidence=0 보고서가 유효 소스 수를 채우고(C4), 거래량 키 불일치로 +15 가 절대 미발동(C5), 시장가 주문이 앞단 상한을 보장하지 않으며(D3/D5), 승인 BUY 가 CF 에서 제외되고(E1) 같은 날 판단이 덮어써졌다(E2). 현 코드(main 3175732) 재확인 결과는 계획서 §1 표.
