@@ -32,13 +32,18 @@
 - 기존 xfail 2건은 `test_live_backtest_parity.py`의 손절 발동 기준(가격 하락률 vs 수수료 포함 순손익률)과 익절 접촉(일봉 고가 vs 실시간 현재가) 차이. 이번 수정의 새 실패가 아니며 해당 parity/승격 제한은 그대로다.
 - 최초 구현 검증 후 운영 루트는 `main` / `1aba7d7d54281b19767fd875aa52445446502876`, staged/unstaged 변경 없음이었다. 이 최초 단계에서는 실제 서비스 상태·운영 데이터를 조회하지 않았다.
 
-## 후속 배포 준비 (2026-09-15)
+## 후속 배포 결과 (2026-09-15)
 
 - PR [#58](https://github.com/qwq-partners/qwq-ai-trader/pull/58) 생성. strict 보호의 `verify` 필수 검사를 우회하지 않고 통과 후 병합한다.
 - 사용자 승인 후 20:33 KST 읽기 전용 사전 점검: 서비스 active, KIS 연결, pending 0, 하트비트 정체 없음. 20:31 진화 잡은 거래 표본 부족으로 종료됨을 확인했다. `.env`·유효 설정 파일·킬스위치는 값 노출 없이 변경 전후 지문을 비교한다.
 - 배포 전 UTC 추가 검증에서 R3의 호환성 회귀 발견: 기존 생산자의 host-local naive `datetime.now()`와 새 기본 KST-aware 시계가 UTC 호스트에서 9시간 어긋났다. UTC 부분 검증 10건 실패, GitHub 전체 검증(run `34964038674`) 19 failed / 883 passed / 2 xfailed. **병합·배포를 보류하고 코드 호환성을 수정했다.** CI 시간대 설정으로 실패를 숨기지 않았다.
-- 추가 수정(Astra/high, 별도 워크트리): `now` 생략 시 naive 보고서는 기존 host-local 시계와 비교, aware 보고서는 실제 현재 순간과 비교. 명시적 replay `now`의 naive=KST 계약은 유지. 신규 14건 중 UTC RED 5 failed / 9 passed → GREEN 14 passed. UTC·Asia/Seoul 전체 verify 각각 **916 passed / 2 xfailed**, 문법·비밀패턴 통과·외부/운영 접근 0. 필수 GitHub 검사 결과를 확인한 뒤 배포한다. 이 호환성 수정은 별도 Astra/xhigh 읽기 전용 리뷰 대상이며 Claude의 R1~R8 전체 독립 리뷰를 대체하지 않는다.
+- 추가 수정(Astra/high, 별도 워크트리): `now` 생략 시 naive 보고서는 기존 host-local 시계와 비교, aware 보고서는 실제 현재 순간과 비교. 명시적 replay `now`의 naive=KST 계약은 유지. 신규 14건 중 UTC RED 5 failed / 9 passed → GREEN 14 passed. UTC·Asia/Seoul 전체 verify 각각 **916 passed / 2 xfailed**, 문법·비밀패턴 통과·외부/운영 접근 0. 별도 Astra/xhigh 읽기 전용 리뷰는 지적 사항 0건, UTC·KST 신규 14건씩 독립 재실행 통과. 이 2파일 한정 리뷰는 Claude의 R1~R8 전체 독립 리뷰를 대체하지 않는다.
 - 배포는 pending 0·운영 트리 청결·장외 조건을 직전 재확인한 뒤 `local_deploy.sh <병합 SHA>`로 수행한다. 운영 main을 먼저 pull하지 않아 스크립트의 이전 SHA 롤백 지점을 보존한다. 재시작 후 헬스·오류·설정 지문을 확인하고 최소 150초 뒤 ops-check로 재확인한다. 장외 동기화는 300초이므로 150초 관찰을 "동기화 5주기"로 부르지 않는다.
+- PR #58 최신 head `337d672`의 필수 `verify` 성공(run `34964883139`, 20:45 KST) → 보호 규칙을 우회하지 않고 **main `53ea967bb77790a9da45b4cd9aabe09d76dd48dc`**로 병합했다.
+- 첫 배포 호출은 격리 환경의 Git 전역 제외 경로 누락으로 `.claude/settings.local.json`을 untracked로 읽어 청결 가드에서 중단됐다(checkout·재시작 전). 파일 변경 없이 기존 `XDG_CONFIG_HOME=/home/ubuntu/.config`를 배포 프로세스에 명시해 재실행했다. 운영 애플리케이션 설정 변경이 아니다.
+- **20:47:03 KST 재시작·배포 성공**, PID `2925793`, 이전 checkout `1aba7d7`. 배포 스크립트에서 916 passed / 2 xfailed, 격리 위반 0·문법·비밀패턴 통과. pytest 임시 디렉터리 정리 경고는 있었으나 종료 코드 0이며, 임시 파일을 강제로 지우지 않았다. KIS 연결 20:47:03·엔진 시작 20:47:09 확인. 초기 `/api/health` 연결 정상·pending 0·정체 없음, 기동 이후 ERROR/Traceback·EGW00215 0건. `.env`·`config/default.yml`·`config/evolved_overrides.yml`·킬스위치 4경로의 지문/부재 상태가 배포 전과 같음을 확인했다.
+- **20:49:49 KST ops-check(재기동 166초 후)**: active, HTTP 500·EGW00201·EGW00215·토큰 오류·ERROR/Traceback 0, pending 0, 하트비트 정체·실패 누적 없음. harvest/vol/evolution은 "재시작 전 완료 복원" 상태다. `mcp` 패키지 부재로 pykrx·naver_search 연결 경고가 남아 있으며, **이전 18:31:48 기동 로그에도 같은 경고**가 있음을 대조했다. 이번 배포 회귀는 아니지만 두 MCP 데이터 경로가 정상 연결됐다는 뜻도 아니다. 환경/패키지 복구는 이번 수정본 배포 범위에서 수행하지 않았다.
+- 주문 발행·설정 편집·킬스위치 변경·canary 시작 없음. 08:00 동기화 경계 및 다음 장전/저녁 평가 경로는 해당 스케줄이 실행될 때 별도 관찰이 필요하며 지금 검증했다고 주장하지 않는다.
 
 최종 재현 명령(반드시 아래 격리 워크트리에서, 운영 .env 로드 금지):
 
