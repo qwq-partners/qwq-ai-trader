@@ -1,0 +1,44 @@
+[
+  {
+    "pair_id": "p-1",
+    "symbol": "005930",
+    "now": "2026-09-16T10:00:00+09:00",
+    "kis": {"price": 100.0, "observed_at": "2026-09-16T09:59:30+09:00", "fetched_at": "2026-09-16T09:59:40+09:00", "status": "ok", "latency_ms": 10.0},
+    "toss": {"price": 100.1, "observed_at": "2026-09-16T09:59:31+09:00", "fetched_at": "2026-09-16T09:59:41+09:00", "status": "ok", "latency_ms": 12.0}
+  },
+  {
+    "pair_id": "p-2",
+    "symbol": "000660",
+    "now": "2026-09-16T10:00:00+09:00",
+    "kis": {"price": 200.0, "observed_at": "2026-09-16T09:59:30+09:00", "fetched_at": "2026-09-16T09:59:40+09:00", "status": "ok", "latency_ms": 11.0},
+    "toss": {"price": 202.0, "observed_at": "2026-09-16T09:59:31+09:00", "fetched_at": "2026-09-16T09:59:41+09:00", "status": "ok", "latency_ms": 13.0}
+  },
+  {
+    "pair_id": "p-3-duplicate",
+    "symbol": "005930",
+    "now": "2026-09-16T10:00:00+09:00",
+    "kis": {"price": 100.0, "observed_at": "2026-09-16T09:59:30+09:00", "fetched_at": "2026-09-16T09:59:40+09:00", "status": "ok", "latency_ms": 10.0},
+    "toss": {"price": 100.1, "observed_at": "2026-09-16T09:59:31+09:00", "fetched_at": "2026-09-16T09:59:41+09:00", "status": "ok", "latency_ms": 12.0}
+  },
+  {
+    "pair_id": "p-4-failed",
+    "symbol": "035420",
+    "now": "2026-09-16T10:00:00+09:00",
+    "kis": {"price": 300.0, "observed_at": "2026-09-16T09:59:30+09:00", "fetched_at": "2026-09-16T09:59:40+09:00", "status": "ok", "latency_ms": 10.0},
+    "toss": {"price": null, "observed_at": "2026-09-16T09:59:31+09:00", "fetched_at": "2026-09-16T09:59:41+09:00", "status": "error", "latency_ms": 10.0, "raw_error": "credential=not-for-output"}
+  },
+  {
+    "pair_id": "p-5-skew",
+    "symbol": "051910",
+    "now": "2026-09-16T10:00:00+09:00",
+    "kis": {"price": 400.0, "observed_at": "2026-09-16T09:59:20+09:00", "fetched_at": "2026-09-16T09:59:30+09:00", "status": "ok", "latency_ms": 10.0},
+    "toss": {"price": 401.0, "observed_at": "2026-09-16T09:59:31+09:00", "fetched_at": "2026-09-16T09:59:41+09:00", "status": "ok", "latency_ms": 10.0}
+  },
+  {
+    "pair_id": "p-6-stale",
+    "symbol": "068270",
+    "now": "2026-09-16T10:00:00+09:00",
+    "kis": {"price": 500.0, "observed_at": "2026-09-16T09:50:00+09:00", "fetched_at": "2026-09-16T09:50:01+09:00", "status": "ok", "latency_ms": 10.0},
+    "toss": {"price": 500.1, "observed_at": "2026-09-16T09:50:00+09:00", "fetched_at": "2026-09-16T09:50:01+09:00", "status": "ok", "latency_ms": 10.0}
+  }
+]
