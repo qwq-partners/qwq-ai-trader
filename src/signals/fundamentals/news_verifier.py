@@ -27,6 +27,9 @@ class NewsCheckResult:
     negative_count: int = 0
     sentiment_score: float = 0.0  # -1.0 ~ +1.0
     confidence_adjustment: float = 0.0  # 진입 confidence 조정값
+    # 실제로 네이버 뉴스 API 를 조회해 얻은 결과인가 — 미설정·HTTP 실패·예외로 기본값을 대신
+    # 돌려준 경우 False. "기사 없음" 은 정상 조회이므로 True (T11 R-A r5 blocking, 2026-09-15).
+    fetched: bool = False
 
 
 # HTML 태그 제거 패턴
@@ -125,6 +128,7 @@ class NewsVerifier:
         if not items:
             # 뉴스 없음 → 재료 없는 급등 가능성
             return NewsCheckResult(
+                fetched=True,
                 has_news=False,
                 confidence_adjustment=-0.20,
             )
@@ -169,6 +173,7 @@ class NewsVerifier:
             confidence_adj = 0.0  # 혼재 또는 중립
 
         return NewsCheckResult(
+                fetched=True,
             has_news=True,
             positive_count=positive_count,
             negative_count=negative_count,

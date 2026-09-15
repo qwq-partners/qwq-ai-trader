@@ -53,6 +53,11 @@ class ValidationResult:
     supply_demand_result: Optional[SupplyDemandResult] = None
     short_selling_result: Optional[ShortSellingResult] = None
     trend_buzz_result: Optional[TrendBuzzResult] = None
+    # ── T11 근거 계약 (2026-09-15) — 기존 approved 의미·기본값·소비자(batch 검증 흐름)
+    #    동작은 그대로 둔다. 신규 소비자(에이전트 팀 분석가)만 이 두 필드로
+    #    "실제 검증을 수행했는가"를 approved 와 분리해 판단한다.
+    validated: bool = True        # 실제 검증 수행 여부 (미연결·예외 시 False)
+    data_status: str = "full"     # full | partial | insufficient | error
 
 
 class StockValidator:
@@ -108,15 +113,39 @@ class StockValidator:
         """
         try:
             # 5개 검증 병렬 실행
-            news_result, dart_result, sd_result, ss_result, tb_result = await asyncio.gather(
-                self._safe_check_news(symbol, stock_name),
-                self._safe_check_dart(symbol),
-                self._safe_check_supply_demand(symbol),
-                self._safe_check_short_selling(symbol),
-                self._safe_check_trend_buzz(stock_name),
-            )
+            (news_result, news_ok), (dart_result, dart_ok), (sd_result, sd_ok), \
+                (ss_result, ss_ok), (tb_result, tb_ok) = \
+                await asyncio.gather(
+                    self._safe_check_news(symbol, stock_name),
+                    self._safe_check_dart(symbol),
+                    self._safe_check_supply_demand(symbol),
+                    self._safe_check_short_selling(symbol),
+                    self._safe_check_trend_buzz(stock_name),
+                )
 
-            # DART block 공시 → 즉시 차단
+            # T11 리뷰 수정(2026-09-15, R-A r4 blocking #1): validated/data_status는
+            # "MCP 서버가 연결돼 있는가"(mcp_ok)가 아니라 "하위 검증이 실제로 값을
+            # 얻었는가"에서 유도한다 — mcp_ok만 보면 서버는 붙어 있는데
+            # _safe_check_supply_demand 내부에서 fetch가 실패(예외 흡수)해 기본값으로
+            # 조용히 대체된 경우도 "검증됐고 위험 없음"(validated=True/full)으로
+            # 잘못 보고됐다. news/dart도 동일 — DART_API_KEY 미설정(조회 미수행)
+            # 이나 check_disclosures 예외를 dart_ok=False로 반영하지 않으면 DART가
+            # 매 호출 500을 던져도 "위험 미발견"(full)으로 나갔다(r3 blocking #2
+            # 재발, 벡터만 수급→뉴스/DART로 이동). 공매도는 pykrx-mcp에 도구가
+            # 아예 없어(구조적 영구 부재, _safe_check_short_selling 참조) 항상
+            # ss_ok=False다 — 이건 "실패"가 아니므로 최소 partial로만 내리고
+            # insufficient로 떨어뜨리지 않는다.
+            mcp_ok = self._mcp_available("pykrx")
+            if not (mcp_ok and news_ok and dart_ok and sd_ok and tb_ok):
+                validated, data_status = False, "insufficient"
+            elif not ss_ok:
+                validated, data_status = True, "partial"
+            else:
+                validated, data_status = True, "full"
+
+            # DART block 공시 → 즉시 차단 (DART 자체는 실제 위험을 발견한 확정 판단이라
+            # validated=True 고정이지만, data_status는 같이 조회된 supply_demand/
+            # short_selling의 실제 획득 여부를 그대로 반영한다)
             if dart_result.risk_level == "block":
                 reason = f"위험 공시 감지: {', '.join(dart_result.risk_disclosures[:3])}"
                 logger.info(f"[종목검증] {symbol} {stock_name} 차단: {reason}")
@@ -129,6 +158,10 @@ class StockValidator:
                     supply_demand_result=sd_result,
                     short_selling_result=ss_result,
                     trend_buzz_result=tb_result,
+                    validated=True,
+                    # DART 가 위험을 확정한 조회이므로 (validated=True, insufficient) 모순 쌍을
+                    # 만들지 않는다 — 최소 partial (R-A r5 advisory)
+                    data_status=data_status if data_status != "insufficient" else "partial",
                 )
 
             # confidence 조정 합산 (범위 제한: -0.30 ~ +0.25)
@@ -149,72 +182,133 @@ class StockValidator:
                 supply_demand_result=sd_result,
                 short_selling_result=ss_result,
                 trend_buzz_result=tb_result,
+                validated=validated,
+                data_status=data_status,
             )
 
         except Exception as e:
-            # 예외 시 통과 (API 실패가 거래를 막지 않음)
+            # 예외 시 통과 (API 실패가 거래를 막지 않음) — 단, 실제로 검증하지 못했음을
+            # validated=False/data_status="error"로 남겨 소비자가 "정보 없음"과
+            # "위험 미발견"을 혼동하지 않게 한다.
             logger.debug(f"[종목검증] {symbol} 검증 예외 (통과): {e}")
-            return ValidationResult(approved=True)
+            return ValidationResult(approved=True, validated=False, data_status="error")
 
     # ───────────────────── 기존 검증 (뉴스/DART) ─────────────────────
 
-    async def _safe_check_news(self, symbol: str, stock_name: str) -> NewsCheckResult:
-        """뉴스 검증 (예외 안전)"""
+    async def _safe_check_news(self, symbol: str, stock_name: str) -> Tuple[NewsCheckResult, bool]:
+        """뉴스 검증 (예외 안전)
+
+        Returns:
+            (result, ok) — ok=False는 미설정(NAVER_CLIENT_ID/SECRET 없음) 또는
+            조회 예외로 기본값을 대신 돌려준 경우다 (T11 리뷰 r4 blocking #1,
+            2026-09-15). validate()가 이를 news_ok로 반영한다.
+        """
+        if not getattr(self.news_verifier, "_enabled", True):
+            return NewsCheckResult(), False
         try:
-            return await self.news_verifier.check_news(symbol, stock_name)
+            result = await self.news_verifier.check_news(symbol, stock_name)
         except Exception as e:
             logger.debug(f"[종목검증] 뉴스 검증 오류 ({symbol}): {e}")
-            return NewsCheckResult()
+            return NewsCheckResult(), False
+        # 생산자 내부에서 HTTP 실패를 삼키고 기본값을 돌려준 경우는 fetched=False 다 (R-A r5)
+        return result, bool(getattr(result, "fetched", True))
 
-    async def _safe_check_dart(self, symbol: str) -> DartCheckResult:
-        """DART 공시 검증 (예외 안전)"""
+    async def _safe_check_dart(self, symbol: str) -> Tuple[DartCheckResult, bool]:
+        """DART 공시 검증 (예외 안전)
+
+        Returns:
+            (result, ok) — ok=False는 미설정(DART_API_KEY 없음) 또는 조회 예외로
+            기본값을 대신 돌려준 경우다 (T11 리뷰 r4 blocking #1, 2026-09-15).
+            validate()가 이를 dart_ok로 반영한다.
+        """
+        if not getattr(self.dart_checker, "_enabled", True):
+            return DartCheckResult(), False
+        # corp_code 매핑이 비었거나(initialize 실패) 종목이 매핑에 없으면 check_disclosures 는
+        # 조회 없이 기본값을 돌려준다 — 그 조건과 1:1 로 미획득(ok=False) 처리 (R-A r5 blocking)
+        corp_map = getattr(self.dart_checker, "_corp_code_map", None)
+        if isinstance(corp_map, dict) and (not corp_map or str(symbol).lstrip("A").strip() not in corp_map):
+            return DartCheckResult(), False
         try:
-            return await self.dart_checker.check_disclosures(symbol)
+            result = await self.dart_checker.check_disclosures(symbol)
         except Exception as e:
             logger.debug(f"[종목검증] DART 검증 오류 ({symbol}): {e}")
-            return DartCheckResult()
+            return DartCheckResult(), False
+        # 생산자 내부에서 HTTP/API 실패를 삼키고 기본값을 돌려준 경우는 fetched=False 다
+        return result, bool(getattr(result, "fetched", True))
 
     # ───────────────────── MCP 기반 검증 (수급/공매도/트렌드) ─────────────────────
 
-    async def _safe_check_supply_demand(self, symbol: str) -> SupplyDemandResult:
-        """외국인/기관 수급 검증 (캐시 30분, 예외 안전)"""
-        if not self._mcp_manager or not self._mcp_manager.is_server_available("pykrx"):
-            return SupplyDemandResult()
+    def _mcp_available(self, server: str) -> bool:
+        """is_server_available 호출 보호 (advisory, 2026-09-15).
+
+        덕타이핑 MCP 매니저 구현체가 예외를 던지면 validate() 전체가 무너지는
+        대신 '미연결'로 안전하게 처리한다.
+        """
+        if not self._mcp_manager:
+            return False
+        try:
+            return bool(self._mcp_manager.is_server_available(server))
+        except Exception as e:
+            logger.debug(f"[종목검증] MCP 가용성 확인 실패({server}): {e}")
+            return False
+
+    async def _safe_check_supply_demand(self, symbol: str) -> Tuple[SupplyDemandResult, bool]:
+        """외국인/기관 수급 검증 (캐시 30분, 예외 안전)
+
+        Returns:
+            (result, ok) — ok=True는 실제 조회(또는 캐시 재사용)로 얻은 값,
+            False는 MCP 미연결·조회 실패로 기본값을 대신 돌려준 경우다.
+            T11 리뷰 수정(blocking #2, 2026-09-15): validate()가 이 ok를 그대로
+            반영해야 "연결됐지만 fetch 실패"를 "검증 통과"로 오판하지 않는다.
+        """
+        if not self._mcp_available("pykrx"):
+            return SupplyDemandResult(), False
 
         # 캐시 확인
         cached = self._get_cache(self._supply_demand_cache, symbol, self._SUPPLY_DEMAND_TTL)
         if cached is not None:
-            return cached
+            return cached, True
 
         try:
             result = await self._fetch_supply_demand(symbol)
             self._set_cache(self._supply_demand_cache, symbol, result, self._CACHE_MAX_SIZE)
-            return result
+            return result, True
         except Exception as e:
             logger.debug(f"[종목검증] 수급 검증 오류 ({symbol}): {e}")
-            return SupplyDemandResult()
+            return SupplyDemandResult(), False
 
-    async def _safe_check_short_selling(self, symbol: str) -> ShortSellingResult:
-        """공매도 상위 검증 (pykrx-mcp v0.1.3에 도구 미제공 → 즉시 기본값)"""
+    async def _safe_check_short_selling(self, symbol: str) -> Tuple[ShortSellingResult, bool]:
+        """공매도 상위 검증 (pykrx-mcp v0.1.3에 도구 미제공 → 즉시 기본값)
+
+        ok=False 고정 — 예외로 인한 '실패'가 아니라 도구가 구조적으로 영구
+        부재하다는 뜻이다. validate()는 이를 실제 실패(sd_ok=False)와 구분해
+        최소 partial로만 내린다(insufficient로 떨어뜨리지 않음).
+        """
         # 향후 pykrx-mcp에 공매도 도구 추가 시 캐시 로직 복원
-        return ShortSellingResult()
+        return ShortSellingResult(), False
 
-    async def _safe_check_trend_buzz(self, stock_name: str) -> TrendBuzzResult:
-        """검색 트렌드 검증 (캐시 2시간, 예외 안전)"""
-        if not self._mcp_manager or not self._mcp_manager.is_server_available("naver_search"):
-            return TrendBuzzResult()
+    async def _safe_check_trend_buzz(self, stock_name: str) -> Tuple[TrendBuzzResult, bool]:
+        """검색 트렌드 검증 (캐시 2시간, 예외 안전)
+
+        Returns:
+            (result, ok) — ok=False는 MCP 미연결 또는 조회 예외로 기본값을 대신
+            돌려준 경우다 (T11 리뷰 r4 blocking #1, 2026-09-15). validate()가
+            이를 tb_ok로 반영한다.
+        """
+        if not self._mcp_available("naver_search"):
+            return TrendBuzzResult(), False
 
         cached = self._get_cache(self._trend_buzz_cache, stock_name, self._TREND_BUZZ_TTL)
         if cached is not None:
-            return cached
+            return cached, True
 
         try:
             result = await self._fetch_trend_buzz(stock_name)
             self._set_cache(self._trend_buzz_cache, stock_name, result, self._CACHE_MAX_SIZE)
-            return result
+            return result, True
         except Exception as e:
             logger.debug(f"[종목검증] 트렌드 검증 오류 ({stock_name}): {e}")
-            return TrendBuzzResult()
+            return TrendBuzzResult(), False
 
     # ───────────────────── MCP 도구 호출 ─────────────────────
 

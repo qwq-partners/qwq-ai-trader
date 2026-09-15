@@ -151,7 +151,9 @@ class SignalEventStorage:
                 )
             # SSE push
             if self._sse_callback and row:
-                await self._push_sse(row["id"], row["event_time"], **kwargs)
+                if kwargs.get("event_type") in ("passed", "blocked", "penalized"):
+                    await self._push_sse(row["id"], row["event_time"], **kwargs)
+                # shadow_plan_check 등 계측 전용 행은 실시간 피드로 내보내지 않는다(T11)
         except Exception as e:
             logger.debug(f"[SignalEventStorage] 기록 실패 (무시): {e}")
 
@@ -185,7 +187,10 @@ class SignalEventStorage:
         if not self._pool:
             return []
         try:
-            where = "WHERE event_type = $2" if event_type else ""
+            # type 미지정 기본 조회는 실제 판정 행만 — shadow_plan_check(T11 shadow 기록)가
+            # 대시보드 '차단/통과 이력' 창을 잠식하지 않게 한다. shadow 행은 type 을 명시해 조회.
+            where = ("WHERE event_type = $2" if event_type
+                     else "WHERE event_type IN ('passed','blocked','penalized')")
             params = [limit, event_type] if event_type else [limit]
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
@@ -216,7 +221,7 @@ class SignalEventStorage:
                 summary = await conn.fetchrow(
                     """
                     SELECT
-                        COUNT(*) FILTER (WHERE side='buy')                        AS total_buy,
+                        COUNT(*) FILTER (WHERE side='buy' AND event_type IN ('passed','blocked','penalized')) AS total_buy,
                         COUNT(*) FILTER (WHERE side='buy' AND event_type='passed')  AS passed,
                         COUNT(*) FILTER (WHERE side='buy' AND event_type='blocked') AS blocked,
                         COUNT(*) FILTER (WHERE side='buy' AND event_type='penalized') AS penalized
@@ -245,7 +250,7 @@ class SignalEventStorage:
                            COUNT(*) FILTER (WHERE event_type='passed')  AS passed,
                            COUNT(*) FILTER (WHERE event_type='blocked') AS blocked
                     FROM signal_events
-                    WHERE side='buy'
+                    WHERE side='buy' AND event_type IN ('passed','blocked','penalized')
                       AND event_time >= NOW() - ($1 || ' days')::interval
                     GROUP BY strategy
                     ORDER BY (COUNT(*) FILTER (WHERE event_type='blocked')) DESC
@@ -259,7 +264,8 @@ class SignalEventStorage:
                            COUNT(*) FILTER (WHERE event_type='passed')  AS passed,
                            COUNT(*) FILTER (WHERE event_type='blocked') AS blocked
                     FROM signal_events
-                    WHERE side='buy' AND event_time >= NOW() - '14 days'::interval
+                    WHERE side='buy' AND event_type IN ('passed','blocked','penalized')
+                      AND event_time >= NOW() - '14 days'::interval
                     GROUP BY day
                     ORDER BY day
                     """

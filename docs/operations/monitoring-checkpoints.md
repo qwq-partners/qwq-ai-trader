@@ -630,6 +630,16 @@ T10(F13~F22, 통합 SHA `a6d81d0`)은 단계별 수정이 아니라 자료 수�
 
 20건 누적 전에는 위 관측을 근거로 임계값·판정 규칙을 바꾸지 않는다(`morning_brief_eval.summarize()` 표본 수 우선 확인).
 
+### 2026-09-15~ — T11 팀 근거 계약·판단 v2·EntryPlan shadow (배포 후 관측, 승격 판정 아님)
+
+- [ ] `~/.cache/ai_trader/team_ledger/deliberations_YYYYMMDD.jsonl` 이 슬롯마다 append 되고 같은 종목의 복수 시점 판단이 보존되는가(`team_ledger.count_samples`: buy_approved/buy_rejected/hold/abstained/failed 분포).
+- [ ] `TeamAssessment`: `abstained` 비율과 사유(근거 부족/토론 실패), `data_sufficiency` 분포, `success_probability` 가 항상 None 인가.
+- [ ] `signal_events` event_type=`shadow_plan_check` 행(총계·block_rate 분모·기본 조회·SSE 에서 제외, `type=shadow_plan_check` 로 조회)의 status/reasons 분포 — `QUOTE_STALE` 비율(호가 as_of 는 09:01 변환 시각), `COST_RR_LOW` 부착 비율(컷오프 결정은 분포를 본 뒤 별도 승인).
+- [ ] 팀 심의 `entry_ready` 가 대부분 wait(QUOTE_STALE) 이면 후보 현재가 재조회 배선을 검토(KIS 호출 증가 → 별도 승인).
+- [ ] CF `team_buy_unfilled` 등록 건수와 '체결 대조 미배선' 경고 — 실제 체결분이 섞이는지 확인.
+- [ ] 돈 경로 불변 확인: 09:01 주문 수량·가격·유형이 배포 전과 같은 규칙으로 산출되는가(`tests/test_t11_money_path_baseline.py` 와 같은 지문).
+- 승격·엣지 판정에 이 관측을 쓰지 않는다. A/B/C 러너는 연구용 스냅샷이 확보될 때까지 `synthetic_only`.
+
 ## 완료된 체크포인트
 
 (검증 완료 시 ✅ + 1줄 요약으로 여기에 이동)

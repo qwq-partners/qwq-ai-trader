@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +28,68 @@ class AnalystKind(str, Enum):
     FUNDAMENTAL = "fundamental"
     TECHNICAL = "technical"
     NEWS = "news"
+
+
+# 근거 상태·종류 어휘 (T11 근거 계약, 2026-09-15)
+EVIDENCE_STATUS = ("full", "partial", "insufficient", "error")
+EVIDENCE_KIND = ("fact", "interpretation", "assumption")
+
+
+@dataclass
+class EvidenceItem:
+    """근거 1건 — 출처·원자료 식별자·관측/수집 시각·상태·종류·유효기간을 분리해 담는다.
+
+    원칙(T11 계약 2.1): observed_at 은 **실제 관측/공표 시각을 모르면 None** 이다 —
+    수집 시각이나 now 로 채워 신선도를 세탁하지 않는다. 결측은 status 로 표시하고
+    value 를 0·중립·긍정으로 바꾸지 않는다. "위험 미발견"(risk_clear)과 "긍정 근거
+    확인"(positive_basis)은 보고서 수준에서 분리한다.
+    """
+
+    source: str                                  # 예: "stock_validator.supply_demand", "dart", "technical.indicators", "news_curator"
+    metric: str                                  # 예: "foreign_net_buying", "rsi_14", "sentiment"
+    value: Any = None
+    unit: Optional[str] = None                   # 예: "%", "bool", "score(-100..100)"
+    observed_at: Optional[datetime] = None       # 실제 관측/공표 시각 — 모르면 None
+    collected_at: Optional[datetime] = None      # 수집 시각
+    period: Optional[str] = None                 # 재무자료의 회계기간 (예: "2026Q2") — 없으면 None
+    status: str = "full"                         # EVIDENCE_STATUS
+    kind: str = "fact"                           # EVIDENCE_KIND
+    ref_id: Optional[str] = None                 # 원자료 식별자 (기사 URL·공시 접수번호·캐시 키)
+    valid_until: Optional[datetime] = None
+    expiry_reason: Optional[str] = None
+    dedup_key: Optional[str] = None              # 같은 기사·공시 재인용 식별용 (같으면 1회만 센다)
+    note: str = ""
+
+    @property
+    def usable(self) -> bool:
+        """판단 근거로 셀 수 있는가 — full/partial 이고 값이 있어야 한다"""
+        return self.status in ("full", "partial") and self.value is not None
+
+    @classmethod
+    def from_datapoint(cls, dp: Any, *, metric: str, kind: str = "fact",
+                       collected_at: Optional[datetime] = None, **kw) -> "EvidenceItem":
+        """T9 `src.utils.data_freshness.DataPoint` 를 감싼다 (결측 사유·as_of·ttl 보존)"""
+        value = getattr(dp, "value", None)
+        as_of = getattr(dp, "as_of", None)
+        ttl = getattr(dp, "ttl_seconds", None)
+        missing_reason = getattr(dp, "missing_reason", None)
+        status = "insufficient" if value is None else ("full" if as_of is not None else "partial")
+        valid_until = (as_of + timedelta(seconds=ttl)) if (as_of is not None and ttl is not None) else None
+        return cls(
+            source=str(getattr(dp, "source", "") or ""), metric=metric, value=value,
+            observed_at=as_of, collected_at=collected_at, status=status, kind=kind,
+            valid_until=valid_until, expiry_reason=None,
+            note=(missing_reason or ("관측 시각 미상" if as_of is None and value is not None else "")),
+            **kw,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        for k in ("observed_at", "collected_at", "valid_until"):
+            v = getattr(self, k)
+            d[k] = v.isoformat(timespec="seconds") if isinstance(v, datetime) else None
+        d["usable"] = self.usable
+        return d
 
 
 @dataclass
@@ -46,6 +108,14 @@ class AnalystReport:
     # 캐시된 값을 썼다면 그 값이 만들어진 시점을 넣는다.
     # 장중 판단에 몇 시간 전 데이터를 쓰면서 그 사실을 모르는 것이 가장 위험하다.
     data_as_of: datetime = field(default_factory=datetime.now)
+    # ── T11 근거 계약 (2026-09-15) — 기본값으로 하위 호환. 기존 score/confidence/data_as_of
+    #    의미는 기준선으로 불변이며, 신규 shadow 판단(TeamAssessment)은 아래 필드만 읽는다.
+    data_status: str = "unknown"                 # full | partial | insufficient | error | unknown(미판정)
+    evidence: List[EvidenceItem] = field(default_factory=list)
+    positive_basis: Optional[bool] = None        # 긍정적 투자 근거가 실제로 확인됐는가
+    risk_clear: Optional[bool] = None            # 검증을 실제로 수행했고 위험을 발견하지 못했는가 (≠ 긍정 근거)
+    observed_at: Optional[datetime] = None       # 정직한 관측 시각 — 모르면 None (data_as_of 추정치와 구분)
+    limitations: List[str] = field(default_factory=list)   # 예: "헤드라인 기반", "캐시 시각 미제공"
 
     @property
     def ok(self) -> bool:
@@ -95,6 +165,9 @@ class AnalystReport:
         d["kind"] = self.kind.value
         d["data_as_of"] = self.data_as_of.isoformat(timespec="seconds")
         d["age_minutes"] = round(self.age_minutes, 1)
+        d["evidence"] = [e.to_dict() for e in self.evidence]
+        d["observed_at"] = (self.observed_at.isoformat(timespec="seconds")
+                            if isinstance(self.observed_at, datetime) else None)
         return d
 
     @classmethod
@@ -114,6 +187,9 @@ class DebateTurn:
     # 모델 교체 전후 성과를 비교하려면 판단마다 이게 남아야 한다.
     model: str = ""
     provider: str = ""
+    # T11 (2026-09-15): R2 에서 입장이 바뀌었을 때만 채운다 —
+    # {"kind": "new_evidence"|"prior_error"|"unrecorded", "text": str}
+    change_reason: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -150,7 +226,8 @@ class DebateResult:
             "turns": [
                 {"round": t.round_no, "side": t.side,
                  "stance": t.stance, "text": t.text[:500],
-                 "model": t.model, "provider": t.provider}
+                 "model": t.model, "provider": t.provider,
+                 "change_reason": t.change_reason}
                 for t in self.turns
             ],
         }
@@ -197,6 +274,43 @@ class PMDecision:
         return d
 
 
+ASSESSMENT_POLICY_VERSION = "v2-shadow-2026-09-15"
+
+
+@dataclass
+class TeamAssessment:
+    """신규 shadow 판단 (T11 계약 2.2) — 기존 TradeProposal/conviction 과 병행하며 돈 경로에 쓰이지 않는다.
+
+    네 가지 판단을 별도 필드로 표현한다: 매수 매력(merit), 위험 허용(risk_acceptable),
+    자료 충분성(data_sufficiency), 진입 조건 충족(entry_ready). 합의 수준(consensus_level)·
+    근거 품질(evidence_quality)·성공확률(success_probability, 외부 검증 전 None+uncalibrated)
+    은 서로 다른 필드다. 판단 불능은 abstained 로 남긴다.
+    """
+
+    symbol: str
+    policy_version: str = ASSESSMENT_POLICY_VERSION
+    merit_score: Optional[int] = None            # -100~100, 근거 부족이면 None
+    merit_status: str = "abstain"                # sufficient | weak | insufficient | abstain
+    risk_acceptable: Optional[bool] = None       # Bear 최종: ACCEPT=True / REJECT=False / None=기권·실패
+    data_sufficiency: str = "insufficient"       # full | partial | insufficient
+    entry_ready: Optional[bool] = None           # EntryPlan shadow 검증 allow=True, wait/reject=False, None=계획 없음
+    entry_check: Optional[Dict[str, Any]] = None # PlanCheck.to_dict()
+    consensus_level: str = "failed"              # unanimous | split | one_sided | failed
+    evidence_quality: Dict[str, Any] = field(default_factory=dict)  # unique_sources, weight, dedup_removed, expired
+    success_probability: Optional[float] = None
+    calibration_status: str = "uncalibrated"     # 예측 사건·기간·외부 검증이 없으면 항상 uncalibrated
+    abstained: bool = False
+    abstain_reason: str = ""
+    independent_votes: Dict[str, Optional[bool]] = field(default_factory=dict)  # R1 {"bull":..,"bear":..}
+    final_votes: Dict[str, Optional[bool]] = field(default_factory=dict)        # 최종
+    change_reasons: List[Dict[str, Any]] = field(default_factory=list)          # [{"side","from","to","kind","text"}]
+    stance_v2: str = "abstain"                   # buy_candidate | hold | abstain
+    notes: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class TeamVerdict:
     """팀 심의 전체 결과 — 한 종목에 대한 최종 산출물"""
@@ -210,12 +324,21 @@ class TeamVerdict:
     elapsed_sec: float = 0.0
     error: Optional[str] = None
     wiki_context_used: bool = False  # 심의 컨텍스트에 종목 위키 노트 포함 여부 (2026-09-13 WikiSkill 계측)
+    # T11 (2026-09-15): shadow 판단·원장 식별자 — 기존 소비자는 무시해도 된다
+    assessment: Optional[TeamAssessment] = None
+    deliberation_id: str = ""
+    slot: str = ""
+    entry_plan_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "symbol": self.symbol,
             "name": self.name,
             "wiki_context_used": self.wiki_context_used,
+            "assessment": self.assessment.to_dict() if self.assessment else None,
+            "deliberation_id": self.deliberation_id,
+            "slot": self.slot,
+            "entry_plan_id": self.entry_plan_id,
             "decision": self.decision.to_dict() if self.decision else None,
             "reports": [r.to_dict() for r in self.reports],
             "debate": self.debate.to_dict() if self.debate else None,

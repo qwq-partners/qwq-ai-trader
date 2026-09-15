@@ -512,7 +512,7 @@ class OfficeAPIHandler:
             _qa_extra = {
                 "label": _cap(team.get("last_summary"), 200),
                 "activeFile": f"{team.get('last_name')}({team.get('last_symbol')})",
-                "skill": ("팀 심의 · " + {"buy": "매수", "hold": "보류", "sell": "매도"}.get(
+                "skill": ("팀 심의 · " + {"buy": "매수(제안)", "hold": "보류", "sell": "매도"}.get(
                     str(team.get("last_stance")), "거부")),
                 "hint": (f"토론 {team.get('last_rounds')}R"
                          f"{' 합의' if team.get('last_consensus') else ' 미합의'}"
@@ -520,7 +520,7 @@ class OfficeAPIHandler:
             }
             _buys, _holds = _int(team.get("buys")), _int(team.get("holds"))
             _rej = _int(team.get("rejected"))
-            _qa_task = f"심의 {_t_total}건 — 매수 {_buys} · 보류 {_holds} · 거부 {_rej}"
+            _qa_task = f"심의 {_t_total}건 — 매수(제안) {_buys} · 보류 {_holds} · 거부 {_rej}"
             if _buys == 0 and _t_total >= 3:
                 agents.append(_agent("qa", "blocked", _qa_task,
                                      reasonCode="blocked-unknown", **_qa_extra))

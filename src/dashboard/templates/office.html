@@ -287,9 +287,10 @@
 
   // approved=true는 "PM이 제안을 승인했다"일 뿐, stance=hold면 신규 매수는 없다.
   // 둘을 뭉뚱그리면 "승인 9건"이 매수 9건으로 읽힌다.
+  // T11 (2026-09-15): "매수"는 PM 승인 제안일 뿐 실주문이 아니다 — engine.html 라벨과 동일하게 맞춘다
   function outcome(v) {
     if (!v.approved) return { cls: 'tl-no', text: '거부' };
-    if (v.stance === 'buy')  return { cls: 'tl-ok', text: '매수' };
+    if (v.stance === 'buy')  return { cls: 'tl-ok', text: '매수(제안)' };
     if (v.stance === 'sell') return { cls: 'tl-no', text: '매도' };
     return { cls: 'tl-hold', text: '보류' };
   }
@@ -307,7 +308,7 @@
         <span class="tl-meta">
           <span>분석가 <b>${esc(scoreText(v.analyst_scores))}</b></span>
           <span>토론 <b>${esc(v.debate_rounds ?? '–')}R</b>${v.debate_consensus ? ' 합의' : ''}</span>
-          <span>확신 <b>${num(v.conviction)}</b></span>
+          <span title="${esc(v.conviction_label || '합의 기반 지표 · 확률 미보정')}">확신 <b>${num(v.conviction)}</b></span>
           <span><b>${num(v.elapsed_sec, 1)}</b>초</span>
         </span>
         ${hasDetail ? '<span class="tl-caret">▶</span>' : ''}
@@ -398,10 +399,10 @@
           `<option value="${esc(x)}"${x === d.date ? ' selected' : ''}>${esc(ymd(x))}</option>`).join('');
       }
 
-      const c = { 매수: 0, 보류: 0, 거부: 0, 매도: 0 };
+      const c = { '매수(제안)': 0, 보류: 0, 거부: 0, 매도: 0 };
       v.forEach(x => { c[outcome(x).text]++; });
       sumEl.textContent = v.length
-        ? `총 ${v.length}건 — 매수 ${c.매수} · 보류 ${c.보류} · 거부 ${c.거부 + c.매도}`
+        ? `총 ${v.length}건 — 매수(제안) ${c['매수(제안)']} · 보류 ${c.보류} · 거부 ${c.거부 + c.매도}`
         : '심의 기록 없음';
       listEl.innerHTML = v.length
         ? v.map(cardHTML).join('')

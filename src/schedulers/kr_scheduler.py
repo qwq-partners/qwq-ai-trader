@@ -5692,7 +5692,9 @@ JSON:
                 logger.info(f"[팀심의] {slot[0]:02d}:{slot[1]:02d} 슬롯 시작")
 
                 try:
-                    await self._run_team_deliberation_once()
+                    await self._run_team_deliberation_once(
+                        slot=f"{slot[0]:02d}:{slot[1]:02d}"
+                    )
                 except Exception as e:
                     logger.error(f"[팀심의] 실행 오류: {e}", exc_info=True)
 
@@ -5704,10 +5706,23 @@ JSON:
             logger.error(f"[팀심의] 스케줄러 오류: {e}", exc_info=True)
             raise
 
-    async def _run_team_deliberation_once(self):
-        """팀 심의 1회 실행 (후보 + 보유)"""
+    async def _run_team_deliberation_once(self, slot: str = ""):
+        """팀 심의 1회 실행 (후보 + 보유)
+
+        slot: 심의 슬롯 라벨("10:30" 등). 같은 날 같은 종목이 여러 번 심의되므로
+              원장·CF 소비자가 회차를 구분하려면 필요하다 (T11 계약 2.4).
+        """
         bot = self.bot
         team = bot.trading_team
+
+        # 오늘 대기 중인 조건부 진입계획 (종목당 1건) — 팀이 "지금 진입 가능한가"를
+        # 실행 검증기와 **같은 계획**으로 판단하게 한다. 없으면 None (생성 금지).
+        _plans_by_symbol = {}
+        try:
+            for _p in (getattr(getattr(bot, "batch_analyzer", None), "_pending", None) or []):
+                _plans_by_symbol[_p.symbol] = _p.to_dict()
+        except Exception as e:
+            logger.warning(f"[팀심의] 대기 계획 수집 실패 (계획 없이 진행): {e}")
 
         # ── 1) 매수 후보 상위 5 ──
         # 스크리닝은 5분 주기라 심의 시점엔 지표가 이미 몇 분~수십 분 지난 값이다.
@@ -5724,6 +5739,22 @@ JSON:
                     got = cache.get(sym)
                     if got:
                         return dict(got)
+            return None
+
+        def _cached_indicators_at(sym: str):
+            """지표 캐시의 **실제 계산 시각** (TechnicalIndicators._cache_ts).
+
+            보유 재평가는 스크리닝 후보와 달리 `_last_screened_at` 이 자기 자료의 시각이
+            아니다. 출처를 못 찾으면 now 로 채우지 않고 None 을 넘긴다 — 수집 시각으로
+            신선도를 세탁하면 분석가가 오래된 지표를 새 자료로 오인한다 (C3).
+            """
+            for holder in (getattr(bot, "batch_analyzer", None), bot):
+                scr = getattr(holder, "_screener", None) or getattr(holder, "screener", None)
+                ts_map = getattr(getattr(scr, "_indicators", None), "_cache_ts", None)
+                if isinstance(ts_map, dict):
+                    got = ts_map.get(sym)
+                    if got is not None:
+                        return got
             return None
 
         def _indicators_of(obj, sym: str):
@@ -5746,14 +5777,47 @@ JSON:
 
         candidates = []
         screened = getattr(bot, "_last_screened", None) or []
+        # 당일 갱신된 급락 감지기 상태만 넘긴다(전일 상태는 결측) — 팀 심의의 EntryPlan shadow
+        # 검증이 주문 직전 검증기와 같은 급락 입력을 보게 한다 (T11 통합)
+        try:
+            _team_intraday_level = self._intraday_crash_snapshot()[0]
+        except Exception:
+            _team_intraday_level = None
         for s in screened[:5]:
             _sym = getattr(s, "symbol", "")
             _meta = getattr(s, "metadata", None)
+            # 후보의 최신 가격은 스크리닝 시점 값이다 — 그 시각을 같이 넘긴다.
+            # 가격 필드는 타입마다 다르다: ScreenedStock=price, SwingCandidate=entry_price.
+            # (예전엔 운영에 없는 current_price/entry_price 만 봐서 항상 None 이었다)
+            _price = None
+            try:
+                for _attr in ("current_price", "price", "entry_price"):
+                    _raw_price = getattr(s, _attr, None)
+                    if _raw_price is None:
+                        continue
+                    _price = float(_raw_price)
+                    if _price <= 0:
+                        _price = None
+                    break
+            except (TypeError, ValueError):
+                _price = None
+            # 시각은 종목별 실측(ScreenedStock.screened_at)이 우선, 없으면 사이클 시각.
+            # 둘 다 없으면 None (now 로 채우지 않는다 — 신선도 세탁 금지).
+            _price_at = getattr(s, "screened_at", None)
+            if _price_at is None:
+                _price_at = screened_at
             candidates.append({
                 "symbol": _sym,
                 "name": getattr(s, "name", ""),
                 "indicators": _indicators_of(s, _sym),
                 "indicators_as_of": screened_at,
+                # ── T11: 팀 심의도 실행 검증기와 같은 계획·같은 호가를 본다 ──
+                "slot": slot,
+                "entry_plan": _plans_by_symbol.get(_sym),
+                "current_price": _price,
+                "quote_as_of": _price_at if _price is not None else None,
+                # 급락 감지기 당일 상태 — 실행 검증기(INTRADAY_BLOCK)와 같은 입력 (통합 담당, R-B advisory)
+                "intraday_level": _team_intraday_level,
                 # 섹터를 반드시 넘겨야 한다 — cross_validator 규칙4(동일 섹터 과집중)는
                 # `metadata.get("sector")`로만 동작해서, 없으면 집중 검사가 통째로 스킵된다.
                 "sector": (getattr(s, "sector", None)
@@ -5780,7 +5844,10 @@ JSON:
                     # 보유 종목도 근거 없이 재평가하면 토론이 "정보 부족 → 반대"로
                     # 기울어 청산 쪽 판단이 왜곡된다. 캐시된 지표라도 실어 보낸다.
                     "indicators": _cached_indicators(sym),
+                    # 지표의 실제 계산 시각 — 모르면 None (C3 / 인수 조건 §4 #3)
+                    "indicators_as_of": _cached_indicators_at(sym),
                     "pnl_pct": pnl_pct,
+                    "slot": slot,
                 })
         except Exception as e:
             logger.warning(f"[팀심의] 보유 종목 수집 실패: {e}")

@@ -220,7 +220,7 @@ Gemini는 `temperature=0.0`으로 고정했다.
 
 ## 실행 (2026-08-02~)
 
-`kr_scheduler.run_team_deliberation` — 장중 **10:30 / 14:00** 2회.
+`kr_scheduler.run_team_deliberation` — 장중 **10:30 / 11:30 / 13:00 / 14:00** 4슬롯(2026-08-03 2→4 확대, `SLOTS`).
 
 | 대상 | 범위 |
 |---|---|
@@ -283,6 +283,47 @@ python scripts/shadow_report.py --telegram   # 텔레그램 전송
 | 재현성 | 동일 입력 재실행 시 **판정 일치율 80% 이상** |
 | 장애 안전성 | stale·LLM 장애·공급자 폴백 상황에서 **주문 0건** 증명 |
 | 포트폴리오 | 동일 섹터 동시 후보 포함 스트레스 테스트 통과 |
+
+## T11 — 근거 계약·판단 v2(shadow)·조건부 진입계획·불변 원장 (2026-09-15)
+
+> 계획서 `docs/superpowers/plans/2026-09-15-agent-team-evidence-entryplan.md`. 상태: **구현 완료(shadow)**, 투자 성능 검증 미완, 운영 승격 없음. 팀 BUY 는 여전히 실주문에 연결되지 않는다.
+
+### 근거 계약 (`types.EvidenceItem`, `AnalystReport` 확장)
+- 근거 1건마다 출처·원자료 식별자(`ref_id`)·관측 시각(`observed_at`, 모르면 None — 수집 시각·now 로 채우지 않는다)·수집 시각·회계기간·상태(full/partial/insufficient/error)·종류(fact/interpretation/assumption)·유효기간·`dedup_key`(같은 기사·공시 재인용은 1회만).
+- 보고서는 `positive_basis`(긍정 근거 확인)와 `risk_clear`(검증 수행 + 위험 미발견)를 분리한다. 펀더멘털 "검증 통과" 는 risk_clear 일 뿐 긍정 근거가 아니다. 뉴스는 `limitations=["헤드라인 기반"]`.
+- `stock_validator.ValidationResult.validated/data_status` — 하위 검증(수급·공매도·DART·뉴스)의 실제 획득 여부에서 유도. 기존 `approved` 의 의미·기본값은 그대로(다른 소비자 무영향).
+- 기존 경로 버그 수정 2건(승인): `vol_ratio` 소비 키(거래량 +15 가 이전엔 절대 미발동), `evidence_quality` 의 유효 소스 수에서 confidence=0 보고서 제외. 기준선 특성화 테스트 `tests/test_t11_evidence_baseline.py`.
+
+### 판단 v2 (`judgment.assess` → `TeamAssessment`, 플래그 `TEAM_ASSESSMENT_V2`, 기본 "1"=shadow)
+| 필드 | 의미 |
+|---|---|
+| `merit_score/merit_status` | 매수 매력 — evidence 기반(usable fact, dedup 1회, confidence=0·만료·error 제외, risk_clear 단독 +10 미가산) |
+| `risk_acceptable` | Bear 최종 ACCEPT=True / REJECT=False / None=기권 — **매수 매력에 가산하지 않는다** |
+| `data_sufficiency` | full / partial / insufficient (유효 보고서 기준) |
+| `entry_ready` + `entry_check` | EntryPlan shadow 검증 allow=True, wait/reject=False, 계획 없음=None |
+| `consensus_level` | unanimous / split / one_sided / failed — 합의 수준일 뿐 확률이 아니다 |
+| `success_probability` | 항상 None, `calibration_status="uncalibrated"` (예측 사건·기간·외부 검증 없음) |
+| `independent_votes / final_votes / change_reasons` | R1 독립 표 보존, R2 변경 시 `변경사유: 새근거|이전해석오류 — …` 파싱(없으면 unrecorded) |
+| `stance_v2` | buy_candidate = merit sufficient ∧ risk_acceptable ∧ data ≥ partial ∧ entry_ready; 아니면 hold/abstain |
+- 채택 해석(통합 확정): 펀더멘털 '검증 통과' +10 은 positive_basis 유무와 무관하게 **항상 merit 에서 취소**한다(긍정 근거는 score 의 다른 항목으로 이미 반영).
+- 기존 `TradeProposal/PMDecision/conviction`·`team_conviction_multiplier` 산식은 **기준선으로 불변**(`tests/test_t11_judgment_baseline.py`). 화면의 conviction 은 "합의 기반 지표·확률 미보정" 으로 표기.
+- 재현성 원장 params 에 `reasoning_effort` 실제값·`seed`·`temperature`·`prompt_version="debate-v2-2026-09-15"`.
+
+### 조건부 진입계획 (EntryPlan = `PendingSignal` 확장, `execution/entry_plan.check_entry_plan`, 플래그 `ENTRY_PLAN_SHADOW`, 기본 "1"=shadow)
+- 정본은 PendingSignal 하나(`plan_id/setup/decided_at/inputs_ref/trigger/invalidation/required_inputs/assumptions/exit_policy_ref`). 배치 변환이 `Signal.metadata["entry_plan"]` 로 실어 주문 직전까지 조건이 유실되지 않는다.
+- `check_entry_plan` → `PlanCheck(allow|wait|reject, 사유 코드)`: 만료·가격 상한(wait)·밴드 하한·트리거(VCP 돌파)·setup 별 필수 입력(gap_vwap 의 vwap 없으면 `INPUT_MISSING:vwap`)·급락(severe → reject, crash 는 기존 SEPA 차단 미러)·무효화·위험예산/슬롯/일일 한도(문맥 있을 때만)·비용 반영 손익비(`COST_RR_LOW` 는 기록만, 컷오프 미정).
+- 엔진은 Order 생성 직전에 **기록만**(`signal_events` event_type=`shadow_plan_check`). 허용/차단하지 않는다. shadow 행은 `get_stats` 의 total_buy/block_rate 분모·`/api/signal-events` 기본 조회·SSE 실시간 피드에서 제외되며 `type=shadow_plan_check` 로만 조회한다(계측 오염 방지). 시장가 주문이 상한을 보장한다고 주장하지 않는다 — 지정가 도입은 모의 연구(E)까지.
+- 팀 심의는 후보 dict 의 `entry_plan/current_price/quote_as_of/intraday_level` 로 같은 함수를 호출해 `entry_ready` 를 낸다. 후보 현재가는 스크리닝 시점 값이라 5분 경과 시 `QUOTE_STALE`(wait)이 잦다(별도 재조회는 미배선).
+
+### 불변 원장·실행 상태 (`team_ledger.py`)
+- `~/.cache/ai_trader/team_ledger/deliberations_YYYYMMDD.jsonl` append-only, `deliberation_id = sha256(symbol|date|slot|input_snapshot_hash)[:16]` — 같은 입력 재시도는 같은 id(읽기 dedup). 같은 날 같은 종목의 여러 시점 판단·BUY/HOLD/REJECT/기권/실패 전부 보존. 기존 `team_verdicts/verdicts_*.json`(latest-per-symbol)은 대시보드·conviction 호환용으로 유지.
+- 실행 상태: `candidate → waiting_trigger | plan_rejected → shadow_ready → order_submitted → filled`. 뒤 두 단계는 trade_journal 등 실제 증거가 있을 때만 표시(승인 BUY 를 체결로 가정하지 않는다).
+- CF: 승인 BUY 중 체결 증거 없는 건은 `team_buy_unfilled` 로 추적(요약에서 '차단 적중' 프레이밍과 분리). 체결 대조 콜백 미배선 시 경고 표기.
+
+### 추가 가치 검증 도구 (`scripts/team_policy_ab.py`)
+- A 기존 규칙 / B +독립 근거 검토(R1) / C +토론(R2) 를 같은 후보군·시점에서 비교. 실험 1(선정: 진입·청산·비용 고정) / 실험 2(가격·시점: 기존 진입 vs EntryPlan 조건부, 일봉만으로 선후 불명확이면 미체결).
+- 사전 등록(manifest): 주평가 = 포지션당 비용 차감 R 중앙값·평균, MDE +0.10R, 표본 ≥30/정책, 시간순 홀드아웃(마지막 1/3) 부호 유지, 종목-주 클러스터·겹치는 보유기간 dedup, 판단 시각 이전 필드만. 벤치마크 KODEX200(캐시 없으면 null).
+- **실데이터 없음 → 합성 fixture 로 도구만 검증(`validation_status=synthetic_only`)**. 성능·확률 보정·승격 판정은 미검증/보류. 과거 LLM 재평가는 사후 지식 가능성을 한계로 명시.
 
 ## 남은 작업
 

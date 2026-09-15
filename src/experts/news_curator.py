@@ -132,13 +132,15 @@ class NewsCurator(ExpertAgent):
         )
 
     # ─────────────────────────────────────────
-    # 종목별 sentiment (engine.on_signal에서 호출)
+    # 종목별 sentiment (orchestrator.get_news_sentiment → agents.analysts.NewsAnalyst 에서 호출)
     # ─────────────────────────────────────────
     async def get_symbol_sentiment(self, symbol: str) -> Optional[Dict[str, Any]]:
         """종목별 24h sentiment + 이벤트 태그
 
         Returns:
-            {"score": -50, "tags": ["earnings_warning"], "items": 3} or None
+            {"score": -50, "tags": ["earnings_warning"], "items": 3,
+             "item_ids": [...], "dedup_removed": 0} or None
+            (item_ids/dedup_removed는 T11, 2026-09-15 추가 — 근거 원자료 식별자 + dedup 제거 건수)
 
         P1-4 (2026-05-29 리뷰): LLM 호출이 daily_call_budget를 우회하지 않도록
         budget 체크 + call count 증가.
@@ -158,14 +160,29 @@ class NewsCurator(ExpertAgent):
         try:
             items = await self._fetch_symbol_news(symbol)
             if not items:
-                result = {"score": 0, "tags": [], "items": 0}
+                result = {"score": 0, "tags": [], "items": 0, "item_ids": [], "dedup_removed": 0}
             else:
+                # T11 (2026-09-15, C6): _analyze()는 시장 뉴스에 _deduplicate를 쓰지만
+                # 이 경로는 빠져 있었다 — 같은 기사가 여러 검색어로 재수집되면
+                # sentiment·tags가 같은 기사 재인용만으로 부풀려진다.
+                # R-A r3 blocking #1 (2026-09-15): URL 선행 dedup은 이전에 공유
+                # _deduplicate 안에 있어 _analyze(시장 뉴스) 결과까지 바꿨다 — 여기
+                # (종목별 경로) 전용으로 한정한다. Jaccard dedup(_deduplicate)은
+                # 그대로 공유해 두 경로 모두 헤드라인 유사 기사는 걸러진다.
+                fetched_count = len(items)
+                items = self._url_dedup(items)
+                items = self._deduplicate(items)
                 await self._classify_batch(items)
                 self._inc_call_count()  # LLM 분류 1회 카운트
                 scores = [i.sentiment for i in items if i.sentiment != 0]
                 avg = int(sum(scores) / len(scores)) if scores else 0
                 tags = sorted(set(t for it in items for t in it.event_tags))
-                result = {"score": avg, "tags": tags, "items": len(items)}
+                # 원자료 식별자 — url이 없으면(perplexity 속보 등) source+제목으로 대체 식별
+                item_ids = [it.url if it.url else f"{it.source}:{it.title[:60]}" for it in items]
+                result = {
+                    "score": avg, "tags": tags, "items": len(items),
+                    "item_ids": item_ids, "dedup_removed": fetched_count - len(items),
+                }
 
             self._symbol_cache[symbol] = (result, datetime.now())
             return result
@@ -305,7 +322,27 @@ class NewsCurator(ExpertAgent):
         return items[:5]
 
     # ─────────────────────────────────────────
-    # 중복 제거 (Jaccard ≥ 0.6)
+    # URL 동일 기사 제거 — get_symbol_sentiment(종목별) 전용
+    # R-A r3 blocking #1 (2026-09-15): _analyze(시장 뉴스)와 공유하지 않는다 —
+    # 검색어별로 같은 기사가 재수집되는 것은 종목별 경로 특유의 패턴이고,
+    # 여기서 URL 선행 제거를 하면 시장 sentiment(item_count/confidence)가
+    # 의도치 않게 바뀐다.
+    # ─────────────────────────────────────────
+    def _url_dedup(self, items: List[NewsItem]) -> List[NewsItem]:
+        if len(items) <= 1:
+            return items
+        seen_urls: Set[str] = set()
+        out: List[NewsItem] = []
+        for it in items:
+            if it.url:
+                if it.url in seen_urls:
+                    continue
+                seen_urls.add(it.url)
+            out.append(it)
+        return out
+
+    # ─────────────────────────────────────────
+    # 중복 제거 (Jaccard ≥ 0.6) — 시장 뉴스(_analyze)·종목별 뉴스 양쪽이 공유
     # ─────────────────────────────────────────
     def _deduplicate(self, items: List[NewsItem]) -> List[NewsItem]:
         if len(items) <= 1:

@@ -9,6 +9,7 @@ import os
 import time
 import asyncio
 from datetime import date, datetime
+from typing import Dict, Optional
 
 import aiohttp as aiohttp_client
 from aiohttp import web
@@ -82,6 +83,70 @@ class KRAPIHandler:
 
     def __init__(self, data_collector):
         self.dc = data_collector
+
+    # ── T11 (2026-09-15) 팀 심의 실행 상태 — 계약 2.4 execution_state ──────────
+    _EXEC_STATES = ("candidate", "waiting_trigger", "plan_rejected", "shadow_ready", "order_submitted", "filled")
+
+    def _load_ledger_index(self, day: str) -> Dict[str, list]:
+        """하루치 팀 원장을 요청당 한 번만 읽어 종목별로 인덱싱 (N+1 파일 I/O 방지).
+
+        행마다 history_for_symbol(→ load_day)을 다시 부르면 목록 한 번 요청에 원장 파일을
+        건수만큼 반복해서 read_text 한다 — 여기서 한 번만 읽어 나눠 쓴다.
+        """
+        try:
+            from ..agents.team_ledger import load_day
+            rows = load_day(day)
+        except Exception as e:
+            logger.debug(f"[API] 팀 원장 조회 실패 (candidate 로 표시): {e}")
+            return {}
+        index: Dict[str, list] = {}
+        for r in rows:
+            index.setdefault(str(r.get("symbol") or ""), []).append(r)
+        for lst in index.values():
+            lst.sort(key=lambda r: str(r.get("decided_at", "")))
+        return index
+
+    def _execution_state(self, row: dict, day: str, ledger_index: Optional[Dict[str, list]] = None) -> str:
+        """팀 판단(candidate) ~ 실제 체결(filled) 중 화면에 보여줄 단계.
+
+        team_ledger 행이 order_submitted/filled 라고 적어도, 실제 주문·체결 증거
+        (trade_journal)가 없으면 그 값을 그대로 믿지 않고 shadow_ready 로 낮춘다 —
+        팀 BUY 합의와 실제 주문·체결을 화면에서 혼동시키지 않기 위함이다.
+
+        ledger_index 를 주면(get_team_verdicts 가 요청당 한 번 로드) 그걸 쓰고, 없으면
+        (단독 호출 등) 기존처럼 그때그때 history_for_symbol 로 조회한다.
+        """
+        symbol = str(row.get("symbol") or "")
+        state = "candidate"
+        try:
+            if ledger_index is not None:
+                hist = ledger_index.get(symbol) or []
+            else:
+                from ..agents.team_ledger import history_for_symbol
+                hist = history_for_symbol(symbol, day)
+            if hist:
+                state = str(hist[-1].get("execution_state") or "candidate")
+        except Exception as e:
+            logger.debug(f"[API] 팀 원장 조회 실패 (candidate 로 표시): {e}")
+        if state not in self._EXEC_STATES:
+            state = "candidate"
+        if state in ("order_submitted", "filled") and not self._has_fill_evidence(symbol, day):
+            return "shadow_ready"
+        return state
+
+    def _has_fill_evidence(self, symbol: str, day: str) -> bool:
+        """당일 실제 매수 체결 증거 — 이미 메모리에 로드된 trade_journal 만 본다
+        (새 인스턴스를 만들어 파일을 다시 읽지 않는다). 증거 없으면 보수적으로 False."""
+        try:
+            bot = getattr(self.dc, "bot", None)
+            tj = getattr(bot, "trade_journal", None)
+            if tj is None:
+                return False
+            y, m, d = int(day[:4]), int(day[4:6]), int(day[6:])
+            trade_date = date(y, m, d)
+            return any(getattr(t, "symbol", None) == symbol for t in tj.get_trades_by_date(trade_date))
+        except Exception:
+            return False
 
     async def get_status(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_status())
@@ -177,12 +242,17 @@ class KRAPIHandler:
                 if bool((r.get("decision") or {}).get("approved")) is want
             ]
 
+        verdict_day = day or f"{datetime.now():%Y%m%d}"
+        ledger_index = self._load_ledger_index(verdict_day)  # 요청당 1회 — 행마다 다시 읽지 않는다
+
         # 목록 화면용 요약 — 토론 전문은 상세 필드에 그대로 남겨둔다
         summary = []
         for r in rows:
             d = r.get("decision") or {}
             p = r.get("proposal") or {}
             deb = r.get("debate") or {}
+            a = r.get("assessment")  # T11 (2026-09-15) shadow 판단 — 없으면 구 레코드
+            a = a if isinstance(a, dict) else {}  # 손상 레코드(문자열 등) 1건이 전체 목록을 막지 않도록
             summary.append({
                 "symbol": r.get("symbol"),
                 "name": r.get("name"),
@@ -193,6 +263,7 @@ class KRAPIHandler:
                 "overridden_gates": d.get("overridden_gates", []),
                 "reason": d.get("reason", "")[:200],
                 "conviction": p.get("conviction"),
+                "conviction_label": "합의 기반 지표 · 확률 미보정",
                 "analyst_scores": p.get("analyst_scores", {}),
                 "debate_summary": deb.get("summary", "")[:200],
                 "debate_rounds": deb.get("rounds_run"),
@@ -204,6 +275,18 @@ class KRAPIHandler:
                 # 상세 패널이 펼칠 내용이 있는지 — 없으면 프런트가 토글을 숨긴다
                 "turn_count": len(deb.get("turns") or []),
                 "report_count": len(r.get("reports") or []),
+                # T11 (2026-09-15) — 신규 shadow 판단 요약 (계약 2.2). 구 레코드는 assessment 가 없어 None.
+                "assessment": {
+                    "stance_v2": a.get("stance_v2"),
+                    "merit_status": a.get("merit_status"),
+                    "risk_acceptable": a.get("risk_acceptable"),
+                    "data_sufficiency": a.get("data_sufficiency"),
+                    "entry_ready": a.get("entry_ready"),
+                    "consensus_level": a.get("consensus_level"),
+                    "calibration_status": a.get("calibration_status"),
+                } if a else None,
+                # 실행 상태 5단계 — 팀 판단과 실제 주문·체결을 화면에서 혼동하지 않도록 분리 (계약 2.4)
+                "execution_state": self._execution_state(r, verdict_day, ledger_index),
             })
 
         return web.json_response({
