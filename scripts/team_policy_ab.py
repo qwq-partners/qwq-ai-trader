@@ -250,6 +250,18 @@ def _as_kst(value: datetime) -> datetime:
     return value.replace(tzinfo=KST) if value.tzinfo is None else value.astimezone(KST)
 
 
+def _observation_issue(raw: Any, now: Optional[datetime]) -> Optional[str]:
+    """관측 미상(None)은 허용하되 명시된 손상·미래 시각은 평가에 쓰지 않는다."""
+    if raw is None:
+        return None
+    parsed = _parse_dt(raw)
+    if parsed is None:
+        return "invalid"
+    if now is not None and _as_kst(parsed) > _as_kst(now):
+        return "future"
+    return None
+
+
 def _decision_time(c: Candidate) -> Optional[datetime]:
     """정확한 계획 시각 우선, 해당 키가 없는 date-only 레거시는 KST 자정.
 
@@ -282,8 +294,8 @@ def _to_evidence_item(d: Dict[str, Any], now: Optional[datetime] = None) -> Evid
     if d.get("valid_until") is not None and valid_until is None:
         status = "insufficient"  # 손상된 만료시각을 '만료 없음'으로 승격하지 않는다.
     observed_at = _parse_dt(d.get("observed_at"))
-    if observed_at is not None and now is not None and _as_kst(observed_at) > _as_kst(now):
-        status = "insufficient"  # 보고서의 나이와 무관하게 판단 이후 관측은 사용할 수 없다.
+    if _observation_issue(d.get("observed_at"), now) is not None:
+        status = "insufficient"  # 명시된 손상/미래 관측을 미상(None)으로 정상화하지 않는다.
     return EvidenceItem(
         source=str(d.get("source") or ""), metric=str(d.get("metric") or ""),
         value=d.get("value"), unit=d.get("unit"),
@@ -335,10 +347,14 @@ def _to_analyst_report(d: Dict[str, Any], now: Optional[datetime] = None) -> Ana
     rep.data_as_of = as_of
     if as_of is None:
         rep.limitations.append("snapshot_report_time_missing_or_invalid")
-    if now is not None and any(
-        item.observed_at is not None and _as_kst(item.observed_at) > _as_kst(now)
-        for item in nested
-    ):
+    observation_issues = {
+        _observation_issue(row.get("observed_at"), now)
+        for row in [d, *(d.get("evidence") or [])]
+    }
+    if "invalid" in observation_issues:
+        rep.error = rep.error or "snapshot_observation_time_invalid"
+        rep.limitations.append("snapshot_report_score_contains_invalid_observation_time")
+    if "future" in observation_issues:
         # 항목 status만 바꾸면 미래 근거가 기여한 보고서 종합 score는 그대로 남는다.
         # 항목별 점수 분해 계약이 없으므로 이 보고서를 제외하고 별도 유효 보고서만 쓴다.
         rep.error = rep.error or "snapshot_evidence_after_decision"
@@ -641,6 +657,8 @@ def _entry_plan_fill(c: Candidate, start_idx: int) -> Tuple[Optional[int], Optio
         except (ValueError, TypeError):
             return None, None, "invalid_bar_time"
         check = check_entry_plan(plan, quote, now)
+        if any(reason.startswith("CHECKER_ERROR") for reason in check.reasons):
+            return None, None, "|".join(check.reasons)
         if check.status == "allow":
             efp = check.expected_fill_price
             fill = efp if (efp is not None and efp > 0) else price
@@ -752,6 +770,7 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
         no_data = 0
         incomplete = 0
         unfilled = 0
+        checker_error_reasons: Dict[str, int] = {}
         wait_days: List[int] = []
         opportunity_cost: List[float] = []
         for c in deduped_candidates:
@@ -770,6 +789,9 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
             else:
                 idx, entry_px, _reason = _entry_plan_fill(c, start_idx)
                 if idx is None or entry_px is None:
+                    if _reason and _reason.startswith("CHECKER_ERROR"):
+                        checker_error_reasons[_reason] = checker_error_reasons.get(_reason, 0) + 1
+                        continue  # 검사 오류는 정상 미체결·기회비용으로 평가하지 않는다.
                     unfilled += 1
                     # 미체결 기회비용 — 기존 방식(다음 시가) 이었다면 얻었을 R을 참고용으로 기록
                     base_entry = _next_open_entry(c)
@@ -798,12 +820,20 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
             })
         summary = _summarize_positions(mode, selected, positions, no_data, incomplete, excluded)
         summary["unfilled"] = unfilled
+        checker_errors = sum(checker_error_reasons.values())
+        evaluated = len(deduped_candidates) - checker_errors
+        summary["timing_candidates"] = len(deduped_candidates)
+        summary["checker_errors"] = checker_errors
+        summary["checker_error_reasons"] = checker_error_reasons
+        summary["evaluated_candidates"] = evaluated
         # 체결률 = (실제 시도한 후보 - 미체결 - 데이터없음) / 실제 시도한 후보. dedup 은 시뮬레이션
         # 전에 적용되므로 분모 자체가 dedup 이후 후보 수다(deduped_candidates) — dedup 제외는
         # results 의 excluded_correlated 로 별도 집계한다(advisory, 2026-09-15).
+        # 검사 오류는 유효 평가 분모에서 제외하되 건수·원래 후보 수를 함께 공개한다.
+        # 전부 검사 오류면 체결률은 미판정(None)이며 0%로 표시하지 않는다.
         summary["fill_rate"] = (
-            round((len(deduped_candidates) - unfilled - no_data) / len(deduped_candidates), 4)
-            if deduped_candidates else None
+            round((evaluated - unfilled - no_data) / evaluated, 4)
+            if evaluated else None
         )
         summary["avg_wait_days"] = round(sum(wait_days) / len(wait_days), 2) if wait_days else None
         summary["unfilled_opportunity_cost_median_r"] = (
