@@ -21,6 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 
 PLAN_CHECK_STATUS = ("allow", "wait", "reject")
 
@@ -91,6 +94,11 @@ def _as_dt(v: Any) -> Optional[datetime]:
     return None
 
 
+def _as_kst(value: datetime) -> datetime:
+    """주입 시각의 naive는 KST, aware는 실제 순간으로 비교한다."""
+    return value.replace(tzinfo=KST) if value.tzinfo is None else value.astimezone(KST)
+
+
 def _as_float(v: Any) -> Optional[float]:
     """숫자 변환 — 0.0 도 유효값이므로 falsy 판정을 쓰지 않는다"""
     if v is None or isinstance(v, bool):
@@ -125,7 +133,7 @@ def check_entry_plan(
     Args:
         plan: `PendingSignal` 인스턴스 또는 `to_dict()` 결과.
         quote: {"price", "as_of"(datetime|ISO), "vwap"(선택), "bid"/"ask"(선택)} — None 이면 QUOTE_MISSING.
-        now: 판정 시각(주입).
+        now: 판정 시각(주입). naive=KST, aware=실제 순간. 반환 감사 시각은 원형 유지.
         intraday_level: 급락 감지기 수준 normal|caution|crash|severe|None.
         risk_ctx: {"risk_budget_ok": bool|None, "slots_available": int|None, "daily_buys_left": int|None,
                    "fee_bps": float|None, "slippage_bps": float|None} — 없으면 해당 항목은 판정하지 않는다.
@@ -178,9 +186,10 @@ def check_entry_plan(
             )
 
         # ── 1) 만료 (호가와 무관) ────────────────────────────────────────────
+        reference = _as_kst(now)
         for raw in (p.get("expires_at"), invalidation.get("expires_at")):
             exp = _as_dt(raw)
-            if exp is not None and now > exp:
+            if exp is not None and reference > _as_kst(exp):
                 _add("reject", "PLAN_EXPIRED")
                 break
 
@@ -202,7 +211,7 @@ def check_entry_plan(
         if as_of is None:
             _add("wait", "QUOTE_STALE")
             return _result()
-        age_sec = (now - as_of).total_seconds()
+        age_sec = (reference - _as_kst(as_of)).total_seconds()
         if age_sec > QUOTE_MAX_AGE_SEC or age_sec < 0:
             # 미래 시각도 신뢰하지 않는다 (T10 B 의 as_of 기준과 동일)
             _add("wait", "QUOTE_STALE")
