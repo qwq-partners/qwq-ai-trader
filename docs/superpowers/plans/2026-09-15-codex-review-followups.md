@@ -52,9 +52,9 @@
 
 ## 통합·운영 인수
 
-- [ ] 작업별 독립 Codex 리뷰 → 필요한 수정의 한정 재리뷰 → 전체 브랜치 최종 독립 리뷰.
+- [x] 작업별 독립 Codex 리뷰 → 필요한 수정의 한정 재리뷰 → 전체 브랜치 최종 독립 리뷰.
 - [x] 관련 기술 문서·CHANGELOG·CLAUDE 현재 상태·docs/README·MEMORY(교훈만) 갱신.
 - [x] UTC/KST 전체 verify, 격리 위반 0, 문법·비밀정보 검사·git diff --check.
-- [ ] feature push → PR verify → protected main merge.
-- [ ] 직전 장외/pending0/청결/설정·킬스위치 지문 확인 후 local_deploy.sh 병합SHA. 재시작 후 초기 health 및 150초 이상·장외 동기화 300초 경과 점검.
-- [ ] 실제 배포 SHA·시각·테스트·운영 상태·잔여 한계를 기록한다. 다음 장중/저녁 스케줄은 미관측으로 명시한다.
+- [x] feature push → PR verify → protected main merge.
+- [x] 직전 장외/pending0/청결/설정·킬스위치 지문 확인 후 local_deploy.sh 병합SHA. 재시작 후 초기 health 및 150초 이상·장외 동기화 300초 경과 점검.
+- [x] 실제 배포 SHA·시각·테스트·운영 상태·잔여 한계를 기록한다. 다음 장중/저녁 스케줄은 미관측으로 명시한다.

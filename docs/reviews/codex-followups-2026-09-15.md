@@ -46,7 +46,20 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul \
   bash scripts/dev/verify.sh
 ```
 
-UTC는 TZ=UTC로 변경하며 충돌 없는 임시 pytest basetemp를 추가했다. 가짜 SSH 키 경로는 테스트 fixture의 HOME 기본값 확장 회피용이고 실제 연결은 없다. 문서 포함 최종 브랜치 리뷰·보호 PR·실제 배포 결과는 후속 실행 시 기록한다.
+UTC는 TZ=UTC로 변경하며 충돌 없는 임시 pytest basetemp를 추가했다. 가짜 SSH 키 경로는 테스트 fixture의 HOME 기본값 확장 회피용이고 실제 연결은 없다. 문법·비밀패턴 검사 및 문서 커밋 전 staged 비밀패턴/diff 검사도 통과했다.
+
+## 최종 독립 리뷰·PR·배포 결과
+
+- 문서 포함 `4b70a34..9584df4`는 구현에 참여하지 않은 **Codex Astra/xhigh 최종 승인**, 신규 P0/P1/P2·요구 누락·범위 밖 변경 없음. 통합 소스/테스트7개 파일이 작업별 승인본과 정확히 동일하고, 공유 문서의 실제 DART 의미·분모·롤백 한계를 확인했다. 테스트는 증거가 있는 동일 범위를 중복 실행하지 않았다.
+- 구현 원본→통합 커밋: CF `efd3ecb→bfe3289`, 공정성 `2d55315→53d7b75`, DART `86ada2d→0e8c5a7`, 긍정 가산 `a7a1274→dd77e0b`, replay `bcbd791→b7a62db`. 코드 재편집 없이 cherry-pick하고 문서 `9584df4`를 추가했다.
+- PR [#61](https://github.com/qwq-partners/qwq-ai-trader/pull/61) 필수 verify [run34971599511](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/34971599511) 성공(21:55:16 KST). 보호 규칙 우회 없이 **21:55:45 main `82b50392f7e4dccbbffdfc60e7ccfce08544d3ec`** 병합.
+- 21:56:02 직전 점검: 운영 root는 여전히 `4b70a34`/clean, 장외, broker connected·pending0·stale{}·루프 실패0. `.env`·`config/default.yml`·`config/evolved_overrides.yml`와 킬스위치4경로 지문은 작업 시작 전과 동일. 값을 출력하거나 수정하지 않았다.
+- `local_deploy.sh 82b5039` 성공: fetch→고정 SHA checkout→**1022 passed/2 xfailed/21.95초**, 기존 pykrx 경고1·격리 위반0·문법/비밀패턴 통과→재시작·헬스 확인. 실패·롤백 없음. **21:56:43 KST 재시작(PID3037106)**, KIS 연결21:56:44·엔진 시작21:56:51.
+- 21:57:11 초기 확인: active, broker connected·pending0·stale{}, 당시 portfolio sync는 첫 실행 대기였다. 재시작 후 설정/킬스위치7경로 지문 동일. 이전 PID2976010 종료 시 Unclosed client session 1건은 새 프로세스 오류와 분리한다. 새 기동의 MCP pykrx/naver_search `No module named mcp` 경고는 21:20 이전 기동에도 있던 기존 한계로, 패키지·환경 복구는 하지 않았다.
+- 운영 main 복귀는 기존 main이 배포 SHA의 조상임을 확인하고 `update-ref`의 이전 SHA 비교로 fast-forward한 뒤 동일 SHA로 switch했다. root를 먼저 pull하거나 잠시 구버전 소스로 checkout하지 않았고 추가 재시작도 없었다.
+- **21:59:42 KST(재시작179초 후) ops-check:** active, HTTP500/EGW00201/EGW00215/토큰 오류0, 오류/Traceback 없음, pending0, 하트비트 정체·실패 누적 없음. 포지션1개·daily_trades0. 일일 잡3개는 '재시작 전 완료 복원'이며 재실행됐다는 뜻이 아니다. 장외 portfolio sync의 실제 실행 여부는 300초 이후 별도 확인한다.
+- **22:02:10 KST(재시작327초 후) ops-check:** 위 오류/주문/정체/실패 상태 동일. `/api/health`의 portfolio sync 성공 시각 **21:57:53.806 KST**, 연속 실패0을 확인했다. 150초를 동기화5주기로 오인하지 않았다. 일중 DART·EntryPlan 및 다음 저녁 CF 스케줄의 실제 자료 경로는 아직 미관측이다.
+- 배포 기록은 별도 docs-only 브랜치에서 갱신. 이 브랜치도 전체 verify **1022 passed/2 xfailed/25.81초**, 기존 pykrx 경고1·격리 위반0·문법/비밀패턴 통과. 소스·설정은 배포본과 동일하며 문서 병합으로 추가 재시작하지 않는다.
 
 ## 운영 관찰과 잔여 한계
 

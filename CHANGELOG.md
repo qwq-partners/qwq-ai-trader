@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — ops: Codex 최종 리뷰 후속 배포 (PR #61, 21:56 KST)
+
+- 문서 포함 `4b70a34..9584df4` 독립 Astra/xhigh 최종 리뷰 승인(신규 P0/P1/P2 0). 필수 verify(run34971599511) 성공 후 보호 규칙 우회 없이 main `82b50392f7e4dccbbffdfc60e7ccfce08544d3ec` 병합·배포.
+- `local_deploy.sh` 운영 측 검증 1022 passed/2 xfailed·격리 위반0·문법/비밀패턴 통과(21.95초). **21:56:43 KST 재시작**, PID3037106, KIS 연결21:56:44·엔진 시작21:56:51. 이전 checkout `4b70a34`, 배포 실패/롤백 없음.
+- 주문·설정·킬스위치 변경 없음: 설정3파일/킬스위치4경로 지문 동일. 위험 사이징/팀 정책 승격·canary 시작 없음. 초기 broker connected·pending0·stale{}; 기존 MCP SDK 부재의 pykrx/naver_search 경고는 남음. 종료된 이전 PID의 Unclosed client session 1건과 새 프로세스 오류를 구분한다.
+- main 복귀는 이전 main의 조상 관계 검증 후 compare-and-swap 방식으로 fast-forward하여, 운영 파일을 잠시 구버전으로 되돌리지 않고 동일 트리를 유지했다. 재시작은 추가로 하지 않았다. 지연 관찰·잔여 한계는 `docs/reviews/codex-followups-2026-09-15.md`.
+- 21:59:42(+179초)와 22:02:10(+327초) ops-check 모두 KIS 오류0·pending0·정체/실패 없음. portfolio sync 성공21:57:53 확인, daily_trades0. 새 DART/EntryPlan/저녁 CF 실자료 경로는 해당 스케줄 때 추가 관찰하며 투자 성능 검증 완료로 간주하지 않는다.
+
 ## 2026-09-15 — fix: Codex 독립 리뷰 후속 CR1~CR4 (원장·DART·replay)
 
 - 사용자 지시로 최종 리뷰를 Claude에서 Codex로 대체. 이전 `1aba7d7..53ea967` 독립 리뷰에서 신규 P2 2건·기존 시각 계약 P2 2건 재현, 후속 수정 기준은 PR #60을 포함한 `4b70a34`. 격리 워크트리 병렬 구현(CF/replay Astra/high, DART Terra/high), 구현과 별도 Astra/xhigh 독립 리뷰. 세 작업의 초기 리뷰에서 추가 P2 2건을 찾아 수정·한정 재리뷰 승인했다.
