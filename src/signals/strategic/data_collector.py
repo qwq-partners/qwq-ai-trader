@@ -2,7 +2,7 @@
 AI Trading Bot v2 - 전략적 데이터 수집
 
 전문가 패널에 제공할 실제 시장 데이터를 수집합니다.
-pykrx(MCP), FDR, KIS API, 네이버 뉴스를 활용.
+FDR, KIS API, 네이버 뉴스를 활용.
 """
 
 import asyncio
@@ -45,12 +45,10 @@ class StrategicDataCollector:
 
         tasks = [
             ("market_indices", self._collect_market_indices()),
-            ("sector_flows", self._collect_sector_flows()),
             ("exchange_rate", self._collect_exchange_rate()),
             ("interest_rates", self._collect_interest_rates()),
             ("top_foreign_buys", self._collect_top_foreign_buys()),
             ("top_inst_buys", self._collect_top_inst_buys()),
-            ("sector_valuations", self._collect_sector_valuations()),
             ("recent_themes", self._collect_recent_themes()),
             ("news_summary", self._collect_news_summary()),
         ]
@@ -69,6 +67,9 @@ class StrategicDataCollector:
 
         collected = sum(1 for v in results.values() if v is not None)
         logger.info(f"[전략적분석] 데이터 수집 완료: {collected}/{len(tasks)}항목")
+        # 기존 collect_all 결과 형태를 소비하는 호출자와의 호환성을 유지한다.
+        results["sector_flows"] = {}
+        results["sector_valuations"] = {}
         return results
 
     async def collect_macro_context(self) -> Optional[Dict[str, Any]]:
@@ -113,31 +114,6 @@ class StrategicDataCollector:
             return indices if indices else None
         except Exception as e:
             logger.warning(f"[전략적분석] 지수 수집 오류: {e}")
-            return None
-
-    async def _collect_sector_flows(self) -> Optional[List[Dict[str, Any]]]:
-        """업종별 외국인/기관 순매수 (pykrx MCP)"""
-        try:
-            from src.utils.mcp_client import get_mcp_manager
-            manager = get_mcp_manager()
-
-            if not manager.is_server_available("pykrx"):
-                logger.debug("[전략적분석] pykrx MCP 미사용 가능")
-                return None
-
-            # pykrx는 당일 데이터 미제공 → 최근 영업일 기준
-            target_date = self._last_business_day()
-
-            result = await manager.call_tool(
-                "pykrx",
-                "get_market_trading_value_by_date",
-                {"date": target_date, "market": "KOSPI"},
-            )
-            if result:
-                return result if isinstance(result, list) else [result]
-            return None
-        except Exception as e:
-            logger.debug(f"[전략적분석] 섹터 수급 수집 실패: {e}")
             return None
 
     async def _collect_exchange_rate(self) -> Optional[Dict[str, Any]]:
@@ -267,26 +243,6 @@ class StrategicDataCollector:
             ]
         except Exception as e:
             logger.debug(f"[전략적분석] 기관 순매수 수집 실패: {e}")
-            return None
-
-    async def _collect_sector_valuations(self) -> Optional[Dict[str, Any]]:
-        """업종별 평균 PER/PBR (pykrx MCP)"""
-        try:
-            from src.utils.mcp_client import get_mcp_manager
-            manager = get_mcp_manager()
-
-            if not manager.is_server_available("pykrx"):
-                return None
-
-            target_date = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-            result = await manager.call_tool(
-                "pykrx",
-                "get_market_fundamental_by_ticker",
-                {"date": target_date, "market": "KOSPI"},
-            )
-            return result
-        except Exception as e:
-            logger.debug(f"[전략적분석] 밸류에이션 수집 실패: {e}")
             return None
 
     async def _collect_recent_themes(self) -> Optional[List[Dict[str, str]]]:

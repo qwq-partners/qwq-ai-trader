@@ -4,7 +4,7 @@ AI Trading Bot v2 - 수급 추세 탐지 (Layer 2)
 2~4주간 기관/외국인이 연속 순매수 중인 종목 탐지.
 매일 15:35 실행.
 
-데이터: pykrx MCP (20영업일 외국인/기관 순매수)
+데이터: KIS API (20영업일 외국인/기관 순매수)
 유니버스: KIS API 당일 수급 상위 ~100 + KOSPI200/KOSDAQ150 → ~250종목
 """
 
@@ -51,10 +51,8 @@ class SupplyTrendDetector:
     async def detect_accumulation(self) -> List[SupplyTrendStock]:
         """수급 매집 종목 탐지
 
-        2026-05-18 P0-1 데이터 파이프라인 수리:
-        - 기존 pykrx MCP 의존 → KIS API FHKST01010900 (fetch_stock_investor_daily) 우선
-        - 장전/장후 모두 D-1 데이터 정상 반환 가능
-        - pykrx는 폴백
+        KIS API FHKST01010900 (fetch_stock_investor_daily)를 사용한다.
+        장전/장후 모두 D-1 데이터 정상 반환 가능하다.
         """
         logger.info("[수급추세] 탐지 시작...")
 
@@ -71,19 +69,13 @@ class SupplyTrendDetector:
 
             logger.info(f"[수급추세] 유니버스: {len(universe)}종목")
 
-            # 2) KIS API FHKST01010900 우선 (장전/장후 모두 D-1 데이터 제공)
+            # 2) KIS API FHKST01010900 (장전/장후 모두 D-1 데이터 제공)
             use_kis = self._kis_market_data is not None and hasattr(
                 self._kis_market_data, "fetch_stock_investor_daily"
             )
-            manager = None
             if not use_kis:
-                from src.utils.mcp_client import get_mcp_manager
-                manager = get_mcp_manager()
-                if not manager.is_server_available("pykrx"):
-                    logger.warning(
-                        "[수급추세] KIS API + pykrx 모두 사용 불가 → 폴백 모드"
-                    )
-                    return self._fallback_daily_only(universe)
+                logger.warning("[수급추세] KIS API 사용 불가 → 폴백 모드")
+                return self._fallback_daily_only(universe)
 
             stocks = []
             universe_items = list(universe.items())[:80]
@@ -92,10 +84,7 @@ class SupplyTrendDetector:
             async def bounded_analyze(sym, nm):
                 async with sem:
                     try:
-                        if use_kis:
-                            result = await self._analyze_supply_trend_kis(sym, nm)
-                        else:
-                            result = await self._analyze_supply_trend(manager, sym, nm)
+                        result = await self._analyze_supply_trend_kis(sym, nm)
                         if result and result.score >= 50:
                             return result
                     except Exception as e:
@@ -121,7 +110,7 @@ class SupplyTrendDetector:
             self._save_cache(stocks)
 
             logger.info(
-                f"[수급추세] 탐지 완료: {len(stocks)}종목 (점수 50+), 소스={'KIS_API' if use_kis else 'pykrx'}"
+                f"[수급추세] 탐지 완료: {len(stocks)}종목 (점수 50+), 소스=KIS_API"
             )
             for s in stocks[:5]:
                 logger.info(
@@ -280,113 +269,6 @@ class SupplyTrendDetector:
 
         return universe
 
-    async def _analyze_supply_trend(
-        self, mcp_manager, symbol: str, name: str
-    ) -> Optional[SupplyTrendStock]:
-        """개별 종목 수급 추세 분석"""
-        # 20영업일 수급 조회
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=35)  # 20영업일 ≈ 28~30일
-
-        try:
-            result = await mcp_manager.call_tool(
-                "pykrx",
-                "get_market_trading_value_by_date",
-                {
-                    "fromdate": start_date.strftime("%Y%m%d"),
-                    "todate": end_date.strftime("%Y%m%d"),
-                    "ticker": symbol,
-                },
-            )
-        except Exception:
-            return None
-
-        if not result:
-            return None
-
-        # 결과 파싱 (pykrx 반환 형식에 따라 적응)
-        foreign_daily = []
-        inst_daily = []
-
-        if isinstance(result, list):
-            for row in result:
-                foreign_daily.append(float(row.get("외국인합계", row.get("foreign", 0))))
-                inst_daily.append(float(row.get("기관합계", row.get("institution", 0))))
-        elif isinstance(result, dict):
-            # 단일 데이터
-            foreign_daily.append(float(result.get("외국인합계", result.get("foreign", 0))))
-            inst_daily.append(float(result.get("기관합계", result.get("institution", 0))))
-        else:
-            return None
-
-        if len(foreign_daily) < 5:
-            return None
-
-        # 연속 순매수 일수 계산
-        foreign_streak = self._count_consecutive_positive(foreign_daily)
-        inst_streak = self._count_consecutive_positive(inst_daily)
-
-        # 최근 10일 누적
-        recent_10 = min(10, len(foreign_daily))
-        foreign_total = sum(foreign_daily[-recent_10:])
-        inst_total = sum(inst_daily[-recent_10:])
-
-        # 가속 판단 (최근 5일 > 이전 5일)
-        is_accelerating = False
-        if len(foreign_daily) >= 10:
-            recent_5 = sum(foreign_daily[-5:]) + sum(inst_daily[-5:])
-            prev_5 = sum(foreign_daily[-10:-5]) + sum(inst_daily[-10:-5])
-            is_accelerating = recent_5 > prev_5 > 0
-
-        # 2026-05-10 P0-1: 수급 델타(1차 미분) 보너스
-        # 가설: today 외국인 net이 5일 평균의 3배+ → 폭등 사전징후
-        # 5/4 SK하이닉스 사례: 4/30~5/4 외국인 누적 412만주, 5/4 단독 289만주(평균 대비 ~3.5배)
-        # 진입 차단된 종목이 +31% 폭등
-        delta_ratio = 0.0
-        if len(foreign_daily) >= 6:
-            today_net = foreign_daily[-1] + inst_daily[-1]
-            prev_5_avg = (sum(foreign_daily[-6:-1]) + sum(inst_daily[-6:-1])) / 5
-            if prev_5_avg > 0:
-                delta_ratio = today_net / prev_5_avg
-
-        # 점수 산출
-        score = self._calculate_trend_score(
-            foreign_streak, inst_streak,
-            foreign_total, inst_total,
-            is_accelerating,
-            delta_ratio=delta_ratio,
-        )
-
-        if score < 30:
-            return None
-
-        reasons = []
-        if foreign_streak >= 5:
-            reasons.append(f"외국인 {foreign_streak}일 연속 순매수")
-        if inst_streak >= 5:
-            reasons.append(f"기관 {inst_streak}일 연속 순매수")
-        if foreign_streak >= 5 and inst_streak >= 5:
-            reasons.append("외국인+기관 동시 매집")
-        if is_accelerating:
-            reasons.append("순매수 가속 중")
-        if delta_ratio >= 5:
-            reasons.append(f"수급 델타 폭증({delta_ratio:.1f}x)")
-        elif delta_ratio >= 3:
-            reasons.append(f"수급 델타 점프({delta_ratio:.1f}x)")
-
-        return SupplyTrendStock(
-            symbol=symbol,
-            name=name,
-            score=score,
-            foreign_streak=foreign_streak,
-            inst_streak=inst_streak,
-            foreign_total=foreign_total,
-            inst_total=inst_total,
-            is_accelerating=is_accelerating,
-            delta_ratio=round(delta_ratio, 2),
-            reasons=reasons,
-        )
-
     @staticmethod
     def _count_consecutive_positive(values: List[float]) -> int:
         """끝에서부터 연속 양수 일수"""
@@ -450,14 +332,14 @@ class SupplyTrendDetector:
         return min(score, 100)
 
     def _fallback_daily_only(self, universe: Dict[str, str]) -> List[SupplyTrendStock]:
-        """pykrx 불가 시 당일 수급 데이터만으로 간이 점수"""
+        """KIS 일별 수급 미사용 시 당일 수급 데이터만으로 간이 점수"""
         # 유니버스에 있는 것 자체가 당일 순매수 상위 → 기본 점수 부여
         stocks = []
         for symbol, name in list(universe.items())[:30]:
             stocks.append(SupplyTrendStock(
                 symbol=symbol,
                 name=name,
-                score=55,  # 당일 수급 상위이므로 기본 55점 (pykrx 미확인)
+                score=55,  # 당일 수급 상위이므로 기본 55점 (연속 데이터 미확인)
                 foreign_streak=1,
                 inst_streak=1,
                 foreign_total=0,
