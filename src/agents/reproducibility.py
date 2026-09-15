@@ -76,6 +76,10 @@ class LLMCallRecord:
     # 재실행 시 입력이 같은지 확인하는 기준 — 입력이 달라졌으면 판정 차이는 비재현이 아니다.
     input_snapshot_hash: str = ""
 
+    # 프롬프트 문구 버전 (T11 계약 2.2, 2026-09-15) — 기본값 "" 으로 하위 호환.
+    # 프롬프트가 바뀌면 과거 판정과 재현성 비교가 성립하지 않으므로 버전을 남긴다.
+    prompt_version: str = ""
+
     latency_ms: float = 0.0
     success: bool = True
     error: Optional[str] = None
@@ -115,6 +119,7 @@ class LLMLedger:
         latency_ms: float = 0.0,
         success: bool = True,
         error: Optional[str] = None,
+        prompt_version: str = "",
     ) -> Optional[LLMCallRecord]:
         """
         호출 1건을 원장에 남긴다.
@@ -135,6 +140,7 @@ class LLMLedger:
             verdict=verdict,
             input_snapshot_hash=sha256_short(input_snapshot) if input_snapshot else "",
             latency_ms=latency_ms, success=success, error=error,
+            prompt_version=prompt_version,
         )
 
         try:

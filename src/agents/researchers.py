@@ -15,14 +15,18 @@ R1에서 갈렸다가 R2에서 한쪽이 설득되면 그 합의는 R1 만장일
 모델을 갈라 쓴다 (Bull=OpenAI, Bear=Gemini). 같은 모델로 양쪽을 돌리면
 같은 편향을 공유해 토론이 형식적으로 흐른다.
 
-fail-open: LLM 장애 시 토론 실패로 표시하되 매매를 막지는 않는다.
-결정론적 게이트(cross_validator 11규칙)가 뒤에 있으므로,
-LLM 문제로 전체가 멈추는 쪽이 더 해롭다.
+fail 정책(2026-09-15 정정 — 이전 docstring의 "fail-open"은 stale했다):
+    TraderAgent.propose가 실제로 적용하는 규칙은 **신규 매수만 fail-closed**다 —
+    토론 실패(LLM 장애 등)는 BUY를 HOLD로 강등시킨다(trader.py 참조).
+    이미 보유 중인 종목 판단(HOLD/SELL)에는 토론 결과를 계속 쓰되 확신도만 낮춘다
+    (fail-open) — 정보가 없다고 파는 것도, 사는 것도 위험하기는 마찬가지지만
+    신규 진입은 검증 미비 상태로 자본을 더 태우는 일이라 더 보수적으로 막는다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -56,6 +60,35 @@ EMPTY_RETRY = 1
 DEBATE_SEED = 20260803
 # Gemini는 temperature로 결정성을 확보한다 (0.3에서도 안정적이었지만 0으로 고정)
 DEBATE_TEMPERATURE = 0.0
+
+# 토론 프롬프트 버전 — 재현성 원장에 기록(T11 계약 2.2, 2026-09-15).
+# R2에 변경사유 지시가 추가된 시점을 표시한다. 프롬프트 문구가 바뀌면 올린다.
+PROMPT_VERSION = "debate-v2-2026-09-15"
+
+# R2(반박 라운드)에서 입장을 바꿨을 때만 붙이는 지시문 — 바꾸지 않으면 쓰지 않는다.
+_CHANGE_REASON_INSTRUCTION = (
+    "\n\n입장을 이번 라운드에서 바꾼다면, 판정 다음 새 줄에 "
+    "'변경사유: 새근거|이전해석오류 — <이유>' 를 적어라. "
+    "입장을 유지한다면 이 줄은 쓰지 않는다."
+)
+
+# "변경사유: 새근거 — ..." / "변경사유: 이전해석오류 — ..." 파싱
+# 사유는 한 줄만 캡처한다([^\n]+) — 프롬프트도 "한 줄"을 지시한다. re.S로 두면
+# 사유 줄 뒤에 딸려오는 잡담까지 텍스트에 섞인다(리뷰 advisory b).
+_CHANGE_REASON_RE = re.compile(
+    r"변경사유\s*[:：]\s*(새근거|이전해석오류)\s*[—\-–]\s*([^\n]+)"
+)
+
+
+def _extract_change_reason(text: str) -> Optional[Dict[str, str]]:
+    """응답에서 '변경사유: ...' 줄을 파싱한다. 없으면 None (호출측이 unrecorded로 채운다)."""
+    if not text:
+        return None
+    m = _CHANGE_REASON_RE.search(text)
+    if not m:
+        return None
+    kind = "new_evidence" if m.group(1) == "새근거" else "prior_error"
+    return {"kind": kind, "text": m.group(2).strip()[:300]}
 
 BULL_SYSTEM = (
     "당신은 매수 측 리서처다. 주어진 종목을 매수해야 하는 근거를 제시한다. "
@@ -213,7 +246,7 @@ class ResearchTeam:
                 bull_prompt = (
                     f"{base}\n\n[리스크 측 주장]\n{bear_text or '(응답 없음)'}\n\n"
                     "위 반론을 반영해 다시 판단하라. 반론이 타당하면 입장을 바꿔도 된다. "
-                    "APPROVE 또는 REJECT로 시작하라."
+                    "APPROVE 또는 REJECT로 시작하라." + _CHANGE_REASON_INSTRUCTION
                 )
                 # "해소됐다면"은 불가능한 문턱이다 — 리스크는 결코 완전히 해소되지 않는다.
                 # R1과 같은 기준(치명적 vs 감수 가능)으로 재판정하게 한다.
@@ -221,7 +254,7 @@ class ResearchTeam:
                     f"{base}\n\n[매수 측 주장]\n{bull_text or '(응답 없음)'}\n\n"
                     "위 주장을 반영해 다시 판단하라. 당신의 리스크가 여전히 근거의 핵심을 "
                     "무너뜨리면 REJECT, 감수 가능한 수준이면 ACCEPT다. "
-                    "ACCEPT 또는 REJECT로 시작하라."
+                    "ACCEPT 또는 REJECT로 시작하라." + _CHANGE_REASON_INSTRUCTION
                 )
 
             try:
@@ -265,7 +298,9 @@ class ResearchTeam:
                         provider=_meta.get("provider", ""),
                         model=_meta.get("model", ""),
                         params={"max_tokens": MAX_TOKENS,
-                                "reasoning_effort": "low", "weight": "light"},
+                                "reasoning_effort": REASONING_EFFORT, "weight": "light",
+                                "seed": DEBATE_SEED, "temperature": DEBATE_TEMPERATURE},
+                        prompt_version=PROMPT_VERSION,
                         verdict=_v,
                         input_snapshot=input_snapshot,
                         latency_ms=_meta.get("latency_ms", 0.0),
@@ -275,15 +310,29 @@ class ResearchTeam:
                 except Exception as _le:
                     logger.debug(f"[리서치팀] 원장 기록 실패: {_le}")
 
+            # 입장 변경 이유 — R2(rnd>1)에서 직전 라운드와 판정이 달라졌을 때만 채운다.
+            # 이 시점에서 bull_v/bear_v는 아직 "직전 라운드"의 최종값이다
+            # (몇 줄 아래에서 이번 라운드 값으로 덮어쓴다) — 그래서 여기서 비교해야 한다.
+            # 직전 라운드가 무응답/파싱 실패(None)였다면 "변경"이 아니라 "첫 판정"이다 —
+            # bull_v/bear_v가 None이면 변경으로 치지 않는다(리뷰 advisory a).
+            bull_changed = (rnd > 1 and bull_v is not None
+                            and round_bull_v is not None and round_bull_v != bull_v)
+            bear_changed = (rnd > 1 and bear_v is not None
+                            and round_bear_v is not None and round_bear_v != bear_v)
+            bull_reason = (_extract_change_reason(round_bull) or {"kind": "unrecorded"}) if bull_changed else None
+            bear_reason = (_extract_change_reason(round_bear) or {"kind": "unrecorded"}) if bear_changed else None
+
             # 이력에는 이번 라운드에 실제로 나온 것만 남긴다 (모델 ID 포함)
             result.turns.append(DebateTurn(
                 rnd, "bull", round_bull_v, round_bull or "(응답 없음)",
                 model=bull_meta.get("model", ""),
-                provider=bull_meta.get("provider", "")))
+                provider=bull_meta.get("provider", ""),
+                change_reason=bull_reason))
             result.turns.append(DebateTurn(
                 rnd, "bear", round_bear_v, round_bear or "(응답 없음)",
                 model=bear_meta.get("model", ""),
-                provider=bear_meta.get("provider", "")))
+                provider=bear_meta.get("provider", ""),
+                change_reason=bear_reason))
             result.rounds_run = rnd
 
             # 다음 라운드 프롬프트와 최종 판정에는 마지막으로 확보된 응답을 이어 쓴다
