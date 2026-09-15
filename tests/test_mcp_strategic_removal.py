@@ -93,6 +93,7 @@ def test_supply_trend_keeps_existing_empty_result_when_kis_daily_fetch_fails(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    fallback_calls = []
 
     class FailingKisMarketData:
         async def fetch_stock_investor_daily(self, symbol, days):
@@ -103,11 +104,16 @@ def test_supply_trend_keeps_existing_empty_result_when_kis_daily_fetch_fails(
     async def universe():
         return {"005930": "삼성전자"}
 
+    def unexpected_daily_fallback(universe):
+        fallback_calls.append(universe)
+        return []
+
     detector._build_universe = universe
     monkeypatch.setattr(
         detector,
         "_fallback_daily_only",
-        lambda _universe: (_ for _ in ()).throw(AssertionError("KIS 오류는 당일 폴백이 아님")),
+        unexpected_daily_fallback,
     )
 
     assert asyncio.run(detector.detect_accumulation()) == []
+    assert fallback_calls == []
