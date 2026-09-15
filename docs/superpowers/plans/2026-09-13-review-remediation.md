@@ -530,6 +530,8 @@ venv/bin/python -m pytest tests/test_backtest_point_in_time.py tests/test_backte
 - **리뷰 라운드**: A(레짐 경로) 1회 승인 / B(자료 유효성·전문가 집계) 3라운드(초안 → blocking 반영 1차 → blocking 반영 2차) / C(발송·평가) 2라운드(초안 → blocking 반영) / D(독립 재현) 기준 SHA 재현 3종 + 통합 후 E2E, 총 14건 통과.
 - **통합 수정 요약**: 브랜치별 병합 직후 D 재현 6건이 실패해 원인별 조치 — F14 잔여(어댑터 당일 관측이 캡 병합에서 빠져 있던 것 추가), F19 통합 결함(아카이브 경로 규칙 이원화 → `_brief_archive_path` 단일화), F17/F18/F20 D 테스트 조정(내부 표현이 아니라 관찰 결과 기준으로), 리뷰 advisory 일괄 반영(07:30 슬롯만 발송 기록, NaN 가드, 아카이브 원자적 쓰기, 계획서 F16 산술 정정), `tests/conftest.py`에 curl_cffi 차단 추가. 최종 전체 스위트 552 passed(통합 최종, E2E 8건·회귀 2건 포함) / 2 xfailed, 격리 위반 0건. 운영 미배포(`de111b7`).
 
+**정책값 승인 (2026-09-15):** ① 야간선물 세션 규칙(개시일 기준 거래일 판정 + 공휴일 캘린더 연동, 종료 06:00 정정) ② `from_dict` 기본 unknown ③ 테마→업종 매핑 2건 — 사용자 승인. 연동 구현은 `feature/t11-policy-approved` (CHANGELOG 2026-09-15 policy 항목).
+
 ## 4. 공통 검증과 최종 전달 형식
 
 각 구현 PR은 아래 순서를 따른다. 테스트 수를 임의로 목표로 삼지 않고 위 인수 사례가 모두 들어갔는지 확인한다.
