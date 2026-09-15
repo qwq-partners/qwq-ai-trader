@@ -3247,9 +3247,18 @@ JSON:
         except asyncio.CancelledError:
             pass
 
+    SYNC_INTERVAL_SEC = 30
+    SYNC_INTERVAL_CLOSED_SEC = 300
+
     async def run_portfolio_sync(self):
-        """주기적 포트폴리오 동기화 루프"""
-        await asyncio.sleep(30)
+        """주기적 포트폴리오 동기화 루프 — 거래 가능 세션 30초, CLOSED 300초.
+
+        CLOSED 로 바뀐 직후 1회는 30초를 유지해 마감 직전 체결(15:29 등)을 확정한 뒤 늘린다.
+        CLOSED 에서는 submit_order 가 주문 자체를 거부하므로 재정합할 신규 체결이 생기지 않는다
+        (2026-09-15 원장 한도 조사: 24시간 30초 주기가 야간·주말 8434R 1,440건/일을 만들던 낭비).
+        """
+        await asyncio.sleep(self.SYNC_INTERVAL_SEC)
+        prev_closed = False
         while self.bot.running:
             try:
                 await self._sync_portfolio()
@@ -3257,7 +3266,13 @@ JSON:
                 logger.error(f"동기화 루프 오류: {e}")
                 if self.bot.risk_manager and hasattr(self.bot.risk_manager, 'set_sync_status'):
                     self.bot.risk_manager.set_sync_status(False)
-            await asyncio.sleep(30)
+            try:
+                closed = self._get_current_session() == MarketSession.CLOSED
+            except Exception:
+                closed = False  # 세션 판정 실패는 거래 가능으로 보고 30초 유지(보수적)
+            await asyncio.sleep(self.SYNC_INTERVAL_CLOSED_SEC if (closed and prev_closed)
+                                else self.SYNC_INTERVAL_SEC)
+            prev_closed = closed
 
     async def run_screening(self):
         """주기적 종목 스크리닝 루프"""

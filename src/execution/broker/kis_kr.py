@@ -251,13 +251,17 @@ class KISBroker(BaseBroker):
                         logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
                         await self._recover_token()
                         continue
-                    if resp.status in (429, 500, 502, 503) and attempt < 2:
-                        # HTTP 500 본문에 토큰 오류가 포함될 수 있음
+                    if resp.status in (429, 500, 502, 503):
+                        # HTTP 500 본문에 토큰 오류가 포함될 수 있음. 거절 분류·리미터 계측은 마지막
+                        # 시도에도 수행한다 — 재시도 소진분(3번째 500)이 계측·백오프에서 빠지고 KIS 오류
+                        # 본문이 정상 응답처럼 반환되던 결함 (2026-09-15 원장 한도 조사).
                         _err_msg = ""
+                        err_data: dict = {}
                         if resp.status == 500:
                             try:
-                                err_data = await resp.json()
-                                if self._is_token_error(err_data):
+                                _body = await resp.json()
+                                err_data = _body if isinstance(_body, dict) else {}
+                                if self._is_token_error(err_data) and attempt < 2:
                                     logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
                                     await self._recover_token()
                                     continue
@@ -267,16 +271,24 @@ class KISBroker(BaseBroker):
                                 elif str(err_data.get("msg_cd", "")) == "EGW00215":
                                     kis_rate_limit.note_ledger_rejection(tr_id)
                             except Exception:
-                                pass
-                        wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
-                        logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, {attempt+1}회 재시도 ({wait}초 대기)")
-                        await asyncio.sleep(wait)
-                        continue
+                                err_data = {}
+                        if attempt < 2:
+                            wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
+                            logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, {attempt+1}회 재시도 ({wait}초 대기)")
+                            await asyncio.sleep(wait)
+                            continue
+                        logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, 재시도 소진 → 실패 반환")
+                        return err_data if err_data else {"rt_cd": "-1", "msg1": f"HTTP {resp.status}{_err_msg}"}
                     try:
                         data = await resp.json()
                     except Exception:
                         logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
                         return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
+                    if isinstance(data, dict):
+                        # KIS 연속조회 신호(응답 헤더 tr_cont: F/M=다음 페이지 있음, D/E=마지막) —
+                        # 본문의 ctx_area_*100 키는 마지막 페이지에도 채워져 와서 종료 근거가 못 된다
+                        # (보유 1종목 계좌에서 8434R 을 페이지 상한 10회까지 호출하던 원인, 2026-09-15)
+                        data["_tr_cont"] = str(resp.headers.get("tr_cont", "") or "").strip().upper()
                     if self._is_token_error(data) and attempt < 2:
                         logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
                         await self._recover_token()
@@ -1061,6 +1073,8 @@ class KISBroker(BaseBroker):
 
             ctx_fk = ""
             ctx_nk = ""
+            prev_ctx_fk = ""
+            prev_ctx_nk = ""
 
             for page in range(10):  # 최대 10페이지 (약 500건)
                 params = {
@@ -1088,15 +1102,23 @@ class KISBroker(BaseBroker):
                 output1 = data.get("output1", []) or []
                 positions.update(self._parse_positions(output1))
 
-                # 연속 조회 키 확인 — 비어있으면 마지막 페이지
+                # 종료 판정 (2026-09-15): ① 헤더 tr_cont D/E = 마지막 페이지 ② ctx 키 둘 다 비면 마지막
+                # ③ 빈 페이지 ④ ctx 키가 이전 페이지와 같으면 단일 페이지(get_positions_for_account 와
+                # 같은 가드). KIS 는 마지막 페이지에도 ctx 키를 채워 보내므로 ②만으로는 보유 1종목 계좌가
+                # 8434R 을 10회 호출했다(원장 초당 한도 초과의 주 발생원).
+                if str(data.get("_tr_cont", "") or "") in ("D", "E"):
+                    break
                 ctx_fk = (data.get("ctx_area_fk100") or "").strip()
                 ctx_nk = (data.get("ctx_area_nk100") or "").strip()
                 if not ctx_fk and not ctx_nk:
                     break
                 if len(output1) == 0:
                     break
+                if ctx_fk == prev_ctx_fk and ctx_nk == prev_ctx_nk:
+                    break
+                prev_ctx_fk, prev_ctx_nk = ctx_fk, ctx_nk
 
-            logger.debug(f"포지션 조회 완료: {len(positions)}개")
+            logger.debug(f"포지션 조회 완료: {len(positions)}개 ({page + 1}페이지)")
             return positions
 
         except Exception as e:
@@ -1466,8 +1488,14 @@ class KISBroker(BaseBroker):
             if not output2:
                 return {}
 
-            # 같은 응답의 output1(포지션 1페이지)을 5초간 보관 — 다음 페이지가 있으면(대량 보유) 보관 안 함
-            _ctx_more = bool((data.get("ctx_area_fk100") or "").strip() or (data.get("ctx_area_nk100") or "").strip())
+            # 같은 응답의 output1(포지션 1페이지)을 5초간 보관 — 다음 페이지가 있으면(대량 보유) 보관 안 함.
+            # 다음 페이지 유무는 헤더 tr_cont(F/M) 로 판정한다 — ctx 키는 마지막 페이지에도 채워져 와서
+            # 키 기반 판정이 항상 True 가 되어 2026-09-11 스냅샷 재사용이 한 번도 발동하지 않았다(2026-09-15).
+            # 헤더가 없으면(테스트·프록시) 기존 키 기반 판정으로 보수적으로 되돌아간다.
+            _tr_cont = str(data.get("_tr_cont", "") or "")
+            _ctx_more = (_tr_cont in ("F", "M")) if _tr_cont else bool(
+                (data.get("ctx_area_fk100") or "").strip() or (data.get("ctx_area_nk100") or "").strip()
+            )
             self._balance_snapshot = None if _ctx_more else (time.monotonic(), data.get("output1", []) or [])
 
             account_info = output2[0] if isinstance(output2, list) else output2
@@ -1509,10 +1537,10 @@ class KISBroker(BaseBroker):
                 else:
                     # rt_cd 실패(재시도 소진 등)도 예외 경로와 동일하게 예수금 폴백 —
                     # 0원으로 성공 반환하면 기동 시 portfolio.cash=0/initial_capital 과소 (2026-09-03 P2)
-                    logger.debug(f"매수가능조회 rt_cd 실패 → 예수금 폴백: {data2.get('msg1', '')}")
+                    logger.warning(f"[잔고] 매수가능조회 실패 → 예수금 {deposit:,.0f}원 폴백: {data2.get('msg1', '')}")
                     available_cash = deposit
             except Exception as e:
-                logger.debug(f"매수가능조회 실패: {e}")
+                logger.warning(f"[잔고] 매수가능조회 예외 → 예수금 {deposit:,.0f}원 폴백: {e}")
                 # 실패시 예수금 사용
                 available_cash = deposit
 
@@ -1822,6 +1850,8 @@ class KISBroker(BaseBroker):
         all_items = []
         ctx_fk = ""
         ctx_nk = ""
+        prev_ctx_fk = ""
+        prev_ctx_nk = ""
 
         for page in range(10):  # 최대 10페이지 (약 300건)
             params = {
@@ -1849,13 +1879,18 @@ class KISBroker(BaseBroker):
             items = data.get("output1", []) or []
             all_items.extend(items)
 
-            # 연속 조회 키 확인 — 비어있으면 마지막 페이지
+            # 종료 판정 — get_positions 와 동일(헤더 D/E · 키 비움 · 빈 페이지 · 동일 키, 2026-09-15)
+            if str(data.get("_tr_cont", "") or "") in ("D", "E"):
+                break
             ctx_fk = (data.get("ctx_area_fk100") or "").strip()
             ctx_nk = (data.get("ctx_area_nk100") or "").strip()
             if not ctx_fk and not ctx_nk:
                 break
             if len(items) == 0:
                 break
+            if ctx_fk == prev_ctx_fk and ctx_nk == prev_ctx_nk:
+                break
+            prev_ctx_fk, prev_ctx_nk = ctx_fk, ctx_nk
 
         # odno 기반 중복 제거 (페이지네이션 중복 방지)
         seen = set()
