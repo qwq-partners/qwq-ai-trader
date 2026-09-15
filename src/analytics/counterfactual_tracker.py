@@ -21,6 +21,7 @@ AI 게이트가 차단·감지한 매수 후보의 "만약 거래했다면" 후�
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -35,9 +36,17 @@ _SOURCES = {
 # 팀 심의 판정 (2026-08-08 후속 — HOLD/거부 후보의 기회비용 추적)
 _TEAM_VERDICT_DIR = _CACHE_DIR / "team_verdicts"
 _HORIZONS = (("r1", 1), ("r5", 5), ("r20", 20))
-# 콜백 미주입 시 기본 체결 증거원 (CLAUDE.md 명시 경로) — advisory(2026-09-15):
-# 운영에서 콜백 없이 생성되면 실제 체결분까지 전부 team_buy_unfilled 로 잘못 등록되던 문제
-_TRADE_JOURNAL_PATH = _CACHE_DIR / "trade_journal_kr.json"
+# 콜백 미주입 시 기본 체결 증거원 — 실제 거래저널(src/core/evolution/trade_journal.py)과
+# 같은 경로 규칙 <TRADE_JOURNAL_DIR 또는 ~/.cache/ai_trader/journal>/trades_YYYYMMDD.json.
+# (배포 전 리뷰 2026-09-15: 이전 폴백 trade_journal_kr.json 은 아무도 쓰지 않는 파일이라
+#  항상 '판정 불가'였고, 그걸 미체결로 읽어 실제 체결분까지 team_buy_unfilled 로 등록될 수 있었다.)
+_TRADE_JOURNAL_DIR: Optional[Path] = None   # 테스트 격리용 override; None 이면 env/기본 경로
+
+
+def _journal_dir() -> Path:
+    if _TRADE_JOURNAL_DIR is not None:
+        return Path(_TRADE_JOURNAL_DIR)
+    return Path(os.getenv("TRADE_JOURNAL_DIR", str(_CACHE_DIR / "journal")))
 
 
 def _close_price(bar: Dict[str, Any]) -> float:
@@ -53,10 +62,17 @@ def _close_price(bar: Dict[str, Any]) -> float:
         return 0.0
 
 
-def _read_trade_journal_buy_symbols(day: str, path: Path) -> Optional[set]:
-    """당일(day, YYYY-MM-DD) entry_time 매수 기록 종목 집합 — 파일 없거나 손상 시 None(폴백 실패)."""
-    if not path.exists():
+def _read_trade_journal_buy_symbols(day: str, journal_dir: Path) -> Optional[set]:
+    """당일(day, YYYY-MM-DD) 진입 기록 종목 집합.
+
+    저널 디렉터리가 없으면 None(판정 불가 — 미체결로 오라벨하지 않는다), 날짜 파일이 없으면
+    빈 집합(저널은 진입이 있는 날만 파일을 만든다 = 그날 진입 없음), 손상이면 None.
+    """
+    if not journal_dir.is_dir():
         return None
+    path = journal_dir / f"trades_{day.replace('-', '')}.json"
+    if not path.exists():
+        return set()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
@@ -88,14 +104,14 @@ class CounterfactualTracker:
         self._state: Dict[str, Dict[str, Any]] = self._load()
         self._fill_evidence_check = fill_evidence_check
 
-    def _has_fill_evidence(self, symbol: str, day: str) -> bool:
-        """승인 BUY 의 실제 체결 증거.
+    def _has_fill_evidence(self, symbol: str, day: str) -> Optional[bool]:
+        """승인 BUY 의 실제 체결 증거 — True 체결 / False 미체결 / None 판정 불가.
 
         콜백이 주입되면 그것을 우선한다(콜백 실패 시엔 기존과 동일하게 보수적으로 '없음' —
-        폴백으로 더 파고들지 않는다, 기존 계약 유지). 콜백이 아예 없을 때만
-        trade_journal_kr.json 당일 매수 기록을 기본 증거원으로 읽는다(advisory 2026-09-15 —
-        콜백 미배선 상태로는 실제 체결분까지 전부 미체결로 등록되던 문제). 그마저 실패하면
-        보수적으로 '없음'(미체결).
+        폴백으로 더 파고들지 않는다, 기존 계약 유지). 콜백이 아예 없을 때만 거래저널
+        날짜 파일(`_journal_dir()/trades_YYYYMMDD.json`)을 기본 증거원으로 읽는다.
+        저널 디렉터리 자체가 없거나 손상이면 None — 호출부는 등록을 보류한다(미체결로
+        오라벨하지 않는다, 배포 전 리뷰 2026-09-15).
         """
         if self._fill_evidence_check is not None:
             try:
@@ -104,12 +120,12 @@ class CounterfactualTracker:
                 logger.debug(f"[CF추적] 체결 증거 콜백 실패 ({symbol}/{day}, 미체결로 간주): {e}")
                 return False
         try:
-            symbols = _read_trade_journal_buy_symbols(day, _TRADE_JOURNAL_PATH)
+            symbols = _read_trade_journal_buy_symbols(day, _journal_dir())
         except Exception as e:
-            logger.debug(f"[CF추적] 거래저널 폴백 조회 실패 ({symbol}/{day}, 미체결로 간주): {e}")
-            return False
+            logger.debug(f"[CF추적] 거래저널 폴백 조회 실패 ({symbol}/{day}, 판정 불가): {e}")
+            return None
         if symbols is None:
-            return False
+            return None
         return symbol in symbols
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
@@ -160,6 +176,7 @@ class CounterfactualTracker:
                 logger.debug(f"[CF추적] {source} 읽기 실패: {e}")
 
         # 팀 심의 HOLD/거부 판정 (2026-08-08 후속) — "심의가 막은 후보"의 후속 추적
+        undetermined = 0
         try:
             for vf in sorted(_TEAM_VERDICT_DIR.glob("verdicts_*.json")):
                 day_raw = vf.stem.replace("verdicts_", "")
@@ -195,7 +212,11 @@ class CounterfactualTracker:
                             # T11 E1 (2026-09-15): 승인 BUY 라도 실제 체결 증거가 없으면
                             # 더는 조용히 제외하지 않고 "team_buy_unfilled" 로 별도 추적한다.
                             # 체결 증거가 있으면(=실거래로 이미 추적됨) 기존과 동일하게 건너뛴다.
-                            if self._has_fill_evidence(sym, day):
+                            fill = self._has_fill_evidence(sym, day)
+                            if fill is True:
+                                continue
+                            if fill is None:
+                                undetermined += 1   # 판정 불가 — 미체결로 등록하지 않는다
                                 continue
                             key = f"team_buy_unfilled|{sym}|{day}"
                             if key in self._state:
@@ -228,6 +249,8 @@ class CounterfactualTracker:
                         continue
         except Exception as e:
             logger.debug(f"[CF추적] 팀 심의 읽기 실패: {e}")
+        if undetermined:
+            logger.warning(f"[CF추적] 승인 BUY {undetermined}건 체결 대조 판정 불가(콜백 없음·거래저널 디렉터리 없음) — 등록 보류")
         return added
 
     # ── 갱신 ───────────────────────────────────────────────
@@ -353,8 +376,12 @@ class CounterfactualTracker:
                 if v.get("wiki_context_used") is not None:  # 2026-09-13 위키 노출 유무로 분리
                     _g = f"{_g}|wiki={'Y' if v['wiki_context_used'] else 'N'}"
                 groups.setdefault(_g, []).append(v)
+        hold_note = ""
+        if self._fill_evidence_check is None and not _journal_dir().is_dir():
+            hold_note = ("※ 체결 대조 판정 불가(콜백 없음·거래저널 디렉터리 없음) — "
+                         "승인 BUY 는 team_buy_unfilled 로 등록하지 않고 보류 중")
         if not groups:
-            return "counterfactual 표본 없음 (r5 완성 건 0)"
+            return "counterfactual 표본 없음 (r5 완성 건 0)" + (f"\n{hold_note}" if hold_note else "")
         lines = []
         for source, items in sorted(groups.items()):
             n = len(items)
@@ -380,11 +407,8 @@ class CounterfactualTracker:
             if avg_r20 is not None:
                 line += f" | 평균 r20 {avg_r20:+.1f}%"
             lines.append(line)
-        if (self._fill_evidence_check is None and not _TRADE_JOURNAL_PATH.exists() and any(
-            source.split("|", 1)[0] == "team_buy_unfilled" for source in groups
-        )):
-            lines.append("※ 체결 대조 미배선(콜백 없음·거래저널 파일 없음) — "
-                          "team_buy_unfilled 에 실제 체결분도 섞여 있을 수 있음")
+        if hold_note:
+            lines.append(hold_note)
         return "\n".join(lines)
 
 
