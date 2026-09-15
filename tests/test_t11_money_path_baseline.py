@@ -87,9 +87,9 @@ def test_baseline_signal_metadata_keys(monkeypatch):
     assert meta["intraday_state"] == "normal"
     assert meta["gap_pct"] == 1.0                       # (10100-10000)/10000
     # T11 은 키를 **추가**만 한다 — 기존 키를 지우거나 바꾸지 않는다.
-    # quote_as_of 는 1차 리뷰 후 추가(현재가 조회 시각) — shadow 신선도 판정 입력일 뿐
-    # 사이징·주문에는 쓰이지 않는다(아래 주문 기준선 테스트가 이를 고정한다).
-    assert set(meta) - baseline_keys <= {"entry_plan", "quote_as_of"}
+    # quote_as_of(현재가 조회 시각)·intraday_state_as_of(급락 상태 갱신 시각)는 리뷰 후 추가 —
+    # shadow 신선도·당일 게이트 입력일 뿐 사이징·주문에는 쓰이지 않는다(아래 주문 기준선이 고정).
+    assert set(meta) - baseline_keys <= {"entry_plan", "quote_as_of", "intraday_state_as_of"}
 
 
 def test_baseline_regime_stop_tightening(monkeypatch):

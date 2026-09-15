@@ -688,3 +688,94 @@ def test_candidate_without_pending_plan_gets_none(monkeypatch):
     cand = next(c for c in calls if not c["holding"])["items"][0]
     assert cand["entry_plan"] is None
     assert cand["quote_as_of"] is None
+
+
+# ── FINAL 리뷰 후속 (2026-09-15) ─────────────────────────────────────────────
+
+def test_unreadable_plan_input_waits_instead_of_allowing():
+    """문자열·빈 객체 등 계획으로 읽을 수 없는 입력은 '조건 없음 = 허용' 으로 떨어지지 않는다."""
+    now = datetime.now()
+    quote = {"price": 10000.0, "as_of": now.isoformat()}
+    for bad in ("not-a-plan", 42, object(), {}):
+        chk = check_entry_plan(bad, quote, now)
+        assert chk.status == "wait", bad
+        assert "INPUT_MISSING:plan" in chk.reasons
+
+
+@pytest.mark.parametrize("as_of_offset, expect_level", [
+    (timedelta(0), "severe"),            # 오늘 갱신 → 그대로 전달
+    (timedelta(days=-1), None),          # 어제 상태 → 오늘 관측처럼 넘기지 않는다
+    (None, None),                        # 갱신 시각 모름 → 전달 안 함
+])
+def test_shadow_hook_passes_intraday_level_only_when_updated_today(home, monkeypatch,
+                                                                   as_of_offset, expect_level):
+    from test_risk_sizing import _em, _rm
+    from src.core import engine as engine_mod
+    monkeypatch.setenv("ENTRY_PLAN_SHADOW", "1")
+    rm = _rm(monkeypatch, mode="nominal", em=_em())
+    _order_env(monkeypatch, rm)
+    seen = {}
+
+    def _fake_check(plan, quote, now, **kw):
+        seen.update(kw)
+        return PlanCheck(status="allow", reasons=[], checked_at=now)
+    monkeypatch.setattr(engine_mod, "check_entry_plan", _fake_check)
+
+    extra = {"intraday_state": "severe"}
+    if as_of_offset is not None:
+        extra["intraday_state_as_of"] = (datetime.now() + as_of_offset).isoformat()
+    asyncio.run(rm.on_signal(_buy_signal(_plan().to_dict(), **extra)))
+    assert seen.get("intraday_level") == expect_level
+
+
+def test_signal_event_shadow_rows_do_not_reach_sse_feed():
+    """shadow_plan_check 행은 DB 에만 남고 실시간(SSE) 피드로 나가지 않는다 — 대시보드 '감점' 오독 방지."""
+    from src.data.storage.signal_event_storage import SignalEventStorage
+
+    class _Conn:
+        async def fetchrow(self, *_a, **_k):
+            return {"id": 1, "event_time": datetime.now()}
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return False
+
+    class _Pool:
+        def acquire(self): return _Conn()
+
+    st = SignalEventStorage.__new__(SignalEventStorage)
+    st._pool = _Pool()
+    st._sse_callback = lambda *_a, **_k: None
+    pushed = []
+
+    async def _ensure_init(): return None
+    async def _push(row_id, event_time, **kw): pushed.append(kw["event_type"])
+    st._ensure_init = _ensure_init
+    st._push_sse = _push
+
+    base = dict(symbol="005930", name="삼성전자", strategy="sepa_trend", score=70.0,
+                adjusted_score=70.0, side="buy", market_regime="neutral", sector=None, metadata={})
+    asyncio.run(st._write(event_type="shadow_plan_check", **base))
+    asyncio.run(st._write(event_type="blocked", **base))
+    asyncio.run(st._write(event_type="passed", **base))
+    assert pushed == ["blocked", "passed"]
+
+
+def test_signal_event_stats_and_default_listing_exclude_shadow_rows():
+    """총계·전략별·일별 집계와 type 미지정 기본 조회의 SQL 이 실제 판정 행만 센다(정적 확인)."""
+    import inspect
+    from src.data.storage import signal_event_storage as m
+    stats_src = inspect.getsource(m.SignalEventStorage.get_stats)
+    assert stats_src.count("event_type IN ('passed','blocked','penalized')") >= 3
+    recent_src = inspect.getsource(m.SignalEventStorage.get_recent)
+    assert "event_type IN ('passed','blocked','penalized')" in recent_src
+
+
+def test_ledger_does_not_mask_numeric_only_identifiers(tmp_path):
+    """plan_id/deliberation_id 가 우연히 전부 숫자여도 '***' 로 지워지지 않는다(원장 조인 보호)."""
+    from src.agents import team_ledger
+    row = {"plan_id": "1234567890123456", "deliberation_id": "9876543210987654",
+           "note": "계좌 12345678-01 은 가린다", "api_key": "sk-abcdefghijklmnopqrstuvwxyz"}
+    out = team_ledger._mask_secrets(row)
+    assert out["plan_id"] == "1234567890123456"
+    assert out["deliberation_id"] == "9876543210987654"
+    assert "***" in out["note"] and "12345678-01" not in out["note"]
+    assert out["api_key"] == "***"

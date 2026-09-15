@@ -1010,9 +1010,6 @@ class BatchAnalyzer:
 
             try:
                 quote = await self._broker.get_quote(sig.symbol)
-                # REST 스냅샷에는 거래소 시각이 없다 — 조회 시각이 우리가 아는
-                # 유일한 실측 시각이고, shadow 검증기의 신선도 판정 입력이 된다.
-                _quote_at = datetime.now()
                 if not quote:
                     validated.append(sig)
                     continue
@@ -1436,6 +1433,12 @@ class BatchAnalyzer:
                         "position_multiplier": atr_position_multiplier(sig.atr_pct) if sig.atr_pct > 0 else 1.0,
                         "market_regime": _regime,
                         "intraday_state": self._intraday_state,
+                        # shadow 검증기가 당일 갱신분만 쓰도록 갱신 시각을 같이 싣는다
+                        # (T10 _intraday_crash_snapshot 게이트와 동일 출처, FINAL-1 advisory)
+                        "intraday_state_as_of": (
+                            self._intraday_updated_at.isoformat()
+                            if getattr(self, "_intraday_updated_at", None) is not None else None
+                        ),
                         "intraday_kospi_pct": round(self._intraday_kospi_pct, 2),
                         "sector": _sector,
                         "gap_pct": round(gap_pct, 2),

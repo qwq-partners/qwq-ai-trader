@@ -305,13 +305,14 @@ python scripts/shadow_report.py --telegram   # 텔레그램 전송
 | `success_probability` | 항상 None, `calibration_status="uncalibrated"` (예측 사건·기간·외부 검증 없음) |
 | `independent_votes / final_votes / change_reasons` | R1 독립 표 보존, R2 변경 시 `변경사유: 새근거|이전해석오류 — …` 파싱(없으면 unrecorded) |
 | `stance_v2` | buy_candidate = merit sufficient ∧ risk_acceptable ∧ data ≥ partial ∧ entry_ready; 아니면 hold/abstain |
+- 채택 해석(통합 확정): 펀더멘털 '검증 통과' +10 은 positive_basis 유무와 무관하게 **항상 merit 에서 취소**한다(긍정 근거는 score 의 다른 항목으로 이미 반영).
 - 기존 `TradeProposal/PMDecision/conviction`·`team_conviction_multiplier` 산식은 **기준선으로 불변**(`tests/test_t11_judgment_baseline.py`). 화면의 conviction 은 "합의 기반 지표·확률 미보정" 으로 표기.
 - 재현성 원장 params 에 `reasoning_effort` 실제값·`seed`·`temperature`·`prompt_version="debate-v2-2026-09-15"`.
 
 ### 조건부 진입계획 (EntryPlan = `PendingSignal` 확장, `execution/entry_plan.check_entry_plan`, 플래그 `ENTRY_PLAN_SHADOW`, 기본 "1"=shadow)
 - 정본은 PendingSignal 하나(`plan_id/setup/decided_at/inputs_ref/trigger/invalidation/required_inputs/assumptions/exit_policy_ref`). 배치 변환이 `Signal.metadata["entry_plan"]` 로 실어 주문 직전까지 조건이 유실되지 않는다.
 - `check_entry_plan` → `PlanCheck(allow|wait|reject, 사유 코드)`: 만료·가격 상한(wait)·밴드 하한·트리거(VCP 돌파)·setup 별 필수 입력(gap_vwap 의 vwap 없으면 `INPUT_MISSING:vwap`)·급락(severe → reject, crash 는 기존 SEPA 차단 미러)·무효화·위험예산/슬롯/일일 한도(문맥 있을 때만)·비용 반영 손익비(`COST_RR_LOW` 는 기록만, 컷오프 미정).
-- 엔진은 Order 생성 직전에 **기록만**(`signal_events` event_type=`shadow_plan_check`). 허용/차단하지 않는다. 시장가 주문이 상한을 보장한다고 주장하지 않는다 — 지정가 도입은 모의 연구(E)까지.
+- 엔진은 Order 생성 직전에 **기록만**(`signal_events` event_type=`shadow_plan_check`). 허용/차단하지 않는다. shadow 행은 `get_stats` 의 total_buy/block_rate 분모·`/api/signal-events` 기본 조회·SSE 실시간 피드에서 제외되며 `type=shadow_plan_check` 로만 조회한다(계측 오염 방지). 시장가 주문이 상한을 보장한다고 주장하지 않는다 — 지정가 도입은 모의 연구(E)까지.
 - 팀 심의는 후보 dict 의 `entry_plan/current_price/quote_as_of/intraday_level` 로 같은 함수를 호출해 `entry_ready` 를 낸다. 후보 현재가는 스크리닝 시점 값이라 5분 경과 시 `QUOTE_STALE`(wait)이 잦다(별도 재조회는 미배선).
 
 ### 불변 원장·실행 상태 (`team_ledger.py`)

@@ -1641,10 +1641,17 @@ class RiskManager:
                 "price": float(event.price) if event.price is not None else None,
                 "as_of": meta.get("quote_as_of"),
             }
-            check = check_entry_plan(
-                plan, quote, datetime.now(),
-                intraday_level=meta.get("intraday_state"),
-            )
+            # 급락 수준은 당일 갱신분만 — 전일 상태를 오늘 관측처럼 넘기지 않는다
+            now = datetime.now()
+            level = None
+            as_of = meta.get("intraday_state_as_of")
+            if as_of:
+                try:
+                    if datetime.fromisoformat(as_of).date() == now.date():
+                        level = meta.get("intraday_state")
+                except ValueError:
+                    level = None
+            check = check_entry_plan(plan, quote, now, intraday_level=level)
             self._log_sig(event, event_type="shadow_plan_check",
                           metadata=check.to_dict(), count_failures=False)
         except Exception as e:

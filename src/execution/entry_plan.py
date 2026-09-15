@@ -143,6 +143,10 @@ def check_entry_plan(
     """
     try:
         p = _plan_dict(plan)
+        if not p:
+            # 문자열·빈 객체 등 계획으로 읽을 수 없는 입력 — '조건 없음 = 허용' 으로 떨어지면
+            # 안 된다(FINAL-2 advisory). 계획이 없으면 검증하지 않는다.
+            return PlanCheck(status="wait", reasons=["INPUT_MISSING:plan"], checked_at=now)
         plan_id = str(p.get("plan_id") or "")
         setup = str(p.get("setup") or "")
         strategy = str(p.get("strategy") or "")

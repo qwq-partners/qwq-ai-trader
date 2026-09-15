@@ -30,7 +30,10 @@ EXECUTION_STATES = ("candidate", "waiting_trigger", "plan_rejected", "shadow_rea
 
 # 비밀·개인정보 마스킹 (entry_risk._is_secret_key 와 같은 취지 — 키 이름·값 패턴 둘 다)
 _SECRET_KEY_RE = re.compile(r"(api[_-]?key|secret|token|password|passwd|appkey|cano|acnt|account|chat_id)", re.I)
-_SECRET_VALUE_RE = re.compile(r"(github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|\b\d{8}-\d{2}\b|\b\d{10,}\b)")
+# 긴 순수 숫자열(\b\d{10,}\b)은 마스킹하지 않는다 — plan_id/deliberation_id(hex)가 우연히 전부
+# 숫자면 원장 키가 '***' 로 지워져 dedup·조인이 깨진다(FINAL-2 advisory). 계좌번호는 키 이름
+# (cano/acnt/account)과 8-2 형식으로 가린다.
+_SECRET_VALUE_RE = re.compile(r"(github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|\b\d{8}-\d{2}\b)")
 
 
 def make_deliberation_id(symbol: str, day: str, slot: str, input_snapshot_hash: str) -> str:

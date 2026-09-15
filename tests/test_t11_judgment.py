@@ -483,3 +483,16 @@ def test_deliberation_id_is_stable_for_same_input_and_ledger_row_has_execution_s
     assert row["execution_state"] in team_ledger.EXECUTION_STATES
     assert row["prompt_version"] == "debate-v2-2026-09-15"
     assert "model_calls" in row and isinstance(row["model_calls"], list)
+
+
+def test_verification_pass_bonus_is_cancelled_even_with_positive_basis():
+    """채택 해석(통합 확정): '검증 통과' +10 은 positive_basis 유무와 무관하게 항상 취소된다."""
+    ev = [_ev("verify", True, dedup_key="v1")]
+    both = _report(AnalystKind.FUNDAMENTAL, 40, evidence=ev, risk_clear=True, positive_basis=True)
+    clear_only = _report(AnalystKind.FUNDAMENTAL, 40, evidence=ev, risk_clear=True, positive_basis=False)
+    neither = _report(AnalystKind.FUNDAMENTAL, 40, evidence=ev, risk_clear=False, positive_basis=True)
+    m_both = judgment.assess("005930", [both], None).merit_score
+    m_clear = judgment.assess("005930", [clear_only], None).merit_score
+    m_neither = judgment.assess("005930", [neither], None).merit_score
+    assert m_both == m_clear == 30          # positive_basis 가 있어도 +10 은 남지 않는다
+    assert m_neither == 40                  # 취소 폭은 정확히 +10

@@ -194,8 +194,8 @@ function stanceBadge(stance, approved) {
 
 // T11 (2026-09-15): 실행 상태 5단계 배지 — 팀 BUY 합의(제안)와 실제 주문·체결을 시각적으로도 분리
 const EXEC_STATE_LABEL = {
-    candidate: '판단', waiting_trigger: '트리거 대기', shadow_ready: 'shadow(체결 미확인)',
-    order_submitted: '주문 접수', filled: '체결',
+    candidate: '판단', waiting_trigger: '트리거 대기', plan_rejected: '계획 거절(shadow)',
+    shadow_ready: 'shadow(체결 미확인)', order_submitted: '주문 접수', filled: '체결',
 };
 function execStateBadge(state) {
     const label = EXEC_STATE_LABEL[state] || state;

@@ -99,13 +99,12 @@ def _evidence_merit(reports: List[AnalystReport], now: Optional[datetime]) -> tu
 
         unique_sources += 1
         score = r.score
-        if r.risk_clear is True and r.positive_basis is not True:
-            score -= 10                       # "검증 통과"만의 가산 취소 — 긍정 근거가 아니다
-        # 리뷰 advisory: risk_clear=True·positive_basis=True 가 함께 확인된 보고서는
-        # 이 조건에 걸리지 않아 +10이 남는다 — "검증 통과 자체는 미가산"의 엄격한
-        # 해석과 다른 여지가 있다(관대한 해석: 긍정 근거가 실제로 있으면 굳이 깎지 않음).
-        # 두 해석 모두 계약 문구("근거 없는 검증 통과는 미가산")와 상충하지 않아
-        # 로직은 유지하고 통합 단계에서 확정하도록 남겨 둔다.
+        if r.risk_clear is True:
+            # 계약 §2.2 문언대로 "검증 통과·위험 미발견" 은 매수 매력에 가산하지 않는다 —
+            # 긍정 근거(positive_basis)가 함께 있어도 그 근거는 보고서 score 의 다른 항목
+            # (동반 순매수 등)으로 이미 반영돼 있으므로 '통과 +10' 자체는 항상 취소한다
+            # (통합 담당 확정, FINAL-1 blocking 2, 2026-09-15).
+            score -= 10
         weighted += score * w
         total_w += w
 

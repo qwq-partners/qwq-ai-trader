@@ -148,7 +148,11 @@ PRE_REGISTERED = {
         "live 청산정책의 '그대로 미러'가 아니다. "
         "(3) simulate_exit 은 같은 봉의 고가로 트레일링을 무장하고 같은 봉의 저가로 발동시킨다 — "
         "일봉만으로는 장중 고가·저가 선후를 알 수 없어 절대 R 수치는 근사치다(정책·팔 간 상대 "
-        "비교는 동일 로직이라 편향이 작지만, 절대 수치를 승격 근거로 쓰지 말 것)."
+        "비교는 동일 로직이라 편향이 작지만, 절대 수치를 승격 근거로 쓰지 말 것). "
+        "(4) timing 실험의 EntryPlan 팔은 각 일봉의 자정을 판정 시각(now)으로 써서 check_entry_plan 을 "
+        "부른다 — 배치 생성부의 계획 만료(expires_at=다음 영업일 15:30)는 그대로 적용되므로 후보일 "
+        "다음다음 거래일부터는 PLAN_EXPIRED 로 미체결이 된다(일봉 해상도의 구조적 한계, 체결률이 "
+        "낮게 나오는 방향). (5) 정책 B/C 의 성공확률·수익 개선은 이 도구가 만들어 내지 않는다."
     ),
 }
 
@@ -718,6 +722,9 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
         summary["avg_wait_days"] = round(sum(wait_days) / len(wait_days), 2) if wait_days else None
         summary["unfilled_opportunity_cost_median_r"] = (
             round(statistics.median(opportunity_cost), 4) if opportunity_cost else None
+        )
+        summary["reports_without_age"] = sum(
+            1 for c in rows for e in (c.evidence or []) if e.get("age_minutes") is None
         )
         out[mode] = summary
     return out
