@@ -32,7 +32,7 @@
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
-- [mcp-retirement-2026-09-15.md](reviews/mcp-retirement-2026-09-15.md) — 미사용 MCP 런타임 제거, 직접 공급자·미획득 계약 보존, 검증·리뷰·배포 기록
+- [mcp-retirement-2026-09-15.md](reviews/mcp-retirement-2026-09-15.md) — 미사용 MCP 런타임 제거·직접 공급자/미획득 계약 보존, PR #63 `c9923bf` 22:37 배포·MCP 경고 0건 확인
 - [codex-followups-2026-09-15.md](reviews/codex-followups-2026-09-15.md) — Codex 최종 독립 리뷰 후속·추가 P2 재리뷰 승인, UTC/KST 1022건 통과·PR #61 `82b5039` 21:56 배포·운영 관찰 원장
 - [codex-remediation-2026-09-15.md](reviews/codex-remediation-2026-09-15.md) — 금일 커밋 교차 리뷰 R1~R8 후속 수정·검증·PR #58 `53ea967` 배포 결과(당시 인계 기록 보존, 후속 Codex 리뷰로 대체)
 - [strategy-architecture-review-2026-09.md](reviews/strategy-architecture-review-2026-09.md) — 전략·아키텍처 종합 리뷰 (2026-09-13): 트랙레코드 실측(수수료 전 총손익 ≈ 0), 청산·회전·사이징·배분 구조 원인, 게이트 스택 가치(베타 혼동), 코드 건전성, 권고 8·금지 목록

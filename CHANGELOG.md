@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — ops: MCP 제거 배포·재시작 (PR #63)
+
+- 독립 Codex 리뷰 승인·필수 verify(run34975893319, 1분12초) 성공 후 main `c9923bfac024a5abdd5a44916a6d1242f7132d83` 병합. 장외·pending0·청결·설정 지문 확인 후 `local_deploy.sh`로 적용, 운영 측 verify 1019 passed/2 xfailed·격리 위반0(21.94초).
+- **22:37:08 KST 재시작(PID3082563)**. KIS 연결22:37:08·뉴스/DART 검증기 초기화22:37:12·엔진 시작22:37:14. 새 PID MCP 경고0·ERROR/Traceback0·Unclosed client session0(22:38:22 관찰). 패키지 설치·주문·설정·킬스위치 변경 없음(7경로 지문 동일), pending0·daily_trades0·정체/실패 없음.
+- 복구 가능한 Git 이력은 보존하며 배포 실패/롤백 없음. main 복귀는 같은 트리에서 CAS fast-forward로 수행해 구버전 파일을 일시 적용하지 않았다. 장외 동기화 300초와 장중 실자료 미관측 한계·후속 관찰은 `docs/reviews/mcp-retirement-2026-09-15.md` 참고.
+
 ## 2026-09-15 — refactor: 미사용 MCP 런타임 제거
 
 - 사용자 승인으로 패키지 설치 대신 미사용 연결을 정리한다. `run_trader` 부팅 연결과 `src/utils/mcp_client.py`, StockValidator의 MCP 조회·파싱·캐시·미검증 가산, 전략 수집기의 미소비 업종 조회와 수급 탐지기의 잘못된 MCP 폴백을 제거한다.
