@@ -58,7 +58,10 @@
 - 인증: OAuth2 client_credentials, `expires_in` 86399(24h). **클라이언트당 유효 토큰 1개** — 재발급 시 이전 토큰 즉시 무효(`token-revoked`). 단일 토큰 캐시 + 파일 락 필수
 - 허용 IP 사전 등록 필수(미등록 403). 시세·종목·수급·랭킹·지수·캘린더는 토큰만으로 조회(계좌 헤더 불필요)
 - Rate limit: 그룹별 TPS(`MARKET_DATA` 15 / `MARKET_DATA_CHART` 20 / `RANKING` 5 / `STOCK` 5 / `STOCK_ALL` 1 / `STOCK_TRADING_TREND` 10 / `MARKET_INFO` 3), 응답 헤더 `X-RateLimit-*`·429 `Retry-After`. **KIS 리미터와 분리된 독립 게이트**를 쓸 것
-- 주요 필드 제약: `/prices` 는 `lastPrice`·`timestamp` 만(등락률·거래량·전일종가 없음), 지수 현재가는 `timestamp=null`, 종목 정보에 **업종 필드 없음**(WICS 대체 불가)
+- 주요 필드 제약: `/prices` 는 `lastPrice`·`timestamp` 만(등락률·거래량·전일종가 없음), `timestamp` 는 조건부 nullable, 종목 정보에 **업종 필드 없음**(WICS 대체 불가), `sharesOutstanding` 은 `/stocks` 에만(`/stocks/all` 에는 없음)
+- **일봉 정렬이 KIS 와 반대다** — 토스 `/candles` 는 최신순 내림차순, KIS `get_daily_prices` 는 오래된 순. 소비자가 `[-1]`·`[-200:]` 로 "끝이 최신"을 가정하므로 어댑터에서 반드시 재정렬(같은 유형의 역전이 2026-08-07 실사고). 값·수량은 decimal **문자열**
+- **토큰 `401 token-revoked` 는 재발급 신호가 아니다** — 캐시를 다시 읽어 최신 토큰으로 재시도한다. 재발급하면 상대 프로세스 토큰을 죽여 핑퐁이 된다
+- **OAuth 스코프가 없다** — 시세용 토큰이 곧 주문 권한 토큰이며, 실효 권한 경계는 허용 IP 목록뿐이다
 - **가격 기준**: 국내 시세는 KRX+NXT 통합이라 20:00 까지 갱신 — KIS 정규장 종가와 다르다(실측 0.9% 차이). 청산·사이징에 그대로 쓰지 말 것
 - 환경변수: `TOSS_CLIENT_ID`, `TOSS_CLIENT_SECRET` (`.env`, 커밋 금지)
 
