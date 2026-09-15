@@ -25,8 +25,10 @@ class Quote:
 
     def to_data_point(self, max_age_seconds: int) -> DataPoint:
         """Expose quote freshness through the shared utility without changing it."""
-        if self.price is None:
-            return missing("toss", "price missing")
+        # A rejected/stale parser result must not become fresh merely because a
+        # later caller supplies a later ``now`` to ``is_fresh``.
+        if self.status != "ok" or self.price is None:
+            return missing("toss", f"quote {self.status}")
         return DataPoint(
             value=self.price,
             as_of=self.observed_at,

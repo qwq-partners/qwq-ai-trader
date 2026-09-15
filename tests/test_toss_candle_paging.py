@@ -1,7 +1,10 @@
 """Paging contract for Toss daily candles (offline-only)."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+
+import pytest
 
 from src.data.providers.toss.market_data import fetch_daily_candles
 
@@ -10,10 +13,11 @@ KST = timezone(timedelta(hours=9))
 FETCHED = datetime(2026, 9, 16, 10, 0, tzinfo=KST)
 
 
-def _candle(day, close="100"):
+def _candle(day, close="100", high=None):
+    high = high or close
     return {
         "timestamp": f"{day[:4]}-{day[4:6]}-{day[6:]}T00:00:00+09:00",
-        "openPrice": "95", "highPrice": "250", "lowPrice": "1",
+        "openPrice": "95", "highPrice": high, "lowPrice": "1",
         "closePrice": close, "volume": 100, "currency": "KRW",
     }
 
@@ -71,12 +75,25 @@ def test_fetch_daily_candles_passes_next_before_verbatim_and_collects_complete_w
     assert budget.pages_used == 2
 
 
-def test_fetch_daily_candles_deduplicates_inclusive_page_boundary_without_losing_201_to_250_high():
-    expected = [f"2025{month:02d}{day:02d}" for month, day in [(1, 2), (1, 3), (1, 6)]]
-    # A10의 핵심은 200개 뒤쪽(두 번째 페이지)에만 있는 고점도 요구 창에 포함되면 보존하는 것이다.
+def _weekday_dates(count):
+    result = []
+    cursor = date(2025, 1, 2)
+    while len(result) < count:
+        if cursor.weekday() < 5:
+            result.append(cursor.strftime("%Y%m%d"))
+        cursor += timedelta(days=1)
+    return result
+
+
+def test_fetch_daily_candles_preserves_actual_250_day_window_and_older_page_only_high():
+    expected = _weekday_dates(250)
+    newer_page = list(reversed(expected[50:]))
+    older_page = [expected[50], *reversed(expected[:50])]
+    # A10: first page has 200 distinct dates, the older page contributes the
+    # remaining 50, and only that older segment contains the 200 high.
     client = _Client([
-        {"candles": [_candle("20250106", "110"), _candle("20250103", "120")], "nextBefore": "2025-01-03T00:00:00+09:00"},
-        {"candles": [_candle("20250103", "120"), _candle("20250102", "200")], "nextBefore": None},
+        {"candles": [_candle(day, "110", high="120") for day in newer_page], "nextBefore": f"{expected[50][:4]}-{expected[50][4:6]}-{expected[50][6:]}T00:00:00+09:00"},
+        {"candles": [_candle(day, "110", high=("200" if day == expected[0] else "120")) for day in older_page], "nextBefore": None},
     ])
 
     series = asyncio.run(fetch_daily_candles(
@@ -85,13 +102,16 @@ def test_fetch_daily_candles_deduplicates_inclusive_page_boundary_without_losing
     ))
 
     assert series.complete is True
-    assert [str(bar.close) for bar in series.bars] == ["200", "120", "110"]
+    assert len(series.bars) == 250
+    assert len({bar.bar_date for bar in series.bars}) == 250
+    assert max(bar.high for bar in series.bars) == Decimal("200")
+    assert float((Decimal("110") / max(bar.high for bar in series.bars) - Decimal("1")) * Decimal("100")) == -45.0
 
 
 def test_fetch_daily_candles_stops_repeated_cursor_and_returns_partial_not_false_success():
     client = _Client([
-        {"candles": [_candle("20260915")], "nextBefore": "cursor-a"},
-        {"candles": [_candle("20260912")], "nextBefore": "cursor-a"},
+        {"candles": [_candle("20260915")], "nextBefore": "2026-09-12T00:00:00+09:00"},
+        {"candles": [_candle("20260912")], "nextBefore": "2026-09-12T00:00:00+09:00"},
     ])
 
     series = asyncio.run(fetch_daily_candles(
@@ -105,9 +125,52 @@ def test_fetch_daily_candles_stops_repeated_cursor_and_returns_partial_not_false
     assert len(client.calls) == 2
 
 
+@pytest.mark.parametrize("next_before", [[], "not-an-iso-cursor"])
+def test_fetch_daily_candles_stops_malformed_cursor_safely_with_partial_result(next_before):
+    client = _Client([{"candles": [_candle("20260915")], "nextBefore": next_before}])
+
+    series = asyncio.run(fetch_daily_candles(
+        client, symbol="005930", expected_dates=["20260912", "20260915"],
+        fetched_at=FETCHED, budget=_Budget(), market_basis="krx",
+    ))
+
+    assert series.complete is False
+    assert series.missing_dates == ("20260912",)
+    assert len(client.calls) == 1
+
+
+def test_fetch_daily_candles_stops_forward_cursor_without_a_third_request():
+    client = _Client([
+        {"candles": [_candle("20260915")], "nextBefore": "2026-09-15T00:00:00+09:00"},
+        {"candles": [_candle("20260912")], "nextBefore": "2026-09-16T00:00:00+09:00"},
+    ])
+
+    series = asyncio.run(fetch_daily_candles(
+        client, symbol="005930", expected_dates=["20260911", "20260912", "20260915"],
+        fetched_at=FETCHED, budget=_Budget(), market_basis="krx",
+    ))
+
+    assert series.complete is False
+    assert series.missing_dates == ("20260911",)
+    assert len(client.calls) == 2
+
+
+def test_fetch_daily_candles_stops_initial_cursor_later_than_received_time():
+    client = _Client([{"candles": [_candle("20260915")], "nextBefore": "2026-09-16T10:01:00+09:00"}])
+
+    series = asyncio.run(fetch_daily_candles(
+        client, symbol="005930", expected_dates=["20260912", "20260915"],
+        fetched_at=FETCHED, budget=_Budget(), market_basis="krx",
+    ))
+
+    assert series.complete is False
+    assert series.missing_dates == ("20260912",)
+    assert len(client.calls) == 1
+
+
 def test_fetch_daily_candles_second_page_error_returns_partial_without_collector_retry():
     client = _Client([
-        {"candles": [_candle("20260915")], "nextBefore": "cursor-a"},
+        {"candles": [_candle("20260915")], "nextBefore": "2026-09-12T00:00:00+09:00"},
         RuntimeError("offline fake failure"),
     ])
     budget = _Budget()

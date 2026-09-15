@@ -19,6 +19,9 @@ _STATUSES = frozenset({"ok", "partial", "missing", "invalid", "stale"})
 _SUPPORTED_PAYLOAD_FIELDS = frozenset({
     "price", "open", "high", "low", "close", "volume", "prev_close", "change_pct",
 })
+# These are internal explicit labels only.  A Toss source remains ``unknown``
+# until its concrete market-basis evidence is supplied by an upper boundary.
+_SUPPORTED_MARKET_BASES = frozenset({"krx", "krx_nxt"})
 
 
 class MarketDataError(Exception):
@@ -30,7 +33,13 @@ class MarketDataError(Exception):
 
 
 def _require_aware_not_future(value: datetime, now: datetime, *, code: str) -> None:
-    if value.tzinfo is None or value.utcoffset() is None or value > now:
+    if (
+        now.tzinfo is None
+        or now.utcoffset() is None
+        or value.tzinfo is None
+        or value.utcoffset() is None
+        or value > now
+    ):
         raise MarketDataError(code)
 
 
@@ -112,16 +121,22 @@ def parse_prices(
     if any(not isinstance(symbol, str) or not symbol for symbol in requested):
         raise MarketDataError("invalid_symbol")
     quotes = {symbol: _missing_quote(symbol, fetched_at) for symbol in requested}
+    seen_symbols: set[str] = set()
 
     for row in _price_result_rows(body):
         if not isinstance(row, Mapping):
             continue
         symbol = row.get("symbol")
+        if not isinstance(symbol, str):
+            continue
         if symbol not in quotes:
             continue
-        # A first valid record wins; later malformed duplicates cannot poison it.
-        if quotes[symbol].status == "ok":
+        # Every duplicate is ambiguous as a single point-in-time observation.
+        # Fail closed permanently, independent of validity or response ordering.
+        if symbol in seen_symbols:
+            quotes[symbol] = _missing_quote(symbol, fetched_at, status="invalid")
             continue
+        seen_symbols.add(symbol)
         currency = row.get("currency")
         if currency != "KRW":
             quotes[symbol] = _missing_quote(symbol, fetched_at, status="invalid")
@@ -142,6 +157,9 @@ def parse_prices(
             quotes[symbol] = Quote(symbol, price, None, fetched_at, "invalid", frozenset({"observed_at"}), "unknown", "KRW")
             continue
 
+        if observed_at > fetched_at:
+            quotes[symbol] = _missing_quote(symbol, fetched_at, status="invalid")
+            continue
         age_seconds = (now - observed_at).total_seconds()
         if age_seconds < 0 or age_seconds > max_age_seconds:
             quotes[symbol] = Quote(symbol, price, observed_at, fetched_at, "stale", frozenset(), "unknown", "KRW")
@@ -289,8 +307,9 @@ async def fetch_daily_candles(
     """
     expected = _normalize_expected_dates(expected_dates)
     pages: list[object] = []
-    cursor: object | None = None
-    seen_cursors: set[object] = set()
+    cursor: str | None = None
+    cursor_time: datetime | None = None
+    seen_cursors: set[str] = set()
 
     while True:
         if budget.remaining() <= 0:
@@ -313,10 +332,21 @@ async def fetch_daily_candles(
             return series
         payload = _page_payload(page)
         next_before = payload.get("nextBefore") if payload is not None else None
-        if next_before is None or next_before in seen_cursors:
+        if next_before is None or not isinstance(next_before, str):
+            break
+        try:
+            next_time = _parse_timestamp(next_before)
+        except ValueError:
+            break
+        if (
+            next_time > fetched_at
+            or next_before in seen_cursors
+            or (cursor_time is not None and next_time >= cursor_time)
+        ):
             break
         seen_cursors.add(next_before)
         cursor = next_before
+        cursor_time = next_time
 
     return normalize_candle_pages(
         pages, symbol=symbol, expected_dates=expected, fetched_at=fetched_at,
@@ -343,12 +373,27 @@ def compose_quote(
         return {}
     if quote.observed_at > quote.fetched_at:
         return {}
+    try:
+        _normalize_expected_dates([trading_date, previous_trading_date])
+    except MarketDataError:
+        return {}
+    target_date = trading_date
+    previous_date = previous_trading_date
+    if previous_date >= target_date:
+        return {}
+    if quote.observed_at.astimezone(KST).strftime("%Y%m%d") != target_date:
+        return {}
 
     payload: dict[str, float | int] = {"price": float(quote.price)} if "price" in required_fields else {}
     candle_fields = required_fields - {"price"}
     if not candle_fields:
         return payload
-    if not series.complete or series.status != "ok" or quote.market_basis == "unknown":
+    if (
+        not series.complete
+        or series.status != "ok"
+        or not isinstance(quote.market_basis, str)
+        or quote.market_basis not in _SUPPORTED_MARKET_BASES
+    ):
         return {}
     by_date = {bar.bar_date: bar for bar in series.bars}
     today = by_date.get(trading_date)
@@ -360,7 +405,12 @@ def compose_quote(
         if previous is None or not previous.complete:
             return {}
     relevant = [bar for bar in (today, previous) if bar is not None]
-    if any(bar.market_basis != quote.market_basis for bar in relevant):
+    if any(
+        not isinstance(bar.market_basis, str)
+        or bar.market_basis not in _SUPPORTED_MARKET_BASES
+        or bar.market_basis != quote.market_basis
+        for bar in relevant
+    ):
         return {}
     # A Quote has no adjusted flag because a live last price is not itself an
     # adjusted history.  The historical legs still must share one explicit
