@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -271,6 +272,8 @@ class StockValidator:
 
         try:
             result = await self._fetch_supply_demand(symbol)
+            if result is None:
+                return SupplyDemandResult(), False
             self._set_cache(self._supply_demand_cache, symbol, result, self._CACHE_MAX_SIZE)
             return result, True
         except Exception as e:
@@ -304,6 +307,8 @@ class StockValidator:
 
         try:
             result = await self._fetch_trend_buzz(stock_name)
+            if result is None:
+                return TrendBuzzResult(), False
             self._set_cache(self._trend_buzz_cache, stock_name, result, self._CACHE_MAX_SIZE)
             return result, True
         except Exception as e:
@@ -312,7 +317,7 @@ class StockValidator:
 
     # ───────────────────── MCP 도구 호출 ─────────────────────
 
-    async def _fetch_supply_demand(self, symbol: str) -> SupplyDemandResult:
+    async def _fetch_supply_demand(self, symbol: str) -> Optional[SupplyDemandResult]:
         """pykrx-mcp로 종목별 투자자 유형 거래대금 조회 (외국인/기관 순매수 판별)"""
         # pykrx는 장중 당일 데이터 미제공 → 최근 3거래일 조회 (주말/공휴일 대비)
         today = datetime.now()
@@ -324,11 +329,11 @@ class StockValidator:
             {"ticker": symbol, "start_date": start_date, "end_date": end_date}
         )
         if not resp:
-            return SupplyDemandResult()
+            return None
 
         data = self._parse_mcp_text(resp)
-        if not data:
-            return SupplyDemandResult()
+        if not self._is_supply_demand_response(data):
+            return None
 
         result = SupplyDemandResult()
 
@@ -354,7 +359,7 @@ class StockValidator:
         # 향후 get_shorting_volume_top50 등이 추가되면 여기서 호출
         return ShortSellingResult()
 
-    async def _fetch_trend_buzz(self, stock_name: str) -> TrendBuzzResult:
+    async def _fetch_trend_buzz(self, stock_name: str) -> Optional[TrendBuzzResult]:
         """naver-search-mcp로 검색 트렌드 조회"""
         today = datetime.now()
         start_date = (today - timedelta(days=14)).strftime("%Y-%m-%d")
@@ -372,9 +377,11 @@ class StockValidator:
             }
         )
         if not resp:
-            return TrendBuzzResult()
+            return None
 
         data = self._parse_mcp_text(resp)
+        if not self._is_trend_buzz_response(data):
+            return None
         return self._analyze_trend(data)
 
     # ───────────────────── 유틸리티 ─────────────────────
@@ -401,6 +408,70 @@ class StockValidator:
             return None
         except (json.JSONDecodeError, AttributeError):
             return None
+
+    @staticmethod
+    def _is_supply_demand_response(data: Any) -> bool:
+        """MCP 수급 응답의 최소 스키마를 확인한다.
+
+        빈 목록과 0 순매수는 정상적인 중립 조회 결과다. 반대로 JSON 파싱은 됐어도
+        수급 응답 형식이 아닌 객체는 획득 성공으로 취급하지 않는다.
+        """
+        if not isinstance(data, dict):
+            return False
+        if "data" in data or "results" in data:
+            rows = data.get("data", data.get("results"))
+            if not isinstance(rows, list):
+                return False
+            if not rows:                 # 명시적 정상 빈 응답
+                return True
+            if not all(isinstance(row, dict) for row in rows):
+                return False
+            return StockValidator._has_finite_investor_values(rows[-1])
+        return StockValidator._has_finite_investor_values(data)
+
+    @staticmethod
+    def _is_trend_buzz_response(data: Any) -> bool:
+        """Naver DataLab 응답의 최소 스키마를 확인한다 (빈 응답은 정상 중립)."""
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            return False
+        results = data["results"]
+        if not results:                  # 명시적 정상 빈 응답
+            return True
+        first = results[0]
+        if not isinstance(first, dict) or not isinstance(first.get("data"), list):
+            return False
+        rows = first["data"]
+        if not rows:
+            return True                  # 명시적 정상 빈 시계열
+        return all(
+            isinstance(row, dict) and "ratio" in row
+            and StockValidator._is_finite_ratio(row["ratio"])
+            for row in rows
+        )
+
+    @staticmethod
+    def _has_finite_investor_values(row: Any) -> bool:
+        if not isinstance(row, dict):
+            return False
+        investor_keys = ("외국인합계", "외국인", "기관합계", "금융투자", "보험", "투신", "연기금등")
+        values = [row[key] for key in investor_keys if key in row]
+        return bool(values) and all(StockValidator._is_finite_number(value) for value in values)
+
+    @staticmethod
+    def _is_finite_number(value: Any) -> bool:
+        if isinstance(value, bool) or value is None:
+            return False
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _is_finite_ratio(value: Any) -> bool:
+        """트렌드 소비자는 ratio를 산술 연산하므로 문자열 숫자는 허용하지 않는다."""
+        return (not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(value))
 
     def _extract_investor_value(self, data: Any, keys: list) -> Optional[float]:
         """투자자 유형별 거래대금 추출 (여러 키 중 첫 매칭)"""

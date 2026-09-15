@@ -291,6 +291,7 @@ python scripts/shadow_report.py --telegram   # 텔레그램 전송
 ### 근거 계약 (`types.EvidenceItem`, `AnalystReport` 확장)
 - 근거 1건마다 출처·원자료 식별자(`ref_id`)·관측 시각(`observed_at`, 모르면 None — 수집 시각·now 로 채우지 않는다)·수집 시각·회계기간·상태(full/partial/insufficient/error)·종류(fact/interpretation/assumption)·유효기간·`dedup_key`(같은 기사·공시 재인용은 1회만).
 - 보고서는 `positive_basis`(긍정 근거 확인)와 `risk_clear`(검증 수행 + 위험 미발견)를 분리한다. 펀더멘털 "검증 통과" 는 risk_clear 일 뿐 긍정 근거가 아니다. 뉴스는 `limitations=["헤드라인 기반"]`.
+- 2026-09-15 교차 리뷰 후속: `validation_pass_bonus`는 기존 점수의 검증 통과 가산분(0/10)을 `risk_clear`와 독립적으로 보존한다. DART 경고 뒤 `risk_clear=False`가 되어도 v2에서 +10은 취소한다. 구버전 `None`은 기존 risk_clear 기반 추정으로 호환하므로 과거의 불명확한 점수 성분까지 복원했다는 뜻은 아니다. 자료 시각 미상은 `data_as_of=null, age_minutes=null`로 표준 JSON에 보존한다.
 - `stock_validator.ValidationResult.validated/data_status` — 하위 검증(수급·공매도·DART·뉴스)의 실제 획득 여부에서 유도. 기존 `approved` 의 의미·기본값은 그대로(다른 소비자 무영향).
 - 기존 경로 버그 수정 2건(승인): `vol_ratio` 소비 키(거래량 +15 가 이전엔 절대 미발동), `evidence_quality` 의 유효 소스 수에서 confidence=0 보고서 제외. 기준선 특성화 테스트 `tests/test_t11_evidence_baseline.py`.
 
@@ -319,9 +320,12 @@ python scripts/shadow_report.py --telegram   # 텔레그램 전송
 - `~/.cache/ai_trader/team_ledger/deliberations_YYYYMMDD.jsonl` append-only, `deliberation_id = sha256(symbol|date|slot|input_snapshot_hash)[:16]` — 같은 입력 재시도는 같은 id(읽기 dedup). 같은 날 같은 종목의 여러 시점 판단·BUY/HOLD/REJECT/기권/실패 전부 보존. 기존 `team_verdicts/verdicts_*.json`(latest-per-symbol)은 대시보드·conviction 호환용으로 유지.
 - 실행 상태: `candidate → waiting_trigger | plan_rejected → shadow_ready → order_submitted → filled`. 뒤 두 단계는 trade_journal 등 실제 증거가 있을 때만 표시(승인 BUY 를 체결로 가정하지 않는다).
 - CF: 승인 BUY 중 체결 증거 없는 건은 `team_buy_unfilled` 로 추적(요약에서 '차단 적중' 프레이밍과 분리). 체결 증거는 콜백 우선, 콜백 미주입이면 실제 거래저널 `<TRADE_JOURNAL_DIR|~/.cache/ai_trader/journal>/trades_YYYYMMDD.json` 을 읽는다(날짜 파일 없음 = 그날 진입 없음 = 미체결). 저널 디렉터리 자체가 없으면 판정 불가로 **등록 보류** + 요약 경고(미체결로 오라벨하지 않음).
+- CF 입력은 날짜별 **불변 심의 원장 우선**(2026-09-15 교차 리뷰 후속). 같은 날 오전 BUY→오후 HOLD도 BUY 집단으로 분류하며 모든 `deliberation_ids`를 보존한다. 종목·날짜당 종가 기준 1표본으로 기존 분모를 유지하고, 기존 HOLD의 BUY 재분류 시 가격·rN은 보존한다. 새 체결 증거/판정 불가가 생기면 잘못된 미체결 표본을 제외하고 변경만 있어도 저장한다. 원장 파일이 **없는 날짜만** latest 파일로 폴백하며, 빈/읽기 실패 원장은 최신 HOLD로 대체하지 않는다. 일중 시점별 수익률 연구는 아니며 원장이 없던 과거의 덮어쓴 판단은 복원할 수 없다. 기존 콜백 예외→False 계약은 이번 범위에서 변경하지 않았다.
 
 ### 추가 가치 검증 도구 (`scripts/team_policy_ab.py`)
 - A 기존 규칙 / B +독립 근거 검토(R1) / C +토론(R2) 를 같은 후보군·시점에서 비교. 실험 1(선정: 진입·청산·비용 고정) / 실험 2(가격·시점: 기존 진입 vs EntryPlan 조건부, 일봉만으로 선후 불명확이면 미체결).
+- 2026-09-15 교차 리뷰 후속: 고정 손절선 또는 이미 활성화된 트레일링선을 시가가 관통하면 시가로 잔여분을 청산한다(당일 고가·익절 판정보다 먼저). 비용·손절/익절 임계값은 불변이며 실엔진 청산을 수정한 것이 아니다.
+- replay의 기준 시각은 `plan.decided_at`(naive=KST). 그 키 자체가 없는 구형 스냅샷만 후보일 KST 자정으로 고정 폴백하며 해상도 한계를 명시한다. 키가 있으나 무효/결측이거나 결정 KST 날짜가 후보일과 다르면 B/C는 기권한다. 원본 `data_as_of` 우선, 그 키가 없을 때만 판단 시각에서 `age_minutes`를 뺀다. 모든 TTL·감쇠·근거 만료를 이 시각으로 평가하며 UTC/KST 혼합도 같은 순간으로 비교한다. 미래 관측이 섞인 보고서는 항목별 점수 분해가 불가능하므로 **보고서 전체 제외**(다른 유효 보고서는 유지). 기존 no-age 합성 fixture는 명시 시각으로 보완했으며 결측을 fresh로 간주하던 계약은 폐기했다.
 - 사전 등록(manifest): 주평가 = 포지션당 비용 차감 R 중앙값·평균, MDE +0.10R, 표본 ≥30/정책, 시간순 홀드아웃(마지막 1/3) 부호 유지, 종목-주 클러스터·겹치는 보유기간 dedup, 판단 시각 이전 필드만. 벤치마크 KODEX200(캐시 없으면 null).
 - **실데이터 없음 → 합성 fixture 로 도구만 검증(`validation_status=synthetic_only`)**. 성능·확률 보정·승격 판정은 미검증/보류. 과거 LLM 재평가는 사후 지식 가능성을 한계로 명시.
 

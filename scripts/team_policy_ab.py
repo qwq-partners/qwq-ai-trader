@@ -46,12 +46,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import sys
 from dataclasses import dataclass, field
 from datetime import timedelta, date as _date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -66,6 +68,7 @@ from src.agents.types import (  # noqa: E402
 
 POLICIES = ("A", "B", "C")
 EXPERIMENTS = ("selection", "timing")
+KST = ZoneInfo("Asia/Seoul")
 
 # ── 청산정책 임계값 — CLAUDE.md "청산 관리(ExitManager)"의 분할익절·트레일링·손절 사다리만
 #    미러한다(계획값, 사후 변경 금지). stale_exit/stale_high(시간 기반 강제청산, 실엔진
@@ -102,7 +105,9 @@ PRE_REGISTERED = {
         f"(1·2·3차 모두 마쳐도 잔여 {((1-TP1_FRAC)*(1-TP2_FRAC)*(1-TP3_FRAC))*100:.1f}% 남아 "
         f"트레일링·손절·관찰창 만기로만 종결 가능 — 사다리만 미러, stale_exit/stale_high 미구현) · "
         f"트레일링 +{TRAIL_ARM_PCT}%↑ 고점대비 -{TRAIL_DD_PCT}% · "
-        f"손절 plan.stop_price(없으면 {DEFAULT_SL_PCT}%) · 같은 날 손절·익절 동시 충족 시 손절 우선(보수적)"
+        f"손절 plan.stop_price(없으면 {DEFAULT_SL_PCT}%) · 시가가 고정 손절선/전일 무장된 트레일링선 "
+        "이하면 시가로 잔여 전량 청산(당일 고가·익절 전에 판정). "
+        "같은 날 장중 손절·익절 동시 충족 시 손절 우선(보수적)"
     ),
     "cost_assumption": "FeeCalculator 왕복(매수 0.0140527% + 매도 0.0130527%+세금0.20%) — KR 기본",
     "fill_assumption": (
@@ -129,9 +134,16 @@ PRE_REGISTERED = {
         "스냅샷 evidence 가 data_status(full/partial)·근거(evidence, kind=fact) 를 채우지 않으면 "
         "(=A 근거계약 미배선) data_sufficiency 가 insufficient 가 되어 B/C 게이트에서 탈락한다"
         "(merit 자체는 evidence 가 있으면 계산될 수 있다) — 이때 B/C 선정이 0건이어도 버그가 아니다. "
-        "보고서 신선도는 스냅샷의 age_minutes 로 복원한다(없으면 판단 시점에 신선 가정, "
+        "판단 시각은 plan.decided_at이며 naive 시각은 KST로 해석한다. 해당 키가 없는 구형 "
+        "date-only 후보는 후보일 KST 자정을 고정 폴백으로 쓴다(시각 해상도 한계). "
+        "명시된 decided_at이 손상/결측이면 기권하며 실행 시계로 대체하지 않는다. "
+        "결정 시각의 KST 날짜가 후보일과 다르면 기권한다(이월계획 시간 모델 미지원). "
+        "보고서 신선도는 원본 data_as_of 우선, 키가 없을 때만 판단 시각-age_minutes 로 복원한다. "
+        "복원할 시각이 없거나 손상되면 유효 보고서에서 제외한다. 근거 observed_at/valid_until은 "
+        "원본을 유지하고 같은 판단 시각에서 만료를 검사하며, 판단 이후 observed_at이 포함된 "
+        "보고서는 종합 score를 안전하게 분해할 수 없어 통째로 제외한다. 다른 유효 보고서는 유지한다. "
         "results.evidence_items_without_age_all_rows 카운터 — 선정·dedup 이전 입력 전체의 "
-        "evidence 항목 수라 정책/모드 간 동일한 스냅샷 품질 지표다). C 는 gate_b(R1 bear ACCEPT)를 전제로 하므로 "
+        "evidence 항목 수라 정책/모드 간 동일한 스냅샷 품질 지표다. C 는 gate_b(R1 bear ACCEPT)를 전제로 하므로 "
         "R1 REJECT→R2 ACCEPT 전향 후보는 C 에서 제외된다(=live 팀 최종 판정보다 엄격) — "
         "results.r1_reject_r2_accept_excluded 카운터로 남긴다(정책 정의는 결과를 본 뒤 바꾸지 않는다)."
     ),
@@ -233,7 +245,32 @@ def _parse_dt(v: Any) -> Optional[datetime]:
         return None
 
 
-def _to_evidence_item(d: Dict[str, Any]) -> EvidenceItem:
+def _as_kst(value: datetime) -> datetime:
+    """naive 역사 시각은 프로젝트의 KST 관례로 해석한다."""
+    return value.replace(tzinfo=KST) if value.tzinfo is None else value.astimezone(KST)
+
+
+def _decision_time(c: Candidate) -> Optional[datetime]:
+    """정확한 계획 시각 우선, 해당 키가 없는 date-only 레거시는 KST 자정.
+
+    명시됐지만 잘못된 decided_at은 레거시가 아니다 — fallback으로 정상화하지 않는다.
+    """
+    try:
+        day = _date.fromisoformat(c.date)
+    except (TypeError, ValueError):
+        return None
+    if "decided_at" in c.plan:
+        raw = c.plan["decided_at"]
+        if isinstance(raw, str) and len(raw.strip()) <= 10:
+            return None
+        parsed = _parse_dt(raw)
+        reference = _as_kst(parsed) if parsed is not None else None
+        # 체결은 후보일 다음 시가를 쓰므로 다른 날의 판단을 적용하면 시점 누수가 생긴다.
+        return reference if reference is not None and reference.date() == day else None
+    return datetime(day.year, day.month, day.day, tzinfo=KST)
+
+
+def _to_evidence_item(d: Dict[str, Any], now: Optional[datetime] = None) -> EvidenceItem:
     """AnalystReport.to_dict()['evidence'] 항목(EvidenceItem.to_dict()) 역직렬화.
 
     observed_at/collected_at/valid_until 을 복원해야 judgment._evidence_merit 의 근거 유효기간
@@ -241,19 +278,25 @@ def _to_evidence_item(d: Dict[str, Any]) -> EvidenceItem:
     'insufficient'(미상)로 둔다 — 결측을 가장 관대한 값으로 매핑하지 않는다 (R-D r5 advisory).
     """
     status = d.get("status")
+    valid_until = _parse_dt(d.get("valid_until"))
+    if d.get("valid_until") is not None and valid_until is None:
+        status = "insufficient"  # 손상된 만료시각을 '만료 없음'으로 승격하지 않는다.
+    observed_at = _parse_dt(d.get("observed_at"))
+    if observed_at is not None and now is not None and _as_kst(observed_at) > _as_kst(now):
+        status = "insufficient"  # 보고서의 나이와 무관하게 판단 이후 관측은 사용할 수 없다.
     return EvidenceItem(
         source=str(d.get("source") or ""), metric=str(d.get("metric") or ""),
         value=d.get("value"), unit=d.get("unit"),
-        observed_at=_parse_dt(d.get("observed_at")), collected_at=_parse_dt(d.get("collected_at")),
+        observed_at=observed_at, collected_at=_parse_dt(d.get("collected_at")),
         period=d.get("period"),
         status=status if isinstance(status, str) and status else "insufficient",
         kind=str(d.get("kind") or "fact"),
-        ref_id=d.get("ref_id"), valid_until=_parse_dt(d.get("valid_until")),
+        ref_id=d.get("ref_id"), valid_until=valid_until,
         dedup_key=d.get("dedup_key"),
     )
 
 
-def _to_analyst_report(d: Dict[str, Any]) -> AnalystReport:
+def _to_analyst_report(d: Dict[str, Any], now: Optional[datetime] = None) -> AnalystReport:
     """스냅샷의 AnalystReport.to_dict() 형태 dict → AnalystReport (judgment.assess 입력용).
 
     confidence·score 결측은 0 으로 매핑한다(0 을 "값 있음"으로 오인하지 않도록 명시적으로
@@ -264,23 +307,42 @@ def _to_analyst_report(d: Dict[str, Any]) -> AnalystReport:
         kind = AnalystKind(kind_raw)
     except ValueError:
         kind = AnalystKind.TECHNICAL
-    nested = [_to_evidence_item(e) for e in (d.get("evidence") or [])]
+    nested = [_to_evidence_item(e, now=now) for e in (d.get("evidence") or [])]
     rep = AnalystReport(
         kind=kind, symbol=str(d.get("symbol") or ""), score=_safe_int(d.get("score")),
         confidence=_safe_float(d.get("confidence")), error=d.get("error"),
+        data_as_of=None,  # 실행시각 default_factory를 거치지 않고 아래에서 역사 시각만 복원한다.
         data_status=str(d.get("data_status") or "unknown"),
         positive_basis=d.get("positive_basis"), risk_clear=d.get("risk_clear"),
+        validation_pass_bonus=d.get("validation_pass_bonus"),
         evidence=nested,
         observed_at=_parse_dt(d.get("observed_at")),
         limitations=list(d.get("limitations") or []),
     )
-    # R-D r5 blocking: data_as_of 의 dataclass 기본값은 now 라 복원된 모든 보고서가 '방금 만든 것'
-    # 이 된다(신선도 세탁) — judgment 의 유효성 판정(HARD_TTL·감쇠 가중치)이 전부 age_minutes 에
-    # 걸려 있으므로 스냅샷이 기록한 나이를 그대로 되살린다. age_minutes 가 없는 구형·합성
-    # 스냅샷은 '판단 시점에 신선' 가정으로 남고 그 사실을 results 에 카운터로 남긴다.
-    age = d.get("age_minutes")
-    if isinstance(age, (int, float)) and not isinstance(age, bool) and age >= 0:
-        rep.data_as_of = datetime.now() - timedelta(minutes=float(age))
+    # 절대시각을 age보다 우선한다. age는 직렬화 시점에 측정/반올림될 수 있다.
+    # dataclass의 실행시각 기본값은 사용하지 않는다: 시각 미상은 기존 TTL 계약대로 제외.
+    as_of = _parse_dt(d.get("data_as_of")) if "data_as_of" in d else None
+    if "data_as_of" not in d and now is not None:
+        age = d.get("age_minutes")
+        if (isinstance(age, (int, float)) and not isinstance(age, bool)
+                and math.isfinite(age) and age >= 0):
+            try:
+                as_of = _as_kst(now) - timedelta(minutes=float(age))
+            except OverflowError:
+                pass
+    if as_of is not None and now is not None and _as_kst(as_of) > _as_kst(now):
+        as_of = None  # 판단 이후에 만들어진 보고서를 신선한 과거 근거로 쓰지 않는다.
+    rep.data_as_of = as_of
+    if as_of is None:
+        rep.limitations.append("snapshot_report_time_missing_or_invalid")
+    if now is not None and any(
+        item.observed_at is not None and _as_kst(item.observed_at) > _as_kst(now)
+        for item in nested
+    ):
+        # 항목 status만 바꾸면 미래 근거가 기여한 보고서 종합 score는 그대로 남는다.
+        # 항목별 점수 분해 계약이 없으므로 이 보고서를 제외하고 별도 유효 보고서만 쓴다.
+        rep.error = rep.error or "snapshot_evidence_after_decision"
+        rep.limitations.append("snapshot_report_score_contains_future_evidence")
     return rep
 
 
@@ -306,32 +368,37 @@ def _debate_from_votes(symbol: str, votes: Dict[str, Any], upto_round: int) -> D
 
 def _assess(c: Candidate, upto_round: int):
     """정책 B/C 공용 — src.agents.judgment.assess 를 그대로 호출한다(러너 자체 근사 없음)."""
-    reports = [_to_analyst_report(e) for e in c.evidence]
     debate = _debate_from_votes(c.symbol, c.votes, upto_round)
-    # now 를 넘겨야 EvidenceItem.valid_until 만료 검사가 동작한다(team.py 실배선과 동일)
-    return judgment.assess(c.symbol, reports, debate, now=datetime.now())
+    now = _decision_time(c)
+    if now is None:
+        assessment = judgment.assess(c.symbol, [], debate)
+        assessment.abstain_reason += " | snapshot_decision_time_missing_or_invalid"
+        return assessment
+    reports = [_to_analyst_report(e, now=now) for e in c.evidence]
+    return judgment.assess(c.symbol, reports, debate, now=now)
 
 
 # ── R1/R2 판단 레거시 유틸 — 정책 게이트에서는 더는 쓰지 않는다(judgment.assess 로 재배선,
 #    §2.5). r1_assess 의 confidence 결측 처리(usable 판정)는 judgment._valid_reports 를
 #    재사용해 이 함수와 실제 판단 경로의 "유효 보고서" 정의를 어긋나지 않게 유지한다. ──
-def _usable_reports(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _usable_reports(evidence: List[Dict[str, Any]], now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """confidence=0·결측·오류·만료 보고서는 제외 (인수조건 #2 — 유효 소스를 부풀리지 않는다).
 
     이전에는 confidence 가 아예 없는(None) 보고서를 유효로 세는 결함이 있었다(결측을
     '검사 통과'로 취급) — judgment._valid_reports(ok·신뢰도>0·TTL 이내)로 판정을 통일한다.
+    age_minutes만 있는 레거시 스냅샷에는 호출자가 판단 시각(now)을 명시해야 한다.
     """
-    reports = [_to_analyst_report(e) for e in evidence]
-    valid_ids = {id(r) for r in judgment._valid_reports(reports)}
+    reports = [_to_analyst_report(e, now=now) for e in evidence]
+    valid_ids = {id(r) for r in judgment._valid_reports(reports, now=now)}
     return [e for e, r in zip(evidence, reports) if id(r) in valid_ids]
 
 
-def r1_assess(evidence: List[Dict[str, Any]]) -> Tuple[Optional[int], str, str]:
+def r1_assess(evidence: List[Dict[str, Any]], now: Optional[datetime] = None) -> Tuple[Optional[int], str, str]:
     """R1 독립 판단(레거시 유틸) — merit_score, merit_status, data_sufficiency.
 
     '검증 통과'·컨센서스는 가산하지 않는다 — positive_basis=True 인 보고서만 점수에 넣는다.
     """
-    usable = _usable_reports(evidence)
+    usable = _usable_reports(evidence, now=now)
     if not usable:
         return None, "abstain", "insufficient"
     positive = [r for r in usable if r.get("positive_basis") is True]
@@ -458,6 +525,22 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
     start = entry_idx + 1 if skip_entry_bar else entry_idx
     for i in range(start, end):
         bar = bars[i]
+        # 시가는 그날 고가·저가보다 먼저 관측된다. 이미 유효한 stop을 갭으로 통과했으면
+        # stop 가격 체결을 지어내거나 이후 고가로 TP/새 트레일을 얻을 수 없다.
+        try:
+            opening = float(bar["open"])
+        except (KeyError, TypeError, ValueError):
+            opening = None
+        gap_reason = None
+        if opening is not None and math.isfinite(opening) and opening > 0:
+            if opening <= stop_px:
+                gap_reason = "stop_loss"
+            elif trail_armed and opening <= high_wm * (1 - TRAIL_DD_PCT / 100):
+                gap_reason = "trailing"
+        if gap_reason is not None:
+            realized += remaining * _net_pct(entry_price, opening)
+            return {"exit_date": bar.get("date"), "holding_days": i - entry_idx,
+                    "net_pct": realized, "exit_reason": gap_reason}
         try:
             lo, hi = float(bar["low"]), float(bar["high"])
         except (KeyError, TypeError, ValueError):
@@ -555,8 +638,8 @@ def _entry_plan_fill(c: Candidate, start_idx: int) -> Tuple[Optional[int], Optio
         quote = {"price": price, "as_of": bar.get("date"), "vwap": bar.get("vwap")}
         try:
             now = datetime.fromisoformat(str(bar.get("date")))
-        except ValueError:
-            now = datetime.now()
+        except (ValueError, TypeError):
+            return None, None, "invalid_bar_time"
         check = check_entry_plan(plan, quote, now)
         if check.status == "allow":
             efp = check.expected_fill_price

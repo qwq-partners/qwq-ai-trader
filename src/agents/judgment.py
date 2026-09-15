@@ -22,10 +22,22 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .trader import BUY_THRESHOLD
-from .types import AnalystReport, DebateResult, TeamAssessment
+from .types import AnalystReport, DebateResult, TeamAssessment, as_kst_aware
 
 
-def _valid_reports(reports: List[AnalystReport]) -> List[AnalystReport]:
+def _expired_at(valid_until: datetime, now: Optional[datetime]) -> bool:
+    """유효시각을 평가시각과 비교한다.
+
+    과거 replay의 decision_time은 KST-aware일 수 있지만, 기존 직렬화 자료의
+    valid_until은 KST naive일 수 있다. naive 값은 기존 로컬(KST) wall-clock
+    계약으로 해석해 비교하고, 두 시각의 시간대 정보는 보존한다.
+    """
+    if now is None:
+        return False
+    return as_kst_aware(valid_until) < as_kst_aware(now)
+
+
+def _valid_reports(reports: List[AnalystReport], now: Optional[datetime] = None) -> List[AnalystReport]:
     """merit/data_sufficiency 판단에 공통으로 쓰는 '유효 보고서' 필터.
 
     ok·신뢰도(감쇠후)>0·TTL 미초과 — `_evidence_merit`의 배제 규칙과 반드시 같게
@@ -38,9 +50,9 @@ def _valid_reports(reports: List[AnalystReport]) -> List[AnalystReport]:
     for r in reports:
         if not r.ok:
             continue
-        if r.freshness_decayed_confidence() <= 0:
+        if r.freshness_decayed_confidence(now=now) <= 0:
             continue
-        if AnalystTeam.is_expired(r):
+        if AnalystTeam.is_expired(r, now=now):
             continue
         out.append(r)
     return out
@@ -74,10 +86,10 @@ def _evidence_merit(reports: List[AnalystReport], now: Optional[datetime]) -> tu
         if r.ok and r.evidence:
             any_evidence = True
 
-        w = r.freshness_decayed_confidence()
+        w = r.freshness_decayed_confidence(now=now)
         if w <= 0:
             continue                          # confidence=0·error·시각불명 → freshness_decayed_confidence가 이미 0
-        if AnalystTeam.is_expired(r):
+        if AnalystTeam.is_expired(r, now=now):
             expired_n += 1
             continue
 
@@ -85,7 +97,7 @@ def _evidence_merit(reports: List[AnalystReport], now: Optional[datetime]) -> tu
         for ev in r.evidence:
             if ev.kind != "fact" or not ev.usable:
                 continue
-            if ev.valid_until is not None and now is not None and ev.valid_until < now:
+            if ev.valid_until is not None and _expired_at(ev.valid_until, now):
                 continue                      # 근거 자체의 유효기간 만료
             key = ev.dedup_key
             if key is not None:
@@ -99,7 +111,9 @@ def _evidence_merit(reports: List[AnalystReport], now: Optional[datetime]) -> tu
 
         unique_sources += 1
         score = r.score
-        if r.risk_clear is True:
+        if r.validation_pass_bonus is not None:
+            score -= r.validation_pass_bonus
+        elif r.risk_clear is True:
             # 계약 §2.2 문언대로 "검증 통과·위험 미발견" 은 매수 매력에 가산하지 않는다 —
             # 긍정 근거(positive_basis)가 함께 있어도 그 근거는 보고서 score 의 다른 항목
             # (동반 순매수 등)으로 이미 반영돼 있으므로 '통과 +10' 자체는 항상 취소한다
@@ -128,13 +142,13 @@ def _merit_status(score: Optional[int], *, abstain_unknown: bool) -> tuple:
     return "insufficient", f"종합 {score:+d} — 부정적"
 
 
-def _data_sufficiency(reports: List[AnalystReport]) -> str:
+def _data_sufficiency(reports: List[AnalystReport], now: Optional[datetime] = None) -> str:
     """자료 충분성 — 만료·confidence=0·error 보고서는 유효 소스로 세지 않는다(B1 수정).
 
     data_status 라벨만 보면 만료된 'full' 보고서가 자료 완비로 둔갑한다 —
     `_valid_reports`로 `_evidence_merit`과 같은 배제 규칙을 적용한 뒤 집계한다.
     """
-    valid = _valid_reports(reports)
+    valid = _valid_reports(reports, now=now)
     full = sum(1 for r in valid if r.data_status == "full")
     usable = sum(1 for r in valid if r.data_status in ("full", "partial"))
     if full >= 2:
@@ -216,7 +230,7 @@ def assess(
     LLM은 해석·반증만 담당했고(토론 단계), 여기서는 수치 계산만 한다 — 결정론적.
     """
     reports = list(reports or [])
-    valid_reports = _valid_reports(reports)   # ok·신뢰도>0·TTL 이내 — B1: fallback도 이 기준을 따른다
+    valid_reports = _valid_reports(reports, now=now)   # ok·신뢰도>0·TTL 이내 — B1: fallback도 이 기준을 따른다
 
     merit_score, unique_sources, weight, dedup_removed, expired_n, any_evidence = \
         _evidence_merit(reports, now)
@@ -233,7 +247,7 @@ def assess(
         # A(근거 계약)가 아직 evidence를 채우지 않은 상태 — 기존 score를 그대로 쓴다(기준선)
         from .analysts import AnalystTeam
         try:
-            merit_score = AnalystTeam.aggregate_score(reports)
+            merit_score = AnalystTeam.aggregate_score(reports, now=now)
         except Exception:
             merit_score = None
 
@@ -252,7 +266,7 @@ def assess(
         merit_reason = "유효 근거 0 — 전 보고서 만료·오류·신뢰도 0"
 
     risk_acceptable = _risk_acceptable(debate)
-    data_suff = _data_sufficiency(reports)
+    data_suff = _data_sufficiency(reports, now=now)
     consensus = _consensus_level(debate)
     entry_ready = _entry_ready(entry_check)
 

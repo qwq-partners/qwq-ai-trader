@@ -90,6 +90,7 @@
 
 ## 데이터 — DART
 
+- 조회 상태 계약(2026-09-15 교차 리뷰 후속): HTTP 200 / status `000`의 정상 공시 목록은 위험·호재 키워드가 없는 중립 공시도 `DartCheckResult.fetched=True`. HTTP/API/파싱 실패와 정상 무위험 결과를 구분한다.
 - 위험 공시 차단 (유상증자, 소송 등)
 - 호재 공시 보너스 (자사주 매입 등)
 - `_apply_dart_catalyst()` in kr_screener.py
@@ -99,6 +100,10 @@
   경보 전용(자동 매도 없음), 일중 dedup, 캐시 우회(`use_cache=False`).
   비용 최대 48콜/시 (DART 한도 20,000/일). LLM 정성 해석·자동 대응은
   경보 정확도 관측 후 승격 (리서치 #3, docs/research/ai-trading-research-2026-08.md)
+
+### 종목 검증 MCP 획득 상태
+
+`StockValidator`의 수급·검색 트렌드 조회는 전송 `None`, MCP `isError`, JSON/스키마 실패를 미획득으로 반환하고 캐시하지 않는다. 정상 0/중립과 실패 기본값을 구분하며 `ValidationResult.validated/data_status`에 실제 획득 여부를 전달한다. 기존 `approved` 기본값과 거래 임계값은 유지한다. 테스트는 실제 MCP 호출 대신 메모리 응답으로 이 경계를 검증한다.
 
 ## 데이터 — AIK Stock Data (공시 요약, 2026-08-11~)
 

@@ -27,6 +27,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
+from ..agents import team_ledger
+
 _CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 _STATE_PATH = _CACHE_DIR / "counterfactual_state.json"
 _SOURCES = {
@@ -144,8 +146,91 @@ class CounterfactualTracker:
             logger.warning(f"[CF추적] 상태 저장 실패: {e}")
 
     # ── 수집 ───────────────────────────────────────────────
+    @staticmethod
+    def _team_days():
+        """불변 원장이 있는 날은 전체 심의 사용; 원장 없는 구버전 날짜만 latest 폴백.
+
+        손상/빈 원장을 최신 HOLD로 대체하면 잃은 BUY를 다시 숨기므로 폴백하지 않는다.
+        날짜별 원장의 경로는 생산자 team_ledger.LEDGER_DIR 한 곳을 참조한다.
+        """
+        ledger_days = {
+            p.stem.removeprefix("deliberations_"): p
+            for p in team_ledger.LEDGER_DIR.glob("deliberations_*.jsonl")
+        }
+        latest_days = {
+            p.stem.removeprefix("verdicts_"): p
+            for p in _TEAM_VERDICT_DIR.glob("verdicts_*.json")
+        }
+        for raw in sorted(ledger_days.keys() | latest_days.keys()):
+            if len(raw) != 8 or not raw.isdigit():
+                continue
+            day = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+            try:
+                if raw in ledger_days:
+                    rows = team_ledger.load_day(day)
+                    if not rows:
+                        logger.warning(f"[CF추적] {day} 불변 심의 원장 비어 있음/읽기 실패 — 최신 판정 폴백 보류")
+                else:
+                    rows = json.loads(latest_days[raw].read_text(encoding="utf-8"))
+                if isinstance(rows, list):
+                    yield day, [r for r in rows if isinstance(r, dict)]
+            except (OSError, ValueError, TypeError, AttributeError) as e:
+                logger.warning(f"[CF추적] {day} 심의 원장 읽기 실패 — 해당 날짜 보류: {e}")
+
+    def _ingest_team_day(self, day: str, rows: List[Dict]) -> tuple[int, int]:
+        """종목·일자당 1표본. 하루 중 승인 BUY가 하나라도 있으면 BUY 집단 우선.
+
+        심의별 실시간 성과가 아니라 기존 종가 기준 CF다. 모든 심의 ID는 감사용으로
+        보존하되, 같은 가격경로를 여러 표본으로 세지 않는다.
+        """
+        grouped: Dict[str, List[Dict]] = {}
+        for row in rows:
+            sym = row.get("symbol")
+            if not sym or not isinstance(row.get("decision"), dict):
+                continue
+            grouped.setdefault(str(sym), []).append(row)
+        added = undetermined = 0
+        for sym, decisions in grouped.items():
+            decisions.sort(key=lambda r: str(r.get("decided_at") or r.get("saved_at") or ""))
+            buys = [r for r in decisions if r["decision"].get("approved")
+                    and str(r["decision"].get("stance", "")).lower() == "buy"]
+            hold_key = f"team_hold|{sym}|{day}"
+            buy_key = f"team_buy_unfilled|{sym}|{day}"
+            # 이전 수집의 BUY도 latest HOLD로 뒤집지 않는다(구버전 폴백 날짜 포함).
+            had_buy = bool(buys) or buy_key in self._state
+            source = "team_buy_unfilled" if had_buy else "team_hold"
+            key = buy_key if had_buy else hold_key
+            if had_buy:
+                fill = self._has_fill_evidence(sym, day)
+                if fill is not False:
+                    # 새 체결 증거/판정 불가: 잘못된 HOLD·미체결 분모를 남기지 않는다.
+                    self._state.pop(hold_key, None)
+                    self._state.pop(buy_key, None)
+                    undetermined += int(fill is None)
+                    continue
+            prior_hold = self._state.pop(hold_key, None) if had_buy else None
+            entry = self._state.get(key)
+            selected = (buys or decisions)[0]
+            if entry is None:
+                # 재분류는 종가·rN 계산을 보존한다(같은 날짜·종목 가격경로).
+                entry = prior_hold if prior_hold is not None else {
+                    "symbol": sym, "date": day, "sector": None,
+                    "entry_px": None, "r1": None, "r5": None, "r20": None,
+                }
+                entry["source"] = source
+                entry["wiki_context_used"] = selected.get("wiki_context_used")
+                self._state[key] = entry
+                added += 1
+            entry["deliberation_ids"] = sorted({
+                *entry.get("deliberation_ids", []),
+                *(str(r["deliberation_id"]) for r in decisions if r.get("deliberation_id")),
+            })
+        return added, undetermined
+
     def _ingest_sources(self) -> int:
         """shadow 로그에서 신규 감지 건을 상태에 등록 (일일 dedup 키)"""
+        # 재분류·체결 대조만 바뀐 경우에도 update에서 저장해야 한다.
+        before = json.dumps(self._state, sort_keys=True, ensure_ascii=False)
         added = 0
         for source, path in _SOURCES.items():
             if not path.exists():
@@ -175,82 +260,18 @@ class CounterfactualTracker:
             except Exception as e:
                 logger.debug(f"[CF추적] {source} 읽기 실패: {e}")
 
-        # 팀 심의 HOLD/거부 판정 (2026-08-08 후속) — "심의가 막은 후보"의 후속 추적
+        # 팀 원장 → 일일 CF. 최신 판정 파일은 과거 날짜 호환용으로만 사용한다.
         undetermined = 0
         try:
-            for vf in sorted(_TEAM_VERDICT_DIR.glob("verdicts_*.json")):
-                day_raw = vf.stem.replace("verdicts_", "")
-                if len(day_raw) != 8:
-                    continue
-                day = f"{day_raw[:4]}-{day_raw[4:6]}-{day_raw[6:]}"
-                try:
-                    verdicts = json.loads(vf.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    continue
-                verdict_list = verdicts if isinstance(verdicts, list) else []
-                # 이중 등록 방지(advisory 2026-09-15): 같은 (종목,날짜) 가 그날 승인 BUY 판정을
-                # 하나라도 받았으면 team_hold 로는 등록하지 않는다 — 장중 10:30 HOLD, 14:00 BUY
-                # 처럼 같은 날 두 번 심의된 종목을 같은 가격경로로 두 소스(team_hold·
-                # team_buy_unfilled)에 각각 등록하면 표본이 부풀려진다.
-                buy_symbols_today = {
-                    str(vv.get("symbol", "")) for vv in verdict_list
-                    if isinstance(vv, dict)
-                    and bool((vv.get("decision") or {}).get("approved"))
-                    and str((vv.get("decision") or {}).get("stance", "")).lower() == "buy"
-                }
-                for v in verdict_list:
-                    try:
-                        sym = v.get("symbol", "")
-                        if not sym:
-                            continue
-                        dec = v.get("decision") or {}
-                        stance = str(dec.get("stance", "")).lower()
-                        approved_buy = bool(dec.get("approved")) and stance == "buy"
-                        if not approved_buy and sym in buy_symbols_today:
-                            continue  # 같은 날 승인 BUY 가 있었다 — team_hold 이중 등록 방지
-                        if approved_buy:
-                            # T11 E1 (2026-09-15): 승인 BUY 라도 실제 체결 증거가 없으면
-                            # 더는 조용히 제외하지 않고 "team_buy_unfilled" 로 별도 추적한다.
-                            # 체결 증거가 있으면(=실거래로 이미 추적됨) 기존과 동일하게 건너뛴다.
-                            fill = self._has_fill_evidence(sym, day)
-                            if fill is True:
-                                continue
-                            if fill is None:
-                                undetermined += 1   # 판정 불가 — 미체결로 등록하지 않는다
-                                continue
-                            key = f"team_buy_unfilled|{sym}|{day}"
-                            if key in self._state:
-                                continue
-                            self._state[key] = {
-                                "symbol": sym,
-                                "source": "team_buy_unfilled",
-                                "wiki_context_used": v.get("wiki_context_used"),
-                                "date": day,
-                                "sector": None,
-                                "entry_px": None,
-                                "r1": None, "r5": None, "r20": None,
-                            }
-                            added += 1
-                            continue
-                        key = f"team_hold|{sym}|{day}"
-                        if key in self._state:
-                            continue
-                        self._state[key] = {
-                            "symbol": sym,
-                            "source": "team_hold",
-                            "wiki_context_used": v.get("wiki_context_used"),  # 2026-09-13 분리 집계
-                            "date": day,
-                            "sector": None,
-                            "entry_px": None,
-                            "r1": None, "r5": None, "r20": None,
-                        }
-                        added += 1
-                    except (TypeError, AttributeError):
-                        continue
+            for day, rows in self._team_days():
+                new, unknown = self._ingest_team_day(day, rows)
+                added += new
+                undetermined += unknown
         except Exception as e:
             logger.debug(f"[CF추적] 팀 심의 읽기 실패: {e}")
         if undetermined:
             logger.warning(f"[CF추적] 승인 BUY {undetermined}건 체결 대조 판정 불가(콜백 없음·거래저널 디렉터리 없음) — 등록 보류")
+        self._ingest_changed = before != json.dumps(self._state, sort_keys=True, ensure_ascii=False)
         return added
 
     # ── 갱신 ───────────────────────────────────────────────
@@ -356,7 +377,7 @@ class CounterfactualTracker:
                                 entry[xf] = round(float(entry[field]) - _br, 2)
             except Exception as e:
                 logger.debug(f"[CF추적] {key} 갱신 실패: {e}")
-        if added or filled:
+        if added or filled or self._ingest_changed:
             self._save()
             logger.info(f"[CF추적] 신규 {added}건 등록, {filled}개 수익률 채움")
         return {"added": added, "filled": filled}

@@ -55,9 +55,24 @@ def _axis(claimed: Optional[str], actual_pct: Optional[float], *,
             "hit": claimed == actual_dir, "reason": ""}
 
 
-def _expert_claim(expert: Optional[Dict]) -> Optional[str]:
-    """전문가 종합점수/bias → 방향 주장"""
+def _expert_abstain_reason(expert: Optional[Dict]) -> str:
+    """집계의 무보정(0)은 보합 예측이 아니다. 생산자와 같은 커버리지 기준 사용."""
     if not expert:
+        return "전문가 종합판단 미기록"
+    from ..experts.orchestrator import ExpertOrchestrator
+
+    valid_n = expert.get("valid_n")
+    if type(valid_n) is not int or valid_n < 0:
+        return "전문가 커버리지 미기록 또는 무효 — 방향 미평가"
+    minimum = ExpertOrchestrator.MIN_VALID_EXPERTS
+    if valid_n < minimum:
+        return f"전문가 자료 부족(유효 {valid_n}명 < {minimum}명) — 무보정은 보합 예측이 아님"
+    return ""
+
+
+def _expert_claim(expert: Optional[Dict]) -> Optional[str]:
+    """유효 커버리지가 확인된 전문가 종합점수/bias만 방향 주장으로 해석한다."""
+    if _expert_abstain_reason(expert):
         return None
     score = expert.get("score")
     if score is not None:
@@ -137,9 +152,11 @@ def evaluate(
         claim_reason="브리프에 종가 방향 주장 없음",
         actual_reason="KOSPI 종가 미수집",
     )
+    expert = brief.get("expert_consensus")
     expert_axis = _axis(
-        _expert_claim(brief.get("expert_consensus")), close_pct,
-        claim_reason=dispatch_reason or "전문가 종합판단 미기록",
+        _expert_claim(expert), close_pct,
+        claim_reason=(_expert_abstain_reason(expert) if expert else dispatch_reason)
+                     or "전문가 종합판단 미기록",
         actual_reason="KOSPI 종가 미수집",
     )
 

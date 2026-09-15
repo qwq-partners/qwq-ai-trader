@@ -3251,19 +3251,24 @@ JSON:
     SYNC_INTERVAL_CLOSED_SEC = 300
 
     def _portfolio_sync_interval(self, closed: bool, prev_closed: bool,
-                                 now: Optional[datetime] = None) -> int:
+                                 now: Optional[datetime] = None) -> float:
         """다음 동기화까지 대기 — 300초는 '연속 CLOSED' 이면서 KRX 주문 접수 시간대 밖일 때만.
 
         KRSession 은 08:50~09:00·15:20~15:40 도 CLOSED 로 보지만 그 구간엔 동시호가 체결
         (정규장 미체결 지정가 이월)이 있고 브로커 세션 맵은 지정가를 접수한다(kis_kr 15:20~15:30
         "closing"). 그래서 08:00~15:40(거래일)은 세션과 무관하게 30초를 유지하고, 300초는
-        15:40 이후 CLOSED(NXT 20:00 종료 뒤)·08:00 이전·휴장일에만 쓴다 — 300초 수면이 09:00
-        개장 경계를 가로지르지 않는다(리뷰 2026-09-15).
+        15:40 이후 CLOSED(NXT 20:00 종료 뒤)·08:00 이전·휴장일에만 쓴다. 거래일 장전에는
+        08:00까지 남은 초로 장외 수면을 제한해 프리장 주문 접수 경계를 넘지 않는다.
+        시각은 기존 KRSession과 같은 로컬 KST 기준이다(리뷰 2026-09-15).
         """
         now = now or datetime.now()
         hhmm = now.hour * 100 + now.minute
-        orderable = (not is_kr_market_holiday(now.date())) and 800 <= hhmm < 1540
+        trading_day = not is_kr_market_holiday(now.date())
+        orderable = trading_day and 800 <= hhmm < 1540
         if closed and prev_closed and not orderable:
+            if trading_day and hhmm < 800:
+                orderable_start = now.replace(hour=8, minute=0, second=0, microsecond=0)
+                return min(self.SYNC_INTERVAL_CLOSED_SEC, (orderable_start - now).total_seconds())
             return self.SYNC_INTERVAL_CLOSED_SEC
         return self.SYNC_INTERVAL_SEC
 

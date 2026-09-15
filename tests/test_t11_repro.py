@@ -15,6 +15,8 @@ import sys
 from datetime import date as _date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -26,6 +28,11 @@ import src.agents.team_ledger as ledger_mod  # noqa: E402
 import src.analytics.counterfactual_tracker as cf_mod  # noqa: E402
 from src.agents.types import TeamAssessment  # noqa: E402
 import team_policy_ab as tpab  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cf_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr(ledger_mod, "LEDGER_DIR", tmp_path / "team_ledger")
 
 
 # ── #11: 같은 날 같은 종목 복수 판단 · 승인 BUY 누락 없이 추적 ──────────────
@@ -118,7 +125,7 @@ def _mk_candidate(symbol: str, day: str = "2026-08-01"):
         # data_status/evidence(kind=fact) 채움 — judgment.assess 가 "A 근거계약 미배선" abstain
         # 폴백 대신 실제 근거 기반 merit 을 계산하게 한다(D 3차, 정책 B/C 재배선 §2.5).
         evidence=[{"kind": "technical", "score": 20, "confidence": 0.7, "positive_basis": True, "error": None,
-                   "data_status": "full",
+                   "data_status": "full", "age_minutes": 0,
                    "evidence": [{"source": "t", "metric": "score", "value": 20, "status": "full", "kind": "fact"}]}],
         votes=votes, prices=prices, synthetic=True,
     )

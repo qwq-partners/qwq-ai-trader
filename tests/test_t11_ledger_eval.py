@@ -37,6 +37,12 @@ from src.dashboard.kr_api import KRAPIHandler  # noqa: E402
 import team_policy_ab as tpab  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cf_ledger(tmp_path, monkeypatch):
+    # CF가 새로 읽는 불변 원장도 기존 최신 판정 파일처럼 테스트별로 격리한다.
+    monkeypatch.setattr(ledger_mod, "LEDGER_DIR", tmp_path / "team_ledger")
+
+
 # ── 1) CounterfactualTracker E1 ──────────────────────────────────────────
 
 def _write_verdicts(base: Path, day8: str, rows: list) -> None:
@@ -263,10 +269,10 @@ def _mk_candidate(symbol: str, *, score=80, bear_r1=True, bull_r2=True, bear_r2=
         # (merit_status 강제 abstain) 대신 실제 근거 기반 merit 을 계산한다 (T11 §2.5 재배선).
         "evidence": [
             {"kind": "technical", "score": 30, "confidence": 0.8, "positive_basis": True, "error": None,
-             "data_status": "full",
+             "data_status": "full", "age_minutes": 0,
              "evidence": [{"source": "t", "metric": "score", "value": 30, "status": "full", "kind": "fact"}]},
             {"kind": "fundamental", "score": 10, "confidence": 0.6, "positive_basis": True, "error": None,
-             "data_status": "full",
+             "data_status": "full", "age_minutes": 0,
              "evidence": [{"source": "f", "metric": "score", "value": 10, "status": "full", "kind": "fact"}]},
         ],
         "votes": {"r1": {"bull": True, "bear": bear_r1}, "r2": {"bull": bull_r2, "bear": bear_r2}},
@@ -296,8 +302,9 @@ def test_policy_gates_differ_on_risk_and_debate_outcome():
 
 def test_bear_accept_alone_does_not_change_merit_score():
     """계약 2.2 — Bear ACCEPT(risk_acceptable)만으로 매수 매력(merit)이 오르지 않는다."""
-    evidence = [{"kind": "technical", "score": 5, "confidence": 0.7, "positive_basis": False, "error": None}]
-    merit_reject, status_reject, _ = tpab.r1_assess(evidence)
+    evidence = [{"kind": "technical", "score": 5, "confidence": 0.7, "positive_basis": False,
+                 "error": None, "age_minutes": 0}]
+    merit_reject, status_reject, _ = tpab.r1_assess(evidence, now=datetime(2026, 8, 3, 10))
     votes_bear_true = {"r1": {"bull": True, "bear": True}}
     votes_bear_false = {"r1": {"bull": True, "bear": False}}
     assert tpab.risk_acceptable_r1(votes_bear_true) is True
@@ -572,8 +579,9 @@ def test_snapshot_restores_report_age_so_expired_reports_are_not_valid_sources()
     stale = _candidate_with_age(600.0)
     assert tpab.gate_b(fresh) is True
     assert tpab.gate_b(stale) is False
-    rep = tpab._to_analyst_report({**fresh.evidence[0], "age_minutes": 600.0})
-    assert rep.age_minutes >= 599
+    now = tpab._decision_time(fresh)
+    rep = tpab._to_analyst_report({**fresh.evidence[0], "age_minutes": 600.0}, now=now)
+    assert rep.age_minutes_at(now) == 600.0
 
 
 def test_snapshot_restores_evidence_validity_and_missing_status_is_not_full():

@@ -949,6 +949,7 @@ def _ab_bars(start: str, n: int = 3):
 def _ab_candidate_with_evidence(symbol: str, score: float, synthetic=True) -> tpab.Candidate:
     rep = AnalystReport(
         kind=AnalystKind.FUNDAMENTAL, symbol=symbol, score=30, confidence=0.8,
+        data_as_of=datetime(2026, 1, 5),  # 후보 판단 시각의 자료, 테스트 실행 시각 사용 금지
         data_status="full", positive_basis=True, risk_clear=True,
         evidence=[EvidenceItem(source="stock_validator.supply_demand",
                                metric="foreign_net_buying", value=True,
