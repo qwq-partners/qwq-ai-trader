@@ -541,3 +541,37 @@ def test_inflight_issuance_cannot_publish_a_newly_observed_bearer(tmp_path):
             await restarted.get_token(deadline=deadline())
     run(scenario())
     assert issued == ["issued"]
+
+
+@pytest.mark.parametrize("operation", ["get", "bootstrap", "revoked", "expired"])
+def test_cached_success_rechecks_deadline_after_revocation_scan(tmp_path, monkeypatch, operation):
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    store.save(record(storage, value="synthetic-current", generation=2))
+    clock = [0.0]
+    manager.clock = lambda: clock[0]
+    original = store.load_revocations
+    def scan():
+        observations = original()
+        clock[0] = 2.0
+        return observations
+    monkeypatch.setattr(store, "load_revocations", scan)
+    if operation == "get":
+        action = manager.get_token(deadline=1.0)
+    elif operation == "bootstrap":
+        action = manager.bootstrap(approved=True, deadline=1.0)
+    else:
+        code = "token-revoked" if operation == "revoked" else "expired-token"
+        action = manager.recover(code, "synthetic-old", deadline=1.0)
+    with pytest.raises(token.TokenError, match="deadline_exceeded"):
+        run(action)
+    assert issued == []
+
+
+def test_generation_overflow_stops_before_new_issuer_call(tmp_path):
+    token, store, manager, issued = setup(tmp_path)
+    _, storage = modules()
+    store.save(record(storage, generation=9223372036854775807, expired=True))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(manager.get_token(deadline=deadline()))
+    assert issued == []

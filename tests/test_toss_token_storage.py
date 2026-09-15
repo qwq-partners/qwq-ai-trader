@@ -553,3 +553,104 @@ def test_two_process_observations_are_idempotent_and_never_clobber(tmp_path, sam
                 process.join(timeout=2)
         results.close()
         results.join_thread()
+
+
+@pytest.mark.parametrize("identity", ["x" * 2000, "😀" * 100, '"\\\x00' * 50],
+    ids=["long-ascii", "escaped-nonascii", "escaped-control-quote-backslash"])
+def test_identity_must_fit_revocation_domain_before_any_io(tmp_path, identity):
+    token, storage = modules()
+    directory = tmp_path / "toss"
+    with pytest.raises(token.TokenError, match="unsafe_storage"):
+        storage.SecureTokenStore(directory, identity)
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize("identity", ["x" * 254, "é" * 42, "😀" * 21, '"' * 127, "\\" * 127, "\x00" * 42],
+    ids=["ascii", "escaped-nonascii", "surrogate-pairs", "quotes", "backslashes", "controls"])
+def test_maximum_identity_and_generation_can_persist_revocation(tmp_path, identity):
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+    from test_toss_token_contract import run, deadline
+    token, storage = modules()
+    store = storage.SecureTokenStore(tmp_path / "toss", identity)
+    current = replace(record(storage), client_identity=identity, generation=9223372036854775807)
+    store.save(current)
+    store.save_state("ready", current.generation)
+    issued = []
+    async def issuer():
+        issued.append(1)
+        return {"access_token": "synthetic-fresh", "expires_in": 86400, "token_type": "Bearer"}
+    manager = token.TokenManager(store, role="issuer", issuer=issuer, enabled=True)
+    assert run(manager.get_token(deadline=deadline())) == current.access_token
+    manager.observe_revocation(current.access_token)
+    assert len(store.load_revocations()) == 1
+    assert next(store.directory.glob("toss_revoked_slot_*.json")).stat().st_size <= 1024
+    restarted = token.TokenManager(store, role="issuer", issuer=issuer, enabled=True,
+        now=lambda: datetime.now(timezone.utc) + timedelta(days=2))
+    with pytest.raises(token.TokenError, match="auth_unavailable"):
+        run(restarted.get_token(deadline=deadline()))
+    assert issued == []
+
+
+def test_oversize_generation_is_rejected_before_token_storage(tmp_path):
+    token, storage = modules()
+    store = storage.SecureTokenStore(tmp_path / "toss", "offline-client")
+    with pytest.raises(token.TokenError, match="invalid_cache"):
+        store.save(record(storage, generation=10 ** 2000))
+    assert not store.directory.exists()
+
+
+@pytest.mark.parametrize("kind", ["cache", "state", "observation", "resolution"])
+def test_oversize_generation_cannot_enter_from_disk(tmp_path, kind):
+    import json
+    from test_toss_token_contract import setup, run, deadline
+    token, store, manager, _ = setup(tmp_path)
+    _, storage = modules()
+    store.save(record(storage, value="synthetic-new", generation=2))
+    store.save_state("ready", 2)
+    manager.observe_revocation("synthetic-old")
+    run(manager.get_token(deadline=deadline()))
+    paths = {"cache": store.directory / "toss_token.json", "state": store.directory / "toss_auth_state.json",
+        "observation": next(store.directory.glob("toss_revoked_slot_*.json")),
+        "resolution": store.directory / "toss_revoked_resolutions.json"}
+    path = paths[kind]
+    data = json.loads(path.read_text())
+    if kind == "resolution":
+        next(iter(data["resolutions"].values()))["generation"] = 9223372036854775808
+    else:
+        data["generation"] = 9223372036854775808
+    path.write_text(json.dumps(data))
+    loads = {"cache": store.load, "state": store.load_state,
+        "observation": store.load_revocations, "resolution": store.load_revocation_resolutions}
+    with pytest.raises(token.TokenError):
+        loads[kind]()
+
+
+@pytest.mark.parametrize("generation", [True, -1, 9223372036854775808, 10 ** 2000],
+    ids=["bool", "negative", "overflow", "oversize"])
+@pytest.mark.parametrize("surface", ["cache", "state", "observation", "resolution"])
+def test_generation_domain_rejected_at_write_boundary_without_values_in_error(tmp_path, generation, surface):
+    token, storage = modules()
+    store = storage.SecureTokenStore(tmp_path / "toss", "offline-client")
+    with pytest.raises(token.TokenError) as caught:
+        if surface == "cache":
+            store.save(record(storage, generation=generation))
+        elif surface == "state":
+            store.save_state("ready", generation)
+        elif surface == "observation":
+            store.observe_revocation("a" * 64, generation)
+        else:
+            store.save_revocation_resolutions({"a" * 64: {"cache_digest": "b" * 64, "generation": generation}})
+    assert str(caught.value) in {"invalid_cache", "auth_unavailable"}
+    assert "synthetic" not in repr(caught.value)
+    assert not list(store.directory.glob("toss_revoked_slot_*.json"))
+
+
+def test_rejected_identity_error_does_not_expose_input(tmp_path):
+    import traceback
+    token, storage = modules()
+    identity = "FAKE_IDENTITY_PRIVATE_VALUE" * 100
+    with pytest.raises(token.TokenError) as caught:
+        storage.SecureTokenStore(tmp_path / "toss", identity)
+    diagnostic = str(caught.value) + repr(caught.value) + "".join(traceback.format_exception(caught.value))
+    assert "FAKE_IDENTITY_PRIVATE_VALUE" not in diagnostic

@@ -7,7 +7,7 @@ import hashlib
 import math
 import time
 
-from .token_store import MAX_LIFETIME, TokenError, TokenRecord
+from .token_store import MAX_GENERATION, MAX_LIFETIME, TokenError, TokenRecord
 
 
 def utc_now():
@@ -116,7 +116,8 @@ class TokenManager:
             return
         raise TokenError("auth_unavailable")
 
-    def _return(self, record):
+    def _return(self, record, deadline):
+        self._check(deadline)
         self._seen_generation = max(self._seen_generation, record.generation)
         digest = self._digest(record.access_token)
         self._token_generations[digest] = max(self._token_generations.get(digest, 0), record.generation)
@@ -136,7 +137,7 @@ class TokenManager:
             self._state(record)
             self._revocation_gate(record)
             if self._valid(record) and (self.role == "reader" or not self._due(record)):
-                return self._return(record)
+                return self._return(record, deadline)
             if (record is None or (self.now() - record.issued_at).total_seconds() < 60
                     or self.role != "issuer" or self.issuer is None):
                 raise TokenError("auth_unavailable")
@@ -156,7 +157,7 @@ class TokenManager:
             self._revocation_gate(record)
             if record is not None:
                 if self._valid(record):
-                    return self._return(record)
+                    return self._return(record, deadline)
                 raise TokenError("auth_unavailable")
             return await self._issue(1, deadline)
 
@@ -176,7 +177,7 @@ class TokenManager:
                 self._state(record)
                 self._revocation_gate(record)
                 if self._valid(record) and record.access_token != failed_token:
-                    return self._return(record)
+                    return self._return(record, deadline)
                 if (record is None or self.role != "issuer" or self.issuer is None
                         or (self.now() - record.issued_at).total_seconds() < 60):
                     raise TokenError("auth_unavailable")
@@ -188,7 +189,7 @@ class TokenManager:
                     and record.generation >= self._seen_generation):
                 self._state(record)
                 self._revocation_gate(record)
-                return self._return(record)
+                return self._return(record, deadline)
             generation = max(self._seen_generation, record.generation if record else 0,
                              state["generation"] if state else 0)
             try:
@@ -200,6 +201,8 @@ class TokenManager:
 
     async def _issue(self, generation, deadline):
         self._check(deadline)
+        if not 1 <= generation <= MAX_GENERATION:
+            raise TokenError("auth_unavailable")
         record = self._load()
         self._state(record)
         self._revocation_gate(record)
@@ -226,7 +229,7 @@ class TokenManager:
             self.store.save(record)
             self._revocation_gate(record)
             self.store.save_state("ready", generation)
-            return self._return(record)
+            return self._return(record, deadline)
         except asyncio.CancelledError:
             self._blocked = "issuance_unknown"
             raise

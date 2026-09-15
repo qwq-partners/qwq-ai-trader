@@ -20,6 +20,12 @@ MAX_BYTES = 65536
 MAX_LIFETIME = 366 * 86400
 REVOCATION_SLOTS = 256
 REVOCATION_BYTES = 1024
+MAX_IDENTITY_BYTES = 256
+MAX_GENERATION = 2 ** 63 - 1
+
+
+def _generation_ok(value, *, minimum=0):
+    return type(value) is int and minimum <= value <= MAX_GENERATION
 
 
 class TokenError(Exception):
@@ -50,7 +56,7 @@ class TokenRecord:
                 or any(ord(c) < 33 or ord(c) > 126 for c in self.access_token)
                 or self.client_identity != identity or self.origin != ORIGIN
                 or type(self.schema_version) is not int or self.schema_version != 1
-                or type(self.generation) is not int or self.generation < 1
+                or not _generation_ok(self.generation, minimum=1)
                 or type(self.issuer_pid) is not int or self.issuer_pid < 1):
             raise TokenError("invalid_cache")
         for value in (self.issued_at, self.expires_at):
@@ -68,7 +74,8 @@ class SecureTokenStore:
         self.directory = Path(directory)
         if (not self.directory.is_absolute() or ".." in self.directory.parts
                 or len(self.directory.parts) < 2
-                or not isinstance(client_identity, str) or not client_identity.strip()):
+                or not isinstance(client_identity, str) or not client_identity.strip()
+                or len(json.dumps(client_identity, ensure_ascii=True).encode("ascii")) > MAX_IDENTITY_BYTES):
             raise TokenError("unsafe_storage")
         self.client_identity = client_identity
 
@@ -208,7 +215,7 @@ class SecureTokenStore:
                 or data["client_identity"] != self.client_identity or data["origin"] != ORIGIN
                 or not isinstance(data["kind"], str)
                 or data["kind"] not in {"ready", "auth_unavailable", "issuance_unknown"}
-                or type(data["generation"]) is not int or data["generation"] < 0
+                or not _generation_ok(data["generation"])
                 or not isinstance(data["failed_digest"], str)
                 or (data["kind"] == "auth_unavailable" and (len(data["failed_digest"]) != 64
                     or any(c not in "0123456789abcdef" for c in data["failed_digest"])))
@@ -217,6 +224,8 @@ class SecureTokenStore:
         return data
 
     def save_state(self, kind, generation=0, failed_digest=""):
+        if not _generation_ok(generation):
+            raise TokenError("auth_unavailable")
         self._write("toss_auth_state.json", {"schema_version": 1, "client_identity": self.client_identity,
                     "origin": ORIGIN, "kind": kind, "generation": generation, "failed_digest": failed_digest})
 
@@ -233,7 +242,7 @@ class SecureTokenStore:
                 or type(data["schema_version"]) is not int or data["schema_version"] != 1
                 or data["client_identity"] != self.client_identity or data["origin"] != ORIGIN
                 or not self._digest_ok(data["failed_digest"])
-                or type(data["generation"]) is not int or data["generation"] < 0):
+                or not _generation_ok(data["generation"])):
             raise TokenError("auth_unavailable")
         return self._observation_id(data["failed_digest"], data["generation"])
 
@@ -353,12 +362,14 @@ class SecureTokenStore:
             if (not self._digest_ok(observation_id) or not isinstance(proof, dict)
                     or set(proof) != {"cache_digest", "generation"}
                     or not self._digest_ok(proof["cache_digest"])
-                    or type(proof["generation"]) is not int or proof["generation"] < 1):
+                    or not _generation_ok(proof["generation"], minimum=1)):
                 raise TokenError("auth_unavailable")
         return data["resolutions"]
 
     def save_revocation_resolutions(self, resolutions):
         # 호출자는 issuer lock을 가진다. 관측 파일/issuance_unknown은 변경하지 않는다.
+        if any(not _generation_ok(proof["generation"], minimum=1) for proof in resolutions.values()):
+            raise TokenError("auth_unavailable")
         self._write("toss_revoked_resolutions.json", {"schema_version": 1,
                     "client_identity": self.client_identity, "origin": ORIGIN, "resolutions": resolutions})
 
