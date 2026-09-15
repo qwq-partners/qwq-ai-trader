@@ -94,6 +94,22 @@ def _symbol(value):
     return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9]{1,20}", value) is not None
 
 
+async def _await_cleanup(task):
+    """반복 취소를 받아도 공유 정리를 끝까지 보호한 뒤 호출자 취소를 전파한다."""
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
 class AiohttpTransport:
     """세션은 첫 승인 조회에서 생성한다. factory는 오프라인 검증용 주입점이다."""
 
@@ -101,6 +117,7 @@ class AiohttpTransport:
         self._factory = session_factory
         self._session = None
         self._closed = False
+        self._closing = None
 
     async def request(self, method, path, *, params, headers, timeout):
         params = validate_request(method, path, params)
@@ -151,11 +168,18 @@ class AiohttpTransport:
 
     async def close(self):
         self._closed = True
+        if (self._closing is None or (self._closing.done() and
+                (self._closing.cancelled() or self._closing.exception() is not None))):
+            self._closing = asyncio.create_task(self._close())
+        await _await_cleanup(self._closing)
+
+    async def _close(self):
         if self._session is not None:
-            session, self._session = self._session, None
+            session = self._session
             try:
                 await session.close()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 raise TossRequestError("network_error") from None
+            self._session = None

@@ -327,3 +327,139 @@ def test_missing_or_corrupt_429_headers_use_bounded_backoff(headers):
         await gate.acquire("MARKET_DATA", mod.RequestBudget(5, clock=clock))
     asyncio.run(run())
     assert 0.25 <= sum(clock.waits) <= 0.500001
+
+
+@pytest.mark.parametrize("half_open,old_result", [
+    (False, "success"), (True, "success"), (True, "failure"), (True, "cancel"),
+])
+def test_old_inflight_result_cannot_change_new_circuit_epoch(tmp_path, half_open, old_result):
+    mod, clock = api(), Clock()
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender", clock=clock)
+    entered, old_release, probe_entered, probe_release = [asyncio.Event() for _ in range(4)]
+    calls = []
+    async def response(*args, **kwargs):
+        index = len(calls)
+        calls.append(index)
+        if index == 0:
+            entered.set()
+            await old_release.wait()
+            status = 500 if old_result == "failure" else 200
+            return mod.HttpResponse(status, {}, {"result": []})
+        if index in (1, 2):
+            return mod.HttpResponse(500, {}, {})
+        if index == 3 and half_open:
+            probe_entered.set()
+            await probe_release.wait()
+        return mod.HttpResponse(200, {}, {"result": []})
+    transport.request = response
+    async def fetch():
+        return await client.get("/api/v1/prices", params={"symbols": "005930"},
+                               budget=mod.RequestBudget(30, clock=clock, max_retries=0))
+    async def run():
+        async with client:
+            old = asyncio.create_task(fetch())
+            await entered.wait()
+            for _ in range(2):
+                with pytest.raises(mod.TossRequestError):
+                    await fetch()
+            probe = None
+            if half_open:
+                clock.now += 5
+                probe = asyncio.create_task(fetch())
+                await probe_entered.wait()
+            try:
+                if old_result == "cancel":
+                    old.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await old
+                else:
+                    old_release.set()
+                    if old_result == "failure":
+                        with pytest.raises(mod.TossRequestError):
+                            await old
+                    else:
+                        await old
+                assert client.health["MARKET_DATA"]["failures"] == 2
+                with pytest.raises(mod.TossRequestError, match="circuit_open"):
+                    await fetch()
+                assert len(calls) == (4 if half_open else 3)
+            finally:
+                probe_release.set()
+                if probe is not None:
+                    await probe
+            if half_open:
+                assert client.health["MARKET_DATA"]["failures"] == 0
+                await fetch()
+                assert len(calls) == 5
+    asyncio.run(run())
+
+
+def test_repeated_close_cancellation_keeps_session_and_lock_until_cleanup(tmp_path):
+    from test_toss_client_boundary import FakeSession
+    mod = api()
+    transport_mod = importlib.import_module("src.data.providers.toss.transport")
+    close_entered, close_release = asyncio.Event(), asyncio.Event()
+    class Session(FakeSession):
+        async def close(self):
+            close_entered.set()
+            await close_release.wait()
+            self.closed = True
+    session = Session()
+    client, _, _ = make_client(tmp_path, enabled=True, role="sender")
+    client.transport = transport_mod.AiohttpTransport(session_factory=lambda: session)
+    async def run():
+        await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+        closing = asyncio.create_task(client.close())
+        await close_entered.wait()
+        retry = None
+        try:
+            for _ in range(2):
+                closing.cancel()
+                await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            retry = asyncio.create_task(client.close())
+            await asyncio.sleep(0)
+            other, _, _ = make_client(tmp_path, enabled=True, role="sender")
+            with pytest.raises(mod.TossRequestError, match="sender_busy"):
+                await other.start()
+            assert not session.closed
+        finally:
+            close_release.set()
+            await asyncio.gather(closing, *([retry] if retry is not None else []), return_exceptions=True)
+        assert session.closed
+        assert closing.cancelled()
+        assert retry is not None and retry.exception() is None
+        async with other:
+            pass
+    asyncio.run(run())
+
+
+def test_failed_session_close_retains_sender_ownership_until_successful_retry(tmp_path):
+    from test_toss_client_boundary import FakeSession
+    mod = api()
+    transport_mod = importlib.import_module("src.data.providers.toss.transport")
+    class Session(FakeSession):
+        attempts = 0
+        async def close(self):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("synthetic-close-error")
+            self.closed = True
+    session = Session()
+    client, _, _ = make_client(tmp_path, enabled=True, role="sender")
+    client.transport = transport_mod.AiohttpTransport(session_factory=lambda: session)
+    async def run():
+        await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+        try:
+            with pytest.raises(mod.TossRequestError, match="network_error"):
+                await client.close()
+            other, _, _ = make_client(tmp_path, enabled=True, role="sender")
+            with pytest.raises(mod.TossRequestError, match="sender_busy"):
+                await other.start()
+            assert not session.closed
+        finally:
+            await client.close()
+        assert session.closed and session.attempts == 2
+        async with other:
+            pass
+    asyncio.run(run())

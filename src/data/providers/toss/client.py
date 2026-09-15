@@ -14,6 +14,7 @@ from pathlib import Path
 from .rate_limit import RequestBudget, positive_number
 from .transport import (
     AUTH_CODES, ENDPOINT_GROUPS, HttpResponse, TossRequestError, validate_request,
+    _await_cleanup,
 )
 
 
@@ -37,6 +38,8 @@ class TossClient:
         self._states = {group: dict(failures=0, open_until=None, probe=False,
                                    last_success=None, reason=None)
                         for group in ENDPOINT_GROUPS.values()}
+        self._epochs = dict.fromkeys(self._states, 0)
+        self._probes = dict.fromkeys(self._states)
 
     @property
     def health(self):
@@ -86,14 +89,11 @@ class TossClient:
     async def close(self):
         if not self.enabled or self.role == "reader":
             return
-        if self._closing is None:
+        if (self._closing is None or (self._closing.done() and
+                (self._closing.cancelled() or self._closing.exception() is not None))):
             self._closed = True
             self._closing = asyncio.create_task(self._close())
-        try:
-            await asyncio.shield(self._closing)
-        except asyncio.CancelledError:
-            await self._closing
-            raise
+        await _await_cleanup(self._closing)
 
     async def _close(self):
         try:
@@ -107,10 +107,10 @@ class TossClient:
             raise
         except Exception:
             raise TossRequestError("network_error") from None
-        finally:
-            if self._fd is not None:
-                fd, self._fd = self._fd, None
-                os.close(fd)
+        # 실패/취소 시에는 세션 정리가 완료되지 않았으므로 송신 소유권을 유지한다.
+        if self._fd is not None:
+            fd, self._fd = self._fd, None
+            os.close(fd)
 
     async def get(self, path, *, params, budget):
         return await self.request("GET", path, params=params, budget=budget)
@@ -135,7 +135,7 @@ class TossClient:
             self._active.discard(task)
 
     async def _execute(self, path, params, budget, group):
-        probe = False
+        probe, epoch = None, None
         try:
             async with asyncio.timeout(budget.remaining()):
                 await self.start()
@@ -143,32 +143,44 @@ class TossClient:
                 if state["open_until"] is not None:
                     if self._clock() < state["open_until"] or state["probe"]:
                         raise TossRequestError("circuit_open")
-                    state["probe"] = probe = True
+                    probe = object()
+                    self._probes[group] = probe
+                    state["probe"] = True
+                    self._epochs[group] += 1
+                epoch = self._epochs[group]
                 body = await self._get(path, params, budget, group)
-                state.update(failures=0, open_until=None, last_success=self._clock(), reason=None)
+                # 회로가 열린 뒤 도착한 이전 요청은 새 회로/검사 요청을 갱신하지 못한다.
+                if self._epochs[group] == epoch:
+                    state.update(failures=0, open_until=None, last_success=self._clock(), reason=None)
+                    if probe is not None:
+                        self._epochs[group] += 1
                 return body
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            self._failure(group, "timeout")
+            self._failure(group, "timeout", epoch)
             raise TossRequestError("timeout") from None
         except TossRequestError as exc:
             if exc.code not in ("circuit_open", "sender_busy", "unsafe_lock"):
-                self._failure(group, exc.code)
+                self._failure(group, exc.code, epoch)
             raise TossRequestError(exc.code) from None
         except Exception:
-            self._failure(group, "auth_unavailable")
+            self._failure(group, "auth_unavailable", epoch)
             raise TossRequestError("auth_unavailable") from None
         finally:
-            if probe:
+            if probe is not None and self._probes[group] is probe:
+                self._probes[group] = None
                 self._states[group]["probe"] = False
 
-    def _failure(self, group, reason):
+    def _failure(self, group, reason, epoch):
+        if epoch is None or self._epochs[group] != epoch:
+            return
         state = self._states[group]
         state["failures"] += 1
         state["reason"] = reason
         if state["failures"] >= self._threshold:
             state["open_until"] = self._clock() + self._open_seconds
+            self._epochs[group] += 1
 
     async def _get(self, path, params, budget, group):
         token = await self.tokens.get_token(deadline=budget.deadline)

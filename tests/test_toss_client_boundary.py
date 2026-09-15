@@ -379,3 +379,31 @@ def test_before_requires_valid_aware_datetime_before_auth(tmp_path, cursor):
                     "count": 200, "adjusted": True, "before": cursor}, budget=mod.RequestBudget(1))
     asyncio.run(run())
     assert tokens.calls == transport.requests == []
+
+
+def test_transport_close_survives_repeated_cancellation_and_shared_retry():
+    api()
+    transport_mod = importlib.import_module("src.data.providers.toss.transport")
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Session(FakeSession):
+        async def close(self):
+            entered.set()
+            await release.wait()
+            self.closed = True
+    session = Session()
+    async def run():
+        transport = transport_mod.AiohttpTransport(session_factory=lambda: session)
+        await transport.request("GET", "/api/v1/prices", params={"symbols": "005930"},
+            headers={"Authorization": "Bearer synthetic-bearer"}, timeout=1)
+        task = asyncio.create_task(transport.close())
+        await entered.wait()
+        for _ in range(2):
+            task.cancel()
+            await asyncio.sleep(0)
+        retry = asyncio.create_task(transport.close())
+        await asyncio.sleep(0)
+        release.set()
+        results = await asyncio.gather(task, retry, return_exceptions=True)
+        assert isinstance(results[0], asyncio.CancelledError) and results[1] is None
+        assert session.closed
+    asyncio.run(run())
