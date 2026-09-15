@@ -3247,9 +3247,37 @@ JSON:
         except asyncio.CancelledError:
             pass
 
+    SYNC_INTERVAL_SEC = 30
+    SYNC_INTERVAL_CLOSED_SEC = 300
+
+    def _portfolio_sync_interval(self, closed: bool, prev_closed: bool,
+                                 now: Optional[datetime] = None) -> int:
+        """다음 동기화까지 대기 — 300초는 '연속 CLOSED' 이면서 KRX 주문 접수 시간대 밖일 때만.
+
+        KRSession 은 08:50~09:00·15:20~15:40 도 CLOSED 로 보지만 그 구간엔 동시호가 체결
+        (정규장 미체결 지정가 이월)이 있고 브로커 세션 맵은 지정가를 접수한다(kis_kr 15:20~15:30
+        "closing"). 그래서 08:00~15:40(거래일)은 세션과 무관하게 30초를 유지하고, 300초는
+        15:40 이후 CLOSED(NXT 20:00 종료 뒤)·08:00 이전·휴장일에만 쓴다 — 300초 수면이 09:00
+        개장 경계를 가로지르지 않는다(리뷰 2026-09-15).
+        """
+        now = now or datetime.now()
+        hhmm = now.hour * 100 + now.minute
+        orderable = (not is_kr_market_holiday(now.date())) and 800 <= hhmm < 1540
+        if closed and prev_closed and not orderable:
+            return self.SYNC_INTERVAL_CLOSED_SEC
+        return self.SYNC_INTERVAL_SEC
+
     async def run_portfolio_sync(self):
-        """주기적 포트폴리오 동기화 루프"""
-        await asyncio.sleep(30)
+        """주기적 포트폴리오 동기화 루프 — 거래 가능 시간대 30초, 장외 CLOSED 300초.
+
+        CLOSED 로 바뀐 직후 1회는 30초를 유지하고, 300초 적용 조건은 `_portfolio_sync_interval`
+        참조. 장외 CLOSED 에서는 engine.is_trading_hours() 가 신호 주문을 차단하고 직접 호출
+        경로(안전자산·미체결 폴백)는 시장가라 브로커가 거부하므로 재정합할 신규 체결이 없다.
+        15:30 동시호가 체결은 08:00~15:40 30초 유지 구간이라 기존과 같이 정합된다
+        (2026-09-15 원장 한도 조사: 24시간 30초 주기가 야간·주말 8434R 1,440건/일을 만들던 낭비).
+        """
+        await asyncio.sleep(self.SYNC_INTERVAL_SEC)
+        prev_closed = False
         while self.bot.running:
             try:
                 await self._sync_portfolio()
@@ -3257,7 +3285,12 @@ JSON:
                 logger.error(f"동기화 루프 오류: {e}")
                 if self.bot.risk_manager and hasattr(self.bot.risk_manager, 'set_sync_status'):
                     self.bot.risk_manager.set_sync_status(False)
-            await asyncio.sleep(30)
+            try:
+                closed = self._get_current_session() == MarketSession.CLOSED
+            except Exception:
+                closed = False  # 세션 판정 실패는 거래 가능으로 보고 30초 유지(보수적)
+            await asyncio.sleep(self._portfolio_sync_interval(closed, prev_closed))
+            prev_closed = closed
 
     async def run_screening(self):
         """주기적 종목 스크리닝 루프"""
