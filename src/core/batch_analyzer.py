@@ -16,6 +16,7 @@ AI Trading Bot v2 - 배치 분석 엔진
 
 import asyncio
 import json
+import uuid
 from dataclasses import field, dataclass, asdict
 from datetime import datetime, timedelta, time, date
 from decimal import Decimal
@@ -29,6 +30,7 @@ from .types import (
     Signal, OrderSide, SignalStrength, StrategyType
 )
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
+from ..utils.fee_calculator import get_fee_calculator
 from ..utils.sizing import atr_position_multiplier
 
 
@@ -113,6 +115,38 @@ class PendingSignal:
         # 알 수 없는 키(미래 버전)는 버리지 않고 무시 — dataclass 생성자가 받지 않으므로 걸러낸다
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in data.items() if k in known})
+
+
+# ── setup 매핑 (T11 계약 2.3, 2026-09-15) ───────────────────────────────────
+# 전략 이름은 배분·청산·통계의 키라 바꿀 수 없다. `setup` 은 "어떤 조건으로 진입하는가"를
+# 나타내는 별도 축이고, 같은 전략이라도 돌파 모드면 돌파 setup 이 된다.
+_SETUP_BY_STRATEGY = {
+    "sepa_trend": "sepa_pullback",
+    "vcp_breakout": "vcp_breakout",
+    "gap_and_go": "gap_vwap",
+    "rsi2_reversal": "rsi2_reversal",
+    "momentum_breakout": "momentum",
+}
+
+
+def setup_for_strategy(strategy: str, entry_mode: str = "close") -> str:
+    """전략·진입모드 → setup. 모르는 전략은 ""(빈값) — 지어내지 않는다.
+
+    전략 매핑이 **우선**이다. breakout 모드가 전략 고유 setup 을 덮어쓰면, 예컨대
+    gap_and_go 에 돌파 모드가 생겼을 때 setup 이 gap_vwap → vcp_breakout 으로 바뀌며
+    VWAP 필수 조건이 조용히 사라진다 (1차 리뷰 advisory). 현재 breakout 은 VCP 라인
+    전용이라 운영 결과는 같다.
+    """
+    mapped = _SETUP_BY_STRATEGY.get(str(strategy or ""), "")
+    if mapped:
+        return mapped
+    return "vcp_breakout" if entry_mode == "breakout" else ""
+
+
+# setup 이 진입 판정에 반드시 필요로 하는 입력 (검증기가 호가·계획에서 찾는다)
+_REQUIRED_INPUTS_BY_SETUP = {
+    "gap_vwap": ["vwap"],
+}
 
 
 # ── 대기 시그널 이월 정책 (2026-08-03) ────────────────────────────────────────
@@ -482,26 +516,8 @@ class BatchAnalyzer:
             if entry_price <= 0:
                 continue
 
-            max_entry = entry_price * (1 + _slip / 100)
-
-            pending = PendingSignal(
-                symbol=sig.symbol,
-                name=(sig.metadata or {}).get("candidate_name", sig.symbol),
-                strategy=sig.strategy.value,
-                side=sig.side.value,
-                entry_price=entry_price,
-                max_entry_price=max_entry,
-                stop_price=float(sig.stop_price) if sig.stop_price else entry_price * 0.95,
-                target_price=float(sig.target_price) if sig.target_price else entry_price * 1.10,
-                score=sig.score,
-                reason=sig.reason,
-                created_at=now.isoformat(),
-                expires_at=expires.isoformat(),
-                atr_pct=float((sig.metadata or {}).get("atr_pct", 0)),
-                entry_mode=str((sig.metadata or {}).get("entry_mode", "close")),
-                breakout_trigger=float((sig.metadata or {}).get("breakout_trigger", 0) or 0),
-            )
-            result.append(pending)
+            result.append(self._to_pending_signal(sig, now=now, expires=expires,
+                                                  slippage_pct=_slip))
 
         logger.info(
             f"[배치분석] 스캔 완료: "
@@ -509,6 +525,100 @@ class BatchAnalyzer:
             f"시그널 {len(result)}개"
         )
         return result
+
+    def _to_pending_signal(self, sig, *, now: datetime, expires: datetime,
+                           slippage_pct: float) -> PendingSignal:
+        """Signal → PendingSignal (조건부 진입계획 포함, T11 계약 2.3)
+
+        기존 가격 필드(entry/max_entry/stop/target/expires/entry_mode/breakout_trigger)의
+        계산은 **그대로**이고, 여기에 식별·근거·조건·가정 메타만 덧붙인다.
+        모르는 값(슬리피지 실측·유동성)은 None 으로 남긴다 — 지어내지 않는다.
+        """
+        meta = sig.metadata or {}
+        entry_price = float(sig.price) if sig.price else 0
+        max_entry = entry_price * (1 + slippage_pct / 100)
+        stop_price = float(sig.stop_price) if sig.stop_price else entry_price * 0.95
+        target_price = float(sig.target_price) if sig.target_price else entry_price * 1.10
+        strategy = sig.strategy.value
+        entry_mode = str(meta.get("entry_mode", "close"))
+        _bt_raw = meta.get("breakout_trigger")
+        try:
+            # 기존 동작 유지: None·빈값·비숫자는 0.0 (돌파 트리거 없음)
+            breakout_trigger = 0.0 if _bt_raw is None else float(_bt_raw)
+        except (TypeError, ValueError):
+            breakout_trigger = 0.0
+
+        if entry_mode == "breakout":
+            trigger: Dict[str, Any] = {
+                "type": "breakout",
+                "level": breakout_trigger if breakout_trigger > 0 else entry_price,
+                "satisfied": None, "satisfied_at": None,
+            }
+        else:
+            trigger = {"type": "none"}
+
+        indicators = meta.get("indicators") or {}
+        _ind_as_of = indicators.get("as_of") if isinstance(indicators, dict) else None
+        if _ind_as_of is None:
+            # 지표 dict 에는 시각이 없다(TechnicalIndicators.calculate_all 이 'as_of' 를
+            # 만들지 않는다) — 실제 계산 시각은 캐시 타임스탬프가 정본이다.
+            _ts_map = getattr(getattr(getattr(self, "_screener", None), "_indicators", None),
+                              "_cache_ts", None)
+            _ts = _ts_map.get(sig.symbol) if isinstance(_ts_map, dict) else None
+            # 없으면 None 유지 — now·수집 시각으로 채우면 신선도 세탁이 된다
+            _ind_as_of = _ts.isoformat() if isinstance(_ts, datetime) else None
+
+        return PendingSignal(
+            symbol=sig.symbol,
+            name=meta.get("candidate_name", sig.symbol),
+            strategy=strategy,
+            side=sig.side.value,
+            entry_price=entry_price,
+            max_entry_price=max_entry,
+            stop_price=stop_price,
+            target_price=target_price,
+            score=sig.score,
+            reason=sig.reason,
+            created_at=now.isoformat(),
+            expires_at=expires.isoformat(),
+            atr_pct=float(meta.get("atr_pct", 0)),
+            entry_mode=entry_mode,
+            breakout_trigger=breakout_trigger,
+            # ── T11 조건부 진입계획 ──
+            plan_id=uuid.uuid4().hex[:12],
+            plan_version=1,
+            candidate_id=str(meta.get("candidate_id")
+                             or f"{sig.symbol}|{now.date().isoformat()}"),
+            setup=setup_for_strategy(strategy, entry_mode),
+            decided_at=now.isoformat(),
+            inputs_ref={
+                "indicator_keys": sorted(indicators.keys()) if isinstance(indicators, dict) else [],
+                # 지표의 실제 관측 시각을 모르면 None — now 로 채우면 신선도 세탁이 된다
+                "indicators_as_of": _ind_as_of,
+                "score": sig.score,
+            },
+            trigger=trigger,
+            invalidation={
+                "stop_price": stop_price,
+                "below_price": 0.0,
+                "intraday_levels": ["severe"],
+                "expires_at": expires.isoformat(),
+            },
+            required_inputs=_REQUIRED_INPUTS_BY_SETUP.get(
+                setup_for_strategy(strategy, entry_mode), []
+            ),
+            assumptions={
+                # 매수 수수료 bps (FeeCalculator 단일 출처 — 하드코딩 금지)
+                "fee_bps": float(get_fee_calculator("KR").config.buy_commission_rate) * 10000,
+                # 매수측 비용만 반영했음을 소비자에게 명시한다 — 왕복(매도 수수료+거래세
+                # 포함 0.227%)을 쓸지는 정책 결정이라 값은 바꾸지 않는다 (1차 리뷰 advisory)
+                "fee_side": "buy_only",
+                "slippage_bps": None,    # 실측 없음
+                "liquidity_ok": None,    # 미판정
+                "expected_fill_price": None,
+            },
+            exit_policy_ref=f"exit_manager:{strategy}",
+        )
 
     async def run_daily_scan(self):
         """[15:40] 전일 마감 후 일일 배치 스캔 (morning_scan_enabled=false 시 사용)"""
@@ -900,6 +1010,9 @@ class BatchAnalyzer:
 
             try:
                 quote = await self._broker.get_quote(sig.symbol)
+                # REST 스냅샷에는 거래소 시각이 없다 — 조회 시각이 우리가 아는
+                # 유일한 실측 시각이고, shadow 검증기의 신선도 판정 입력이 된다.
+                _quote_at = datetime.now()
                 if not quote:
                     validated.append(sig)
                     continue
@@ -1101,6 +1214,9 @@ class BatchAnalyzer:
                     continue
 
                 quote = await self._broker.get_quote(sig.symbol)
+                # REST 스냅샷에는 거래소 시각이 없다 — 조회 시각이 우리가 아는
+                # 유일한 실측 시각이고, shadow 검증기의 신선도 판정 입력이 된다.
+                _quote_at = datetime.now()
                 if not quote:
                     logger.warning(f"[배치분석] {sig.symbol} 현재가 조회 실패")
                     _carry(sig, "quote_fail")
@@ -1325,6 +1441,12 @@ class BatchAnalyzer:
                         "gap_pct": round(gap_pct, 2),
                         # LLM 이중검증용 지표 주입 (스크리너 캐시)
                         "indicators": self._screener._indicators._cache.get(sig.symbol, {}),
+                        # 현재가 조회 시각 (T11) — shadow 검증기가 호가 신선도를 판정한다
+                        "quote_as_of": _quote_at.isoformat(),
+                        # 조건부 진입계획 원본 (T11) — 주문 직전 shadow 검증기가 읽는다.
+                        # Signal.price 는 여기서 현재가로 고정되지만 계획의 상한·만료·트리거는
+                        # 그대로 실어 보내 이후 경로에서 유실되지 않게 한다.
+                        "entry_plan": sig.to_dict(),
                     },
                 )
 
