@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "spec_version": "1.2.17",
+  "spec_sha256": "791082da4cb379117ed9fdc29a45bd42746f7a1aec368da1e9f4e1f3bfbff5b4",
+  "source": "https://openapi.tossinvest.com/openapi-docs/latest/openapi.json",
+  "checked_date": "2026-09-16",
+  "verification": "public_unauthenticated_spec_only",
+  "production_eligible": false,
+  "allowed_get_paths": [
+    "/api/v1/prices",
+    "/api/v1/candles",
+    "/api/v1/market-calendar/KR"
+  ],
+  "success_envelope": {"required": ["result"], "error_must_be_absent": true},
+  "prices": {
+    "result_type": "array",
+    "required_row_fields": ["symbol", "lastPrice", "currency"],
+    "timestamp": "optional_nullable_timezone_aware",
+    "numeric_string_max_length": 30,
+    "symbols_max_count": 200
+  },
+  "candles": {
+    "result_type": "object",
+    "required_result_fields": ["candles"],
+    "required_row_fields": ["timestamp", "openPrice", "highPrice", "lowPrice", "closePrice", "volume", "currency"],
+    "numeric_string_max_length": 30,
+    "count_max": 200,
+    "supported_interval_in_this_implementation": "1d",
+    "before_is_inclusive": true,
+    "cursor_policy": "send_nextBefore_unchanged",
+    "daily_timestamp_semantics": "local_midnight_bar_date_not_observation_freshness",
+    "market_basis": "unknown_pending_provider_confirmation"
+  },
+  "calendar_kr": {
+    "optional_query_fields": ["date"],
+    "date_format": "YYYY-MM-DD",
+    "required_result_fields": ["today", "previousBusinessDay", "nextBusinessDay"]
+  },
+  "authentication_error_codes": ["invalid-token", "expired-token", "token-revoked", "login-user-not-found"],
+  "rate_reset_semantics": "seconds_until_one_token_refill_not_epoch",
+  "retry_after_semantics": "seconds"
+}
