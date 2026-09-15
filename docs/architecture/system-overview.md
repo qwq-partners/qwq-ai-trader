@@ -429,6 +429,17 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 
 **정오 당일 봉 교체 규칙 (2026-09-15, T10 F13)**: `_today_bar_action(last_bar, today)`가 스크리너 종가열의 마지막 봉과 오늘 날짜를 비교해 판정한다 — 마지막 봉이 오늘이면 **교체**(재계산에 이중 계상 없이 반영), 직전 거래일이면 **추가**, 그 외(날짜 미상·중간 결측)는 최신으로 위장하지 않고 그대로 유지 + 사유 기록. 현재 지수 as_of(`kr_as_of`)와 5/20일 봉 기반 지표의 as_of(`kospi_bars_as_of`)는 분리해 `input_meta`에 남긴다.
 
+## 10.3 종목 단위 팀 심의의 근거·판단·진입계획 경계 (2026-09-15~, T11)
+
+```
+스크리너 → PendingSignal(=EntryPlan 정본: 가격 범위·상한·트리거·만료·손절/청산 참조·가정)
+   ├─ 09:01 변환 → Signal.metadata["entry_plan"] → engine.on_signal → [shadow] check_entry_plan → signal_events(shadow_plan_check) → 주문(시장가, 불변)
+   └─ 팀 심의(10:30/11:30/13:00/14:00, shadow) → Analyst×3(evidence 계약) → Bull/Bear(R1 독립 표 보존, R2 변경사유) → Trader/PM(기준선 불변)
+                                                  └─ [shadow] judgment.assess(+ 같은 check_entry_plan) → TeamAssessment → team_ledger(append-only) + verdicts_*.json(호환)
+```
+- 플래그 `TEAM_ASSESSMENT_V2`·`ENTRY_PLAN_SHADOW`(기본 "1"): shadow 계산·기록만. "0" 이면 미호출. 어느 쪽도 주문·청산·사이징 결과를 바꾸지 않는다(기준선 특성화 테스트).
+- 결측은 None + status 로 남긴다(관측 시각 모르면 None, 확률은 미보정). 상세 `docs/agents/trading-team.md` T11 절.
+
 ## 11. 변경 시 확인할 경계
 
 | 변경 종류 | 함께 확인할 파일 |

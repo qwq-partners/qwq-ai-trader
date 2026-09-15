@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — feat: 에이전트 팀 근거 정합성 개선 + 조건부 진입계획(EntryPlan) shadow 통합 (T11, F-agent A~E)
+
+계기: 팀이 "BUY 에 합의하는 시스템" 이었다 — 만장일치가 +20·conviction 0.90 으로 확률처럼 쓰이고(A1/A2), Bear 의 ACCEPT(위험 허용)가 매수 찬성과 합쳐지며(B1), 펀더멘털 '검증 통과'·예외가 긍정 근거/approved 로 흡수되고(C1/C2), confidence=0 보고서가 유효 소스 수를 채우고(C4), 거래량 키 불일치로 +15 가 절대 미발동(C5), 시장가 주문이 앞단 상한을 보장하지 않으며(D3/D5), 승인 BUY 가 CF 에서 제외되고(E1) 같은 날 판단이 덮어써졌다(E2). 현 코드(main 3175732) 재확인 결과는 계획서 §1 표.
+
+- **계약**(`src/agents/types.py`, `batch_analyzer.PendingSignal`, `src/execution/entry_plan.py`, `src/agents/team_ledger.py`): `EvidenceItem`(출처·식별자·관측/수집 시각·회계기간·상태·종류·유효기간·dedup_key, T9 DataPoint 재사용), `AnalystReport` 확장(data_status/evidence/positive_basis/risk_clear/observed_at/limitations — 기존 score/confidence/data_as_of 불변), `TeamAssessment`(매수 매력·위험 허용·자료 충분성·진입 조건·합의 수준·근거 품질·success_probability=None+uncalibrated·기권·R1/R2 표·변경 사유), `PendingSignal` 이 EntryPlan 단일 정본, `PlanCheck(allow|wait|reject + 사유 코드)`, append-only 심의 원장(멱등 deliberation_id, 마스킹).
+- **A 근거**: 3 분석가가 evidence 를 채우고 '검증 통과' 는 `risk_clear` 만(긍정 근거 아님); `ValidationResult.validated/data_status` 를 하위 검증 실제 획득 여부로 유도(`approved` 불변); 종목 뉴스 dedup(URL/식별자, 종목 경로 한정)·헤드라인 한계 표기; shadow 필드 파싱 예외 격리. **승인된 기존 경로 수정 2건**: `vol_ratio` 소비 키 정정, `evidence_quality` 유효 소스 수에서 confidence=0 제외. 기준선 특성화 `tests/test_t11_evidence_baseline.py`.
+- **B 판단**: `judgment.assess`(순수 함수) — evidence 기반 merit(dedup 1회, 만료·오류·conf 0 제외, risk_clear 단독 +10 미가산), Bear ACCEPT 는 `risk_acceptable` 에만, 만장일치는 `consensus_level` 에만, 확률은 항상 미보정, 자료 부족·토론 실패는 기권; R2 변경사유 파싱(`DebateTurn.change_reason`); 재현성 원장 params 정정(reasoning_effort 실제값·seed·temperature·prompt_version). `team.py` 가 shadow 판단을 부착하고 원장에 기록(플래그 `TEAM_ASSESSMENT_V2`, "0" 이면 미계산·미기록). 기존 Trader/PM/conviction 산식 불변(`tests/test_t11_judgment_baseline.py`).
+- **C EntryPlan**: `check_entry_plan` 구현(만료·상한 wait·밴드·트리거·setup 필수 입력·급락(severe reject, crash 는 SEPA 만 미러)·무효화·위험/슬롯/한도·비용 반영 손익비 기록); 배치 생성부가 plan 메타를 채우고 변환부가 `Signal.metadata["entry_plan"]` 을 실음(직렬화·이월 왕복 유지); 엔진 Order 생성 직전 **shadow 기록만**(`shadow_plan_check`, 플래그 `ENTRY_PLAN_SHADOW`); 스케줄러가 보유 재평가에 `indicators_as_of`, 팀 후보에 `entry_plan/slot/current_price/quote_as_of/intraday_level` 전달. 주문 유형(시장가) 불변 — `tests/test_t11_money_path_baseline.py`(플래그 on/off × 계획 유무에서 Order 지문 동일).
+- **D 원장·화면·CF·평가**: CF 가 체결 증거 없는 승인 BUY 를 `team_buy_unfilled` 로 추적(차단 '적중' 프레이밍과 분리); `/api/team/verdicts` 에 assessment 요약·`execution_state`(candidate/waiting_trigger/plan_rejected/shadow_ready/order_submitted/filled, 뒤 두 단계는 실제 증거 필요)·conviction 라벨 "합의 기반·확률 미보정"; `/engine`·`/office` 카드 '매수(제안)' + shadow 안내; shadow_report/shadow_lab 에 "LLM 프로세스 품질 — P&L 미측정" 라벨(승격 기준 숫자 불변); `scripts/team_policy_ab.py` A/B/C 오프라인 러너(사전 등록 manifest, 만기 청산, 종목-주 클러스터 dedup, 정책 B/C 는 `judgment.assess`; 합성 fixture 로만 검증 → `synthetic_only`).
+- **통합 담당**: 팀 후보에 급락 수준 전달, judgment 레거시 폴백을 A 미배선 상태로 한정(evidence 0건 우회 차단), `plan_rejected` 상태 추가.
+- **상태 구분**: 구현 완료(shadow) / 투자 성능 검증 **미완**(연구용 스냅샷·원장 표본 없음) / 운영 승격 **없음**. 배포·재시작·주문·설정 변경 없음.
+- 테스트·리뷰: (통합 후 갱신) 브랜치별 독립 리뷰 A 5라운드·B 3라운드·C 2라운드·D 5라운드, 통합 최종 리뷰·D 독립 재현. Codex 교차 리뷰 결과는 §검증에 기록.
+
 ## 2026-09-15 — fix: T9 후속 교차 리뷰 수정 (계획서 T10, F13~F22)
 
 계기: T9(PR #42~#46, main `dcec010`) 이후 교차 리뷰가 "각 단계는 고쳤으나 단계 사이 연결이 끊긴" 결함 10건을 지적(기준 SHA `dcec010`). D(독립 재현)로 실제 코드 경로를 먼저 확인한 뒤 A(레짐 경로)·B(자료 유효성)·C(발송·평가) 세 갈래로 병렬 수정, 통합 브랜치에서 재발견된 잔여 결함 2건을 추가 조치.
