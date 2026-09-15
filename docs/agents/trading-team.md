@@ -318,7 +318,7 @@ python scripts/shadow_report.py --telegram   # 텔레그램 전송
 ### 불변 원장·실행 상태 (`team_ledger.py`)
 - `~/.cache/ai_trader/team_ledger/deliberations_YYYYMMDD.jsonl` append-only, `deliberation_id = sha256(symbol|date|slot|input_snapshot_hash)[:16]` — 같은 입력 재시도는 같은 id(읽기 dedup). 같은 날 같은 종목의 여러 시점 판단·BUY/HOLD/REJECT/기권/실패 전부 보존. 기존 `team_verdicts/verdicts_*.json`(latest-per-symbol)은 대시보드·conviction 호환용으로 유지.
 - 실행 상태: `candidate → waiting_trigger | plan_rejected → shadow_ready → order_submitted → filled`. 뒤 두 단계는 trade_journal 등 실제 증거가 있을 때만 표시(승인 BUY 를 체결로 가정하지 않는다).
-- CF: 승인 BUY 중 체결 증거 없는 건은 `team_buy_unfilled` 로 추적(요약에서 '차단 적중' 프레이밍과 분리). 체결 대조 콜백 미배선 시 경고 표기.
+- CF: 승인 BUY 중 체결 증거 없는 건은 `team_buy_unfilled` 로 추적(요약에서 '차단 적중' 프레이밍과 분리). 체결 증거는 콜백 우선, 콜백 미주입이면 실제 거래저널 `<TRADE_JOURNAL_DIR|~/.cache/ai_trader/journal>/trades_YYYYMMDD.json` 을 읽는다(날짜 파일 없음 = 그날 진입 없음 = 미체결). 저널 디렉터리 자체가 없으면 판정 불가로 **등록 보류** + 요약 경고(미체결로 오라벨하지 않음).
 
 ### 추가 가치 검증 도구 (`scripts/team_policy_ab.py`)
 - A 기존 규칙 / B +독립 근거 검토(R1) / C +토론(R2) 를 같은 후보군·시점에서 비교. 실험 1(선정: 진입·청산·비용 고정) / 실험 2(가격·시점: 기존 진입 vs EntryPlan 조건부, 일봉만으로 선후 불명확이면 미체결).

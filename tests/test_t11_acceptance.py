@@ -84,7 +84,8 @@ def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(cf_mod, "_STATE_PATH", tmp_path / "cf_state.json")
     monkeypatch.setattr(cf_mod, "_SOURCES", {})
     monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tmp_path / "team_verdicts")
-    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_PATH", tmp_path / "no_such_journal.json")
+    (tmp_path / "journal").mkdir(exist_ok=True)
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_DIR", tmp_path / "journal")  # 빈 저널 = 그날 진입 없음
     return tmp_path
 
 

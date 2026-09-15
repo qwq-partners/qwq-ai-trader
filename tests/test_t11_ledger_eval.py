@@ -50,8 +50,9 @@ def test_approved_buy_without_fill_evidence_is_tracked_not_dropped(tmp_path, mon
     tv_dir = tmp_path / "team_verdicts"
     monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tv_dir)
     monkeypatch.setattr(cf_mod, "_SOURCES", {})  # rule11/12 소스는 이 테스트와 무관
-    # 콜백 미주입 폴백(trade_journal_kr.json)이 운영 캐시를 건드리지 않도록 존재하지 않는 tmp 경로로 격리
-    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_PATH", tmp_path / "trade_journal_kr.json")
+    # 콜백 미주입 폴백(거래저널 디렉터리)이 운영 캐시를 건드리지 않도록 tmp 경로로 격리
+    (tmp_path / "journal").mkdir(exist_ok=True)
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_DIR", tmp_path / "journal")  # 빈 저널 = 그날 진입 없음
     _write_verdicts(tv_dir, "20260915", [
         {"symbol": "005930", "decision": {"approved": True, "stance": "buy"}},
         {"symbol": "000660", "decision": {"approved": True, "stance": "hold"}},  # 기존 team_hold 경로
@@ -117,7 +118,8 @@ def test_same_symbol_hold_and_approved_buy_same_day_not_double_registered(tmp_pa
     tv_dir = tmp_path / "team_verdicts"
     monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tv_dir)
     monkeypatch.setattr(cf_mod, "_SOURCES", {})
-    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_PATH", tmp_path / "trade_journal_kr.json")
+    (tmp_path / "journal").mkdir(exist_ok=True)
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_DIR", tmp_path / "journal")  # 빈 저널 = 그날 진입 없음
     _write_verdicts(tv_dir, "20260915", [
         {"symbol": "005930", "decision": {"approved": True, "stance": "hold"}},
         {"symbol": "005930", "decision": {"approved": True, "stance": "buy"}},
@@ -593,3 +595,47 @@ def test_selection_results_report_age_and_flip_counters(tmp_path):
     results = tpab.run_selection_experiment(rows, ["A", "C"], max_new=5)
     assert "reports_without_age" in results["A"]
     assert results["C"]["r1_reject_r2_accept_excluded"] == 1
+
+
+# ── 배포 전 리뷰 후속 (2026-09-15): 콜백 미주입 폴백은 실제 거래저널 경로를 본다 ──────
+
+def _tracker_with_buy_verdict(tmp_path, monkeypatch):
+    tv_dir = tmp_path / "team_verdicts"
+    monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tv_dir)
+    monkeypatch.setattr(cf_mod, "_SOURCES", {})
+    _write_verdicts(tv_dir, "20260915", [
+        {"symbol": "005930", "decision": {"approved": True, "stance": "buy"}},
+    ])
+    tracker = object.__new__(cf_mod.CounterfactualTracker)
+    tracker._state = {}
+    tracker._fill_evidence_check = None
+    return tracker
+
+
+def test_fallback_reads_real_journal_date_file_and_skips_filled_buy(tmp_path, monkeypatch):
+    """trade_journal.py 와 같은 규칙(<dir>/trades_YYYYMMDD.json, trades[].entry_time)으로 체결을 찾는다."""
+    jdir = tmp_path / "journal"; jdir.mkdir()
+    (jdir / "trades_20260915.json").write_text(json.dumps({"date": "2026-09-15", "trades": [
+        {"id": "t1", "symbol": "005930", "entry_time": "2026-09-15T09:01:12"},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_DIR", jdir)
+    tracker = _tracker_with_buy_verdict(tmp_path, monkeypatch)
+    assert tracker._ingest_sources() == 0
+    assert tracker._state == {}
+
+
+def test_fallback_registers_unfilled_when_journal_dir_exists_but_no_trades_that_day(tmp_path, monkeypatch):
+    jdir = tmp_path / "journal"; jdir.mkdir()
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_DIR", jdir)
+    tracker = _tracker_with_buy_verdict(tmp_path, monkeypatch)
+    assert tracker._ingest_sources() == 1
+    assert list(tracker._state.values())[0]["source"] == "team_buy_unfilled"
+
+
+def test_fallback_holds_registration_when_journal_dir_missing(tmp_path, monkeypatch):
+    """저널 디렉터리 자체가 없으면 판정 불가 — 미체결로 오라벨해 등록하지 않고, 요약에 보류 경고를 남긴다."""
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_DIR", tmp_path / "no_journal_dir")
+    tracker = _tracker_with_buy_verdict(tmp_path, monkeypatch)
+    assert tracker._ingest_sources() == 0
+    assert tracker._state == {}
+    assert "판정 불가" in tracker._summary_base()

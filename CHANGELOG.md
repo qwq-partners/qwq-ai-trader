@@ -14,6 +14,13 @@
 - **상태 구분**: 구현 완료(shadow) / 투자 성능 검증 **미완**(연구용 스냅샷·원장 표본 없음) / 운영 승격 **없음**. 배포·재시작·주문·설정 변경 없음.
 - **테스트·리뷰**: 전체 스위트 **775 passed / 2 xfailed**, 테스트 격리 위반 0건. T11 테스트 10파일 215건(계약 6·근거 25+기준선 8·판단 26+기준선 13·EntryPlan 46·돈 경로 기준선 6·원장/평가 25·재현 8·D 독립 인수 14조건 45). 리뷰: 브랜치별 독립 리뷰 A 5라운드·B 3라운드·C 2라운드·D 5라운드 → 통합 2차 → 최종 리뷰 2인(FINAL-2 승인, FINAL-1 blocking 2건 → 본 항목 후속으로 해소, 재검증(opus/xhigh 읽기 전용): blocking 2건 해소·신규 blocking 0·돈 경로 무변경 판정, advisory 6건 중 문서 2건·예외 범위 1건 반영). Codex 교차 리뷰(`scripts/dev/codex_review.sh`)는 bwrap 샌드박스 오류로 **미실행**(승인으로 간주하지 않음, Claude opus/xhigh 독립 리뷰로 대체).
 
+## 2026-09-15 — fix(T11 배포 전 리뷰): CF 체결 증거 폴백을 실제 거래저널 경로로 정정
+
+계기: PR #51 머지 후 운영 배포 전 5관점 리뷰(부팅·돈 경로·저장소·대시보드·스케줄러 + 적대적 검증)에서 3개 관점이 동일 결함을 지적 — `counterfactual_tracker` 의 콜백 미주입 폴백이 아무도 쓰지 않는 `~/.cache/ai_trader/trade_journal_kr.json` 을 읽어 항상 '판정 불가'였고, 그것을 미체결로 해석해 승인 BUY 전건이 `team_buy_unfilled` 로 등록될 수 있었다(운영 배선은 콜백 없이 생성 — `get_counterfactual_tracker()`).
+- `src/analytics/counterfactual_tracker.py`: 폴백 증거원을 실제 저널 규칙 `<TRADE_JOURNAL_DIR|~/.cache/ai_trader/journal>/trades_YYYYMMDD.json`(`trades[].entry_time`)으로 교체. `_has_fill_evidence` 가 True/False/None(판정 불가) 3값 — 저널 디렉터리 부재·손상은 None 이며 이때 `team_buy_unfilled` 등록을 **보류**하고 WARNING + 요약 경고("판정 불가 … 보류 중")를 남긴다(미체결로 오라벨하지 않음). 날짜 파일 없음은 '그날 진입 없음'(=미체결 등록).
+- 테스트: `tests/test_t11_ledger_eval.py` 폴백 3건(실제 저널 날짜 파일에서 체결 발견→제외 / 디렉터리만 있고 파일 없음→미체결 등록 / 디렉터리 없음→보류+경고) 추가, 기존 격리 monkeypatch 대상 `_TRADE_JOURNAL_PATH`→`_TRADE_JOURNAL_DIR`(빈 tmp 디렉터리) 교체(인수 조건·재현 테스트 판정 불변).
+- 같은 리뷰의 나머지 확정 advisory(코드 변경 없음): ① 분석가 수정 2건(`vol_ratio` 키·confidence=0 유효 소스 제외)은 shadow 플래그 밖의 기존 stance 산식 변경이며 사이징 연결은 운영 `.env` `TEAM_CONVICTION=0`(배포 전 .env·프로세스 환경 모두 확인) + 위험 모드 0.7% 최종 클램프 + 현금 고갈로 3중 차단 ② 보유 재평가에 `indicators_as_of` 가 실제 배선돼 technical 보고서가 45분 TTL 로 만료(지표 캐시는 `invalidate_cache` 호출자 0건이라 결정론적 만료) → 보유 심의가 '근거 부족→HOLD/기권' 으로 기울 수 있음 — 의도된 신선도 세탁 금지이며 주문 무관, 배포 후 기권 비율 관측 항목으로 추적 ③ 3175732 로 수동 롤백 시 새 필드가 기록된 `pending_signals.json` 은 구 `from_dict` 가 파일 단위로 버림(자동 롤백 창에서는 저장 이전이라 무관, 09:01 배치 이후 수동 롤백 시 당일 대기 시그널 소실 가능 — 롤백 전 파일 백업).
+
 ## 2026-09-15 — policy: T10 정책값 3건 승인 반영 + 야간선물 세션 공휴일 캘린더 연동·종료 06:00 정정
 
 사용자 승인(2026-09-15): ① KRX 야간선물 세션 as_of 규칙 ② `ExpertOpinion.from_dict` 기본 `unknown`(T9 이전 저장 레코드 집계 제외) ③ 모닝브리프 테마→업종 평가 매핑 2건(AI/반도체→전기전자, 바이오→의약품). ②③ 은 코드 변경 없음(승인 표기만).
