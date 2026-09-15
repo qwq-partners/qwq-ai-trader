@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — ops: Codex R1~R8 수정본 배포 (20:47 KST, PR #58)
+
+- 사용자 후속 승인("주문·설정은 유지하고 수정본만 배포")에 따라 PR #58의 필수 verify 성공 후 main `53ea967` 병합·배포. `local_deploy.sh`에서 916 passed / 2 xfailed·격리 위반 0·문법/비밀패턴 통과, 20:47:03 재시작(PID 2925793), KIS 연결·엔진 시작 확인.
+- 배포 전 발견한 UTC host-local 시계 회귀는 코드 수정·UTC/KST 각각 전체 916건 통과·Astra/xhigh 한정 리뷰(지적 0)로 해소. R1~R8 전체 Claude 최종 독립 리뷰는 여전히 미실시.
+- 초기 헬스 연결 정상·pending 0·하트비트 정체 없음·기동 이후 ERROR/Traceback·EGW00215 0. 설정 3파일·킬스위치 4경로 지문 동일, 주문/설정/킬스위치 변경·정책 승격·canary 시작 없음. 상세 `docs/reviews/codex-remediation-2026-09-15.md` 후속 배포 결과.
+- 첫 배포 호출은 격리 환경에서 Git 전역 제외 규칙을 못 읽어 청결 가드에서 중단(checkout·재시작 없음). 기존 XDG_CONFIG_HOME 경로를 명시해 해결했으며 로컬 설정 파일은 편집하지 않았다.
+- 20:49:49 ops-check(166초 후)에서도 KIS 오류·ERROR/Traceback 0·pending 0·하트비트 정체/실패 없음. `mcp` 부재로 pykrx·naver_search 연결 경고는 남음(이전 18:31 기동에도 동일, 신규 회귀 아님). 패키지 설치·환경 변경은 하지 않았으며 두 MCP 경로의 정상화로 오인하지 않는다.
+
 ## 2026-09-15 — fix: Codex 금일 커밋 리뷰 R1~R8 후속 (PR #58, Claude 리뷰 대기)
 
 기준 `1aba7d7`, `feature/codex-review-fixes-20260915`. 사용자 승인에 따라 병렬 격리 구현(Astra/high: 동기화·A/B, Terra/high: 근거 계약, 주 에이전트: 평가·CF·통합). 최초 구현은 로컬 한정. 후속 사용자 승인으로 PR·main 병합·배포·재시작을 진행하며 **주문·설정·킬스위치는 유지**한다. Claude 독립 최종 리뷰는 아직 미실시이며 배포 승인과 별개다.
