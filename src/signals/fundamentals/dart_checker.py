@@ -282,6 +282,11 @@ class DartChecker:
                     positive_list.append(report_nm)
                     break
 
+        if not list_complete:
+            # 불완전한 목록의 호재는 실제 검증기·스크리너 가산에 쓰지 않는다.
+            # 확인된 위험은 그대로 보존해 부분 실패가 차단/경고를 지우지 않게 한다.
+            positive_list = []
+
         # 결과 결정
         if has_block:
             return DartCheckResult(
@@ -312,5 +317,5 @@ class DartChecker:
             )
         else:
             # HTTP 200/status 000의 인식된 공시 목록은 위험·호재 키워드가 없어도
-            # 실제로 획득된 정상 중립 결과다. fetched=False는 HTTP/API 오류 전용이다.
+            # 실제로 획득된 정상 중립 결과다. 손상 행이 있으면 미획득으로 남긴다.
             return DartCheckResult(fetched=list_complete)
