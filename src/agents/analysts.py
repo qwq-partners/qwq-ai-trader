@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from .types import AnalystKind, AnalystReport
+from .types import AnalystKind, AnalystReport, EvidenceItem
 
 # 개별 분석가 타임아웃 (초) — 장중 경로이므로 짧게
 ANALYST_TIMEOUT = 15.0
@@ -47,6 +47,18 @@ MIN_VALID_SOURCES = 2       # 유효 보고서 수
 MIN_TOTAL_WEIGHT = 0.5      # 감쇠 후 가중치 합 (정보량의 절대 하한)
 
 
+def _failed_report(kind: AnalystKind, symbol: str, error: str) -> AnalystReport:
+    """AnalystReport.failed()에 data_status="error"를 얹는다.
+
+    T11 리뷰 반영(2026-09-15 advisory): failed()의 기본값은 "unknown"(미판정)이라
+    "오류로 실패"와 "아직 판정 안 함"이 구분되지 않는다. types.py는 다른 담당
+    소유라 시그니처를 바꾸지 않고, 이 파일 안에서만 명시적으로 error로 올린다.
+    """
+    report = AnalystReport.failed(kind, symbol, error)
+    report.data_status = "error"
+    return report
+
+
 class FundamentalAnalyst:
     """공시·수급·공매도 기반 펀더멘탈 관점"""
 
@@ -64,11 +76,18 @@ class FundamentalAnalyst:
         # confidence=0이어야 aggregate_score의 가중치에서 빠진다 —
         # 0점을 0.3 가중치로 넣으면 다른 관점의 신호를 희석시킨다.
         confidence = 0.0
+        # T11 근거 계약 (2026-09-15) — 아래 evidence/positive_basis/risk_clear/data_status는
+        # 기존 score/confidence 산식에 관여하지 않는다 (신규 shadow 판단 전용, 기준선 불변).
+        evidence: List[EvidenceItem] = []
+        positive_basis: Optional[bool] = None
+        risk_clear: Optional[bool] = None
+        data_status = "full" if self._validator is not None else "partial"
 
         if self._validator is None and self._dart is None:
             return AnalystReport(
                 kind=AnalystKind.FUNDAMENTAL, symbol=symbol, score=0,
                 summary="펀더멘탈 데이터 소스 미연결", confidence=0.0,
+                data_status="insufficient", limitations=["펀더멘탈 데이터 소스 미연결"],
             )
 
         try:
@@ -84,8 +103,17 @@ class FundamentalAnalyst:
                 #    하위 필드도 숫자가 아니라 bool이다 — 순매수 "여부"만 알 수 있다.
                 passed = getattr(result, "approved", None)
                 reason = getattr(result, "block_reason", "") or ""
+                # T11: validate()가 실제로 수행됐는지 여부 — approved는 불변 의미로 두고
+                # (기존 score/confidence 산식이 그대로 읽는다), 이 두 값만 근거 신뢰도 판단에 쓴다.
+                # T11 리뷰(2026-09-15 advisory): 필드 부재를 낙관값(True/"full")으로
+                # 올리면 계약 위반 객체(덕타이핑 validator)가 "검증했고 위험 없음"으로
+                # 포장된다 — 결측은 보수값(False/"unknown")으로 떨어뜨린다.
+                validated_ok = bool(getattr(result, "validated", False))
+                _v_status = getattr(result, "data_status", None)
+                v_status = _v_status if _v_status else "unknown"
 
                 sd = getattr(result, "supply_demand_result", None)
+                foreign = inst = False
                 if sd is not None:
                     foreign = bool(getattr(sd, "foreign_net_buying", False))
                     inst = bool(getattr(sd, "institutional_net_buying", False))
@@ -101,8 +129,11 @@ class FundamentalAnalyst:
                         score += 10
                         findings.append("외국인" if foreign else "기관")
 
+                # 리뷰 참고(2026-09-15): pykrx-mcp에 공매도 도구가 없어(stock_validator._safe_check_short_selling)
+                # in_top50은 현재 항상 기본값(False)이다 — 아래 감점·evidence는 도구 제공 시 활성화될 사문 경로.
                 ss = getattr(result, "short_selling_result", None)
-                if ss is not None and bool(getattr(ss, "in_top50", False)):
+                ss_top50 = ss is not None and bool(getattr(ss, "in_top50", False))
+                if ss_top50:
                     metrics["short_top50"] = True
                     score -= 15
                     findings.append("공매도 상위 50종목")
@@ -115,20 +146,97 @@ class FundamentalAnalyst:
 
                 confidence = 0.7
 
-            # 2) 공시 이상 징후
+                # T11: '검증 통과'는 위험을 못 찾았다는 뜻(risk_clear)일 뿐이다.
+                # positive_basis(매수 매력의 긍정 근거)는 순매수 등 실제로 확인된
+                # 신호가 있을 때만 True — 검증 통과 자체를 긍정 근거로 승격하지 않는다.
+                if validated_ok:
+                    data_status = v_status
+                    risk_clear = (passed is True) if passed is not None else None
+                    positive_basis = (foreign or inst) if sd is not None else None
+                    if passed is True:
+                        evidence.append(EvidenceItem(
+                            source="stock_validator", metric="risk_clear", value=True,
+                            unit="bool", status="full", kind="fact",
+                            note="검증 통과 — 위험 미발견",
+                        ))
+                    elif passed is False:
+                        evidence.append(EvidenceItem(
+                            source="stock_validator", metric="risk_clear", value=False,
+                            unit="bool", status="full", kind="fact",
+                            note=f"검증 실패: {reason[:60]}",
+                        ))
+                    if foreign:
+                        evidence.append(EvidenceItem(
+                            source="stock_validator.supply_demand", metric="foreign_net_buying",
+                            value=True, unit="bool", status="full", kind="fact",
+                        ))
+                    if inst:
+                        evidence.append(EvidenceItem(
+                            source="stock_validator.supply_demand",
+                            metric="institutional_net_buying",
+                            value=True, unit="bool", status="full", kind="fact",
+                        ))
+                    if ss_top50:
+                        evidence.append(EvidenceItem(
+                            source="stock_validator.short_selling", metric="short_top50",
+                            value=True, unit="bool", status="full", kind="fact",
+                        ))
+                else:
+                    # 실제로 검증을 수행하지 못했다 — 긍정 근거도 위험 미발견도 주장하지 않는다.
+                    data_status = v_status
+                    # T11 리뷰 반영(2026-09-15 advisory): EvidenceItem.status 어휘는
+                    # EVIDENCE_STATUS(full/partial/insufficient/error)뿐이다 — 보고서
+                    # 수준 data_status만 허용하는 "unknown"을 여기 그대로 흘리지 않는다.
+                    evidence.append(EvidenceItem(
+                        source="stock_validator", metric="validated", value=False,
+                        status=v_status if v_status != "unknown" else "insufficient",
+                        kind="fact", note="검증 미수행 또는 실패",
+                    ))
+
+            # 2) 공시 이상 징후 (self._validator와 독립적인 별도 직접 조회)
+            #    T11 리뷰 반영(2026-09-15 blocking B1): 생산자 DartCheckResult
+            #    (dart_checker.py:25-31)는 risk_disclosures를 낸다. risk_items는
+            #    이 파일에만 있던 존재하지 않는 키라 getattr 기본값(빈 리스트)이
+            #    조용히 삼켜 위험 건수가 항상 0으로 "사실" 처리됐다.
             if self._dart is not None:
                 dart = await self._dart.check_disclosures(symbol, days=7)
                 risky = getattr(dart, "has_risk", None)
-                items = getattr(dart, "risk_items", None) or []
+                items = getattr(dart, "risk_disclosures", None) or []
                 metrics["dart_risk_items"] = len(items)
                 if risky:
                     score -= 30
-                    findings.append(f"공시 위험 신호 {len(items)}건")
                     confidence = max(confidence, 0.8)
+                    if items:
+                        findings.append(f"공시 위험 신호 {len(items)}건")
+                        evidence.append(EvidenceItem(
+                            source="dart_checker", metric="dart_risk_items", value=len(items),
+                            unit="count", status="full", kind="fact",
+                            note=f"공시 위험 신호 {len(items)}건",
+                        ))
+                    else:
+                        # has_risk=True인데 세부 항목이 비었다 — 0건이라는 "사실"이
+                        # 아니라 결측이다. value=None/status=partial로 정직하게 남긴다.
+                        findings.append("공시 위험 신호 감지(세부 항목 미상)")
+                        evidence.append(EvidenceItem(
+                            source="dart_checker", metric="dart_risk_items", value=None,
+                            unit="count", status="partial", kind="fact",
+                            note="공시 위험 감지되었으나 세부 항목 미상",
+                        ))
+                    # T11 리뷰 반영(2026-09-15 blocking B2): stock_validator가 앞서
+                    # '검증 통과 — 위험 미발견'으로 risk_clear=True를 적재했더라도,
+                    # DART가 별도 위험을 발견하면 그 주장은 더 이상 성립하지 않는다.
+                    # 두 소스는 서로 다른 위험을 보므로 한쪽 통과가 다른 쪽 위험을
+                    # 지우지 않는다 — risk_clear를 내리고 모순되는 근거를 정정한다.
+                    risk_clear = False
+                    for ev in evidence:
+                        if ev.source == "stock_validator" and ev.metric == "risk_clear" \
+                                and ev.value is True:
+                            ev.value = False
+                            ev.note = "검증 통과 — 그러나 별도 공시 위험 발견(위험 미발견 아님)"
 
         except Exception as e:
             logger.debug(f"[Analyst/fundamental] {symbol} 실패: {e}")
-            return AnalystReport.failed(AnalystKind.FUNDAMENTAL, symbol, str(e))
+            return _failed_report(AnalystKind.FUNDAMENTAL, symbol, str(e))
 
         score = max(-100, min(100, score))
         summary = "; ".join(findings[:3]) if findings else "특이사항 없음"
@@ -140,6 +248,10 @@ class FundamentalAnalyst:
             summary=summary, findings=findings, metrics=metrics,
             confidence=confidence,
             data_as_of=datetime.now() - timedelta(minutes=15),
+            data_status=data_status, evidence=evidence,
+            positive_basis=positive_basis, risk_clear=risk_clear,
+            observed_at=None,  # 캐시 히트 실제 시각은 알 수 없다 — 추정치(data_as_of)로 세탁 금지
+            limitations=["캐시 시각 미제공"],
         )
 
 
@@ -164,11 +276,17 @@ class TechnicalAnalyst:
             indicators_as_of: 그 지표가 계산된 시각.
                 스크리닝은 5분 주기라 심의 시점엔 최대 수십 분 지난 값일 수 있다.
                 None이면 현재로 간주하므로, 재사용 시 반드시 실제 시각을 넘길 것.
+                보유 재평가 경로(kr_scheduler)는 T11-C에서 실제 시각을 전달할
+                예정이다 — 그전까지 미전달 경로는 data_status="partial"로 남는다.
         """
         findings: List[str] = []
         metrics: Dict[str, Any] = dict(indicators or {})
         score = 0
         as_of = indicators_as_of or datetime.now()
+        # T11 (2026-09-15): data_as_of(위 as_of)는 신선도 감쇠용 "추정" 시각이라
+        # 호출 시각으로 채워도 무방하다(기존 동작 불변). 신규 observed_at은 정직한
+        # 관측 시각만 담는다 — 실제로 아는 경우에만 True로 바뀐다.
+        as_of_known = indicators_as_of is not None
 
         try:
             # 지표를 외부에서 받으면 그대로 쓴다 (스크리너가 이미 계산한 값 재사용)
@@ -184,23 +302,34 @@ class TechnicalAnalyst:
                         obs = getattr(last_idx, "to_pydatetime", None)
                         if obs is not None:
                             as_of = obs()
+                            as_of_known = True
                         elif isinstance(last_idx, datetime):
                             as_of = last_idx
+                            as_of_known = True
                     except (IndexError, AttributeError, TypeError, ValueError):
-                        pass    # 인덱스가 시각이 아니면 호출 시각을 유지
+                        pass    # 인덱스가 시각이 아니면 호출 시각을 유지 (as_of_known 그대로)
 
             if not metrics:
-                return AnalystReport.failed(
+                return _failed_report(
                     AnalystKind.TECHNICAL, symbol, "지표 없음"
                 )
 
             rsi = metrics.get("rsi_14")
             ma200_dist = metrics.get("ma200_distance_pct")
             atr_pct = metrics.get("atr_14")
-            vol_ratio = metrics.get("volume_ratio")
+            # T11 (C5): technical.py 생산자(두 경로 모두)는 "vol_ratio"를 낸다.
+            # "volume_ratio"는 존재하지 않는 키라 거래량 신호가 항상 미발동이었다.
+            vol_ratio = metrics.get("vol_ratio")
+
+            evidence: List[EvidenceItem] = []
 
             # RSI — 과열/과매도
             if rsi is not None:
+                evidence.append(EvidenceItem(
+                    source="technical.indicators", metric="rsi_14", value=rsi,
+                    unit="0-100", status="full" if as_of_known else "partial",
+                    kind="fact", observed_at=as_of if as_of_known else None,
+                ))
                 if rsi >= 75:
                     score -= 20
                     findings.append(f"RSI 과열 ({rsi:.0f})")
@@ -213,6 +342,12 @@ class TechnicalAnalyst:
 
             # MA200 이격 — 추세 위치
             if ma200_dist is not None:
+                evidence.append(EvidenceItem(
+                    source="technical.indicators", metric="ma200_distance_pct",
+                    value=ma200_dist, unit="%",
+                    status="full" if as_of_known else "partial",
+                    kind="fact", observed_at=as_of if as_of_known else None,
+                ))
                 if ma200_dist > 40:
                     score -= 15
                     findings.append(f"MA200 과대 이격 (+{ma200_dist:.0f}%)")
@@ -226,18 +361,29 @@ class TechnicalAnalyst:
             # 변동성
             if atr_pct is not None:
                 metrics["atr_14"] = atr_pct
+                evidence.append(EvidenceItem(
+                    source="technical.indicators", metric="atr_14", value=atr_pct,
+                    unit="%", status="full" if as_of_known else "partial",
+                    kind="fact", observed_at=as_of if as_of_known else None,
+                ))
                 if atr_pct > 7:
                     score -= 10
                     findings.append(f"변동성 과다 (ATR {atr_pct:.1f}%)")
 
             # 거래량
-            if vol_ratio is not None and vol_ratio >= 2.0:
-                score += 15
-                findings.append(f"거래량 급증 ({vol_ratio:.1f}배)")
+            if vol_ratio is not None:
+                evidence.append(EvidenceItem(
+                    source="technical.indicators", metric="vol_ratio", value=vol_ratio,
+                    unit="ratio", status="full" if as_of_known else "partial",
+                    kind="fact", observed_at=as_of if as_of_known else None,
+                ))
+                if vol_ratio >= 2.0:
+                    score += 15
+                    findings.append(f"거래량 급증 ({vol_ratio:.1f}배)")
 
         except Exception as e:
             logger.debug(f"[Analyst/technical] {symbol} 실패: {e}")
-            return AnalystReport.failed(AnalystKind.TECHNICAL, symbol, str(e))
+            return _failed_report(AnalystKind.TECHNICAL, symbol, str(e))
 
         score = max(-100, min(100, score))
         summary = "; ".join(findings[:3]) if findings else "지표 중립"
@@ -246,6 +392,10 @@ class TechnicalAnalyst:
             summary=summary, findings=findings, metrics=metrics,
             confidence=0.7 if findings else 0.4,
             data_as_of=as_of,
+            data_status="full" if as_of_known else "partial",
+            evidence=evidence,
+            observed_at=as_of if as_of_known else None,
+            limitations=[] if as_of_known else ["지표 시각 미상"],
         )
 
 
@@ -259,7 +409,7 @@ class NewsAnalyst:
 
     async def analyze(self, symbol: str, name: str = "") -> AnalystReport:
         if self._orch is None:
-            return AnalystReport.failed(AnalystKind.NEWS, symbol, "orchestrator 없음")
+            return _failed_report(AnalystKind.NEWS, symbol, "orchestrator 없음")
 
         try:
             data = await self._orch.get_news_sentiment(symbol)
@@ -270,6 +420,8 @@ class NewsAnalyst:
                 return AnalystReport(
                     kind=AnalystKind.NEWS, symbol=symbol, score=0,
                     summary="관련 뉴스 없음", confidence=0.0,
+                    data_status="insufficient",
+                    limitations=["헤드라인 기반", "캐시 시각 미제공"],
                 )
 
             # news_curator.get_symbol_sentiment 반환 스키마:
@@ -304,18 +456,40 @@ class NewsAnalyst:
             else:
                 confidence = 0.5
 
+            # T11 (C6): item_ids/dedup_removed는 news_curator.get_symbol_sentiment가
+            # _deduplicate 적용 후 채운다 — 같은 기사 재인용이 evidence를 부풀리지 않도록
+            # dedup_key로 원자료 식별자(url 또는 대체 식별자)를 보존한다.
+            item_ids = data.get("item_ids") or []
+            dedup_removed = int(data.get("dedup_removed", 0) or 0)
+            evidence = [
+                EvidenceItem(
+                    source="news_curator", metric="source_article", value=True,
+                    unit="bool", status="full", kind="fact",
+                    ref_id=iid, dedup_key=iid,
+                )
+                for iid in item_ids
+            ]
+
             # news_curator는 종목 sentiment를 1시간 TTL로 캐시한다 (_SYMBOL_TTL).
             # 캐시 생성 시각을 알 수 없어 보수적으로 TTL 절반을 가정한다.
             return AnalystReport(
                 kind=AnalystKind.NEWS, symbol=symbol, score=score,
                 summary=summary[:200], findings=findings,
-                metrics={"score": score, "tags": list(tags), "items": items},
+                metrics={"score": score, "tags": list(tags), "items": items,
+                         "dedup_removed": dedup_removed},
                 confidence=confidence,
                 data_as_of=datetime.now() - timedelta(minutes=30),
+                # T11 리뷰 반영(2026-09-15 advisory): 기사가 있어도 observed_at은
+                # 여전히 모르고 헤드라인 한정 판단이다 — technical의 "시각 미상=partial"
+                # 기준과 맞춰 full을 주장하지 않는다.
+                data_status="partial" if items > 0 else "insufficient",
+                evidence=evidence,
+                observed_at=None,  # 기사 게재 시각을 모른다 — 캐시 조회 시각으로 세탁 금지
+                limitations=["헤드라인 기반", "캐시 시각 미제공"],
             )
         except Exception as e:
             logger.debug(f"[Analyst/news] {symbol} 실패: {e}")
-            return AnalystReport.failed(AnalystKind.NEWS, symbol, str(e))
+            return _failed_report(AnalystKind.NEWS, symbol, str(e))
 
 
 class AnalystTeam:
@@ -340,9 +514,9 @@ class AnalystTeam:
             try:
                 return await asyncio.wait_for(coro, timeout=ANALYST_TIMEOUT)
             except asyncio.TimeoutError:
-                return AnalystReport.failed(kind, symbol, f"타임아웃({ANALYST_TIMEOUT}s)")
+                return _failed_report(kind, symbol, f"타임아웃({ANALYST_TIMEOUT}s)")
             except Exception as e:
-                return AnalystReport.failed(kind, symbol, str(e))
+                return _failed_report(kind, symbol, str(e))
 
         results = await asyncio.gather(
             _guard(self.fundamental.analyze(symbol, name), AnalystKind.FUNDAMENTAL),
@@ -396,7 +570,12 @@ class AnalystTeam:
         Returns:
             (ok: bool, reason: str, total_weight: float)
         """
-        valid = [r for r in reports if r.ok and not AnalystTeam.is_expired(r)]
+        # T11 (C4, 2026-09-15): confidence=0("정보 없음")인 보고서는 r.ok=True라서
+        # 이전에는 이 필터를 통과해 "유효 소스"로 잡혔다 — aggregate_score는 가중치 0이라
+        # 점수엔 영향이 없었지만, evidence_quality는 "유효 소스 수"를 세는 게 목적이라
+        # 정보가 전혀 없는 보고서까지 소스로 세면 근거량을 부풀린다.
+        valid = [r for r in reports
+                 if r.ok and r.confidence > 0 and not AnalystTeam.is_expired(r)]
         total_w = sum(r.freshness_decayed_confidence() for r in valid)
 
         expired = [r.kind.value for r in reports
