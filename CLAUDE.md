@@ -1,5 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
-> 최종 업데이트: 2026-09-15 (T11 에이전트 팀 근거·EntryPlan shadow 배포 — 15:41 KST main 8c27fe8, 상세는 docs/agents/trading-team.md T11 절)
+> 최종 업데이트: 2026-09-15 (T11 배포 15:41 `8c27fe8` → KIS 원장 8434R 페이지 종료·동기화 게이트 수정 18:31 `678e132` 배포, 상세는 CHANGELOG 최상단)
 
 ## 세션 시작 시 필수 읽기
 
@@ -301,6 +301,7 @@ result = value if value is not None else default
 - **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
 - **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일
 - **KIS 직접 호출은 `await kis_rate_limit.acquire(tr_id)` 선행**: 브로커·시세·스크리너가 같은 appkey라 초당 한도는 합산(EGW00201). 원장 TR(잔고/매수가능/체결/미체결)은 계좌당 초당 1건(EGW00215) — 새 원장 TR은 `utils/kis_rate_limit.LEDGER_TR_IDS`에 추가
+- **KIS 연속조회 종료는 응답 헤더 `tr_cont`(F/M 다음, D/E 마지막)로 판정** — 본문 `ctx_area_*100` 키는 마지막 페이지에도 채워져 오므로 종료 근거가 못 된다(2026-09-15 EGW00215 반복 원인: 보유 1종목 계좌가 8434R 을 10회 호출). `_api_get` 이 `data["_tr_cont"]` 로 실어 준다. 요청 헤더 `tr_cont: N` 은 아직 미송신(다중 페이지 후속)
 
 ---
 
