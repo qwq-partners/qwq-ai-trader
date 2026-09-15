@@ -107,13 +107,17 @@ class AnalystReport:
     # 이 보고서가 근거로 삼은 **데이터의 시각** (보고서 생성 시각이 아니다).
     # 캐시된 값을 썼다면 그 값이 만들어진 시점을 넣는다.
     # 장중 판단에 몇 시간 전 데이터를 쓰면서 그 사실을 모르는 것이 가장 위험하다.
-    data_as_of: datetime = field(default_factory=datetime.now)
+    data_as_of: Optional[datetime] = field(default_factory=datetime.now)
     # ── T11 근거 계약 (2026-09-15) — 기본값으로 하위 호환. 기존 score/confidence/data_as_of
     #    의미는 기준선으로 불변이며, 신규 shadow 판단(TeamAssessment)은 아래 필드만 읽는다.
     data_status: str = "unknown"                 # full | partial | insufficient | error | unknown(미판정)
     evidence: List[EvidenceItem] = field(default_factory=list)
     positive_basis: Optional[bool] = None        # 긍정적 투자 근거가 실제로 확인됐는가
     risk_clear: Optional[bool] = None            # 검증을 실제로 수행했고 위험을 발견하지 못했는가 (≠ 긍정 근거)
+    # 기존 score에 포함된 "검증 통과" 가산분. risk_clear와 독립적으로 보존해
+    # shadow merit이 DART 경고 뒤에도 그 가산분만 정확히 취소할 수 있게 한다.
+    # None은 T11 이전/외부 생산자이며 judgment가 legacy risk_clear 규칙으로 폴백한다.
+    validation_pass_bonus: Optional[int] = None
     observed_at: Optional[datetime] = None       # 정직한 관측 시각 — 모르면 None (data_as_of 추정치와 구분)
     limitations: List[str] = field(default_factory=list)   # 예: "헤드라인 기반", "캐시 시각 미제공"
 
@@ -123,8 +127,12 @@ class AnalystReport:
 
     @property
     def age_minutes(self) -> float:
+        """현재 시각 기준 근거 데이터 나이(분) — 기존 호출 하위 호환 프로퍼티."""
+        return self.age_minutes_at()
+
+    def age_minutes_at(self, now: Optional[datetime] = None) -> float:
         """
-        근거 데이터의 나이(분).
+        `now` 기준 근거 데이터의 나이(분).
 
         `data_as_of`가 tz-aware로 들어오면 naive `datetime.now()`와 빼는 순간
         TypeError가 나고, 이 프로퍼티는 종합 점수·프롬프트·저장 경로 전부에서 쓰이므로
@@ -132,14 +140,26 @@ class AnalystReport:
         """
         try:
             as_of = self.data_as_of
-            now = datetime.now(as_of.tzinfo) if as_of.tzinfo is not None else datetime.now()
-            return max(0.0, (now - as_of).total_seconds() / 60.0)
+            if as_of.tzinfo is not None:
+                if now is None:
+                    reference = datetime.now(as_of.tzinfo)
+                elif now.tzinfo is None:
+                    # naive decision_time은 기존 KST wall-clock 계약을 따른다.
+                    reference = now.replace(tzinfo=as_of.tzinfo)
+                else:
+                    reference = now
+            else:
+                reference = datetime.now() if now is None else (
+                    now.replace(tzinfo=None) if now.tzinfo is not None else now
+                )
+            return max(0.0, (reference - as_of).total_seconds() / 60.0)
         except (TypeError, AttributeError, OverflowError):
             # 시각을 신뢰할 수 없으면 "매우 오래된 것"으로 본다 —
             # 알 수 없는 데이터를 신선하다고 가정하는 쪽이 더 위험하다.
             return float("inf")
 
-    def freshness_decayed_confidence(self, half_life_min: float = 60.0) -> float:
+    def freshness_decayed_confidence(self, half_life_min: float = 60.0,
+                                     now: Optional[datetime] = None) -> float:
         """
         나이에 따라 감쇠시킨 신뢰도.
 
@@ -154,7 +174,7 @@ class AnalystReport:
         conf = min(1.0, conf)
         if half_life_min <= 0:
             return conf
-        age = self.age_minutes
+        age = self.age_minutes_at(now)
         if not math.isfinite(age):
             return 0.0          # 시각 불명 → 가중치 제외
         decay = 0.5 ** (age / half_life_min)
@@ -163,7 +183,8 @@ class AnalystReport:
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["kind"] = self.kind.value
-        d["data_as_of"] = self.data_as_of.isoformat(timespec="seconds")
+        d["data_as_of"] = (self.data_as_of.isoformat(timespec="seconds")
+                            if isinstance(self.data_as_of, datetime) else None)
         d["age_minutes"] = round(self.age_minutes, 1)
         d["evidence"] = [e.to_dict() for e in self.evidence]
         d["observed_at"] = (self.observed_at.isoformat(timespec="seconds")

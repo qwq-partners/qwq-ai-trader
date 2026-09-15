@@ -298,4 +298,6 @@ class DartChecker:
                 confidence_adjustment=0.10,
             )
         else:
-            return DartCheckResult()
+            # HTTP 200/status 000의 인식된 공시 목록은 위험·호재 키워드가 없어도
+            # 실제로 획득된 정상 중립 결과다. fetched=False는 HTTP/API 오류 전용이다.
+            return DartCheckResult(fetched=True)

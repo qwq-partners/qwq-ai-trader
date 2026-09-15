@@ -95,6 +95,7 @@ class FundamentalAnalyst:
         evidence: List[EvidenceItem] = []
         positive_basis: Optional[bool] = None
         risk_clear: Optional[bool] = None
+        validation_pass_bonus = 0
         data_status = "full" if self._validator is not None else "partial"
 
         if self._validator is None and self._dart is None:
@@ -157,6 +158,7 @@ class FundamentalAnalyst:
                     findings.append(f"검증 실패: {reason[:60]}")
                 elif passed is True:
                     score += 10
+                    validation_pass_bonus = 10
 
                 confidence = 0.7
 
@@ -272,6 +274,7 @@ class FundamentalAnalyst:
             data_as_of=datetime.now() - timedelta(minutes=15),
             data_status=data_status, evidence=evidence,
             positive_basis=positive_basis, risk_clear=risk_clear,
+            validation_pass_bonus=validation_pass_bonus,
             observed_at=None,  # 캐시 히트 실제 시각은 알 수 없다 — 추정치(data_as_of)로 세탁 금지
             limitations=["캐시 시각 미제공"],
         )
@@ -571,7 +574,8 @@ class AnalystTeam:
 
     @staticmethod
     def aggregate_score(reports: List[AnalystReport],
-                        apply_freshness_decay: bool = True) -> int:
+                        apply_freshness_decay: bool = True,
+                        now: Optional[datetime] = None) -> int:
         """
         신뢰도 가중 평균 점수 (-100 ~ +100).
 
@@ -584,9 +588,9 @@ class AnalystTeam:
         weighted = 0.0
         total_w = 0.0
         for r in reports:
-            if not r.ok or AnalystTeam.is_expired(r):
+            if not r.ok or AnalystTeam.is_expired(r, now=now):
                 continue
-            w = (r.freshness_decayed_confidence() if apply_freshness_decay
+            w = (r.freshness_decayed_confidence(now=now) if apply_freshness_decay
                  else max(0.0, r.confidence))
             weighted += r.score * w
             total_w += w
@@ -595,15 +599,15 @@ class AnalystTeam:
         return int(round(weighted / total_w))
 
     @staticmethod
-    def is_expired(report: AnalystReport) -> bool:
+    def is_expired(report: AnalystReport, now: Optional[datetime] = None) -> bool:
         """소스별 hard TTL 초과 여부 — 초과분은 집계에서 통째로 제외한다"""
         ttl = HARD_TTL_MIN.get(report.kind.value)
         if ttl is None:
             return False
-        return report.age_minutes > ttl
+        return report.age_minutes_at(now) > ttl
 
     @staticmethod
-    def evidence_quality(reports: List[AnalystReport]) -> tuple:
+    def evidence_quality(reports: List[AnalystReport], now: Optional[datetime] = None) -> tuple:
         """
         매수 판단을 내려도 될 만큼 근거가 남아 있는지 검사한다.
 
@@ -618,11 +622,11 @@ class AnalystTeam:
         # 점수엔 영향이 없었지만, evidence_quality는 "유효 소스 수"를 세는 게 목적이라
         # 정보가 전혀 없는 보고서까지 소스로 세면 근거량을 부풀린다.
         valid = [r for r in reports
-                 if r.ok and r.confidence > 0 and not AnalystTeam.is_expired(r)]
-        total_w = sum(r.freshness_decayed_confidence() for r in valid)
+                 if r.ok and r.confidence > 0 and not AnalystTeam.is_expired(r, now=now)]
+        total_w = sum(r.freshness_decayed_confidence(now=now) for r in valid)
 
         expired = [r.kind.value for r in reports
-                   if r.ok and AnalystTeam.is_expired(r)]
+                   if r.ok and AnalystTeam.is_expired(r, now=now)]
         if len(valid) < MIN_VALID_SOURCES:
             return (False,
                     f"유효 근거 {len(valid)}개 < {MIN_VALID_SOURCES}개"
@@ -636,13 +640,13 @@ class AnalystTeam:
         return (True, "", total_w)
 
     @staticmethod
-    def freshness_summary(reports: List[AnalystReport]) -> str:
+    def freshness_summary(reports: List[AnalystReport], now: Optional[datetime] = None) -> str:
         """보고서별 데이터 나이 요약 (토론 프롬프트·로그용)"""
         parts = []
         for r in reports:
             if not r.ok:
                 continue
-            age = r.age_minutes
+            age = r.age_minutes_at(now)
             parts.append(f"{r.kind.value} {age:.0f}분 전" if age >= 1
                          else f"{r.kind.value} 실시간")
         return ", ".join(parts)
