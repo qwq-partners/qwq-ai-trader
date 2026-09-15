@@ -113,23 +113,36 @@ class StockValidator:
         """
         try:
             # 5개 검증 병렬 실행
-            news_result, dart_result, sd_result, ss_result, tb_result = await asyncio.gather(
-                self._safe_check_news(symbol, stock_name),
-                self._safe_check_dart(symbol),
-                self._safe_check_supply_demand(symbol),
-                self._safe_check_short_selling(symbol),
-                self._safe_check_trend_buzz(stock_name),
-            )
+            news_result, dart_result, (sd_result, sd_ok), (ss_result, ss_ok), tb_result = \
+                await asyncio.gather(
+                    self._safe_check_news(symbol, stock_name),
+                    self._safe_check_dart(symbol),
+                    self._safe_check_supply_demand(symbol),
+                    self._safe_check_short_selling(symbol),
+                    self._safe_check_trend_buzz(stock_name),
+                )
 
-            # T11: 수급 검증(공매도·순매수)은 MCP(pykrx) 연결이 있어야 실제로 수행된다.
-            # MCP 미연결이면 _safe_check_supply_demand가 예외 없이 "순매수 없음" 기본값을
-            # 조용히 돌려주므로, approved만 보면 "검증해서 통과"와 "확인 못 함"을 구분할 수
-            # 없다 — 그 구분을 validated/data_status로 명시한다 (approved 자체는 불변).
-            mcp_ok = bool(self._mcp_manager) and self._mcp_manager.is_server_available("pykrx")
+            # T11 리뷰 수정(2026-09-15, R-A r3 blocking #2): validated/data_status는
+            # "MCP 서버가 연결돼 있는가"(mcp_ok)가 아니라 "하위 검증이 실제로 값을
+            # 얻었는가"에서 유도한다 — mcp_ok만 보면 서버는 붙어 있는데
+            # _safe_check_supply_demand 내부에서 fetch가 실패(예외 흡수)해 기본값으로
+            # 조용히 대체된 경우도 "검증됐고 위험 없음"(validated=True/full)으로
+            # 잘못 보고됐다. 공매도는 pykrx-mcp에 도구가 아예 없어(구조적 영구 부재,
+            # _safe_check_short_selling 참조) 항상 ss_ok=False다 — 이건 "실패"가
+            # 아니므로 최소 partial로만 내리고 insufficient로 떨어뜨리지 않는다.
+            mcp_ok = self._mcp_available("pykrx")
+            if not mcp_ok:
+                validated, data_status = False, "insufficient"
+            elif not sd_ok:
+                validated, data_status = False, "insufficient"
+            elif not ss_ok:
+                validated, data_status = True, "partial"
+            else:
+                validated, data_status = True, "full"
 
             # DART block 공시 → 즉시 차단 (DART 자체는 실제 위험을 발견한 확정 판단이라
-            # validated=True 고정이지만, 같이 조회된 supply_demand/short_selling 은
-            # mcp_ok 가 아니면 실제 조회된 값이 아니다 — data_status 는 그대로 반영)
+            # validated=True 고정이지만, data_status는 같이 조회된 supply_demand/
+            # short_selling의 실제 획득 여부를 그대로 반영한다)
             if dart_result.risk_level == "block":
                 reason = f"위험 공시 감지: {', '.join(dart_result.risk_disclosures[:3])}"
                 logger.info(f"[종목검증] {symbol} {stock_name} 차단: {reason}")
@@ -143,7 +156,7 @@ class StockValidator:
                     short_selling_result=ss_result,
                     trend_buzz_result=tb_result,
                     validated=True,
-                    data_status="full" if mcp_ok else "insufficient",
+                    data_status=data_status,
                 )
 
             # confidence 조정 합산 (범위 제한: -0.30 ~ +0.25)
@@ -164,8 +177,8 @@ class StockValidator:
                 supply_demand_result=sd_result,
                 short_selling_result=ss_result,
                 trend_buzz_result=tb_result,
-                validated=mcp_ok,
-                data_status="full" if mcp_ok else "insufficient",
+                validated=validated,
+                data_status=data_status,
             )
 
         except Exception as e:
@@ -195,32 +208,58 @@ class StockValidator:
 
     # ───────────────────── MCP 기반 검증 (수급/공매도/트렌드) ─────────────────────
 
-    async def _safe_check_supply_demand(self, symbol: str) -> SupplyDemandResult:
-        """외국인/기관 수급 검증 (캐시 30분, 예외 안전)"""
-        if not self._mcp_manager or not self._mcp_manager.is_server_available("pykrx"):
-            return SupplyDemandResult()
+    def _mcp_available(self, server: str) -> bool:
+        """is_server_available 호출 보호 (advisory, 2026-09-15).
+
+        덕타이핑 MCP 매니저 구현체가 예외를 던지면 validate() 전체가 무너지는
+        대신 '미연결'로 안전하게 처리한다.
+        """
+        if not self._mcp_manager:
+            return False
+        try:
+            return bool(self._mcp_manager.is_server_available(server))
+        except Exception as e:
+            logger.debug(f"[종목검증] MCP 가용성 확인 실패({server}): {e}")
+            return False
+
+    async def _safe_check_supply_demand(self, symbol: str) -> Tuple[SupplyDemandResult, bool]:
+        """외국인/기관 수급 검증 (캐시 30분, 예외 안전)
+
+        Returns:
+            (result, ok) — ok=True는 실제 조회(또는 캐시 재사용)로 얻은 값,
+            False는 MCP 미연결·조회 실패로 기본값을 대신 돌려준 경우다.
+            T11 리뷰 수정(blocking #2, 2026-09-15): validate()가 이 ok를 그대로
+            반영해야 "연결됐지만 fetch 실패"를 "검증 통과"로 오판하지 않는다.
+        """
+        if not self._mcp_available("pykrx"):
+            return SupplyDemandResult(), False
 
         # 캐시 확인
         cached = self._get_cache(self._supply_demand_cache, symbol, self._SUPPLY_DEMAND_TTL)
         if cached is not None:
-            return cached
+            return cached, True
 
         try:
             result = await self._fetch_supply_demand(symbol)
             self._set_cache(self._supply_demand_cache, symbol, result, self._CACHE_MAX_SIZE)
-            return result
+            return result, True
         except Exception as e:
             logger.debug(f"[종목검증] 수급 검증 오류 ({symbol}): {e}")
-            return SupplyDemandResult()
+            return SupplyDemandResult(), False
 
-    async def _safe_check_short_selling(self, symbol: str) -> ShortSellingResult:
-        """공매도 상위 검증 (pykrx-mcp v0.1.3에 도구 미제공 → 즉시 기본값)"""
+    async def _safe_check_short_selling(self, symbol: str) -> Tuple[ShortSellingResult, bool]:
+        """공매도 상위 검증 (pykrx-mcp v0.1.3에 도구 미제공 → 즉시 기본값)
+
+        ok=False 고정 — 예외로 인한 '실패'가 아니라 도구가 구조적으로 영구
+        부재하다는 뜻이다. validate()는 이를 실제 실패(sd_ok=False)와 구분해
+        최소 partial로만 내린다(insufficient로 떨어뜨리지 않음).
+        """
         # 향후 pykrx-mcp에 공매도 도구 추가 시 캐시 로직 복원
-        return ShortSellingResult()
+        return ShortSellingResult(), False
 
     async def _safe_check_trend_buzz(self, stock_name: str) -> TrendBuzzResult:
         """검색 트렌드 검증 (캐시 2시간, 예외 안전)"""
-        if not self._mcp_manager or not self._mcp_manager.is_server_available("naver_search"):
+        if not self._mcp_available("naver_search"):
             return TrendBuzzResult()
 
         cached = self._get_cache(self._trend_buzz_cache, stock_name, self._TREND_BUZZ_TTL)

@@ -59,6 +59,20 @@ def _failed_report(kind: AnalystKind, symbol: str, error: str) -> AnalystReport:
     return report
 
 
+def _append_evidence(evidence: List[EvidenceItem], **kwargs) -> None:
+    """EvidenceItem 생성을 개별 보호한다.
+
+    R-A r3 blocking #3 (2026-09-15) 원칙의 확장: 근거(evidence) 조립은
+    shadow 판단 전용이고 score/confidence(돈 경로)와 무관하다 — 여기서 실패해도
+    그 소스가 이미 계산한 score/confidence/findings/error 까지 끌고 내려가면
+    안 된다. 실패하면 그 근거 1건만 조용히 빠진다(디버그 로그만 남김).
+    """
+    try:
+        evidence.append(EvidenceItem(**kwargs))
+    except Exception as e:
+        logger.debug(f"[Analyst] evidence 구성 실패(metric={kwargs.get('metric')}): {e}")
+
+
 class FundamentalAnalyst:
     """공시·수급·공매도 기반 펀더멘탈 관점"""
 
@@ -154,44 +168,50 @@ class FundamentalAnalyst:
                     risk_clear = (passed is True) if passed is not None else None
                     positive_basis = (foreign or inst) if sd is not None else None
                     if passed is True:
-                        evidence.append(EvidenceItem(
+                        _append_evidence(
+                            evidence,
                             source="stock_validator", metric="risk_clear", value=True,
                             unit="bool", status="full", kind="fact",
                             note="검증 통과 — 위험 미발견",
-                        ))
+                        )
                     elif passed is False:
-                        evidence.append(EvidenceItem(
+                        _append_evidence(
+                            evidence,
                             source="stock_validator", metric="risk_clear", value=False,
                             unit="bool", status="full", kind="fact",
                             note=f"검증 실패: {reason[:60]}",
-                        ))
+                        )
                     if foreign:
-                        evidence.append(EvidenceItem(
+                        _append_evidence(
+                            evidence,
                             source="stock_validator.supply_demand", metric="foreign_net_buying",
                             value=True, unit="bool", status="full", kind="fact",
-                        ))
+                        )
                     if inst:
-                        evidence.append(EvidenceItem(
+                        _append_evidence(
+                            evidence,
                             source="stock_validator.supply_demand",
                             metric="institutional_net_buying",
                             value=True, unit="bool", status="full", kind="fact",
-                        ))
+                        )
                     if ss_top50:
-                        evidence.append(EvidenceItem(
+                        _append_evidence(
+                            evidence,
                             source="stock_validator.short_selling", metric="short_top50",
                             value=True, unit="bool", status="full", kind="fact",
-                        ))
+                        )
                 else:
                     # 실제로 검증을 수행하지 못했다 — 긍정 근거도 위험 미발견도 주장하지 않는다.
                     data_status = v_status
                     # T11 리뷰 반영(2026-09-15 advisory): EvidenceItem.status 어휘는
                     # EVIDENCE_STATUS(full/partial/insufficient/error)뿐이다 — 보고서
                     # 수준 data_status만 허용하는 "unknown"을 여기 그대로 흘리지 않는다.
-                    evidence.append(EvidenceItem(
+                    _append_evidence(
+                        evidence,
                         source="stock_validator", metric="validated", value=False,
                         status=v_status if v_status != "unknown" else "insufficient",
                         kind="fact", note="검증 미수행 또는 실패",
-                    ))
+                    )
 
             # 2) 공시 이상 징후 (self._validator와 독립적인 별도 직접 조회)
             #    T11 리뷰 반영(2026-09-15 blocking B1): 생산자 DartCheckResult
@@ -208,20 +228,22 @@ class FundamentalAnalyst:
                     confidence = max(confidence, 0.8)
                     if items:
                         findings.append(f"공시 위험 신호 {len(items)}건")
-                        evidence.append(EvidenceItem(
+                        _append_evidence(
+                            evidence,
                             source="dart_checker", metric="dart_risk_items", value=len(items),
                             unit="count", status="full", kind="fact",
                             note=f"공시 위험 신호 {len(items)}건",
-                        ))
+                        )
                     else:
                         # has_risk=True인데 세부 항목이 비었다 — 0건이라는 "사실"이
                         # 아니라 결측이다. value=None/status=partial로 정직하게 남긴다.
                         findings.append("공시 위험 신호 감지(세부 항목 미상)")
-                        evidence.append(EvidenceItem(
+                        _append_evidence(
+                            evidence,
                             source="dart_checker", metric="dart_risk_items", value=None,
                             unit="count", status="partial", kind="fact",
                             note="공시 위험 감지되었으나 세부 항목 미상",
-                        ))
+                        )
                     # T11 리뷰 반영(2026-09-15 blocking B2): stock_validator가 앞서
                     # '검증 통과 — 위험 미발견'으로 risk_clear=True를 적재했더라도,
                     # DART가 별도 위험을 발견하면 그 주장은 더 이상 성립하지 않는다.
@@ -325,11 +347,12 @@ class TechnicalAnalyst:
 
             # RSI — 과열/과매도
             if rsi is not None:
-                evidence.append(EvidenceItem(
+                _append_evidence(
+                    evidence,
                     source="technical.indicators", metric="rsi_14", value=rsi,
                     unit="0-100", status="full" if as_of_known else "partial",
                     kind="fact", observed_at=as_of if as_of_known else None,
-                ))
+                )
                 if rsi >= 75:
                     score -= 20
                     findings.append(f"RSI 과열 ({rsi:.0f})")
@@ -342,12 +365,13 @@ class TechnicalAnalyst:
 
             # MA200 이격 — 추세 위치
             if ma200_dist is not None:
-                evidence.append(EvidenceItem(
+                _append_evidence(
+                    evidence,
                     source="technical.indicators", metric="ma200_distance_pct",
                     value=ma200_dist, unit="%",
                     status="full" if as_of_known else "partial",
                     kind="fact", observed_at=as_of if as_of_known else None,
-                ))
+                )
                 if ma200_dist > 40:
                     score -= 15
                     findings.append(f"MA200 과대 이격 (+{ma200_dist:.0f}%)")
@@ -361,22 +385,24 @@ class TechnicalAnalyst:
             # 변동성
             if atr_pct is not None:
                 metrics["atr_14"] = atr_pct
-                evidence.append(EvidenceItem(
+                _append_evidence(
+                    evidence,
                     source="technical.indicators", metric="atr_14", value=atr_pct,
                     unit="%", status="full" if as_of_known else "partial",
                     kind="fact", observed_at=as_of if as_of_known else None,
-                ))
+                )
                 if atr_pct > 7:
                     score -= 10
                     findings.append(f"변동성 과다 (ATR {atr_pct:.1f}%)")
 
             # 거래량
             if vol_ratio is not None:
-                evidence.append(EvidenceItem(
+                _append_evidence(
+                    evidence,
                     source="technical.indicators", metric="vol_ratio", value=vol_ratio,
                     unit="ratio", status="full" if as_of_known else "partial",
                     kind="fact", observed_at=as_of if as_of_known else None,
-                ))
+                )
                 if vol_ratio >= 2.0:
                     score += 15
                     findings.append(f"거래량 급증 ({vol_ratio:.1f}배)")
@@ -459,8 +485,25 @@ class NewsAnalyst:
             # T11 (C6): item_ids/dedup_removed는 news_curator.get_symbol_sentiment가
             # _deduplicate 적용 후 채운다 — 같은 기사 재인용이 evidence를 부풀리지 않도록
             # dedup_key로 원자료 식별자(url 또는 대체 식별자)를 보존한다.
-            item_ids = data.get("item_ids") or []
-            dedup_removed = int(data.get("dedup_removed", 0) or 0)
+            # R-A r3 blocking #3 (2026-09-15): 이 shadow 전용 필드 파싱은 위 score/
+            # confidence/findings(돈 경로) 계산과 별도 try로 감싼다 — news_curator가
+            # 규약과 다른 값(item_ids가 리스트가 아니거나 dedup_removed가 숫자로 못
+            # 바뀌는 값)을 주면 이전엔 바깥 try가 삼켜 보고서 전체가 failed(score=0)로
+            # 떨어졌다(부정 뉴스 소실 → 매수가 쉬워짐). 여기서만 실패하고 evidence=[]·
+            # dedup_removed=None으로 조용히 넘어간다.
+            item_ids: List[str] = []
+            dedup_removed: Optional[int] = None
+            try:
+                raw_ids = data.get("item_ids")
+                if isinstance(raw_ids, list):
+                    item_ids = [str(i) for i in raw_ids]
+                raw_dedup = data.get("dedup_removed")
+                if raw_dedup is not None:
+                    dedup_removed = int(raw_dedup)
+            except (TypeError, ValueError) as e:
+                logger.debug(f"[Analyst/news] {symbol} shadow 필드(item_ids/dedup_removed) 오염: {e}")
+                item_ids = []
+                dedup_removed = None
             evidence = [
                 EvidenceItem(
                     source="news_curator", metric="source_article", value=True,

@@ -165,7 +165,12 @@ class NewsCurator(ExpertAgent):
                 # T11 (2026-09-15, C6): _analyze()는 시장 뉴스에 _deduplicate를 쓰지만
                 # 이 경로는 빠져 있었다 — 같은 기사가 여러 검색어로 재수집되면
                 # sentiment·tags가 같은 기사 재인용만으로 부풀려진다.
+                # R-A r3 blocking #1 (2026-09-15): URL 선행 dedup은 이전에 공유
+                # _deduplicate 안에 있어 _analyze(시장 뉴스) 결과까지 바꿨다 — 여기
+                # (종목별 경로) 전용으로 한정한다. Jaccard dedup(_deduplicate)은
+                # 그대로 공유해 두 경로 모두 헤드라인 유사 기사는 걸러진다.
                 fetched_count = len(items)
+                items = self._url_dedup(items)
                 items = self._deduplicate(items)
                 await self._classify_batch(items)
                 self._inc_call_count()  # LLM 분류 1회 카운트
@@ -317,25 +322,29 @@ class NewsCurator(ExpertAgent):
         return items[:5]
 
     # ─────────────────────────────────────────
-    # 중복 제거 (URL 동일 + Jaccard ≥ 0.6)
+    # URL 동일 기사 제거 — get_symbol_sentiment(종목별) 전용
+    # R-A r3 blocking #1 (2026-09-15): _analyze(시장 뉴스)와 공유하지 않는다 —
+    # 검색어별로 같은 기사가 재수집되는 것은 종목별 경로 특유의 패턴이고,
+    # 여기서 URL 선행 제거를 하면 시장 sentiment(item_count/confidence)가
+    # 의도치 않게 바뀐다.
     # ─────────────────────────────────────────
-    def _deduplicate(self, items: List[NewsItem]) -> List[NewsItem]:
+    def _url_dedup(self, items: List[NewsItem]) -> List[NewsItem]:
         if len(items) <= 1:
             return items
-        # T11 (2026-09-15, C6 리뷰 반영): 같은 URL 기사가 헤드라인만 바뀌어
-        # 재수집되면 토큰 Jaccard 유사도로 못 거르는 경우가 있다(리뷰 blocking) —
-        # URL이 있는 기사는 먼저 URL 기준으로 1건만 남긴다. 이 함수는 시장 뉴스
-        # (_analyze)와 종목별 뉴스(get_symbol_sentiment) 양쪽이 공유하므로
-        # 여기 한 곳만 고치면 두 경로 모두 수정된다.
         seen_urls: Set[str] = set()
-        url_deduped: List[NewsItem] = []
+        out: List[NewsItem] = []
         for it in items:
             if it.url:
                 if it.url in seen_urls:
                     continue
                 seen_urls.add(it.url)
-            url_deduped.append(it)
-        items = url_deduped
+            out.append(it)
+        return out
+
+    # ─────────────────────────────────────────
+    # 중복 제거 (Jaccard ≥ 0.6) — 시장 뉴스(_analyze)·종목별 뉴스 양쪽이 공유
+    # ─────────────────────────────────────────
+    def _deduplicate(self, items: List[NewsItem]) -> List[NewsItem]:
         if len(items) <= 1:
             return items
         kept: List[NewsItem] = []
