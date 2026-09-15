@@ -113,7 +113,11 @@ def _mk_candidate(symbol: str, day: str = "2026-08-01"):
         date=day, symbol=symbol, strategy="sepa_trend", setup="sepa_pullback",
         plan={"score": 80, "stop_price": 9500.0, "entry_band_low": 0, "max_entry_price": 11000.0,
               "trigger": {}, "entry_mode": "close"},
-        evidence=[{"kind": "technical", "score": 20, "confidence": 0.7, "positive_basis": True, "error": None}],
+        # data_status/evidence(kind=fact) 채움 — judgment.assess 가 "A 근거계약 미배선" abstain
+        # 폴백 대신 실제 근거 기반 merit 을 계산하게 한다(D 3차, 정책 B/C 재배선 §2.5).
+        evidence=[{"kind": "technical", "score": 20, "confidence": 0.7, "positive_basis": True, "error": None,
+                   "data_status": "full",
+                   "evidence": [{"source": "t", "metric": "score", "value": 20, "status": "full", "kind": "fact"}]}],
         votes=votes, prices=prices, synthetic=True,
     )
 

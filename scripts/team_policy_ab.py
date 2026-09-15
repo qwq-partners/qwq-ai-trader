@@ -14,17 +14,22 @@
 사후에 정책을 끼워 맞추지 않는다(사후 선별 금지).
 
 실험:
-    selection — 정책(A/B/C)만 비교. 진입=다음 거래일 시가, 청산=live 청산정책 미러,
-                위험예산·비용 고정.
+    selection — 정책(A/B/C)만 비교. 진입=다음 거래일 시가, 청산=분할익절·트레일링·손절
+                사다리만 미러(stale_exit/stale_high 시간 기반 청산은 미구현 — known_limitations
+                참조), 위험예산·비용 고정.
     timing    — 선정은 고정(기본 C 정책)하고 진입만 비교: 기존(다음 시가 즉시) vs
                 EntryPlan 조건부(`src.execution.entry_plan.check_entry_plan` 을 그대로
-                재사용 — 판정 로직을 여기서 중복 구현하지 않는다). checker 가 아직
-                placeholder(CHECKER_NOT_IMPLEMENTED)면 전부 미체결이 나오는 게 정상이다.
+                재사용 — 판정 로직을 여기서 중복 구현하지 않는다). checker 판정(allow/wait/
+                reject)을 그대로 따른다 — 러너가 자체적으로 체결 여부를 다시 판정하지 않는다.
 
 입력 스냅샷(JSONL, 한 줄 = 후보 1건):
     {"date": "2026-08-01", "symbol": "005930", "strategy": "sepa_trend", "setup": "sepa_pullback",
      "plan": {...PendingSignal.to_dict() 형태 — score/stop_price/entry_band_low/trigger/max_entry_price...},
-     "evidence": [...AnalystReport.to_dict() 형태 3건(fundamental/technical/news)...],
+     "evidence": [...AnalystReport.to_dict() 형태 3건(fundamental/technical/news) — 정책 B/C 를
+       judgment.assess 로 판정하려면 각 보고서에 data_status("full"/"partial")와 근거
+       evidence(kind="fact", status, value) 를 채워야 한다. 전부 data_status="unknown"(기본값)
+       이면 judgment.assess 는 "A(근거 계약) 미배선" 상태로 보고 merit_status 를 abstain 으로
+       고정한다 — 이땐 B/C 선정이 0건이어도 버그가 아니다...],
      "votes": {"r1": {"bull": true, "bear": true}, "r2": {"bull": true, "bear": true}},
      "prices": [{"date": "2026-08-01", "open":.., "high":.., "low":.., "close":..}, ...],
      "synthetic": true}   # 합성 fixture 면 true — 하나라도 없으면 전체를 "unverified" 로 표시
@@ -54,18 +59,31 @@ if str(ROOT) not in sys.path:
 
 from src.utils.fee_calculator import get_fee_calculator  # noqa: E402
 from src.execution.entry_plan import check_entry_plan  # noqa: E402
+from src.agents import judgment  # noqa: E402
+from src.agents.types import (  # noqa: E402
+    AnalystKind, AnalystReport, ASSESSMENT_POLICY_VERSION, DebateResult, DebateTurn, EvidenceItem,
+)
 
 POLICIES = ("A", "B", "C")
 EXPERIMENTS = ("selection", "timing")
 
-# ── 청산정책 임계값 — CLAUDE.md "청산 관리(ExitManager)" 절 그대로 미러 (계획값, 사후 변경 금지) ──
+# ── 청산정책 임계값 — CLAUDE.md "청산 관리(ExitManager)"의 분할익절·트레일링·손절 사다리만
+#    미러한다(계획값, 사후 변경 금지). stale_exit/stale_high(시간 기반 강제청산, 실엔진
+#    HOLDING_POLICIES)는 미구현이다 — known_limitations 참조, 이 절 자체가 "live 완전 미러"는
+#    아니다 ──
 DEFAULT_SL_PCT = 5.0            # ATR 동적 손절 기본값 (plan.stop_price 없을 때만 대체 사용)
 TP1_PCT, TP1_FRAC = 10.0, 0.10  # 1차 익절
 TP2_PCT, TP2_FRAC = 15.0, 0.50  # 2차 익절
 TP3_PCT, TP3_FRAC = 25.0, 0.50  # 3차 익절
 TRAIL_ARM_PCT = 5.0             # 트레일링 활성화 임계 수익률
 TRAIL_DD_PCT = 3.0              # 트레일링 낙폭
-MAX_HOLD_DAYS = 20               # 관찰 창 상한(연구용) — 이 안에 청산 안 되면 미완결로 제외
+# 관찰 창 상한(연구용, 사전등록값 — 결과 보고 바꾸지 않음). 실엔진 setup별 live max_holding
+# (예: scripts/backtest_strategies.HOLDING_POLICIES['current']['sepa_max_holding_days']=10)
+# 보다 느슨하다 — 이 안에 손절/익절/트레일링이 없으면 예전엔 "미완결로 제외"했으나(결과와
+# 상관된 표본 탈락 — 손실은 빨리 손절돼 빠지고 승자는 미완결로 빠지는 하방 편향, 리뷰
+# blocking 2026-09-15), 이제 관찰 창 마지막 봉 종가로 잔여 전량을 강제 청산해 완결로 센다
+# (exit_reason="max_holding").
+MAX_HOLD_DAYS = 20
 
 DEFAULT_MAX_NEW_PER_DAY = 5      # CLAUDE.md KR 리스크 "일일 신규 매수 5개" 미러
 
@@ -73,12 +91,16 @@ DEFAULT_MAX_NEW_PER_DAY = 5      # CLAUDE.md KR 리스크 "일일 신규 매수 
 PRE_REGISTERED = {
     "primary_metric": "포지션당 비용 차감 R(risk-adjusted return) — 중앙값·평균",
     "mde": "중앙값 R +0.10 (≈ 왕복 수수료 0.227%의 SL 5% 대비 2배)",
-    "holding_assumption": f"최대 관찰 {MAX_HOLD_DAYS}거래일, 이 안에 청산 트리거 없으면 미완결로 제외",
+    "holding_assumption": (
+        f"최대 관찰 {MAX_HOLD_DAYS}거래일 — 그 안에 손절/익절/트레일링이 없으면 마지막 관측 봉 "
+        f"종가로 잔여 전량을 강제 청산해 완결로 센다(exit_reason=max_holding, 탈락 아님). "
+        f"실엔진 setup별 live max_holding(예: sepa 10거래일)보다 느슨한 근사치다."
+    ),
     "exit_assumption": (
         f"1차 +{TP1_PCT}%→{TP1_FRAC*100:.0f}%(원금 대비=잔여 대비, 시점상 동일) 매도, "
         f"2차 +{TP2_PCT}%→잔여의 {TP2_FRAC*100:.0f}%, 3차 +{TP3_PCT}%→잔여의 {TP3_FRAC*100:.0f}% "
         f"(1·2·3차 모두 마쳐도 잔여 {((1-TP1_FRAC)*(1-TP2_FRAC)*(1-TP3_FRAC))*100:.1f}% 남아 "
-        f"트레일링·손절로만 종결 가능 — live 미러) · "
+        f"트레일링·손절·관찰창 만기로만 종결 가능 — 사다리만 미러, stale_exit/stale_high 미구현) · "
         f"트레일링 +{TRAIL_ARM_PCT}%↑ 고점대비 -{TRAIL_DD_PCT}% · "
         f"손절 plan.stop_price(없으면 {DEFAULT_SL_PCT}%) · 같은 날 손절·익절 동시 충족 시 손절 우선(보수적)"
     ),
@@ -99,9 +121,14 @@ PRE_REGISTERED = {
     ),
     "benchmark": "KODEX200(069500) — 로컬 가격 캐시가 없으면 null. 초과수익은 계산하지 않는다(경로만 기록).",
     "policy_bc_implementation": (
-        "정책 B/C 는 이 SHA 시점에 src.agents.judgment.assess 가 없어 이 러너 자체 구현"
-        "(r1_assess/_usable_reports/unanimous_r2)을 근사치로 쓴다 — 실제 배포된 judgment.assess 결과와 "
-        "다를 수 있다. 통합 후에는 judgment.assess 로 재배선해야 한다."
+        f"판단 정책 = src.agents.judgment.assess (policy_version={ASSESSMENT_POLICY_VERSION}) — "
+        "스냅샷의 evidence(AnalystReport.to_dict() 형태)·votes 를 AnalystReport/DebateResult 로 "
+        "복원해 호출한다(이 러너가 merit/위험/자료충분성을 자체 근사하지 않는다). "
+        "B 는 votes.r1 을 최종 표로 준 DebateResult(R1 독립 판단만, 토론 전), "
+        "C 는 votes.r2 를 최종 표로 준 DebateResult(R2 토론 후 만장일치)로 각각 재평가한다. "
+        "스냅샷 evidence 가 data_status(full/partial)·근거(evidence, kind=fact) 를 채우지 않으면 "
+        "(=A 근거계약 미배선, 전 보고서 data_status=unknown) judgment.assess 는 merit_status 를 "
+        "abstain 으로 고정한다 — 이때 B/C 선정이 0건이어도 버그가 아니다."
     ),
     "llm_reeval_limitation": (
         "과거 판단을 재현하는 R1/R2 표결·근거는 스냅샷 시점에 실제로 LLM 이 낸 결과가 아니라면 "
@@ -109,10 +136,13 @@ PRE_REGISTERED = {
         "온 것이 아니라 사후 재평가로 만들어졌다면 이 한계가 적용된다."
     ),
     "known_limitations": (
-        "(1) MAX_HOLD_DAYS 안에 청산 안 된 포지션은 완결 표본에서 제외한다(incomplete) — "
-        "손실은 대부분 손절로 빨리 종결되고 꾸준히 오르는 승자는 미완결로 빠지기 쉬워 중앙값 R이 "
-        "하방 편향될 수 있다. results 의 incomplete 건수를 함께 확인할 것. "
-        "(2) simulate_exit 은 같은 봉의 고가로 트레일링을 무장하고 같은 봉의 저가로 발동시킨다 — "
+        "(1) MAX_HOLD_DAYS 안에 손절/익절/트레일링이 없으면 마지막 관측 봉 종가로 강제 청산한다"
+        "(exit_reason=max_holding) — 실제 체결이 아니라 관찰 창 마감 시점의 근사 마킹이고, "
+        "실엔진 setup별 live max_holding(예: sepa 10거래일)보다 창이 넓어 강제청산 시점이 실제보다 "
+        "늦을 수 있다. (2) stale_exit/stale_high(시간 기반 강제청산, 실엔진 HOLDING_POLICIES)는 "
+        "미구현이다 — 이 러너의 청산은 분할익절·트레일링·손절·관찰창 만기 4가지뿐이라 "
+        "live 청산정책의 '그대로 미러'가 아니다. "
+        "(3) simulate_exit 은 같은 봉의 고가로 트레일링을 무장하고 같은 봉의 저가로 발동시킨다 — "
         "일봉만으로는 장중 고가·저가 선후를 알 수 없어 절대 R 수치는 근사치다(정책·팔 간 상대 "
         "비교는 동일 로직이라 편향이 작지만, 절대 수치를 승격 근거로 쓰지 말 것)."
     ),
@@ -134,8 +164,11 @@ class Candidate:
 
     @property
     def score(self) -> float:
+        raw = self.plan.get("score")
+        if raw is None:
+            return 0.0
         try:
-            return float(self.plan.get("score", 0) or 0)
+            return float(raw)
         except (TypeError, ValueError):
             return 0.0
 
@@ -160,22 +193,99 @@ def load_snapshot(path: Path) -> List[Candidate]:
     return rows
 
 
-# ── R1/R2 판단 (계약 2.2 규칙의 오프라인 재현 — 실제 src.agents.judgment 와는 독립) ──
+def _safe_int(v: Any) -> int:
+    if v is None:
+        return 0
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(v: Any) -> float:
+    if v is None:
+        return 0.0
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# ── judgment.assess 입력 복원 (스냅샷 dict → AnalystReport/DebateResult) ─────────────
+def _to_evidence_item(d: Dict[str, Any]) -> EvidenceItem:
+    """AnalystReport.to_dict()['evidence'] 항목(EvidenceItem.to_dict()) 역직렬화."""
+    return EvidenceItem(
+        source=str(d.get("source") or ""), metric=str(d.get("metric") or ""),
+        value=d.get("value"), unit=d.get("unit"),
+        status=str(d.get("status") or "full"), kind=str(d.get("kind") or "fact"),
+        dedup_key=d.get("dedup_key"),
+    )
+
+
+def _to_analyst_report(d: Dict[str, Any]) -> AnalystReport:
+    """스냅샷의 AnalystReport.to_dict() 형태 dict → AnalystReport (judgment.assess 입력용).
+
+    confidence·score 결측은 0 으로 매핑한다(0 을 "값 있음"으로 오인하지 않도록 명시적으로
+    분기 — 'or 0' 패턴 금지). data_status 결측은 dataclass 기본값 "unknown" 그대로 둔다.
+    """
+    kind_raw = str(d.get("kind") or "technical")
+    try:
+        kind = AnalystKind(kind_raw)
+    except ValueError:
+        kind = AnalystKind.TECHNICAL
+    nested = [_to_evidence_item(e) for e in (d.get("evidence") or [])]
+    return AnalystReport(
+        kind=kind, symbol=str(d.get("symbol") or ""), score=_safe_int(d.get("score")),
+        confidence=_safe_float(d.get("confidence")), error=d.get("error"),
+        data_status=str(d.get("data_status") or "unknown"),
+        positive_basis=d.get("positive_basis"), risk_clear=d.get("risk_clear"),
+        evidence=nested,
+    )
+
+
+def _debate_from_votes(symbol: str, votes: Dict[str, Any], upto_round: int) -> DebateResult:
+    """votes({"r1": {"bull":..,"bear":..}, "r2": {...}}) → DebateResult.
+
+    upto_round=1: R1 표를 최종으로 준다(정책 B — 토론 전 독립 판단만, judgment._risk_acceptable
+    이 이 "최종" bear 값을 읽는다). upto_round=2: R2 표를 최종으로 준다(정책 C — 토론 후 만장일치).
+    """
+    r1 = votes.get("r1") or {}
+    turns = [DebateTurn(round_no=1, side="bull", stance=r1.get("bull")),
+             DebateTurn(round_no=1, side="bear", stance=r1.get("bear"))]
+    if upto_round >= 2:
+        r2 = votes.get("r2") or {}
+        turns += [DebateTurn(round_no=2, side="bull", stance=r2.get("bull")),
+                  DebateTurn(round_no=2, side="bear", stance=r2.get("bear"))]
+        bull_final, bear_final = r2.get("bull"), r2.get("bear")
+    else:
+        bull_final, bear_final = r1.get("bull"), r1.get("bear")
+    return DebateResult(symbol=symbol, turns=turns, bull_final=bull_final,
+                         bear_final=bear_final, rounds_run=upto_round)
+
+
+def _assess(c: Candidate, upto_round: int):
+    """정책 B/C 공용 — src.agents.judgment.assess 를 그대로 호출한다(러너 자체 근사 없음)."""
+    reports = [_to_analyst_report(e) for e in c.evidence]
+    debate = _debate_from_votes(c.symbol, c.votes, upto_round)
+    return judgment.assess(c.symbol, reports, debate)
+
+
+# ── R1/R2 판단 레거시 유틸 — 정책 게이트에서는 더는 쓰지 않는다(judgment.assess 로 재배선,
+#    §2.5). r1_assess 의 confidence 결측 처리(usable 판정)는 judgment._valid_reports 를
+#    재사용해 이 함수와 실제 판단 경로의 "유효 보고서" 정의를 어긋나지 않게 유지한다. ──
 def _usable_reports(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """confidence=0·오류 보고서는 제외 (인수조건 #2 — 유효 소스를 부풀리지 않는다)"""
-    out = []
-    for r in evidence:
-        if r.get("error"):
-            continue
-        conf = r.get("confidence")
-        if conf is not None and float(conf) <= 0:
-            continue
-        out.append(r)
-    return out
+    """confidence=0·결측·오류·만료 보고서는 제외 (인수조건 #2 — 유효 소스를 부풀리지 않는다).
+
+    이전에는 confidence 가 아예 없는(None) 보고서를 유효로 세는 결함이 있었다(결측을
+    '검사 통과'로 취급) — judgment._valid_reports(ok·신뢰도>0·TTL 이내)로 판정을 통일한다.
+    """
+    reports = [_to_analyst_report(e) for e in evidence]
+    valid_ids = {id(r) for r in judgment._valid_reports(reports)}
+    return [e for e, r in zip(evidence, reports) if id(r) in valid_ids]
 
 
 def r1_assess(evidence: List[Dict[str, Any]]) -> Tuple[Optional[int], str, str]:
-    """R1 독립 판단 — merit_score, merit_status, data_sufficiency.
+    """R1 독립 판단(레거시 유틸) — merit_score, merit_status, data_sufficiency.
 
     '검증 통과'·컨센서스는 가산하지 않는다 — positive_basis=True 인 보고서만 점수에 넣는다.
     """
@@ -187,9 +297,9 @@ def r1_assess(evidence: List[Dict[str, Any]]) -> Tuple[Optional[int], str, str]:
         status = "insufficient"
         merit = 0
     elif len(positive) == 1:
-        status, merit = "weak", sum(int(r.get("score", 0) or 0) for r in positive)
+        status, merit = "weak", sum(_safe_int(r.get("score")) for r in positive)
     else:
-        status, merit = "sufficient", sum(int(r.get("score", 0) or 0) for r in positive)
+        status, merit = "sufficient", sum(_safe_int(r.get("score")) for r in positive)
     data_suff = "full" if len(usable) >= 3 else ("partial" if len(usable) >= 1 else "insufficient")
     return merit, status, data_suff
 
@@ -210,18 +320,28 @@ def gate_a(_c: Candidate) -> bool:
 
 
 def gate_b(c: Candidate) -> bool:
-    _score, status, data_suff = r1_assess(c.evidence)
-    if status not in ("sufficient", "weak"):
+    """B — R1 독립 판단(§2.5): merit(sufficient/weak) ∧ risk_acceptable=True ∧ data_sufficiency≥partial.
+
+    판정은 src.agents.judgment.assess 결과를 그대로 쓴다 — 이 함수가 자체적으로 점수를 다시
+    계산하지 않는다.
+    """
+    a = _assess(c, upto_round=1)
+    if a.merit_status not in ("sufficient", "weak"):
         return False
-    if risk_acceptable_r1(c.votes) is not True:
+    if a.risk_acceptable is not True:
         return False
-    if data_suff == "insufficient":
+    if a.data_sufficiency == "insufficient":
         return False
     return True
 
 
 def gate_c(c: Candidate) -> bool:
-    return gate_b(c) and unanimous_r2(c.votes)
+    """C — B + R2(토론) 최종 투표 만장일치(bull_final=bear_final=True). judgment.assess 의
+    R2 DebateResult(votes.r2 최종) 결과에서 final_votes 를 그대로 읽는다."""
+    if not gate_b(c):
+        return False
+    a2 = _assess(c, upto_round=2)
+    return a2.final_votes.get("bull") is True and a2.final_votes.get("bear") is True
 
 
 GATES = {"A": gate_a, "B": gate_b, "C": gate_c}
@@ -244,7 +364,7 @@ def select_candidates(rows: List[Candidate], policy: str, max_new: int) -> List[
     return selected
 
 
-# ── 청산 시뮬레이션 (live 청산정책 미러) ────────────────────────────────
+# ── 청산 시뮬레이션 (분할익절·트레일링·손절·관찰창 만기 — stale_exit/stale_high 미구현) ──
 _FEE = get_fee_calculator("KR")
 
 
@@ -265,10 +385,14 @@ def _risk_pct(entry_price: float, stop_price: Optional[float]) -> float:
 
 def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float,
                    stop_price: Optional[float], skip_entry_bar: bool = False) -> Optional[Dict[str, Any]]:
-    """분할 익절(1/2/3차) + 트레일링 + 손절 — CLAUDE.md 청산정책 그대로 미러.
+    """분할 익절(1/2/3차) + 트레일링 + 손절 + 관찰창 만기 강제청산 — CLAUDE.md 청산정책의
+    사다리만 미러한다(stale_exit/stale_high 시간 기반 청산은 미구현, known_limitations 참조).
 
     같은 봉에서 손절가와 익절 라인이 함께 걸리면 낙관적 체결을 만들지 않도록 손절을 우선한다.
-    MAX_HOLD_DAYS 안에 전량 청산되지 않으면 미완결(None) — 완결 포지션만 판정에 쓴다.
+    MAX_HOLD_DAYS 안에 손절/익절/트레일링이 없으면 마지막 관측 봉 종가로 잔여 전량을 강제
+    청산한다(exit_reason="max_holding") — 예전엔 "미완결"로 표본에서 제외했으나, 그러면
+    표본에 남는지 여부가 결과(얼마나 오래 걸렸나)와 상관돼 승자가 미완결로 빠지기 쉬운
+    하방 편향이 생긴다(리뷰 blocking 2026-09-15). None 은 스캔할 봉 자체가 없을 때만.
 
     skip_entry_bar: 체결이 그 봉의 **종가**(예: EntryPlan)일 때 True로 둔다 — 체결 이전에
     지나간 그 봉의 저가·고가로 손절·익절·트레일링을 판정하면 아직 일어나지 않은 가격으로
@@ -321,7 +445,19 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
                 realized += remaining * _net_pct(entry_price, trail_stop)
                 return {"exit_date": bar.get("date"), "holding_days": i - entry_idx,
                         "net_pct": realized, "exit_reason": "trailing"}
-    return None  # 관찰 창 안에 청산 안 됨 — 미완결
+    # 관찰 창 안에 손절/익절/트레일링 트리거가 없었다 — 마지막 관측 봉 종가로 잔여 전량을
+    # 강제 청산해 완결로 센다(탈락이 아니라 청산, 리뷰 blocking 2026-09-15).
+    last_i = end - 1
+    if last_i < start:
+        return None  # 스캔할 봉이 아예 없음(체결 직후 데이터 종료) — 완결 불가
+    last_bar = bars[last_i]
+    try:
+        last_close = float(last_bar["close"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    realized += remaining * _net_pct(entry_price, last_close)
+    return {"exit_date": last_bar.get("date"), "holding_days": last_i - entry_idx,
+            "net_pct": realized, "exit_reason": "max_holding"}
 
 
 def _find_bar_index(prices: List[Dict[str, Any]], on_or_after: str) -> Optional[int]:
@@ -399,36 +535,36 @@ def _week_key(date_str: str) -> str:
         return date_str
 
 
-def _dedupe_correlated(positions: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
-    """leakage_guard 이행 — 종목-주 클러스터·보유기간 겹침 표본을 독립 표본에서 제외한다.
+def _dedupe_correlated(candidates: List[Candidate]) -> Tuple[List[Candidate], int]:
+    """leakage_guard 이행 — 종목-주 클러스터·보유기간 겹침 후보를 독립 표본에서 제외한다.
 
-    날짜순으로 먼저 잡힌 진입만 남긴다: 같은 종목이 같은 ISO 주에 다시 후보로 잡히거나,
-    직전 포지션의 보유기간(entry~entry+holding_days)과 겹치는 후속 진입은 사실상 같은
-    베팅의 반복이라 독립 표본으로 세지 않는다(§2.5 사전등록 표본 요건의 전제).
+    시뮬레이션 **전**(후보 단계)에 적용한다 — 실제 청산 시점(holding_days, 시뮬레이션 결과)
+    으로 겹침을 판정하면 표본에 남는지 여부가 시뮬레이션 경로에 좌우돼 §2.5 사전등록 표본
+    요건(사후 선별 금지)과 상충한다(advisory, 2026-09-15). 대신 관찰 창 상한(MAX_HOLD_DAYS)을
+    보수적 보유기간 가정으로 쓴다 — 날짜순으로 먼저 잡힌 후보만 남긴다: 같은 종목이 같은
+    ISO 주에 다시 후보로 잡히거나, 직전 후보의 가정 보유기간(entry~entry+MAX_HOLD_DAYS)과
+    겹치는 후속 후보는 사실상 같은 베팅의 반복이라 독립 표본으로 세지 않는다.
     """
-    ordered = sorted(positions, key=lambda p: (p["symbol"], p["date"]))
-    kept: List[Dict[str, Any]] = []
+    ordered = sorted(candidates, key=lambda c: (c.symbol, c.date))
+    kept: List[Candidate] = []
     excluded = 0
-    last_by_symbol: Dict[str, Dict[str, Any]] = {}
+    prev_end_by_symbol: Dict[str, int] = {}
     seen_week: set = set()
-    for p in ordered:
-        wk = (p["symbol"], p.get("week"))
-        prev = last_by_symbol.get(p["symbol"])
-        overlap = False
-        if prev is not None:
-            try:
-                prev_entry = _date.fromisoformat(prev["date"])
-                cur_entry = _date.fromisoformat(p["date"])
-                prev_end = prev_entry.toordinal() + int(prev.get("holding_days") or 0)
-                overlap = cur_entry.toordinal() <= prev_end
-            except (ValueError, TypeError):
-                overlap = False
+    for c in ordered:
+        wk = (c.symbol, _week_key(c.date))
+        try:
+            cur_entry_ord: Optional[int] = _date.fromisoformat(c.date).toordinal()
+        except (ValueError, TypeError):
+            cur_entry_ord = None
+        prev_end = prev_end_by_symbol.get(c.symbol)
+        overlap = prev_end is not None and cur_entry_ord is not None and cur_entry_ord <= prev_end
         if wk in seen_week or overlap:
             excluded += 1
             continue
         seen_week.add(wk)
-        last_by_symbol[p["symbol"]] = p
-        kept.append(p)
+        if cur_entry_ord is not None:
+            prev_end_by_symbol[c.symbol] = cur_entry_ord + MAX_HOLD_DAYS
+        kept.append(c)
     return kept, excluded
 
 
@@ -437,10 +573,11 @@ def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new
     out: Dict[str, Any] = {}
     for policy in policies:
         selected = select_candidates(rows, policy, max_new)
+        deduped_candidates, excluded = _dedupe_correlated(selected)  # 시뮬레이션 전에 적용
         positions: List[Dict[str, Any]] = []
         no_data = 0
         incomplete = 0
-        for c in selected:
+        for c in deduped_candidates:
             entry = _next_open_entry(c)
             if entry is None:
                 no_data += 1
@@ -448,7 +585,7 @@ def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new
             idx, entry_px = entry
             res = simulate_exit(c.prices, idx, entry_px, c.plan.get("stop_price"))
             if res is None:
-                incomplete += 1  # 관찰 창 안에 미청산 — 완결 표본에서 제외(사전등록)
+                incomplete += 1  # 스캔할 봉 자체가 없음(체결 직후 데이터 종료) — 완결 불가
                 continue
             risk = _risk_pct(entry_px, c.plan.get("stop_price"))
             r = res["net_pct"] / risk if risk > 0 else None
@@ -460,13 +597,13 @@ def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new
                 "entry_price": entry_px, "net_pct": res["net_pct"], "r": r,
                 "holding_days": res["holding_days"], "exit_reason": res["exit_reason"],
             })
-        deduped, excluded = _dedupe_correlated(positions)
-        out[policy] = _summarize_positions(policy, selected, deduped, no_data, incomplete, excluded)
+        out[policy] = _summarize_positions(policy, selected, positions, no_data, incomplete, excluded)
     return out
 
 
 def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int) -> Dict[str, Any]:
     selected = select_candidates(rows, fixed_policy, max_new)
+    deduped_candidates, excluded = _dedupe_correlated(selected)  # 시뮬레이션 전에 적용, 두 팔 공용
     out: Dict[str, Any] = {}
     for mode in ("existing_open", "entry_plan"):
         positions: List[Dict[str, Any]] = []
@@ -475,7 +612,7 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
         unfilled = 0
         wait_days: List[int] = []
         opportunity_cost: List[float] = []
-        for c in selected:
+        for c in deduped_candidates:
             # 두 체결 방식이 반드시 같은 첫 관찰 봉(start_idx)에서 스캔을 시작한다 —
             # EntryPlan 쪽이 후보일 당일 봉(판단 재료)으로 체결해 선행정보 우위를 얻지 않도록.
             start_idx = _first_tradable_idx(c)
@@ -517,13 +654,14 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
                 "net_pct": res["net_pct"], "r": res["net_pct"] / risk,
                 "holding_days": res["holding_days"], "exit_reason": res["exit_reason"],
             })
-        deduped, excluded = _dedupe_correlated(positions)
-        summary = _summarize_positions(mode, selected, deduped, no_data, incomplete, excluded)
+        summary = _summarize_positions(mode, selected, positions, no_data, incomplete, excluded)
         summary["unfilled"] = unfilled
-        # 체결률 = (선정 - 미체결 - 데이터없음) / 선정 — dedup·미완결 제외는 별도 필드(completed_positions/
-        # excluded_correlated)로만 집계한다(advisory, 2026-09-15: dedup 분자를 쓰면 체결률이 실제보다 낮게 보임)
+        # 체결률 = (실제 시도한 후보 - 미체결 - 데이터없음) / 실제 시도한 후보. dedup 은 시뮬레이션
+        # 전에 적용되므로 분모 자체가 dedup 이후 후보 수다(deduped_candidates) — dedup 제외는
+        # results 의 excluded_correlated 로 별도 집계한다(advisory, 2026-09-15).
         summary["fill_rate"] = (
-            round((len(selected) - unfilled - no_data) / len(selected), 4) if selected else None
+            round((len(deduped_candidates) - unfilled - no_data) / len(deduped_candidates), 4)
+            if deduped_candidates else None
         )
         summary["avg_wait_days"] = round(sum(wait_days) / len(wait_days), 2) if wait_days else None
         summary["unfilled_opportunity_cost_median_r"] = (
@@ -552,8 +690,8 @@ def _summarize_positions(label: str, selected: List[Candidate], positions: List[
         "candidates_selected": len(selected),
         "completed_positions": n,
         "no_data": no_data,                       # 체결 대상 봉 자체가 없음(데이터 끝 등)
-        "incomplete": incomplete,                  # 관찰 창 안에 청산 안 됨 / 위험값 계산 불가
-        "excluded_correlated": excluded_correlated,  # leakage_guard: 종목-주 클러스터·보유기간 겹침 제외
+        "incomplete": incomplete,                  # 스캔할 봉 자체가 없음(체결 직후 데이터 종료) / 위험값 계산 불가
+        "excluded_correlated": excluded_correlated,  # leakage_guard: 종목-주 클러스터·보유기간 겹침 제외(후보 단계)
         "median_r": round(statistics.median(rs), 4) if rs else None,
         "mean_r": round(sum(rs) / n, 4) if rs else None,
         "net_pnl_pct_sum": round(sum(p["net_pct"] for p in positions), 2) if positions else None,
@@ -577,6 +715,8 @@ def build_manifest(policies: List[str], experiment: str, snapshot_path: str,
         "benchmark_kodex200": {"path": benchmark_path, "computed": False} if benchmark_path else None,
         "note": "이 도구는 승격 판정을 하지 않는다 — 사전등록 지표를 보고할 뿐이다.",
         "all_rows_synthetic": all_synthetic,
+        # 정책 B/C 판단에 실제로 쓰인 judgment.assess 계약 버전 — §2.5, 재현·회귀 추적용.
+        "judgment_policy_version": ASSESSMENT_POLICY_VERSION,
     }
 
 
@@ -633,6 +773,9 @@ def main() -> None:
     results_payload = {
         "validation_status": validation_status,
         "n_candidates_in_snapshot": len(rows),
+        # 합성/실데이터 혼합 스냅샷의 합성 행 수 — all_rows_synthetic=False 여도 내역이 보이도록
+        # 기록한다(advisory, 2026-09-15: 혼합인지 전부 비합성인지 결과만 봐선 구분이 안 됐다).
+        "n_synthetic_rows": sum(1 for c in rows if c.synthetic),
         "results": results,
     }
     (out_dir / "results.json").write_text(json.dumps(results_payload, ensure_ascii=False, indent=2), encoding="utf-8")
