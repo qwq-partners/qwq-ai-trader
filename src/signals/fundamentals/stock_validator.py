@@ -113,7 +113,8 @@ class StockValidator:
         """
         try:
             # 5개 검증 병렬 실행
-            news_result, dart_result, (sd_result, sd_ok), (ss_result, ss_ok), tb_result = \
+            (news_result, news_ok), (dart_result, dart_ok), (sd_result, sd_ok), \
+                (ss_result, ss_ok), (tb_result, tb_ok) = \
                 await asyncio.gather(
                     self._safe_check_news(symbol, stock_name),
                     self._safe_check_dart(symbol),
@@ -122,18 +123,20 @@ class StockValidator:
                     self._safe_check_trend_buzz(stock_name),
                 )
 
-            # T11 리뷰 수정(2026-09-15, R-A r3 blocking #2): validated/data_status는
+            # T11 리뷰 수정(2026-09-15, R-A r4 blocking #1): validated/data_status는
             # "MCP 서버가 연결돼 있는가"(mcp_ok)가 아니라 "하위 검증이 실제로 값을
             # 얻었는가"에서 유도한다 — mcp_ok만 보면 서버는 붙어 있는데
             # _safe_check_supply_demand 내부에서 fetch가 실패(예외 흡수)해 기본값으로
             # 조용히 대체된 경우도 "검증됐고 위험 없음"(validated=True/full)으로
-            # 잘못 보고됐다. 공매도는 pykrx-mcp에 도구가 아예 없어(구조적 영구 부재,
-            # _safe_check_short_selling 참조) 항상 ss_ok=False다 — 이건 "실패"가
-            # 아니므로 최소 partial로만 내리고 insufficient로 떨어뜨리지 않는다.
+            # 잘못 보고됐다. news/dart도 동일 — DART_API_KEY 미설정(조회 미수행)
+            # 이나 check_disclosures 예외를 dart_ok=False로 반영하지 않으면 DART가
+            # 매 호출 500을 던져도 "위험 미발견"(full)으로 나갔다(r3 blocking #2
+            # 재발, 벡터만 수급→뉴스/DART로 이동). 공매도는 pykrx-mcp에 도구가
+            # 아예 없어(구조적 영구 부재, _safe_check_short_selling 참조) 항상
+            # ss_ok=False다 — 이건 "실패"가 아니므로 최소 partial로만 내리고
+            # insufficient로 떨어뜨리지 않는다.
             mcp_ok = self._mcp_available("pykrx")
-            if not mcp_ok:
-                validated, data_status = False, "insufficient"
-            elif not sd_ok:
+            if not (mcp_ok and news_ok and dart_ok and sd_ok and tb_ok):
                 validated, data_status = False, "insufficient"
             elif not ss_ok:
                 validated, data_status = True, "partial"
@@ -190,21 +193,37 @@ class StockValidator:
 
     # ───────────────────── 기존 검증 (뉴스/DART) ─────────────────────
 
-    async def _safe_check_news(self, symbol: str, stock_name: str) -> NewsCheckResult:
-        """뉴스 검증 (예외 안전)"""
+    async def _safe_check_news(self, symbol: str, stock_name: str) -> Tuple[NewsCheckResult, bool]:
+        """뉴스 검증 (예외 안전)
+
+        Returns:
+            (result, ok) — ok=False는 미설정(NAVER_CLIENT_ID/SECRET 없음) 또는
+            조회 예외로 기본값을 대신 돌려준 경우다 (T11 리뷰 r4 blocking #1,
+            2026-09-15). validate()가 이를 news_ok로 반영한다.
+        """
+        if not getattr(self.news_verifier, "_enabled", True):
+            return NewsCheckResult(), False
         try:
-            return await self.news_verifier.check_news(symbol, stock_name)
+            return await self.news_verifier.check_news(symbol, stock_name), True
         except Exception as e:
             logger.debug(f"[종목검증] 뉴스 검증 오류 ({symbol}): {e}")
-            return NewsCheckResult()
+            return NewsCheckResult(), False
 
-    async def _safe_check_dart(self, symbol: str) -> DartCheckResult:
-        """DART 공시 검증 (예외 안전)"""
+    async def _safe_check_dart(self, symbol: str) -> Tuple[DartCheckResult, bool]:
+        """DART 공시 검증 (예외 안전)
+
+        Returns:
+            (result, ok) — ok=False는 미설정(DART_API_KEY 없음) 또는 조회 예외로
+            기본값을 대신 돌려준 경우다 (T11 리뷰 r4 blocking #1, 2026-09-15).
+            validate()가 이를 dart_ok로 반영한다.
+        """
+        if not getattr(self.dart_checker, "_enabled", True):
+            return DartCheckResult(), False
         try:
-            return await self.dart_checker.check_disclosures(symbol)
+            return await self.dart_checker.check_disclosures(symbol), True
         except Exception as e:
             logger.debug(f"[종목검증] DART 검증 오류 ({symbol}): {e}")
-            return DartCheckResult()
+            return DartCheckResult(), False
 
     # ───────────────────── MCP 기반 검증 (수급/공매도/트렌드) ─────────────────────
 
@@ -257,22 +276,28 @@ class StockValidator:
         # 향후 pykrx-mcp에 공매도 도구 추가 시 캐시 로직 복원
         return ShortSellingResult(), False
 
-    async def _safe_check_trend_buzz(self, stock_name: str) -> TrendBuzzResult:
-        """검색 트렌드 검증 (캐시 2시간, 예외 안전)"""
+    async def _safe_check_trend_buzz(self, stock_name: str) -> Tuple[TrendBuzzResult, bool]:
+        """검색 트렌드 검증 (캐시 2시간, 예외 안전)
+
+        Returns:
+            (result, ok) — ok=False는 MCP 미연결 또는 조회 예외로 기본값을 대신
+            돌려준 경우다 (T11 리뷰 r4 blocking #1, 2026-09-15). validate()가
+            이를 tb_ok로 반영한다.
+        """
         if not self._mcp_available("naver_search"):
-            return TrendBuzzResult()
+            return TrendBuzzResult(), False
 
         cached = self._get_cache(self._trend_buzz_cache, stock_name, self._TREND_BUZZ_TTL)
         if cached is not None:
-            return cached
+            return cached, True
 
         try:
             result = await self._fetch_trend_buzz(stock_name)
             self._set_cache(self._trend_buzz_cache, stock_name, result, self._CACHE_MAX_SIZE)
-            return result
+            return result, True
         except Exception as e:
             logger.debug(f"[종목검증] 트렌드 검증 오류 ({stock_name}): {e}")
-            return TrendBuzzResult()
+            return TrendBuzzResult(), False
 
     # ───────────────────── MCP 도구 호출 ─────────────────────
 
