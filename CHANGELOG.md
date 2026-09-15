@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — docs: 토스 설계 Codex 후속 보완 (T12, 구현 없음)
+
+- Claude 설계 `85a4266`을 최신 main `8849d92`와 공개 OpenAPI `1.2.17`에 대조하고, P1 4개/P2 10개를 문서·향후 인수 명세로 보완했다. 과거 Claude 검토 34건의 완료 수를 재사용하거나 Toss 런타임 결함을 실행 재현했다고 주장하지 않는다.
+- **아래 이전 적대적 검토 기록의 잔존 정책은 이 항목과 최신 설계로 대체된다**: revoked 동일 캐시 발급 허용 → mint0/지속 auth 회로; 일반 atomic writer → 전용0600 보안 저장; 브로커 전역 주입 훅/정규장 청산 허용 → 전 세션 KIS 단독·표시 wrapper만; 숫자 결측의0 허용 → 내부 nullable와 legacy 필수 필드 게이트 분리; Phase1 기본on → 모든 기본off/실자료 별도 승인.
+- 2봉 당일/전일 오인·200봉52주 모순, 캐시 shadow 누출, 수급/유니버스 의미, 발급/한도/페이지 전체 deadline·총retry1, HTTP allowlist·로그 보안, Phase0 실제 원인/코드 완료와3영업일 관측 분리, manifest 분모/승격 조건을 보완했다. 가격 근접성과 거래소 계약/실행 안전성은 별개다.
+- 필수 Codex CLI는 read-only sandbox의 bwrap 오류로 미완료(승인으로 계산 안 함). 별도 병렬 에이전트가 실제 소비 코드/토큰/보안/Git을 읽기 전용 대조했다. 상세 검증·재리뷰 상태는 `docs/reviews/toss-design-codex-2026-09-15.md`에 기록한다.
+- **문서만 변경**. Toss 구현·패키지 설치·토큰/인증 조회·운영 배포/재시작·주문·설정 변경 없음. §10 A01~A14는 아직 실행하지 않은 향후 테스트 명세다.
+
 ## 2026-09-15 — ops: MCP 제거 배포·재시작 (PR #63)
 
 - 독립 Codex 리뷰 승인·필수 verify(run34975893319, 1분12초) 성공 후 main `c9923bfac024a5abdd5a44916a6d1242f7132d83` 병합. 장외·pending0·청결·설정 지문 확인 후 `local_deploy.sh`로 적용, 운영 측 verify 1019 passed/2 xfailed·격리 위반0(21.94초).
