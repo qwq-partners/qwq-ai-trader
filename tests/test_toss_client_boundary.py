@@ -523,14 +523,26 @@ def test_expired_token_issuance_still_requires_remaining_retry(tmp_path, prefix,
 @pytest.mark.parametrize("stop", ["deadline", "cancel"])
 def test_revoked_observation_does_not_escape_deadline_or_cancellation(tmp_path, stop):
     """동기 폐기 관측 후 토큰 잠금 대기만 기존 예산/취소에 종속된다."""
+    from contextlib import asynccontextmanager
     mod = api()
     store, manager, minted, now = real_token_stack(tmp_path)
-    client, _, transport = make_client(tmp_path, enabled=True, role="sender")
+    clock_value = [100.0]
+    clock = lambda: clock_value[0]
+    manager.clock = clock
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender", clock=clock)
     client.tokens = manager
-    observed = asyncio.Event()
+    observed, recovery_waiting = asyncio.Event(), asyncio.Event()
     held, sent = [], []
+    real_lock = store.lock
+    @asynccontextmanager
+    async def tracked_lock(*, deadline, clock):
+        if held:
+            recovery_waiting.set()
+        async with real_lock(deadline=deadline, clock=clock):
+            yield
+    store.lock = tracked_lock
     async def respond(*args, **kwargs):
-        lock = store.lock(deadline=mod.RequestBudget(1).deadline)
+        lock = store.lock(deadline=clock() + 60, clock=clock)
         await lock.__aenter__()
         held.append(lock)
         sent.append(True)
@@ -539,18 +551,24 @@ def test_revoked_observation_does_not_escape_deadline_or_cancellation(tmp_path, 
     transport.request = respond
     async def run():
         async with client:
+            task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
+                budget=mod.RequestBudget(60, clock=clock, max_retries=0)))
             try:
-                task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
-                    budget=mod.RequestBudget(0.05, max_retries=0)))
-                await asyncio.wait_for(observed.wait(), 1)
+                # wall-clock 제한은 테스트 고착 감시용이며 요청 만료의 원인이 아니다.
+                await asyncio.wait_for(observed.wait(), 5)
+                await asyncio.wait_for(recovery_waiting.wait(), 5)
                 if stop == "cancel":
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
                         await task
                 else:
+                    clock_value[0] += 61
                     with pytest.raises(mod.TossRequestError):
-                        await asyncio.wait_for(task, 0.3)
+                        await asyncio.wait_for(task, 5)
             finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
                 for lock in held:
                     await lock.__aexit__(None, None, None)
         await assert_revoked_after_restart_and_expiry(store, manager, now)
@@ -654,14 +672,17 @@ def test_cancelled_rate_observation_still_prevents_restart_mint(tmp_path):
     transport.request = respond
     async def run():
         async with client:
+            task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
+                                                 budget=mod.RequestBudget(60)))
             try:
-                task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
-                                                     budget=mod.RequestBudget(1)))
-                await asyncio.wait_for(received.wait(), 1)
+                await asyncio.wait_for(received.wait(), 5)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
             finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
                 if client.limiter._lock.locked():
                     client.limiter._lock.release()
         await assert_revoked_after_restart_and_expiry(store, manager, now)
