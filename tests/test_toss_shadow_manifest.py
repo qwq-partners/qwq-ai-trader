@@ -200,6 +200,19 @@ def test_decimal_threshold_comparison_keeps_exact_equality_but_rejects_a_real_ex
     assert report["status"] == status
 
 
+def test_large_integer_fraction_just_above_threshold_is_not_rounded_down():
+    # Decimal 기본 precision 28에서 0.2% + 1e-29%를 0.2%로 반올림하면 실패한다.
+    row = deepcopy(_pairs()[0])
+    row["kis"]["price"] = 10 ** 31
+    row["toss"]["price"] = 1002 * 10 ** 28 + 1
+
+    report = summarize_pairs([row], _single_sample_manifest())
+
+    assert report["p95_difference_pct"] == pytest.approx(0.2)
+    assert report["outlier_fraction"] == 1.0
+    assert report["status"] == "threshold_exceeded"
+
+
 def test_unrepresentable_difference_is_excluded_without_losing_other_attempts_or_json_finiteness():
     # 1e-308 대비 1e308 차이를 inf로 출력하거나 전체 집계를 중단하면 실패한다.
     valid, overflow = deepcopy(_pairs()[0]), deepcopy(_pairs()[0])

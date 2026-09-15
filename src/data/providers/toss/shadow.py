@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, DecimalException
+from decimal import Decimal
 from datetime import datetime, timezone
+from fractions import Fraction
 from hashlib import sha256
 import json
 import math
@@ -83,12 +84,25 @@ def _decimal(value: int | float) -> Decimal:
     return Decimal(str(value))
 
 
-def _json_decimal(value: Decimal) -> float | None:
+def _decimal_fraction(value: Decimal) -> Fraction:
+    """Return the finite decimal's exact base-10 rational representation."""
+    sign, digits, exponent = value.as_tuple()
+    coefficient = int("".join(map(str, digits)) or "0")
+    if sign:
+        coefficient = -coefficient
+    if exponent >= 0:
+        return Fraction(coefficient * (10 ** exponent), 1)
+    return Fraction(coefficient, 10 ** (-exponent))
+
+
+def _json_fraction(value: Fraction) -> float | None:
     try:
         result = float(value)
     except (OverflowError, ValueError):
         return None
-    return result if math.isfinite(result) else None
+    if not math.isfinite(result) or (result == 0.0 and value != 0):
+        return None
+    return result
 
 
 def _normalized_hash_rows(rows: Sequence[Any]) -> list[dict[str, Any]]:
@@ -202,7 +216,7 @@ def build_shadow(*, enabled: bool = False, factory: Callable[[], Any]) -> Any | 
     return factory()
 
 
-def _source_values(row: Mapping[str, Any], name: str) -> tuple[Decimal, datetime, datetime]:
+def _source_values(row: Mapping[str, Any], name: str) -> tuple[Fraction, datetime, datetime]:
     source = row.get(name)
     if not isinstance(source, Mapping):
         raise KeyError("source")
@@ -212,12 +226,12 @@ def _source_values(row: Mapping[str, Any], name: str) -> tuple[Decimal, datetime
         raise ArithmeticError("price")
     if not _is_number(latency) or latency < 0:
         raise ArithmeticError("latency")
-    return _decimal(price), _parse_aware(source.get("observed_at")), _parse_aware(source.get("fetched_at"))
+    return _decimal_fraction(_decimal(price)), _parse_aware(source.get("observed_at")), _parse_aware(source.get("fetched_at"))
 
 
 def _excluded_reason(
     row: Any, manifest: ShadowManifest, seen: set[tuple[str, str, str]]
-) -> tuple[str | None, float | None]:
+) -> tuple[str | None, Fraction | None]:
     if not isinstance(row, Mapping):
         return "invalid_row", None
     if not isinstance(row.get("pair_id"), str) or not isinstance(row.get("symbol"), str):
@@ -263,10 +277,10 @@ def _excluded_reason(
     ).total_seconds() > manifest.max_age_seconds:
         return "stale", None
     try:
-        difference = abs(toss_price - kis_price) / kis_price * Decimal("100")
-    except (DecimalException, ZeroDivisionError, OverflowError):
+        difference = abs(toss_price - kis_price) / kis_price * 100
+    except (ZeroDivisionError, OverflowError):
         return "invalid_difference", None
-    if not difference.is_finite() or _json_decimal(difference) is None:
+    if _json_fraction(difference) is None:
         return "invalid_difference", None
     return None, difference
 
@@ -279,7 +293,7 @@ def summarize_pairs(rows: Sequence[Any], manifest: ShadowManifest) -> dict[str, 
         raise ValueError("rows must be a JSON array")
 
     excluded: dict[str, int] = {}
-    differences: list[Decimal] = []
+    differences: list[Fraction] = []
     seen: set[tuple[str, str, str]] = set()
     for row in rows:
         reason, difference = _excluded_reason(row, manifest, seen)
@@ -293,8 +307,8 @@ def summarize_pairs(rows: Sequence[Any], manifest: ShadowManifest) -> dict[str, 
     coverage = valid / attempted if attempted else 0.0
     differences.sort()
     p95 = differences[math.ceil(0.95 * valid) - 1] if valid else None
-    p95_limit = _decimal(manifest.p95_limit_pct)
-    outlier_threshold = _decimal(manifest.outlier_threshold_pct)
+    p95_limit = _decimal_fraction(_decimal(manifest.p95_limit_pct))
+    outlier_threshold = _decimal_fraction(_decimal(manifest.outlier_threshold_pct))
     outliers = sum(value > outlier_threshold for value in differences)
     outlier_fraction = outliers / valid if valid else None
     sufficient = valid > 0 and valid >= manifest.min_valid_pairs and coverage >= manifest.min_coverage
@@ -315,7 +329,7 @@ def summarize_pairs(rows: Sequence[Any], manifest: ShadowManifest) -> dict[str, 
         "time_excluded_pairs": time_excluded,
         "excluded_reasons": excluded,
         "coverage": coverage,
-        "p95_difference_pct": _json_decimal(p95) if p95 is not None else None,
+        "p95_difference_pct": _json_fraction(p95) if p95 is not None else None,
         "outlier_fraction": outlier_fraction,
         "meets_thresholds": within_limits,
         "status": status,
