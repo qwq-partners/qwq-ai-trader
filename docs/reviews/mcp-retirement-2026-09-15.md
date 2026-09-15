@@ -34,4 +34,13 @@ SDK와 `pykrx-mcp` 실행 파일이 없고, 서버 호출의 인자/응답·거�
 
 ## 배포 상태
 
-아직 미배포. 운영은 `82b5039` 소스(문서 포함 checkout `76f7120`)다. 머지·필수 verify 후 장외 시간·pending 0·운영 청결·설정/킬스위치 지문을 확인하고 자동 롤백 배포 스크립트를 사용한다. 새 PID에서 MCP 경고가 없는지, KIS 연결·하트비트·동기화와 설정 지문을 확인한다. 장외 동기화 주기는 300초이므로 150초 관찰을 여러 주기 검증으로 표현하지 않는다.
+- PR [#63](https://github.com/qwq-partners/qwq-ai-trader/pull/63), 최종 PR 커밋 `b0263394e7b892c9a3444e57bef7c0dc6c47178b`. 리뷰 보완·문서 포함 마지막 KST verify **1019 passed / 2 xfailed**(24.34초), 격리 위반 0·문법/비밀패턴 통과. 필수 verify [run34975893319](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/34975893319) 성공(1분 12초) 후 main **`c9923bfac024a5abdd5a44916a6d1242f7132d83`**로 병합했다. 머지 트리는 검증된 PR 트리와 동일하다.
+- 사전 점검 **22:36:29 KST**: KR 전용 서비스·장외 시간, pending `[]`, root `76f7120` 청결, 설정 3파일과 킬스위치 4경로 지문 유지.
+- `local_deploy.sh c9923bf...`: 운영 측 verify **1019 passed / 2 xfailed**(21.94초), 격리 위반 0·문법/비밀패턴 통과. 패키지 설치 없음. **22:37:08 KST 재시작**, 새 PID **3082563**, 이전 checkout `76f7120`, 배포 실패/롤백 없음.
+- 시작 로그: KIS 연결 **22:37:08**, StockValidator 및 뉴스/공시 검증기 초기화 **22:37:12**, 통합 엔진 시작 **22:37:14**. 구 main의 조상 관계를 확인하고 CAS fast-forward한 뒤 같은 트리에서 main으로 복귀했다(추가 재시작 없음).
+- **22:37:36 KST(+28초)**: active/running·브로커 연결·pending 0·stale/실패 없음. 설정 3파일(.env/default/evolved) SHA-256과 킬스위치 4경로 상태가 사전 점검과 동일하다. 초기 portfolio sync는 아직 미실행(null)이므로 성공으로 세지 않는다.
+- **22:38:22 KST(+74초)**: ops-check KIS HTTP 500/EGW00201/00215/00123/00133 **0건**, 정체·실패 누적 없음, pending `[]`, daily_trades 0. 새 PID의 ANSI 제거 로그 146줄에서 **MCP 0·ERROR/Traceback 0·Unclosed client session 0건**. 재시작 전 완료 복원 note 3건은 실패가 아니라 스케줄 상태 복원이다.
+- 이후 health 조회에서 첫 portfolio sync 성공 **22:38:16.498 KST**(`last_success=1789479496.4982584`)·실패 누적 0을 확인했다. **22:39:55 KST(+167초)**에도 root main 청결·pending `[]`를 확인했다. 한 번의 동기화 성공이며 여러 주기를 확인했다고 세지 않는다.
+- **22:40:18 KST(+190초)** 재점검: KIS 오류·pending·daily_trades·하트비트 정체/실패 0 유지. 새 PID 로그에서도 MCP·ERROR/Traceback·Unclosed client session 0 유지. cash 83,536원·total_equity 18,179,536원·보유 1종목은 앞선 점검과 동일하다.
+
+장외 동기화 주기는 300초다. 150초 관찰을 5주기 검증으로 표현하지 않으며, 장중 수급 탐지·뉴스/DART 실자료 판단은 해당 잡 실행 시 추가 관찰 대상이다. 이번 배포는 미검증 보조 경로 제거이며 시장 데이터 커버리지 확장이나 투자 성능 검증이 아니다. 삭제한 코드는 Git 이력에서 복구 가능하다.
