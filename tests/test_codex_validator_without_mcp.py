@@ -1,4 +1,4 @@
-"""Direct news/DART validation must not revive retired MCP sources (offline)."""
+"""직접 뉴스/DART 검증이 폐기한 MCP 소스를 재활성화하지 않도록 검증한다."""
 
 import asyncio
 import sys
@@ -64,8 +64,8 @@ def test_available_retired_sources_cannot_add_confidence_or_evidence():
             ) + ']}]}'
         return SimpleNamespace(content=[SimpleNamespace(text=payload)], isError=False)
 
-    # Model a formerly available source: removal must ignore it, not merely depend
-    # on an unavailable SDK/server to suppress the old positive adjustments.
+    # 과거 연결 가능한 소스를 주입해도 무시해야 한다. SDK/서버 부재에만 의존해
+    # 이전의 긍정 가산이 우연히 비활성화된 상태여서는 안 된다.
     validator._mcp_manager = SimpleNamespace(is_server_available=lambda _name: True, call_tool=call_tool)
     result = asyncio.run(validator.validate("005930", "삼성전자"))
 

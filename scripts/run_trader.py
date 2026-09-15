@@ -208,7 +208,6 @@ class UnifiedTradingBot:
         self.equity_tracker = None
         self.daily_reviewer = None
         self.report_generator = None
-        self._mcp_manager = None
         self._stock_validator = None
 
         # 엔진에 종목명 캐시 참조 연결
@@ -417,16 +416,6 @@ class UnifiedTradingBot:
             except Exception as e:
                 logger.warning(f"[KR] 테마 탐지기 초기화 실패 (무시): {e}")
                 self.theme_detector = None
-
-            # 5. MCP 서버 클라이언트 초기화
-            try:
-                from src.utils.mcp_client import get_mcp_manager
-                self._mcp_manager = get_mcp_manager()
-                await self._mcp_manager.initialize()
-                logger.info("[KR] MCP 서버 클라이언트 초기화 완료")
-            except Exception as e:
-                logger.warning(f"[KR] MCP 클라이언트 초기화 실패 (무시): {e}")
-                self._mcp_manager = None
 
             # 6. 종목 뉴스/공시 검증기 초기화
             try:

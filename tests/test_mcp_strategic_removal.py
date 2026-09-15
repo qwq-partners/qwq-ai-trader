@@ -1,4 +1,4 @@
-"""Strategic collectors remain useful without the removed MCP runtime."""
+"""MCP 제거 후에도 직접 전략 데이터 수집과 기존 폴백은 유지된다."""
 
 import asyncio
 import sys
@@ -11,6 +11,7 @@ from src.signals.strategic.supply_trend import SupplyTrendDetector
 
 def test_collect_all_keeps_removed_sector_keys_empty_without_calling_collectors(monkeypatch):
     collector = StrategicDataCollector()
+    retired_calls = []
 
     async def value(name):
         return {"source": name}
@@ -23,13 +24,15 @@ def test_collect_all_keeps_removed_sector_keys_empty_without_calling_collectors(
         monkeypatch.setattr(collector, name, lambda name=name: value(name))
 
     async def forbidden():
-        raise AssertionError("removed MCP sector collector must not run")
+        retired_calls.append("sector")
+        raise AssertionError("폐기한 MCP 업종 조회 실행")
 
     monkeypatch.setattr(collector, "_collect_sector_flows", forbidden, raising=False)
     monkeypatch.setattr(collector, "_collect_sector_valuations", forbidden, raising=False)
 
     result = asyncio.run(collector.collect_all())
 
+    assert retired_calls == []
     assert result["sector_flows"] == {}
     assert result["sector_valuations"] == {}
     assert result["market_indices"] == {"source": "_collect_market_indices"}

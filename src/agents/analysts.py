@@ -144,8 +144,8 @@ class FundamentalAnalyst:
                         score += 10
                         findings.append("외국인" if foreign else "기관")
 
-                # 리뷰 참고(2026-09-15): pykrx-mcp에 공매도 도구가 없어(stock_validator._safe_check_short_selling)
-                # in_top50은 현재 항상 기본값(False)이다 — 아래 감점·evidence는 도구 제공 시 활성화될 사문 경로.
+                # 공매도 자료는 현재 미획득이며 in_top50 기본값(False)은 위험 해소 근거가 아니다.
+                # 향후 검증된 공급자가 실제 위험을 제공할 때만 아래 감점·evidence를 사용한다.
                 ss = getattr(result, "short_selling_result", None)
                 ss_top50 = ss is not None and bool(getattr(ss, "in_top50", False))
                 if ss_top50:
