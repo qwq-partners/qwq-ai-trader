@@ -167,3 +167,39 @@ def test_snapshot_restores_explicit_validation_bonus_without_assuming_risk_clear
     candidate = _candidate()
     candidate.evidence[0].update(risk_clear=True, validation_pass_bonus=0)
     assert replay._assess(candidate, 1).merit_score == 30
+
+
+@pytest.mark.parametrize("decision", ["2026-08-02T10:00:00+09:00", "2026-08-04T10:00:00+09:00"])
+def test_plan_from_another_candidate_day_cannot_select_before_its_decision(decision):
+    candidate = _candidate(decided_at=decision)
+    candidate.evidence[0]["evidence"][0].pop("valid_until")
+    candidate.evidence[0]["evidence"][0].pop("observed_at")
+    assert replay.gate_b(candidate) is False
+    assert "decision_time" in replay._assess(candidate, 1).abstain_reason
+
+
+def test_utc_decision_date_can_differ_when_kst_candidate_day_is_identical():
+    candidate = _candidate(decided_at="2026-08-02T23:00:00+00:00")  # KST 08-03 08:00
+    candidate.evidence[0]["evidence"][0]["observed_at"] = "2026-08-03T07:50:00+09:00"
+    assert replay.gate_b(candidate) is True
+
+
+@pytest.mark.parametrize("observation", ["2026-08-03T10:01:00", "2026-08-03T01:01:00+00:00"])
+def test_future_evidence_observation_cannot_be_laundered_by_old_report_age(observation):
+    candidate = _candidate(age=10)
+    candidate.evidence[0]["evidence"][0]["observed_at"] = observation
+    assert replay.gate_b(candidate) is False
+    report = replay._to_analyst_report(candidate.evidence[0], now=datetime(2026, 8, 3, 10))
+    assert report.evidence[0].observed_at == datetime.fromisoformat(observation)
+    assert report.evidence[0].status == "insufficient"
+
+
+def test_future_evidence_exclusion_keeps_independent_historical_fact_usable():
+    candidate = _candidate(age=10)
+    candidate.evidence[0]["evidence"].append({
+        "source": "future", "metric": "later_quote", "value": 1, "kind": "fact",
+        "status": "full", "observed_at": "2026-08-03T10:01:00+09:00",
+    })
+    report = replay._to_analyst_report(candidate.evidence[0], now=datetime(2026, 8, 3, 10))
+    assert [item.usable for item in report.evidence] == [True, False]
+    assert replay.gate_b(candidate) is True

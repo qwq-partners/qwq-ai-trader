@@ -137,9 +137,10 @@ PRE_REGISTERED = {
         "판단 시각은 plan.decided_at이며 naive 시각은 KST로 해석한다. 해당 키가 없는 구형 "
         "date-only 후보는 후보일 KST 자정을 고정 폴백으로 쓴다(시각 해상도 한계). "
         "명시된 decided_at이 손상/결측이면 기권하며 실행 시계로 대체하지 않는다. "
+        "결정 시각의 KST 날짜가 후보일과 다르면 기권한다(이월계획 시간 모델 미지원). "
         "보고서 신선도는 원본 data_as_of 우선, 키가 없을 때만 판단 시각-age_minutes 로 복원한다. "
         "복원할 시각이 없거나 손상되면 유효 보고서에서 제외한다. 근거 observed_at/valid_until은 "
-        "원본을 유지하고 같은 판단 시각에서 만료를 검사한다. "
+        "원본을 유지하고 같은 판단 시각에서 만료를 검사하며, 판단 이후 observed_at 근거는 제외한다. "
         "results.evidence_items_without_age_all_rows 카운터 — 선정·dedup 이전 입력 전체의 "
         "evidence 항목 수라 정책/모드 간 동일한 스냅샷 품질 지표다. C 는 gate_b(R1 bear ACCEPT)를 전제로 하므로 "
         "R1 REJECT→R2 ACCEPT 전향 후보는 C 에서 제외된다(=live 팀 최종 판정보다 엄격) — "
@@ -253,20 +254,22 @@ def _decision_time(c: Candidate) -> Optional[datetime]:
 
     명시됐지만 잘못된 decided_at은 레거시가 아니다 — fallback으로 정상화하지 않는다.
     """
+    try:
+        day = _date.fromisoformat(c.date)
+    except (TypeError, ValueError):
+        return None
     if "decided_at" in c.plan:
         raw = c.plan["decided_at"]
         if isinstance(raw, str) and len(raw.strip()) <= 10:
             return None
         parsed = _parse_dt(raw)
-        return _as_kst(parsed) if parsed is not None else None
-    try:
-        day = _date.fromisoformat(c.date)
-    except (TypeError, ValueError):
-        return None
+        reference = _as_kst(parsed) if parsed is not None else None
+        # 체결은 후보일 다음 시가를 쓰므로 다른 날의 판단을 적용하면 시점 누수가 생긴다.
+        return reference if reference is not None and reference.date() == day else None
     return datetime(day.year, day.month, day.day, tzinfo=KST)
 
 
-def _to_evidence_item(d: Dict[str, Any]) -> EvidenceItem:
+def _to_evidence_item(d: Dict[str, Any], now: Optional[datetime] = None) -> EvidenceItem:
     """AnalystReport.to_dict()['evidence'] 항목(EvidenceItem.to_dict()) 역직렬화.
 
     observed_at/collected_at/valid_until 을 복원해야 judgment._evidence_merit 의 근거 유효기간
@@ -277,10 +280,13 @@ def _to_evidence_item(d: Dict[str, Any]) -> EvidenceItem:
     valid_until = _parse_dt(d.get("valid_until"))
     if d.get("valid_until") is not None and valid_until is None:
         status = "insufficient"  # 손상된 만료시각을 '만료 없음'으로 승격하지 않는다.
+    observed_at = _parse_dt(d.get("observed_at"))
+    if observed_at is not None and now is not None and _as_kst(observed_at) > _as_kst(now):
+        status = "insufficient"  # 보고서의 나이와 무관하게 판단 이후 관측은 사용할 수 없다.
     return EvidenceItem(
         source=str(d.get("source") or ""), metric=str(d.get("metric") or ""),
         value=d.get("value"), unit=d.get("unit"),
-        observed_at=_parse_dt(d.get("observed_at")), collected_at=_parse_dt(d.get("collected_at")),
+        observed_at=observed_at, collected_at=_parse_dt(d.get("collected_at")),
         period=d.get("period"),
         status=status if isinstance(status, str) and status else "insufficient",
         kind=str(d.get("kind") or "fact"),
@@ -300,7 +306,7 @@ def _to_analyst_report(d: Dict[str, Any], now: Optional[datetime] = None) -> Ana
         kind = AnalystKind(kind_raw)
     except ValueError:
         kind = AnalystKind.TECHNICAL
-    nested = [_to_evidence_item(e) for e in (d.get("evidence") or [])]
+    nested = [_to_evidence_item(e, now=now) for e in (d.get("evidence") or [])]
     rep = AnalystReport(
         kind=kind, symbol=str(d.get("symbol") or ""), score=_safe_int(d.get("score")),
         confidence=_safe_float(d.get("confidence")), error=d.get("error"),
