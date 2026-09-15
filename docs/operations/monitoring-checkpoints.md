@@ -630,7 +630,9 @@ T10(F13~F22, 통합 SHA `a6d81d0`)은 단계별 수정이 아니라 자료 수�
 
 20건 누적 전에는 위 관측을 근거로 임계값·판정 규칙을 바꾸지 않는다(`morning_brief_eval.summarize()` 표본 수 우선 확인).
 
-### 2026-09-15~ — T11 팀 근거 계약·판단 v2·EntryPlan shadow (배포 후 관측, 승격 판정 아님)
+### 2026-09-15~ — T11 팀 근거 계약·판단 v2·EntryPlan shadow (2026-09-15 15:41 KST main 8c27fe8 배포, 관측 시작은 09-16 09:01 배치·10:30 슬롯부터; 승격 판정 아님)
+
+- ⚠️ 현금 고갈(0.4%) 상태에서는 엔진의 가용 현금 검사가 EntryPlan shadow 훅보다 앞이라 `shadow_plan_check` 행과 CF 승인 BUY 표본이 0건일 수 있다 — 표본 부재를 결함으로 오독하지 말 것(팀 원장·TeamAssessment 관측은 현금과 무관하게 쌓인다).
 
 - [ ] `~/.cache/ai_trader/team_ledger/deliberations_YYYYMMDD.jsonl` 이 슬롯마다 append 되고 같은 종목의 복수 시점 판단이 보존되는가(`team_ledger.count_samples`: buy_approved/buy_rejected/hold/abstained/failed 분포).
 - [ ] `TeamAssessment`: `abstained` 비율과 사유(근거 부족/토론 실패), `data_sufficiency` 분포, `success_probability` 가 항상 None 인가.

@@ -19,6 +19,7 @@
 계기: 15:33 KST 장 마감 후 `local_deploy.sh 04279c6` 의 verify 단계에서 T11 테스트 7건이 실패해 자동 롤백(운영은 `3175732` 유지, 재기동 정상). 테스트가 실제 벽시계를 써서 (a) 배치 실행부 `execute_pending_signals` 가 14:30 이후 SEPA 진입 차단 분기로 빠지고 (b) `_plan()` 만료가 고정 상수(2026-09-15 15:30) 기준이라 엔진 shadow 검증이 15:30 이후 PLAN_EXPIRED 로 갈라졌다. 오전에 작성·검증된 테스트라 배포 창(장 마감 후)에서 처음 드러났다.
 - `tests/test_t11_entry_plan.py`: `_freeze_clock` 헬퍼(모듈 `datetime.now()` → NOW 동결)를 `_run_execute`(batch_analyzer)·`_order_env`(engine) 에 적용, 호가 조회 시각·`intraday_state_as_of` 단정을 동결 시계 기준으로 정정. 운영 코드 변경 없음.
 - 교훈: 배포 verify 는 배포 창 시각에 돈다 — 시각 게이트(14:30/15:30/장중 여부)를 지나는 경로의 테스트는 반드시 시계를 주입한다.
+- **배포**: PR #53 머지 후 15:41 KST `local_deploy.sh 8c27fe8` 성공(verify 779 passed / 2 xfailed) — KIS 연결 15:41:07·엔진 시작 15:41:34, ERROR/Traceback 0, 헬스 정상, pending 0, 운영 체크아웃 main 복귀(트리 동일). 배포 전 `pending_signals.json` 을 `~/.cache/ai_trader/backup_20260915/` 에 백업(구버전 롤백 시 파일 유실 대비). 재기동 150초 후 ops-check: 재기동 이후 ERROR 0·동기화 경고 0·하트비트 정체/실패 없음(harvest_shadow·vol_targeting 은 "재시작 전 완료 복원" 정상)·pending 0.
 
 ## 2026-09-15 — fix(T11 배포 전 리뷰): CF 체결 증거 폴백을 실제 거래저널 경로로 정정
 
