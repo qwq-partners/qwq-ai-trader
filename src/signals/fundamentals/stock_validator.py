@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -419,14 +420,58 @@ class StockValidator:
             return False
         if "data" in data or "results" in data:
             rows = data.get("data", data.get("results"))
-            return isinstance(rows, list)
-        investor_keys = {"외국인합계", "외국인", "기관합계", "금융투자", "보험", "투신", "연기금등"}
-        return bool(investor_keys.intersection(data))
+            if not isinstance(rows, list):
+                return False
+            if not rows:                 # 명시적 정상 빈 응답
+                return True
+            if not all(isinstance(row, dict) for row in rows):
+                return False
+            return StockValidator._has_finite_investor_values(rows[-1])
+        return StockValidator._has_finite_investor_values(data)
 
     @staticmethod
     def _is_trend_buzz_response(data: Any) -> bool:
-        """Naver DataLab 응답의 최소 스키마를 확인한다 (빈 results는 정상 중립)."""
-        return isinstance(data, dict) and isinstance(data.get("results"), list)
+        """Naver DataLab 응답의 최소 스키마를 확인한다 (빈 응답은 정상 중립)."""
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            return False
+        results = data["results"]
+        if not results:                  # 명시적 정상 빈 응답
+            return True
+        first = results[0]
+        if not isinstance(first, dict) or not isinstance(first.get("data"), list):
+            return False
+        rows = first["data"]
+        if not rows:
+            return True                  # 명시적 정상 빈 시계열
+        return all(
+            isinstance(row, dict) and "ratio" in row
+            and StockValidator._is_finite_ratio(row["ratio"])
+            for row in rows
+        )
+
+    @staticmethod
+    def _has_finite_investor_values(row: Any) -> bool:
+        if not isinstance(row, dict):
+            return False
+        investor_keys = ("외국인합계", "외국인", "기관합계", "금융투자", "보험", "투신", "연기금등")
+        values = [row[key] for key in investor_keys if key in row]
+        return bool(values) and all(StockValidator._is_finite_number(value) for value in values)
+
+    @staticmethod
+    def _is_finite_number(value: Any) -> bool:
+        if isinstance(value, bool) or value is None:
+            return False
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _is_finite_ratio(value: Any) -> bool:
+        """트렌드 소비자는 ratio를 산술 연산하므로 문자열 숫자는 허용하지 않는다."""
+        return (not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(value))
 
     def _extract_investor_value(self, data: Any, keys: list) -> Optional[float]:
         """투자자 유형별 거래대금 추출 (여러 키 중 첫 매칭)"""

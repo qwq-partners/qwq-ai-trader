@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .trader import BUY_THRESHOLD
-from .types import AnalystReport, DebateResult, TeamAssessment
+from .types import AnalystReport, DebateResult, TeamAssessment, as_kst_aware
 
 
 def _expired_at(valid_until: datetime, now: Optional[datetime]) -> bool:
@@ -34,13 +34,7 @@ def _expired_at(valid_until: datetime, now: Optional[datetime]) -> bool:
     """
     if now is None:
         return False
-    if valid_until.tzinfo is None and now.tzinfo is not None:
-        reference = now.replace(tzinfo=None)
-    elif valid_until.tzinfo is not None and now.tzinfo is None:
-        reference = now.replace(tzinfo=valid_until.tzinfo)
-    else:
-        reference = now
-    return valid_until < reference
+    return as_kst_aware(valid_until) < as_kst_aware(now)
 
 
 def _valid_reports(reports: List[AnalystReport], now: Optional[datetime] = None) -> List[AnalystReport]:

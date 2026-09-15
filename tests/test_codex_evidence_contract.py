@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import pytest
@@ -49,6 +50,26 @@ def test_supply_demand_mcp_failures_are_not_acquired_or_cached(response):
 
 @pytest.mark.parametrize(
     "response",
+    [
+        _McpResponse('{"data": [{"error": "not available"}]}'),
+        _McpResponse('{"외국인합계": "bad"}'),
+        _McpResponse('{"data": [{"외국인합계": null}]}'),
+        _McpResponse('{"data": [{"외국인합계": NaN}]}'),
+    ],
+)
+def test_supply_demand_unparseable_observations_are_not_acquired_or_cached(response):
+    async def call_tool(*_args, **_kwargs):
+        return response
+
+    validator = _validator_with_mcp(call_tool)
+    _result, acquired = asyncio.run(validator._safe_check_supply_demand("005930"))
+
+    assert acquired is False
+    assert validator._supply_demand_cache == {}
+
+
+@pytest.mark.parametrize(
+    "response",
     [None, _McpResponse(is_error=True), _McpResponse("not-json"), _McpResponse('{"unexpected": 1}')],
 )
 def test_trend_buzz_mcp_failures_are_not_acquired_or_cached(response):
@@ -63,6 +84,25 @@ def test_trend_buzz_mcp_failures_are_not_acquired_or_cached(response):
     assert validator._trend_buzz_cache == {}
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"results": [{"error": "not available"}]}',
+        '{"results": [{"data": [{"ratio": NaN}]}]}',
+        '{"results": [{"data": [{"ratio": "0"}]}]}',
+    ],
+)
+def test_trend_buzz_unparseable_nested_response_is_not_acquired_or_cached(payload):
+    async def call_tool(*_args, **_kwargs):
+        return _McpResponse(payload)
+
+    validator = _validator_with_mcp(call_tool)
+    _result, acquired = asyncio.run(validator._safe_check_trend_buzz("삼성전자"))
+
+    assert acquired is False
+    assert validator._trend_buzz_cache == {}
+
+
 def test_zero_supply_response_is_acquired_and_cached_as_valid_neutral():
     async def call_tool(*_args, **_kwargs):
         return _McpResponse('{"data": [{"외국인합계": 0, "기관합계": 0}]}')
@@ -73,6 +113,20 @@ def test_zero_supply_response_is_acquired_and_cached_as_valid_neutral():
     assert acquired is True
     assert result.confidence_adjustment == 0.0
     assert "005930" in validator._supply_demand_cache
+
+
+def test_fourteen_day_zero_trend_is_acquired_and_cached_as_valid_neutral():
+    rows = ",".join('{"period": "2026-09-%02d", "ratio": 0}' % day for day in range(1, 15))
+
+    async def call_tool(*_args, **_kwargs):
+        return _McpResponse('{"results": [{"data": [' + rows + ']}]}')
+
+    validator = _validator_with_mcp(call_tool)
+    result, acquired = asyncio.run(validator._safe_check_trend_buzz("삼성전자"))
+
+    assert acquired is True
+    assert result.trend_direction == "neutral"
+    assert "삼성전자" in validator._trend_buzz_cache
 
 
 def test_dart_neutral_disclosure_is_marked_fetched(monkeypatch):
@@ -182,6 +236,24 @@ def test_aware_report_accepts_naive_historical_clock_in_its_timezone():
     assert report.age_minutes_at(datetime(2026, 9, 10, 10, 0)) == 30.0
 
 
+def test_naive_kst_now_and_aware_utc_as_of_measure_the_same_instant():
+    report = _report(data_as_of=datetime(2026, 9, 10, 0, 30, tzinfo=timezone.utc))
+
+    assert report.age_minutes_at(datetime(2026, 9, 10, 10, 0)) == 30.0
+
+
+def test_aware_utc_now_and_naive_kst_as_of_measure_the_same_instant():
+    report = _report(data_as_of=datetime(2026, 9, 10, 9, 30))
+
+    assert report.age_minutes_at(datetime(2026, 9, 10, 1, 0, tzinfo=timezone.utc)) == 30.0
+
+
+def test_future_aware_as_of_is_not_treated_as_stale_against_naive_kst_now():
+    report = _report(data_as_of=datetime(2026, 9, 10, 1, 30, tzinfo=timezone.utc))
+
+    assert report.age_minutes_at(datetime(2026, 9, 10, 10, 0)) == 0.0
+
+
 def test_evidence_expiry_accepts_naive_deadline_with_aware_historical_clock():
     decision_time = datetime(2026, 9, 10, 10, 0, tzinfo=timezone(timedelta(hours=9)))
     report = _report(data_as_of=decision_time - timedelta(minutes=5))
@@ -190,6 +262,17 @@ def test_evidence_expiry_accepts_naive_deadline_with_aware_historical_clock():
     assessment = judgment.assess("005930", [report], None, now=decision_time)
 
     assert assessment.merit_score == 40
+
+
+def test_naive_kst_deadline_expires_against_aware_utc_historical_clock():
+    kst = ZoneInfo("Asia/Seoul")
+    now = datetime(2026, 9, 10, 1, 0, tzinfo=timezone.utc)  # KST 10:00
+    report = _report(data_as_of=datetime(2026, 9, 10, 9, 30, tzinfo=kst))
+    report.evidence[0].valid_until = datetime(2026, 9, 10, 9, 55)  # naive KST
+
+    assessment = judgment.assess("005930", [report], None, now=now)
+
+    assert assessment.merit_score is None
 
 
 def test_missing_data_as_of_remains_fail_closed_and_serializable():

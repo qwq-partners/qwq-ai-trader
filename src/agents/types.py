@@ -15,6 +15,15 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
+
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def as_kst_aware(value: datetime) -> datetime:
+    """naive 시각은 기존 로컬 계약대로 KST를 부여하고 aware offset은 보존한다."""
+    return value.replace(tzinfo=KST) if value.tzinfo is None else value
 
 
 class Stance(str, Enum):
@@ -139,19 +148,8 @@ class AnalystReport:
         심의 자체가 통째로 실패한다. 외부에서 어떤 시각이 들어와도 죽지 않게 정규화한다.
         """
         try:
-            as_of = self.data_as_of
-            if as_of.tzinfo is not None:
-                if now is None:
-                    reference = datetime.now(as_of.tzinfo)
-                elif now.tzinfo is None:
-                    # naive decision_time은 기존 KST wall-clock 계약을 따른다.
-                    reference = now.replace(tzinfo=as_of.tzinfo)
-                else:
-                    reference = now
-            else:
-                reference = datetime.now() if now is None else (
-                    now.replace(tzinfo=None) if now.tzinfo is not None else now
-                )
+            as_of = as_kst_aware(self.data_as_of)
+            reference = as_kst_aware(now) if now is not None else datetime.now(KST)
             return max(0.0, (reference - as_of).total_seconds() / 60.0)
         except (TypeError, AttributeError, OverflowError):
             # 시각을 신뢰할 수 없으면 "매우 오래된 것"으로 본다 —
