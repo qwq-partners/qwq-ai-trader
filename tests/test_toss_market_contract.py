@@ -257,9 +257,14 @@ def test_compose_quote_rejects_empty_unknown_or_unsupported_market_basis(basis):
 
 
 def test_compose_quote_rejects_mixed_adjusted_history_before_calculating_change():
-    quote = Quote("005930", Decimal("105"), NOW - timedelta(seconds=10), FETCHED, "ok", frozenset(), "krx", "KRW")
-    today = Candle("20260915", Decimal("100"), Decimal("110"), Decimal("90"), Decimal("100"), 100, True, True, "krx")
-    previous = Candle("20260914", Decimal("90"), Decimal("110"), Decimal("80"), Decimal("100"), 100, True, False, "krx")
-    mixed = CandleSeries((previous, today), True, (), "ok")
+    target_fetched = datetime(2026, 9, 15, 15, 0, tzinfo=KST)
+    quote = Quote("005930", Decimal("105"), target_fetched - timedelta(seconds=10), target_fetched, "ok", frozenset(), "krx", "KRW")
+    confirmed_target = Candle("20260915", Decimal("100"), Decimal("110"), Decimal("90"), Decimal("100"), 100, True, True, "krx")
+    normal_previous = Candle("20260914", Decimal("90"), Decimal("110"), Decimal("80"), Decimal("100"), 100, True, True, "krx")
+    mixed_previous = Candle("20260914", Decimal("90"), Decimal("110"), Decimal("80"), Decimal("100"), 100, True, False, "krx")
+    normal = CandleSeries((normal_previous, confirmed_target), True, (), "ok")
+    mixed = CandleSeries((mixed_previous, confirmed_target), True, (), "ok")
 
-    assert compose_quote(quote, mixed, trading_date="20260915", previous_trading_date="20260914", required_fields={"price", "prev_close", "change_pct"}) == {}
+    required = {"price", "prev_close", "change_pct"}
+    assert compose_quote(quote, normal, trading_date="20260915", previous_trading_date="20260914", required_fields=required) == {"price": 105.0, "prev_close": 100.0, "change_pct": 5.0}
+    assert compose_quote(quote, mixed, trading_date="20260915", previous_trading_date="20260914", required_fields=required) == {}
