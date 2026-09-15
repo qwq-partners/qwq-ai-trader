@@ -13,14 +13,16 @@ AI 게이트가 차단·감지한 매수 후보의 "만약 거래했다면" 후�
   · 가상 진입가 = 감지일(이후 첫 거래일) 종가, rN = N세션 후 종가 대비 수익률(%)
   · 갱신은 저녁 품질검증 잡에서 1일 1회 (KIS get_daily_prices — 오래된 순 반환)
 
-해석: 차단 후보의 rN이 음수(-) = 게이트가 손실을 막았다 (정확한 차단).
+해석: 차단(rule11/rule12/team_hold) 후보의 rN이 음수(-) = 게이트가 손실을 막았다(정확한 차단).
+반대로 team_buy_unfilled(팀이 승인한 매수, T11 E1 2026-09-15~)는 rN이 음수면 팀 판단이
+틀렸다는 뜻이다 — 같은 부호라도 두 소스의 "적중"은 정반대 의미이므로 요약에서 섞어 읽지 않는다.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
@@ -33,13 +35,69 @@ _SOURCES = {
 # 팀 심의 판정 (2026-08-08 후속 — HOLD/거부 후보의 기회비용 추적)
 _TEAM_VERDICT_DIR = _CACHE_DIR / "team_verdicts"
 _HORIZONS = (("r1", 1), ("r5", 5), ("r20", 20))
+# 콜백 미주입 시 기본 체결 증거원 (CLAUDE.md 명시 경로) — advisory(2026-09-15):
+# 운영에서 콜백 없이 생성되면 실제 체결분까지 전부 team_buy_unfilled 로 잘못 등록되던 문제
+_TRADE_JOURNAL_PATH = _CACHE_DIR / "trade_journal_kr.json"
+
+
+def _read_trade_journal_buy_symbols(day: str, path: Path) -> Optional[set]:
+    """당일(day, YYYY-MM-DD) entry_time 매수 기록 종목 집합 — 파일 없거나 손상 시 None(폴백 실패)."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    trades = data.get("trades") if isinstance(data, dict) else data
+    if not isinstance(trades, list):
+        return None
+    symbols = set()
+    for t in trades:
+        if not isinstance(t, dict):
+            continue
+        entry_time = str(t.get("entry_time") or "")
+        sym = t.get("symbol")
+        if sym and entry_time[:10] == day:
+            symbols.add(sym)
+    return symbols
 
 
 class CounterfactualTracker:
     """shadow 차단 후보의 가상 성과 추적"""
 
-    def __init__(self):
+    def __init__(self, fill_evidence_check: Optional[Callable[[str, str], bool]] = None):
+        """
+        Args:
+            fill_evidence_check: 승인 BUY 종목이 당일 실제로 체결됐는지 확인하는 콜백
+                (symbol, day) -> bool. T11 E1 (2026-09-15) — 주입 전용, 기본 None 이면
+                항상 "증거 없음"(미체결)으로 본다(보수적). 운영 배선은 이 트래커 밖에서 한다.
+        """
         self._state: Dict[str, Dict[str, Any]] = self._load()
+        self._fill_evidence_check = fill_evidence_check
+
+    def _has_fill_evidence(self, symbol: str, day: str) -> bool:
+        """승인 BUY 의 실제 체결 증거.
+
+        콜백이 주입되면 그것을 우선한다(콜백 실패 시엔 기존과 동일하게 보수적으로 '없음' —
+        폴백으로 더 파고들지 않는다, 기존 계약 유지). 콜백이 아예 없을 때만
+        trade_journal_kr.json 당일 매수 기록을 기본 증거원으로 읽는다(advisory 2026-09-15 —
+        콜백 미배선 상태로는 실제 체결분까지 전부 미체결로 등록되던 문제). 그마저 실패하면
+        보수적으로 '없음'(미체결).
+        """
+        if self._fill_evidence_check is not None:
+            try:
+                return bool(self._fill_evidence_check(symbol, day))
+            except Exception as e:
+                logger.debug(f"[CF추적] 체결 증거 콜백 실패 ({symbol}/{day}, 미체결로 간주): {e}")
+                return False
+        try:
+            symbols = _read_trade_journal_buy_symbols(day, _TRADE_JOURNAL_PATH)
+        except Exception as e:
+            logger.debug(f"[CF추적] 거래저널 폴백 조회 실패 ({symbol}/{day}, 미체결로 간주): {e}")
+            return False
+        if symbols is None:
+            return False
+        return symbol in symbols
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
         try:
@@ -102,10 +160,30 @@ class CounterfactualTracker:
                 for v in (verdicts if isinstance(verdicts, list) else []):
                     try:
                         sym = v.get("symbol", "")
+                        if not sym:
+                            continue
                         dec = v.get("decision") or {}
                         stance = str(dec.get("stance", "")).lower()
-                        # 매수 승인은 실거래로 추적됨 — 막힌 후보만 counterfactual
-                        if not sym or (dec.get("approved") and stance == "buy"):
+                        approved_buy = bool(dec.get("approved")) and stance == "buy"
+                        if approved_buy:
+                            # T11 E1 (2026-09-15): 승인 BUY 라도 실제 체결 증거가 없으면
+                            # 더는 조용히 제외하지 않고 "team_buy_unfilled" 로 별도 추적한다.
+                            # 체결 증거가 있으면(=실거래로 이미 추적됨) 기존과 동일하게 건너뛴다.
+                            if self._has_fill_evidence(sym, day):
+                                continue
+                            key = f"team_buy_unfilled|{sym}|{day}"
+                            if key in self._state:
+                                continue
+                            self._state[key] = {
+                                "symbol": sym,
+                                "source": "team_buy_unfilled",
+                                "wiki_context_used": v.get("wiki_context_used"),
+                                "date": day,
+                                "sector": None,
+                                "entry_px": None,
+                                "r1": None, "r5": None, "r20": None,
+                            }
+                            added += 1
                             continue
                         key = f"team_hold|{sym}|{day}"
                         if key in self._state:
@@ -136,8 +214,12 @@ class CounterfactualTracker:
                 if v.get("x5") is not None:
                     groups.setdefault(str(v.get("source")), []).append(float(v["x5"]))
             if groups:
+                # advisory(2026-09-15): team_buy_unfilled 는 음수=팀 판단이 틀림(다른 소스는 음수=적중) —
+                # _summary_base 와 프레이밍이 반대이므로 이 줄에서도 명시한다.
                 parts = [
-                    f"{src} n={len(xs)} x5 {sum(xs) / len(xs):+.2f}% (음수 {sum(1 for x in xs if x < 0) / len(xs) * 100:.0f}%)"
+                    f"{src} n={len(xs)} x5 {sum(xs) / len(xs):+.2f}% "
+                    f"(음수 {sum(1 for x in xs if x < 0) / len(xs) * 100:.0f}%"
+                    f"{'·팀 판단이 틀림' if src.split('|', 1)[0] == 'team_buy_unfilled' else ''})"
                     for src, xs in sorted(groups.items())
                 ]
                 base += "\n· KODEX200 대비 초과(r5): " + " | ".join(parts)
@@ -237,7 +319,12 @@ class CounterfactualTracker:
 
     # ── 요약 (주간 성적표) ──────────────────────────────────
     def _summary_base(self) -> str:
-        """소스별 차단 정확도 요약 — rN < 0 이면 '손실 회피 적중'"""
+        """소스별 요약 — 차단 계열(rN<0="적중")과 승인 BUY 계열(rN<0="팀 판단이 틀림")을 분리해 표기한다.
+
+        team_buy_unfilled 는 "게이트가 막은 후보"가 아니라 "팀이 승인한 매수"다. rN 이 음수라는
+        같은 사실이 차단 계열에선 '정확한 차단'을, 승인 계열에선 '틀린 매수 판단'을 뜻하므로
+        같은 "적중" 프레이밍으로 섞어 보고하면 오해를 낳는다(T11 담당D 리뷰 2026-09-15 반영).
+        """
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for v in self._state.values():
             if v.get("r5") is not None:
@@ -250,20 +337,33 @@ class CounterfactualTracker:
         lines = []
         for source, items in sorted(groups.items()):
             n = len(items)
-            avoided = sum(1 for i in items if (i.get("r5") or 0) < 0)
+            base_source = source.split("|", 1)[0]
             avg_r5 = sum((i.get("r5") or 0) for i in items) / n
             r20_items = [i for i in items if i.get("r20") is not None]
             avg_r20 = (
                 sum(i["r20"] for i in r20_items) / len(r20_items)
                 if r20_items else None
             )
-            line = (
-                f"{source}: {n}건 | 5일 뒤 하락 {avoided}건 ({avoided/n*100:.0f}% 적중) "
-                f"| 평균 r5 {avg_r5:+.1f}%"
-            )
+            if base_source == "team_buy_unfilled":
+                wrong = sum(1 for i in items if (i.get("r5") or 0) < 0)
+                line = (
+                    f"{source}: 승인 BUY 미체결 {n}건 | 5일 뒤 하락 {wrong}건 "
+                    f"(팀 판단이 틀린 비율 {wrong/n*100:.0f}%) | 평균 r5 {avg_r5:+.1f}%"
+                )
+            else:
+                avoided = sum(1 for i in items if (i.get("r5") or 0) < 0)
+                line = (
+                    f"{source}: {n}건 | 5일 뒤 하락 {avoided}건 ({avoided/n*100:.0f}% 적중) "
+                    f"| 평균 r5 {avg_r5:+.1f}%"
+                )
             if avg_r20 is not None:
                 line += f" | 평균 r20 {avg_r20:+.1f}%"
             lines.append(line)
+        if (self._fill_evidence_check is None and not _TRADE_JOURNAL_PATH.exists() and any(
+            source.split("|", 1)[0] == "team_buy_unfilled" for source in groups
+        )):
+            lines.append("※ 체결 대조 미배선(콜백 없음·거래저널 파일 없음) — "
+                          "team_buy_unfilled 에 실제 체결분도 섞여 있을 수 있음")
         return "\n".join(lines)
 
 

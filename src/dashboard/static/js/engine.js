@@ -186,9 +186,22 @@ function toggleNoise() {
 function stanceBadge(stance, approved) {
     const s = (stance || '').toLowerCase();
     if (!approved) return '<span class="badge badge-red">거부</span>';
-    if (s === 'buy') return '<span class="badge badge-green">매수</span>';
+    // T11 (2026-09-15): PM 승인은 "매수 제안"일 뿐 실주문이 아니다 — 실행 상태는 별도 표시
+    if (s === 'buy') return '<span class="badge badge-green">매수(제안)</span>';
     if (s === 'sell') return '<span class="badge badge-red">매도</span>';
     return '<span class="badge badge-yellow">보유</span>';
+}
+
+// T11 (2026-09-15): 실행 상태 5단계 배지 — 팀 BUY 합의(제안)와 실제 주문·체결을 시각적으로도 분리
+const EXEC_STATE_LABEL = {
+    candidate: '판단', waiting_trigger: '트리거 대기', shadow_ready: 'shadow(체결 미확인)',
+    order_submitted: '주문 접수', filled: '체결',
+};
+function execStateBadge(state) {
+    const label = EXEC_STATE_LABEL[state] || state;
+    const cls = state === 'filled' ? 'badge-green'
+        : state === 'order_submitted' ? 'badge-yellow' : 'badge-blue';
+    return `<span class="badge ${cls}" style="font-size:.6rem;">${escapeHtml(label)}</span>`;
 }
 
 function escapeHtml(s) {
@@ -243,12 +256,13 @@ async function fetchTeamVerdicts() {
                     <strong style="font-size:.78rem;">${escapeHtml(v.name || v.symbol)}</strong>
                     <span style="font-size:.64rem;color:var(--text-muted);">${escapeHtml(v.symbol)}</span>
                     ${stanceBadge(v.stance, v.approved)}
+                    ${v.execution_state ? execStateBadge(v.execution_state) : ''}
                     ${v.size_multiplier ? `<span style="font-size:.64rem;color:var(--text-muted);">×${v.size_multiplier}</span>` : ''}
                     ${override} ${split}
                 </div>
                 <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;">${chips}
                     <span style="font-size:.62rem;color:var(--text-muted);margin-left:auto;">
-                        ${v.debate_rounds || 0}R · 확신 ${v.conviction ?? '—'} · ${v.elapsed_sec ?? '—'}s
+                        ${v.debate_rounds || 0}R · <span title="${escapeHtml(v.conviction_label || '합의 기반 지표 · 확률 미보정')}">확신 ${v.conviction ?? '—'}</span> · ${v.elapsed_sec ?? '—'}s
                     </span>
                 </div>
                 <div style="margin-top:4px;font-size:.66rem;color:var(--text-muted);line-height:1.4;">
