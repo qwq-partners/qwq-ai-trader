@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-16 — feat: 토스 Phase 1 오프라인 기반 (기본 OFF, 운영 미배선)
+
+- 검토된 설계 PR #65 `2235586` 위 별도 feature 브랜치에서 보안 토큰 저장/상태 머신, 정확한 GET 3경로 조회 client/transport, 공유 deadline·retry/page 예산, 시세/일봉 정규화와 합성 shadow CLI를 구현한다. 실제 OAuth 발급기는 주입 인터페이스뿐이며 기존 broker/core/schedulers·설정·의존성 파일은 바꾸지 않는다.
+- 독립 리뷰에서 늦은 revoked 응답/손상 auth 지문, 오래된 요청의 회로 해제/반복 취소 정리, 중복·미래 관측·거래일/시장/페이지 커서, 비교 자료의 관측 나이·정확한 경계/수치범위 문제를 재현하고 회귀 테스트로 보완한다. 진행·재리뷰·최종 검증 수치는 `docs/reviews/toss-phase1-offline-2026-09-16.md`가 정본이다.
+- 공개 OpenAPI `1.2.17` 원본 SHA와 사용 계약 메타데이터를 고정한다. 파일 입력 CLI는 합성 자료만 처리하며 p95/유효·제외·실패·중복 분모를 보고한다. 합성 수치·fixture 정책을 실자료 승인으로 쓰지 않으며 `production_eligible=False`를 유지한다.
+- **실토큰/인증 API·운영 캐시·주문·설정·SSH·배포·재시작 변경 없음.** 모든 런타임 진입은 미배선·기본 OFF. Phase 1의 실자료 3영업일 관측, Phase 2 후보/점수, Phase 3 표시 wrapper는 별도 승인·구현 대상이다.
+
 ## 2026-09-15 — docs: 토스 설계 Codex 후속 보완 (T12, 구현 없음)
 
 - Claude 설계 `85a4266`을 최신 main `8849d92`와 공개 OpenAPI `1.2.17`에 대조하고, P1 4개/P2 10개를 문서·향후 인수 명세로 보완했다. 과거 Claude 검토 34건의 완료 수를 재사용하거나 Toss 런타임 결함을 실행 재현했다고 주장하지 않는다.
