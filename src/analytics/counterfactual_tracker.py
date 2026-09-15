@@ -10,7 +10,8 @@ AI 게이트가 차단·감지한 매수 후보의 "만약 거래했다면" 후�
 
 산출:
   counterfactual_state.json — {key: {symbol, source, date, entry_px, r1, r5, r20}}
-  · 가상 진입가 = 감지일(이후 첫 거래일) 종가, rN = N세션 후 종가 대비 수익률(%)
+  · 가상 진입가 = 감지일 종가(해당 날짜 봉 필수), rN = N세션 후 종가 대비 수익률(%)
+  · fill_evidence_unknown=True 행은 측정값을 보존하되 평가·가격 갱신에서 제외
   · 갱신은 저녁 품질검증 잡에서 1일 1회 (KIS get_daily_prices — 오래된 순 반환)
 
 해석: 차단(rule11/rule12/team_hold) 후보의 rN이 음수(-) = 게이트가 손실을 막았다(정확한 차단).
@@ -200,14 +201,19 @@ class CounterfactualTracker:
             had_buy = bool(buys) or buy_key in self._state
             source = "team_buy_unfilled" if had_buy else "team_hold"
             key = buy_key if had_buy else hold_key
+            fill = False
             if had_buy:
                 fill = self._has_fill_evidence(sym, day)
-                if fill is not False:
-                    # 새 체결 증거/판정 불가: 잘못된 HOLD·미체결 분모를 남기지 않는다.
+                if fill is True:
+                    # 체결 확정만 미체결 표본에서 제거한다.
                     self._state.pop(hold_key, None)
                     self._state.pop(buy_key, None)
-                    undetermined += int(fill is None)
                     continue
+                if fill is None:
+                    undetermined += 1
+                    # 새 표본은 등록 보류. 기존 측정은 평가 제외 상태로 보존한다.
+                    if buy_key not in self._state and hold_key not in self._state:
+                        continue
             prior_hold = self._state.pop(hold_key, None) if had_buy else None
             entry = self._state.get(key)
             selected = (buys or decisions)[0]
@@ -221,6 +227,10 @@ class CounterfactualTracker:
                 entry["wiki_context_used"] = selected.get("wiki_context_used")
                 self._state[key] = entry
                 added += 1
+            if fill is None:
+                entry["fill_evidence_unknown"] = True
+            else:
+                entry.pop("fill_evidence_unknown", None)
             entry["deliberation_ids"] = sorted({
                 *entry.get("deliberation_ids", []),
                 *(str(r["deliberation_id"]) for r in decisions if r.get("deliberation_id")),
@@ -270,7 +280,7 @@ class CounterfactualTracker:
         except Exception as e:
             logger.debug(f"[CF추적] 팀 심의 읽기 실패: {e}")
         if undetermined:
-            logger.warning(f"[CF추적] 승인 BUY {undetermined}건 체결 대조 판정 불가(콜백 없음·거래저널 디렉터리 없음) — 등록 보류")
+            logger.warning(f"[CF추적] 승인 BUY {undetermined}건 체결 대조 판정 불가 — 신규 등록 보류·기존 측정 보존 및 평가 제외")
         self._ingest_changed = before != json.dumps(self._state, sort_keys=True, ensure_ascii=False)
         return added
 
@@ -281,7 +291,7 @@ class CounterfactualTracker:
         try:
             groups: Dict[str, List[float]] = {}
             for v in self._state.values():
-                if v.get("x5") is not None:
+                if not v.get("fill_evidence_unknown") and v.get("x5") is not None:
                     groups.setdefault(str(v.get("source")), []).append(float(v["x5"]))
             if groups:
                 # advisory(2026-09-15): team_buy_unfilled 는 음수=팀 판단이 틀림(다른 소스는 음수=적중) —
@@ -315,7 +325,8 @@ class CounterfactualTracker:
         2026-09-13 리뷰: 삽입순 상위 50개만 처리해 r20 대기 항목이 슬롯을 점유 → 08-24 이후
         신규 126건이 한 번도 가격 조회되지 않아 승격 지표가 8/2~8/24 코호트에 동결됐던 결함.
         """
-        pending = [(k, v) for k, v in state.items() if v.get("r20") is None]
+        pending = [(k, v) for k, v in state.items()
+                   if not v.get("fill_evidence_unknown") and v.get("r20") is None]
         pending.sort(key=lambda kv: (kv[1].get("entry_px") is not None, str(kv[1].get("date", ""))))
         return pending
 
@@ -327,7 +338,8 @@ class CounterfactualTracker:
             from datetime import datetime as _dt, timedelta as _td
             _cut = (_dt.now() - _td(days=180)).strftime("%Y-%m-%d")
             _old = [k for k, v in self._state.items()
-                    if v.get("r20") is not None and str(v.get("date", "")) < _cut]
+                    if not v.get("fill_evidence_unknown")
+                    and v.get("r20") is not None and str(v.get("date", "")) < _cut]
             for k in _old:
                 del self._state[k]
         except Exception:
@@ -349,9 +361,9 @@ class CounterfactualTracker:
                     continue
                 # get_daily_prices는 오래된 순 — (날짜, 종가) 리스트 구성
                 rows = self._rows(prices)
-                # 감지일 이후 첫 거래일 = 기준점
+                # 조회 창에서 감지일이 빠졌다면 다른 날 봉을 기준점으로 대체하지 않는다.
                 idx0 = next(
-                    (i for i, (d, _) in enumerate(rows) if d >= entry["date"]), None
+                    (i for i, (d, _) in enumerate(rows) if d == entry["date"]), None
                 )
                 if idx0 is None:
                     continue
@@ -359,7 +371,7 @@ class CounterfactualTracker:
                     entry["entry_px"] = rows[idx0][1]
                 base = entry["entry_px"]
                 # 벤치마크 기준점 (같은 감지일)
-                bidx0 = next((i for i, (d, _) in enumerate(bench_rows) if d >= entry["date"]), None) if bench_rows else None
+                bidx0 = next((i for i, (d, _) in enumerate(bench_rows) if d == entry["date"]), None) if bench_rows else None
                 for field, n in _HORIZONS:
                     if entry.get(field) is None and idx0 + n < len(rows):
                         entry[field] = round(
@@ -392,13 +404,16 @@ class CounterfactualTracker:
         """
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for v in self._state.values():
-            if v.get("r5") is not None:
+            if not v.get("fill_evidence_unknown") and v.get("r5") is not None:
                 _g = v["source"]
                 if v.get("wiki_context_used") is not None:  # 2026-09-13 위키 노출 유무로 분리
                     _g = f"{_g}|wiki={'Y' if v['wiki_context_used'] else 'N'}"
                 groups.setdefault(_g, []).append(v)
         hold_note = ""
-        if self._fill_evidence_check is None and not _journal_dir().is_dir():
+        unknown = sum(1 for v in self._state.values() if v.get("fill_evidence_unknown"))
+        if unknown:
+            hold_note = f"※ 체결 대조 판정 불가 {unknown}건 — 기존 측정 보존·평가 및 가격 갱신 제외"
+        elif self._fill_evidence_check is None and not _journal_dir().is_dir():
             hold_note = ("※ 체결 대조 판정 불가(콜백 없음·거래저널 디렉터리 없음) — "
                          "승인 BUY 는 team_buy_unfilled 로 등록하지 않고 보류 중")
         if not groups:
