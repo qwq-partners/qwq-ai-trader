@@ -198,3 +198,79 @@ def test_shadow_readiness_counts_only_rule11_even_when_unknown_buy_has_returns(t
     tracker._save()
     report = asyncio.run(shadow_lab.promotion_readiness_report())
     assert "CF 표본 1/20건, r5 정확도 100%" in report
+
+
+def test_pending_batch_rotates_past_unpriceable_backfill_to_recent_sample(tracker):
+    """45봉 밖 150건도 재조회하되, 뒤의 정상 후보를 영구히 굶기지 않는다."""
+    old_day = "2020-01-02"
+    recent_day = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    for idx in range(150):
+        tracker._state[f"old-{idx:03}"] = {
+            "symbol": f"OLD{idx:03}", "date": old_day, "source": "rule11",
+            "entry_px": None, "r1": None, "r5": None, "r20": None,
+        }
+    tracker._state["recent"] = {
+        "symbol": "RECENT", "date": recent_day, "source": "rule11",
+        "entry_px": None, "r1": None, "r5": None, "r20": None,
+    }
+    requests = []
+    recent_bars = _bars(recent_day, price=100)
+
+    async def get_daily_prices(symbol, days):
+        if symbol == "069500":
+            return []
+        requests.append(symbol)
+        return recent_bars
+
+    broker = SimpleNamespace(get_daily_prices=get_daily_prices)
+    tracker._save()
+    first = asyncio.run(tracker.update(broker))
+    assert len(requests) == 150
+    assert "RECENT" not in requests
+    assert tracker._state["recent"]["entry_px"] is None
+    assert first["filled"] == 0
+
+    requests.clear()
+    restored = cf.CounterfactualTracker()
+    second = asyncio.run(restored.update(broker))
+
+    assert "RECENT" in requests
+    assert restored._state["recent"]["entry_px"] == 100
+    assert second["filled"] == 3
+
+
+def test_pending_batch_rotates_past_new_unpriceable_rows_to_price_ready_sample(tracker):
+    """신규 손상 150건도 과거에 이미 가격이 있는 미완성 표본을 영구히 막지 않는다."""
+    old_day = "2020-01-02"
+    recent_day = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    for idx in range(150):
+        tracker._state[f"new-{idx:03}"] = {
+            "symbol": f"NEW{idx:03}", "date": recent_day, "source": "rule11",
+            "entry_px": None, "r1": None, "r5": None, "r20": None,
+        }
+    tracker._state["old-priced"] = {
+        "symbol": "OLD_PRICED", "date": old_day, "source": "rule11",
+        "entry_px": 100, "r1": None, "r5": None, "r20": None,
+    }
+    requests = []
+    old_bars = _bars(old_day, price=100)
+
+    async def get_daily_prices(symbol, days):
+        if symbol == "069500":
+            return []
+        requests.append(symbol)
+        return old_bars
+
+    broker = SimpleNamespace(get_daily_prices=get_daily_prices)
+    tracker._save()
+    asyncio.run(tracker.update(broker))
+    assert len(requests) == 150
+    assert "OLD_PRICED" not in requests
+
+    requests.clear()
+    restored = cf.CounterfactualTracker()
+    second = asyncio.run(restored.update(broker))
+
+    assert "OLD_PRICED" in requests
+    assert restored._state["old-priced"]["entry_px"] == 100
+    assert second["filled"] == 3

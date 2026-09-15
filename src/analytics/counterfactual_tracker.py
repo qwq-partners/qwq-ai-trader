@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -320,14 +321,23 @@ class CounterfactualTracker:
 
     @staticmethod
     def _pending_order(state: Dict[str, Dict[str, Any]]) -> List[tuple]:
-        """미완성 항목 처리 순서 — 아직 가격도 없는 항목(entry_px None) 먼저, 그다음 오래된 순.
+        """미완성 항목 처리 순서 — 미시도/오래전 시도 우선, 그다음 기존 우선순위.
 
         2026-09-13 리뷰: 삽입순 상위 50개만 처리해 r20 대기 항목이 슬롯을 점유 → 08-24 이후
         신규 126건이 한 번도 가격 조회되지 않아 승격 지표가 8/2~8/24 코호트에 동결됐던 결함.
+
+        `last_price_attempted_at`은 조회 창에 감지일이 없거나 API가 실패한 경우에도 남긴다.
+        그래서 150개 호출 상한이 있어도 같은 실패 행만 재시도해 나머지 행이 굶지 않으며,
+        행 자체는 유지되어 이후 제공 데이터 범위가 바뀌면 다시 조회할 수 있다.
         """
         pending = [(k, v) for k, v in state.items()
                    if not v.get("fill_evidence_unknown") and v.get("r20") is None]
-        pending.sort(key=lambda kv: (kv[1].get("entry_px") is not None, str(kv[1].get("date", ""))))
+        pending.sort(key=lambda kv: (
+            kv[1].get("last_price_attempted_at") is not None,
+            str(kv[1].get("last_price_attempted_at") or ""),
+            kv[1].get("entry_px") is not None,
+            str(kv[1].get("date", "")),
+        ))
         return pending
 
     async def update(self, broker) -> Dict[str, int]:
@@ -345,6 +355,7 @@ class CounterfactualTracker:
         except Exception:
             pass
         filled = 0
+        attempted = 0
         pending = self._pending_order(self._state)
         # 벤치마크(KODEX200) 일봉 1회 — r5/r20에 대응하는 초과수익 x5/x20 (2026-09-13 리뷰:
         # 절대수익 판정이 시장 베타에 휘둘려 04-23·08-20 결정이 뒤집힌 문제)
@@ -355,6 +366,10 @@ class CounterfactualTracker:
         except Exception as _be:
             logger.debug(f"[CF추적] 벤치마크 조회 실패 (초과수익 생략): {_be}")
         for key, entry in pending[:150]:  # 호출당 상한 — 시세 TR(원장 무관), 공용 리미터 10/s 하에서 ~15초
+            # 정확한 감지일 봉이 없는 행도 이번 순번을 썼다는 사실은 저장해야 다음
+            # 실행(프로세스 재시작 포함)에서 다른 미완성 행이 조회 기회를 얻는다.
+            entry["last_price_attempted_at"] = datetime.now().isoformat(timespec="microseconds")
+            attempted += 1
             try:
                 prices = await broker.get_daily_prices(entry["symbol"], days=45)
                 if not prices or len(prices) < 2:
@@ -389,7 +404,7 @@ class CounterfactualTracker:
                                 entry[xf] = round(float(entry[field]) - _br, 2)
             except Exception as e:
                 logger.debug(f"[CF추적] {key} 갱신 실패: {e}")
-        if added or filled or self._ingest_changed:
+        if added or filled or attempted or self._ingest_changed:
             self._save()
             logger.info(f"[CF추적] 신규 {added}건 등록, {filled}개 수익률 채움")
         return {"added": added, "filled": filled}
