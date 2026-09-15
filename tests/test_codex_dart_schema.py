@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import timedelta
-from types import SimpleNamespace
 
 import aiohttp
 import pytest
@@ -13,12 +12,7 @@ from src.agents.types import DebateResult
 from src.signals.fundamentals.dart_checker import DartChecker
 from src.signals.fundamentals import dart_checker as dart_module
 from src.signals.fundamentals.news_verifier import NewsCheckResult
-from src.signals.fundamentals.stock_validator import (
-    ShortSellingResult,
-    StockValidator,
-    SupplyDemandResult,
-    TrendBuzzResult,
-)
+from src.signals.fundamentals.stock_validator import StockValidator
 from src.signals.screener.kr_screener import ScreenedStock, StockScreener
 
 
@@ -156,11 +150,7 @@ class _Validator:
 def _stock_validator(checker):
     validator = StockValidator.__new__(StockValidator)
     validator.dart_checker = checker
-    validator._mcp_manager = SimpleNamespace(is_server_available=lambda _server: True)
     validator._safe_check_news = lambda *_args: _async_result((NewsCheckResult(fetched=True), True))
-    validator._safe_check_supply_demand = lambda *_args: _async_result((SupplyDemandResult(), True))
-    validator._safe_check_short_selling = lambda *_args: _async_result((ShortSellingResult(), True))
-    validator._safe_check_trend_buzz = lambda *_args: _async_result((TrendBuzzResult(), True))
     return validator
 
 
@@ -230,7 +220,9 @@ def test_complete_positive_list_keeps_existing_live_bonuses(monkeypatch):
     assert validation.dart_result.fetched is True
     assert validation.dart_result.positive_disclosures == ["자기주식취득결정"]
     assert validation.confidence_adjustment == 0.10
-    assert validation.validated is True
+    # Direct positive disclosures retain their bonus, not missing-source coverage.
+    assert validation.validated is False
+    assert validation.data_status == "insufficient"
     assert stocks["005930"].score == 65
     assert "005930" in checker._cache
 

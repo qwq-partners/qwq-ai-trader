@@ -1,19 +1,15 @@
 """
 종목 검증 오케스트레이터
 
-뉴스 검증 + DART 공시 검증 + MCP 기반 수급/공매도/트렌드 검증을
-병렬 실행하여 진입 전 종목의 펀더멘털 리스크를 평가합니다.
+뉴스 검증과 DART 공시 검증을 병렬 실행하여 진입 전 리스크를 평가합니다.
+수급/공매도/트렌드 결과 필드는 호환용이며, 미획득 상태를 유지합니다.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import math
-import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from loguru import logger
 
@@ -62,48 +58,24 @@ class ValidationResult:
 
 
 class StockValidator:
-    """뉴스/공시/수급/공매도/트렌드 기반 종목 검증 통합 관리자"""
-
-    # 캐시 TTL (초)
-    _SUPPLY_DEMAND_TTL = 1800    # 30분
-    _TREND_BUZZ_TTL = 7200       # 2시간
-    _CACHE_MAX_SIZE = 300
+    """직접 뉴스/공시 기반 종목 검증 관리자 (추가 소스 미획득 유지)"""
 
     def __init__(self):
         self.news_verifier = NewsVerifier()
         self.dart_checker = DartChecker()
 
-        # MCP 매니저 (lazy init)
-        self._mcp_manager = None
-
-        # MCP 결과 캐시: {key: (timestamp, result)}
-        self._supply_demand_cache: Dict[str, Tuple[float, SupplyDemandResult]] = {}
-        self._trend_buzz_cache: Dict[str, Tuple[float, TrendBuzzResult]] = {}
-
     async def initialize(self):
-        """초기화 (DART corp_code + MCP 매니저)"""
+        """DART corp_code 초기화"""
         try:
             await self.dart_checker.ensure_corp_code_map()
         except Exception as e:
             logger.warning(f"[종목검증] DART 초기화 실패 (무시): {e}")
 
-        # MCP 매니저 연결
-        try:
-            from src.utils.mcp_client import get_mcp_manager
-            self._mcp_manager = get_mcp_manager()
-            # initialize()는 run_trader에서 이미 호출되므로 여기서는 참조만 저장
-        except ImportError:
-            logger.debug("[종목검증] MCP SDK 미설치 → MCP 검증 비활성")
-            self._mcp_manager = None
-        except Exception as e:
-            logger.warning(f"[종목검증] MCP 매니저 연결 실패 (무시): {e}")
-            self._mcp_manager = None
-
         logger.info("[종목검증] StockValidator 초기화 완료")
 
     async def validate(self, symbol: str, stock_name: str) -> ValidationResult:
         """
-        종목 검증 (뉴스 + 공시 + 수급 + 공매도 + 트렌드 병렬 실행)
+        종목 검증 (뉴스 + 공시 병렬 실행)
 
         Args:
             symbol: 종목코드 (예: "005930")
@@ -113,40 +85,18 @@ class StockValidator:
             ValidationResult: 검증 결과
         """
         try:
-            # 5개 검증 병렬 실행
-            (news_result, news_ok), (dart_result, dart_ok), (sd_result, sd_ok), \
-                (ss_result, ss_ok), (tb_result, tb_ok) = \
-                await asyncio.gather(
-                    self._safe_check_news(symbol, stock_name),
-                    self._safe_check_dart(symbol),
-                    self._safe_check_supply_demand(symbol),
-                    self._safe_check_short_selling(symbol),
-                    self._safe_check_trend_buzz(stock_name),
-                )
+            (news_result, _news_ok), (dart_result, _dart_ok) = await asyncio.gather(
+                self._safe_check_news(symbol, stock_name),
+                self._safe_check_dart(symbol),
+            )
 
-            # T11 리뷰 수정(2026-09-15, R-A r4 blocking #1): validated/data_status는
-            # "MCP 서버가 연결돼 있는가"(mcp_ok)가 아니라 "하위 검증이 실제로 값을
-            # 얻었는가"에서 유도한다 — mcp_ok만 보면 서버는 붙어 있는데
-            # _safe_check_supply_demand 내부에서 fetch가 실패(예외 흡수)해 기본값으로
-            # 조용히 대체된 경우도 "검증됐고 위험 없음"(validated=True/full)으로
-            # 잘못 보고됐다. news/dart도 동일 — DART_API_KEY 미설정(조회 미수행)
-            # 이나 check_disclosures 예외를 dart_ok=False로 반영하지 않으면 DART가
-            # 매 호출 500을 던져도 "위험 미발견"(full)으로 나갔다(r3 blocking #2
-            # 재발, 벡터만 수급→뉴스/DART로 이동). 공매도는 pykrx-mcp에 도구가
-            # 아예 없어(구조적 영구 부재, _safe_check_short_selling 참조) 항상
-            # ss_ok=False다 — 이건 "실패"가 아니므로 최소 partial로만 내리고
-            # insufficient로 떨어뜨리지 않는다.
-            mcp_ok = self._mcp_available("pykrx")
-            if not (mcp_ok and news_ok and dart_ok and sd_ok and tb_ok):
-                validated, data_status = False, "insufficient"
-            elif not ss_ok:
-                validated, data_status = True, "partial"
-            else:
-                validated, data_status = True, "full"
+            # 기존 미연결 출력과 호환: 비활성 소스를 정상 조회/위험 없음으로
+            # 승격하지 않는다. 직접 뉴스/DART 성공만으로 전체 근거는 충족되지 않는다.
+            sd_result = SupplyDemandResult()
+            ss_result = ShortSellingResult()
+            tb_result = TrendBuzzResult()
 
-            # DART block 공시 → 즉시 차단 (DART 자체는 실제 위험을 발견한 확정 판단이라
-            # validated=True 고정이지만, data_status는 같이 조회된 supply_demand/
-            # short_selling의 실제 획득 여부를 그대로 반영한다)
+            # 알려진 DART 위험은 다른 소스의 미획득과 무관하게 차단한다.
             if dart_result.risk_level == "block":
                 reason = f"위험 공시 감지: {', '.join(dart_result.risk_disclosures[:3])}"
                 logger.info(f"[종목검증] {symbol} {stock_name} 차단: {reason}")
@@ -160,18 +110,13 @@ class StockValidator:
                     short_selling_result=ss_result,
                     trend_buzz_result=tb_result,
                     validated=True,
-                    # DART 가 위험을 확정한 조회이므로 (validated=True, insufficient) 모순 쌍을
-                    # 만들지 않는다 — 최소 partial (R-A r5 advisory)
-                    data_status=data_status if data_status != "insufficient" else "partial",
+                    data_status="partial",
                 )
 
             # confidence 조정 합산 (범위 제한: -0.30 ~ +0.25)
             total_adj = (
                 news_result.confidence_adjustment
                 + dart_result.confidence_adjustment
-                + sd_result.confidence_adjustment
-                + ss_result.confidence_adjustment
-                + tb_result.confidence_adjustment
             )
             total_adj = max(-0.30, min(0.25, total_adj))
 
@@ -183,8 +128,8 @@ class StockValidator:
                 supply_demand_result=sd_result,
                 short_selling_result=ss_result,
                 trend_buzz_result=tb_result,
-                validated=validated,
-                data_status=data_status,
+                validated=False,
+                data_status="insufficient",
             )
 
         except Exception as e:
@@ -202,7 +147,7 @@ class StockValidator:
         Returns:
             (result, ok) — ok=False는 미설정(NAVER_CLIENT_ID/SECRET 없음) 또는
             조회 예외로 기본값을 대신 돌려준 경우다 (T11 리뷰 r4 blocking #1,
-            2026-09-15). validate()가 이를 news_ok로 반영한다.
+            2026-09-15). 미획득을 정상 조회와 구분해 유지한다.
         """
         if not getattr(self.news_verifier, "_enabled", True):
             return NewsCheckResult(), False
@@ -220,7 +165,7 @@ class StockValidator:
         Returns:
             (result, ok) — ok=False는 미설정(DART_API_KEY 없음) 또는 조회 예외로
             기본값을 대신 돌려준 경우다 (T11 리뷰 r4 blocking #1, 2026-09-15).
-            validate()가 이를 dart_ok로 반영한다.
+            미획득을 정상 조회와 구분해 유지한다.
         """
         if not getattr(self.dart_checker, "_enabled", True):
             return DartCheckResult(), False
@@ -236,331 +181,6 @@ class StockValidator:
             return DartCheckResult(), False
         # 생산자 내부에서 HTTP/API 실패를 삼키고 기본값을 돌려준 경우는 fetched=False 다
         return result, bool(getattr(result, "fetched", True))
-
-    # ───────────────────── MCP 기반 검증 (수급/공매도/트렌드) ─────────────────────
-
-    def _mcp_available(self, server: str) -> bool:
-        """is_server_available 호출 보호 (advisory, 2026-09-15).
-
-        덕타이핑 MCP 매니저 구현체가 예외를 던지면 validate() 전체가 무너지는
-        대신 '미연결'로 안전하게 처리한다.
-        """
-        if not self._mcp_manager:
-            return False
-        try:
-            return bool(self._mcp_manager.is_server_available(server))
-        except Exception as e:
-            logger.debug(f"[종목검증] MCP 가용성 확인 실패({server}): {e}")
-            return False
-
-    async def _safe_check_supply_demand(self, symbol: str) -> Tuple[SupplyDemandResult, bool]:
-        """외국인/기관 수급 검증 (캐시 30분, 예외 안전)
-
-        Returns:
-            (result, ok) — ok=True는 실제 조회(또는 캐시 재사용)로 얻은 값,
-            False는 MCP 미연결·조회 실패로 기본값을 대신 돌려준 경우다.
-            T11 리뷰 수정(blocking #2, 2026-09-15): validate()가 이 ok를 그대로
-            반영해야 "연결됐지만 fetch 실패"를 "검증 통과"로 오판하지 않는다.
-        """
-        if not self._mcp_available("pykrx"):
-            return SupplyDemandResult(), False
-
-        # 캐시 확인
-        cached = self._get_cache(self._supply_demand_cache, symbol, self._SUPPLY_DEMAND_TTL)
-        if cached is not None:
-            return cached, True
-
-        try:
-            result = await self._fetch_supply_demand(symbol)
-            if result is None:
-                return SupplyDemandResult(), False
-            self._set_cache(self._supply_demand_cache, symbol, result, self._CACHE_MAX_SIZE)
-            return result, True
-        except Exception as e:
-            logger.debug(f"[종목검증] 수급 검증 오류 ({symbol}): {e}")
-            return SupplyDemandResult(), False
-
-    async def _safe_check_short_selling(self, symbol: str) -> Tuple[ShortSellingResult, bool]:
-        """공매도 상위 검증 (pykrx-mcp v0.1.3에 도구 미제공 → 즉시 기본값)
-
-        ok=False 고정 — 예외로 인한 '실패'가 아니라 도구가 구조적으로 영구
-        부재하다는 뜻이다. validate()는 이를 실제 실패(sd_ok=False)와 구분해
-        최소 partial로만 내린다(insufficient로 떨어뜨리지 않음).
-        """
-        # 향후 pykrx-mcp에 공매도 도구 추가 시 캐시 로직 복원
-        return ShortSellingResult(), False
-
-    async def _safe_check_trend_buzz(self, stock_name: str) -> Tuple[TrendBuzzResult, bool]:
-        """검색 트렌드 검증 (캐시 2시간, 예외 안전)
-
-        Returns:
-            (result, ok) — ok=False는 MCP 미연결 또는 조회 예외로 기본값을 대신
-            돌려준 경우다 (T11 리뷰 r4 blocking #1, 2026-09-15). validate()가
-            이를 tb_ok로 반영한다.
-        """
-        if not self._mcp_available("naver_search"):
-            return TrendBuzzResult(), False
-
-        cached = self._get_cache(self._trend_buzz_cache, stock_name, self._TREND_BUZZ_TTL)
-        if cached is not None:
-            return cached, True
-
-        try:
-            result = await self._fetch_trend_buzz(stock_name)
-            if result is None:
-                return TrendBuzzResult(), False
-            self._set_cache(self._trend_buzz_cache, stock_name, result, self._CACHE_MAX_SIZE)
-            return result, True
-        except Exception as e:
-            logger.debug(f"[종목검증] 트렌드 검증 오류 ({stock_name}): {e}")
-            return TrendBuzzResult(), False
-
-    # ───────────────────── MCP 도구 호출 ─────────────────────
-
-    async def _fetch_supply_demand(self, symbol: str) -> Optional[SupplyDemandResult]:
-        """pykrx-mcp로 종목별 투자자 유형 거래대금 조회 (외국인/기관 순매수 판별)"""
-        # pykrx는 장중 당일 데이터 미제공 → 최근 3거래일 조회 (주말/공휴일 대비)
-        today = datetime.now()
-        start_date = (today - timedelta(days=5)).strftime("%Y%m%d")
-        end_date = today.strftime("%Y%m%d")
-
-        resp = await self._mcp_manager.call_tool(
-            "pykrx", "get_market_trading_value_by_date",
-            {"ticker": symbol, "start_date": start_date, "end_date": end_date}
-        )
-        if not resp:
-            return None
-
-        data = self._parse_mcp_text(resp)
-        if not self._is_supply_demand_response(data):
-            return None
-
-        result = SupplyDemandResult()
-
-        # 데이터에서 투자자별 순매수 금액 추출
-        foreign_val = self._extract_investor_value(data, ["외국인합계", "외국인"])
-        inst_val = self._extract_investor_value(data, ["기관합계", "금융투자", "보험", "투신", "연기금등"])
-
-        if foreign_val is not None and foreign_val > 0:
-            result.foreign_net_buying = True
-            result.confidence_adjustment += 0.10
-            logger.debug(f"[종목검증] {symbol} 외국인 순매수 ({foreign_val:,.0f}원) → +0.10")
-
-        if inst_val is not None and inst_val > 0:
-            result.institutional_net_buying = True
-            result.confidence_adjustment += 0.05
-            logger.debug(f"[종목검증] {symbol} 기관 순매수 ({inst_val:,.0f}원) → +0.05")
-
-        return result
-
-    async def _fetch_short_selling(self, symbol: str) -> ShortSellingResult:
-        """공매도 상위 조회 (현재 pykrx-mcp에 도구 미제공 → 기본값)"""
-        # pykrx-mcp v0.1.3에는 공매도 관련 도구가 없음
-        # 향후 get_shorting_volume_top50 등이 추가되면 여기서 호출
-        return ShortSellingResult()
-
-    async def _fetch_trend_buzz(self, stock_name: str) -> Optional[TrendBuzzResult]:
-        """naver-search-mcp로 검색 트렌드 조회"""
-        today = datetime.now()
-        start_date = (today - timedelta(days=14)).strftime("%Y-%m-%d")
-        end_date = today.strftime("%Y-%m-%d")
-
-        resp = await self._mcp_manager.call_tool(
-            "naver_search", "datalab_search",
-            {
-                "startDate": start_date,
-                "endDate": end_date,
-                "timeUnit": "date",
-                "keywordGroups": [
-                    {"groupName": stock_name, "keywords": [stock_name, f"{stock_name} 주가"]}
-                ],
-            }
-        )
-        if not resp:
-            return None
-
-        data = self._parse_mcp_text(resp)
-        if not self._is_trend_buzz_response(data):
-            return None
-        return self._analyze_trend(data)
-
-    # ───────────────────── 유틸리티 ─────────────────────
-
-    def _parse_mcp_text(self, result: Any) -> Any:
-        """MCP CallToolResult에서 텍스트 추출 + JSON 파싱"""
-        try:
-            # MCP 에러 응답 체크
-            if hasattr(result, "isError") and result.isError:
-                return None
-
-            if hasattr(result, "content") and result.content:
-                text = ""
-                for block in result.content:
-                    if hasattr(block, "text"):
-                        text += block.text
-                if text:
-                    parsed = json.loads(text)
-                    # pykrx 에러 응답 체크 (isError=false이지만 error 키 존재)
-                    if isinstance(parsed, dict) and "error" in parsed:
-                        logger.debug(f"[종목검증] MCP 응답 에러: {parsed['error']}")
-                        return None
-                    return parsed
-            return None
-        except (json.JSONDecodeError, AttributeError):
-            return None
-
-    @staticmethod
-    def _is_supply_demand_response(data: Any) -> bool:
-        """MCP 수급 응답의 최소 스키마를 확인한다.
-
-        빈 목록과 0 순매수는 정상적인 중립 조회 결과다. 반대로 JSON 파싱은 됐어도
-        수급 응답 형식이 아닌 객체는 획득 성공으로 취급하지 않는다.
-        """
-        if not isinstance(data, dict):
-            return False
-        if "data" in data or "results" in data:
-            rows = data.get("data", data.get("results"))
-            if not isinstance(rows, list):
-                return False
-            if not rows:                 # 명시적 정상 빈 응답
-                return True
-            if not all(isinstance(row, dict) for row in rows):
-                return False
-            return StockValidator._has_finite_investor_values(rows[-1])
-        return StockValidator._has_finite_investor_values(data)
-
-    @staticmethod
-    def _is_trend_buzz_response(data: Any) -> bool:
-        """Naver DataLab 응답의 최소 스키마를 확인한다 (빈 응답은 정상 중립)."""
-        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
-            return False
-        results = data["results"]
-        if not results:                  # 명시적 정상 빈 응답
-            return True
-        first = results[0]
-        if not isinstance(first, dict) or not isinstance(first.get("data"), list):
-            return False
-        rows = first["data"]
-        if not rows:
-            return True                  # 명시적 정상 빈 시계열
-        return all(
-            isinstance(row, dict) and "ratio" in row
-            and StockValidator._is_finite_ratio(row["ratio"])
-            for row in rows
-        )
-
-    @staticmethod
-    def _has_finite_investor_values(row: Any) -> bool:
-        if not isinstance(row, dict):
-            return False
-        investor_keys = ("외국인합계", "외국인", "기관합계", "금융투자", "보험", "투신", "연기금등")
-        values = [row[key] for key in investor_keys if key in row]
-        return bool(values) and all(StockValidator._is_finite_number(value) for value in values)
-
-    @staticmethod
-    def _is_finite_number(value: Any) -> bool:
-        if isinstance(value, bool) or value is None:
-            return False
-        try:
-            return math.isfinite(float(value))
-        except (TypeError, ValueError):
-            return False
-
-    @staticmethod
-    def _is_finite_ratio(value: Any) -> bool:
-        """트렌드 소비자는 ratio를 산술 연산하므로 문자열 숫자는 허용하지 않는다."""
-        return (not isinstance(value, bool)
-                and isinstance(value, (int, float))
-                and math.isfinite(value))
-
-    def _extract_investor_value(self, data: Any, keys: list) -> Optional[float]:
-        """투자자 유형별 거래대금 추출 (여러 키 중 첫 매칭)"""
-        try:
-            # 데이터 구조: {"data": [{"날짜": ..., "외국인합계": 123, ...}]} 또는 직접 dict
-            rows = data
-            if isinstance(data, dict):
-                rows = data.get("data", data.get("results", [data]))
-            if isinstance(rows, list) and rows:
-                row = rows[-1] if isinstance(rows[-1], dict) else rows[0]
-            elif isinstance(rows, dict):
-                row = rows
-            else:
-                return None
-
-            # 합계 키 먼저 시도, 없으면 개별 키 합산
-            for key in keys[:2]:  # 합계 키 우선 (외국인합계, 기관합계)
-                if key in row:
-                    val = row[key]
-                    return float(val) if val is not None else None
-
-            # 개별 키 합산 (금융투자+보험+투신+연기금등)
-            total = 0.0
-            found = False
-            for key in keys[2:]:
-                if key in row and row[key] is not None:
-                    total += float(row[key])
-                    found = True
-            return total if found else None
-
-        except (TypeError, ValueError, IndexError, KeyError):
-            return None
-
-    def _analyze_trend(self, data: Any) -> TrendBuzzResult:
-        """네이버 DataLab 트렌드 데이터 분석"""
-        if not data or not isinstance(data, dict):
-            return TrendBuzzResult()
-
-        try:
-            results = data.get("results", [])
-            if not results:
-                return TrendBuzzResult()
-
-            items = results[0].get("data", [])
-            if len(items) < 14:
-                return TrendBuzzResult()
-
-            # 최근 7일 vs 이전 7일 비교
-            recent = [item.get("ratio", 0) for item in items[-7:]]
-            previous = [item.get("ratio", 0) for item in items[-14:-7]]
-
-            recent_avg = sum(recent) / len(recent) if recent else 0
-            previous_avg = sum(previous) / len(previous) if previous else 0
-
-            if previous_avg == 0:
-                return TrendBuzzResult()
-
-            change_rate = (recent_avg - previous_avg) / previous_avg
-
-            if change_rate >= 0.3:  # 30% 이상 상승
-                logger.debug(f"[종목검증] 검색 트렌드 상승 ({change_rate:.1%}) → +0.05")
-                return TrendBuzzResult(trend_direction="rising", confidence_adjustment=0.05)
-            elif change_rate <= -0.3:  # 30% 이상 하락
-                logger.debug(f"[종목검증] 검색 트렌드 하락 ({change_rate:.1%}) → -0.05")
-                return TrendBuzzResult(trend_direction="falling", confidence_adjustment=-0.05)
-
-            return TrendBuzzResult()
-
-        except Exception:
-            return TrendBuzzResult()
-
-    # ───────────────────── 캐시 관리 ─────────────────────
-
-    def _get_cache(self, cache: Dict, key: str, ttl: float) -> Optional[Any]:
-        """TTL 기반 캐시 조회"""
-        if key in cache:
-            ts, value = cache[key]
-            if time.monotonic() - ts < ttl:
-                return value
-            del cache[key]
-        return None
-
-    def _set_cache(self, cache: Dict, key: str, value: Any, max_size: int):
-        """캐시 저장 (크기 상한 초과 시 오래된 항목 제거)"""
-        if len(cache) >= max_size:
-            # 가장 오래된 항목 제거
-            oldest_key = min(cache, key=lambda k: cache[k][0])
-            del cache[oldest_key]
-        cache[key] = (time.monotonic(), value)
 
 
 # 전역 싱글톤 (클래스 정의 이후 배치)

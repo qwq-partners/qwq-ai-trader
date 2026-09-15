@@ -16,8 +16,7 @@ from src.agents.analysts import AnalystTeam, FundamentalAnalyst, NewsAnalyst, Te
 from src.agents.types import AnalystKind, AnalystReport
 from src.experts.types import ExpertConfig
 from src.signals.fundamentals.stock_validator import (
-    DartCheckResult, NewsCheckResult, ShortSellingResult, StockValidator,
-    SupplyDemandResult, TrendBuzzResult,
+    DartCheckResult, NewsCheckResult, StockValidator,
 )
 
 
@@ -346,135 +345,45 @@ def test_news_analyst_score_confidence_error_survive_contaminated_shadow_fields(
 
 # ── stock_validator: validated/data_status 가 실제 검증 수행 여부를 반영 ──
 
-def _wire_offline_checks(sv, *, mcp_manager=None, news_raises=False,
-                          news_ok=True, dart_ok=True, sd_ok=True, ss_ok=True,
-                          tb_ok=True):
-    """StockValidator의 5개 _safe_check_* 를 네트워크 없는 순수 함수로 교체한다.
-
-    R-A r3 blocking #2 (2026-09-15): _safe_check_supply_demand/_safe_check_short_selling
-    은 (결과, ok) 튜플을 낸다. R-A r4 blocking #1 (2026-09-15): news/dart/trend_buzz
-    도 동일하게 (결과, ok) 튜플을 낸다 — 이 fake 도 실제 시그니처를 따른다.
-    news_ok/dart_ok/sd_ok/ss_ok/tb_ok 로 "실제로 조회에 성공했는가"를 개별
-    제어할 수 있다 (기본값 True=이상적 성공 시나리오, 집계 로직 자체를 검증하는
-    3개 테스트용).
-    """
-    sv._mcp_manager = mcp_manager
-
+def _wire_offline_checks(sv, *, news_raises=False):
+    """직접 뉴스/DART만 오프라인으로 대체하고 실제 집계·미획득 판단을 검증한다."""
     async def _news(symbol, name):
         if news_raises:
             raise RuntimeError("네트워크 차단(테스트)")
-        return NewsCheckResult(), news_ok
+        return NewsCheckResult(fetched=True), True
 
     async def _dart(symbol):
-        return DartCheckResult(), dart_ok
-
-    async def _sd(symbol):
-        return SupplyDemandResult(), sd_ok
-
-    async def _ss(symbol):
-        return ShortSellingResult(), ss_ok
-
-    async def _tb(name):
-        return TrendBuzzResult(), tb_ok
+        return DartCheckResult(fetched=True), True
 
     sv._safe_check_news = _news
     sv._safe_check_dart = _dart
-    sv._safe_check_supply_demand = _sd
-    sv._safe_check_short_selling = _ss
-    sv._safe_check_trend_buzz = _tb
 
 
-def test_stock_validator_insufficient_when_mcp_not_connected():
+def test_stock_validator_insufficient_with_inactive_sources():
     sv = StockValidator()
-    _wire_offline_checks(sv, mcp_manager=None)
+    _wire_offline_checks(sv)
     result = asyncio.run(sv.validate("005930", "삼성전자"))
     assert result.approved is True          # 기존 approved 의미·값 불변
     assert result.validated is False
     assert result.data_status == "insufficient"
 
 
-def test_stock_validator_full_when_mcp_connected():
-    sv = StockValidator()
-    _wire_offline_checks(sv, mcp_manager=SimpleNamespace(is_server_available=lambda name: True))
-    result = asyncio.run(sv.validate("005930", "삼성전자"))
-    assert result.approved is True
-    assert result.validated is True
-    assert result.data_status == "full"
-
-
 def test_stock_validator_exception_marks_error_but_keeps_approved_true():
     sv = StockValidator()
-    _wire_offline_checks(sv, mcp_manager=None, news_raises=True)
+    _wire_offline_checks(sv, news_raises=True)
     result = asyncio.run(sv.validate("005930", "삼성전자"))
     assert result.approved is True          # 기존 소비자(batch 검증 흐름) 동작 그대로
     assert result.validated is False
     assert result.data_status == "error"
 
 
-# ── stock_validator: 하위 검증 실제 획득 여부에서 validated/data_status 유도 ──
-# R-A r3 blocking #2 (2026-09-15): mcp_ok(서버 연결 여부)만으로 판단하던 이전 버전은
-# "연결은 됐지만 조회는 실패"를 "검증 통과"로 잘못 보고했다. 아래 두 테스트는
-# _safe_check_supply_demand/_safe_check_short_selling 을 목으로 대체하지 않고
-# 실제 구현을 그대로 태워 그 구분을 확인한다.
-
-def test_stock_validator_partial_when_short_selling_tool_structurally_absent():
-    """MCP 연결 + 수급 조회 성공, 그러나 공매도는 pykrx-mcp에 도구가 없어
-    (_safe_check_short_selling 이 항상 ok=False) — 이건 '실패'가 아니라
-    구조적 영구 공백이므로 insufficient 가 아니라 partial 이어야 한다."""
-    sv = StockValidator()
-    sv._mcp_manager = SimpleNamespace(is_server_available=lambda name: True)
-    sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(), True))
-    sv._safe_check_dart = lambda symbol: _async_return((DartCheckResult(), True))
-    sv._safe_check_trend_buzz = lambda name: _async_return((TrendBuzzResult(), True))
-    # 실제 _fetch_supply_demand 는 호출하지 않고 캐시 경로로 성공을 모사한다.
-    sv._get_cache = lambda cache, key, ttl: SupplyDemandResult(foreign_net_buying=True)
-    # _safe_check_short_selling 은 실제 구현 그대로(패치 안 함) — 항상 (default, False).
-
-    result = asyncio.run(sv.validate("005930", "삼성전자"))
-    assert result.validated is True
-    assert result.data_status == "partial"
-    assert result.supply_demand_result.foreign_net_buying is True
-
-
-def test_stock_validator_insufficient_when_supply_demand_fetch_raises():
-    """MCP는 연결됐지만 _fetch_supply_demand 내부에서 예외가 나면
-    _safe_check_supply_demand 는 그 예외를 삼키고 기본값을 돌려준다(실제 구현) —
-    이 경우는 '실패'이므로 partial 이 아니라 insufficient 여야 한다."""
-    sv = StockValidator()
-    sv._mcp_manager = SimpleNamespace(is_server_available=lambda name: True)
-    sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(), True))
-    sv._safe_check_dart = lambda symbol: _async_return((DartCheckResult(), True))
-    sv._safe_check_trend_buzz = lambda name: _async_return((TrendBuzzResult(), True))
-    sv._get_cache = lambda cache, key, ttl: None
-
-    async def _raise(symbol):
-        raise RuntimeError("MCP 응답 파싱 실패(테스트)")
-
-    sv._fetch_supply_demand = _raise
-    # _safe_check_short_selling 은 실제 구현 그대로 — 항상 (default, False).
-
-    result = asyncio.run(sv.validate("005930", "삼성전자"))
-    assert result.approved is True
-    assert result.validated is False
-    assert result.data_status == "insufficient"
-
-
 def test_stock_validator_insufficient_when_dart_check_raises_and_analyst_risk_clear_none():
-    """R-A r4 blocking #1 (2026-09-15): DART가 매 호출 500 을 던져도(또는
-    DART_API_KEY 미설정으로 조회 자체를 안 해도) 이전 버전은 news/dart를
-    validated/data_status 유도에서 빼놓아 '검증 통과 — 위험 미발견'(full)으로
-    잘못 보고했다 — r3 blocking #2 가 지목한 결함이 벡터만 수급→DART 로 옮겨간
-    것. 여기서는 실제 dart_checker 객체를 그대로 쓰고 check_disclosures 만
-    예외로 교체해(리뷰 repro와 동일) is_server_available=True(연결됨)인데도
-    실제 조회는 실패하는 경로를 재현한다."""
+    """직접 DART 조회 예외는 미획득이며 분석가의 risk_clear 근거가 되지 않는다."""
     sv = StockValidator()
-    sv._mcp_manager = SimpleNamespace(is_server_available=lambda name: True)
-    sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(), True))
-    sv._safe_check_trend_buzz = lambda name: _async_return((TrendBuzzResult(), True))
-    sv._get_cache = lambda cache, key, ttl: SupplyDemandResult(foreign_net_buying=True)
-    # dart_checker 는 실제 인스턴스 그대로 두고 (키는 설정된 것으로 간주) 조회 함수만
-    # 예외로 교체한다 — _safe_check_dart 는 패치하지 않고 실제 구현을 그대로 태운다.
+    sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(fetched=True), True))
+    # 실제 안전 래퍼가 조회 예외를 처리하도록 매핑까지 유효하게 구성한다.
     sv.dart_checker._enabled = True
+    sv.dart_checker._corp_code_map = {"005930": "00126380"}
 
     async def _dart_raises(symbol, days=7, use_cache=True):
         raise RuntimeError("DART 500 (테스트)")
@@ -500,14 +409,6 @@ async def _async_return(value):
 
 
 # ── R-A r5 blocking (2026-09-15, 통합 담당 반영): '예외 없음' ≠ '실제 획득' ────────────────
-def _validator_with_supply_ok():
-    sv = StockValidator()
-    sv._mcp_manager = SimpleNamespace(is_server_available=lambda name: True)
-    sv._safe_check_trend_buzz = lambda name: _async_return((TrendBuzzResult(), True))
-    sv._get_cache = lambda cache, key, ttl: SupplyDemandResult(foreign_net_buying=True)
-    return sv
-
-
 def _assert_not_risk_clear(result):
     fa = FundamentalAnalyst(stock_validator=_FakeValidator(result), dart_checker=None)
     report = asyncio.run(fa.analyze("005930"))
@@ -520,7 +421,7 @@ def test_dart_corp_code_map_empty_is_not_fetched(monkeypatch):
     """dart_checker._enabled=True 인데 _corp_code_map 이 비어 있으면(initialize 실패의 실제 기본 상태)
     check_disclosures 는 조회 없이 기본값을 돌려준다 — 실제 _safe_check_dart 를 태워 미획득으로
     유도되고 '검증 통과 — 위험 미발견' 이 적재되지 않아야 한다."""
-    sv = _validator_with_supply_ok()
+    sv = StockValidator()
     sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(fetched=True), True))
     sv.dart_checker._enabled = True
     sv.dart_checker._corp_code_map = {}
@@ -532,7 +433,7 @@ def test_dart_corp_code_map_empty_is_not_fetched(monkeypatch):
 def test_dart_http_failure_absorbed_by_producer_is_not_fetched():
     """corp_code 매핑은 있지만 DartChecker._fetch_and_analyze 가 HTTP 실패를 삼키고 기본값
     (fetched=False)을 돌려주는 경로 — 이전에는 dart_ok=True 로 통과했다."""
-    sv = _validator_with_supply_ok()
+    sv = StockValidator()
     sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(fetched=True), True))
     sv.dart_checker._enabled = True
     sv.dart_checker._corp_code_map = {"005930": "00126380"}
@@ -547,7 +448,7 @@ def test_dart_http_failure_absorbed_by_producer_is_not_fetched():
 
 def test_news_http_failure_absorbed_by_producer_is_not_fetched():
     """NewsVerifier._fetch_and_analyze 가 HTTP 실패를 삼키고 기본값을 돌려주면 news_ok=False."""
-    sv = _validator_with_supply_ok()
+    sv = StockValidator()
     sv._safe_check_dart = lambda symbol: _async_return((DartCheckResult(fetched=True), True))
     sv.news_verifier._enabled = True
 
