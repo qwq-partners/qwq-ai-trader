@@ -315,17 +315,22 @@ python scripts/shadow_report.py --telegram   # 텔레그램 전송
 - `check_entry_plan` → `PlanCheck(allow|wait|reject, 사유 코드)`: 만료·가격 상한(wait)·밴드 하한·트리거(VCP 돌파)·setup 별 필수 입력(gap_vwap 의 vwap 없으면 `INPUT_MISSING:vwap`)·급락(severe → reject, crash 는 기존 SEPA 차단 미러)·무효화·위험예산/슬롯/일일 한도(문맥 있을 때만)·비용 반영 손익비(`COST_RR_LOW` 는 기록만, 컷오프 미정).
 - 엔진은 Order 생성 직전에 **기록만**(`signal_events` event_type=`shadow_plan_check`). 허용/차단하지 않는다. shadow 행은 `get_stats` 의 total_buy/block_rate 분모·`/api/signal-events` 기본 조회·SSE 실시간 피드에서 제외되며 `type=shadow_plan_check` 로만 조회한다(계측 오염 방지). 시장가 주문이 상한을 보장한다고 주장하지 않는다 — 지정가 도입은 모의 연구(E)까지.
 - 팀 심의는 후보 dict 의 `entry_plan/current_price/quote_as_of/intraday_level` 로 같은 함수를 호출해 `entry_ready` 를 낸다. 후보 현재가는 스크리닝 시점 값이라 5분 경과 시 `QUOTE_STALE`(wait)이 잦다(별도 재조회는 미배선).
+- 명시적으로 주입한 `now`와 만료·호가 시각 비교는 naive=KST, aware=실제 순간으로 정규화한다. `checked_at`/`quote_as_of` 감사 출력은 원래 표현을 유지한다. 만료 `now > expires_at`, 호가 5분 경계·shadow 전용 지위는 불변이다. 분석가/보고서의 now 생략 시 host-local 호환 경로와는 별도 계약이다.
 
 ### 불변 원장·실행 상태 (`team_ledger.py`)
 - `~/.cache/ai_trader/team_ledger/deliberations_YYYYMMDD.jsonl` append-only, `deliberation_id = sha256(symbol|date|slot|input_snapshot_hash)[:16]` — 같은 입력 재시도는 같은 id(읽기 dedup). 같은 날 같은 종목의 여러 시점 판단·BUY/HOLD/REJECT/기권/실패 전부 보존. 기존 `team_verdicts/verdicts_*.json`(latest-per-symbol)은 대시보드·conviction 호환용으로 유지.
 - 실행 상태: `candidate → waiting_trigger | plan_rejected → shadow_ready → order_submitted → filled`. 뒤 두 단계는 trade_journal 등 실제 증거가 있을 때만 표시(승인 BUY 를 체결로 가정하지 않는다).
 - CF: 승인 BUY 중 체결 증거 없는 건은 `team_buy_unfilled` 로 추적(요약에서 '차단 적중' 프레이밍과 분리). 체결 증거는 콜백 우선, 콜백 미주입이면 실제 거래저널 `<TRADE_JOURNAL_DIR|~/.cache/ai_trader/journal>/trades_YYYYMMDD.json` 을 읽는다(날짜 파일 없음 = 그날 진입 없음 = 미체결). 저널 디렉터리 자체가 없으면 판정 불가로 **등록 보류** + 요약 경고(미체결로 오라벨하지 않음).
-- CF 입력은 날짜별 **불변 심의 원장 우선**(2026-09-15 교차 리뷰 후속). 같은 날 오전 BUY→오후 HOLD도 BUY 집단으로 분류하며 모든 `deliberation_ids`를 보존한다. 종목·날짜당 종가 기준 1표본으로 기존 분모를 유지하고, 기존 HOLD의 BUY 재분류 시 가격·rN은 보존한다. 새 체결 증거/판정 불가가 생기면 잘못된 미체결 표본을 제외하고 변경만 있어도 저장한다. 원장 파일이 **없는 날짜만** latest 파일로 폴백하며, 빈/읽기 실패 원장은 최신 HOLD로 대체하지 않는다. 일중 시점별 수익률 연구는 아니며 원장이 없던 과거의 덮어쓴 판단은 복원할 수 없다. 기존 콜백 예외→False 계약은 이번 범위에서 변경하지 않았다.
+- CF 입력은 날짜별 **불변 심의 원장 우선**(2026-09-15 교차 리뷰 후속). 같은 날 오전 BUY→오후 HOLD도 BUY 집단으로 분류하며 모든 `deliberation_ids`를 보존한다. 종목·날짜당 종가 기준 1표본으로 기존 분모를 유지하고, 기존 HOLD의 BUY 재분류 시 가격·rN은 보존한다. 새 체결 증거가 확인되면 미체결 표본에서 제거하고 변경만 있어도 저장한다. **체결 판정 불가 때는 기존 행을 `fill_evidence_unknown=True`로 보존**하되 평가 분모·가격 갱신·보존기간 정리에서 제외한다. 새 판정 불가 BUY는 등록 보류한다. 미체결 확인으로 복구되면 제외 상태만 해제하고 원 측정값·ID를 재사용한다. 원 표본일 봉이 없으면 뒤 날짜를 진입일로 대체하지 않으며, 벤치마크도 정확한 기준일이 없으면 초과수익을 만들지 않는다. 원장 파일이 **없는 날짜만** latest 파일로 폴백하며, 빈/읽기 실패 원장은 최신 HOLD로 대체하지 않는다. 일중 시점별 수익률 연구는 아니며 원장이 없던 과거의 덮어쓴 판단은 복원할 수 없다. 기존 콜백 예외→False 계약은 이번 범위에서 변경하지 않았다.
+
+- 가격 조회 예산 150건은 유지하되 행별 `last_price_attempted_at`을 저장해 미시도→가장 오래전 시도→기존 우선순위로 처리한다. 정확한 날짜가 없는 오래된 표본도 보존·재시도하며, 이들이 새 표본의 평가를 영구히 막지 않게 한다. 재시작 후에도 보조 시각이 복원된다.
 
 ### 추가 가치 검증 도구 (`scripts/team_policy_ab.py`)
 - A 기존 규칙 / B +독립 근거 검토(R1) / C +토론(R2) 를 같은 후보군·시점에서 비교. 실험 1(선정: 진입·청산·비용 고정) / 실험 2(가격·시점: 기존 진입 vs EntryPlan 조건부, 일봉만으로 선후 불명확이면 미체결).
 - 2026-09-15 교차 리뷰 후속: 고정 손절선 또는 이미 활성화된 트레일링선을 시가가 관통하면 시가로 잔여분을 청산한다(당일 고가·익절 판정보다 먼저). 비용·손절/익절 임계값은 불변이며 실엔진 청산을 수정한 것이 아니다.
 - replay의 기준 시각은 `plan.decided_at`(naive=KST). 그 키 자체가 없는 구형 스냅샷만 후보일 KST 자정으로 고정 폴백하며 해상도 한계를 명시한다. 키가 있으나 무효/결측이거나 결정 KST 날짜가 후보일과 다르면 B/C는 기권한다. 원본 `data_as_of` 우선, 그 키가 없을 때만 판단 시각에서 `age_minutes`를 뺀다. 모든 TTL·감쇠·근거 만료를 이 시각으로 평가하며 UTC/KST 혼합도 같은 순간으로 비교한다. 미래 관측이 섞인 보고서는 항목별 점수 분해가 불가능하므로 **보고서 전체 제외**(다른 유효 보고서는 유지). 기존 no-age 합성 fixture는 명시 시각으로 보완했으며 결측을 fresh로 간주하던 계약은 폐기했다.
+- 미래·명시 손상 `observed_at` 검사는 보고서 최상위와 nested 근거 모두에 적용한다. 키 없음/None은 미상으로 보존하고, 문자열 등 명시값이 파싱되지 않으면 관측 없음으로 정상화하지 않는다.
+- timing의 `CHECKER_ERROR`는 일반 미체결·기회비용과 분리한다. 원 `candidates_selected`·상관 표본 제외 수 외에 `timing_candidates`(dedup 후), `checker_errors`/`checker_error_reasons`, `evaluated_candidates`(오류 제외 분모)를 함께 출력한다. 모두 검사 오류이면 `fill_rate=None`이며, 오류 제외로 분모가 줄어든 비율을 단독 성능 근거로 쓰지 않는다. 일봉 날짜 자정 판정·데이터 없음의 기존 처리 및 사전 등록 기준은 유지한다.
 - 사전 등록(manifest): 주평가 = 포지션당 비용 차감 R 중앙값·평균, MDE +0.10R, 표본 ≥30/정책, 시간순 홀드아웃(마지막 1/3) 부호 유지, 종목-주 클러스터·겹치는 보유기간 dedup, 판단 시각 이전 필드만. 벤치마크 KODEX200(캐시 없으면 null).
 - **실데이터 없음 → 합성 fixture 로 도구만 검증(`validation_status=synthetic_only`)**. 성능·확률 보정·승격 판정은 미검증/보류. 과거 LLM 재평가는 사후 지식 가능성을 한계로 명시.
 

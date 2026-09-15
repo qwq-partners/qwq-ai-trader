@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-15 — fix: Codex 독립 리뷰 후속 CR1~CR4 (원장·DART·replay)
+
+- 사용자 지시로 최종 리뷰를 Claude에서 Codex로 대체. 이전 `1aba7d7..53ea967` 독립 리뷰에서 신규 P2 2건·기존 시각 계약 P2 2건 재현, 후속 수정 기준은 PR #60을 포함한 `4b70a34`. 격리 워크트리 병렬 구현(CF/replay Astra/high, DART Terra/high), 구현과 별도 Astra/xhigh 독립 리뷰. 세 작업의 초기 리뷰에서 추가 P2 2건을 찾아 수정·한정 재리뷰 승인했다.
+- **CR1 CF** (`counterfactual_tracker.py`): 저널 일시 읽기 실패 때 기존 BUY의 `entry_px/rN/xN/deliberation_ids`를 삭제하지 않고 `fill_evidence_unknown=True`로 보존·저장. 요약 분모·가격 갱신·보존기간 정리에서 제외하고 미체결 확인 후 원 측정값으로 복귀. 종목/벤치마크의 정확한 표본일 봉이 없으면 뒤 날짜로 대체하지 않는다. 독립 리뷰에서 드러난 오래된 미완성 150건의 예산 독점은 행별 `last_price_attempted_at` 저장·미시도/오래전 시도 우선으로 해결, 재시작 후에도 공정성 유지(150건 상한 불변).
+- **CR2 DART** (`dart_checker.py`): 목록/행/비공백 문자열 `report_nm` 검증, 손상은 `fetched=False`·미캐시. 정상 중립/명시적 0건/013·호재·위험 분류 보존. 독립 리뷰의 실제 StockValidator/StockScreener 대조에서 mixed 호재+손상 행이 `fetched=False`인데도 +0.10/+15 가산되는 경계를 수정했다. **불완전 목록의 호재 목록/긍정 가산은 억제, 이미 확인된 위험 차단·감점은 유지**. 실제 신호 의미 변경이며 shadow-only/모든 live 동작 불변이라고 주장하지 않는다. 임계값·설정은 불변.
+- **CR3/CR4 replay** (`entry_plan.py`, `team_policy_ab.py`): 만료·호가 비교는 명시 now의 naive=KST/aware=실제 순간, 감사 시각 표현 유지. top/nested `observed_at`의 미래·명시 손상 입력은 보고서 전체 제외하고 다른 정상 보고서는 유지(None/키 없음은 미상 유지). CHECKER_ERROR는 일반 미체결·기회비용과 분리해 선정 수/오류 수/유효 분모를 함께 출력, 모두 오류면 fill_rate=None. 기존 no-now host-local 보고서 호환·manifest·주문/청산 임계값 무변경.
+- 새 회귀 파일: `test_codex_cf_preservation.py` 14건, `test_codex_dart_schema.py` 25건, `test_codex_replay_time_contract.py` 55건. 상세 RED/GREEN·통합 검증·최종 리뷰·실제 배포 결과는 `docs/reviews/codex-followups-2026-09-15.md`에 기록한다. 투자 성능 검증·위험 사이징/팀 정책 승격·canary 시작 없음. **주문·설정·킬스위치는 유지**한다.
+
 ## 2026-09-15 — fix(screener): 조용히 죽어 있던 발굴 채널 3건 복구 (T12 Phase 0)
 
 계기: 토스증권 API 도입 조사 중 스크리닝 채널 다수가 **에러 없이 0건**을 내고 있던 것이 드러났다. 소스를 바꾸기 전에 자체 버그부터 고쳐야 비교가 오염되지 않는다.
