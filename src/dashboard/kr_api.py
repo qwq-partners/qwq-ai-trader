@@ -85,7 +85,7 @@ class KRAPIHandler:
         self.dc = data_collector
 
     # ── T11 (2026-09-15) 팀 심의 실행 상태 — 계약 2.4 execution_state ──────────
-    _EXEC_STATES = ("candidate", "waiting_trigger", "shadow_ready", "order_submitted", "filled")
+    _EXEC_STATES = ("candidate", "waiting_trigger", "plan_rejected", "shadow_ready", "order_submitted", "filled")
 
     def _load_ledger_index(self, day: str) -> Dict[str, list]:
         """하루치 팀 원장을 요청당 한 번만 읽어 종목별로 인덱싱 (N+1 파일 I/O 방지).

@@ -222,7 +222,14 @@ def assess(
     merit_score, unique_sources, weight, dedup_removed, expired_n, any_evidence = \
         _evidence_merit(reports, now)
 
-    used_fallback = merit_score is None and not any_evidence
+    # 레거시 aggregate_score 폴백은 **A(근거 계약)가 아직 배선되지 않은 상태**(유효 보고서 전부
+    # data_status=unknown)에서만 허용한다. 보고서가 data_status 를 판정했는데 usable evidence 가
+    # 하나도 없으면 그것은 "근거 없음" 이지 기준선 점수로 대체할 상황이 아니다 — evidence 0건으로
+    # merit_status=sufficient 가 되는 우회로를 막는다 (R-B r3 advisory, 통합 담당 반영).
+    all_unknown = (not reports) or all(
+        r.data_status == "unknown" for r in reports if r.ok
+    )
+    used_fallback = merit_score is None and not any_evidence and all_unknown
     if used_fallback:
         # A(근거 계약)가 아직 evidence를 채우지 않은 상태 — 기존 score를 그대로 쓴다(기준선)
         from .analysts import AnalystTeam
@@ -238,9 +245,6 @@ def assess(
     if no_valid_reports:
         merit_score = None
 
-    all_unknown = (not reports) or all(
-        r.data_status == "unknown" for r in reports if r.ok
-    )
     merit_status, merit_reason = _merit_status(
         merit_score, abstain_unknown=(used_fallback and all_unknown)
     )

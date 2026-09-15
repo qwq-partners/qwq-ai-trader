@@ -5777,6 +5777,12 @@ JSON:
 
         candidates = []
         screened = getattr(bot, "_last_screened", None) or []
+        # 당일 갱신된 급락 감지기 상태만 넘긴다(전일 상태는 결측) — 팀 심의의 EntryPlan shadow
+        # 검증이 주문 직전 검증기와 같은 급락 입력을 보게 한다 (T11 통합)
+        try:
+            _team_intraday_level = self._intraday_crash_snapshot()[0]
+        except Exception:
+            _team_intraday_level = None
         for s in screened[:5]:
             _sym = getattr(s, "symbol", "")
             _meta = getattr(s, "metadata", None)
@@ -5810,6 +5816,8 @@ JSON:
                 "entry_plan": _plans_by_symbol.get(_sym),
                 "current_price": _price,
                 "quote_as_of": _price_at if _price is not None else None,
+                # 급락 감지기 당일 상태 — 실행 검증기(INTRADAY_BLOCK)와 같은 입력 (통합 담당, R-B advisory)
+                "intraday_level": _team_intraday_level,
                 # 섹터를 반드시 넘겨야 한다 — cross_validator 규칙4(동일 섹터 과집중)는
                 # `metadata.get("sector")`로만 동작해서, 없으면 집중 검사가 통째로 스킵된다.
                 "sector": (getattr(s, "sector", None)

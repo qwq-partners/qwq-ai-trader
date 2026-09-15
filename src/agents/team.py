@@ -595,7 +595,7 @@ class TradingTeam:
             ]
             entry_check = (verdict.assessment.entry_check if verdict.assessment else None) or {}
             row["execution_state"] = {
-                "allow": "shadow_ready", "wait": "waiting_trigger",
+                "allow": "shadow_ready", "wait": "waiting_trigger", "reject": "plan_rejected",
             }.get(entry_check.get("status"), "candidate")
             team_ledger.append_deliberation(row)
         except Exception as e:

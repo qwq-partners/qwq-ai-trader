@@ -25,7 +25,8 @@ from loguru import logger
 
 LEDGER_DIR = Path.home() / ".cache" / "ai_trader" / "team_ledger"
 
-EXECUTION_STATES = ("candidate", "waiting_trigger", "shadow_ready", "order_submitted", "filled")
+EXECUTION_STATES = ("candidate", "waiting_trigger", "plan_rejected", "shadow_ready", "order_submitted", "filled")
+# plan_rejected: 계획은 있으나 shadow 검증이 reject(만료·무효화·severe) — "계획 없음/판단 전"(candidate) 과 구분 (T11 통합)
 
 # 비밀·개인정보 마스킹 (entry_risk._is_secret_key 와 같은 취지 — 키 이름·값 패턴 둘 다)
 _SECRET_KEY_RE = re.compile(r"(api[_-]?key|secret|token|password|passwd|appkey|cano|acnt|account|chat_id)", re.I)
