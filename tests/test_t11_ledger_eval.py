@@ -593,7 +593,7 @@ def test_selection_results_report_age_and_flip_counters(tmp_path):
     _write_snapshot(snap, [_mk_candidate("000001"), flip])
     rows = tpab.load_snapshot(snap)
     results = tpab.run_selection_experiment(rows, ["A", "C"], max_new=5)
-    assert "reports_without_age" in results["A"]
+    assert "evidence_items_without_age_all_rows" in results["A"]
     assert results["C"]["r1_reject_r2_accept_excluded"] == 1
 
 
