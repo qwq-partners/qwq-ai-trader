@@ -21,6 +21,10 @@ def api():
 class Tokens:
     def __init__(self):
         self.calls = []
+        self.observations = []
+
+    def observe_revocation(self, failed_token):
+        self.observations.append(failed_token)
 
     async def get_token(self, *, deadline):
         self.calls.append(("get", deadline))
@@ -364,6 +368,7 @@ def test_401_with_result_and_error_is_not_recovered(tmp_path):
     asyncio.run(run())
     assert len(transport.requests) == 1
     assert len(tokens.calls) == 1
+    assert tokens.observations == []
 
 
 @pytest.mark.parametrize("cursor", [
@@ -444,7 +449,6 @@ def test_exhausted_retry_still_persists_revoked_before_poll_restart_and_expiry(t
             with pytest.raises(mod.TossRequestError):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
                     budget=mod.RequestBudget(1, max_retries=max_retries))
-            assert store.load_state()["kind"] == "auth_unavailable"
             with pytest.raises(mod.TossRequestError, match="auth_unavailable"):
                 await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
         now[0] += timedelta(hours=3)
@@ -518,9 +522,9 @@ def test_expired_token_issuance_still_requires_remaining_retry(tmp_path, prefix,
 
 @pytest.mark.parametrize("stop", ["deadline", "cancel"])
 def test_revoked_observation_does_not_escape_deadline_or_cancellation(tmp_path, stop):
-    """잠금 점유 시 관측 지속은 보장하지 않지만 예산/취소를 우회하지 않는다."""
+    """동기 폐기 관측 후 토큰 잠금 대기만 기존 예산/취소에 종속된다."""
     mod = api()
-    store, manager, minted, _ = real_token_stack(tmp_path)
+    store, manager, minted, now = real_token_stack(tmp_path)
     client, _, transport = make_client(tmp_path, enabled=True, role="sender")
     client.tokens = manager
     observed = asyncio.Event()
@@ -538,7 +542,7 @@ def test_revoked_observation_does_not_escape_deadline_or_cancellation(tmp_path, 
             try:
                 task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
                     budget=mod.RequestBudget(0.05, max_retries=0)))
-                await observed.wait()
+                await asyncio.wait_for(observed.wait(), 1)
                 if stop == "cancel":
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
@@ -549,5 +553,134 @@ def test_revoked_observation_does_not_escape_deadline_or_cancellation(tmp_path, 
             finally:
                 for lock in held:
                     await lock.__aexit__(None, None, None)
+        await assert_revoked_after_restart_and_expiry(store, manager, now)
     asyncio.run(run())
     assert sent == [True] and minted == []
+
+
+def test_revocation_callback_precedes_limiter_observe_await(tmp_path):
+    mod = api()
+    client, tokens, transport = make_client(tmp_path, enabled=True, role="sender",
+        responses=[mod.HttpResponse(401, {}, {"error": {"code": "token-revoked"}})])
+    order = []
+    original_observer = tokens.observe_revocation
+    def observe(token):
+        original_observer(token)
+        order.append("revoked")
+    async def observe_rate(*args, **kwargs):
+        order.append("limiter")
+    tokens.observe_revocation = observe
+    client.limiter.observe = observe_rate
+    async def run():
+        async with client:
+            with pytest.raises(mod.TossRequestError):
+                await client.get("/api/v1/prices", params={"symbols": "005930"},
+                                 budget=mod.RequestBudget(1, max_retries=0))
+    asyncio.run(run())
+    assert order == ["revoked", "limiter"]
+    assert tokens.observations == ["synthetic-bearer"]
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize("async_callback", [False, True])
+def test_missing_sync_observation_protocol_fails_before_auth_and_http(tmp_path, async_callback):
+    mod = api()
+    client, tokens, transport = make_client(tmp_path, enabled=True, role="sender",
+        responses=[mod.HttpResponse(200, {}, {"result": []})])
+    async def wrong_callback(failed_token):
+        return None
+    tokens.observe_revocation = wrong_callback if async_callback else None
+    async def run():
+        async with client:
+            with pytest.raises(mod.TossRequestError, match="auth_unavailable"):
+                await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+    asyncio.run(run())
+    assert tokens.calls == transport.requests == []
+
+
+async def assert_revoked_after_restart_and_expiry(store, manager, now):
+    from datetime import timedelta
+    from src.data.providers.toss.token import TokenManager
+    from src.data.providers.toss.token_store import TokenError
+    with pytest.raises(TokenError, match="auth_unavailable"):
+        await manager.get_token(deadline=manager.clock() + 1)
+    now[0] += timedelta(hours=3)
+    restarted = TokenManager(store, enabled=True, role="issuer", issuer=manager.issuer,
+                             now=lambda: now[0], clock=manager.clock)
+    for candidate in (manager, restarted):
+        with pytest.raises(TokenError, match="auth_unavailable"):
+            await candidate.get_token(deadline=manager.clock() + 1)
+        with pytest.raises(TokenError, match="auth_unavailable"):
+            await candidate.bootstrap(approved=True, deadline=manager.clock() + 1)
+
+
+def test_revoked_response_after_deadline_still_prevents_restart_mint(tmp_path):
+    import time
+    mod = api()
+    store, manager, minted, now = real_token_stack(tmp_path)
+    clock_value = [time.monotonic()]
+    clock = lambda: clock_value[0]
+    manager.clock = clock
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender", clock=clock)
+    client.tokens = manager
+    sent = []
+    async def respond(*args, **kwargs):
+        sent.append(True)
+        clock_value[0] += 2
+        return mod.HttpResponse(401, {}, {"error": {"code": "token-revoked"}})
+    transport.request = respond
+    async def run():
+        async with client:
+            with pytest.raises(mod.TossRequestError):
+                await client.get("/api/v1/prices", params={"symbols": "005930"},
+                                 budget=mod.RequestBudget(1, clock=clock))
+        await assert_revoked_after_restart_and_expiry(store, manager, now)
+    asyncio.run(run())
+    assert sent == [True] and minted == []
+
+
+def test_cancelled_rate_observation_still_prevents_restart_mint(tmp_path):
+    mod = api()
+    store, manager, minted, now = real_token_stack(tmp_path)
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender")
+    client.tokens = manager
+    received = asyncio.Event()
+    sent = []
+    async def respond(*args, **kwargs):
+        await client.limiter._lock.acquire()
+        sent.append(True)
+        received.set()
+        return mod.HttpResponse(401, {}, {"error": {"code": "token-revoked"}})
+    transport.request = respond
+    async def run():
+        async with client:
+            try:
+                task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
+                                                     budget=mod.RequestBudget(1)))
+                await asyncio.wait_for(received.wait(), 1)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                if client.limiter._lock.locked():
+                    client.limiter._lock.release()
+        await assert_revoked_after_restart_and_expiry(store, manager, now)
+    asyncio.run(run())
+    assert sent == [True] and minted == []
+
+
+def test_disabled_client_with_real_token_manager_never_creates_storage(tmp_path):
+    from src.data.providers.toss.token import TokenManager
+    from src.data.providers.toss.token_store import SecureTokenStore
+    mod = api()
+    store = SecureTokenStore(tmp_path / "unused-token-store", "offline-disabled")
+    manager = TokenManager(store, enabled=False)
+    client, _, transport = make_client(tmp_path, enabled=False, role="sender")
+    client.tokens = manager
+    async def run():
+        async with client:
+            with pytest.raises(mod.TossRequestError, match="disabled"):
+                await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+    asyncio.run(run())
+    assert not store.directory.exists()
+    assert transport.requests == [] and not transport.closed

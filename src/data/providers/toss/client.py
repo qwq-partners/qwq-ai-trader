@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import inspect
 import os
 import re
 import stat
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Protocol
 
 from .rate_limit import RequestBudget, positive_number
 from .transport import (
@@ -18,8 +20,18 @@ from .transport import (
 )
 
 
+class TokenProvider(Protocol):
+    """폐기 관측은 동기·지속·발급0이며, 조회/복구와 함께 필수 계약이다."""
+
+    def observe_revocation(self, failed_token: str) -> None: ...
+
+    async def get_token(self, *, deadline: float) -> str: ...
+
+    async def recover(self, error_code: str, failed_token: str, *, deadline: float) -> str: ...
+
+
 class TossClient:
-    def __init__(self, *, transport, tokens, limiter, enabled=False, role="reader",
+    def __init__(self, *, transport, tokens: TokenProvider, limiter, enabled=False, role="reader",
                  sender_lock_path: Path, circuit_failure_threshold: int,
                  circuit_open_seconds: float, clock=time.monotonic):
         if type(enabled) is not bool or role not in ("sender", "reader"):
@@ -183,6 +195,9 @@ class TossClient:
             self._epochs[group] += 1
 
     async def _get(self, path, params, budget, group):
+        observe_revocation = getattr(self.tokens, "observe_revocation", None)
+        if not callable(observe_revocation) or inspect.iscoroutinefunction(observe_revocation):
+            raise TossRequestError("auth_unavailable")
         token = await self.tokens.get_token(deadline=budget.deadline)
         while True:
             if (not isinstance(token, str) or len(token) > 16384
@@ -207,10 +222,13 @@ class TossClient:
                 raise TossRequestError("malformed_response")
             if not isinstance(response.headers, Mapping):
                 raise TossRequestError("malformed_response")
-            await self.limiter.observe(group, response.headers, status=response.status)
             status, body = response.status, response.body
             if isinstance(body, Mapping) and "result" in body and "error" in body:
                 raise TossRequestError("malformed_response")
+            if status == 401 and _error_code(body) == "token-revoked":
+                # 응답을 확인한 뒤 첫 await/deadline 검사 전에 폐기 관측을 지속 게시한다.
+                observe_revocation(token)
+            await self.limiter.observe(group, response.headers, status=status)
             if 300 <= status < 400:
                 raise TossRequestError("redirect_rejected")
             if status == 403:
