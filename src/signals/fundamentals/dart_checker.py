@@ -200,7 +200,8 @@ class DartChecker:
             return DartCheckResult()
 
         result = await self._fetch_and_analyze(corp_code, days)
-        self._cache[symbol] = (result, now)
+        if result.fetched:
+            self._cache[symbol] = (result, now)
         return result
 
     async def _fetch_and_analyze(self, corp_code: str, days: int) -> DartCheckResult:
@@ -232,6 +233,9 @@ class DartChecker:
             logger.debug(f"[DART] API 오류 (corp={corp_code}): {e}")
             return DartCheckResult()
 
+        if not isinstance(data, dict):
+            return DartCheckResult()
+
         # status "000" = 정상, "013" = 조회 결과 없음
         status = data.get("status", "")
         if status == "013":
@@ -239,16 +243,25 @@ class DartChecker:
         if status != "000":
             return DartCheckResult()               # API 오류 — 미획득
 
-        disclosures = data.get("list", [])
+        disclosures = data.get("list")
+        if not isinstance(disclosures, list):
+            return DartCheckResult()
         if not disclosures:
             return DartCheckResult(fetched=True)
 
         risk_list = []
         positive_list = []
         has_block = False
+        list_complete = True
 
         for disc in disclosures:
-            report_nm = disc.get("report_nm", "")
+            if not isinstance(disc, dict):
+                list_complete = False
+                continue
+            report_nm = disc.get("report_nm")
+            if not isinstance(report_nm, str) or not report_nm.strip():
+                list_complete = False
+                continue
 
             matched_risk = False
             for kw in BLOCK_KEYWORDS:
@@ -272,7 +285,7 @@ class DartChecker:
         # 결과 결정
         if has_block:
             return DartCheckResult(
-                fetched=True,
+                fetched=list_complete,
                 has_risk=True,
                 risk_disclosures=risk_list,
                 positive_disclosures=positive_list,
@@ -281,7 +294,7 @@ class DartChecker:
             )
         elif risk_list:
             return DartCheckResult(
-                fetched=True,
+                fetched=list_complete,
                 has_risk=True,
                 risk_disclosures=risk_list,
                 positive_disclosures=positive_list,
@@ -290,7 +303,7 @@ class DartChecker:
             )
         elif positive_list:
             return DartCheckResult(
-                fetched=True,
+                fetched=list_complete,
                 has_risk=False,
                 risk_disclosures=[],
                 positive_disclosures=positive_list,
@@ -300,4 +313,4 @@ class DartChecker:
         else:
             # HTTP 200/status 000의 인식된 공시 목록은 위험·호재 키워드가 없어도
             # 실제로 획득된 정상 중립 결과다. fetched=False는 HTTP/API 오류 전용이다.
-            return DartCheckResult(fetched=True)
+            return DartCheckResult(fetched=list_complete)
