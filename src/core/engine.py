@@ -1649,7 +1649,7 @@ class RiskManager:
                 try:
                     if datetime.fromisoformat(as_of).date() == now.date():
                         level = meta.get("intraday_state")
-                except ValueError:
+                except (TypeError, ValueError):
                     level = None
             check = check_entry_plan(plan, quote, now, intraday_level=level)
             self._log_sig(event, event_type="shadow_plan_check",

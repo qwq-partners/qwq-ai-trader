@@ -220,7 +220,7 @@ Gemini는 `temperature=0.0`으로 고정했다.
 
 ## 실행 (2026-08-02~)
 
-`kr_scheduler.run_team_deliberation` — 장중 **10:30 / 14:00** 2회.
+`kr_scheduler.run_team_deliberation` — 장중 **10:30 / 11:30 / 13:00 / 14:00** 4슬롯(2026-08-03 2→4 확대, `SLOTS`).
 
 | 대상 | 범위 |
 |---|---|
