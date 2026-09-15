@@ -1,8 +1,8 @@
 # QWQ AI Trader - Changelog
 
-## 2026-09-15 — fix: Codex 금일 커밋 리뷰 R1~R8 후속 (로컬 브랜치, Claude 리뷰 대기)
+## 2026-09-15 — fix: Codex 금일 커밋 리뷰 R1~R8 후속 (PR #58, Claude 리뷰 대기)
 
-기준 `1aba7d7`, `feature/codex-review-fixes-20260915`. 사용자 승인에 따라 병렬 격리 구현(Astra/high: 동기화·A/B, Terra/high: 근거 계약, 주 에이전트: 평가·CF·통합). 배포·재시작·주문·설정·원격 push·main 변경 없음.
+기준 `1aba7d7`, `feature/codex-review-fixes-20260915`. 사용자 승인에 따라 병렬 격리 구현(Astra/high: 동기화·A/B, Terra/high: 근거 계약, 주 에이전트: 평가·CF·통합). 최초 구현은 로컬 한정. 후속 사용자 승인으로 PR·main 병합·배포·재시작을 진행하며 **주문·설정·킬스위치는 유지**한다. Claude 독립 최종 리뷰는 아직 미실시이며 배포 승인과 별개다.
 
 - R1 `kr_scheduler`: 장외 300초 수면을 거래일 08:00까지 남은 시간으로 제한. 응답 유실 체결의 동기화 공백을 줄이고 30초/300초 정책 유지.
 - R2/R3 `team_policy_ab`, `agents/types·analysts·judgment`: 손절·활성 트레일 갭은 시가 체결. replay 기준은 계획 결정 시각; TTL·감쇠·만료까지 now 전달, naive KST/aware UTC 정합화. 후보일과 다른 계획·미래 보고서/관측은 배제. 미래 관측이 종합 score에 섞인 보고서는 통째로 제외해 항목 필터만으로 점수가 살아남는 누수도 차단. 미상 시각은 null 직렬화. 구형 date-only는 명시적 KST 자정 폴백, no-age 신선 가정 제거. 원본 연구 결과는 재계산하거나 덮어쓰지 않음.
@@ -11,6 +11,7 @@
 - R7 `morning_brief_eval`: 유효 전문가 4명 미만 또는 커버리지 미상/무효는 hit=None+사유, 보합 적중률 분모에서 제외.
 - R8 `counterfactual_tracker`: 날짜별 불변 심의 원장 우선, 원장 없는 날짜만 최신 판정 파일 호환. 오전 BUY→오후 HOLD 유실 방지, 종목·날짜 1표본 및 deliberation_ids 보존, 재분류 시 가격 성과 보존·체결 대조 재확인·변경만 있어도 저장.
 - 테스트: `test_codex_{sync_boundary,evidence_contract,policy_replay,evaluation_sources}.py` 신규 106건, 기존 fixture의 시각·새 원장 경로 격리 보완. 통합 verify **902 passed / 2 xfailed / 기존 pykrx 경고 1**, 문법·비밀패턴 검사 통과, 외부/운영 접근 시도 0. 문서: 기술 문서·CLAUDE.md·MEMORY.md·`docs/reviews/codex-remediation-2026-09-15.md`(최종 검증·Claude 인계). 투자 성능 검증/운영 승격/독립 최종 리뷰 완료를 뜻하지 않음.
+- 배포 전 UTC 회귀 보완: `age_minutes_at(now=None)`가 host-local naive 보고서를 9시간 오래된 자료로 읽어 GitHub 검사 19건 실패. `now` 생략 시 naive는 기존 host-local 비교, aware는 실제 현재 순간 비교로 수정하고 명시적 replay의 naive=KST 계약은 유지(Astra/high). 추가 `test_codex_host_clock.py` 14건(UTC RED 5건 확인 후 GREEN), UTC·Asia/Seoul 전체 각각 **916 passed / 2 xfailed**, 운영/외부 접근 0. CI 시간대를 강제로 바꿔 실패를 숨기지 않음.
 
 ## 2026-09-15 — feat: 에이전트 팀 근거 정합성 개선 + 조건부 진입계획(EntryPlan) shadow 통합 (T11, F-agent A~E)
 
