@@ -5,7 +5,7 @@
 이 문서는 [검토된 설계](../superpowers/plans/2026-09-15-toss-securities-fallback.md)의 **Phase 1 오프라인 부분**을 다룬다. 인증 실자료 shadow, 운영 스케줄러, 소비자 폴백 도입까지 완료했다는 의미가 아니다.
 
 - 시작 기준: main `8849d92`, 설계 PR #65 head `2235586`. 설계 PR을 임의로 병합하지 않고 별도 `feature/toss-phase1-offline-20260916`에서 구현했다.
-- 계획: [구현 계획](../superpowers/plans/2026-09-16-toss-phase1-offline.md). 네 작업의 구현·작업별 독립 재리뷰는 완료했다. 통합 소스 `298bc4c`에 대해 부모 UTC/KST 검증과 전체 브랜치 최종 리뷰를 진행한다.
+- 계획: [구현 계획](../superpowers/plans/2026-09-16-toss-phase1-offline.md). 네 작업의 구현·작업별 독립 재리뷰 후 전체 브랜치 리뷰에서 추가 경계 결함을 발견했다. 수정 및 한정 재리뷰 이력은 아래와 같다. 작업별 승인·테스트 통과를 전체 승인으로 대체하지 않는다.
 - 기본 OFF, 운영 호출부에 import/배선 없음. 주문·체결·잔고·청산·사이징·후보/점수·설정·의존성 파일은 변경 범위 밖이다.
 - 실제 자격증명/토큰/운영 캐시를 읽지 않았고, 인증 API·SSH·systemctl·배포·재시작·주문을 실행하지 않았다. 공개 OpenAPI JSON을 인증 없이 조회한 것과 합성 transport/session 검증을 구분한다.
 
@@ -49,7 +49,21 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul \
 - 두 실행 모두 Python 문법·비밀정보 패턴 검사 통과, 운영 상태·외부 네트워크 접근 시도 0건. `git diff --cached --check` 통과.
 - xfail 2건은 기존 live/backtest 손절 수수료·익절 touch 차이이며 이번에 숨기거나 추가하지 않았다. warning은 기존 pykrx importlib-resources deprecation 1건이다.
 - 부모가 아래 합성 CLI도 직접 실행해 exit 0, 시도6/유효2/p95=1/초과비율0.5/상태 `insufficient` 및 `production_eligible=False`를 확인했다.
-- 전체 브랜치 최종 독립 리뷰·원격 CI는 아직 진행 전/중이며 작업별 승인을 최종 승인으로 대체하지 않는다.
+- 이 소스와 문서를 포함한 `14210d4`의 [원격 Verify](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/35033658238)도 성공했다: **1292 passed / 2 xfailed / 33 warnings**, 25.20초, 격리 0·비밀정보 검사 통과. 원격 경고는 이번에 변경하지 않은 `scripts/backtest_strategies.py:665,1614`의 NumPy timedelta deprecation이며 Toss 경고가 아니다. 로컬의 pykrx 경고 1건과 환경 차이를 숨기지 않는다. 이 CI는 아래 추가 수정 **전** 증거다.
+
+### 전체 리뷰의 추가 수정
+
+`2235586..14210d4` 전체 diff를 Astra/xhigh 독립 리뷰어가 읽고 Important 2건·Minor 1건을 재현했다.
+
+| 항목 | 원인 및 수정 | 한정 재리뷰 |
+|---|---|---|
+| F1 | retry 예산 소진 시 revoked 기록까지 생략됨. revoked 복구를 재전송 허가보다 먼저 수행하되 expired-token 발급은 계속 재시도 허가 뒤에 둠 | 승인, `990d34e` |
+| F2 | 실제 `RequestBudget.remaining()` 예외가 일봉 수집 종료 처리를 우회함. 최초/페이지 사이 만료에서도 확보한 봉과 `missing_dates`를 부분 결과로 보존 | 승인, `f190a3d` |
+| F3 | page cap 테스트가 잘못된 cursor로 먼저 중단됨. 유효한 cursor·실제 예산의 cap1/cap2 음성·양성 대조군으로 교체 | 승인, `f190a3d` |
+
+- 부모 `f190a3d` KST 전체: **1304 passed / 2 xfailed / 1 warning**, 30.69초, 격리 0·문법·비밀정보 검사 통과.
+- 독립 한정 재리뷰: 15 passed / 95 deselected, 1.08초, 격리 0. F1의 재시도 경로·F2·F3은 닫혔다.
+- **전체 승인 보류:** 별도 Important 경계가 확인됐다. `recover()`가 이미 deadline을 넘었거나 토큰 락 대기 중 취소되면 폐기 관측을 저장하지 못해, 재시작·만료 후 가짜 issuer가 호출됐다. 즉시 종료·즉시 mint0만으로 지속 차단을 입증하지 않는다. 첫 비동기 대기 전 관측을 보존하고 검증된 최신 캐시로만 해결하는 내부 계약을 검토 중이다. 실토큰/운영에 연결하지 않는다.
 
 ## 합성 CLI 재현 방법
 

@@ -178,3 +178,14 @@ assert called == []
 - [x] Step 5: 실제 CLI subprocess를 synthetic fixture로 실행해 JSON/exitcode/분모를 검산하고 과거결과 덮어쓰기/캐시읽기/인증설정 접근이 없음을 검증한다. 함수 OFF는 env를 암묵 조회하지 않는다. TOSS_API=1 문자열만으로 on으로 전환되는 경로도 만들지 않는다(현재 런타임 미배선).
 - [x] Step 6: 세 모듈 통합 fixture 테스트(가짜 issuer/token→client→가격/페이지→shadow)와 전체 offline verify를 실행한다. subprocess는 명시 timeout, output path 미지정(stdout만), .env로드·운영results사용 금지. 자체 선행 커밋/리뷰 report를 부모에게 넘긴다.
 - [ ] Step 7: 부모가 독립 작업별/전체 리뷰·수정·UTC/KST 전체 verify·비밀 검사 후 feature push/PR 생성한다. 설계 PR #65는 별도 유지하며 main 병합/배포는 실행하지 않는다. README에 reproducible offline CLI 명령과 Phase1 **실자료 부분 미완**을 명시한다.
+
+## Final-review follow-up: cancellation-safe revoked observation
+
+실제 Store/Manager/Client 조합의 전체 리뷰에서 재시도 예산으로 폐기 기록을 건너뛰는 경로를 고쳤다. 이후 deadline 선행 검사·락 대기 취소에도 같은 영속화 누락이 재현됐다. 이는 A01/Task1 Step3의 내부 안전 보완이며 실자료/운영 권한을 확장하지 않는다.
+
+**Chosen contract:** `TokenManager.observe_revocation(failed_token)`는 동기 메서드다. OFF이면 저장소 I/O 0. ON이면 첫 await/deadline 검사 전에 해당 bearer의 digest·known generation·identity/origin/schema를 안전하게 게시한다. `recover()`도 idempotent 호출하며, client는 유효한 401 revoked 응답을 받은 뒤 `limiter.observe()`를 포함한 첫 비동기 대기 전에 호출한다. 재전송 예산·HTTP deadline을 늘리지 않고 background task/shield 발급을 만들지 않는다.
+
+- [ ] Token owner (Astra/high): 기존 auth_state는 계속 발급 락 안에서만 변경. 별도 immutable 관측을 최대256개 고정 slot(각≤1KiB)에 no-clobber 게시·fsync하며, 충돌은 결정적 탐색·중복은 idempotent 처리. 포화는 고정 overflow latch로 지속 차단, 자동 삭제/TTL GC 없음. 해결증거 JSON≤64KiB는 발급 락 안에서만 갱신하고 정확한 관측ID에 대해 실제 확인한 유효·다른·더 높은 캐시만 증거로 인정. 같은 bearer는 해결 후에도 재사용 불가. 해결된 최신 캐시의 이후 정상 만료 갱신은 유지.
+- [ ] Token owner: deadline 초과/락 취소→재시작·만료 mint0, 늦은 T1 응답과 정상 T2, 복수 관측·idempotency·동시 게시·포화·손상·symlink/권한·쓰기 실패·issuance_unknown·bootstrap 우회를 RED/GREEN으로 검증. 이미 시작한 외부 발급/다른 호스트를 취소·통제한다는 보장은 하지 않고 발급 허가 검사 시점을 명시.
+- [ ] Client owner (Astra/high): sync API를 필수 token protocol에 추가하고 모호한 result/error·잘못된 401 형식은 계속 거부. 응답 직후 deadline 만료, limiter 대기 취소, token lock 대기 취소를 실제 token 모듈/임시 저장소/가짜 HTTP로 검증. expired-token은 재시도 허가 없는 발급0 유지. Token owner 파일은 편집하지 않음.
+- [ ] Parent: own 커밋만 통합하고 Astra/xhigh 독립 한정 재리뷰로 위 경계 및 도입 회귀 확인. UTC/KST 전체 검증·비밀 검사·최신 SHA CI와 최종 문서를 갱신한 뒤 브랜치를 푸시. 기본 OFF·main/운영 미변경 유지.
