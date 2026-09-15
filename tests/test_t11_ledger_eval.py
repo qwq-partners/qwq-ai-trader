@@ -419,6 +419,33 @@ def test_simulate_exit_skip_entry_bar_does_not_leak_pre_fill_low_into_stop_loss(
     assert res_leaky["exit_reason"] == "stop_loss"
 
 
+def test_simulate_exit_missing_or_invalid_stop_price_falls_back_to_default_sl_not_none():
+    """리뷰 blocking(2026-09-15) 재발 방지 고정 — stop_price 가 결측(None)이거나 무효
+    (갭하락 진입으로 entry_price 이상)면 simulate_exit 은 예전처럼 손절을 아예 걸지 않는(stop_px=None)
+    대신, PRE_REGISTERED.exit_assumption 이 사전등록한 DEFAULT_SL_PCT 대체선을 실제로 적용해야
+    한다. _risk_pct 는 이미 이 경우 DEFAULT_SL_PCT 를 분모로 쓰므로, 시뮬레이터도 같은 가정을
+    써야 R 이 왜곡되지 않는다(결측 위험값을 "위험 5%"로 포장하지 않되, 분자·분모를 일치시킴)."""
+    bars = []
+    price = 10000.0
+    for i in range(25):
+        nxt = price * 0.98  # 매일 -2% 단조 하락
+        bars.append({"date": f"2026-08-{i + 1:02d}", "open": price, "high": price,
+                     "low": nxt, "close": nxt})
+        price = nxt
+
+    res_valid = tpab.simulate_exit(bars, 0, 10000.0, 9500.0)  # DEFAULT_SL_PCT=5.0 과 동일 손절가
+    assert res_valid is not None and res_valid["exit_reason"] == "stop_loss"
+
+    res_missing = tpab.simulate_exit(bars, 0, 10000.0, None)
+    res_gap = tpab.simulate_exit(bars, 0, 10000.0, 10500.0)  # entry_price 보다 위 = 무효
+    for res in (res_missing, res_gap):
+        assert res is not None and res["exit_reason"] == "stop_loss", (
+            "결측/무효 stop_price 도 DEFAULT_SL_PCT 대체선으로 손절이 걸려야 한다(max_holding 아님)"
+        )
+        assert res == res_valid, "대체 손절선이 명시적 9500(=DEFAULT_SL_PCT) 케이스와 완전히 같아야 한다"
+        assert tpab._risk_pct(10000.0, None if res is res_missing else 10500.0) == 5.0
+
+
 def test_run_timing_experiment_entry_plan_mode_passes_skip_entry_bar_through(tmp_path, monkeypatch):
     """리뷰 blocking(2026-09-15) 배선 확인 — run_timing_experiment 의 entry_plan 팔이 실제로
     skip_entry_bar=True 를 simulate_exit 에 전달하는지(호출부 회귀 방지). checker 를 항상

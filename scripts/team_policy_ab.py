@@ -407,7 +407,11 @@ def simulate_exit(bars: List[Dict[str, Any]], entry_idx: int, entry_price: float
     stage = 0
     high_wm = entry_price
     trail_armed = False
-    stop_px = stop_price if (stop_price is not None and 0 < stop_price < entry_price) else None
+    # stop_price 결측·무효(0<stop<entry 불만족, 예: 갭하락 진입) 시 PRE_REGISTERED.exit_assumption
+    # 그대로 DEFAULT_SL_PCT 대체선을 적용한다 — _risk_pct 의 분모(R)도 같은 대체값을 쓰므로
+    # 결측을 "무위험"(손절 미적용)으로 새지 않고 사전등록된 가정과 일치시킨다(리뷰 blocking 2026-09-15).
+    stop_px = stop_price if (stop_price is not None and 0 < stop_price < entry_price) \
+        else entry_price * (1 - DEFAULT_SL_PCT / 100)
     end = min(entry_idx + MAX_HOLD_DAYS, len(bars))
     start = entry_idx + 1 if skip_entry_bar else entry_idx
     for i in range(start, end):
