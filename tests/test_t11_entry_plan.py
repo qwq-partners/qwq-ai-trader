@@ -39,6 +39,17 @@ NOW = datetime(2026, 9, 15, 10, 30, 0)
 SYM = "005930"
 
 
+def _freeze_clock(monkeypatch, module, fixed: datetime = NOW) -> None:
+    """모듈의 `datetime.now()` 를 NOW 로 동결 — 배치 실행부의 14:30 SEPA 진입 차단·계획 만료
+    (NOW+5h=15:30)·엔진 shadow 검증의 만료 판정이 실제 벽시계에 따라 갈라지지 않게 한다
+    (2026-09-15 15:33 배포 verify 가 장 마감 후 실행돼 7건이 실패·자동 롤백된 원인)."""
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else fixed.replace(tzinfo=tz)
+    monkeypatch.setattr(module, "datetime", _Frozen)
+
+
 def _plan(**kw) -> PendingSignal:
     """합성 계획 — 기본값은 '전부 통과'(allow) 이고 테스트가 한 조건씩 깨뜨린다."""
     base = dict(
@@ -384,11 +395,9 @@ def test_plan_reaches_signal_metadata_and_event(monkeypatch):
 
 def test_signal_metadata_carries_quote_as_of(monkeypatch):
     """변환부가 현재가 **조회 시각**을 함께 싣는다 — shadow 신선도 게이트의 입력."""
-    before = datetime.now()
     events = _run_execute(monkeypatch, [_plan()])
-    after = datetime.now()
     q = events[0].signal.metadata["quote_as_of"]
-    assert before <= datetime.fromisoformat(q) <= after
+    assert datetime.fromisoformat(q) == NOW     # 조회 시각 = 실행부 시계(동결)
 
 
 def test_shadow_uses_quote_as_of_and_sees_price_reasons(home, monkeypatch):
@@ -398,7 +407,7 @@ def test_shadow_uses_quote_as_of_and_sees_price_reasons(home, monkeypatch):
     rm = _rm(monkeypatch, mode="nominal", em=_em())
     logs = _order_env(monkeypatch, rm)
     plan = _plan(max_entry_price=9000.0).to_dict()     # 현재가 10000 > 상한
-    ev = _buy_signal(plan, quote_as_of=datetime.now().isoformat())
+    ev = _buy_signal(plan, quote_as_of=NOW.isoformat())   # 엔진 시계(동결) 기준 신선한 호가
     asyncio.run(rm.on_signal(ev))
     rec = next(r for r in logs if r["event_type"] == "shadow_plan_check")
     assert rec["metadata"]["status"] == "wait"
@@ -419,6 +428,7 @@ def _run_execute(monkeypatch, pending_list, quote_price=10100.0):
 
     import src.core.batch_analyzer as bam
     monkeypatch.setattr(bam._SigLog, "get", staticmethod(lambda: _FakeSigLog()))
+    _freeze_clock(monkeypatch, bam)
 
     async def _emit(ev):
         emitted.append(ev)
@@ -461,6 +471,7 @@ def _order_env(monkeypatch, rm):
 
     import src.core.engine as eng
     monkeypatch.setattr(eng._SigLog, "get", staticmethod(lambda: _FakeSigLog()))
+    _freeze_clock(monkeypatch, eng)
 
     rm._cross_validator = SimpleNamespace(
         validate=lambda **kw: (True, kw["score"], ""), last_memory_adj=0,
@@ -723,7 +734,7 @@ def test_shadow_hook_passes_intraday_level_only_when_updated_today(home, monkeyp
 
     extra = {"intraday_state": "severe"}
     if as_of_offset is not None:
-        extra["intraday_state_as_of"] = (datetime.now() + as_of_offset).isoformat()
+        extra["intraday_state_as_of"] = (NOW + as_of_offset).isoformat()   # 엔진 시계(동결) 기준
     asyncio.run(rm.on_signal(_buy_signal(_plan().to_dict(), **extra)))
     assert seen.get("intraday_level") == expect_level
 

@@ -14,6 +14,12 @@
 - **상태 구분**: 구현 완료(shadow) / 투자 성능 검증 **미완**(연구용 스냅샷·원장 표본 없음) / 운영 승격 **없음**. 배포·재시작·주문·설정 변경 없음.
 - **테스트·리뷰**: 전체 스위트 **775 passed / 2 xfailed**, 테스트 격리 위반 0건. T11 테스트 10파일 215건(계약 6·근거 25+기준선 8·판단 26+기준선 13·EntryPlan 46·돈 경로 기준선 6·원장/평가 25·재현 8·D 독립 인수 14조건 45). 리뷰: 브랜치별 독립 리뷰 A 5라운드·B 3라운드·C 2라운드·D 5라운드 → 통합 2차 → 최종 리뷰 2인(FINAL-2 승인, FINAL-1 blocking 2건 → 본 항목 후속으로 해소, 재검증(opus/xhigh 읽기 전용): blocking 2건 해소·신규 blocking 0·돈 경로 무변경 판정, advisory 6건 중 문서 2건·예외 범위 1건 반영). Codex 교차 리뷰(`scripts/dev/codex_review.sh`)는 bwrap 샌드박스 오류로 **미실행**(승인으로 간주하지 않음, Claude opus/xhigh 독립 리뷰로 대체).
 
+## 2026-09-15 — test(T11): 시각 의존 테스트 결정론화 (15:33 배포 verify 실패·자동 롤백 원인)
+
+계기: 15:33 KST 장 마감 후 `local_deploy.sh 04279c6` 의 verify 단계에서 T11 테스트 7건이 실패해 자동 롤백(운영은 `3175732` 유지, 재기동 정상). 테스트가 실제 벽시계를 써서 (a) 배치 실행부 `execute_pending_signals` 가 14:30 이후 SEPA 진입 차단 분기로 빠지고 (b) `_plan()` 만료가 고정 상수(2026-09-15 15:30) 기준이라 엔진 shadow 검증이 15:30 이후 PLAN_EXPIRED 로 갈라졌다. 오전에 작성·검증된 테스트라 배포 창(장 마감 후)에서 처음 드러났다.
+- `tests/test_t11_entry_plan.py`: `_freeze_clock` 헬퍼(모듈 `datetime.now()` → NOW 동결)를 `_run_execute`(batch_analyzer)·`_order_env`(engine) 에 적용, 호가 조회 시각·`intraday_state_as_of` 단정을 동결 시계 기준으로 정정. 운영 코드 변경 없음.
+- 교훈: 배포 verify 는 배포 창 시각에 돈다 — 시각 게이트(14:30/15:30/장중 여부)를 지나는 경로의 테스트는 반드시 시계를 주입한다.
+
 ## 2026-09-15 — fix(T11 배포 전 리뷰): CF 체결 증거 폴백을 실제 거래저널 경로로 정정
 
 계기: PR #51 머지 후 운영 배포 전 5관점 리뷰(부팅·돈 경로·저장소·대시보드·스케줄러 + 적대적 검증)에서 3개 관점이 동일 결함을 지적 — `counterfactual_tracker` 의 콜백 미주입 폴백이 아무도 쓰지 않는 `~/.cache/ai_trader/trade_journal_kr.json` 을 읽어 항상 '판정 불가'였고, 그것을 미체결로 해석해 승인 BUY 전건이 `team_buy_unfilled` 로 등록될 수 있었다(운영 배선은 콜백 없이 생성 — `get_counterfactual_tracker()`).
