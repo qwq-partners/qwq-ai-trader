@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, DecimalException
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -37,7 +38,12 @@ _SOURCE_FIELDS = ("price", "observed_at", "fetched_at", "status", "latency_ms")
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _canonical_hash(value: Any) -> str:
@@ -62,8 +68,27 @@ def _parse_aware(value: Any) -> datetime:
 def _utc_text(value: Any) -> str | None:
     try:
         return _parse_aware(value).astimezone(timezone.utc).isoformat()
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
+
+
+def _datetime_utc_text(value: datetime) -> str | None:
+    try:
+        return value.astimezone(timezone.utc).isoformat()
+    except OverflowError:
+        return None
+
+
+def _decimal(value: int | float) -> Decimal:
+    return Decimal(str(value))
+
+
+def _json_decimal(value: Decimal) -> float | None:
+    try:
+        result = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def _normalized_hash_rows(rows: Sequence[Any]) -> list[dict[str, Any]]:
@@ -121,7 +146,7 @@ class ShadowManifest:
             raise ValueError("manifest must be an object")
         if set(data) != _MANIFEST_FIELDS:
             raise ValueError("manifest fields do not match the offline contract")
-        if data["schema_version"] != 1 or isinstance(data["schema_version"], bool):
+        if not isinstance(data["schema_version"], int) or isinstance(data["schema_version"], bool) or data["schema_version"] != 1:
             raise ValueError("schema_version must be 1")
         if data["mode"] != "offline" or data["dataset_kind"] != "synthetic":
             raise ValueError("only offline synthetic datasets are supported")
@@ -177,7 +202,7 @@ def build_shadow(*, enabled: bool = False, factory: Callable[[], Any]) -> Any | 
     return factory()
 
 
-def _source_values(row: Mapping[str, Any], name: str) -> tuple[float, datetime, datetime, float]:
+def _source_values(row: Mapping[str, Any], name: str) -> tuple[Decimal, datetime, datetime]:
     source = row.get(name)
     if not isinstance(source, Mapping):
         raise KeyError("source")
@@ -187,7 +212,7 @@ def _source_values(row: Mapping[str, Any], name: str) -> tuple[float, datetime, 
         raise ArithmeticError("price")
     if not _is_number(latency) or latency < 0:
         raise ArithmeticError("latency")
-    return float(price), _parse_aware(source.get("observed_at")), _parse_aware(source.get("fetched_at")), float(latency)
+    return _decimal(price), _parse_aware(source.get("observed_at")), _parse_aware(source.get("fetched_at"))
 
 
 def _excluded_reason(
@@ -208,8 +233,8 @@ def _excluded_reason(
         return "provider_status", None
     try:
         now = _parse_aware(row.get("now"))
-        kis_price, kis_observed, kis_fetched, _ = _source_values(row, "kis")
-        toss_price, toss_observed, toss_fetched, _ = _source_values(row, "toss")
+        kis_price, kis_observed, kis_fetched = _source_values(row, "kis")
+        toss_price, toss_observed, toss_fetched = _source_values(row, "toss")
     except ArithmeticError as exc:
         return ("invalid_price" if str(exc) == "price" else "invalid_latency"), None
     except (KeyError, ValueError):
@@ -218,21 +243,32 @@ def _excluded_reason(
         return "invalid_time", None
     if kis_fetched > now or toss_fetched > now:
         return "invalid_time", None
+    normalized_now = _datetime_utc_text(now)
+    normalized_kis_observed = _datetime_utc_text(kis_observed)
+    normalized_toss_observed = _datetime_utc_text(toss_observed)
+    if normalized_now is None or normalized_kis_observed is None or normalized_toss_observed is None:
+        return "invalid_time", None
     key = (
         symbol,
-        kis_observed.astimezone(timezone.utc).isoformat(),
-        toss_observed.astimezone(timezone.utc).isoformat(),
+        normalized_kis_observed,
+        normalized_toss_observed,
     )
     if key in seen:
         return "duplicate_symbol_observed_at", None
     seen.add(key)
     if abs((kis_observed - toss_observed).total_seconds()) > manifest.max_pair_skew_seconds:
         return "observation_skew", None
-    if (now - kis_fetched).total_seconds() > manifest.max_age_seconds or (
-        now - toss_fetched
+    if (now - kis_observed).total_seconds() > manifest.max_age_seconds or (
+        now - toss_observed
     ).total_seconds() > manifest.max_age_seconds:
         return "stale", None
-    return None, abs(toss_price - kis_price) / kis_price * 100
+    try:
+        difference = abs(toss_price - kis_price) / kis_price * Decimal("100")
+    except (DecimalException, ZeroDivisionError, OverflowError):
+        return "invalid_difference", None
+    if not difference.is_finite() or _json_decimal(difference) is None:
+        return "invalid_difference", None
+    return None, difference
 
 
 def summarize_pairs(rows: Sequence[Any], manifest: ShadowManifest) -> dict[str, Any]:
@@ -243,7 +279,7 @@ def summarize_pairs(rows: Sequence[Any], manifest: ShadowManifest) -> dict[str, 
         raise ValueError("rows must be a JSON array")
 
     excluded: dict[str, int] = {}
-    differences: list[float] = []
+    differences: list[Decimal] = []
     seen: set[tuple[str, str, str]] = set()
     for row in rows:
         reason, difference = _excluded_reason(row, manifest, seen)
@@ -257,13 +293,15 @@ def summarize_pairs(rows: Sequence[Any], manifest: ShadowManifest) -> dict[str, 
     coverage = valid / attempted if attempted else 0.0
     differences.sort()
     p95 = differences[math.ceil(0.95 * valid) - 1] if valid else None
-    outliers = sum(value > manifest.outlier_threshold_pct for value in differences)
+    p95_limit = _decimal(manifest.p95_limit_pct)
+    outlier_threshold = _decimal(manifest.outlier_threshold_pct)
+    outliers = sum(value > outlier_threshold for value in differences)
     outlier_fraction = outliers / valid if valid else None
-    sufficient = valid >= manifest.min_valid_pairs and coverage >= manifest.min_coverage
+    sufficient = valid > 0 and valid >= manifest.min_valid_pairs and coverage >= manifest.min_coverage
     within_limits = (
         sufficient
         and p95 is not None
-        and p95 <= manifest.p95_limit_pct
+        and p95 <= p95_limit
         and outlier_fraction is not None
         and outlier_fraction <= manifest.max_outlier_fraction
     )
@@ -277,7 +315,7 @@ def summarize_pairs(rows: Sequence[Any], manifest: ShadowManifest) -> dict[str, 
         "time_excluded_pairs": time_excluded,
         "excluded_reasons": excluded,
         "coverage": coverage,
-        "p95_difference_pct": p95,
+        "p95_difference_pct": _json_decimal(p95) if p95 is not None else None,
         "outlier_fraction": outlier_fraction,
         "meets_thresholds": within_limits,
         "status": status,

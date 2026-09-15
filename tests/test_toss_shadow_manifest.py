@@ -20,6 +20,13 @@ def _pairs():
     return json.loads((FIXTURES / "phase1_pairs.json").read_text(encoding="utf-8"))
 
 
+def _single_sample_manifest():
+    data = _manifest_data()
+    data.update(min_valid_pairs=1, min_coverage=1.0, p95_limit_pct=0.2,
+                outlier_threshold_pct=0.2, max_outlier_fraction=0.0)
+    return ShadowManifest.from_dict(data)
+
+
 def test_manifest_accepts_explicit_offline_synthetic_nearest_rank_contract():
     manifest = ShadowManifest.from_dict(_manifest_data())
 
@@ -34,6 +41,7 @@ def test_manifest_accepts_explicit_offline_synthetic_nearest_rank_contract():
     ("field", "value"),
     [
         ("mode", "live"),
+        ("schema_version", 1.0),
         ("dataset_kind", "historical"),
         ("spec_sha256", "not-a-sha"),
         ("max_age_seconds", True),
@@ -155,3 +163,101 @@ def test_empty_sample_has_no_p95_and_can_never_be_production_eligible():
     assert report["p95_difference_pct"] is None
     assert report["status"] == "insufficient"
     assert report["production_eligible"] is False
+
+
+def test_stale_observations_are_excluded_even_if_receipts_are_fresh():
+    # fetched_at만 age에 쓰도록 바꾸면 과거 관측이 유효 표본으로 되살아난다.
+    row = deepcopy(_pairs()[0])
+    row["kis"].update(observed_at="2026-09-15T09:59:30+09:00", fetched_at="2026-09-16T09:59:59+09:00")
+    row["toss"].update(observed_at="2026-09-15T09:59:31+09:00", fetched_at="2026-09-16T09:59:59+09:00")
+
+    report = summarize_pairs([row], _single_sample_manifest())
+
+    assert report["attempted_pairs"] == 1
+    assert report["valid_pairs"] == 0
+    assert report["excluded_reasons"] == {"stale": 1}
+    assert report["coverage"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("toss_price", "status", "outlier_fraction"),
+    [
+        (100.2, "within_limits", 0.0),
+        (100.2000000001, "threshold_exceeded", 1.0),
+    ],
+)
+def test_decimal_threshold_comparison_keeps_exact_equality_but_rejects_a_real_excess(
+    toss_price, status, outlier_fraction
+):
+    # float 오차를 그대로 비교하면 100.2가 0.2%를 초과했다고 잘못 분류한다.
+    row = deepcopy(_pairs()[0])
+    row["toss"]["price"] = toss_price
+
+    report = summarize_pairs([row], _single_sample_manifest())
+
+    assert report["p95_difference_pct"] == pytest.approx(toss_price - 100.0)
+    assert report["outlier_fraction"] == outlier_fraction
+    assert report["status"] == status
+
+
+def test_unrepresentable_difference_is_excluded_without_losing_other_attempts_or_json_finiteness():
+    # 1e-308 대비 1e308 차이를 inf로 출력하거나 전체 집계를 중단하면 실패한다.
+    valid, overflow = deepcopy(_pairs()[0]), deepcopy(_pairs()[0])
+    overflow["pair_id"] = "range-overflow"
+    overflow["symbol"] = "000001"
+    overflow["kis"]["price"] = 1e-308
+    overflow["toss"]["price"] = 1e308
+
+    report = summarize_pairs([valid, overflow], _single_sample_manifest())
+
+    assert report["attempted_pairs"] == 2
+    assert report["valid_pairs"] == 1
+    assert report["excluded_reasons"] == {"invalid_difference": 1}
+    assert report["p95_difference_pct"] == pytest.approx(0.1)
+    assert json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize(("source", "field", "reason"), [
+    ("kis", "price", "invalid_price"),
+    ("toss", "latency_ms", "invalid_latency"),
+])
+def test_huge_json_integer_is_safely_excluded_without_aborting_summary(source, field, reason):
+    # math.isfinite(10**400) range error가 전체 리포트를 중단하면 실패한다.
+    valid, huge = deepcopy(_pairs()[0]), deepcopy(_pairs()[0])
+    huge["pair_id"] = f"huge-{field}"
+    huge["symbol"] = "000002"
+    huge[source][field] = 10 ** 400
+
+    report = summarize_pairs([valid, huge], _single_sample_manifest())
+
+    assert report["attempted_pairs"] == 2
+    assert report["valid_pairs"] == 1
+    assert report["excluded_reasons"] == {reason: 1}
+
+
+def test_zero_valid_pairs_are_insufficient_even_with_zero_minimum_policies():
+    # min=0을 그대로 sufficient로 해석하면 p95=None 보고서가 threshold_exceeded가 된다.
+    data = _manifest_data()
+    data.update(min_valid_pairs=0, min_coverage=0.0)
+
+    report = summarize_pairs([], ShadowManifest.from_dict(data))
+
+    assert report["valid_pairs"] == 0
+    assert report["status"] == "insufficient"
+    assert report["meets_thresholds"] is False
+
+
+def test_utc_conversion_overflow_is_an_invalid_time_and_does_not_abort_hashing_or_other_rows():
+    # aware 값을 UTC로 바꾸다 OverflowError가 나도 나머지 행과 attempt 분모를 보존해야 한다.
+    valid, invalid_time = deepcopy(_pairs()[0]), deepcopy(_pairs()[0])
+    invalid_time["pair_id"] = "utc-underflow"
+    invalid_time["symbol"] = "000003"
+    invalid_time["kis"].update(observed_at="0001-01-01T00:00:00+09:00", fetched_at="0001-01-01T00:00:00+09:00")
+    invalid_time["toss"].update(observed_at="0001-01-01T00:00:01+09:00", fetched_at="0001-01-01T00:00:01+09:00")
+
+    report = summarize_pairs([valid, invalid_time], _single_sample_manifest())
+
+    assert report["attempted_pairs"] == 2
+    assert report["valid_pairs"] == 1
+    assert report["excluded_reasons"] == {"invalid_time": 1}
+    assert json.dumps(report, allow_nan=False)
