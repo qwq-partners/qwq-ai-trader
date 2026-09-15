@@ -93,7 +93,8 @@ TossClient(*, transport, tokens, limiter, enabled=False, role="reader",
            circuit_open_seconds: float, clock=time.monotonic)
 async with client:  # enabled=False이면 토큰/lock/transport 전혀 접근하지 않음
     body = await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=budget)
-# token protocol: get_token(deadline=...), recover(error_code, failed_token, deadline=...)
+# token protocol: get_token(deadline=...), recover(error_code, failed_token, deadline=...),
+#                 observe_revocation(failed_token) -> None (동기, 첫 await 전. 아래 final follow-up 참조)
 # 송신을 명시 승인한 사용자는 client role="sender". TokenManager issuer/reader와 별개 권한.
 # get은 원본 result envelope 반환, logical get당 consume_page 1회. 재시도에는 추가 page 소비 없음.
 # transport: async request(method, path, *, params, headers, timeout) -> HttpResponse
@@ -179,13 +180,19 @@ assert called == []
 - [x] Step 6: 세 모듈 통합 fixture 테스트(가짜 issuer/token→client→가격/페이지→shadow)와 전체 offline verify를 실행한다. subprocess는 명시 timeout, output path 미지정(stdout만), .env로드·운영results사용 금지. 자체 선행 커밋/리뷰 report를 부모에게 넘긴다.
 - [ ] Step 7: 부모가 독립 작업별/전체 리뷰·수정·UTC/KST 전체 verify·비밀 검사 후 feature push/PR 생성한다. 설계 PR #65는 별도 유지하며 main 병합/배포는 실행하지 않는다. README에 reproducible offline CLI 명령과 Phase1 **실자료 부분 미완**을 명시한다.
 
+  코드/검증/문서·feature push 부분은 완료(소스 `2bf7842`, 최종 독립 승인, UTC/KST1375 passed/2 xfailed, 원격 Verify35036649156 성공). **PR 생성은 마무리 선택 응답 전이므로 미실행**이며 Step7 전체를 완료로 표시하지 않는다. main/운영 checkout은 유지한다.
+
 ## Final-review follow-up: cancellation-safe revoked observation
 
 실제 Store/Manager/Client 조합의 전체 리뷰에서 재시도 예산으로 폐기 기록을 건너뛰는 경로를 고쳤다. 이후 deadline 선행 검사·락 대기 취소에도 같은 영속화 누락이 재현됐다. 이는 A01/Task1 Step3의 내부 안전 보완이며 실자료/운영 권한을 확장하지 않는다.
 
 **Chosen contract:** `TokenManager.observe_revocation(failed_token)`는 동기 메서드다. OFF이면 저장소 I/O 0. ON이면 첫 await/deadline 검사 전에 해당 bearer의 digest·known generation·identity/origin/schema를 안전하게 게시한다. `recover()`도 idempotent 호출하며, client는 유효한 401 revoked 응답을 받은 뒤 `limiter.observe()`를 포함한 첫 비동기 대기 전에 호출한다. 재전송 예산·HTTP deadline을 늘리지 않고 background task/shield 발급을 만들지 않는다.
 
-- [ ] Token owner (Astra/high): 기존 auth_state는 계속 발급 락 안에서만 변경. 별도 immutable 관측을 최대256개 고정 slot(각≤1KiB)에 no-clobber 게시·fsync하며, 충돌은 결정적 탐색·중복은 idempotent 처리. 포화는 고정 overflow latch로 지속 차단, 자동 삭제/TTL GC 없음. 해결증거 JSON≤64KiB는 발급 락 안에서만 갱신하고 정확한 관측ID에 대해 실제 확인한 유효·다른·더 높은 캐시만 증거로 인정. 같은 bearer는 해결 후에도 재사용 불가. 해결된 최신 캐시의 이후 정상 만료 갱신은 유지.
-- [ ] Token owner: deadline 초과/락 취소→재시작·만료 mint0, 늦은 T1 응답과 정상 T2, 복수 관측·idempotency·동시 게시·포화·손상·symlink/권한·쓰기 실패·issuance_unknown·bootstrap 우회를 RED/GREEN으로 검증. 이미 시작한 외부 발급/다른 호스트를 취소·통제한다는 보장은 하지 않고 발급 허가 검사 시점을 명시.
-- [ ] Client owner (Astra/high): sync API를 필수 token protocol에 추가하고 모호한 result/error·잘못된 401 형식은 계속 거부. 응답 직후 deadline 만료, limiter 대기 취소, token lock 대기 취소를 실제 token 모듈/임시 저장소/가짜 HTTP로 검증. expired-token은 재시도 허가 없는 발급0 유지. Token owner 파일은 편집하지 않음.
-- [ ] Parent: own 커밋만 통합하고 Astra/xhigh 독립 한정 재리뷰로 위 경계 및 도입 회귀 확인. UTC/KST 전체 검증·비밀 검사·최신 SHA CI와 최종 문서를 갱신한 뒤 브랜치를 푸시. 기본 OFF·main/운영 미변경 유지.
+동시성 한계: 최종 발급 허가용 슬롯 검사 시작 전에 지속 게시된 관측은 모두 검사한다. 256개 슬롯 검사는 원자적 snapshot이 아니므로 검사 중/후 신규 관측은 해당 검사에서 놓칠 수 있고 새 토큰 게시/다음 호출에서 재검사한다. 이미 허가된 외부 발급의 취소나 외부 호스트 통제를 보장하지 않는다.
+
+한정 재리뷰 보완: 관측 payload 상한보다 긴 identity를 처음부터 허용하지 않는다. exact identity 비교를 유지하면서 생성자에서 JSON-escaped 표현(따옴표 포함)≤256바이트를 I/O 전에 검증한다. generation은 공통 `0..2^63-1`(토큰/해결증거는1이상)이며 다음 generation overflow는 issuer 호출 전에 거부한다. 성공 반환은 중앙 `_return`의 deadline 재확인으로 저장소 검사 중 예산 소진까지 처리한다. 새 fingerprint/schema로 교체하거나 실제 캐시를 마이그레이션하는 작업은 아니다.
+
+- [x] Token owner (Astra/high): 기존 auth_state는 계속 발급 락 안에서만 변경. 별도 immutable 관측을 최대256개 고정 slot(각≤1KiB)에 no-clobber 게시·fsync하며, 충돌은 결정적 탐색·중복은 idempotent 처리. 포화는 고정 overflow latch로 지속 차단, 자동 삭제/TTL GC 없음. 해결증거 JSON≤64KiB는 발급 락 안에서만 갱신하고 정확한 관측ID에 대해 실제 확인한 유효·다른·더 높은 캐시만 증거로 인정. 같은 bearer는 해결 후에도 재사용 불가. 해결된 최신 캐시의 이후 정상 만료 갱신은 유지.
+- [x] Token owner: deadline 초과/락 취소→재시작·만료 mint0, 늦은 T1 응답과 정상 T2, 복수 관측·idempotency·동시 게시·포화·손상·symlink/권한·쓰기 실패·issuance_unknown·bootstrap 우회를 RED/GREEN으로 검증. 이미 시작한 외부 발급/다른 호스트를 취소·통제한다는 보장은 하지 않고 발급 허가 검사 시점을 명시.
+- [x] Client owner (Astra/high): sync API를 필수 token protocol에 추가하고 모호한 result/error·잘못된 401 형식은 계속 거부. 응답 직후 deadline 만료, limiter 대기 취소, token lock 대기 취소를 실제 token 모듈/임시 저장소/가짜 HTTP로 검증. expired-token은 재시도 허가 없는 발급0 유지. Token owner 파일은 편집하지 않음.
+- [x] Parent: own 커밋만 통합하고 Astra/xhigh 독립 한정 재리뷰로 위 경계 및 도입 회귀 확인. UTC/KST 전체 검증·비밀 검사·소스 SHA CI와 최종 문서 갱신 및 브랜치 푸시. 기본 OFF·main/운영 미변경 유지. PR 생성/병합은 별도 마무리 선택이며 위 Step7에 열린 상태로 둔다.

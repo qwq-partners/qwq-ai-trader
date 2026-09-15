@@ -4,6 +4,8 @@
 
 - 검토된 설계 PR #65 `2235586` 위 별도 feature 브랜치에서 보안 토큰 저장/상태 머신, 정확한 GET 3경로 조회 client/transport, 공유 deadline·retry/page 예산, 시세/일봉 정규화와 합성 shadow CLI를 구현한다. 실제 OAuth 발급기는 주입 인터페이스뿐이며 기존 broker/core/schedulers·설정·의존성 파일은 바꾸지 않는다.
 - 독립 리뷰에서 늦은 revoked 응답/손상 auth 지문, 오래된 요청의 회로 해제/반복 취소 정리, 중복·미래 관측·거래일/시장/페이지 커서, 비교 자료의 관측 나이·정확한 경계/수치범위 문제를 재현하고 회귀 테스트로 보완한다. 진행·재리뷰·최종 검증 수치는 `docs/reviews/toss-phase1-offline-2026-09-16.md`가 정본이다.
+- 최종 통합 리뷰의 재시도 예산·페이지 만료 결함을 수정했고, 폐기 응답→첫 await 전 immutable 관측·관측별 해결 증거로 deadline/취소·재시작 우회를 닫았다. 식별자 JSON 크기·세대 번호 도메인 정합화와 반환 직전 deadline 검사를 추가했다. 병렬 실행에서 드러난50ms 테스트 불안정성은 주입 시계/이벤트·task 회수로 수정했으며 운영 시간 정책은 유지한다.
+- 최종 소스 `2bf7842`: 독립 코드 리뷰 **Approved**, 미해결 Critical/Important/Minor0. UTC/KST 각각 **1375 passed / 2 xfailed**(기준선 대비356건 증가), 격리0·문법·비밀정보 검사 통과. 브랜치 푸시만 수행, main 병합/실자료 관측은 미실행.
 - 공개 OpenAPI `1.2.17` 원본 SHA와 사용 계약 메타데이터를 고정한다. 파일 입력 CLI는 합성 자료만 처리하며 p95/유효·제외·실패·중복 분모를 보고한다. 합성 수치·fixture 정책을 실자료 승인으로 쓰지 않으며 `production_eligible=False`를 유지한다.
 - **실토큰/인증 API·운영 캐시·주문·설정·SSH·배포·재시작 변경 없음.** 모든 런타임 진입은 미배선·기본 OFF. Phase 1의 실자료 3영업일 관측, Phase 2 후보/점수, Phase 3 표시 wrapper는 별도 승인·구현 대상이다.
 

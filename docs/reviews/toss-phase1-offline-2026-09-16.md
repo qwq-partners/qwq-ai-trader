@@ -5,7 +5,7 @@
 이 문서는 [검토된 설계](../superpowers/plans/2026-09-15-toss-securities-fallback.md)의 **Phase 1 오프라인 부분**을 다룬다. 인증 실자료 shadow, 운영 스케줄러, 소비자 폴백 도입까지 완료했다는 의미가 아니다.
 
 - 시작 기준: main `8849d92`, 설계 PR #65 head `2235586`. 설계 PR을 임의로 병합하지 않고 별도 `feature/toss-phase1-offline-20260916`에서 구현했다.
-- 계획: [구현 계획](../superpowers/plans/2026-09-16-toss-phase1-offline.md). 네 작업의 구현·작업별 독립 재리뷰 후 전체 브랜치 리뷰에서 추가 경계 결함을 발견했다. 수정 및 한정 재리뷰 이력은 아래와 같다. 작업별 승인·테스트 통과를 전체 승인으로 대체하지 않는다.
+- 계획: [구현 계획](../superpowers/plans/2026-09-16-toss-phase1-offline.md). **오프라인 구현·최종 코드 리뷰 승인**, 검증 소스 `2bf7842`. 전체 리뷰에서 발견한 결함을 수정하고 한정 재리뷰로 닫았다. 작업별 승인·테스트 통과를 전체 승인으로 대체하지 않았다. PR 생성/병합은 마무리 선택 전이므로 보류하고 기능 브랜치만 푸시한다.
 - 기본 OFF, 운영 호출부에 import/배선 없음. 주문·체결·잔고·청산·사이징·후보/점수·설정·의존성 파일은 변경 범위 밖이다.
 - 실제 자격증명/토큰/운영 캐시를 읽지 않았고, 인증 API·SSH·systemctl·배포·재시작·주문을 실행하지 않았다. 공개 OpenAPI JSON을 인증 없이 조회한 것과 합성 transport/session 검증을 구분한다.
 
@@ -20,14 +20,14 @@
 
 ## 구현·검증 원장
 
-| 작업 | 담당 역할 | 검증/리뷰 상태 |
+| 초기 구성요소 작업 | 담당 역할 | 초기 검증/리뷰 상태 (통합 후속은 아래 별도) |
 |---|---|---|
 | 보안 토큰 저장·issuer/reader 상태 | Astra/high 구현, Astra/xhigh 리뷰 | Important2 전부 수정·재리뷰 승인, 전용102건 |
 | 조회 경계·송신자 락·공통 예산 | Astra/high 구현, Astra/xhigh 리뷰 | Important2 전부 수정·재리뷰 승인, 전용89건 |
 | 현재가/일봉 정규화·전체 구간 확보 | Terra/high 구현, Astra/high 리뷰 | Important5/Minor2 전부 수정·재리뷰 승인, 전용41건 |
 | 합성 비교 manifest·CLI·통합 | Terra/high 구현, Astra/high 리뷰 | Important3/Minor3 전부 수정·재리뷰 승인, 전용41건·실제 모듈 통합 |
 
-기준선 전체 검증: `1019 passed / 2 xfailed`, 격리 위반 0. 기존 `pykrx` 경고 1건. 통합본은 테스트 **273건 증가**다.
+기준선 전체 검증: `1019 passed / 2 xfailed`, 격리 위반 0. 기존 `pykrx` 경고 1건. 초기 통합본 `298bc4c`는 테스트 **273건 증가**이며 이후 통합 리뷰 보완을 추가했다.
 
 구성요소 1차 독립 리뷰는 Important 12건·Minor 5건이었으며 전부 수정·한정 재리뷰를 통과했다. shadow I2는 1차 수정 후 큰 정수 정밀도 경계를 추가 재현했고, `Fraction` 기반 비교로 재수정한 뒤 승인됐다. 실제 TokenManager→TossClient→가격/일봉→shadow 통합도 승인 범위에 포함된다. 별도 정규화 테스트 advisory는 정상 양성 대조군을 추가해 실제 adjusted gate를 검증하도록 보완했다(런타임 무변경); 전체 브랜치 리뷰에 함께 포함한다.
 
@@ -63,7 +63,25 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul \
 
 - 부모 `f190a3d` KST 전체: **1304 passed / 2 xfailed / 1 warning**, 30.69초, 격리 0·문법·비밀정보 검사 통과.
 - 독립 한정 재리뷰: 15 passed / 95 deselected, 1.08초, 격리 0. F1의 재시도 경로·F2·F3은 닫혔다.
-- **전체 승인 보류:** 별도 Important 경계가 확인됐다. `recover()`가 이미 deadline을 넘었거나 토큰 락 대기 중 취소되면 폐기 관측을 저장하지 못해, 재시작·만료 후 가짜 issuer가 호출됐다. 즉시 종료·즉시 mint0만으로 지속 차단을 입증하지 않는다. 첫 비동기 대기 전 관측을 보존하고 검증된 최신 캐시로만 해결하는 내부 계약을 검토 중이다. 실토큰/운영에 연결하지 않는다.
+- 이 단계에서는 전체 승인을 보류했다. `recover()`의 deadline 초과·락 대기 취소 시 폐기 관측이 사라져 재시작·만료 후 가짜 issuer가 호출되는 별도 Important를 재현했기 때문이다. 아래 추가 보완으로 닫았으며 실토큰/운영에는 연결하지 않는다.
+
+### 취소·재시작 안전 보완과 최종 승인
+
+- `96e2bbb`: 첫 await/deadline 검사 전 동기 폐기 관측, immutable 256슬롯·정확한 관측ID별 해결 증거. 검증한 유효·다른·최신 캐시로만 해결하며 같은 bearer는 이후에도 거부한다. 토큰 담당 관련131건/전체1150건 통과.
+- `18babb2`: client도 401 revoked를 해석한 직후 제한기 대기를 포함한 첫 await 전에 관측한다. 실제 모듈의 응답 직후 deadline 소진·제한기/토큰 락 취소→재시작·만료·bootstrap mint0를 검증했다. 관측 호출만 제거한 변이는 실패하고 복원 후 통과했다.
+- 이 보완의 한정 리뷰에서 **Important 1건**(허용된 긴 identity가 관측·overflow 용량을 동시에 초과)과 **Minor 1건**(관측 검사 후 성공 캐시 반환의 deadline 재검사 누락)을 추가 재현했다. `358cde0`에서 JSON-escaped identity≤256바이트·공통 generation≤2^63−1·발급 전 세대 overflow 거부, 중앙 반환 deadline 검사로 수정했다. 관련167건/전체1186건 통과, 독립 재리뷰50건 통과·신규 지적0.
+- 부모 `18babb2` 병렬 전체 검증은 KST1339건 통과, UTC1337건 통과/2건 실패였다. 두 실패는 초기50ms 테스트 예산이 토큰 검사 중 소진돼 **의도한 응답 이후 경계에 도달하지 못한 테스트 불안정성**이다. 미회수 task 예외도 관찰했다. 75ms 검사 지연을 주입해 2실패를 재현한 뒤 `2bf7842`에서 공유 시계·응답/실제 락 진입 이벤트·finally cancel/gather로 고쳤다. 같은 지연에서2건 통과, UTC/KST 실제 통합12건을 각각3회 반복해 총72실행 통과. 운영 deadline 정책을 완화하지 않았다.
+- 최종 독립 리뷰: Astra/xhigh, `2235586..2bf7842` **Approved**, 미해결 Critical/Important/Minor 0건. 전체 diff 읽기와 후속 변경별 한정 재리뷰를 합친 판정이다. 마지막 테스트-only UTC 검증3건 통과/70 deselected·격리0. 이는 오프라인 코드 승인이지 실자료·운영 활성화 승인이 아니다.
+
+### 최종 부모 검증 (`2bf7842`)
+
+위 `verify.sh` 명령으로 한국·UTC 시간대를 병렬 실행했다.
+
+- KST: **1375 passed / 2 xfailed / 1 warning**, 59.58초, exit0.
+- UTC: **1375 passed / 2 xfailed / 1 warning**, 61.68초, exit0.
+- 기준선 대비 테스트 **356건 증가**. 기존 xfail2·pykrx warning1 유지, 두 실행 모두 문법·비밀정보 검사 통과 및 운영 상태/외부 네트워크 접근 시도0.
+- 최종 합성 CLI도 다시 실행해 시도6/유효2/제외4/p95=1/초과비율0.5/`insufficient`/`production_eligible=False`, 기존 manifest/dataset 해시 일치를 확인했다.
+- 원격 Verify: [소스 `2bf7842` 실행](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/35036649156) **SUCCESS**, **1375 passed / 2 xfailed / 33 warnings**, 29.75초, 격리0·비밀정보 검사 통과. 경고는 위와 같은 미변경 백테스터 NumPy timedelta deprecation이다. 초기 `14210d4`의 성공 결과를 최신 검증으로 재사용하지 않는다. 이 결과를 기록한 최종 문서 커밋은 소스/테스트를 바꾸지 않는다.
 
 ## 합성 CLI 재현 방법
 
@@ -89,6 +107,8 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul PYTHONDONTWRITEBYTECODE=1 \
 5. 오프라인 manifest의 수치와 데이터는 합성 예시다. 조건을 모두 만족해도 `production_eligible=False`이며 실자료 사전 등록 임계값이나 매매 성능 증거로 쓰지 않는다.
 6. 로컬 파일 쓰기/fsync는 동기 OS 호출이다. 락의 비동기 대기·발급기 await에는 deadline이 적용되지만 커널 내부 syscall 자체를 강제 종료한다고 주장하지 않는다. 디스크가 실패 상태 재게시까지 전부 거부하는 고장은 운영자 확인 대상이다.
 7. 설치된 aiohttp `3.13.5`는 GET 연결 오류를 내부적으로 재전송할 수 있다. 이번 transport는 `_retry_connection=False`를 강제하고 그 제어 훅이 없거나 다시 켜졌으면 송신 전 거부한다. 비공개 속성 의존이므로 라이브러리 변경 시 재검증이 필요하다. 이번에는 의존성 버전을 변경하거나 설치하지 않았다.
+8. 폐기 관측의 추가 보완은 저장 슬롯256개·관측당1KiB·해결증거64KiB 상한을 둔다. 포화/손상은 자동 삭제·재발급으로 복구하지 않는 fail-closed 설계다. 최종 발급 허가용 슬롯 검사 **시작 전** 지속 게시된 관측은 모두 검사한다. 여러 슬롯을 읽는 과정은 원자적 snapshot이 아니므로 검사 중/후 게시된 관측을 그 검사에서 놓칠 수 있으며 새 토큰 게시/다음 호출에서 재검사한다. 이미 허가된 외부 발급을 취소하거나 모든 프로세스의 관측·발급을 원자적으로 직렬화했다고 주장하지 않는다. 실제 운영 도입 전에는 저장소 점검/수동 복구 절차와 부하도 별도 검증해야 한다.
+9. client의 token provider는 동기 `observe_revocation(...) -> None` 계약을 지켜야 한다. 누락/일반 `async def` 콜백은 사전 거부하지만 런타임 검사로 모든 async callable 객체·awaitable 반환 함수를 판별한다고 주장하지 않는다. 검증된 실제 `TokenManager`를 사용해야 하며 임의 provider의 지속 기록을 타입 검사만으로 증명할 수 없다.
 
 ## 이후 단계 (이번 작업에 포함하지 않음)
 

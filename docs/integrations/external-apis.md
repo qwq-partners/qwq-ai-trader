@@ -51,7 +51,7 @@
 
 ## 데이터 — 토스증권 Open API (Phase 1 오프라인 모듈, **운영 미배선**)
 
-> [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [구현·검증 원장과 CLI](../reviews/toss-phase1-offline-2026-09-16.md) · 상태: 오프라인 모듈 통합 검증 중, 인증 실자료·운영 활성화 미승인
+> [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [구현·검증 원장과 CLI](../reviews/toss-phase1-offline-2026-09-16.md) · 상태: 오프라인 구현·최종 코드 리뷰 승인, UTC/KST1375 passed/2 xfailed. main 미병합·인증 실자료/운영 활성화 미승인
 
 - 구현 위치: `src/data/providers/toss/`의 보안 token store/manager, 조회 client/transport/limiter, 시장 자료 정규화, 합성 shadow 비교. `scripts/replay_toss_shadow.py`는 명시한 합성 JSON 파일만 읽어 stdout 보고서를 만든다.
 - **현재 배선 없음**: 실제 OAuth 발급기는 주입 인터페이스뿐이며 키 로딩·시세 캐시·5분 잡·broker wrapper를 만들지 않았다. 기존 실행 경로·설정/의존성 파일은 무변경. `enabled=False`가 기본이며 `TOSS_API=1` 환경 문자열만으로 활성화되는 코드도 없다.
