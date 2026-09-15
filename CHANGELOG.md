@@ -14,6 +14,12 @@
 - **상태 구분**: 구현 완료(shadow) / 투자 성능 검증 **미완**(연구용 스냅샷·원장 표본 없음) / 운영 승격 **없음**. 배포·재시작·주문·설정 변경 없음.
 - **테스트·리뷰**: 전체 스위트 **775 passed / 2 xfailed**, 테스트 격리 위반 0건. T11 테스트 10파일 215건(계약 6·근거 25+기준선 8·판단 26+기준선 13·EntryPlan 46·돈 경로 기준선 6·원장/평가 25·재현 8·D 독립 인수 14조건 45). 리뷰: 브랜치별 독립 리뷰 A 5라운드·B 3라운드·C 2라운드·D 5라운드 → 통합 2차 → 최종 리뷰 2인(FINAL-2 승인, FINAL-1 blocking 2건 → 본 항목 후속으로 해소, 재검증(opus/xhigh 읽기 전용): blocking 2건 해소·신규 blocking 0·돈 경로 무변경 판정, advisory 6건 중 문서 2건·예외 범위 1건 반영). Codex 교차 리뷰(`scripts/dev/codex_review.sh`)는 bwrap 샌드박스 오류로 **미실행**(승인으로 간주하지 않음, Claude opus/xhigh 독립 리뷰로 대체).
 
+## 2026-09-15 — chore(T11): 재검증 advisory 반영 (테스트·오프라인 러너만, 운영 코드 무변경)
+
+- `tests/test_t11_entry_plan.py`: signal_events 집계의 shadow 행 제외 검사를 소스 문자열 검사에서 **행동 검사**(가짜 pool 로 `get_stats`/`get_recent` 실행, 실행된 모든 SQL 이 event_type 을 실제 판정 3종으로 한정)로 교체 — 미필터 집계 쿼리가 추가되면 잡힌다.
+- `scripts/team_policy_ab.py`: `reports_without_age` → `evidence_items_without_age_all_rows` 로 명명 정정(보고서가 아니라 evidence 항목 수, 선정·dedup 이전 입력 전체 기준이라 정책/모드 간 동일한 스냅샷 품질 지표). 사전 등록 manifest 문구 동일 정정.
+- 수용(미반영): 원장 마스킹에서 하이픈 없는 10자리 계좌번호가 키 밖 자유 텍스트에 나오면 가려지지 않는 점 — 순수 숫자열 규칙을 되살리면 숫자만인 plan_id·epoch 초가 지워지는 부작용이 더 크고, 원장에 계좌 문자열을 싣는 경로가 없어 수용. 계좌 문자열을 싣는 경로가 생기면 재검토.
+
 ## 2026-09-15 — test(T11): 시각 의존 테스트 결정론화 (15:33 배포 verify 실패·자동 롤백 원인)
 
 계기: 15:33 KST 장 마감 후 `local_deploy.sh 04279c6` 의 verify 단계에서 T11 테스트 7건이 실패해 자동 롤백(운영은 `3175732` 유지, 재기동 정상). 테스트가 실제 벽시계를 써서 (a) 배치 실행부 `execute_pending_signals` 가 14:30 이후 SEPA 진입 차단 분기로 빠지고 (b) `_plan()` 만료가 고정 상수(2026-09-15 15:30) 기준이라 엔진 shadow 검증이 15:30 이후 PLAN_EXPIRED 로 갈라졌다. 오전에 작성·검증된 테스트라 배포 창(장 마감 후)에서 처음 드러났다.

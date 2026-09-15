@@ -770,14 +770,45 @@ def test_signal_event_shadow_rows_do_not_reach_sse_feed():
     assert pushed == ["blocked", "passed"]
 
 
-def test_signal_event_stats_and_default_listing_exclude_shadow_rows():
-    """총계·전략별·일별 집계와 type 미지정 기본 조회의 SQL 이 실제 판정 행만 센다(정적 확인)."""
-    import inspect
-    from src.data.storage import signal_event_storage as m
-    stats_src = inspect.getsource(m.SignalEventStorage.get_stats)
-    assert stats_src.count("event_type IN ('passed','blocked','penalized')") >= 3
-    recent_src = inspect.getsource(m.SignalEventStorage.get_recent)
-    assert "event_type IN ('passed','blocked','penalized')" in recent_src
+def test_signal_event_stats_queries_all_exclude_shadow_rows_behaviourally():
+    """get_stats 가 실제로 실행하는 모든 SQL 이 event_type 을 실제 판정 3종(또는 그 부분집합)으로
+    한정한다 — 가짜 pool 로 실행해 쿼리를 수집하므로 새 미필터 집계가 추가되면 잡힌다
+    (재검증 advisory: 소스 문자열 검사 → 행동 검사)."""
+    from src.data.storage.signal_event_storage import SignalEventStorage
+
+    executed = []
+
+    class _Row(dict):
+        pass
+
+    class _Conn:
+        async def fetchrow(self, sql, *a):
+            executed.append(sql)
+            return _Row(total_buy=0, passed=0, blocked=0, penalized=0)
+        async def fetch(self, sql, *a):
+            executed.append(sql)
+            return []
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return False
+
+    class _Pool:
+        def acquire(self): return _Conn()
+
+    st = SignalEventStorage.__new__(SignalEventStorage)
+    st._pool = _Pool()
+
+    async def _ensure_init(): return None
+    st._ensure_init = _ensure_init
+
+    stats = asyncio.run(st.get_stats(days=7))
+    assert stats["total_buy"] == 0 and executed, "집계 쿼리가 실행돼야 한다"
+    real_only = "event_type IN ('passed','blocked','penalized')"
+    for sql in executed:
+        assert real_only in sql or "event_type='blocked'" in sql, sql
+    # type 미지정 기본 조회도 같은 한정을 건다
+    executed.clear()
+    asyncio.run(st.get_recent(limit=5))
+    assert executed and real_only in executed[0]
 
 
 def test_ledger_does_not_mask_numeric_only_identifiers(tmp_path):

@@ -130,7 +130,8 @@ PRE_REGISTERED = {
         "(=A 근거계약 미배선) data_sufficiency 가 insufficient 가 되어 B/C 게이트에서 탈락한다"
         "(merit 자체는 evidence 가 있으면 계산될 수 있다) — 이때 B/C 선정이 0건이어도 버그가 아니다. "
         "보고서 신선도는 스냅샷의 age_minutes 로 복원한다(없으면 판단 시점에 신선 가정, "
-        "results.reports_without_age 카운터). C 는 gate_b(R1 bear ACCEPT)를 전제로 하므로 "
+        "results.evidence_items_without_age_all_rows 카운터 — 선정·dedup 이전 입력 전체의 "
+        "evidence 항목 수라 정책/모드 간 동일한 스냅샷 품질 지표다). C 는 gate_b(R1 bear ACCEPT)를 전제로 하므로 "
         "R1 REJECT→R2 ACCEPT 전향 후보는 C 에서 제외된다(=live 팀 최종 판정보다 엄격) — "
         "results.r1_reject_r2_accept_excluded 카운터로 남긴다(정책 정의는 결과를 본 뒤 바꾸지 않는다)."
     ),
@@ -644,7 +645,9 @@ def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new
                 "holding_days": res["holding_days"], "exit_reason": res["exit_reason"],
             })
         out[policy] = _summarize_positions(policy, selected, positions, no_data, incomplete, excluded)
-        out[policy]["reports_without_age"] = sum(
+        # 스냅샷 품질 지표: 선정·dedup 이전 입력 전체(rows)의 evidence 항목 중 age 결측 수
+        # (보고서 수가 아니라 evidence 항목 수, 정책 간 동일 — 재검증 advisory 2026-09-15 명명 정정)
+        out[policy]["evidence_items_without_age_all_rows"] = sum(
             1 for c in rows for e in (c.evidence or []) if e.get("age_minutes") is None
         )
         if policy == "C":
@@ -723,7 +726,7 @@ def run_timing_experiment(rows: List[Candidate], fixed_policy: str, max_new: int
         summary["unfilled_opportunity_cost_median_r"] = (
             round(statistics.median(opportunity_cost), 4) if opportunity_cost else None
         )
-        summary["reports_without_age"] = sum(
+        summary["evidence_items_without_age_all_rows"] = sum(   # 위 selection 과 동일 정의
             1 for c in rows for e in (c.evidence or []) if e.get("age_minutes") is None
         )
         out[mode] = summary
