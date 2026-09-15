@@ -143,13 +143,17 @@ class AnalystReport:
         """
         `now` 기준 근거 데이터의 나이(분).
 
-        `data_as_of`가 tz-aware로 들어오면 naive `datetime.now()`와 빼는 순간
-        TypeError가 나고, 이 프로퍼티는 종합 점수·프롬프트·저장 경로 전부에서 쓰이므로
-        심의 자체가 통째로 실패한다. 외부에서 어떤 시각이 들어와도 죽지 않게 정규화한다.
+        `now` 생략 시 naive 보고서는 기존 생산자의 host-local `datetime.now()`와
+        비교하고, aware 보고서는 실제 현재 시각과 비교한다. 과거 replay처럼
+        `now`를 명시하면 naive 시각을 KST로 해석하고 aware offset은 보존한다.
         """
         try:
-            as_of = as_kst_aware(self.data_as_of)
-            reference = as_kst_aware(now) if now is not None else datetime.now(KST)
+            if now is None and self.data_as_of.tzinfo is None:
+                as_of = self.data_as_of
+                reference = datetime.now()
+            else:
+                as_of = as_kst_aware(self.data_as_of)
+                reference = as_kst_aware(now) if now is not None else datetime.now(KST)
             return max(0.0, (reference - as_of).total_seconds() / 60.0)
         except (TypeError, AttributeError, OverflowError):
             # 시각을 신뢰할 수 없으면 "매우 오래된 것"으로 본다 —
