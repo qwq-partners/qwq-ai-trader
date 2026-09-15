@@ -110,6 +110,29 @@ def test_fill_evidence_callback_exception_is_conservative(tmp_path, monkeypatch)
     assert list(tracker._state.values())[0]["source"] == "team_buy_unfilled"
 
 
+def test_same_symbol_hold_and_approved_buy_same_day_not_double_registered(tmp_path, monkeypatch):
+    """D 3차(advisory) 재발 방지 — 같은 종목이 같은 날 두 번 심의(예: 10:30 HOLD, 14:00 승인
+    BUY)되면 team_hold 와 team_buy_unfilled 양쪽에 등록돼 같은 (종목,날짜) 가격경로가
+    두 배로 표본에 잡히던 결함. 승인 BUY 가 있으면 team_hold 로는 등록하지 않아야 한다."""
+    tv_dir = tmp_path / "team_verdicts"
+    monkeypatch.setattr(cf_mod, "_TEAM_VERDICT_DIR", tv_dir)
+    monkeypatch.setattr(cf_mod, "_SOURCES", {})
+    monkeypatch.setattr(cf_mod, "_TRADE_JOURNAL_PATH", tmp_path / "trade_journal_kr.json")
+    _write_verdicts(tv_dir, "20260915", [
+        {"symbol": "005930", "decision": {"approved": True, "stance": "hold"}},
+        {"symbol": "005930", "decision": {"approved": True, "stance": "buy"}},
+    ])
+    tracker = object.__new__(cf_mod.CounterfactualTracker)
+    tracker._state = {}
+    tracker._fill_evidence_check = None
+
+    added = tracker._ingest_sources()
+
+    assert added == 1, "같은 (종목,날짜) 가 team_hold·team_buy_unfilled 양쪽에 등록되면 안 된다"
+    sources = {v["source"] for v in tracker._state.values()}
+    assert sources == {"team_buy_unfilled"}
+
+
 # ── 2) kr_api.get_team_verdicts ──────────────────────────────────────────
 
 class _FakeTrade:
@@ -234,9 +257,15 @@ def _mk_candidate(symbol: str, *, score=80, bear_r1=True, bull_r2=True, bear_r2=
         "date": "2026-08-01", "symbol": symbol, "strategy": "sepa_trend", "setup": "sepa_pullback",
         "plan": {"score": score, "stop_price": 9500.0, "entry_band_low": 0, "max_entry_price": 11000.0,
                  "trigger": {}, "entry_mode": "close"},
+        # data_status/evidence(kind=fact) 를 채워야 judgment.assess 가 "A 근거계약 미배선" 폴백
+        # (merit_status 강제 abstain) 대신 실제 근거 기반 merit 을 계산한다 (T11 §2.5 재배선).
         "evidence": [
-            {"kind": "technical", "score": 30, "confidence": 0.8, "positive_basis": True, "error": None},
-            {"kind": "fundamental", "score": 10, "confidence": 0.6, "positive_basis": True, "error": None},
+            {"kind": "technical", "score": 30, "confidence": 0.8, "positive_basis": True, "error": None,
+             "data_status": "full",
+             "evidence": [{"source": "t", "metric": "score", "value": 30, "status": "full", "kind": "fact"}]},
+            {"kind": "fundamental", "score": 10, "confidence": 0.6, "positive_basis": True, "error": None,
+             "data_status": "full",
+             "evidence": [{"source": "f", "metric": "score", "value": 10, "status": "full", "kind": "fact"}]},
         ],
         "votes": {"r1": {"bull": True, "bear": bear_r1}, "r2": {"bull": bull_r2, "bear": bear_r2}},
         "prices": _mk_prices("2026-08-01", 10000.0),
@@ -275,6 +304,16 @@ def test_bear_accept_alone_does_not_change_merit_score():
     assert merit_reject == 0 and status_reject == "insufficient"
 
 
+def test_usable_reports_does_not_treat_missing_confidence_as_valid():
+    """D 3차(advisory) 재발 방지 — confidence 키가 아예 없는(None) 보고서를 결측이 아니라
+    유효로 세던 결함. judgment._valid_reports 재사용 후에는 결측도 confidence=0 과 동일하게
+    제외돼야 한다."""
+    no_confidence_key = [{"kind": "technical", "score": 50, "positive_basis": True, "error": None}]
+    assert tpab._usable_reports(no_confidence_key) == []
+    merit, status, _ = tpab.r1_assess(no_confidence_key)
+    assert merit is None and status == "abstain"
+
+
 def test_selection_experiment_runs_and_marks_synthetic(tmp_path):
     snap = tmp_path / "snap.jsonl"
     _write_snapshot(snap, [_mk_candidate("000001"), _mk_candidate("000002", score=70)])
@@ -290,17 +329,31 @@ def test_selection_experiment_runs_and_marks_synthetic(tmp_path):
     assert "포지션당 비용 차감 R" in manifest["pre_registered"]["primary_metric"]
 
 
-def test_timing_experiment_defers_to_canonical_entry_plan_checker(tmp_path):
-    """EntryPlan 조건부 모드는 check_entry_plan 을 재사용한다 — placeholder 인 동안은
-    전부 미체결이 나오는 게 정답이다(허위 체결 생성 금지)."""
+def test_timing_experiment_defers_to_canonical_entry_plan_checker(tmp_path, monkeypatch):
+    """EntryPlan 조건부 모드는 check_entry_plan(정본 검증기)의 판정을 그대로 따른다 — 러너가
+    스스로 체결 여부를 재판정하지 않는다는 원 취지를 wait/allow 두 판정으로 고정 확인한다
+    (C 의 실제 검증기가 배선된 뒤로는 "항상 wait" 가 기본 동작이 아니게 됐다, 2026-09-15)."""
     snap = tmp_path / "snap.jsonl"
     _write_snapshot(snap, [_mk_candidate("000001")])
     rows = tpab.load_snapshot(snap)
+
+    # 검증기가 wait 를 내면(예: 트리거 미충족) — 관찰 창 끝까지 미체결이어야 한다
+    monkeypatch.setattr(tpab, "check_entry_plan",
+                         lambda plan, quote, now, **kw: SimpleNamespace(
+                             status="wait", expected_fill_price=None, reasons=["TRIGGER_NOT_MET"]))
     results = tpab.run_timing_experiment(rows, fixed_policy="A", max_new=5)
     assert results["existing_open"]["completed_positions"] == 1
     assert results["entry_plan"]["unfilled"] == 1
     assert results["entry_plan"]["completed_positions"] == 0
     assert results["entry_plan"]["fill_rate"] == 0.0
+
+    # 검증기가 allow 를 내면 — 러너가 자체 판정 없이 그 결과를 그대로 체결로 쓴다
+    monkeypatch.setattr(tpab, "check_entry_plan",
+                         lambda plan, quote, now, **kw: SimpleNamespace(
+                             status="allow", expected_fill_price=None, reasons=[]))
+    results2 = tpab.run_timing_experiment(rows, fixed_policy="A", max_new=5)
+    assert results2["entry_plan"]["unfilled"] == 0
+    assert results2["entry_plan"]["completed_positions"] == 1
 
 
 def test_entry_plan_and_existing_open_use_the_same_first_bar_when_checker_allows(tmp_path, monkeypatch):
@@ -333,8 +386,12 @@ def test_simulate_exit_skip_entry_bar_does_not_leak_pre_fill_high_into_take_prof
         {"date": "2026-08-05", "open": 9700.0, "high": 9750.0, "low": 9600.0, "close": 9650.0},
     ]
     # skip_entry_bar=True(EntryPlan 경로) — 체결 봉(idx0)의 장중 고가 11200 은 스캔 대상이 아니다.
+    # 관찰창(bars 길이 2) 안에 실제 트리거가 없으므로 마지막 봉 종가로 강제 청산(max_holding)
+    # 된다 — leak 이 있었다면 대신 trailing/take_profit 으로 잡혔을 것이다.
     res_fixed = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=True)
-    assert res_fixed is None, "체결 이전 고가로 익절/트레일링이 발동해선 안 된다(관찰창 안에 실제 트리거 없음)"
+    assert res_fixed is not None and res_fixed["exit_reason"] == "max_holding", (
+        "체결 이전 고가로 익절/트레일링이 발동해선 안 된다(관찰창 안에 실제 트리거 없음)"
+    )
     # 대조군: skip_entry_bar=False(existing_open 처럼 체결 봉부터 스캔)면 같은 봉 고가로
     # 트레일링이 무장·발동해 holding_days=0 에 양(+)의 수익이 나온다 — 버그가 실재했음을 보여준다.
     res_leaky = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=False)
@@ -352,12 +409,41 @@ def test_simulate_exit_skip_entry_bar_does_not_leak_pre_fill_low_into_stop_loss(
         {"date": "2026-08-05", "open": 10000.0, "high": 10100.0, "low": 9950.0, "close": 10050.0},
     ]
     res_fixed = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=True)
-    assert res_fixed is None, "체결 이전 저가로 손절이 발동해선 안 된다(다음 봉은 저가 9950 로 손절가 미달)"
+    assert res_fixed is not None and res_fixed["exit_reason"] != "stop_loss", (
+        "체결 이전 저가로 손절이 발동해선 안 된다(다음 봉은 저가 9950 로 손절가 미달)"
+    )
     # 대조군: skip_entry_bar=False 면 체결 봉 자체의 저가 9400 으로 holding_days=0 손절이 잡힌다.
     res_leaky = tpab.simulate_exit(bars, 0, 10000.0, 9500.0, skip_entry_bar=False)
     assert res_leaky is not None
     assert res_leaky["holding_days"] == 0
     assert res_leaky["exit_reason"] == "stop_loss"
+
+
+def test_simulate_exit_missing_or_invalid_stop_price_falls_back_to_default_sl_not_none():
+    """리뷰 blocking(2026-09-15) 재발 방지 고정 — stop_price 가 결측(None)이거나 무효
+    (갭하락 진입으로 entry_price 이상)면 simulate_exit 은 예전처럼 손절을 아예 걸지 않는(stop_px=None)
+    대신, PRE_REGISTERED.exit_assumption 이 사전등록한 DEFAULT_SL_PCT 대체선을 실제로 적용해야
+    한다. _risk_pct 는 이미 이 경우 DEFAULT_SL_PCT 를 분모로 쓰므로, 시뮬레이터도 같은 가정을
+    써야 R 이 왜곡되지 않는다(결측 위험값을 "위험 5%"로 포장하지 않되, 분자·분모를 일치시킴)."""
+    bars = []
+    price = 10000.0
+    for i in range(25):
+        nxt = price * 0.98  # 매일 -2% 단조 하락
+        bars.append({"date": f"2026-08-{i + 1:02d}", "open": price, "high": price,
+                     "low": nxt, "close": nxt})
+        price = nxt
+
+    res_valid = tpab.simulate_exit(bars, 0, 10000.0, 9500.0)  # DEFAULT_SL_PCT=5.0 과 동일 손절가
+    assert res_valid is not None and res_valid["exit_reason"] == "stop_loss"
+
+    res_missing = tpab.simulate_exit(bars, 0, 10000.0, None)
+    res_gap = tpab.simulate_exit(bars, 0, 10000.0, 10500.0)  # entry_price 보다 위 = 무효
+    for res in (res_missing, res_gap):
+        assert res is not None and res["exit_reason"] == "stop_loss", (
+            "결측/무효 stop_price 도 DEFAULT_SL_PCT 대체선으로 손절이 걸려야 한다(max_holding 아님)"
+        )
+        assert res == res_valid, "대체 손절선이 명시적 9500(=DEFAULT_SL_PCT) 케이스와 완전히 같아야 한다"
+        assert tpab._risk_pct(10000.0, None if res is res_missing else 10500.0) == 5.0
 
 
 def test_run_timing_experiment_entry_plan_mode_passes_skip_entry_bar_through(tmp_path, monkeypatch):
@@ -381,20 +467,18 @@ def test_run_timing_experiment_entry_plan_mode_passes_skip_entry_bar_through(tmp
 
 
 def test_dedupe_correlated_excludes_same_week_symbol_and_overlapping_holding_period():
-    """리뷰 blocking#2(2026-09-15) 재발 방지 고정 — leakage_guard 사전등록(종목-주 클러스터·
-    보유기간 겹침 dedup)이 실제로 표본을 줄이는지 확인한다. 잘못된 'week': date[:8] (월 접두사)
-    구현이었다면 이 제외가 전혀 일어나지 않았다."""
-    positions = [
-        {"symbol": "000001", "date": "2026-08-01", "week": tpab._week_key("2026-08-01"),
-         "holding_days": 5, "r": 0.2},
-        {"symbol": "000001", "date": "2026-08-03", "week": tpab._week_key("2026-08-03"),
-         "holding_days": 5, "r": 0.5},  # 08-01 보유기간(~08-06)과 겹침 + 같은 ISO 주
-        {"symbol": "000002", "date": "2026-08-01", "week": tpab._week_key("2026-08-01"),
-         "holding_days": 5, "r": 0.3},  # 다른 종목 — 영향 없음
+    """리뷰 blocking#2(2026-09-15) 재발 방지 고정, D 3차(advisory) 갱신 — leakage_guard dedup 은
+    시뮬레이션 **전**(후보 단계, Candidate 리스트)에 적용된다: 표본에 남는지 여부가 시뮬레이션
+    결과(holding_days)에 좌우되지 않도록 관찰창(MAX_HOLD_DAYS)을 보수적 겹침 가정으로 쓴다.
+    잘못된 'week': date[:8] (월 접두사) 구현이었다면 이 제외가 전혀 일어나지 않았다."""
+    candidates = [
+        tpab.Candidate(date="2026-08-01", symbol="000001"),
+        tpab.Candidate(date="2026-08-03", symbol="000001"),  # 같은 ISO 주 + 관찰창 겹침
+        tpab.Candidate(date="2026-08-01", symbol="000002"),  # 다른 종목 — 영향 없음
     ]
-    kept, excluded = tpab._dedupe_correlated(positions)
+    kept, excluded = tpab._dedupe_correlated(candidates)
     assert excluded == 1
-    assert {(p["symbol"], p["date"]) for p in kept} == {
+    assert {(c.symbol, c.date) for c in kept} == {
         ("000001", "2026-08-01"), ("000002", "2026-08-01"),
     }
 

@@ -40,6 +40,19 @@ _HORIZONS = (("r1", 1), ("r5", 5), ("r20", 20))
 _TRADE_JOURNAL_PATH = _CACHE_DIR / "trade_journal_kr.json"
 
 
+def _close_price(bar: Dict[str, Any]) -> float:
+    """봉의 종가 — close 우선, 없으면(None, 키 없음) KIS 필드(stck_clpr) 대체. 값 0 은 무효
+    데이터로 보고 호출부에서 걸러진다('or 0' 금지 — 0.0 이 legit 값인지 결측 대체인지
+    구분해서 명시적으로 처리한다)."""
+    v = bar.get("close")
+    if v is None:
+        v = bar.get("stck_clpr")
+    try:
+        return float(v) if v is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _read_trade_journal_buy_symbols(day: str, path: Path) -> Optional[set]:
     """당일(day, YYYY-MM-DD) entry_time 매수 기록 종목 집합 — 파일 없거나 손상 시 None(폴백 실패)."""
     if not path.exists():
@@ -157,7 +170,18 @@ class CounterfactualTracker:
                     verdicts = json.loads(vf.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
-                for v in (verdicts if isinstance(verdicts, list) else []):
+                verdict_list = verdicts if isinstance(verdicts, list) else []
+                # 이중 등록 방지(advisory 2026-09-15): 같은 (종목,날짜) 가 그날 승인 BUY 판정을
+                # 하나라도 받았으면 team_hold 로는 등록하지 않는다 — 장중 10:30 HOLD, 14:00 BUY
+                # 처럼 같은 날 두 번 심의된 종목을 같은 가격경로로 두 소스(team_hold·
+                # team_buy_unfilled)에 각각 등록하면 표본이 부풀려진다.
+                buy_symbols_today = {
+                    str(vv.get("symbol", "")) for vv in verdict_list
+                    if isinstance(vv, dict)
+                    and bool((vv.get("decision") or {}).get("approved"))
+                    and str((vv.get("decision") or {}).get("stance", "")).lower() == "buy"
+                }
+                for v in verdict_list:
                     try:
                         sym = v.get("symbol", "")
                         if not sym:
@@ -165,6 +189,8 @@ class CounterfactualTracker:
                         dec = v.get("decision") or {}
                         stance = str(dec.get("stance", "")).lower()
                         approved_buy = bool(dec.get("approved")) and stance == "buy"
+                        if not approved_buy and sym in buy_symbols_today:
+                            continue  # 같은 날 승인 BUY 가 있었다 — team_hold 이중 등록 방지
                         if approved_buy:
                             # T11 E1 (2026-09-15): 승인 BUY 라도 실제 체결 증거가 없으면
                             # 더는 조용히 제외하지 않고 "team_buy_unfilled" 로 별도 추적한다.
@@ -233,7 +259,7 @@ class CounterfactualTracker:
         rows: List[tuple] = []
         for bar in prices or []:
             d = str(bar.get("date", "") or bar.get("stck_bsop_date", ""))
-            c = float(bar.get("close", 0) or bar.get("stck_clpr", 0) or 0)
+            c = _close_price(bar)
             if len(d) == 8 and c > 0:
                 rows.append((f"{d[:4]}-{d[4:6]}-{d[6:]}", c))
         return rows
@@ -278,12 +304,7 @@ class CounterfactualTracker:
                 if not prices or len(prices) < 2:
                     continue
                 # get_daily_prices는 오래된 순 — (날짜, 종가) 리스트 구성
-                rows = []
-                for bar in prices:
-                    d = str(bar.get("date", "") or bar.get("stck_bsop_date", ""))
-                    c = float(bar.get("close", 0) or bar.get("stck_clpr", 0) or 0)
-                    if len(d) == 8 and c > 0:
-                        rows.append((f"{d[:4]}-{d[4:6]}-{d[6:]}", c))
+                rows = self._rows(prices)
                 # 감지일 이후 첫 거래일 = 기준점
                 idx0 = next(
                     (i for i, (d, _) in enumerate(rows) if d >= entry["date"]), None
@@ -338,20 +359,20 @@ class CounterfactualTracker:
         for source, items in sorted(groups.items()):
             n = len(items)
             base_source = source.split("|", 1)[0]
-            avg_r5 = sum((i.get("r5") or 0) for i in items) / n
+            avg_r5 = sum(i["r5"] for i in items) / n  # groups 는 r5 not None 건만 모았다
             r20_items = [i for i in items if i.get("r20") is not None]
             avg_r20 = (
                 sum(i["r20"] for i in r20_items) / len(r20_items)
                 if r20_items else None
             )
             if base_source == "team_buy_unfilled":
-                wrong = sum(1 for i in items if (i.get("r5") or 0) < 0)
+                wrong = sum(1 for i in items if i["r5"] < 0)
                 line = (
                     f"{source}: 승인 BUY 미체결 {n}건 | 5일 뒤 하락 {wrong}건 "
                     f"(팀 판단이 틀린 비율 {wrong/n*100:.0f}%) | 평균 r5 {avg_r5:+.1f}%"
                 )
             else:
-                avoided = sum(1 for i in items if (i.get("r5") or 0) < 0)
+                avoided = sum(1 for i in items if i["r5"] < 0)
                 line = (
                     f"{source}: {n}건 | 5일 뒤 하락 {avoided}건 ({avoided/n*100:.0f}% 적중) "
                     f"| 평균 r5 {avg_r5:+.1f}%"
