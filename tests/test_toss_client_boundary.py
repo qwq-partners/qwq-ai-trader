@@ -407,3 +407,147 @@ def test_transport_close_survives_repeated_cancellation_and_shared_retry():
         assert isinstance(results[0], asyncio.CancelledError) and results[1] is None
         assert session.closed
     asyncio.run(run())
+
+
+def real_token_stack(tmp_path):
+    """통합 인증 회귀는 실제 저장소/관리자와 합성 발급기만 사용한다."""
+    from datetime import datetime, timedelta, timezone
+    from src.data.providers.toss.token import TokenManager
+    from src.data.providers.toss.token_store import SecureTokenStore, TokenRecord
+    now = [datetime(2026, 9, 16, tzinfo=timezone.utc)]
+    minted = []
+    async def issuer():
+        minted.append(True)
+        return {"access_token": "synthetic-issued-bearer", "expires_in": 7200, "token_type": "Bearer"}
+    store = SecureTokenStore(tmp_path / "tokens", "offline-client-boundary")
+    store.save(TokenRecord(access_token="synthetic-original-bearer",
+        issued_at=now[0] - timedelta(hours=1), expires_at=now[0] + timedelta(hours=2),
+        generation=1, client_identity=store.client_identity))
+    store.save_state("ready", 1)
+    manager = TokenManager(store, enabled=True, role="issuer", issuer=issuer, now=lambda: now[0])
+    return store, manager, minted, now
+
+
+@pytest.mark.parametrize("prefix,max_retries", [([], 0), ([500], 1)])
+def test_exhausted_retry_still_persists_revoked_before_poll_restart_and_expiry(tmp_path, prefix, max_retries):
+    from datetime import timedelta
+    from src.data.providers.toss.token import TokenManager
+    from src.data.providers.toss.token_store import TokenError
+    mod = api()
+    store, manager, minted, now = real_token_stack(tmp_path)
+    responses = [mod.HttpResponse(status, {}, {}) for status in prefix]
+    responses.append(mod.HttpResponse(401, {}, {"error": {"code": "token-revoked"}}))
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender", responses=responses)
+    client.tokens = manager
+    async def run():
+        async with client:
+            with pytest.raises(mod.TossRequestError):
+                await client.get("/api/v1/prices", params={"symbols": "005930"},
+                    budget=mod.RequestBudget(1, max_retries=max_retries))
+            assert store.load_state()["kind"] == "auth_unavailable"
+            with pytest.raises(mod.TossRequestError, match="auth_unavailable"):
+                await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+        now[0] += timedelta(hours=3)
+        restarted = TokenManager(store, enabled=True, role="issuer", issuer=manager.issuer, now=lambda: now[0])
+        for candidate in (manager, restarted):
+            with pytest.raises(TokenError, match="auth_unavailable"):
+                await candidate.get_token(deadline=mod.RequestBudget(1).deadline)
+            with pytest.raises(TokenError, match="auth_unavailable"):
+                await candidate.bootstrap(approved=True, deadline=mod.RequestBudget(1).deadline)
+    asyncio.run(run())
+    assert len(transport.requests) == len(prefix) + 1
+    assert minted == []
+
+
+@pytest.mark.parametrize("max_retries", [0, 1])
+def test_revoked_can_adopt_new_cache_without_exceeding_http_retry_budget(tmp_path, max_retries):
+    from dataclasses import replace
+    mod = api()
+    store, manager, minted, _ = real_token_stack(tmp_path)
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender")
+    client.tokens = manager
+    sent = []
+    async def respond(*args, **kwargs):
+        sent.append(kwargs["headers"]["Authorization"])
+        if len(sent) == 1:
+            store.save(replace(store.load(), access_token="synthetic-other-bearer", generation=2))
+            return mod.HttpResponse(401, {}, {"error": {"code": "token-revoked"}})
+        return mod.HttpResponse(200, {}, {"result": []})
+    transport.request = respond
+    async def run():
+        async with client:
+            action = client.get("/api/v1/prices", params={"symbols": "005930"},
+                                budget=mod.RequestBudget(1, max_retries=max_retries))
+            if max_retries == 0:
+                with pytest.raises(mod.TossRequestError, match="retry_exhausted"):
+                    await action
+            else:
+                assert await action == {"result": []}
+            assert len(sent) == 1 + max_retries
+            assert await manager.get_token(deadline=mod.RequestBudget(1).deadline) == "synthetic-other-bearer"
+            assert await client.get("/api/v1/prices", params={"symbols": "005930"},
+                                    budget=mod.RequestBudget(1)) == {"result": []}
+    asyncio.run(run())
+    assert sent == ["Bearer synthetic-original-bearer"] + ["Bearer synthetic-other-bearer"] * (1 + max_retries)
+    assert minted == []
+
+
+@pytest.mark.parametrize("prefix,max_retries", [([], 0), ([500], 1), ([], 1)])
+def test_expired_token_issuance_still_requires_remaining_retry(tmp_path, prefix, max_retries):
+    mod = api()
+    _, manager, minted, _ = real_token_stack(tmp_path)
+    responses = [mod.HttpResponse(status, {}, {}) for status in prefix]
+    responses += [mod.HttpResponse(401, {}, {"error": {"code": "expired-token"}}),
+                  mod.HttpResponse(200, {}, {"result": []})]
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender", responses=responses)
+    client.tokens = manager
+    can_retry = max_retries > len(prefix)
+    async def run():
+        async with client:
+            action = client.get("/api/v1/prices", params={"symbols": "005930"},
+                                budget=mod.RequestBudget(1, max_retries=max_retries))
+            if can_retry:
+                assert await action == {"result": []}
+            else:
+                with pytest.raises(mod.TossRequestError, match="retry_exhausted"):
+                    await action
+    asyncio.run(run())
+    assert len(transport.requests) == len(prefix) + 1 + int(can_retry)
+    assert len(minted) == int(can_retry)
+
+
+@pytest.mark.parametrize("stop", ["deadline", "cancel"])
+def test_revoked_observation_does_not_escape_deadline_or_cancellation(tmp_path, stop):
+    """잠금 점유 시 관측 지속은 보장하지 않지만 예산/취소를 우회하지 않는다."""
+    mod = api()
+    store, manager, minted, _ = real_token_stack(tmp_path)
+    client, _, transport = make_client(tmp_path, enabled=True, role="sender")
+    client.tokens = manager
+    observed = asyncio.Event()
+    held, sent = [], []
+    async def respond(*args, **kwargs):
+        lock = store.lock(deadline=mod.RequestBudget(1).deadline)
+        await lock.__aenter__()
+        held.append(lock)
+        sent.append(True)
+        observed.set()
+        return mod.HttpResponse(401, {}, {"error": {"code": "token-revoked"}})
+    transport.request = respond
+    async def run():
+        async with client:
+            try:
+                task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
+                    budget=mod.RequestBudget(0.05, max_retries=0)))
+                await observed.wait()
+                if stop == "cancel":
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                else:
+                    with pytest.raises(mod.TossRequestError):
+                        await asyncio.wait_for(task, 0.3)
+            finally:
+                for lock in held:
+                    await lock.__aexit__(None, None, None)
+    asyncio.run(run())
+    assert sent == [True] and minted == []

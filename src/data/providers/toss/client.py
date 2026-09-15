@@ -219,8 +219,15 @@ class TossClient:
                 code = _error_code(body)
                 if code not in ("expired-token", "token-revoked"):
                     raise TossRequestError("auth_unavailable")
-                budget.consume_retry()
-                token = await self.tokens.recover(code, token, deadline=budget.deadline)
+                if code == "token-revoked":
+                    # 폐기 관측의 지속 처리는 추가 HTTP 송신 허가와 독립이다.
+                    # recover는 동일 deadline 안에서 발급 없이 새 캐시 확인/차단만 한다.
+                    token = await self.tokens.recover(code, token, deadline=budget.deadline)
+                    budget.consume_retry()
+                else:
+                    # expired 복구는 발급할 수 있으므로 먼저 재시도 허가를 확보한다.
+                    budget.consume_retry()
+                    token = await self.tokens.recover(code, token, deadline=budget.deadline)
                 continue
             if status == 429 or 500 <= status < 600:
                 budget.consume_retry()
