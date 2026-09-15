@@ -57,7 +57,7 @@ class ValidationResult:
     #    동작은 그대로 둔다. 신규 소비자(에이전트 팀 분석가)만 이 두 필드로
     #    "실제 검증을 수행했는가"를 approved 와 분리해 판단한다.
     validated: bool = True        # 실제 검증 수행 여부 (미연결·예외 시 False)
-    data_status: str = "full"     # full | insufficient | error
+    data_status: str = "full"     # full | partial | insufficient | error
 
 
 class StockValidator:
@@ -159,7 +159,9 @@ class StockValidator:
                     short_selling_result=ss_result,
                     trend_buzz_result=tb_result,
                     validated=True,
-                    data_status=data_status,
+                    # DART 가 위험을 확정한 조회이므로 (validated=True, insufficient) 모순 쌍을
+                    # 만들지 않는다 — 최소 partial (R-A r5 advisory)
+                    data_status=data_status if data_status != "insufficient" else "partial",
                 )
 
             # confidence 조정 합산 (범위 제한: -0.30 ~ +0.25)
@@ -204,10 +206,12 @@ class StockValidator:
         if not getattr(self.news_verifier, "_enabled", True):
             return NewsCheckResult(), False
         try:
-            return await self.news_verifier.check_news(symbol, stock_name), True
+            result = await self.news_verifier.check_news(symbol, stock_name)
         except Exception as e:
             logger.debug(f"[종목검증] 뉴스 검증 오류 ({symbol}): {e}")
             return NewsCheckResult(), False
+        # 생산자 내부에서 HTTP 실패를 삼키고 기본값을 돌려준 경우는 fetched=False 다 (R-A r5)
+        return result, bool(getattr(result, "fetched", True))
 
     async def _safe_check_dart(self, symbol: str) -> Tuple[DartCheckResult, bool]:
         """DART 공시 검증 (예외 안전)
@@ -219,11 +223,18 @@ class StockValidator:
         """
         if not getattr(self.dart_checker, "_enabled", True):
             return DartCheckResult(), False
+        # corp_code 매핑이 비었거나(initialize 실패) 종목이 매핑에 없으면 check_disclosures 는
+        # 조회 없이 기본값을 돌려준다 — 그 조건과 1:1 로 미획득(ok=False) 처리 (R-A r5 blocking)
+        corp_map = getattr(self.dart_checker, "_corp_code_map", None)
+        if isinstance(corp_map, dict) and (not corp_map or str(symbol).lstrip("A").strip() not in corp_map):
+            return DartCheckResult(), False
         try:
-            return await self.dart_checker.check_disclosures(symbol), True
+            result = await self.dart_checker.check_disclosures(symbol)
         except Exception as e:
             logger.debug(f"[종목검증] DART 검증 오류 ({symbol}): {e}")
             return DartCheckResult(), False
+        # 생산자 내부에서 HTTP/API 실패를 삼키고 기본값을 돌려준 경우는 fetched=False 다
+        return result, bool(getattr(result, "fetched", True))
 
     # ───────────────────── MCP 기반 검증 (수급/공매도/트렌드) ─────────────────────
 

@@ -484,7 +484,7 @@ def test_stock_validator_insufficient_when_dart_check_raises_and_analyst_risk_cl
     result = asyncio.run(sv.validate("005930", "삼성전자"))
     assert result.approved is True          # 기존 approved 의미·값 불변
     assert result.validated is False
-    assert result.data_status in ("insufficient", "error")
+    assert result.data_status == "insufficient"   # 'error' 는 outer except 경로 전용 (R-A r5 advisory)
 
     fa = FundamentalAnalyst(stock_validator=_FakeValidator(result), dart_checker=None)
     report = asyncio.run(fa.analyze("005930"))
@@ -497,3 +497,99 @@ def test_stock_validator_insufficient_when_dart_check_raises_and_analyst_risk_cl
 
 async def _async_return(value):
     return value
+
+
+# ── R-A r5 blocking (2026-09-15, 통합 담당 반영): '예외 없음' ≠ '실제 획득' ────────────────
+def _validator_with_supply_ok():
+    sv = StockValidator()
+    sv._mcp_manager = SimpleNamespace(is_server_available=lambda name: True)
+    sv._safe_check_trend_buzz = lambda name: _async_return((TrendBuzzResult(), True))
+    sv._get_cache = lambda cache, key, ttl: SupplyDemandResult(foreign_net_buying=True)
+    return sv
+
+
+def _assert_not_risk_clear(result):
+    fa = FundamentalAnalyst(stock_validator=_FakeValidator(result), dart_checker=None)
+    report = asyncio.run(fa.analyze("005930"))
+    assert report.risk_clear is None and report.positive_basis is None
+    assert not any(e.metric == "risk_clear" and e.value is True for e in report.evidence)
+    assert not any("위험 미발견" in (e.note or "") for e in report.evidence)
+
+
+def test_dart_corp_code_map_empty_is_not_fetched(monkeypatch):
+    """dart_checker._enabled=True 인데 _corp_code_map 이 비어 있으면(initialize 실패의 실제 기본 상태)
+    check_disclosures 는 조회 없이 기본값을 돌려준다 — 실제 _safe_check_dart 를 태워 미획득으로
+    유도되고 '검증 통과 — 위험 미발견' 이 적재되지 않아야 한다."""
+    sv = _validator_with_supply_ok()
+    sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(fetched=True), True))
+    sv.dart_checker._enabled = True
+    sv.dart_checker._corp_code_map = {}
+    result = asyncio.run(sv.validate("005930", "삼성전자"))
+    assert result.validated is False and result.data_status == "insufficient"
+    _assert_not_risk_clear(result)
+
+
+def test_dart_http_failure_absorbed_by_producer_is_not_fetched():
+    """corp_code 매핑은 있지만 DartChecker._fetch_and_analyze 가 HTTP 실패를 삼키고 기본값
+    (fetched=False)을 돌려주는 경로 — 이전에는 dart_ok=True 로 통과했다."""
+    sv = _validator_with_supply_ok()
+    sv._safe_check_news = lambda symbol, name: _async_return((NewsCheckResult(fetched=True), True))
+    sv.dart_checker._enabled = True
+    sv.dart_checker._corp_code_map = {"005930": "00126380"}
+
+    async def _http_failed(corp_code, days):
+        return DartCheckResult()          # dart_checker.py 의 HTTP≠200/예외 경로 그대로
+    sv.dart_checker._fetch_and_analyze = _http_failed
+    result = asyncio.run(sv.validate("005930", "삼성전자"))
+    assert result.validated is False and result.data_status == "insufficient"
+    _assert_not_risk_clear(result)
+
+
+def test_news_http_failure_absorbed_by_producer_is_not_fetched():
+    """NewsVerifier._fetch_and_analyze 가 HTTP 실패를 삼키고 기본값을 돌려주면 news_ok=False."""
+    sv = _validator_with_supply_ok()
+    sv._safe_check_dart = lambda symbol: _async_return((DartCheckResult(fetched=True), True))
+    sv.news_verifier._enabled = True
+
+    async def _http_failed(stock_name):
+        return NewsCheckResult()
+    sv.news_verifier._fetch_and_analyze = _http_failed
+    result = asyncio.run(sv.validate("005930", "삼성전자"))
+    assert result.validated is False and result.data_status == "insufficient"
+    _assert_not_risk_clear(result)
+
+
+def test_dart_and_news_success_paths_mark_fetched_true():
+    """정상 조회(공시 없음·기사 없음 포함)는 fetched=True — 커버리지를 불필요하게 잃지 않는다."""
+    from src.signals.fundamentals.dart_checker import DartChecker
+    from src.signals.fundamentals.news_verifier import NewsVerifier
+
+    class _Resp:
+        def __init__(self, payload): self.status = 200; self._p = payload
+        async def json(self): return self._p
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    class _Session:
+        def __init__(self, payload): self._p = payload
+        def get(self, *a, **k): return _Resp(self._p)
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    import aiohttp
+    dc = DartChecker.__new__(DartChecker); dc._api_key = "x"; dc.DART_LIST_URL = "http://localhost/dart"
+    orig = aiohttp.ClientSession
+    aiohttp.ClientSession = lambda *a, **k: _Session({"status": "013"})
+    try:
+        r = asyncio.run(dc._fetch_and_analyze("00126380", 7))
+        assert r.fetched is True and r.has_risk is False
+        aiohttp.ClientSession = lambda *a, **k: _Session({"status": "000", "list": [{"report_nm": "유상증자결정"}]})
+        r2 = asyncio.run(dc._fetch_and_analyze("00126380", 7))
+        assert r2.fetched is True and r2.risk_level == "block"
+        nv = NewsVerifier.__new__(NewsVerifier); nv._client_id = "a"; nv._client_secret = "b"; nv.NAVER_NEWS_URL = "http://localhost/news"
+        aiohttp.ClientSession = lambda *a, **k: _Session({"items": []})
+        n = asyncio.run(nv._fetch_and_analyze("삼성전자"))
+        assert n.fetched is True and n.has_news is False
+        assert DartCheckResult().fetched is False and NewsCheckResult().fetched is False
+    finally:
+        aiohttp.ClientSession = orig

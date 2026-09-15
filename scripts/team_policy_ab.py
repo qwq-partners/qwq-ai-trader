@@ -49,7 +49,7 @@ import json
 import statistics
 import sys
 from dataclasses import dataclass, field
-from datetime import date as _date, datetime
+from datetime import timedelta, date as _date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -127,8 +127,12 @@ PRE_REGISTERED = {
         "B 는 votes.r1 을 최종 표로 준 DebateResult(R1 독립 판단만, 토론 전), "
         "C 는 votes.r2 를 최종 표로 준 DebateResult(R2 토론 후 만장일치)로 각각 재평가한다. "
         "스냅샷 evidence 가 data_status(full/partial)·근거(evidence, kind=fact) 를 채우지 않으면 "
-        "(=A 근거계약 미배선, 전 보고서 data_status=unknown) judgment.assess 는 merit_status 를 "
-        "abstain 으로 고정한다 — 이때 B/C 선정이 0건이어도 버그가 아니다."
+        "(=A 근거계약 미배선) data_sufficiency 가 insufficient 가 되어 B/C 게이트에서 탈락한다"
+        "(merit 자체는 evidence 가 있으면 계산될 수 있다) — 이때 B/C 선정이 0건이어도 버그가 아니다. "
+        "보고서 신선도는 스냅샷의 age_minutes 로 복원한다(없으면 판단 시점에 신선 가정, "
+        "results.reports_without_age 카운터). C 는 gate_b(R1 bear ACCEPT)를 전제로 하므로 "
+        "R1 REJECT→R2 ACCEPT 전향 후보는 C 에서 제외된다(=live 팀 최종 판정보다 엄격) — "
+        "results.r1_reject_r2_accept_excluded 카운터로 남긴다(정책 정의는 결과를 본 뒤 바꾸지 않는다)."
     ),
     "llm_reeval_limitation": (
         "과거 판단을 재현하는 R1/R2 표결·근거는 스냅샷 시점에 실제로 LLM 이 낸 결과가 아니라면 "
@@ -212,12 +216,34 @@ def _safe_float(v: Any) -> float:
 
 
 # ── judgment.assess 입력 복원 (스냅샷 dict → AnalystReport/DebateResult) ─────────────
+def _parse_dt(v: Any) -> Optional[datetime]:
+    """ISO 문자열 → datetime (없거나 손상되면 None — 시각을 지어내지 않는다)."""
+    if isinstance(v, datetime):
+        return v
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        return datetime.fromisoformat(v)
+    except ValueError:
+        return None
+
+
 def _to_evidence_item(d: Dict[str, Any]) -> EvidenceItem:
-    """AnalystReport.to_dict()['evidence'] 항목(EvidenceItem.to_dict()) 역직렬화."""
+    """AnalystReport.to_dict()['evidence'] 항목(EvidenceItem.to_dict()) 역직렬화.
+
+    observed_at/collected_at/valid_until 을 복원해야 judgment._evidence_merit 의 근거 유효기간
+    검사가 오프라인에서도 살아 있다. status 키가 없거나 비었으면 'full' 로 승격하지 않고
+    'insufficient'(미상)로 둔다 — 결측을 가장 관대한 값으로 매핑하지 않는다 (R-D r5 advisory).
+    """
+    status = d.get("status")
     return EvidenceItem(
         source=str(d.get("source") or ""), metric=str(d.get("metric") or ""),
         value=d.get("value"), unit=d.get("unit"),
-        status=str(d.get("status") or "full"), kind=str(d.get("kind") or "fact"),
+        observed_at=_parse_dt(d.get("observed_at")), collected_at=_parse_dt(d.get("collected_at")),
+        period=d.get("period"),
+        status=status if isinstance(status, str) and status else "insufficient",
+        kind=str(d.get("kind") or "fact"),
+        ref_id=d.get("ref_id"), valid_until=_parse_dt(d.get("valid_until")),
         dedup_key=d.get("dedup_key"),
     )
 
@@ -234,13 +260,23 @@ def _to_analyst_report(d: Dict[str, Any]) -> AnalystReport:
     except ValueError:
         kind = AnalystKind.TECHNICAL
     nested = [_to_evidence_item(e) for e in (d.get("evidence") or [])]
-    return AnalystReport(
+    rep = AnalystReport(
         kind=kind, symbol=str(d.get("symbol") or ""), score=_safe_int(d.get("score")),
         confidence=_safe_float(d.get("confidence")), error=d.get("error"),
         data_status=str(d.get("data_status") or "unknown"),
         positive_basis=d.get("positive_basis"), risk_clear=d.get("risk_clear"),
         evidence=nested,
+        observed_at=_parse_dt(d.get("observed_at")),
+        limitations=list(d.get("limitations") or []),
     )
+    # R-D r5 blocking: data_as_of 의 dataclass 기본값은 now 라 복원된 모든 보고서가 '방금 만든 것'
+    # 이 된다(신선도 세탁) — judgment 의 유효성 판정(HARD_TTL·감쇠 가중치)이 전부 age_minutes 에
+    # 걸려 있으므로 스냅샷이 기록한 나이를 그대로 되살린다. age_minutes 가 없는 구형·합성
+    # 스냅샷은 '판단 시점에 신선' 가정으로 남고 그 사실을 results 에 카운터로 남긴다.
+    age = d.get("age_minutes")
+    if isinstance(age, (int, float)) and not isinstance(age, bool) and age >= 0:
+        rep.data_as_of = datetime.now() - timedelta(minutes=float(age))
+    return rep
 
 
 def _debate_from_votes(symbol: str, votes: Dict[str, Any], upto_round: int) -> DebateResult:
@@ -267,7 +303,8 @@ def _assess(c: Candidate, upto_round: int):
     """정책 B/C 공용 — src.agents.judgment.assess 를 그대로 호출한다(러너 자체 근사 없음)."""
     reports = [_to_analyst_report(e) for e in c.evidence]
     debate = _debate_from_votes(c.symbol, c.votes, upto_round)
-    return judgment.assess(c.symbol, reports, debate)
+    # now 를 넘겨야 EvidenceItem.valid_until 만료 검사가 동작한다(team.py 실배선과 동일)
+    return judgment.assess(c.symbol, reports, debate, now=datetime.now())
 
 
 # ── R1/R2 판단 레거시 유틸 — 정책 게이트에서는 더는 쓰지 않는다(judgment.assess 로 재배선,
@@ -567,7 +604,8 @@ def _dedupe_correlated(candidates: List[Candidate]) -> Tuple[List[Candidate], in
             continue
         seen_week.add(wk)
         if cur_entry_ord is not None:
-            prev_end_by_symbol[c.symbol] = cur_entry_ord + MAX_HOLD_DAYS
+            # MAX_HOLD_DAYS 는 거래일 단위, ordinal 은 달력일 — 7/5 로 환산(R-D r5 advisory)
+            prev_end_by_symbol[c.symbol] = cur_entry_ord + int(MAX_HOLD_DAYS * 7 / 5)
         kept.append(c)
     return kept, excluded
 
@@ -602,6 +640,16 @@ def run_selection_experiment(rows: List[Candidate], policies: List[str], max_new
                 "holding_days": res["holding_days"], "exit_reason": res["exit_reason"],
             })
         out[policy] = _summarize_positions(policy, selected, positions, no_data, incomplete, excluded)
+        out[policy]["reports_without_age"] = sum(
+            1 for c in rows for e in (c.evidence or []) if e.get("age_minutes") is None
+        )
+        if policy == "C":
+            out[policy]["r1_reject_r2_accept_excluded"] = sum(
+                1 for c in rows
+                if (c.votes.get("r1") or {}).get("bear") is False
+                and (c.votes.get("r2") or {}).get("bull") is True
+                and (c.votes.get("r2") or {}).get("bear") is True
+            )
     return out
 
 

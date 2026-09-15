@@ -29,6 +29,10 @@ class DartCheckResult:
     positive_disclosures: List[str] = field(default_factory=list)
     risk_level: str = "none"  # "none" / "warning" / "block"
     confidence_adjustment: float = 0.0
+    # 실제로 DART 를 조회해 얻은 결과인가 — 미설정·corp_code 미매핑·HTTP 실패·API 오류로 기본값을
+    # 대신 돌려준 경우 False. "조회 결과 없음(013)/공시 없음" 은 정상 조회이므로 True.
+    # (T11 R-A r5 blocking: '위험 미발견' 을 미획득 상태에서 사실로 적재하지 않기 위함, 2026-09-15)
+    fetched: bool = False
 
 
 BLOCK_KEYWORDS = [
@@ -230,12 +234,14 @@ class DartChecker:
 
         # status "000" = 정상, "013" = 조회 결과 없음
         status = data.get("status", "")
-        if status == "013" or status != "000":
-            return DartCheckResult()
+        if status == "013":
+            return DartCheckResult(fetched=True)   # 정상 조회 — 기간 내 공시 없음
+        if status != "000":
+            return DartCheckResult()               # API 오류 — 미획득
 
         disclosures = data.get("list", [])
         if not disclosures:
-            return DartCheckResult()
+            return DartCheckResult(fetched=True)
 
         risk_list = []
         positive_list = []
@@ -266,6 +272,7 @@ class DartChecker:
         # 결과 결정
         if has_block:
             return DartCheckResult(
+                fetched=True,
                 has_risk=True,
                 risk_disclosures=risk_list,
                 positive_disclosures=positive_list,
@@ -274,6 +281,7 @@ class DartChecker:
             )
         elif risk_list:
             return DartCheckResult(
+                fetched=True,
                 has_risk=True,
                 risk_disclosures=risk_list,
                 positive_disclosures=positive_list,
@@ -282,6 +290,7 @@ class DartChecker:
             )
         elif positive_list:
             return DartCheckResult(
+                fetched=True,
                 has_risk=False,
                 risk_disclosures=[],
                 positive_disclosures=positive_list,

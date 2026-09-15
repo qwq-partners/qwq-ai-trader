@@ -546,3 +546,50 @@ def test_shadow_lab_promotion_report_adds_disclaimer_without_changing_thresholds
     report = asyncio.run(sl.promotion_readiness_report())
     assert "0/20건" in report and "55%" in report  # 규칙#11 기준 숫자 불변
     assert "엣지 증명이 아님" in report
+
+
+# ── R-D r5 blocking (2026-09-15, 통합 담당 반영): 스냅샷 복원이 신선도를 세탁하지 않는다 ─────────
+def _candidate_with_age(age_minutes):
+    c = _mk_candidate("000001")
+    ev = []
+    for e in c["evidence"]:
+        e = dict(e)
+        if age_minutes is None:
+            e.pop("age_minutes", None)
+        else:
+            e["age_minutes"] = age_minutes
+        ev.append(e)
+    return tpab.Candidate(date=c["date"], symbol=c["symbol"], plan=c["plan"], evidence=ev,
+                          votes=c["votes"], prices=c["prices"], synthetic=True)
+
+
+def test_snapshot_restores_report_age_so_expired_reports_are_not_valid_sources():
+    """live judgment 는 HARD_TTL(technical 45분 등)을 넘긴 보고서를 유효 소스로 세지 않는다.
+    복원본이 data_as_of=now 로 되살아나면 오프라인 B/C 게이트가 live 보다 관대해진다(R-D r5)."""
+    fresh = _candidate_with_age(5.0)
+    stale = _candidate_with_age(600.0)
+    assert tpab.gate_b(fresh) is True
+    assert tpab.gate_b(stale) is False
+    rep = tpab._to_analyst_report({**fresh.evidence[0], "age_minutes": 600.0})
+    assert rep.age_minutes >= 599
+
+
+def test_snapshot_restores_evidence_validity_and_missing_status_is_not_full():
+    past = (datetime.now() - timedelta(days=5)).isoformat(timespec="seconds")
+    item = tpab._to_evidence_item({"source": "s", "metric": "m", "value": 1, "kind": "fact",
+                                   "status": "full", "valid_until": past, "observed_at": past})
+    assert item.valid_until is not None and item.valid_until < datetime.now()
+    assert item.observed_at is not None
+    unknown = tpab._to_evidence_item({"source": "s", "metric": "m", "value": 1})
+    assert unknown.status == "insufficient" and not unknown.usable
+
+
+def test_selection_results_report_age_and_flip_counters(tmp_path):
+    snap = tmp_path / "snap.jsonl"
+    flip = _mk_candidate("000009", bear_r1=False)          # R1 bear REJECT
+    flip["votes"]["r2"] = {"bull": True, "bear": True}     # R2 만장일치 전향
+    _write_snapshot(snap, [_mk_candidate("000001"), flip])
+    rows = tpab.load_snapshot(snap)
+    results = tpab.run_selection_experiment(rows, ["A", "C"], max_new=5)
+    assert "reports_without_age" in results["A"]
+    assert results["C"]["r1_reject_r2_accept_excluded"] == 1
