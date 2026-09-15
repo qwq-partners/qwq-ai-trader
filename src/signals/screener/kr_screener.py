@@ -255,15 +255,23 @@ class StockScreener:
 
             params = {
                 "FID_COND_MRKT_DIV_CODE": "J",  # 주식
-                "FID_COND_SCR_DIV_CODE": "20101",
+                # 20171 = HTS [0171] 거래량순위 화면코드. 기존 "20101" 은 이 TR 의 화면코드가
+                # 아니라서 rt_cd=0 "정상처리" + output **0행** 이 돌아왔다 — 30일간 2,474회
+                # 호출이 전부 "0개 발굴" 이던 원인(2026-09-15 라이브 프로브로 확정:
+                # 20101 → 0행, 20171 → 30행).
+                "FID_COND_SCR_DIV_CODE": "20171",
                 "FID_INPUT_ISCD": "0000",  # 전체
                 "FID_DIV_CLS_CODE": "0",
+                # 0=평균거래량순 유지. 1(거래량증가율순)은 전일 거래량이 2~6주뿐인
+                # 채권형 ETF·ETN 이 증가율 9999.99% 로 상위를 독식해 급증 후보로 쓸 수 없다
+                # (같은 프로브에서 확인 — 증가율순 상위 3종목이 전부 전일 거래량 한 자리수).
                 "FID_BLNG_CLS_CODE": "0",
                 "FID_TRGT_CLS_CODE": "111111111",
-                "FID_TRGT_EXLS_CLS_CODE": "000000",
-                "FID_INPUT_PRICE_1": "0",
-                "FID_INPUT_PRICE_2": "0",
-                "FID_VOL_CNT": "0",
+                "FID_TRGT_EXLS_CLS_CODE": "0000000000",   # 스펙 10자리
+                # 조건 미사용은 공백 (정상 동작 중인 fetch_fluctuation_rank 와 동일)
+                "FID_INPUT_PRICE_1": "",
+                "FID_INPUT_PRICE_2": "",
+                "FID_VOL_CNT": "",
                 "FID_INPUT_DATE_1": "",
             }
 
@@ -280,6 +288,7 @@ class StockScreener:
                     return stocks
 
                 output = data.get("output", [])
+                no_ratio = 0   # 거래량 비율 산출 불가 건수 (조용한 전량 탈락 감지용)
 
                 for item in output[:limit]:
                     symbol = item.get("mksc_shrn_iscd", "").zfill(6)
@@ -287,10 +296,19 @@ class StockScreener:
                     price = float(item.get("stck_prpr", 0) or 0)
                     change_pct = float(item.get("prdy_ctrt", 0) or 0)
                     volume = int(item.get("acml_vol", 0) or 0)
-                    vol_inrt = float(item.get("vol_inrt", 0) or 0)  # 거래량 증가율
 
-                    # 거래량 비율 계산 (증가율 + 100 = 비율)
-                    volume_ratio = (vol_inrt + 100) / 100 if vol_inrt else 1.0
+                    # 거래량 비율: vol_inrt(거래량증가율 %) 우선, 결측·비숫자면 같은 응답의
+                    # prdy_vol(전일 거래량)로 자체 산출한다. 둘 다 없으면 1.0 을 지어내지 않고
+                    # 건너뛴다 — 1.0 은 min_volume_ratio(2.0) 미만이라 조용한 전량 탈락이 된다.
+                    raw_inrt = str(item.get("vol_inrt", "") or "").strip()
+                    prdy_vol = int(item.get("prdy_vol", 0) or 0)
+                    try:
+                        volume_ratio = (float(raw_inrt) + 100) / 100
+                    except ValueError:
+                        volume_ratio = (volume / prdy_vol) if prdy_vol > 0 else None
+                    if volume_ratio is None:
+                        no_ratio += 1
+                        continue
 
                     # 거래대금 계산 (유동성 확인)
                     trading_value = volume * price
@@ -328,6 +346,12 @@ class StockScreener:
             stocks.sort(key=lambda x: x.score, reverse=True)
             self._update_cache(cache_key, stocks)
 
+            if not stocks:
+                # 응답이 비었는지(파라미터·API 문제) 전량 탈락인지(게이트 문제) 구분해 남긴다
+                logger.warning(
+                    f"[Screener] 거래량 급증 0개 — 응답 {len(output)}행, "
+                    f"비율산출불가 {no_ratio}행, 게이트 min_ratio={self.min_volume_ratio}"
+                )
             logger.info(f"[Screener] 거래량 급증 종목 {len(stocks)}개 발굴")
             return stocks
 
@@ -1425,7 +1449,9 @@ class StockScreener:
                 "Accept-Language": "ko-KR,ko;q=0.9",
             }
 
-            await kis_rate_limit.acquire()
+            # KIS 리미터를 쓰지 않는다 — 네이버는 외부 사이트이고, 2026-09-03 에 같은 파일의
+            # 실제 KIS 호출 2곳과 함께 acquire() 가 일괄 삽입되면서 크롤링이 KIS 초당 예산을
+            # 갉아먹고 있었다(슬롯 1개 + MIN_GAP 100ms 를 매 호출 소모).
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
                     logger.warning(f"네이버 금융 크롤링 실패: {resp.status}")
@@ -1775,7 +1801,10 @@ class StockScreener:
         self,
         llm_manager=None,
         news_titles: List[str] = None,
-        use_naver: bool = True,
+        # 2026-09-11 네이버 금융 테이블 구조 변경 이후 파싱 성공 0건(796회 전부 0개),
+        # KIS 실패 시 주력으로 승격되는 경로도 29회 전부 0종목이라 기본 OFF.
+        # 로그 노이즈(일 265건)만 남기고 후보 기여는 정확히 0이었다.
+        use_naver: bool = False,
         min_price: float = 1000,
         theme_detector=None,
         overnight_sentiment: Optional[str] = None,

@@ -5264,7 +5264,7 @@ JSON:
                         # 5일 누적 수급 스코어 갱신
                         if not getattr(bot, '_last_supply5d_date', None) == today:
                             try:
-                                from ..data.providers.supply_score_provider import SupplyScoreProvider
+                                from ..data.providers.supply_score import SupplyScoreProvider
                                 sp = SupplyScoreProvider()
                                 await sp.ensure_loaded(force_refresh_today=True)
                                 bot._last_supply5d_date = today

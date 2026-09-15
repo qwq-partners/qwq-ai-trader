@@ -49,6 +49,19 @@
 - 시장구분: `CM`=야간(18:00~05:00, 기준가=주간 종가 → prdy_ctrt=밤사이 변동률), `F`=주간
 - 아침 스크리닝 선행지표로 사용 (US 지수보다 우선, kr_scheduler)
 
+## 데이터 — 토스증권 Open API (2026-09-15 설계, **미구현**)
+
+> 설계서 `docs/superpowers/plans/2026-09-15-toss-securities-fallback.md` · 상태: 승인 대기, 코드 없음
+
+- 용도(예정): **읽기 전용 2차 시세·참조 데이터**. 주문·체결·잔고·계좌는 **KIS 단독 유지**
+- Base `https://openapi.tossinvest.com` · WS `wss://openapi-ws.tossinvest.com/ws/v1` · OpenAPI 3.1 스펙 `/openapi-docs/latest/openapi.json`
+- 인증: OAuth2 client_credentials, `expires_in` 86399(24h). **클라이언트당 유효 토큰 1개** — 재발급 시 이전 토큰 즉시 무효(`token-revoked`). 단일 토큰 캐시 + 파일 락 필수
+- 허용 IP 사전 등록 필수(미등록 403). 시세·종목·수급·랭킹·지수·캘린더는 토큰만으로 조회(계좌 헤더 불필요)
+- Rate limit: 그룹별 TPS(`MARKET_DATA` 15 / `MARKET_DATA_CHART` 20 / `RANKING` 5 / `STOCK` 5 / `STOCK_ALL` 1 / `STOCK_TRADING_TREND` 10 / `MARKET_INFO` 3), 응답 헤더 `X-RateLimit-*`·429 `Retry-After`. **KIS 리미터와 분리된 독립 게이트**를 쓸 것
+- 주요 필드 제약: `/prices` 는 `lastPrice`·`timestamp` 만(등락률·거래량·전일종가 없음), 지수 현재가는 `timestamp=null`, 종목 정보에 **업종 필드 없음**(WICS 대체 불가)
+- **가격 기준**: 국내 시세는 KRX+NXT 통합이라 20:00 까지 갱신 — KIS 정규장 종가와 다르다(실측 0.9% 차이). 청산·사이징에 그대로 쓰지 말 것
+- 환경변수: `TOSS_CLIENT_ID`, `TOSS_CLIENT_SECRET` (`.env`, 커밋 금지)
+
 ## 데이터 — pykrx
 
 - KR 종목 마스터 (stock_list)
