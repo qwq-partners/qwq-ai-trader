@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from src.data.providers.toss.market_types import Candle, CandleSeries, Quote
+from src.data.providers.toss.transport import TossRequestError
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -312,7 +313,10 @@ async def fetch_daily_candles(
     seen_cursors: set[str] = set()
 
     while True:
-        if budget.remaining() <= 0:
+        try:
+            if budget.remaining() <= 0:
+                break
+        except TossRequestError:
             break
         params: dict[str, Any] = {
             "symbol": symbol, "interval": "1d", "count": 200, "adjusted": adjusted,

@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from src.data.providers.toss.market_data import fetch_daily_candles
+from src.data.providers.toss.rate_limit import RequestBudget
 
 
 KST = timezone(timedelta(hours=9))
@@ -50,7 +51,35 @@ class _Client:
             raise RuntimeError("budget exhausted")
         self.calls.append((path, params, budget))
         outcome = next(self.responses)
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+class _Clock:
+    def __init__(self, now=0.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+class _ActualBudgetClient:
+    """Offline client boundary that mirrors TossClient's page consumption order."""
+
+    def __init__(self, responses, *, clock=None, expire_after_first=False):
+        self.responses = iter(responses)
+        self.calls = []
+        self._clock = clock
+        self._expire_after_first = expire_after_first
+
+    async def get(self, path, *, params, budget):
+        budget.consume_page()
+        self.calls.append((path, params, budget))
+        outcome = next(self.responses)
+        if self._expire_after_first and len(self.calls) == 1:
+            self._clock.now = budget.deadline
+        if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
@@ -187,22 +216,73 @@ def test_fetch_daily_candles_second_page_error_returns_partial_without_collector
     assert budget.pages_used == 2
 
 
-def test_fetch_daily_candles_honors_page_cap_and_deadline_before_a_new_request():
-    capped_client = _Client([{"candles": [_candle("20260915")], "nextBefore": "cursor-a"}])
-    capped = asyncio.run(fetch_daily_candles(
-        capped_client, symbol="005930", expected_dates=["20260912", "20260915"],
-        fetched_at=FETCHED, budget=_Budget(pages=1), market_basis="krx",
-    ))
-    expired_client = _Client([])
-    expired = asyncio.run(fetch_daily_candles(
-        expired_client, symbol="005930", expected_dates=["20260915"],
-        fetched_at=FETCHED, budget=_Budget(remaining=0), market_basis="krx",
+def test_fetch_daily_candles_actual_budget_timeout_before_first_send_returns_partial():
+    clock = _Clock()
+    budget = RequestBudget(1, clock=clock)
+    clock.now = budget.deadline
+    client = _ActualBudgetClient([])
+
+    series = asyncio.run(fetch_daily_candles(
+        client, symbol="005930", expected_dates=["20260915"],
+        fetched_at=FETCHED, budget=budget, market_basis="krx",
     ))
 
-    assert capped.complete is False
-    assert capped.missing_dates == ("20260912",)
-    assert len(capped_client.calls) == 1
-    assert expired.complete is False
-    assert expired.missing_dates == ("20260915",)
-    assert expired.status == "partial"
-    assert expired_client.calls == []
+    assert client.calls == []
+    assert series.complete is False
+    assert series.missing_dates == ("20260915",)
+    assert series.status == "partial"
+
+
+def test_fetch_daily_candles_actual_budget_expiry_between_pages_keeps_first_bar_partial():
+    clock = _Clock()
+    budget = RequestBudget(1, clock=clock)
+    client = _ActualBudgetClient(
+        [{"candles": [_candle("20260915")], "nextBefore": "2026-09-12T00:00:00+09:00"}],
+        clock=clock, expire_after_first=True,
+    )
+
+    series = asyncio.run(fetch_daily_candles(
+        client, symbol="005930", expected_dates=["20260912", "20260915"],
+        fetched_at=FETCHED, budget=budget, market_basis="krx",
+    ))
+
+    assert len(client.calls) == 1
+    assert [bar.bar_date for bar in series.bars] == ["20260915"]
+    assert series.complete is False
+    assert series.missing_dates == ("20260912",)
+    assert series.status == "partial"
+
+
+def test_fetch_daily_candles_actual_page_cap_prevents_second_send_and_higher_cap_completes():
+    responses = [
+        {"candles": [_candle("20260915")], "nextBefore": "2026-09-12T00:00:00+09:00"},
+        {"candles": [_candle("20260912")], "nextBefore": None},
+    ]
+    cap_one_client = _ActualBudgetClient(responses)
+    cap_one = asyncio.run(fetch_daily_candles(
+        cap_one_client, symbol="005930", expected_dates=["20260912", "20260915"],
+        fetched_at=FETCHED, budget=RequestBudget(5, clock=_Clock(), max_pages=1), market_basis="krx",
+    ))
+    cap_two_client = _ActualBudgetClient(responses)
+    cap_two = asyncio.run(fetch_daily_candles(
+        cap_two_client, symbol="005930", expected_dates=["20260912", "20260915"],
+        fetched_at=FETCHED, budget=RequestBudget(5, clock=_Clock(), max_pages=2), market_basis="krx",
+    ))
+
+    assert len(cap_one_client.calls) == 1
+    assert [bar.bar_date for bar in cap_one.bars] == ["20260915"]
+    assert cap_one.complete is False
+    assert cap_one.missing_dates == ("20260912",)
+    assert len(cap_two_client.calls) == 2
+    assert cap_two.complete is True
+    assert [bar.bar_date for bar in cap_two.bars] == ["20260912", "20260915"]
+
+
+def test_fetch_daily_candles_propagates_cancellation_instead_of_converting_it_to_partial():
+    client = _ActualBudgetClient([asyncio.CancelledError()])
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(fetch_daily_candles(
+            client, symbol="005930", expected_dates=["20260915"],
+            fetched_at=FETCHED, budget=RequestBudget(5, clock=_Clock()), market_basis="krx",
+        ))
