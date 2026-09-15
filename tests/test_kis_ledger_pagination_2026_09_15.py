@@ -4,8 +4,8 @@
 1) 잔고/포지션/체결 연속조회 루프가 헤더 tr_cont(D/E) 또는 동일 ctx 키에서 종료한다
    (보유 1종목 계좌에서 8434R 을 10페이지까지 호출하던 결함).
 2) 잔고 스냅샷 재사용이 헤더 D/E 에서 실제로 발동해 동기화 1틱당 8434R 이 1회가 된다.
-3) _api_get 의 3번째 500 도 리미터 계측을 거치고 실패 dict 로 반환된다.
-4) 동기화 루프가 CLOSED 세션에서 300초로 늘어나되 전환 직후 1회는 30초를 유지한다.
+3) _api_get 의 3번째 500 도 리미터 계측을 거치고 실패로 판정되는 dict 를 반환한다(호출자 분기 불변).
+4) 동기화 루프가 장외 CLOSED 에서 300초로 늘어나되 전환 직후 1회는 30초, 08:00~15:40 은 항상 30초.
 """
 from __future__ import annotations
 
@@ -83,12 +83,22 @@ def test_positions_single_page_stops_on_repeated_ctx_without_header():
 
 
 def test_positions_two_real_pages_are_merged():
-    """진짜 다음 페이지(헤더 F, 다른 ctx)는 계속 읽고 합친다 — 대량 보유 계좌 회귀 방지."""
+    """헤더 F(다음 있음)는 계속 읽고 합친다 — 새 종료 조건(D/E·동일 ctx)이 진짜 다음 페이지를
+    끊지 않는지와 ctx 키가 2회차 요청에 되돌려지는지 고정. 요청 헤더 tr_cont:N 은 운영 코드가
+    보내지 않아(별도 후속) 이 시임에서 검증되지 않는다."""
     b = _broker()
+    seen_params = []
     calls = _install(b, [_page([_POS], ctx="K1", tr_cont="F"), _page([_POS2], ctx="K2", tr_cont="D")])
+    _orig = b._api_get
+
+    async def _spy(url, tr_id, params):
+        seen_params.append(dict(params))
+        return await _orig(url, tr_id, params)
+    b._api_get = _spy
     pos = asyncio.run(b.get_positions())
     assert set(pos) == {"005930", "000660"}
     assert calls.count("TTTC8434R") == 2
+    assert seen_params[1]["CTX_AREA_NK100"] == "K1"     # 2회차 요청에 1페이지 ctx 되돌림
 
 
 def test_daily_fills_loop_uses_same_termination(monkeypatch):
@@ -213,6 +223,35 @@ def test_sync_loop_sleeps_300s_only_after_second_consecutive_closed(monkeypatch)
         sleeps.append(s)
     monkeypatch.setattr(kr_scheduler.asyncio, "sleep", _rec)
 
+    # 장외 시각(21:00 거래일)으로 고정 — 08:00~15:40 이면 CLOSED 여도 30초 유지되므로
+    from datetime import datetime as _dt
+    sched._portfolio_sync_interval = (lambda closed, prev, now=None, _f=KRScheduler._portfolio_sync_interval:
+                                      _f(sched, closed, prev, _dt(2026, 9, 15, 21, 0)))
     asyncio.run(sched.run_portfolio_sync())
     # 초기 30 → REGULAR 30, 30 → CLOSED 전환 직후 1회 30 → 연속 CLOSED 300 …
     assert sleeps == [30, 30, 30, 30, 300, 300, 300]
+
+
+@pytest.mark.parametrize("hhmm, expect", [
+    ((8, 55), 30),     # 장전 동시호가 — KRSession 은 CLOSED 지만 주문 접수 시간대 → 30초
+    ((15, 25), 30),    # 마감 동시호가 — 15:30 체결 정합을 위해 30초
+    ((15, 39), 30),
+    ((15, 41), 300),   # NXT 세션(NEXT)이면 closed=False 라 실제로는 30초지만, 함수 단위로는 300 허용
+    ((21, 0), 300),
+    ((7, 30), 300),
+])
+def test_sync_interval_keeps_30s_inside_orderable_window(hhmm, expect):
+    from datetime import datetime as _dt
+    from src.schedulers.kr_scheduler import KRScheduler
+    sched = KRScheduler.__new__(KRScheduler)
+    now = _dt(2026, 9, 15, *hhmm)   # 화요일 거래일
+    assert sched._portfolio_sync_interval(True, True, now) == expect
+    assert sched._portfolio_sync_interval(True, False, now) == 30    # 전환 직후 1회는 항상 30
+    assert sched._portfolio_sync_interval(False, True, now) == 30
+
+
+def test_sync_interval_holiday_is_closed_all_day():
+    from datetime import datetime as _dt
+    from src.schedulers.kr_scheduler import KRScheduler
+    sched = KRScheduler.__new__(KRScheduler)
+    assert sched._portfolio_sync_interval(True, True, _dt(2026, 9, 13, 10, 0)) == 300   # 일요일
