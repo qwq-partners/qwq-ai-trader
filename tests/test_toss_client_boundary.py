@@ -158,6 +158,11 @@ def test_success_returns_envelope_and_redacts_response_repr(tmp_path):
 class FakeResponse:
     status = 200
     headers = {}
+    @property
+    def content(self):
+        return self
+    async def iter_chunked(self, size):
+        yield b'{"result":[]}'
     async def __aenter__(self):
         return self
     async def __aexit__(self, *args):
