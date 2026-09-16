@@ -1,4 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
+> 2026-09-17 후속: 사용자 지시로 PR #70 main `1c9531c` 병합. #68 원본은 #70 실행 트리를 보존하는 정합화 merge로 통합 중이다. 배포/재시작/활성화 승인은 받았지만 아래 역사 검증과 실행 완료를 혼동하지 않는다. 현황 정본 `docs/reviews/toss-pr-integration-2026-09-17.md`.
 > 최종 업데이트: 2026-09-16 (Toss 승인 기반 관측 런타임 source `984dbdf`, UTC/KST 각각1684 passed/2 known xfailed·독립 소스 리뷰 승인. PR #70 Draft, #68 보류. 검증 정본 `docs/reviews/toss-runtime-2026-09-16.md`. 기본 OFF·실관측 미시작; main/운영·배포/재시작·주문/설정 무변경. 과거 운영 배포 기록은 아래 이력이며 이번에 실행 PID/SHA를 조회하지 않음)
 
 ## 세션 시작 시 필수 읽기
@@ -46,6 +47,8 @@
 - 크로스 전략 검증 게이트 + 시장 체제 사전 적응
 
 ### 토스 후속 작업 상태 (2026-09-16)
+
+아래는 09-16 인계 당시 기록이다. 09-17 사용자가 열린 PR 전체 통합·배포·재시작·활성화를 지시해 #68 보류 결정은 검토 후 정합화 방식으로 변경됐다. 원본의 안전하지 않은 구현을 복구하지 않으며 실행 트리는 #67/#70을 유지한다. 실관측 연결·승인 정책의 준비와 실제 활성화 결과는 후속 보고서로 구분한다.
 
 - **최신 인계:** #67은 main `8c159d0`에 병합됐다. #69/#71까지 main `a3187a8` 기준 feature/PR #70의 **Plan→Do→See 오프라인 구현·통합/독립 소스 리뷰 완료**(source `984dbdf`, 검증 정본 `docs/reviews/toss-runtime-2026-09-16.md`). 중복 PR #68 `0b978e0`는 보류 유지(임의 병합/리베이스/닫기 금지). 설계 `docs/superpowers/specs/2026-09-16-toss-runtime-shadow-design.md`, 실행 계획 `docs/superpowers/plans/2026-09-16-toss-runtime-shadow.md`, 배치 경계 `docs/operations/toss-shadow-runtime.md` 참조.
 - `src/data/providers/toss/`는 기본 OFF다. 승인/발급 context·실 OAuth 어댑터·bounded GET/POST·원장·격리 worker·5분 현재가/별도 캘린더 관측을 오프라인 구현/검증했다. **운영 배포/실관측 미시작**이며 승인 등록부·plan·신뢰된 시작 시점 attestation 없이는 `TOSS_API=1`도 실행 거부다. broker fallback·일봉 live·후보 점수·돈 경로 변경은 미포함이다. grant `client_identity`는 정확한 OAuth client_id이며 발급 예산은 worker 수명당 상한이다.
