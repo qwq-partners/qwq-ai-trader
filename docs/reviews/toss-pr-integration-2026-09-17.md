@@ -36,3 +36,17 @@
 - 병합 main의 소스/테스트/스크립트/설정/의존성은 검증된 #70과 동일하다. main의 병합 이력과 실제 운영 프로세스의 로드 상태는 다르므로, 배포 완료 결과는 이 문단으로 대체하지 않는다.
 - 운영 설정3개(.env/default/evolved)·킬스위치4경로의 사전 지문을 값 노출 없이 비교용으로 확보했다. 미체결0과 브로커 연결을 배포 직전에 다시 검사한다.
 - 활성화는 현재 mutable 거래 checkout을 immutable이라고 주장하지 않는 별도 연결 설계가 필요하다. 기존 거래 서비스를 유지하는 독립 관측 프로세스안과 전체 거래 서비스의 고정 릴리스 이전안을 비교했고, 사용자에게 전자를 권고했다. 아직 선택/상세 정책을 확정하거나 서비스를 설치하지 않았다. 기존 `run_trader.py`를 관측용 두 번째 프로세스로 실행하면 singleton 동작이 기존 거래 프로세스를 중단할 수 있으므로 금지한다.
+
+## 운영 배포·재시작 결과
+
+배포 대상 **`84ec1cc30c06e75d375fbba9a3de69f898295e9f`**는 #72 상태 문서 PR까지 포함한다. 해당 head CI [run35117127260](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/35117127260)는 SUCCESS였고 Terra/medium이 문서3개를 한정 리뷰해 지적0을 확인했다. 실행 소스는 `984dbdf`와 같고 기본 OFF다.
+
+1. 장외·pending 주문/매도0·브로커 정상·clean·sudo 비대화식 가능을 다시 검사했다. 첫 배포는 env-i에서 기본 사용자 Git ignore를 읽지 못해 `.claude/settings.local.json`을 미추적으로 보는 가드에서 종료했다. 이때 HEAD/PID는 그대로였으며 배포 실패 후 rollback이 일어난 것은 아니다.
+2. 정상 환경의 `git check-ignore -v`와 env-i의 차이를 확인하고, 기존 `/home/ubuntu/.config/git/ignore`를 `core.excludesFile`로 그 명령에만 전달했다. 사용자 설정 파일/ignore 파일·전역 Git 설정은 변경하지 않았고 가드를 우회하지 않았다. 자격을 제거한 환경의 clean 판정이 정상 환경과 같아진 것을 확인했다.
+3. `local_deploy.sh`가 운영 체크아웃에서 전체 **1684 passed/2 xfailed(80.05초)**·격리0·문법·비밀정보 검사를 통과한 뒤 재시작했다. pytest 요약 warning1은 기존 pykrx다. 종료 정리 중 기존 임시 Git 디렉터리의 ENOTEMPTY 경고가 추가 발생했으나 검증/배포 exit0이며 원인 미확정이다. 운영 문제로 오인하거나 임시 디렉터리를 광범위하게 삭제하지 않았다.
+4. **2026-09-17 00:47:47 KST, PID3274983**, 서비스 active. 00:48:28 초기 health에서 broker connected, broker/risk pending0, pending sell0, stale0, 연속 실패0을 확인했다. Toss loop는 없다(기본 OFF).
+5. `.env`, default/evolved 설정 및 킬스위치4경로의 사전/사후 지문이 모두 동일하다. 과거 local main에서 대상까지 fast-forward 가능을 검증한 뒤 CAS로 main 포인터를 전진하고 동일 트리로 복귀했다. 구버전 checkout을 거치거나 추가 재시작하지 않았다.
+
+이번 배포는 토스 OAuth 발급·실가격/캘린더 조회·실관측 원장 생성의 증거가 아니다. 사용자 확인으로 약관/발급 소유권 항목은 해소됐지만, 시작 증명과 실제 배치 연결 방식/정책이 남아 활성화하지 않았다. 기존 거래 서비스와 분리한 관측 서비스안을 권고하고 선택을 요청했다. 3영업일 인수와 소비자 승격은 계속 미시작이다.
+
+150초 이후 재확인: **00:50:44 KST** `ops_check.sh` exit0, 동일 PID3274983/active, broker connected, broker/risk pending 및 pending sell0, stale0·연속 실패0. 재기동 시각 이후 HTTP500/EGW00201/EGW00215/토큰 EGW00123·133 모두0이며, 새 PID 로그에서 KIS 연결/엔진 시작 각1·ERROR/Traceback/Unclosed client session0을 확인했다. 5분 주기 장외 동기화의 여러 회차나 다음 장중 상태까지 확인했다는 뜻은 아니다. 배포 기록 문서3개는 Terra/medium이 별도로 사실 대조했으며 실행 코드 변경은 없다.
