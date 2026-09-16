@@ -164,11 +164,19 @@ class AiohttpTransport:
                 timeout = deadline - self._clock()
                 if timeout <= 0:
                     raise TossRequestError("timeout")
-            async with self._session.request(
-                method, ORIGIN + path, params=query, headers={**headers, "Accept-Encoding": "identity"},
-                timeout=aiohttp.ClientTimeout(total=timeout), ssl=True, allow_redirects=False,
-                auto_decompress=False,
-            ) as response:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise TossRequestError("timeout")
+            # aiohttp는 5초 이상 total을 정수초로 올릴 수 있다. 승인 기한은
+            # 연결 대기부터 본문 소비까지 별도의 정확한 timeout으로 제한한다.
+            async with (
+                asyncio.timeout(remaining),
+                self._session.request(
+                    method, ORIGIN + path, params=query, headers={**headers, "Accept-Encoding": "identity"},
+                    timeout=aiohttp.ClientTimeout(total=timeout), ssl=True, allow_redirects=False,
+                    auto_decompress=False,
+                ) as response,
+            ):
                 status, response_headers = response.status, dict(response.headers)
                 if 300 <= status < 400:
                     return HttpResponse(status, response_headers, None)
