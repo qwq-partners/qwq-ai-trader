@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "mode": "offline",
+  "dataset_kind": "synthetic",
+  "spec_version": "1.2.17",
+  "spec_sha256": "791082da4cb379117ed9fdc29a45bd42746f7a1aec368da1e9f4e1f3bfbff5b4",
+  "max_age_seconds": 300,
+  "max_pair_skew_seconds": 2,
+  "min_valid_pairs": 2,
+  "min_coverage": 0.5,
+  "p95_limit_pct": 0.75,
+  "outlier_threshold_pct": 0.5,
+  "max_outlier_fraction": 0.25,
+  "p95_method": "nearest_rank"
+}

@@ -1,6 +1,6 @@
 # 외부 API 연동
 
-> 최종 갱신: 2026-09-15 (토스 설계 Codex 교차 검토)
+> 최종 갱신: 2026-09-16 (토스 Phase 1 오프라인 모듈, 실자료·운영 미배선)
 
 ## 브로커 — KIS (한국투자증권)
 
@@ -49,9 +49,13 @@
 - 시장구분: `CM`=야간(18:00~05:00, 기준가=주간 종가 → prdy_ctrt=밤사이 변동률), `F`=주간
 - 아침 스크리닝 선행지표로 사용 (US 지수보다 우선, kr_scheduler)
 
-## 데이터 — 토스증권 Open API (2026-09-15 설계, **미구현**)
+## 데이터 — 토스증권 Open API (Phase 1 오프라인 모듈, **운영 미배선**)
 
-> [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [Codex 후속 리뷰](../reviews/toss-design-codex-2026-09-15.md) · 상태: 문서 보완, 토스 구현/활성화 미승인
+> [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [구현·검증 원장과 CLI](../reviews/toss-phase1-offline-2026-09-16.md) · 상태: 오프라인 구현·최종 코드 리뷰 승인, UTC/KST1375 passed/2 xfailed. main 미병합·인증 실자료/운영 활성화 미승인
+
+- 구현 위치: `src/data/providers/toss/`의 보안 token store/manager, 조회 client/transport/limiter, 시장 자료 정규화, 합성 shadow 비교. `scripts/replay_toss_shadow.py`는 명시한 합성 JSON 파일만 읽어 stdout 보고서를 만든다.
+- **현재 배선 없음**: 실제 OAuth 발급기는 주입 인터페이스뿐이며 키 로딩·시세 캐시·5분 잡·broker wrapper를 만들지 않았다. 기존 실행 경로·설정/의존성 파일은 무변경. `enabled=False`가 기본이며 `TOSS_API=1` 환경 문자열만으로 활성화되는 코드도 없다.
+- 공개 명세 `1.2.17`/2026-09-16 원본 SHA는 `tests/fixtures/toss/spec_contract.json`에 고정했다. 오프라인 fixture의 한도·시각·비교 임계값은 합성 예시이지 승인된 운영값이 아니다. `production_eligible=False`를 유지한다.
 
 - 용도(예정): **읽기 전용 2차 시세·참조 데이터**. 청산·사이징·포트폴리오 평가/최고가·주문·체결·잔고·계좌·호가는 **전 세션 KIS 단독**. 브로커 전역 폴백 훅 금지; 표시용 wrapper opt-in과 후보/점수 변경 승격을 분리
 - Base `https://openapi.tossinvest.com` · WS `wss://openapi-ws.tossinvest.com/ws/v1` · OpenAPI 3.1 스펙 `/openapi-docs/latest/openapi.json`

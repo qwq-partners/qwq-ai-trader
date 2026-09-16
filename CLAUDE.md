@@ -1,5 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
-> 최종 업데이트: 2026-09-15 (MCP 런타임 제거 PR #63, main `c9923bf` 22:37:08 KST 배포·재시작. 새 PID MCP 경고 0, 주문·설정 유지. 정본 `docs/reviews/mcp-retirement-2026-09-15.md`)
+> 최종 업데이트: 2026-09-16 (토스 Phase 1 오프라인 모듈 구현·코드 리뷰 승인, UTC/KST 각각1375 passed/2 xfailed. 설계 PR #65는 main `a28f12e` 병합 완료, 구현은 PR #67로 제출. 이 문서 갱신은 #67 병합 전 스냅샷이며 이후 상태/merge SHA는 PR 참조. 검증·후속 사전점검 정본 `docs/reviews/toss-phase1-offline-2026-09-16.md`. 기본 OFF·운영 미배선·실자료 관측 미시작. 최근 운영 배포 기록은 MCP 제거 PR #63 `c9923bf`, 09-15 22:37:08 KST이며 이번 작업에서 배포·재시작하지 않음)
 
 ## 세션 시작 시 필수 읽기
 
@@ -44,6 +44,12 @@
 - 비동기(asyncio) 이벤트 기반 아키텍처
 - 단일 포트 8080에서 KR+US 대시보드 통합 서빙
 - 크로스 전략 검증 게이트 + 시장 체제 사전 적응
+
+### 토스 후속 작업 상태 (2026-09-16)
+
+- `src/data/providers/toss/`는 기본 OFF인 오프라인 검증 대상 모듈이다. 실제 키 로딩/OAuth 발급기·5분 잡·시세 캐시·브로커 폴백은 미배선이며, `TOSS_API=1` 문자열만으로 활성화되는 경로도 없다.
+- 합성 입력 전용 `scripts/replay_toss_shadow.py`의 CLI·검증·독립 리뷰 근거는 `docs/reviews/toss-phase1-offline-2026-09-16.md`에 기록한다. 합성 결과는 항상 `production_eligible=False`; 실자료 승인이나 매매 성능 근거가 아니다.
+- 실자료 관측 전에 약관·발급 소유권·시장/수정주가 기준·관측 manifest를 별도로 확정해야 한다. 주문·청산·사이징·계좌·잔고는 계속 KIS 단독이며 기존 설정과 운영 상태는 변경하지 않는다.
 
 ## 프로젝트 경로
 - 소스: `/home/ubuntu/projects/qwq-ai-trader`
