@@ -187,3 +187,50 @@ def test_get_non_json_error_preserves_http_status():
         assert session.requests[0][2]["headers"]["Accept-Encoding"] == "identity"
         await transport.close()
     asyncio.run(run())
+
+
+def test_real_aiohttp_connection_wait_cannot_send_after_approved_deadline(monkeypatch):
+    """aiohttp의 5초 이상 timeout 올림이 짧은 승인 기한을 늘리지 않는다."""
+    import math
+    import time
+
+    import aiohttp
+    from src.data.providers.toss.transport import AiohttpTransport, TossRequestError
+
+    async def run():
+        expiry = math.ceil(time.monotonic()) + 5.1
+        sends = []
+
+        class Protocol:
+            def set_response_params(self, **kwargs):
+                pass
+
+        class Connection:
+            protocol = Protocol()
+
+            def close(self):
+                pass
+
+        async def connect(self, req, *, traces, timeout):
+            await asyncio.sleep(expiry + .08 - time.monotonic())
+            return Connection()
+
+        async def send(self, connection):
+            sends.append(time.monotonic())
+            raise aiohttp.ClientError("synthetic stop before socket send")
+
+        def authorize(*, deadline):
+            return min(deadline, expiry)
+
+        monkeypatch.setattr(aiohttp.TCPConnector, "connect", connect)
+        monkeypatch.setattr(aiohttp.ClientRequest, "send", send)
+        transport = AiohttpTransport(authorize=authorize, body_limits=limits())
+        try:
+            with pytest.raises(TossRequestError) as error:
+                await transport.request("GET", "/api/v1/prices", params={"symbols": "005930"},
+                    headers={"Authorization": "Bearer synthetic-token"}, timeout=30)
+            assert sends == [], "승인 기한 후 실제 aiohttp send 경계에 도달했다"
+            assert error.value.code == "timeout"
+        finally:
+            await transport.close()
+    asyncio.run(run())
