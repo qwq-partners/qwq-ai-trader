@@ -1,4 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
+> 2026-09-17 관측 서비스 후속: 사용자가 **기존 거래 봇 유지·별도 Toss 서비스 ON·단일 발급 주체·추가 KIS 조회0·주문 무영향** 방식을 선택했다. 구체 설계는 `docs/superpowers/specs/2026-09-17-toss-observer-service-design.md`이며 **상세 설계 확인 전, 구현/설치/ON 미실행**이다. 첫 제안은 보유 종목만 관측하며 시각/시장 근거 없는 KIS 가격 비교는 제외한다. 기존 거래 봇 재시작/설정 변경은 하지 않는다.
 > 2026-09-17 후속: PR #70/#68/#72 병합 후 **main `84ec1cc` 00:47:47 KST 배포·재시작(PID3274983)**. 운영 verify1684 passed/2 known xfailed·설정/킬스위치7경로 지문 동일. Toss는 기본 OFF·실관측 미시작이며 실제 launcher/관측 서비스 연결 방식 확인이 남았다. 현황 정본 `docs/reviews/toss-pr-integration-2026-09-17.md`.
 > 최종 업데이트: 2026-09-16 (Toss 승인 기반 관측 런타임 source `984dbdf`, UTC/KST 각각1684 passed/2 known xfailed·독립 소스 리뷰 승인. PR #70 Draft, #68 보류. 검증 정본 `docs/reviews/toss-runtime-2026-09-16.md`. 기본 OFF·실관측 미시작; main/운영·배포/재시작·주문/설정 무변경. 과거 운영 배포 기록은 아래 이력이며 이번에 실행 PID/SHA를 조회하지 않음)
 
