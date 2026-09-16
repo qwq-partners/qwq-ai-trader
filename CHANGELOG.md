@@ -7,6 +7,7 @@
 - KR 스케줄러는 선택적 task 생성과 마지막 성공 후보의 동기 복사만 연결한다. OFF는 승인 파일·worker·잡·키 접근 0, ON도 유효 승인/시작 증명 없으면 실행 거부. 추가 KIS HTTP 0, 기존 주문/청산/사이징·일봉 live·점수/표시 fallback은 미변경이다.
 - `auth_max_issues`는 worker 수명당 POST 상한(재시작 합산 아님), bootstrap만 durable 1회다. 관측 성공과 가격 비교는 별도이며 시각/시장 기준 결측은 insufficient; `production_eligible=False` 유지.
 - 검증·리뷰 SHA/인수 근거·잔여 한계 정본: `docs/reviews/toss-runtime-2026-09-16.md`. 기존 #68은 보류, #70에서 통합하며 main 병합·SSH·배포/재시작·주문/설정 변경은 하지 않는다.
+- 최종 source `984dbdf`: UTC/KST 각각 **1684 passed / 2 known xfailed / 1 기존 warning**, 격리0·문법/비밀정보 검사 통과. 독립 통합 리뷰 P1 client 자격 바인딩·P2 동적 OFF 종료 진단까지 재현 수정·재리뷰 승인(잔여 P0/P1/P2 0). 실제 API 인수가 아닌 합성 HTTP 검증이며 launcher/운영 승인 설치·실자료 최소 영업일 검증은 미실시다.
 
 ## 2026-09-16 — docs(T12): PR #68 보류·Codex 인계와 승인 기반 관측 런타임 설계
 

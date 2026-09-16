@@ -54,7 +54,7 @@
 > [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [오프라인 기반 검증 원장](../reviews/toss-phase1-offline-2026-09-16.md) · [관측 실행 경계](../operations/toss-shadow-runtime.md). #67 main 병합 완료; PR #70에서 기본 OFF 승인 관측 후속을 Plan→Do→See로 구현/검증한다. 인증 실자료/운영 활성화 미승인.
 
 - 구현 위치: `src/data/providers/toss/`의 보안 token store/manager, 조회 client/transport/limiter, 시장 자료 정규화, 합성 shadow 비교. `scripts/replay_toss_shadow.py`는 명시한 합성 JSON 파일만 읽어 stdout 보고서를 만든다.
-- **관측 전용 후속**: 승인된 lazy OAuth/GET·bounded body·별도 thread·지속 원장·가격/캘린더 감독 배선을 추가한다. 기본 OFF이며 flag만으로 활성화하지 않는다. 운영자 소유 등록부·계획/릴리스 바인딩·시작 시점 증명은 별도 배치 사전조건이다. 실제 키 로딩/토큰/자료 수집·배포는 수행하지 않았으며 기존 KIS 소비자·설정/의존성은 무변경이다.
+- **관측 전용 후속**: 승인된 lazy OAuth/GET·bounded body·별도 thread·지속 원장·가격/캘린더 감독 배선의 오프라인 구현/독립 소스 리뷰를 완료했다. source `984dbdf`, UTC/KST 각각1684 passed/2 known xfailed; [검증 정본](../reviews/toss-runtime-2026-09-16.md). 기본 OFF이며 flag만으로 활성화하지 않는다. 운영자 소유 등록부·계획/릴리스 바인딩·시작 시점 증명은 별도 배치 사전조건이다. 실제 키 로딩/토큰/자료 수집·배포는 수행하지 않았으며 기존 KIS 소비자·설정/의존성은 무변경이다.
 - 공개 명세 `1.2.17`/2026-09-16 원본 SHA는 `tests/fixtures/toss/spec_contract.json`에 고정했다. 오프라인 fixture의 한도·시각·비교 임계값은 합성 예시이지 승인된 운영값이 아니다. `production_eligible=False`를 유지한다.
 
 - 용도(예정): **읽기 전용 2차 시세·참조 데이터**. 청산·사이징·포트폴리오 평가/최고가·주문·체결·잔고·계좌·호가는 **전 세션 KIS 단독**. 브로커 전역 폴백 훅 금지; 표시용 wrapper opt-in과 후보/점수 변경 승격을 분리

@@ -1,6 +1,6 @@
 # Toss 승인 기반 관측 런타임 — Plan / Do / See
 
-상태: 오프라인 구현 통합·최종 리뷰 진행 중. 실관측·배포·재시작 없음. 완료 SHA와 최종 검증은 아래 최종 절에서만 판정한다.
+상태: 오프라인 구현·통합 검증·독립 소스 리뷰 완료. 실관측·배포·재시작 없음. 검증된 소스 SHA와 범위는 아래 최종 절이 정본이다.
 
 ## Plan — 범위와 기준
 
@@ -44,7 +44,7 @@
 | ID | 로컬 근거 | 한계/별도 인수 |
 |---|---|---|
 | R01 | live_authority, runtime, runtime_factory, shadow_scheduler | 실제 launcher/승인 등록부 설치 미실시 |
-| R02 | authorized_tokens, token_state_machine, runtime | 다른 호스트 발급 중지는 로컬 lock으로 강제하지 못함 |
+| R02 | authorized_tokens, token_contract, runtime | 다른 호스트 발급 중지는 로컬 lock으로 강제하지 못함 |
 | R03 | oauth, http_body, client_boundary | 실제 자격/토큰·공급자 송신 미실시 |
 | R04 | 기존 request budget/rate/client 회귀 + observation 청크 | 운영 한도/429 관측 미실시 |
 | R05 | observation 비교·Fraction·시각/상태/시장 검증 | 현 캐시 비교 0건은 정상 insufficient일 수 있음 |
@@ -66,4 +66,13 @@
 
 ## 최종 검증·인계
 
-통합 source SHA·UTC/KST 전체 verify·비밀정보 검사·독립 최종 리뷰·PR CI를 확인한 뒤 이 절을 확정한다. 아직 이 문서의 진행 기록만으로 전체 완료를 선언하지 않는다.
+검증된 소스: **`984dbdf4504d33cec590fbe6e963323a4314b6f5`**. 이후 문서 인계 커밋과 구분한다. 주요 통합 이력은 HTTP `d834cb9/9469dc4`, authority `bc1011f/5009c4e`, 예산 `61ab705`, 원장 `86dbab4/f3fbc38/ba75399`, worker/배선 `984dbdf`다.
+
+- clean-env `scripts/dev/verify.sh`: **UTC 1684 passed / 2 xfailed / 1 warning (65.51초)**, **KST 동일 수치 (64.21초)**. 두 실행 모두 문법·비밀정보 패턴 검사 통과, 외부/운영 접근 0.
+- 기준선 `9624559` 1379 passed 대비 305건 증가. 기존 xfail 2건은 손절 수수료 기준·익절 접촉 백테스트 parity 차이이며 이번 Toss 작업에서 해소했다고 주장하지 않는다. warning은 기존 pykrx deprecation이다.
+- 독립 통합 리뷰: Astra/xhigh, 구현자와 분리. Task2 연결 127건, 최종 runtime/factory/실모듈 E2E/scheduler/돈 경로 **UTC/KST 각각 55건** 독립 통과. client 불일치 POST 0 및 OFF로 실제 worker 초기화가 중단되는 경로를 재현해 수정 후 승인, 잔여 P0/P1/P2 0.
+- 검토 고정 해시(SHA256): factory `ad6b74593c2d99ba5b2602a92b7dcdba60fb866014371218fd0976b05eb12628`; supervisor `b5e22fb7e7284500f95caf0ebd568c974a90a54c1d4d3bc44e577ca993274eb0`; heartbeat `8ac306ea7ffc4f15811e88078906f8df777569d6f8475b735309010b325880a5`; worker `8fa72e56a358e1911cb3e7e875350045c4afe04347f24c24a173859ca58744d8`.
+- 기존 synthetic fixture 3개 및 `src/core`, `src/execution/broker`, 설정/의존성 파일은 main 기준 무변경. main worktree도 clean으로 확인했다. #68 head/state는 기존 SHA·OPEN 그대로다.
+- PR #70은 Draft로 유지한다. source `984dbdf`의 [GitHub verify](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/35109894762)는 SUCCESS로 확인했다. 로컬 검증과 별도이며 후속 문서 head의 CI도 PR에서 확인한다. 이 보고서로 main 병합이나 실관측 활성화를 승인하지 않는다.
+
+실관측 전 별도 작업: 운영자 grant/약관·저장/자격 소유권 승인, immutable release/launcher attestation 배치, 승인 기간/정책, 실제 자료 최소 영업일 검증. KIS 시각/시장 기준 보강과 모든 주문 경로의 확장 동적 fault matrix, 일봉 live 및 소비자 승격은 아직 수행하지 않았다. 운영 토큰·설정·주문·SSH·배포/재시작은 이번 작업에서 0이다.

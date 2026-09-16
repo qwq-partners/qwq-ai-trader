@@ -217,7 +217,9 @@ assert 'client_secret' not in repr(credentials)
 - [x] Test matrix R01–R14 including actual forbidden paths flags×KISfail invariance; old synthetic fixture/hash/APIunchanged.
   - 실행 범위: 실제 REST→ExitManager의 OFF/ON×KIS 성공/실패 지문 및 sync/fill/exit 정적 경계. 모든 broker/order 호출부의 동적 fault matrix까지 확장한 것으로 주장하지 않는다. 세부 근거/한계는 런타임 리뷰 보고서의 R01–R14 표에 보존한다.
 - [x] See: task-scoped independent review, fix and re-review; integrated high-stakes reviewer separate from all implementers. Build acceptance table mapping each R to test or explicit gap; no unsupported completion claim.
-- [ ] Run clean-env targeted tests and full verify UTC/KST, secret scan, gitdiffcheck. Update docs/schema/operator-only activation and stopping_unconfirmed recovery procedure, SHA/file-based external review prompt. Commit/push namedfiles, update DraftPR70 and inspectCI. Do not merge/deploy automatically.
+- [x] Run clean-env targeted tests and full verify UTC/KST, secret scan, gitdiffcheck. Update docs/schema/operator-only activation and stopping_unconfirmed recovery procedure, SHA/file-based external review prompt. Commit/push namedfiles, update DraftPR70 and inspectCI. Do not merge/deploy automatically.
+
+최종 근거: source `984dbdf4504d33cec590fbe6e963323a4314b6f5`, UTC/KST 각각1684 passed/2 known xfailed, 격리0·문법/비밀정보 검사·독립 소스 리뷰 승인. source verify CI run35109894762 SUCCESS. 후속 문서는 코드와 별도 커밋이며 최종 head CI를 PR에서 확인한다. 정확한 인수 범위와 남은 실관측/확장 테스트는 `docs/reviews/toss-runtime-2026-09-16.md` 참조.
 
 ## Verification commands
 

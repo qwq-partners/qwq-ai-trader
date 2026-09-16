@@ -34,6 +34,7 @@
 
 ### Reviews (리뷰)
 - [toss-runtime-2026-09-16.md](reviews/toss-runtime-2026-09-16.md) — 승인 기반 관측 런타임 Plan→Do→See·독립 리뷰·인수 근거/한계·운영 미활성화
+- [Toss 런타임 교차 리뷰 프롬프트](reviews/prompts/toss-runtime-review-2026-09-16.md) — source `984dbdf`·main 기준 SHA·재현 범위를 고정한 외부 리뷰 인계문
 - [toss-phase1-handoff-2026-09-16.md](reviews/toss-phase1-handoff-2026-09-16.md) — PR #68 중복 구현 교차 리뷰·보류·Codex 인계 당시 기록; 후속 구현은 위 런타임 보고서
 - [toss-phase1-offline-2026-09-16.md](reviews/toss-phase1-offline-2026-09-16.md) — 토스 Phase 1 오프라인 구현 PR #67·최종 코드 리뷰·검증 원장·합성 CLI·실수집 전 사전점검(기본 OFF·운영 미배선·실자료 승격 아님)
 - [toss-design-codex-2026-09-15.md](reviews/toss-design-codex-2026-09-15.md) — 토스 설계 `85a4266` 교차 리뷰·14개 보완 당시 기록(문서만); 후속 오프라인 구현 상태는 위 원장 참조
