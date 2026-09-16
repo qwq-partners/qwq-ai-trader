@@ -321,6 +321,8 @@ OPENAI_API_KEY, GEMINI_API_KEY
 MANUS_API_KEY (미사용 — 2026-08-19 구독 해지, manus.enabled=false)
 TEAM_ASSESSMENT_V2 (기본 1 — 팀 심의 shadow 판단 v2·원장 기록; 0 이면 미계산. 돈 경로 무영향, 2026-09-15 T11)
 ENTRY_PLAN_SHADOW (기본 1 — 주문 직전 EntryPlan shadow 검증 기록만; 0 이면 미호출. 허용/차단 없음, 2026-09-15 T11)
+TOSS_API (기본 1 — 토스증권 KIS↔토스 대조 기록 태스크; 0 이면 미생성·전 경로 비활성. 소비자 무연결, 2026-09-16 T12 Phase 1)
+TOSS_CLIENT_ID, TOSS_CLIENT_SECRET (토스증권 Open API. 토큰은 클라이언트당 1개 — 봇 외 발급 금지, 캐시 ~/.cache/ai_trader/toss_token.json)
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 INITIAL_CAPITAL (KR, 기본 500000)
 ```

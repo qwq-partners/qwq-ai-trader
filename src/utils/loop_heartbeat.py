@@ -32,6 +32,7 @@ PERIODS: Dict[str, int] = {
     "kr_rest_price_feed": 20,
     "kr_market_trend": 120,
     "kr_dart_alert": 600,
+    "kr_toss_parity": 300,        # T12 Phase 1 — KIS↔토스 대조 기록, 5분 주기
 }
 # 일 1회 잡의 예정 시각(시, 분) — 각 스케줄러 루프 내부의 실행 시각 조건과 동일 출처로
 # 취급한다(하드코딩 중복 방지 목적의 단일 정의점). 실행측(`kr_scheduler.py`)도 이 값을 참조한다.

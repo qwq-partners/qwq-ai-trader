@@ -49,9 +49,9 @@
 - 시장구분: `CM`=야간(18:00~05:00, 기준가=주간 종가 → prdy_ctrt=밤사이 변동률), `F`=주간
 - 아침 스크리닝 선행지표로 사용 (US 지수보다 우선, kr_scheduler)
 
-## 데이터 — 토스증권 Open API (2026-09-15 설계, **미구현**)
+## 데이터 — 토스증권 Open API (2026-09-15 설계 → 09-16 **Phase 1 구현·기록 전용**)
 
-> 설계서 `docs/superpowers/plans/2026-09-15-toss-securities-fallback.md` · 상태: 승인 대기, 코드 없음
+> 설계서 `docs/superpowers/plans/2026-09-15-toss-securities-fallback.md` · 상태: **Phase 1** — 인프라(`src/data/providers/toss/`)와 KIS↔토스 대조 원장(`src/analytics/toss_parity.py`, `~/.cache/ai_trader/toss_parity/`)만. **어떤 소비자도 토스 값을 쓰지 않는다.** 플래그 `TOSS_API`(기본 1, 0 이면 태스크 미생성·전 경로 비활성)
 
 - 용도(예정): **읽기 전용 2차 시세·참조 데이터**. 주문·체결·잔고·계좌는 **KIS 단독 유지**
 - Base `https://openapi.tossinvest.com` · WS `wss://openapi-ws.tossinvest.com/ws/v1` · OpenAPI 3.1 스펙 `/openapi-docs/latest/openapi.json`
