@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-16 — docs: 토스 오프라인 PR 통합·실수집 전 사전점검
+
+- 사용자 요청에 따라 설계 PR #65·구현 PR #67 통합을 진행한다. 별도 PR #66의 관측 기록을 모두 보존하며 main과 동기화했다. 병합 상태/merge SHA는 각 PR에서 확인한다.
+- 새 로컬 검증은 구현1375 passed/2 xfailed, 설계 동기화1019 passed/2 xfailed·각 기존 warning1, 격리0·비밀정보 검사 통과. 기존 소스의 독립 리뷰 승인과 새 CI 검증을 구분한다.
+- 병렬 사전점검으로 승인 bool/합성 manifest의 실자료 권한 한계, KIS 관측시각 미제공, 프로세스별 한도, live 원장 재시작 계약 공백을 기록했다. 엔진 내부 독립 저우선 작업을 권고 후보로 두며 설계 승인 전 새 구현을 시작하지 않는다.
+- 기본 OFF·운영 미배선·실자료 관측 미시작. 토큰 발급·인증 API·주문/설정·배포/재시작 없음. 정본은 `docs/reviews/toss-phase1-offline-2026-09-16.md`의 PR 통합·사전점검 절이다.
+
 ## 2026-09-16 — feat: 토스 Phase 1 오프라인 기반 (기본 OFF, 운영 미배선)
 
 - 검토된 설계 PR #65 `2235586` 위 별도 feature 브랜치에서 보안 토큰 저장/상태 머신, 정확한 GET 3경로 조회 client/transport, 공유 deadline·retry/page 예산, 시세/일봉 정규화와 합성 shadow CLI를 구현한다. 실제 OAuth 발급기는 주입 인터페이스뿐이며 기존 broker/core/schedulers·설정·의존성 파일은 바꾸지 않는다.

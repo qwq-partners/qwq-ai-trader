@@ -1,5 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
-> 최종 업데이트: 2026-09-16 (토스 Phase 1 오프라인 모듈 구현·코드 리뷰 승인, UTC/KST 각각1375 passed/2 xfailed. 기본 OFF·운영 미배선·main 미병합. 정본 `docs/reviews/toss-phase1-offline-2026-09-16.md`. 최근 운영 배포 기록은 MCP 제거 PR #63 `c9923bf`, 09-15 22:37:08 KST이며 이번 작업에서 배포·재시작하지 않음)
+> 최종 업데이트: 2026-09-16 (토스 Phase 1 오프라인 모듈 구현·코드 리뷰 승인, UTC/KST 각각1375 passed/2 xfailed. 사용자 승인으로 설계 PR #65·구현 PR #67 통합 진행; 병합 상태는 각 PR, 검증·후속 사전점검은 `docs/reviews/toss-phase1-offline-2026-09-16.md` 참조. 기본 OFF·운영 미배선·실자료 관측 미시작. 최근 운영 배포 기록은 MCP 제거 PR #63 `c9923bf`, 09-15 22:37:08 KST이며 이번 작업에서 배포·재시작하지 않음)
 
 ## 세션 시작 시 필수 읽기
 
