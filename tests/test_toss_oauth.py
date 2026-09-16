@@ -271,3 +271,22 @@ def test_missing_library_retry_control_cannot_send_even_on_second_call():
         await issuer.close()
     asyncio.run(run())
     assert session.requests == []
+
+
+def test_issue_budget_probe_is_pure_and_false_after_possible_post_or_close():
+    calls = []
+    issuer, session = make(loader=lambda: calls.append("credentials"))
+    assert issuer.can_issue() is True
+    assert calls == [] and session.requests == []
+    asyncio.run(issuer.close())
+    assert issuer.can_issue() is False
+    assert calls == [] and session.requests == []
+    issuer, session = make(session=Session(failure=TimeoutError("synthetic-failure")))
+    async def scenario():
+        assert issuer.can_issue() is True
+        with pytest.raises(api().TossRequestError):
+            await issuer.issue(operation="renewal", deadline=10)
+        assert issuer.can_issue() is False
+        await issuer.close()
+    asyncio.run(scenario())
+    assert len(session.requests) == 1

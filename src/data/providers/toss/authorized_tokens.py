@@ -86,14 +86,50 @@ class _QueryOnlyTokenManager(TokenManager):
         self._manager._seen_generation = value
 
 
+def _budget_available(can_issue):
+    if can_issue is None:
+        return True
+    try:
+        return can_issue() is True
+    except Exception:
+        return False
+
+
+class _BudgetedTokenManager(_QueryOnlyTokenManager):
+    """issuer lock 안의 역할 검사에 현재 worker 발급 예산을 결합한다."""
+
+    def __init__(self, manager, can_issue):
+        super().__init__(manager)
+        self._can_issue = can_issue
+
+    @property
+    def role(self):
+        return self._manager.role if _budget_available(self._can_issue) else "reader"
+
+    @property
+    def issuer(self):
+        return self._manager.issuer
+
+    async def _issue(self, generation, deadline):
+        # 원 TokenManager._issue의 intent 저장보다 먼저 거부한다. 이 검사 뒤
+        # 실제 POST 가능성이 생긴 실패는 기존 unknown 처리를 그대로 따른다.
+        if not _budget_available(self._can_issue):
+            raise TokenError("auth_unavailable")
+        return await super()._issue(generation, deadline)
+
+
 class AuthorizedTokenProvider:
-    def __init__(self, manager, authority):
+    def __init__(self, manager, authority, *, can_issue=None):
         self.manager, self.authority = manager, authority
         if (manager.role != authority.grant.role
                 or manager.store.client_identity != authority.grant.client_identity
                 or str(manager.store.directory) != authority.grant.token_directory):
             raise ApprovalError("approval_denied")
-        self._query_manager = manager if authority.grant.capabilities["renewal"] else _QueryOnlyTokenManager(manager)
+        if can_issue is not None and not callable(can_issue):
+            raise ApprovalError("approval_denied")
+        self._can_issue = can_issue
+        self._issuance_manager = manager if can_issue is None else _BudgetedTokenManager(manager, can_issue)
+        self._query_manager = self._issuance_manager if authority.grant.capabilities["renewal"] else _QueryOnlyTokenManager(manager)
 
     async def _call(self, operation, action, *, deadline):
         bounded = self.authority.require("query", deadline=deadline)
@@ -123,14 +159,18 @@ class AuthorizedTokenProvider:
 
     async def bootstrap(self, *, deadline):
         bounded = self.authority.require("bootstrap", deadline=deadline)
+        if not _budget_available(self._can_issue):
+            raise TokenError("auth_unavailable")
         store = self.manager.store
         # 같은 issuer lock에서 먼저 권한을 영속 소진한다. bootstrap()은 자신의
         # lock을 획득하므로 이 블록 밖에서 호출하여 재귀 flock을 피한다.
         async with store.lock(deadline=bounded, clock=self.manager.clock):
             bounded = self.authority.require("bootstrap", deadline=bounded)
+            if not _budget_available(self._can_issue):
+                raise TokenError("auth_unavailable")
             if not store._publish_immutable("toss_bootstrap_used.json", {
                     "schema_version": 1, "authority_hash": self.authority.authority_hash,
                     "grant_id": self.authority.grant.grant_id}):
                 store._sync_existing("toss_bootstrap_used.json")
                 raise TokenError("approval_required")
-        return await self._call("bootstrap", lambda current: self.manager.bootstrap(approved=True, deadline=current), deadline=bounded)
+        return await self._call("bootstrap", lambda current: self._issuance_manager.bootstrap(approved=True, deadline=current), deadline=bounded)

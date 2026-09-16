@@ -52,6 +52,10 @@ class OAuthIssuer:
         self._session = self._credentials = self._closing = None
         self._closed, self._issues = False, 0
 
+    def can_issue(self):
+        """이 worker 수명의 남은 발급 예산. I/O·예약·승인 검사는 하지 않는다."""
+        return not self._closed and self._issues < self._max_issues
+
     def _check(self, deadline):
         if type(deadline) not in (int, float) or not math.isfinite(deadline):
             raise TossRequestError("timeout")

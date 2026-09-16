@@ -303,3 +303,120 @@ def test_query_only_view_shares_bootstrap_failure_block(tmp_path, monkeypatch):
     with pytest.raises(TokenError, match="issuance_unknown"):
         asyncio.run(provider.get_token(deadline=130))
     assert store.load_state()["kind"] == "issuance_unknown"
+
+
+def oauth_budget_setup(tmp_path, monkeypatch, *, failure=None):
+    from src.data.providers.toss.oauth import OAuthIssuer, Credentials
+    from test_toss_oauth import Session
+    from test_toss_http_body import Response, limits
+    approval, kwargs, grant, stamp, ticks = authority_fixture(tmp_path, monkeypatch)
+    grant["expires_at"] = (stamp[0] + timedelta(days=1)).isoformat()
+    kwargs["registry_path"].write_bytes(raw(dict(schema_version=1, grants=[grant])))
+    authority = approval.load_authority(**kwargs)
+    session = Session(Response(b'{"access_token":"synthetic-budget-token","token_type":"Bearer","expires_in":120}'), failure=failure)
+    oauth = OAuthIssuer(credential_loader=lambda: Credentials("synthetic-id", "synthetic-secret"),
+        authorize=authority.require, limits=limits(), max_issues=1,
+        session_factory=lambda: session, clock=lambda: ticks[0])
+    mod = importlib.import_module("src.data.providers.toss.authorized_tokens")
+    store = SecureTokenStore(tmp_path / "tokens", "synthetic-client")
+    manager = TokenManager(store, role="issuer", issuer=mod.make_authorized_issuer(authority, oauth.issue),
+        enabled=True, clock=lambda: ticks[0], now=lambda: stamp[0])
+    provider = mod.AuthorizedTokenProvider(manager, authority, can_issue=oauth.can_issue)
+    return oauth, session, store, provider, stamp, ticks
+
+
+def test_spent_oauth_budget_keeps_valid_due_cache_ready(tmp_path, monkeypatch):
+    oauth, session, store, provider, stamp, _ = oauth_budget_setup(tmp_path, monkeypatch)
+    save_old(store, stamp)
+    async def scenario():
+        assert await provider.get_token(deadline=130) == "synthetic-budget-token"
+        ready = (store.directory / "toss_auth_state.json").read_bytes()
+        stamp[0] += timedelta(seconds=61)
+        assert await provider.get_token(deadline=130) == "synthetic-budget-token"
+        assert (store.directory / "toss_auth_state.json").read_bytes() == ready
+        assert store.load().generation == 2
+        await oauth.close()
+    asyncio.run(scenario())
+    assert len(session.requests) == 1
+
+
+@pytest.mark.parametrize("action", ["get", "recover", "bootstrap"])
+def test_spent_oauth_budget_denies_without_unknown_or_bootstrap_marker(tmp_path, monkeypatch, action):
+    oauth, session, store, provider, stamp, _ = oauth_budget_setup(tmp_path, monkeypatch)
+    save_old(store, stamp)
+    async def scenario():
+        await provider.get_token(deadline=130)
+        ready = (store.directory / "toss_auth_state.json").read_bytes()
+        stamp[0] += timedelta(seconds=121)
+        with pytest.raises(TokenError):
+            if action == "get":
+                await provider.get_token(deadline=130)
+            elif action == "recover":
+                await provider.recover("expired-token", "synthetic-budget-token", deadline=130)
+            else:
+                await provider.bootstrap(deadline=130)
+        assert (store.directory / "toss_auth_state.json").read_bytes() == ready
+        assert not (store.directory / "toss_bootstrap_used.json").exists()
+        await oauth.close()
+    asyncio.run(scenario())
+    assert len(session.requests) == 1
+
+
+def test_oauth_budget_is_rechecked_after_waiting_for_issuer_lock(tmp_path, monkeypatch):
+    oauth, session, store, provider, stamp, ticks = oauth_budget_setup(tmp_path, monkeypatch)
+    save_old(store, stamp)
+    async def scenario():
+        async with store.lock(deadline=130, clock=lambda: ticks[0]):
+            waiting = asyncio.create_task(provider.get_token(deadline=130))
+            await asyncio.sleep(0)
+            # 동일 worker의 다른 허용 발급이 마지막 슬롯을 소비한 상황을 재현.
+            await oauth.issue(operation="renewal", deadline=130)
+        assert await waiting == "synthetic-old"
+        assert store.load_state() is None
+        await oauth.close()
+    asyncio.run(scenario())
+    assert len(session.requests) == 1
+
+
+def test_possible_post_failure_keeps_unknown_with_budget_guard(tmp_path, monkeypatch):
+    oauth, session, store, provider, stamp, _ = oauth_budget_setup(tmp_path, monkeypatch,
+        failure=TimeoutError("synthetic-failure"))
+    save_old(store, stamp)
+    async def scenario():
+        with pytest.raises(TokenError, match="issuance_unknown"):
+            await provider.get_token(deadline=130)
+        with pytest.raises(TokenError, match="issuance_unknown"):
+            await provider.get_token(deadline=130)
+        assert store.load_state()["kind"] == "issuance_unknown"
+        await oauth.close()
+    asyncio.run(scenario())
+    assert len(session.requests) == 1
+
+
+def test_exhausted_bootstrap_budget_does_not_create_store(tmp_path, monkeypatch):
+    oauth, session, store, provider, _, _ = oauth_budget_setup(tmp_path, monkeypatch)
+    async def scenario():
+        await oauth.issue(operation="renewal", deadline=130)
+        with pytest.raises(TokenError):
+            await provider.bootstrap(deadline=130)
+        assert not store.directory.exists()
+        await oauth.close()
+    asyncio.run(scenario())
+    assert len(session.requests) == 1
+
+
+def test_budget_guard_does_not_bypass_stop_or_revocation_safety(tmp_path, monkeypatch):
+    from src.data.providers.toss.approval import ApprovalError
+    oauth, session, store, provider, stamp, _ = oauth_budget_setup(tmp_path, monkeypatch)
+    save_old(store, stamp)
+    async def scenario():
+        await provider.get_token(deadline=130)
+        provider.authority.stop()
+        with pytest.raises(ApprovalError):
+            await provider.get_token(deadline=130)
+        with pytest.raises(ApprovalError):
+            await provider.recover("token-revoked", "synthetic-budget-token", deadline=130)
+        assert {item["generation"] for item in store.load_revocations().values()} == {2}
+        await oauth.close()
+    asyncio.run(scenario())
+    assert len(session.requests) == 1
