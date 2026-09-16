@@ -370,6 +370,17 @@ class KRScheduler:
                 self.run_expert_briefing(), name="kr_expert_briefing"
             ))
 
+        # Optional observation only. OFF does not instantiate/register anything.
+        # No deployment trust object is supplied by default or derived from env.
+        if os.environ.get("TOSS_API", "0") not in {"0", ""}:
+            try:
+                from .toss_shadow import attach_shadow
+                observer_task = attach_shadow(bot)
+                if observer_task is not None:
+                    tasks.append(observer_task)
+            except Exception:
+                logger.warning("[Toss shadow] 초기화 불가 — 기존 KR 태스크는 유지")
+
         return tasks
 
     # ============================================================
@@ -3427,6 +3438,13 @@ JSON:
                     # 스크리닝 시각 — 팀 심의가 지표 신선도를 판단하는 데 쓴다
                     bot._last_screened_at = datetime.now()
                     _hb.record_success("kr_screener")
+                    observer = getattr(bot, "_toss_shadow_supervisor", None)
+                    if observer is not None:
+                        try:
+                            observer.publish_candidates(screened)
+                        except Exception:
+                            # Observation failure must not reclassify screening.
+                            logger.warning("[Toss shadow] 후보 snapshot 복사 실패")
 
                 except Exception as e:
                     logger.warning(f"스크리닝 오류: {e}", exc_info=True)

@@ -1,5 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
-> 최종 업데이트: 2026-09-16 (토스 Phase 1 오프라인 모듈 구현·코드 리뷰 승인, UTC/KST 각각1375 passed/2 xfailed. 설계 PR #65는 main `a28f12e` 병합 완료, 구현은 PR #67로 제출. 이 문서 갱신은 #67 병합 전 스냅샷이며 이후 상태/merge SHA는 PR 참조. 검증·후속 사전점검 정본 `docs/reviews/toss-phase1-offline-2026-09-16.md`. 기본 OFF·운영 미배선·실자료 관측 미시작. 최근 운영 배포 기록은 MCP 제거 PR #63 `c9923bf`, 09-15 22:37:08 KST이며 이번 작업에서 배포·재시작하지 않음)
+> 최종 업데이트: 2026-09-16 (Toss 승인 기반 관측 런타임 source `984dbdf`, UTC/KST 각각1684 passed/2 known xfailed·독립 소스 리뷰 승인. PR #70 Draft, #68 보류. 검증 정본 `docs/reviews/toss-runtime-2026-09-16.md`. 기본 OFF·실관측 미시작; main/운영·배포/재시작·주문/설정 무변경. 과거 운영 배포 기록은 아래 이력이며 이번에 실행 PID/SHA를 조회하지 않음)
 
 ## 세션 시작 시 필수 읽기
 
@@ -47,7 +47,8 @@
 
 ### 토스 후속 작업 상태 (2026-09-16)
 
-- `src/data/providers/toss/`는 기본 OFF인 오프라인 검증 대상 모듈이다. 실제 키 로딩/OAuth 발급기·5분 잡·시세 캐시·브로커 폴백은 미배선이며, `TOSS_API=1` 문자열만으로 활성화되는 경로도 없다.
+- **최신 인계:** #67은 main `8c159d0`에 병합됐다. #69/#71까지 main `a3187a8` 기준 feature/PR #70의 **Plan→Do→See 오프라인 구현·통합/독립 소스 리뷰 완료**(source `984dbdf`, 검증 정본 `docs/reviews/toss-runtime-2026-09-16.md`). 중복 PR #68 `0b978e0`는 보류 유지(임의 병합/리베이스/닫기 금지). 설계 `docs/superpowers/specs/2026-09-16-toss-runtime-shadow-design.md`, 실행 계획 `docs/superpowers/plans/2026-09-16-toss-runtime-shadow.md`, 배치 경계 `docs/operations/toss-shadow-runtime.md` 참조.
+- `src/data/providers/toss/`는 기본 OFF다. 승인/발급 context·실 OAuth 어댑터·bounded GET/POST·원장·격리 worker·5분 현재가/별도 캘린더 관측을 오프라인 구현/검증했다. **운영 배포/실관측 미시작**이며 승인 등록부·plan·신뢰된 시작 시점 attestation 없이는 `TOSS_API=1`도 실행 거부다. broker fallback·일봉 live·후보 점수·돈 경로 변경은 미포함이다. grant `client_identity`는 정확한 OAuth client_id이며 발급 예산은 worker 수명당 상한이다.
 - 합성 입력 전용 `scripts/replay_toss_shadow.py`의 CLI·검증·독립 리뷰 근거는 `docs/reviews/toss-phase1-offline-2026-09-16.md`에 기록한다. 합성 결과는 항상 `production_eligible=False`; 실자료 승인이나 매매 성능 근거가 아니다.
 - 실자료 관측 전에 약관·발급 소유권·시장/수정주가 기준·관측 manifest를 별도로 확정해야 한다. 주문·청산·사이징·계좌·잔고는 계속 KIS 단독이며 기존 설정과 운영 상태는 변경하지 않는다.
 

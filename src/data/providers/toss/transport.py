@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
 import aiohttp
+
+from .http_body import BodyError, BodyLimits, read_json_bounded
 
 
 ORIGIN = "https://openapi.tossinvest.com"
@@ -113,8 +116,14 @@ async def _await_cleanup(task):
 class AiohttpTransport:
     """세션은 첫 승인 조회에서 생성한다. factory는 오프라인 검증용 주입점이다."""
 
-    def __init__(self, *, session_factory=None):
+    def __init__(self, *, session_factory=None, body_limits=None, authorize=None,
+                 clock=time.monotonic):
         self._factory = session_factory
+        self._body_limits = body_limits if body_limits is not None else BodyLimits(
+            1024 * 1024, 32, 100_000, 65536, 1)
+        if not isinstance(self._body_limits, BodyLimits) or (authorize is not None and not callable(authorize)):
+            raise TossRequestError("invalid_request")
+        self._authorize, self._clock = authorize, clock
         self._session = None
         self._closed = False
         self._closing = None
@@ -131,10 +140,12 @@ class AiohttpTransport:
             raise TossRequestError("closed")
         # aiohttp는 bool query를 지원하지 않으므로 HTTP 직전에만 직렬화한다.
         query = {k: str(v).lower() if isinstance(v, bool) else v for k, v in params.items()}
+        deadline = self._clock() + timeout
         try:
             if self._session is None:
                 self._session = (self._factory() if self._factory else
-                                 aiohttp.ClientSession(trust_env=False, cookie_jar=aiohttp.DummyCookieJar()))
+                                 aiohttp.ClientSession(trust_env=False, cookie_jar=aiohttp.DummyCookieJar(),
+                                                       auto_decompress=False))
                 # 확인한 aiohttp 3.13.5의 keepalive GET 내부 재시도를 막는다.
                 # 이 훅이 없는 버전/세션은 지원을 추측하지 않고 송신 전에 거부한다.
                 if not hasattr(self._session, "_retry_connection"):
@@ -142,20 +153,44 @@ class AiohttpTransport:
                 self._session._retry_connection = False
             if getattr(self._session, "_retry_connection", None) is not False:
                 raise TossRequestError("unsupported")
-            async with self._session.request(
-                method, ORIGIN + path, params=query, headers=dict(headers),
-                timeout=aiohttp.ClientTimeout(total=timeout), ssl=True, allow_redirects=False,
-            ) as response:
+            if self._authorize is not None:
+                try:
+                    bounded = self._authorize(deadline=deadline)
+                    if type(bounded) not in (int, float) or not math.isfinite(bounded):
+                        raise ValueError
+                    deadline = min(deadline, bounded)
+                except Exception:
+                    raise TossRequestError("auth_unavailable") from None
+                timeout = deadline - self._clock()
+                if timeout <= 0:
+                    raise TossRequestError("timeout")
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise TossRequestError("timeout")
+            # aiohttp는 5초 이상 total을 정수초로 올릴 수 있다. 승인 기한은
+            # 연결 대기부터 본문 소비까지 별도의 정확한 timeout으로 제한한다.
+            async with (
+                asyncio.timeout(remaining),
+                self._session.request(
+                    method, ORIGIN + path, params=query, headers={**headers, "Accept-Encoding": "identity"},
+                    timeout=aiohttp.ClientTimeout(total=timeout), ssl=True, allow_redirects=False,
+                    auto_decompress=False,
+                ) as response,
+            ):
                 status, response_headers = response.status, dict(response.headers)
                 if 300 <= status < 400:
                     return HttpResponse(status, response_headers, None)
                 # redirect/4xx/5xx는 JSON이 아니어도 상태 자체로 분류한다.
                 try:
-                    body = await response.json()
-                except (ValueError, aiohttp.ContentTypeError):
-                    if status == 200:
-                        raise TossRequestError("malformed_response") from None
-                    body = None
+                    body = await read_json_bounded(response, limits=self._body_limits,
+                                                   deadline=deadline, clock=self._clock)
+                except BodyError as exc:
+                    if exc.code == "non_json" and status != 200:
+                        body = None
+                    else:
+                        raise TossRequestError("timeout" if exc.code == "timeout" else
+                                               "network_error" if exc.code == "network_error" else
+                                               "malformed_response") from None
                 return HttpResponse(status, response_headers, body)
         except asyncio.CancelledError:
             raise
