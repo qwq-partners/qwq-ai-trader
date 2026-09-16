@@ -28,3 +28,11 @@
 실관측은 아직 시작하지 않았다. 현재 서비스는 mutable checkout의 `run_trader.py`를 직접 실행한다. launcher/StartupAttestation·operator registry·실제 plan/grant·분리 상태 경로 연결이 없으므로 플래그만 켜거나 현재 Git HEAD로 실행 증거를 만들지 않는다. 정확한 실행 방식·관측 정책 설계/검증 후 활성화해야 한다.
 
 배포 직전에는 장외·pending0·clean·최종CI·설정/킬스위치 보존을 다시 확인한다. 배포 성공과 실관측 활성화/3영업일 인수/소비자 승격은 별개이며, 모든 관측 보고서의 `production_eligible=False`는 유지한다.
+
+## 병합 완료·배포 직전 인계
+
+- #68 정합화 head **`93570df673ba03ccfeba9f074a77b743557b18cc`**. 부모는 원본 `0b978e0`과 #70 main `1c9531c`다. 원본 브랜치로 정상 fast-forward push했고 이력을 강제로 재작성하지 않았다.
+- 독립 Astra/xhigh 최종 커밋 재확인 승인, 신규 P0/P1/P2 0. [필수 verify run35116712908](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/35116712908) SUCCESS 후 #68을 **main `6ac6ce02daaa6a2429fc5cacad1f9c585731772c`**에 병합했다. 00:40 KST 열린 PR은 0개로 확인했다.
+- 병합 main의 소스/테스트/스크립트/설정/의존성은 검증된 #70과 동일하다. main의 병합 이력과 실제 운영 프로세스의 로드 상태는 다르므로, 배포 완료 결과는 이 문단으로 대체하지 않는다.
+- 운영 설정3개(.env/default/evolved)·킬스위치4경로의 사전 지문을 값 노출 없이 비교용으로 확보했다. 미체결0과 브로커 연결을 배포 직전에 다시 검사한다.
+- 활성화는 현재 mutable 거래 checkout을 immutable이라고 주장하지 않는 별도 연결 설계가 필요하다. 기존 거래 서비스를 유지하는 독립 관측 프로세스안과 전체 거래 서비스의 고정 릴리스 이전안을 비교했고, 사용자에게 전자를 권고했다. 아직 선택/상세 정책을 확정하거나 서비스를 설치하지 않았다. 기존 `run_trader.py`를 관측용 두 번째 프로세스로 실행하면 singleton 동작이 기존 거래 프로세스를 중단할 수 있으므로 금지한다.
