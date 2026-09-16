@@ -1,243 +1,439 @@
-"""토스 시세 엔드포인트 래퍼 + KIS 계약 정규화 (설계 §3.1·§3.3·§4.4)
+"""Pure Toss price/candle normalization and bounded daily-candle collection.
 
-Phase 1 은 **기록만** 한다 — 여기서 나온 값은 청산·사이징·주문 어디에도 들어가지 않는다.
-
-정규화 원칙:
-- 채울 수 없는 값은 **0 이 아니라 None** (CLAUDE.md 금지 패턴). `timestamp` 가 null 이면
-  `as_of=None` — 관측 시각을 지어내지 않는다 (T9/T10 시간 계약)
-- 캔들은 KIS `get_daily_prices` 계약(`date`/`open`/`high`/`low`/`close`/`volume`/`value`,
-  **오래된 순**)으로 맞춘다. 토스는 최신순 내림차순이라 재정렬이 필수다
-- 거래대금(`value`)은 토스가 주지 않으므로 **None** — 0 을 넣으면 소비자가 "거래대금 0" 으로 읽는다
+This module has no token, retry, cache, or network implementation.  It accepts
+the read-only client boundary and its shared RequestBudget as injected protocols.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from decimal import Decimal, InvalidOperation
+from typing import Any, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
-from loguru import logger
-
-from src.utils.session import KST
-
-from .client import TossAPIError, TossClient
-
-SOURCE = "toss"
-
-MAX_SYMBOLS_PER_CALL = 200   # /prices, /market-indicators/prices 다건 상한
-MAX_CANDLES_PER_CALL = 200   # /candles 1회 상한
+from src.data.providers.toss.market_types import Candle, CandleSeries, Quote
+from src.data.providers.toss.transport import TossRequestError
 
 
-def _to_float(value: Any) -> Optional[float]:
-    """decimal 문자열 → float. 파싱 불가·부재는 None (0 으로 메우지 않는다)"""
-    if value is None:
-        return None
+KST = ZoneInfo("Asia/Seoul")
+_STATUSES = frozenset({"ok", "partial", "missing", "invalid", "stale"})
+_SUPPORTED_PAYLOAD_FIELDS = frozenset({
+    "price", "open", "high", "low", "close", "volume", "prev_close", "change_pct",
+})
+# These are internal explicit labels only.  A Toss source remains ``unknown``
+# until its concrete market-basis evidence is supplied by an upper boundary.
+_SUPPORTED_MARKET_BASES = frozenset({"krx", "krx_nxt"})
+
+
+class MarketDataError(Exception):
+    """A safe normalization error.  It deliberately contains no response body."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def _require_aware_not_future(value: datetime, now: datetime, *, code: str) -> None:
+    if (
+        now.tzinfo is None
+        or now.utcoffset() is None
+        or value.tzinfo is None
+        or value.utcoffset() is None
+        or value > now
+    ):
+        raise MarketDataError(code)
+
+
+def _as_decimal(value: Any, *, positive: bool = True) -> Decimal:
+    if isinstance(value, bool) or value is None:
+        raise ValueError("not a numeric value")
+    if isinstance(value, str) and len(value) > 30:
+        raise ValueError("numeric string too long")
     try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise ValueError("not a decimal") from None
+    if not number.is_finite() or (positive and number <= 0):
+        raise ValueError("non-finite or out-of-range")
+    # Reject values that can exhaust Decimal work or are not representable market ticks.
+    if abs(number.adjusted()) > 15 or abs(number.as_tuple().exponent) > 12:
+        raise ValueError("decimal exponent out of range")
+    return number
 
 
-def _to_int(value: Any) -> Optional[int]:
-    parsed = _to_float(value)
-    return None if parsed is None else int(parsed)
-
-
-def _parse_ts(value: Any) -> Optional[datetime]:
-    """ISO 8601 → KST aware datetime. null/파싱 불가는 None (§3.3-2)"""
-    if not value:
-        return None
+def _as_volume(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError("not a volume")
+    if isinstance(value, str) and len(value) > 30:
+        raise ValueError("numeric string too long")
     try:
-        parsed = datetime.fromisoformat(str(value))
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise ValueError("not a volume") from None
+    if not number.is_finite() or number < 0 or number != number.to_integral_value():
+        raise ValueError("invalid volume")
+    if number.adjusted() > 18:
+        raise ValueError("volume out of range")
+    return int(number)
+
+
+def _parse_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("timestamp missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        logger.debug(f"[토스] timestamp 파싱 실패: {value!r}")
+        raise ValueError("timestamp invalid") from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp naive")
+    return parsed
+
+
+def _missing_quote(symbol: str, fetched_at: datetime, *, status: str = "missing") -> Quote:
+    return Quote(
+        symbol=symbol, price=None, observed_at=None, fetched_at=fetched_at,
+        status=status, missing_fields=frozenset({"price", "observed_at", "currency"}),
+        market_basis="unknown", currency=None,
+    )
+
+
+def _price_result_rows(body: object) -> Iterable[object]:
+    if isinstance(body, Mapping):
+        result = body.get("result", body)
+    else:
+        result = body
+    return result if isinstance(result, list) else ()
+
+
+def parse_prices(
+    body: object,
+    *,
+    symbols: Sequence[str],
+    fetched_at: datetime,
+    now: datetime,
+    max_age_seconds: int,
+) -> dict[str, Quote]:
+    """Validate a ``/prices`` result without inventing missing market metadata."""
+    _require_aware_not_future(fetched_at, now, code="invalid_fetched_at")
+    if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int) or max_age_seconds <= 0:
+        raise MarketDataError("invalid_max_age")
+
+    requested = tuple(symbols)
+    if any(not isinstance(symbol, str) or not symbol for symbol in requested):
+        raise MarketDataError("invalid_symbol")
+    quotes = {symbol: _missing_quote(symbol, fetched_at) for symbol in requested}
+    seen_symbols: set[str] = set()
+
+    for row in _price_result_rows(body):
+        if not isinstance(row, Mapping):
+            continue
+        symbol = row.get("symbol")
+        if not isinstance(symbol, str):
+            continue
+        if symbol not in quotes:
+            continue
+        # Every duplicate is ambiguous as a single point-in-time observation.
+        # Fail closed permanently, independent of validity or response ordering.
+        if symbol in seen_symbols:
+            quotes[symbol] = _missing_quote(symbol, fetched_at, status="invalid")
+            continue
+        seen_symbols.add(symbol)
+        currency = row.get("currency")
+        if currency != "KRW":
+            quotes[symbol] = _missing_quote(symbol, fetched_at, status="invalid")
+            continue
+        try:
+            price = _as_decimal(row.get("lastPrice"))
+        except ValueError:
+            quotes[symbol] = _missing_quote(symbol, fetched_at, status="invalid")
+            continue
+
+        raw_timestamp = row.get("timestamp")
+        if raw_timestamp is None:
+            quotes[symbol] = Quote(symbol, price, None, fetched_at, "partial", frozenset({"observed_at"}), "unknown", "KRW")
+            continue
+        try:
+            observed_at = _parse_timestamp(raw_timestamp)
+        except ValueError:
+            quotes[symbol] = Quote(symbol, price, None, fetched_at, "invalid", frozenset({"observed_at"}), "unknown", "KRW")
+            continue
+
+        if observed_at > fetched_at:
+            quotes[symbol] = _missing_quote(symbol, fetched_at, status="invalid")
+            continue
+        age_seconds = (now - observed_at).total_seconds()
+        if age_seconds < 0 or age_seconds > max_age_seconds:
+            quotes[symbol] = Quote(symbol, price, observed_at, fetched_at, "stale", frozenset(), "unknown", "KRW")
+            continue
+        quotes[symbol] = Quote(symbol, price, observed_at, fetched_at, "ok", frozenset(), "unknown", "KRW")
+
+    return quotes
+
+
+def _normalize_expected_dates(expected_dates: Sequence[str]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for item in expected_dates:
+        if not isinstance(item, str) or len(item) != 8 or not item.isdigit():
+            raise MarketDataError("invalid_expected_date")
+        try:
+            datetime.strptime(item, "%Y%m%d")
+        except ValueError:
+            raise MarketDataError("invalid_expected_date") from None
+        if item not in normalized:
+            normalized.append(item)
+    return tuple(normalized)
+
+
+def _page_payload(page: object) -> Mapping[str, Any] | None:
+    if not isinstance(page, Mapping):
         return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=KST)
-    return parsed.astimezone(KST)
+    result = page.get("result", page)
+    return result if isinstance(result, Mapping) else None
 
 
-def _chunks(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
-    for start in range(0, len(items), size):
-        yield items[start:start + size]
+def _parse_candle(
+    row: Mapping[str, Any],
+    *,
+    fetched_day: str,
+    market_basis: str,
+    adjusted: bool,
+) -> Candle:
+    timestamp = _parse_timestamp(row.get("timestamp"))
+    bar_date = timestamp.astimezone(KST).strftime("%Y%m%d")
+    if bar_date > fetched_day:
+        raise ValueError("future candle")
+    if row.get("currency") != "KRW":
+        raise ValueError("currency mismatch")
+    open_price = _as_decimal(row.get("openPrice"))
+    high = _as_decimal(row.get("highPrice"))
+    low = _as_decimal(row.get("lowPrice"))
+    close = _as_decimal(row.get("closePrice"))
+    volume = _as_volume(row.get("volume"))
+    if high < max(open_price, close) or low > min(open_price, close) or high < low:
+        raise ValueError("inconsistent OHLC")
+    # A current-day bar has no completion proof in this endpoint contract.  Do not
+    # change this merely because a later caller happens to run after market close.
+    return Candle(
+        bar_date=bar_date, open=open_price, high=high, low=low, close=close,
+        volume=volume, complete=(bar_date < fetched_day), adjusted=adjusted,
+        market_basis=market_basis,
+    )
 
 
-class TossMarketData:
-    """토스 시세 조회 (읽기 전용)"""
+def normalize_candle_pages(
+    pages: Iterable[object],
+    *,
+    symbol: str,
+    expected_dates: Sequence[str],
+    fetched_at: datetime,
+    market_basis: str = "unknown",
+    adjusted: bool = True,
+) -> CandleSeries:
+    """Return only the caller's requested confirmed dates, in chronological order."""
+    if fetched_at.tzinfo is None or fetched_at.utcoffset() is None:
+        raise MarketDataError("invalid_fetched_at")
+    if not isinstance(symbol, str) or not symbol:
+        raise MarketDataError("invalid_symbol")
+    if not isinstance(adjusted, bool):
+        raise MarketDataError("invalid_adjusted")
+    expected = _normalize_expected_dates(expected_dates)
+    expected_set = set(expected)
+    fetched_day = fetched_at.astimezone(KST).strftime("%Y%m%d")
+    accepted: dict[str, Candle] = {}
+    conflicted: set[str] = set()
+    invalid_expected = False
 
-    def __init__(self, client: TossClient) -> None:
-        self._client = client
-
-    # ── 현재가 ───────────────────────────────────────────────────────────────
-    async def get_prices(self, symbols: Sequence[str]) -> Dict[str, Dict[str, Any]]:
-        """다건 현재가 — 200개씩 분할 조회
-
-        Returns: `{symbol: {"price", "as_of", "currency", "source"}}`
-        `/prices` 는 현재가만 준다 — 등락률·거래량·전일종가는 없다(§3.3-1).
-        """
-        out: Dict[str, Dict[str, Any]] = {}
-        unique = list(dict.fromkeys(s for s in symbols if s))
-        chunks = list(_chunks(unique, MAX_SYMBOLS_PER_CALL))
-        for chunk in chunks:
+    for page in pages:
+        payload = _page_payload(page)
+        if payload is None:
+            invalid_expected = invalid_expected or bool(expected)
+            continue
+        candles = payload.get("candles")
+        if not isinstance(candles, list):
+            invalid_expected = invalid_expected or bool(expected)
+            continue
+        for row in candles:
+            if not isinstance(row, Mapping):
+                invalid_expected = invalid_expected or bool(expected)
+                continue
             try:
-                body = await self._client.get(
-                    "/api/v1/prices", {"symbols": ",".join(chunk)}, group="MARKET_DATA"
+                candle = _parse_candle(
+                    row, fetched_day=fetched_day, market_basis=market_basis, adjusted=adjusted,
                 )
-            except TossAPIError as e:
-                if len(chunks) == 1:
-                    raise                       # 단일 청크면 기존대로 전파(호출부가 실패율 기록)
-                logger.warning(f"[토스] 현재가 청크 실패 — 건너뜀 ({len(chunk)}종목): {e}")
-                continue                        # 다중 청크: 성공분은 살린다(응답에 없는 심볼 = 실패)
-            for row in body.get("result") or []:
-                symbol = row.get("symbol")
-                if not symbol:
-                    continue
-                as_of = _parse_ts(row.get("timestamp"))
-                out[str(symbol)] = {
-                    "price": _to_float(row.get("lastPrice")),
-                    "as_of": as_of,
-                    "currency": row.get("currency"),
-                    "data_status": "ok" if as_of is not None else "partial",   # 관측 시각 모르면 partial(§3.3-2)
-                    "source": SOURCE,
-                }
-        return out
+            except ValueError:
+                # A malformed row without a safely-derived date cannot prove any
+                # requested date.  Keep a complete window from being claimed.
+                invalid_expected = invalid_expected or bool(expected)
+                continue
+            if candle.bar_date not in expected_set:
+                continue
+            if candle.bar_date in conflicted:
+                continue
+            prior = accepted.get(candle.bar_date)
+            if prior is None:
+                accepted[candle.bar_date] = candle
+            elif prior != candle:
+                accepted.pop(candle.bar_date, None)
+                conflicted.add(candle.bar_date)
 
-    # ── 캔들 ─────────────────────────────────────────────────────────────────
-    async def get_candles(
-        self,
-        symbol: str,
-        interval: str = "1d",
-        count: int = 100,
-        adjusted: bool = True,
-    ) -> List[Dict[str, Any]]:
-        """캔들 — KIS `get_daily_prices` 계약으로 정규화해 **오래된 순**으로 반환
+    bars = tuple(sorted(accepted.values(), key=lambda bar: bar.bar_date))
+    missing_dates = tuple(sorted(expected_set - set(accepted)))
+    has_partial = any(not bar.complete for bar in bars)
+    complete = not missing_dates and not has_partial and not invalid_expected
+    if complete:
+        status = "ok"
+    elif invalid_expected or conflicted:
+        status = "invalid"
+    elif not bars and not expected:
+        status = "ok"
+    else:
+        status = "partial"
+    return CandleSeries(bars=bars, complete=complete, missing_dates=missing_dates, status=status)
 
-        행: `{"date": "YYYYMMDD", "open"/"high"/"low"/"close": float, "volume": int,
-              "value": None, "timestamp": datetime}`
-        `timestamp`(KST aware)는 KIS 계약에 없는 추가 키다 — 1분봉이 날짜만으로는
-        구분되지 않으므로 항상 함께 싣는다(일봉 소비자는 무시하면 된다).
-        200봉 초과는 `nextBefore` 페이징.
-        """
-        collected: Dict[datetime, Dict[str, Any]] = {}
-        before: Optional[str] = None
-        max_pages = (max(count, 1) + MAX_CANDLES_PER_CALL - 1) // MAX_CANDLES_PER_CALL + 1
 
-        for _ in range(max_pages):
-            params: Dict[str, Any] = {
-                "symbol": symbol,
-                "interval": interval,
-                "count": min(count, MAX_CANDLES_PER_CALL),
-                "adjusted": adjusted,
-            }
-            if before is not None:
-                params["before"] = before
-            body = await self._client.get(
-                "/api/v1/candles", params, group="MARKET_DATA_CHART"
-            )
-            result = body.get("result") or {}
-            rows = result.get("candles") or []
-            for row in rows:
-                ts = _parse_ts(row.get("timestamp"))
-                close = _to_float(row.get("closePrice"))
-                if ts is None or close is None:
-                    continue
-                collected[ts] = {          # before 가 inclusive라 경계 봉이 겹친다 → 시각 키로 dedup
-                    "date": ts.strftime("%Y%m%d"),
-                    "open": _to_float(row.get("openPrice")),
-                    "high": _to_float(row.get("highPrice")),
-                    "low": _to_float(row.get("lowPrice")),
-                    "close": close,
-                    "volume": _to_int(row.get("volume")),
-                    "value": None,          # 토스 미제공 — 0 금지
-                    "timestamp": ts,
-                }
-            prev_before = before
-            before = result.get("nextBefore")
-            if not rows or before is None or before == prev_before or len(collected) >= count:
-                break   # before 가 전진하지 않으면 같은 페이지를 상한까지 재요청하게 된다
+async def fetch_daily_candles(
+    client: Any,
+    *,
+    symbol: str,
+    expected_dates: Sequence[str],
+    fetched_at: datetime,
+    budget: Any,
+    market_basis: str = "unknown",
+    adjusted: bool = True,
+) -> CandleSeries:
+    """Collect daily pages under the *one* client-owned request budget.
 
-        ordered = [collected[ts] for ts in sorted(collected)]   # 최신순 → 오래된 순
-        return ordered[-count:] if count > 0 else ordered
+    The collector never retries: a client-level retry already consumes the shared
+    budget, and a failed later page returns a partial series rather than success.
+    """
+    expected = _normalize_expected_dates(expected_dates)
+    pages: list[object] = []
+    cursor: str | None = None
+    cursor_time: datetime | None = None
+    seen_cursors: set[str] = set()
 
-    # ── 호가 ─────────────────────────────────────────────────────────────────
-    async def get_orderbook(self, symbol: str) -> Dict[str, Any]:
-        body = await self._client.get(
-            "/api/v1/orderbook", {"symbol": symbol}, group="MARKET_DATA"
-        )
-        result = body.get("result") or {}
-
-        def _levels(key: str, *, reverse: bool) -> List[Dict[str, Optional[float]]]:
-            rows = [
-                {"price": _to_float(e.get("price")), "volume": _to_int(e.get("volume"))}
-                for e in (result.get(key) or [])
-            ]
-            rows = [r for r in rows if r["price"] is not None]
-            # index 0 = 최우선호가를 코드가 보장한다 — asks 오름차순, bids 내림차순(서버 순서 의존 금지)
-            return sorted(rows, key=lambda r: r["price"], reverse=reverse)
-
-        return {
-            "symbol": symbol,
-            "as_of": _parse_ts(result.get("timestamp")),
-            "currency": result.get("currency"),
-            "asks": _levels("asks", reverse=False),
-            "bids": _levels("bids", reverse=True),
-            "source": SOURCE,
+    while True:
+        try:
+            if budget.remaining() <= 0:
+                break
+        except TossRequestError:
+            break
+        params: dict[str, Any] = {
+            "symbol": symbol, "interval": "1d", "count": 200, "adjusted": adjusted,
         }
-
-    # ── 상/하한가 ────────────────────────────────────────────────────────────
-    async def get_price_limits(self, symbol: str) -> Dict[str, Any]:
-        body = await self._client.get(
-            "/api/v1/price-limits", {"symbol": symbol}, group="MARKET_DATA"
+        if cursor is not None:
+            params["before"] = cursor
+        try:
+            page = await client.get("/api/v1/candles", params=params, budget=budget)
+        except Exception:
+            break
+        pages.append(page)
+        series = normalize_candle_pages(
+            pages, symbol=symbol, expected_dates=expected, fetched_at=fetched_at,
+            market_basis=market_basis, adjusted=adjusted,
         )
-        result = body.get("result") or {}
-        return {
-            "symbol": symbol,
-            "as_of": _parse_ts(result.get("timestamp")),
-            "upper_limit": _to_float(result.get("upperLimitPrice")),
-            "lower_limit": _to_float(result.get("lowerLimitPrice")),
-            "currency": result.get("currency"),
-            "source": SOURCE,
-        }
+        if series.complete:
+            return series
+        payload = _page_payload(page)
+        next_before = payload.get("nextBefore") if payload is not None else None
+        if next_before is None or not isinstance(next_before, str):
+            break
+        try:
+            next_time = _parse_timestamp(next_before)
+        except ValueError:
+            break
+        if (
+            next_time > fetched_at
+            or next_before in seen_cursors
+            or (cursor_time is not None and next_time >= cursor_time)
+        ):
+            break
+        seen_cursors.add(next_before)
+        cursor = next_before
+        cursor_time = next_time
 
-    # ── 장운영 캘린더 ────────────────────────────────────────────────────────
-    async def get_market_calendar_kr(self, date: Optional[str] = None) -> Dict[str, Any]:
-        """국내 장운영 정보 (KRX+NXT 통합)
+    return normalize_candle_pages(
+        pages, symbol=symbol, expected_dates=expected, fetched_at=fetched_at,
+        market_basis=market_basis, adjusted=adjusted,
+    )
 
-        응답 원형(`today`/`previousBusinessDay`/`nextBusinessDay`)을 그대로 실어 보낸다 —
-        Phase 1 은 `utils/session.py` 하드코딩과 **대조·경고**만 하고 세션 판정을 바꾸지 않는다(§6.3).
-        """
-        body = await self._client.get(
-            "/api/v1/market-calendar/KR",
-            {"date": date} if date else None,
-            group="MARKET_INFO",
-        )
-        result = body.get("result")
-        return {
-            "calendar": result if isinstance(result, dict) else None,
-            "source": SOURCE,
-        }
 
-    # ── 지수 현재가 ──────────────────────────────────────────────────────────
-    async def get_index_prices(self, symbols: Sequence[str]) -> Dict[str, Dict[str, Any]]:
-        """시장 지표 현재가 — `timestamp` 가 null 로 오는 것이 실측 기본값이라
-        `as_of=None` 을 그대로 둔다. 소비자는 `data_status=partial` 로 다뤄야 한다(§3.3-2).
-        """
-        out: Dict[str, Dict[str, Any]] = {}
-        unique = list(dict.fromkeys(s for s in symbols if s))
-        for chunk in _chunks(unique, MAX_SYMBOLS_PER_CALL):
-            body = await self._client.get(
-                "/api/v1/market-indicators/prices",
-                {"symbols": ",".join(chunk)},
-                group="MARKET_INDICATOR",
-            )
-            for row in body.get("result") or []:
-                symbol = row.get("symbol")
-                if not symbol:
-                    continue
-                as_of = _parse_ts(row.get("timestamp"))
-                out[str(symbol)] = {
-                    "price": _to_float(row.get("lastPrice")),
-                    "as_of": as_of,
-                    "data_status": "ok" if as_of is not None else "partial",   # 실측 기본값 null → partial
-                    "source": SOURCE,
-                }
-        return out
+def compose_quote(
+    quote: Quote,
+    series: CandleSeries,
+    *,
+    trading_date: str,
+    previous_trading_date: str,
+    required_fields: set[str],
+) -> dict[str, float | int]:
+    """Build a legacy numeric payload only when every requested field is proven."""
+    if not required_fields or not required_fields <= _SUPPORTED_PAYLOAD_FIELDS:
+        return {}
+    if quote.status != "ok" or quote.price is None or quote.observed_at is None:
+        return {}
+    if quote.observed_at.tzinfo is None or quote.observed_at.utcoffset() is None:
+        return {}
+    if quote.fetched_at.tzinfo is None or quote.fetched_at.utcoffset() is None:
+        return {}
+    if quote.observed_at > quote.fetched_at:
+        return {}
+    try:
+        _normalize_expected_dates([trading_date, previous_trading_date])
+    except MarketDataError:
+        return {}
+    target_date = trading_date
+    previous_date = previous_trading_date
+    if previous_date >= target_date:
+        return {}
+    if quote.observed_at.astimezone(KST).strftime("%Y%m%d") != target_date:
+        return {}
+
+    payload: dict[str, float | int] = {"price": float(quote.price)} if "price" in required_fields else {}
+    candle_fields = required_fields - {"price"}
+    if not candle_fields:
+        return payload
+    if (
+        not series.complete
+        or series.status != "ok"
+        or not isinstance(quote.market_basis, str)
+        or quote.market_basis not in _SUPPORTED_MARKET_BASES
+    ):
+        return {}
+    by_date = {bar.bar_date: bar for bar in series.bars}
+    today = by_date.get(trading_date)
+    previous = by_date.get(previous_trading_date)
+    if any(field in candle_fields for field in {"open", "high", "low", "close", "volume"}):
+        if today is None or not today.complete:
+            return {}
+    if any(field in candle_fields for field in {"prev_close", "change_pct"}):
+        if previous is None or not previous.complete:
+            return {}
+    relevant = [bar for bar in (today, previous) if bar is not None]
+    if any(
+        not isinstance(bar.market_basis, str)
+        or bar.market_basis not in _SUPPORTED_MARKET_BASES
+        or bar.market_basis != quote.market_basis
+        for bar in relevant
+    ):
+        return {}
+    # A Quote has no adjusted flag because a live last price is not itself an
+    # adjusted history.  The historical legs still must share one explicit
+    # adjusted basis; a hand-assembled mixed series cannot be composed.
+    if len({bar.adjusted for bar in relevant}) > 1:
+        return {}
+
+    if "open" in required_fields:
+        payload["open"] = float(today.open)  # type: ignore[union-attr]
+    if "high" in required_fields:
+        payload["high"] = float(today.high)  # type: ignore[union-attr]
+    if "low" in required_fields:
+        payload["low"] = float(today.low)  # type: ignore[union-attr]
+    if "close" in required_fields:
+        payload["close"] = float(today.close)  # type: ignore[union-attr]
+    if "volume" in required_fields:
+        payload["volume"] = today.volume  # type: ignore[union-attr]
+    if "prev_close" in required_fields:
+        payload["prev_close"] = float(previous.close)  # type: ignore[union-attr]
+    if "change_pct" in required_fields:
+        payload["change_pct"] = float((quote.price / previous.close - Decimal("1")) * Decimal("100"))  # type: ignore[union-attr]
+    return payload

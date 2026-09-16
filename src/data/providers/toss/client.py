@@ -1,246 +1,286 @@
-"""토스 Open API HTTP 클라이언트 (설계 §4.2·§4.3·§6.6)
-
-토큰 주입 → 그룹 리미터 → 429/401 처리 → 에러 envelope 파싱 → 서킷 브레이커.
-읽기 전용 GET 만 제공한다. **주문·계좌 엔드포인트는 이 클라이언트로 부르지 않는다**
-(설계 §8: 제공되지만 쓰지 않는다).
-"""
+"""기본 OFF 조회 client. sender 역할은 토큰 issuer/reader 역할과 독립이다."""
 
 from __future__ import annotations
 
 import asyncio
+import fcntl
+import inspect
 import os
+import re
+import stat
 import time
-from typing import Any, Dict, Mapping, Optional
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Protocol
 
-import aiohttp
-from loguru import logger
-
-from . import rate_limit
-from .token import DEFAULT_BASE_URL, TOKEN_ERROR_CODES, TossTokenCache, TossTokenError
-
-DEFAULT_TIMEOUT_SEC = 5
-CIRCUIT_FAIL_THRESHOLD = 5    # 연속 실패 N회 → 개방
-CIRCUIT_OPEN_SEC = 60.0       # 개방 유지 시간 (이 동안 호출 자체를 건너뛴다)
+from .rate_limit import RequestBudget, positive_number
+from .transport import (
+    AUTH_CODES, ENDPOINT_GROUPS, HttpResponse, TossRequestError, validate_request,
+    _await_cleanup,
+)
 
 
-class TossAPIError(RuntimeError):
-    """토스 API 호출 실패 (HTTP 오류·전송 오류·서킷 개방)"""
+class TokenProvider(Protocol):
+    """폐기 관측은 동기·지속·발급0이며, 조회/복구와 함께 필수 계약이다."""
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        status: Optional[int] = None,
-        code: Optional[str] = None,
-        request_id: Optional[str] = None,
-    ) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.request_id = request_id
+    def observe_revocation(self, failed_token: str) -> None: ...
 
+    async def get_token(self, *, deadline: float) -> str: ...
 
-class TossCircuitOpen(TossAPIError):
-    """서킷 개방 — 호출하지 않고 즉시 실패"""
-
-
-def _error_fields(body: Any) -> Dict[str, Optional[str]]:
-    """에러 envelope `{"error": {"code", "message", "requestId"}}` 파싱"""
-    if not isinstance(body, dict):
-        return {"code": None, "message": None, "request_id": None}
-    err = body.get("error")
-    if isinstance(err, str):          # OAuth2 표준 포맷 (토큰 엔드포인트)
-        return {"code": err, "message": body.get("error_description"), "request_id": None}
-    if not isinstance(err, dict):
-        return {"code": None, "message": None, "request_id": None}
-    return {
-        "code": err.get("code"),
-        "message": err.get("message"),
-        "request_id": err.get("requestId"),
-    }
-
-
-def _query(params: Optional[Mapping[str, Any]]) -> Dict[str, str]:
-    """aiohttp 쿼리 값은 문자열이어야 한다 — bool 은 토스 규약대로 true/false"""
-    out: Dict[str, str] = {}
-    for key, value in (params or {}).items():
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            out[key] = "true" if value else "false"
-        else:
-            out[key] = str(value)
-    return out
+    async def recover(self, error_code: str, failed_token: str, *, deadline: float) -> str: ...
 
 
 class TossClient:
-    def __init__(
-        self,
-        client_id: str,
-        client_secret: str,
-        *,
-        token_cache: Optional[TossTokenCache] = None,
-        session: Optional[aiohttp.ClientSession] = None,
-        timeout_sec: int = DEFAULT_TIMEOUT_SEC,
-        base_url: str = DEFAULT_BASE_URL,
-        fail_threshold: int = CIRCUIT_FAIL_THRESHOLD,
-        circuit_open_sec: float = CIRCUIT_OPEN_SEC,
-    ) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._timeout_sec = timeout_sec
-        self._session = session
-        self._owns_session = session is None
-        self._token_cache = token_cache if token_cache is not None else TossTokenCache(
-            client_id, client_secret
-        )
-        self._fail_threshold = fail_threshold
-        self._circuit_open_sec = circuit_open_sec
-        self._consecutive_failures = 0
-        self._open_until = 0.0
-        self._half_open_trial = False   # 반열림 중 시험 호출 1건만 통과
+    def __init__(self, *, transport, tokens: TokenProvider, limiter, enabled=False, role="reader",
+                 sender_lock_path: Path, circuit_failure_threshold: int,
+                 circuit_open_seconds: float, clock=time.monotonic):
+        if type(enabled) is not bool or role not in ("sender", "reader"):
+            raise ValueError("invalid_role")
+        if (type(circuit_failure_threshold) is not int or circuit_failure_threshold < 1
+                or not positive_number(circuit_open_seconds)):
+            raise ValueError("invalid_circuit_policy")
+        self.transport, self.tokens, self.limiter = transport, tokens, limiter
+        self.enabled, self.role = enabled, role
+        self._path = Path(sender_lock_path)
+        self._threshold, self._open_seconds = circuit_failure_threshold, circuit_open_seconds
+        self._clock, self._fd = clock, None
+        self._closed = False
+        self._active = set()
+        self._closing = None
+        self._states = {group: dict(failures=0, open_until=None, probe=False,
+                                   last_success=None, reason=None)
+                        for group in ENDPOINT_GROUPS.values()}
+        self._epochs = dict.fromkeys(self._states, 0)
+        self._probes = dict.fromkeys(self._states)
 
-    # ── 세션 ────────────────────────────────────────────────────────────────
-    def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self._timeout_sec)
-            )
-            self._owns_session = True
-        return self._session
+    @property
+    def health(self):
+        return {group: dict(state) for group, state in self._states.items()}
 
-    async def close(self) -> None:
-        if self._session is not None and self._owns_session and not self._session.closed:
-            await self._session.close()
-        self._session = None
+    async def __aenter__(self):
+        await self.start()
+        return self
 
-    # ── 서킷 브레이커 (설계 §6.6) ────────────────────────────────────────────
-    def circuit_state(self) -> Dict[str, Any]:
-        now = time.monotonic()
-        is_open = now < self._open_until
-        return {
-            "open": is_open,
-            "failures": self._consecutive_failures,
-            "remaining_sec": round(self._open_until - now, 2) if is_open else 0.0,
-        }
+    async def __aexit__(self, *args):
+        await self.close()
 
-    def _note_success(self) -> None:
-        self._consecutive_failures = 0
-        self._open_until = 0.0
-        self._half_open_trial = False
-
-    def _note_failure(self, reason: str) -> None:
-        self._consecutive_failures += 1
-        self._half_open_trial = False
-        if self._consecutive_failures >= self._fail_threshold and self._open_until <= time.monotonic():
-            self._open_until = time.monotonic() + self._circuit_open_sec
-            logger.warning(
-                f"[토스] 서킷 개방 — 연속 실패 {self._consecutive_failures}회 ({reason}), "
-                f"{self._circuit_open_sec:.0f}초간 호출 중단"
-            )
-
-    def _check_circuit(self, path: str) -> None:
-        if time.monotonic() < self._open_until:
-            raise TossCircuitOpen(f"토스 서킷 개방 중 — 호출 생략: {path}")
-        if self._open_until and time.monotonic() >= self._open_until:
-            # 개방 시간이 지나면 반열림: 시험 호출 1건만 통과시키고 나머지는 계속 거부
-            if self._half_open_trial:
-                raise TossCircuitOpen(f"토스 서킷 반열림 — 시험 호출 진행 중, 생략: {path}")
-            self._half_open_trial = True
-            self._open_until = 0.0
-            self._consecutive_failures = self._fail_threshold - 1
-            logger.info("[토스] 서킷 반열림 — 1회 시험 호출")
-
-    # ── 조회 ────────────────────────────────────────────────────────────────
-    async def get(
-        self,
-        path: str,
-        params: Optional[Mapping[str, Any]] = None,
-        *,
-        group: str,
-    ) -> Dict[str, Any]:
-        """GET 호출 — 성공 응답 envelope(`{"result": ...}`) 전체를 반환
-
-        실패는 `TossAPIError` 로 올린다 (Phase 1 은 실패를 기록해야 하므로 조용히 삼키지 않는다).
-        """
-        self._check_circuit(path)
-        url = f"{self._base_url}{path}"
-        query = _query(params)
-        token_retried = False
-
-        for attempt in range(rate_limit.MAX_RETRIES + 1):
+    async def start(self):
+        if not self.enabled or self.role == "reader":
+            return
+        if self._closed:
+            raise TossRequestError("closed")
+        if self._fd is not None:
+            return
+        fd = None
+        try:
+            # 상위 symlink도 거부한다. 기존 디렉터리나 파일의 권한은 변경하지 않는다.
+            for parent in self._path.absolute().parents:
+                if parent.is_symlink():
+                    raise TossRequestError("unsafe_lock")
+            fd = os.open(self._path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise TossRequestError("unsafe_lock")
             try:
-                token = await self._token_cache.get_token()
-            except TossTokenError as exc:
-                self._note_failure("토큰 발급 실패")
-                raise TossAPIError(f"토스 토큰 확보 실패: {exc}") from exc
-            await rate_limit.acquire(group)   # 토큰 확보(최대 락 대기 15초) 뒤에 슬롯을 소비해야 전송 시각과 맞는다
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise TossRequestError("sender_busy") from None
+            visible = self._path.lstat()
+            if (visible.st_dev, visible.st_ino) != (info.st_dev, info.st_ino):
+                raise TossRequestError("unsafe_lock")
+            self._fd, fd = fd, None
+        except TossRequestError:
+            raise
+        except OSError:
+            raise TossRequestError("unsafe_lock") from None
+        finally:
+            if fd is not None:
+                os.close(fd)
 
-            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    async def close(self):
+        if not self.enabled or self.role == "reader":
+            return
+        if (self._closing is None or (self._closing.done() and
+                (self._closing.cancelled() or self._closing.exception() is not None))):
+            self._closed = True
+            self._closing = asyncio.create_task(self._close())
+        await _await_cleanup(self._closing)
+
+    async def _close(self):
+        try:
+            active = tuple(self._active)
+            for task in active:
+                task.cancel()
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
+            await self.transport.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise TossRequestError("network_error") from None
+        # 실패/취소 시에는 세션 정리가 완료되지 않았으므로 송신 소유권을 유지한다.
+        if self._fd is not None:
+            fd, self._fd = self._fd, None
+            os.close(fd)
+
+    async def get(self, path, *, params, budget):
+        return await self.request("GET", path, params=params, budget=budget)
+
+    async def request(self, method, path, *, params, budget, headers=None):
+        if not self.enabled:
+            raise TossRequestError("disabled")
+        if self.role != "sender":
+            raise TossRequestError("reader_only")
+        params = validate_request(method, path, params)
+        if headers:
+            raise TossRequestError("invalid_request")
+        if self._closed:
+            raise TossRequestError("closed")
+        group = ENDPOINT_GROUPS[path]
+        budget.consume_page()
+        task = asyncio.create_task(self._execute(path, params, budget, group))
+        self._active.add(task)
+        try:
+            return await task
+        finally:
+            self._active.discard(task)
+
+    async def _execute(self, path, params, budget, group):
+        probe, epoch = None, None
+        try:
+            async with asyncio.timeout(budget.remaining()):
+                await self.start()
+                state = self._states[group]
+                if state["open_until"] is not None:
+                    if self._clock() < state["open_until"] or state["probe"]:
+                        raise TossRequestError("circuit_open")
+                    probe = object()
+                    self._probes[group] = probe
+                    state["probe"] = True
+                    self._epochs[group] += 1
+                epoch = self._epochs[group]
+                body = await self._get(path, params, budget, group)
+                # 회로가 열린 뒤 도착한 이전 요청은 새 회로/검사 요청을 갱신하지 못한다.
+                if self._epochs[group] == epoch:
+                    state.update(failures=0, open_until=None, last_success=self._clock(), reason=None)
+                    if probe is not None:
+                        self._epochs[group] += 1
+                return body
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            self._failure(group, "timeout", epoch)
+            raise TossRequestError("timeout") from None
+        except TossRequestError as exc:
+            if exc.code not in ("circuit_open", "sender_busy", "unsafe_lock"):
+                self._failure(group, exc.code, epoch)
+            raise TossRequestError(exc.code) from None
+        except Exception:
+            self._failure(group, "auth_unavailable", epoch)
+            raise TossRequestError("auth_unavailable") from None
+        finally:
+            if probe is not None and self._probes[group] is probe:
+                self._probes[group] = None
+                self._states[group]["probe"] = False
+
+    def _failure(self, group, reason, epoch):
+        if epoch is None or self._epochs[group] != epoch:
+            return
+        state = self._states[group]
+        state["failures"] += 1
+        state["reason"] = reason
+        if state["failures"] >= self._threshold:
+            state["open_until"] = self._clock() + self._open_seconds
+            self._epochs[group] += 1
+
+    async def _get(self, path, params, budget, group):
+        observe_revocation = getattr(self.tokens, "observe_revocation", None)
+        if not callable(observe_revocation) or inspect.iscoroutinefunction(observe_revocation):
+            raise TossRequestError("auth_unavailable")
+        token = await self.tokens.get_token(deadline=budget.deadline)
+        while True:
+            if (not isinstance(token, str) or len(token) > 16384
+                    or re.fullmatch(r"[\x21-\x7e]+", token) is None):
+                raise TossRequestError("auth_unavailable")
+            await self.limiter.acquire(group, budget)
+            network_failure = False
             try:
-                async with self._get_session().get(url, params=query, headers=headers) as resp:
-                    status = resp.status
-                    resp_headers = resp.headers
-                    try:
-                        body = await resp.json(content_type=None)
-                    except ValueError:   # 게이트웨이 HTML 5xx 등 비-JSON — status 분기가 그대로 동작하게
-                        body = None
-            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                self._note_failure(type(exc).__name__)
-                raise TossAPIError(f"토스 전송 실패 {path}: {exc}") from exc
-
-            rate_limit.note_limit_header(group, resp_headers)
-
-            if status == 200:
-                self._note_success()
-                return body if isinstance(body, dict) else {"result": body}
-
-            fields = _error_fields(body)
-            code = fields["code"]
-
-            if status == 429 and attempt < rate_limit.MAX_RETRIES:
-                delay = rate_limit.retry_delay(attempt, rate_limit.parse_retry_after(resp_headers))
-                logger.warning(f"[토스] 429 {code or ''} {path} — {delay:.2f}초 뒤 재시도")
-                await asyncio.sleep(delay)
+                response = await self.transport.request(
+                    "GET", path, params=params, headers={"Authorization": "Bearer " + token},
+                    timeout=budget.remaining())
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if isinstance(exc, TossRequestError) and exc.code not in ("network_error", "timeout"):
+                    raise TossRequestError(exc.code) from None
+                network_failure = True
+            if network_failure:
+                budget.consume_retry()
                 continue
-
-            if status == 401 and code in TOKEN_ERROR_CODES and not token_retried:
-                token_retried = True
-                await self._token_cache.refresh_after_error(token, str(code))
+            if not isinstance(response, HttpResponse) or type(response.status) is not int:
+                raise TossRequestError("malformed_response")
+            if not isinstance(response.headers, Mapping):
+                raise TossRequestError("malformed_response")
+            status, body = response.status, response.body
+            if isinstance(body, Mapping) and "result" in body and "error" in body:
+                raise TossRequestError("malformed_response")
+            if status == 401 and _error_code(body) == "token-revoked":
+                # 응답을 확인한 뒤 첫 await/deadline 검사 전에 폐기 관측을 지속 게시한다.
+                observe_revocation(token)
+            await self.limiter.observe(group, response.headers, status=status)
+            if 300 <= status < 400:
+                raise TossRequestError("redirect_rejected")
+            if status == 403:
+                raise TossRequestError("forbidden")
+            if status == 401:
+                code = _error_code(body)
+                if code not in ("expired-token", "token-revoked"):
+                    raise TossRequestError("auth_unavailable")
+                if code == "token-revoked":
+                    # 폐기 관측의 지속 처리는 추가 HTTP 송신 허가와 독립이다.
+                    # recover는 동일 deadline 안에서 발급 없이 새 캐시 확인/차단만 한다.
+                    token = await self.tokens.recover(code, token, deadline=budget.deadline)
+                    budget.consume_retry()
+                else:
+                    # expired 복구는 발급할 수 있으므로 먼저 재시도 허가를 확보한다.
+                    budget.consume_retry()
+                    token = await self.tokens.recover(code, token, deadline=budget.deadline)
                 continue
-
-            if status >= 500:
-                self._note_failure(f"HTTP {status}")
-            raise TossAPIError(
-                f"토스 API 실패 {path}: HTTP {status} code={code} msg={fields['message']}",
-                status=status,
-                code=code,
-                request_id=fields["request_id"],
-            )
-
-        self._note_failure("재시도 소진")
-        raise TossAPIError(f"토스 API 재시도 소진 {path}", status=429)
+            if status == 429 or 500 <= status < 600:
+                budget.consume_retry()
+                continue
+            if status != 200:
+                raise TossRequestError("http_error")
+            _validate_body(path, body)
+            return body
 
 
-def create_toss_client(
-    *,
-    session: Optional[aiohttp.ClientSession] = None,
-    token_cache: Optional[TossTokenCache] = None,
-    env: Optional[Mapping[str, str]] = None,
-    **kwargs: Any,
-) -> Optional[TossClient]:
-    """환경변수 기반 팩토리 — `TOSS_API=0` 이거나 자격증명이 없으면 None
+def _error_code(body):
+    if isinstance(body, Mapping) and isinstance(body.get("error"), Mapping):
+        code = body["error"].get("code")
+        if isinstance(code, str) and code in AUTH_CODES | {"unsupported"}:
+            return code
+    return "unknown"
 
-    None 반환은 "토스 비활성"을 뜻한다. 호출부는 None 을 정상 상태로 다뤄야 한다.
-    """
-    env = os.environ if env is None else env
-    if str(env.get("TOSS_API", "1")).strip() == "0":
-        logger.info("[토스] TOSS_API=0 — 비활성")
-        return None
-    client_id = (env.get("TOSS_CLIENT_ID") or "").strip()
-    client_secret = (env.get("TOSS_CLIENT_SECRET") or "").strip()
-    if not client_id or not client_secret:
-        logger.warning("[토스] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET 미설정 — 비활성")
-        return None
-    return TossClient(
-        client_id, client_secret, session=session, token_cache=token_cache, **kwargs
-    )
+
+def _validate_body(path, body):
+    if not isinstance(body, Mapping):
+        raise TossRequestError("malformed_response")
+    if "error" in body and "result" in body:
+        raise TossRequestError("malformed_response")
+    if "error" in body:
+        code = _error_code(body)
+        raise TossRequestError("auth_unavailable" if code in AUTH_CODES else
+                               "unsupported" if code == "unsupported" else "http_error")
+    result = body.get("result")
+    if path == "/api/v1/prices":
+        valid = isinstance(result, list)
+    elif path == "/api/v1/candles":
+        valid = (isinstance(result, Mapping) and isinstance(result.get("candles"), list)
+                 and (result.get("nextBefore") is None or isinstance(result["nextBefore"], str)))
+    else:
+        valid = isinstance(result, Mapping) and {
+            "today", "previousBusinessDay", "nextBusinessDay"} <= result.keys()
+    if not valid:
+        raise TossRequestError("malformed_response")

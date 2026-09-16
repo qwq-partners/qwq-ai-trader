@@ -1,0 +1,19 @@
+# Codex CLI 번들 bubblewrap 에 비특권 사용자 네임스페이스 생성을 허용한다.
+#
+# Ubuntu 24.04+ 는 kernel.apparmor_restrict_unprivileged_userns=1 로, 프로파일 없는(unconfined)
+# 실행 파일이 userns 를 만들면 `unprivileged_userns` 프로파일로 전이시켜 capability 를 전부 거부한다.
+# 그러면 bwrap 이 네임스페이스 안 loopback 을 못 올려 `bwrap: loopback: Failed RTM_NEWADDR` 로 죽고,
+# Codex 의 read-only/workspace-write 샌드박스가 전부 기동 불가가 된다(2026-08~09 교차 리뷰 연속 실패).
+# Ubuntu 가 chrome/code 등에 쓰는 것과 같은 패턴 — unconfined 를 유지하되 userns 만 명시 허용.
+#
+# 경로는 nvm 노드 버전·플랫폼 트리플이 바뀌어도 맞도록 글롭. 정본: 저장소 scripts/ops/apparmor/codex-bwrap
+# 롤백: sudo apparmor_parser -R /etc/apparmor.d/codex-bwrap && sudo rm /etc/apparmor.d/codex-bwrap
+abi <abi/4.0>,
+include <tunables/global>
+
+profile codex-bwrap /home/ubuntu/.nvm/versions/node/*/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-*/vendor/*/codex-resources/bwrap flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/codex-bwrap>
+}

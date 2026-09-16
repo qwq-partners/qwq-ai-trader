@@ -1,6 +1,6 @@
 # 외부 API 연동
 
-> 최종 갱신: 2026-04-06
+> 최종 갱신: 2026-09-16 (토스 승인 기반 관측 후속 구현·오프라인 검증, 실자료·운영 미활성화)
 
 ## 브로커 — KIS (한국투자증권)
 
@@ -49,21 +49,30 @@
 - 시장구분: `CM`=야간(18:00~05:00, 기준가=주간 종가 → prdy_ctrt=밤사이 변동률), `F`=주간
 - 아침 스크리닝 선행지표로 사용 (US 지수보다 우선, kr_scheduler)
 
-## 데이터 — 토스증권 Open API (2026-09-15 설계 → 09-16 **Phase 1 구현·기록 전용**)
+## 데이터 — 토스증권 Open API (오프라인 기반·승인 관측 후속, **운영 미활성화**)
 
-> 설계서 `docs/superpowers/plans/2026-09-15-toss-securities-fallback.md` · 상태: **Phase 1** — 인프라(`src/data/providers/toss/`)와 KIS↔토스 대조 원장(`src/analytics/toss_parity.py`, `~/.cache/ai_trader/toss_parity/`)만. **어떤 소비자도 토스 값을 쓰지 않는다.** 플래그 `TOSS_API`(기본 1, 0 이면 태스크 미생성·전 경로 비활성)
+> [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [오프라인 기반 검증 원장](../reviews/toss-phase1-offline-2026-09-16.md) · [관측 실행 경계](../operations/toss-shadow-runtime.md). #67 main 병합 완료; PR #70에서 기본 OFF 승인 관측 후속을 Plan→Do→See로 구현/검증한다. 인증 실자료/운영 활성화 미승인.
 
-- 용도(예정): **읽기 전용 2차 시세·참조 데이터**. 주문·체결·잔고·계좌는 **KIS 단독 유지**
+- 구현 위치: `src/data/providers/toss/`의 보안 token store/manager, 조회 client/transport/limiter, 시장 자료 정규화, 합성 shadow 비교. `scripts/replay_toss_shadow.py`는 명시한 합성 JSON 파일만 읽어 stdout 보고서를 만든다.
+- **관측 전용 후속**: 승인된 lazy OAuth/GET·bounded body·별도 thread·지속 원장·가격/캘린더 감독 배선의 오프라인 구현/독립 소스 리뷰를 완료했다. source `984dbdf`, UTC/KST 각각1684 passed/2 known xfailed; [검증 정본](../reviews/toss-runtime-2026-09-16.md). 기본 OFF이며 flag만으로 활성화하지 않는다. 운영자 소유 등록부·계획/릴리스 바인딩·시작 시점 증명은 별도 배치 사전조건이다. 실제 키 로딩/토큰/자료 수집·배포는 수행하지 않았으며 기존 KIS 소비자·설정/의존성은 무변경이다.
+- 공개 명세 `1.2.17`/2026-09-16 원본 SHA는 `tests/fixtures/toss/spec_contract.json`에 고정했다. 오프라인 fixture의 한도·시각·비교 임계값은 합성 예시이지 승인된 운영값이 아니다. `production_eligible=False`를 유지한다.
+
+- 용도(예정): **읽기 전용 2차 시세·참조 데이터**. 청산·사이징·포트폴리오 평가/최고가·주문·체결·잔고·계좌·호가는 **전 세션 KIS 단독**. 브로커 전역 폴백 훅 금지; 표시용 wrapper opt-in과 후보/점수 변경 승격을 분리
 - Base `https://openapi.tossinvest.com` · WS `wss://openapi-ws.tossinvest.com/ws/v1` · OpenAPI 3.1 스펙 `/openapi-docs/latest/openapi.json`
-- 인증: OAuth2 client_credentials, `expires_in` 86399(24h). **클라이언트당 유효 토큰 1개** — 재발급 시 이전 토큰 즉시 무효(`token-revoked`). 단일 토큰 캐시 + 파일 락 필수
+- 인증: OAuth2 client_credentials, 기존 관측 `expires_in=86399`(약24h, 상수 아님). **클라이언트당 유효 토큰 1개**. 단일 issuer/reader·별도 고정 락·최초 생성부터0600인 전용 보안 캐시 필요(일반 atomic writer 그대로 사용 금지)
 - 허용 IP 사전 등록 필수(미등록 403). 시세·종목·수급·랭킹·지수·캘린더는 토큰만으로 조회(계좌 헤더 불필요)
 - Rate limit: 그룹별 TPS(`MARKET_DATA` 15 / `MARKET_DATA_CHART` 20 / `RANKING` 5 / `STOCK` 5 / `STOCK_ALL` 1 / `STOCK_TRADING_TREND` 10 / `MARKET_INFO` 3), 응답 헤더 `X-RateLimit-*`·429 `Retry-After`. **KIS 리미터와 분리된 독립 게이트**를 쓸 것
 - 주요 필드 제약: `/prices` 는 `lastPrice`·`timestamp` 만(등락률·거래량·전일종가 없음), `timestamp` 는 조건부 nullable, 종목 정보에 **업종 필드 없음**(WICS 대체 불가), `sharesOutstanding` 은 `/stocks` 에만(`/stocks/all` 에는 없음)
 - **일봉 정렬이 KIS 와 반대다** — 토스 `/candles` 는 최신순 내림차순, KIS `get_daily_prices` 는 오래된 순. 소비자가 `[-1]`·`[-200:]` 로 "끝이 최신"을 가정하므로 어댑터에서 반드시 재정렬(같은 유형의 역전이 2026-08-07 실사고). 값·수량은 decimal **문자열**
-- **토큰 `401 token-revoked` 는 재발급 신호가 아니다** — 캐시를 다시 읽어 최신 토큰으로 재시도한다. 재발급하면 상대 프로세스 토큰을 죽여 핑퐁이 된다
-- **OAuth 스코프가 없다** — 시세용 토큰이 곧 주문 권한 토큰이며, 실효 권한 경계는 허용 IP 목록뿐이다
+- **`401 token-revoked`는 재발급 신호가 아니다** — 다른 유효 공유 캐시로만1회 재시도. 동일/없음/손상이면 mint0·auth unavailable 지속, reader는 항상 mint0. 발급 응답 유실/저장 실패도 자동 재발급 금지
+- **공개 OAuth scopes가 비어 있음** — 시세 전용 권한을 주장하지 않는다. 메서드+조회 endpoint allowlist·고정 HTTPS origin·redirect 금지·계좌 호출 금지; POST는 issuer의 token 발급만 예외. 허용 IP만으로 서버 내부 오호출을 막을 수 없음
 - **가격 기준**: 국내 시세는 KRX+NXT 통합이라 20:00 까지 갱신 — KIS 정규장 종가와 다르다(실측 0.9% 차이). 청산·사이징에 그대로 쓰지 말 것
 - 환경변수: `TOSS_CLIENT_ID`, `TOSS_CLIENT_SECRET` (`.env`, 커밋 금지)
+- 모든 배포 기본 `TOSS_API=0`(토큰/네트워크/캐시 소비/잡 등록0). 실자료 shadow 전 약관·발급 소유권·manifest 승인 필요. 토스 shadow 캐시는 운영 수급/섹터/포트폴리오와 분리
+- 일봉2개를 오늘/전일로 가정하지 않는다. 거래일·원 관측/수신 시각·확정/부분·시장/adjusted 기준을 검증하고 필수 결측은 legacy 숫자 dict를 만들지 않음(N/A 또는 스킵). 200은 페이지 크기이며 52주/252기간 요청은 전체 구간 확보 필요
+- `/stocks/all`은 토스 거래 가능 목록이지 KRX 전체 정본이 아님. 종목 수급의 주/등록외국인/통합시장/잠정치와 시장 수급 금액 기준을 혼용하지 않음
+- 합산 예산은 단일 송신자에서 공유(동시 reader 조회 금지). Reset은 1토큰 보충까지 초; 락·한도·HTTP·페이지·retry에 단일 deadline, 논리 조회 총 retry1·발급 retry0. 원문 인증/body/예외 로그 금지
+- 위 TPS/IP/0.9%는 기존 조사 보고이며 이번에 인증 재호출하지 않았다. [공개 스펙](https://openapi.tossinvest.com/openapi-docs/latest/openapi.json) `1.2.17`/현재 main 소비자만 대조했으며 구현 인수는 설계 §10 참고
 
 ## 데이터 — pykrx
 

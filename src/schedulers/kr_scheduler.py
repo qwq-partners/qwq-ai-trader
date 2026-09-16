@@ -22,7 +22,7 @@ import traceback
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Optional, Dict, List, Set, Tuple
+from typing import Optional, Dict, List, Set, Tuple
 
 from loguru import logger
 
@@ -347,14 +347,6 @@ class KRScheduler:
             self.run_dart_alert_scheduler(), name="kr_dart_alert"
         ))
 
-        # 토스 대조 기록 (2026-09-16 T12 Phase 1 — 장중 5분 주기, 기록 전용. TOSS_API=0이면 미생성)
-        if os.getenv("TOSS_API", "1") == "0":
-            _hb.set_enabled("kr_toss_parity", False, "TOSS_API=0")
-        else:
-            tasks.append(asyncio.create_task(
-                self._supervised(self.run_toss_parity_scheduler, "kr_toss_parity"), name="kr_toss_parity"
-            ))
-
         # 루프 하트비트 감시 (2026-09-13 — 살아 있지만 일을 못 하는 루프 탐지)
         tasks.append(asyncio.create_task(
             self._supervised(self.run_heartbeat_monitor, "kr_heartbeat_monitor"), name="kr_heartbeat_monitor"
@@ -377,6 +369,17 @@ class KRScheduler:
             tasks.append(asyncio.create_task(
                 self.run_expert_briefing(), name="kr_expert_briefing"
             ))
+
+        # Optional observation only. OFF does not instantiate/register anything.
+        # No deployment trust object is supplied by default or derived from env.
+        if os.environ.get("TOSS_API", "0") not in {"0", ""}:
+            try:
+                from .toss_shadow import attach_shadow
+                observer_task = attach_shadow(bot)
+                if observer_task is not None:
+                    tasks.append(observer_task)
+            except Exception:
+                logger.warning("[Toss shadow] 초기화 불가 — 기존 KR 태스크는 유지")
 
         return tasks
 
@@ -3435,6 +3438,13 @@ JSON:
                     # 스크리닝 시각 — 팀 심의가 지표 신선도를 판단하는 데 쓴다
                     bot._last_screened_at = datetime.now()
                     _hb.record_success("kr_screener")
+                    observer = getattr(bot, "_toss_shadow_supervisor", None)
+                    if observer is not None:
+                        try:
+                            observer.publish_candidates(screened)
+                        except Exception:
+                            # Observation failure must not reclassify screening.
+                            logger.warning("[Toss shadow] 후보 snapshot 복사 실패")
 
                 except Exception as e:
                     logger.warning(f"스크리닝 오류: {e}", exc_info=True)
@@ -7662,102 +7672,6 @@ JSON:
                 logger.warning(f"[공시경보] 루프 오류 (계속): {e}")
                 _hb.record_failure("kr_dart_alert", str(e))
                 await asyncio.sleep(300)
-
-    async def run_toss_parity_scheduler(self):
-        """KIS↔토스 대조 기록 — 장중 5분 주기, 기록 전용 (2026-09-16 T12 Phase 1)
-
-        설계: docs/superpowers/plans/2026-09-15-toss-securities-fallback.md §5 Phase 1.
-        돈 경로(청산·사이징·주문)에는 한 줄도 배선하지 않는다 — 원장(JSONL)에 쌓기만 한다.
-
-        KIS 추가 호출 금지 준수: 보유 종목은 REST/WS 피드가 이미 갱신해 둔
-        `portfolio.positions[symbol].current_price`를 그대로 쓴다(신규 KIS 콜 없음).
-        스크리닝 상위 후보(미보유)는 캐시된 KIS 가격이 없어 `kis_price=None`으로
-        기록된다(토스 단독 관측) — 원장 한도(EGW00215) 재발 방지를 위해 이 태스크가
-        직접 KIS 시세를 추가 조회하지 않기로 한 의도적 절충.
-        """
-        if os.getenv("TOSS_API", "1") == "0":
-            logger.info("[토스대조] TOSS_API=0 — 스케줄러 시작 안 함")
-            return
-        from ..analytics import toss_parity
-        from ..data.providers.toss.client import create_toss_client
-        from ..data.providers.toss.market_data import TossMarketData
-
-        client = create_toss_client()
-        if client is None:
-            logger.info("[토스대조] 자격증명 없음 — 스케줄러 종료")
-            _hb.set_enabled("kr_toss_parity", False, "토스 자격증명 없음")
-            return
-        toss_md = TossMarketData(client)
-        bot = self.bot
-        candidate_limit = 10
-        last_calendar_day: Optional[str] = None
-
-        async def _kis_cached_price(symbol: str) -> Optional[Dict[str, Any]]:
-            portfolio = bot.engine.portfolio if bot.engine else None
-            pos = portfolio.positions.get(symbol) if portfolio else None
-            if pos is None or pos.current_price is None or pos.current_price <= 0:
-                return None
-            return {"price": float(pos.current_price), "as_of": None}
-
-        logger.info(f"[토스대조] 스케줄러 시작 (5분 주기, 후보 상위 {candidate_limit}종목, 기록 전용)")
-        try:
-            while bot.running:
-                try:
-                    await asyncio.sleep(300)
-                    _hb.record_attempt("kr_toss_parity")
-                    session = self._get_current_session()
-                    if session == MarketSession.CLOSED:
-                        _hb.record_idle("kr_toss_parity", "장외 세션")
-                        continue
-
-                    now = datetime.now()
-                    portfolio = bot.engine.portfolio if bot.engine else None
-                    holdings = list(portfolio.positions.keys()) if portfolio else []
-                    candidates = [
-                        s for s in getattr(bot, "_watch_symbols", []) if s not in holdings
-                    ][:candidate_limit]
-                    symbols = holdings + candidates
-
-                    if not symbols:
-                        _hb.record_idle("kr_toss_parity", "대조 대상 0건")
-                    else:
-                        # 보유와 후보를 분리 호출 — 후보 배치의 404 한 건이 보유 종목 대조까지 유실시키지 않게
-                        stats = {"compared": 0, "toss_fail": 0}
-                        for batch in (holdings, candidates):
-                            if not batch:
-                                continue
-                            s = await toss_parity.record_price_parity(
-                                batch, _kis_cached_price, toss_md, now=now
-                            )
-                            stats["compared"] += s["compared"]; stats["toss_fail"] += s["toss_fail"]
-                        logger.info(
-                            f"[토스대조] 현재가 {stats['compared']}종목 대조 "
-                            f"(보유 {len(holdings)}·후보 {len(candidates)}, 토스실패 {stats['toss_fail']}건)"
-                        )
-                        _hb.record_success("kr_toss_parity", note=f"토스실패 {stats['toss_fail']}건" if stats["toss_fail"] else None)
-
-                    # 캘린더 대조 — 하루 1회. 실패해도 이번 틱의 record_success 를 덮어쓰지 않는다
-                    today_str = now.strftime("%Y-%m-%d")
-                    if last_calendar_day != today_str:
-                        try:
-                            await toss_parity.record_calendar_parity(toss_md, now=now)
-                        except Exception as e:
-                            _hb.annotate("kr_toss_parity", f"캘린더 대조 실패: {e}")
-                        finally:
-                            last_calendar_day = today_str
-
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"[토스대조] 루프 오류 (계속): {e}")
-                    _hb.record_failure("kr_toss_parity", str(e))
-        except asyncio.CancelledError:
-            pass
-        finally:
-            try:
-                await client.close()
-            except Exception:
-                pass
 
     async def run_value_growth_shadow_scheduler(self):
         """밸류코어(가치·성장 장기보유) shadow 스캔 — 주 1회, 주문 없음 (2026-08-04)

@@ -1,15 +1,70 @@
 # QWQ AI Trader - Changelog
 
-## 2026-09-16 — feat(T12 Phase 1): 토스증권 클라이언트 인프라 + KIS↔토스 대조 기록 (shadow 전용, 소비자 무연결)
+## 2026-09-17 — docs(T12): 열린 PR 통합·중복 #68 정합화
 
-설계서 §5 Phase 1. **어떤 기존 소비자도 토스 값을 받지 않는다.** 돈 경로(청산·사이징·주문)에 단 한 줄도 배선하지 않았다. 설계 검토 반영 브랜치(`fix/toss-design-review-followup`, blocking 11건)도 이 PR 에 합쳐 들어간다.
+- 사용자 지시로 #70을 main `1c9531c`에 병합했다. 새 KST 전체 검증은 1684 passed/2 known xfailed/1 기존 warning, 격리0·문법/비밀정보 검사 통과다.
+- #68 원본 `0b978e0`을 독립 Astra/xhigh로 다시 검토했다. 구형 provider/스케줄러/하트비트는 #70 정본으로 해결하고, 구형 parity 모듈·테스트 2개는 대체된 구현으로 제외한다. 실행 코드·현재 테스트·운영 설정·의존성은 #70과 동일하다. 원본 이력은 merge 부모로 보존하며 강제 push하지 않는다.
+- 원본 리뷰 프롬프트는 역사 배너와 함께 보존하고 `.env.example`만 `TOSS_API=0`·빈 자격·별도 승인 필요로 보완했다. 원본의 호가/상하한가/지수·비일봉 래퍼·미배선 일봉 대조는 이번 승인 관측 범위에 포함하지 않는다.
+- 사용자는 배포/재시작/토스 활성화와 단일 발급·조회/원장 저장 가능을 확인했다. 이 항목은 배포나 실관측 완료 증거가 아니며, launcher·실제 plan/grant 연결은 아직 미구현이다. 상태 정본: `docs/reviews/toss-pr-integration-2026-09-17.md`.
 
-- `src/data/providers/toss/` 신규 — `token.py`(단일 캐시 파일+`fcntl` 락+락 안 double-check, **`token-revoked` 는 재발급하지 않고 캐시 재읽기→최신 토큰 재시도**, `expired/invalid-token` 만 재발급, 에러 코드로 구분, 캐시 삭제 없음, 캐시·락 경로 생성자 주입), `rate_limit.py`(KIS 리미터와 완전 분리된 그룹별 토큰 버킷, `X-RateLimit-Limit` 로 하향만, 429 `Retry-After`·재시도 상한 2), `client.py`(서킷 브레이커 — 연속 5회 실패 60초 개방, 반열림 시험 호출 1건, 비-JSON 본문 방어, `TOSS_API=0`/자격증명 부재 시 팩토리 None), `market_data.py`(현재가 200개 분할·청크 실패 격리, **캔들을 KIS 계약으로 정규화 — 오래된 순 재정렬·`date=YYYYMMDD`·decimal→float·`value=None`**, `before` 미전진 가드, 호가 index 0=최우선 정렬 강제, `timestamp` null → `as_of=None`+`data_status=partial`).
-- `src/analytics/toss_parity.py` 신규 — 현재가 대조(bp 차이·지연·세션 태깅), 캔들 대조(정렬 방향·날짜·종가 일치율), 캘린더 대조(`utils/session.py` 하드코딩과 경계 비교, **경고만 — 세션 판정 불변**), `summarize()` 세션별 p50/p95(Phase 3 게이트는 `regular` 키로만 판정). 원장 `~/.cache/ai_trader/toss_parity/<kind>_YYYYMMDD.jsonl` append-only, 경로 주입 가능.
-- `kr_scheduler.run_toss_parity_scheduler` — 5분 주기, 장중만, 보유 종목은 **KIS 추가 호출 없이** 포트폴리오 캐시 가격(`kis_as_of=None` 정직 기록), 스크리닝 후보 상위 10은 토스 단독 관측. 보유·후보 분리 호출(후보 404 가 보유 대조를 유실시키지 않게). `TOSS_API=0`·자격증명 부재 시 하트비트 `set_enabled(False)` 로 정체 오탐 차단. 캘린더 대조 실패는 annotate 만(해당 틱 success 를 덮지 않음). `loop_heartbeat.PERIODS` 에 `kr_toss_parity: 300`.
-- 테스트 45건(`tests/test_toss_client_phase1.py` 27 + `tests/test_toss_parity_phase1.py` 18) 전부 스텁 — 동시 2요청 발급 1회, 별도 인스턴스(≈다른 프로세스) flock double-check 발급 1회, revoked 재발급 회피·캐시 보존, 캔들 정렬 역전 탐지, 세션 태깅, 캘린더 불일치 경고, TOSS_API=0 미생성·하트비트 비활성, 반열림 1건, 비-JSON 5xx 계수, 발급 예외 래핑(자격증명 미노출), 짧은 expires_in 재발급 루프 방지, 청크 실패 격리, 페이징 가드, 호가 정렬, summarize regular 분리.
-- 3관점 적대적 검토(토큰·동시성 / 계약 정규화 / 격리·돈 경로) 16건 → blocking 1(하트비트 오탐)·advisory 15 중 12건 반영. **미반영 3건**: 캔들 대조 스케줄러 배선(KIS 일봉 캐시 접근점 부재 — 추가 KIS 호출 금지 원칙 우선), 호가 키 KIS 명명(`size`) 정합(호가는 설계 §6.1 상 어떤 단계에서도 폴백 대상이 아니라 보류), 페이징 비용 측정(캔들 배선과 함께 후속).
-- **상태**: 구현 완료 / 대조 표본 0일(3영업일 축적 후 Phase 3 게이트 X·Y 판정) / 운영 승격 없음. 배포 시 재시작 필요(새 태스크). 토스 자격증명은 09-15 운영 `.env` 반영 완료. 독립 리뷰용 프롬프트 `docs/reviews/prompts/t12-phase1-review-prompt.md`.
+## 2026-09-16 — feat(T12): 승인 기반 Toss 관측 런타임 (기본 OFF, 실관측 미시작)
+
+- 사용자 승인한 Plan→Do→See로 #67 기반을 보존하며 운영자 read-only 승인 등록부·계획/실행 증명 바인딩, lazy OAuth·bounded GET/POST, 전용 worker·지속 원장·현재가/캘린더 관측과 오프라인 리포트를 추가한다. 실제 승인값·키·launcher 배치는 설치하지 않는다.
+- 역할별 격리 병렬 구현(Astra/high 인증·전송, Terra/high 원장→리뷰 후 Astra/high 보강), 별도 Astra/xhigh 리뷰. 토큰 정상 캐시 보존·발급 예산 전검사, 정확한 송신 기한·시계 이동, 원장 fsync/재시작/중복·비교 분모, worker 취소/종료, UTC/KST 하트비트와 optional import 실패를 회귀 테스트로 고정한다.
+- KR 스케줄러는 선택적 task 생성과 마지막 성공 후보의 동기 복사만 연결한다. OFF는 승인 파일·worker·잡·키 접근 0, ON도 유효 승인/시작 증명 없으면 실행 거부. 추가 KIS HTTP 0, 기존 주문/청산/사이징·일봉 live·점수/표시 fallback은 미변경이다.
+- `auth_max_issues`는 worker 수명당 POST 상한(재시작 합산 아님), bootstrap만 durable 1회다. 관측 성공과 가격 비교는 별도이며 시각/시장 기준 결측은 insufficient; `production_eligible=False` 유지.
+- 검증·리뷰 SHA/인수 근거·잔여 한계 정본: `docs/reviews/toss-runtime-2026-09-16.md`. 기존 #68은 보류, #70에서 통합하며 main 병합·SSH·배포/재시작·주문/설정 변경은 하지 않는다.
+- 최종 source `984dbdf`: UTC/KST 각각 **1684 passed / 2 known xfailed / 1 기존 warning**, 격리0·문법/비밀정보 검사 통과. 독립 통합 리뷰 P1 client 자격 바인딩·P2 동적 OFF 종료 진단까지 재현 수정·재리뷰 승인(잔여 P0/P1/P2 0). 실제 API 인수가 아닌 합성 HTTP 검증이며 launcher/운영 승인 설치·실자료 최소 영업일 검증은 미실시다.
+
+## 2026-09-16 — docs(T12): PR #68 보류·Codex 인계와 승인 기반 관측 런타임 설계
+
+- 최신 main `c32de93`(#67 기반·#69 리뷰 도구 수정)에서 별도 feature 작업공간을 만들고, 중복 구현 #68 `0b978e0`의 인증/보안·자료 계약·관측 원장/하트비트 리뷰를 인계 문서로 고정했다. #68의 기본 ON·revoked 재발급·불명확 발급 반복·보안 저장/전송·결측 통계·전량 실패 성공 처리 문제를 단순 충돌 해결로 덮지 않는다.
+- #67 보존·기본 OFF·별도 승인 등록부/키 로더·실 OAuth 어댑터·Toss 전용 worker·지속 attempt 원장·가격/캘린더 분리 설계를 작성했다. 첫 범위는 추가 KIS 조회0, 시각/시장 미확정은 유효 비교 제외, 일봉 실관측 및 소비자 승격은 별도다. **상세 설계 사용자 확인 대기이며 런타임 구현은 아직 없다.**
+- 기준선 KST 전체1378 passed/2 known xfailed/1 기존 warning·격리0·문법/비밀정보 패턴 검사 통과. 신규 설계의 인수 통과나 실자료 검증으로 계산하지 않는다. 작업별 근거는 `docs/reviews/toss-phase1-handoff-2026-09-16.md`.
+- 문서만 변경. 실제 자격/운영 토큰/캐시·인증 API·SSH·배포/재시작·주문/설정·#68 상태 변경 없음. Claude의 별도 작업공간을 변경하지 않았다.
+
+## 2026-09-16 — ops(dev): Codex 샌드박스 복구 — 번들 bwrap 용 AppArmor userns 프로파일 (리뷰 스크립트 기본 read-only 복귀)
+
+앞 항목(PR #69)의 후속. 사용자 승인으로 호스트 설정을 바꿨다.
+- **원인 재확인**: Ubuntu `kernel.apparmor_restrict_unprivileged_userns=1` 은 프로파일 없는 실행 파일이 userns 를 만들면 `unprivileged_userns` 프로파일로 전이시켜 capability 를 전부 거부한다 → bwrap 이 네임스페이스 안 loopback 을 못 올림.
+- **조치**: `/etc/apparmor.d/codex-bwrap` — Codex 번들 bubblewrap(`~/.nvm/.../codex-resources/bwrap`, 노드 버전·플랫폼 글롭)에 `flags=(unconfined) { userns, }` 만 부여(Ubuntu 가 chrome/code 에 쓰는 패턴). 정본 `scripts/ops/apparmor/codex-bwrap`, 설치 `scripts/ops/apparmor/install.sh`. 다른 실행 파일·시스템 sysctl 무변경, AppArmor 거부 로그 0.
+- **검증**: 번들 bwrap 직접 실행 `--unshare-user/--unshare-net/--unshare-all` 전부 성공(`lo` 확인). `codex exec --sandbox read-only` 디버그 프로브 9초 완주 — `exec_command success=true`, `SANDBOX_OK`, 번들 bwrap 사용 경고만. 프로파일 직후 1회 180초 무출력 타임아웃이 있었으나 같은 명령 재실행(19초)·디버그 실행(9초) 모두 정상이라 일회성으로 판정(원인 미확정).
+- `scripts/dev/codex_review.sh` 기본값을 **read-only 샌드박스**로 복귀(미설정 → read-only + 프로브, 빈 값 → 플래그 없음, 그 외 → 그 모드). 테스트 9건.
+- `~/.codex/config.toml` 의 `danger-full-access` 는 **유지** — 다른 Codex 세션이 진행 중이라 전역 기본값 변경은 보류. 리뷰 스크립트는 명시 플래그라 영향 없음. 배포판 `bubblewrap` 미설치(번들본으로 충분).
+
+## 2026-09-16 — fix(dev): Codex 교차 리뷰 연속 실패 원인 확정·수정 (`--sandbox read-only` 가 config 우회를 덮어쓰던 문제)
+
+계기: 8~9월 `scripts/dev/codex_review.sh` 가 매번 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` 로 저장소를 못 읽고 "미검증" 으로 끝났다(T10·T11·T12 전부).
+- **근본 원인**: 이 호스트(Ubuntu, `kernel.apparmor_restrict_unprivileged_userns=1`, AppArmor 활성)에서 Codex 번들 bwrap 이 비특권 사용자 네임스페이스 안에서 loopback 을 설정하지 못한다. 시스템 bwrap 은 미설치, 번들 경로 `@openai/codex-linux-x64/vendor/.../codex-resources/bwrap`.
+- **직접 원인**: 2026-08-02 에 `~/.codex/config.toml` 에 `sandbox_mode = "danger-full-access"` 우회를 넣어 뒀는데, 리뷰 스크립트가 `--sandbox read-only` 를 **하드코딩**해 CLI 플래그가 config 를 덮어썼다. 플래그 없이 실행하면 즉시 정상(실측: 30초 내 `git log` 까지 성공).
+- 수정: 샌드박스 플래그를 기본 비지정으로(config 를 따름), `QWQ_REVIEW_SANDBOX=<mode>` 로 명시할 때만 전달하되 **1회 프로브**로 bwrap 오류를 감지하면 즉시 실패(조용한 미검증 방지). 읽기 전용 계약(파일 수정·git 쓰기·설치·네트워크 금지)은 프롬프트에 명시. 테스트 `tests/dev/test_codex_review.py` 7건(기본 무플래그·env 전달·프로브 실패 fail-fast).
+- **수정본을 수정된 스크립트로 실제 Codex 에 리뷰시켜 8월 이후 첫 정상 완주**(gpt-6-astra, 결론까지 출력). Codex 가 낸 P1 1(샌드박스 제거로 쓰기 권한 부여)·P2 2(프로브 pipefail 오판, 프로브 cwd 불일치)를 반영 — 프로브를 1회 호출·rc/출력 분리 판정으로, `cd "$ROOT"` 를 프로브 앞으로, 그리고 **리뷰 전후 작업 트리·HEAD 대조로 변경 시 경고+exit 3**(격리 대체가 아닌 위반 탐지). 테스트 8건.
+- 샌드박스 자체를 살리는 것(번들 bwrap 에 `userns` 허용 AppArmor 프로파일 또는 sysctl 완화)은 호스트 보안 설정 변경이라 **별도 승인 대상** — 이번엔 하지 않았다. 문서 `docs/operations/local-development.md` §9.
+- 부수: 기존 메모리의 "Codex 는 grounding 인라인 필수" 지침은 스크립트 경로에 한해 더 이상 필요 없다(리뷰 결과의 실코드 대조 원칙은 유지).
+
+## 2026-09-16 — docs: 토스 오프라인 PR 통합·실수집 전 사전점검
+
+- 사용자 요청에 따라 설계 PR #65를 main `a28f12e`에 병합하고 구현 PR #67을 생성했다. 이 항목은 #67 병합 전 기록이며 이후 병합 상태/merge SHA는 해당 PR에서 확인한다. 별도 PR #66의 관측 기록은 모두 보존하며 main과 동기화했다.
+- 새 로컬 검증은 구현1375 passed/2 xfailed, 설계 동기화1019 passed/2 xfailed·각 기존 warning1, 격리0·비밀정보 검사 통과. 기존 소스의 독립 리뷰 승인과 새 CI 검증을 구분한다.
+- 병렬 사전점검으로 승인 bool/합성 manifest의 실자료 권한 한계, KIS 관측시각 미제공, 프로세스별 한도, live 원장 재시작 계약 공백을 기록했다. 엔진 내부 독립 저우선 작업을 권고 후보로 두며 설계 승인 전 새 구현을 시작하지 않는다.
+- 기본 OFF·운영 미배선·실자료 관측 미시작. 토큰 발급·인증 API·주문/설정·배포/재시작 없음. 정본은 `docs/reviews/toss-phase1-offline-2026-09-16.md`의 PR 통합·사전점검 절이다.
+
+## 2026-09-16 — feat: 토스 Phase 1 오프라인 기반 (기본 OFF, 운영 미배선)
+
+- 검토된 설계 PR #65 `2235586` 위 별도 feature 브랜치에서 보안 토큰 저장/상태 머신, 정확한 GET 3경로 조회 client/transport, 공유 deadline·retry/page 예산, 시세/일봉 정규화와 합성 shadow CLI를 구현한다. 실제 OAuth 발급기는 주입 인터페이스뿐이며 기존 broker/core/schedulers·설정·의존성 파일은 바꾸지 않는다.
+- 독립 리뷰에서 늦은 revoked 응답/손상 auth 지문, 오래된 요청의 회로 해제/반복 취소 정리, 중복·미래 관측·거래일/시장/페이지 커서, 비교 자료의 관측 나이·정확한 경계/수치범위 문제를 재현하고 회귀 테스트로 보완한다. 진행·재리뷰·최종 검증 수치는 `docs/reviews/toss-phase1-offline-2026-09-16.md`가 정본이다.
+- 최종 통합 리뷰의 재시도 예산·페이지 만료 결함을 수정했고, 폐기 응답→첫 await 전 immutable 관측·관측별 해결 증거로 deadline/취소·재시작 우회를 닫았다. 식별자 JSON 크기·세대 번호 도메인 정합화와 반환 직전 deadline 검사를 추가했다. 병렬 실행에서 드러난50ms 테스트 불안정성은 주입 시계/이벤트·task 회수로 수정했으며 운영 시간 정책은 유지한다.
+- 최종 소스 `2bf7842`: 독립 코드 리뷰 **Approved**, 미해결 Critical/Important/Minor0. UTC/KST 각각 **1375 passed / 2 xfailed**(기준선 대비356건 증가), 격리0·문법·비밀정보 검사 통과. 당시(설계 PR #65 병합 전)는 브랜치 푸시만 수행했고 main 병합/실자료 관측은 미실행이었다. 후속 PR 통합은 위 별도 항목에서 추적한다.
+- 공개 OpenAPI `1.2.17` 원본 SHA와 사용 계약 메타데이터를 고정한다. 파일 입력 CLI는 합성 자료만 처리하며 p95/유효·제외·실패·중복 분모를 보고한다. 합성 수치·fixture 정책을 실자료 승인으로 쓰지 않으며 `production_eligible=False`를 유지한다.
+- **실토큰/인증 API·운영 캐시·주문·설정·SSH·배포·재시작 변경 없음.** 모든 런타임 진입은 미배선·기본 OFF. Phase 1의 실자료 3영업일 관측, Phase 2 후보/점수, Phase 3 표시 wrapper는 별도 승인·구현 대상이다.
+
+## 2026-09-15 — docs: 토스 설계 Codex 후속 보완 (T12, 구현 없음)
+
+- Claude 설계 `85a4266`을 최신 main `8849d92`와 공개 OpenAPI `1.2.17`에 대조하고, P1 4개/P2 10개를 문서·향후 인수 명세로 보완했다. 과거 Claude 검토 34건의 완료 수를 재사용하거나 Toss 런타임 결함을 실행 재현했다고 주장하지 않는다.
+- **아래 이전 적대적 검토 기록의 잔존 정책은 이 항목과 최신 설계로 대체된다**: revoked 동일 캐시 발급 허용 → mint0/지속 auth 회로; 일반 atomic writer → 전용0600 보안 저장; 브로커 전역 주입 훅/정규장 청산 허용 → 전 세션 KIS 단독·표시 wrapper만; 숫자 결측의0 허용 → 내부 nullable와 legacy 필수 필드 게이트 분리; Phase1 기본on → 모든 기본off/실자료 별도 승인.
+- 2봉 당일/전일 오인·200봉52주 모순, 캐시 shadow 누출, 수급/유니버스 의미, 발급/한도/페이지 전체 deadline·총retry1, HTTP allowlist·로그 보안, Phase0 실제 원인/코드 완료와3영업일 관측 분리, manifest 분모/승격 조건을 보완했다. 가격 근접성과 거래소 계약/실행 안전성은 별개다.
+- 필수 Codex CLI는 read-only sandbox의 bwrap 오류로 미완료(승인으로 계산 안 함). 별도 병렬 에이전트가 실제 소비 코드/토큰/보안/Git을 읽기 전용 대조했다. 상세 검증·재리뷰 상태는 `docs/reviews/toss-design-codex-2026-09-15.md`에 기록한다.
+- **문서만 변경**. Toss 구현·패키지 설치·토큰/인증 조회·운영 배포/재시작·주문·설정 변경 없음. §10 A01~A14는 아직 실행하지 않은 향후 테스트 명세다.
 
 ## 2026-09-16 — docs: 배포 3건 장중 1차 관측 (T11·KIS 원장·T12 Phase 0)
 

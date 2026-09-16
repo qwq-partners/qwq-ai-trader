@@ -1,27 +1,8 @@
-"""토스증권 Open API 2차 데이터 소스 (T12 Phase 1 — 인프라·기록 전용)
+"""Toss Phase 1의 오프라인 shadow 통계 경계.
 
-설계: docs/superpowers/plans/2026-09-15-toss-securities-fallback.md
-
-Phase 1 범위는 **인프라와 대조 기록**뿐이다. 어떤 소비자도 토스 값을 쓰지 않으며
-돈 경로(청산·사이징·주문)에는 한 줄도 배선하지 않는다.
+이 패키지는 네트워크, 인증, 환경변수, 운영 설정을 읽지 않는다.
 """
 
-from .client import (
-    TossAPIError,
-    TossCircuitOpen,
-    TossClient,
-    create_toss_client,
-)
-from .market_data import SOURCE, TossMarketData
-from .token import TossTokenCache, TossTokenError
+from .shadow import ShadowManifest, build_shadow, summarize_pairs
 
-__all__ = [
-    "SOURCE",
-    "TossAPIError",
-    "TossCircuitOpen",
-    "TossClient",
-    "TossMarketData",
-    "TossTokenCache",
-    "TossTokenError",
-    "create_toss_client",
-]
+__all__ = ("ShadowManifest", "build_shadow", "summarize_pairs")

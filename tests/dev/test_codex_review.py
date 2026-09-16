@@ -22,10 +22,17 @@ def make_repo(path: Path, *, branch: str = "main"):
     )
 
 
+def args_path(repo: Path) -> Path:
+    """가짜 Codex 의 인자 기록 파일 — 저장소 **밖**에 둔다(스크립트가 리뷰 중 트리 변경을 탐지하므로)."""
+    out = repo.parent / f"{repo.name}_codex_args"
+    out.mkdir(exist_ok=True)
+    return out / "codex_args.txt"
+
+
 def make_codex_stub(path: Path) -> Path:
     """호출 인자를 기록만 하는 가짜 Codex 실행 파일."""
     stub = path / "codex_stub"
-    args_file = path / "codex_args.txt"
+    args_file = args_path(path)
     stub.write_text(
         "#!/usr/bin/env bash\n"
         f"printf '%s\\n' \"$@\" > {args_file}\n",
@@ -35,11 +42,14 @@ def make_codex_stub(path: Path) -> Path:
     return stub
 
 
-def run_review(repo: Path, *args, codex_bin: str):
+def run_review(repo: Path, *args, codex_bin: str, extra_env: dict | None = None):
     env = os.environ | {
         "QWQ_REVIEW_ROOT": str(repo),
         "QWQ_REVIEW_CODEX_BIN": codex_bin,
     }
+    env.pop("QWQ_REVIEW_SANDBOX", None)   # 호출 셸의 값이 새지 않게 — 테스트가 명시한 것만
+    if extra_env:
+        env |= extra_env
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
         cwd=ROOT,
@@ -67,7 +77,7 @@ def test_refuses_branch_review_on_base_branch(tmp_path):
 
     assert result.returncode != 0
     assert "기준 브랜치" in result.stderr
-    assert not (tmp_path / "codex_args.txt").exists()
+    assert not args_path(tmp_path).exists()
 
 
 def test_branch_mode_runs_read_only_review_against_base(tmp_path):
@@ -81,11 +91,14 @@ def test_branch_mode_runs_read_only_review_against_base(tmp_path):
     result = run_review(tmp_path, codex_bin=str(stub))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    args = (tmp_path / "codex_args.txt").read_text(encoding="utf-8").splitlines()
+    args = args_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    # 기본은 read-only 샌드박스(프로브 통과 후) — AppArmor 프로파일 설치로 이 호스트에서도 다시 뜬다.
+    # config.toml 을 따르고 싶으면 QWQ_REVIEW_SANDBOX 를 빈 값으로 준다(아래 별도 테스트).
     assert args[:3] == ["exec", "--sandbox", "read-only"]
     prompt = "\n".join(args[3:])
     assert "main...HEAD" in prompt
     assert "P0" in prompt
+    assert "읽기 전용" in prompt          # 샌드박스가 없어도 계약은 프롬프트로 유지
 
 
 def test_uncommitted_mode_allows_base_branch(tmp_path):
@@ -95,7 +108,7 @@ def test_uncommitted_mode_allows_base_branch(tmp_path):
     result = run_review(tmp_path, "--uncommitted", codex_bin=str(stub))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    args = (tmp_path / "codex_args.txt").read_text(encoding="utf-8").splitlines()
+    args = args_path(tmp_path).read_text(encoding="utf-8").splitlines()
     assert args[:3] == ["exec", "--sandbox", "read-only"]
     prompt = "\n".join(args[3:])
     assert "커밋되지 않은 변경" in prompt
@@ -110,3 +123,68 @@ def test_rejects_unknown_option(tmp_path):
 
     assert result.returncode == 2
     assert "사용법" in result.stdout + result.stderr
+
+
+def test_empty_sandbox_env_means_no_flag(tmp_path):
+    """QWQ_REVIEW_SANDBOX= (빈 값) 이면 플래그를 넘기지 않고 config.toml 을 따른다(프로파일 없는 호스트용)."""
+    make_repo(tmp_path)
+    subprocess.run(["git", "-C", str(tmp_path), "switch", "-q", "-c", "feature/x"], check=True)
+    stub = make_codex_stub(tmp_path)
+
+    result = run_review(tmp_path, codex_bin=str(stub), extra_env={"QWQ_REVIEW_SANDBOX": ""})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = args_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    assert args[:1] == ["exec"] and "--sandbox" not in args
+
+
+def test_sandbox_env_is_passed_after_successful_probe(tmp_path):
+    """QWQ_REVIEW_SANDBOX 를 주면 프로브 뒤 --sandbox 로 전달된다."""
+    make_repo(tmp_path)
+    subprocess.run(["git", "-C", str(tmp_path), "switch", "-q", "-c", "feature/x"], check=True)
+    stub = make_codex_stub(tmp_path)
+
+    result = run_review(tmp_path, codex_bin=str(stub), extra_env={"QWQ_REVIEW_SANDBOX": "read-only"})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = args_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    assert args[:3] == ["exec", "--sandbox", "read-only"]
+
+
+def test_sandbox_probe_failure_fails_fast_instead_of_unverified_review(tmp_path):
+    """샌드박스가 bwrap 오류로 못 뜨면 리뷰를 돌리지 않고 즉시 실패한다(조용한 '미검증' 방지)."""
+    make_repo(tmp_path)
+    subprocess.run(["git", "-C", str(tmp_path), "switch", "-q", "-c", "feature/x"], check=True)
+    stub = tmp_path / "codex_stub"
+    args_file = args_path(tmp_path)
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *--sandbox* ]]; then echo 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted'; exit 0; fi\n"
+        f"printf '%s\\n' \"$@\" > {args_file}\n",
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+
+    result = run_review(tmp_path, codex_bin=str(stub), extra_env={"QWQ_REVIEW_SANDBOX": "read-only"})
+
+    assert result.returncode == 1
+    assert "샌드박스" in result.stderr and "bwrap" in result.stderr
+    assert not args_file.exists(), "리뷰 본 실행이 시작되면 안 된다"
+
+
+def test_repo_mutation_during_review_is_detected(tmp_path):
+    """샌드박스 없이 돌 때의 완화책 — Codex 가 파일을 바꾸면 경고 + exit 3."""
+    make_repo(tmp_path)
+    subprocess.run(["git", "-C", str(tmp_path), "switch", "-q", "-c", "feature/x"], check=True)
+    stub = tmp_path / "codex_stub"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo mutated > {tmp_path / 'b.txt'}\n",   # 리뷰 중 파일 생성 = 계약 위반
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+
+    result = run_review(tmp_path, codex_bin=str(stub))
+
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "읽기 전용 계약 위반" in result.stderr and "b.txt" in result.stderr

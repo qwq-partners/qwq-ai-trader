@@ -131,7 +131,11 @@ bash scripts/dev/codex_review.sh                # 현재 feature 브랜치 vs ma
 bash scripts/dev/codex_review.sh --uncommitted  # 커밋 전 변경만
 ```
 
-리뷰는 읽기 전용 샌드박스에서 실행되어 파일을 수정하거나 명령을 실행하지 않는다. 지적 사항은 P0(치명적)/P1(중요)/P2(경미)로 분류된다. P0·P1을 수정한 뒤 `bash scripts/dev/verify.sh`를 다시 통과시키고 push한다. 반대로 Codex가 구현한 변경은 Claude Code가 리뷰한다. 기준 브랜치는 `QWQ_REVIEW_BASE`로 재정의할 수 있다.
+리뷰의 읽기 전용 계약은 **프롬프트**로 강제된다(파일 수정·git 쓰기·설치·네트워크 금지, 조회 명령만 허용). 샌드박스는 기본 **read-only** 이며(운영 서버는 아래 AppArmor 프로파일로 다시 동작), 프로파일이 없는 호스트에서 `~/.codex/config.toml` 의 `sandbox_mode` 를 그대로 쓰려면 `QWQ_REVIEW_SANDBOX=` (빈 값)으로 실행한다 — 샌드박스를 켤 때는 스크립트가 먼저 1회 프로브(종료 코드·출력 분리 판정)해 bwrap 이 못 뜨면 조용히 "미검증"으로 끝나는 대신 즉시 실패한다. 샌드박스 없이 도는 경우의 완화책으로 리뷰 전후 작업 트리·HEAD 를 대조해 변경이 있으면 경고와 함께 exit 3 으로 끝낸다(격리를 대신하진 못하고 위반을 탐지한다).
+
+> **운영 서버(Ubuntu, `kernel.apparmor_restrict_unprivileged_userns=1`)에서는 Codex 번들 bwrap 이 사용자·네트워크 네임스페이스를 만들지 못한다**(`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`). 2026-08-02 에 config 에 `danger-full-access` 우회를 뒀으나 이 스크립트가 `--sandbox read-only` 를 하드코딩해 그것을 덮어써 8~9월 교차 리뷰가 전부 "환경 오류·미검증"으로 끝났다(2026-09-16 확정·수정). **2026-09-16 저녁 해결**: 번들 bwrap 에 `userns` 만 허용하는 AppArmor 프로파일(`scripts/ops/apparmor/codex-bwrap`, 설치 `bash scripts/ops/apparmor/install.sh`)을 운영 서버에 로드했다 — Ubuntu 가 chrome/code 에 쓰는 `flags=(unconfined) { userns, }` 패턴이고 경로는 nvm 노드 버전·플랫폼 글롭. 이후 `codex exec --sandbox read-only` 가 정상 완주(실측: 번들 bwrap 으로 명령 실행·`SANDBOX_OK`). 롤백은 프로파일 머리말 참조. Codex 가 "bubblewrap 이 PATH 에 없다"고 경고하지만 번들본을 쓰므로 무해하다(배포판 `bubblewrap` 패키지 설치는 하지 않았다). `~/.codex/config.toml` 의 `danger-full-access` 우회는 다른 Codex 세션이 진행 중이라 **그대로 뒀다** — 리뷰 스크립트는 `--sandbox read-only` 를 명시하므로 config 와 무관하게 격리된다.
+
+지적 사항은 P0(치명적)/P1(중요)/P2(경미)로 분류된다. P0·P1을 수정한 뒤 `bash scripts/dev/verify.sh`를 다시 통과시키고 push한다. 반대로 Codex가 구현한 변경은 Claude Code가 리뷰한다. 기준 브랜치는 `QWQ_REVIEW_BASE`로 재정의할 수 있다.
 
 ## 문제 해결
 
