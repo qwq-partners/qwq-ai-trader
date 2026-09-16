@@ -437,7 +437,7 @@ class ObservationLedger:
         _require(abs((observed[0] - observed[1]).total_seconds()) <= cohort["max_skew_seconds"])
         pair_id = sha256(_canonical([symbol, *(t.astimezone(timezone.utc).isoformat() for t in observed)])).hexdigest()
         _require(comp["pair_id"] == pair_id)
-        key = self._cohort_key(slot), comp["pair_id"]
+        key = self._pair_key(slot, comp["pair_id"])
         _require(key not in self._pairs or row["attempt_id"] in self._terminals)
 
     def _apply(self, row):
@@ -454,7 +454,7 @@ class ObservationLedger:
             comp = (row["observation"] or {}).get("comparison")
             if comp and comp["valid"]:
                 slot = self._slots[self._attempts[row["attempt_id"]]]
-                self._pairs.add((self._cohort_key(slot), comp["pair_id"]))
+                self._pairs.add(self._pair_key(slot, comp["pair_id"]))
         elif typ == "missed":
             self._missed.add((row["kind"], row["slot_id"]))
         elif typ == "duplicate":
@@ -549,8 +549,12 @@ class ObservationLedger:
         c = slot["snapshot"].get("cohort", {})
         return self.plan_hash, c.get("dataset_kind", "unknown"), c.get("session", "unknown")
 
+    def _pair_key(self, slot, pair_id):
+        # 세션별 집계와 달리 원시각 쌍은 같은 계획·자료셋 전체에서 한 번만 센다.
+        return (*self._cohort_key(slot)[:2], pair_id)
+
     def pair_seen(self, *, attempt_id, pair_id):
-        return (self._cohort_key(self._slots[self._attempts[attempt_id]]), pair_id) in self._pairs
+        return self._pair_key(self._slots[self._attempts[attempt_id]], pair_id) in self._pairs
 
     def _counts(self, kind=None):
         attempts = {a for a, key in self._attempts.items() if kind is None or key[0] == kind}
