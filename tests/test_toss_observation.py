@@ -373,6 +373,8 @@ def test_distinct_sessions_and_datasets_are_not_pooled(tmp_path, monkeypatch):
     asyncio.run(runner.prices(slot_id="s3", snapshot=snap))
     report = ledger.summary()
     assert {(g["dataset_kind"], g["session"]) for g in report["cohorts"]} == {("synthetic", "regular"), ("synthetic", "after"), ("live", "regular")}
+    assert {(g["dataset_kind"], g["session"]): g["comparison"]["valid_pairs"] for g in report["cohorts"]} == {
+        ("synthetic", "regular"): 1, ("synthetic", "after"): 0, ("live", "regular"): 1}
     assert report["comparison"]["status"] == "insufficient" and report["comparison"]["p95_pct"] is None
     assert report["cohorts"][0]["by_date"]["2026-09-16"]["valid_pairs"] == 1
 
@@ -414,3 +416,71 @@ def test_unconfirmed_policy_market_basis_stays_comparison_excluded(tmp_path):
     runner, ledger, snap = setup_runner(tmp_path, p=p)
     result = asyncio.run(runner.prices(slot_id="s", snapshot=snap))
     assert result.outcome == "success" and result.ledger_complete and result.valid_pairs == 0
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_source_pair_is_unique_across_sessions_with_one_configured_plan(tmp_path, monkeypatch, restart):
+    import json
+    from hashlib import sha256
+    from types import MappingProxyType
+    from src.data.providers.toss import observation
+    from src.data.providers.toss.observation_ledger import ObservationLedger
+
+    source_at = datetime(2026, 9, 16, 8, 59, 55, tzinfo=KST)
+    now = [datetime(2026, 9, 16, 8, 59, 59, tzinfo=KST)]
+    p = policy()
+    p["dataset_kind"] = "live"
+    p["sessions"] = [{"name": "pre", "start": "08:00", "end": "09:00"},
+                     {"name": "regular", "start": "09:00", "end": "15:30"}]
+    def freeze(value):
+        if isinstance(value, dict): return MappingProxyType({k: freeze(v) for k, v in value.items()})
+        if isinstance(value, (list, tuple)): return tuple(freeze(v) for v in value)
+        return value
+    p = freeze(p)
+    kis = replace(quote("A", observed_at=source_at), fetched_at=now[0])
+    # 가짜 정규화 경계에서만 명시적 시장 기준을 주입한다. 두 조회 모두
+    # 원시각은 같고 수신시각만 바뀌므로 새 가격 통계 표본이 아니다.
+    monkeypatch.setattr(observation, "parse_prices", lambda body, **kwargs: {
+        "A": replace(quote("A", "106", observed_at=source_at), fetched_at=now[0])})
+    ledger = ObservationLedger(tmp_path / "ledger", plan_hash="a" * 64, max_bytes=2_000_000)
+    ledger.open()
+    ledger.configure_plan(p)
+    client = GoodClient()
+    runner = observation.ObservationRunner(client=client, ledger=ledger, policy=p, now=lambda: now[0])
+    def snapshot():
+        return observation.select_snapshot(candidates=(("A", 1),), holdings=(),
+            source_success_at=now[0], now=now[0], policy=p, kis_quotes={"A": kis})
+    first = asyncio.run(runner.prices(slot_id="2026-09-16T08:55:00+09:00", snapshot=snapshot()))
+    assert first.valid_pairs == 1
+    if restart:
+        ledger.close()
+        ledger = ObservationLedger(ledger.path, plan_hash="a" * 64, max_bytes=2_000_000)
+        ledger.open()
+        ledger.configure_plan(p)
+        runner.ledger = ledger
+    now[0] = datetime(2026, 9, 16, 9, 0, 1, tzinfo=KST)
+    second = asyncio.run(runner.prices(slot_id="2026-09-16T09:00:00+09:00", snapshot=snapshot()))
+    assert second.outcome == "success" and second.observation_count == 1
+    assert second.valid_pairs == 0 and second.excluded_pairs == 1 and second.ledger_complete
+    assert len(client.calls) == 2
+    ledger.close()
+    report = ObservationLedger.read_only_summary(ledger.path, plan_hash="a" * 64, max_bytes=2_000_000)
+    assert (report["valid_pairs"], report["excluded_pairs"], report["terminal_attempts"]) == (1, 1, 2)
+    by_session = {c["session"]: c for c in report["cohorts"]}
+    assert by_session["pre"]["comparison"]["valid_pairs"] == 1
+    assert by_session["regular"]["comparison"]["p95_pct"] is None
+    assert by_session["regular"]["excluded_pairs"] == 1
+    rows = [json.loads(line) for line in ledger.path.read_text().splitlines()]
+    terminals = [r for r in rows if r["type"] == "terminal"]
+    first_comparison, second_comparison = (r["observation"]["comparison"] for r in terminals)
+    assert first_comparison["pair_id"] == second_comparison["pair_id"]
+    assert second_comparison["reason"] == "duplicate"
+
+    # 같은 중복을 hash-valid한 유효 terminal로 위조해도 재읽기에서 거부한다.
+    terminal = rows[-1]
+    terminal["observation"].update(valid_pairs=1, excluded_pairs=0, comparison=first_comparison)
+    terminal.pop("hash")
+    terminal["hash"] = sha256(json.dumps(terminal, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    ledger.path.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows))
+    corrupt = ObservationLedger.read_only_summary(ledger.path, plan_hash="a" * 64, max_bytes=2_000_000)
+    assert corrupt["incomplete"] and corrupt["error_code"] == "ledger_corrupt"
