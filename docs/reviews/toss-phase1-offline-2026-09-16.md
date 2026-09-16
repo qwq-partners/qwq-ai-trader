@@ -5,7 +5,7 @@
 이 문서는 [검토된 설계](../superpowers/plans/2026-09-15-toss-securities-fallback.md)의 **Phase 1 오프라인 부분**을 다룬다. 인증 실자료 shadow, 운영 스케줄러, 소비자 폴백 도입까지 완료했다는 의미가 아니다.
 
 - 시작 기준: main `8849d92`, 설계 PR #65 head `2235586`. 설계 PR을 임의로 병합하지 않고 별도 `feature/toss-phase1-offline-20260916`에서 구현했다.
-- 계획: [구현 계획](../superpowers/plans/2026-09-16-toss-phase1-offline.md). **오프라인 구현·최종 코드 리뷰 승인**, 검증 소스 `2bf7842`. 전체 리뷰에서 발견한 결함을 수정하고 한정 재리뷰로 닫았다. 작업별 승인·테스트 통과를 전체 승인으로 대체하지 않았다. 09-16 후속 사용자 요청으로 [설계 PR #65](https://github.com/qwq-partners/qwq-ai-trader/pull/65) → [구현 PR #67](https://github.com/qwq-partners/qwq-ai-trader/pull/67) 순서의 main 통합을 진행한다. 각 PR의 실제 상태/merge SHA가 병합 정본이다.
+- 계획: [구현 계획](../superpowers/plans/2026-09-16-toss-phase1-offline.md). **오프라인 구현·최종 코드 리뷰 승인**, 검증 소스 `2bf7842`. 전체 리뷰에서 발견한 결함을 수정하고 한정 재리뷰로 닫았다. 작업별 승인·테스트 통과를 전체 승인으로 대체하지 않았다. 09-16 후속 사용자 요청으로 [설계 PR #65](https://github.com/qwq-partners/qwq-ai-trader/pull/65)는 main `a28f12e`에 병합됐다. [구현 PR #67](https://github.com/qwq-partners/qwq-ai-trader/pull/67)은 생성됐으며 **이 문서 갱신은 #67 병합 전 스냅샷**이다. 이후 실제 상태/merge SHA는 PR이 정본이다.
 - 기본 OFF, 운영 호출부에 import/배선 없음. 주문·체결·잔고·청산·사이징·후보/점수·설정·의존성 파일은 변경 범위 밖이다.
 - 실제 자격증명/토큰/운영 캐시를 읽지 않았고, 인증 API·SSH·systemctl·배포·재시작·주문을 실행하지 않았다. 공개 OpenAPI JSON을 인증 없이 조회한 것과 합성 transport/session 검증을 구분한다.
 
@@ -122,6 +122,7 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul PYTHONDONTWRITEBYTECODE=1 \
 
 ### 통합 검증과 범위
 
+- 중간 상태 고정: PR #65는 **2026-09-16 20:14:13 KST**, main `a28f12e13228d95d815b0663629e4f4b11441b33`에 병합 완료. 필수 Verify [35088959821](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/35088959821) 성공. 이 절 작성 시 PR #67은 아직 미병합이며 아래 검증·사전점검을 거쳐 별도 병합한다. 앞부분의 착수 기준/부모 검증은 해당 SHA 시점의 역사 기록이다.
 - 사용자 요청은 PR 생성·main 반영·후속 진행이다. 실토큰 발급·실자료 호출·운영 배포/재시작·설정/주문 변경까지 승인된 것으로 해석하지 않는다.
 - 기능 브랜치 `080e9bc`의 새 KST 전체 검증: **1375 passed / 2 xfailed / 1 기존 warning**, 44.08초, 격리 접근0·문법/비밀정보 검사 통과.
 - 통합 도중 별도 PR #66이 main `dce9941`에 반영됐다. 설계 브랜치의 CHANGELOG 충돌은 양쪽 기록을 보존했고, 관측 문서를 변경하거나 그 실측을 새로 검증했다고 주장하지 않는다. 설계 브랜치 전체 검증: **1019 passed / 2 xfailed / 1 기존 warning**, 24.34초, 격리0·비밀정보 검사 통과. 구현 브랜치에도 같은 기록을 보존했다.

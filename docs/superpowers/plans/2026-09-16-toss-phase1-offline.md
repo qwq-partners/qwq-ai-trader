@@ -18,7 +18,7 @@
 - 모든 캐시/락/입출력 경로는 명시 주입, HOME 재지정 금지. 토큰/인증 raw body·예외를 로그/repr/원장에 노출하지 않는다.
 - 프로젝트 TDD: 테스트→RED 관찰→최소 구현→GREEN. 외부 호출만 fake로 대체하고 상태/파일/분기 구현은 실제로 검사한다. 예상값은 직접 검산한 literal을 사용한다.
 - 파일 수정은 apply_patch, 작업별 격리 feature worktree, 다른 담당 파일 수정 금지. 에이전트는 하위 에이전트를 생성하지 않는다. 부모가 통합 문서·리뷰·푸시를 담당한다.
-- 구현 착수 기준 main `8849d92`, 당시 설계 PR #65는 미병합. 구현은 `2235586` 위 별도 브랜치로 쌓았다. 09-16 후속 사용자 요청으로 설계 PR #65·구현 PR #67의 main 통합을 진행한다. 실자료·운영 배포/재시작 승인은 포함하지 않는다.
+- 구현 착수 기준 main `8849d92`, 당시 설계 PR #65는 미병합. 구현은 `2235586` 위 별도 브랜치로 쌓았다. 09-16 후속 사용자 요청으로 설계 PR #65를 main `a28f12e`에 병합했고 구현 PR #67을 생성했다. 이 갱신은 #67 병합 전 기록이다. 실자료·운영 배포/재시작 승인은 포함하지 않는다.
 
 ## Scope / Acceptance Map
 
@@ -178,7 +178,7 @@ assert called == []
 
 - [x] Step 5: 실제 CLI subprocess를 synthetic fixture로 실행해 JSON/exitcode/분모를 검산하고 과거결과 덮어쓰기/캐시읽기/인증설정 접근이 없음을 검증한다. 함수 OFF는 env를 암묵 조회하지 않는다. TOSS_API=1 문자열만으로 on으로 전환되는 경로도 만들지 않는다(현재 런타임 미배선).
 - [x] Step 6: 세 모듈 통합 fixture 테스트(가짜 issuer/token→client→가격/페이지→shadow)와 전체 offline verify를 실행한다. subprocess는 명시 timeout, output path 미지정(stdout만), .env로드·운영results사용 금지. 자체 선행 커밋/리뷰 report를 부모에게 넘긴다.
-- [x] Step 7: 부모가 독립 작업별/전체 리뷰·수정·UTC/KST 전체 verify·비밀 검사 후 feature push/PR 생성한다. README에 reproducible offline CLI 명령과 Phase1 **실자료 부분 미완**을 명시한다. 원래 범위의 main 병합 보류는 09-16 사용자 후속 요청으로 해제됐으며, 설계 #65 → 구현 #67 순서로 보호 규칙을 지켜 통합한다. 배포·재시작은 여전히 범위 밖이다.
+- [x] Step 7: 부모가 독립 작업별/전체 리뷰·수정·UTC/KST 전체 verify·비밀 검사 후 feature push/PR 생성한다. README에 reproducible offline CLI 명령과 Phase1 **실자료 부분 미완**을 명시한다. 원래 범위의 main 병합 보류는 09-16 사용자 후속 요청으로 해제됐다. 설계 #65는 `a28f12e`로 병합 완료했고 구현 #67은 이 기록 시점에 병합 전이다. 배포·재시작은 여전히 범위 밖이다.
 
   코드/검증/문서·feature push·[PR #67 생성](https://github.com/qwq-partners/qwq-ai-trader/pull/67) 완료(소스 `2bf7842`, 최종 독립 승인, UTC/KST1375 passed/2 xfailed, 원격 Verify35036649156 성공). 최종 병합 여부는 PR 상태로 확인한다. 이 체크는 실자료 관측 또는 운영 활성화 완료를 뜻하지 않는다.
 
