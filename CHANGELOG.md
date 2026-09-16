@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-16 — feat(T12 Phase 1): 토스증권 클라이언트 인프라 + KIS↔토스 대조 기록 (shadow 전용, 소비자 무연결)
+
+설계서 §5 Phase 1. **어떤 기존 소비자도 토스 값을 받지 않는다.** 돈 경로(청산·사이징·주문)에 단 한 줄도 배선하지 않았다. 설계 검토 반영 브랜치(`fix/toss-design-review-followup`, blocking 11건)도 이 PR 에 합쳐 들어간다.
+
+- `src/data/providers/toss/` 신규 — `token.py`(단일 캐시 파일+`fcntl` 락+락 안 double-check, **`token-revoked` 는 재발급하지 않고 캐시 재읽기→최신 토큰 재시도**, `expired/invalid-token` 만 재발급, 에러 코드로 구분, 캐시 삭제 없음, 캐시·락 경로 생성자 주입), `rate_limit.py`(KIS 리미터와 완전 분리된 그룹별 토큰 버킷, `X-RateLimit-Limit` 로 하향만, 429 `Retry-After`·재시도 상한 2), `client.py`(서킷 브레이커 — 연속 5회 실패 60초 개방, 반열림 시험 호출 1건, 비-JSON 본문 방어, `TOSS_API=0`/자격증명 부재 시 팩토리 None), `market_data.py`(현재가 200개 분할·청크 실패 격리, **캔들을 KIS 계약으로 정규화 — 오래된 순 재정렬·`date=YYYYMMDD`·decimal→float·`value=None`**, `before` 미전진 가드, 호가 index 0=최우선 정렬 강제, `timestamp` null → `as_of=None`+`data_status=partial`).
+- `src/analytics/toss_parity.py` 신규 — 현재가 대조(bp 차이·지연·세션 태깅), 캔들 대조(정렬 방향·날짜·종가 일치율), 캘린더 대조(`utils/session.py` 하드코딩과 경계 비교, **경고만 — 세션 판정 불변**), `summarize()` 세션별 p50/p95(Phase 3 게이트는 `regular` 키로만 판정). 원장 `~/.cache/ai_trader/toss_parity/<kind>_YYYYMMDD.jsonl` append-only, 경로 주입 가능.
+- `kr_scheduler.run_toss_parity_scheduler` — 5분 주기, 장중만, 보유 종목은 **KIS 추가 호출 없이** 포트폴리오 캐시 가격(`kis_as_of=None` 정직 기록), 스크리닝 후보 상위 10은 토스 단독 관측. 보유·후보 분리 호출(후보 404 가 보유 대조를 유실시키지 않게). `TOSS_API=0`·자격증명 부재 시 하트비트 `set_enabled(False)` 로 정체 오탐 차단. 캘린더 대조 실패는 annotate 만(해당 틱 success 를 덮지 않음). `loop_heartbeat.PERIODS` 에 `kr_toss_parity: 300`.
+- 테스트 45건(`tests/test_toss_client_phase1.py` 27 + `tests/test_toss_parity_phase1.py` 18) 전부 스텁 — 동시 2요청 발급 1회, 별도 인스턴스(≈다른 프로세스) flock double-check 발급 1회, revoked 재발급 회피·캐시 보존, 캔들 정렬 역전 탐지, 세션 태깅, 캘린더 불일치 경고, TOSS_API=0 미생성·하트비트 비활성, 반열림 1건, 비-JSON 5xx 계수, 발급 예외 래핑(자격증명 미노출), 짧은 expires_in 재발급 루프 방지, 청크 실패 격리, 페이징 가드, 호가 정렬, summarize regular 분리.
+- 3관점 적대적 검토(토큰·동시성 / 계약 정규화 / 격리·돈 경로) 16건 → blocking 1(하트비트 오탐)·advisory 15 중 12건 반영. **미반영 3건**: 캔들 대조 스케줄러 배선(KIS 일봉 캐시 접근점 부재 — 추가 KIS 호출 금지 원칙 우선), 호가 키 KIS 명명(`size`) 정합(호가는 설계 §6.1 상 어떤 단계에서도 폴백 대상이 아니라 보류), 페이징 비용 측정(캔들 배선과 함께 후속).
+- **상태**: 구현 완료 / 대조 표본 0일(3영업일 축적 후 Phase 3 게이트 X·Y 판정) / 운영 승격 없음. 배포 시 재시작 필요(새 태스크). 토스 자격증명은 09-15 운영 `.env` 반영 완료. 독립 리뷰용 프롬프트 `docs/reviews/prompts/t12-phase1-review-prompt.md`.
+
 ## 2026-09-16 — docs: 배포 3건 장중 1차 관측 (T11·KIS 원장·T12 Phase 0)
 
 09-16 09:00~10:52 장중 읽기 전용 관측. 상세는 `docs/operations/monitoring-checkpoints.md`.
@@ -23,6 +34,24 @@
 - 운영은 MCP 미연결 상태였으므로 보조 가산을 신규 활성화하지 않는다. 패키지·환경·주문·설정·킬스위치 무변경. 과거 MCP 연결 환경에서는 보조 가산이 사라지는 의미 변경이며 모든 환경의 기준선 동일을 주장하지 않는다.
 - 격리 병렬 구현(Astra/high 검증기, Terra/high 전략 공급자), 부모 부팅 배선·문서·통합, Astra/xhigh 독립 리뷰. 테스트 교체·RED/GREEN·검증·리뷰·운영 배포 상태는 `docs/reviews/mcp-retirement-2026-09-15.md`에 기록한다.
 - 검증: MCP 전용 20건 폐기·신규 17건 추가, UTC/KST 각각 **1019 passed / 2 xfailed**·격리 위반 0. 독립 리뷰 신규 P0/P1/P2 0·승인. 비차단 테스트 의견 1건(예외에 흡수되는 미호출 검사)은 호출 목록 외부 단언으로 보완·한정 재리뷰 승인·메모리 변이 실패 확인. 아직 미배포.
+
+## 2026-09-15 — docs: 토스증권 도입 설계 적대적 검토 반영 (T12, blocking 11건)
+
+설계서 초안(PR #60 에 함께 들어감)을 4관점 적대적 검토(스펙 정확성·아키텍처 정합성·돈 경로 위험·단계 검증 가능성)에 부쳐 **지적 43건 → 확정 34건(blocking 11)** 을 반영했다. 정본 OpenAPI/AsyncAPI 문서와 실제 저장소 코드로 교차 검증한 결과다.
+
+**blocking 반영**
+- **토큰 `401 token-revoked` 처리 방향 반전**(§4.2) — 초안은 "캐시 무효화 후 1회 재발급"이었으나 스펙 권고는 *최신 토큰으로 재시도*다. 이 코드는 "다른 주체가 더 새 토큰을 발급했다"는 신호라, 재발급하면 방금 정당하게 발급된 상대 토큰을 죽여 §6.2 가 막으려던 핑퐁이 그대로 발생한다("1회만"은 각 프로세스가 독립 수행하므로 전역 루프를 못 막는다). 캐시 재읽기 → 다르면 재시도 → 같을 때만 락 잡고 double-check 후 1회 발급으로 교체. `expired-token`/`invalid-token` 과 **에러 코드로 구분**(HTTP 401 만으로 분기 금지).
+- **반환 계약에서 `None` 금지**(§4.4) — 초안의 "채울 수 없는 값은 0 이 아니라 None"은 기존 소비자를 죽인다. `quote.get(k, 0)` 방어는 값이 None 이면 default 를 쓰지 않아 `Decimal(str(None))` 이 터지고, 그 예외가 REST 피드의 per-symbol `except → debug` 에 삼켜져 **폴백이 성공했는데 청산 체크가 조용히 스킵**된다. "타입 도메인 불변"으로 교체하고 결측은 `data_status`·`missing_fields` 메타 키로만 전달. 0 금지 규칙은 신규 키에만 적용.
+- **일봉 정렬 역전**(§3.3.5) — 토스 `/candles` 는 **최신순 내림차순**, KIS 는 오래된 순. 소비자 9곳이 `[-1]`·`[-200:]` 로 "끝이 최신"을 가정하며 **같은 유형의 역전이 2026-08-07 에 두 번 실사고**를 냈다(섹터 수익률 부호 역전). 날짜 포맷(ISO8601 vs YYYYMMDD)·거래대금 축 부재·`adjusted` 기본값까지 어댑터 정규화 대상으로 명문화.
+- **호가 폴백 전면 금지**(§6.1·§3.1·Phase 3) — 호가는 매도 지정가로 직결되는데 토스 호가 응답에 **거래소 식별 필드가 없다.** 통합 최우선 매수호가로 지정가를 내면 KRX 에 미체결로 남아 청산이 지연된다. Phase 3 대상에서 `orderbook` 삭제.
+- **랭킹 필드 의미 한정**(§3.3.1) — `changeRate` 는 **소수비율**(0.0125=1.25%)이라 KIS `change_pct`(퍼센트) 자리에 ×100 변환 필수. `tradingVolume` 은 duration 누적이고 `TOSS_SECURITIES_*` 는 토스 체결분만 집계하므로 합성 소스에서 배제. `TOP_GAINERS/LOSERS` 는 기간 등락률이라 배제.
+- **Phase 3 진입 임계값 사전 등록**(§5) — "정규장엔 통합=정규장 시세"는 스펙 근거가 없다(토스는 KRX 단독가를 제공하지 않는다). 차이는 제거 불가이며 측정 대상이므로 p95·초과 비율 임계값을 **데이터 보기 전에** 등록하고 측정 후 변경 금지.
+- **라우터 배선 축소**(§4.1·Phase 3) — 전역 교체는 `get_quote` 23곳·`get_daily_prices` 12곳이라 과도. `allow_fallback: bool = False` opt-in 으로 바꾸고 청산·사이징·주문 경로는 기본값(KIS 단독) 유지. 브로커에는 토스 import 를 두지 않고 **주입형 훅**으로 배선.
+- **OAuth 스코프 부재**(§6.5) — 시세용 토큰이 곧 주문 권한 토큰이고 `X-Tossinvest-Account` 도 비밀이 아니다. "주문 API 를 쓰지 않는다"는 우리 코드 관례일 뿐 권한 경계가 아니며 **실효 경계는 허용 IP 하나뿐**임을 명시. 재발급은 사용자 판단으로 미실시(현재 키 유지).
+
+**advisory 반영**: 상/하한가≠신고가 포착 구분, NXT 시간외 폴백이 청산 직행하는 경로, 매수 유의사항·거래정지 플래그(신규 능력), `timestamp` 조건부 nullable, decimal 문자열 타입, 대시보드가 `source` 를 리터럴로 쓴다는 사실, 파일 락 근거 정정(대시보드는 봇과 동일 프로세스), 토큰 캐시 경로를 생성자 인자로(테스트 격리 가드), 봇 외 발급 금지, **§6.6 폴백 실패 경로의 지연**(타임아웃·재시도 상한·서킷브레이커) 신설, Phase 0 기준선 계측으로 Phase 2 효과 분리, 일봉·수급의 거래소 기준 확정, Phase 4 WebSocket 이 전 세션 통합 시세를 푸시한다는 경고.
+
+- 문서: 설계서 291→310줄, `docs/integrations/external-apis.md` 토스 절에 정렬·토큰·스코프 제약 추가. **구현 없음.**
 
 ## 2026-09-15 — ops: Codex 최종 리뷰 후속 배포 (PR #61, 21:56 KST)
 

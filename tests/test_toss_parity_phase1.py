@@ -324,3 +324,31 @@ async def test_run_toss_parity_scheduler_자격증명_없으면_즉시_반환(mo
 # ── 유틸 ─────────────────────────────────────────────────────────────────────
 def _read_jsonl(path: Path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+# ── 검토 반영 (2026-09-16) ───────────────────────────────────────────────────
+
+def test_summarize_reports_regular_session_separately(tmp_path):
+    """Phase 3 게이트는 정규장 수치로만 판정한다 — 세션 섞인 p95 와 별도로 regular 키가 있어야 한다."""
+    import json
+    from src.analytics import toss_parity as tp
+    day = "2026-09-16"
+    p = tp._ledger_path("price", day, tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    rows = [{"toss_ok": True, "diff_bp": 5.0, "session": "regular"},
+            {"toss_ok": True, "diff_bp": 90.0, "session": "next"},
+            {"toss_ok": True, "diff_bp": 7.0, "session": "regular"}]
+    p.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    s = tp.summarize(tmp_path, day)
+    assert s["regular"]["n"] == 2 and s["regular"]["p95"] <= 7.0
+    assert s["diff_by_session"]["next"]["n"] == 1
+    assert s["diff_bp_p95"] >= 7.0   # 혼합 수치는 참고값
+
+
+def test_scheduler_marks_heartbeat_disabled_when_toss_off(monkeypatch):
+    """TOSS_API=0 이면 태스크를 안 만들 뿐 아니라 하트비트를 비활성 표기해 정체 오탐을 막는다."""
+    from src.schedulers import kr_scheduler
+    from src.utils import loop_heartbeat as hb
+    src = __import__("inspect").getsource(kr_scheduler.KRScheduler.create_tasks)
+    assert 'set_enabled("kr_toss_parity", False' in src
+    src2 = __import__("inspect").getsource(kr_scheduler.KRScheduler.run_toss_parity_scheduler)
+    assert 'set_enabled("kr_toss_parity", False' in src2

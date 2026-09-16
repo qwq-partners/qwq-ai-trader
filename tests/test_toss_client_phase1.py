@@ -442,3 +442,100 @@ async def test_orderbook_price_limits_calendar_and_index(tmp_path):
     assert index["KOSPI"]["price"] == 2812.45
     assert index["KOSPI"]["as_of"] is None        # 지수 timestamp null 실측 (§3.3-2)
     assert session.calls[3]["url"].endswith("/api/v1/market-indicators/prices")
+
+
+# ── 검토 반영 (2026-09-16) — 되돌리면 실패하는 회귀 가드 ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_half_open_allows_only_one_trial_call(tmp_path):
+    """반열림 중 시험 호출은 1건만 통과, 동시 호출은 거부된다."""
+    session = FakeSession([err(500, "internal-error"), err(500, "internal-error")])
+    client = make_client(tmp_path, session, fail_threshold=2, circuit_open_sec=0.05)
+    for _ in range(2):
+        with pytest.raises(TossAPIError):
+            await client.get("/api/v1/prices", {"symbols": "A"}, group="MARKET_DATA")
+    await asyncio.sleep(0.06)
+    session.responses.append(err(500, "internal-error"))   # 시험 호출도 실패시킨다
+    with pytest.raises(TossAPIError):
+        await client.get("/api/v1/prices", {"symbols": "A"}, group="MARKET_DATA")
+    # 실패 → 다시 개방. 개방 중에는 호출 자체가 생략된다(세션 호출 수 불변)
+    n = len(session.calls)
+    with pytest.raises(TossCircuitOpen):
+        await client.get("/api/v1/prices", {"symbols": "A"}, group="MARKET_DATA")
+    assert len(session.calls) == n
+
+
+@pytest.mark.asyncio
+async def test_non_json_5xx_body_is_counted_as_failure(tmp_path):
+    """게이트웨이 HTML 5xx(비-JSON)도 에러 매핑·서킷 계수를 탄다."""
+    class _HtmlResp(FakeResponse):
+        async def json(self, content_type=None):
+            raise ValueError("not json")
+    resp = _HtmlResp(502, {}, None)
+    client = make_client(tmp_path, FakeSession([resp]), fail_threshold=1, circuit_open_sec=1)
+    with pytest.raises(TossAPIError) as ei:
+        await client.get("/api/v1/prices", {"symbols": "A"}, group="MARKET_DATA")
+    assert ei.value.status == 502
+    assert client.circuit_state()["open"] is True
+
+
+@pytest.mark.asyncio
+async def test_token_fetch_transport_error_is_wrapped(tmp_path):
+    """토큰 발급 중 aiohttp 예외가 TossTokenError → TossAPIError 로 감싸이고 서킷에 계수된다."""
+    async def boom(cid, csec):
+        raise ConnectionError("dns")
+    cache = make_cache(tmp_path, boom)
+    client = TossClient("cid", "csec", token_cache=cache, session=FakeSession([]),
+                        fail_threshold=1, circuit_open_sec=1)
+    with pytest.raises(TossAPIError) as ei:
+        await client.get("/api/v1/prices", {"symbols": "A"}, group="MARKET_DATA")
+    assert "csec" not in str(ei.value) and "cid" not in str(ei.value)
+    assert client.circuit_state()["open"] is True
+
+
+@pytest.mark.asyncio
+async def test_short_expires_in_does_not_reissue_every_call(tmp_path):
+    """expires_in 이 갱신 마진 이하여도 캐시 히트가 보장돼 호출마다 재발급되지 않는다."""
+    calls = []
+    async def fetch(cid, csec):
+        calls.append(1)
+        return {"access_token": f"t{len(calls)}", "expires_in": 600}   # 10분 < 마진 30분
+    cache = make_cache(tmp_path, fetch)
+    a = await cache.get_token(); b = await cache.get_token(); c = await cache.get_token()
+    assert a == b == c and len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_prices_chunk_failure_keeps_other_chunks(tmp_path):
+    from src.data.providers.toss.market_data import TossMarketData
+    symbols = [f"{i:06d}" for i in range(250)]
+    session = FakeSession([ok([{"symbol": "000000", "timestamp": None, "lastPrice": "10", "currency": "KRW"}]),
+                           err(500, "internal-error")])
+    md = TossMarketData(make_client(tmp_path, session, fail_threshold=10))
+    out = await md.get_prices(symbols)
+    assert "000000" in out and out["000000"]["data_status"] == "partial"   # timestamp null → partial
+    assert len(session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_candle_paging_stops_when_before_does_not_advance(tmp_path):
+    from src.data.providers.toss.market_data import TossMarketData
+    row = {"timestamp": "2026-09-15T00:00:00+09:00", "openPrice": "1", "highPrice": "1", "lowPrice": "1",
+           "closePrice": "1", "volume": "1", "currency": "KRW"}
+    same = {"candles": [row], "nextBefore": "2026-09-15T00:00:00+09:00"}
+    session = FakeSession([ok(same), ok(same), ok(same), ok(same)])
+    md = TossMarketData(make_client(tmp_path, session))
+    await md.get_candles("A", count=200)
+    assert len(session.calls) == 2, "before 가 전진하지 않으면 두 번째 페이지에서 멈춰야 한다"
+
+
+@pytest.mark.asyncio
+async def test_orderbook_levels_are_sorted_best_first(tmp_path):
+    from src.data.providers.toss.market_data import TossMarketData
+    body = {"timestamp": None, "currency": "KRW",
+            "asks": [{"price": "102", "volume": "1"}, {"price": "100", "volume": "1"}, {"price": "101", "volume": "1"}],
+            "bids": [{"price": "98", "volume": "1"}, {"price": "99", "volume": "1"}]}
+    md = TossMarketData(make_client(tmp_path, FakeSession([ok(body)])))
+    ob = await md.get_orderbook("A")
+    assert [a["price"] for a in ob["asks"]] == [100.0, 101.0, 102.0]
+    assert [b["price"] for b in ob["bids"]] == [99.0, 98.0]
