@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "spec_version": "1.2.17",
+  "spec_sha256": "791082da4cb379117ed9fdc29a45bd42746f7a1aec368da1e9f4e1f3bfbff5b4",
+  "source": "https://openapi.tossinvest.com/openapi-docs/latest/openapi.json",
+  "checked_date": "2026-09-16",
+  "verification": "public_unauthenticated_spec_only",
+  "production_eligible": false,
+  "oauth": {
+    "method": "POST",
+    "origin": "https://openapi.tossinvest.com",
+    "path": "/oauth2/token",
+    "request_content_type": "application/x-www-form-urlencoded",
+    "required_form_fields": ["grant_type", "client_id", "client_secret"],
+    "grant_type": "client_credentials",
+    "client_authentication": "form_body_not_basic",
+    "authorization_header": false,
+    "success_status": 200,
+    "success_envelope": "top_level_object",
+    "success_required_fields": ["access_token", "token_type", "expires_in"],
+    "token_type": "Bearer",
+    "expires_in_type": "integer",
+    "expires_in_unit": "seconds",
+    "rate_limit_group": "AUTH",
+    "automatic_retries": 0
+  },
+  "calendar_kr": {
+    "path": "/api/v1/market-calendar/KR",
+    "required_result_fields": ["today", "previousBusinessDay", "nextBusinessDay"],
+    "day_required_fields_in_spec": ["date"],
+    "date_format": "YYYY-MM-DD",
+    "date_timezone": "Asia/Seoul",
+    "explicit_closed": {"integrated": null},
+    "missing_integrated": "unknown_not_closed",
+    "integrated_session_keys": ["preMarket", "regularMarket", "afterMarket"],
+    "sessions_nullable": true,
+    "session_required_fields": ["startTime", "endTime"],
+    "session_time_format": "timezone_aware_date_time",
+    "all_sessions_null": "provider_represents_as_integrated_null",
+    "session_market_basis": "KRX_NXT_union"
+  }
+}
