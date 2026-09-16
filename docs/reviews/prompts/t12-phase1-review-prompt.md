@@ -1,7 +1,7 @@
 # T12 Phase 1 독립 리뷰 요청 — 토스증권 Open API 2차 시세 소스 인프라 (shadow 전용)
 
 > 이 프롬프트는 구현자와 **다른** 에이전트(Codex / 별도 Claude 세션 / 사람)가 그대로 붙여 넣어 쓰도록 작성됐다.
-> 리뷰 대상 브랜치 `feature/t12-phase1-toss-infra`, 기준 `main` __BASE_SHA__, 리뷰 대상 HEAD __HEAD_SHA__.
+> 리뷰 대상 브랜치 `feature/t12-phase1-toss-infra`, 기준 `main` `dce9941`, 리뷰 대상 HEAD `52baa47`.
 
 ## 0. 당신의 역할과 제약
 
