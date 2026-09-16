@@ -12,8 +12,11 @@ MODE=--branch
 # 켜는 순간 파일 읽기·git 이 전부 실패하고 리뷰가 "미검증"으로 끝난다(2026-08-02 우회로 config 에
 # danger-full-access 를 뒀는데, 이 스크립트가 `--sandbox read-only` 를 하드코딩해 그걸 덮어쓰던
 # 것이 2026-08~09 리뷰 연속 실패의 직접 원인 — 2026-09-16 확정).
-# 샌드박스가 되는 환경(WSL 등)에서는 QWQ_REVIEW_SANDBOX=read-only 로 명시하면 된다.
-SANDBOX=${QWQ_REVIEW_SANDBOX:-}
+# 2026-09-16 저녁: 운영 서버에 번들 bwrap 용 AppArmor 프로파일(scripts/ops/apparmor/)을 설치해 샌드박스가
+# 다시 뜬다. 그래서 기본값은 **read-only 샌드박스**로 되돌린다. 프로파일이 없는 호스트에서는 아래 프로브가
+# fail-fast 하므로, 그 호스트에서 config.toml 설정을 그대로 쓰려면 QWQ_REVIEW_SANDBOX= (빈 값) 으로 실행한다.
+#   미설정 → read-only(프로브 후) / 빈 값 → 플래그 없음(config 따름) / 그 외 → 그 모드(프로브 후)
+SANDBOX=${QWQ_REVIEW_SANDBOX-read-only}
 
 fail() {
   printf '[실패] %s\n' "$1" >&2
@@ -67,6 +70,11 @@ REVIEW_PROMPT="$SCOPE_PROMPT 리뷰어 관점에서 검토하라.
 
 cd "$ROOT"   # 프로브와 본 실행을 같은 디렉터리·같은 조건에서 돌린다
 
+# 리뷰 전후 작업 트리·HEAD 대조 — 프로브까지 포함해 Codex 가 무언가 바꿨으면 숨기지 않고 경고 + 비정상
+# 종료한다. 샌드박스가 있어도 남기는 이중 안전장치이고, 없을 때는 "읽기 전용" 계약 위반의 유일한 탐지선이다.
+before_head=$(git rev-parse HEAD 2>/dev/null || true)
+before_status=$(git status --porcelain --untracked-files=all 2>/dev/null || true)
+
 ARGS=(exec)
 if [[ -n $SANDBOX ]]; then
   # 요청된 샌드박스가 이 호스트에서 실제로 뜨는지 **1회** 프로브 — 종료 코드와 출력을 따로 판정한다
@@ -79,12 +87,6 @@ if [[ -n $SANDBOX ]]; then
   ARGS+=(--sandbox "$SANDBOX")
 fi
 ARGS+=("$REVIEW_PROMPT")
-
-# 샌드박스 없이 돌 때(config 가 danger-full-access 인 이 호스트)의 완화책 — 리뷰 전후 작업 트리·HEAD 를
-# 대조해 Codex 가 무언가 바꿨으면 숨기지 않고 경고 + 비정상 종료한다. bwrap 격리를 대신하진 못하지만
-# "읽기 전용" 계약 위반을 최소한 탐지한다.
-before_head=$(git rev-parse HEAD 2>/dev/null || true)
-before_status=$(git status --porcelain --untracked-files=all 2>/dev/null || true)
 
 printf '[리뷰] Codex 교차 리뷰를 시작합니다 (모드: %s, 기준: %s, 샌드박스: %s)\n' "${MODE#--}" "$BASE_BRANCH" "${SANDBOX:-config.toml 설정}"
 review_rc=0
