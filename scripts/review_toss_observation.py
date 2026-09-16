@@ -25,7 +25,10 @@ def main(argv=None) -> int:
     parser.add_argument("--plan-hash", required=True)
     parser.add_argument("--max-bytes", type=int, required=True)
     args = parser.parse_args(argv)
-    summary = ObservationLedger.read_only_summary(args.ledger, plan_hash=args.plan_hash, max_bytes=args.max_bytes)
+    try:
+        summary = ObservationLedger.read_only_summary(args.ledger, plan_hash=args.plan_hash, max_bytes=args.max_bytes)
+    except (ValueError, TypeError):
+        summary = {"incomplete": True, "error_code": "invalid_report_input", "production_eligible": False}
     summary["production_eligible"] = False
     print(json.dumps(summary, sort_keys=True, separators=(",", ":")))
     return 0 if not summary["incomplete"] else 2
