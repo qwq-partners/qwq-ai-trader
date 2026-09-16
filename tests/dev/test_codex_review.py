@@ -92,10 +92,10 @@ def test_branch_mode_runs_read_only_review_against_base(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     args = args_path(tmp_path).read_text(encoding="utf-8").splitlines()
-    # 기본은 --sandbox 를 넘기지 않는다 — ~/.codex/config.toml 의 sandbox_mode 를 따른다
-    # (이 호스트는 bwrap userns 제한으로 read-only 샌드박스가 뜨지 않아 리뷰가 미검증으로 끝났다)
-    assert args[:1] == ["exec"] and "--sandbox" not in args
-    prompt = "\n".join(args[1:])
+    # 기본은 read-only 샌드박스(프로브 통과 후) — AppArmor 프로파일 설치로 이 호스트에서도 다시 뜬다.
+    # config.toml 을 따르고 싶으면 QWQ_REVIEW_SANDBOX 를 빈 값으로 준다(아래 별도 테스트).
+    assert args[:3] == ["exec", "--sandbox", "read-only"]
+    prompt = "\n".join(args[3:])
     assert "main...HEAD" in prompt
     assert "P0" in prompt
     assert "읽기 전용" in prompt          # 샌드박스가 없어도 계약은 프롬프트로 유지
@@ -109,8 +109,8 @@ def test_uncommitted_mode_allows_base_branch(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     args = args_path(tmp_path).read_text(encoding="utf-8").splitlines()
-    assert args[:1] == ["exec"] and "--sandbox" not in args
-    prompt = "\n".join(args[1:])
+    assert args[:3] == ["exec", "--sandbox", "read-only"]
+    prompt = "\n".join(args[3:])
     assert "커밋되지 않은 변경" in prompt
     assert "main...HEAD" not in prompt
 
@@ -123,6 +123,19 @@ def test_rejects_unknown_option(tmp_path):
 
     assert result.returncode == 2
     assert "사용법" in result.stdout + result.stderr
+
+
+def test_empty_sandbox_env_means_no_flag(tmp_path):
+    """QWQ_REVIEW_SANDBOX= (빈 값) 이면 플래그를 넘기지 않고 config.toml 을 따른다(프로파일 없는 호스트용)."""
+    make_repo(tmp_path)
+    subprocess.run(["git", "-C", str(tmp_path), "switch", "-q", "-c", "feature/x"], check=True)
+    stub = make_codex_stub(tmp_path)
+
+    result = run_review(tmp_path, codex_bin=str(stub), extra_env={"QWQ_REVIEW_SANDBOX": ""})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = args_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    assert args[:1] == ["exec"] and "--sandbox" not in args
 
 
 def test_sandbox_env_is_passed_after_successful_probe(tmp_path):

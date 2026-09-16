@@ -7,6 +7,15 @@
 - 기준선 KST 전체1378 passed/2 known xfailed/1 기존 warning·격리0·문법/비밀정보 패턴 검사 통과. 신규 설계의 인수 통과나 실자료 검증으로 계산하지 않는다. 작업별 근거는 `docs/reviews/toss-phase1-handoff-2026-09-16.md`.
 - 문서만 변경. 실제 자격/운영 토큰/캐시·인증 API·SSH·배포/재시작·주문/설정·#68 상태 변경 없음. Claude의 별도 작업공간을 변경하지 않았다.
 
+## 2026-09-16 — ops(dev): Codex 샌드박스 복구 — 번들 bwrap 용 AppArmor userns 프로파일 (리뷰 스크립트 기본 read-only 복귀)
+
+앞 항목(PR #69)의 후속. 사용자 승인으로 호스트 설정을 바꿨다.
+- **원인 재확인**: Ubuntu `kernel.apparmor_restrict_unprivileged_userns=1` 은 프로파일 없는 실행 파일이 userns 를 만들면 `unprivileged_userns` 프로파일로 전이시켜 capability 를 전부 거부한다 → bwrap 이 네임스페이스 안 loopback 을 못 올림.
+- **조치**: `/etc/apparmor.d/codex-bwrap` — Codex 번들 bubblewrap(`~/.nvm/.../codex-resources/bwrap`, 노드 버전·플랫폼 글롭)에 `flags=(unconfined) { userns, }` 만 부여(Ubuntu 가 chrome/code 에 쓰는 패턴). 정본 `scripts/ops/apparmor/codex-bwrap`, 설치 `scripts/ops/apparmor/install.sh`. 다른 실행 파일·시스템 sysctl 무변경, AppArmor 거부 로그 0.
+- **검증**: 번들 bwrap 직접 실행 `--unshare-user/--unshare-net/--unshare-all` 전부 성공(`lo` 확인). `codex exec --sandbox read-only` 디버그 프로브 9초 완주 — `exec_command success=true`, `SANDBOX_OK`, 번들 bwrap 사용 경고만. 프로파일 직후 1회 180초 무출력 타임아웃이 있었으나 같은 명령 재실행(19초)·디버그 실행(9초) 모두 정상이라 일회성으로 판정(원인 미확정).
+- `scripts/dev/codex_review.sh` 기본값을 **read-only 샌드박스**로 복귀(미설정 → read-only + 프로브, 빈 값 → 플래그 없음, 그 외 → 그 모드). 테스트 9건.
+- `~/.codex/config.toml` 의 `danger-full-access` 는 **유지** — 다른 Codex 세션이 진행 중이라 전역 기본값 변경은 보류. 리뷰 스크립트는 명시 플래그라 영향 없음. 배포판 `bubblewrap` 미설치(번들본으로 충분).
+
 ## 2026-09-16 — fix(dev): Codex 교차 리뷰 연속 실패 원인 확정·수정 (`--sandbox read-only` 가 config 우회를 덮어쓰던 문제)
 
 계기: 8~9월 `scripts/dev/codex_review.sh` 가 매번 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` 로 저장소를 못 읽고 "미검증" 으로 끝났다(T10·T11·T12 전부).
