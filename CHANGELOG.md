@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-17 — ops(T12): PR 통합본 배포·재시작 (Toss 기본 OFF 유지)
+
+- #70/#68 정합화와 #72 상태 문서를 main에 병합했다. #72 CI run35117127260 SUCCESS·문서 Terra/medium 한정 리뷰 지적0 후 대상 `84ec1cc30c06e75d375fbba9a3de69f898295e9f`를 배포했다.
+- 첫 시도는 env-i로 사용자 Git ignore가 빠져 기존 `.claude/settings.local.json`을 미추적으로 판단한 clean 가드에서 중단(코드 교체/재시작0). 실제 파일 무변경을 대조하고 기존 excludesFile만 명시해 재실행했다. 가드를 끄거나 파일을 삭제하지 않았다.
+- 운영 verify **1684 passed/2 known xfailed**(80.05초), 격리0·문법/비밀정보 검사 통과 후 **00:47:47 KST 재시작, PID3274983**. pytest 요약의 기존 pykrx warning1 외에 종료 시 과거 임시 디렉터리 정리 ENOTEMPTY 경고가 별도로 발생했으며 테스트/배포 exit0이다. 원인 미확정·임의 삭제 없음.
+- 초기 브로커 정상·pending0·stale0, 설정3개/킬스위치4경로 지문 동일. rollback 없이 같은 Git 트리에서 main으로 복귀했다. 토스 키·플래그·승인 파일·토큰·주문/전략 설정은 변경하지 않았고, Toss 실관측은 아직 시작하지 않았다. 150초 후 관찰·활성화 다음 결정 정본은 `docs/reviews/toss-pr-integration-2026-09-17.md`.
+- **00:50:44 KST(150초 이후)** 동일 PID·브로커 정상·pending/stale/연속 실패0, KIS 오류0. 새 PID ERROR/Traceback/Unclosed client session0. 다음 장중/5분 동기화 여러 회차 인수와는 구분한다.
+
 ## 2026-09-17 — docs(T12): 열린 PR 통합·중복 #68 정합화
 
 - #68 정합화 head `93570df` 독립 재리뷰 승인·CI run35116712908 SUCCESS 후 main `6ac6ce0` 병합, 당시 열린 PR 0개. 원본 구현을 복구하지 않았으며 #70 대비 실행 코드 diff0을 병합 후에도 확인했다. 운영 배포/활성화 결과는 별도 후속 기록으로 남긴다.
