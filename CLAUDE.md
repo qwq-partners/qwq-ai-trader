@@ -47,6 +47,7 @@
 
 ### 토스 후속 작업 상태 (2026-09-16)
 
+- **최신 인계(문서만):** #67은 main `8c159d0`에 병합됐고 기준선은 리뷰 도구 #69 포함 `c32de93`이다. 중복 구현 PR #68 `0b978e0`는 보류하며 임의 병합/리베이스/닫기 금지. #67 기반 후속 상세 설계 `docs/superpowers/specs/2026-09-16-toss-runtime-shadow-design.md`를 작성해 **사용자 문서 확인 대기** 중이다. 새 실행 코드·승인 파일·환경 설정은 아직 없다. 인계/리뷰 증거는 `docs/reviews/toss-phase1-handoff-2026-09-16.md`; 문서 첫머리의 #67 병합 전 수치는 당시 기록이다.
 - `src/data/providers/toss/`는 기본 OFF인 오프라인 검증 대상 모듈이다. 실제 키 로딩/OAuth 발급기·5분 잡·시세 캐시·브로커 폴백은 미배선이며, `TOSS_API=1` 문자열만으로 활성화되는 경로도 없다.
 - 합성 입력 전용 `scripts/replay_toss_shadow.py`의 CLI·검증·독립 리뷰 근거는 `docs/reviews/toss-phase1-offline-2026-09-16.md`에 기록한다. 합성 결과는 항상 `production_eligible=False`; 실자료 승인이나 매매 성능 근거가 아니다.
 - 실자료 관측 전에 약관·발급 소유권·시장/수정주가 기준·관측 manifest를 별도로 확정해야 한다. 주문·청산·사이징·계좌·잔고는 계속 KIS 단독이며 기존 설정과 운영 상태는 변경하지 않는다.

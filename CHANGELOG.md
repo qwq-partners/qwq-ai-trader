@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-16 — docs(T12): PR #68 보류·Codex 인계와 승인 기반 관측 런타임 설계
+
+- 최신 main `c32de93`(#67 기반·#69 리뷰 도구 수정)에서 별도 feature 작업공간을 만들고, 중복 구현 #68 `0b978e0`의 인증/보안·자료 계약·관측 원장/하트비트 리뷰를 인계 문서로 고정했다. #68의 기본 ON·revoked 재발급·불명확 발급 반복·보안 저장/전송·결측 통계·전량 실패 성공 처리 문제를 단순 충돌 해결로 덮지 않는다.
+- #67 보존·기본 OFF·별도 승인 등록부/키 로더·실 OAuth 어댑터·Toss 전용 worker·지속 attempt 원장·가격/캘린더 분리 설계를 작성했다. 첫 범위는 추가 KIS 조회0, 시각/시장 미확정은 유효 비교 제외, 일봉 실관측 및 소비자 승격은 별도다. **상세 설계 사용자 확인 대기이며 런타임 구현은 아직 없다.**
+- 기준선 KST 전체1378 passed/2 known xfailed/1 기존 warning·격리0·문법/비밀정보 패턴 검사 통과. 신규 설계의 인수 통과나 실자료 검증으로 계산하지 않는다. 작업별 근거는 `docs/reviews/toss-phase1-handoff-2026-09-16.md`.
+- 문서만 변경. 실제 자격/운영 토큰/캐시·인증 API·SSH·배포/재시작·주문/설정·#68 상태 변경 없음. Claude의 별도 작업공간을 변경하지 않았다.
+
 ## 2026-09-16 — fix(dev): Codex 교차 리뷰 연속 실패 원인 확정·수정 (`--sandbox read-only` 가 config 우회를 덮어쓰던 문제)
 
 계기: 8~9월 `scripts/dev/codex_review.sh` 가 매번 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` 로 저장소를 못 읽고 "미검증" 으로 끝났다(T10·T11·T12 전부).
