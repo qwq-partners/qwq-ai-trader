@@ -189,3 +189,12 @@ def test_invalid_path_types_are_safe_errors(tmp_path, monkeypatch, path):
     kwargs["registry_path"] = path
     with pytest.raises(mod.ApprovalError):
         mod.load_authority(**kwargs)
+
+
+@pytest.mark.parametrize("field", ["plan", "grant", "clock", "now", "authority_hash", "_deadline"])
+def test_loaded_authority_bindings_cannot_be_reassigned(tmp_path, monkeypatch, field):
+    mod, kwargs, *_ = authority_fixture(tmp_path, monkeypatch)
+    authority = mod.load_authority(**kwargs)
+    with pytest.raises(AttributeError):
+        setattr(authority, field, None)
+    assert authority.require("query", deadline=130) == 130

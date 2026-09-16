@@ -5,13 +5,13 @@ from datetime import timedelta
 
 import pytest
 
-from test_toss_live_authority import authority_fixture
+from test_toss_live_authority import authority_fixture, plan_document, raw
 from src.data.providers.toss.token import TokenManager
 from src.data.providers.toss.token_store import SecureTokenStore, TokenError, TokenRecord
 
 
-def setup(tmp_path, monkeypatch, *, role="issuer", issue=None):
-    approval, kwargs, _, stamp, ticks = authority_fixture(tmp_path, monkeypatch, role=role)
+def setup(tmp_path, monkeypatch, *, role="issuer", issue=None, capabilities=None):
+    approval, kwargs, _, stamp, ticks = authority_fixture(tmp_path, monkeypatch, role=role, capabilities=capabilities)
     authority = approval.load_authority(**kwargs)
     try:
         mod = importlib.import_module("src.data.providers.toss.authorized_tokens")
@@ -201,3 +201,105 @@ def test_marker_write_failure_prevents_issue(tmp_path, monkeypatch):
     with pytest.raises(TokenError, match="storage_failed"):
         asyncio.run(provider.bootstrap(deadline=130))
     assert sent == []
+
+
+def test_direct_self_authored_authority_without_registry_never_stores_or_issues(tmp_path, monkeypatch):
+    approval, kwargs, grant, _, _ = authority_fixture(tmp_path, monkeypatch)
+    kwargs["registry_path"].unlink()
+    mod = importlib.import_module("src.data.providers.toss.authorized_tokens")
+    sent = []
+    async def issue(**arguments):
+        sent.append(arguments)
+        return dict(access_token="synthetic-token", token_type="Bearer", expires_in=86400)
+    store = SecureTokenStore(tmp_path / "tokens", "synthetic-client")
+    with pytest.raises(approval.ApprovalError):
+        authority = approval.ApprovedAuthority(
+            approval.ObservationPlan.from_bytes(raw(plan_document())),
+            approval.LiveObservationGrant.from_document(grant), clock=kwargs["clock"], now=kwargs["now"])
+        manager = TokenManager(store, role="issuer", enabled=True,
+            issuer=mod.make_authorized_issuer(authority, issue), clock=kwargs["clock"], now=kwargs["now"])
+        asyncio.run(mod.AuthorizedTokenProvider(manager, authority).bootstrap(deadline=130))
+    assert sent == []
+    assert not store.directory.exists()
+
+
+def test_query_only_issuer_uses_due_valid_cache_without_intent(tmp_path, monkeypatch):
+    _, _, _, store, manager, provider, sent, stamp, _ = setup(tmp_path, monkeypatch,
+        capabilities=dict(query=True, renewal=False, bootstrap=False))
+    save_old(store, stamp)
+    store.save_state("ready", 1)
+    before = (store.directory / "toss_auth_state.json").read_bytes()
+    assert asyncio.run(provider.get_token(deadline=130)) == "synthetic-old"
+    assert (store.directory / "toss_auth_state.json").read_bytes() == before
+    assert store.load().access_token == "synthetic-old"
+    assert manager.role == "issuer"
+    assert sent == []
+
+
+@pytest.mark.parametrize("action", ["get", "recover"])
+@pytest.mark.parametrize("ttl", [-1, 100])
+def test_query_only_issuer_denial_never_creates_unknown(tmp_path, monkeypatch, action, ttl):
+    _, approval, _, store, _, provider, sent, stamp, _ = setup(tmp_path, monkeypatch,
+        capabilities=dict(query=True, renewal=False, bootstrap=False))
+    save_old(store, stamp, ttl=ttl)
+    store.save_state("ready", 1)
+    before = (store.directory / "toss_auth_state.json").read_bytes()
+    async def scenario():
+        if action == "get":
+            return await provider.get_token(deadline=130)
+        return await provider.recover("expired-token", "synthetic-old", deadline=130)
+    if action == "get" and ttl > 0:
+        assert asyncio.run(scenario()) == "synthetic-old"
+    else:
+        with pytest.raises((TokenError, approval.ApprovalError)):
+            asyncio.run(scenario())
+    assert (store.directory / "toss_auth_state.json").read_bytes() == before
+    assert store.load().access_token == "synthetic-old"
+    assert sent == []
+
+
+def test_query_only_issuer_keeps_revocation_generation_and_newer_cache_gate(tmp_path, monkeypatch):
+    _, _, _, store, _, provider, sent, stamp, _ = setup(tmp_path, monkeypatch,
+        capabilities=dict(query=True, renewal=False, bootstrap=False))
+    store.save(TokenRecord(access_token="synthetic-newer", issued_at=stamp[0] - timedelta(hours=1),
+        expires_at=stamp[0] + timedelta(seconds=100), generation=2, client_identity="synthetic-client"))
+    assert asyncio.run(provider.get_token(deadline=130)) == "synthetic-newer"
+    save_old(store, stamp)
+    with pytest.raises(TokenError):
+        asyncio.run(provider.recover("token-revoked", "synthetic-newer", deadline=130))
+    assert {item["generation"] for item in store.load_revocations().values()} == {2}
+    assert sent == []
+
+
+def test_query_only_issuer_never_bypasses_unknown(tmp_path, monkeypatch):
+    _, _, _, store, _, provider, sent, stamp, _ = setup(tmp_path, monkeypatch,
+        capabilities=dict(query=True, renewal=False, bootstrap=False))
+    save_old(store, stamp)
+    store.save_state("issuance_unknown", 2)
+    with pytest.raises(TokenError, match="issuance_unknown"):
+        asyncio.run(provider.get_token(deadline=130))
+    assert store.load_state()["kind"] == "issuance_unknown"
+    assert sent == []
+
+
+def test_query_only_issuer_recovers_with_different_valid_cache(tmp_path, monkeypatch):
+    _, _, _, store, _, provider, sent, stamp, _ = setup(tmp_path, monkeypatch,
+        capabilities=dict(query=True, renewal=False, bootstrap=False))
+    save_old(store, stamp)
+    assert asyncio.run(provider.recover("expired-token", "synthetic-other", deadline=130)) == "synthetic-old"
+    assert store.load_state() is None
+    assert sent == []
+
+
+def test_query_only_view_shares_bootstrap_failure_block(tmp_path, monkeypatch):
+    async def fail(**kwargs):
+        raise RuntimeError("synthetic-failure")
+    _, _, _, store, manager, provider, _, _, _ = setup(tmp_path, monkeypatch, issue=fail,
+        capabilities=dict(query=True, renewal=False, bootstrap=True))
+    with pytest.raises(TokenError, match="issuance_unknown"):
+        asyncio.run(provider.bootstrap(deadline=130))
+    assert manager._blocked == "issuance_unknown"
+    assert provider._query_manager._blocked == "issuance_unknown"
+    with pytest.raises(TokenError, match="issuance_unknown"):
+        asyncio.run(provider.get_token(deadline=130))
+    assert store.load_state()["kind"] == "issuance_unknown"

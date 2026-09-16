@@ -253,23 +253,45 @@ class LiveObservationGrant:
         return cls(_freeze(g))
 
 
+_LOADER_PROVENANCE = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class ApprovedAuthority:
-    def __init__(self, plan, grant, *, clock, now):
-        self.plan, self.grant = plan, grant
-        self.clock, self.now = clock, now
-        self.authority_hash = hashlib.sha256((plan.raw_hash + hashlib.sha256(_canonical(dict(grant.document, capabilities=dict(grant.capabilities)))).hexdigest()).encode()).hexdigest()
-        self._stopped = threading.Event()
-        self._not_before, self._expires = _timestamp(grant.not_before), _timestamp(grant.expires_at)
-        stamp, tick = self.now(), self.clock()
+    plan: ObservationPlan
+    grant: LiveObservationGrant
+    clock: object
+    now: object
+    authority_hash: str
+    _stopped: object
+    _not_before: datetime
+    _expires: datetime
+    _deadline: float
+    _provenance: object
+
+    def __init__(self, plan, grant, *, clock, now, _provenance=None):
+        # 공개 파서 결과만으로 권한이 생성되는 오호출을 막는다. 악성 Python
+        # 코드의 private 접근/메모리 변조를 통제하는 보안 경계는 아니다.
+        if _provenance is not _LOADER_PROVENANCE:
+            raise ApprovalError("approval_untrusted")
+        stamp, tick = now(), clock()
         if not isinstance(stamp, datetime) or stamp.utcoffset() != timedelta(0) or not math.isfinite(tick):
             _reject()
-        self._deadline = tick + (self._expires - stamp).total_seconds()
+        start, end = _timestamp(grant.not_before), _timestamp(grant.expires_at)
+        bound = dict(plan=plan, grant=grant, clock=clock, now=now,
+            authority_hash=hashlib.sha256((plan.raw_hash + hashlib.sha256(_canonical(dict(grant.document, capabilities=dict(grant.capabilities)))).hexdigest()).encode()).hexdigest(),
+            _stopped=threading.Event(), _not_before=start, _expires=end,
+            _deadline=tick + (end - stamp).total_seconds(), _provenance=_provenance)
+        for name, value in bound.items():
+            object.__setattr__(self, name, value)
         self.require("query", deadline=self._deadline)
 
     def stop(self):
         self._stopped.set()
 
     def require(self, operation, *, deadline):
+        if self._provenance is not _LOADER_PROVENANCE:
+            raise ApprovalError("approval_untrusted")
         if self._stopped.is_set() or operation not in ("query", "renewal", "bootstrap") or not self.grant.capabilities[operation] or (operation != "query" and self.grant.role != "issuer"):
             raise ApprovalError("approval_denied")
         stamp, tick = self.now(), self.clock()
@@ -359,4 +381,4 @@ def load_authority(*, registry_path, plan_path, grant_id, trust, identity, clock
     plan = ObservationPlan.from_bytes(_read_file(plan_path))
     if plan.raw_hash != grant.plan_raw_hash or plan.canonical_hash != grant.plan_canonical_hash:
         raise ApprovalError("approval_denied")
-    return ApprovedAuthority(plan, grant, clock=clock, now=now)
+    return ApprovedAuthority(plan, grant, clock=clock, now=now, _provenance=_LOADER_PROVENANCE)

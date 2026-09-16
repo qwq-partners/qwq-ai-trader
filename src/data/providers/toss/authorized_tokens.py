@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from .approval import ApprovalError
+from .token import TokenManager
 from .token_store import TokenError
 
 
@@ -51,6 +52,40 @@ def make_authorized_issuer(authority, issue):
     return issuer
 
 
+class _QueryOnlyTokenManager(TokenManager):
+    """원 manager의 안전 상태를 공유하며 발급 역할만 제한하는 view.
+
+    TokenManager 생성자는 안전 상태를 초기화하므로 호출하지 않는다. store/
+    clock/now/enabled와 관측 digest dict는 원본을 읽고, scalar 안전 상태의
+    쓰기도 원본으로 전달한다. bootstrap과 조회 사이 세대 정보가 갈라지지 않는다.
+    """
+
+    role = "reader"
+    issuer = None
+
+    def __init__(self, manager):
+        self._manager = manager
+
+    def __getattr__(self, name):
+        return getattr(self._manager, name)
+
+    @property
+    def _blocked(self):
+        return self._manager._blocked
+
+    @_blocked.setter
+    def _blocked(self, value):
+        self._manager._blocked = value
+
+    @property
+    def _seen_generation(self):
+        return self._manager._seen_generation
+
+    @_seen_generation.setter
+    def _seen_generation(self, value):
+        self._manager._seen_generation = value
+
+
 class AuthorizedTokenProvider:
     def __init__(self, manager, authority):
         self.manager, self.authority = manager, authority
@@ -58,6 +93,7 @@ class AuthorizedTokenProvider:
                 or manager.store.client_identity != authority.grant.client_identity
                 or str(manager.store.directory) != authority.grant.token_directory):
             raise ApprovalError("approval_denied")
+        self._query_manager = manager if authority.grant.capabilities["renewal"] else _QueryOnlyTokenManager(manager)
 
     async def _call(self, operation, action, *, deadline):
         bounded = self.authority.require("query", deadline=deadline)
@@ -74,7 +110,7 @@ class AuthorizedTokenProvider:
             _ISSUE_CONTEXT.reset(reset)
 
     async def get_token(self, *, deadline):
-        return await self._call("renewal", lambda bounded: self.manager.get_token(deadline=bounded), deadline=deadline)
+        return await self._call("renewal", lambda bounded: self._query_manager.get_token(deadline=bounded), deadline=deadline)
 
     def observe_revocation(self, failed_token):
         # 안전 기록에는 승인 검사를 두지 않는다. 첫 await 전 fsync 계약 유지.
@@ -83,7 +119,7 @@ class AuthorizedTokenProvider:
     async def recover(self, error_code, failed_token, *, deadline):
         if error_code == "token-revoked":
             self.observe_revocation(failed_token)
-        return await self._call("renewal", lambda bounded: self.manager.recover(error_code, failed_token, deadline=bounded), deadline=deadline)
+        return await self._call("renewal", lambda bounded: self._query_manager.recover(error_code, failed_token, deadline=bounded), deadline=deadline)
 
     async def bootstrap(self, *, deadline):
         bounded = self.authority.require("bootstrap", deadline=deadline)
