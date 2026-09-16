@@ -1,5 +1,5 @@
 # QWQ AI Trader - CLAUDE.md
-> 2026-09-17 후속: 사용자 지시로 PR #70 main `1c9531c` 병합. #68 원본은 #70 실행 트리를 보존하는 정합화 merge로 통합 중이다. 배포/재시작/활성화 승인은 받았지만 아래 역사 검증과 실행 완료를 혼동하지 않는다. 현황 정본 `docs/reviews/toss-pr-integration-2026-09-17.md`.
+> 2026-09-17 후속: PR #70 main `1c9531c`, #68 정합화 main `6ac6ce0` 병합 완료. 원본 #68 이력은 보존하고 실행 트리는 #70과 동일하다. 배포/재시작/활성화 승인은 받았지만 현재 기본 OFF·실관측 미시작이며, 운영 실행 결과는 아래 역사 검증과 구분한다. 현황 정본 `docs/reviews/toss-pr-integration-2026-09-17.md`.
 > 최종 업데이트: 2026-09-16 (Toss 승인 기반 관측 런타임 source `984dbdf`, UTC/KST 각각1684 passed/2 known xfailed·독립 소스 리뷰 승인. PR #70 Draft, #68 보류. 검증 정본 `docs/reviews/toss-runtime-2026-09-16.md`. 기본 OFF·실관측 미시작; main/운영·배포/재시작·주문/설정 무변경. 과거 운영 배포 기록은 아래 이력이며 이번에 실행 PID/SHA를 조회하지 않음)
 
 ## 세션 시작 시 필수 읽기
