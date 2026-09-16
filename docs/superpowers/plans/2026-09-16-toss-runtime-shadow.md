@@ -1,6 +1,6 @@
 # Toss 승인 기반 관측 런타임 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** #67을 보존하며 승인 없는 송신이 불가능한 기본 OFF 현재가/캘린더 관측 런타임을 오프라인 검증한다.
 
@@ -63,7 +63,11 @@ acceptance: {min_coverage:number, max_provider_failure_rate:number,
 
 All values mandatory, finite bounded positive/nonnegative according to meaning; no live defaults. Existing rate limiter actual group names must be checked; adapter mapping lives in runtime if they differ.
 
+발급 예산 해석: `auth_max_issues`는 한 worker/OAuthIssuer 수명 동안의 POST 시도 상한이다. 재시작을 합친 grant 전체의 누적 발급 한도를 보장하지 않는다. grant 기간·발급 권한은 송신마다 별도 검증하고 bootstrap 1회만 durable하게 소비한다. 운영자가 grant 전체 누적 발급 상한을 요구하면 별도 설계/검증 전에는 활성화하지 않는다.
+
 Task 1 `LiveObservationGrant` is separate strict schema, owns approval evidence, not-before/expiry, client identity/host/UID/role, token directory/sender lock/ledger path, release/config hashes, exact plan hashes, query/renewal/bootstrap capabilities. Task 1 declares its exact schema in its tests/report before integration. No field may itself claim registry trust.
+
+Runtime binding: `client_identity` is exactly the non-secret OAuth `client_id`, not an alias. The worker's lazy credential loader rejects a mismatch before POST; no guessed mapping or key logging is allowed.
 
 Fixed API between workers:
 
@@ -131,18 +135,18 @@ select_snapshot(*, candidates, holdings, source_success_at, now, policy, kis_quo
 
 Implementer must report interface issue before changing contract; parent records ruling and tells all consumers. Internal helpers/dataclasses can be added within file ownership.
 
-### Task 1: 信頼 승인 로더와 발급 권한 context
+### Task 1: 신뢰 승인 로더와 발급 권한 context
 
 **Files:** Create `src/data/providers/toss/approval.py`, `authorized_tokens.py`; tests `tests/test_toss_live_authority.py`, `tests/test_toss_authorized_tokens.py`.
 
 **Interfaces:** Produces approval/token APIs above. Consumes existing TokenManager/SecureTokenStore, not Task 3 implementation (issue fake has keyword signature above). Strict plan contract above is part of this task brief. Read approved spec §§4–5, complete project rules and existing token/store contracts.
 
-- [ ] RED: tests invalid/offline/unknown JSON, fake self-approved grant, writable registry ancestry, symlink/hardlinks, wrong host/release/path/hash; pure parsing creates no files.
-- [ ] GREEN: immutable plans/grants, bounded safe operator-registry read, binding comparison with injected host/release/UID identity; no actual config installed.
-- [ ] RED: expiry during queued GET/POST, monotonic bound despite wall-clock reversal; context absent/task-leak/cancel; reader mint0; revoked safety write even expired/stopped.
-- [ ] GREEN: `require` checks time/role/capability; token wrapper supplies/reset IssueContext to issuer closure. Pass renewal context to normal get/recover while allowing reader valid cached query. Revoked recovery itself never issues.
-- [ ] RED/GREEN: bootstrap once after intent even restart; unknown/revoked gate remains #67. Use durable private marker in validated token directory, not ephemeral bool; acquire existing issuer lock appropriately without recursive lock deadlock. Capability consumption before attempt, never auto-reset on errors.
-- [ ] Verify new tests + all existing token tests, report RED command/result and GREEN command/result; commit/push owned files only.
+- [x] RED: tests invalid/offline/unknown JSON, fake self-approved grant, writable registry ancestry, symlink/hardlinks, wrong host/release/path/hash; pure parsing creates no files.
+- [x] GREEN: immutable plans/grants, bounded safe operator-registry read, binding comparison with injected host/release/UID identity; no actual config installed.
+- [x] RED: expiry during queued GET/POST, monotonic bound despite wall-clock reversal; context absent/task-leak/cancel; reader mint0; revoked safety write even expired/stopped.
+- [x] GREEN: `require` checks time/role/capability; token wrapper supplies/reset IssueContext to issuer closure. Pass renewal context to normal get/recover while allowing reader valid cached query. Revoked recovery itself never issues.
+- [x] RED/GREEN: bootstrap once after intent even restart; unknown/revoked gate remains #67. Use durable private marker in validated token directory, not ephemeral bool; acquire existing issuer lock appropriately without recursive lock deadlock. Capability consumption before attempt, never auto-reset on errors.
+- [x] Verify new tests + all existing token tests, report RED command/result and GREEN command/result; commit/push owned files only.
 
 Representative required assertions:
 ```python
@@ -159,16 +163,16 @@ assert store.load_revocations()  # safety persists despite expired authority
 
 **Interfaces:** Produces ledger/runner/selection APIs above; consumes existing TossClient.get/RequestBudget/parse_prices/Quote with fake client in tests. Complete document is policy. No approval/OAuth dependency. Read approved spec §§6–8.
 
-- [ ] RED/GREEN: private append-only canonical JSONL sequence/hash chain, strict schema/size; constructors no I/O. Paths owner/mode/no-follow/nlink validated; fsync for slot, attempt and terminal. Preserve corrupt file and fail closed. Do not stringify raw exceptions/payloads.
-- [ ] RED/GREEN: same slot replay/new snapshot stays first snapshot; snapshot-only and incomplete attempts recover to interrupted with no new HTTP; valid terminal ACK-loss replay doesn't duplicate; missed slots no invented symbols. Ledger write failure stops sends and marks incomplete. Exactly one logical terminal per attempt.
-- [ ] RED/GREEN: selection deterministic held-first + candidate score-desc/code-asc, stale/missing candidates partial; keep quote original observed/fetched metadata, never fabricate KIS market time. Frozen input boundary.
-- [ ] RED/GREEN: prices chunks200 shared whole-job deadline/retry/page budget, persist all selected attempts before each request, preserve successful earlier chunks and explicit remaining failures/cancellation. Parse result via existing normalizer. Errors fixed reason enum.
-- [ ] RED/GREEN: exact Fraction comparison, currencies/status/freshness/skew/basis; unknown excluded; same source timestamps counted once across attempts, 0pairs None/insufficient; separate sessions/cohorts. Never relabel live as synthetic.
-- [ ] RED/GREEN: calendar `/api/v1/market-calendar/KR`, top-level result, today date exact, integrated explicitly null means holiday; missing key/empty object invalid; previous<today<next with valid KST session intervals and nonholiday neighbors. No market mutation, no CLOSED guard. Public 1.2.17 contract supplied below.
-- [ ] RED/GREEN: report CLI reads ledger only, no auth/import side-effect/network; reports denominator completeness, eligible alwaysFalse. No activation/gate flag.
-- [ ] Verify owned + old market/shadow tests; report tests and commit/push owned files only.
+- [x] RED/GREEN: private append-only canonical JSONL sequence/hash chain, strict schema/size; constructors no I/O. Paths owner/mode/no-follow/nlink validated; fsync for slot, attempt and terminal. Preserve corrupt file and fail closed. Do not stringify raw exceptions/payloads.
+- [x] RED/GREEN: same slot replay/new snapshot stays first snapshot; snapshot-only and incomplete attempts recover to interrupted with no new HTTP; valid terminal ACK-loss replay doesn't duplicate; missed slots no invented symbols. Ledger write failure stops sends and marks incomplete. Exactly one logical terminal per attempt.
+- [x] RED/GREEN: selection deterministic held-first + candidate score-desc/code-asc, stale/missing candidates partial; keep quote original observed/fetched metadata, never fabricate KIS market time. Frozen input boundary.
+- [x] RED/GREEN: prices chunks200 shared whole-job deadline/retry/page budget, persist all selected attempts before each request, preserve successful earlier chunks and explicit remaining failures/cancellation. Parse result via existing normalizer. Errors fixed reason enum.
+- [x] RED/GREEN: exact Fraction comparison, currencies/status/freshness/skew/basis; unknown excluded; same source timestamps counted once across attempts, 0pairs None/insufficient; separate sessions/cohorts. Never relabel live as synthetic.
+- [x] RED/GREEN: calendar `/api/v1/market-calendar/KR`, top-level result, today date exact, integrated explicitly null means holiday; missing key/empty object invalid; previous<today<next with valid KST session intervals and nonholiday neighbors. No market mutation, no CLOSED guard. Public 1.2.17 contract supplied below.
+- [x] RED/GREEN: report CLI reads ledger only, no auth/import side-effect/network; reports denominator completeness, eligible alwaysFalse. No activation/gate flag.
+- [x] Verify owned + old market/shadow tests; report tests and commit/push owned files only.
 
-Public schema confirmed 2026-09-16: KR response.result fields today/previousBusinessDay/nextBusinessDay; each has date and explicit integrated. integrated is null or has preMarket/regularMarket/afterMarket, nullable individually. Sessions startTime/endTime; pre/regular singlePriceAuctionStartTime, after singlePriceAuctionEndTime. All timezone+09:00, same day, start≤auction≤end. Integrated all-null object is unsupported (official representation is integrated:null). Source URL/hash in global contract.
+Public schema confirmed 2026-09-16: KR response.result fields today/previousBusinessDay/nextBusinessDay; each has date and explicit integrated. integrated is null or has preMarket/regularMarket/afterMarket, nullable individually. Sessions require startTime/endTime; pre/regular singlePriceAuctionStartTime and after singlePriceAuctionEndTime are optional/nullable (absence is not a malformed session). For present nonnull auction values: timezone+09:00, same day, start≤auction≤end. Integrated all-null object is unsupported (official representation is integrated:null). Source URL/hash in global contract.
 
 ```python
 ledger.reserve_slot('2026-09-16T09:00:00+09:00', kind='prices', snapshot=snapshot)
@@ -183,12 +187,12 @@ assert client.calls == []
 
 **Interfaces:** Produces body/OAuth/transport APIs above. authorize injectable fake in tests, so no Task 1 dependency. Read existing transport/errors and approved spec §5.
 
-- [ ] Verify public unauthenticated OpenAPI hash/version (already parent-confirmed above); freeze used OAuth/calendar contract without credential samples. OAuth POST application/x-www-form-urlencoded grant_type=client_credentials/client_id/client_secret, success top-level access_token/token_type/expires_in, not result envelope, no Basic guessed auth.
-- [ ] RED/GREEN: stream cumulative bounded JSON bytes, identity encoding only, reject chunked overflow/compressed/duplicate keys/NaN/depth/node/string limits. Parse time budget before/after bounded parse, fixed sanitized errors, deadline applied read+parse. No unbounded response.json fallback for production or fakes.
-- [ ] RED/GREEN: OAuth fixed origin/exact path, SSLverify/redirectFalse/trust_envFalse/DummyCookieJar/no aiohttp retry, bounded body; fresh authority check before credentials and again immediately before send. auth issue cap separate from GET limit groups. POST retry0. Credential repr/load errors redacted; keys lazy only issuer.
-- [ ] RED/GREEN: cancellation/timeout/exceptions never echo request/response; close repeated cancellation safe, no orphan requests. TokenManager stores issuance_unknown, adapter never resets it or initiates recovery.
-- [ ] RED/GREEN: optional GET authorize check directly before send after async gates, approved deadline/limits, old3path allowlist/retry semantics unchanged. Existing fakes gain content.iter_chunked rather than bypass.
-- [ ] Verify owned + old client/rate/token tests; report tests and commit/push owned files only.
+- [x] Verify public unauthenticated OpenAPI hash/version (already parent-confirmed above); freeze used OAuth/calendar contract without credential samples. OAuth POST application/x-www-form-urlencoded grant_type=client_credentials/client_id/client_secret, success top-level access_token/token_type/expires_in, not result envelope, no Basic guessed auth.
+- [x] RED/GREEN: stream cumulative bounded JSON bytes, identity encoding only, reject chunked overflow/compressed/duplicate keys/NaN/depth/node/string limits. Parse time budget before/after bounded parse, fixed sanitized errors, deadline applied read+parse. No unbounded response.json fallback for production or fakes.
+- [x] RED/GREEN: OAuth fixed origin/exact path, SSLverify/redirectFalse/trust_envFalse/DummyCookieJar/no aiohttp retry, bounded body; fresh authority check before credentials and again immediately before send. auth issue cap separate from GET limit groups. POST retry0. Credential repr/load errors redacted; keys lazy only issuer.
+- [x] RED/GREEN: cancellation/timeout/exceptions never echo request/response; close repeated cancellation safe, no orphan requests. TokenManager stores issuance_unknown, adapter never resets it or initiates recovery.
+- [x] RED/GREEN: optional GET authorize check directly before send after async gates, approved deadline/limits, old3path allowlist/retry semantics unchanged. Existing fakes gain content.iter_chunked rather than bypass.
+- [x] Verify owned + old client/rate/token tests; report tests and commit/push owned files only.
 
 ```python
 await issuer.issue(operation='renewal', deadline=clock() + 2)
@@ -201,15 +205,18 @@ assert 'client_secret' not in repr(credentials)
 
 **Files:** Create `src/data/providers/toss/runtime.py`, `src/schedulers/toss_shadow.py`; Modify `src/schedulers/kr_scheduler.py` create_tasks + successful screening copy hook only; Modify `src/utils/loop_heartbeat.py` minimal per-loop schedule registration/status fields; tests `tests/test_toss_runtime.py`, `tests/test_toss_shadow_scheduler.py`, `tests/test_toss_money_path_invariance.py`; parent docs/CHANGELOG/CLAUDE/README and review prompt/report.
 
+실행 중 합의: worker 수명주기와 배치/조립 책임을 분리해 `runtime_factory.py`, `tests/test_toss_runtime_factory.py`를 추가한다. 신뢰된 launcher의 시작 시점 attestation 없이는 live 거부하며 현재 Git HEAD로 대체하지 않는다. 원장 보강은 최초 Terra/high 구현의 영속성/통계 리뷰 결함 때문에 Astra/high로 상향한다. `ObservationLedger.configure_plan(policy)`로 승인 일정 메타를 지속화하여 full-plan expected/미기록 슬롯을 구분한다; 메타 없는 기존 합성 원장의 coverage는 unavailable이다. 이는 운영 활성화 범위 확대가 아니다.
+
 **Interfaces:** Consumes Task1–3 APIs above. No existing trade loop awaits Toss. Existing heartbeat public semantics stay unchanged. Trust anchor is explicit deployment object, not env-derived; absent refuses ON. Master flag exact opt-in only, defaultOFF.
 
-- [ ] RED/GREEN: OFF no preflight/file/factories/task/worker; ON missing anchor unavailable; separate bounded single preflight thread can hang without blocking trading loop. Post-timeout results discarded and no overlapping replacement. Grant accepted only after correct preflight.
-- [ ] RED/GREEN: worker single thread/own event loop constructs ledger/auth/HTTP after approval, sender lock acquired before token/key I/O. Boundedqueue1; immutable commands/results, no broker references; bootstrap tracked along with observations. Existing TokenManager issuance unknown contract remains.
-- [ ] RED/GREEN: stop gate→cancel/gather all→OAuthclose→clientclose→thread confirmation with bounded async waits. fsync hang gives stopping_unconfirmed and no replacementworker/sender. Multiple cancellation doesn't pretend success. Expired/stopped authority still permits revoked safety persistence.
-- [ ] RED/GREEN: KST fixed 5min slots within plan, daily calendar independent CLOSED; recover missed slots without imagined symbols; immutable selection copy from latest successful candidate hook+holdings/current-price cache only. Existing price metadata not invented. No additional KIS method call.
-- [ ] RED/GREEN: heartbeat register approved schedule; only durablecomplete+≥1validToss observation success, allinvalid/error failure, emptyoutside idle, busy budget skip not success; comparison/ledger/calendar separate diagnostics in health-compatible snapshot.
-- [ ] Test matrix R01–R14 including actual forbidden paths flags×KISfail invariance; old synthetic fixture/hash/APIunchanged.
-- [ ] See: task-scoped independent review, fix and re-review; integrated high-stakes reviewer separate from all implementers. Build acceptance table mapping each R to test or explicit gap; no unsupported completion claim.
+- [x] RED/GREEN: OFF no preflight/file/factories/task/worker; ON missing anchor unavailable; separate bounded single preflight thread can hang without blocking trading loop. Post-timeout results discarded and no overlapping replacement. Grant accepted only after correct preflight.
+- [x] RED/GREEN: worker single thread/own event loop constructs ledger/auth/HTTP after approval, sender lock acquired before token/key I/O. Boundedqueue1; immutable commands/results, no broker references; bootstrap tracked along with observations. Existing TokenManager issuance unknown contract remains.
+- [x] RED/GREEN: stop gate→cancel/gather all→OAuthclose→clientclose→thread confirmation with bounded async waits. fsync hang gives stopping_unconfirmed and no replacementworker/sender. Multiple cancellation doesn't pretend success. Expired/stopped authority still permits revoked safety persistence.
+- [x] RED/GREEN: KST fixed 5min slots within plan, daily calendar independent CLOSED; recover missed slots without imagined symbols; immutable selection copy from latest successful candidate hook+holdings/current-price cache only. Existing price metadata not invented. No additional KIS method call.
+- [x] RED/GREEN: heartbeat register approved schedule; only durablecomplete+≥1validToss observation success, allinvalid/error failure, emptyoutside idle, busy budget skip not success; comparison/ledger/calendar separate diagnostics in health-compatible snapshot.
+- [x] Test matrix R01–R14 including actual forbidden paths flags×KISfail invariance; old synthetic fixture/hash/APIunchanged.
+  - 실행 범위: 실제 REST→ExitManager의 OFF/ON×KIS 성공/실패 지문 및 sync/fill/exit 정적 경계. 모든 broker/order 호출부의 동적 fault matrix까지 확장한 것으로 주장하지 않는다. 세부 근거/한계는 런타임 리뷰 보고서의 R01–R14 표에 보존한다.
+- [x] See: task-scoped independent review, fix and re-review; integrated high-stakes reviewer separate from all implementers. Build acceptance table mapping each R to test or explicit gap; no unsupported completion claim.
 - [ ] Run clean-env targeted tests and full verify UTC/KST, secret scan, gitdiffcheck. Update docs/schema/operator-only activation and stopping_unconfirmed recovery procedure, SHA/file-based external review prompt. Commit/push namedfiles, update DraftPR70 and inspectCI. Do not merge/deploy automatically.
 
 ## Verification commands

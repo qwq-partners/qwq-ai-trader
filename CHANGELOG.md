@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-16 — feat(T12): 승인 기반 Toss 관측 런타임 (기본 OFF, 실관측 미시작)
+
+- 사용자 승인한 Plan→Do→See로 #67 기반을 보존하며 운영자 read-only 승인 등록부·계획/실행 증명 바인딩, lazy OAuth·bounded GET/POST, 전용 worker·지속 원장·현재가/캘린더 관측과 오프라인 리포트를 추가한다. 실제 승인값·키·launcher 배치는 설치하지 않는다.
+- 역할별 격리 병렬 구현(Astra/high 인증·전송, Terra/high 원장→리뷰 후 Astra/high 보강), 별도 Astra/xhigh 리뷰. 토큰 정상 캐시 보존·발급 예산 전검사, 정확한 송신 기한·시계 이동, 원장 fsync/재시작/중복·비교 분모, worker 취소/종료, UTC/KST 하트비트와 optional import 실패를 회귀 테스트로 고정한다.
+- KR 스케줄러는 선택적 task 생성과 마지막 성공 후보의 동기 복사만 연결한다. OFF는 승인 파일·worker·잡·키 접근 0, ON도 유효 승인/시작 증명 없으면 실행 거부. 추가 KIS HTTP 0, 기존 주문/청산/사이징·일봉 live·점수/표시 fallback은 미변경이다.
+- `auth_max_issues`는 worker 수명당 POST 상한(재시작 합산 아님), bootstrap만 durable 1회다. 관측 성공과 가격 비교는 별도이며 시각/시장 기준 결측은 insufficient; `production_eligible=False` 유지.
+- 검증·리뷰 SHA/인수 근거·잔여 한계 정본: `docs/reviews/toss-runtime-2026-09-16.md`. 기존 #68은 보류, #70에서 통합하며 main 병합·SSH·배포/재시작·주문/설정 변경은 하지 않는다.
+
 ## 2026-09-16 — docs(T12): PR #68 보류·Codex 인계와 승인 기반 관측 런타임 설계
 
 - 최신 main `c32de93`(#67 기반·#69 리뷰 도구 수정)에서 별도 feature 작업공간을 만들고, 중복 구현 #68 `0b978e0`의 인증/보안·자료 계약·관측 원장/하트비트 리뷰를 인계 문서로 고정했다. #68의 기본 ON·revoked 재발급·불명확 발급 반복·보안 저장/전송·결측 통계·전량 실패 성공 처리 문제를 단순 충돌 해결로 덮지 않는다.

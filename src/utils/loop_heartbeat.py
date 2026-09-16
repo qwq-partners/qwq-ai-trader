@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Callable, Dict, Optional
+from zoneinfo import ZoneInfo
 
 # 장중 루프 기대 주기(초). 정체 판정 = 주기×3 (최소 120초).
 PERIODS: Dict[str, int] = {
@@ -62,6 +63,71 @@ class _LoopState:
 
 
 _states: Dict[str, _LoopState] = {}
+# Optional, explicitly approved observer schedules. Never modify trade schedules.
+_observers: Dict[str, dict] = {}
+_observer_status: Dict[str, dict] = {}
+_OBSERVER_NAMES = frozenset({'kr_toss_prices', 'kr_toss_calendar'})
+
+
+def register_observer(name, *, dates, windows=(), daily_time=None,
+                      period_seconds=300, grace_seconds=60):
+    """Register an already-validated immutable observer schedule, KST dates.
+
+    Unlike trading loops, a calendar observation is due on an approved holiday.
+    Registration itself never marks an observation successful.
+    """
+    if name not in _OBSERVER_NAMES or type(period_seconds) is not int or period_seconds <= 0:
+        raise ValueError('invalid_observer_schedule')
+    if type(grace_seconds) not in (int, float) or not 0 <= grace_seconds <= 86400:
+        raise ValueError('invalid_observer_schedule')
+    _observers[name] = dict(dates=tuple(dates), windows=tuple(sorted(tuple(w) for w in windows)),
+                            daily_time=daily_time, period_seconds=period_seconds,
+                            grace_seconds=grace_seconds)
+    _state(name)
+
+
+def observer_status(name, **values):
+    """Safe diagnostic scalars, distinct from generic last_success/last beat."""
+    allowed = {'state', 'comparison', 'degraded', 'observation_count', 'valid_pairs',
+               'provider_failures', 'budget_skips', 'excluded_pairs',
+               'ledger_complete', 'last_valid_pair', 'last_ledger_complete',
+               'skip_count', 'production_eligible'}
+    if name not in _OBSERVER_NAMES or values.keys() - allowed:
+        raise ValueError('invalid_observer_status')
+    if any(v is not None and type(v) not in (str, bool, int, float) for v in values.values()):
+        raise ValueError('invalid_observer_status')
+    _observer_status.setdefault(name, {}).update(values)
+    _state(name)
+
+
+def _observer_names():
+    return tuple(sorted(set(_observers) | set(_observer_status)))
+
+
+def _observer_check(now):
+    kst = ZoneInfo('Asia/Seoul')
+    # datetime.now() is host-local when naive, not implicitly Korean time.
+    local = now.astimezone(kst)
+    out = {}
+    for name, schedule in _observers.items():
+        if not _state(name).enabled or local.date().isoformat() not in schedule['dates']:
+            continue
+        if schedule['daily_time']:
+            h, m = map(int, schedule['daily_time'].split(':'))
+            due = local.replace(hour=h, minute=m, second=0, microsecond=0).timestamp()
+            age = local.timestamp() - max(_beats.get(name, _started), due)
+            if (local.timestamp() > max(due, _started) + schedule['grace_seconds']
+                    and _beats.get(name, 0) < due):
+                out[name] = age
+        else:
+            for start, end in schedule['windows']:
+                if start <= local.strftime('%H:%M') < end:
+                    h, m = map(int, start.split(':'))
+                    floor = local.replace(hour=h, minute=m, second=0, microsecond=0).timestamp()
+                    age = local.timestamp() - max(_beats.get(name, _started), floor)
+                    if age > max(schedule['period_seconds'] * 3, schedule['grace_seconds']):
+                        out[name] = age
+    return out
 
 
 def _state(name: str) -> _LoopState:
@@ -141,7 +207,7 @@ def set_enabled(name: str, enabled: bool, reason: Optional[str] = None) -> None:
 def snapshot(now: Optional[float] = None) -> Dict[str, int]:
     """등록된 모든 루프의 마지막 beat 이후 경과(초) — 대시보드 `/api/health` 노출용 (기존 필드 호환)"""
     now = time.time() if now is None else now
-    return {n: int(now - _beats.get(n, _started)) for n in (*PERIODS, *DAILY)}
+    return {n: int(now - _beats.get(n, _started)) for n in (*PERIODS, *DAILY, *_observer_names())}
 
 
 def stale(now: float, thresholds: Dict[str, float], floor: float = 0.0) -> Dict[str, float]:
@@ -170,13 +236,14 @@ def check(now: Optional[datetime] = None,
       기존 "직전 거래일 자정 이후" 기준은 예정시각 이전에도 정체로 오탐했다)
     """
     now = datetime.now() if now is None else now
+    observers = _observer_check(now)
     if is_holiday is None:
         from ..core.engine import is_kr_market_holiday as is_holiday
     if is_holiday(now.date()):
-        return {}
+        return observers
 
     ts = now.timestamp()
-    out: Dict[str, float] = {}
+    out: Dict[str, float] = dict(observers)
     if INTRADAY_WINDOW[0] <= now.strftime("%H:%M") <= INTRADAY_WINDOW[1]:
         open_ts = now.replace(hour=9, minute=0, second=0, microsecond=0).timestamp()
         thresholds = {
@@ -198,6 +265,31 @@ def check(now: Optional[datetime] = None,
 
 
 def _next_due(name: str, now: datetime) -> Optional[str]:
+    if name in _observers:
+        schedule = _observers[name]
+        kst = ZoneInfo('Asia/Seoul')
+        local = now.astimezone(kst)
+        for day in schedule['dates']:
+            midnight = datetime.fromisoformat(day).replace(tzinfo=kst)
+            if midnight.date() < local.date():
+                continue
+            windows = ((schedule['daily_time'], None),) if schedule['daily_time'] else schedule['windows']
+            for start, end in windows:
+                h, m = map(int, start.split(':'))
+                cursor = midnight.replace(hour=h, minute=m)
+                if end is None:
+                    if cursor > local:
+                        return cursor.strftime('%Y-%m-%d %H:%M')
+                    continue
+                cursor += timedelta(minutes=(-cursor.minute) % 5)
+                eh, em = map(int, end.split(':'))
+                end_at = midnight.replace(hour=eh, minute=em)
+                if cursor <= local:
+                    steps = int((local - cursor).total_seconds() // schedule['period_seconds']) + 1
+                    cursor += timedelta(seconds=steps * schedule['period_seconds'])
+                if cursor < end_at:
+                    return cursor.strftime('%Y-%m-%d %H:%M')
+        return None
     if name not in DAILY_SCHEDULE:
         return None
     h, m = DAILY_SCHEDULE[name]
@@ -212,7 +304,7 @@ def loop_status(now: Optional[datetime] = None) -> Dict[str, dict]:
     last_attempt, last_success, consecutive_failures, next_due. 감시 대상 9개 한정."""
     now = datetime.now() if now is None else now
     out: Dict[str, dict] = {}
-    for name in (*PERIODS, *DAILY):
+    for name in (*PERIODS, *DAILY, *_observer_names()):
         st = _state(name)
         row = {
             "enabled": st.enabled,
@@ -226,5 +318,7 @@ def loop_status(now: Optional[datetime] = None) -> Dict[str, dict]:
             row["failure_reason"] = st.failure_reason
         if st.note is not None:
             row["note"] = st.note
+        if name in _observer_status:
+            row['observation'] = dict(_observer_status[name])
         out[name] = row
     return out
