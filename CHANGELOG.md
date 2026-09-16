@@ -6,6 +6,7 @@
 - **근본 원인**: 이 호스트(Ubuntu, `kernel.apparmor_restrict_unprivileged_userns=1`, AppArmor 활성)에서 Codex 번들 bwrap 이 비특권 사용자 네임스페이스 안에서 loopback 을 설정하지 못한다. 시스템 bwrap 은 미설치, 번들 경로 `@openai/codex-linux-x64/vendor/.../codex-resources/bwrap`.
 - **직접 원인**: 2026-08-02 에 `~/.codex/config.toml` 에 `sandbox_mode = "danger-full-access"` 우회를 넣어 뒀는데, 리뷰 스크립트가 `--sandbox read-only` 를 **하드코딩**해 CLI 플래그가 config 를 덮어썼다. 플래그 없이 실행하면 즉시 정상(실측: 30초 내 `git log` 까지 성공).
 - 수정: 샌드박스 플래그를 기본 비지정으로(config 를 따름), `QWQ_REVIEW_SANDBOX=<mode>` 로 명시할 때만 전달하되 **1회 프로브**로 bwrap 오류를 감지하면 즉시 실패(조용한 미검증 방지). 읽기 전용 계약(파일 수정·git 쓰기·설치·네트워크 금지)은 프롬프트에 명시. 테스트 `tests/dev/test_codex_review.py` 7건(기본 무플래그·env 전달·프로브 실패 fail-fast).
+- **수정본을 수정된 스크립트로 실제 Codex 에 리뷰시켜 8월 이후 첫 정상 완주**(gpt-6-astra, 결론까지 출력). Codex 가 낸 P1 1(샌드박스 제거로 쓰기 권한 부여)·P2 2(프로브 pipefail 오판, 프로브 cwd 불일치)를 반영 — 프로브를 1회 호출·rc/출력 분리 판정으로, `cd "$ROOT"` 를 프로브 앞으로, 그리고 **리뷰 전후 작업 트리·HEAD 대조로 변경 시 경고+exit 3**(격리 대체가 아닌 위반 탐지). 테스트 8건.
 - 샌드박스 자체를 살리는 것(번들 bwrap 에 `userns` 허용 AppArmor 프로파일 또는 sysctl 완화)은 호스트 보안 설정 변경이라 **별도 승인 대상** — 이번엔 하지 않았다. 문서 `docs/operations/local-development.md` §9.
 - 부수: 기존 메모리의 "Codex 는 grounding 인라인 필수" 지침은 스크립트 경로에 한해 더 이상 필요 없다(리뷰 결과의 실코드 대조 원칙은 유지).
 

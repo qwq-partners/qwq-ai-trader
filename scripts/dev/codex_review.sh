@@ -65,19 +65,37 @@ REVIEW_PROMPT="$SCOPE_PROMPT 리뷰어 관점에서 검토하라.
 - 코드 변경에 상응하는 CHANGELOG.md 및 docs/ 갱신이 포함됐는지 확인하라.
 - 결론에 병합 가능 여부를 명시하라. 답변은 한국어로 작성하라."
 
+cd "$ROOT"   # 프로브와 본 실행을 같은 디렉터리·같은 조건에서 돌린다
+
 ARGS=(exec)
 if [[ -n $SANDBOX ]]; then
-  # 요청된 샌드박스가 이 호스트에서 실제로 뜨는지 1회 프로브 — 안 뜨면 조용히 미검증으로
-  # 끝나지 않도록 즉시 실패시킨다(호출자가 QWQ_REVIEW_SANDBOX 를 비우거나 환경을 고치도록).
-  if ! "$CODEX_BIN" exec --sandbox "$SANDBOX" "run the shell command: true" >/dev/null 2>&1 \
-     || "$CODEX_BIN" exec --sandbox "$SANDBOX" "run the shell command: echo QWQ_SANDBOX_PROBE" 2>&1 \
-        | grep -q "bwrap: "; then
-    fail "샌드박스($SANDBOX)가 이 호스트에서 기동하지 않습니다 (bwrap/userns 제한). QWQ_REVIEW_SANDBOX 를 비우고 config.toml 의 sandbox_mode 를 따르거나 환경을 고치세요."
+  # 요청된 샌드박스가 이 호스트에서 실제로 뜨는지 **1회** 프로브 — 종료 코드와 출력을 따로 판정한다
+  # (파이프라인에 넣으면 pipefail 때문에 오류 문자열을 잡고도 fail 분기를 건너뛴다).
+  probe_rc=0
+  probe_out=$("$CODEX_BIN" exec --sandbox "$SANDBOX" "run the shell command: echo QWQ_SANDBOX_PROBE" 2>&1) || probe_rc=$?
+  if (( probe_rc != 0 )) || grep -q "bwrap: " <<<"$probe_out"; then
+    fail "샌드박스($SANDBOX)가 이 호스트에서 기동하지 않습니다 (rc=$probe_rc, bwrap/userns 제한). QWQ_REVIEW_SANDBOX 를 비우고 config.toml 의 sandbox_mode 를 따르거나 환경을 고치세요."
   fi
   ARGS+=(--sandbox "$SANDBOX")
 fi
 ARGS+=("$REVIEW_PROMPT")
 
+# 샌드박스 없이 돌 때(config 가 danger-full-access 인 이 호스트)의 완화책 — 리뷰 전후 작업 트리·HEAD 를
+# 대조해 Codex 가 무언가 바꿨으면 숨기지 않고 경고 + 비정상 종료한다. bwrap 격리를 대신하진 못하지만
+# "읽기 전용" 계약 위반을 최소한 탐지한다.
+before_head=$(git rev-parse HEAD 2>/dev/null || true)
+before_status=$(git status --porcelain --untracked-files=all 2>/dev/null || true)
+
 printf '[리뷰] Codex 교차 리뷰를 시작합니다 (모드: %s, 기준: %s, 샌드박스: %s)\n' "${MODE#--}" "$BASE_BRANCH" "${SANDBOX:-config.toml 설정}"
-cd "$ROOT"
-exec "$CODEX_BIN" "${ARGS[@]}"
+review_rc=0
+"$CODEX_BIN" "${ARGS[@]}" || review_rc=$?
+
+after_head=$(git rev-parse HEAD 2>/dev/null || true)
+after_status=$(git status --porcelain --untracked-files=all 2>/dev/null || true)
+if [[ "$before_head" != "$after_head" || "$before_status" != "$after_status" ]]; then
+  printf '[경고] 리뷰 중 저장소가 변경됐습니다 — 읽기 전용 계약 위반. 아래 diff 를 확인하세요.\n' >&2
+  diff <(printf '%s\n' "$before_status") <(printf '%s\n' "$after_status") >&2 || true
+  [[ "$before_head" != "$after_head" ]] && printf '[경고] HEAD %s -> %s\n' "$before_head" "$after_head" >&2
+  exit 3
+fi
+exit "$review_rc"
