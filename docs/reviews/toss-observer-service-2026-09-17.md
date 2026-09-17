@@ -7,6 +7,7 @@
 - 기준 main/root checkout: `8ff2f55f4515d049fbcd5fa1eea009b3ffc9f164`; 원격 main과 새 artifact만 후속 갱신하며 거래 checkout은 유지한다.
 - 실행 계획: `docs/superpowers/plans/2026-09-17-toss-observer-service.md`, 상세 설계 승인 및 역할/인터페이스 고정 `2e772d6`.
 - 09-17 20:30 KST 착수로 당일 첫 관측 창이 지났다. 09/18·21·22 및09/22 18:00만료 변경 여부를 사용자에게 확인 중이다. **답변 전 실제 날짜 자동 연장/과거 채움은 하지 않는다.**
+- **09-17 21:34:47 KST PR #74 병합 완료**: 원격 main `c2fe787b59a25b2a6ca0931c82622f47a6771ca5`. CI run35221651554는 정확한 head `877768eef234f94df10a63e7bac452865dcc9f18`에서1809 passed/2 known xfailed, 격리0·문법/비밀정보 검사 통과(48.90초, 환경별 기존 경고33). 병합 main과 해당 head의 tree diff0을 확인했다. 거래 봇 로컬 main은 pull하지 않아 여전히8ff2f55이다.
 
 ## Plan / 역할
 
@@ -29,6 +30,7 @@
 - 독립 리뷰의 Important1(입력 close1초+worker10초 별도 예산)을 공통 monotonic deadline으로 수정했다. 종료 불확실 시 인수도None을 유지한다. Minor1(승인 파일 없는 identity 거부 fixture)은 정상 성공 대조군→변조로 보강했다. 각 RED2/RED8→서비스18/launcher48 GREEN, scoped 재리뷰 신규C/I/M0.
 - 통합 집중117건 통과 후 수정·추가된 실제 worker/지속 원장 성공·입력 실패·공급자 실패 및 패키지 closure4건 통과. 별도 wheel 기반 package 빌드 및 `/usr/bin/python3 -I -S -B` import 스모크에서 aiohttp3.13.5/관측 모듈 로드·거래 모듈0 확인. 최종운영artifact는 리뷰 후 소스로 다시 만든다.
 - installer dry-run은 proposed 새 일정으로 `ready=true, applied=false`를 반환했다. 자격 읽기·계정/설치 파일/실제grant 생성·systemctl0이며 일정 승인이나 실제 배포로 계산하지 않는다.
+- 최종 리뷰 소스 `877768e`로 hash-locked wheel 오프라인 빌드를 다시 실행했다. artifact SHA256 `1f046e498a2258028cfafb6850b3fa37685a2bda38a3e410225b4f3607c9ffba`; system Python `-I -S -B`에서 aiohttp3.13.5·관측 모듈 import 및 거래 모듈0, installer dry-run `ready=true/applied=false`를 확인했다. 이는 `/tmp` 준비물이며 root 보호 운영 릴리스 설치가 아니다. 실제 설치 전 동일 digest와 플랫폼을 다시 검증한다.
 
 ## 통합 검증 중 발견한 실행 부하 영향
 
@@ -54,10 +56,12 @@
 ## See / 아직 남은 게이트
 
 - 완료: 각 작업 독립 spec/quality 리뷰·수정·재리뷰, sealed artifact+실worker fakeHTTP 통합 인수, UTC/KST 전체 verify·비밀정보 검사·최종 broad 및 한정 리뷰.
-- PR #74의 required CI exact head 성공을 확인한 후에만 main 병합한다. 기존 거래 봇 checkout은 병합 후에도 유지한다.
+- 완료: PR #74 required CI exact head 성공·보호 규칙 경유 main 병합. 기존 거래 봇 checkout은 유지했다.
 - 실제 root/전용 UID 설치·check-only(발급0)·새 unit 한 번 시작·기존 PID/설정 지문 대조.
 - 장외 ON과 실제 GET/원장 관측을 구분하고3영업일/유효 가격 비교/소비자 승격은 별도 미완 인수로 유지한다.
 
 ## 운영 읽기 전용 확인
 
 구현 중 재조회: `qwq-ai-trader.service` active/running, PID3274983, 시작09-17 00:47:47 KST; root checkout8ff2f55/clean. `qwq-toss-observer.service` not-found/inactive. 21:10:36 KST 로컬 health 메모리 읽기에서 broker_connected=true, broker/risk pending0, stale0. 추가 KIS 요청을 만들지 않는 경로만 조회했다. 기존 서비스 재시작/checkout 변경/주문/설정 변경0. 이 조회는 새 서비스 설치/인수 증거가 아니다.
+
+21:34:34 KST 최종 health도 broker_connected=true, broker/risk pending0, stale0. 동일 PID3274983·observer not-found를 재확인했다. systemd `ExecMainStartTimestamp`는00:47:46이며 이전00:47:47은 시작 로그 기준이다. PR 병합 후에도 로컬 checkout8ff2f55/clean을 확인했다. 운영 gate는 새 관측 일정 답변 → 실제 root/UID/자격 설치·check-only → 새 unit 시작 순이며, 기존 거래 봇의 재시작은 포함하지 않는다.
