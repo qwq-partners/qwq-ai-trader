@@ -1,0 +1,33 @@
+[Unit]
+Description=QWQ Toss holdings observer (no trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qwq-toss-observer
+Group=qwq-toss-observer
+WorkingDirectory=/
+ExecStart=/usr/bin/python3 -I -S /usr/libexec/qwq-toss-observer/launcher.py --deployment /etc/qwq-toss-observer/deployment.json
+Environment=TOSS_API=1 PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/qwq-toss-observer/credentials.env
+Restart=no
+KillMode=control-group
+TimeoutStopSec=20
+UMask=0077
+LimitCORE=0
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/qwq-toss-observer
+CPUQuota=25%
+MemoryMax=192M
+TasksMax=16
+Nice=10
+IOWeight=10
+
+[Install]
+WantedBy=multi-user.target
