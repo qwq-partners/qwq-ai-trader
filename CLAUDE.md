@@ -79,6 +79,12 @@
 - UnifiedEngine 구조·스케줄러 태스크 주기·KR 배치 시각: `docs/architecture/system-overview.md` 및 `src/schedulers/` 소스 참조
 - 디렉토리 구조는 `src/` 하위 `ls`로 확인 (모듈별 한 줄 설명은 위 아키텍처 문서)
 
+### 목적 정합성 1단계 설계 (2026-09-17, 구현 전)
+
+- 목표: 비용 차감 KODEX200 초과수익 검증 + 현행 위험 한도 유지. 첫 범위는 KR 취소/체결/복구 정합성과 최종 진입 검사다.
+- 상세 설계 `docs/superpowers/specs/2026-09-17-engine-execution-safety-design.md`는 **사용자 확인 대기**다. 구현·운영 변경이 아니며 US 전체 안전성/수익성 검증 완료로 해석하지 않는다.
+- KIS 거래·잔고, Toss 별도 관측, 면제·위험 수치·설정 유지. 기존 '예외마다 pending 해제' 등의 규칙과 새 unknown 보존 계약의 충돌은 설계서에 명시했고, 구현 승인 후 코드·문서를 함께 바꾼다.
+
 ---
 
 ## 매매 전략

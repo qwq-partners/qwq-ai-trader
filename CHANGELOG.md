@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-17 — docs: 목적 정합성 1단계 KR 주문·체결 안전성 상세 설계
+
+- 사용자 목표를 비용 차감 KODEX200 초과수익 검증·현행 위험 한도 유지로 고정하고, 단계적 재설계 중 첫 KR 실행 안전성 설계를 작성했다. 취소 명령/최종상태 분리, intent별 잔여 목표, 부분체결 단일 commit, SQLite 실행 상태/복구, sync 이중반영 방지, 제출 직전 위험·시각 검사와 기존 예외 분류를 명시한다.
+- 가격 상한 enforce·LLM 실행 경로 분리·전략 자격/성과 승격·US 전체 이행은 후속으로 분리한다. KIS 거래·잔고/Toss 관측 전용 경계, 위험/청산 수치·면제·운영 설정은 유지한다. unknown 보류·저장 장애 시 자동 제출 제한 등 의도된 의미 변경은 상세 승인 대상으로 드러냈다.
+- 기준 main465a029에서 KST verify **1810 passed/2 known xfailed/1 기존 warning(85.02초)**, 격리0·문법/비밀정보 패턴 검사 통과. 기존 기준선이며 신규 설계 인수 통과가 아니다. 두 Astra/high 조사 결과를 반영하며 추가 모델 생성 제한은 설계서에 명시했다.
+- 문서 작성 후 UTC verify도 **1810 passed/2 known xfailed(86.42초)**·격리0. 두 Astra/high 문서 교차 리뷰의 Important7 및 재리뷰 중복 Important1을 보완했다(게시 복구·보호 degraded·시작 송신 장벽·보호 상태 소유·재진입 상태·최종 송신 건강성·최신 결측·취소 미송신 예약 보존). 구현 후 인수 검증과 구분한다.
+- 정본: `docs/superpowers/specs/2026-09-17-engine-execution-safety-design.md`. **상세 설계 사용자 확인 대기, 구현·운영 SSH/배포/재시작·주문/설정 변경 없음.**
+
 ## 2026-09-17 — ops(T12): 별도 Toss 관측 서비스 ON (기존 거래 봇 유지)
 
 - 사용자 승인 일정09/18·21·22/만료09/22 18:00 KST로 root 보호 release877768e·전용 UID997/GID987·Toss2자격·plan/grant를 설치했다. 자격 없는 전용 UID check-only 성공/시작 전 state 파일0, effective unit 권한·자원 제한 확인 후 **21:47:37 KST 새 서비스1회 시작(PID3335469)**.

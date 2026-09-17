@@ -5,6 +5,7 @@
 ## 문서 목록
 
 ### Architecture (아키텍처)
+- [KR 주문·체결 안전성 상세 설계](superpowers/specs/2026-09-17-engine-execution-safety-design.md) — 목적 정합성 1단계: 취소 최종성·체결 단일 적용·복구·최종 진입 검사, 상세 설계 확인 대기/구현·운영 무변경
 - [system-overview.md](architecture/system-overview.md) — 실행 수명주기, KR 이벤트 경로와 US 직접 스케줄러 경로, 설정·스케줄·상태 경계
 - [harness-evolution-design.md](architecture/harness-evolution-design.md) — 하네스 엔지니어링 적용 설계 (2026-08-10, Claude+Codex 협업): weakness_miner·기각 후보 원장·Wiki ACE 격상·편집 표면 정책·4페이즈 로드맵
 
