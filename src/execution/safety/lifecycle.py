@@ -14,6 +14,8 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from .reservations import has_remaining_reservation
+
 
 class CommandKind(str, Enum):
     SUBMIT = "submit"
@@ -185,6 +187,11 @@ def _replacement(state: dict, intent_id: str) -> int:
             return 0
         if order["observed_quantity"] != order["applied_quantity"]:
             return 0
+        try:
+            if has_remaining_reservation(order):
+                return 0
+        except ValueError:
+            return 0
     # 정정은 노출을 바꿀 수 있으므로 체인 확인 전 재주문 권한을 주지 않는다.
     for attempt in attempts:
         if attempt["kind"] == CommandKind.MODIFY.value and attempt.get("command_status") not in (
@@ -192,6 +199,41 @@ def _replacement(state: dict, intent_id: str) -> int:
         ):
             return 0
     return max(0, intent["target_quantity"] - sum(a["applied_quantity"] for a in orders))
+
+
+def clear_settled_pending_sector(state: dict, attempt_id: str) -> None:
+    """소진된 submit의 sector 효과만 정리한다. 기존 root가 없으면 만들지 않는다."""
+    attempts = state.get('attempts', {})
+    attempt = attempts.get(attempt_id)
+    effects = state.get('entry_policy_effects')
+    if not attempt or attempt.get('kind') != 'submit' or not isinstance(effects, dict):
+        return
+    if has_remaining_reservation(attempt):
+        return
+    for aid, other in attempts.items():
+        if aid == attempt_id or other.get('symbol') != attempt['symbol']:
+            continue
+        if other.get('kind') == 'submit':
+            if other.get('state') not in TERMINAL_STATES or has_remaining_reservation(other):
+                return
+        elif other.get('command_status') not in ('not_sent', 'rejected'):
+            return
+    sectors = effects.get('pending_sectors')
+    if isinstance(sectors, dict):
+        sectors.pop(attempt['symbol'], None)
+
+
+def _release_resources(state: dict, attempt_id: str) -> None:
+    attempt = state['attempts'][attempt_id]
+    has_remaining_reservation(attempt)  # 검증 전에 0으로 덮어 형식 오류를 지우지 않는다.
+    attempt['reserved_quantity'], attempt['reserved_cash'] = 0, '0'
+    if 'reserved_exposure' in attempt or 'reserved_planned_risk' in attempt:
+        if not {'reserved_exposure', 'reserved_planned_risk'} <= attempt.keys():
+            raise ValueError('incomplete bound reservation')
+        attempt['reserved_exposure'] = '0'
+        if attempt['reserved_planned_risk'] is not None:
+            attempt['reserved_planned_risk'] = '0'
+    clear_settled_pending_sector(state, attempt_id)
 
 
 class OrderLifecycleCoordinator:
@@ -207,7 +249,7 @@ class OrderLifecycleCoordinator:
         if self._admission_guard is not None:
             self._admission_guard()
 
-    async def prepare(self, intent_id: str, attempt_id: str, quantity: int,
+    def prepare_candidate(self, state: dict, intent_id: str, attempt_id: str, quantity: int,
                       symbol: str, side: str, *, command: CommandKind = CommandKind.SUBMIT,
                       parent_attempt_id: str | None = None, order_ref: OrderRef | None = None,
                       reserved_cash: str = "0", origin: str = "auto", strategy: str = "") -> dict:
@@ -262,10 +304,26 @@ class OrderLifecycleCoordinator:
             intent["attempt_ids"].append(attempt_id)
             return state
 
+        return reduce(state)
+
+    async def prepare(self, intent_id: str, attempt_id: str, quantity: int,
+                      symbol: str, side: str, *, command: CommandKind = CommandKind.SUBMIT,
+                      parent_attempt_id: str | None = None, order_ref: OrderRef | None = None,
+                      reserved_cash: str = "0", origin: str = "auto", strategy: str = "") -> dict:
+        self._require_admission()
+        _quantity(quantity, positive=True)
+        _money(reserved_cash)
+        CommandKind(command)
+        if not intent_id or not attempt_id or not symbol or side not in ('buy', 'sell'):
+            raise ValueError('invalid order intent')
+        def reduce(state):
+            return self.prepare_candidate(state, intent_id, attempt_id, quantity, symbol, side,
+                command=command, parent_attempt_id=parent_attempt_id, order_ref=order_ref,
+                reserved_cash=reserved_cash, origin=origin, strategy=strategy)
         await self.owner.mutate(f"prepare:{attempt_id}:{uuid4().hex}", reduce)
         return self.owner.state["attempts"][attempt_id]
 
-    async def claim(self, attempt_id: str, claim_id: str) -> bool:
+    async def claim(self, attempt_id: str, claim_id: str, *, candidate_guard=None) -> bool:
         self._require_admission()
         if not claim_id:
             raise ValueError("sender identity required")
@@ -277,6 +335,8 @@ class OrderLifecycleCoordinator:
             attempt = state.get("attempts", {}).get(attempt_id)
             if not attempt or attempt["claim_id"] is not None or attempt["state"] != "prepared":
                 return state
+            if candidate_guard is not None:
+                candidate_guard(state)
             if attempt["kind"] != "submit":
                 parent = state["attempts"][attempt["parent_attempt_id"]]
                 if parent["state"] in TERMINAL_STATES or parent.get("evidence_conflict"):
@@ -311,6 +371,23 @@ class OrderLifecycleCoordinator:
                     or attempt["claim_id"] != claim_id
                     or (expected_attempt_version is not None and attempt["version"] != expected_attempt_version)):
                 return state
+            binding = attempt.get('request_binding')
+            if binding is not None:
+                if (type(expected_attempt_version) is not int
+                        or any(binding.get(key) != attempt.get(key) for key in
+                               ('symbol', 'side', 'strategy', 'quantity'))
+                        or binding.get('command') != attempt.get('kind')):
+                    return state
+                ref = result.order_ref
+                if ref is not None:
+                    if ((ref.account_scope, ref.market, ref.order_date, ref.exchange) !=
+                            (binding.get('account_scope'), 'KR', binding.get('business_day'), 'KRX')
+                            or not ref.org_no):
+                        return state
+                    parent = state['attempts'].get(attempt.get('parent_attempt_id'))
+                    parent_no = parent['order_ref']['order_no'] if parent else ''
+                    if ref.parent_order_no != parent_no:
+                        return state
             if attempt["state"] in TERMINAL_STATES or attempt.get("evidence_conflict"):
                 return state
             if (attempt["kind"] == "submit"
@@ -350,8 +427,7 @@ class OrderLifecycleCoordinator:
             if attempt["kind"] == "submit":
                 if status in (CommandStatus.NOT_SENT, CommandStatus.REJECTED):
                     attempt["state"] = OrderState.FINAL_REJECTED.value
-                    attempt["reserved_quantity"] = 0
-                    attempt["reserved_cash"] = "0"
+                    _release_resources(state, attempt_id)
                 elif status is CommandStatus.ACKNOWLEDGED:
                     attempt["state"] = OrderState.OPEN.value
                 else:
@@ -431,8 +507,7 @@ class OrderLifecycleCoordinator:
                     self._finality_recorder(state, attempt_id, evidence,
                                             version=self.owner.version + 1, now=self.clock())
                 if attempt["applied_quantity"] == qty:
-                    attempt["reserved_quantity"] = 0
-                    attempt["reserved_cash"] = "0"
+                    _release_resources(state, attempt_id)
             elif attempt["state"] not in TERMINAL_STATES:
                 attempt["state"] = (OrderState.PARTIAL.value if qty else OrderState.RECONCILING.value)
             attempt["status"] = attempt["state"]

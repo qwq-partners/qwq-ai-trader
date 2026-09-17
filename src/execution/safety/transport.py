@@ -14,6 +14,7 @@ import json
 from typing import Callable
 
 from .guards import GuardDecision
+from .requests import KISRequestBuilder, PreparedTradeRequest, RequestValidationError
 
 
 def _payload_snapshot(payload: dict) -> dict:
@@ -63,8 +64,96 @@ class GuardedKISTransport:
 
     _PATHS = {'submit': 'order-cash', 'cancel': 'order-rvsecncl', 'modify': 'order-rvsecncl'}
 
-    def __init__(self, broker):
+    def __init__(self, broker, *, request_builder: KISRequestBuilder | None = None):
         self._broker = broker
+        if request_builder is not None and type(request_builder) is not KISRequestBuilder:
+            raise ValueError('invalid_request_builder')
+        self._request_builder = request_builder
+
+    def _broker_scope_matches(self, request: PreparedTradeRequest) -> bool:
+        config, account = self._broker.config, request.account
+        pairs = ((config.account_no, account.account_no),
+                 (config.account_product_cd, account.account_product_cd),
+                 (config.env, account.environment), (config.base_url, account.endpoint))
+        return all(type(actual) is str and actual == expected for actual, expected in pairs)
+
+    async def send_prepared(self, request: PreparedTradeRequest,
+                            guard: Callable[[PreparedTradeRequest], GuardDecision]) -> TransportResult:
+        """실제 준비 요청을 최종 guard에 전달한다. owner 예약/claim 검사는 호출자 책임이다.
+
+        기존 raw send와 별도인 opt-in 경계이며 운영 broker에는 아직 설치하지 않는다.
+        hashkey helper의 사본 변형도 거부하고 마지막 검증 이후 단회 POST만 수행한다.
+        """
+        builder, broker = self._request_builder, self._broker
+        if builder is None:
+            return TransportResult(TransportStatus.NOT_SENT, 'request_builder_required')
+        dispatched = False
+        try:
+            prepared = deepcopy(request)
+            builder.validate(prepared)
+            fingerprint = prepared.fingerprint
+            if not self._broker_scope_matches(prepared):
+                return TransportResult(TransportStatus.NOT_SENT, 'request_broker_scope_changed')
+            if not broker._session or broker._session.closed:
+                if not await broker.connect():
+                    return TransportResult(TransportStatus.NOT_SENT, 'connection_unavailable')
+            if not self._broker_scope_matches(prepared):
+                return TransportResult(TransportStatus.NOT_SENT, 'request_broker_scope_changed')
+            if broker._token is None and not await broker._ensure_token():
+                return TransportResult(TransportStatus.NOT_SENT, 'token_unavailable')
+            if not self._broker_scope_matches(prepared):
+                return TransportResult(TransportStatus.NOT_SENT, 'request_broker_scope_changed')
+            hash_payload = prepared.body()
+            hashkey = await broker._get_hashkey(hash_payload)
+            if _payload_snapshot(hash_payload) != prepared.body():
+                return TransportResult(TransportStatus.NOT_SENT, 'hashkey_payload_changed')
+            if type(hashkey) is not str or not hashkey:
+                return TransportResult(TransportStatus.NOT_SENT, 'hashkey_unavailable')
+            if not self._broker_scope_matches(prepared):
+                return TransportResult(TransportStatus.NOT_SENT, 'request_broker_scope_changed')
+            await broker._rate_limit(prepared.tr_id)
+            # 마지막 application await 이후: 요청/config/header와 실제 owner guard를 대조한다.
+            builder.validate(prepared)
+            if not self._broker_scope_matches(prepared):
+                return TransportResult(TransportStatus.NOT_SENT, 'request_broker_scope_changed')
+            headers = dict(broker._get_headers(prepared.tr_id))
+            if (any(type(key) is not str or type(value) is not str for key, value in headers.items())
+                    or headers.get('tr_id') != prepared.tr_id):
+                return TransportResult(TransportStatus.NOT_SENT, 'header_request_mismatch')
+            headers['hashkey'] = hashkey
+            decision = guard(prepared)
+            if (type(decision) is not GuardDecision or type(decision.allowed) is not bool
+                    or type(decision.reason) is not str):
+                return TransportResult(TransportStatus.NOT_SENT, 'invalid_guard_result')
+            if not decision.allowed:
+                return TransportResult(TransportStatus.NOT_SENT, decision.reason)
+            builder.validate(prepared)
+            if prepared.fingerprint != fingerprint:
+                return TransportResult(TransportStatus.NOT_SENT, 'prepared_request_changed')
+            if not self._broker_scope_matches(prepared):
+                return TransportResult(TransportStatus.NOT_SENT, 'request_broker_scope_changed')
+            payload = prepared.body()
+            url = prepared.account.endpoint + prepared.path
+            dispatched = True
+            async with broker._session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    return TransportResult(TransportStatus.UNKNOWN, 'http_response_unconfirmed')
+                data = await response.json()
+                if not isinstance(data, dict):
+                    return TransportResult(TransportStatus.UNKNOWN, 'invalid_response')
+                if data.get('rt_cd') == '0':
+                    return TransportResult(TransportStatus.ACKNOWLEDGED, 'command_acknowledged', data)
+                if data.get('rt_cd') == '1' and isinstance(data.get('msg_cd'), str) and data['msg_cd']:
+                    return TransportResult(TransportStatus.REJECTED, 'command_rejected', data)
+                return TransportResult(TransportStatus.UNKNOWN, 'invalid_response')
+        except asyncio.CancelledError:
+            raise
+        except RequestValidationError:
+            return TransportResult(TransportStatus.UNKNOWN if dispatched else TransportStatus.NOT_SENT,
+                                   'dispatch_unconfirmed' if dispatched else 'invalid_prepared_request')
+        except Exception:
+            return TransportResult(TransportStatus.UNKNOWN if dispatched else TransportStatus.NOT_SENT,
+                                   'dispatch_unconfirmed' if dispatched else 'preparation_failed')
 
     async def send(self, command: str, tr_id: str, payload: dict,
                    guard: Callable[[], GuardDecision]) -> TransportResult:

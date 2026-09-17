@@ -22,7 +22,7 @@
 
 최종 동결 후보 전체 검증은 KST **2292passed/2 known xfailed/1 기존warning,97.70초**, UTC **2292passed/2 known xfailed/1 기존warning,97.34초**다. 두 번 모두 격리0·문법·비밀정보 패턴 검사를 통과했고 신규68시험(보호34·합성원장28·실제DB5·교차1)을 포함한다. 핵심 해시: runtime `824070f81bd5300b99d96a9c3aeacd8ff72f641480247fead846a2be1b5a6512`, recovery `499b8d1ff1b65984b0b1c2c073fc3c7c3a28624feda53548d476c1d335d55eae`, journal `1e1bda8a83d56804edc218e23064fa116e9c5e3a5967f5b454b631e555dc6ee2`, 실제DB시험 `960ba02c42f8309ac3eea66d01ff07df124f84370726d9516cd8e7d98ae8334f`.
 
-남은 단계2: 확정 사실 ingress·quiescence와 KST 일자 전환, 최초 손절/지원되는 최종성 증거 및 R 원장, 기존 분석 원장 projection. 경제 사실을 재가감하거나 stage/high/R을 추정해 복구하지 않는다. **8A/B 한정 완료이며 단계2 전체 완료가 아니다.**
+8A/B 당시 후속 항목은 확정 사실 ingress·quiescence와 KST 일자 전환, 최초 손절/지원되는 최종성 증거 및 R 원장, 기존 분석 원장 projection이었다. 전자의 core 범위는 아래8C에서 검증했으며 기존 분석 원장 projection과 실제 writer 연결은 남았다. 경제 사실을 재가감하거나 stage/high/R을 추정해 복구하지 않는다. **8A/B 및8C 한정 완료이며 전체 운영 경로 인수가 아니다.**
 
 ### 후속 Task8C — 일자 경합·초기 R (core 범위 한정 검증 완료)
 
@@ -66,7 +66,43 @@ Plan: 아래는 Terra/high 읽기 전용 조사에서 얻은 기준 HEAD의 주�
 
 Do/See: 아직 전체 이행 전이다. 특히 정정의 수량/가격 증가는 request-bound 추가 예약·위험 상한 없이는 송신하지 않는다. 신규 가드로 legacy 호출을 거부하는 것만으로 정상 기능의 이행을 완료했다고 보고하지 않는다.
 
+### Task9A/9A2/9B1 — 요청·전송·정책 선행 경계 (한정 리뷰 완료)
+
+- Plan: 실제 계좌/세션·command/path/TR·수량/호가·부모·strategy를 하나의 불변 요청과 fingerprint로 고정한다. 실제 두 기존 위험 gate를 분리 특성화하고, 거래 POST 직전에는 준비한 그 요청을 검사한다. 생성·정책 허용을 예약/송신권으로 오인하지 않는다.
+- Do: Astra/high가 request builder160시험과 순수 위험 정책316시험을 구현했고 부모가 prepared transport36시험을 추가했다. MODIFY는 전부 미지원이며 CANCEL 전량 wire0은 양의 원주문 잔여 커버리지와 구분한다. hash helper와 POST는 본문 사본을 따로 받으며 connect/token/hash/limiter 뒤 계좌 설정을 재검사한다. 마지막 guard 이후 POST까지 application await는 없다. 기존 raw send와 운영 broker는 아직 교체하지 않았다.
+- See: Astra/xhigh 독립 리뷰에서 요청은 한정 승인했다(관련KST/UTC276건·추가18,905단언; 후자는 pytest 개수가 아님). 전송에서는 문자열`"false"` 등의 허가값을 truthy로 승인하던 P2를 재현해 exact DTO/bool/str 검증으로 고쳤다(신규10 RED→GREEN, 관련318건·원본75단언+5반례 한정 재승인). 정책에서는 정상 빈전략 pending 거부와 Decimal→float의0/Inf/NaN이 재진입을 허용/예외 처리하는 P2 두 건을 수정했다(신규6 RED→GREEN, 정책322건·원본600복합 legacy 비교 한정 재승인). 격리 위반0이며 전체 브랜치 검증은 이 후보 동결 후 다시 수행한다.
+
+정책은 실제 함수의 bool/reason/효과 순서를 보존한다. 일일손실 경고구간의 trend 결측은 실제 코드상 전 전략 허용이고 dynamic/flex 슬롯은 해당 최종 gate에 적용되지 않는다. 문서 설명을 근거로 새 판단을 넣지 않았다. core/USER/SAFE_ASSET/SELL 적용 범위와1.3 sizing/1.015 예약/1.001 현금 gate를 분리하며 sync timeout/일자 리셋의 제안은 실행 장벽 해제가 아니다. 외부 유효 설정은 명시 입력이며 운영 설정을 읽거나 바꾸지 않았다.
+
+### Task9B2 — 실제 요청의 예약·단일 owner 연결 (한정 재리뷰 완료)
+
+Plan: 요청에서 계산한 현금·수량·노출·계획위험, 현재 owner 정책 입력, prepare/claim 및 단회 전송을 연결한다. SELL/CANCEL에 BUY 예산 조건을 새로 적용하거나 미측정 위험을0으로 만들지 않는다. 부모와 Astra/high 구현자가 파일 소유권을 나누고 독립 Astra/xhigh 리뷰를 병행한다.
+
+Do: 순수 자원 계산은 실제 builder·FeeCalculator·planned_risk/risk_quantity_cap을 재사용한다. LIMIT 저평가 입력은 실제 호가 가격 이상으로 계산하고 MARKET wire0은 별도 양의 평가가격과 구별한다. 부모 검토에서 초안의 공통 양의 자산 조건이 SELL/CANCEL까지 막는 것을 발견해4건 RED→수정했다. 현재 자원95시험이다. 새 정책 어댑터는 외부 context에 cash/pending를 캐시하지 않고 현재 Portfolio/보호/위험/attempt로 재구성하며 관측시각과 계산시각을 분리한다.
+
+실큐 부분체결의 새 노출/계획위험 예약 해제도 진행했다. 신규10건 중6RED/4기존방어GREEN을 확인했고 기존 cash와 같은 보수적 비례 해제·write-set 검증을 연결했다. 미측정None과 원본 request binding은 유지한다. 실제 전체체결에서 해당 종목의 sector 효과만 정리하며 다른 sector/sidecar 변경은 거부한다. 관련 실큐·경제·application139passed/격리0을 확인했다.
+
+독립 순수 리뷰의 P2와 부모 연결 점검에서 수량·현금만0인 종결 행의 노출/위험 잔여를 놓치는 문제를 확인했다. 정확한 `reserved_exposure`/`reserved_planned_risk` pair·도메인을 검사하는 공통 predicate를 도입해 pending 투영·일자 quiescence·초기 R에 적용했다. predicate35건 missing-module RED, snapshot canonical32건 RED, 실제 큐로 만든 R/day 후보4건 RED→수정 후 관련207passed/격리0이다. 잔여0/riskNone의 정상 종료 대조와 sibling 위험도 추가했다. 독립 리뷰 원본 probe는 위험 키를 `planned_risk`로 잘못 쓴 한계가 발견되어 원본을 보존하고 재리뷰에서 정정한다. 원본32건을 모두 올바른 위험 키 재현으로 주장하지 않는다.
+
+실제 ExitManager가 허용하는 빈 strategy가 보호 DTO에서 거부되어 정상 체결이 degraded로 남는 별도 문제도 DTO1·실큐2건 RED로 재현했다. None/빈 문자열을 값 그대로 보존하고 필수 종목/intent 식별자 제약은 완화하지 않았다. 명시 registration 인자/복원·잘못된 타입 대조 포함9시험이며 관련178passed/격리0을 확인했다. 당시 모듈 결과만으로 완료를 선언하지 않았으며, 이후 실제 bound command·결과·재시작 연결의 독립 통합 리뷰/최종 검증은 아래에 기록한다.
+
 부모 추가 호출점 점검에서 별도 수동 CLI 두 경로를 확인했다. 현재 취소 예외를 무시한 뒤 포지션 조회 수량으로 재주문하며, `sell_specific`은 최초 요청량보다 큰 기존 보유까지 fallback 대상으로 삼을 수 있다. 소스 읽기만 수행했으며 스크립트의 import 시 `.env` 로딩/실행은 하지 않았다. 스케줄러 수동 매수와 별개 프로세스이므로 인프로세스 runtime 바인딩만으로 단일 owner가 완성되지 않는다. 이행 시 명시 owner 명령 전달/프로세스 소유권 계약을 갖추고, 미지원 경로는 지원 완료로 세지 않는다.
+
+#### 9B2 통합 리뷰와 섹터 인계 수정
+
+순수 자원/정책 snapshot의 독립 재리뷰는 canonical 위험 키32사례·추가302벡터와 원본 정상1736벡터를 재확인했다. KST181시험·UTC확장683시험·격리0, 한정 승인이다. 원본 잘못된 `planned_risk` probe는 그대로 보존하며 원본 스크립트 전체 GREEN으로 보고하지 않는다.
+
+실제 명령 owner는 prepare/예약/effect의 단일 commit, 현재 정책·가격·손절의 claim/final 재검사, 단회 permit·정확 ACK 참조·UNKNOWN 결과 보존을 구현했다. 작성자107시험 중 bootstrap10건과 의미 결함32건의 최초 RED를 구별했다. 나머지65건은 최초 GREEN이었다. 작성자 관련13파일 KST/UTC1048passed는 전체 writer 인수가 아니다.
+
+통합 독립 Astra/xhigh는 관련 KST/UTC905시험 통과와 별개로 **P2 I1**을 발견했다. 소유 주문의 sector가 첫 체결 Position에 이관되지 않아 부분/전량·재시작 후 섹터 한도1을 우회했다. metadata 결측/상이값 × 부분/전량 × 복원 유무8사례가 RED였다. 나머지16사례는 정상 요청→ACK→부분/전량→R, concurrent dispatch, 마지막 await 중 정책 변경, 체결 write-set 공격, 취소 부모 커버리지 대조다. 중간 전체 KST3270passed도 이 결함을 포함하므로 최종 완료 근거가 아니다.
+
+부모는 실제 flow6건과 순수 경제18건(16RED/2최초GREEN)을 추가했다. bound 요청은 저장된 sector를 canonical로 이관하며 명시 None도 외부 관측으로 추측하지 않는다. binding의 누락/잘못된 타입·attempt와 충돌은 실패하고, unbound legacy만 기존 metadata fallback을 유지한다. 잘못된 관측 metadata 타입의 기존 거부도 유지한다. 수정 후 관련8파일318passed/22.79초·격리0이다. 원본 보고서·probe를 보존한 독립 Astra/xhigh 재리뷰는 **원본24passed(8RED→GREEN+16대조), KST216passed/20.21초, UTC929passed/40.58초, 추가50벡터·격리0**을 확인했다. I1 해소·남은 P0/P1/P2 발견 없음으로 Task9B2 검토 범위를 한정 승인했다. 재리뷰 보고서 hash는 `9e64119c4fe66864f2757323c73460b6ee90a5b699aa48fdcb3edaa28063950a`이다.
+
+별도 손상 주입에서 active 예약을 원 binding보다 적게 만든 checkpoint를 restore할 수 있음을 확인했으나, 정상 공개 전이로 이 상태가 생기는 경로는 입증하지 못했다. 현 전이의 보수적 해제/write-set 보존과 구별하는 잔여 방어 항목이며 추가 정상 운영 P2로 세지 않는다.
+
+수정 후 동결 source/test patch(기준4d6a4bb) SHA256 `eb80af55a4288c53dd0fa722cca1d6da2aba1272f7aee9a1b2d8cea008515a61`. 전체 KST **3294passed/2 known xfailed/1 기존warning,139.03초**, UTC **3294passed/2 known xfailed/1 기존warning,127.80초**로 격리0·문법·비밀정보 패턴 검사를 통과했다. 기존8C 대비 신규869시험이며 미래 writer/운영 인수는 포함하지 않는다. 핵심 수정 economics `16bdff6dbc4da2d6268e548bca057a5a71238d463912b982e2cdee31b4ad2a35`, 실제 연결 flow `ed4024d20aa036c9819a6a50c6fdf06d60f25a6ec38b08acad7ffa6a2e218467`이다.
+
+후속 writer 이행은 [Task10 세분 계획](../superpowers/plans/2026-09-18-engine-writer-migration.md)으로 정리했다. 첫 범위는 계좌 singleton lease와 같은 runtime의 command/result 종료 drain이다. 이후 실제 WS 원시각/유효정책 publisher→기존 sizing/qualification 보존→실제 SIGNAL/ORDER→SAFE/USER/CLI·fill·sync/day 순서로 진행한다. 각 조각의 한정 승인을 전체 단계3 완료로 바꾸지 않는다.
 
 ## 단계4 — 공식 계약 증거
 

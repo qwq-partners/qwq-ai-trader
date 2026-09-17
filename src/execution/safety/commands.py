@@ -1,0 +1,422 @@
+"""명시 설치 전용 KR 요청 owner. 기본 startup 장벽/legacy writer를 열지 않는다.
+
+예약과 claim은 기존 owner에만 저장하고, process-local permit은 durable claim의
+성공한 호출에만 존재한다. 마지막 동기 검사의 보장은 로컬 POST 시작까지다.
+"""
+from __future__ import annotations
+
+import asyncio
+from copy import deepcopy
+from dataclasses import asdict, replace
+from datetime import datetime
+from decimal import Decimal
+from uuid import uuid4
+
+from ...core.types import OrderSide
+from . import risk_policy as p
+from .economics import decode_portfolio, encode_portfolio
+from .guards import EntryAuthority, EntryOrigin, FinalEntryGuard, GuardDecision
+from .lifecycle import CommandKind, CommandResult, CommandStatus, OrderRef, TERMINAL_STATES
+from .policy_snapshot import PolicyContext, build_owned_snapshot
+from .protection import encode_protection
+from .requests import KISRequestBuilder, PreparedTradeRequest, _session_at
+from .reservations import has_remaining_reservation
+from .resources import calculate_resources, remaining_resource_amount
+from .transport import GuardedKISTransport, TransportStatus
+
+
+class CommandValidationError(ValueError):
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+def _require(condition, reason):
+    if not condition:
+        raise CommandValidationError(reason)
+
+
+def _text(value):
+    _require(type(value) is str and bool(value) and value == value.strip(), 'invalid_command_identity')
+
+
+def _amount(value):
+    _require(type(value) is str, 'invalid_reservation')
+    amount = Decimal(value)
+    _require(amount.is_finite() and amount >= 0, 'invalid_reservation')
+    return amount
+
+
+class RequestBoundCommands:
+    def __init__(self, runtime, *, builder, authority, entry_guard, stop_resolver, session_guard):
+        from .runtime import KRExecutionRuntime
+        _require(isinstance(runtime, KRExecutionRuntime), 'invalid_runtime')
+        _require(type(builder) is KISRequestBuilder and type(authority) is EntryAuthority
+                 and type(entry_guard) is FinalEntryGuard and entry_guard.authority is authority,
+                 'invalid_command_authority')
+        _require(callable(stop_resolver) and callable(session_guard), 'invalid_command_callbacks')
+        self.runtime, self.owner = runtime, runtime.owner
+        self.builder, self.authority, self.entry_guard = builder, authority, entry_guard
+        self.stop_resolver, self.session_guard = stop_resolver, session_guard
+        self._permits = {}
+        self._result_tasks = set()
+
+    def _owner_ready(self, state, *, dispatch=False):
+        _require(self.owner.healthy and self.owner.version == self.owner.published_version,
+                 'store_or_publication_unhealthy')
+        self.runtime._require_day_admission()
+        _require(self.runtime.engine._execution_version == self.owner.version, 'publication_mismatch')
+        _require(all(row.get('status') in ('APPLIED', 'SUPERSEDED')
+                     for row in state.get('inbox', {}).values()), 'unapplied_execution_observation')
+        _require(all(row.get('state') in ('SETTLED', 'RESOLVED')
+                     for row in self.runtime.engine._execution_ingress.values()), 'unapplied_execution_ingress')
+        if dispatch:
+            _require(self.runtime.trading_ready is True, 'startup_reconciliation')
+        pf = decode_portfolio(state['portfolio'])
+        for symbol, position in pf.positions.items():
+            position.current_price = self.runtime._view_price(state, symbol, position.current_price)
+        _require(encode_portfolio(pf) == encode_portfolio(self.runtime.engine.portfolio),
+                 'legacy_portfolio_writer_conflict')
+        _require(encode_protection(self.runtime.exit_manager) == state['protection'],
+                 'legacy_protection_writer_conflict')
+
+    def _request(self, request, context):
+        self.builder.validate(request)
+        prepared = deepcopy(request)
+        _require(self.authority.owns(context), 'untrusted_entry_context')
+        context = replace(context)
+        _require((context.symbol, context.side, context.strategy) ==
+                 (prepared.symbol, prepared.side.value, prepared.strategy), 'entry_context_mismatch')
+        _require(prepared.account.account_scope == self.runtime.account_scope, 'account_scope_mismatch')
+        self._session(prepared)
+        return prepared, context
+
+    def _session(self, request):
+        now = self.runtime._now()
+        _require(request.session.business_date_kst == now.date().isoformat()
+                 and request.session.observed_at <= now, 'request_day_mismatch')
+        _require(request.session.session == _session_at(now), 'request_session_changed')
+        decision = self.session_guard(request)
+        _require(type(decision) is GuardDecision and type(decision.allowed) is bool
+                 and type(decision.reason) is str,
+                 'invalid_session_decision')
+        _require(decision.allowed, decision.reason)
+
+    def _version(self, expected):
+        _require(type(expected) is int and expected == self.owner.version, 'stale_execution_version')
+
+    async def publish_policy_context(self, context, *, expected_version):
+        _require(type(context) is PolicyContext, 'invalid_policy_context')
+        context = PolicyContext.from_dict(context.to_dict())
+        def reduce(state):
+            self._owner_ready(state)
+            self._version(expected_version)
+            now = self.runtime._now()
+            _require(context.business_day == now.date() and context.observed_at <= now,
+                     'policy_context_day_or_time_mismatch')
+            _require(context.versions.execution == self.owner.version, 'stale_policy_source_version')
+            state['entry_policy_context'] = context.to_dict()
+            state.setdefault('entry_policy_effects', {'pending_sectors': {}})
+            return state
+        await self.owner.mutate('entry-policy:'+uuid4().hex, reduce)
+        return self.owner.version
+
+    async def observe_entry_quote(self, symbol, price, *, as_of, source, event_id, expected_version):
+        for value in (symbol, source, event_id): _text(value)
+        _require(type(price) is Decimal and price.is_finite() and price > 0, 'invalid_entry_quote')
+        _require(type(as_of) is datetime and as_of.utcoffset() is not None, 'invalid_entry_quote_time')
+        row = dict(symbol=symbol, price=str(price), as_of=as_of.isoformat(), source=source, event_id=event_id)
+        def reduce(state):
+            self._owner_ready(state)
+            self._version(expected_version)
+            now = self.runtime._now()
+            _require(as_of.astimezone(now.tzinfo).date() == now.date() and as_of <= now,
+                     'entry_quote_day_or_time_mismatch')
+            quotes = state.setdefault('entry_quotes', {})
+            previous = quotes.get(symbol)
+            # 현재 보존한 원관측의 ID만 대조한다. 전체 과거 replay 검출 원장이 아니다.
+            if previous is not None and (previous['source'], previous['event_id']) == (source, event_id):
+                _require(previous == row, 'entry_quote_event_conflict')
+            _require(previous is None or datetime.fromisoformat(previous['as_of']) <= as_of,
+                     'stale_entry_quote')
+            quotes[symbol] = deepcopy(row)
+            return state
+        await self.owner.mutate('entry-quote:'+uuid4().hex, reduce)
+        return self.owner.version
+
+    def _snapshot(self, state, *, exclude_attempt=None):
+        context = PolicyContext.from_dict(state['entry_policy_context'])
+        prices = {symbol: self.runtime._view_price(state, symbol, Decimal(row['current_price']))
+                  for symbol, row in state['portfolio']['positions'].items()}
+        return build_owned_snapshot(state, context=context, version=self.owner.version,
+            now=self.runtime._now(), prices=prices, exclude_attempt=exclude_attempt)
+
+    def _parent(self, state, request):
+        parent = request.parent
+        _require(parent is not None, 'cancel_parent_required')
+        current = state['attempts'].get(parent.attempt_id)
+        _require(current is not None and current.get('request_binding') is not None,
+                 'cancel_parent_binding_required')
+        binding = current['request_binding']
+        _require(current['version'] == parent.version and current['kind'] == 'submit'
+                 and current['state'] not in TERMINAL_STATES and not current.get('evidence_conflict')
+                 and current['intent_id'] == parent.intent_id == request.intent_id
+                 and current['order_ref'] == parent.order_ref.to_dict()
+                 and current['symbol'] == parent.symbol == request.symbol
+                 and current['side'] == parent.side.value == request.side.value
+                 and current['strategy'] == parent.strategy == request.strategy
+                 and binding['order_type'] == parent.order_type.value
+                 and Decimal(binding['valuation_price']) == parent.valuation_price
+                 and current['reserved_quantity'] == parent.remaining_quantity == request.quantity
+                 and current['quantity'] - current['applied_quantity'] == parent.remaining_quantity
+                 and current['observed_quantity'] == current['applied_quantity'], 'cancel_parent_changed')
+        _amount(current['reserved_cash'])
+        _amount(current['reserved_exposure'])
+        if current['reserved_planned_risk'] is not None: _amount(current['reserved_planned_risk'])
+        resources = binding['resources']
+        for field, basis in (('reserved_cash', 'cash'), ('reserved_exposure', 'exposure'),
+                             ('reserved_planned_risk', 'planned_risk')):
+            original = resources[basis]
+            if original is None:
+                _require(current[field] is None, 'cancel_parent_reservation_changed')
+            else:
+                original, remaining = _amount(original), _amount(current[field])
+                minimum = remaining_resource_amount(original, before_quantity=current['quantity'],
+                                                    after_quantity=parent.remaining_quantity)
+                _require(minimum <= remaining <= original, 'cancel_parent_reservation_changed')
+        return current
+
+    def _evaluate(self, state, request, context, sector, *, exclude_attempt=None):
+        self._owner_ready(state)
+        self._session(request)
+        _require(self.authority.owns(context), 'untrusted_entry_context')
+        _require(request.command is not CommandKind.MODIFY, 'unsupported_modify_contract')
+        snapshot = self._snapshot(state, exclude_attempt=exclude_attempt)
+        active = []
+        for aid, attempt in state['attempts'].items():
+            if aid == exclude_attempt: continue
+            if attempt['kind'] != 'submit':
+                if request.command is CommandKind.SUBMIT and attempt['symbol'] == request.symbol:
+                    _require(attempt.get('command_status') in ('not_sent', 'rejected'), 'unresolved_child_attempt')
+                continue
+            _require(attempt['observed_quantity'] == attempt['applied_quantity']
+                     and not attempt.get('evidence_conflict')
+                     and attempt['state'] != 'blocked_unknown', 'unresolved_execution_evidence')
+            remaining = has_remaining_reservation(attempt)
+            if attempt['state'] in TERMINAL_STATES:
+                _require(not remaining, 'terminal_reservation_remaining')
+                continue
+            _require(attempt.get('request_binding') is not None, 'unbound_active_attempt')
+            if request.command is CommandKind.SUBMIT:
+                _require(attempt['symbol'] != request.symbol, 'unresolved_symbol_attempt')
+            active.append(attempt)
+        if request.command is CommandKind.CANCEL:
+            self._parent(state, request)
+        elif request.side is OrderSide.BUY:
+            quote = state.get('entry_quotes', {}).get(request.symbol)
+            now = self.runtime._now()
+            _require(quote is not None and Decimal(quote['price']) == request.valuation_price
+                     and datetime.fromisoformat(quote['as_of']).astimezone(now.tzinfo).date() == now.date()
+                     and datetime.fromisoformat(quote['as_of']) <= now, 'current_entry_quote_required')
+        stop = None
+        if (request.command is CommandKind.SUBMIT and request.side is OrderSide.BUY
+                and context.origin is EntryOrigin.AUTOMATIC and request.strategy != 'core_holding'
+                and snapshot.policy.sizing_mode == 'risk'):
+            stop = self.stop_resolver(request.strategy)
+        resources = calculate_resources(request, builder=self.builder, policy=snapshot.policy,
+            equity=snapshot.portfolio.equity, origin=context.origin, stop_decision=stop)
+        if request.command is CommandKind.CANCEL:
+            return resources, None, snapshot
+        if request.side is OrderSide.BUY:
+            reserved = sum((_amount(a['reserved_cash']) for a in active if a['side'] == 'buy'), Decimal('0'))
+            _require(snapshot.portfolio.cash - reserved >= resources.cash, 'reserved_cash_insufficient')
+        else:
+            held = next((position.quantity for position in snapshot.portfolio.positions
+                         if position.symbol == request.symbol), 0)
+            reserved = sum(a['reserved_quantity'] for a in active
+                           if a['side'] == 'sell' and a['symbol'] == request.symbol)
+            _require(held - reserved >= request.quantity, 'reserved_quantity_insufficient')
+        # Pending BUY는 기존 pre-candidate 슬롯의 현재 점유다. 후보 자신을 +1하지 않는다.
+        positions = list(snapshot.portfolio.positions)
+        held_symbols = {position.symbol for position in positions}
+        for pending in snapshot.pending:
+            if pending.side == 'buy' and pending.symbol not in held_symbols:
+                positions.append(p.PositionPolicyFact(pending.symbol, pending.strategy, pending.sector,
+                    0, Decimal('0'), snapshot.business_day, None, None, None, False))
+                held_symbols.add(pending.symbol)
+        gated = replace(snapshot, portfolio=replace(snapshot.portfolio, positions=tuple(positions)))
+        entry = p.EntryPolicyInput(request.symbol, request.side, request.quantity,
+                                   resources.valuation_price, request.strategy, sector)
+        decision = p.evaluate_entry_policy(entry, gated, now=self.runtime._now(), origin=context.origin)
+        _require(decision.allowed, decision.reason.value)
+        alpha = self.entry_guard.evaluate(context)
+        _require(type(alpha) is GuardDecision and alpha.allowed is True, alpha.reason)
+        if context.origin is EntryOrigin.AUTOMATIC and request.side is OrderSide.BUY:
+            _require(not state['protection']['degraded'], 'protection_degraded')
+        return resources, decision, snapshot
+
+    @staticmethod
+    def _effects(state, request, decision, *, commit):
+        root = state.get('entry_policy_effects', {})
+        if decision is None: return
+        for effect in decision.effects:
+            if effect.kind is p.EffectKind.SIDECAR_SET:
+                if commit: root['sidecar_active'] = effect.value
+                else: _require(root.get('sidecar_active') == effect.value, 'policy_effect_pending')
+            elif effect.kind is p.EffectKind.PENDING_SECTOR_SET:
+                if commit: root['pending_sectors'][request.symbol] = effect.value
+                else: _require(root.get('pending_sectors', {}).get(request.symbol) == effect.value,
+                               'policy_effect_pending')
+            else:
+                raise CommandValidationError('policy_effect_pending')
+
+    async def prepare(self, request, context, *, sector=None):
+        request, context = self._request(request, context)
+        if sector is not None: _text(sector)
+        def reduce(state):
+            resources, decision, snapshot = self._evaluate(state, request, context, sector)
+            parent = request.parent
+            self.runtime.lifecycle.prepare_candidate(state, request.intent_id, request.attempt_id,
+                request.quantity, request.symbol, request.side.value, command=request.command,
+                parent_attempt_id=None if parent is None else parent.attempt_id,
+                order_ref=None if parent is None else parent.order_ref, reserved_cash=str(resources.cash),
+                origin=context.origin.value, strategy=request.strategy)
+            attempt = state['attempts'][request.attempt_id]
+            attempt['sector'] = sector
+            attempt['reserved_exposure'] = str(resources.exposure)
+            attempt['reserved_planned_risk'] = None if resources.planned_risk is None else str(resources.planned_risk)
+            attempt['request_binding'] = {
+                'fingerprint': request.fingerprint, 'account_scope': request.account.account_scope,
+                'business_day': request.session.business_date_kst, 'command': request.command.value,
+                'symbol': request.symbol, 'side': request.side.value, 'order_type': request.order_type.value,
+                'strategy': request.strategy, 'quantity': request.quantity,
+                'valuation_price': str(request.valuation_price), 'wire_price': str(request.wire_price),
+                'origin': context.origin.value, 'sector': sector, 'source_versions': asdict(snapshot.versions),
+                'resources': resources.to_dict(), 'parent_version': None if parent is None else parent.version,
+            }
+            self._effects(state, request, decision, commit=True)
+            return state
+        await self.owner.mutate('bound-prepare:'+uuid4().hex, reduce)
+        return self.owner.state['attempts'][request.attempt_id]
+
+    def _bound(self, state, request, context, binding, *, claim=None, version=None):
+        self._owner_ready(state, dispatch=True)
+        attempt = state['attempts'].get(request.attempt_id)
+        _require(attempt is not None and self.owner._same(attempt.get('request_binding'), binding)
+                 and binding['fingerprint'] == request.fingerprint
+                 and binding['origin'] == context.origin.value, 'request_binding_changed')
+        expected = {'fingerprint': request.fingerprint, 'account_scope': request.account.account_scope,
+            'business_day': request.session.business_date_kst, 'command': request.command.value,
+            'symbol': request.symbol, 'side': request.side.value, 'order_type': request.order_type.value,
+            'strategy': request.strategy, 'quantity': request.quantity,
+            'valuation_price': str(request.valuation_price), 'wire_price': str(request.wire_price),
+            'origin': context.origin.value,
+            'parent_version': None if request.parent is None else request.parent.version}
+        _require(all(self.owner._same(binding.get(key), value) for key, value in expected.items()),
+                 'request_binding_changed')
+        _require(type(attempt['quantity']) is int and type(attempt['reserved_quantity']) is int
+                 and type(attempt['version']) is int and attempt['quantity'] == request.quantity
+                 and attempt['origin'] == context.origin.value and attempt['symbol'] == request.symbol
+                 and attempt['side'] == request.side.value and attempt['strategy'] == request.strategy
+                 and attempt['intent_id'] == request.intent_id and attempt['kind'] == request.command.value
+                 and attempt['observed_quantity'] == attempt['applied_quantity'] == 0,
+                 'request_attempt_changed')
+        if claim is not None:
+            _require(attempt['claim_id'] == claim and attempt['version'] == version
+                     and attempt['command_status'] is None
+                     and attempt['state'] in ('submitting', 'cancel_requested'), 'sender_claim_invalid')
+        resources, decision, _ = self._evaluate(state, request, context, binding['sector'],
+                                                exclude_attempt=request.attempt_id)
+        _require(self.owner._same(resources.to_dict(), binding['resources']), 'current_resources_changed')
+        _require(attempt['reserved_quantity'] == (request.quantity if request.command is CommandKind.SUBMIT else 0)
+                 and _amount(attempt['reserved_cash']) == resources.cash
+                 and _amount(attempt['reserved_exposure']) == resources.exposure
+                 and attempt['reserved_planned_risk'] == (None if resources.planned_risk is None
+                                                          else str(resources.planned_risk)), 'reservation_changed')
+        self._effects(state, request, decision, commit=False)
+
+    def _ack(self, request, response):
+        if response.status is not TransportStatus.ACKNOWLEDGED:
+            return CommandResult(CommandStatus(response.status.value), request.attempt_id, reason_code=response.reason)
+        try:
+            output = response.data['output']
+            order_no = output.get('ODNO', output.get('odno'))
+            org_no = output.get('KRX_FWDG_ORD_ORGNO', output.get('ORGNO'))
+            _text(order_no)
+            _text(org_no)
+            ref = OrderRef(request.account.account_scope, request.market,
+                request.session.business_date_kst, 'KRX', order_no, org_no,
+                '' if request.parent is None else request.parent.order_ref.order_no)
+            return CommandResult(CommandStatus.ACKNOWLEDGED, request.attempt_id, ref, response.reason)
+        except (KeyError, TypeError, AttributeError, ValueError):
+            return CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='ack_identity_missing_or_invalid')
+
+    async def _record(self, request, claim, version, result):
+        task = asyncio.create_task(self.runtime.lifecycle.record_result(request.attempt_id, claim, result,
+            expected_attempt_version=version))
+        self._result_tasks.add(task)
+        def done(task):
+            self._result_tasks.discard(task)
+            if task.cancelled() or task.exception() is not None or task.result() is not True:
+                self.owner._block()
+        task.add_done_callback(done)
+        accepted = await asyncio.shield(task)
+        if not accepted:
+            self.owner._block()
+            return CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='result_not_recorded')
+        return result
+
+    async def dispatch(self, request, context, transport):
+        # 第一 await 앞에 request/권한을 검증한다. 다른 실행 경로에 permit을 주지 않는다.
+        request, context = self._request(request, context)
+        _require(type(transport) is GuardedKISTransport, 'invalid_prepared_transport')
+        state = self.owner.state
+        attempt = state.get('attempts', {}).get(request.attempt_id)
+        binding = None if attempt is None else deepcopy(attempt.get('request_binding'))
+        claim = uuid4().hex
+        try:
+            _require(binding is not None, 'bound_attempt_required')
+            self._bound(state, request, context, binding)
+            claimed = await self.runtime.lifecycle.claim(request.attempt_id, claim,
+                candidate_guard=lambda candidate: self._bound(candidate, request, context, binding))
+            if not claimed:
+                return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code='claim_not_available')
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code='claim_not_available')
+        version = self.owner.state['attempts'][request.attempt_id]['version']
+        self._permits[claim] = (request.fingerprint, version)
+        def guard(actual):
+            try:
+                self.builder.validate(actual)
+                _require(actual.fingerprint == request.fingerprint, 'request_fingerprint_changed')
+                _require(self._permits.get(claim) == (request.fingerprint, version), 'sender_permit_missing')
+                self._bound(self.owner.state, actual, context, binding, claim=claim, version=version)
+                del self._permits[claim]
+                return GuardDecision(True, 'bound_request_permit_consumed')
+            except Exception:
+                return GuardDecision(False, 'current_request_guard_rejected')
+        try:
+            response = await transport.send_prepared(request, guard)
+            result = self._ack(request, response)
+        except asyncio.CancelledError as cancelled:
+            self._permits.pop(claim, None)
+            result = CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='caller_cancelled')
+            try:
+                await self._record(request, claim, version, result)
+            except BaseException:
+                self.owner._block()
+            finally:
+                raise cancelled
+        except Exception:
+            result = CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='transport_failed')
+        finally:
+            self._permits.pop(claim, None)
+        try:
+            return await self._record(request, claim, version, result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.owner._block()
+            return CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='result_record_failed')

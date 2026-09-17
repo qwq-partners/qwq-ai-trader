@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: KR 요청 바인딩·자원 예약·현재 정책 재검사 (Task9A/B, 운영 미설치)
+
+- 계좌/날짜/세션·실제 TR/본문·수량/호가/strategy/부모를 불변 요청에 묶고, 기존 broker의 토큰/hash/공용 limiter 이후 그 요청을 마지막 동기 검사해 단회 POST한다. raw/운영 broker 송신 경로를 교체한 것은 아니다. 모든 MODIFY는 지원 계약·증분 예약 근거가 없어 미지원이다.
+- 실제 기존 두 진입 gate를 순수 특성화하고 현재 owner의 Portfolio/보호/위험/pending으로 판단한다. 요청 준비·예약·정책 효과는 한 commit, durable claim·process-local permit은 구분한다. 실제 건별 위험 상한/예외·시장가 정책을 유지하며 USER/SAFE도 현금/보유 예약의 보존 경계는 지킨다. None 계획위험을 측정0으로 만들지 않는다.
+- 체결 reducer/write-set 검증과 종결·재주문 가능량·일자/R 확정에 새 노출/계획위험 예약을 연결한다. 부분체결은 보수적 비례 해제, ACK/UNKNOWN/취소 ACK는 원주문 해제가 아니다. 다른 sector/sidecar를 변경하는 체결 후보를 거부한다. 실제 ExitManager의 빈 strategy도 DTO/실큐/복원에서 값 그대로 유지한다.
+- 독립 순수 리뷰 P2(빈 strategy·극단 Decimal 재진입·truthy guard·종결 pending의 새 예약 누락) 및 통합 P2(체결 후 소유 sector 소실로 섹터 한도 우회)를 재현·수정했다. Astra/xhigh 한정 재리뷰 승인, 통합 원본24·관련UTC929시험 및 추가50벡터 통과. 원본 probe의 위험 키 오기는 보존·정정해 재검증했고 과거32건을 모두 canonical 위험 키 재현으로 주장하지 않는다.
+- 최종 전체 KST/UTC 각각 **3294 passed/2 known xfailed/1 기존warning(139.03/127.80초)**, 격리0·문법·비밀패턴 검사 통과. 기존8C 대비 신규869시험이며 모든 시험의 최초 RED를 주장하지 않는다. 실제 source/test patch hash와 역할별 검증은 후속 보고서에 기록했다. 다음 writer 이행은 계좌 lease/종료 drain→원시각/정책 publisher→기존 후보 파이프라인→전체 writer 순으로 세분했다.
+- **전 writer·결과 task의 runtime 종료 배선·기존 분석 원장 projection·최초 인계·전체 C/F/G/R 미완.** 현재 runtime의 거래 시작 장벽은 닫혀 있고 성공 POST 시험은 합성 허가/fake HTTP에 한정한다. main/운영/실API/주문/설정/Toss 변경 없음. 진행 정본: `docs/reviews/engine-execution-followup-2026-09-18.md`.
+
 ## 2026-09-18 — feat: 체결 ingress·KST 일자 전환·초기 R 증거 (Task8C, 운영 미설치)
 
 - 실제 core 큐의 첫 await부터 확정 사실 접수/적용을 추적한다. caller 취소·queue/owner/DB 대기·종료 뒤에도 영속 접수한 원 관측을 보존한다. 일자 fence와 명시 valuation 증거로 일일 상태만 원자 전환하며, 전일 늦은 사실은 보류하고 자동 resume/startup 승격을 하지 않는다.

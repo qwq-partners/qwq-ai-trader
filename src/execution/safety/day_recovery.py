@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from .economics import decode_portfolio, validate_risk
 from .lifecycle import TERMINAL_STATES, OrderRef
 from .protection_recovery import digest
+from .reservations import has_remaining_reservation
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -127,8 +128,11 @@ def unresolved_reason(state):
             return "unresolved_submit"
         if row.get("observed_quantity", 0) != row.get("applied_quantity", 0):
             return "observed_not_applied"
-        if row.get("reserved_quantity", 0) != 0 or Decimal(row.get("reserved_cash", "0")) != 0:
-            return "remaining_reservation"
+        try:
+            if has_remaining_reservation(row):
+                return "remaining_reservation"
+        except ValueError:
+            return "invalid_reservation"
         if row.get("kind") == "submit" and row.get("observed_quantity", 0) > 0:
             try:
                 cursor = state.get("cursors", {}).get(OrderRef(**row["order_ref"]).key)

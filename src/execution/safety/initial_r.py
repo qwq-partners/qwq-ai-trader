@@ -10,6 +10,7 @@ from .application import FillObservation
 from .lifecycle import OrderEvidence, OrderRef, OrderState, TERMINAL_STATES, valid_evidence_provenance
 from .protection import decode_protection
 from .protection_recovery import digest
+from .reservations import has_remaining_reservation
 from ...strategies.exit_manager import REGIME_EXIT_PARAMS, INTRADAY_CRASH_PARAMS
 
 
@@ -188,7 +189,7 @@ def _finalize(state, order_key, stop_id, finality_id, state_version, now):
             or attempt["applied_quantity"] != evidence.cumulative_quantity
             or cursor["quantity"] != evidence.cumulative_quantity or Decimal(cursor["amount"]) != evidence.cumulative_amount
             or cursor["identity"] != observation.identity
-            or attempt["reserved_quantity"] != 0 or Decimal(attempt["reserved_cash"]) != 0):
+            or has_remaining_reservation(attempt)):
         raise ValueError("initial_r_scope_or_application_mismatch")
     if any(row.get("parent_attempt_id") == lot["attempt_id"] and row.get("command_status") not in {"not_sent", "rejected"}
            for row in state["attempts"].values()):
@@ -196,8 +197,7 @@ def _finalize(state, order_key, stop_id, finality_id, state_version, now):
     for sibling_id in intent["attempt_ids"]:
         sibling = state["attempts"][sibling_id]
         if sibling["kind"] == "submit" and (sibling.get("state") not in TERMINAL_STATES
-                or sibling.get("evidence_conflict") or sibling["reserved_quantity"] != 0
-                or Decimal(sibling["reserved_cash"]) != 0
+                or sibling.get("evidence_conflict") or has_remaining_reservation(sibling)
                 or sibling["applied_quantity"] != sibling["observed_quantity"]):
             raise ValueError("unresolved_initial_entry_intent")
     first = state.get("inbox", {}).get(observation.observation_id)

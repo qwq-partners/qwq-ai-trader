@@ -87,6 +87,7 @@
 - 09-18 후속: 실제 broker GET/공용 limiter와 legacy 수집기의 오프라인 통합을 검증했다. 실제 aiohttp 헤더와 취득별 lease를 사용하고 운영 poller/거래 POST는 아직 연결하지 않았다. 단계별 정본은 `docs/reviews/engine-execution-followup-2026-09-18.md`이며 조회 complete를 거래 허가로 쓰지 않는다.
 - Task8A/B: 증거 기반 보호 repair와 전용 경제 원장 durable ACK를 한정 검증했다. quote는 durable admission 후에만 view를 게시하며 미해결 입력을 재시작 뒤 repair로 덮지 않는다. 실제 임시 PostgreSQL 인수 포함 KST/UTC2292passed/기존xfail2·격리0, 별도 독립 재리뷰 승인. 전용 이벤트 원장 ACK는 기존 분석 원장·R/canary 완료가 아니다.
 - Task8C: 확정 사실 ingress·KST fence/valuation 기반 일자 전환·최초 손절/최종성/R과 typed ACK의 core 범위를 한정 검증했다. C1 독립 리뷰 P1 3/P2 1, C2 P2 1을 수정·재리뷰 승인했다. 최종 전체 KST/UTC2425passed/기존xfail2·격리0. 명시 stale quote는 수락 전 거부하고 durable 최신 시각/원 provenance를 보존한다. 이력 크기/ingress registry 장기 성장, 실제 scheduler 일일 writer 및 legacy 분석 원장 projection은 남는다.
+- Task9A/B: 실제 요청·기존 위험 정책·예약을 같은 owner의 prepare/claim/최종 검사에 연결하고 체결 sector 인계 등 독립 P2를 수정·한정 재리뷰 승인했다. 전체 KST/UTC3294passed/기존xfail2·격리0. 모든 MODIFY는 미지원, 결과 task 종료 drain·계좌 lease/IPC·실제 publisher와 전체 writer 이행은 미완이다. 다음은 `docs/superpowers/plans/2026-09-18-engine-writer-migration.md`의10A1이며 전체 단계3/운영 완료가 아니다.
 - 명시 runtime 설치 후에는 legacy SIGNAL/ORDER/FILL와 직접 체결/가격 writer를 거부한다. 큐 적재는 적용 성공이 아니며, caller 취소·계산 실패를 pending 해제로 해석하지 않는다. 미설치 운영 경로의 기존 동작이 바뀌었다고 보고하지 않는다.
 - KIS 거래·잔고, Toss 별도 관측, 면제·위험 수치·설정 유지. 운영 배포·재시작/주문/설정 변경은 하지 않는다. 모든 writer·HTTP/별도 수동 CLI 통합, 실제 일일 초기화 writer, 최초 인계·기존 분석 원장 projection·전체 인수는 잔여다. 비용은 기존 요율의 누적 추정 비용 차분으로 기록하며 실제 징수액과 구분한다. 정본: `docs/reviews/engine-execution-followup-2026-09-18.md`.
 

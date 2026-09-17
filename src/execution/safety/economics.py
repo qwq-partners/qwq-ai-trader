@@ -17,7 +17,8 @@ from ...core.types import Portfolio, Position, PositionSide, Market, TimeHorizon
 from ...risk.manager import DailyStats
 from ...utils.fee_calculator import FeeCalculator
 from .application import FillObservation, FillDelta
-from .lifecycle import OrderRef
+from .lifecycle import OrderRef, clear_settled_pending_sector
+from .resources import remaining_resource_amount
 
 
 _KST = ZoneInfo("Asia/Seoul")
@@ -323,6 +324,21 @@ def _matching_attempt(state, observation, delta):
     return key, intent_id, old_amount
 
 
+def _entry_sector(attempt, metadata):
+    """주문이 소유한 분류를 체결로 이관한다. 관측 metadata는 legacy 전용이다."""
+    if 'request_binding' not in attempt:
+        return metadata.get('sector')
+    binding = attempt['request_binding']
+    if type(binding) is not dict or 'sector' not in binding or 'sector' not in attempt:
+        raise ValueError('invalid_bound_sector')
+    sector = binding['sector']
+    if sector is not None and (type(sector) is not str or not sector or sector.strip() != sector):
+        raise ValueError('invalid_bound_sector')
+    if type(attempt['sector']) is not type(sector) or attempt['sector'] != sector:
+        raise ValueError('conflicting_bound_sector')
+    return sector  # 명시 None도 관측으로 추측·대체하지 않는다.
+
+
 def reduce_economics(state: dict, observation: FillObservation, delta: FillDelta, *, now: datetime) -> EconomicReduction:
     now = _time(now)
     if now is None or observation.market != "KR" or observation.exchange != "KRX" or observation.cumulative_fee != 0:
@@ -360,6 +376,7 @@ def reduce_economics(state: dict, observation: FillObservation, delta: FillDelta
     realized = Decimal("0")
     lots = candidate.setdefault("lots", {})
     if observation.side == "BUY":
+        entry_sector = _entry_sector(attempt, metadata)
         existing_lot = lots.get(key)
         old_quantity = observation.cumulative_quantity - delta.quantity
         if (existing_lot is None) != (old_quantity == 0):
@@ -389,7 +406,7 @@ def reduce_economics(state: dict, observation: FillObservation, delta: FillDelta
                          "fee_basis": "estimated_order_cumulative", "closed": False}
         if before is None:
             position = Position(symbol, name=metadata.get("name", ""), side=PositionSide.LONG,
-                                strategy=attempt.get("strategy"), entry_time=now, sector=metadata.get("sector"))
+                                strategy=attempt.get("strategy"), entry_time=now, sector=entry_sector)
             position.entry_signal_score = metadata.get("entry_signal_score")
             portfolio.positions[symbol] = position
             risk["cost_basis_remaining"][symbol] = "0"
@@ -450,7 +467,18 @@ def reduce_economics(state: dict, observation: FillObservation, delta: FillDelta
     remaining = max(0, reserved - delta.quantity)
     next_cash = (min(reserved_cash, (reserved_cash * remaining / reserved).quantize(Decimal("1"), rounding=ROUND_CEILING))
                  if reserved else reserved_cash)
+    resource_fields = {'reserved_exposure', 'reserved_planned_risk'}
+    if resource_fields & attempt.keys():
+        if not resource_fields <= attempt.keys():
+            raise ValueError('incomplete_request_resource_reservation')
+        for field in resource_fields:
+            original = attempt[field]
+            if original is None and field == 'reserved_planned_risk':
+                continue  # 미측정은 0으로 바꾸지 않는다.
+            amount = _decimal(original, nonnegative=True)
+            attempt[field] = str(remaining_resource_amount(amount, reserved, remaining))
     attempt.update(applied_quantity=observation.cumulative_quantity, reserved_quantity=remaining, reserved_cash=str(next_cash))
+    clear_settled_pending_sector(candidate, attempt_id)
     risk["daily_stats"]["trades"] = portfolio.daily_trades
     candidate["portfolio"] = encode_portfolio(portfolio)
     validate_risk(risk)

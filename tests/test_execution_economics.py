@@ -133,6 +133,44 @@ def test_buy_and_sell_40_plus_60_cash_fees_pnl_and_scoped_count():
     assert state["portfolio"]["cash"] == "939851"  # 후보 입력 변조 없음
 
 
+@pytest.mark.parametrize('owned_sector', [None, '반도체'])
+@pytest.mark.parametrize('metadata', [{}, {'sector': ''}, {'sector': '철강'}])
+def test_bound_buy_sector_is_owned_even_when_explicitly_unknown(owned_sector, metadata):
+    observation = obs(40, '400000', metadata=metadata)
+    state = add_attempt(baseline(), observation)
+    attempt = state['attempts']['00001']
+    attempt.update(sector=owned_sector, request_binding={'sector': owned_sector})
+    result = step(state, observation, 40, '400000')
+    assert result.after_position.sector == owned_sector
+    assert result.state['outbox'][observation.observation_id]['after_position']['sector'] == owned_sector
+
+
+@pytest.mark.parametrize('change', [
+    {'request_binding': None}, {'request_binding': []}, {'request_binding': {}},
+    {'request_binding': {'sector': True}}, {'request_binding': {'sector': 1}},
+    {'request_binding': {'sector': ''}}, {'request_binding': {'sector': ' 반도체'}},
+    {'request_binding': {'sector': '철강'}}, {'sector': None}, {'sector': True},
+    {'sector': 'missing'},
+])
+def test_invalid_bound_sector_cannot_fall_back_to_observation(change):
+    observation = obs(40, '400000', metadata={'sector': '반도체'})
+    state = add_attempt(baseline(), observation)
+    attempt = state['attempts']['00001']
+    attempt.update(sector='반도체', request_binding={'sector': '반도체'})
+    attempt.update(change)
+    if change.get('sector') == 'missing': del attempt['sector']
+    before = deepcopy(state)
+    with pytest.raises(ValueError, match='bound_sector'):
+        step(state, observation, 40, '400000')
+    assert state == before
+
+
+def test_unbound_legacy_buy_preserves_observation_sector_fallback():
+    observation = obs(40, '400000', metadata={'sector': '철강'})
+    result = step(add_attempt(baseline(), observation), observation, 40, '400000')
+    assert result.after_position.sector == '철강'
+
+
 @pytest.mark.parametrize("problem", ["oversell", "missing_basis", "day", "naive_now", "no_attempt", "duplicate_attempt", "observed_behind", "applied_ahead", "intent_missing", "nonzero_fee", "unknown_metadata"])
 def test_invalid_economic_inputs_fail_without_mutating_state(problem):
     observation = obs(40, "400000")

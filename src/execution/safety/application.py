@@ -246,12 +246,31 @@ class FillApplicationCoordinator:
                 from .initial_r import validate_initial_stop_write_set
                 validate_initial_stop_write_set(self._state, candidate, observation)
                 continue
+            if key == 'entry_policy_effects':
+                self._validate_policy_effect_write_set(candidate, observation)
+                continue
             if key not in self._state:
                 raise ValueError("fill reducer의 알 수 없는 신규 root")
             if key == "attempts":
                 self._validate_attempt_write_set(candidate[key], observation, delta)
             elif not self._same(candidate[key], self._state[key]):
                 raise ValueError("fill reducer가 보호된 checkpoint root를 변경했습니다")
+
+    def _validate_policy_effect_write_set(self, candidate: dict, observation: FillObservation) -> None:
+        from .lifecycle import OrderRef, clear_settled_pending_sector
+        ref = OrderRef(observation.account_scope, observation.market, observation.trading_day,
+                       observation.exchange, observation.order_id, observation.org_no, observation.parent_order_no)
+        matches = [aid for aid, row in self._state['attempts'].items()
+                   if row.get('kind') == 'submit' and row.get('order_ref') == ref.to_dict()
+                   and row.get('symbol') == observation.symbol and row.get('side') == observation.side.lower()]
+        if len(matches) != 1:
+            raise ValueError('policy_release_requires_matching_submit')
+        expected = {'attempts': deepcopy(candidate['attempts'])}
+        if 'entry_policy_effects' in self._state:
+            expected['entry_policy_effects'] = deepcopy(self._state['entry_policy_effects'])
+        clear_settled_pending_sector(expected, matches[0])
+        if not self._same(expected.get('entry_policy_effects'), candidate.get('entry_policy_effects')):
+            raise ValueError('foreign_policy_effect_change_by_fill')
 
     def _validate_attempt_write_set(self, candidate: dict, observation: FillObservation,
                                     delta: FillDelta) -> None:
@@ -272,7 +291,8 @@ class FillApplicationCoordinator:
         if len(matches) != 1 or changed != matches:
             raise ValueError("체결은 같은 범위의 단일 submit attempt만 변경할 수 있습니다")
         old, new = previous[matches[0]], candidate[matches[0]]
-        allowed = {"applied_quantity", "reserved_quantity", "reserved_cash"}
+        allowed = {"applied_quantity", "reserved_quantity", "reserved_cash",
+                   "reserved_exposure", "reserved_planned_risk"}
         if type(new) is not dict or old.keys() != new.keys():
             raise ValueError("attempt 필드는 보존해야 합니다")
         if any(not self._same(old[key], new[key]) for key in old.keys() - allowed):
@@ -300,6 +320,24 @@ class FillApplicationCoordinator:
                 or (cash_before - cash_after) * reserved_before
                 > cash_before * (reserved_before - reserved_after)):
             raise ValueError("수량 비례 한도를 넘는 예약 현금 해제")
+        resource_fields = {'reserved_exposure', 'reserved_planned_risk'}
+        if resource_fields & old.keys():
+            if not resource_fields <= old.keys():
+                raise ValueError('incomplete_request_resource_reservation')
+            for field in resource_fields:
+                before, after = old[field], new[field]
+                if before is None and field == 'reserved_planned_risk':
+                    if after is not None:
+                        raise ValueError('unmeasured_risk_must_remain_unknown')
+                    continue
+                if type(before) is not str or type(after) is not str:
+                    raise ValueError('request_resource_requires_decimal_string')
+                before, after = Decimal(before), Decimal(after)
+                if not before.is_finite() or not after.is_finite() or not 0 <= after <= before:
+                    raise ValueError('invalid_request_resource_release')
+                if ((reserved_before == 0 and after != before)
+                        or (before - after) * reserved_before > before * (reserved_before - reserved_after)):
+                    raise ValueError('excessive_request_resource_release')
 
     @staticmethod
     def _require_sync(result):

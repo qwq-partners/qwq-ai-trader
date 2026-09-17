@@ -62,6 +62,16 @@ def _text(value):
     return value
 
 
+def _strategy(value):
+    # 기존 Position/ExitManager의 전략 미지정 ''/None은 보존한다.
+    # 종목/intent 같은 필수 식별자의 _text 제약은 완화하지 않는다.
+    if value is not None and value != "":
+        _text(value)
+    elif value is not None and type(value) is not str:
+        raise ValueError("보호 전략 형식 오류")
+    return value
+
+
 def _quantity(value):
     if type(value) is not int or value < 0:
         raise ValueError("보호 수량 오류")
@@ -140,8 +150,7 @@ def _state_from_dict(symbol, row):
         if parsed.isoformat() != raw_date:
             raise ValueError("보호 날짜 형식 오류")
         values["last_new_high_date"] = parsed
-    if values["strategy_name"] is not None:
-        _text(values["strategy_name"])
+    _strategy(values["strategy_name"])
     if type(values["exit_history"]) is not list:
         raise ValueError("보호 이력 형식 오류")
     for event in values["exit_history"]:
@@ -291,8 +300,7 @@ def _registration(observation):
         raise ValueError("미지원 보호 등록 인자")
     for name, value in params.items():
         if name == "strategy_name":
-            if value is not None:
-                _text(value)
+            _strategy(value)
         elif name == "is_core":
             if type(value) is not bool:
                 raise ValueError("보호 등록 bool 오류")

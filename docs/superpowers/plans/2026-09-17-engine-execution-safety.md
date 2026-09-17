@@ -276,6 +276,8 @@ Task8C 일자 전환/initial R 및 단계3의 각 writer는 위 두 단위 리�
 
 ### Task 9A: 실제 요청의 불변 본문·의미 바인딩 (단계3 선행 단위)
 
+**실행 판정:** 9A/9A2/9B1/9B2는 구현·독립 한정 리뷰/재리뷰를 마쳤다. 전체 KST/UTC3294passed/기존xfail2·격리0(139.03/127.80초). 아래 항목은 승인된 계약이며 모든 시험의 최초 RED를 주장하지 않는다. 실제 전 writer 이행은 [Task10 세분 계획](2026-09-18-engine-writer-migration.md)으로 이어진다. Task9 성공은 운영 설치·전체 C/F/G/R/공식 최초 인계의 승인이 아니다.
+
 **Files:** create `src/execution/safety/requests.py`, `tests/test_execution_requests.py`. 소유자는 broker/transport/runtime/lifecycle를 동시에 수정하지 않는다. Task8C의 리뷰·검증을 닫은 뒤 착수한다. 설계 근거는 SDD `task-9-request-design.md`이며 이후 예약 연결까지 완료해야 송신 인수로 인정한다.
 
 **Plan:** 첫 거래 네트워크 await 전에 command·path·TR·계좌범위·영업일·session·symbol·side·order type·수량·가격·부모 참조를 한 요청으로 고정한다. 인증 token/appsecret/hashkey는 저장하거나 fingerprint에 포함하지 않는다. 실제 계좌 본문을 로그/repr에 노출하지 않는다. domain quantity는 양의 int(bool 제외), 가격은 유한 양의 Decimal이다. JSON의 정확한 필드 값/타입 바인딩이며 네트워크 raw byte 동일성을 주장하지 않는다.
@@ -286,3 +288,38 @@ Task8C 일자 전환/initial R 및 단계3의 각 writer는 위 두 단위 리�
 - [ ] See: builder 특성화/부정시험·독립 리뷰. 이것만으로 실제 broker 연결·위험 예약·단일 owner 이행 완료로 세지 않는다.
 
 Task9B는 이 요청을 실제 기존 위험정책에 따라 계산한 현금·수량·노출·계획위험 예약과 같은 owner commit으로 저장하고, 마지막 await 이후 동일 요청/claim/현재 예약을 재검사하는 경계다. 구현 전 기존 RiskManager의 예외·시장가 평가배율을 특성화한다. Task9C 이후 실제 writer 이행 순서와 모든 송신점 시험은 사용자 단계3의 별도 완료 조건이다.
+
+### Task 9B1: 기존 진입 위험 정책의 순수 계산·특성화
+
+**Files:** create `src/execution/safety/risk_policy.py`, `tests/test_execution_risk_policy.py`. Task9A와 독립된 새 파일만 소유하며 기존 manager/engine/runtime/transport는 읽기 전용이다. 자세한 DTO/API 근거는 SDD `task-9b-policy-proposal.md`다.
+
+**Plan:** 명시 frozen 유효설정·경제/보호/재진입/sync/trend/macro/pending snapshot와 aware KST 시각으로 실제 두 `can_open_position`의 결과를 각각 재현한다. 함수 자체는 clock/파일/manager·포트폴리오 상태를 바꾸지 않는다. 결정과 owner에 제안하는 sidecar/sync/date/sector effect를 분리한다. 이 단계의 allowed는 송신 허가가 아니다.
+
+- [ ] RED: 실제 기존 helper를 mock하지 않고 합성 fixture에 호출하여 bool·기존 reason·부수효과를 비교한다. 손실 경계/trend 결측, V 재진입 30분/+5%, sync9:59/10:00, macro, weighted7.9/8 및 core별도 슬롯, 신규 BUY·pending count, 현금/섹터/청산횟수 경계, route별 차이를 고정한다.
+- [ ] Do: `evaluate_risk_manager`, `evaluate_engine` 및 명시 route composition을 분리한다. 경고구간 trend 부재 허용, candidate 이전 weighted>=max, 실제 미적용 dynamic/flex를 보존한다. core/SAFE_ASSET/USER/SELL의 기존 적용 범위와 1.3/1.015/1.001의 목적을 바꾸지 않는다. 유효 설정은 주입하며 YAML/dataclass 기본값을 운영 유효값으로 대체하지 않는다.
+- [ ] sync timeout 관측 효과는 기존 동작 특성화일 뿐 실행 UNKNOWN/store/startup 해제 권한이 아니다. V 1회권은 평가 때 소모하지 않는다. 날짜 전환은 Task8C 명시 fence/valuation을 우회하지 않는다. last-await guard는 효과를 실행하지 않으며 미적용 효과를 송신 허가로 오인하지 않는다.
+- [ ] See: 입력 불변·외부 I/O/시계 호출0·UTC/KST 결과 동일·실제 기존 함수 parity·독립 리뷰. 예약/claim/기존 경제 reducer의 해제·실제 transport 배선은 Task9B2 별도 인수다.
+
+### Task 9A2: 준비된 실제 본문과 단회 전송 경계 연결
+
+**Files:** modify `src/execution/safety/transport.py`; create `tests/test_kr_prepared_dispatch.py`. 부모가 소유하며9A/9B1 새 모듈과 파일을 공유하지 않는다. 기존 `send`의 미설치 기반 API는 호환 유지하고 새 `send_prepared`는 builder가 명시 설치된 인스턴스에서만 사용한다.
+
+**Plan:** frozen 요청을 첫 await 전 검증·복사한다. 실제 broker config의 계좌/상품/env/endpoint와 대조하고, hashkey helper에는 별도 본문 사본을 준다. helper가 사본을 바꾸면 다른 본문으로 받은 hash를 사용하지 않고 NOT_SENT다. connect/token/hashkey/limiter 이후 동일 요청·config·header를 다시 검사하고 최종 guard에 실제 요청을 넘긴다. 송신 JSON은 검증된 요청에서 별도 생성한다.
+
+- [ ] RED: 각 await에서 caller 변형/계좌·endpoint 교체, hash 본문 변경, tr header 변경, 최종 guard 내 요청 변형, unsupported MODIFY는 HTTP0. 정상 SUBMIT/CANCEL은 실제 builder 본문으로 단회 POST하고 성공은 ACK일 뿐이다. HTTP/응답/취소 실패는 재시도하지 않는다.
+- [ ] Do: final callback 전후 동기 검증부터 `session.post`까지 application await0. 인증 자료는 DTO/에러 사유에 넣지 않는다. 실제 broker config/header를 사용하되 네트워크/토큰/hash/limiter 외부 경계만 시험에서 대체한다.
+- [ ] See: 기존 raw transport 회귀와 신규 실제 builder/broker 시험·독립 리뷰. 이 단위의 주입 guard는 아직 실제 owner 예약 검사를 대신하지 않으며 Task9B2 이전에는 운영 broker에 설치하지 않는다. 기존 raw send의 제거/차단과 모든 호출점 이행도 후속이다.
+
+### Task 9B2: 요청별 자원 계산과 단일 owner 준비·예약·송신
+
+**Plan:** 9A의 실제 요청과9B1의 명시 정책을 사용한다. 먼저 순수 `resources.py`를 만들고, 같은 owner commit 안에서 prepare·예약·정책 효과·요청 digest를 저장하는 연결을 구현한다. `resources.py` 단독 승인은 실제 owner 배선의 승인이 아니다. 구현 중인 파일을 겹쳐 수정하지 않는다.
+
+- [ ] RED/Do 자원: BUY 평가가격은 MARKET의 양의 별도 평가가격, LIMIT은 `max(평가가격, 실제 호가 반영 가격)`이다. 명시 수수료 설정의 기존 `FeeCalculator`/`planned_risk`를 사용한다. 현금 예약은 `max(원금×1.015, 원금+매수수수료)`로 기존 예약 여유를 보존한다. 시장가 sizing1.3·gate1.001은 별도 목적이며 이 계산으로 대체하지 않는다.
+- [ ] 위험 cap은 현행 automatic BUY·비코어·risk 모드에만 적용한다. 그 경로에는 명시 초기 손절 근거와 현 자산 기준 건별0.7%/현행 설정 상한을 사용한다. USER/SAFE_ASSET/SELL/코어를 자동 위험 cap 대상으로 넓히지 않는다. 미측정 계획위험은 `None`이며 가짜0으로 표시하지 않는다. 금액은 planned basis이지 실제 시장가 체결 상한 보장이 아니다.
+- [ ] 자산 입력은 유한 Decimal이며 BUY는 양수를 요구한다. SELL/CANCEL은 보유/부모 예약이 따로 검증되므로 자산0·음수만으로 자원 계산을 금지하지 않는다. 초안 resources brief의 공통 양수 조건을 재검토해 노출 축소 경로에 불필요한 제한이 생기지 않도록 정정했다.
+- [ ] 소유·예약: 실제 보유/원장 예약으로 BUY 가용 현금 및 SELL 가용 수량을 판정한다. 동일 마지막 현금·가중 슬롯·섹터·신규 매수 슬롯의 경합을 owner 안에서 막는다. 기존 건별 위험 한도를 포트폴리오 총위험 상한으로 바꾸지 않는다. 기존 per-request 금액 gate와 aggregate exposure 계측을 분리하며 승인되지 않은 새 숫자 상한은 추가하지 않는다.
+- [ ] CANCEL은 부모의 현 예약·완전한 참조·version에 연결하고 추가 자원0을 부모 예약 해제로 해석하지 않는다. 모든 MODIFY는 지원 체인·증분 예약 인수가 없으므로 `unsupported_modify_contract`/HTTP0이다. 자동 cancel→resubmit 우회도 없다.
+- [ ] 후보·claim·결과: prepare의 생명주기 전이와 요청/예약은 하나의 owner transaction이며 DB/게시 실패 시 전송 불가다. durable claim과 process-local 단회 permit을 분리한다. 마지막 await 뒤 동일 요청·계좌/날짜/session·현재 자원·정책·저장/게시·claim·startup/보호·alpha를 동기 검사한다. 매번 이전 승인 bool을 재사용하거나 final guard에서 예약을 증액하지 않는다.
+- [ ] 정책 입력 소유: `policy_snapshot.py`는 명시 외부 정책 context(유효설정·sync·trend·macro·source version/관측시각)의 DTO 왕복과 현재 owner의 Portfolio/보호/위험/attempt에서 `EntryPolicySnapshot`을 만드는 순수 어댑터다. 과거 caller가 준 cash/pending를 재사용하지 않는다. context의 자료 관측시각과 snapshot 계산시각을 분리하고 현재시각으로 전일 자료를 신선하게 포장하지 않는다. runtime context 게시와 writer 이행은 별도 연결 인수다.
+- [ ] 체결/종결: 실제 경제 reducer와 write-set 검증에서 수량·현금·노출·계획위험을 함께 보수적으로 해제한다. ACK/UNKNOWN/취소 ACK는 예약 해제가 아니다. caller 취소/응답 유실/재시작 뒤 동일 POST 재전송을 금지한다.
+- [ ] See: 실제 SQLite/core queue/Portfolio/ExitManager와 prepared transport를 연결한 인수, 경합·위조·미측정·DB/게시 장애·부분체결·중복·재시작을 실행한다. 모듈 단독·합성 startup 허가를 운영 허가로 세지 않는다. 전 writer와 공식 최초 인계가 미완이면 `trading_ready=False`를 유지한다.

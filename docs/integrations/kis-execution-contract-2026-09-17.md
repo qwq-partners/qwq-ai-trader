@@ -33,6 +33,14 @@ TTTC8001R의 '3개월 이내'는 같은 예제에서 **월 단위**로 설명한
 - 외부/미식별 주문을 기존 intent에 수량·종목 유사성만으로 연결하지 않는다. 시작 대사는 상호 일치한 로컬 상태만으로 성공시키지 않는다.
 - 합성 fixture는 파서·상태기계 인수 근거이지 실 API 응답 인수나 실거래 안전성 완료 증거가 아니다.
 
+## 09-18 시세 원관측 시각의 추가 근거 (writer 이전 준비)
+
+같은 고정 revision의 [legacy WS 시장 체결가 배열](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/legacy/Sample01/kis_domstk_ws.py#L103)과 [현재 WS 함수 예제](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/examples_user/domestic_stock/domestic_stock_functions_ws.py)를 공개 원문으로 확인했다. 시장 체결가 H0STCNT0/KRX 및 현재 예제 H0NXCNT0/NXT의 배열에는 시간(index1)과 영업일자 BSOP_DATE(index33)가 있다. legacy는 시간 필드의 이름을 TICK_HOUR로 바꿔 소비한다.
+
+현재 로컬 `kis_websocket._handle_price_data`는 HHMMSS를 읽고 버리며 영업일자는 읽지 않는다. Event의 생성 시각을 이 원 시각으로 오인하면 안 된다. 후속 어댑터는 원 TR·날짜/시간·수신 시각을 분리하고, 정확한 레코드 범위·필드 수·날짜/시간 유효성을 검증해야 한다. 현재 REST `KISBroker.get_quote` 반환에는 시장 as_of가 없으므로 수신 now로 채우지 않는다. 이 문단은 원문 조사 결과이며 해당 feed 배선이 이미 구현됐다는 뜻이 아니다.
+
+**시장 시세 시각은 계좌 체결 sequence나 잔고–체결 공통 cutoff의 증명이 아니다.** 최초 인계/취소 체인 미입증 판정은 그대로다. 외부 예제의 인증/실행 코드를 실행하지 않았고 실 API를 호출하지 않았다.
+
 ## 고정 파일 SHA-256
 
 ### 09-18 후속 재확인
