@@ -16,6 +16,7 @@ from .types import (
     Order, Fill, Position, Signal, Price, Quote, Theme,
     OrderSide, OrderStatus, SignalStrength, StrategyType, MarketSession
 )
+from .market_observation import MarketObservation
 
 
 class EventType(Enum):
@@ -87,6 +88,7 @@ class MarketDataEvent(Event):
     prev_close: Optional[Decimal] = None  # 전일 종가
     change: Decimal = Decimal("0")        # 전일 대비
     change_pct: float = 0.0               # 전일 대비 (%)
+    observation: Optional[MarketObservation] = None  # immutable WS provenance (optional for legacy/US)
 
     def to_price(self) -> Price:
         """Price 객체로 변환"""

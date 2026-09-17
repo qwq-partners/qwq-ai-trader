@@ -213,8 +213,15 @@ def test_quote_watermark_and_unresolved_input_have_atomic_durability(tmp_path, f
                     with pytest.raises(ApplicationBlocked):
                         await runtime.quote("005930", Decimal("10500"))
                     assert runtime.owner.state == before
-            # 워터마크는 시각 거부 근거일 뿐 비영속 current quote view를 복원하지 않는다.
-            assert engine.portfolio.positions["005930"].current_price == Decimal("10500")
+            # A2b F1: 워터마크와 별개로 수락된 가격 view도 같은 admission에 저장한다.
+            # commit 전 실패만 기존 일일 평가를 유지하고, 나머지는 수락 가격을 복원한다.
+            # 보호 미완 장벽/원 입력 보존은 위 assertion대로 유지하며 복원 != 거래 허가다.
+            expected_price = "10500" if failure == "admit_precommit" else "10400"
+            assert engine.portfolio.positions["005930"].current_price == Decimal(expected_price)
+            view = state.get('quote_price_views', {}).get('005930')
+            assert (view is None) == (failure == 'admit_precommit')
+            if view is not None:
+                assert view['price'] == '10400' and view['source_version'] == row['admission_version']
             assert not runtime.trading_ready
         finally:
             await runtime.shutdown()

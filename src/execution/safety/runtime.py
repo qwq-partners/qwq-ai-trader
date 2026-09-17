@@ -19,6 +19,9 @@ from .initial_r import capture_initial_stop, capture_finality, reduce_finalize_i
 from .protection import decode_protection, publish_protection, quote_protection, reduce_protection
 from .protection_recovery import RecoveryReceipt, capture_fill, capture_quote, digest, reduce_repair
 from .store import ExecutionStateStore
+from .market_source import (canonical_observation, observation_from_event, complete_source,
+                            validate_sources, completed_duplicate, observation_market_data,
+                            quote_price_view, validate_price_views)
 
 
 class KRExecutionRuntime:
@@ -288,14 +291,29 @@ class KRExecutionRuntime:
         if latest_fill and (not valued or latest_fill > view["rollover_version"]):
             # SELL DTO의 옛 현재가나 누적 평균 대신 실제 증분 체결가를 복원한다.
             price = Decimal(fill["amount"]) / fill["quantity"]
-        metadata = self._quote_metadata.get(symbol)
+        # 새 프로세스에서도 동일 수락 가격을 사용한다. 메모리 cache는 권위가 아니다.
+        metadata = state.get('quote_price_views', {}).get(symbol)
+        quote_price = Decimal(metadata['price']) if metadata else None
+        if metadata is None:
+            # 새 projection root가 없는 legacy checkpoint 호환. 원시각 없는 과거
+            # cache를 만들어내지 않으며, 실제 신규 source proof에는 durable view가 필수다.
+            explicit = state.get('latest_explicit_quote', {}).get(symbol)
+            if explicit:
+                metadata = {'received_at': explicit['received_at'],
+                            'source_version': explicit['admission_version'],
+                            'market_as_of': explicit['as_of']}
+                quote_price = Decimal(explicit['price'])
+            cached = self._quote_metadata.get(symbol)
+            if cached and symbol in self._quotes and (metadata is None
+                    or cached['source_version'] > metadata['source_version']):
+                metadata, quote_price = cached, self._quotes[symbol]
         floor = self._quote_time_floor(state, symbol)
-        if (symbol in self._quotes and metadata and metadata["source_version"] > latest_fill
+        if (metadata and metadata["source_version"] > latest_fill
                 and (not valued or (metadata["source_version"] > view["rollover_version"]
                      and aware(datetime.fromisoformat(metadata["received_at"])) >= aware(datetime.fromisoformat(valuation["valuation_boundary"]))))
                 and (metadata["market_as_of"] is None or floor is None
                      or aware(datetime.fromisoformat(metadata["market_as_of"])) >= floor)):
-            price = self._quotes[symbol]
+            price = quote_price
         return price
 
     @staticmethod
@@ -349,12 +367,19 @@ class KRExecutionRuntime:
                 and previous["payload_digest"] != digest(self._market_quote_payload(symbol, market_quote))):
             raise ApplicationBlocked("market_quote_event_conflict")
 
+    def market_source_pending(self, state) -> bool:
+        """접수 첫 await부터 보호 완료까지 반쯤 게시된 시세로 새 노출을 만들지 않는다."""
+        return (any(not task.done() for task in self._protection_tasks)
+                or bool(state.get("protection_quote_admissions")) or self._protection_failed)
+
     def _publish(self, state: dict, version: int) -> None:
         required = {"portfolio", "protection", "risk", "lots", "outbox",
                     "intents", "attempts", "startup_reconciliation"}
         if not required <= state.keys():
             raise ValueError("실행 checkpoint/시작 대사 기준선이 없습니다")
         self._validate_explicit_quotes(state, version)
+        validate_price_views(state, version)
+        validate_sources(state, version)
         # 전체 decode를 먼저 끝낸다. live object deepcopy/legacy 파일 I/O 없음.
         portfolio = decode_portfolio(state["portfolio"])
         protection = decode_protection(state["protection"], clock=self.clock)
@@ -418,9 +443,18 @@ class KRExecutionRuntime:
                     raise ApplicationBlocked("day_transition_application_closed")
         return await self.owner.apply(observation, application_gate=gate)
 
+    async def observe_market(self, event, *, intent_id=None, market_data=None):
+        """원관측을 보호·진입 가격의 같은 완료 commit으로 게시한다. 전략 송신은 별도다."""
+        observation = observation_from_event(event)
+        return await self.quote(observation.symbol, observation.price,
+            market_data=market_data, intent_id=intent_id, market_as_of=observation.market_as_of,
+            source=observation.source, source_event_id=observation.source_event_id,
+            entry_observation=observation)
+
     async def quote(self, symbol: str, price: Decimal, *, market_data=None,
                     intent_id: str | None = None, market_as_of: datetime | None = None,
-                    source: str | None = None, source_event_id: str | None = None):
+                    source: str | None = None, source_event_id: str | None = None,
+                    entry_observation=None):
         """입력의 durable 접수 후 view 게시, 보호 적용 후 완료. 제안은 주문 전송이 아니다."""
         if self._closing:
             raise ApplicationBlocked("종료 중에는 새 보호 명령을 수락하지 않습니다")
@@ -438,12 +472,19 @@ class KRExecutionRuntime:
                 raise ValueError("future_market_quote")
         else:
             observed = None
-        market_data = deepcopy(market_data)
+        if entry_observation is not None:
+            entry_observation = canonical_observation(entry_observation, symbol=symbol, price=price,
+                as_of=observed, source=source, event_id=source_event_id, now=now)
+            market_data = observation_market_data(entry_observation, market_data)
+        else:
+            market_data = deepcopy(market_data)
         command_id = "quote:" + uuid4().hex
         request = {"symbol": symbol, "price": str(price), "market_data": market_data,
                    "intent_id": intent_id, "observed_at": now.isoformat(),
                    "market_as_of": observed.isoformat() if observed is not None else None,
                    "source": source, "source_event_id": source_event_id}
+        if entry_observation is not None:
+            request['entry_observation'] = entry_observation.to_dict()
         request_digest = digest(request)  # JSON 입력 검증도 수락 전에 끝낸다.
         market_quote = {"price": request["price"], "as_of": request["market_as_of"],
                         "source": source, "source_event_id": source_event_id, "market_data": market_data}
@@ -467,6 +508,7 @@ class KRExecutionRuntime:
             pending[command_id] = {**request, "payload_digest": request_digest,
                                    "status": "RECEIVED", "source_version": self.owner.version + 1,
                                    "admitted_at": self._now().isoformat()}
+            state.setdefault('quote_price_views', {})[symbol] = quote_price_view(request, self.owner.version + 1)
             if observed is not None:
                 # 종목당 한 행만 보관하며 시각 없는 후속 입력은 이 근거를 지우지 않는다.
                 state.setdefault("latest_explicit_quote", {})[symbol] = {
@@ -504,13 +546,32 @@ class KRExecutionRuntime:
                           version=self.owner.version + 1, now=now,
                           provenance={"market_as_of": request["market_as_of"], "source": source,
                                       "source_event_id": source_event_id, "received_at": request["observed_at"]})
+            if entry_observation is not None:
+                complete_source(state, command_id=command_id, request=request,
+                    admission_version=admission['source_version'],
+                    completed_version=self.owner.version + 1, decision=decision)
+            elif symbol in state.get('market_sources', {}):
+                # 보호-only 입력은 과거 진입 proof를 새 시세로 재사용할 권한이 아니다.
+                state['market_sources'][symbol]['invalidated_at_version'] = self.owner.version + 1
             # 보호 결과/재생 입력과 같은 commit에서만 미해결 접수를 제거한다.
             del state["protection_quote_admissions"][command_id]
             return state
 
         async def apply_quote():
+            nonlocal admission_rejected
             # 두 owner transaction 사이에도 가격 입력 순서가 뒤집히지 않게 한다.
             async with self._quote_lock:
+                if entry_observation is not None:
+                    try:
+                        self.owner._require_ready()
+                        current = self.owner.state
+                        self._require_quote_freshness(current, symbol, observed, market_quote)
+                        repeated, saved_decision = completed_duplicate(current, request)
+                    except (ValueError, ApplicationBlocked):
+                        admission_rejected = True  # 아직 새 입력을 저장/게시한 적이 없다.
+                        raise
+                    if repeated:
+                        return saved_decision
                 await self.owner.mutate("quote-admit:" + command_id, admit)
                 # 저장 실패/결과불명 때는 수락하거나 view를 게시하지 않는다.
                 self._quotes[symbol] = price
@@ -522,6 +583,12 @@ class KRExecutionRuntime:
                 if position is not None:
                     position.current_price = self._view_price(self.owner.state, symbol, position.current_price)
                 await self.owner.mutate(command_id, reduce)
+                if entry_observation is not None:
+                    proof = self.owner.state['market_sources'][symbol]
+                    if proof['admission_id'] != command_id or proof['request_digest'] != request_digest:
+                        raise ApplicationBlocked('market_source_completion_conflict')
+                    # commit-ID 재조회에서는 reducer closure가 실행되지 않을 수 있다.
+                    return None if proof['decision'] is None else tuple(proof['decision'])
                 return decision
 
         # 수락된 가격은 호출자의 취소와 분리한다. 강한 참조와 종료 drain으로

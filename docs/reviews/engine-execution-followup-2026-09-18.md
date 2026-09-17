@@ -116,6 +116,28 @@ Do: 실제 SQLite/runtime/commands에서 HTTP 응답/결과 저장/호출 취소
 
 See: 동결 source/test patch(기준bef213c) SHA256 `9385094f719ac57ce025eaecdda41c984d74b89b8cfda9952afbba263c9b79dc`. 전체 KST **3381passed/2 known xfailed/4 warnings,138.78초**, UTC **3381passed/2 known xfailed/4 warnings,143.26초**, 각각 격리0·문법·비밀정보 패턴 검사 통과다. 신규87개(lease62·종료25)이며4warning은 기존pykrx1과 의도적인 fork 경계 시험의 Python3.12 경고3이다. warning을 숨기거나 전부 기존 경고라고 쓰지 않는다. lease `e79ea390ae7beed978fb8140a030cc402802af99050ce68b21826d329da74bfa`, runtime `7dd0a5ef0756b3bd8a173bc9d6c7fbe968ba13ca51153ee29f0de33aa97252ec`, commands `1ab94a2f217a991f076edad9681d53cfceafafd4b5b4dffb7811cbbba2d3bd1b`. 이는 설치 factory나 실제 engine/scheduler shutdown 전체 인수가 아니다. 다음은10A2 실제 원관측/정책 publisher이며 main/운영/실API/주문/설정/Toss 변경은 없다.
 
+### 후속 Task10A2a/b — 원관측·완료 증거·순수 위험 전이 (실제 writer 연결 전)
+
+Plan: KRX/NXT 46필드 원 체결 시각을 수신 시각과 분리하고 같은 owner commit에서 보호 결과와 진입 가격 증거를 완료한다. 현재 정책 산술과 실제 writer의 시도 순서를 분리한다. 구현은 feed/순수 위험 전이 Terra/high, owner·교차 인수는 부모, 독립 검토는 Astra/xhigh로 분담했다. 전체 단계3 완료나 운영 설치를 뜻하지 않는다.
+
+Do — feed: frozen `MarketObservation`에 원 TR·거래소·날짜/시간·수신 시각·연결/프레임/행 식별·원문 digest를 보존한다. 실제 WS feed는 전체 frame을 검증한 뒤 발행한다. 기존 US/naive event heap과 legacy 숫자/부호 의미는 유지했다. 독립 검토의 P2 두 건(Decimal 문맥에 따른 음수 반올림, malformed underscore 수치의 Decimal 허용)을 원본 6 RED로 재현하고 exact 부호 전환 및 기존 float lexical 경계로 수정했다. 최종 feed49 + 원본28 + 추가29 = 각 TZ106개 통과, 두 파일 수정 포함 5파일 한정 재리뷰 승인이다. 다중 record parser의 원자 검증은 downstream 여러 종목 commit의 원자성이나 전 이력 exactly-once 보장이 아니다.
+
+Do — owner: 실제 Event/원 DTO 일치를 첫 await 전에 확인하고 durable 접수→보호/고점·원장 outbox·entry quote·완료 증거를 연결했다. 접수 중/미완/실패는 SUBMIT prepare·claim·최종 검사에 공통 장벽이며 CANCEL alpha 정책을 바꾸지 않는다. 같은 현재 원관측의 재전달은 같은 결과를 돌려주되 과거 전체 ID의 중복 방지로 과장하지 않는다. bare 보호 가격은 이전 진입 증거를 무효화한다.
+
+독립 리뷰의 **P1 F1**은 cold restore에서 수락 가격이 사라져 일일 PnL -200000이0으로 바뀌고 fake POST1이 허용되는 문제였다. `quote_price_views`를 admission과 같은 commit에 저장하고 view·체결·일자 valuation의 기존 순서를 보존했다. **P1 F2**는 원관측 low와 다른 supplemental low가 기본 FIRST 단계 복합 청산을 없애는 문제였다. 원 OHLC 등 수치 충돌을 접수 전에 거부하고 low는 원 DTO 값으로 채운다. MA5/prev_low는 별도 지표로 남기며 그 출처까지 입증됐다고 주장하지 않는다. 신규30회귀는 최초13 RED/1대조와 수정 후16추가 대조로 구분했다. 기존 day 시험3개는 가격 영속화 계약에 맞춰 기대값만 변경했고 pending·startup 장벽은 유지했다. 원본9 재현은 두 TZ에서 GREEN이다.
+
+재리뷰 **P2 F3**는 bound10000 완료→bare10100 완료 뒤 invalidation 한 필드가 소실된 합성 checkpoint를 healthy로 복원하고 오래된 source로 fake POST1을 허용하는 관계 검증 누락이었다. 정상 생성 경로에서의 손실이나 악의적인 DB 전체 위조 방어를 주장하지 않는다. current 판정은 최신 durable view와 proof admission의 정확한 일치를 요구하고, restore는 정상 newer pending과 완료 후 무효화 증거를 구분하도록 수정했다. author3회귀는2 RED/정상1 GREEN→수정 후 관련157pass, 동결 재리뷰 원본20은20pass다. 독립 최종 판정과 전체 동결 검증은 아래에 별도 기록한다.
+
+Do — 위험 전이: 실제 persist=False ExitManager clone과 공통 classifier를 이용해 이전 정책 상태/보호 DTO→후보 상태/보호 DTO/선제 stale 필요 여부를 계산한다. 임계값·core/면제·same-level no-op·회복5분 cooldown을 보존했다. author36 및 독립58 시험은 두 TZ 각각94개 통과, **두 파일 한정 승인**이다. 숫자 문자열 정규화, 같은 단계/결측의 보호 DTO 검증 생략, 실제 ExitManager의 logger 호출을 명시한다. owner는 별도 checkpoint 검증을 해야 하며 ‘파일/network 직접 접근 없음’이 모든 log sink I/O 없음은 아니다. 반환 dict는 독립 복사본이지 권한/불변 capability가 아니다.
+
+실제 `BatchAnalyzer.update_intraday_state`의 겹친 호출은 여전히 `(batch normal, ExitManager crash)`가 되는 **의미 RED1**로 남았다(순차 대조1 GREEN, 두 TZ). 순수 후보만으로 이 실제 writer가 수정됐다고 세지 않는다. 현재 5분·정오는 같은 루프이므로 항상 겹친다고 주장하지도 않는다. 다음은 I/O 전 durable begin·최신 시도 완료·의존 version·정책/보호/effect outbox 동일 commit, 실제 5분/정오/2분과 callback/factory 연결이다.
+
+검증 주의: 개발 중 bare pytest의 scripts 수집/변경 중 소스 오류 및 probe와 tests 동시 수집의 conftest 중복 오류는 합격 근거에서 제외했다. guard 위반은0이며 이후 명시 tests 또는 standalone probe로만 실행했다. 실제 최초 인계·취소 체인, REST 시장 시각, 전체 C/F/G/R, 장기 저장/처리량은 계속 미입증/미완이다. `trading_ready=False`, 모든 MODIFY 미지원, KIS 거래·잔고/Toss 관측 전용, main·운영·실API·주문·설정 무변경을 유지한다.
+
+See: 최종 source/test patch(기준a1003ed) SHA256 `5a32c0bba11c0ab2b263ad836d7f43d151c7335cbc33a08ac127c5a345294e99`. 전체 KST **3544passed/2 known xfailed/4 warnings,148.18초**, UTC **3544passed/2 known xfailed/4 warnings,155.18초**로 격리0·문법·비밀패턴 검사를 통과했다. 신규163개는 feed49·owner45+33·순수 위험36이며 warning은 기존pykrx1+의도적 fork 경계3이다. F3 전 후보3541 KST 통과는 최종 지문 근거로 쓰지 않는다.
+
+독립 owner 최종 리뷰는 원본9·후속20·추가17을 각 TZ46개, 관련UTC328개 통과로 F1/F2/F3 해결·신규 P0/P1/P2 0을 확인해 **6파일 한정 승인**했다. 정상 pending bare/bound 복원, generation/가격/시각/status 손상 거부, 새 정상 bound 이후 actual fake POST1 대조를 포함한다. 승인 보고서 SHA256은 feed `ed456844f77a1f3b601c1059ac26c4c0edb5d9111db332b12a0bc59493c48d83`, owner `db203e80d6ce01a6b43e7e9d009d23d7f7fd7de334dc44bb80e69691158f9d00`, 순수 위험 `5b34734271c88fee069621023511ca6fe086b96d20a7cd8200d77f19f9f617be`다. 각 원본 실패 보고서/probe는 덮어쓰지 않았다. 이 승인은 사용자 단계5의 실제 전체 broad 리뷰를 대체하지 않는다.
+
 ## 단계4 — 공식 계약 증거
 
 Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와 잔고–체결 cutoff를 확인한다. 최신 TR로 자동 치환하지 않는다.

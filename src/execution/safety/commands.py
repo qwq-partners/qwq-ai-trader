@@ -15,6 +15,7 @@ from uuid import uuid4
 from ...core.types import OrderSide
 from . import risk_policy as p
 from .application import ApplicationBlocked
+from .market_source import source_is_current
 from .economics import decode_portfolio, encode_portfolio
 from .guards import EntryAuthority, EntryOrigin, FinalEntryGuard, GuardDecision
 from .lifecycle import CommandKind, CommandResult, CommandStatus, OrderRef, TERMINAL_STATES
@@ -139,6 +140,7 @@ class RequestBoundCommands:
         def reduce(state):
             self._owner_ready(state)
             self._version(expected_version)
+            _require(symbol not in state.get('market_sources', {}), 'bound_market_source_required')
             now = self.runtime._now()
             _require(as_of.astimezone(now.tzinfo).date() == now.date() and as_of <= now,
                      'entry_quote_day_or_time_mismatch')
@@ -198,6 +200,8 @@ class RequestBoundCommands:
 
     def _evaluate(self, state, request, context, sector, *, exclude_attempt=None):
         self._owner_ready(state)
+        if request.command is CommandKind.SUBMIT:
+            _require(not self.runtime.market_source_pending(state), 'market_source_pending')
         self._session(request)
         _require(self.authority.owns(context), 'untrusted_entry_context')
         _require(request.command is not CommandKind.MODIFY, 'unsupported_modify_contract')
@@ -223,6 +227,7 @@ class RequestBoundCommands:
         if request.command is CommandKind.CANCEL:
             self._parent(state, request)
         elif request.side is OrderSide.BUY:
+            _require(source_is_current(state, request.symbol), 'current_market_source_required')
             quote = state.get('entry_quotes', {}).get(request.symbol)
             now = self.runtime._now()
             _require(quote is not None and Decimal(quote['price']) == request.valuation_price

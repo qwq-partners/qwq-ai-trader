@@ -19,11 +19,19 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Callable, Coroutine, Dict, List, Optional, Set, Any
+import uuid
+from zoneinfo import ZoneInfo
 import aiohttp
 from loguru import logger
 
 from src.core.types import OrderSide, MarketSession
 from src.core.event import MarketDataEvent, QuoteEvent, TickEvent
+from src.core.market_observation import MarketObservation
+from src.data.feeds.kis_market_parser import (
+    MarketFrameError,
+    PRICE_TR_EXCHANGES,
+    parse_market_price_frame,
+)
 from src.utils.token_manager import get_token_manager
 from src.utils.session import KRSession
 
@@ -93,8 +101,16 @@ class KISWebSocketFeed:
     MAX_SUBSCRIPTIONS = 40  # 최대 동시 구독 종목 수
     ROLLING_INTERVAL = 30   # 롤링 주기 (초)
 
-    def __init__(self, config: Optional[KISWebSocketConfig] = None):
+    def __init__(
+        self,
+        config: Optional[KISWebSocketConfig] = None,
+        *,
+        clock: Optional[Callable[[], datetime]] = None,
+    ):
         self.config = config or KISWebSocketConfig.from_env()
+        self._clock = clock or (lambda: datetime.now(ZoneInfo("Asia/Seoul")))
+        self._connection_id = str(uuid.uuid4())
+        self._frame_sequence = 0
 
         # 장 시간 체크용
         self._kr_session = KRSession()
@@ -191,11 +207,12 @@ class KISWebSocketFeed:
                 return False
 
             # WebSocket 연결
-            self._ws = await self._session.ws_connect(
+            ws = await self._session.ws_connect(
                 self.config.ws_url,
                 heartbeat=self.config.ping_interval,
                 timeout=aiohttp.ClientTimeout(total=15),
             )
+            self._activate_connection(ws)
 
             self._connected = True
             self._running = True
@@ -231,6 +248,12 @@ class KISWebSocketFeed:
             await self._session.close()
 
         logger.info("WebSocket 연결 해제")
+
+    def _activate_connection(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Record a new local connection generation after an actual WS connect."""
+        self._ws = ws
+        self._connection_id = str(uuid.uuid4())
+        self._frame_sequence = 0
 
     def enable_reconnect(self):
         """장 시작 전 재연결 허용 (run 루프가 자동으로 connect 재시도)"""
@@ -798,8 +821,14 @@ class KISWebSocketFeed:
                         await self._ws.close()
                 return
 
-            # 파이프 구분 데이터 (실시간 시세)
+            # Price frames have a stricter independent source contract.  Keep
+            # legacy orderbook parsing below unchanged.
             parts = data.split("|")
+            if len(parts) >= 2 and parts[1] in PRICE_TR_EXCHANGES:
+                await self._handle_price_frame(data)
+                return
+
+            # 파이프 구분 데이터 (실시간 시세)
             if len(parts) < 4:
                 logger.debug(f"[WS] 파이프 구분 데이터 부족: {len(parts)}개 파트")
                 return
@@ -819,75 +848,84 @@ class KISWebSocketFeed:
                 logger.info(f"[WS] 메시지 수신 통계: 총 {self._message_count}건, TR={tr_id}")
 
             # TR ID별 처리 (정규장 + NXT 공통)
-            if tr_id in (KISWebSocketType.PRICE.value, KISWebSocketType.NXT_PRICE.value):
-                await self._handle_price_data(raw_data)
-
-            elif tr_id in (KISWebSocketType.ORDERBOOK.value, KISWebSocketType.NXT_ORDERBOOK.value):
+            if tr_id in (KISWebSocketType.ORDERBOOK.value, KISWebSocketType.NXT_ORDERBOOK.value):
                 await self._handle_orderbook_data(raw_data)
 
         except Exception as e:
             logger.error(f"메시지 처리 오류: {e}")
 
-    async def _handle_price_data(self, data: str):
-        """실시간 체결가 처리"""
+    async def _handle_price_frame(self, frame: str):
+        """Validate a whole KIS price frame before emitting any event callback."""
         try:
-            fields = data.split("^")
+            records = parse_market_price_frame(frame)
+        except MarketFrameError:
+            logger.debug("[WS] malformed market price frame rejected")
+            return
 
-            if len(fields) < 20:
-                logger.warning(f"[WS] 체결가 필드 부족: {len(fields)}개 (최소 20 필요)")
-                return
+        try:
+            received_at = self._clock()
+            next_frame_sequence = self._frame_sequence + 1
+            events = []
+            for record_index, record in enumerate(records, start=1):
+                observation = MarketObservation(
+                    symbol=record.symbol,
+                    price=record.price,
+                    open=record.open,
+                    high=record.high,
+                    low=record.low,
+                    volume=record.volume,
+                    value=record.value,
+                    change_sign=record.change_sign,
+                    change=record.change,
+                    change_pct=record.change_pct,
+                    source=f"kis_websocket:{record.tr_id}",
+                    tr_id=record.tr_id,
+                    exchange=record.exchange,
+                    raw_date=record.raw_date,
+                    raw_time=record.raw_time,
+                    received_at=received_at,
+                    connection_id=self._connection_id,
+                    frame_sequence=next_frame_sequence,
+                    record_index=record_index,
+                    record_digest=record.record_digest,
+                )
+                events.append(MarketDataEvent(
+                    source="kis_websocket",
+                    symbol=record.symbol,
+                    open=record.open,
+                    high=record.high,
+                    low=record.low,
+                    close=record.price,
+                    volume=record.volume,
+                    value=record.value,
+                    change=record.change,
+                    change_pct=float(record.change_pct),
+                    observation=observation,
+                ))
 
-            # 필드 매핑 (KIS 실시간 체결가 스펙)
-            symbol = fields[0].zfill(6)
-            time_str = fields[1]          # HHMMSS
-            price = int(fields[2])        # 현재가
-
-            # 0원/음수 체결가 필터 (데이터 이상)
-            if price <= 0:
-                return
-            change_sign = fields[3]       # 전일대비부호
-            change = int(fields[4])       # 전일대비
-            change_pct = float(fields[5]) # 전일대비율
-            open_price = int(fields[7])   # 시가
-            high_price = int(fields[8])   # 고가
-            low_price = int(fields[9])    # 저가
-            volume = int(fields[13])      # 누적거래량
-            value = int(fields[14])       # 누적거래대금
-
-            self._price_data_count += 1
+            self._frame_sequence = next_frame_sequence
+            self._price_data_count += len(events)
 
             # 첫 수신 로그
             if not self._logged_first_price:
-                logger.info(f"[WS] 첫 체결가 수신: {symbol} {price:,}원 ({change_pct:+.2f}%) vol={volume:,}")
+                first = events[0]
+                logger.info(f"[WS] 첫 체결가 수신: {first.symbol} {first.close:,}원 ({first.change_pct:+.2f}%) vol={first.volume:,}")
                 self._logged_first_price = True
 
             # 주기적 로그 (5000건마다)
             if self._price_data_count % 5000 == 0:
-                logger.info(f"[WS] 체결가 수신 {self._price_data_count}건째: {symbol} {price:,}원")
+                last = events[-1]
+                logger.info(f"[WS] 체결가 수신 {self._price_data_count}건째: {last.symbol} {last.close:,}원")
 
-            # 이벤트 생성
-            event = MarketDataEvent(
-                source="kis_websocket",
-                symbol=symbol,
-                open=Decimal(str(open_price)),
-                high=Decimal(str(high_price)),
-                low=Decimal(str(low_price)),
-                close=Decimal(str(price)),
-                volume=volume,
-                value=Decimal(str(value)),
-                change=Decimal(str(change if change_sign != "5" else -change)),
-                change_pct=change_pct if change_sign != "5" else -change_pct,
-            )
-
-            # 콜백 호출
-            for callback in self._data_callbacks:
-                try:
-                    await callback(event)
-                except Exception as e:
-                    logger.error(f"데이터 콜백 오류: {e}")
+            for event in events:
+                for callback in self._data_callbacks:
+                    try:
+                        await callback(event)
+                    except Exception as e:
+                        logger.error(f"데이터 콜백 오류: {e}")
 
         except Exception as e:
-            logger.error(f"체결가 처리 오류: {e}")
+            logger.error(f"체결가 provenance 처리 오류: {e}")
 
     async def _handle_orderbook_data(self, data: str):
         """실시간 호가 처리"""

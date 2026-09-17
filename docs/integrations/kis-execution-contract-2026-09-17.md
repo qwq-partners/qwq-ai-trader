@@ -37,9 +37,15 @@ TTTC8001R의 '3개월 이내'는 같은 예제에서 **월 단위**로 설명한
 
 같은 고정 revision의 [legacy WS 시장 체결가 배열](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/legacy/Sample01/kis_domstk_ws.py#L103)과 [현재 WS 함수 예제](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/examples_user/domestic_stock/domestic_stock_functions_ws.py)를 공개 원문으로 확인했다. 시장 체결가 H0STCNT0/KRX 및 현재 예제 H0NXCNT0/NXT의 배열에는 시간(index1)과 영업일자 BSOP_DATE(index33)가 있다. legacy는 시간 필드의 이름을 TICK_HOUR로 바꿔 소비한다.
 
-현재 로컬 `kis_websocket._handle_price_data`는 HHMMSS를 읽고 버리며 영업일자는 읽지 않는다. Event의 생성 시각을 이 원 시각으로 오인하면 안 된다. 후속 어댑터는 원 TR·날짜/시간·수신 시각을 분리하고, 정확한 레코드 범위·필드 수·날짜/시간 유효성을 검증해야 한다. 현재 REST `KISBroker.get_quote` 반환에는 시장 as_of가 없으므로 수신 now로 채우지 않는다. 이 문단은 원문 조사 결과이며 해당 feed 배선이 이미 구현됐다는 뜻이 아니다.
+기준 `a1003ed`의 로컬 `kis_websocket._handle_price_data`는 HHMMSS를 읽고 버리며 영업일자는 읽지 않았다. Task10A2a는 원 TR·날짜/시간·수신 시각을 분리하는 frozen DTO와 46필드 전체 frame parser를 실제 feed에 연결했다. Event 생성 시각을 시장 시각으로 오인하지 않으며 정확한 레코드 수·날짜/시간·수치 경계를 검증한다. 실제 run_trader callback→owner 설치는 별도 미완이다. REST `KISBroker.get_quote` 반환에는 입증된 시장 as_of가 없으므로 수신 now로 채우지 않는다. WS 체결 시각 보존은 REST 신선도·잔고/체결 cutoff의 증명이 아니다.
 
 **시장 시세 시각은 계좌 체결 sequence나 잔고–체결 공통 cutoff의 증명이 아니다.** 최초 인계/취소 체인 미입증 판정은 그대로다. 외부 예제의 인증/실행 코드를 실행하지 않았고 실 API를 호출하지 않았다.
+
+### 09-18 위험정보 publisher 준비: REST 지수 시각의 한계
+
+동일 revision의 [현재지수 응답 필드 표시기](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/examples_llm/domestic_stock/inquire_index_price/chk_inquire_index_price.py)는 현재값·전일대비·연중고저일자를 열거하지만 현재 관측의 영업일자/체결시각 조합은 제시하지 않는다. [공식 요청 함수](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/examples_user/domestic_stock/domestic_stock_functions.py#L4712)는 FHPUP02100000과 output 반환을 확인해 줄 뿐이다. 로컬 `fetch_index_price`도 시장 원시각을 반환하지 않는다. 이 자료만으로 REST 응답 완료를 시장 `as_of`로 삼을 근거를 얻지 못했다는 판정이지 모든 실제 응답에 시각이 없다는 단정은 아니다.
+
+[시간별지수(초) 표시기](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/examples_llm/domestic_stock/inquire_index_tickprice/chk_inquire_index_tickprice.py)는 체결시간을 열거하지만 이 표만으로 일자 결합·최신행 순서·현재지수 조회와의 동일 관측을 증명하지 않는다. 조회를 추가하거나 endpoint를 자동 교체하지 않았다. 후속 위험 publisher는 요청 시작/응답 수신/분류/시장 시각을 분리하고, 시장 시각이 입증되지 않은 관측을 임의 now로 승격하지 않는다. 실제 호출점 전환 때 이 결측 상태의 자동 진입 차단과 기존 보수적 보호 유지도 인수해야 한다.
 
 ## 고정 파일 SHA-256
 

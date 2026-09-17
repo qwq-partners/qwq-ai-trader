@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: 시세 원관측·보호/진입 완료 증거 (Task10A2 부분, 운영 미설치)
+
+- KRX/NXT 46필드 전체 frame parser와 불변 원관측 DTO를 실제 feed에 연결했다. 원 시장 시각·수신 시각을 분리하고 기존 숫자/부호 호환을 유지했다. 독립 P2(Decimal 문맥 반올림·잘못된 수치 허용) 2건을 수정·한정 재리뷰 승인했다.
+- 같은 owner의 durable 가격 접수와 보호/entry quote 완료 증거를 연결했다. 독립 P1(재시작 후 평가가격/일일손실 소실, supplemental low로 복합청산 누락) 2건과 P2(가격 세대/무효화 관계 검증) 1건을 RED→수정·재리뷰 승인했다. 후속 체결/일자 평가 우선순위와 정상 pending 복원을 유지한다.
+- 기존 급락 임계값·회복5분·core/면제의 순수 전이 후보를 추출하고 실제 정책과 대조했다. 계산 두 파일은 별도 승인이나 실제 batch 중첩 writer RED1은 **아직 미해결**이며 다음 owner 연결 대상이다.
+- feed/순수 전이 Terra/high·owner 부모 구현, 독립 Astra/xhigh 리뷰를 분리했다. 전체 KST **3544 passed/2 known xfailed/4 warnings(148.18초)**, UTC **3544/2/4(155.18초)**, 격리0·문법/비밀패턴 통과. 새163시험과 독립 한정 검증/지문은 후속 보고서 참조.
+- 실제 callback/factory·5분/정오/2분 source writer·전체 C/F/G/R는 미완이다. REST 시장 시각/최초 인계/취소 체인 미입증, 모든 MODIFY 미지원과 `trading_ready=False`를 유지한다. main/운영/실API/주문/설정/Toss 변경 없음.
+
 ## 2026-09-18 — feat: 계좌 독점 lease·명령 종료 drain (Task10A1, 운영 미설치)
 
 - 같은 host·고정 private root의 KIS 계좌 독점을 nonblocking flock으로 제공한다. scope/DB 경로 별칭은 계좌 독점을 나누지 않으며 UID/권한/link/inode·fork/FD/GC 수명을 검사한다. 파일 삭제·PID/TTL takeover는 없다. 다중 host나 임의 root/직접 broker 우회를 막는 설치가 아니다.

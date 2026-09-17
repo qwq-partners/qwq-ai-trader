@@ -33,6 +33,39 @@ Do: 동일 owner로 시세→진입 가격/보호→전략 입력을 직렬 게�
 
 See: 실제 WS 문자열→parser→owner, UTC/KST·역행·결측·다중행·실패 순서·최종 source mismatch를 검증한다. WS 영업일자가 잔고/체결 atomic cutoff의 증거는 아니다.
 
+### 10A2a/b 작업 분리
+
+- A2a(Terra/high): 순수 frozen MarketObservation·46필드 전체 frame parser·실제 feed·선택 Event provenance만 소유한다. KRX/NXT 원 TR, 원 날짜/시간과 수신 시각을 보존하고 기존 naive 이벤트 heap/US를 유지한다. 실제 callback→owner 설치는 포함하지 않는다.
+- A2b(부모): 기존 보호 quote의 durable admission을 확장해 원관측을 보존하고 보호 적용과 entry quote를 **같은 commit**에 완료한다. 별도의 두 await publisher를 성공한 동일 자료라고 합성하지 않는다. 기존 손절 접촉 replay와 원본 provenance를 버리지 않는다. 접수 task·durable 미완·실패는 신규 SUBMIT prepare/claim/final의 장벽이며, 수량 노출을 늘리지 않는 CANCEL에 시장가 신선도 정책을 새로 부과하지 않는다.
+- 현재 의미 RED4개: 실제 runtime.quote의 admission 전/후에서 멈추면 owner healthy임에도 prepare가 승인되고 dispatch가 fake HTTP를 송신했다. 먼저 이 장벽을 닫고 실제 DTO→완료 증거·재시작·동일시각·실패/취소 시험을 추가한다. 테스트 허가와 외부 fake는 운영 허가가 아니다.
+- 기존 run_trader callback에는 scheduler의 theme/gap EOD 우선 청산도 있으므로 통째 삭제하거나 quote 뒤 그대로 재호출하지 않는다. owner 소단위·복구·실제 risk source·callback 순서로 별도 연결하며 아직 전체 A2 완료가 아니다.
+
+### 10A2b3 — 위험 전이 계산과 시도 순서의 분리
+
+Plan: 현재 `BatchAnalyzer.update_intraday_state`는 batch 값을 바꾸고 선제 청산을 await한 뒤 ExitManager를 바꾼다. 실제 메서드에서 A(crash)를 선제 처리 await에 멈추고 B(normal)를 완료한 다음 A를 재개하면 최종 `(batch, ExitManager)=(normal, crash)`다. 별도 ignored 원본 재현의 순차 대조는 GREEN, 겹친 호출은 의미 RED1이다. 현재 5분/정오 루프가 항상 병렬이라는 주장은 아니다.
+
+- 첫 독립 단위는 `risk_transition.py`의 순수 후보 계산/전용 시험이다. 현재 공통 classifier와 실제 persist=False ExitManager clone으로 기존 정상↔caution/crash/severe 전이를 대조한다. 이전 batch state·분류 시각·recovery_until·보호 DTO를 명시 입력으로 받고 후보와 선제 stale 처리 필요 여부만 반환한다. 실제 emit/파일/시간 조회/owner/송신은 하지 않는다. raw 시장 시각을 분류 시각으로 대신 만들지 않는다.
+- 유한 숫자의 기존 임계값, same-level no-op 보호 정책, normal 회복5분 cooldown, core/면제·레짐 복원은 변경하지 않는다. 결측/bool/비유한 입력은 기존 보수적 보호 상태를 유지하는 `missing` 후보이며 normal로 보정하지 않는다. 이 경계 검증은 시장 관측 성공의 증거가 아니다.
+- 후속 root owner 연결은 I/O 시작 전에 durable latest-begun sequence를 발급한다. 완료에서 최신 시도·일자·의존 source versions를 확인한 뒤에만 순수 후보를 적용하고 risk/protection/effect outbox를 같은 commit으로 저장한다. 이전 성공/실패가 최신 상태를 덮지 못하며 duplicate 완료는 효과를 다시 실행하지 않는다. standalone RiskSnapshotPublisher에 동일 sequence의 pending/success를 두 번 publish하지 않는다.
+- 실제 선제 stale 후보/emit을 owner effect로 옮기기 전에는 pure helper만으로 위 의미 RED가 해결됐다고 보고하지 않는다. 신규 helper import 부재 bootstrap, 기존 메서드 parity 최초 GREEN, 실제 writer 의미 RED를 구분한다.
+
+See: 순수 전이 matrix·입력 비변경·직접 실제 메서드 대조 후 독립 리뷰. 이후 owner/begin-complete/실제 5분·정오·2분 caller 검증은 별도이며 전체 A2/단계3 완료가 아니다.
+
+09-18 순수 전이 결과: author36·독립58을 각 KST/UTC로 실행해94개씩 통과, 두 파일 한정 승인이다. 실제 writer 중첩 원본은 여전히1 RED/순차1 GREEN으로 남는다. helper의 logger 호출, 같은 단계/결측 시 보호 DTO 전체 검증 생략, mutable 독립 반환 dict를 권한으로 보지 않는 한계를 후속 보고서에 기록했다.
+
+### 10A2b4 — 실제 위험 source/writer 연결의 다음 경계
+
+Plan: 5분 batch 전이, 정오 max-risk 캡/LLM, 2분 기술 추세는 같은 연산이 아니다. 동일 입력 계열별 latest-begun/terminal lane과 의존 source versions를 분리한다. 전역 단일 시도 번호로 서로를 취소하거나 정오 관측으로 batch 전이·회복 cooldown을 새로 실행하지 않는다.
+
+- begin을 해당 외부 I/O 전에 내구 기록하고, 첫 owner await 전부터 신규 자동진입의 unknown 장벽을 둔다. 응답 누락/실패/취소와 같은 시도의 본문 충돌은 이전 정상 승인으로 복귀하지 않는다. 상태/정책 후보 계산과 side effect 실행을 분리한다.
+- 5분 경로는 현행 전이·회복5분·normal→crash/severe 선제 stale 조건을 보존한다. 실제 core/면제·5영업일·미실현1% 미만 선택을 명시 snapshot으로 계산해 outbox에 넣고 이후 emit/주문 의도를 별도 멱등 전달한다. 후보 계산 중 emit await·파일 쓰기·live manager 변경은 하지 않는다.
+- 정오는 현재 당일 batch/이번 지수/adapter 중 보수적인 캡을 먼저 저장하고, 느린 LLM 응답은 그때 사용한 lane·일자·dependency version이 아직 일치할 때만 게시한다. cache 파일은 projection이며 owner보다 앞선 진실로 취급하지 않는다. 2분 trend와 전문가/VIX 관련 입력도 source 성공·결측과 버전을 따로 보존한다.
+- REST index receipt/분류 시각은 시장 as_of가 아니다. 근거가 없는 원시각은 unknown으로 유지하며 보호 파라미터 후보가 계산됐다는 사실을 자동매수 승인으로 승격하지 않는다. 추가 KIS 조회나 새 TTL/임계값을 도입하지 않는다.
+- owner DTO는 aware KST 기준이다. 기존 batch cooldown 소비자의 naive `datetime.now()` 비교를 남긴 채 aware 값을 직접 주입하지 않는다. 실제 호출점 시험은 UTC/KST 호스트에서 이를 검증한다.
+- shutdown/drain·일자 fence·저장/게시 실패·재시작 pending·중복 완료를 기존 owner 명령 수명과 결합한다. 미완 효과는 startup/실행 장벽을 우회하지 못한다. 기존 SIGNAL/ORDER gateway 전체 연결 전 outbox 저장만으로 정상 청산 전송 이행을 완료했다고 세지 않는다.
+
+Do/See 예정: 기존 실제 writer RED1을 보존하고 새 실제 caller 시험(시도 시작 뒤 오래된 정상, 역순 성공/실패, 느린 LLM 동안 새 급락/일자 전환, 선제 emit 대기 중 정상 회복, 중복/복원)을 먼저 실패시킨다. 실제 클래스·임시 SQLite·fake 조회/LLM/HTTP만 사용한다. 전체 source hash 동결 검증이 끝난 뒤 공유 runtime/caller 수정을 시작한다.
+
 ## 10A3 — 명시 설치 factory
 
 같은 runtime/commands/builder/authority/guard/stop/session/lease를 묶는다. 실제 run_trader 종료는 admission 닫기→producer 정지→receipt/result drain→broker/store→lease 순서로 변경한다. raw KIS 우회는 거부하지만 B/C의 정상 경로까지 연결하기 전 운영 enable하지 않는다. US tuple 계약을 무단 변경하지 않고 startupFalse 대조를 유지한다.
