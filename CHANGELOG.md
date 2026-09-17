@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: 실제 정책 재생·수량 계산 단계 분리 (Task10A2b6/B1, 운영 미설치)
+
+- 실제 5분 owner의 정책 전이를 원 source/완료 version·전후 보호 scope와 같은 commit에 기록하고, degraded 보호 복구에서 당시 순서로 재생한다. 복구 중 경제·예약·R·outbox는 재적용하지 않는다.
+- 독립 검토의 정책 이력 누락/종류변환 P2와 진짜 후속 fill의 건강 상태를 위조해 과거 손절을 건너뛰는 P1을 수정했다. 모든 event의 글로벌 정책/승인 전이 순서를 대조하며, 원 최초 fill commit에서 전체 replay digest를 경제 outbox와 연결한다. 누락 증거를 ACK/복구/재시작으로 소급 생성하지 않는다. 원본 재현을 보존하고 경계/추가 probe 포함 각 TZ175개 직접 확인한 여덟 파일 한정 재리뷰 승인이다.
+- 기존 수량 계산을 순수 단계로 추출하고 실제 wrapper에 연결했다. 독립 P2(조기 매수 거부 전에 수수료 설정을 읽는 회귀)는 pre-fee/fee-cap 단계 분리로 수정했다. 원본 함수 대조278·집중35·추가19를 각 TZ 직접 통과한 다섯 파일 한정 재리뷰 승인이다. 수치·설정·배율 정책은 유지한다.
+- P1 수정 후 전체 KST/UTC 각각 **3830 passed/2 known xfailed/4 warnings(190.32~190.35초)**·격리0. Python 문법/비밀패턴 검사 통과. 신규128시험과 ignored 독립 probe는 합산하지 않으며 근거·지문은 후속 보고서 참조. 수정 전3815통과를 수정 후 근거로 쓰지 않는다.
+- 정오/2분/LLM의 남은 writer는 별도 실제 RED3·기존 정책 특성화5로 다음 이행 경계를 고정했다. qualification/최종 sizing·effect/gateway·WS/수동/KOFR·sync/day·factory·전체 C/F/G/R는 미완. `trading_ready=False`, 모든 MODIFY 미지원, 공식 최초 인계/취소 체인·REST 시장 시각 미입증 유지. main/운영/실API/주문/설정/Toss 변경 없음.
+
 ## 2026-09-18 — feat: 지수 자료 검증·위험 source 수명·5분 owner 경로 (Task10A2 부분, 운영 미설치)
 
 - 실제 KIS 지수 adapter에 원 필드 결측/비정상 상태·receipt·응답 ID를 보존하고 반환 cache alias와 늦은 과거 응답의 cache 덮기를 방어했다. 기존 숫자/반올림·TTL·조회 횟수는 유지하며 receipt를 시장 시각으로 만들지 않는다. input 독립 P2 F1(비정상 status/극단 정수/시각 변환 예외)은 13 RED→수정·원본34+추가38+작성자42를 각 TZ 재확인해 한정 승인했다.

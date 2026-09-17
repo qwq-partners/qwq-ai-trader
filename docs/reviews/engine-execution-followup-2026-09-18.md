@@ -162,6 +162,40 @@ See: source/test patch(기준552fb25, 이번14파일 전체) SHA `997ef674b03fc8
 
 정오/2분/LLM·정책 재생·WS callback·실제 effect/gateway·수동/KOFR·sync/day·factory, 전체 C/F/G/R와 장기 성능은 아직 미완이다. REST 시장 시각/최초 인계/취소 체인 미입증, 모든 MODIFY 미지원과 `trading_ready=False`를 유지한다. main/운영/실API/주문/설정/Toss 변경 없음.
 
+### 후속 Task10A2b6 — 실제 5분 정책의 보호 재생 (한정 재리뷰 승인)
+
+Plan: 등록 실패로 degraded가 된 실제 포지션에 5분 정책 전이가 생겼을 때, 원 source의 시도/완료 version·digest와 원 보호 scope를 같은 owner commit에 기록한다. 복구는 당시 순서로 실제 보호 전이를 재생하며 경제·예약·초기 R·outbox를 재적용하지 않는다. 구현 Astra/high, actual hook·실제 scheduler/SQLite 인수는 부모, 독립 검토는 별도 Astra/xhigh로 분리했다.
+
+Do: typed `IntradayPolicyReplayInput`과 `capture_intraday_transition`을 실제 completion reducer에 연결했다. 테스트 전용 wrapper가 hook을 대신 설치하지 않는다. 원본 actual degraded→5분→repair 3건은 연결 후 KST/UTC 모두 통과했고, 실제 scheduler·warm/cold restore·SQL 실패·과거 quote 순서를 포함한 관련109개도 양 TZ에서 통과했다(UTC13.83초/KST14.07초). 정상 source의 시장 시각 결측과 거래 시작 차단은 그대로다.
+
+독립 검토에서 이력 완전성 P2가 추가 재현됐다. 원 accepted source/정책 root는 그대로인데 policy event를 삭제하거나 quote로 바꾸고 연결 hash를 다시 계산한 합성 손상 checkpoint가 repair를 허용했다. crash→normal 전이를 함께 누락하면 최종 글로벌 정책도 맞아 단순 최종 대조로는 과거 손절 누락을 찾을 수 없었다. 독립 세션은 최종 보고서 작성 전 실패로 종료돼 **완성된 승인 보고서로 세지 않는다**. 남은 원본14시험(probe SHA `5a0c05edfac947e58205de83dbddb026fc30b08b1e56d674b0c54c6a1bf3784e`)을 부모가 그대로 실행해 UTC8실패/6통과7.15초·KST8실패/6통과7.18초·격리0으로 확인했고, 별도 영구 회귀8개도 전부 의미 RED였다. 삭제·변환된 보호 이력에 관한 로컬 복구 정합성 시험이며 실제 운영 원장 손상 사고를 관측했다는 주장은 아니다.
+
+Do — 보완: 모든 event의 글로벌 정책 전후 일치와 최신 정상 상태 이후 원 accepted level-change의 정확한 순서·누락/중복을 검증한다. 추가 의미 RED2는 재생 fill 버전을 옮겨 검사 범위를 줄이는 경우와 policy를 정상 상태 quote로 바꾸는 경우였다. 이제 시작점은 실제 fill만 허용하고, fill 적용 버전을 독립 경제 outbox와 대조한다. 이전 정상 lifecycle의 전이·same-level/duplicate/missing/older는 잘못 추가 요구하지 않으며, 실제 dispatcher ACK 후에도 원 payload/버전을 유지해 정상 복구한다. 전체 checkpoint의 모든 독립 root를 함께 바꾼 경우까지 인증한다는 주장은 아니다.
+
+중간 See: 작성자가 관련117개(41+11+8+18+기존39)를 UTC17.50초/KST19.22초, 불변 독립 원본14개를 UTC3.88초/KST3.98초, 각각 별도 process로 통과·격리0을 확인했다. 작성자 보완 보고서 SHA `4e5e871fc0fc479ca899301f9e3d5c8b8dce417f542b0e5f40dc7d82e5c86fb3`. 이 중간 결과 후에도 다음 독립 P1이 발견됐으므로 당시 통과를 최종 승인으로 쓰지 않는다.
+
+후속 독립 **P1 F1**: 실제 후속 fill의 ID/버전이 맞아도 그 `before.protection`만 정상으로 바꾸면 latest anchor가 과거 미기록 손절을 건너뛰었다. 실제40주 degraded→crash→9700quote→normal→누적100주 degraded 뒤 이력만 바꾼 warm/cold 두 경우가 RED였다. 기존135+원본14 GREEN은 이 결함을 해결하지 않는다. 원본 보고서 SHA `952c6adfdc28a65f53381317df30030726723c133aeceb56c6f8bf954b82c598`, 새 불변 probe SHA `159dc205382391762acf0d714d29b94adb69ed39b722c9033bb5aba412390354`를 보존했다.
+
+부모 보완: `capture_fill`의 원 최초 commit에서 새 경제 outbox에 정확한 replay event digest를 결합하고, 복구 시작점을 고르기 전에 모든 fill 이력을 독립 outbox와 대조한다. 연결은 journal 원 payload에 포함된다. repair/restore/중복 체결/ACK 때 새로 만들지 않으며, 링크가 없는 과거 checkpoint를 소급 보정하지 않고 BLOCKED로 남긴다. 실제 repair 후 새 degradation은 정상 대조로 유지해 전체 이력의 무조건 연속성을 강요하지 않는다. 새 영구5시험은 연결 필드 부재 bootstrap1·실제 위조2·미입증 링크 요구1 RED, 정상 재복구1 최초 GREEN이었다. 수정 후 부모 관련122개 UTC18.41초/KST19.12초·불변 원본14개 UTC4.27초·F1원본4개 UTC2.78초 통과·격리0이다.
+
+추가 경계10시험은 별도 Astra/high가 ACK/중복/콜드 복원·누락/비정규 링크·SQL commit 전후 실패를 고정했다. 수정 소스가 먼저 반영돼 최초 제품 RED는 관측하지 못했으며 fixture8·예외 wrapper2 작성 오류를 제품 RED로 세지 않는다. 자체10+부모5를 UTC3.58초/KST2.67초 통과·격리0, 보고서 SHA `dff5b4cd2448b2b74a5420ccc25f6f35579be2b5a7dad4779a945b8acf7e01af`.
+
+최종 See: 별도 Astra/xhigh가 named140·경계10·불변 원본14·P1 원본4·추가 whole-event7을 **KST/UTC 각각175passed, 격리0**으로 직접 검증해 여덟 파일/실제5분 degraded 보호 재생 범위만 승인했다. 후속 보고서 SHA `8ec487a0299ed6984131f021d9fcb0f2e673e14b7ed87320484ae7df07720cf5`, 별도 추가 probe SHA `fac6ca4b3b37781e2699cb224cf40d61737eee5e3096575c6b429e4c09c49ef9`. 원본 보고서/실패 probe는 덮어쓰지 않았다. 보호와 경제의 독립 root 모두를 조작하는 경우의 인증·과거 증거 소급 생성·전체 writer/운영 승인은 범위 밖이다.
+
+### 후속 Task10B1 — 실제 수량 계산의 순수 단계 분리 (한정 재리뷰 승인)
+
+Plan: 기존 함수의 숫자·조기 반환·외부 의존 호출 순서를 보존한 상태에서 현재 owned 자원으로 재계산할 산술부만 분리한다. Terra/high는 특성화17·kernel9, 부모는 실제 wrapper 연결, 별도 Astra/xhigh는 기준 `7cafd74` 함수 AST와 새 함수를 직접 비교했다. 초기 특성화 GREEN과 새 API 부재 bootstrap RED를 제품 결함으로 세지 않는다.
+
+Do: nominal/risk·core/hybrid pool·기존 배율/예외 순서·전략 잔여/최소금액/3주/1.3 affordability/수수료 포함 위험 상한을 pure phases로 옮겼다. metadata/실제 resolver·calendar/volatility/conviction 읽기는 wrapper에 남겼다. nominal이 쓰지 않는 risk 설정을 새로 요구하던 연결 회귀1건을 수정했다. 독립 비교275개와 정상139주·R/수수료 순서1개는 GREEN이었지만, 최소금액/최소수량 거부 전에 수수료 설정을 읽는 P2 F1 두 사례가 RED였다. 실제 getter는 현재 메모리 조회이며, 실패를 주입해 드러낸 조기 반환 계약 회귀이지 운영 수수료 장애를 관측한 것은 아니다.
+
+F1은 `pre_fee_quantity`와 명시 수수료 입력의 `apply_fee_risk_cap`으로 분리해 수정했다. 거부될 수량은 수수료를 읽지 않으며 최소금액 로그의 순서도 유지한다. 원본 보고서 SHA `420c5085a882cae52c619a69373f3c3b7f67d0b61a3c7f36c88e712e66369e2a`, 원본 probe SHA `3a345d931278e1a62442f18e28c44a7c8d3effa41aedb33cd13aabaa161b5a53`는 보존했다. 부모가 원본278개를 UTC1.18초/KST1.23초, 영구 집중35개를 UTC0.59초/KST0.64초 각각 통과·격리0으로 재확인했다. probe와 tests를 한 process로 모은 첫 명령은 conftest 이중 등록으로 수집 오류1건이었으며, guard를 끄지 않고 별도 process로 바로잡았다.
+
+See: 별도 독립 재리뷰는 집중35·불변 원본278·추가19를 KST/UTC 각각332개 통과·격리0으로 직접 확인해 **다섯 파일 한정 승인**했다. 보고서 SHA `224840646fd5e745a03322b792b85aefdb0311763e8df5e8128fcf843d46884e`, 추가 probe SHA `08783314a6bf5a8aa45a7a287e9adb899a56c56d343249d7322561a00049cf7c`. 최종 전체 검증은 별도 기록한다. 계산 결과는 주문 허가가 아니다. qualification/source version·최종 현재 자원 예약·실제 SIGNAL→ORDER gateway(B2/B3)는 아직 이행하지 않았다.
+
+**P1 F1 수정 전 후보**의 동결 source/test11파일 patch(기준 `7cafd74`) SHA `e0286133a163368759cb4070cb8baa486eb691a14a951b2e4159b25969966e89`. 부모 전체 KST **3815passed/2 known xfailed/4 warnings,178.47초**, UTC **3815/2/4,179.67초**, 각각 격리0이다. 당시 신규113개는 재생41·실제 연결11·무결성8·완전성18·수량35이며 ignored 독립 probe를 더하지 않는다. 당시 문법/비밀패턴 검사도 통과했지만 이 결과를 P1 수정본의 검증으로 사용하지 않는다. 경고는 기존pykrx1+의도적 fork3이다. 전체 통과만으로 두 범위 승인이나 단계3/5 완료를 선언하지 않는다.
+
+최종 P1 수정 후보의 source/test13파일 patch(기준 `7cafd74`) SHA `3e7014010a30c25d7efcd016ba83ad729b016f97eb7461f43e6fb8102206c58c`. 부모가 수정/경계시험 동결 뒤 전체 **KST/UTC 각각3830passed/2 known xfailed/4 warnings(190.32~190.35초)**, 격리0을 새로 확인했다. 신규128개는 앞선113+anchor5+경계10이며 ignored 독립 probe를 합산하지 않는다. 새 파일까지 stage한 뒤 Python 문법/비밀패턴 검사와 `git diff --check`도 통과했다. 두 범위의 한정 승인이며 단계3 전체/단계5 broad/운영 승인은 아니다.
+
 ## 단계4 — 공식 계약 증거
 
 Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와 잔고–체결 cutoff를 확인한다. 최신 TR로 자동 치환하지 않는다.

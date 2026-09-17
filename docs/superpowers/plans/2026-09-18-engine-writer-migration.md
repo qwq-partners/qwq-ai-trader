@@ -70,6 +70,20 @@ Do/See 예정: 기존 실제 writer RED1을 보존하고 새 실제 caller 시�
 
 KIS 지수 경계: 기존 numeric 반환/반올림·10초 캐시·GET/limiter 횟수는 유지하고 JSON-safe `_observation` 자료를 추가한다. 각 원 숫자 필드의 missing/invalid/valid 상태와 기존 정규화 값, 원 응답 ID·수신 aware 시각을 분리한다. 시장 `as_of`는 미입증 None이며 raw 누락/bool/nonfinite를 정상0으로 승인하지 않는다. cache 재조회는 원 ID/수신시각을 유지하고 caller의 반환 dict 변경이 보존된 원관측을 바꾸지 않게 한다. 이 metadata만으로 기존 scheduler가 자동으로 고쳐진다고 세지 않으며 실제 owned caller가 소비하는 시험을 뒤에 추가한다.
 
+### 10A2c 선행 인수 — 정오/추세/레짐의 남은 writer
+
+7cafd74 이후 실제 호출점 재현에서 남은 경계를 확인했다. `_apply_regime_to_exit_manager`가 실제 owned 포지션의 live ExitManager를 바꾸지만 SQLite 보호 DTO는 바꾸지 않는다. `_run_llm_regime_classifier`는 역순 완료 시 새 분류 파일을 옛 결과로 덮으며, 일자를 넘긴 응답도 과거 날짜 파일로 되돌린다. 보존 probe SHA `947c31e474f11edbcf1935a017154e0cead17b6e3d5c4fd1d0f6964789467af0`, UTC3 RED/0.88초·KST3 RED/0.75초·격리0. 앞선 5분 한정 승인이 이 경로를 포함하지 않는 이유이며, installed 불일치는 운영 미설치 경로에서 재현한 것이다. LLM 겹침은 지연 완료를 강제한 인수 조건이지 현재 운영에서 항상 동시 실행된다는 주장이 아니다.
+
+Plan/Do: 정오 지수 cap은 실제 5분 보호 전이와 구분하고, 기술 추세·전문가·VIX·LLM의 의존 원본과 version을 명시한다. `MarketRegimeAdapter.update_regime`의 VIX 파일/비동기 refresh 및 `llm_morning_diagnosis`의 조회·상태 수정을 동기 owner reducer 안에 통째로 넣지 않는다. 기존 09:00~10:00 neutral, bull/bear 확인30분·VIX complacency10분, 전문가600초 등 숫자/순서를 보존한 명시 입력 계산을 먼저 대조한다. 실제 2분 루프의 KOSPI/KOSDAQ 조회 수를 늘리지 않고, 불완전 숫자·원 시장시각 결측을 0/신선한 승인으로 바꾸지 않는다. 지수 receipt와 분류/적용 시각은 별개로 보존한다.
+
+Plan/Do: source begin → 외부 조회 → 최신/일자/의존 검사 → 실제 보호/레짐 DTO와 필요한 replay event 동일 commit → mirror/cache projection 순서다. 이후 LLM 응답이 최신 지수·기술 추세·정책 근거와 달라졌으면 게시하지 않는다. 기존 cache 파일은 owner의 진실이 아니라 projection이며, owned sync가 파일을 재승인 근거로 읽지 않게 한다. 최초 trend/LLM/config snapshot도 미증명 normal 기본값을 자동 인계하지 않는다. 두 종류의 RiskManager(신호 수량 관리자와 risk/manager.py sidecar)를 혼동하지 않고 각 consumer까지 연결한다. raw setter 차단만으로 정상 writer 이행을 완료로 세지 않는다.
+
+See: 위 원본 RED 보존, 순차 정상 경로·지연/역순·다른 source lane·최신 실패·일자 fence·DB/게시 실패·cold restore·degraded 복구의 정책 순서와 실제 scheduler caller를 모두 확인한다. effect dispatcher/gateway·WS callback·factory와 전체 C/F/G/R는 그 뒤 별도다.
+
+선행 특성화(Terra/high): 실제 adapter/sidecar/scheduler/ExitManager의 다섯 시나리오를 KST0.49초·UTC0.48초, 각5passed·격리0으로 확인했다. 최초 GREEN인 기존 동작 대조이며 독립 승인이나 결함 수정이 아니다. 한쪽 지수 누락의 기존0 보정과 늦은 LLM 파일 덮기도 **현재 잘못된 동작을 기록한 것**이지 목표 정책으로 승인한 것이 아니다. probe SHA `f85aba1d98902a558e1ac073b7b24c452be97941f055c845d0617724d8d8f866`, 분해안 SHA `0dab1efc321079da63789ae815ecd09eee8d2d3f55df159ee0691c3e5b016c91`.
+
+다음 계산 분리: sidecar 추세·중기 pending/VIX·전문가 pending을 각 명시 상태/입력의 순수 함수로 나누고 legacy caller도 같은 함수를 소비해 산식을 이중 정의하지 않는다. 실제 VIX loader-before-index 순서와 전문가가 `_last_update`를 바꾸지 않는 계약을 유지한다. 외부 source 인계층은 별도로 aware KST/valid·missing/원시각을 검증한다. expert/VIX는 독립 도착하므로 각각 versioned source가 필요하며, 같은 intraday lane으로 섞거나 파일 projection을 재승인 근거로 쓰지 않는다. 계산 helper의 통과는 실제 owner/소비자 이행 완료가 아니다.
+
 ## 10A3 — 명시 설치 factory
 
 선행 보호 재생 경계: 5분 writer가 실제 보호 DTO를 바꾸면 degraded 포지션의 기존 fill/quote 재생도 그 정책 입력을 알아야 한다. source ID·완료 version/digest·전후 정책·실제 보호 scope를 같은 commit에 기록하고, 실제 persist=False 전이로 재생한다. 누락/다른 source/잘못된 정책·과거 청산 결정은 계속 BLOCKED이며 회복 과정에서 경제/예약/R/outbox를 다시 적용하지 않는다. 현재 정책을 과거 체결 전체에 소급하는 복구는 금지다. 실제 큐 등록 실패→5분 정책→quote/추가 fill→repair/새 runtime 복원을 RED부터 확인한다. 5분 조각의 한정 승인은 이 재생 인수까지 완료했다는 뜻이 아니다.

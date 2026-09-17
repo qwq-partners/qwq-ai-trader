@@ -35,7 +35,7 @@
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
-- [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — broker 조회·경제/보호/일자/R·요청/예약·lease/종료·원관측/source 수명·명시5분 경로, KST/UTC3702시험·구간별 독립 한정 승인. 정책 재생/effect 전달·나머지 writer/callback/설치·전체 인수·공식 증거는 잔여
+- [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — broker 조회·경제/보호/일자/R·요청/예약·lease/종료·명시5분 정책 재생·수량 산술 분리, KST/UTC3830시험·구간별 독립 한정 승인. qualification/최종 sizing·effect 전달·나머지 writer/callback/설치·전체 인수·공식 증거는 잔여
 - [KR writer 이행 세분 계획](superpowers/plans/2026-09-18-engine-writer-migration.md) — 계좌 lease/종료 drain→원시각·정책 publisher→기존 sizing/qualification·실제 큐→SAFE/USER/IPC·fill·sync/day; 운영 설치 미완
 - [KR 실행 안전성 구현 중간 리뷰](reviews/engine-execution-safety-2026-09-17.md) — 기반·Task4b 실제 경제/보호/큐 검증과 운영 writer 전체 이행 미완을 구분; 공식 KIS 계약/잔여 인수
 - [toss-pr-integration-2026-09-17.md](reviews/toss-pr-integration-2026-09-17.md) — #70 병합·중복 #68 정합화, 배포/활성화 승인과 실제 실행 상태 분리

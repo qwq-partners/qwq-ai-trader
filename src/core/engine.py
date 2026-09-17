@@ -26,7 +26,7 @@ from loguru import logger
 
 from ..execution.entry_plan import check_entry_plan
 from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
-from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
+from ..utils import position_sizing_kernel as _sizing_kernel
 from ..utils.stop_policy import StopDecision
 from src.data.storage.signal_event_storage import SignalEventStorage as _SigLog
 
@@ -2657,9 +2657,6 @@ class RiskManager:
             "weak": 0.5
         }.get(signal.strength.value, 1.0)
 
-        position_pct = min(base_pct * multiplier, max_pct)
-        pct_value = pool_equity * Decimal(str(position_pct))
-
         # 가용 현금 (수수료 여유분, 예약 현금 차감)
         # 2026-08-05 P2: 비코어는 코어 예약분도 차감 — G3 게이트(can_open_position의
         # reserved_cash = _reserved_cash + _get_core_reserve())와 동일 기준으로 정합.
@@ -2672,8 +2669,11 @@ class RiskManager:
             return 0
 
         # 전략별 비율 기반 포지션 금액 (전략별 상한 존중)
-        max_value = equity * Decimal(str(self.config.max_position_pct / 100))
-        position_value = min(pct_value, max_value, available)
+        _phase = _sizing_kernel.nominal_initial(_sizing_kernel.NominalSizingInput(
+            equity=equity, pool_equity=pool_equity, base_pct=base_pct,
+            strength_multiplier=multiplier, max_pct=max_pct,
+            global_max_position_pct=self.config.max_position_pct, available=available,
+        ))
 
         # 위험 기반 사이징 (2026-09-13 리뷰 권고 ③ — 백테스트 A/B에서 두 윈도우 모두 게이트를 통과한
         # 유일한 축, docs/research/exit-policy-ab-2026-09.md). 건당 자본 위험 = risk_per_trade_pct.
@@ -2707,9 +2707,11 @@ class RiskManager:
                 logger.error(f"[리스크] {signal.symbol} 진입 손절 해석 실패 → 신규 매수 거부: {_stop_err}")
                 return 0
             _risk_stop = _stop_decision.stop_pct
-            _risk_value = equity * Decimal(str(self.config.risk_per_trade_pct)) / _risk_stop
-            max_value = min(max_value, equity * Decimal(str(self.config.risk_max_position_pct / 100)))
-            position_value = min(_risk_value, max_value, available)
+            _phase = _sizing_kernel.override_risk_initial(_phase, _sizing_kernel.RiskSizingInput(
+                equity=equity, available=available, global_max_position_pct=self.config.max_position_pct,
+                risk_per_trade_pct=self.config.risk_per_trade_pct,
+                risk_max_position_pct=self.config.risk_max_position_pct, stop_pct=_risk_stop,
+            ))
             if signal.signal is not None:
                 # canary 계측 태그 — signal_events/trades 메타로 risk 모드 체결을 골라내 원장 R·초과수익 판정
                 # (T3 가 entry_risk 스냅샷으로 확장 예정 — 키 충돌 없음)
@@ -2721,8 +2723,8 @@ class RiskManager:
             logger.info(
                 f"[리스크] {signal.symbol} 위험 사이징: 손절 {float(_risk_stop):.2f}%({_stop_decision.source}"
                 f"{', 급락cap 활성(분모 미적용)' if _stop_decision.crash_capped else ''}) · 위험 "
-                f"{self.config.risk_per_trade_pct}% → {position_value:,.0f}원 "
-                f"({float(position_value / equity * 100):.1f}%, ATR={_risk_atr})"
+                f"{self.config.risk_per_trade_pct}% → {_phase.position_value:,.0f}원 "
+                f"({float(_phase.position_value / equity * 100):.1f}%, ATR={_risk_atr})"
             )
 
         # 전략 예산 한도 — 잔여 예산으로 포지션 제한
@@ -2738,46 +2740,33 @@ class RiskManager:
                 _remaining = _budget_cap - _current
                 if _remaining <= 0:
                     return 0
-                if position_value > _remaining:
-                    position_value = _remaining
                 _strategy_remaining = _remaining
+        _phase = _sizing_kernel.apply_strategy_remaining(_phase, _strategy_remaining)
 
         # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
         effective_pnl = self.engine.portfolio.effective_daily_pnl
-        if equity > 0:
-            daily_pnl_pct = float(effective_pnl / equity * 100)
-            half_limit = -self.config.daily_max_loss_pct / 2
-            if daily_pnl_pct <= half_limit:
-                position_value *= Decimal("0.5")
+        _phase = _sizing_kernel.apply_daily_loss(_phase, effective_daily_pnl=effective_pnl,
+            equity=equity, daily_max_loss_pct=self.config.daily_max_loss_pct)
 
         # 배율 적용 전 값 보존 (2026-08-05 P2: min_position_value 바닥 클램프 판단용)
-        _pre_mult_value = position_value
+        _phase = _sizing_kernel.capture_pre_multiplier(_phase)
 
         # 전략별 포지션 배율
         position_multiplier = 1.0
         if signal.signal and signal.signal.metadata:
             position_multiplier = signal.signal.metadata.get("position_multiplier", 1.0)
-        if (_stop_decision is not None and _risk_atr is not None and position_multiplier != 1.0
-                and abs(position_multiplier - atr_position_multiplier(_risk_atr)) < 1e-6):
+        if _sizing_kernel.should_skip_atr_multiplier(
+                _stop_decision is not None, position_multiplier, _risk_atr):
             # risk 모드: ATR 배율은 백테스트 risk 공식(equity×위험%/손절)에 없으므로 미적용 (연구 조건 동일)
             # ponytail: 배율에 LLM 감액 등이 곱해져 ATR 배율과 다르면 그대로 적용(보수적 이중 축소 허용)
             position_multiplier = 1.0
-        if position_multiplier != 1.0:
-            # 배율 적용 후 개별 포지션 상한 재클램프 (2026-08-04 P2 — 미클램프 시
-            # max_position_pct 초과 값이 G3에서 사이즈 축소가 아닌 전체 거부로 이어져
-            # 부스트 의도가 신호 유실로 변질됐다. 시즈널리티 경로와 동일 패턴)
-            position_value = min(
-                position_value * Decimal(str(position_multiplier)), max_value
-            )
+        _phase = _sizing_kernel.apply_overlay(_phase, kind="position", multiplier=position_multiplier)
 
         # 캘린더 시즈널리티 부스트 (월말월초) — 개별 포지션 상한(max_value)은 재적용
         try:
             from ..utils.calendar_seasonality import calendar_multiplier
             _cal_mult, _ = calendar_multiplier(date.today(), "kr")
-            if _cal_mult != 1.0:
-                position_value = min(
-                    position_value * Decimal(str(_cal_mult)), max_value
-                )
+            _phase = _sizing_kernel.apply_overlay(_phase, kind="calendar", multiplier=_cal_mult)
         except Exception as _cal_err:
             logger.debug(f"[리스크] 시즈널리티 계산 실패 (무시): {_cal_err}")
 
@@ -2789,8 +2778,7 @@ class RiskManager:
             _vt_mult, _ = vol_targeting_multiplier(
                 signal.strategy.value if signal.strategy else ""
             )
-            if _vt_mult < 1.0:
-                position_value = position_value * Decimal(str(_vt_mult))
+            _phase = _sizing_kernel.apply_overlay(_phase, kind="volatility", multiplier=_vt_mult)
         except Exception as _vt_err:
             logger.debug(f"[리스크] 변동성 타게팅 계산 실패 (무시): {_vt_err}")
 
@@ -2799,75 +2787,50 @@ class RiskManager:
         try:
             from ..utils.team_conviction import team_conviction_multiplier
             _tc_mult, _ = team_conviction_multiplier(signal.symbol)
-            if _tc_mult > 1.0:
-                position_value = min(
-                    position_value * Decimal(str(_tc_mult)), max_value
-                )
+            _phase = _sizing_kernel.apply_overlay(_phase, kind="conviction", multiplier=_tc_mult)
         except Exception as _tc_err:
             logger.debug(f"[리스크] 팀 conviction 계산 실패 (무시): {_tc_err}")
 
-        # 부스트(전략 배율/시즈널리티/conviction) 후 전략 예산 잔여 재클램프
-        # (2026-08-20 Codex P1 — max_value만 재적용하면 부스트가 전략 캡을 초과)
-        if _strategy_remaining is not None and position_value > _strategy_remaining:
-            position_value = _strategy_remaining
-
-        # 최소 포지션 금액 체크
+        # 전략 재클램프→최소금액→1.3 증거금→3주→수수료 포함 위험 상한의 기존 순서.
+        # 외부 provider는 위의 개별 try 경계에서 읽고, 수수료율도 명시 값으로 넘긴다.
+        # 이 계산 결과 자체는 owner 예약·최종 송신 승인이 아니다.
         min_val = Decimal(str(self.config.min_position_value))
-        if position_value < min_val:
-            # 2026-08-05 P2: LLM soft-reject 50% 축소 등 배율 적용으로만 미달한 경우
-            # min_val로 바닥 클램프 — "사이즈 축소" 의도가 전면 차단으로 변질되는 것 방지.
-            # 단, 가용현금/개별 상한(max_value) 이내일 때만.
-            if (_pre_mult_value >= min_val
-                    and min_val <= available and min_val <= max_value):
-                logger.info(
-                    f"[리스크] {signal.symbol} 배율 축소로 최소 금액 미달 "
-                    f"({position_value:,.0f} < {min_val:,.0f}) → 최소 금액으로 클램프"
-                )
-                position_value = min_val
-            else:
-                return 0
-
-        # 수량 계산 (시장가 주문 시 상한가 +30% 증거금 고려)
-        quantity = int(position_value / price)
-        max_qty_for_market = int(available / (price * Decimal("1.3")))
-        if max_qty_for_market < quantity:
-            quantity = max_qty_for_market
-
-        # 최소 수량 체크: 분할 익절에 최소 3주 권장
-        MIN_QTY_FOR_PARTIAL_EXIT = 3
-        if quantity < MIN_QTY_FOR_PARTIAL_EXIT:
-            cost_for_min = price * MIN_QTY_FOR_PARTIAL_EXIT * Decimal("1.001")
-            # 전략 잔여 예산도 존중 — 보정이 캡 재클램프를 우회하던 문제 (2026-09-03 P1)
-            if (cost_for_min <= available and cost_for_min <= max_value
-                    and (_strategy_remaining is None or cost_for_min <= _strategy_remaining)):
-                quantity = MIN_QTY_FOR_PARTIAL_EXIT
-            elif quantity >= 1:
-                pass
-            else:
-                return 0
-
-        # 위험 모드 최종 불변조건 (2026-09-14 T2): 모든 오버레이(강도·전략 배율·캘린더·변동성·팀)·
-        # 최소금액·최소 3주 보정이 끝난 뒤 planned_risk(q) = (price×q + 매수수수료) × net SL% ≤ equity × 위험%.
-        # 초과 시 줄이기만 한다 — 증액 오버레이가 0.7% 를 못 넘고, 축소 오버레이는 되돌리지 않는다.
-        # 상한 내 1~2주는 허용, 축소 결과가 최소 금액 미달이면 명시 거부. 시장가 증거금 1.3배는 위 현금 제약.
-        if _stop_decision is not None and quantity > 0:
-            _q_cap = risk_quantity_cap(
-                equity, price, _stop_decision.stop_pct,
-                risk_per_trade_pct=self.config.risk_per_trade_pct,
+        _sized = _sizing_kernel.pre_fee_quantity(
+            _phase, price=price, min_position_value=min_val,
+        )
+        if _sized.minimum_floor_applied:
+            _floor_from = (_phase.position_value if _strategy_remaining is None
+                           else min(_phase.position_value, _strategy_remaining))
+            logger.info(
+                f"[리스크] {signal.symbol} 배율 축소로 최소 금액 미달 "
+                f"({_floor_from:,.0f} < {min_val:,.0f}) → 최소 금액으로 클램프"
             )
-            if quantity > _q_cap:
+        if _sized.reason is not None:
+            return 0
+        if _stop_decision is not None and _sized.quantity > 0:
+            from ..utils.fee_calculator import get_fee_calculator
+            _sized = _sizing_kernel.apply_fee_risk_cap(_sized, _sizing_kernel.FinalizeSizingInput(
+                price=price, min_position_value=min_val,
+                buy_commission_rate=get_fee_calculator("KR").config.buy_commission_rate,
+                stop_pct=_stop_decision.stop_pct, equity=equity,
+                risk_per_trade_pct=self.config.risk_per_trade_pct,
+            ))
+        quantity = _sized.quantity
+        if (_sized.risk_cap_quantity is not None
+                and _sized.quantity_before_risk_cap > _sized.risk_cap_quantity):
+            logger.info(
+                f"[리스크] {signal.symbol} 위험 상한 재클램프: "
+                f"{_sized.quantity_before_risk_cap}→{_sized.risk_cap_quantity}주 "
+                f"(예산 {equity * Decimal(str(self.config.risk_per_trade_pct)) / 100:,.0f}원, "
+                f"net SL {float(_stop_decision.stop_pct):.2f}%, 매수수수료 포함)"
+            )
+        if _sized.reason is not None:
+            if _sized.reason == "risk_cap_min_position_value":
                 logger.info(
-                    f"[리스크] {signal.symbol} 위험 상한 재클램프: {quantity}→{_q_cap}주 "
-                    f"(예산 {equity * Decimal(str(self.config.risk_per_trade_pct)) / 100:,.0f}원, "
-                    f"net SL {float(_stop_decision.stop_pct):.2f}%, 매수수수료 포함)"
+                    f"[리스크] {signal.symbol} 위험 상한 축소 후 최소 금액 미달 "
+                    f"({_sized.risk_cap_quantity * price:,.0f} < {min_val:,.0f}) → 매수 거부"
                 )
-                quantity = _q_cap
-                if quantity * price < min_val:
-                    logger.info(
-                        f"[리스크] {signal.symbol} 위험 상한 축소 후 최소 금액 미달 "
-                        f"({quantity * price:,.0f} < {min_val:,.0f}) → 매수 거부"
-                    )
-                    return 0
+            return 0
 
         # 진입 위험 스냅샷 (2026-09-14 T3/F4) — 최종 수량이 확정된 뒤 event.metadata 와
         # event.signal.metadata **양쪽 별개 복사본**에 넣는다. 주문 캐시(_pending_signal_cache)는

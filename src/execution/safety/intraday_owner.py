@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 
 from .application import ApplicationBlocked
 from .economics import decode_portfolio
-from .protection_recovery import digest
+from .protection_recovery import capture_intraday_transition, digest
 from .risk_sources import RiskSourceCoordinator
 from .risk_transition import IntradayPolicyState, transition_intraday, _COOLDOWN
 from .stale_exit_candidate import select_preemptive_stale
@@ -146,6 +147,7 @@ class IntradayRiskOwner:
     def _reduce(self, state, ticket, envelope, version):
         if ticket.kind != 'intraday_5m':
             raise ValueError('unsupported_intraday_policy_writer')
+        checkpoint_before = deepcopy(state)
         root = state['intraday_policy']
         before = IntradayPolicyState.from_dict(root['current'])
         payload = envelope['payload']
@@ -199,6 +201,8 @@ class IntradayRiskOwner:
         root['transitions'][ticket.operation_id] = {
             'before': before.to_dict(), 'after': after.to_dict(), 'version': version,
             'outcome_digest': digest(envelope), 'disposition': disposition, 'effects': effects}
+        capture_intraday_transition(checkpoint_before, state, ticket=ticket, envelope=envelope,
+                                    version=version, now=self.runtime._now())
         return state
 
     async def refresh(self, provider):
