@@ -1,6 +1,6 @@
 # 외부 API 연동
 
-> 최종 갱신: 2026-09-16 (토스 승인 기반 관측 후속 구현·오프라인 검증, 실자료·운영 미활성화)
+> 최종 갱신: 2026-09-17 (토스 별도 제한 관측 ON·초기 발급 성공, 거래 소비자 미연결)
 
 ## 브로커 — KIS (한국투자증권)
 
@@ -49,12 +49,12 @@
 - 시장구분: `CM`=야간(18:00~05:00, 기준가=주간 종가 → prdy_ctrt=밤사이 변동률), `F`=주간
 - 아침 스크리닝 선행지표로 사용 (US 지수보다 우선, kr_scheduler)
 
-## 데이터 — 토스증권 Open API (오프라인 기반·승인 관측 후속, **운영 미활성화**)
+## 데이터 — 토스증권 Open API (별도 제한 관측 ON, **거래 소비자 미연결**)
 
-> [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [오프라인 기반 검증 원장](../reviews/toss-phase1-offline-2026-09-16.md) · [관측 실행 경계](../operations/toss-shadow-runtime.md). #67 main 병합 완료; PR #70에서 기본 OFF 승인 관측 후속을 Plan→Do→See로 구현/검증한다. 인증 실자료/운영 활성화 미승인.
+> [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [관측 실행 경계](../operations/toss-shadow-runtime.md) · [실제 활성화 원장](../reviews/toss-observer-service-2026-09-17.md). 사용자 승인으로09/17 별도 서비스 ON·초기 발급 성공,09/18·21·22 관측/09/22 18시만료. 기존 거래 봇과 KIS 소비자는 그대로이며 장외 시점의 시세 표본은0이다.
 
 - 구현 위치: `src/data/providers/toss/`의 보안 token store/manager, 조회 client/transport/limiter, 시장 자료 정규화, 합성 shadow 비교. `scripts/replay_toss_shadow.py`는 명시한 합성 JSON 파일만 읽어 stdout 보고서를 만든다.
-- **관측 전용 후속**: 승인된 lazy OAuth/GET·bounded body·별도 thread·지속 원장·가격/캘린더 감독 배선의 오프라인 구현/독립 소스 리뷰를 완료했다. source `984dbdf`, UTC/KST 각각1684 passed/2 known xfailed; [검증 정본](../reviews/toss-runtime-2026-09-16.md). 기본 OFF이며 flag만으로 활성화하지 않는다. 운영자 소유 등록부·계획/릴리스 바인딩·시작 시점 증명은 별도 배치 사전조건이다. 실제 키 로딩/토큰/자료 수집·배포는 수행하지 않았으며 기존 KIS 소비자·설정/의존성은 무변경이다.
+- **관측 전용 후속**: lazy OAuth/GET·bounded body·별도 worker·지속 원장에 root 보호launcher/고정release·전용UID 서비스를 연결했다. release877768e, UTC/KST 각각1809 passed/기존xfail2. flag만으로 활성화하지 않으며 실제 registry/plan/grant 검증과 단일 시작 영수증을 사용한다. Toss 전용 자격만 별도 환경에 전달했고 기존 KIS 소비자·설정/venv는 무변경이다. 시세 GET/일반 갱신/3영업일 인수는 아직 별도 검증 대상이다.
 - 공개 명세 `1.2.17`/2026-09-16 원본 SHA는 `tests/fixtures/toss/spec_contract.json`에 고정했다. 오프라인 fixture의 한도·시각·비교 임계값은 합성 예시이지 승인된 운영값이 아니다. `production_eligible=False`를 유지한다.
 
 - 용도(예정): **읽기 전용 2차 시세·참조 데이터**. 청산·사이징·포트폴리오 평가/최고가·주문·체결·잔고·계좌·호가는 **전 세션 KIS 단독**. 브로커 전역 폴백 훅 금지; 표시용 wrapper opt-in과 후보/점수 변경 승격을 분리
@@ -68,11 +68,11 @@
 - **공개 OAuth scopes가 비어 있음** — 시세 전용 권한을 주장하지 않는다. 메서드+조회 endpoint allowlist·고정 HTTPS origin·redirect 금지·계좌 호출 금지; POST는 issuer의 token 발급만 예외. 허용 IP만으로 서버 내부 오호출을 막을 수 없음
 - **가격 기준**: 국내 시세는 KRX+NXT 통합이라 20:00 까지 갱신 — KIS 정규장 종가와 다르다(실측 0.9% 차이). 청산·사이징에 그대로 쓰지 말 것
 - 환경변수: `TOSS_CLIENT_ID`, `TOSS_CLIENT_SECRET` (`.env`, 커밋 금지)
-- 모든 배포 기본 `TOSS_API=0`(토큰/네트워크/캐시 소비/잡 등록0). 실자료 shadow 전 약관·발급 소유권·manifest 승인 필요. 토스 shadow 캐시는 운영 수급/섹터/포트폴리오와 분리
+- 코드 기본 및 기존 거래 봇은 `TOSS_API=0`(토큰/네트워크/캐시 소비/잡 등록0). 명시 승인된 별도 observer에만 `TOSS_API=1`; 약관·단일 발급·plan/grant를 확인하고 토스 상태는 운영 수급/섹터/포트폴리오와 분리했다.
 - 일봉2개를 오늘/전일로 가정하지 않는다. 거래일·원 관측/수신 시각·확정/부분·시장/adjusted 기준을 검증하고 필수 결측은 legacy 숫자 dict를 만들지 않음(N/A 또는 스킵). 200은 페이지 크기이며 52주/252기간 요청은 전체 구간 확보 필요
 - `/stocks/all`은 토스 거래 가능 목록이지 KRX 전체 정본이 아님. 종목 수급의 주/등록외국인/통합시장/잠정치와 시장 수급 금액 기준을 혼용하지 않음
 - 합산 예산은 단일 송신자에서 공유(동시 reader 조회 금지). Reset은 1토큰 보충까지 초; 락·한도·HTTP·페이지·retry에 단일 deadline, 논리 조회 총 retry1·발급 retry0. 원문 인증/body/예외 로그 금지
-- 위 TPS/IP/0.9%는 기존 조사 보고이며 이번에 인증 재호출하지 않았다. [공개 스펙](https://openapi.tossinvest.com/openapi-docs/latest/openapi.json) `1.2.17`/현재 main 소비자만 대조했으며 구현 인수는 설계 §10 참고
+- 위 TPS/IP/0.9%는 기존 조사 보고다. 이번 별도 서비스의 실제 검증은 초기 OAuth 발급까지이며 TPS/시세 정확도 재측정이 아니다. pinned 공개 스펙1.2.17 계약과 실제 관측 결과를 구분한다.
 
 ## 데이터 — pykrx
 

@@ -1,6 +1,6 @@
 # Toss 관측 런타임 운영 경계
 
-상태: #70/#68 정합화 통합본은09-17 배포됐으나 기존 거래 봇 Toss는 계속 OFF다([배포 기록](../reviews/toss-pr-integration-2026-09-17.md)). 사용자는 [별도 서비스 상세 설계](../superpowers/specs/2026-09-17-toss-observer-service-design.md)를 승인했다. 구현/검증과 실제 설치/ON은 [새 원장](../reviews/toss-observer-service-2026-09-17.md)으로 구분하며 현재 운영 설치/ON은 미실행이다.
+상태: **09-17 21:47:37 KST 별도 `qwq-toss-observer.service` ON(PID3335469, release877768e)**. 초기 토큰 발급 성공·장외idle이며 가격/캘린더 관측은 아직0건이다. 기존 거래 봇은 재시작하지 않았고 Toss도 계속 OFF다. 사용자가 확정한 관측일은09/18·21·22, 승인 만료는09/22 18:00 KST다. 실제 설치·검증 증거와 미완 인수는 [관측 원장](../reviews/toss-observer-service-2026-09-17.md)에서 구분한다.
 
 ## 독립 서비스의 추가 경계
 
@@ -11,6 +11,13 @@
 - 전용 `status.json`은 입력 수신/관측 성공/원장 완료 시각을 구분한다. 실제 원장과 계수 불일치·상태 저장 실패면 중단하며 성능 인수는 incomplete/None이다. 기존 `/api/health`에 새 서비스가 자동 연결되지는 않는다.
 - 가격/캘린더 coverage를 합산하지 않는다. 가격 ended 분모는5분/세션 종료, 캘린더는 예정시각+작업20초 기준이다(같은 날 늦은 조회는 허용). full-plan·경과 분모/선정 attempt·budget skip을 별도 표시한다. 0분모는None이며 장외 ON은 관측 성공이 아니다.
 - 보존 timer는 승인 cohort 종료+30일, 서비스 inactive 및 sender 락 반환 뒤 정확한 원장만 삭제한다. token/starts/unknown/revoked/grant/거래 상태는 삭제 대상이 아니다. 실제 삭제 시 복구 보장 없음과 삭제 영수증을 별도 보고한다.
+- observer는 start1회만 수행하며 boot 자동 시작은 enable하지 않는다. retention timer만 enabled다. **같은 grant로 restart/start 재시도 금지**: 실패/재부팅 후 영수증·토큰을 지우지 말고 종료/소유권 및 새 승인 필요 여부를 확인한다. 이상 시 새 관측 서비스만 중단하고 기존 거래 봇은 유지한다.
+
+## 설치된 관측의 확인 절차
+
+- `systemctl show qwq-toss-observer.service -p MainPID -p ActiveState -p NRestarts`와 전용 state의 승인 cohort `status.json`을 읽는다. 실제 경로는 root 보호 `/etc/qwq-toss-observer/deployment.json`의 `status_path`/`ledger_path`다. 전체 deployment·프로세스 환경·토큰·자격 파일을 로그/대화에 덤프하지 않는다.
+- 상태에서 `state`, `updated_at`, `expires_at`, `by_kind`, `last_observation_success_at`, `last_ledger_complete_at`, `accounting_consistent`를 확인한다. 장외idle/0표본을 실패 또는 가격 수집 성공으로 바꾸지 않는다. 첫 캘린더08:55/가격09:00 이후 원장·상태 계수 대조가 필요하다.
+- 09/22 18:00 만료 후 서비스 종료·sender 락 반환·추가 송신 중단을 별도 확인한다. 이번 활성화가 미래 종료를 이미 검증했다는 뜻은 아니다. 이후30일 보존 기한(10/22 18:00)을 넘긴19:00 timer부터 원장 삭제 대상이며 auth 안전 기록은 보존한다.
 
 아래는 기존 **봇 내부 supervisor의 참조 계약**이다. 독립 서비스의 설치/활성화·상태는 위 설계/원장을 우선한다.
 

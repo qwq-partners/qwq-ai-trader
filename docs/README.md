@@ -19,7 +19,7 @@
 - [evolution-system.md](evolution/evolution-system.md) — 3계층 메모리, Trade Wiki, 전략 진화, 일일 복기, 품질 검증, 거래 원칙
 
 ### Operations (운영)
-- [toss-shadow-runtime.md](operations/toss-shadow-runtime.md) — 기본 OFF Toss 관측의 별도 승인·시작 증명·worker 중단·원장/health 경계(운영 미활성화)
+- [toss-shadow-runtime.md](operations/toss-shadow-runtime.md) — 별도 Toss 서비스 ON·승인 만료/재시작 금지·원장/health 경계(기존 거래 봇 Toss OFF)
 - [local-development.md](operations/local-development.md) — WSL2 기반 Claude Code·Codex 로컬 개발환경 구성과 안전한 PR 흐름
 - [github-quality-gate.md](operations/github-quality-gate.md) — PR 자동 검증과 `main` 브랜치 보호 운영 절차
 - [lightsail-deployment.md](operations/lightsail-deployment.md) — 수동 승인 배포, 상태 확인, 자동 롤백 절차
@@ -48,10 +48,10 @@
 ### Integrations (연동)
 - [토스 독립 관측 서비스 설계](superpowers/specs/2026-09-17-toss-observer-service-design.md) — 상세 승인: 기존 봇 무재시작·보유 종목 관측·단일 발급·추가 KIS0·고정 릴리스/승인
 - [토스 독립 관측 서비스 실행 계획](superpowers/plans/2026-09-17-toss-observer-service.md) — 격리 병렬 구현·TDD·독립 리뷰·새 서비스만 설치/활성화
-- [토스 독립 관측 서비스 검증 원장](reviews/toss-observer-service-2026-09-17.md) — 독립 리뷰·UTC/KST 각1809건 검증·PR #74·운영 ON 일정 확인 대기
+- [토스 독립 관측 서비스 검증 원장](reviews/toss-observer-service-2026-09-17.md) — 독립 리뷰·UTC/KST 각1809건 검증·별도 서비스 ON/초기 발급·장외 대기 및 남은 실관측 인수
 - [토스 관측 Plan→Do→See 구현 계획](superpowers/plans/2026-09-16-toss-runtime-shadow.md) — 역할별 병렬 모델·파일/API 소유권·TDD·독립 리뷰·오프라인 인수
 - [토스 승인 기반 관측 런타임 설계](superpowers/specs/2026-09-16-toss-runtime-shadow-design.md) — #67 보존·기본 OFF·별도 승인·추가 KIS 조회0·지속 원장/worker 설계, 구현/실관측 승인과 구분
-- [external-apis.md](integrations/external-apis.md) — KIS, 토스 Open API(오프라인 기반·승인 관측 후속, 운영 미활성화), pykrx, yfinance, Finnhub, Finviz, LLM(OpenAI/Gemini/Perplexity), Telegram, DART
+- [external-apis.md](integrations/external-apis.md) — KIS, 토스 Open API(별도 제한 관측 ON·거래 소비자 미연결), pykrx, yfinance, Finnhub, Finviz, LLM(OpenAI/Gemini/Perplexity), Telegram, DART
 - [토스 2차 데이터 소스 설계](superpowers/plans/2026-09-15-toss-securities-fallback.md) — T12 단계별 승인·KIS 돈 경로 유지·공식 필드 계약·향후 구현 인수 명세
 - [토스 Phase 1 오프라인 구현 계획](superpowers/plans/2026-09-16-toss-phase1-offline.md) — 보안 토큰·조회 경계·정규화·합성 비교 4작업, 이번 범위와 미완 실자료 단계 분리
 

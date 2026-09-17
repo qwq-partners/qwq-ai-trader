@@ -6,6 +6,16 @@
 
 ## 활성 체크포인트
 
+### 2026-09-18·21·22 — 독립 Toss 제한 관측 (기존 거래 봇 유지)
+
+- ✅ 09/17 21:47:37 ON/PID3335469·초기 토큰 generation1/ready·receipt1/sender1. 기존 봇 PID3274983/checkout8ff2f55와 보호7경로 동일,21:49 broker 연결 정상/pending0/stale0. [설치·검증 원장](../reviews/toss-observer-service-2026-09-17.md).
+- [ ] 09/18 08:55 이후: calendar 관측/terminal 원장, 날짜·개장/휴장·결측 처리, source 시각 확인. 휴장/partial을 영업일 성공으로 세지 않는다.
+- [ ] 09/18 09:00 및 이후5분: 가격 관측·선정/terminal 계수·입력/관측/원장 시각 대조. 추가 KIS 조회/주문 경로 연결0 유지, 0표본/입력 실패/공급자 실패를 구분한다.
+- [ ] 09/21·22: 일반 토큰 갱신과 발급 예산4회 이내, 3영업일·가격/캘린더별 coverage 및 실패율 인수. KIS 비교는근거부족/valid_pairs0·production_eligible=False 유지한다.
+- [ ] 09/22 18:00 KST: 승인 만료·서비스 종료·sender 락 반환·추가 송신0 확인. 날짜 자동 연장·같은 grant 재시작·영수증/unknown/revoked 삭제 금지.
+- [ ] 10/22 19:00 KST 이후: retention timer가 승인 cohort 원장만 삭제하고 안전 기록/삭제 영수증을 보존했는지 확인. 삭제의 복구 보장은 없으며 수행 결과를 별도 보고한다.
+- 이상 시 새 observer만 중단하고 원장을 보존한다. 기존 거래 봇 재시작·설정/킬스위치 변경 없이 조사한다. 이 목록은 확인 절차이며 별도 예약 알림이 설정됐다는 뜻은 아니다.
+
 ### 2026-08-10~ (2주 관측) — 팩터 버킷 위험예산 shadow 검증
 
 - **적용 일자**: 2026-08-08 (engine `_check_factor_budget`, enforce=false)

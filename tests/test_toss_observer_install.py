@@ -80,6 +80,12 @@ def test_dry_run_does_not_read_credentials_or_mutate(tmp_path, monkeypatch):
     m = load('install')
     monkeypatch.setattr(m, 'inspect_artifact', lambda path: {'release_id': 'abc', 'artifact_sha256': 'a' * 64})
     monkeypatch.setattr(m, 'check_targets', lambda digest: None)
+    # The installed service account is external host state; this dry-run
+    # contract requires the installer to see the not-yet-provisioned state.
+    def missing_account(name):
+        raise KeyError(name)
+    monkeypatch.setattr(m.pwd, 'getpwnam', missing_account)
+    monkeypatch.setattr(m.grp, 'getgrnam', missing_account)
     monkeypatch.setattr(m, 'read_credentials', lambda *a: pytest.fail('자격 읽기 금지'))
     monkeypatch.setattr(m, 'provision', lambda *a, **k: pytest.fail('변경 금지'))
     result = m.install(artifact=tmp_path, credential_source=tmp_path / 'not-read',
@@ -95,6 +101,17 @@ def test_existing_service_account_never_repurposed(monkeypatch):
     monkeypatch.setattr(m.pwd, 'getpwnam', lambda name: object())
     monkeypatch.setattr(m, 'run_command', lambda *args: pytest.fail('기존 계정 수정 금지'))
     with pytest.raises(m.InstallError, match='service_user_exists'):
+        m.create_user()
+
+
+def test_existing_service_group_never_repurposed(monkeypatch):
+    m = load('install')
+    def missing_account(name):
+        raise KeyError(name)
+    monkeypatch.setattr(m.pwd, 'getpwnam', missing_account)
+    monkeypatch.setattr(m.grp, 'getgrnam', lambda name: object())
+    monkeypatch.setattr(m, 'run_command', lambda *args: pytest.fail('기존 그룹 수정 금지'))
+    with pytest.raises(m.InstallError, match='service_group_exists'):
         m.create_user()
 
 
