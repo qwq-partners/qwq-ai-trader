@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from enum import Enum
 from loguru import logger
 
@@ -291,9 +291,15 @@ class ExitManager:
         "trailing": ExitStage.TRAILING,
     }
 
-    def __init__(self, config: Optional[ExitConfig] = None, market: str = "KR"):
+    def __init__(self, config: Optional[ExitConfig] = None, market: str = "KR", *,
+                 persist: bool = True, state_dir: Optional[Path] = None,
+                 clock: Optional[Callable[[], datetime]] = None):
         self.config = config or ExitConfig()
         self.market = market.upper()
+        # 실행 checkpoint 후보는 기존 계산만 재사용하고 legacy 파일을 읽거나 쓰지 않는다.
+        # 기본값은 KR/US 기존 동작을 유지한다. 시계는 결정마다 호출한다.
+        self._persistence_enabled = persist
+        self._clock = clock if clock is not None else lambda: datetime.now()
 
         # 수수료 계산기 (KR: 수수료 포함, US: zero-commission)
         self.fee_calc = get_fee_calculator(self.market)
@@ -317,11 +323,12 @@ class ExitManager:
         self._max_holding_days: int = self.config.max_holding_days
 
         # stage 영속화: 재시작 후 정확한 stage 복원
-        _cache_dir = Path.home() / ".cache" / "ai_trader"
-        _cache_dir.mkdir(parents=True, exist_ok=True)
+        _cache_dir = state_dir if state_dir is not None else Path.home() / ".cache" / "ai_trader"
+        if self._persistence_enabled:
+            _cache_dir.mkdir(parents=True, exist_ok=True)
         market_suffix = f"_{self.market.lower()}" if self.market != "KR" else ""
-        self._stage_file = _cache_dir / f"exit_stages{market_suffix}_{date.today().isoformat()}.json"
-        self._persisted: Dict[str, Dict] = self._load_persisted_states()
+        self._stage_file = _cache_dir / f"exit_stages{market_suffix}_{self._clock().date().isoformat()}.json"
+        self._persisted: Dict[str, Dict] = self._load_persisted_states() if persist else {}
 
         # 현재 적용된 레짐 (apply_regime_params 호출 시 갱신)
         self._current_regime: str = "neutral"
@@ -340,7 +347,7 @@ class ExitManager:
         _cache_dir = self._stage_file.parent
         market_suffix = f"_{self.market.lower()}" if self.market != "KR" else ""
         for delta in range(0, 7):
-            candidate = _cache_dir / f"exit_stages{market_suffix}_{(date.today() - timedelta(days=delta)).isoformat()}.json"
+            candidate = _cache_dir / f"exit_stages{market_suffix}_{(self._clock().date() - timedelta(days=delta)).isoformat()}.json"
             if not candidate.exists():
                 continue
             try:
@@ -364,6 +371,8 @@ class ExitManager:
         initial_qty: 포지션 최초 진입 수량 (부분 매도 후에도 유지).
           재시작 시 KIS 실제 잔고와 비교해 익절 미실행 여부를 검증하는 데 사용.
         """
+        if not self._persistence_enabled:
+            return
         data = {}
         for sym, state in self._states.items():
             entry: Dict = {
@@ -428,7 +437,7 @@ class ExitManager:
             # stage/고점/코어 파라미터가 전량 소실된다)
             _suffix = f"_{self.market.lower()}" if self.market != "KR" else ""
             self._stage_file = self._stage_file.parent / (
-                f"exit_stages{_suffix}_{date.today().isoformat()}.json"
+                f"exit_stages{_suffix}_{self._clock().date().isoformat()}.json"
             )
             from ..utils.atomic_io import atomic_write_json
             atomic_write_json(self._stage_file, data)
@@ -700,7 +709,7 @@ class ExitManager:
                 ):
                     try:
                         _p_since = datetime.fromisoformat(persisted.get("pending_since", ""))
-                        if (datetime.now() - _p_since).total_seconds() < 1800:
+                        if (self._clock() - _p_since).total_seconds() < 1800:
                             _restored_pending = ExitStage(persisted["pending_stage"])
                             _restored_pending_since = _p_since
                             _restored_target = int(persisted.get("pending_target_qty", 0))
@@ -754,7 +763,7 @@ class ExitManager:
             atr_pct=atr_pct,
             dynamic_stop_pct=dynamic_stop,
             effective_trailing_stop_pct=effective_ts_pct,
-            last_new_high_date=date.today(),
+            last_new_high_date=self._clock().date(),
             stale_high_days=stale_high_days,
             initial_quantity=initial_qty_for_state,
             is_core=is_core,
@@ -812,7 +821,7 @@ class ExitManager:
         if position.entry_time:
             self._entry_times[position.symbol] = position.entry_time
         elif position.symbol not in self._entry_times:
-            self._entry_times[position.symbol] = datetime.now()
+            self._entry_times[position.symbol] = self._clock()
 
         effective_stop = dynamic_stop if dynamic_stop is not None else (stop_loss_pct if stop_loss_pct is not None else self.config.stop_loss_pct)
         eff_1st = first_exit_pct if first_exit_pct is not None else self.config.first_exit_pct
@@ -949,13 +958,13 @@ class ExitManager:
         # 고가 업데이트 + 신고가 일자 추적
         if current_price > state.highest_price:
             state.highest_price = current_price
-            state.last_new_high_date = date.today()
+            state.last_new_high_date = self._clock().date()
 
         # 보유기간 계산 (영업일 기준)
         entry_time = self._entry_times.get(symbol)
         biz_days = 0
         if entry_time:
-            biz_days = self._count_business_days(entry_time.date(), date.today())
+            biz_days = self._count_business_days(entry_time.date(), self._clock().date())
 
         # 보유기간 초과 체크 (포지션별 max_holding_days 우선 적용)
         eff_max_holding = state.max_holding_days if state.max_holding_days is not None else self._max_holding_days
@@ -998,7 +1007,7 @@ class ExitManager:
             # 신고가 갱신 여부 체크: 최근 갱신 중이면 아직 추세 진행 → 스킵
             _days_since_high = 0
             if state.last_new_high_date is not None:
-                _days_since_high = self._count_business_days(state.last_new_high_date, date.today())
+                _days_since_high = self._count_business_days(state.last_new_high_date, self._clock().date())
             if _days_since_high >= 3:  # 3영업일 이상 신고가 미갱신 시에만 발동
                 return self._create_exit(
                     state, "sell_all", state.remaining_quantity,
@@ -1013,7 +1022,7 @@ class ExitManager:
             and eff_stale_high > 0
             and state.last_new_high_date is not None
             and state.current_stage == ExitStage.NONE):
-            days_since_high = self._count_business_days(state.last_new_high_date, date.today())
+            days_since_high = self._count_business_days(state.last_new_high_date, self._clock().date())
             if (days_since_high >= eff_stale_high
                 and net_pnl_pct < self.config.stale_high_min_pnl_pct):
                 return self._create_exit(
@@ -1272,7 +1281,7 @@ class ExitManager:
         # 담당한다 — 여기서는 30분 하드 만료만 (sweeper 미동작 대비 최후 방어).
         # verifier가 없으면(레거시/US) 기존 5분 클리어 유지.
         if state.pending_stage is not None and state.pending_since is not None:
-            _pending_age = (datetime.now() - state.pending_since).total_seconds()
+            _pending_age = (self._clock() - state.pending_since).total_seconds()
             _hard_limit = 1800 if self._pending_verifier is not None else 300
             if _pending_age > _hard_limit:
                 logger.warning(
@@ -1299,7 +1308,7 @@ class ExitManager:
                 # ★ stage는 fill 확인 후(on_fill)에만 advance
                 # 2026-08-08 P0: pending은 영속화됨 — 재시작 시 미체결 확인 후에만 재발행
                 state.pending_stage = ExitStage.FIRST
-                state.pending_since = datetime.now()
+                state.pending_since = self._clock()
                 state.pending_target_qty = exit_qty
                 state.pending_filled_qty = 0
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
@@ -1317,7 +1326,7 @@ class ExitManager:
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.pending_stage = ExitStage.SECOND
-                state.pending_since = datetime.now()
+                state.pending_since = self._clock()
                 state.pending_target_qty = exit_qty
                 state.pending_filled_qty = 0
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
@@ -1335,7 +1344,7 @@ class ExitManager:
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
                 state.pending_stage = ExitStage.THIRD
-                state.pending_since = datetime.now()
+                state.pending_since = self._clock()
                 state.pending_target_qty = exit_qty
                 state.pending_filled_qty = 0
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
@@ -1365,7 +1374,7 @@ class ExitManager:
     ) -> Tuple[str, int, str]:
         """청산 신호 생성"""
         state.exit_history.append({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": self._clock().isoformat(),
             "action": action,
             "quantity": quantity,
             "reason": reason,
@@ -1658,7 +1667,7 @@ class ExitManager:
                 and state.pending_filled_qty < state.pending_target_qty
             ):
                 # 부분 체결 진행 중 — 주문이 살아있다는 증거이므로 만료 타이머 연장
-                state.pending_since = datetime.now()
+                state.pending_since = self._clock()
                 logger.info(
                     f"[ExitManager] {symbol} 부분 체결 누적: "
                     f"{state.pending_filled_qty}/{state.pending_target_qty}주 "
@@ -1714,7 +1723,7 @@ class ExitManager:
         state = self._states.get(symbol)
         if state is None or state.pending_stage is None or state.pending_since is None:
             return
-        if (datetime.now() - state.pending_since).total_seconds() <= 300:
+        if (self._clock() - state.pending_since).total_seconds() <= 300:
             return
         try:
             outstanding = await self._pending_verifier(symbol)
@@ -1722,7 +1731,7 @@ class ExitManager:
             logger.debug(f"[ExitManager] {symbol} pending 검증 실패 (유지): {e}")
             return
         if outstanding is True:
-            state.pending_since = datetime.now()
+            state.pending_since = self._clock()
             logger.info(
                 f"[ExitManager] {symbol} pending 연장: 거래소 미체결 확인 "
                 f"({state.pending_stage.value}, 체결 대기 지속)"

@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: KR 실행 안전성 기반·공식 KIS 계약 조사 (09-17 착수, 실거래 경로 미연결)
+
+- 승인된 상세 설계에 따라 SQLite 원자 checkpoint·누적체결 적용 receipt·주문 intent/attempt/예약·최종 송신 guard를 독립 모듈로 구현했다. UNKNOWN 보존·최신 위험 실패/KST 경계·거래 POST 무재시도·await 전 본문 고정 및 ExitManager의 선택적 메모리 전용/시계 주입을 검증한다.
+- 공식 GitHub legacy에서 현행 TTTC8001R/TTTC8036R 요청·전체조회·F/M→N 연속조회 근거를 확인했다. 당일 조회 지연과 최초 인계 cutoff·취소/정정 체인 의미의 미입증 범위를 구분한다. 최신 TR을 운영에 자동 치환하지 않는다.
+- 현행 TR의 오프라인 주입형 읽기 전용 수집기48시험·독립 리뷰 C/I/M0, 월 단위 조회 범위·실제 cursor provenance·부분 실패 보존을 검증했다. 전체 KST **2076 passed/2 known xfailed(86.38초)**, UTC **2076 passed/2 known xfailed(89.76초)**·기존 pykrx warning1·격리0·문법/비밀정보 패턴 검사 통과. 신규 시험266개이며 실제 큐/운영 인수는 아니다.
+- 구현자와 다른 리뷰어가 Important6·Minor1을 발견해 수정·한정 재리뷰했다. 실제 역할은 부모와 기존 Astra/high2개이며 추가 슬롯 부족으로 fresh/xhigh 실행을 주장하지 않는다. TDD와 전체 검증 결과는 `docs/reviews/engine-execution-safety-2026-09-17.md`에 기록한다.
+- **전체 1단계 미완**: 실제 Portfolio/ExitManager/리스크 reducer와 engine·scheduler·broker writer 통합, 최초 인계·outbox·실큐 C/F/G/R 인수는 남았다. 새 모듈은 기존 거래 경로에서 사용하지 않으며 main 병합/운영 SSH·배포·재시작/주문/설정 변경 없음. Toss 관측 전용과 KIS 거래·잔고 경계 유지.
+
 ## 2026-09-17 — docs: 목적 정합성 1단계 KR 주문·체결 안전성 상세 설계
 
 - 사용자 목표를 비용 차감 KODEX200 초과수익 검증·현행 위험 한도 유지로 고정하고, 단계적 재설계 중 첫 KR 실행 안전성 설계를 작성했다. 취소 명령/최종상태 분리, intent별 잔여 목표, 부분체결 단일 commit, SQLite 실행 상태/복구, sync 이중반영 방지, 제출 직전 위험·시각 검사와 기존 예외 분류를 명시한다.
