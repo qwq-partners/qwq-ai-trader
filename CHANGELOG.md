@@ -1,5 +1,22 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-17 — feat(T12): 독립 Toss 관측 서비스 구현·로컬 검증·독립 리뷰 완료 (운영 미설치)
+
+- 승인된 상세 설계에 따라 root 보호 launcher/고정 artifact·배치/plan hash 검증, grant당 단일 worker 시작 영수증, 전용 UID 설치와 기존 Toss worker 재사용을 구현한다. 실제 자격/승인 파일은 저장소에 포함하지 않는다.
+- 입력은 추가 KIS 호출 없는 기존 loopback `/api/positions` 보유 코드만 사용한다. 빈 보유와 입력 장애를 분리하고 후보·KIS 비교 가격·관측시각을 만들어 넣지 않는다.
+- 별도 private 상태는 원장 ACK 및 read-only 대조 뒤 성공을 확정한다. 슬롯/attempt 분모·관측/비교·입력/원장 시각을 구분하며 `production_eligible=False`를 유지한다. 기존 봇 checkout·PID·주문/설정은 바꾸지 않는다.
+- 작업별 모델/RED-GREEN·독립 리뷰·UTC/KST 통합검증·설치/ON의 실제 결과는 `docs/reviews/toss-observer-service-2026-09-17.md`에 구분 기록한다. 이 항목만으로 운영 활성화나 3영업일 인수 완료를 의미하지 않는다.
+- 최종 UTC/KST 순차 전체 검증 각각 **1809 passed/2 known xfailed/1 기존 warning**, 격리0·비밀정보 검사 통과. 독립 broad 및 후속 테스트 한정 리뷰 C/I/M0. 초기 CI의 시험 Python patch 불일치를 `sys.executable -I -S`로 수정하고 운영 exact-version 거부 검사는 유지했다. CI/main 병합 이력은 PR #74, 실제 ON은 일정 확정 및 운영 인수 후 별도 기록한다.
+
+## 2026-09-17 — docs(T12): 독립 Toss 관측 서비스 상세 설계 (ON 미실행)
+
+- 사용자가 기존 거래 봇을 유지하는 별도 서비스·단일 발급 주체·추가 KIS 조회0·주문 무영향 방식을 선택했다. 09-16 동일 봇 프로세스 배치안은 새 상세 설계의 분리 배치안으로 대체하며 기존 인증/원장 안전 계약은 유지한다.
+- root 보호 릴리스/launcher·전용 UID·Toss 자격만 전달·grant당 단일 worker 수명·별도 상태/보존 경계를 제안한다. 플래그만 켜거나 가변 체크아웃 HEAD로 시작 증명을 꾸미지 않는다.
+- Astra/high 보안 및 Terra/high 입력 경로를 병렬 조사했다. 기존 `/api/positions`는 추가 KIS 없이 읽을 수 있으나 mutable 캐시 입력이고, `/api/screening`은 마지막 성공 provenance를 보장하지 않는다. 첫 제안은 보유 종목만 관측하며 KIS 가격 비교 제외·insufficient·production_eligible=False를 유지한다.
+- 새 격리 작업공간 기준선 verify1684 passed/2 known xfailed/1 기존 pykrx warning(83.71초), 격리0·문법/비밀정보 검사 통과. **새 서비스의 인수 결과가 아니며 구현·운영 설치/설정/발급/GET·재시작은 하지 않았다.** 상세 설계 사용자 확인 후 Plan→Do→See로 진행한다.
+- 설계: `docs/superpowers/specs/2026-09-17-toss-observer-service-design.md`.
+- 독립 Astra/xhigh 문서 리뷰의 Important 2·Minor 1을 반영: `-I -S`/표준 라이브러리 전용 검증 전 경로, systemd 자격 전달과 application accessor 구분, 관측 슬롯/attempt coverage·실패율·지연·분모0/미완의 판정 계약을 명시했다. 리뷰 결과는 구현 인수와 별개다.
+
 ## 2026-09-17 — ops(T12): PR 통합본 배포·재시작 (Toss 기본 OFF 유지)
 
 - #70/#68 정합화와 #72 상태 문서를 main에 병합했다. #72 CI run35117127260 SUCCESS·문서 Terra/medium 한정 리뷰 지적0 후 대상 `84ec1cc30c06e75d375fbba9a3de69f898295e9f`를 배포했다.

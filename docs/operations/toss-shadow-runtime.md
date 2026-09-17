@@ -1,6 +1,20 @@
 # Toss 관측 런타임 운영 경계
 
-상태: 오프라인 구현·검증/독립 소스 리뷰 완료([검증 원장](../reviews/toss-runtime-2026-09-16.md)). 이 문서는 활성화 승인서가 아니며 운영 설치·배포·재시작·자격/환경 변경을 수행하지 않는다. PR #68은 보류 유지, #67 기반 후속은 Draft PR #70에서 검토한다.
+상태: #70/#68 정합화 통합본은09-17 배포됐으나 기존 거래 봇 Toss는 계속 OFF다([배포 기록](../reviews/toss-pr-integration-2026-09-17.md)). 사용자는 [별도 서비스 상세 설계](../superpowers/specs/2026-09-17-toss-observer-service-design.md)를 승인했다. 구현/검증과 실제 설치/ON은 [새 원장](../reviews/toss-observer-service-2026-09-17.md)으로 구분하며 현재 운영 설치/ON은 미실행이다.
+
+## 독립 서비스의 추가 경계
+
+- 거래 봇 재시작·checkout 갱신·키/전략/킬스위치 변경 없이 별도 sealed release를 실행한다. 기존 `local_deploy.sh`는 거래 봇을 재시작하므로 사용하지 않는다.
+- root-only Toss 전용 EnvironmentFile과 root 보호 launcher/registry/plan/deployment를 사용한다. `/usr/bin/python3 -I -S`가 프로젝트/의존성 import 전에 manifest·실제 UID/GID/host·plan/config hash를 검사한다. OS Python/표준 라이브러리/CA는 별도 플랫폼 신뢰 경계다.
+- grant당 durable 시작 영수증을 자격 accessor/worker 전에 소비한다. `Restart=no`이며 같은 grant 재시작·영수증 삭제·토큰/unknown/revoked 초기화는 금지한다. 새 grant는 기존 소유권 반환 확인과 별도 운영 승인 대상이다.
+- 기존 `/api/positions`를 슬롯당 최대1회/2초/64KiB로 읽되 전체 응답은 보존하지 않는다. 정상 `[]`만 빈 보유이며 입력 장애는 missed+input_unavailable, 성공 시각 갱신0이다. 후보0·KIS 비교0·주문 경로0이다.
+- 전용 `status.json`은 입력 수신/관측 성공/원장 완료 시각을 구분한다. 실제 원장과 계수 불일치·상태 저장 실패면 중단하며 성능 인수는 incomplete/None이다. 기존 `/api/health`에 새 서비스가 자동 연결되지는 않는다.
+- 가격/캘린더 coverage를 합산하지 않는다. 가격 ended 분모는5분/세션 종료, 캘린더는 예정시각+작업20초 기준이다(같은 날 늦은 조회는 허용). full-plan·경과 분모/선정 attempt·budget skip을 별도 표시한다. 0분모는None이며 장외 ON은 관측 성공이 아니다.
+- 보존 timer는 승인 cohort 종료+30일, 서비스 inactive 및 sender 락 반환 뒤 정확한 원장만 삭제한다. token/starts/unknown/revoked/grant/거래 상태는 삭제 대상이 아니다. 실제 삭제 시 복구 보장 없음과 삭제 영수증을 별도 보고한다.
+
+아래는 기존 **봇 내부 supervisor의 참조 계약**이다. 독립 서비스의 설치/활성화·상태는 위 설계/원장을 우선한다.
+
+아래 수명주기/health 설명은 구현된 **봇 내부 관측 supervisor** 계약이다. 후속 독립 서비스는 기존 거래 봇을 재시작하지 않고 별도 상태를 제공하며 기존 `/api/health` 자동 연결을 주장하지 않는다. 이 문서 자체를 실제 grant로 사용하지 않는다.
 
 ## 무엇이 달라지는가
 

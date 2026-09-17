@@ -1,0 +1,25 @@
+[Unit]
+Description=Remove only approved expired Toss observation ledger
+
+[Service]
+Type=oneshot
+User=qwq-toss-observer
+Group=qwq-toss-observer
+WorkingDirectory=/
+ExecStart=/usr/bin/python3 -I -S /usr/libexec/qwq-toss-observer/retention.py --apply
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+LimitCORE=0
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/qwq-toss-observer
+CPUQuota=25%
+MemoryMax=192M
+TasksMax=16
+Nice=10
+IOWeight=10
+TimeoutStartSec=60
