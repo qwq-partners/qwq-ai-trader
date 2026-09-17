@@ -308,21 +308,29 @@ async def run_service(*, deployment, settings: dict, claim_start, stop_event=Non
             tracker.consistent = False
             tracker.state, tracker.last_result = 'unavailable', 'observation_incomplete'
     finally:
+        cleanup_deadline = clock() + cleanup_timeout
         if authority is not None:
             authority.stop()
         if positions is not None:
             try:
-                await asyncio.wait_for(positions.close(), timeout=1)
+                await asyncio.wait_for(positions.close(), timeout=min(1, max(0, cleanup_deadline - clock())))
             except Exception:
                 code = 1
         final_state = 'closed'
         if worker is not None:
             try:
-                final_state = await worker.stop(timeout=cleanup_timeout)
+                remaining = cleanup_deadline - clock()
+                if remaining <= 0:
+                    worker.request_stop()
+                    final_state = 'stopping_unconfirmed'
+                else:
+                    final_state = await worker.stop(timeout=remaining)
             except BaseException:
                 final_state = 'stopping_unconfirmed'
             if final_state != 'closed':
                 code = 1
+                if tracker is not None:
+                    tracker.consistent = False
         if tracker is not None and writer is not None:
             tracker.state = final_state if final_state != 'closed' or not code else 'unavailable'
             try:

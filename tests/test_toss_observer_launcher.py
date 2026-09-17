@@ -201,8 +201,12 @@ def test_strict_deployment_json_rejects_ambiguous_document(sealed_release, paylo
 @pytest.mark.parametrize('field,value', [('service_uid', 0), ('service_uid', 123456),
     ('service_gid', 123456), ('service_gids', [0]), ('host_identity', 'other-host'),
     ('policy', {}), ('unknown', True), ('plan_raw_hash', 'x')])
-def test_deployment_rejects_identity_and_configuration_mismatch(sealed_release, field, value):
-    module, document = sealed_release
+def test_deployment_rejects_identity_and_configuration_mismatch(approved_release, field, value):
+    module, document, *_ = approved_release
+    path = module.CONFIG_DIRECTORY / 'deployment.json'
+    path.write_bytes(module.canonical_bytes(document))
+    path.chmod(0o644)
+    assert module.load_verified_document(path) == document
     document[field] = value
     document['config_hash'] = module.configuration_hash(document)
     path = module.CONFIG_DIRECTORY / 'deployment.json'

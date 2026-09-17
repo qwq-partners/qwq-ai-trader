@@ -262,3 +262,29 @@ def test_statistics_keep_skips_in_denominator_and_do_not_mix_calendar(tmp_path):
     assert doc['by_kind']['calendar']['attempt_coverage'] == 1
     assert doc['confirmed_business_days'] == 1
     assert doc['observation_acceptance'] is False
+
+
+def test_cleanup_clients_share_one_deadline(tmp_path, monkeypatch):
+    module, args, events, _, _ = fixture_service(tmp_path, monkeypatch)
+    ticks = [100.0]
+    args['clock'] = lambda: ticks[0]
+    original_worker = args['worker_factory']
+    class Worker(original_worker):
+        async def stop(self, *, timeout):
+            assert timeout <= .061  # .1 total minus .04 input cleanup
+            return 'closed'
+    class Positions:
+        async def fetch(self):
+            return ('087010',)
+
+        async def close(self):
+            ticks[0] += .04
+    args.update(worker_factory=Worker, positions_factory=Positions)
+    assert asyncio.run(module.run_service(**args)) == 0
+
+
+def test_uncertain_cleanup_invalidates_acceptance_even_after_observation(tmp_path, monkeypatch):
+    module, args, _, _, _ = fixture_service(tmp_path, monkeypatch, stop_state='stopping_unconfirmed')
+    assert asyncio.run(module.run_service(**args)) != 0
+    assert read_status(args)['accounting_consistent'] is False
+    assert read_status(args)['observation_acceptance'] is None
