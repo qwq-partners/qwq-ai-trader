@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from ...core.types import OrderSide
 from . import risk_policy as p
+from .application import ApplicationBlocked
 from .economics import decode_portfolio, encode_portfolio
 from .guards import EntryAuthority, EntryOrigin, FinalEntryGuard, GuardDecision
 from .lifecycle import CommandKind, CommandResult, CommandStatus, OrderRef, TERMINAL_STATES
@@ -106,6 +107,10 @@ class RequestBoundCommands:
         _require(type(expected) is int and expected == self.owner.version, 'stale_execution_version')
 
     async def publish_policy_context(self, context, *, expected_version):
+        with self.runtime.command_scope():
+            return await self._publish_policy_context(context, expected_version=expected_version)
+
+    async def _publish_policy_context(self, context, *, expected_version):
         _require(type(context) is PolicyContext, 'invalid_policy_context')
         context = PolicyContext.from_dict(context.to_dict())
         def reduce(state):
@@ -122,6 +127,11 @@ class RequestBoundCommands:
         return self.owner.version
 
     async def observe_entry_quote(self, symbol, price, *, as_of, source, event_id, expected_version):
+        with self.runtime.command_scope():
+            return await self._observe_entry_quote(symbol, price, as_of=as_of, source=source,
+                                                   event_id=event_id, expected_version=expected_version)
+
+    async def _observe_entry_quote(self, symbol, price, *, as_of, source, event_id, expected_version):
         for value in (symbol, source, event_id): _text(value)
         _require(type(price) is Decimal and price.is_finite() and price > 0, 'invalid_entry_quote')
         _require(type(as_of) is datetime and as_of.utcoffset() is not None, 'invalid_entry_quote_time')
@@ -271,6 +281,10 @@ class RequestBoundCommands:
                 raise CommandValidationError('policy_effect_pending')
 
     async def prepare(self, request, context, *, sector=None):
+        with self.runtime.command_scope():
+            return await self._prepare(request, context, sector=sector)
+
+    async def _prepare(self, request, context, *, sector=None):
         request, context = self._request(request, context)
         if sector is not None: _text(sector)
         def reduce(state):
@@ -351,9 +365,10 @@ class RequestBoundCommands:
         except (KeyError, TypeError, AttributeError, ValueError):
             return CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='ack_identity_missing_or_invalid')
 
-    async def _record(self, request, claim, version, result):
-        task = asyncio.create_task(self.runtime.lifecycle.record_result(request.attempt_id, claim, result,
-            expected_attempt_version=version))
+    async def _record(self, request, claim, version, result, command_token):
+        task = self.runtime.start_command_result(command_token,
+            lambda: self.runtime.lifecycle.record_result(request.attempt_id, claim, result,
+                expected_attempt_version=version))
         self._result_tasks.add(task)
         def done(task):
             self._result_tasks.discard(task)
@@ -367,6 +382,15 @@ class RequestBoundCommands:
         return result
 
     async def dispatch(self, request, context, transport):
+        try:
+            with self.runtime.command_scope() as command_token:
+                return await self._dispatch(request, context, transport, command_token)
+        except ApplicationBlocked:
+            # 공개 결과 타입 유지. 종료 중에는 claim/POST를 새로 시작하지 않는다.
+            return CommandResult(CommandStatus.NOT_SENT, request.attempt_id,
+                                 reason_code='command_admission_closed')
+
+    async def _dispatch(self, request, context, transport, command_token):
         # 第一 await 앞에 request/권한을 검증한다. 다른 실행 경로에 permit을 주지 않는다.
         request, context = self._request(request, context)
         _require(type(transport) is GuardedKISTransport, 'invalid_prepared_transport')
@@ -404,7 +428,7 @@ class RequestBoundCommands:
             self._permits.pop(claim, None)
             result = CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='caller_cancelled')
             try:
-                await self._record(request, claim, version, result)
+                await self._record(request, claim, version, result, command_token)
             except BaseException:
                 self.owner._block()
             finally:
@@ -414,7 +438,7 @@ class RequestBoundCommands:
         finally:
             self._permits.pop(claim, None)
         try:
-            return await self._record(request, claim, version, result)
+            return await self._record(request, claim, version, result, command_token)
         except asyncio.CancelledError:
             raise
         except Exception:

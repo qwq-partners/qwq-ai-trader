@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
@@ -38,6 +39,10 @@ class KRExecutionRuntime:
         self._quote_metadata: dict[str, dict] = {}
         self._published_day = None
         self._protection_tasks: set[asyncio.Task] = set()
+        self._command_scopes: dict[asyncio.Future, asyncio.Task] = {}
+        self._command_tracking_started = False
+        self._command_result_tasks: set[asyncio.Task] = set()
+        self._command_results_failed = False
         self._quote_lock = asyncio.Lock()
         self._protection_failed = False
         self._closing = False
@@ -599,14 +604,62 @@ class KRExecutionRuntime:
         task.add_done_callback(completed)
         return await asyncio.shield(task)
 
+    @contextmanager
+    def command_scope(self):
+        """첫 await 전 접수하고 coroutine 반환까지 추적한다. caller task 전체를 기다리지 않는다."""
+        if self._closing:
+            raise ApplicationBlocked('command_admission_closed')
+        self._command_tracking_started = True
+        token = asyncio.get_running_loop().create_future()
+        self._command_scopes[token] = asyncio.current_task()
+        try:
+            yield token
+        finally:
+            self._command_scopes.pop(token, None)
+            if not token.done():
+                token.set_result(None)
+
+    def _command_result_completed(self, task):
+        self._command_result_tasks.discard(task)
+        if task.cancelled() or task.exception() is not None or task.result() is not True:
+            self._command_results_failed = True
+            self.owner._block()
+
+    def start_command_result(self, token, operation):
+        """종료 중에도 이미 접수한 같은 호출의 결과만 새 strong task로 등록한다."""
+        if (token not in self._command_scopes
+                or self._command_scopes[token] is not asyncio.current_task()):
+            raise ApplicationBlocked('command_scope_required')
+        task = asyncio.create_task(operation())
+        self._command_result_tasks.add(task)
+        task.add_done_callback(self._command_result_completed)
+        return task
+
     async def shutdown(self) -> None:
-        """새 명령 수락을 닫고 이미 수락한 보호 작업을 저장/실패 확정까지 추적한다."""
+        """admission을 닫고 명령 중 뒤늦게 생긴 결과 저장까지 fixed-point drain한다."""
         self._closing = True
-        if self._day_tasks:
-            await asyncio.gather(*(asyncio.shield(task) for task in tuple(self._day_tasks)), return_exceptions=True)
-        if self._protection_tasks:
-            await asyncio.gather(*(asyncio.shield(task) for task in tuple(self._protection_tasks)),
-                                 return_exceptions=True)
+        if asyncio.current_task() in self._command_scopes.values():
+            raise ApplicationBlocked('command_shutdown_self_wait')
+        while True:
+            # 이미 완료됐지만 callback 실행 전인 실패도 종료 성공으로 숨기지 않는다.
+            for task in tuple(self._command_result_tasks):
+                if task.done():
+                    self._command_result_completed(task)
+            pending = {task for task in (*self._command_scopes, *self._command_result_tasks,
+                                        *self._day_tasks, *self._protection_tasks) if not task.done()}
+            if not pending:
+                break
+            # 종료 caller 취소가 명령/저장 task 취소로 전파되지 않는다.
+            await asyncio.gather(*(asyncio.shield(task) for task in pending), return_exceptions=True)
+        if self._command_results_failed:
+            raise ApplicationBlocked('command_result_drain_failed')
+        # scope의 예외 유무만으로는 내부에서 NOT_SENT로 처리한 claim 실패를 못 본다.
+        # 반대로 scope finally에서 검사하면 다른 정상 commit의 일시 _block을 오인한다.
+        # 새 명령 경계를 사용한 runtime만, 전 작업 drain 뒤 최종 저장/게시를 판정한다.
+        if self._command_tracking_started and (
+                not self.owner.healthy or self.owner.version != self.owner.published_version
+                or self.engine._execution_version != self.owner.version):
+            raise ApplicationBlocked('command_state_drain_failed')
 
     def health(self) -> dict:
         state = self.owner.state
@@ -617,6 +670,9 @@ class KRExecutionRuntime:
             "publication_recovery_required": self.owner.publication_recovery_required,
             "protection_updates_failed": self._protection_failed,
             "protection_updates_pending": len(self._protection_tasks),
+            "command_operations_pending": len(self._command_scopes),
+            "command_results_pending": len(self._command_result_tasks),
+            "command_results_failed": self._command_results_failed,
             "day_admission_closed": self.day_admission_closed,
             "ingress_pending": sum(row["state"] not in ("SETTLED", "PARKED", "FAILED", "RESOLVED")
                                    for row in self.engine._execution_ingress.values()),

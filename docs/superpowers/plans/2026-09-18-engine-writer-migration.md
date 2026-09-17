@@ -23,6 +23,8 @@ Do/RED: lease 신규 API 부재의 bootstrap 실패와 기존 shutdown의 의미
 
 See: 관련 KST/UTC 회귀·독립 리뷰·전체 검증 후 한정 완료. 아직 gateway 설치/실제 SIGNAL/수동 writer 완료가 아니며 계좌 lease만으로 거래 허가가 생기지 않는다.
 
+09-18 실행 결과: lease62·종료25시험, 독립 종료 P2 D1 수정·한정 재리뷰 승인. 전체 KST/UTC3381passed/기존xfail2·격리0. **10A1 두 조각 한정 완료**, 실제 설치/전체 writer는 다음 절의 미완 작업이다. 역할별 직접 검증·해시·경고는 후속 보고서에 기록했다.
+
 ## 10A2 — 원시각과 실제 정책 publisher
 
 Plan: 공식 고정 revision의 KRX/NXT WS 체결 46필드 중 HHMMSS(index1)와 BSOP_DATE(index33)를 보존한다. 현재 len>=20/count 무시/원시각 폐기를 실제 parser RED로 고정한다. 다중 record 전체를 검증한 뒤 발행하며 잘못된 두 번째 행 때문에 첫 행만 승인되지 않게 한다. 원 시장 시각과 수신 시각을 구분하고 REST now로 as_of를 만들지 않는다.

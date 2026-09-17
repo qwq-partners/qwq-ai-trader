@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: 계좌 독점 lease·명령 종료 drain (Task10A1, 운영 미설치)
+
+- 같은 host·고정 private root의 KIS 계좌 독점을 nonblocking flock으로 제공한다. scope/DB 경로 별칭은 계좌 독점을 나누지 않으며 UID/권한/link/inode·fork/FD/GC 수명을 검사한다. 파일 삭제·PID/TTL takeover는 없다. 다중 host나 임의 root/직접 broker 우회를 막는 설치가 아니다.
+- runtime의 첫 await 전 명령 scope와 늦은 결과 task를 추적해 admission 종료 후 fixed-point drain한다. 종료 caller 취소는 접수된 작업을 취소하지 않고, 미송신 POST를 shield로 재개하지 않는다. 독립 P2 D1(prepare/가격/정책/claim 저장·게시 실패의 정상 종료 오인)을 추가8 RED→GREEN으로 수정했다. 일시 정상 commit의 unhealthy와 최종 미복구 실패를 구분한다.
+- Astra/high lease 구현·부모 종료 구현과 별도 Astra/xhigh 리뷰를 분리했다. lease 관련 KST/UTC268개+추가10, 종료 재리뷰 원본24+추가16·관련UTC249개로 각각 한정 승인. 전체 KST/UTC **3381 passed/2 known xfailed/4 warnings(138.78/143.26초)**·격리0·문법/비밀패턴 통과. 신규87시험, warning은 pykrx1+실제 fork 경계 시험3이며 전체 RED-first라고 주장하지 않는다.
+- **실제 factory/core/run_trader/CLI 설치·전체 writer·최초 인계·전체 C/F/G/R 미완.** 다음은10A2 원시각·정책 publisher다. main/운영/실API/주문/설정/Toss 변경 없음. 검증 지문과 Plan–Do–See는 `docs/reviews/engine-execution-followup-2026-09-18.md` 참조.
+
 ## 2026-09-18 — feat: KR 요청 바인딩·자원 예약·현재 정책 재검사 (Task9A/B, 운영 미설치)
 
 - 계좌/날짜/세션·실제 TR/본문·수량/호가/strategy/부모를 불변 요청에 묶고, 기존 broker의 토큰/hash/공용 limiter 이후 그 요청을 마지막 동기 검사해 단회 POST한다. raw/운영 broker 송신 경로를 교체한 것은 아니다. 모든 MODIFY는 지원 계약·증분 예약 근거가 없어 미지원이다.

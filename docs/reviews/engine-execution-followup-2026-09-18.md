@@ -104,6 +104,18 @@ Do: 순수 자원 계산은 실제 builder·FeeCalculator·planned_risk/risk_qua
 
 후속 writer 이행은 [Task10 세분 계획](../superpowers/plans/2026-09-18-engine-writer-migration.md)으로 정리했다. 첫 범위는 계좌 singleton lease와 같은 runtime의 command/result 종료 drain이다. 이후 실제 WS 원시각/유효정책 publisher→기존 sizing/qualification 보존→실제 SIGNAL/ORDER→SAFE/USER/CLI·fill·sync/day 순서로 진행한다. 각 조각의 한정 승인을 전체 단계3 완료로 바꾸지 않는다.
 
+### Task10A1 — 계좌 독점·runtime 명령 종료 (한정 승인, 운영 미설치)
+
+Plan: 계좌 lease(Astra/high)와 runtime 종료 배선(부모)을 파일별 분리한다. 기존 수동 CLI/운영 서비스에는 아직 설치하지 않는다. 같은-host·같은 private root의 협력 프로세스 독점이며 다중-host나 별도 root까지 보장하지 않는다. 신규 명령을 먼저 닫고 이미 진행 중인 명령에서 늦게 생성되는 결과 저장까지 기다린다.
+
+Do: 실제 SQLite/runtime/commands에서 HTTP 응답/결과 저장/호출 취소 뒤 남은 결과 및 prepare·quote·정책 commit 중 종료가 먼저 반환하는6건과 결과 저장 실패가 성공 종료로 표시되는1건을 먼저 RED로 확인했다. 첫 await 전 scope 등록과 runtime 결과-task registry/fixed-point drain을 연결했다. 종료 caller의 취소는 저장/송신 task로 전파하지 않고, 이미 닫힌 runtime의 새 prepare/dispatch/publisher를 거부한다. 미송신 요청은 기존 최종 guard로 POST0이며 진행 중 결과 저장을 새 주문 허가로 쓰지 않는다.
+
+계좌 lease는 wire 계좌/상품·KIS 환경의 canonical digest를 사용한다. scope 별칭/config version/SQLite 경로는 독점 키가 아니며, 기존 private root/ancestor와 lock의 UID·권한·inode·link를 재검사한다. 실제 nonblocking flock, fork 자식 FD 정리, thread/fork 직렬화, GC finalizer를 포함한다. 파일을 삭제하거나 PID/TTL로 takeover하지 않는다. 신규62시험은 bootstrap26·의미 RED18·최초 GREEN18로 구별했다. 별도 Astra/xhigh의 독립 리뷰는 관련 KST268passed/3.97초·UTC268passed/3.93초와 추가 probe10개(KST0.45초·UTC0.42초), 격리0·동결 해시 일치를 확인하여 **lease 두 파일 한정 APPROVED, P0/P1/P2 0**이다. 리뷰 보고서 hash `a721ebedbc04fb01b3cc463922ef495cfddece275ec6ff351d7f534eefebd274`.
+
+종료의 최초15시험은 의미 RED7·최초 GREEN8이었다. 독립 리뷰가 추가 **P2 D1**을 재현했다: 결과 task 이전의 prepare/quote/정책/claim에서 commit·게시가 실패해도 shutdown이 정상 반환했다(8RED·16대조GREEN). 최종 drain 후 owner 건강성·저장/게시/engine version 일치를 검사하도록 고쳤다. scope finally에서 순간의 unhealthy를 영구화하면 다른 정상 commit을 오인하므로 그런 방식은 쓰지 않았다. 신규8 RED 회귀와 정상 동시 commit 대조2개를 더해 종료25시험이다. 수정 후 관련 KST279passed/27.75초·격리0. 새 독립 Astra/xhigh는 원본24개(8RED→GREEN+16대조), 종료25개, 관련UTC249개 및 독립 추가16개를 통과해 **D1 해소·종료 경계 한정 승인, 신규 P0/P1/P2 0**으로 판정했다. 실제 정상 busy의 유효 요청 거부, lookup/commit 취소, 실제 restore 뒤 회복, engine 게시 version 불일치 및 결과 실패의 지속을 확인했다. 재리뷰 보고서 hash `1376a4bf9fb4bc16bb57d1722d09d8415a8f193b8a5bce9f3a58e0ada2a441a7`. 원본 실패 보고서와 probe는 보존했다.
+
+See: 동결 source/test patch(기준bef213c) SHA256 `9385094f719ac57ce025eaecdda41c984d74b89b8cfda9952afbba263c9b79dc`. 전체 KST **3381passed/2 known xfailed/4 warnings,138.78초**, UTC **3381passed/2 known xfailed/4 warnings,143.26초**, 각각 격리0·문법·비밀정보 패턴 검사 통과다. 신규87개(lease62·종료25)이며4warning은 기존pykrx1과 의도적인 fork 경계 시험의 Python3.12 경고3이다. warning을 숨기거나 전부 기존 경고라고 쓰지 않는다. lease `e79ea390ae7beed978fb8140a030cc402802af99050ce68b21826d329da74bfa`, runtime `7dd0a5ef0756b3bd8a173bc9d6c7fbe968ba13ca51153ee29f0de33aa97252ec`, commands `1ab94a2f217a991f076edad9681d53cfceafafd4b5b4dffb7811cbbba2d3bd1b`. 이는 설치 factory나 실제 engine/scheduler shutdown 전체 인수가 아니다. 다음은10A2 실제 원관측/정책 publisher이며 main/운영/실API/주문/설정/Toss 변경은 없다.
+
 ## 단계4 — 공식 계약 증거
 
 Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와 잔고–체결 cutoff를 확인한다. 최신 TR로 자동 치환하지 않는다.
@@ -128,7 +140,7 @@ Do/See: 아직 실행 전이다. 충족/미충족과 운영 전환의 증거 조
 | C2/C6 | `test_kis_order_evidence.py::test_cancel_quantity_fields_do_not_invent_proven_finality`, `test_kis_execution_query_integration.py`의 실제GET 페이지/실패 시험 | 취소 체인 미지원 유지, 조회 결과→실제 intent 대사 배선 |
 | C3 | `test_execution_lifecycle.py::test_replacement_requires_terminal_evidence_and_applied_fills` | 합성 최종성은 공식 취소 계약 증명이 아님. 지원 증거가 없어 실경로 다음5주 주문은 미지원 |
 | C4 | `test_execution_lifecycle.py::test_evidence_other_scope_never_matches`, `test_late_or_wrong_sender_result_cannot_release_new_attempt` | 실제 수집기 scope→broker ref→체결큐 연동 |
-| C5 | `test_execution_lifecycle.py::test_real_store_restart_preserves_claim_and_unresolved_reservation`, `test_kr_final_dispatch.py::test_post_never_repeats_after_auth_network_or_malformed_reply` | 실제 broker·owner 연결에서 POST 전후/ACK 저장 종료 인수 |
+| C5 | lifecycle 재시작/단회 POST 시험 및 `test_execution_command_shutdown.py`의 실제 commands·SQLite·fake HTTP 응답/결과 drain·저장 실패 인수 | 명령 owner 한정 연결됨. 실제 gateway 설치·engine/scheduler/수동 호출·broker/lease 종료 순서 인수는 미완 |
 | C7 | `test_execution_lifecycle.py::test_concurrent_claims_and_duplicate_prepare_have_one_sender` | 실제 engine와scheduler 동시 fallback을 같은 intent로 합류 |
 | F1/F2 | `test_execution_runtime.py::test_real_queue_buy40_60_then_sell40_60_applies_cash_and_protection_once` | core 실큐 범위 충족. scheduler의 중복 적용 제거 후 전체 경로 재실행 |
 | F3 | 같은 실큐 시험 및 `test_full_engine_loop_delivers_receipt_and_reopen_replays_without_reapplying` | 실제 조회→큐 replay 인수 추가 |
@@ -139,12 +151,12 @@ Do/See: 아직 실행 전이다. 충족/미충족과 운영 전환의 증거 조
 | F7 | `test_execution_protection_checkpoint.py::test_addon_accumulates_small_fills_then_resets_only_once`, `test_execution_initial_r.py::test_runtime_queue_captures_first_stop_and_finality_then_finalizes_once`, `test_execution_initial_r_runtime.py::test_initial_r_failed_commit_or_publish_reopens_without_reapplying_economics`, `test_execution_journal_postgres.py` | 최초 R 및 전용 원장 core 인수는 한정 검증. 공식 취소 최종성 지원·기존 분석 원장 projection·전체 경로 미완 |
 | F8 | `test_execution_protection_checkpoint.py::test_missing_protection_degrades_and_later_fill_cannot_fake_recovery`, `test_exemption_survives_fills_and_full_close_clears_owned_protection` | 실제 기존 보유 인계·복구/면제 변경 경로 연결 |
 | F9 | `test_execution_runtime.py::test_real_risk_manager_receives_persisted_loss_intent_and_one_use_state`, `test_execution_day_recovery.py::test_day_publish_resets_real_risk_metrics_once_without_legacy_writes`, `::test_rollover_fault_and_reopen_keep_durable_date_and_closed_admission` | runtime 날짜 전환/복원 검증과 실제 scheduler 일일 초기화 writer 이행을 구분. 후자는 미완 |
-| G1/G2 | `test_kr_final_dispatch.py::test_market_changes_during_each_await_prevent_http`, `test_execution_guards.py::test_clock_and_snapshot_are_read_at_each_decision_not_at_construction` | 실제 분석/분산대기/LLM→broker 전체 경로·요청/예약 바인딩 미완 |
+| G1/G2 | final guard 시험 및 `test_execution_command_owner.py::test_current_state_after_every_network_await_blocks_post`, 실제 bound prepare→ACK→실큐 체결의 `test_execution_command_flow.py` | 요청/예약 owner 한정 연결됨. 실제 분석/분산대기/LLM·현재 source publisher→broker 전체 경로는 미완 |
 | G3/G3a | `test_execution_guards.py::test_timezone_host_does_not_change_kst_cutoff`, `test_failure_attempt_hides_previous_normal_until_new_valid_observation` | 현재 위험 publisher를 실제 scheduler 관측 성공/실패에 배선 |
 | G4 | `test_execution_guards.py::test_explicit_routes_exempt_only_alpha_and_metadata_cannot_issue_context` | 실제 KOFR/수동/SELL 경로 이행·기존 위험 예외 특성화 |
-| G5 | `test_execution_guards.py::test_common_safety_barrier_applies_to_all_trade_commands` | owner→실제 request→HTTP 결합과 DB 장애 장벽 시험 |
+| G5 | 공통 guard와 `test_execution_command_owner.py`, `test_execution_command_shutdown.py`의 실제 owner→prepared request→fake HTTP·DB/게시 장애 | 실제 설치자의 모든 raw 송신점 이관·계좌 lease 최종 검사와 결합해야 함. MODIFY 미지원 유지 |
 | R1/R1a | `test_execution_state_store.py::test_existing_invalid_database_is_rejected_not_recreated`, `test_execution_runtime.py::test_empty_database_does_not_replace_known_live_portfolio` | 최초 인계 근거 부재로 시작 차단 유지. 실제 시작 후 모든POST0 인수 미완 |
-| R2 | C1/C2 동결본 KST/UTC 전체 회귀2425passed/기존xfail2, ExitManager 기존 특성화 포함 | 공용 파일 변경 때마다 반복. US 실행 안전성 완료 근거는 아님 |
+| R2 | Task9 동결본 KST/UTC 전체3294passed/기존xfail2, Task10A1 추가 종료/lease 회귀는 위 진행 원장에 별도 기록 | 공용 파일 변경 때마다 반복. US 실행 안전성 완료 근거는 아님 |
 
 ### 이후 구현 순서의 구체 경계
 
