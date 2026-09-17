@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-17 — docs(T12): 독립 관측 서비스 main 병합·운영 대기 인계
+
+- PR #74 head877768e의 required CI1809 passed/2 known xfailed·격리0 성공 후21:34:47 KST main `c2fe787` 병합. 소스/테스트/의존성 변경 없는 후속 상태 문서다.
+- 최종 오프라인 봉인 패키지 빌드·system Python 격리 import·설치 dry-run 통과. 실제 설치/자격 복사/토큰 발급/ON은 미실행이며 새 관측 일정(09/18·21·22,09/22 18시만료) 답변 대기다. 기존 거래 봇 PID3274983·checkout8ff2f55 유지,21:34:34 health 정상·pending/stale0. 정본: `docs/reviews/toss-observer-service-2026-09-17.md`.
+
 ## 2026-09-17 — feat(T12): 독립 Toss 관측 서비스 구현·로컬 검증·독립 리뷰 완료 (운영 미설치)
 
 - 승인된 상세 설계에 따라 root 보호 launcher/고정 artifact·배치/plan hash 검증, grant당 단일 worker 시작 영수증, 전용 UID 설치와 기존 Toss worker 재사용을 구현한다. 실제 자격/승인 파일은 저장소에 포함하지 않는다.
