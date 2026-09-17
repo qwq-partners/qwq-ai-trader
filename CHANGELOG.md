@@ -1,11 +1,12 @@
 # QWQ AI Trader - Changelog
 
-## 2026-09-17 — feat(T12): 독립 Toss 관측 서비스 구현 (검증·리뷰 중, 운영 미설치)
+## 2026-09-17 — feat(T12): 독립 Toss 관측 서비스 구현·로컬 검증·독립 리뷰 완료 (운영 미설치)
 
 - 승인된 상세 설계에 따라 root 보호 launcher/고정 artifact·배치/plan hash 검증, grant당 단일 worker 시작 영수증, 전용 UID 설치와 기존 Toss worker 재사용을 구현한다. 실제 자격/승인 파일은 저장소에 포함하지 않는다.
 - 입력은 추가 KIS 호출 없는 기존 loopback `/api/positions` 보유 코드만 사용한다. 빈 보유와 입력 장애를 분리하고 후보·KIS 비교 가격·관측시각을 만들어 넣지 않는다.
 - 별도 private 상태는 원장 ACK 및 read-only 대조 뒤 성공을 확정한다. 슬롯/attempt 분모·관측/비교·입력/원장 시각을 구분하며 `production_eligible=False`를 유지한다. 기존 봇 checkout·PID·주문/설정은 바꾸지 않는다.
 - 작업별 모델/RED-GREEN·독립 리뷰·UTC/KST 통합검증·설치/ON의 실제 결과는 `docs/reviews/toss-observer-service-2026-09-17.md`에 구분 기록한다. 이 항목만으로 운영 활성화나 3영업일 인수 완료를 의미하지 않는다.
+- 최종 UTC/KST 순차 전체 검증 각각 **1809 passed/2 known xfailed/1 기존 warning**, 격리0·비밀정보 검사 통과. 독립 broad 및 후속 테스트 한정 리뷰 C/I/M0. 초기 CI의 시험 Python patch 불일치를 `sys.executable -I -S`로 수정하고 운영 exact-version 거부 검사는 유지했다. CI/main 병합 이력은 PR #74, 실제 ON은 일정 확정 및 운영 인수 후 별도 기록한다.
 
 ## 2026-09-17 — docs(T12): 독립 Toss 관측 서비스 상세 설계 (ON 미실행)
 

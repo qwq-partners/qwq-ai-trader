@@ -138,6 +138,25 @@ def test_changed_release_rejected_before_service_import(sealed_release):
         module.verify_release(document)
 
 
+def test_release_rejects_python_patch_version_mismatch(sealed_release):
+    module, document = sealed_release
+    module.verify_release(document)
+    root = Path(document['release_root'])
+    manifest = json.loads((root / 'manifest.json').read_bytes())
+    version = list(sys.version_info[:3])
+    version[2] += 1
+    manifest['python_version'] = '.'.join(map(str, version))
+    payload = module.canonical_bytes(manifest)
+    digest = hashlib.sha256(payload).hexdigest()
+    (root / 'manifest.json').write_bytes(payload)
+    destination = root.parent / digest
+    root.rename(destination)
+    document.update(artifact_sha256=digest, release_root=str(destination),
+                    manifest_path=str(destination / 'manifest.json'))
+    with pytest.raises(module.LaunchError):
+        module.verify_release(document)
+
+
 @pytest.mark.parametrize('change', ['extra', 'symlink', 'hardlink', 'mode', 'parent', 'bootstrap'])
 def test_release_rejects_unsafe_files(sealed_release, change):
     module, document = sealed_release
@@ -319,7 +338,9 @@ assert 'src.data.providers.toss.oauth' not in sys.modules
 assert 'scripts.run_trader' not in sys.modules
 print(str(code) + ':' + str('src' in sys.modules))
 '''
-    result = subprocess.run(['/usr/bin/python3', '-I', '-S', '-c', harness, str(tmp_path)],
+    # Manifest and isolated subprocess must use the same interpreter patch
+    # version; CI's setup-python can differ from /usr/bin/python3.
+    result = subprocess.run([sys.executable, '-I', '-S', '-c', harness, str(tmp_path)],
         env={'TOSS_API': '1', 'PYTHONPATH': str(tmp_path), 'PYTHONHOME': str(tmp_path)},
         cwd=tmp_path, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr

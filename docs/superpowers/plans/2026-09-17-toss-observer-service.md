@@ -184,8 +184,8 @@ def test_retention_does_not_delete_auth_records(retention_fixture):
 
 **Files:** Update `CHANGELOG.md`, `CLAUDE.md`, `docs/README.md`, `docs/operations/toss-shadow-runtime.md`; Create `docs/reviews/toss-observer-service-2026-09-17.md`, integration tests `tests/test_toss_observer_integration.py` if boundary tests require them. 공통 문서 작성은 부모만 담당한다.
 
-- [ ] **Step 1: 각 task spec+quality 리뷰.** baseline~head review package와 task brief/report로 독립 reviewer를 배치한다. 수정은 해당 구현자에게 반환하고 covering test evidence 후 scoped 재리뷰한다. 격리 분기 commit을 부모 feature에 명시 merge/cherry-pick한다.
-- [ ] **Step 2: 통합 인수.** temp-root sealed artifact+가짜HTTP end-to-end, 누락 registry/expiry/receipt/publicURL/invalid positions에서 OAuth/GET0, valid flow에서 durable 결과·별도 status. 기존 돈 경로 테스트 불변, 전체 UTC/KST verify·비밀정보 검사·의존성 폐쇄성 확인. root 작업 checkout은 여전히8ff2f55/PID 동일.
+- [x] **Step 1: 각 task spec+quality 리뷰.** baseline~head review package와 task brief/report로 독립 reviewer를 배치한다. 수정은 해당 구현자에게 반환하고 covering test evidence 후 scoped 재리뷰한다. 격리 분기 commit을 부모 feature에 명시 merge/cherry-pick한다.
+- [x] **Step 2: 통합 인수.** temp-root sealed artifact+가짜HTTP end-to-end, 누락 registry/expiry/receipt/publicURL/invalid positions에서 OAuth/GET0, valid flow에서 durable 결과·별도 status. 기존 돈 경로 테스트 불변, 전체 UTC/KST verify·비밀정보 검사·의존성 폐쇄성 확인. root 작업 checkout은 여전히8ff2f55/PID 동일. 최종 UTC/KST 각각1809 passed/기존xfail2, 격리0.
 - [ ] **Step 3: 최종 리뷰/문서/커밋·푸시.** Astra/xhigh broad branch 리뷰, 새 결함은 한정 fixwave/재리뷰. S01~S12 증거와 미실행 운영 인수 기록. Required CI exact head 성공 후 PR/main 병합, root 운영 checkout pull금지.
 - [ ] **Step 4: 실제 설치 preflight.** 기존 봇 PID/시각·pending/연결/정체·설정7경로 보호지문 확보, 실제 UID/host·클라이언트 일치·approved dates·root paths/권한·디스크/systemd 지원 대조. 비밀 출력 없는 dry-run, 서명 대신root operator anchor를 설치한다. 조건실패시기존봇유지.
 - [ ] **Step 5: 새 서비스만 ON.** sealed release와root bootstrap을 설치한 뒤 전용UID `--check`에서발급0을 확인, 이후 unit start1회. 기존서비스restart0, 실제OAuth/GET/원장 관측구분,unknown/revoked발생하면자동재발급0으로중단보고.
