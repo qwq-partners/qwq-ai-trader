@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, date, timedelta
+from copy import deepcopy
+from datetime import datetime, date, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
 import aiohttp
@@ -22,6 +23,7 @@ from loguru import logger
 from src.utils.token_manager import get_token_manager
 from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
 from src.utils.data_freshness import kr_night_futures_as_of  # T10 F17 (2026-09-15)
+from .kis_index_observation import build_index_observation
 
 
 class KISMarketData:
@@ -39,6 +41,9 @@ class KISMarketData:
         # "바뀐" 시각. 가격이 같은 채로 반복 조회되는 게 고착인지 정상 유지(장외/무변동)
         # 인지는 이 데이터(마지막 변경 이후 경과)로만 판단하고 여기서 단정하지 않는다.
         self._night_futures_last_change: Dict[str, Dict[str, Any]] = {}
+        # Receipt time is not source market time; cached reads keep this original fact.
+        self._index_clock = lambda: datetime.now(timezone.utc)
+        self._index_attempts: Dict[str, int] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -1033,8 +1038,12 @@ class KISMarketData:
         label = label_map.get(index_code, index_code)
         cache_key = f"index_price_{index_code}"
         if self._is_cache_valid(cache_key, 10):
-            return self._cache[cache_key]
+            return deepcopy(self._cache[cache_key])
 
+        # 동일 지수의 늦은 옛 응답이 최신 성공/실패 뒤 cache를 덮지 않는다.
+        # 호출자 응답은 유지하고 GET 추가/직렬화/TTL 변경은 하지 않는다.
+        attempt = self._index_attempts.get(index_code, 0) + 1
+        self._index_attempts[index_code] = attempt
         try:
             session = await self._get_session()
             headers = await self._get_headers("FHPUP02100000")
@@ -1075,9 +1084,12 @@ class KISMarketData:
                     "change": round(change, 2),
                     "change_pct": round(change_pct, 2),
                     "source": "kis",
+                    "_observation": build_index_observation(out, index_code,
+                                                              received_at=self._index_clock()),
                 }
-                self._set_cache(cache_key, result)
-                return result
+                if self._index_attempts.get(index_code) == attempt:
+                    self._set_cache(cache_key, result)
+                return deepcopy(result)
         except Exception as e:
             logger.debug(f"[KIS 지수] {label} 조회 오류: {e}")
             return None

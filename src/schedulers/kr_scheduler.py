@@ -1740,7 +1740,11 @@ class KRScheduler:
         어댑터·메서드가 아직 없으면 조용히 건너뛴다 — 급락 감지 루프를 막지 않는다.
         등락률이 없으면 0 이 아니라 None 으로 넘긴다.
         """
-        adapter = getattr(getattr(self.bot, "engine", None), "_regime_adapter", None)
+        engine = getattr(self.bot, "engine", None)
+        if getattr(engine, '_execution_runtime', None) is not None:
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked('risk_source_ticket_required')
+        adapter = getattr(engine, "_regime_adapter", None)
         setter = getattr(adapter, "set_intraday_risk", None)
         if not callable(setter):
             return
@@ -1748,6 +1752,27 @@ class KRScheduler:
             setter(level, change_pct, as_of)
         except Exception as e:
             logger.debug(f"[장중급락] 레짐 어댑터 전달 실패 (무시): {e}")
+
+    async def _refresh_intraday_risk(self):
+        """5분 점검 한 회. 명시 설치 시 같은 owner에서 조회 수명/보호를 완료한다."""
+        runtime = getattr(getattr(self.bot, 'engine', None), '_execution_runtime', None)
+        provider = getattr(self.bot, 'kis_market_data', None)
+        if runtime is not None:
+            writer = getattr(runtime, '_intraday_writer', None)
+            if writer is None:
+                from ..execution.safety.application import ApplicationBlocked
+                raise ApplicationBlocked('intraday_owner_not_installed')
+            return await writer.refresh(provider)
+        # 未설치 legacy 경로의 조회/분류/어댑터 순서와 예외 경계는 유지한다.
+        if provider:
+            data = await provider.fetch_index_price('0001')
+            if data and 'change_pct' in data:
+                pct = float(data['change_pct'])
+                level = await self.bot.batch_analyzer.update_intraday_state(pct)
+                if classify_intraday_level(pct) is not None:
+                    self._push_intraday_risk(level, pct, _now_kst())
+                else:
+                    logger.warning(f'[장중급락] KOSPI 등락률 결측/비정상({pct!r}) — 어댑터 갱신 생략')
 
     def _resolve_regime_conflict(self, kospi_regime: str, llm_regime: str,
                                  crash_level: Optional[str] = None) -> str:
@@ -6925,17 +6950,23 @@ JSON:
 
         pending_signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
 
+        _runtime = getattr(getattr(bot, 'engine', None), '_execution_runtime', None)
+        def _batch_now():
+            # legacy 파일/시그널은 naive KST 계약. owned clock만 명시 변환하며
+            # 시스템 TZ에 따라 장중 작업이 사라지지 않도록 한다.
+            return _runtime._now().replace(tzinfo=None) if _runtime is not None else datetime.now()
+
         # 실행 플래그 파일 기반 영속화 (재시작 시 중복 매수 방지)
         _flag_dir = Path.home() / ".cache" / "ai_trader"
         _flag_dir.mkdir(parents=True, exist_ok=True)
-        _today_flag = _flag_dir / f"executed_{date.today().isoformat()}.flag"
+        _today_flag = _flag_dir / f"executed_{_batch_now().date().isoformat()}.flag"
         if _today_flag.exists():
-            last_execute_date = date.today()
-            logger.info(f"[배치스케줄러] 실행 플래그 감지: 오늘({date.today()}) 이미 실행됨 → 중복 방지")
+            last_execute_date = _batch_now().date()
+            logger.info(f"[배치스케줄러] 실행 플래그 감지: 오늘({last_execute_date}) 이미 실행됨 → 중복 방지")
 
         try:
             while bot.running:
-                now = datetime.now()
+                now = _batch_now()
                 today = now.date()
 
                 # 일요일 21:00 전문가 패널 (주 1회)
@@ -7072,19 +7103,7 @@ JSON:
                         and not (now.hour == 15 and now.minute >= 35)
                         and time.time() - last_crash_check_ts >= _crash_interval):
                     try:
-                        _kis_md = getattr(bot, "kis_market_data", None)
-                        if _kis_md:
-                            kospi_data = await _kis_md.fetch_index_price("0001")
-                            if kospi_data and "change_pct" in kospi_data:
-                                _pct = float(kospi_data["change_pct"])
-                                _level = await bot.batch_analyzer.update_intraday_state(_pct)
-                                # 유효 레짐(MarketRegimeAdapter)도 같은 급락 상태를 본다.
-                                # 등락률이 NaN 등 결측이면 감지기는 이전 상태를 돌려주므로
-                                # 그것을 '지금 관측' 으로 재각인하지 않는다 (T10 통합 리뷰 advisory)
-                                if classify_intraday_level(_pct) is not None:
-                                    self._push_intraday_risk(_level, _pct, _now_kst())
-                                else:
-                                    logger.warning(f"[장중급락] KOSPI 등락률 결측/비정상({_pct!r}) — 어댑터 갱신 생략")
+                        await self._refresh_intraday_risk()
                     except Exception as _e:
                         logger.debug(f"[장중급락] KOSPI 조회 실패 (무시): {_e}")
                     last_crash_check_ts = time.time()

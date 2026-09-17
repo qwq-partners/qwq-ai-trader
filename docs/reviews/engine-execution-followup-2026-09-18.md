@@ -138,6 +138,30 @@ See: 최종 source/test patch(기준a1003ed) SHA256 `5a32c0bba11c0ab2b263ad836d7
 
 독립 owner 최종 리뷰는 원본9·후속20·추가17을 각 TZ46개, 관련UTC328개 통과로 F1/F2/F3 해결·신규 P0/P1/P2 0을 확인해 **6파일 한정 승인**했다. 정상 pending bare/bound 복원, generation/가격/시각/status 손상 거부, 새 정상 bound 이후 actual fake POST1 대조를 포함한다. 승인 보고서 SHA256은 feed `ed456844f77a1f3b601c1059ac26c4c0edb5d9111db332b12a0bc59493c48d83`, owner `db203e80d6ce01a6b43e7e9d009d23d7f7fd7de334dc44bb80e69691158f9d00`, 순수 위험 `5b34734271c88fee069621023511ca6fe086b96d20a7cd8200d77f19f9f617be`다. 각 원본 실패 보고서/probe는 덮어쓰지 않았다. 이 승인은 사용자 단계5의 실제 전체 broad 리뷰를 대체하지 않는다.
 
+### 후속 Task10A2b4/5 — 위험 관측 수명·실제 5분 호출점 (구간별 한정 승인, 운영 미설치)
+
+Plan: 실제 KIS 지수 조회의 원 필드 결측과 receipt를 보존하고, I/O 전 durable begin부터 같은 runtime이 추적한다. 5분 정책과 정오 캡·2분 추세를 혼합하지 않는다. Astra/high는 source 수명, Terra/high는 선제 청산 선택·입력 정규화, 부모는 producer/실제 scheduler·owner 연결, Astra/xhigh는 별도 리뷰를 맡았다.
+
+Do — source: `risk_sources`는 시도별 source lane/latest·명시 의존 version·완료 상태와 충돌을 저장한다. 조회 대기 중의 pending, 최신 실패/결측/취소는 이전 정상 승인을 가린다. 최신 유효 완료에서만 현재 owner DTO를 동기 reducer에 전달하며 상태와 결과를 한 commit으로 저장한다. 종료 도중 이미 수락한 외부 조회의 결과도 기존 scope token으로 drain한다. 시장 as_of가 없는 성공은 진입 unknown이다. author46·독립37 및 관련100을 각 TZ 직접 확인한 한정 승인 보고서 SHA `f9bd0e514dc8a020ff29657a1dd36d4c155888a758dcbd89f9ccc8bb3d20395b`를 보존했다. 이 source 모듈 승인 당시 actual publisher hook은 없었으므로 아래 실제 연결 리뷰와 구분한다.
+
+Do — 입력: 실제 KIS 지수 숫자·반올림·10초 TTL·GET/limiter 수는 유지한다. metadata에는 raw 필드 valid/missing/invalid, 응답 UUID·원 receipt를 추가하되 시장 시각은 None이다. deepcopy로 반환값 변경이 cache 원관측을 바꾸지 못하게 했다(별도 의미 RED1). 이후 실제 병렬 조회 RED2(늦은 옛 정상의 최신 급락 cache 덮기·최신 실패 뒤 cache 재생성)를 per-index latest-begun cache-write guard로 수정했다. caller는 늦은 원 응답을 그대로 받으므로 owner의 시도 검사도 필요하다. 원 producer 한정 승인 보고서 SHA `2da8e59d883c9267eb5ba53736c8d6596798ed1b8f5c36bbd290662fc7b9b069`와 추가 cache/input 원본 리뷰 SHA `9f72082c8ac83340eef4bab9b564627a7e5f78c08db7583bc0621188be4a9df1`를 구분한다.
+
+입력 정규화 독립 **P2 F1**은 collection status·극단 정수·timezone 변환 underflow가 missing 대신 예외로 빠지는 한 결함의 세 경계다. 원본13 RED/21대조를 보존하고 exact type·유한 수치 변환·좁은 시각 변환 방어로 수정했다. 별도 재리뷰는 작성자42·원본34·추가38을 각 TZ **114passed/격리0**로 직접 확인해 두 파일 한정 승인했다. 보고서 SHA `2ffc4e097921f928692011c1d5b2b8a113b22b503f1ae92bf7df508bd81d755b`. caller 시계/날짜 인자 오류와 임의 programming RuntimeError는 그대로 전파되며 blanket catch로 숨기지 않는다. 원 metadata가 missing인 outer0은 normal로 승인하지 않는다.
+
+Do — 선택: 실제 Portfolio/ExitManager를 복호화한 선제 청산 selector는 core·면제 제외, 5영업일 이상·미실현1% 미만을 보존한다. 독립 **P2 F1/F2**는 저장 DTO 가격으로 PnL을 판단하면서 다른 최신 가격을 제안하던 불일치와 비유한/음수 Decimal 수용이었다. 원본11 RED/18대조, author9 RED/8대조 후 제공된 시세를 cloned Position에도 반영하고 입력을 검증했다. 최종 author17+원본29를 두 TZ 재확인한 두 파일 승인 SHA `a0672c20808def6a22f561fea8a26538bac02f5cd527d36e171b7b1108ec4b8d`. 이 helper는 주문/출처 권한을 만들지 않는다.
+
+Do — 실제 5분: `run_batch_scheduler`→`_refresh_intraday_risk`→실제 KIS adapter(fake HTTP)→owner 완료 경로를 추가했다. 명시 설치 시에만 사용하며, 원래 운영 factory에는 설치하지 않았다. 증명된 최초 인계 대신 normal0 기준선을 자동 생성하지 않고 미존재 시 설치를 차단한다. 최신 유효 입력으로 현재 보호·현재 시세 view를 사용해 정책/선제 후보 outbox/완료 증거를 함께 저장하고, 전체 DTO 검증 뒤 batch와 adapter의 intraday mirror를 게시한다. 기존 임계값/5분 회복과 당일 보호 정책은 유지한다. 같은 원 응답의 cache 재조회는 분류 시각을 새로 찍지 않는다. 회복해도 이미 저장된 pending 청산 후보를 지우지 않는다.
+
+실제 raw batch mutation/선제 emit 우회2건, aware cooldown의 기존 소비자 비교3건, UTC 호스트에서 실제 loop의 GET0이 된1건을 의미 RED→GREEN으로 고정했다. 신규 API 부재5건은 bootstrap이고 실제 기존 결함5건이라고 세지 않는다. 잘못된 test helper 메서드명1건은 시험 작성 실수로 분리했다. installed loop는 명시 runtime KST 시계, cooldown은 aware 시계로 비교하며 uninstalled legacy 동작은 유지한다. 실제 보호/outbox 전달은 **저장까지만** 연결됐으며 정상 Signal→gateway 송신 이행 완료가 아니다. 원본 uninstalled 겹침 RED도 보존한다.
+
+See: source/test patch(기준552fb25, 이번14파일 전체) SHA `997ef674b03fc8989d23818425fb316bf737e0286709686d38be70c51a99c445`. KST 전체 **3702passed/2 known xfailed/4 warnings,130.71초**, UTC **3702/2/4,125.77초**·각각 격리0, tracked 전체 Python 문법/비밀패턴 검사 통과다. 신규158개는 source46·producer35·입력42·선택17·실제5분18이다. 최초 중간 전체는 env 격리에서 HOME을 제거한 탓에 배포 *fake 시험*1건이 실패(3687pass)했다. 시험용 SSH-key 경로만 명시한 clean env로 바로잡았으며 제품 수정/운영 SSH로 해결하지 않았다. 4 warnings는 기존pykrx1+의도적 fork3이다.
+
+실제5분 다섯 파일의 별도 독립 리뷰는 새 P0/P1/P2 없이 **한정 승인**했다. 리뷰어가 관련210시험(UTC10.80초/KST13.02초)과 독립27시험(UTC3.64초/KST3.51초)을 직접 실행했고 각각 격리0이다. 실제 HTTP 응답 대기 중 pending, 역순 정상/급락/결측/실패, 동시 체결·시세, 새 store/runtime/engine/ExitManager 복원, SQL/게시 실패, 손상 crosslink, 늦은 cache, 달력·과거 진입일 변화, 실제 adapter bull cap을 확인했다. 보고서 SHA `599416ed16fd1acdef416d107b1443786523039194ef927a2cb2fc0843a0a5c9`, 독립 probe SHA `60426fc5f68b66fbc25046df82392d81220aa20517fae60254bd4e5b9afbc91c`. 리뷰 수치를 전체3702에 합산하지 않는다. 이 리뷰가 닫지 않은 입력 F1은 위 별도 입력 재리뷰에서 해결됐고, 정책 재생·effect 전달·나머지 writer 및 운영 승인은 이 한정 승인에 포함되지 않는다.
+
+후속 미완을 별도 RED로 확인했다. 실제 core 등록실패→5분 caution/crash/severe→보호 repair는 현재 정책 이력이 기존 fill/quote 재생에 연결되지 않아 `current_protection_evidence_mismatch`로 **3건 BLOCKED**다(UTC1.19초·격리0). 원본 probe SHA `8b5cd60e3a0da6ddb219c77c67f45a490543f5274a534bb7df608744d40d6b24`. 이는 위험하게 추정 복구하지 않는 차단이며 다음 정책 입력 기록·재생 작업 대상이다. 5분 연결의 한정 리뷰를 복구까지 전체 완료로 확대하지 않는다.
+
+정오/2분/LLM·정책 재생·WS callback·실제 effect/gateway·수동/KOFR·sync/day·factory, 전체 C/F/G/R와 장기 성능은 아직 미완이다. REST 시장 시각/최초 인계/취소 체인 미입증, 모든 MODIFY 미지원과 `trading_ready=False`를 유지한다. main/운영/실API/주문/설정/Toss 변경 없음.
+
 ## 단계4 — 공식 계약 증거
 
 Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와 잔고–체결 cutoff를 확인한다. 최신 TR로 자동 치환하지 않는다.

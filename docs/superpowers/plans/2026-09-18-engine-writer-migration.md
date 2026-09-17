@@ -66,7 +66,13 @@ Plan: 5분 batch 전이, 정오 max-risk 캡/LLM, 2분 기술 추세는 같은 �
 
 Do/See 예정: 기존 실제 writer RED1을 보존하고 새 실제 caller 시험(시도 시작 뒤 오래된 정상, 역순 성공/실패, 느린 LLM 동안 새 급락/일자 전환, 선제 emit 대기 중 정상 회복, 중복/복원)을 먼저 실패시킨다. 실제 클래스·임시 SQLite·fake 조회/LLM/HTTP만 사용한다. 전체 source hash 동결 검증이 끝난 뒤 공유 runtime/caller 수정을 시작한다.
 
+552fb25 이후 구현 소유 분리: Astra/high는 새 `risk_sources.py`/전용시험의 durable 시도 수명, Terra/high는 새 `stale_exit_candidate.py`/전용시험의 실제 선제 stale 선택 parity, 부모는 실제 `fetch_index_price`의 원응답 자료 상태·공유 runtime/caller 연결을 담당한다. 같은 파일을 동시에 수정하지 않는다. 각각 독립 리뷰 후 조합한다.
+
+KIS 지수 경계: 기존 numeric 반환/반올림·10초 캐시·GET/limiter 횟수는 유지하고 JSON-safe `_observation` 자료를 추가한다. 각 원 숫자 필드의 missing/invalid/valid 상태와 기존 정규화 값, 원 응답 ID·수신 aware 시각을 분리한다. 시장 `as_of`는 미입증 None이며 raw 누락/bool/nonfinite를 정상0으로 승인하지 않는다. cache 재조회는 원 ID/수신시각을 유지하고 caller의 반환 dict 변경이 보존된 원관측을 바꾸지 않게 한다. 이 metadata만으로 기존 scheduler가 자동으로 고쳐진다고 세지 않으며 실제 owned caller가 소비하는 시험을 뒤에 추가한다.
+
 ## 10A3 — 명시 설치 factory
+
+선행 보호 재생 경계: 5분 writer가 실제 보호 DTO를 바꾸면 degraded 포지션의 기존 fill/quote 재생도 그 정책 입력을 알아야 한다. source ID·완료 version/digest·전후 정책·실제 보호 scope를 같은 commit에 기록하고, 실제 persist=False 전이로 재생한다. 누락/다른 source/잘못된 정책·과거 청산 결정은 계속 BLOCKED이며 회복 과정에서 경제/예약/R/outbox를 다시 적용하지 않는다. 현재 정책을 과거 체결 전체에 소급하는 복구는 금지다. 실제 큐 등록 실패→5분 정책→quote/추가 fill→repair/새 runtime 복원을 RED부터 확인한다. 5분 조각의 한정 승인은 이 재생 인수까지 완료했다는 뜻이 아니다.
 
 같은 runtime/commands/builder/authority/guard/stop/session/lease를 묶는다. 실제 run_trader 종료는 admission 닫기→producer 정지→receipt/result drain→broker/store→lease 순서로 변경한다. raw KIS 우회는 거부하지만 B/C의 정상 경로까지 연결하기 전 운영 enable하지 않는다. US tuple 계약을 무단 변경하지 않고 startupFalse 대조를 유지한다.
 
@@ -76,6 +82,15 @@ Do/See 예정: 기존 실제 writer RED1을 보존하고 새 실제 caller 시�
 2. B2 Plan/Do: crossvalidator/LLM/시간 규칙 등 기존 qualification의 명시 출처를 immutable decision facts로 저장한다. sector·등록 손절·score는 broker 체결 metadata와 별개다. 실제 출처 version이 없으면 publisher를 먼저 만든다. final에는 현재 경제/다른 예약/같은 pure kernel을 재검사하며 기존 allow bool을 재사용하거나 500줄 on_signal을 복제하지 않는다.
 3. B3 Plan/Do: 실제 SIGNAL→기존 후보 판단→gateway 준비→ORDER의 command ID→prepared dispatch를 연결한다. mutable Order/metadata로 wire·origin을 바꾸지 못한다. UNKNOWN 예약 유지, 취소 ACK와 최종성 분리, 지원 종결 이후에만 기존 fallback/잔여 목표를 사용한다. eviction SELL도 동일 owner다.
 4. See: 실제 emit/큐/on_signal/on_order/정책/kernel/SQLite를 사용하고 HTTP만 fake한다. MARKET BUY·LIMIT/MARKET SELL 정상 대조와 CV/LLM/budget/factor/slot/session 및 각 network await 중 변화의 HTTP0을 검증한다.
+
+### 10B1 추출 경계 (A2 독립 리뷰 중 선행 분석)
+
+기존 `RiskManager._calculate_position_size`의 외부 호출과 순수 수치 계산을 분리한다. 외부 상태를 한 번에 선조회해 조기 거부 뒤 원래 없던 resolver/캘린더/변동성/conviction 호출이나 metadata 변경을 만들지 않는다. 먼저 기존 메서드에 actual Portfolio·RiskManager와 fake 외부 팩터/시계만 붙여 nominal/risk/core/hybrid 및 조기 반환의 고정 기대값·호출 순서·metadata 대조를 만든다. 최초 GREEN 특성화와 새 kernel 부재 RED를 구별한다.
+
+- base/pool/core-reserve 산출에 쓰는 config·포지션 평가·현금 예약은 명시 불변 입력이다. float 곱셈 뒤 `Decimal(str(...))`로 옮기는 기존 순서를 바꾸지 않는다.
+- 필요하면 초기 금액/전략 캡/일일손실 축소 후보와 overlay 이후 최종 수량을 별도 순수 함수로 나눈다. 실제 wrapper가 기존 위치에서 손절 resolver와 팩터를 읽고, risk tag와 최종 entry_risk 기록 시점도 유지한다. kernel은 파일·시계·callback·live metadata를 읽거나 수정하지 않는다.
+- core risk 예외·하이브리드 pool·risk ATR 배율 제거 조건·최소금액 바닥·3주 보정·시장가1.3 affordability·수수료 포함 risk final cap을 동일 입력으로 대조한다. 새로운 가격상한/주문유형 금지는 추가하지 않는다. 기존 nominal/risk 승격 상태도 바꾸지 않는다.
+- 실제 wrapper가 추출한 함수를 사용하기 전 순수 helper만 완료로 세지 않는다. 이후 B2/B3에서 final 재검사에 쓸 팩터/정책 source version과 현재 보유/예약을 연결한다. kernel 결과 자체는 승인 capability가 아니다.
 
 ## 10C — 나머지 실제 writer와 프로세스 경계
 

@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: 지수 자료 검증·위험 source 수명·5분 owner 경로 (Task10A2 부분, 운영 미설치)
+
+- 실제 KIS 지수 adapter에 원 필드 결측/비정상 상태·receipt·응답 ID를 보존하고 반환 cache alias와 늦은 과거 응답의 cache 덮기를 방어했다. 기존 숫자/반올림·TTL·조회 횟수는 유지하며 receipt를 시장 시각으로 만들지 않는다. input 독립 P2 F1(비정상 status/극단 정수/시각 변환 예외)은 13 RED→수정·원본34+추가38+작성자42를 각 TZ 재확인해 한정 승인했다.
+- 동일 owner의 durable source begin/complete·최신 시도·의존 version·실패/취소/충돌과 종료 drain을 구현했다. 별도 source 46시험+독립37을 각 TZ로 검증·한정 승인했다. 실제 runtime 게시 전 source validator도 연결했다.
+- 실제5분 scheduler 경로는 명시 설치 시 현재 Portfolio/보호 DTO/가격 view로 정책과 pending 청산 후보 outbox를 함께 저장한다. raw writer는 차단하고 정상 owned 조회 경로를 제공한다. actual loop/KST 시계·aware cooldown을 고정했다. 선제 선택은 최신 시세/저장 가격 불일치와 비정상 Decimal 독립 P2 2건 수정 후 두 파일 승인했다. 실제5분 연결은 별도 독립 리뷰의 관련210·독립27시험을 각 TZ 직접 통과한 다섯 파일 한정 승인이다.
+- 전체 KST **3702 passed/2 known xfailed/4 warnings(130.71초)**, UTC **3702/2/4(125.77초)**, 격리0·Python 문법/비밀패턴 통과. 신규158시험의 RED/최초 GREEN 구별·실패 원본/승인 해시는 후속 보고서 참조.
+- source 모듈/부분 연결의 한정 승인은 전체 단계3/운영 승인이 아니다. 보호 정책 재생은 actual degraded→5분→repair 3건의 차단 RED로 후속 고정했다. effect 전달·정오/2분/LLM·callback/factory·나머지 writer·전체 C/F/G/R 미완. `trading_ready=False`, 모든 MODIFY 미지원, 공식 최초 인계/취소 체인·REST 시장 시각 미입증 유지. main/운영/실API/주문/설정/Toss 변경 없음.
+
 ## 2026-09-18 — feat: 시세 원관측·보호/진입 완료 증거 (Task10A2 부분, 운영 미설치)
 
 - KRX/NXT 46필드 전체 frame parser와 불변 원관측 DTO를 실제 feed에 연결했다. 원 시장 시각·수신 시각을 분리하고 기존 숫자/부호 호환을 유지했다. 독립 P2(Decimal 문맥 반올림·잘못된 수치 허용) 2건을 수정·한정 재리뷰 승인했다.

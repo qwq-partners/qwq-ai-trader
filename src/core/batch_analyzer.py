@@ -1121,8 +1121,10 @@ class BatchAnalyzer:
 
         # ── 장중 급락 게이트 ───────────────────────────────────────────────
         # 2026-05-28 P1-B: caution/crash 해제 직후 5분 cooldown 차단
-        if self._intraday_recovery_until and datetime.now() < self._intraday_recovery_until:
-            _remain = (self._intraday_recovery_until - datetime.now()).total_seconds()
+        _runtime = getattr(self._engine, '_execution_runtime', None)
+        _cooldown_now = _runtime._now() if _runtime is not None else datetime.now()
+        if self._intraday_recovery_until and _cooldown_now < self._intraday_recovery_until:
+            _remain = (self._intraday_recovery_until - _cooldown_now).total_seconds()
             logger.warning(
                 f"[장중급락] 회복 직후 cooldown: 신규 진입 {_remain:.0f}초 차단 "
                 f"({len(signals)}개 시그널 대기)"
@@ -1590,6 +1592,9 @@ class BatchAnalyzer:
 
         목적: -5% stop_loss까지 가지 않고 본전 부근에서 빠져나가기
         """
+        if getattr(getattr(self, '_engine', None), '_execution_runtime', None) is not None:
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked('risk_source_ticket_required')
         # StrategyType/OrderSide/Signal/SignalStrength/SignalEvent는 모듈 상단에서 import됨.
         # (기존 버그: SignalEvent를 types에서 import 시도 → ImportError로 선제 stale 청산 실패)
         from datetime import date as _date
@@ -1670,6 +1675,11 @@ class BatchAnalyzer:
         Returns:
             새 상태 문자열
         """
+        # 설치된 실행 owner의 checkpoint를 건너뛰는 legacy writer는 금지한다.
+        # 정상 owned 갱신은 scheduler의 durable source→정책/effect 경로를 사용한다.
+        if getattr(getattr(self, "_engine", None), "_execution_runtime", None) is not None:
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked("risk_source_ticket_required")
         # 상태 결정 — 임계값 단일 출처(market_regime.classify_intraday_level).
         # 레짐 분류기도 같은 함수를 쓴다 (T10 F14: 분류 규칙이 여기에만 있어
         # 12:00 재분류가 이번 조회 -3% 를 급락으로 보지 못했다).

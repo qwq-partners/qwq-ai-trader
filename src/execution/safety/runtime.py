@@ -49,6 +49,7 @@ class KRExecutionRuntime:
         self._quote_lock = asyncio.Lock()
         self._protection_failed = False
         self._closing = False
+        self._intraday_writer = None
         self.owner = FillApplicationCoordinator(store, self._publish, self._reduce)
         self.lifecycle = OrderLifecycleCoordinator(self.owner, clock=clock,
                                                    admission_guard=self._require_day_admission,
@@ -380,6 +381,12 @@ class KRExecutionRuntime:
         self._validate_explicit_quotes(state, version)
         validate_price_views(state, version)
         validate_sources(state, version)
+        from .risk_sources import validate_risk_sources
+        from .intraday_owner import validate_intraday_policy
+        validate_risk_sources(state, version)
+        intraday = validate_intraday_policy(state, version)
+        intraday_horizons = (self._intraday_writer.projection(intraday)
+                            if self._intraday_writer is not None else None)
         # 전체 decode를 먼저 끝낸다. live object deepcopy/legacy 파일 I/O 없음.
         portfolio = decode_portfolio(state["portfolio"])
         protection = decode_protection(state["protection"], clock=self.clock)
@@ -411,6 +418,8 @@ class KRExecutionRuntime:
             from ...core.types import RiskMetrics
             self.engine.risk_metrics = RiskMetrics()
         self._published_day = risk["day"]
+        if self._intraday_writer is not None:
+            self._intraday_writer.publish(intraday, intraday_horizons)
         self.engine._execution_version = version
 
     def _reduce(self, state, observation, delta) -> FillReduction:
