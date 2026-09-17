@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import hashlib
 import inspect
@@ -152,6 +152,34 @@ class FillReceipt:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class IngressContext:
+    ticket: int
+    generation: int
+    received_at: datetime
+    fence_id: str | None = None
+    defer_reason: str = ""
+    replay_fence_id: str | None = None
+
+    def to_dict(self):
+        if (type(self.ticket) is not int or self.ticket < 1
+                or type(self.generation) is not int or self.generation < 0
+                or self.received_at.tzinfo is None or self.received_at.utcoffset() is None):
+            raise ObservationError("수신 ticket/세대/aware 시각이 필요합니다")
+        return {"ticket": self.ticket, "generation": self.generation,
+                "received_at": self.received_at.isoformat(), "fence_id": self.fence_id,
+                "defer_reason": self.defer_reason, "replay_fence_id": self.replay_fence_id}
+
+
+@dataclass(frozen=True)
+class InboxReceipt:
+    observation_id: str
+    status: str
+    execution_version: int
+    application_complete: bool
+    reason: str = ""
+
+
 class FillApplicationCoordinator:
     """모든 core 명령에 하나의 순서를 부여하고 publish 전 성공을 반환하지 않는다."""
 
@@ -213,6 +241,10 @@ class FillApplicationCoordinator:
             if key == "protection_replay":
                 from .protection_recovery import validate_fill_evidence
                 validate_fill_evidence(self._state, candidate, observation)
+                continue
+            if key == "initial_stop_evidence":
+                from .initial_r import validate_initial_stop_write_set
+                validate_initial_stop_write_set(self._state, candidate, observation)
                 continue
             if key not in self._state:
                 raise ValueError("fill reducer의 알 수 없는 신규 root")
@@ -336,20 +368,50 @@ class FillApplicationCoordinator:
             candidate["inbox"][observation_id]["status"] = "SUPERSEDED"
             await self._commit_publish(candidate, "superseded:" + observation_id)
 
-    async def apply(self, observation: FillObservation) -> FillReceipt:
+    async def _receive_locked(self, observation, context=None):
+        key, oid = observation.order_key, observation.observation_id
+        existing = self._state.get("inbox", {}).get(oid)
+        if existing is not None:
+            if (not self._same(existing.get("observation"), observation.to_dict())
+                    or existing.get("order_key") != key
+                    or existing.get("payload_digest", oid) != oid):
+                raise ObservationError("저장된 관측 본문/identity/digest 충돌")
+        else:
+            received = deepcopy(self._state)
+            row = {"observation": observation.to_dict(), "status": "RECEIVED",
+                   "order_key": key, "payload_digest": oid}
+            if context is not None:
+                row["ingress_context"] = context.to_dict()
+                day = received.get("risk", {}).get("day")
+                if day and observation.trading_day < day:
+                    row["ingress_context"]["defer_reason"] = "late_prior_day_requires_reconciliation"
+            received.setdefault("inbox", {})[oid] = row
+            received.setdefault("fill_identities", {}).setdefault(key, observation.identity)
+            await self._commit_publish(received, "inbox:" + oid)
+            existing = self._state["inbox"][oid]
+        complete = existing["status"] in ("APPLIED", "SUPERSEDED")
+        return InboxReceipt(oid, "ALREADY_APPLIED" if complete else existing["status"],
+                            self._version, complete,
+                            "" if complete else existing.get("ingress_context", {}).get("defer_reason", ""))
+
+    async def receive(self, observation: FillObservation, *, ingress_context: IngressContext) -> InboxReceipt:
+        """관측 원문만 내구 저장한다. RECEIVED는 경제 적용 성공이 아니다."""
+        if not isinstance(observation, FillObservation):
+            raise ObservationError("정규화된 FillObservation이 필요합니다")
+        ingress_context.to_dict()
+        async with self._lock:
+            self._require_ready()
+            return await self._receive_locked(observation, ingress_context)
+
+    async def apply(self, observation: FillObservation, *, application_gate=None) -> FillReceipt:
         if not isinstance(observation, FillObservation):
             raise ObservationError("정규화된 FillObservation이 필요합니다")
         async with self._lock:
             self._require_ready()
             key, oid = observation.order_key, observation.observation_id
-            if oid not in self._state.get("inbox", {}):
-                received = deepcopy(self._state)
-                received.setdefault("inbox", {})[oid] = {
-                    "observation": observation.to_dict(), "status": "RECEIVED", "order_key": key,
-                }
-                # applied cursor가 아직 없어도 최초 관측의 주문 소유권은 고정한다.
-                received.setdefault("fill_identities", {}).setdefault(key, observation.identity)
-                await self._commit_publish(received, "inbox:" + oid)
+            await self._receive_locked(observation)
+            if application_gate is not None:
+                application_gate()
             cursor = self._state.get("cursors", {}).get(key)
             reason = ("order_identity_conflict"
                       if self._state.get("fill_identities", {}).get(key, observation.identity) != observation.identity

@@ -24,9 +24,10 @@ from src.strategies.exit_manager import ExitManager, ExitStage
 NOW = datetime(2026, 9, 18, 10, tzinfo=ZoneInfo("Asia/Seoul"))
 
 
-async def setup(tmp_path, *, store_type=ExecutionStateStore, risk_manager=None):
+async def setup(tmp_path, *, store_type=ExecutionStateStore, risk_manager=None, account_scope=None, clock=None):
+    clock = clock or (lambda: NOW)
     engine = UnifiedEngine(TradingConfig(initial_capital=Decimal("2000000")))
-    exits = ExitManager(persist=False, clock=lambda: NOW)
+    exits = ExitManager(persist=False, clock=clock)
     store = store_type(tmp_path / "execution" / "state.sqlite3")
     # 합성 기준선일 뿐: 실계좌 인계/시작 대사 증거를 생성하는 API는 아니다.
     state = {
@@ -37,7 +38,7 @@ async def setup(tmp_path, *, store_type=ExecutionStateStore, risk_manager=None):
         "startup_reconciliation": {"status": "blocked", "reason": "synthetic_baseline"},
     }
     await store.commit(0, state, "synthetic-baseline")
-    runtime = KRExecutionRuntime(store, engine, exits, clock=lambda: NOW, risk_manager=risk_manager)
+    runtime = KRExecutionRuntime(store, engine, exits, clock=clock, risk_manager=risk_manager, account_scope=account_scope)
     await runtime.restore()
     runtime.attach()
     return engine, exits, store, runtime
@@ -68,10 +69,19 @@ async def observed(runtime, ref, qty, amount, *, side="buy", total=100, metadata
                            "005930", side.upper(), qty, Decimal(amount), metadata=metadata or {})
 
 
+async def wait_queued(engine, caller):
+    async def condition():
+        while not engine._event_queue:
+            if caller.done():
+                return await caller
+            await asyncio.sleep(0)
+    await asyncio.wait_for(condition(), 2)
+
+
 async def queued(engine, observation):
     pending = asyncio.create_task(engine.apply_execution_observation(observation))
     # 실제 우선순위 힙 적재/핸들러를 사용하고 emit을 mock하지 않는다.
-    await asyncio.sleep(0)
+    await wait_queued(engine, pending)
     assert not pending.done()
     event = await engine._get_next_event()
     assert event is not None
@@ -126,7 +136,7 @@ def test_receipt_waiter_cancellation_does_not_cancel_queued_fill(tmp_path):
             ref = await opened(runtime, "B1")
             obs = await observed(runtime, ref, 100, "1000000")
             caller = asyncio.create_task(engine.apply_execution_observation(obs))
-            await asyncio.sleep(0)
+            await wait_queued(engine, caller)
             caller.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await caller
@@ -146,7 +156,7 @@ def test_queue_saturation_keeps_execution_fill_and_shutdown_fails_waiter(tmp_pat
             obs = await observed(runtime, ref, 100, "1000000")
             engine._MAX_QUEUE_SIZE = 1
             caller = asyncio.create_task(engine.apply_execution_observation(obs))
-            await asyncio.sleep(0)
+            await wait_queued(engine, caller)
             await engine.emit_many([HeartbeatEvent(), HeartbeatEvent()])
             assert not caller.done()
             await engine._shutdown()
@@ -300,7 +310,7 @@ def test_quote_during_fill_commit_preserves_current_view_and_serializes_high_be(
             obs = await observed(runtime, ref, 100, "1000000")
             store.armed = True
             caller = asyncio.create_task(engine.apply_execution_observation(obs))
-            await asyncio.sleep(0)
+            await wait_queued(engine, caller)
             process = asyncio.create_task(engine._process_event(await engine._get_next_event()))
             await store.entered.wait()
             price = asyncio.create_task(runtime.quote("005930", Decimal("11000")))
@@ -407,7 +417,7 @@ def test_engine_cancelled_during_startup_closes_queued_receipt(tmp_path):
         ref = await opened(runtime, "B1")
         obs = await observed(runtime, ref, 100, "1000000")
         caller = asyncio.create_task(engine.apply_execution_observation(obs))
-        await asyncio.sleep(0)
+        await wait_queued(engine, caller)
         await engine._queue_lock.acquire()
         runner = asyncio.create_task(engine.run())
         try:

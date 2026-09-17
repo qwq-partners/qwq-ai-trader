@@ -223,3 +223,85 @@ def test_real_postgres_missing_schema_cannot_ack_or_fall_back(temporary_postgres
         finally:
             await store.close()
     asyncio.run(scenario())
+
+
+def test_real_postgres_initial_r_requires_fill_ack_and_keeps_unique_typed_payload(temporary_postgres, tmp_path):
+    from test_execution_initial_r import candidate, finalize
+    async def scenario():
+        _, _, store, runtime, ref, state = await candidate(tmp_path, quantity=140, amount="1400001", partial=True)
+        try:
+            state = finalize(state, ref, version=runtime.owner.version, expected=runtime.owner.version)
+            await runtime.owner.mutate("synthetic-initial-r-candidate", lambda _: state)
+            rkey, row = next((key, row) for key, row in state["outbox"].items() if row.get("kind") == "initial_r_finalized")
+            event = ExecutionEnvelope.from_outbox(rkey, row)
+            async with journal_pool(temporary_postgres) as (pool, sink):
+                dispatcher = OutboxDispatcher(runtime.owner, sink)
+                assert (await dispatcher.drain(limit=1)).delivered == 1
+                assert runtime.owner.state["lots"][ref.key]["initial_r_journal_pending"]
+                async with pool.acquire() as connection:
+                    assert await connection.fetchval("SELECT count(*) FROM execution_journal WHERE payload->>'kind'='initial_r_finalized'") == 0
+                outcomes = await asyncio.gather(dispatcher.drain(), OutboxDispatcher(runtime.owner, sink).drain())
+                assert sum(item.delivered for item in outcomes) == 2
+                assert not runtime.owner.state["lots"][ref.key]["initial_r_journal_pending"]
+                assert not runtime.owner.state["cursors"][ref.key]["journal_pending"]
+                results = await asyncio.gather(*(sink.apply_once(event) for _ in range(3)))
+                assert all(item == results[0] for item in results)
+                row["source_version"] += 1
+                with pytest.raises(ValueError, match="different payload"):
+                    await sink.apply_once(ExecutionEnvelope.from_outbox(rkey, row))
+                async with pool.acquire() as connection:
+                    assert await connection.fetchval("SELECT count(*) FROM execution_journal") == 3
+                    value = await connection.fetchval("SELECT payload FROM execution_journal WHERE execution_key=$1", rkey)
+                    assert json.loads(value) == json.loads(event.payload_json)
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lost_reply", [False, True])
+def test_real_postgres_initial_r_commit_unacknowledged_reopens_once(temporary_postgres, tmp_path, lost_reply):
+    from test_execution_initial_r import candidate, finalize
+    async def scenario():
+        engine, exits, store, runtime, ref, state = await candidate(tmp_path)
+        state = finalize(state, ref, version=runtime.owner.version, expected=runtime.owner.version)
+        await runtime.owner.mutate("synthetic-initial-r-candidate", lambda _: state)
+        rkey = next(key for key, row in state["outbox"].items() if row.get("kind") == "initial_r_finalized")
+        async with journal_pool(temporary_postgres) as (pool, sink):
+            try:
+                assert (await OutboxDispatcher(runtime.owner, sink).drain(limit=1)).delivered == 1
+                if lost_reply:
+                    class LostReply:
+                        async def lookup(self, key): return await sink.lookup(key)
+                        async def apply_once(self, event):
+                            await sink.apply_once(event)
+                            raise OSError("synthetic committed response loss")
+                    result = await OutboxDispatcher(runtime.owner, LostReply()).drain()
+                    assert result.reason == "sink_unconfirmed"
+                else:
+                    original = store.commit
+                    async def fail_ack(version, candidate, command):
+                        if command.startswith("command:journal-ack:"): raise OSError("synthetic owner ACK")
+                        return await original(version, candidate, command)
+                    store.commit = fail_ack
+                    result = await OutboxDispatcher(runtime.owner, sink).drain()
+                    assert result.reason == "owner_ack_unconfirmed"
+                assert result.delivered == 0
+                durable = (await store.load())[1]
+                assert durable["lots"][ref.key]["initial_r_journal_pending"]
+                assert not durable["cursors"][ref.key]["journal_pending"]
+                async with pool.acquire() as connection:
+                    assert await connection.fetchval("SELECT count(*) FROM execution_journal WHERE execution_key=$1", rkey) == 1
+            finally:
+                await store.close()
+            reopened = ExecutionStateStore(tmp_path / "execution" / "state.sqlite3")
+            again = KRExecutionRuntime(reopened, engine, exits, clock=lambda: NOW)
+            try:
+                await again.restore()
+                assert (await OutboxDispatcher(again.owner, sink).drain()).delivered == 1
+                assert not again.owner.state["lots"][ref.key]["initial_r_journal_pending"]
+                assert again.owner.state["cursors"] == durable["cursors"]
+                async with pool.acquire() as connection:
+                    assert await connection.fetchval("SELECT count(*) FROM execution_journal") == 2
+            finally:
+                await reopened.close()
+    asyncio.run(scenario())

@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import math
 from zoneinfo import ZoneInfo
 
-from ...core.types import Portfolio, Position, PositionSide, Market, TimeHorizon
+from ...core.types import Portfolio, Position, PositionSide, Market, TimeHorizon, RiskMetrics
 from ...risk.manager import DailyStats
 from ...utils.fee_calculator import FeeCalculator
 from .application import FillObservation, FillDelta
@@ -247,6 +247,9 @@ def publish_risk(manager, dto: dict) -> None:
     for key in ("total_pnl", "max_drawdown", "peak_equity"):
         stats[key] = Decimal(stats[key])
     daily_stats = DailyStats(**stats)
+    if manager.daily_stats.date != daily_stats.date:
+        manager.metrics = RiskMetrics()
+        manager._last_exit_cooldown_log.clear()
     # 기존 risk 메서드는 naive datetime.now()를 사용한다. live projection만 명시적
     # KST naive로 내보내며, durable checkpoint의 aware 시각은 바꾸지 않는다.
     exits = {symbol: {"price": _number(float(Decimal(row["price"]))),

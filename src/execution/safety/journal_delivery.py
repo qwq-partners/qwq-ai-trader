@@ -3,17 +3,62 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from decimal import Decimal
 import hashlib
 import json
 from uuid import uuid4
 
 from .application import FillObservation
+from .lifecycle import OrderRef
 from .store import encode_state
 
 
 def _digest(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def initial_r_execution_key(row: dict) -> str:
+    """체결 키와 분리된 초기 lot R의 불변 namespace."""
+    return _digest(encode_state({"namespace": "initial-r", "account_scope": row["account_scope"],
+                                 "market": row["market"], "lifecycle_id": row["lifecycle_id"],
+                                 "order_key": row["order_key"]}))
+
+
+def _initial_r_payload(key, row):
+    required = {"kind", "schema", "source_version", "account_scope", "market", "order_key", "lifecycle_id",
+                "symbol", "attempt_id", "intent_id", "quantity", "amount", "initial_r", "actual_stop_pct",
+                "initial_stop_evidence_id", "initial_stop_digest", "finality_evidence_id", "finality_digest",
+                "entry_execution_keys", "confirmed_at"}
+    if set(row) != required or type(row["schema"]) is not int or row["schema"] != 1:
+        raise ValueError("invalid initial R event schema")
+    for name in ("account_scope", "market", "order_key", "lifecycle_id", "symbol", "attempt_id", "intent_id"):
+        if type(row[name]) is not str or not row[name] or row[name] != row[name].strip():
+            raise ValueError("invalid initial R identity")
+    ref = OrderRef(*json.loads(row["order_key"]))
+    if (ref.key != row["order_key"] or ref.account_scope != row["account_scope"] or ref.market != row["market"]
+            or ref.market != "KR" or row["lifecycle_id"] != ref.key or initial_r_execution_key(row) != key):
+        raise ValueError("initial R identity mismatch")
+    if type(row["quantity"]) is not int or row["quantity"] <= 0:
+        raise ValueError("invalid initial R quantity")
+    for name in ("amount", "initial_r", "actual_stop_pct"):
+        if type(row[name]) is not str or not Decimal(row[name]).is_finite() or Decimal(row[name]) <= 0:
+            raise ValueError("invalid initial R amount")
+    if Decimal(row["initial_r"]) != Decimal(row["amount"]) * Decimal(row["actual_stop_pct"]) / Decimal(100):
+        raise ValueError("initial R amount mismatch")
+    keys = row["entry_execution_keys"]
+    if type(keys) is not list or not keys or len(set(keys)) != len(keys):
+        raise ValueError("invalid initial R prerequisite keys")
+    for value in [*keys, *(row[name] for name in ("initial_stop_evidence_id", "initial_stop_digest",
+                                                 "finality_evidence_id", "finality_digest"))]:
+        if type(value) is not str or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("invalid initial R evidence identity")
+    if (row["initial_stop_evidence_id"] != row["initial_stop_digest"]
+            or row["finality_evidence_id"] != row["finality_digest"]):
+        raise ValueError("initial R evidence mismatch")
+    when = datetime.fromisoformat(row["confirmed_at"])
+    if when.tzinfo is None or when.utcoffset() is None:
+        raise ValueError("initial R needs aware confirmation time")
 
 
 @dataclass(frozen=True)
@@ -29,6 +74,12 @@ class ExecutionEnvelope:
         row = json.loads(self.payload_json)
         if type(row) is not dict or encode_state(row) != self.payload_json:
             raise ValueError("noncanonical execution payload")
+        if type(row.get("source_version")) is not int or row["source_version"] <= 0:
+            raise ValueError("missing execution ordering evidence")
+        if row.get("kind") == "initial_r_finalized":
+            _initial_r_payload(self.execution_key, row)
+            object.__setattr__(self, "payload_digest", _digest(self.payload_json))
+            return
         required = {"source_version", "order_key", "attempt_id", "intent_id", "observation",
                     "quantity", "amount", "estimated_fee", "fee_basis", "realized_pnl",
                     "before_position", "after_position", "portfolio", "risk"}
@@ -171,6 +222,40 @@ class OutboxDispatcher:
                    and row.get("status") != "delivered")
                    for row in self.owner.state.get("outbox", {}).values())
 
+    @staticmethod
+    def _initial_r_prerequisites(state, event):
+        body = json.loads(event.payload_json)
+        rows = [(row["source_version"], key, row) for key, row in state["outbox"].items()
+                if row.get("kind", "fill") == "fill" and row.get("order_key") == body["order_key"]]
+        rows.sort()
+        if [key for _, key, _ in rows] != body["entry_execution_keys"]:
+            raise ValueError("initial R prerequisite history mismatch")
+        quantity, amount, latest = 0, Decimal(0), None
+        for version, key, row in rows:
+            fill = ExecutionEnvelope.from_outbox(key, row)
+            if row["status"] != "delivered" or version >= body["source_version"]:
+                raise ValueError("initial R prerequisite not acknowledged")
+            OutboxDispatcher._check_receipt(fill, SinkReceipt(**row["delivery"]))
+            latest = FillObservation(**row["observation"])
+            quantity += row["quantity"]
+            amount += Decimal(row["amount"])
+            if (latest.side != "BUY" or latest.symbol != body["symbol"]
+                    or row["attempt_id"] != body["attempt_id"] or row["intent_id"] != body["intent_id"]
+                    or quantity != latest.cumulative_quantity or amount != latest.cumulative_amount):
+                raise ValueError("initial R prerequisite cumulative mismatch")
+        cursor = state["cursors"][body["order_key"]]
+        lot = state["lots"][body["order_key"]]
+        if (latest is None or quantity != body["quantity"] or amount != Decimal(body["amount"])
+                or cursor["quantity"] != quantity or Decimal(cursor["amount"]) != amount
+                or cursor["identity"] != latest.identity or Decimal(cursor["fee"]) != latest.cumulative_fee
+                or cursor["journal_pending"] or lot["lifecycle_id"] != body["lifecycle_id"]
+                or lot["quantity"] != quantity or Decimal(lot["amount"]) != amount
+                or lot["initial_r_status"] != "confirmed" or lot["initial_r"] != body["initial_r"]
+                or lot["initial_stop_evidence_id"] != body["initial_stop_evidence_id"]
+                or lot["finality_evidence_id"] != body["finality_evidence_id"]):
+            raise ValueError("initial R lot/cursor acknowledgment mismatch")
+        return lot
+
     async def _ack(self, event: ExecutionEnvelope, receipt: SinkReceipt) -> bool:
         self._check_receipt(event, receipt)
         newly_delivered = False
@@ -184,11 +269,19 @@ class OutboxDispatcher:
             events = self._events(state, self.owner.version)
             if current["status"] == "delivered":
                 return state
+            body = json.loads(event.payload_json)
+            if body.get("kind") == "initial_r_finalized":
+                lot = self._initial_r_prerequisites(state, event)
+                current.update(status="delivered", delivery=asdict(receipt))
+                lot["initial_r_journal_pending"] = False
+                newly_delivered = True
+                return state
             current.update(status="delivered", delivery=asdict(receipt))
             newly_delivered = True
             body = json.loads(event.payload_json)
             order_key = body["order_key"]
-            relevant = [item for item in events if json.loads(item.payload_json)["order_key"] == order_key]
+            relevant = [item for item in events if json.loads(item.payload_json)["order_key"] == order_key
+                        and json.loads(item.payload_json).get("kind", "fill") == "fill"]
             # 모든 경제 이벤트 ACK와 누적 cursor를 함께 확인해야 늦은 ACK가 최신 체결을 해제하지 않는다.
             complete = all(state["outbox"][item.execution_key]["status"] == "delivered" for item in relevant)
             quantity, amount = 0, Decimal("0")
@@ -229,6 +322,11 @@ class OutboxDispatcher:
                     return DrainReceipt(delivered, self._pending(), "outbox_invalid")
                 if event is None:
                     return DrainReceipt(delivered, self._pending(), "complete")
+                if json.loads(event.payload_json).get("kind") == "initial_r_finalized":
+                    try:
+                        self._initial_r_prerequisites(state, event)
+                    except Exception:
+                        return DrainReceipt(delivered, self._pending(), "initial_r_prerequisite_unconfirmed")
                 try:
                     receipt = await self.sink.lookup(event.execution_key)
                     if receipt is None:

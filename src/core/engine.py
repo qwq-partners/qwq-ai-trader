@@ -203,6 +203,11 @@ class UnifiedEngine:
         self._execution_runtime = None
         self._execution_version = -1
         self._execution_accepting = False
+        self._execution_ingress = {}
+        self._execution_ingress_tasks = set()
+        self._execution_apply_tasks = set()
+        self._execution_ticket = 0
+        self._execution_stopping = asyncio.Event()
 
         # 프리마켓 데이터 (NXT)
         self.premarket_data: Dict[str, Dict] = {}
@@ -297,6 +302,9 @@ class UnifiedEngine:
 
     async def apply_execution_observation(self, observation):
         """누적 관측을 실제 큐에 넣고 commit/게시 receipt까지 기다린다."""
+        return await self._ingress_execution_observation(observation)
+
+    async def _ingress_execution_observation(self, observation, *, replay_fence_id=None):
         from ..execution.safety.application import ApplicationBlocked, FillObservation
         if self._execution_runtime is None or not self._execution_accepting:
             raise ApplicationBlocked("KR 실행 적용 담당이 연결되지 않았습니다")
@@ -306,8 +314,66 @@ class UnifiedEngine:
         # 호출자 취소 후에도 큐는 체결을 처리한다. 미회수 예외 경고만 억제하며
         # 정상 waiter의 예외/receipt 전달은 그대로 보존한다.
         future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-        await self.emit(ExecutionFillEvent(observation=observation, completion=future))
-        return await asyncio.shield(future)
+        self._execution_ticket += 1
+        ticket = self._execution_ticket
+        context = self._execution_runtime.ingress_context(ticket, replay_fence_id=replay_fence_id)
+        row = {"observation_id": observation.observation_id, "generation": context.generation,
+               "state": "ADMITTED", "completion": future, "context": context}
+        self._execution_ingress[ticket] = row
+
+        def resolve_previous_failures():
+            for previous in self._execution_ingress.values():
+                if previous["observation_id"] == observation.observation_id and previous["state"] == "FAILED":
+                    previous.update(state="RESOLVED", resolved_by_ticket=ticket)
+
+        async def deliver():
+            try:
+                row["state"] = "RECEIVING"
+                received = await self._execution_runtime.owner.receive(observation, ingress_context=context)
+                if not context.replay_fence_id and (context.defer_reason or received.reason):
+                    row["state"] = "SETTLED" if received.application_complete else "PARKED"
+                    if received.application_complete:
+                        resolve_previous_failures()
+                    return received
+                row["state"] = "QUEUE_WAIT"
+                if not self._execution_accepting:
+                    raise ApplicationBlocked("큐 처리 전 종료: durable 관측 재전달 필요")
+                event = ExecutionFillEvent(observation=observation, completion=future,
+                                           metadata={"execution_ticket": ticket})
+                enqueue = asyncio.create_task(self.emit(event))
+                stopping = asyncio.create_task(self._execution_stopping.wait())
+                try:
+                    await asyncio.wait((enqueue, stopping), return_when=asyncio.FIRST_COMPLETED)
+                    if stopping.done():
+                        raise ApplicationBlocked("큐 대기 중 종료: durable 관측 재전달 필요")
+                    await enqueue
+                    if row["state"] == "QUEUE_WAIT":
+                        row["state"] = "QUEUED"
+                finally:
+                    for pending in (enqueue, stopping):
+                        if not pending.done():
+                            pending.cancel()
+                    await asyncio.gather(enqueue, stopping, return_exceptions=True)
+                receipt = await asyncio.shield(future)
+                row["state"] = "SETTLED" if receipt.status in ("APPLIED", "ALREADY_APPLIED") else "FAILED"
+                if row["state"] == "SETTLED":
+                    resolve_previous_failures()
+                else:
+                    row["failure_reason"] = receipt.reason
+                return receipt
+            except BaseException as exc:
+                row["state"] = "FAILED"
+                row["failure_reason"] = type(exc).__name__
+                raise
+
+        task = asyncio.create_task(deliver())
+        self._execution_ingress_tasks.add(task)
+        def completed(done):
+            self._execution_ingress_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(completed)
+        return await asyncio.shield(task)
 
     def _purge_queue(self, keep_count: int) -> None:
         """큐 정리: FILL/ORDER 이벤트 보존, 나머지 중 최저 우선순위 폐기 (Lock 내부 호출 전용)"""
@@ -429,20 +495,33 @@ class UnifiedEngine:
         if event.type == EventType.EXECUTION_FILL:
             from ..execution.safety.application import ApplicationBlocked
             future = event.completion
+            row = self._execution_ingress.get(event.metadata.get("execution_ticket"))
+            if row is not None:
+                row["state"] = "OWNER_WAIT"
+            async def apply():
+                try:
+                    if self._execution_runtime is None:
+                        raise ApplicationBlocked("KR 실행 적용 담당 미연결")
+                    receipt = await self._execution_runtime.apply_observation(
+                        event.observation, ingress_context=row["context"] if row is not None else None)
+                    if not future.done():
+                        future.set_result(receipt)
+                except BaseException:
+                    self.stats.errors_count += 1
+                    if not future.done():
+                        future.set_exception(ApplicationBlocked("체결 적용 실패: checkpoint 재대사 필요"))
+                    raise
+            task = asyncio.create_task(apply())
+            self._execution_apply_tasks.add(task)
+            def applied(done):
+                self._execution_apply_tasks.discard(done)
+                if not done.cancelled():
+                    done.exception()
+            task.add_done_callback(applied)
             try:
-                if self._execution_runtime is None:
-                    raise ApplicationBlocked("KR 실행 적용 담당 미연결")
-                receipt = await self._execution_runtime.apply_observation(event.observation)
-                if not future.done():
-                    future.set_result(receipt)
-            except asyncio.CancelledError:
-                if not future.done():
-                    future.set_exception(ApplicationBlocked("적용 중 종료: checkpoint 재대사 필요"))
-                raise
+                await asyncio.shield(task)
             except Exception:
-                self.stats.errors_count += 1
-                if not future.done():
-                    future.set_exception(ApplicationBlocked("체결 적용 실패: checkpoint 재대사 필요"))
+                pass
             return
 
         if self._execution_runtime is not None and event.type in (
@@ -597,14 +676,20 @@ class UnifiedEngine:
         """종료 처리"""
         logger.info("통합 트레이딩 엔진 종료 중...")
         self._execution_accepting = False
+        self._execution_stopping.set()
         from ..execution.safety.application import ApplicationBlocked
-        async with self._queue_lock:
-            for event in self._event_queue:
-                if event.type == EventType.EXECUTION_FILL and not event.completion.done():
-                    event.completion.set_exception(ApplicationBlocked("큐 처리 전 종료: 관측 재전달 필요"))
-            self._event_queue = [event for event in self._event_queue
-                                 if event.type != EventType.EXECUTION_FILL]
-            heapq.heapify(self._event_queue)
+        # 같은 이벤트루프의 await 없는 큐 변경이다. queue-lock 대기 ingress가
+        # 종료를 기다릴 때 그 lock을 다시 기다려 고아 작업을 만들지 않는다.
+        for row in self._execution_ingress.values():
+            if row["state"] != "OWNER_WAIT" and not row["completion"].done():
+                row["completion"].set_exception(ApplicationBlocked("큐 처리 전 종료: 관측 재전달 필요"))
+        self._event_queue = [event for event in self._event_queue
+                             if event.type != EventType.EXECUTION_FILL]
+        heapq.heapify(self._event_queue)
+        if self._execution_apply_tasks:
+            await asyncio.gather(*tuple(self._execution_apply_tasks), return_exceptions=True)
+        if self._execution_ingress_tasks:
+            await asyncio.gather(*tuple(self._execution_ingress_tasks), return_exceptions=True)
         if self._execution_runtime is not None:
             await self._execution_runtime.shutdown()
 

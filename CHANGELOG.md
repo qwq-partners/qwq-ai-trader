@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: 체결 ingress·KST 일자 전환·초기 R 증거 (Task8C, 운영 미설치)
+
+- 실제 core 큐의 첫 await부터 확정 사실 접수/적용을 추적한다. caller 취소·queue/owner/DB 대기·종료 뒤에도 영속 접수한 원 관측을 보존한다. 일자 fence와 명시 valuation 증거로 일일 상태만 원자 전환하며, 전일 늦은 사실은 보류하고 자동 resume/startup 승격을 하지 않는다.
+- 첫 등록의 원본 손절 입력과 검증된 최종성 증거를 보존해 초기 R을 실제 최종 누적대금×당시 uncapped SL로 확정한다. 심한 급락 시 보호 SL 정책과 R 측정 기준을 혼동하지 않는다. R은 별도 typed outbox·PostgreSQL transaction/ACK를 사용하고 경제/체결 cursor를 재가감하지 않는다.
+- 독립 리뷰의 P1 3건(늦은 시세 view/신선도·다음날 부분매도 가격 역행·과거 손절의 현재 판단 승격), P2 2건(해결된 SUPERSEDED가 R 차단·동일시각 후속 quote 누락)을 RED 재현 후 수정했다. 종목별 최신 명시 시세 근거는 admission과 같이 저장·검증하고, 이미 수락한 보호 입력은 후행 검사로 버리지 않는다. quote replay의 중복 scope snapshot만 축약하며 모든 입력은 보존한다.
+- 구현 Astra/high와 별도 독립 Astra/xhigh 리뷰/재리뷰를 분리했다. C1 한정344건·C2 실제 큐 훅 한정163건 승인, 최종 전체 KST/UTC 각각 **2425 passed/2 known xfailed/1 기존warning(134.96/117.07초)**, 격리0·문법·비밀패턴 검사 통과. 신규133건, 실제 임시 PostgreSQL R 인수3건 포함(합계8건). 모든 시험의 최초 RED를 주장하지 않으며 일부 C1 원래 회귀는 최초 GREEN이었다.
+- **전 writer/HTTP·기존 분석 원장 projection·최초 인계·전체 C/F/G/R 미완**. 메모리/저장 이력의 장기 성장과 운영 지연 인수도 남는다. main 병합/운영/실API/주문/설정/Toss 변경 없이 feature에만 저장한다. 정본: `docs/reviews/engine-execution-followup-2026-09-18.md`.
+
 ## 2026-09-18 — feat: 증거 기반 보호 복구·durable 경제 원장 전달 (Task8A/B, 운영 미설치)
 
 - 실제 core 큐에서 보호 등록 실패 후 경제 중복 없이 저장된 입력으로 보호만 복구한다. 입력 누락·정책/수량/버전 충돌·과거 미기록 청산 판단은 BLOCKED다. 독립 리뷰가 재현한 P1(손절 quote 저장 실패→재시작→잘못된 복구)은 durable admission으로 수정했다. 접수 commit+publish 후에만 view를 게시하고, 미해결 입력은 재시작 후에도 repair/후속 덮어쓰기를 차단한다. 정상 tick의2회commit 지연 인수는 후속이다.

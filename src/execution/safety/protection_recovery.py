@@ -41,7 +41,9 @@ def _scope(state, symbol):
     return {
         "protection": protection,
         "position": deepcopy(state["portfolio"]["positions"].get(symbol)),
-        "lots": {key: deepcopy(row) for key, row in state["lots"].items() if row["symbol"] == symbol},
+        "lots": {key: {field: deepcopy(value) for field, value in row.items()
+                       if field != "initial_r_journal_pending"}
+                 for key, row in state["lots"].items() if row["symbol"] == symbol},
         "cursors": {key: {field: deepcopy(value) for field, value in row.items() if field != "journal_pending"}
                     for key, row in state.get("cursors", {}).items()
                     if row["identity"]["symbol"] == symbol},
@@ -56,6 +58,12 @@ def _append(before, after, symbol, payload, version, now):
     event = {"symbol": symbol, "source_version": version, "applied_at": now.isoformat(),
              "before": _scope(before, symbol), "after": _scope(after, symbol),
              "policy_code": digest(REGIME_EXIT_PARAMS), "previous": history["tail"], **payload}
+    # degraded quote는 보호 상태를 변경하지 않는다. 모든 가격/시각/입력은 보존하되
+    # 동일 경제·보호 snapshot 두 벌을 매 quote마다 복제하지 않는다.
+    # 상태가 실제 변했다면 축약하지 않고 기존 전체 snapshot 형식을 유지한다.
+    if event["kind"] == "quote" and digest(event["before"]) == digest(event["after"]):
+        event["scope_digest"] = digest(event.pop("before"))
+        event.pop("after")
     event["digest"] = digest(event)
     history["events"].append(event)
     history["tail"] = event["digest"]
@@ -80,13 +88,15 @@ def capture_fill(before, after, observation, delta, *, fill_kind, intent_id, sta
     after[ROOT] = projected[ROOT]
 
 
-def capture_quote(before, after, symbol, *, price, market_data, intent_id, command_id, decision, version, now):
+def capture_quote(before, after, symbol, *, price, market_data, intent_id, command_id, decision,
+                  version, now, provenance=None):
     if symbol not in before["protection"]["degraded"]:
         return
     _append(before, after, symbol, {
         "kind": "quote", "price": str(price), "market_data": deepcopy(market_data),
         "intent_id": intent_id, "command_id": command_id,
         "decision": None if decision is None else list(decision),
+        "provenance": deepcopy(provenance),
     }, version, now)
 
 
@@ -132,13 +142,23 @@ def _replay(state, symbol):
     history = state.get(ROOT, {}).get(symbol)
     if not history or not history["events"]:
         raise ValueError("missing_protection_history")
-    events, previous, last_version = history["events"], "", -1
-    for event in events:
+    events, previous, last_version, prior_scope = [], "", -1, None
+    for event in history["events"]:
         raw = {key: value for key, value in event.items() if key != "digest"}
         if (event["previous"] != previous or digest(raw) != event["digest"]
                 or event["symbol"] != symbol or event["source_version"] <= last_version):
             raise ValueError("protection_history_gap")
         previous, last_version = event["digest"], event["source_version"]
+        if "scope_digest" in event:
+            if (event["kind"] != "quote" or "before" in event or "after" in event
+                    or prior_scope is None or event["scope_digest"] != digest(prior_scope)):
+                raise ValueError("unrecorded_protection_input")
+            # 읽기 전용 재생 view만 확장한다. 원본 durable event/hash는 변경하지 않는다.
+            resolved = {**event, "before": prior_scope, "after": prior_scope}
+        else:
+            resolved = event
+        prior_scope = resolved["after"]
+        events.append(resolved)
     if history["tail"] != previous or digest(events[-1]["after"]) != digest(_scope(state, symbol)):
         raise ValueError("current_protection_evidence_mismatch")
     start = None

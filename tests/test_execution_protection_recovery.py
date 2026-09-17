@@ -8,8 +8,115 @@ import pytest
 from src.execution.safety.runtime import KRExecutionRuntime
 from src.execution.safety.application import ApplicationBlocked
 from src.execution.safety.store import ExecutionStateStore
+from src.execution.safety.protection_recovery import digest, _scope, capture_quote
+from src.execution.safety.store import encode_state
 from src.strategies.exit_manager import ExitManager
 from test_execution_runtime import NOW, setup, opened, observed, queued
+
+
+def test_degraded_quote_evidence_preserves_original_source_time(tmp_path, monkeypatch):
+    async def scenario():
+        _, _, store, runtime, _, _ = await failed_entry(tmp_path, monkeypatch)
+        try:
+            before = runtime.owner.state
+            after = deepcopy(before)
+            provenance = {"market_as_of": "2026-09-18T09:59:59+09:00", "received_at": NOW.isoformat(),
+                          "source": "synthetic-feed", "source_event_id": "market-tick-1"}
+            expected = deepcopy(provenance)
+            capture_quote(before, after, "005930", price=Decimal("10400"), market_data=None,
+                          intent_id=None, command_id="synthetic-quote", decision=None,
+                          version=runtime.owner.version + 1, now=NOW, provenance=provenance)
+            provenance["market_as_of"] = NOW.isoformat()
+            event = after["protection_replay"]["005930"]["events"][-1]
+            assert event["provenance"] == expected
+            assert event["provenance"]["market_as_of"] != event["applied_at"]
+            assert event["digest"] == digest({key: value for key, value in event.items() if key != "digest"})
+        finally:
+            await runtime.shutdown()
+            await store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("legacy_first", [False, True])
+def test_degraded_quote_keeps_every_input_without_repeating_full_scope(tmp_path, monkeypatch, legacy_first):
+    async def scenario():
+        _, exits, store, runtime, _, _ = await failed_entry(tmp_path, monkeypatch)
+        try:
+            for price in ("10100", "10400", "10200"):
+                await runtime.quote("005930", Decimal(price))
+            before = runtime.owner.state
+            events = before["protection_replay"]["005930"]["events"]
+            assert len(events) == 4
+            assert [row["price"] for row in events[1:]] == ["10100", "10400", "10200"]
+            for row in events[1:]:
+                assert row["scope_digest"] == digest(events[0]["after"])
+                assert "before" not in row and "after" not in row
+                assert len(encode_state(row)) < len(encode_state(events[0]["after"]))
+            if legacy_first:
+                def legacy(state):
+                    history = state["protection_replay"]["005930"]
+                    row = history["events"][1]
+                    row.pop("scope_digest")
+                    row["before"] = deepcopy(history["events"][0]["after"])
+                    row["after"] = deepcopy(row["before"])
+                    previous = ""
+                    for event in history["events"]:
+                        event["previous"] = previous
+                        event["digest"] = digest({k: v for k, v in event.items() if k != "digest"})
+                        previous = event["digest"]
+                    history["tail"] = previous
+                    return state
+                await runtime.owner.mutate("synthetic-legacy-format", legacy)
+            receipt = await runtime.repair_protection("compact-repair", "005930", expected_version=runtime.owner.version)
+            assert receipt.status == "APPLIED"
+            assert exits.get_state("005930").highest_price == Decimal("10400")
+            assert runtime.owner.state["portfolio"] == before["portfolio"]
+        finally:
+            await runtime.shutdown()
+            await store.close()
+    asyncio.run(scenario())
+
+
+def test_compact_quote_scope_gap_blocks_even_with_resealed_hash_chain(tmp_path, monkeypatch):
+    async def scenario():
+        _, _, store, runtime, _, _ = await failed_entry(tmp_path, monkeypatch)
+        try:
+            await runtime.quote("005930", Decimal("10400"))
+            def corrupt(state):
+                history = state["protection_replay"]["005930"]
+                event = history["events"][-1]
+                assert "scope_digest" in event
+                event["scope_digest"] = "0" * 64
+                event["digest"] = digest({k: v for k, v in event.items() if k != "digest"})
+                history["tail"] = event["digest"]
+                return state
+            await runtime.owner.mutate("synthetic-scope-gap", corrupt)
+            receipt = await runtime.repair_protection("gap-repair", "005930", expected_version=runtime.owner.version)
+            assert receipt.status == "BLOCKED"
+        finally:
+            await runtime.shutdown()
+            await store.close()
+    asyncio.run(scenario())
+
+
+def test_initial_r_delivery_flag_is_not_protection_input(tmp_path):
+    async def scenario():
+        engine, _, store, runtime = await setup(tmp_path)
+        try:
+            ref = await opened(runtime, "B1")
+            obs = await observed(runtime, ref, 40, "400000")
+            await queued(engine, obs)
+            state = runtime.owner.state
+            state["lots"][obs.order_key]["initial_r_journal_pending"] = True
+            before = digest(_scope(state, "005930"))
+            state["lots"][obs.order_key]["initial_r_journal_pending"] = False
+            assert digest(_scope(state, "005930")) == before
+            state["lots"][obs.order_key]["initial_r"] = "20000"
+            assert digest(_scope(state, "005930")) != before
+        finally:
+            await runtime.shutdown()
+            await store.close()
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("reopen", [False, True])

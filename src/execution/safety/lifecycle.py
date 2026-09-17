@@ -197,14 +197,21 @@ def _replacement(state: dict, intent_id: str) -> int:
 class OrderLifecycleCoordinator:
     """모든 전이는 owner.mutate(command_id, 동기 reducer)로만 저장한다."""
 
-    def __init__(self, owner, *, clock=None):
+    def __init__(self, owner, *, clock=None, admission_guard=None, finality_recorder=None):
         self.owner = owner
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self._admission_guard = admission_guard
+        self._finality_recorder = finality_recorder
+
+    def _require_admission(self):
+        if self._admission_guard is not None:
+            self._admission_guard()
 
     async def prepare(self, intent_id: str, attempt_id: str, quantity: int,
                       symbol: str, side: str, *, command: CommandKind = CommandKind.SUBMIT,
                       parent_attempt_id: str | None = None, order_ref: OrderRef | None = None,
                       reserved_cash: str = "0", origin: str = "auto", strategy: str = "") -> dict:
+        self._require_admission()
         _quantity(quantity, positive=True)
         cash = str(_money(reserved_cash))
         kind = CommandKind(command)
@@ -212,6 +219,7 @@ class OrderLifecycleCoordinator:
             raise ValueError("invalid order intent")
 
         def reduce(state):
+            self._require_admission()
             intents = state.setdefault("intents", {})
             attempts = state.setdefault("attempts", {})
             if attempt_id in attempts:
@@ -258,12 +266,14 @@ class OrderLifecycleCoordinator:
         return self.owner.state["attempts"][attempt_id]
 
     async def claim(self, attempt_id: str, claim_id: str) -> bool:
+        self._require_admission()
         if not claim_id:
             raise ValueError("sender identity required")
         claimed = False
 
         def reduce(state):
             nonlocal claimed
+            self._require_admission()
             attempt = state.get("attempts", {}).get(attempt_id)
             if not attempt or attempt["claim_id"] is not None or attempt["state"] != "prepared":
                 return state
@@ -415,6 +425,11 @@ class OrderLifecycleCoordinator:
                 final = False
             if final:
                 attempt["state"] = evidence.state.value
+                # 지원된 원본 근거가 명시된 경우에만 같은 transaction에 보존한다.
+                # ACK/terminal 문자열이나 빈 contract로 초기 R 증거를 제조하지 않는다.
+                if self._finality_recorder is not None and evidence.source_contract:
+                    self._finality_recorder(state, attempt_id, evidence,
+                                            version=self.owner.version + 1, now=self.clock())
                 if attempt["applied_quantity"] == qty:
                     attempt["reserved_quantity"] = 0
                     attempt["reserved_cash"] = "0"

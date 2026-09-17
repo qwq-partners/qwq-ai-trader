@@ -193,6 +193,8 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul \
 
 ### Task 7: 실제 broker GET 어댑터와 legacy 수집기 통합 (사용자 단계1)
 
+**실행 상태:** bdda0e9에서 해당 단위 검증·독립 리뷰·feature push 완료. 아래 항목은 최초 인수 명세이며 실제 RED/See 근거는 후속 보고서 단계1이 정본이다.
+
 **Files:** modify `src/execution/broker/kis_kr.py`; create `tests/test_kis_execution_query_integration.py`. 다른 구현자는 이 작업이 동결될 때까지 broker 파일을 수정하지 않는다.
 
 **Interfaces:** `KISBroker.get_execution_daily(*, account_scope, start_date, end_date, clock)` / `get_execution_cancelable(*, account_scope, clock)` → `QueryCollection`. broker.config의 계좌/상품을 사용하고 `LegacyExecutionQueries`를 단발 실행한다. timeout은 기존 broker config 값, 페이지 상한은 수집기의 기존 기본값이다. 운영 poller를 아직 교체하지 않는다.
@@ -220,6 +222,8 @@ assert session.requests[1]["headers"]["tr_cont"] == "N"
 
 ### Task 8A: 증거를 보존하는 보호 복구 (단계2의 F5b)
 
+**실행 상태:** 8978f68에서 해당 단위 한정 검증·재리뷰·feature push 완료. 전체 writer/운영 인수는 미완이다.
+
 **Files:** create `src/execution/safety/protection_recovery.py`, `tests/test_execution_protection_recovery.py`; modify `runtime.py`, `application.py`의 fill write-set만. 이 묶음은 한 구현자가 소유한다. 다른 통합 변경은 동결 후 수행한다.
 
 **Plan:** 기존 경제/보호 DTO와 실제 큐를 재사용한다. 새 보호 실패와 같은 commit에 마지막 정상 보호 DTO, 실패한 체결의 before/after·누적관측·증분·시각·분류·intent 및 이후 수락된 fill/quote 입력을 보존한다. 기존 이력 없는 degraded를 정상 상태로 추정하지 않는다. 거래 전송/원장 성공/시작 장벽 해제는 복구의 효과가 아니다.
@@ -230,6 +234,8 @@ assert session.requests[1]["headers"]["tr_cont"] == "N"
 - [ ] See: 외부 I/O만 fake, 실제 store/core queue/ExitManager 시험, DB 저장/게시 장애와 호출 취소 후 복구를 검증한다. 독립 리뷰 후 해당 범위만 완료로 기록하며 F5b와 전체 F 인수를 구분한다.
 
 ### Task 8B: durable outbox 전달 경계 (단계2의 F7)
+
+**실행 상태:** 8978f68에서 전용 경제 원장 단위 한정 검증·독립 리뷰·feature push 완료. 기존 분석 원장 projection의 완료가 아니다.
 
 **Files:** create `src/execution/safety/journal_delivery.py`, `tests/test_execution_journal_delivery.py`; 필요할 때 기존 `src/data/storage/trade_storage.py`에 명시 DB transaction 기반 execution journal API를 추가한다. runtime 배선은8A 동결 후 부모가 한다.
 
@@ -243,6 +249,8 @@ Task8C 일자 전환/initial R 및 단계3의 각 writer는 위 두 단위 리�
 
 ### Task 8C1: 확정 사실 ingress와 KST 일자 전환
 
+**실행 상태:** 실제 core 범위 구현·독립 재리뷰 완료(P1 3·P2 1 수정). C1/C2 최종 전체 KST2425/134.96초·UTC2425/117.07초, 기존xfail2·격리0. 일부 원래 회귀는 최초 GREEN으로 모든 항목 RED-first를 주장하지 않는다. 실제 scheduler 일일 writer·메모리/이력 장기 인수는 남는다.
+
 **Files:** create `src/execution/safety/day_recovery.py`, `tests/test_execution_day_recovery.py`; modify `src/core/engine.py`, `application.py`, `runtime.py`, 필요한 `economics.py`의 day-change publication. 공유 파일은 단일 구현자가 소유한다. lifecycle의 직접 prepare/claim fence 검사는 그 파일 소유권 인계 후 직렬 적용한다.
 
 **Plan:** 큐 길이0을 정지 증명으로 쓰지 않는다. 첫 await 전 ingress ticket·strong task를 등록하여 queue-lock 대기부터 RECEIVED·경제 게시/실패까지 추적한다. 거래 admission과 확정 사실 접수를 분리하고, fence 이후 사실도 원래 주문일 그대로 durable RECEIVED로 남긴다. 미수신 거래소 체결이 없다는 증거를 만들지는 않는다.
@@ -255,6 +263,8 @@ Task8C 일자 전환/initial R 및 단계3의 각 writer는 위 두 단위 리�
 
 ### Task 8C2: 최초 손절·최종성 증거와 초기 R 원장
 
+**실행 상태:** 실제 큐 훅·typed 원장·임시 PostgreSQL R 인수 및 독립 리뷰 완료(P2 SUPERSEDED 수정). 초기 근거 없는 과거 lot은 미측정이고 공식 취소 최종성·기존 분석 원장 projection은 미완이다.
+
 **Files:** create `src/execution/safety/initial_r.py`, `tests/test_execution_initial_r.py`; modify `protection.py`, `lifecycle.py`, `application.py`, `runtime.py`, `journal_delivery.py` 및 관련 시험. C1 공유 파일 동결 후 배선한다.
 
 **Plan:** 최초 보호 등록 성공과 같은 후보에서 기존 uncapped initial-R `StopDecision` 입력/결과·설정 provenance를 보존한다. 기존 `apply_crash_cap=False` 및 신규 등록 dynamic stop 정책을 바꾸지 않는다. 최종성은 terminal 문자열이 아니라 이미 검증된 전체 원본 근거를 append-only로 보관한다.
@@ -263,3 +273,16 @@ Task8C 일자 전환/initial R 및 단계3의 각 writer는 위 두 단위 리�
 - [ ] Do: `finalize_initial_r`는 owner 안 CAS·멱등 receipt를 사용하고 동일 최초 BUY lifecycle의 실제 최종 누적대금×저장된 초기SL/100만 확정한다. 현재 설정/남은 수량/계획 위험을 사용하지 않는다. 기존 값 충돌·모호한 add-on·지원 근거 없는 종결은 pending/BLOCKED다. 과거 lot의 R 확정이 새 lifecycle 보호를 수정하지 않는다.
 - [ ] R kind는 fill 원장과 같은 typed envelope/UNIQUE transaction을 사용하되 선행 fill ACK를 요구하고 별도 `initial_r_journal_pending`으로 관리한다. R ACK가 기존 fill cursor를 풀지 않는다. 경제·위험·예약을 재가감하지 않는다. legacy 분석 원장 projection은 별도 인수다.
 - [ ] See: 실제 큐/SQLite와 sink ACK 실패·재시작·payload 충돌 시험, 별도 리뷰, KST/UTC 전체 검증. 보호 repair 성공과 R 미측정은 별개이며 최초 손절 근거 없는 과거 lot은 미측정으로 남긴다.
+
+### Task 9A: 실제 요청의 불변 본문·의미 바인딩 (단계3 선행 단위)
+
+**Files:** create `src/execution/safety/requests.py`, `tests/test_execution_requests.py`. 소유자는 broker/transport/runtime/lifecycle를 동시에 수정하지 않는다. Task8C의 리뷰·검증을 닫은 뒤 착수한다. 설계 근거는 SDD `task-9-request-design.md`이며 이후 예약 연결까지 완료해야 송신 인수로 인정한다.
+
+**Plan:** 첫 거래 네트워크 await 전에 command·path·TR·계좌범위·영업일·session·symbol·side·order type·수량·가격·부모 참조를 한 요청으로 고정한다. 인증 token/appsecret/hashkey는 저장하거나 fingerprint에 포함하지 않는다. 실제 계좌 본문을 로그/repr에 노출하지 않는다. domain quantity는 양의 int(bool 제외), 가격은 유한 양의 Decimal이다. JSON의 정확한 필드 값/타입 바인딩이며 네트워크 raw byte 동일성을 주장하지 않는다.
+
+- [ ] RED: caller의 Order/본문 변경, command/TR/side/계좌/path/부모 바꿔치기, True/1.0/문자열 수량, NaN/Infinity/0 지정가, 미지원 order type/환경/session을 거부한다. 시장가 wire0과 별도 양의 평가금액을 혼동하지 않는다.
+- [ ] Do: immutable prepared request와 canonical fingerprint를 만들고 broker의 현행 주문구분/호가 반올림을 특성화해 Decimal 계산으로 보존한다. 현재 시장가 정책이나 위험 수치를 바꾸지 않는다. CANCEL 전량의 wire0 표식은 원주문의 실제 양의 잔여 예약 커버리지와 구분한다. 원주문 범위가 없으면 생성하지 않는다.
+- [ ] MODIFY는 명시 `unsupported_modify_contract`로 생성/송신 불가다. 감소·SELL도 예외가 아니다. 계산 DTO가 있다는 이유로 거래소 체인 지원이나 추가 위험 인수를 승인하지 않는다.
+- [ ] See: builder 특성화/부정시험·독립 리뷰. 이것만으로 실제 broker 연결·위험 예약·단일 owner 이행 완료로 세지 않는다.
+
+Task9B는 이 요청을 실제 기존 위험정책에 따라 계산한 현금·수량·노출·계획위험 예약과 같은 owner commit으로 저장하고, 마지막 await 이후 동일 요청/claim/현재 예약을 재검사하는 경계다. 구현 전 기존 RiskManager의 예외·시장가 평가배율을 특성화한다. Task9C 이후 실제 writer 이행 순서와 모든 송신점 시험은 사용자 단계3의 별도 완료 조건이다.

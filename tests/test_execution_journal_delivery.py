@@ -14,6 +14,114 @@ from src.execution.safety.store import ExecutionStateStore, StoreError
 from test_execution_runtime import NOW, setup, opened, observed, queued
 
 
+def test_typed_initial_r_waits_for_entry_ack_and_acks_only_its_lot(tmp_path):
+    from test_execution_initial_r import candidate, finalize
+    async def scenario():
+        _, _, store, runtime, ref, state = await candidate(tmp_path)
+        try:
+            final = finalize(state, ref, version=runtime.owner.version, expected=runtime.owner.version)
+            await runtime.owner.mutate("synthetic-initial-r-candidate", lambda _: final)
+            pool = Pool()
+            dispatcher = OutboxDispatcher(runtime.owner, PostgresExecutionJournal(pool))
+            first = await dispatcher.drain(limit=1)
+            assert first.delivered == 1
+            assert runtime.owner.state["lots"][ref.key]["initial_r_journal_pending"]
+            assert not runtime.owner.state["cursors"][ref.key]["journal_pending"]
+            second = await dispatcher.drain()
+            assert second.delivered == 1 and len(pool.rows) == 2
+            assert not runtime.owner.state["lots"][ref.key]["initial_r_journal_pending"]
+            await runtime.restore()
+            assert (await dispatcher.drain()).delivered == 0
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fault", ["lost_ack", "owner_ack", "digest", "missing_fill", "wrong_lifecycle"])
+def test_initial_r_durable_failure_preserves_separate_pending_and_reopen_retry(tmp_path, fault):
+    from test_execution_initial_r import candidate, finalize
+    async def scenario():
+        _, _, store, runtime, ref, state = await candidate(tmp_path)
+        try:
+            final = finalize(state, ref, version=runtime.owner.version, expected=runtime.owner.version)
+            await runtime.owner.mutate("synthetic-initial-r", lambda _: final)
+            pool = Pool()
+            sink = PostgresExecutionJournal(pool)
+            dispatcher = OutboxDispatcher(runtime.owner, sink)
+            assert (await dispatcher.drain(limit=1)).delivered == 1
+            rkey = next(key for key, row in runtime.owner.state["outbox"].items() if row.get("kind") == "initial_r_finalized")
+            if fault == "lost_ack": pool.lose_commit_ack = True
+            if fault == "owner_ack":
+                original = store.commit
+                async def failure(version, state, command):
+                    if command.startswith("command:journal-ack:"): raise OSError("synthetic owner ACK")
+                    return await original(version, state, command)
+                store.commit = failure
+            if fault == "digest":
+                await sink.apply_once(ExecutionEnvelope.from_outbox(rkey, runtime.owner.state["outbox"][rkey]))
+                pool.rows[rkey]["payload_digest"] = "f" * 64
+            if fault in {"missing_fill", "wrong_lifecycle"}:
+                def corrupt(state):
+                    if fault == "missing_fill":
+                        key = state["outbox"][rkey]["entry_execution_keys"][0]
+                        state["outbox"].pop(key)
+                    else: state["lots"][ref.key]["lifecycle_id"] = "different"
+                    return state
+                await runtime.owner.mutate("synthetic-corruption", corrupt)
+            outcome = await dispatcher.drain()
+            assert outcome.delivered == 0
+            persisted = (await store.load())[1]
+            assert persisted["lots"][ref.key]["initial_r_journal_pending"]
+            assert not persisted["cursors"][ref.key]["journal_pending"]
+            if fault in {"lost_ack", "owner_ack"}:
+                if fault == "owner_ack": store.commit = original
+                await runtime.restore()
+                assert (await dispatcher.drain()).delivered == 1
+                assert len(pool.rows) == 2
+                assert not runtime.owner.state["lots"][ref.key]["initial_r_journal_pending"]
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("field", "value"), [("schema", True), ("quantity", 0), ("initial_r", "49999"),
+                                               ("confirmed_at", "2026-09-18T10:00:00"),
+                                               ("entry_execution_keys", []), ("finality_digest", "f" * 64)])
+def test_initial_r_typed_envelope_rejects_invalid_content(tmp_path, field, value):
+    from test_execution_initial_r import candidate, finalize
+    async def scenario():
+        _, _, store, runtime, ref, state = await candidate(tmp_path)
+        try:
+            final = finalize(state, ref, version=runtime.owner.version, expected=runtime.owner.version)
+            key, row = next((key, row) for key, row in final["outbox"].items() if row.get("kind") == "initial_r_finalized")
+            row[field] = value
+            with pytest.raises(ValueError): ExecutionEnvelope.from_outbox(key, row)
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
+def test_initial_r_same_key_different_payload_conflicts_in_transaction(tmp_path):
+    from test_execution_initial_r import candidate, finalize
+    async def scenario():
+        _, _, store, runtime, ref, state = await candidate(tmp_path)
+        try:
+            final = finalize(state, ref, version=runtime.owner.version, expected=runtime.owner.version)
+            key, row = next((key, row) for key, row in final["outbox"].items() if row.get("kind") == "initial_r_finalized")
+            pool = Pool()
+            sink = PostgresExecutionJournal(pool)
+            original = ExecutionEnvelope.from_outbox(key, row)
+            await sink.apply_once(original)
+            row["source_version"] += 1
+            with pytest.raises(ValueError, match="different payload"):
+                await sink.apply_once(ExecutionEnvelope.from_outbox(key, row))
+            assert pool.insertions == 1
+            assert (await sink.lookup(key)).payload_digest == original.payload_digest
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
 class Pool:
     """SQL 자체를 실행하지 않는 외부 DB 경계. transaction commit/rollback만 모사."""
     def __init__(self):
