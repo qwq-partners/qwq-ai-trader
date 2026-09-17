@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-17-toss-observer-service-design.md` (사용자 09-17 후속 `ㄱㄱ`로 상세 설계 승인).
 
-**진행:** Task1/2/3 구현·작업별 검증·독립 리뷰 완료(Important1·Minor1 수정 및 재리뷰 승인). Task4 통합/최종 검증 중. 운영 설치/ON 미실행. 실제 증거와 실패를 포함한 정본은 `docs/reviews/toss-observer-service-2026-09-17.md`.
+**진행:** Task1/2/3 및 Task4 소스 통합·검증·리뷰·PR #74/#75 병합 완료. 사용자 확정 일정09/18·21·22/09/22 18:00 KST 만료로21:47:37 별도 서비스 ON(PID3335469), 초기 발급/장외idle·기존 봇 보존까지 확인했다. 운영 증거와 이후 미완 실관측은 `docs/reviews/toss-observer-service-2026-09-17.md` 및 모니터링 체크포인트로 인계한다.
 
 ## Global Constraints
 
@@ -23,7 +23,7 @@
 - 원장16MiB·상태16KiB/0600·보존30일. `production_eligible=False`, 유효 KIS 비교0/insufficient/통계None 유지.
 - 모든 로컬 테스트는 env-i+임시 경로·가짜 HTTP/시계, 운영 자격/네트워크 접근0. `.env`·로그·캐시·PID·실제 grant/토큰은 커밋하지 않는다.
 - User가 병렬·격리 구현을 요청했으므로 task1/2/3은 서로 다른 feature worktree에서 수행한다. 부모만 통합한다. 구현자는 리뷰어가 아니며 하위 에이전트를 재위임하지 않는다.
-- 20:30 KST 착수: 설계의 첫날 종료로 09/18·21·22 일정 및 09/22 18:00 만료 변경을 비동기 확인 중. 구현/합성 테스트는 날짜 주입, 사용자 응답 전 운영 날짜 자동변경 금지.
+- 설계의 첫날 종료 후 사용자가 09/18·21·22 일정 및09/22 18:00 KST 만료를 명시 승인했다. 이 날짜를 실제 plan/grant에 고정하며 추후 자동 연장/과거 채움은 금지한다.
 
 ## 공통 인터페이스 (세 작업의 고정 접점)
 
@@ -187,9 +187,9 @@ def test_retention_does_not_delete_auth_records(retention_fixture):
 - [x] **Step 1: 각 task spec+quality 리뷰.** baseline~head review package와 task brief/report로 독립 reviewer를 배치한다. 수정은 해당 구현자에게 반환하고 covering test evidence 후 scoped 재리뷰한다. 격리 분기 commit을 부모 feature에 명시 merge/cherry-pick한다.
 - [x] **Step 2: 통합 인수.** temp-root sealed artifact+가짜HTTP end-to-end, 누락 registry/expiry/receipt/publicURL/invalid positions에서 OAuth/GET0, valid flow에서 durable 결과·별도 status. 기존 돈 경로 테스트 불변, 전체 UTC/KST verify·비밀정보 검사·의존성 폐쇄성 확인. root 작업 checkout은 여전히8ff2f55/PID 동일. 최종 UTC/KST 각각1809 passed/기존xfail2, 격리0.
 - [x] **Step 3: 최종 리뷰/문서/커밋·푸시.** Astra/xhigh broad branch 리뷰, 새 결함은 한정 fixwave/재리뷰. S01~S12 증거와 미실행 운영 인수 기록. Required CI exact head 성공 후 PR #74/main `c2fe787` 병합 완료, root 운영 checkout은8ff2f55로 유지.
-- [ ] **Step 4: 실제 설치 preflight.** 기존 봇 PID/시각·pending/연결/정체·설정7경로 보호지문 확보, 실제 UID/host·클라이언트 일치·approved dates·root paths/권한·디스크/systemd 지원 대조. 비밀 출력 없는 dry-run, 서명 대신root operator anchor를 설치한다. 조건실패시기존봇유지.
-- [ ] **Step 5: 새 서비스만 ON.** sealed release와root bootstrap을 설치한 뒤 전용UID `--check`에서발급0을 확인, 이후 unit start1회. 기존서비스restart0, 실제OAuth/GET/원장 관측구분,unknown/revoked발생하면자동재발급0으로중단보고.
-- [ ] **Step 6: See·인계.** 자체status/PID/실행SHA/만료·issuer/sender·원장·기존PID/설정지문동일 대조. 장외면idle/다음예정만보고. 3영업일인수·유효가격비교·소비자승격미완을명시하고 새관측상태기록문서만커밋·푸시/PR한다.
+- [x] **Step 4: 실제 설치 preflight.** 기존 봇 PID/시각·pending/연결/정체·설정7경로 보호지문 확보, 실제 UID/host·클라이언트 일치·approved dates·root paths/권한·디스크/systemd 지원 대조. dry-run 및 root 설치·전용UID check-only 성공, 시작 전 state 파일0.
+- [x] **Step 5: 새 서비스만 ON.** root sealed release·실제 unit 제한 확인 후21:47:37 start1회. 초기OAuth generation1/ready·receipt1·sender1, 기존서비스restart0. unknown/revoked발생하면자동재발급0으로중단보고한다.
+- [x] **Step 6: See·인계.** status/PID/실행SHA/만료·issuer/sender·원장과 기존PID/보호7경로 동일 대조. 장외idle/다음예정만보고하며3영업일인수·유효가격비교·소비자승격은 미완으로 체크포인트에 인계한다. 운영 상태 문서만 커밋·푸시/PR하며 후속 CI/병합 이력은 해당 PR에서 확인한다.
 
 ## 검증 실행 계약
 

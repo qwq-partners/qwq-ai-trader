@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-17 — ops(T12): 별도 Toss 관측 서비스 ON (기존 거래 봇 유지)
+
+- 사용자 승인 일정09/18·21·22/만료09/22 18:00 KST로 root 보호 release877768e·전용 UID997/GID987·Toss2자격·plan/grant를 설치했다. 자격 없는 전용 UID check-only 성공/시작 전 state 파일0, effective unit 권한·자원 제한 확인 후 **21:47:37 KST 새 서비스1회 시작(PID3335469)**.
+- 초기 토큰 generation1/ready·receipt1·sender 소유자1·idle 확인. 장외이므로 가격/캘린더 표본0, 비교/인수 미완·production_eligible=False. 첫 예정은09/18 08:55 캘린더/09:00 가격이다. 자동 재시작 없이 승인 만료에 종료하며 원장 보존 timer만 enable했다.
+- 기존 거래 봇 PID3274983/checkout8ff2f55 유지, 보호7경로 지문 동일,21:49 health 연결 정상·pending/stale0. 기존 봇 재시작·주문·설정·venv 변경0. 신규 실행 코드 변경 없이 운영/승인/인계 문서와 설치 테스트의 호스트 계정 격리를 보완한다.
+- 사전 KST verify1809 passed/2 known xfailed/1 기존 warning·격리0, Astra/high 운영 절차 GO. systemd 검증의 기존 claude-session KillMode=none 경고는 별도 기록·미변경. 정본: `docs/reviews/toss-observer-service-2026-09-17.md`.
+- 설치 후 dry-run 테스트의 실제 계정 조회 의존성을 격리하고 그룹 충돌 거부 대조군을 추가했다. 운영 가드 무변경, 최종 KST verify **1810 passed/2 known xfailed/1 기존 warning(84.86초)**·격리0·비밀정보 검사 통과, Terra/medium 한정 독립 리뷰 승인.
+
 ## 2026-09-17 — docs(T12): 독립 관측 서비스 main 병합·운영 대기 인계
 
 - PR #74 head877768e의 required CI1809 passed/2 known xfailed·격리0 성공 후21:34:47 KST main `c2fe787` 병합. 소스/테스트/의존성 변경 없는 후속 상태 문서다.
