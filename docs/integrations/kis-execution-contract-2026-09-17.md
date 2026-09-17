@@ -35,8 +35,22 @@ TTTC8001R의 '3개월 이내'는 같은 예제에서 **월 단위**로 설명한
 
 ## 고정 파일 SHA-256
 
+### 09-18 후속 재확인
+
+공개 main의 고정 revision은 동일했다. [실시간 체결통보 예제](https://github.com/koreainvestment/open-trading-api/blob/b4e6249714418aa57833d1cbbbced39cbcc5b125/examples_llm/domestic_stock/ccnl_notice/ccnl_notice.py)는 접수 통보와 체결 통보를 구분하지만, 끊김 이후 무손실 재생·전역 sequence·잔고와 공유하는 cutoff까지 보장하지 않는다. 연결 성공이나 취소 접수 통보를 최초 인계/최종 취소 증거로 쓰지 않는다.
+
+공식 Postman의 `response: []`는 저장된 응답 예제0건이라는 뜻이며 실제 API의 빈 output 증거가 아니다. 잔고 AFHR/PRCS 범위 선택도 원자적 스냅샷 근거는 아니다. 원주문/정정 자식의 누적 체결 중복, 부분취소 이후 잔여 권리, 다단정정의 수량 보존식·지연 상한은 확인 자료에서 충분히 입증하지 못했다. 공식 포털 검색에서는 추가 유효 자료를 얻지 못했고 인증 후 상세 명세를 확인했다고 주장하지 않는다.
+
+추가 자료는 실제 TR·환경·시장/세션·요청 시작/응답 완료 aware시각, 페이지별 header/cursor, 일관 가명 처리한 원주문/자식 식별자, 응답에 실제 존재하는 수량·대금·상태필드를 연결해 제공해야 한다. 체결 없는 취소/부분체결 뒤 취소/다단정정/경합/날짜경계의 fixture는 회귀를 보강하지만, 표본만으로 최대 지연·원자성을 증명하지 않는다. 공식 수량 의미·cutoff 보장 범위와 함께 지원 계약을 확정한다. 계좌번호·자격·인증헤더는 필요하지 않으며 수집을 위한 실주문은 요청하지 않는다.
+
+현재 미입증 범위는 `unsupported_finality`/startup 차단으로 유지한다. [단계별 실행 원장](../reviews/engine-execution-followup-2026-09-18.md)에 구현/인수와 분리해 기록한다.
+
+### 기존 및 추가 파일 지문
+
 - legacy Sample01: `d7bc6da85f4b086de3063f110d6e426fbc5751bc340b45e533ccdf9a5d55e575`
 - legacy REST: `59c9722c08c3d91c08fa8907cb705b826ac4596233dd87f9d8429bf73b9c5596`
 - 현재 일별조회: `9a039eef4f4c61e6d3b5ec15a85b18508e69f5b069bbbf447a0ba5cfe6044b5b`
 - 현재 응답 필드 표시기: `e97ad745cac44abeff7615c68afe96258dc664da1ed60db33d49b4736a34735c`
 - 현재 취소가능조회: `c51f69737ebf2faf5bda92030e81deffe43f7f30d1214afc409f3a5481f36fd0`
+- 실전 Postman: `8309124f93909600011847451b0cb7bb45aecebb22d07981370742604610bc04`
+- 현재 체결 통보: `440f80ec223c7b8643a7d434c2190f700716fa193f50580c06372627ec21084f`

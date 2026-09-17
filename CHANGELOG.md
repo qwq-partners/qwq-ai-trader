@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — fix: legacy 실행 조회 broker 통합·HTTP 헤더/limiter 소유권
+
+- 실제 KISBroker의 GET·토큰 복구·공용 limiter에 일별/취소가능 legacy 수집기를 연결하는 단발 API를 추가했다. 운영 poller/거래 POST는 미변경이며 dev 환경은 호출 전에 거부한다. 실제 HTTP status·F/M→N cursor를 보존하고 조회 완결을 최종성·거래 허가로 승격하지 않는다.
+- 오프라인 RED에서 취소 시 busy 잔류를 재현했다. fresh Astra/xhigh 독립 리뷰가 추가로 확인한 P1(actual aiohttp `istr` 헤더 거부)·P2(stale 재취득 뒤 이전 취소가 후속 소유권 해제)를 실제 자료형/경합 시험으로 고정·수정했다. GET은 취득별 lease가 일치할 때만 해제한다. 기존 간격·10초 stale 정책·무인자 legacy 해제 호환은 유지한다.
+- 신규32시험, 관련131 passed·격리0. 수정범위 한정 독립 재리뷰 APPROVED, 신규 P0/P1/P2 0. 전체 KST/UTC 각각2224 passed/기존xfail2·warning1(92.28/90.40초)·격리0·문법/비밀정보 패턴 검사 통과.
+- 후속5단계 중 조회 통합 조각이며 **전체 writer 이행·C/F/G/R·운영 전환은 미완**이다. 최초 인계 cutoff/취소 체인 증거 미입증 유지. KIS 거래/잔고·Toss 관측·주문/설정/위험 수치와 운영 서비스는 변경하지 않았다. 정본: `docs/reviews/engine-execution-followup-2026-09-18.md`.
+
 ## 2026-09-18 — feat: KR 경제·보호 checkpoint와 실제 core 체결 receipt (Task4b, 운영 미설치)
 
 - 실제 Portfolio/Position·RiskManager·ExitManager의 명시 DTO와 경제/보호 후보를 SQLite 단일 commit 후 게시한다. 부분체결·중복·재시작에서 현금/수량/위험 횟수를 한 번만 반영하고, 보호 계산 실패는 경제 사실을 숨기지 않는 degraded로 보존한다. 비용은 기존 요율의 누적 **추정** 비용 차분이며 실제 징수액·initial R 확정을 뜻하지 않는다.

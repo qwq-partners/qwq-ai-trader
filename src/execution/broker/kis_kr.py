@@ -15,13 +15,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Callable, Dict, List, Optional, Tuple, Any
 import aiohttp
 from loguru import logger
 
 from ...utils import kis_rate_limit
 
 from .base import BaseBroker
+from ..safety.queries import LegacyExecutionQueries, QueryCollection, QueryRequest, QueryResponse
 from ...core.types import (
     Order, Fill, Position, OrderSide, OrderStatus, OrderType, MarketSession
 )
@@ -119,7 +120,7 @@ class KISBroker(BaseBroker):
 
     async def _rate_limit(self, tr_id: str = ""):
         """API 호출 전 레이트 리미트 대기 — 프로세스 공용 슬라이딩 윈도우 + 원장 TR 간격"""
-        await kis_rate_limit.acquire(tr_id)
+        return await kis_rate_limit.acquire(tr_id)
 
     # ============================================================
     # 연결 관리
@@ -230,23 +231,45 @@ class KISBroker(BaseBroker):
         # EGW00123: Access Token 만료, EGW00121: 유효하지 않은 Access Token
         return msg_cd in ("EGW00123", "EGW00121")
 
-    async def _api_get(self, url: str, tr_id: str, params: dict) -> dict:
-        """API GET 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)"""
+    async def _api_get(self, url: str, tr_id: str, params: dict, *,
+                       tr_cont: Optional[str] = None,
+                       return_response: bool = False) -> dict | QueryResponse:
+        """GET 재시도 정책을 공유하며 선택적으로 실제 HTTP 응답 경계를 보존한다."""
+        def result(data, response=None):
+            if return_response:
+                if response is None:
+                    # HTTP를 받지 못한 실패에 성공 status/header를 제조하지 않는다.
+                    raise RuntimeError("KIS GET unavailable")
+                # aiohttp 헤더 키는 str 하위형 istr이며 중복 필드도 보존한다.
+                # dict 변환 전에 충돌을 거부하고 수집기 경계에는 순수 str 키를 전달한다.
+                response_headers = {}
+                for key, value in response.headers.items():
+                    name = str(key).lower()
+                    if name in response_headers and response_headers[name] != value:
+                        raise ValueError("conflicting response headers")
+                    response_headers[name] = value
+                return QueryResponse(response.status, response_headers, data)
+            return data
+
         if not self._session or self._session.closed:
             logger.warning("[API] 세션 없음, 재연결 시도")
             if not await self.connect():
-                return {"rt_cd": "-1", "msg1": "세션 연결 실패"}
+                return result({"rt_cd": "-1", "msg1": "세션 연결 실패"})
         if self._token is None:
             logger.warning("[API] 토큰 없음, 갱신 시도")
             if not await self._ensure_token():
-                return {"rt_cd": "-1", "msg1": "토큰 발급 실패"}
+                return result({"rt_cd": "-1", "msg1": "토큰 발급 실패"})
         for attempt in range(3):
+            ledger_lease = None
             try:
-                await self._rate_limit(tr_id)
+                ledger_lease = await self._rate_limit(tr_id)
                 headers = self._get_headers(tr_id)
+                if tr_cont is not None:
+                    headers["tr_cont"] = tr_cont
                 async with self._session.get(url, headers=headers, params=params) as resp:
-                    if kis_rate_limit.is_ledger(tr_id):
-                        kis_rate_limit.release_ledger()  # 원장 응답 수신 — 다음 원장 호출 허용(+1.05초)
+                    if ledger_lease is not None:
+                        kis_rate_limit.release_ledger(ledger_lease)  # 해당 원장 응답 수신(+1.05초)
+                        ledger_lease = None
                     if resp.status == 401 and attempt < 2:
                         logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
                         await self._recover_token()
@@ -278,12 +301,12 @@ class KISBroker(BaseBroker):
                             await asyncio.sleep(wait)
                             continue
                         logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, 재시도 소진 → 실패 반환")
-                        return err_data if err_data else {"rt_cd": "-1", "msg1": f"HTTP {resp.status}{_err_msg}"}
+                        return result(err_data if err_data else {"rt_cd": "-1", "msg1": f"HTTP {resp.status}{_err_msg}"}, resp)
                     try:
                         data = await resp.json()
                     except Exception:
                         logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
-                        return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
+                        return result({"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}, resp)
                     if isinstance(data, dict):
                         # KIS 연속조회 신호(응답 헤더 tr_cont: F/M=다음 페이지 있음, D/E=마지막) —
                         # 본문의 ctx_area_*100 키는 마지막 페이지에도 채워져 와서 종료 근거가 못 된다
@@ -293,18 +316,51 @@ class KISBroker(BaseBroker):
                         logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
                         await self._recover_token()
                         continue
-                    return data
+                    return result(data, resp)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                if kis_rate_limit.is_ledger(tr_id):
-                    kis_rate_limit.release_ledger()  # 응답 없이 실패 — busy 해제
+                if ledger_lease is not None:
+                    kis_rate_limit.release_ledger(ledger_lease)  # 해당 취득의 응답 없는 실패
+                    ledger_lease = None
                 if attempt < 2:
                     wait = 2 ** attempt
                     logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도 ({wait}초 대기): {e}")
                     await asyncio.sleep(wait)
                     continue
                 logger.error(f"[API] GET 실패 (3회 시도): {e}")
-                return {"rt_cd": "-1", "msg1": f"네트워크 오류: {e}"}
-        return {"rt_cd": "-1", "msg1": "API 호출 실패 (최대 재시도 초과)"}
+                return result({"rt_cd": "-1", "msg1": f"네트워크 오류: {e}"})
+            finally:
+                # 취소/예상 밖 예외도 정리하되 취득 대기 중 다른 호출의 busy는 보존한다.
+                if ledger_lease is not None:
+                    kis_rate_limit.release_ledger(ledger_lease)
+        return result({"rt_cd": "-1", "msg1": "API 호출 실패 (최대 재시도 초과)"})
+
+    async def _fetch_execution_query(self, request: QueryRequest) -> QueryResponse:
+        return await self._api_get(
+            self.config.base_url + request.path, request.tr_id, dict(request.params),
+            tr_cont=request.tr_cont, return_response=True,
+        )
+
+    def _execution_queries(self, clock: Callable[[], datetime]) -> LegacyExecutionQueries:
+        if self.config.env != "prod":
+            raise ValueError("legacy execution queries require production environment")
+        return LegacyExecutionQueries(self._fetch_execution_query, clock=clock,
+                                      request_timeout=self.config.timeout_seconds)
+
+    async def get_execution_daily(self, *, account_scope: str, start_date: str,
+                                  end_date: str, clock: Callable[[], datetime]) -> QueryCollection:
+        """실전 legacy 일별 조회 단발 수집. 페이지 완결은 거래 허가/최종성이 아니다."""
+        return await self._execution_queries(clock).daily(
+            account_scope=account_scope, account_number=self.config.account_no,
+            product_code=self.config.account_product_cd, start_date=start_date, end_date=end_date,
+        )
+
+    async def get_execution_cancelable(self, *, account_scope: str,
+                                       clock: Callable[[], datetime]) -> QueryCollection:
+        """실전 legacy 취소가능 조회 단발 수집. 목록 부재로 취소를 확정하지 않는다."""
+        return await self._execution_queries(clock).cancelable(
+            account_scope=account_scope, account_number=self.config.account_no,
+            product_code=self.config.account_product_cd,
+        )
 
     async def _api_post(self, url: str, tr_id: str, json_data: dict,
                         extra_headers: Optional[dict] = None, retry: bool = True) -> dict:

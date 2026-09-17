@@ -186,3 +186,57 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul \
 
 - [ ] Repeat with TZ=UTC; require syntax/secret checks and isolation0. Existing2 parity xfails are not repaired by this work. Compare config/Toss files to base unchanged.
 - [ ] Explicit path staging, commit+push feature branch, confirm remote SHA and clean worktree. Do not merge/deploy/restart. Final report gives actual completed acceptance IDs, remaining constraints and review/test evidence, no profitability claim.
+
+## 09-18 사용자 후속 5단계 — 실행 단위
+
+기준 `dd3b0f7`. 단계1→2→3의 구현/리뷰는 순서대로 닫으며, 단계4의 공개 계약 조사와 단계3의 읽기 전용 호출점 조사는 병렬로 한다. 이미 검증한 DTO/경제/core receipt는 재작성하지 않는다. 단계별 Plan(계약·실패예제), Do(RED→GREEN), See(독립 리뷰·인수·잔여)를 보고서에 기록한다. 전체 완료 전 broad 리뷰를 성공한 최종 인수로 표시하지 않는다.
+
+### Task 7: 실제 broker GET 어댑터와 legacy 수집기 통합 (사용자 단계1)
+
+**Files:** modify `src/execution/broker/kis_kr.py`; create `tests/test_kis_execution_query_integration.py`. 다른 구현자는 이 작업이 동결될 때까지 broker 파일을 수정하지 않는다.
+
+**Interfaces:** `KISBroker.get_execution_daily(*, account_scope, start_date, end_date, clock)` / `get_execution_cancelable(*, account_scope, clock)` → `QueryCollection`. broker.config의 계좌/상품을 사용하고 `LegacyExecutionQueries`를 단발 실행한다. timeout은 기존 broker config 값, 페이지 상한은 수집기의 기존 기본값이다. 운영 poller를 아직 교체하지 않는다.
+
+**Plan:** 기존 `_api_get`의 GET 재시도/토큰 복구/공용 limiter 정책은 유지한다. 요청 `tr_cont`와 실제 HTTP status/응답 header를 주입형 수집기에 전달하는 선택적 내부 응답 경계를 추가한다. 성공 status를200으로 합성하지 않는다. 실패/취소 시 원장 limiter busy가 남지 않으며 실제 취득 여부를 구분한다. 기존 dict 소비자 동작은 유지한다. 미지원 dev/모의 TR은 실전 TR로 보내지 말고 호출 전에 명시 거부한다. QueryCollection은 조회 완결만 보고하고 trading_permission/finality_supported False를 유지한다.
+
+- [ ] RED: 실제 broker `_api_get`+기존 limiter를 fake session/token clock 경계만 대체해 첫F/다음E 응답을 처리한다. 다음 요청 header N·cursor 일치/반환 complete를 검증한다. header 누락·HTTP실패·다음페이지실패·취소/timeout·실패후다음ledger획득·mock환경 거부를 고정한다.
+
+```python
+result = await broker.get_execution_daily(account_scope="test-scope", start_date="2026-09-18", end_date="2026-09-18", clock=lambda: NOW)
+assert result.complete and len(result.pages) == 2
+assert not result.trading_permission and not result.finality_supported
+assert session.requests[1]["headers"]["tr_cont"] == "N"
+```
+
+- [ ] Do: 위 인터페이스를 기존 helper에 연결한다. 취소를 삼키거나 정상 빈 행으로 실패를 바꾸지 않는다. 계좌·토큰·HTTP원문 오류 로그를 새로 만들지 않는다. 전송/주문 API는 수정하지 않는다.
+- [ ] See: `tests/test_kis_execution_queries.py`, 신규 통합시험, 기존 GET/limiter 회귀를 격리 실행한다. 독립 spec+quality 리뷰→지적 수정→한정 재리뷰. parent만 검증된 파일을 stage/commit+push한다.
+
+### 이후 실행 순서와 인수 경계
+
+- 사용자 단계2: 기존 Task4b116시험을 유지하며 Task5의 보호repair/일자전환/initialR·outbox 및 실제 저장소 재시작 인수를 완성한다. 외부 sink의 durable dedup 없는 전송은 pending이다.
+- 사용자 단계3: Task4 전체 호출점 목록을 기준으로 단일 runtime writer·송신 guard·request 바인딩 예약을 연결한다. 정정의 추가 위험/예약을 증명하지 못하면 NOT_SENT로 유지한다. 단순 legacy 거부만으로 모든 writer 이행 완료라 하지 않는다.
+- 사용자 단계4: 공식 공개 자료 고정 근거 또는 승인된 비식별 응답으로 지원 표를 갱신한다. atomic cutoff/체인 의미의 증거가 없으면 startup/finality를 열지 않는다.
+- 사용자 단계5: 실제 C/F/G/R 시험명별 충족/미충족을 대조하고 독립 전체 브랜치 broad 리뷰를 한다. 미충족이 있으면 최종 완료·main/운영 전환 GO를 선언하지 않는다. main 통합·운영 전환은 이 요청에서도 별도 판단이다.
+
+### Task 8A: 증거를 보존하는 보호 복구 (단계2의 F5b)
+
+**Files:** create `src/execution/safety/protection_recovery.py`, `tests/test_execution_protection_recovery.py`; modify `runtime.py`, `application.py`의 fill write-set만. 이 묶음은 한 구현자가 소유한다. 다른 통합 변경은 동결 후 수행한다.
+
+**Plan:** 기존 경제/보호 DTO와 실제 큐를 재사용한다. 새 보호 실패와 같은 commit에 마지막 정상 보호 DTO, 실패한 체결의 before/after·누적관측·증분·시각·분류·intent 및 이후 수락된 fill/quote 입력을 보존한다. 기존 이력 없는 degraded를 정상 상태로 추정하지 않는다. 거래 전송/원장 성공/시작 장벽 해제는 복구의 효과가 아니다.
+
+- [ ] RED: 실제 큐의 등록 실패 APPLIED+degraded→재전달→동일 checkpoint 증거로 repair→재시작. 현금/수량/원가/위험 카운트 재가감0, stage/high/BE/pending/R 보존. 증거 부재·다른 lifecycle·stale version·입력 누락·충돌·기존 보유의 가짜 empty anchor는 거부.
+- [ ] Do: `repair_protection(operation_id, symbol, *, expected_version)`는 owner 잠금 안에서 버전·현재 종목/주문 cursor와 저장된 증거를 확인한다. operation ID와 전체 요청 digest를 영속 receipt에 묶고 같은 ID 다른 요청은 거부한다. 같은 요청 재전달은 멱등이다. 후보에서만 입력을 재생하며 과거 청산 제안의 재송신은 금지한다. 재생으로 새 주문 판단이 생겼으나 기존 intent와 대조할 증거가 없으면 차단한다.
+- [ ] 입력을 모두 보존하지 못한 레짐/면제/외부 writer의 변경, 알 수 없는 pending owner, 자료가 없는 과거 degraded는 미지원으로 남긴다. 수량만 맞춰 등록하거나 현재 설정으로 최초 손절/R을 제조하지 않는다. 정상 다른 종목의 상태를 덮어쓰지 않는다.
+- [ ] See: 외부 I/O만 fake, 실제 store/core queue/ExitManager 시험, DB 저장/게시 장애와 호출 취소 후 복구를 검증한다. 독립 리뷰 후 해당 범위만 완료로 기록하며 F5b와 전체 F 인수를 구분한다.
+
+### Task 8B: durable outbox 전달 경계 (단계2의 F7)
+
+**Files:** create `src/execution/safety/journal_delivery.py`, `tests/test_execution_journal_delivery.py`; 필요할 때 기존 `src/data/storage/trade_storage.py`에 명시 DB transaction 기반 execution journal API를 추가한다. runtime 배선은8A 동결 후 부모가 한다.
+
+**Plan:** 경제 APPLIED와 외부 원장 ACK를 구분한다. 실행 이벤트 키·payload digest·실제 원장 저장은 sink의 같은 transaction이어야 한다. 기존 JSON 기록/비동기 enqueue는 이 계약의 ACK로 사용하지 않는다. sink I/O는 owner lock 밖, 전달 receipt 반영은 owner 안에서 한다.
+
+- [ ] RED: sink commit 전/후 응답 유실·중복·동일 키 다른 payload·ACK commit 실패·오래된 ACK가 최신 cursor를 해제하는 경우를 고정한다. outbox 장애로 경제/보호를 되돌리지 않는다.
+- [ ] Do: immutable envelope, durable receipt 조회/재전달, 현재 key/hash 검증 및 delivered 보존을 구현한다. 같은 주문의 뒤 체결이 pending이면 cursor도 pending이며 보호 제안은 체결 원장/송신으로 혼동하지 않는다. 실제 DB 전용 API의 UNIQUE key+event payload transaction을 검증하고 legacy projection/canary 배선 여부를 따로 명시한다.
+- [ ] See: 실큐→checkpoint→전달/재시작 경로를 확인한다. 외부 sink 계약 미충족/미설치는 pending 유지가 결과이며 원격 운영 DB 성공을 주장하지 않는다.
+
+Task8C 일자 전환/initial R 및 단계3의 각 writer는 위 두 단위 리뷰 후 별도 정확한 파일·실패 인수로 고정한다. 설계 참고는 SDD task-8-design-note이며, 구현되지 않은 제안을 완료 체크하지 않는다.

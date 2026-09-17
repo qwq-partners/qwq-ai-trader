@@ -43,6 +43,9 @@ LEDGER_HOLD_AFTER_REJECT = 2.0  # EGW00215 수신 후 다음 원장 호출까지
 
 _state = {"ledger_last": 0.0, "last_send": 0.0, "hold_until": 0.0, "rejections": 0,
           "ledger_busy_since": 0.0, "ledger_rejections": 0}
+# 타임스탬프와 별개인 취득별 토큰. stale 재취득 뒤 늦게 끝난 요청을 구분한다.
+_ledger_lease: object | None = None
+_UNSCOPED_RELEASE = object()
 
 
 def note_rejection(tr_id: str = "") -> None:
@@ -84,8 +87,12 @@ def note_ledger_rejection(tr_id: str = "") -> None:
     )
 
 
-def release_ledger() -> None:
-    """원장 TR 응답 수신(또는 실패) — busy 해제 + 간격 기준 시각을 응답 시각으로 갱신"""
+def release_ledger(lease: object = _UNSCOPED_RELEASE) -> None:
+    """취득 토큰 일치 시 busy 해제. 무인자는 기존 호출자의 해제 동작을 유지한다."""
+    global _ledger_lease
+    if lease is not _UNSCOPED_RELEASE and (lease is None or lease is not _ledger_lease):
+        return
+    _ledger_lease = None
     _state["ledger_busy_since"] = 0.0
     # 거절 백오프로 미래 시각이 잡혀 있으면 앞당기지 않는다
     _state["ledger_last"] = max(_state["ledger_last"], time.monotonic())
@@ -94,8 +101,9 @@ def release_ledger() -> None:
 stamp_ledger = release_ledger  # 구 이름 호환
 
 
-async def acquire(tr_id: str = "") -> None:
-    """호출 직전 대기. tr_id가 원장 TR이면 원장 간격까지 보장."""
+async def acquire(tr_id: str = "") -> object | None:
+    """공용 간격 대기 후 원장 취득 토큰 반환. 기존 호출자는 반환값을 무시할 수 있다."""
+    global _ledger_lease
     ledger = tr_id in LEDGER_TR_IDS
     while True:
         now = time.monotonic()
@@ -109,6 +117,7 @@ async def acquire(tr_id: str = "") -> None:
         elif ledger and _state["ledger_busy_since"]:
             if now - _state["ledger_busy_since"] > LEDGER_BUSY_TIMEOUT:
                 _state["ledger_busy_since"] = 0.0  # 응답 누락 — stale 해제
+                _ledger_lease = None
             else:
                 wait = 0.05  # 이전 원장 응답 대기 중 — 짧게 폴링
         elif ledger and now - _state["ledger_last"] < LEDGER_TR_INTERVALS.get(tr_id, LEDGER_MIN_INTERVAL):
@@ -121,12 +130,16 @@ async def acquire(tr_id: str = "") -> None:
             if ledger:
                 _state["ledger_last"] = now
                 _state["ledger_busy_since"] = now
-            return
+                _ledger_lease = object()
+                return _ledger_lease
+            return None
         await asyncio.sleep(wait)
 
 
 def reset() -> None:
     """테스트 전용 — 윈도우·원장 시각 초기화"""
+    global _ledger_lease
+    _ledger_lease = None
     _calls.clear()
     _state["ledger_last"] = 0.0
     _state["last_send"] = 0.0
