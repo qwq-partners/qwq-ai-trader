@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-17-toss-observer-service-design.md` (사용자 09-17 후속 `ㄱㄱ`로 상세 설계 승인).
 
+**진행:** Task1/2/3 구현·작업별 검증·독립 리뷰 완료(Important1·Minor1 수정 및 재리뷰 승인). Task4 통합/최종 검증 중. 운영 설치/ON 미실행. 실제 증거와 실패를 포함한 정본은 `docs/reviews/toss-observer-service-2026-09-17.md`.
+
 ## Global Constraints
 
 - 기존 거래 봇 재시작·설정·킬스위치·주문 변경0. `scripts/run_trader.py` 호출/import0, KIS 추가 호출0. 기존 루트 checkout/main도 pull하지 않는다.
@@ -30,7 +32,8 @@ Deployment JSON은 아래 키만 허용한다. 비밀은 JSON에 넣지 않는�
 ```python
 DEPLOYMENT_KEYS = {
     'schema_version', 'release_id', 'artifact_sha256', 'release_root',
-    'manifest_path', 'registry_path', 'plan_path', 'grant_id', 'config_hash',
+    'manifest_path', 'registry_path', 'plan_path', 'plan_raw_hash',
+    'plan_canonical_hash', 'grant_id', 'config_hash',
     'client_identity', 'host_identity', 'service_uid', 'service_gid', 'service_gids',
     'state_directory', 'token_directory', 'sender_lock_path', 'ledger_path',
     'status_path', 'receipt_directory', 'retention_at', 'policy',
@@ -71,7 +74,7 @@ release 내 배치는 `app/src/...`, `deps/`, `bootstrap/launcher.py`, `manifest
 - Produces `toss_deployment.make_deployment(document:dict)->Deployment`, `claim_start(document:dict, authority:ApprovedAuthority)->None`.
 - Consumes task2 `async run_service(*, deployment, settings:dict, claim_start:Callable)->int`. launcher main은 OFF 즉시0, ON 검증 뒤 lazy import/`asyncio.run`; `--check`는 실제 승인까지 검증하되 receipt/credential/worker/network0.
 
-- [ ] **Step 1: 실패 테스트 작성/확인.** 앱 import 전 변조 거부, 같은 grant receipt 두 번 거부, fsync 실패 후 재시도 금지를 임시 경로·가짜 authority로 검증한다. 예:
+- [x] **Step 1: 실패 테스트 작성/확인.** 앱 import 전 변조 거부, 같은 grant receipt 두 번 거부, fsync 실패 후 재시도 금지를 임시 경로·가짜 authority로 검증한다. 예:
 
 ```python
 def test_changed_release_rejected_before_service_import(tmp_path, sealed_release):
@@ -90,7 +93,7 @@ def test_grant_start_is_consumed_after_claim_failure(receipt_fixture, monkeypatc
 
 실제 테스트는 helper fixture도 이 task 테스트파일에 정의하고, tempfile의 운영자 UID를 테스트 내부에서만 치환한다. 테스트용 우회 플래그를 production CLI에 추가하지 않는다. Run: 격리 pytest 위 두 파일, 예상 missing module/feature 실패를 보고서에 남긴다.
 
-- [ ] **Step 2: 최소 구현.** 중복키/NaN/unknown keys·파일 종류/하드링크/부모권한/미등재파일 거부, bound read/hash·30초 검증, UID와 grant/config/hash 바인딩. code 실행 전 stdout에는 고정 에러코드만. 시작 receipt O_EXCL/NOFOLLOW·파일/부모 fsync 완료 뒤만 반환, 삭제/자동복구 없음.
+- [x] **Step 2: 최소 구현.** 중복키/NaN/unknown keys·파일 종류/하드링크/부모권한/미등재파일 거부, bound read/hash·30초 검증, UID와 grant/config/hash 바인딩. code 실행 전 stdout에는 고정 에러코드만. 시작 receipt O_EXCL/NOFOLLOW·파일/부모 fsync 완료 뒤만 반환, 삭제/자동복구 없음.
 
 ```python
 def main(argv=None):
@@ -101,10 +104,10 @@ def main(argv=None):
     # make_deployment -> check-only OR run_service with claim_start closure
 ```
 
-- [ ] **Step 3: GREEN/보강.** OFF 파일0, 악성 .pth/sitecustomize0, env/PYTHONPATH injection, root identity mismatch, extra files/symlink/hardlink, grant expiry 및 시작 receipt 경쟁·fsync 실패를 인수한다. actual stdlib bootstrap subprocess(-I -S)도 실행한다.
-- [ ] **Step 4: 명시 파일 commit+push, 자체 리뷰·RED/GREEN/파일목록 보고.** task1 worktree만 변경; 공통 문서는 부모에게 결과 전달.
+- [x] **Step 3: GREEN/보강.** OFF 파일0, 악성 .pth/sitecustomize0, env/PYTHONPATH injection, root identity mismatch, extra files/symlink/hardlink, grant expiry 및 시작 receipt 경쟁·fsync 실패를 인수한다. actual stdlib bootstrap subprocess(-I -S)도 실행한다.
+- [x] **Step 4: 명시 파일 commit+push, 자체 리뷰·RED/GREEN/파일목록 보고.** task1 worktree만 변경; 공통 문서는 부모에게 결과 전달.
 
-## Task 2: 캐시 입력·관측 감독·별도 상태 (Terra/high)
+## Task 2: 캐시 입력·관측 감독·별도 상태 (부모; Terra/high 슬롯 미확보)
 
 **Files:** Create `src/observation/__init__.py`, `toss_positions.py`, `toss_status.py`, `toss_service.py`; Test `tests/test_toss_observer_positions.py`, `test_toss_observer_status.py`, `test_toss_observer_service.py`.
 
@@ -115,7 +118,7 @@ def main(argv=None):
 - Positions client `async fetch()->tuple[str,...]`, `async close()`. 정상 []와 `InputUnavailable` 분리; 실패 원문/response body 출력0.
 - Status writer `write(document:dict)` bounded atomic0600/fsync, 원장 ACK 후만 success update. service는 자기 상태만 소유하며 기존 heartbeat registry를 변경하지 않는다.
 
-- [ ] **Step 1: RED 작성/실행.** 구체 시작 테스트:
+- [x] **Step 1: RED 작성/실행.** 구체 시작 테스트:
 
 ```python
 @pytest.mark.asyncio
@@ -135,8 +138,8 @@ async def test_receipt_failure_prevents_worker(service_fixture):
     assert counts.worker_starts == 0
 ```
 
-- [ ] **Step 2: 최소 구현.** 입력 literal URL·GET/redirect/proxy/cookie/no automatic retry, body/time/cardinality/type 경계. 전체 입력 파싱 후 코드 정렬/dedup, malformed 한 행도 input failure. 모든 후보/시각/가격 비교값은 spec대로 빈/None.
-- [ ] **Step 3: 감독/상태 구현.** preflight→receipt→starting status→worker.start, 5분 슬롯 price와 독립 calendar, missed/input failure 처리, 미래/과거 구분, busy/실패 last_success 유지. 만료/OFF/SIGTERM→신규 제출 차단→worker stop/join 확정→상태·exit code. 스레드 종료 불명은 stopping_unconfirmed, 자동 worker 교체0.
+- [x] **Step 2: 최소 구현.** 입력 literal URL·GET/redirect/proxy/cookie/no automatic retry, body/time/cardinality/type 경계. 전체 입력 파싱 후 코드 정렬/dedup, malformed 한 행도 input failure. 모든 후보/시각/가격 비교값은 spec대로 빈/None.
+- [x] **Step 3: 감독/상태 구현.** preflight→receipt→starting status→worker.start, 5분 슬롯 price와 독립 calendar, missed/input failure 처리, 미래/과거 구분, busy/실패 last_success 유지. 만료/OFF/SIGTERM→신규 제출 차단→worker stop/join 확정→상태·exit code. 스레드 종료 불명은 stopping_unconfirmed, 자동 worker 교체0.
 
 ```python
 # price branch contract (actual errors handled with fixed codes)
@@ -148,8 +151,8 @@ command = WorkerCommand('prices', slot.slot_id, snapshot)
 # but classify status as input_unavailable, not the worker's idle result.
 ```
 
-- [ ] **Step 4: GREEN/인수.** real worker fake transport 또는 bounded worker double로 성공/전량실패/빈보유/입력실패/과거슬롯/캘린더/만료/취소/cleanup 불확실. writer symlink/write/fsync 실패, 상태 계수·coverage/latency·0분모·원장 불일치 인수. health에는 release/grant/plan/PID·상태·시각·누적 counts·실측latency·production_eligibleFalse, 비밀/전체 입력 없음.
-- [ ] **Step 5: 명시 파일 commit+push·자체 리뷰·RED/GREEN 보고.** test timestamp는 고정, 환경/네트워크 격리.
+- [x] **Step 4: GREEN/인수.** real worker fake transport 또는 bounded worker double로 성공/전량실패/빈보유/입력실패/과거슬롯/캘린더/만료/취소/cleanup 불확실. writer symlink/write/fsync 실패, 상태 계수·coverage/latency·0분모·원장 불일치 인수. health에는 release/grant/plan/PID·상태·시각·누적 counts·실측latency·production_eligibleFalse, 비밀/전체 입력 없음.
+- [x] **Step 5: 명시 파일 commit+push·자체 리뷰·RED/GREEN 보고.** test timestamp는 고정, 환경/네트워크 격리.
 
 ## Task 3: 릴리스 패키징·설치·정리 timer (Astra/high)
 
@@ -157,7 +160,7 @@ command = WorkerCommand('prices', slot.slot_id, snapshot)
 
 **Interfaces:** Consumes task1 manifest/config helpers via stdlib importlib by exact file path (build/install only), common JSON contract above. Produces root-owned actual deployment/plan/grant and service files from exact artifact/UID/host/approved dates; deployment.runtime references task2. No actual provisioning by child agent.
 
-- [ ] **Step 1: RED.** temp-root installer dry-run has writes0/useradd0/systemctl0/keys0; malicious staging symlink/path escape and existing protected target overwrite 거부; retention refuses early/live-service/wrongUID/symlink/unknown path.
+- [x] **Step 1: RED.** temp-root installer dry-run has writes0/useradd0/systemctl0/keys0; malicious staging symlink/path escape and existing protected target overwrite 거부; retention refuses early/live-service/wrongUID/symlink/unknown path.
 
 ```python
 def test_dry_run_does_not_read_credentials_or_start_service(installer_fixture):
@@ -172,10 +175,10 @@ def test_retention_does_not_delete_auth_records(retention_fixture):
     assert retention_fixture.token_record.read_bytes() == b'protected'
 ```
 
-- [ ] **Step 2: package.** 기존 Python 설치 metadata에서 검증할 aiohttp/전이 의존성 버전을 선택하고 wheel SHA256 lock. 빌더는 명시 wheelhouse로 `--no-index --require-hashes --no-compile --target deps`를 사용, 기존 venv 수정0. 프로젝트 closure만 복사(app/src/data/providers/toss, 빈 package initializers, utils/data_freshness, utils/loop_heartbeat, schedulers/toss_shadow, observation); 테스트/봇 엔트리/키/실상태 포함0. 부모가 공개 wheel 다운로드를 별도로 담당한다.
-- [ ] **Step 3: install.** artifact 내용 검증 후 immutable destination 새 생성·root seal, 전용 UID/GID생성, 엄격하게 Toss 2개 필드만 원본env에서 읽어 root0600 EnvironmentFile로 복사(원본 무변경/값 출력0). plan 날짜와 grant max7일/실제 시작/만료·hashes 바인딩. root trust files 새설치, 기존파일 있으면 덮어쓰기 대신 refuse 또는 검증된 동일파일 재사용. 실제 토큰·상태는 읽거나삭제하지 않는다.
-- [ ] **Step 4: unit와 retention.** ExecStart `/usr/bin/python3 -I -S /usr/libexec/qwq-toss-observer/launcher.py --deployment /etc/qwq-toss-observer/deployment.json`, Environment=TOSS_API=1/PYTHONDONTWRITEBYTECODE=1, 전용EnvironmentFile, spec hardening/limits·Restart=no. Retention은 explicit approved cohort inode/권한/기한·inactive 확인 뒤 원장만 unlink, 안전 기록 보존·삭제영수증 fsync. default dry-run, 실제 설치와 `--activate` 분리; root 권한은 테스트 fake boundary로만 대체.
-- [ ] **Step 5: GREEN.** dry-run→실제 temp-root file layout+document load, `systemd-analyze verify`(비밀 없는 unit), EnvFile quoting/parser/중복키·newline거부, 재설치 경합/권한/파일변조/기존 사용자그룹 거부, retention 안전경계. commit+push와 보고. 실제 sudo/useradd/systemctl 명령 실행금지(부모만 실행).
+- [x] **Step 2: package.** 기존 Python 설치 metadata에서 검증할 aiohttp/전이 의존성 버전을 선택하고 wheel SHA256 lock. 빌더는 명시 wheelhouse로 `--no-index --require-hashes --no-compile --target deps`를 사용, 기존 venv 수정0. 프로젝트 closure만 복사(app/src/data/providers/toss, 빈 package initializers, utils/data_freshness, utils/loop_heartbeat, schedulers/toss_shadow, observation); 테스트/봇 엔트리/키/실상태 포함0. 부모가 공개 wheel 다운로드를 별도로 담당한다.
+- [x] **Step 3: install.** artifact 내용 검증 후 immutable destination 새 생성·root seal, 전용 UID/GID생성, 엄격하게 Toss 2개 필드만 원본env에서 읽어 root0600 EnvironmentFile로 복사(원본 무변경/값 출력0). plan 날짜와 grant max7일/실제 시작/만료·hashes 바인딩. root trust files 새설치, 기존파일 있으면 덮어쓰기 대신 refuse 또는 검증된 동일파일 재사용. 실제 토큰·상태는 읽거나삭제하지 않는다.
+- [x] **Step 4: unit와 retention.** ExecStart `/usr/bin/python3 -I -S /usr/libexec/qwq-toss-observer/launcher.py --deployment /etc/qwq-toss-observer/deployment.json`, Environment=TOSS_API=1/PYTHONDONTWRITEBYTECODE=1, 전용EnvironmentFile, spec hardening/limits·Restart=no. Retention은 explicit approved cohort inode/권한/기한·inactive 확인 뒤 원장만 unlink, 안전 기록 보존·삭제영수증 fsync. default dry-run, 실제 설치와 `--activate` 분리; root 권한은 테스트 fake boundary로만 대체.
+- [x] **Step 5: GREEN.** dry-run→실제 temp-root file layout+document load, `systemd-analyze verify`(비밀 없는 unit), EnvFile quoting/parser/중복키·newline거부, 재설치 경합/권한/파일변조/기존 사용자그룹 거부, retention 안전경계. commit+push와 보고. 실제 sudo/useradd/systemctl 명령 실행금지(부모만 실행).
 
 ## Task 4: 통합·독립 리뷰·배포 (부모 통합, Astra/xhigh 리뷰)
 
