@@ -44,6 +44,7 @@ class EventType(Enum):
     SESSION = auto()            # 세션 변경
     ERROR = auto()              # 에러
     LOG = auto()                # 로그
+    EXECUTION_FILL = auto()     # 누적체결 + 적용 receipt (KR 실행 이행 경로)
 
 
 @dataclass
@@ -226,6 +227,15 @@ class OrderEvent(Event):
             price=order.price,
             status=order.status
         )
+
+
+@dataclass
+class ExecutionFillEvent(Event):
+    """큐 적재와 경제/보호 적용 완료를 분리한다. 내부 future는 직렬화하지 않는다."""
+    type: EventType = EventType.EXECUTION_FILL
+    priority: int = 1
+    observation: Any = field(default=None, repr=False)
+    completion: Any = field(default=None, repr=False)
 
 
 @dataclass

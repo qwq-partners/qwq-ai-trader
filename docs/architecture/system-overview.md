@@ -105,6 +105,14 @@ ORDER, FILL, RISK_ALERT, STOP_TRIGGERED, ERROR는 우선순위 1이다. 큐가 �
 
 ## 4. KR 거래 경로
 
+### 2026-09-18 실행 안전성 이행 브랜치 (운영 미설치)
+
+`KRExecutionRuntime`은 명시 checkpoint의 경제·보호·위험 후보를 하나의 SQLite commit으로 저장한 뒤 실제 Portfolio/ExitManager/RiskManager에 게시한다. `ExecutionFillEvent`는 기존 FILL과 다른 중요 큐 이벤트이며 `apply_execution_observation()`은 enqueue가 아니라 적용 receipt까지 기다린다. 명시 설치한 엔진은 legacy 거래 이벤트/직접 체결·가격 writer를 거부하고 자동 legacy fallback을 하지 않는다.
+
+현재가 view는 별도로 보존하고 고점/BE/pending은 동일 coordinator로 직렬화한다. 보호 계산 실패는 확인된 보유 수량의 degraded로 경제 사실과 함께 저장한다. outbox는 pending이며 외부 원장 전송은 아직 없다. `trading_ready`는 전 writer/HTTP/startup 연결 전까지 항상 False다.
+
+**아래 운영 경로는 아직 교체하지 않았다.** run_trader/scheduler/broker에 이 runtime을 설치하는 호출이 없고, 일부 연결본 배포는 금지한다. 전체 설계 인수·최초 잔고 cutoff·취소 최종성은 [중간 리뷰](../reviews/engine-execution-safety-2026-09-17.md)를 확인한다.
+
 ### 진입 경로
 
 KR에는 실시간 경로와 배치 경로가 있으며 둘 다 최종적으로 같은 엔진 주문 흐름에 합류한다.

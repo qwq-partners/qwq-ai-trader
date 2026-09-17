@@ -5,7 +5,7 @@
 ## 문서 목록
 
 ### Architecture (아키텍처)
-- [KR 주문·체결 안전성 상세 설계](superpowers/specs/2026-09-17-engine-execution-safety-design.md) — 사용자 승인; 안전 기반 모듈 구현·실거래 경로 연결/전체 인수 미완
+- [KR 주문·체결 안전성 상세 설계](superpowers/specs/2026-09-17-engine-execution-safety-design.md) — 사용자 승인; 경제/보호·core 큐 검증, 운영 경로 설치/전체 인수 미완
 - [KR 실행 안전성 구현 계획](superpowers/plans/2026-09-17-engine-execution-safety.md) — Plan–Do–See, 작업 소유권·단계별 검증·잔여 통합 조건
 - [system-overview.md](architecture/system-overview.md) — 실행 수명주기, KR 이벤트 경로와 US 직접 스케줄러 경로, 설정·스케줄·상태 경계
 - [harness-evolution-design.md](architecture/harness-evolution-design.md) — 하네스 엔지니어링 적용 설계 (2026-08-10, Claude+Codex 협업): weakness_miner·기각 후보 원장·Wiki ACE 격상·편집 표면 정책·4페이즈 로드맵
@@ -35,7 +35,7 @@
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
-- [KR 실행 안전성 구현 중간 리뷰](reviews/engine-execution-safety-2026-09-17.md) — 안전 모듈의 검증과 실제 engine 통합 미완을 구분; 공식 KIS 계약 조사/잔여 인수
+- [KR 실행 안전성 구현 중간 리뷰](reviews/engine-execution-safety-2026-09-17.md) — 기반·Task4b 실제 경제/보호/큐 검증과 운영 writer 전체 이행 미완을 구분; 공식 KIS 계약/잔여 인수
 - [toss-pr-integration-2026-09-17.md](reviews/toss-pr-integration-2026-09-17.md) — #70 병합·중복 #68 정합화, 배포/활성화 승인과 실제 실행 상태 분리
 - [toss-runtime-2026-09-16.md](reviews/toss-runtime-2026-09-16.md) — 승인 기반 관측 런타임 Plan→Do→See·독립 리뷰·인수 근거/한계·운영 미활성화
 - [Toss 런타임 교차 리뷰 프롬프트](reviews/prompts/toss-runtime-review-2026-09-16.md) — source `984dbdf`·main 기준 SHA·재현 범위를 고정한 외부 리뷰 인계문

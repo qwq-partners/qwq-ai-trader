@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: KR 경제·보호 checkpoint와 실제 core 체결 receipt (Task4b, 운영 미설치)
+
+- 실제 Portfolio/Position·RiskManager·ExitManager의 명시 DTO와 경제/보호 후보를 SQLite 단일 commit 후 게시한다. 부분체결·중복·재시작에서 현금/수량/위험 횟수를 한 번만 반영하고, 보호 계산 실패는 경제 사실을 숨기지 않는 degraded로 보존한다. 비용은 기존 요율의 누적 **추정** 비용 차분이며 실제 징수액·initial R 확정을 뜻하지 않는다.
+- UnifiedEngine 중요 누적체결 이벤트와 commit/게시 receipt를 추가했다. 명시 연결한 core는 legacy 거래 writer를 거부하며, pause 중 체결은 적용한다. startup/호출자 취소와 수락한 체결·가격 보호 작업을 분리하고 종료 시 대기자를 정리한다. 현재가 view는 보호 상태와 별도로 보존한다.
+- 부모와 기존 Astra/high2개가 파일을 분리해 구현·교차 리뷰했다. Important7(경제2·core3·보호2)을 재현·수정·한정 재리뷰하여 모두 ADDRESSED, 수정에서 신규 C/I/M0. 신규116시험+기존43 집중 검증159 passed. 전체 KST **2192 passed/2 known xfailed(91.95초)**, UTC **2192 passed/2 known xfailed(89.93초)**·기존 warning1·격리0·문법/비밀정보 패턴 검사 통과. 해시/근거는 `docs/reviews/engine-execution-safety-2026-09-17.md`의 Task4b 검증 절에 기록한다.
+- **전체 재설계 미완·trading_ready 항상 False**. run_trader/scheduler/broker에 설치하지 않았고, 모든 writer/HTTP 연결·보호 repair·날짜 전환·최초 인계·initial R/외부 원장은 잔여다. feature 저장만 진행하며 main 병합/운영 SSH·배포·재시작/주문/설정 변경 없음. KIS 거래·잔고/Toss 관측 전용·위험/청산 수치·면제 유지.
+
 ## 2026-09-18 — feat: KR 실행 안전성 기반·공식 KIS 계약 조사 (09-17 착수, 실거래 경로 미연결)
 
 - 승인된 상세 설계에 따라 SQLite 원자 checkpoint·누적체결 적용 receipt·주문 intent/attempt/예약·최종 송신 guard를 독립 모듈로 구현했다. UNKNOWN 보존·최신 위험 실패/KST 경계·거래 POST 무재시도·await 전 본문 고정 및 ExitManager의 선택적 메모리 전용/시계 주입을 검증한다.

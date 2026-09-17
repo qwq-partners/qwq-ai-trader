@@ -12,7 +12,9 @@
 
 ## 현재 진척 (완료 범위와 미완 분리)
 
-Task1/2/3의 독립 모듈·인터페이스와 ExitManager 메모리 전용 준비를 구현했고, Important6/Minor1을 수정·재리뷰했다. Task4a 공식 legacy 조회 수집도48시험·독립 리뷰를 마쳤다. KST/UTC 전체 verify는 각각2076 passed/기존xfail2·격리0이다. **실제 돈 경로(Task4/5)는 아직 연결하지 않았으며 전체 명세 인수 미완**이다. 아래 체크리스트는 모듈 시험만으로 실제 큐·경제/보호·복구 요구까지 통과했다고 체크하지 않는다. 중간 검증 정본은 `docs/reviews/engine-execution-safety-2026-09-17.md`다.
+Task1/2/3의 독립 모듈·인터페이스와 ExitManager 메모리 전용 준비를 구현했고, Important6/Minor1을 수정·재리뷰했다. Task4a 공식 legacy 조회 수집도48시험·독립 리뷰를 마쳤다. 기반 커밋의 KST/UTC 전체 verify는 각각2076 passed/기존xfail2·격리0이다. **운영 돈 경로(Task4/5)는 아직 교체하지 않았으며 전체 명세 인수 미완**이다. 아래 체크리스트는 모듈 시험만으로 실제 큐·경제/보호·복구 요구까지 통과했다고 체크하지 않는다. 중간 검증 정본은 `docs/reviews/engine-execution-safety-2026-09-17.md`다.
+
+09-18 후속 Task4b에서 실제 경제/보호 DTO와 core 누적체결 큐/receipt를 구현했다. 경제56·보호44·통합16시험과 기존 보호43시험의 집중 검증159건을 통과했다. 독립 리뷰 Important7은 수정·한정 재리뷰를 마쳤고, 소스 동결 후 전체 KST/UTC 각각2192 passed/기존xfail2·격리0이다. 위2076은 이전 기반 커밋의 근거이며 이번 변경의 결과가 아니다. 운영 설치·모든 writer 이행/보호repair/일자전환/initialR/최초 인계/원장 배출은 남아 있다. 현재 결과는 리뷰 보고서의 Task4b 절에 별도로 기록한다.
 
 ## Global Constraints
 
@@ -126,6 +128,18 @@ assert before.time() < at_cutoff.time()
 - [ ] GREEN tests; sibling reviews guard and exclusion mapping before integration.
 
 ### Task 4: Integrate all KR writers and HTTP boundary
+
+#### Task4b — 실제 경제/보호 후보와 core 큐 receipt (2026-09-18 착수)
+
+Task4a 다음 독립 검증 단위. `economics.py`(Astra/high 저장 담당), `protection.py`(Astra/high 생명주기 담당), `runtime.py` 및 core event/engine 연결(부모)을 파일별 병렬 소유한다. 구현 종료 후 서로 다른 담당자가 리뷰한다. 슬롯 제한 때문에 기존 두 에이전트를 재사용한다. 기존 scheduler/broker/run_trader는 이 조각에서 활성화하지 않으며, Task4 전체·운영 안전성 완료로 세지 않는다.
+
+- 명시 Portfolio/Risk/ExitManager DTO, Decimal 비용, 같은 주문의 부분체결/별도 추가매수 구분, intent별 손실 청산·V재진입 소모, 보호 실패 시 degraded를 실제 컴포넌트로 시험한다.
+- 비용은 기존 FeeCalculator 요율/원 단위 반올림을 사용한 **주문 누적 추정 비용의 차분**이다. 실제 징수 비용으로 표시하지 않는다. 분할 관측마다 반올림하던 legacy와 원 단위 차이가 날 수 있으며 비용 귀속만 명시적으로 바꾼다. 잔여 매수비용을 보존하여 분할 매도에 배분한다.
+- 별도 추가매수는 주문 시작 직전 수량을 기준으로 누적 증가율10%에 도달할 때 기존 리셋을 한 번만 적용한다. 동일 최초 진입의 추가 체결은 리셋하지 않는다. pending 청산 stage는 같은 intent 체결만 진행시킨다.
+- 위험 일자 불일치·전일 주문 지연 체결·미측정 기존 원가/비용·초기 baseline 인계는 자동 추정하지 않는다. Task5 대사/rollover 연결 전 fail-closed로 남긴다. 기존 미호출 KR 승패 통계를 새로 활성화하지 않는다.
+- 실제 UnifiedEngine 큐에 별도 누적체결 이벤트를 넣고 APPLIED receipt까지 기다린다. 큐 적재/일반 핸들러 예외 삼킴은 성공으로 처리하지 않는다. 연결 후 legacy 증분 FILL/update_position 경로는 거부한다. 이 opt-in 연결은 운영 설정 토글이 아니며 run_trader에서는 아직 호출하지 않는다.
+- quote 현재가는 별도 view로 보존하고 고점/BE/pending 변경은 같은 coordinator 명령으로 직렬화한다. 종료/대기 취소/DB 대기/게시 실패·복구를 외부 경계만 fake한 통합시험으로 검증한다.
+- 초기 R은 명시 종결+누적 적용 및 측정 자료가 없으면 pending이며, outbox는 미전송 상태로 둔다. 원격 원장 exactly-once나 자동 startup 해제를 주장하지 않는다.
 
 공식 legacy 추가 조사 후 Task4a(독립 선행 조각)를 분리했다: `execution/safety/queries.py`와 `test_kis_execution_queries.py`에서 현행 TTTC8001R/8036R의 읽기 전용 요청·페이지 수집을 오프라인 구현한다. 외부 fetch/clock 주입, 전체 범위·F/M→N·상한/실패·provenance를 검사하며 최종성/시작 장벽 해제 권한은 없다. 신규 두 파일은 저장 담당 Astra/high가 맡고 기존 live 파일은 여전히 부모 소유다. Task4a 완료가 Task4 전체 완료는 아니다.
 

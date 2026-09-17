@@ -32,7 +32,7 @@ from src.data.storage.signal_event_storage import SignalEventStorage as _SigLog
 
 from .event import (
     Event, EventType,
-    MarketDataEvent, QuoteEvent, SignalEvent, OrderEvent, FillEvent,
+    MarketDataEvent, QuoteEvent, SignalEvent, OrderEvent, FillEvent, ExecutionFillEvent,
     PositionEvent, RiskAlertEvent, StopTriggeredEvent,
     ThemeEvent, NewsEvent, SessionEvent, HeartbeatEvent, ErrorEvent
 )
@@ -199,6 +199,10 @@ class UnifiedEngine:
         self.risk_manager = None
         self.broker = None
         self.data_feed = None
+        # 명시 설치 시에만 사용. 운영 진입점의 전 writer 이행 전에는 미배선.
+        self._execution_runtime = None
+        self._execution_version = -1
+        self._execution_accepting = False
 
         # 프리마켓 데이터 (NXT)
         self.premarket_data: Dict[str, Dict] = {}
@@ -280,7 +284,30 @@ class UnifiedEngine:
             self._handlers[event_type].remove(handler)
 
     # 큐 정리 시 보존해야 할 중요 이벤트 타입 (체결/주문은 절대 폐기 금지)
-    _CRITICAL_EVENT_TYPES = frozenset({EventType.FILL, EventType.ORDER})
+    _CRITICAL_EVENT_TYPES = frozenset({EventType.FILL, EventType.ORDER, EventType.EXECUTION_FILL})
+
+    def bind_execution_runtime(self, runtime):
+        """실행 중 핸들러 교체/legacy로 자동 복귀하지 않는다."""
+        if self.running or self._execution_runtime is not None or self._event_queue:
+            raise RuntimeError("실행 큐가 정지·비어 있는 초기화 단계에서만 설치할 수 있습니다")
+        if runtime.engine is not self:
+            raise ValueError("다른 엔진의 실행 상태를 설치할 수 없습니다")
+        self._execution_runtime = runtime
+        self._execution_accepting = True
+
+    async def apply_execution_observation(self, observation):
+        """누적 관측을 실제 큐에 넣고 commit/게시 receipt까지 기다린다."""
+        from ..execution.safety.application import ApplicationBlocked, FillObservation
+        if self._execution_runtime is None or not self._execution_accepting:
+            raise ApplicationBlocked("KR 실행 적용 담당이 연결되지 않았습니다")
+        if not isinstance(observation, FillObservation):
+            raise TypeError("FillObservation이 필요합니다")
+        future = asyncio.get_running_loop().create_future()
+        # 호출자 취소 후에도 큐는 체결을 처리한다. 미회수 예외 경고만 억제하며
+        # 정상 waiter의 예외/receipt 전달은 그대로 보존한다.
+        future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        await self.emit(ExecutionFillEvent(observation=observation, completion=future))
+        return await asyncio.shield(future)
 
     def _purge_queue(self, keep_count: int) -> None:
         """큐 정리: FILL/ORDER 이벤트 보존, 나머지 중 최저 우선순위 폐기 (Lock 내부 호출 전용)"""
@@ -339,16 +366,19 @@ class UnifiedEngine:
         self.running = True
         logger.info("통합 트레이딩 엔진 시작")
 
-        # 초기화 이벤트
-        await self._emit_startup_events()
-
-        # 하트비트 태스크
-        heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-
+        heartbeat_task = None
         try:
+            # 첫 await 중 취소도 종료/receipt 정리 범위에 포함한다.
+            await self._emit_startup_events()
+            heartbeat_task = asyncio.create_task(self._heartbeat_loop())
             while self.running:
                 # 일시 정지 체크
                 if self.paused:
+                    if self._execution_runtime is not None:
+                        event = await self._get_next_event(execution_only=True)
+                        if event is not None:
+                            await self._process_event(event)
+                            continue
                     await asyncio.sleep(0.1)
                     continue
 
@@ -368,16 +398,26 @@ class UnifiedEngine:
                 recoverable=False
             ))
         finally:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
             await self._shutdown()
 
-    async def _get_next_event(self) -> Optional[Event]:
+    async def _get_next_event(self, *, execution_only: bool = False) -> Optional[Event]:
         """다음 이벤트 가져오기"""
         async with self._queue_lock:
+            if execution_only:
+                candidates = [(event, index) for index, event in enumerate(self._event_queue)
+                              if event.type == EventType.EXECUTION_FILL]
+                if not candidates:
+                    return None
+                event, index = min(candidates)
+                self._event_queue.pop(index)
+                heapq.heapify(self._event_queue)
+                return event
             if self._event_queue:
                 return heapq.heappop(self._event_queue)
         return None
@@ -385,6 +425,33 @@ class UnifiedEngine:
     async def _process_event(self, event: Event):
         """이벤트 처리"""
         self.stats.events_processed += 1
+
+        if event.type == EventType.EXECUTION_FILL:
+            from ..execution.safety.application import ApplicationBlocked
+            future = event.completion
+            try:
+                if self._execution_runtime is None:
+                    raise ApplicationBlocked("KR 실행 적용 담당 미연결")
+                receipt = await self._execution_runtime.apply_observation(event.observation)
+                if not future.done():
+                    future.set_result(receipt)
+            except asyncio.CancelledError:
+                if not future.done():
+                    future.set_exception(ApplicationBlocked("적용 중 종료: checkpoint 재대사 필요"))
+                raise
+            except Exception:
+                self.stats.errors_count += 1
+                if not future.done():
+                    future.set_exception(ApplicationBlocked("체결 적용 실패: checkpoint 재대사 필요"))
+            return
+
+        if self._execution_runtime is not None and event.type in (
+            EventType.FILL, EventType.ORDER, EventType.SIGNAL,
+        ):
+            # 부분 이행 상태에서 구 거래 핸들러로 조용히 우회하지 않는다.
+            self.stats.errors_count += 1
+            logger.error("[엔진] 실행 coordinator 연결 후 legacy 거래 이벤트 거부")
+            return
 
         # SIGNAL 이벤트 추적 + 대시보드 로그
         if event.type == EventType.SIGNAL:
@@ -529,6 +596,17 @@ class UnifiedEngine:
     async def _shutdown(self):
         """종료 처리"""
         logger.info("통합 트레이딩 엔진 종료 중...")
+        self._execution_accepting = False
+        from ..execution.safety.application import ApplicationBlocked
+        async with self._queue_lock:
+            for event in self._event_queue:
+                if event.type == EventType.EXECUTION_FILL and not event.completion.done():
+                    event.completion.set_exception(ApplicationBlocked("큐 처리 전 종료: 관측 재전달 필요"))
+            self._event_queue = [event for event in self._event_queue
+                                 if event.type != EventType.EXECUTION_FILL]
+            heapq.heapify(self._event_queue)
+        if self._execution_runtime is not None:
+            await self._execution_runtime.shutdown()
 
         # 열린 포지션 경고 (KR)
         if self.portfolio.positions:
@@ -582,6 +660,9 @@ class UnifiedEngine:
 
     def update_position(self, fill: Fill):
         """체결로 포지션 업데이트 (KR)"""
+        if self._execution_runtime is not None:
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked("누적 관측 receipt 경로를 사용해야 합니다")
         symbol = fill.symbol
 
         if symbol not in self.portfolio.positions:
@@ -727,6 +808,9 @@ class UnifiedEngine:
 
         트레일링 스탑 계산에 필요합니다.
         """
+        if self._execution_runtime is not None:
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked("가격 보호 변경은 execution.quote로 직렬화해야 합니다")
         pos = self.portfolio.positions.get(symbol)
         if not pos:
             return
@@ -2230,6 +2314,9 @@ class RiskManager:
 
     async def on_order(self, event: OrderEvent) -> Optional[List[Event]]:
         """ORDER 이벤트 처리 → 브로커에 주문 제출"""
+        if getattr(self.engine, "_execution_runtime", None) is not None:
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked("legacy 주문 경로는 실행 coordinator와 함께 사용할 수 없습니다")
         if not self.engine.broker:
             logger.error(f"[리스크] 브로커 미연결 — 주문 제출 불가: {event.symbol}")
             await self.clear_pending(event.symbol)
@@ -2302,6 +2389,9 @@ class RiskManager:
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
         """체결 후 포트폴리오 업데이트 + 리스크 추적 (부분 체결 지원) - Lock 보호"""
+        if getattr(self.engine, "_execution_runtime", None) is not None:
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked("누적 관측 receipt 전에 pending을 정리할 수 없습니다")
         # 1) 포트폴리오 즉시 업데이트 (포지션 생성/수정/삭제, 현금 차감/증가)
         try:
             fill = event.fill if hasattr(event, 'fill') and event.fill else Fill(

@@ -79,12 +79,13 @@
 - UnifiedEngine 구조·스케줄러 태스크 주기·KR 배치 시각: `docs/architecture/system-overview.md` 및 `src/schedulers/` 소스 참조
 - 디렉토리 구조는 `src/` 하위 `ls`로 확인 (모듈별 한 줄 설명은 위 아키텍처 문서)
 
-### 목적 정합성 1단계 (2026-09-17, 안전 기반 구현·실경로 미연결)
+### 목적 정합성 1단계 (09-17 착수, 09-18 경제/보호·core 큐 연결 검증)
 
 - 목표: 비용 차감 KODEX200 초과수익 검증 + 현행 위험 한도 유지. 첫 범위는 KR 취소/체결/복구 정합성과 최종 진입 검사다.
-- 상세 설계는 사용자 승인됐으며 구현 계획은 `docs/superpowers/plans/2026-09-17-engine-execution-safety.md`다. 현재 feature 브랜치의 `src/execution/safety/`는 저장·체결 적용 인터페이스/주문 상태/최종 송신 검사 기반이고 **기존 engine·scheduler·broker에 연결하지 않았다**. 전체 1단계/US 안전성/수익성 완료가 아니다.
+- 상세 설계는 사용자 승인됐으며 구현 계획은 `docs/superpowers/plans/2026-09-17-engine-execution-safety.md`다. feature 브랜치에는 저장/주문/guard 기반과 실제 Portfolio·ExitManager·위험 DTO/reducer, UnifiedEngine 누적체결 큐/receipt를 구현했다. **run_trader·scheduler·broker 운영 경로에는 설치하지 않았다.** 전체 1단계/US 안전성/수익성 완료가 아니다.
 - 공식 GitHub legacy에 현행 TTTC8001R/TTTC8036R 자료가 있다. `docs/integrations/kis-execution-contract-2026-09-17.md`에서 고정 출처와 지원/미지원 범위를 확인한다. 빈 조회·취소 ACK·같은 잔고 반복으로 최초 인계나 취소 최종성을 승인하지 않는다.
-- KIS 거래·잔고, Toss 별도 관측, 면제·위험 수치·설정 유지. 운영 배포·재시작/주문/설정 변경은 하지 않는다. 실제 writer 통합·경제/보호 reducer·최초 인계 증거·전체 인수는 잔여다. 현황 정본: `docs/reviews/engine-execution-safety-2026-09-17.md`.
+- 명시 runtime 설치 후에는 legacy SIGNAL/ORDER/FILL와 직접 체결/가격 writer를 거부한다. 큐 적재는 적용 성공이 아니며, caller 취소·계산 실패를 pending 해제로 해석하지 않는다. 미설치 운영 경로의 기존 동작이 바뀌었다고 보고하지 않는다.
+- KIS 거래·잔고, Toss 별도 관측, 면제·위험 수치·설정 유지. 운영 배포·재시작/주문/설정 변경은 하지 않는다. 모든 writer·HTTP 통합, 보호 repair, rollover/최초 인계, initial R 확정/원장 배출·전체 인수는 잔여다. 비용은 기존 요율의 누적 추정 비용 차분으로 기록하며 실제 징수액과 구분한다. 정본: `docs/reviews/engine-execution-safety-2026-09-17.md`.
 
 ---
 
