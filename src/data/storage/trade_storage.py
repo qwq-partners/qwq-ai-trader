@@ -81,6 +81,14 @@ CREATE INDEX IF NOT EXISTS idx_te_event_time ON trade_events(event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_te_trade_id ON trade_events(trade_id);
 CREATE INDEX IF NOT EXISTS idx_te_type ON trade_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_te_date ON trade_events((event_time::date));
+
+CREATE TABLE IF NOT EXISTS execution_journal (
+    execution_key       TEXT PRIMARY KEY,
+    payload_digest      CHAR(64) NOT NULL,
+    sink_schema_version SMALLINT NOT NULL CHECK (sink_schema_version = 1),
+    payload             JSONB NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -110,6 +118,13 @@ class TradeStorage:
         self._writer_task: Optional[asyncio.Task] = None
 
     # ── 라이프사이클 ──────────────────────────────────────
+
+    def execution_journal(self):
+        """이미 연결된 DB의 내구 원장 API. JSON/큐 성공으로 대체하거나 자동 연결하지 않는다."""
+        if not self._db_available or self.pool is None:
+            raise RuntimeError("execution journal database unavailable")
+        from src.execution.safety.journal_delivery import PostgresExecutionJournal
+        return PostgresExecutionJournal(self.pool)
 
     async def connect(self):
         """DB 연결 + 스키마 생성 + writer 시작"""

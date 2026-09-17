@@ -210,6 +210,10 @@ class FillApplicationCoordinator:
         for key in candidate.keys() | self._state.keys():
             if key in domain_roots:
                 continue
+            if key == "protection_replay":
+                from .protection_recovery import validate_fill_evidence
+                validate_fill_evidence(self._state, candidate, observation)
+                continue
             if key not in self._state:
                 raise ValueError("fill reducer의 알 수 없는 신규 root")
             if key == "attempts":

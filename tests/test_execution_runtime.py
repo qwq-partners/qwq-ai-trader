@@ -305,14 +305,15 @@ def test_quote_during_fill_commit_preserves_current_view_and_serializes_high_be(
             await store.entered.wait()
             price = asyncio.create_task(runtime.quote("005930", Decimal("11000")))
             await asyncio.sleep(0)
-            assert engine.portfolio.positions["005930"].current_price == Decimal("11000")
+            # durable quote admission 전에는 이전 view를 유지한다.
+            assert engine.portfolio.positions["005930"].current_price == Decimal("10000")
             assert not price.done() and not caller.done()
             assert not runtime.owner.healthy
             store.release.set()
             await process
             assert (await caller).status == "APPLIED"
-            assert engine.portfolio.positions["005930"].current_price == Decimal("11000")
             assert await price is None
+            assert engine.portfolio.positions["005930"].current_price == Decimal("11000")
             guard = exits.get_state("005930")
             assert guard.current_stage is ExitStage.SECOND
             assert guard.breakeven_activated

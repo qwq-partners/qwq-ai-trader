@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-18 — feat: 증거 기반 보호 복구·durable 경제 원장 전달 (Task8A/B, 운영 미설치)
+
+- 실제 core 큐에서 보호 등록 실패 후 경제 중복 없이 저장된 입력으로 보호만 복구한다. 입력 누락·정책/수량/버전 충돌·과거 미기록 청산 판단은 BLOCKED다. 독립 리뷰가 재현한 P1(손절 quote 저장 실패→재시작→잘못된 복구)은 durable admission으로 수정했다. 접수 commit+publish 후에만 view를 게시하고, 미해결 입력은 재시작 후에도 repair/후속 덮어쓰기를 차단한다. 정상 tick의2회commit 지연 인수는 후속이다.
+- outbox의 immutable key/hash와 실제 이벤트를 같은 PostgreSQL transaction에 저장하고 정확한 ACK 후에만 delivered/journal_pending을 갱신한다. SQLite ACK 실패·다중 dispatcher·신규 체결 경합은 경제/보호를 재가감하지 않는다. 기존 분석 원장/initial R/canary 반영 완료와 구분한다.
+- Astra/high2개 분리 구현, fresh Astra/xhigh 독립 리뷰·P1 수정 뒤 다른 fresh Astra/xhigh 한정 재리뷰 승인(신규 P0/P1/P2 0). 임시 PostgreSQL16.15·UNIX socket 실제5시험 포함 신규68건. 최종 KST/UTC 각각 **2292 passed/2 known xfailed/1 기존warning(97.70/97.34초)**·격리0·문법/비밀정보 패턴 검사 통과. 테스트 전용 서버/DB만 정리했으며 운영 DB/자격은 사용하지 않았다.
+- 후속 계획에 ingress/일자 전환·최초 손절/최종성/R과 별도 수동 CLI 송신점을 명시했다. **모든 writer/HTTP·최초 인계·전체 C/F/G/R는 미완**, main 병합/배포/재시작/실API/주문/설정 변경 없음. 정본: `docs/reviews/engine-execution-followup-2026-09-18.md`.
+
 ## 2026-09-18 — fix: legacy 실행 조회 broker 통합·HTTP 헤더/limiter 소유권
 
 - 실제 KISBroker의 GET·토큰 복구·공용 limiter에 일별/취소가능 legacy 수집기를 연결하는 단발 API를 추가했다. 운영 poller/거래 POST는 미변경이며 dev 환경은 호출 전에 거부한다. 실제 HTTP status·F/M→N cursor를 보존하고 조회 완결을 최종성·거래 허가로 승격하지 않는다.

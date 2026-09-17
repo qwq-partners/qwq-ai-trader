@@ -13,6 +13,7 @@ from .application import ApplicationBlocked, FillApplicationCoordinator, FillObs
 from .economics import decode_portfolio, reduce_economics, validate_risk, publish_risk
 from .lifecycle import OrderLifecycleCoordinator
 from .protection import decode_protection, publish_protection, quote_protection, reduce_protection
+from .protection_recovery import RecoveryReceipt, capture_fill, capture_quote, digest, reduce_repair
 from .store import ExecutionStateStore
 
 
@@ -27,6 +28,7 @@ class KRExecutionRuntime:
         self.clock = clock
         self._quotes: dict[str, Decimal] = {}
         self._protection_tasks: set[asyncio.Task] = set()
+        self._quote_lock = asyncio.Lock()
         self._protection_failed = False
         self._closing = False
         self.owner = FillApplicationCoordinator(store, self._publish, self._reduce)
@@ -97,6 +99,9 @@ class KRExecutionRuntime:
             fill_kind=economic.fill_kind, intent_id=economic.intent_id, now=now,
         )
         economic.state["protection"] = protection
+        economic.state["outbox"][observation.observation_id]["source_version"] = self.owner.version + 1
+        capture_fill(state, economic.state, observation, delta, fill_kind=economic.fill_kind,
+                     intent_id=economic.intent_id, status=status, version=self.owner.version + 1, now=now)
         return FillReduction(economic.state, protection_status=status, journal_pending=True)
 
     async def apply_observation(self, observation: FillObservation):
@@ -106,7 +111,7 @@ class KRExecutionRuntime:
 
     async def quote(self, symbol: str, price: Decimal, *, market_data=None,
                     intent_id: str | None = None):
-        """현재가 view는 즉시, 보호 상태는 직렬화. 반환 제안은 주문 전송이 아니다."""
+        """입력의 durable 접수 후 view 게시, 보호 적용 후 완료. 제안은 주문 전송이 아니다."""
         if self._closing:
             raise ApplicationBlocked("종료 중에는 새 보호 명령을 수락하지 않습니다")
         if type(symbol) is not str or not symbol or symbol != symbol.strip():
@@ -115,15 +120,31 @@ class KRExecutionRuntime:
             raise ValueError("현재가는 양의 유한 Decimal이어야 합니다")
         now = self._now()
         market_data = deepcopy(market_data)
-        self._quotes[symbol] = price
-        position = self.engine.portfolio.positions.get(symbol)
-        if position is not None:
-            position.current_price = price
         command_id = "quote:" + uuid4().hex
+        request = {"symbol": symbol, "price": str(price), "market_data": market_data,
+                   "intent_id": intent_id, "observed_at": now.isoformat()}
+        request_digest = digest(request)  # JSON 입력 검증도 수락 전에 끝낸다.
+        if intent_id is not None and (type(intent_id) is not str or not intent_id or intent_id != intent_id.strip()):
+            raise ValueError("보호 intent 식별자 오류")
         decision = None
+
+        def admit(state):
+            pending = state.setdefault("protection_quote_admissions", {})
+            if any(row["symbol"] == symbol for row in pending.values()):
+                raise ApplicationBlocked("미해결 보호 가격 입력을 먼저 대사해야 합니다")
+            pending[command_id] = {**request, "payload_digest": request_digest,
+                                   "status": "RECEIVED", "source_version": self.owner.version + 1,
+                                   "admitted_at": self._now().isoformat()}
+            return state
 
         def reduce(state):
             nonlocal decision
+            admission = state.get("protection_quote_admissions", {}).get(command_id)
+            if (not admission or admission["status"] != "RECEIVED"
+                    or admission["payload_digest"] != request_digest
+                    or any(admission[key] != value for key, value in request.items())):
+                raise ApplicationBlocked("보호 가격 접수 증거 불일치")
+            before = deepcopy(state)
             dto, decision = quote_protection(
                 state["protection"], symbol=symbol, price=price, now=now,
                 market_data=market_data, intent_id=intent_id,
@@ -138,11 +159,24 @@ class KRExecutionRuntime:
                     "intent_id": intent_id, "decision": list(decision),
                     "status": "pending", "observed_at": now.isoformat(),
                 }
+            capture_quote(before, state, symbol, price=price, market_data=market_data,
+                          intent_id=intent_id, command_id=command_id, decision=decision,
+                          version=self.owner.version + 1, now=now)
+            # 보호 결과/재생 입력과 같은 commit에서만 미해결 접수를 제거한다.
+            del state["protection_quote_admissions"][command_id]
             return state
 
         async def apply_quote():
-            await self.owner.mutate(command_id, reduce)
-            return decision
+            # 두 owner transaction 사이에도 가격 입력 순서가 뒤집히지 않게 한다.
+            async with self._quote_lock:
+                await self.owner.mutate("quote-admit:" + command_id, admit)
+                # 저장 실패/결과불명 때는 수락하거나 view를 게시하지 않는다.
+                self._quotes[symbol] = price
+                position = self.engine.portfolio.positions.get(symbol)
+                if position is not None:
+                    position.current_price = price
+                await self.owner.mutate(command_id, reduce)
+                return decision
 
         # 수락된 가격은 호출자의 취소와 분리한다. 강한 참조와 종료 drain으로
         # 앞선 fill commit을 기다리는 동안의 고점/손절 접촉을 버리지 않는다.
@@ -154,6 +188,39 @@ class KRExecutionRuntime:
             if done.cancelled() or done.exception() is not None:
                 self._protection_failed = True
 
+        task.add_done_callback(completed)
+        return await asyncio.shield(task)
+
+    async def repair_protection(self, operation_id: str, symbol: str, *, expected_version: int):
+        if self._closing:
+            raise ApplicationBlocked("종료 중에는 새 보호 명령을 수락하지 않습니다")
+        if any(type(value) is not str or not value or value != value.strip()
+               for value in (operation_id, symbol)):
+            raise ValueError("복구 명령/종목 식별자 오류")
+        if type(expected_version) is not int or expected_version < 0:
+            raise ValueError("복구 version 오류")
+        request = {"kind": "protection_repair", "operation_id": operation_id,
+                   "symbol": symbol, "expected_version": expected_version}
+
+        async def apply_repair():
+            applied_here = False
+            def reduce(state):
+                nonlocal applied_here
+                applied_here = operation_id not in state.get("recovery_receipts", {})
+                return reduce_repair(state, operation_id, symbol,
+                                     expected_version=expected_version, state_version=self.owner.version)
+            await self.owner.mutate("protection-repair:" + digest(request), reduce)
+            row = self.owner.state["recovery_receipts"][operation_id]
+            return RecoveryReceipt(operation_id,
+                                   "ALREADY_APPLIED" if not applied_here and row["status"] == "APPLIED" else row["status"],
+                                   row["reason"], row["committed_version"])
+
+        task = asyncio.create_task(apply_repair())
+        self._protection_tasks.add(task)
+        def completed(done):
+            self._protection_tasks.discard(done)
+            if done.cancelled() or done.exception() is not None:
+                self._protection_failed = True
         task.add_done_callback(completed)
         return await asyncio.shield(task)
 
@@ -173,9 +240,11 @@ class KRExecutionRuntime:
             "publication_recovery_required": self.owner.publication_recovery_required,
             "protection_updates_failed": self._protection_failed,
             "protection_updates_pending": len(self._protection_tasks),
+            "protection_quote_admissions_pending": len(state.get("protection_quote_admissions", {})),
             "trading_ready": False, "block_reason": "runtime_integration_incomplete",
             "protection_degraded": len(state.get("protection", {}).get("degraded", {})),
             "unapplied_inbox": sum(row.get("status") not in ("APPLIED", "SUPERSEDED")
                                     for row in state.get("inbox", {}).values()),
-            "outbox_pending": len(state.get("outbox", {})),
+            "outbox_pending": sum(type(row) is not dict or row.get("status") != "delivered"
+                                  for row in state.get("outbox", {}).values()),
         }

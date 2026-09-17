@@ -240,3 +240,26 @@ assert session.requests[1]["headers"]["tr_cont"] == "N"
 - [ ] See: 실큐→checkpoint→전달/재시작 경로를 확인한다. 외부 sink 계약 미충족/미설치는 pending 유지가 결과이며 원격 운영 DB 성공을 주장하지 않는다.
 
 Task8C 일자 전환/initial R 및 단계3의 각 writer는 위 두 단위 리뷰 후 별도 정확한 파일·실패 인수로 고정한다. 설계 참고는 SDD task-8-design-note이며, 구현되지 않은 제안을 완료 체크하지 않는다.
+
+### Task 8C1: 확정 사실 ingress와 KST 일자 전환
+
+**Files:** create `src/execution/safety/day_recovery.py`, `tests/test_execution_day_recovery.py`; modify `src/core/engine.py`, `application.py`, `runtime.py`, 필요한 `economics.py`의 day-change publication. 공유 파일은 단일 구현자가 소유한다. lifecycle의 직접 prepare/claim fence 검사는 그 파일 소유권 인계 후 직렬 적용한다.
+
+**Plan:** 큐 길이0을 정지 증명으로 쓰지 않는다. 첫 await 전 ingress ticket·strong task를 등록하여 queue-lock 대기부터 RECEIVED·경제 게시/실패까지 추적한다. 거래 admission과 확정 사실 접수를 분리하고, fence 이후 사실도 원래 주문일 그대로 durable RECEIVED로 남긴다. 미수신 거래소 체결이 없다는 증거를 만들지는 않는다.
+
+- [ ] RED: queue lock 대기 중 caller 취소, dequeue 뒤 owner/DB 대기, fence 후 사실 도착, 최종 rollover DB await 중 전일 사실 도착을 실제 core 큐로 재현한다.
+- [ ] Do: `owner.receive`는 기존 inbox 접수 경계를 분리 재사용하며 원 관측/identity 불변·접수 성공과 APPLIED를 구분한다. runtime의 prepare/rollover/resume는 요청 전체 digest·영속 receipt·잠금 안 expected_version을 사용한다. fence·세대·미완 ticket·inbox·child·관측/적용 차이·예약·보호 admission·DB/게시 상태를 점검한다. 중단/재시작 후 자동 resume는 금지한다.
+- [ ] 최초 fence는 거래·새 보호 변경의 수락을 닫되 이미 수락한 작업을 유실시키지 않는다. 경제 적용이 보류된 관측은 명시 RECEIVED/parked로 보존한다. shutdown을 rollover pause로 사용하지 않고 별도 두 번째 큐 소비자를 만들지 않는다.
+- [ ] 일자 전환은 현재 KST day·소유 포트폴리오와 일치하는 명시 valuation 증거가 있을 때만 일일 PnL/거래·손실 제한 및 미실현 기준선을 같은 commit으로 갱신한다. 단순 `_quotes` 값에 현재시각을 붙여 근거를 만들지 않는다. 현금/보유/원가/수수료 잔액·dedup·pending·stage/high/BE·R·과거 증거는 유지한다. 새 임의 TTL/위험 숫자/전일 종가 정책은 추가하지 않는다.
+- [ ] See: 미완·결측·미지원은 BLOCKED, 다음날 첫 체결/중복은1회, pre/postcommit·publication·caller 취소·reopen·UTC/KST를 검증한다. 로컬 resume는 startup/trading_ready의 허가가 아니며, 전일 late fact의 과거 회계 처리는 미지원으로 남긴다. 실제 일일 scheduler writer 이행은 단계3 별도 인수다.
+
+### Task 8C2: 최초 손절·최종성 증거와 초기 R 원장
+
+**Files:** create `src/execution/safety/initial_r.py`, `tests/test_execution_initial_r.py`; modify `protection.py`, `lifecycle.py`, `application.py`, `runtime.py`, `journal_delivery.py` 및 관련 시험. C1 공유 파일 동결 후 배선한다.
+
+**Plan:** 최초 보호 등록 성공과 같은 후보에서 기존 uncapped initial-R `StopDecision` 입력/결과·설정 provenance를 보존한다. 기존 `apply_crash_cap=False` 및 신규 등록 dynamic stop 정책을 바꾸지 않는다. 최종성은 terminal 문자열이 아니라 이미 검증된 전체 원본 근거를 append-only로 보관한다.
+
+- [ ] RED: 부분체결 중 설정/레짐 변화, terminal 문자열만 존재, ACK/미지원 취소, 관측>적용, 원본 범위 불일치, 등록 실패→repair, 부분매도/완전청산→같은 종목 재진입, 나누어떨어지지 않는 누적대금을 고정한다.
+- [ ] Do: `finalize_initial_r`는 owner 안 CAS·멱등 receipt를 사용하고 동일 최초 BUY lifecycle의 실제 최종 누적대금×저장된 초기SL/100만 확정한다. 현재 설정/남은 수량/계획 위험을 사용하지 않는다. 기존 값 충돌·모호한 add-on·지원 근거 없는 종결은 pending/BLOCKED다. 과거 lot의 R 확정이 새 lifecycle 보호를 수정하지 않는다.
+- [ ] R kind는 fill 원장과 같은 typed envelope/UNIQUE transaction을 사용하되 선행 fill ACK를 요구하고 별도 `initial_r_journal_pending`으로 관리한다. R ACK가 기존 fill cursor를 풀지 않는다. 경제·위험·예약을 재가감하지 않는다. legacy 분석 원장 projection은 별도 인수다.
+- [ ] See: 실제 큐/SQLite와 sink ACK 실패·재시작·payload 충돌 시험, 별도 리뷰, KST/UTC 전체 검증. 보호 repair 성공과 R 미측정은 별개이며 최초 손절 근거 없는 과거 lot은 미측정으로 남긴다.

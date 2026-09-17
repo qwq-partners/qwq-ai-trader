@@ -13,8 +13,16 @@
 ## 단계2 — 경제·보호·원장/복구
 
 - Plan: `dd3b0f7`의 DTO/경제/core receipt116시험을 유지하고 보호repair·KST일자전환·명시종결 initialR·durable outbox ACK를 보완한다. 기존 TradeStorage 비동기 큐/PositionLedger 오류삼킴은 durable ACK가 아니다.
-- Do: 아직 후속 구현 전. 현재 블록의 집중 기준선164passed/2.30s·격리0을 재확인했다.
-- See: 현재 APPLIED는 경제/보호 checkpoint 게시이며 journal_synced가 아니다. 경제 사실을 재가감하거나 stage/high/R을 추정해 복구하지 않는다.
+- Do: Astra/high 두 역할로 보호 재생·복구(8A)와 전용 경제 이벤트 원장 전달(8B)을 분리 구현했다. 실제 core 큐·SQLite·Portfolio/ExitManager를 사용하며 초기 위험값은 아직 pending이다. 부모 교차 시험은 원장 ACK→보호 복구→후속 체결→재시작을 연결했다. 전달 완료 행을 health의 pending으로 잘못 세던 문제도 RED→GREEN으로 고정했다.
+- See: fresh Astra/xhigh 독립 리뷰는 8B의 전용 이벤트 원장 경계를 한정 승인했고, 8A에서 **P1-A1**을 재현했다. 손절 접촉 quote의 저장 실패 뒤 같은 프로세스 restore 및 SQLite 재개방에서 repair가 누락을 모르고 APPLIED로 승인했다. 정상 저장 대조군은 BLOCKED였다. 아래 durable admission 수정 후 다른 fresh Astra/xhigh가 한정 재리뷰하여 **spec/quality APPROVED, 신규 P0/P1/P2 0**으로 판정했다. 독립208passed/7.68초·격리0와 별도 게시 실패/호출 취소·fill 경합3사례를 확인했다. 수정 전 전체 KST2276passed는 최종 근거로 사용하지 않는다.
+
+8A 수정은 가격 입력의 durable admission과 보호 적용 완료를 분리했다. admission 저장·게시 전에는 성공 수락이나 현재가 view 게시를 하지 않고, 그 이후 적용 실패는 영속 미해결 입력으로 남겨 repair를 차단한다. 뒤의 높은 가격으로 미해결 손절 접촉을 덮을 수도 없다. 기존 high/BE·중간 손절 접촉 보존 인수는 유지했다. 이 변화는 아직 운영에 설치되지 않은 새 runtime의 수락 경계 변경이며 가격·손절 정책 수치 변경이 아니다. 정상 quote의 commit/publish가2회가 되므로 운영 연결 전 처리량/지연 검증은 남는다. 저장 전 실패 입력까지 재시작으로 되살리는 보장은 없고 upstream 재전달이 필요하다.
+
+8B의 ACK는 새 `execution_journal`의 이벤트 키·payload가 같은 DB transaction으로 저장됐다는 뜻이다. 기존 `trades`/`trade_events`/PositionLedger·성과·canary projection의 완료를 뜻하지 않는다. 최초 리뷰에서는 PostgreSQL pool 경계가 합성이었으므로 임시 디렉터리의 별도 PostgreSQL16.15·UNIX socket에서 실제 DDL/SQL/asyncpg/중복·충돌·core ACK 실패 후 재개방 **5건**을 추가 실행했다. 기존 합성28건과 합계33passed, 독립 재실행33passed/6.13초·skip0·격리0·한정 spec/quality APPROVED. 기존 DB/자격/운영 서비스는 사용하지 않았고 fixture가 만든 서버·DB만 종료/정리했다. DB 전원 유실이나 모든 race schedule·운영 DB 인수를 주장하지 않는다.
+
+최종 동결 후보 전체 검증은 KST **2292passed/2 known xfailed/1 기존warning,97.70초**, UTC **2292passed/2 known xfailed/1 기존warning,97.34초**다. 두 번 모두 격리0·문법·비밀정보 패턴 검사를 통과했고 신규68시험(보호34·합성원장28·실제DB5·교차1)을 포함한다. 핵심 해시: runtime `824070f81bd5300b99d96a9c3aeacd8ff72f641480247fead846a2be1b5a6512`, recovery `499b8d1ff1b65984b0b1c2c073fc3c7c3a28624feda53548d476c1d335d55eae`, journal `1e1bda8a83d56804edc218e23064fa116e9c5e3a5967f5b454b631e555dc6ee2`, 실제DB시험 `960ba02c42f8309ac3eea66d01ff07df124f84370726d9516cd8e7d98ae8334f`.
+
+남은 단계2: 확정 사실 ingress·quiescence와 KST 일자 전환, 최초 손절/지원되는 최종성 증거 및 R 원장, 기존 분석 원장 projection. 경제 사실을 재가감하거나 stage/high/R을 추정해 복구하지 않는다. **8A/B 한정 완료이며 단계2 전체 완료가 아니다.**
 
 ## 단계3 — 단일 owner·송신점 이행
 
@@ -31,11 +39,14 @@ Plan: 아래는 Terra/high 읽기 전용 조사에서 얻은 기준 HEAD의 주�
 | 일일 초기화 | engine.reset_daily_stats, scheduler 전일취소·pending clear | 대사 전 취소/해제 금지, 원자 rollover |
 | KOFR | 직접BUY/SELL·safe_asset_state write | safe_asset 신뢰경로·체결 이후 상태 |
 | 수동 | 직접BUY·면제 설정·지시목록 삭제 | user 신뢰경로·UNKNOWN 보존·면제 유지 |
+| 별도 수동 CLI | `scripts/liquidate_all.py::liquidate_kr`, `scripts/sell_specific.py::main`의 직접 submit·취소 후 fallback | 같은 계좌 owner/intent를 공유하는 명시 명령 경계; 취소 불명 때 재주문0·최초 목표 잔여량만 허용 |
 | batch | 보유 current/high 쓰기, monitor/rebalance/trim SELL·BUY | quote/intent 경유, 후보 파일은 거래 정본 아님 |
 | 시작 | run_trader 잔고주입/_load_existing_positions/면제·보호·daily복원 | startup 장벽·최초 인계 증거 |
 | WS | run_trader 시장 이벤트 발행 | 보유 quote의 동일 owner |
 
 Do/See: 아직 전체 이행 전이다. 특히 정정의 수량/가격 증가는 request-bound 추가 예약·위험 상한 없이는 송신하지 않는다. 신규 가드로 legacy 호출을 거부하는 것만으로 정상 기능의 이행을 완료했다고 보고하지 않는다.
+
+부모 추가 호출점 점검에서 별도 수동 CLI 두 경로를 확인했다. 현재 취소 예외를 무시한 뒤 포지션 조회 수량으로 재주문하며, `sell_specific`은 최초 요청량보다 큰 기존 보유까지 fallback 대상으로 삼을 수 있다. 소스 읽기만 수행했으며 스크립트의 import 시 `.env` 로딩/실행은 하지 않았다. 스케줄러 수동 매수와 별개 프로세스이므로 인프로세스 runtime 바인딩만으로 단일 owner가 완성되지 않는다. 이행 시 명시 owner 명령 전달/프로세스 소유권 계약을 갖추고, 미지원 경로는 지원 완료로 세지 않는다.
 
 ## 단계4 — 공식 계약 증거
 
@@ -50,3 +61,39 @@ See: 요청/페이지 계약 외에, 취소/정정 원행과 자식행의 누적
 Plan: 실제 전체 C/F/G/R 시험명을 명세와 대조하고 독립 broad 리뷰·수정·한정 재리뷰·UTC/KST 전체 검증을 수행한다. 이전 모듈 리뷰를 대신 쓰지 않는다.
 
 Do/See: 아직 실행 전이다. 충족/미충족과 운영 전환의 증거 조건을 분리하고, 미충족 상태에서 main/운영 GO를 선언하지 않는다.
+
+### 기준 bdda0e9의 실제 인수 매핑
+
+아래는 부모가 시험 함수와 실제 호출점을 대조한 **미완 범위 목록**이다. 전체 통합 승인이나 독립 broad 리뷰가 아니다. `tests/` 아래 파일명을 사용하며 뒤 단계에서 같은 표를 갱신한다.
+
+| ID | 현재 구체 근거 | 남은 전체 인수 |
+|---|---|---|
+| C1/C8 | `test_execution_lifecycle.py::test_cancel_result_never_releases_original_sell_reservation`, `test_execution_guards.py::test_common_safety_barrier_applies_to_all_trade_commands` | 실제 broker cancel→scheduler fallback 연결에서 추가POST0/원pending 보존 |
+| C2/C6 | `test_kis_order_evidence.py::test_cancel_quantity_fields_do_not_invent_proven_finality`, `test_kis_execution_query_integration.py`의 실제GET 페이지/실패 시험 | 취소 체인 미지원 유지, 조회 결과→실제 intent 대사 배선 |
+| C3 | `test_execution_lifecycle.py::test_replacement_requires_terminal_evidence_and_applied_fills` | 합성 최종성은 공식 취소 계약 증명이 아님. 지원 증거가 없어 실경로 다음5주 주문은 미지원 |
+| C4 | `test_execution_lifecycle.py::test_evidence_other_scope_never_matches`, `test_late_or_wrong_sender_result_cannot_release_new_attempt` | 실제 수집기 scope→broker ref→체결큐 연동 |
+| C5 | `test_execution_lifecycle.py::test_real_store_restart_preserves_claim_and_unresolved_reservation`, `test_kr_final_dispatch.py::test_post_never_repeats_after_auth_network_or_malformed_reply` | 실제 broker·owner 연결에서 POST 전후/ACK 저장 종료 인수 |
+| C7 | `test_execution_lifecycle.py::test_concurrent_claims_and_duplicate_prepare_have_one_sender` | 실제 engine와scheduler 동시 fallback을 같은 intent로 합류 |
+| F1/F2 | `test_execution_runtime.py::test_real_queue_buy40_60_then_sell40_60_applies_cash_and_protection_once` | core 실큐 범위 충족. scheduler의 중복 적용 제거 후 전체 경로 재실행 |
+| F3 | 같은 실큐 시험 및 `test_full_engine_loop_delivers_receipt_and_reopen_replays_without_reapplying` | 실제 조회→큐 replay 인수 추가 |
+| F4 | 시작 장벽·unknown 보존 모듈 시험 | 잔고 snapshot/cutoff 증거와 sync/fill 경합 실경로 없음; 미충족 |
+| F5/F5a | `test_execution_runtime.py::test_committed_fill_with_failed_publication_recovers_without_double_cash`, `test_execution_fill_application.py::test_economic_commit_failure_keeps_inbox_and_reservation_for_recovery` | core 범위 시험. broker송신/ACK 저장까지 결합 필요 |
+| F5b | `test_execution_runtime.py::test_protection_failure_commits_economics_once_and_stays_degraded` | Task8A의 실제 repair·재시작 검증/독립 리뷰 진행 |
+| F6/F6a | `test_execution_protection_checkpoint.py::test_same_entry_partial_does_not_reset_existing_protection`, `test_execution_runtime.py::test_quote_during_fill_commit_preserves_current_view_and_serializes_high_be` | quote/fill core 범위 충족. sync 및 레짐·면제 writer 이행 필요 |
+| F7 | `test_execution_protection_checkpoint.py::test_addon_accumulates_small_fills_then_resets_only_once` | 초기R 최종 증거·Task8B durable sink·원장 projection 연결 미완 |
+| F8 | `test_execution_protection_checkpoint.py::test_missing_protection_degrades_and_later_fill_cannot_fake_recovery`, `test_exemption_survives_fills_and_full_close_clears_owned_protection` | 실제 기존 보유 인계·복구/면제 변경 경로 연결 |
+| F9 | `test_execution_runtime.py::test_real_risk_manager_receives_persisted_loss_intent_and_one_use_state` | 해당 core 상태 복원 근거는 있음. 일일 초기화 writer 이행 후 재시험 |
+| G1/G2 | `test_kr_final_dispatch.py::test_market_changes_during_each_await_prevent_http`, `test_execution_guards.py::test_clock_and_snapshot_are_read_at_each_decision_not_at_construction` | 실제 분석/분산대기/LLM→broker 전체 경로·요청/예약 바인딩 미완 |
+| G3/G3a | `test_execution_guards.py::test_timezone_host_does_not_change_kst_cutoff`, `test_failure_attempt_hides_previous_normal_until_new_valid_observation` | 현재 위험 publisher를 실제 scheduler 관측 성공/실패에 배선 |
+| G4 | `test_execution_guards.py::test_explicit_routes_exempt_only_alpha_and_metadata_cannot_issue_context` | 실제 KOFR/수동/SELL 경로 이행·기존 위험 예외 특성화 |
+| G5 | `test_execution_guards.py::test_common_safety_barrier_applies_to_all_trade_commands` | owner→실제 request→HTTP 결합과 DB 장애 장벽 시험 |
+| R1/R1a | `test_execution_state_store.py::test_existing_invalid_database_is_rejected_not_recreated`, `test_execution_runtime.py::test_empty_database_does_not_replace_known_live_portfolio` | 최초 인계 근거 부재로 시작 차단 유지. 실제 시작 후 모든POST0 인수 미완 |
+| R2 | KST/UTC 전체 회귀2224passed, ExitManager 기존 특성화 포함 | 공용 파일 변경 때마다 반복. US 실행 안전성 완료 근거는 아님 |
+
+### 이후 구현 순서의 구체 경계
+
+1. Task8A/B를 리뷰해 보호 repair/원장 ACK를 먼저 닫는다. 다음은 수락된 큐 작업까지 확인하는 KST rollover와 최초 손절·검증된 최종성 증거를 보존하는 initial R이다. 오래된 불명 이력은 추정하지 않는다.
+2. 실제 request의 command/TR/계좌범위/종목/side/수량/가격/부모 참조 fingerprint를 durable attempt·claim·예약과 결합한다. 마지막 await 뒤 현재 예약/현금/수량/기존 위험 한도를 다시 확인한다. 시장가 wire 가격0은 예약 금액0이 아니다.
+3. 취소/정정 체인 미지원 중에는 **모든 정정(감소·매도 포함) 미송신**을 유지한다. 향후 계약이 확보돼도 가격상승·수량감소처럼 방향이 다른 경우의 추가 현금·계획손실·노출을 독립 계산·예약해야 하며 BUY alpha 통과는 이를 대신하지 않는다.
+4. 위 계약이 준비되면 core→broker→scheduler 체결/청산→batch→KOFR/수동→일일 초기화→시작 인계 순서로 writer를 이행한다. 각각 실제 호출점의 성공과 실패 시험을 추가한다. legacy를 단순 거부한 경로는 이행 완료로 세지 않는다.
+5. 최초 인계 cutoff·체인 수량 범위 자료를 공식 명세 또는 승인된 비식별 응답으로 보충한다. 소프트웨어 시험 fixture는 그 외부 사실의 증명이 아니다. 미충족 인수를 공개한 뒤 독립 전체 리뷰와 별도 main/운영 전환 판단을 한다.
