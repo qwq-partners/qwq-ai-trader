@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -184,10 +185,13 @@ class FillApplicationCoordinator:
     """모든 core 명령에 하나의 순서를 부여하고 publish 전 성공을 반환하지 않는다."""
 
     def __init__(self, store: ExecutionStateStore, publisher: Callable,
-                 reducer: Callable | None = None):
+                 reducer: Callable | None = None, *, registration_scope: Callable = nullcontext,
+                 registration_guard: Callable | None = None):
         self.store = store
         self.publisher = publisher
         self.reducer = reducer
+        self._registration_scope = registration_scope
+        self._registration_guard = registration_guard
         self._lock = asyncio.Lock()
         self._state: dict = {}
         self._version = 0
@@ -363,11 +367,22 @@ class FillApplicationCoordinator:
     async def restore(self) -> int:
         async with self._lock:
             self._block()
-            version, state = await self.store.load()
+            version, state, receipts = await self.store.load_with_policy_receipts()
+            from .policy_generations import validate_policy_generations
+            try:
+                validate_policy_generations(state, version)
+                registrations = state.get('policy_generations', {}).get('registrations', {})
+                if receipts != {command: row['version'] for command, row in registrations.items()}:
+                    raise ValueError('policy_registration_sql_receipt_conflict')
+            except ValueError as exc:
+                raise ApplicationBlocked('정책 등록 checkpoint 복구 검증 실패') from exc
             self._publish(state, version)
             return version
 
-    async def _commit_publish(self, state: dict, commit_id: str) -> int:
+    async def _commit_publish(self, state: dict, commit_id: str, *, policy_registration=(), registration_id=None) -> int:
+        from .policy_generations import finalize_policy_generations
+        state = finalize_policy_generations(self._state, state, self._version,
+                                            registration=policy_registration, registration_id=registration_id)
         payload = json.loads(encode_state(state))
         # SQL 대기 중의 옛 게시 상태로 송신을 승인하지 못하게 한다.
         self._block()
@@ -378,6 +393,35 @@ class FillApplicationCoordinator:
             raise
         self._publish(payload, version)
         return version
+
+    async def register_policy_generations(self, command_id: str, selectors: tuple[str, ...]) -> int:
+        """명시 관측 시작. 일반 reducer에 이력 작성 권한을 부여하지 않는다."""
+        from .policy_generations import registration_names
+        names = registration_names(selectors)
+        if type(command_id) is not str or not command_id.strip():
+            raise ValueError('command_id_required')
+        # runtime 소유 API도 이 경로를 쓴다. scope는 취소된 SQL의 drain까지 유지한다.
+        with self._registration_scope():
+            async with self._lock:
+                self._require_ready()
+                if self._registration_guard is not None:
+                    self._registration_guard()
+                commit_id = 'policy-registration:' + command_id
+                try:
+                    existing = await self.store.lookup_commit(commit_id)
+                except BaseException:
+                    self._block()
+                    raise
+                if existing is not None:
+                    request = self._state.get('policy_generations', {}).get('registrations', {}).get(command_id)
+                    if request != {'selectors': list(names), 'version': existing}:
+                        raise ValueError('policy_registration_request_conflict')
+                    return existing
+                # prepare_day는 owner lock 밖에서도 admission을 닫을 수 있다.
+                if self._registration_guard is not None:
+                    self._registration_guard()
+                return await self._commit_publish(deepcopy(self._state), commit_id,
+                                                  policy_registration=names, registration_id=command_id)
 
     async def mutate(self, command_id: str, reducer: Callable[[dict], dict]) -> int:
         if not isinstance(command_id, str) or not command_id.strip():

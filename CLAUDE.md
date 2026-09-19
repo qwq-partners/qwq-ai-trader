@@ -35,12 +35,16 @@
 - 전문가 시스템 상세: `docs/agents/expert-system.md` / 코드: `src/experts/`
 - 출력: `ExpertOpinion` (score/bias/confidence/findings) → market_regime + cross_validator
 
-## 하위 에이전트 위임 규칙 (2026-09-14 사용자 지시)
+## 하위 에이전트 위임 규칙 (2026-09-20 Codex·Claude 공통 규칙)
 - Agent/Workflow 로 하위 에이전트를 띄울 때는 기본값을 쓰지 말고 **작업 성격에 맞춰 모델·effort 를 매번 명시**한다.
-  - 기계적·저위험(복사·포맷·grep 요약·단순 테스트 실행) → haiku/sonnet, low~medium
-  - 일반 구현·특성화 테스트·문서 초안 → sonnet(또는 세션 기본), medium~high
-  - 돈이 걸린 경로(사이징·주문·청산·동기화)·백테스트 판정·보안·독립/적대적 리뷰·최종 통합 판단 → opus/세션 최상위, high~xhigh
+  - 기계적·저위험 요약·작은 문서 → `gpt-5.6-luna`, low~medium. 검색·단순 시험 실행은 별도 모델보다 도구를 직접 사용한다.
+  - 범위가 고정된 일반 구현·특성화 시험 → `gpt-5.6-terra`, medium~high; 다중 파일 분석·일반 독립 리뷰 → `gpt-5.6-sol`, high.
+  - 설계·어려운 재현·주문/사이징/청산·보안·동시성·상태 무결성 → `gpt-6-astra` 또는 확인된 `claude-opus-5`, high. 중요한 최종 리뷰는 구현자와 분리해 지원되는 xhigh를 명시하고 다른 공급자를 우선한다.
 - 같은 워크플로 안에서도 단계별로 다르게 지정하고, 선택 근거를 label/프롬프트 첫 줄에 남긴다.
+- 이 호스트 전역 정본은 `/home/ubuntu/.config/ai-agents/model-routing.md` (`ai-routing-v1-2026-09-20`), 로딩/설정 검증은 같은 폴더 `verification-2026-09-20.md`다. 다른 호스트는 별도 설치/확인이 필요하다. 프로젝트 안전 경계는 계속 적용한다.
+- Plan→Do→See: 같은 base SHA·격리 worktree·파일별 단일 writer, 부모만 통합한다. native Codex와 외부 Claude를 합해 작업자 최대3명(실제 도구 한도가 더 낮으면 그 한도), worker 재위임 금지. 요청 모델/effort와 실제 관측 모델을 구별한다.
+- Fable은 요청 후 Opus로 fallback된 상태여서 자동 배정 제외. Sonnet/Haiku도 이 환경에서는 실제 모델 확인 전 자동 사용하지 않는다. max/ultra는 기본값이 아니다.
+- 외부 Claude는 우선 도구를 끈 비식별 source 입력으로 리뷰한다. 도구 허용 구현에는 검증된 개발 sandbox가 필요하며 worktree는 보안 sandbox가 아니다. 이 규칙은 실주문·운영 SSH·배포·재시작·설정 변경 권한을 부여하지 않는다.
 
 ## 프로젝트 개요
 - KR+US 통합 트레이딩 엔진 (Full Rewrite)
@@ -91,7 +95,9 @@
 - Task10A1: 같은 host/고정 private root 계좌 lease와 runtime command/result 종료 drain을 구현·별도 독립 리뷰했다. 저장/게시 실패의 정상 종료 오인 P2를 수정·재리뷰 승인, 당시 전체 KST/UTC3381passed/기존xfail2·격리0. factory/core/run_trader/CLI에는 아직 설치하지 않았다.
 - Task10A2 부분: feed/보호·진입 증거에 이어 실제 지수 metadata·위험 source 수명과 명시5분 owner 경로를 구현했다. source/input/선제 selector와 실제5분 연결은 각각 독립 한정 승인이다. KST/UTC3702passed/기존xfail2·격리0(경고4: pykrx1+fork3). pending effect 전달·정책 재생·정오/2분/LLM·callback/factory 및 전체 writer는 미완이다. actual degraded→5분→repair 차단 RED3을 후속 고정했고 원본 uninstalled batch 중첩 RED도 보존한다. 시장 시각 미입증을 receipt now로 채우지 않으며 `trading_ready=False`다. 세분 계획은 `docs/superpowers/plans/2026-09-18-engine-writer-migration.md`, 완료 범위 정본은 `docs/reviews/engine-execution-followup-2026-09-18.md`다.
 - Task10A2b6/B1 후속: 실제5분 정책 재생과 기존 수량 산술 분리를 각각 한정 재리뷰 승인했다. 정책 누락/건강 anchor 위조·조기 거부 전 수수료 조회 회귀를 수정했고, 최초 fill commit의 replay digest를 경제 outbox에 결합해 증거 없는 과거 이력은 BLOCKED로 유지한다. 수정 후 전체 KST/UTC3830passed/기존xfail2·격리0·기존경고4다. 정오/2분/LLM 실제 writer RED3, qualification/최종 sizing·effect 전달·나머지 writer/설치·전체 C/F/G/R는 계속 미완이며 main/운영 변경은 없다.
-- Task10A2c 09-19: 레짐 산식의 실제 legacy caller 분리·두 지수 원자료 입력7파일과 input seal 기반3파일을 각각 독립 한정 승인했다. 정책 값-only ABA와 완료 후 source read 지속 무효화 한계가 남아 실제 caller 전에 owner generation/소비 권한 보강이 필요하다. 동결 후보 전체 KST/UTC3933passed/기존xfail2·격리0·기존경고4. 실제2분 live/owned sidecar 불일치·결측 회복3 RED를 추가 보존했고 기존 정오/LLM RED3도 미해결이다. 전체 writer/전체 C/F/G/R·broad·main/운영 전환 완료가 아니다. 정본과 후속 순서는 위 후속 보고서/세분 계획을 따른다.
+- Task10A2c/C2a 정책 변경 이력·schema2 seal: 최초 Opus CHANGES_REQUIRED의 B1/B2/B4를 실제 재현 후 수정했다. 미등록 요청 사전거부, 등록 day/closing/drain, checkpoint↔SQL 등록 receipt 양방향 복원 대조가 포함된다. 신규 정규32시험 포함 전체 UTC/KST 각4053passed/기존xfail2·경고4·격리0; 실제 Opus5/xhigh366.318초 정상 완료·APPROVE_THIS_SLICE. 정적 리뷰는 시험 실행/전체 engine/운영 승인이 아니다. 처분 정본 `docs/reviews/policy-generation-remediation-2026-09-20.md`. 다음은 retained source 요청 경계(N1) → 지속 source 권한(기존 RED7/대조2) → 실제2분/정오·LLM·보호 replay다. 전일 checkpoint는 rollover/resume 후 selector 등록·versioned seal 순서. 전체 writer/C/F/G/R·main/운영 전환은 미완이다.
+- 후속 N1 retained 요청 경계는 RED10/대조8→수정, 전체 UTC/KST4071통과·실제 Opus 한정 승인을 받았다. source 무변경 outer-scope 회귀2개를 추가했고 C2b 입력 전파 구현을 진행 중이다. 최신 정본 `docs/reviews/source-authority-followup-2026-09-20.md`; 실제2분·정오/LLM/replay·전체 writer/운영은 여전히 미완이다.
+- 09-20 개발용 Opus 실행기는 timeout/진행 분리·nonzero 실패·자식 정리·모델/result 검증 후 독립 Astra/xhigh 한정 승인됐다. 당시 전체 UTC/KST4021통과·실제 smoke2.72초이며 이후 엔진 C2a는 위 별도 한정 승인을 받았다. 실행 완료와 코드 승인·운영 승인을 계속 구분한다. 사용법 `docs/operations/agent-routing.md`, 원인/검증 이력 `docs/reviews/opus-review-runner-2026-09-20.md`.
 - 명시 runtime 설치 후에는 legacy SIGNAL/ORDER/FILL와 직접 체결/가격 writer를 거부한다. 큐 적재는 적용 성공이 아니며, caller 취소·계산 실패를 pending 해제로 해석하지 않는다. 미설치 운영 경로의 기존 동작이 바뀌었다고 보고하지 않는다.
 - KIS 거래·잔고, Toss 별도 관측, 면제·위험 수치·설정 유지. 운영 배포·재시작/주문/설정 변경은 하지 않는다. 모든 writer·HTTP/별도 수동 CLI 통합, 실제 일일 초기화 writer, 최초 인계·기존 분석 원장 projection·전체 인수는 잔여다. 비용은 기존 요율의 누적 추정 비용 차분으로 기록하며 실제 징수액과 구분한다. 정본: `docs/reviews/engine-execution-followup-2026-09-18.md`.
 

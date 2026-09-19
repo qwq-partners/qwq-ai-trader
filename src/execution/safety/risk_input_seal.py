@@ -3,11 +3,9 @@
 Trusted callers choose the required reads; opt-in does not authenticate that choice or
 the supplied input facts. No JSONPath, external I/O, new database or startup authority.
 
-Policy selectors below are VALUE-ONLY: equality is not evidence that an A→B→A
-transition never occurred. No policy-generation selector is implemented yet, and
-intraday updated_at is not a generation. Version-safe future callers must first add
-a reviewed selector containing a real owner-maintained policy generation. Source
-selections already include real admission/terminal/conflict versions.
+Legacy policy_reads remain VALUE-ONLY. Explicit versioned_policy_reads bind the
+owner's registered change history; neither form grants persistent consumption
+authority. Source selections include real admission/terminal/conflict versions.
 """
 from __future__ import annotations
 
@@ -69,17 +67,22 @@ def _names(values):
     return sorted(values)
 
 
-def _request(ticket, source_lanes, retained_sources, policy_reads, inputs):
+def _request(ticket, source_lanes, retained_sources, policy_reads, inputs, versioned_policy_reads=()):
     from .risk_sources import _LANES
     if type(inputs) is not dict:
         raise ValueError('input_seal_bundle_required')
     lanes, retained, policies = map(_names, (source_lanes, retained_sources, policy_reads))
+    versioned = _names(versioned_policy_reads)
     if (not set(lanes) <= _LANES or ticket.lane in lanes
-            or not set(policies) <= _POLICIES.keys() or ticket.operation_id in retained):
+            or not set(policies) <= _POLICIES.keys() or ticket.operation_id in retained
+            or not set(versioned) <= _POLICIES.keys() or set(versioned) & set(policies)):
         raise ValueError('unsupported_input_seal_selection')
-    return {'ticket_digest': ticket.request_digest, 'source_lanes': lanes,
+    request = {'ticket_digest': ticket.request_digest, 'source_lanes': lanes,
             'retained_sources': retained, 'policy_reads': policies,
             'inputs': json.loads(_json(inputs))}
+    if versioned:
+        request.update(schema=2, versioned_policy_reads=versioned)
+    return request
 
 
 def _source_at(row, cutoff, seals):
@@ -97,20 +100,33 @@ def _source_at(row, cutoff, seals):
     return value
 
 
-def _reads(state, ticket, request, *, cutoff=None, policies=True):
+def _retained_reads(state, request, *, cutoff=None, seals=None):
     records = state['risk_sources']['records']
-    seals = state.get(ROOT, {}).get('records', {})
-    facts = {'sources': {}, 'retained': {}, 'policies': {}}
-    for lane in request['source_lanes']:
-        rows = [_source_at(row, cutoff, seals) for row in records.values() if row['ticket']['lane'] == lane]
-        rows = [row for row in rows if row is not None]
-        facts['sources'][lane] = max(rows, key=lambda row: row['ticket']['sequence']) if rows else None
+    seals = state.get(ROOT, {}).get('records', {}) if seals is None else seals
+    retained = {}
     for operation in request['retained_sources']:
         row = _source_at(records.get(operation), cutoff, seals)
         if (not row or row['ticket']['lane'] not in request['source_lanes']
                 or not row['terminal'] or row['terminal']['receipt']['status'] != 'accepted'):
             raise ValueError('invalid_retained_input_source')
-        facts['retained'][operation] = row
+        retained[operation] = row
+    return retained
+
+
+def _reads(state, ticket, request, *, cutoff=None, policies=True):
+    records = state['risk_sources']['records']
+    seals = state.get(ROOT, {}).get('records', {})
+    facts = {'sources': {}, 'retained': {}, 'policies': {}}
+    if request.get('schema') == 2:
+        from .policy_generations import versioned_fact
+        facts['versioned_policies'] = {
+            name: versioned_fact(state, name, cutoff=cutoff)
+            for name in request['versioned_policy_reads']}
+    for lane in request['source_lanes']:
+        rows = [_source_at(row, cutoff, seals) for row in records.values() if row['ticket']['lane'] == lane]
+        rows = [row for row in rows if row is not None]
+        facts['sources'][lane] = max(rows, key=lambda row: row['ticket']['sequence']) if rows else None
+    facts['retained'] = _retained_reads(state, request, cutoff=cutoff, seals=seals)
     if policies:
         for name in request['policy_reads']:
             root, field = _POLICIES[name]
@@ -147,12 +163,12 @@ def _receipt(operation, row):
 
 
 async def seal_input(coordinator, ticket, *, source_lanes=(), retained_sources=(),
-                     policy_reads=(), inputs, scope_token=None):
+                     policy_reads=(), versioned_policy_reads=(), inputs, scope_token=None):
     from .risk_sources import RefreshTicket, _ticket_dict, validate_risk_sources
     if type(ticket) is not RefreshTicket:
         raise TypeError('RefreshTicket_required')
     runtime = coordinator.runtime
-    request = _request(ticket, source_lanes, retained_sources, policy_reads, inputs)
+    request = _request(ticket, source_lanes, retained_sources, policy_reads, inputs, versioned_policy_reads)
     request_digest = digest(request)
     initial = runtime.owner.state
     source = initial.get('risk_sources', {}).get('records', {}).get(ticket.operation_id)
@@ -160,6 +176,18 @@ async def seal_input(coordinator, ticket, *, source_lanes=(), retained_sources=(
         raise ValueError('risk_source_ticket_mismatch')
     if (source['terminal'] and ticket.operation_id not in initial.get(ROOT, {}).get('records', {})):
         raise ValueError('input_seal_source_terminal')
+    # 최초 유효 seal의 잘못된 선택은 결과 저장 접수 전에 거부한다.
+    # 기존 seal 충돌과 이미 stale인 요청은 아래의 durable 판정을 유지한다.
+    if (request.get('versioned_policy_reads')
+            and ticket.operation_id not in initial.get(ROOT, {}).get('records', {})
+            and not _context_reason(runtime, initial, ticket)):
+        registered = initial.get('policy_generations', {}).get('selectors', {})
+        if any(name not in registered for name in request['versioned_policy_reads']):
+            raise ValueError('policy_generation_unregistered')
+    if (ticket.operation_id not in initial.get(ROOT, {}).get('records', {})
+            and not source['terminal'] and not source['conflict']
+            and not _context_reason(runtime, initial, ticket)):
+        _retained_reads(initial, request)
     with (runtime.command_scope() if scope_token is None else nullcontext(scope_token)) as token:
         async def execute():
             def reduce(state):
@@ -214,6 +242,8 @@ def validate_risk_input_seals(state, version):
     before completion; a successful hook may legitimately change those policy values.
     """
     from .risk_sources import _keys, _ticket, _time
+    from .policy_generations import validate_policy_history
+    validate_policy_history(state, version)
     sources = state.get('risk_sources', {}).get('records', {})
     root = state.get(ROOT)
     if ROOT not in state:
@@ -238,11 +268,16 @@ def validate_risk_input_seals(state, version):
             if fact is not original:
                 _keys(fact, ('request', 'request_digest', 'version', 'status', 'reason'))
             request = fact['request']
-            _keys(request, ('ticket_digest', 'source_lanes', 'retained_sources', 'policy_reads', 'inputs'))
-            if any(type(request[name]) is not list for name in ('source_lanes', 'retained_sources', 'policy_reads')):
+            names = ('source_lanes', 'retained_sources', 'policy_reads')
+            extra = ('schema', 'versioned_policy_reads') if 'schema' in request else ()
+            _keys(request, ('ticket_digest', *names, 'inputs', *extra))
+            if extra and (type(request['schema']) is not int or request['schema'] != 2):
+                raise ValueError('invalid_input_seal_schema')
+            if any(type(request[name]) is not list for name in (*names, *extra[1:])):
                 raise ValueError('invalid_input_seal_request')
             expected = _request(ticket, tuple(request['source_lanes']), tuple(request['retained_sources']),
-                                tuple(request['policy_reads']), request['inputs'])
+                                tuple(request['policy_reads']), request['inputs'],
+                                tuple(request.get('versioned_policy_reads', ())))
             if _json(expected) != _json(request) or fact['request_digest'] != digest(request):
                 raise ValueError('input_seal_request_conflict')
             if (type(fact['version']) is not int or not ticket.admission_version < fact['version'] <= version
@@ -257,8 +292,11 @@ def validate_risk_input_seals(state, version):
             if original['reason'] or when.date().isoformat() != ticket.business_day:
                 raise ValueError('invalid_input_seal_context')
             facts = original['reads']
-            _keys(facts, ('sources', 'retained', 'policies'))
+            versioned_keys = ('versioned_policies',) if original['request'].get('schema') == 2 else ()
+            _keys(facts, ('sources', 'retained', 'policies', *versioned_keys))
             expected = _reads(state, ticket, original['request'], cutoff=original['version'], policies=False)
+            if any(_json(facts[key]) != _json(expected[key]) for key in versioned_keys):
+                raise ValueError('input_seal_policy_generation_crosslink_conflict')
             if (_json(facts['sources']) != _json(expected['sources'])
                     or _json(facts['retained']) != _json(expected['retained'])
                     or type(facts['policies']) is not dict
@@ -300,3 +338,6 @@ def validate_risk_input_seals(state, version):
         facts = _reads(state, _ticket(source), original['request'], cutoff=completed, policies=False)
         if any(_json(facts[key]) != _json(original['reads'][key]) for key in ('sources', 'retained')):
             raise ValueError('accepted_input_seal_source_changed')
+        if ('versioned_policies' in facts
+                and _json(facts['versioned_policies']) != _json(original['reads']['versioned_policies'])):
+            raise ValueError('accepted_input_seal_policy_generation_changed')

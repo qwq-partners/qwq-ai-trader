@@ -224,6 +224,30 @@ See: 계산/입력7파일과 input seal 기반3파일은 각각 독립 한정 �
 
 위 구현·검증·한정 리뷰 결과는 feature 커밋 `bfeb4a6`으로 저장·push했고, 원격 branch의 전체 SHA 일치를 확인했다. main/운영 반영은 아니다. 교훈 문서 후속은 소스/시험 변경 없이 정책 ABA와 지속 소비 권한의 구별만 기록한다.
 
+### Task10A2c/C2a — 정책별 변경 이력 (09-20, 시험 완료·독립 리뷰 보류)
+
+최신 후속: 사용자는 Astra 대체가 아니라 Opus 실패 원인의 진단/수정을 우선 지시했다. 동일 원 입력·Opus/xhigh는 계측 재실행에서692.32초에 정상 완료했다. 기존360초 예산/진행 정보 소실/래퍼 exit0 문제와 수정은 [실행기 보고서](opus-review-runner-2026-09-20.md)를 따른다. **Opus 판정은 CHANGES_REQUIRED**이며 B1 등 지적은 아직 실제 재현·범위 판정 전이다. 원문은 SDD `task-10a2c-generation-opus-review-completed-20260920.md`(SHA `d75fd2ff0eb4706f0cfad8be1a65f39528cd903aaf8203b533d0fedf8b1a2bb8`)에 보존했다. 아래 timeout/대체 선택 대기는 진단 이전 이력이며 지금의 블로커는 리뷰 미도착이 아니라 지적 검토/해소다. 엔진 후보 코드/시험7파일 지문은 그대로다.
+
+Plan: 사용자가 전역 모델 규칙 설치·확인 후 기존 순서를 재개하도록 승인했다. 전역 `ai-routing-v1-2026-09-20`은 Codex/Claude 새 소비자에서 확인했고, 프로젝트 요약은 [공통 배정 규칙](../operations/agent-routing.md)에 기록했다. Astra/high가 commit 경계, Terra/high가 별도 worktree의 source 전파 RED, 별도 읽기 전용 Astra/high가 다음 실제 caller 인터페이스를 담당했다. 실제 모델 ID가 노출되지 않는 native 작업은 배정값을 실측값으로 주장하지 않는다.
+
+Do: 명시 등록한 다섯 정책 selector의 version·presence·value·digest 이력을 중앙 owner finalizer가 SQL 직전에 기록한다. reducer의 이력 root 변경은 거부하며 복원/게시에서 generation을 생성하지 않는다. 새 `versioned_policy_reads`는 legacy 값-only 기록과 구분한 schema2로 봉인하고 seal S/완료 C **엄격히 이전** 이력과 대조한다. own completion hook의 C 변경은 자신을 무효화하지 않는다. 등록 자체는 기준선/시장 신선도/거래 허가가 아니다.
+
+부모가 같은 등록 ID/다른 selector 요청이 기존 성공처럼 반환되는 경계를 지적했고 실제 RED 후 등록 요청 목록/commit version까지 내구적으로 결합했다. 작성자 신규31개, 집중118·확대 관련320개를 UTC/KST 각각 통과·격리0으로 보고했다(서로 포함되는 집합이므로 합산하지 않음). 실제 queue fill·quote·journal ACK의 무관 변화, config/command-effect ABA, intraday 선택 분리, SQL 전후 실패·게시 실패·복원 및 history/seal 변조를 검사했다. sidecar effect 시험은 전체 scheduler/dispatch 인수가 아니며 신규 registry의 day/account 종단·fill 취소 조합은 추가 검증 대상으로 남겼다.
+
+See: 코드/시험6파일 동결 뒤 도구를 끈 Claude Opus/xhigh에 원문·해시·명세를 전달했으나 두 시도 모두360.02초 내 리뷰 결론을 반환하지 않았다. 첫 input202716자/두 번째 핵심 발췌137827자, 두 번째 assistant 메타데이터의 실제 모델은 `claude-opus-5`, toolcalls0·리뷰문/최종 result 없음이다. 래퍼 exit0은 child timeout(-9)을 처리한 결과일 뿐 성공 리뷰가 아니다. 유효 effort/사용량/최종 비용은 관측하지 못했으며, 로그인 오류나 영구 공급자 장애라고 단정하지 않는다. 소스 manifest는 두 시도 전후 동일했다. 세 번째 재시도나 자격/설정 우회는 하지 않았고, 독립 Astra로 검증을 대체할지 사용자에게 요청했다. 승인 전 C2b/actual caller 통합은 보류한다.
+
+부모의 동결 코드 전체 시험은 **UTC3964passed/2 known xfailed/4 warnings143.63초, KST3964/2/4 147.99초**, 격리0이다. Terra/high가 등록 이력을 포함한 실제 day prepare→valuation→roll→resume/cold restore, 계좌 불일치의 stale/새 접수 거부, SQLite 체결 precommit abort, 큐/처리 waiter 취소 후 단회 commit·중복 방지4개를 별도 probe로 UTC1.73초/KST1.52초 통과했다. 원 probe SHA `e12ccba27af1fb60da3ae22d133b6d54e873e3d8e11066c5dea4b833f7e00ac3`, 보고서 SHA `3e8847af6265aadff323466d7ef1ea61e1852d66131a82c09f3674e3a05fa459`. pre-fence versioned seal이 roll을 가로지르는 별도 행렬과 협조된 DB 재작성 인증은 이4개가 증명하지 않는다.
+
+부모는 원 probe를 보존하고4개를 `tests/test_execution_policy_generation_boundaries.py`로 옮겼다. 정규 파일만 UTC1.41초/KST1.05초·격리0 통과, 새 파일 포함 stage 후 Python 문법/비밀패턴·diff 검사 통과. 여기서 verify의 테스트 생략은 별도 전체 실행과 구분한다. source/test7파일 staged patch SHA(기준77c3f5d) `e62f1c53e267dac313bd880f32fc0b6b11b339e60af02b755011486ee785cd81`.
+
+경계4개를 포함한 최종 전체 `tests` 실행은 **UTC3968passed/2 known xfailed/4 warnings(172.36초), KST3968/2/4(172.61초)**, 각각 exit0·운영 상태/외부 네트워크 접근 시도0이다. 이전 전체3964나 별도 probe 수치를 여기에 합산하지 않는다. 깨끗한 환경·pytest 외부 plugin 자동 로딩 OFF·명시적 tests 경로로 실행했다. 경고는 기존 pykrx1/fork3이다. 최종 검사까지 source/test 변경은 없으며, 이 상태는 독립 코드 리뷰 승인이나 전체 단계 완료가 아니다.
+
+C2b 선행 RED: Terra의 별도 동일 base `77c3f5d` worktree에서 완료 후 선언 source 변경·전이 의존·첫-await pending·후속 begin/complete·cold restore를 시험했다. 부모 재실행 **7 behavioral RED/2 GREEN controls, UTC1.93초·격리0**. 실패/부재 사실이 그대로인 optional VIX 및 own hook 정책 변경은 유지해야 하는 대조다. 원 테스트 SHA `227def6e2cea5daefd4fbca22aba4cc6cd092b0c4fc655f45a1473f149563a4c`, 보고서 SHA `9eaa6879a62ba6917d0dc55216a78ffbd0d3cc18a14678ee8ecf3bab26994d00`. 이 원본을 보존하고 C2a 소유권 해제 후 source 현재성 evaluator를 순차 구현한다.
+
+다음 실제 연결의 고정 경계: 2분 보호 적용0, sidecar는 `entry_policy_effects.sidecar_active` 단일 정본, mid/expert pending은 새 RegimeOwner selector, VIX6시간/단일 background task의 기존 실행 순서, noon/5분 horizon은 영구 max가 아니라 관측시각·commit 순서에 따른 단일 projection. 정오/JSON LLM/보호 적용은 typed replay와 같은 commit으로 이행해야 한다. 아직 이 실제 caller/replay를 구현 완료했다고 주장하지 않는다. main/운영·실API·주문·거래 설정·Toss 무변경, `trading_ready=False` 및 모든 MODIFY 미지원 유지.
+
+현재 C2a 후속 상태는 [Opus 수정·인수 원장](policy-generation-remediation-2026-09-20.md)이 정본이다. 위의 최초 후보/timeout 수치는 당시 이력으로 보존한다. B1/B2/B4를 재현 후 수정하고 신규 정규32시험을 포함한 전체 UTC/KST 각각4053passed/기존xfail2·경고4·격리0을 확인했다. 복구된 실행기의 실제 Opus5/xhigh 재리뷰는366.318초에 정상 완료·APPROVE_THIS_SLICE다. 다음은 retained source 요청 경계(N1)와 C2b 지속 소비 권한이며 실제 caller 이행/운영 승인은 아니다.
+
 ## 단계4 — 공식 계약 증거
 
 Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와 잔고–체결 cutoff를 확인한다. 최신 TR로 자동 치환하지 않는다.
@@ -235,6 +259,8 @@ See: 요청/페이지 계약 외에, 취소/정정 원행과 자식행의 누적
 09-19 후속으로 [부족 증거 인수 목록](../integrations/kis-execution-evidence-request-2026-09-18.md)을 정리했다. 공식 답변에 필요한 질문·승인된 기존 비식별 자료·저장 금지 비밀정보·실제 lifecycle/큐/예약 인수 순서를 명시했다. 새 외부 증거 확보나 시험용 실주문/API 호출은 하지 않았다. 모든 MODIFY 미지원과 최초 인계 시작 차단은 그대로다.
 
 ## 단계5 — 마지막 통합 리뷰
+
+09-20 추가 진행: C2a 정책 이력 및 N1 요청 오류 분리는 각각 독립 한정 승인을 받았다. N1 최종 전체 검증은 UTC/KST 각각4073passed·기존2xfail·격리0이다. 완료 후 source 소비 권한(C2b)은 별도 워크트리에서 구현 중이며 실제2분·정오·LLM·보호 재생/전체 통합 완료로 확대하지 않는다. [최신 Plan–Do–See 및 근거](source-authority-followup-2026-09-20.md)를 참조한다.
 
 Plan: 실제 전체 C/F/G/R 시험명을 명세와 대조하고 독립 broad 리뷰·수정·한정 재리뷰·UTC/KST 전체 검증을 수행한다. 이전 모듈 리뷰를 대신 쓰지 않는다.
 

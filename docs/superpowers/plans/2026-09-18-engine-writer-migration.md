@@ -102,7 +102,7 @@ C2 기반의 정책 selector는 **현재 값/존재/digest만** 비교한다. �
 
 seal의 source read는 완료 시점까지의 직접 비교이며 완료 뒤 `snapshot`의 지속적 dependency 권한은 아니다. 실제 소비자가 accepted 결과를 재사용할 때의 최신 read·새 source의 첫-await pending·실패 전파를 별도 계약/시험으로 닫는다. 기존 hard dependencies의 의미를 약화하거나 optional 실패를 무조건 거래 실패/정상으로 치환하지 않는다.
 
-### C2a 다음 실행 경계 — 정책별 변경 이력 (09-19 설계 검토, 미구현)
+### C2a 실행 경계 — 정책별 변경 이력 (09-20 후보 구현, 독립 검증 진행)
 
 독립 읽기 전용 검토(`85dfd6749b63b2f4990334bba6e220343cecfd676c5968db4e6f30af07c9c873`)를 바탕으로 전체5개 selector에는 **명시 opt-in한 owner commit finalizer와 selector별 변경 이력**을 우선 설계한다. intraday 두 경로만 소비한다면 기존 검증된 transition의 실제 last-change version을 재사용할 수 있지만, config/current_regime/sidecar까지 읽는 caller의 의존성을 숨겨 이 방식으로 축소하지 않는다. 설계 조언이며 구현/검증 승인은 아니다.
 
@@ -111,6 +111,19 @@ seal의 source read는 완료 시점까지의 직접 비교이며 완료 뒤 `sn
 - 단순 최신 counter만 저장하면 과거 accepted seal의 ABA를 복원 검증할 수 없다. selector별 등록/변경 fact의 version·presence·value·digest를 보존하고 seal version S/완료 C **엄격히 이전(<)** 이력으로 대조한다. 완료 hook이 같은 C에서 바꾼 정책은 자신의 완료 전 조건에 포함하지 않는다.
 - 내부 source reducer의 pre-stamp 검증과 finalized current-tail 검증을 분리한다. current-tail 엄격 검사는 중앙 stamp 후와 runtime 복원 전 모두 유지하며, 공개 validation 우회 옵션을 만들지 않는다. SQL 응답 유실/게시 실패는 기존 unhealthy→restore 규칙을 지키고 임시 generation을 승인하지 않는다.
 - RED→GREEN 인수: 실제 owner config/sidecar A→B→A, 실제 command sidecar effect·intraday 전이, 실제 fill/ACK의 무관 변화, 여러 selector의 동일 commit, 완료 hook 자신의 변경, 첫 등록/미등록/기존 checkpoint, reducer 이력 변조, SQL 전후 실패·취소·cold restore. 그 뒤 source seal의 지속 소비 권한과 실제2분 정상/결측 caller를 연결한다. 전체 writer 또는 전체 C/F/G/R 완료로 계산하지 않는다.
+
+09-20 Do: Astra/high가 명시 등록·중앙 finalizer·schema2 versioned seal 후보6파일을 구현했다. 동일 등록 ID의 다른 선택도 durable request로 거부한다. Terra/high의 별도 day/account/fill-fault4개를 정규 시험으로 보존한 뒤, 부모 최종 전체 UTC/KST 각각3968passed/기존xfail2·경고4·격리0을 확인했다. Opus/xhigh 도구 없는 정적 리뷰는 처음 두 차례360초 timeout으로 끝났으나, 사용자가 대체 모델보다 실행기 원인 수정을 우선 지시했다. 동일 입력·모델의 계측 재현은692.32초에 정상 완료됐고 판정은 **CHANGES_REQUIRED**다. 따라서 Astra 대체 승인 대기가 아니라 Opus 지적 재현·수정·재리뷰 대기다. 실행기 수정부터 검증하며 엔진 후보는 동결하고 승인/전체 caller 이행으로 표시하지 않는다. 지속 source 권한은 별도 worktree의 실제 RED7/대조2로 다음 경계를 고정했다. 정확한 결과·한계는 후속 보고서와 [실행기 진단](../../reviews/opus-review-runner-2026-09-20.md)을 따른다.
+
+### C2a Opus 후속 인수 — 09-20
+
+기존 승인 설계의 리뷰 수정 단계다. 부모가 B1 요청 사전검사/문서를, Astra/high가 B2·B4·B6의 읽기 전용 재현/판정을, Terra/high가 V1·V3·V4·V5 인수 probe를 병렬로 맡는다. 같은 제품 파일을 동시 수정하지 않으며 마지막은 수정한 실행기로 Opus/xhigh의 독립 재리뷰를 받는다. 기준은 HEAD77c3f5d + 후보 patch e62f1c53이며 main/운영은 변경하지 않는다.
+
+- [x] Plan/Do B1: 실제 runtime에서 미등록 selector 요청의 차단 확대를 4 RED/3 대조로 고정하고 최초 유효 seal 사전검사로 수정했다. reducer·기존 reseal conflict/stale·실제 SQL 실패 차단은 유지한다. 관련 인수178 통과, 독립 최종 See는 아래 별도다.
+- [x] Plan/Do B2·B4·B6: 실제 day/closing/drain 경계와 SQL 등록 receipt의 양방향 복원 대조를 RED 후 보강했다. 중간 schema는 지원하지 않고 진짜 legacy는 유지한다. 전면 일관 DB 재작성·미측정 성능은 한계/후속으로 명시했다.
+- [x] Plan/Do V1·V3·V4·V5: 실큐 sector 정산·부분/상위집합 등록·legacy/versioned 혼합/중복 거부·등록 SQL 취소/재개방 멱등을 정규시험으로 보강했다. 원본4개 최초 GREEN과 B2 종료 차단을 추가한 RED1을 구분한다. 독립 SQLite 취소/동시 snapshot/rollback9개도 byte-identical 이식했다.
+- [x] See: 원본 실패 보존·신규 정규32시험 포함 전체 UTC/KST 각4053passed/기존xfail2·경고4·격리0·문법/비밀패턴 검사 통과. 실제 Opus5/xhigh366.318초 정상 완료·APPROVE_THIS_SLICE. [처분 원장](../../reviews/policy-generation-remediation-2026-09-20.md)에 B1–B6/V1–V8/N1–N5와 한계를 기록했다. 승인 범위는 C2a이며 전체 writer/운영 승인이 아니다.
+
+N1 retained_sources 요청 사전검사/실패 분리 인수는10 RED→수정·Opus 한정 승인·전체 UTC/KST4071시험으로 닫았다(추가 outer-scope 회귀2는 최초 GREEN). [후속 정본](../../reviews/source-authority-followup-2026-09-20.md)을 따른다. 이제 C2b의 기존 source 지속 권한 RED7/대조2와 보강 인수를 구현 중이며, 실제2분 → 정오·LLM·보호 replay 순서는 유지한다. 전일 checkpoint는 rollover/resume 완료 후 selector 등록, 그 뒤 versioned seal/producer를 연결한다. 등록 이후 shutdown의 healthy/published/engine-version 장벽을 유지한다.
 
 ## 10A3 — 명시 설치 factory
 

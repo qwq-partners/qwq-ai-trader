@@ -156,6 +156,31 @@ class ExecutionStateStore:
     async def load(self) -> tuple[int, dict]:
         return await self._run(self._load)
 
+    def _load_with_policy_receipts(self) -> tuple[int, dict, dict[str, int]]:
+        """같은 SQLite 읽기 snapshot에서 checkpoint와 등록 ID 전체를 대조한다."""
+        conn = self._open()
+        try:
+            conn.execute('BEGIN')
+            version, state = self._load()
+            prefix = 'policy-registration:'
+            rows = conn.execute(
+                'SELECT commit_id, version FROM commits WHERE substr(commit_id, 1, ?) = ?',
+                (len(prefix), prefix)).fetchall()
+            receipts = {command[len(prefix):]: committed for command, committed in rows}
+            if any(type(committed) is not int or not 0 < committed <= version
+                   for committed in receipts.values()):
+                raise StoreError('invalid_policy_registration_sql_receipt')
+            conn.execute('COMMIT')
+            return version, state, receipts
+        except (sqlite3.Error, ValueError, TypeError) as exc:
+            raise StoreError('실행 등록 영수증 읽기 실패') from exc
+        finally:
+            if conn.in_transaction:
+                conn.execute('ROLLBACK')
+
+    async def load_with_policy_receipts(self) -> tuple[int, dict, dict[str, int]]:
+        return await self._run(self._load_with_policy_receipts)
+
     def _commit(self, expected_version: int, payload: str, commit_id: str) -> int:
         conn = self._open()
         digest = hashlib.sha256(payload.encode()).hexdigest()

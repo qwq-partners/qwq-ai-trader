@@ -394,12 +394,12 @@ class RiskSourceCoordinator:
             return _ticket(runtime.owner.state['risk_sources']['records'][operation_id])
 
     async def seal(self, ticket, *, source_lanes=(), retained_sources=(), policy_reads=(),
-                   inputs, scope_token=None):
+                   versioned_policy_reads=(), inputs, scope_token=None):
         """Seal actual owner reads; trusted callers remain responsible for selecting all inputs."""
         from .risk_input_seal import seal_input
         return await seal_input(self, ticket, source_lanes=source_lanes,
             retained_sources=retained_sources, policy_reads=policy_reads, inputs=inputs,
-            scope_token=scope_token)
+            versioned_policy_reads=versioned_policy_reads, scope_token=scope_token)
 
     async def complete(self, ticket, outcome, payload=None, *, source='', source_event_id='',
                        received_at=None, market_as_of=None, classified_at=None, recovery_until=None,

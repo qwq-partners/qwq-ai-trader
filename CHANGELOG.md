@@ -1,5 +1,34 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — N1 보존 입력 요청 오류 분리 (운영 미설치)
+
+- 최초 유효 seal의 없는 retained operation·선언 lane 불일치·미accepted terminal을 결과 저장 task 전에 거부한다. 이전에는 ValueError가 owner/종료 실패로 확대됐다. 공유 순수 검사로 reducer/역사적 cutoff를 유지하고 reseal conflict·이미 stale인 원장·실제 SQL/게시 실패 차단은 바꾸지 않았다.
+- 신규18시험의10 RED/8대조에서 수정 후 전체 **UTC4071passed/기존xfail2/경고4(180.53초), KST4071/2/4(181.45초)**·각각 격리0. Opus5/xhigh326.685초 정상 완료·APPROVE_THIS_SLICE(spec/qualityPASS·차단0). 이후 source 무변경 outer-scope 회귀2개를 보강했으며 전체4071에는 아직 합산하지 않았다.
+- 입력 전파 C2b는 별도 워크트리에서 구현 중이다. 자세한 비차단 의견 처분·검증 범위는 `docs/reviews/source-authority-followup-2026-09-20.md`를 따른다. 실제2분·정오/LLM/보호 재생·전체 writer/운영 설치 완료가 아니다. main/운영·실API·주문·설정 변경 없음.
+
+## 2026-09-20 — C2a Opus 지적 수정·독립 한정 승인 (운영 미설치)
+
+- B1 미등록 정책 선택의 요청 오류가 owner/종료 영구 차단으로 번지던 경로를 RED 후 사전검사로 수정했다. 기존 reseal conflict·stale 기록과 실제 SQL 실패 차단은 유지한다.
+- B2 public 등록 API를 runtime day/closing/종료 drain에 연결했다. lock/lookup 이후 일자 재확인, 이미 접수된 SQL 취소의 종료 대기/복원 장벽을 인수했다. B4는 같은 SQLite 읽기 snapshot에서 체크포인트와 전체 등록 commit ID/version을 양방향 대조하며 prefix 손상·registry 삭제·SQL receipt 누락/개명을 게시 전에 차단한다.
+- Astra/high 독립 재현·Terra/high 실큐 인수·부모 수정 후 **실제 Opus5/xhigh 재리뷰 APPROVE_THIS_SLICE**, 366.318초/정상 result/child0. Opus는 정적 소스 검토이며 시험 실행을 대신하지 않는다. B3/B5/B6 보류·호환성 및 추가 N1–N5 처분은 `docs/reviews/policy-generation-remediation-2026-09-20.md`에 기록했다.
+- 신규 정규32시험 포함 최종 **UTC4053passed/2 known xfailed/4기존 warnings(229.44초), KST4053/2/4(228.65초)**·각각 격리0·문법/비밀패턴 검사 통과. 앞선4044통과는 독립9시험 이식 전 중간 결과로 구분한다.
+- C2a만 승인했고 다음은 잘못된 retained source 요청의 차단 확대(N1) 선행 인수 → 지속 source 권한 → 실제2분/정오·LLM·보호 replay다. `trading_ready=False`, 모든 MODIFY 미지원, 공식 초기 인계/취소 증거와 전체 C/F/G/R 장벽 유지. main/운영·실API·주문·거래 설정 무변경.
+
+## 2026-09-20 — Opus 리뷰 시간 초과 원인 수정 (개발 도구 한정 검증, 운영 미변경)
+
+- 원 입력 해시를 그대로 재현해 Opus5/xhigh가577.05초에 본문 출력을 시작하고692.32초에 정상 완료함을 확인했다. 이전360초 `communicate` 제한이 정상 장문 리뷰보다 짧았으며, 래퍼는 진행 subtype을 버리고 timeout 후에도 exit0하던 문제가 있었다. 짧은 연결 대조4.13초·실제 모듈 대조120.91초도 정상이다. 로그인/모델/권한을 바꾸지 않았다.
+- 전역 규칙에 timeout 진단 우선·진행/정체/전체 상한 구별·미완료 nonzero·실행 완료와 코드 승인 분리를 반영했다. 공용 `scripts/dev/claude_review.py`는 제한된 인증 환경·도구 차단·완전 stdin 전송/모델/result 검증과 시간 상한을 적용한다. 독립 재현의 예외/종료 시 자식 생존·nested event 검사 우회·thinking 블록 정체 오판·초기화 SIGTERM 경계를 수정하고 Astra/xhigh 한정 재리뷰 승인했다. 완성 입력/정상 출력 소비자가 전제이며 모든 OS 신호 경합의 증명은 아니다.
+- 신규53회귀 포함 집중62passed/격리0, 최종본 실제 Opus smoke2.72초/child0/정상 result. 전체 **UTC4021passed/2 known xfailed/4기존 warnings(224.01초), KST4021/2/4(222.78초)**·각각 격리0·문법/비밀패턴 통과. 정확한 지문·원본 실패/검증 범위는 `docs/reviews/opus-review-runner-2026-09-20.md`를 따른다.
+- 원 Opus C2a 리뷰 판정은 CHANGES_REQUIRED로 도착했다. 지적은 아직 재현·판정 전이며 엔진 후보/후속 caller·main/운영은 변경하지 않는다. 아래 'Astra 대체 선택 대기'는 원인 진단 지시 이전 이력이다.
+
+## 2026-09-20 — 정책 변경 이력 후보·공통 모델 배정 (Task10A2c/C2a, 운영 미설치)
+
+- 호스트 사용자 전역 `ai-routing-v1-2026-09-20`을 설치하고 새 Codex/Claude 세션에서 로딩과 한도를 확인했다. 프로젝트의 이전 Claude 전용 배정표를 Codex·Claude 공통 Plan–Do–See·합산 작업자3명·단일 writer 규칙으로 맞췄다. Codex 기본 하위 모델만 Terra/medium으로 정했고, 투자 판단 모델/주문/거래 설정은 변경하지 않았다.
+- 명시 등록한 다섯 정책 selector의 변경 이력을 owner의 중앙 commit finalizer에서 기록하고, `versioned_policy_reads` schema2가 실제 마지막 변경 generation과 원값을 함께 고정한다. A→B→A를 탐지하며 완료 hook 자신의 변경은 역사적 `< C` 비교로 허용한다. legacy 값-only seal과 미등록 checkpoint를 자동 승격하지 않는다.
+- 등록 요청 ID/선택 목록 불일치를 RED 후 거부하도록 보완했다. reducer 이력 변조·cold restore tail/seal crosslink·SQL 전후 실패·실제 fill/ACK 무관 변경을 고정했다. 작성자31시험과 독립 날짜/계좌/체결 중단 경계4개를 정규 시험에 포함해 최종 전체 **UTC3968 passed/2 known xfailed/4 warnings(172.36초), KST3968/2/4(172.61초)**·격리0. 원래 별도 probe 실행을 이 수치에 중복 합산하지 않는다.
+- 독립 정적 Opus/xhigh 리뷰는 두 시도 모두360초 내 결론을 반환하지 않아 미검증으로 기록했다(두 번째 실제 모델 Opus 확인, 리뷰문/판정 없음). 세 번째 재시도나 자격/설정 우회는 하지 않았다. 독립 Astra 리뷰로 대체할지 사용자 선택을 요청했으며, 그 전까지 source 지속 전파/실제 caller 통합은 보류한다. source 완료 후 지속 전파는 별도 worktree의 실제 RED7/대조2로 고정했다.
+- main/운영/실API/주문/거래 설정/Toss 무변경. `trading_ready=False`, 모든 MODIFY 미지원과 공식 최초 인계/취소 증거 장벽 유지. 후속 보고서에 후보·검증·미실행 경계를 구분했다.
+
 ## 2026-09-19 — feat: 레짐 계산 보존·두 지수 검증·입력 seal 기반 (Task10A2c 부분, 운영 미설치)
 
 - 기존 sidecar/중기 레짐/전문가 산식을 순수 함수로 나누고 실제 legacy caller 세 곳을 연결했다. 개장 neutral 구간 pending 유실 회귀를 수정했다. 원래 숫자·조건부 시계·VIX/전문가 호출·로그 순서는 독립 차등 대조로 확인했다. 이는 owned writer 이행 완료가 아니다.

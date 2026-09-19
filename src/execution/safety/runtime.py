@@ -50,7 +50,9 @@ class KRExecutionRuntime:
         self._protection_failed = False
         self._closing = False
         self._intraday_writer = None
-        self.owner = FillApplicationCoordinator(store, self._publish, self._reduce)
+        self.owner = FillApplicationCoordinator(store, self._publish, self._reduce,
+            registration_scope=self._policy_registration_scope,
+            registration_guard=self._require_registration_day)
         self.lifecycle = OrderLifecycleCoordinator(self.owner, clock=clock,
                                                    admission_guard=self._require_day_admission,
                                                    finality_recorder=capture_finality)
@@ -88,6 +90,17 @@ class KRExecutionRuntime:
 
     def _require_day_admission(self):
         if self._closing or self.day_admission_closed:
+            raise ApplicationBlocked("day_transition_admission_closed")
+
+    @contextmanager
+    def _policy_registration_scope(self):
+        self._require_day_admission()
+        with self.command_scope():
+            yield
+
+    def _require_registration_day(self):
+        # 이미 접수된 명령은 closing에도 drain하되 새 day 경계를 넘지 않는다.
+        if self.day_admission_closed:
             raise ApplicationBlocked("day_transition_admission_closed")
 
     def ingress_context(self, ticket, *, replay_fence_id=None):
@@ -383,6 +396,8 @@ class KRExecutionRuntime:
         validate_sources(state, version)
         from .risk_sources import validate_risk_sources
         from .intraday_owner import validate_intraday_policy
+        from .policy_generations import validate_policy_generations
+        validate_policy_generations(state, version)
         validate_risk_sources(state, version)
         intraday = validate_intraday_policy(state, version)
         intraday_horizons = (self._intraday_writer.projection(intraday)

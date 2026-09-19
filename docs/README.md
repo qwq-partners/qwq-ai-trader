@@ -21,6 +21,7 @@
 - [evolution-system.md](evolution/evolution-system.md) — 3계층 메모리, Trade Wiki, 전략 진화, 일일 복기, 품질 검증, 거래 원칙
 
 ### Operations (운영)
+- [agent-routing.md](operations/agent-routing.md) — Codex·Claude 전역 배정, Plan–Do–See·통합 동시성·격리/권한 경계와 실제 로딩 검증 범위
 - [toss-shadow-runtime.md](operations/toss-shadow-runtime.md) — 별도 Toss 서비스 ON·승인 만료/재시작 금지·원장/health 경계(기존 거래 봇 Toss OFF)
 - [local-development.md](operations/local-development.md) — WSL2 기반 Claude Code·Codex 로컬 개발환경 구성과 안전한 PR 흐름
 - [github-quality-gate.md](operations/github-quality-gate.md) — PR 자동 검증과 `main` 브랜치 보호 운영 절차
@@ -35,7 +36,11 @@
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
-- [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — broker·경제/보호/R·요청/예약·lease/종료·5분 정책 재생·산술 분리·입력 seal 기반, KST/UTC3933시험·구간별 승인 범위 명시. 정책 generation/실제2분·정오·LLM·qualification/gateway·나머지 writer/설치·전체 인수·공식 증거는 잔여
+
+- [입력 소비 권한 후속](reviews/source-authority-followup-2026-09-20.md) — N1 retained 요청 오류 분리·실제 Opus 한정 승인·UTC/KST4071통과; C2b 지속 전파 구현 진행, 실제2분·정오/LLM/replay는 후속
+- [Opus 리뷰 실행기 진단·수정](reviews/opus-review-runner-2026-09-20.md) — 360초 로컬 종료 원인·동일 입력692초 정상 완료. 실행기 한정 재리뷰 승인·신규53회귀·전체 KST/UTC4021통과·실제 smoke 확인; 엔진 Opus 수정 요청은 별도 후속
+- [C2a Opus 후속 수정·인수](reviews/policy-generation-remediation-2026-09-20.md) — B1/B2/B4 재현·수정, 실제 Opus 한정 승인·UTC/KST 각각4053통과. 다음은 retained source 요청 경계와 지속 소비 권한; 운영 전환 승인은 아님
+- [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — 기반 구간별 한정 승인과 정책 generation 후속 검증. 지속 source 권한/실제2분·정오·LLM·qualification/gateway·나머지 writer/설치·전체 인수·공식 증거는 잔여
 - [KR writer 이행 세분 계획](superpowers/plans/2026-09-18-engine-writer-migration.md) — 계좌 lease/종료 drain→원시각·정책 publisher→기존 sizing/qualification·실제 큐→SAFE/USER/IPC·fill·sync/day; 운영 설치 미완
 - [KR 실행 안전성 구현 중간 리뷰](reviews/engine-execution-safety-2026-09-17.md) — 기반·Task4b 실제 경제/보호/큐 검증과 운영 writer 전체 이행 미완을 구분; 공식 KIS 계약/잔여 인수
 - [toss-pr-integration-2026-09-17.md](reviews/toss-pr-integration-2026-09-17.md) — #70 병합·중복 #68 정합화, 배포/활성화 승인과 실제 실행 상태 분리
