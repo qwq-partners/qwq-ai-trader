@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
@@ -62,8 +63,9 @@ def run_runner(
     *,
     extra: list[str] | None = None,
     timeout: float = 5,
+    interpreter: Path | str = PYTHON,
 ) -> subprocess.CompletedProcess[str]:
-    args = [str(PYTHON), str(SCRIPT), "--claude-bin", str(fake)]
+    args = [str(interpreter), str(SCRIPT), "--claude-bin", str(fake)]
     if extra:
         args.extend(extra)
     return subprocess.run(
@@ -292,6 +294,90 @@ def test_child_nonzero_exit_cannot_turn_a_valid_result_into_success(tmp_path):
 
 
 def test_complete_assistant_tool_content_and_error_events_fail_closed(tmp_path):
+    """A forbidden event must make the wrapper exit while its child is still held alive."""
+    def runner_wrapper(path, *, interpreter=PYTHON, startup_delay=0.0, disable_tool_hook=False):
+        if not startup_delay and not disable_tool_hook:
+            return interpreter
+        wrapper = path / "runner-wrapper.py"
+        body = (f"#!{sys.executable}\n"
+                "import importlib.util, json, sys, time\n"
+                f"time.sleep({startup_delay!r})\n"
+                "script = sys.argv[1]\n"
+                "spec = importlib.util.spec_from_file_location('review_runner_negative_control', script)\n"
+                "module = importlib.util.module_from_spec(spec)\n"
+                "sys.modules[spec.name] = module\n"
+                "spec.loader.exec_module(module)\n")
+        if disable_tool_hook:
+            body += ("original_reject = module.State.reject\n"
+                     "def reject_without_tool_violation(state, reason):\n"
+                     "    if reason == 'tool_violation': return\n"
+                     "    return original_reject(state, reason)\n"
+                     "module.State.reject = reject_without_tool_violation\n")
+        body += "sys.argv = [script, *sys.argv[2:]]\nraise SystemExit(module.main())\n"
+        wrapper.write_text(body, encoding="utf-8")
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        return wrapper
+
+    def wait_for(path, timeout=2.0):
+        deadline = time.monotonic() + timeout
+        while not path.exists() and time.monotonic() < deadline:
+            time.sleep(.005)
+        return path.exists()
+
+    def run_barrier(case_path, events, reason, *, startup_delay=0.0, disable_tool_hook=False):
+        emit_gate, continue_gate = case_path / "emit", case_path / "continue"
+        marker, emitted = case_path / "survived", case_path / "emitted"
+        fake, ready = fake_claude(case_path / "fake", f"""
+while not os.path.exists({str(emit_gate)!r}): time.sleep(.005)
+open({str(emitted)!r}, 'w').write('emitted')
+sys.stdout.write({stream(events)!r}); sys.stdout.flush()
+while not os.path.exists({str(continue_gate)!r}): time.sleep(.005)
+open({str(marker)!r}, 'w').write('survived')
+""")
+        outcome = {}
+        interpreter = runner_wrapper(case_path, startup_delay=startup_delay,
+                                     disable_tool_hook=disable_tool_hook)
+        try:
+            def invoke():
+                try:
+                    outcome['result'] = run_runner(fake, extra=["--total-timeout", "3"], timeout=10,
+                                                    interpreter=interpreter)
+                except BaseException as exc:
+                    outcome['exception'] = exc
+
+            worker = threading.Thread(
+                target=invoke,
+            )
+            worker.start()
+            assert wait_for(ready), "fake child did not reach startup readiness"
+            emit_gate.write_text("release", encoding="utf-8")
+            assert wait_for(emitted), "fake child did not emit the controlled event"
+            worker.join(timeout=2)
+            if disable_tool_hook:
+                # Negative control: without this one hook, the wrapper remains
+                # live behind the child continuation gate and the normal oracle
+                # would fail.
+                assert worker.is_alive()
+                continue_gate.write_text("release", encoding="utf-8")
+                worker.join(timeout=2)
+                assert not worker.is_alive() and wait_for(marker)
+                assert 'exception' not in outcome
+                assert outcome['result'].returncode == 0
+                assert "execution_status: complete" in outcome['result'].stdout
+                return
+            assert not worker.is_alive(), "forbidden event did not terminate wrapper before child continuation"
+            assert 'exception' not in outcome
+            result = outcome['result']
+            assert result.returncode != 0
+            assert f"reason: {reason}" in result.stdout
+            continue_gate.write_text("release", encoding="utf-8")
+            assert not wait_for(marker, timeout=.8), "terminated child wrote after wrapper exit"
+        finally:
+            if 'worker' in locals():
+                continue_gate.write_text("release", encoding="utf-8")
+                worker.join(timeout=10)
+                assert not worker.is_alive(), "worker cleanup left a direct fake child path live"
+
     cases = [
         ([
             {"type": "system", "subtype": "init", "tools": []},
@@ -301,13 +387,11 @@ def test_complete_assistant_tool_content_and_error_events_fail_closed(tmp_path):
         ([*good_events()[:-1], {"type": "error", "error": {"type": "api_error"}}, good_events()[-1]], "stream_error"),
     ]
     for index, (events, reason) in enumerate(cases):
-        fake, _ = fake_claude(tmp_path / str(index), f"sys.stdout.write({stream(events)!r}); sys.stdout.flush(); time.sleep(.4)\n")
-        started = time.monotonic()
-        result = run_runner(fake, extra=["--total-timeout", "0.8"])
-        elapsed = time.monotonic() - started
-        assert result.returncode != 0
-        assert f"reason: {reason}" in result.stdout
-        assert elapsed < 0.3, "protocol violations must terminate the owned child immediately"
+        run_barrier(tmp_path / str(index), events, reason)
+    # Startup before the runner begins is deliberately outside the causal
+    # oracle; the child is still held at the same post-event barrier.
+    run_barrier(tmp_path / "startup-delay", cases[0][0], cases[0][1], startup_delay=.35)
+    run_barrier(tmp_path / "negative-control", cases[0][0], cases[0][1], disable_tool_hook=True)
 
 
 def test_invalid_utf8_input_is_rejected_before_any_child_execution(tmp_path):

@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — 실제 2분 레짐 owner (독립 한정 승인·운영 미설치)
+
+- 명시 supplied baseline과 동일 owner로 실제 2분 scheduler를 연결했다. 두 지수의 원 입력 검증·기존 limiter/호출 수·조건부 시계와 산식을 보존하며, 결측/실패는 이전 상태를 보존하고 성공 하트비트를 남기지 않는다. trend/sidecar/engine copy를 같은 commit에 기록하고 installed raw writer를 차단한다. 이 경로의 청산 파라미터 적용·보호 replay는0이다.
+- schema3 captured-read seal은 계산 때 읽은 원 source/정책과 seal 시점을 canonical 비교하여 await 경합·ABA를 거부한다. accepted VIX 원시각과 최신 pending/실패를 구분하며 진입 prepare/dispatch에서 현재 source 권한을 다시 확인한다.
+- 독립 경계 리뷰에서 발견한 정상 baseline 거부의 실패 latch 확대와 최초/expert source SQL 중 취소의 terminal 누락을 수정했다. 명시 도메인 거부만 분리하고 원 admitted task의 tracked child finalizer로 종결한다. 실제 SQL/게시 장애·잘못된 finalizer token·조기 취소 실패는 계속 차단한다. 독립28시험 UTC/KST 통과·해당 BR1/BR2 한정 승인.
+- Opus 최초 변경 요청 뒤 typed source의 SQL 저장 전 검증·canonical/OHLC 역사 대조를 보강했다. 추가 지적한 baseline 이전 ticket의 공개 완료 API SQL 오염도 실제 재현 후5줄 guard로 예방했다. 네이티브·실제 Opus 한정 재리뷰 승인. 개발용0.3초 시작 시간 단정은 인과적 종료/음성 대조 시험으로 바꾸고 별도 Sol 리뷰 승인했으며 제품 runner는 바꾸지 않았다.
+- 신규147시험 포함 최종 전체 **UTC4271passed/기존xfail2/경고4(222.71초), KST4271/2/4(206.95초)**·각각 exit0/격리0·문법/비밀패턴/diff 검사 통과. 실패·보완 이력과 코드 지문, 단계별 리뷰 범위는 `docs/reviews/two-minute-regime-owner-2026-09-20.md`를 따른다. 전이력 비용/부하 미검증은 활성화 장벽으로 남는다.
+- main/운영·실 API·주문·설정 변경0, `trading_ready=False`, MODIFY 미지원과 공식 최초 인계/취소 증거 장벽 유지. 다음 정오/LLM/보호 replay 계약과13개 실제 인수 계획은 준비됐고 제품 구현은 이 gate 이후다.
+
 ## 2026-09-20 — C2b 입력 변경 전파·독립 한정 승인 (운영 미설치)
 
 - 공통 source 권한 검사와 동기 `read_source`를 추가했다. 과거 accepted receipt는 보존하고, 실제 읽은 입력의 최신성·충돌·전이적 의존·첫 await pending으로 현재 재사용 가능성을 판단한다. 실패 사실과 성공 입력, 명시 전일 retained와 당일 자료를 구분하고 완료 hook 자신의 정책 변경은 source 변경으로 오인하지 않는다.

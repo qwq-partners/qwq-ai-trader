@@ -732,6 +732,10 @@ class RiskManager:
         - 장중 위치 50% 이상 (고가 쪽에 가까움) → 회복세 보강
         - 전일대비 등락률 평균 < -0.5% 이고 시가대비 하락이면 → 하락세
         """
+        if (getattr(self, '_regime_owner', None) is not None
+                or getattr(self, '_execution_runtime', None) is not None):
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked('regime_source_ticket_required')
         transition = regime_transition.transition_sidecar_trend(
             kospi, kosdaq,
             regime_transition.SidecarState(self._market_trend, self._sidecar_active),

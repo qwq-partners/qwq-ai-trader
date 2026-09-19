@@ -50,6 +50,7 @@ class KRExecutionRuntime:
         self._protection_failed = False
         self._closing = False
         self._intraday_writer = None
+        self._regime_writer = None
         self.owner = FillApplicationCoordinator(store, self._publish, self._reduce,
             registration_scope=self._policy_registration_scope,
             registration_guard=self._require_registration_day)
@@ -289,6 +290,11 @@ class KRExecutionRuntime:
         if not self.owner.healthy:
             raise ApplicationBlocked("유효한 checkpoint를 먼저 게시해야 합니다")
         self.engine.bind_execution_runtime(self)
+        if self.risk_manager is not None:
+            self.risk_manager._execution_runtime = self
+        adapter = getattr(self.engine, '_regime_adapter', None)
+        if adapter is not None:
+            adapter._execution_runtime = self
 
     def _view_price(self, state, symbol, fallback):
         """평가·증분 체결·수락 시세의 동일 우선순위를 모든 게시에서 사용한다."""
@@ -400,6 +406,10 @@ class KRExecutionRuntime:
         validate_policy_generations(state, version)
         validate_risk_sources(state, version)
         intraday = validate_intraday_policy(state, version)
+        from .regime_owner import validate_regime_policy
+        regime = validate_regime_policy(state, version)
+        regime_projection = (self._regime_writer.projection(state, regime)
+                             if self._regime_writer is not None else None)
         intraday_horizons = (self._intraday_writer.projection(intraday)
                             if self._intraday_writer is not None else None)
         # 전체 decode를 먼저 끝낸다. live object deepcopy/legacy 파일 I/O 없음.
@@ -435,6 +445,8 @@ class KRExecutionRuntime:
         self._published_day = risk["day"]
         if self._intraday_writer is not None:
             self._intraday_writer.publish(intraday, intraday_horizons)
+        if self._regime_writer is not None:
+            self._regime_writer.publish(state, regime, regime_projection)
         self.engine._execution_version = version
 
     def _reduce(self, state, observation, delta) -> FillReduction:
@@ -724,6 +736,28 @@ class KRExecutionRuntime:
         task = asyncio.create_task(operation())
         self._command_result_tasks.add(task)
         task.add_done_callback(self._command_result_completed)
+        return task
+
+    def _start_command_finalizer(self, parent_token, operation):
+        """Transfer an admitted cleanup to its own task-owned scope, never borrow a token."""
+        if (parent_token not in self._command_scopes
+                or self._command_scopes[parent_token] is not asyncio.current_task()):
+            raise ApplicationBlocked('command_scope_required')
+        if not callable(operation):
+            raise TypeError('command_finalizer_required')
+        child_token = asyncio.get_running_loop().create_future()
+        def release(_=None):
+            self._command_scopes.pop(child_token, None)
+            if not child_token.done(): child_token.set_result(None)
+        async def execute():
+            try:
+                return await operation(child_token)
+            finally:
+                release()
+        task = self.start_command_result(parent_token, execute)
+        self._command_scopes[child_token] = task
+        # Cancellation before execute's first instruction does not run its finally.
+        task.add_done_callback(release)
         return task
 
     async def shutdown(self) -> None:

@@ -11,6 +11,7 @@ from .protection_recovery import digest
 
 ROOT = 'policy_generations'
 SELECTORS = {
+    'regime_policy.trend_state': ('regime_policy', 'trend_state'),
     'intraday_policy.current': ('intraday_policy', 'current'),
     'protection.config': ('protection', 'config'),
     'protection.current_regime': ('protection', 'current_regime'),

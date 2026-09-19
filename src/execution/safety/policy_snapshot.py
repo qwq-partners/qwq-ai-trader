@@ -152,14 +152,24 @@ def build_owned_snapshot(state: dict, *, context: PolicyContext, version: int,
     if type(effects) is not dict or type(effects.get('pending_sectors')) is not dict:
         raise ValueError('invalid_owned_policy_effects')
     trend = context.trend
+    regime_version, effective_policy = context.versions.regime, context.policy
+    if 'regime_policy' in state:
+        from .regime_owner import validate_regime_policy, require_current_trend, effective_regime
+        from ...core.market_regime import MarketRegimeAdapter
+        root = validate_regime_policy(state, version)
+        regime_version = require_current_trend(state, now.date().isoformat())
+        owned = root['trend_state']['market_trend']
+        trend = p.MarketTrendPolicySnapshot(owned['present'], owned['recovering'], effects['sidecar_active'])
+        effective_policy = replace(context.policy, regime_min_cash_reserve_pct=
+            MarketRegimeAdapter.REGIME_PARAMS[effective_regime(state, now)]['min_cash_reserve_pct'])
     if 'sidecar_active' in effects:
         trend = replace(trend, sidecar_active=effects['sidecar_active'])
     sectors = tuple(p.PendingSectorFact(symbol, sector) for symbol, sector in effects['pending_sectors'].items()
                     if symbol != excluded_symbol)
     return p.EntryPolicySnapshot(
         p.PolicyVersions(version, version, version, version, context.versions.config,
-                         context.versions.regime, context.versions.macro),
-        context.business_day, now, context.policy,
+                         regime_version, context.versions.macro),
+        context.business_day, now, effective_policy,
         p.PortfolioPolicySnapshot(pf.cash, pf.total_equity, pf.effective_daily_pnl, pf.daily_trades, tuple(positions)),
         p.ReentryPolicySnapshot(frozenset(risk['stop_loss_today']), frozenset(risk['stop_loss_rebound_used']),
             tuple(p.ExitPolicyFact(symbol, Decimal(row['price']), datetime.fromisoformat(row['time']))

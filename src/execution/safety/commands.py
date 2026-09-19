@@ -157,6 +157,14 @@ class RequestBoundCommands:
         return self.owner.version
 
     def _snapshot(self, state, *, exclude_attempt=None):
+        if 'regime_policy' in state:
+            writer = getattr(self.runtime, '_regime_writer', None)
+            _require(writer is not None, 'regime_owner_not_installed')
+            ref = state['regime_policy']['trend_state']['source_refs']['trend']
+            _require(ref is not None, 'regime_source_not_current')
+            read = writer.sources.read_source('index_trend', expected_version=ref['committed_version'])
+            _require(read.authority_status == 'current' and read.terminal_status == 'accepted',
+                     'regime_source_not_current')
         context = PolicyContext.from_dict(state['entry_policy_context'])
         prices = {symbol: self.runtime._view_price(state, symbol, Decimal(row['current_price']))
                   for symbol, row in state['portfolio']['positions'].items()}

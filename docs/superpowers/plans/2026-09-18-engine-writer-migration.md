@@ -125,6 +125,8 @@ seal의 source read는 완료 시점까지의 직접 비교이며 완료 뒤 `sn
 
 N1 retained_sources 요청 사전검사/실패 분리 인수는10 RED→수정·Opus 한정 승인·최종 전체 UTC/KST4073시험으로 닫았다(추가 outer-scope 회귀2는 최초 GREEN). [후속 정본](../../reviews/source-authority-followup-2026-09-20.md)을 따른다. C2b는 원본9+보강37에 리뷰5 인수를 추가하고 I1 과잉 무효화 두 줄/I2 명시 conflict 검증을 보완해, 최종UTC/KST4124통과·실제 Opus 재리뷰 한정 승인으로 닫았다. 다음은 실제2분 → 정오·LLM·보호 replay다. 전일 checkpoint는 rollover/resume 완료 후 selector 등록, 그 뒤 versioned seal/producer를 연결한다. 등록 이후 shutdown의 healthy/published/engine-version 장벽을 유지한다.
 
+실제2분 C2 후속도 baseline/등록/취소·typed source 저장 경계를 독립 재현 후 보완해 네이티브/Opus 한정 승인으로 닫았다. 최종 UTC/KST 각각4271passed·기존xfail2/경고4·격리0. [실제2분 근거](../../reviews/two-minute-regime-owner-2026-09-20.md)를 따른다. C3는 명시 horizon 기준선, 정오 cap 선행 commit, JSON LLM 1회, full 원 보호 호출 증거와 typed replay, 독립30분 application의13개 실큐 인수로 이어간다. C2 승인만으로 보호 재생·factory/운영/전이력 성능을 승인하지 않는다.
+
 ## 10A3 — 명시 설치 factory
 
 선행 보호 재생 경계: 5분 writer가 실제 보호 DTO를 바꾸면 degraded 포지션의 기존 fill/quote 재생도 그 정책 입력을 알아야 한다. source ID·완료 version/digest·전후 정책·실제 보호 scope를 같은 commit에 기록하고, 실제 persist=False 전이로 재생한다. 누락/다른 source/잘못된 정책·과거 청산 결정은 계속 BLOCKED이며 회복 과정에서 경제/예약/R/outbox를 다시 적용하지 않는다. 현재 정책을 과거 체결 전체에 소급하는 복구는 금지다. 실제 큐 등록 실패→5분 정책→quote/추가 fill→repair/새 runtime 복원을 RED부터 확인한다. 5분 조각의 한정 승인은 이 재생 인수까지 완료했다는 뜻이 아니다.

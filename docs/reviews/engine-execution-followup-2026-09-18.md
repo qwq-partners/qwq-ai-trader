@@ -262,6 +262,8 @@ See: 요청/페이지 계약 외에, 취소/정정 원행과 자식행의 누적
 
 09-20 추가 진행: C2a 정책 이력·N1 요청 오류 분리·C2b 현재 source 소비 권한은 각각 독립 한정 승인을 받았다. C2b 최초 Opus I1/I2를 재현/인수 보강 후 수정해307.174초 재리뷰 승인, 최종 전체 UTC/KST 각각4124passed·기존2xfail·경고4·격리0이다. 다음 실제2분·정오·LLM·보호 재생/전체 통합 완료로 확대하지 않는다. [최신 Plan–Do–See 및 근거](source-authority-followup-2026-09-20.md)를 참조한다.
 
+09-20 추가 진행(위4124 이후): 실제2분 owner/caller·schema3 captured reads를 연결하고 등록/취소·typed completion·baseline scope의 독립 지적을 재현 후 보완했다. 최종 UTC4271passed222.71초/KST4271passed206.95초·각 기존xfail2/경고4·격리0, 네이티브/Opus 한정 재리뷰 승인이다. 별도 개발용 시간 시험은 인과적 종료 대조로 정정·독립 승인했다. [실제2분 Plan–Do–See](two-minute-regime-owner-2026-09-20.md)가 이 구간의 정본이다. 다음은 승인 계약의 정오 cap 선행 저장→JSON LLM→실제 보호 적용·typed replay/repair이며, 전체 C/F/G/R·성능·운영 이행은 계속 미완이다.
+
 Plan: 실제 전체 C/F/G/R 시험명을 명세와 대조하고 독립 broad 리뷰·수정·한정 재리뷰·UTC/KST 전체 검증을 수행한다. 이전 모듈 리뷰를 대신 쓰지 않는다.
 
 Do/See: 아직 실행 전이다. 충족/미충족과 운영 전환의 증거 조건을 분리하고, 미충족 상태에서 main/운영 GO를 선언하지 않는다.

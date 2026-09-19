@@ -204,6 +204,7 @@ class MarketRegimeAdapter:
 
     def set_open_expectation(self, expectation: str, as_of: Optional[datetime] = None) -> None:
         """장전 개장 예상을 기록한다 — 09:30 이후에는 읽을 때 무효 처리된다."""
+        self._require_unowned_writer()
         self._horizons = replace(
             self._horizons, open_expectation=expectation,
             open_expectation_as_of=as_of if as_of is not None else datetime.now(),
@@ -223,6 +224,7 @@ class MarketRegimeAdapter:
         "지금 관측"으로 취급하지 않는다 — 기존 관측이 있으면 무시하고, 없으면
         as_of=None(결측)으로 저장해 `effective_regime` 의 당일 게이트에서 걸러진다.
         """
+        self._require_unowned_writer()
         if level not in INTRADAY_RISK_LEVELS:
             raise ValueError(
                 f"intraday_risk 는 {INTRADAY_RISK_LEVELS} 중 하나여야 합니다: {level!r}"
@@ -247,6 +249,12 @@ class MarketRegimeAdapter:
     def mid_trend(self) -> str:
         """중기 추세 관점 — update_regime() 결과 단일 출처 (기준시각 = _last_update)"""
         return self._current_regime
+
+    def _require_unowned_writer(self):
+        if (getattr(self, '_regime_owner', None) is not None
+                or getattr(self, '_execution_runtime', None) is not None):
+            from ..execution.safety.application import ApplicationBlocked
+            raise ApplicationBlocked('regime_source_ticket_required')
 
     def open_expectation(self, now: Optional[datetime] = None) -> Optional[str]:
         """장전 개장 예상 — 09:30 이후·다음 날에는 None (만료)"""
@@ -327,6 +335,7 @@ class MarketRegimeAdapter:
         - VIX >= 30 (Fear): bull → sideways 강등
         - VIX <= 15 (Complacency): bull/sideways 전환 지연 30분 → 10분 단축
         """
+        self._require_unowned_writer()
         # VIX 캐시 로드 (TTL 만료 시 백그라운드 refresh 예약)
         self._load_vix_cache_or_refresh()
         facts = regime_transition.calculate_mid_regime_facts(kospi_data, kosdaq_data)
@@ -413,6 +422,7 @@ class MarketRegimeAdapter:
         - bear 합의 → bull/sideways → bear 강등 (안전 우선)
         - 강한 bull 점수 (+20 이상) → sideways → bull 격상 (확인 지연 단축)
         """
+        self._require_unowned_writer()
         if expert_orchestrator is None:
             return
         try:
@@ -498,6 +508,7 @@ class MarketRegimeAdapter:
             premarket_data: 넥스트장 시세 (보유 종목별 등락률)
             news_headlines: 최신 뉴스 헤드라인 요약
         """
+        self._require_unowned_writer()
         self._init_llm_state()
         from datetime import date as _date
         today = _date.today()
@@ -596,6 +607,7 @@ class MarketRegimeAdapter:
 
     def _load_vix_cache_or_refresh(self):
         """VIX 캐시 파일 로드 — 만료/부재 시 백그라운드 refresh 예약"""
+        self._require_unowned_writer()
         try:
             if _VIX_CACHE_PATH.exists():
                 with _VIX_CACHE_PATH.open("r", encoding="utf-8") as f:
@@ -635,6 +647,7 @@ class MarketRegimeAdapter:
 
     async def _fetch_vix(self):
         """yfinance로 VIX 조회 (동기 → to_thread 래핑). 실패 시 조용히 fallback."""
+        self._require_unowned_writer()
         try:
             vix_value = await asyncio.to_thread(self._fetch_vix_sync)
             if vix_value is None:

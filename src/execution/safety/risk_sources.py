@@ -27,6 +27,10 @@ _OUTCOMES = frozenset({'success', 'missing', 'failed', 'cancelled'})
 _LEVELS = frozenset({'normal', 'caution', 'crash', 'severe'})
 
 
+class _TypedCompletionRejected(ValueError):
+    """Only an explicit typed source admission check may produce this marker."""
+
+
 @dataclass(frozen=True)
 class RefreshTicket:
     operation_id: str
@@ -435,9 +439,12 @@ class RiskSourceCoordinator:
         if not hasattr(runtime, '_risk_source_pending'):
             runtime._risk_source_pending = {}
 
-    def _context(self, state):
+    def _context(self, state, *, admitted=False):
         runtime = self.runtime
-        runtime._require_day_admission()
+        if admitted:
+            runtime._require_registration_day()
+        else:
+            runtime._require_day_admission()
         reason = scope_reason(state, runtime.account_scope)
         if reason:
             raise ApplicationBlocked(reason)
@@ -445,11 +452,18 @@ class RiskSourceCoordinator:
             raise ApplicationBlocked('risk_source_scope_conflict')
         return runtime._now().date().isoformat(), runtime._day_generation, runtime._day_fence_id
 
-    async def begin(self, operation_id, kind, *, dependencies=None, require_seal=False):
+    async def begin(self, operation_id, kind, *, dependencies=None, require_seal=False, scope_token=None,
+                    _admitted_task_observer=None):
         """Trusted new callers opt in; the requirement is durable and ticket-digest bound."""
         runtime = self.runtime
+        if _admitted_task_observer is not None and not callable(_admitted_task_observer):
+            raise TypeError('admitted_task_observer_required')
+        admitted = scope_token is not None
+        if admitted and (scope_token not in runtime._command_scopes
+                or runtime._command_scopes[scope_token] is not asyncio.current_task()):
+            raise ApplicationBlocked('command_scope_required')
         state = runtime.owner.state
-        business_day, generation, fence_id = self._context(state)
+        business_day, generation, fence_id = self._context(state, admitted=admitted)
         request = _request(operation_id, kind, {} if dependencies is None else dependencies, runtime.account_scope,
                            business_day, generation, fence_id, require_seal)
         request_digest = digest(request)
@@ -461,14 +475,14 @@ class RiskSourceCoordinator:
         if existing is None and any(authority.dependency(lane, ver)[0] != 'current'
                                     for lane, ver in request['dependencies'].items()):
             raise ValueError('risk_source_dependency_not_current')
-        with runtime.command_scope() as token:
+        with (nullcontext(scope_token) if admitted else runtime.command_scope()) as token:
             runtime._risk_source_pending[token] = _KINDS[kind]
             admission_reason = ''
             async def execute():
                 nonlocal admission_reason
                 try:
                     def reduce(candidate):
-                        current = self._context(candidate)
+                        current = self._context(candidate, admitted=admitted)
                         if current != (business_day, generation, fence_id):
                             raise ApplicationBlocked('risk_source_day_changed')
                         registry = candidate.setdefault('risk_sources', {
@@ -506,20 +520,81 @@ class RiskSourceCoordinator:
                 finally:
                     runtime._risk_source_pending.pop(token, None)
             task = runtime.start_command_result(token, execute)
+            if _admitted_task_observer is not None:
+                _admitted_task_observer(task)
             await asyncio.shield(task)
             if admission_reason:
                 raise ValueError(admission_reason)
-            if self._context(runtime.owner.state) != (business_day, generation, fence_id):
+            if self._context(runtime.owner.state, admitted=admitted) != (business_day, generation, fence_id):
                 raise ApplicationBlocked('risk_source_day_changed')
             return _ticket(runtime.owner.state['risk_sources']['records'][operation_id])
 
+    def capture_reads(self, ticket, *, source_lanes=(), retained_sources=(), policy_reads=(), versioned_policy_reads=()):
+        from .risk_input_seal import _request as request_for, _reads, _json, _context_reason
+        if type(ticket) is not RefreshTicket: raise TypeError('RefreshTicket_required')
+        state = self.runtime.owner.state
+        row = state.get('risk_sources', {}).get('records', {}).get(ticket.operation_id)
+        if row is None or row['ticket'] != _ticket_dict(ticket): raise ValueError('risk_source_ticket_mismatch')
+        reason = _context_reason(self.runtime, state, ticket)
+        if reason or row['terminal'] or row['conflict']: raise ValueError('input_capture_context')
+        request = request_for(ticket, source_lanes, retained_sources, policy_reads, {}, versioned_policy_reads)
+        request.update(schema=3, versioned_policy_reads=list(sorted(versioned_policy_reads)))
+        return _json(_reads(state, ticket, request))
+
     async def seal(self, ticket, *, source_lanes=(), retained_sources=(), policy_reads=(),
-                   versioned_policy_reads=(), inputs, scope_token=None):
+                   versioned_policy_reads=(), inputs, scope_token=None, expected_reads_json=None):
         """Seal actual owner reads; trusted callers remain responsible for selecting all inputs."""
         from .risk_input_seal import seal_input
         return await seal_input(self, ticket, source_lanes=source_lanes,
             retained_sources=retained_sources, policy_reads=policy_reads, inputs=inputs,
-            versioned_policy_reads=versioned_policy_reads, scope_token=scope_token)
+            versioned_policy_reads=versioned_policy_reads, scope_token=scope_token, expected_reads_json=expected_reads_json)
+
+    def _completion_status(self, state, ticket, outcome):
+        runtime = self.runtime
+        registry = state['risk_sources']
+        current = registry['records'][ticket.operation_id]
+        if current['terminal']:
+            return 'conflict', 'outcome_conflict'
+        if (ticket.business_day != state['risk']['day']
+                or ticket.business_day != runtime._now().date().isoformat()
+                or ticket.generation != runtime._day_generation
+                or ticket.fence_id != runtime._day_fence_id or runtime.day_admission_closed
+                or ticket.account_scope != runtime.account_scope
+                or scope_reason(state, runtime.account_scope)):
+            return 'stale', 'day_or_generation'
+        if registry['latest'].get(ticket.lane) != ticket.operation_id:
+            return 'stale', 'superseded'
+        authority = _SourceAuthority(state, ticket.business_day, runtime._risk_source_pending.values())
+        if any(authority.dependency(lane, ver)[0] != 'current' for lane, ver in ticket.dependencies):
+            return 'stale', 'dependency'
+        status = 'accepted' if outcome == 'success' else outcome
+        if status == 'accepted':
+            from .risk_input_seal import input_seal_current
+            if not input_seal_current(state, ticket) or authority.inputs(current)[0] != 'current':
+                return 'stale', 'input_seal'
+        return status, ''
+
+    def _check_typed_completion(self, state, ticket, envelope, status):
+        if state.get('regime_policy') is None or status != 'accepted':
+            return
+        from .regime_owner import RegimeOwner, _vix_payload
+        if ticket.kind == 'index_trend':
+            writer = getattr(self.runtime, '_regime_writer', None)
+            callback = self._completion_reducer
+            if (writer is None or getattr(writer, 'runtime', None) is not self.runtime
+                    or getattr(writer, 'sources', None) is not self
+                    or getattr(callback, '__self__', None) is not writer
+                    or getattr(callback, '__func__', None) is not RegimeOwner._reduce):
+                raise _TypedCompletionRejected('regime_completion_writer_required')
+            if ticket.admission_version <= state['regime_policy']['baseline']['baseline_version']:
+                raise _TypedCompletionRejected('regime_transition_baseline_scope_conflict')
+        elif ticket.kind == 'vix_regime':
+            try:
+                _vix_payload({'terminal': {'envelope': envelope,
+                    'completed_at': self.runtime._now().isoformat()}})
+            except ValueError as exc:
+                # This local input validator alone defines ordinary bad typed input.
+                raise _TypedCompletionRejected(str(exc)) from None
 
     async def complete(self, ticket, outcome, payload=None, *, source='', source_event_id='',
                        received_at=None, market_as_of=None, classified_at=None, recovery_until=None,
@@ -528,7 +603,8 @@ class RiskSourceCoordinator:
         runtime = self.runtime
         if not isinstance(ticket, RefreshTicket):
             raise TypeError('RefreshTicket_required')
-        row = runtime.owner.state.get('risk_sources', {}).get('records', {}).get(ticket.operation_id)
+        state = runtime.owner.state
+        row = state.get('risk_sources', {}).get('records', {}).get(ticket.operation_id)
         if row is None or _ticket_dict(ticket) != row['ticket']:
             raise ValueError('risk_source_ticket_mismatch')
         envelope = _envelope(outcome, payload, source=source, source_event_id=source_event_id,
@@ -536,8 +612,16 @@ class RiskSourceCoordinator:
                              classified_at=classified_at, recovery_until=recovery_until)
         _valid_envelope(envelope, ticket, runtime._now())
         outcome_digest = digest(envelope)
+        if state.get('regime_policy') is not None and row['terminal'] is None and not row['conflict']:
+            try:
+                self._check_typed_completion(state, ticket, envelope,
+                    self._completion_status(state, ticket, outcome)[0])
+            except _TypedCompletionRejected as exc:
+                raise ValueError(str(exc)) from None
         with (runtime.command_scope() if scope_token is None else nullcontext(scope_token)) as token:
+            rejection = None
             async def execute():
+                nonlocal rejection
                 def reduce(candidate):
                     registry = candidate['risk_sources']
                     current = registry['records'][ticket.operation_id]
@@ -548,28 +632,9 @@ class RiskSourceCoordinator:
                     prior = current['terminal']
                     if prior and prior['receipt']['outcome_digest'] == outcome_digest:
                         return candidate
-                    authority = _SourceAuthority(candidate, ticket.business_day,
-                                                 runtime._risk_source_pending.values())
-                    status, reason = ('accepted' if outcome == 'success' else outcome), ''
-                    if prior:
-                        status, reason = 'conflict', 'outcome_conflict'
-                    elif (ticket.business_day != candidate['risk']['day']
-                          or ticket.business_day != runtime._now().date().isoformat()
-                          or ticket.generation != runtime._day_generation
-                          or ticket.fence_id != runtime._day_fence_id or runtime.day_admission_closed
-                          or ticket.account_scope != runtime.account_scope
-                          or scope_reason(candidate, runtime.account_scope)):
-                        status, reason = 'stale', 'day_or_generation'
-                    elif registry['latest'].get(ticket.lane) != ticket.operation_id:
-                        status, reason = 'stale', 'superseded'
-                    elif any(authority.dependency(lane, ver)[0] != 'current'
-                             for lane, ver in ticket.dependencies):
-                        status, reason = 'stale', 'dependency'
-                    if status == 'accepted':
-                        from .risk_input_seal import input_seal_current
-                        if (not input_seal_current(candidate, ticket)
-                                or authority.inputs(current)[0] != 'current'):
-                            status, reason = 'stale', 'input_seal'
+                    status, reason = self._completion_status(candidate, ticket, outcome)
+                    self._check_typed_completion(candidate, ticket, envelope, status)
+                    before_regime = deepcopy(candidate.get('regime_policy'))
                     if status == 'accepted' and self._completion_reducer is not None:
                         before_sources = deepcopy(registry)
                         before_seals = deepcopy(candidate.get('risk_input_seals'))
@@ -587,10 +652,25 @@ class RiskSourceCoordinator:
                         'envelope': envelope, 'receipt': asdict(receipt),
                         'completed_at': runtime._now().isoformat()}
                     validate_risk_sources(candidate, runtime.owner.version + 1)
+                    if before_regime is not None:
+                        from .regime_owner import _validate_regime_append, _vix_payload
+                        from .policy_generations import canonical
+                        if status == 'accepted' and ticket.kind == 'index_trend':
+                            _validate_regime_append(candidate, before_regime, ticket.operation_id,
+                                                    runtime.owner.version + 1)
+                        elif canonical(candidate.get('regime_policy')) != canonical(before_regime):
+                            raise ValueError('completion_reducer_changed_regime_policy')
+                        if status == 'accepted' and ticket.kind == 'vix_regime':
+                            _vix_payload(current)
                     return candidate
-                await runtime.owner.mutate('risk-complete:' + ticket.request_digest + ':' + outcome_digest, reduce)
+                try:
+                    await runtime.owner.mutate('risk-complete:' + ticket.request_digest + ':' + outcome_digest, reduce)
+                except _TypedCompletionRejected as exc:
+                    rejection = str(exc)
                 return True
             await asyncio.shield(runtime.start_command_result(token, execute))
+            if rejection is not None:
+                raise ValueError(rejection)
             current = runtime.owner.state['risk_sources']['records'][ticket.operation_id]
             return RefreshReceipt(**(current['conflict'] or current['terminal'])['receipt'])
 

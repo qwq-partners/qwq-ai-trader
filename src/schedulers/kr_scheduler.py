@@ -4399,6 +4399,17 @@ JSON:
         except asyncio.CancelledError:
             pass
 
+    async def _refresh_market_trend(self):
+        from ..execution.safety.application import ApplicationBlocked
+        runtime = getattr(getattr(self.bot, 'engine', None), '_execution_runtime', None)
+        writer = getattr(runtime, '_regime_writer', None)
+        if writer is None:
+            raise ApplicationBlocked('regime_owner_not_installed')
+        if writer.sidecar is not getattr(self.bot, 'risk_manager', None):
+            raise ApplicationBlocked('regime_owner_binding_conflict')
+        return await writer.refresh_trend(self.bot.kis_market_data,
+            expert_orchestrator=getattr(self.bot, 'expert_orchestrator', None))
+
     async def run_market_trend_monitor(self):
         """KOSPI/KOSDAQ 장중 추세 모니터 (2분 주기) → RiskManager 사이드카 연동
 
@@ -4424,6 +4435,15 @@ JSON:
                     kis_md = getattr(bot, 'kis_market_data', None)
                     if not rm or not kis_md:
                         _hb.record_failure("kr_market_trend", "risk_manager/kis_market_data 미초기화")
+                        await asyncio.sleep(120)
+                        continue
+
+                    if getattr(getattr(bot, 'engine', None), '_execution_runtime', None) is not None:
+                        receipt = await self._refresh_market_trend()
+                        if receipt.status == 'accepted':
+                            _hb.record_success('kr_market_trend')
+                        else:
+                            _hb.record_failure('kr_market_trend', 'owned trend ' + receipt.status)
                         await asyncio.sleep(120)
                         continue
 
