@@ -222,6 +222,8 @@ See: 계산/입력7파일과 input seal 기반3파일은 각각 독립 한정 �
 
 부모 전체 검증은 **KST3933passed/2 known xfailed/4 warnings(193.81초), UTC3933/2/4(193.42초)**·격리0이다. 신규103개(계산/legacy parity6·지수56·seal41)이며 ignored 독립/RED는 합산하지 않는다. source/test10파일 patch(기준 `4f8f098`) SHA `3b47ab86a676f396cd71f1f57b9561a120afb0ad47d29e6924ce9752d4b3e1a3`, 새파일 stage 후 문법/비밀패턴·diff check도 통과했다. 경고는 기존pykrx1+fork3이다. 2분 RED 원본의 주석 정리 후 UTC 재실행도3 RED/1.11초·격리0이며 위 probe hash와 동일하다. 하위 에이전트 한도 오류는 미실행으로 구분했고 제한 해제 시각 이후 재개했다. 다음은 정책별 변경 이력/지속 소비 권한→실제2분 owner→정오/LLM 보호 replay다. main/운영/실API/주문/설정/Toss 변경은 없다.
 
+위 구현·검증·한정 리뷰 결과는 feature 커밋 `bfeb4a6`으로 저장·push했고, 원격 branch의 전체 SHA 일치를 확인했다. main/운영 반영은 아니다. 교훈 문서 후속은 소스/시험 변경 없이 정책 ABA와 지속 소비 권한의 구별만 기록한다.
+
 ## 단계4 — 공식 계약 증거
 
 Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와 잔고–체결 cutoff를 확인한다. 최신 TR로 자동 치환하지 않는다.
