@@ -74,6 +74,113 @@ class RefreshReceipt:
         text(self.outcome_digest)
 
 
+@dataclass(frozen=True)
+class SourceRead:
+    """현재 소비 권한과 원 terminal 사실은 별개다. 거래 허가가 아니다."""
+    lane: str
+    operation_id: str | None
+    committed_version: int | None
+    authority_status: str
+    terminal_status: str | None
+    reason: str
+    envelope_json: str | None
+
+
+class _SourceDependencyChanged(ValueError):
+    """SQL 접수 전 reducer가 확인한 정상 dependency 경합만 표시한다."""
+
+
+class _SourceAuthority:
+    """한 detached state의 현재 graph. 과거 receipt 검증에는 사용하지 않는다."""
+    def __init__(self, state, business_day, pending=()):
+        self.state = state
+        self.root = state.get('risk_sources', {'records': {}, 'latest': {}})
+        self.seals = state.get('risk_input_seals', {}).get('records', {})
+        self.business_day = business_day
+        self.pending = frozenset(pending)
+        self.memo = {}
+        self.visiting = set()
+
+    def _pending(self, result):
+        status, reason, lanes = result
+        return ('pending', 'source_pending', lanes) if self.pending.intersection(lanes) else result
+
+    def dependency(self, lane, version):
+        row = _current(self.root, lane)
+        result = self.inspect(row) if row else ('missing', 'source_missing', frozenset({lane}))
+        terminal = row['terminal'] if row else None
+        if (not terminal or terminal['receipt']['status'] != 'accepted'
+                or terminal['receipt']['committed_version'] != version):
+            result = ('stale', 'dependency', result[2])
+        return self._pending(result)
+
+    def inputs(self, row):
+        from .risk_input_seal import _json, _source_reads
+        lanes = set()
+        reason = ''
+        for lane, version in row['ticket']['dependencies']:
+            status, _, closure = self.dependency(lane, version)
+            lanes.update(closure)
+            if status != 'current':
+                reason = 'dependency'
+        seal = self.seals.get(row['ticket']['operation_id'])
+        if seal is None:
+            if row['request'].get('require_seal', False):
+                reason = reason or 'input_seal'
+        else:
+            original = seal['original']
+            lanes.update(original['request']['source_lanes'])
+            if seal['conflict'] or original['status'] != 'sealed':
+                reason = reason or 'input_seal'
+            else:
+                facts = original['reads']
+                try:
+                    current = _source_reads(self.state, original['request'])
+                    if any(_json(current[key]) != _json(facts[key]) for key in ('sources', 'retained')):
+                        reason = reason or 'source_read_changed'
+                except ValueError:
+                    reason = reason or 'source_read_changed'
+                # 실패/결측/이미 충돌한 관측은 사실 leaf다. retained는 재귀하지 않는다.
+                for observed in facts['sources'].values():
+                    if (observed and not observed['conflict'] and not observed['input_seal_conflict']
+                            and observed['terminal'] and observed['terminal']['receipt']['status'] == 'accepted'):
+                        selected = self.root['records'].get(observed['ticket']['operation_id'])
+                        status, _, closure = self.inspect(selected)
+                        lanes.update(closure)
+                        if status != 'current':
+                            reason = reason or 'observed_source_not_current'
+        return self._pending(('stale' if reason else 'current', reason, frozenset(lanes)))
+
+    def inspect(self, row):
+        if row is None:
+            return 'missing', 'source_missing', frozenset()
+        ticket = row['ticket']
+        operation, lane = ticket['operation_id'], ticket['lane']
+        if operation in self.visiting:
+            return 'stale', 'source_cycle', frozenset({lane})
+        if operation in self.memo:
+            return self.memo[operation]
+        self.visiting.add(operation)
+        try:
+            terminal = row['terminal']
+            result = (self.inputs(row) if terminal and terminal['receipt']['status'] == 'accepted'
+                      else ('current', '', frozenset({lane})))
+            seal = self.seals.get(operation)
+            if ticket['business_day'] != self.business_day or self.root['latest'].get(lane) != operation:
+                result = 'stale', 'source_context', result[2]
+            elif row['conflict'] or (seal and seal['conflict']):
+                result = 'conflict', 'source_conflict', result[2]
+            elif terminal is None:
+                result = 'pending', 'source_incomplete', result[2]
+            elif terminal['receipt']['status'] == 'stale':
+                result = 'stale', terminal['receipt']['reason'], result[2]
+            result = self._pending((result[0], result[1], result[2] | {lane}))
+            self.memo[operation] = result
+            return result
+        finally:
+            self.visiting.remove(operation)
+
+
 def _integer(value, minimum=0):
     if type(value) is not int or value < minimum:
         raise ValueError('invalid_risk_source_integer')
@@ -350,13 +457,15 @@ class RiskSourceCoordinator:
         existing = root['records'].get(operation_id)
         if existing is not None and existing['ticket']['request_digest'] != request_digest:
             raise ValueError('risk_source_operation_conflict')
-        if existing is None and any(not _dependency_current(root, lane, ver, business_day,
-                                    seals=state.get('risk_input_seals', {}).get('records', {}))
+        authority = _SourceAuthority(state, business_day, runtime._risk_source_pending.values())
+        if existing is None and any(authority.dependency(lane, ver)[0] != 'current'
                                     for lane, ver in request['dependencies'].items()):
             raise ValueError('risk_source_dependency_not_current')
         with runtime.command_scope() as token:
             runtime._risk_source_pending[token] = _KINDS[kind]
+            admission_reason = ''
             async def execute():
+                nonlocal admission_reason
                 try:
                     def reduce(candidate):
                         current = self._context(candidate)
@@ -369,10 +478,14 @@ class RiskSourceCoordinator:
                             if registry['records'][operation_id]['ticket']['request_digest'] != request_digest:
                                 raise ValueError('risk_source_operation_conflict')
                             return candidate
-                        if any(not _dependency_current(registry, lane, ver, business_day,
-                               seals=candidate.get('risk_input_seals', {}).get('records', {}))
+                        # 자기 접수는 아직 candidate에 쓰기 전이다. 다른 facade의 같은
+                        # lane token까지 제외하면 실제 경쟁 갱신을 놓치므로 token만 뺀다.
+                        authority = _SourceAuthority(candidate, business_day,
+                            (lane for pending_token, lane in runtime._risk_source_pending.items()
+                             if pending_token is not token))
+                        if any(authority.dependency(lane, ver)[0] != 'current'
                                for lane, ver in request['dependencies'].items()):
-                            raise ValueError('risk_source_dependency_not_current')
+                            raise _SourceDependencyChanged('risk_source_dependency_not_current')
                         ticket = RefreshTicket(operation_id, runtime.account_scope, business_day,
                             generation, fence_id, kind, _KINDS[kind], registry['next_sequence'],
                             runtime.owner.version + 1, runtime._now().isoformat(),
@@ -385,10 +498,17 @@ class RiskSourceCoordinator:
                         return candidate
                     await runtime.owner.mutate('risk-begin:' + request_digest, reduce)
                     return True
+                except _SourceDependencyChanged as exc:
+                    # 정상 거부는 task drain 성공이지만 source 접수 성공이 아니다.
+                    # lookup/SQL/게시 실패나 일반 ValueError는 이 경계에 포함하지 않는다.
+                    admission_reason = str(exc)
+                    return True
                 finally:
                     runtime._risk_source_pending.pop(token, None)
             task = runtime.start_command_result(token, execute)
             await asyncio.shield(task)
+            if admission_reason:
+                raise ValueError(admission_reason)
             if self._context(runtime.owner.state) != (business_day, generation, fence_id):
                 raise ApplicationBlocked('risk_source_day_changed')
             return _ticket(runtime.owner.state['risk_sources']['records'][operation_id])
@@ -428,6 +548,8 @@ class RiskSourceCoordinator:
                     prior = current['terminal']
                     if prior and prior['receipt']['outcome_digest'] == outcome_digest:
                         return candidate
+                    authority = _SourceAuthority(candidate, ticket.business_day,
+                                                 runtime._risk_source_pending.values())
                     status, reason = ('accepted' if outcome == 'success' else outcome), ''
                     if prior:
                         status, reason = 'conflict', 'outcome_conflict'
@@ -440,13 +562,13 @@ class RiskSourceCoordinator:
                         status, reason = 'stale', 'day_or_generation'
                     elif registry['latest'].get(ticket.lane) != ticket.operation_id:
                         status, reason = 'stale', 'superseded'
-                    elif any(not _dependency_current(registry, lane, ver, ticket.business_day,
-                             seals=candidate.get('risk_input_seals', {}).get('records', {}))
+                    elif any(authority.dependency(lane, ver)[0] != 'current'
                              for lane, ver in ticket.dependencies):
                         status, reason = 'stale', 'dependency'
                     if status == 'accepted':
                         from .risk_input_seal import input_seal_current
-                        if not input_seal_current(candidate, ticket):
+                        if (not input_seal_current(candidate, ticket)
+                                or authority.inputs(current)[0] != 'current'):
                             status, reason = 'stale', 'input_seal'
                     if status == 'accepted' and self._completion_reducer is not None:
                         before_sources = deepcopy(registry)
@@ -472,53 +594,62 @@ class RiskSourceCoordinator:
             current = runtime.owner.state['risk_sources']['records'][ticket.operation_id]
             return RefreshReceipt(**(current['conflict'] or current['terminal'])['receipt'])
 
-    def snapshot(self):
+    def read_source(self, lane, *, expected_version=None):
+        """동기 detached 조회. current+failed는 현재 실패 사실이며 성공이 아니다."""
+        from .risk_input_seal import _context_reason, _json
+        if type(lane) is not str or lane not in _LANES:
+            raise ValueError('invalid_risk_source_lane')
+        if expected_version is not None:
+            _integer(expected_version, 1)
         runtime = self.runtime
         state, version = runtime.owner.state, runtime.owner.version
         root = state.get('risk_sources')
-        row = _current(root, 'intraday') if root else None
-        sequence = row['ticket']['sequence'] if row else 0
+        row = _current(root, lane) if root else None
+        terminal = row['terminal'] if row else None
         source_version = ((row['conflict'] or row['terminal'])['receipt']['committed_version']
                           if row and (row['conflict'] or row['terminal']) else
-                          row['ticket']['admission_version'] if row else 0)
-        def unknown(status):
-            return RiskSnapshot(source_version, sequence, status, None, None)
+                          row['ticket']['admission_version'] if row else None)
+        def result(status, reason=''):
+            return SourceRead(lane, row['ticket']['operation_id'] if row else None,
+                source_version, status, terminal['receipt']['status'] if terminal else None,
+                reason, _json(terminal['envelope']) if terminal else None)
         if (not runtime.owner.healthy or runtime.owner.published_version != version
                 or runtime.engine._execution_version != version or runtime._closing
                 or runtime.day_admission_closed):
-            return unknown('missing')
-        relevant_lanes = {'intraday'}
-        todo = [row] if row else []
-        while todo:
-            current = todo.pop()
-            for lane, _ in current['ticket']['dependencies']:
-                if lane not in relevant_lanes:
-                    relevant_lanes.add(lane)
-                    dependency = _current(root, lane)
-                    if dependency:
-                        todo.append(dependency)
-        if relevant_lanes.intersection(runtime._risk_source_pending.values()):
-            return unknown('pending')
+            return result('unavailable', 'runtime_unavailable')
+        if scope_reason(state, runtime.account_scope):
+            return result('unavailable', 'scope_conflict')
+        authority = _SourceAuthority(state, runtime._now().date().isoformat(),
+                                     runtime._risk_source_pending.values())
         if row is None:
-            return unknown('missing')
+            return result('pending' if lane in authority.pending else 'missing', 'source_missing')
         validate_risk_sources(state, version)
-        if row['ticket']['business_day'] != runtime._now().date().isoformat():
-            return unknown('missing')
-        if row['conflict']:
-            return unknown('conflict')
-        seal = state.get('risk_input_seals', {}).get('records', {}).get(row['ticket']['operation_id'])
-        if seal and seal['conflict']:
-            return unknown('conflict')
+        context = _context_reason(runtime, state, _ticket(row))
+        if context:
+            return result('stale', context)
+        status, reason, _ = authority.inspect(row)
+        if expected_version is not None and source_version != expected_version:
+            status, reason = 'stale', 'source_version_changed'
+        return result(status, reason)
+
+    def snapshot(self):
+        read = self.read_source('intraday')
+        state = self.runtime.owner.state
+        row = state.get('risk_sources', {}).get('records', {}).get(read.operation_id)
+        sequence = row['ticket']['sequence'] if row else 0
+        def unknown(status):
+            return RiskSnapshot(read.committed_version or 0, sequence, status, None, None)
+        if read.authority_status != 'current':
+            status = read.authority_status
+            if status not in {'pending', 'conflict'}:
+                status = ('stale' if status == 'stale' and read.terminal_status == 'stale'
+                          else 'missing')
+            return unknown(status)
         terminal = row['terminal']
-        if terminal is None:
-            return unknown('pending')
         receipt, envelope = terminal['receipt'], terminal['envelope']
         if receipt['status'] != 'accepted':
             return unknown(receipt['status'])
-        if (any(not _dependency_current(root, lane, ver, row['ticket']['business_day'],
-                                       seals=state.get('risk_input_seals', {}).get('records', {}))
-                for lane, ver in row['ticket']['dependencies'])
-                or envelope['market_as_of'] is None or envelope['payload'].get('level') not in _LEVELS):
+        if envelope['market_as_of'] is None or envelope['payload'].get('level') not in _LEVELS:
             return unknown('missing')
         return RiskSnapshot(receipt['committed_version'], sequence, 'success',
                             _time(envelope['market_as_of']), envelope['payload']['level'],

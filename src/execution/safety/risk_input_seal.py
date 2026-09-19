@@ -113,20 +113,26 @@ def _retained_reads(state, request, *, cutoff=None, seals=None):
     return retained
 
 
-def _reads(state, ticket, request, *, cutoff=None, policies=True):
+def _source_reads(state, request, *, cutoff=None):
+    """정책과 분리된 원 source 사실. 역사 cutoff의 의미도 그대로 보존한다."""
     records = state['risk_sources']['records']
     seals = state.get(ROOT, {}).get('records', {})
-    facts = {'sources': {}, 'retained': {}, 'policies': {}}
-    if request.get('schema') == 2:
-        from .policy_generations import versioned_fact
-        facts['versioned_policies'] = {
-            name: versioned_fact(state, name, cutoff=cutoff)
-            for name in request['versioned_policy_reads']}
+    facts = {'sources': {}, 'retained': {}}
     for lane in request['source_lanes']:
         rows = [_source_at(row, cutoff, seals) for row in records.values() if row['ticket']['lane'] == lane]
         rows = [row for row in rows if row is not None]
         facts['sources'][lane] = max(rows, key=lambda row: row['ticket']['sequence']) if rows else None
     facts['retained'] = _retained_reads(state, request, cutoff=cutoff, seals=seals)
+    return facts
+
+
+def _reads(state, ticket, request, *, cutoff=None, policies=True):
+    facts = {**_source_reads(state, request, cutoff=cutoff), 'policies': {}}
+    if request.get('schema') == 2:
+        from .policy_generations import versioned_fact
+        facts['versioned_policies'] = {
+            name: versioned_fact(state, name, cutoff=cutoff)
+            for name in request['versioned_policy_reads']}
     if policies:
         for name in request['policy_reads']:
             root, field = _POLICIES[name]

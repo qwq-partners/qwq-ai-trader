@@ -1,9 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — C2b 입력 변경 전파·독립 한정 승인 (운영 미설치)
+
+- 공통 source 권한 검사와 동기 `read_source`를 추가했다. 과거 accepted receipt는 보존하고, 실제 읽은 입력의 최신성·충돌·전이적 의존·첫 await pending으로 현재 재사용 가능성을 판단한다. 실패 사실과 성공 입력, 명시 전일 retained와 당일 자료를 구분하고 완료 hook 자신의 정책 변경은 source 변경으로 오인하지 않는다.
+- 실제 접수 경합의 정상 dependency 거부가 종료 실패로 번지는 경로는 전용 예외만 포착해 분리했다. 자신의 pending token만 제외해 기존 같은-lane 접수→완료 stale 의미를 보존하고, SQL/게시 실패 차단은 유지한다.
+- 최초 Opus 리뷰의 자기 lane 과잉 무효화(I1)를 별도1RED 후 두 줄 수정했고, 충돌한 source의 직접 거부 인수(I2)를 추가했다. 원본9시험+보강37+리뷰5=51집중 인수, 원본9와 helper3 AST 불변. 실제 Opus5/xhigh 재리뷰307.174초·APPROVE_THIS_SLICE·새Important0이다.
+- 최종 전체 **UTC4124passed/기존xfail2/경고4(179.75초), KST4124/2/4(181.14초)**·각각 exit0/격리0·문법/비밀패턴/diff 검사 통과. 코드 지문·최초4119시험과 리뷰/수정 이력·보류 minor는 `docs/reviews/source-authority-followup-2026-09-20.md`에 구분했다.
+- 실제2분 owner/caller와 정오/LLM/보호 replay는 다음 단위다. main/운영·실API·주문·설정 변경 없음. `trading_ready=False`, 모든 MODIFY 미지원과 초기 인계/취소 공식 증거 장벽 유지.
+
 ## 2026-09-20 — N1 보존 입력 요청 오류 분리 (운영 미설치)
 
 - 최초 유효 seal의 없는 retained operation·선언 lane 불일치·미accepted terminal을 결과 저장 task 전에 거부한다. 이전에는 ValueError가 owner/종료 실패로 확대됐다. 공유 순수 검사로 reducer/역사적 cutoff를 유지하고 reseal conflict·이미 stale인 원장·실제 SQL/게시 실패 차단은 바꾸지 않았다.
-- 신규18시험의10 RED/8대조에서 수정 후 전체 **UTC4071passed/기존xfail2/경고4(180.53초), KST4071/2/4(181.45초)**·각각 격리0. Opus5/xhigh326.685초 정상 완료·APPROVE_THIS_SLICE(spec/qualityPASS·차단0). 이후 source 무변경 outer-scope 회귀2개를 보강했으며 전체4071에는 아직 합산하지 않았다.
+- 신규18시험의10 RED/8대조에서 수정 후 전체 **UTC4071passed/기존xfail2/경고4(180.53초), KST4071/2/4(181.45초)**·각각 격리0. Opus5/xhigh326.685초 정상 완료·APPROVE_THIS_SLICE(spec/qualityPASS·차단0). 이후 source 무변경 outer-scope 회귀2개를 보강해 최종 전체 **UTC4073/2/4(178.52초), KST4073/2/4(181.18초)**·각각 exit0/격리0를 확인했다.
 - 입력 전파 C2b는 별도 워크트리에서 구현 중이다. 자세한 비차단 의견 처분·검증 범위는 `docs/reviews/source-authority-followup-2026-09-20.md`를 따른다. 실제2분·정오/LLM/보호 재생·전체 writer/운영 설치 완료가 아니다. main/운영·실API·주문·설정 변경 없음.
 
 ## 2026-09-20 — C2a Opus 지적 수정·독립 한정 승인 (운영 미설치)

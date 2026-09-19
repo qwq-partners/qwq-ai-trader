@@ -37,7 +37,7 @@
 
 ### Reviews (리뷰)
 
-- [입력 소비 권한 후속](reviews/source-authority-followup-2026-09-20.md) — N1 retained 요청 오류 분리·실제 Opus 한정 승인·UTC/KST4071통과; C2b 지속 전파 구현 진행, 실제2분·정오/LLM/replay는 후속
+- [입력 소비 권한 후속](reviews/source-authority-followup-2026-09-20.md) — N1·C2b 지속 전파의 실제 Opus 한정 승인, 리뷰 I1/I2 보완·최종UTC/KST4124통과; 실제2분·정오/LLM/replay는 후속
 - [Opus 리뷰 실행기 진단·수정](reviews/opus-review-runner-2026-09-20.md) — 360초 로컬 종료 원인·동일 입력692초 정상 완료. 실행기 한정 재리뷰 승인·신규53회귀·전체 KST/UTC4021통과·실제 smoke 확인; 엔진 Opus 수정 요청은 별도 후속
 - [C2a Opus 후속 수정·인수](reviews/policy-generation-remediation-2026-09-20.md) — B1/B2/B4 재현·수정, 실제 Opus 한정 승인·UTC/KST 각각4053통과. 다음은 retained source 요청 경계와 지속 소비 권한; 운영 전환 승인은 아님
 - [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — 기반 구간별 한정 승인과 정책 generation 후속 검증. 지속 source 권한/실제2분·정오·LLM·qualification/gateway·나머지 writer/설치·전체 인수·공식 증거는 잔여

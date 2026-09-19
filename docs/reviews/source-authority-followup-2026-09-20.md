@@ -43,13 +43,29 @@ Plan: 이미 accepted된 receipt/history는 보존하면서, 현재 결과를 �
 
 원래 별도 워크트리의 실제 RED7/대조2를 보존했다. 독립 읽기 전용 재실행 UTC1.95초/KST1.89초, 격리0. 이는 새 구현 통과나 독립 승인 근거가 아니다. schema2 own-hook 후 재사용, 실제 rollover/resume의 전일 retained, 취소·SQL 장애·observed-only 연쇄 등을 추가 인수한다.
 
-Do: N1 한정 승인 후 Astra/high가 별도 `feature/source-authority-impl-20260920` 워크트리에서 source/seal 모듈과 집중 시험만 소유한다. 새 동기 `read_source`는 현재 소비 가능성과 실제 terminal 결과를 분리한다. N1 통합본 위에서 부모가 원본9시험을 다시 실행해7 RED/2 GREEN(UTC2.74초·격리0)을 확인했다. 구현·독립 See는 진행 중이다.
+Do: N1 한정 승인 후 Astra/high가 별도 `feature/source-authority-impl-20260920` 워크트리에서 source/seal 모듈과 집중 시험만 구현하고 소유권을 반환했다. 새 동기 `read_source`는 현재 소비 가능성과 실제 terminal 결과를 분리한다. N1 통합본 위에서 부모가 원본9시험을 다시 실행해7 RED/2 GREEN(UTC2.74초·격리0)을 확인했다. 구현 동결본을 부모 워크트리에 이식했으며 독립 See는 진행 중이다.
 
-추가 실제 경합 RED: begin 사전검사 이후 저장 조회를 기다리는 동안 다른 facade가 의존 source 갱신을 접수하면 reducer가 정상 거부하지만 결과 task 실패 latch까지 켜진다. reducer의 이 재검사에만 전용 예외를 두고 외부 caller에는 기존 ValueError를 돌려주는 좁은 경계를 승인했다. SQL/조회/게시 오류 포착이나 latch 초기화는 금지하고, 취소된 caller의 drain·다른 접수 요청의 장벽·거부 요청의 durable 행 부재를 함께 검증한다. 아직 수정 완료/리뷰 승인 근거는 아니다.
+추가 실제 경합 RED: begin 사전검사 이후 저장 조회를 기다리는 동안 다른 facade가 의존 source 갱신을 접수하면 reducer가 정상 거부하지만 결과 task 실패 latch까지 켜졌다. reducer의 이 재검사에만 전용 예외를 두고 외부 caller에는 기존 ValueError를 돌려준다. SQL/조회/게시 일반 오류 포착이나 latch 초기화는 없다. 같은 lane의 이전 source를 hard dependency로 삼는 기존 begin 접수→complete stale 의미도 자기 pending token 하나만 제외해 보존했다. 다른 facade의 같은 lane은 계속 장벽에 포함한다.
+
+구현자 검증은 집중46시험(원본9+보강37), 관련15파일 UTC304/38.76초·KST304/39.08초, 별도 replay 완전성/무결성 UTC26/7.27초·KST26/7.32초, 각각 exit0·격리0이다. 보강37 전부가 새로운 RED는 아니며 actual day prepare→valuation→rollover→resume 이후 전일 retained, schema2 own-hook+실제 core fill/합성 journal ACK, 취소·SQL 전/후 장애·복원을 포함한다. cold restore는 같은 프로세스의 새 객체이며 실 API/실 PostgreSQL 검증이 아니다. 부모도 원본9시험+helper3의 AST 불변과 통합3파일의 SHA 동일성을 확인했다.
+
+최초 동결 지문: source `6b6241b181c85db8e10d0f71706fcc20f4a70ba9aa00a37ee4141920a1f87601`, seal `86cb6ed4da88fa102f2032c5ca61fa33f346eb2b25ffb7a0a4abc9bb5d588709`, test `3f258d1d32b4c29f1ea6e9f63a3cba3d44f49cede11ad2b93ccb70422c48788c`. 최초 후보 전체는 **UTC4119 passed / 2 known xfailed / 4기존 warnings / 184.52초**, **KST4119 / 2 / 4 / 180.44초**, 각각 exit0·격리0이다. 문법·비밀패턴·diff 검사도 통과했다.
+
+독립 Opus5/xhigh 리뷰는687.025초·child0·terminal success·오류0으로 실행 완료했지만 **REQUEST_CHANGES**다. 입력186204바이트/SHA `348be3426700b6edce4edfc9d13b5bca8d714c95ea1ce8b037d9ac2f463ae6d1`. Critical0, Important2: (I1) 읽은 의존이 없는 결과까지 같은 lane의 미저장 begin 때문에 영구 stale/input_seal로 기록되는 과잉 무효화, (I2) 충돌한 source의 직접 read/hard dependency 거부 인수 공백. 코드 판독 리뷰이며 독립 시험 실행이 아니다. 부모가 I1의 공통 검사기 호출 경계와 원 소비 의미를 확인했고, 별도 Terra/high 시험 작업에서 재현·직접 대조를 추가한 뒤 좁게 수정·재리뷰한다. 위4119통과를 승인이나 다음 실제 writer 착수로 해석하지 않는다.
+
+선택 Minor10의 처분: 공개 ValueError 정확 타입과 legacy own-hook의 직접 read 대조는 시험으로 보강한다. 과거일 stale/missing 표시 차이는 `FinalEntryGuard.evaluate`가 둘 다 `observation_status != 'success'`로 동일 차단함을 부모가 확인했다. 사유 문자열/expected-version 우선순위/중복 deepcopy/도달 불가 삭제 경계/손상 상태 ValueError 매핑·성능 계측은 현 fail-closed/기존 API를 바꾸지 않고 broad 리뷰의 보류 목록으로 남긴다.
+
+I1 보완: Terra의 별도 시험에서 실제1 RED/4 GREEN(UTC1.16초)을 확인했다. 부모는 `inputs()`에서 자기 lane을 제거하고 `inspect()`의 현재 소비 검사에서만 추가하도록 두 줄을 수정했다. 실제로 읽은 lane의 pending 차단은 그대로다. source 최종 SHA `15aa2ef64ebdf1095360d87a3449768da3d8f94b9b51806793199288546c856b`; seal/기존46시험은 무변경이다. I2의 충돌 직접 대조2개는 최초 GREEN이며 새로운 결함2건이 아니다.
+
+신규5시험에는 실제 reducer 경합의 공개 ValueError 정확 타입과 legacy policy hook 이후 current 조회도 포함한다. 작성자51시험 UTC6.66초/KST6.05초, 부모 통합51시험6.27초 후 타 요청의 일시 게시 장벽을 읽지 않도록 그 완료를 먼저 await하는 시험 순서만 보완했다(단언 삭제 없음). 최종 test SHA `9da07054e47b5d81ffd399ff207e8194b585e126c80fc36ab8801636e179dfb9`, 부모51시험6.14초·격리0.
+
+한정 재리뷰는 실제 `claude-opus-5`/요청xhigh·307.174초·child0·terminal success·오류0으로 **APPROVE_THIS_SLICE**, I1/I2 해소·새Important0이다. 입력87686바이트/SHA `f382e0b845ca280eb8809de23bb299ffbf0c38c866c0d2fc4cd00e0c321484d1`, 메타데이터+답변 보존본 SHA `b2db35534464558b5df985b0f079a4bc401cc788610cb579acf14c19d9365152`. 원본9 전문과 현재 helper를 입력에 포함했으며 AST12/12 불변은 부모 실행 근거를 따른다. 정적 reviewer가 실제 테스트를 실행한 것은 아니다.
+
+최종 전체 **UTC4124 passed / 2 known xfailed / 4기존 warnings / 179.75초**, **KST4124 / 2 / 4 / 181.14초**, 각각 exit0·격리0. 문법·비밀패턴·diff 검사 통과다. 재리뷰의 선택 의견(첫-await 시험의 reason 단언 강화, helper 결합, Event observer 설명, lookup ID 필터)은 보류 minor로 원장에 남기며 승인 뒤 제품/시험을 다시 바꾸지 않았다. 이로써 C2b 소스 권한의 한정 gate를 닫고 실제2분 단위로 진행한다. 전체 engine/writer/운영 승인은 아니다.
 
 ## 이후 순서와 미완
 
-1. C2b의 실제 owner/SQLite 인수·독립 리뷰.
+1. C2b의 실제 owner/SQLite 인수·독립 리뷰: 위 한정 gate 완료.
 2. 명시 기준선을 가진 RegimeOwner와 실제 2분 루프. 기존 두 지수 조회 횟수·동시성·VIX/전문가 순서·하트비트를 유지하며 2분에서 보호 적용을 새로 추가하지 않는다.
 3. 정오 cap 선행 commit, LLM 지연/역순 결과 차단, 실제 보호 변경과 replay 원장의 같은 commit, cold restore.
 4. 별도 morning diagnosis와 나머지 writer, 전체 C/F/G/R·독립 broad 리뷰. 공식 증거 부족은 미지원/시작 차단으로 남긴다.

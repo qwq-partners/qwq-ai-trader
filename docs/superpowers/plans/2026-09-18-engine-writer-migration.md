@@ -123,7 +123,7 @@ seal의 source read는 완료 시점까지의 직접 비교이며 완료 뒤 `sn
 - [x] Plan/Do V1·V3·V4·V5: 실큐 sector 정산·부분/상위집합 등록·legacy/versioned 혼합/중복 거부·등록 SQL 취소/재개방 멱등을 정규시험으로 보강했다. 원본4개 최초 GREEN과 B2 종료 차단을 추가한 RED1을 구분한다. 독립 SQLite 취소/동시 snapshot/rollback9개도 byte-identical 이식했다.
 - [x] See: 원본 실패 보존·신규 정규32시험 포함 전체 UTC/KST 각4053passed/기존xfail2·경고4·격리0·문법/비밀패턴 검사 통과. 실제 Opus5/xhigh366.318초 정상 완료·APPROVE_THIS_SLICE. [처분 원장](../../reviews/policy-generation-remediation-2026-09-20.md)에 B1–B6/V1–V8/N1–N5와 한계를 기록했다. 승인 범위는 C2a이며 전체 writer/운영 승인이 아니다.
 
-N1 retained_sources 요청 사전검사/실패 분리 인수는10 RED→수정·Opus 한정 승인·전체 UTC/KST4071시험으로 닫았다(추가 outer-scope 회귀2는 최초 GREEN). [후속 정본](../../reviews/source-authority-followup-2026-09-20.md)을 따른다. 이제 C2b의 기존 source 지속 권한 RED7/대조2와 보강 인수를 구현 중이며, 실제2분 → 정오·LLM·보호 replay 순서는 유지한다. 전일 checkpoint는 rollover/resume 완료 후 selector 등록, 그 뒤 versioned seal/producer를 연결한다. 등록 이후 shutdown의 healthy/published/engine-version 장벽을 유지한다.
+N1 retained_sources 요청 사전검사/실패 분리 인수는10 RED→수정·Opus 한정 승인·최종 전체 UTC/KST4073시험으로 닫았다(추가 outer-scope 회귀2는 최초 GREEN). [후속 정본](../../reviews/source-authority-followup-2026-09-20.md)을 따른다. C2b는 원본9+보강37에 리뷰5 인수를 추가하고 I1 과잉 무효화 두 줄/I2 명시 conflict 검증을 보완해, 최종UTC/KST4124통과·실제 Opus 재리뷰 한정 승인으로 닫았다. 다음은 실제2분 → 정오·LLM·보호 replay다. 전일 checkpoint는 rollover/resume 완료 후 selector 등록, 그 뒤 versioned seal/producer를 연결한다. 등록 이후 shutdown의 healthy/published/engine-version 장벽을 유지한다.
 
 ## 10A3 — 명시 설치 factory
 
