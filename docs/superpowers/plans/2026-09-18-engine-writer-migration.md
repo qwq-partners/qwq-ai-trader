@@ -129,6 +129,8 @@ N1 retained_sources 요청 사전검사/실패 분리 인수는10 RED→수정·
 
 ## 10A3 — 명시 설치 factory
 
+선행 C3 최신(09-20): 명시 horizon·정오 cap 선행 commit·JSON classifier 단회 호출·full 보호 적용/typed replay·실제 scheduler 분기를 구현했다. 독립3건과 stale/결측/복구 이력 누락 및 Opus A의 원시각·명시 결측을 수정하고 신규79 포함 최종 UTC/KST4350passed·기존xfail2/경고4·격리0, 네이티브/Opus A 재리뷰·B 한정 승인이다. 첫 전체 입력900초 timeout은 미승인으로 남기고 동일 모델/effort/권한의 소입력 대조와 분할 리뷰로 완료했다. [C3 정본](../../reviews/noon-regime-protection-replay-2026-09-20.md)의13행 핵심 인수·미실행 변형·advisory를 구분한다. 다음 구현은 C4 장전 text diagnosis·consumer closure이며, 이 절의 factory/전체 writer·공식 증거·장기 성능 장벽은 그대로다.
+
 선행 보호 재생 경계: 5분 writer가 실제 보호 DTO를 바꾸면 degraded 포지션의 기존 fill/quote 재생도 그 정책 입력을 알아야 한다. source ID·완료 version/digest·전후 정책·실제 보호 scope를 같은 commit에 기록하고, 실제 persist=False 전이로 재생한다. 누락/다른 source/잘못된 정책·과거 청산 결정은 계속 BLOCKED이며 회복 과정에서 경제/예약/R/outbox를 다시 적용하지 않는다. 현재 정책을 과거 체결 전체에 소급하는 복구는 금지다. 실제 큐 등록 실패→5분 정책→quote/추가 fill→repair/새 runtime 복원을 RED부터 확인한다. 5분 조각의 한정 승인은 이 재생 인수까지 완료했다는 뜻이 아니다.
 
 같은 runtime/commands/builder/authority/guard/stop/session/lease를 묶는다. 실제 run_trader 종료는 admission 닫기→producer 정지→receipt/result drain→broker/store→lease 순서로 변경한다. raw KIS 우회는 거부하지만 B/C의 정상 경로까지 연결하기 전 운영 enable하지 않는다. US tuple 계약을 무단 변경하지 않고 startupFalse 대조를 유지한다.

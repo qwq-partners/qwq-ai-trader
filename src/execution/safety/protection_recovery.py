@@ -285,19 +285,45 @@ def _require_intraday_completeness(state, events):
     """남아 있는 event만 믿지 않고 독립 정책 원장에서 누락/중복 전이를 찾는다."""
     anchor_version = events[0]['source_version']
     transitions = state.get('intraday_policy', {}).get('transitions', {})
-    expected = [(operation, row['version']) for operation, row in
+    expected = [('intraday_policy', operation, row['version']) for operation, row in
                 sorted(transitions.items(), key=lambda pair: pair[1]['version'])
                 if row['version'] > anchor_version and row['disposition'] == 'applied'
                 and row['before']['level'] != row['after']['level']]
+    symbol = events[0]['symbol']
+    expected.extend(('regime_application', operation, row['receipt']['committed_version'])
+        for operation, row in state.get('regime_policy', {}).get('applications', {}).items()
+        if row['receipt']['committed_version'] > anchor_version and row['calculation'] is not None
+        and symbol in row['calculation']['original_protection_before']['degraded']
+        and symbol in row['calculation']['changed_symbol_scopes'])
+    expected.sort(key=lambda item: item[2])
     actual = []
     for event in events:
         if event['kind'] == 'intraday_policy':
             fact = IntradayPolicyReplayInput.from_dict(event['policy_input'])
             if fact.source_version != event['source_version']:
                 raise ValueError('intraday_replay_source_crosslink_conflict')
-            actual.append((fact.operation_id, fact.source_version))
+            actual.append(('intraday_policy', fact.operation_id, fact.source_version))
+        elif event['kind'] == 'regime_application':
+            actual.append(('regime_application', event['application_id'], event['source_version']))
     if actual != expected:
         raise ValueError('intraday_replay_policy_history_incomplete')
+    if state.get('regime_policy', {}).get('schema') == 2:
+        # source 없는 sync 왕복도 삭제될 수 있으므로 남은 app 목록만 신뢰하지 않는다.
+        # 일반 게시가 아니라 실제 fill anchor 이후 복구에만 적용하는 증거 장벽이다.
+        from .regime_application import PROTECTION_READS
+        generations = state.get('policy_generations', {}).get('selectors', {})
+        by_version = {event['source_version']: event for event in events
+                      if event['kind'] in {'intraday_policy', 'regime_application'}}
+        for name in PROTECTION_READS:
+            registered = generations.get(name)
+            if registered is None:
+                continue
+            field = name.split('.')[1]
+            for change in registered['history'][1:]:
+                if change['version'] <= anchor_version: continue
+                event = by_version.get(change['version'])
+                if event is None or digest(change['value']) != digest(event['after']['protection'][field]):
+                    raise ValueError('unrecorded_protection_policy_generation')
 
 
 def _replay(state, symbol, *, state_version):
@@ -312,6 +338,8 @@ def _replay(state, symbol, *, state_version):
     from .intraday_owner import validate_intraday_policy
     validate_risk_sources(state, state_version)
     validate_intraday_policy(state, state_version)
+    from .regime_owner import validate_regime_policy
+    validate_regime_policy(state, state_version)
     events, previous, last_version, prior_scope = [], "", -1, None
     for event in history["events"]:
         raw = {key: value for key, value in event.items() if key != "digest"}
@@ -435,6 +463,12 @@ def _replay(state, symbol, *, state_version):
             if result.status != 'applied' or result.state != fact.after_policy:
                 raise ValueError('intraday_replay_recovered_transition_conflict')
             candidate = result.protection_dto
+        elif event['kind'] == 'regime_application':
+            if set(event) != {'kind', 'symbol', 'source_version', 'applied_at', 'before', 'after',
+                    'policy_code', 'previous', 'application_id', 'application_digest', 'digest'}:
+                raise ValueError('invalid_regime_replay_event')
+            from .regime_application import replay_application
+            candidate = replay_application(state, event, candidate, now)
         else:
             raise ValueError("unsupported_protection_input")
         _require_replay_policy(candidate, event['after']['protection'])

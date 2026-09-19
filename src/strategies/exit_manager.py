@@ -1449,6 +1449,10 @@ class ExitManager:
             logger.debug(f"[레짐파라미터] 레짐 변경 없음 ({regime}) → 스킵")
             return 0
 
+        return self._apply_regime_params_body(regime, params)
+
+    def _apply_regime_params_body(self, regime: str, params: dict) -> int:
+        """public guard 또는 검증된 원 전체 호출 뒤 공유하는 기존 본문."""
         prev_regime = self._current_regime
         self._current_regime = regime
 

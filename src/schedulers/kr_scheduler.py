@@ -44,6 +44,75 @@ from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
 
 
+class _RegimeClassifierLLM:
+    async def complete_json(self, **kwargs):
+        from ..utils.llm import get_llm_manager
+        return await get_llm_manager().complete_json(**kwargs)
+
+
+class _RegimeClassifierInputs:
+    """호출 stage에서만 읽는 scheduler 경계. 생성 시 live 값 캡처 없음."""
+    def __init__(self, scheduler):
+        self.scheduler = scheduler
+
+    @staticmethod
+    def _stage(stage, payload, source, *, event_id=None, received_at=None, market_as_of=None):
+        from ..execution.safety.regime_owner import RegimeStageInput
+        def serial(value):
+            if isinstance(value, (datetime, date)): return value.isoformat()
+            if type(value) is dict: return {key: serial(item) for key, item in value.items()}
+            if type(value) is list: return [serial(item) for item in value]
+            return value
+        return RegimeStageInput.from_dict({'schema': 1, 'stage': stage,
+            'outcome': 'missing' if payload is None else 'success', 'source': source,
+            'event_id': event_id, 'received_at': serial(received_at),
+            'market_as_of': serial(market_as_of), 'payload': serial(payload)})
+
+    async def read_daily_bias(self):
+        path = Path.home() / '.cache' / 'ai_trader' / 'daily_bias.json'
+        payload = {'data': json.loads(path.read_text(encoding='utf-8'))} if path.exists() else None
+        return self._stage('daily_bias', payload, 'daily_bias.json')
+
+    async def fetch_us_overnight(self):
+        from ..data.providers.us_market_data import get_us_market_data
+        value = await get_us_market_data().get_overnight_signal()
+        return self._stage('us_overnight', {'overnight': value}, 'us_market_data.get_overnight_signal')
+
+    def snapshot_screener(self):
+        batch = getattr(self.scheduler.bot, 'batch_analyzer', None)
+        screener = getattr(batch, '_screener', None)
+        payload = None
+        if screener is not None:
+            last = getattr(screener, '_kospi_last_bar_date', None)
+            if isinstance(last, datetime): last = last.date()
+            payload = {'closes': [float(item) for item in (getattr(screener, '_kospi_closes', None) or [])],
+                'last_bar_date': last, 'loaded_at': getattr(screener, '_kospi_loaded_at', None)}
+        return self._stage('screener', payload, 'batch_analyzer._screener._kospi_closes')
+
+    async def fetch_index_price(self, index_code):
+        provider = getattr(self.scheduler.bot, 'kis_market_data', None)
+        quote = await provider.fetch_index_price(index_code) if provider is not None else None
+        meta = quote.get('_observation', {}) if type(quote) is dict else {}
+        return self._stage('index' + index_code, {'quote': quote} if type(quote) is dict else None,
+            'kis_market_data.fetch_index_price', event_id=meta.get('observation_id'),
+            received_at=meta.get('received_at'), market_as_of=meta.get('market_as_of'))
+
+    def snapshot_application_context(self, *, captured_at):
+        from ..execution.safety.regime_owner import RegimeSyncContext
+        config = getattr(self.scheduler.bot, 'config', {})
+        kr = config.get('kr', {}) if isinstance(config, dict) else {}
+        enabled = kr.get('llm_ops', {}).get('regime_conflict_guard_enabled', True)
+        regime = None
+        if enabled:
+            screener = getattr(getattr(self.scheduler.bot, 'batch_analyzer', None), '_screener', None)
+            if screener is not None and hasattr(screener, 'get_market_regime'):
+                try: regime = screener.get_market_regime()
+                except Exception: pass
+        return RegimeSyncContext.from_dict({'schema': 1, 'captured_at': captured_at.isoformat(),
+            'regime_conflict_guard_enabled': enabled, 'screener': {'regime': regime,
+                'source': 'batch_analyzer._screener.get_market_regime', 'event_id': None, 'observed_at': None}})
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # LLM 레짐 분류기 입력 유틸 (2026-09-14 리뷰 요청1·3)
 # 원칙: 같은 시점의 유효한 자료로 판단하고, 모르는 것을 0·중립으로 포장하지 않는다.
@@ -1379,6 +1448,13 @@ class KRScheduler:
         Args:
             label: 프롬프트에 표시할 기준 시각 (예: "08:10", "12:00 (장중 업데이트)")
         """
+        runtime = getattr(getattr(self.bot, 'engine', None), '_execution_runtime', None)
+        if runtime is not None:
+            writer = getattr(runtime, '_regime_writer', None)
+            if writer is None:
+                from ..execution.safety.application import ApplicationBlocked
+                raise ApplicationBlocked('regime_owner_not_installed')
+            return await writer.classify(label, inputs_provider=_RegimeClassifierInputs(self), llm=_RegimeClassifierLLM())
         logger.info(f"[LLM레짐] ===== 시장 레짐 분류 시작 ({label}) =====")
         try:
             import json
@@ -1835,13 +1911,24 @@ class KRScheduler:
             logger.warning(f"[모닝브리프평가] 실행 실패 (무시): {e}")
         return None
 
-    async def _apply_regime_to_exit_manager(self) -> None:
+    async def _apply_regime_to_exit_manager(self, *, classifier_receipt=None) -> None:
         """llm_regime_today.json 에서 레짐을 읽어 ExitManager 파라미터를 실시간 갱신.
 
         _run_llm_regime_classifier() 완료 직후 + 30분 주기 동기화에서 호출.
         레짐이 바뀐 경우만 ExitManager.apply_regime_params() 가 실제 갱신 수행.
         KOSPI 기술 레짐과 LLM 레짐이 충돌 시 안전한 쪽으로 조정 (레짐 충돌 가드).
         """
+        runtime = getattr(getattr(self.bot, 'engine', None), '_execution_runtime', None)
+        if runtime is not None:
+            writer = getattr(runtime, '_regime_writer', None)
+            if writer is None:
+                from ..execution.safety.application import ApplicationBlocked
+                raise ApplicationBlocked('regime_owner_not_installed')
+            if classifier_receipt is not None:
+                return writer.classifier_application_receipt(classifier_receipt.operation_id)
+            from uuid import uuid4
+            context = _RegimeClassifierInputs(self).snapshot_application_context(captured_at=runtime._now())
+            return await writer.sync_protection('regime-sync:' + uuid4().hex, supplied_context=context)
         import json
         from pathlib import Path
         from ..strategies.exit_manager import REGIME_EXIT_PARAMS
@@ -7098,16 +7185,16 @@ JSON:
                         and morning_scan_enabled
                         and now.hour == 8 and 10 <= now.minute < 15
                         and last_regime_date != today):
-                    await self._run_llm_regime_classifier(label="08:10")
-                    await self._apply_regime_to_exit_manager()  # ★ 기존 포지션 파라미터 즉시 갱신
+                    _classifier_receipt = await self._run_llm_regime_classifier(label="08:10")
+                    await self._apply_regime_to_exit_manager(classifier_receipt=_classifier_receipt)
                     last_regime_date = today
 
                 # ── 12:00 장중 레짐 재분류 (오전 흐름 반영, 오후 전략 조정) ──
                 if (_llm_regime_enabled
                         and now.hour == 12 and 0 <= now.minute < 5
                         and last_regime_noon_date != today):
-                    await self._run_llm_regime_classifier(label="12:00 (장중 업데이트)")
-                    await self._apply_regime_to_exit_manager()  # ★ 기존 포지션 파라미터 즉시 갱신
+                    _classifier_receipt = await self._run_llm_regime_classifier(label="12:00 (장중 업데이트)")
+                    await self._apply_regime_to_exit_manager(classifier_receipt=_classifier_receipt)
                     last_regime_noon_date = today
                     logger.info("[LLM레짐] 장중 레짐 재분류 완료 — 오후 전략에 즉시 반영")
 

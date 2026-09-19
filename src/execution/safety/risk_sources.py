@@ -578,7 +578,8 @@ class RiskSourceCoordinator:
         if state.get('regime_policy') is None or status != 'accepted':
             return
         from .regime_owner import RegimeOwner, _vix_payload
-        if ticket.kind == 'index_trend':
+        if ticket.kind == 'index_trend' or (state['regime_policy'].get('schema') == 2
+                and ticket.kind in {'noon_index', 'llm_regime'}):
             writer = getattr(self.runtime, '_regime_writer', None)
             callback = self._completion_reducer
             if (writer is None or getattr(writer, 'runtime', None) is not self.runtime
@@ -588,6 +589,15 @@ class RiskSourceCoordinator:
                 raise _TypedCompletionRejected('regime_completion_writer_required')
             if ticket.admission_version <= state['regime_policy']['baseline']['baseline_version']:
                 raise _TypedCompletionRejected('regime_transition_baseline_scope_conflict')
+            if (ticket.kind != 'index_trend' and ticket.admission_version
+                    <= state['regime_policy']['horizon_baseline']['baseline_version']):
+                raise _TypedCompletionRejected('regime_transition_baseline_scope_conflict')
+            if ticket.kind == 'noon_index':
+                from .regime_horizon import validate_noon_envelope
+                try:
+                    validate_noon_envelope(envelope, ticket.business_day, self.runtime._now())
+                except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    raise _TypedCompletionRejected('invalid_regime_noon_input') from None
         elif ticket.kind == 'vix_regime':
             try:
                 _vix_payload({'terminal': {'envelope': envelope,
@@ -595,6 +605,17 @@ class RiskSourceCoordinator:
             except ValueError as exc:
                 # This local input validator alone defines ordinary bad typed input.
                 raise _TypedCompletionRejected(str(exc)) from None
+        elif state['regime_policy'].get('schema') == 2 and ticket.kind == 'intraday_5m':
+            from .intraday_owner import IntradayRiskOwner
+            writer = getattr(self.runtime, '_intraday_writer', None)
+            callback = self._completion_reducer
+            if (writer is None or getattr(writer, 'runtime', None) is not self.runtime
+                    or getattr(writer, 'sources', None) is not self
+                    or getattr(callback, '__self__', None) is not writer
+                    or getattr(callback, '__func__', None) is not IntradayRiskOwner._reduce):
+                raise _TypedCompletionRejected('regime_completion_writer_required')
+            if ticket.admission_version <= state['regime_policy']['horizon_baseline']['baseline_version']:
+                raise _TypedCompletionRejected('regime_transition_baseline_scope_conflict')
 
     async def complete(self, ticket, outcome, payload=None, *, source='', source_event_id='',
                        received_at=None, market_as_of=None, classified_at=None, recovery_until=None,
@@ -658,6 +679,16 @@ class RiskSourceCoordinator:
                         if status == 'accepted' and ticket.kind == 'index_trend':
                             _validate_regime_append(candidate, before_regime, ticket.operation_id,
                                                     runtime.owner.version + 1)
+                        elif (status == 'accepted' and ticket.kind == 'intraday_5m'
+                                and before_regime.get('schema') == 2):
+                            from .regime_horizon import validate_intraday_horizon_append
+                            validate_intraday_horizon_append(candidate, before_regime,
+                                ticket.operation_id, runtime.owner.version + 1)
+                        elif (status == 'accepted' and ticket.kind in {'noon_index', 'llm_regime'}
+                                and before_regime.get('schema') == 2):
+                            from .regime_horizon import validate_source_append
+                            validate_source_append(candidate, before_regime, ticket.operation_id,
+                                runtime.owner.version + 1)
                         elif canonical(candidate.get('regime_policy')) != canonical(before_regime):
                             raise ValueError('completion_reducer_changed_regime_policy')
                         if status == 'accepted' and ticket.kind == 'vix_regime':

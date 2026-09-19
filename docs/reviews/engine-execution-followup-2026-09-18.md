@@ -270,6 +270,8 @@ Do/See: 아직 실행 전이다. 충족/미충족과 운영 전환의 증거 조
 
 ### 실제 인수 매핑 (bdda0e9 이후 후속 증거 누적)
 
+09-20 C3 한정 완료: 정오 위험 cap 선행 commit→JSON LLM→full 보호 application/typed replay 및 실제 scheduler 즉시/주기 분기를 같은 owner에 연결했다. 네이티브 첫 리뷰3건·경합/결측/이력 누락과 Opus A의 원시각·명시 결측 문제를 보완했고 네이티브/Opus A 재리뷰·B 모두 한정 승인이다. 신규79 포함 최종 UTC4350passed244.32초/KST4350passed239.88초·각 기존xfail2/경고4·격리0이다. Opus 첫 전체 입력900초 상한은 미승인 이력으로 보존하고 같은 모델·권한·effort의 소입력 대조 후 분할 검토로 완료했다. [C3 Plan–Do–See](noon-regime-protection-replay-2026-09-20.md)에13범주의 실제 확인 범위·미실행 조합·비차단 advisory를 기록했다. 전체5단계 완료가 아니며 C4·qualification/최종 sizing·effect/gateway·나머지 writer/factory·전체 C/F/G/R·공식 증거·전이력 성능은 잔여다.
+
 아래는 부모가 시험 함수와 실제 호출점을 대조한 **미완 범위 목록**이다. 전체 통합 승인이나 독립 broad 리뷰가 아니다. `tests/` 아래 파일명을 사용하며 뒤 단계에서 같은 표를 갱신한다.
 
 | ID | 현재 구체 근거 | 남은 전체 인수 |

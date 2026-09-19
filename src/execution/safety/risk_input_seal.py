@@ -20,6 +20,7 @@ from .protection_recovery import digest
 
 ROOT = 'risk_input_seals'
 _POLICIES = {
+    'regime_policy.horizon': ('regime_policy', 'horizon'),
     'regime_policy.trend_state': ('regime_policy', 'trend_state'),
     'intraday_policy.current': ('intraday_policy', 'current'),
     'protection.config': ('protection', 'config'),

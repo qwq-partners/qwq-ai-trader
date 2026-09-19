@@ -100,6 +100,7 @@
 - 09-20 개발용 Opus 실행기는 timeout/진행 분리·nonzero 실패·자식 정리·모델/result 검증 후 독립 Astra/xhigh 한정 승인됐다. 당시 전체 UTC/KST4021통과·실제 smoke2.72초이며 이후 엔진 C2a는 위 별도 한정 승인을 받았다. 실행 완료와 코드 승인·운영 승인을 계속 구분한다. 사용법 `docs/operations/agent-routing.md`, 원인/검증 이력 `docs/reviews/opus-review-runner-2026-09-20.md`.
 - 실제2분 C2 후속: owner/caller·schema3 captured reads와 등록/취소·typed source/baseline 경계를 독립 재현 후 수정·네이티브/Opus 한정 승인했다. 최종 UTC/KST4271passed·기존xfail2/경고4·격리0. 정본 `docs/reviews/two-minute-regime-owner-2026-09-20.md`. 다음은 명시 horizon·정오/JSON LLM/보호 적용·typed replay/repair13개 실큐 인수다. 전이력 성능·전체 writer·factory/운영은 미완이며2분 보호 적용0·기존 임계값을 유지한다.
 - 명시 runtime 설치 후에는 legacy SIGNAL/ORDER/FILL와 직접 체결/가격 writer를 거부한다. 큐 적재는 적용 성공이 아니며, caller 취소·계산 실패를 pending 해제로 해석하지 않는다. 미설치 운영 경로의 기존 동작이 바뀌었다고 보고하지 않는다.
+- C3 후속 한정 승인: 정오 cap/JSON LLM/full 보호 application·typed replay와 실제 즉시/주기 caller를 단일 owner에 연결했다. 독립3건·경합/복구 이력과 Opus A의 원시각/명시 결측을 보완했고 네이티브/Opus A 재리뷰·B 모두 한정 승인이다. 신규79 포함 최종UTC4350passed244.32초/KST4350passed239.88초·각 기존xfail2/경고4·격리0. 첫 전체 입력900초 timeout은 미승인 이력으로 남기고, 모델/effort/권한 변경 없이 소입력 대조·분할 리뷰로 완료했다. 정본 `docs/reviews/noon-regime-protection-replay-2026-09-20.md`, 고정계약 `docs/superpowers/specs/2026-09-20-regime-noon-owner-contract.md`. C4 장전 text diagnosis·consumer closure와 전체writer/factory/공식증거/성능은 미완이며 운영 설치 승인이 아니다.
 - KIS 거래·잔고, Toss 별도 관측, 면제·위험 수치·설정 유지. 운영 배포·재시작/주문/설정 변경은 하지 않는다. 모든 writer·HTTP/별도 수동 CLI 통합, 실제 일일 초기화 writer, 최초 인계·기존 분석 원장 projection·전체 인수는 잔여다. 비용은 기존 요율의 누적 추정 비용 차분으로 기록하며 실제 징수액과 구분한다. 정본: `docs/reviews/engine-execution-followup-2026-09-18.md`.
 
 ---

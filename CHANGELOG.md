@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — 정오·JSON LLM·보호 application/replay (C3 한정 승인·운영 미설치)
+
+- 명시 horizon 기준선과 기존 단일 owner로 정오 cap 선행 commit, JSON LLM 단회 호출, 분류 완료·전체 보호 DTO 적용·typed replay의 원자 저장을 연결했다. 즉시 후속은 receipt 읽기, 독립30분 sync는 새로운 요청과 실제 읽은 정책/현재 classifier 권한을 사용한다. JSON은 권한이 아닌 역순 방지 projection이다.
+- 보호 복구는 원 전체 ExitManager의 force=False guard와 full before/after를 검증한다. 실제5분 위험 전이·분류 적용·시세의 합집합 순서를 재생하고 경제/수량/초기R/예약/outbox를 반복하지 않는다. 복구 anchor 이후 설명되지 않는 보호 정책 generation은 repair에서만 차단한다.
+- 최초 독립 리뷰의 거부된 지수 재소비(P1), 위조 noon 시장시각 저장(P1), cross-account 기준선 복원(P2)과 늦은 정오 capture·malformed US 종결·sync ABA 공동삭제를 보완했다. 원 여섯 반례/대조 양TZ 통과, 네이티브 한정 재리뷰 승인. optional OHLC 결측·정상1초 지연은 허용하는 대조를 보존했다.
+- Opus A의 원 수신 시각 오표시·명시 결측의 raw 부활·미국 지수 시각 혼합/생성을 실제 재현 후 classifier 한 파일로 수정했다. key 부재의 legacy fallback·유효0·optional OHLC를 보존하고 새 TTL/수치 변경은 없다. 추가19를 포함한 신규79, 최종 전체 UTC4350passed/기존xfail2/경고4(244.32초), KST4350/2/4(239.88초), 각각 exit0·격리0이다. 문법·비밀패턴·diff 검사 통과.
+- Opus 첫 전체 입력900초 timeout은 미승인으로 보존했다. 같은 모델/effort/권한의 소입력 대조 후 A/B 분할 검토를 완료했고, A 수정 후 네이티브/Opus 재리뷰와 B는 모두 한정 승인이다. namespace 등 비차단 advisory와 미실행 조합은 보고서에 남겼다.
+- 고정 인터페이스와13범주의 실제 근거/미실행 조합은 `docs/reviews/noon-regime-protection-replay-2026-09-20.md`에 기록했다. 전체5단계·C4·나머지 writer·factory·전체 C/F/G/R·장기 성능 및 운영 승인이 아니다. main/운영·실API/주문/설정 변경0, KIS 거래/잔고·Toss 관측 전용 및 기존 미지원 장벽 유지.
+
 ## 2026-09-20 — 실제 2분 레짐 owner (독립 한정 승인·운영 미설치)
 
 - 명시 supplied baseline과 동일 owner로 실제 2분 scheduler를 연결했다. 두 지수의 원 입력 검증·기존 limiter/호출 수·조건부 시계와 산식을 보존하며, 결측/실패는 이전 상태를 보존하고 성공 하트비트를 남기지 않는다. trend/sidecar/engine copy를 같은 commit에 기록하고 installed raw writer를 차단한다. 이 경로의 청산 파라미터 적용·보호 replay는0이다.

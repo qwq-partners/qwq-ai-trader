@@ -132,7 +132,8 @@ class IntradayRiskOwner:
         batch._intraday_updated_at = policy.updated_at
         batch._intraday_recovery_until = policy.recovery_until
         adapter = getattr(self.runtime.engine, '_regime_adapter', None)
-        if adapter is not None and horizons is not None:
+        if (adapter is not None and horizons is not None
+                and getattr(self.runtime, '_regime_writer', None) is None):
             # 이 세 필드만 owner projection. trend/expert/LLM writer는 별도 이행 대상.
             # legacy horizon의 as_of는 분류 시각이며 시장시각으로 사용하지 않는다.
             adapter._horizons = horizons
@@ -142,7 +143,9 @@ class IntradayRiskOwner:
         if result.observation_status != 'success':
             return result
         policy = IntradayPolicyState.from_dict(self.runtime.owner.state['intraday_policy']['current'])
-        return replace(result, level=policy.level, recovery_until=policy.recovery_until)
+        horizon = self.runtime.owner.state.get('regime_policy', {}).get('horizon')
+        return replace(result, level=horizon['level'] if horizon else policy.level,
+                       recovery_until=policy.recovery_until)
 
     def _reduce(self, state, ticket, envelope, version):
         if ticket.kind != 'intraday_5m':
@@ -201,6 +204,9 @@ class IntradayRiskOwner:
         root['transitions'][ticket.operation_id] = {
             'before': before.to_dict(), 'after': after.to_dict(), 'version': version,
             'outcome_digest': digest(envelope), 'disposition': disposition, 'effects': effects}
+        if state.get('regime_policy', {}).get('schema') == 2:
+            from .regime_horizon import fold_horizon
+            state['regime_policy']['horizon'] = fold_horizon(state)
         capture_intraday_transition(checkpoint_before, state, ticket=ticket, envelope=envelope,
                                     version=version, now=self.runtime._now())
         return state

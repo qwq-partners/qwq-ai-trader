@@ -18,6 +18,8 @@ from .intraday_owner import validate_intraday_policy
 from .policy_generations import canonical, versioned_fact
 from .protection_recovery import digest
 from .risk_sources import RiskSourceCoordinator, _SourceAuthority
+from .regime_horizon import (RegimeHorizonBaseline, RegimeStageInput, RegimeSyncContext,
+                             RegimeApplicationReceipt)
 
 POLICY_READS = ('regime_policy.trend_state', 'entry_policy_effects.sidecar_active', 'intraday_policy.current')
 _REGIMES = {'bull', 'bear', 'sideways', 'neutral'}
@@ -299,11 +301,12 @@ def _validate_regime_append(state, before, operation, version):
 def validate_regime_policy(state, version):
     root = state.get('regime_policy')
     if root is None: return None
-    _keys(root, ('schema', 'baseline', 'trend_state', 'transitions', 'engine_projection'))
+    _keys(root, ('schema', 'baseline', 'trend_state', 'transitions', 'engine_projection') +
+        (('horizon_baseline', 'horizon', 'noon_caps', 'applications') if root.get('schema') == 2 else ()))
     _keys(root['baseline'], ('supplied', 'digest', 'baseline_version'))
     baseline = root['baseline']; supplied = RegimeBaseline.from_dict(baseline['supplied']).to_dict()
     _positive(baseline['baseline_version'])
-    if (type(root['schema']) is not int or root['schema'] != 1
+    if (type(root['schema']) is not int or root['schema'] not in (1, 2)
             or baseline['baseline_version'] > version or baseline['digest'] != digest(supplied)
             or type(root['transitions']) is not dict):
         raise ValueError('invalid_regime_baseline')
@@ -327,6 +330,9 @@ def validate_regime_policy(state, version):
         raise ValueError('regime_projection_conflict')
     if type(state.get('entry_policy_effects', {}).get('sidecar_active')) is not bool:
         raise ValueError('invalid_regime_sidecar_projection')
+    if root['schema'] == 2:
+        from .regime_horizon import validate_horizon
+        validate_horizon(state, version)
     return deepcopy(root)
 
 
@@ -341,6 +347,70 @@ def require_current_trend(state, day):
 
 
 class RegimeOwner:
+    @staticmethod
+    async def register_horizon_baseline(runtime, baseline, *, expected_version):
+        if (type(baseline) is not RegimeHorizonBaseline or type(expected_version) is not int
+                or expected_version < 0):
+            raise ValueError('invalid_regime_horizon_registration')
+        supplied = RegimeHorizonBaseline.from_dict(baseline.to_dict()).to_dict()
+        def check(state, *, admitted=False):
+            def reject(reason, *, blocked=False):
+                if admitted: raise _BaselineAdmissionRejected(reason, blocked=blocked)
+                raise (ApplicationBlocked if blocked else ValueError)(reason)
+            if admitted:
+                if runtime.day_admission_closed: reject('day_transition_admission_closed', blocked=True)
+            else:
+                runtime._require_day_admission()
+            root = state.get('regime_policy')
+            if root is None: reject('regime_baseline_required', blocked=True)
+            if root.get('horizon_baseline') is not None:
+                if canonical(root['horizon_baseline']['supplied']) != canonical(supplied):
+                    reject('regime_horizon_baseline_conflict')
+                return root['horizon_baseline']['baseline_version']
+            now = runtime._now()
+            times = (supplied['evidence']['observed_at'], supplied['horizon']['classified_at'])
+            if any(_time(t) > now for t in times if t is not None): reject('future_regime_baseline')
+            if (supplied['account_scope'] != runtime.account_scope or scope_reason(state, runtime.account_scope)
+                    or supplied['business_day'] != now.date().isoformat()
+                    or supplied['generation'] != runtime._day_generation or supplied['fence_id'] != runtime._day_fence_id):
+                reject('regime_baseline_context_conflict')
+            if runtime.owner.version != expected_version: reject('regime_baseline_version_conflict')
+            if (supplied['regime_baseline_version'] != root['baseline']['baseline_version']
+                    or supplied['intraday']['baseline_version'] != state['intraday_policy']['baseline_version']
+                    or canonical(supplied['intraday']['current']) != canonical(state['intraday_policy']['current'])):
+                reject('regime_baseline_prerequisite_conflict')
+            return None
+        runtime.owner._require_ready()
+        prior = check(runtime.owner.state)
+        if prior is not None: return prior
+        with runtime.command_scope() as token:
+            rejection = None
+            async def execute():
+                nonlocal rejection
+                def reduce(state):
+                    if check(state, admitted=True) is not None: return state
+                    version = runtime.owner.version + 1
+                    root = state['regime_policy']
+                    root.update(schema=2, horizon_baseline={'supplied': supplied,
+                        'digest': digest(supplied), 'baseline_version': version}, noon_caps={}, applications={})
+                    from .regime_horizon import fold_horizon
+                    root['horizon'] = fold_horizon(state)
+                    validate_regime_policy(state, version)
+                    return state
+                try:
+                    await runtime.owner.mutate('regime-horizon-baseline:' + digest(supplied), reduce)
+                except _BaselineAdmissionRejected as exc:
+                    rejection = exc
+                return True
+            await asyncio.shield(runtime.start_command_result(token, execute))
+            try:
+                if rejection is not None: raise rejection
+                result = check(runtime.owner.state, admitted=True)
+                if result is None: raise ValueError('regime_horizon_baseline_result_missing')
+                return result
+            except _BaselineAdmissionRejected as exc:
+                raise (ApplicationBlocked if exc.blocked else ValueError)(str(exc)) from None
+
     @staticmethod
     async def register_baseline(runtime, baseline, *, expected_version):
         if type(baseline) is not RegimeBaseline or type(expected_version) is not int or expected_version < 0:
@@ -421,6 +491,7 @@ class RegimeOwner:
         self.sources = RiskSourceCoordinator(runtime, completion_reducer=self._reduce)
         self._vix_fetcher = vix_fetcher
         self._vix_refresh_task = None
+        self._classifier_projection_lock = asyncio.Lock()
         self.publish(runtime.owner.state, root)
         runtime._regime_writer = self
         adapter._regime_owner = sidecar._regime_owner = self
@@ -429,6 +500,7 @@ class RegimeOwner:
         if root is None: raise ValueError('installed_regime_baseline_missing')
         trend = root['trend_state']; value = trend['market_trend']
         intraday = state['intraday_policy']['current']
+        horizon = root.get('horizon')
         selected = self._select_vix(state)
         return {
             'mid': trend['mid_regime'], 'data': deepcopy(trend['regime_data']),
@@ -440,9 +512,11 @@ class RegimeOwner:
             'market_trend': {**{key: val for key, val in value.items() if key not in ('present', 'classified_at')},
                              'ts': _time(value['classified_at'])},
             'sidecar': state['entry_policy_effects']['sidecar_active'],
-            'horizons': replace(self.adapter._horizons, intraday_risk=intraday['level'],
-                intraday_change_pct=intraday['kospi_pct'],
-                intraday_risk_as_of=None if intraday['updated_at'] is None else _time(intraday['updated_at'])),
+            'horizons': replace(self.adapter._horizons,
+                intraday_risk=horizon['level'] if horizon else intraday['level'],
+                intraday_change_pct=horizon['change_pct'] if horizon else intraday['kospi_pct'],
+                intraday_risk_as_of=(None if horizon['classified_at'] is None else _time(horizon['classified_at']))
+                    if horizon else (None if intraday['updated_at'] is None else _time(intraday['updated_at']))),
             'vix': selected[1], 'vix_when': selected[2],
             'vix_state': 'normal' if selected[1] is None else self.adapter._classify_vix(selected[1]),
             'engine_regime': root['engine_projection']['regime']}
@@ -472,6 +546,9 @@ class RegimeOwner:
             'committed_version': row['terminal']['receipt']['committed_version']}, value, when
 
     def _reduce(self, state, ticket, envelope, version):
+        if state['regime_policy']['schema'] == 2 and ticket.kind in {'noon_index', 'llm_regime'}:
+            from .regime_commands import reduce_source
+            return reduce_source(self, state, ticket, envelope, version)
         if ticket.kind != 'index_trend': return state
         payload = deepcopy(envelope['payload']); root = state['regime_policy']
         if (canonical(root['trend_state']) != canonical(payload['before'])
@@ -488,6 +565,27 @@ class RegimeOwner:
             seal_digest=seal['seal_digest'], rule_digest=_RULE)
         root['engine_projection'] = {'regime': payload['engine_regime'], 'operation_id': ticket.operation_id, 'version': version}
         return state
+
+    async def classify(self, label, *, inputs_provider, llm):
+        from .regime_commands import classify
+        return await classify(self, label, inputs_provider, llm)
+
+    def classifier_application_receipt(self, classifier_operation_id):
+        row = self.runtime.owner.state['regime_policy'].get('applications', {}).get(
+            'classifier:' + classifier_operation_id)
+        return None if row is None else RegimeApplicationReceipt(**row['receipt'])
+
+    async def sync_protection(self, operation_id, *, supplied_context):
+        from .regime_commands import sync_protection
+        return await sync_protection(self, operation_id, supplied_context)
+
+    async def _write_classifier_projection(self, operation_id):
+        from .regime_commands import write_projection
+        return await write_projection(self, operation_id)
+
+    def _replace_classifier_projection(self, payload):
+        from .regime_commands import replace_projection
+        return replace_projection(payload)
 
     async def refresh_trend(self, provider, *, expert_orchestrator=None):
         runtime = self.runtime
