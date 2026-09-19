@@ -35,7 +35,7 @@
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
-- [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — broker 조회·경제/보호/일자/R·요청/예약·lease/종료·명시5분 정책 재생·수량 산술 분리, KST/UTC3830시험·구간별 독립 한정 승인. qualification/최종 sizing·effect 전달·나머지 writer/callback/설치·전체 인수·공식 증거는 잔여
+- [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — broker·경제/보호/R·요청/예약·lease/종료·5분 정책 재생·산술 분리·입력 seal 기반, KST/UTC3933시험·구간별 승인 범위 명시. 정책 generation/실제2분·정오·LLM·qualification/gateway·나머지 writer/설치·전체 인수·공식 증거는 잔여
 - [KR writer 이행 세분 계획](superpowers/plans/2026-09-18-engine-writer-migration.md) — 계좌 lease/종료 drain→원시각·정책 publisher→기존 sizing/qualification·실제 큐→SAFE/USER/IPC·fill·sync/day; 운영 설치 미완
 - [KR 실행 안전성 구현 중간 리뷰](reviews/engine-execution-safety-2026-09-17.md) — 기반·Task4b 실제 경제/보호/큐 검증과 운영 writer 전체 이행 미완을 구분; 공식 KIS 계약/잔여 인수
 - [toss-pr-integration-2026-09-17.md](reviews/toss-pr-integration-2026-09-17.md) — #70 병합·중복 #68 정합화, 배포/활성화 승인과 실제 실행 상태 분리
@@ -58,6 +58,7 @@
 - [토스 승인 기반 관측 런타임 설계](superpowers/specs/2026-09-16-toss-runtime-shadow-design.md) — #67 보존·기본 OFF·별도 승인·추가 KIS 조회0·지속 원장/worker 설계, 구현/실관측 승인과 구분
 - [external-apis.md](integrations/external-apis.md) — KIS, 토스 Open API(별도 제한 관측 ON·거래 소비자 미연결), pykrx, yfinance, Finnhub, Finviz, LLM(OpenAI/Gemini/Perplexity), Telegram, DART
 - [KIS 실행 증거 계약 조사](integrations/kis-execution-contract-2026-09-17.md) — 공식 legacy 현행 TR·연속조회·고정 출처와 최초 인계/취소 최종성의 미입증 범위
+- [KIS 부족 증거 인수 목록](integrations/kis-execution-evidence-request-2026-09-18.md) — 공식 확인 질문·승인된 비식별 자료 범위·최초 인계/취소/정정 인수; 실 API/시험 주문 요청이나 증거 확보 완료가 아님
 - [토스 2차 데이터 소스 설계](superpowers/plans/2026-09-15-toss-securities-fallback.md) — T12 단계별 승인·KIS 돈 경로 유지·공식 필드 계약·향후 구현 인수 명세
 - [토스 Phase 1 오프라인 구현 계획](superpowers/plans/2026-09-16-toss-phase1-offline.md) — 보안 토큰·조회 경계·정규화·합성 비교 4작업, 이번 범위와 미완 실자료 단계 분리
 

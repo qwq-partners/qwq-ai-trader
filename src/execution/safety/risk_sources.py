@@ -19,7 +19,9 @@ from .guards import RiskSnapshot
 from .protection_recovery import digest
 
 _KINDS = {'intraday_5m': 'intraday', 'noon_index': 'intraday',
-          'index_trend': 'index_trend', 'llm_regime': 'llm_regime'}
+          'index_trend': 'index_trend', 'llm_regime': 'llm_regime',
+          'vix_regime': 'vix_regime', 'expert_regime': 'expert_regime',
+          'llm_morning_diagnosis': 'llm_morning_diagnosis'}
 _LANES = frozenset(_KINDS.values())
 _OUTCOMES = frozenset({'success', 'missing', 'failed', 'cancelled'})
 _LEVELS = frozenset({'normal', 'caution', 'crash', 'severe'})
@@ -102,10 +104,13 @@ def _dependencies(value):
     return dict(sorted(result.items()))
 
 
-def _request(operation_id, kind, dependencies, scope, business_day, generation, fence_id):
+def _request(operation_id, kind, dependencies, scope, business_day, generation, fence_id, require_seal=False):
     if type(kind) is not str or kind not in _KINDS:
         raise ValueError('unsupported_risk_source_kind')
-    return {'operation_id': text(operation_id), 'kind': kind,
+    if type(require_seal) is not bool:
+        raise ValueError('invalid_input_seal_requirement')
+    return {**({'require_seal': True} if require_seal else {}),
+            'operation_id': text(operation_id), 'kind': kind,
             'dependencies': _dependencies(dependencies), 'account_scope': text(scope),
             'business_day': day(business_day), 'generation': _integer(generation),
             'fence_id': None if fence_id is None else text(fence_id)}
@@ -163,26 +168,32 @@ def _current(root, lane):
     return root['records'].get(operation_id) if operation_id else None
 
 
-def _dependency_current(root, lane, version, business_day, *, cutoff=None, visited=frozenset()):
+def _dependency_current(root, lane, version, business_day, *, cutoff=None, visited=frozenset(), seals=None):
     if lane in visited:
         return False
     candidates = [row for row in root['records'].values() if row['ticket']['lane'] == lane
                   and (cutoff is None or row['ticket']['admission_version'] < cutoff)]
     row = max(candidates, key=lambda value: value['ticket']['sequence']) if candidates else None
+    seal = (seals or {}).get(row['ticket']['operation_id']) if row else None
+    seal_conflict = seal and seal['conflict'] and (
+        cutoff is None or seal['conflict']['version'] < cutoff)
     return bool(row and row['ticket']['business_day'] == business_day
+                and not seal_conflict
                 and (not row['conflict'] or (cutoff is not None and
                      row['conflict']['receipt']['committed_version'] >= cutoff))
                 and row['terminal'] and row['terminal']['receipt']['status'] == 'accepted'
                 and row['terminal']['receipt']['committed_version'] == version
                 and (cutoff is None or version < cutoff)
                 and all(_dependency_current(root, dep_lane, dep_version, business_day,
-                        cutoff=cutoff, visited=visited | {lane})
+                        cutoff=cutoff, visited=visited | {lane}, seals=seals)
                         for dep_lane, dep_version in row['ticket']['dependencies']))
 
 
 def validate_risk_sources(state, version):
     """게시 전 모든 source DTO와 과거 의존/최신 lane 연결을 검증한다."""
     if 'risk_sources' not in state:
+        from .risk_input_seal import validate_risk_input_seals
+        validate_risk_input_seals(state, version)
         return
     root = state['risk_sources']
     _keys(root, ('schema', 'account_scope', 'market', 'next_sequence', 'latest', 'records'))
@@ -198,7 +209,10 @@ def validate_risk_sources(state, version):
         _keys(row, ('request', 'ticket', 'terminal', 'conflict'))
         request, raw = row['request'], row['ticket']
         _keys(request, ('operation_id', 'kind', 'dependencies', 'account_scope',
-                        'business_day', 'generation', 'fence_id'))
+                        'business_day', 'generation', 'fence_id',
+                        *(('require_seal',) if 'require_seal' in request else ())))
+        if 'require_seal' in request and request['require_seal'] is not True:
+            raise ValueError('noncanonical_input_seal_requirement')
         if _request(**{('scope' if key == 'account_scope' else key): val
                        for key, val in request.items()}) != request:
             raise ValueError('noncanonical_risk_source_request')
@@ -235,7 +249,8 @@ def validate_risk_sources(state, version):
                     or receipt.outcome_digest != digest(terminal['envelope'])
                     or (receipt.status, receipt.reason) not in {
                         ('accepted', ''), ('missing', ''), ('failed', ''), ('cancelled', ''),
-                        ('stale', 'superseded'), ('stale', 'day_or_generation'), ('stale', 'dependency')}):
+                        ('stale', 'superseded'), ('stale', 'day_or_generation'), ('stale', 'dependency'),
+                        ('stale', 'input_seal')}):
                 raise ValueError('risk_source_terminal_crosslink_conflict')
             if receipt.status != 'stale' and receipt.status != (
                     'accepted' if terminal['envelope']['outcome'] == 'success' else terminal['envelope']['outcome']):
@@ -292,11 +307,15 @@ def validate_risk_sources(state, version):
                     or dependency['ticket']['business_day'] != row['ticket']['business_day']):
                 raise ValueError('risk_source_dependency_crosslink_conflict')
             if not _dependency_current(root, lane, dep_version, ticket['business_day'],
-                                       cutoff=ticket['admission_version']):
+                                       cutoff=ticket['admission_version'],
+                                       seals=state.get('risk_input_seals', {}).get('records', {})):
                 raise ValueError('risk_source_historical_dependency_conflict')
             if terminal and terminal['receipt']['status'] != 'stale':
-                if not _dependency_current(root, lane, dep_version, ticket['business_day'], cutoff=terminal_version):
+                if not _dependency_current(root, lane, dep_version, ticket['business_day'], cutoff=terminal_version,
+                                           seals=state.get('risk_input_seals', {}).get('records', {})):
                     raise ValueError('risk_source_accepted_dependency_conflict')
+    from .risk_input_seal import validate_risk_input_seals
+    validate_risk_input_seals(state, version)
 
 
 class RiskSourceCoordinator:
@@ -319,18 +338,20 @@ class RiskSourceCoordinator:
             raise ApplicationBlocked('risk_source_scope_conflict')
         return runtime._now().date().isoformat(), runtime._day_generation, runtime._day_fence_id
 
-    async def begin(self, operation_id, kind, *, dependencies=None):
+    async def begin(self, operation_id, kind, *, dependencies=None, require_seal=False):
+        """Trusted new callers opt in; the requirement is durable and ticket-digest bound."""
         runtime = self.runtime
         state = runtime.owner.state
         business_day, generation, fence_id = self._context(state)
         request = _request(operation_id, kind, {} if dependencies is None else dependencies, runtime.account_scope,
-                           business_day, generation, fence_id)
+                           business_day, generation, fence_id, require_seal)
         request_digest = digest(request)
         root = state.get('risk_sources', {'latest': {}, 'records': {}})
         existing = root['records'].get(operation_id)
         if existing is not None and existing['ticket']['request_digest'] != request_digest:
             raise ValueError('risk_source_operation_conflict')
-        if existing is None and any(not _dependency_current(root, lane, ver, business_day)
+        if existing is None and any(not _dependency_current(root, lane, ver, business_day,
+                                    seals=state.get('risk_input_seals', {}).get('records', {}))
                                     for lane, ver in request['dependencies'].items()):
             raise ValueError('risk_source_dependency_not_current')
         with runtime.command_scope() as token:
@@ -348,7 +369,8 @@ class RiskSourceCoordinator:
                             if registry['records'][operation_id]['ticket']['request_digest'] != request_digest:
                                 raise ValueError('risk_source_operation_conflict')
                             return candidate
-                        if any(not _dependency_current(registry, lane, ver, business_day)
+                        if any(not _dependency_current(registry, lane, ver, business_day,
+                               seals=candidate.get('risk_input_seals', {}).get('records', {}))
                                for lane, ver in request['dependencies'].items()):
                             raise ValueError('risk_source_dependency_not_current')
                         ticket = RefreshTicket(operation_id, runtime.account_scope, business_day,
@@ -370,6 +392,14 @@ class RiskSourceCoordinator:
             if self._context(runtime.owner.state) != (business_day, generation, fence_id):
                 raise ApplicationBlocked('risk_source_day_changed')
             return _ticket(runtime.owner.state['risk_sources']['records'][operation_id])
+
+    async def seal(self, ticket, *, source_lanes=(), retained_sources=(), policy_reads=(),
+                   inputs, scope_token=None):
+        """Seal actual owner reads; trusted callers remain responsible for selecting all inputs."""
+        from .risk_input_seal import seal_input
+        return await seal_input(self, ticket, source_lanes=source_lanes,
+            retained_sources=retained_sources, policy_reads=policy_reads, inputs=inputs,
+            scope_token=scope_token)
 
     async def complete(self, ticket, outcome, payload=None, *, source='', source_event_id='',
                        received_at=None, market_as_of=None, classified_at=None, recovery_until=None,
@@ -410,15 +440,23 @@ class RiskSourceCoordinator:
                         status, reason = 'stale', 'day_or_generation'
                     elif registry['latest'].get(ticket.lane) != ticket.operation_id:
                         status, reason = 'stale', 'superseded'
-                    elif any(not _dependency_current(registry, lane, ver, ticket.business_day)
+                    elif any(not _dependency_current(registry, lane, ver, ticket.business_day,
+                             seals=candidate.get('risk_input_seals', {}).get('records', {}))
                              for lane, ver in ticket.dependencies):
                         status, reason = 'stale', 'dependency'
+                    if status == 'accepted':
+                        from .risk_input_seal import input_seal_current
+                        if not input_seal_current(candidate, ticket):
+                            status, reason = 'stale', 'input_seal'
                     if status == 'accepted' and self._completion_reducer is not None:
                         before_sources = deepcopy(registry)
+                        before_seals = deepcopy(candidate.get('risk_input_seals'))
                         candidate = runtime.owner._require_sync(self._completion_reducer(
                             candidate, ticket, deepcopy(envelope), runtime.owner.version + 1))
                         if type(candidate) is not dict or candidate.get('risk_sources') != before_sources:
                             raise ValueError('completion_reducer_changed_risk_sources')
+                        if candidate.get('risk_input_seals') != before_seals:
+                            raise ValueError('completion_reducer_changed_input_seals')
                         registry = candidate['risk_sources']
                         current = registry['records'][ticket.operation_id]
                     receipt = RefreshReceipt(ticket.operation_id, ticket.sequence, status, reason,
@@ -468,13 +506,17 @@ class RiskSourceCoordinator:
             return unknown('missing')
         if row['conflict']:
             return unknown('conflict')
+        seal = state.get('risk_input_seals', {}).get('records', {}).get(row['ticket']['operation_id'])
+        if seal and seal['conflict']:
+            return unknown('conflict')
         terminal = row['terminal']
         if terminal is None:
             return unknown('pending')
         receipt, envelope = terminal['receipt'], terminal['envelope']
         if receipt['status'] != 'accepted':
             return unknown(receipt['status'])
-        if (any(not _dependency_current(root, lane, ver, row['ticket']['business_day'])
+        if (any(not _dependency_current(root, lane, ver, row['ticket']['business_day'],
+                                       seals=state.get('risk_input_seals', {}).get('records', {}))
                 for lane, ver in row['ticket']['dependencies'])
                 or envelope['market_as_of'] is None or envelope['payload'].get('level') not in _LEVELS):
             return unknown('missing')

@@ -19,6 +19,8 @@ from typing import Dict, Optional
 import aiohttp
 from loguru import logger
 
+from ..utils import regime_transition
+
 
 # VIX 캐시 설정
 _VIX_CACHE_PATH = Path.home() / ".cache" / "ai_trader" / "vix_cache.json"
@@ -327,72 +329,46 @@ class MarketRegimeAdapter:
         """
         # VIX 캐시 로드 (TTL 만료 시 백그라운드 refresh 예약)
         self._load_vix_cache_or_refresh()
-        kospi_change = kospi_data.get("change_pct", 0)
-        kosdaq_change = kosdaq_data.get("change_pct", 0)
-        avg_change = (kospi_change + kosdaq_change) / 2
-
-        kospi_vs_open = 0
-        if kospi_data.get("open", 0) > 0 and kospi_data.get("price", 0) > 0:
-            kospi_vs_open = (kospi_data["price"] - kospi_data["open"]) / kospi_data["open"] * 100
-        kosdaq_vs_open = 0
-        if kosdaq_data.get("open", 0) > 0 and kosdaq_data.get("price", 0) > 0:
-            kosdaq_vs_open = (kosdaq_data["price"] - kosdaq_data["open"]) / kosdaq_data["open"] * 100
-        avg_vs_open = (kospi_vs_open + kosdaq_vs_open) / 2
-
+        facts = regime_transition.calculate_mid_regime_facts(kospi_data, kosdaq_data)
         prev_regime = self._current_regime
-
-        # VIX complacency 상태 시 bull/sideways 전환 확인 지연 단축 (1800초 → 600초)
-        confirm_delay_sec = 600 if self._vix_state == "complacency" else 1800
-
-        # 장초 1시간(09:00~10:00) neutral 고정 — 초기 모멘텀으로 bull/bear 오판 방지
         now_hm = datetime.now().strftime("%H:%M")
-        if "09:00" <= now_hm < "10:00":
-            self._current_regime = "neutral"
-        elif avg_change > 1.0 and avg_vs_open > 0.3:
-            # 체제 전환 지연: bull/bear 전환 시 기본 30분 (complacency 시 10분)
-            if prev_regime != "bull":
-                if not hasattr(self, '_pending_regime') or self._pending_regime != "bull":
-                    self._pending_regime = "bull"
-                    self._pending_since = datetime.now()
-                    self._current_regime = prev_regime  # 유지
-                elif (datetime.now() - self._pending_since).total_seconds() >= confirm_delay_sec:
-                    self._current_regime = "bull"
-                    self._pending_regime = None
-                else:
-                    self._current_regime = prev_regime  # 확인 시간 미만 → 유지
-            else:
-                self._current_regime = "bull"
-                self._pending_regime = None
-        elif avg_change < -1.0 and avg_vs_open < -0.3:
-            # bear 전환은 안전 우선 — VIX complacency에도 기본 30분 유지
-            if prev_regime != "bear":
-                if not hasattr(self, '_pending_regime') or self._pending_regime != "bear":
-                    self._pending_regime = "bear"
-                    self._pending_since = datetime.now()
-                    self._current_regime = prev_regime
-                elif (datetime.now() - self._pending_since).total_seconds() >= 1800:
-                    self._current_regime = "bear"
-                    self._pending_regime = None
-                else:
-                    self._current_regime = prev_regime
-            else:
-                self._current_regime = "bear"
-                self._pending_regime = None
-        elif abs(avg_change) <= 1.0:
-            self._current_regime = "sideways"
-            self._pending_regime = None
+        state = regime_transition.MidRegimeState(
+            self._current_regime,
+            hasattr(self, "_pending_regime"),
+            getattr(self, "_pending_regime", None),
+            getattr(self, "_pending_since", None),
+        )
+        plan = regime_transition.plan_mid_regime_transition(
+            state, facts, now_hm, self._vix_state, self._vix_value,
+        )
+        if plan.clock_stage == "start":
+            transition = regime_transition.complete_mid_regime_transition(plan, datetime.now())
+        elif plan.clock_stage == "confirm":
+            transition = regime_transition.complete_mid_regime_transition(plan, datetime.now())
         else:
-            self._current_regime = "sideways"
-            self._pending_regime = None
+            transition = regime_transition.complete_mid_regime_transition(plan)
+        self._current_regime = transition.state.current_regime
+        if transition.state.pending_present:
+            self._pending_regime = transition.state.pending_regime
+        if plan.clock_stage == "start":
+            self._pending_since = transition.state.pending_since
 
-        # VIX 기반 조정 (Fear 시 bull 강등)
-        self._apply_vix_adjustment(prev_regime)
+        if transition.fear_demoted:
+            logger.info(
+                f"[체제] VIX={self._vix_value:.1f} (fear), "
+                "기준 체제 bull → 조정 sideways"
+            )
+        elif self._vix_value is not None and prev_regime != self._current_regime:
+            logger.info(
+                f"[체제] VIX={self._vix_value:.1f} ({self._vix_state}), "
+                f"기준 체제 {self._current_regime} → 조정 {self._current_regime}"
+            )
 
         self._regime_data = {
-            "kospi_change": kospi_change,
-            "kosdaq_change": kosdaq_change,
-            "avg_change": avg_change,
-            "avg_vs_open": avg_vs_open,
+            "kospi_change": transition.kospi_change,
+            "kosdaq_change": transition.kosdaq_change,
+            "avg_change": transition.avg_change,
+            "avg_vs_open": transition.avg_vs_open,
             "vix": self._vix_value,
             "vix_state": self._vix_state,
         }
@@ -403,7 +379,7 @@ class MarketRegimeAdapter:
             logger.info(
                 f"[시장체제] {prev_regime} → {self._current_regime}: "
                 f"{params['description']} "
-                f"(전일비 {avg_change:+.1f}%, 시가비 {avg_vs_open:+.1f}%)"
+                f"(전일비 {transition.avg_change:+.1f}%, 시가비 {transition.avg_vs_open:+.1f}%)"
             )
 
     @property
@@ -449,46 +425,33 @@ class MarketRegimeAdapter:
             return
 
         prev = self._current_regime
-
-        # P1-6 (2026-05-29 리뷰): pending_regime 메커니즘과 통합
-        # 즉시 변경 대신 _expert_pending에 등록하고 확인 시간(기본 10분) 후 적용.
-        # 페이크 BEAR 변동에 의한 잦은 체제 변경 방지.
-        proposed: Optional[str] = None
-        reason: str = ""
-        if bear_consensus and self._current_regime in ("bull", "sideways", "neutral"):
-            proposed = "bear"
-            reason = f"전문가 BEAR 합의 (score={score})"
-        elif score >= 20 and self._current_regime in ("sideways", "neutral"):
-            proposed = "bull"
-            reason = f"전문가 BULL 강한 합의 (score={score})"
-        elif score <= -20 and self._current_regime in ("bull", "sideways"):
-            proposed = "sideways"
-            reason = f"전문가 BEAR (score={score})"
-        elif score >= 10 and not bear_consensus and self._current_regime == "bear":
-            proposed = "sideways"
-            reason = f"전문가 BEAR 합의 해소 (score={score})"
-
-        EXPERT_CONFIRM_SEC = 600  # 10분 — VIX의 confirm_delay와 통일
-        if proposed is None:
-            # 변경 없음 → pending 클리어
-            if hasattr(self, "_expert_pending"):
-                self._expert_pending = None
-        elif (
-            not hasattr(self, "_expert_pending")
-            or self._expert_pending != proposed
-        ):
-            # 새 제안 → pending 등록만, 즉시 변경 안 함
-            self._expert_pending = proposed
-            self._expert_pending_since = datetime.now()
+        state = regime_transition.ExpertState(
+            self._current_regime,
+            hasattr(self, "_expert_pending"),
+            getattr(self, "_expert_pending", None),
+            getattr(self, "_expert_pending_since", None),
+        )
+        plan = regime_transition.plan_expert_transition(state, score, bear_consensus)
+        if plan.clock_stage == "start":
+            transition = regime_transition.complete_expert_transition(plan, datetime.now())
+        elif plan.clock_stage == "confirm":
+            transition = regime_transition.complete_expert_transition(plan, datetime.now())
+        else:
+            transition = regime_transition.complete_expert_transition(plan)
+        self._current_regime = transition.state.current_regime
+        if transition.state.pending_present:
+            self._expert_pending = transition.state.pending_regime
+        if plan.clock_stage == "start":
+            self._expert_pending_since = transition.state.pending_since
+        if plan.clock_stage == "start":
             logger.info(
-                f"[시장체제] 전문가 제안: {prev} → {proposed} ({reason}, 확인 대기 10분)"
+                f"[시장체제] 전문가 제안: {prev} → {transition.proposed} "
+                f"({transition.reason}, 확인 대기 10분)"
             )
-        elif (
-            datetime.now() - self._expert_pending_since
-        ).total_seconds() >= EXPERT_CONFIRM_SEC:
-            self._current_regime = proposed
-            logger.info(f"[시장체제] 전문가 보정 확정: {prev} → {proposed} ({reason})")
-            self._expert_pending = None
+        elif transition.confirmed:
+            logger.info(
+                f"[시장체제] 전문가 보정 확정: {prev} → {transition.proposed} ({transition.reason})"
+            )
 
         # 디버그 흔적
         self._regime_data["expert_score"] = score

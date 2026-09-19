@@ -59,6 +59,8 @@ TTTC8001R의 '3개월 이내'는 같은 예제에서 **월 단위**로 설명한
 
 현재 미입증 범위는 `unsupported_finality`/startup 차단으로 유지한다. [단계별 실행 원장](../reviews/engine-execution-followup-2026-09-18.md)에 구현/인수와 분리해 기록한다.
 
+후속 자료 요청/비식별화/인수 조건은 [외부 증거 인수 목록](kis-execution-evidence-request-2026-09-18.md)에 분리했다. 이는 추가 자료를 확보한 결과나 API 호출/실주문 지시가 아니며 현재 미입증 판정을 바꾸지 않는다.
+
 ### 기존 및 추가 파일 지문
 
 - legacy Sample01: `d7bc6da85f4b086de3063f110d6e426fbc5751bc340b45e533ccdf9a5d55e575`

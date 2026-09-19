@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-19 — feat: 레짐 계산 보존·두 지수 검증·입력 seal 기반 (Task10A2c 부분, 운영 미설치)
+
+- 기존 sidecar/중기 레짐/전문가 산식을 순수 함수로 나누고 실제 legacy caller 세 곳을 연결했다. 개장 neutral 구간 pending 유실 회귀를 수정했다. 원래 숫자·조건부 시계·VIX/전문가 호출·로그 순서는 독립 차등 대조로 확인했다. 이는 owned writer 이행 완료가 아니다.
+- 두 지수의 원 metadata·OHLC/등락률·원 receipt/ID를 검증하고 detached 입력으로 고정한다. 결측을0이나 정상 회복으로 승인하지 않으며 원 시장 시각은 미입증 None이다. 추가 GET/TTL/가격 clipping은 없다. 계산/입력7파일 독립 Astra/xhigh 한정 승인, 각 TZ 관련216+독립532+원특성화5 통과·격리0.
+- durable source 요청의 `require_seal`, owner-issued 원입력/명시 read 증거·중복/충돌·완료 전 stale 검사·역사적 복원 교차검사를 추가했다. VIX/전문가/장전 diagnosis lane을 분리하고 기존 mapping은 보존한다. 작성자 관련157개와 별도 Astra/xhigh 관련87+독립19개를 양 TZ로 통과해 **seal 기반3파일 한정 승인**이다. 정책 selector의 A→B→A 미탐지와 source read의 완료 후 지속 무효화 미지원은 실제 caller 전에 보강해야 한다. 성공 receipt는 거래 허가가 아니다.
+- 동결 후보 전체 **KST3933 passed/2 known xfailed/4 warnings(193.81초), UTC3933/2/4(193.42초)**·격리0. 새파일 stage 후 문법/비밀패턴 검사 통과. 신규103시험과 ignored 독립/실패 재현은 합산하지 않는다. 근거·한정 승인·남은 RED는 후속 보고서 참조.
+- 실제2분 루프에서 live/owned sidecar 불일치·고가 결측·한쪽 지수 실패의 회복/성공 오판3 RED를 추가 보존했다. 기존 정오/LLM RED3와 함께 실제 caller 이행 대상이다. 부족한 KIS 공식/승인 응답 증거의 인수 목록도 정리했으나 새 증거 확보는 아니다. main/운영/실API/주문/설정/Toss 변경 없음; `trading_ready=False`, 모든 MODIFY 미지원 유지.
+
 ## 2026-09-18 — feat: 실제 정책 재생·수량 계산 단계 분리 (Task10A2b6/B1, 운영 미설치)
 
 - 실제 5분 owner의 정책 전이를 원 source/완료 version·전후 보호 scope와 같은 commit에 기록하고, degraded 보호 복구에서 당시 순서로 재생한다. 복구 중 경제·예약·R·outbox는 재적용하지 않는다.

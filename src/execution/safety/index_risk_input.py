@@ -22,6 +22,7 @@ _OBSERVATION_KEYS = frozenset({
     "schema_version", "source", "source_tr", "index_code", "observation_id",
     "received_at", "market_as_of", "fields",
 })
+_TREND_FIELDS = ("price", "open", "high", "low", "change_pct")
 
 
 @dataclass(frozen=True)
@@ -112,12 +113,102 @@ def _missing() -> IndexRiskInput:
     )
 
 
-def _observation(value: Any) -> tuple[datetime, float | None, str] | None:
+@dataclass(frozen=True)
+class IndexTrendInput:
+    """추세 계산용 detached 값. 생성 자체가 source 성공/시장 신선도 권한은 아니다.
+
+    legacy 추세의 한쪽 지수 누락→0 fallback은 이 인계 경계에서 사용하지 않는다.
+    두 지수의 결합/순서/현재 source 검사는 실제 owner caller의 별도 책임이다.
+    """
+
+    index_code: str
+    outcome: str
+    values: tuple[tuple[str, float], ...]
+    source: str
+    source_event_id: str
+    received_at: datetime | None
+    market_as_of: None
+    observation_json: str
+
+    def __post_init__(self) -> None:
+        if (type(self.index_code) is not str or self.index_code not in {"0001", "1001"}
+                or type(self.outcome) is not str or self.outcome not in {"success", "missing"}
+                or type(self.values) is not tuple or self.market_as_of is not None
+                or type(self.observation_json) is not str):
+            raise ValueError("invalid index trend DTO")
+        if self.outcome == "missing":
+            if (self.values != () or self.source != "missing" or self.source_event_id != ""
+                    or self.received_at is not None or self.observation_json != "{}"):
+                raise ValueError("missing index trend must not carry facts")
+            return
+        if (len(self.values) != len(_TREND_FIELDS) or any(
+                type(pair) is not tuple or len(pair) != 2 or pair[0] != name
+                or type(pair[1]) is not float or not math.isfinite(pair[1])
+                or (name != "change_pct" and pair[1] <= 0)
+                for name, pair in zip(_TREND_FIELDS, self.values))):
+            raise ValueError("invalid index trend values")
+        try:
+            observation = json.loads(self.observation_json)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid index trend provenance") from exc
+        parsed = _observation(observation, index_code=self.index_code)
+        if (parsed is None or parsed[2] != self.observation_json
+                or self.received_at != parsed[0]
+                or self.source != "kis:FHPUP02100000:index" + self.index_code
+                or self.source_event_id != observation["observation_id"]
+                or any(observation["fields"][name]["status"] != "valid"
+                       or observation["fields"][name]["value"] != value
+                       for name, value in self.values)):
+            raise ValueError("conflicting index trend provenance")
+
+
+def normalize_index_trend(
+    quote: Any, *, index_code: str, now: datetime, business_day: str,
+) -> IndexTrendInput:
+    """기존 두 지수 응답만 검증한다. 조회/시계/추가 TTL/레짐 판정은 하지 않는다.
+
+    OHLC는 양수여야 산식의 fallback 분기로 결측이 숨지 않는다. 등락률 0은
+    원 필드가 valid인 경우 그대로 유효하다. 사용하지 않는 전일 대비 금액의
+    결측은 허용한다. 모든 required 값은 producer metadata와 정확히 일치해야 한다.
+    """
+    if type(index_code) is not str or index_code not in {"0001", "1001"}:
+        raise ValueError("unsupported index trend contract")
+    _aware(now)
+    expected_day = _iso_day(business_day)
+    missing = IndexTrendInput(index_code, "missing", (), "missing", "", None, None, "{}")
+    if type(quote) is not dict:
+        return missing
+    observation = quote.get("_observation")
+    parsed = _observation(observation, index_code=index_code)
+    if parsed is None:
+        return missing
+    received_at, _, encoded = parsed
+    if received_at > now:
+        return missing
+    try:
+        if received_at.astimezone(_KST).date() != expected_day:
+            return missing
+    except (OverflowError, ValueError):
+        return missing
+    values = []
+    for name in _TREND_FIELDS:
+        field = observation["fields"][name]
+        value = _finite_number(quote.get(name))
+        if (field["status"] != "valid" or value is None or value != field["value"]
+                or (name != "change_pct" and value <= 0)):
+            return missing
+        values.append((name, value))
+    return IndexTrendInput(index_code, "success", tuple(values),
+        "kis:FHPUP02100000:index" + index_code, observation["observation_id"],
+        received_at, None, encoded)
+
+
+def _observation(value: Any, *, index_code: str = "0001") -> tuple[datetime, float | None, str] | None:
     if type(value) is not dict or set(value) != _OBSERVATION_KEYS:
         return None
     if (type(value["schema_version"]) is not int or value["schema_version"] != 1
             or value["source"] != "kis" or value["source_tr"] != "FHPUP02100000"
-            or value["index_code"] != "0001" or value["market_as_of"] is not None):
+            or value["index_code"] != index_code or value["market_as_of"] is not None):
         return None
     if not _uuid(value["observation_id"]):
         return None

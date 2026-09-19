@@ -196,6 +196,32 @@ See: 별도 독립 재리뷰는 집중35·불변 원본278·추가19를 KST/UTC 
 
 최종 P1 수정 후보의 source/test13파일 patch(기준 `7cafd74`) SHA `3e7014010a30c25d7efcd016ba83ad729b016f97eb7461f43e6fb8102206c58c`. 부모가 수정/경계시험 동결 뒤 전체 **KST/UTC 각각3830passed/2 known xfailed/4 warnings(190.32~190.35초)**, 격리0을 새로 확인했다. 신규128개는 앞선113+anchor5+경계10이며 ignored 독립 probe를 합산하지 않는다. 새 파일까지 stage한 뒤 Python 문법/비밀패턴 검사와 `git diff --check`도 통과했다. 두 범위의 한정 승인이며 단계3 전체/단계5 broad/운영 승인은 아니다.
 
+### Task10A2c — 계산 보존·입력 증거 기반 (09-19, 실제 writer 연결 전)
+
+Plan: 2분 추세·정오 JSON LLM·장전 text LLM을 서로 다른 producer로 유지한다. 2분 루프에 기존에 없던 ExitManager 적용을 추가하지 않는다. 기존 수치/조건부 시계·VIX/전문가 조회 순서는 보존하고, 실제 호출점의 결측/owner 우회를 별도 RED로 고정한다. source별 최신 시도와 입력 증거는 전역 execution version 비교와 구분한다.
+
+Do — 계산/입력:
+
+- Terra/high가 sidecar 추세·중기 pending/VIX·전문가 pending의 순수 계산을 추출하고 실제 legacy 메서드 세 곳을 연결했다. 부모 대조에서 발견한 09:00–10:00 neutral의 pending 유실 회귀는 실제 RED 후 수정했다. 기존 미설치 경로의 한쪽 지수 0 fallback은 특성화 대상으로 보존하며 owned 입력의 승인 규칙으로 쓰지 않는다.
+- 부모가 두 지수의 원 metadata·OHLC/등락률·응답 ID·receipt를 검증하는 frozen 입력을 구현했다. 결측/비유한/불일치/미래·전일 receipt는 missing이고, 원 등락률 0은 valid면 유지한다. 시장 시각은 None이며 TTL·추가 조회·가격 clipping은 넣지 않았다. 신규 API 부재51 RED와 DTO 직접 생성의 가변/충돌 허용5 RED를 구분하고 최종 관련133개를 양 TZ로 확인했다.
+- 별도 Astra/xhigh가 동결7파일을 한정 승인했다. 직접 관련216·새 독립532·원본 특성화5, **각 TZ753개·격리0**. 독립532 중425는 `4f8f098` 실제 메서드 AST와 정확 float/속성 유무/시계·공급자 호출·로그·예외의 차등 대조이며107은 원자료/receipt/DTO 경계다. 실제 writer/source authority·source seal·전체 인수 승인으로 확대하지 않는다. 독립 probe SHA `f7dc5368dc7e9d27b59c22c15396bb197a6cf45e0a941a87d5a70f89198396a0`.
+
+Do — input seal 기반:
+
+- Astra/high가 기존 source begin 요청에 opt-in `require_seal`을 내구적으로 결합하고 owner가 읽은 lane 상태/원 accepted 보존 사실/정책 값과 detached 입력을 고정했다. 새 VIX/전문가/장전 diagnosis lane은 독립이며 기존 noon/intraday mapping은 유지한다. 다른 facade가 required를 제거하거나 완료 hook이 seal root를 바꾸지 못한다. 완료/복원에서 source·seal 충돌과 역사적 admission/terminal 시점을 대조한다.
+- 반복 seal은 멱등, 다른 본문은 원본을 보존한 conflict다. success 전에 관련 read가 변하면 hook 전 stale, missing/failed/cancelled는 seal 없이도 종료 가능하다. fill/ACK 같은 무관한 commit은 판단을 굶기지 않는다. 전일 VIX 유지도 원 날짜와 현재 실패 lane을 함께 보존하며 새 성공/신선도로 바꾸지 않는다.
+- 작성자 직접 시험은 신규41+기존116 = **157개 UTC18.32초/KST18.50초·격리0**. 새 구현의 conflict 의존 누락·hook 증거 삭제·잘못된 root/version을 실제 RED로 고정했다. API 부재/receipt 필드 부재와 fixture 작성 오류는 기존 제품 결함 재현으로 세지 않는다. 독립 seal 리뷰와 부모 전체 검증은 아래 최종 판정에 별도로 기록한다.
+- **미해결 한계:** 정책 selector는 값/존재/digest만 비교하여 A→B→A를 놓친다(실제 owner 대조). `updated_at`은 generation이 아니다. 실제 caller를 연결하기 전 정책별 owner generation과 값의 동시 고정이 필요하다. 이 기반의 성공 receipt만으로 version-safe 소비 권한이나 거래 허가를 만들지 않는다. trusted caller의 입력 선택 완전성과 임의 동시 checkpoint 변조 인증도 제공하지 않는다.
+- seal의 `source_lanes`는 **완료 전** 명시 read 비교다. 완료 뒤에도 계속 추적하는 기존 ticket의 hard `dependencies`와 같지 않으며, 후속 source 변경/첫-await pending을 최종 소비자에게 전파하는 권한까지 제공하지 않는다. 실제 caller 연결은 정책 generation뿐 아니라 이 지속 무효화/현재 snapshot 경계도 인수해야 한다.
+
+Do — 실제 경로의 다음 RED:
+
+부모가 실제 `run_market_trend_monitor` 1회 반복→KIS adapter→sidecar→SQLite runtime→owned 진입 snapshot을 실행했다. 정상 양지수에서 live sidecar=False/owned=True 불일치, 고가 결측과 KOSDAQ 실패에도 live 회복/하트비트 성공을 재현했다. GET/limiter 각각2회, owner version 변화0, SQL와 owner는 동일, `trading_ready=False`다. 원본 `task-10a2c-trend-writer-probe.py` SHA `4d3c9bb80ffc60ae42ca671705b28aef9327e42162d91f280108724550572e07`, UTC3 RED/0.94초·KST3 RED/3.16초·격리0. 정상 흐름을 owner로 옮길 때 별도 인수로 닫으며 기존 정오/LLM RED3도 미해결이다. ignored 실패 probe는 passing suite에 숨겨 합산하거나 xfail로 완료 처리하지 않는다.
+
+See: 계산/입력7파일과 input seal 기반3파일은 각각 독립 한정 승인됐다. seal 리뷰어는 관련87+새19개를 양 TZ로 직접 통과·격리0으로 확인했고, 위 완료 후 지속 권한 한계도 hard dependency 유/무의 실제 pending→commit→cold restore로 대조했다. 계산 리뷰 보고서 SHA `09aebdc881e2b2999f352dea3172656c1040f798df1496159d299fc3cd75c1b6`, seal 보고서 SHA `704f050abf9c343315992072873dfe69ebb92512c7b11286956a12834df1221a`, seal probe SHA `b3e178b162e1ac2a84e6a63c9304bf8a66fcc1d9dae2d3a8a147601358bac6c4`다. 전체 C2/단계3·broad 승인과 구분한다.
+
+부모 전체 검증은 **KST3933passed/2 known xfailed/4 warnings(193.81초), UTC3933/2/4(193.42초)**·격리0이다. 신규103개(계산/legacy parity6·지수56·seal41)이며 ignored 독립/RED는 합산하지 않는다. source/test10파일 patch(기준 `4f8f098`) SHA `3b47ab86a676f396cd71f1f57b9561a120afb0ad47d29e6924ce9752d4b3e1a3`, 새파일 stage 후 문법/비밀패턴·diff check도 통과했다. 경고는 기존pykrx1+fork3이다. 2분 RED 원본의 주석 정리 후 UTC 재실행도3 RED/1.11초·격리0이며 위 probe hash와 동일하다. 하위 에이전트 한도 오류는 미실행으로 구분했고 제한 해제 시각 이후 재개했다. 다음은 정책별 변경 이력/지속 소비 권한→실제2분 owner→정오/LLM 보호 replay다. main/운영/실API/주문/설정/Toss 변경은 없다.
+
 ## 단계4 — 공식 계약 증거
 
 Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와 잔고–체결 cutoff를 확인한다. 최신 TR로 자동 치환하지 않는다.
@@ -203,6 +229,8 @@ Plan: 공개 KIS 공식 자료에서 현행 TR의 취소/정정 체인 의미와
 Do: Astra/high가 기존 고정 revision `b4e6249714418aa57833d1cbbbced39cbcc5b125`의 legacy·Postman·현재 예제·체결 통보를 재확인했다. 실 API/계좌/자격은 사용하지 않았다. [계약 정본](../integrations/kis-execution-contract-2026-09-17.md) 참조.
 
 See: 요청/페이지 계약 외에, 취소/정정 원행과 자식행의 누적 중복 처리·최종수량 정의, 공통 snapshot/cutoff·지연 상한은 확인 자료 범위에서 **미입증**이다. API에 기능이 없다고 단정하지 않는다. 공식 포털 인증 후 상세 명세는 확인하지 못했다. ACK·빈 목록 반복·웹소켓 연결만으로 startup/최종성을 열지 않는다. 자동 최초 인계/미지원 체인 승격은 완료가 아니다.
+
+09-19 후속으로 [부족 증거 인수 목록](../integrations/kis-execution-evidence-request-2026-09-18.md)을 정리했다. 공식 답변에 필요한 질문·승인된 기존 비식별 자료·저장 금지 비밀정보·실제 lifecycle/큐/예약 인수 순서를 명시했다. 새 외부 증거 확보나 시험용 실주문/API 호출은 하지 않았다. 모든 MODIFY 미지원과 최초 인계 시작 차단은 그대로다.
 
 ## 단계5 — 마지막 통합 리뷰
 

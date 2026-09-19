@@ -84,6 +84,34 @@ See: 위 원본 RED 보존, 순차 정상 경로·지연/역순·다른 source l
 
 다음 계산 분리: sidecar 추세·중기 pending/VIX·전문가 pending을 각 명시 상태/입력의 순수 함수로 나누고 legacy caller도 같은 함수를 소비해 산식을 이중 정의하지 않는다. 실제 VIX loader-before-index 순서와 전문가가 `_last_update`를 바꾸지 않는 계약을 유지한다. 외부 source 인계층은 별도로 aware KST/valid·missing/원시각을 검증한다. expert/VIX는 독립 도착하므로 각각 versioned source가 필요하며, 같은 intraday lane으로 섞거나 파일 projection을 재승인 근거로 쓰지 않는다. 계산 helper의 통과는 실제 owner/소비자 이행 완료가 아니다.
 
+### 10A2c 실행 분해 (4f8f098 이후)
+
+Plan: 읽기 전용 owner 검토에서 실제2분은 ExitManager를 적용하지 않으며 장전 text diagnosis는 JSON classifier와 다른 writer임을 확인했다. 2분에 보호 적용을 추가하거나 두 LLM을 한 lane으로 취소시키지 않는다. source 조회 성공만으로 optional VIX/전문가 결측을 정상 승인하지 않는다. 검토 보고서 SHA `cbe4d94830fd1f083567ae4b2cec24b097b229579e6301f80c48d2bde0273a68`는 설계 조언이며 구현 승인/실행 결과가 아니다.
+
+- C1(Terra/high): 실제 adapter/sidecar 호출을 공유 pure 산식으로 연결한다. 기존 로그·조건부 시계/공급자 호출·pending 속성 유무·유효 수치·예외 순서를 원 함수와 비교한다. legacy 누락 fallback의 특성화는 owned 입력 승인으로 쓰지 않는다.
+- C2 기반(Astra/high): 기존 accepted-only dependencies를 약화하지 않고 **owner가 발행하는 immutable input seal**을 추가한다. source begin은 첫 I/O 전, seal은 입력 수집 후/LLM 전의 최신 lane·일자·generation을 확인하고 딱 한 번 저장한다. declared read의 absent/pending/failed/accepted/conflict와 정확한 원 payload·정책 subroot를 분리해 고정한다. completion은 관련 read가 바뀌면 stale이며 fill/ACK 같은 무관한 execution version 변화만으로는 실패시키지 않는다. 동일 seal 재시도는 멱등, 본문 충돌은 실패 폐쇄이며 덮어쓰지 않는다. 새로운 VIX/expert/morning lane은 독립 latest authority다. seal은 시장시각·startup·source 성공 또는 거래 허가를 증명하지 않는다.
+- C2 실제 연결(부모 후속): 외부 조회는 lock 밖에서 기존 횟수/순서로 수행하고 current source와 seal을 same-owner 정책/sidecar context로 소비한다. 유효 기준선 없는 live neutral/normal은 인계하지 않는다. 계산/source 모듈 통과와 실제2분 정상 caller 이행을 구분한다.
+- C3: 정오 cap/JSON classifier/08:10·12:00·30분 실제 보호 적용은 policy/replay 같은 commit까지 한 단위로 이행한다. 5분 전이·cooldown을 정오에 재실행하지 않는다. 파일은 version 확인 후 쓰는 projection이고 owned consumer는 다시 권한으로 읽지 않는다. typed regime replay와 intraday 전이의 정확한 합집합 순서를 대조한다.
+- C4: 별도 morning diagnosis의 once/day·원 window·optional 조회·open expectation/중기 상태를 이행한 뒤 consumer closure를 감사한다. 실제 원본 RED3과 추가 역순/누락/취소/SQL/재시작 시험이 통과하기 전 writer 이행 완료로 표시하지 않는다.
+
+Do/See: C1 산식 연결과 C2 seal 기반은 파일 소유를 분리해 병렬 구현·각각 독립 검토한다. 합성 입력은 외부 계약 증명이 아니다. 실제 전체 C/F/G/R·독립 broad는 모든 caller 연결 뒤 별도이며 현재 운영/정정/미입증 최초 인계 장벽은 유지한다.
+
+09-19 추가 실제 caller RED: `run_market_trend_monitor` 전체 1회 반복을 실제 KIS 시세 어댑터·sidecar·SQLite runtime·`build_owned_snapshot`으로 실행했다(외부 HTTP/시계/루프 대기만 격리). 정상 양지수에서도 live sidecar는 False로 바뀌지만 owned 진입 snapshot은 True, 고가 결측/한쪽 지수 실패에도 live sidecar를 해제하고 하트비트 성공을 기록했다. 두 GET/limiter 그대로이며 owner version 변화0이다. 원본 probe `4d3c9bb80ffc60ae42ca671705b28aef9327e42162d91f280108724550572e07`, UTC3 RED/0.94초·KST3 RED/3.16초·격리0. 이 원본은 현재 우회 경로의 증거로 보존하며 C2 실제 이행 후의 정상 인수는 별도 시험으로 작성한다.
+
+C2 기반의 정책 selector는 **현재 값/존재/digest만** 비교한다. 실제 owner A→B→A가 다시 accepted되는 한계를 시험으로 확인했으므로, 이 기반을 곧바로 version-safe LLM/레짐 권한으로 연결하면 안 된다. 다음 연결 전 정책별 owner generation과 원값을 함께 고정하고, 관련 정책 변경만 stale로 만드는 경계를 RED부터 닫아야 한다. 전역 execution version 비교로 fill/ACK까지 거부하거나 receipt/updated_at을 generation으로 대신하지 않는다. 이전 accepted VIX를 유지할 때도 원 날짜와 현재 실패 lane을 따로 보존하고 새 성공/신선도로 재표시하지 않는다.
+
+seal의 source read는 완료 시점까지의 직접 비교이며 완료 뒤 `snapshot`의 지속적 dependency 권한은 아니다. 실제 소비자가 accepted 결과를 재사용할 때의 최신 read·새 source의 첫-await pending·실패 전파를 별도 계약/시험으로 닫는다. 기존 hard dependencies의 의미를 약화하거나 optional 실패를 무조건 거래 실패/정상으로 치환하지 않는다.
+
+### C2a 다음 실행 경계 — 정책별 변경 이력 (09-19 설계 검토, 미구현)
+
+독립 읽기 전용 검토(`85dfd6749b63b2f4990334bba6e220343cecfd676c5968db4e6f30af07c9c873`)를 바탕으로 전체5개 selector에는 **명시 opt-in한 owner commit finalizer와 selector별 변경 이력**을 우선 설계한다. intraday 두 경로만 소비한다면 기존 검증된 transition의 실제 last-change version을 재사용할 수 있지만, config/current_regime/sidecar까지 읽는 caller의 의존성을 숨겨 이 방식으로 축소하지 않는다. 설계 조언이며 구현/검증 승인은 아니다.
+
+- pure finalizer는 기존 reducer/체결 write-set 검사 뒤, SQL encode/commit 전에 한 곳에서 현재 값/존재가 바뀐 selector만 실제 다음 commit version으로 기록한다. reducer가 이력 root를 직접 삽입/삭제/수정하면 거부한다. `runtime._publish`나 restore에서 이력을 생성하지 않는다. 비관련 fill/ACK/예약 섹터 변화·no-op은 generation을 올리지 않는다.
+- 최초 명시 등록은 그때부터 변경을 추적한다는 뜻일 뿐이다. 현재 neutral/normal·absence를 유효 정책 기준선이나 source 성공으로 승인하지 않는다. generation-required selector가 미등록이면 차단하며 과거 seal을 소급 승격하지 않는다.
+- 단순 최신 counter만 저장하면 과거 accepted seal의 ABA를 복원 검증할 수 없다. selector별 등록/변경 fact의 version·presence·value·digest를 보존하고 seal version S/완료 C **엄격히 이전(<)** 이력으로 대조한다. 완료 hook이 같은 C에서 바꾼 정책은 자신의 완료 전 조건에 포함하지 않는다.
+- 내부 source reducer의 pre-stamp 검증과 finalized current-tail 검증을 분리한다. current-tail 엄격 검사는 중앙 stamp 후와 runtime 복원 전 모두 유지하며, 공개 validation 우회 옵션을 만들지 않는다. SQL 응답 유실/게시 실패는 기존 unhealthy→restore 규칙을 지키고 임시 generation을 승인하지 않는다.
+- RED→GREEN 인수: 실제 owner config/sidecar A→B→A, 실제 command sidecar effect·intraday 전이, 실제 fill/ACK의 무관 변화, 여러 selector의 동일 commit, 완료 hook 자신의 변경, 첫 등록/미등록/기존 checkpoint, reducer 이력 변조, SQL 전후 실패·취소·cold restore. 그 뒤 source seal의 지속 소비 권한과 실제2분 정상/결측 caller를 연결한다. 전체 writer 또는 전체 C/F/G/R 완료로 계산하지 않는다.
+
 ## 10A3 — 명시 설치 factory
 
 선행 보호 재생 경계: 5분 writer가 실제 보호 DTO를 바꾸면 degraded 포지션의 기존 fill/quote 재생도 그 정책 입력을 알아야 한다. source ID·완료 version/digest·전후 정책·실제 보호 scope를 같은 commit에 기록하고, 실제 persist=False 전이로 재생한다. 누락/다른 source/잘못된 정책·과거 청산 결정은 계속 BLOCKED이며 회복 과정에서 경제/예약/R/outbox를 다시 적용하지 않는다. 현재 정책을 과거 체결 전체에 소급하는 복구는 금지다. 실제 큐 등록 실패→5분 정책→quote/추가 fill→repair/새 runtime 복원을 RED부터 확인한다. 5분 조각의 한정 승인은 이 재생 인수까지 완료했다는 뜻이 아니다.
