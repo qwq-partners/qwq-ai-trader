@@ -1,16 +1,19 @@
-"""S2-1: CrossStrategyValidator 특성화 기준선.
+"""S2-1: CrossStrategyValidator 특성화 기준선 + 결정 증거 채널.
 
 C1~C7 은 제품을 건드리지 않고 현재 감점 산식·시간 구간·임계값을 그대로 못 박는다
 (착수 시 GREEN 이 정상 — RED 가 아니다). tests/ 전체에 실인스턴스가 0건이라
 감점 산식을 고정하는 증거가 없었다.
+R1~R4 는 증거 채널(`last_decision`·`last_llm_reason`·`request_token`)의 행동 계약이다.
 
 시계는 전부 주입한다. `validate()` 안의 지역 재임포트(`from datetime import datetime as _dt`)
 때문에 한쪽만 얼면 경계가 풀려서 `datetime.datetime` 과 `cross_validator.datetime` 을
 함께 고정한다 — 09:29/09:45/12:45/13:00/13:01 이 실제로 얼리는 것을 실측했다.
 """
+import asyncio
 import datetime as datetime_module
 from datetime import datetime as _RealDateTime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -206,3 +209,198 @@ def test_c7_us_skips_kr_only_rules(freeze):
         False, 0, '체제 부적합: 약세장에서 momentum_breakout 차단')
     assert run(cv('KR'), strategy='gap_and_go', regime='bear') == (
         False, 0, '체제 부적합: 약세장에서 gap_and_go 차단')
+
+
+# ── R1~R4: 결정 증거 채널 ────────────────────────────────────────────
+
+def test_r1_blocked_verdict_leaves_no_decision(freeze):
+    """차단이면 last_decision 은 None 이다 — 앞 통과 판단의 잔류도 금지."""
+    freeze(11, 0)
+    validator = cv()
+
+    assert run(validator, request_token='t-pass')[0] is True
+    assert validator.last_decision['token'] == 't-pass'
+
+    # 점수 미달 차단
+    assert run(validator, score=57.0, metadata=meta({}), request_token='t-low')[0] is False
+    assert validator.last_decision is None
+
+    # 체제 차단
+    assert run(validator, request_token='t-pass2')[0] is True
+    assert run(validator, strategy='gap_and_go', regime='bear',
+               request_token='t-bear')[0] is False
+    assert validator.last_decision is None
+
+    # 시간 차단
+    freeze(9, 15)
+    assert run(validator, request_token='t-early')[0] is False
+    assert validator.last_decision is None
+
+
+def test_r1_sell_pass_is_not_a_decision(freeze):
+    """매도 통과는 증거를 남기지 않는다 — 대입 지점은 매수 통과 1곳뿐이다."""
+    freeze(11, 0)
+    validator = cv()
+    assert run(validator, side='sell', request_token='t-sell')[0] is True
+    assert validator.last_decision is None
+
+
+def test_r2_interleaved_shadow_call_invalidates_token(freeze):
+    """실거래와 팀심의 shadow 가 한 인스턴스를 공유한다 — 내 token 이 아니면 못 쓴다."""
+    freeze(11, 0)
+    validator = cv()
+
+    assert run(validator, request_token='t1')[0] is True
+    assert validator.last_decision['token'] == 't1'
+
+    # 팀심의 shadow 가 끼어든다(count_stats=False, token 없음).
+    run(validator, symbol='000660', strategy='team', count_stats=False)
+    assert validator.last_decision is not None
+    assert validator.last_decision['token'] != 't1'
+    assert validator.last_decision['symbol'] == '000660'
+
+    # 다른 요청 token 이 끼어든 경우도 같은 방식으로 구분된다.
+    run(validator, request_token='t2')
+    assert validator.last_decision['token'] == 't2'
+
+
+def test_r2_decision_payload_carries_judgement_inputs(freeze):
+    """last_decision 은 판정을 바꾼 사실을 그대로 싣는다(S2-4 builder 입력 계약)."""
+    freeze(9, 45)
+    validator = cv()
+    assert run(validator, metadata=meta({}), request_token='t1') == (True, 55.0, '')
+
+    decision = validator.last_decision
+    assert decision['symbol'] == '005930'
+    assert decision['side'] == 'buy'
+    assert decision['strategy'] == 'momentum_breakout'
+    assert decision['regime'] == 'neutral'
+    assert decision['original'] == 70.0
+    assert decision['adjusted'] == 55.0
+    assert decision['cap_applied'] is True
+    assert decision['now_hm'] == 945
+    assert decision['memory_adj'] == 0
+    assert decision['panel'] is None
+    assert isinstance(decision['penalties'], tuple)
+    assert any('장초반 변동성' in p for p in decision['penalties'])
+    assert any('지표결손' in p for p in decision['penalties'])
+    assert any('누적감점캡' in p for p in decision['penalties'])
+
+
+def test_r2_absent_contributions_are_reported_as_absent(freeze):
+    freeze(11, 0)
+    validator = cv('US')
+    assert run(validator, request_token='t1')[0] is True
+    assert validator.last_decision['cap_applied'] is False
+    assert validator.last_decision['now_hm'] is None
+    assert validator.last_decision['penalties'] == ()
+
+
+def test_r2_memory_and_panel_contributions_are_reported(freeze):
+    """규칙9 memory_adj 와 규칙10 패널 보너스는 실제로 붙었을 때만 실린다."""
+    stamp = freeze(11, 0)
+    memory = SimpleNamespace(get_score_adjustment=lambda strategy, sector: -3)
+    validator = cv(trade_memory=memory)
+    validator._panel_outlook = SimpleNamespace(created_at='2026-09-20T21:00:00')
+    validator._panel_loaded_at = stamp
+    validator._panel_recommended = {'005930': SimpleNamespace(conviction=0.8)}
+
+    passed, adjusted, _ = run(validator, request_token='t1')
+    decision = validator.last_decision
+    assert (passed, adjusted) == (True, 70.0 - 3 + 8)
+    assert decision['memory_adj'] == -3
+    assert decision['panel'] == {
+        'created_at': '2026-09-20T21:00:00',
+        'conviction': 0.8,
+        'bonus': 8,
+        'loaded_at': stamp,
+    }
+
+    # 추천 목록에 없는 종목은 패널 기여가 없다.
+    run(validator, symbol='000660', request_token='t2')
+    assert validator.last_decision['panel'] is None
+
+
+def _reply(content, success=True):
+    """llm_manager.complete 대역 — 주입된 응답 하나만 돌려준다."""
+    async def complete(prompt, task=None, max_tokens=None):
+        return SimpleNamespace(success=success, content=content, error='주입된 실패')
+    return complete
+
+
+def _llm_check(validator, **over):
+    kwargs = dict(symbol='005930', strategy='sepa_trend', score=90.0,
+                  indicators={}, market_regime='neutral')
+    kwargs.update(over)
+    return asyncio.run(validator.llm_second_check(**kwargs))
+
+
+def _single_llm(reply):
+    """적대검증기를 끈 단일 LLM 경로 인스턴스."""
+    validator = cv(llm_manager=SimpleNamespace(complete=reply))
+    validator._adversarial = None
+    return validator
+
+
+def test_r3_llm_fail_open_is_distinguishable_from_approval(freeze):
+    """한도 소진 fail-open 과 실제 승인은 둘 다 True 를 낸다 — 어휘로만 구분된다."""
+    stamp = freeze(11, 0)
+
+    approving = _single_llm(_reply('YES 진입 타당'))
+    assert _llm_check(approving) is True
+    assert approving.last_llm_reason == 'approved'
+
+    quota = _single_llm(_reply('YES 진입 타당'))
+    quota._daily_llm_count_date = stamp.date()
+    quota._daily_llm_count = quota._daily_llm_max
+    assert _llm_check(quota) is True
+    assert quota.last_llm_reason == 'fail_open_quota'
+
+    rejecting = _single_llm(_reply('NO 과열 구간'))
+    assert _llm_check(rejecting) is False
+    assert rejecting.last_llm_reason == 'rejected_soft'
+
+    broken = _single_llm(_reply(None, success=False))
+    assert _llm_check(broken) is True
+    assert broken.last_llm_reason == 'fail_open_error'
+
+
+def test_r3_llm_skip_paths_have_their_own_words(freeze):
+    freeze(11, 0)
+
+    no_manager = cv()
+    assert _llm_check(no_manager) is True
+    assert no_manager.last_llm_reason == 'skipped_no_manager'
+
+    bull = _single_llm(_reply('YES'))
+    assert _llm_check(bull, market_regime='bull') is True
+    assert bull.last_llm_reason == 'skipped_bull'
+
+    low = _single_llm(_reply('YES'))
+    assert _llm_check(low, score=84.9) is True
+    assert low.last_llm_reason == 'skipped_low_score'
+
+
+def test_r3_validate_resets_llm_reason(freeze):
+    """LLM 을 부르지 않은 판단이 앞 판단의 어휘를 물려받지 않는다."""
+    freeze(11, 0)
+    validator = cv()
+    validator.last_llm_reason = 'approved'
+    run(validator, request_token='t1')
+    assert validator.last_llm_reason == 'not_required'
+
+
+@pytest.mark.parametrize('hm, kwargs', [
+    ((11, 0), {}),                                        # 감점 없는 통과
+    ((9, 45), {'metadata': meta({})}),                    # 감점 + cap 통과
+    ((9, 15), {}),                                        # 시간 차단
+    ((11, 0), {'score': 57.0, 'metadata': meta({})}),     # 점수 미달 차단
+    ((11, 0), {'side': 'sell'}),                          # 매도 조기 통과
+])
+def test_r4_request_token_has_no_side_effect(freeze, hm, kwargs):
+    """token 유무로 반환 tuple 도 _stats 증분도 달라지지 않는다."""
+    freeze(*hm)
+    without, with_token = cv(), cv()
+    assert run(without, **kwargs) == run(with_token, request_token='t1', **kwargs)
+    assert without.get_stats() == with_token.get_stats()
+    assert without.get_stats()['total'] == 1
