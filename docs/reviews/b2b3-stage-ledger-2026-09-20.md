@@ -224,7 +224,7 @@
 | S3-2 | `risk_policy.py`(+helper 2줄) | **통합(한정 승인·제품 생성자 0건)** | `af09a24`(red)→`f66258d` | CHANGES_REQUIRED(시험 공백 1) → coordinator `1a6e6d2` 로 해소 | merge `2c24aca` |
 | S3-3 | `commands.py` | **통합(한정 승인·dispatch 제품 호출자 0건)** | `3a28993`(red)→`d339cd7`→`17725fa` | APPROVE_THIS_SLICE(P2 3건) → coordinator `9a3fe19` 로 해소 | merge `c48cb68` |
 | S3-4 | `day_recovery.py` | **통합(한정 승인·돈 경로 아님)** | `feb4349`(red)→`968a097` | CHANGES_REQUIRED(시험 공백 2) → coordinator `9a3fe19` 로 해소 | merge `e42b014` |
-| S3-5 | `gateway.py`·`runtime.py` 설치점 | 미착수 | — | — | — |
+| S3-5 | `gateway.py`·`runtime.py` 설치점 (+`commands.py` P1 수정) | **통합(한정 승인·설치 호출자 0건)** | `cadd67a`·`fd03c12`(red)→`737da95`→`05e3104` | CHANGES_REQUIRED(**P1 1**·P2 5) → coordinator `83e187a`(red)·`b83b6e7`·`4356d43` 로 해소 | merge `cb1f554` |
 | S3-6a | `engine.py` H1·H4·H5 | 미착수 | — | — | — |
 | S3-6b | `engine.py` H2·H3 | 미착수 | — | — | — |
 
@@ -269,6 +269,22 @@
   4. facts 를 비운 뒤에도 자동 BUY 의 facts 검사는 생략되지 않고(`decision_facts_required`) final guard 가 재검사한다.
   5. **범위 B 는 이전 P2 를 닫는다**(실제 메모리에 전달한 섹터로 digest·이름 생성, 보정 0 과 섹터 불일치도 거부). 새 결함 미발견. → S2 의 "Codex 재확인을 받지 않았다"는 단서는 이 리뷰로 해소된다.
 - **Codex 가 "미확인"으로 남긴 것(승인 근거에 미포함):** 부분 상태(`observed_amount`·`status` 불일치)의 유입 가능성 · checkpoint restore 에서 claim 보존 · `owner.mutate` 의 원자성(지정 파일 밖) · transport 내부의 POST 이후 상태 분류 · 실제 rollover 직렬화와 guard→POST 간격 · `recompose_quantity` 내부의 신고 on 거부 구현. 이 중 restore 뒤 가드 성립은 S3-1 시험이, mutate 의 deepcopy-commit 의미는 기존 application 시험이 덮는다. 나머지는 S5 최종 broad 리뷰의 범위다.
+
+### wave 3 (S3-5 gateway) — Do·See 기록 (기준 `d1faf91` → `4356d43`)
+
+- **방법:** workflow `wf_e783d47f-151` — 단일 writer(요청 opus/high) → 독립 재현(요청 opus/xhigh), 관측 모델 미노출.
+- **S3-5 `src/execution/safety/gateway.py`(신규 121줄 → coordinator 수정 뒤 120줄)·`runtime.py`(+9/−0: `self.gateway = None` 과 `install_gateway` 뿐):** `SignalGateway.submit(event, order, evidence)` 가 (BUY) 진입 시세 게시 → `publish_qualification` → 감사 로그 → `prepare` → `dispatch` 를 같은 태스크에서 수행한다. engine import 0, owner 판정 복제 0, 같은 attempt 재 dispatch 0(구조적). 실제 인터페이스·예외 계약은 계획서 S3-5 절의 "통합된 실제 인터페이스".
+  - **RED 의 성격:** 새 모듈이라 24건 전부 **부재 RED**(ModuleNotFoundError) — 증거로 세지 않는다. owner 측 거부(`decision_facts_required`·`current_entry_quote_required`·`stale_regime_decision` 등)는 S1~S3-4 가 이미 GREEN 으로 만든 계약이라 "부를 주체가 없다"는 형태로만 실패한다. 인수 근거는 변이 kill(구현자 9종 전건).
+  - 세우지 못한 것(구현자 보고·수용): ExitManager 가 다를 때의 `decision_stop_changed` 대조(재사용 fixture 가 nominal 이라 손절 축이 비어 있다 — commands 층의 기존 시험이 덮는다) · 대조 3종(무관 fill·무관 취소 ACK·미소비 출처)은 `test_execution_regime_recheck` 의 기존 4건에 의존 · stale 6축은 실제 증거가 정당화하는 수량(약 47주)에 맞춰 크기를 키운 자체 `apply_change`.
+- **독립 재현: CHANGES_REQUIRED — P1 1건(실제 누수)·P2 5건.** 지정 변이 전건 kill, 자체 변이 3종 생존.
+  - **P1 (직접 재현): prepare 와 dispatch 사이에 세션 경계가 닫히면 예약이 영구 잔류한다.** `_dispatch` 가 `_request`(세션 재검사 포함)를 try **바깥**에서 불러 `CommandValidationError` 가 `dispatch()` 를 탈출 — 재현: `market_closed`·state `prepared`·claim None·예약 101,500원·`pending_sectors` 잔류·abandon 0·POST 0. S3-1·S3-3 이 닫으려던 바로 그 누수이고, gateway 가 prepare **뒤에** dispatch 를 부르므로 창이 실재한다(장 마감 경계·session_guard 거부). → coordinator: 행동 RED `83e187a`(`CommandValidationError: market_closed` 가 탈출함을 실측) → 수정 `b83b6e7`: `_dispatch` 는 `_request(..., session=False)` 로 **신원·권한만** try 밖에서 검증(계속 raise — 기존 시험 `untrusted_entry_context` 계약 유지, 위조 요청이 남의 attempt 를 끝내는 길은 열지 않는다), 세션은 `_bound`→`_evaluate` 의 기존 재검사에서 걸려 `_unsent` 로 끝난다. dispatch 를 구동하는 기존 7파일 252건 회귀 0.
+  - **P2-a config 축 자기 인증:** gateway 가 게시본의 config 축을 주입값으로 다시 찍어 재게시 → owner 의 `stale_decision_config_version` 이 한 값을 자기 자신과 비교(변이 생존). → coordinator `4356d43`: **gateway 는 정책 맥락을 쓰지 않는다.** BUY 는 게시 전에 게시본 config ≠ 주입값이면 같은 사유로 거부(owner.version 불변·facts 0), SELL 은 config 로 막지 않는다. 결정 ⑫의 순서를 계획서에서 정정.
+  - **P2-b/c 시험 공백:** LIMIT 주문의 평가가격 출처(`valuation = event.price` 변이 생존)·intent 키의 side/전략 성분(`key = (symbol,)` 변이 생존) → 대조 시험 2건.
+  - **P2-d 전송 객체:** prepare 뒤에 만들던 `GuardedKISTransport` 를 예약 이전으로 당김. 부수 실측: `engine.broker` 가 None 이어도 누수는 없다 — NOT_SENT/`preparation_failed`·`final_rejected`·예약 0(시험으로 고정).
+  - **P2-e 합산식 복제(수용):** helper 두 줄이 `risk_policy.py:716`·`decisions.py:283-284` 와 같은 식을 다시 적었다. 공용 함수로 뽑으려면 B1·S1 파일을 건드려야 해 수용하고, 갈라짐은 S3-6b 의 parity RED 가 행동으로 잡게 한다. **P2-f 인계:** engine 의 `_reserved_cash` 는 property, gateway 쪽은 예외를 내는 메서드 · core_reserve 합산 기준 차이 → 계획서 S3-6b 의 H2 에 명시.
+- **coordinator 변이 재적용:** 평가가격(B)·intent 키(C)·config 사전 대조 무력화(A′) 세 변이를 직접 넣어 **각각 해당 시험만 실패**함을 확인 후 원복·트리 clean. P1 은 수정 전 RED 실패를 실측.
+- **제품 호출자 재확인:** `src/`·`scripts/` 에서 `KRExecutionRuntime(`·`.attach(`·`install_gateway(` 호출 0건(grep).
+- **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
 Codex 교차 리뷰(포그라운드·10분 상한)는 wave 3·5 뒤 각 1회 더. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 
