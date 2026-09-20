@@ -1,5 +1,7 @@
 # 브랜치 정리·운영 동기화 — 2026-09-20
 
+> **후속 최종 상태:** 사용자의 독자 정리 지시로 잔여 로컬54/원격7/worktree53을 복구 가능한 archive로 전환했다. 상시 잔여는 main·engine 각2개다. 아래 “원위치 보존” 및56/9/55는 **1차 시점 기록**이며 현재 경로로 사용하지 않는다. 현재 복구 위치/검증은 [추가 archive 보고서](retired-workspace-archive-2026-09-20.md)를 따른다.
+
 ## Plan
 
 사용자 요청: 과도하게 남은 브랜치 정리, 운영 반영 가능한 내용 적용, migration 후속과 Claude 새 세션 인계. main 병합 여부·현재 HEAD·dirty/untracked/ignored 증거·실제 프로세스를 먼저 감사했다. Sol/high가 브랜치/작업공간을, Astra/xhigh가 migration의 배포 경계를 읽기 전용 독립 감사했다. 요청 모델/effort이며 native actual model metadata는 미노출이다.
@@ -77,7 +79,7 @@ git fetch /home/ubuntu/projects/qwq-branch-archive-20260920.vlFfQE/all-refs.bund
 | feature/toss-runtime-http-20260916 | `d5b3fc6` | 고유 이력 보존 |
 | feature/toss-runtime-ledger-20260916 | `d396bff` | 고유 이력 보존 |
 
-위7개 토스 worker 이력은 현재 main과 동등한 최종 구현이라고 간주하거나 다시 통째 병합하지 않는다. 검토된 통합본은 main에 이미 있으며, 고유 이력의 폐기/별도 archive는 다음 사용자의 명시 판단 대상이다.
+위7개 토스 worker 이력은 현재 main과 동등한 최종 구현이라고 간주하거나 다시 통째 병합하지 않는다. 검토된 통합본은 main에 이미 있다. 후속 독자 정리 지시로 같은 SHA의 `archive/2026-09-20/<원래 branch>` 태그에 보존하고 원격 branch heads에서는 제거했다.
 
 ## 보존 로컬 브랜치 (main·임시 인계 브랜치 제외)
 
