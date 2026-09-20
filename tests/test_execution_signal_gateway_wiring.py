@@ -351,10 +351,10 @@ def test_the_entry_stale_loops_have_nothing_to_sweep_in_attach_mode(tmp_path, mo
     asyncio.run(scenario())
 
 
-# ── 결정 ⑤: eviction 은 attach 에서 발화하지 않는다 ─────────────────────
+# ── S4-2 결정 ⑥: eviction 은 attach 에서도 호출된다 ─────────────────────
 
-def test_eviction_is_not_reached_in_attach_mode(tmp_path, monkeypatch, freeze):
-    """①이 SIGNAL 폐기를 없애면 eviction 이 큐에 낳는 SELL 이 실제 POST 가 된다."""
+def test_eviction_is_reached_in_attach_mode(tmp_path, monkeypatch, freeze):
+    """S4-2 가 H5 를 복원했다 — 호출부까지 닿는다(실제 SELL 은 eviction 시험 파일이 고정한다)."""
     async def scenario():
         f = await wired(tmp_path, monkeypatch, freeze)
         try:
@@ -369,7 +369,7 @@ def test_eviction_is_not_reached_in_attach_mode(tmp_path, monkeypatch, freeze):
                 lambda *args, **kwargs: (False, '최대 포지션 수 도달'))})()
             calls = spy(f)
             await drive(f['engine'], buy(SYM, score=99.0))
-            assert evicted == []
+            assert len(evicted) == 1 and evicted[0]['new_symbol'] == SYM
             assert queued_types(f['engine']) == []
             assert [len(calls[key]) for key in ('submit', 'publish', 'prepare')] == [0, 0, 0]
             assert posts(f) == [] and f['runtime'].owner.state['attempts'] == {}
