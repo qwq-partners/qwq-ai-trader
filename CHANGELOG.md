@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — docs(ops): 퇴역 작업공간 archive·상시 개발선 2개로 정리
+
+- 후속 독자 정리 지시로 로컬54 heads를 archive refs, 원격7 heads를 같은 SHA의 archive tags로 전환했다. dirty28/staged12를 포함한53개 worktree 원본 전체와 Git admin/index/objects를 mode700 로컬 보관소에 보존했다. 상시 잔여는 main·engine의 local/remote/worktree 각2개(임시 문서 PR 제외), 강제 삭제/reset/전역 prune0.
+- 대표3개 독립 복구 시험, 53/53 파일·Git 상태·actual admin 대조, 원격 atomic 생성/삭제·SHA lease·사후 재조회 통과. 독립 검토의 staged-only blob 누락 및 이동 중 index 경쟁 지적을 보완했다. 보관소와 복구 주의사항: `docs/reviews/retired-workspace-archive-2026-09-20.md`.
+- 새 KST main 전체1810 passed/2 known xfailed/1 warning(76.92초), exit0·격리0. 종료 후 과거 pytest 임시 디렉터리 정리 경고는 별도 기록했다. 제품 소스·테스트·설정 변경0, 운영 재시작/주문/토큰 변경0. 전체 엔진 운영 승격은 계속 차단하며 Claude 다음 단계는 인계 문서의 B2/B3다.
+
 ## 2026-09-20 — docs(ops): 브랜치 정리·운영 checkout 동기화·Claude migration 인계
 
 - 독립 branch/배포 경계 감사 뒤 병합 완료 local166·remote67·clean worktree83개를 정리했다. 정확한 refs/worktree manifest와 검증된 전체 Git bundle, engine ignored SDD archive를 호스트 로컬에 보존했다. dirty28·고유 커밋·비캐시 증거는 삭제하지 않았다. 강제 worktree 제거/reset/커밋 덮어쓰기 없음.
