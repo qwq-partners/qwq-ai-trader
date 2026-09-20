@@ -171,6 +171,7 @@
   - → coordinator `85a65bc`: 대칭 가드 1개(+3줄)와 단언 1줄 추가. 가드를 무력화하는 변이를 직접 적용해 `test_memory_source_without_a_reported_sector_is_refused` **그 시험만 실패**(1 failed / 70 passed) 확인 후 원복.
 - **S2 최종 전체 suite(coordinator, HEAD `85a65bc`, 단독 직렬, 2026-09-21):** UTC **4632 passed / 2 xfailed / 경고 4 / 293.74초**, KST **4632 / 2 / 4 / 282.27초**, 각 격리 0. `83baa2a` 의 4628 대비 **+4 = CV 특성화 1 + builder 2 + publishers 1**. 기존 xfail 2·경고 4 불변. 그에 앞선 1차 UTC 실행(4631 passed / **1 failed**)은 S3 조사 에이전트 3명과 겹쳐 돌린 **부하 오염**이라 증거로 쓰지 않았다 — 실패한 `test_toss_client_boundary.py::…[prefix2-1]` 은 이번 diff 와 무관한 파일이고 실시간 1초 예산을 쓰며 단독 73 passed(위 "공통 작업 방법"의 기록, 별도 작업 칩 `task_df7c594a`).
 - **정리:** 임시 worktree 2개(`wf_df27d92f-809-1·2`)와 `work/s2-memory-sector` 제거(clean·merged). 남은 worktree 는 main·세션 기본·engine 3개.
+- **(갱신 2026-09-21) 교차 provider 재확인 완료:** S3 의 Codex 교차 리뷰 1차(아래 S3 절, 대상 `8ef3b99`)가 이 diff(`fcc2a27..85a65bc`)를 범위 B 로 보고 "이전 P2 를 닫는다·새 결함 미발견"으로 판정했다. 아래는 그 전 시점의 기록이다.
 - **교차 provider 재확인은 하지 않았다.** Codex 의 CHANGES_REQUIRED 는 이 P2 한 건이었고 수정은 같은 provider(Opus) 독립 재현으로만 검증됐다 — "Codex 재승인"으로 세지 않는다. S3 단계 리뷰에서 Codex 가 이 diff(`fcc2a27..85a65bc`)를 함께 보게 한다.
 
 ### S2 의 성과와 한계 (보고 문장 — 이대로 인용한다)
@@ -258,7 +259,18 @@
 - **wave 1·2 전체 suite(coordinator, HEAD `9572ed2`, 단독 직렬·다른 세션의 pytest 없음 확인, 2026-09-21 02:25~02:35 KST):** UTC **4680 passed / 2 xfailed / 경고 4 / 290.00초**(종료 시 load 1.51), KST **4680 / 2 / 4 / 291.24초**(load 1.29), 각 격리 0. `85a65bc` 의 4632 대비 **+48 = abandon 16 + hybrid 축 8 + 사유 보존 17 + facts 정리 7**. 기존 xfail 2·경고 4 불변. 그 직전의 `9a3fe19` UTC 실행(4679 passed / **1 failed**)은 wave 1 기록의 "정정"에 적은 fd 누수였고 `9572ed2` 에서 고쳤다.
 - **정리:** 임시 worktree 4개·work 브랜치 2개 제거(clean·merged).
 
-Codex 교차 리뷰(포그라운드·10분 상한)는 wave 2·3·5 뒤 각 1회. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
+### Codex 교차 리뷰 1차 (wave 2 경계, 대상 `8ef3b99`) — **APPROVE**
+
+- 요청 gpt-6-astra/xhigh, companion 포그라운드(`--background` 없음)·read-only·pytest 금지, 전체 suite 가 끝나 호스트가 조용할 때 실행. 범위 A = `3f30fcc..8ef3b99 -- src/`(S3 wave 1·2 제품 변경 4파일), 범위 B = `fcc2a27..85a65bc -- src/`(S2 마감 수정). 좁힌 질문 5개(송신됐을 수 있는 attempt 의 예약 해제 경로 / claim 이후 실패의 분류 / hybrid 대조 배치의 fail-open / facts 정리의 fail-open / S2 의 이전 P2 해소).
+- **판정: "P0/P1/P2: 지정 diff 에서 확인된 신규 결함 없음."**
+  1. `abandon_candidate`: claim 과 `submitting` 을 함께 세우고(lifecycle.py:353) 377-383 이 둘 중 하나만 남아도 거부, abandon 이 먼저 끝나면 `final_rejected` 라 claim 조건(336)을 통과하지 못한다 — 송신 가능 시도의 예약 해제 경로 미발견.
+  2. claim commit 뒤에 `CommandValidationError` 가 전파돼 `_unsent` 로 가더라도 저장된 claim 때문에 abandon 이 거부된다(예약 유지). 일반 예외는 `dispatch_failed` 로 끝나고 상태는 claim 유지·`submitting`·예약 유지(permit·전송·결과 기록에 미도달). 같은 attempt 의 중복 dispatch 에서 패자가 받는 NOT_SENT 는 "이 호출이 보내지 않았다"이지 attempt 전체의 미송신 증명이 아니다 — **기준 커밋에도 있던 동작**이고 예약은 유지된다.
+  3. hybrid 대조의 배치가 만드는 fail-open 조합 없음(on·off, off·on 모두 불통과).
+  4. facts 를 비운 뒤에도 자동 BUY 의 facts 검사는 생략되지 않고(`decision_facts_required`) final guard 가 재검사한다.
+  5. **범위 B 는 이전 P2 를 닫는다**(실제 메모리에 전달한 섹터로 digest·이름 생성, 보정 0 과 섹터 불일치도 거부). 새 결함 미발견. → S2 의 "Codex 재확인을 받지 않았다"는 단서는 이 리뷰로 해소된다.
+- **Codex 가 "미확인"으로 남긴 것(승인 근거에 미포함):** 부분 상태(`observed_amount`·`status` 불일치)의 유입 가능성 · checkpoint restore 에서 claim 보존 · `owner.mutate` 의 원자성(지정 파일 밖) · transport 내부의 POST 이후 상태 분류 · 실제 rollover 직렬화와 guard→POST 간격 · `recompose_quantity` 내부의 신고 on 거부 구현. 이 중 restore 뒤 가드 성립은 S3-1 시험이, mutate 의 deepcopy-commit 의미는 기존 application 시험이 덮는다. 나머지는 S5 최종 broad 리뷰의 범위다.
+
+Codex 교차 리뷰(포그라운드·10분 상한)는 wave 3·5 뒤 각 1회 더. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 
 ### 이어받는 에이전트 체크리스트 (S3 공통 — 하위 단계마다 반복)
 - [ ] 세부 계획 §4 의 그 단계 "고정 인터페이스"와 실제 시그니처가 일치하는가. §2 의 결정 번호와 어긋나는 구현이 없는가.
