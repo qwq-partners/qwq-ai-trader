@@ -130,6 +130,25 @@ def test_r5_weak_strength_multiplier_is_the_applied_value(external_factors):
     assert manager._last_sizing_inputs['strength_multiplier'] == 0.5
 
 
+def test_r5_money_fields_are_exported_as_decimal_not_float(external_factors):
+    """금액 필드는 Decimal 로 반출한다 — Decimal == float 이 True 라 값 비교로는 못 박히지 않는다."""
+    nominal = _manager()
+
+    assert nominal._calculate_position_size(_signal()) == 175
+
+    nominal_inputs = nominal._last_sizing_inputs
+    assert isinstance(nominal_inputs['min_position_value'], Decimal)
+    assert nominal_inputs['stop_pct'] is None
+
+    risk = _manager(config=_config(mode='risk'), stop=_stop_recorder([]))
+
+    assert risk._calculate_position_size(_signal()) == 139
+
+    risk_inputs = risk._last_sizing_inputs
+    assert isinstance(risk_inputs['min_position_value'], Decimal)
+    assert isinstance(risk_inputs['stop_pct'], Decimal)
+
+
 # --- R6: overlay fail-open 표식 ----------------------------------------------
 
 
@@ -151,6 +170,49 @@ def test_r6_provider_failure_is_marked_unavailable_with_unit_multiplier(
         name: ('unavailable' if name == kind else 'applied') for name in PROVIDERS
     }
     assert inputs[f'{kind}_multiplier'] == 1.0
+
+
+@pytest.mark.parametrize('kind', sorted(PROVIDERS))
+def test_r6_kernel_rejected_multiplier_is_recorded_only_after_apply_overlay(
+        external_factors, kind):
+    """provider 는 정상 반환했지만 kernel apply_overlay 가 그 배율을 처리하지 못한 표본.
+
+    문자열 배율은 calendar 에서 Decimal 변환 실패, volatility/conviction 에서 비교 TypeError 를
+    낸다(src/utils/position_sizing_kernel.py apply_overlay). 배율이 실제로 적용되지 않았으므로
+    기록은 apply_overlay **성공 뒤**에만 남아야 한다 — 호출 앞에서 기록하면 미적용 배율이
+    'applied' 로 새어 나간다.
+    """
+    _calls, values = external_factors
+    values[kind] = 'unset'
+    manager = _manager()
+
+    # 수량은 배율 1.0 표본과 같다 — 적용이 없었다는 뜻.
+    assert manager._calculate_position_size(_signal()) == 175
+
+    inputs = manager._last_sizing_inputs
+    assert inputs['overlay_status'] == {
+        name: ('unavailable' if name == kind else 'applied') for name in PROVIDERS
+    }
+    assert inputs[f'{kind}_multiplier'] == 1.0
+
+
+@pytest.mark.parametrize(('kind', 'expected_quantity'), [
+    ('calendar', 20),       # 0 배율 → 최소금액 바닥(200,000원)으로 클램프
+    ('volatility', 20),
+    ('conviction', 175),    # conviction 은 1.0 초과만 적용 → 수량 불변
+])
+def test_r6_zero_multiplier_is_applied_not_unavailable(
+        external_factors, kind, expected_quantity):
+    """배율 0.0 은 provider 가 실제로 준 값이다 — falsy 라는 이유로 'unavailable' 이 아니다."""
+    _calls, values = external_factors
+    values[kind] = 0.0
+    manager = _manager()
+
+    assert manager._calculate_position_size(_signal()) == expected_quantity
+
+    inputs = manager._last_sizing_inputs
+    assert inputs[f'{kind}_multiplier'] == 0.0
+    assert inputs['overlay_status'] == {name: 'applied' for name in PROVIDERS}
 
 
 def test_r6_applied_status_carries_the_actual_provider_value(external_factors):
