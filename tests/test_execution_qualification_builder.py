@@ -77,7 +77,7 @@ def _regime_row(module, regime='sideways', *, version=1, as_of=None):
 
 
 def _build(module, *, decided_at=None, cv=None, sizing=None, regime_used='sideways',
-           regime_row=..., llm_reason='not_required', strategy=None, observed_at=None, **changes):
+           regime_row=..., llm_reason='not_required', strategy=None, observed_at=..., **changes):
     cv = cv if cv is not None else _cv()
     decided_at = decided_at if decided_at is not None else _at(945)
     # 기본 판독 시각은 판단 시각보다 1초 앞이다 — 둘을 같은 값으로 두면 as_of 계약이 안 드러난다.
@@ -89,7 +89,7 @@ def _build(module, *, decided_at=None, cv=None, sizing=None, regime_used='sidewa
         config_version='synthetic-config-version', regime_used=regime_used,
         regime_row=_regime_row(module, regime_used) if regime_row is ... else regime_row,
         decided_at=decided_at,
-        observed_at=(decided_at - timedelta(seconds=1) if observed_at is None else observed_at),
+        observed_at=(decided_at - timedelta(seconds=1) if observed_at is ... else observed_at),
     )
     kwargs.update(changes)
     return module.build_decision_facts(**kwargs)

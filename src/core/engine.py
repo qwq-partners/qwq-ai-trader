@@ -1847,11 +1847,12 @@ class RiskManager:
         # S2-5: 이번 판단의 증거 캡처 자리. 판정·수량에는 관여하지 않는 기록 전용이고
         # 게시·intent_id·config_version 은 S3 gateway 가 한다. runtime 미설치면 캡처 분기가
         # 통째로 돌지 않는다(legacy 실행 0줄).
+        from copy import deepcopy as _qual_deepcopy
         from uuid import uuid4 as _qual_uuid
         self._last_qualification_evidence = None
         _qual_on = getattr(self.engine, "_execution_runtime", None) is not None
         _qual_token = _qual_uuid().hex if _qual_on else None
-        _qual_decision = _qual_llm_reason = _qual_sizing = None
+        _qual_decision = _qual_llm_reason = _qual_sizing = _qual_observed_at = None
 
         # 진입 근거 표준화 검증 (2026-04-21 도입, shadow 모드 — 경고만 발생, 차단 없음)
         # 1주일 관찰 후 hard-reject로 전환 예정
@@ -2059,6 +2060,10 @@ class RiskManager:
         if event.side == OrderSide.BUY:
             _meta = event.metadata if event.metadata is not None else {}
             _regime = self._resolve_market_regime()
+            # S2-5 계약 3: 출처 as_of 가 되는 CV 판독 시각. validate 직전(사이에 await 0)에
+            # 찍어야 llm_second_check·섹터 조회를 건넌 decided_at 과 구분된다.
+            if _qual_on:
+                _qual_observed_at = self.engine._execution_runtime._now()
             _cv_pass, _cv_score, _cv_reason = self._cross_validator.validate(
                 symbol=event.symbol,
                 side="buy",
@@ -2154,7 +2159,10 @@ class RiskManager:
                 if _qual_last is not None and _qual_last.get("token") == _qual_token:
                     _qual_reason = getattr(self._cross_validator, "last_llm_reason", None)
                     if type(_qual_reason) is str:
-                        _qual_decision, _qual_llm_reason = dict(_qual_last), _qual_reason
+                        # 얕은 복사면 중첩 panel dict 가 섹터 조회 await 창 동안 제자리에서
+                        # 바뀌어 증거에 실린다 — 지금 통째로 끊는다.
+                        _qual_decision = _qual_deepcopy(_qual_last)
+                        _qual_llm_reason = _qual_reason
 
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
         if event.side == OrderSide.BUY:
@@ -2302,13 +2310,14 @@ class RiskManager:
             # 실제로 넘긴 그 값을 쓰고 다시 조회하지 않는다. 전략 폴백('unknown')은
             # facts.strategy 가 요청과 달라지므로 증거를 만들지 않는다.
             if (_qual_on and _qual_decision is not None and _qual_sizing is not None
-                    and event.strategy is not None):
+                    and _qual_observed_at is not None and event.strategy is not None):
                 from ..execution.safety.qualification_publisher import QualificationEvidence
                 self._last_qualification_evidence = QualificationEvidence(
                     token=_qual_token, symbol=order.symbol, side=order.side.value,
                     strategy=order.strategy, origin="automatic", sector=_sector,
                     cv_decision=_qual_decision, llm_reason=_qual_llm_reason,
                     sizing_inputs=_qual_sizing, regime_used=_regime,
+                    observed_at=_qual_observed_at,
                 )
 
             if self._risk_validator:

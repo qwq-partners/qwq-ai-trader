@@ -27,6 +27,9 @@ class QualificationEvidence:
 
     `cv_decision` 과 `sizing_inputs` 는 CV·RiskManager 가 다음 판단에 덮어쓰는 살아있는
     dict 다. 생성 시 끊어 두지 않으면 게시본이 나중 판단의 값으로 바뀐다.
+
+    `observed_at` 은 CV 판독 시각(aware KST)이다 — 판단 시각이 아니라 이 값이 출처 as_of 가
+    된다(계약 3). 둘 사이에는 llm_second_check·섹터 조회 await 가 있다.
     """
     token: str
     symbol: str
@@ -38,6 +41,7 @@ class QualificationEvidence:
     llm_reason: str
     sizing_inputs: dict
     regime_used: str
+    observed_at: datetime
 
     def __post_init__(self):
         object.__setattr__(self, 'cv_decision', deepcopy(self.cv_decision))
@@ -82,13 +86,17 @@ async def publish_qualification(commands, evidence, *, intent_id, config_version
     """
     if type(evidence) is not QualificationEvidence:
         raise ValueError('invalid_qualification_evidence')
-    regime_row = await _cite(commands, 'regime', regime_digest(evidence.regime_used), decided_at)
+    # regime 의 as_of 도 판독 시각이다 — builder 가 돌려주는 pending 출처와 같은 기준이어야
+    # 한 판단 안에서 출처끼리 시각이 어긋나지 않는다.
+    regime_row = await _cite(commands, 'regime', regime_digest(evidence.regime_used),
+                             evidence.observed_at)
     facts, pending = build_decision_facts(
         intent_id=intent_id, symbol=evidence.symbol, side=evidence.side,
         strategy=evidence.strategy, origin=evidence.origin, sector=evidence.sector,
         cv_decision=evidence.cv_decision, llm_reason=evidence.llm_reason,
         sizing_inputs=evidence.sizing_inputs, config_version=config_version,
-        regime_used=evidence.regime_used, regime_row=regime_row, decided_at=decided_at)
+        regime_used=evidence.regime_used, regime_row=regime_row, decided_at=decided_at,
+        observed_at=evidence.observed_at)
     cited = []
     for source in pending:
         cited.append(_consumed(source.name, await _cite(commands, source.name, source.digest,
