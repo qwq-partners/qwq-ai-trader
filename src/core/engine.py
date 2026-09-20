@@ -1670,13 +1670,30 @@ class RiskManager:
         Returns:
             축출 대상 symbol, 없으면 None
         """
+        # H9(S4-2): attach 에서 legacy 장부는 비어 있다(결정 ④) — 미해결 종목의 정본은
+        # owner 다. 루프마다 읽지 않고 여기서 한 번 읽으며, 예외는 흡수하지 않는다(축출만
+        # 건너뛴 채 통과하지 않게 — _submit_signal 이 그 SIGNAL 하나를 명시 거부로 끝낸다).
+        _gateway = _attached_gateway(getattr(self, "engine", None))
+        _owner_pending = None if _gateway is None else _gateway.unresolved_symbols()
         try:
             now = datetime.now()
+            # H10(S4-2 결정 ⑦): attach 의 축출 SELL 은 실제 POST 가 된다. 큐 순서상 종목별
+            # 쿨다운으로는 연쇄가 닫히지 않으므로 쿨다운 안에는 전역 1건만 허용한다.
+            # legacy 는 불변(상한 없음 — S4-0 특성화가 연쇄 2건을 고정한다).
+            if _gateway is not None and any(
+                (now - _ts).total_seconds() < self._REPLACEMENT_COOLDOWN_SEC
+                for _ts in self._REPLACEMENT_LAST_EVICT_TS.values()
+            ):
+                logger.info(
+                    f"[리스크] 교체 스킵: 쿨다운 안 축출 기록 존재 (신규 {new_symbol})"
+                )
+                return None
+            _pending_ref = self._pending_orders if _owner_pending is None else _owner_pending
             candidates = []
             for sym, pos in self.engine.portfolio.positions.items():
                 if pos.strategy == "core_holding":
                     continue
-                if sym in self._pending_orders:
+                if sym in _pending_ref:
                     continue
                 # 자동매도 금지 종목은 축출 불가 (2026-08-04 P0 — 7개 청산 가드 중
                 # 이 경로만 누락돼 있었다. run_trader에서 exit_manager 세트 주입)
@@ -2415,11 +2432,11 @@ class RiskManager:
                     #   고점수(adjusted_score >= _REPLACEMENT_MIN_SCORE) 시그널이 만석에 막히면
                     #   가장 약한 비코어 포지션을 자동 청산 → 다음 screening cycle에서 진입.
                     #   실제 매수는 여기서 수행하지 않고 sell signal만 발행 (TOCTOU/타이밍 안전성).
-                    #   S3-6a(결정 ⑤): attach 에서는 부르지 않는다 — 여기서 emit 되는 SELL
-                    #   시그널이 gateway 를 타고 실제 POST 가 된다. owner 경로 이관은 S4.
+                    #   S4-2(결정 ⑥): attach 에서도 부른다 — 여기서 emit 되는 SELL 시그널이
+                    #   gateway 를 타고 실제 POST 가 된다(세 경로 중 취소에 의존하지 않는
+                    #   유일한 경로). 후보 제외·상한은 _try_evict_weakest_position 의 H9·H10.
                     if ("최대 포지션 수 도달" in reason
-                            and event.score >= self._REPLACEMENT_MIN_SCORE
-                            and getattr(self.engine, "_execution_runtime", None) is None):
+                            and event.score >= self._REPLACEMENT_MIN_SCORE):
                         _evicted = await self._try_evict_weakest_position(
                             new_symbol=order.symbol, new_score=float(event.score),
                             new_reason=event.reason or "high-score replacement",

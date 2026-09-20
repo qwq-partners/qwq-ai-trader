@@ -72,6 +72,10 @@ class SignalGateway:
         """owner 미해결 attempt 의 예약 현금 합. `evaluate_entry_policy` 와 같은 식이다."""
         return sum((fact.reserved_cash for fact in self._pending()), Decimal('0'))
 
+    def unresolved_symbols(self) -> frozenset:
+        """owner 미해결 attempt 의 종목. attach 의 교체 후보 제외에 쓴다(S4-2 H9)."""
+        return frozenset(fact.symbol for fact in self._pending())
+
     def pending_strategy_notional(self, strategy) -> Decimal:
         """전략별 pending 매수 예약. `recompose_quantity` 의 잔여 계산과 같은 필터다."""
         return sum((fact.reserved_cash for fact in self._pending()
