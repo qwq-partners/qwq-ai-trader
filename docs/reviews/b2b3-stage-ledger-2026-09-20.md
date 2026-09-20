@@ -13,7 +13,7 @@
 | S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **완료 — 한정 승인·운영 미설치** (실제 publisher·gateway 없음, 합성 시험 한정) | `01362db`(merge) + `78ca94f` |
 | S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`·`44e543a`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a`·`85a65bc` |
 | S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()`·`recover_unsent()` 호출자 0건, `trading_ready=False` 그대로. HEAD `10d2ca7` 전체 UTC/KST 각 4758 passed. Codex 1차 APPROVE·2차/3차 CHANGES_REQUIRED → 처분(3차 처분은 Codex 미재확인 — S5 범위). 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md` 의 각 단계 "통합된 실제 인터페이스"가 구현 뒤의 정본 | merge `0975624`·`2c24aca`·`c48cb68`·`e42b014`·`cb1f554`·`5dac8da`·`4242b70` + coordinator `1a6e6d2`·`9a3fe19`·`9572ed2`·`b83b6e7`·`4356d43`·`aee69e3`·`9688d1d`·`486c7d3`·`10d2ca7` |
-| S4 (B3b) | on_signal 내부 직접 SELL·취소0건 해제·eviction | 미착수 | — |
+| S4 (B3b) | attach 에서 되살릴 수 있는 것만 owner 경로로 — 하위 S4-0(legacy 세 경로 특성화)·S4-1(미claim 자식 종료)·S4-1b(`_unsent`)·S4-2(eviction) | **Plan 완료(2026-09-21, 기준 `95029fe`)** — 세부 계획 `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md`. **범위 축소:** 취소 최종성 증거가 제품에 없어 90초 SELL 에스컬레이션·10분 BUY 취소·owner 취소 배선은 attach 미지원으로 명시. Do 는 wave 1 부터 | — |
 | S5 (See) | 독립 실큐 인수·최종 broad 리뷰·전체 직렬 | 미착수 | — |
 
 ## 공통 작업 방법 (이어받는 에이전트가 먼저 읽을 것)
@@ -368,3 +368,33 @@
 5. **계약 귀결의 전제:** claim 이전의 일시 차단(in-flight market source 등)도 그 attempt 를 끝낸다 — 재송신은 같은 intent 의 새 prepare. 보호 SELL 의 재시도 설계는 이 위에서 한다.
 6. UNKNOWN 예약 유지·취소 ACK≠최종성은 lifecycle 에 이미 있다 — S4 는 그것을 실큐 접합에서 대조로 고정한다.
 7. 범위 밖(10C): KOFR(`kr_scheduler.py:6754·6818`)·수동 매수(7597)·CLI 2개·`kr_scheduler.py:978-1004` 의 취소0건 예약 해제·`run_trader.py` 의 sector lookup 예외 뭉갬.
+
+## S4 (B3b) — attach 모드에서 되살릴 수 있는 것만 owner 경로로
+
+정직한 성과 문장은 세부 계획 §0 에 있다: **S4 는 "이관"이 아니라 부분 복원이고, 설치가 아니다.** S4 뒤에도 attach 모드에는 미체결 SELL 의 시장가 에스컬레이션과 미체결 BUY 의 타임아웃 취소가 없다 — 보호 SELL 에 관해 legacy 보다 계속 덜 안전하며, 그것이 attach 설치의 차단 사유다.
+
+### Plan (완료, 2026-09-21, 기준 `95029fe`)
+
+- **방법:** S3 와 같은 틀 — 읽기 전용 조사 3관점(legacy 세 경로의 실제 동작 / owner 의 취소·SELL API / 하네스·RED 후보, 요청 claude-opus-5/high) → 설계(요청 opus/high) → **적대적 설계 심사(요청 opus/xhigh, 다른 실행): REVISE — must-fix 5건** → coordinator 결정 9건. 관측 모델 전부 미노출(미검증). 제품·시험 수정 0, pytest 0. workflow `wf_7a788856-a08`.
+- **산출물:** `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md` — §1 확정 사실 14 · §2 결정 ①~⑨ · §3 계약 7 · §4 하위 단계 4개 · §5 legacy 불변 · §6 하지 않는 것과 그 전제 · §7 위험.
+- **Plan 이 뒤집은 것(상위 계획·원장 "S4 진입 조건" 대비 범위 축소 — coordinator 결정, 인계 지시 "공식 취소 증거 미완이면 차단 유지"와 같은 방향):**
+  - **취소 최종성은 제품에서 도달 불가능하다**(증거 파서가 취소 체인을 `supported_finality=False` 로 못박고 `lifecycle.reconcile` 제품 호출자 0건·`EXECUTION_FILL` 제품 생산자 0건). 그래서 legacy 의 "취소 → 같은 종목 시장가 재주문"은 owner 위에서 성립하지 않는다 → **90초 SELL 에스컬레이션은 attach 미지원으로 명시**(진입 조건 1 의 절반).
+  - **owner 취소의 제품 배선도 하지 않는다**(설계의 cancel sweep 기각) — 심사 must-fix: 취소를 켜는 순간 부모가 영구히 최종화 불가가 되고, claim 이후 transport 실패는 자식을 `RECONCILING` 으로 굳혀 그 종목과 sweep 을 영구히 잠근다. 설계안 그대로면 stale BUY 한 건이 매 sweep 의 `previous child command unresolved` 예외로 **attach 의 모든 SIGNAL 을 무기한 죽였다**.
+  - **SELL 지정가 재확인(진입 조건 4)은 "하지 않는다"로 닫는다** — 심사 must-fix: "불리한 방향만 막는다"는 안전장치가 곧 손절 방향이라 하락장에서 보호 SELL 을 체계적으로 거부한다.
+  - **연쇄 축출은 owner 필터로 닫히지 않는다**(큐 순서 — 발행된 SELL 은 이미 큐에 있던 BUY#2 뒤에 처리된다) → attach 에서만 전역 600초 1건 상한.
+- **S4 가 하는 것:** S4-0 legacy 세 경로의 특성화(오늘 0건·현행 결함까지 그대로 고정·exit_exempt 가드의 첫 시험) · S4-1 미claim 자식 명령의 종료 간선(kind 인지형 가드) · S4-1b `_unsent` 가 자식 명령도 끝낸다 · S4-2 eviction 을 owner 경로로(H5 복원·H9 owner 미해결 필터·H10 상한).
+- **"S4 진입 조건" 7항의 처분:** 1 → 10분 BUY·90초 SELL 모두 **미지원 명시**(전제: 취소·체결 최종성 증거 계약 = 10A2/10C) · 2 → S4-2 · 3 → S4-1+S4-1b(ACK/UNKNOWN 자식은 풀지 않는다 — 같은 전제) · 4 → 하지 않는다 · 5 → 전제로 유지(S4 가 보호 SELL 의 재시도 경로를 새로 만들지 않으므로 충돌 없음) · 6 → S4-1b 의 대조 시험이 claim 이후 자식의 상태값까지 고정 · 7 → 10C 그대로.
+
+### Do·See — 하위 단계별 (진행하며 채운다)
+
+| 단계 | 제품 파일 | 상태 | 구현 SHA | 독립 재현 | 통합 SHA |
+|---|---|---|---|---|---|
+| S4-0 | 없음(특성화) | 미착수 | — | — | — |
+| S4-1 | `lifecycle.py` | 미착수 | — | — | — |
+| S4-1b | `commands.py` | 미착수 | — | — | — |
+| S4-2 | `engine.py`·`gateway.py` | 미착수 | — | — | — |
+
+체크리스트는 S3 공통 체크리스트를 그대로 쓰고 세 항목을 더한다:
+- [ ] S4-0 의 특성화가 **현행 결함까지 그대로** 고정했는가("고치고 싶은" 동작을 섞지 않았는가), 그리고 S4-2 뒤에도 한 글자 안 고치고 통과하는가.
+- [ ] exit_exempt·승자·코어 보호가 legacy 와 attach 양쪽에서 변이 kill 로 고정됐는가.
+- [ ] S3 시험의 기대값 변경이 계획 결정 ⑨의 **2건뿐**인가(`test_the_entry_stale_loops_…`·`test_a_risk_manager_with_legacy_orders_connected_after_attach_…` 는 변경 금지).
