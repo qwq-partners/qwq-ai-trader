@@ -684,7 +684,8 @@ class UnifiedEngine:
             ))
         finally:
             # 결정 ⑮: 성공 경로의 유일한 pop(update_position 763)이 attach 에서 막혀 있다.
-            self._pending_sector_map.pop(event.symbol, None)
+            # 정리가 다시 던지면 위에서 흡수한 예외를 덮고 루프 밖으로 샌다 — symbol 없는 이벤트도 받는다.
+            self._pending_sector_map.pop(getattr(event, "symbol", None), None)
 
     async def _emit_startup_events(self):
         """시작 이벤트 발행"""
@@ -1961,6 +1962,14 @@ class RiskManager:
         if len(self._last_signal_time) > 500:
             cutoff = now - timedelta(seconds=self._SIGNAL_COOLDOWN_SECONDS * 10)
             self._last_signal_time = {s: t for s, t in self._last_signal_time.items() if t > cutoff}
+
+        # H7: attach 에서 legacy 장부는 비어 있어야 한다(결정 ④·H6). bind 뒤에 장부가 남은
+        # 관리자가 연결되면 아래 stale 루프가 owner 를 거치지 않고 직접 취소·재주문한다
+        # (계약 1 위반) — 위험 지점에서 그 SIGNAL 을 거부한다(_submit_signal 이 흡수).
+        if getattr(self.engine, "_execution_runtime", None) is not None and (
+                len(self._pending_orders) > 0 or len(self._pending_timestamps) > 0
+                or len(self._reserved_by_order) > 0):
+            raise RuntimeError("attach 모드에서 legacy 미체결 장부가 남아 있습니다")
 
         # stale pending 주문 정리 (매도: 90초, 매수: 10분 타임아웃)
         _SELL_TIMEOUT = 90  # 매도 지정가 미체결 타임아웃
