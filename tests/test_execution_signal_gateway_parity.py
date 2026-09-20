@@ -36,6 +36,7 @@ from test_cross_validator_characterization import freeze  # noqa: F401 — pytes
 from test_execution_decision_facts import unrelated_holding
 from test_execution_qualification_publishers import SECTOR, buy, cv
 from test_execution_runtime import NOW as RUNTIME_NOW
+from test_kr_final_dispatch import Response
 from test_execution_signal_gateway import reservations
 from test_execution_signal_gateway_wiring import (
     ENGINE_NOW, JUSTIFIED, drive, engine_clock, posts, risk_manager, spy, teardown, wired,
@@ -102,9 +103,16 @@ def attempts(f, side='buy'):
     return [row for row in f['runtime'].owner.state['attempts'].values() if row['side'] == side]
 
 
-async def again(f, event):
-    """ErrorEvent 가 큐에 남아 있으면 다음 `drive` 가 그걸 먼저 꺼낸다."""
+async def again(f, event, *, order_number=None):
+    """ErrorEvent 가 큐에 남아 있으면 다음 `drive` 가 그걸 먼저 꺼낸다.
+
+    fake 응답은 주문번호가 고정이라 두 번째 ACK 가 같은 `OrderRef` 를 받는다 — 실제 접수처럼
+    새 번호를 돌려주게 갈아 끼운다(`order_number` 를 준 시험만).
+    """
     f['engine']._event_queue.clear()
+    if order_number is not None:
+        f['broker']._session.response = Response(data={'rt_cd': '0', 'output': {
+            'ODNO': order_number, 'KRX_FWDG_ORD_ORGNO': '12345'}})
     return await drive(f['engine'], event)
 
 
@@ -129,7 +137,7 @@ def test_the_second_buy_is_sized_against_the_owners_strategy_remaining(tmp_path,
             assert D('0') < budget - reserved < budget
 
             before = f['engine'].stats.errors_count
-            await again(f, buy(OTHER))
+            await again(f, buy(OTHER), order_number='9876543210')
             assert len(posts(f)) == 2
             assert f['engine'].stats.errors_count == before
             sent = [row for row in attempts(f) if row['symbol'] == OTHER]
@@ -216,7 +224,7 @@ def test_the_core_reserve_is_added_once_on_top_of_the_owner_reservation(tmp_path
                 return original(*args, **kwargs)
 
             f['engine'].can_open_position = record
-            await again(f, buy(OTHER))
+            await again(f, buy(OTHER), order_number='9876543210')
             assert len(seen) == 1
             assert seen[0] == pending + core
         finally:

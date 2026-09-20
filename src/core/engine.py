@@ -295,6 +295,13 @@ class UnifiedEngine:
         """실행 중 핸들러 교체/legacy로 자동 복귀하지 않는다."""
         if self.running or self._execution_runtime is not None or self._event_queue:
             raise RuntimeError("실행 큐가 정지·비어 있는 초기화 단계에서만 설치할 수 있습니다")
+        # H6: attach 의 폐쇄성은 "legacy 장부가 비어 있다"는 전제 위에 있다. 행이 남은 채로
+        # 붙으면 다음 on_signal 진입부의 90초 stale SELL 루프가 owner 를 거치지 않고
+        # broker.submit_order 를 직접 부른다(계약 1 위반). risk_manager 가 없으면 통과.
+        if self.risk_manager is not None:
+            for _ledger in ("_pending_orders", "_pending_timestamps", "_reserved_by_order"):
+                if len(getattr(self.risk_manager, _ledger, ())) > 0:
+                    raise RuntimeError("legacy 미체결 장부가 남아 있으면 설치할 수 없습니다")
         if runtime.engine is not self:
             raise ValueError("다른 엔진의 실행 상태를 설치할 수 없습니다")
         self._execution_runtime = runtime
@@ -1358,6 +1365,18 @@ class StrategyManager:
         return signals or []
 
 
+def _attached_gateway(engine):
+    """attach + gateway 설치 상태의 단일 송신로(S3-6b). 그 밖에서는 항상 None 이다.
+
+    gateway 미설치 attach 는 SIGNAL 이 폐기되는 상태라 on_signal 자체가 돌지 않는다 —
+    legacy 식을 그대로 둔다(결정 ⑪: engine 은 safety 패키지를 이 한 길로만 만난다).
+    """
+    runtime = getattr(engine, "_execution_runtime", None)
+    if runtime is None:
+        return None
+    return getattr(runtime, "gateway", None)
+
+
 class RiskManager:
     """
     리스크 관리자
@@ -1509,6 +1528,12 @@ class RiskManager:
     @property
     def _reserved_cash(self) -> Decimal:
         """예약 현금 합계 (주문별 추적 기반)"""
+        # H2: attach 에서 legacy 장부는 비어 있다(결정 ④) — 정본은 owner 의 미해결 예약이다.
+        # helper 는 fail-closed 로 예외를 낸다(0 을 지어내지 않는다) — on_signal 안에서 나면
+        # H1 의 try/except 가 그 SIGNAL 하나를 명시 거부로 끝낸다.
+        _gateway = _attached_gateway(self.engine)
+        if _gateway is not None:
+            return _gateway.reserved_cash()
         return sum(self._reserved_by_order.values()) if self._reserved_by_order else Decimal("0")
 
     def _get_core_reserve(self) -> Decimal:
@@ -2345,6 +2370,14 @@ class RiskManager:
                 try:
                     _sector = await self._sector_lookup(order.symbol)
                 except Exception:
+                    # H3(결정 ⑭): attach 에서는 owner 가 sector None 에서 섹터 한도를 통째로
+                    # 건너뛰므로(risk_policy 632·666) 조회 장애를 '섹터 없음'으로 뭉개면
+                    # 한도가 꺼진 채 통과한다. 정상적으로 None 을 돌려준 경우는 불변이다.
+                    if _attached_gateway(self.engine) is not None:
+                        logger.exception(f"주문 거부 (섹터 조회 실패): {order.symbol}")
+                        self._log_sig(event, event_type="blocked", block_gate="G3_sector",
+                                      block_reason="섹터 조회 실패")
+                        return None
                     _sector = None
 
             # S2-5: 계약 13·14 를 통과한 증거만 조립한다(게시는 S3 gateway). 레짐은 CV 에
@@ -2476,6 +2509,10 @@ class RiskManager:
 
     def _pending_strategy_notional(self, strategy_name: str) -> Decimal:
         """미체결 BUY 주문의 전략별 예약 금액 합 — 전략 예산 캡 계산 시 체결분에 더한다"""
+        # H2: owner 의 `recompose_quantity` 가 쓰는 같은 필터(side=='buy'·전략별)를 읽는다.
+        _gateway = _attached_gateway(self.engine)
+        if _gateway is not None:
+            return _gateway.pending_strategy_notional(strategy_name)
         return sum(
             (self._reserved_by_order.get(sym, Decimal("0"))
              for sym, st in self._pending_strategy.items() if st == strategy_name),
