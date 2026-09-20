@@ -292,3 +292,59 @@ def test_child_close_after_restore_keeps_the_same_verdict(tmp_path):
             # 열린 SQLite fd 를 남기면 같은 프로세스의 fd 계수 시험(account_lease)이 틀어진다
             await store.close()
     asyncio.run(scenario())
+
+
+# ── 독립 재현이 찾은 결함 (wave 1): 완화 분기는 '확인된 자식'에게만 열린다 ───────
+
+@pytest.mark.parametrize('kind', [None, 'SUBMIT', 'submit ', 'unknown-kind'])
+def test_a_row_of_an_unexpected_kind_is_never_closed(kind):
+    """kind 가 submit 도 cancel/modify 도 아닌 행은 어느 쪽으로도 면제받지 못한다.
+
+    완화 분기가 기본값(else)이면 kind 한 칸이 어긋난 복구 행이 ACK 증거(order_ref)를 가진 채
+    종료되고 예약이 풀린다.
+    """
+    async def scenario():
+        owner, life = await prepared()
+        assert await life.claim('A-1', 'sender-1')
+        assert await life.record_result('A-1', 'sender-1', CommandResult(
+            CommandStatus.ACKNOWLEDGED, 'A-1', PARENT_REF))
+        # ACK 된 SUBMIT 을 '미송신 3축'만 되돌린 복구 행으로 만들고 kind 를 어긋나게 둔다.
+        await seed(owner, 'A-1', state='prepared', status='prepared', claim_id=None,
+                   command_status=None, kind=kind, parent_attempt_id='A-1')
+        before = deepcopy(owner.state)
+        assert await life.abandon_candidate('A-1', reason='dispatch_failed') is False
+        assert owner.state == before
+        assert reservations(owner.state['attempts']['A-1'])[0] == 10
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('parent', ['self', 'sibling-child', 'missing', None])
+def test_the_exemption_needs_a_real_submit_parent(parent):
+    """면제의 근거는 '부모 SUBMIT 의 주문번호'다 — 부모가 자기 자신·다른 자식·소실이면 근거가 없다."""
+    async def scenario():
+        owner, life = await with_child()
+        if parent == 'sibling-child':
+            # 같은 order_ref 를 정상적으로 공유하는 다른 자식을 부모로 가리킨다.
+            def reduce(state):
+                state['attempts']['C-2'] = deepcopy(state['attempts']['C-1'])
+                state['attempts']['C-2']['attempt_id'] = 'C-2'
+                return state
+            await owner.mutate('seed:sibling', reduce)
+        pointer = {'self': 'C-1', 'sibling-child': 'C-2', 'missing': 'GONE', None: None}[parent]
+        await seed(owner, 'C-1', parent_attempt_id=pointer)
+        before = deepcopy(owner.state)
+        assert await life.abandon_candidate('C-1', reason='dispatch_failed') is False
+        assert owner.state == before
+    asyncio.run(scenario())
+
+
+def test_a_parent_without_a_broker_order_number_gives_no_exemption():
+    """부모와 자식의 order_ref 가 둘 다 None 이면 '같다'는 아무것도 식별하지 않는다."""
+    async def scenario():
+        owner, life = await with_child()
+        await seed(owner, 'A-1', order_ref=None)
+        await seed(owner, 'C-1', order_ref=None)
+        before = deepcopy(owner.state)
+        assert await life.abandon_candidate('C-1', reason='dispatch_failed') is False
+        assert owner.state == before
+    asyncio.run(scenario())
