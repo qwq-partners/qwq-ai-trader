@@ -10,8 +10,14 @@ owner 는 실제 SQLite·실제 RegimeOwner 이고 증거는 실제 `CrossStrate
 **S3 는 설치가 아니다** — 제품에 `KRExecutionRuntime` 을 만들거나 `attach()`·
 `install_gateway()` 를 부르는 코드는 0건이고 제품의 `trading_ready` 는 계속 False 다.
 
-시계는 넷을 같은 순간으로 맞춘다: legacy `KRSession`(`src.utils.session.datetime` — 여기서
-처음 동결)·engine 모듈의 naive 시계(`engine_clock`)·CV 모듈 시계(`freeze`)·runtime 주입 시계.
+**여전히 스텁인 것(재사용 하네스에서 걷어내지 못했다):** `_risk_validator`(None — 실제
+`risk/manager.py` 의 `can_open_position` 게이트는 이 파일도 태우지 않는다)·
+`_check_factor_budget`(항상 None — 팩터 버킷 게이트는 attach 경로에서 한 줄도 돌지 않는다).
+
+시계: 11:00 표본은 넷(legacy `KRSession` — `src.utils.session.datetime`, 여기서 처음 동결 ·
+engine 모듈의 naive 시계 `engine_clock` · CV 모듈 시계 `freeze` · runtime 주입 시계)을 같은
+순간으로 맞춘다. 세션 차단 표본(08:55·15:30)은 legacy 세션·engine 시계 **두 축만** 옮긴다 —
+owner 에 닿기 전에 막히므로 뒤의 두 축은 결과에 영향이 없다.
 
 실행: venv/bin/python -m pytest tests/test_execution_signal_gateway_parity.py -q -p no:cacheprovider
 """
@@ -83,14 +89,13 @@ def blocked_gates(records):
     return [row.get('block_gate') for row in records if row.get('event_type') == 'blocked']
 
 
-async def parity(tmp_path, monkeypatch, freeze_clock, *, strict=True):
+async def parity(tmp_path, monkeypatch, freeze_clock):
     """S3-6a 의 배선 위에서 스텁을 걷어낸 엔진."""
     f = await wired(tmp_path, monkeypatch, freeze_clock)
     rm = f['rm']
     unstub(rm, *STUBS)
-    if strict:
-        # 실제 `UnifiedEngine.can_open_position` 이 owner 예약을 받는다(소비 지점 3).
-        unstub(f['engine'], 'can_open_position')
+    # 실제 `UnifiedEngine.can_open_position` 이 owner 예약을 받는다(소비 지점 3).
+    unstub(f['engine'], 'can_open_position')
     f['gates'] = gate_log(rm, monkeypatch)
     return f
 
@@ -451,6 +456,75 @@ def test_the_pending_sector_map_is_still_cleared_when_the_sector_lookup_fails(tm
             await drive(f['engine'], buy(SYM, score=82.0, sector=None))
             assert f['engine']._pending_sector_map == {}
             assert posts(f) == []
+        finally:
+            await teardown(f)
+    asyncio.run(scenario())
+
+
+# ── 독립 재현이 찾은 공백 (wave 5) ────────────────────────────────────────
+
+def test_an_unreadable_cash_reservation_alone_refuses_the_signal(tmp_path, monkeypatch, freeze):
+    """현금 축만 예외원일 때도 그 SIGNAL 은 거부된다 — 전략 축이 대신 던져 주지 않는다.
+
+    전략 배분이 0 이거나 전략이 없는 BUY 는 전략 예산 게이트를 건너뛴다. 그때 `_reserved_cash`
+    가 예외를 0 으로 삼키면 한도가 조용히 넓어진다(fail-open).
+    """
+    async def scenario():
+        f = await parity(tmp_path, monkeypatch, freeze)
+        try:
+            engine, rm = f['engine'], f['rm']
+            # 전략 축은 조용히 둔다 — 남는 예외원은 현금 축 하나다.
+            rm._pending_strategy_notional = lambda _name: D('0')
+            engine.portfolio.cash = engine.portfolio.cash + D('1')   # owner 가 복구 필요 상태
+            calls = spy(f)
+            before = engine.stats.errors_count
+            await drive(engine, buy(SYM))
+            assert engine.stats.errors_count == before + 1
+            assert 'legacy_portfolio_writer_conflict' in errors(engine)[0].message
+            assert [len(calls[key]) for key in ('submit', 'publish', 'prepare')] == [0, 0, 0]
+            assert posts(f) == []
+        finally:
+            await teardown(f)
+    asyncio.run(scenario())
+
+
+def test_the_strategy_reservation_is_read_per_strategy(tmp_path, monkeypatch, freeze):
+    """attach 분기도 legacy 식과 같은 전략 필터를 쓴다 — 다른 전략의 예약을 끌어오지 않는다."""
+    async def scenario():
+        f = await parity(tmp_path, monkeypatch, freeze)
+        try:
+            await drive(f['engine'], buy(SYM))
+            assert len(posts(f)) == 1
+            reserved = f['gateway'].reserved_cash()
+            assert reserved > 0
+            assert f['rm']._pending_strategy_notional('sepa_trend') == reserved
+            assert f['rm']._pending_strategy_notional('gap_and_go') == D('0')
+        finally:
+            await teardown(f)
+    asyncio.run(scenario())
+
+
+def test_the_sizing_itself_subtracts_the_owner_reservation_from_the_cash(tmp_path, monkeypatch,
+                                                                         freeze):
+    """소비 지점 다섯 곳 중 사이징의 가용 현금(`available`)을 직접 고정한다.
+
+    현금이 넉넉한 표본에서는 전략 축이 먼저 묶여 이 지점이 관측되지 않는다 — 현금이 실제로
+    수량을 깎는 구간을 만들고, owner 예약을 뺀 값과 안 뺀 값의 수량이 다름을 본다.
+    """
+    async def scenario():
+        f = await parity(tmp_path, monkeypatch, freeze)
+        try:
+            await drive(f['engine'], buy(SYM))
+            reserved = f['gateway'].reserved_cash()
+            await unrelated_holding(f, symbol='000660', quantity=115)
+            available = f['engine'].get_available_cash()
+            remaining = f['engine'].portfolio.total_equity * D('0.4') - reserved
+            # 조기 차단(G5_cash)은 통과하지만 전략 잔여보다 현금 잔여가 작다.
+            assert D('0') < available - reserved < remaining
+            with_owner = f['rm']._calculate_position_size(buy(OTHER))
+            monkeypatch.setattr(f['gateway'], 'reserved_cash', lambda: D('0'))
+            without = f['rm']._calculate_position_size(buy(OTHER))
+            assert 0 < with_owner < without
         finally:
             await teardown(f)
     asyncio.run(scenario())
