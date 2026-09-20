@@ -60,8 +60,11 @@ def test_inflight_market_source_blocks_submit_until_protection_is_applied(
                 await commands.prepare(request, f['entry'](request))
             result = await commands.dispatch(request, f['entry'](request),
                 GuardedKISTransport(f['broker'], request_builder=f['builder']))
-            assert result.status is CommandStatus.ACKNOWLEDGED
-            assert len(f['broker']._session.posts) == 1
+            # S3-3: claim 이전 실패는 예약을 남기지 않고 시도를 끝낸다 — 앞서 거부된 dispatch 의
+            # 같은 attempt 는 다시 보낼 수 없고, 재송신은 새 prepare 로만 열린다.
+            assert result.status is (CommandStatus.ACKNOWLEDGED if operation == 'prepare'
+                                     else CommandStatus.NOT_SENT)
+            assert len(f['broker']._session.posts) == (1 if operation == 'prepare' else 0)
         finally:
             release.set()
             if task is not None:

@@ -640,7 +640,12 @@ def test_prepared_dispatch_rechecks_replaced_current_regime_source_before_any_ht
                 GuardedKISTransport(broker, request_builder=builder))
             assert result.status.value == 'not_sent'
             assert observed_snapshot_errors == ['regime_source_not_current']
-            assert runtime.owner.state['attempts'][request.attempt_id] == prepared
+            # S3-3: claim 이전 실패는 예약을 남기지 않고 시도를 끝낸다(행이 prepared 로 남던 현행 갱신).
+            current = runtime.owner.state['attempts'][request.attempt_id]
+            assert (current['state'], current['reason_code']) == ('final_rejected',
+                                                                  'regime_source_not_current')
+            assert (current['reserved_quantity'], current['reserved_cash']) == (0, '0')
+            assert current['request_binding'] == prepared['request_binding']
             assert runtime.owner.healthy
             assert broker._session.posts == []
         finally:
