@@ -529,23 +529,23 @@ class RequestBoundCommands:
     async def _unsent(self, request, reason):
         """claim 이전에 끝난 요청. SUBMIT 은 같은 호출 안에서 예약까지 푼다(결정 ⑦·⑧).
 
-        자식 명령은 부모의 order_ref 를 싣고 있어 abandon 가드가 구조적으로 거부한다 —
-        '이미 보냈을 수 있는' 행의 증거를 지우는 길을 열지 않도록 부르지도 않는다(잔류는 S4).
+        자식 명령(cancel/modify)도 같은 길로 보낸다(S4-1b). 누가 실제로 끝날 수 있는지는
+        lifecycle 의 abandon 가드 한 곳이 정한다 — 여기서 kind 로 다시 판정하면 '이미
+        보냈을 수 있는' 행의 판단이 두 곳으로 갈린다. claim 이후 실패는 여기 오지 않는다.
         """
         released = False
-        if request.command is CommandKind.SUBMIT:
-            try:
-                released = await self.runtime.lifecycle.abandon_candidate(request.attempt_id,
-                                                                          reason=reason)
-            except ApplicationBlocked:
-                raise
-            except Exception:
-                # 저장된 행이 깨져 있어도 '보내지 못했다'는 결과는 그대로다. 삼키지 않고 남긴다.
-                logger.exception('[실행] 미송신 시도 해제 예외: attempt={} 사유={}',
-                                 request.attempt_id, reason)
-            if released is not True:
-                logger.warning('[실행] 미송신 시도 예약 유지: attempt={} 사유={}',
-                               request.attempt_id, reason)
+        try:
+            released = await self.runtime.lifecycle.abandon_candidate(request.attempt_id,
+                                                                      reason=reason)
+        except ApplicationBlocked:
+            raise
+        except Exception:
+            # 저장된 행이 깨져 있어도 '보내지 못했다'는 결과는 그대로다. 삼키지 않고 남긴다.
+            logger.exception('[실행] 미송신 시도 해제 예외: attempt={} 사유={}',
+                             request.attempt_id, reason)
+        if released is not True:
+            logger.warning('[실행] 미송신 시도 예약 유지: attempt={} 사유={}',
+                           request.attempt_id, reason)
         return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code=reason)
 
     async def dispatch(self, request, context, transport):
