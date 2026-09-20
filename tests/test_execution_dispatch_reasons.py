@@ -230,10 +230,13 @@ def test_a_failure_after_the_claim_is_recorded_not_abandoned(tmp_path, monkeypat
     asyncio.run(scenario())
 
 
-# ── 결정 ⑧: 자식 명령은 S4 로 이월한 현행을 고정한다 ─────────────────────
+# ── 결정 ⑨: 미claim 자식 명령도 끝난다(S4-1b) ───────────────────────────
 
-def test_an_unclaimed_cancel_is_left_for_s4_and_never_abandoned(tmp_path, monkeypatch):
-    """자식 행은 부모 order_ref 를 싣고 있어 구조적으로 abandon 될 수 없다 — 부르지도 않는다."""
+def test_an_unclaimed_cancel_is_ended_while_the_acknowledged_submit_is_not(tmp_path, monkeypatch):
+    """자식 행이 싣는 order_ref 는 부모 것이다 — lifecycle 가드가 그 한 항만 면제해 끝낸다.
+
+    부모(ACK 된 SUBMIT)는 한 글자도 바뀌지 않고, 끝난 자식은 다음 취소를 다시 열어 준다.
+    """
     async def scenario():
         f, req, _ = await prepared(tmp_path, monkeypatch)
         try:
@@ -256,12 +259,23 @@ def test_an_unclaimed_cancel_is_left_for_s4_and_never_abandoned(tmp_path, monkey
             posted = len(f['broker']._session.posts)
             result = await send(f, cancel)
             assert result.status is CommandStatus.NOT_SENT
-            assert calls == []
+            assert calls == [('C', 'request_binding_changed', True)]
             current = f['runtime'].owner.state['attempts']['C']
-            assert (current['state'], current['claim_id']) == ('prepared', None)
+            assert (current['state'], current['claim_id']) == ('final_rejected', None)
+            assert (current['command_status'], current['reason_code']) == (
+                'not_sent', result.reason_code)
             assert reservations(current) == reservations(before)
-            assert reservations(f['runtime'].owner.state['attempts']['A']) == reservations(parent_before)
+            assert f['runtime'].owner.state['attempts']['A'] == parent_before
             assert len(f['broker']._session.posts) == posted
+
+            # 끝난 자식은 같은 부모의 다음 취소를 막지 않는다(전에는 previous child command unresolved).
+            again = f['builder'].prepare_cancel(intent_id=req.intent_id, attempt_id='C2',
+                session=req.session, parent=CancelParent(req.intent_id, req.attempt_id,
+                    parent['version'], OrderRef.from_dict(parent['order_ref']), req.symbol,
+                    req.side, req.order_type, parent['reserved_quantity'],
+                    req.valuation_price, req.strategy))
+            reopened = await f['commands'].prepare(again, f['entry'](again))
+            assert reopened['state'] == 'prepared'
         finally: await f['store'].close()
     asyncio.run(scenario())
 
@@ -416,5 +430,68 @@ def test_a_session_that_closes_after_prepare_ends_the_attempt(tmp_path, monkeypa
             assert reservations(attempt) == (0, D('0'), D('0'), None)
             assert pending_sectors(f) == {}
             assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+# ── 대조: claim 이후 실패한 자식은 S4-1b 도 풀지 않는다 (계획 §1 사실 3) ──
+
+async def cancel_child(tmp_path, monkeypatch):
+    """ACK 된 부모 SUBMIT 한 건과 그 밑에 prepare 만 해 둔 취소 자식."""
+    f, req, _ = await prepared(tmp_path, monkeypatch)
+    assert (await send(f, req)).status is CommandStatus.ACKNOWLEDGED
+    parent = f['runtime'].owner.state['attempts']['A']
+    cancel = f['builder'].prepare_cancel(intent_id=req.intent_id, attempt_id='C',
+        session=req.session, parent=CancelParent(req.intent_id, req.attempt_id,
+            parent['version'], OrderRef.from_dict(parent['order_ref']), req.symbol,
+            req.side, req.order_type, parent['reserved_quantity'],
+            req.valuation_price, req.strategy))
+    await f['commands'].prepare(cancel, f['entry'](cancel))
+    return f, cancel
+
+
+@pytest.mark.parametrize('failure, status, command_status, reason, posted', [
+    ('transport', CommandStatus.UNKNOWN, 'unknown', 'dispatch_unconfirmed', 1),
+    ('guard', CommandStatus.NOT_SENT, 'not_sent', 'current_request_guard_rejected', 0),
+])
+def test_a_child_that_failed_after_the_claim_is_not_abandoned(tmp_path, monkeypatch, failure,
+                                                              status, command_status, reason, posted):
+    """claim 이 붙은 자식은 '보냈을 수 있는' 행이다 — 잔류를 상태값까지 고정한다.
+
+    이 잔류를 푸는 것은 취소·체결 최종성의 증거 계약(10A2/10C)이지 S4 가 아니다.
+    """
+    from test_kr_final_dispatch import Response
+
+    async def scenario():
+        f, cancel = await cancel_child(tmp_path, monkeypatch)
+        try:
+            parent_before = dict(f['runtime'].owner.state['attempts']['A'])
+            calls = spy_abandon(f, monkeypatch)
+            before = len(f['broker']._session.posts)
+            if failure == 'transport':
+                # POST 는 나갔고 응답만 읽지 못한 경우 — 접수 여부를 모른다.
+                f['broker']._session.response = Response(
+                    data={'rt_cd': '0'}, error=OSError('synthetic-cancel-transport-failure'))
+                result = await send(f, cancel)
+            else:
+                task, release = await paused_dispatch(f, cancel, boundary='hashkey')
+                f['commands']._permits.clear()
+                release.set()
+                result = await task
+            assert (result.status, result.reason_code) == (status, reason)
+            assert calls == []
+            current = f['runtime'].owner.state['attempts']['C']
+            assert (current['state'], current['command_status']) == ('reconciling', command_status)
+            assert current['claim_id'] is not None
+            assert len(f['broker']._session.posts) == before + posted
+
+            # 어떤 abandon 가드로도 끝낼 수 없다(직접 불러도 거부).
+            child_before = dict(current)
+            assert await f['runtime'].lifecycle.abandon_candidate(
+                'C', reason='synthetic-direct-abandon') is False
+            assert calls == [('C', 'synthetic-direct-abandon', False)]
+            assert f['runtime'].owner.state['attempts']['C'] == child_before
+            assert f['runtime'].owner.state['attempts']['A'] == parent_before
+            assert reservations(f['runtime'].owner.state['attempts']['A']) == reservations(parent_before)
         finally: await f['store'].close()
     asyncio.run(scenario())
