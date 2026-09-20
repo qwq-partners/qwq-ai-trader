@@ -240,6 +240,7 @@
   - → coordinator `1a6e6d2`: ① state 만 어긋난 복구 행 파라미터 ② version+1 단언 ③ regime owner 없는 state 의 전파 시험(기존 `test_execution_policy_snapshot.baseline` 을 import 만). **세 변이를 직접 다시 적용해 각각 그 시험만 실패**함을 확인 후 원복·트리 clean.
   - **설계 쟁점(재현자 발견 → 결정 ⑧ 확정):** 자식 명령(cancel/modify) 행은 `prepare_candidate` 가 항상 부모 `order_ref` 를 싣기 때문에 `order_ref is None` 가드에 걸려 **구조적으로 abandon 될 수 없다.** 가드를 풀면 "이미 보낸 주문"의 증거를 가진 행을 지우는 길이 되므로 풀지 않는다 → **S3-3 의 abandon 호출은 SUBMIT 한정**, 미claim 자식 명령의 잔류(같은 부모의 이후 취소를 막는다)는 취소를 owner 경로로 옮기는 **S4 의 설계 항목**으로 이월. S3 gateway 는 SUBMIT 만 내므로 S3 범위의 누수는 없다.
 - **전체 suite — 아직 깨끗한 증거 없음:** HEAD `1a6e6d2` UTC 1회 = **4654 passed / 2 failed**(426초, 평소 ~290초). 실패 2건은 `tests/test_execution_account_lease.py` 의 프로세스 spawn·fd 시험으로 이번 diff 와 무관한 파일이고 단독 62 passed. 원인은 **다른 사용자 세션**(PID 175570, 새 worktree `serene-wright-7abecf` — 분리해 둔 Toss flaky 작업으로 보인다)이 같은 시각에 pytest 를 돌려 load average 가 10 까지 오른 것. 합계는 4654+2 = 4656 = 4632 + 16(abandon) + 8(hybrid)로 맞는다. **오염된 실행이라 증거로 쓰지 않고, wave 2 경계에서 호스트가 조용할 때(`uptime` 의 load average 확인) UTC→KST 를 다시 돌린다.** 다른 세션은 건드리지 않는다.
+  - **정정(wave 2 경계에서 확인):** 위 2건 중 `test_repeated_close_does_not_retain_lease_objects_or_descriptors` 는 **부하 탓이 아니었다.** 조용한 호스트(load 1.2, 292초)의 재실행에서도 그 1건만 실패했고, 원인은 S3-1 의 새 restore 시험이 SQLite store 를 닫지 않아 남긴 fd 였다 — 새 파일 `test_execution_abandon_candidate.py` 가 알파벳 순서상 `test_execution_account_lease.py` **바로 앞**에서 돌고, 그 시험의 `gc.collect()` 가 남은 연결을 거두면서 fd 계수가 틀어진다(두 파일만 함께 돌려 재현). `9572ed2` 에서 `finally: await store.close()` 로 수정, S3 의 새 시험 파일 4개 전부를 lease 시험 앞에 같은 프로세스로 돌려 110 passed 확인. **교훈: "단독으로는 통과"는 부하성의 증거가 아니다 — 순서 의존일 수도 있다. 무관해 보이는 실패는 "직전 파일과 함께" 다시 돌려 본다.** 나머지 1건(`test_two_spawn_processes…`)은 조용한 재실행에서 통과했다(부하성).
 - **정리:** 임시 worktree 4개·work 브랜치 2개 제거(clean·merged).
 
 ### wave 2 (S3-3 ∥ S3-4) — Do·See 기록 (기준 `ffca70c` → `9a3fe19`)
@@ -254,6 +255,8 @@
   - **부수 발견:** 미claim prepared attempt 가 하나라도 있으면 일자 전환이 `unresolved_submit` 로 **시작조차 되지 않는다** — S3-3 이전의 누수는 예약뿐 아니라 다음 날 rollover 도 막는 결함이었다.
   - **독립 재현: CHANGES_REQUIRED — 제품은 옳고 시험 공백 2건**(자체 변이 4종 중 3종 생존): ⓓ 정리를 `not state.get("attempts")` 에 조건부로 걸어도 통과(전환 시나리오가 백지 state 뿐) ⓔ 전환 writer 가 `entry_policy_effects`·`entry_quotes`·`inbox` 를 함께 비워도 통과(무변경 대조가 손열거 6뿌리). → coordinator `9a3fe19`: 거래가 있었던 날(S3-3 의 abandon 이 남긴 터미널 attempt·intent)의 전환 시험 + 무변경 뿌리를 "전환 직전의 전 뿌리 − 전환 소관"으로 유도·뿌리 키 집합 단언(전환이 `recovery_receipts` 를 더한다는 것도 이때 실측).
 - **coordinator 변이 재적용:** 생존했던 4종(ⓑ `_unsent` 의 재던짐을 `pass` 로 · ⓓ · ⓔ 두 뿌리)을 직접 다시 넣어 **각각 해당 시험만 실패**함을 확인 후 원복·트리 clean.
+- **wave 1·2 전체 suite(coordinator, HEAD `9572ed2`, 단독 직렬·다른 세션의 pytest 없음 확인, 2026-09-21 02:25~02:35 KST):** UTC **4680 passed / 2 xfailed / 경고 4 / 290.00초**(종료 시 load 1.51), KST **4680 / 2 / 4 / 291.24초**(load 1.29), 각 격리 0. `85a65bc` 의 4632 대비 **+48 = abandon 16 + hybrid 축 8 + 사유 보존 17 + facts 정리 7**. 기존 xfail 2·경고 4 불변. 그 직전의 `9a3fe19` UTC 실행(4679 passed / **1 failed**)은 wave 1 기록의 "정정"에 적은 fd 누수였고 `9572ed2` 에서 고쳤다.
+- **정리:** 임시 worktree 4개·work 브랜치 2개 제거(clean·merged).
 
 Codex 교차 리뷰(포그라운드·10분 상한)는 wave 2·3·5 뒤 각 1회. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 
@@ -265,5 +268,6 @@ Codex 교차 리뷰(포그라운드·10분 상한)는 wave 2·3·5 뒤 각 1회.
 - [ ] 세부 계획에 나열된 변이 **전건**과 독립 재현자의 자체 변이 ≥3 이 kill 되는가. "attach 가드를 항상 참으로" 변이에서 legacy 대조 시험이 죽는가.
 - [ ] 합성 허가 없는(`ready=False`) 대조가 쌍으로 있고 그때 **예약 0** 인가.
 - [ ] 네 시계(legacy `KRSession`·engine 모듈·CV 모듈·runtime 주입)가 같은 순간으로 고정됐는가. UTC·KST 양쪽 통과, 벽시계 의존 0, `synthetic_home` autouse 자체 선언.
+- [ ] 실제 SQLite store·runtime 을 여는 새 시험이 `finally` 에서 `await store.close()`(필요하면 `runtime.shutdown()`)를 부르는가 — 남긴 fd 는 같은 프로세스에서 다음에 도는 fd 계수 시험(`test_execution_account_lease.py`)을 깨뜨린다(wave 1 에서 실제 발생). 새 시험 파일들을 그 파일 **앞에 같은 프로세스로** 돌려 확인한다.
 - [ ] `src/`·`scripts/` 에서 `KRExecutionRuntime(`·`.attach(`·`install_gateway(` 제품 호출자 0건을 grep 으로 재확인했는가.
 - [ ] 전체 suite 는 **어떤 에이전트도 돌지 않을 때** 단독 직렬(UTC→KST)로 돌렸는가.
