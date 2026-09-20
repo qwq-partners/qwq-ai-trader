@@ -22,7 +22,7 @@ from src.execution.safety.transport import GuardedKISTransport
 
 from test_execution_command_owner import fixture as command_fixture
 from test_execution_decision_facts import (
-    JUSTIFIED, apply_change, make_facts, nominal, publish,
+    JUSTIFIED, apply_change, make_facts, nominal, paused_dispatch, publish,
 )
 from test_execution_regime_recheck import (
     fixture as regime_fixture, regime_digest,
@@ -204,6 +204,27 @@ def test_an_unexpected_failure_is_named_dispatch_failed_and_abandons_nothing(tmp
             current = f['runtime'].owner.state['attempts']['A']
             assert current['state'] == 'prepared'
             assert reservations(current) == before
+            assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_failure_after_the_claim_is_recorded_not_abandoned(tmp_path, monkeypatch):
+    """claim 이후 실패는 record_result→FINAL_REJECTED 가 맡는다 — 종료 전이를 겹쳐 걸지 않는다."""
+    async def scenario():
+        f, req, facts = await prepared(tmp_path, monkeypatch, quantity=JUSTIFIED)
+        calls = spy_abandon(f, monkeypatch)
+        try:
+            task, release = await paused_dispatch(f, req, boundary='connect')
+            await apply_change(f, req, facts, 'config')
+            release.set()
+            result = await task
+            assert result.status is CommandStatus.NOT_SENT
+            assert calls == []
+            current = f['runtime'].owner.state['attempts']['A']
+            assert current['state'] == 'final_rejected'
+            assert current['claim_id'] is not None
+            assert reservations(current) == (0, D('0'), D('0'), None)
             assert f['broker']._session.posts == []
         finally: await f['store'].close()
     asyncio.run(scenario())
