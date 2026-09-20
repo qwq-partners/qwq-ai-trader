@@ -201,18 +201,18 @@ def test_final_recheck_blocks_post_after_the_network_await(tmp_path, monkeypatch
             req = f['request'](quantity=JUSTIFIED)
             await f['quote'](req)
             facts = await publish(f, make_facts(req))
-            await f['commands'].prepare(req, f['entry'](req))
-            reserved = dict(f['runtime'].owner.state['attempts']['A'])
+            prepared = await f['commands'].prepare(req, f['entry'](req))
+            assert (prepared['reserved_cash'], prepared['reserved_quantity']) == ('507500.000', 50)
             task, release = await paused_dispatch(f, req, boundary='connect')
             await apply_change(f, req, facts, change)
             release.set()
             result = await task
             assert result.status in (CommandStatus.NOT_SENT, CommandStatus.UNKNOWN)
             assert f['broker']._session.posts == []
+            # 미송신은 예약을 새로 잡지도 남기지도 않는다(누수 없이 전량 해제).
             current = f['runtime'].owner.state['attempts']['A']
-            assert (current['reserved_cash'], current['reserved_exposure'],
-                    current['reserved_quantity']) == (reserved['reserved_cash'],
-                    reserved['reserved_exposure'], reserved['reserved_quantity'])
+            assert (D(current['reserved_cash']), D(current['reserved_exposure']),
+                    current['reserved_quantity']) == (D('0'), D('0'), 0)
         finally: await f['store'].close()
     asyncio.run(scenario())
 
@@ -344,8 +344,12 @@ def test_final_kernel_quantity_equals_the_actual_legacy_wrapper(external_factors
          _signal(strategy=StrategyType.CORE_HOLDING),
          _parity_snapshot(mode='risk', core_pct=30.0),
          dict(strategy='core_holding', base_pct=0.10, strategy_allocation_pct=30.0)),
+        # wrapper는 get_available_cash를 직접 눌러 1.3M을 만들고, owner는 현금 1.3M +
+        # 무관 전략 보유 8.7M으로 같은 자산/가용현금을 구성한다.
         ('market_affordability', 100, _manager(config=_config(core_pct=0.0), available=D('1300000')),
-         _signal(), _parity_snapshot(mode='nominal', core_pct=0.0, cash=D('1300000')),
+         _signal(), _parity_snapshot(mode='nominal', core_pct=0.0, cash=D('1300000'),
+             positions=(p.PositionPolicyFact('000660', 'gap_and_go', None, 87, D('8700000'),
+                                             NOW.date(), None, None, None, False),)),
          dict(base_pct=0.25, strategy_allocation_pct=42.0)),
     ]
     for name, expected, manager, event, snapshot, changes in cases:

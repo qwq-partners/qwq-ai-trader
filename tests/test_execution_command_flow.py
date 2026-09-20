@@ -30,6 +30,7 @@ def test_bound_request_partial_full_fill_and_initial_r_share_one_owner(tmp_path,
             request = f['request']()
             context = f['entry'](request)
             await f['quote'](request)
+            if origin == 'automatic': await f['facts'](request, sector='반도체')
             prepared = await commands.prepare(request, context, sector='반도체')
             binding = deepcopy(prepared['request_binding'])
             transport = GuardedKISTransport(f['broker'], request_builder=f['builder'])
@@ -59,6 +60,7 @@ def test_bound_request_partial_full_fill_and_initial_r_share_one_owner(tmp_path,
             async def reject_another_same_sector():
                 other = f['request']('B', symbol='000660', strategy='sepa_trend')
                 await f['quote'](other)
+                await f['facts'](other, sector='반도체')
                 automatic = f['authority'].automatic(other.symbol, 'buy', other.strategy)
                 with pytest.raises(CommandValidationError, match='sector_limit'):
                     await commands.prepare(other, automatic, sector='반도체')
