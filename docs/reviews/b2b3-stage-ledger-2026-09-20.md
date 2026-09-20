@@ -221,8 +221,8 @@
 |---|---|---|---|---|---|
 | S3-1 | `lifecycle.py` | **통합(한정 승인·호출자 0건)** | `52a6ffc`(red)→`86ccc7e`→`58d530f` | CHANGES_REQUIRED(시험 공백 2·설계 쟁점 1) → coordinator `1a6e6d2` 로 해소 | merge `0975624` |
 | S3-2 | `risk_policy.py`(+helper 2줄) | **통합(한정 승인·제품 생성자 0건)** | `af09a24`(red)→`f66258d` | CHANGES_REQUIRED(시험 공백 1) → coordinator `1a6e6d2` 로 해소 | merge `2c24aca` |
-| S3-3 | `commands.py` | 미착수 | — | — | — |
-| S3-4 | `day_recovery.py` | 미착수 | — | — | — |
+| S3-3 | `commands.py` | **통합(한정 승인·dispatch 제품 호출자 0건)** | `3a28993`(red)→`d339cd7`→`17725fa` | APPROVE_THIS_SLICE(P2 3건) → coordinator `9a3fe19` 로 해소 | merge `c48cb68` |
+| S3-4 | `day_recovery.py` | **통합(한정 승인·돈 경로 아님)** | `feb4349`(red)→`968a097` | CHANGES_REQUIRED(시험 공백 2) → coordinator `9a3fe19` 로 해소 | merge `e42b014` |
 | S3-5 | `gateway.py`·`runtime.py` 설치점 | 미착수 | — | — | — |
 | S3-6a | `engine.py` H1·H4·H5 | 미착수 | — | — | — |
 | S3-6b | `engine.py` H2·H3 | 미착수 | — | — | — |
@@ -241,6 +241,19 @@
   - **설계 쟁점(재현자 발견 → 결정 ⑧ 확정):** 자식 명령(cancel/modify) 행은 `prepare_candidate` 가 항상 부모 `order_ref` 를 싣기 때문에 `order_ref is None` 가드에 걸려 **구조적으로 abandon 될 수 없다.** 가드를 풀면 "이미 보낸 주문"의 증거를 가진 행을 지우는 길이 되므로 풀지 않는다 → **S3-3 의 abandon 호출은 SUBMIT 한정**, 미claim 자식 명령의 잔류(같은 부모의 이후 취소를 막는다)는 취소를 owner 경로로 옮기는 **S4 의 설계 항목**으로 이월. S3 gateway 는 SUBMIT 만 내므로 S3 범위의 누수는 없다.
 - **전체 suite — 아직 깨끗한 증거 없음:** HEAD `1a6e6d2` UTC 1회 = **4654 passed / 2 failed**(426초, 평소 ~290초). 실패 2건은 `tests/test_execution_account_lease.py` 의 프로세스 spawn·fd 시험으로 이번 diff 와 무관한 파일이고 단독 62 passed. 원인은 **다른 사용자 세션**(PID 175570, 새 worktree `serene-wright-7abecf` — 분리해 둔 Toss flaky 작업으로 보인다)이 같은 시각에 pytest 를 돌려 load average 가 10 까지 오른 것. 합계는 4654+2 = 4656 = 4632 + 16(abandon) + 8(hybrid)로 맞는다. **오염된 실행이라 증거로 쓰지 않고, wave 2 경계에서 호스트가 조용할 때(`uptime` 의 load average 확인) UTC→KST 를 다시 돌린다.** 다른 세션은 건드리지 않는다.
 - **정리:** 임시 worktree 4개·work 브랜치 2개 제거(clean·merged).
+
+### wave 2 (S3-3 ∥ S3-4) — Do·See 기록 (기준 `ffca70c` → `9a3fe19`)
+
+- **방법:** workflow `wf_d8295400-b95` — wave 1 과 같은 틀(단일 writer 요청 opus/high → 독립 재현 요청 opus/xhigh, 관측 모델 미노출).
+- **S3-3 `commands.py`(+36/−2 → coordinator 로거 교체 포함):** ① `_dispatch` 의 claim 이전 `except Exception` 하나를 네 갈래로 — `ApplicationBlocked` 재던짐(바깥이 `command_admission_closed`) / `CommandValidationError` → **사유 보존** + `_unsent` / 그 밖 → `dispatch_failed`(예약 무변) / `claimed=False` → `claim_not_available` + `_unsent` ② `_unsent`: **SUBMIT 일 때만** `abandon_candidate`, False·예외는 로그로 남기고 NOT_SENT 보존 ③ `_decision_facts` 에 `decision_hybrid_mismatch`(`recompose_quantity` 뒤 — 진리표와 이유는 계획서 S3-3 절). 성공 경로·claim 이후 실패 경로는 0줄 변경.
+  - **행동 RED 11건(부재 RED 0):** 전부 단언 불일치 — 예) `assert 'claim_not_available' == 'startup_reconciliation'`, `== 'decision_facts_expired'`, `DID NOT RAISE`(설정 hybrid on·신고 off 가 오늘 통과), 그리고 누수 그 자체: dispatch 실패 뒤 `attempts['A']` 가 `prepared`·`reserved_quantity=50`·`reserved_cash='507500.000'`·`pending_sectors == {'005930': '반도체'}` 로 남는다.
+  - **기존 시험 기대값 갱신 2파일(좁은 예외 — 줄 단위 보고, 재현자가 "약화 아님" 확인):** `tests/test_execution_market_source.py`(일시 차단 뒤 같은 attempt 가 다시 ACK 된다는 단언 → dispatch 분기는 NOT_SENT·POST 0)·`tests/test_execution_two_minute_regime_owner.py`(claim 이전 실패 뒤 행이 prepare 직후와 글자 하나까지 같다는 단언 → `final_rejected`·사유·예약 0·binding 보존). 둘 다 **이 단계가 닫는 누수를 현행으로 고정했던 단언**이다. 계약 귀결(일시 차단도 attempt 를 끝내고 재송신은 새 prepare)은 계획서 S3-3 절에 기록.
+  - 명세대로 세울 수 없었던 것(수용): `claimed=False` 의 "sibling 미해결" 형태는 도달 불가(`_evaluate` 가 먼저 예외) → 대조 시험으로 · schema3 의 now 계약은 동치 변이 → schema1 축에서 고정(인수 조건 7 은 그렇게 닫는다).
+  - **독립 재현: APPROVE_THIS_SLICE** — 지정 변이 8 + 자체 7 = 15종 중 1종 생존(시험 공백). P2 3건 → coordinator `9a3fe19`: ⓐ 새 로거가 stdlib `logging` 이라 프로젝트 loguru sink 에 실리지 않는다 → `from loguru import logger`(실행 로그에서 `[실행] 미송신 시도 예약 유지` 출력 확인) ⓑ `_unsent` 의 `ApplicationBlocked` 재던짐에 시험이 없다 → abandon 경합 시험 1건 ⓒ 갱신된 market_source 단언의 특정성 → 사유 코드 `reservation_changed` 단언 추가(실측값).
+- **S3-4 `day_recovery.py`(+4/−0):** `reset_daily` 가 `entry_decision_facts` 만 비운다(키가 없으면 만들지 않는다, `qualification_sources` 무접촉). 행동 RED 3건(부재 0): 실제 4단계 전환을 APPLIED 로 통과한 뒤 facts 3건 잔존 / `rollover_day` 직전 7886B → 직후 8636B / 전환 후 재 prepare 의 사유가 `decision_facts_required` 가 아니라 `decision_facts_expired`. 명세의 RED 두 건이 도달 불가·거짓이었던 사정은 계획서 S3-4 절.
+  - **부수 발견:** 미claim prepared attempt 가 하나라도 있으면 일자 전환이 `unresolved_submit` 로 **시작조차 되지 않는다** — S3-3 이전의 누수는 예약뿐 아니라 다음 날 rollover 도 막는 결함이었다.
+  - **독립 재현: CHANGES_REQUIRED — 제품은 옳고 시험 공백 2건**(자체 변이 4종 중 3종 생존): ⓓ 정리를 `not state.get("attempts")` 에 조건부로 걸어도 통과(전환 시나리오가 백지 state 뿐) ⓔ 전환 writer 가 `entry_policy_effects`·`entry_quotes`·`inbox` 를 함께 비워도 통과(무변경 대조가 손열거 6뿌리). → coordinator `9a3fe19`: 거래가 있었던 날(S3-3 의 abandon 이 남긴 터미널 attempt·intent)의 전환 시험 + 무변경 뿌리를 "전환 직전의 전 뿌리 − 전환 소관"으로 유도·뿌리 키 집합 단언(전환이 `recovery_receipts` 를 더한다는 것도 이때 실측).
+- **coordinator 변이 재적용:** 생존했던 4종(ⓑ `_unsent` 의 재던짐을 `pass` 로 · ⓓ · ⓔ 두 뿌리)을 직접 다시 넣어 **각각 해당 시험만 실패**함을 확인 후 원복·트리 clean.
 
 Codex 교차 리뷰(포그라운드·10분 상한)는 wave 2·3·5 뒤 각 1회. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 

@@ -151,6 +151,14 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
 - **변이:** hybrid `_require` 를 `_require(True, …)` 로 / `except CommandValidationError` 를 `except Exception` 으로 뭉갬 / abandon 의 SUBMIT 한정 제거 / 경합 코드를 예외 코드와 같게 / 예외 경로의 abandon 제거 / **`claimed=False` 경로의 abandon 제거** / abandon 을 claim 이후 실패에도 부름 / `_recheck_regime` 의 now 를 `facts.decided_at` 으로.
 - **위험:** `_owner_ready` 실패 사유에 `startup_reconciliation` 같은 owner 내부 어휘가 그대로 실린다 — 로그 한정(결정 ⑬).
 
+- **통합된 실제 인터페이스(wave 2, `d339cd7`+`9a3fe19`):**
+  - hybrid `_require` 는 sector `_require` 옆이 아니라 **`recompose_quantity` 대조 뒤**에 있다(같은 prepare·final 공통 관문 안). 앞에 두면 동결 시험 `test_hybrid_sizing_is_explicitly_refused_before_any_attempt`(신고 on·정책 off)가 `unsupported_hybrid_sizing` 대신 mismatch 를 받아 깨진다. 진리표: 정책 off·신고 off → 통과 / off·on → `unsupported_hybrid_sizing` / on·on → `unsupported_hybrid_sizing` / **on·off → `decision_hybrid_mismatch`**. 통과는 off·off 하나뿐이라 순서와 무관하게 fail-closed 다.
+  - claim 이전 실패는 helper `_unsent(request, reason)` 한 곳을 지난다: SUBMIT 일 때만 `abandon_candidate` 호출, False 면 loguru `[실행] 미송신 시도 예약 유지` 경고, abandon 의 `ApplicationBlocked` 는 다시 던져 바깥 `dispatch` 가 `command_admission_closed` 로 만들고, 그 밖의 abandon 예외(저장된 예약 행이 깨진 경우 — 기존 시험이 그 상태를 만든다)는 `logger.exception` 으로 남기되 NOT_SENT 결과는 보존한다.
+  - **`claimed=False` 는 "sibling submit 미해결"로는 도달하지 않는다** — 그 조건들은 `_bound`→`_evaluate` 가 먼저 `unresolved_symbol_attempt` 등 예외로 막는다. 실제로 도달하는 `claimed=False` 는 "남의 claim 이 이미 붙었다/상태가 prepared 가 아니다"뿐이고 그때 abandon 은 정의상 False(예약 유지)다. 그래서 그 경로는 대조 시험(예약 유지 + abandon 호출 사실 spy)으로 고정됐다.
+  - **schema3 의 "재유도는 현재 now" 는 행동으로 관측되지 않는다(동치 변이).** schema3 게이트는 `classified_at` 과 now 를 둘 다 KST 날짜로만 비교하는데, 날짜가 다른 요청은 `_session` 의 `request_day_mismatch` 가 먼저 막는다. 같은 변이는 schema1 경로의 naive `.date()` 축으로, **dispatch 시점**에 세워 kill 했다. 인수 조건 7 은 "schema3 에서는 구조적으로 성립, 시험으로는 schema1 축에서 고정"으로 닫는다.
+  - **계약 귀결(기존 시험 2곳의 기대값이 바뀐 이유):** claim 이전의 **일시적** 차단(in-flight market source, regime source 교체)도 이제 그 attempt 를 끝낸다. 같은 attempt 의 재 dispatch 는 `reservation_changed` 로 NOT_SENT 이고, 재송신은 **같은 intent 의 새 prepare** 로만 열린다(계약 5·6 과 일치). `tests/test_execution_market_source.py`·`tests/test_execution_two_minute_regime_owner.py` 의 "같은 attempt 가 prepared·예약 그대로 남아 다시 보내진다"는 단언이 바로 이 단계가 닫는 누수를 현행으로 고정한 것이어서 새 계약으로 갱신됐다(독립 재현이 줄 단위로 "약화 아님" 확인, coordinator 가 사유 코드 단언을 더해 특정성 회복). S4 의 보호 SELL 설계는 이 귀결(일시 차단 뒤에는 새 attempt)을 전제로 한다.
+  - 부수 확인: **미claim prepared 가 하나라도 남으면 일자 전환 자체가 `unresolved_submit` 로 막힌다**(S3-4 worker 실측) — 이 단계 이전의 누수는 예약뿐 아니라 다음 날의 rollover 도 막는 결함이었다. 자식 명령 잔류(S4 이월)가 같은 방식으로 전환을 막는지는 S4 에서 확인한다.
+
 ### S3-4 — `day_recovery.py`: 전일 판단 사실 정리 (돈 경로 아님 · 별도 커밋)
 
 - **제품 파일(단일 writer):** `src/execution/safety/day_recovery.py` · **시험:** `tests/test_execution_decision_facts_gc.py` · **의존:** 없음(S3-3 과 병렬 — 결정 ⑩으로 `commands.py` 의존이 없다)
@@ -163,6 +171,8 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
   - [대조] `portfolio`·`risk`·`protection`·`lots`·`outbox`·`intents`·`attempts`·`qualification_sources` 무변경.
 - **변이:** facts 비우기 제거 / `qualification_sources` 까지 비움 / 키 부재 state 에서 KeyError.
 - **위험:** facts 를 지우면 저장소에 흔적이 없다(사실 15) — 감사 흔적은 S3-5 의 게시 로그가 맡는다. 이 단계를 "감사 보존"으로 보고하지 않는다.
+
+- **통합된 실제 인터페이스(wave 2, `968a097`+`9a3fe19`):** `reset_daily` 에 `if "entry_decision_facts" in state: state["entry_decision_facts"] = {}` 한 곳. 명세의 RED 두 건은 그대로 세울 수 없었다 — ① "전환 전 prepare → 전환 후 dispatch" 는 도달 불가(prepared attempt 가 있으면 전환이 `unresolved_submit` 로 시작되지 않고, 전환 뒤 전일 요청은 `request_day_mismatch` 가 먼저 막는다) → facts 부재는 **전환 후 같은 intent 재 prepare → `decision_facts_required`**(수정 전에는 `decision_facts_expired`)로 고정. ② "encode_state 길이가 준다" 는 전환 전체 구간으로는 거짓(전환이 `day_transition`·`day_valuations`·`day_valuation_view`·`recovery_receipts` 를 더한다) → 측정 구간을 `rollover_day` 직전/직후로 좁혔다. 무변경 대조는 손열거가 아니라 **"전환 직전의 전 뿌리 − 전환 소관 뿌리"** 로 유도하고 뿌리 키 집합 자체도 단언한다(이 writer 에 뿌리 삭제가 하나 더 끼어들면 자동으로 잡힌다). 거래가 있었던 날(터미널 attempt·intent 가 남은 state)의 전환도 고정.
 
 ### S3-5 — `gateway.py`(신규) + `runtime.py` 설치점
 

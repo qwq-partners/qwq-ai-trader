@@ -193,15 +193,19 @@ def test_abandon_after_restore_releases_bound_reservations(tmp_path):
     """checkpoint 복구 뒤에도 같은 가드로 예약 4항이 0 이 된다."""
     async def scenario():
         engine, exits, store, runtime = await setup(tmp_path)
-        await runtime.lifecycle.prepare('I-1', 'A-1', 10, SYMBOL, 'buy',
-                                        reserved_cash=CASH, strategy='sepa_trend')
-        await bind_reservation(runtime.owner, 'A-1')
-        second = KRExecutionRuntime(store, engine, exits, clock=lambda: NOW)
-        await second.restore()
-        assert second.owner.state['attempts']['A-1']['claim_id'] is None
-        assert await second.lifecycle.abandon_candidate('A-1', reason='dispatch_failed') is True
-        attempt = second.owner.state['attempts']['A-1']
-        assert attempt['state'] == 'final_rejected' and attempt['reason_code'] == 'dispatch_failed'
-        assert reservations(attempt) == (0, '0', '0', '0')
-        assert second.lifecycle.replacement_quantity('I-1') == 10
+        try:
+            await runtime.lifecycle.prepare('I-1', 'A-1', 10, SYMBOL, 'buy',
+                                            reserved_cash=CASH, strategy='sepa_trend')
+            await bind_reservation(runtime.owner, 'A-1')
+            second = KRExecutionRuntime(store, engine, exits, clock=lambda: NOW)
+            await second.restore()
+            assert second.owner.state['attempts']['A-1']['claim_id'] is None
+            assert await second.lifecycle.abandon_candidate('A-1', reason='dispatch_failed') is True
+            attempt = second.owner.state['attempts']['A-1']
+            assert attempt['state'] == 'final_rejected' and attempt['reason_code'] == 'dispatch_failed'
+            assert reservations(attempt) == (0, '0', '0', '0')
+            assert second.lifecycle.replacement_quantity('I-1') == 10
+        finally:
+            # 열린 SQLite fd 를 남기면 같은 프로세스의 fd 계수 시험(account_lease)이 틀어진다
+            await store.close()
     asyncio.run(scenario())
