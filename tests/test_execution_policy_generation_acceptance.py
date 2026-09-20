@@ -35,6 +35,7 @@ def test_v1_actual_queued_fill_releases_pending_sector_without_advancing_sidecar
 
             request = f['request'](quantity=10)
             await f['quote'](request)
+            await f['facts'](request, sector='반도체')
             await f['commands'].prepare(request, f['entry'](request), sector='반도체')
             assert runtime.owner.state['entry_policy_effects']['pending_sectors'] == {'005930': '반도체'}
             result = await f['commands'].dispatch(

@@ -61,6 +61,30 @@ async def fixture(tmp_path, monkeypatch, *, ready=True, origin='user', policy=No
         await commands.observe_entry_quote(req.symbol, req.valuation_price, as_of=clock[0],
             source='synthetic-market', event_id='quote-'+req.attempt_id,
             expected_version=runtime.owner.version)
+    async def facts(req, sector=None, **changes):
+        """S1 계약: 자동 BUY prepare는 게시된 판단 사실을 요구한다(게시 호출만 추가)."""
+        from datetime import timedelta
+        from src.execution.safety.decisions import (
+            ConsumedSource, EntryDecisionFacts, QualificationFacts)
+        risk = ctx.policy.sizing_mode == 'risk' and req.strategy != 'core_holding'
+        source = ConsumedSource('trade_memory', 1, clock[0], 'synthetic-memory-digest')
+        value = EntryDecisionFacts(intent_id=req.intent_id, symbol=req.symbol,
+            side=req.side.value, strategy=req.strategy, origin='automatic', sector=sector,
+            config_version=ctx.versions.config, hybrid_enabled=False, decided_at=clock[0],
+            expires_at=clock[0] + timedelta(minutes=30), base_pct=0.25,
+            strategy_allocation_pct=None, min_position_value=D('200000'),
+            strength_multiplier=1.0, position_multiplier=1.0, calendar_multiplier=1.0,
+            volatility_multiplier=1.0, conviction_multiplier=1.0, atr_pct=None,
+            stop_pct=stop[0].stop_pct if risk else None,
+            stop_source=stop[0].source if risk else None,
+            stop_crash_capped=stop[0].crash_capped if risk else None,
+            qualification=QualificationFacts(72.0, 72.0, 70.0, ('rule_11',), 'allow'),
+            sources=(source,), **changes)
+        if source.name not in runtime.owner.state.get('qualification_sources', {}):
+            await commands.publish_qualification_source(source.name, as_of=source.as_of,
+                digest=source.digest, expected_version=runtime.owner.version)
+        await commands.publish_decision_facts(value, expected_version=runtime.owner.version)
+        return value
     return locals()
 
 
@@ -124,6 +148,8 @@ def test_two_prepares_compete_for_current_owner_resources(tmp_path, monkeypatch,
             reqs = [f['request']('A', quantity=100 if dimension == 'cash' else 10),
                     f['request']('B', symbol='000660', quantity=100 if dimension == 'cash' else 10)]
             for req in reqs: await f['quote'](req)
+            if dimension != 'cash':
+                for req in reqs: await f['facts'](req, sector='반도체')
             results = await asyncio.gather(*(f['commands'].prepare(req, f['entry'](req), sector='반도체')
                                             for req in reqs), return_exceptions=True)
             assert sum(isinstance(result, dict) for result in results) == 1
@@ -140,6 +166,7 @@ def test_current_state_after_every_network_await_blocks_post(tmp_path, monkeypat
         try:
             req = f['request']()
             await f['quote'](req)
+            await f['facts'](req)
             await f['commands'].prepare(req, f['entry'](req))
             reached, release = asyncio.Event(), asyncio.Event()
             async def pause(*args):
@@ -237,6 +264,7 @@ def test_ack_identity_unknown_and_definitive_rejection_resource_release(tmp_path
         try:
             req = f['request']()
             await f['quote'](req)
+            await f['facts'](req, sector='반도체')
             await f['commands'].prepare(req, f['entry'](req), sector='반도체')
             f['broker']._session.response.data = response
             result = await f['commands'].dispatch(req, f['entry'](req),
@@ -281,6 +309,7 @@ def test_real_risk_resource_cap_139_140_uses_current_equity(tmp_path, monkeypatc
             await f['runtime'].owner.mutate('synthetic-equity', fund)
             req = f['request'](quantity=quantity)
             await f['quote'](req)
+            await f['facts'](req)
             if allowed:
                 attempt = await f['commands'].prepare(req, f['entry'](req))
                 assert D(attempt['reserved_planned_risk']) <= D('70000')
@@ -704,6 +733,7 @@ def test_stop_resolver_failure_does_not_extend_cap_to_exempt_routes(tmp_path, mo
             req = f['request'](side=OrderSide.SELL if route == 'sell' else OrderSide.BUY,
                 strategy='core_holding' if route == 'core' else 'safe_asset' if route == 'safe_asset' else None)
             if route != 'sell': await f['quote'](req)
+            if route == 'core': await f['facts'](req)
             attempt = await f['commands'].prepare(req, f['entry'](req))
             assert attempt['reserved_planned_risk'] is None
             result = await f['commands'].dispatch(req, f['entry'](req),

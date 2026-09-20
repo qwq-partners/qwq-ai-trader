@@ -15,6 +15,7 @@ from uuid import uuid4
 from ...core.types import OrderSide
 from . import risk_policy as p
 from .application import ApplicationBlocked
+from .decisions import EntryDecisionFacts, recompose_quantity
 from .market_source import source_is_current
 from .economics import decode_portfolio, encode_portfolio
 from .guards import EntryAuthority, EntryOrigin, FinalEntryGuard, GuardDecision
@@ -156,6 +157,98 @@ class RequestBoundCommands:
         await self.owner.mutate('entry-quote:'+uuid4().hex, reduce)
         return self.owner.version
 
+    async def publish_qualification_source(self, name, *, as_of, digest, expected_version):
+        with self.runtime.command_scope():
+            return await self._publish_qualification_source(name, as_of=as_of, digest=digest,
+                                                            expected_version=expected_version)
+
+    async def _publish_qualification_source(self, name, *, as_of, digest, expected_version):
+        for value in (name, digest): _text(value)
+        _require(type(as_of) is datetime and as_of.utcoffset() is not None,
+                 'invalid_qualification_source_time')
+        def reduce(state):
+            self._owner_ready(state)
+            self._version(expected_version)
+            now = self.runtime._now()
+            _require(as_of.astimezone(now.tzinfo).date() == now.date() and as_of <= now,
+                     'qualification_source_day_or_time_mismatch')
+            sources = state.setdefault('qualification_sources', {})
+            previous = sources.get(name)
+            _require(previous is None or datetime.fromisoformat(previous['as_of']) <= as_of,
+                     'stale_qualification_source_observation')
+            # 출처별 단조 counter다. 무관한 fill/ACK로 커지는 owner.version과 구분한다.
+            version = 1 if previous is None else previous['version'] + 1
+            sources[name] = dict(version=version, as_of=as_of.isoformat(), digest=digest)
+            return state
+        await self.owner.mutate('qualification-source:'+uuid4().hex, reduce)
+        return self.owner.version
+
+    async def publish_decision_facts(self, facts, *, expected_version):
+        with self.runtime.command_scope():
+            return await self._publish_decision_facts(facts, expected_version=expected_version)
+
+    async def _publish_decision_facts(self, facts, *, expected_version):
+        _require(type(facts) is EntryDecisionFacts, 'invalid_decision_facts')
+        facts = EntryDecisionFacts.from_dict(facts.to_dict())
+        row = facts.to_dict()
+        def reduce(state):
+            self._owner_ready(state)
+            self._version(expected_version)
+            now = self.runtime._now()
+            _require(facts.decided_at.astimezone(now.tzinfo).date() == now.date()
+                     and facts.expires_at.astimezone(now.tzinfo).date() == now.date()
+                     and facts.decided_at <= now < facts.expires_at,
+                     'decision_facts_day_or_time_mismatch')
+            self._consumed_sources(state, facts)
+            published = state.setdefault('entry_decision_facts', {})
+            previous = published.get(facts.intent_id)
+            # 같은 intent로 다른 내용을 다시 굳힐 수 없다. 동일 재게시는 무해하다.
+            _require(previous is None or self.owner._same(previous, row), 'decision_facts_conflict')
+            published[facts.intent_id] = deepcopy(row)
+            return state
+        await self.owner.mutate('decision-facts:'+uuid4().hex, reduce)
+        return self.owner.version
+
+    def _consumed_sources(self, state, facts):
+        """소비했다고 기록한 출처만 현재 게시본과 대조한다. 미소비 출처 변화는 stale이 아니다.
+
+        version·digest만으로는 게시 시각이 구속되지 않는다. 게시본 as_of와 facts의
+        source.as_of가 같아야 하고, 그 게시본이 당일(KST)이어야 하며, 판단 시점보다
+        미래의 출처를 소비했다고 적을 수 없다.
+        """
+        published = state.get('qualification_sources', {})
+        now = self.runtime._now()
+        for source in facts.sources:
+            current = published.get(source.name)
+            _require(current is not None and current['version'] == source.version
+                     and current['digest'] == source.digest, 'stale_qualification_source')
+            published_at = datetime.fromisoformat(current['as_of'])
+            _require(published_at == source.as_of
+                     and published_at.astimezone(now.tzinfo).date() == now.date()
+                     and source.as_of <= facts.decided_at, 'stale_qualification_source')
+
+    def _decision_facts(self, state, request, context, snapshot, resources, sector):
+        """자동 매수만 소비한다. 경제값은 전부 현재 snapshot에서 다시 읽는다."""
+        row = state.get('entry_decision_facts', {}).get(request.intent_id)
+        _require(row is not None, 'decision_facts_required')
+        facts = EntryDecisionFacts.from_dict(deepcopy(row))
+        _require((facts.intent_id, facts.symbol, facts.side, facts.strategy, facts.origin)
+                 == (request.intent_id, request.symbol, request.side.value, request.strategy,
+                     context.origin.value), 'decision_facts_mismatch')
+        _require(sector is None or sector == facts.sector, 'decision_facts_sector_mismatch')
+        _require((facts.stop_pct, facts.stop_source, facts.stop_crash_capped)
+                 == (resources.stop_pct, resources.stop_source, resources.stop_crash_active),
+                 'decision_stop_changed')
+        now = self.runtime._now()
+        _require(facts.expires_at.astimezone(now.tzinfo).date() == now.date() and now < facts.expires_at,
+                 'decision_facts_expired')
+        _require(facts.config_version == snapshot.versions.config, 'stale_decision_config_version')
+        self._consumed_sources(state, facts)
+        result = recompose_quantity(facts, snapshot, price=resources.valuation_price)
+        _require(result.reason is None and request.quantity <= result.quantity,
+                 'decision_quantity_unjustified')
+        return facts
+
     def _snapshot(self, state, *, exclude_attempt=None):
         if 'regime_policy' in state:
             writer = getattr(self.runtime, '_regime_writer', None)
@@ -249,7 +342,11 @@ class RequestBoundCommands:
         resources = calculate_resources(request, builder=self.builder, policy=snapshot.policy,
             equity=snapshot.portfolio.equity, origin=context.origin, stop_decision=stop)
         if request.command is CommandKind.CANCEL:
-            return resources, None, snapshot
+            return resources, None, snapshot, None
+        facts = None
+        if request.side is OrderSide.BUY and context.origin is EntryOrigin.AUTOMATIC:
+            facts = self._decision_facts(state, request, context, snapshot, resources, sector)
+            sector = facts.sector
         if request.side is OrderSide.BUY:
             reserved = sum((_amount(a['reserved_cash']) for a in active if a['side'] == 'buy'), Decimal('0'))
             _require(snapshot.portfolio.cash - reserved >= resources.cash, 'reserved_cash_insufficient')
@@ -276,7 +373,7 @@ class RequestBoundCommands:
         _require(type(alpha) is GuardDecision and alpha.allowed is True, alpha.reason)
         if context.origin is EntryOrigin.AUTOMATIC and request.side is OrderSide.BUY:
             _require(not state['protection']['degraded'], 'protection_degraded')
-        return resources, decision, snapshot
+        return resources, decision, snapshot, facts
 
     @staticmethod
     def _effects(state, request, decision, *, commit):
@@ -301,7 +398,9 @@ class RequestBoundCommands:
         request, context = self._request(request, context)
         if sector is not None: _text(sector)
         def reduce(state):
-            resources, decision, snapshot = self._evaluate(state, request, context, sector)
+            resources, decision, snapshot, facts = self._evaluate(state, request, context, sector)
+            # sector 정본은 facts다. 호출자 kwarg는 같거나 None만 허용한다.
+            bound_sector = sector if facts is None else facts.sector
             parent = request.parent
             self.runtime.lifecycle.prepare_candidate(state, request.intent_id, request.attempt_id,
                 request.quantity, request.symbol, request.side.value, command=request.command,
@@ -309,7 +408,7 @@ class RequestBoundCommands:
                 order_ref=None if parent is None else parent.order_ref, reserved_cash=str(resources.cash),
                 origin=context.origin.value, strategy=request.strategy)
             attempt = state['attempts'][request.attempt_id]
-            attempt['sector'] = sector
+            attempt['sector'] = bound_sector
             attempt['reserved_exposure'] = str(resources.exposure)
             attempt['reserved_planned_risk'] = None if resources.planned_risk is None else str(resources.planned_risk)
             attempt['request_binding'] = {
@@ -318,7 +417,9 @@ class RequestBoundCommands:
                 'symbol': request.symbol, 'side': request.side.value, 'order_type': request.order_type.value,
                 'strategy': request.strategy, 'quantity': request.quantity,
                 'valuation_price': str(request.valuation_price), 'wire_price': str(request.wire_price),
-                'origin': context.origin.value, 'sector': sector, 'source_versions': asdict(snapshot.versions),
+                'origin': context.origin.value, 'sector': bound_sector,
+                'source_versions': asdict(snapshot.versions),
+                'decision_facts_digest': None if facts is None else facts.digest,
                 'resources': resources.to_dict(), 'parent_version': None if parent is None else parent.version,
             }
             self._effects(state, request, decision, commit=True)
@@ -352,9 +453,11 @@ class RequestBoundCommands:
             _require(attempt['claim_id'] == claim and attempt['version'] == version
                      and attempt['command_status'] is None
                      and attempt['state'] in ('submitting', 'cancel_requested'), 'sender_claim_invalid')
-        resources, decision, _ = self._evaluate(state, request, context, binding['sector'],
-                                                exclude_attempt=request.attempt_id)
+        resources, decision, _, facts = self._evaluate(state, request, context, binding['sector'],
+                                                       exclude_attempt=request.attempt_id)
         _require(self.owner._same(resources.to_dict(), binding['resources']), 'current_resources_changed')
+        _require(self.owner._same(binding.get('decision_facts_digest'),
+                                  None if facts is None else facts.digest), 'decision_facts_changed')
         _require(attempt['reserved_quantity'] == (request.quantity if request.command is CommandKind.SUBMIT else 0)
                  and _amount(attempt['reserved_cash']) == resources.cash
                  and _amount(attempt['reserved_exposure']) == resources.exposure

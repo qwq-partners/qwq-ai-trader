@@ -382,6 +382,7 @@ def test_actual_prepare_and_pending_sector_release_leave_selected_history_unchan
             before = runtime.owner.state['policy_generations']
             request = f['request']()
             await f['quote'](request)
+            await f['facts'](request, sector='반도체')
             await f['commands'].prepare(request, f['entry'](request), sector='반도체')
             assert runtime.owner.state['entry_policy_effects']['pending_sectors'] == {'005930': '반도체'}
             await runtime.lifecycle.claim(request.attempt_id, 'sender')
