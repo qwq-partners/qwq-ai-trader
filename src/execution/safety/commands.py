@@ -88,7 +88,7 @@ class RequestBoundCommands:
         _require(encode_protection(self.runtime.exit_manager) == state['protection'],
                  'legacy_protection_writer_conflict')
 
-    def _request(self, request, context):
+    def _request(self, request, context, *, session=True):
         self.builder.validate(request)
         prepared = deepcopy(request)
         _require(self.authority.owns(context), 'untrusted_entry_context')
@@ -96,7 +96,8 @@ class RequestBoundCommands:
         _require((context.symbol, context.side, context.strategy) ==
                  (prepared.symbol, prepared.side.value, prepared.strategy), 'entry_context_mismatch')
         _require(prepared.account.account_scope == self.runtime.account_scope, 'account_scope_mismatch')
-        self._session(prepared)
+        if session:
+            self._session(prepared)
         return prepared, context
 
     def _session(self, request):
@@ -558,7 +559,9 @@ class RequestBoundCommands:
 
     async def _dispatch(self, request, context, transport, command_token):
         # 第一 await 앞에 request/권한을 검증한다. 다른 실행 경로에 permit을 주지 않는다.
-        request, context = self._request(request, context)
+        # 신원·권한 위반은 호출자 결함이라 그대로 던진다. 세션은 여기서 보지 않는다 — prepare 뒤에
+        # 장 경계가 닫힌 요청은 아래 `_bound`→`_evaluate` 의 재검사에서 걸려 예약까지 끝나야 한다.
+        request, context = self._request(request, context, session=False)
         _require(type(transport) is GuardedKISTransport, 'invalid_prepared_transport')
         state = self.owner.state
         attempt = state.get('attempts', {}).get(request.attempt_id)
