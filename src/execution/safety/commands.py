@@ -20,8 +20,11 @@ from .market_source import source_is_current
 from .economics import decode_portfolio, encode_portfolio
 from .guards import EntryAuthority, EntryOrigin, FinalEntryGuard, GuardDecision
 from .lifecycle import CommandKind, CommandResult, CommandStatus, OrderRef, TERMINAL_STATES
+from .policy_generations import canonical
 from .policy_snapshot import PolicyContext, build_owned_snapshot
 from .protection import encode_protection
+from .protection_recovery import digest as _digest
+from .regime_owner import effective_regime
 from .requests import KISRequestBuilder, PreparedTradeRequest, _session_at
 from .reservations import has_remaining_reservation
 from .resources import calculate_resources, remaining_resource_amount
@@ -227,6 +230,25 @@ class RequestBoundCommands:
                      and published_at.astimezone(now.tzinfo).date() == now.date()
                      and source.as_of <= facts.decided_at, 'stale_qualification_source')
 
+    def read_qualification_source(self, name):
+        """게시본의 읽기 전용 사본. 어댑터의 idempotent 재사용이 이것만 본다."""
+        return deepcopy(self.owner.state.get('qualification_sources', {}).get(name))
+
+    def _recheck_regime(self, state, facts):
+        """게시자 자기신고가 아닌 유일한 stale 축이다. 지금 다시 유도해 소비 digest와 대조한다.
+
+        effective_regime은 I/O도 await도 없는 순수 함수라 final 동기 구간에서 부를 수 있다.
+        regime_policy가 없는 state에서는 재유도 자체가 불가능하므로 소비 사실을 거부한다.
+        """
+        consumed = next((source for source in facts.sources if source.name == 'regime'), None)
+        if consumed is None:
+            return
+        _require('regime_policy' in state, 'stale_regime_decision')
+        # 판단 시각이 아니라 현재 시각으로 유도한다. 당일 게이트가 지금 기준으로 열려야 한다.
+        current = effective_regime(state, self.runtime._now())
+        _require(_digest(canonical({'effective_regime': current})) == consumed.digest,
+                 'stale_regime_decision')
+
     def _decision_facts(self, state, request, context, snapshot, resources, sector):
         """자동 매수만 소비한다. 경제값은 전부 현재 snapshot에서 다시 읽는다."""
         row = state.get('entry_decision_facts', {}).get(request.intent_id)
@@ -244,6 +266,7 @@ class RequestBoundCommands:
                  'decision_facts_expired')
         _require(facts.config_version == snapshot.versions.config, 'stale_decision_config_version')
         self._consumed_sources(state, facts)
+        self._recheck_regime(state, facts)
         result = recompose_quantity(facts, snapshot, price=resources.valuation_price)
         _require(result.reason is None and request.quantity <= result.quantity,
                  'decision_quantity_unjustified')
