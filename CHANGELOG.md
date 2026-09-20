@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — feat(cv,sizing): B2/B3 S2 wave A — CV 특성화 기준선·결정 증거 채널·사이징 입력 반출 (한정 승인·운영 미설치)
+
+- **S2-1 `src/core/cross_validator.py`(+63/−9, 판정·감점 산식·임계값·penalties 문자열·반환 tuple·규칙11/12 파일 쓰기 무변):** `validate(..., request_token=None)`(맨 뒤·기본 None, 호출부 3곳 전부 keyword 라 후방 호환) · `last_decision`(진입 시 None, 매수 통과 return 직전 1곳에서만 12키 대입: token·symbol·side·strategy·regime·penalties·cap_applied·original·adjusted·memory_adj·panel·now_hm) · `last_llm_reason`(8어휘: approved/rejected_soft/not_required/skipped_no_manager/skipped_bull/skipped_low_score/fail_open_quota/fail_open_error — fail-open 통과와 실제 승인이 처음으로 구분된다). `llm_second_check` 의 return 9곳은 `_llm()` 경유로 바뀌었으나 원래 bool 을 그대로 반환한다.
+- **tests/ 에 0건이던 CrossStrategyValidator 실인스턴스 특성화를 먼저 세웠다**(`tests/test_cross_validator_characterization.py` 55건): 시간 3구간(09:29 차단/09:45 −8/12:45 +5, 13:00 포함·13:01 제외)·면제·지표결손·누적 cap 15 와 hard-block 태그·MIN_PASS_SCORE 50 경계·US 인스턴스. 시계는 `datetime.datetime` 과 `cross_validator.datetime` 을 **함께** 동결해야 언다(함수 내 재임포트 때문 — 실측).
+- **S2-2 `src/core/engine.py`(+30/−0, `RiskManager._calculate_position_size` 내부만):** 이번 계산이 실제로 쓴 입력을 `self._last_sizing_inputs`(14키, 진입 시 None·성공 tail 에서만 대입)로 반출. provider·stop resolver 재호출 0(기존 특성화 시험의 호출 순서·횟수 단언이 기계적 증명), overlay 예외는 `overlay_status[kind]='unavailable'`·배율 1.0 으로 **읽기 실패와 미적용을 처음으로 구분**한다. 수량·분기·overlay 순서·metadata 기록 무변. 시험 27건.
+- Plan→Do→See: 단계별 단일 writer(요청 opus/high) → 독립 재검증(요청 opus/xhigh, 계획서 변이 15종 전건 kill + 자체 변이) — **제품 가드는 전부 맞고 시험 공백 5종이 변이 생존으로 드러남** → 시험 전용 보강 → 독립 재현에서 전건 kill → 재현자 추가 2종은 coordinator 가 단언을 넣고 같은 변이로 직접 확인 → **Codex 교차 리뷰(요청 astra/xhigh) P0/P1 0·P2 1**(동결 시계가 지연 import 모듈 `expert_panel` 에 남는 누수) → fixture 종료 시 전 모듈 scrub + 시험 2건으로 수정, scrub 제거 변이로 확인.
+- 검증: 통합 `7177a8d`·`9330fbe`·`6fa7fe5` 기준 **전체 UTC 4522 passed/기존 xfail2/경고4(277.61초)·KST 4522/2/4(269.98초)**, 각 exit0·격리0(+80 = 새 시험 2파일). 이후 시험 전용 수정은 해당 파일 55건 통과로 확인.
+- 이 단계는 **기록 전용 증거 채널**이다 — 제품 소비자 0건(facts builder 는 S2-4, 게시 배선은 S2-5, gateway 는 S3). 잔여·다음 단계 계약(증거 캡처 순서, 사이징 입력을 읽는 지점, 0 배율/hybrid 는 facts 미생성)은 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md` §3 의 13~15, 진행·체크리스트는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md`.
+- main/운영·배포·재시작·주문·설정·Toss grant 변경0, `trading_ready=False`·MODIFY 미지원 유지. 운영 서버 메모리 보호를 위해 세션 자식 `pyright-langserver`(643MB)를 내리고 전체 suite 를 단독 직렬로 돌렸다.
+
 ## 2026-09-20 — feat(safety): B2/B3 S1 — 불변 판단 사실과 final kernel 재검사 (한정 승인·운영 미설치)
 
 - 자동 매수(SUBMIT+BUY+AUTOMATIC)만 대상으로, 판단 시점 값을 frozen `EntryDecisionFacts`(`src/execution/safety/decisions.py` 신규)로 굳혀 게시(`publish_qualification_source`·`publish_decision_facts`)하고, prepare·final 공통 관문 `commands._evaluate` 한 곳에서 **현재 owner snapshot 의 경제값 + facts** 로 B1 pure kernel(`compose_sizing`)을 재실행해 `request.quantity <= 재유도 수량`·설정 version·소비 출처(version·digest·as_of·당일)·만료를 재검사한다. binding 에 `decision_facts_digest`, sector 정본은 facts. USER·SAFE_ASSET·SELL·CANCEL 동작 무변. `engine.py`·kernel·`risk_policy` 판정 로직 무접촉.

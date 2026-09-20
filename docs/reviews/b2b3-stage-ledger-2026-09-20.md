@@ -110,11 +110,26 @@
 
 | 하위 단계 | 제품 파일 | 시험 파일 | 상태 | 커밋 | 재검증·리뷰 |
 |---|---|---|---|---|---|
-| S2-1 CV 특성화 + 증거 채널 | `src/core/cross_validator.py` | `tests/test_cross_validator_characterization.py` | 미착수 | — | — |
-| S2-2 사이징 입력 반출 | `src/core/engine.py`(`_calculate_position_size` 내부만) | `tests/test_execution_sizing_inputs_export.py` | 미착수 | — | — |
+| S2-1 CV 특성화 + 증거 채널 | `src/core/cross_validator.py` (+63/−9, 판정·산식·문자열 무변) | `tests/test_cross_validator_characterization.py` (53건) | **통합(한정 승인)** | `5968220`(특성화)→`9185993`(red)→`a97dc1a`(feat)→`0988dbc`(보강) / merge `7177a8d` | 1차 재검증 CHANGES_REQUIRED(생존 변이 2) → 보강 → 독립 재현 APPROVE |
+| S2-2 사이징 입력 반출 | `src/core/engine.py`(`_calculate_position_size` 내부만, +30/−0) | `tests/test_execution_sizing_inputs_export.py` (27건) | **통합(한정 승인)** | `7e26da7`(red)→`3832555`(feat)→`f53d57a`(보강) / merge `9330fbe` | 1차 재검증 APPROVE(생존 변이 3, P2) → 보강 → 독립 재현 APPROVE |
 | S2-3 regime final 재유도 | `src/execution/safety/commands.py` | `tests/test_execution_regime_recheck.py` | 미착수 | — | — |
 | S2-4 순수 builder | `src/execution/safety/qualification.py`(신규) | `tests/test_execution_qualification_builder.py` | 미착수 | — | — |
 | S2-5 engine 어댑터 배선 | `src/core/engine.py`(어댑터 구간만) | `tests/test_execution_qualification_publishers.py` | 미착수 | — | — |
+
+### wave A (S2-1 ∥ S2-2) — Do·See 기록 (기준 `58e5ef7`)
+
+- **구현:** 단계별 단일 writer(요청 claude-opus-5/high, metadata 미노출), harness 격리 worktree. 허용 파일 밖 변경 0, 기존 시험 파일 수정 0줄.
+- **S2-1 착수 전 실측(성공):** `cross_validator.py:258` 의 함수 내 재임포트 때문에 시계 동결은 **`datetime.datetime` 과 `src.core.cross_validator.datetime` 두 곳을 함께** Frozen(datetime 서브클래스, `now()` 만 고정)으로 교체해야 09:29/09:45/12:45/13:00/13:01 다섯 경계가 전부 언다(한쪽만 바꾸면 stats 리셋·패널 캐시·days_old·LLM 일일 한도 중 일부가 벽시계로 남는다). CV 시그니처·본문은 시험 편의로 바꾸지 않았다. validate 호출부 3곳(engine.py:2053, kr_scheduler.py:6153, us_scheduler.py:1090) 전부 keyword → 새 kwarg 후방 호환.
+- **S2-1 구현자 이탈(수용):** 계약 9 의 `not_required` 에 생산자를 붙였다(validate 진입부에서 `last_llm_reason='not_required'` — llm_second_check 를 부르지 않은 판단이 앞 판단의 어휘를 물려받지 않게) · 제품 가산이 계획(~20줄)보다 큼(+63/−9; −9 는 llm_second_check 의 return 9곳을 `_llm()` 경유로 바꾼 것, **coordinator 가 diff 로 각 return 의 원래 bool 보존을 확인**).
+- **S2-2 구현자 이탈(수용):** resolver 미실행(nominal·core)에서는 stop 3튜플을 False/'' 가 아니라 전부 None 으로 기록("해석기 미실행"과 "실제 False" 구분). **coordinator 확인:** overlay 3종은 조건 분기 없이 항상 호출되므로 `unavailable` 은 예외일 때만 생긴다("해당 없음"이 `unavailable` 로 오표식되지 않는다).
+- **RED 의 한계(두 단계 공통, P2 수용):** 가산 인터페이스라 RED 커밋의 실패가 전부 부재 오류(TypeError/AttributeError)였다 — 단언 실패 0건. 행동 계약의 실질 증명은 **변이 kill** 이다. 이후 단계의 RED 인수 기준을 "나열 변이 전건 kill"로 읽는다.
+- **변이:** 계획서 목록 S2-1 9종·S2-2 6종 전건 kill(구현자 보고 → 재검증자 재현 일치). 재검증자 자체 변이에서 **5종 생존 → 시험 전용 보강 → 독립 재현에서 전건 kill**: ① 적대검증 LLM 경로(운영 1순위 반환 경로)의 어휘 붕괴 ② 보너스 0 인 stale 패널 분기에서 `panel` 기록 ③ overlay 기록 줄을 `apply_overlay` 앞으로 이동 ④ `is not None` → falsy 판정(배율 0.0) ⑤ 금액 필드 `float()` 붕괴. 재현자가 추가로 찾은 2종(폴백 경로의 LLM 일일 한도 계수 제거, risk 경로 전용 key 추가)은 coordinator 가 단언 2줄(`6fa7fe5`)을 넣고 **같은 변이를 직접 적용해 각각 1건 실패 확인 후 원복**(`git diff --stat -- src/` 비어 있음, MUTATION 표식 0).
+- **S2-5·S2-4 로 넘기는 계약 메모:** (a) `_last_sizing_inputs` 는 첫 사이징 호출 전에는 None 이 아니라 **속성 부재**다(기존 시험이 `object.__new__` 로 `__init__` 을 건너뛰므로 `__init__` 선언으로는 못 막는다) → 어댑터는 `getattr(rm, '_last_sizing_inputs', None)` 로 읽는다. (b) `last_llm_reason` 에는 token 이 없다 → 어댑터는 **같은 판단의 `last_decision['token']` 대조가 통과한 경우에만** `last_llm_reason` 을 읽는다. (c) 반출 `position_multiplier` 는 ATR skip **이전** 값이다(계약 8) — S1 의 `recompose_quantity` 가 `should_skip_atr_multiplier` 를 스스로 적용하므로 facts 에는 이 원값을 그대로 넣는다. `overlay_status` 는 position kind 를 덮지 않는다.
+- **중간 전체 suite(coordinator, HEAD `6fa7fe5`, 단독 직렬, 2026-09-20 18:08~18:17 KST):** UTC **4522 passed / 2 xfailed / 경고 4 / 277.61초**, KST **4522 / 2 / 4 / 269.98초**, 각 exit 0·격리 0. S1 뒤 4442 대비 +80 = CV 특성화 53 + 사이징 반출 27. live 파일 2개(`cross_validator.py`·`engine.py`) 변경이 범위 밖 시험을 깨지 않았다.
+- **Codex 교차 리뷰(요청 gpt-6-astra/xhigh, read-only·pytest 금지, HEAD `6fa7fe5`, job `task-mu9legcx-6dilp6`, session `01a0be11-a81f-76e3-a665-52d0738a0d75`, 7분 4초): CHANGES_REQUIRED — P0/P1 0건, P2 1건.** 제품은 깨끗: 증거 기록과 `_llm()` 래핑을 제거한 AST 가 두 제품 파일 모두 `58e5ef7` 과 일치, 메모리 one-off 에서 CV 19표본의 반환·통계와 LLM 11표본의 반환·계수 일치, LLM return 9곳의 원래 bool 보존, 세 호출부 keyword, `<=1300`(13:00 포함·13:01 제외)은 기존 구현과 일치, 0/빈값·Decimal·한국어 주석 위반 없음.
+  - **P2(수정 완료):** 시계 동결 fixture 가 직접 바꾼 두 속성만 복원해, 동결 중 CV 가 처음 지연 import 하는 `expert_panel` 의 `from datetime import datetime` 이 `Frozen` 을 붙잡은 채 다음 시험까지 남는다(import 순서 의존 누수, Codex 가 메모리 재현으로 확인: 다음 시험 시계를 11:00 으로 바꿔도 패널 시계는 08:59). → fixture 종료 시 `sys.modules` 전체에서 Frozen 참조를 이름 무관하게 실제 `datetime` 으로 되돌리는 `_scrub_frozen` 추가 + 누수를 심는 시험/복원을 확인하는 시험 2건. **coordinator 가 scrub 호출을 제거하는 변이로 복원 확인 시험 1건 실패를 확인 후 원복.** CV 파일 55건 통과.
+  - **S2-5·S2-4 로 승격한 지침(세부 계획 계약 13~15):** 증거 캡처 순서(자기 LLM await 직후 token 대조 → decision·reason 을 추가 await 없이 함께 복사; "B validate → 지연된 A 의 `_llm()`" 은 token B + A 사유를 만든다) · 사이징 입력은 현재 요청의 성공한 사이징 직후에만 읽는다 · 0 배율/hybrid 는 보정하지 말고 facts 미생성.
+- **호스트 자원 사고 방지 기록:** 이 세션의 자식 `pyright-langserver` 가 643MB 까지 자라 가용 메모리가 481MB 로 떨어졌다(스왑 100%). coordinator 가 SIGTERM 으로 내려 1134MB 회복 후 전체 suite 를 돌렸다. 이 호스트에서 작업하는 세션은 `ps -eo rss,pid,comm --sort=-rss | head` 로 자기 세션의 LSP 서버 크기를 확인할 것.
 
 ### 이어받는 에이전트 체크리스트 (S2 공통 — 하위 단계마다 반복)
 - [ ] 세부 계획 §4 의 그 단계 "고정 인터페이스"와 실제 시그니처·dict 키가 일치하는가(S2-4·S2-5·S3 가 의존).

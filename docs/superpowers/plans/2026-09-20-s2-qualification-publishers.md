@@ -52,6 +52,10 @@ S2 가 끝나도 **실효 있는 stale 축은 regime 1개**다. panel_outlook·t
 11. `applied_rule_ids` 는 penalties 한국어 문자열에서 **유도**한다(penalties 리스트·문자열·`_HARD_BLOCK_TAGS` 매칭은 불변 — 누적 cap 판정이 그 문자열에 의존). 유도 표는 `qualification.py` 에 두고 시험으로 고정.
 12. builder 가 `decided_at`(aware KST)으로 재계산한 CV 시간 구간과 CV 가 보고한 penalties 태그가 다르면 facts 를 만들지 않는다(`decision_clock_disagreement`).
 
+13. **증거 캡처 순서(S2-5, wave A 리뷰에서 추가).** 증거 채널은 그 자체로 fail-closed 가 아니다 — 안전성은 **읽는 순서**가 정한다. 어댑터는 (a) 자기 `llm_second_check` await 가 끝난 **직후**(LLM 을 부르지 않는 경로는 validate 직후) (b) `last_decision['token']` 이 자기 token 과 정확히 같은지 대조하고 (c) `last_decision` 과 `last_llm_reason` 을 **추가 await 없이 함께 복사**한다. 불일치·None 이면 게시 0. token 대조만으로 충분하다고 일반화하지 않는다: Codex 재현에서 "B validate → 지연된 A 의 `_llm()`" 은 **token B + A 의 사유**를 만든다. 현재 매수 경로는 LLM 복귀부터 사이징까지 await 가 없어 이 캡처 지점을 확보할 수 있다(S2-5 worker 가 다시 확인).
+14. **사이징 입력은 현재 요청의 성공한 사이징 직후에만 읽는다(S2-5).** `getattr(rm, '_last_sizing_inputs', None)` 은 속성 부재만 막는다 — 현재 요청이 사이징 전에 끝났는데 이전 요청의 성공값을 읽는 경우는 막지 못하므로, 어댑터는 자기 요청의 `_calculate_position_size` 가 양의 수량을 돌려준 **바로 그 지점**에서 복사한다.
+15. **0 배율·hybrid 는 facts 를 만들지 않는다(S2-4).** legacy 는 0.0 배율을 처리하지만 S1 DTO 는 배율을 `positive=True` 로 검사해 거부하고 hybrid 는 재유도를 거부한다. builder 는 이를 `0 or 1.0` 같은 보정으로 넘기지 말고 facts 미생성(자동 BUY 게시 0)으로 끝낸다 — 사유 코드를 남긴다.
+
 ### 출처별 전략
 
 | 출처 | digest | 게시 | final stale 실효성 |
