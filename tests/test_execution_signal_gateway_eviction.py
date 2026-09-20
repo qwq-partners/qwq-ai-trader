@@ -125,6 +125,13 @@ def sold(f):
             for row in attempts(f) if row['side'] == 'sell']
 
 
+def renumber(f, order_no):
+    """합성 세션은 같은 ODNO 를 무한히 돌려준다 — 두 번째 송신은 다른 주문번호를 받게 한다."""
+    from test_kr_final_dispatch import Response
+    f['broker']._session.response = Response(data={'rt_cd': '0', 'output': {
+        'ODNO': order_no, 'KRX_FWDG_ORD_ORGNO': '12345'}})
+
+
 def errors(engine):
     return [event for event in engine._event_queue if type(event) is ErrorEvent]
 
@@ -233,6 +240,7 @@ def test_a_symbol_with_an_unresolved_owner_sell_is_not_a_candidate(tmp_path, mon
             assert sold(f) == [(WEAKER, 5, 'acknowledged')]
 
             # 전역 상한·종목 쿨다운·신호 쿨다운을 모두 지난 뒤의 두 번째 고득점 BUY.
+            renumber(f, '1234567891')
             f['now'][0] = ENGINE_NOW + timedelta(seconds=601)
             await drive(f['engine'], buy(OTHER, score=99.0))
             await pump(f['engine'])
