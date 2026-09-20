@@ -80,12 +80,14 @@ def test_synthetic_issuer_client_prices_candles_and_shadow_use_the_real_offline_
     )
 
     async def run():
-        deadline = time.monotonic() + 2
+        # 실제 구현 연결이 의도라 시계는 주입하지 않는다. 30초는 만료 원인이 아니라 고착 감시용이다
+        # (실파일 잠금·fsync 가 호스트 부하로 느려져도 성공 경로가 timeout 으로 바뀌지 않게 한다).
+        deadline = time.monotonic() + 30
         assert await tokens.bootstrap(approved=True, deadline=deadline) == "synthetic-integration-bearer"
         fetched_at = datetime.fromisoformat("2026-09-16T10:00:00+09:00")
         async with client:
             price_body = await client.get(
-                "/api/v1/prices", params={"symbols": "005930"}, budget=RequestBudget(2),
+                "/api/v1/prices", params={"symbols": "005930"}, budget=RequestBudget(30),
             )
             quote = parse_prices(
                 price_body, symbols=["005930"], fetched_at=fetched_at, now=fetched_at,
@@ -93,7 +95,7 @@ def test_synthetic_issuer_client_prices_candles_and_shadow_use_the_real_offline_
             )["005930"]
             candles = await fetch_daily_candles(
                 client, symbol="005930", expected_dates=["20260915"], fetched_at=fetched_at,
-                budget=RequestBudget(2), market_basis="krx",
+                budget=RequestBudget(30), market_basis="krx",
             )
         return fetched_at, quote, candles
 

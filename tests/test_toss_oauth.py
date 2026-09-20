@@ -244,7 +244,8 @@ def test_manager_preserves_unknown_after_adapter_or_storage_failure(tmp_path, mo
             def broken_save(record):
                 raise OSError("synthetic-secret")
             monkeypatch.setattr(store, "save", broken_save)
-        task = asyncio.create_task(manager.bootstrap(approved=True, deadline=time.monotonic() + 2))
+        # 30초는 만료 원인이 아니라 고착 감시용 — 부하로 상태 기록 전에 만료되면 issuance_unknown 이 안 남는다.
+        task = asyncio.create_task(manager.bootstrap(approved=True, deadline=time.monotonic() + 30))
         if failure == "cancel":
             while not session.requests:
                 await asyncio.sleep(0)
@@ -254,7 +255,7 @@ def test_manager_preserves_unknown_after_adapter_or_storage_failure(tmp_path, mo
         assert store.load_state()["kind"] == "issuance_unknown"
         restarted = TokenManager(store, role="issuer", issuer=issue, enabled=True)
         with pytest.raises(TokenError):
-            await restarted.bootstrap(approved=True, deadline=time.monotonic() + 2)
+            await restarted.bootstrap(approved=True, deadline=time.monotonic() + 30)
         assert len(session.requests) == 1
         await issuer.close()
     asyncio.run(run())

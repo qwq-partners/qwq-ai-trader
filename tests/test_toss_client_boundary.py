@@ -65,6 +65,20 @@ def make_client(tmp_path, *, responses=(), **kwargs):
     return client, tokens, transport
 
 
+def frozen_clock():
+    """시간이 주제가 아닌 시험용 고정 시계 — 실시간 경과가 예산·deadline 판정에 새지 않는다."""
+    return 100.0
+
+
+def steady_budget(mod, **kwargs):
+    """부하 비의존 예산: 고정 주입 시계 + 넉넉한 30초.
+
+    제품은 남은 초를 asyncio 실시간 타이머(asyncio.timeout/wait_for)에도 넘기므로 주입 시계만으로는
+    실시간 1초 제한이 남는다. 30초는 만료 원인이 아니라 시험 고착 감시용이다.
+    """
+    return mod.RequestBudget(30, clock=frozen_clock, **kwargs)
+
+
 @pytest.mark.parametrize("settings", [{}, {"enabled": True}, {"role": "sender"}])
 def test_off_or_reader_never_touches_credentials_transport_or_lock(tmp_path, settings):
     mod = api()
@@ -135,7 +149,7 @@ def test_structural_and_permanent_errors_are_not_retried(tmp_path, status, body,
         async with client:
             with pytest.raises(mod.TossRequestError, match=code):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
     asyncio.run(run())
     assert len(transport.requests) == 1
 
@@ -150,7 +164,7 @@ def test_success_returns_envelope_and_redacts_response_repr(tmp_path):
     async def run():
         async with client:
             assert await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                    budget=mod.RequestBudget(1)) == body
+                                    budget=steady_budget(mod)) == body
     asyncio.run(run())
     assert transport.closed
 
@@ -258,7 +272,7 @@ def test_other_allowed_endpoints_preserve_contract(tmp_path, path, params, body)
                                       responses=[mod.HttpResponse(200, {}, body)])
     async def run():
         async with client:
-            assert await client.get(path, params=params, budget=mod.RequestBudget(1)) == body
+            assert await client.get(path, params=params, budget=steady_budget(mod)) == body
     asyncio.run(run())
     assert transport.requests[0][2]["params"] == params
 
@@ -271,7 +285,7 @@ def test_result_and_error_cannot_both_be_present_even_with_null_error(tmp_path):
         async with client:
             with pytest.raises(mod.TossRequestError, match="malformed_response"):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
     asyncio.run(run())
 
 
@@ -283,7 +297,7 @@ def test_client_injected_exception_chain_never_displays_raw_secret(tmp_path):
         async with client:
             try:
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
             except mod.TossRequestError as exc:
                 assert "synthetic-private-credential" not in "".join(traceback.format_exception(exc))
                 assert exc.code == "retry_exhausted"
@@ -340,7 +354,7 @@ def test_none_response_is_structural_failure_without_retry(tmp_path):
         async with client:
             with pytest.raises(mod.TossRequestError, match="malformed_response"):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
     asyncio.run(run())
     assert len(transport.requests) == 1
 
@@ -356,7 +370,7 @@ def test_malformed_token_cannot_reach_injected_transport(tmp_path, value):
         async with client:
             with pytest.raises(mod.TossRequestError, match="auth_unavailable"):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
     asyncio.run(run())
     assert transport.requests == []
 
@@ -369,7 +383,7 @@ def test_401_with_result_and_error_is_not_recovered(tmp_path):
         async with client:
             with pytest.raises(mod.TossRequestError, match="malformed_response"):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
     asyncio.run(run())
     assert len(transport.requests) == 1
     assert len(tokens.calls) == 1
@@ -445,6 +459,7 @@ def test_exhausted_retry_still_persists_revoked_before_poll_restart_and_expiry(t
     from src.data.providers.toss.token_store import TokenError
     mod = api()
     store, manager, minted, now = real_token_stack(tmp_path)
+    manager.clock = frozen_clock
     responses = [mod.HttpResponse(status, {}, {}) for status in prefix]
     responses.append(mod.HttpResponse(401, {}, {"error": {"code": "token-revoked"}}))
     client, _, transport = make_client(tmp_path, enabled=True, role="sender", responses=responses)
@@ -453,16 +468,17 @@ def test_exhausted_retry_still_persists_revoked_before_poll_restart_and_expiry(t
         async with client:
             with pytest.raises(mod.TossRequestError):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                    budget=mod.RequestBudget(1, max_retries=max_retries))
+                    budget=steady_budget(mod, max_retries=max_retries))
             with pytest.raises(mod.TossRequestError, match="auth_unavailable"):
-                await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+                await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=steady_budget(mod))
         now[0] += timedelta(hours=3)
-        restarted = TokenManager(store, enabled=True, role="issuer", issuer=manager.issuer, now=lambda: now[0])
+        restarted = TokenManager(store, enabled=True, role="issuer", issuer=manager.issuer,
+                                 now=lambda: now[0], clock=manager.clock)
         for candidate in (manager, restarted):
             with pytest.raises(TokenError, match="auth_unavailable"):
-                await candidate.get_token(deadline=mod.RequestBudget(1).deadline)
+                await candidate.get_token(deadline=steady_budget(mod).deadline)
             with pytest.raises(TokenError, match="auth_unavailable"):
-                await candidate.bootstrap(approved=True, deadline=mod.RequestBudget(1).deadline)
+                await candidate.bootstrap(approved=True, deadline=steady_budget(mod).deadline)
     asyncio.run(run())
     assert len(transport.requests) == len(prefix) + 1
     assert minted == []
@@ -473,6 +489,7 @@ def test_revoked_can_adopt_new_cache_without_exceeding_http_retry_budget(tmp_pat
     from dataclasses import replace
     mod = api()
     store, manager, minted, _ = real_token_stack(tmp_path)
+    manager.clock = frozen_clock
     client, _, transport = make_client(tmp_path, enabled=True, role="sender")
     client.tokens = manager
     sent = []
@@ -486,16 +503,16 @@ def test_revoked_can_adopt_new_cache_without_exceeding_http_retry_budget(tmp_pat
     async def run():
         async with client:
             action = client.get("/api/v1/prices", params={"symbols": "005930"},
-                                budget=mod.RequestBudget(1, max_retries=max_retries))
+                                budget=steady_budget(mod, max_retries=max_retries))
             if max_retries == 0:
                 with pytest.raises(mod.TossRequestError, match="retry_exhausted"):
                     await action
             else:
                 assert await action == {"result": []}
             assert len(sent) == 1 + max_retries
-            assert await manager.get_token(deadline=mod.RequestBudget(1).deadline) == "synthetic-other-bearer"
+            assert await manager.get_token(deadline=steady_budget(mod).deadline) == "synthetic-other-bearer"
             assert await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                    budget=mod.RequestBudget(1)) == {"result": []}
+                                    budget=steady_budget(mod)) == {"result": []}
     asyncio.run(run())
     assert sent == ["Bearer synthetic-original-bearer"] + ["Bearer synthetic-other-bearer"] * (1 + max_retries)
     assert minted == []
@@ -505,6 +522,7 @@ def test_revoked_can_adopt_new_cache_without_exceeding_http_retry_budget(tmp_pat
 def test_expired_token_issuance_still_requires_remaining_retry(tmp_path, prefix, max_retries):
     mod = api()
     _, manager, minted, _ = real_token_stack(tmp_path)
+    manager.clock = frozen_clock
     responses = [mod.HttpResponse(status, {}, {}) for status in prefix]
     responses += [mod.HttpResponse(401, {}, {"error": {"code": "expired-token"}}),
                   mod.HttpResponse(200, {}, {"result": []})]
@@ -514,7 +532,7 @@ def test_expired_token_issuance_still_requires_remaining_retry(tmp_path, prefix,
     async def run():
         async with client:
             action = client.get("/api/v1/prices", params={"symbols": "005930"},
-                                budget=mod.RequestBudget(1, max_retries=max_retries))
+                                budget=steady_budget(mod, max_retries=max_retries))
             if can_retry:
                 assert await action == {"result": []}
             else:
@@ -598,7 +616,7 @@ def test_revocation_callback_precedes_limiter_observe_await(tmp_path):
         async with client:
             with pytest.raises(mod.TossRequestError):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1, max_retries=0))
+                                 budget=steady_budget(mod, max_retries=0))
     asyncio.run(run())
     assert order == ["revoked", "limiter"]
     assert tokens.observations == ["synthetic-bearer"]
@@ -616,7 +634,7 @@ def test_missing_sync_observation_protocol_fails_before_auth_and_http(tmp_path, 
     async def run():
         async with client:
             with pytest.raises(mod.TossRequestError, match="auth_unavailable"):
-                await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+                await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=steady_budget(mod))
     asyncio.run(run())
     assert tokens.calls == transport.requests == []
 
@@ -665,6 +683,7 @@ def test_revoked_response_after_deadline_still_prevents_restart_mint(tmp_path):
 def test_cancelled_rate_observation_still_prevents_restart_mint(tmp_path):
     mod = api()
     store, manager, minted, now = real_token_stack(tmp_path)
+    manager.clock = frozen_clock
     client, _, transport = make_client(tmp_path, enabled=True, role="sender")
     client.tokens = manager
     received = asyncio.Event()
@@ -678,7 +697,7 @@ def test_cancelled_rate_observation_still_prevents_restart_mint(tmp_path):
     async def run():
         async with client:
             task = asyncio.create_task(client.get("/api/v1/prices", params={"symbols": "005930"},
-                                                 budget=mod.RequestBudget(60)))
+                                                 budget=mod.RequestBudget(60, clock=frozen_clock)))
             try:
                 await asyncio.wait_for(received.wait(), 5)
                 task.cancel()
