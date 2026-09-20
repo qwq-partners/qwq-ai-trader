@@ -67,6 +67,26 @@ S1:
 
 S3~S5 는 인계 Do 1~4항과 조사 C 의 RED 후보 24건을 기준으로 S1 통합 뒤 확정한다. 실큐 시험은 "조용한 폐기"를 통과로 오인하지 않도록 `stats.errors_count` 와 gateway 수신 사실을 명시 단언한다.
 
+### S1 독립 리뷰 처분 (2026-09-20, 대상 `03cc2d6..33b7643`)
+
+구현: worker 1명(요청 claude-opus-5/high, 실제 모델 metadata 미노출) — RED `8a571b8` → GREEN `33b7643`, 허용 7파일만 변경.
+coordinator 재현: RED 커밋 22 failed/3 passed(행동 RED 1건 `DID NOT RAISE`, 나머지 모듈 부재), GREEN UTC·KST 각 364 passed·격리 0. 기존 시험 4파일 삭제 0줄(Codex 도 `assert` AST 225개 동일 확인).
+리뷰: ① Codex 요청 gpt-6-astra/xhigh(읽기 전용 sandbox, 8분 53초) ② Claude 요청 opus/xhigh 2렌즈(돈 경로 parity / 상태·시험 정직성) + 발견 11건 전부 반증 시도(opus/high). **세 리뷰 모두 CHANGES_REQUIRED, P0 0건.** 재검증으로 2건 기각(성장은 기존 잔여 항목, cash·reservation 의 실제 차단 주체는 신규 검사).
+
+| # | 등급 | 발견 | 처분 |
+|---|---|---|---|
+| R1 | P1 | `recompose_quantity` 에 hybrid 분기가 없다. 운영 설정은 `hybrid.enabled: false` 라 현재 미발동이나, 켜면 legacy 40주 vs final 140~175주(3.5~4.4배)로 **fail-open** (세 리뷰 공통, 수치 재현) | facts 에 설정 전용 값 `hybrid_enabled: bool`(필수) 추가, True 면 `unsupported_hybrid_sizing` 으로 **명시 거부**. 인수 조건 5 의 hybrid 는 parity 표본이 아니라 거부 시험으로 바꾼다 |
+| R2 | P1 | `facts.sources=()` 이면 stale 검사가 전무한 채 자동 BUY 가 송신된다 | 자동 BUY facts 는 소비 출처 **1개 이상 필수**(DTO 에서 거부). 실제로 소비가 없는 판단은 S2 에서 ruleset 출처로 표현한다 |
+| R3 | P2 | 소비 출처 대조가 version·digest 뿐이다 — 게시본과 다른(미래) `as_of` 도 통과, 전일 게시본으로 당일 매수 정당화 가능 | `_consumed_sources` 가 게시본 `as_of` 동일성·당일(KST)·`as_of <= decided_at` 을 함께 본다 |
+| R4 | P2 | final 시험이 `status in (NOT_SENT, UNKNOWN)` 뒤에 예약 0 을 단언 → `UNKNOWN+예약 해제` 회귀를 가린다(실제 status 는 전부 NOT_SENT) | `is NOT_SENT` + 저장 상태 단언으로 좁히고, UNKNOWN 은 별도 시험에서 예약 유지(507,500원·50주)를 단언 |
+| R5 | P2 | kernel 재검사의 예약 차감·전략 잔여·overlay 항을 제거한 변이 3종에서 364건 전부 통과. cash·reservation 사례는 신규 검사를 빼도 기존 `position_value_limit`/`cash_insufficient` 가 막는다 | 구속 표본 추가(pending 예약, 전략 예산 소진, overlay≠1.0, 일손실)와 "기존 gate 는 통과·kernel 수량만 부족" 구간의 final 사례(예: 다른 예약 130주 → kernel 44주). **수정 후 변이 (a)(c)(d) 각각 ≥1건 실패가 인수 조건** |
+| R6 | P2 | `_bound` 의 `decision_facts_changed` 대조를 지워도 전건 통과 | binding digest 를 위조한 dispatch → NOT_SENT·POST0 시험 추가 |
+| R7 | P2 | 인수 조건 4 의 대조가 quote·출처·정책 게시뿐 — 계약이 요구한 **무관 fill 관측·무관 취소 ACK** 가 없다. hashkey 경계도 출처 변화만 본다 | 실제 무관 fill·취소 ACK 대조와 hashkey×경제 변화 1건 추가 |
+
+**계약 문언 정정:** 조건 3 의 "예약 무변"은 "guard 평가 자체는 예약을 바꾸지 않는다"는 뜻이다. 확정 `NOT_SENT` 는 기존 lifecycle 대로 예약을 해제하고(`lifecycle.py` FINAL_REJECTED), `UNKNOWN` 만 `BLOCKED_UNKNOWN` 으로 예약을 유지한다. 두 경우를 한 단언에 섞지 않는다.
+
+**S1 잔여(수정하지 않고 명시):** ① facts 의 설정 전용 값·배율은 게시자 신뢰 범위다(owner 교차검증 없음, 노출은 policy 상한으로 묶임) — S2 publisher 시험에서 설정 출처에 고정한다. ② `entry_decision_facts`·`qualification_sources` 정리 writer 없음(소비는 당일·만료로 fail-closed, 위험은 checkpoint 성장) — `day_recovery.reset_daily` 를 건드리는 별도 작업. 출처 counter 는 재시작·일자 전환에서 단조성을 유지해야 하므로 일별 초기화 금지. ③ wrapper `get_available_cash()` 실산식(최소 현금·레짐 reserve)과 owner `available_cash(regime=True)` 의 등가는 parity 표본이 양쪽을 stub/0 으로 두어 미대조. ④ 과거 checkpoint 의 자동 BUY 는 `decision_facts_required`/`decision_facts_changed` 로 송신 차단(호환 우회 없음).
+
 ### S3 사전 확인 (coordinator 소스 대조, `03cc2d6`)
 
 - **세션 표가 둘이다.** legacy `KRSession.get_session`(`src/utils/session.py:125-161`): 08:00~08:50 PRE / 09:00~15:20 REGULAR / 15:40~20:00 NEXT, 그 사이(08:50~09:00, 15:20~15:40)는 전부 CLOSED, 공휴일 반영, **naive `datetime.now()`**. owner `requests._session_at`(64-72): 같은 틈을 `pre_close`/`closing`(MARKET 만 거부)·`break`(전면 거부)로 나누고 휴장은 판단하지 않는다.
