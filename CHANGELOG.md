@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — fix(safety): S2 마감 수정(메모리 출처 섹터 귀속) + docs: S3 세부 계획 (engine 브랜치·운영 미설치)
+
+- **S2 마감 수정 `fcc2a27` → `85a65bc` (Codex S2 재리뷰의 새 P2 1건):** CV 는 규칙9 메모리 보정을 신호 metadata 의 섹터(`sector or ""` — 빈 문자열일 수 있다)로 계산하는데 증거에는 그 뒤에 조회한 섹터가 들어가, `trade_memory:<strategy>:<섹터>` 출처가 **CV 가 쓰지 않은 섹터**에 귀속되고 서로 다른 소비 범위가 같은 행을 덮었다(행동 RED: 빈 섹터 −7 과 '반도체' −3 이 같은 이름을 공유).
+  - `src/core/cross_validator.py`(**가산만**, +8/−1 — 삭제 1줄은 같은 인자 호출을 2줄로 분해한 것): `last_decision` 에 13번째 키 `memory_sector`(보정이 실제로 붙었을 때만 `get_score_adjustment` 에 넘긴 값 그대로, 아니면 None). 판정·점수·penalties·반환·기존 12키 불변.
+  - `src/execution/safety/qualification.py`: `_CV_KEYS` 13키 정확 대조, trade_memory 출처의 이름·digest 를 `memory_sector` 로(`''` → `'-'`), `memory_adj != 0` 인데 str 아님 / `memory_adj == 0` 인데 None 아님 → `unexpected_cv_decision`. `_pending_sources` 에서 조회 후 `sector` 인자를 제거해 그 값이 출처 이름에 닿을 경로를 없앴다. `facts.sector` 는 계속 조회 후 섹터(섹터 한도 판정용)이며, 출처 이름과 분리되면서 `facts.sector` 의 ':' 는 더 이상 `invalid_source_scope` 로 막히지 않는다(공개된 완화 1건 — 소비처는 equality 대조·섹터 비교뿐).
+  - 시험: 메모리 stub 을 상수 → 섹터 의존으로 교체(상수 stub 이 결함을 숨겼다), 신규 4건. 단일 writer(요청 Opus/high) → 독립 재현(요청 Opus/xhigh) **APPROVE_THIS_SLICE**, 변이 6종 전건 kill. 재현자의 새 P2(반대 방향 계약 미검사)는 coordinator 가 +3줄 가드·변이 kill 확인으로 닫음. **Codex 재확인은 받지 않았다**(S3 첫 Codex 리뷰 범위에 포함).
+  - 전체 suite(HEAD `85a65bc`, 단독 직렬): UTC **4632 passed / 2 xfailed / 경고 4**(293.74초), KST **4632 / 2 / 4**(282.27초), 격리 0. 4628 대비 +4.
+- **운영 교훈(원장 "공통 작업 방법"에 기록):** 전체 suite 와 읽기 전용 에이전트 3명을 겹쳐 돌린 1차 실행에서 `test_toss_client_boundary.py::…[prefix2-1]` 1건이 실패했다 — 실시간 1초 예산(`RequestBudget(1)`, `time.monotonic`)이 스왑 100% 호스트의 부하에 민감하다. 단독 재실행은 통과. **"단독"에는 읽기 전용 에이전트도 포함한다.** 시험 자체의 부하 의존 제거는 별도 작업으로 분리.
+- **S3 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md`(신규, 계획일 뿐 구현 아님):** 조사 3관점 → 설계 → 적대적 심사(REVISE·must-fix 8건 전부 수용) → coordinator 결정 17건. 핵심: ① `_process_event` 의 SIGNAL 폐기 분기만 gateway 로 돌리고 예외를 흡수한다(안 하면 owner 예외 한 건이 엔진 루프를 내린다) ② `trading_ready` 가 항상 False 라 gateway 를 붙이는 순간 모든 dispatch 가 claim 이전에 실패 → **미claim prepared 의 원자적 종료(`abandon_candidate`)가 wave 1 의 전제 조건** ③ attach 모드에서 legacy pending 장부 7개는 쓰지 않되 `_last_signal_time` 은 유지 ④ eviction 은 attach 에서 호출 자체를 막는다(안 막으면 S3 가 그 SELL 의 실제 POST 경로를 연다) ⑤ 사이징 정합은 `_reserved_cash`·`_pending_strategy_notional` 두 지점(소비자 다섯 곳) ⑥ 정리 writer 는 facts 행만(출처 행은 이름 수로 유계). 하위 단계 S3-1~S3-6b·5 wave. `config_version` 5축 조립·factory·`trading_ready` 실제 대사는 10A3, 직접 SELL 폴백·취소0건·eviction 이관은 S4, 독립 실큐 인수는 S5.
+- main/운영·배포·재시작·주문·설정·Toss grant 무변경. 제품 attach 호출자 0건.
+
 ## 2026-09-20 — feat(safety): B2/B3 S2 wave B·C — regime final 재유도·순수 builder·증거 캡처·게시 함수 (S2 한정 승인·운영 미설치)
 
 - **S2-3 `src/execution/safety/commands.py`(+23/−0):** owner 가 prepare·final 공통 관문(`_decision_facts`)에서 순수 함수 `effective_regime(state, runtime._now())` 를 **다시 유도**해 facts 가 인용한 'regime' digest 와 대조한다(사유 `stale_regime_decision`). S2 에서 **유일하게 게시자 자기신고가 아닌 stale 축**이다 — 장중 어떤 경로로 체제가 바뀌어도 final 이 잡는다. 'regime' 을 인용하지 않은 facts 는 무영향, `regime_policy` 부재 시 거부, 재유도는 현재 now. `read_qualification_source(name)`(deepcopy) 추가. 확인된 사실: 장중 급락 cap 은 **bull 계열만 강등**하므로 체제가 실제로 바뀌는 표본은 `mid_regime='bull'` 이어야 한다.

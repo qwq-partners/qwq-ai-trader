@@ -11,8 +11,8 @@
 |---|---|---|---|
 | Plan | 조사 3관점 + 계약·단계 고정 | 완료 | `47fa76b`·`03cc2d6`·`1f8e3ad`·`e8054b0` (문서만) |
 | S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **완료 — 한정 승인·운영 미설치** (실제 publisher·gateway 없음, 합성 시험 한정) | `01362db`(merge) + `78ca94f` |
-| S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a` |
-| S3 (B3a) | SIGNAL→gateway→ORDER command ID→dispatch | 미착수 (사전 확인만, 계획서 "S3 사전 확인") | — |
+| S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`·`44e543a`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a`·`85a65bc` |
+| S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **Plan 완료(2026-09-21, 기준 `85a65bc`)** — 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md`. Do 는 wave 1 부터 | — |
 | S4 (B3b) | on_signal 내부 직접 SELL·취소0건 해제·eviction | 미착수 | — |
 | S5 (See) | 독립 실큐 인수·최종 broad 리뷰·전체 직렬 | 미착수 | — |
 
@@ -22,7 +22,7 @@
 - **오프라인 시험 명령(접두):**
   `env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 QWQ_DEPLOY_SSH_KEY=/tmp/qwq-offline-no-ssh-key /home/ubuntu/projects/qwq-ai-trader/venv/bin/python -m pytest -q -p no:cacheprovider --tb=short <파일…>` — KST 는 `TZ=Asia/Seoul`. 마지막 줄 위의 `[테스트 격리] … 0건` 을 함께 확인한다.
 - **S1 대상 10파일:** `tests/test_execution_decision_facts.py tests/test_execution_command_owner.py tests/test_execution_command_flow.py tests/test_execution_command_shutdown.py tests/test_execution_policy_generations.py tests/test_execution_policy_generation_acceptance.py tests/test_execution_market_source.py tests/test_execution_resources.py tests/test_position_sizing_kernel.py tests/test_execution_sizing_characterization.py` (S1 이전 기준선: 앞 파일 제외 9개 339 passed)
-- **호스트 자원이 병렬도의 실제 상한이다:** 이 호스트는 운영 서버(거래 봇·Toss observer 상주)이며 2 vCPU·RAM 3.8GB, 2026-09-20 15:18 KST 관측 가용 871MB·스왑 2GB 100% 사용. pytest 를 도는 에이전트는 동시 2명 이하, **전체 suite(UTC→KST)는 다른 worker 가 없을 때 단독 직렬**로 돌리고 시작 전 `free -m`·`uptime` 을 본다. 다른 세션의 장기 프로세스는 건드리지 않는다.
+- **호스트 자원이 병렬도의 실제 상한이다:** 이 호스트는 운영 서버(거래 봇·Toss observer 상주)이며 2 vCPU·RAM 3.8GB, 2026-09-20 15:18 KST 관측 가용 871MB·스왑 2GB 100% 사용. pytest 를 도는 에이전트는 동시 2명 이하, **전체 suite(UTC→KST)는 다른 worker 가 없을 때 단독 직렬**로 돌리고 시작 전 `free -m`·`uptime` 을 본다. 다른 세션의 장기 프로세스는 건드리지 않는다. **"단독"은 읽기 전용 에이전트도 포함한다(2026-09-21 실측):** 전체 suite 와 pytest 를 돌지 않는 조사 에이전트 3명을 겹쳐 돌렸더니 `tests/test_toss_client_boundary.py::test_expired_token_issuance_still_requires_remaining_retry[prefix2-1]` 1건이 실패했다 — 이 시험은 `RequestBudget(1)` 의 **실시간 1초 예산**(`rate_limit.py` 기본 `clock=time.monotonic`)을 쓰고 실제 토큰 발급(파일 잠금)을 그 안에 끝내야 해서 스왑 100% 호스트의 부하에 민감하다. 단독 재실행은 73 passed. 부하로 오염된 실행은 증거로 쓰지 않고 다시 돌린다.
 - **하위 에이전트 worktree:** 수동 `git worktree add` + worker `EnterWorktree` 는 실패한다(Bash 격리 고정점이 부모 worktree 에 남음 — S1 1차 시도 커밋 0). Workflow `agent(..., {isolation:'worktree'})` 로 harness 가 만든 worktree 에서 시작해, 그 안에서 `git switch -c work/<이름> <base SHA>`(구현) 또는 `git switch --detach <SHA>`(리뷰)로 기준을 맞추고 **기준선 시험을 첫 단계**로 돌리게 한다. detached 로 바꾼 리뷰 worktree 는 자동 회수되지 않으므로 끝난 뒤 `git worktree remove <경로>`(dirty 면 스스로 거부)로 정리한다.
 - **교차 provider 리뷰(Codex):** `scripts/dev/codex_review.sh` 는 모델·effort 를 지정하지 않아 전역 설정(astra/medium)을 따르고 기준이 main 이면 engine 전체가 범위가 된다. 단계 리뷰는 플러그인 companion 으로 돌린다:
   `node /home/ubuntu/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs task --background --model gpt-6-astra --effort xhigh "<프롬프트>"` — `--write` 가 없으면 read-only sandbox. 완료 통지가 오지 않으므로 `status <id> --json`, `result <id>` 로 확인한다. 범위는 프롬프트에 `git diff <base>..<head>` 와 `git show <head>:<경로>` 로 명시하고, 실행 전후 `git status --short`·HEAD 를 대조한다.
@@ -157,7 +157,21 @@
 - **Codex S2 재리뷰(요청 gpt-6-astra/xhigh, read-only·pytest 금지, 대상 `83baa2a`): CHANGES_REQUIRED — 새 P0/P1 0건, 새 P2 1건.** 1·2차(`task-mu9qmtk7-sp2cwl`·`task-mu9x4m7f-vb88oh`, `--background`)와 3차(harness 백그라운드)는 세션 종료 훅에 정리돼 결과 없이 죽었고(위 "공통 작업 방법"의 경고 참조), **4차에 포그라운드·좁힌 프롬프트로 10분 안에 완료**했다. 좁힌 범위: 이전 발견 5건의 해소 여부 + 새 P0/P1 위주(출처 행 수 증가·시험 정직성 전수·falsy/Decimal 점검은 이번 재리뷰에서 뺐다 — wave A·B 리뷰와 독립 재현이 덮은 항목이다).
   - 이전 발견: **P1(claim 이전 실패 시 prepared 예약 잔류) → S3 이관 수용**("현재 `src/` 에 prepare/dispatch 제품 호출자가 없으므로 S3 연결 전 인수 조건으로 처리할 수 있다") · 전역 출처 충돌 **해소** · `as_of` **해소** · regime await 시험·base_pct 주장 축소는 **처분 수용**(regime 시험 원문은 이번 범위 밖이라 독립 확인하지 않았다고 명시).
   - 확인된 것: legacy 경로의 판정·반환 변경 없음, 캡처 사이 추가 await 없음, 사이징 dict 는 호출마다 교체, 거부 뒤 남는 증거는 S2 에 소비자가 없어 즉시 주문 위험 아님, 게시 순서·매 게시 시 현재 `owner.version`·예외 전파, 출처만 게시된 부분 상태는 기존 판단을 stale 로 만들 수 있으나 새 송신 허가를 만들지는 않는다.
-  - **새 P2(수정 중):** metadata 에 sector 가 없으면 CV 는 `get_score_adjustment(strategy, "")` 로 메모리 보정을 계산하는데, 증거에는 그 뒤 `_sector_lookup` 이 돌려준 섹터가 들어가 `trade_memory:<strategy>:<조회 후 섹터>` 로 게시된다 — CV 가 쓰지 않은 섹터에 귀속되고, 서로 다른 소비 범위가 같은 행을 덮어 정상 판단을 stale 로 만들 수 있다(현행 메모리 stub 이 섹터와 무관한 상수라 놓침). → CV 가 규칙9 에서 실제로 넘긴 섹터를 `last_decision['memory_sector']`(13번째 키)로 보고하고 builder 가 그 값으로 출처 이름·digest 를 만든다. 단일 writer + 독립 재현으로 진행 중.
+  - **새 P2(수정 완료 — 바로 아래 "S2 마감 수정" 참조):** metadata 에 sector 가 없으면 CV 는 `get_score_adjustment(strategy, "")` 로 메모리 보정을 계산하는데, 증거에는 그 뒤 `_sector_lookup` 이 돌려준 섹터가 들어가 `trade_memory:<strategy>:<조회 후 섹터>` 로 게시된다 — CV 가 쓰지 않은 섹터에 귀속되고, 서로 다른 소비 범위가 같은 행을 덮어 정상 판단을 stale 로 만들 수 있다(현행 메모리 stub 이 섹터와 무관한 상수라 놓침). → CV 가 규칙9 에서 실제로 넘긴 섹터를 `last_decision['memory_sector']`(13번째 키)로 보고하고 builder 가 그 값으로 출처 이름·digest 를 만든다. 단일 writer + 독립 재현으로 처리했다(아래).
+
+### S2 마감 수정 — trade_memory 출처의 섹터 귀속 (기준 `fcc2a27` → `85a65bc`)
+
+- **Plan:** Codex S2 재리뷰의 새 P2 한 건만. 고정 인터페이스(`last_decision` 키 집합)가 바뀌므로 S3 전에 닫는다. 허용 파일 5개(`cross_validator.py` 는 **가산만**·`qualification.py`·시험 3파일), `engine.py`·`qualification_publisher.py`·`commands.py`·`decisions.py` 금지. 인수 조건은 변이 M1~M4 kill.
+- **Do (단일 writer, 요청 claude-opus-5/high, 관측 모델 미노출):** `0ac5dd8`(red) → `36d8dc6`(fix), merge `44e543a`. CV 가 규칙9 에서 `get_score_adjustment` 에 넘긴 값을 같은 지역변수로 들고 있다가 **보정이 실제로 붙었을 때만** `last_decision['memory_sector']`(13번째 키)로 싣는다 — 기존 `sector or ""` 의미·판정·점수·penalties·반환·기존 12키 불변(삭제 줄 1줄은 같은 인자 호출을 2줄로 분해한 것). builder 는 `_CV_KEYS` 13키 정확 대조, trade_memory 이름·digest 를 `memory_sector` 로(`''` → `'-'`), `memory_adj != 0` 인데 str 아니면 `unexpected_cv_decision`. `_pending_sources` 에서 조회 후 `sector` 인자를 제거해 그 값이 출처 이름에 닿을 경로 자체를 없앴다.
+  - **행동 RED:** `test_f8_memory_source_is_attributed_to_the_sector_the_validator_used` — 실제 CV·실제 on_signal·실제 owner 로 빈 섹터(−7)와 '반도체'(−3) 두 판단을 게시하면 `assert 'trade_memory:sepa_trend:-' in {'regime', 'trade_memory:sepa_trend:반도체'}` 로 실패(잘못된 귀속 그대로 재현). 같은 RED 커밋의 builder 실패 57건은 공유 표본이 13키로 바뀐 데 따른 **구조적 RED**(행동 단언 미도달) — 행동 RED 단독 증거는 F8 하나이고, 고친 뒤에는 M1·M6 이 builder 시험을 단언으로 죽인다.
+  - 메모리 stub 을 상수 → 섹터 의존(`{'반도체': -3, '': -7}`, 그 외 −5)으로 교체(상수 stub 이 귀속 오류를 숨겼다는 Codex 지적의 직접 해소).
+  - **기대값을 갱신한 기존 단언 7건**은 구현자가 줄 단위로 보고, 독립 재현자가 "계약 이동에 따른 갱신·약화 아님"으로 확인. **실질 완화 1건(공개):** `facts.sector` 의 ':'(예 `'반도체:2차전지'`)는 이제 통과한다 — 출처 이름 조각으로 더는 쓰이지 않기 때문이며 소비처는 `commands.py` equality 대조와 `risk_policy` 섹터 비교뿐이다. `''`·`' 반도체'` 는 계속 거부되고 사유만 `invalid_source_scope` → `invalid_decision_sector` 로 바뀐다.
+  - 절차 이탈(구현자 자진 신고·결과 무영향): 1차 변이 실행 때 `git restore` 가 미커밋 fix 를 함께 되돌렸다 → fix 재적용·커밋 후 M1~M4 를 커밋 기준으로 재실행. 독립 재현자가 커밋 `36d8dc6` detached 에서 전부 다시 돌려 영향 없음을 확인.
+- **See (독립 재현, 요청 claude-opus-5/xhigh, 관측 모델 미노출): APPROVE_THIS_SLICE** — 확인 13항목 전부 OK(허용 파일만·가산만·13키 정확 대조·순수성 유지·행동 RED 재현·기존 단언 갱신 7건 판정), 지정 변이 M1~M4 + 자체 변이 M5(보정 0 에도 섹터 채움)·M6(`'-'` 치환·`_scope` 제거) **6종 전건 kill**, 각 변이 뒤 트리 원복 확인. 새 P2 1건: 반대 방향 계약(`memory_adj == 0` 이면 `memory_sector` 도 None) 미검사 — 오늘 행동 영향 0 이나 CV 기록 위치가 바뀌면 조용히 통과할 틈.
+  - → coordinator `85a65bc`: 대칭 가드 1개(+3줄)와 단언 1줄 추가. 가드를 무력화하는 변이를 직접 적용해 `test_memory_source_without_a_reported_sector_is_refused` **그 시험만 실패**(1 failed / 70 passed) 확인 후 원복.
+- **S2 최종 전체 suite(coordinator, HEAD `85a65bc`, 단독 직렬, 2026-09-21):** UTC **4632 passed / 2 xfailed / 경고 4 / 293.74초**, KST **4632 / 2 / 4 / 282.27초**, 각 격리 0. `83baa2a` 의 4628 대비 **+4 = CV 특성화 1 + builder 2 + publishers 1**. 기존 xfail 2·경고 4 불변. 그에 앞선 1차 UTC 실행(4631 passed / **1 failed**)은 S3 조사 에이전트 3명과 겹쳐 돌린 **부하 오염**이라 증거로 쓰지 않았다 — 실패한 `test_toss_client_boundary.py::…[prefix2-1]` 은 이번 diff 와 무관한 파일이고 실시간 1초 예산을 쓰며 단독 73 passed(위 "공통 작업 방법"의 기록, 별도 작업 칩 `task_df7c594a`).
+- **정리:** 임시 worktree 2개(`wf_df27d92f-809-1·2`)와 `work/s2-memory-sector` 제거(clean·merged). 남은 worktree 는 main·세션 기본·engine 3개.
+- **교차 provider 재확인은 하지 않았다.** Codex 의 CHANGES_REQUIRED 는 이 P2 한 건이었고 수정은 같은 provider(Opus) 독립 재현으로만 검증됐다 — "Codex 재승인"으로 세지 않는다. S3 단계 리뷰에서 Codex 가 이 diff(`fcc2a27..85a65bc`)를 함께 보게 한다.
 
 ### S2 의 성과와 한계 (보고 문장 — 이대로 인용한다)
 
@@ -188,3 +202,40 @@
 - [ ] 세부 계획에 나열된 변이 각각 ≥1건 실패를 **직접 재현**(실험 뒤 원복·`git status --short` 비어 있음).
 - [ ] 새 시험이 `synthetic_home` autouse 를 자체 선언했는가(CV `__init__` 과 규칙11/12 가 `~/.cache/ai_trader` 아래에 쓴다 — 운영 캐시 오염 위험). 벽시계 의존 0, UTC·KST 양쪽 통과.
 - [ ] legacy 불변: 특성화·기준선 시험 전건 통과, runtime 미설치에서 게시 호출 0.
+
+## S3 (B3a) — SIGNAL → gateway → owner prepare/dispatch
+
+정직한 성과 문장은 세부 계획 §0 에 있다: **S3 는 설치가 아니다.** 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()` 호출자는 S3 뒤에도 0건이고, 모든 GREEN 은 fake HTTP·주입 시계·시험용 합성 startup 허가 위의 결과다.
+
+### Plan (완료, 2026-09-21, 기준 `85a65bc`)
+
+- **방법:** 읽기 전용 조사 3관점(engine 흐름 / safety API / 하네스·RED 후보, 요청 claude-opus-5/high) → 설계(요청 opus/high) → **적대적 설계 심사(요청 opus/xhigh, 설계자와 다른 실행): REVISE — must-fix 8건** → coordinator 가 핵심 줄을 직접 대조한 뒤 결정 17건으로 확정. 관측 모델은 전부 metadata 미노출(미검증). 제품·시험 수정 0, pytest 0. workflow `wf_40cf4baa-380`(에이전트 5, 조사·설계·심사 원문은 그 journal).
+- **산출물:** `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md` — §1 확정 사실 19 · §2 coordinator 결정 ①~⑰ · §3 계약 8 · §4 하위 단계 7개(고정 인터페이스·RED·변이) · §5 legacy/US 불변 증명 · §6 하지 않는 것 · §7 위험·미확인 · §8 역할.
+- **심사 must-fix 8건의 처분(전부 수용, 계획 §2 에 반영):** ② 인계점의 예외 흡수(없으면 owner 예외 한 건이 엔진 루프를 내린다) · ④ `_last_signal_time` 기록 유지(지우면 30초 쿨다운이 attach 에서 무장되지 않는다) · ⑥ (must-fix 2건을 한 결정으로) 사이징 divergence 는 `_reserved_cash` 하나가 아니라 `_pending_strategy_notional` 까지 두 지점이고, `_reserved_cash` 의 소비자에 G5_cash 조기 차단(2169)이 빠져 있었다 — 소비자는 모두 다섯 곳 · ⑩ 정리 writer 의 축약 행이 `commands.py` 인덱싱을 KeyError 로 깬다 → **coordinator 가 범위를 더 줄여 facts 행만 정리**(출처 행은 이름 수로 유계임을 직접 확인) · ⑤ eviction 은 S3 가 송신 경로를 실제로 열어 버리므로 attach 에서 호출 자체를 막는다(설계의 "S4 이관" 기각) · ⑦ `claimed=False` 경로도 같은 prepared 누수 → abandon 대상에 포함 · ⑮ `_pending_sector_map` 이 attach 에서 체결 후 영구 잔류 → 결과와 무관하게 pop.
+- **coordinator 가 설계와 다르게 정한 것:** ③ attach 모드에서는 ORDER 이벤트를 큐에 싣지 않는다(prepare·dispatch 를 같은 command_scope 에서) — 상위 계획 문구와 다른 해석이라 **S5 최종 broad 리뷰의 확인 항목**. ⑩ 위. ⑪ engine 은 safety 패키지를 `runtime.gateway` 한 길로만 만나고 예약 읽기 helper 도 gateway 가 제공(engine 에 owner state 해석 복제 금지). ⑯ engine.py 배선을 S3-6a(경로)·S3-6b(정합)로 분할.
+- **누적 인수 조건 12항의 처분:** 1 → S3-2+S3-3 · 2 → 대조만 S3-3, 조립은 10A3 · 3 → S3-1+S3-3(**wave 1 의 전제 조건** — `trading_ready` 가 항상 False 라 gateway 를 붙이는 순간 모든 dispatch 가 claim 이전에 실패해 예약이 100% 누수된다) · 4 → S3-6a(계약 3) · 5 → S3-6b · 6 → S3-5 helper + S3-6b · 7 → S3-3 · 8 → 소비 지점 S3-6b, lookup 은 10C · 9 → S3-3 · 10 → S3-5 · 11 → S3-4(facts 만) · 12 → SIGNAL 분기·식별자는 S3, 직접 SELL 폴백·취소0건·eviction 이관은 S4(S3 는 attach 에서 셋이 발화하지 않음만 고정), 실큐 인수는 S5.
+
+### Do·See — 하위 단계별 (진행하며 채운다)
+
+| 단계 | 제품 파일 | 상태 | 구현 SHA | 독립 재현 | 통합 SHA |
+|---|---|---|---|---|---|
+| S3-1 | `lifecycle.py` | 미착수 | — | — | — |
+| S3-2 | `risk_policy.py`(+helper 2줄) | 미착수 | — | — | — |
+| S3-3 | `commands.py` | 미착수 | — | — | — |
+| S3-4 | `day_recovery.py` | 미착수 | — | — | — |
+| S3-5 | `gateway.py`·`runtime.py` 설치점 | 미착수 | — | — | — |
+| S3-6a | `engine.py` H1·H4·H5 | 미착수 | — | — | — |
+| S3-6b | `engine.py` H2·H3 | 미착수 | — | — | — |
+
+Codex 교차 리뷰(포그라운드·10분 상한)는 wave 2·3·5 뒤 각 1회. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
+
+### 이어받는 에이전트 체크리스트 (S3 공통 — 하위 단계마다 반복)
+- [ ] 세부 계획 §4 의 그 단계 "고정 인터페이스"와 실제 시그니처가 일치하는가. §2 의 결정 번호와 어긋나는 구현이 없는가.
+- [ ] 허용 파일 밖 변경 0. `engine.py` 는 허용 hunk(H1~H5) 밖 변경 0 이고, 추가된 실행 줄이 전부 `_execution_runtime is not None`(및 `gateway is not None`) 가드 안인가(§5-1).
+- [ ] 기존 시험 파일 수정 0줄(`git diff --numstat <base> <head> -- tests/`). 예외는 S3-2 의 helper 2줄뿐이고 기대값·단언 변경 0.
+- [ ] RED 커밋이 제품 커밋보다 앞. 행동 RED 와 부재 RED 를 구분해 보고했는가.
+- [ ] 세부 계획에 나열된 변이 **전건**과 독립 재현자의 자체 변이 ≥3 이 kill 되는가. "attach 가드를 항상 참으로" 변이에서 legacy 대조 시험이 죽는가.
+- [ ] 합성 허가 없는(`ready=False`) 대조가 쌍으로 있고 그때 **예약 0** 인가.
+- [ ] 네 시계(legacy `KRSession`·engine 모듈·CV 모듈·runtime 주입)가 같은 순간으로 고정됐는가. UTC·KST 양쪽 통과, 벽시계 의존 0, `synthetic_home` autouse 자체 선언.
+- [ ] `src/`·`scripts/` 에서 `KRExecutionRuntime(`·`.attach(`·`install_gateway(` 제품 호출자 0건을 grep 으로 재확인했는가.
+- [ ] 전체 suite 는 **어떤 에이전트도 돌지 않을 때** 단독 직렬(UTC→KST)로 돌렸는가.
