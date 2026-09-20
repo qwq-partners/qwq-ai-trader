@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from test_toss_client_boundary import api, make_client
+from test_toss_client_boundary import api, make_client, steady_budget
 
 
 class Clock:
@@ -88,7 +88,7 @@ def test_external_close_cancels_request_without_deadlocking_context_exit(tmp_pat
         async def worker():
             async with client:
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(3))
+                                 budget=steady_budget(mod))
         task = asyncio.create_task(worker())
         await entered.wait()
         await asyncio.wait_for(asyncio.shield(client.close()), 0.1)
@@ -129,7 +129,7 @@ def test_shared_budget_consumes_each_page_once_but_retries_only_once(tmp_path):
         mod.HttpResponse(200, {}, {"result": []})])
     async def run():
         async with client:
-            budget = mod.RequestBudget(1, max_pages=2)
+            budget = steady_budget(mod, max_pages=2)
             for _ in range(2):
                 await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=budget)
             with pytest.raises(mod.TossRequestError, match="page_exhausted"):
@@ -189,7 +189,7 @@ def test_401_then_429_cannot_get_a_second_retry(tmp_path):
         async with client:
             with pytest.raises(mod.TossRequestError, match="retry_exhausted"):
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
     asyncio.run(run())
     assert len(transport.requests) == 2
     assert [call[0] for call in tokens.calls] == ["get", "token-revoked"]
@@ -259,7 +259,7 @@ def test_cancellation_closes_and_releases_sender_lock(tmp_path):
         async def worker():
             async with client:
                 await client.get("/api/v1/prices", params={"symbols": "005930"},
-                                 budget=mod.RequestBudget(1))
+                                 budget=steady_budget(mod))
         task = asyncio.create_task(worker())
         await ready.wait()
         task.cancel()
@@ -408,7 +408,7 @@ def test_repeated_close_cancellation_keeps_session_and_lock_until_cleanup(tmp_pa
     client, _, _ = make_client(tmp_path, enabled=True, role="sender")
     client.transport = transport_mod.AiohttpTransport(session_factory=lambda: session)
     async def run():
-        await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+        await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=steady_budget(mod))
         closing = asyncio.create_task(client.close())
         await close_entered.wait()
         retry = None
@@ -449,7 +449,7 @@ def test_failed_session_close_retains_sender_ownership_until_successful_retry(tm
     client, _, _ = make_client(tmp_path, enabled=True, role="sender")
     client.transport = transport_mod.AiohttpTransport(session_factory=lambda: session)
     async def run():
-        await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=mod.RequestBudget(1))
+        await client.get("/api/v1/prices", params={"symbols": "005930"}, budget=steady_budget(mod))
         try:
             with pytest.raises(mod.TossRequestError, match="network_error"):
                 await client.close()

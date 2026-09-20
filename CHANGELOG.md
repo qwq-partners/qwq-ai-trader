@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — test(toss): 실시간 1~3초 예산 의존 시험을 부하 비의존으로 (시험 전용)
+
+- **증상:** `tests/test_toss_client_boundary.py::test_expired_token_issuance_still_requires_remaining_retry[prefix2-1]` 가 호스트 고부하(2 vCPU·스왑 100%, 전체 suite 와 다른 에이전트 중첩)에서 1건 실패(단독 73 passed). 시험이 `RequestBudget(1)`(기본 `time.monotonic`) 실시간 1초 안에 실제 토큰 발급(파일 잠금·`os.fsync`)과 재시도를 끝내야 했고, 넘기면 `TossRequestError("timeout")` 이 성공 기대를 깼다.
+- **원인 실측:** 시험 본문은 그대로 두고 지연만 주입(`os.fsync` 0.4초 동기 지연 / 발급기 1.2초 비동기 지연)해 결정적으로 재현했다. 주입 시계만으로는 부족하다 — 제품이 `budget.remaining()` 을 `asyncio.timeout`(client)·`asyncio.wait_for`(token) **실시간 타이머**에도 넘기므로 "고정 시계 + 1초"는 비동기 지연에서 여전히 `timeout`. "고정 시계 + 30초"만 두 지연 모두 통과. 같은 파일의 기존 선례(`RequestBudget(60, clock=clock)` + "wall-clock 제한은 고착 감시용")와 동일한 조합이다.
+- **수정(시험 5파일, 제품 코드 무변경):** `test_toss_client_boundary.py` 에 `frozen_clock()`·`steady_budget(mod, **kwargs)`(고정 주입 시계 + 30초) 추가, `_execute` 를 실제 통과하는 시험과 실제 토큰 스택 시험(`manager.clock = frozen_clock`, 재시작 관리자 `clock=manager.clock`)에 적용. `test_toss_rate_deadline.py` 6곳 동일 적용. 실제 구현 연결이 의도인 `test_toss_offline_boundary.py`·`test_toss_oauth.py` 와 `test_toss_token_contract.py::deadline()` 헬퍼(`test_toss_token_storage.py` 도 공유, 만료 기대 사용처 0)는 시계 주입 대신 2→30초.
+- **그대로 둔 것:** 인증 전에 거부되어 예산 시간을 읽지 않는 시험 6곳(`RequestBudget(1)` 유지), 시간이 주제인 시험(주입 시계로 +61/+2 이동, `RequestBudget(0.02)` 실타이머 검증, 명시 `monotonic()+0.06`/`-1` deadline). 단언 삭제·완화 0, 시험 수 불변.
+- **검증:** 지연 주입 비교 — 실제 토큰 스택 11케이스×2지연: 수정 전 4 failed/18 passed → 수정 후 22 passed, `offline_boundary` 통합 시험 수정 전 FAIL → 수정 후 PASS. 오프라인 `tests/test_toss_*.py` 전체 UTC/KST 각각 **787 passed**·격리 0건(대상 파일 73 passed), 시험 수 787·단언 수(파일별 assert/raises) 기준선과 동일.
+- **잔여(미변경, 별도 판단):** 실시간 벽시계 감시값이 빡빡한 시험 — `test_toss_rate_deadline.py` 의 `wait_for(shield(close()), 0.1)`, `test_toss_runtime.py` 의 worker `start/stop(timeout=…)`, `test_toss_observer_service.py`(.2)·`test_toss_shadow_scheduler.py`(.25). 값 상향이 단언 완화에 해당할 수 있어 이번 범위에서 제외했다. 배포·재시작·운영 설정·Toss observer/토큰/영수증 변경 0.
+
 ## 2026-09-20 — docs(ops): 퇴역 작업공간 archive·상시 개발선 2개로 정리
 
 - 후속 독자 정리 지시로 로컬54 heads를 archive refs, 원격7 heads를 같은 SHA의 archive tags로 전환했다. dirty28/staged12를 포함한53개 worktree 원본 전체와 Git admin/index/objects를 mode700 로컬 보관소에 보존했다. 상시 잔여는 main·engine의 local/remote/worktree 각2개(임시 문서 PR 제외), 강제 삭제/reset/전역 prune0.

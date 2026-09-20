@@ -34,7 +34,9 @@ def run(awaitable):
 
 
 def deadline():
-    return time.monotonic() + 2
+    # 만료가 주제가 아닌 호출용 — 실파일 잠금·fsync 가 부하로 느려져도 만료되지 않게 넉넉히 둔다.
+    # 만료 자체를 검증하는 시험은 이 헬퍼 대신 명시 deadline 을 쓴다.
+    return time.monotonic() + 30
 
 
 def record(storage, *, value="synthetic-old-bearer", generation=1, expired=False):
