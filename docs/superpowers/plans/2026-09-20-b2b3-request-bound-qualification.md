@@ -50,7 +50,8 @@
 | **S5 (See)** | 독립 실큐 인수(구현자 아님) + 최종 broad 리뷰 + UTC/KST 전체 직렬 | 없음(제품 수정 권한 없음) | `tests/test_execution_signal_gateway_acceptance.py` |
 
 - S2·S3·S4 는 같은 `engine.py` 를 만지므로 **순차**다. 10C(KOFR·수동 매수·CLI·scheduler 978-1004)는 범위 밖으로 남긴다.
-- 공용 하네스 `tests/test_execution_runtime.py`·`tests/test_execution_command_owner.py` 는 **동결**(import 만). 새 시험 파일은 각자 `synthetic_home` autouse 를 선언한다.
+- 공용 하네스 `tests/test_execution_runtime.py` 는 **동결**(import 만). 새 시험 파일은 각자 `synthetic_home` autouse 를 선언한다.
+- **정정(S1 착수 전 확인):** 기존 시험 8건이 공용 `fixture(origin='automatic')` 로 facts 없이 자동 BUY 를 prepare 한다(`test_execution_command_owner.py` 5, `test_execution_command_flow.py` 1, `test_execution_policy_generations.py` 1, `test_execution_policy_generation_acceptance.py` 1). S1 이후 이들은 facts 게시가 필요하므로, **S1 worker 단독**으로 `test_execution_command_owner.py` 의 `fixture()` 에 `facts(req)` helper 를 추가하고 위 8건에 게시 호출만 넣는 최소 수정을 허용한다. 기존 단언의 삭제·완화·기대값 변경은 금지이며 coordinator 가 통합 전 diff 로 확인한다. S2 이후 단계에서는 다시 동결이다.
 - legacy(no-runtime) 경로와 US 경로의 동작·기준선(`test_t11_money_path_baseline` 등)은 불변. `Order`/`OrderEvent` 를 frozen 으로 바꾸지 않는다.
 
 ## 3. 인수 조건 (RED 는 행동 실패여야 한다 — import/bootstrap 실패는 RED 증거가 아니다)
