@@ -173,6 +173,37 @@ def test_published_facts_must_describe_the_actual_request(tmp_path, monkeypatch,
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('published', [None, '금융'])
+def test_caller_sector_must_match_the_published_facts_sector(tmp_path, monkeypatch, published):
+    # 호출자 sector가 facts와 다르면 집중 한도가 엉뚱한 sector로 평가된다. 정확한 사유로 거부해야 한다.
+    async def scenario():
+        f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
+        try:
+            req = f['request'](quantity=10)
+            await f['quote'](req)
+            await publish(f, make_facts(req, sector=published))
+            with pytest.raises(ValueError, match='decision_facts_sector_mismatch'):
+                await f['commands'].prepare(req, f['entry'](req), sector='반도체')
+            assert f['runtime'].owner.state['attempts'] == {}
+            assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_facts_sector_is_canonical_when_the_caller_passes_none(tmp_path, monkeypatch):
+    async def scenario():
+        f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
+        try:
+            req = f['request'](quantity=10)
+            await f['quote'](req)
+            await publish(f, make_facts(req, sector='반도체'))
+            attempt = await f['commands'].prepare(req, f['entry'](req))
+            assert attempt['sector'] == '반도체'
+            assert attempt['request_binding']['sector'] == '반도체'
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
 async def paused_dispatch(f, req, *, boundary):
     reached, release = asyncio.Event(), asyncio.Event()
     async def pause(*args):
