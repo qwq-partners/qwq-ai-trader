@@ -56,6 +56,10 @@ S2 가 끝나도 **실효 있는 stale 축은 regime 1개**다. panel_outlook·t
 14. **사이징 입력은 현재 요청의 성공한 사이징 직후에만 읽는다(S2-5).** `getattr(rm, '_last_sizing_inputs', None)` 은 속성 부재만 막는다 — 현재 요청이 사이징 전에 끝났는데 이전 요청의 성공값을 읽는 경우는 막지 못하므로, 어댑터는 자기 요청의 `_calculate_position_size` 가 양의 수량을 돌려준 **바로 그 지점**에서 복사한다.
 15. **0 배율·hybrid 는 facts 를 만들지 않는다(S2-4).** legacy 는 0.0 배율을 처리하지만 S1 DTO 는 배율을 `positive=True` 로 검사해 거부하고 hybrid 는 재유도를 거부한다. builder 는 이를 `0 or 1.0` 같은 보정으로 넘기지 말고 facts 미생성(자동 BUY 게시 0)으로 끝낸다 — 사유 코드를 남긴다.
 
+16. **출처 이름은 소비 범위로 나눈다(통합 수정, Codex wave B P2).** digest 가 종목·전략·섹터별로 다른데 이름이 전역이면 같은 패널로 두 종목을 잇달아 판단할 때 뒤 게시가 앞 요청을 `stale_qualification_source` 로 만든다(행동 RED 로 재현). 이름 규칙: `panel_outlook:<symbol>` · `trade_memory:<strategy>:<sector 또는 '-'>` · `regime` 은 전역(`commands._recheck_regime` 이 name=='regime' 을 찾는다). 조각은 `commands._text` 형태(비어 있지 않고 strip 된 str)이고 ':' 를 포함하지 않아야 한다 — 아니면 `invalid_source_scope` 로 facts 미생성. **아래 표의 출처 이름은 이 규칙으로 읽는다.**
+17. **`as_of` 는 CV 가 실제로 읽은 시각(`observed_at`)이다(통합 수정, Codex wave B P2).** on_signal 이 `validate` 호출 **직전**(같은 동기 구간, 사이 await 0)에 `runtime._now()`(aware KST)를 찍어 `QualificationEvidence.observed_at` 으로 싣는다. `build_decision_facts(..., observed_at=...)`(필수 키워드)는 aware·`observed_at <= decided_at`·같은 KST 날짜를 강제하고(`invalid_observation_time`) `PendingSource.as_of` 로 쓴다. publisher 는 regime 게시의 `as_of` 에도 `observed_at` 을 쓴다. `expires_at` 의 기준은 계속 `decided_at` 이다. 위치 계약은 전진 시계 시험으로 고정했다(섹터 조회 await 안에서 시계를 밀어도 증거는 await 이전 판독값).
+18. **증거는 캡처 시점에 deepcopy 한다.** `last_decision` 의 중첩 `panel` dict 가 섹터 조회 await 창 동안 제자리 변형돼도 증거에 실리지 않는다.
+
 ### 출처별 전략
 
 | 출처 | digest | 게시 | final stale 실효성 |

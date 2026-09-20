@@ -11,7 +11,7 @@
 |---|---|---|---|
 | Plan | 조사 3관점 + 계약·단계 고정 | 완료 | `47fa76b`·`03cc2d6`·`1f8e3ad`·`e8054b0` (문서만) |
 | S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **완료 — 한정 승인·운영 미설치** (실제 publisher·gateway 없음, 합성 시험 한정) | `01362db`(merge) + `78ca94f` |
-| S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5) | **Plan 완료, Do 착수 전** (세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | — |
+| S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a` |
 | S3 (B3a) | SIGNAL→gateway→ORDER command ID→dispatch | 미착수 (사전 확인만, 계획서 "S3 사전 확인") | — |
 | S4 (B3b) | on_signal 내부 직접 SELL·취소0건 해제·eviction | 미착수 | — |
 | S5 (See) | 독립 실큐 인수·최종 broad 리뷰·전체 직렬 | 미착수 | — |
@@ -138,6 +138,25 @@
   - **P1(S3 로 이관, coordinator 가 소스로 확인):** prepare 뒤 **claim 이전**에 `_bound` 가 실패하면 `_dispatch` 가 결과를 기록하지 않고 `NOT_SENT/claim_not_available` 만 돌려준다(`commands.py:540-550`) → attempt 가 `prepared` 로 남아 **예약(현금·수량)과 pending sector 가 유지**된다. lifecycle 에 prepared 를 종료시키는 경로가 없다(`prepare_candidate`·`claim`·`record_result`·`reconcile` 뿐). claim 이후 최종 guard 의 같은 실패는 `final_rejected` 로 예약 0. S2-3 이 만든 결함이 아니라 Task 9 부터의 공백이지만 regime 거부가 새 발화 경로다. prepare 와 dispatch 를 실제로 잇는 S3 가 **"미claim prepared 의 원자적 미송신 종료(예약·pending sector 해제)"** 를 만들어야 한다.
   - **P2(통합 수정 라운드에서 처리):** ① 종목별 digest 를 전역 출처 한 행(`panel_outlook`)에 게시 → 두 번째 종목 게시가 첫 요청을 stale 로 만든다(설계 결함, R31 은 같은 digest 표본이라 놓침) → 출처 이름을 소비 범위로 분리 ② pending 출처의 `as_of` 가 CV 판독 시각이 아니라 `decided_at` → validate 직전에 `observed_at` 을 찍어 증거에 싣는다 ③ regime 시험이 network await 이후 재검사를 입증하지 못한다 ④ base_pct 표 대조 시험이 주장한 속성을 검증하지 않는다.
   - 참고: naive `panel_loaded_at` 을 KST 로 해석하는 가정은 실제 UTC 생산자에는 틀린다(운영 TZ=KST 에서는 무해). 새 시험 fixture 의 `date.today()`·`EngineStats` 의 `datetime.now()` 는 남아 있다 — 판정 입력의 벽시계 의존은 아니다.
+
+### 통합 수정 라운드와 S2 마감 See (기준 `d703b34` → `83baa2a`)
+
+- **통합 수정(F1~F9):** 단일 writer(요청 claude-opus-5/high) `a835502`(red)→`5a236f1`(fix), merge `072c51e`. 제품 3파일(`qualification.py`·`qualification_publisher.py`·`engine.py` 의 S2-5 캡처 구간)·시험 3파일. `commands.py` 무수정.
+  - **F1 행동 RED 로 재현:** 같은 패널로 conviction 이 다른 두 종목을 잇달아 게시하면 첫 요청의 prepare 가 `CommandValidationError: stale_qualification_source` 로 막혔다(Codex 지적 그대로). 출처 이름을 `panel_outlook:<symbol>`·`trade_memory:<strategy>:<sector|'-'>` 로 분리, `regime` 은 전역. 조각 검사 `_scope`(사유 `invalid_source_scope`).
+  - **F2:** on_signal 이 validate 직전에 `runtime._now()` 를 찍어 `QualificationEvidence.observed_at` 으로, `build_decision_facts(..., observed_at=)`(필수)가 `observed_at<=decided_at`·같은 KST 날짜 강제(`invalid_observation_time`), 출처 `as_of` = `observed_at`, `expires_at` 기준은 `decided_at`.
+  - **F3~F9(제품 무변경·시험 고정):** token 보유 침입자 / 전일 게시본 재게시(합성 state 주입 — 시계를 다음 날로 옮기면 day admission 이 먼저 막는다) / regime 재조회 금지 / 캡처 시점 deepcopy(제품 1줄) / `invalid_qualification_evidence` / **network await 대기 중** regime 변경 → NOT_SENT·POST0·`final_rejected`·예약 0 / base_pct 표 대조 시험의 거짓 주장 제거(주장 범위 축소 + `_entry_risk_config_hash` 의 해시 입력이 `self.config` 뿐임을 소스 대조).
+  - 계약 변경으로 **기대값을 갱신한 기존 단언**(출처 이름·`as_of`)은 구현자가 줄 단위로 보고했고 독립 재현자가 "계약 변경에 따른 갱신이며 약화 아님"으로 확인.
+- **독립 재현(요청 opus/xhigh): CHANGES_REQUIRED** — 확인 19항목 전부 OK, 지정 변이 8종 전건 kill, 자체 변이 5종 중 1종 생존: 관측 시각 stamp 를 LLM·섹터 조회 await 뒤로 옮겨도 354건 통과(주입 시계가 상수라 "언제 읽었는가"가 관측 불가). → coordinator `83baa2a`: 섹터 조회 await 안에서 시계를 30초 미는 **전진 시계 시험** 추가, 같은 변이(증거 조립 시점에 시계를 다시 읽기)를 직접 적용해 **그 시험만 실패**함을 확인 후 원복(`git diff --stat -- src/` 비어 있음, MUTATION 표식 0).
+- **S2 마감 전체 suite(coordinator, HEAD `83baa2a`, 단독 직렬, 2026-09-20):** UTC **4628 passed / 2 xfailed / 경고 4 / 301.43초**, KST **4628 / 2 / 4 / 282.50초**, 각 exit 0·격리 0. S1 뒤 4442 대비 **+186 = builder 69 + CV 특성화 55 + 사이징 반출 27 + publishers 25 + regime 재검사 10**(수집 수로 대조). 기존 xfail 2·경고 4 불변. 시작 전 세션 자식 `pyright-langserver` 가 다시 548MB 로 자라 있어 SIGTERM(가용 654→1204MB).
+- **정리:** S2 의 임시 worktree 18개(wave A 8 + wave B·C·수정 라운드 10)와 work 브랜치 9개(4 + 5)를 전부 제거(모두 clean·merged — `worktree remove`/`branch -d` 가 거부 없이 통과). 남은 worktree 는 main·세션 기본·engine 3개.
+
+- **Codex S2 재리뷰(요청 gpt-6-astra/xhigh, read-only·pytest 금지, 대상 `83baa2a`, job `task-mu9qmtk7-sp2cwl`): 진행 중** — 이전 발견 5건의 해소 여부, S2-5·통합 수정, P1 의 S3 이관 수용 여부를 물었다. 판정은 이 줄 아래에 덧붙인다.
+
+### S2 의 성과와 한계 (보고 문장 — 이대로 인용한다)
+
+- S2 가 만든 것: 실제 `CrossStrategyValidator`·실제 `_calculate_position_size` 가 낸 값으로 **불변 `EntryDecisionFacts` 를 만드는 부품**(증거 채널·사이징 입력 반출·순수 builder·증거 캡처·게시 함수)과, owner 가 final 에서 **체제를 스스로 재유도해 대조하는 검사**. tests/ 에 0건이던 CV 실인스턴스 특성화 55건.
+- **실효 있는 stale 축은 regime 1개다.** `panel_outlook:*`·`trade_memory:*` 는 결정 시점에만 게시되므로 판단→final 사이 version·digest 대조가 헛돈다 — **replay 구속 전용**(전일·다른 결정의 게시본 재사용과 `as_of` 당일성만 잡는다). config 축은 제품 PolicyContext publisher 가 0건이라 자기 일관성뿐이고 **S3 에서 실효가 생긴다.**
+- **제품 소비자는 여전히 0건이다.** `publish_qualification` 의 호출자도, `_last_qualification_evidence` 를 읽는 코드도, prepare/dispatch 를 부르는 코드도 없다(S3 gateway). 즉 운영 경로에서 게시·송신은 0건이고 이 단계는 설치가 아니다. 모든 GREEN 은 fake HTTP·주입 시계·시험용 합성 startup 허가 위의 결과다.
 
 ### S3 인수 조건 (누적 — S1·S2 의 리뷰에서 S3 로 넘긴 것. S3 Plan 은 이 목록에서 시작한다)
 
