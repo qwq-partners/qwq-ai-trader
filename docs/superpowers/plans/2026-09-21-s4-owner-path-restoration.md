@@ -50,7 +50,7 @@
 2. **취소 0건·취소 ACK 는 최종성이 아니다.** S4 는 attach 에서 취소를 보내지 않는다. legacy 의 "0건도 해제"는 legacy 에서만 남고(특성화), attach 로 가져오지 않는다.
 3. **자식 종료는 부모를 만지지 않는다.** 부모 행의 state·version·예약 4항·pending sector 는 글자 하나 안 바뀐다.
 4. **exit_exempt 종목은 어떤 경로로도 자동 매도되지 않는다.**
-5. attach 의 eviction 은 600초에 전역 1건. legacy 는 불변.
+5. attach 의 eviction 은 **쿨다운(600초) 안에 전역 최대 1건**이다 — "배치 전체에 1건"이 아니라 직전 축출 기록이 쿨다운 안에 있는 동안의 상한이다(Codex 4차의 정확한 서술). legacy 는 불변.
 6. legacy(no-runtime)·US 경로는 실행 결과 차이 0(§5).
 7. 보고 문장: "S4 는 설치가 아니다 · 제품 attach 호출자 0건 · 합성 startup 허가 위의 GREEN · attach 모드에는 미체결 SELL 의 시장가 에스컬레이션과 미체결 BUY 의 타임아웃 취소가 없다."
 

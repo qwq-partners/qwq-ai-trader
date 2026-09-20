@@ -12,8 +12,8 @@
 | Plan | 조사 3관점 + 계약·단계 고정 | 완료 | `47fa76b`·`03cc2d6`·`1f8e3ad`·`e8054b0` (문서만) |
 | S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **완료 — 한정 승인·운영 미설치** (실제 publisher·gateway 없음, 합성 시험 한정) | `01362db`(merge) + `78ca94f` |
 | S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`·`44e543a`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a`·`85a65bc` |
-| S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()`·`recover_unsent()` 호출자 0건, `trading_ready=False` 그대로. HEAD `10d2ca7` 전체 UTC/KST 각 4758 passed. Codex 1차 APPROVE·2차/3차 CHANGES_REQUIRED → 처분(3차 처분은 Codex 미재확인 — S5 범위). 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md` 의 각 단계 "통합된 실제 인터페이스"가 구현 뒤의 정본 | merge `0975624`·`2c24aca`·`c48cb68`·`e42b014`·`cb1f554`·`5dac8da`·`4242b70` + coordinator `1a6e6d2`·`9a3fe19`·`9572ed2`·`b83b6e7`·`4356d43`·`aee69e3`·`9688d1d`·`486c7d3`·`10d2ca7` |
-| S4 (B3b) | attach 에서 되살릴 수 있는 것만 owner 경로로 — 하위 S4-0(legacy 세 경로 특성화)·S4-1(미claim 자식 종료)·S4-1b(`_unsent`)·S4-2(eviction) | **Plan 완료(2026-09-21, 기준 `95029fe`)** — 세부 계획 `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md`. **범위 축소:** 취소 최종성 증거가 제품에 없어 90초 SELL 에스컬레이션·10분 BUY 취소·owner 취소 배선은 attach 미지원으로 명시. Do 는 wave 1 부터 | — |
+| S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()`·`recover_unsent()` 호출자 0건, `trading_ready=False` 그대로. HEAD `10d2ca7` 전체 UTC/KST 각 4758 passed. Codex 1차 APPROVE·2차/3차 CHANGES_REQUIRED → 처분(3차 처분은 S4 마감의 Codex 4차가 "닫는다"고 확인). 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md` 의 각 단계 "통합된 실제 인터페이스"가 구현 뒤의 정본 | merge `0975624`·`2c24aca`·`c48cb68`·`e42b014`·`cb1f554`·`5dac8da`·`4242b70` + coordinator `1a6e6d2`·`9a3fe19`·`9572ed2`·`b83b6e7`·`4356d43`·`aee69e3`·`9688d1d`·`486c7d3`·`10d2ca7` |
+| S4 (B3b) | attach 에서 되살릴 수 있는 것만 owner 경로로 — 하위 S4-0(legacy 세 경로 특성화)·S4-1(미claim 자식 종료)·S4-1b(`_unsent`)·S4-2(eviction) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 세부 계획 `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md`. **범위 축소:** 취소 최종성 증거가 제품에 없어 90초 SELL 에스컬레이션·10분 BUY 취소·owner 취소 배선은 attach 미지원으로 명시 — **보호 SELL 에 관해 attach 는 legacy 보다 계속 덜 안전하다(설치 차단 사유).** 전체 UTC/KST 각 4835 passed, Codex 4차 APPROVE | merge `60a19af`·`9afa8e9`·`d929167`·`892112f` + coordinator 보강 커밋(원장 S4 절) |
 | S5 (See) | 독립 실큐 인수·최종 broad 리뷰·전체 직렬 | 미착수 | — |
 
 ## 공통 작업 방법 (이어받는 에이전트가 먼저 읽을 것)
@@ -424,6 +424,32 @@
   - 그에 앞선 UTC 1회(`nice -n 10` 으로 돌린 실행)는 **4834 passed / 1 failed** — `tests/dev/test_claude_review.py::test_status_spam_cannot_extend_model_progress_idle_deadline`. 이번 diff 와 무관한 개발용 리뷰 실행기 시험이고 하위 프로세스를 0.12~0.8초의 실시간 시한으로 돌린다. 장 시작 직전(08:30 KST)이라 운영 봇에 양보하려고 낮은 우선순위로 돌렸더니 그 시험이 굶었다. **단독과 같은 디렉터리(`tests/dev`, 직전 파일 포함) 71 passed, 같은 HEAD 의 KST 실행과 기본 우선순위 UTC 재실행 모두 통과** — 순서 의존이 아니라 우선순위·부하성이다. 교훈: 전체 suite 에 `nice` 를 쓰지 않는다(실시간 시한 시험이 있다).
 - **제품 호출자 재확인:** `KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(` 호출 0건(grep).
 - **정리:** 임시 worktree 4개·work 브랜치 2개 제거.
+
+### Codex 교차 리뷰 4차 (S4 마감, 대상 `74aa6d5`) — **APPROVE**
+
+- 요청 gpt-6-astra/xhigh, 포그라운드·read-only·pytest 금지, 전체 suite 뒤 실행. 범위 A = `3ff04c8..10d2ca7 -- src/core/engine.py`(S3 의 3차 처분 — H7·`finally` 의 getattr), 범위 B = `10d2ca7..74aa6d5 -- src/`(S4 전체). "취소 최종성 증거가 없어 attach 에서는 취소를 배선하지 않는다"는 설계 결정은 전제로 제시했다.
+- **판정: "P0/P1/P2: 지정 범위와 제시된 전제에서 신규 수정 요구 없음."**
+  1. **범위 A 의 두 처분은 이전 P1·P2 를 닫는다.** H7 은 attach 뒤 연결된 RiskManager 의 잔류 장부도 stale 루프 전에 차단하고, runtime 이 없으면 단락 평가라 legacy 결과 불변. `finally` 의 getattr 로 같은 AttributeError 가 재발하지 않는다. → **S3 의 "3차 처분은 Codex 미재확인" 단서는 이 리뷰로 해소된다.**
+  2. 새 abandon 가드로 송신 가능 행(ACK 된 SUBMIT, claim/ACK/UNKNOWN 자식)이 종료·해제되는 경로 없음. 변경 대상은 해당 attempt 뿐이고 자식은 sector 정리에서도 즉시 반환 — 부모 행·예약 불변.
+  3. 같은 dispatch 의 claim 이후 실패(transport·UNKNOWN·guard 거부)는 `_record` 경로라 abandon 으로 가지 않는다. 이미 claim 된 요청을 **재 dispatch** 하면 `_unsent → abandon` 호출 자체는 가능하나 lifecycle 의 claim/state 가드가 거부한다.
+  4. eviction: 선정 시점에 core·exit_exempt·pnl>0 제외. 쿨다운은 SELL 을 큐에 넣은 직후 기록되고 엔진은 이전 이벤트를 await 한 뒤 다음을 꺼내므로 **첫 기록보다 먼저 두 번째가 평가되는 틈은 없다.** 다만 H10 은 "양의 쿨다운 안 최대 1건"이지 "쿨다운을 넘기는 배치 전체의 1건"은 아니다(정확한 서술로 계획서에 반영). attach SELL 은 owner prepare/claim 을 거치고 legacy 직접 주문은 attach 에서 막힌다. legacy·`engine` 없는 부분 생성 인스턴스 결과 불변.
+  5. `unresolved_symbols()` 는 미해결 SELL SUBMIT 을 예약 현금 0 이어도 포함한다. **부모가 종결·예약 0 이고 미해결 cancel/modify 자식만 남은 종목은 빠진다** — 취소 미배선 전제 밖이고 그 상태에서도 새 SUBMIT 은 `unresolved_child_attempt` 가 막는다(취소를 켜는 작업의 인수 조건으로 넘긴다).
+- Codex 도 실행·pytest·실제 KIS 동작은 "미확인"(정적 검토).
+
+### S4 의 성과와 한계 (보고 문장 — 이대로 인용한다)
+
+- S4 가 만든 것: legacy 세 경로(90초 SELL 폴백·10분 BUY 정리·eviction)의 **첫 특성화**(현행 결함까지 그대로 고정, exit_exempt 가드의 첫 시험) · 미claim 자식 명령의 종료 간선(확인된 자식 + 실제 ACK 된 SUBMIT 부모에게만)과 `_unsent` 의 확장 · attach 의 만석 교체가 owner 의 SELL 한 길로 나가는 경로(보호 3종·owner 미해결 제외·쿨다운 안 1건).
+- **S4 는 "이관"이 아니라 부분 복원이고 설치가 아니다.** 취소 최종성 증거가 제품에 없어 **attach 모드에는 미체결 SELL 의 시장가 에스컬레이션과 미체결 BUY 의 타임아웃 취소가 없다** — 보호 SELL 에 관해 attach 는 legacy 보다 계속 덜 안전하고, 이것이 attach 설치의 차단 사유다. 여는 전제는 취소·체결 최종성의 증거 계약(공식 KIS 증거, 10A2/10C)이다.
+- 시험이 아직 태우지 않는 것: 실제 `risk/manager.py` 게이트(`_risk_validator` 는 하네스가 심는다)·팩터 버킷 게이트 · `_exit_exempt_ref` 의 제품 주입(`scripts/run_trader.py:854` 한 곳 — attach 설치자가 재현해야 한다) · 3건 이상 동시 미해결 BUY 의 누적 정합.
+- 특성화가 드러낸 **운영 경로의 현행 결함 5건**은 S4 가 고치지 않았다(별도 작업 칩 `task_1d1ae719`).
+
+### S5 진입 조건 (S5 Plan 은 이 목록에서 시작한다)
+
+1. **독립 실큐 인수**(구현 worker 와 다른 실행): S3·S4 가 만든 attach 경로를 처음부터 다시 구동해 인수한다 — 정상 MARKET BUY·LIMIT/MARKET SELL·eviction, claim 이전 실패 5갈래의 예약 0, UNKNOWN 예약 유지·재 dispatch 0, 취소 미배선(attach 에서 취소 POST 0), ready=False 쌍, legacy 불변. **하네스의 스텁을 최대한 걷어낸다** — 실제 `risk/manager.py` 의 `can_open_position`, 팩터 버킷 게이트, `_sector_lookup`.
+2. **최종 broad 리뷰**(Codex Astra/xhigh — 포그라운드 10분 상한이라 범위를 나눠 여러 번): 확인받을 결정 — S3 결정 ③(attach 에서 ORDER 이벤트를 큐에 싣지 않는다 — 상위 계획 문구와 다른 해석) · S4 결정 ①②③(범위 축소) · S2 의 "실효 stale 축은 regime 1개" · entry quote 의 출처가 SIGNAL 자체라는 한계.
+3. 전체 suite UTC→KST 단독 직렬(nice 금지·다른 세션 pytest 없음 확인·load 기록).
+4. **인계 문서 갱신:** `docs/operations/claude-migration-handoff-2026-09-20.md` 의 "다음" 을 B2/B3 완료·10A3/10C/증거 계약으로, 설치 차단 사유 목록(attach 설치 전에 닫아야 할 것)을 한 곳에 모은다.
+5. S3·S4 에서 10A3/10C 로 넘긴 항목의 단일 목록: factory·`config_version` 5축·`recover_unsent()` 호출·`_exit_exempt_ref` 주입 재현·attach 인지형 대시보드(`data_collector.py:1572`)·engine 과 owner 의 core_reserve 설정 출처 통일·fill projection(체결 메타·pending 교착 감시)·취소/체결 최종성 증거 계약과 그 뒤의 에스컬레이션·`KRScheduler._cleanup_stale_pending`·KOFR·수동 매수·CLI·sector lookup 예외 뭉갬.
 
 체크리스트는 S3 공통 체크리스트를 그대로 쓰고 세 항목을 더한다:
 - [ ] S4-0 의 특성화가 **현행 결함까지 그대로** 고정했는가("고치고 싶은" 동작을 섞지 않았는가), 그리고 S4-2 뒤에도 한 글자 안 고치고 통과하는가.

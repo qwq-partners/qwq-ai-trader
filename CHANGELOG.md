@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — feat(safety): B2/B3 S4 — attach 에서 되살릴 수 있는 것만 owner 경로로 (한정 승인·**운영 미설치**)
+
+> **S4 는 "이관"이 아니라 부분 복원이고 설치가 아니다.** 제품 attach 호출자 0건·`trading_ready=False` 그대로. 단계별 Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 S4 절, 결정·실제 인터페이스는 `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md`.
+
+- **Plan 이 범위를 줄였다(조사 3관점 → 설계 → 적대적 심사 REVISE·must-fix 5건 → coordinator 결정 9건):** **취소 최종성 증거가 제품에 없다**(증거 파서가 취소 체인을 `supported_finality=False` 로 못박고 `lifecycle.reconcile` 제품 호출자 0건·`EXECUTION_FILL` 제품 생산자 0건). 그래서 legacy 의 "취소 → 같은 종목 시장가 재주문"은 owner 위에서 성립하지 않는다 → **미체결 SELL 의 90초 시장가 에스컬레이션·미체결 BUY 의 10분 취소·owner 취소의 제품 배선은 attach 미지원으로 명시**(인계 지시 "공식 취소 증거 미완이면 차단 유지"와 같은 방향). 설계안의 cancel sweep 은 stale BUY 한 건이 매 sweep 의 예외로 attach 의 모든 SIGNAL 을 무기한 죽였을 것이고, LIMIT SELL 지정가 재확인은 "불리한 방향만 막는다"는 안전장치가 곧 손절 방향이라 보호 SELL 을 체계적으로 거부했을 것이다 — 둘 다 심사가 잡아 기각. **결과: 보호 SELL 에 관해 attach 는 legacy 보다 계속 덜 안전하다 — attach 설치의 차단 사유.**
+- **S4-0 legacy 세 경로의 첫 특성화(제품 0줄, `tests/test_engine_legacy_stale_eviction_characterization.py` 26건):** 90초 SELL 폴백·10분 BUY 정리·eviction 을 고정하는 시험은 0건이었다. **현행 결함까지 그대로 고정**했고 변이 kill 이 인수 근거다. 드러난 운영 경로의 결함 5건(동시호가에 취소만 보내고 재주문 없음 · `_exit_exempt_ref` 종목도 90초 폴백에서는 시장가 SELL · `submit_order` 예외 시 접수 여부를 모른 채 `clear_pending` · 폴백 상한 뒤 원 지정가 방치 · 취소 0건도 예약 해제)은 **S4 가 고치지 않았다**(별도 작업으로 분리).
+- **S4-1·S4-1b 미claim 자식 명령의 종료(`lifecycle.py`·`commands.py`):** `abandon_candidate` 의 가드를 kind 인지형으로 — cancel/modify 는 `command_ref` 부재 + 부모 존재 + 부모≠자신 + 부모 kind=submit + 부모 `order_ref` 존재 + 자식 `order_ref`==부모 것일 때만 종료, 그 밖의 kind 는 거부. `_unsent` 는 어떤 명령이든 claim 이전 실패면 abandon 을 시도한다(판정은 lifecycle 한 곳). **독립 재현이 찾은 제품 결함:** 1차 구현은 완화 분기가 기본값(`else:`)이고 부모를 검증하지 않아, ACK 된 SUBMIT 의 복구 행이 `kind`·`parent_attempt_id` 두 칸만 어긋나면 종료되고 예약 1,000,200원이 0 이 됐다 → 행동 RED 7건 → positive 형으로 좁힘. claim **이후** 실패한 자식(`reconciling`·`unknown`)은 끝낼 수 없다는 것을 상태값까지 고정(그 종착역은 증거 계약 뒤).
+- **S4-2 eviction 을 owner 경로로(`engine.py`·`gateway.py`):** H5 복원(S3 가 붙인 attach 차단 한 줄 삭제) · H9 후보 제외가 attach 에서는 owner 의 미해결 종목(`gateway.unresolved_symbols()` — try 앞에서 예외 무흡수) · H10 attach 에서만 쿨다운(600초) 안 전역 최대 1건(큐 순서 때문에 owner 필터로는 연쇄 축출이 닫히지 않는다). 만석 + 고득점 BUY → SELL SignalEvent → `_submit_signal` → owner 의 SELL 한 길로 POST 정확히 1건, `broker.submit_order` 직접 호출 0. exit_exempt·승자·코어 보호를 attach 에서 변이 kill 로 고정. **S4-0 의 특성화는 한 글자도 안 고치고 통과**(legacy 의 연쇄 축출 2건 그대로).
+- **검증:** 단계마다 단일 writer(요청 claude-opus-5/high) → 독립 재현(요청 opus/xhigh) → coordinator 의 diff 확인·변이 재적용. 독립 재현은 4단계 중 3단계에서 CHANGES_REQUIRED(제품 결함 1·살아남은 변이 7종 — 전부 보강 후 재적용해 kill 확인). **Codex 4차(요청 gpt-6-astra/xhigh): APPROVE** — S4 전체와 S3 의 3차 처분(H7·`finally`) 모두 "신규 수정 요구 없음·이전 P1·P2 를 닫는다". 전체 suite(단독 직렬): UTC·KST 각 **4835 passed / 2 xfailed / 경고 4**, 격리 0. S3 마감 4758 대비 +77. 관측 모델은 전부 metadata 미노출(미검증).
+- 운영 교훈: 전체 suite 에 `nice` 를 쓰지 않는다 — 개발용 리뷰 실행기 시험이 0.12~0.8초의 실시간 시한으로 하위 프로세스를 돌려, 낮은 우선순위에서 1건이 굶어 실패했다(같은 HEAD 의 기본 우선순위 재실행은 통과).
+- main/운영·배포·재시작·주문·설정·Toss grant 무변경.
+
 ## 2026-09-21 — feat(safety): B2/B3 S3 — SIGNAL → gateway → owner prepare/dispatch (한정 승인·**운영 미설치**)
 
 > **S3 는 설치가 아니다.** 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()`·`recover_unsent()` 를 부르는 코드는 S3 뒤에도 0건이고 제품의 `trading_ready` 는 계속 False 다. 모든 GREEN 은 fake HTTP·주입 시계·시험용 합성 startup 허가 위의 결과다. 단계별 Plan/Do/See·변이 결과·리뷰 판정은 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 S3 절, 계약·실제 인터페이스는 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md`.
