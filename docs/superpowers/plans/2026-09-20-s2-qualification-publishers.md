@@ -110,6 +110,19 @@ S2 가 끝나도 **실효 있는 stale 축은 regime 1개**다. panel_outlook·t
 - 변이: token 대조 제거→R33 · idempotent 재사용 제거→R31 · 게시 순서 역전→R30 · runtime 미설치 가드 제거→R32 · None 검사 제거→R34 · decided_at 을 두 번 찍음→as_of<=decided_at 경계 표본
 - 금지: facts 를 **소비**하는 제품 호출자(gateway·prepare·dispatch) 생성(S3), `engine.py:526-533` SIGNAL 폐기 분기 수정(S3), on_signal 판정·in-place 변형 8지점 수정, 기존 시험 파일 수정.
 
+#### S2-5 범위 정정 (coordinator, wave B 통합 뒤 — 위 S2-5 절보다 우선한다)
+
+위 초안은 "engine 어댑터가 on_signal 안에서 게시까지" 였으나 세 가지 때문에 성립하지 않는다: ① `intent_id` 는 S3 gateway 가 발급하므로 on_signal 안에서는 모른다 ② `config_version` 의 `stops` 축(`run_trader.py:498 _strategy_exit_params`·exit_manager 표)은 RiskManager 가 들고 있지 않다 — 조립할 수 있는 곳은 S3 의 factory 다 ③ 게시 호출을 둘 자리(레거시 게이트 G15~G17 뒤, Order 생성 자리)는 on_signal **종착부**로 S3 소유다. 따라서 S2-5 는 **"증거 캡처" + "게시 함수"** 두 부품까지이고, 둘을 잇는 호출은 S3 gateway 가 한다.
+
+- **부품 A — 게시 함수(순수 async, engine 무의존):** `src/execution/safety/qualification_publisher.py`(신규).
+  `QualificationEvidence`(frozen: `token, symbol, side, strategy, origin, sector, cv_decision, llm_reason, sizing_inputs, regime_used`) ·
+  `async def publish_qualification(commands, evidence, *, intent_id, config_version, decided_at) -> EntryDecisionFacts` — 순서 고정(계약 6): ① regime 을 `read_qualification_source('regime')` 로 읽어 **digest 가 같고 당일이면 재사용**, 아니면 `publish_qualification_source` ② `build_decision_facts(..., regime_row=...)` ③ `PendingSource` 각각을 같은 idempotent 규칙으로 게시해 `ConsumedSource` 로 만들고 `dataclasses.replace(facts, sources=...)` ④ `publish_decision_facts`. `QualificationRefused`·`CommandValidationError` 는 삼키지 않고 그대로 올린다(게시 0).
+  `commands.py` 의 regime digest 는 `qualification.regime_digest` 와 **같은 값**이어야 한다 — 동등성 시험으로 고정한다(commands.py 는 S2-5 에서 수정하지 않는다).
+- **부품 B — on_signal 의 증거 캡처(`src/core/engine.py`, runtime 이 붙어 있을 때만):** token(`uuid4().hex`) 발급 → `validate(..., request_token=token)` → **자기 `llm_second_check` await 직후**(LLM 을 부르지 않는 경로는 validate 직후) `last_decision['token'] == token` 을 대조하고 `last_decision`·`last_llm_reason` 을 **추가 await 없이 함께 복사**(계약 13) → `_calculate_position_size` 가 양수를 돌려준 **바로 그 지점**에서 `getattr(self, '_last_sizing_inputs', None)` 복사(계약 14) → sector 조회 뒤 `QualificationEvidence` 를 만들어 `self._last_qualification_evidence` 에 둔다(on_signal 진입부에서 None 으로 초기화, 불일치·None·조기 return 이면 None 유지). **게시 호출·intent_id·config_version 은 넣지 않는다.** runtime 미설치면 이 분기 전체가 실행되지 않는다(legacy 0줄 실행). 허용 구간: CV 호출부의 kwarg 1개, LLM 블록 직후 복사, 사이징 직후 복사, sector 조회 직후 조립, 진입부 초기화 — on_signal 의 판정·in-place 변형 8지점·종착부(G15 이후)·`_process_event` 는 건드리지 않는다.
+- **시험(`tests/test_execution_qualification_publishers.py`):** R29 실제 `CrossStrategyValidator`·실제 `RiskManager._calculate_position_size` 가 만든 증거 → `publish_qualification` → 실제 `RequestBoundCommands` 의 `publish_decision_facts`·prepare(`_decision_facts`) 통과(합성 startup 위) · R30 게시 순서 역전 → `stale_qualification_source` · R31 같은 패널로 두 종목 연속 → panel version 1회 상승·앞 요청 stale 아님 · R32 runtime 미설치 on_signal → 같은 Order·`_last_qualification_evidence` 미생성·게시 호출 0 · R33 validate 와 LLM 복귀 사이에 shadow validate 가 끼면 증거 None · R33b "B validate → 지연된 A 의 `_llm()`" 재현에서 A 의 증거에 B 의 token/사유가 섞이지 않는다 · R34 사이징이 0/조기 return 이면 증거 None(이전 요청 값 잔류 금지) · R35 SELL 신호는 증거 None · R36 `regime_digest` 동등성(commands 의 재유도 digest 와 builder 의 digest) · R37 0 배율·hybrid·SEPA 14:30 이후 → `QualificationRefused` 가 그대로 올라오고 게시 0.
+- **변이:** token 대조 제거→R33 · decision 과 reason 을 서로 다른 시점에 복사(사이에 await)→R33b · idempotent 재사용 제거→R31 · 게시 순서 역전→R30 · runtime 미설치 가드 제거→R32 · 사이징 입력을 on_signal 진입 시점에 읽기→R34 · `replace(facts, sources=...)` 누락(pending 미인용)→R29 의 sources 단언.
+- **S3 로 넘기는 것:** gateway 가 `_last_qualification_evidence`(또는 같은 호출 안의 지역값)를 받아 `intent_id` 발급·`config_version` 조립(factory 가 validator/llm/sizing 표/stops/experts 5축을 모은다)·`publish_qualification` 호출·prepare→ORDER→dispatch. 레거시 게이트 G15~G17 을 gateway 앞에 둘지, 증거 속성 대신 on_signal 종착부에서 지역값을 직접 넘길지는 S3 Plan 이 정한다.
+
 ## 5. legacy/US 불변의 증명
 
 - 기존 시험 수정 0줄·전건 통과(특히 overlay 호출 순서·횟수 단언 — provider 재호출 금지의 기계적 증명).
@@ -127,6 +140,17 @@ hybrid policy 대조(S1 잔여 7, **S3 인수 조건**) · SIGNAL→gateway·int
 - stop 3튜플은 owner 가 현재 ExitManager 상태로 재해석해 완전 일치를 요구한다(`commands.py:239-241`) — 판단~final 사이 급락 레벨이 바뀌면 `decision_stop_changed`. owner 의 stop_resolver 가 engine 과 같은 ExitManager 인스턴스인지는 S3 에서 확인.
 - `adapter.regime` 은 owner 가 ready 가 아니면 None 이 아니라 **예외를 전파**한다(`market_regime.py:318`).
 - 미확인(정적 대조에서 열지 않은 것): kernel 본문 · `_layer3` 수명주기와 expert_panel 갱신 스케줄(조사 인용) · `runtime._now()` 구현 · 팀심의 gate_checker 의 주기와 `count_stats=False` 여부 · `run_trader.py` 의 KR CV 생성부(validator 튜닝 kwargs — `config/default.yml` 에 top-level `validator:` 없음, 운영 튜닝값의 실제 경로 미확정 → **S2-4 worker 가 config_version 입력 정의 전에 확인**. coordinator 관측 단서: `config/default.yml:161` 부근에 **중첩된** `validator:` 블록(`min_pass_score: 50`, `missing_indicator_penalty_step/cap`, `llm_daily_max`, `rule_penalties.early_session: 8`·`sepa_chase: 10` …)이 있다 — top-level 이 아니라 상위 섹션 아래이므로 어느 config 객체로 읽혀 CV 생성자에 들어가는지 추적할 것) · `STRATEGY_EXIT_PARAMS` 정의 위치 · `INTRADAY_CRASH_PARAMS` 갱신 주기.
+
+### wave B 에서 확정된 사실 (S2-3·S2-4 worker 의 착수 전 확인, `3c51117` 기준)
+
+- **`cap_regime_by_intraday_risk` 는 bull 계열만 강등한다**(`src/core/market_regime.py:143-151`, `_BULL_DEMOTION={'bull':'sideways','trending_bull':'neutral'}`). 장중 급락으로 유효 레짐이 실제로 바뀌는 표본은 `mid_regime='bull'` 이어야 한다 — 'sideways' 기준선에서는 급락 레벨을 올려도 문자열이 그대로다.
+- **validator 튜닝값의 실제 경로:** `config/default.yml:161` 의 중첩 `validator:`(kr 섹션 아래) → `scripts/run_trader.py:839` `_validator_cfg = kr_cfg.get("validator") or self.config.get("validator") or {}` → `run_trader.py:848` `RiskManager(..., validator_config=_validator_cfg)` → `engine.py:1339 _vcfg` → `engine.py:1355 CrossStrategyValidator(min_pass_score, missing_indicator_penalty_step/cap, llm_daily_max, rule_penalties)` 와 `engine.py:1394-1396 _LLM_CHECK_MIN/_LLM_BYPASS_AT/_LLM_REJECT_SIZE_MULT`. US 인스턴스는 `run_trader.py:1489` 별도.
+- **`STRATEGY_EXIT_PARAMS` 라는 제품 상수는 없다**(`src/`·`scripts/` grep 0건 — 시험 상수일 뿐). 같은 자리의 제품 값은 `scripts/run_trader.py:498 self._strategy_exit_params`(전략별 stop_loss_pct 등, `config/default.yml` kr.strategies 에서 조립)이며 `run_trader.py:858-860 make_entry_stop_resolver(self.exit_manager, self._strategy_exit_params)` 로 위험 사이징 분모에 연결된다. 레짐/급락 표는 `src/strategies/exit_manager.py:79 REGIME_EXIT_PARAMS`·`:134 INTRADAY_CRASH_PARAMS`. config_version 의 `stops` 축은 이 값들을 받아야 한다.
+- **base_pct 선택표는 코드 리터럴**이다(`engine.py:2616-2627 strategy_position_pct`: SEPA/STRATEGIC_SWING 25.0, VCP 15.0, RSI2 20.0, EARNINGS_DRIFT 20.0, THEME/GAP 15.0 …). 설정 파일이 아니므로 config_version 의 `sizing` 축에 이 표를 그대로 실어야 표 변경이 stale 로 잡힌다(`engine._entry_risk_config_hash` 는 이 표 변화에 무반응).
+- **S2-4 의 반환 책임 분담(S2-5 가 따를 절차):** builder 는 게시 신원이 이미 확정된 'regime'(어댑터가 먼저 게시하고 `regime_row` 로 넘긴 게시본)만 `facts.sources` 에 담고, panel_outlook·trade_memory 는 `PendingSource` 로 돌려준다(version 은 게시해야 정해진다). 어댑터는 pending 을 게시 → `ConsumedSource` 로 만들어 `dataclasses.replace(facts, sources=...)` → `publish_decision_facts`.
+- **trade_memory digest** 는 `{strategy, sector, memory_adj}` 다(계획 표의 `rule·score_delta` 는 S2-1 의 `last_decision` 에 없고 CV 수정이 금지라 얻을 수 없다 — replay 구속 전용이라 실효성 손실 없음).
+- **S2-3 의 schema 의존:** "재유도는 현재 now" 의 시험 증명은 schema1 경로의 naive `.date()` 대조에 기대고 있다. schema3(horizon)는 양쪽을 KST 로 정규화해 같은 변이가 동치가 된다 → fixture 에 schema==1 경계 단언을 넣었다(`51a71e0`). **S3 인수 조건:** schema3 상태에서 "horizon 의 classified_at 당일 게이트가 현재 now 로 평가된다"는 축으로 이 계약을 다시 세운다.
+- **게시는 막지 않는다:** stale 한 regime 을 인용한 facts 도 `publish_decision_facts` 는 통과한다 — 막히는 곳은 prepare 와 final 이다(계획대로). 게시 단계에서도 막을지는 S3 판단.
 
 ## 8. 역할·모델·한도
 

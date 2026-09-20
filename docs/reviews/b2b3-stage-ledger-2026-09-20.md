@@ -112,9 +112,9 @@
 |---|---|---|---|---|---|
 | S2-1 CV 특성화 + 증거 채널 | `src/core/cross_validator.py` (+63/−9, 판정·산식·문자열 무변) | `tests/test_cross_validator_characterization.py` (53건) | **통합(한정 승인)** | `5968220`(특성화)→`9185993`(red)→`a97dc1a`(feat)→`0988dbc`(보강) / merge `7177a8d` | 1차 재검증 CHANGES_REQUIRED(생존 변이 2) → 보강 → 독립 재현 APPROVE |
 | S2-2 사이징 입력 반출 | `src/core/engine.py`(`_calculate_position_size` 내부만, +30/−0) | `tests/test_execution_sizing_inputs_export.py` (27건) | **통합(한정 승인)** | `7e26da7`(red)→`3832555`(feat)→`f53d57a`(보강) / merge `9330fbe` | 1차 재검증 APPROVE(생존 변이 3, P2) → 보강 → 독립 재현 APPROVE |
-| S2-3 regime final 재유도 | `src/execution/safety/commands.py` | `tests/test_execution_regime_recheck.py` | 미착수 | — | — |
-| S2-4 순수 builder | `src/execution/safety/qualification.py`(신규) | `tests/test_execution_qualification_builder.py` | 미착수 | — | — |
-| S2-5 engine 어댑터 배선 | `src/core/engine.py`(어댑터 구간만) | `tests/test_execution_qualification_publishers.py` | 미착수 | — | — |
+| S2-3 regime final 재유도 | `src/execution/safety/commands.py` (+23/−0: `read_qualification_source`·`_recheck_regime`·호출 1줄, `_decision_facts` 의 `_consumed_sources` 직후 = prepare·final 공통) | `tests/test_execution_regime_recheck.py` (8건) | **통합(한정 승인)** | `892905a`(red)→`53cbb08`(feat)→`73fe6af`(시계 시험) / merge `6f9108a` + `51a71e0`(schema 경계 단언) | 독립 재검증 APPROVE — 변이 8종 중 7 kill, 1종(deepcopy 제거)은 `owner.state` 가 이미 deepcopy 라 **동치 변이**로 확정. 구현자가 계획 변이 3(`decided_at` 재유도)의 생존을 스스로 발견해 시험 보강. coordinator 가 diff 직접 확인 |
+| S2-4 순수 builder | `src/execution/safety/qualification.py`(신규 ~370줄: `QualificationRefused`·`PendingSource`·`RULE_IDS` 15쌍·`config_version`·`entry_expires_at`·`regime_digest`·`build_decision_facts`; I/O·시계 읽기 0) | `tests/test_execution_qualification_builder.py` (66건) | **통합(한정 승인)** | `4b085eb`(red)→`97b642d`(feat)→`9b09697`(red)→`d890c6f`(fix) / merge `4829200` + `4018b79`(SEPA 상한 경과 거부) | 1차 재검증 CHANGES_REQUIRED(자체 변이 26종 중 4 생존: atr_pct None 보존 P1·allocation None·overlay_status 내부 키·hybrid truthy) → 수정(가드 3건 시험 고정 + **SEPA 14:30 경계 교차 거부**, 행동 RED `DID NOT RAISE`) → 독립 재현 APPROVE(변이 8종 전건 kill) → 재현자 P2(양쪽 시계가 모두 14:30 이후면 상한이 소멸해 당일 말까지 유효 — fail-open)를 coordinator 가 `sepa_entry_deadline_passed` 거부로 닫고 가드 제거 변이로 확인 |
+| S2-5 증거 캡처 + 게시 함수 (**범위 정정** — 세부 계획 "S2-5 범위 정정": on_signal 은 캡처만, 게시 호출·intent_id·config_version 은 S3 gateway) | `src/execution/safety/qualification_publisher.py`(신규) · `src/core/engine.py`(on_signal 의 캡처 구간만) | `tests/test_execution_qualification_publishers.py` | 착수 | — | — |
 
 ### wave A (S2-1 ∥ S2-2) — Do·See 기록 (기준 `58e5ef7`)
 
