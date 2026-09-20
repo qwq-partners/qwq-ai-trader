@@ -128,6 +128,41 @@ def test_r18_sepa_trend_expires_at_1430():
         *DAY, 23, 59, 59, 999999, tzinfo=KST)
 
 
+def test_r18_sepa_decision_crossing_1430_refuses():
+    """계약 13 — CV 는 14:30 전에 판정했는데 decided_at 이 14:30 을 넘으면 상한이 사라진다.
+
+    decided_at 은 자기 llm_second_check(네트워크 await) 뒤에 찍히므로 이 교차는 실제로
+    생긴다. 창을 늘리는 대신 판단을 버린다.
+    """
+    module = api()
+    cv = _cv(now_hm=1429, penalties=())
+    assert _refusal(module, cv=cv, decided_at=_at(1430, second=5)) == 'decision_clock_disagreement'
+    # 표기 시간대를 바꿔도 같은 순간이면 같은 결과다(UTC CI 에서도 동일)
+    assert _refusal(module, cv=cv, decided_at=_at(1430, second=5).astimezone(
+        timezone.utc)) == 'decision_clock_disagreement'
+
+
+def test_r18_sepa_decision_inside_the_deadline_still_builds():
+    module = api()
+    built, _pending = _build(module, cv=_cv(now_hm=1429, penalties=()),
+                             decided_at=_at(1429, second=30))
+    assert built.expires_at == _at(1430)
+
+
+def test_r18_other_strategies_are_not_bound_by_the_sepa_deadline():
+    module = api()
+    cv = _cv(now_hm=1429, penalties=(), strategy='momentum_breakout')
+    built, _pending = _build(module, cv=cv, decided_at=_at(1430, second=5))
+    assert built.strategy == 'momentum_breakout'
+    assert built.expires_at == datetime(*DAY, 23, 59, 59, 999999, tzinfo=KST)
+
+
+def test_r18_missing_reported_clock_keeps_the_existing_refusal():
+    module = api()
+    assert _refusal(module, cv=_cv(now_hm=None, penalties=()),
+                    decided_at=_at(1430, second=5)) == 'decision_clock_disagreement'
+
+
 # --- R19: 패널 기여 시 panel_loaded_at + 6h ----------------------------------
 
 
@@ -284,6 +319,16 @@ def test_r24_overlay_exception_shows_up_as_rule_id_with_neutral_multiplier():
         'early_session_penalty', 'overlay_calendar_unavailable', 'overlay_conviction_unavailable')
     assert (built.calendar_multiplier, built.volatility_multiplier,
             built.conviction_multiplier) == (1.0, 1.0, 1.0)
+
+
+def test_r24_overlay_status_inner_keys_are_pinned():
+    """계약 10 — 오버레이 3종 집합이 어긋나면 fail-open 표식을 셀 수 없다."""
+    module = api()
+    extra = _sizing(overlay_status={'calendar': 'applied', 'volatility': 'applied',
+                                    'conviction': 'applied', 'liquidity': 'unavailable'})
+    assert _refusal(module, sizing=extra) == 'unexpected_sizing_inputs'
+    missing = _sizing(overlay_status={'calendar': 'applied', 'volatility': 'unavailable'})
+    assert _refusal(module, sizing=missing) == 'unexpected_sizing_inputs'
 
 
 # --- R25: LLM 어휘 ------------------------------------------------------------
@@ -481,6 +526,24 @@ def test_risk_mode_inputs_are_copied_verbatim():
     assert built.position_multiplier == 0.8
     assert built.min_position_value == D('200000')
     assert built.base_pct == 0.25 and built.strategy_allocation_pct == 42.0
+
+
+def test_missing_atr_stays_missing_and_is_not_reported_as_zero():
+    """계약 8 — ATR 미측정(None)과 실제 0% 는 다른 사실이다. DTO 는 0.0 을 정상값으로 받는다."""
+    module = api()
+    absent, _a = _build(module, sizing=_sizing(atr_pct=None))
+    assert absent.atr_pct is None
+    zero, _b = _build(module, sizing=_sizing(atr_pct=0.0))
+    assert zero.atr_pct is not None
+    assert zero.atr_pct == 0.0
+    assert absent.digest != zero.digest
+
+
+def test_missing_strategy_allocation_stays_missing():
+    """배분표에 없는 전략은 None 으로 실린다 — 양수 검사로 거부하지 않는다."""
+    module = api()
+    built, _pending = _build(module, sizing=_sizing(strategy_allocation_pct=None))
+    assert built.strategy_allocation_pct is None
 
 
 def test_scores_come_from_the_recorded_cross_validator_values():
