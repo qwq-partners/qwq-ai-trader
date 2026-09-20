@@ -46,7 +46,7 @@
 | ⑤ | **eviction(심사 must-fix — 설계의 "S4 이관" 기각)** | attach 모드에서 eviction **호출 자체를 막는다**(2335-2345). owner 경로 이관은 S4 | ①이 SIGNAL 폐기를 없애는 순간 eviction 이 큐에 낳는 SELL SIGNAL 이 gateway 를 타고 실제 POST 가 된다. 후보 필터(`_pending_orders`)도 ④로 죽는다. 설계가 든 "순회 대상 부재" 근거는 진입부 stale 루프에만 해당한다 |
 | ⑥ | 인수 조건 6 (사이징 divergence) | `_calculate_position_size` 본문은 불변. **두 지점**을 attach 분기: `_reserved_cash` 와 `_pending_strategy_notional`(심사 must-fix). 둘 다 gateway 의 동기 읽기 helper 를 부른다(⑪) | 사실 8 — 소비자 다섯 곳이 두 지점에서 한 번에 정합된다. S2-2 특성화 27건은 legacy 에서 불변. 심사 지적대로 G5_cash(2169)·전략 예산(2193)도 함께 바뀌므로 RED 에 포함 |
 | ⑦ | 미claim prepared 의 종료 | 새 원자 전이 `abandon_candidate`(단일 reducer, 터미널은 기존 `FINAL_REJECTED` 재사용·구분은 `reason`). 호출 지점: claim 이전 **예외** 실패 **와 `claimed=False`(심사 must-fix)** | 사실 9·10. "claim 후 record_result" 안은 claim 과 record 사이 await 에서 죽으면 POST 한 적 없는 attempt 가 `submitting`+claim_id 로 남아 재시작 대사가 "송신됐을 수 있음"으로 읽는다. `claim_id is None` 이 "POST 시작된 적 없음"의 증거 |
-| ⑧ | `_dispatch` 의 예외 분류 | `CommandValidationError` → `exc.reason` 보존 + abandon · `claimed=False` → `claim_not_available` 유지 + abandon · `ApplicationBlocked`(종료 중) → `command_admission_closed`, abandon 은 시도하지 않는다(그 자체가 다시 던진다) · 그 밖(SQL 등) → `dispatch_failed`, abandon 미시도 | 뒤의 두 경우 attempt 는 prepared 로 남는다 — **재시작 시 미claim prepared 의 자동 정리(sweep)는 10A3 의 startup 대사 범위**로 이월하고, S3-1 에서 "restore 뒤에도 `abandon_candidate` 가드가 성립한다"만 고정한다 |
+| ⑧ | `_dispatch` 의 예외 분류 | **abandon 은 `request.command is CommandKind.SUBMIT` 일 때만 부른다(wave 1 독립 재현에서 확정).** `CommandValidationError` → `exc.reason` 보존 + abandon · `claimed=False` → `claim_not_available` 유지 + abandon · `ApplicationBlocked`(종료 중) → `command_admission_closed`, abandon 은 시도하지 않는다(그 자체가 다시 던진다) · 그 밖(SQL 등) → `dispatch_failed`, abandon 미시도 | 자식 명령(cancel/modify)의 행은 `prepare_candidate`(lifecycle.py:285-286)가 항상 부모의 `order_ref` 를 싣기 때문에 `abandon_candidate` 의 `order_ref is None` 가드에 걸려 **구조적으로 abandon 될 수 없다** — 그 가드를 풀면 '이미 보낸 주문'의 증거를 가진 행을 지우는 길이 되므로 풀지 않는다. S3 gateway 는 SUBMIT 만 내므로 S3 범위에서는 누수가 없고, **미claim 자식 명령의 잔류(같은 부모의 이후 취소를 `previous child command unresolved` 로 막는다)는 취소를 owner 경로로 옮기는 S4 의 설계 항목**으로 이월한다. 뒤의 두 경우 attempt 는 prepared 로 남는다 — **재시작 시 미claim prepared 의 자동 정리(sweep)는 10A3 의 startup 대사 범위**로 이월하고, S3-1 에서 "restore 뒤에도 `abandon_candidate` 가드가 성립한다"만 고정한다 |
 | ⑨ | PolicyContext 제품 publisher·`config_version` 5축 조립 | **10A3 으로 미룬다.** gateway 는 `config_version` 을 생성자 주입값으로 받고, S3-3 이 owner 쪽 대조(`stale_decision_config_version`)를 처음으로 실효화하는 RED 를 세운다 | 사실 14 — S3 에서 복사본을 만들면 원본과 갈라져 config 축이 조용히 헛돈다. `run_trader.py` 는 S3 허용 파일이 아니다 |
 | ⑩ | 정리 writer(인수 조건 11) 의 범위 **(설계·심사 둘 다 기각, coordinator 축소)** | `reset_daily` 가 **`entry_decision_facts` 만** 비운다. `qualification_sources` 는 **건드리지 않는다** | 사실 15 — 출처 행은 이름 수로 유계라 일별 무한 성장이 아니다. 설계의 축약 행 `{'version': n}` 은 `commands.py` 의 `previous['as_of']`·`current['digest']` 인덱싱을 KeyError 로 깨고(심사 must-fix) S3-3 과 숨은 의존을 만든다. 남겨 둔 전일 출처 행은 이미 `as_of` 당일성 검사로 재사용이 막힌다. `ponytail:` 출처 행이 수천을 넘기면 counter 를 별도 키로 분리한 뒤 행 삭제로 승격. **facts 를 지우면 저장소에 흔적이 없으므로** gateway 가 게시 시점에 facts 핵심 필드·digest 를 로그로 남긴다(⑫). 분석 원장 projection 은 기존 잔여(10C) |
 | ⑪ | gateway 설치점과 engine 의 읽기 경로 | `runtime.py` 에 `gateway` 속성(None)과 `install_gateway(gateway)` 를 둔다(S3-5 단일 writer). engine 은 safety 패키지를 `self._execution_runtime.gateway` 한 길로만 만난다: `submit(...)`·`reserved_cash()`·`pending_strategy_notional(strategy)` | engine 에 owner state 해석을 복제하지 않는다(이중 정의 금지). 두 읽기 helper 는 `risk_policy.py:713-716`·`decisions.py:280-285` 와 **같은 식을 재사용**한다 |
@@ -107,6 +107,8 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
   - state 를 `final_rejected` 로 바꾸지 않고 예약만 해제 → replacement_quantity 시험 실패(터미널이 아니면 `_replacement` 가 여전히 차감)
 - **위험:** 새 터미널 진입점이 하나 더 생긴다 — 가드 조건 중 하나라도 빠지면 이미 송신된 attempt 의 예약을 푸는 경로가 된다. 그래서 '거부되어야 한다' RED 3건(claim 됨·체결 선도착·evidence_conflict)을 성공 RED 보다 먼저 세운다.
 
+- **통합된 실제 인터페이스(wave 1, `86ccc7e`):** 사유는 attempt row 의 기존 키 **`reason_code`** 에 기록한다(명세의 'reason 필드'는 새 키가 아니다 — `record_result`·`reconcile` 과 같은 키). `reason` 이 str 이 아니거나 공백뿐이면 `ValueError`. `_require_admission()` 은 부르지 않는다(`record_result`·`reconcile` 과 같은 '끝내는 전이' 관용구 — day admission 이 닫힌 뒤에도 미송신 attempt 의 예약은 풀 수 있어야 한다. 종료 중의 `ApplicationBlocked` 는 `owner.mutate` 가 그대로 던진다). 가드 실패는 False·무변경, reducer 내부 예외(불완전 예약 pair)는 예외·무변경.
+
 ### S3-2 — `risk_policy.py`: `EffectiveRiskPolicy.hybrid_enabled` 필수 축
 
 - **목표:** `EffectiveRiskPolicy` 에 hybrid 축을 실어 S1 잔여 7·Codex S1 재리뷰 조건을 닫을 준비를 한다. 현재 필드 15개에 hybrid 축이 없어(risk_policy.py:88-108 확인) `facts.hybrid_enabled` 는 게시자 자기신고이고 대조 상대가 없다.
@@ -134,7 +136,7 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
 - **제품 파일(단일 writer):** `src/execution/safety/commands.py` · **시험:** `tests/test_execution_dispatch_reasons.py` · **의존:** S3-1, S3-2
 - **고정 인터페이스:**
   - `_decision_facts` 에 한 줄: `_require(facts.hybrid_enabled == snapshot.policy.hybrid_enabled, 'decision_hybrid_mismatch')` — 기존 sector `_require`(260) 옆, prepare·final 공통 관문 안.
-  - `_dispatch`(543-550)의 실패 분류(결정 ⑧): `CommandValidationError as exc` → `reason_code=exc.reason` + `await self.runtime.lifecycle.abandon_candidate(attempt_id, reason=exc.reason)` · `claimed is False` → `claim_not_available` 유지 + abandon(reason `'claim_not_available'`) · `ApplicationBlocked` → `command_admission_closed`, abandon 미시도 · 그 밖 → `dispatch_failed`, abandon 미시도. `CommandResult.reason_code` 는 자유 문자열이라 타입 변경 0. abandon 이 False 를 돌려주면(남의 claim 이 붙음 등) 결과는 그대로 NOT_SENT 이고 예약은 유지된다 — 삼키지 않고 로그.
+  - `_dispatch`(543-550)의 실패 분류(결정 ⑧ — **abandon 호출은 SUBMIT 한정**, 자식 명령은 현행대로 남긴다): `CommandValidationError as exc` → `reason_code=exc.reason` + `await self.runtime.lifecycle.abandon_candidate(attempt_id, reason=exc.reason)` · `claimed is False` → `claim_not_available` 유지 + abandon(reason `'claim_not_available'`) · `ApplicationBlocked` → `command_admission_closed`, abandon 미시도 · 그 밖 → `dispatch_failed`, abandon 미시도. `CommandResult.reason_code` 는 자유 문자열이라 타입 변경 0. abandon 이 False 를 돌려주면(남의 claim 이 붙음 등) 결과는 그대로 NOT_SENT 이고 예약은 유지된다 — 삼키지 않고 로그.
   - 새 종료 경로는 **claim 이후 실패에 관여하지 않는다** — transport guard 거부는 여전히 `record_result`→`FINAL_REJECTED`(lifecycle.py:427-430).
 - **RED:**
   - [행동] 합성 허가 없이(`trading_ready=False`) prepare 성공 후 dispatch → NOT_SENT 뒤 attempt 가 `prepared`·`claim_id is None`·`reserved_cash != '0'`·`pending_sectors[symbol]` 존재(오늘 통과 = 누수 증명). 수정 후 `final_rejected`·예약 4항 0·pending_sector 제거·POST 0·같은 intent 로 재 prepare 가능.
@@ -145,7 +147,8 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
   - [행동] schema3 재유도 계약: horizon 의 `classified_at` 당일 게이트를 넘긴 시각으로 시계를 민 뒤 dispatch → `_recheck_regime` 이 `facts.decided_at` 이 아니라 **현재 now** 로 평가한다. 대조: 재유도 문자열이 같으면 POST 1.
   - [행동] `ApplicationBlocked`(종료 중) dispatch → `command_admission_closed`·POST 0, abandon 을 시도하지 않아 2차 예외가 새지 않는다.
   - [행동] 사유 문자열에 금액·계좌·종목 수량이 섞이지 않는다(결정 ⑬).
-- **변이:** hybrid `_require` 를 `_require(True, …)` 로 / `except CommandValidationError` 를 `except Exception` 으로 뭉갬 / 경합 코드를 예외 코드와 같게 / 예외 경로의 abandon 제거 / **`claimed=False` 경로의 abandon 제거** / abandon 을 claim 이후 실패에도 부름 / `_recheck_regime` 의 now 를 `facts.decided_at` 으로.
+  - [대조·결정 ⑧] 미claim cancel 이 claim 이전에 실패해도 abandon 을 부르지 않고(호출 0 — spy) 행·부모 예약이 그대로다. S4 로 이월한 잔류를 '고쳐진 것'으로 오인하지 않게 현행을 고정한다.
+- **변이:** hybrid `_require` 를 `_require(True, …)` 로 / `except CommandValidationError` 를 `except Exception` 으로 뭉갬 / abandon 의 SUBMIT 한정 제거 / 경합 코드를 예외 코드와 같게 / 예외 경로의 abandon 제거 / **`claimed=False` 경로의 abandon 제거** / abandon 을 claim 이후 실패에도 부름 / `_recheck_regime` 의 now 를 `facts.decided_at` 으로.
 - **위험:** `_owner_ready` 실패 사유에 `startup_reconciliation` 같은 owner 내부 어휘가 그대로 실린다 — 로그 한정(결정 ⑬).
 
 ### S3-4 — `day_recovery.py`: 전일 판단 사실 정리 (돈 경로 아님 · 별도 커밋)
@@ -234,7 +237,7 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
 
 ## 6. S3 에서 하지 않는 것
 
-- **S4:** 90초 MARKET SELL 폴백(1899-1982)·취소0건 예약 해제(1985-2015)·eviction(1586-1696·2335-2345)의 owner 경로 이관. S3 는 attach 에서 셋이 **발화하지 않음**만 고정한다. eviction 권한 표식을 `metadata['source']='replacement'` 문자열에서 `EntryAuthority` 발급 context 로 대체. SELL 지정가(`broker.get_best_bid` await, 2264)를 final 에서 다시 볼지 facts 로 굳힐지.
+- **S4:** 미claim **자식 명령(cancel/modify)** 의 종료 간선(결정 ⑧ — 부모 `order_ref` 를 싣는 행은 `abandon_candidate` 로 끝낼 수 없다). 90초 MARKET SELL 폴백(1899-1982)·취소0건 예약 해제(1985-2015)·eviction(1586-1696·2335-2345)의 owner 경로 이관. S3 는 attach 에서 셋이 **발화하지 않음**만 고정한다. eviction 권한 표식을 `metadata['source']='replacement'` 문자열에서 `EntryAuthority` 발급 context 로 대체. SELL 지정가(`broker.get_best_bid` await, 2264)를 final 에서 다시 볼지 facts 로 굳힐지.
 - **S5:** 독립 실큐 인수·최종 broad 리뷰·전체 직렬. 결정 ③(ORDER 이벤트를 큐에 싣지 않음)을 상위 계획과의 차이로 확인받는다.
 - **10A3(factory):** `config_version` 5축 조립·제품 PolicyContext publisher · `KRExecutionRuntime` 생성·`attach()`·`install_gateway()` 와 설치 순서(regime owner 가 command owner 보다 앞) · `trading_ready` 를 True 로 만드는 실제 startup 대사 · **재시작 시 미claim prepared 의 자동 정리** · attach 모드의 체결 메타(entry_tags·전략) 인계와 pending 교착 감시(결정 ④).
 - **10C:** `run_trader.py:1846-1848` 의 sector lookup 예외 뭉갬 · KOFR(`kr_scheduler.py:6754·6818`) · 수동 매수(7597) · CLI 2개 · `kr_scheduler.py:978-1004` · 판단 사실의 분석 원장 projection.

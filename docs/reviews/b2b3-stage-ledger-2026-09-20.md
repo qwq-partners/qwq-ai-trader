@@ -22,7 +22,7 @@
 - **오프라인 시험 명령(접두):**
   `env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 QWQ_DEPLOY_SSH_KEY=/tmp/qwq-offline-no-ssh-key /home/ubuntu/projects/qwq-ai-trader/venv/bin/python -m pytest -q -p no:cacheprovider --tb=short <파일…>` — KST 는 `TZ=Asia/Seoul`. 마지막 줄 위의 `[테스트 격리] … 0건` 을 함께 확인한다.
 - **S1 대상 10파일:** `tests/test_execution_decision_facts.py tests/test_execution_command_owner.py tests/test_execution_command_flow.py tests/test_execution_command_shutdown.py tests/test_execution_policy_generations.py tests/test_execution_policy_generation_acceptance.py tests/test_execution_market_source.py tests/test_execution_resources.py tests/test_position_sizing_kernel.py tests/test_execution_sizing_characterization.py` (S1 이전 기준선: 앞 파일 제외 9개 339 passed)
-- **호스트 자원이 병렬도의 실제 상한이다:** 이 호스트는 운영 서버(거래 봇·Toss observer 상주)이며 2 vCPU·RAM 3.8GB, 2026-09-20 15:18 KST 관측 가용 871MB·스왑 2GB 100% 사용. pytest 를 도는 에이전트는 동시 2명 이하, **전체 suite(UTC→KST)는 다른 worker 가 없을 때 단독 직렬**로 돌리고 시작 전 `free -m`·`uptime` 을 본다. 다른 세션의 장기 프로세스는 건드리지 않는다. **"단독"은 읽기 전용 에이전트도 포함한다(2026-09-21 실측):** 전체 suite 와 pytest 를 돌지 않는 조사 에이전트 3명을 겹쳐 돌렸더니 `tests/test_toss_client_boundary.py::test_expired_token_issuance_still_requires_remaining_retry[prefix2-1]` 1건이 실패했다 — 이 시험은 `RequestBudget(1)` 의 **실시간 1초 예산**(`rate_limit.py` 기본 `clock=time.monotonic`)을 쓰고 실제 토큰 발급(파일 잠금)을 그 안에 끝내야 해서 스왑 100% 호스트의 부하에 민감하다. 단독 재실행은 73 passed. 부하로 오염된 실행은 증거로 쓰지 않고 다시 돌린다.
+- **호스트 자원이 병렬도의 실제 상한이다:** 이 호스트는 운영 서버(거래 봇·Toss observer 상주)이며 2 vCPU·RAM 3.8GB, 2026-09-20 15:18 KST 관측 가용 871MB·스왑 2GB 100% 사용. pytest 를 도는 에이전트는 동시 2명 이하, **전체 suite(UTC→KST)는 다른 worker 가 없을 때 단독 직렬**로 돌리고 시작 전 `free -m`·`uptime` 을 본다. 다른 세션의 장기 프로세스는 건드리지 않는다. **"단독"은 읽기 전용 에이전트도 포함한다(2026-09-21 실측):** 전체 suite 와 pytest 를 돌지 않는 조사 에이전트 3명을 겹쳐 돌렸더니 `tests/test_toss_client_boundary.py::test_expired_token_issuance_still_requires_remaining_retry[prefix2-1]` 1건이 실패했다 — 이 시험은 `RequestBudget(1)` 의 **실시간 1초 예산**(`rate_limit.py` 기본 `clock=time.monotonic`)을 쓰고 실제 토큰 발급(파일 잠금)을 그 안에 끝내야 해서 스왑 100% 호스트의 부하에 민감하다. 단독 재실행은 73 passed. 부하로 오염된 실행은 증거로 쓰지 않고 다시 돌린다. **호스트는 다른 사용자 세션과도 공유된다(같은 날 2차 실측):** 다른 Claude 세션이 자기 worktree 에서 pytest 를 도는 동안 돌린 전체 suite 는 426초(평소 ~290초)·`test_execution_account_lease.py` 의 프로세스 spawn·fd 시험 2건 실패(단독 62 passed)로 끝났다. 전체 suite 는 시작 전과 끝난 뒤 `uptime` 의 load average 를 함께 기록하고, 실행 시간이 평소보다 크게 길거나 무관한 파일이 실패하면 `ps -eo etimes,pcpu,pid,ppid,args --sort=etimes` 로 다른 세션의 pytest 를 확인한 뒤 조용해지면 다시 돌린다. 다른 세션은 건드리지 않는다.
 - **하위 에이전트 worktree:** 수동 `git worktree add` + worker `EnterWorktree` 는 실패한다(Bash 격리 고정점이 부모 worktree 에 남음 — S1 1차 시도 커밋 0). Workflow `agent(..., {isolation:'worktree'})` 로 harness 가 만든 worktree 에서 시작해, 그 안에서 `git switch -c work/<이름> <base SHA>`(구현) 또는 `git switch --detach <SHA>`(리뷰)로 기준을 맞추고 **기준선 시험을 첫 단계**로 돌리게 한다. detached 로 바꾼 리뷰 worktree 는 자동 회수되지 않으므로 끝난 뒤 `git worktree remove <경로>`(dirty 면 스스로 거부)로 정리한다.
 - **교차 provider 리뷰(Codex):** `scripts/dev/codex_review.sh` 는 모델·effort 를 지정하지 않아 전역 설정(astra/medium)을 따르고 기준이 main 이면 engine 전체가 범위가 된다. 단계 리뷰는 플러그인 companion 으로 돌린다:
   `node /home/ubuntu/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs task --background --model gpt-6-astra --effort xhigh "<프롬프트>"` — `--write` 가 없으면 read-only sandbox. 완료 통지가 오지 않으므로 `status <id> --json`, `result <id>` 로 확인한다. 범위는 프롬프트에 `git diff <base>..<head>` 와 `git show <head>:<경로>` 로 명시하고, 실행 전후 `git status --short`·HEAD 를 대조한다.
@@ -219,13 +219,28 @@
 
 | 단계 | 제품 파일 | 상태 | 구현 SHA | 독립 재현 | 통합 SHA |
 |---|---|---|---|---|---|
-| S3-1 | `lifecycle.py` | 미착수 | — | — | — |
-| S3-2 | `risk_policy.py`(+helper 2줄) | 미착수 | — | — | — |
+| S3-1 | `lifecycle.py` | **통합(한정 승인·호출자 0건)** | `52a6ffc`(red)→`86ccc7e`→`58d530f` | CHANGES_REQUIRED(시험 공백 2·설계 쟁점 1) → coordinator `1a6e6d2` 로 해소 | merge `0975624` |
+| S3-2 | `risk_policy.py`(+helper 2줄) | **통합(한정 승인·제품 생성자 0건)** | `af09a24`(red)→`f66258d` | CHANGES_REQUIRED(시험 공백 1) → coordinator `1a6e6d2` 로 해소 | merge `2c24aca` |
 | S3-3 | `commands.py` | 미착수 | — | — | — |
 | S3-4 | `day_recovery.py` | 미착수 | — | — | — |
 | S3-5 | `gateway.py`·`runtime.py` 설치점 | 미착수 | — | — | — |
 | S3-6a | `engine.py` H1·H4·H5 | 미착수 | — | — | — |
 | S3-6b | `engine.py` H2·H3 | 미착수 | — | — | — |
+
+### wave 1 (S3-1 ∥ S3-2) — Do·See 기록 (기준 `3f30fcc` → `1a6e6d2`)
+
+- **방법:** workflow `wf_82d74f07-3a1` — 단계마다 단일 writer(요청 claude-opus-5/high, harness 격리 worktree) → 독립 재현(요청 opus/xhigh, 다른 실행). 관측 모델 전부 미노출(미검증).
+- **S3-1 `abandon_candidate`(`lifecycle.py` +33/−0, 순수 가산):** 단일 `owner.mutate` reducer. 가드 = attempt 존재 · `state=='prepared'` · `claim_id is None` · `command_status is None` · `order_ref is None` · `observed_quantity==applied_quantity==0` · `evidence_conflict` 없음 → 하나라도 어긋나면 무변경 False. 통과 시 `final_rejected`/`not_sent`/`reason_code=<사유>`/version+1 뒤 **기존** `_release_resources`(→`clear_settled_pending_sector`) 재사용. 새 OrderState·새 해제식 없음. 제품 호출자 0건(배선은 S3-3).
+  - **RED 의 성격(정직하게):** 새 전이라 RED 13건이 전부 **부재 RED**(AttributeError)다 — 증거로 세지 않는다. 인수 근거는 변이 kill 이다. 유일한 특성화 1건은 "기존 `record_result` 로는 미claim prepared 를 끝낼 수 없다"를 현행 행동으로 고정.
+  - 구현자가 자기 변이에서 **`claim_id is None` 가드 제거가 살아남는 것**을 발견(claim 하면 state 가 `submitting` 이 되어 state 가드가 먼저 걷어낸다) → "state 는 prepared 인데 claim_id 가 남은 복구 행" 파라미터를 더해 kill(`58d530f`).
+  - 명세와 다른 점(수용·계획서 S3-1 절에 기록): 사유 키는 기존 `reason_code`, 빈 사유는 `ValueError`, `_require_admission()` 미호출(`record_result`·`reconcile` 과 같은 관용구).
+- **S3-2 `EffectiveRiskPolicy.hybrid_enabled`(`risk_policy.py` +3/−0):** 마지막 필수 필드(기본값 없음) + `_bool()`(`type is bool`). `policy_snapshot.py` **수정 0줄** — `from_dict` 의 키 집합이 `fields(kind)` 파생이고 `build_owned_snapshot` 이 `replace` 라 자동 전파(둘 다 시험으로 고정). 기존 시험 수정은 결정 ⑰의 helper 2곳 각 1줄 치환(`hybrid_enabled=False` 인자 추가), 단언·기대값 변경 0. `EffectiveRiskPolicy(` 생성 지점은 그 2곳뿐(제품 0건).
+  - 행동 RED 5건(기본값·키 누락 거부 1 + bool 아닌 값 4) · 부재 RED 2건(왕복·전파 — 오늘은 hybrid on 인 policy 를 만들 수 없다). **이 축의 실질 행동 RED 는 S3-3 의 `decision_hybrid_mismatch`** 다. 제품에 이 축에 실제 설정값을 싣는 경로는 아직 없다(10A3).
+- **독립 재현: 두 단계 모두 CHANGES_REQUIRED — 제품 코드는 명세대로, 살아남은 변이 3종은 전부 시험 공백.** 지정 변이는 전건 kill. 자체 변이 중 생존: ① abandon 가드에서 `state != 'prepared'` 절 제거 ② `attempt['version'] += 1` 제거 ③ `build_owned_snapshot` **비-regime 분기**에서 hybrid 축을 조용히 off 로(그 분기가 S3-3 의 hybrid 대조 상대다).
+  - → coordinator `1a6e6d2`: ① state 만 어긋난 복구 행 파라미터 ② version+1 단언 ③ regime owner 없는 state 의 전파 시험(기존 `test_execution_policy_snapshot.baseline` 을 import 만). **세 변이를 직접 다시 적용해 각각 그 시험만 실패**함을 확인 후 원복·트리 clean.
+  - **설계 쟁점(재현자 발견 → 결정 ⑧ 확정):** 자식 명령(cancel/modify) 행은 `prepare_candidate` 가 항상 부모 `order_ref` 를 싣기 때문에 `order_ref is None` 가드에 걸려 **구조적으로 abandon 될 수 없다.** 가드를 풀면 "이미 보낸 주문"의 증거를 가진 행을 지우는 길이 되므로 풀지 않는다 → **S3-3 의 abandon 호출은 SUBMIT 한정**, 미claim 자식 명령의 잔류(같은 부모의 이후 취소를 막는다)는 취소를 owner 경로로 옮기는 **S4 의 설계 항목**으로 이월. S3 gateway 는 SUBMIT 만 내므로 S3 범위의 누수는 없다.
+- **전체 suite — 아직 깨끗한 증거 없음:** HEAD `1a6e6d2` UTC 1회 = **4654 passed / 2 failed**(426초, 평소 ~290초). 실패 2건은 `tests/test_execution_account_lease.py` 의 프로세스 spawn·fd 시험으로 이번 diff 와 무관한 파일이고 단독 62 passed. 원인은 **다른 사용자 세션**(PID 175570, 새 worktree `serene-wright-7abecf` — 분리해 둔 Toss flaky 작업으로 보인다)이 같은 시각에 pytest 를 돌려 load average 가 10 까지 오른 것. 합계는 4654+2 = 4656 = 4632 + 16(abandon) + 8(hybrid)로 맞는다. **오염된 실행이라 증거로 쓰지 않고, wave 2 경계에서 호스트가 조용할 때(`uptime` 의 load average 확인) UTC→KST 를 다시 돌린다.** 다른 세션은 건드리지 않는다.
+- **정리:** 임시 worktree 4개·work 브랜치 2개 제거(clean·merged).
 
 Codex 교차 리뷰(포그라운드·10분 상한)는 wave 2·3·5 뒤 각 1회. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 
