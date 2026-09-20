@@ -133,6 +133,9 @@
 - **변이:** H5 를 다시 attach 차단으로 / H9 를 attach 에서도 `_pending_orders` 로 / H9 의 legacy 분기를 owner 로(가드 항상 참) / **H10 상한 제거** / H10 을 legacy 에도 적용(가드 항상 참) / exit_exempt `continue` 삭제 / pnl>0 제외 삭제 / core_holding 제외 삭제 / emit 대신 `broker.submit_order` 직접 호출
 - **위험:** 높음 — attach 에서 실제 SELL POST 를 새로 여는 유일한 단계다.
 
+- **통합된 실제 인터페이스(wave 2, `3fa9b0e` + coordinator 시험 보강):** H9 는 두 단계다 — owner 읽기(`_owner_pending = None if _gateway is None else _gateway.unresolved_symbols()`)는 `_try_evict_weakest_position` 의 try **앞**(예외 무흡수 → `_submit_signal` 이 그 SIGNAL 을 `errors_count` +1 로 끝낸다), legacy 장부 읽기(`_pending_ref = self._pending_orders if _owner_pending is None else _owner_pending`)는 try **안** 루프 앞(그래야 `object.__new__(RiskManager)` 인스턴스에서 종전처럼 AttributeError 가 흡수된다). H10 은 try 안 `now` 직후, `_gateway is not None` 가드 + 기존 상수 `_REPLACEMENT_COOLDOWN_SEC` 재사용. `gateway.unresolved_symbols()` 는 `_pending()`(= `_owner_ready` → `commands._snapshot(state).pending`)의 종목 집합 — pending 조립은 kind=='submit' 만 거르고 side 는 거르지 않아 **미해결 SELL 도 들어온다**(실큐 probe 로 확인). owner 의 최종 방어선 사유는 `unresolved_symbol_attempt`(`_evaluate` 의 attempts 순회가 보유−예약 검사보다 앞).
+  - attach 하네스의 CV 는 99점을 86점으로 깎는다 — eviction 에 전달되는 `new_score` 는 86 이고 +5 경계는 희생 81(축출)/82(스킵)로 고정했다. H10 상한 때문에 종목별 600초 쿨다운은 attach 에서 구분 불가능한 표본이 된다(legacy 는 S4-0 이 고정). 연쇄 표본은 합성 세션이 같은 주문번호를 돌려주는 한계 때문에 시험이 두 번째 응답의 주문번호를 갈아 끼운다(실제 KIS 의 발급·중복 거부 계약의 입증이 아니다).
+
 ## 5. legacy·US 불변 증명
 
 S3 §5 의 네 겹(구조 diff 검사 · 기준선 불변 · 행동 대조 · "attach 가드를 항상 참으로" 변이 kill)에 두 축을 더한다: **S4-0 의 특성화가 S4-2 뒤에도 한 글자 안 고치고 통과한다** · **`engine` 속성 없는 부분 생성 `RiskManager` 인스턴스**에서 새 helper 가 종전 값으로 떨어진다. engine.py 를 만진 단계는 coordinator 가 전체 suite(UTC→KST, 단독 직렬)를 돌린 뒤에만 통합을 확정한다. `src/`·`scripts/` 의 `KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(` 제품 호출자 0건을 단계마다 grep 으로 재확인한다.

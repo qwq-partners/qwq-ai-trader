@@ -391,8 +391,8 @@
 |---|---|---|---|---|---|
 | S4-0 | 없음(특성화) | **통합(제품 0줄)** | `1e0581a` | CHANGES_REQUIRED(시험 공백 — 임계값 미고정·공전 단언) → coordinator 보강 | merge `60a19af` |
 | S4-1 | `lifecycle.py` | **통합(한정 승인·제품 호출자 0건)** | `952028c`(red)→`b8a8b7e` | CHANGES_REQUIRED(**제품 결함 P2 1**·시험 공백 2) → coordinator RED→수정 | merge `9afa8e9` |
-| S4-1b | `commands.py` | 미착수 | — | — | — |
-| S4-2 | `engine.py`·`gateway.py` | 미착수 | — | — | — |
+| S4-1b | `commands.py` | **통합(한정 승인·취소 제품 호출자 0건)** | `a1f0a3e`(red)→`2efb01e` | **APPROVE_THIS_SLICE**(변이 7종 전건 kill, info 2) | merge `d929167` |
+| S4-2 | `engine.py`·`gateway.py` | **통합(한정 승인·attach 가드 안 — 제품 attach 호출자 0건)** | `ce1e710`·`75ffb0b`(red)→`3fa9b0e` | CHANGES_REQUIRED(제품 결함 0·시험 공백 2·낡은 독스트링 1) → coordinator 보강 | merge `892112f` |
 
 ### wave 1 (S4-0 ∥ S4-1) — Do·See 기록 (기준 `6a6ca30`)
 
@@ -406,6 +406,23 @@
   - 관측해 고정한 현행(판정 보류): 부모가 터미널이고 자식만 남은 표본에서 자식 종료 뒤에도 pending sector 가 풀리지 않는다 — 제품에 취소 호출자가 없어 생길 길이 없고, 취소를 켜는 작업(증거 계약 뒤)의 인수 조건으로 넘긴다.
 - **wave 1 전체 suite(coordinator, 단독·다른 세션 pytest 없음, 2026-09-21 07:38~07:43 KST):** UTC **4813 passed / 2 xfailed / 경고 4 / 323.86초**(시작 load 0.56·종료 1.32), 격리 0. `10d2ca7` 의 4758 대비 +55 = 특성화 26 + 자식 종료 29. **KST 는 wave 2 경계에서 함께 돌린다**(이 wave 는 live 파일 `engine.py` 를 만지지 않았다).
 - legacy 현행 결함 5건은 운영 경로의 별도 작업으로 분리했다(작업 칩 `task_1d1ae719` — S4 는 고치지 않는다).
+- **정리:** 임시 worktree 4개·work 브랜치 2개 제거.
+
+### wave 2 (S4-1b ∥ S4-2) — Do·See 기록 (기준 `982bc17`)
+
+- **방법:** workflow `wf_6c600add-b85` — 단일 writer(요청 opus/high) → 독립 재현(요청 opus/xhigh), 관측 모델 미노출.
+- **S4-1b `commands._unsent`(한 hunk):** `if request.command is CommandKind.SUBMIT:` 한 줄을 지우고 본문을 한 단계 dedent — **어떤 명령이든** claim 이전에 실패하면 `abandon_candidate` 를 부르고, 누가 끝날 수 있는지는 lifecycle 의 가드 한 곳이 정한다. `ApplicationBlocked` 재던짐·abandon 예외의 `logger.exception`+NOT_SENT 보존·False 시 경고·`dispatch_failed` 의 abandon 미시도는 글자 그대로. S4-1 로 거짓이 된 독스트링 2곳도 고쳤다.
+  - **행동 RED:** `assert [] == [('C', 'request_binding_changed', True)]` — 오늘은 claim 이전에 실패한 cancel dispatch 가 abandon 을 한 번도 부르지 않아 자식이 prepared 로 남고 같은 부모의 두 번째 취소가 `previous child command unresolved` 로 막힌다.
+  - **결정 ⑨의 시험 1건 개정**(`test_an_unclaimed_cancel_is_left_for_s4_and_never_abandoned` → `…_is_ended_while_the_acknowledged_submit_is_not`): 단언 반전 + 사유 보존 + **부모 행 전체 dict 동일성**(명세의 "예약 4항"보다 강하다) + 같은 부모에 두 번째 취소 prepare 통과. 줄 단위 보고는 workflow journal.
+  - **대조(상태값까지 고정):** claim **이후** 실패한 자식(transport 실패·guard 거부 2종)은 `reconciling`·`unknown` 이고 abandon 이 거부되며 부모 예약이 그대로다 — 이 잔류는 S4 가 풀지 않는다.
+  - 독립 재현 **APPROVE_THIS_SLICE** — 지정 변이 + 자체 변이 7종 전건 kill. info: 자식 행의 예약 단언 한 줄은 구조적으로 공허하다(자식 예약은 항상 0 — 원본에서 옮겨온 줄) · 자식의 claim-before 표본이 합성 binding 위조 1종뿐(넷 다 같은 `_unsent` 한 길로 모인다 — 취소를 실제로 켜는 작업의 인수 조건으로).
+- **S4-2 eviction 을 owner 경로로(`engine.py`·`gateway.py`):** **H5 복원**(S3-6a 가 붙인 attach 차단 조건 한 줄 삭제 — engine.py 에서 기존 줄이 바뀐 유일한 곳을 원래대로) · **H9** `_try_evict_weakest_position` 의 try **앞**에서 owner 의 미해결 종목을 한 번 읽고(`_attached_gateway(getattr(self, "engine", None))` — 예외 무흡수), try 안 루프 앞에서 `_pending_ref = self._pending_orders if … else …` 로 고정(legacy 장부 읽기는 try 안에 남겨 `object.__new__(RiskManager)` 인스턴스에서 종전처럼 흡수된다) · **H10** attach 에서만 `_REPLACEMENT_LAST_EVICT_TS` 에 쿨다운(기존 상수 600초) 안의 기록이 하나라도 있으면 축출하지 않는다 · `gateway.unresolved_symbols()` = `_pending()` 의 종목 집합(구현 전 확인: `build_owned_snapshot` 의 pending 은 kind=='submit' 만 거르고 side 는 거르지 않아 **미해결 SELL 도 들어온다** — 실큐 probe 로 관측).
+  - **행동 RED 10건:** 핵심은 `assert 0 == 1`(H5 가 막아 SELL 0) — 만석 + 고득점 BUY → SELL SignalEvent 1건이 큐에 들어가고 구동하면 owner 경로로 POST 정확히 1건(`broker.submit_order` 직접 호출 0), 원 BUY 는 같은 사이클에 `G3_risk` 거부. exit_exempt·승자·코어 보호, owner 미해결 SELL 종목 제외, **같은 배치의 고득점 BUY 두 건 → 축출 SELL 1건뿐**(상한 경계 599/600초), owner 의 최종 방어선(`unresolved_symbol_attempt`), helper 예외 → 그 SIGNAL 은 `errors_count` +1, ready=False, legacy 불변(H9 가 같은 객체 — `__contains__` 기록 set 으로 조회 순서까지, H10 미적용).
+  - **S4-0 의 특성화 26건은 한 글자도 안 고치고 전건 통과**(legacy 의 연쇄 축출 2건 그대로). 결정 ⑨의 S3 시험 1건(`test_eviction_is_not_reached_in_attach_mode` → `…_is_reached_…`) 개정.
+  - 독립 재현 CHANGES_REQUIRED — **제품 결함 0**, 시험 공백 2: ⓐ `unresolved_symbols()` 본문이 예외를 삼켜 빈 집합을 돌려주는 변이가 생존(기존 시험은 helper 를 스텁으로 갈아끼워 engine 쪽 전파만 봤다) ⓑ `+5` → `+20` 변이가 생존(attach 하네스의 CV 가 99→86 으로 깎아 13점 여유) + RED 시절 독스트링 1건. → coordinator: helper 자신의 fail-closed 시험(unhealthy owner → `store_or_publication_unhealthy`) + 실효 점수 86 기준 경계 시험(희생 81 → 축출 / 82 → 스킵). **두 변이를 직접 다시 넣어 각각 새 시험만 실패**(2 failed / 18 passed) 확인·원복.
+- **S4 전체 suite(coordinator, wave 2 통합 HEAD, 단독 직렬·다른 세션 pytest 없음, 2026-09-21 08:29~08:47 KST):** KST **4835 passed / 2 xfailed / 경고 4 / 344.91초**, UTC **4835 / 2 / 4 / 328.32초**(시작 load 1.54·종료 1.11), 각 격리 0. wave 1 의 4813 대비 +22 = 사유 보존 2 + eviction 20(구현 17 + coordinator 3). **S3 마감(4758) 대비 S4 전체 +77.** 기존 xfail 2·경고 4 불변.
+  - 그에 앞선 UTC 1회(`nice -n 10` 으로 돌린 실행)는 **4834 passed / 1 failed** — `tests/dev/test_claude_review.py::test_status_spam_cannot_extend_model_progress_idle_deadline`. 이번 diff 와 무관한 개발용 리뷰 실행기 시험이고 하위 프로세스를 0.12~0.8초의 실시간 시한으로 돌린다. 장 시작 직전(08:30 KST)이라 운영 봇에 양보하려고 낮은 우선순위로 돌렸더니 그 시험이 굶었다. **단독과 같은 디렉터리(`tests/dev`, 직전 파일 포함) 71 passed, 같은 HEAD 의 KST 실행과 기본 우선순위 UTC 재실행 모두 통과** — 순서 의존이 아니라 우선순위·부하성이다. 교훈: 전체 suite 에 `nice` 를 쓰지 않는다(실시간 시한 시험이 있다).
+- **제품 호출자 재확인:** `KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(` 호출 0건(grep).
 - **정리:** 임시 worktree 4개·work 브랜치 2개 제거.
 
 체크리스트는 S3 공통 체크리스트를 그대로 쓰고 세 항목을 더한다:
