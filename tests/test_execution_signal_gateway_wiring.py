@@ -563,3 +563,56 @@ def test_the_evidence_is_taken_before_anything_else_can_replace_it(tmp_path, mon
         finally:
             await teardown(f)
     asyncio.run(scenario())
+
+
+# ── Codex 교차 리뷰 3차 ───────────────────────────────────────────────────
+
+def test_a_risk_manager_with_legacy_orders_connected_after_attach_cannot_post_directly(
+        tmp_path, monkeypatch, freeze):
+    """H6 은 attach **시점**만 본다 — 그 뒤에 장부가 남은 관리자가 연결되면 진입부 stale 루프가
+    owner 를 거치지 않고 직접 취소·재주문한다(계약 1 위반). 위험 지점에서 막는다.
+    """
+    async def scenario():
+        f = await wired(tmp_path, monkeypatch, freeze)
+        try:
+            broker_calls = []
+            for name in ('cancel_all_for_symbol', 'submit_order'):
+                async def record(*args, _name=name, **kwargs):
+                    broker_calls.append(_name)
+                    return True
+                monkeypatch.setattr(f['broker'], name, record, raising=False)
+            rm = f['rm']
+            # attach 이후에 남아 있는 legacy 미체결 매도(90초 경과, 정규장).
+            rm._pending_orders.add('000660')
+            rm._pending_sides['000660'] = OrderSide.SELL
+            rm._pending_quantities['000660'] = 10
+            rm._pending_timestamps['000660'] = ENGINE_NOW - timedelta(seconds=200)
+            calls = spy(f)
+            before = f['engine'].stats.errors_count
+            await drive(f['engine'], buy(SYM))
+            assert broker_calls == []
+            assert f['engine'].stats.errors_count == before + 1
+            assert [len(calls[key]) for key in ('submit', 'publish', 'prepare')] == [0, 0, 0]
+            assert posts(f) == []
+        finally:
+            await teardown(f)
+    asyncio.run(scenario())
+
+
+def test_a_signal_typed_event_without_a_symbol_does_not_stop_the_loop(tmp_path, monkeypatch,
+                                                                     freeze):
+    """정리(`finally`)가 다시 던지면 흡수한 예외를 덮고 루프 밖으로 샌다."""
+    from src.core.event import Event
+
+    async def scenario():
+        f = await wired(tmp_path, monkeypatch, freeze)
+        try:
+            before = f['engine'].stats.errors_count
+            await drive(f['engine'], Event(type=EventType.SIGNAL))
+            assert f['engine'].stats.errors_count == before + 1
+            f['engine']._event_queue.clear()
+            await drive(f['engine'], buy(SYM))
+            assert len(posts(f)) == 1
+        finally:
+            await teardown(f)
+    asyncio.run(scenario())
