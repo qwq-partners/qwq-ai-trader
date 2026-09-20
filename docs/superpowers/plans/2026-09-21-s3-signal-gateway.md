@@ -251,6 +251,12 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
 - **변이:** H6 의 legacy 장부 검사 제거 / `_reserved_cash` 의 attach 분기 제거 / **`_pending_strategy_notional` 의 attach 분기 제거** / 두 분기의 attach 가드를 "항상 참"으로 / H3 의 예외 구분 제거 / H3 가 정상 None 까지 거부.
 - **위험:** property 변경은 다섯 소비 지점을 함께 움직인다(사실 8) — 다섯 곳 각각에 도달하는 RED 또는 대조가 있어야 한다.
 
+- **통합된 실제 인터페이스(wave 5, `6e5c621`+coordinator 시험 보강) — `engine.py` 37줄 가산 / 0 삭제:** 모듈 함수 `_attached_gateway(engine)`(runtime 있고 gateway 설치됨일 때만 gateway, 아니면 None)이 H2a·H2b·H3 의 **단일 가드**다. `_reserved_cash`(property 유지)와 `_pending_strategy_notional` 은 첫머리에서 gateway helper 를 그대로 돌려주고(예외 무흡수), H3 는 sector 조회 `except` 블록 안에서 attach 일 때만 `block_gate='G3_sector'` 로 거부, H6 은 `bind_execution_runtime` 의 running·큐 검사 직후에 legacy 장부 3종을 본다.
+  - **core_reserve 기준 — 이중 차감·누락 없음:** owner 는 `pending 합 + core_reserve(snapshot)`(non-core), `gateway.reserved_cash()` 는 pending 합만, engine 은 소비 지점에서 `_get_core_reserve()` 를 따로 더한다 → 합계 기준이 같다(시험: `can_open_position` 이 받은 `reserved_cash` == 477,050 + 600,000). **단 두 core 식의 입력 출처가 다르다** — owner 는 `snapshot.policy.core_allocation_pct`, engine 은 `config.strategy_allocation['core_holding']`. 설정 축이 갈라지면 두 값이 달라질 수 있고, 그것을 하나로 묶는 것은 `config_version` 5축 조립(10A3)이다.
+  - 표본: 자본 2,000,000·가용 1,900,000·sepa_trend 배분 40%(800,000) → A 47주 예약 477,050 → 전략 잔여 322,950 → **B 30주**로 줄어 POST 1(수정 전에는 B 가 `decision_quantity_unjustified`·POST 0).
+  - **on_signal 밖의 소비자 1건:** `src/dashboard/data_collector.py:1572` 의 `float(getattr(rm, '_reserved_cash', 0))` — attach+gateway 에서 property 가 내는 `CommandValidationError`/`KeyError` 는 `getattr` 기본값이 덮지 못해 그 디버그 통계 응답이 실패한다(돈 경로 아님·허용 파일 밖 → **10A3/10C 이월**).
+  - 이 단계가 걷어낸 스텁은 legacy 세션·`engine.can_open_position`·`_sector_lookup`·`_pending_strategy_notional` 넷이다. **`_risk_validator`(None)·`_check_factor_budget`(항상 None)은 여전히 스텁** — 실제 `risk/manager.py` 게이트와 팩터 버킷 게이트는 attach 경로 시험에서 아직 한 줄도 돌지 않는다(S5 인수의 범위). 세션 차단 표본(08:55·15:30)은 legacy 세션·engine 시계 두 축만 옮긴다.
+
 ## 5. legacy·US 불변 증명 (네 겹)
 
 1. **구조(diff 검사):** engine.py 의 허용 hunk(H1~H5) 각각에서 추가된 실행 줄이 전부 `_execution_runtime is not None`(및 `gateway is not None`) 가드 안이거나 순수 가산임을 coordinator 가 줄 단위로 확인한다(S2-5 가 `engine.py` +39/−0 을 같은 방식으로 통과).
@@ -264,7 +270,7 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
 
 - **S4:** 미claim **자식 명령(cancel/modify)** 의 종료 간선(결정 ⑧ — 부모 `order_ref` 를 싣는 행은 `abandon_candidate` 로 끝낼 수 없다). 90초 MARKET SELL 폴백(1899-1982)·취소0건 예약 해제(1985-2015)·eviction(1586-1696·2335-2345)의 owner 경로 이관. S3 는 attach 에서 셋이 **발화하지 않음**만 고정한다. eviction 권한 표식을 `metadata['source']='replacement'` 문자열에서 `EntryAuthority` 발급 context 로 대체. SELL 지정가(`broker.get_best_bid` await, 2264)를 final 에서 다시 볼지 facts 로 굳힐지.
 - **S5:** 독립 실큐 인수·최종 broad 리뷰·전체 직렬. 결정 ③(ORDER 이벤트를 큐에 싣지 않음)을 상위 계획과의 차이로 확인받는다.
-- **10A3(factory):** `config_version` 5축 조립·제품 PolicyContext publisher · `KRExecutionRuntime` 생성·`attach()`·`install_gateway()` 와 설치 순서(regime owner 가 command owner 보다 앞) · `trading_ready` 를 True 로 만드는 실제 startup 대사 · **재시작 시 미claim prepared 의 자동 정리 — 부품은 S3 에 있다: factory 가 `runtime.restore()` 뒤·엔진 루프 시작 전에 `await runtime.gateway.recover_unsent()` 를 불러야 한다**(Codex 2차 P1 의 처분. 취소·종료·crash 가 prepare 와 claim 사이에 남긴 행은 같은 호출 안에서 정리할 수 없고, 남으면 예약과 일자 전환을 막는다. 엔진이 도는 중에는 거부된다) · attach 모드의 체결 메타(entry_tags·전략) 인계와 pending 교착 감시(결정 ④).
+- **10A3(factory):** `config_version` 5축 조립·제품 PolicyContext publisher · `KRExecutionRuntime` 생성·`attach()`·`install_gateway()` 와 설치 순서(regime owner 가 command owner 보다 앞) · `trading_ready` 를 True 로 만드는 실제 startup 대사 · **재시작 시 미claim prepared 의 자동 정리 — 부품은 S3 에 있다: factory 가 `runtime.restore()` 뒤·엔진 루프 시작 전에 `await runtime.gateway.recover_unsent()` 를 불러야 한다**(Codex 2차 P1 의 처분. 취소·종료·crash 가 prepare 와 claim 사이에 남긴 행은 같은 호출 안에서 정리할 수 없고, 남으면 예약과 일자 전환을 막는다. 엔진이 도는 중에는 거부된다) · attach 모드의 체결 메타(entry_tags·전략) 인계와 pending 교착 감시(결정 ④) · `dashboard/data_collector.py:1572` 의 디버그 통계가 attach 에서 예외로 끝나는 것(attach 인지형으로) · engine 의 `_get_core_reserve()` 와 owner 의 `core_reserve(snapshot)` 가 서로 다른 설정 출처를 읽는 것.
 - **10C:** `run_trader.py:1846-1848` 의 sector lookup 예외 뭉갬 · KOFR(`kr_scheduler.py:6754·6818`) · 수동 매수(7597) · CLI 2개 · `kr_scheduler.py:978-1004` · 판단 사실의 분석 원장 projection.
 - **성능:** `ExecutionStateStore.commit` 이 매 commit 마다 state 전체를 직렬화한다(store.py:212-217). S3-4 가 facts 누적을 끊지만 commit 당 비용의 측정·개선은 미착수. `ponytail:` 출처 행이 수천을 넘기면 counter 분리 후 행 삭제.
 

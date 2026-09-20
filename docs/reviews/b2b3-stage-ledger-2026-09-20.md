@@ -226,7 +226,7 @@
 | S3-4 | `day_recovery.py` | **통합(한정 승인·돈 경로 아님)** | `feb4349`(red)→`968a097` | CHANGES_REQUIRED(시험 공백 2) → coordinator `9a3fe19` 로 해소 | merge `e42b014` |
 | S3-5 | `gateway.py`·`runtime.py` 설치점 (+`commands.py` P1 수정) | **통합(한정 승인·설치 호출자 0건)** | `cadd67a`·`fd03c12`(red)→`737da95`→`05e3104` | CHANGES_REQUIRED(**P1 1**·P2 5) → coordinator `83e187a`(red)·`b83b6e7`·`4356d43` 로 해소 | merge `cb1f554` |
 | S3-6a | `engine.py` H1·H4·H5 | **통합(한정 승인·live 파일이나 attach 가드 안 — 제품 attach 호출자 0건)** | `cf8720b`(red)→`0b5ac18` | CHANGES_REQUIRED(P1 시험 공백 1·P2 3) → coordinator 시험 보강으로 해소 | merge `5dac8da` |
-| S3-6b | `engine.py` H2·H3 | 미착수 | — | — | — |
+| S3-6b | `engine.py` H2·H3·H6 | **통합(한정 승인·attach 가드 안 — 제품 attach 호출자 0건)** | `e8039a6`(red)→`6e5c621` | CHANGES_REQUIRED(P1 시험 공백 1·P2 4·P3 1) → coordinator `9688d1d` 로 해소 | merge `4242b70` |
 
 ### wave 1 (S3-1 ∥ S3-2) — Do·See 기록 (기준 `3f30fcc` → `1a6e6d2`)
 
@@ -314,7 +314,21 @@
 - **남은 것(이 단계에서 고정하지 않음):** UNKNOWN 의 실큐 접합 쪽 대조 · attach 모드의 체결 메타·pending 교착 감시가 빈 값을 본다는 결정 ④의 이월 사항(10A3/10C) · dispatch 의 network await 동안 엔진 루프가 멈추는 지연 상한.
 - **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
-Codex 교차 리뷰(포그라운드·10분 상한)는 wave 5 뒤 1회 더. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
+### wave 5 (S3-6b engine 정합 배선) — Do·See 기록 (기준 `1d9bed6` → `9688d1d`)
+
+- **방법:** workflow `wf_b958e489-068` — 단일 writer(요청 opus/high) → 독립 재현(요청 opus/xhigh), 관측 모델 미노출.
+- **`src/core/engine.py`(numstat **37 추가 / 0 삭제**):** 모듈 함수 `_attached_gateway(engine)`(단일 가드) · H2a `_reserved_cash`(**property 유지**) · H2b `_pending_strategy_notional` — 둘 다 첫머리에서 gateway helper 를 그대로 돌려준다(예외 무흡수) · H3 sector 조회 `except` 안의 attach 거부(`block_gate='G3_sector'`) · H6 `bind_execution_runtime` 의 legacy 장부 검사. coordinator 가 diff 를 줄 단위로 읽어 가드 밖 변경 0 확인. `_calculate_position_size` 본문과 소비 지점 다섯 곳은 불변.
+- **행동 RED 10건(부재 RED 0):** B 가 owner `strategy_remaining`(322,950원)을 넘어 `decision_quantity_unjustified`·POST 0(`assert 1 == 2`) · 전략 예산·현금 조기 차단이 owner 예약을 못 봐 발화 0 · `can_open_position(reserved_cash=)` 가 owner pending 을 통째로 누락(600,000 vs 477,050+600,000) · 예약 읽기 실패가 `gateway.submit` 이후에야 드러남 · H6 3건 · sector 조회 예외가 None 으로 통과 등. 표본·core_reserve 결론·on_signal 밖 소비자(`dashboard/data_collector.py:1572`)는 계획서 S3-6b 절.
+- **독립 재현: CHANGES_REQUIRED — 제품은 fail-closed 가 맞고(결함 0) 시험 공백.** 지정 변이 전건 kill, 자체 변이 중 3종 생존:
+  - **P1 X1** `_reserved_cash` 의 attach 분기**만** 예외를 0 으로 삼켜도 19건 통과 — 바로 뒤의 `_pending_strategy_notional` 이 같은 예외를 다시 내 가려졌다. 전략 배분이 0 이거나 전략이 없는 BUY 는 전략 예산 게이트를 건너뛰므로, 그때 현금 축이 0 을 돌려주면 **한도가 조용히 넓어진다.** → 전략 축을 조용히 둔 채 현금 축만 예외원이 되는 시험.
+  - **P2 X2** attach 분기의 전략 필터 상실(전 전략 합 반환)이 생존 — 표본의 미해결 BUY 가 늘 같은 전략 1건뿐이었다. → 다른 전략은 0 임을 단언.
+  - **P2 X4** 사이징의 `available = … - self._reserved_cash` 에서 차감을 지워도 parity 19건 + 기준선 239건 전부 통과 — 현금이 넉넉한 표본에서는 전략 축이 먼저 묶인다. → 현금이 실제로 수량을 깎는 구간(무관 보유 115주)을 만들어 owner 예약을 뺀 수량 < 안 뺀 수량을 단언.
+  - P2 "네 시계" 서술이 세션 차단 표본에서는 사실과 다름 · P3 걷어내지 못한 스텁(`_risk_validator`·`_check_factor_budget`) 미공개 → 독스트링 정정. P2 대시보드 디버그 통계 → 10A3/10C 이월.
+- **coordinator 변이 재적용:** X1·X2·X4 를 직접 넣어 **각각 새 시험만 실패**(1 failed / 21 passed) 확인 후 원복·트리 clean.
+- **제품 호출자 재확인:** `KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(` 호출 0건(grep).
+- **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
+
+Codex 교차 리뷰 3차(포그라운드·10분 상한)는 이 wave 의 전체 suite 뒤. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 
 ### 이어받는 에이전트 체크리스트 (S3 공통 — 하위 단계마다 반복)
 - [ ] 세부 계획 §4 의 그 단계 "고정 인터페이스"와 실제 시그니처가 일치하는가. §2 의 결정 번호와 어긋나는 구현이 없는가.
