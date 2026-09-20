@@ -394,3 +394,27 @@ def test_a_closing_runtime_racing_the_abandon_is_reported_as_admission_closed(tm
             assert f['broker']._session.posts == []
         finally: await f['store'].close()
     asyncio.run(scenario())
+
+
+def test_a_session_that_closes_after_prepare_ends_the_attempt(tmp_path, monkeypatch):
+    """prepare 뒤 장 경계가 닫혀도 '보내지 못한 요청은 예약을 남기지 않는다'(계약 5).
+
+    세션 재검사가 claim 이전 분류 바깥에서 터지면 예외가 그대로 빠져나가 예약이 남는다.
+    """
+    from src.execution.safety.guards import GuardDecision
+
+    async def scenario():
+        f, req, _ = await prepared(tmp_path, monkeypatch)
+        calls = spy_abandon(f, monkeypatch)
+        try:
+            f['session'][0] = GuardDecision(False, 'market_closed')
+            result = await send(f, req)
+            assert (result.status, result.reason_code) == (CommandStatus.NOT_SENT, 'market_closed')
+            assert calls == [('A', 'market_closed', True)]
+            attempt = f['runtime'].owner.state['attempts']['A']
+            assert attempt['state'] == 'final_rejected' and attempt['claim_id'] is None
+            assert reservations(attempt) == (0, D('0'), D('0'), None)
+            assert pending_sectors(f) == {}
+            assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
