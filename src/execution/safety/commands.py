@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime
@@ -29,6 +30,8 @@ from .requests import KISRequestBuilder, PreparedTradeRequest, _session_at
 from .reservations import has_remaining_reservation
 from .resources import calculate_resources, remaining_resource_amount
 from .transport import GuardedKISTransport, TransportStatus
+
+logger = logging.getLogger(__name__)
 
 
 class CommandValidationError(ValueError):
@@ -270,6 +273,9 @@ class RequestBoundCommands:
         result = recompose_quantity(facts, snapshot, price=resources.valuation_price)
         _require(result.reason is None and request.quantity <= result.quantity,
                  'decision_quantity_unjustified')
+        # 설정 hybrid 축의 유일한 대조 상대다. 자기신고만 믿으면 '설정 on·신고 off'가 통과한다.
+        # 신고 on 은 재구성 자체가 거부하므로(unsupported_hybrid_sizing) 그 뒤에서 본다.
+        _require(facts.hybrid_enabled == snapshot.policy.hybrid_enabled, 'decision_hybrid_mismatch')
         return facts
 
     def _snapshot(self, state, *, exclude_attempt=None):
@@ -520,6 +526,28 @@ class RequestBoundCommands:
             return CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='result_not_recorded')
         return result
 
+    async def _unsent(self, request, reason):
+        """claim 이전에 끝난 요청. SUBMIT 은 같은 호출 안에서 예약까지 푼다(결정 ⑦·⑧).
+
+        자식 명령은 부모의 order_ref 를 싣고 있어 abandon 가드가 구조적으로 거부한다 —
+        '이미 보냈을 수 있는' 행의 증거를 지우는 길을 열지 않도록 부르지도 않는다(잔류는 S4).
+        """
+        released = False
+        if request.command is CommandKind.SUBMIT:
+            try:
+                released = await self.runtime.lifecycle.abandon_candidate(request.attempt_id,
+                                                                          reason=reason)
+            except ApplicationBlocked:
+                raise
+            except Exception:
+                # 저장된 행이 깨져 있어도 '보내지 못했다'는 결과는 그대로다. 삼키지 않고 남긴다.
+                logger.exception('[실행] 미송신 시도 해제 예외: attempt=%s 사유=%s',
+                                 request.attempt_id, reason)
+            if released is not True:
+                logger.warning('[실행] 미송신 시도 예약 유지: attempt=%s 사유=%s',
+                               request.attempt_id, reason)
+        return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code=reason)
+
     async def dispatch(self, request, context, transport):
         try:
             with self.runtime.command_scope() as command_token:
@@ -543,11 +571,17 @@ class RequestBoundCommands:
             claimed = await self.runtime.lifecycle.claim(request.attempt_id, claim,
                 candidate_guard=lambda candidate: self._bound(candidate, request, context, binding))
             if not claimed:
-                return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code='claim_not_available')
+                return await self._unsent(request, 'claim_not_available')
         except asyncio.CancelledError:
             raise
+        except ApplicationBlocked:
+            # 종료·일자 전환 중에는 새 종료 전이도 시작하지 않는다. 바깥이 사유를 정한다.
+            raise
+        except CommandValidationError as exc:
+            return await self._unsent(request, exc.reason)
         except Exception:
-            return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code='claim_not_available')
+            # 저장/전송 장애는 '보낼 수 없었다'는 판정이 아니다. 예약은 그대로 둔다.
+            return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code='dispatch_failed')
         version = self.owner.state['attempts'][request.attempt_id]['version']
         self._permits[claim] = (request.fingerprint, version)
         def guard(actual):

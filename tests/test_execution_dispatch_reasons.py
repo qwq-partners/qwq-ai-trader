@@ -14,6 +14,7 @@ import re
 
 import pytest
 
+from src.core.types import Order, OrderSide, OrderType
 from src.execution.safety.decisions import ConsumedSource
 from src.execution.safety.lifecycle import CommandStatus, OrderRef
 from src.execution.safety.requests import CancelParent
@@ -106,8 +107,12 @@ def test_claim_before_failure_ends_the_attempt_and_frees_every_reservation(tmp_p
             assert pending_sectors(f) == {}
 
             # 같은 intent 의 다음 시도가 다시 열린다(끝나지 않은 앞 시도가 막지 않는다).
-            again = f['builder'].prepare_submit(req.order, intent_id=req.intent_id,
-                attempt_id='A2', session=req.session, valuation_price=req.valuation_price)
+            again = f['builder'].prepare_submit(
+                Order(symbol=req.symbol, side=OrderSide.BUY, quantity=JUSTIFIED,
+                      price=req.valuation_price, order_type=OrderType.LIMIT,
+                      strategy=req.strategy),
+                intent_id=req.intent_id, attempt_id='A2', session=req.session,
+                valuation_price=req.valuation_price)
             reopened = await f['commands'].prepare(again, f['entry'](again))
             assert reopened['state'] == 'prepared'
         finally: await f['store'].close()
