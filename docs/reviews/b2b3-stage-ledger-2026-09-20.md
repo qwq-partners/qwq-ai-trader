@@ -26,6 +26,10 @@
 - **하위 에이전트 worktree:** 수동 `git worktree add` + worker `EnterWorktree` 는 실패한다(Bash 격리 고정점이 부모 worktree 에 남음 — S1 1차 시도 커밋 0). Workflow `agent(..., {isolation:'worktree'})` 로 harness 가 만든 worktree 에서 시작해, 그 안에서 `git switch -c work/<이름> <base SHA>`(구현) 또는 `git switch --detach <SHA>`(리뷰)로 기준을 맞추고 **기준선 시험을 첫 단계**로 돌리게 한다. detached 로 바꾼 리뷰 worktree 는 자동 회수되지 않으므로 끝난 뒤 `git worktree remove <경로>`(dirty 면 스스로 거부)로 정리한다.
 - **교차 provider 리뷰(Codex):** `scripts/dev/codex_review.sh` 는 모델·effort 를 지정하지 않아 전역 설정(astra/medium)을 따르고 기준이 main 이면 engine 전체가 범위가 된다. 단계 리뷰는 플러그인 companion 으로 돌린다:
   `node /home/ubuntu/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs task --background --model gpt-6-astra --effort xhigh "<프롬프트>"` — `--write` 가 없으면 read-only sandbox. 완료 통지가 오지 않으므로 `status <id> --json`, `result <id>` 로 확인한다. 범위는 프롬프트에 `git diff <base>..<head>` 와 `git show <head>:<경로>` 로 명시하고, 실행 전후 `git status --short`·HEAD 를 대조한다.
+- **⚠️ Codex 작업은 세션이 끝나면 죽는다(2026-09-20 실측 3회).** Codex 플러그인의 `SessionEnd` 훅(`scripts/session-lifecycle-hook.mjs`의 `cleanupSessionJobs`)이 이 세션에 등록된 실행 중 Codex 작업을 프로세스 트리째 종료하고 브로커도 내린다(`Stop` 훅은 안내만 한다). 사용자가 자리를 비운 사이 턴이 끝나 세션이 종료 처리되면 `--background` 작업이 시작 약 100초 만에 죽고, **종료 상태를 남기지 못해 `status` 가 계속 `running` 으로 보인다**(1차는 3시간 방치). harness 백그라운드 Bash 로 companion 을 포그라운드 모드로 돌려도 같은 지점에서 `exit 0` 으로 끊겼다 — companion 에 등록된 작업이면 정리 대상이다. 배제한 원인: 세션 CLI 재시작(같은 PID 10시간), OOM(커널 로그에 기록 없음), Codex 호출 자체(작은 대조 실행 정상).
+  - **동작하는 방법:** companion `task` 를 **`--background` 없이 포그라운드 Bash 한 번**으로 돌려 끝날 때까지 턴을 열어 둔다(Bash 상한 10분). 10분 안에 끝나도록 프롬프트를 핵심 질문으로 좁히고 "플러그인·스킬 안내 파일·CLAUDE.md·CHANGELOG 는 읽지 말고 대상만 읽어라, 8분 안에 답하라"를 넣는다(모델·effort 는 그대로). 실측: 좁힌 S2 재리뷰가 xhigh 로 10분 안에 완료.
+  - `codex exec` 직접 호출은 격리 세션의 git 검증기가 거부한다(프롬프트 안의 git 문구 때문에 "내 worktree 밖 git 이 아님"을 확인할 수 없다). 프롬프트를 파일로 돌려 검증기를 피하지 말 것 — 의도된 격리 경계다.
+  - `--background` 를 쓸 수밖에 없으면 대기는 "상태가 running 을 벗어남"만 보지 말고 **worker pid 생존·로그 침묵·절대 시한**을 함께 본다(`kill -0 <pid>`, 로그 mtime). 죽은 작업은 `cancel <id>` 로 기록을 바로잡는다.
 - **역할·한도:** coordinator 1 + active worker ≤3(전 provider 합산, 실제로는 위 자원 제약으로 ≤2), worker 재위임 금지, 파일당 단일 writer, coordinator 만 통합. 구현 = 요청 claude-opus-5/high, 독립 리뷰 = 구현자와 다른 실행의 opus/xhigh + Codex astra/xhigh. worker 금지: 운영 `.env`·토큰·`~/.cache/ai_trader*`·네트워크·systemctl·git push·허용 목록 밖 파일.
 
 ---
@@ -150,7 +154,10 @@
 - **S2 마감 전체 suite(coordinator, HEAD `83baa2a`, 단독 직렬, 2026-09-20):** UTC **4628 passed / 2 xfailed / 경고 4 / 301.43초**, KST **4628 / 2 / 4 / 282.50초**, 각 exit 0·격리 0. S1 뒤 4442 대비 **+186 = builder 69 + CV 특성화 55 + 사이징 반출 27 + publishers 25 + regime 재검사 10**(수집 수로 대조). 기존 xfail 2·경고 4 불변. 시작 전 세션 자식 `pyright-langserver` 가 다시 548MB 로 자라 있어 SIGTERM(가용 654→1204MB).
 - **정리:** S2 의 임시 worktree 18개(wave A 8 + wave B·C·수정 라운드 10)와 work 브랜치 9개(4 + 5)를 전부 제거(모두 clean·merged — `worktree remove`/`branch -d` 가 거부 없이 통과). 남은 worktree 는 main·세션 기본·engine 3개.
 
-- **Codex S2 재리뷰(요청 gpt-6-astra/xhigh, read-only·pytest 금지, 대상 `83baa2a`, job `task-mu9qmtk7-sp2cwl`): 진행 중** — 이전 발견 5건의 해소 여부, S2-5·통합 수정, P1 의 S3 이관 수용 여부를 물었다. 판정은 이 줄 아래에 덧붙인다.
+- **Codex S2 재리뷰(요청 gpt-6-astra/xhigh, read-only·pytest 금지, 대상 `83baa2a`): CHANGES_REQUIRED — 새 P0/P1 0건, 새 P2 1건.** 1·2차(`task-mu9qmtk7-sp2cwl`·`task-mu9x4m7f-vb88oh`, `--background`)와 3차(harness 백그라운드)는 세션 종료 훅에 정리돼 결과 없이 죽었고(위 "공통 작업 방법"의 경고 참조), **4차에 포그라운드·좁힌 프롬프트로 10분 안에 완료**했다. 좁힌 범위: 이전 발견 5건의 해소 여부 + 새 P0/P1 위주(출처 행 수 증가·시험 정직성 전수·falsy/Decimal 점검은 이번 재리뷰에서 뺐다 — wave A·B 리뷰와 독립 재현이 덮은 항목이다).
+  - 이전 발견: **P1(claim 이전 실패 시 prepared 예약 잔류) → S3 이관 수용**("현재 `src/` 에 prepare/dispatch 제품 호출자가 없으므로 S3 연결 전 인수 조건으로 처리할 수 있다") · 전역 출처 충돌 **해소** · `as_of` **해소** · regime await 시험·base_pct 주장 축소는 **처분 수용**(regime 시험 원문은 이번 범위 밖이라 독립 확인하지 않았다고 명시).
+  - 확인된 것: legacy 경로의 판정·반환 변경 없음, 캡처 사이 추가 await 없음, 사이징 dict 는 호출마다 교체, 거부 뒤 남는 증거는 S2 에 소비자가 없어 즉시 주문 위험 아님, 게시 순서·매 게시 시 현재 `owner.version`·예외 전파, 출처만 게시된 부분 상태는 기존 판단을 stale 로 만들 수 있으나 새 송신 허가를 만들지는 않는다.
+  - **새 P2(수정 중):** metadata 에 sector 가 없으면 CV 는 `get_score_adjustment(strategy, "")` 로 메모리 보정을 계산하는데, 증거에는 그 뒤 `_sector_lookup` 이 돌려준 섹터가 들어가 `trade_memory:<strategy>:<조회 후 섹터>` 로 게시된다 — CV 가 쓰지 않은 섹터에 귀속되고, 서로 다른 소비 범위가 같은 행을 덮어 정상 판단을 stale 로 만들 수 있다(현행 메모리 stub 이 섹터와 무관한 상수라 놓침). → CV 가 규칙9 에서 실제로 넘긴 섹터를 `last_decision['memory_sector']`(13번째 키)로 보고하고 builder 가 그 값으로 출처 이름·digest 를 만든다. 단일 writer + 독립 재현으로 진행 중.
 
 ### S2 의 성과와 한계 (보고 문장 — 이대로 인용한다)
 
