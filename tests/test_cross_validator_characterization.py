@@ -11,6 +11,8 @@ R1~R4 는 증거 채널(`last_decision`·`last_llm_reason`·`request_token`)의 
 """
 import asyncio
 import datetime as datetime_module
+import sys
+import types
 from datetime import datetime as _RealDateTime
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,9 +29,29 @@ def synthetic_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
 
 
+def _scrub_frozen(frozen_classes):
+    """동결 중 지연 import 된 모듈이 붙잡은 Frozen 시계를 실제 datetime 으로 되돌린다.
+
+    monkeypatch 는 직접 바꾼 두 속성만 복원한다. 동결 중에 CV 가 처음 import 하는 모듈
+    (예: expert_panel 의 `from datetime import datetime`)은 Frozen 을 따로 붙잡아 다음
+    시험까지 들고 간다 — import 순서에 따라 터지는 누수라 이름·모듈을 가리지 않고 훑는다.
+    """
+    if not frozen_classes:
+        return
+    for module in list(sys.modules.values()):
+        namespace = getattr(module, '__dict__', None)
+        if not isinstance(namespace, dict):
+            continue
+        for name, value in list(namespace.items()):
+            if any(value is frozen for frozen in frozen_classes):
+                namespace[name] = _RealDateTime
+
+
 @pytest.fixture
 def freeze(monkeypatch):
     """CV 시계를 고정한다 — 모듈 최상위 이름과 validate 내부 지역 재임포트 양쪽."""
+    frozen_classes = []
+
     def _freeze(hour, minute, *, day=21):
         stamp = _RealDateTime(2026, 9, day, hour, minute)
 
@@ -38,10 +60,35 @@ def freeze(monkeypatch):
             def now(cls, tz=None):
                 return stamp
 
+        frozen_classes.append(Frozen)
         monkeypatch.setattr(datetime_module, 'datetime', Frozen)
         monkeypatch.setattr(cv_module, 'datetime', Frozen)
         return stamp
-    return _freeze
+    yield _freeze
+    # 이 fixture 가 monkeypatch 보다 먼저 정리된다 — 지연 import 가 붙잡은 참조를 여기서 거둔다
+    _scrub_frozen(frozen_classes)
+
+
+_LEAK_PROBE = 's2_1_clock_leak_probe'
+
+
+def test_frozen_clock_leak_is_planted_by_a_lazy_import(freeze):
+    """동결 중 처음 import 된 모듈은 Frozen 을 붙잡는다(누수 재현 — 다음 시험이 복원을 확인)."""
+    freeze(11, 0)
+    probe = types.ModuleType(_LEAK_PROBE)
+    exec('from datetime import datetime\nfrom datetime import datetime as _dt', probe.__dict__)
+    sys.modules[_LEAK_PROBE] = probe
+    assert probe.datetime is not _RealDateTime and probe._dt is not _RealDateTime
+    assert probe.datetime.now().hour == 11
+
+
+def test_frozen_clock_is_scrubbed_from_every_module_after_the_fixture():
+    """앞 시험의 fixture 종료 뒤에는 어떤 이름으로 붙잡았든 실제 datetime 으로 돌아와 있다."""
+    probe = sys.modules.pop(_LEAK_PROBE, None)
+    if probe is None:
+        pytest.skip('앞 시험과 함께 돌 때만 의미가 있다')
+    assert probe.datetime is _RealDateTime and probe._dt is _RealDateTime
+    assert datetime_module.datetime is _RealDateTime and cv_module.datetime is _RealDateTime
 
 
 # 감점 0 이 되는 지표 묶음 — 규칙1(RSI)·6(추격)·7(MA200)·8(밸류)·지표결손을 전부 비켜간다.
