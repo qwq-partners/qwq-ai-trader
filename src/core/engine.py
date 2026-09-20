@@ -1531,7 +1531,7 @@ class RiskManager:
         # H2: attach 에서 legacy 장부는 비어 있다(결정 ④) — 정본은 owner 의 미해결 예약이다.
         # helper 는 fail-closed 로 예외를 낸다(0 을 지어내지 않는다) — on_signal 안에서 나면
         # H1 의 try/except 가 그 SIGNAL 하나를 명시 거부로 끝낸다.
-        _gateway = _attached_gateway(self.engine)
+        _gateway = _attached_gateway(getattr(self, "engine", None))
         if _gateway is not None:
             return _gateway.reserved_cash()
         return sum(self._reserved_by_order.values()) if self._reserved_by_order else Decimal("0")
@@ -2510,7 +2510,7 @@ class RiskManager:
     def _pending_strategy_notional(self, strategy_name: str) -> Decimal:
         """미체결 BUY 주문의 전략별 예약 금액 합 — 전략 예산 캡 계산 시 체결분에 더한다"""
         # H2: owner 의 `recompose_quantity` 가 쓰는 같은 필터(side=='buy'·전략별)를 읽는다.
-        _gateway = _attached_gateway(self.engine)
+        _gateway = _attached_gateway(getattr(self, "engine", None))
         if _gateway is not None:
             return _gateway.pending_strategy_notional(strategy_name)
         return sum(

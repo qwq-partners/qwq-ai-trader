@@ -528,3 +528,17 @@ def test_the_sizing_itself_subtracts_the_owner_reservation_from_the_cash(tmp_pat
         finally:
             await teardown(f)
     asyncio.run(scenario())
+
+
+def test_a_risk_manager_without_an_engine_keeps_the_legacy_reads():
+    """부분 생성 인스턴스(engine 속성 없음)는 종전 식 그대로다 — legacy 에 새 의존을 만들지 않는다.
+
+    wave 5 의 1차 구현은 두 읽기가 self.engine 을 새로 읽어 기존 시험
+    test_review_fixes_2026_09 의 test_pending_strategy_notional_sums_reserved_cash 를 깼다.
+    """
+    from src.core.engine import RiskManager
+    rm = object.__new__(RiskManager)
+    rm._reserved_by_order = {'A': D('1000'), 'B': D('2500')}
+    rm._pending_strategy = {'A': 'sepa_trend', 'B': 'gap_and_go'}
+    assert rm._reserved_cash == D('3500')
+    assert rm._pending_strategy_notional('sepa_trend') == D('1000')
