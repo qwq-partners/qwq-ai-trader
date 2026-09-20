@@ -32,7 +32,7 @@ from src.risk.manager import RiskManager
 from src.utils.stop_policy import StopDecision
 
 from test_execution_command_owner import fixture as command_fixture
-from test_execution_decision_facts import make_facts, nominal, publish
+from test_execution_decision_facts import make_facts, nominal, paused_dispatch, publish
 from test_execution_regime_owner import baseline_json
 from test_execution_risk_policy import NOW, snapshot as policy_snapshot
 from test_execution_runtime import setup
@@ -182,6 +182,33 @@ def test_intraday_crash_after_prepare_blocks_the_post_and_names_the_stale_axis(t
             with pytest.raises(ValueError, match='stale_regime_decision'):
                 await f['commands'].prepare(other, f['entry'](other))
             assert 'B' not in f['runtime'].owner.state['attempts']
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('boundary', ['connect', 'hashkey'])
+def test_intraday_crash_during_the_network_await_blocks_the_post(tmp_path, monkeypatch, boundary):
+    """앞 시험은 send() **전**에 급락을 넣어 claim 이전 검사만으로도 통과한다.
+
+    마지막 network await 이후에 다시 유도한다는 것은 대기 **중**에 바꿔야 드러난다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            req = await bound(f)
+            task, release = await paused_dispatch(f, req, boundary=boundary)
+            # POST 직전 await 에 멈춘 사이에 유효 레짐이 강등된다.
+            await f['intraday']('crash', f['clock'][0])
+            assert effective_regime(f['runtime'].owner.state, f['clock'][0]) == 'sideways'
+            release.set()
+            assert (await task).status is CommandStatus.NOT_SENT
+            assert f['broker']._session.posts == []
+            current = f['runtime'].owner.state['attempts']['A']
+            assert current['command_status'] == 'not_sent'
+            assert current['state'] == 'final_rejected'
+            # 미송신은 예약을 남기지 않는다(누수 없이 전량 해제).
+            assert (D(current['reserved_cash']), current['reserved_quantity']) == (D('0'), 0)
         finally:
             await f['runtime'].shutdown(); await f['store'].close()
     asyncio.run(scenario())

@@ -49,6 +49,12 @@ def synthetic_home(tmp_path, monkeypatch):
 
 MEMORY_ADJ = -3
 SECTOR = '반도체'
+# CV 판독 시각(runtime._now)은 decided_at 과 다른 시각이다 — 그 사이에 LLM·섹터 조회 await 가 있다.
+OBSERVED = NOW - timedelta(minutes=1)
+PANEL_CREATED = '2026-09-13T21:00:00'
+# 출처 이름은 소비 범위까지 담는다(F1). 전역 한 행이면 종목·전략별 digest 가 서로를 밀어낸다.
+MEMORY_SOURCE = 'trade_memory:sepa_trend:' + SECTOR
+PANEL_SOURCE = 'panel_outlook:' + SYM
 
 
 def cv(*, memory=MEMORY_ADJ, llm=None):
@@ -61,6 +67,19 @@ def cv(*, memory=MEMORY_ADJ, llm=None):
         kwargs['llm_manager'] = SimpleNamespace(complete=llm)
     validator = CrossStrategyValidator(market='KR', **kwargs)
     validator._adversarial = None
+    return validator
+
+
+def with_panel(validator, convictions, *, loaded_at):
+    """같은 패널 한 장을 심는다 — 종목별 conviction 이 다르면 보너스·digest 도 달라진다.
+
+    `_load_panel_outlook` 은 성공 6시간 lock 이라 `_panel_loaded_at` 을 함께 심으면 파일을
+    읽지 않는다(운영 캐시 접근 0). loaded_at 은 freeze 가 돌려준 naive 벽시계 그대로다.
+    """
+    validator._panel_outlook = SimpleNamespace(created_at=PANEL_CREATED)
+    validator._panel_recommended = {symbol: SimpleNamespace(symbol=symbol, conviction=value)
+                                    for symbol, value in convictions.items()}
+    validator._panel_loaded_at = loaded_at
     return validator
 
 
@@ -81,8 +100,8 @@ def manager(monkeypatch, validator, *, regime='bull', attached=True):
     rm._PENDING_TIMEOUT_SECONDS = 600
     rm.engine._market_regime = regime
     if attached:
-        # on_signal 은 runtime 의 속성을 읽지 않는다 — 설치 여부만 본다.
-        rm.engine._execution_runtime = object()
+        # on_signal 이 runtime 에서 읽는 것은 판독 시각(_now) 하나다.
+        rm.engine._execution_runtime = SimpleNamespace(_now=lambda: OBSERVED)
     return rm
 
 
@@ -127,6 +146,7 @@ def test_r29_real_evidence_publishes_facts_that_prepare_accepts(tmp_path, monkey
             assert evidence.cv_decision['memory_adj'] == MEMORY_ADJ
             assert evidence.cv_decision['now_hm'] == 1100
             assert evidence.llm_reason == 'not_required'
+            assert evidence.observed_at == OBSERVED
             assert evidence.sizing_inputs == rm._last_sizing_inputs
             assert evidence.sizing_inputs['position_multiplier'] == atr_position_multiplier(2.5)
             assert (evidence.regime_used, evidence.sector, evidence.strategy) == (
@@ -136,8 +156,11 @@ def test_r29_real_evidence_publishes_facts_that_prepare_accepts(tmp_path, monkey
             await f['market_quote'](req)
             facts = await publish(f, evidence, aid='A')
             # 기여한 출처만 인용한다 — regime(항상) + memory_adj 가 붙은 trade_memory.
-            assert tuple(source.name for source in facts.sources) == ('regime', 'trade_memory')
+            assert tuple(source.name for source in facts.sources) == ('regime', MEMORY_SOURCE)
             assert facts.sources[0].digest == regime_digest('bull')
+            # 출처 as_of 는 CV 판독 시각이다 — 판단 시각(decided_at)으로 덮지 않는다(계약 3).
+            assert facts.decided_at == f['clock'][0] and f['clock'][0] != OBSERVED
+            assert [source.as_of for source in facts.sources] == [OBSERVED, OBSERVED]
             assert facts.qualification.applied_rule_ids == ('trade_memory_adjust',)
             assert facts.qualification.llm_verdict == 'not_required'
             assert (facts.base_pct, facts.strategy_allocation_pct) == (0.25, 40.0)
@@ -161,9 +184,9 @@ def test_r30_every_source_is_published_before_the_facts_row(tmp_path, monkeypatc
         f = await owner_fixture(tmp_path, monkeypatch)
         try:
             _, evidence = await evidence_for(monkeypatch, freeze)
-            assert source_row(f, 'trade_memory') is None
+            assert source_row(f, MEMORY_SOURCE) is None
             facts = await publish(f, evidence, aid='A')
-            row = source_row(f, 'trade_memory')
+            row = source_row(f, MEMORY_SOURCE)
             assert row is not None and row['version'] == 1
             assert row['digest'] == facts.sources[1].digest
             assert 'I-A' in f['runtime'].owner.state['entry_decision_facts']
@@ -193,7 +216,7 @@ def test_r31_same_digest_is_reused_and_keeps_the_earlier_request_sendable(tmp_pa
             await f['market_quote'](first_req)
             _, first = await capture(rm, buy(SYM))
             await publish(f, first, aid='A')
-            published = {name: source_row(f, name) for name in ('regime', 'trade_memory')}
+            published = {name: source_row(f, name) for name in ('regime', MEMORY_SOURCE)}
             assert [row['version'] for row in published.values()] == [1, 1]
 
             # 같은 레짐·같은 전략/섹터/보정의 다음 종목 — digest 가 같으니 재게시하지 않는다.
@@ -207,6 +230,120 @@ def test_r31_same_digest_is_reused_and_keeps_the_earlier_request_sendable(tmp_pa
             # 앞 요청이 인용한 version 1 이 그대로라 송신까지 간다.
             await f['commands'].prepare(first_req, f['entry'](first_req))
             assert (await f['send'](first_req)).status is CommandStatus.ACKNOWLEDGED
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+# ── F1: 종목·전략별 digest 는 전역 한 행에 실을 수 없다 ─────────────────
+
+def test_f1_two_symbols_with_different_panel_convictions_do_not_stale_each_other(
+        tmp_path, monkeypatch, freeze):
+    """같은 패널이라도 digest 는 종목별이다 — 전역 'panel_outlook' 이면 둘째가 첫째를 밀어낸다."""
+    async def scenario():
+        f = await owner_fixture(tmp_path, monkeypatch)
+        try:
+            stamp = freeze(11, 0, day=18)
+            validator = with_panel(cv(), {SYM: 0.9, '000660': 0.4}, loaded_at=stamp)
+            rm = manager(monkeypatch, validator)
+            first_req = f['request']('A')
+            await f['market_quote'](first_req)
+            _, first = await capture(rm, buy(SYM))
+            _, second = await capture(rm, buy('000660'))
+            # 두 판단의 패널 값이 실제로 다르다(같은 digest 표본이면 이 결함을 못 본다).
+            assert first.cv_decision['panel']['conviction'] == 0.9
+            assert second.cv_decision['panel']['conviction'] == 0.4
+            assert first.cv_decision['panel']['bonus'] != second.cv_decision['panel']['bonus']
+
+            first_facts = await publish(f, first, aid='A')
+            second_facts = await publish(f, second, aid='B')
+            assert {'I-A', 'I-B'} <= set(f['runtime'].owner.state['entry_decision_facts'])
+            # 둘째 게시가 첫 요청의 인용 version 을 흔들지 않는다.
+            await f['commands'].prepare(first_req, f['entry'](first_req))
+            assert (await f['send'](first_req)).status is CommandStatus.ACKNOWLEDGED
+            assert PANEL_SOURCE in {source.name for source in first_facts.sources}
+            assert 'panel_outlook:000660' in {source.name for source in second_facts.sources}
+            assert source_row(f, PANEL_SOURCE)['version'] == 1
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_f1_two_strategies_with_different_memory_scopes_do_not_stale_each_other(
+        tmp_path, monkeypatch, freeze):
+    """memory 보정 digest 는 전략·섹터별이다 — 전역 'trade_memory' 면 서로를 stale 로 만든다."""
+    async def scenario():
+        f = await owner_fixture(tmp_path, monkeypatch)
+        try:
+            freeze(11, 0, day=18)
+            rm = manager(monkeypatch, cv())
+            first_req = f['request']('A')
+            await f['market_quote'](first_req)
+            _, first = await capture(rm, buy(SYM))
+            _, second = await capture(rm, buy('000660', strategy=StrategyType.VCP_BREAKOUT,
+                                              sector='2차전지'))
+            assert (second.strategy, second.sector) == ('vcp_breakout', '2차전지')
+
+            first_facts = await publish(f, first, aid='A')
+            second_facts = await publish(f, second, aid='B')
+            assert {'I-A', 'I-B'} <= set(f['runtime'].owner.state['entry_decision_facts'])
+            await f['commands'].prepare(first_req, f['entry'](first_req))
+            assert (await f['send'](first_req)).status is CommandStatus.ACKNOWLEDGED
+            assert MEMORY_SOURCE in {source.name for source in first_facts.sources}
+            assert 'trade_memory:vcp_breakout:2차전지' in {
+                source.name for source in second_facts.sources}
+            assert source_row(f, MEMORY_SOURCE)['version'] == 1
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+# ── F4: 전일 게시본은 재사용하지 않는다 (계약 5 의 '당일' 절) ────────────
+
+def test_f4_a_source_published_yesterday_is_republished_instead_of_reused(
+        tmp_path, monkeypatch, freeze):
+    """전일 게시본을 재사용하면 publish_decision_facts 가 매번 stale 로 거부한다(영구 fail-closed)."""
+    async def scenario():
+        f = await owner_fixture(tmp_path, monkeypatch)
+        try:
+            _, evidence = await evidence_for(monkeypatch, freeze)
+            await publish(f, evidence, aid='A')
+            assert source_row(f, 'regime')['version'] == 1
+
+            # 시계를 다음 날로 옮기면 day admission 이 먼저 막는다 — 게시본 쪽을 전일로 심는다.
+            yesterday = (OBSERVED - timedelta(days=1)).isoformat()
+            def age(state):
+                for row in state['qualification_sources'].values():
+                    row['as_of'] = yesterday
+                return state
+            await f['runtime'].owner.mutate('synthetic-aged-sources', age)
+
+            facts = await publish(f, evidence, aid='B')
+            assert [source.version for source in facts.sources] == [2, 2]
+            assert source_row(f, 'regime')['as_of'] == OBSERVED.isoformat()
+            assert source_row(f, MEMORY_SOURCE)['version'] == 2
+            assert 'I-B' in f['runtime'].owner.state['entry_decision_facts']
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+# ── F7: 증거 타입 가드 ───────────────────────────────────────────────────
+
+@pytest.mark.parametrize('kind', ['dict', 'namespace'])
+def test_f7_a_look_alike_evidence_object_publishes_nothing(tmp_path, monkeypatch, freeze, kind):
+    """필드가 같아도 QualificationEvidence 가 아니면 게시본 0 이다(deepcopy 방어가 통째로 빠진다)."""
+    async def scenario():
+        f = await owner_fixture(tmp_path, monkeypatch)
+        try:
+            _, evidence = await evidence_for(monkeypatch, freeze)
+            fields = {name: getattr(evidence, name) for name in evidence.__slots__}
+            bogus = fields if kind == 'dict' else SimpleNamespace(**fields)
+            with pytest.raises(ValueError, match='invalid_qualification_evidence'):
+                await publish(f, bogus, aid='A')
+            state = f['runtime'].owner.state
+            assert state.get('entry_decision_facts', {}) == {}
+            assert state.get('qualification_sources', {}) == {}
         finally:
             await f['runtime'].shutdown(); await f['store'].close()
     asyncio.run(scenario())
@@ -299,6 +436,80 @@ def test_r33b_a_delayed_other_llm_cannot_relabel_my_reason(tmp_path, monkeypatch
         assert found.cv_decision['symbol'] == SYM
         assert found.llm_reason == 'not_required'
         assert found.sector == SECTOR
+    asyncio.run(scenario())
+
+
+def test_f3_an_intruder_carrying_its_own_token_still_leaves_no_evidence(tmp_path, monkeypatch, freeze):
+    """token 은 **동등** 비교다 — 존재 검사로 약화하면 남의 token 을 내 증거로 싣는다."""
+    async def scenario():
+        freeze(11, 0, day=18)
+        holder = {}
+
+        async def complete(prompt, task=None, max_tokens=None):
+            # 내 LLM 을 기다리는 사이 같은 symbol/strategy/regime 의 다른 요청이 채널을 덮는다.
+            passed, _, _ = holder['cv'].validate(
+                symbol=SYM, side='buy', strategy='vcp_breakout', score=90.0,
+                metadata={'indicators': dict(FULL_INDICATORS), 'sector': SECTOR},
+                market_regime='neutral', request_token='other', count_stats=False)
+            assert passed and holder['cv'].last_decision['token'] == 'other'
+            return SimpleNamespace(success=True, content='YES 진입 타당', error='')
+
+        holder['cv'] = cv(memory=None, llm=complete)
+        rm = manager(monkeypatch, holder['cv'], regime='neutral')
+        orders, found = await capture(
+            rm, buy(SYM, score=90.0, strategy=StrategyType.VCP_BREAKOUT))
+        assert orders, '증거가 없어도 legacy 판정은 그대로다'
+        # 침입자의 판정은 내 것과 symbol/strategy/regime 이 같다 — token 만이 구분 수단이다.
+        assert holder['cv'].last_decision['token'] == 'other'
+        assert holder['cv'].last_decision['symbol'] == SYM
+        assert found is None
+    asyncio.run(scenario())
+
+
+def test_f5_regime_is_the_value_cross_validator_received_not_a_later_lookup(
+        tmp_path, monkeypatch, freeze):
+    """섹터 조회 await 동안 레짐이 바뀌어도 증거는 CV 가 받은 값을 싣는다."""
+    async def scenario():
+        freeze(11, 0, day=18)
+        rm = manager(monkeypatch, cv(), regime='bull')
+
+        async def sector_lookup(symbol):
+            rm.engine._market_regime = 'bear'
+            return SECTOR
+
+        rm._sector_lookup = sector_lookup
+        event = buy(SYM)
+        event.metadata.pop('sector')
+        orders, found = await capture(rm, event)
+        assert orders and found is not None
+        assert rm._resolve_market_regime() == 'bear', '레짐이 실제로 바뀌어야 의미가 있다'
+        assert found.regime_used == 'bull'
+        assert found.cv_decision['regime'] == 'bull'
+    asyncio.run(scenario())
+
+
+def test_f6_a_nested_panel_mutation_during_the_await_never_reaches_the_evidence(
+        tmp_path, monkeypatch, freeze):
+    """캡처 시점 복사가 얕으면 중첩 panel dict 가 섹터 조회 창 동안 제자리에서 바뀐다."""
+    async def scenario():
+        stamp = freeze(11, 0, day=18)
+        validator = with_panel(cv(), {SYM: 0.9}, loaded_at=stamp)
+        rm = manager(monkeypatch, validator)
+
+        async def sector_lookup(symbol):
+            # 증거 조립 전, CV 의 살아있는 판정 dict 안쪽이 다음 판단 값으로 덮인다.
+            validator.last_decision['panel']['conviction'] = 0.1
+            validator.last_decision['panel']['bonus'] = 99
+            return SECTOR
+
+        rm._sector_lookup = sector_lookup
+        event = buy(SYM)
+        event.metadata.pop('sector')
+        orders, found = await capture(rm, event)
+        assert orders and found is not None
+        assert validator.last_decision['panel']['conviction'] == 0.1, '변형이 실제로 일어나야 한다'
+        assert found.cv_decision['panel']['conviction'] == 0.9
+        assert found.cv_decision['panel']['bonus'] != 99
     asyncio.run(scenario())
 
 
@@ -400,13 +611,15 @@ def test_evidence_detaches_the_caller_dicts(tmp_path, monkeypatch, freeze):
         _, found = await capture(rm, buy(SYM))
         rm._cross_validator.last_decision['adjusted'] = 1.0
         rm._last_sizing_inputs['base_pct'] = 9.9
+        assert found.cv_decision['adjusted'] == 69.0
+        assert found.sizing_inputs['base_pct'] == 0.25
         found.cv_decision['symbol'] = '999999'
         found.sizing_inputs['base_pct'] = 8.8
         again = QualificationEvidence(
             token=found.token, symbol=found.symbol, side=found.side, strategy=found.strategy,
             origin=found.origin, sector=found.sector, cv_decision=found.cv_decision,
             llm_reason=found.llm_reason, sizing_inputs=found.sizing_inputs,
-            regime_used=found.regime_used)
+            regime_used=found.regime_used, observed_at=found.observed_at)
         found.cv_decision['symbol'] = '000000'
         assert again.cv_decision['symbol'] == '999999'
         assert again.sizing_inputs['base_pct'] == 8.8
