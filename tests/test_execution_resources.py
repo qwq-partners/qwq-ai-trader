@@ -39,7 +39,7 @@ def policy(**changes):
         min_cash_reserve_pct=5.0, max_positions_per_sector=2,
         daily_exit_cooldown_threshold=3, regime_min_cash_reserve_pct=5.0,
         core_allocation_pct=0.0, sizing_mode='risk', risk_per_trade_pct=0.7,
-        risk_max_position_pct=18.0, buy_commission_rate=D('0.000140527')), **changes)
+        risk_max_position_pct=18.0, buy_commission_rate=D('0.000140527'), hybrid_enabled=False), **changes)
 
 
 def builder():
