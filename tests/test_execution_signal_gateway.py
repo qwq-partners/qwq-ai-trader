@@ -8,6 +8,7 @@ owner 는 실제 SQLite + 실제 RegimeOwner 다. 전송은 합성 fake HTTP · 
 실행: venv/bin/python -m pytest tests/test_execution_signal_gateway.py -q -p no:cacheprovider
 """
 import asyncio
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
 from pathlib import Path
@@ -24,7 +25,7 @@ from src.execution.safety.runtime import KRExecutionRuntime
 
 from test_cross_validator_characterization import freeze  # noqa: F401 — pytest fixture 재사용
 from test_execution_command_owner import fixture as command_fixture
-from test_execution_decision_facts import JUSTIFIED, apply_change, economy  # noqa: F401
+from test_execution_decision_facts import economy, unrelated_holding
 from test_execution_market_source import market_event
 from test_execution_qualification_publishers import SECTOR, buy, evidence_for
 from test_execution_regime_recheck import fixture as regime_fixture
@@ -324,6 +325,36 @@ def test_a_regime_citing_buy_without_the_regime_owner_is_refused(tmp_path, monke
 
 # ── 판단~송신 사이의 stale 축 (마지막 network await 이후 재검사) ─────────
 
+async def apply_change(f, change):
+    """판단~송신 사이에 실제로 바뀔 수 있는 6축. 전부 결정적으로 상한을 넘긴다."""
+    commands, runtime = f['commands'], f['runtime']
+    if change == 'cash':
+        await unrelated_holding(f, quantity=195)
+    elif change == 'reservation':
+        other = f['request']('B', symbol='000660')
+        await f['quote'](other)
+        sibling = f['builder'].prepare_submit(
+            Order(symbol='000660', side=OrderSide.BUY, quantity=185, price=PRICE,
+                  order_type=OrderType.LIMIT, strategy='manual'),
+            intent_id='I-B', attempt_id='B', session=other.session, valuation_price=PRICE)
+        await commands.prepare(sibling, f['authority'].user_order('000660', 'buy'))
+    elif change == 'daily_loss':
+        await economy(f, daily_pnl=D('-1500000'))
+    elif change == 'source':
+        await commands.publish_qualification_source(
+            'regime', as_of=f['clock'][0], digest='synthetic-regime-digest-2',
+            expected_version=runtime.owner.version)
+    elif change == 'config':
+        context = replace(f['ctx'], versions=replace(
+            f['ctx'].versions, execution=runtime.owner.version, config='effective-config-2'))
+        await commands.publish_policy_context(context, expected_version=runtime.owner.version)
+    elif change == 'expired':
+        # 실제 증거의 만료는 판단 90분 뒤다 — 합성 30분 표본보다 멀리 민다.
+        f['clock'][0] = NOW + timedelta(hours=2)
+    else:
+        raise AssertionError('unknown synthetic change')
+
+
 @pytest.mark.parametrize('change', ['cash', 'reservation', 'daily_loss', 'source',
                                     'config', 'expired'])
 def test_a_change_during_the_network_await_blocks_the_post(tmp_path, monkeypatch, freeze, change):
@@ -331,15 +362,11 @@ def test_a_change_during_the_network_await_blocks_the_post(tmp_path, monkeypatch
         f = await fixture(tmp_path, monkeypatch)
         try:
             found = await evidence(monkeypatch, freeze)
-            task, release = await paused_submit(f, buy(SYM), order(quantity=JUSTIFIED), found)
-            facts = next(iter(facts_rows(f).values()))
-            from src.execution.safety.decisions import EntryDecisionFacts
-            if change == 'expired':
-                # 실제 증거의 만료는 판단 90분 뒤다 — 합성 30분 표본보다 멀리 민다.
-                f['clock'][0] = NOW + timedelta(hours=2)
-            else:
-                await apply_change(f, None, EntryDecisionFacts.from_dict(facts), change)
-            release.set()
+            task, release = await paused_submit(f, buy(SYM), order(), found)
+            try:
+                await apply_change(f, change)
+            finally:
+                release.set()
             result = await task
             assert result.status is CommandStatus.NOT_SENT
             assert f['broker']._session.posts == []
@@ -358,8 +385,10 @@ def test_an_unrelated_regime_recommit_during_the_await_still_sends(tmp_path, mon
         try:
             found = await evidence(monkeypatch, freeze)
             task, release = await paused_submit(f, buy(SYM), order(), found)
-            assert (await f['refresh']()).status == 'accepted'
-            release.set()
+            try:
+                assert (await f['refresh']()).status == 'accepted'
+            finally:
+                release.set()
             result = await task
             assert result.status is CommandStatus.ACKNOWLEDGED
             assert len(f['broker']._session.posts) == 1
@@ -408,11 +437,11 @@ def test_the_read_helpers_sum_open_buy_reservations_only(tmp_path, monkeypatch, 
             assert gateway.reserved_cash() == D('0')
             assert gateway.pending_strategy_notional('sepa_trend') == D('0')
             found = await evidence(monkeypatch, freeze)
-            result = await f['gateway'].submit(buy(SYM), order(quantity=JUSTIFIED), found)
+            result = await f['gateway'].submit(buy(SYM), order(), found)
             assert result.status is CommandStatus.ACKNOWLEDGED
             # ACK 된 BUY 는 아직 미해결 예약이다 — 합에 포함된다.
-            assert gateway.reserved_cash() == D('507500.000')
-            assert gateway.pending_strategy_notional('sepa_trend') == D('507500.000')
+            assert gateway.reserved_cash() == D('101500.000')
+            assert gateway.pending_strategy_notional('sepa_trend') == D('101500.000')
             assert gateway.pending_strategy_notional('gap_and_go') == D('0')
 
             # 터미널로 끝난 시도는 예약이 없으므로 두 합에서 빠진다.
@@ -439,16 +468,17 @@ def test_the_facts_publication_leaves_one_audit_line_without_money(tmp_path, mon
         sink = logger.add(lambda message: lines.append(str(message)), level='INFO')
         try:
             found = await evidence(monkeypatch, freeze)
-            result = await f['gateway'].submit(buy(SYM), order(quantity=JUSTIFIED), found)
+            result = await f['gateway'].submit(buy(SYM), order(), found)
             assert result.status is CommandStatus.ACKNOWLEDGED
             tagged = [line for line in lines if '[게이트웨이]' in line]
             assert len(tagged) == 1
+            from src.execution.safety.decisions import EntryDecisionFacts
             attempt = only_attempt(f)
-            row = facts_rows(f)[attempt['intent_id']]
-            for value in (attempt['intent_id'], SYM, 'sepa_trend', row['digest'],
-                          row['config_version'], row['expires_at']):
+            row = EntryDecisionFacts.from_dict(facts_rows(f)[attempt['intent_id']])
+            for value in (attempt['intent_id'], SYM, 'sepa_trend', row.digest,
+                          row.config_version, row.expires_at.isoformat()):
                 assert value in tagged[0]
-            for secret in ('507500', 'test-scope', str(JUSTIFIED * 10000)):
+            for secret in ('101500', 'test-scope', '100000'):
                 assert secret not in tagged[0]
         finally:
             logger.remove(sink)
