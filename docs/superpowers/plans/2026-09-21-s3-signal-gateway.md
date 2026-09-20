@@ -257,6 +257,8 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
   - **on_signal 밖의 소비자 1건:** `src/dashboard/data_collector.py:1572` 의 `float(getattr(rm, '_reserved_cash', 0))` — attach+gateway 에서 property 가 내는 `CommandValidationError`/`KeyError` 는 `getattr` 기본값이 덮지 못해 그 디버그 통계 응답이 실패한다(돈 경로 아님·허용 파일 밖 → **10A3/10C 이월**).
   - 이 단계가 걷어낸 스텁은 legacy 세션·`engine.can_open_position`·`_sector_lookup`·`_pending_strategy_notional` 넷이다. **`_risk_validator`(None)·`_check_factor_budget`(항상 None)은 여전히 스텁** — 실제 `risk/manager.py` 게이트와 팩터 버킷 게이트는 attach 경로 시험에서 아직 한 줄도 돌지 않는다(S5 인수의 범위). 세션 차단 표본(08:55·15:30)은 legacy 세션·engine 시계 두 축만 옮긴다.
 
+- **Codex 3차 처분(`10d2ca7`) — H7·정리 구문:** H6 은 attach **시점**만 본다(그 뒤 연결된 RiskManager 의 잔류는 못 본다) → **H7:** on_signal 의 stale 루프 직전에서 attach 이고 legacy 장부 3종 중 하나라도 비어 있지 않으면 RuntimeError(그 SIGNAL 만 거부, 브로커 직접 호출 0). `_submit_signal` 의 `finally` 는 `getattr(event, "symbol", None)` 로 symbol 없는 SIGNAL 이벤트도 받는다(정리가 다시 던지면 흡수한 예외를 덮고 루프 밖으로 샌다). engine.py 누적 **98 추가 / 1 삭제**.
+
 ## 5. legacy·US 불변 증명 (네 겹)
 
 1. **구조(diff 검사):** engine.py 의 허용 hunk(H1~H5) 각각에서 추가된 실행 줄이 전부 `_execution_runtime is not None`(및 `gateway is not None`) 가드 안이거나 순수 가산임을 coordinator 가 줄 단위로 확인한다(S2-5 가 `engine.py` +39/−0 을 같은 방식으로 통과).

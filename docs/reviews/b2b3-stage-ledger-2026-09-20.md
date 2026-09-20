@@ -12,7 +12,7 @@
 | Plan | 조사 3관점 + 계약·단계 고정 | 완료 | `47fa76b`·`03cc2d6`·`1f8e3ad`·`e8054b0` (문서만) |
 | S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **완료 — 한정 승인·운영 미설치** (실제 publisher·gateway 없음, 합성 시험 한정) | `01362db`(merge) + `78ca94f` |
 | S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`·`44e543a`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a`·`85a65bc` |
-| S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **Plan 완료(2026-09-21, 기준 `85a65bc`)** — 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md`. Do 는 wave 1 부터 | — |
+| S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()`·`recover_unsent()` 호출자 0건, `trading_ready=False` 그대로. HEAD `10d2ca7` 전체 UTC/KST 각 4758 passed. Codex 1차 APPROVE·2차/3차 CHANGES_REQUIRED → 처분(3차 처분은 Codex 미재확인 — S5 범위). 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md` 의 각 단계 "통합된 실제 인터페이스"가 구현 뒤의 정본 | merge `0975624`·`2c24aca`·`c48cb68`·`e42b014`·`cb1f554`·`5dac8da`·`4242b70` + coordinator `1a6e6d2`·`9a3fe19`·`9572ed2`·`b83b6e7`·`4356d43`·`aee69e3`·`9688d1d`·`486c7d3`·`10d2ca7` |
 | S4 (B3b) | on_signal 내부 직접 SELL·취소0건 해제·eviction | 미착수 | — |
 | S5 (See) | 독립 실큐 인수·최종 broad 리뷰·전체 직렬 | 미착수 | — |
 
@@ -330,7 +330,14 @@
 - **제품 호출자 재확인:** `KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(` 호출 0건(grep).
 - **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
-Codex 교차 리뷰 3차(포그라운드·10분 상한)는 이 wave 의 전체 suite 뒤. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
+### Codex 교차 리뷰 3차 (wave 5 경계, 대상 `3ff04c8`) — **CHANGES_REQUIRED (P0 0 · P1 1 · P2 1)** → coordinator 처분 `10d2ca7`
+
+- 요청 gpt-6-astra/xhigh, 포그라운드·read-only·pytest 금지, 전체 suite 뒤 실행. 범위 `1442f82..3ff04c8 -- src/`(engine.py H1~H6 + Codex 2차 처분인 `recover_unsent`·`_pending` 의 준비 검사).
+- **결함 없음으로 확인된 것:** ① **legacy 불변** — runtime 없는 운영 경로에서 실행 결과를 바꾸는 곳 미발견(`_attached_gateway` 와 중첩 `getattr(..., None)` 은 `engine` 없는 부분 생성 RiskManager 에서도 기존 합산식으로 돌아가고, 새 SIGNAL 분기는 단락 평가, H3 는 기존 `_sector=None` 유지) ② `on_signal` 반환~증거 지역값 확보~`gateway.submit` 사이에 끼어드는 await 없음, `CancelledError` 재전파, OrderEvent 를 큐에 넣지 않음 ③ **H2 에서 예외를 0 으로 바꾸거나 한도를 넓히는 경로 없음**(소비 지점 다섯 곳 모두 무흡수) ④ **Codex 2차 P1·P2 의 처분은 타당** — `recover_unsent` 는 `running=True` 를 거부하고 transaction 내부 가드가 재확인하며, claim 은 송신 전에 저장되므로 sweep 이 송신됐을 수 있는 주문의 예약을 푸는 경로 없음. `_owner_ready` 사전 검사도 낡은 집계를 막는다. (자동 기동 호출이 `src/` 에 없으므로 실제 기동 순서의 보장은 "미확인" — 10A3.)
+- **P1 H6 은 attach 시점만 본다.** `engine.risk_manager is None` 인 상태로 attach 한 뒤 legacy pending 이 남은 RiskManager 가 연결되면, 다음 SIGNAL 의 진입부 stale 루프가 owner 를 거치지 않고 직접 취소·재주문한다(H4·H5 는 그보다 뒤라 못 막는다). → **행동 RED**(`assert ['cancel_all_for_symbol'] == []` 실패 — 직접 호출이 실제로 일어남) → **H7:** on_signal 의 stale 루프 **직전**에서 attach 이고 legacy 장부 3종 중 하나라도 비어 있지 않으면 RuntimeError(`_submit_signal` 이 흡수 → 그 SIGNAL 만 거부·`errors_count` +1·브로커 직접 호출 0·게시 0).
+- **P2 H1 의 `finally` 가 다시 던질 수 있다.** `symbol` 없는 `Event(type=SIGNAL)` 이면 `event.symbol` 접근이 AttributeError 를 내 흡수한 예외를 덮고 run 루프 밖으로 샌다. → 행동 RED(AttributeError 가 `_process_event` 를 탈출) → `getattr(event, "symbol", None)`. 다음 SIGNAL 이 정상 POST 됨까지 단언.
+- **S3 최종 전체 suite(coordinator, HEAD `10d2ca7`, 단독 직렬·다른 세션 pytest 없음, 2026-09-21 06:14~06:25 KST):** UTC **4758 passed / 2 xfailed / 경고 4 / 324.28초**(시작 load 0.81·종료 1.56), KST **4758 / 2 / 4 / 319.85초**(종료 load 1.05), 각 격리 0. `486c7d3` 의 4756 대비 +2(Codex 3차 RED 2건). **S2 마감(4632) 대비 S3 전체 +126.** 기존 xfail 2·경고 4 불변.
+- engine.py 누적 numstat 은 **98 추가 / 1 삭제**, H7 도 attach 가드 안이다. **이 처분은 Codex 의 재확인을 받지 않았다**(Codex 가 제시한 수정안 그대로이며 RED→GREEN 과 전체 suite 로 확인) — S5 최종 broad 리뷰의 범위에 `3ff04c8..10d2ca7 -- src/core/engine.py` 를 포함한다. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 
 ### 이어받는 에이전트 체크리스트 (S3 공통 — 하위 단계마다 반복)
 - [ ] 세부 계획 §4 의 그 단계 "고정 인터페이스"와 실제 시그니처가 일치하는가. §2 의 결정 번호와 어긋나는 구현이 없는가.
@@ -343,3 +350,21 @@ Codex 교차 리뷰 3차(포그라운드·10분 상한)는 이 wave 의 전체 s
 - [ ] 실제 SQLite store·runtime 을 여는 새 시험이 `finally` 에서 `await store.close()`(필요하면 `runtime.shutdown()`)를 부르는가 — 남긴 fd 는 같은 프로세스에서 다음에 도는 fd 계수 시험(`test_execution_account_lease.py`)을 깨뜨린다(wave 1 에서 실제 발생). 새 시험 파일들을 그 파일 **앞에 같은 프로세스로** 돌려 확인한다.
 - [ ] `src/`·`scripts/` 에서 `KRExecutionRuntime(`·`.attach(`·`install_gateway(` 제품 호출자 0건을 grep 으로 재확인했는가.
 - [ ] 전체 suite 는 **어떤 에이전트도 돌지 않을 때** 단독 직렬(UTC→KST)로 돌렸는가.
+
+### S3 의 성과와 한계 (보고 문장 — 이대로 인용한다)
+
+- S3 가 만든 것: runtime 이 붙은 엔진에서 실제 큐의 SIGNAL 이 기존 후보 판단(`on_signal`)을 그대로 거친 뒤 **owner 의 prepare → final 재검사 → dispatch 한 길로만** 송신되는 경로(정상 MARKET BUY·LIMIT/MARKET SELL), 송신하지 못한 요청이 예약을 남기지 않게 하는 종료 전이와 기동 sweep 부품, 그리고 attach 모드의 사이징·한도가 owner 의 예약을 읽게 하는 정합.
+- **S3 는 설치가 아니다.** 제품에 runtime 을 만들고 붙이는 코드는 0건이다. `trading_ready` 는 항상 False 이므로 **정상 송신의 표본은 시험 안에만 있다**(fake HTTP·주입 시계·합성 startup 허가). 현금 고갈(펩트론 99.6%)로 정상 BUY 의 실경로 표본도 0건이다.
+- **시험이 아직 태우지 않는 것:** 실제 `risk/manager.py` 의 `can_open_position`(`_risk_validator` 가 하네스에서 None)·팩터 버킷 게이트(`_check_factor_budget` 스텁) · UNKNOWN 의 실큐 접합 쪽 대조 · 3건 이상 동시 미해결 BUY 의 누적 정합 · dispatch 의 network await 동안 엔진 루프가 멈추는 지연 상한.
+- **진입 가격의 provenance 는 증명되지 않는다** — gateway 가 게시하는 entry quote 의 출처는 SIGNAL 자체(`source='signal'`)다. 실제 market source 결합은 10A2/10A3.
+- 독립 재현(같은 provider, 다른 실행)은 7단계 중 6단계에서 CHANGES_REQUIRED 였고 그 가치는 컸다 — 실제 누수 1건(세션 경계)과 살아남은 변이 15종. Codex 는 그 위에서 P1 3건을 더 찾았다(취소·종료 잔류 2, attach 뒤 연결된 legacy 장부 1). **같은 provider 의 독립 재현과 교차 provider 리뷰는 서로 다른 것을 잡는다.**
+
+### S4 진입 조건 (S3 에서 S4 로 넘긴 것 — S4 Plan 은 이 목록에서 시작한다)
+
+1. **on_signal 진입부의 직접 SELL 폴백**(90초 미체결 SELL → `cancel_all_for_symbol` → MARKET SELL `broker.submit_order` 직접 호출)과 **취소 0건을 최종성으로 읽는 예약 해제**(10분 미체결 BUY)를 owner 경로로. S3 는 attach 에서 둘이 **발화하지 않게** 했을 뿐이다(H4 로 순회 대상이 없고, H7 로 잔류가 있으면 SIGNAL 자체를 거부). 그 결과 **attach 모드에는 지금 미체결 SELL 의 시장가 폴백이 없다** — S4 가 owner 경로로 되살려야 하는 기능이다.
+2. **eviction**(만석 + 고득점 BUY → 가장 약한 포지션 SELL)의 owner 경로 이관. S3 는 attach 에서 호출을 막았다(H5). 권한 표식을 `metadata['source']='replacement'` 문자열에서 `EntryAuthority` 발급 context 로.
+3. **미claim 자식 명령(cancel/modify)의 종료 간선** — `prepare_candidate` 가 자식 행에 부모 `order_ref` 를 싣기 때문에 `abandon_candidate` 로 끝낼 수 없다. 남으면 같은 부모의 이후 취소를 `previous child command unresolved` 로 막는다. 일자 전환도 막는지 S4 에서 확인.
+4. **SELL 지정가의 재확인** — SELL 은 evidence·facts·진입 시세를 요구하지 않아, LIMIT SELL 의 지정가(`broker.get_best_bid` await 로 얻은 값)가 판단~송신 사이에 여전히 타당한지 아무도 다시 보지 않는다.
+5. **계약 귀결의 전제:** claim 이전의 일시 차단(in-flight market source 등)도 그 attempt 를 끝낸다 — 재송신은 같은 intent 의 새 prepare. 보호 SELL 의 재시도 설계는 이 위에서 한다.
+6. UNKNOWN 예약 유지·취소 ACK≠최종성은 lifecycle 에 이미 있다 — S4 는 그것을 실큐 접합에서 대조로 고정한다.
+7. 범위 밖(10C): KOFR(`kr_scheduler.py:6754·6818`)·수동 매수(7597)·CLI 2개·`kr_scheduler.py:978-1004` 의 취소0건 예약 해제·`run_trader.py` 의 sector lookup 예외 뭉갬.
