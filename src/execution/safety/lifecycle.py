@@ -389,11 +389,18 @@ class OrderLifecycleCoordinator:
             if attempt["kind"] == CommandKind.SUBMIT.value:
                 if attempt.get("order_ref") is not None:
                     return state
-            else:
+            elif attempt["kind"] in (CommandKind.CANCEL.value, CommandKind.MODIFY.value):
+                # 면제의 근거는 '실제 SUBMIT 부모의 브로커 주문번호'다. 부모가 없거나 자기 자신·
+                # 다른 자식이거나 주문번호가 없으면 "같다"는 아무것도 식별하지 않는다.
                 parent = state["attempts"].get(attempt.get("parent_attempt_id"))
-                if (attempt.get("command_ref") is not None or parent is None
+                if (attempt.get("command_ref") is not None or parent is None or parent is attempt
+                        or parent.get("kind") != CommandKind.SUBMIT.value
+                        or parent.get("order_ref") is None
                         or attempt.get("order_ref") != parent.get("order_ref")):
                     return state
+            else:
+                # 어긋난 kind 는 어느 쪽으로도 면제하지 않는다(완화 분기를 기본값으로 두지 않는다).
+                return state
             attempt["state"] = OrderState.FINAL_REJECTED.value
             attempt["status"] = attempt["state"]
             attempt["command_status"] = CommandStatus.NOT_SENT.value

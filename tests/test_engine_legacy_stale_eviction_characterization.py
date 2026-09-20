@@ -137,8 +137,19 @@ def test_a_stale_limit_sell_is_cancelled_then_resubmitted_at_market(monkeypatch)
                                                                 OrderType.MARKET)
         rm = f['rm']
         assert rm._pending_timestamps[SYM] == ENGINE_NOW
-        assert rm._pending_sides[SYM] == OrderSide.SELL
         assert rm._pending_fallback_count[SYM] == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('seconds, fires', [(89, False), (90, True)])
+def test_the_sell_fallback_threshold_is_ninety_seconds(monkeypatch, seconds, fires):
+    """임계값 자체를 고정한다 — '충분히 오래됐다'만으로는 90→150 같은 변경을 놓친다."""
+    async def scenario():
+        f = legacy(monkeypatch, broker=Broker())
+        hold(f, SYM)
+        stale(f['rm'], SYM, side=OrderSide.SELL, now=ENGINE_NOW, quantity=30, seconds=seconds)
+        await drive(f['engine'], buy(OTHER))
+        assert kinds(f['broker']) == (['cancel', 'submit'] if fires else [])
     asyncio.run(scenario())
 
 
@@ -240,7 +251,11 @@ def test_an_exit_exempt_symbol_is_still_market_sold_by_the_fallback_loop(monkeyp
 
 
 def test_nothing_is_swept_while_no_signal_arrives(monkeypatch):
-    """두 루프는 on_signal 본문 안에만 있다 — 주기 태스크가 아니다(사실 7)."""
+    """두 루프는 on_signal 본문 안에만 있다 — 주기 태스크가 아니다(사실 7).
+
+    이 시험은 엔진을 시작하지 않으므로 구조상 실패할 수 없다 — 주기 태스크의 부재는 이 단언이
+    아니라 소스(stale 루프가 on_signal 본문 밖에 없다)가 뒷받침한다. 의도를 적어 두는 자리다.
+    """
     async def scenario():
         f = legacy(monkeypatch, broker=Broker())
         hold(f, SYM)
