@@ -389,10 +389,24 @@
 
 | 단계 | 제품 파일 | 상태 | 구현 SHA | 독립 재현 | 통합 SHA |
 |---|---|---|---|---|---|
-| S4-0 | 없음(특성화) | 미착수 | — | — | — |
-| S4-1 | `lifecycle.py` | 미착수 | — | — | — |
+| S4-0 | 없음(특성화) | **통합(제품 0줄)** | `1e0581a` | CHANGES_REQUIRED(시험 공백 — 임계값 미고정·공전 단언) → coordinator 보강 | merge `60a19af` |
+| S4-1 | `lifecycle.py` | **통합(한정 승인·제품 호출자 0건)** | `952028c`(red)→`b8a8b7e` | CHANGES_REQUIRED(**제품 결함 P2 1**·시험 공백 2) → coordinator RED→수정 | merge `9afa8e9` |
 | S4-1b | `commands.py` | 미착수 | — | — | — |
 | S4-2 | `engine.py`·`gateway.py` | 미착수 | — | — | — |
+
+### wave 1 (S4-0 ∥ S4-1) — Do·See 기록 (기준 `6a6ca30`)
+
+- **방법:** workflow `wf_fbc2a382-957` — 단일 writer(요청 opus/high) → 독립 재현(요청 opus/xhigh), 관측 모델 미노출.
+- **S4-0 특성화(제품 0줄, 26건):** runtime 없는 실제 `UnifiedEngine`+실제 inner `RiskManager`+engine 시계 동결, 본문 monkeypatch 0(브로커의 `cancel_all_for_symbol`·`submit_order` 만 심는다). RED 가 아니라 **변이 kill 8/8** 이 인수 근거(폴백 수량 클램프·exit_exempt·폴백 상한·동시호가 분기·+5점·`cancel_ok = cancelled`·승자 보호·코어 보호). 고정한 동작 18항은 계획서 S4-0 절. **드러난 legacy 현행 결함(고치지 않고 고정만 했다):** 동시호가(15:20~15:30)에 취소만 보내고 재주문 없음 · 폴백 상한 뒤 원 지정가 방치 · `submit_order` 예외 시 접수 여부를 모른 채 `clear_pending` · 취소 0건도 최종성으로 읽어 예약 해제 · **`_exit_exempt_ref` 종목도 90초 폴백 루프에서는 그대로 시장가 SELL**(7개 청산 가드 중 이 경로만 누락) · 연쇄 축출.
+  - 독립 재현 CHANGES_REQUIRED(자체 변이 6종 중 3종 생존, 전부 시험 공백): ⓐ `_SELL_TIMEOUT 90→150` 생존 — 표본이 전부 200초라 "90초"가 고정돼 있지 않았다 → 경계 시험(89초 미발화/90초 발화) ⓑ 폴백 성공 분기의 `_pending_sides` 재기록 삭제 생존 — 시험이 같은 값을 미리 심어 단언이 공전했다 → 공전 단언 삭제 ⓒ eviction 제외 검사의 순서 교환 생존 — 구현자는 "제품 probe 없이는 관측 불가"로 처분했으나 재현자가 시험 쪽 프로퍼티 probe 로 관측 가능함을 보였다. 다만 다섯 검사가 모두 부수효과 없는 `continue` 라 **재정렬은 결과를 바꾸지 않는다** → 고정하지 않고 사유를 정확히 기록(계획서). ⓓ "신호 없으면 폴백 없음" 시험은 엔진을 시작하지 않아 구조상 실패할 수 없다 → 독스트링에 그 성격을 명시.
+  - coordinator 변이 재적용: `_SELL_TIMEOUT = 150` → 경계 시험 `[90-True]` 만 실패 확인·원복.
+- **S4-1 `abandon_candidate` 의 kind 인지형 가드(`lifecycle.py`):** 행동 RED 9건(`assert False is True` — 오늘은 미claim 자식을 끝낼 수 없다), 자식 종료는 부모 행을 글자 하나 안 바꾼다. 기존 `test_execution_abandon_candidate.py`(SUBMIT 가드) 0줄 수정·전건 통과, `_unsent` 는 아직 SUBMIT 한정이라 S3 의 해당 시험도 그대로 통과.
+  - **독립 재현이 찾은 제품 결함(P2):** 가드가 `if submit: <엄격> else: <완화>` 라 **완화가 기본값**이고 부모를 검증하지 않았다. ACK 된 SUBMIT 을 "미송신 3축"만 되돌린 복구 행이 `kind` 와 `parent_attempt_id` 두 칸만 어긋나면(자기 자신, 또는 같은 order_ref 를 정상적으로 공유하는 자기 취소 자식) 종료되고 예약 (10, 1,000,200, 1,000,000) → 0. 제품 경로에서는 생기지 않지만 이 가드가 방어하기로 선언한 대상이 바로 복구/위조 행이다. → coordinator: **행동 RED 7건**(예상 밖 kind 4·부모가 자기 자신·부모가 다른 자식·부모와 자식의 order_ref 가 둘 다 None) → 수정: positive 형 `elif kind in (cancel, modify)` + 부모 존재·부모≠자신·부모 kind=submit·부모 order_ref 존재 + `else: return state`. 부모 소실·`parent_attempt_id=None` 거부는 대조로 추가(그 절 삭제 변이가 살아남던 공백).
+  - coordinator 변이 재적용: 가드를 1차 구현 모양으로 되돌리면 **7건 실패** 확인·원복. 관련 6파일 192 passed(lease fd 시험 포함).
+  - 관측해 고정한 현행(판정 보류): 부모가 터미널이고 자식만 남은 표본에서 자식 종료 뒤에도 pending sector 가 풀리지 않는다 — 제품에 취소 호출자가 없어 생길 길이 없고, 취소를 켜는 작업(증거 계약 뒤)의 인수 조건으로 넘긴다.
+- **wave 1 전체 suite(coordinator, 단독·다른 세션 pytest 없음, 2026-09-21 07:38~07:43 KST):** UTC **4813 passed / 2 xfailed / 경고 4 / 323.86초**(시작 load 0.56·종료 1.32), 격리 0. `10d2ca7` 의 4758 대비 +55 = 특성화 26 + 자식 종료 29. **KST 는 wave 2 경계에서 함께 돌린다**(이 wave 는 live 파일 `engine.py` 를 만지지 않았다).
+- legacy 현행 결함 5건은 운영 경로의 별도 작업으로 분리했다(작업 칩 `task_1d1ae719` — S4 는 고치지 않는다).
+- **정리:** 임시 worktree 4개·work 브랜치 2개 제거.
 
 체크리스트는 S3 공통 체크리스트를 그대로 쓰고 세 항목을 더한다:
 - [ ] S4-0 의 특성화가 **현행 결함까지 그대로** 고정했는가("고치고 싶은" 동작을 섞지 않았는가), 그리고 S4-2 뒤에도 한 글자 안 고치고 통과하는가.

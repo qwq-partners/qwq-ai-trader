@@ -78,6 +78,7 @@
   - [eviction] 후보 제외 순서(core·`_pending_orders`·**exit_exempt**·pnl>0·600초)와 정렬 · +5점 미만 스킵 · 발행은 `engine.emit(SignalEvent)` 이고 `metadata['quantity']` 는 전량 · 축출 뒤 원 BUY 는 `G3_risk` 거부이며 `_last_signal_time` 미기록 · **같은 배치의 고득점 BUY 두 건이 서로 다른 희생자를 연달아 축출한다**(사실 9 — legacy 는 닫혀 있지 않다)
 - **변이(제품에 일시 적용해 시험이 죽는지 — 끝나면 원복):** 폴백 수량의 `min(...)` 을 `pos.quantity` 로 / exit_exempt `continue` 삭제 / `fallback_cnt >= _MAX_FALLBACK` 을 False 로 / 동시호가 분기 삭제 / +5 를 +0 으로 / **`cancel_ok = True` 를 `cancel_ok = cancelled` 로**(심사 추가 — "0건도 해제한다"가 실제로 고정됐는지) / pnl>0 제외 삭제 / core_holding 제외 삭제
 - **위험:** 낮음. 특성화가 현행 결함을 "계약"으로 굳히는 것처럼 읽히지 않게 독스트링에 명시한다.
+- **통합된 결과(wave 1, `1e0581a` + coordinator 보강):** 26건. 명세에 없던 갈래 셋도 고정됐다 — 폴백의 `submit_order` False 가 **상한에 닿는 순간**에는 `logger.critical` 뒤 `clear_pending`(손절 포기 지점) · SELL 폴백의 `cancel_all_for_symbol` **예외**는 재주문을 건너뛰고 pending 유지 · **`_exit_exempt_ref` 에 있는 종목도 90초 폴백 루프에서는 그대로 시장가 SELL 로 나간다**(7개 청산 가드 중 이 경로만 누락 — 현행 결함). 고정하지 못한 것: eviction 후보 제외의 **평가 순서** — 다섯 검사가 모두 부수효과 없는 `continue` 라 재정렬이 후보·희생자·발행 건수를 바꾸지 않으므로 행동 시험으로는 의미가 없다(프로퍼티 probe 로 구현 세부를 고정할 수는 있다). BUY 쪽 10분 임계는 하네스가 600 을 심으므로 제품 기본값을 고정하지 않는다. 구동 전제: `_rm` 하네스는 `object.__new__` 라 `_REPLACEMENT_LAST_EVICT_TS`·`_REPLACEMENT_COOLDOWN_SEC` 를 시험이 채워야 하고, 전략 예산 게이트가 `_risk_validator` 보다 앞이라 eviction 표본의 포지션은 작아야(5주) 만석 경로에 닿는다.
 
 ### S4-1 — `lifecycle.py`: 미claim 자식 명령의 종료 간선
 
@@ -96,10 +97,15 @@
 - **변이:** kind 조건을 지우고 `order_ref` 가드를 통째로 제거 / `claim_id is None` 제거 / `command_status is None` 제거 / 부모 order_ref 대조를 True 로 / `command_ref` 부재 요구 제거
 - **위험:** 중간 — 이 가드는 "이미 보낸 주문의 증거를 지우지 마라"는 방어선이다.
 
+- **통합된 실제 인터페이스(wave 1, `b8a8b7e` + coordinator 수정):** 공통 5항(prepared·`claim_id None`·`command_status None`·체결 0·증거 충돌 없음) 뒤에 kind 로 가른다 — `submit` 은 종전대로 `order_ref` 가 있으면 거부, **`cancel`/`modify` 만**(positive 형 `elif … in (…)`) `command_ref` 부재 + 부모 행 존재 + **부모가 자기 자신이 아님** + **부모의 kind 가 submit** + **부모 `order_ref` 가 None 이 아님** + 자식 `order_ref` == 부모 `order_ref` 를 모두 요구한다. 그 밖의 kind 는 `else: return state`. 1차 구현은 완화 분기가 기본값(`else:`)이고 부모를 검증하지 않아, ACK 된 SUBMIT 을 "미송신 3축"만 되돌린 복구 행이 `kind` 와 `parent_attempt_id` 두 칸만 어긋나면(자기 자신·같은 order_ref 를 공유하는 자기 취소 자식) 종료되고 예약 (10, 1,000,200, 1,000,000)이 0 이 됐다(독립 재현의 probe). 필드 이름은 명세와 일치(`parent_attempt_id`·`command_ref`).
+  - 관측해 고정한 현행(옳다고 판정하지 않음): 부모가 이미 터미널이고 자식만 남아 있던 표본에서 자식 종료 뒤에도 **pending sector 는 풀리지 않는다**(`clear_settled_pending_sector` 가 kind≠submit 이면 즉시 반환). 제품에는 취소 호출자가 없어 이 상태가 생길 길이 없다 — 취소를 켜는 작업(증거 계약 뒤)의 인수 조건으로 넘긴다.
+  - "부모를 터미널로 만든 표본"은 FINAL_CANCELLED 합성 증거(`supported_finality=True`)로 만들었다 — 기존 `test_execution_lifecycle.terminal()` 과 같은 성격이며 실제 KIS 취소 종결 계약의 입증이 아니다(§1 사실 1 불변).
+
 ### S4-1b — `commands.py`: `_unsent` 가 자식 명령도 끝낸다
 
 - **제품 파일:** `src/execution/safety/commands.py` · **시험:** `tests/test_execution_dispatch_reasons.py`(결정 ⑨의 예외 1건 개정 + 같은 파일에 추가) · **의존:** S4-1
 - **고정 인터페이스:** `_unsent(request, reason)` 의 "SUBMIT 일 때만" 조건을 걷는다 — 어떤 명령이든 claim 이전에 실패하면 `abandon_candidate` 를 부른다(누가 끝낼 수 있는지는 lifecycle 의 가드가 정한다). 독스트링의 "자식 명령은 S4" 문장을 갱신한다. 그 밖의 분류(`ApplicationBlocked` 재던짐·`dispatch_failed`·False 시 로그)는 그대로.
+- **함께 고칠 것(wave 1 독립 재현):** S4-1 로 거짓이 된 독스트링 2곳 — `commands._unsent` 의 "자식 명령은 … abandon 가드가 구조적으로 거부한다 — 부르지도 않는다" 와 `tests/test_execution_dispatch_reasons.py` 의 해당 시험 독스트링.
 - **RED:** [행동] claim 이전에 실패한 cancel dispatch 뒤 자식 행이 `final_rejected`·`reason_code` 보존이고 같은 부모에 다시 취소를 prepare 할 수 있다(오늘은 자식이 prepared 로 남아 두 번째 prepare 가 `previous child command unresolved`) · [대조] claim **이후** transport 실패의 자식은 `state=='reconciling'`·`command_status=='unknown'` 이고 abandon 이 거부되며 부모 예약 4항이 그대로다(사실 3 — 이 잔류는 S4 가 풀지 않는다는 것을 상태값까지 고정) · [대조] SUBMIT 경로의 기존 시험 불변
 - **변이:** 조건을 다시 SUBMIT 한정으로 / claim 이후 실패에도 abandon 을 부름
 - **위험:** 낮음(제품 호출자 0건). 기존 시험 1건의 단언 반전은 줄 단위로 보고한다.
