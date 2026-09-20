@@ -8,6 +8,12 @@ SQLite·실제 RegimeOwner 이고, 증거는 실제 `CrossStrategyValidator` 와
 **S3 는 설치가 아니다** — 제품에 `KRExecutionRuntime` 을 만들거나 `attach()`·
 `install_gateway()` 를 부르는 코드는 0건이고 제품의 `trading_ready` 는 계속 False 다.
 
+**이 파일이 태우지 않는 것(재사용한 `test_t11_entry_plan._order_env` 의 스텁):** legacy 세션
+(`is_trading_hours`/`_get_current_session`)뿐 아니라 `engine.can_open_position`(항상 통과)·
+`_risk_validator`(None)·`_sector_lookup`(None)도 스텁이다. 그래서 통과 경로에서 실제 일일
+한도·섹터·포지션 크기·현금 게이트는 돌지 않고 `_pending_sector_map` 의 자연 writer 도 실행되지
+않는다(⑮ 는 수동 seed 로 고정). 실제 게이트 통과 경로는 S3-6b 의 parity 시험이 처음 태운다.
+
 시계는 넷을 같은 순간으로 맞춘다: legacy 세션(스텁 — 실제 `KRSession` 표는 S3-6b)·engine
 모듈의 naive 시계(여기서 동결)·CV 모듈 시계(`freeze`)·runtime 주입 시계(`f['clock']`).
 
@@ -374,7 +380,7 @@ def test_eviction_is_not_reached_in_attach_mode(tmp_path, monkeypatch, freeze):
 
 # ── 결정 ⑮·계약 3 ───────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('outcome', ['sent', 'refused'])
+@pytest.mark.parametrize('outcome', ['sent', 'refused', 'raised'])
 def test_the_pending_sector_map_is_empty_after_every_signal(tmp_path, monkeypatch, freeze,
                                                             outcome):
     """성공 경로의 유일한 pop(`update_position` 763)이 attach 에서 막혀 있다(결정 ⑮)."""
@@ -383,10 +389,17 @@ def test_the_pending_sector_map_is_empty_after_every_signal(tmp_path, monkeypatc
         try:
             if outcome == 'refused':
                 f['ready'][0] = False
+            if outcome == 'raised':
+                # 게시~prepare 실패는 예외로 올라온다 — 이 경로의 정상적인 실패 채널이다.
+                async def refuse(*args, **kwargs):
+                    raise ValueError('unresolved_symbol_attempt')
+                f['gateway'].submit = refuse
+            before = f['engine'].stats.errors_count
             f['engine']._pending_sector_map[SYM] = SECTOR
             await drive(f['engine'], buy(SYM))
             assert f['engine']._pending_sector_map == {}
             assert len(posts(f)) == (1 if outcome == 'sent' else 0)
+            assert f['engine'].stats.errors_count == before + (1 if outcome == 'raised' else 0)
         finally:
             await teardown(f)
     asyncio.run(scenario())
@@ -509,4 +522,44 @@ def test_eviction_still_runs_on_the_legacy_path(tmp_path, monkeypatch, freeze):
             lambda *args, **kwargs: (False, '최대 포지션 수 도달'))})()
         await drive(legacy, buy(SYM, score=99.0))
         assert len(evicted) == 1 and evicted[0]['new_symbol'] == SYM
+    asyncio.run(scenario())
+
+
+def test_the_evidence_is_taken_before_anything_else_can_replace_it(tmp_path, monkeypatch, freeze):
+    """계약 3: 증거는 on_signal 반환 직후의 지역값이다.
+
+    `_last_qualification_evidence` 는 공유 RiskManager 의 가변 속성이다. 반환과 submit 사이에
+    무엇이든 끼어들어 속성을 바꾸면, 늦게 읽는 구현은 **다른 요청의 증거**를 이번 intent 로 게시한다.
+    """
+    async def scenario():
+        f = await wired(tmp_path, monkeypatch, freeze)
+        try:
+            rm, sentinel, seen = f['rm'], object(), []
+            original_signal, original_submit = rm.on_signal, f['gateway'].submit
+
+            class Trap:
+                """`.order` 를 읽는 순간 속성을 바꿔 치운다 — 읽기 순서를 관측 가능하게 만든다."""
+                def __init__(self, inner):
+                    self._inner = inner
+
+                @property
+                def order(self):
+                    rm._last_qualification_evidence = sentinel
+                    return self._inner.order
+
+            async def trapped(event):
+                result = await original_signal(event)
+                return [Trap(result[0])] if result else result
+
+            async def record(event, order, evidence):
+                seen.append(evidence)
+                return await original_submit(event, order, evidence)
+
+            rm.on_signal = trapped
+            f['gateway'].submit = record
+            await drive(f['engine'], buy(SYM))
+            assert len(seen) == 1 and seen[0] is not sentinel and seen[0] is not None
+            assert len(posts(f)) == 1
+        finally:
+            await teardown(f)
     asyncio.run(scenario())
