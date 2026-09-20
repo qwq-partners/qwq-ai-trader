@@ -1,5 +1,7 @@
 # Claude 인계 — 브랜치 정리와 엔진 마이그레이션 (2026-09-20)
 
+> **인계 이후 진행 위치(2026-09-20 갱신):** 아래 §1 "B2/B3" 는 착수됐다. 단계별 Plan/Do/See·재현 명령·리뷰 판정·이어받는 체크리스트·잔여는 **`docs/reviews/b2b3-stage-ledger-2026-09-20.md`(단계 원장)** 가 정본이고, 계약·단계 정의는 `docs/superpowers/plans/2026-09-20-b2b3-request-bound-qualification.md` 다. 이 문서의 경계(main 병합·배포·재시작·주문·설정·Toss grant 미실행, `trading_ready=False`, MODIFY 미지원)는 그대로 유효하다. 이어받는 세션은 원장의 "상태 요약"과 "공통 작업 방법"부터 읽는다.
+
 ## 먼저 읽을 결론
 
 운영 기준은 main, 계속 개발할 정본은 **`feature/engine-safety-design-20260917`** 한 개다. C4 제품 기준은 **`ab044c4edeb702911fee998973cb00a263a7b085`**다. 추가 확인 없이 정리하라는 후속 지시에 따라 다른 로컬54/원격7 branch heads와53개 worktree는 **복구 가능한 archive로 전환**했다. 최종 상시 branch/worktree는 main·engine 두 개이며 임시 문서 PR 작업공간은 병합 후 제거한다. 다른 worker를 다시 활성화하거나 중복 구현하지 않는다.

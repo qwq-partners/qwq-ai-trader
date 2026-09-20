@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — feat(safety): B2/B3 S1 — 불변 판단 사실과 final kernel 재검사 (한정 승인·운영 미설치)
+
+- 자동 매수(SUBMIT+BUY+AUTOMATIC)만 대상으로, 판단 시점 값을 frozen `EntryDecisionFacts`(`src/execution/safety/decisions.py` 신규)로 굳혀 게시(`publish_qualification_source`·`publish_decision_facts`)하고, prepare·final 공통 관문 `commands._evaluate` 한 곳에서 **현재 owner snapshot 의 경제값 + facts** 로 B1 pure kernel(`compose_sizing`)을 재실행해 `request.quantity <= 재유도 수량`·설정 version·소비 출처(version·digest·as_of·당일)·만료를 재검사한다. binding 에 `decision_facts_digest`, sector 정본은 facts. USER·SAFE_ASSET·SELL·CANCEL 동작 무변. `engine.py`·kernel·`risk_policy` 판정 로직 무접촉.
+- Plan→Do→See: 구현 `8a571b8`(red)→`33b7643` → 독립 리뷰 3건(Codex 요청 astra/xhigh, Claude 요청 opus/xhigh 2렌즈 + 발견 11건 반증 검증) **전부 CHANGES_REQUIRED·P0 0** → 수정 `206376b`(red)→`720c913`(R1 hybrid 명시 거부, R2 빈 소비 출처 거부, R3 출처 as_of 결합, R4~R7 시험 강화) → 독립 재검증 2명(수정 정확성 APPROVE / 시험 강도 CHANGES_REQUIRED: sector 가드 변이 생존) → `78ca94f` sector 가드 시험(같은 변이로 2건 실패 확인 후 원복) → **Codex 재리뷰 APPROVE(새 P0/P1/P2 0)**. 통합 `01362db`(merge, 리뷰된 SHA 보존).
+- 핵심 교훈: 1차 구현은 코드가 맞았는데 **시험이 헛돌았다** — 재검사의 예약 차감·전략 잔여·overlay 항을 지워도 364건 전부 통과. 수정 후 변이 7종(+sector)이 각각 ≥1건 실패하도록 구속했고, parity 11표본은 실제 legacy wrapper 호출값(175/139/100/100/153/40/125/192/210/227/87)과 대조한다.
+- 검증: 대상 10파일 `720c913` 기준 UTC·KST 각 375 passed(재검증 2명이 각각 재현), sector 보강 뒤에는 **전체 UTC 4442 passed/기존 xfail2/경고4(272.84초)·KST 4442/2/4(266.91초)**, 각 exit0·격리0(C4 4403 대비 +39 = 새 시험 파일). 전체 suite 는 운영 서버 메모리 제약(2 vCPU·3.8GB·스왑 100%)으로 다른 worker 없이 단독 직렬 실행.
+- 잔여(수정하지 않고 명시): 실제 qualification publisher 부재(S2), `hybrid_enabled` 는 게시자 자기신고 — 실제 policy publisher 배선 전 `snapshot.policy.hybrid_enabled` 대조·"설정 True·facts False→거부" 시험 필수, facts 설정 전용 값의 owner 교차검증 없음, `entry_decision_facts`·`qualification_sources` 정리 writer 없음(소비는 fail-closed), wrapper `get_available_cash()` 실산식 parity 미대조. 단계별 증거·체크리스트·다음 진입 조건 정본 `docs/reviews/b2b3-stage-ledger-2026-09-20.md`.
+- main/운영·배포·재시작·주문·설정·Toss grant 변경0. 제품 코드의 `trading_ready=False`·MODIFY 미지원 유지. 모든 GREEN 은 fake HTTP·주입 시계·시험용 합성 startup 허가 위의 결과이며 실송신 경로 검증이 아니다.
+
 ## 2026-09-20 — docs(plan): B2/B3 request-bound qualification·최종 사이징 실행 계획 (계획만, 구현 0)
 
 - 인계 §1 Plan 단계. `214223e` 기준 읽기 전용 3관점 조사(실제 주문 경로 관문 지도 / safety 요청→준비→최종→송신 경로 / 실큐 하네스, 각 Opus·high 요청·실제 모델 메타데이터 미검증)와 coordinator 의 `commands.py` 전문·kernel 계약·snapshot 필드 대조로 계약과 단계를 고정했다. 정적 추적이며 런타임 관측이 아니다.

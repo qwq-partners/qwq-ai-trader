@@ -10,7 +10,7 @@
 | 단계 | 범위 | 상태 | 통합 SHA |
 |---|---|---|---|
 | Plan | 조사 3관점 + 계약·단계 고정 | 완료 | `47fa76b`·`03cc2d6`·`1f8e3ad`·`e8054b0` (문서만) |
-| S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **리뷰 수정 라운드 진행 중** (미통합) | — |
+| S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **완료 — 한정 승인·운영 미설치** (실제 publisher·gateway 없음, 합성 시험 한정) | `01362db`(merge) + `78ca94f` |
 | S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher | 미착수 | — |
 | S3 (B3a) | SIGNAL→gateway→ORDER command ID→dispatch | 미착수 (사전 확인만, 계획서 "S3 사전 확인") | — |
 | S4 (B3b) | on_signal 내부 직접 SELL·취소0건 해제·eviction | 미착수 | — |
@@ -52,9 +52,24 @@
 - **비-hybrid parity 는 코드상 일치**(세 리뷰 공통): 가용 현금·core reserve·pool·단위(%/비율)·전략 잔여·일손실·overlay 순서·ATR skip·수수료 포함 risk cap·최소금액·3주·MARKET 1.3. 리뷰어가 직접 넣은 표본(일손실, overlay 0.5/1.1/1.2/1.3, 전략 예산 소진, 최소금액 바닥)에서 legacy == recompose. 즉 **코드는 맞고 시험이 없었다.**
 - **처분표 R1~R7·기각 2건·계약 문언 정정·잔여 4건:** 계획서 "S1 독립 리뷰 처분" 절이 정본이다(`e8054b0`).
 
-### Do·See (리뷰 수정 라운드) — 진행 중
-- 기준 `33b7643`, 브랜치 `work/s1-fixes`. 단일 writer(요청 opus/high) → 독립 재검증 2명(요청 opus/xhigh: 수정 정확성 / 시험 강도). 인수 조건: 변이 (a)(c)(d)(f)(g)(h)(i) 각각 ≥1건 실패.
-- 결과는 완료 후 이 절에 채운다: 수정 커밋 SHA, 항목별 상태, 변이 kill 표, 재검증 판정, Codex 재리뷰 판정, 통합 SHA, 전체 suite UTC/KST 수치.
+### Do (리뷰 수정 라운드)
+- 기준 `33b7643`, 브랜치 `work/s1-fixes`, 단일 writer(요청 claude-opus-5/high, metadata 미노출). 커밋 `206376b` `test(red): S1 review fixes acceptance` → `720c913` `fix(safety): S1 review fixes R1-R7`. 변경 4파일: `decisions.py`·`commands.py`·`test_execution_decision_facts.py`·`test_execution_command_owner.py`(fixture `facts()` 에 `hybrid_enabled=False` 추가뿐).
+- 항목별: **R1** `EntryDecisionFacts.hybrid_enabled: bool` 필수(기본값 없음·`type is bool`·digest 포함), `recompose_quantity` 가 True 면 `ValueError('unsupported_hybrid_sizing')`. **R2** 빈 `sources` 는 DTO 에서 `invalid_consumed_source`(falsy 검사가 아닌 길이 비교). **R3** `_consumed_sources` 가 게시본 `as_of` 동일성·당일(KST, `runtime._now()`)·`as_of <= decided_at` 을 추가로 요구(staticmethod → 인스턴스 메서드, 호출부 시그니처 무변, 사유 코드 `stale_qualification_source` 재사용). **R4~R7** 은 제품 변경 없이 시험만: status 를 `is NOT_SENT` + 저장 상태(`command_status=='not_sent'`, `state=='final_rejected'`)로 좁힘, UNKNOWN 별도 시험(주문번호 없는 ACK → 예약 507500.000/50주 유지·`blocked_unknown`·재 dispatch POST 추가 0), parity 구속 표본 7건, final `reservation` 140→130주·`cash` 는 "무관 종목 134주 보유 심기"(자산 200만 유지, 현금만 66만), binding digest 위조 시험, 무관 fill·무관 취소 ACK 대조, hashkey×reservation.
+- parity 추가 표본의 기대값은 전부 **실제 legacy wrapper 호출값**이며 리뷰어 수치와 일치: pending 예약 153 · 전략 예산 소진 40 · volatility 0.5→125 · calendar 1.1→192 · conviction 1.2→210 · position 1.3→227 · 일손실 절반 축소 87 (기존 nominal 175 / risk 139 / core 100 / MARKET 1.3 100 포함 11표본).
+- 수정 worker 가 밝힌 이탈: ① R3 의 "전일 게시본"은 시계 이동이 아니라 합성 state 주입으로 구성(시계를 다음 날로 옮기면 `_require_day_admission` 이 먼저 `day_transition_admission_closed` 로 막아 새 검사에 도달하지 못함 — 실측) ② R7 `other_fill` 만 요청 수량 50→49(무관 매수 수수료 14원으로 equity 2,000,000→1,999,986, kernel 상한 50→49), POST 단언은 절대값 1 → "직전 대비 +1" ③ DTO type 검사 사유 코드 `invalid_decision_hybrid` 신설.
+- coordinator 보강 `78ca94f` `test(safety): pin the facts sector guard…`: 재검증에서 살아남은 변이(아래)에 대응해 시험 3건 추가. 제품 코드 무변경.
+
+### See (수정 라운드)
+- **독립 재검증 2명**(구현자와 다른 실행, 요청 opus/xhigh, `720c913` 기준): ① 수정 정확성 렌즈 **APPROVE_THIS_SLICE** — R1~R7·기존 단언 무변·면제 경로 무변 전부 확인, UTC·KST 각 375 passed·격리 0. ② 시험 강도 렌즈 **CHANGES_REQUIRED** — R1~R7 은 전부 확인했으나 자체 추가 변이 3종 중 1종 생존.
+- **변이 kill(수정 worker 보고 → 재검증 2명이 각각 재현, 전부 일치):** (a) 예약 차감 제거 → 3건 실패 · (c) 전략 잔여 제거 → 1건 · (d) overlays 제거 → 1건 · (f) `_bound` digest 대조 제거 → 1건 · (g) as_of 검사 제거 → 3건 · (h) hybrid 거부 제거 → 1건 · (i) 빈 sources 거부 제거 → 2건. 재검증자 추가 변이: 수량 비교 `<=`→`<` 등 kill.
+- **생존 변이 → 처분:** `commands._decision_facts` 의 `_require(sector is None or sector == facts.sector, 'decision_facts_sector_mismatch')` 를 `_require(True, …)` 로 바꿔도 375건 전부 통과(P1, 가드는 존재·시험 부재. 이 값이 `EntryPolicyInput` 의 섹터 집중 한도와 `attempt['sector']`·binding 에 쓰인다). → `78ca94f` 에서 `test_caller_sector_must_match_the_published_facts_sector[None|금융]`(정확한 사유·attempts `{}`·POST 0)와 `test_facts_sector_is_canonical_when_the_caller_passes_none` 추가. **coordinator 가 같은 변이를 적용해 앞의 2건이 실패함을 확인한 뒤 원복**(`git diff --stat -- src/` 비어 있음).
+- **재검증 공통 P2 → 잔여 7 로 수용:** `hybrid_enabled` 는 게시자 자기신고이고 owner snapshot 에 대조할 값이 없다(거짓 False 는 검출 불가, 방향은 fail-open). 두 재검증자 모두 "지금 코드를 바꾸지 말고 실제 publisher 배선 시 policy 에 실어 대조"를 권고. `EffectiveRiskPolicy` 확장은 PolicyContext 직렬화·다수 시험 fixture 에 파급되고, policy publisher 자체가 아직 운영에 없다.
+- **통합:** `01362db` `Merge S1 (B2a)…`(`--no-ff`, 리뷰된 SHA `8a571b8`·`33b7643`·`206376b`·`720c913` 보존) + `78ca94f`.
+- **Codex 교차 재리뷰(요청 gpt-6-astra/xhigh, read-only, HEAD `78ca94f`, job `task-mu9gp9oc-h4etpz`, session `01a0bd99-35bb-7921-9b6c-6e522871ff68`): APPROVE — 이전 발견 8항목 전부 해소, 새 P0/P1/P2 0건.** pytest 는 돌리지 않고(호스트 메모리 제약으로 금지시킴) 메모리 내 재현으로 확인: ① final `cash` 사례는 기존 gate 가용 560,000원·owner 현금 660,000원으로 둘 다 통과하고 kernel 상한만 `floor(560000/13000)`=**43주**, `reservation` 은 580,500/680,500원·kernel **44주** (50주 요청의 주문가치 500,000·정책 gate 필요액 500,500·owner 예약 507,500원) ② `as_of` 검사 UTC/KST 자정 경계 8개 재현 일치(`runtime._now()` 가 항상 KST 정규화) ③ `other_fill` 49주는 타당(수수료 14원 → equity 1,999,986 → 25% 명목 499,996.50 → 49주; "경제적으로 유효한 요청이 무관 fill 로 stale 처리되지 않음"의 증명 목적에 맞음) ④ `hybrid_enabled` 키 없는 과거 행은 키 집합 검사에서 `invalid_decision_facts` 로 해당 자동 BUY 만 차단 ⑤ 기존 시험 단언 225개 AST 보존. **조건:** 실제 publisher 연결 전 `snapshot.policy.hybrid_enabled` 대조와 "설정 True·facts False → 거부" 시험은 필수(잔여 7). 이 판정은 소스 리뷰와 제한된 재현에 한정되며 전체 시험 통과·운영 승격을 뜻하지 않는다.
+
+- **전체 suite(coordinator, HEAD `78ca94f`, 다른 worker 없이 단독 직렬, 2026-09-20 16:02~16:11 KST):** UTC **4442 passed / 2 xfailed / 경고 4 / 272.84초**, KST **4442 passed / 2 xfailed / 경고 4 / 266.91초**, 각 exit 0·`[테스트 격리] … 0건`. C4 기준선 4403 대비 +39 = `tests/test_execution_decision_facts.py` 의 39건(36 + sector 보강 3). 기존 xfail 2·경고 4(pykrx 1 + fork 3)는 그대로다. 실행 후 가용 메모리 916MB.
+- **판정:** S1 은 **한정 승인**이다. 승인 범위 = "safety 패키지 안에서 자동 BUY 의 prepare·final 이 불변 facts 와 현재 snapshot 으로 수량·출처·설정·만료를 재검사한다"는 계약의 구현과 합성 시험. **승인 범위 밖:** 실제 CV/LLM 이 facts 를 만드는지(S2), SIGNAL 이 이 경로를 타는지(S3), 운영 설치·실송신·성능.
+- **정리:** 임시 worktree `wf_37a6f0db-0ab-1`(1차 구현)·`wf_52cc12bf-265-*`(수정·재검증)와 로컬 브랜치 `work/s1-decision-facts`·`work/s1-fixes` 는 통합 후 제거한다(리뷰된 커밋은 merge 로 feature 브랜치에 보존). 리뷰용 worktree 13개는 1차 리뷰 직후 제거했다(전부 clean — 변이 원복 확인).
 
 ### 이어받는 에이전트 체크리스트 (S1)
 - [ ] `git log --oneline 03cc2d6..<S1 통합 SHA>` 로 RED 커밋이 제품 커밋보다 앞에 있는지 확인.
@@ -72,6 +87,8 @@
 4. 과거 checkpoint 의 자동 BUY 는 `decision_facts_required`/`decision_facts_changed` 로 송신 차단(호환 우회 없음) — 실제 과거 checkpoint 재현은 하지 않음.
 5. hybrid 사이징은 재현하지 않고 **명시 거부**한다(운영 설정 `hybrid.enabled: false`). 켜려면 policy 계약 확장과 parity 표본이 먼저다.
 6. 실제 qualification publisher 가 없다 — facts 의 CV 점수·규칙 ID·LLM verdict·배율·출처 digest 는 전부 시험의 합성값(S2 범위).
+7. `hybrid_enabled` 는 **게시자 자기신고**다. True 신고는 명시 거부되지만(변이 (h) kill), 거짓 False 를 대조할 owner 값이 없다(`EffectiveRiskPolicy` 에 hybrid 축 없음, `config_version` 은 불투명 문자열). 실제 policy publisher 를 붙일 때 `policy.hybrid_enabled` 를 실어 `_decision_facts` 에서 `facts.hybrid_enabled == snapshot.policy.hybrid_enabled` 를 대조하고, "config 에서 hybrid on + facts False → 거부" RED 를 먼저 세운다.
+8. `test_published_facts_must_describe_the_actual_request` 는 `pytest.raises(ValueError)` 에 `match` 가 없어 어느 검사가 거부했는지 고정하지 않는다(수량 사례는 변이 (e) 로 구속됨). `_dispatch` 가 `_bound` 의 모든 실패를 `claim_not_available` 로 뭉개는 것과 같은 계열 — 사유별 구속은 변이로만 증명된다.
 
 ### S2 진입 조건
 - S1 이 engine 브랜치에 통합되고 전체 suite UTC·KST 직렬 통과·격리 0, 이 원장과 CHANGELOG·계획서·인계 문서가 갱신·push 됨.
