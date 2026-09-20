@@ -3,6 +3,7 @@
 > 2026-09-20 · 기준 `feature/engine-safety-design-20260917` `214223e`(제품 트리 = C4 `ab044c4`) ·
 > 상위: `2026-09-18-engine-writer-migration.md` 10B, 인계 `docs/operations/claude-migration-handoff-2026-09-20.md` §1.
 > 상태 표기는 **계획**이다. 이 문서의 어떤 항목도 구현·검증 완료를 뜻하지 않는다.
+> **단계별 진행·증거·체크리스트·잔여는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md`(단계 원장)에 있다.** 리뷰하거나 이어받을 때는 원장부터 읽는다.
 > 운영 경계 불변: main 병합·배포·재시작·주문·설정·Toss grant 변경 없음, `trading_ready=False` 유지, MODIFY 미지원 유지.
 
 ## 0. 조사로 확정한 사실 (읽기 전용 3관점 + coordinator 소스 대조)
