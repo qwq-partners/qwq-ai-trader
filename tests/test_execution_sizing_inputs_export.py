@@ -73,6 +73,7 @@ def test_r5_risk_export_keeps_pre_atr_multiplier_and_stop_triple(external_factor
     assert manager._calculate_position_size(event) == 139
 
     inputs = manager._last_sizing_inputs
+    assert set(inputs) == EXPORT_KEYS   # risk 경로에서만 key 가 늘거나 줄어도 잡는다
     assert inputs['position_multiplier'] == atr_position_multiplier(6.0) != 1.0
     assert inputs['atr_pct'] == 6.0
     assert inputs['stop_pct'] == Decimal('5')

@@ -464,6 +464,8 @@ def test_r6_adversarial_failure_falls_back_to_single_llm(freeze):
     assert _llm_check(validator) is False   # adv.approved 였다면 True 였을 것
     assert len(calls) == 1
     assert validator.last_llm_reason == 'rejected_soft'
+    # 일일 한도 계수: 기본 1 + 적대검증 보정 1 + 폴백 보정 1 (2026-08-08 이중 계수 수정의 계약)
+    assert validator._daily_llm_count == 3
 
 
 @pytest.mark.parametrize('hm, kwargs', [
