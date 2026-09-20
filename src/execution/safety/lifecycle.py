@@ -360,6 +360,39 @@ class OrderLifecycleCoordinator:
         await self.owner.mutate(f"claim:{attempt_id}:{uuid4().hex}", reduce)
         return claimed
 
+    async def abandon_candidate(self, attempt_id: str, *, reason: str) -> bool:
+        """송신을 시작한 적 없는 prepared 시도를 한 transaction으로 종료한다.
+
+        claim_id가 None인 것이 "POST를 시작한 적 없음"의 증거다. 그 밖의 시도는
+        이미 송신됐을 수 있으므로 거부하고 예약을 그대로 둔다. 미송신 포기와
+        '보냈는데 거부됨'의 구분은 reason 하나로 한다.
+        """
+        if type(reason) is not str or not reason.strip():
+            raise ValueError("abandon reason required")
+        abandoned = False
+
+        def reduce(state):
+            nonlocal abandoned
+            attempt = state.get("attempts", {}).get(attempt_id)
+            if (not attempt or attempt["state"] != OrderState.PREPARED.value
+                    or attempt["claim_id"] is not None
+                    or attempt.get("command_status") is not None
+                    or attempt.get("order_ref") is not None
+                    or attempt["observed_quantity"] != 0 or attempt["applied_quantity"] != 0
+                    or attempt.get("evidence_conflict")):
+                return state
+            attempt["state"] = OrderState.FINAL_REJECTED.value
+            attempt["status"] = attempt["state"]
+            attempt["command_status"] = CommandStatus.NOT_SENT.value
+            attempt["reason_code"] = reason
+            attempt["version"] += 1
+            _release_resources(state, attempt_id)
+            abandoned = True
+            return state
+
+        await self.owner.mutate(f"abandon:{attempt_id}:{uuid4().hex}", reduce)
+        return abandoned
+
     async def record_result(self, attempt_id: str, claim_id: str, result: CommandResult,
                             *, expected_attempt_version: int | None = None) -> bool:
         accepted = False
