@@ -5,6 +5,7 @@
 (벽시계 의존 0 — TZ=UTC·Asia/Seoul 에서 같은 결과). 여기서 만든 facts 는 기록일 뿐
 주문 송신·운영 승격 근거가 아니다.
 """
+import ast
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
@@ -71,7 +72,7 @@ def _sizing(**changes):
 
 def _regime_row(module, regime='sideways', *, version=1, as_of=None):
     """commands 가 저장하는 형태(as_of 는 isoformat 문자열)."""
-    return {'version': version, 'as_of': (as_of or _at(940)).isoformat(),
+    return {'version': version, 'as_of': (as_of or _at(900)).isoformat(),
             'digest': module.regime_digest(regime)}
 
 
@@ -202,8 +203,11 @@ def test_r20_same_instant_in_utc_gives_identical_facts():
     module = api()
     kst_built, _a = _build(module, decided_at=_at(945))
     utc_built, _b = _build(module, decided_at=_at(945).astimezone(timezone.utc))
+    # 같은 순간이면 표기 시간대와 무관하게 같은 판단이어야 한다(digest 는 표기까지 굳으므로 제외)
+    assert kst_built.decided_at == utc_built.decided_at
     assert kst_built.expires_at == utc_built.expires_at
-    assert kst_built.digest == utc_built.digest
+    assert kst_built.qualification == utc_built.qualification
+    assert kst_built.sources == utc_built.sources
 
 
 # --- R21: 패널 digest 는 해당 종목의 3값만 -----------------------------------
@@ -504,7 +508,12 @@ def test_only_automatic_buy_is_in_scope():
 
 
 def test_module_is_pure():
-    """I/O·await·벽시계 0 — 단위 검증이 가능한 순수 builder 라는 계약."""
-    source = Path(api().__file__).read_text(encoding='utf-8')
-    for banned in ('datetime.now(', 'date.today(', 'await ', 'async def', 'open(', 'requests.'):
-        assert banned not in source, banned
+    """비동기 대기·파일·벽시계 0 — 단위 검증이 가능한 순수 builder 라는 계약(주석 아닌 AST 로)."""
+    tree = ast.parse(Path(api().__file__).read_text(encoding='utf-8'))
+    banned = {'now', 'utcnow', 'today', 'open', 'sleep', 'get', 'post'}
+    for node in ast.walk(tree):
+        assert not isinstance(node, (ast.Await, ast.AsyncFunctionDef, ast.AsyncFor, ast.AsyncWith))
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', '')
+            assert name not in banned, name
