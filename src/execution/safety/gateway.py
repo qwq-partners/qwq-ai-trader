@@ -77,9 +77,31 @@ class SignalGateway:
         return sum((fact.reserved_cash for fact in self._pending()
                     if fact.side == 'buy' and fact.strategy == strategy), Decimal('0'))
 
+    async def recover_unsent(self) -> list[str]:
+        """기동 전용 sweep: 송신을 시작한 적 없는 prepared SUBMIT 을 끝내고 예약을 푼다.
+
+        prepare 와 claim 사이의 취소·종료·crash 는 같은 호출 안에서 정리할 수 없다. 재시작하면
+        그 요청 객체도 사라져 아무도 보낼 수 없으므로, 남은 행은 예약과 일자 전환만 막는다.
+        누가 끝낼 수 있는지는 `abandon_candidate` 의 가드가 정한다(여기서 다시 판정하지 않는다).
+        엔진이 도는 중에는 진행 중인 제출과 겹치므로 거부한다.
+        """
+        _require(not self.runtime.engine.running, 'gateway_recover_requires_stopped_engine')
+        swept = []
+        for attempt_id, attempt in list(self.commands.owner.state.get('attempts', {}).items()):
+            if attempt['kind'] == 'submit' and attempt['state'] == 'prepared':
+                if await self.runtime.lifecycle.abandon_candidate(attempt_id,
+                                                                  reason='startup_unclaimed'):
+                    swept.append(attempt_id)
+        if swept:
+            logger.warning('[게이트웨이] 미송신 시도 {}건을 기동 시 정리했습니다', len(swept))
+        return swept
+
     def _pending(self):
         # snapshot 을 못 만드는 상태에서 0 을 지어내면 예약이 없는 것처럼 읽힌다(fail-closed).
-        return self.commands._snapshot(self.commands.owner.state).pending
+        # 저장과 게시가 어긋난 owner 의 메모리 state 는 낡았을 수 있으므로 먼저 준비 상태를 본다.
+        state = self.commands.owner.state
+        self.commands._owner_ready(state)
+        return self.commands._snapshot(state).pending
 
     def _bind(self, event, order, now):
         key = (order.symbol, order.side, order.strategy)

@@ -574,3 +574,76 @@ def test_the_intent_is_keyed_by_symbol_side_and_strategy(tmp_path, monkeypatch):
         finally:
             await f['runtime'].shutdown(); await f['store'].close()
     asyncio.run(scenario())
+
+
+# ── Codex 교차 리뷰 2차 (취소·종료가 남기는 미claim 잔류) ───────────────────
+
+def test_a_cancelled_submit_leaves_residue_that_the_startup_sweep_clears(tmp_path, monkeypatch,
+                                                                         freeze):
+    """prepare 와 claim 사이의 취소·종료·crash 는 같은 호출 안에서 정리할 수 없다.
+
+    그래서 정리는 다음 기동의 sweep 몫이다 — 엔진이 도는 중에는 거부한다(진행 중인 제출과 겹친다).
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            found = await evidence(monkeypatch, freeze)
+
+            async def cancelled(*args, **kwargs):
+                raise asyncio.CancelledError()
+
+            monkeypatch.setattr(f['commands'], 'dispatch', cancelled)
+            with pytest.raises(asyncio.CancelledError):
+                await f['gateway'].submit(buy(SYM), order(), found)
+            attempt = only_attempt(f)
+            assert attempt['state'] == 'prepared' and attempt['claim_id'] is None
+            assert reservations(attempt)[0] == 10
+            f['engine'].running = True
+            with pytest.raises(CommandValidationError,
+                               match='gateway_recover_requires_stopped_engine'):
+                await f['gateway'].recover_unsent()
+            assert only_attempt(f)['state'] == 'prepared'
+            f['engine'].running = False
+            assert await f['gateway'].recover_unsent() == [attempt['attempt_id']]
+            attempt = only_attempt(f)
+            assert (attempt['state'], attempt['reason_code']) == ('final_rejected',
+                                                                   'startup_unclaimed')
+            assert reservations(attempt) == (0, D('0'), D('0'), None)
+            assert await f['gateway'].recover_unsent() == []
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_the_startup_sweep_never_touches_a_sent_order(tmp_path, monkeypatch, freeze):
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            found = await evidence(monkeypatch, freeze)
+            result = await f['gateway'].submit(buy(SYM), order(), found)
+            assert result.status is CommandStatus.ACKNOWLEDGED
+            before = dict(only_attempt(f))
+            assert await f['gateway'].recover_unsent() == []
+            assert only_attempt(f) == before
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_the_read_helpers_refuse_an_owner_that_needs_recovery(tmp_path, monkeypatch):
+    """저장과 게시가 어긋난 owner 의 메모리 state 는 낡았다 — 예약 0 으로 읽히면 한도가 넓어진다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            assert f['gateway'].reserved_cash() == D('0')
+            f['runtime'].owner._healthy = False
+            try:
+                with pytest.raises(CommandValidationError, match='store_or_publication_unhealthy'):
+                    f['gateway'].reserved_cash()
+                with pytest.raises(CommandValidationError, match='store_or_publication_unhealthy'):
+                    f['gateway'].pending_strategy_notional('sepa_trend')
+            finally:
+                f['runtime'].owner._healthy = True
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
