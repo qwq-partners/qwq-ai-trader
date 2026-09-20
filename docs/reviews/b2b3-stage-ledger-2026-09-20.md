@@ -283,6 +283,7 @@
   - **P2-d 전송 객체:** prepare 뒤에 만들던 `GuardedKISTransport` 를 예약 이전으로 당김. 부수 실측: `engine.broker` 가 None 이어도 누수는 없다 — NOT_SENT/`preparation_failed`·`final_rejected`·예약 0(시험으로 고정).
   - **P2-e 합산식 복제(수용):** helper 두 줄이 `risk_policy.py:716`·`decisions.py:283-284` 와 같은 식을 다시 적었다. 공용 함수로 뽑으려면 B1·S1 파일을 건드려야 해 수용하고, 갈라짐은 S3-6b 의 parity RED 가 행동으로 잡게 한다. **P2-f 인계:** engine 의 `_reserved_cash` 는 property, gateway 쪽은 예외를 내는 메서드 · core_reserve 합산 기준 차이 → 계획서 S3-6b 의 H2 에 명시.
 - **coordinator 변이 재적용:** 평가가격(B)·intent 키(C)·config 사전 대조 무력화(A′) 세 변이를 직접 넣어 **각각 해당 시험만 실패**함을 확인 후 원복·트리 clean. P1 은 수정 전 RED 실패를 실측.
+- **wave 3 전체 suite(coordinator, HEAD `09dcf77`, 단독 직렬·다른 세션 pytest 없음, 2026-09-21 03:53~04:03 KST):** UTC **4709 passed / 2 xfailed / 경고 4 / 303.16초**(종료 시 load 1.68), KST **4709 / 2 / 4 / 301.97초**(load 1.26), 각 격리 0. `9572ed2` 의 4680 대비 **+29 = gateway 28(구현 24 + coordinator 4) + 세션 경계 RED 1**. 기존 xfail 2·경고 4 불변.
 - **제품 호출자 재확인:** `src/`·`scripts/` 에서 `KRExecutionRuntime(`·`.attach(`·`install_gateway(` 호출 0건(grep).
 - **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
