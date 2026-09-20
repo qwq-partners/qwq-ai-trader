@@ -197,8 +197,14 @@ def _check_clock(cv_decision, decided_at, strategy, rule_ids):
         # KR 매수 가드가 돌지 않았다(US 인스턴스·조기 return) — 자동 매수 facts 를 만들지 않는다
         _refuse('decision_clock_disagreement')
     local = decided_at.astimezone(_KST)
-    reported, recomputed = _bucket(now_hm, strategy), _bucket(local.hour * 100 + local.minute, strategy)
+    local_hm = local.hour * 100 + local.minute
+    reported, recomputed = _bucket(now_hm, strategy), _bucket(local_hm, strategy)
     if reported != recomputed or reported == 'blocked':
+        _refuse('decision_clock_disagreement')
+    # 계약 13·결정 ⑥ — SEPA 14:30 상한은 'other' 버킷 안쪽 경계라 위 대조로는 드러나지 않는다.
+    # decided_at 은 자기 llm_second_check(네트워크) 뒤에 찍히므로 "14:29 판정 → 14:31 게시"
+    # 교차가 실제로 생기고, 그러면 상한이 통째로 사라진다. 창을 늘리지 않고 판단을 버린다.
+    if strategy == 'sepa_trend' and (now_hm < 1430) != (local_hm < 1430):
         _refuse('decision_clock_disagreement')
     # 장초반 감점은 배치·core·swing 면제가 있어 한 방향만 검사한다.
     if 'early_session_penalty' in rule_ids and reported != 'early':
