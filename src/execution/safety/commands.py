@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
+
+from loguru import logger
 
 from ...core.types import OrderSide
 from . import risk_policy as p
@@ -30,8 +31,6 @@ from .requests import KISRequestBuilder, PreparedTradeRequest, _session_at
 from .reservations import has_remaining_reservation
 from .resources import calculate_resources, remaining_resource_amount
 from .transport import GuardedKISTransport, TransportStatus
-
-logger = logging.getLogger(__name__)
 
 
 class CommandValidationError(ValueError):
@@ -541,10 +540,10 @@ class RequestBoundCommands:
                 raise
             except Exception:
                 # 저장된 행이 깨져 있어도 '보내지 못했다'는 결과는 그대로다. 삼키지 않고 남긴다.
-                logger.exception('[실행] 미송신 시도 해제 예외: attempt=%s 사유=%s',
+                logger.exception('[실행] 미송신 시도 해제 예외: attempt={} 사유={}',
                                  request.attempt_id, reason)
             if released is not True:
-                logger.warning('[실행] 미송신 시도 예약 유지: attempt=%s 사유=%s',
+                logger.warning('[실행] 미송신 시도 예약 유지: attempt={} 사유={}',
                                request.attempt_id, reason)
         return CommandResult(CommandStatus.NOT_SENT, request.attempt_id, reason_code=reason)
 

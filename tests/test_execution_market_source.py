@@ -65,6 +65,9 @@ def test_inflight_market_source_blocks_submit_until_protection_is_applied(
             assert result.status is (CommandStatus.ACKNOWLEDGED if operation == 'prepare'
                                      else CommandStatus.NOT_SENT)
             assert len(f['broker']._session.posts) == (1 if operation == 'prepare' else 0)
+            if operation == 'dispatch':
+                # 이미 끝난 행이라 예약이 binding 과 다르다 — 다른 이유로 막힌 것이 아님을 못 박는다
+                assert result.reason_code == 'reservation_changed'
         finally:
             release.set()
             if task is not None:

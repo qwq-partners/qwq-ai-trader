@@ -27,11 +27,18 @@ from src.execution.safety.decisions import ConsumedSource
 from src.execution.safety.requests import RequestSession
 from src.execution.safety.store import encode_state
 
+from src.execution.safety.lifecycle import CommandStatus
+
 from test_execution_command_owner import fixture as command_fixture
 from test_execution_day_recovery import prepare as prepare_rollover
+from test_execution_dispatch_reasons import prepared as traded, send
 
 # 전환이 건드리면 안 되는 뿌리. portfolio·risk 는 reset_daily 의 원래 소관이라 따로 본다.
 UNTOUCHED = ('protection', 'lots', 'outbox', 'intents', 'attempts', 'qualification_sources')
+# 일자 전환이 쓰는 뿌리는 이것뿐이다. 나머지는 손으로 열거하지 않고 '전환 직전의 전 뿌리'에서
+# 유도해 대조한다 — 이 writer 에 뿌리 삭제가 하나 더 끼어들면 자동으로 잡힌다.
+ROLLOVER_OWNED = {'portfolio', 'risk', 'entry_decision_facts',
+                  'day_transition', 'day_valuations', 'day_valuation_view', 'recovery_receipts'}
 TO_DAY = '2026-09-19'
 
 
@@ -112,12 +119,15 @@ def test_rollover_clears_only_the_prior_day_decision_facts(tmp_path, monkeypatch
             await published(f)
             state = f['runtime'].owner.state
             sources = encode_state({'rows': deepcopy(state['qualification_sources'])})
-            frozen = {key: encode_state({'rows': deepcopy(state[key])}) for key in UNTOUCHED}
+            frozen = {key: encode_state({'rows': deepcopy(state[key])})
+                      for key in state if key not in ROLLOVER_OWNED}
+            assert set(UNTOUCHED) <= set(frozen)
             await rollover(f)
             state = f['runtime'].owner.state
             assert state['entry_decision_facts'] == {}
             assert encode_state({'rows': state['qualification_sources']}) == sources
-            assert {key: encode_state({'rows': state[key]}) for key in UNTOUCHED} == frozen
+            assert set(state) - ROLLOVER_OWNED == set(frozen)   # 뿌리를 새로 만들지도 없애지도 않는다
+            assert {key: encode_state({'rows': state[key]}) for key in frozen} == frozen
             # 사실 15: 지운 판단은 checkpoint 어디에도 흔적이 없다.
             assert 'I-A' not in encode_state(state)
         finally:
@@ -217,6 +227,24 @@ def test_prior_day_intent_cannot_prepare_on_the_new_day(tmp_path, monkeypatch):
                 await commands.prepare(again, f['entry'](again))
             assert 'A2' not in runtime.owner.state['attempts']
             assert f['broker']._session.posts == []
+        finally:
+            await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_rollover_clears_facts_on_a_day_that_actually_traded(tmp_path, monkeypatch):
+    """운영 전환은 그날 거래한 뒤에 온다 — attempt·intent 가 남은 state 에서도 facts 는 빈다."""
+    async def scenario():
+        f, req, _ = await traded(tmp_path, monkeypatch, ready=False)
+        try:
+            assert (await send(f, req)).status is CommandStatus.NOT_SENT
+            state = f['runtime'].owner.state
+            assert state['attempts'] and state['intents'] and state['entry_decision_facts']
+            attempts = encode_state({'rows': deepcopy(state['attempts'])})
+            await rollover(f)
+            state = f['runtime'].owner.state
+            assert state['entry_decision_facts'] == {}
+            assert encode_state({'rows': state['attempts']}) == attempts
         finally:
             await f['store'].close()
     asyncio.run(scenario())

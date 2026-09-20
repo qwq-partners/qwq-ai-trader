@@ -370,3 +370,27 @@ def test_reason_codes_never_carry_money_account_or_quantity(tmp_path, monkeypatc
             assert f['broker']._session.posts == []
         finally: await f['store'].close()
     asyncio.run(scenario())
+
+
+def test_a_closing_runtime_racing_the_abandon_is_reported_as_admission_closed(tmp_path, monkeypatch):
+    """종료 전이 도중 admission 이 닫히면 원래 사유가 아니라 '종료 중'으로 보고한다.
+
+    dispatch 진입 전에 닫힌 경우와 달리, claim 이전 실패를 끝내려는 abandon 이 던지는 경합이다.
+    """
+    from src.execution.safety.application import ApplicationBlocked
+
+    async def scenario():
+        f, req, _ = await prepared(tmp_path, monkeypatch, ready=False)
+
+        async def blocked(attempt_id, *, reason):
+            raise ApplicationBlocked('day_transition_admission_closed')
+
+        monkeypatch.setattr(f['runtime'].lifecycle, 'abandon_candidate', blocked)
+        try:
+            result = await send(f, req)
+            assert (result.status, result.reason_code) == (
+                CommandStatus.NOT_SENT, 'command_admission_closed')
+            assert f['runtime'].owner.state['attempts']['A']['state'] == 'prepared'
+            assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
