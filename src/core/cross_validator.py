@@ -56,6 +56,12 @@ class CrossStrategyValidator:
         self.last_memory_adj: int = 0
         self.last_llm_context: Dict[str, bool] = {}
 
+        # 2026-09-20 S2-1: 결정 증거 채널. 판정을 바꾼 사실만 요청 token 에 묶어 반출한다.
+        # 실거래와 팀 심의 shadow 가 한 인스턴스를 공유하므로(engine.py / kr_scheduler.py)
+        # 소비자는 token 을 대조하기 전까지 남의 판단일 수 있다고 봐야 한다.
+        self.last_decision: Optional[Dict[str, Any]] = None
+        self.last_llm_reason: Optional[str] = None
+
         # 적대적 교차 검증기 (2026-08-02 추가) — Bull/Bear 역할 분리 + 멀티 LLM 합의
         # 초기화 실패해도 단일 LLM 경로로 폴백되므로 매매에 영향 없음
         self._adversarial = None
@@ -207,6 +213,7 @@ class CrossStrategyValidator:
         metadata: dict,
         market_regime: str = "neutral",
         count_stats: bool = True,
+        request_token: Optional[str] = None,
     ) -> Tuple[bool, float, str]:
         """
         시그널 교차 검증
@@ -220,10 +227,16 @@ class CrossStrategyValidator:
             market_regime: 시장 체제 ("bull", "bear", "sideways", "neutral")
             count_stats: False면 일일 통계(_stats) 미집계 (2026-08-05 P2 —
                 팀 심의 shadow 게이트 조회가 실거래 통계를 오염시키던 문제)
+            request_token: 이 판단을 요청한 주체의 식별자 (2026-09-20 S2-1 —
+                last_decision 에 그대로 실어 소비자가 자기 요청인지 대조한다.
+                판정·점수·통계에는 일절 영향이 없다)
 
         Returns:
             (통과 여부, 조정된 점수, 사유)
         """
+        # 증거 채널 초기화 — 진입 시 무조건 비운다(앞 판단의 잔류 금지)
+        self.last_decision = None
+        self.last_llm_reason = "not_required"
         # 통계 집계 헬퍼 — shadow 호출(count_stats=False)은 카운트하지 않는다
         def _bump(key: str) -> None:
             if count_stats:
@@ -250,6 +263,12 @@ class CrossStrategyValidator:
         penalties = []
         adjusted_score = score
 
+        # 증거 채널이 실을 기여 사실 (붙지 않았으면 붙지 않았다고 남긴다)
+        _now_hm: Optional[int] = None        # KR 시간 가드가 읽은 시각(HHMM)
+        _memory_adj: int = 0                 # 이번 호출에 실제 적용된 규칙9 보정
+        _panel: Optional[Dict[str, Any]] = None   # 규칙10 보너스가 실제로 붙었을 때만
+        _cap_applied: bool = False
+
         # 2026-04-25 추가: 진입 시간대 가드 (KR 전용)
         # 30일 데이터: 09시 -440k(승률 26.7%) / 10시 +181k / 12시 +1.08M(승률 70%)
         # → 09:00~09:29 하드 차단, 09:30~10:30 -8점 페널티, 12:30~13:00 +5 보너스
@@ -258,6 +277,7 @@ class CrossStrategyValidator:
             from datetime import datetime as _dt
             now = _dt.now()
             now_hm = now.hour * 100 + now.minute  # 930 = 09:30
+            _now_hm = now_hm
             # 09:00~09:29 하드 차단 (장초반 30분 모든 매수 신호 차단)
             # 단, core_holding은 별도 배치(09:30 execute)로 처리되므로 영향 없음
             if 900 <= now_hm < 930 and strategy != "core_holding":
@@ -488,6 +508,7 @@ class CrossStrategyValidator:
                 adjusted_score += memory_adj
                 penalties.append(f"메모리보정({memory_adj:+d})")
                 self.last_memory_adj = memory_adj
+                _memory_adj = memory_adj
 
         # === 규칙 10: 전문가 패널 추천 보너스 (2026-05-03 P0 통합) ===
         # 일요일 21:00 갱신, 14일 이내 신선도 가중. 모든 전략에 일관 적용.
@@ -524,6 +545,13 @@ class CrossStrategyValidator:
                         penalties.append(
                             f"전문가패널 추천(+{bonus} conv={conv:.0%}/신선도{freshness:.0%})"
                         )
+                        # 계산된 결과값을 남긴다 — 파일이 그대로여도 days_old 로 값이 바뀐다
+                        _panel = {
+                            "created_at": getattr(self._panel_outlook, "created_at", None),
+                            "conviction": conv,
+                            "bonus": bonus,
+                            "loaded_at": self._panel_loaded_at,
+                        }
                 except Exception as _e:
                     logger.debug(f"[크로스검증] 패널 보너스 계산 실패 {symbol}: {_e}")
 
@@ -604,6 +632,7 @@ class CrossStrategyValidator:
                     f"누적감점캡({total_penalty:.0f}→{TOTAL_PENALTY_CAP})"
                 )
                 adjusted_score = score - TOTAL_PENALTY_CAP
+                _cap_applied = True
 
         # 감점 적용 결과
         if penalties:
@@ -621,8 +650,32 @@ class CrossStrategyValidator:
             )
             return False, adjusted_score, f"크로스 감점 후 점수 부족 ({adjusted_score:.0f})"
 
+        # 2026-09-20 S2-1: 통과 판단만 증거로 남긴다(차단·매도 조기통과는 None 유지)
+        self.last_decision = {
+            "token": request_token,
+            "symbol": symbol,
+            "side": side,
+            "strategy": strategy,
+            "regime": market_regime,
+            "penalties": tuple(penalties),
+            "cap_applied": _cap_applied,
+            "original": score,
+            "adjusted": adjusted_score,
+            "memory_adj": _memory_adj,
+            "panel": _panel,
+            "now_hm": _now_hm,
+        }
         _bump("passed")
         return True, adjusted_score, ""
+
+    def _llm(self, reason: str, approved: bool) -> bool:
+        """LLM 이중검증 결과를 증거 채널 어휘로 기록하고 기존 bool 을 그대로 반환한다.
+
+        fail-open 통과(한도 소진·오류)와 실제 승인은 둘 다 True 라 반환값만으로는
+        구분되지 않는다 — 어휘가 유일한 구분 수단이다 (2026-09-20 S2-1).
+        """
+        self.last_llm_reason = reason
+        return approved
 
     def _log_rule11_hit(
         self,
@@ -721,15 +774,15 @@ class CrossStrategyValidator:
         엄격 모드가 필요하면 return True → return False 로 변경 (정책 결정 사안).
         """
         if not self._llm_manager:
-            return True
+            return self._llm("skipped_no_manager", True)
 
         # 강세장이면 LLM 검증 생략 (속도 우선)
         if market_regime == "bull":
-            return True
+            return self._llm("skipped_bull", True)
 
         # 고점수 시그널만 검증
         if score < 85:
-            return True
+            return self._llm("skipped_low_score", True)
 
         # 일일 한도 체크 (비용 제어)
         today = datetime.now().date()
@@ -745,7 +798,7 @@ class CrossStrategyValidator:
                 f"({self._daily_llm_max}회) → fail-open 통과. "
                 f"고변동 날엔 수동 모니터링 필요."
             )
-            return True
+            return self._llm("fail_open_quota", True)
         self._daily_llm_count += 1
         logger.info(
             f"[크로스검증] LLM 이중검증 #{self._daily_llm_count}/{self._daily_llm_max}: "
@@ -835,7 +888,8 @@ class CrossStrategyValidator:
                 if not adv.failed:
                     if not adv.approved:
                         logger.info(f"[크로스검증] 적대검증 거부: {symbol} — {adv.reason}")
-                    return adv.approved
+                    return self._llm(
+                        "approved" if adv.approved else "rejected_soft", adv.approved)
                 # adv.failed면 폴백 (아래 단일 LLM 경로)
 
             # 단일 LLM 폴백 — GPT-5.4 (STRATEGY_ANALYSIS)
@@ -851,15 +905,15 @@ class CrossStrategyValidator:
             )
             if not resp.success:
                 logger.debug(f"[크로스검증] LLM 응답 실패 (통과): {resp.error}")
-                return True  # fail-open
+                return self._llm("fail_open_error", True)  # fail-open
             content = (resp.content or "").strip()
             if content and "NO" in content.upper()[:10]:
                 logger.info(f"[크로스검증] LLM 거부: {symbol} — {content[:80]}")
-                return False
-            return True
+                return self._llm("rejected_soft", False)
+            return self._llm("approved", True)
         except Exception as e:
             logger.debug(f"[크로스검증] LLM 검증 실패 (통과): {e}")
-            return True  # fail-open
+            return self._llm("fail_open_error", True)  # fail-open
 
     def get_stats(self) -> Dict:
         """오늘 검증 통계"""
