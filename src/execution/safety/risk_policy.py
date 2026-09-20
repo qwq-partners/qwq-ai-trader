@@ -106,6 +106,8 @@ class EffectiveRiskPolicy:
     risk_per_trade_pct: float
     risk_max_position_pct: float
     buy_commission_rate: Decimal
+    # 설정 hybrid 축. 기본값을 주면 '신고 없음'이 조용히 off로 읽혀 대조가 무력해진다.
+    hybrid_enabled: bool
 
     def __post_init__(self):
         for value in (self.daily_max_trades, self.max_daily_new_buys, self.max_positions,
@@ -119,6 +121,7 @@ class EffectiveRiskPolicy:
         if self.sizing_mode not in ('nominal', 'risk'):
             raise ValueError('알 수 없는 sizing basis')
         _money(self.buy_commission_rate, nonnegative=True)
+        _bool(self.hybrid_enabled)
 
 
 @dataclass(frozen=True, slots=True)
