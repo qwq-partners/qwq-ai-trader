@@ -524,6 +524,13 @@ class UnifiedEngine:
                 pass
             return
 
+        # S3-6a(결정 ①): gateway 가 설치돼 있으면 SIGNAL 만 owner 의 단일 송신로로 넘긴다.
+        # 미설치면 아래 거부가 그대로 fail-closed 다.
+        if (self._execution_runtime is not None and event.type == EventType.SIGNAL
+                and self._execution_runtime.gateway is not None):
+            await self._submit_signal(event)
+            return
+
         if self._execution_runtime is not None and event.type in (
             EventType.FILL, EventType.ORDER, EventType.SIGNAL,
         ):
@@ -637,6 +644,40 @@ class UnifiedEngine:
                     message=str(e),
                     recoverable=True
                 ))
+
+    async def _submit_signal(self, event):
+        """후보 판단(on_signal)을 거친 요청 하나를 owner 의 단일 송신로로 넘긴다 (S3-6a).
+
+        핸들러 루프(아래 621-639)를 거치지 않으므로 예외 흡수도 여기서 같은 의미로 한다
+        (결정 ②) — 이 경로에서 새는 예외 한 건은 `while self.running` **밖**의 except 로
+        가 루프를 끝내고 `_shutdown()` 까지 간다. 반환 OrderEvent 는 큐에 싣지 않는다
+        (결정 ③ — 되싣으면 아래 거부 분기가 그대로 폐기한다).
+        """
+        try:
+            result = await self.risk_manager.on_signal(event)
+            # 계약 3: 증거는 이번 요청의 지역값이다 — 다음 await 이전에 받는다.
+            evidence = self.risk_manager._last_qualification_evidence
+            order = result[0].order if result else None
+            if order is not None:
+                outcome = await self._execution_runtime.gateway.submit(event, order, evidence)
+                # 결정 ⑬: 운영자용 사유 코드만 남긴다(금액·계좌 없음).
+                detail = ("미송신(증거 없음)" if outcome is None
+                          else f"{outcome.status.value}/{outcome.reason_code}")
+                logger.info(f"[엔진] 실행 송신 결과: {event.symbol} {detail}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.stats.errors_count += 1
+            logger.exception(f"핸들러 오류 (on_signal): {e}")
+            await self.emit(ErrorEvent(
+                source="on_signal",
+                error_type=type(e).__name__,
+                message=str(e),
+                recoverable=True
+            ))
+        finally:
+            # 결정 ⑮: 성공 경로의 유일한 pop(update_position 763)이 attach 에서 막혀 있다.
+            self._pending_sector_map.pop(event.symbol, None)
 
     async def _emit_startup_events(self):
         """시작 이벤트 발행"""
@@ -2332,8 +2373,11 @@ class RiskManager:
                     #   고점수(adjusted_score >= _REPLACEMENT_MIN_SCORE) 시그널이 만석에 막히면
                     #   가장 약한 비코어 포지션을 자동 청산 → 다음 screening cycle에서 진입.
                     #   실제 매수는 여기서 수행하지 않고 sell signal만 발행 (TOCTOU/타이밍 안전성).
+                    #   S3-6a(결정 ⑤): attach 에서는 부르지 않는다 — 여기서 emit 되는 SELL
+                    #   시그널이 gateway 를 타고 실제 POST 가 된다. owner 경로 이관은 S4.
                     if ("최대 포지션 수 도달" in reason
-                            and event.score >= self._REPLACEMENT_MIN_SCORE):
+                            and event.score >= self._REPLACEMENT_MIN_SCORE
+                            and getattr(self.engine, "_execution_runtime", None) is None):
                         _evicted = await self._try_evict_weakest_position(
                             new_symbol=order.symbol, new_score=float(event.score),
                             new_reason=event.reason or "high-score replacement",
@@ -2377,6 +2421,13 @@ class RiskManager:
             if order.symbol in self._pending_orders:
                 logger.warning(f"[리스크] 경쟁 조건 감지: {order.symbol} 이미 주문 진행 중 (재검증)")
                 return None
+
+            # S3-6a(결정 ④): attach 에서는 중복 주문·예약의 정본이 owner 다 — legacy 장부를
+            # 이중으로 쓰지 않는다. `_last_signal_time` 만 남긴다(지우면 송신 뒤 30초 쿨다운이
+            # 영원히 무장되지 않는다 — 다른 기록 지점은 사이징 0 거부뿐이다).
+            if getattr(self.engine, "_execution_runtime", None) is not None:
+                self._last_signal_time[order.symbol] = datetime.now()
+                return [OrderEvent.from_order(order, source="risk_manager")]
 
             self._pending_orders.add(order.symbol)
             self._pending_quantities[order.symbol] = order.quantity
