@@ -51,6 +51,7 @@ class KRExecutionRuntime:
         self._closing = False
         self._intraday_writer = None
         self._regime_writer = None
+        self.gateway = None
         self.owner = FillApplicationCoordinator(store, self._publish, self._reduce,
             registration_scope=self._policy_registration_scope,
             registration_guard=self._require_registration_day)
@@ -295,6 +296,14 @@ class KRExecutionRuntime:
         adapter = getattr(self.engine, '_regime_adapter', None)
         if adapter is not None:
             adapter._execution_runtime = self
+
+    def install_gateway(self, gateway) -> None:
+        """명시 설치. engine 은 safety 패키지를 이 한 길로만 만난다(결정 ⑪)."""
+        if self.gateway is not None:
+            raise ApplicationBlocked("gateway_already_installed")
+        if getattr(gateway, "runtime", None) is not self:
+            raise ApplicationBlocked("gateway_runtime_mismatch")
+        self.gateway = gateway
 
     def _view_price(self, state, symbol, fallback):
         """평가·증분 체결·수락 시세의 동일 우선순위를 모든 게시에서 사용한다."""

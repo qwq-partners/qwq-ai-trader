@@ -1,0 +1,121 @@
+"""SIGNAL 한 건의 단일 송신로: 게시 → prepare → dispatch (S3-5).
+
+engine 을 import 하지 않는다 — 입력은 SignalEvent·Order·증거뿐이고, 설치 지점은
+`runtime.install_gateway` 하나다. owner 의 판정을 복제하지 않는다: 가격·수량·세션·경제·
+섹터는 `_evaluate` 가 보고 이 모듈은 순서와 식별자만 맡는다.
+
+실패는 삼키지 않는다. 게시~prepare 실패는 reducer 예외라 commit 0 이고 그대로 호출자에게
+올라간다(S3-6a 의 호출부가 결정 ②로 흡수한다). `CommandResult` 를 돌려준 요청만 dispatch
+까지 간 것이며 NOT_SENT 도 결과다 — 송신 성공이 아니다. "출처만 게시·판단 사실 실패"의
+부분 상태는 되돌리지 않는다(version 되감기 금지).
+"""
+from __future__ import annotations
+
+from dataclasses import replace
+from decimal import Decimal
+from uuid import uuid4
+
+from loguru import logger
+
+from ...core.types import Order, OrderSide
+from .commands import RequestBoundCommands, _require, _text
+from .lifecycle import CommandResult
+from .policy_snapshot import PolicyContext
+from .qualification_publisher import QualificationEvidence, publish_qualification
+from .requests import RequestSession, _session_at
+from .transport import GuardedKISTransport
+
+
+class SignalGateway:
+    """후보 판단을 통과한 요청 하나를 owner 의 한 길로 보낸다."""
+
+    def __init__(self, runtime, commands, *, exit_manager, config_version):
+        _require(type(commands) is RequestBoundCommands and commands.runtime is runtime,
+                 'invalid_gateway_commands')
+        # 판단~final 의 손절 축이 owner 가 보는 보호 상태와 갈라지지 않게 같은 객체를 요구한다.
+        _require(exit_manager is runtime.exit_manager, 'invalid_gateway_exit_manager')
+        _text(config_version)
+        self.runtime, self.commands = runtime, commands
+        self.exit_manager, self.config_version = exit_manager, config_version
+        # 같은 종목·side·전략의 재시도는 같은 intent 를 쓴다(계약 4). 목표 수량은 lifecycle 소관.
+        self._intents: dict[tuple, str] = {}
+
+    async def submit(self, event, order, evidence) -> CommandResult | None:
+        """결정 ⑫의 순서. 자동 BUY 는 증거가 없으면 게시도 prepare 도 하지 않는다."""
+        _require(type(order) is Order, 'invalid_gateway_order')
+        buying = order.side is OrderSide.BUY
+        if buying and evidence is None:
+            logger.warning('[게이트웨이] 증거 없는 자동 매수는 게시하지 않습니다: 종목={}',
+                           order.symbol)
+            return None
+        if buying:
+            _require(type(evidence) is QualificationEvidence, 'invalid_qualification_evidence')
+        now = self.runtime._now()
+        request, context = self._bind(event, order, now)
+        if buying:
+            await self._quote(event, request, now)
+        await self._policy_context()
+        if buying:
+            facts = await publish_qualification(
+                self.commands, evidence, intent_id=request.intent_id,
+                config_version=self.config_version, decided_at=now)
+            # S3-4 가 전일 판단 사실을 지우므로 이 한 줄이 유일한 감사 흔적이다(결정 ⑩·⑬).
+            logger.info('[게이트웨이] 판단 사실 게시: intent={} 종목={} 전략={} digest={} '
+                        'config={} 만료={}', facts.intent_id, facts.symbol, facts.strategy,
+                        facts.digest, facts.config_version, facts.expires_at.isoformat())
+        await self.commands.prepare(request, context)
+        # 같은 attempt 로 재시도하지 않는다(계약 6). create_task 로 감싸면 명령 스코프가 깨진다.
+        return await self.commands.dispatch(
+            request, context,
+            GuardedKISTransport(self.runtime.engine.broker, request_builder=self.commands.builder))
+
+    def reserved_cash(self) -> Decimal:
+        """owner 미해결 attempt 의 예약 현금 합. `evaluate_entry_policy` 와 같은 식이다."""
+        return sum((fact.reserved_cash for fact in self._pending()), Decimal('0'))
+
+    def pending_strategy_notional(self, strategy) -> Decimal:
+        """전략별 pending 매수 예약. `recompose_quantity` 의 잔여 계산과 같은 필터다."""
+        return sum((fact.reserved_cash for fact in self._pending()
+                    if fact.side == 'buy' and fact.strategy == strategy), Decimal('0'))
+
+    def _pending(self):
+        # snapshot 을 못 만드는 상태에서 0 을 지어내면 예약이 없는 것처럼 읽힌다(fail-closed).
+        return self.commands._snapshot(self.commands.owner.state).pending
+
+    def _bind(self, event, order, now):
+        key = (order.symbol, order.side, order.strategy)
+        intent_id = self._intents.get(key)
+        if intent_id is None:
+            intent_id = 'gw-i-' + uuid4().hex
+            self._intents[key] = intent_id
+        # 시장가에는 지정가가 없다 — 평가 가격은 신호가 실어 온 값이다.
+        valuation = order.price if order.price is not None else event.price
+        request = self.commands.builder.prepare_submit(
+            order, intent_id=intent_id, attempt_id='gw-a-' + uuid4().hex,
+            session=RequestSession(now.date().isoformat(), now, _session_at(now)),
+            valuation_price=valuation)
+        context = self.commands.authority.automatic(request.symbol, request.side.value,
+                                                    request.strategy)
+        return request, context
+
+    async def _quote(self, event, request, now):
+        if request.symbol in self.commands.owner.state.get('market_sources', {}):
+            # 실제 원관측이 이미 진입 가격을 게시했다. 같은 종목에 두 번째 출처를 세우지 않는다.
+            return
+        await self.commands.observe_entry_quote(
+            request.symbol, request.valuation_price, as_of=now, source='signal',
+            event_id=event.id, expected_version=self.commands.owner.version)
+
+    async def _policy_context(self):
+        """게시본에 주입 `config_version` 과 현재 실행 version 만 다시 찍는다.
+
+        5축의 제품 조립과 PolicyContext 제품 publisher 는 10A3 이다 — 여기서 만들면
+        원본과 갈라져 config 축이 조용히 헛돈다.
+        """
+        row = self.commands.owner.state.get('entry_policy_context')
+        _require(row is not None, 'entry_policy_context_required')
+        version = self.commands.owner.version
+        context = PolicyContext.from_dict(row)
+        context = replace(context, versions=replace(context.versions, execution=version,
+                                                    config=self.config_version))
+        await self.commands.publish_policy_context(context, expected_version=version)
