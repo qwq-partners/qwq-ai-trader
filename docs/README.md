@@ -24,6 +24,7 @@
 
 ### Operations (운영)
 - [agent-routing.md](operations/agent-routing.md) — Codex·Claude 전역 배정, Plan–Do–See·통합 동시성·격리/권한 경계와 실제 로딩 검증 범위
+- [Claude 마이그레이션 인계](operations/claude-migration-handoff-2026-09-20.md) — 단일 engine 개발선·C4 완료/운영 미승격·다음 B2/B3 Plan→Do→See·모델/검증/금지 경계
 - [toss-shadow-runtime.md](operations/toss-shadow-runtime.md) — 별도 Toss 서비스 ON·승인 만료/재시작 금지·원장/health 경계(기존 거래 봇 Toss OFF)
 - [local-development.md](operations/local-development.md) — WSL2 기반 Claude Code·Codex 로컬 개발환경 구성과 안전한 PR 흐름
 - [github-quality-gate.md](operations/github-quality-gate.md) — PR 자동 검증과 `main` 브랜치 보호 운영 절차
@@ -48,6 +49,7 @@
 - [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — 기반·정책 generation·지속 source 권한·실제2분 구간별 한정 승인. 정오·LLM·qualification/gateway·나머지 writer/설치·전체 인수·공식 증거는 잔여
 - [KR writer 이행 세분 계획](superpowers/plans/2026-09-18-engine-writer-migration.md) — 계좌 lease/종료 drain→원시각·정책 publisher→기존 sizing/qualification·실제 큐→SAFE/USER/IPC·fill·sync/day; 운영 설치 미완
 - [KR 실행 안전성 구현 중간 리뷰](reviews/engine-execution-safety-2026-09-17.md) — 기반·Task4b 실제 경제/보호/큐 검증과 운영 writer 전체 이행 미완을 구분; 공식 KIS 계약/잔여 인수
+- [브랜치 정리·운영 동기화](reviews/branch-consolidation-2026-09-20.md) — 병합 완료 ref/worktree 정리·복구 bundle·보존 목록·main 동기화/재시작0·미완 migration 배포 차단
 - [toss-pr-integration-2026-09-17.md](reviews/toss-pr-integration-2026-09-17.md) — #70 병합·중복 #68 정합화, 배포/활성화 승인과 실제 실행 상태 분리
 - [toss-runtime-2026-09-16.md](reviews/toss-runtime-2026-09-16.md) — 승인 기반 관측 런타임 Plan→Do→See·독립 리뷰·인수 근거/한계·운영 미활성화
 - [Toss 런타임 교차 리뷰 프롬프트](reviews/prompts/toss-runtime-review-2026-09-16.md) — source `984dbdf`·main 기준 SHA·재현 범위를 고정한 외부 리뷰 인계문
