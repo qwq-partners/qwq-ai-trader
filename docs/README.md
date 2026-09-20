@@ -8,6 +8,7 @@
 - [KR 주문·체결 안전성 상세 설계](superpowers/specs/2026-09-17-engine-execution-safety-design.md) — 사용자 승인; 경제/보호·core 큐 검증, 운영 경로 설치/전체 인수 미완
 - [KR 실행 안전성 구현 계획](superpowers/plans/2026-09-17-engine-execution-safety.md) — Plan–Do–See, 작업 소유권·단계별 검증·잔여 통합 조건
 - [정오 레짐·보호 재생 고정 계약](superpowers/specs/2026-09-20-regime-noon-owner-contract.md) — C3 DTO·source/application·horizon·full 보호 재생 인터페이스, 운영 승인과 구분
+- [장전 text diagnosis 고정 계약](superpowers/specs/2026-09-20-regime-morning-owner-contract.md) — C4 명시 기준선·원 window/호출 순서·성공일 dedupe·정책/표시 분리; 한정 인수 완료·운영 승인 아님
 - [system-overview.md](architecture/system-overview.md) — 실행 수명주기, KR 이벤트 경로와 US 직접 스케줄러 경로, 설정·스케줄·상태 경계
 - [harness-evolution-design.md](architecture/harness-evolution-design.md) — 하네스 엔지니어링 적용 설계 (2026-08-10, Claude+Codex 협업): weakness_miner·기각 후보 원장·Wiki ACE 격상·편집 표면 정책·4페이즈 로드맵
 
@@ -38,7 +39,8 @@
 
 ### Reviews (리뷰)
 
-- [정오·JSON LLM·보호 재생 C3](reviews/noon-regime-protection-replay-2026-09-20.md) — 독립 결함·원시각/결측 보완, 신규79·최종UTC/KST4350통과·네이티브/Opus 한정 승인; C4/전체 writer/운영 미완
+- [장전 진단·소비 경로 C4](reviews/morning-regime-owner-2026-09-20.md) — 실제 caller·schema 활성 경합·게시 읽기 보완, 신규53·UTC/KST4403통과·native/Opus 한정 승인; 전체 writer/운영 미완
+- [정오·JSON LLM·보호 재생 C3](reviews/noon-regime-protection-replay-2026-09-20.md) — 독립 결함·원시각/결측 보완, 당시 신규79·UTC/KST4350통과·네이티브/Opus 한정 승인; C4는 별도 후속 보고, 전체 writer/운영 미완
 - [실제 2분 레짐 owner](reviews/two-minute-regime-owner-2026-09-20.md) — 실제 caller·captured reads·등록/취소·typed source·baseline 경계 보완, 네이티브/Opus 한정 승인·당시UTC/KST4271통과; 후속 정오/LLM/보호 replay는 별도 C3 보고서
 - [입력 소비 권한 후속](reviews/source-authority-followup-2026-09-20.md) — N1·C2b 지속 전파의 실제 Opus 한정 승인, 리뷰 I1/I2 보완·최종UTC/KST4124통과; 실제2분·정오/LLM/replay는 후속
 - [Opus 리뷰 실행기 진단·수정](reviews/opus-review-runner-2026-09-20.md) — 360초 로컬 종료 원인·동일 입력692초 정상 완료. 실행기 한정 재리뷰 승인·신규53회귀·전체 KST/UTC4021통과·실제 smoke 확인; 엔진 Opus 수정 요청은 별도 후속

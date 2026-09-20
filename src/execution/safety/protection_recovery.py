@@ -307,7 +307,7 @@ def _require_intraday_completeness(state, events):
             actual.append(('regime_application', event['application_id'], event['source_version']))
     if actual != expected:
         raise ValueError('intraday_replay_policy_history_incomplete')
-    if state.get('regime_policy', {}).get('schema') == 2:
+    if state.get('regime_policy', {}).get('schema') in (2, 3):
         # source 없는 sync 왕복도 삭제될 수 있으므로 남은 app 목록만 신뢰하지 않는다.
         # 일반 게시가 아니라 실제 fill anchor 이후 복구에만 적용하는 증거 장벽이다.
         from .regime_application import PROTECTION_READS

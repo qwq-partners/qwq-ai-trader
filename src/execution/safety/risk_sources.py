@@ -572,13 +572,22 @@ class RiskSourceCoordinator:
             from .risk_input_seal import input_seal_current
             if not input_seal_current(state, ticket) or authority.inputs(current)[0] != 'current':
                 return 'stale', 'input_seal'
+            if ticket.kind == 'index_trend' and state.get('regime_policy') is not None:
+                from .regime_owner import _index_rule_at, _RULE, _HORIZON_RULE
+                seal = state.get('risk_input_seals', {}).get('records', {}).get(ticket.operation_id, {}).get('original', {})
+                rule = seal.get('request', {}).get('inputs', {}).get('rule_digest')
+                if rule in (_RULE, _HORIZON_RULE) and rule != _index_rule_at(state, runtime.owner.version + 1):
+                    # A registered schema3 baseline can arrive during optional
+                    # input/seal awaits. This is an ordinary stale result, not a
+                    # reducer/storage failure that poisons command drain.
+                    return 'stale', 'input_seal'
         return status, ''
 
     def _check_typed_completion(self, state, ticket, envelope, status):
         if state.get('regime_policy') is None or status != 'accepted':
             return
         from .regime_owner import RegimeOwner, _vix_payload
-        if ticket.kind == 'index_trend' or (state['regime_policy'].get('schema') == 2
+        if ticket.kind in {'index_trend', 'llm_morning_diagnosis'} or (state['regime_policy'].get('schema') in (2, 3)
                 and ticket.kind in {'noon_index', 'llm_regime'}):
             writer = getattr(self.runtime, '_regime_writer', None)
             callback = self._completion_reducer
@@ -589,7 +598,16 @@ class RiskSourceCoordinator:
                 raise _TypedCompletionRejected('regime_completion_writer_required')
             if ticket.admission_version <= state['regime_policy']['baseline']['baseline_version']:
                 raise _TypedCompletionRejected('regime_transition_baseline_scope_conflict')
-            if (ticket.kind != 'index_trend' and ticket.admission_version
+            if ticket.kind == 'llm_morning_diagnosis':
+                if (state['regime_policy'].get('schema') != 3 or ticket.admission_version
+                        <= state['regime_policy']['morning_baseline']['baseline_version']):
+                    raise _TypedCompletionRejected('morning_baseline_required')
+                from .regime_morning import validate_envelope
+                try:
+                    validate_envelope(state, ticket, envelope)
+                except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+                    raise _TypedCompletionRejected('invalid_morning_input') from None
+            if (ticket.kind not in {'index_trend', 'llm_morning_diagnosis'} and ticket.admission_version
                     <= state['regime_policy']['horizon_baseline']['baseline_version']):
                 raise _TypedCompletionRejected('regime_transition_baseline_scope_conflict')
             if ticket.kind == 'noon_index':
@@ -605,7 +623,7 @@ class RiskSourceCoordinator:
             except ValueError as exc:
                 # This local input validator alone defines ordinary bad typed input.
                 raise _TypedCompletionRejected(str(exc)) from None
-        elif state['regime_policy'].get('schema') == 2 and ticket.kind == 'intraday_5m':
+        elif state['regime_policy'].get('schema') in (2, 3) and ticket.kind == 'intraday_5m':
             from .intraday_owner import IntradayRiskOwner
             writer = getattr(self.runtime, '_intraday_writer', None)
             callback = self._completion_reducer
@@ -676,16 +694,16 @@ class RiskSourceCoordinator:
                     if before_regime is not None:
                         from .regime_owner import _validate_regime_append, _vix_payload
                         from .policy_generations import canonical
-                        if status == 'accepted' and ticket.kind == 'index_trend':
+                        if status == 'accepted' and ticket.kind in {'index_trend', 'llm_morning_diagnosis'}:
                             _validate_regime_append(candidate, before_regime, ticket.operation_id,
                                                     runtime.owner.version + 1)
                         elif (status == 'accepted' and ticket.kind == 'intraday_5m'
-                                and before_regime.get('schema') == 2):
+                                and before_regime.get('schema') in (2, 3)):
                             from .regime_horizon import validate_intraday_horizon_append
                             validate_intraday_horizon_append(candidate, before_regime,
                                 ticket.operation_id, runtime.owner.version + 1)
                         elif (status == 'accepted' and ticket.kind in {'noon_index', 'llm_regime'}
-                                and before_regime.get('schema') == 2):
+                                and before_regime.get('schema') in (2, 3)):
                             from .regime_horizon import validate_source_append
                             validate_source_append(candidate, before_regime, ticket.operation_id,
                                 runtime.owner.version + 1)

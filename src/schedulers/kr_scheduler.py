@@ -50,6 +50,54 @@ class _RegimeClassifierLLM:
         return await get_llm_manager().complete_json(**kwargs)
 
 
+class _RegimeMorningLLM:
+    async def complete(self, prompt, **kwargs):
+        from ..utils.llm import get_llm_manager
+        return await get_llm_manager().complete(prompt, **kwargs)
+
+
+class _RegimeMorningInputs:
+    """Legacy optional stages, read only after the owner's durable begin."""
+    def __init__(self, scheduler): self.scheduler = scheduler
+
+    @staticmethod
+    def _stage(stage, payload, source):
+        from ..execution.safety.regime_morning import RegimeMorningStageInput
+        return RegimeMorningStageInput.from_dict({'schema': 1, 'stage': stage,
+            'outcome': 'missing' if payload is None else 'success', 'source': source,
+            'event_id': None, 'received_at': None, 'market_as_of': None, 'payload': payload})
+
+    def snapshot_themes(self):
+        detector = getattr(self.scheduler.bot, 'theme_detector', None)
+        active = detector.get_active_themes() if detector else None
+        text = ', '.join(f'{theme.name}({theme.score:.0f})' if hasattr(theme, 'name') else str(theme)
+                         for theme in active[:5]) if active else ''
+        return self._stage('theme', {'text': text} if text else None, 'theme_detector.get_active_themes')
+
+    def snapshot_symbols(self):
+        bot = self.scheduler.bot
+        broker = getattr(bot, 'broker', None)
+        if broker is None or not hasattr(broker, 'get_overtime_price'): return ()
+        return tuple(list(bot.engine.portfolio.positions.keys())[:5])
+
+    async def fetch_overtime_price(self, symbol):
+        quote = await self.scheduler.bot.broker.get_overtime_price(symbol)
+        payload = {'symbol': symbol, 'quote': quote} if quote and quote.get('price', 0) > 0 else None
+        return self._stage('overtime', payload, 'broker.get_overtime_price')
+
+    def snapshot_news(self):
+        detector = getattr(self.scheduler.bot, 'theme_detector', None)
+        recent = getattr(detector, '_recent_news', []) if detector else []
+        text = '\n'.join(f'- {item.title}' if hasattr(item, 'title') else f'- {item}'
+                         for item in recent[:5]) if recent else ''
+        return self._stage('news', {'text': text} if text else None, 'theme_detector._recent_news')
+
+    async def fetch_macro_context(self):
+        key = os.getenv('PERPLEXITY_API_KEY', '')
+        text = await self.scheduler.bot.engine._regime_adapter._fetch_perplexity_context(key) if key else ''
+        return self._stage('macro', {'text': text} if text else None, 'perplexity.macro')
+
+
 class _RegimeClassifierInputs:
     """호출 stage에서만 읽는 scheduler 경계. 생성 시 live 값 캡처 없음."""
     def __init__(self, scheduler):
@@ -4497,6 +4545,40 @@ JSON:
         return await writer.refresh_trend(self.bot.kis_market_data,
             expert_orchestrator=getattr(self.bot, 'expert_orchestrator', None))
 
+    async def _run_morning_diagnosis(self):
+        from ..execution.safety.application import ApplicationBlocked
+        runtime = getattr(getattr(self.bot, 'engine', None), '_execution_runtime', None)
+        writer = getattr(runtime, '_regime_writer', None)
+        if writer is None or writer.sidecar is not getattr(self.bot, 'risk_manager', None):
+            raise ApplicationBlocked('regime_owner_binding_conflict')
+        result = await writer.diagnose_morning(_RegimeMorningInputs(self), _RegimeMorningLLM())
+        telegram = getattr(self.bot, 'telegram', None)
+        if result.status == 'completed' and result.receipt.status == 'accepted' and telegram:
+            from html import escape
+            # Read the accepted immutable envelope, never a raw response or live
+            # adapter text. Optional display details come from its original seal.
+            state = runtime.owner.state
+            row = state['risk_sources']['records'][result.receipt.operation_id]
+            payload = row['terminal']['envelope']['payload']
+            inputs = state['risk_input_seals']['records'][result.receipt.operation_id]['original']['request']['inputs']
+            data = payload['after']['regime_data']; stages = inputs['stages']
+            lines = ['🌅 <b>장전 시장 진단</b>', '', '<b>■ AI 판단</b>', escape(payload['assessment']), '',
+                f"<b>■ 시장 체제</b>: {escape(payload['after']['mid_regime'])}",
+                f"KOSPI {data.get('kospi_change', 0):+.1f}% / KOSDAQ {data.get('kosdaq_change', 0):+.1f}%"]
+            quotes = [stage['payload'] for stage in stages['overtime'] if stage['outcome'] == 'success']
+            if quotes:
+                lines.extend(['', '<b>■ 넥스트장</b>'])
+                for item in quotes:
+                    lines.append(f"  {escape(item['symbol'])}: {item['quote'].get('change_pct', 0):+.1f}%")
+            if stages['theme']['outcome'] == 'success':
+                lines.extend(['', '<b>■ 테마</b>: ' + escape(stages['theme']['payload']['text'])])
+            if stages['news']['outcome'] == 'success':
+                lines.extend(['', '<b>■ 뉴스</b>'])
+                lines.extend('  ' + escape(line) for line in stages['news']['payload']['text'].split('\n')[:3])
+            try: await telegram.send_message('\n'.join(lines), parse_mode='HTML')
+            except Exception as exc: logger.debug(f'[시장체제] 텔레그램 전송 실패 (무시): {exc}')
+        return result
+
     async def run_market_trend_monitor(self):
         """KOSPI/KOSDAQ 장중 추세 모니터 (2분 주기) → RiskManager 사이드카 연동
 
@@ -4529,6 +4611,9 @@ JSON:
                         receipt = await self._refresh_market_trend()
                         if receipt.status == 'accepted':
                             _hb.record_success('kr_market_trend')
+                            now = bot.engine._execution_runtime._now()
+                            if (8, 48) <= (now.hour, now.minute) <= (8, 55):
+                                await self._run_morning_diagnosis()
                         else:
                             _hb.record_failure('kr_market_trend', 'owned trend ' + receipt.status)
                         await asyncio.sleep(120)

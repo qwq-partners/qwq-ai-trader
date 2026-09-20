@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — 장전 text diagnosis·소비 경계 (C4 한정 승인·운영 미설치)
+
+- 명시 morning 기준선과 독립 source lane으로 실제08:48~08:55 장전 caller를 연결했다. 원 optional 순서·조회 수·성공1회/일·실패 재시도·09:30 표시 만료를 보존하며, 진단/중기 전이/정책 version/adapter·engine 복사본을 owner 상태와 연결했다. schema1/2 역사와 schema3의 기존5분·C3 보호 재생은 유지한다.
+- 독립 리뷰의 UTC/KST 동일 순간 급락 오판·macro 전 형식 검사 누락을 수정했다. 외부 리뷰 후 실제 재현된 schema2→3 도중 v1 계산 승인 경합은 정상 stale 처리와 역사 rule 경계 검증으로, SQL 성공/게시 실패 후 미게시 getter 읽기는 readiness 장벽으로 보완했다. malformed 날짜 DTO ValueError·HTML 표시 escape도 추가했다.
+- 신규53 포함 최종 전체 UTC4403passed/기존xfail2/경고4(287.03초), KST4403/2/4(268.28초), 각각exit0·격리0·문법/비밀패턴/diff 통과. native와 실제 Opus 분할 후속은 한정 승인이다. 최초 timeout/반려·반증/보완/조건 종료와 남은 advisory는 `docs/reviews/morning-regime-owner-2026-09-20.md`에 보존했다. 게시 실패14개 실제 소비자도 허용 기본값/주문 재발행으로 우회하지 않음을 확인했으나 전체5단계·factory·운영 승인은 아니다.
+- main/운영 SSH·배포·재시작·실API·주문·설정 변경0. KIS 거래/잔고·Toss 관측 전용, trading_ready=False, MODIFY 미지원 및 공식 최초 인계/취소 증거 장벽 유지.
+
 ## 2026-09-20 — 정오·JSON LLM·보호 application/replay (C3 한정 승인·운영 미설치)
 
 - 명시 horizon 기준선과 기존 단일 owner로 정오 cap 선행 commit, JSON LLM 단회 호출, 분류 완료·전체 보호 DTO 적용·typed replay의 원자 저장을 연결했다. 즉시 후속은 receipt 읽기, 독립30분 sync는 새로운 요청과 실제 읽은 정책/현재 classifier 권한을 사용한다. JSON은 권한이 아닌 역순 방지 projection이다.

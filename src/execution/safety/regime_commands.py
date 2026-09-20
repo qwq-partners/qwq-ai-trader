@@ -15,7 +15,7 @@ from .index_risk_input import normalize_index_risk
 
 
 def require_c3(owner):
-    if owner.runtime.owner.state['regime_policy']['schema'] != 2:
+    if owner.runtime.owner.state['regime_policy']['schema'] not in (2, 3):
         raise ApplicationBlocked('regime_horizon_baseline_required')
     for name in CLASSIFIER_READS: versioned_fact(owner.runtime.owner.state, name)
 

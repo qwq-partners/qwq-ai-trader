@@ -274,6 +274,8 @@ Do/See: 아직 실행 전이다. 충족/미충족과 운영 전환의 증거 조
 
 아래는 부모가 시험 함수와 실제 호출점을 대조한 **미완 범위 목록**이다. 전체 통합 승인이나 독립 broad 리뷰가 아니다. `tests/` 아래 파일명을 사용하며 뒤 단계에서 같은 표를 갱신한다.
 
+09-20 C4 한정 완료: 위 C3 당시 잔여였던 장전 text diagnosis·정책/표시 소비 경계를 구현했다. 실제 caller·KST 날짜·optional 호출·schema 활성 경합·미게시 읽기·DTO/HTML을 보완했다. 신규53 포함 최종 UTC4403passed287.03초/KST4403passed268.28초·각기존xfail2/경고4·격리0, native/Opus 한정 승인·외부 호출부 확인 조건도 충족했다. [C4 Plan–Do–See](morning-regime-owner-2026-09-20.md)에 원 반려·수정·재리뷰·advisory를 보존했다. unknown baseline은 명시 차단이며 새 day/startup 기준선 인계를 자동 지원하지 않는다. 아래 전체 C/F/G/R와 qualification/최종 sizing·writer/factory·공식 증거·성능·운영 전환은 이 C4 한정 검증으로 완료되지 않는다.
+
 | ID | 현재 구체 근거 | 남은 전체 인수 |
 |---|---|---|
 | C1/C8 | `test_execution_lifecycle.py::test_cancel_result_never_releases_original_sell_reservation`, `test_execution_guards.py::test_common_safety_barrier_applies_to_all_trade_commands` | 실제 broker cancel→scheduler fallback 연결에서 추가POST0/원pending 보존 |

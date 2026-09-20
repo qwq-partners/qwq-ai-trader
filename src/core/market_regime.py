@@ -49,6 +49,42 @@ INTRADAY_RISK_LEVELS = ("normal", "caution", "crash", "severe")
 # 강세를 강세로 취급하지 않는 장중 위험 수준
 _BULL_BLOCKING_RISK = ("crash", "severe")
 
+
+def morning_mid_regime(current, intraday_risk, assessment):
+    """The existing text substring/if-elif adjustment, without mutable state."""
+    if '[방어]' in assessment and current == 'bull':
+        return 'sideways'
+    elif '[공격]' in assessment and current == 'bear' and intraday_risk not in _BULL_BLOCKING_RISK:
+        return 'sideways'
+    return current
+
+
+def morning_diagnosis_prompt(current, data, theme_summary='', premarket_data=None,
+                             news_headlines='', macro_context=''):
+    def pct(key):
+        value = data.get(key)
+        return f'{value:+.1f}%' if value is not None else '미수집'
+    regime_info = (f'현재 체제: {current}\n'
+        f"KOSPI 등락: {pct('kospi_change')}\n"
+        f"KOSDAQ 등락: {pct('kosdaq_change')}\n"
+        f"시가대비: {pct('avg_vs_open')}")
+    premarket_info = ''
+    if premarket_data:
+        lines = [f"  {symbol}: {quote.get('change_pct', 0):+.1f}% (거래량 {quote.get('volume', 0):,})"
+                 for symbol, quote in premarket_data.items() if quote.get('price', 0) > 0]
+        if lines: premarket_info = '\n=== 넥스트장 보유종목 시세 ===\n' + '\n'.join(lines[:8])
+    return (f'당신은 KR 주식시장 전문 분석가입니다.\n\n'
+        f'=== 현재 시장 상황 ===\n{regime_info}\n'
+        + (premarket_info + '\n' if premarket_info else '')
+        + (f'\n=== 오늘 테마 ===\n{theme_summary}\n' if theme_summary else '')
+        + (f'\n=== 뉴스 헤드라인 ===\n{news_headlines}\n' if news_headlines else '')
+        + (f'\n=== 실시간 매크로 ===\n{macro_context}\n' if macro_context else '')
+        + '\n=== 진단 요청 ===\n'
+        '오늘 장 전략 방향을 한 줄로 제시하세요.\n'
+        '형식: [공격/중립/방어] 사유\n'
+        '예: [공격] 반도체 수급 강세 + 미국 기술주 호조 + 넥스트장 강세, SEPA 확대\n'
+        '예: [방어] 관세 리스크 + 넥스트장 약세 + 원화 약세, 테마 축소 권고')
+
 # 강등 표 — "bull 로 취급하지 않는" 최소 강등만 한다 (새 차단 추가 아님).
 # bull → sideways 는 기존 VIX Fear 강등과 같은 방향,
 # trending_bull → neutral 은 기존 레짐충돌가드(_KOSPI_CAP["bear"]) 와 같은 방향.
@@ -258,6 +294,9 @@ class MarketRegimeAdapter:
 
     def open_expectation(self, now: Optional[datetime] = None) -> Optional[str]:
         """장전 개장 예상 — 09:30 이후·다음 날에는 None (만료)"""
+        owner = getattr(self, '_regime_owner', None)
+        if owner is not None and owner.runtime.owner.state['regime_policy'].get('schema') == 3:
+            return owner.morning_assessment(now=now)['open_expectation']
         h = self._horizons
         if h.open_expectation is None or h.open_expectation_as_of is None:
             return None
@@ -273,6 +312,11 @@ class MarketRegimeAdapter:
         """게이트·사이징이 읽는 유효 레짐 — 장중 위험이 오래된 강세 전망을 이긴다.
         장중 위험은 **당일** 관측만 인정 — 전일 15:3x crash 가 다음 날 장전(PRE_MARKET 2분 루프)까지
         강등을 거는 잔존 경로 차단 (2026-09-14 재리뷰). as_of 없음/다른 날짜 = 결측(None)."""
+        owner = getattr(self, '_regime_owner', None)
+        if owner is not None and owner.runtime.owner.state['regime_policy'].get('schema') == 3:
+            from ..execution.safety.regime_owner import effective_regime
+            owner.runtime.owner._require_ready()
+            return effective_regime(owner.runtime.owner.state, owner.runtime._now())
         risk = self._horizons.intraday_risk
         as_of = self._horizons.intraday_risk_as_of
         if risk is not None and (as_of is None or as_of.date() != _now().date()):

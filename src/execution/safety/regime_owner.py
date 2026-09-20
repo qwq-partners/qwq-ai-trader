@@ -8,6 +8,7 @@ from datetime import date, datetime
 import json
 import math
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from ...core.market_regime import MarketRegimeAdapter, cap_regime_by_intraday_risk
 from ...utils import regime_transition as calc
@@ -24,6 +25,16 @@ from .regime_horizon import (RegimeHorizonBaseline, RegimeStageInput, RegimeSync
 POLICY_READS = ('regime_policy.trend_state', 'entry_policy_effects.sidecar_active', 'intraday_policy.current')
 _REGIMES = {'bull', 'bear', 'sideways', 'neutral'}
 _RULE = digest('regime_transition:sidecar-mid-expert:v1')
+_HORIZON_RULE = digest('regime_transition:sidecar-mid-expert:folded-horizon:v2')
+
+
+def _index_rule_at(state, version):
+    """Bind semantics to the durable activation boundary, including cold history."""
+    root = state.get('regime_policy', {})
+    baseline = root.get('morning_baseline')
+    if root.get('schema') == 3 and baseline is not None and version > baseline['baseline_version']:
+        return _HORIZON_RULE
+    return _RULE
 
 
 class _BaselineAdmissionRejected(Exception):
@@ -162,6 +173,13 @@ def _references(state, trend):
 
 
 def effective_regime(state, now):
+    if state['regime_policy'].get('schema') == 3:
+        value = state['regime_policy']['horizon']
+        when = value['classified_at']
+        kst = ZoneInfo('Asia/Seoul')
+        level = value['level'] if (when is not None
+            and _time(when).astimezone(kst).date() == now.astimezone(kst).date()) else None
+        return cap_regime_by_intraday_risk(state['regime_policy']['trend_state']['mid_regime'], level)
     value = state['intraday_policy']['current']
     when = value['updated_at']
     level = value['level'] if when is not None and _time(when).date() == now.date() else None
@@ -172,7 +190,7 @@ def _verify_calculation(payload, seal):
     """Recompute with sealed facts only; no live mirrors, clock, or provider."""
     inputs, reads = seal['request']['inputs'], seal['reads']
     _keys(inputs, ('observations', 'clocks', 'selected_vix', 'expert', 'rule_digest'))
-    if inputs['rule_digest'] != _RULE or len(inputs['observations']) != 2:
+    if inputs['rule_digest'] not in (_RULE, _HORIZON_RULE) or len(inputs['observations']) != 2:
         raise ValueError('regime_calculation_inputs')
     clocks = inputs['clocks']; before = payload['before']
     parsed = {name: _time(value) for name, value in clocks.items()}
@@ -232,8 +250,16 @@ def _verify_calculation(payload, seal):
     elif raw and raw['terminal'] and raw['terminal']['receipt']['status'] == 'accepted':
         raise ValueError('regime_calculation_expert_omitted')
     expected['source_refs'] = {'trend': None, 'vix': selected, 'expert': expert_ref}
-    intraday = policies['intraday_policy.current']['value']
-    risk = intraday['level'] if intraday['updated_at'] is not None and _time(intraday['updated_at']).date() == parsed['sidecar'].date() else None
+    if inputs['rule_digest'] == _HORIZON_RULE:
+        horizon = policies['regime_policy.horizon']['value']
+        kst = ZoneInfo('Asia/Seoul')
+        risk = horizon['level'] if (horizon['classified_at'] is not None
+            and _time(horizon['classified_at']).astimezone(kst).date()
+            == parsed['sidecar'].astimezone(kst).date()) else None
+    else:
+        if 'regime_policy.horizon' in policies: raise ValueError('regime_rule_policy_conflict')
+        intraday = policies['intraday_policy.current']['value']
+        risk = intraday['level'] if intraday['updated_at'] is not None and _time(intraday['updated_at']).date() == parsed['sidecar'].date() else None
     if (set(clocks) != expected_clocks or canonical(expected) != canonical(payload['after'])
             or payload['sidecar_after'] is not sidecar.sidecar_active
             or payload['engine_regime'] != cap_regime_by_intraday_risk(expected['mid_regime'], risk)):
@@ -242,6 +268,9 @@ def _verify_calculation(payload, seal):
 
 def _validate_transition(state, operation, row, previous, last_version, version):
     """One transition, shared by cold history replay and the precommit append gate."""
+    if row.get('kind') == 'llm_morning_diagnosis':
+        from .regime_morning import validate_transition
+        return validate_transition(state, operation, row, previous, last_version, version)
     _keys(row, ('kind', 'version', 'before', 'after', 'sidecar_before', 'sidecar_after',
         'request_digest', 'outcome_digest', 'seal_digest', 'rule_digest', 'engine_regime'))
     source = state.get('risk_sources', {}).get('records', {}).get(operation, {})
@@ -250,7 +279,7 @@ def _validate_transition(state, operation, row, previous, last_version, version)
     seal = state.get('risk_input_seals', {}).get('records', {}).get(operation, {}).get('original', {})
     if (row['kind'] != 'index_trend' or type(row['version']) is not int
             or not last_version < row['version'] <= version or canonical(row['before']) != canonical(previous)
-            or row['rule_digest'] != _RULE or receipt.get('status') != 'accepted'
+            or row['rule_digest'] != _index_rule_at(state, row['version']) or receipt.get('status') != 'accepted'
             or source.get('ticket', {}).get('kind') != 'index_trend'
             or receipt.get('committed_version') != row['version']
             or receipt.get('outcome_digest') != row['outcome_digest']
@@ -258,6 +287,8 @@ def _validate_transition(state, operation, row, previous, last_version, version)
             or seal.get('seal_digest') != row['seal_digest']):
         raise ValueError('regime_transition_crosslink_conflict')
     payload = terminal['envelope']['payload']
+    if row['rule_digest'] != seal.get('request', {}).get('inputs', {}).get('rule_digest'):
+        raise ValueError('regime_rule_crosslink')
     _verify_calculation(payload, seal)
     expected_after = deepcopy(payload['after'])
     expected_after['source_refs']['trend'] = {'operation_id': operation, 'committed_version': row['version']}
@@ -281,10 +312,12 @@ def _validate_regime_append(state, before, operation, version):
             <= root['baseline']['baseline_version']):
         raise ValueError('regime_transition_baseline_scope_conflict')
     transitions = root['transitions']
+    changed = ('transitions', 'trend_state', 'engine_projection')
+    if transitions[operation]['kind'] == 'llm_morning_diagnosis': changed += ('morning',)
     if (operation in before['transitions'] or set(transitions) != set(before['transitions']) | {operation}
             or any(canonical(transitions[key]) != canonical(value) for key, value in before['transitions'].items())
             or any(canonical(root[key]) != canonical(value) for key, value in before.items()
-                   if key not in ('transitions', 'trend_state', 'engine_projection'))):
+                   if key not in changed)):
         raise ValueError('regime_prior_root_changed')
     row = transitions[operation]
     if row['version'] != version:
@@ -296,17 +329,21 @@ def _validate_regime_append(state, before, operation, version):
             or type(state['entry_policy_effects']['sidecar_active']) is not bool
             or state['entry_policy_effects']['sidecar_active'] is not row['sidecar_after']):
         raise ValueError('regime_projection_conflict')
+    if root.get('schema') == 3:
+        from .regime_morning import validate_history
+        validate_history(state, version)
 
 
 def validate_regime_policy(state, version):
     root = state.get('regime_policy')
     if root is None: return None
     _keys(root, ('schema', 'baseline', 'trend_state', 'transitions', 'engine_projection') +
-        (('horizon_baseline', 'horizon', 'noon_caps', 'applications') if root.get('schema') == 2 else ()))
+        (('horizon_baseline', 'horizon', 'noon_caps', 'applications') if root.get('schema') in (2, 3) else ()) +
+        (('morning_baseline', 'morning') if root.get('schema') == 3 else ()))
     _keys(root['baseline'], ('supplied', 'digest', 'baseline_version'))
     baseline = root['baseline']; supplied = RegimeBaseline.from_dict(baseline['supplied']).to_dict()
     _positive(baseline['baseline_version'])
-    if (type(root['schema']) is not int or root['schema'] not in (1, 2)
+    if (type(root['schema']) is not int or root['schema'] not in (1, 2, 3)
             or baseline['baseline_version'] > version or baseline['digest'] != digest(supplied)
             or type(root['transitions']) is not dict):
         raise ValueError('invalid_regime_baseline')
@@ -322,7 +359,8 @@ def validate_regime_policy(state, version):
     for operation, row in sorted(root['transitions'].items(), key=lambda item: item[1]['version']):
         previous, engine = _validate_transition(state, operation, row, previous, last_version, version)
         last_version = row['version']
-    accepted = {op for op, row in records.items() if row['ticket']['kind'] == 'index_trend'
+    kinds = ('index_trend', 'llm_morning_diagnosis') if root['schema'] == 3 else ('index_trend',)
+    accepted = {op for op, row in records.items() if row['ticket']['kind'] in kinds
         and row['ticket']['admission_version'] > baseline['baseline_version']
         and row['terminal'] and row['terminal']['receipt']['status'] == 'accepted'}
     if (accepted != set(root['transitions']) or canonical(root['trend_state']) != canonical(previous)
@@ -330,13 +368,23 @@ def validate_regime_policy(state, version):
         raise ValueError('regime_projection_conflict')
     if type(state.get('entry_policy_effects', {}).get('sidecar_active')) is not bool:
         raise ValueError('invalid_regime_sidecar_projection')
-    if root['schema'] == 2:
+    if root['schema'] in (2, 3):
         from .regime_horizon import validate_horizon
         validate_horizon(state, version)
+    if root['schema'] == 3:
+        from .regime_morning import validate_history
+        validate_history(state, version)
     return deepcopy(root)
 
 
 def require_current_trend(state, day):
+    root = state['regime_policy']
+    selected = root['engine_projection']['operation_id']
+    if selected is not None and root['transitions'][selected]['kind'] == 'llm_morning_diagnosis':
+        version = root['transitions'][selected]['version']
+        status, _, _ = _SourceAuthority(state, day).dependency('llm_morning_diagnosis', version)
+        if status != 'current': raise ApplicationBlocked('regime_source_not_current')
+        return version
     ref = state['regime_policy']['trend_state']['source_refs']['trend']
     if ref is None:
         raise ApplicationBlocked('regime_source_not_current')
@@ -347,6 +395,31 @@ def require_current_trend(state, day):
 
 
 class RegimeOwner:
+    @staticmethod
+    async def register_morning_baseline(runtime, baseline, *, expected_version):
+        from .regime_morning_commands import register_baseline
+        return await register_baseline(runtime, baseline, expected_version)
+
+    async def diagnose_morning(self, inputs_provider, llm):
+        from .regime_morning_commands import diagnose
+        return await diagnose(self, inputs_provider, llm)
+
+    def morning_assessment(self, *, now=None):
+        from zoneinfo import ZoneInfo
+        from ...core.market_regime import OPEN_EXPECTATION_EXPIRY
+        self.runtime.owner._require_ready()
+        root = self.runtime.owner.state['regime_policy']
+        if root.get('schema') != 3: raise ApplicationBlocked('morning_baseline_required')
+        result = deepcopy(root['morning'])
+        now = self.runtime._now() if now is None else now
+        if now.utcoffset() is None: raise ValueError('naive_morning_time')
+        now = now.astimezone(ZoneInfo('Asia/Seoul'))
+        as_of = result['open_expectation_as_of']
+        if (as_of is None or _time(as_of).astimezone(ZoneInfo('Asia/Seoul')).date() != now.date()
+                or now.time() >= OPEN_EXPECTATION_EXPIRY):
+            result['open_expectation'] = None
+        return result
+
     @staticmethod
     async def register_horizon_baseline(runtime, baseline, *, expected_version):
         if (type(baseline) is not RegimeHorizonBaseline or type(expected_version) is not int
@@ -492,6 +565,7 @@ class RegimeOwner:
         self._vix_fetcher = vix_fetcher
         self._vix_refresh_task = None
         self._classifier_projection_lock = asyncio.Lock()
+        self._morning_running = False
         self.publish(runtime.owner.state, root)
         runtime._regime_writer = self
         adapter._regime_owner = sidecar._regime_owner = self
@@ -502,6 +576,7 @@ class RegimeOwner:
         intraday = state['intraday_policy']['current']
         horizon = root.get('horizon')
         selected = self._select_vix(state)
+        morning = root.get('morning')
         return {
             'mid': trend['mid_regime'], 'data': deepcopy(trend['regime_data']),
             'updated': None if trend['last_update'] is None else _time(trend['last_update']),
@@ -512,14 +587,19 @@ class RegimeOwner:
             'market_trend': {**{key: val for key, val in value.items() if key not in ('present', 'classified_at')},
                              'ts': _time(value['classified_at'])},
             'sidecar': state['entry_policy_effects']['sidecar_active'],
+            'morning': morning,
             'horizons': replace(self.adapter._horizons,
+                **({'open_expectation': morning['open_expectation'], 'open_expectation_as_of':
+                    None if morning['open_expectation_as_of'] is None else _time(morning['open_expectation_as_of'])}
+                   if morning is not None else {}),
                 intraday_risk=horizon['level'] if horizon else intraday['level'],
                 intraday_change_pct=horizon['change_pct'] if horizon else intraday['kospi_pct'],
                 intraday_risk_as_of=(None if horizon['classified_at'] is None else _time(horizon['classified_at']))
                     if horizon else (None if intraday['updated_at'] is None else _time(intraday['updated_at']))),
             'vix': selected[1], 'vix_when': selected[2],
             'vix_state': 'normal' if selected[1] is None else self.adapter._classify_vix(selected[1]),
-            'engine_regime': root['engine_projection']['regime']}
+            'engine_regime': effective_regime(state, self.runtime._now()) if root['schema'] == 3
+                else root['engine_projection']['regime']}
 
     def publish(self, state, root, projection=None):
         plan = self.projection(state, root) if projection is None else projection
@@ -532,6 +612,11 @@ class RegimeOwner:
             elif hasattr(adapter, clock_attr): delattr(adapter, clock_attr)
         self.sidecar._market_trend, self.sidecar._sidecar_active = plan['market_trend'], plan['sidecar']
         adapter._horizons = plan['horizons']
+        if plan['morning'] is not None:
+            morning = plan['morning']
+            adapter._llm_assessment = morning['assessment'] or ''
+            adapter._llm_assessment_date = None if morning['assessment_day'] is None else date.fromisoformat(morning['assessment_day'])
+            adapter._llm_assessment_inited = True
         adapter._vix_value, adapter._vix_state, adapter._vix_last_fetch = plan['vix'], plan['vix_state'], plan['vix_when']
         self.runtime.engine._market_regime = plan['engine_regime']
 
@@ -546,7 +631,10 @@ class RegimeOwner:
             'committed_version': row['terminal']['receipt']['committed_version']}, value, when
 
     def _reduce(self, state, ticket, envelope, version):
-        if state['regime_policy']['schema'] == 2 and ticket.kind in {'noon_index', 'llm_regime'}:
+        if ticket.kind == 'llm_morning_diagnosis':
+            from .regime_morning import append_source
+            return append_source(state, ticket, envelope, version)
+        if state['regime_policy']['schema'] in (2, 3) and ticket.kind in {'noon_index', 'llm_regime'}:
             from .regime_commands import reduce_source
             return reduce_source(self, state, ticket, envelope, version)
         if ticket.kind != 'index_trend': return state
@@ -562,7 +650,7 @@ class RegimeOwner:
             ('before', 'after', 'sidecar_before', 'sidecar_after', 'engine_regime')}
         root['transitions'][ticket.operation_id].update(kind='index_trend', version=version,
             request_digest=ticket.request_digest, outcome_digest=digest(envelope),
-            seal_digest=seal['seal_digest'], rule_digest=_RULE)
+            seal_digest=seal['seal_digest'], rule_digest=seal['request']['inputs']['rule_digest'])
         root['engine_projection'] = {'regime': payload['engine_regime'], 'operation_id': ticket.operation_id, 'version': version}
         return state
 
@@ -603,11 +691,11 @@ class RegimeOwner:
                         await self.sources.complete(ticket, 'cancelled', scope_token=token)
                 raise
 
-    async def _begin(self, operation, kind, token, *, require_seal=False):
+    async def _begin(self, operation, kind, token, *, require_seal=False, dependencies=None):
         admitted = []
         try:
             return await self.sources.begin(operation, kind, require_seal=require_seal,
-                scope_token=token, _admitted_task_observer=admitted.append)
+                dependencies=dependencies, scope_token=token, _admitted_task_observer=admitted.append)
         except asyncio.CancelledError:
             if admitted:
                 self._defer_cancel(operation, kind, token, admitted[0])
@@ -660,8 +748,9 @@ class RegimeOwner:
         sidecar = calc.transition_sidecar_trend(kospi, kosdaq, calc.SidecarState(before['market_trend'], sidecar_before))
         vix_ref, vix, vix_when = self._select_vix(state)
         retained = () if vix_ref is None else (vix_ref['operation_id'],)
+        reads = POLICY_READS + (('regime_policy.horizon',) if state['regime_policy']['schema'] == 3 else ())
         expected = json.loads(self.sources.capture_reads(ticket, source_lanes=('vix_regime',),
-            retained_sources=retained, versioned_policy_reads=POLICY_READS))
+            retained_sources=retained, versioned_policy_reads=reads))
         refresh_vix = vix_when is None or (runtime._now() - vix_when).total_seconds() >= 6 * 3600
         clocks = {'sidecar': runtime._now().isoformat()}
         mid = before['mid_pending']; mid_facts = calc.calculate_mid_regime_facts(kospi, kosdaq)
@@ -712,9 +801,10 @@ class RegimeOwner:
         after['source_refs'] = {'trend': None, 'vix': vix_ref, 'expert': None if expert_receipt.status != 'accepted'
             else {'operation_id': expert.operation_id, 'committed_version': expert_receipt.committed_version}}
         inputs = {'observations': [fact.observation_json for fact in facts], 'clocks': clocks,
-                  'selected_vix': vix_ref, 'expert': expert_payload, 'rule_digest': _RULE}
+                  'selected_vix': vix_ref, 'expert': expert_payload,
+                  'rule_digest': _HORIZON_RULE if state['regime_policy']['schema'] == 3 else _RULE}
         seal = await self.sources.seal(ticket, source_lanes=('vix_regime', 'expert_regime'),
-            retained_sources=retained, versioned_policy_reads=POLICY_READS, inputs=inputs,
+            retained_sources=retained, versioned_policy_reads=reads, inputs=inputs,
             scope_token=token, expected_reads_json=canonical(expected))
         candidate = deepcopy(state); candidate['regime_policy']['trend_state'] = after
         payload = {'before': before, 'after': after, 'sidecar_before': sidecar_before,

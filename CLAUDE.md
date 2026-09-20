@@ -85,6 +85,7 @@
 
 ### 목적 정합성 1단계 (09-17 착수, 09-18 경제/보호·core 큐 연결 검증)
 
+- 최신 C4(09-20): 명시 장전 text diagnosis owner·actual caller·중기 정책 version/표시 소비 경계를 구현하고 신규53시험을 추가했다. 동일 순간 KST 급락·optional 호출 순서·schema 활성 규칙 경합·미게시 getter·DTO/HTML 경계를 보완했다. 최종 UTC/KST 각각4403passed/기존xfail2/경고4·격리0, native/Opus 한정 승인과 외부 조건의 실제14개 소비자 검증을 완료했다. 정본은 `docs/reviews/morning-regime-owner-2026-09-20.md`이며 아래 C3 당시의 C4 미완 표기는 과거 이력이다. 전체5단계·factory/나머지 writer·qualification/최종 sizing·gateway·공식 증거·장기 성능·운영 이행은 여전히 미완이다.
 - 목표: 비용 차감 KODEX200 초과수익 검증 + 현행 위험 한도 유지. 첫 범위는 KR 취소/체결/복구 정합성과 최종 진입 검사다.
 - 상세 설계는 사용자 승인됐으며 구현 계획은 `docs/superpowers/plans/2026-09-17-engine-execution-safety.md`다. feature 브랜치에는 저장/주문/guard 기반과 실제 Portfolio·ExitManager·위험 DTO/reducer, UnifiedEngine 누적체결 큐/receipt를 구현했다. **run_trader·scheduler·broker 운영 경로에는 설치하지 않았다.** 전체 1단계/US 안전성/수익성 완료가 아니다.
 - 공식 GitHub legacy에 현행 TTTC8001R/TTTC8036R 자료가 있다. `docs/integrations/kis-execution-contract-2026-09-17.md`에서 고정 출처와 지원/미지원 범위를 확인한다. 빈 조회·취소 ACK·같은 잔고 반복으로 최초 인계나 취소 최종성을 승인하지 않는다.

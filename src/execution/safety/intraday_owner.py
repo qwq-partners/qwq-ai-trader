@@ -204,7 +204,7 @@ class IntradayRiskOwner:
         root['transitions'][ticket.operation_id] = {
             'before': before.to_dict(), 'after': after.to_dict(), 'version': version,
             'outcome_digest': digest(envelope), 'disposition': disposition, 'effects': effects}
-        if state.get('regime_policy', {}).get('schema') == 2:
+        if state.get('regime_policy', {}).get('schema') in (2, 3):
             from .regime_horizon import fold_horizon
             state['regime_policy']['horizon'] = fold_horizon(state)
         capture_intraday_transition(checkpoint_before, state, ticket=ticket, envelope=envelope,
