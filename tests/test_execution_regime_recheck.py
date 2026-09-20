@@ -278,6 +278,37 @@ def test_missing_regime_policy_rejects_a_facts_row_that_consumed_regime(tmp_path
     asyncio.run(scenario())
 
 
+def test_rederivation_uses_the_owner_clock_not_the_published_decision_time(tmp_path, monkeypatch):
+    """판단 시각은 게시본이 정한다. 그 값으로 당일 게이트를 재유도하면 급락이 가려진다.
+
+    같은 순간을 UTC 표기로 담은 `decided_at` 은 게시 검사(astimezone 대조)를 통과하지만
+    naive `.date()` 는 전일이라, 장중 급락 관측의 당일 게이트가 열린 것처럼 보인다.
+    """
+    async def scenario():
+        from datetime import timezone
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await f['intraday']('crash', f['clock'][0])
+            assert effective_regime(f['runtime'].owner.state, f['clock'][0]) == 'sideways'
+            decided = f['clock'][0].replace(hour=8).astimezone(timezone.utc)
+            assert decided.date() != f['clock'][0].date()
+            req = f['request']()
+            await f['market_quote'](req)
+            await f['commands'].publish_qualification_source('regime', as_of=decided,
+                digest=regime_digest('bull'), expected_version=f['runtime'].owner.version)
+            row = f['commands'].read_qualification_source('regime')
+            source = ConsumedSource('regime', row['version'],
+                                    datetime.fromisoformat(row['as_of']), row['digest'])
+            await publish(f, make_facts(req, sources=(source,), decided_at=decided), sources=False)
+            with pytest.raises(ValueError, match='stale_regime_decision'):
+                await f['commands'].prepare(req, f['entry'](req))
+            assert f['runtime'].owner.state['attempts'] == {}
+            assert f['broker']._session.posts == []
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
 def test_read_qualification_source_hands_out_a_detached_copy(tmp_path, monkeypatch):
     """반환값 변형이 게시본에 닿으면 어댑터가 stale 대조를 조용히 무력화한다."""
     async def scenario():
