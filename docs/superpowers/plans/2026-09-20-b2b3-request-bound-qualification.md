@@ -67,6 +67,14 @@ S1:
 
 S3~S5 는 인계 Do 1~4항과 조사 C 의 RED 후보 24건을 기준으로 S1 통합 뒤 확정한다. 실큐 시험은 "조용한 폐기"를 통과로 오인하지 않도록 `stats.errors_count` 와 gateway 수신 사실을 명시 단언한다.
 
+### S3 사전 확인 (coordinator 소스 대조, `03cc2d6`)
+
+- **세션 표가 둘이다.** legacy `KRSession.get_session`(`src/utils/session.py:125-161`): 08:00~08:50 PRE / 09:00~15:20 REGULAR / 15:40~20:00 NEXT, 그 사이(08:50~09:00, 15:20~15:40)는 전부 CLOSED, 공휴일 반영, **naive `datetime.now()`**. owner `requests._session_at`(64-72): 같은 틈을 `pre_close`/`closing`(MARKET 만 거부)·`break`(전면 거부)로 나누고 휴장은 판단하지 않는다.
+  → gateway 는 기존 후보 판단(on_signal 의 거래시간 게이트)을 **먼저** 통과시킨 뒤 owner 로 넘긴다. 순서를 뒤집으면 기존에 막히던 틈 구간에 LIMIT 주문이 새로 열린다. 시간 규칙 fact 의 `decided_at`/`expires_at` 은 aware KST(`runtime._now()`)로 만들고, 실큐 시험은 legacy 벽시계 경로까지 시계를 주입한다.
+- **조용한 폐기 지점**: `engine.py:527-533`(`_process_event` 안, handler 호출 전). S3 의 분기는 여기 한 곳이다.
+- **eviction**: 호출 `engine.py:2289`(BUY 거부 경로 안), 정의 1586, SELL 신호의 권한 표식은 `metadata['source']='replacement'`(1669) 문자열뿐 → S4 에서 `EntryAuthority` 발급 context 로 대체한다.
+- **하위 에이전트 worktree**: 수동 `git worktree add` + worker `EnterWorktree` 는 Bash 격리 고정점 불일치로 실패했다(S1 1차, 커밋 0). Workflow `isolation:'worktree'` + worktree 안에서 `git switch -c work/<이름> <base SHA>` 방식으로 재시도 중이다.
+
 ## 4. 역할·모델·한도 (정책 `ai-routing-v1-2026-09-20`)
 
 | 역할 | 요청 모델/effort | 근거 | 한도 |
