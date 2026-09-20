@@ -310,6 +310,7 @@
   - **P2 스텁 공개 불완전:** 재사용한 `_order_env` 가 세션뿐 아니라 `engine.can_open_position`(항상 통과)·`_risk_validator`·`_sector_lookup` 도 스텁한다 — 통과 경로에서 실제 게이트는 돌지 않는다. → 파일 독스트링과 계획서에 명시. **실제 게이트 통과 경로는 S3-6b 가 처음 태운다.**
   - **P2 (S3 범위 밖의 구조적 전제) `bind_execution_runtime` 이 legacy 장부 잔류를 보지 않는다** — 잔류한 `_pending_timestamps` 가 있으면 attach 뒤에도 진입부 90초 stale SELL 이 owner 를 우회해 직접 POST 한다. → **S3-6b 에 H6 로 추가**(bind 시 legacy 장부 3종이 비어 있지 않으면 RuntimeError).
 - **coordinator 변이 재적용:** m5(증거를 `order` 접근 뒤에 읽음)·n3(pop 을 `finally` 밖으로) → **각각 새 시험만 실패**(1 failed / 20 passed). m4(인계점의 예외 흡수 제거)는 재현자 기록에 `killed=false` 로 적혀 있었으나 실패 시험 4건을 함께 적은 **표기 오류**였다 — 직접 적용해 5건 실패(kill) 확인. 전부 원복·트리 clean.
+- **wave 4 전체 suite(coordinator, HEAD `5d80df2`, 단독 직렬·다른 세션 pytest 없음, 2026-09-21 04:52~05:02 KST):** UTC **4733 passed / 2 xfailed / 경고 4 / 311.35초**(종료 시 load 1.76), KST **4733 / 2 / 4 / 308.37초**(load 1.33), 각 격리 0. `09dcf77` 의 4709 대비 **+24 = Codex 2차 처분 시험 3 + 실큐 배선 21(구현 19 + coordinator 2)**. live 파일 `engine.py` 의 변경이 범위 밖 시험(legacy on_signal 소비 5파일·T11 기준선 포함)을 깨지 않았다. 기존 xfail 2·경고 4 불변.
 - **남은 것(이 단계에서 고정하지 않음):** UNKNOWN 의 실큐 접합 쪽 대조 · attach 모드의 체결 메타·pending 교착 감시가 빈 값을 본다는 결정 ④의 이월 사항(10A3/10C) · dispatch 의 network await 동안 엔진 루프가 멈추는 지연 상한.
 - **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
