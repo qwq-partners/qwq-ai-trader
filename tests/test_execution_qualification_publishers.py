@@ -55,14 +55,16 @@ PANEL_CREATED = '2026-09-13T21:00:00'
 # 출처 이름은 소비 범위까지 담는다(F1). 전역 한 행이면 종목·전략별 digest 가 서로를 밀어낸다.
 MEMORY_SOURCE = 'trade_memory:sepa_trend:' + SECTOR
 PANEL_SOURCE = 'panel_outlook:' + SYM
+# 실제 메모리는 섹터마다 다른 값을 돌려준다. 상수 stub 이면 귀속이 틀려도 드러나지 않는다.
+MEMORY_BY_SECTOR = {SECTOR: MEMORY_ADJ, '': -7}
 
 
-def cv(*, memory=MEMORY_ADJ, llm=None):
+def cv(*, memory=True, llm=None):
     """실제 CV 인스턴스. 적대검증기는 끄고(단일 LLM 경로) 나머지 산식은 제품 그대로다."""
     kwargs = {}
-    if memory is not None:
+    if memory is True:
         kwargs['trade_memory'] = SimpleNamespace(
-            get_score_adjustment=lambda strategy, sector: memory)
+            get_score_adjustment=lambda strategy, sector: MEMORY_BY_SECTOR.get(sector, -5))
     if llm is not None:
         kwargs['llm_manager'] = SimpleNamespace(complete=llm)
     validator = CrossStrategyValidator(market='KR', **kwargs)
@@ -298,6 +300,49 @@ def test_f1_two_strategies_with_different_memory_scopes_do_not_stale_each_other(
     asyncio.run(scenario())
 
 
+def test_f8_memory_source_is_attributed_to_the_sector_the_validator_used(
+        tmp_path, monkeypatch, freeze):
+    """규칙9 는 metadata 섹터로 계산하고 증거의 섹터는 조회 후 값이다 — 귀속은 전자여야 한다.
+
+    조회 후 섹터로 이름을 붙이면 '빈 섹터 보정' 행과 '반도체 보정' 행이 한 이름을 공유해
+    뒤 게시가 앞 판단을 stale 로 만든다.
+    """
+    async def scenario():
+        f = await owner_fixture(tmp_path, monkeypatch)
+        try:
+            freeze(11, 0, day=18)
+            rm = manager(monkeypatch, cv())
+
+            async def sector_lookup(symbol):
+                return SECTOR
+
+            rm._sector_lookup = sector_lookup
+            blind = buy(SYM)
+            blind.metadata.pop('sector')
+            first_req = f['request']('A')
+            await f['market_quote'](first_req)
+            _, first = await capture(rm, blind)
+            # 메모리는 빈 섹터로 계산했고 증거의 섹터는 조회 결과다(두 값이 실제로 다르다)
+            assert first.cv_decision['memory_adj'] == MEMORY_BY_SECTOR['']
+            assert first.sector == SECTOR
+            _, second = await capture(rm, buy('000660'))
+            assert second.cv_decision['memory_adj'] == MEMORY_ADJ
+
+            first_facts = await publish(f, first, aid='A')
+            second_facts = await publish(f, second, aid='B')
+            assert 'trade_memory:sepa_trend:-' in {s.name for s in first_facts.sources}
+            assert MEMORY_SOURCE in {s.name for s in second_facts.sources}
+            # 섹터 한도용 facts.sector 는 계속 조회 후 값이다
+            assert first_facts.sector == SECTOR
+            # 소비 범위가 갈렸으므로 둘째 게시가 첫 요청의 인용 version 을 흔들지 않는다
+            assert source_row(f, 'trade_memory:sepa_trend:-')['version'] == 1
+            await f['commands'].prepare(first_req, f['entry'](first_req))
+            assert (await f['send'](first_req)).status is CommandStatus.ACKNOWLEDGED
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
 # ── F4: 전일 게시본은 재사용하지 않는다 (계약 5 의 '당일' 절) ────────────
 
 def test_f4_a_source_published_yesterday_is_republished_instead_of_reused(
@@ -385,7 +430,7 @@ def test_r33_shadow_validate_during_my_llm_await_leaves_no_evidence(tmp_path, mo
             assert passed and holder['cv'].last_decision['symbol'] == '000660'
             return SimpleNamespace(success=True, content='YES 진입 타당', error='')
 
-        holder['cv'] = cv(memory=None, llm=complete)
+        holder['cv'] = cv(memory=False, llm=complete)
         rm = manager(monkeypatch, holder['cv'], regime='neutral')
         # 비강세장 + 85~95 점수라야 내 판단이 실제로 LLM 을 기다린다(VCP 는 레짐 게이트 밖).
         orders, found = await capture(
@@ -407,7 +452,7 @@ def test_r33b_a_delayed_other_llm_cannot_relabel_my_reason(tmp_path, monkeypatch
             await gate.wait()
             return SimpleNamespace(success=True, content='NO 과열 구간', error='')
 
-        shared = cv(memory=None, llm=slow)
+        shared = cv(memory=False, llm=slow)
         # A: 다른 요청이 같은 인스턴스에서 LLM 응답을 기다리는 중이다.
         shared.validate(symbol='000660', side='buy', strategy='sepa_trend', score=90.0,
                         metadata={'indicators': dict(FULL_INDICATORS), 'sector': SECTOR},
@@ -454,7 +499,7 @@ def test_f3_an_intruder_carrying_its_own_token_still_leaves_no_evidence(tmp_path
             assert passed and holder['cv'].last_decision['token'] == 'other'
             return SimpleNamespace(success=True, content='YES 진입 타당', error='')
 
-        holder['cv'] = cv(memory=None, llm=complete)
+        holder['cv'] = cv(memory=False, llm=complete)
         rm = manager(monkeypatch, holder['cv'], regime='neutral')
         orders, found = await capture(
             rm, buy(SYM, score=90.0, strategy=StrategyType.VCP_BREAKOUT))

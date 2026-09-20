@@ -46,11 +46,12 @@ LUNCH = '점심 sweet spot +5 (12:30~13:00)'
 
 
 def _cv(**changes):
-    """S2-1 이 고정한 12키 증거 dict (09:45 통과 판단 표본)."""
+    """S2-1 이 고정한 13키 증거 dict (09:45 통과 판단 표본)."""
     row = {
         'token': 'req-1', 'symbol': '005930', 'side': 'buy', 'strategy': 'sepa_trend',
         'regime': 'sideways', 'penalties': (EARLY,), 'cap_applied': False,
-        'original': 72.0, 'adjusted': 64.0, 'memory_adj': 0, 'panel': None, 'now_hm': 945,
+        'original': 72.0, 'adjusted': 64.0, 'memory_adj': 0, 'memory_sector': None,
+        'panel': None, 'now_hm': 945,
     }
     row.update(changes)
     return row
@@ -300,7 +301,7 @@ def test_r22_only_regime_is_cited_when_nothing_else_contributed():
 def test_r22_memory_and_panel_are_cited_only_when_they_moved_the_score():
     module = api()
     cv = _cv(penalties=(EARLY, '메모리보정(-3)', '전문가패널 추천(+7 conv=90%/신선도80%)'),
-             memory_adj=-3,
+             memory_adj=-3, memory_sector='반도체',
              panel={'created_at': '2026-09-20T21:00:00', 'conviction': 0.9, 'bonus': 7,
                     'loaded_at': _naive(900)})
     _built, pending = _build(module, cv=cv)
@@ -310,12 +311,36 @@ def test_r22_memory_and_panel_are_cited_only_when_they_moved_the_score():
     # 관측 시각은 CV 판독 시각이다(판단 시각도, 원본 생성시각도 아니다 — 생성시각은 digest 안)
     assert all(source.as_of == _at(945) - timedelta(seconds=1) for source in pending)
     # memory_adj 가 0 으로 돌아오면 인용도 사라진다
-    _b2, pending2 = _build(module, cv={**cv, 'memory_adj': 0})
+    _b2, pending2 = _build(module, cv={**cv, 'memory_adj': 0, 'memory_sector': None})
     assert [source.name for source in pending2] == ['panel_outlook:005930']
-    # 섹터를 모르면 이름의 그 자리는 '-' 다(빈 조각은 commands 의 신원 검사를 통과하지 못한다)
-    _b3, pending3 = _build(module, cv=cv, sector=None)
+    # CV 가 섹터를 모르는 채로 보정했으면 이름의 그 자리는 '-' 다(빈 조각은 commands 의
+    # 신원 검사를 통과하지 못한다). 조회 후 섹터가 있어도 귀속은 바뀌지 않는다.
+    _b3, pending3 = _build(module, cv={**cv, 'memory_sector': ''}, sector=None)
     assert [source.name for source in pending3] == [
         'panel_outlook:005930', 'trade_memory:sepa_trend:-']
+
+
+def test_memory_source_is_attributed_to_the_sector_the_validator_used():
+    """CV 가 빈 섹터로 계산한 보정을 조회 후 섹터로 귀속하면 다른 범위를 stale 로 만든다."""
+    module = api()
+    cv = _cv(penalties=(EARLY, '메모리보정(-3)'), memory_adj=-3, memory_sector='')
+    built, pending = _build(module, cv=cv, sector='반도체')
+    # 이름·digest 는 CV 가 넘긴 섹터를, facts.sector 는 조회 후 섹터를 쓴다
+    assert [source.name for source in pending] == ['trade_memory:sepa_trend:-']
+    assert built.sector == '반도체'
+    _looked_up, looked_up_pending = _build(
+        module, cv={**cv, 'memory_sector': '반도체'}, sector='반도체')
+    assert looked_up_pending[0].name == 'trade_memory:sepa_trend:반도체'
+    assert looked_up_pending[0].digest != pending[0].digest
+
+
+def test_memory_source_without_a_reported_sector_is_refused():
+    """보정이 붙었는데 귀속 섹터가 없으면 아무 섹터로 채우지 않고 끝낸다."""
+    module = api()
+    cv = _cv(penalties=(EARLY, '메모리보정(-3)'), memory_adj=-3)
+    assert cv['memory_sector'] is None
+    assert _refusal(module, cv=cv, sector='반도체') == 'unexpected_cv_decision'
+    assert _refusal(module, cv={**cv, 'memory_sector': 3}) == 'unexpected_cv_decision'
 
 
 def test_r23_non_deciding_inputs_are_never_cited_as_sources():
@@ -359,12 +384,17 @@ def test_expiry_is_anchored_on_the_decision_time_not_the_observation():
 def test_source_scope_segments_must_be_usable_as_a_published_name():
     """이름 조각에 공백·빈값·':' 이 섞이면 다른 범위와 겹치거나 게시 자체가 거부된다."""
     module = api()
-    cv = _cv(memory_adj=-3, penalties=(EARLY, '메모리보정(-3)'))
-    for bad in ('', ' 반도체', '반도체:2차전지'):
-        assert _refusal(module, cv=cv, sector=bad) == 'invalid_source_scope'
+    cv = _cv(memory_adj=-3, memory_sector='반도체', penalties=(EARLY, '메모리보정(-3)'))
+    # 이름 조각이 되는 값은 CV 가 보고한 memory_sector 다('' 는 '-' 로 대체되므로 제외)
+    for bad in (' 반도체', '반도체:2차전지'):
+        assert _refusal(module, cv={**cv, 'memory_sector': bad}) == 'invalid_source_scope'
     built, pending = _build(module, cv=cv, sector='반도체')
     assert [source.name for source in pending] == ['trade_memory:sepa_trend:반도체']
     assert built.sector == '반도체'
+    # 조회 후 섹터는 이름에 쓰이지 않지만 facts 로는 남으므로 DTO 계약이 계속 거른다
+    for bad in ('', ' 반도체'):
+        with pytest.raises(ValueError, match='invalid_decision_sector'):
+            _build(module, cv=cv, sector=bad)
 
 
 # --- R24: overlay fail-open 표식 ---------------------------------------------
@@ -509,7 +539,8 @@ def test_r27_rule_ids_are_unique_and_follow_penalty_order():
         EARLY, 'SEPA 90+ 추격매수 -10', '지표결손(ATR,PER) -4', 'RSI과매수(78>70) -5',
         '[규칙2] 기관+외국인 동시 순매도 — SEPA 감점 -10', '추격매수(등락/ATR=1.8x) -15',
         'MA200하방(-3.2%) -5', '적자+고PBR(6.1) -10', '극단PER(88) -5',
-        '메모리보정(-3)', '누적감점캡(26→15)'), memory_adj=-3, cap_applied=True, adjusted=57.0)
+        '메모리보정(-3)', '누적감점캡(26→15)'), memory_adj=-3, memory_sector='반도체',
+        cap_applied=True, adjusted=57.0)
     built, _pending = _build(module, cv=cv)
     ids = built.qualification.applied_rule_ids
     assert len(set(ids)) == len(ids)
@@ -576,6 +607,9 @@ def test_input_key_sets_are_pinned():
     short = _cv()
     short.pop('panel')
     assert _refusal(module, cv=short) == 'unexpected_cv_decision'
+    without_memory_sector = _cv()
+    without_memory_sector.pop('memory_sector')
+    assert _refusal(module, cv=without_memory_sector) == 'unexpected_cv_decision'
     assert _refusal(module, sizing=_sizing(extra=1)) == 'unexpected_sizing_inputs'
 
 

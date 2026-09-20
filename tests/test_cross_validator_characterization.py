@@ -318,6 +318,10 @@ def test_r2_decision_payload_carries_judgement_inputs(freeze):
     assert run(validator, metadata=meta({}), request_token='t1') == (True, 55.0, '')
 
     decision = validator.last_decision
+    # 증거 채널의 키 집합은 builder 입력 계약이다(S2-4 가 정확 대조로 거부한다)
+    assert set(decision) == {
+        'token', 'symbol', 'side', 'strategy', 'regime', 'penalties', 'cap_applied',
+        'original', 'adjusted', 'memory_adj', 'memory_sector', 'panel', 'now_hm'}
     assert decision['symbol'] == '005930'
     assert decision['side'] == 'buy'
     assert decision['strategy'] == 'momentum_breakout'
@@ -327,6 +331,7 @@ def test_r2_decision_payload_carries_judgement_inputs(freeze):
     assert decision['cap_applied'] is True
     assert decision['now_hm'] == 945
     assert decision['memory_adj'] == 0
+    assert decision['memory_sector'] is None
     assert decision['panel'] is None
     assert isinstance(decision['penalties'], tuple)
     assert any('장초반 변동성' in p for p in decision['penalties'])
@@ -356,6 +361,8 @@ def test_r2_memory_and_panel_contributions_are_reported(freeze):
     decision = validator.last_decision
     assert (passed, adjusted) == (True, 70.0 - 3 + 8)
     assert decision['memory_adj'] == -3
+    # 섹터 미상 metadata 였으므로 메모리가 받은 값은 빈 문자열이다(None 이 아니다)
+    assert decision['memory_sector'] == ''
     assert decision['panel'] == {
         'created_at': '2026-09-20T21:00:00',
         'conviction': 0.8,
@@ -366,6 +373,37 @@ def test_r2_memory_and_panel_contributions_are_reported(freeze):
     # 추천 목록에 없는 종목은 패널 기여가 없다.
     run(validator, symbol='000660', request_token='t2')
     assert validator.last_decision['panel'] is None
+
+
+def test_r2_memory_sector_is_the_value_the_rule_actually_passed(freeze):
+    """규칙9 가 메모리에 넘긴 섹터를 그대로 싣는다 — 조회 후 섹터로 귀속하면 안 된다.
+
+    실제 메모리는 섹터마다 다른 값을 돌려주므로 보정의 소비 범위는 '넘긴 섹터'다.
+    """
+    freeze(11, 0)
+    seen = []
+
+    def adjustment(strategy, sector):
+        seen.append(sector)
+        return -3 if sector == '반도체' else -7
+
+    validator = cv(trade_memory=SimpleNamespace(get_score_adjustment=adjustment))
+
+    # metadata 에 섹터가 있으면 그 값이 그대로 넘어간다
+    assert run(validator, metadata=meta(sector='반도체'))[1] == 67.0
+    assert seen[-1] == '반도체'
+    assert validator.last_decision['memory_sector'] == '반도체'
+
+    # 섹터 미상이면 빈 문자열이 넘어간다 — None 과 구분된다
+    assert run(validator)[1] == 63.0
+    assert seen[-1] == ''
+    assert validator.last_decision['memory_sector'] == ''
+
+    # 보정이 0 이면 적용 자체가 없으므로 귀속할 섹터도 없다
+    quiet = cv(trade_memory=SimpleNamespace(get_score_adjustment=lambda strategy, sector: 0))
+    assert run(quiet, metadata=meta(sector='반도체'))[1] == 70.0
+    assert quiet.last_decision['memory_adj'] == 0
+    assert quiet.last_decision['memory_sector'] is None
 
 
 def _reply(content, success=True):

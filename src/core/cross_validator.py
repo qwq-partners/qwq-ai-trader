@@ -266,6 +266,7 @@ class CrossStrategyValidator:
         # 증거 채널이 실을 기여 사실 (붙지 않았으면 붙지 않았다고 남긴다)
         _now_hm: Optional[int] = None        # KR 시간 가드가 읽은 시각(HHMM)
         _memory_adj: int = 0                 # 이번 호출에 실제 적용된 규칙9 보정
+        _memory_sector: Optional[str] = None  # 그 보정을 계산할 때 메모리에 넘긴 섹터
         _panel: Optional[Dict[str, Any]] = None   # 규칙10 보너스가 실제로 붙었을 때만
         _cap_applied: bool = False
 
@@ -503,12 +504,16 @@ class CrossStrategyValidator:
 
         # === 규칙 9: 거래 메모리 기반 점수 보정 ===
         if self._trade_memory:
-            memory_adj = self._trade_memory.get_score_adjustment(strategy, sector or "")
+            # 메모리에 실제로 넘긴 섹터를 그대로 들고 있는다 — 보정 값은 섹터마다 다르므로
+            # 증거는 나중에 조회한 섹터가 아니라 이 값으로 출처를 귀속해야 한다 (2026-09-20 S2)
+            memory_sector = sector or ""
+            memory_adj = self._trade_memory.get_score_adjustment(strategy, memory_sector)
             if memory_adj != 0:
                 adjusted_score += memory_adj
                 penalties.append(f"메모리보정({memory_adj:+d})")
                 self.last_memory_adj = memory_adj
                 _memory_adj = memory_adj
+                _memory_sector = memory_sector
 
         # === 규칙 10: 전문가 패널 추천 보너스 (2026-05-03 P0 통합) ===
         # 일요일 21:00 갱신, 14일 이내 신선도 가중. 모든 전략에 일관 적용.
@@ -662,6 +667,7 @@ class CrossStrategyValidator:
             "original": score,
             "adjusted": adjusted_score,
             "memory_adj": _memory_adj,
+            "memory_sector": _memory_sector,
             "panel": _panel,
             "now_hm": _now_hm,
         }
