@@ -288,6 +288,10 @@ def test_rederivation_uses_the_owner_clock_not_the_published_decision_time(tmp_p
         from datetime import timezone
         f = await fixture(tmp_path, monkeypatch)
         try:
+            # 이 시험이 두 시각을 구분하는 근거는 schema1 경로의 naive `.date()` 대조다.
+            # schema3(horizon)는 양쪽을 KST 로 정규화해 이 변이가 동치가 된다 — fixture 가
+            # schema3 으로 넘어가면 조용히 무력화되지 말고 여기서 깨져 다른 축으로 다시 세우게 한다.
+            assert f['runtime'].owner.state['regime_policy'].get('schema', 1) == 1
             await f['intraday']('crash', f['clock'][0])
             assert effective_regime(f['runtime'].owner.state, f['clock'][0]) == 'sideways'
             decided = f['clock'][0].replace(hour=8).astimezone(timezone.utc)
