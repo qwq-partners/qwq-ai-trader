@@ -62,16 +62,23 @@ def reservations(attempt):
             attempt['reserved_exposure'], attempt['reserved_planned_risk'])
 
 
-def test_abandon_rejects_claimed_attempt():
-    """claim 된 시도는 이미 POST 가 시작됐을 수 있어 예약을 풀 수 없다."""
+@pytest.mark.parametrize('state', ['submitting', 'prepared'])
+def test_abandon_rejects_claimed_attempt(state):
+    """claim 된 시도는 이미 POST 가 시작됐을 수 있어 예약을 풀 수 없다.
+
+    복구된 checkpoint 에서 state 와 claim_id 가 어긋나더라도 claim_id 하나만으로
+    '송신을 시작한 적 없음'을 판정한다.
+    """
     async def scenario():
         owner, life = await prepared()
         assert await life.claim('A-1', 'sender-1')
+        if state == 'prepared':
+            await bind_reservation(owner, 'A-1', state='prepared', status='prepared')
         before = deepcopy(owner.state)
         assert await life.abandon_candidate('A-1', reason='claim_not_available') is False
         assert owner.state == before
         attempt = owner.state['attempts']['A-1']
-        assert attempt['state'] == 'submitting' and attempt['claim_id'] == 'sender-1'
+        assert attempt['state'] == state and attempt['claim_id'] == 'sender-1'
         assert reservations(attempt) == (10, CASH, EXPOSURE, PLANNED_RISK)
     asyncio.run(scenario())
 
