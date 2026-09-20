@@ -5,7 +5,7 @@ I/O·await 가 없고 현재 시각을 스스로 읽지 않는다 — now 는 �
 stale 대조는 `commands.py` 가 하고 여기서는 게시 대상만 계산한다.
 
 입력은 두 개다. `cv_decision` 은 S2-1 이 고정한 `CrossStrategyValidator.last_decision`
-12키 dict, `sizing_inputs` 는 S2-2 가 고정한 `RiskManager._last_sizing_inputs` 14키
+13키 dict, `sizing_inputs` 는 S2-2 가 고정한 `RiskManager._last_sizing_inputs` 14키
 dict 다. 키 집합이 다르면 조용히 채우지 않고 거부한다.
 
 반환은 `(facts, pending)` 이다. `facts.sources` 에는 게시 신원이 이미 확정된 출처
@@ -30,7 +30,8 @@ _KST = ZoneInfo('Asia/Seoul')
 
 # S2-1·S2-2 가 고정한 입력 키 집합 (누락·추가는 전부 거부)
 _CV_KEYS = frozenset({'token', 'symbol', 'side', 'strategy', 'regime', 'penalties',
-                      'cap_applied', 'original', 'adjusted', 'memory_adj', 'panel', 'now_hm'})
+                      'cap_applied', 'original', 'adjusted', 'memory_adj', 'memory_sector',
+                      'panel', 'now_hm'})
 _SIZING_KEYS = frozenset({'base_pct', 'strategy_allocation_pct', 'min_position_value',
                           'strength_multiplier', 'position_multiplier', 'calendar_multiplier',
                           'volatility_multiplier', 'conviction_multiplier', 'atr_pct',
@@ -278,7 +279,7 @@ def _regime_source(regime_used, regime_row, decided_at):
                           digest=expected)
 
 
-def _pending_sources(cv_decision, sector, observed_at):
+def _pending_sources(cv_decision, observed_at):
     """판정을 실제로 바꾼 출처만 게시 대상으로 남긴다(계약 1).
 
     이름은 digest 가 갈리는 범위까지 담는다 — 패널은 종목별, 메모리 보정은 전략·섹터별이다.
@@ -305,11 +306,17 @@ def _pending_sources(cv_decision, sector, observed_at):
         _refuse('unexpected_cv_decision')
     if memory_adj != 0:
         # last_decision 에는 적용 규칙·score_delta 가 없다. 보정을 결정하는 입력(전략·섹터)과
-        # 적용된 결과값으로 digest 를 만든다.
-        body = {'strategy': cv_decision['strategy'], 'sector': sector, 'memory_adj': memory_adj}
-        # 섹터 미상은 '-' 다. 빈 조각은 commands 의 신원 검사를 통과하지 못한다.
+        # 적용된 결과값으로 digest 를 만든다. 섹터는 CV 가 메모리에 **실제로 넘긴** 값이다 —
+        # 판정 뒤에 조회한 섹터로 귀속하면 서로 다른 소비 범위가 한 행을 덮어써 정상 판단을
+        # stale 로 만들고, 출처가 CV 가 쓰지도 않은 섹터에 달린다.
+        memory_sector = cv_decision['memory_sector']
+        if type(memory_sector) is not str:
+            _refuse('unexpected_cv_decision')
+        body = {'strategy': cv_decision['strategy'], 'sector': memory_sector,
+                'memory_adj': memory_adj}
+        # 섹터 미상('')은 '-' 다. 빈 조각은 commands 의 신원 검사를 통과하지 못한다.
         name = ('trade_memory:' + _scope(cv_decision['strategy'], 'invalid_source_scope') + ':'
-                + ('-' if sector is None else _scope(sector, 'invalid_source_scope')))
+                + ('-' if memory_sector == '' else _scope(memory_sector, 'invalid_source_scope')))
         pending.append(PendingSource(name, observed_at, _sha256(canonical(body))))
     return tuple(pending)
 
@@ -354,7 +361,7 @@ def build_decision_facts(*, intent_id, symbol, side, strategy, origin, sector, c
     _check_clock(cv_decision, decided_at, strategy, rule_ids)
 
     source = _regime_source(regime_used, regime_row, decided_at)
-    pending = _pending_sources(cv_decision, sector, observed_at)
+    pending = _pending_sources(cv_decision, observed_at)
 
     panel = cv_decision['panel']
     expires_at = entry_expires_at(decided_at, strategy=strategy,

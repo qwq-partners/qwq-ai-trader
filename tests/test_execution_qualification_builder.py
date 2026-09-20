@@ -539,7 +539,8 @@ def test_r27_rule_ids_are_unique_and_follow_penalty_order():
         EARLY, 'SEPA 90+ 추격매수 -10', '지표결손(ATR,PER) -4', 'RSI과매수(78>70) -5',
         '[규칙2] 기관+외국인 동시 순매도 — SEPA 감점 -10', '추격매수(등락/ATR=1.8x) -15',
         'MA200하방(-3.2%) -5', '적자+고PBR(6.1) -10', '극단PER(88) -5',
-        '메모리보정(-3)', '누적감점캡(26→15)'), memory_adj=-3, cap_applied=True, adjusted=57.0)
+        '메모리보정(-3)', '누적감점캡(26→15)'), memory_adj=-3, memory_sector='반도체',
+        cap_applied=True, adjusted=57.0)
     built, _pending = _build(module, cv=cv)
     ids = built.qualification.applied_rule_ids
     assert len(set(ids)) == len(ids)
