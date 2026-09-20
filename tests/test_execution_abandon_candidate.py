@@ -97,9 +97,14 @@ def test_abandon_rejects_settled_or_conflicted_attempt(field, value):
 
 
 @pytest.mark.parametrize('field,value', [
-    ('command_status', 'unknown'), ('order_ref', SIBLING_REF.to_dict())])
+    ('command_status', 'unknown'), ('order_ref', SIBLING_REF.to_dict()),
+    ('state', 'final_filled')])
 def test_abandon_rejects_attempt_with_send_evidence(field, value):
-    """명령 결과·브로커 주문번호가 남아 있으면 미송신 증거가 아니다."""
+    """명령 결과·브로커 주문번호가 남아 있으면 미송신 증거가 아니다.
+
+    state 만 prepared 가 아닌 복구 행(claim_id·command_status·order_ref 는 비어 있음)도
+    같은 이유로 거부한다 — state 가드가 다른 절에 가려 빠져도 모르는 일이 없게 한다.
+    """
     async def scenario():
         owner, life = await prepared(**{field: value})
         before = deepcopy(owner.state)
@@ -151,8 +156,11 @@ def test_abandon_unblocks_intent_retry():
         assert life.replacement_quantity('I-1') == 0
         with pytest.raises(ValueError, match='previous attempt unresolved or target exceeded'):
             await life.prepare('I-1', 'A-2', 10, SYMBOL, 'buy', reserved_cash=CASH)
+        before_version = owner.state['attempts']['A-1']['version']
         assert await life.abandon_candidate('A-1', reason='claim_not_available') is True
         attempt = owner.state['attempts']['A-1']
+        # 다른 전이와 같이 상태 변경과 version 증가가 한 쌍이다
+        assert attempt['version'] == before_version + 1
         assert attempt['state'] == attempt['status'] == 'final_rejected'
         assert attempt['command_status'] == 'not_sent'
         assert attempt['reason_code'] == 'claim_not_available'

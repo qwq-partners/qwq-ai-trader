@@ -15,8 +15,9 @@ import pytest
 from src.execution.safety import risk_policy as p
 from src.execution.safety.policy_snapshot import PolicyContext, build_owned_snapshot
 
+from test_execution_policy_snapshot import baseline as owned_baseline
 from test_execution_regime_recheck import fixture as regime_fixture
-from test_execution_risk_policy import snapshot as policy_snapshot
+from test_execution_risk_policy import NOW, snapshot as policy_snapshot
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +61,19 @@ def test_the_hybrid_axis_refuses_a_non_bool_value(bad):
     assert 'fields' not in str(rejected.value)
     with pytest.raises(ValueError, match='bool'):
         replace(policy_snapshot(p).policy, hybrid_enabled=bad)
+
+
+def test_the_owned_snapshot_keeps_the_hybrid_axis_without_a_regime_owner():
+    """[행동] regime owner 가 없는 owner(비-regime 분기)의 snapshot 도 축을 그대로 싣는다.
+
+    S3-3 의 hybrid 대조 상대가 바로 이 snapshot 이다 — 여기서 축이 조용히 off 로 바뀌면
+    설정 hybrid on 이 대조를 통과해 버린다.
+    """
+    state = owned_baseline()
+    assert 'regime_policy' not in state
+    value = context(hybrid_enabled=True)
+    owned = build_owned_snapshot(state, context=value, version=9, now=NOW, prices={})
+    assert owned.policy == value.policy and owned.policy.hybrid_enabled is True
 
 
 def test_the_owned_snapshot_keeps_the_hybrid_axis_through_the_regime_replace(tmp_path, monkeypatch):
