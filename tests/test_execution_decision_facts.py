@@ -4,15 +4,17 @@
 `trading_ready` 는 제품 코드에서 계속 False 다.
 """
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from src.core.types import OrderSide, StrategyType
+from src.core.types import OrderSide, Position, StrategyType
 from src.execution.safety import risk_policy as p
 from src.execution.safety.economics import decode_portfolio, encode_portfolio
 from src.execution.safety.lifecycle import CommandStatus
@@ -23,7 +25,7 @@ from src.utils.sizing import atr_position_multiplier
 from test_execution_command_owner import fixture as command_fixture, held
 from test_execution_risk_policy import NOW, snapshot as policy_snapshot
 from test_execution_sizing_characterization import (  # noqa: F401 — pytest fixture 재사용
-    EQUITY, PRICE, external_factors, _config, _manager, _signal, _stop_recorder,
+    EQUITY, PRICE, external_factors, _config, _manager, _portfolio, _signal, _stop_recorder,
 )
 
 
@@ -50,6 +52,7 @@ def make_facts(req, *, sector=None, stop=None, **changes):
     values = dict(
         intent_id=req.intent_id, symbol=req.symbol, side=req.side.value, strategy=req.strategy,
         origin='automatic', sector=sector, config_version='effective-config',
+        hybrid_enabled=False,
         decided_at=NOW, expires_at=NOW + timedelta(minutes=30), base_pct=0.25,
         strategy_allocation_pct=None, min_position_value=D('200000'), strength_multiplier=1.0,
         position_multiplier=1.0, calendar_multiplier=1.0, volatility_multiplier=1.0,
@@ -84,6 +87,23 @@ async def economy(f, **changes):
     await f['runtime'].owner.mutate('synthetic-economy:'+''.join(changes), reduce)
     for key, value in changes.items():
         setattr(f['engine'].portfolio, key, value)
+
+
+async def unrelated_holding(f, *, symbol='000660', quantity, price=D('10000')):
+    """무관 종목 보유를 심어 현금만 줄인다(자산은 그대로 → 기존 gate 는 통과 구간)."""
+    from src.core.types import PositionSide
+    from src.execution.safety.protection import decode_protection, encode_protection
+    def reduce(state):
+        pf = decode_portfolio(state['portfolio'])
+        position = Position(symbol, side=PositionSide.LONG, quantity=quantity,
+            avg_price=price, current_price=price, strategy='manual', entry_time=NOW)
+        pf.positions[symbol] = position
+        pf.cash -= price * quantity
+        exits = decode_protection(state['protection'], clock=lambda: NOW)
+        exits.register_position(position)
+        state['portfolio'], state['protection'] = encode_portfolio(pf), encode_protection(exits)
+        return state
+    await f['runtime'].owner.mutate('synthetic-holding:'+symbol+str(quantity), reduce)
 
 
 @pytest.mark.parametrize('route', ['automatic', 'user', 'safe_asset', 'sell', 'cancel'])
@@ -171,9 +191,12 @@ async def paused_dispatch(f, req, *, boundary):
 async def apply_change(f, req, facts, change):
     commands, runtime = f['commands'], f['runtime']
     if change == 'cash':
-        await economy(f, cash=D('600000'))
+        # 현금만 134주 어치 줄인다: 자산 200만 유지 → 크기/현금 gate 는 통과하고
+        # kernel 의 1.3배 증거금 상한만 43주로 떨어진다.
+        await unrelated_holding(f, quantity=134)
     elif change == 'reservation':
-        other = f['request']('B', symbol='000660', quantity=140, strategy='manual')
+        # 130주 예약이면 기존 현금 gate(500,500 ≤ 580,500)는 허용하고 kernel 만 부족하다.
+        other = f['request']('B', symbol='000660', quantity=130, strategy='manual')
         await f['quote'](other)
         await commands.prepare(other, f['authority'].user_order(other.symbol, 'buy'))
     elif change == 'daily_loss':
@@ -207,17 +230,21 @@ def test_final_recheck_blocks_post_after_the_network_await(tmp_path, monkeypatch
             await apply_change(f, req, facts, change)
             release.set()
             result = await task
-            assert result.status in (CommandStatus.NOT_SENT, CommandStatus.UNKNOWN)
+            # guard 거부는 전송 자체가 없었다는 뜻이다. UNKNOWN(응답 불명)과 섞지 않는다.
+            assert result.status is CommandStatus.NOT_SENT
             assert f['broker']._session.posts == []
             # 미송신은 예약을 새로 잡지도 남기지도 않는다(누수 없이 전량 해제).
             current = f['runtime'].owner.state['attempts']['A']
             assert (D(current['reserved_cash']), D(current['reserved_exposure']),
                     current['reserved_quantity']) == (D('0'), D('0'), 0)
+            assert current['command_status'] == 'not_sent'
+            assert current['state'] == 'final_rejected'
         finally: await f['store'].close()
     asyncio.run(scenario())
 
 
-def test_final_recheck_also_covers_the_hashkey_await_boundary(tmp_path, monkeypatch):
+@pytest.mark.parametrize('change', ['source', 'reservation'])
+def test_final_recheck_also_covers_the_hashkey_await_boundary(tmp_path, monkeypatch, change):
     async def scenario():
         f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
         try:
@@ -226,25 +253,109 @@ def test_final_recheck_also_covers_the_hashkey_await_boundary(tmp_path, monkeypa
             facts = await publish(f, make_facts(req))
             await f['commands'].prepare(req, f['entry'](req))
             task, release = await paused_dispatch(f, req, boundary='hashkey')
-            await apply_change(f, req, facts, 'source')
+            await apply_change(f, req, facts, change)
             release.set()
-            assert (await task).status in (CommandStatus.NOT_SENT, CommandStatus.UNKNOWN)
+            assert (await task).status is CommandStatus.NOT_SENT
             assert f['broker']._session.posts == []
+            current = f['runtime'].owner.state['attempts']['A']
+            assert current['command_status'] == 'not_sent'
+            assert current['state'] == 'final_rejected'
         finally: await f['store'].close()
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('unrelated', ['other_quote', 'other_source', 'policy_context'])
+def test_unknown_response_keeps_the_reservation_and_never_reposts(tmp_path, monkeypatch):
+    """전송 후 응답 불명은 예약을 유지한다(미송신 해제와 반대 성질)."""
+    async def scenario():
+        f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
+        try:
+            req = f['request'](quantity=JUSTIFIED)
+            await f['quote'](req)
+            await publish(f, make_facts(req))
+            prepared = await f['commands'].prepare(req, f['entry'](req))
+            assert (prepared['reserved_cash'], prepared['reserved_quantity']) == ('507500.000', 50)
+            # 주문번호 없는 ACK → 신원 불명. POST 는 이미 나갔다.
+            f['broker']._session.response.data = {'rt_cd': '0'}
+            result = await f['commands'].dispatch(req, f['entry'](req),
+                GuardedKISTransport(f['broker'], request_builder=f['builder']))
+            assert result.status is CommandStatus.UNKNOWN
+            current = f['runtime'].owner.state['attempts']['A']
+            assert (current['reserved_cash'], current['reserved_quantity']) == ('507500.000', 50)
+            assert current['state'] == 'blocked_unknown'
+            again = await f['commands'].dispatch(req, f['entry'](req),
+                GuardedKISTransport(f['broker'], request_builder=f['builder']))
+            assert again.status is CommandStatus.NOT_SENT
+            assert len(f['broker']._session.posts) == 1
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+async def unrelated_submit(f, *, quantity=10, order_no):
+    """무관 종목 BUY 1건을 실제 요청/전송 경로로 접수한다. 응답 주문번호만 분리한다."""
+    other = f['request']('B', symbol='000660', quantity=quantity, strategy='manual')
+    context = f['authority'].user_order(other.symbol, 'buy')
+    await f['quote'](other)
+    await f['commands'].prepare(other, context)
+    f['broker']._session.response.data = {'rt_cd': '0', 'output': {
+        'ODNO': order_no, 'KRX_FWDG_ORD_ORGNO': '12345'}}
+    ack = await f['commands'].dispatch(other, context,
+        GuardedKISTransport(f['broker'], request_builder=f['builder']))
+    assert ack.status is CommandStatus.ACKNOWLEDGED
+    return other, context, ack.order_ref
+
+
+async def unrelated_fill(f, other, ref):
+    """test_execution_command_flow 의 증거/관측 주입을 그대로 재사용한다."""
+    from src.execution.safety.application import FillObservation
+    from src.execution.safety.lifecycle import OrderEvidence, OrderState
+    from test_execution_runtime import queued
+    now, total = f['clock'][0], D('10000') * other.quantity
+    evidence = OrderEvidence(ref, other.symbol, 'buy', other.quantity, other.quantity, total, 0, 0,
+        OrderState.FINAL_FILLED, complete=True, supported_finality=True,
+        source_contract='synthetic-unrelated-only', observed_at=now, request_started_at=now,
+        query_scope=dict(account_scope=ref.account_scope, market='KR', exchange='KRX',
+            start_date=ref.order_date, end_date=ref.order_date, tr_id='TTTC0081R',
+            query_kind='all', session='regular'))
+    assert await f['runtime'].lifecycle.reconcile(other.attempt_id, evidence)
+    observation = FillObservation(ref.account_scope, 'KR', ref.order_date, 'KRX', ref.order_no,
+        other.symbol, 'BUY', other.quantity, total, org_no=ref.org_no,
+        parent_order_no=ref.parent_order_no,
+        metadata={'registration_params': {'stop_loss_pct': 5}})
+    assert (await queued(f['engine'], observation)).status == 'APPLIED'
+
+
+async def unrelated_cancel(f, other, ref):
+    from src.execution.safety.lifecycle import OrderRef
+    from src.execution.safety.requests import CancelParent
+    parent = f['runtime'].owner.state['attempts'][other.attempt_id]
+    cancel = f['builder'].prepare_cancel(intent_id=other.intent_id, attempt_id='C',
+        session=other.session, parent=CancelParent(other.intent_id, other.attempt_id,
+            parent['version'], OrderRef.from_dict(parent['order_ref']), other.symbol,
+            other.side, other.order_type, parent['reserved_quantity'],
+            other.valuation_price, other.strategy))
+    context = f['authority'].user_order(cancel.symbol, 'buy')
+    await f['commands'].prepare(cancel, context)
+    f['broker']._session.response.data = {'rt_cd': '0', 'output': {
+        'ODNO': '8888888888', 'KRX_FWDG_ORD_ORGNO': '12345'}}
+    result = await f['commands'].dispatch(cancel, context,
+        GuardedKISTransport(f['broker'], request_builder=f['builder']))
+    assert result.status is CommandStatus.ACKNOWLEDGED
+
+
+@pytest.mark.parametrize('unrelated', ['other_quote', 'other_source', 'policy_context',
+                                       'other_fill', 'other_cancel_ack'])
 def test_unrelated_owner_version_growth_is_not_stale(tmp_path, monkeypatch, unrelated):
     async def scenario():
         f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
         commands, runtime = f['commands'], f['runtime']
         try:
-            req = f['request'](quantity=JUSTIFIED)
+            # 무관 체결은 매수 수수료 14원만큼 자산을 줄이므로 kernel 상한이 49주가 된다.
+            req = f['request'](quantity=49 if unrelated == 'other_fill' else JUSTIFIED)
             await f['quote'](req)
             await publish(f, make_facts(req))
             await commands.prepare(req, f['entry'](req))
             before = runtime.owner.version
+            original = deepcopy(f['broker']._session.response.data)
             if unrelated == 'other_quote':
                 await commands.observe_entry_quote('000660', D('20000'), as_of=f['clock'][0],
                     source='synthetic-market', event_id='unrelated-quote',
@@ -252,15 +363,23 @@ def test_unrelated_owner_version_growth_is_not_stale(tmp_path, monkeypatch, unre
             elif unrelated == 'other_source':
                 await commands.publish_qualification_source('sector_council', as_of=f['clock'][0],
                     digest='synthetic-council-digest', expected_version=runtime.owner.version)
+            elif unrelated == 'other_fill':
+                other, _, ref = await unrelated_submit(f, order_no='9999999999')
+                await unrelated_fill(f, other, ref)
+            elif unrelated == 'other_cancel_ack':
+                other, _, ref = await unrelated_submit(f, order_no='9999999999')
+                await unrelated_cancel(f, other, ref)
             else:
                 context = replace(f['ctx'], versions=replace(f['ctx'].versions,
                                                              execution=runtime.owner.version))
                 await commands.publish_policy_context(context, expected_version=runtime.owner.version)
+            f['broker']._session.response.data = original
+            posted = len(f['broker']._session.posts)
             assert runtime.owner.version > before
             result = await commands.dispatch(req, f['entry'](req),
                 GuardedKISTransport(f['broker'], request_builder=f['builder']))
             assert result.status is CommandStatus.ACKNOWLEDGED
-            assert len(f['broker']._session.posts) == 1
+            assert len(f['broker']._session.posts) == posted + 1
         finally: await f['store'].close()
     asyncio.run(scenario())
 
@@ -300,6 +419,97 @@ def test_publication_pins_day_identity_and_immutability(tmp_path, monkeypatch, f
     asyncio.run(scenario())
 
 
+def test_hybrid_sizing_is_explicitly_refused_before_any_attempt(tmp_path, monkeypatch):
+    """legacy wrapper 는 hybrid 에서 base/max/pool 을 바꾼다 — 재구성 대신 명시 거부한다."""
+    async def scenario():
+        f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
+        try:
+            req = f['request'](quantity=JUSTIFIED)
+            await f['quote'](req)
+            await publish(f, make_facts(req, hybrid_enabled=True))
+            with pytest.raises(ValueError, match='unsupported_hybrid_sizing'):
+                await f['commands'].prepare(req, f['entry'](req))
+            assert f['runtime'].owner.state['attempts'] == {}
+            assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('shape', ['dto', 'row'])
+def test_decision_facts_reject_an_empty_consumed_source_set(shape):
+    """빈 출처는 stale 검사 루프를 통째로 건너뛰므로 DTO 생성에서 막는다."""
+    stub = SimpleNamespace(intent_id='I-A', symbol='005930', side=OrderSide.BUY,
+                           strategy='sepa_trend')
+    with pytest.raises(ValueError, match='invalid_consumed_source'):
+        if shape == 'dto':
+            make_facts(stub, sources=())
+        else:
+            row = make_facts(stub).to_dict()
+            row['sources'] = []
+            api().EntryDecisionFacts.from_dict(row)
+
+
+@pytest.mark.parametrize('fault', ['as_of_mismatch', 'after_decision', 'yesterday_publication'])
+def test_consumed_source_binds_the_publication_time_and_the_current_day(tmp_path, monkeypatch, fault):
+    """version·digest 만으로는 게시 시각·일자를 구속하지 못한다."""
+    async def scenario():
+        f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
+        commands, runtime = f['commands'], f['runtime']
+        module = api()
+        try:
+            req = f['request'](quantity=JUSTIFIED)
+            await f['quote'](req)
+            published_at = NOW - timedelta(minutes=10)
+            await commands.publish_qualification_source('trade_memory', as_of=published_at,
+                digest='synthetic-memory-digest', expected_version=runtime.owner.version)
+            if fault == 'as_of_mismatch':
+                source = module.ConsumedSource('trade_memory', 1, NOW - timedelta(minutes=5),
+                                               'synthetic-memory-digest')
+                facts = make_facts(req, sources=(source,))
+            elif fault == 'after_decision':
+                source = module.ConsumedSource('trade_memory', 1, published_at,
+                                               'synthetic-memory-digest')
+                facts = make_facts(req, decided_at=NOW - timedelta(minutes=20), sources=(source,))
+            else:
+                # 전일 게시본이 남은 상태. 당일 게시 경로로는 만들 수 없어 합성으로 심는다
+                # (시계를 다음 날로 옮기면 day admission 이 먼저 닫혀 이 검사를 못 본다).
+                yesterday = NOW - timedelta(days=1)
+                def stale(state):
+                    state['qualification_sources']['trade_memory']['as_of'] = yesterday.isoformat()
+                    return state
+                await runtime.owner.mutate('synthetic-yesterday-source', stale)
+                source = module.ConsumedSource('trade_memory', 1, yesterday,
+                                               'synthetic-memory-digest')
+                facts = make_facts(req, sources=(source,))
+            with pytest.raises(ValueError, match='stale_qualification_source'):
+                await commands.publish_decision_facts(facts, expected_version=runtime.owner.version)
+            assert 'entry_decision_facts' not in runtime.owner.state
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_forged_decision_facts_digest_in_the_binding_never_posts(tmp_path, monkeypatch):
+    """dispatch 는 시작 시점 binding 을 deepcopy 하므로 위조도 그 앞에서 심는다."""
+    async def scenario():
+        f = await command_fixture(tmp_path, monkeypatch, origin='automatic', policy=nominal())
+        try:
+            req = f['request'](quantity=JUSTIFIED)
+            await f['quote'](req)
+            await publish(f, make_facts(req))
+            await f['commands'].prepare(req, f['entry'](req))
+            def forge(state):
+                binding = state['attempts']['A']['request_binding']
+                binding['decision_facts_digest'] = 'synthetic-forged-digest'
+                return state
+            await f['runtime'].owner.mutate('synthetic-forged-digest', forge)
+            result = await f['commands'].dispatch(req, f['entry'](req),
+                GuardedKISTransport(f['broker'], request_builder=f['builder']))
+            assert result.status is CommandStatus.NOT_SENT
+            assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
 def test_synthetic_startup_permission_absent_never_posts(tmp_path, monkeypatch):
     async def scenario():
         f = await command_fixture(tmp_path, monkeypatch, ready=False, origin='automatic',
@@ -318,20 +528,33 @@ def test_synthetic_startup_permission_absent_never_posts(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
-def _parity_snapshot(*, mode, core_pct, cash=EQUITY, positions=()):
+def _parity_snapshot(*, mode, core_pct, cash=EQUITY, positions=(), pending=(), daily_pnl=D('0')):
     policy = replace(policy_snapshot(p).policy, sizing_mode=mode, core_allocation_pct=core_pct,
         regime_min_cash_reserve_pct=0.0, max_position_pct=28.0, daily_max_loss_pct=5.0,
         risk_per_trade_pct=0.7, risk_max_position_pct=18.0,
         buy_commission_rate=get_fee_calculator('KR').config.buy_commission_rate)
-    return replace(policy_snapshot(p), policy=policy,
-        portfolio=p.PortfolioPolicySnapshot(D(cash), EQUITY, D('0'), 0, positions))
+    return replace(policy_snapshot(p), policy=policy, pending=pending,
+        portfolio=p.PortfolioPolicySnapshot(D(cash), EQUITY, daily_pnl, 0, positions))
+
+
+def _reserving(manager, amount, strategy):
+    """legacy wrapper 의 pending 예약/전략 점유를 실제 필드로 심는다."""
+    manager._reserved_by_order = {'PENDING': amount}
+    manager._pending_strategy = {'PENDING': strategy}
+    return manager
 
 
 def test_final_kernel_quantity_equals_the_actual_legacy_wrapper(external_factors):
     """실제 wrapper 와 같은 표본에서 수량이 일치해야 한다(hybrid 는 범위 밖)."""
     module = api()
+    calls, values = external_factors
     stop_calls = []
     atr = atr_position_multiplier(6.0)
+    sepa_owned = p.PositionPolicyFact('000660', 'sepa_trend', None, 380, D('3800000'),
+                                      NOW.date(), None, None, None, False)
+    sepa_legacy = Position('000660', quantity=380, avg_price=PRICE, current_price=PRICE,
+                           strategy='sepa_trend')
+    pending_buy = p.PendingPolicyFact('P', 'I-P', '000660', 'buy', 'manual', None, D('8000000'))
     cases = [
         ('nominal', 175, _manager(), _signal(), _parity_snapshot(mode='nominal', core_pct=30.0),
          dict(base_pct=0.25, strategy_allocation_pct=42.0)),
@@ -351,22 +574,55 @@ def test_final_kernel_quantity_equals_the_actual_legacy_wrapper(external_factors
              positions=(p.PositionPolicyFact('000660', 'gap_and_go', None, 87, D('8700000'),
                                              NOW.date(), None, None, None, False),)),
          dict(base_pct=0.25, strategy_allocation_pct=42.0)),
+        # 미체결 BUY 예약은 가용현금을 실제로 깎는다(무관 전략이라 전략 예산엔 무영향).
+        ('pending_reservation', 153, _reserving(_manager(config=_config(core_pct=0.0)),
+                                                D('8000000'), 'manual'),
+         _signal(), _parity_snapshot(mode='nominal', core_pct=0.0, pending=(pending_buy,)),
+         dict(base_pct=0.25, strategy_allocation_pct=42.0)),
+        # 전략 예산 잔여(4.2M-3.8M)가 상한이 되는 구간.
+        ('strategy_budget', 40, _manager(config=_config(core_pct=0.0),
+             portfolio=_portfolio(cash=D('6200000'), positions=(sepa_legacy,))),
+         _signal(), _parity_snapshot(mode='nominal', core_pct=0.0, cash=D('6200000'),
+                                     positions=(sepa_owned,)),
+         dict(base_pct=0.25, strategy_allocation_pct=42.0)),
+        ('volatility_downscale', 125, _manager(config=_config(core_pct=0.0)), _signal(),
+         _parity_snapshot(mode='nominal', core_pct=0.0),
+         dict(base_pct=0.25, strategy_allocation_pct=42.0, overlays={'volatility': 0.5})),
+        ('calendar_boost', 192, _manager(), _signal(),
+         _parity_snapshot(mode='nominal', core_pct=30.0),
+         dict(base_pct=0.25, strategy_allocation_pct=42.0, overlays={'calendar': 1.1})),
+        ('conviction_boost', 210, _manager(), _signal(),
+         _parity_snapshot(mode='nominal', core_pct=30.0),
+         dict(base_pct=0.25, strategy_allocation_pct=42.0, overlays={'conviction': 1.2})),
+        ('position_boost', 227, _manager(), _signal(metadata={'position_multiplier': 1.3}),
+         _parity_snapshot(mode='nominal', core_pct=30.0),
+         dict(base_pct=0.25, strategy_allocation_pct=42.0, position_multiplier=1.3)),
+        # 일일 손실 한도 절반 도달 → 사이징 50% 축소.
+        ('daily_loss_halved', 87, _manager(portfolio=_portfolio(daily_pnl=D('-250000'))), _signal(),
+         _parity_snapshot(mode='nominal', core_pct=30.0, daily_pnl=D('-250000')),
+         dict(base_pct=0.25, strategy_allocation_pct=42.0)),
     ]
     for name, expected, manager, event, snapshot, changes in cases:
+        overlays = changes.pop('overlays', {})
+        values.update(calendar=1.0, volatility=1.0, conviction=1.0)
+        values.update(overlays)
         legacy = manager._calculate_position_size(event)
         facts = module.EntryDecisionFacts(
             intent_id='I-parity', symbol='005930', side='buy',
             strategy=changes.pop('strategy', 'sepa_trend'), origin='automatic', sector=None,
-            config_version='effective-config', decided_at=NOW,
+            config_version='effective-config', hybrid_enabled=False, decided_at=NOW,
             expires_at=NOW + timedelta(minutes=30), base_pct=changes.pop('base_pct'),
             strategy_allocation_pct=changes.pop('strategy_allocation_pct'),
             min_position_value=D('200000'), strength_multiplier=1.0,
-            position_multiplier=changes.pop('position_multiplier', 1.0), calendar_multiplier=1.0,
-            volatility_multiplier=1.0, conviction_multiplier=1.0,
+            position_multiplier=changes.pop('position_multiplier', 1.0),
+            calendar_multiplier=overlays.get('calendar', 1.0),
+            volatility_multiplier=overlays.get('volatility', 1.0),
+            conviction_multiplier=overlays.get('conviction', 1.0),
             atr_pct=changes.pop('atr_pct', None), stop_pct=changes.pop('stop_pct', None),
             stop_source=changes.pop('stop_source', None),
             stop_crash_capped=changes.pop('stop_crash_capped', None),
-            qualification=module.QualificationFacts(72.0, 72.0, 70.0, (), None), sources=())
+            qualification=module.QualificationFacts(72.0, 72.0, 70.0, (), None),
+            sources=(module.ConsumedSource('trade_memory', 1, NOW, 'synthetic-parity-digest'),))
         assert not changes
         assert legacy == expected, name
         assert module.recompose_quantity(facts, snapshot, price=PRICE).quantity == legacy, name

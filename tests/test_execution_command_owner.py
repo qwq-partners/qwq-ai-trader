@@ -70,7 +70,7 @@ async def fixture(tmp_path, monkeypatch, *, ready=True, origin='user', policy=No
         source = ConsumedSource('trade_memory', 1, clock[0], 'synthetic-memory-digest')
         value = EntryDecisionFacts(intent_id=req.intent_id, symbol=req.symbol,
             side=req.side.value, strategy=req.strategy, origin='automatic', sector=sector,
-            config_version=ctx.versions.config, decided_at=clock[0],
+            config_version=ctx.versions.config, hybrid_enabled=False, decided_at=clock[0],
             expires_at=clock[0] + timedelta(minutes=30), base_pct=0.25,
             strategy_allocation_pct=None, min_position_value=D('200000'),
             strength_multiplier=1.0, position_multiplier=1.0, calendar_multiplier=1.0,
