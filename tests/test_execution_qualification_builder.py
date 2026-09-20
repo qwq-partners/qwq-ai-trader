@@ -341,6 +341,8 @@ def test_memory_source_without_a_reported_sector_is_refused():
     assert cv['memory_sector'] is None
     assert _refusal(module, cv=cv, sector='반도체') == 'unexpected_cv_decision'
     assert _refusal(module, cv={**cv, 'memory_sector': 3}) == 'unexpected_cv_decision'
+    # 반대 방향 — 보정이 없는데 귀속 섹터만 온 입력도 받지 않는다
+    assert _refusal(module, cv=_cv(memory_sector='반도체')) == 'unexpected_cv_decision'
 
 
 def test_r23_non_deciding_inputs_are_never_cited_as_sources():

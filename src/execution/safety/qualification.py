@@ -304,6 +304,9 @@ def _pending_sources(cv_decision, observed_at):
     memory_adj = cv_decision['memory_adj']
     if type(memory_adj) is not int:
         _refuse('unexpected_cv_decision')
+    # 보정과 귀속 섹터는 CV 의 같은 블록에서만 함께 기록된다 — 한쪽만 온 입력은 받지 않는다
+    if memory_adj == 0 and cv_decision['memory_sector'] is not None:
+        _refuse('unexpected_cv_decision')
     if memory_adj != 0:
         # last_decision 에는 적용 규칙·score_delta 가 없다. 보정을 결정하는 입력(전략·섹터)과
         # 적용된 결과값으로 digest 를 만든다. 섹터는 CV 가 메모리에 **실제로 넘긴** 값이다 —
