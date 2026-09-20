@@ -287,7 +287,19 @@
 - **제품 호출자 재확인:** `src/`·`scripts/` 에서 `KRExecutionRuntime(`·`.attach(`·`install_gateway(` 호출 0건(grep).
 - **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
-Codex 교차 리뷰(포그라운드·10분 상한)는 wave 3·5 뒤 각 1회 더. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
+### Codex 교차 리뷰 2차 (wave 3 경계, 대상 `1442f82`) — **CHANGES_REQUIRED (P0 0 · P1 2 · P2 1)** → coordinator 처분
+
+- 요청 gpt-6-astra/xhigh, 포그라운드·read-only·pytest 금지, 전체 suite 가 끝난 뒤 실행. 범위 `d1faf91..1442f82 -- src/`(gateway·`install_gateway`·`_request(session=False)`). 질문 5개(prepare 뒤 예약이 남는 탈출 경로 / `session=False` 의 fail-open / 증거·facts·config 없이 BUY 가 prepare 에 닿는 경로 / 중복 dispatch·POST / helper 의 과소 집계).
+- **확인된 것(결함 없음):** `session=False` 로 인한 fail-open 없음 — prepare(`commands.py:427`)·claim 직전과 claim reducer 의 candidate guard·final guard 가 모두 `_bound`→`_evaluate`→`_session` 으로 이어진다 · 증거/판단 사실 없이 자동 BUY 예약이 승인되는 경로 없음, SELL 이 BUY 검사를 우회해 BUY 를 송신하는 경로 없음 · gateway 내부에 같은 attempt 재 dispatch·POST 재시도 경로 없음(POST 호출은 `transport.py:138` 한 곳, 재시도 루프 없음) · 건강한 owner 에서 helper 는 예약이 남은 터미널·UNKNOWN·부분체결을 빠뜨리지 않는다.
+- **P1-a claim 이전 취소가 예약을 남긴다**(prepare 성공 뒤 claim 의 owner lock 대기 중 submit 태스크가 취소되면 `CancelledError` 가 그대로 전파) · **P1-b prepare 도중 shutdown 이 시작되면 dispatch 의 새 `command_scope` 가 거부돼 `command_admission_closed` 만 돌려주고 abandon 은 부르지 않는다.**
+  - **coordinator 판단:** 둘은 결정 ⑧이 10A3 의 startup 정리로 미뤄 둔 **같은 부류**(종료·취소 중에는 abandon 자체가 다시 던진다)다. 그리고 프로세스가 prepare 와 dispatch 사이에 **죽는** 경우는 어떤 in-process 정리 경계로도 덮을 수 없으므로, 필요충분한 해법은 "취소에도 완료되는 정리 경계"가 아니라 **다음 기동의 sweep** 이다. 다만 그 부품이 아예 없으면 재시작 뒤 잔류가 영구가 되므로 **부품은 지금 만든다**: `SignalGateway.recover_unsent()` — `kind=='submit'`·`state=='prepared'` 인 행마다 `abandon_candidate(reason='startup_unclaimed')` 를 부르고(누가 끝낼 수 있는지는 그 가드가 정한다 — 재판정 없음), **엔진이 도는 중에는 `gateway_recover_requires_stopped_engine` 로 거부**한다. 제품 호출자는 0건이며 **factory(10A3)가 restore 뒤·엔진 루프 시작 전에 불러야 한다**(계획서 §6 에 명시).
+  - 시험(`tests/test_execution_signal_gateway.py`): dispatch 가 `CancelledError` 를 내면 attempt 가 `prepared`·claim None·예약 10주로 남음을 **재현**(Codex P1-a 그대로) → 엔진 실행 중 sweep 거부 → 정지 후 sweep 이 `final_rejected`/`startup_unclaimed`·예약 0 으로 만들고 두 번째 sweep 은 빈 목록 · ACK 된 주문은 sweep 이 글자 하나 건드리지 않는다.
+- **P2 복구가 필요한 owner 에서 helper 가 낡은 메모리 state 를 읽는다**(SQL commit 은 됐는데 게시 전 취소 → durable 예약은 있고 메모리는 이전 값) → `_pending()` 이 먼저 `commands._owner_ready(state)` 를 부른다(`store_or_publication_unhealthy`). 실제 dispatch 는 원래 `_owner_ready` 로 막혀 초과 주문 경로는 아니었으나, 사이징이 "예약 없음"으로 읽는 것은 막는다.
+- **coordinator 변이 재적용:** 두 가드(엔진 실행 중 거부·helper 의 준비 검사)를 제거하면 **각각 해당 시험만 실패**(2 failed / 29 passed) 확인 후 원복. 수정 커밋 `aee69e3`.
+- Codex 가 덧붙인 관찰(조치 없음·기록): `_dispatch` 의 claim **이후** `version` 조회·permit 등록(try 밖)에서 예외가 나면 claim 된 행이 `submitting` 으로 남는다 — POST 전이고 재시작 대사가 "송신됐을 수 있음"으로 보수적으로 읽는다(기준 커밋에도 있던 동작). 송신 단계 취소는 UNKNOWN 기록 후 재전파하며 예약 보존이 타당하다. 실행 재현·실제 KIS 동작은 Codex 도 "미확인".
+- **이 처분은 Codex 의 재확인을 받지 않았다** — wave 5 뒤의 3차 리뷰 범위에 `1442f82..<wave 5 HEAD> -- src/execution/safety/` 를 포함한다.
+
+Codex 교차 리뷰(포그라운드·10분 상한)는 wave 5 뒤 1회 더. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 
 ### 이어받는 에이전트 체크리스트 (S3 공통 — 하위 단계마다 반복)
 - [ ] 세부 계획 §4 의 그 단계 "고정 인터페이스"와 실제 시그니처가 일치하는가. §2 의 결정 번호와 어긋나는 구현이 없는가.
