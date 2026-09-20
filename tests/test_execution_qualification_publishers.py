@@ -488,6 +488,32 @@ def test_f5_regime_is_the_value_cross_validator_received_not_a_later_lookup(
     asyncio.run(scenario())
 
 
+def test_f2_observation_time_is_read_before_the_awaits_not_after(tmp_path, monkeypatch, freeze):
+    """판독 시각은 validate 직전에 읽는다 — await 를 건넌 뒤에 읽으면 '판정 직전' 시각이 된다.
+
+    주입 시계가 상수면 어디서 읽든 같은 값이라 위치가 관측되지 않는다. 섹터 조회 await
+    안에서 시계를 앞으로 밀어, 증거가 await **이전**의 판독값을 싣는지 본다.
+    """
+    async def scenario():
+        freeze(11, 0, day=18)
+        rm = manager(monkeypatch, cv(), regime='bull')
+        clock = [OBSERVED]
+        rm.engine._execution_runtime = SimpleNamespace(_now=lambda: clock[0])
+
+        async def sector_lookup(symbol):
+            clock[0] = OBSERVED + timedelta(seconds=30)
+            return SECTOR
+
+        rm._sector_lookup = sector_lookup
+        event = buy(SYM)
+        event.metadata.pop('sector')
+        orders, found = await capture(rm, event)
+        assert orders and found is not None
+        assert clock[0] == OBSERVED + timedelta(seconds=30), '시계가 실제로 전진해야 의미가 있다'
+        assert found.observed_at == OBSERVED
+    asyncio.run(scenario())
+
+
 def test_f6_a_nested_panel_mutation_during_the_await_never_reaches_the_evidence(
         tmp_path, monkeypatch, freeze):
     """캡처 시점 복사가 얕으면 중첩 panel dict 가 섹터 조회 창 동안 제자리에서 바뀐다."""
