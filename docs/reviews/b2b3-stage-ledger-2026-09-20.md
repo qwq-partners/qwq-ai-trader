@@ -225,7 +225,7 @@
 | S3-3 | `commands.py` | **통합(한정 승인·dispatch 제품 호출자 0건)** | `3a28993`(red)→`d339cd7`→`17725fa` | APPROVE_THIS_SLICE(P2 3건) → coordinator `9a3fe19` 로 해소 | merge `c48cb68` |
 | S3-4 | `day_recovery.py` | **통합(한정 승인·돈 경로 아님)** | `feb4349`(red)→`968a097` | CHANGES_REQUIRED(시험 공백 2) → coordinator `9a3fe19` 로 해소 | merge `e42b014` |
 | S3-5 | `gateway.py`·`runtime.py` 설치점 (+`commands.py` P1 수정) | **통합(한정 승인·설치 호출자 0건)** | `cadd67a`·`fd03c12`(red)→`737da95`→`05e3104` | CHANGES_REQUIRED(**P1 1**·P2 5) → coordinator `83e187a`(red)·`b83b6e7`·`4356d43` 로 해소 | merge `cb1f554` |
-| S3-6a | `engine.py` H1·H4·H5 | 미착수 | — | — | — |
+| S3-6a | `engine.py` H1·H4·H5 | **통합(한정 승인·live 파일이나 attach 가드 안 — 제품 attach 호출자 0건)** | `cf8720b`(red)→`0b5ac18` | CHANGES_REQUIRED(P1 시험 공백 1·P2 3) → coordinator 시험 보강으로 해소 | merge `5dac8da` |
 | S3-6b | `engine.py` H2·H3 | 미착수 | — | — | — |
 
 ### wave 1 (S3-1 ∥ S3-2) — Do·See 기록 (기준 `3f30fcc` → `1a6e6d2`)
@@ -298,6 +298,20 @@
 - **coordinator 변이 재적용:** 두 가드(엔진 실행 중 거부·helper 의 준비 검사)를 제거하면 **각각 해당 시험만 실패**(2 failed / 29 passed) 확인 후 원복. 수정 커밋 `aee69e3`.
 - Codex 가 덧붙인 관찰(조치 없음·기록): `_dispatch` 의 claim **이후** `version` 조회·permit 등록(try 밖)에서 예외가 나면 claim 된 행이 `submitting` 으로 남는다 — POST 전이고 재시작 대사가 "송신됐을 수 있음"으로 보수적으로 읽는다(기준 커밋에도 있던 동작). 송신 단계 취소는 UNKNOWN 기록 후 재전파하며 예약 보존이 타당하다. 실행 재현·실제 KIS 동작은 Codex 도 "미확인".
 - **이 처분은 Codex 의 재확인을 받지 않았다** — wave 5 뒤의 3차 리뷰 범위에 `1442f82..<wave 5 HEAD> -- src/execution/safety/` 를 포함한다.
+
+### wave 4 (S3-6a engine 경로 배선) — Do·See 기록 (기준 `d2e899c` → 이 절의 마지막 SHA)
+
+- **방법:** workflow `wf_d7265c3c-a9e` — 단일 writer(요청 opus/high) → 독립 재현(요청 opus/xhigh), 관측 모델 미노출.
+- **`src/core/engine.py`(numstat 52 추가 / **1 삭제**) — 운영에서 도는 live 파일:** H1(`_process_event` 의 거부 분기 직전 6줄 + 새 메서드 `_submit_signal` 33줄)·H4(종착부 `_pending_lock` 블록 안의 조기 반환 7줄)·H5(eviction `if` 에 조건 한 줄 — **기존 줄이 바뀐 유일한 곳**). coordinator 가 diff 를 줄 단위로 읽어 확인: 추가 실행 줄은 전부 `_execution_runtime is not None`(H1 은 +`gateway is not None`) 가드 안, H4 의 조기 반환이 건너뛰는 것은 7개 장부 기록뿐(그 뒤에 다른 로그·훅 없음), FILL·ORDER 거부와 gateway 미설치 시의 SIGNAL 폐기는 글자 그대로. legacy 경로에서 새로 평가되는 것은 가드의 첫 피연산자(`is not None`) 하나다. SIGNAL 에 등록된 핸들러는 `on_signal` 하나뿐(grep).
+- **행동 RED 13건(부재 RED 0):** 오늘은 527-533 이 SIGNAL 을 폐기해 핵심 시험이 `assert 0 == 1`(POST 0)로 실패 — 핵심 BUY·SELL 송신 2 · 결정 ② 예외 흡수 3(gateway·candidate·`CancelledError`) · 결정 ④ 쿨다운·이중 장부 2 + S4 경계(진입부 stale 루프 무발화) 1 · 결정 ⑮ 2 · 계약 3 1 · SignalEvent 불변 1 · ready=False 예약 0 1. 착수 시에도 통과하는 6건은 의도된 현행 고정·대조(FILL/ORDER 거부 2·gateway 미설치 폐기 1·**legacy 불변 쌍 2**·eviction 미호출 1).
+- **독립 재현: CHANGES_REQUIRED — 제품 결함 0, 시험 공백.** §5-4 의 "attach 가드를 항상 참으로" 변이 3종(H1·H4·H5)에서 legacy 대조 시험이 전부 죽는 것은 재현됨. 발견:
+  - **P1 계약 3 이 행동으로 고정되지 않았다.** 구현자는 "증거를 submit 시점에 다시 읽음" 변이를 동치로 처분했으나 **틀렸다** — 재현자가 `result[0].order` 접근에 부수효과를 심는 12줄 probe 로 kill 가능함을 보였다. `_last_qualification_evidence` 는 공유 RiskManager 의 가변 속성이라, 반환과 읽기 사이에 await 이 하나라도 끼면 **다른 요청의 증거가 이번 intent 로 게시**된다. → coordinator: `Trap` 객체로 읽기 순서를 관측하는 시험 추가.
+  - **P2 결정 ⑮ 가 예외 경로에서 미고정**(pop 을 `finally` 밖으로 옮겨도 19건 통과) — 예외는 이 경로의 정상적인 실패 채널이다(S3-5 계약상 게시~prepare 실패는 raise). → parametrize 에 `'raised'` 추가(+`errors_count` +1 단언).
+  - **P2 스텁 공개 불완전:** 재사용한 `_order_env` 가 세션뿐 아니라 `engine.can_open_position`(항상 통과)·`_risk_validator`·`_sector_lookup` 도 스텁한다 — 통과 경로에서 실제 게이트는 돌지 않는다. → 파일 독스트링과 계획서에 명시. **실제 게이트 통과 경로는 S3-6b 가 처음 태운다.**
+  - **P2 (S3 범위 밖의 구조적 전제) `bind_execution_runtime` 이 legacy 장부 잔류를 보지 않는다** — 잔류한 `_pending_timestamps` 가 있으면 attach 뒤에도 진입부 90초 stale SELL 이 owner 를 우회해 직접 POST 한다. → **S3-6b 에 H6 로 추가**(bind 시 legacy 장부 3종이 비어 있지 않으면 RuntimeError).
+- **coordinator 변이 재적용:** m5(증거를 `order` 접근 뒤에 읽음)·n3(pop 을 `finally` 밖으로) → **각각 새 시험만 실패**(1 failed / 20 passed). m4(인계점의 예외 흡수 제거)는 재현자 기록에 `killed=false` 로 적혀 있었으나 실패 시험 4건을 함께 적은 **표기 오류**였다 — 직접 적용해 5건 실패(kill) 확인. 전부 원복·트리 clean.
+- **남은 것(이 단계에서 고정하지 않음):** UNKNOWN 의 실큐 접합 쪽 대조 · attach 모드의 체결 메타·pending 교착 감시가 빈 값을 본다는 결정 ④의 이월 사항(10A3/10C) · dispatch 의 network await 동안 엔진 루프가 멈추는 지연 상한.
+- **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
 Codex 교차 리뷰(포그라운드·10분 상한)는 wave 5 뒤 1회 더. **첫 리뷰 범위에 S2 마감 수정 diff `fcc2a27..85a65bc` 를 포함**한다(그 수정은 아직 같은 provider 재현만 받았다).
 

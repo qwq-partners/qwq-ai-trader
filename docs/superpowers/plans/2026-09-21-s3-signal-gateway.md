@@ -231,11 +231,15 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
 - **변이:** H1 되돌리기(다시 폐기) / 반환 OrderEvent 를 `emit_many` 로 큐에 넣음 / 거부 튜플에서 FILL·ORDER 까지 뺌 / **H1 의 try/except 제거** / 증거를 지역값이 아니라 submit 시점의 속성 재독으로 / on_signal 이 None 인데 gateway 호출 / H4 의 attach 가드 제거(legacy dict 기록) / **H4 에서 `_last_signal_time` 기록까지 제거** / **H5 제거** / **성공 경로의 `_pending_sector_map.pop` 제거** / H1·H4·H5 의 attach 가드를 "항상 참"으로(legacy 대조 시험이 죽어야 한다).
 - **위험:** 527-533 의 SIGNAL 분기에는 기존 회귀 안전망이 없다(사실 1) — 양성 단언과 대조를 같은 파일에 쌍으로 둔다.
 
-### S3-6b — `engine.py` 정합 배선 (H2·H3) + 게이트 순서
+- **통합된 실제 인터페이스(wave 4, `0b5ac18`+coordinator 시험 보강):** H1 은 두 조각이다 — `_process_event` 의 거부 분기 **직전**에 `if runtime is not None and event.type == SIGNAL and runtime.gateway is not None: await self._submit_signal(event); return`(6줄 가산), 그리고 새 메서드 `UnifiedEngine._submit_signal(event)`: `on_signal` await → **바로 다음 줄에서** `_last_qualification_evidence` 를 지역값으로 → `result[0].order` 가 있을 때만 `gateway.submit` → 결과는 `status/reason_code` 만 로그. `CancelledError` 는 재던짐, 그 밖의 예외는 핸들러 루프와 같은 형태(`errors_count += 1`·`logger.exception`·`ErrorEvent(source='on_signal', recoverable=True)`)로 흡수, `finally` 에서 `_pending_sector_map.pop`. H4 는 `_pending_lock` 블록 안 중복 재검사 직후의 **조기 반환**(`_last_signal_time` 기록 + 같은 `[OrderEvent…]` 반환 — 그 뒤에 건너뛰는 다른 동작 없음을 coordinator 가 끝까지 읽어 확인). H5 는 기존 `if` 에 조건 한 줄(`… and getattr(self.engine, '_execution_runtime', None) is None`) — **engine.py 에서 기존 줄이 바뀐 유일한 곳**이다(numstat 52 추가 / 1 삭제). 실제 사이징 수량은 47주(CV 메모리 보정 −3 뒤)라 시험 상수도 47 이다.
+  - 이 단계의 실큐 시험은 재사용한 `_order_env` 의 스텁(legacy 세션·`engine.can_open_position`·`_risk_validator`·`_sector_lookup`) 위에 있다 — **실제 게이트 통과 경로와 실제 `KRSession` 표는 S3-6b 가 처음 태운다.** UNKNOWN 의 예약 유지·재 dispatch 없음은 S3-5 의 계약으로만 고정돼 있고 실큐 접합 쪽 대조는 없다.
+
+### S3-6b — `engine.py` 정합 배선 (H2·H3·H6) + 게이트 순서
 
 - **제품 파일(단일 writer):** `src/core/engine.py` · **시험:** `tests/test_execution_signal_gateway_parity.py` · **의존:** S3-6a
 - **허용 hunk:**
   - **H2** `_reserved_cash` property(1468-1471)와 `_pending_strategy_notional`(2426-2432): attach + gateway 설치 시 각각 `gateway.reserved_cash()`·`gateway.pending_strategy_notional(strategy_name)` 를 돌려준다. **`_reserved_cash` 는 `@property` 로 남긴다**(소비 지점 다섯 곳이 괄호 없이 산술식에 쓴다 — gateway 쪽은 메서드이므로 property 안에서 호출). gateway helper 는 fail-closed 로 **예외를 낸다** — 지금까지 예외를 내지 않던 property 가 예외원이 되므로, on_signal 안에서 난 예외가 H1 의 try/except 로 올라가 그 SIGNAL 이 명시 거부(`errors_count` +1)로 끝남을 RED 로 세우고, on_signal **밖**에서 `_reserved_cash`/`_pending_strategy_notional` 을 읽는 곳(`grep`)이 attach 모드에서 어떻게 되는지 보고한다. **core_reserve 기준:** owner 의 `evaluate_entry_policy` 는 non-core 에서 `core_reserve(snapshot)` 를 예약 합에 더하는데(risk_policy.py:717-718) gateway 의 `reserved_cash()` 는 더하지 않는다 — engine 은 `_get_core_reserve()` 를 따로 뺀다(engine.py:2713 부근 주석). 이중 차감·누락이 없는지 parity RED 로 확인한다. `_calculate_position_size` 본문·소비 지점 5곳은 불변.
+  - **H6(wave 4 독립 재현이 찾은 전제 — 추가)** `bind_execution_runtime`(293-301): attach 의 폐쇄성은 "legacy 장부가 비어 있다"는 전제 위에 있다. 같은 프로세스가 legacy 로 신호를 처리해 `_pending_timestamps` 에 행이 남은 채 runtime 을 bind 하면, 다음 on_signal 진입부의 90초 stale SELL 루프가 owner 를 거치지 않고 `broker.submit_order` 를 직접 부른다(계약 1 위반). 그래서 bind 시 `risk_manager` 의 legacy 장부(`_pending_orders`·`_pending_timestamps`·`_reserved_by_order`)가 **비어 있지 않으면 RuntimeError 로 거부**한다(기존의 running·큐 검사와 같은 자리·같은 방식, `risk_manager` 가 아직 없으면 통과). RED: 장부에 행을 심고 attach → RuntimeError·`_execution_runtime` 은 None 그대로. 변이: 그 검사 제거.
   - **H3** sector 조회 2302-2307: attach 에서 조회가 **예외**로 끝나면 BUY 를 거부한다(`_log_sig` 의 block_gate 는 기존 어휘 규칙을 따른다). 정상적으로 None 을 돌려준 경우와 legacy 경로의 None 뭉갬은 불변.
 - **RED:**
   - [행동·⑥] 같은 전략·다른 종목 BUY 두 건(A 는 ACK 후 open — 루프가 직렬이라 "동시"는 이 형태로만 재현된다) → 오늘은 B 의 legacy 수량이 owner `strategy_remaining` 을 넘어 `decision_quantity_unjustified`·POST 0. 수정 후 B 의 수량이 owner 재유도값 이하로 산출돼 POST 1.
@@ -244,7 +248,7 @@ wave 는 최대 2 병렬(이 호스트는 2 vCPU·3.8GB — pytest worker 동시
   - [행동·계약 2] `is_trading_hours` 류 스텁을 **걷어내고** `src.utils.session.datetime` 과 engine 모듈 `datetime` 을 함께 얼려 실제 `KRSession` 표를 태운다 — legacy CLOSED·owner 허용 구간(08:50-09:00, 15:20-15:40)의 LIMIT SIGNAL 이 owner 로 넘어가기 전에 막힌다(게시 0·POST 0).
   - [대조·legacy 불변] runtime 미attach 에서 `_reserved_cash`·`_pending_strategy_notional` 이 종전 값을 돌려주고 S2-2 사이징 특성화 표본의 수량이 같다. sector 예외도 종전대로 None.
   - [대조·ready=False] 합성 허가 없이 위 시나리오 → POST 0·예약 0.
-- **변이:** `_reserved_cash` 의 attach 분기 제거 / **`_pending_strategy_notional` 의 attach 분기 제거** / 두 분기의 attach 가드를 "항상 참"으로 / H3 의 예외 구분 제거 / H3 가 정상 None 까지 거부.
+- **변이:** H6 의 legacy 장부 검사 제거 / `_reserved_cash` 의 attach 분기 제거 / **`_pending_strategy_notional` 의 attach 분기 제거** / 두 분기의 attach 가드를 "항상 참"으로 / H3 의 예외 구분 제거 / H3 가 정상 None 까지 거부.
 - **위험:** property 변경은 다섯 소비 지점을 함께 움직인다(사실 8) — 다섯 곳 각각에 도달하는 RED 또는 대조가 있어야 한다.
 
 ## 5. legacy·US 불변 증명 (네 겹)
