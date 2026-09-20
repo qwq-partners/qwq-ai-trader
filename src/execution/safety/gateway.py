@@ -11,7 +11,6 @@ engine 을 import 하지 않는다 — 입력은 SignalEvent·Order·증거뿐�
 """
 from __future__ import annotations
 
-from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
 
@@ -52,10 +51,12 @@ class SignalGateway:
             _require(type(evidence) is QualificationEvidence, 'invalid_qualification_evidence')
         now = self.runtime._now()
         request, context = self._bind(event, order, now)
+        # 전송 객체는 예약이 생기기 전에 만든다 — prepare 뒤에 실패하면 예약이 남는다.
+        transport = GuardedKISTransport(self.runtime.engine.broker,
+                                        request_builder=self.commands.builder)
+        self._policy_context(buying)
         if buying:
             await self._quote(event, request, now)
-        await self._policy_context()
-        if buying:
             facts = await publish_qualification(
                 self.commands, evidence, intent_id=request.intent_id,
                 config_version=self.config_version, decided_at=now)
@@ -65,9 +66,7 @@ class SignalGateway:
                         facts.digest, facts.config_version, facts.expires_at.isoformat())
         await self.commands.prepare(request, context)
         # 같은 attempt 로 재시도하지 않는다(계약 6). create_task 로 감싸면 명령 스코프가 깨진다.
-        return await self.commands.dispatch(
-            request, context,
-            GuardedKISTransport(self.runtime.engine.broker, request_builder=self.commands.builder))
+        return await self.commands.dispatch(request, context, transport)
 
     def reserved_cash(self) -> Decimal:
         """owner 미해결 attempt 의 예약 현금 합. `evaluate_entry_policy` 와 같은 식이다."""
@@ -106,16 +105,16 @@ class SignalGateway:
             request.symbol, request.valuation_price, as_of=now, source='signal',
             event_id=event.id, expected_version=self.commands.owner.version)
 
-    async def _policy_context(self):
-        """게시본에 주입 `config_version` 과 현재 실행 version 만 다시 찍는다.
+    def _policy_context(self, buying):
+        """정책 맥락은 게시자(10A3 factory)의 것이다 — gateway 는 쓰지 않고 읽기만 한다.
 
-        5축의 제품 조립과 PolicyContext 제품 publisher 는 10A3 이다 — 여기서 만들면
-        원본과 갈라져 config 축이 조용히 헛돈다.
+        주입 `config_version` 으로 게시본의 config 축을 덮어쓰면 owner 의
+        `stale_decision_config_version` 이 한 값을 자기 자신과 비교하게 된다. 그래서 덮어쓰지
+        않고, 매수는 판단 사실을 게시하기 **전에** 같은 조건을 미리 본다(어긋난 채 게시하면
+        그날의 판단 행만 남는다). 매도는 사이징 설정과 무관하므로 막지 않는다.
         """
         row = self.commands.owner.state.get('entry_policy_context')
         _require(row is not None, 'entry_policy_context_required')
-        version = self.commands.owner.version
-        context = PolicyContext.from_dict(row)
-        context = replace(context, versions=replace(context.versions, execution=version,
-                                                    config=self.config_version))
-        await self.commands.publish_policy_context(context, expected_version=version)
+        if buying:
+            _require(PolicyContext.from_dict(row).versions.config == self.config_version,
+                     'stale_decision_config_version')

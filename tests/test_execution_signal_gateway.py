@@ -494,3 +494,83 @@ def test_the_facts_publication_leaves_one_audit_line_without_money(tmp_path, mon
             logger.remove(sink)
             await f['runtime'].shutdown(); await f['store'].close()
     asyncio.run(scenario())
+
+
+# ── 독립 재현이 찾은 공백 (wave 3) ────────────────────────────────────────
+
+def test_a_gateway_built_with_another_config_version_cannot_buy(tmp_path, monkeypatch, freeze):
+    """gateway 는 정책 맥락을 쓰지 않는다 — 주입값이 게시본과 다르면 게시 전에 막힌다.
+
+    덮어쓰면 owner 의 config 대조가 한 값을 자기 자신과 비교하게 된다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch, config_version='another-config')
+        try:
+            found = await evidence(monkeypatch, freeze)
+            before = f['runtime'].owner.version
+            published = dict(f['runtime'].owner.state['entry_policy_context'])
+            with pytest.raises(CommandValidationError, match='stale_decision_config_version'):
+                await f['gateway'].submit(buy(SYM), order(), found)
+            state = f['runtime'].owner.state
+            assert f['runtime'].owner.version == before
+            assert state['entry_policy_context'] == published
+            assert facts_rows(f) == {} and state['attempts'] == {}
+            assert f['broker']._session.posts == []
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_missing_broker_is_not_sent_and_leaves_no_reservation(tmp_path, monkeypatch, freeze):
+    """attach 시점에 broker 가 없어도 fail-closed 다 — 전송 준비 실패로 기록되고 예약은 0."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            found = await evidence(monkeypatch, freeze)
+            f['engine'].broker = None
+            result = await f['gateway'].submit(buy(SYM), order(), found)
+            assert (result.status, result.reason_code) == (
+                CommandStatus.NOT_SENT, 'preparation_failed')
+            attempt = only_attempt(f)
+            assert attempt['state'] == 'final_rejected'
+            assert reservations(attempt) == (0, D('0'), D('0'), None)
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_limit_order_is_valued_at_its_own_price_not_the_signal_price(tmp_path, monkeypatch,
+                                                                      freeze):
+    """평가 가격은 예약 현금·진입 시세를 정하는 돈 축이다 — 지정가가 있으면 지정가다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            found = await evidence(monkeypatch, freeze)
+            limit = PRICE + 100
+            event = buy(SYM)
+            assert event.price != limit
+            result = await f['gateway'].submit(event, order(price=limit), found)
+            assert result.status is CommandStatus.ACKNOWLEDGED
+            state = f['runtime'].owner.state
+            assert only_attempt(f)['request_binding']['valuation_price'] == str(limit)
+            assert state['entry_quotes'][SYM]['price'] == str(limit)
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_the_intent_is_keyed_by_symbol_side_and_strategy(tmp_path, monkeypatch):
+    """같은 종목의 매도·다른 전략이 매수의 intent 를 물려받으면 목표 수량과 판단 행이 섞인다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            now, event = f['runtime']._now(), buy(SYM)
+            bind = lambda **changes: f['gateway']._bind(event, order(**changes), now)[0]
+            first, again = bind(), bind()
+            sold, other = bind(side=OrderSide.SELL), bind(strategy='gap_and_go')
+            assert first.intent_id == again.intent_id
+            assert len({first.intent_id, sold.intent_id, other.intent_id}) == 3
+            assert len({first.attempt_id, again.attempt_id, sold.attempt_id, other.attempt_id}) == 4
+        finally:
+            await f['runtime'].shutdown(); await f['store'].close()
+    asyncio.run(scenario())
