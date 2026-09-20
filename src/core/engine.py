@@ -2586,6 +2586,9 @@ class RiskManager:
 
     def _calculate_position_size(self, signal: SignalEvent) -> int:
         """포지션 크기 계산 (자본 활용률 최적화, 분할익절 최소 수량 보장)"""
+        # S2-2: 이번 계산이 실제로 쓴 입력의 반출 자리. 조기 return 경로는 직전 값을
+        # 남기지 않는다(기록 전용 — 주문 승인·운영 승격 근거 아님).
+        self._last_sizing_inputs: Optional[dict] = None
         equity = self.engine.portfolio.total_equity
         price = signal.price or Decimal("0")
 
@@ -2729,6 +2732,7 @@ class RiskManager:
 
         # 전략 예산 한도 — 잔여 예산으로 포지션 제한
         _strategy_remaining: Optional[Decimal] = None  # 부스트 후 재클램프용 (Codex P1)
+        _alloc_pct: Optional[float] = None             # S2-2: 실제 적용된 전략 예산 비율
         if signal.strategy:
             _alloc = self.config.strategy_allocation
             _strat_name = signal.strategy.value
@@ -2741,6 +2745,7 @@ class RiskManager:
                 if _remaining <= 0:
                     return 0
                 _strategy_remaining = _remaining
+                _alloc_pct = _cap_pct
         _phase = _sizing_kernel.apply_strategy_remaining(_phase, _strategy_remaining)
 
         # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
@@ -2755,6 +2760,10 @@ class RiskManager:
         position_multiplier = 1.0
         if signal.signal and signal.signal.metadata:
             position_multiplier = signal.signal.metadata.get("position_multiplier", 1.0)
+        _raw_position_multiplier = position_multiplier   # S2-2: ATR skip 이전 값
+        # S2-2: overlay 별 실제 배율(None = provider 예외로 미적용). provider 재호출 없이
+        # 기존 try 경계 안에서만 기록한다.
+        _overlay_used: dict = {"calendar": None, "volatility": None, "conviction": None}
         if _sizing_kernel.should_skip_atr_multiplier(
                 _stop_decision is not None, position_multiplier, _risk_atr):
             # risk 모드: ATR 배율은 백테스트 risk 공식(equity×위험%/손절)에 없으므로 미적용 (연구 조건 동일)
@@ -2767,6 +2776,7 @@ class RiskManager:
             from ..utils.calendar_seasonality import calendar_multiplier
             _cal_mult, _ = calendar_multiplier(date.today(), "kr")
             _phase = _sizing_kernel.apply_overlay(_phase, kind="calendar", multiplier=_cal_mult)
+            _overlay_used["calendar"] = _cal_mult
         except Exception as _cal_err:
             logger.debug(f"[리스크] 시즈널리티 계산 실패 (무시): {_cal_err}")
 
@@ -2779,6 +2789,7 @@ class RiskManager:
                 signal.strategy.value if signal.strategy else ""
             )
             _phase = _sizing_kernel.apply_overlay(_phase, kind="volatility", multiplier=_vt_mult)
+            _overlay_used["volatility"] = _vt_mult
         except Exception as _vt_err:
             logger.debug(f"[리스크] 변동성 타게팅 계산 실패 (무시): {_vt_err}")
 
@@ -2788,6 +2799,7 @@ class RiskManager:
             from ..utils.team_conviction import team_conviction_multiplier
             _tc_mult, _ = team_conviction_multiplier(signal.symbol)
             _phase = _sizing_kernel.apply_overlay(_phase, kind="conviction", multiplier=_tc_mult)
+            _overlay_used["conviction"] = _tc_mult
         except Exception as _tc_err:
             logger.debug(f"[리스크] 팀 conviction 계산 실패 (무시): {_tc_err}")
 
@@ -2857,6 +2869,24 @@ class RiskManager:
                     signal.signal.metadata = {}
                 signal.signal.metadata["entry_risk"] = dict(_snapshot)
 
+        # S2-2: 이번 계산이 실제로 쓴 입력만 반출한다(config 폴백으로 대체하지 않는다).
+        self._last_sizing_inputs = {
+            "base_pct": base_pct,
+            "strategy_allocation_pct": _alloc_pct,
+            "min_position_value": min_val,
+            "strength_multiplier": multiplier,
+            "position_multiplier": _raw_position_multiplier,
+            "calendar_multiplier": _overlay_used["calendar"] if _overlay_used["calendar"] is not None else 1.0,
+            "volatility_multiplier": _overlay_used["volatility"] if _overlay_used["volatility"] is not None else 1.0,
+            "conviction_multiplier": _overlay_used["conviction"] if _overlay_used["conviction"] is not None else 1.0,
+            "atr_pct": _risk_atr,
+            "stop_pct": _stop_decision.stop_pct if _stop_decision is not None else None,
+            "stop_source": _stop_decision.source if _stop_decision is not None else None,
+            "stop_crash_capped": _stop_decision.crash_capped if _stop_decision is not None else None,
+            "hybrid_enabled": bool(self.config.hybrid.enabled),
+            "overlay_status": {_kind: ("applied" if _mult is not None else "unavailable")
+                               for _kind, _mult in _overlay_used.items()},
+        }
         return max(quantity, 0)
 
     def _entry_risk_config_hash(self) -> str:
