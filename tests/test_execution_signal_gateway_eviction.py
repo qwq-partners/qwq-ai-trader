@@ -151,7 +151,7 @@ def direct(f, monkeypatch):
 
 def test_a_full_book_evicts_the_weakest_position_through_the_owner_path(tmp_path, monkeypatch,
                                                                         freeze):
-    """오늘은 H5 가 attach 에서 eviction 자체를 막아 SELL 0·POST 0 이다."""
+    """attach 의 만석 BUY 는 최약 포지션 SELL 을 owner 의 한 길로 정확히 1건 내보낸다 — 브로커 직접 호출 0."""
     async def scenario():
         f = await full(tmp_path, monkeypatch, freeze)
         try:
@@ -422,4 +422,43 @@ def test_a_partially_constructed_risk_manager_still_returns_none(tmp_path, monke
         rm = object.__new__(RiskManager)
         assert await rm._try_evict_weakest_position(
             new_symbol=SYM, new_score=99.0, new_reason='합성') is None
+    asyncio.run(scenario())
+
+
+# ── 독립 재현이 찾은 공백 (S4 wave 2) ─────────────────────────────────────
+
+def test_the_owner_helper_itself_refuses_a_state_it_cannot_read(tmp_path, monkeypatch, freeze):
+    """`unresolved_symbols()` 자신이 fail-closed 다 — 흡수해 빈 집합을 돌려주면 미해결 SELL 이
+    있는 종목이 다시 축출 후보가 된다(위 시험은 helper 를 스텁으로 갈아끼워 engine 쪽 전파만 본다).
+    """
+    async def scenario():
+        f = await full(tmp_path, monkeypatch, freeze)
+        try:
+            assert f['gateway'].unresolved_symbols() == frozenset()
+            f['runtime'].owner._healthy = False
+            try:
+                with pytest.raises(Exception, match='store_or_publication_unhealthy'):
+                    f['gateway'].unresolved_symbols()
+            finally:
+                f['runtime'].owner._healthy = True
+        finally:
+            await teardown(f)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('victim_score, evicted', [(81, True), (82, False)])
+def test_the_five_point_edge_is_a_boundary_in_attach_mode(tmp_path, monkeypatch, freeze,
+                                                          victim_score, evicted):
+    """attach 하네스의 CV 는 99 점을 86 점으로 깎는다 — 실효 점수 기준으로 +5 경계 양쪽을 고정한다.
+
+    86 >= 81 + 5 는 축출, 86 < 82 + 5 는 스킵. 여유가 큰 표본만으로는 +1~+4 로의 완화가 안 보인다.
+    """
+    async def scenario():
+        f = await full(tmp_path, monkeypatch, freeze,
+                       rows=((WEAK, 5, D('9000'), 'sepa_trend', victim_score),))
+        try:
+            await drive(f['engine'], buy(SYM, score=99.0))
+            assert [event.symbol for event in sells(f['engine'])] == ([WEAK] if evicted else [])
+        finally:
+            await teardown(f)
     asyncio.run(scenario())
