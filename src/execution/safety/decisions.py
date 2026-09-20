@@ -135,6 +135,8 @@ class EntryDecisionFacts:
     origin: str
     sector: str | None
     config_version: str
+    # 설정 전용 사실. hybrid는 legacy wrapper가 base/max/pool을 통째로 바꾸므로 재현하지 않고 거부한다.
+    hybrid_enabled: bool
     decided_at: datetime
     expires_at: datetime
     base_pct: float
@@ -160,6 +162,8 @@ class EntryDecisionFacts:
             raise ValueError('unsupported_decision_scope')
         if self.sector is not None:
             _text(self.sector, 'invalid_decision_sector')
+        if type(self.hybrid_enabled) is not bool:
+            raise ValueError('invalid_decision_hybrid')
         _aware(self.decided_at, 'invalid_decision_time')
         _aware(self.expires_at, 'invalid_decision_time')
         if self.decided_at >= self.expires_at:
@@ -184,6 +188,9 @@ class EntryDecisionFacts:
             raise ValueError('invalid_qualification_facts')
         if type(self.sources) is not tuple or any(type(s) is not ConsumedSource for s in self.sources):
             raise ValueError('invalid_consumed_source')
+        # 빈 소비 출처는 stale 대조 루프를 통째로 건너뛴다. 소비 사실 없는 판단은 받지 않는다.
+        if len(self.sources) == 0:
+            raise ValueError('invalid_consumed_source')
         names = [source.name for source in self.sources]
         if len(set(names)) != len(names):
             raise ValueError('invalid_consumed_source')
@@ -192,7 +199,8 @@ class EntryDecisionFacts:
         return {
             'intent_id': self.intent_id, 'symbol': self.symbol, 'side': self.side,
             'strategy': self.strategy, 'origin': self.origin, 'sector': self.sector,
-            'config_version': self.config_version, 'decided_at': self.decided_at.isoformat(),
+            'config_version': self.config_version, 'hybrid_enabled': self.hybrid_enabled,
+            'decided_at': self.decided_at.isoformat(),
             'expires_at': self.expires_at.isoformat(), 'base_pct': self.base_pct,
             'strategy_allocation_pct': self.strategy_allocation_pct,
             'min_position_value': str(self.min_position_value),
@@ -242,6 +250,10 @@ def recompose_quantity(facts: EntryDecisionFacts, snapshot, *, price: Decimal):
     if type(facts) is not EntryDecisionFacts or type(snapshot) is not p.EntryPolicySnapshot:
         raise ValueError('invalid_decision_recompose_input')
     _money(price, 'invalid_decision_price', positive=True)
+    if facts.hybrid_enabled:
+        # legacy wrapper는 hybrid에서 호라이즌별 base/max/pool로 갈아탄다. 조용히 다른
+        # 수량을 만들지 않도록 재현 대신 명시 거부한다(risk 모드 stop 누락과 같은 패턴).
+        raise ValueError('unsupported_hybrid_sizing')
     policy, pf = snapshot.policy, snapshot.portfolio
     is_core = facts.strategy == 'core_holding'
     if policy.sizing_mode == 'risk' and not is_core and facts.stop_pct is None:

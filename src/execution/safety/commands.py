@@ -209,14 +209,23 @@ class RequestBoundCommands:
         await self.owner.mutate('decision-facts:'+uuid4().hex, reduce)
         return self.owner.version
 
-    @staticmethod
-    def _consumed_sources(state, facts):
-        """소비했다고 기록한 출처만 현재 게시본과 대조한다. 미소비 출처 변화는 stale이 아니다."""
+    def _consumed_sources(self, state, facts):
+        """소비했다고 기록한 출처만 현재 게시본과 대조한다. 미소비 출처 변화는 stale이 아니다.
+
+        version·digest만으로는 게시 시각이 구속되지 않는다. 게시본 as_of와 facts의
+        source.as_of가 같아야 하고, 그 게시본이 당일(KST)이어야 하며, 판단 시점보다
+        미래의 출처를 소비했다고 적을 수 없다.
+        """
         published = state.get('qualification_sources', {})
+        now = self.runtime._now()
         for source in facts.sources:
             current = published.get(source.name)
             _require(current is not None and current['version'] == source.version
                      and current['digest'] == source.digest, 'stale_qualification_source')
+            published_at = datetime.fromisoformat(current['as_of'])
+            _require(published_at == source.as_of
+                     and published_at.astimezone(now.tzinfo).date() == now.date()
+                     and source.as_of <= facts.decided_at, 'stale_qualification_source')
 
     def _decision_facts(self, state, request, context, snapshot, resources, sector):
         """자동 매수만 소비한다. 경제값은 전부 현재 snapshot에서 다시 읽는다."""
