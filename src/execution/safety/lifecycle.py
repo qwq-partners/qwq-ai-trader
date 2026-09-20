@@ -366,6 +366,12 @@ class OrderLifecycleCoordinator:
         claim_id가 None인 것이 "POST를 시작한 적 없음"의 증거다. 그 밖의 시도는
         이미 송신됐을 수 있으므로 거부하고 예약을 그대로 둔다. 미송신 포기와
         '보냈는데 거부됨'의 구분은 reason 하나로 한다.
+
+        가드는 kind를 안다. SUBMIT의 order_ref는 그 시도 자신의 브로커 주문번호라
+        채워져 있으면 곧 송신 증거지만, 자식 명령(cancel/modify)의 order_ref는
+        prepare가 싣는 **부모의** 식별자다. 그래서 자식은 그 한 항만 면제하되
+        부모 것과 정확히 같을 때로 한정하고, 자식 자신의 송신 증거인 command_ref
+        부재를 추가로 요구한다. 자식 종료는 부모 행을 만지지 않는다(S4 계약 3).
         """
         if type(reason) is not str or not reason.strip():
             raise ValueError("abandon reason required")
@@ -377,10 +383,17 @@ class OrderLifecycleCoordinator:
             if (not attempt or attempt["state"] != OrderState.PREPARED.value
                     or attempt["claim_id"] is not None
                     or attempt.get("command_status") is not None
-                    or attempt.get("order_ref") is not None
                     or attempt["observed_quantity"] != 0 or attempt["applied_quantity"] != 0
                     or attempt.get("evidence_conflict")):
                 return state
+            if attempt["kind"] == CommandKind.SUBMIT.value:
+                if attempt.get("order_ref") is not None:
+                    return state
+            else:
+                parent = state["attempts"].get(attempt.get("parent_attempt_id"))
+                if (attempt.get("command_ref") is not None or parent is None
+                        or attempt.get("order_ref") != parent.get("order_ref")):
+                    return state
             attempt["state"] = OrderState.FINAL_REJECTED.value
             attempt["status"] = attempt["state"]
             attempt["command_status"] = CommandStatus.NOT_SENT.value
