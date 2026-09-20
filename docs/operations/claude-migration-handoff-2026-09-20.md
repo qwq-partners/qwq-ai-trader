@@ -2,7 +2,7 @@
 
 ## 먼저 읽을 결론
 
-운영 기준은 main, 계속 개발할 정본은 **`feature/engine-safety-design-20260917`** 한 개다. C4 제품 기준은 **`ab044c4edeb702911fee998973cb00a263a7b085`**다. 다른 보존 브랜치는 고유 커밋/미커밋 자료/리뷰 증거를 지키기 위한 것이며 새 구현을 병렬로 다시 시작할 근거가 아니다.
+운영 기준은 main, 계속 개발할 정본은 **`feature/engine-safety-design-20260917`** 한 개다. C4 제품 기준은 **`ab044c4edeb702911fee998973cb00a263a7b085`**다. 추가 확인 없이 정리하라는 후속 지시에 따라 다른 로컬54/원격7 branch heads와53개 worktree는 **복구 가능한 archive로 전환**했다. 최종 상시 branch/worktree는 main·engine 두 개이며 임시 문서 PR 작업공간은 병합 후 제거한다. 다른 worker를 다시 활성화하거나 중복 구현하지 않는다.
 
 **전체 엔진의 main 병합·운영 전환은 아직 승인 가능한 상태가 아니다.** C4 한정 통과를 전체 마이그레이션 완료로 확대하지 않는다. 이번 정리는 개발선을 폐기하거나 거래 안전 장벽을 해제하지 않았다. 사용자가 요청한 다음 개발·설계는 이 문서를 읽은 새 Claude 세션에서 이어간다.
 
@@ -10,9 +10,9 @@
 
 - 운영 checkout: `/home/ubuntu/projects/qwq-ai-trader` (main).
 - 엔진 작업공간: `/home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/engine-safety-design-20260917`.
-- 감사 시 main: `465a0298059abfdeb4381d1e75933fc450e2ad58`. engine은 이 main의 직계 후손이며 18커밋 앞선다. 뒤처진 main 코드를 재구현할 필요가 없다.
+- 1차 감사 시 main `465a029`, engine `ab044c4`(+18/-0). PR #77 이후 문서-only 동기화 기준은 main `4222f7442a63ded50dc2d96a3840a0f8acb041e6`, engine `792a4988c87049615bdda3689852f7b3acc0ac04`다. 이번 archive 인계도 문서만 추가한다. 현재 SHA는 Git으로 재확인하며 뒤처진 main 코드를 재구현하지 않는다.
 - 이 인계 문서의 main 병합 이후에는 **문서만 바뀐 main을 engine에 merge**해 인계 문서도 가져온다. source/test 트리와 `ab044c4`의 차이를 대조한다. 강제 push/rebase로 기존 검토 이력을 바꾸지 않는다.
-- 브랜치/복구 원장: [정리 보고서](../reviews/branch-consolidation-2026-09-20.md). dirty 작업공간은 그대로 남겼다. 사용자 변경을 reset/덮어쓰기하지 않는다.
+- 복구 정본: [추가 archive 보고서](../reviews/retired-workspace-archive-2026-09-20.md). dirty28·staged12개를 포함한53개 원본과 전체 Git 객체/index는 `/home/ubuntu/projects/qwq-retired-workspaces-20260920.c2dhUU`에 있다. **원래 worker 경로는 더 이상 존재하지 않으며 archive의 `.git` 포인터도 직접 사용하지 않는다.** 보고서의 복구 절차를 따른다. [1차 정리 보고서](../reviews/branch-consolidation-2026-09-20.md)의 보존 목록은 역사 기록이다.
 - 이 문서보다 실제 Git 상태를 우선한다. 시작 직전 `git status --short`, `git log -5 --oneline`, `gh pr list`로 다른 세션 변경을 확인한다.
 
 ## 운영에 반영한 범위와 유지한 것
