@@ -453,6 +453,16 @@ def test_the_read_helpers_sum_open_buy_reservations_only(tmp_path, monkeypatch, 
             await f['runtime'].owner.mutate('synthetic-terminal', settle)
             assert gateway.reserved_cash() == D('0')
             assert gateway.pending_strategy_notional('sepa_trend') == D('0')
+
+            # snapshot 을 만들 수 없는 상태에서 0 을 돌려주면 '예약 없음'으로 읽힌다(fail-closed).
+            def drop(state):
+                del state['entry_policy_context']
+                return state
+            await f['runtime'].owner.mutate('synthetic-missing-context', drop)
+            with pytest.raises(KeyError):
+                gateway.reserved_cash()
+            with pytest.raises(KeyError):
+                gateway.pending_strategy_notional('sepa_trend')
         finally:
             await f['runtime'].shutdown(); await f['store'].close()
     asyncio.run(scenario())
