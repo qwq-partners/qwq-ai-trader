@@ -176,9 +176,24 @@ def test_r19_panel_contribution_caps_expiry_six_hours_after_load():
                                    panel_loaded_at=_at(1200)) == _at(1800)
 
 
+def test_r18_sepa_decision_after_the_deadline_is_refused_not_extended():
+    """양쪽 시계가 모두 14:30 을 넘기면 14:30 항이 소멸해 당일 말까지 유효해진다 — 버린다."""
+    module = api()
+    cv = _cv(now_hm=1430, penalties=())
+    assert _refusal(module, cv=cv, decided_at=_at(1430, second=5)) == 'sepa_entry_deadline_passed'
+    late = _cv(now_hm=1525, penalties=())
+    assert _refusal(module, cv=late, decided_at=_at(1525)) == 'sepa_entry_deadline_passed'
+    # 대조: 다른 전략은 같은 시각에도 만들어지고 당일 말까지 유효하다
+    other = _cv(strategy='momentum_breakout', now_hm=1525, penalties=())
+    built, _ = _build(module, cv=other, decided_at=_at(1525))
+    assert built.expires_at == _at(2359, second=59).replace(microsecond=999999)
+
+
 def test_r19_panel_bound_applies_to_built_facts():
     module = api()
-    cv = _cv(now_hm=1525, penalties=('전문가패널 추천(+7 conv=90%/신선도80%)',),
+    # 패널 창만 본다 — SEPA 는 14:30 이후 판단 자체가 거부되므로 다른 전략 표본을 쓴다
+    cv = _cv(strategy='momentum_breakout', now_hm=1525,
+             penalties=('전문가패널 추천(+7 conv=90%/신선도80%)',),
              panel={'created_at': '2026-09-20T21:00:00', 'conviction': 0.9, 'bonus': 7,
                     'loaded_at': _naive(1200)})
     built, _pending = _build(module, cv=cv, decided_at=_at(1525))
@@ -187,7 +202,8 @@ def test_r19_panel_bound_applies_to_built_facts():
 
 def test_r19_expired_panel_window_refuses_instead_of_extending():
     module = api()
-    cv = _cv(now_hm=1525, penalties=('전문가패널 추천(+7 conv=90%/신선도80%)',),
+    cv = _cv(strategy='momentum_breakout', now_hm=1525,
+             penalties=('전문가패널 추천(+7 conv=90%/신선도80%)',),
              panel={'created_at': '2026-09-20T21:00:00', 'conviction': 0.9, 'bonus': 7,
                     'loaded_at': _naive(900)})
     assert _refusal(module, cv=cv, decided_at=_at(1525)) == 'decision_already_expired'

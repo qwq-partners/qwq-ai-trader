@@ -206,6 +206,10 @@ def _check_clock(cv_decision, decided_at, strategy, rule_ids):
     # 교차가 실제로 생기고, 그러면 상한이 통째로 사라진다. 창을 늘리지 않고 판단을 버린다.
     if strategy == 'sepa_trend' and (now_hm < 1430) != (local_hm < 1430):
         _refuse('decision_clock_disagreement')
+    # 양쪽 시계가 모두 상한을 넘긴 SEPA 판단은 entry_expires_at 의 14:30 항이 소멸해 당일 말까지
+    # 유효해진다. 상류(sepa_trend 의 14:30 신호 차단)는 naive 벽시계라 믿지 않는다 — 버린다.
+    if strategy == 'sepa_trend' and local_hm >= 1430:
+        _refuse('sepa_entry_deadline_passed')
     # 장초반 감점은 배치·core·swing 면제가 있어 한 방향만 검사한다.
     if 'early_session_penalty' in rule_ids and reported != 'early':
         _refuse('decision_clock_disagreement')
