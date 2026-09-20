@@ -11,7 +11,7 @@
 |---|---|---|---|
 | Plan | 조사 3관점 + 계약·단계 고정 | 완료 | `47fa76b`·`03cc2d6`·`1f8e3ad`·`e8054b0` (문서만) |
 | S1 (B2a) | facts DTO·게시 2종·final kernel 재검사 | **완료 — 한정 승인·운영 미설치** (실제 publisher·gateway 없음, 합성 시험 한정) | `01362db`(merge) + `78ca94f` |
-| S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher | 미착수 | — |
+| S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5) | **Plan 완료, Do 착수 전** (세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | — |
 | S3 (B3a) | SIGNAL→gateway→ORDER command ID→dispatch | 미착수 (사전 확인만, 계획서 "S3 사전 확인") | — |
 | S4 (B3b) | on_signal 내부 직접 SELL·취소0건 해제·eviction | 미착수 | — |
 | S5 (See) | 독립 실큐 인수·최종 broad 리뷰·전체 직렬 | 미착수 | — |
@@ -93,3 +93,34 @@
 ### S2 진입 조건
 - S1 이 engine 브랜치에 통합되고 전체 suite UTC·KST 직렬 통과·격리 0, 이 원장과 CHANGELOG·계획서·인계 문서가 갱신·push 됨.
 - S2 Plan 에서 먼저 정할 것: CV 의 4개 입력(trade_memory·expert_orchestrator·sector_council·panel_outlook)과 market_regime 의 **digest 산출 방법과 게시 시점**, CV 가 facts 를 "추가 반환"하는 형태(기존 `(bool, float, str)` 반환·감점 산식·임계값 불변, `event.score` in-place 변형은 legacy 경로에서 유지), LLM soft-reject 의 `position_multiplier` 이중 곱(event/signal 두 dict) 중 kernel 이 읽는 쪽(`signal.signal.metadata`) 기준 단일 값, 시간 규칙의 `expires_at` 산출(aware KST, `runtime._now()`), `hybrid_enabled`·`base_pct`·`strategy_allocation_pct`·`min_position_value`·`config_version` 의 설정 출처 고정.
+
+---
+
+## S2 (B2b) — 실제 qualification publisher
+
+> 세부 계획·계약·하위 단계 명세의 정본: `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`. 이 절은 진행·증거·체크리스트를 적는다.
+
+### Plan (완료, 2026-09-20, 기준 `e5d0d93`)
+- 방법: 읽기 전용 워크플로 — 조사 2건(CV 출처·갱신 지점 / facts 필드 출처·시간 규칙) → 독립 설계 2안(최소 침습 우선 / stale 실효성 우선) → 심사·종합 1건. 전부 요청 claude-opus-5(high, 심사만 xhigh), 실제 모델 metadata 미노출. 호스트 제약으로 동시 ≤2·**pytest 0건**(모든 주장은 정적 소스 대조). 심사자가 사실 주장 16건을 파일을 열어 확인(15 맞음·1 부분), 설계안1 의 오류 2건(증거 채널 교차 오염이 "구조적으로 불가능"하다는 주장, shadow 규칙11 을 소비 출처로 게시)을 기각.
+- 핵심 발견: ① CV 가 받는 regime 은 owner 의 순수 함수 `effective_regime(state, now)` 와 같은 값 → **final 동기 구간에서 재유도 가능(자기신고가 아닌 유일한 stale 축)** ② panel_outlook·trade_memory 는 결정 시점에만 게시되어 version·digest 대조가 헛돈다(**replay 구속 전용**으로 정직하게 보고) ③ tests/ 에 CV 실인스턴스 0건 — "감점 산식 불변"의 증거가 없어 **특성화를 먼저** 세운다 ④ `cross_validator.py:258` 의 함수 내 datetime 재임포트로 기존 시계 동결 관례가 듣지 않는다 ⑤ CV 인스턴스를 실거래와 팀심의 shadow 가 공유하고 그 사이에 await 가 있어 증거 채널은 "진입 시 None + token 정확 대조"가 필요하다.
+- coordinator 결정 8건 + 구조 변경(시험 파일 단계별 분리·wave 실행)은 세부 계획 §2. 상위 계획서 대비 이탈 2건을 거기 기록: S2 허용 제품 파일에 `safety/qualification.py`·`safety/commands.py` 추가, R2 의 "ruleset 출처" 대신 regime 상시 인용.
+- **Codex 재리뷰 조건(S1)의 처리:** `hybrid_enabled` 의 policy 대조는 S3 로 미룬다(제품 PolicyContext publisher 0건이라 지금은 자기 자신과 비교, 필수 필드 추가는 기존 시험 동결 위반). S2 에서는 **부분 충족**(유도 + 명시 거부)으로 기록하고 완전 충족은 S3 인수 조건이다.
+
+### Do·See — 하위 단계별 (진행하며 채운다)
+
+| 하위 단계 | 제품 파일 | 시험 파일 | 상태 | 커밋 | 재검증·리뷰 |
+|---|---|---|---|---|---|
+| S2-1 CV 특성화 + 증거 채널 | `src/core/cross_validator.py` | `tests/test_cross_validator_characterization.py` | 미착수 | — | — |
+| S2-2 사이징 입력 반출 | `src/core/engine.py`(`_calculate_position_size` 내부만) | `tests/test_execution_sizing_inputs_export.py` | 미착수 | — | — |
+| S2-3 regime final 재유도 | `src/execution/safety/commands.py` | `tests/test_execution_regime_recheck.py` | 미착수 | — | — |
+| S2-4 순수 builder | `src/execution/safety/qualification.py`(신규) | `tests/test_execution_qualification_builder.py` | 미착수 | — | — |
+| S2-5 engine 어댑터 배선 | `src/core/engine.py`(어댑터 구간만) | `tests/test_execution_qualification_publishers.py` | 미착수 | — | — |
+
+### 이어받는 에이전트 체크리스트 (S2 공통 — 하위 단계마다 반복)
+- [ ] 세부 계획 §4 의 그 단계 "고정 인터페이스"와 실제 시그니처·dict 키가 일치하는가(S2-4·S2-5·S3 가 의존).
+- [ ] 허용 파일·허용 구간 밖 변경 0(`git diff --stat <base> <head>`; engine.py 는 hunk 위치까지 확인).
+- [ ] 기준선 시험 파일 수정 0줄(`git diff --numstat <base> <head> -- tests/` 에서 새 파일만 나와야 한다).
+- [ ] RED 커밋이 제품 커밋보다 앞, 행동 RED 와 부재 RED 를 구분했는가. S2-1 의 특성화 C1~C7 은 "착수 시 GREEN 이 정상"이므로 RED 로 세지 않았는가.
+- [ ] 세부 계획에 나열된 변이 각각 ≥1건 실패를 **직접 재현**(실험 뒤 원복·`git status --short` 비어 있음).
+- [ ] 새 시험이 `synthetic_home` autouse 를 자체 선언했는가(CV `__init__` 과 규칙11/12 가 `~/.cache/ai_trader` 아래에 쓴다 — 운영 캐시 오염 위험). 벽시계 의존 0, UTC·KST 양쪽 통과.
+- [ ] legacy 불변: 특성화·기준선 시험 전건 통과, runtime 미설치에서 게시 호출 0.

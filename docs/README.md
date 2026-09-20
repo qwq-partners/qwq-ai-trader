@@ -49,6 +49,7 @@
 - [C2a Opus 후속 수정·인수](reviews/policy-generation-remediation-2026-09-20.md) — B1/B2/B4 재현·수정, 실제 Opus 한정 승인·UTC/KST 각각4053통과. 다음은 retained source 요청 경계와 지속 소비 권한; 운영 전환 승인은 아님
 - [**B2/B3 단계 원장 (현재 진행 정본)**](reviews/b2b3-stage-ledger-2026-09-20.md) — request-bound qualification·최종 사이징 S1~S5 의 단계별 Plan/Do/See·재현 명령·리뷰 판정·변이 결과·이어받는 체크리스트·잔여·다음 진입 조건. 리뷰·인계는 여기부터
 - [B2/B3 실행 계획·계약](superpowers/plans/2026-09-20-b2b3-request-bound-qualification.md) — immutable decision facts 계약(현재 경제는 snapshot, 판단 시점 값은 facts), 단계 S1~S5·파일 소유권·인수 조건·S1 리뷰 처분·S3 사전 확인
+- [S2 세부 계획 — 실제 qualification publisher](superpowers/plans/2026-09-20-s2-qualification-publishers.md) — 조사 확정 사실·coordinator 결정 8건·S2 계약 12항·출처별 전략(실효 stale 축은 regime 1개)·하위 단계 S2-1~S2-5 의 고정 인터페이스/행동 RED/변이 kill·S3 로 미룬 것
 - [KR 실행 안전성 후속 Plan–Do–See](reviews/engine-execution-followup-2026-09-18.md) — 기반·정책 generation·지속 source 권한·실제2분 구간별 한정 승인. 정오·LLM·qualification/gateway·나머지 writer/설치·전체 인수·공식 증거는 잔여
 - [KR writer 이행 세분 계획](superpowers/plans/2026-09-18-engine-writer-migration.md) — 계좌 lease/종료 drain→원시각·정책 publisher→기존 sizing/qualification·실제 큐→SAFE/USER/IPC·fill·sync/day; 운영 설치 미완
 - [KR 실행 안전성 구현 중간 리뷰](reviews/engine-execution-safety-2026-09-17.md) — 기반·Task4b 실제 경제/보호/큐 검증과 운영 writer 전체 이행 미완을 구분; 공식 KIS 계약/잔여 인수
