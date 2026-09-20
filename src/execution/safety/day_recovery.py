@@ -182,5 +182,9 @@ def reset_daily(state, prices, unrealized, to_day):
     risk["daily_stats"].update(date=to_day, trades=0, wins=0, losses=0, total_pnl="0",
                                max_drawdown="0", consecutive_losses=0, peak_equity=portfolio["initial_capital"])
     risk.update(consecutive_losses=0, stop_loss_today=[], stop_loss_rebound_used=[], exited_today={}, daily_exit_count=0)
+    # 전일 판단 사실은 새 날에 소비될 수 없으므로 여기서 끊는다(결정 ⑩). 출처 행은
+    # 이름으로 키잉돼 유계이고 as_of 당일성 검사가 재사용을 막으므로 건드리지 않는다.
+    if "entry_decision_facts" in state:
+        state["entry_decision_facts"] = {}
     validate_risk(risk)
     return state
