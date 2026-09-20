@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — docs(plan): B2/B3 request-bound qualification·최종 사이징 실행 계획 (계획만, 구현 0)
+
+- 인계 §1 Plan 단계. `214223e` 기준 읽기 전용 3관점 조사(실제 주문 경로 관문 지도 / safety 요청→준비→최종→송신 경로 / 실큐 하네스, 각 Opus·high 요청·실제 모델 메타데이터 미검증)와 coordinator 의 `commands.py` 전문·kernel 계약·snapshot 필드 대조로 계약과 단계를 고정했다. 정적 추적이며 런타임 관측이 아니다.
+- 핵심: 경제·슬롯·섹터·재진입·sync 는 이미 owner 에 있어 B2 신규 범위는 CV/LLM/시간 규칙의 fact 화와 **수량 재유도**다. `_evaluate` 가 prepare·final 공통 관문이므로 소비·kernel 재검사는 그 한 곳. "현재 경제는 snapshot, 판단 시점 값은 불변 facts, mutable event/Order 에서는 읽지 않음". stale 은 소비한 출처 version·config·만료만(무관 fill/ACK 제외).
+- 단계 S1(facts·게시·final 재검사, engine.py 무접촉)→S2(실제 publisher)→S3(SIGNAL→gateway→ORDER command ID)→S4(on_signal 내부 직접 SELL·취소0건 해제·eviction)→S5(독립 실큐 인수·최종 리뷰). 10C 는 범위 밖. 정본 `docs/superpowers/plans/2026-09-20-b2b3-request-bound-qualification.md`.
+- 제품 소스·시험·설정 변경0. main/운영·배포·재시작·주문·Toss grant 무변경, `trading_ready=False`·MODIFY 미지원 유지.
+
 ## 2026-09-20 — docs(ops): 퇴역 작업공간 archive·상시 개발선 2개로 정리
 
 - 후속 독자 정리 지시로 로컬54 heads를 archive refs, 원격7 heads를 같은 SHA의 archive tags로 전환했다. dirty28/staged12를 포함한53개 worktree 원본 전체와 Git admin/index/objects를 mode700 로컬 보관소에 보존했다. 상시 잔여는 main·engine의 local/remote/worktree 각2개(임시 문서 PR 제외), 강제 삭제/reset/전역 prune0.
