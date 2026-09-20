@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-20 — docs(ops): 브랜치 정리·운영 checkout 동기화·Claude migration 인계
+
+- 독립 branch/배포 경계 감사 뒤 병합 완료 local166·remote67·clean worktree83개를 정리했다. 정확한 refs/worktree manifest와 검증된 전체 Git bundle, engine ignored SDD archive를 호스트 로컬에 보존했다. dirty28·고유 커밋·비캐시 증거는 삭제하지 않았다. 강제 worktree 제거/reset/커밋 덮어쓰기 없음.
+- root main `8ff2f55→465a029` fast-forward, 기존 거래 경로/설정/의존성 diff0·거래 PID3534327/Toss PID3335469·보호7경로 유지. 별도 관측 서비스 소스/문서를 동기화했으며 서비스 재시작·주문·설정·grant/토큰 변경0. 새 엔진 배포로 계산하지 않는다.
+- engine 정본 `feature/engine-safety-design-20260917`의 C4 source `ab044c4`는 main보다18커밋 앞서나 전체166파일의 운영 승격은 미완이다. 다음은10B2/B3 실제 qualification/최종 sizing request-bound 인수, 이후 writer/factory/공식 증거/전체 C/F/G/R·독립 broad. `trading_ready=False`·모든 MODIFY 미지원 유지.
+- 새 main 기준 전체 KST1810passed/기존xfail2(74.60초), UTC1810/2(70.69초), 각각격리0. engine도 새 직렬 KST4403/2(280.83초)·UTC4403/2(269.10초)를 확인했다. 문서 독립 Astra/xhigh 승인·Sol/high 정리 사후 대조 통과, 문법/비밀정보 검사 통과. 상세 검증/보존 목록: `docs/reviews/branch-consolidation-2026-09-20.md`; Claude 시작 문서: `docs/operations/claude-migration-handoff-2026-09-20.md`. 문서만 변경하며 후속 PR/CI/동기화 상태는 Git 기록과 구분한다.
+
 ## 2026-09-17 — ops(T12): 별도 Toss 관측 서비스 ON (기존 거래 봇 유지)
 
 - 사용자 승인 일정09/18·21·22/만료09/22 18:00 KST로 root 보호 release877768e·전용 UID997/GID987·Toss2자격·plan/grant를 설치했다. 자격 없는 전용 UID check-only 성공/시작 전 state 파일0, effective unit 권한·자원 제한 확인 후 **21:47:37 KST 새 서비스1회 시작(PID3335469)**.
