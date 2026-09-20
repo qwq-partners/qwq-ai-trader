@@ -77,8 +77,10 @@ def _regime_row(module, regime='sideways', *, version=1, as_of=None):
 
 
 def _build(module, *, decided_at=None, cv=None, sizing=None, regime_used='sideways',
-           regime_row=..., llm_reason='not_required', strategy=None, **changes):
+           regime_row=..., llm_reason='not_required', strategy=None, observed_at=..., **changes):
     cv = cv if cv is not None else _cv()
+    decided_at = decided_at if decided_at is not None else _at(945)
+    # 기본 판독 시각은 판단 시각보다 1초 앞이다 — 둘을 같은 값으로 두면 as_of 계약이 안 드러난다.
     kwargs = dict(
         intent_id='intent-1', symbol='005930', side='buy',
         strategy=strategy if strategy is not None else cv['strategy'],
@@ -86,7 +88,8 @@ def _build(module, *, decided_at=None, cv=None, sizing=None, regime_used='sidewa
         sizing_inputs=sizing if sizing is not None else _sizing(),
         config_version='synthetic-config-version', regime_used=regime_used,
         regime_row=_regime_row(module, regime_used) if regime_row is ... else regime_row,
-        decided_at=decided_at or _at(945),
+        decided_at=decided_at,
+        observed_at=(decided_at - timedelta(seconds=1) if observed_at is ... else observed_at),
     )
     kwargs.update(changes)
     return module.build_decision_facts(**kwargs)
@@ -272,7 +275,7 @@ def test_r21_panel_digest_covers_only_this_symbol_values():
 
     def digest_of(panel):
         _built, pending = _build(module, cv=_cv(penalties=penalties, panel=panel))
-        return {source.name: source.digest for source in pending}['panel_outlook']
+        return {source.name: source.digest for source in pending}['panel_outlook:005930']
 
     # 로드 시각(다른 종목 판단으로도 움직인다)은 digest 에 들어가지 않는다
     assert digest_of(base) == digest_of({**base, 'loaded_at': _naive(1230)})
@@ -301,12 +304,18 @@ def test_r22_memory_and_panel_are_cited_only_when_they_moved_the_score():
              panel={'created_at': '2026-09-20T21:00:00', 'conviction': 0.9, 'bonus': 7,
                     'loaded_at': _naive(900)})
     _built, pending = _build(module, cv=cv)
-    assert [source.name for source in pending] == ['panel_outlook', 'trade_memory']
-    # 관측 시각은 판단 시각이다(원본 생성시각은 digest 안)
-    assert all(source.as_of == _at(945) for source in pending)
+    # 이름은 소비 범위까지 담는다 — 종목별·전략/섹터별 digest 를 전역 한 행에 실을 수 없다(계약 1)
+    assert [source.name for source in pending] == [
+        'panel_outlook:005930', 'trade_memory:sepa_trend:반도체']
+    # 관측 시각은 CV 판독 시각이다(판단 시각도, 원본 생성시각도 아니다 — 생성시각은 digest 안)
+    assert all(source.as_of == _at(945) - timedelta(seconds=1) for source in pending)
     # memory_adj 가 0 으로 돌아오면 인용도 사라진다
     _b2, pending2 = _build(module, cv={**cv, 'memory_adj': 0})
-    assert [source.name for source in pending2] == ['panel_outlook']
+    assert [source.name for source in pending2] == ['panel_outlook:005930']
+    # 섹터를 모르면 이름의 그 자리는 '-' 다(빈 조각은 commands 의 신원 검사를 통과하지 못한다)
+    _b3, pending3 = _build(module, cv=cv, sector=None)
+    assert [source.name for source in pending3] == [
+        'panel_outlook:005930', 'trade_memory:sepa_trend:-']
 
 
 def test_r23_non_deciding_inputs_are_never_cited_as_sources():
@@ -321,6 +330,41 @@ def test_r23_non_deciding_inputs_are_never_cited_as_sources():
     # 규칙 4·5 는 점수를 바꿨으므로 rule id 로는 남는다
     assert built.qualification.applied_rule_ids == (
         'early_session_penalty', 'sector_stoploss_penalty', 'sector_foreign_bonus')
+
+
+# --- 계약 3: 출처 as_of 는 CV 판독 시각 --------------------------------------
+
+
+def test_observed_at_must_be_aware_and_not_after_the_decision():
+    """판독 시각이 판단 시각 뒤면 '소비 시각 역전'을 owner 가 아니라 여기서 끊는다."""
+    module = api()
+    assert _refusal(module, observed_at=_naive(944)) == 'invalid_observation_time'
+    assert _refusal(module, observed_at=None) == 'invalid_observation_time'
+    assert _refusal(module, observed_at=_at(946)) == 'invalid_observation_time'
+    # 같은 KST 날짜여야 한다 — 전일 판독은 당일 게시본과 짝이 될 수 없다
+    assert _refusal(module, observed_at=_at(945) - timedelta(days=1)) == 'invalid_observation_time'
+    # 표기 시간대가 달라도 같은 순간이면 받는다
+    built, _pending = _build(module, observed_at=_at(944).astimezone(timezone.utc))
+    assert built.decided_at == _at(945)
+
+
+def test_expiry_is_anchored_on_the_decision_time_not_the_observation():
+    """만료 기준은 계속 decided_at 이다 — 판독 시각으로 창을 늘리거나 줄이지 않는다."""
+    module = api()
+    early, _a = _build(module, decided_at=_at(1029), observed_at=_at(1000))
+    late, _b = _build(module, decided_at=_at(1029), observed_at=_at(1029))
+    assert early.expires_at == late.expires_at == _at(1030)
+
+
+def test_source_scope_segments_must_be_usable_as_a_published_name():
+    """이름 조각에 공백·빈값·':' 이 섞이면 다른 범위와 겹치거나 게시 자체가 거부된다."""
+    module = api()
+    cv = _cv(memory_adj=-3, penalties=(EARLY, '메모리보정(-3)'))
+    for bad in ('', ' 반도체', '반도체:2차전지'):
+        assert _refusal(module, cv=cv, sector=bad) == 'invalid_source_scope'
+    built, pending = _build(module, cv=cv, sector='반도체')
+    assert [source.name for source in pending] == ['trade_memory:sepa_trend:반도체']
+    assert built.sector == '반도체'
 
 
 # --- R24: overlay fail-open 표식 ---------------------------------------------
@@ -429,8 +473,14 @@ def test_r26_config_version_is_recomputed_not_cached():
     assert module.config_version(**base) != first
 
 
-def test_r26_contrast_entry_risk_config_hash_ignores_the_base_pct_table():
-    """대조: 기존 `_entry_risk_config_hash` 는 base_pct 표를 담지 않아 표 변화에 무반응이다."""
+def test_r26_contrast_entry_risk_config_hash_only_hashes_the_risk_config():
+    """대조: 기존 `_entry_risk_config_hash` 의 입력은 RiskConfig 하나뿐이다.
+
+    표가 다른 두 사례는 만들 수 없다 — 전략별 base_pct 표는 `_calculate_position_size` 안의
+    리터럴이라 설정 객체에 실리지 않는다. 그래서 여기서 주장하는 것은 두 가지로 좁힌다:
+    같은 설정에서 결정적이라는 것과, 해시 입력 목록에 그 표가 없다는 소스 사실이다.
+    """
+    import inspect
     from src.core.engine import RiskManager
     from test_execution_sizing_characterization import _config  # noqa: F401 — 특성화 설정 재사용
 
@@ -438,6 +488,11 @@ def test_r26_contrast_entry_risk_config_hash_ignores_the_base_pct_table():
     assert is_dataclass(config)
     # 전략별 base_pct 표는 engine.py `_calculate_position_size` 안의 리터럴이라 설정 객체에 없다
     assert 'strategy_position_pct' not in asdict(config)
+    source = inspect.getsource(RiskManager._entry_risk_config_hash)
+    assert 'strategy_position_pct' not in source
+    # 해시 입력은 self.config 뿐이다 — 다른 축이 추가되면 이 대조를 다시 세워야 한다
+    assert [name for name in ('self.config', 'self.engine', 'strategy_position_pct')
+            if name in source] == ['self.config']
     manager = object.__new__(RiskManager)
     manager.config = config
     other = object.__new__(RiskManager)

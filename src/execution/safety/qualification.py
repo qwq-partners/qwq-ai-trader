@@ -107,6 +107,18 @@ def _money(value, reason):
     return value
 
 
+def _scope(value, reason):
+    """출처 이름에 붙는 소비 범위 조각(계약 1).
+
+    digest 가 종목·전략·섹터별로 다른데 이름이 전역이면, 같은 패널로 두 종목을 잇달아
+    판단할 때 뒤 게시가 앞 판단의 version 을 stale 로 만든다. 이름은 `commands._text` 가
+    받는 형태(비어 있지 않고 strip 된 str)여야 하고 ':' 가 섞이면 다른 범위와 겹친다.
+    """
+    if type(value) is not str or not value or value != value.strip() or ':' in value:
+        _refuse(reason)
+    return value
+
+
 def _kst(value, reason):
     """naive 는 KST 지역시각으로 본다 — CV 의 `_panel_loaded_at` 이 naive 벽시계다."""
     if type(value) is not datetime:
@@ -266,10 +278,12 @@ def _regime_source(regime_used, regime_row, decided_at):
                           digest=expected)
 
 
-def _pending_sources(cv_decision, sector, decided_at):
+def _pending_sources(cv_decision, sector, observed_at):
     """판정을 실제로 바꾼 출처만 게시 대상으로 남긴다(계약 1).
 
-    as_of 는 관측(판독) 시각이라 판단 시각을 쓰고, 원본 생성시각은 digest 안에 넣는다
+    이름은 digest 가 갈리는 범위까지 담는다 — 패널은 종목별, 메모리 보정은 전략·섹터별이다.
+    전역 한 행에 싣던 때는 같은 패널로 두 종목을 잇달아 판단하면 뒤 게시가 앞 판단을
+    stale 로 만들었다. as_of 는 관측(판독) 시각이고 원본 생성시각은 digest 안에 넣는다
     (계약 3). digest 에는 계산된 결과값을 담아야 파일이 그대로여도 날짜로 값이 달라지는
     경우를 잡는다(계획서 §7).
     """
@@ -284,7 +298,8 @@ def _pending_sources(cv_decision, sector, decided_at):
             row_digest = _sha256(canonical(body))
         except ValueError:
             _refuse('unexpected_cv_decision')
-        pending.append(PendingSource('panel_outlook', decided_at, row_digest))
+        name = 'panel_outlook:' + _scope(cv_decision['symbol'], 'invalid_source_scope')
+        pending.append(PendingSource(name, observed_at, row_digest))
     memory_adj = cv_decision['memory_adj']
     if type(memory_adj) is not int:
         _refuse('unexpected_cv_decision')
@@ -292,13 +307,16 @@ def _pending_sources(cv_decision, sector, decided_at):
         # last_decision 에는 적용 규칙·score_delta 가 없다. 보정을 결정하는 입력(전략·섹터)과
         # 적용된 결과값으로 digest 를 만든다.
         body = {'strategy': cv_decision['strategy'], 'sector': sector, 'memory_adj': memory_adj}
-        pending.append(PendingSource('trade_memory', decided_at, _sha256(canonical(body))))
+        # 섹터 미상은 '-' 다. 빈 조각은 commands 의 신원 검사를 통과하지 못한다.
+        name = ('trade_memory:' + _scope(cv_decision['strategy'], 'invalid_source_scope') + ':'
+                + ('-' if sector is None else _scope(sector, 'invalid_source_scope')))
+        pending.append(PendingSource(name, observed_at, _sha256(canonical(body))))
     return tuple(pending)
 
 
 def build_decision_facts(*, intent_id, symbol, side, strategy, origin, sector, cv_decision,
                          llm_reason, sizing_inputs, config_version, regime_used, regime_row,
-                         decided_at) -> tuple[EntryDecisionFacts, tuple[PendingSource, ...]]:
+                         decided_at, observed_at) -> tuple[EntryDecisionFacts, tuple[PendingSource, ...]]:
     """CV 증거 + 사이징 입력 + 레짐 게시본 → 불변 facts 와 게시 대상 출처.
 
     보정하지 않는다: 0 이하 배율·hybrid 는 `0 or 1.0` 류로 넘기지 않고 사유 코드와 함께
@@ -310,6 +328,14 @@ def build_decision_facts(*, intent_id, symbol, side, strategy, origin, sector, c
         _refuse('unexpected_sizing_inputs')
     if type(decided_at) is not datetime or decided_at.utcoffset() is None:
         _refuse('invalid_decision_time')
+    # 계약 3 — observed_at 은 CV 판독 시각이다. decided_at 은 llm_second_check·섹터 조회
+    # await 뒤에 찍히므로 둘은 같은 값이 아니고, 출처 as_of 는 판독 쪽이어야 한다.
+    # 만료 기준은 계속 decided_at 이다(창을 판독 시각으로 늘리지 않는다).
+    if type(observed_at) is not datetime or observed_at.utcoffset() is None:
+        _refuse('invalid_observation_time')
+    if (observed_at > decided_at
+            or observed_at.astimezone(_KST).date() != decided_at.astimezone(_KST).date()):
+        _refuse('invalid_observation_time')
     if (cv_decision['symbol'], cv_decision['side'], cv_decision['strategy']) != (symbol, side, strategy):
         _refuse('decision_identity_mismatch')
     if cv_decision['regime'] != regime_used:
@@ -328,7 +354,7 @@ def build_decision_facts(*, intent_id, symbol, side, strategy, origin, sector, c
     _check_clock(cv_decision, decided_at, strategy, rule_ids)
 
     source = _regime_source(regime_used, regime_row, decided_at)
-    pending = _pending_sources(cv_decision, sector, decided_at)
+    pending = _pending_sources(cv_decision, sector, observed_at)
 
     panel = cv_decision['panel']
     expires_at = entry_expires_at(decided_at, strategy=strategy,
