@@ -1844,6 +1844,15 @@ class RiskManager:
         """신호 검증 및 주문 생성"""
         logger.info(f"[리스크] 신호 수신: {event.symbol} {event.side.value} 가격={event.price} 점수={event.score:.1f}")
 
+        # S2-5: 이번 판단의 증거 캡처 자리. 판정·수량에는 관여하지 않는 기록 전용이고
+        # 게시·intent_id·config_version 은 S3 gateway 가 한다. runtime 미설치면 캡처 분기가
+        # 통째로 돌지 않는다(legacy 실행 0줄).
+        from uuid import uuid4 as _qual_uuid
+        self._last_qualification_evidence = None
+        _qual_on = getattr(self.engine, "_execution_runtime", None) is not None
+        _qual_token = _qual_uuid().hex if _qual_on else None
+        _qual_decision = _qual_llm_reason = _qual_sizing = None
+
         # 진입 근거 표준화 검증 (2026-04-21 도입, shadow 모드 — 경고만 발생, 차단 없음)
         # 1주일 관찰 후 hard-reject로 전환 예정
         if event.side == OrderSide.BUY and event.signal is not None:
@@ -2057,6 +2066,7 @@ class RiskManager:
                 score=event.score,
                 metadata=_meta,
                 market_regime=_regime,
+                request_token=_qual_token,
             )
             # 규칙#9 메모리 보정 귀속 태그 (2026-09-13 — 게이트 성적표에서 지식층 영향 분리용)
             _mem_adj = getattr(self._cross_validator, "last_memory_adj", 0)
@@ -2134,6 +2144,17 @@ class RiskManager:
                                   original_score=_orig_score,
                                   adjusted_score=float(_cv_score),
                                   regime=_regime)
+
+            # S2-5 계약 13: 자기 LLM await 직후(LLM 미호출 경로는 validate 직후)에 token 을
+            # 대조하고 판정과 사유를 **추가 await 없이 함께** 복사한다. 증거 채널은 실거래와
+            # 팀심의 shadow 가 공유하므로, 그 사이에 다른 판단이 끼면 token 은 내 것인데
+            # 사유는 남의 것인 조합이 만들어진다. 불일치·부재면 증거를 만들지 않는다.
+            if _qual_on:
+                _qual_last = getattr(self._cross_validator, "last_decision", None)
+                if _qual_last is not None and _qual_last.get("token") == _qual_token:
+                    _qual_reason = getattr(self._cross_validator, "last_llm_reason", None)
+                    if type(_qual_reason) is str:
+                        _qual_decision, _qual_llm_reason = dict(_qual_last), _qual_reason
 
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
         if event.side == OrderSide.BUY:
@@ -2219,6 +2240,11 @@ class RiskManager:
             self._last_signal_time[event.symbol] = datetime.now()
             return None
 
+        # S2-5 계약 14: 이번 요청의 사이징이 양수를 돌려준 바로 그 지점이다. 속성은 첫 호출
+        # 전에는 부재이고, 조기 return 한 요청이 앞 요청의 성공값을 물려받아서는 안 된다.
+        if _qual_on and event.side == OrderSide.BUY:
+            _qual_sizing = getattr(self, "_last_sizing_inputs", None)
+
         # ── 조건부 진입계획 shadow 검증 (T11, 2026-09-15) ──────────────────────
         # 주문 생성 **직전**에 계획과 최신 값으로 판정해 기록만 한다.
         # 결과로 주문을 허용/차단하지 않는다(shadow 전용). 계획이 없으면 호출하지 않는다.
@@ -2271,6 +2297,19 @@ class RiskManager:
                     _sector = await self._sector_lookup(order.symbol)
                 except Exception:
                     _sector = None
+
+            # S2-5: 계약 13·14 를 통과한 증거만 조립한다(게시는 S3 gateway). 레짐은 CV 에
+            # 실제로 넘긴 그 값을 쓰고 다시 조회하지 않는다. 전략 폴백('unknown')은
+            # facts.strategy 가 요청과 달라지므로 증거를 만들지 않는다.
+            if (_qual_on and _qual_decision is not None and _qual_sizing is not None
+                    and event.strategy is not None):
+                from ..execution.safety.qualification_publisher import QualificationEvidence
+                self._last_qualification_evidence = QualificationEvidence(
+                    token=_qual_token, symbol=order.symbol, side=order.side.value,
+                    strategy=order.strategy, origin="automatic", sector=_sector,
+                    cv_decision=_qual_decision, llm_reason=_qual_llm_reason,
+                    sizing_inputs=_qual_sizing, regime_used=_regime,
+                )
 
             if self._risk_validator:
                 can_trade, reason = self._risk_validator.can_open_position(

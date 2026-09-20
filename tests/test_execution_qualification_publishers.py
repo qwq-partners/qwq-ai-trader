@@ -29,6 +29,9 @@ from src.core.types import (
 from src.execution.safety.commands import CommandValidationError
 from src.execution.safety.lifecycle import CommandStatus
 from src.execution.safety.qualification import QualificationRefused, regime_digest
+from src.execution.safety.qualification_publisher import (
+    QualificationEvidence, publish_qualification,
+)
 from src.utils.sizing import atr_position_multiplier
 
 from test_cross_validator_characterization import FULL_INDICATORS, freeze  # noqa: F401
@@ -42,11 +45,6 @@ from test_t11_entry_plan import _order_env
 def synthetic_home(tmp_path, monkeypatch):
     """CV 의 규칙11/12 로그·패널 파일이 운영 캐시(~/.cache/ai_trader)를 건드리지 않게 한다."""
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
-
-
-def api():
-    import importlib
-    return importlib.import_module('src.execution.safety.qualification_publisher')
 
 
 MEMORY_ADJ = -3
@@ -80,6 +78,7 @@ def manager(monkeypatch, validator, *, regime='bull', attached=True):
     rm = _rm(monkeypatch, mode='nominal', em=_em())
     _order_env(monkeypatch, rm)
     rm._cross_validator = validator
+    rm._PENDING_TIMEOUT_SECONDS = 600
     rm.engine._market_regime = regime
     if attached:
         # on_signal 은 runtime 의 속성을 읽지 않는다 — 설치 여부만 본다.
@@ -104,8 +103,7 @@ async def evidence_for(monkeypatch, freeze_clock, *, symbol=SYM, regime='bull'):
 
 
 async def publish(f, evidence, *, aid='A', decided_at=None, **changes):
-    module = api()
-    return await module.publish_qualification(
+    return await publish_qualification(
         f['commands'], evidence, intent_id='I-' + aid,
         config_version=f['ctx'].versions.config,
         decided_at=f['clock'][0] if decided_at is None else decided_at, **changes)
@@ -252,7 +250,9 @@ def test_r33_shadow_validate_during_my_llm_await_leaves_no_evidence(tmp_path, mo
 
         holder['cv'] = cv(memory=None, llm=complete)
         rm = manager(monkeypatch, holder['cv'], regime='neutral')
-        orders, found = await capture(rm, buy(SYM, score=90.0))
+        # 비강세장 + 85~95 점수라야 내 판단이 실제로 LLM 을 기다린다(VCP 는 레짐 게이트 밖).
+        orders, found = await capture(
+            rm, buy(SYM, score=90.0, strategy=StrategyType.VCP_BREAKOUT))
         assert orders, '증거가 없어도 legacy 판정은 그대로다'
         assert holder['cv'].last_llm_reason == 'approved'
         assert holder['cv'].last_decision['token'] is None
@@ -274,13 +274,13 @@ def test_r33b_a_delayed_other_llm_cannot_relabel_my_reason(tmp_path, monkeypatch
         # A: 다른 요청이 같은 인스턴스에서 LLM 응답을 기다리는 중이다.
         shared.validate(symbol='000660', side='buy', strategy='sepa_trend', score=90.0,
                         metadata={'indicators': dict(FULL_INDICATORS), 'sector': SECTOR},
-                        market_regime='neutral', request_token='A')
+                        market_regime='bull', request_token='A')
         pending = asyncio.create_task(shared.llm_second_check(
             symbol='000660', strategy='sepa_trend', score=90.0, indicators={},
             market_regime='neutral', sector=SECTOR))
         await asyncio.sleep(0)
 
-        rm = manager(monkeypatch, shared, regime='neutral')
+        rm = manager(monkeypatch, shared, regime='bull')
 
         async def sector_lookup(symbol):
             # B 의 sector 조회 await 동안 A 의 _llm() 이 끝나 사유만 덮어쓴다.
@@ -402,7 +402,7 @@ def test_evidence_detaches_the_caller_dicts(tmp_path, monkeypatch, freeze):
         rm._last_sizing_inputs['base_pct'] = 9.9
         found.cv_decision['symbol'] = '999999'
         found.sizing_inputs['base_pct'] = 8.8
-        again = api().QualificationEvidence(
+        again = QualificationEvidence(
             token=found.token, symbol=found.symbol, side=found.side, strategy=found.strategy,
             origin=found.origin, sector=found.sector, cv_decision=found.cv_decision,
             llm_reason=found.llm_reason, sizing_inputs=found.sizing_inputs,
