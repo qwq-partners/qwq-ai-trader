@@ -390,6 +390,82 @@ def test_r3_validate_resets_llm_reason(freeze):
     assert validator.last_llm_reason == 'not_required'
 
 
+# ── R5: 보너스 0 인 규칙10 은 인용하지 않는다 (계약 3.1) ──────────────
+# 추천 목록에 있어도 폐기(21일 초과)·저신선도(7일 초과) 분기는 점수를 안 바꾸므로
+# 판정 근거가 아니다 — panel 을 실으면 붙지 않은 보너스를 인용하게 된다.
+
+@pytest.mark.parametrize('created_at, label', [
+    ('2026-08-22T11:00:00', '30일 경과 — days_old>21 폐기 분기'),
+    ('2026-09-13T11:00:00', '8일 경과 — freshness 43%<50% 분기'),
+])
+def test_r5_stale_panel_is_recommended_but_never_cited(freeze, created_at, label):
+    stamp = freeze(11, 0)
+    validator = cv()
+    validator._panel_outlook = SimpleNamespace(created_at=created_at)
+    validator._panel_loaded_at = stamp   # 6시간 캐시 — 디스크를 읽지 않는다
+    validator._panel_recommended = {'005930': SimpleNamespace(conviction=0.8)}
+
+    passed, adjusted, reason = run(validator, request_token='t1')
+    assert (passed, adjusted, reason) == (True, 70.0, ''), label
+    assert validator.last_decision['penalties'] == ()
+    assert validator.last_decision['panel'] is None, label
+
+
+# ── R6: 적대검증 반환 경로의 어휘 (운영 1순위 경로) ────────────────────
+# llm_manager 가 있으면 __init__ 이 _adversarial 을 만들므로 실제로는 이 분기가
+# 먼저 돈다. R3 는 전부 _adversarial=None 인 폴백 경로만 덮고 있었다.
+
+def _adversarial_llm(result, reply=None):
+    """적대검증 스텁을 꽂은 인스턴스와 호출 기록을 함께 돌려준다.
+
+    스텁 시그니처가 어긋나면 llm_second_check 의 except 가 삼켜 fail_open_error 로
+    보이므로, 실제 호출 여부를 calls 로 확인해야 어휘 단언이 의미를 가진다.
+    """
+    calls = []
+
+    async def validate(**kwargs):
+        calls.append(kwargs)
+        return result
+
+    validator = cv(llm_manager=SimpleNamespace(complete=reply or _reply('YES')))
+    validator._adversarial = SimpleNamespace(validate=validate)
+    return validator, calls
+
+
+def test_r6_adversarial_rejection_has_its_own_word(freeze):
+    freeze(11, 0)
+    validator, calls = _adversarial_llm(
+        SimpleNamespace(failed=False, approved=False, reason='과열'))
+
+    assert _llm_check(validator) is False
+    assert len(calls) == 1 and calls[0]['symbol'] == '005930'
+    assert validator.last_llm_reason == 'rejected_soft'
+
+
+def test_r6_adversarial_approval_has_its_own_word(freeze):
+    freeze(11, 0)
+    validator, calls = _adversarial_llm(
+        SimpleNamespace(failed=False, approved=True, reason='합의 승인'))
+
+    assert _llm_check(validator) is True
+    assert len(calls) == 1
+    assert validator.last_llm_reason == 'approved'
+
+
+def test_r6_adversarial_failure_falls_back_to_single_llm(freeze):
+    """failed=True 는 adv.approved 가 아니라 단일 LLM 응답이 판정을 낸다."""
+    freeze(11, 0)
+    validator, calls = _adversarial_llm(
+        # 실제 fail-open 모양: approved=True 인 채로 failed=True
+        SimpleNamespace(failed=True, approved=True, reason='타임아웃 — fail-open'),
+        reply=_reply('NO 과열 구간'),
+    )
+
+    assert _llm_check(validator) is False   # adv.approved 였다면 True 였을 것
+    assert len(calls) == 1
+    assert validator.last_llm_reason == 'rejected_soft'
+
+
 @pytest.mark.parametrize('hm, kwargs', [
     ((11, 0), {}),                                        # 감점 없는 통과
     ((9, 45), {'metadata': meta({})}),                    # 감점 + cap 통과
