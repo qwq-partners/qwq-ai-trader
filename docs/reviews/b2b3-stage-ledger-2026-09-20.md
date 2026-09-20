@@ -325,6 +325,8 @@
   - **P2 X4** 사이징의 `available = … - self._reserved_cash` 에서 차감을 지워도 parity 19건 + 기준선 239건 전부 통과 — 현금이 넉넉한 표본에서는 전략 축이 먼저 묶인다. → 현금이 실제로 수량을 깎는 구간(무관 보유 115주)을 만들어 owner 예약을 뺀 수량 < 안 뺀 수량을 단언.
   - P2 "네 시계" 서술이 세션 차단 표본에서는 사실과 다름 · P3 걷어내지 못한 스텁(`_risk_validator`·`_check_factor_budget`) 미공개 → 독스트링 정정. P2 대시보드 디버그 통계 → 10A3/10C 이월.
 - **coordinator 변이 재적용:** X1·X2·X4 를 직접 넣어 **각각 새 시험만 실패**(1 failed / 21 passed) 확인 후 원복·트리 clean.
+- **전체 suite 가 잡은 legacy 회귀 1건(구현자·독립 재현자·coordinator 의 지정 파일 실행은 모두 놓쳤다):** HEAD `bd4cc8c` 의 UTC·KST 두 실행이 똑같이 **1 failed / 4754 passed** — `tests/test_review_fixes_2026_09.py::test_pending_strategy_notional_sums_reserved_cash`. 그 시험은 `object.__new__(RiskManager)` 로 **`engine` 속성이 없는** 인스턴스를 만들어 `_pending_strategy_notional` 을 부르는데, H2 가 첫머리에서 `self.engine` 을 새로 읽어 AttributeError 가 났다 — **legacy 경로에 새 의존을 만든 회귀**다("runtime 없는 legacy 의 실행 줄 차이 0" 은 맞았지만 "engine 없는 인스턴스"라는 축을 아무도 보지 않았다). → `486c7d3`: H2a·H2b 의 가드를 `_attached_gateway(getattr(self, "engine", None))` 으로(helper 는 None engine 을 이미 받는다), 같은 축을 `_reserved_cash` 까지 고정하는 시험 1건 추가. 깨졌던 파일 + parity 45 passed. **교훈: live 파일을 만지는 단계는 지정 파일 GREEN 만으로 통합하지 않는다 — 전체 suite 가 유일한 안전망이었다.**
+- **wave 5 전체 suite(coordinator, HEAD `486c7d3`, 단독 직렬·다른 세션 pytest 없음, 2026-09-21 05:56~06:07 KST):** UTC **4756 passed / 2 xfailed / 경고 4 / 321.14초**(시작 load 1.10·종료 1.17), KST **4756 / 2 / 4 / 324.50초**(종료 load 1.08), 각 격리 0. `5d80df2` 의 4733 대비 **+23 = parity 23(구현 19 + coordinator 4)**. 기존 xfail 2·경고 4 불변. **S2 마감(4632) 대비 S3 전체 +124.**
 - **제품 호출자 재확인:** `KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(` 호출 0건(grep).
 - **정리:** 임시 worktree 2개·work 브랜치 1개 제거.
 
