@@ -13,6 +13,16 @@ engine 브랜치의 특성화 시험이 드러낸 main `RiskManager.on_signal` �
 - **검증**: RED(목표 3건 실패/회귀 가드 4건 통과) → 수정. 독립 리뷰(claude-opus-5, 요청 effort high·실효 effort 미확인, 같은 제공자라 교차 제공자 리뷰 아님) 조건부 승인 — P1 1건(유지 상한 부재)·P2 중 횟수 기록 경쟁·동시호가 분기 범위·시험 누락을 반영, 시각 되감기 표시 왜곡은 한계로 기록. 재검토 **승인**(P1 해소) — 추가 P2(강제 해제 뒤 즉시 재매수 가능, 공유 장부 누출 시 SELL 폴백 예산 소진) 2건도 각 한 줄로 반영, 예외 경로의 상한 미적용은 한계로 기록. 최종 `tests/test_engine_stale_pending_fixes.py` UTC/KST 각 16 passed(방어 코드 3곳 변이 시 해당 시험 실패 확인), 격리 위반 0. 전체 suite KST **1826 passed / 2 known xfailed / 기존 warning 1**(81초, exit 0, 격리 0 — 기준선 1810 + 신규 16). UTC 전체는 PR 의 필수 verify 로 확인.
 
 수정: `src/core/engine.py`, `tests/test_engine_stale_pending_fixes.py`(신규), `docs/risk/risk-and-exit.md`
+## 2026-09-21 — feat(kis): 구/신 TR 전환 스위치 `KIS_TR_SET` (**무동작 PR — 기본값에서 동작 변경 0**)
+
+- **무엇:** KIS 구 TR 5종(`TTTC0802U`/`TTTC0801U`/`TTTC0803U`/`TTTC8001R`/`TTTC8036R`)과 신 TR 5종(`TTTC0012U`/`TTTC0011U`/`TTTC0013U`/`TTTC0081R`/`TTTC0084R`)의 매핑을 `kis_kr.py` 모듈 상수 한 곳에 모으고, `.env` 의 `KIS_TR_SET=new` + 재시작으로만 전환되게 했다. **기본값 `legacy` 에서는 요청 본문·헤더·응답 파싱이 전환 전과 완전히 같다**(스냅샷 시험으로 고정). 되돌리기는 그 줄 삭제 + 재시작.
+- **`new` 모드에서만:** order-cash 본문에 `EXCG_ID_DVSN_CD="KRX"`·`CNDT_PRIC=""`, 정정취소 본문에 `EXCG_ID_DVSN_CD="KRX"` 추가(기존 키 제거 0, hashkey 발급 전에 추가). 정정취소가능조회는 신 TR output 에 `rmn_qty` 가 없어 `psbl_qty` 로 대체하고, **둘 다 없거나 비어 있으면 조용한 0 대신 `None`(판단 불가)** 을 돌려준다 — 호출측(`run_trader.py` pending 검증자)이 pending 을 유지하므로 이중 매도 방지가 끊기지 않는다. 일별조회의 기존 `EXCG_ID_DVSN_CD="ALL"` 은 두 모드 공통으로 유지.
+- **주문 접수는 정규장 한정:** 공식 저장소에 NXT 주문 예제가 없어 `pre_market`·`next_market` 세션의 `EXCG_ID_DVSN_CD` 값을 확정할 근거가 없다 → 신 TR·신 본문은 `regular` 세션 접수에만 적용하고, 두 NXT 세션은 `new` 모드에서도 구 TR·구 본문 그대로 나간다. **취소·정정에는 세션 분기가 없어** NXT 세션에서 접수된 주문의 취소에도 `"KRX"` 가 닿는다 — runbook 확인 12·13 번.
+- **전환 여부 확인 수단:** 브로커 `connect()` 성공 직후 `KIS TR 세트: legacy|new` 를 `logger.info` 한 줄로 남긴다(두 모드 모두, 주문·본문 무영향). runbook 의 확인 명령을 이 로그 기준으로 고쳤고, "조회 먼저·주문 나중" 두 단계는 **이 스위치 하나로는 불가능**(조회·주문을 동시에 바꾼다)하다는 것을 먼저 적었다 — 분리가 필요하면 별도 PR.
+- **리미터:** `LEDGER_TR_IDS` 에 신 TR 둘(`TTTC0081R`·`TTTC0084R`)을 **추가**(구 TR 유지) — 전환/롤백 어느 쪽에서도 계좌 원장(EGW00215) 직렬화가 끊기지 않는다. docstring 의 '게이트웨이 한도 실전 20/s' 전제는 근거가 없어 '실측값' 으로 정정(수치 변경 0).
+- **하지 않은 것(전부 별도 PR):** 취소 POST 의 `retry` 정책, 미체결 조회의 페이지 루프(50건 잘림), 요청 헤더 `tr_cont`, `custtype` 헤더, 취소 `ORD_QTY` 의미, 장외 주문구분. 동작 변경이라 이 무동작 PR 에 섞지 않았다.
+- **검증:** 신규 `tests/test_kis_tr_switch.py` 36건(가짜 HTTP, 실 KIS 호출 0) — 두 모드 × 5 경로 tr_id 스냅샷, legacy 본문 동일성, new 전용 키, `psbl_qty` 대체와 판단 불가(키 부재·빈 문자열 둘 다), 두 모드 × 세 세션 주문 스냅샷, 접수·정정 POST 의 `retry=False` 고정, `KIS_TR_SET` 해석 8종(자식 프로세스 import — `new` 만 전환), 신 TR 원장 직렬화, `check_fills` 파서 키 계약. 변이 실측(세션 조건 제거·빈 문자열 판정을 `is None` 만으로·`retry=False` 삭제 2곳·`== "new"` → `!= "legacy"`) 전부 kill.
+- **운영:** 배포·재시작·`.env` 변경 0. 전환 전 실계좌로만 닫히는 확인 항목 11개와 전환/롤백 절차는 `docs/operations/runbook.md`, TR 표와 저장소 출처(`koreainvestment/open-trading-api@b4e6249`)는 `docs/integrations/external-apis.md`.
 
 ## 2026-09-21 — test(toss): 실시간 1~3초 예산 의존 시험을 부하 비의존으로 (시험 전용)
 
