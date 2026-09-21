@@ -8,6 +8,35 @@
 
 **전체 엔진의 main 병합·운영 전환은 아직 승인 가능한 상태가 아니다.** C4 한정 통과를 전체 마이그레이션 완료로 확대하지 않는다. 이번 정리는 개발선을 폐기하거나 거래 안전 장벽을 해제하지 않았다. 사용자가 요청한 다음 개발·설계는 이 문서를 읽은 새 Claude 세션에서 이어간다.
 
+## B2/B3 이후 — attach 설치 차단 사유와 이월 목록 (2026-09-21 갱신)
+
+아래 §1(B2/B3)은 engine 브랜치에서 S1~S5 로 진행됐다. 단계별 Plan/Do/See·SHA·전체 suite 숫자·리뷰 판정은 [단계 원장](../reviews/b2b3-stage-ledger-2026-09-20.md)의 "상태 요약"이 정본이다. **만들어진 것은 "runtime 이 붙은 엔진에서 SIGNAL 이 기존 후보 판단을 거친 뒤 owner 의 prepare → final 재검사 → dispatch 한 길로만 나가는 경로"이고 설치가 아니다.** 제품에 `KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(` 호출자는 0건(단계마다 grep 으로 재확인), `trading_ready` 는 항상 False, 모든 MODIFY 는 미지원이다. 모든 GREEN 은 fake HTTP·주입 시계·시험용 합성 startup 허가 위의 결과이고, 현금 고갈로 정상 BUY 의 실경로 표본은 0건이다.
+
+### attach 설치 전에 닫아야 할 것 (하나라도 열려 있으면 설치하지 않는다)
+
+| # | 차단 사유 | 왜 막는가 | 여는 작업 |
+|---|---|---|---|
+| 1 | **취소·체결 최종성의 증거 계약이 제품에 없다** | 증거 파서가 취소 체인을 `supported_finality=False` 로 두고, `lifecycle.reconcile` 의 제품 호출자·`EXECUTION_FILL` 의 제품 생산자가 0건이다. 그래서 attach 모드에는 **미체결 SELL 의 시장가 에스컬레이션과 미체결 BUY 의 타임아웃 취소가 없다** — 보호 SELL 에 관해 attach 는 legacy 보다 덜 안전하다 | 아래 §3 공식 증거 + 10A2/10C(체인 최종성, reconcile·fill 생산자). 그 뒤에야 "취소 확정 뒤 재주문"을 설계한다 |
+| 2 | `trading_ready` 를 여는 실제 startup 대사가 없다 | 합성 허가는 시험 안에만 있다. 강제 True 금지 | §3 최초 잔고/체결 cutoff 증거 + 10A3 |
+| 3 | fill projection 이 없다 | attach 에서는 ORDER 이벤트를 큐에 싣지 않고 legacy 미체결 장부를 쓰지 않는다(S3 결정 ③④). 체결 메타(entry_tags·전략) 인계와 pending 교착 감시가 비어 있다 | 10A3/10C |
+| 4 | factory·설치 순서가 없다 | `config_version` 5축 조립·제품 PolicyContext publisher·regime owner → command owner 순서·`runtime.restore()` 뒤 엔진 루프 시작 전 `await runtime.gateway.recover_unsent()`(안 부르면 prepare~claim 사이 잔류가 예약과 일자 전환을 막는다) | 10A3 |
+| 5 | `_exit_exempt_ref` 주입 재현 + **면제 추가 경로를 owner 로** | 제품 주입은 `scripts/run_trader.py:854` 한 곳뿐이다. 빠지면 eviction 의 exit_exempt 보호(펩트론 087010)가 사라진다. 또 attach 에서 면제의 정본은 owner state 다 — `publish_protection` 이 live set 의 **내용을 owner DTO 로 교체**하므로 런타임 `exit_manager.add_exit_exempt(...)`(`kr_scheduler.py:7537·7614`)는 다음 게시에서 지워진다(S5 Plan 확인) | 10A3(주입) + 10C(추가 경로 이행) |
+| 6 | 진입 가격의 provenance 가 증명되지 않는다 | gateway 가 게시하는 entry quote 의 출처가 SIGNAL 자체(`source='signal'`)다 | 10A2/10A3 market source 결합 |
+| 7 | owner 밖의 직접 writer/sender 가 남아 있다 | KOFR(`kr_scheduler.py:6754·6818`)·수동 매수(7597)·CLI 2개·`KRScheduler._cleanup_stale_pending`(별도 장부, 취소 0건을 최종성으로 읽는 예약 해제)·`run_trader.py` 의 sector lookup 예외 뭉갬 | 10C |
+| 8 | attach 에서 예외로 끝나는 소비자 | `src/dashboard/data_collector.py:1572` 가 `_reserved_cash` property 를 직접 읽는다 | 10A3(attach 인지형으로) |
+| 9 | core_reserve 설정 출처가 둘이다 | engine `_get_core_reserve()` 와 owner `core_reserve(snapshot)` | 10A3 |
+| 10 | **attach 에서 가격 없는 SELL SIGNAL 은 거부된다** | 호가도 `event.price` 도 없으면 legacy 는 MARKET SELL 을 보내지만 attach 는 gateway 의 평가 가격 부재(`invalid_request_price`)로 끝난다 — POST 0. fail-closed 이나 보호 SELL 의 한 갈래가 닫혀 있다(S5 Plan 확인) | 10A2/10A3 market source 결합(평가 가격의 독립 출처) |
+| 11 | sidecar 와 owner 의 정책 출처가 다르다 | 같은 축(최대 포지션·최소 현금·포지션 크기·섹터)을 `risk/manager.py` 의 게이트와 owner 의 `evaluate_entry_policy` 가 각각 평가하는데, owner 의 `EffectiveRiskPolicy` 를 RiskConfig 에서 만드는 제품 코드가 없다(시험은 리터럴) — 두 결론의 정합은 출처를 묶은 뒤에야 인수할 수 있다 | 10A3 factory 의 인수 조건 |
+| 12 | 실효 있는 stale 축은 regime 1개다 | `panel_outlook:*`·`trade_memory:*` 는 결정 시점에만 게시돼 판단→final 대조가 replay 구속 전용이다. config 축은 제품 publisher 가 생겨야 실효가 생긴다(#4) | 10A3 + 지속 publisher 설계 |
+
+설치 차단과 별개로 **운영 경로(legacy)의 현행 결함 5건**이 S4 특성화로 드러나 있다(동시호가에 취소만 보내고 재주문 없음·90초 폴백 루프에 exit_exempt 확인 없음·`submit_order` 예외 시 접수 여부를 모른 채 `clear_pending`·폴백 상한 뒤 원 지정가 방치·취소 0건 예약 해제). engine 브랜치는 이것을 고치지 않고 시험으로 고정만 했다 — main 기준의 별도 운영 수정 과제다.
+
+### 기타 이월 (차단은 아니나 잊지 말 것)
+
+- 3건 이상 동시 미해결 BUY 의 누적 정합 · dispatch 의 network await 동안 엔진 루프가 멈추는 지연 상한 · UNKNOWN 자식만 남은 종목이 `unresolved_symbols()` 에서 빠지는 것(취소를 켜는 작업의 인수 조건).
+- 성능: `ExecutionStateStore.commit` 이 매 commit 마다 state 전체를 직렬화한다. 판단 사실의 분석 원장 projection 은 10C.
+- flaky: Toss `RequestBudget(1)` 실시간 1초 예산 시험·개발용 리뷰 실행기의 0.12~0.8초 시한 시험은 호스트 부하에 민감하다(전체 suite 는 단독 직렬·`nice` 금지).
+
 ## 작업 장소와 기준
 
 - 운영 checkout: `/home/ubuntu/projects/qwq-ai-trader` (main).
@@ -40,14 +69,16 @@
 | 실제 2분 레짐 루프 | owner 분기·버전/결측/저장 경계 한정 완료 | [2분 루프](https://github.com/qwq-partners/qwq-ai-trader/blob/ab044c4edeb702911fee998973cb00a263a7b085/docs/reviews/two-minute-regime-owner-2026-09-20.md) |
 | C3 정오·JSON LLM·보호 replay | 실제 스케줄러 인수·한정 승인 완료 | [C3](https://github.com/qwq-partners/qwq-ai-trader/blob/ab044c4edeb702911fee998973cb00a263a7b085/docs/reviews/noon-regime-protection-replay-2026-09-20.md) |
 | C4 장전 text diagnosis·소비자 정합성 | actual caller·성공일 dedupe·정책/표시·게시 실패 장벽 완료 | [C4](https://github.com/qwq-partners/qwq-ai-trader/blob/ab044c4edeb702911fee998973cb00a263a7b085/docs/reviews/morning-regime-owner-2026-09-20.md) |
-| qualification·최종 sizing·실제 SIGNAL/ORDER | **다음 시작점**, request-bound 전체 연결 미완 | [10B2/10B3](https://github.com/qwq-partners/qwq-ai-trader/blob/ab044c4edeb702911fee998973cb00a263a7b085/docs/superpowers/plans/2026-09-18-engine-writer-migration.md) |
-| factory·나머지 writer/sender·공식 증거·전체 인수 | 미완, 운영 전환 차단 | 같은 계획 10A3/10C와 아래 순서 |
+| qualification·최종 sizing·실제 SIGNAL → owner 송신 | **S1~S4 한정 승인·운영 미설치(2026-09-21)**, S5(독립 인수·최종 리뷰)는 원장 참조. 설치가 아니며 위 "차단 사유" 12항이 열려 있다 | engine 브랜치 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` |
+| factory·나머지 writer/sender·공식 증거·전체 인수 | 미완, 운영 전환 차단 — **다음 시작점** | 같은 계획 10A3/10C, 위 "차단 사유"와 아래 순서 |
 
 브랜치 전체는 166파일 +44,697/-389줄이며 **전부 비활성 코드가 아니다**. WS 46필드 parser, 공용 limiter, 기존 sizing/regime wrapper와 DB DDL도 바뀐다. 따라서 owner가 아직 자동 설치되지 않는다는 이유로 통째 merge/restart하지 않는다. 실제 `KRExecutionRuntime.trading_ready`는 False, factory 자동 생성/attach는 미배선이며 임의 attach는 legacy SIGNAL/ORDER/FILL을 차단한다.
 
 ## 다음 세션의 Plan → Do → See
 
-### 1. B2/B3 — 실제 요청에 qualification·최종 sizing 연결 (최우선)
+### 1. B2/B3 — 실제 요청에 qualification·최종 sizing 연결 (진행됨 — 원장이 정본, 아래는 인계 당시의 원 지시)
+
+> 2026-09-21: 이 절의 Plan/Do/See 는 단계 원장의 S1~S5 로 수행됐다. 아래 원문은 무엇을 요구했는지의 기록으로 남긴다. 미충족으로 남은 것은 위 "차단 사유"·"기타 이월"에 있다(예: UNKNOWN 의 실큐 접합 대조 범위, 부분체결·늦은 응답의 fill projection).
 
 **Plan**
 

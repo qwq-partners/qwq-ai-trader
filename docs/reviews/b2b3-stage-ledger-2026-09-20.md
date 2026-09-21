@@ -14,7 +14,7 @@
 | S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`·`44e543a`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a`·`85a65bc` |
 | S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()`·`recover_unsent()` 호출자 0건, `trading_ready=False` 그대로. HEAD `10d2ca7` 전체 UTC/KST 각 4758 passed. Codex 1차 APPROVE·2차/3차 CHANGES_REQUIRED → 처분(3차 처분은 S4 마감의 Codex 4차가 "닫는다"고 확인). 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md` 의 각 단계 "통합된 실제 인터페이스"가 구현 뒤의 정본 | merge `0975624`·`2c24aca`·`c48cb68`·`e42b014`·`cb1f554`·`5dac8da`·`4242b70` + coordinator `1a6e6d2`·`9a3fe19`·`9572ed2`·`b83b6e7`·`4356d43`·`aee69e3`·`9688d1d`·`486c7d3`·`10d2ca7` |
 | S4 (B3b) | attach 에서 되살릴 수 있는 것만 owner 경로로 — 하위 S4-0(legacy 세 경로 특성화)·S4-1(미claim 자식 종료)·S4-1b(`_unsent`)·S4-2(eviction) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 세부 계획 `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md`. **범위 축소:** 취소 최종성 증거가 제품에 없어 90초 SELL 에스컬레이션·10분 BUY 취소·owner 취소 배선은 attach 미지원으로 명시 — **보호 SELL 에 관해 attach 는 legacy 보다 계속 덜 안전하다(설치 차단 사유).** 전체 UTC/KST 각 4835 passed, Codex 4차 APPROVE | merge `60a19af`·`9afa8e9`·`d929167`·`892112f` + coordinator 보강 커밋(원장 S4 절) |
-| S5 (See) | 독립 실큐 인수·최종 broad 리뷰·전체 직렬 | 미착수 | — |
+| S5 (See) | 독립 실큐 인수(새 하네스·새 시험 파일 1개, 제품 수정 0)·최종 broad 리뷰·전체 직렬 | **Plan 완료(2026-09-21) — Do 진행 중.** 세부 계획 `docs/superpowers/plans/2026-09-21-s5-independent-acceptance.md` | (진행하며 채운다) |
 
 ## 공통 작업 방법 (이어받는 에이전트가 먼저 읽을 것)
 
@@ -455,3 +455,35 @@
 - [ ] S4-0 의 특성화가 **현행 결함까지 그대로** 고정했는가("고치고 싶은" 동작을 섞지 않았는가), 그리고 S4-2 뒤에도 한 글자 안 고치고 통과하는가.
 - [ ] exit_exempt·승자·코어 보호가 legacy 와 attach 양쪽에서 변이 kill 로 고정됐는가.
 - [ ] S3 시험의 기대값 변경이 계획 결정 ⑨의 **2건뿐**인가(`test_the_entry_stale_loops_…`·`test_a_risk_manager_with_legacy_orders_connected_after_attach_…` 는 변경 금지).
+
+---
+
+## S5 (See) — attach 경로의 독립 실큐 인수
+
+세부 계획(결정·하네스·시나리오의 정본): `docs/superpowers/plans/2026-09-21-s5-independent-acceptance.md`
+
+### Plan (완료, 2026-09-21, 기준 `3969eaa`)
+
+- **과정:** 읽기 전용 조사 2관점(인수 시나리오 16건·하네스 스텁 24건, opus/high) → 인수 계획 설계(20 시나리오, opus/high) → 적대적 심사 2관점(vacuity·feasibility, opus/xhigh). **심사는 둘 다 NEEDS_CHANGES(P0 6·P1 16·P2 11)** 였고 coordinator 가 핵심 주장을 코드로 재확인해 계획서로 처분했다. pytest 0·제품 수정 0. 요청 모델은 claude-opus-5(관측 모델은 워크플로 메타에 노출되지 않아 **미검증**).
+- **심사가 구현 전에 잡은 것(그대로 갔으면 허위 GREEN/허위 결함 보고가 됐을 것):** 동결 시계와 종목별 30초 신호 쿨다운의 충돌(같은 종목 2회차가 조용히 None) · 지정 변이 6종이 실제로는 죽지 않음(이중 가드·`if sell_price:` 의 falsy 동치·로그 한 줄짜리 분기) · 같은 엔진에 attach 하는 대조가 H6 에 막혀 실행 불가 · 설정 출처가 3개가 아니라 4개(owner 의 `EffectiveRiskPolicy` 는 하네스 리터럴)라 sidecar↔owner 비교가 확정적으로 어긋남 · `src.core.engine.date` 동결 누락으로 월말·월초에만 RED · `__init__` 속성 미주입이 eviction 의 광역 `except` 에 삼켜져 "보호 가드 동작"으로 오독 · `_log_sig` 의 fire-and-forget 태스크가 단언 시점에 미실행.
+- **Plan 이 확정한 사실 8건**(계획서 §1) 가운데 이 원장의 이전 문장을 고치는 것:
+  - **정정 — 위 "S5 진입 조건" 1항의 "claim 이전 실패 5갈래의 예약 0" 은 틀렸다.** 다섯 갈래(`claim_not_available`·`CommandValidationError`·`ApplicationBlocked`·그 밖의 예외·`CancelledError`) 중 예약이 0 이 되는 것은 앞의 둘이 abandon 에 성공했을 때뿐이고, 뒤의 셋은 설계상 예약을 남긴다. 공통 계약은 POST 0 이다. wave 2 절(:250 부근)의 "네 갈래" 서술도 같은 뜻으로 읽는다.
+  - **신규 — attach 에서 가격 없는 SELL SIGNAL 은 거부된다**(legacy 는 MARKET SELL 송신). 실큐로는 MARKET SELL 이 owner 에 닿지 않는다. 1항의 "LIMIT/MARKET SELL" 인수는 LIMIT 은 실큐·MARKET 은 gateway 단위 시험으로 나뉜다.
+  - **신규 — attach 에서 exit_exempt 의 정본은 owner state 다.** 런타임 `add_exit_exempt`(`kr_scheduler.py:7537·7614`)는 다음 보호 게시에서 지워진다.
+  - **걷어낼 스텁은 3종이 아니라 2종이다**(`_sector_lookup`·`SignalEventStorage` 는 conftest 가 루프백을 허용해 걷어내면 운영 DB 에 닿는다).
+- 두 신규 사실은 설치 차단 사유로 인계 문서에 올렸다.
+
+### Do·See — wave 별 (진행하며 채운다)
+
+| wave | 범위 | 상태 | SHA |
+|---|---|---|---|
+| 1 | 하네스 + H0 + A(전선 값)·B(UNKNOWN)·C(claim 이전 실패 갈래별)·E(취소 0)·F(legacy 불변) | 진행 중 | — |
+| 2 | D(eviction)·G(실제 `can_open_position`·죽은 legacy 보정·팩터 버킷) | 대기 | — |
+
+### 이어받는 에이전트 체크리스트 (S5)
+
+- [ ] 인수 파일이 S3·S4 시험 모듈과 `_order_env`·`_rm` 에서 **아무것도** import 하지 않는가(grep).
+- [ ] H0(하네스 자기 단언)을 깨뜨렸을 때 다른 시나리오가 vacuous GREEN 이 되지 않는가.
+- [ ] 차단 표본마다 분기 도달 증거(`block_gate`·spy 호출 수)가 있는가. POST 는 건수가 아니라 **본문**으로 단언했는가.
+- [ ] `git diff --stat <base>.. -- src/ scripts/` 가 빈 출력인가(제품 수정 0). 파일에 RED·xfail 이 없는가.
+- [ ] 격리 위반 0·`ResourceWarning` 0, 그리고 오버레이 모듈을 먼저 import 하는 파일 뒤에서도 GREEN 인가.
