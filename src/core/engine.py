@@ -1262,10 +1262,10 @@ class RiskManager:
 
         # 매도 시장가 폴백 횟수 추적 (무한 루프 방지, 최대 2회)
         self._pending_fallback_count: Dict[str, int] = {}
-        # stale SELL 취소 0건 유지 {종목: (횟수, 마지막 취소 시도 시각)} (2026-09-21) — 폴백 횟수와 장부를 나눈다
+        # stale SELL 취소 실패 유지 {종목: (횟수, 마지막 취소 시도 시각, 생존 로그 여부)} (2026-09-21) — 폴백 횟수와 장부를 나눈다
         # (유지가 시장가 폴백 예산을 깎지 않게). 재시도 간격은 이 시각으로 만든다 — pending 등록 시각을 되감으면
         # 헬스 모니터의 5분 교착 경보가 '손절이 막힌 SELL 유지'를 영영 못 본다.
-        self._pending_cancel_keep: Dict[str, Tuple[int, datetime]] = {}
+        self._pending_cancel_keep: Dict[str, Tuple[int, datetime, bool]] = {}
 
         # KIS 잔고 불일치 카운터 (2026-06-09 추가)
         # "주문 가능한 수량 초과" 에러가 N회+ 발생 시 좀비 후보로 마킹
@@ -1294,6 +1294,7 @@ class RiskManager:
         engine.register_handler(EventType.SIGNAL, self.on_signal)
         engine.register_handler(EventType.ORDER, self.on_order)
         engine.register_handler(EventType.FILL, self.on_fill)
+        engine.register_handler(EventType.HEARTBEAT, self.on_heartbeat)  # 유지 중 stale SELL 의 재시도 구동
 
     @property
     def pending_count(self) -> int:
@@ -1736,90 +1737,9 @@ class RiskManager:
             elif not is_sell and elapsed >= self._PENDING_TIMEOUT_SECONDS:
                 stale_buys.append(s)
 
-        # stale 매도: 지정가 취소 → 시장가 재주문 (최대 2회 폴백)
-        _MAX_FALLBACK = 2
+        # stale 매도: 지정가 취소 → 시장가 재주문 (최대 2회 폴백) — 하트비트의 유지분 재시도와 같은 함수
         for s in stale_sells:
-            ts = self._pending_timestamps.get(s)
-            if not ts:
-                continue
-            elapsed = (now - ts).total_seconds()
-            fallback_cnt = self._pending_fallback_count.get(s, 0)
-            if fallback_cnt >= _MAX_FALLBACK:
-                logger.warning(
-                    f"[리스크] 매도 폴백 최대 횟수 초과: {s} ({fallback_cnt}회) → pending 해제"
-                )
-                await self.clear_pending(s)
-                continue
-            # 동시호가(15:20~15:30)는 시장가 불가 — 취소보다 먼저 분기해 원 지정가를 거래소에 남긴다
-            # (2026-09-21: 취소를 먼저 보낸 뒤 '지정가 유지'로 빠져 청산 주문이 재주문 없이 사라지던 버그).
-            # 포지션이 사라진 pending 은 종전대로 아래에서 취소·해제한다.
-            _held = self.engine.portfolio.positions.get(s)
-            if 1520 <= time_val < 1530 and _held is not None and _held.quantity > 0:
-                logger.info(f"[리스크] 동시호가 시간대 시장가 불가: {s} → 지정가 유지")
-                continue
-            _keep = self._pending_cancel_keep.get(s)
-            if _keep is not None and (now - _keep[1]).total_seconds() < self._SELL_CANCEL_RETRY_SECONDS:
-                continue  # 취소 0건 유지 중 — SIGNAL 마다 취소·조회 API 를 때리지 않는다
-            logger.warning(f"[리스크] 매도 미체결 폴백: {s} ({elapsed:.0f}초 초과, 폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회) → 시장가 전환")
-            cancelled = None
-            if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
-                try:
-                    cancelled = await self.engine.broker.cancel_all_for_symbol(s)
-                except Exception as e:
-                    logger.warning(f"[리스크] 매도 취소 실패: {s} - {e}, 시장가 재주문 건너뜀")
-                    continue
-            # 시장가 재주문 (동시호가 시간대는 위에서 취소 전에 분기)
-            pos = self.engine.portfolio.positions.get(s)
-            # 2026-09-21: 브로커 cancel 은 실패를 예외로 올리지 않고 0 을 돌려준다 — 0건에 섞인 "취소 실패
-            # (방금 체결/거래소 생존)" 위에 시장가를 얹으면 분할 매도가 두 번 나간다(합계가 보유 수량 안이라
-            # KIS 가 거절하지 않는다). 포지션이 없으면 재주문이 없으므로 종전대로 아래에서 해제한다.
-            if cancelled is not None and cancelled == 0 and pos is not None and pos.quantity > 0:
-                if await self._keep_stale_sell_after_failed_cancel(s, now):
-                    continue
-            if pos and pos.quantity > 0:
-                # 원 주문 수량 유지 — 분할 익절/트림 폴백이 전량 매도로 번지는 것 방지
-                # (2026-08-04 P0: 부분 매도 미체결 시 pos.quantity 전량이 시장가로 나가던 버그)
-                _orig_qty = self._pending_quantities.get(s)
-                _fb_qty = (min(_orig_qty, pos.quantity)
-                           if _orig_qty is not None and _orig_qty > 0
-                           else pos.quantity)
-                fallback_order = Order(
-                    symbol=s,
-                    side=OrderSide.SELL,
-                    order_type=OrderType.MARKET,
-                    quantity=_fb_qty,
-                    reason="미체결 폴백: 시장가 전환",
-                )
-                try:
-                    # 2026-08-05 P2: 반환값 미확인으로 제출 실패가 성공 취급되던 버그
-                    # — 실패 시 타임스탬프를 갱신하지 않아 다음 주기에 즉시 재감지·재시도
-                    _fb_ok, _fb_msg = await self.engine.broker.submit_order(fallback_order)
-                    if _fb_ok:
-                        async with self._pending_lock:
-                            self._pending_timestamps[s] = datetime.now()
-                            self._pending_sides[s] = OrderSide.SELL
-                            self._pending_fallback_count[s] = fallback_cnt + 1
-                            self._pending_cancel_keep.pop(s, None)  # 새 주문은 0회에서 다시 센다
-                        logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {_fb_qty}주/보유 {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
-                    else:
-                        async with self._pending_lock:
-                            self._pending_fallback_count[s] = fallback_cnt + 1
-                        if fallback_cnt + 1 >= _MAX_FALLBACK:
-                            logger.critical(
-                                f"[리스크] 매도 시장가 폴백 최종 포기: {s} — {_fb_msg} "
-                                f"(청산 시그널 소실 — 수동 매도 확인 필요)"
-                            )
-                            await self.clear_pending(s)
-                        else:
-                            logger.error(
-                                f"[리스크] 시장가 폴백 제출 실패: {s} — {_fb_msg} "
-                                f"(재시도 {fallback_cnt + 1}/{_MAX_FALLBACK}, 다음 주기 재감지)"
-                            )
-                except Exception as e:
-                    logger.error(f"[리스크] 시장가 폴백 주문 실패: {s} - {e}")
-                    await self.clear_pending(s)
-            else:
-                await self.clear_pending(s)
+            await self._fallback_stale_sell(s, now)
 
         # stale 매수: 기존 로직 (거래소 취소 + 내부 정리)
         _MAX_BUY_KEEP = 15  # 취소 실패 시 유지 상한 (60초 간격 → 최소 15분)
@@ -2272,6 +2192,107 @@ class RiskManager:
             Decimal("0"),
         )
 
+    async def _fallback_stale_sell(self, s: str, now: datetime) -> None:
+        """90초 넘은 미체결 SELL 한 종목: 지정가 취소 → 원 주문 수량으로 시장가 재주문 (최대 2회).
+
+        on_signal 진입부의 stale 루프와 on_heartbeat(취소 0건 유지분의 재시도)가 부른다 — 둘 다 엔진의
+        직렬 이벤트 큐에서 돌므로 서로 겹치지 않는다. 겹치는 것은 별도 태스크(스케줄러 정리)뿐이다.
+        """
+        _MAX_FALLBACK = 2
+        time_val = now.hour * 100 + now.minute
+        ts = self._pending_timestamps.get(s)
+        if not ts:
+            return
+        elapsed = (now - ts).total_seconds()
+        fallback_cnt = self._pending_fallback_count.get(s, 0)
+        if fallback_cnt >= _MAX_FALLBACK:
+            logger.warning(
+                f"[리스크] 매도 폴백 최대 횟수 초과: {s} ({fallback_cnt}회) → pending 해제"
+            )
+            await self.clear_pending(s)
+            return
+        # 동시호가(15:20~15:30)는 시장가 불가 — 취소보다 먼저 분기해 원 지정가를 거래소에 남긴다
+        # (2026-09-21: 취소를 먼저 보낸 뒤 '지정가 유지'로 빠져 청산 주문이 재주문 없이 사라지던 버그).
+        # 포지션이 사라진 pending 은 종전대로 아래에서 취소·해제한다.
+        _held = self.engine.portfolio.positions.get(s)
+        if 1520 <= time_val < 1530 and _held is not None and _held.quantity > 0:
+            logger.info(f"[리스크] 동시호가 시간대 시장가 불가: {s} → 지정가 유지")
+            return
+        _keep = self._pending_cancel_keep.get(s)
+        if _keep is not None and (now - _keep[1]).total_seconds() < self._SELL_CANCEL_RETRY_SECONDS:
+            return  # 취소 0건 유지 중 — SIGNAL 마다 취소·조회 API 를 때리지 않는다
+        logger.warning(f"[리스크] 매도 미체결 폴백: {s} ({elapsed:.0f}초 초과, 폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회) → 시장가 전환")
+        cancelled = None
+        if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
+            try:
+                cancelled = await self.engine.broker.cancel_all_for_symbol(s)
+            except Exception as e:
+                logger.warning(f"[리스크] 매도 취소 실패: {s} - {e}, 시장가 재주문 건너뜀")
+                return
+        # await 사이에 다른 태스크(스케줄러 정리)가 이 pending 을 해제·교체했으면 여기서 멈춘다 — 수량 장부가
+        # 비면 아래 폴백이 보유 전량으로 번진다(10주 익절 → 100주 시장가). 엔진 2회차 폴백과 스케줄러 3분 정리는
+        # 둘 다 ~180초에 닿으므로 취소 await 만으로도 겹칠 수 있다.
+        if not self._is_same_sell_pending(s, ts):
+            return
+        # 시장가 재주문 (동시호가 시간대는 위에서 취소 전에 분기)
+        pos = self.engine.portfolio.positions.get(s)
+        # 2026-09-21: 브로커 cancel 은 실패를 예외로 올리지 않고 0 을 돌려준다 — 0건에 섞인 "취소 실패
+        # (방금 체결/거래소 생존)" 위에 시장가를 얹으면 분할 매도가 두 번 나간다(합계가 보유 수량 안이라
+        # KIS 가 거절하지 않는다). **분할 매도에만** 적용한다: 전량 매도(손절·트레일링)는 원 주문이 살아 있으면
+        # KIS 가 주문가능수량 0 으로 거절하므로 과매도가 불가능하다 — 종전 경로 그대로 두어 손절 지연을 만들지 않는다.
+        _pend_qty = self._pending_quantities.get(s)
+        if (cancelled is not None and pos is not None and _pend_qty is not None
+                and 0 < _pend_qty < pos.quantity):
+            if await self._keep_stale_sell_after_failed_cancel(s, now, cancelled):
+                return
+            if not self._is_same_sell_pending(s, ts):
+                return
+            pos = self.engine.portfolio.positions.get(s)
+        if pos and pos.quantity > 0:
+            # 원 주문 수량 유지 — 분할 익절/트림 폴백이 전량 매도로 번지는 것 방지
+            # (2026-08-04 P0: 부분 매도 미체결 시 pos.quantity 전량이 시장가로 나가던 버그)
+            _orig_qty = self._pending_quantities.get(s)
+            _fb_qty = (min(_orig_qty, pos.quantity)
+                       if _orig_qty is not None and _orig_qty > 0
+                       else pos.quantity)
+            fallback_order = Order(
+                symbol=s,
+                side=OrderSide.SELL,
+                order_type=OrderType.MARKET,
+                quantity=_fb_qty,
+                reason="미체결 폴백: 시장가 전환",
+            )
+            try:
+                # 2026-08-05 P2: 반환값 미확인으로 제출 실패가 성공 취급되던 버그
+                # — 실패 시 타임스탬프를 갱신하지 않아 다음 주기에 즉시 재감지·재시도
+                _fb_ok, _fb_msg = await self.engine.broker.submit_order(fallback_order)
+                if _fb_ok:
+                    async with self._pending_lock:
+                        self._pending_timestamps[s] = datetime.now()
+                        self._pending_sides[s] = OrderSide.SELL
+                        self._pending_fallback_count[s] = fallback_cnt + 1
+                        self._pending_cancel_keep.pop(s, None)  # 새 주문은 0회에서 다시 센다
+                    logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {_fb_qty}주/보유 {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
+                else:
+                    async with self._pending_lock:
+                        self._pending_fallback_count[s] = fallback_cnt + 1
+                    if fallback_cnt + 1 >= _MAX_FALLBACK:
+                        logger.critical(
+                            f"[리스크] 매도 시장가 폴백 최종 포기: {s} — {_fb_msg} "
+                            f"(청산 시그널 소실 — 수동 매도 확인 필요)"
+                        )
+                        await self.clear_pending(s)
+                    else:
+                        logger.error(
+                            f"[리스크] 시장가 폴백 제출 실패: {s} — {_fb_msg} "
+                            f"(재시도 {fallback_cnt + 1}/{_MAX_FALLBACK}, 다음 주기 재감지)"
+                        )
+            except Exception as e:
+                logger.error(f"[리스크] 시장가 폴백 주문 실패: {s} - {e}")
+                await self.clear_pending(s)
+        else:
+            await self.clear_pending(s)
+
     async def stale_order_still_live(self, symbol: str, side: OrderSide, *, confirm: bool) -> Optional[bool]:
         """취소 0건인 stale 주문이 아직 살아 있는가 — True 생존(또는 첫 회 대기) / None 판단 불가 / False 소멸. 상태 무변경.
 
@@ -2284,8 +2305,9 @@ class RiskManager:
         broker = self.engine.broker
         if not hasattr(broker, "get_open_orders"):
             return False
-        if not any(o.symbol == symbol and o.is_active for o in await broker.get_open_orders()):
-            return False
+        if not any(o.symbol == symbol and o.side == side and o.is_active
+                   for o in await broker.get_open_orders()):
+            return False  # 같은 종목의 반대 방향 주문(해제된 BUY 잔량 등)은 이 주문의 생존 근거가 아니다
         if not confirm:
             logger.warning(f"[리스크] stale 주문 취소 실패(체결 직후/거래소 생존 가능): {symbol}")
             return True
@@ -2316,20 +2338,37 @@ class RiskManager:
         await self.clear_pending(symbol)
         return True
 
-    _SELL_CANCEL_RETRY_SECONDS = 20  # 취소 0건 뒤 재시도 간격 — 체결 확인(5초 주기) 몇 회분, 손절 지연은 짧게
+    _SELL_CANCEL_RETRY_SECONDS = 20  # 취소 실패 뒤 재시도 간격 — 체결 확인(미체결 있을 때 2초 주기) 여러 회분, 지연은 짧게
     _MAX_SELL_KEEP = 9               # 연속 '판단 불가' 상한: 90초 + 20초×9 = 270초 = 종전 최장 보유(90초×3회)
 
-    async def _keep_stale_sell_after_failed_cancel(self, symbol: str, now: datetime) -> bool:
-        """취소 0건인 stale SELL 위에 시장가를 얹지 말아야 하는가 — True 면 호출측이 재주문을 건너뛴다.
+    def _is_same_sell_pending(self, symbol: str, registered_at: datetime) -> bool:
+        """await 를 건넌 뒤에도 같은 SELL pending 인가 (해제·재등록되면 등록 시각이 달라진다)."""
+        return (symbol in self._pending_orders
+                and self._pending_sides.get(symbol) == OrderSide.SELL
+                and self._pending_timestamps.get(symbol) == registered_at)
 
-        첫 회는 추적 여부와 무관하게 조회 없이 한 주기 기다린다: 브로커 장부는 완전 체결·취소 성공에서만
-        빠지므로 0건의 가장 흔한 원인은 '방금 체결'이고, 그 FillEvent(우선순위 1)가 pending 을 지운다.
-        그 뒤에도 남아 있으면 거래소 실 미체결로 가린다 — 소멸이면 False(종전 시장가 폴백), 생존이면
-        상한 없이 유지(풀면 발생원이 같은 분할 매도를 그 위에 재발행한다), 판단 불가가 **연속으로** 이어지면
-        상한에서 재주문 없이 해제한다(pending 은 그 종목의 손절 신호까지 막는다 — 재판단은 발생원이 한다).
-        횟수는 BUY 유지와 같은 뜻이다: 1 이상 = 이미 기다렸다, 생존 확인·첫 회 대기는 1 로 되돌린다.
+    async def _keep_stale_sell_after_failed_cancel(self, symbol: str, now: datetime, cancelled: int) -> bool:
+        """stale **분할** SELL 의 취소가 실패했을 수 있을 때 시장가를 얹지 말아야 하는가 — True 면 재주문을 건너뛴다.
+
+        취소 ≥1건이고 브로커 장부에 그 종목의 활성 SELL 이 남지 않았으면 취소 성공이다 → False(지연 없이 종전 경로).
+        (건수만 보면 같은 종목의 다른 주문 — 해제된 BUY 잔량 등 — 이 취소된 것을 SELL 취소로 읽는다.)
+        그 밖에는: 첫 회는 추적 여부와 무관하게 조회 없이 기다린다 — 장부는 완전 체결·취소 성공에서만 빠지므로
+        0건의 가장 흔한 원인은 '방금 체결'이고 그 FillEvent(우선순위 1)가 pending 을 지운다. 그 뒤에도 남아
+        있으면 거래소 실 미체결로 가린다 — 소멸이면 False(종전 시장가 폴백), 생존이면 상한 없이 유지(풀면
+        발생원이 같은 분할 매도를 그 위에 재발행한다), 판단 불가가 **연속으로** 이어지면 상한에서 재주문 없이
+        해제한다(pending 은 그 종목의 손절 신호까지 막는다 — 재판단은 발생원이 한다). 횟수는 BUY 유지와 같은
+        뜻이다: 1 이상 = 이미 기다렸다, 생존 확인·첫 회 대기는 1 로 되돌린다. 재시도는 on_heartbeat 가 구동한다.
         """
-        keep_cnt = self._pending_cancel_keep.get(symbol, (0, now))[0]
+        keep = self._pending_cancel_keep.get(symbol)
+        keep_cnt, alive_logged = (keep[0], keep[2]) if keep is not None else (0, False)
+        if cancelled > 0:
+            try:
+                tracked = await self.stale_order_still_live(symbol, OrderSide.SELL, confirm=False)
+            except Exception as e:
+                logger.warning(f"[리스크] stale 매도 장부 확인 오류: {symbol} - {e}")
+                tracked = None
+            if tracked is False:
+                return False
         live: Optional[bool] = True
         if keep_cnt > 0:
             try:
@@ -2338,7 +2377,7 @@ class RiskManager:
                 logger.warning(f"[리스크] stale 매도 생존 확인 오류: {symbol} - {e}")
                 live = None
         else:
-            logger.warning(f"[리스크] 매도 취소 0건(체결 직후/거래소 생존 가능): {symbol} → 시장가 재주문 보류")
+            logger.warning(f"[리스크] 매도 취소 실패 가능(체결 직후/거래소 생존): {symbol} → 시장가 재주문 보류")
         if live is False:
             return False
         if live is None and keep_cnt >= self._MAX_SELL_KEEP:
@@ -2348,14 +2387,32 @@ class RiskManager:
             )
             await self.clear_pending(symbol)
             return True
-        if live is True and keep_cnt > 0:
+        if live is True and keep_cnt > 0 and not alive_logged:
+            alive_logged = True  # 유지 한 번에 1회만 — 이후는 헬스 모니터의 5분 교착 경보가 알린다
             logger.error(
                 f"[리스크] 매도 주문이 거래소에 살아 있으나 취소 불가: {symbol} — 시장가 전환 보류 중 (수동 확인 필요)"
             )
         async with self._pending_lock:
             if symbol in self._pending_timestamps:  # await 사이 다른 태스크(스케줄러 정리)가 해제했으면 되살리지 않는다
-                self._pending_cancel_keep[symbol] = (keep_cnt + 1 if live is None else 1, now)
+                self._pending_cancel_keep[symbol] = (keep_cnt + 1 if live is None else 1, now, alive_logged)
         return True
+
+    async def on_heartbeat(self, event: Event) -> None:
+        """취소 실패로 유지 중인 stale SELL 의 재시도를 SIGNAL 없이도 진행한다 (2026-09-21).
+
+        stale 루프는 on_signal 안에만 있어 SIGNAL 이 끊기면 멈춘다. 유지는 '다음 주기에 다시 본다'는 약속이라
+        그 약속만은 엔진 하트비트(10초)로 구동한다 — SIGNAL·FILL 과 같은 직렬 큐로 오므로 루프와 겹치지 않는다.
+        유지분이 없으면 아무것도 하지 않는다(90초 폴백·10분 BUY 정리의 SIGNAL 의존은 종전 그대로).
+        """
+        if not self._pending_cancel_keep:
+            return None
+        now = datetime.now()
+        if not 900 <= now.hour * 100 + now.minute < 1530:
+            return None
+        for s in list(self._pending_cancel_keep):
+            if self._pending_sides.get(s) == OrderSide.SELL and s in self._pending_timestamps:
+                await self._fallback_stale_sell(s, now)
+        return None
 
     async def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):
         """주문 완료/실패 시 pending 해제 (외부에서 호출) - Lock 보호"""
