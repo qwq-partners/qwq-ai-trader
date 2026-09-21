@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-22 — ops: main `d337494` 운영 반영 (PR #88 병합·배포·재시작)
+
+- **지시·대상:** 사용자 지시 "PR머지하고 운영배포까지 가자". PR #88 `fix/kis-pagination-protocol`(연속조회 요청 헤더 `tr_cont` — 2페이지째부터 `N` · `get_positions_for_account` 의 헤더 `D`/`E` 종료 판정 통일 · 취소 POST 재시도 유지의 특성화와 "취소는 멱등" 문장 정정)을 병합하고 main 을 운영에 반영했다. 운영 checkout `d1e8b2f` → `d337494`.
+- **운영에서 실제로 바뀌는 것:** 제품 경로 변경은 `src/execution/broker/kis_kr.py` 하나다. **1페이지로 끝나는 조회(현재 운영: 보유 1종목)는 요청이 바뀌지 않는다** — 2페이지 이상에서만 요청 헤더 `tr_cont: N` 이 붙고, 외부계좌 표시용 조회는 마지막 페이지 뒤의 불필요한 원장 호출 1회가 없어진다.
+- **병합 전 확인:** head `9c3f6ff` 의 필수 verify SUCCESS. 독립 재현(요청 opus/xhigh) **APPROVE** — 기준선과 브랜치 양쪽에서 실제 요청(headers·params·호출 횟수)을 떠 비교해 1페이지 요청 diff 0줄, 변이 8종 kill. 교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh) **APPROVE(P0·P1·P2 0)**. coordinator 가 제품 diff 를 직접 검토했다. `mergeable CLEAN` 에서 merge commit 방식으로 병합(2026-09-21T22:21:45Z).
+- **배포 전 점검(07:22 KST, 개장 전):** pending `[]`, 부하 1.24. 운영 트리 청결은 배포 스크립트가 검사한다.
+- **배포:** `scripts/deploy/local_deploy.sh d337494…` → 운영 서버 verify **1982 passed / 2 xfailed / 경고 1(pykrx)**(90.29초), 격리 위반 0·문법·비밀정보 검사 통과 → 재시작 → 헬스 통과(자동 롤백 없음). 이전 PID1453603 → **PID1546587, 07:24:06 KST 기동.**
+- **사후 점검:** 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`통합 트레이딩 엔진 시작`. ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음). 170초 시점 `ops_check`: HTTP 500 0·EGW00201 0·원장 EGW00215 0·토큰 오류 0, 루프 정체·실패 누적 없음, pending `[]`, `cash_ratio` 0.43%(매수 불가 상태 그대로). Toss 관측 서비스 PID3335469 무변경.
+- **하지 않은 것:** `.env`(`KIS_TR_SET`)·설정·킬스위치·주문·Toss grant/토큰 변경 0. 신 TR 전환은 runbook 의 실계좌 확인 항목이 닫힌 뒤 별도 지시로만 한다.
+- **남은 일:** 배포 뒤 운영 checkout 이 `d337494` 에 **detached** 로 남아 있다(배포한 세션이 worktree 격리라 다른 checkout 에 git 을 실행할 수 없었다 — 트리는 main 과 동일하므로 재시작은 필요 없다). `git -C /home/ubuntu/projects/qwq-ai-trader checkout main` 후 `pull --ff-only origin main` 으로 복귀한다.
+
 ## 2026-09-21 — fix(kis): 연속조회 요청 헤더 `tr_cont` 와 형제 루프의 종료 판정 통일 (운영 동작 변경 2건)
 
 - **무엇 ①(연속조회 요청):** `_api_get` 에 `tr_cont: str = ""` 인자를 더해 빈 문자열이 아닐 때만 요청 헤더 `tr_cont` 로 싣는다. 연속조회 루프 3종(`get_positions`·`get_positions_for_account`·`_query_daily_fills`)이 **첫 페이지는 지금과 똑같이** 호출하고 2페이지째부터만 `tr_cont="N"` 을 보낸다. `_get_headers` 는 손대지 않았다(원래 `tr_cont` 를 넣지 않는다).
