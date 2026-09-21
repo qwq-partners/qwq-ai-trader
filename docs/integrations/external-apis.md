@@ -22,9 +22,14 @@
 
   잔고 `TTTC8434R`·매수가능 `TTTC8908R`은 저장소에 구/신 구분이 없어 **변경 대상이 아니다**.
   `new` 모드에서만 order-cash 본문에 `EXCG_ID_DVSN_CD="KRX"`·`CNDT_PRIC=""`, 정정취소 본문에
-  `EXCG_ID_DVSN_CD="KRX"`가 추가되고, 정정취소가능조회는 `rmn_qty`가 없으면 `psbl_qty`를 읽는다
-  (둘 다 없으면 조용한 0 대신 `None`=판단 불가). 구 TR 이 `EXCG_ID_DVSN_CD`를 받아들이는지는
+  `EXCG_ID_DVSN_CD="KRX"`가 추가되고, 정정취소가능조회는 `rmn_qty`가 **없거나(None) 비어
+  있으면**(공백 제거 후 빈 문자열) `psbl_qty`를 읽는다 (대체 뒤에도 비어 있으면 조용한 0 대신
+  `None`=판단 불가). 구 TR 이 `EXCG_ID_DVSN_CD`를 받아들이는지는
   미확인이라 `legacy` 본문에는 싣지 않는다 (일별조회의 기존 `"ALL"` 은 두 모드 공통으로 유지).
+  **주문(접수)의 신 TR·신 본문은 정규장(`regular`) 세션에만 적용한다** — 저장소에 NXT 주문
+  예제가 없어 `pre_market`·`next_market` 의 올바른 `EXCG_ID_DVSN_CD` 값을 확정할 수 없어,
+  그 두 세션 접수는 `new` 모드에서도 구 TR·구 본문 그대로다. 취소·정정·조회에는 세션 분기가
+  없다(`new` 모드면 항상 `"KRX"`).
   출처: 공식 저장소 `koreainvestment/open-trading-api@b4e6249` 의 `examples_llm/`
   (`order_cash.py:103-130`, `order_rvsecncl.py:106-128`, `inquire_daily_ccld.py:141-174`,
   `inquire_psbl_rvsecncl.py:82-91`). 저장소는 **구 TR 의 지원 종료 일정도, 구/신 응답 필드가

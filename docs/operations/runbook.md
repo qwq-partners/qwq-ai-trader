@@ -216,9 +216,18 @@ echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
 ```
 
 - 적용 TR 표와 본문 차이는 `docs/integrations/external-apis.md` 의 브로커 절.
-- **두 단계로 나눈다** — 조회 TR(일별체결·정정취소가능)을 먼저, 주문 TR(매수·매도·정정취소)을
-  나중에. 조회는 되돌리기가 싸고 주문은 비가역이다. 현재 스위치는 한 개라 단계 분리가
-  필요하면 주문 경로 전환을 별도 PR 로 뺀다.
+- **"조회 먼저·주문 나중" 두 단계는 이 스위치 하나로는 불가능하다.** `KIS_TR_SET=new` 는 조회
+  TR 과 주문 TR 을 **동시에** 바꾼다. 단계 분리가 필요하면 조회 경로만 먼저 여는 **별도 PR** 로
+  뺀다 — 이 PR 에서는 하지 않았다. (조회는 되돌리기가 싸고 주문은 비가역이라 분리가 바람직하다.)
+- **정규장 주문만 신 TR 로 나간다.** 프리장(`pre_market`)·넥스트장(`next_market`) 접수는
+  `KIS_TR_SET=new` 에서도 구 TR·구 본문 그대로다 — 공식 저장소에 NXT 주문 예제가 없어 그
+  세션의 `EXCG_ID_DVSN_CD` 값(NXT? 미입력?)을 확정할 근거가 없기 때문이다.
+  **취소·정정에는 세션 분기가 없다** — `cancel_order`/`modify_order` 는 주문이 어느 세션에서
+  접수됐는지 모르고, new 모드에서는 무조건 `EXCG_ID_DVSN_CD="KRX"` 를 싣는다. 따라서 NXT
+  세션에 접수된(=구 TR) 주문을 new 모드에서 취소하면 "KRX" 가 그 주문에 닿는다 (아래 확인 12).
+- 전환 여부 확인(로그): 재시작 직후 `journalctl -u qwq-ai-trader | grep 'KIS TR 세트'` 가
+  `KIS TR 세트: new`(전환) 또는 `KIS TR 세트: legacy`(기본/롤백)를 찍는다. 브로커 연결마다
+  남으며 주문 본문·TR 에는 영향이 없다.
 - 전환 후 확인: `journalctl -u qwq-ai-trader | grep -E 'TTTC00(11|12|13)U|TTTC008[14]R'` 에
   거절(`msg_cd`)이 없는지, 체결 확인과 pending 만료 검증이 계속 도는지.
 
@@ -240,6 +249,10 @@ echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
 9. 구 TR 호출이 내부적으로 신 TR 로 자동 매핑되는지.
 10. `TTTC0084R` 의 모의투자 지원 여부 — 저장소 예제에 `env_dv` 분기가 없다.
 11. 취소 본문 `ORD_QTY` 의 올바른 값 — 저장소가 세 갈래로 갈려 판정하지 않는다.
+12. **NXT 세션 주문의 `EXCG_ID_DVSN_CD` 값** — 확정 전에는 그 세션 주문(접수)이 `new` 모드에서도
+    legacy 로 나간다. 확정되면 정규장 한정 조건을 푼다.
+13. NXT 세션에 접수된 주문을 `new` 모드에서 취소·정정할 때 `EXCG_ID_DVSN_CD="KRX"` 가 수용되는가
+    — 취소·정정에는 세션 분기가 없어 "KRX" 가 그 주문에 그대로 닿는다.
 
 ## 킬스위치 (긴급 주문 차단, 2026-08-02~)
 

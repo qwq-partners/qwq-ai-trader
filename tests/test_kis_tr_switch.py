@@ -7,16 +7,21 @@
 1) 두 모드 × 5 경로의 요청 헤더 tr_id 가 명세 §1 표와 정확히 일치한다.
 2) legacy 모드의 요청 본문이 전환 전과 완전히 같다 — 신 TR 전용 키가 새지 않는다.
 3) new 모드 본문에만 EXCG_ID_DVSN_CD(+ order-cash 의 CNDT_PRIC)가 실린다.
-4) new 모드 취소가능조회가 rmn_qty 부재 시 psbl_qty 를 읽고, 둘 다 없으면
-   조용한 0 대신 판단 불가(None)를 돌려준다.
+4) new 모드 취소가능조회가 rmn_qty 부재/공백 시 psbl_qty 를 읽고, 둘 다 없거나
+   비어 있으면 조용한 0 대신 판단 불가(None)를 돌려준다.
 5) 신 TR 두 개도 계좌 원장 간격으로 직렬화된다.
 6) check_fills 가 읽는 응답 키(odno·tot_ccld_qty·avg_prvs)는 그대로다.
+7) 신 TR·신 본문은 정규장 주문에만 — NXT 세션(pre_market·next_market) 접수는
+   new 모드에서도 legacy tr_id·본문 그대로다.
+8) 접수·정정 POST 는 두 모드 모두 retry=False (비멱등 재전송 금지).
+9) KIS_TR_SET 해석 — 정확히 "new" 일 때만 신 TR.
 
-모두 가짜 HTTP — 실 KIS 호출 0건.
+모두 가짜 HTTP — 실 KIS 호출 0건. 9)만 자식 프로세스(네트워크·.env 없음)를 쓴다.
 """
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 import time
 from decimal import Decimal
@@ -271,6 +276,21 @@ def test_new_cancelable_prefers_rmn_qty_when_present(broker, monkeypatch):
     assert rows[0]["qty"] == 3
 
 
+def test_new_cancelable_blank_rmn_qty_still_reads_psbl_qty(broker, monkeypatch):
+    """rmn_qty 가 빈 문자열이어도 유효한 psbl_qty 가 있으면 그 값을 쓴다 (조용한 0 금지)."""
+    _use_new(monkeypatch, True)
+    _capture_get(broker, {"rt_cd": "0", "output": [dict(_ROW, rmn_qty="", psbl_qty="7")]})
+    rows = asyncio.run(broker.get_exchange_open_orders())
+    assert rows == [{"symbol": "005930", "side": "sell", "qty": 7}]
+
+
+def test_new_cancelable_blank_both_quantities_is_undecidable(broker, monkeypatch):
+    """대체 뒤에도 비어 있으면 0 이 아니라 None 이다."""
+    _use_new(monkeypatch, True)
+    _capture_get(broker, {"rt_cd": "0", "output": [dict(_ROW, rmn_qty="", psbl_qty="  ")]})
+    assert asyncio.run(broker.get_exchange_open_orders()) is None
+
+
 def test_new_cancelable_without_any_qty_key_is_undecidable(broker, monkeypatch):
     """둘 다 없으면 조용한 0 이 아니라 None — 호출측이 pending 을 유지한다."""
     _use_new(monkeypatch, True)
@@ -324,3 +344,77 @@ def test_check_fills_reads_the_same_response_keys(broker, monkeypatch, new):
     fills = asyncio.run(broker.check_fills())
     assert len(fills) == 1
     assert fills[0].quantity == 10 and fills[0].price == Decimal("70500")
+
+
+# ── 7) 세션별: 신 TR 은 정규장 주문에만 ─────────────────────────────────────
+
+@pytest.mark.parametrize("new,session,expected_tr,new_keys", [
+    (False, "regular", "TTTC0802U", False),
+    (False, "pre_market", "TTTC0802U", False),
+    (False, "next_market", "TTTC0802U", False),
+    (True, "regular", "TTTC0012U", True),
+    (True, "pre_market", "TTTC0802U", False),
+    (True, "next_market", "TTTC0802U", False),
+])
+def test_order_tr_and_body_by_session(broker, monkeypatch, new, session, expected_tr, new_keys):
+    """공식 저장소에 NXT 주문 예제가 없어 EXCG_ID_DVSN_CD 값을 확정할 수 없다 —
+    그 세션 접수는 new 모드에서도 구 TR·구 본문으로 나간다."""
+    _use_new(monkeypatch, new)
+    monkeypatch.setattr(kis_kr.KISBroker, "_get_current_market_session", lambda self: session)
+
+    async def fake_nxt(self):
+        return ["005930"]
+    monkeypatch.setattr(kis_kr.KISBroker, "get_nxt_symbols", fake_nxt)
+
+    posted = _capture_post(broker)
+    asyncio.run(broker.submit_order(_order(OrderSide.BUY)))
+    tr_id, body, _ = posted[-1]
+    assert tr_id == expected_tr
+    assert ("EXCG_ID_DVSN_CD" in body) is new_keys
+    assert ("CNDT_PRIC" in body) is new_keys
+
+
+# ── 8) 비멱등 POST 는 재전송하지 않는다 ─────────────────────────────────────
+
+@pytest.mark.parametrize("new", [False, True])
+def test_order_and_modify_posts_are_pinned_to_no_retry(broker, monkeypatch, new):
+    """접수·정정은 응답 유실 시 재전송하면 중복 주문이다 (2026-09-03 P0)."""
+    _use_new(monkeypatch, new)
+    posted = _capture_post(broker)
+    asyncio.run(broker.submit_order(_order(OrderSide.BUY)))
+    assert posted[0][2] is False
+    _pending(broker)
+    assert asyncio.run(broker.modify_order("o1", new_price=Decimal("71000"))) is True
+    assert posted[1][2] is False
+
+
+# ── 9) KIS_TR_SET 해석 ──────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("env_value,expected", [
+    (None, "TTTC0802U"),        # 미설정
+    ("", "TTTC0802U"),
+    ("legacy", "TTTC0802U"),
+    ("NEW", "TTTC0802U"),       # 대소문자 구분 — 오타가 조용히 전환하면 안 된다
+    ("New", "TTTC0802U"),
+    ("1", "TTTC0802U"),
+    ("true", "TTTC0802U"),
+    ("new", "TTTC0012U"),       # 유일한 전환 값
+])
+def test_kis_tr_set_env_parsing(env_value, expected):
+    """자식 프로세스에서 모듈을 새로 import 한다 — 네트워크·.env 없이 env 만 준다."""
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(ROOT),
+    }
+    if env_value is not None:
+        env["KIS_TR_SET"] = env_value
+    done = subprocess.run(
+        [sys.executable, "-c",
+         "from src.execution.broker import kis_kr; print(kis_kr._tr_id('buy'))"],
+        env=env, cwd=str(ROOT), capture_output=True, text=True, timeout=180,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == expected

@@ -170,6 +170,8 @@ class KISBroker(BaseBroker):
                 return False
 
             logger.info("KIS API 연결 완료")
+            # 전환 여부를 로그로만 확인할 수단 — 주문 본문·TR 에는 영향이 없고 legacy 에서도 찍힌다
+            logger.info(f"KIS TR 세트: {'new' if _TR_NEW else 'legacy'}")
             return True
 
         except asyncio.TimeoutError:
@@ -491,8 +493,13 @@ class KISBroker(BaseBroker):
                     logger.warning(f"NXT 거래 불가 종목: {order.symbol} (세션: {session})")
                     return False, f"{order.symbol}은(는) NXT 거래 불가 종목입니다"
 
+            # 신 TR·신 본문은 정규장 주문에만 적용한다 — 공식 저장소가 NXT 주문 예제를 주지
+            # 않아 pre_market·next_market 세션의 EXCG_ID_DVSN_CD 올바른 값을 확정할 근거가
+            # 없다. 그 세션 접수는 new 모드에서도 현행(legacy) tr_id·본문 그대로 보낸다.
+            use_new_order = _TR_NEW and session == "regular"
+
             # TR ID 결정 (세션별)
-            tr_id = self._get_tr_id_for_session(order.side)
+            tr_id = self._get_tr_id_for_session(order.side, use_new_order)
 
             # 주문 구분 결정
             ord_dvsn = self._get_order_division(order)
@@ -520,7 +527,7 @@ class KISBroker(BaseBroker):
 
             # 신 TR 전용 필수 키 — 저장소 예제는 excg_id_dvsn_cd 미입력을 ValueError 로 막는다
             # (order_cash.py:99-100). 구 TR 의 수용 여부는 미확인이라 legacy 에는 싣지 않는다.
-            if _TR_NEW:
+            if use_new_order:
                 params["EXCG_ID_DVSN_CD"] = "KRX"
                 params["CNDT_PRIC"] = ""
 
@@ -648,21 +655,22 @@ class KISBroker(BaseBroker):
         else:
             return "closed"
 
-    def _get_tr_id_for_session(self, side: OrderSide) -> str:
+    def _get_tr_id_for_session(self, side: OrderSide, use_new: bool) -> str:
         """
         주문 TR ID 반환
 
-        국내주식 현금주문 (KIS_TR_SET 에 따라 구/신 TR):
+        국내주식 현금주문 (KIS_TR_SET 과 세션에 따라 구/신 TR):
         - 매수: TTTC0802U(legacy) / TTTC0012U(new)
         - 매도: TTTC0801U(legacy) / TTTC0011U(new)
 
-        시간외 단일가(NXT)도 동일한 TR ID 사용
+        `use_new` 는 호출측이 판단한다 — NXT 세션(pre_market·next_market) 주문은
+        new 모드에서도 False 로 들어와 구 TR 로 나간다.
+
+        시간외 단일가(NXT)도 legacy 안에서는 동일한 TR ID 사용
         ORD_DVSN="05"와 AFHR_FLPR_YN="Y"로 시간외 주문 구분
         """
-        if side == OrderSide.BUY:
-            return _tr_id("buy")
-        else:
-            return _tr_id("sell")
+        key = "buy" if side == OrderSide.BUY else "sell"
+        return _TR_SETS["new" if use_new else "legacy"][key]
 
     async def get_nxt_symbols(self) -> List[str]:
         """
@@ -1059,16 +1067,20 @@ class KISBroker(BaseBroker):
                     # chk_inquire_psbl_rvsecncl.py:21-43 — psbl_qty·tot_ccld_qty·ord_qty).
                     # 둘 다 없으면 조용한 0 대신 판단 불가(None)로 올린다 — 호출측이
                     # pending 을 유지하므로 이중 매도 방지가 끊기지 않는다.
+                    # 키가 없거나(None) 값이 비어 있으면("" / 공백) 대체한다 — KIS 는
+                    # 미사용 컬럼을 빈 문자열로 채워 보내므로 키 부재만 보면 유효한
+                    # psbl_qty 를 두고도 조용한 0 이 된다.
                     raw_qty = item.get("rmn_qty")
-                    if raw_qty is None:
+                    _qty_txt = "" if raw_qty is None else str(raw_qty).strip()
+                    if _qty_txt == "":
                         raw_qty = item.get("psbl_qty")
-                    if raw_qty is None:
+                        _qty_txt = "" if raw_qty is None else str(raw_qty).strip()
+                    if _qty_txt == "":
                         logger.warning(
-                            "실 미체결 조회: 수량 키(rmn_qty/psbl_qty) 부재 → 판단 불가"
+                            "실 미체결 조회: 수량(rmn_qty/psbl_qty)이 없거나 비어 있음 → 판단 불가"
                         )
                         return None
-                    _qty_txt = str(raw_qty).strip()
-                    qty = int(_qty_txt) if _qty_txt else 0
+                    qty = int(_qty_txt)
                 else:
                     qty = int(item.get("rmn_qty", 0) or 0)
                 rows.append({
