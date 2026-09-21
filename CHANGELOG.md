@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-22 — feat(safety): P0-1 — attach 송신 경로가 킬스위치와 감사 원장을 거친다 (**부품·제품 호출자 0건·운영 미설치**)
+
+> 결정 문서 `docs/superpowers/plans/2026-09-22-kis-judgement-decisions.md` §5 의 첫 전제 단계. 설치 차단 사유 16(attach 의 주문 POST 가 킬스위치·감사 원장을 우회)을 **legacy 와 같은 best-effort 수준까지** 닫았다. 상세 §5-1.
+
+- **`src/execution/safety/transport.py` — `GuardedKISTransport.send_prepared`:** 최종 guard 승인 뒤·POST 직전의 **동기 구간**(새 application await 0)에서 `kill_switch.check(side, market)` — SUBMIT/MODIFY 만, CANCEL 은 현행 `cancel_order` 와 같이 제외. 차단이면 원문은 `EV_BLOCKED` 행에만, 상태는 `NOT_SENT/'kill_switch_blocked'`. 송신 앞에 `EV_SUBMIT`/`EV_CANCEL`, 응답 뒤 `EV_ACCEPT`/`EV_REJECT`(UNKNOWN 은 `unconfirmed=True`)를 **한 시도당 한 번**. 원장 필드는 `path='attach'`·`attempt_id`·`fingerprint` 포함, 계좌·hashkey·토큰·헤더·본문 불포함. raw `send` 는 호출자 0건(docstring 경고만).
+- **반환값 의미 변경 1건(의도):** 응답 본문으로 ACK/거부를 확인한 뒤 응답 컨텍스트 종료가 실패하면 기존은 `UNKNOWN`(+결과 행 2개)이었고 지금은 확인한 결과를 유지한다(행 1개) — 클라이언트 측 정리 실패만으로 접수된 주문을 UNKNOWN 으로 뒤집으면 attach 의 전역 정지를 부른다. 본문을 못 읽은 실패는 그대로 UNKNOWN.
+- **`tests/conftest.py`(전역, 시험 전용):** `kill_switch.CACHE_DIR`·`audit_log.AUDIT_DIR` 이 운영 캐시를 가리키는 모듈 상수라, 격리 가드가 막아도 두 모듈이 OSError 를 삼켜 **시험 안에서 킬스위치가 항상 "꺼짐"으로 보였다**(주문 경계를 타는 기존 시험 47건이 격리 위반으로 RED). autouse fixture 가 두 상수를 테스트마다 tmp_path 로 돌린다. 기존 시험 파일 0줄 변경, 독립 인수 37건 무수정 GREEN.
+- **검증:** 신규 `tests/test_execution_transport_killswitch_audit.py`(런타임으로 "검사가 마지막 await 뒤·POST 앞"을 고정 — 가짜 `_rate_limit` 안에서 플래그를 만든다 · 매수 전용/전면 동결 × `_KR` 접미사 · CANCEL 통과 · 결과 행 1/시도 · 금지 필드 부재). 구현(요청 opus/high) → 독립 재현(요청 opus/xhigh) **APPROVE**(P2 6 → 처분, 변이 12종 중 등가 1 제외 전부 kill) → **Codex 10차(요청 gpt-6-astra/xhigh) APPROVE(P0/P1/P2 0)**. 전체 suite 단독 직렬 **UTC 4993 / KST 4993 passed**(각 기존 xfail 2·격리 위반 0).
+- **설치 전제로 등록(코드 변경 없음):** 킬스위치는 플래그 디렉터리 접근 실패 시 **fail-open**(현행도 동일) — attach 설치 시 `~/.cache/ai_trader` 기동 점검 필요.
+- main 병합·배포·재시작·주문·설정·Toss grant 무변경, `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-22 — docs(safety): KIS 미확정 문항의 판단 결정 + attach 의 새 설치 차단 사유 3건 (**제품 코드 0줄**)
 
 > 사용자 지시(원문): "나머지 답들도 답변이 없으니 우리가 임의로 판단해서 진행하면 돼. 니가 검토해서 제일 우리에게 이득이 되는 방향으로." 정본은 `docs/superpowers/plans/2026-09-22-kis-judgement-decisions.md`.

@@ -83,7 +83,7 @@
 
 | 단계 | 내용 | 성격 |
 |---|---|---|
-| **P0-1** | attach transport 가 킬스위치·감사 원장을 거친다(N1). `send_prepared` 의 POST 직전에 `kill_switch.check` → 차단이면 `NOT_SENT` + `audit_log.record_blocked`, 송신이면 `audit_log.record` | 부품(제품 호출자 0건)·작음·**다음 구현 단계** |
+| **P0-1** | attach transport 가 킬스위치·감사 원장을 거친다(N1). `send_prepared` 의 POST 직전에 `kill_switch.check` → 차단이면 `NOT_SENT` + `audit_log.record_blocked`, 송신이면 `audit_log.record` | **완료(2026-09-22, 부품·제품 호출자 0건)** — §5-1 |
 | P0-2 | attach 의 체결·종결 증거 생산자(N3) — 수집기(`queries.py`)·파서(`evidence.py`)·`lifecycle.reconcile` 의 제품 배선 | 설계 필요(10A2/10C) |
 | P0-3 | `_sync_portfolio` 의 attach 분기(N2) — owner 경유 재정합, 수동 매도의 학습 경로 포함 | live 파일 |
 | P0-4 | `_protection_failed` 의 해제 경로 · 부분 체결 뒤 예약 감소 · 세션 경계 소멸 · `_cleanup_stale_pending` 의 attach 인지 | 10C |
@@ -92,6 +92,13 @@
 | P3 | D6(차가운 시작 술어)·설치기 앞 단계 | 부품 → 설치 |
 
 **하지 않는 것:** `trading_ready` 강제 True · MODIFY · KR 체결통보 · 매도가능수량 팩트 · 보호 SELL 전용 모드 · 사용자 확인 없는 main 기록기.
+
+### 5-1. P0-1 Do·See (2026-09-22)
+
+- **Do(요청 opus/high, 격리 worktree):** `src/execution/safety/transport.py` 만 — `send_prepared` 의 **최종 guard 승인 뒤 ~ POST 직전의 동기 구간**에 `kill_switch.check(side, market)`(SUBMIT/MODIFY 만, CANCEL 은 현행 `cancel_order` 와 같이 제외 → 차단이면 `EV_BLOCKED` 행 + `NOT_SENT/'kill_switch_blocked'`, 상태 사유에 차단 원문 없음)와 `EV_SUBMIT`/`EV_CANCEL` 기록. 응답 뒤 `EV_ACCEPT`/`EV_REJECT`(UNKNOWN 은 `unconfirmed=True`). 원장 필드는 `path='attach'`·`attempt_id`·`fingerprint` 를 포함하고 계좌·hashkey·토큰·헤더·본문을 포함하지 않는다. raw `send` 는 호출자 0건이라 docstring 에 "제품에서 쓰지 말 것"만. **실제 결함 1건을 찾아 `tests/conftest.py` 에서 닫았다:** `kill_switch.CACHE_DIR`·`audit_log.AUDIT_DIR` 이 운영 캐시를 가리키는 모듈 상수이고, 격리 가드가 접근을 막아도 두 모듈이 OSError 를 삼켜 **시험 안에서 킬스위치가 항상 "꺼짐"으로 보였다**(주문 경계를 타는 기존 시험 47건이 격리 위반으로 RED) → autouse fixture 가 두 상수를 테스트마다 tmp_path 로 돌린다. 기존 시험 파일은 0줄 변경, 독립 인수 37건 무수정 GREEN.
+- **See — 독립 재현(요청 opus/xhigh, 다른 실행): APPROVE(P0/P1 0, P2 6).** guard→POST 사이 application await 0 을 **런타임 probe**(guard 콜백 안에서 ready task 를 만들고 POST 시점에 안 돌았음을 확인)로 실증 · 킬스위치 캐시 미스 ≈105µs/stat 4회, 적중 ≈5µs · 격리 결함 재현(fixture 를 끄면 47 failed) · 변이 9종 중 **m7(검사를 함수 상단 — 모든 await 앞 — 으로 옮김)이 생존** = 이번 변경의 핵심 개선("긴급 정지를 POST 직전에 읽는다")이 고정돼 있지 않았다.
+- **P2 처분(`3a58818`):** ① m7 을 **런타임 시험**으로 kill — 가짜 broker 의 `_rate_limit`(guard 앞의 마지막 await) 안에서 플래그를 만들어, 검사가 동기 구간에 있어야만 잡히게 ② 결과 행을 `async with` **밖**에서 한 번만 쓴다 — **반환값 의미 변경 1건(의도):** 응답 본문으로 ACK/거부를 확인한 뒤 응답 컨텍스트 종료(`__aexit__`)가 실패하면 기존은 `UNKNOWN` + 결과 행 2개였고 지금은 확인한 결과 유지 + 행 1개. 근거: 클라이언트 측 정리 실패만으로 접수된 주문을 UNKNOWN 으로 뒤집으면 attach 의 전역 정지를 부른다. 본문을 못 읽은 실패(비200·파싱 실패·`json()` 예외)는 그대로 UNKNOWN ③ docstring 과장 정정 — "예외가 나면 송신 0"은 도달 불가 문장이었다(`audit_log.record` 가 예외를 삼킨다) ④ `attempt_id` ⑤ `KILL_SWITCH_ALL_KR` 표본. 변이 m7·m10·m11·m12b kill(m12a 는 등가 변이 — `check` 의 기본값이 `"KR"`).
+- **설치 전제로 등록(코드는 이번 범위 밖, legacy·US 브로커까지 같이 바뀌는 별도 결정):** **킬스위치는 플래그 디렉터리 접근 실패 시 허용한다(fail-open, `kill_switch._read_flag`)** — 현행 `submit_order` 도 같은 성질. attach 설치 시 `~/.cache/ai_trader` 의 가용성이 긴급 정지의 전제이고, 기동 점검(디렉터리 읽기 가능 여부)을 설치 조건에 넣는다. 감사 원장도 best-effort 다(쓰기 실패 시 주문은 나가고 행은 남지 않는다) — 차단 사유 16 은 **legacy 와 같은 수준까지** 닫혔다.
 
 ## 6. 사용자에게 올리는 판단 (coordinator 의 권고)
 
