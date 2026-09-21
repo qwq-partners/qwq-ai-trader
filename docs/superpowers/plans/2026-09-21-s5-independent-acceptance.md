@@ -72,7 +72,7 @@
 - **D2 보호 가드 대 조용한 실패:** ① 전역 쿨다운 — 기록을 **후보 목록에 없는 제3 종목**으로 심는다(희생자 종목이면 종목 쿨다운에 가려 변이가 산다) + **양성 대조**(그 기록만 지우면 같은 fixture 가 실제로 축출한다). ② +5 우위 경계.
 - **D3 exit_exempt:** (a) owner 의 `protection.exit_exempt` 에 든 종목은 축출되지 않는다. (b) **별칭 불변식** — 게시 뒤에도 `rm._exit_exempt_ref is exits._exit_exempt` 이고 내용이 owner DTO 와 정확히 같다(live 에만 추가한 종목은 사라진다 — 사실 5 를 GREEN 으로 고정).
 - **D4 owner 읽기 실패의 fail-closed:** 현금 게이트·전략 예산 게이트·eviction 세 소비 지점이 각각 예외로 끝난다. 현금 게이트 표본은 전략 cap 을 0 으로 두어 뒤 게이트에 가려지지 않게 한다.
-- **G1 실제 `can_open_position` 의 거부:** 최소 현금 미달·최소 포지션 금액 미달이 `G3_risk` 로 끝나고 POST 0·owner 행 0. (sidecar↔owner 결론 비교는 하지 않는다 — 사실 7.)
+- **G1 실제 `can_open_position` 의 거부:** 최소 현금 보유 미달(검사 4)·현금 부족(검사 6)이 `G3_risk` 로 끝나고 POST 0·owner 행 0. (sidecar↔owner 결론 비교는 하지 않는다 — 사실 7.) **정정(wave 2):** 초안의 "최소 포지션 금액 미달"은 `can_open_position` 의 거부 사유가 아니다 — `min_position_value` 는 사이징 커널의 조기 종료 사유라 경로가 `G3_risk` 가 아니라 "포지션 크기 0" 으로 끝난다(구현자·재현자 각각 확인). 더해 owner 가 투영한 "당일 손절" 장부로 실제 sidecar 가 재진입을 막는 표본이 **단일 sidecar 전제의 행위 증거**다(별도 객체로 바꾸면 동일성 단언을 지워도 이 표본이 RED).
 - **G2 죽은 legacy 보정의 짝:** attach 에서 engine 쪽 TOCTOU 보정은 0 을 더한다 — 미해결 BUY 가 있는 상태에서 `daily_max_trades`·섹터 한도 경계를 넘기는 BUY 는 **owner 가** 막는다(ErrorEvent 의 message 로 사유 단언 — prepare 의 reducer 가 던지면 owner 에는 기록이 없다).
 - **G3 팩터 버킷:** `rm.config.factor_budgets` 를 주입(값 출처·확인 시점을 주석으로 — 미러 부채)하고 보유를 **같은 버킷의 형제 전략**에 심는다(신호 전략 자신에게 심으면 전략 예산 게이트가 먼저 막는다). `enforce=false` 는 통과·`enforce=true` 는 차단. fail-open 표본의 예외 주입은 `_check_factor_budget` 구간에만 건다.
 

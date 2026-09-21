@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — test(safety): B2/B3 S5 — attach 경로의 독립 실큐 인수·최종 broad 리뷰 (**제품 수정 0**·한정 승인·**운영 미설치**)
+
+> **인수 GREEN 은 설치 승인이 아니다.** 제품 attach 호출자 0건·`trading_ready=False`·MODIFY 미지원 그대로이고 모든 송신 표본은 합성 startup 허가 위에 있다. 단계별 Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 S5 절, 계획은 `docs/superpowers/plans/2026-09-21-s5-independent-acceptance.md`, **설치 차단 사유 15항은 `docs/operations/claude-migration-handoff-2026-09-20.md` 가 정본**이다.
+
+- **새 파일 1개:** `tests/test_execution_signal_gateway_acceptance.py` 37건 — S3·S4 가 만든 시험 모듈에서 아무것도 import 하지 않는 독립 하네스(실제 `risk/manager.py` 게이트·실제 CV·실제 RegimeOwner·실제 팩터 버킷, 시계 7축+macro 주입, 증가하는 fake 주문번호, 하네스 자기 단언 H0). POST 는 건수가 아니라 **전선 본문**으로, 차단은 **분기 도달 증거**로 단언한다. 남긴 fake 는 브로커 HTTP·`_SigLog.get`·`_sector_lookup`·`trading_ready` 패치·시계뿐 — 뒤의 둘을 걷어내면 conftest 가 루프백을 허용해 **운영 DB 에 닿는다**.
+- **Plan 의 적대적 심사(P0 6·P1 16·P2 11)가 구현 전에 잡은 것:** 동결 시계와 종목별 30초 신호 쿨다운의 충돌 · 지정 변이 6종이 실제로는 죽지 않음(이중 가드·falsy 동치) · 같은 엔진 attach 대조의 실행 불가 · 설정 출처 4개 · `src.core.engine.date` 동결 누락으로 월말·월초에만 RED · `__init__` 속성 미주입이 eviction 의 광역 `except` 에 삼켜짐.
+- **인수가 코드로 확정한 사실(원장·인계 문서의 이전 문장을 고쳤다):** claim 이전 실패 5갈래 중 **예약 0 은 2갈래뿐**(공통 계약은 POST 0) · attach 에서 **가격 없는 SELL 은 거부**(실큐 MARKET SELL 도달 불가) · **UNKNOWN ACK 1건이 자동 매수 경로 전체를 멈추고** 해제 수단(`reconcile`)의 제품 호출자는 0건 · attach 에서 exit_exempt 의 정본은 owner(런타임 `add_exit_exempt` 는 다음 게시에 지워진다) · **CV 의 판단 시각은 주입 시계가 아니라 벽시계** · `claim_not_available` 갈래는 실큐로 도달 불가(방어 분기) · 최소 현금 축의 게시값은 죽은 값이고 `RiskConfig` dataclass 기본값은 운영 YAML 과 다르다 · "쿨다운 안 전역 1건"은 재시작을 넘지 못한다.
+- **독립 재현(요청 opus/xhigh)은 세 번 모두 무하중 가드를 찾았다:** 포지션·현금을 직접 쓰는 `update_position` 의 attach 가드 · eviction 의 코어 제외·승자 제외(표본을 바꾸자 **코어 포지션이 실제로 POST 됐다**) · `pending_strategy_notional` 의 값. 전부 시험을 보강한 뒤 변이를 다시 넣어 kill 을 확인하고 원복했다.
+- **Codex 5차 A·B(요청 gpt-6-astra/xhigh, 최종 broad 리뷰):** S3 결정 ③(ORDER 를 큐에 싣지 않음)·S4 범위 축소 ①②③·S2 의 실효 stale 축·entry quote 출처 — **네 결정 모두 방향이 옳다고 확인**, 지적은 서술 정밀화뿐(제품 수정 요구 0). 정정: "S3 에서 config 축에 실효가 생긴다"는 성립하지 않는다(버전 불일치 검사를 연결했을 뿐, 제품 publisher 0).
+- **검증:** 전체 suite 단독 직렬 **UTC 4872 passed / KST 4872 passed**(각 기존 xfail 2·격리 위반 0, load 1.07→1.15). `git diff --stat 3969eaa.. -- src/ scripts/` 빈 출력.
+- 다음: 공식 KIS 증거(취소·체결 최종성) → 10A3 factory → 10C. main 병합·배포·재시작·주문·설정·Toss grant 무변경.
+
 ## 2026-09-21 — feat(safety): B2/B3 S4 — attach 에서 되살릴 수 있는 것만 owner 경로로 (한정 승인·**운영 미설치**)
 
 > **S4 는 "이관"이 아니라 부분 복원이고 설치가 아니다.** 제품 attach 호출자 0건·`trading_ready=False` 그대로. 단계별 Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 S4 절, 결정·실제 인터페이스는 `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md`.

@@ -1,5 +1,6 @@
 # Claude 인계 — 브랜치 정리와 엔진 마이그레이션 (2026-09-20)
 
+> **인계 이후 진행 위치(2026-09-21 갱신): B2/B3 는 S1~S5 로 완료됐다(한정 승인·운영 미설치, engine 전체 UTC/KST 각 4872 passed).** 다음 세션은 바로 아래 "B2/B3 이후" 절의 **차단 사유 15항**과 문서 끝의 **"다음 세션에게 전달할 시작 문장(2026-09-21)"** 에서 시작한다. 아래 줄은 착수 당시 기록이다.
 > **인계 이후 진행 위치(2026-09-20 갱신):** 아래 §1 "B2/B3" 는 착수됐다. 단계별 Plan/Do/See·재현 명령·리뷰 판정·이어받는 체크리스트·잔여는 **`docs/reviews/b2b3-stage-ledger-2026-09-20.md`(단계 원장)** 가 정본이고, 계약·단계 정의는 `docs/superpowers/plans/2026-09-20-b2b3-request-bound-qualification.md` 다. 이 문서의 경계(main 병합·배포·재시작·주문·설정·Toss grant 미실행, `trading_ready=False`, MODIFY 미지원)는 그대로 유효하다. 이어받는 세션은 원장의 "상태 요약"과 "공통 작업 방법"부터 읽는다.
 
 ## 먼저 읽을 결론
@@ -29,13 +30,17 @@
 | 11 | sidecar 와 owner 의 정책 출처가 다르다 | 같은 축(최대 포지션·최소 현금·포지션 크기·섹터)을 `risk/manager.py` 의 게이트와 owner 의 `evaluate_entry_policy` 가 각각 평가하는데, owner 의 `EffectiveRiskPolicy` 를 RiskConfig 에서 만드는 제품 코드가 없다(시험은 리터럴) — 두 결론의 정합은 출처를 묶은 뒤에야 인수할 수 있다. S5 wave 1 이 확인한 구체 사례: **최소 현금 축의 게시값은 죽은 값이다**(engine `get_available_cash()` 와 owner `build_owned_snapshot` 이 둘 다 레짐 표 `REGIME_PARAMS` 를 읽어 게시값을 덮어쓴다 — 현재는 같은 표라 일치). 또 `RiskConfig` 의 dataclass 기본값(최소 현금 15%·최소 포지션 금액 50만)은 운영 YAML(5%·20만)과 다르다 — factory 는 기본값이 아니라 **로드된 설정**에서 정책을 만들어야 한다 | 10A3 factory 의 인수 조건 |
 | 12 | **주문번호 없는 ACK(UNKNOWN) 한 건이 attach 의 자동 매수 경로 전체를 멈춘다** | owner 는 `blocked_unknown` 행이 하나라도 있으면 종목과 무관하게 새 후보를 `unresolved_execution_evidence` 로 거부한다(S5 wave 1 의 B1 이 다른 종목으로 실큐 확인). fail-closed 로는 옳지만 **해제 수단이 `lifecycle.reconcile` 뿐이고 그 제품 호출자가 0건**이다 — 설치하면 네트워크 이상 한 번이 수동 state 수술 전까지의 전면 정지가 된다 | #1 의 증거 계약 + reconcile 의 제품 배선(10A2/10C), 운영자 절차(runbook) |
 | 13 | CV 의 판단 시각이 주입 시계가 아니다 | `cross_validator.py` 가 함수 안에서 `datetime` 을 다시 import 해 프로세스 벽시계로 `now_hm` 을 읽고, `qualification._check_clock` 이 그것을 owner 의 주입 시계와 대조한다. 운영에서는 둘 다 실제 시각이라 일치하지만, factory 가 시계를 주입하면 "판단 시각" 축이 둘이 된다(S5 wave 1 — 어긋나게 두면 BUY 표본 12/18 실패) | 10A3 — CV 에 clock 주입(또는 `now_hm` 인자화) |
-| 14 | 실효 있는 stale 축은 regime 1개다 | `panel_outlook:*`·`trade_memory:*` 는 결정 시점에만 게시돼 판단→final 대조가 replay 구속 전용이다. config 축은 제품 publisher 가 생겨야 실효가 생긴다(#4) | 10A3 + 지속 publisher 설계 |
+| 14 | **만석 교체(eviction)의 "쿨다운 안 전역 1건" 은 프로세스 재시작을 넘지 못한다** | 그 기록(`_REPLACEMENT_LAST_EVICT_TS`)은 engine 내부 RiskManager 의 in-memory dict 뿐이고 owner state 에 대응 필드가 없다. attach 에는 fill projection 이 없어(#3) 축출 SELL 뒤에도 만석 상태가 유지되므로, 재기동 직후 같은 쿨다운 창 안에서 **두 번째 축출 SELL** 이 나갈 수 있다(미해결로 남은 첫 희생자는 owner 가 후보에서 빼지만 다음 약한 후보가 나간다). legacy 의 종목별 쿨다운도 in-memory 지만 legacy 는 체결이 포지션을 실제로 비운다 — S5 wave 2 재현자의 정적 분석, 시험 미구성 | 10A3 — 교체 기록을 owner state 로(축출 사유가 붙은 attempt/효과 원장) |
+| 15 | 실효 있는 stale 축은 regime 1개다 | `panel_outlook:*`·`trade_memory:*` 는 결정 시점에만 게시돼 판단→final 대조가 replay 구속 전용이다. config 축은 제품 publisher 가 생겨야 실효가 생긴다(#4) | 10A3 + 지속 publisher 설계 |
 
 설치 차단과 별개로 **운영 경로(legacy)의 현행 결함 5건**이 S4 특성화로 드러나 있다(동시호가에 취소만 보내고 재주문 없음·90초 폴백 루프에 exit_exempt 확인 없음·`submit_order` 예외 시 접수 여부를 모른 채 `clear_pending`·폴백 상한 뒤 원 지정가 방치·취소 0건 예약 해제). engine 브랜치는 이것을 고치지 않고 시험으로 고정만 했다 — main 기준의 별도 운영 수정 과제다.
 
 ### 기타 이월 (차단은 아니나 잊지 말 것)
 
 - 3건 이상 동시 미해결 BUY 의 누적 정합 · dispatch 의 network await 동안 엔진 루프가 멈추는 지연 상한 · UNKNOWN 자식만 남은 종목이 `unresolved_symbols()` 에서 빠지는 것(취소를 켜는 작업의 인수 조건).
+- **S5 인수가 고정한 범위의 한계(10A3 factory 의 인수 조건으로 넘긴다):** 독립 인수 파일에서 결정 게이트로 하중된 것은 **sidecar(`risk/manager.py`) 층과 owner 의 `daily_trade_limit` 뿐**이다. owner 쪽 최소 현금·최대 포지션 수·당일 손절 재진입·섹터 한도 경계는 각각 무력화해도 인수 파일이 GREEN 이다(항상 sidecar 나 짝이 되는 owner 지점이 먼저 막는 이중 방어 — 단위 시험은 따로 있다). factory 가 정책 출처를 묶을 때 "각 owner 게이트가 단독으로 결정 게이트가 되는 표본"을 인수 조건에 넣는다. owner 의 섹터 한도는 두 판정 지점이 같은 사유 문자열(`sector_limit`)을 써서 어느 쪽이 막았는지 사유만으로는 구분할 수 없다.
+- attach 에서 eviction 의 **종목별** 쿨다운은 전역 쿨다운에 포섭돼 사실상 죽은 검사다(legacy 와의 차이 목록). eviction 경로에 금지 falsy 판정 3곳(`… or 0`·`current_price or avg_price`, `engine.py` `_try_evict_weakest_position`)이 남아 있다 — 현재 행동 차이는 없다.
+- trend 팩터 버킷(65%)은 `RiskConfig` **기본값**(코어 배분 30%)에서는 현금 게이트가 항상 먼저 막아 도달할 수 없다. 운영 설정(코어 0)에서는 도달 가능하고 현재 `enforce=false` 라 주문 영향은 없다 — 버킷 승격을 판단할 때의 전제다.
 - 성능: `ExecutionStateStore.commit` 이 매 commit 마다 state 전체를 직렬화한다. 판단 사실의 분석 원장 projection 은 10C.
 - flaky: Toss `RequestBudget(1)` 실시간 1초 예산 시험·개발용 리뷰 실행기의 0.12~0.8초 시한 시험은 호스트 부하에 민감하다(전체 suite 는 단독 직렬·`nice` 금지).
 
@@ -71,7 +76,7 @@
 | 실제 2분 레짐 루프 | owner 분기·버전/결측/저장 경계 한정 완료 | [2분 루프](https://github.com/qwq-partners/qwq-ai-trader/blob/ab044c4edeb702911fee998973cb00a263a7b085/docs/reviews/two-minute-regime-owner-2026-09-20.md) |
 | C3 정오·JSON LLM·보호 replay | 실제 스케줄러 인수·한정 승인 완료 | [C3](https://github.com/qwq-partners/qwq-ai-trader/blob/ab044c4edeb702911fee998973cb00a263a7b085/docs/reviews/noon-regime-protection-replay-2026-09-20.md) |
 | C4 장전 text diagnosis·소비자 정합성 | actual caller·성공일 dedupe·정책/표시·게시 실패 장벽 완료 | [C4](https://github.com/qwq-partners/qwq-ai-trader/blob/ab044c4edeb702911fee998973cb00a263a7b085/docs/reviews/morning-regime-owner-2026-09-20.md) |
-| qualification·최종 sizing·실제 SIGNAL → owner 송신 | **S1~S4 한정 승인·운영 미설치(2026-09-21)**, S5(독립 인수·최종 리뷰)는 원장 참조. 설치가 아니며 위 "차단 사유" 14항이 열려 있다 | engine 브랜치 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` |
+| qualification·최종 sizing·실제 SIGNAL → owner 송신 | **S1~S5 한정 승인·운영 미설치(2026-09-21)** — 독립 인수 37건·Codex 최종 broad 리뷰 포함, engine 전체 UTC/KST 각 4872 passed. 설치가 아니며 위 "차단 사유" 15항이 열려 있다 | engine 브랜치 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` |
 | factory·나머지 writer/sender·공식 증거·전체 인수 | 미완, 운영 전환 차단 — **다음 시작점** | 같은 계획 10A3/10C, 위 "차단 사유"와 아래 순서 |
 
 브랜치 전체는 166파일 +44,697/-389줄이며 **전부 비활성 코드가 아니다**. WS 46필드 parser, 공용 limiter, 기존 sizing/regime wrapper와 DB DDL도 바뀐다. 따라서 owner가 아직 자동 설치되지 않는다는 이유로 통째 merge/restart하지 않는다. 실제 `KRExecutionRuntime.trading_ready`는 False, factory 자동 생성/attach는 미배선이며 임의 attach는 legacy SIGNAL/ORDER/FILL을 차단한다.
@@ -151,6 +156,10 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC \
 
 다음 실행은 같은 명령의 `TZ=Asia/Seoul`로 **앞 suite 종료 후** 수행한다. C4 원 완료 기록은 양TZ 각각4403passed/기존xfail2다. 새 변경 후에는 이 숫자를 복사하지 말고 실제 결과를 기록한다.
 
-## Claude에게 전달할 시작 문장
+## 다음 세션에게 전달할 시작 문장 (2026-09-21)
+
+> engine 브랜치의 단계 원장(`docs/reviews/b2b3-stage-ledger-2026-09-20.md`)의 "상태 요약"·"공통 작업 방법"·"S5 마감"과 이 문서의 "attach 설치 전에 닫아야 할 것" 15항을 읽어 주세요. B2/B3(S1~S5)를 재구현하지 말아 주세요 — 독립 인수 37건(`tests/test_execution_signal_gateway_acceptance.py`)은 새 제품 코드가 **한 글자 안 고치고** 통과해야 하는 기준선입니다. 먼저 현재 HEAD/dirty 상태/다른 세션의 PR 을 확인하고, 다음 중 사용자가 고른 것부터 Plan→Do→See 로 진행해 주세요: ① 공식 KIS 증거(취소·체결 최종성, 최초 잔고/체결 cutoff) 확보 — 코드와 별도 작업이며 차단 사유 1·2·12 를 여는 유일한 전제 ② 10A3 factory(정책·설정 출처 일원화, `recover_unsent()` 호출, `_exit_exempt_ref` 주입, CV clock 주입, 교체 기록의 owner 이관) ③ 10C 남은 writer/sender. main 병합·배포·재시작·주문·설정·Toss grant 변경은 이 인계만으로 실행하지 말고, `trading_ready` 강제·합성 startup 허가로 장벽을 우회하지 마세요. 완료/미완/실제 검증, 요청 모델/관측 모델을 구분해 보고해 주세요.
+
+## Claude에게 전달할 시작 문장 (2026-09-20 원문 — 수행됨)
 
 > 이 문서와 engine 브랜치의 최신 writer 이행 계획을 읽고, 기존 C4 완료 부분을 재구현하지 말아 주세요. 먼저 현재 HEAD/dirty 상태/다른 PR을 확인하고 B2/B3의 실제 qualification·최종 sizing request-bound 인수를 RED부터 진행해 주세요. Plan→Do→See, 역할별 모델·격리 병렬·독립 리뷰를 유지해 주세요. main 전체 병합·배포·재시작·주문·설정/토스 grant 변경은 이번 인계만으로 실행하지 마세요. 공식 startup·취소 증거와 전체 C/F/G/R이 미완이면 차단을 유지하고, 완료/미완/실제 검증을 구분해 보고해 주세요.

@@ -14,7 +14,7 @@
 | S2 (B2b) | 실제 CV/LLM/시간 규칙 publisher — 하위 S2-1~S2-5, wave A(S2-1∥S2-2)→B(S2-3∥S2-4)→C(S2-5)→통합 수정 | **완료 — 한정 승인·운영 미설치** (제품 소비자 0건: 게시·prepare·dispatch 호출은 S3. 실효 stale 축은 regime 1개. 세부 계획 `docs/superpowers/plans/2026-09-20-s2-qualification-publishers.md`) | `7177a8d`·`9330fbe`·`6f9108a`·`4829200`·`d703b34`·`072c51e`·`44e543a`(merge) + `6fa7fe5`·`578dc80`·`51a71e0`·`4018b79`·`83baa2a`·`85a65bc` |
 | S3 (B3a) | SIGNAL→gateway→owner prepare/dispatch — 하위 S3-1~S3-6b, wave 1(S3-1∥S3-2)→2(S3-3∥S3-4)→3(S3-5)→4(S3-6a)→5(S3-6b) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 제품에 `KRExecutionRuntime` 생성·`attach()`·`install_gateway()`·`recover_unsent()` 호출자 0건, `trading_ready=False` 그대로. HEAD `10d2ca7` 전체 UTC/KST 각 4758 passed. Codex 1차 APPROVE·2차/3차 CHANGES_REQUIRED → 처분(3차 처분은 S4 마감의 Codex 4차가 "닫는다"고 확인). 세부 계획 `docs/superpowers/plans/2026-09-21-s3-signal-gateway.md` 의 각 단계 "통합된 실제 인터페이스"가 구현 뒤의 정본 | merge `0975624`·`2c24aca`·`c48cb68`·`e42b014`·`cb1f554`·`5dac8da`·`4242b70` + coordinator `1a6e6d2`·`9a3fe19`·`9572ed2`·`b83b6e7`·`4356d43`·`aee69e3`·`9688d1d`·`486c7d3`·`10d2ca7` |
 | S4 (B3b) | attach 에서 되살릴 수 있는 것만 owner 경로로 — 하위 S4-0(legacy 세 경로 특성화)·S4-1(미claim 자식 종료)·S4-1b(`_unsent`)·S4-2(eviction) | **완료 — 한정 승인·운영 미설치**(2026-09-21). 세부 계획 `docs/superpowers/plans/2026-09-21-s4-owner-path-restoration.md`. **범위 축소:** 취소 최종성 증거가 제품에 없어 90초 SELL 에스컬레이션·10분 BUY 취소·owner 취소 배선은 attach 미지원으로 명시 — **보호 SELL 에 관해 attach 는 legacy 보다 계속 덜 안전하다(설치 차단 사유).** 전체 UTC/KST 각 4835 passed, Codex 4차 APPROVE | merge `60a19af`·`9afa8e9`·`d929167`·`892112f` + coordinator 보강 커밋(원장 S4 절) |
-| S5 (See) | 독립 실큐 인수(새 하네스·새 시험 파일 1개, 제품 수정 0)·최종 broad 리뷰·전체 직렬 | **Plan 완료(2026-09-21) — Do 진행 중.** 세부 계획 `docs/superpowers/plans/2026-09-21-s5-independent-acceptance.md` | (진행하며 채운다) |
+| S5 (See) | 독립 실큐 인수(새 하네스·새 시험 파일 1개, 제품 수정 0)·최종 broad 리뷰·전체 직렬 | **완료 — 한정 승인·운영 미설치**(2026-09-21). 인수 37건(`tests/test_execution_signal_gateway_acceptance.py`)·**제품 수정 0**. 전체 UTC/KST 각 4872 passed. Codex 5차 A·B: 네 결정 모두 방향 확인, 지적은 문서 정밀화뿐. **인수 GREEN 은 설치 승인이 아니다 — 설치 차단 사유 15항은 인계 문서가 정본.** 세부 계획 `docs/superpowers/plans/2026-09-21-s5-independent-acceptance.md` | merge `2f849ce`·`7ff7bf0`·`99e6cd9` + coordinator `559c8a7` + 문서 `b2b68db`·`6452f3a`·`accf9ae` |
 
 ## 공통 작업 방법 (이어받는 에이전트가 먼저 읽을 것)
 
@@ -478,7 +478,7 @@
 | wave | 범위 | 상태 | SHA |
 |---|---|---|---|
 | 1 | 하네스 + H0 + A(전선 값)·B(UNKNOWN)·C(claim 이전 실패 갈래별)·E(취소 0)·F(legacy 불변) | **완료** — 18건 GREEN(UTC/KST)·제품 수정 0·독립 재현 CHANGES_REQUIRED(P1 2·P2 3) → 처분 | merge `2f849ce`(`02e75f2`) + coordinator `559c8a7` |
-| 2 | D(eviction)·G(실제 `can_open_position`·죽은 legacy 보정·팩터 버킷) | 진행 중 | — |
+| 2 | D(eviction)·G(실제 `can_open_position`·죽은 legacy 보정·팩터 버킷) | **완료** — +19건(총 37건) GREEN(UTC/KST)·제품 수정 0·독립 재현 CHANGES_REQUIRED(P1 1·P2 5) → 보강·처분 | merge `7ff7bf0`(`8ffb9f7`)·`99e6cd9`(`ee99722`) |
 
 ### 이어받는 에이전트 체크리스트 (S5)
 
@@ -527,3 +527,42 @@
 2. **`claim_not_available` 갈래는 실큐로 도달할 수 없다.** gateway 의 intent 키가 (종목·side·전략)이라 같은 intent 의 비종료 sibling 은 항상 같은 종목이고 prepare 가 `unresolved_symbol_attempt` 로 먼저 막는다. C2 는 `lifecycle.claim` 을 세워 그 분기를 구동했다 — gateway 밖의 호출자(10C 의 수동·CLI 경로)를 위한 방어 분기로 남긴다.
 3. **주문번호 없는 ACK 한 건이 attach 의 자동 매수 경로 전체를 멈춘다**(B1 이 다른 종목으로 실큐 확인). 해제 수단은 `lifecycle.reconcile` 뿐인데 제품 호출자가 0건이다 → 설치 차단 사유 12 로 올렸다(CV 시계는 13).
 4. **최소 현금 축의 게시값은 죽은 값이다.** engine 과 owner 가 둘 다 레짐 표(`REGIME_PARAMS`)에서 만나고 게시한 `EffectiveRiskPolicy.regime_min_cash_reserve_pct` 는 덮어쓰인다. 또 `RiskConfig` 의 dataclass 기본값(최소 현금 15%·최소 금액 50만)은 운영 YAML(5%·20만)과 다르다 — factory 는 기본값이 아니라 로드된 설정에서 만들어야 한다(차단 사유 11 에 보강).
+
+### wave 2 (D eviction · G 실제 게이트) — Do·See 기록 (기준 `accf9ae` → `99e6cd9`)
+
+- **Do:** 구현(요청 opus/high, 격리 worktree, `8ffb9f7`) — 같은 인수 파일에 +593줄·**17건**(D1 2·D2 2·D3 2·D4 3·G1 3·G2 2·G3 3). wave 1 의 하네스와 18건은 한 줄도 고치지 않았다. 제품 diff 0. UTC/KST 각 35 passed·격리 0. 구현자 변이 26종 중 24 kill, 2종은 "동치가 아니라 이중 방어"로 처분(owner 의 섹터 한도는 두 지점이 같은 자료를 읽어 한쪽만 지우면 다른 쪽이 막는다 — 둘을 함께 지우면 RED).
+- **See — 독립 재현**(요청 opus/xhigh, 다른 실행): **CHANGES_REQUIRED (P1 1·P2 5)**. 독립성 grep 통과. 변이 40종 재실측(자체 15) 중 10종 생존.
+  - **P1 — eviction 의 후보 제외 가드 3개 중 2개(코어 제외·승자 제외)가 무하중.** 각각 `if False:` 로 바꿔도 35건 GREEN 이었고, 재현자가 표본을 바꿔 넣자 **코어 포지션·수익 중 포지션이 실제로 게이트웨이로 POST 되어 나갔다.** 만석 표본이 "비코어 손실 5건"이라 두 가드가 발화하지 않았기 때문이다.
+  - P2 — `gateway.pending_strategy_notional` 의 값이 무하중(항상 0 을 돌려줘도 GREEN) · G1 의 "현금 부족" 접두사 단언은 sidecar 와 engine 의 `can_open_position` 을 구분하지 못한다.
+  - P2(문서) — owner 쪽 최소 현금·최대 포지션·당일 손절 재진입·섹터 경계는 이 파일에서 결정 게이트가 된 적이 없다(sidecar 가 먼저 막는 이중 방어) · attach 에서 종목별 교체 쿨다운은 전역 쿨다운에 포섭된 죽은 검사 · 계획서 G1 의 "최소 포지션 금액 미달"은 `can_open_position` 의 거부 사유가 아니다.
+  - **단일 sidecar 하중 검사:** sidecar 를 별도 객체로 바꾸고 **동일성 단언 두 줄까지 지워도** `test_g1_same_day_stop_loss_block_rides_on_the_owner_published_sidecar` 가 RED — 별도 객체는 `publish_risk` 투영을 못 받아 engine 게이트를 통과하고 차단이 owner 로 밀린다. wave 1 의 숙제(전제가 H0 자기 단언뿐)는 행위 증거로 해소됐다.
+- **보강(요청 opus/high, `ee99722`, merge `99e6cd9`):** 만석 표본에 **코어 미끼**(진입 점수 0·−50%)와 **승자 미끼**(최저 점수·+10%)를 넣어 기존 D1 의 전선 본문 단언이 두 가드를 잡게 했다(정렬 2순위 축의 하중은 유지). 전략 예산 캡의 미체결 보정 2건(`G5_budget` 차단 / 미해결 0 의 양성 대조) 추가. G1 사유를 전문으로 단언하고 통과형 spy 로 "막은 층은 sidecar, engine 의 `can_open_position` 도달 0" 을 고정. **총 37건**, UTC/KST 각 37 passed·격리 0·제품 diff 0. 변이 4종(코어 가드·승자 가드·정렬 2순위·`pending_strategy_notional`) kill.
+- **coordinator 확인:** 코어 제외 가드 변이를 직접 다시 넣어 **5 failed / 32 passed** 로 kill 을 확인하고 원복(`git diff --stat -- src/ scripts/` 빈 출력).
+
+**wave 2 가 드러낸 사실(제품 수정 0 — 인계 문서에 반영):**
+1. **"쿨다운 안 전역 1건"(S4 결정 ⑦)은 프로세스 재시작을 넘지 못한다** — 기록이 in-memory 뿐이고 attach 에는 fill projection 이 없어 축출 SELL 뒤에도 만석이 유지된다 → 설치 차단 사유 14.
+2. 이 인수가 결정 게이트로 고정한 것은 **sidecar 층과 owner 의 `daily_trade_limit`·전략 예산의 owner 미체결 보정**이다. 나머지 owner 판정은 이중 방어 뒤에 있어 이 파일에서는 무하중이다(단위 시험은 따로 있다) → 10A3 의 인수 조건.
+3. trend 팩터 버킷(65%)은 `RiskConfig` 기본값(코어 30%)에서는 현금 게이트가 항상 먼저 막아 도달 불가(운영 설정 코어 0 에서는 도달 가능, 현재 `enforce=false`). G3 은 그래서 reversion 버킷으로 인수했다.
+4. eviction 경로에 금지 falsy 판정 3곳이 남아 있다(행동 차이 없음 — 기록만).
+
+### S5 마감 See (2026-09-21, HEAD `99e6cd9` + 문서 커밋)
+
+- **전체 suite 단독 직렬**(에이전트 0·다른 세션 pytest 0 확인·`nice` 미사용·이 세션의 pyright 종료 후): **UTC 4872 passed / 기존 xfail 2 / 경고 4(기존) / 355.16초**, **KST 4872 passed / 기존 xfail 2 / 345.31초**, 두 번 모두 "[테스트 격리] … 0건". load average 1.07 → 1.13 → 1.15. (S4 마감 4835 + 인수 37 = 4872.)
+- **제품 코드 수정 0:** S5 의 커밋은 새 시험 파일 1개와 문서뿐이다(`git diff --stat 3969eaa.. -- src/ scripts/` 빈 출력). 제품 호출자 0건(`KRExecutionRuntime(`·`.attach(`·`install_gateway(`·`recover_unsent(`)·`trading_ready=False`·MODIFY 미지원 그대로.
+- **교차 provider 최종 broad 리뷰(Codex 5차 A·B, 위 절):** 확인받으려던 네 결정은 모두 방향이 옳다고 확인받았고 지적은 전부 서술 정밀화였다(제품 수정 요구 0).
+- 요청 모델: 구현 claude-opus-5/high·독립 재현 claude-opus-5/xhigh·교차 리뷰 gpt-6-astra/xhigh. 관측 모델은 워크플로·companion 메타에 노출되지 않아 **미검증**이다.
+
+### S5 의 성과와 한계 (보고 문장 — 이대로 인용한다)
+
+- S5 가 만든 것: S3·S4 시험 모듈에서 아무것도 물려받지 않은 **독립 인수 하네스와 37건**(`tests/test_execution_signal_gateway_acceptance.py`) — 실제 `risk/manager.py` 게이트·실제 CV·실제 RegimeOwner·실제 팩터 버킷 게이트를 세우고, POST 를 건수가 아니라 **전선 본문**으로, 차단을 **분기 도달 증거**로 단언한다. 하네스 자기 단언(H0)은 전제를 하나씩 깨는 파괴 검사로 하중을 실증했다.
+- 처음으로 고정된 것: 사이징 수량이 전선까지 간다 · 실큐 SELL 의 매수1호가 가지 · UNKNOWN ACK 뒤의 예약 유지와 **경로 전체 정지** · 같은 주문번호 두 번의 기록 거부 · claim 이전 실패의 갈래별 계약(예약 0 은 두 갈래뿐, 공통은 POST 0) · abandon 내부 실패에서의 루프 생존 · legacy ORDER→브로커 구동 · 실제 inner RiskManager 위의 H6 · eviction 의 코어·승자·exit_exempt 보호가 **전선에 무엇이 나가는가**로 · owner 가 미체결을 세어 막는 `daily_trade_limit`·섹터 한도·전략 예산.
+- **독립 재현의 가치가 다시 확인됐다:** 세 번(wave 1·wave 2·보강) 모두 구현자 GREEN 뒤에서 무하중 가드를 찾았다 — 포지션·현금을 직접 쓰는 `update_position` 의 attach 가드, eviction 의 코어 제외·승자 제외(표본을 바꾸자 코어 포지션이 실제로 POST 됐다), `pending_strategy_notional` 의 값.
+- **S5 는 설치 승인이 아니다.** 모든 송신 표본은 합성 startup 허가 위에 있다(H0 이 patch 없는 `trading_ready is False` 를 단언한다). 인수가 새로 드러낸 설치 차단 사유 5건(가격 없는 SELL 의 거부·UNKNOWN 1건의 전역 정지와 해제 수단 부재·CV 의 벽시계·면제 추가 경로·재시작 경계의 교체 상한)을 포함해 **차단 사유 15항이 인계 문서에 모여 있다.**
+- 이 인수가 태우지 않는 것: 실제 `_sector_lookup`·`SignalEventStorage`(걷어내면 운영 DB 에 닿는다) · 실큐 MARKET SELL(도달 불가) · owner 쪽 개별 게이트의 단독 결정(이중 방어 뒤) · 실제 2분/5분 레짐 강등으로 만드는 stale · 체결 뒤의 다음 사이클(체결 관측 공급 경로 0) · `KRScheduler._cleanup_stale_pending`(10C).
+
+### 다음 단계(10A3/10C·증거 계약) 진입 조건
+
+`docs/operations/claude-migration-handoff-2026-09-20.md` 의 **"attach 설치 전에 닫아야 할 것" 15항과 "기타 이월"이 단일 목록이다**(원장 S5 조건 4·5 의 산출물). 착수 순서의 권고: ① 공식 KIS 증거(취소·체결 최종성, 최초 잔고/체결 cutoff) — 코드와 별도 작업이고 #1·#2·#12 를 여는 유일한 전제 ② 10A3 factory(정책·설정 출처 일원화 #4·#9·#11, `recover_unsent()` 호출, `_exit_exempt_ref` 주입, CV clock 주입 #13, 교체 기록의 owner 이관 #14) ③ 10C 남은 writer/sender(#7, 면제 추가 경로 #5). 10A3 의 인수는 S5 의 인수 파일 위에 "각 owner 게이트가 단독으로 결정 게이트가 되는 표본"을 더한다.
+
+체크리스트는 S5 체크리스트를 그대로 쓰고 한 항목을 더한다:
+- [ ] 새 제품 코드가 인수 파일 37건을 **한 글자 안 고치고** 통과하는가(기대값을 바꿔야 한다면 그 변경이 계획의 결정으로 명시돼 있는가).

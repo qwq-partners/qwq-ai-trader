@@ -67,7 +67,7 @@ S1:
 7. 시계는 전부 주입(`clock` list). 벽시계 의존 0 — 배포 verify 는 장 마감 후에 돈다.
 
 **S3 는 `2026-09-21-s3-signal-gateway.md`(세부 계획)에서 확정했다** — 하위 단계 S3-1~S3-6b, 그리고 §2 표의 "ORDER(command ID 만)" 은 그 계획의 결정 ③에서 "attach 모드에서는 ORDER 이벤트를 큐에 싣지 않고 gateway 가 같은 command_scope 에서 prepare·dispatch 한다"로 해석됐다(S5 최종 리뷰의 확인 항목). 조사 C 의 RED 후보 24건 원문은 문서로 남아 있지 않아(docs/ 전체 grep) S3 Plan 에서 12항 인수 조건과 인계 Do 1~4 로부터 다시 도출했다.
-S4~S5 는 인계 Do 1~4항을 기준으로 S3 통합 뒤 확정한다. 실큐 시험은 "조용한 폐기"를 통과로 오인하지 않도록 `stats.errors_count` 와 gateway 수신 사실을 명시 단언한다.
+**S4 는 `2026-09-21-s4-owner-path-restoration.md`, S5 는 `2026-09-21-s5-independent-acceptance.md` 에서 확정·수행했다(2026-09-21, 둘 다 한정 승인·운영 미설치).** S4 는 취소 최종성 증거의 부재 때문에 범위를 줄였고, S5 는 제품 수정 0 의 독립 인수 37건이다 — B2/B3 뒤에 남은 것은 인계 문서의 "attach 설치 전에 닫아야 할 것" 15항이다. (착수 당시 문장:) S4~S5 는 인계 Do 1~4항을 기준으로 S3 통합 뒤 확정한다. 실큐 시험은 "조용한 폐기"를 통과로 오인하지 않도록 `stats.errors_count` 와 gateway 수신 사실을 명시 단언한다.
 
 ### S1 독립 리뷰 처분 (2026-09-20, 대상 `03cc2d6..33b7643`)
 
