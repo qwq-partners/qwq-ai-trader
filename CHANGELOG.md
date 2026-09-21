@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — fix(engine): on_signal stale 루프 결함 2건 수정 + 3건 점검 기록 (미배포)
+
+engine 브랜치의 특성화 시험이 드러낸 main `RiskManager.on_signal` 진입부(90초 SELL 폴백·10분 BUY 정리) 결함 5건을 위험도부터 판단했다. **배포·재시작·주문·설정 변경 0** — 현금 고갈로 봇 매매가 없는 상태라 두 경로 모두 현재는 실행되지 않으며, 매수 재개 시점부터 의미가 있다.
+
+- **고침 ① 동시호가(15:20~15:30) 분기 순서**: 90초 넘은 미체결 SELL 에 `cancel_all_for_symbol` 을 **먼저 보낸 뒤** '지정가 유지'로 빠져, 청산 지정가가 재주문 없이 거래소에서 사라졌다(15:20 이후 낸 매도는 90초 뒤 반드시 취소). 취소보다 앞에서 분기 — 포지션이 남아 있는 SELL 은 동시호가에 취소·재주문·장부 변경이 없다(폴백 상한 도달·포지션이 사라진 pending 의 해제는 종전 순서 그대로: 15:30 이후엔 이 루프가 돌지 않아 정리 주체가 없다). 안쪽의 기존 분기는 삭제(await 사이 포지션이 복구되는 드문 경우는 브로커의 동시호가 시장가 거절이 막는다).
+- **고침 ⑤ 10분 BUY 정리의 '취소 0건도 해제'**: 조사 중 확인한 근본 원인 — `KISKRBroker.cancel_all_for_symbol`/`cancel_order` 는 실패를 예외로 올리지 않고 0/False 를 돌려준다. 2026-08-04 P1 의 "0건은 해제, API 예외만 유지-재시도"에서 뒤 절반은 도달한 적이 없고, 0건에 "추적 주문 없음(소멸)"과 "취소 실패(방금 체결/거래소 생존)"가 섞여 예약현금이 풀리고 즉시 재매수가 허용됐다. 이제 0건이면 ⓐ 브로커 미추적 → 종전대로 해제(예약 잠김 방지 유지) ⓑ 추적 중 첫 회 → 유지·60초 뒤 재시도(체결이면 5초 주기 FillEvent 가 지움) ⓒ 그 뒤에도 남으면 거래소 실 미체결(TTTC8036R, ExitManager pending 검증자와 같은 조회) — 생존·조회 실패는 유지, 없으면 해제 ⓓ 유지 상한 15회(60초 간격, 최소 15분) — 조회 실패가 이어져도 예약현금이 자정까지 잠기지 않게 CRITICAL 로그와 함께 강제 해제(스케줄러 15분 강제 해제와 같은 정책) + 원 주문 위 재매수를 막는 `block_symbol` 5분(BUY 전용). 새 장부 없이 기존 `_pending_fallback_count` 를 유지 횟수로 같이 쓰고(락 안·pending 존재 확인 후 기록, 새 pending 등록 시 0회로 초기화 — 잔존 값이 SELL 폴백 예산을 깎지 않게), 추가 KIS 호출은 ⓒ 에서만. 60초 스로틀은 pending 시각 되감기라 유지 중 모니터링 경과 표시가 9~10분에 머문다(기록된 한계).
+- **두고 기록 ② exit_exempt 가드 없음**: 현재 설정(면제 = `manual` 087010)에서는 면제 종목이 엔진 SELL pending 에 들어오는 경로가 없다(SELL 발행처 전수 확인 — 면제 가드 뒤이거나 `core_holding`/전략 자체 포지션 한정, 수동 매도는 별도 브로커 인스턴스). 이 루프의 가드는 위치도 맞지 않는다(그 시점엔 지정가가 이미 나감). 단 코어 경로에는 면제 가드가 없어 `core_holding` 포지션을 면제로 지정하면 SELL 이 나간다 — 발행처의 공백으로 별도 기록.
+- **두고 기록 ③ 폴백 `submit_order` 예외 시 `clear_pending`**: `KISKRBroker.submit_order` 가 POST 이후 예외를 전부 삼켜 `(False, msg)` 로 돌려주므로 이 `except` 는 POST 전 예외만 닿는다(미발주 확실). 응답 유실은 일반 실패 분기로 들어오고 `on_order` 와 같은 2026-09-03 P0 정책(해제 + 30초 동기화 정합)이다. 3상태 구분은 브로커 계약 변경이라 범위 밖.
+- **두고 기록 ④ 폴백 상한 뒤 방치**: 시장가 2건이 각 90초 미체결(거래정지·가격제한 잠김)이어야 도달. 살아 있는 주문은 브로커가 계속 추적해 체결은 반영되고 전량 중복은 KIS 가 수량 초과로 거절한다.
+- **추가 확인(미수정)**: 같은 원인으로 SELL 루프의 "취소 실패 → 재주문 건너뜀"과 `KRScheduler._cleanup_stale_pending` 의 "예외 시 유지"도 도달하지 않는다. 스케줄러 정리(별도 장부, 3분)는 ExitManager 발 매도에서 엔진 폴백 1회 뒤 180초에 양쪽을 초기화·재발행하므로 엔진 폴백 2회차·상한은 그 외 발행처에서만 닿는다. 상세·잔존 위험: `docs/risk/risk-and-exit.md` 첫 절.
+- **검증**: RED(목표 3건 실패/회귀 가드 4건 통과) → 수정. 독립 리뷰(claude-opus-5, 요청 effort high·실효 effort 미확인, 같은 제공자라 교차 제공자 리뷰 아님) 조건부 승인 — P1 1건(유지 상한 부재)·P2 중 횟수 기록 경쟁·동시호가 분기 범위·시험 누락을 반영, 시각 되감기 표시 왜곡은 한계로 기록. 재검토 **승인**(P1 해소) — 추가 P2(강제 해제 뒤 즉시 재매수 가능, 공유 장부 누출 시 SELL 폴백 예산 소진) 2건도 각 한 줄로 반영, 예외 경로의 상한 미적용은 한계로 기록. 최종 `tests/test_engine_stale_pending_fixes.py` UTC/KST 각 16 passed(방어 코드 3곳 변이 시 해당 시험 실패 확인), 격리 위반 0. 전체 suite KST **1826 passed / 2 known xfailed / 기존 warning 1**(81초, exit 0, 격리 0 — 기준선 1810 + 신규 16). UTC 전체는 PR 의 필수 verify 로 확인.
+
+수정: `src/core/engine.py`, `tests/test_engine_stale_pending_fixes.py`(신규), `docs/risk/risk-and-exit.md`
+
 ## 2026-09-21 — test(toss): 실시간 1~3초 예산 의존 시험을 부하 비의존으로 (시험 전용)
 
 - **증상:** `tests/test_toss_client_boundary.py::test_expired_token_issuance_still_requires_remaining_retry[prefix2-1]` 가 호스트 고부하(2 vCPU·스왑 100%, 전체 suite 와 다른 에이전트 중첩)에서 1건 실패(단독 73 passed). 시험이 `RequestBudget(1)`(기본 `time.monotonic`) 실시간 1초 안에 실제 토큰 발급(파일 잠금·`os.fsync`)과 재시도를 끝내야 했고, 넘기면 `TossRequestError("timeout")` 이 성공 기대를 깼다.
