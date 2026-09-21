@@ -87,9 +87,11 @@ def _freeze_engine(monkeypatch, at):
     monkeypatch.setattr(eng, "datetime", _Frozen)
 
 
-def _engine(monkeypatch, broker, *, keep=None, positions=None):
+def _engine(monkeypatch, broker, *, keep=None, positions=None, partial=True):
     rm = _rm(monkeypatch, broker, NOW, positions=_held_100() if positions is None else positions)
     _stale(rm, OrderSide.SELL, NOW, seconds=100)
+    if partial:
+        rm._pending_signal_cache[SYM] = {"sell_partial_intent": True}   # on_signal 이 등록 시점에 남기는 의도
     if keep is not None:
         rm._pending_cancel_keep[SYM] = (keep, NOW - timedelta(seconds=20), False)   # 재시도 간격은 이미 지났다
     return rm
@@ -164,7 +166,7 @@ def test_engine_one_undecidable_query_after_long_alive_does_not_release(monkeypa
 
     _drive(rm)                                      # 생존 확인 → 횟수 초기화
     broker._exchange_rows = None
-    _freeze_engine(monkeypatch, NOW + timedelta(seconds=20))
+    _freeze_engine(monkeypatch, NOW + timedelta(seconds=60))   # 생존 확정 뒤의 간격
     _drive(rm)                                      # 조회 실패 1회
 
     assert broker.orders == [] and SYM in rm._pending_orders
@@ -304,7 +306,7 @@ def test_engine_full_quantity_sell_keeps_the_old_path_so_stops_are_not_delayed(m
     """전량 매도(손절·트레일링)는 원 주문이 살아 있으면 KIS 가 주문가능수량 0 으로 거절한다 — 과매도가 불가능하므로
     관문을 적용하지 않는다. 대기시키면 손절이 늦어지기만 한다."""
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()])
-    rm = _engine(monkeypatch, broker)
+    rm = _engine(monkeypatch, broker, partial=False)
     rm._pending_quantities[SYM] = 100
 
     _drive(rm)
@@ -316,13 +318,50 @@ def test_engine_full_quantity_sell_keeps_the_old_path_so_stops_are_not_delayed(m
 def test_engine_partially_filled_full_stop_is_still_a_full_exit(monkeypatch):
     """교차 리뷰 반례: 100주 손절이 10주 체결된 뒤 잔량 90주 — 보유도 90주라 여전히 전량 청산이다(SIGNAL 하나로 제출)."""
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell(OrderStatus.PARTIAL)])
-    rm = _engine(monkeypatch, broker, positions={SYM: Position(
+    rm = _engine(monkeypatch, broker, partial=False, positions={SYM: Position(
         symbol=SYM, quantity=90, avg_price=PRICE, current_price=PRICE, strategy="sepa_trend")})
     rm._pending_quantities[SYM] = 90
 
     _drive(rm)
 
     assert [o.quantity for o in broker.orders] == [90]
+
+
+def test_engine_late_balance_snapshot_does_not_turn_a_full_stop_into_a_partial(monkeypatch):
+    """교차 리뷰 2회차 P1: 분할 여부를 현재 수량 비교로 추정하면, 늦게 도착한 잔고 스냅샷이 포트폴리오를 100주로
+    되돌리는 순간 잔량 90주 손절이 '90 < 100 = 분할'로 읽혀 손절에 대기가 걸린다. 의도는 등록 시점에 남긴다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell(OrderStatus.PARTIAL)])
+    rm = _engine(monkeypatch, broker, partial=False)      # 포트폴리오 100주
+    rm._pending_quantities[SYM] = 90
+
+    _drive(rm)
+
+    assert [o.quantity for o in broker.orders] == [90] and SYM not in rm._pending_cancel_keep
+
+
+@pytest.mark.parametrize("metadata, partial", [
+    ({"quantity": 10, "exit_action": "sell_partial"}, True),
+    ({"quantity": 10}, True),                                   # batch·core 트림 등 exit_action 없는 발행처
+    ({"quantity": 100, "exit_action": "sell_all"}, False),
+    ({"quantity": 10, "exit_action": "sell_all"}, False),       # 의도가 전량이면 수량과 무관하게 전량
+    ({}, False),                                                # 수량 미지정 = 보유 전량
+])
+def test_engine_records_the_partial_intent_when_the_sell_is_registered(monkeypatch, metadata, partial):
+    from src.core.event import SignalEvent
+    from src.core.types import MarketSession, Signal, SignalStrength, StrategyType
+
+    rm = _rm(monkeypatch, SellBroker(), NOW, positions=_held_100())
+    rm.engine.is_trading_hours = lambda: True
+    rm.engine._get_current_session = lambda: MarketSession.REGULAR
+    rm._risk_validator = None
+    rm._pending_signal_cache[SYM] = {"score": 80.0}             # 어떤 경로로든 남은 옛 캐시
+
+    sig = Signal(symbol=SYM, side=OrderSide.SELL, strength=SignalStrength.STRONG,
+                 strategy=StrategyType.SEPA_TREND, price=PRICE, reason="청산", metadata=metadata)
+    orders = asyncio.run(rm.on_signal(SignalEvent.from_signal(sig, source="test")))
+
+    assert orders and SYM in rm._pending_orders
+    assert rm._pending_signal_cache.get(SYM) == ({"sell_partial_intent": True} if partial else None)
 
 
 def test_engine_cancel_count_from_another_order_does_not_bypass_the_gate(monkeypatch):
@@ -374,6 +413,45 @@ def test_engine_heartbeat_drives_the_retry_without_another_signal(monkeypatch):
     _beat(rm)
     assert broker.calls == ["cancel", "cancel", EXCHANGE, "submit"]
     assert [o.quantity for o in broker.orders] == [10]
+
+
+def test_engine_confirmed_alive_sell_backs_off_to_60_seconds(monkeypatch):
+    """독립 리뷰 2회차 P2: 생존 확정 분기는 상한이 없다 — 20초 고정이면 한 종목 고착에 하루 천 건 넘는 취소 POST·원장
+    조회가 나간다. 복구는 사람 손(MTS 취소)이라 20초가 사는 것도 없다. 판단 불가·첫 회 대기는 20초 그대로."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
+    rm = _engine(monkeypatch, broker, keep=1)
+
+    _drive(rm)                                              # 생존 확인
+    assert rm._pending_cancel_keep[SYM] == (1, NOW, True)
+    _freeze_engine(monkeypatch, NOW + timedelta(seconds=59))
+    _beat(rm)
+    assert broker.calls == ["cancel", EXCHANGE]
+
+    _freeze_engine(monkeypatch, NOW + timedelta(seconds=60))
+    _beat(rm)
+    assert broker.calls == ["cancel", EXCHANGE, "cancel", EXCHANGE]
+
+
+def test_engine_heartbeat_retries_one_symbol_at_a_time(monkeypatch):
+    """하트비트 핸들러가 유지분 전부의 브로커 I/O 를 직렬로 기다리면 뒤에 선 FILL(우선순위 1) 처리가 그만큼 밀린다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
+    rm = _engine(monkeypatch, broker, keep=1)
+    third = "035720"
+    # OTHER 는 생존 확정(60초 간격)이라 40초로는 아직 때가 아니다 — 가장 오래됐다고 뽑으면 때가 된 종목이 굶는다
+    for other, waited, alive in ((OTHER, 40, True), (third, 30, False)):
+        rm._pending_orders.add(other)
+        rm._pending_sides[other], rm._pending_quantities[other] = OrderSide.SELL, 10
+        rm._pending_timestamps[other] = NOW - timedelta(seconds=300)
+        rm._pending_signal_cache[other] = {"sell_partial_intent": True}
+        rm._pending_cancel_keep[other] = (1, NOW - timedelta(seconds=waited), alive)
+        rm.engine.portfolio.positions[other] = Position(
+            symbol=other, quantity=100, avg_price=PRICE, current_price=PRICE, strategy="sepa_trend")
+
+    _beat(rm)
+
+    assert broker.calls.count("cancel") == 1
+    assert [o.symbol for o in broker.orders] == [third]    # 때가 된 것 중 가장 오래 기다린 종목(장부에 없어 곧바로 폴백)
+    assert rm._pending_cancel_keep[SYM][1] == NOW - timedelta(seconds=20)   # 나머지는 다음 하트비트
 
 
 def test_engine_heartbeat_does_nothing_without_a_kept_sell(monkeypatch):
@@ -443,7 +521,7 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _scheduler(monkeypatch, broker, *, age_min=4, engine_pending=True):
+def _scheduler(monkeypatch, broker, *, age_min=4, engine_pending=True, partial=True):
     class _Frozen(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -478,6 +556,8 @@ def _scheduler(monkeypatch, broker, *, age_min=4, engine_pending=True):
     scheduler = object.__new__(KRScheduler)
     scheduler.bot = bot
     scheduler.alerts = []
+    if partial:   # _check_exit_signal 이 sell_partial 로 등록하며 남기는 표식(등록 시각에 묶인다)
+        scheduler._partial_exit_pending = {SYM: bot._exit_pending_timestamps[SYM]}
 
     async def send_error_alert(error_type, message, details="", critical=False):
         scheduler.alerts.append((error_type, critical))   # 텔레그램 무접촉
@@ -640,14 +720,117 @@ def test_scheduler_alert_failure_does_not_release_anything(home, monkeypatch):
 
 
 def test_scheduler_full_exit_keeps_the_old_path_so_stops_are_not_delayed(home, monkeypatch):
-    """전량 청산(손절·트레일링·EOD)은 pending_stage 가 없다 — 롤백할 것도, 과매도 여지도 없으므로 종전대로 즉시 해제."""
+    """전량 청산(손절·트레일링·EOD)은 과매도 여지가 없다 — 종전대로 즉시 해제해 손절 재판단을 늦추지 않는다.
+
+    교차 리뷰 2회차 P1: `pending_stage` 로 추정하면 안 된다 — '롤백 없는 해제' 뒤에는 옛 익절 stage 가 남은 채
+    새 손절 pending 이 등록된다. 이 시험은 stage 가 남아 있는(FIRST) 상태에서 표식 없는 pending 을 푼다.
+    """
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()])
-    scheduler, bot, state, cleared = _scheduler(monkeypatch, broker)
-    state.pending_stage = None
+    scheduler, bot, state, cleared = _scheduler(monkeypatch, broker, partial=False)
+    assert state.pending_stage == ExitStage.FIRST
 
     _sweep(scheduler)
 
     assert SYM not in bot._exit_pending_symbols and cleared == [SYM]
+
+
+def test_scheduler_partial_mark_of_an_older_pending_does_not_gate_a_new_stop(home, monkeypatch):
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()])
+    scheduler, bot, state, cleared = _scheduler(monkeypatch, broker, partial=False)
+    scheduler._partial_exit_pending = {SYM: NOW - timedelta(hours=1)}     # 이전 분할 익절의 표식
+
+    _sweep(scheduler)
+
+    assert SYM not in bot._exit_pending_symbols and cleared == [SYM]
+
+
+@pytest.mark.parametrize("hook, rows, waited", [
+    ("on_cancel", (), None), ("on_open_orders", ELSEWHERE, 0), ("on_open_orders", None, 1)],
+    ids=["취소 await 중 교체", "생존 조회 await 중 교체(소멸 판정)", "생존 조회 await 중 교체(판단 불가 상한)"])
+def test_scheduler_never_releases_a_pending_that_replaced_the_one_it_was_checking(home, monkeypatch, hook, rows, waited):
+    """교차 리뷰 2회차 P1: await 사이에 옛 익절 A 가 체결로 끝나고 같은 종목의 다음 익절 B 가 등록되면,
+    A 에 대한 '소멸' 판정으로 B 의 양쪽 pending·stage 를 풀어 B 가 중복 발행된다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=rows)
+    scheduler, bot, state, cleared = _scheduler(monkeypatch, broker)
+    if waited is not None:
+        scheduler._stale_cancel_miss = {SYM: (bot._exit_pending_timestamps[SYM], waited, False)}
+
+    async def replace():
+        bot._exit_pending_timestamps[SYM] = NOW          # B 의 등록 시각
+    setattr(broker, hook, replace)
+
+    _sweep(scheduler)
+
+    assert SYM in bot._exit_pending_symbols and bot._exit_pending_timestamps[SYM] == NOW
+    assert cleared == [] and state.pending_stage == ExitStage.FIRST
+
+
+def test_scheduler_replacement_during_cancel_is_caught_for_full_exits_too(home, monkeypatch):
+    """전량 청산은 관문을 타지 않고 곧바로 해제로 간다 — 해제 직전의 세대 재검증이 유일한 방어선이다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()])
+    scheduler, bot, state, cleared = _scheduler(monkeypatch, broker, partial=False)
+
+    async def replace():
+        bot._exit_pending_timestamps[SYM] = NOW
+    broker.on_cancel = replace
+
+    _sweep(scheduler)
+
+    assert SYM in bot._exit_pending_symbols and cleared == [] and state.pending_stage == ExitStage.FIRST
+
+
+def test_stop_loss_reopens_while_the_partial_stage_stays_gated(home, monkeypatch):
+    """'롤백 없는 해제'의 전제: ExitManager 의 손절 판정은 pending_stage 관문보다 앞이고, 같은 분할 익절은 계속 막힌다.
+
+    ExitManager 가 재배열돼 이 순서가 바뀌면 판단 불가 해제 뒤 손절이 조용히 막힌다 — 그때 이 시험이 깨져야 한다.
+    """
+    scheduler, bot, state, cleared = _scheduler(monkeypatch, SellBroker())
+    monkeypatch.setattr(ExitManager, "_count_business_days", lambda self, s, e: 1)
+
+    async def undecidable(symbol):
+        return None
+    bot.exit_manager.set_pending_verifier(undecidable)   # 운영과 같은 배선(하드 만료 30분)
+    state.pending_since = datetime.now()                 # ExitManager 는 실제 시계를 쓴다
+    assert state.pending_stage == ExitStage.FIRST
+
+    assert bot.exit_manager.update_price(SYM, PRICE * Decimal("1.12")) is None       # 1차 익절 조건이지만 보류
+    action, qty, reason = bot.exit_manager.update_price(SYM, PRICE * Decimal("0.90"))
+
+    assert (action, qty) == ("sell_all", 100) and "손절" in reason
+    assert state.pending_stage == ExitStage.FIRST
+
+
+@pytest.mark.parametrize("action, marked", [("sell_partial", True), ("sell_all", False)])
+def test_scheduler_marks_partial_exits_when_it_registers_them(home, monkeypatch, action, marked):
+    """분할 표식은 발행 시점의 exit_action 으로 남고 등록 시각에 묶인다."""
+    scheduler, bot, state, cleared = _scheduler(monkeypatch, SellBroker(), partial=False)
+    bot._exit_pending_symbols.clear()
+    bot._exit_pending_timestamps.clear()
+    scheduler._partial_exit_pending = {SYM: NOW - timedelta(hours=1)}
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    async def no_expire(symbol):
+        return None
+
+    position = Position(symbol=SYM, quantity=100, avg_price=PRICE, current_price=PRICE, strategy="sepa_trend")
+    bot.engine.portfolio = SimpleNamespace(positions={SYM: position})
+    bot.engine.emit = emit
+    bot.engine.risk_manager._pending_sides, bot.engine.risk_manager._pending_fallback_count = {}, {}
+    bot.engine.risk_manager._pending_orders = set()
+    bot._pause_resume_at, bot._sell_blocked_symbols, bot._exit_reasons = None, {}, {}
+    bot._strategy_exit_params = {}
+    bot.exit_manager = SimpleNamespace(
+        is_exit_exempt=lambda sym: False, maybe_expire_pending=no_expire,
+        update_price=lambda sym, price, market_data=None: (action, 10 if marked else 100, "시험 청산"))
+
+    asyncio.run(scheduler._check_exit_signal(SYM, PRICE))
+
+    assert len(events) == 1 and SYM in bot._exit_pending_symbols
+    expected = {SYM: bot._exit_pending_timestamps[SYM]} if marked else {}
+    assert scheduler._partial_exit_pending == expected
 
 
 def test_scheduler_cancel_count_from_another_order_does_not_bypass_the_gate(home, monkeypatch):

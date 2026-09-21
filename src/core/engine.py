@@ -2146,6 +2146,18 @@ class RiskManager:
 
             self._last_signal_time[order.symbol] = datetime.now()
 
+            # SELL: 이 pending 이 분할 매도인지 **등록 시점의 의도**로 남긴다 (2026-09-21) — 취소 실패 관문은
+            # 분할 매도에만 적용한다. 나중의 수량 비교로 추정하면 늦은 잔고 스냅샷 하나가 전량 손절을 분할로
+            # 오분류해 손절에 대기를 건다. 수명은 이 캐시와 같다(clear_pending·on_fill 완결·새 등록에서 지움).
+            if order.side == OrderSide.SELL:
+                _reg_pos = self.engine.portfolio.positions.get(order.symbol)
+                _reg_meta = event.metadata if event.metadata is not None else {}
+                if (_reg_meta.get("exit_action") != "sell_all" and _reg_pos is not None
+                        and 0 < order.quantity < _reg_pos.quantity):
+                    self._pending_signal_cache[order.symbol] = {"sell_partial_intent": True}
+                else:
+                    self._pending_signal_cache.pop(order.symbol, None)
+
             # BUY 시그널 메타데이터 캐시 (fill 시 entry_tags 구성용)
             if order.side == OrderSide.BUY:
                 _sig = event.signal
@@ -2219,8 +2231,8 @@ class RiskManager:
             logger.info(f"[리스크] 동시호가 시간대 시장가 불가: {s} → 지정가 유지")
             return
         _keep = self._pending_cancel_keep.get(s)
-        if _keep is not None and (now - _keep[1]).total_seconds() < self._SELL_CANCEL_RETRY_SECONDS:
-            return  # 취소 0건 유지 중 — SIGNAL 마다 취소·조회 API 를 때리지 않는다
+        if _keep is not None and (now - _keep[1]).total_seconds() < self._sell_retry_interval(_keep):
+            return  # 취소 실패 유지 중 — SIGNAL·하트비트마다 취소·조회 API 를 때리지 않는다
         logger.warning(f"[리스크] 매도 미체결 폴백: {s} ({elapsed:.0f}초 초과, 폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회) → 시장가 전환")
         cancelled = None
         if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
@@ -2240,9 +2252,9 @@ class RiskManager:
         # (방금 체결/거래소 생존)" 위에 시장가를 얹으면 분할 매도가 두 번 나간다(합계가 보유 수량 안이라
         # KIS 가 거절하지 않는다). **분할 매도에만** 적용한다: 전량 매도(손절·트레일링)는 원 주문이 살아 있으면
         # KIS 가 주문가능수량 0 으로 거절하므로 과매도가 불가능하다 — 종전 경로 그대로 두어 손절 지연을 만들지 않는다.
-        _pend_qty = self._pending_quantities.get(s)
-        if (cancelled is not None and pos is not None and _pend_qty is not None
-                and 0 < _pend_qty < pos.quantity):
+        # 분할 여부는 등록 시점에 남긴 의도로 읽는다(현재 수량 비교는 잔고 스냅샷 지연에 흔들린다).
+        _partial_intent = self._pending_signal_cache.get(s, {}).get("sell_partial_intent") is True
+        if cancelled is not None and _partial_intent and pos is not None and pos.quantity > 0:
             if await self._keep_stale_sell_after_failed_cancel(s, now, cancelled):
                 return
             if not self._is_same_sell_pending(s, ts):
@@ -2339,6 +2351,11 @@ class RiskManager:
         return True
 
     _SELL_CANCEL_RETRY_SECONDS = 20  # 취소 실패 뒤 재시도 간격 — 체결 확인(미체결 있을 때 2초 주기) 여러 회분, 지연은 짧게
+    _SELL_ALIVE_RETRY_SECONDS = 60   # 거래소 생존이 확인된 뒤의 간격 — 복구는 사람 손(MTS 취소)이라 20초가 사는 게 없고,
+                                     # 상한 없는 유지에서 취소 POST·원장 조회가 하루 천 건 넘게 나가는 것을 줄인다
+
+    def _sell_retry_interval(self, keep: Tuple[int, datetime, bool]) -> int:
+        return self._SELL_ALIVE_RETRY_SECONDS if keep[2] else self._SELL_CANCEL_RETRY_SECONDS
     _MAX_SELL_KEEP = 9               # 연속 '판단 불가' 상한: 90초 + 20초×9 = 270초 = 종전 최장 보유(90초×3회)
 
     def _is_same_sell_pending(self, symbol: str, registered_at: datetime) -> bool:
@@ -2402,16 +2419,20 @@ class RiskManager:
 
         stale 루프는 on_signal 안에만 있어 SIGNAL 이 끊기면 멈춘다. 유지는 '다음 주기에 다시 본다'는 약속이라
         그 약속만은 엔진 하트비트(10초)로 구동한다 — SIGNAL·FILL 과 같은 직렬 큐로 오므로 루프와 겹치지 않는다.
-        유지분이 없으면 아무것도 하지 않는다(90초 폴백·10분 BUY 정리의 SIGNAL 의존은 종전 그대로).
+        유지분이 없으면 아무것도 하지 않는다(90초 폴백·10분 BUY 정리의 SIGNAL 의존은 종전 그대로). 하트비트는
+        우선순위 10 이라 큐가 포화되면 밀린다 — 10초는 발행 주기이지 처리 보장 시한이 아니다(그때는 SIGNAL 이 흐른다).
         """
         if not self._pending_cancel_keep:
             return None
         now = datetime.now()
         if not 900 <= now.hour * 100 + now.minute < 1530:
             return None
-        for s in list(self._pending_cancel_keep):
-            if self._pending_sides.get(s) == OrderSide.SELL and s in self._pending_timestamps:
-                await self._fallback_stale_sell(s, now)
+        # 재시도 간격이 지난 유지분 중 가장 오래 기다린 하나만 — 브로커 I/O 를 한 핸들러에 몰아 넣으면 뒤의 FILL 이 밀린다
+        due = [(keep[1], s) for s, keep in self._pending_cancel_keep.items()
+               if self._pending_sides.get(s) == OrderSide.SELL and s in self._pending_timestamps
+               and (now - keep[1]).total_seconds() >= self._sell_retry_interval(keep)]
+        if due:
+            await self._fallback_stale_sell(min(due)[1], now)
         return None
 
     async def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):
