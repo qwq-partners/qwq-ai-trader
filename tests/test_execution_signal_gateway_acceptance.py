@@ -1297,29 +1297,39 @@ async def seed_portfolio(f, rows, *, cash=None, daily_trades=None, tag='many'):
 
 # ─────────────────── D·G — eviction 과 실제 게이트 (wave 2) ───────────────────
 
-# D 의 만석 표본: 비코어 손실 보유 5건(제품 기본 `RiskConfig.max_positions == 5`).
-#   · 진입 점수 두 건이 같은 70 이고 손익이 다르다 → 정렬 키 **두 축**(점수 → 손익)이 각각
-#     하중된다. 최약 후보는 051910(점수 70·손익 -20%)이다.
+# D 의 만석 표본: 비코어 보유 5건(제품 기본 `RiskConfig.max_positions == 5`) + 코어 1건.
+#   · 손실 비코어 두 건의 진입 점수가 같은 70 이고 손익이 다르다 → 정렬 키 **두 축**
+#     (점수 → 손익)이 각각 하중된다. 최약 후보는 051910(점수 70·손익 -20%)이다.
+#   · 006400 은 **비코어 최저 점수(60) + 수익(+10%)** 이다. '승자 킬 금지' 가드를 지우면
+#     점수 60 이 정렬 1순위를 이겨 이 행이 나간다 — 그 가드에 하중을 거는 유일한 행이다.
+#   · 017670 은 **코어(점수 0·손익 -50%)** 다. '코어 제외' 가드를 지우면 점수 0·최대 손실로
+#     이 행이 나간다. 비코어 5건은 그대로 둬 만석(가중 5.0/5) 조건을 깨지 않는다.
 #   · 진입 시각이 3일 전인 이유: sidecar 의 '일일 신규 매수 한도'(당일 진입 ≥5)가 우리가
 #     보려는 '최대 포지션 수 도달'보다 먼저 막는다. 전일부터 보유한 포지션이 정상 표본이다.
 #   · 전략이 gap_and_go 인 이유: 신호(sepa_trend)의 전략 예산 게이트에 걸리지 않게 한다.
-# 자산: 현금 1,000,000 + 시가 850,000 = 1,850,000. 신호 사이징은 323,750(=풀 25%)이고
-# 최소 포지션 금액 200,000 을 넘는다 — 사이징 0 으로 조기 종료되지 않는다.
+# 자산: 현금 1,010,000 + 시가 990,000 = 2,000,000. 코어 예약 = 2,000,000×30% − 코어 시가
+# 100,000 = 500,000 이므로 신호 사이징은 (2,000,000−500,000)×25% = 375,000 이고 최소 포지션
+# 금액 200,000 을 넘는다 — 사이징 0 으로 조기 종료되지 않는다.
 FULL_HOUSE = (
     {'symbol': '035420', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('9500'),
      'strategy': 'gap_and_go', 'entry_score': 70.0, 'entry_days_ago': 3},
     {'symbol': '051910', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('8000'),
      'strategy': 'gap_and_go', 'entry_score': 70.0, 'entry_days_ago': 3},
-    {'symbol': '006400', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('9000'),
-     'strategy': 'gap_and_go', 'entry_score': 74.0, 'entry_days_ago': 3},
+    {'symbol': '006400', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('11000'),
+     'strategy': 'gap_and_go', 'entry_score': 60.0, 'entry_days_ago': 3},
     {'symbol': '105560', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('8500'),
      'strategy': 'gap_and_go', 'entry_score': 76.0, 'entry_days_ago': 3},
     {'symbol': '055550', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('7500'),
      'strategy': 'gap_and_go', 'entry_score': 78.0, 'entry_days_ago': 3},
+    {'symbol': '017670', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('5000'),
+     'strategy': 'core_holding', 'entry_score': 0.0, 'entry_days_ago': 3},
 )
-FULL_HOUSE_CASH = D('1000000')
+FULL_HOUSE_CASH = D('1010000')
+FULL_HOUSE_EQUITY = D('2000000')
 WEAKEST = '051910'          # 점수 70 중 손실이 더 큰 쪽
 SECOND_WEAKEST = '035420'   # 점수 70·손실 -5%
+CORE_DECOY = '017670'       # 코어 가드가 없으면 뽑힐 행(점수 0·손실 -50%)
+WINNER_DECOY = '006400'     # 승자 킬 금지 가드가 없으면 뽑힐 행(점수 60·수익 +10%)
 NEW_SYMBOL = '012330'       # 만석을 밀고 들어오는 신규 후보(보유에 없다)
 # 축출을 부르는 조건: sidecar 가 '최대 포지션 수 도달'을 내고 점수가 `_REPLACEMENT_MIN_SCORE`
 # (85) 이상. 88 은 sepa_trend 90+ 추격매수 감점(>=90)과 G4 LLM 구간을 모두 피한다.
@@ -1349,9 +1359,10 @@ def test_d1_eviction_sells_the_weakest_candidate_through_the_gateway(tmp_path, m
         try:
             engine, runtime, rm = f['engine'], f['runtime'], f['rm']
             new_buy = await full_house(f)
-            assert engine.portfolio.total_equity == D('1850000')
+            assert engine.portfolio.total_equity == FULL_HOUSE_EQUITY
             await f['drive'](new_buy())
-            # 1) 전선 값: 최약 후보의 지정가 매도 한 건뿐이다.
+            # 1) 전선 값: 최약 후보의 지정가 매도 한 건뿐이다. 코어(점수 0·-50%)도 승자
+            #    (점수 60·+10%)도 나가지 않는다 — 둘 다 최약 후보보다 앞서는 정렬 값이다.
             assert sell_posts(f) == [(WEAKEST, '20', '8000')]
             assert len(f['posts']()) == 1
             sent = f['posts']()[0][1]
@@ -1361,6 +1372,15 @@ def test_d1_eviction_sells_the_weakest_candidate_through_the_gateway(tmp_path, m
             assert f['siglog'].gates() == [('blocked', 'G3_risk')]
             assert '최대 포지션 수 도달' in f['siglog'].rows[0]['block_reason']
             assert NEW_SYMBOL not in engine.portfolio.positions
+            # 두 미끼 행의 정렬 값이 실제로 희생자보다 앞선다(가드가 없으면 뽑힌다).
+            core, winner = (engine.portfolio.positions[CORE_DECOY],
+                            engine.portfolio.positions[WINNER_DECOY])
+            victim = engine.portfolio.positions[WEAKEST]
+            assert core.strategy == 'core_holding'
+            assert core.entry_signal_score < victim.entry_signal_score
+            assert float(core.unrealized_pnl_pct) < float(victim.unrealized_pnl_pct) < 0
+            assert winner.entry_signal_score < victim.entry_signal_score
+            assert float(winner.unrealized_pnl_pct) > 0
             # 3) owner 에는 그 SELL 한 행만 있다.
             rows = [row for row in runtime.owner.state['attempts'].values()
                     if row['kind'] == 'submit']
@@ -1432,8 +1452,9 @@ def test_d2_global_replacement_cooldown_blocks_the_second_eviction(tmp_path, mon
 def test_d2_replacement_requires_five_point_edge(tmp_path, monkeypatch):
     """H10 ② — +5 우위 경계. 88 은 84 를 밀어내지 못하고 83 은 밀어낸다.
 
-    다섯 후보의 진입 점수를 한 값으로 맞춘다 — 경계를 보려면 최약 후보의 점수가 그 값이어야
-    하고, 그러면 정렬 2순위(손실 큰 순)가 후보를 고른다(손실 -25% 의 055550).
+    여섯 보유의 진입 점수를 한 값으로 맞춘다 — 경계를 보려면 최약 후보의 점수가 그 값이어야
+    하고, 그러면 정렬 2순위(손실 큰 순)가 후보를 고른다(손실 -25% 의 055550). 점수를 맞추면
+    코어 미끼(-50%)가 손실 1위가 되므로 이 표본은 코어 제외 가드에도 하중을 건다.
     """
     async def scenario():
         f = await fixture(tmp_path, monkeypatch)
@@ -1598,11 +1619,17 @@ def test_d4_owner_read_failure_is_fail_closed_at_every_consumer(tmp_path, monkey
 #     같은 자산에서 두 층의 가용 현금이 갈린다(사실 7 — 출처 일원화는 10A3).
 # 두 표본 모두 코어 보유로 `_get_core_reserve()` 를 0 으로 만들어(코어 예산 초과) 앞의
 # 현금 게이트·사이징이 0 으로 끝나지 않게 한다. 현금은 owner 에 그대로 심는다.
+#
+# 사유는 **전문**으로 적는다. '현금 부족' 은 sidecar(검사 6)와 engine `can_open_position`
+# 이 같은 접두사를 쓰므로 접두사만 보면 막은 층을 구분하지 못한다(독립 재현 P2). 괄호 안
+# 가용 현금이 두 층을 가른다 — sidecar 는 자기 설정 15%(1,600,000 − 10,000,000×15%
+# = 100,000), engine 은 레짐 표 5%(= 1,100,000)를 뺀다. 요구액은 사이징 수량 × 10,000 ×
+# 1.001 이고, 그 수량은 아래 시험이 sidecar 에 실제로 넘어간 값으로 함께 단언한다.
 G1_CASES = {
-    'min_cash': {'core_quantity': 900, 'cash': D('1000000'),
-                 'reason': '최소 현금 보유 미달', 'quantity': 25},
-    'short_cash': {'core_quantity': 840, 'cash': D('1600000'),
-                   'reason': '현금 부족', 'quantity': 40},
+    'min_cash': {'core_quantity': 900, 'cash': D('1000000'), 'quantity': 25,
+                 'reason': '최소 현금 보유 미달 (1,000,000 < 1,500,000)'},
+    'short_cash': {'core_quantity': 840, 'cash': D('1600000'), 'quantity': 40,
+                   'reason': '현금 부족 (100,000 < 400,400)'},
 }
 
 
@@ -1613,6 +1640,23 @@ def test_g1_real_can_open_position_rejections_never_reach_the_owner(tmp_path, mo
         f = await fixture(tmp_path, monkeypatch)
         try:
             runtime, params = f['runtime'], G1_CASES[case]
+            # 막은 층을 통과형 spy 로 고정한다 — sidecar 가 거부했고 engine 게이트는
+            # 도달 0 이다(같은 '현금 부족' 접두사를 쓰는 두 층의 구분).
+            sidecar_calls, engine_calls = [], []
+            original_sidecar = f['sidecar'].can_open_position
+            original_engine = f['engine'].can_open_position
+
+            def sidecar_spy(*args, **kwargs):
+                verdict = original_sidecar(*args, **kwargs)
+                sidecar_calls.append((args[2], verdict))
+                return verdict
+
+            def engine_spy(*args, **kwargs):
+                engine_calls.append(args[0])
+                return original_engine(*args, **kwargs)
+
+            f['sidecar'].can_open_position = sidecar_spy
+            f['engine'].can_open_position = engine_spy
             await seed_portfolio(f, ({'symbol': '005930', 'quantity': params['core_quantity'],
                                       'avg_price': D('10000'), 'strategy': 'core_holding',
                                       'entry_days_ago': 3},),
@@ -1627,8 +1671,14 @@ def test_g1_real_can_open_position_rejections_never_reach_the_owner(tmp_path, mo
             gates = f['siglog'].gates()
             assert gates == [('blocked', 'G3_risk')]
             reason = f['siglog'].rows[0]['block_reason']
-            assert reason.startswith(params['reason']), reason
+            assert reason == params['reason'], reason
+            # 거부한 층: sidecar 가 그 사유를 돌려줬고 engine 게이트는 도달 0 이다.
+            assert engine_calls == []
+            assert len(sidecar_calls) == 1
+            quantity, verdict = sidecar_calls[0]
+            assert verdict == (False, params['reason'])
             # 사이징은 양수였다 — 거부는 '포지션 크기 0' 이 아니라 위험 게이트다.
+            assert quantity == params['quantity']
             assert f['rm']._last_sizing_inputs is not None
             assert f['errors']() == []
             assert f['engine']._pending_sector_map == {}
@@ -1747,6 +1797,55 @@ def test_g2_owner_blocks_the_sector_limit_that_the_engine_no_longer_counts(tmp_p
             rows = [row for row in runtime.owner.state['attempts'].values()
                     if row['kind'] == 'submit']
             assert [row['symbol'] for row in rows] == ['012330']
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('pile', [True, False])
+def test_g2_owner_pending_buys_fill_the_strategy_budget_cap(tmp_path, monkeypatch, pile):
+    """같은 짝 — 전략 예산 캡. 캡의 '사용' 은 보유 + **owner 미해결 BUY** 다.
+
+    engine 의 `_pending_strategy` 는 attach 에서 항상 비어 있으므로(결정 ④) 미체결분의
+    정본은 `gateway.pending_strategy_notional` 뿐이다. 캡을 한 포지션 크기(풀 25% =
+    350,000)와 같게 두면 미해결 BUY 한 건이 매수수수료만큼 캡을 넘긴다 — 사이징이 잔여
+    예산으로 클램프되므로 '보유 + 미해결' 이 캡을 넘는 자리는 언제나 이 수수료분이다.
+    양성 대조(pile=False)에서는 같은 BUY 가 실제로 전선까지 나간다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            engine, runtime, rm, gateway = f['engine'], f['runtime'], f['rm'], f['gateway']
+            # D4 의 현금 게이트 표본과 같은 제품 knob(전략 총예산 %)만 바꾼다.
+            rm.config.strategy_allocation['sepa_trend'] = 17.5
+            cap = engine.portfolio.total_equity * D('0.175')
+            assert cap == EXPECTED_BUY_NOTIONAL == D('350000')
+            if pile:
+                await f['drive'](buy_signal('005930'))
+                assert len(f['posts']()) == 1
+                assert engine.portfolio.get_strategy_allocation('sepa_trend') == D('0')
+                advance(31)
+            await f['drive'](buy_signal('000660'))
+            assert rm._pending_strategy == {} and rm._pending_orders == set()
+            rows = [row for row in runtime.owner.state['attempts'].values()
+                    if row['kind'] == 'submit']
+            if pile:
+                # 전략 예산 게이트는 owner 에 닿기 전이다 — POST 도 owner 행도 늘지 않는다.
+                assert len(f['posts']()) == 1
+                assert f['siglog'].gates() == [('passed', None), ('blocked', 'G5_budget')]
+                assert f['siglog'].rows[1]['block_reason'].startswith('sepa_trend 전략 예산 소진')
+                assert f['prepared'] == [f['prepared'][0]]
+                assert [row['symbol'] for row in rows] == ['005930']
+                # 그 '사용' 의 정본: 보유 0 + 미해결 BUY 한 건, 전략별 필터가 걸린 값이다.
+                assert gateway.pending_strategy_notional('sepa_trend') >= cap
+                assert gateway.pending_strategy_notional('gap_and_go') == D('0')
+            else:
+                assert len(f['posts']()) == 1
+                assert f['posts']()[0][1]['json']['PDNO'] == '000660'
+                assert f['siglog'].gates() == [('passed', None)]
+                assert [row['symbol'] for row in rows] == ['000660']
+            assert f['errors']() == []
             await assert_no_direct_broker_calls(f)
         finally:
             await f['teardown']()
