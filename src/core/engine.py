@@ -1279,6 +1279,8 @@ class RiskManager:
         self._exit_exempt_ref: set = set()
         # 면제 종목 SELL 차단 경고의 마지막 기록 시각 (로그 스로틀 전용 — 키는 면제 종목뿐이라 유한)
         self._exempt_block_logged: Dict[str, datetime] = {}
+        # 면제 종목에 남은 미체결 SELL 의 마지막 취소 시도 시각 (60초 스로틀)
+        self._exempt_cancel_last_try: Dict[str, datetime] = {}
         # (2026-08-05 P2 제거) RiskManager._pending_sector_map은 쓰기 지점이 전무한
         # 죽은 dict였음 — 섹터 캐시는 UnifiedEngine._pending_sector_map 단일 소유로 정리.
 
@@ -1748,6 +1750,12 @@ class RiskManager:
             # 면제 등록(런타임 add_exit_exempt) 전에 나간 SELL — 남은 지정가만 취소하고
             # 시장가로 재주문하지 않는다 (이 루프는 on_signal 가드를 거치지 않는 직접 제출 경로)
             if self._is_exit_exempt(s):
+                # 취소 재시도는 60초 간격 (on_signal 은 신호마다 돈다). pending 시각은 건드리지 않는다 —
+                # 경과가 그대로 흘러야 헬스 모니터의 300초 교착 경보가 이 상태를 드러낸다
+                _last_try = self._exempt_cancel_last_try.get(s)
+                if _last_try is not None and (now - _last_try).total_seconds() < 60:
+                    continue
+                self._exempt_cancel_last_try[s] = now
                 _alive = False
                 _broker = self.engine.broker
                 if _broker and hasattr(_broker, 'cancel_all_for_symbol'):
@@ -1763,11 +1771,9 @@ class RiskManager:
                 if _alive:
                     # pending 을 풀면 취소 재시도 대상에서 빠진 채 지정가가 체결될 수 있다 → 유지, 60초 뒤 재시도
                     logger.error(f"[리스크] 자동매도 금지 종목 SELL 취소 실패: {s} — 거래소 주문 생존 가능, 60초 뒤 재시도 (재주문 없음)")
-                    async with self._pending_lock:
-                        if s in self._pending_timestamps:
-                            self._pending_timestamps[s] = now - timedelta(seconds=_SELL_TIMEOUT - 60)
                     continue
                 logger.warning(f"[리스크] 자동매도 금지 종목 미체결 SELL 취소: {s} → pending 해제 (재주문 없음)")
+                self._exempt_cancel_last_try.pop(s, None)
                 await self.clear_pending(s)
                 continue
             elapsed = (now - ts).total_seconds()

@@ -53,6 +53,7 @@ def _sell_rm(monkeypatch, positions, exempt):
     rm.engine.portfolio.positions = positions
     rm._pending_exit_reasons = {}
     rm._exempt_block_logged = {}
+    rm._exempt_cancel_last_try = {}
     rm._exit_exempt_ref = exempt
 
     async def _sell_price(_symbol, fallback):
@@ -156,26 +157,33 @@ def test_stale_sell_fallback_never_resubmits_exempt_symbol(home, monkeypatch):
 
 def test_stale_exempt_sell_keeps_pending_when_cancel_fails(home, monkeypatch):
     """취소 0건은 주문 소멸의 증거가 아니다 — 브로커 추적에 남아 있으면 pending 을 풀지 않고
-    (풀면 취소 재시도 대상에서 빠진 채 지정가가 체결될 수 있다) 60초 뒤 다시 취소한다."""
+    (풀면 취소 재시도 대상에서 빠진 채 지정가가 체결될 수 있다) 60초 간격으로 다시 취소한다.
+    pending 시각은 되감지 않는다 — 경과가 흘러야 헬스 모니터의 300초 교착 경보가 뜬다."""
     from datetime import timedelta
-    from test_t11_entry_plan import NOW
+    import src.core.engine as eng
+    from test_t11_entry_plan import NOW, _freeze_clock
     rm = _sell_rm(monkeypatch, {EXEMPT: _pos(EXEMPT, "sepa_trend"),
                                 OTHER: _pos(OTHER, "sepa_trend")}, {EXEMPT})
     _stale_sell(rm, EXEMPT)
+    issued_at = rm._pending_timestamps[EXEMPT]
     rm.cancel_ok = False
 
     asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
-
-    assert rm.submitted == []
+    assert rm.cancelled == [EXEMPT] and rm.submitted == []
     assert EXEMPT in rm._pending_orders, "취소 실패 — 거래소 주문이 살아 있을 수 있으므로 추적 유지"
-    assert rm._pending_timestamps[EXEMPT] == NOW - timedelta(seconds=30), "60초 뒤(90초 기준) 재시도"
+    assert rm._pending_timestamps[EXEMPT] == issued_at, "경과 시간을 숨기지 않는다"
 
-    # 다음 주기에 취소가 되면 그때 해제한다
+    # 60초 안의 다음 신호는 취소 API 를 다시 때리지 않는다
+    _freeze_clock(monkeypatch, eng, NOW + timedelta(seconds=59))
+    asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
+    assert rm.cancelled == [EXEMPT]
+
+    # 60초가 지나면 재취소 — 이번엔 성공하므로 그때 해제한다 (재주문은 끝까지 없다)
     rm.cancel_ok = True
-    rm._pending_timestamps[EXEMPT] = NOW - timedelta(seconds=120)
+    _freeze_clock(monkeypatch, eng, NOW + timedelta(seconds=61))
     asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
     assert rm.cancelled == [EXEMPT, EXEMPT] and rm.submitted == []
-    assert EXEMPT not in rm._pending_orders
+    assert EXEMPT not in rm._pending_orders and EXEMPT not in rm._exempt_cancel_last_try
 
 
 def test_stale_fallback_aborts_when_exemption_lands_during_cancel(home, monkeypatch):
@@ -244,6 +252,61 @@ def test_scheduler_exit_check_leaves_no_pending_for_exempt(home):
 
     assert emitted == [] and sched.bot._exit_pending_symbols == set()
     assert sched.bot._exit_pending_timestamps == {} and sched.bot._exit_reasons == {}
+
+
+def test_scheduler_cleanup_keeps_exempt_pending_while_sell_may_be_live(home, monkeypatch):
+    """엔진이 취소 실패로 유지한 pending 을 스케줄러 3분 정리가 다시 풀면 안 된다 —
+    취소 0건 뒤에도 브로커 추적에 SELL 이 남아 있으면 양쪽 pending 을 보존하고 60초 뒤 재취소한다."""
+    from datetime import timedelta
+    import src.schedulers.kr_scheduler as ks
+    from test_t11_entry_plan import NOW, _freeze_clock
+    _freeze_clock(monkeypatch, ks)
+    em = ExitManager(ExitConfig())
+    em.add_exit_exempt(EXEMPT, reason="test")
+    rolled, cleared, cancelled = [], [], []
+    monkeypatch.setattr(em, "rollback_stage", lambda sym: rolled.append(sym))
+    open_orders = [SimpleNamespace(symbol=EXEMPT, is_active=True),
+                   SimpleNamespace(symbol=OTHER, is_active=True)]
+    state = {"cancel_ok": False}
+
+    async def _cancel(symbol):
+        cancelled.append(symbol)
+        if not state["cancel_ok"]:
+            return 0
+        open_orders[:] = [o for o in open_orders if o.symbol != symbol]
+        return 1
+
+    async def _open():
+        return list(open_orders)
+
+    async def _clear(symbol):
+        cleared.append(symbol)
+    issued = NOW - timedelta(minutes=10)   # 장전 5분·정규장 3분 기준 모두 초과
+    sched = object.__new__(ks.KRScheduler)
+    sched.bot = SimpleNamespace(
+        exit_manager=em,
+        broker=SimpleNamespace(cancel_all_for_symbol=_cancel, get_open_orders=_open),
+        engine=SimpleNamespace(risk_manager=SimpleNamespace(clear_pending=_clear,
+                                                            _pending_orders={EXEMPT, OTHER})),
+        _exit_pending_symbols={EXEMPT, OTHER},
+        _exit_pending_timestamps={EXEMPT: issued, OTHER: issued},
+    )
+
+    asyncio.run(sched._cleanup_stale_pending())
+    # 비면제는 종전대로 해제(기존 동작 불변), 면제는 양쪽 pending 보존·stage 롤백 없음
+    assert cleared == [OTHER] and rolled == [OTHER]
+    assert sched.bot._exit_pending_symbols == {EXEMPT}
+    assert sched.bot._exit_pending_timestamps == {EXEMPT: issued}
+
+    # 60초 안에는 취소 API 를 다시 때리지 않고, 지나면 재취소 → 성공 시 그때 해제
+    _freeze_clock(monkeypatch, ks, NOW + timedelta(seconds=59))
+    asyncio.run(sched._cleanup_stale_pending())
+    assert cancelled.count(EXEMPT) == 1
+    state["cancel_ok"] = True
+    _freeze_clock(monkeypatch, ks, NOW + timedelta(seconds=61))
+    asyncio.run(sched._cleanup_stale_pending())
+    assert cancelled.count(EXEMPT) == 2 and cleared == [OTHER, EXEMPT]
+    assert sched.bot._exit_pending_symbols == set()
 
 
 # ── 2) 전략 자체 청산: gap_and_go 는 남의(manual) 포지션에도 SELL 을 낸다 → 엔진이 막는다 ──
