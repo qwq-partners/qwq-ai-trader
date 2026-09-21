@@ -686,6 +686,7 @@ def _rm_harness(monkeypatch):
     rm._pending_timestamps = {}
     rm._pending_sides = {}
     rm._pending_fallback_count = {}
+    rm._pending_cancel_keep = {}
     rm._pending_strategy = {}
     rm._pending_signal_cache = {}
     rm._reserved_by_order = {}

@@ -92,6 +92,7 @@ def _rm(monkeypatch, broker, now, *, positions=None):
     rm._pending_orders, rm._pending_quantities = set(), {}
     rm._pending_timestamps, rm._pending_sides = {}, {}
     rm._pending_fallback_count, rm._reserved_by_order = {}, {}
+    rm._pending_cancel_keep = {}
     rm._pending_strategy, rm._pending_signal_cache = {}, {}
     rm._pending_lock = asyncio.Lock()
     rm.engine = SimpleNamespace(
