@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — ops: main `2a143c6` 운영 반영 (PR #80 병합·배포·재시작)
+
+- **지시·범위:** 사용자 지시로 진행 중인 PR #81 을 제외하고 main 을 운영에 반영했다. 운영 checkout `93c2fbd` → `2a143c6`. 제품 경로 변경은 PR #80 의 `src/execution/broker/kis_kr.py`·`src/utils/kis_rate_limit.py` 뿐이고(그 사이의 #79 는 시험 전용), 기본 `legacy` 에서 요청 본문·헤더·파싱이 전환 전과 같다.
+- **병합 전 확인:** #80 head `fa2db75` 의 필수 verify SUCCESS, 교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh) P0 0·P1 0·P2 1 처분 완료, 제품 diff 직접 검토(TR 리터럴 5곳 → `_tr_id`, 시그니처가 바뀐 `_get_tr_id_for_session` 호출처 1곳 동반 갱신, `new` 전용 분기는 전부 `_TR_NEW` 가드 안).
+- **배포 전 점검(20:37~20:42 KST, 장 마감 후):** pending `[]`, 브로커 연결, 20:30 진화 잡 종료(거래 0건 스킵), 운영 트리 청결, 설정3파일·킬스위치4경로 지문 기록. 다른 세션의 전체 pytest 가 끝난 뒤 실행(2 vCPU 부하 플레이크로 인한 불필요한 롤백 방지).
+- **배포:** `scripts/deploy/local_deploy.sh 2a143c6…` 20:42:30 시작 → verify 통과 → 재시작 → 헬스 통과, 20:44:23 `[완료]`(자동 롤백 없음). 이전 PID3534327(09-19 06:14 기동) → **PID1193531, 20:44:08 기동.** 이후 운영 checkout 을 `main` 브랜치로 복귀(트리 동일, 재시작 없음).
+- **사후 점검:** 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`통합 트레이딩 엔진 시작`. ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음). 199초 시점 `ops_check`: 원장 EGW00215 0·토큰 오류 0, 기동 직후 시세 TR(FHKST01010100) EGW00201 2건은 재시도 성공·반복 없음, 루프 정체·실패 누적 없음, pending `[]`. 지문 7경로 전후 동일. Toss 관측 서비스 PID3335469 무변경.
+- **하지 않은 것:** `.env`(`KIS_TR_SET`)·설정·킬스위치·주문·Toss grant/토큰 변경 0. 신 TR 전환은 runbook 의 실계좌 확인 항목이 닫힌 뒤 별도 지시로만 한다. PR #81 은 교차 리뷰(Codex, 병합 불가 → 처분 반영 → 재리뷰 중) 단계라 병합·배포하지 않았다.
+
 ## 2026-09-21 — fix(engine): on_signal stale 루프 결함 2건 수정 + 3건 점검 기록 (미배포)
 
 engine 브랜치의 특성화 시험이 드러낸 main `RiskManager.on_signal` 진입부(90초 SELL 폴백·10분 BUY 정리) 결함 5건을 위험도부터 판단했다. **배포·재시작·주문·설정 변경 0** — 현금 고갈로 봇 매매가 없는 상태라 두 경로 모두 현재는 실행되지 않으며, 매수 재개 시점부터 의미가 있다.
