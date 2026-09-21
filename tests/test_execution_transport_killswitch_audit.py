@@ -181,7 +181,8 @@ def test_no_application_await_between_guard_and_post():
     assert not asyncio.iscoroutinefunction(audit_log.record_blocked)
     body = inspect.getsource(transport_mod.GuardedKISTransport.send_prepared)
     between = body.split('decision = guard(prepared)', 1)[1].split('broker._session.post(', 1)[0]
-    assert 'await' not in between
+    code = [line.split('#', 1)[0] for line in between.splitlines()]
+    assert not any('await' in line for line in code)
 
 
 def test_unconfirmed_response_is_recorded_as_a_rejection_marked_unconfirmed(ledger):
