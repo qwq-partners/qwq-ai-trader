@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — fix(safety): KIS 공식 저장소 기준 정합 — 증거 파서·수집기를 신 TR 모양으로 (**호출자 0건·운영 미설치**)
+
+> 사용자 지시("Kis api는 https://github.com/koreainvestment/open-trading-api 여길 참고")에 따라 기준 자료를 공식 저장소 사본(`open-trading-api@b4e6249`, 2026-08-26)으로 고정했다. **저장소가 고정해 주는 것은 요청·응답의 모양뿐이고 취소 최종성·누적 범위·cutoff 는 저장소도 말하지 않는다 — 설치 차단 사유 1·2·12 는 그대로다.** 문항별 상태표는 `docs/integrations/kis-repo-grounding-2026-09-21.md`, 구현 상태는 `docs/integrations/kis-tr-migration-spec-2026-09-21.md` §8.
+
+- **`safety/evidence.py::_parse_row`:** 취소확인수량을 `cnc_cfrm_qty`(저장소 표기)와 `cncl_cfrm_qty`(포털 표기) **둘 다** 받는다. 함께 오고 값이 다르면 malformed. 철자를 확정한 것이 아니라 실응답 1건이 오기 전까지 어느 쪽에도 fail-closed 로 떨어지지 않게 한 것이다. **정규화 뒤의 종결 조건식(supported)은 그대로이고 허용하는 원시 스키마가 넓어졌다** — 포털 철자만 있는 전량체결 행은 이전에 `malformed_row` 였고 이제 `supported_finality=True` 가 될 수 있다(Codex 8차 P2 — "입력 집합 불변"이라고 말하면 틀린다). 소비자가 없는 부품이라 운영 영향은 0 이다.
+- **`safety/queries.py`:** daily 수집 `TTTC8001R → TTTC0081R` + `EXCG_ID_DVSN_CD="KRX"`, cancelable 수집 `TTTC8036R → TTTC0084R`. `QueryScope.exchange_scope` 를 명시 인자로(기본 `"KRX"`). 증거 파서가 요구하던 TR 과 수집기가 보내던 TR 의 불일치(10A3b-1 에서 발견)가 닫혔다.
+- **`utils/kis_rate_limit.py`(live 파일):** `LEDGER_TR_IDS` 에 `TTTC0081R`·`TTTC0084R` 추가 — 원장 TR 계좌당 초당 1건 직렬화 대상. 기존 TR 의 동작은 같다.
+- **바꾸지 않은 것:** `safety/requests.py` 의 주문·취소 POST 모양(구 TR). main 의 TR 매핑이 들어온 뒤 같은 출처를 읽게 한다 — 독립 인수 37건의 전선 본문 기대값이 함께 바뀌므로 그때 결정으로 기록한다.
+- **남긴 경고:** chain 판정은 조회한 거래소 범위에 의존한다. KRX 만 조회하면 NXT/SOR 의 자식행이 보이지 않아 최종성 인정이 **더 쉬워진다**(범위를 좁히는 것이 여기서는 fail-open 방향). engine 의 주문이 구 TR 이라 KRX 로만 나간다는 것이 현재의 방어이며 계약이 아니라 추론이다.
+- **검증:** 구현(요청 opus/high) → 독립 재현(요청 opus/xhigh) **CHANGES_REQUIRED**(P1: supported 식의 `cancel == "N"` 을 어떤 시험도 하중하지 않음) → 보강 후 변이 3종 kill·대조 변이 1종 생존을 실측(보존식 때문에 `remaining/cancelled/rejected == 0` 은 단독 하중 표본을 만들 수 없다 — 그 전제인 보존식을 대신 고정). 신규 `tests/test_kis_repo_alignment.py`. **Codex 8차(요청 gpt-6-astra/xhigh): P0/P1 0 · P2 2 → 처분**(main 의 new 모드 음수 수량 → `None` · engine 의 "입력 집합 불변" 주장 정정). 전체 suite 단독 직렬 **UTC 4971 / KST 4971 passed**(각 기존 xfail 2·격리 위반 0).
+- **운영(main) 쪽은 별도 브랜치 `fix/kis-tr-id-migration-switch`(무동작 PR):** `KIS_TR_SET` 기본 `legacy` 에서 요청이 바이트 단위로 같다. 신 TR 은 정규장 주문 접수에만, 전환 전 미해결(취소·정정이 접수 세션을 모른다)은 이행 명세 §8-1.
+- main 병합·배포·재시작·주문·설정·Toss grant 무변경, `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-21 — feat(safety): 10A3b-1 — 거부형 설치기 + KIS 증거 좁히기 (**호출자 0건·운영 미설치**)
 
 > **설치가 아니다.** 사용자 위임("니가 추천 및 확인해서 진행해줘")으로 10A3b 에 앞선 여섯 결정을 전부 보수적 기본값으로 확정했다(`docs/superpowers/plans/2026-09-21-10a3-install-preparation.md` §3-1). Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 10A3 절.

@@ -642,3 +642,25 @@
 - **구현·재현이 함께 찾은 제품 사실(수정하지 않음 — 10C 배선의 계약, 계획서 §6-4):** 성공한 추세 갱신은 VIX 가 없거나 6시간이 지났으면 VIX 갱신을 **뒤에** 걸고, 그 VIX 행이 commit 되면 방금 수락된 추세 판단의 input seal 이 `source_read_changed` 로 stale 이 되어 **다음 추세 갱신까지 모든 prepare 가 `regime_source_not_current` 로 막힌다**(fail-closed — coordinator 가 `regime_owner.py` 에서 확인). 
 
 **10A3b-1 의 성과와 한계 (보고 문장):** 설치 **순서와 명명된 거부 16종**이 한 함수와 33건의 시험으로 고정됐다. **설치가 아니다** — 제품 호출자 0건이고, 제품에는 이 함수를 통과시킬 checkpoint·레짐 baseline·일자 전환을 만드는 코드가 없어 운영에서는 항상 거부로 끝난다. 차단 사유 4(설치 순서)는 "부품 완성"이고 표에서 열린 채로 둔다. 남은 것: 설치기 **앞** 단계(공식 KIS 증거 뒤)·시계 주입·관측·사이징 표·store 의 읽기 전용 개방·추세/VIX 갱신 순서의 배선 계약(10C).
+
+### KIS 공식 저장소 기준 정합 (2026-09-21 저녁, 기준 `36ed36d`)
+
+- **사용자 지시:** "Kis api는 https://github.com/koreainvestment/open-trading-api 여길 참고하고 나머지 사항도 진행해". 기준 자료를 저장소 사본(`b4e6249`, 2026-08-26)으로 고정했다. 거래 API 호스트 요청 0·자격증명 0.
+- **Plan(`36ed36d` 에 문서로):** 저장소 전수 조사 → 적대적 검증(97건) → Q1~Q31 상태표(`docs/integrations/kis-repo-grounding-2026-09-21.md`)와 main 이행 명세(`docs/integrations/kis-tr-migration-spec-2026-09-21.md`). 결론: **저장소가 고정하는 것은 요청·응답의 모양뿐 — 취소 최종성·누적 범위·cutoff 는 저장소도 말하지 않는다. 차단 사유 1·2·12 불변.** 두 갈래로 나눴다: engine(증거 파서·수집기 — 호출자 0건 부품) / main(운영 주문 경로의 무동작 전환 스위치).
+- **Do(두 갈래 병렬, 요청 opus/high, 격리 worktree):** engine `2878d2c` — `_parse_row` 가 두 철자를 받고 어긋나면 malformed · 수집기 `TTTC0081R`+`EXCG_ID_DVSN_CD="KRX"`/`TTTC0084R` · `LEDGER_TR_IDS` 신 TR 2종 · 신규 `tests/test_kis_repo_alignment.py`. main `21d537a` — `_TR_SETS`·`_tr_id()`·`KIS_TR_SET`(기본 legacy) · 신규 `tests/test_kis_tr_switch.py`.
+- **See — 독립 재현(요청 opus/xhigh, 다른 실행): 둘 다 CHANGES_REQUIRED.**
+  - engine P1: supported 식의 `cancel == "N"` 을 지워도 시험이 전부 통과했다(기존 `cncl_yn="Y"` 표본은 수량 불일치에서 먼저 걸렸다). P2: 빈 `cncl_yn` 표본·docstring 의 조건 개수(11 → 실제 13)·scope 매핑 시험의 주장 한정·chain 판정의 거래소 범위 의존.
+  - main P1: **new 모드가 NXT 세션 주문에도 `EXCG_ID_DVSN_CD="KRX"` 를 실었다.** P2: 빈 문자열 수량이 조용한 0 · 접수·정정 `retry=False` 무하중 · `KIS_TR_SET` 해석 무하중 · runbook 의 "두 단계 전환" 모순과 전환 여부 확인 수단 부재.
+- **보강(요청 opus/high, 변이 전에 커밋·원복은 역-편집):** engine `3eece74`(src 는 docstring 뿐 — coordinator 가 diff 로 확인. 변이 3종 kill, **대조 변이 1종 생존을 실측** — `remaining/cancelled/rejected == 0` 은 보존식 때문에 단독 하중 표본을 만들 수 없어 그 전제인 보존식을 대신 고정). main `3013082`(coordinator 처분: **신 TR·신 본문은 `session == "regular"` 접수에만**. 변이 5종 kill). coordinator 가 main 의 제품 diff 전체와 문서 diff 를 직접 읽었다.
+- **통합:** engine 은 `--no-ff` merge. main 은 브랜치 push + **PR [#80](https://github.com/qwq-partners/qwq-ai-trader/pull/80)**(병합하지 않음 — 병합·배포·재시작·전환은 사용자 확인 뒤, 장 마감 후에만).
+- **Codex 교차 리뷰 8차(요청 gpt-6-astra/xhigh, 포그라운드, 정적): CHANGES_REQUIRED — P0 0 · P1 0 · P2 2.** legacy 요청 동일성(TR·본문 키와 순서·hashkey 입력·응답 수량식)·신 키가 hashkey 발급 앞·`_tr_id()` 가 env 를 다시 읽지 않음·시그니처의 다른 호출자 없음·비정규장 접수의 기존 본문 유지·수집 결과의 `finality_supported` 는 여전히 항상 False·chain 경고가 코드와 맞음을 확인받았다.
+  - P2(main) → 처분 `fa2db75`: new 모드 미체결 조회가 음수 수량을 정상 결과로 통과 → new 분기에만 `qty < 0 → None`. legacy 분기 0줄 변경·그 현행 동작을 시험으로 고정. 시험 38건, 변이 kill.
+  - P2(engine, 주장 정밀화) → 처분: "supported_finality 입력 집합 불변"은 틀렸다 — **정규화 뒤의 종결 조건식은 불변이고 허용하는 원시 스키마가 넓어졌다**(포털 철자만 있는 전량체결 행: `malformed_row` → supported 가능). CHANGELOG·이행 명세 §8-2 에 그대로 적었다. 소비자 0건.
+  - Codex 의 "미확인": 음수 응답의 실제 발생·비정규장 주문에 대한 신 취소·정정의 실제 수용·거래소 간 부모·자식 주문의 실제 발생 가능성. 실행·pytest 없음.
+- **coordinator 재판정(이행 명세 §8-1):** 명세 §3-12 의 "취소 POST 에 `retry=False` 누락"은 **결함으로 고치지 않는다.** `_api_post` 의 재전송 대상 다수는 접수 전 거절(유량 `EGW00201` 이 HTTP 500)이고, 전량 취소는 원주문번호 하나를 겨냥해 두 번 닿아도 노출을 만들 수 없으며, 응답 유실 시 `False` 는 `retry=False` 에서도 같다. 재시도를 빼면 보호 취소 성공률만 떨어진다. 고칠 것은 "취소는 멱등"이라는 근거 없는 문장이다(다음 main PR).
+- **절차 실수 1건(기록):** 첫 전체 suite 에서 경로 인자 `tests` 를 빠뜨려 `scripts/test_new_tr.py`(수동 점검 스크립트 — CI `verify` 는 `tests/` 만 돈다)의 3항목이 함께 수집됐다. 2건은 fixture 부재로 **코드 미실행**(ERROR), 1건(`test_tr3_screener_log`)은 `journalctl -u qwq-ai-trader -n 200` 을 **읽기 전용**으로 불렀고 출력은 pytest 가 캡처해 폐기했다(내용은 누구에게도 표시되지 않았다 — 쓰기·네트워크·주문 0). 그 실행의 `tests/` 분은 UTC/KST 각 4971 passed 였으나 격리 줄이 tail 밖이라 **증거로 쓰지 않고** `tests` 인자로 다시 돌렸다.
+- **전체 suite 단독 직렬(engine merge 뒤, `tests` 인자, 에이전트·다른 pytest 0):** **UTC 4971 passed / 기존 xfail 2 / 경고 4 / 408.28초**, **KST 4971 passed / 기존 xfail 2 / 경고 4 / 386.30초**, 격리 위반 0. load 2.34 → 2.74 → 1.61. (4950 + 21.) main 쪽 근거는 PR #80 의 `verify`: **`fa2db75` 기준 SUCCESS**(2026-09-21T11:30:20Z), mergeable·CLEAN.
+
+**이 단계의 성과와 한계 (보고 문장):** KIS 와 주고받는 **모양**을 공식 저장소에 맞췄고(engine 부품은 통합, main 은 기본값에서 아무것도 바뀌지 않는 PR #80), **그것으로 닫힌 설치 차단 사유는 없다.** 취소·체결 최종성·조회 cutoff 는 저장소에도 없다 — 질문지 31문항의 답이나 승인된 비식별 실응답만이 1·2·12 를 연다. PR #80 의 병합·배포·재시작, 그리고 `KIS_TR_SET=new` 전환은 각각 별개의 사용자 결정이다(전환 전 확인 13항은 main 쪽 runbook).
+
+**이어받는 에이전트 체크리스트(이 단계):** ① `gh pr view 80` 으로 병합 여부 확인 — 병합됐으면 engine 에 main 을 들일 때 `src/utils/kis_rate_limit.py` 의 `LEDGER_TR_IDS` 한 줄이 충돌한다(합집합으로 푼다) ② 그 뒤 `safety/requests.py` 의 TR 리터럴을 main 의 `_TR_SETS` 로 모으는 것은 **독립 인수 37건의 전선 본문 기대값을 바꾸는 결정**이다 — 조용히 하지 말고 결정으로 기록한다 ③ 다음 main PR 의 Plan 은 이행 명세 §8-1b ④ 전체 suite 는 **반드시 `tests` 인자**.

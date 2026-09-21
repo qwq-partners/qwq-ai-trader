@@ -159,3 +159,60 @@ _TR = {
 - **조회 일관성·원장 cutoff·당일 지연 상한도 그대로다**(Q16~Q22). 신TR 응답에도 기준시각 필드가 없다.
 - 따라서 **attach 설치 차단 사유는 이 이행으로 해소되지 않는다.** `trading_ready=False`, MODIFY 미지원, 보호 SELL 의 legacy 대비 열위는 불변이다.
 - engine 브랜치의 `evidence.py`/`queries.py`/`requests.py` 는 **호출자 0건**이라 이 이행과 독립이다. 두 작업을 한 배포에 묶지 않는다.
+
+## 8. 구현 상태 (2026-09-21 저녁 — 이 명세 작성 뒤의 Do·See)
+
+두 갈래로 나눠 각각 구현(opus/high) → 독립 재현(opus/xhigh, 둘 다 CHANGES_REQUIRED) → 보강(opus/high, 변이 kill 실측)을 거쳤다.
+
+### 8-1. main 쪽 — 브랜치 `fix/kis-tr-id-migration-switch` (base `origin/main 33b8285`, **무동작 PR**)
+
+| §3 항목 | 상태 | 비고 |
+|---|---|---|
+| 1~5 (TR 값) | ✅ `_TR_SETS`·`_tr_id()` | 기본 `legacy` — 요청 본문·헤더·파싱이 전환 전과 바이트 단위 동일(스냅샷 시험) |
+| 6 (`LEDGER_TR_IDS`) | ✅ 신·구 둘 다 | 전환·롤백 어느 쪽에서도 원장 직렬화 유지 |
+| 7 | 확인만 | 변경 없음 |
+| 8 (order-cash 본문) | ✅ **정규장 주문에만** | 아래 "§4 에서 달라진 것" 참고 |
+| 9·10 (취소·정정 본문) | ✅ new 모드에서 `"KRX"` | **세션을 모른다** — 아래 미해결 1 |
+| 11 (일별조회 `"ALL"`) | ⏸ 그대로 | 두 모드 공통으로 이미 나가고 있다. 값 결정은 §6-1 의 운영 응답 1건 뒤 |
+| 13 (`rmn_qty` 부재) | ✅ new 모드만 | 없거나 빈 값이면 `psbl_qty`, 그래도 비면 `None`(판단 불가). legacy 분기는 현행 그대로 |
+| 12 (취소 POST 의 `retry`) | ❎ **바꾸지 않기로 결정** | 아래 "§3-12 재판정" |
+| 14·15 (50건 잘림·요청 `tr_cont`) | ⏸ **동작 변경이라 별도 PR** | 무동작 PR 에 섞지 않는다 |
+| 16 (docstring 의 '실전 20/s') | ✅ | 저장소가 수치를 주지 않는다는 사실로 정정 |
+| 17 (CLAUDE.md) | ✅ | main 쪽 CLAUDE.md·runbook·external-apis·CHANGELOG |
+
+시험 `tests/test_kis_tr_switch.py` 36건(두 모드 × 세 세션 주문 스냅샷, 빈 문자열 수량, 접수·정정 `retry=False` 고정, `KIS_TR_SET` 해석 8값 — 자식 프로세스로 새로 import). 변이 5종 전부 kill. 전체 suite 근거는 PR 의 `verify`(CI)다 — 이 호스트에서는 main 트리의 전체 suite 를 돌리지 않았다. **PR [#80](https://github.com/qwq-partners/qwq-ai-trader/pull/80)**(병합하지 않음).
+
+**Codex 교차 리뷰 8차(요청 gpt-6-astra/xhigh, 정적, 대상 `3013082`): P0 0 · P1 0 · P2 1(main 쪽).** 확인받은 것: legacy 에서 TR 값·본문 키와 삽입 순서·hashkey 입력·응답 수량식이 그대로다 · 신 키는 세 곳 모두 hashkey 발급 **앞**에 붙는다 · `_tr_id()` 는 환경변수를 다시 읽지 않아 실행 중 env 변경이 헤더·본문·파서 사이의 모드 불일치를 만들지 않는다 · `_get_tr_id_for_session` 의 다른 호출자 없음 · 비정규장 접수는 new 모드에서도 기존 TR·본문(`AFHR_FLPR_YN` 포함). P2 → 처분(`fa2db75`): new 모드 미체결 조회가 **음수 수량을 정상 결과로 통과**시켰다(`'7.0'`·`'abc'` 는 바깥 except 가 `None` 으로 닫지만 `'-1'` 은 통과) → new 분기에만 `qty < 0 → None`, legacy 분기는 0줄 변경이고 그 현행 동작(`-1` 그대로 반환)을 시험으로 고정. 시험 38건, 변이 kill 확인.
+
+**§4 에서 달라진 것**
+- **"조회 먼저 → 주문 나중"의 두 단계 배포는 스위치 하나로는 불가능하다.** `KIS_TR_SET` 은 다섯 TR 을 한꺼번에 바꾼다. 나누려면 별도 PR 이 필요하다 — runbook 이 그렇게 고쳐졌다.
+- **신 TR·신 본문은 `session == "regular"` 인 주문 접수에만 적용한다.** 공식 저장소에 NXT 주문 예제가 없어 `pre_market`·`next_market` 의 `EXCG_ID_DVSN_CD` 값을 확정할 근거가 없다. 그 세션(그리고 `regular` 가 아닌 동시호가 세션)의 접수는 new 모드에서도 구 TR·구 본문 그대로 나간다.
+- 전환 여부는 connect 직후 `KIS TR 세트: legacy|new` 로그 한 줄로 확인한다.
+
+**§3-12 재판정(coordinator, `_api_post` 본문 확인 뒤) — 취소 POST 는 재시도를 유지한다.** §3-12 는 "취소만 `retry=False` 가 빠져 있다"를 결함으로 적었으나, `_api_post(retry=True)` 가 재전송하는 경우는 HTTP 429/500/502/503 과 네트워크 오류이고 그중 다수는 **접수 전 거절**(유량 초과 `EGW00201` 이 HTTP 500 으로 온다)이다. 전량 취소(`QTY_ALL_ORD_YN="Y"`)는 특정 원주문번호 하나를 겨냥하므로 같은 본문이 두 번 닿아도 **노출을 만들 수 없다**(두 번째는 거절될 뿐) — 접수·정정과 달리 재전송의 최악이 "거절 응답"이다. 첫 요청이 실제로는 처리됐고 응답만 유실된 경우 `cancel_order` 가 `False` 를 돌려주는 것은 `retry=False` 에서도 똑같다(새 실패 양식이 아니다). 반대로 재시도를 빼면 유량 버스트 중의 **보호 취소(90초 SELL 폴백·BUY 정리) 성공률이 떨어진다.** 따라서 코드는 그대로 두고, 고칠 것은 문서다: `external-apis.md` 의 "취소는 멱등"은 KIS 가 준 계약이 아니므로 위의 **효과 한정 논증**으로 바꾸고, CLAUDE.md 의 'POST 재전송 금지' 규칙에 "취소는 예외 — 이유"를 적는다. 다음 main PR 에서 특성화 시험 1건으로 고정한다.
+
+**전환(`KIS_TR_SET=new`) 전에 닫아야 할 미해결**
+1. **취소·정정은 주문의 접수 세션을 모른다.** new 모드에서는 `EXCG_ID_DVSN_CD="KRX"` 가 무조건 붙고, NXT 세션에 구 TR 로 접수된 주문의 취소(90초 SELL 폴백·10분 BUY 정리가 같은 세션에서 부르는 경로가 실재)에도 그대로 닿는다. 수용 여부는 실계좌로만 확인된다 — runbook 전환 전 확인 13번. 코드로 풀려면 주문 식별자에 접수 세션을 실어야 해서 무동작 PR 의 범위를 넘는다.
+2. §6 의 11항 전부. 그중 §6-1(Q27)은 코드 변경 없이 운영 응답 1건으로 확인된다.
+
+### 8-1b. 다음 main PR 의 Plan — 연속조회 프로토콜 (PR #80 위에 쌓는다, 브랜치 `fix/kis-pagination-protocol`)
+
+같은 파일·같은 함수를 고치므로 base 는 `fix/kis-tr-id-migration-switch` 다(#80 이 병합되면 main 으로 재지정). **두 모드 공통의 동작 변경**이라 #80(무동작)에 섞지 않는다. 범위는 셋뿐이다.
+
+| # | 무엇 | 왜 | 운영에서 실제로 바뀌는 것 |
+|---|---|---|---|
+| A | `_api_get(url, tr_id, params, tr_cont="")` — 값이 있으면 요청 헤더 `tr_cont` 로 싣는다. 연속조회 루프 셋(`get_positions`·`get_positions_for_account`·`_query_daily_fills`)이 **2페이지째부터 `"N"`** 을 넘긴다 | 저장소의 모든 연속조회 예제가 다음 페이지에 `tr_cont="N"` 을 보낸다(§2-5). 지금은 미송신이라 2페이지 요청이 1페이지를 다시 받을 수 있고, 그러면 "ctx 가 이전과 같으면 중단" 가드가 **조용히 잘린 목록**으로 끝낸다 | 1페이지로 끝나는 계좌(현재 운영: 보유 1종목·일 체결 ≤10건)는 **요청이 한 바이트도 안 바뀐다**. 2페이지 이상일 때만 헤더가 붙는다 |
+| B | `get_exchange_open_orders` — 응답 `_tr_cont` 가 `F`/`M`(다음 페이지 있음)이면 경고 후 `None`(판단 불가) | 이 조회는 1회 호출·최대 50건이다(§3-14). 잘린 목록은 "그 종목 미체결 없음"으로 읽히고 그것이 pending 만료(이중 매도 방지)의 근거다. 페이지 루프 대신 `None` — 호출자는 이미 `None` 을 "pending 유지"로 처리한다 | 미체결 50건 초과일 때만. `# ponytail:` 미체결이 50건을 넘는 운용이 되면 페이지 루프로 |
+| C | 취소 POST 의 재시도 **유지**를 특성화 시험 1건으로 고정(500 → 재전송 → 성공) + 문서 정정 | 위 "§3-12 재판정" | 코드 0줄. `external-apis.md` 의 "취소는 멱등" → 효과 한정 논증, CLAUDE.md 의 'POST 재전송 금지' 규칙에 "취소는 예외 — 이유" |
+
+인수 조건: ① 1페이지 응답(D/E)에서 요청 헤더·호출 횟수가 현행과 같다(스냅샷) ② `F → M → D` 3페이지에서 요청 `tr_cont` 가 `미송신 → "N" → "N"` ③ B 의 `F`/`M` → `None`, `D`/`E`/빈 값 → 현행 목록 ④ 두 모드(`legacy`/`new`) 모두에서 ①~③ ⑤ 변이: `"N"` 전달 제거 · B 의 조건 제거 · 취소에 `retry=False` 추가 — 각각 kill.
+하지 않는 것: `custtype` 헤더 · 취소 `ORD_QTY` 의미 · 장외 주문구분 · **운영 폴백 루프 결함 5건**(주문 동작을 바꾸므로 별도 Plan·별도 PR).
+
+### 8-2. engine 쪽 — `feature/engine-safety-design-20260917` 에 통합 (호출자 0건 부품)
+
+- `safety/evidence.py::_parse_row` — 취소확인수량을 `cnc_cfrm_qty`(저장소)와 `cncl_cfrm_qty`(포털) **둘 다** 받는다. 둘이 함께 오고 값이 다르면 malformed. §6-3 의 실응답이 오기 전까지 어느 철자에도 fail-closed 로 떨어지지 않게 한 것이지 철자를 확정한 것이 아니다. **정규화 뒤의 종결 조건식은 불변이고 허용하는 원시 스키마가 넓어졌다** — 포털 철자만 있는 전량체결 행은 이전에 `malformed_row` 였고 이제 `supported_finality=True` 가 될 수 있다(Codex 8차 P2). 한쪽이 빈 문자열이고 다른 쪽이 숫자면 빈 값을 무시하지 않고 malformed, 둘 다 없으면 malformed 다.
+- `safety/queries.py` — daily 수집을 `TTTC0081R` + `EXCG_ID_DVSN_CD="KRX"`, cancelable 수집을 `TTTC0084R` 로. `QueryScope.exchange_scope` 를 명시 인자로(기본 `"KRX"`).
+- `utils/kis_rate_limit.py` — `LEDGER_TR_IDS` 에 신 TR 2종(main 브랜치와 같은 줄을 고친다 — 나중에 main 을 병합할 때 이 한 줄이 충돌하며 합집합으로 푼다).
+- **바꾸지 않은 것:** `safety/requests.py` 의 주문·취소 POST 모양(구 TR 리터럴 그대로). main 의 `_TR_SETS` 가 들어온 뒤 같은 출처를 읽게 한다 — 독립 인수 37건의 전선 본문 기대값이 함께 바뀌므로 그때 결정으로 기록한다. 장후 주문구분 `'05'` 대 저장소 코드표 `'06'` 도 동작 변경이라 별도.
+- **남긴 경고(docstring):** chain 판정은 조회한 거래소 범위에 의존한다. 수집기는 KRX 만 조회하므로 NXT/SOR 에 있는 자식행(취소·정정)은 보이지 않고, 그 경우 `chain=False` 로 읽혀 최종성 인정이 **더 쉬워진다** — 범위를 좁히는 것이 여기서는 fail-open 방향이다. engine 의 주문은 구 TR(거래소 필드 없음)이라 KRX 로만 나간다는 것이 현재의 방어이고, 이것은 계약이 아니라 추론이다(Q27·Q29).
+- 독립 재현이 찾은 무하중 조건: supported 식의 `cancel == "N"` 은 어떤 시험도 하중하지 않았다(기존 `cncl_yn="Y"` 표본은 수량 불일치에서 먼저 걸렸다) → 수량이 전부 정상인 `cncl_yn="Y"` 표본으로 고정. `remaining/cancelled/rejected == 0` 세 조건은 보존식(`filled+cancelled+rejected+remaining ≤ qty`) 때문에 단독 하중 표본을 만들 수 없다 — 대조 변이가 생존하는 것을 실측으로 확인했고, 그 전제인 보존식을 대신 고정했다. 세 조건은 2중 방어로 남긴다.
