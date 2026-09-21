@@ -972,6 +972,10 @@ class KRScheduler:
             # 이미 매도 주문이 진행 중이면 중복 방지
             if symbol in bot._exit_pending_symbols:
                 return
+            # 취소 실패로 유지 중이던 stale BUY 가 (FillEvent 없이 잔고 동기화로라도) 포지션이 됐으면
+            # pending 을 풀어 아래 검사가 이 종목의 청산을 막지 않게 한다 (2026-09-21)
+            if bot.engine.risk_manager:
+                await bot.engine.risk_manager.release_kept_stale_buy(symbol)
             if bot.engine.risk_manager and symbol in bot.engine.risk_manager._pending_orders:
                 return
 

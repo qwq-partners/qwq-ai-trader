@@ -1031,7 +1031,7 @@ class KISBroker(BaseBroker):
             return self._pending_orders[order_id].status
         return None
 
-    async def get_exchange_open_orders(self) -> Optional[List[Dict[str, Any]]]:
+    async def get_exchange_open_orders(self, symbol: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """거래소 실 미체결 주문 조회 (정정취소가능주문, TTTC8036R / 신 TR TTTC0084R)
 
         로컬 `_pending_orders` 캐시와 달리 **재시작 후에도 유효** — ExitManager
@@ -1093,6 +1093,13 @@ class KISBroker(BaseBroker):
                     "side": "sell" if str(item.get("sll_buy_dvsn_cd", "")) == "01" else "buy",
                     "qty": qty,
                 })
+            # 이 조회는 첫 페이지만 읽는다(페이지 루프는 별도 PR). 호출측이 물은 종목이 첫 페이지에 없는데
+            # 다음 페이지가 남았으면(응답 헤더 tr_cont F/M) "미체결 없음"을 말할 수 없다 → 판단 불가.
+            # 찾았으면 생존 증거이므로 그대로 돌려준다. symbol 미지정 호출은 종전 동작 그대로 (2026-09-21).
+            if (symbol is not None and data.get("_tr_cont") in ("F", "M")
+                    and not any(r["symbol"] == symbol for r in rows)):
+                logger.warning(f"실 미체결 조회: {symbol} 첫 페이지에 없음 + 다음 페이지 남음 → 판단 불가")
+                return None
             return rows
         except Exception as e:
             logger.warning(f"실 미체결 조회 오류: {e}")
