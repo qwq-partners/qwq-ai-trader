@@ -59,18 +59,40 @@ def _sell_rm(monkeypatch, positions, exempt):
         return fallback
     rm._get_sell_price = _sell_price
 
-    # 브로커 직접 호출 기록 — 취소 종목 / 제출 주문
-    rm.cancelled, rm.submitted = [], []
+    # 브로커 대역 — 실제 KIS 계약을 따른다: 취소는 실패를 예외로 올리지 않고 건수만 돌려주며,
+    # 성공한 주문만 추적(get_open_orders)에서 빠진다. cancel_ok=False 면 거절(0건·추적 유지).
+    rm.cancelled, rm.submitted, rm.open_orders, rm.cancel_ok = [], [], [], True
+    rm.on_cancel = lambda _symbol: None   # 취소 await 도중에 일어나는 일을 끼워 넣는 훅
 
     async def _cancel(symbol):
         rm.cancelled.append(symbol)
-        return 1
+        rm.on_cancel(symbol)
+        if not rm.cancel_ok:
+            return 0
+        _mine = [o for o in rm.open_orders if o.symbol == symbol]
+        rm.open_orders[:] = [o for o in rm.open_orders if o.symbol != symbol]
+        return len(_mine)
+
+    async def _open_orders():
+        return list(rm.open_orders)
 
     async def _submit(order):
         rm.submitted.append(order)
         return True, "ORD1"
-    rm.engine.broker = SimpleNamespace(cancel_all_for_symbol=_cancel, submit_order=_submit)
+    rm.engine.broker = SimpleNamespace(cancel_all_for_symbol=_cancel, submit_order=_submit,
+                                       get_open_orders=_open_orders)
     return rm
+
+
+def _stale_sell(rm, symbol, *, age_sec=120):
+    """age_sec 전에 나간 지정가 SELL 이 미체결로 남아 있는 상태 (엔진 pending + 브로커 추적)."""
+    from datetime import timedelta
+    from test_t11_entry_plan import NOW
+    rm._pending_orders.add(symbol)
+    rm._pending_timestamps[symbol] = NOW - timedelta(seconds=age_sec)
+    rm._pending_sides[symbol] = OrderSide.SELL
+    rm._pending_quantities[symbol] = 100
+    rm.open_orders.append(SimpleNamespace(symbol=symbol, is_active=True))
 
 
 def _sell_event(symbol, source, strategy=StrategyType.CORE_HOLDING, **meta):
@@ -121,20 +143,64 @@ def test_engine_still_sells_non_exempt_and_follows_live_set(home, monkeypatch):
 def test_stale_sell_fallback_never_resubmits_exempt_symbol(home, monkeypatch):
     """면제 등록 전에 나간 지정가 SELL 이 90초 넘게 미체결 → 다른 종목 신호가 stale 루프를 돌려도
     시장가 재주문 없이 취소·pending 해제만 한다."""
-    from test_t11_entry_plan import NOW
-    from datetime import timedelta
     rm = _sell_rm(monkeypatch, {EXEMPT: _pos(EXEMPT, "sepa_trend"),
                                 OTHER: _pos(OTHER, "sepa_trend")}, {EXEMPT})
-    rm._pending_orders.add(EXEMPT)
-    rm._pending_timestamps[EXEMPT] = NOW - timedelta(seconds=120)
-    rm._pending_sides[EXEMPT] = OrderSide.SELL
-    rm._pending_quantities[EXEMPT] = 100
+    _stale_sell(rm, EXEMPT)
 
     asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
 
     assert rm.submitted == [], "면제 종목에 시장가 폴백이 나가면 안 된다"
     assert rm.cancelled == [EXEMPT]
     assert EXEMPT not in rm._pending_orders and EXEMPT not in rm._pending_timestamps
+
+
+def test_stale_exempt_sell_keeps_pending_when_cancel_fails(home, monkeypatch):
+    """취소 0건은 주문 소멸의 증거가 아니다 — 브로커 추적에 남아 있으면 pending 을 풀지 않고
+    (풀면 취소 재시도 대상에서 빠진 채 지정가가 체결될 수 있다) 60초 뒤 다시 취소한다."""
+    from datetime import timedelta
+    from test_t11_entry_plan import NOW
+    rm = _sell_rm(monkeypatch, {EXEMPT: _pos(EXEMPT, "sepa_trend"),
+                                OTHER: _pos(OTHER, "sepa_trend")}, {EXEMPT})
+    _stale_sell(rm, EXEMPT)
+    rm.cancel_ok = False
+
+    asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
+
+    assert rm.submitted == []
+    assert EXEMPT in rm._pending_orders, "취소 실패 — 거래소 주문이 살아 있을 수 있으므로 추적 유지"
+    assert rm._pending_timestamps[EXEMPT] == NOW - timedelta(seconds=30), "60초 뒤(90초 기준) 재시도"
+
+    # 다음 주기에 취소가 되면 그때 해제한다
+    rm.cancel_ok = True
+    rm._pending_timestamps[EXEMPT] = NOW - timedelta(seconds=120)
+    asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
+    assert rm.cancelled == [EXEMPT, EXEMPT] and rm.submitted == []
+    assert EXEMPT not in rm._pending_orders
+
+
+def test_stale_fallback_aborts_when_exemption_lands_during_cancel(home, monkeypatch):
+    """비면제로 stale 루프에 들어온 뒤 취소 await 도중 면제가 등록되면 시장가 재주문을 멈춘다."""
+    exempt = set()
+    rm = _sell_rm(monkeypatch, {EXEMPT: _pos(EXEMPT, "sepa_trend"),
+                                OTHER: _pos(OTHER, "sepa_trend")}, exempt)
+    _stale_sell(rm, EXEMPT)
+    rm.on_cancel = lambda symbol: exempt.add(symbol)   # run_manual_buy_orders 가 그 사이 등록
+
+    asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
+
+    assert rm.cancelled == [EXEMPT]
+    assert rm.submitted == [], "면제 등록 뒤에는 시장가 폴백이 나가면 안 된다"
+
+
+def test_stale_fallback_still_resubmits_non_exempt_symbol(home, monkeypatch):
+    """대조군 — 비면제 종목의 시장가 폴백은 종전대로 나간다."""
+    rm = _sell_rm(monkeypatch, {EXEMPT: _pos(EXEMPT, "sepa_trend"),
+                                OTHER: _pos(OTHER, "sepa_trend")}, set())
+    _stale_sell(rm, EXEMPT)
+
+    asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
+
+    assert [(o.symbol, o.side, o.quantity) for o in rm.submitted] == [(EXEMPT, OrderSide.SELL, 100)]
 
 
 def test_on_order_rechecks_exemption_before_submit(home, monkeypatch):
