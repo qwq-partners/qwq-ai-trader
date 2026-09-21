@@ -1277,6 +1277,8 @@ class RiskManager:
 
         # 자동매도 금지 종목 (run_trader에서 exit_manager._exit_exempt live set 주입)
         self._exit_exempt_ref: set = set()
+        # 면제 종목 SELL 차단 경고의 마지막 기록 시각 (로그 스로틀 전용 — 키는 면제 종목뿐이라 유한)
+        self._exempt_block_logged: Dict[str, datetime] = {}
         # (2026-08-05 P2 제거) RiskManager._pending_sector_map은 쓰기 지점이 전무한
         # 죽은 dict였음 — 섹터 캐시는 UnifiedEngine._pending_sector_map 단일 소유로 정리.
 
@@ -1738,6 +1740,18 @@ class RiskManager:
             ts = self._pending_timestamps.get(s)
             if not ts:
                 continue
+            # 면제 등록(런타임 add_exit_exempt) 전에 나간 SELL — 남은 지정가만 취소하고
+            # 시장가로 재주문하지 않는다 (이 루프는 on_signal 가드를 거치지 않는 직접 제출 경로)
+            if s in getattr(self, "_exit_exempt_ref", set()):
+                logger.warning(f"[리스크] 자동매도 금지 종목 미체결 SELL: {s} → 취소 후 pending 해제 (재주문 없음)")
+                if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
+                    try:
+                        await self.engine.broker.cancel_all_for_symbol(s)
+                    except Exception as e:
+                        logger.warning(f"[리스크] 면제 종목 SELL 취소 실패: {s} - {e}, 다음 주기 재시도")
+                        continue
+                await self.clear_pending(s)
+                continue
             elapsed = (now - ts).total_seconds()
             fallback_cnt = self._pending_fallback_count.get(s, 0)
             if fallback_cnt >= _MAX_FALLBACK:
@@ -1840,11 +1854,12 @@ class RiskManager:
         # 수동 매도는 엔진 시그널을 거치지 않는다(MTS·scripts/sell_specific.py·liquidate_all.py 별도 브로커).
         if event.side == OrderSide.SELL and event.symbol in getattr(self, "_exit_exempt_ref", set()):
             self._pending_exit_reasons.pop(event.symbol, None)
-            # 전략 자체 청산은 틱마다 재발행된다 — 경고는 신호 쿨다운 간격으로만 남긴다
-            _last_block = self._last_signal_time.get(event.symbol)
+            # 전략 자체 청산은 틱마다 재발행된다 — 경고는 30초 간격으로만 남긴다.
+            # 신호 쿨다운(_last_signal_time)과 분리: 면제 해제 직후의 정상 SELL 을 막지 않는다.
+            _last_block = self._exempt_block_logged.get(event.symbol)
             if (_last_block is None
                     or (now - _last_block).total_seconds() >= self._SIGNAL_COOLDOWN_SECONDS):
-                self._last_signal_time[event.symbol] = now
+                self._exempt_block_logged[event.symbol] = now
                 logger.warning(
                     f"[리스크] 자동매도 금지 종목 SELL 차단: {event.symbol} "
                     f"(source={event.source}, 사유={event.reason})"
@@ -2256,6 +2271,13 @@ class RiskManager:
             order = event.order
             if order is None:
                 logger.error(f"[리스크] OrderEvent에 Order 객체 없음: {event.symbol}")
+                await self.clear_pending(event.symbol)
+                return None
+
+            # 제출 직전 재검사 — on_signal 통과 뒤(매도호가 조회 await·큐 대기 중) 면제가 등록된 경우
+            if (order.side == OrderSide.SELL
+                    and order.symbol in getattr(self, "_exit_exempt_ref", set())):
+                logger.warning(f"[리스크] 자동매도 금지 종목 SELL 제출 차단: {order.symbol} ({order.reason})")
                 await self.clear_pending(event.symbol)
                 return None
 

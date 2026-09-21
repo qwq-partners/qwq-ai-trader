@@ -52,11 +52,24 @@ def _sell_rm(monkeypatch, positions, exempt):
     _order_env(monkeypatch, rm)
     rm.engine.portfolio.positions = positions
     rm._pending_exit_reasons = {}
+    rm._exempt_block_logged = {}
     rm._exit_exempt_ref = exempt
 
     async def _sell_price(_symbol, fallback):
         return fallback
     rm._get_sell_price = _sell_price
+
+    # 브로커 직접 호출 기록 — 취소 종목 / 제출 주문
+    rm.cancelled, rm.submitted = [], []
+
+    async def _cancel(symbol):
+        rm.cancelled.append(symbol)
+        return 1
+
+    async def _submit(order):
+        rm.submitted.append(order)
+        return True, "ORD1"
+    rm.engine.broker = SimpleNamespace(cancel_all_for_symbol=_cancel, submit_order=_submit)
     return rm
 
 
@@ -95,11 +108,76 @@ def test_engine_still_sells_non_exempt_and_follows_live_set(home, monkeypatch):
     orders = asyncio.run(rm.on_signal(_sell_event(OTHER, "core_early_alert")))
     assert orders and orders[0].order.side == OrderSide.SELL and orders[0].order.quantity == 100
 
-    # live set 참조 — 면제 해제(remove_exit_exempt) 뒤에는 같은 종목 SELL 이 통과한다
+    # live set 참조 — 면제 해제(remove_exit_exempt) 직후의 SELL 도 바로 통과한다
+    # (차단 경고 스로틀이 신호 쿨다운 _last_signal_time 을 오염시키면 30초간 다시 막힌다)
     assert asyncio.run(rm.on_signal(_sell_event(EXEMPT, "exit_manager"))) is None
+    assert EXEMPT not in rm._last_signal_time
     exempt.discard(EXEMPT)
-    rm._last_signal_time.clear()
     assert asyncio.run(rm.on_signal(_sell_event(EXEMPT, "exit_manager")))
+
+
+# ── 1-b) on_signal 을 거치지 않는 직접 제출 경로 — 면제가 런타임에 등록된 경우 ─────
+
+def test_stale_sell_fallback_never_resubmits_exempt_symbol(home, monkeypatch):
+    """면제 등록 전에 나간 지정가 SELL 이 90초 넘게 미체결 → 다른 종목 신호가 stale 루프를 돌려도
+    시장가 재주문 없이 취소·pending 해제만 한다."""
+    from test_t11_entry_plan import NOW
+    from datetime import timedelta
+    rm = _sell_rm(monkeypatch, {EXEMPT: _pos(EXEMPT, "sepa_trend"),
+                                OTHER: _pos(OTHER, "sepa_trend")}, {EXEMPT})
+    rm._pending_orders.add(EXEMPT)
+    rm._pending_timestamps[EXEMPT] = NOW - timedelta(seconds=120)
+    rm._pending_sides[EXEMPT] = OrderSide.SELL
+    rm._pending_quantities[EXEMPT] = 100
+
+    asyncio.run(rm.on_signal(_sell_event(OTHER, "exit_manager")))
+
+    assert rm.submitted == [], "면제 종목에 시장가 폴백이 나가면 안 된다"
+    assert rm.cancelled == [EXEMPT]
+    assert EXEMPT not in rm._pending_orders and EXEMPT not in rm._pending_timestamps
+
+
+def test_on_order_rechecks_exemption_before_submit(home, monkeypatch):
+    from src.core.event import OrderEvent
+    from src.core.types import Order, OrderType
+    exempt = set()
+    rm = _sell_rm(monkeypatch, {EXEMPT: _pos(EXEMPT, "sepa_trend")}, exempt)
+
+    def _order_event():
+        rm._pending_orders.add(EXEMPT)
+        return OrderEvent.from_order(
+            Order(symbol=EXEMPT, side=OrderSide.SELL, order_type=OrderType.LIMIT, quantity=100,
+                  price=Decimal("9000"), strategy="sepa_trend", reason="손절"),
+            source="risk_manager")
+
+    asyncio.run(rm.on_order(_order_event()))
+    assert len(rm.submitted) == 1, "대조군: 비면제 SELL 은 제출된다"
+
+    exempt.add(EXEMPT)   # on_signal 통과 뒤 면제 등록
+    asyncio.run(rm.on_order(_order_event()))
+    assert len(rm.submitted) == 1, "면제 종목 SELL 은 제출 직전에 막힌다"
+    assert EXEMPT not in rm._pending_orders
+
+
+def test_scheduler_exit_check_leaves_no_pending_for_exempt(home):
+    """중앙 가드가 고아 pending 을 남기지 않는 근거 — 실시간 청산 체크는 등록 전에 면제를 돌려보낸다."""
+    from src.schedulers.kr_scheduler import KRScheduler
+    em = ExitManager(ExitConfig())
+    em.add_exit_exempt(EXEMPT, reason="test")
+    emitted = []
+
+    async def _emit(event):
+        emitted.append(event)
+    sched = object.__new__(KRScheduler)
+    sched.bot = SimpleNamespace(
+        exit_manager=em, broker=object(), engine=SimpleNamespace(emit=_emit),
+        _exit_pending_symbols=set(), _exit_pending_timestamps={}, _exit_reasons={},
+    )
+
+    asyncio.run(sched._check_exit_signal(EXEMPT, Decimal("1")))
+
+    assert emitted == [] and sched.bot._exit_pending_symbols == set()
+    assert sched.bot._exit_pending_timestamps == {} and sched.bot._exit_reasons == {}
 
 
 # ── 2) 전략 자체 청산: gap_and_go 는 남의(manual) 포지션에도 SELL 을 낸다 → 엔진이 막는다 ──
@@ -152,7 +230,7 @@ def _core_ba(monkeypatch, tmp_path, positions, exempt, *, candidates=None):
         return None
 
     async def _scan():
-        return candidates or []
+        return candidates if candidates is not None else []
 
     em = ExitManager(ExitConfig())
     for s in exempt:

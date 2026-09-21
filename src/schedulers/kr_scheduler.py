@@ -6550,6 +6550,11 @@ JSON:
                     continue
 
                 # ── 청산 트리거 (보유 시) ──
+                # 자동매도 금지 종목이면 청산하지 않는다 (CORE-023) — 이 매도는 브로커 직접 제출이라
+                # 엔진 on_signal 가드를 거치지 않는다
+                if has_kofr and bot.exit_manager and bot.exit_manager.is_exit_exempt(SAFE_SYMBOL):
+                    logger.debug(f"[안전자산] {SAFE_SYMBOL} 자동매도 금지 종목 — 청산 스킵")
+                    continue
                 if has_kofr:
                     sell_reason = None
                     # (a) 시장 정상화
