@@ -417,149 +417,155 @@ async def fixture(tmp_path, monkeypatch, *, ready=True, policy=None):
     engine, exits, store, runtime = await build_runtime(
         tmp_path, account_scope=ACCOUNT_SCOPE, risk_manager=sidecar,
         clock=lambda: _CLOCK['kst'])
-    engine.broker = broker
-    engine._market_regime = 'bull'
-    risk = engine.config.risk
-    # CLAUDE.md 의 KR 운영값(최소 포지션 20만원). 기본 RiskConfig 의 50만원은 US 쪽 값이라
-    # 2백만원 자산에서는 모든 사이징이 바닥 클램프로 0 이 된다.
-    risk.min_position_value = 200000
-    if ready:
-        monkeypatch.setattr(KRExecutionRuntime, 'trading_ready', property(lambda self: True))
+    try:
+        engine.broker = broker
+        engine._market_regime = 'bull'
+        risk = engine.config.risk
+        # CLAUDE.md 의 KR 운영값(최소 포지션 20만원). 기본 RiskConfig 의 50만원은 US 쪽 값이라
+        # 2백만원 자산에서는 모든 사이징이 바닥 클램프로 0 이 된다.
+        risk.min_position_value = 200000
+        if ready:
+            monkeypatch.setattr(KRExecutionRuntime, 'trading_ready', property(lambda self: True))
 
-    async def sector_lookup(symbol):
-        return None
+        async def sector_lookup(symbol):
+            return None
 
-    stop_resolver = make_entry_stop_resolver(runtime.exit_manager, {
-        'sepa_trend': {'stop_loss_pct': 5.0},
-        'gap_and_go': {'stop_loss_pct': 3.5},
-        'vcp_breakout': {'stop_loss_pct': 4.0},
-    })
-    rm = inner_risk_manager(engine, risk, sidecar=sidecar, exits=exits,
-                            sector_lookup=sector_lookup, stop_resolver=stop_resolver)
-    engine.risk_manager = rm
-    sidecar.set_exit_manager(exits)
+        stop_resolver = make_entry_stop_resolver(runtime.exit_manager, {
+            'sepa_trend': {'stop_loss_pct': 5.0},
+            'gap_and_go': {'stop_loss_pct': 3.5},
+            'vcp_breakout': {'stop_loss_pct': 4.0},
+        })
+        rm = inner_risk_manager(engine, risk, sidecar=sidecar, exits=exits,
+                                sector_lookup=sector_lookup, stop_resolver=stop_resolver)
+        engine.risk_manager = rm
+        sidecar.set_exit_manager(exits)
 
-    # 자동 매수의 판단 사실은 항상 'regime' 출처를 인용하고 final 의 `_recheck_regime` 이 그
-    # digest 를 state 에서 다시 유도한다 — regime_policy 가 없는 owner 는 소비 사실을 통째로
-    # 거부한다(stale_regime_decision). 그래서 실제 RegimeOwner 를 설치한다.
-    adapter = MarketRegimeAdapter()
-    engine._regime_adapter = adapter
+        # 자동 매수의 판단 사실은 항상 'regime' 출처를 인용하고 final 의 `_recheck_regime` 이 그
+        # digest 를 state 에서 다시 유도한다 — regime_policy 가 없는 owner 는 소비 사실을 통째로
+        # 거부한다(stale_regime_decision). 그래서 실제 RegimeOwner 를 설치한다.
+        adapter = MarketRegimeAdapter()
+        engine._regime_adapter = adapter
 
-    def seed_policy(state):
-        value = IntradayPolicyState('normal', 0.0, None, None).to_dict()
-        state['intraday_policy'] = {'schema': 1, 'baseline': value,
-                                    'baseline_version': runtime.owner.version + 1,
-                                    'current': value.copy(), 'transitions': {}}
-        state['entry_policy_effects'] = {'pending_sectors': {}, 'sidecar_active': True}
-        return state
+        def seed_policy(state):
+            value = IntradayPolicyState('normal', 0.0, None, None).to_dict()
+            state['intraday_policy'] = {'schema': 1, 'baseline': value,
+                                        'baseline_version': runtime.owner.version + 1,
+                                        'current': value.copy(), 'transitions': {}}
+            state['entry_policy_effects'] = {'pending_sectors': {}, 'sidecar_active': True}
+            return state
 
-    await runtime.owner.mutate('s10a3a2-prerequisite', seed_policy)
-    await RegimeOwner.register_baseline(runtime, RegimeBaseline.from_dict(regime_baseline(runtime)),
-                                        expected_version=runtime.owner.version)
-    await runtime.owner.register_policy_generations('s10a3a2-reads', POLICY_READS)
+        await runtime.owner.mutate('s10a3a2-prerequisite', seed_policy)
+        await RegimeOwner.register_baseline(runtime, RegimeBaseline.from_dict(regime_baseline(runtime)),
+                                            expected_version=runtime.owner.version)
+        await runtime.owner.register_policy_generations('s10a3a2-reads', POLICY_READS)
 
-    async def missing_vix():
-        return None
+        async def missing_vix():
+            return None
 
-    regime_writer = RegimeOwner(runtime, adapter=adapter, sidecar=sidecar, vix_fetcher=missing_vix)
-    vix_ticket = await regime_writer.sources.begin('s10a3a2-vix', 'vix_regime')
-    await regime_writer.sources.complete(
-        vix_ticket, 'success', {'value': 20.0, 'fetched_at': NOW_KST.isoformat()},
-        source='s10a3a2-vix', source_event_id='s10a3a2-vix', received_at=NOW_KST)
+        regime_writer = RegimeOwner(runtime, adapter=adapter, sidecar=sidecar, vix_fetcher=missing_vix)
+        vix_ticket = await regime_writer.sources.begin('s10a3a2-vix', 'vix_regime')
+        await regime_writer.sources.complete(
+            vix_ticket, 'success', {'value': 20.0, 'fetched_at': NOW_KST.isoformat()},
+            source='s10a3a2-vix', source_event_id='s10a3a2-vix', received_at=NOW_KST)
 
-    async def index_price(code):
-        return bullish_index(code)
+        async def index_price(code):
+            return bullish_index(code)
 
-    trend = await regime_writer.refresh_trend(SimpleNamespace(fetch_index_price=index_price))
-    assert trend.status == 'accepted'
+        trend = await regime_writer.refresh_trend(SimpleNamespace(fetch_index_price=index_price))
+        assert trend.status == 'accepted'
 
-    authority = EntryAuthority()
-    alpha = [RiskSnapshot(1, 1, 'success', NOW_KST, 'normal')]
-    session = [GuardDecision(True, 's10a3a2_open')]
-    builder = KISRequestBuilder(RequestAccount(ACCOUNT_SCOPE, ACCOUNT_NO, PRODUCT_CD,
-                                               'prod', ENDPOINT, 1))
-    commands = RequestBoundCommands(
-        runtime, builder=builder, authority=authority,
-        entry_guard=FinalEntryGuard(authority, lambda: alpha[0], lambda: _CLOCK['kst']),
-        stop_resolver=stop_resolver, session_guard=lambda request: session[0])
-    published_policy = effective_policy(risk, **(policy or {}))
-    context = PolicyContext(
-        business_day=NOW_KST.date(), observed_at=NOW_KST,
-        versions=_policy.PolicyVersions(runtime.owner.version, runtime.owner.version,
-                                        runtime.owner.version, runtime.owner.version,
-                                        CONFIG_VERSION, 0, 0),
-        policy=published_policy,
-        sync=_policy.SyncPolicySnapshot(True, 0, None, 10),
-        trend=_policy.MarketTrendPolicySnapshot(False, False, False),
-        macro=_policy.MacroPolicySnapshot(None, False, False))
-    await commands.publish_policy_context(context, expected_version=runtime.owner.version)
-    gateway = SignalGateway(runtime, commands, exit_manager=exits, config_version=CONFIG_VERSION)
-    runtime.install_gateway(gateway)
+        authority = EntryAuthority()
+        alpha = [RiskSnapshot(1, 1, 'success', NOW_KST, 'normal')]
+        session = [GuardDecision(True, 's10a3a2_open')]
+        builder = KISRequestBuilder(RequestAccount(ACCOUNT_SCOPE, ACCOUNT_NO, PRODUCT_CD,
+                                                   'prod', ENDPOINT, 1))
+        commands = RequestBoundCommands(
+            runtime, builder=builder, authority=authority,
+            entry_guard=FinalEntryGuard(authority, lambda: alpha[0], lambda: _CLOCK['kst']),
+            stop_resolver=stop_resolver, session_guard=lambda request: session[0])
+        published_policy = effective_policy(risk, **(policy or {}))
+        context = PolicyContext(
+            business_day=NOW_KST.date(), observed_at=NOW_KST,
+            versions=_policy.PolicyVersions(runtime.owner.version, runtime.owner.version,
+                                            runtime.owner.version, runtime.owner.version,
+                                            CONFIG_VERSION, 0, 0),
+            policy=published_policy,
+            sync=_policy.SyncPolicySnapshot(True, 0, None, 10),
+            trend=_policy.MarketTrendPolicySnapshot(False, False, False),
+            macro=_policy.MacroPolicySnapshot(None, False, False))
+        await commands.publish_policy_context(context, expected_version=runtime.owner.version)
+        gateway = SignalGateway(runtime, commands, exit_manager=exits, config_version=CONFIG_VERSION)
+        runtime.install_gateway(gateway)
 
-    prepared = []
-    original_prepare = commands.prepare
+        prepared = []
+        original_prepare = commands.prepare
 
-    async def prepare_spy(request, entry_context, **kwargs):
-        result = await original_prepare(request, entry_context, **kwargs)
-        prepared.append(request)
-        return result
+        async def prepare_spy(request, entry_context, **kwargs):
+            result = await original_prepare(request, entry_context, **kwargs)
+            prepared.append(request)
+            return result
 
-    commands.prepare = prepare_spy
+        commands.prepare = prepare_spy
 
-    # sidecar 도달·판정의 유일한 증거. 통과형 spy 라 제품 본문을 그대로 태운다.
-    sidecar_calls = []
-    original_can_open = sidecar.can_open_position
+        # sidecar 도달·판정의 유일한 증거. 통과형 spy 라 제품 본문을 그대로 태운다.
+        sidecar_calls = []
+        original_can_open = sidecar.can_open_position
 
-    def sidecar_spy(*args, **kwargs):
-        verdict = original_can_open(*args, **kwargs)
-        sidecar_calls.append((args[0], args[2], verdict))
-        return verdict
+        def sidecar_spy(*args, **kwargs):
+            verdict = original_can_open(*args, **kwargs)
+            sidecar_calls.append((args[0], args[2], verdict))
+            return verdict
 
-    sidecar.can_open_position = sidecar_spy
+        sidecar.can_open_position = sidecar_spy
 
-    outcomes = []
-    original_submit = gateway.submit
+        outcomes = []
+        original_submit = gateway.submit
 
-    async def submit_spy(event, order, evidence):
-        result = await original_submit(event, order, evidence)
-        outcomes.append(result)
-        return result
+        async def submit_spy(event, order, evidence):
+            result = await original_submit(event, order, evidence)
+            outcomes.append(result)
+            return result
 
-    gateway.submit = submit_spy
+        gateway.submit = submit_spy
 
-    error_events = []
+        error_events = []
 
-    async def drive(event):
-        """실제 우선순위 힙에 싣고 큐가 빌 때까지 돈다."""
-        await engine.emit(event)
-        processed = []
-        while engine._event_queue:
-            queued = await engine._get_next_event()
-            if queued is None:
-                break
-            processed.append(queued)
-            if isinstance(queued, ErrorEvent):
-                error_events.append(queued)
-            await engine._process_event(queued)
-        # `_log_sig` 의 fire-and-forget 태스크를 소진시킨다(도달 증거의 결정성).
-        await asyncio.sleep(0)
-        return processed
+        async def drive(event):
+            """실제 우선순위 힙에 싣고 큐가 빌 때까지 돈다."""
+            await engine.emit(event)
+            processed = []
+            while engine._event_queue:
+                queued = await engine._get_next_event()
+                if queued is None:
+                    break
+                processed.append(queued)
+                if isinstance(queued, ErrorEvent):
+                    error_events.append(queued)
+                await engine._process_event(queued)
+            # `_log_sig` 의 fire-and-forget 태스크를 소진시킨다(도달 증거의 결정성).
+            await asyncio.sleep(0)
+            return processed
 
-    def posts():
-        return broker._session.posts
+        def posts():
+            return broker._session.posts
 
-    def errors():
-        return list(error_events)
+        def errors():
+            return list(error_events)
 
-    async def teardown():
-        try:
-            await runtime.shutdown()
-        except ApplicationBlocked:
-            pass
+        async def teardown():
+            try:
+                await runtime.shutdown()
+            except ApplicationBlocked:
+                pass
+            await store.close()
+            late = sorted(frozenset(sys.modules) - modules_before)
+            assert not late, '시계 patch 창에서 새 모듈 import: %s' % late
+            assert not _conftest.VIOLATIONS, _conftest.VIOLATIONS
+    except BaseException:
+        # 조립 도중 실패하면 열린 store 가 남는다 — 호출자는 아직 f 를 받지 못해
+        # 자기 finally 에서 닫을 수 없다.
         await store.close()
-        late = sorted(frozenset(sys.modules) - modules_before)
-        assert not late, '시계 patch 창에서 새 모듈 import: %s' % late
-        assert not _conftest.VIOLATIONS, _conftest.VIOLATIONS
+        raise
 
     return locals()
 
@@ -1095,4 +1101,6 @@ def test_d1_attach_is_refused_while_a_legacy_pending_ledger_row_exists(tmp_path,
             assert engine._execution_runtime is runtime
         finally:
             await store.close()
+            # 이 시험만 `fixture` 를 쓰지 않아 teardown 의 격리 단언이 없었다 — 11/11 로 맞춘다.
+            assert not _conftest.VIOLATIONS, _conftest.VIOLATIONS
     asyncio.run(scenario())
