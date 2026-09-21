@@ -42,8 +42,17 @@ from ...strategies.exit_manager import INTRADAY_CRASH_PARAMS, ExitConfig
 from ...utils import macro_calendar
 from ...utils.fee_calculator import FeeConfig
 from . import risk_policy as p
+from .application import ApplicationBlocked
+from .commands import RequestBoundCommands
+from .day_recovery import scope_reason
+from .economics import decode_portfolio, encode_portfolio
+from .gateway import SignalGateway
+from .policy_generations import versioned_fact
 from .policy_snapshot import PolicyContext
+from .protection import encode_protection
 from .qualification import config_version
+from .regime_owner import POLICY_READS, RegimeOwner
+from .store import ExecutionStateStore
 
 _KST = ZoneInfo('Asia/Seoul')
 
@@ -202,3 +211,151 @@ async def publish_entry_policy_context(commands, *, risk: RiskConfig, sidecar: R
         policy=policy, sync=sync, trend=trend, macro=macro)
     await commands.publish_policy_context(context, expected_version=version)
     return digest
+
+
+# `_publish` 가 요구하는 checkpoint root. 하나라도 없으면 복구 자체가 불가능하다.
+_REQUIRED_ROOTS = frozenset({'portfolio', 'protection', 'risk', 'lots', 'outbox',
+                             'intents', 'attempts', 'startup_reconciliation'})
+# `engine.bind_execution_runtime` 이 attach 시점에 보는 legacy 미체결 장부 3종.
+_LEGACY_LEDGERS = ('_pending_orders', '_pending_timestamps', '_reserved_by_order')
+
+
+async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
+                                   regime_adapter: MarketRegimeAdapter, fee_config: FeeConfig,
+                                   risk: RiskConfig, validator_config: dict, position_pct: dict,
+                                   stop_params: dict, exit_config: ExitConfig,
+                                   experts_shadow_mode, now: datetime, vix_fetcher) -> SignalGateway:
+    """기동 시 한 번 attach 런타임을 세우거나 **명명된 사유로 거부한다**.
+
+    제품 호출자는 0건이다. 제품에는 이 함수가 요구하는 checkpoint(포트폴리오·보호 대사 +
+    레짐 baseline + policy generation 등록)를 만드는 코드가 없으므로 **운영에서는 항상
+    거부로 끝나는 것이 정상**이다. 기동 시 단일 호출자가 전제이며 계좌 lease 를 잡지 않는다.
+
+    구간 1(아래 1~9)은 순수 읽기다 — live·owner·기존 store 내용을 하나도 바꾸지 않고, store
+    파일이 없으면 **만들지도 않는다**(`store.load()` 는 없는 파일을 생성·초기화한다).
+    여기서 끝나면 호출자는 legacy 로 계속 가도 된다.
+
+    구간 2(10~14)부터 live 는 저장본 값이다 — `runtime.restore()` 의 게시는 롤백 없는 순차
+    대입이라 중간 실패가 혼합 상태를 남긴다. **이 뒤의 실패에서 호출자는 legacy 로 계속
+    가면 안 된다**(프로세스를 세우거나 거래를 멈춘다). store 는 닫지 않는다 — 수명은
+    호출자 소유다.
+
+    예외 관례: 인자 모양은 `ValueError`, 상태 거부는 `ApplicationBlocked(<사유>)`, store
+    장애(`StoreError`)와 `attach()` 의 `RuntimeError` 는 재작명하지 않고 그대로 올린다.
+    `vix_fetcher` 에 기본값을 두지 않는 이유: None 은 "VIX 없음"이 아니라 실제 네트워크
+    조회를 설치한다.
+    """
+    # ── 1. 인자 모양 ──────────────────────────────────────────────
+    if type(now) is not datetime or now.utcoffset() is None:
+        raise ValueError('aware 설치 시각이 필요합니다')
+    if type(commands) is not RequestBoundCommands:
+        raise ValueError('명시 RequestBoundCommands 가 필요합니다')
+    if commands.runtime is not runtime or commands.owner is not runtime.owner:
+        # 잘못 배선된 commands 는 남의 store 에 게시한다.
+        raise ValueError('invalid_command_binding')
+    # 정책 인자의 모양 결함을 live 를 건드리기 전으로 당긴다(결과는 버린다).
+    execution_config_version(validator_config=validator_config, risk=risk,
+                             position_pct=position_pct, stop_params=stop_params,
+                             exit_config=exit_config, experts_shadow_mode=experts_shadow_mode)
+    effective_risk_policy(risk, regime=regime_adapter.regime, fee_config=fee_config)
+
+    # ── 2. 바인딩 선검사 ──────────────────────────────────────────
+    engine = runtime.engine
+    if engine.running:
+        raise ApplicationBlocked('engine_running')
+    if engine._execution_runtime is not None:
+        raise ApplicationBlocked('execution_runtime_already_bound')
+    if engine._event_queue:
+        raise ApplicationBlocked('execution_queue_not_empty')
+    if engine.risk_manager is not None and any(
+            len(getattr(engine.risk_manager, ledger, ())) > 0 for ledger in _LEGACY_LEDGERS):
+        # 제품 순서에서 처음 하중되는 가드를 restore 앞으로 당긴다.
+        raise ApplicationBlocked('legacy_pending_orders_present')
+    if runtime.gateway is not None:
+        raise ApplicationBlocked('gateway_already_installed')
+    # 실패 뒤의 재호출에서 8번 대조가 항진명제로 되살아나는 것을 구조로 막는다. 레짐 배선
+    # 검사보다 **앞**이다 — 구간 2 의 실패는 `_regime_writer` 를 남기고 끝날 수 있어서
+    # 뒤에 두면 재호출이 배선 충돌로 가려진다.
+    if runtime.owner.version != 0 or runtime.owner.state:
+        raise ApplicationBlocked('execution_runtime_already_restored')
+    if (runtime._regime_writer is not None or sidecar is not runtime.risk_manager
+            or regime_adapter is not getattr(engine, '_regime_adapter', None)):
+        raise ApplicationBlocked('regime_owner_binding_conflict')
+
+    # ── 3. 면제 별칭(주입은 호출자 몫, 설치기는 확인만 한다) ──────
+    exit_manager = runtime.exit_manager
+    if (engine.risk_manager is None
+            or getattr(engine.risk_manager, '_exit_exempt_ref', None) is not exit_manager._exit_exempt):
+        raise ApplicationBlocked('exit_exempt_alias_required')
+
+    # ── 4. checkpoint 읽기(없는 파일을 만들지 않는다) ─────────────
+    store = runtime.owner.store
+    if type(store) is not ExecutionStateStore or not store.path.exists():
+        raise ApplicationBlocked('startup_checkpoint_required')
+    version, state = await store.load()
+    if version <= 0 or not _REQUIRED_ROOTS <= state.keys():
+        raise ApplicationBlocked('startup_checkpoint_required')
+
+    # ── 5. 계좌 scope(제품 `_publish` 에는 scope 대조가 없다) ─────
+    regime = state.get('regime_policy')
+    if scope_reason(state, runtime.account_scope) or (
+            regime is not None
+            and regime['baseline']['supplied']['account_scope'] != runtime.account_scope):
+        raise ApplicationBlocked('startup_account_scope_conflict')
+
+    # ── 6. 일자 선필터(제품 입장 검사와 같은 시계·같은 식) ────────
+    # 주입 `now` 는 정책 게시 시각 전용이다. 설치기는 일자 전환을 하지 않는다.
+    if state['risk'].get('day') != runtime._now().date().isoformat():
+        raise ApplicationBlocked('startup_day_transition_required')
+
+    # ── 7. 레짐 baseline·등록(만들지 않는다) ──────────────────────
+    if regime is None:
+        raise ApplicationBlocked('startup_regime_baseline_required')
+    for name in POLICY_READS:
+        try:
+            versioned_fact(state, name)
+        except ValueError:
+            raise ApplicationBlocked('startup_policy_generations_required') from None
+
+    # ── 8. restore 앞 대조(restore 뒤는 게시본 대 게시본의 항진명제다) ──
+    try:
+        saved = decode_portfolio(state['portfolio'])
+        for symbol, position in saved.positions.items():
+            position.current_price = runtime._view_price(state, symbol, position.current_price)
+        reconciled = (encode_portfolio(saved) == encode_portfolio(engine.portfolio)
+                      and encode_protection(exit_manager) == state['protection'])
+    except Exception:
+        # live 인코딩 실패도 "대사되지 않았다"는 같은 결론이다.
+        reconciled = False
+    if not reconciled:
+        raise ApplicationBlocked('startup_reconciliation_required')
+
+    # ── 9. 잔존 prepared 선필터 ───────────────────────────────────
+    # `recover_unsent()` 는 `kind=='submit'` 만 순회한다 — 미claim 자식 명령은 기동 sweep 이
+    # 끝낼 수 없고 남으면 같은 종목의 모든 새 SUBMIT 을 영구 차단한다.
+    for attempt in state['attempts'].values():
+        if attempt.get('state') == 'prepared' and attempt.get('kind') != 'submit':
+            raise ApplicationBlocked('startup_unresolved_prepared_attempt')
+
+    # ── 구간 2 ────────────────────────────────────────────────────
+    await runtime.restore()
+    runtime._require_day_admission()
+    writer = RegimeOwner(runtime, adapter=regime_adapter, sidecar=sidecar, vix_fetcher=vix_fetcher)
+    if runtime._regime_writer is not writer or 'regime_policy' not in runtime.owner.state:
+        raise ApplicationBlocked('regime_owner_binding_conflict')
+    # digest 는 기동 시 한 번 고정한다 — 재게시와 함께 덮어쓰면 다시 자기 인증이 된다.
+    digest = await publish_entry_policy_context(
+        commands, risk=risk, sidecar=sidecar, regime_adapter=regime_adapter,
+        fee_config=fee_config, validator_config=validator_config, position_pct=position_pct,
+        stop_params=stop_params, exit_config=exit_config,
+        experts_shadow_mode=experts_shadow_mode, now=now)
+    gateway = SignalGateway(runtime, commands, exit_manager=exit_manager, config_version=digest)
+    await gateway.recover_unsent()
+    # backstop: sweep 이 끝내지 못한 행은 kind 를 가리지 않고 거부한다.
+    for attempt in runtime.owner.state['attempts'].values():
+        if attempt.get('state') == 'prepared':
+            raise ApplicationBlocked('startup_unresolved_prepared_attempt')
+    # attach 만 되고 gateway 가 없는 구간의 SIGNAL 은 조용히 폐기된다 — 인접한 두 줄로 줄인다.
+    runtime.attach()
+    runtime.install_gateway(gateway)
+    return gateway

@@ -339,7 +339,9 @@ def freeze(monkeypatch):
     monkeypatch.setattr(_risk_module, 'date', _FrozenDate)
     monkeypatch.setattr(_dtmod, 'datetime', _FrozenDatetime)
     monkeypatch.setattr(_dtmod, 'date', _FrozenDate)
-    monkeypatch.setattr(_macro_module, 'is_macro_event_day', lambda day=None: ('', False))
+    # 제품 시그니처는 `is_macro_event_day(day)` 이고 label 은 None 또는 비어 있지 않은
+    # 문자열이다(`MacroPolicySnapshot`). 빈 문자열을 돌려주면 게시가 거부된다.
+    monkeypatch.setattr(_macro_module, 'is_macro_event_day', lambda day=None: (None, False))
 
 
 async def seed_checkpoint(tmp_path, *, scope=SCOPE, mutate=None, with_trend=True):
@@ -373,12 +375,22 @@ async def seed_checkpoint(tmp_path, *, scope=SCOPE, mutate=None, with_trend=True
                 return None
 
             writer = RegimeOwner(runtime, adapter=adapter, sidecar=sidecar, vix_fetcher=missing_vix)
+            # VIX 를 **먼저** 수락시킨다. `_refresh_ticket` 의 `refresh_vix` 는 6시간 규칙이라
+            # 신선한 수락본이 있으면 추세 갱신이 뒤에 vix 태스크를 걸지 않는다 — 걸리면 그
+            # 새 vix 행이 추세 input seal 의 읽기를 바꿔(`source_read_changed`) 복원 뒤 첫
+            # prepare 가 `regime_source_not_current` 로 막히고, 그 발생 여부가 루프 타이밍에
+            # 좌우돼 표본이 비결정적이 된다.
+            vix_ticket = await writer.sources.begin('s10a3b-vix', 'vix_regime')
+            await writer.sources.complete(
+                vix_ticket, 'success', {'value': 20.0, 'fetched_at': NOW_KST.isoformat()},
+                source='s10a3b-vix', source_event_id='s10a3b-vix', received_at=NOW_KST)
 
             async def index_price(code):
                 return bullish_index(code)
 
             trend = await writer.refresh_trend(SimpleNamespace(fetch_index_price=index_price))
             assert trend.status == 'accepted'
+            assert writer._vix_refresh_task is None
         if mutate is not None:
             await mutate(runtime)
         await runtime.shutdown()
@@ -465,19 +477,19 @@ async def target(tmp_path, monkeypatch, *, scope=SCOPE, path=None, seed=True, **
 
 
 def live_snapshot(f):
-    """설치기가 건드리면 안 되는 live 세 축."""
-    return (encode_portfolio(f['engine'].portfolio), encode_protection(f['exits']),
-            f['sidecar']._sidecar_active, f['sidecar']._market_trend)
+    """설치기가 건드리면 안 되는 live 축 + 설치 흔적 세 곳의 동일성(id)."""
+    engine, runtime = f['engine'], f['runtime']
+    return (encode_portfolio(engine.portfolio), encode_protection(f['exits']),
+            f['sidecar']._sidecar_active, f['sidecar']._market_trend,
+            f['adapter']._current_regime, engine._market_regime,
+            id(engine._execution_runtime), id(runtime.gateway), id(runtime._regime_writer))
 
 
 def assert_untouched(f, before):
-    """구간 1 거부의 공통 계약 — live·owner·설치 흔적이 전부 그대로다."""
+    """구간 1 거부의 공통 계약 — live·owner·설치 흔적이 전부 호출 전 그대로다."""
     assert live_snapshot(f) == before
     assert f['runtime'].owner.version == 0 and f['runtime'].owner.state == {}
     assert f['runtime'].owner.healthy is False
-    assert f['engine']._execution_runtime is None
-    assert f['runtime'].gateway is None or f['runtime'].gateway is f.get('installed_gateway')
-    assert f['runtime']._regime_writer is None
     assert f['posts']() == [] and f['broker'].direct_calls == []
 
 
@@ -654,7 +666,6 @@ def _legacy_ledger(f):
 
 def _installed_gateway(f):
     f['runtime'].gateway = SimpleNamespace(runtime=f['runtime'])
-    f['installed_gateway'] = f['runtime'].gateway
 
 
 def _regime_writer_present(f):
