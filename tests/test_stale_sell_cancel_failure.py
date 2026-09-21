@@ -25,7 +25,7 @@ from test_engine_stale_pending_fixes import (  # noqa: E402 — PR #81 하네스
 )
 
 import src.schedulers.kr_scheduler as kr  # noqa: E402
-from src.core.engine import RiskManager  # noqa: E402
+from src.core.engine import RiskManager, _SellKeep  # noqa: E402
 from src.core.types import Order, OrderSide, OrderStatus, OrderType, Position  # noqa: E402
 from src.schedulers.kr_scheduler import KRScheduler  # noqa: E402
 from src.strategies.exit_manager import ExitManager, ExitStage  # noqa: E402
@@ -93,7 +93,7 @@ def _engine(monkeypatch, broker, *, keep=None, positions=None, partial=True):
     if partial:
         rm._pending_signal_cache[SYM] = {"sell_partial_intent": True}   # on_signal 이 등록 시점에 남기는 의도
     if keep is not None:
-        rm._pending_cancel_keep[SYM] = (keep, NOW - timedelta(seconds=20), False)   # 재시도 간격은 이미 지났다
+        rm._pending_cancel_keep[SYM] = _SellKeep(keep, NOW - timedelta(seconds=20), False, False)   # 재시도 간격은 이미 지났다
     return rm
 
 
@@ -114,7 +114,7 @@ def test_engine_failed_cancel_does_not_stack_a_market_sell(monkeypatch, status):
     assert SYM in rm._pending_orders                # 살아 있을 수 있는 주문 — pending 유지
     assert rm._pending_quantities[SYM] == 10
     assert EXCHANGE not in broker.calls           # 첫 회는 조회 없이 대기(체결이면 FillEvent 가 지운다)
-    assert rm._pending_cancel_keep[SYM] == (1, NOW, False)
+    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, False, False)
     assert SYM not in rm._pending_fallback_count    # 시장가 폴백 예산(2회)은 깎지 않는다
     # 등록 시각은 되감지 않는다 — 헬스 모니터의 5분 교착 경보가 '손절이 막힌 SELL 유지'를 볼 수 있어야 한다
     assert (NOW - rm._pending_timestamps[SYM]).total_seconds() == 100
@@ -143,10 +143,10 @@ def test_engine_zero_cancel_with_untracked_order_waits_one_cycle(monkeypatch):
     _drive(rm)
 
     assert broker.orders == [] and SYM in rm._pending_orders
-    assert rm._pending_cancel_keep[SYM] == (1, NOW, False)
+    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, False, False)
 
 
-@pytest.mark.parametrize("rows, count_after", [(ALIVE, (1, NOW, True)), (None, (6, NOW, False))],
+@pytest.mark.parametrize("rows, count_after", [(ALIVE, _SellKeep(1, NOW, True, True)), (None, _SellKeep(6, NOW, False, False))],
                          ids=["거래소 생존 → 연속 판단불가 횟수 초기화", "조회 실패(판단 불가) → 횟수 +1"])
 def test_engine_retry_keeps_while_alive_or_undecidable(monkeypatch, rows, count_after):
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=rows)
@@ -156,7 +156,7 @@ def test_engine_retry_keeps_while_alive_or_undecidable(monkeypatch, rows, count_
 
     assert broker.calls == ["cancel", EXCHANGE]     # 취소는 매 주기 다시 시도한다(성공하면 그때 시장가 전환)
     assert broker.orders == [] and SYM in rm._pending_orders
-    assert rm._pending_cancel_keep[SYM] == count_after   # (횟수, 시도 시각, 생존 로그 1회 여부)
+    assert rm._pending_cancel_keep[SYM] == count_after   # (횟수, 시도 시각, 생존 로그 1회 여부, 직전 판정이 생존인가)
 
 
 def test_engine_one_undecidable_query_after_long_alive_does_not_release(monkeypatch):
@@ -343,7 +343,10 @@ def test_engine_late_balance_snapshot_does_not_turn_a_full_stop_into_a_partial(m
     ({"quantity": 10, "exit_action": "sell_partial"}, True),
     ({"quantity": 10}, True),                                   # batch·core 트림 등 exit_action 없는 발행처
     ({"quantity": 100, "exit_action": "sell_all"}, False),
+    ({"quantity": 100}, False),                                 # 수량이 보유 전량이면 과매도 여지가 없다
+    ({"quantity": 100, "exit_action": "sell_partial"}, False),
     ({"quantity": 10, "exit_action": "sell_all"}, False),       # 의도가 전량이면 수량과 무관하게 전량
+    ({"quantity": 90, "exit_action": "replacement_exit"}, False),   # 교체 축출은 전량 의도(발행 뒤 보유가 달라져도)
     ({}, False),                                                # 수량 미지정 = 보유 전량
 ])
 def test_engine_records_the_partial_intent_when_the_sell_is_registered(monkeypatch, metadata, partial):
@@ -422,7 +425,7 @@ def test_engine_confirmed_alive_sell_backs_off_to_60_seconds(monkeypatch):
     rm = _engine(monkeypatch, broker, keep=1)
 
     _drive(rm)                                              # 생존 확인
-    assert rm._pending_cancel_keep[SYM] == (1, NOW, True)
+    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, True, True)
     _freeze_engine(monkeypatch, NOW + timedelta(seconds=59))
     _beat(rm)
     assert broker.calls == ["cancel", EXCHANGE]
@@ -430,6 +433,26 @@ def test_engine_confirmed_alive_sell_backs_off_to_60_seconds(monkeypatch):
     _freeze_engine(monkeypatch, NOW + timedelta(seconds=60))
     _beat(rm)
     assert broker.calls == ["cancel", EXCHANGE, "cancel", EXCHANGE]
+
+
+def test_engine_undecidable_after_alive_returns_to_the_20_second_budget(monkeypatch):
+    """교차 리뷰 3회차 P1: 간격을 '한 번이라도 생존을 봤는가'로 읽으면 이후 판단 불가 9회가 60초 간격이 돼 해제가
+    9분 뒤다. 간격은 **직전 판정**을 따른다 — 생존 뒤 첫 재시도만 60초, 판단 불가로 바뀌면 20초씩."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
+    rm = _engine(monkeypatch, broker, keep=1)
+    _drive(rm)                                               # T: 생존 확인
+    broker._exchange_rows = None
+
+    released_at = None
+    for sec in range(10, 600, 10):                           # 10초 하트비트
+        _freeze_engine(monkeypatch, NOW + timedelta(seconds=sec))
+        _beat(rm)
+        if SYM not in rm._pending_orders:
+            released_at = sec
+            break
+
+    assert released_at == 60 + 20 * 8                        # T+60 에 첫 판단 불가, 이후 20초마다, 연속 9회째 해제
+    assert broker.orders == []
 
 
 def test_engine_heartbeat_retries_one_symbol_at_a_time(monkeypatch):
@@ -443,7 +466,7 @@ def test_engine_heartbeat_retries_one_symbol_at_a_time(monkeypatch):
         rm._pending_sides[other], rm._pending_quantities[other] = OrderSide.SELL, 10
         rm._pending_timestamps[other] = NOW - timedelta(seconds=300)
         rm._pending_signal_cache[other] = {"sell_partial_intent": True}
-        rm._pending_cancel_keep[other] = (1, NOW - timedelta(seconds=waited), alive)
+        rm._pending_cancel_keep[other] = _SellKeep(1, NOW - timedelta(seconds=waited), alive, alive)
         rm.engine.portfolio.positions[other] = Position(
             symbol=other, quantity=100, avg_price=PRICE, current_price=PRICE, strategy="sepa_trend")
 
@@ -501,7 +524,7 @@ def test_engine_new_pending_starts_with_zero_keep_count(monkeypatch):
     rm.engine.is_trading_hours = lambda: True
     rm.engine._get_current_session = lambda: MarketSession.REGULAR
     rm._risk_validator = None
-    rm._pending_cancel_keep[SYM] = (5, NOW, False)
+    rm._pending_cancel_keep[SYM] = _SellKeep(5, NOW, False, False)
 
     sig = Signal(symbol=SYM, side=OrderSide.SELL, strength=SignalStrength.STRONG,
                  strategy=StrategyType.SEPA_TREND, price=PRICE, reason="1차 익절",
@@ -510,6 +533,33 @@ def test_engine_new_pending_starts_with_zero_keep_count(monkeypatch):
 
     assert orders and SYM in rm._pending_orders
     assert SYM not in rm._pending_cancel_keep
+
+
+def test_engine_intent_is_decided_with_the_quantity_not_after_the_quote_await(monkeypatch):
+    """교차 리뷰 3회차 P1: 수량(보유 90주 전량)을 정한 뒤 매수1호가 조회를 기다리는 동안 늦은 잔고 동기화가 보유를
+    100주로 되돌리면, 등록 시점의 보유량과 다시 비교하는 방식은 `90 < 100` 으로 전량 청산을 분할로 굳힌다."""
+    from src.core.event import SignalEvent
+    from src.core.types import MarketSession, Signal, SignalStrength, StrategyType
+
+    position = Position(symbol=SYM, quantity=90, avg_price=PRICE, current_price=PRICE, strategy="core_holding")
+    broker = SellBroker()
+
+    async def get_best_bid(symbol):
+        position.quantity = 100                              # 호가 조회 await 중 잔고 스냅샷이 덮어쓴다
+        return 9990
+    broker.get_best_bid = get_best_bid
+
+    rm = _rm(monkeypatch, broker, NOW, positions={SYM: position})
+    rm.engine.is_trading_hours = lambda: True
+    rm.engine._get_current_session = lambda: MarketSession.REGULAR
+    rm._risk_validator = None
+
+    sig = Signal(symbol=SYM, side=OrderSide.SELL, strength=SignalStrength.STRONG,
+                 strategy=StrategyType.SEPA_TREND, price=PRICE, reason="코어 손절")   # 수량·exit_action 없음
+    orders = asyncio.run(rm.on_signal(SignalEvent.from_signal(sig, source="test")))
+
+    assert orders and orders[0].order.quantity == 90
+    assert SYM not in rm._pending_signal_cache               # 전량 의도 — 취소 실패 관문에 들어가지 않는다
 
 
 # ── 스케줄러 경로: _cleanup_stale_pending (별도 장부, 3분) ────────────────────
