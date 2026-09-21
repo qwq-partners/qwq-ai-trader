@@ -226,6 +226,7 @@ def test_zero_cancel_retry_releases_when_gone_from_exchange(monkeypatch):
     _drive(rm)
 
     assert SYM not in rm._pending_orders and SYM not in rm._reserved_by_order
+    assert SYM in rm._order_fail_cooldown
 
 
 def test_zero_cancel_without_tracked_order_still_releases(monkeypatch):
@@ -239,6 +240,8 @@ def test_zero_cancel_without_tracked_order_still_releases(monkeypatch):
 
     assert SYM not in rm._pending_orders and SYM not in rm._reserved_by_order
     assert "exchange" not in broker.calls
+    # '미추적'은 방금 체결(FillEvent 대기 중)일 수도 있다 — 포지션 반영 전 같은 종목 재매수 차단
+    assert SYM in rm._order_fail_cooldown
 
 
 def test_cancel_ack_releases(monkeypatch):
@@ -250,6 +253,35 @@ def test_cancel_ack_releases(monkeypatch):
     _drive(rm)
 
     assert SYM not in rm._pending_orders and SYM not in rm._reserved_by_order
+    assert SYM not in rm._order_fail_cooldown   # 취소 ACK 뒤 재진입은 종전대로 허용
+
+
+def test_confirmed_alive_order_is_never_force_released(monkeypatch):
+    """거래소 생존이 확인된 주문은 유지 상한과 무관하게 pending·예약을 지킨다 — 살아 있는 주문을 잊지 않는다."""
+    now = datetime(2026, 9, 21, 10, 30)
+    broker = Broker(cancelled=0, tracked=[_tracked_buy()],
+                    exchange_rows=[{"symbol": SYM, "side": "buy", "qty": 10}])
+    rm = _rm(monkeypatch, broker, now)
+    _stale(rm, OrderSide.BUY, now, seconds=700, reserved=Decimal("101500"))
+    rm._pending_fallback_count[SYM] = 40
+
+    _drive(rm)
+
+    assert SYM in rm._pending_orders and rm._reserved_by_order[SYM] == Decimal("101500")
+    assert SYM not in rm._order_fail_cooldown
+
+
+def test_partial_fill_position_releases_so_exits_are_not_blocked(monkeypatch):
+    """부분체결로 포지션이 있으면 종전대로 해제한다 — pending 은 그 종목의 손절 신호까지 막기 때문."""
+    now = datetime(2026, 9, 21, 10, 30)
+    broker = Broker(cancelled=0, tracked=[_tracked_buy(OrderStatus.PARTIAL)])
+    rm = _rm(monkeypatch, broker, now, positions=_held())
+    _stale(rm, OrderSide.BUY, now, seconds=700, reserved=Decimal("60900"))
+
+    _drive(rm)
+
+    assert SYM not in rm._pending_orders and SYM not in rm._reserved_by_order
+    assert "exchange" not in broker.calls
 
 
 def test_keep_is_bounded_even_if_exchange_query_keeps_failing(monkeypatch):
@@ -326,3 +358,19 @@ def test_new_pending_starts_with_zero_fallback_count(monkeypatch):
     assert orders and orders[0].order.side == OrderSide.SELL
     assert SYM in rm._pending_orders
     assert SYM not in rm._pending_fallback_count
+
+
+# ── 거래소 실 미체결 조회의 다중 페이지 ──────────────────────────────────────
+
+from test_kis_tr_switch import _capture_get, broker as kis_broker  # noqa: E402,F401
+
+
+@pytest.mark.parametrize("tr_cont, undecidable", [("F", True), ("M", True), ("D", False), ("", False)])
+def test_open_order_query_is_undecidable_when_more_pages_remain(kis_broker, tr_cont, undecidable):
+    """첫 페이지만 읽는 조회가 '미체결 없음'을 말하면 살아 있는 주문의 pending 이 풀린다 → 판단 불가(None)."""
+    _capture_get(kis_broker, {"rt_cd": "0", "_tr_cont": tr_cont, "output": [
+        {"pdno": OTHER, "sll_buy_dvsn_cd": "02", "rmn_qty": "3"}]})
+
+    rows = asyncio.run(kis_broker.get_exchange_open_orders())
+
+    assert (rows is None) if undecidable else (rows == [{"symbol": OTHER, "side": "buy", "qty": 3}])

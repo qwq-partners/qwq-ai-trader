@@ -1060,6 +1060,11 @@ class KISBroker(BaseBroker):
             if str(data.get("rt_cd", "")) != "0":
                 logger.warning(f"실 미체결 조회 실패: {data.get('msg1', '')}")
                 return None
+            # 다음 페이지가 남았으면(응답 헤더 tr_cont F/M) 첫 페이지만으로 "미체결 없음"을 말할 수 없다
+            # → 판단 불가. 이 조회는 pending 해제의 근거로 쓰인다 (2026-09-21, 페이지 루프는 별도 PR).
+            if data.get("_tr_cont") in ("F", "M"):
+                logger.warning("실 미체결 조회: 다음 페이지가 남음(첫 페이지만 조회) → 판단 불가")
+                return None
             rows: List[Dict[str, Any]] = []
             for item in (data.get("output", []) or []):
                 if _TR_NEW:

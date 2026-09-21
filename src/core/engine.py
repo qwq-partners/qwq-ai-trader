@@ -1825,26 +1825,38 @@ class RiskManager:
                     # 즉시 재매수(이중 매수)된다. 유지 횟수는 매도 폴백 횟수 장부를 같이 쓴다
                     # (한 종목의 pending 은 한 방향뿐, clear_pending/on_fill 이 지운다).
                     keep_cnt = self._pending_fallback_count.get(s, 0)
+                    _held = self.engine.portfolio.positions.get(s)
                     if cancelled:
                         logger.info(f"[리스크] stale 주문 거래소 취소 완료: {s}")
                         cancel_ok = True
-                    elif not await self._stale_buy_still_live(s, confirm=keep_cnt > 0):
-                        logger.info(f"[리스크] stale 주문 취소 대상 없음(이미 소멸): {s} → pending 해제")
-                        cancel_ok = True
-                    elif keep_cnt >= _MAX_BUY_KEEP:
-                        # 조회 실패가 이어져도 예약현금이 자정까지 잠기지 않게 한다 (스케줄러 15분 강제 해제와 같은 정책)
-                        logger.critical(
-                            f"[리스크] stale 매수 취소 실패 {keep_cnt}회 — 강제 해제: {s} "
-                            f"(거래소에 주문이 살아 있을 수 있음 — 수동 확인 필요)"
-                        )
-                        self.block_symbol(s)  # 원 주문 위 재매수 차단 (BUY 전용 쿨다운, 청산은 무관)
+                    elif _held is not None and _held.quantity > 0:
+                        # 부분체결로 포지션이 있으면 종전대로 해제 — pending 은 방향 구분 없이 그 종목의
+                        # 손절·청산 신호까지 막는다. 재매수는 '기존 포지션 보유 차단'이 막는다.
+                        logger.info(f"[리스크] stale 주문 취소 0건 — 부분체결 보유 중이라 청산 우선: {s} → pending 해제")
                         cancel_ok = True
                     else:
+                        live = await self._stale_buy_still_live(s, confirm=keep_cnt > 0)
+                        if live is False:
+                            logger.info(f"[리스크] stale 주문 취소 대상 없음(이미 소멸): {s} → pending 해제")
+                            cancel_ok = True
+                        elif live is None and keep_cnt >= _MAX_BUY_KEEP:
+                            # 생존이 확인된 주문은 상한과 무관하게 유지한다. 판단 불가(조회 실패)가 이어질 때만
+                            # 예약현금이 자정까지 잠기지 않게 푼다 (스케줄러 15분 강제 해제와 같은 정책).
+                            logger.critical(
+                                f"[리스크] stale 매수 확인 불가 {keep_cnt}회 — 강제 해제: {s} "
+                                f"(거래소에 주문이 살아 있을 수 있음 — 수동 확인 필요)"
+                            )
+                            cancel_ok = True
+                    if cancel_ok and not cancelled:
+                        # 0건 해제는 '방금 체결(FillEvent 가 큐에서 대기 중)'일 수 있다 — 포지션이 반영되기 전
+                        # 같은 종목 재매수를 5분 막는다 (BUY 전용 쿨다운, 청산은 무관)
+                        self.block_symbol(s)
+                    if not cancel_ok:
                         async with self._pending_lock:
                             if s in self._pending_timestamps:  # await 사이 다른 태스크(스케줄러 정리)가 해제했으면 되살리지 않는다
                                 self._pending_fallback_count[s] = keep_cnt + 1
                                 # 60초 뒤 재시도 (SIGNAL 마다 취소 API 호출 방지). 시각을 되감는 방식이라
-                                # 헬스 모니터·대시보드의 경과 표시는 유지 중 9~10분에 머문다 — 상한 안에서만.
+                                # 헬스 모니터·대시보드의 경과 표시는 유지 중 9~10분에 머문다(교착 판정은 그대로 발화).
                                 self._pending_timestamps[s] = now - timedelta(
                                     seconds=self._PENDING_TIMEOUT_SECONDS - 60)
                 except Exception as e:
@@ -2242,8 +2254,8 @@ class RiskManager:
             Decimal("0"),
         )
 
-    async def _stale_buy_still_live(self, symbol: str, *, confirm: bool) -> bool:
-        """취소 0건인 stale BUY 가 아직 살아 있을 수 있는가 (True = pending·예약현금 유지). 상태 무변경.
+    async def _stale_buy_still_live(self, symbol: str, *, confirm: bool) -> Optional[bool]:
+        """취소 0건인 stale BUY 가 아직 살아 있는가 — True 생존(또는 첫 회 대기) / None 판단 불가 / False 소멸. 상태 무변경.
 
         브로커가 그 종목의 활성 주문을 더는 추적하지 않으면 소멸 — 해제한다(2026-08-04 P1 유지).
         아직 추적 중이면 취소 실패다. 첫 회(confirm=False)는 조회 없이 한 주기 기다린다 — 방금
@@ -2261,7 +2273,9 @@ class RiskManager:
         if not hasattr(broker, "get_exchange_open_orders"):
             return False
         rows = await broker.get_exchange_open_orders()
-        if rows is None or any(r.get("symbol") == symbol and r.get("side") == "buy" for r in rows):
+        if rows is None:
+            return None
+        if any(r.get("symbol") == symbol and r.get("side") == "buy" for r in rows):
             return True
         logger.warning(
             f"[리스크] stale 주문: 브로커는 추적 중이나 거래소 미체결 없음(수동 취소 등 소멸 추정): {symbol}")
