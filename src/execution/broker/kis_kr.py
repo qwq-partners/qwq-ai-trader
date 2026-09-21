@@ -1081,6 +1081,11 @@ class KISBroker(BaseBroker):
                         )
                         return None
                     qty = int(_qty_txt)
+                    # 음수 미체결 수량은 신 TR 응답의 의미를 알 수 없다는 뜻이다 —
+                    # 0 이나 그대로 올리는 대신 판단 불가(None)로 올린다.
+                    if qty < 0:
+                        logger.warning(f"실 미체결 조회: 수량이 음수({qty}) → 판단 불가")
+                        return None
                 else:
                     qty = int(item.get("rmn_qty", 0) or 0)
                 rows.append({

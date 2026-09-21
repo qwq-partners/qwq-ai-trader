@@ -224,7 +224,7 @@ echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
   세션의 `EXCG_ID_DVSN_CD` 값(NXT? 미입력?)을 확정할 근거가 없기 때문이다.
   **취소·정정에는 세션 분기가 없다** — `cancel_order`/`modify_order` 는 주문이 어느 세션에서
   접수됐는지 모르고, new 모드에서는 무조건 `EXCG_ID_DVSN_CD="KRX"` 를 싣는다. 따라서 NXT
-  세션에 접수된(=구 TR) 주문을 new 모드에서 취소하면 "KRX" 가 그 주문에 닿는다 (아래 확인 12).
+  세션에 접수된(=구 TR) 주문을 new 모드에서 취소하면 "KRX" 가 그 주문에 닿는다 (아래 확인 13).
 - 전환 여부 확인(로그): 재시작 직후 `journalctl -u qwq-ai-trader | grep 'KIS TR 세트'` 가
   `KIS TR 세트: new`(전환) 또는 `KIS TR 세트: legacy`(기본/롤백)를 찍는다. 브로커 연결마다
   남으며 주문 본문·TR 에는 영향이 없다.

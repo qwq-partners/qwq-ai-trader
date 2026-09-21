@@ -8,7 +8,7 @@
 2) legacy 모드의 요청 본문이 전환 전과 완전히 같다 — 신 TR 전용 키가 새지 않는다.
 3) new 모드 본문에만 EXCG_ID_DVSN_CD(+ order-cash 의 CNDT_PRIC)가 실린다.
 4) new 모드 취소가능조회가 rmn_qty 부재/공백 시 psbl_qty 를 읽고, 둘 다 없거나
-   비어 있으면 조용한 0 대신 판단 불가(None)를 돌려준다.
+   비어 있거나 음수면 조용한 0 대신 판단 불가(None)를 돌려준다. legacy 분기는 무변경.
 5) 신 TR 두 개도 계좌 원장 간격으로 직렬화된다.
 6) check_fills 가 읽는 응답 키(odno·tot_ccld_qty·avg_prvs)는 그대로다.
 7) 신 TR·신 본문은 정규장 주문에만 — NXT 세션(pre_market·next_market) 접수는
@@ -296,6 +296,21 @@ def test_new_cancelable_without_any_qty_key_is_undecidable(broker, monkeypatch):
     _use_new(monkeypatch, True)
     _capture_get(broker, {"rt_cd": "0", "output": [dict(_ROW)]})
     assert asyncio.run(broker.get_exchange_open_orders()) is None
+
+
+def test_new_cancelable_negative_qty_is_undecidable(broker, monkeypatch):
+    """음수 수량은 응답을 해석할 수 없다는 뜻 — 그대로 올리지 않고 None 이다."""
+    _use_new(monkeypatch, True)
+    _capture_get(broker, {"rt_cd": "0", "output": [dict(_ROW, psbl_qty="-1")]})
+    assert asyncio.run(broker.get_exchange_open_orders()) is None
+
+
+def test_legacy_cancelable_negative_qty_keeps_current_behaviour(broker, monkeypatch):
+    """legacy 분기는 무변경이 이 PR 의 계약 — 음수도 전환 전처럼 그대로 실린다."""
+    _use_new(monkeypatch, False)
+    _capture_get(broker, {"rt_cd": "0", "output": [dict(_ROW, rmn_qty="-1")]})
+    rows = asyncio.run(broker.get_exchange_open_orders())
+    assert rows == [{"symbol": "005930", "side": "sell", "qty": -1}]
 
 
 def test_legacy_cancelable_missing_rmn_qty_keeps_current_behaviour(broker, monkeypatch):
