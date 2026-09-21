@@ -1154,6 +1154,7 @@ class _SellKeep(NamedTuple):
     tried_at: datetime    # 마지막 취소 시도 시각 — 재시도 간격의 기준
     alive_logged: bool    # 이 유지에서 '거래소 생존·취소 불가' ERROR 를 이미 남겼는가 (1회 제한)
     alive: bool           # **직전** 판정이 거래소 생존 확인이었는가 — 재시도 간격(60초/20초)을 가른다
+    decided_at: datetime  # 마지막으로 '판단 불가'가 아니었던 시각(첫 회 대기·생존 확인) — 판단 불가 시간 예산의 기준
 
 
 class RiskManager:
@@ -2370,7 +2371,10 @@ class RiskManager:
         # 직전 판정 기준 — '한 번이라도 생존을 봤다'로 읽으면 이후 판단 불가의 상한(연속 9회)이 60초 간격으로
         # 늘어나 해제가 9분 뒤가 된다. 판단 불가로 바뀌면 곧바로 20초 간격·종전 시간 예산으로 돌아온다.
         return self._SELL_ALIVE_RETRY_SECONDS if keep.alive else self._SELL_CANCEL_RETRY_SECONDS
-    _MAX_SELL_KEEP = 9               # 연속 '판단 불가' 상한: 90초 + 20초×9 = 270초 = 종전 최장 보유(90초×3회)
+    # 판단 불가 시간 예산: 마지막 비-판단불가 판정 뒤 이 시간이 지나도록 판단 불가뿐이면 해제 — 처음부터 판단 불가면
+    # 등록 후 90 + 180 = 270초 = 종전 최장 보유(90초×3회). 횟수가 아니라 시간으로 센다: 재시도가 SIGNAL·하트비트
+    # 구동이라 종목이 많거나 큐가 밀리면 횟수 기준 상한은 그만큼 늦게 찬다(8종목이면 270초가 820초가 된다).
+    _SELL_UNKNOWN_BUDGET_SECONDS = 180
 
     def _is_same_sell_pending(self, symbol: str, registered_at: datetime) -> bool:
         """await 를 건넌 뒤에도 같은 SELL pending 인가 (해제·재등록되면 등록 시각이 달라진다)."""
@@ -2386,12 +2390,13 @@ class RiskManager:
         그 밖에는: 첫 회는 추적 여부와 무관하게 조회 없이 기다린다 — 장부는 완전 체결·취소 성공에서만 빠지므로
         0건의 가장 흔한 원인은 '방금 체결'이고 그 FillEvent(우선순위 1)가 pending 을 지운다. 그 뒤에도 남아
         있으면 거래소 실 미체결로 가린다 — 소멸이면 False(종전 시장가 폴백), 생존이면 상한 없이 유지(풀면
-        발생원이 같은 분할 매도를 그 위에 재발행한다), 판단 불가가 **연속으로** 이어지면 상한에서 재주문 없이
+        발생원이 같은 분할 매도를 그 위에 재발행한다), 판단 불가만 **연속으로** 시간 예산(180초)을 넘기면 재주문 없이
         해제한다(pending 은 그 종목의 손절 신호까지 막는다 — 재판단은 발생원이 한다). 횟수는 BUY 유지와 같은
         뜻이다: 1 이상 = 이미 기다렸다, 생존 확인·첫 회 대기는 1 로 되돌린다. 재시도는 on_heartbeat 가 구동한다.
         """
         keep = self._pending_cancel_keep.get(symbol)
-        keep_cnt, alive_logged = (keep.count, keep.alive_logged) if keep is not None else (0, False)
+        keep_cnt, alive_logged, decided_at = ((keep.count, keep.alive_logged, keep.decided_at)
+                                             if keep is not None else (0, False, now))
         if cancelled > 0:
             try:
                 tracked = await self.stale_order_still_live(symbol, OrderSide.SELL, confirm=False)
@@ -2411,9 +2416,10 @@ class RiskManager:
             logger.warning(f"[리스크] 매도 취소 실패 가능(체결 직후/거래소 생존): {symbol} → 시장가 재주문 보류")
         if live is False:
             return False
-        if live is None and keep_cnt >= self._MAX_SELL_KEEP:
+        if live is None and (now - decided_at).total_seconds() >= self._SELL_UNKNOWN_BUDGET_SECONDS:
             logger.critical(
-                f"[리스크] stale 매도 확인 불가 {keep_cnt}회 — 재주문 없이 pending 해제: {symbol} "
+                f"[리스크] stale 매도 확인 불가 {keep_cnt}회·{(now - decided_at).total_seconds():.0f}초 — "
+                f"재주문 없이 pending 해제: {symbol} "
                 f"(거래소에 주문이 살아 있을 수 있음 — 수동 확인 필요)"
             )
             await self.clear_pending(symbol)
@@ -2426,7 +2432,8 @@ class RiskManager:
         async with self._pending_lock:
             if symbol in self._pending_timestamps:  # await 사이 다른 태스크(스케줄러 정리)가 해제했으면 되살리지 않는다
                 self._pending_cancel_keep[symbol] = _SellKeep(
-                    keep_cnt + 1 if live is None else 1, now, alive_logged, live is True and keep_cnt > 0)
+                    keep_cnt + 1 if live is None else 1, now, alive_logged, live is True and keep_cnt > 0,
+                    decided_at if live is None else now)
         return True
 
     async def on_heartbeat(self, event: Event) -> None:
@@ -2442,12 +2449,13 @@ class RiskManager:
         now = datetime.now()
         if not 900 <= now.hour * 100 + now.minute < 1530:
             return None
-        # 재시도 간격이 지난 유지분 중 가장 오래 기다린 하나만 — 브로커 I/O 를 한 핸들러에 몰아 넣으면 뒤의 FILL 이 밀린다
-        due = [(keep.tried_at, s) for s, keep in self._pending_cancel_keep.items()
-               if self._pending_sides.get(s) == OrderSide.SELL and s in self._pending_timestamps
-               and (now - keep.tried_at).total_seconds() >= self._sell_retry_interval(keep)]
-        if due:
-            await self._fallback_stale_sell(min(due)[1], now)
+        # 재시도 간격이 지난 유지분을 오래 기다린 순으로 모두 처리한다(on_signal 의 stale 루프와 같은 방식).
+        # 하트비트당 한 종목씩이면 간격이 10초×종목 수로 늘어난다 — 8종목이면 20초가 80초가 된다.
+        due = sorted((keep.tried_at, s) for s, keep in self._pending_cancel_keep.items()
+                     if self._pending_sides.get(s) == OrderSide.SELL and s in self._pending_timestamps
+                     and (now - keep.tried_at).total_seconds() >= self._sell_retry_interval(keep))
+        for _, s in due:
+            await self._fallback_stale_sell(s, now)
         return None
 
     async def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):

@@ -87,14 +87,26 @@ def _freeze_engine(monkeypatch, at):
     monkeypatch.setattr(eng, "datetime", _Frozen)
 
 
-def _engine(monkeypatch, broker, *, keep=None, positions=None, partial=True):
+def _engine(monkeypatch, broker, *, keep=None, positions=None, partial=True, undecided_for=20):
     rm = _rm(monkeypatch, broker, NOW, positions=_held_100() if positions is None else positions)
     _stale(rm, OrderSide.SELL, NOW, seconds=100)
     if partial:
-        rm._pending_signal_cache[SYM] = {"sell_partial_intent": True}   # on_signal 이 등록 시점에 남기는 의도
-    if keep is not None:
-        rm._pending_cancel_keep[SYM] = _SellKeep(keep, NOW - timedelta(seconds=20), False, False)   # 재시도 간격은 이미 지났다
+        rm._pending_signal_cache[SYM] = {"sell_partial_intent": True}   # on_signal 이 수량을 정하며 남기는 의도
+    if keep is not None:   # 이미 기다렸고 재시도 간격(20초)도 지났다. undecided_for = 마지막 비-판단불가 판정 뒤 경과(초)
+        rm._pending_cancel_keep[SYM] = _SellKeep(keep, NOW - timedelta(seconds=20), False, False,
+                                                 NOW - timedelta(seconds=undecided_for))
     return rm
+
+
+def _add_kept_partial_sell(rm, symbol, *, waited, alive=False):
+    rm._pending_orders.add(symbol)
+    rm._pending_sides[symbol], rm._pending_quantities[symbol] = OrderSide.SELL, 10
+    rm._pending_timestamps[symbol] = NOW - timedelta(seconds=300)
+    rm._pending_signal_cache[symbol] = {"sell_partial_intent": True}
+    at = NOW - timedelta(seconds=waited)
+    rm._pending_cancel_keep[symbol] = _SellKeep(1, at, alive, alive, at)
+    rm.engine.portfolio.positions[symbol] = Position(
+        symbol=symbol, quantity=100, avg_price=PRICE, current_price=PRICE, strategy="sepa_trend")
 
 
 def _beat(rm):
@@ -114,7 +126,7 @@ def test_engine_failed_cancel_does_not_stack_a_market_sell(monkeypatch, status):
     assert SYM in rm._pending_orders                # 살아 있을 수 있는 주문 — pending 유지
     assert rm._pending_quantities[SYM] == 10
     assert EXCHANGE not in broker.calls           # 첫 회는 조회 없이 대기(체결이면 FillEvent 가 지운다)
-    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, False, False)
+    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, False, False, NOW)
     assert SYM not in rm._pending_fallback_count    # 시장가 폴백 예산(2회)은 깎지 않는다
     # 등록 시각은 되감지 않는다 — 헬스 모니터의 5분 교착 경보가 '손절이 막힌 SELL 유지'를 볼 수 있어야 한다
     assert (NOW - rm._pending_timestamps[SYM]).total_seconds() == 100
@@ -143,10 +155,11 @@ def test_engine_zero_cancel_with_untracked_order_waits_one_cycle(monkeypatch):
     _drive(rm)
 
     assert broker.orders == [] and SYM in rm._pending_orders
-    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, False, False)
+    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, False, False, NOW)
 
 
-@pytest.mark.parametrize("rows, count_after", [(ALIVE, _SellKeep(1, NOW, True, True)), (None, _SellKeep(6, NOW, False, False))],
+@pytest.mark.parametrize("rows, count_after", [(ALIVE, _SellKeep(1, NOW, True, True, NOW)),
+                          (None, _SellKeep(6, NOW, False, False, NOW - timedelta(seconds=20)))],
                          ids=["거래소 생존 → 연속 판단불가 횟수 초기화", "조회 실패(판단 불가) → 횟수 +1"])
 def test_engine_retry_keeps_while_alive_or_undecidable(monkeypatch, rows, count_after):
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=rows)
@@ -156,15 +169,15 @@ def test_engine_retry_keeps_while_alive_or_undecidable(monkeypatch, rows, count_
 
     assert broker.calls == ["cancel", EXCHANGE]     # 취소는 매 주기 다시 시도한다(성공하면 그때 시장가 전환)
     assert broker.orders == [] and SYM in rm._pending_orders
-    assert rm._pending_cancel_keep[SYM] == count_after   # (횟수, 시도 시각, 생존 로그 1회 여부, 직전 판정이 생존인가)
+    assert rm._pending_cancel_keep[SYM] == count_after   # (횟수, 시도 시각, 생존 로그 1회, 직전 판정이 생존, 마지막 비-판단불가 시각)
 
 
 def test_engine_one_undecidable_query_after_long_alive_does_not_release(monkeypatch):
     """상한은 '연속 판단 불가'에만 적용한다 — 오래 살아 있던 주문이 조회 실패 한 번으로 풀리면 그 위에 재발행된다."""
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
-    rm = _engine(monkeypatch, broker, keep=9)
+    rm = _engine(monkeypatch, broker, keep=9, undecided_for=36000)
 
-    _drive(rm)                                      # 생존 확인 → 횟수 초기화
+    _drive(rm)                                      # 생존 확인 → 횟수·시간 예산 초기화
     broker._exchange_rows = None
     _freeze_engine(monkeypatch, NOW + timedelta(seconds=60))   # 생존 확정 뒤의 간격
     _drive(rm)                                      # 조회 실패 1회
@@ -212,21 +225,21 @@ def test_engine_cancel_ack_still_converts_to_market_for_original_quantity(monkey
 def test_engine_confirmed_alive_sell_is_never_released_or_restacked(monkeypatch):
     """거래소 생존이 확인된 SELL 은 상한과 무관하게 유지한다 — 풀면 같은 분할 익절이 그 위에 재발행된다."""
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
-    rm = _engine(monkeypatch, broker, keep=40)
+    rm = _engine(monkeypatch, broker, keep=40, undecided_for=36000)
 
     _drive(rm)
 
     assert broker.orders == [] and SYM in rm._pending_orders
 
 
-@pytest.mark.parametrize("keep, released", [(8, False), (9, True)])
-def test_engine_undecidable_keep_is_bounded_and_releases_without_resubmit(monkeypatch, keep, released):
+@pytest.mark.parametrize("undecided_for, released", [(179, False), (180, True)])
+def test_engine_undecidable_keep_is_bounded_and_releases_without_resubmit(monkeypatch, undecided_for, released):
     """조회 실패(None)가 이어지면 pending 이 그 종목의 손절 신호까지 막는다 → 종전 최장 보유(270초)에서 해제.
 
     살아 있을 수 있는 주문 위라 시장가는 얹지 않는다 — 재판단은 발생원(ExitManager 검증자)이 한다.
     """
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=None)
-    rm = _engine(monkeypatch, broker, keep=keep)
+    rm = _engine(monkeypatch, broker, keep=3, undecided_for=undecided_for)   # 횟수가 아니라 시간으로 센다
 
     _drive(rm)
 
@@ -425,7 +438,7 @@ def test_engine_confirmed_alive_sell_backs_off_to_60_seconds(monkeypatch):
     rm = _engine(monkeypatch, broker, keep=1)
 
     _drive(rm)                                              # 생존 확인
-    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, True, True)
+    assert rm._pending_cancel_keep[SYM] == _SellKeep(1, NOW, True, True, NOW)
     _freeze_engine(monkeypatch, NOW + timedelta(seconds=59))
     _beat(rm)
     assert broker.calls == ["cancel", EXCHANGE]
@@ -451,30 +464,72 @@ def test_engine_undecidable_after_alive_returns_to_the_20_second_budget(monkeypa
             released_at = sec
             break
 
-    assert released_at == 60 + 20 * 8                        # T+60 에 첫 판단 불가, 이후 20초마다, 연속 9회째 해제
+    assert released_at == 180                                # T+60 에 첫 판단 불가, 이후 20초마다, 시간 예산(180초)에서 해제
+    assert broker.calls.count("cancel") == 1 + 7             # T, 그리고 T+60·80·…·180 — 60초 간격이 고정되면 60·120·180 뿐
     assert broker.orders == []
 
 
-def test_engine_heartbeat_retries_one_symbol_at_a_time(monkeypatch):
-    """하트비트 핸들러가 유지분 전부의 브로커 I/O 를 직렬로 기다리면 뒤에 선 FILL(우선순위 1) 처리가 그만큼 밀린다."""
+def test_engine_many_kept_sells_release_on_the_same_time_budget(monkeypatch):
+    """교차 리뷰 4회차 P1: 하트비트당 한 종목 + 횟수 상한이면 8종목의 재시도 간격이 80초가 돼 마지막 해제가 등록 후
+    820초다. SIGNAL 도 스케줄러 장부도 없이(부분체결로 지워진 상태) 하트비트만으로 8종목이 같은 예산 안에 끝나야 한다."""
+    symbols = [SYM] + [f"{i:06d}" for i in range(100001, 100008)]
+    tracked = []
+    for sym in symbols:
+        order = _tracked_sell()
+        order.symbol = sym
+        tracked.append(order)
+    broker = SellBroker(cancelled=0, tracked=tracked, exchange_rows=None)
+    rm = _engine(monkeypatch, broker)
+    for sym in symbols[1:]:
+        _add_kept_partial_sell(rm, sym, waited=0)
+        del rm._pending_cancel_keep[sym]                     # 아직 유지 전 — 같은 SIGNAL 에서 첫 회 대기에 들어간다
+        rm._pending_timestamps[sym] = NOW - timedelta(seconds=100)
+
+    _drive(rm)                                               # 등록 후 90초대의 SIGNAL 하나
+    assert set(rm._pending_cancel_keep) == set(symbols)
+
+    released_at = {}
+    for sec in range(10, 900, 10):
+        _freeze_engine(monkeypatch, NOW + timedelta(seconds=sec))
+        _beat(rm)
+        for sym in symbols:
+            if sym not in rm._pending_orders:
+                released_at.setdefault(sym, sec)
+        if len(released_at) == len(symbols):
+            break
+
+    assert released_at == {sym: 180 for sym in symbols} and broker.orders == []
+
+
+def test_engine_heartbeat_retries_every_due_symbol_and_skips_the_rest(monkeypatch):
+    """때가 된 유지분은 한 하트비트에 모두 처리한다(오래 기다린 순) — 생존 확정(60초 간격)이라 아직 때가 아닌 종목은 건너뛴다."""
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
     rm = _engine(monkeypatch, broker, keep=1)
     third = "035720"
-    # OTHER 는 생존 확정(60초 간격)이라 40초로는 아직 때가 아니다 — 가장 오래됐다고 뽑으면 때가 된 종목이 굶는다
-    for other, waited, alive in ((OTHER, 40, True), (third, 30, False)):
-        rm._pending_orders.add(other)
-        rm._pending_sides[other], rm._pending_quantities[other] = OrderSide.SELL, 10
-        rm._pending_timestamps[other] = NOW - timedelta(seconds=300)
-        rm._pending_signal_cache[other] = {"sell_partial_intent": True}
-        rm._pending_cancel_keep[other] = _SellKeep(1, NOW - timedelta(seconds=waited), alive, alive)
-        rm.engine.portfolio.positions[other] = Position(
-            symbol=other, quantity=100, avg_price=PRICE, current_price=PRICE, strategy="sepa_trend")
+    _add_kept_partial_sell(rm, OTHER, waited=40, alive=True)     # 60초 간격 — 아직
+    _add_kept_partial_sell(rm, third, waited=30)                 # 20초 간격 — 때가 됐다
 
     _beat(rm)
 
-    assert broker.calls.count("cancel") == 1
-    assert [o.symbol for o in broker.orders] == [third]    # 때가 된 것 중 가장 오래 기다린 종목(장부에 없어 곧바로 폴백)
-    assert rm._pending_cancel_keep[SYM][1] == NOW - timedelta(seconds=20)   # 나머지는 다음 하트비트
+    assert broker.calls.count("cancel") == 2
+    assert [o.symbol for o in broker.orders] == [third]          # 장부에 없는 종목은 곧바로 종전 폴백
+    assert rm._pending_cancel_keep[SYM].tried_at == NOW          # SYM 도 같은 하트비트에서 재시도됐다
+    assert rm._pending_cancel_keep[OTHER].tried_at == NOW - timedelta(seconds=40)
+
+
+def test_engine_heartbeat_only_touches_kept_sells_whose_retry_is_due(monkeypatch):
+    """하트비트가 구동하는 것은 '간격이 지난 유지분의 재시도'뿐이다 — 폴백 상한 해제 같은 다른 분기를 앞당기지 않는다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
+    rm = _engine(monkeypatch, broker)
+    rm._pending_cancel_keep[SYM] = _SellKeep(1, NOW - timedelta(seconds=5), False, False, NOW - timedelta(seconds=5))
+    rm._pending_fallback_count[SYM] = 2                     # 간격 검사보다 앞에 있는 상한 분기
+
+    _beat(rm)
+    assert SYM in rm._pending_orders and broker.calls == []
+
+    _freeze_engine(monkeypatch, NOW + timedelta(seconds=15))
+    _beat(rm)
+    assert SYM not in rm._pending_orders                    # 때가 되면 종전 상한 분기대로 해제
 
 
 def test_engine_heartbeat_does_nothing_without_a_kept_sell(monkeypatch):
@@ -524,7 +579,7 @@ def test_engine_new_pending_starts_with_zero_keep_count(monkeypatch):
     rm.engine.is_trading_hours = lambda: True
     rm.engine._get_current_session = lambda: MarketSession.REGULAR
     rm._risk_validator = None
-    rm._pending_cancel_keep[SYM] = _SellKeep(5, NOW, False, False)
+    rm._pending_cancel_keep[SYM] = _SellKeep(5, NOW, False, False, NOW)
 
     sig = Signal(symbol=SYM, side=OrderSide.SELL, strength=SignalStrength.STRONG,
                  strategy=StrategyType.SEPA_TREND, price=PRICE, reason="1차 익절",
