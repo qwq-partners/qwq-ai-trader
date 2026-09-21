@@ -9,6 +9,14 @@
 - **운영에서 실제로 바뀌는 것:** **1페이지로 끝나는 계좌(현행 운영 계좌)는 요청이 한 바이트도 바뀌지 않는다** — 헤더·params·호출 횟수 전부 동일(헤더 dict 스냅샷으로 고정). 달라지는 경우는 둘뿐이다: ⓐ 보유 종목/당일 체결이 2페이지를 넘을 때 2페이지째 요청에 `tr_cont: N` 헤더 한 줄이 붙는다, ⓑ 미체결 50건 초과로 목록이 잘리면 pending 을 해제하지 않고 유지한다(보수적).
 - **검증:** 신규 `tests/test_kis_pagination_protocol.py` 20건(가짜 HTTP·실 KIS 0, 진짜 `_api_get`·진짜 `_get_headers` 를 통과시켜 요청 헤더를 스냅샷) — 세 루프의 1페이지 요청 동일성, F→M→D 3페이지의 `(미송신)→N→N` 과 행 합산, 같은 페이지 재시도(HTTP 500)에서도 헤더 유지, 미체결 F/M→`None`·D/E/빈 값→현행(legacy·new 두 모드), 취소 재시도 특성화. 기존 `tests/test_kis_ledger_pagination_2026_09_15.py` 의 가짜 `_api_get` 2곳은 **기대값 그대로** 시그니처만 `tr_cont=""` 를 받게 넓혔다. 지정 4파일 UTC/KST 각 **97 passed**·격리 0건. 변이 4종(루프의 `tr_cont="N"` 제거 · F/M 조건 제거 · 취소에 `retry=False` · `_api_get` 이 헤더에 싣지 않음) 전부 kill.
 - **하지 않은 것:** 미체결 조회의 페이지 루프(50건 초과 운용이 되면 — 코드에 `ponytail:` 주석), `get_positions_for_account` 의 헤더 D/E 종료 판정 부재(외부 계좌 조회 전용, 기존 ctx 가드 유지), `custtype` 헤더. 배포·재시작·`.env` 변경 0.
+## 2026-09-21 — ops: main `2a143c6` 운영 반영 (PR #80 병합·배포·재시작)
+
+- **지시·범위:** 사용자 지시로 진행 중인 PR #81 을 제외하고 main 을 운영에 반영했다. 운영 checkout `93c2fbd` → `2a143c6`. 제품 경로 변경은 PR #80 의 `src/execution/broker/kis_kr.py`·`src/utils/kis_rate_limit.py` 뿐이고(그 사이의 #79 는 시험 전용), 기본 `legacy` 에서 요청 본문·헤더·파싱이 전환 전과 같다.
+- **병합 전 확인:** #80 head `fa2db75` 의 필수 verify SUCCESS, 교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh) P0 0·P1 0·P2 1 처분 완료, 제품 diff 직접 검토(TR 리터럴 5곳 → `_tr_id`, 시그니처가 바뀐 `_get_tr_id_for_session` 호출처 1곳 동반 갱신, `new` 전용 분기는 전부 `_TR_NEW` 가드 안).
+- **배포 전 점검(20:37~20:42 KST, 장 마감 후):** pending `[]`, 브로커 연결, 20:30 진화 잡 종료(거래 0건 스킵), 운영 트리 청결, 설정3파일·킬스위치4경로 지문 기록. 다른 세션의 전체 pytest 가 끝난 뒤 실행(2 vCPU 부하 플레이크로 인한 불필요한 롤백 방지).
+- **배포:** `scripts/deploy/local_deploy.sh 2a143c6…` 20:42:30 시작 → verify 통과 → 재시작 → 헬스 통과, 20:44:23 `[완료]`(자동 롤백 없음). 이전 PID3534327(09-19 06:14 기동) → **PID1193531, 20:44:08 기동.** 이후 운영 checkout 을 `main` 브랜치로 복귀(트리 동일, 재시작 없음).
+- **사후 점검:** 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`통합 트레이딩 엔진 시작`. ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음). 199초 시점 `ops_check`: 원장 EGW00215 0·토큰 오류 0, 기동 직후 시세 TR(FHKST01010100) EGW00201 2건은 재시도 성공·반복 없음, 루프 정체·실패 누적 없음, pending `[]`. 지문 7경로 전후 동일. Toss 관측 서비스 PID3335469 무변경.
+- **하지 않은 것:** `.env`(`KIS_TR_SET`)·설정·킬스위치·주문·Toss grant/토큰 변경 0. 신 TR 전환은 runbook 의 실계좌 확인 항목이 닫힌 뒤 별도 지시로만 한다. PR #81 은 교차 리뷰(Codex, 병합 불가 → 처분 반영 → 재리뷰 중) 단계라 병합·배포하지 않았다.
 
 ## 2026-09-21 — feat(kis): 구/신 TR 전환 스위치 `KIS_TR_SET` (**무동작 PR — 기본값에서 동작 변경 0**)
 
