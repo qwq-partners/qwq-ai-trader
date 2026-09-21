@@ -2272,6 +2272,9 @@ class RiskManager:
                 return
             if not self._is_same_sell_pending(s, ts):
                 return
+            # 유지를 끝내고 폴백으로 넘어간다 — 장부를 여기서 닫는다. 제출이 실패(접수 불명 포함)한 뒤에도 남아 있으면
+            # 하트비트가 SIGNAL 없이 재제출을 구동한다(종전엔 다음 SIGNAL 이 있어야 재시도했다).
+            self._pending_cancel_keep.pop(s, None)
             pos = self.engine.portfolio.positions.get(s)
         if pos and pos.quantity > 0:
             # 원 주문 수량 유지 — 분할 익절/트림 폴백이 전량 매도로 번지는 것 방지
@@ -2296,7 +2299,6 @@ class RiskManager:
                         self._pending_timestamps[s] = datetime.now()
                         self._pending_sides[s] = OrderSide.SELL
                         self._pending_fallback_count[s] = fallback_cnt + 1
-                        self._pending_cancel_keep.pop(s, None)  # 새 주문은 0회에서 다시 센다
                     logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {_fb_qty}주/보유 {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
                 else:
                     async with self._pending_lock:
@@ -2375,6 +2377,7 @@ class RiskManager:
     # 등록 후 90 + 180 = 270초 = 종전 최장 보유(90초×3회). 횟수가 아니라 시간으로 센다: 재시도가 SIGNAL·하트비트
     # 구동이라 종목이 많거나 큐가 밀리면 횟수 기준 상한은 그만큼 늦게 찬다(8종목이면 270초가 820초가 된다).
     _SELL_UNKNOWN_BUDGET_SECONDS = 180
+    _HEARTBEAT_RETRY_BUDGET_SECONDS = 5  # 하트비트 한 번이 유지분 재시도에 쓰는 시간 상한(첫 종목은 항상 처리)
 
     def _is_same_sell_pending(self, symbol: str, registered_at: datetime) -> bool:
         """await 를 건넌 뒤에도 같은 SELL pending 인가 (해제·재등록되면 등록 시각이 달라진다)."""
@@ -2446,15 +2449,20 @@ class RiskManager:
         """
         if not self._pending_cancel_keep:
             return None
-        now = datetime.now()
-        if not 900 <= now.hour * 100 + now.minute < 1530:
+        started = datetime.now()
+        if not 900 <= started.hour * 100 + started.minute < 1530:
             return None
-        # 재시도 간격이 지난 유지분을 오래 기다린 순으로 모두 처리한다(on_signal 의 stale 루프와 같은 방식).
-        # 하트비트당 한 종목씩이면 간격이 10초×종목 수로 늘어난다 — 8종목이면 20초가 80초가 된다.
+        # 재시도 간격이 지난 유지분을 오래 기다린 순으로 처리한다. 하트비트당 한 종목씩이면 간격이 10초×종목 수로
+        # 늘어난다(8종목이면 20초가 80초). 반대로 전부를 끝까지 처리하면, 조회가 타임아웃될 때(종목당 수십 초)
+        # 이 핸들러가 엔진 큐를 수 분 막아 다른 종목의 FILL·ORDER 까지 밀린다 → 처리 시간에 상한을 둔다:
+        # 브로커가 빠르면 한 번에 전부, 느리면 나머지는 다음 하트비트로(그 사이 큐의 FILL·ORDER 가 먼저 처리된다).
         due = sorted((keep.tried_at, s) for s, keep in self._pending_cancel_keep.items()
                      if self._pending_sides.get(s) == OrderSide.SELL and s in self._pending_timestamps
-                     and (now - keep.tried_at).total_seconds() >= self._sell_retry_interval(keep))
+                     and (started - keep.tried_at).total_seconds() >= self._sell_retry_interval(keep))
         for _, s in due:
+            now = datetime.now()  # 종목마다 실제 처리 시각 — 앞 종목의 I/O 가 길어도 시도·판정 시각이 어긋나지 않게
+            if (now - started).total_seconds() >= self._HEARTBEAT_RETRY_BUDGET_SECONDS:
+                break
             await self._fallback_stale_sell(s, now)
         return None
 

@@ -54,6 +54,7 @@ class SellBroker(Broker):
         super().__init__(**kw)
         self.orders = []
         self.on_cancel = None
+        self.submit_result = None       # (False, "…") 를 넣으면 제출 실패(접수 불명 포함)
 
     async def cancel_all_for_symbol(self, symbol):
         if self.on_cancel is not None:
@@ -62,7 +63,8 @@ class SellBroker(Broker):
 
     async def submit_order(self, order):
         self.orders.append(order)
-        return await super().submit_order(order)
+        ok = await super().submit_order(order)
+        return ok if self.submit_result is None else self.submit_result
 
 
 class LegacySellBroker(LegacyBroker):
@@ -515,6 +517,47 @@ def test_engine_heartbeat_retries_every_due_symbol_and_skips_the_rest(monkeypatc
     assert [o.symbol for o in broker.orders] == [third]          # 장부에 없는 종목은 곧바로 종전 폴백
     assert rm._pending_cancel_keep[SYM].tried_at == NOW          # SYM 도 같은 하트비트에서 재시도됐다
     assert rm._pending_cancel_keep[OTHER].tried_at == NOW - timedelta(seconds=40)
+
+
+def test_engine_failed_fallback_submit_is_not_retried_by_the_heartbeat(monkeypatch):
+    """교차 리뷰 5회차 P1: 유지 → 소멸 판정 → 시장가 제출이 실패(응답 유실 = 접수 불명)했는데 유지 장부가 남으면
+    하트비트가 SIGNAL 없이 다시 제출한다 — 첫 시장가가 실제로 체결됐다면 10주가 20주가 된다.
+    종전에도 접수 불명 뒤 재제출은 있었지만 다음 SIGNAL 이 있어야 했다. 그 범위를 넓히지 않는다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ELSEWHERE)
+    broker.submit_result = (False, "네트워크 오류(재전송 금지)")
+    rm = _engine(monkeypatch, broker, keep=1)
+
+    _drive(rm)                                               # 소멸 확인 → 시장가 제출 → 실패
+    assert len(broker.orders) == 1 and rm._pending_fallback_count[SYM] == 1
+    assert SYM not in rm._pending_cancel_keep                # 유지는 폴백으로 넘어가는 순간 끝난다
+
+    for sec in range(10, 130, 10):
+        _freeze_engine(monkeypatch, NOW + timedelta(seconds=sec))
+        _beat(rm)
+    assert len(broker.orders) == 1                           # SIGNAL 없이는 재제출하지 않는다
+
+
+def test_engine_slow_broker_does_not_let_the_heartbeat_hold_the_queue(monkeypatch):
+    """교차 리뷰 5회차 P1: 엔진은 핸들러가 끝나야 다음 이벤트(FILL·ORDER)를 처리한다. 조회가 타임아웃되는 날
+    때가 된 8종목을 한 하트비트에서 끝까지 처리하면 큐가 수 분 막힌다 → 처리 시간 상한에서 멈추고 나머지는 다음에."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
+    rm = _engine(monkeypatch, broker, keep=1)
+    for i, sym in enumerate((OTHER, "035720")):
+        _add_kept_partial_sell(rm, sym, waited=40 + i)       # SYM(20초)보다 오래 기다렸다 → 먼저 처리된다
+    clock = {"at": NOW}
+
+    async def slow_cancel():                                 # 취소 한 번에 6초가 걸린다
+        clock["at"] += timedelta(seconds=6)
+        _freeze_engine(monkeypatch, clock["at"])
+    broker.on_cancel = slow_cancel
+
+    _beat(rm)
+    assert broker.calls.count("cancel") == 1                 # 첫 종목에서 상한(5초)을 넘겼다 — 나머지는 다음 하트비트
+
+    broker.on_cancel = None                                  # 브로커가 빨라지면 한 번에 전부
+    _beat(rm)
+    assert broker.calls.count("cancel") == 3
+    assert rm._pending_cancel_keep[SYM].tried_at == clock["at"]   # 시도 시각은 그 종목을 실제로 처리한 시각
 
 
 def test_engine_heartbeat_only_touches_kept_sells_whose_retry_is_due(monkeypatch):
