@@ -1324,6 +1324,11 @@ class KISBroker(BaseBroker):
                             "purchase_amount": float(acct.get("pchs_amt_smtl_amt", "0") or "0"),
                         }
 
+                # 종료 판정 — get_positions·_query_daily_fills 와 동일(2026-09-21 통일).
+                # 헤더 D/E 가 마지막 페이지의 유일한 확실한 근거다: KIS 는 마지막 페이지에도
+                # ctx 키를 채워 보내므로 아래 빈 키 검사만으로는 원장 호출이 한 번 더 나간다.
+                if str(data.get("_tr_cont", "") or "") in ("D", "E"):
+                    break
                 # 연속 조회 키 확인 — 비어있으면 마지막 페이지
                 ctx_fk = (data.get("ctx_area_fk100") or "").strip()
                 ctx_nk = (data.get("ctx_area_nk100") or "").strip()
