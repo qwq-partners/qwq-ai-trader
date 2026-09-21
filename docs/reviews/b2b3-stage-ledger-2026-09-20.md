@@ -626,4 +626,19 @@
 
 | 단계 | 범위 | 상태 | SHA |
 |---|---|---|---|
-| 10A3b-1 | `factory.py` 에 `install_attached_runtime`(거부형 설치기) + `tests/test_execution_install_factory.py` | 진행 중 | — |
+| 10A3b-1 | `factory.py` 에 `install_attached_runtime`(거부형 설치기) + `tests/test_execution_install_factory.py` 33건 | **완료 — 부품(제품 호출자 0건)·한정 승인.** 독립 재현 APPROVE(P2 6 → 보강), Codex 7차 CHANGES_REQUIRED(P1 2·P2 1) → 처분 | merge `18faf0b`(`43dfc67`)·`2e70d6a`(`b9b9958`) + coordinator 처분 커밋 |
+
+### 10A3b-1 — Do·See 기록 (기준 `1cc7ed9`)
+
+- **Do(요청 opus/high, 격리 worktree, `43dfc67`):** RED 커밋(함수 부재) → GREEN → 변이 보강. `factory.py` +157/−0(기존 세 함수의 실행 줄 0 변경), 시험 29건. **attach 는 함수의 마지막 두 줄**(`runtime.attach()`·`runtime.install_gateway(gateway)`)에 둘 수 있었다 — RegimeOwner·정책 게시·SignalGateway·`recover_unsent` 어느 것도 attach 를 먼저 요구하지 않음을 코드로 확인. 계획과 다른 곳 하나: "이미 복구됨" 검사를 레짐 배선 검사보다 앞에(구간 2 의 실패가 `_regime_writer` 를 남겨 재호출을 가린다). 변이 26종 중 23 kill·3종은 코드 근거로 동치(구간 1 선필터·RegimeOwner 자신의 첫 줄·도달 불가 분기)라 목록에서 뺐다.
+- **See — 독립 재현(요청 opus/xhigh): APPROVE(P0/P1 0).** 변이 37종 재실측(자체 11). **구간 1 순도 실측:** 서로 다른 거부 10종에서 live(포트폴리오·보호·sidecar 9축·engine 내부 장부 6축)·owner(version/state)·설치 흔적 5곳·POST 가 전부 무변경이고, store 파일이 없던 경우 **파일도 부모 디렉터리도 생기지 않았으며**, load 를 통과한 표본에서도 db 의 size·mtime·sha256 이 바이트 단위로 같았다. 유일한 잔존 부작용은 열린 sqlite 연결과 `-wal`/`-shm`. P2 6건(대조의 `_view_price` 정규화·scope_reason 반쪽·commands 타입 검사가 무하중, docstring 의 "순수 읽기" 과장, 죽은 코드, 구간 2 잔존 배선 미기재) → **보강(`b9b9958`)**: 표본 4건 추가(총 33)·baseline 모양 손상의 KeyError 를 명명된 거부로 포장(허용한 유일한 실행 줄 변경 — coordinator 가 diff 로 확인)·docstring 정밀화. 살아남았던 변이 4종 kill 확인.
+- **전체 suite 단독 직렬(`2e70d6a`):** **UTC 4950 passed / 기존 xfail 2 / 366.88초**, **KST 4950 passed / 363.49초**, 격리 위반 0. load 0.60 → 1.15 → 1.28. (4917 + 33.)
+- **Codex 교차 리뷰 7차(요청 gpt-6-astra/xhigh, 포그라운드, 대상 `2e70d6a`): CHANGES_REQUIRED — P0 0 · P1 2 · P2 1.** 확인받은 것: `trading_ready` 를 여는 경로·최초 checkpoint·baseline·일자 전환을 만드는 경로 **없음** · 대조의 정규화가 `_owner_ready` 와 같다 · attach/install_gateway 는 마지막 인접 두 줄이고 선행 attach 요구 없음 · 구간 1 의 live·owner 직접 변경 없음.
+  - P1 → 처분: **재호출에서 복구 이력이 다른 거부에 가려진다**(큐·legacy 장부 검사가 "이미 복구됨"보다 앞) → 그 검사를 **상태 검사 맨 앞**으로 옮기고, 구간 2 실패 뒤 큐와 legacy 장부를 채운 재호출이 여전히 `execution_runtime_already_restored` 로 끝나는 표본을 추가. coordinator 가 이전 순서(`2e70d6a` 의 factory.py)로 되돌려 그 단언이 실패(`execution_queue_not_empty`)하는 것을 확인하고 복원했다. docstring 에 "구간 1 거부면 legacy 로 가도 된다 — 단 `already_restored` 는 예외"를 명시.
+  - P1 → 처분(계약 한정): `store.load()` 는 store 를 **여는** 제품 경로라 journal mode 를 WAL 로 설정하고 권한을 맞춘다 — 제품이 만든 store 는 이미 그 상태라 바이트 불변이지만 DELETE-mode 로 만들어진 DB 라면 헤더가 바뀐다. "기존 store 내용 불변"을 **"기존 checkpoint 행 불변"**으로 좁혔다. 구간 1 의 읽기 전용 개방은 store 에 새 API 가 필요해 실제 설치 단계로 남긴다(호출자 0건인 지금 store 를 고치지 않는다).
+  - P2 → 처분: 실패 계약에 빠진 잔존 상태(정책 게시가 store 에 commit 한 `entry_policy_context`·증가한 version, sweep 이 끝낸 행, RegimeOwner 의 게시값)와 "restore 가 게시 전에 실패하면 재호출이 막히지 않는다"는 예외를 docstring 에 추가.
+  - 처분 뒤 검증: 설치기·정책 시험 UTC 67 passed / 설치기 KST 33 passed, 격리 0. 처분은 `factory.py`(호출자 0건) 한 곳의 검사 순서·docstring 과 시험 단언 1개라 전체 suite 는 `2e70d6a` 의 결과를 기준으로 한다.
+  - Codex 의 "미확인": 실행·pytest 없음. `regime_adapter.regime`·인코딩 함수·`scope_reason`·`versioned_fact`·`abandon_candidate` 의 내부 부수효과는 지정 범위 밖.
+- **구현·재현이 함께 찾은 제품 사실(수정하지 않음 — 10C 배선의 계약, 계획서 §6-4):** 성공한 추세 갱신은 VIX 가 없거나 6시간이 지났으면 VIX 갱신을 **뒤에** 걸고, 그 VIX 행이 commit 되면 방금 수락된 추세 판단의 input seal 이 `source_read_changed` 로 stale 이 되어 **다음 추세 갱신까지 모든 prepare 가 `regime_source_not_current` 로 막힌다**(fail-closed — coordinator 가 `regime_owner.py` 에서 확인). 
+
+**10A3b-1 의 성과와 한계 (보고 문장):** 설치 **순서와 명명된 거부 16종**이 한 함수와 33건의 시험으로 고정됐다. **설치가 아니다** — 제품 호출자 0건이고, 제품에는 이 함수를 통과시킬 checkpoint·레짐 baseline·일자 전환을 만드는 코드가 없어 운영에서는 항상 거부로 끝난다. 차단 사유 4(설치 순서)는 "부품 완성"이고 표에서 열린 채로 둔다. 남은 것: 설치기 **앞** 단계(공식 KIS 증거 뒤)·시계 주입·관측·사이징 표·store 의 읽기 전용 개방·추세/VIX 갱신 순서의 배선 계약(10C).

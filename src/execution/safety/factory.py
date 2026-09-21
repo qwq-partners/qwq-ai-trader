@@ -231,20 +231,29 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     레짐 baseline + policy generation 등록)를 만드는 코드가 없으므로 **운영에서는 항상
     거부로 끝나는 것이 정상**이다. 기동 시 단일 호출자가 전제이며 계좌 lease 를 잡지 않는다.
 
-    구간 1(아래 1~9)은 live·owner·**기존 store 의 내용**을 하나도 바꾸지 않는다. 다만 파일
-    수준까지 무흔적은 아니다: checkpoint 읽기(`store.load()`) 이후의 거부에서는 sqlite 연결이
-    열린 채 남고 store 파일 옆에 `-wal`/`-shm` 이 생긴다 — 설치기는 store 를 닫지 않는다
-    (수명은 호출자 소유다). store 파일이 **없으면** load 자체를 하지 않으므로(`store.load()`
-    는 없는 파일을 생성·초기화한다) 아무 파일도 생기지 않는다. 여기서 끝나면 호출자는
-    legacy 로 계속 가도 된다. 호출자는 성공·거부·실패 **모든** 경로에서 자기 store 를 닫는다.
+    구간 1(아래 1~9)은 live·owner·**기존 checkpoint 행**을 하나도 바꾸지 않는다. 다만 파일
+    수준까지 무흔적은 아니다: checkpoint 읽기(`store.load()`)는 제품이 store 를 **여는** 경로라
+    sqlite 연결이 열린 채 남고 `-wal`/`-shm` 이 생기며, journal mode 를 WAL 로 설정하고 파일·
+    디렉터리 권한을 맞춘다(제품 `ExecutionStateStore` 가 만든 store 는 이미 그 상태라 db 는
+    바이트 단위로 불변이지만, 다른 수단으로 만든 DELETE-mode DB 라면 헤더가 바뀐다 — 구간 1
+    의 읽기 전용 개방은 store 에 새 API 가 필요해 실제 설치 단계로 남겼다). 설치기는 store 를
+    닫지 않는다(수명은 호출자 소유다). store 파일이 **없으면** load 자체를 하지 않으므로
+    (`store.load()` 는 없는 파일을 생성·초기화한다) 아무 파일도 생기지 않는다. 구간 1 의
+    거부로 끝나면 호출자는 legacy 로 계속 가도 된다 — **단 `execution_runtime_already_restored`
+    는 예외다**: 그 거부는 앞선 호출이 이미 구간 2 에 들어갔다는 뜻이다. 호출자는 성공·거부·
+    실패 **모든** 경로에서 자기 store 를 닫는다.
 
     구간 2(10~14)부터 live 는 저장본 값이다 — `runtime.restore()` 의 게시는 롤백 없는 순차
     대입이라 중간 실패가 혼합 상태를 남긴다. 실패가 남기는 것: live(포트폴리오·보호·위험)가
-    저장본 값이고, `runtime._regime_writer` 와 그 writer 가 자기 생성자에서 물리는
-    `regime_adapter._regime_owner`·`sidecar._regime_owner` 가 물린 채 남을 수 있으며,
-    `engine._execution_runtime` 은 아직 None 이다(attach 전). **이 뒤의 실패에서 호출자는
-    legacy 로 계속 가면 안 된다**(프로세스를 세우거나 거래를 멈춘다). 같은 runtime 으로
-    재호출해도 8번 대조는 되살아나지 않고 `execution_runtime_already_restored` 로 끝난다.
+    저장본 값이고, RegimeOwner 가 서면 그 게시값(adapter 의 레짐·horizon·VIX, sidecar 의 추세,
+    engine 의 레짐)과 `runtime._regime_writer`·`regime_adapter._regime_owner`·
+    `sidecar._regime_owner` 가 남으며, 정책 게시까지 갔다면 **store 에 `entry_policy_context`
+    와 증가한 version 이 commit 된 채** 남고, sweep 이 일부 행을 끝냈다면 그 종료와 예약 해제도
+    store 에 남는다. `engine._execution_runtime` 은 아직 None 이다(attach 전). **이 뒤의 실패
+    에서 호출자는 legacy 로 계속 가면 안 된다**(프로세스를 세우거나 거래를 멈춘다). 같은
+    runtime 으로 재호출하면 다른 어떤 거부보다 먼저 `execution_runtime_already_restored` 로
+    끝난다. 예외 하나: `restore()` 가 게시 **전**에 실패하면(store 장애·정책 등록 검증 실패)
+    owner 는 복구되지 않았고 live 도 그대로라 재호출이 막히지 않는다.
 
     예외 관례: 인자 모양은 `ValueError`, 상태 거부는 `ApplicationBlocked(<사유>)`, store
     장애(`StoreError`)와 `attach()` 의 `RuntimeError` 는 재작명하지 않고 그대로 올린다.
@@ -267,6 +276,12 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
 
     # ── 2. 바인딩 선검사 ──────────────────────────────────────────
     engine = runtime.engine
+    # 상태 검사 중 **맨 앞**이다. 이 runtime 이 이미 복구됐다면(= 앞선 호출이 구간 2 에
+    # 들어갔다) live 는 저장본 값이고 호출자는 legacy 로 돌아가면 안 된다 — 그 사실이 아래의
+    # 다른 거부(큐·legacy 장부·배선)에 가려지면 "구간 1 거부니 legacy 로"라는 잘못된 조치를
+    # 부른다. 8번 대조가 항진명제로 되살아나는 것도 같은 줄이 막는다.
+    if runtime.owner.version != 0 or runtime.owner.state:
+        raise ApplicationBlocked('execution_runtime_already_restored')
     if engine.running:
         raise ApplicationBlocked('engine_running')
     if engine._execution_runtime is not None:
@@ -279,11 +294,6 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
         raise ApplicationBlocked('legacy_pending_orders_present')
     if runtime.gateway is not None:
         raise ApplicationBlocked('gateway_already_installed')
-    # 실패 뒤의 재호출에서 8번 대조가 항진명제로 되살아나는 것을 구조로 막는다. 레짐 배선
-    # 검사보다 **앞**이다 — 구간 2 의 실패는 `_regime_writer` 를 남기고 끝날 수 있어서
-    # 뒤에 두면 재호출이 배선 충돌로 가려진다.
-    if runtime.owner.version != 0 or runtime.owner.state:
-        raise ApplicationBlocked('execution_runtime_already_restored')
     if (runtime._regime_writer is not None or sidecar is not runtime.risk_manager
             or regime_adapter is not getattr(engine, '_regime_adapter', None)):
         raise ApplicationBlocked('regime_owner_binding_conflict')

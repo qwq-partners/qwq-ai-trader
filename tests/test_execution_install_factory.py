@@ -819,6 +819,14 @@ def test_c10_already_restored_runtime_is_refused(tmp_path, monkeypatch):
             with pytest.raises(ApplicationBlocked) as caught:
                 await f['install']()
             assert str(caught.value) == 'execution_runtime_already_restored'
+            # 복구 이력은 다른 거부에 가려지지 않는다(Codex 7차 P1): 큐가 차고 legacy 장부가
+            # 남아 있어도 재호출은 "이미 복구됨"으로 끝난다 — 그래야 호출자가 구간 1 의
+            # 거부로 오인해 저장본 값 위에서 legacy 로 돌아가지 않는다.
+            _queue_event(f)
+            _legacy_ledger(f)
+            with pytest.raises(ApplicationBlocked) as masked:
+                await f['install']()
+            assert str(masked.value) == 'execution_runtime_already_restored'
         finally:
             await f['teardown']()
     asyncio.run(scenario())

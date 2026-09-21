@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — feat(safety): 10A3b-1 — 거부형 설치기 + KIS 증거 좁히기 (**호출자 0건·운영 미설치**)
+
+> **설치가 아니다.** 사용자 위임("니가 추천 및 확인해서 진행해줘")으로 10A3b 에 앞선 여섯 결정을 전부 보수적 기본값으로 확정했다(`docs/superpowers/plans/2026-09-21-10a3-install-preparation.md` §3-1). Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 10A3 절.
+
+- **KIS 증거 좁히기(`docs/integrations/kis-execution-evidence-narrowing-2026-09-21.md`):** 공개 공식 자료(개발자 포털 문서·공지·FAQ, 공식 GitHub)를 다시 조사하고 **적대적으로 검증**했다(주장 46건: 확정 37·부분 7·접근 불가 2, 과장 9건 제거). **닫힌 계약 행은 0개** — KIS 자신이 "최종 여부를 직접 알려 주는 정보는 없다"·"체결통보 수신 ≠ 당사 원장 반영 완료"라고 명시한다. 산출은 **KIS 에 그대로 보낼 질문지 31문항**과 비식별 응답 수집 체크리스트, 답이 오면 바뀌는 제품 지점. 거래 API 호출 0·자격증명 0·운영 로그 열람 0.
+- **조사가 코드에서 찾은 것:** UNKNOWN 이 된 주문은 `order_ref` 가 없어 **`reconcile` 의 첫 검사에서 항상 탈락한다 — 증거가 와도 지금 코드로는 풀 수 없다**(설치 차단 사유 12 강화) · 증거 파서(`TTTC0081R`)와 수집기(`TTTC8001R`)의 TR 불일치 · 파서의 필수 키 `cnc_cfrm_qty` 대 포털 표기 `cncl_cfrm_qty` · KR 체결통보(`H0STCNI0`) 소비자 부재. **운영(main)에 해당:** 제품이 쓰는 주문·취소·조회 TR 5종이 전부 KIS 의 "구TR"(자동 매핑 중, 삭제 일정 없음) — 별도 작업 칩으로 분리.
+- **`install_attached_runtime`(`src/execution/safety/factory.py` 에 추가, 다른 제품 파일 0줄):** 설치 **순서와 명명된 거부 16종**을 한 함수에 고정한다. 구간 1(인자 dry-run·`commands` 바인딩·이미 복구됨·engine 큐/legacy 장부·면제 별칭·**없는 store 를 만들지 않음**·계좌 scope·제품과 같은 시계의 일자 선필터·레짐 baseline/policy generation·**restore 앞 대조**·잔존 prepared)은 live·owner·checkpoint 행을 바꾸지 않고, 구간 2 는 restore → RegimeOwner → 정책 게시(digest 를 gateway 에 기동 시 한 번 고정) → `recover_unsent` → kind 무관 잔존 검사 → **마지막 인접 두 줄에서 attach·install_gateway**. 최초 checkpoint·레짐 baseline·일자 전환을 **만들지 않으므로 운영에서는 항상 거부로 끝나는 것이 정상**이다.
+- **검증:** 설계 심사 2관점 REVISE(must-fix 14 전부 수용) → 구현(요청 opus/high) → 독립 재현(요청 opus/xhigh) **APPROVE** — 구간 1 의 거부 10종에서 live·owner·store 바이트 무변경을 실측. **Codex 7차(요청 gpt-6-astra/xhigh): P0 0 · P1 2 · P2 1 → 처분**("이미 복구됨"을 상태 검사 맨 앞으로 — 재호출에서 복구 이력이 다른 거부에 가려지지 않게 · store 계약을 "checkpoint 행 불변"으로 한정 · 실패 계약에 잔존 상태 추가). 시험 33건, 전체 suite 단독 직렬 **UTC 4950 / KST 4950 passed**(각 기존 xfail 2·격리 위반 0).
+- **함께 드러난 제품 사실(수정하지 않음):** 성공한 추세 갱신이 **뒤에** 거는 VIX 갱신이 방금 수락된 추세 판단을 stale 로 만들어 다음 추세 갱신까지 모든 prepare 가 막힌다(fail-closed) — 10C 배선의 계약으로 기록.
+- main 병합·배포·재시작·주문·설정·Toss grant 무변경, `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-21 — feat(safety): 10A3a — 로드된 설정에서 owner 정책을 만드는 부품 + owner 게이트 인수 (**호출자 0건·운영 미설치**)
 
 > **부품과 인수이고 설치가 아니다 — 차단 사유를 하나도 닫지 않았다.** 계획·범위 분할은 `docs/superpowers/plans/2026-09-21-10a3-install-preparation.md`, Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 10A3 절.
