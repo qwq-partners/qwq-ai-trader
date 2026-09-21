@@ -477,8 +477,8 @@
 
 | wave | 범위 | 상태 | SHA |
 |---|---|---|---|
-| 1 | 하네스 + H0 + A(전선 값)·B(UNKNOWN)·C(claim 이전 실패 갈래별)·E(취소 0)·F(legacy 불변) | 진행 중 | — |
-| 2 | D(eviction)·G(실제 `can_open_position`·죽은 legacy 보정·팩터 버킷) | 대기 | — |
+| 1 | 하네스 + H0 + A(전선 값)·B(UNKNOWN)·C(claim 이전 실패 갈래별)·E(취소 0)·F(legacy 불변) | **완료** — 18건 GREEN(UTC/KST)·제품 수정 0·독립 재현 CHANGES_REQUIRED(P1 2·P2 3) → 처분 | merge `2f849ce`(`02e75f2`) + coordinator `559c8a7` |
+| 2 | D(eviction)·G(실제 `can_open_position`·죽은 legacy 보정·팩터 버킷) | 진행 중 | — |
 
 ### 이어받는 에이전트 체크리스트 (S5)
 
@@ -509,3 +509,21 @@
 - Codex 의 "미확인": 실행·pytest·실제 KIS 동작 없음. 변경 시나리오는 정적 추론.
 
 **5차의 결론(A+B):** 원장 S5 조건 2 가 확인받으려던 네 결정은 모두 **방향이 옳다**고 확인받았고, 지적은 전부 서술의 정밀화(설치 차단 사유의 보강 5건·과장된 성과 문장 1건·계획서 문구 2건)였다. 제품 코드 수정 요구 0.
+
+### wave 1 (하네스 + H0·A·B·C·E·F) — Do·See 기록 (기준 `b2b68db` → `559c8a7`)
+
+- **Do:** 구현(요청 opus/high, 격리 worktree, `02e75f2`) — 새 파일 `tests/test_execution_signal_gateway_acceptance.py` 1230줄·**18건**(H0 1·A 5·B 2·C 7(C3 은 3갈래 parametrize)·E 1·F 2). 제품 diff 0. UTC/KST 각 18 passed·격리 0·`-W error::ResourceWarning` 통과, 오버레이 모듈을 먼저 import 하는 `tests/test_sizing_overlays.py` 를 앞·뒤에 둔 순서 의존 실행도 GREEN. 구현자 변이 15종 전부 kill.
+- **See — 독립 재현**(요청 opus/xhigh, 다른 실행, detached): **CHANGES_REQUIRED (P1 2·P2 3)**. 독립성 grep 통과(금지 10개 모듈 참조 0, 허용된 `test_execution_runtime.setup` import 하나). 변이 26종 재실측(자체 11 포함) 중 **1종 생존**.
+  - P1 — legacy writer 가드 세 곳 중 **포지션·현금을 직접 쓰는 `UnifiedEngine.update_position` 의 attach 가드를 지워도 18 passed** → E1 에 그 가드와 "현금·포지션 불변"을 추가.
+  - P1 — A1 기대 수량의 산식 주석이 현금 축에서 틀렸다(구속 값은 RiskConfig 의 15% 가 아니라 레짐 표의 5% — 실제 `MarketRegimeAdapter` 를 설치했기 때문). H0 이 "쓰이지 않는 게시값"을 단언하고 있었다 → 주석·독스트링 정정, H0 은 실제 구속 값(`_get_regime_params()`·`get_available_cash()`)을 단언.
+  - P2 — C1·C2·C5 의 `_pending_sector_map == {}` 는 신호에 섹터가 없어 공허했고 C4 에는 단언이 없었다 → 전 C 표본이 섹터를 싣게 하고 C4 에 단언 추가.
+  - P2(문서) — 단일 sidecar 동일성과 ODNO 증가는 wave 1 에서 **H0 자기 단언으로만** 고정된다(별도 객체·고정 ODNO 로 바꿔도 H0 만 RED). 투영 정합의 행위 증거는 wave 2 의 D·G 몫이다. / tr_id·ORD_DVSN 축은 재현자의 자체 변이가 kill 을 확인했다.
+  - **H0 파괴 검사:** 전제 4가지(datetime 축·정규장 시각·단일 sidecar·ODNO 증가)를 하나씩 깨면 네 번 모두 H0 이 RED. H0 이 없으면 틀린 이유로 GREEN 이 되는 자리가 세 곳 있다 — H0 이 실제로 하중된다.
+- **coordinator 처분(`559c8a7`):** 위 P1 2·P2 1 을 시험 파일에 반영하고, 살아남았던 두 변이(`update_position` 가드 제거·`_pending_sector_map` 정리 제거)를 직접 다시 넣어 **kill 확인 후 원복**(전자: E1 RED, 후자: A1+C 전 표본 8건 RED). UTC/KST 각 18 passed·격리 0, `git diff --stat -- src/ scripts/` 빈 출력.
+- **관찰:** 변이로 한 시험이 중간에 실패하면 뒤 시험이 연쇄로 실패할 수 있다(실패 경로에서 patch 창 동안 새 모듈이 import 되면 동결 클래스가 그 모듈에 굳는다 — teardown 의 하드 단언이 잡는 바로 그 누수). GREEN 상태에서는 발생하지 않으며 역순·순서 의존 실행으로 확인했다.
+
+**wave 1 이 드러낸 사실(제품 수정 0 — 인계 문서·계획서에 반영):**
+1. **CV 의 판단 시각은 주입 시계가 아니라 프로세스 벽시계다**(`cross_validator.py` 의 함수 안 `from datetime import datetime`). `qualification._check_clock` 이 그 값을 owner 의 주입 시계와 대조하므로, 10A3 factory 가 시계를 주입해도 "판단 시각" 축이 둘이 된다. 운영에서는 둘 다 실제 시각이라 일치하지만 재생·시험·시계 주입 설계의 전제다.
+2. **`claim_not_available` 갈래는 실큐로 도달할 수 없다.** gateway 의 intent 키가 (종목·side·전략)이라 같은 intent 의 비종료 sibling 은 항상 같은 종목이고 prepare 가 `unresolved_symbol_attempt` 로 먼저 막는다. C2 는 `lifecycle.claim` 을 세워 그 분기를 구동했다 — gateway 밖의 호출자(10C 의 수동·CLI 경로)를 위한 방어 분기로 남긴다.
+3. **주문번호 없는 ACK 한 건이 attach 의 자동 매수 경로 전체를 멈춘다**(B1 이 다른 종목으로 실큐 확인). 해제 수단은 `lifecycle.reconcile` 뿐인데 제품 호출자가 0건이다 → 설치 차단 사유 12 로 올렸다(CV 시계는 13).
+4. **최소 현금 축의 게시값은 죽은 값이다.** engine 과 owner 가 둘 다 레짐 표(`REGIME_PARAMS`)에서 만나고 게시한 `EffectiveRiskPolicy.regime_min_cash_reserve_pct` 는 덮어쓰인다. 또 `RiskConfig` 의 dataclass 기본값(최소 현금 15%·최소 금액 50만)은 운영 YAML(5%·20만)과 다르다 — factory 는 기본값이 아니라 로드된 설정에서 만들어야 한다(차단 사유 11 에 보강).

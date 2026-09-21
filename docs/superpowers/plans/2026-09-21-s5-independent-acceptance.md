@@ -28,6 +28,7 @@
 - **단일 sidecar:** `rm._risk_validator is runtime.risk_manager` 이고 RegimeOwner 가 소유한 그 객체다(별도 객체를 꽂으면 `publish_risk` 투영을 못 받아 낡은 장부로 판정한다).
 - **`rm._exit_exempt_ref = exits._exit_exempt`** — 제품(`run_trader.py:854`)과 같은 별칭. plain set 대입 금지.
 - **남는 fake 와 이유:** 브로커 HTTP(실 KIS 로 나간다 — **ODNO 는 호출마다 증가**) · `_SigLog.get`(운영 DB — `rm._log_sig` 가 아니라 이 좁은 경계에서 갈아끼워 제품 `_log_sig` 본문은 태운다) · `_sector_lookup`(운영 DB) · `trading_ready` property 패치(토글 리스트) · 시계.
+- **(wave 1 뒤 정정) 시계는 7축 + 1 이다:** 아래 여섯에 더해 **`datetime` 모듈 자신의 `datetime`/`date` 속성**을 동결해야 한다 — `cross_validator.py` 가 함수 안에서 `from datetime import datetime as _dt` 로 다시 import 해 `now_hm` 을 읽기 때문이다(모듈 속성 patch 가 닿지 않는다). 빠지면 실제 벽시계가 09:00~09:29 인 동안 CV 가 자동 매수를 하드 차단하고 `qualification._check_clock` 이 버킷 불일치로 facts 를 거부해, 하루 중 시각에 따라 BUY 표본이 통째로 뒤집힌다(재현자가 09:10 으로 어긋나게 두어 18 중 12 failed 를 실측). 누수 방지로 teardown 이 "patch 창 동안 새 모듈 import 0" 을 단언한다. 또 `is_macro_event_day` 는 **원 모듈**(`src.utils.macro_calendar`) 속성을 patch 하면 함수 안 import 에도 닿는다(초안의 "닿지 않는다"는 틀렸다). 실제 RegimeOwner 설치도 필수다(`regime_policy` 가 없으면 `stale_regime_decision`).
 - **시계 6축 + 1:** `src.utils.session.datetime` · `src.core.engine.datetime` · **`src.core.engine.date`**(캘린더 오버레이의 `date.today()` — 빠지면 월말·월초에 ORD_QTY 가 달라져 달력 날짜에 따라 GREEN/RED 가 뒤집힌다) · CV 모듈 · runtime 주입 clock · `src.risk.manager` 의 `datetime`·`date` · 그리고 `src.utils.macro_calendar.is_macro_event_day` 주입(`risk/manager.py:290` 은 함수 안 재임포트라 모듈 patch 가 닿지 않는다). 동결 **날짜는 owner 의 `state['risk']['day']` 와 같아야** 한다(다르면 `day_admission_closed`).
 - **사이징 오버레이 3종**(calendar·volatility·team_conviction)은 제품 스위치로 끄거나 경로 상수를 tmp 로 돌린다 — 어느 쪽이든 실제 HOME 의 캐시 경로에 닿지 않아야 하고(import 시점 상수라 `Path.home` patch 가 닿지 않는다), 선택을 자기 단언으로 남긴다.
 - **`synthetic_home` 은 conftest 에 없다** — 인수 파일이 autouse fixture 로 직접 정의한다. store 는 fixture 의 yield 뒤 한 곳에서 `await store.close()`.
@@ -62,7 +63,7 @@
 - 모든 C 표본에 `_pending_sector_map == {}`(결정 ⑮ 의 예외 경로)를 붙인다.
 
 ### E·F — 취소 0 과 legacy 불변 (wave 1)
-- **E1:** A·B·C 의 모든 표본에서 `broker.cancel_all_for_symbol`·`broker.submit_order` 직접 호출 0. attach 뒤 legacy 장부에 행을 심으면 SIGNAL 이 RuntimeError 로 끝나고 취소 0(H7). `on_order` 와 `risk/manager.py` 의 `update_position` 두 legacy writer 가드를 짝으로 고정. **이 진술은 엔진 경로에 한정된다** — `KRScheduler._cleanup_stale_pending` 은 attach 를 모른 채 취소를 낸다(10C).
+- **E1:** A·B·C 의 모든 표본에서 `broker.cancel_all_for_symbol`·`broker.submit_order` 직접 호출 0. attach 뒤 legacy 장부에 행을 심으면 SIGNAL 이 RuntimeError 로 끝나고 취소 0(H7). legacy writer 가드 **세 곳** — `src/core/engine.py` 의 `RiskManager.on_order`·`UnifiedEngine.update_position`(포지션·현금을 직접 쓰는 유일한 가드)·`update_position_price` — 를 함께 고정(정정: 초안이 지목한 `risk/manager.py` 의 `update_position` 은 존재하지 않는다. wave 1 구현자·재현자가 각각 확인). **이 진술은 엔진 경로에 한정된다** — `KRScheduler._cleanup_stale_pending` 은 attach 를 모른 채 취소를 낸다(10C).
 - **F1 legacy ORDER 구동:** runtime 없는 엔진에서 SIGNAL → 큐의 OrderEvent 를 다시 구동 → `broker.submit_order` 정확히 1회와 그 Order 의 (symbol·side·quantity·order_type·price). 대조는 **별도의 새 엔진**을 attach 해서 같은 모양의 ORDER 를 넣는다 — ErrorEvent 0·`errors_count` +1(같은 엔진에 attach 하면 H6·큐 비어있음 요구가 먼저 막는다).
 - **F2 H6 실물:** 실제 inner RiskManager 를 attach **이전에** 붙이고 legacy 장부 1행 → `attach()` 거부.
 
