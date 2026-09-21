@@ -7,9 +7,10 @@
 그 함수가 restore·attach 까지 하기 때문이다. 설치 대상은 restore/attach 를 하지 않은 새
 engine·ExitManager·store·runtime 으로 매번 새로 세운다.
 
-**고정하는 것:** 설치 *순서*와 *명명된 거부*다. 구간 1(순수 읽기)의 거부는 live·owner 를
-전혀 건드리지 않고 끝나야 하며(store 파일이 없던 경우 **생성되지 않는다**), 구간 2 의
-실패는 live 가 저장본 값으로 남는다는 계약을 남긴다. `attach()` 는 되돌릴 수 없는 줄이라
+**고정하는 것:** 설치 *순서*와 *명명된 거부*다. 구간 1 의 거부는 live·owner·저장본 내용을
+전혀 건드리지 않고 끝나야 하며(store 파일이 없던 경우 **생성되지 않는다** — 열린 store 옆의
+`-wal`/`-shm` 은 별개이고 호출자가 닫으면 사라진다), 구간 2 의 실패는 live 가 저장본 값으로
+남고 레짐 배선이 물린 채 남는다는 계약을 남긴다. `attach()` 는 되돌릴 수 없는 줄이라
 `install_gateway` 바로 앞에 있다.
 
 **GREEN 은 설치 승인이 아니다.** 제품에는 이 함수가 요구하는 checkpoint 를 만드는 코드가
@@ -46,7 +47,7 @@ from src.core.types import (
     OrderSide, RiskConfig, Signal, SignalStrength, StrategyType, TradingConfig,
 )
 from src.execution.broker.kis_kr import KISBroker, KISConfig
-from src.execution.safety.application import ApplicationBlocked
+from src.execution.safety.application import ApplicationBlocked, FillObservation
 from src.execution.safety.commands import CommandValidationError, RequestBoundCommands
 from src.execution.safety.economics import encode_portfolio
 from src.execution.safety.factory import install_attached_runtime
@@ -54,7 +55,9 @@ from src.execution.safety.gateway import SignalGateway
 from src.execution.safety.guards import (
     EntryAuthority, FinalEntryGuard, GuardDecision, RiskSnapshot,
 )
-from src.execution.safety.lifecycle import CommandKind, CommandResult, CommandStatus, OrderRef
+from src.execution.safety.lifecycle import (
+    CommandKind, CommandResult, CommandStatus, OrderEvidence, OrderRef, OrderState,
+)
 from src.execution.safety.protection import encode_protection
 from src.execution.safety.regime_owner import POLICY_READS, RegimeBaseline, RegimeOwner
 from src.execution.safety.requests import KISRequestBuilder, RequestAccount
@@ -502,6 +505,48 @@ async def saved_state(f):
         await probe.close()
 
 
+async def mirror_restore(f):
+    """저장본을 live 에 게시한다 — 재기동한 제품이 실제로 하는 그 게시(`_publish`)다.
+
+    설치 대상 runtime 은 손대지 않는다(별도 store·별도 runtime 을 쓰고 버린다). 대조
+    표본에서 live 를 손으로 조립하지 않기 위한 장치이며, 정규화는 제품이 한다.
+    """
+    probe = ExecutionStateStore(f['store'].path)
+    mirror = KRExecutionRuntime(probe, f['engine'], f['exits'], clock=lambda: _CLOCK['kst'],
+                                risk_manager=f['sidecar'], account_scope=f['scope'])
+    try:
+        await mirror.restore()
+    finally:
+        await probe.close()
+
+
+async def filled_position_then_quote(runtime):
+    """체결 1건으로 포지션을 만들고 **그 뒤** 다른 값의 시세를 수락시킨다.
+
+    저장본 DTO 의 `current_price` 는 체결가에 멈추고 게시 우선순위(`_view_price`)는 나중에
+    온 수락 시세를 고른다 — 두 값이 갈리는 표본이다.
+    """
+    day = NOW_KST.date().isoformat()
+    ref = OrderRef(SCOPE, 'KR', day, 'KRX', '9100003')
+    await runtime.lifecycle.prepare('iq', 'aq', 100, '005930', 'buy',
+                                    strategy='sepa_trend', reserved_cash='1000200')
+    await runtime.lifecycle.claim('aq', 'sender')
+    await runtime.lifecycle.record_result('aq', 'sender', CommandResult(
+        CommandStatus.ACKNOWLEDGED, 'aq', ref))
+    evidence = OrderEvidence(
+        ref, '005930', 'buy', 100, 100, D('1000000'), 0, 0, OrderState.FINAL_FILLED,
+        complete=True, supported_finality=True, source_contract='s10a3b-fill',
+        observed_at=NOW_KST, request_started_at=NOW_KST - timedelta(seconds=1),
+        query_scope={'account_scope': SCOPE, 'market': 'KR', 'exchange': 'KRX',
+                     'start_date': day, 'end_date': day, 'tr_id': 'TTTC0081R',
+                     'query_kind': 'all', 'session': 'regular'})
+    assert await runtime.lifecycle.reconcile('aq', evidence)
+    await runtime.apply_observation(FillObservation(
+        SCOPE, 'KR', day, 'KRX', ref.order_no, '005930', 'BUY', 100, D('1000000')))
+    # 체결가 10000 과 다른 수락 시세(+1% — 어떤 보호 결정도 나오지 않는 폭).
+    await runtime.quote('005930', D('10100'))
+
+
 # ─────────────────────────── H — 하네스 자기 단언 ───────────────────────────
 
 def test_h0_harness_self_assertions(tmp_path, monkeypatch):
@@ -619,6 +664,24 @@ def test_b4_policy_argument_shape_is_rejected_before_live_is_touched(tmp_path, m
             with pytest.raises(ValueError) as caught:
                 await f['install'](validator_config=broken)
             assert 'llm_bypass_score' in str(caught.value)
+            assert_untouched(f, before)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_b5_commands_must_be_the_real_type_not_a_matching_binding(tmp_path, monkeypatch):
+    """배선만 맞춘 가짜 commands 는 타입 검사에서 끝난다 — b3 는 배선 항만 잡는다."""
+    async def scenario():
+        f = await target(tmp_path, monkeypatch)
+        before = live_snapshot(f)
+        try:
+            runtime = f['runtime']
+            fake = SimpleNamespace(runtime=runtime, owner=runtime.owner)
+            with pytest.raises(ValueError) as caught:
+                await install_attached_runtime(runtime, fake, **f['kwargs'])
+            assert 'RequestBoundCommands' in str(caught.value)
+            assert f['engine']._execution_runtime is None
             assert_untouched(f, before)
         finally:
             await f['teardown']()
@@ -819,6 +882,68 @@ def test_d2_account_scope_conflict(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_d2b_foreign_order_scope_alone_is_a_scope_conflict(tmp_path, monkeypatch):
+    """baseline scope 는 맞는데 원장 식별자만 남의 계좌인 경우 — `scope_reason` 단독 발화.
+
+    d2 의 표본은 baseline 항만 잡는다(attempts·lots 가 비어 `scope_reason` 이 "" 다).
+    여기서는 반대쪽 반만 하중을 준다. owner 는 이런 state 를 게시하지 않으므로(제품 게시
+    검사가 먼저 막는다) 저장본을 owner 밖에서 직접 commit 해 만든다 — d1b·d2c 와 같은 길.
+    """
+    async def scenario():
+        path = await seed_checkpoint(tmp_path)
+        probe = ExecutionStateStore(path)
+        try:
+            version, state = await probe.load()
+            # 남의 계좌 주문번호가 원장에 남은 꼴. baseline 은 건드리지 않는다.
+            state['attempts']['a7'] = {'order_ref': OrderRef(
+                'other-scope', 'KR', NOW_KST.date().isoformat(), 'KRX', '9100007').to_dict()}
+            await probe.commit(version, state, 'foreign-scope-1')
+        finally:
+            await probe.close()
+        f = await target(tmp_path, monkeypatch, seed=False, path=path)
+        before = live_snapshot(f)
+        try:
+            version, state = await saved_state(f)
+            # baseline 항은 통과한다 — 걸리는 것은 scope_reason 뿐이다.
+            assert state['regime_policy']['baseline']['supplied']['account_scope'] == SCOPE
+            assert state['attempts']['a7']['order_ref']['account_scope'] == 'other-scope'
+            with pytest.raises(ApplicationBlocked) as caught:
+                await f['install']()
+            assert str(caught.value) == 'startup_account_scope_conflict'
+            assert_untouched(f, before)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_d2c_broken_regime_baseline_shape_is_a_named_refusal(tmp_path, monkeypatch):
+    """모양이 깨진 baseline 은 scope 를 확인할 수 없다 — KeyError 가 아니라 명명된 거부다.
+
+    docstring 의 예외 관례(상태 거부는 `ApplicationBlocked`)를 실제로 지킨다. owner 를 거치지
+    않고 commit 된 저장본이라야 이 모양이 만들어진다(d1b 와 같은 직접 commit).
+    """
+    async def scenario():
+        path = tmp_path / 'broken' / 'state.sqlite3'
+        state = {root: {} for root in ('portfolio', 'protection', 'risk', 'lots', 'outbox',
+                                       'intents', 'attempts', 'startup_reconciliation')}
+        state['regime_policy'] = {'schema': 3}      # baseline/supplied 가 없다
+        probe = ExecutionStateStore(path)
+        try:
+            await probe.commit(0, state, 'broken-baseline-1')
+        finally:
+            await probe.close()
+        f = await target(tmp_path, monkeypatch, seed=False, path=path)
+        before = live_snapshot(f)
+        try:
+            with pytest.raises(ApplicationBlocked) as caught:
+                await f['install']()
+            assert str(caught.value) == 'startup_account_scope_conflict'
+            assert_untouched(f, before)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
 def test_d3_day_prefilter_uses_the_runtime_clock_not_the_injected_now(tmp_path, monkeypatch):
     """일자 선필터는 제품의 입장 검사와 **같은 시계**(`runtime._now`)를 쓴다."""
     async def scenario():
@@ -873,9 +998,6 @@ def test_d5_regime_baseline_required(tmp_path, monkeypatch):
 def test_d6_policy_generations_required(tmp_path, monkeypatch):
     """POLICY_READS 미등록이면 RegimeOwner 가 뒤에서 죽는다 — 앞에서 명시 거부한다."""
     async def scenario():
-        async def skip_registration(runtime):
-            return None
-
         # 등록만 빼고 baseline 은 만든 checkpoint.
         sidecar = SidecarRiskManager(RiskConfig(), D('2000000'), 'KR')
         engine, exits, store, runtime = await build_seed_runtime(
@@ -946,6 +1068,34 @@ def test_d8_protection_mismatch_is_also_a_reconciliation_refusal(tmp_path, monke
     asyncio.run(scenario())
 
 
+def test_d8b_reconciliation_normalises_the_stored_price_to_the_view_price(tmp_path, monkeypatch):
+    """대조는 저장본 DTO 의 현재가가 아니라 게시 우선순위(`_view_price`)로 본다.
+
+    정규화가 없으면 재기동 직후의 정상 live(= 저장본을 제품이 게시한 값)가 대조에서
+    떨어져 설치가 통째로 막힌다. 포지션 0건 표본만으로는 이 줄이 하중을 받지 않는다.
+    """
+    async def scenario():
+        path = await seed_checkpoint(tmp_path, mutate=filled_position_then_quote)
+        f = await target(tmp_path, monkeypatch, seed=False, path=path)
+        try:
+            version, state = await saved_state(f)
+            # 1) 저장본은 체결가에 멈춰 있고 수락 시세는 그 뒤 version 이다.
+            assert state['portfolio']['positions']['005930']['current_price'] == '10000'
+            view = state['quote_price_views']['005930']
+            assert view['price'] == '10100' and view['source_version'] > 1
+            # 2) live 는 제품이 그 저장본을 게시한 상태다 — 정규화된 10100 이다.
+            await mirror_restore(f)
+            assert f['engine'].portfolio.positions['005930'].current_price == D('10100')
+            assert encode_portfolio(f['engine'].portfolio) != state['portfolio']
+            # 3) 정규화가 있으면 대조가 통과하고 설치가 이어진다.
+            gateway = await f['install']()
+            assert type(gateway) is SignalGateway
+            assert f['engine']._execution_runtime is f['runtime']
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
 def test_d9_unsweepable_child_command_is_refused_before_restore(tmp_path, monkeypatch):
     """`recover_unsent()` 는 미claim 자식을 쓸지 않는다 — 잔존 검사는 kind 무관이다."""
     async def scenario():
@@ -993,6 +1143,11 @@ def test_e1_failure_after_restore_leaves_live_at_the_stored_values(tmp_path, mon
             # attach 는 되돌릴 수 없는 줄이라 마지막까지 일어나지 않았다.
             assert engine._execution_runtime is None and runtime.gateway is None
             assert f['posts']() == []
+            # RegimeOwner 생성 뒤의 실패라 배선 셋이 물린 채 남는다 — 재호출은 c10 의
+            # `execution_runtime_already_restored` 로 끝나고 legacy 복귀는 없다.
+            assert runtime._regime_writer is not None
+            assert f['adapter']._regime_owner is not None
+            assert f['sidecar']._regime_owner is not None
         finally:
             await f['teardown']()
     asyncio.run(scenario())

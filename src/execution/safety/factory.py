@@ -231,14 +231,20 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     레짐 baseline + policy generation 등록)를 만드는 코드가 없으므로 **운영에서는 항상
     거부로 끝나는 것이 정상**이다. 기동 시 단일 호출자가 전제이며 계좌 lease 를 잡지 않는다.
 
-    구간 1(아래 1~9)은 순수 읽기다 — live·owner·기존 store 내용을 하나도 바꾸지 않고, store
-    파일이 없으면 **만들지도 않는다**(`store.load()` 는 없는 파일을 생성·초기화한다).
-    여기서 끝나면 호출자는 legacy 로 계속 가도 된다.
+    구간 1(아래 1~9)은 live·owner·**기존 store 의 내용**을 하나도 바꾸지 않는다. 다만 파일
+    수준까지 무흔적은 아니다: checkpoint 읽기(`store.load()`) 이후의 거부에서는 sqlite 연결이
+    열린 채 남고 store 파일 옆에 `-wal`/`-shm` 이 생긴다 — 설치기는 store 를 닫지 않는다
+    (수명은 호출자 소유다). store 파일이 **없으면** load 자체를 하지 않으므로(`store.load()`
+    는 없는 파일을 생성·초기화한다) 아무 파일도 생기지 않는다. 여기서 끝나면 호출자는
+    legacy 로 계속 가도 된다. 호출자는 성공·거부·실패 **모든** 경로에서 자기 store 를 닫는다.
 
     구간 2(10~14)부터 live 는 저장본 값이다 — `runtime.restore()` 의 게시는 롤백 없는 순차
-    대입이라 중간 실패가 혼합 상태를 남긴다. **이 뒤의 실패에서 호출자는 legacy 로 계속
-    가면 안 된다**(프로세스를 세우거나 거래를 멈춘다). store 는 닫지 않는다 — 수명은
-    호출자 소유다.
+    대입이라 중간 실패가 혼합 상태를 남긴다. 실패가 남기는 것: live(포트폴리오·보호·위험)가
+    저장본 값이고, `runtime._regime_writer` 와 그 writer 가 자기 생성자에서 물리는
+    `regime_adapter._regime_owner`·`sidecar._regime_owner` 가 물린 채 남을 수 있으며,
+    `engine._execution_runtime` 은 아직 None 이다(attach 전). **이 뒤의 실패에서 호출자는
+    legacy 로 계속 가면 안 된다**(프로세스를 세우거나 거래를 멈춘다). 같은 runtime 으로
+    재호출해도 8번 대조는 되살아나지 않고 `execution_runtime_already_restored` 로 끝난다.
 
     예외 관례: 인자 모양은 `ValueError`, 상태 거부는 `ApplicationBlocked(<사유>)`, store
     장애(`StoreError`)와 `attach()` 의 `RuntimeError` 는 재작명하지 않고 그대로 올린다.
@@ -298,9 +304,13 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
 
     # ── 5. 계좌 scope(제품 `_publish` 에는 scope 대조가 없다) ─────
     regime = state.get('regime_policy')
-    if scope_reason(state, runtime.account_scope) or (
-            regime is not None
-            and regime['baseline']['supplied']['account_scope'] != runtime.account_scope):
+    try:
+        scoped = (regime is None
+                  or regime['baseline']['supplied']['account_scope'] == runtime.account_scope)
+    except (KeyError, TypeError):
+        # 모양이 깨진 baseline 은 scope 를 확인할 수 없다 = 대조 실패와 같은 결론이다.
+        scoped = False
+    if scope_reason(state, runtime.account_scope) or not scoped:
         raise ApplicationBlocked('startup_account_scope_conflict')
 
     # ── 6. 일자 선필터(제품 입장 검사와 같은 시계·같은 식) ────────
@@ -355,7 +365,8 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     for attempt in runtime.owner.state['attempts'].values():
         if attempt.get('state') == 'prepared':
             raise ApplicationBlocked('startup_unresolved_prepared_attempt')
-    # attach 만 되고 gateway 가 없는 구간의 SIGNAL 은 조용히 폐기된다 — 인접한 두 줄로 줄인다.
+    # 이 두 줄 사이에 await 를 넣지 말 것: attach 만 되고 gateway 가 없는 구간에 들어온
+    # SIGNAL 은 아무 데도 기록되지 않고 조용히 폐기된다.
     runtime.attach()
     runtime.install_gateway(gateway)
     return gateway
