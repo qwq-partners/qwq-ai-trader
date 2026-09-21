@@ -318,7 +318,7 @@ def test_sync_pair_calls_inquire_balance_once(monkeypatch):
     b._balance_snapshot = None
     calls = []
 
-    async def fake_get(url, tr_id, params):
+    async def fake_get(url, tr_id, params, tr_cont=""):
         calls.append(tr_id)
         if tr_id == "TTTC8434R":
             return {"rt_cd": "0", "ctx_area_fk100": "", "ctx_area_nk100": "",

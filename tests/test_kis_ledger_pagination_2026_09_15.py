@@ -53,7 +53,7 @@ def _install(b, pages):
     calls = []
     seq = list(pages)
 
-    async def fake_get(url, tr_id, params):
+    async def fake_get(url, tr_id, params, tr_cont=""):
         calls.append(tr_id)
         if tr_id == "TTTC8908R":
             return {"rt_cd": "0", "output": {"nrcvb_buy_amt": "1000"}}
@@ -84,16 +84,16 @@ def test_positions_single_page_stops_on_repeated_ctx_without_header():
 
 def test_positions_two_real_pages_are_merged():
     """헤더 F(다음 있음)는 계속 읽고 합친다 — 새 종료 조건(D/E·동일 ctx)이 진짜 다음 페이지를
-    끊지 않는지와 ctx 키가 2회차 요청에 되돌려지는지 고정. 요청 헤더 tr_cont:N 은 운영 코드가
-    보내지 않아(별도 후속) 이 시임에서 검증되지 않는다."""
+    끊지 않는지와 ctx 키가 2회차 요청에 되돌려지는지 고정. 요청 헤더 tr_cont 규약은
+    가짜 _api_get 을 지나쳐 가므로 tests/test_kis_pagination_protocol.py 가 고정한다."""
     b = _broker()
     seen_params = []
     calls = _install(b, [_page([_POS], ctx="K1", tr_cont="F"), _page([_POS2], ctx="K2", tr_cont="D")])
     _orig = b._api_get
 
-    async def _spy(url, tr_id, params):
+    async def _spy(url, tr_id, params, tr_cont=""):
         seen_params.append(dict(params))
-        return await _orig(url, tr_id, params)
+        return await _orig(url, tr_id, params, tr_cont)
     b._api_get = _spy
     pos = asyncio.run(b.get_positions())
     assert set(pos) == {"005930", "000660"}

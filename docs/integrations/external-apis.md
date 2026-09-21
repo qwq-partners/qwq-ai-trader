@@ -39,6 +39,17 @@
   거래건수를 초과", 코드 `EGW00215`)를 반환한다. 전역 리미터(18/s)와 별개라 원장 TR 간
   1.05초 간격을 강제한다 (주문 POST는 미적용). 포트폴리오 동기화가 잔고+포지션을 연속
   호출해 30초마다 HTTP 500이 나던 것이 원인이었음 (일 ~4,000건 재시도 경고).
+- **연속조회 규약** (2026-09-21): 종료 판정은 **응답 헤더** `tr_cont`(`F`/`M`=다음 페이지 있음,
+  `D`/`E`=마지막)로 한다 — 본문 `ctx_area_*100` 키는 마지막 페이지에도 채워져 와서 종료 근거가
+  못 된다 (`_api_get`이 `data["_tr_cont"]`로 실어 준다). **요청 쪽**은 공식 저장소 예제와 같이
+  첫 페이지에 `tr_cont`를 **싣지 않고**, 2페이지째부터 헤더 `tr_cont: "N"`을 보낸다
+  (`_api_get(..., tr_cont="N")`, 같은 페이지의 재시도에도 같은 값 유지). 1페이지로 끝나는
+  호출 — 운영 계좌 대부분 — 의 요청은 전환 전과 한 바이트도 같다. 적용 루프 3종:
+  `get_positions`·`get_positions_for_account`(TTTC8434R)·`_query_daily_fills`. 세 루프는 **같은
+  식으로 끝난다** — 행을 합친 직후 `_tr_cont`가 `D`/`E`면 즉시 종료하고, 그 뒤에 남은 빈 ctx
+  키 검사는 헤더가 없는 응답을 위한 뒷받침이다 (`get_positions_for_account`에 2026-09-21 추가:
+  마지막 페이지에도 채워져 오는 ctx 키 때문에 원장 호출이 1회 더 나가던 것이 없어진다).
+  미체결 조회(`get_exchange_open_orders`)의 잘림 처리는 PR #81이 같은 함수에서 다룬다.
 - **잔고 응답 스냅샷** (2026-09-11): `get_account_balance`의 inquire-balance 응답 `output1`을 5초 보관해
   바로 이어지는 `get_positions`가 재사용(1회용, 다음 페이지 있으면 미보관) — 동기화 30초 사이클의 8434R
   2회→1회. 장중 원장 초과(EGW00215)의 절반이 이 두 번째 호출이었다.
@@ -52,7 +63,16 @@
 - **주문 POST 재전송 금지** (2026-09-03 P0): 접수(order-cash)·정정은 `_api_post(retry=False)` —
   타임아웃/연결 끊김/5xx 시 이미 접수됐을 수 있어 같은 본문을 다시 보내지 않는다 (hashkey는
   본문 무결성 검사이지 멱등키가 아님). 실패 반환 → 호출자 pending 해제 → 30초 동기화가
-  실제 체결분을 sync_detected로 정합. 취소(order-rvsecncl 취소)는 멱등이라 재시도 유지.
+  실제 체결분을 sync_detected로 정합.
+- **취소만 재시도 유지** (2026-09-21 재판단): 취소(order-rvsecncl `RVSE_CNCL_DVSN_CD="02"`)는
+  `retry=True` 그대로다. 근거는 "멱등이라서"가 **아니라** 효과 한정이다 — ① `_api_post`가
+  재전송하는 5xx 다수는 접수 전 거절이다(유량 `EGW00201`이 HTTP 500으로 온다), ② 전량 취소
+  (`QTY_ALL_ORD_YN="Y"`)는 `ORGN_ODNO` 하나를 겨냥하므로 두 번 닿아도 **새 노출을 만들 수
+  없다**(두 번째는 이미 취소된 주문에 대한 거절), ③ 응답이 유실되면 반환값은 `retry=False`
+  에서도 똑같이 `False`다. 즉 재시도를 빼서 줄어드는 것은 중복 위험이 아니라 보호 취소
+  (90초 SELL 폴백·10분 BUY 정리)의 성공률뿐이다. KIS가 취소 재전송을 어떻게 처리하는지에
+  대한 공식 문서는 없다 — 위는 우리 쪽 노출 논증이지 브로커 멱등성 보장이 아니다.
+  고정: `tests/test_kis_pagination_protocol.py::test_cancel_post_retries_after_http_500_and_succeeds`.
 - **토큰 회전 채택** (2026-09-03 P1): 공유 `KISTokenManager`의 토큰이 다른 컴포넌트
   (kis_market_data/kr_screener)에 의해 회전되면 `_get_headers`가 즉시 채택하고, 토큰 오류
   응답 시 `_recover_token()`이 회전 토큰이 있으면 `invalidate()`를 생략한다 — 무조건 무효화가

@@ -92,7 +92,7 @@ def _capture_get(b, response: dict) -> list:
     """(tr_id, 파라미터) 를 기록하는 가짜 _api_get."""
     sent = []
 
-    async def fake_get(url, tr_id, params):
+    async def fake_get(url, tr_id, params, tr_cont=""):
         sent.append((tr_id, dict(params)))
         return response
     b._api_get = fake_get
