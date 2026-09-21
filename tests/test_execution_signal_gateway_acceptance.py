@@ -1250,3 +1250,596 @@ async def seed_position(f, *, symbol='005930', quantity=100, price=D('10000'),
         return state
 
     await runtime.owner.mutate('s5-accept-seed:' + symbol, reduce)
+
+
+async def seed_portfolio(f, rows, *, cash=None, daily_trades=None, tag='many'):
+    """여러 보유·현금·당일 거래 수를 owner 한 commit 으로 심는다(wave 2).
+
+    `seed_position` 과 같은 경로(경제 DTO + 보호 DTO 를 같은 mutate 에서)이고, 축출 후보를
+    서로 다르게 만들기 위해 진입 점수·현재가·진입 시각·섹터를 행마다 받는다. 현금은
+    초기자본과 독립한 상태 값이라 그대로 적는다(기존 보유·입금의 재현이며, 예약·손익은
+    owner 가 이 값으로 다시 계산한다).
+
+    `daily_start_unrealized_pnl` 을 심은 뒤의 미실현 합으로 맞추는 이유: 전일부터 들고 있던
+    손실 포지션은 장 시작 시점에 이미 그 손실을 갖고 있었다. 맞추지 않으면
+    `effective_daily_pnl` 이 보유 손실 전체가 돼 sidecar 의 **일일 손실 한도**(검사 2)가
+    우리가 보려는 검사 3(최대 포지션 수)보다 먼저 막는다.
+    """
+    runtime, exits = f['runtime'], f['exits']
+    from src.execution.safety.economics import encode_portfolio
+    from src.execution.safety.protection import encode_protection
+
+    def reduce(state):
+        pf = f['engine'].portfolio
+        for row in rows:
+            position = position_dto(symbol=row['symbol'], quantity=row['quantity'],
+                                    price=row['avg_price'], strategy=row['strategy'])
+            position.current_price = row.get('current_price', row['avg_price'])
+            position.sector = row.get('sector')
+            position.entry_time = NOW_KST - timedelta(days=row.get('entry_days_ago', 0))
+            position.entry_signal_score = row.get('entry_score')
+            exits.register_position(position)
+            pf.positions[row['symbol']] = position
+        if cash is not None:
+            pf.cash = cash
+        if daily_trades is not None:
+            # 경제 원장의 당일 체결 수는 두 곳에 있고 owner 가 둘을 대조한다
+            # (`policy_owned_day_or_counter_mismatch`) — 한쪽만 적으면 판정 자체가 거부된다.
+            pf.daily_trades = daily_trades
+            state['risk']['daily_stats']['trades'] = daily_trades
+        pf.daily_start_unrealized_pnl = pf.total_unrealized_pnl
+        state['portfolio'] = encode_portfolio(pf)
+        state['protection'] = encode_protection(exits)
+        return state
+
+    await runtime.owner.mutate('s5-accept-seed-' + tag, reduce)
+
+
+# ─────────────────── D·G — eviction 과 실제 게이트 (wave 2) ───────────────────
+
+# D 의 만석 표본: 비코어 손실 보유 5건(제품 기본 `RiskConfig.max_positions == 5`).
+#   · 진입 점수 두 건이 같은 70 이고 손익이 다르다 → 정렬 키 **두 축**(점수 → 손익)이 각각
+#     하중된다. 최약 후보는 051910(점수 70·손익 -20%)이다.
+#   · 진입 시각이 3일 전인 이유: sidecar 의 '일일 신규 매수 한도'(당일 진입 ≥5)가 우리가
+#     보려는 '최대 포지션 수 도달'보다 먼저 막는다. 전일부터 보유한 포지션이 정상 표본이다.
+#   · 전략이 gap_and_go 인 이유: 신호(sepa_trend)의 전략 예산 게이트에 걸리지 않게 한다.
+# 자산: 현금 1,000,000 + 시가 850,000 = 1,850,000. 신호 사이징은 323,750(=풀 25%)이고
+# 최소 포지션 금액 200,000 을 넘는다 — 사이징 0 으로 조기 종료되지 않는다.
+FULL_HOUSE = (
+    {'symbol': '035420', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('9500'),
+     'strategy': 'gap_and_go', 'entry_score': 70.0, 'entry_days_ago': 3},
+    {'symbol': '051910', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('8000'),
+     'strategy': 'gap_and_go', 'entry_score': 70.0, 'entry_days_ago': 3},
+    {'symbol': '006400', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('9000'),
+     'strategy': 'gap_and_go', 'entry_score': 74.0, 'entry_days_ago': 3},
+    {'symbol': '105560', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('8500'),
+     'strategy': 'gap_and_go', 'entry_score': 76.0, 'entry_days_ago': 3},
+    {'symbol': '055550', 'quantity': 20, 'avg_price': D('10000'), 'current_price': D('7500'),
+     'strategy': 'gap_and_go', 'entry_score': 78.0, 'entry_days_ago': 3},
+)
+FULL_HOUSE_CASH = D('1000000')
+WEAKEST = '051910'          # 점수 70 중 손실이 더 큰 쪽
+SECOND_WEAKEST = '035420'   # 점수 70·손실 -5%
+NEW_SYMBOL = '012330'       # 만석을 밀고 들어오는 신규 후보(보유에 없다)
+# 축출을 부르는 조건: sidecar 가 '최대 포지션 수 도달'을 내고 점수가 `_REPLACEMENT_MIN_SCORE`
+# (85) 이상. 88 은 sepa_trend 90+ 추격매수 감점(>=90)과 G4 LLM 구간을 모두 피한다.
+REPLACEMENT_SCORE = 88.0
+
+
+async def full_house(f):
+    """만석 + 재진입 후보를 세운다. 반환은 그 신규 BUY 를 만드는 함수다."""
+    await seed_portfolio(f, FULL_HOUSE, cash=FULL_HOUSE_CASH, tag='full-house')
+    return lambda: buy_signal(NEW_SYMBOL, score=REPLACEMENT_SCORE)
+
+
+def sell_posts(f):
+    """POST 본문 중 매도만 골라 (종목, 수량, 지정가) 로 편다."""
+    return [(sent['json']['PDNO'], sent['json']['ORD_QTY'], sent['json']['ORD_UNPR'])
+            for _, sent in f['posts']() if sent['headers']['tr_id'] == 'TTTC0801U']
+
+
+def test_d1_eviction_sells_the_weakest_candidate_through_the_gateway(tmp_path, monkeypatch):
+    """만석에 막힌 고점수 BUY 가 최약 후보의 SELL 을 **전선까지** 보낸다.
+
+    attach 에서 축출은 취소에 의존하지 않는 유일한 보호 경로다(S4 결정 ⑥). 그러므로
+    "축출 시그널을 발행했다"가 아니라 POST 본문이 그 후보의 매도인지로 고정한다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            engine, runtime, rm = f['engine'], f['runtime'], f['rm']
+            new_buy = await full_house(f)
+            assert engine.portfolio.total_equity == D('1850000')
+            await f['drive'](new_buy())
+            # 1) 전선 값: 최약 후보의 지정가 매도 한 건뿐이다.
+            assert sell_posts(f) == [(WEAKEST, '20', '8000')]
+            assert len(f['posts']()) == 1
+            sent = f['posts']()[0][1]
+            assert sent['json']['ORD_DVSN'] == '00' and sent['json']['SLL_TYPE'] == '01'
+            await assert_no_direct_broker_calls(f)
+            # 2) 원 BUY 는 같은 사이클에 G3_risk 로 끝난다(주문 0).
+            assert f['siglog'].gates() == [('blocked', 'G3_risk')]
+            assert '최대 포지션 수 도달' in f['siglog'].rows[0]['block_reason']
+            assert NEW_SYMBOL not in engine.portfolio.positions
+            # 3) owner 에는 그 SELL 한 행만 있다.
+            rows = [row for row in runtime.owner.state['attempts'].values()
+                    if row['kind'] == 'submit']
+            assert len(rows) == 1
+            assert (rows[0]['symbol'], rows[0]['side'], rows[0]['quantity']) == (WEAKEST, 'sell', 20)
+            assert rows[0]['command_status'] == 'acknowledged'
+            assert f['gateway'].unresolved_symbols() == frozenset({WEAKEST})
+            # 4) 전역 상한이 무장된다(D2 의 전제).
+            assert list(rm._REPLACEMENT_LAST_EVICT_TS) == [WEAKEST]
+            assert rm._REPLACEMENT_LAST_EVICT_TS[WEAKEST] == NOW_KST.replace(tzinfo=None)
+            assert f['errors']() == [] and engine._pending_sector_map == {}
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_d1_unresolved_sell_on_the_weakest_moves_the_eviction_to_the_next(tmp_path, monkeypatch):
+    """H9 — 미해결 종목의 정본은 owner 다. 최약 후보가 이미 나가 있으면 다음이 나간다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            new_buy = await full_house(f)
+            # 최약 후보를 실제로 한 번 내보내 owner 에 미해결 SELL 을 만든다.
+            await f['drive'](sell_signal(WEAKEST, price=D('8000'), quantity=20))
+            assert f['gateway'].unresolved_symbols() == frozenset({WEAKEST})
+            await f['drive'](new_buy())
+            assert sell_posts(f) == [(WEAKEST, '20', '8000'), (SECOND_WEAKEST, '20', '9500')]
+            assert f['gateway'].unresolved_symbols() == frozenset({WEAKEST, SECOND_WEAKEST})
+            assert f['siglog'].gates() == [('blocked', 'G3_risk')]
+            assert f['errors']() == []
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_d2_global_replacement_cooldown_blocks_the_second_eviction(tmp_path, monkeypatch):
+    """H10 ① — 쿨다운 안에는 전역 1건. 조용한 실패와 구분하려고 양성 대조를 붙인다.
+
+    기록은 **후보 목록에 없는 제3 종목**으로 심는다. 희생자 종목으로 심으면 후보 루프의
+    종목별 쿨다운이 같은 결과를 내서 전역 상한을 지워도 시험이 살아남는다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            rm = f['rm']
+            new_buy = await full_house(f)
+            assert '111111' not in f['engine'].portfolio.positions
+            rm._REPLACEMENT_LAST_EVICT_TS['111111'] = (
+                NOW_KST.replace(tzinfo=None) - timedelta(seconds=300))
+            await f['drive'](new_buy())
+            # 차단 표본: 축출 0·POST 0. 분기 도달 증거는 BUY 가 G3_risk 까지 갔다는 것이다.
+            assert f['posts']() == [] and f['prepared'] == []
+            assert f['siglog'].gates() == [('blocked', 'G3_risk')]
+            assert f['runtime'].owner.state['attempts'] == {}
+            assert list(rm._REPLACEMENT_LAST_EVICT_TS) == ['111111']
+            assert f['errors']() == []
+            # 양성 대조: 그 기록만 지우면 같은 fixture 가 실제로 축출한다.
+            rm._REPLACEMENT_LAST_EVICT_TS.clear()
+            await f['drive'](new_buy())
+            assert sell_posts(f) == [(WEAKEST, '20', '8000')]
+            assert f['siglog'].gates() == [('blocked', 'G3_risk'), ('blocked', 'G3_risk')]
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_d2_replacement_requires_five_point_edge(tmp_path, monkeypatch):
+    """H10 ② — +5 우위 경계. 88 은 84 를 밀어내지 못하고 83 은 밀어낸다.
+
+    다섯 후보의 진입 점수를 한 값으로 맞춘다 — 경계를 보려면 최약 후보의 점수가 그 값이어야
+    하고, 그러면 정렬 2순위(손실 큰 순)가 후보를 고른다(손실 -25% 의 055550).
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            runtime = f['runtime']
+            new_buy = await full_house(f)
+
+            def rescore(value):
+                def reduce(state):
+                    for row in state['portfolio']['positions'].values():
+                        row['entry_signal_score'] = value
+                    return state
+                return reduce
+
+            # 88 < 84 + 5 → 축출 없음.
+            await runtime.owner.mutate('s5-accept-edge-84', rescore(84.0))
+            await f['drive'](new_buy())
+            assert f['posts']() == [] and f['prepared'] == []
+            assert f['siglog'].gates() == [('blocked', 'G3_risk')]
+            assert f['rm']._REPLACEMENT_LAST_EVICT_TS == {}
+            # 88 >= 83 + 5 → 손실이 가장 큰 후보가 나간다(양성 대조).
+            await runtime.owner.mutate('s5-accept-edge-83', rescore(83.0))
+            await f['drive'](new_buy())
+            assert sell_posts(f) == [('055550', '20', '7500')]
+            assert f['errors']() == []
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_d3_owner_exit_exempt_symbol_is_never_evicted(tmp_path, monkeypatch):
+    """(a) owner 의 `protection.exit_exempt` 종목은 축출 후보에서 빠진다.
+
+    양성 대조는 구조가 대신한다 — 축출 자체는 일어나고 **다음** 후보가 나간다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            runtime, rm = f['runtime'], f['rm']
+            new_buy = await full_house(f)
+
+            def exempt(state):
+                state['protection']['exit_exempt'] = [WEAKEST]
+                return state
+
+            await runtime.owner.mutate('s5-accept-exempt', exempt)
+            assert rm._exit_exempt_ref == {WEAKEST}
+            await f['drive'](new_buy())
+            assert sell_posts(f) == [(SECOND_WEAKEST, '20', '9500')]
+            assert WEAKEST in f['engine'].portfolio.positions
+            assert f['errors']() == []
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_d3_exit_exempt_alias_survives_publication_and_live_only_rows_do_not(
+        tmp_path, monkeypatch):
+    """(b) 별칭 불변식 — 사실 5 의 GREEN 고정.
+
+    `publish_protection` 은 RiskManager 가 참조하는 **같은 set 객체**를 유지한 채 내용을
+    owner DTO 로 교체한다. 그래서 런타임에 live set 에만 넣은 종목(`add_exit_exempt` 의
+    모양)은 다음 게시에 사라진다 — 설치자는 추가 경로를 owner 로 옮겨야 한다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            runtime, rm, exits = f['runtime'], f['rm'], f['exits']
+            await seed_position(f, symbol='005930', quantity=20)
+            before = exits._exit_exempt
+            exits._exit_exempt.add('999999')      # live 에만 추가한 종목
+            assert rm._exit_exempt_ref == {'999999'}
+
+            def exempt(state):
+                state['protection']['exit_exempt'] = ['005930']
+                return state
+
+            await runtime.owner.mutate('s5-accept-alias', exempt)
+            assert exits._exit_exempt is before
+            assert rm._exit_exempt_ref is exits._exit_exempt
+            assert rm._exit_exempt_ref == {'005930'}
+            assert rm._exit_exempt_ref == set(runtime.owner.state['protection']['exit_exempt'])
+            assert '999999' not in rm._exit_exempt_ref
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('consumer', ['cash_gate', 'strategy_budget_gate', 'eviction'])
+def test_d4_owner_read_failure_is_fail_closed_at_every_consumer(tmp_path, monkeypatch, consumer):
+    """owner 를 못 읽으면 세 소비 지점이 각각 SIGNAL 하나를 명시 거부로 끝낸다.
+
+    0 을 지어내거나(현금·전략 예산) 축출만 건너뛴 채 통과하면(eviction) 가장 비싼 가드가
+    무보호가 된다. 현금 게이트 표본은 전략 cap 을 0 으로 두어 뒤 게이트가 같은 예외를 내
+    가리지 않게 하고, 나머지 둘은 앞 게이트가 실제로 통과했음을 호출 기록으로 단언한다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            runtime, gateway, rm = f['runtime'], f['gateway'], f['rm']
+            calls = []
+            blocked = ApplicationBlocked('synthetic_owner_read_failure')
+
+            def spy(name, original):
+                def wrapped(*args):
+                    calls.append(name)
+                    return original(*args)
+                return wrapped
+
+            def broken(name):
+                def wrapped(*args):
+                    calls.append(name)
+                    raise blocked
+                return wrapped
+
+            gateway.reserved_cash = spy('cash', gateway.reserved_cash)
+            if consumer == 'cash_gate':
+                # 실제 owner 장애로 읽는다 — 접수가 닫히면 `_owner_ready` 가 예외를 낸다.
+                runtime._closing = True
+                # 전략 예산 게이트를 통째로 건너뛰게 해 사유가 겹치지 않게 한다.
+                rm.config.strategy_allocation['sepa_trend'] = 0.0
+                event = buy_signal('012330')
+            elif consumer == 'strategy_budget_gate':
+                gateway.pending_strategy_notional = broken('budget')
+                event = buy_signal('012330')
+            else:
+                gateway.unresolved_symbols = broken('eviction')
+                await full_house(f)
+                event = buy_signal(NEW_SYMBOL, score=REPLACEMENT_SCORE)
+            await f['drive'](event)
+            assert f['posts']() == [] and f['prepared'] == []
+            assert runtime.owner.state['attempts'] == {}
+            errors = f['errors']()
+            assert len(errors) == 1 and errors[0].source == 'on_signal'
+            assert errors[0].error_type == 'ApplicationBlocked'
+            assert f['engine'].stats.errors_count == 1
+            if consumer == 'cash_gate':
+                assert calls == ['cash']
+                # `_owner_ready` → `_require_day_admission` 의 fail-closed 사유 그대로다.
+                assert errors[0].message == 'day_transition_admission_closed'
+                runtime._closing = False
+            else:
+                # 앞 게이트는 실제로 통과했다 — 현금 게이트가 owner 를 읽고 0 을 받았다.
+                assert errors[0].message == 'synthetic_owner_read_failure'
+                assert calls[0] == 'cash' and calls.count('cash') >= 1
+                broken_name = 'budget' if consumer == 'strategy_budget_gate' else 'eviction'
+                assert calls[-1] == broken_name and calls.count(broken_name) == 1
+            assert f['engine']._pending_sector_map == {}
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+# G1 의 두 표본은 **실제 sidecar `can_open_position`** 의 서로 다른 거부다.
+#   · min_cash: 검사 4(최소 현금 보유 미달) — 현금 < 자산×15%(sidecar RiskConfig 기본).
+#   · short_cash: 검사 6(현금 부족) — 검사 4 는 통과하고 요구 금액이 sidecar 의 가용 현금을
+#     넘는다. engine 사이징은 레짐 표 5% 를 빼고 sidecar 는 자기 설정 15% 를 빼기 때문에
+#     같은 자산에서 두 층의 가용 현금이 갈린다(사실 7 — 출처 일원화는 10A3).
+# 두 표본 모두 코어 보유로 `_get_core_reserve()` 를 0 으로 만들어(코어 예산 초과) 앞의
+# 현금 게이트·사이징이 0 으로 끝나지 않게 한다. 현금은 owner 에 그대로 심는다.
+G1_CASES = {
+    'min_cash': {'core_quantity': 900, 'cash': D('1000000'),
+                 'reason': '최소 현금 보유 미달', 'quantity': 25},
+    'short_cash': {'core_quantity': 840, 'cash': D('1600000'),
+                   'reason': '현금 부족', 'quantity': 40},
+}
+
+
+@pytest.mark.parametrize('case', sorted(G1_CASES))
+def test_g1_real_can_open_position_rejections_never_reach_the_owner(tmp_path, monkeypatch, case):
+    """걷어낸 스텁 하나 — 실제 sidecar 의 거부가 G3_risk 로 끝나고 POST 0·owner 행 0."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            runtime, params = f['runtime'], G1_CASES[case]
+            await seed_portfolio(f, ({'symbol': '005930', 'quantity': params['core_quantity'],
+                                      'avg_price': D('10000'), 'strategy': 'core_holding',
+                                      'entry_days_ago': 3},),
+                                 cash=params['cash'], tag='g1-' + case)
+            assert f['engine'].portfolio.total_equity == D('10000000')
+            assert f['rm']._get_core_reserve() == D('0')
+            before = runtime.owner.version
+            await f['drive'](buy_signal('012330'))
+            assert f['posts']() == [] and f['prepared'] == []
+            assert runtime.owner.state['attempts'] == {}
+            assert runtime.owner.version == before
+            gates = f['siglog'].gates()
+            assert gates == [('blocked', 'G3_risk')]
+            reason = f['siglog'].rows[0]['block_reason']
+            assert reason.startswith(params['reason']), reason
+            # 사이징은 양수였다 — 거부는 '포지션 크기 0' 이 아니라 위험 게이트다.
+            assert f['rm']._last_sizing_inputs is not None
+            assert f['errors']() == []
+            assert f['engine']._pending_sector_map == {}
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_g1_same_day_stop_loss_block_rides_on_the_owner_published_sidecar(tmp_path, monkeypatch):
+    """당일 손절 종목 재진입 금지 — owner 가 투영한 장부로 실제 sidecar 가 막는다.
+
+    **단일 sidecar 전제의 행위 증거**다(wave 1 은 H0 자기 단언뿐이었다). `rm._risk_validator`
+    가 owner 소유 객체가 아니면 `publish_risk` 투영을 못 받아 낡은 장부로 판정하고, 같은
+    BUY 가 그대로 전선까지 나간다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            runtime, sidecar = f['runtime'], f['sidecar']
+
+            def stopped(symbols):
+                def reduce(state):
+                    state['risk']['stop_loss_today'] = list(symbols)
+                    return state
+                return reduce
+
+            await runtime.owner.mutate('s5-accept-stop-loss', stopped(['012330']))
+            assert sidecar._stop_loss_today == {'012330'}
+            assert f['rm']._risk_validator is sidecar
+            await f['drive'](buy_signal('012330'))
+            assert f['posts']() == [] and f['prepared'] == []
+            assert runtime.owner.state['attempts'] == {}
+            assert f['siglog'].gates() == [('blocked', 'G3_risk')]
+            assert f['siglog'].rows[0]['block_reason'].startswith('당일 손절 종목 재진입 금지')
+            # 양성 대조: owner 에서 그 종목을 지우면 같은 BUY 가 실제로 나간다.
+            await runtime.owner.mutate('s5-accept-stop-loss-clear', stopped([]))
+            assert sidecar._stop_loss_today == set()
+            await f['drive'](buy_signal('012330'))
+            assert len(f['posts']()) == 1
+            assert f['posts']()[0][1]['json']['PDNO'] == '012330'
+            assert f['errors']() == []
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_g2_owner_blocks_the_daily_trade_limit_that_the_engine_no_longer_counts(
+        tmp_path, monkeypatch):
+    """attach 에서 engine 쪽 TOCTOU 보정은 0 을 더한다 — 경계를 넘기는 BUY 는 owner 가 막는다.
+
+    engine 의 보정은 legacy `_pending_sides` 를 세는데 attach 에서 그 장부는 비어 있다
+    (결정 ④). 미해결 BUY 1건 + 당일 체결 14건이면 engine 게이트는 통과하고(그래서 이번
+    신호도 'passed' 가 기록된다) owner 의 `evaluate_engine` 이 막는다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            engine, runtime, rm = f['engine'], f['runtime'], f['rm']
+            limit = engine.config.risk.daily_max_trades
+            await seed_portfolio(f, (), cash=D('2000000'), daily_trades=limit - 1, tag='g2-trades')
+            assert engine.portfolio.daily_trades == limit - 1
+            await f['drive'](buy_signal('005930'))
+            assert len(f['posts']()) == 1
+            advance(31)
+            await f['drive'](buy_signal('000660'))
+            # engine 의 두 게이트는 통과했다(passed 2건). 보정이 살아 있었다면 여기서 막혔다.
+            assert f['siglog'].gates() == [('passed', None), ('passed', None)]
+            assert rm._pending_sides == {} and rm._pending_orders == set()
+            assert len(f['posts']()) == 1
+            errors = f['errors']()
+            assert len(errors) == 1 and errors[0].error_type == 'CommandValidationError'
+            assert errors[0].message == 'daily_trade_limit'
+            rows = [row for row in runtime.owner.state['attempts'].values()
+                    if row['kind'] == 'submit']
+            assert [row['symbol'] for row in rows] == ['005930']
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_g2_owner_blocks_the_sector_limit_that_the_engine_no_longer_counts(tmp_path, monkeypatch):
+    """같은 짝 — 섹터 한도. engine 의 `_pending_sector_map` 은 attach 에서 항상 비어 있다.
+
+    owner 는 미체결 BUY 를 **두 번** 센다: `commands._evaluate` 가 pending 을 포지션 사실로
+    덧붙여 `evaluate_risk_manager` 의 섹터 검사에 실리고, `evaluate_engine` 은 따로
+    `pending_sectors` 를 더한다. 그래서 한쪽만 지우는 변이는 이 표본에서 살아남는다(실측:
+    두 지점 각각은 생존, 둘을 함께 지우면 RED). 이 시험이 고정하는 것은 "어느 한 줄"이 아니라
+    **미체결을 센 채로 owner 가 막는다**는 결과다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            engine, runtime = f['engine'], f['runtime']
+            held = ({'symbol': '005930', 'quantity': 10, 'avg_price': D('10000'),
+                     'strategy': 'gap_and_go', 'sector': '반도체', 'entry_days_ago': 3},
+                    {'symbol': '000660', 'quantity': 10, 'avg_price': D('10000'),
+                     'strategy': 'gap_and_go', 'sector': '반도체', 'entry_days_ago': 3})
+            await seed_portfolio(f, held, cash=D('1800000'), tag='g2-sector')
+            assert engine.config.risk.max_positions_per_sector == 3
+            await f['drive'](buy_signal('012330', sector='반도체'))
+            assert len(f['posts']()) == 1
+            # 미체결 섹터의 정본은 owner 의 효과 원장이다(engine 의 map 은 매번 비워진다).
+            assert (runtime.owner.state['entry_policy_effects']['pending_sectors']
+                    == {'012330': '반도체'})
+            advance(31)
+            await f['drive'](buy_signal('105560', sector='반도체'))
+            assert f['siglog'].gates() == [('passed', None), ('passed', None)]
+            assert engine._pending_sector_map == {}
+            assert len(f['posts']()) == 1
+            errors = f['errors']()
+            assert len(errors) == 1 and errors[0].error_type == 'CommandValidationError'
+            assert errors[0].message == 'sector_limit'
+            rows = [row for row in runtime.owner.state['attempts'].values()
+                    if row['kind'] == 'submit']
+            assert [row['symbol'] for row in rows] == ['012330']
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+# 팩터 버킷 설정은 제품 `config/default.yml`(2026-09-21 확인, 143~154행)에서 옮겨 적는다.
+# 운영 기본은 `enforce: false`(shadow)다. 미러 부채 — 값이 바뀌면 이 상수도 바꿔야 한다.
+FACTOR_BUDGETS = {
+    'enforce': False,
+    'buckets': {
+        'trend': {'max_pct': 65.0,
+                  'strategies': ['sepa_trend', 'gap_and_go', 'momentum_breakout',
+                                 'vcp_breakout', 'strategic_swing']},
+        'quality': {'max_pct': 20.0, 'strategies': ['core_holding', 'value_growth']},
+        'reversion': {'max_pct': 10.0, 'strategies': ['rsi2_reversal', 'theme_chasing']},
+    },
+}
+# reversion 버킷을 쓰는 이유: trend 버킷(65%)은 코어 예약 30%·최소 현금 5% 와 합이 100%를
+# 넘어, 캡을 채우면 그 전에 현금 게이트가 먼저 막는다(초과 표본을 만들 수 없다).
+# 신호는 rsi2_reversal, 보유는 같은 버킷의 **형제 전략** theme_chasing 이다 — 신호 전략
+# 자신에게 심으면 전략 예산 게이트(17.5%)가 먼저 막는다.
+FACTOR_SIBLING = ({'symbol': '005930', 'quantity': 20, 'avg_price': D('10000'),
+                   'strategy': 'theme_chasing', 'entry_days_ago': 3},)
+
+
+def factor_signal():
+    return buy_signal('012330', strategy=StrategyType.RSI2_REVERSAL)
+
+
+@pytest.mark.parametrize('enforce', [False, True])
+def test_g3_factor_bucket_budget_blocks_only_when_enforced(tmp_path, monkeypatch, enforce):
+    """걷어낸 스텁 둘 — 클래스 구현 그대로의 `_check_factor_budget`.
+
+    같은 초과를 enforce=false 는 통과시키고(shadow) true 는 G5_factor 로 막는다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            rm, runtime = f['rm'], f['runtime']
+            await seed_portfolio(f, FACTOR_SIBLING, cash=D('1800000'), tag='g3')
+            rm.config.factor_budgets = {**FACTOR_BUDGETS, 'enforce': enforce}
+            equity = f['engine'].portfolio.total_equity
+            assert equity == D('2000000')
+            # 초과가 실제로 성립한다: 형제 전략 보유 200,000 >= 캡 10%.
+            assert f['engine'].portfolio.get_strategy_allocation('theme_chasing') == D('200000')
+            assert rm._check_factor_budget('rsi2_reversal') is not None
+            await f['drive'](factor_signal())
+            if enforce:
+                assert f['posts']() == [] and f['prepared'] == []
+                assert runtime.owner.state['attempts'] == {}
+                assert f['siglog'].gates() == [('blocked', 'G5_factor')]
+                assert "팩터 'reversion' 예산 소진" in f['siglog'].rows[0]['block_reason']
+            else:
+                assert len(f['posts']()) == 1
+                assert f['posts']()[0][1]['json']['PDNO'] == '012330'
+                assert f['siglog'].gates() == [('passed', None)]
+            assert f['errors']() == []
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_g3_factor_budget_failure_is_fail_open_by_design(tmp_path, monkeypatch):
+    """설정 오류는 무시하고 통과시킨다(관측용 상위 캡 — G5_budget 이 1차 방어선).
+
+    예외 주입은 `_check_factor_budget` 구간에만 건다 — 같은 포트폴리오 조회를 쓰는 다른
+    게이트까지 깨면 통과가 '예외를 삼켰다'가 아니라 '거기까지 가지도 않았다'가 된다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            rm = f['rm']
+            await seed_portfolio(f, FACTOR_SIBLING, cash=D('1800000'), tag='g3-open')
+            rm.config.factor_budgets = {**FACTOR_BUDGETS, 'enforce': True,
+                                        'buckets': _ExplodingBuckets()}
+            assert rm._check_factor_budget('rsi2_reversal') is None
+            await f['drive'](factor_signal())
+            assert len(f['posts']()) == 1
+            assert f['siglog'].gates() == [('passed', None)]
+            assert f['errors']() == []
+            await assert_no_direct_broker_calls(f)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+class _ExplodingBuckets(dict):
+    """`buckets` 조회에서만 터지는 설정. 비어 있지 않다고 답해 조기 return 을 피한다."""
+
+    def __bool__(self):
+        return True
+
+    def items(self):
+        raise RuntimeError('synthetic factor budget failure')
