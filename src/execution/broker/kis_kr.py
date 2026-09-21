@@ -29,6 +29,37 @@ from ...risk import kill_switch
 from ...utils import audit_log
 
 
+# KIS 구 TR → 신 TR 전환 스위치 (2026-09-21)
+#
+# 기본값 legacy 는 현행 구 TR 그대로이며 요청 본문·헤더·파싱이 전환 전과 완전히 같다.
+# 전환은 .env 에 `KIS_TR_SET=new` 를 추가하고 봇 재시작, 되돌리기는 그 줄을 지우고 재시작이다.
+# import 시점에 한 번만 읽으므로 실행 중 환경변수를 바꿔도 반영되지 않는다
+# (시험은 모듈 상수 `_TR_NEW` 를 monkeypatch 한다).
+# 신 TR 값 출처: koreainvestment/open-trading-api@b4e6249 의 examples_llm.
+_TR_SETS = {
+    "legacy": {
+        "buy": "TTTC0802U",          # 주식주문(현금) 매수
+        "sell": "TTTC0801U",         # 주식주문(현금) 매도
+        "rvsecncl": "TTTC0803U",     # 주식주문(정정취소)
+        "daily": "TTTC8001R",        # 주식일별주문체결조회
+        "cancelable": "TTTC8036R",   # 주식정정취소가능주문조회
+    },
+    "new": {
+        "buy": "TTTC0012U",
+        "sell": "TTTC0011U",
+        "rvsecncl": "TTTC0013U",
+        "daily": "TTTC0081R",
+        "cancelable": "TTTC0084R",
+    },
+}
+_TR_NEW = os.getenv("KIS_TR_SET", "legacy") == "new"
+
+
+def _tr_id(key: str) -> str:
+    """구/신 TR 매핑 조회 — `_TR_NEW` 를 호출 시점에 읽는다."""
+    return _TR_SETS["new" if _TR_NEW else "legacy"][key]
+
+
 @dataclass
 class KISConfig:
     """KIS API 설정"""
@@ -487,6 +518,12 @@ class KISBroker(BaseBroker):
                 "ALGO_NO": "",
             }
 
+            # 신 TR 전용 필수 키 — 저장소 예제는 excg_id_dvsn_cd 미입력을 ValueError 로 막는다
+            # (order_cash.py:99-100). 구 TR 의 수용 여부는 미확인이라 legacy 에는 싣지 않는다.
+            if _TR_NEW:
+                params["EXCG_ID_DVSN_CD"] = "KRX"
+                params["CNDT_PRIC"] = ""
+
             # 시간외 단일가 설정 (프리장/넥스트장) — L351의 session 재사용
             if session in ("pre_market", "next_market"):
                 params["AFHR_FLPR_YN"] = "Y"  # 시간외단일가여부
@@ -615,17 +652,17 @@ class KISBroker(BaseBroker):
         """
         주문 TR ID 반환
 
-        국내주식 현금주문:
-        - 매수: TTTC0802U
-        - 매도: TTTC0801U
+        국내주식 현금주문 (KIS_TR_SET 에 따라 구/신 TR):
+        - 매수: TTTC0802U(legacy) / TTTC0012U(new)
+        - 매도: TTTC0801U(legacy) / TTTC0011U(new)
 
         시간외 단일가(NXT)도 동일한 TR ID 사용
         ORD_DVSN="05"와 AFHR_FLPR_YN="Y"로 시간외 주문 구분
         """
         if side == OrderSide.BUY:
-            return "TTTC0802U"
+            return _tr_id("buy")
         else:
-            return "TTTC0801U"
+            return _tr_id("sell")
 
     async def get_nxt_symbols(self) -> List[str]:
         """
@@ -836,7 +873,7 @@ class KISBroker(BaseBroker):
                 logger.error(f"KIS 주문번호 없음: {order_id}")
                 return False
 
-            tr_id = "TTTC0803U"  # 정정취소
+            tr_id = _tr_id("rvsecncl")  # 정정취소
 
             params = {
                 "CANO": self.config.account_no,
@@ -849,6 +886,8 @@ class KISBroker(BaseBroker):
                 "ORD_UNPR": "0",
                 "QTY_ALL_ORD_YN": "Y",
             }
+            if _TR_NEW:
+                params["EXCG_ID_DVSN_CD"] = "KRX"
 
             hashkey = await self._get_hashkey(params)
             if not hashkey:
@@ -921,7 +960,7 @@ class KISBroker(BaseBroker):
             if not kis_ord_no:
                 return False
 
-            tr_id = "TTTC0803U"  # 정정취소
+            tr_id = _tr_id("rvsecncl")  # 정정취소
 
             # 정정 단가 결정: new_price 미지정 시 기존 주문가 유지
             # (KIS 정정 스펙상 지정가(ORD_DVSN=00) + ORD_UNPR=0 조합은 불가 — 수량만 정정 시 방어)
@@ -944,6 +983,8 @@ class KISBroker(BaseBroker):
                 "ORD_UNPR": str(self.round_to_tick(float(_eff_price))),
                 "QTY_ALL_ORD_YN": "N",
             }
+            if _TR_NEW:
+                params["EXCG_ID_DVSN_CD"] = "KRX"
 
             hashkey = await self._get_hashkey(params)
             if not hashkey:
@@ -983,7 +1024,7 @@ class KISBroker(BaseBroker):
         return None
 
     async def get_exchange_open_orders(self) -> Optional[List[Dict[str, Any]]]:
-        """거래소 실 미체결 주문 조회 (정정취소가능주문, TTTC8036R)
+        """거래소 실 미체결 주문 조회 (정정취소가능주문, TTTC8036R / 신 TR TTTC0084R)
 
         로컬 `_pending_orders` 캐시와 달리 **재시작 후에도 유효** — ExitManager
         pending 만료 검증용 (2026-08-08 최종 리뷰 P0: 로컬 캐시는 재시작 후 비어
@@ -997,7 +1038,7 @@ class KISBroker(BaseBroker):
             if not await self.connect():
                 return None
         try:
-            tr_id = "TTTC8036R"
+            tr_id = _tr_id("cancelable")
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
             params = {
                 "CANO": self.config.account_no,
@@ -1013,10 +1054,27 @@ class KISBroker(BaseBroker):
                 return None
             rows: List[Dict[str, Any]] = []
             for item in (data.get("output", []) or []):
+                if _TR_NEW:
+                    # 신 TR(TTTC0084R) output 컬럼에는 rmn_qty 가 없다 (저장소
+                    # chk_inquire_psbl_rvsecncl.py:21-43 — psbl_qty·tot_ccld_qty·ord_qty).
+                    # 둘 다 없으면 조용한 0 대신 판단 불가(None)로 올린다 — 호출측이
+                    # pending 을 유지하므로 이중 매도 방지가 끊기지 않는다.
+                    raw_qty = item.get("rmn_qty")
+                    if raw_qty is None:
+                        raw_qty = item.get("psbl_qty")
+                    if raw_qty is None:
+                        logger.warning(
+                            "실 미체결 조회: 수량 키(rmn_qty/psbl_qty) 부재 → 판단 불가"
+                        )
+                        return None
+                    _qty_txt = str(raw_qty).strip()
+                    qty = int(_qty_txt) if _qty_txt else 0
+                else:
+                    qty = int(item.get("rmn_qty", 0) or 0)
                 rows.append({
                     "symbol": str(item.get("pdno", "")).lstrip("A"),
                     "side": "sell" if str(item.get("sll_buy_dvsn_cd", "")) == "01" else "buy",
-                    "qty": int(item.get("rmn_qty", 0) or 0),
+                    "qty": qty,
                 })
             return rows
         except Exception as e:
@@ -1832,7 +1890,7 @@ class KISBroker(BaseBroker):
 
     async def _query_daily_fills(self, target_date: str = None) -> list:
         """
-        KIS 일일 체결 내역 원시 조회 (TTTC8001R) — 페이지네이션 포함.
+        KIS 일일 체결 내역 원시 조회 (TTTC8001R / 신 TR TTTC0081R) — 페이지네이션 포함.
 
         Args:
             target_date: YYYYMMDD 형식. None이면 오늘.
@@ -1844,7 +1902,7 @@ class KISBroker(BaseBroker):
             return []
 
         target_date = target_date or datetime.now().strftime("%Y%m%d")
-        tr_id = "TTTC8001R"
+        tr_id = _tr_id("daily")
         url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 
         all_items = []

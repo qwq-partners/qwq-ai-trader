@@ -1,7 +1,10 @@
 """KIS REST 프로세스 공용 초당 호출 리미터 (2026-09-03)
 
 브로커(kis_kr)·시세(kis_market_data)·스크리너(kr_screener)가 같은 appkey로 각자 aiohttp
-세션을 쓰므로 KIS 게이트웨이 한도(실전 20/s)는 **합산**으로 걸린다. 모듈별 세마포어/리미터만
+세션을 쓰므로 KIS 게이트웨이의 초당 한도는 **합산**으로 걸린다. 공식 저장소
+(koreainvestment/open-trading-api@b4e6249 README.md:395-398)는 구체적 수치를 주지 않으므로
+아래 상한은 전부 운영 실측으로 정한 값이다(이전 docstring 의 '실전 20/s' 전제는 근거 없음).
+모듈별 세마포어/리미터만
 으로는 배치·스크리닝 버스트가 겹칠 때 HTTP 500 EGW00201("초당 거래건수를 초과")이 나고,
 kis_market_data 쪽은 재시도가 없어 업종지수·외국인 동향 조회가 그대로 실패했다
 (배포 후 실측: 07:49~08:47 23건, 전부 시세 TR).
@@ -28,7 +31,10 @@ import time
 MAX_RPS = 10
 MIN_GAP = 1.0 / MAX_RPS   # 연속 호출 최소 간격 — 버스트를 초당 한도 안에서 고르게 분산
 # 원장 조회 TR: 잔고 TTTC8434R / 매수가능 TTTC8908R / 체결 TTTC8001R / 미체결 TTTC8036R / 해외잔고
-LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R", "TTTS3012R", "VTTS3012R"})
+# 체결·미체결의 신 TR(TTTC0081R·TTTC0084R)도 함께 등록한다 — KIS_TR_SET 전환/롤백 어느 쪽에서도
+# 계좌 원장 직렬화가 끊기지 않아야 한다 (2026-09-21).
+LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R",
+                           "TTTC0081R", "TTTC0084R", "TTTS3012R", "VTTS3012R"})
 LEDGER_MIN_INTERVAL = 1.05
 # TR별 간격 상향 (2026-09-10): 9/3~9/10 장중 원장 거절 495건/일이 전부 잔고조회 TTTC8434R —
 # 동기화가 30초마다 8434R을 두 번(잔고→포지션) 호출하고 두 번째가 ~50% 거절(≈780쌍 중 387).

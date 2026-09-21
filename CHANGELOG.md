@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — feat(kis): 구/신 TR 전환 스위치 `KIS_TR_SET` (**무동작 PR — 기본값에서 동작 변경 0**)
+
+- **무엇:** KIS 구 TR 5종(`TTTC0802U`/`TTTC0801U`/`TTTC0803U`/`TTTC8001R`/`TTTC8036R`)과 신 TR 5종(`TTTC0012U`/`TTTC0011U`/`TTTC0013U`/`TTTC0081R`/`TTTC0084R`)의 매핑을 `kis_kr.py` 모듈 상수 한 곳에 모으고, `.env` 의 `KIS_TR_SET=new` + 재시작으로만 전환되게 했다. **기본값 `legacy` 에서는 요청 본문·헤더·응답 파싱이 전환 전과 완전히 같다**(스냅샷 시험으로 고정). 되돌리기는 그 줄 삭제 + 재시작.
+- **`new` 모드에서만:** order-cash 본문에 `EXCG_ID_DVSN_CD="KRX"`·`CNDT_PRIC=""`, 정정취소 본문에 `EXCG_ID_DVSN_CD="KRX"` 추가(기존 키 제거 0, hashkey 발급 전에 추가). 정정취소가능조회는 신 TR output 에 `rmn_qty` 가 없어 `psbl_qty` 로 대체하고, **둘 다 없으면 조용한 0 대신 `None`(판단 불가)** 을 돌려준다 — 호출측(`run_trader.py` pending 검증자)이 pending 을 유지하므로 이중 매도 방지가 끊기지 않는다. 일별조회의 기존 `EXCG_ID_DVSN_CD="ALL"` 은 두 모드 공통으로 유지.
+- **리미터:** `LEDGER_TR_IDS` 에 신 TR 둘(`TTTC0081R`·`TTTC0084R`)을 **추가**(구 TR 유지) — 전환/롤백 어느 쪽에서도 계좌 원장(EGW00215) 직렬화가 끊기지 않는다. docstring 의 '게이트웨이 한도 실전 20/s' 전제는 근거가 없어 '실측값' 으로 정정(수치 변경 0).
+- **하지 않은 것(전부 별도 PR):** 취소 POST 의 `retry` 정책, 미체결 조회의 페이지 루프(50건 잘림), 요청 헤더 `tr_cont`, `custtype` 헤더, 취소 `ORD_QTY` 의미, 장외 주문구분. 동작 변경이라 이 무동작 PR 에 섞지 않았다.
+- **검증:** 신규 `tests/test_kis_tr_switch.py` 18건(가짜 HTTP, 실 KIS 호출 0) — 두 모드 × 5 경로 tr_id 스냅샷, legacy 본문 동일성, new 전용 키, `psbl_qty` 대체와 판단 불가, 신 TR 원장 직렬화, `check_fills` 파서 키 계약. 기존 KIS 시험 포함 UTC/KST 각 57 passed·격리 0건. 변이 5종(매핑 값 뒤바꿈·legacy 키 누출·new 키 누락·LEDGER 제거·조용한 0) 전부 kill 실측.
+- **운영:** 배포·재시작·`.env` 변경 0. 전환 전 실계좌로만 닫히는 확인 항목 11개와 전환/롤백 절차는 `docs/operations/runbook.md`, TR 표와 저장소 출처(`koreainvestment/open-trading-api@b4e6249`)는 `docs/integrations/external-apis.md`.
+
 ## 2026-09-21 — test(toss): 실시간 1~3초 예산 의존 시험을 부하 비의존으로 (시험 전용)
 
 - **증상:** `tests/test_toss_client_boundary.py::test_expired_token_issuance_still_requires_remaining_retry[prefix2-1]` 가 호스트 고부하(2 vCPU·스왑 100%, 전체 suite 와 다른 에이전트 중첩)에서 1건 실패(단독 73 passed). 시험이 `RequestBudget(1)`(기본 `time.monotonic`) 실시간 1초 안에 실제 토큰 발급(파일 잠금·`os.fsync`)과 재시도를 끝내야 했고, 넘기면 `TossRequestError("timeout")` 이 성공 기대를 깼다.

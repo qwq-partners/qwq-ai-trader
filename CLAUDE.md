@@ -323,7 +323,8 @@ result = value if value is not None else default
 - **수수료 계산**: `FeeCalculator` 단일 사용 — data_collector/storage 내 하드코딩 금지
 - **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
 - **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일
-- **KIS 직접 호출은 `await kis_rate_limit.acquire(tr_id)` 선행**: 브로커·시세·스크리너가 같은 appkey라 초당 한도는 합산(EGW00201). 원장 TR(잔고/매수가능/체결/미체결)은 계좌당 초당 1건(EGW00215) — 새 원장 TR은 `utils/kis_rate_limit.LEDGER_TR_IDS`에 추가
+- **KIS 직접 호출은 `await kis_rate_limit.acquire(tr_id)` 선행**: 브로커·시세·스크리너가 같은 appkey라 초당 한도는 합산(EGW00201). 원장 TR(잔고/매수가능/체결/미체결)은 계좌당 초당 1건(EGW00215) — 새 원장 TR은 `utils/kis_rate_limit.LEDGER_TR_IDS`에 추가. 구/신 TR 양쪽을 다 넣는다(전환·롤백 어느 쪽에서도 직렬화가 끊기면 안 됨). 게이트웨이 상한 수치는 공식 저장소에 없고 전부 운영 실측값이다
+- **KIS TR ID는 리터럴로 쓰지 않는다**: `kis_kr._tr_id("buy"|"sell"|"rvsecncl"|"daily"|"cancelable")` — `KIS_TR_SET`(기본 legacy) 한 곳에서만 구/신이 갈린다. `new` 전용 본문 키(`EXCG_ID_DVSN_CD`·`CNDT_PRIC`)는 `_TR_NEW` 가드 안에만 두고, hashkey 발급보다 **먼저** 붙인다(hashkey는 본문 무결성 검사)
 - **KIS 연속조회 종료는 응답 헤더 `tr_cont`(F/M 다음, D/E 마지막)로 판정** — 본문 `ctx_area_*100` 키는 마지막 페이지에도 채워져 오므로 종료 근거가 못 된다(2026-09-15 EGW00215 반복 원인: 보유 1종목 계좌가 8434R 을 10회 호출). `_api_get` 이 `data["_tr_cont"]` 로 실어 준다. 요청 헤더 `tr_cont: N` 은 아직 미송신(다중 페이지 후속)
 
 ---
@@ -338,6 +339,8 @@ TEAM_ASSESSMENT_V2 (기본 1 — 팀 심의 shadow 판단 v2·원장 기록; 0 �
 ENTRY_PLAN_SHADOW (기본 1 — 주문 직전 EntryPlan shadow 검증 기록만; 0 이면 미호출. 허용/차단 없음, 2026-09-15 T11)
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 INITIAL_CAPITAL (KR, 기본 500000)
+KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_ID_DVSN_CD. import 시점
+            상수라 재시작 필요, 롤백은 줄 삭제 + 재시작. 2026-09-21, 아직 전환 안 함)
 ```
 
 ## LLM 모델 선택

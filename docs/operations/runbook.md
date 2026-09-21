@@ -201,6 +201,46 @@ ls src/dashboard/static/office/assets/ || bash tools/office/build.sh
 | `config/evolved_overrides.yml` | 진화 오버라이드 | **양쪽 모두 확인 필요** |
 | `.env` | API 키 | 커밋 금지 |
 
+## KIS 구/신 TR 전환 (`KIS_TR_SET`, 2026-09-21~)
+
+기본값은 `legacy`(구 TR, 현행 동작 그대로)다. **아직 전환하지 않았다** — 아래는 절차만이다.
+
+```bash
+# 전환: .env 에 한 줄 추가 후 재시작 (import 시점 상수라 재시작 없이는 반영되지 않는다)
+echo 'KIS_TR_SET=new' >> /home/ubuntu/projects/qwq-ai-trader/.env
+echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+
+# 롤백: 그 줄을 지우고 재시작 (값이 'new' 가 아니면 전부 legacy)
+sed -i '/^KIS_TR_SET=/d' /home/ubuntu/projects/qwq-ai-trader/.env
+echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+```
+
+- 적용 TR 표와 본문 차이는 `docs/integrations/external-apis.md` 의 브로커 절.
+- **두 단계로 나눈다** — 조회 TR(일별체결·정정취소가능)을 먼저, 주문 TR(매수·매도·정정취소)을
+  나중에. 조회는 되돌리기가 싸고 주문은 비가역이다. 현재 스위치는 한 개라 단계 분리가
+  필요하면 주문 경로 전환을 별도 PR 로 뺀다.
+- 전환 후 확인: `journalctl -u qwq-ai-trader | grep -E 'TTTC00(11|12|13)U|TTTC008[14]R'` 에
+  거절(`msg_cd`)이 없는지, 체결 확인과 pending 만료 검증이 계속 도는지.
+
+### 전환 전 실계좌로만 확인 가능한 항목 (오프라인으로 닫히지 않음)
+
+공식 저장소가 판정하지 않아 **장 마감 후 실계좌 응답 1건으로만** 확인된다. 조회 TR 을 먼저
+확인하고 주문 TR 은 그다음이다.
+
+1. 구 TR 에 `EXCG_ID_DVSN_CD`(특히 일별조회의 `"ALL"`)가 수용되는가 — 현행 코드가 이미 그렇게
+   보내고 있으므로 **코드 변경 없이 운영 응답만 보면 된다**.
+2. 신 TR 조회에서 `EXCG_ID_DVSN_CD` 미입력 시의 처리.
+3. 신 TR 응답의 실제 키 철자 — `cnc_cfrm_qty` 인가 `cncl_cfrm_qty` 인가.
+4. `cncl_yn` 의 실제 값 — 정상 주문에서 `"N"` 인가 빈 문자열인가.
+5. 구·신 TR 응답 필드 집합이 같은가 — 특히 `check_fills` 가 읽는 `odno`·`tot_ccld_qty`·`avg_prvs`
+   와 `get_exchange_open_orders` 의 수량 키.
+6. `custtype` 헤더 미송신으로 신 TR 이 정상 응답하는가 (구 TR 에서는 동작 중).
+7. `CTAC_TLNO`·`ALGO_NO`·`AFHR_FLPR_YN` 을 신 TR 본문에 남겨도 수용되는가 — 저장소 9키에 없다.
+8. 요청 헤더 `tr_cont` 없이 신 TR 의 다음 페이지를 받을 수 있는가 (현재 미송신).
+9. 구 TR 호출이 내부적으로 신 TR 로 자동 매핑되는지.
+10. `TTTC0084R` 의 모의투자 지원 여부 — 저장소 예제에 `env_dv` 분기가 없다.
+11. 취소 본문 `ORD_QTY` 의 올바른 값 — 저장소가 세 갈래로 갈려 판정하지 않는다.
+
 ## 킬스위치 (긴급 주문 차단, 2026-08-02~)
 
 파일 하나로 주문을 즉시 막는다. **봇 재시작이 필요 없고**, 엔진이 오작동 중이어도 동작한다
