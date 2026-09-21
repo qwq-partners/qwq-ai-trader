@@ -9,6 +9,31 @@
 - 주문 실행 (매수/매도), 체결 확인
 - 포지션/잔고 조회
 - 넥스트장/프리장 시세 (FHPST02300000)
+- **구/신 TR 전환 스위치** (`KIS_TR_SET`, 2026-09-21): 아래 5종만 구/신 두 벌을 갖는다.
+  기본값 `legacy`(env 미설정)는 전환 전과 요청 본문·헤더·파싱이 완전히 같다.
+
+  | 용도 | 구 TR (기본) | 신 TR (`KIS_TR_SET=new`) | 호출 지점 |
+  |------|------|------|------|
+  | 주식주문(현금) 매수 | `TTTC0802U` | `TTTC0012U` | `_get_tr_id_for_session` |
+  | 주식주문(현금) 매도 | `TTTC0801U` | `TTTC0011U` | `_get_tr_id_for_session` |
+  | 주식주문(정정취소) | `TTTC0803U` | `TTTC0013U` | `cancel_order` / `modify_order` |
+  | 주식일별주문체결조회 | `TTTC8001R` | `TTTC0081R` | `_query_daily_fills` |
+  | 주식정정취소가능주문조회 | `TTTC8036R` | `TTTC0084R` | `get_exchange_open_orders` |
+
+  잔고 `TTTC8434R`·매수가능 `TTTC8908R`은 저장소에 구/신 구분이 없어 **변경 대상이 아니다**.
+  `new` 모드에서만 order-cash 본문에 `EXCG_ID_DVSN_CD="KRX"`·`CNDT_PRIC=""`, 정정취소 본문에
+  `EXCG_ID_DVSN_CD="KRX"`가 추가되고, 정정취소가능조회는 `rmn_qty`가 **없거나(None) 비어
+  있으면**(공백 제거 후 빈 문자열) `psbl_qty`를 읽는다 (대체 뒤에도 비어 있으면 조용한 0 대신
+  `None`=판단 불가). 구 TR 이 `EXCG_ID_DVSN_CD`를 받아들이는지는
+  미확인이라 `legacy` 본문에는 싣지 않는다 (일별조회의 기존 `"ALL"` 은 두 모드 공통으로 유지).
+  **주문(접수)의 신 TR·신 본문은 정규장(`regular`) 세션에만 적용한다** — 저장소에 NXT 주문
+  예제가 없어 `pre_market`·`next_market` 의 올바른 `EXCG_ID_DVSN_CD` 값을 확정할 수 없어,
+  그 두 세션 접수는 `new` 모드에서도 구 TR·구 본문 그대로다. 취소·정정·조회에는 세션 분기가
+  없다(`new` 모드면 항상 `"KRX"`).
+  출처: 공식 저장소 `koreainvestment/open-trading-api@b4e6249` 의 `examples_llm/`
+  (`order_cash.py:103-130`, `order_rvsecncl.py:106-128`, `inquire_daily_ccld.py:141-174`,
+  `inquire_psbl_rvsecncl.py:82-91`). 저장소는 **구 TR 의 지원 종료 일정도, 구/신 응답 필드가
+  같은지도 말하지 않는다** — 전환·롤백 절차는 `docs/operations/runbook.md` 참조.
 - **원장 TR 초당 1건 제한** (2026-09-03): 잔고 TTTC8434R·체결 TTTC8001R·미체결 TTTC8036R은
   KIS 원장 서버가 계좌당 초당 1건 초과 시 HTTP 500 `EGW00201`("원장에서 허용 가능한 초당
   거래건수를 초과", 코드 `EGW00215`)를 반환한다. 전역 리미터(18/s)와 별개라 원장 TR 간
