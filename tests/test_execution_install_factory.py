@@ -608,6 +608,23 @@ def test_b2_vix_fetcher_is_a_required_keyword(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_b4_policy_argument_shape_is_rejected_before_live_is_touched(tmp_path, monkeypatch):
+    """정책 인자의 모양 결함은 restore 앞으로 당겨진다(설치기가 두 부품을 미리 부른다)."""
+    async def scenario():
+        f = await target(tmp_path, monkeypatch)
+        before = live_snapshot(f)
+        broken = validator_block()
+        del broken['llm_bypass_score']
+        try:
+            with pytest.raises(ValueError) as caught:
+                await f['install'](validator_config=broken)
+            assert 'llm_bypass_score' in str(caught.value)
+            assert_untouched(f, before)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
 def test_b3_commands_bound_to_another_runtime_touch_neither_store(tmp_path, monkeypatch):
     """잘못 배선된 commands 는 남의 store 에 게시한다 — 두 store 의 version 이 그대로다."""
     async def scenario():
@@ -758,6 +775,28 @@ def test_d1_missing_store_file_is_refused_without_creating_it(tmp_path, monkeypa
             assert str(caught.value) == 'startup_checkpoint_required'
             assert not f['store'].path.exists()
             assert not f['store'].path.parent.exists()
+            assert_untouched(f, before)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_d1b_checkpoint_without_the_required_roots_is_refused(tmp_path, monkeypatch):
+    """`_publish` 가 요구하는 root 가 빠진 저장본은 restore 앞에서 같은 사유로 끝난다."""
+    async def scenario():
+        path = tmp_path / 'partial' / 'state.sqlite3'
+        probe = ExecutionStateStore(path)
+        try:
+            await probe.commit(0, {'portfolio': {}, 'protection': {}, 'risk': {}}, 'partial-1')
+        finally:
+            await probe.close()
+        f = await target(tmp_path, monkeypatch, seed=False, path=path)
+        before = live_snapshot(f)
+        try:
+            assert (await saved_state(f))[0] == 1
+            with pytest.raises(ApplicationBlocked) as caught:
+                await f['install']()
+            assert str(caught.value) == 'startup_checkpoint_required'
             assert_untouched(f, before)
         finally:
             await f['teardown']()
