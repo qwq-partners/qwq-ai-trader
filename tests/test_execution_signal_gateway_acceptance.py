@@ -58,7 +58,7 @@ from src.core.cross_validator import CrossStrategyValidator
 from src.core.engine import RiskManager as EngineRiskManager, UnifiedEngine
 from src.core.event import ErrorEvent, OrderEvent, SignalEvent
 from src.core.types import (
-    MarketSession, Order, OrderSide, OrderType, RiskConfig, Signal, SignalStrength,
+    Fill, MarketSession, Order, OrderSide, OrderType, RiskConfig, Signal, SignalStrength,
     StrategyType, TradingConfig,
 )
 from src.execution.broker.kis_kr import KISBroker, KISConfig
@@ -311,9 +311,15 @@ REQUIRED_RM_ATTRS = (
 def effective_policy(risk: RiskConfig) -> _policy.EffectiveRiskPolicy:
     """owner 가 판정에 쓰는 정책. 공유 RiskConfig 에서 옮겨 적고 H0 이 그 대조를 단언한다.
 
-    `regime_min_cash_reserve_pct` 는 레짐 어댑터가 없을 때 engine 이 쓰는 값과 같아야 하고
-    (`_get_regime_params()` 가 빈 dict), `core_allocation_pct` 는 engine `_get_core_reserve`
-    가 읽는 `strategy_allocation['core_holding']` 과 같아야 두 층의 코어 예약이 갈리지 않는다.
+    `core_allocation_pct` 는 engine `_get_core_reserve` 가 읽는
+    `strategy_allocation['core_holding']` 과 같아야 두 층의 코어 예약이 갈리지 않는다.
+
+    **`regime_min_cash_reserve_pct` 의 게시값은 쓰이지 않는다.** 이 하네스는 실제
+    `MarketRegimeAdapter` 를 설치하므로 engine `get_available_cash()` 는 어댑터의
+    `REGIME_PARAMS[체제]['min_cash_reserve_pct']` 를 읽고, owner 도 평가 시점에
+    `build_owned_snapshot` 이 같은 표로 이 필드를 덮어쓴다. 즉 두 소비 지점은 RiskConfig 가
+    아니라 레짐 표에서 만난다 — 최소 현금 축의 출처 일원화는 10A3 factory 의 몫이고, H0 은
+    게시값이 아니라 **실제로 구속하는 값**을 단언한다.
     """
     return _policy.EffectiveRiskPolicy(
         daily_max_loss_pct=risk.daily_max_loss_pct,
@@ -653,7 +659,11 @@ def test_h0_harness_self_assertions(tmp_path, monkeypatch):
             assert published.max_positions == risk.max_positions
             assert published.max_position_pct == risk.max_position_pct
             assert published.min_cash_reserve_pct == risk.min_cash_reserve_pct
-            assert published.regime_min_cash_reserve_pct == risk.min_cash_reserve_pct
+            # 최소 현금 축은 게시값이 아니라 레짐 표가 구속한다(A1 의 기대 수량이 이 값에 선다).
+            regime_reserve = engine._get_regime_params()['min_cash_reserve_pct']
+            assert regime_reserve == 5.0 != risk.min_cash_reserve_pct
+            assert engine.get_available_cash() == (
+                engine.portfolio.cash - engine.portfolio.total_equity * D('0.05'))
             assert published.daily_max_trades == risk.daily_max_trades
             assert published.max_daily_new_buys == risk.max_daily_new_buys
             assert published.max_positions_per_sector == risk.max_positions_per_sector
@@ -676,12 +686,14 @@ def test_h0_harness_self_assertions(tmp_path, monkeypatch):
 #   base_pct       = strategy_position_pct[SEPA_TREND] 25% ,  강도 normal 배율 1.0
 #   pct_value      = pool_equity × 0.25                             =   350,000
 #   max_value      = equity × max_position_pct 35%                  =   700,000
-#   available      = (cash − equity×min_cash_reserve 15%) − 예약 0 − core_reserve
-#                  = (2,000,000 − 300,000) − 600,000                = 1,100,000
-#   position_value = min(350,000, 700,000, 1,100,000)               =   350,000
+#   available      = (cash − equity×레짐 표의 min_cash_reserve 5%) − 예약 0 − core_reserve
+#                  = (2,000,000 − 100,000) − 600,000                = 1,300,000
+#                    (출처는 RiskConfig 의 15% 가 아니라 `_get_regime_params()` — 실제
+#                     MarketRegimeAdapter 를 설치했기 때문이다. H0 이 이 값을 단언한다)
+#   position_value = min(350,000, 700,000, 1,300,000)               =   350,000
 #   전략 예산 잔여 = equity × 42% − 보유 0 − pending 0               =   840,000 (비구속)
 #   오버레이 4종(position/calendar/volatility/conviction) 전부 1.0 → 값 불변
-#   quantity       = int(350,000 / 10,000) = 35 ,  시장가 여유 상한 int(1,100,000/13,000)=84
+#   quantity       = int(350,000 / 10,000) = 35 ,  시장가 여유 상한 int(1,300,000/13,000)=100
 EXPECTED_BUY_QUANTITY = 35
 EXPECTED_BUY_NOTIONAL = D('350000')
 
@@ -895,7 +907,8 @@ def test_c1_startup_barrier_releases_the_reservation_but_keeps_the_publications(
         try:
             runtime = f['runtime']
             before = runtime.owner.version
-            await f['drive'](buy_signal('005930'))
+            # 섹터를 실어야 아래 `_pending_sector_map == {}` 가 finally 정리(결정 ⑮)를 실제로 하중한다.
+            await f['drive'](buy_signal('005930', sector='반도체'))
             assert f['posts']() == []
             result = f['outcomes'][0]
             assert result.status is CommandStatus.NOT_SENT
@@ -943,7 +956,7 @@ def test_c2_claim_not_available_releases_the_reservation_without_posting(tmp_pat
                 return False
 
             runtime.lifecycle.claim = claim_false
-            await f['drive'](buy_signal('005930'))
+            await f['drive'](buy_signal('005930', sector='반도체'))
             assert f['posts']() == []
             assert len(claims) == 1
             result = f['outcomes'][0]
@@ -1028,12 +1041,14 @@ def test_c4_cancelled_dispatch_leaves_one_row_for_the_startup_sweep(tmp_path, mo
                 raise asyncio.CancelledError()
 
             runtime.lifecycle.claim = claim_cancelled
-            await f['engine'].emit(buy_signal('005930'))
+            # 섹터를 실은 요청이어야 `_submit_signal` 의 finally 정리(결정 ⑮)가 실제로 하중된다.
+            await f['engine'].emit(buy_signal('005930', sector='반도체'))
             event = await f['engine']._get_next_event()
             with pytest.raises(asyncio.CancelledError):
                 await f['engine']._process_event(event)
             await asyncio.sleep(0)
             assert f['posts']() == []
+            assert f['engine']._pending_sector_map == {}
             attempt_id = f['prepared'][0].attempt_id
             assert runtime.owner.state['attempts'][attempt_id]['state'] == 'prepared'
             assert gateway.reserved_cash() > 0
@@ -1072,7 +1087,7 @@ def test_c5_abandon_failure_preserves_the_reason_and_keeps_the_loop_alive(tmp_pa
                 f['session'][0] = GuardDecision(False, 'synthetic_session_closed')
 
             f['after_prepare'].append(close_session)
-            await f['drive'](buy_signal('005930'))
+            await f['drive'](buy_signal('005930', sector='반도체'))
             assert f['posts']() == []
             result = f['outcomes'][0]
             assert result.status is CommandStatus.NOT_SENT
@@ -1119,13 +1134,20 @@ def test_e1_legacy_ledger_after_attach_refuses_the_signal_without_cancelling(tmp
             assert f['posts']() == []
             assert f['prepared'] == []
             await assert_no_direct_broker_calls(f)
-            # legacy writer 가드 짝: 둘 다 명시 거부다.
+            # legacy writer 가드 세 곳 전부 명시 거부다. 포지션·현금을 직접 쓰는 것은
+            # `update_position` 하나라 그것이 빠지면 가장 비싼 가드가 무보호가 된다(독립 재현 P1).
             with pytest.raises(ApplicationBlocked):
                 await rm.on_order(OrderEvent.from_order(
                     Order(symbol='005930', side=OrderSide.BUY, order_type=OrderType.MARKET,
                           quantity=1, price=D('10000')), source='legacy'))
             with pytest.raises(ApplicationBlocked):
                 engine.update_position_price('005930', D('10100'))
+            cash_before = engine.portfolio.cash
+            with pytest.raises(ApplicationBlocked):
+                engine.update_position(Fill(order_id='legacy-fill', symbol='005930',
+                                            side=OrderSide.BUY, quantity=1, price=D('10000')))
+            assert engine.portfolio.cash == cash_before
+            assert '005930' not in engine.portfolio.positions
             await assert_no_direct_broker_calls(f)
         finally:
             await f['teardown']()
