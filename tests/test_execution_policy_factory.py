@@ -6,7 +6,7 @@ store·실제 runtime·실제 `RequestBoundCommands` 위에서 돌고 외부 I/O
 """
 import asyncio
 from dataclasses import fields, replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -287,7 +287,8 @@ def test_publisher_derives_every_axis_from_the_objects_at_publication_time(tmp_p
         sidecar._sync_fail_count = 3
         # 제품의 naive 벽시계(KST 지역시각). qualification 과 같은 규칙으로 aware 화된다.
         sidecar._sync_unhealthy_since = (NOW - timedelta(minutes=4)).replace(tzinfo=None)
-        sidecar._sync_timeout_minutes = 10
+        # 제품 기본값(10분)과 다른 값 — 게시본이 인스턴스에서 읽는지 고정한다.
+        sidecar._sync_timeout_minutes = 7
         monkeypatch.setattr(macro_calendar, 'is_macro_event_day', lambda day=None: ('FOMC', True))
         store, runtime, commands = await harness(tmp_path, sidecar=sidecar, clock=clock)
         try:
@@ -306,11 +307,15 @@ def test_publisher_derives_every_axis_from_the_objects_at_publication_time(tmp_p
             assert context.versions.config == digest
             assert (context.versions.execution, context.versions.quote,
                     context.versions.risk, context.versions.protection) == (before,) * 4
+            # regime/macro counter 는 제품에 게시 주체가 0 건이라 0 으로 둔다(모듈 docstring 의
+            # 결정). owner 는 regime 을 `regime_policy` 에서 다시 유도하고 macro 는 아무도 읽지
+            # 않으므로, 여기서 owner version 을 실어 보내면 없는 생산자를 있는 것처럼 꾸민다.
+            assert context.versions.regime == 0 and context.versions.macro == 0
             # 정책 전 필드가 게시 시점 객체에서 다시 유도한 값과 전건 일치한다.
             expected = effective_risk_policy(risk, regime='bear', fee_config=FeeConfig())
             for field in fields(p.EffectiveRiskPolicy):
                 assert getattr(context.policy, field.name) == getattr(expected, field.name), field.name
-            assert context.sync == p.SyncPolicySnapshot(False, 3, NOW - timedelta(minutes=4), 10)
+            assert context.sync == p.SyncPolicySnapshot(False, 3, NOW - timedelta(minutes=4), 7)
             assert context.trend == p.MarketTrendPolicySnapshot(True, True, True)
             assert context.macro == p.MacroPolicySnapshot('FOMC', True, False)
             # 왕복 정규화: 게시본은 canonical DTO 다.
@@ -334,6 +339,10 @@ def test_publisher_rederives_instead_of_reusing_the_previous_policy(tmp_path, mo
                 fee_config=FeeConfig(), now=NOW, **first)
             assert published(runtime).policy.max_positions == 8
             assert published(runtime).policy.regime_min_cash_reserve_pct == 5.0
+            # 갱신 전 sidecar 의 추세 dict 는 비어 있다 — legacy `_is_daily_loss_limit_hit` 의
+            # truthy 판정대로 '추세 없음'(present=False)이지 '추세 있음'이 아니다.
+            assert sidecar._market_trend == {} and sidecar._sidecar_active is False
+            assert published(runtime).trend == p.MarketTrendPolicySnapshot(False, False, False)
 
             adapter._current_regime = 'bear'
             second = version_inputs(risk=operating_risk(max_positions=3, max_position_pct=12.0))
@@ -395,6 +404,33 @@ def test_publisher_records_a_failed_macro_lookup_instead_of_an_event(tmp_path, m
     asyncio.run(scenario())
 
 
+def test_publisher_takes_the_business_day_from_kst_across_the_date_boundary(tmp_path, monkeypatch):
+    """UTC-aware now 가 KST 날짜 경계를 넘는 표본 — 영업일은 KST 날짜다.
+
+    UTC 09-17 15:30 = KST 09-18 00:30 이라 두 날짜가 다르다. now 를 KST 로 바꾸지 않으면
+    영업일이 09-17 로 떨어져 owner 의 risk day(KST 09-18)와 어긋난다 — 게시 자체가 실패한다.
+    """
+    async def scenario():
+        boundary = datetime(2026, 9, 17, 15, 30, tzinfo=timezone.utc)
+        assert boundary.date() != NOW.date()
+        assert boundary.astimezone(NOW.tzinfo).date() == NOW.date()
+        clock = [boundary]
+        sidecar = RiskManager(RiskConfig(), D('2000000'))
+        monkeypatch.setattr(macro_calendar, 'is_macro_event_day', lambda day=None: (None, False))
+        store, runtime, commands = await harness(tmp_path, sidecar=sidecar, clock=clock)
+        try:
+            await publish_entry_policy_context(commands, sidecar=sidecar,
+                regime_adapter=MarketRegimeAdapter(), fee_config=FeeConfig(), now=boundary,
+                **version_inputs())
+            context = published(runtime)
+            assert context.business_day == NOW.date()
+            # 관측 시각은 원 tz 를 보존한다 — 날짜만 KST 로 유도한다.
+            assert context.observed_at == boundary
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
 def test_publisher_refuses_a_naive_now_and_a_foreign_sidecar(tmp_path, monkeypatch):
     async def scenario():
         clock = [NOW]
@@ -402,7 +438,10 @@ def test_publisher_refuses_a_naive_now_and_a_foreign_sidecar(tmp_path, monkeypat
         monkeypatch.setattr(macro_calendar, 'is_macro_event_day', lambda day=None: (None, False))
         store, runtime, commands = await harness(tmp_path, sidecar=sidecar, clock=clock)
         try:
-            with pytest.raises(ValueError):
+            # 사유까지 고정한다 — aware 검사를 지우면 naive now 가 `astimezone` 에서 호스트
+            # 지역시각으로 조용히 해석되고 거부는 DTO 의 `invalid_policy_context_time` 으로
+            # 늦춰진다(같은 ValueError 라 사유 없이는 구분되지 않는다).
+            with pytest.raises(ValueError, match='aware'):
                 await publish_entry_policy_context(commands, sidecar=sidecar,
                     regime_adapter=MarketRegimeAdapter(), fee_config=FeeConfig(),
                     now=NOW.replace(tzinfo=None), **version_inputs())

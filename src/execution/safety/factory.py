@@ -1,8 +1,14 @@
 """로드된 설정에서 owner 진입 정책을 만드는 부품 (설치 단계 전용).
 
 제품 호출자는 0건이다 — attach 설치(10A3b)가 정해지기 전에는 아무도 이 모듈을
-부르지 않는다. 시계 조회가 없고(now 는 전부 인자), 설정 파일을 직접 읽지 않으며,
-정책 게시 외의 owner 상태를 건드리지 않는다.
+부르지 않는다. 이 모듈 **자신**은 시계를 부르지 않고(now 는 전부 인자), 설정 파일을
+직접 읽지 않으며, 정책 게시 외의 owner 상태를 건드리지 않는다.
+
+시계가 주입으로 닫히지는 **않는다**: `publish_entry_policy_context` 가 읽는
+`regime_adapter.regime` 은 제품 속성이고, 그 뒤의 `effective_regime` 은 장중 위험의
+당일 게이트에서 host 벽시계(`src/core/market_regime.py` 의 `_now`)를 읽는다. 게시 시점의
+레짐은 그래서 주입 now 가 아니라 벽시계 날짜에 걸린다 — 그 경로까지 주입 시계로 묶는
+것은 10A3b 의 범위다.
 
 naive 시각 규칙: sidecar 의 `_sync_unhealthy_since` 는 naive 벽시계다. 진입 판단
 사실(`qualification._kst`)과 **같은 규칙**으로 naive = KST 지역시각으로 본다.
@@ -92,6 +98,13 @@ def execution_config_version(*, validator_config: dict, risk: RiskConfig, positi
     `run_trader.py` 의 전략별 청산 파라미터를 호출자가 str 키로 정규화한 것이다.
     Decimal·datetime·enum·NaN 은 `canonical` 이 거부한다 — 정규화는 호출자 몫이고
     여기서 조용히 문자열로 바꾸지 않는다.
+
+    탐지력의 구멍 둘(이 digest 가 못 잡는 설정 변경):
+
+    - experts 축은 `shadow_mode` 하나만 덮는다 — `experts.enabled`·`fail_open` 변경은
+      검출되지 않는다(10A3b 호출자 명세의 결정 사항).
+    - stops 축의 `INTRADAY_CRASH_PARAMS` 는 모듈 리터럴 상수라 설정 변경 탐지력을 더하지
+      않는다. digest 에는 실리지만 어떤 설정으로도 움직이지 않는다.
     """
     if type(risk) is not RiskConfig or type(exit_config) is not ExitConfig:
         raise ValueError('명시 RiskConfig/ExitConfig 인스턴스가 필요합니다')
@@ -160,6 +173,14 @@ async def publish_entry_policy_context(commands, *, risk: RiskConfig, sidecar: R
     `config_version` 을 인자로 받지 않는다 — 받으면 owner 의 대조가 한 값을 자기 자신과
     비교하게 된다. 네 owned version 과 `expected_version` 은 게시 직전 `owner.version`
     하나로 채운다(고정값이 아니다).
+
+    거부(전부 게시 **전**이라 owner 상태는 움직이지 않는다 — fail-closed):
+
+    - naive `now`, 명시 인스턴스가 아닌 sidecar/regime_adapter.
+    - sidecar 의 `_sync_unhealthy_since` 가 `now` 보다 나중이면 `PolicyContext` 가
+      `ValueError('future_policy_sync_fact')` 를 던진다. 주기 재게시 호출자는 그래서
+      `now` 를 게시 직전에 잡아야 한다 — 오래된 `now` 를 들고 오면 그 사이 갱신된 동기화
+      사실이 미래로 보여 게시가 통째로 막힌다.
     """
     if type(now) is not datetime or now.utcoffset() is None:
         raise ValueError('aware 게시 시각이 필요합니다')
