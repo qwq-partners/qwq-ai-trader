@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-22 — docs(safety): KIS 미확정 문항의 판단 결정 + attach 의 새 설치 차단 사유 3건 (**제품 코드 0줄**)
+
+> 사용자 지시(원문): "나머지 답들도 답변이 없으니 우리가 임의로 판단해서 진행하면 돼. 니가 검토해서 제일 우리에게 이득이 되는 방향으로." 정본은 `docs/superpowers/plans/2026-09-22-kis-judgement-decisions.md`.
+
+- **임계 경로가 바뀌었다.** KIS 질문지 31문항을 우리가 판단해 확정했다 — 전부 "어느 답이 참이어도 안전한 쪽"(잠기는 쪽이 조용히 틀리는 쪽보다 싸다): 취소 최종성은 **알 수 없다**로 확정 · 공통 cutoff·지연 상한은 **없다**로 확정(2026-09-17 계획의 "정지 snapshot 전체 조회 증명"은 공개 계약으로 달성 불가로 판정) · MODIFY 는 영구 미지원 · 조회 범위를 좁히면 안전해진다는 명제를 부정. 설치 차단 사유 1·2·12 는 "공식 증거 대기"에서 "설계로 대체/분해"로.
+- **사용자가 준 KIS 공식 Wikidocs 핵심이 확정한 것:** 체결통보 `H0STCNI0` 의 `tr_key` 는 HTS ID · 본문은 AES-256-CBC · `CNTG_YN` 1=접수 계열/2=체결 · `ACPT_YN` 1=접수/2=확인 · **`CNTG_QTY` 는 접수 계열 통보에서는 주문수량** · 통보 칼럼 23개(포털 26개). 취소 확인 뒤 추가 체결·재전송·순서 보장은 여전히 말하지 않는다 → KR 체결통보는 붙이지 않고 REST 를 정본으로 둔다(D9).
+- **Plan 워크플로의 적대적 심사(① BLOCK·② REVISE)가 KIS 답과 무관한 새 설치 차단 사유 3건을 찾았다**(인계 문서 표 16~18): **attach 의 주문 POST 가 킬스위치·감사 원장을 우회한다**(`transport.py` 가 `broker._session.post` 로 직접 송신, `src/execution/safety/` 에 `kill_switch`·`audit_log` 참조 0건 — coordinator 확인) · **30초 `_sync_portfolio` 에 attach 분기가 없다**(coordinator 확인) · **attach 에는 체결·종결 증거의 생산자가 0건**(매수 체결이 포지션이 되지 않아 손절 신호 자체가 생기지 않는다). attach 가 현행보다 약한 지점 10곳도 목록화 — 09-21 밤 main 의 PR #81·#83·#84 로 기준선이 올라갔다.
+- **순서 결정:** 게이트를 여는 변경(UNKNOWN 범위 축소 D4·차가운 시작 D6)보다 전제(P0-1 킬스위치·감사 원장 → P0-2 증거 생산자 → P0-3 sync 분기 → P0-4)가 먼저. 다음 구현 단계는 P0-1.
+- **운영(main) 쪽:** PR #80 은 09-21 밤 다른 세션이 사용자 지시로 병합·배포(전환 안 함). 후속 **PR #88**(연속조회 요청 `tr_cont` 헤더 — 2페이지째부터 `N`, 외부계좌 루프의 종료 판정 통일, 취소 재시도 유지의 근거 정정)은 열려 있고 미병합: `verify` 통과·독립 재현 APPROVE·Codex 9차 APPROVE.
+- main 병합·배포·재시작·주문·설정·Toss grant 무변경(이 세션 기준), `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-21 — fix(safety): KIS 공식 저장소 기준 정합 — 증거 파서·수집기를 신 TR 모양으로 (**호출자 0건·운영 미설치**)
 
 > 사용자 지시("Kis api는 https://github.com/koreainvestment/open-trading-api 여길 참고")에 따라 기준 자료를 공식 저장소 사본(`open-trading-api@b4e6249`, 2026-08-26)으로 고정했다. **저장소가 고정해 주는 것은 요청·응답의 모양뿐이고 취소 최종성·누적 범위·cutoff 는 저장소도 말하지 않는다 — 설치 차단 사유 1·2·12 는 그대로다.** 문항별 상태표는 `docs/integrations/kis-repo-grounding-2026-09-21.md`, 구현 상태는 `docs/integrations/kis-tr-migration-spec-2026-09-21.md` §8.
