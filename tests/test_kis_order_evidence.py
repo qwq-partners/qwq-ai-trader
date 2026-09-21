@@ -68,7 +68,7 @@ def test_full_pagination_requires_next_request_n_and_matching_cursor():
     {"tot_ccld_qty": "-1"}, {"tot_ccld_qty": "10.0"}, {"tot_ccld_qty": True},
     {"tot_ccld_amt": "NaN"}, {"tot_ccld_amt": "Infinity"}, {"tot_ccld_amt": "-1"},
     {"ord_dt": "20260230"}, {"sll_buy_dvsn_cd": "garbage"},
-    {"rmn_qty": None}, {"tot_ccld_qty": "11"}, {"cncl_yn": "?"},
+    {"rmn_qty": None}, {"tot_ccld_qty": "11"}, {"cncl_yn": "?"}, {"cncl_yn": ""},
 ])
 def test_malformed_or_impossible_rows_are_not_complete_evidence(changes):
     evidence = parse([EvidencePage([row(**changes)], "D")])

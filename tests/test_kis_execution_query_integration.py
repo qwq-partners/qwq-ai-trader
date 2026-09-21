@@ -116,8 +116,8 @@ async def collect(broker, kind="daily"):
 
 
 @pytest.mark.parametrize("kind,tr,path", [
-    ("daily", "TTTC8001R", "inquire-daily-ccld"),
-    ("cancelable", "TTTC8036R", "inquire-psbl-rvsecncl"),
+    ("daily", "TTTC0081R", "inquire-daily-ccld"),
+    ("cancelable", "TTTC0084R", "inquire-psbl-rvsecncl"),
 ])
 def test_real_get_collects_pages_and_applies_shared_ledger_interval(setup_broker, kind, tr, path):
     make, _ = setup_broker

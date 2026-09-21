@@ -1,4 +1,4 @@
-"""공식 legacy TTTC8001R/TTTC8036R 읽기 전용 페이지 수집 계약.
+"""공식 저장소 현행 TTTC0081R/TTTC0084R 읽기 전용 페이지 수집 계약.
 
 fetch(request)는 기존 호출 제한기를 소유하는, 취소 가능한 async 어댑터다.
 어댑터가 GET과 인증 헤더를 구성하며 이 모듈은 HTTP/계좌 기본값/환경 접근을
@@ -6,7 +6,7 @@ fetch(request)는 기존 호출 제한기를 소유하는, 취소 가능한 asyn
 뿐 로그/저장 대상이 아니며, 소비자는 안전한 필드만 명시적으로 선택해야 한다.
 
 페이지 완결은 계좌 원자적 snapshot, 주문 부재, 취소 최종성 또는 startup 대사
-성공을 증명하지 않는다. legacy exchange 범위는 알려진 거래소 ID로 치환하지 않는다.
+성공을 증명하지 않는다. 조회 범위는 실제로 요청한 값만 기록하며 응답에서 추론하지 않는다.
 """
 from __future__ import annotations
 
@@ -64,7 +64,8 @@ class QueryScope:
     start_date: str | None = None
     end_date: str | None = None
     market: str = field(default="KR", init=False)
-    exchange_scope: str = field(default="legacy_unspecified_all", init=False)
+    # 실제로 요청에 실은 거래소 범위. 요청 파라미터가 없는 조회는 "unspecified"로 남긴다.
+    exchange_scope: str = "KRX"
 
 
 @dataclass(frozen=True)
@@ -153,19 +154,37 @@ class LegacyExecutionQueries:
 
     async def daily(self, *, account_scope: str, account_number: str, product_code: str,
                     start_date: str, end_date: str) -> QueryCollection:
-        scope = QueryScope(self._scope_value(account_scope), "daily", "TTTC8001R", start_date, end_date)
+        """저장소 현행 TTTC0081R 일별 주문체결 조회. EXCG_ID_DVSN_CD를 명시 송신한다.
+
+        저장소 예제(inquire_daily_ccld.py:44,173-174)는 기본값 "KRX"를 두되 미입력도
+        허용한다 — 다만 "미입력이면 KRX"라는 문장은 없으므로 미입력 동작에 기대지 않고
+        범위를 좁히는 방향으로 "KRX"를 직접 보낸다.
+        """
+        scope = QueryScope(self._scope_value(account_scope), "daily", "TTTC0081R", start_date, end_date)
         start, end = self._query_date(start_date), self._query_date(end_date)
         if start > end:
             raise ValueError("invalid query date range")
         params = self._credentials(account_number, product_code)
         params.update(INQR_STRT_DT=start.isoformat().replace("-", ""), INQR_END_DT=end.isoformat().replace("-", ""),
                       SLL_BUY_DVSN_CD="00", INQR_DVSN="01", PDNO="", CCLD_DVSN="00",
-                      ORD_GNO_BRNO="", ODNO="", INQR_DVSN_3="00", INQR_DVSN_1="")
+                      ORD_GNO_BRNO="", ODNO="", INQR_DVSN_3="00", INQR_DVSN_1="",
+                      EXCG_ID_DVSN_CD=scope.exchange_scope)
         return await self._collect(scope, "/uapi/domestic-stock/v1/trading/inquire-daily-ccld", params, "output1")
 
     async def cancelable(self, *, account_scope: str, account_number: str,
                          product_code: str) -> QueryCollection:
-        scope = QueryScope(self._scope_value(account_scope), "cancelable", "TTTC8036R")
+        """저장소 현행 TTTC0084R 정정취소가능 주문 조회. 거래소 요청 파라미터가 없다.
+
+        - 이 조회에 주문번호가 없다는 사실을 취소 확정의 근거로 쓰지 않는다. 저장소는
+          '부재 = 확정'을 말하지 않고, 오히려 취소 전 psbl_qty 확인 의무만 말한다(Q12).
+        - 한 번에 50건 상한이다(inquire_psbl_rvsecncl.py:39). 잘린 목록과 빈 목록을
+          반환값으로 구분하지 못하는 것이 저장소 예제의 결함이므로 complete 여부로만 읽는다.
+        - INQR_DVSN_1의 의미가 저장소 안에서 두 갈래다(예제 ':46 0:주문 1:종목' vs
+          legacy/Sample01/kis_domstk.py:147 '정렬순서'). 어느 값이 옳은지 저장소가 판정하지
+          않으므로 현행 값을 바꾸지 않는다.
+        """
+        scope = QueryScope(self._scope_value(account_scope), "cancelable", "TTTC0084R",
+                           exchange_scope="unspecified")
         params = self._credentials(account_number, product_code)
         params.update(INQR_DVSN_1="1", INQR_DVSN_2="0")
         return await self._collect(scope, "/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl", params, "output")
@@ -191,6 +210,8 @@ class LegacyExecutionQueries:
             return True
         today = requested_at.astimezone(ZoneInfo("Asia/Seoul")).date()
         # 공식 legacy 주석: 4/25 요청이면 1월~4월. 90일/동일 일자 cutoff가 아니다.
+        # 이 창은 구TR legacy 주석 기준의 보수적 제약이며 신TR(TTTC0081R)의 창 정의는
+        # 저장소에 없다. 좁은 쪽으로 남겨 두고 실계좌 확인 전에는 넓히지 않는다.
         year, month_index = divmod(today.year * 12 + today.month - 1 - 3, 12)
         earliest = date(year, month_index + 1, 1)
         return earliest.isoformat() <= scope.start_date <= scope.end_date <= today.isoformat()
