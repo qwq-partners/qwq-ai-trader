@@ -560,6 +560,19 @@ def test_engine_slow_broker_does_not_let_the_heartbeat_hold_the_queue(monkeypatc
     assert rm._pending_cancel_keep[SYM].tried_at == clock["at"]   # 시도 시각은 그 종목을 실제로 처리한 시각
 
 
+def test_engine_heartbeat_never_market_sells_an_exit_exempt_symbol(monkeypatch):
+    """PR #83 과의 병합: 유지 중에 자동매도 금지(exit_exempt)로 등록된 종목은 하트비트 재시도에서도 면제 분기를 먼저
+    탄다 — 남은 지정가만 취소하고, 거래소에서 사라졌어도 시장가로 재주문하지 않는다."""
+    broker = SellBroker(cancelled=0, tracked=[], exchange_rows=ELSEWHERE)
+    rm = _engine(monkeypatch, broker, keep=1)
+    rm._exit_exempt_ref, rm._exempt_cancel_last_try = {SYM}, {}
+
+    _beat(rm)
+
+    assert broker.calls == ["cancel"] and broker.orders == []
+    assert SYM not in rm._pending_orders and SYM not in rm._pending_cancel_keep
+
+
 def test_engine_heartbeat_only_touches_kept_sells_whose_retry_is_due(monkeypatch):
     """하트비트가 구동하는 것은 '간격이 지난 유지분의 재시도'뿐이다 — 폴백 상한 해제 같은 다른 분기를 앞당기지 않는다."""
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)

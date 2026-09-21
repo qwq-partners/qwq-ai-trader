@@ -833,6 +833,22 @@ class KRScheduler:
         else:
             logger.warning(log_msg)
 
+    async def _exempt_sell_still_open(self, symbol: str) -> bool:
+        """자동매도 금지 종목에 미체결 SELL 이 아직 살아 있을 수 있는가 (CORE-023).
+
+        브로커 cancel 은 실패를 예외로 올리지 않고 건수만 준다(0건 = 소멸 또는 실패). 취소에 성공한
+        주문만 브로커 추적에서 빠지므로, 취소 뒤에도 남아 있으면 거래소에 살아 있다고 본다.
+        면제 등록 전에 나간 지정가의 pending 을 풀어 버리면 취소 재시도 대상에서 빠진 채 체결될 수 있다.
+        """
+        bot = self.bot
+        if not (bot.exit_manager and bot.exit_manager.is_exit_exempt(symbol)):
+            return False
+        try:
+            return any(o.symbol == symbol and o.is_active for o in await bot.broker.get_open_orders())
+        except Exception as e:
+            logger.warning(f"[청산 pending] {symbol} 면제 종목 미체결 확인 실패 — 유지: {e}")
+            return True
+
     async def _cleanup_stale_pending(self):
         """교착 pending 정리 — price event 없이도 독립 실행 가능.
 
@@ -894,6 +910,10 @@ class KRScheduler:
                         f"(수동 확인 필요): {e}"
                     )
                     self._stale_cancel_last_try.pop(s, None)
+            if await self._exempt_sell_still_open(s):
+                self._stale_cancel_last_try[s] = now_time  # 60초 뒤 재취소 (틱마다 API 를 때리지 않게)
+                logger.error(f"[청산 pending] {s} 자동매도 금지 종목 SELL 취소 미확인 — pending 유지, 60초 뒤 재시도")
+                continue
             if bot._exit_pending_timestamps.get(s) != _gen:
                 # await(취소·생존 조회) 사이에 이 pending 이 체결로 끝나고 같은 종목의 새 청산 pending 이
                 # 등록됐다 — 옛 주문의 결과로 새 pending·stage 를 풀면 그 청산이 중복 발행된다 (2026-09-21)
@@ -938,6 +958,10 @@ class KRScheduler:
                         # API 예외 = 원 주문 생존 가능 → 유지 후 다음 사이클 재시도
                         logger.warning(f"[청산 pending] {s} 고아 주문 취소 실패 — 유지: {e}")
                         continue
+                if await self._exempt_sell_still_open(s):
+                    self._stale_cancel_last_try[s] = now_time
+                    logger.error(f"[청산 pending] {s} 자동매도 금지 종목 고아 SELL 취소 미확인 — 유지, 60초 뒤 재시도")
+                    continue
                 if bot._exit_pending_timestamps.get(s) != _gen:
                     continue  # 정리 중 pending 이 교체됨 — 새 pending 을 옛 결과로 풀지 않는다
                 bot._exit_pending_symbols.discard(s)
@@ -948,7 +972,7 @@ class KRScheduler:
                     bot.exit_manager.rollback_stage(s)
                 logger.warning(f"[청산 pending] {s} 동기화 해제 (RiskManager에 없음 → 고아 pending 정리)")
 
-    _MAX_EXIT_UNKNOWN = 2  # 연속 '판단 불가' 상한: 3분 + 60초 대기 + 60초×2 = 5분 (엔진 270초와 같은 예산)
+    _MAX_EXIT_UNKNOWN = 2  # 연속 '판단 불가' 상한: 등록 후 약 3분 첫 회 대기 → 약 4분 1회 → 약 5분 2회에서 해제 (엔진 270초와 같은 예산)
 
     def _partial_exit_marks(self) -> Dict[str, datetime]:
         """분할 매도로 발행한 청산 pending 의 표식 {종목: 그 pending 의 등록 시각} (지연 생성 — 초기화 생략 하네스 호환)."""
@@ -6655,6 +6679,11 @@ JSON:
                     continue
 
                 # ── 청산 트리거 (보유 시) ──
+                # 자동매도 금지 종목이면 청산하지 않는다 (CORE-023) — 이 매도는 브로커 직접 제출이라
+                # 엔진 on_signal 가드를 거치지 않는다
+                if has_kofr and bot.exit_manager and bot.exit_manager.is_exit_exempt(SAFE_SYMBOL):
+                    logger.debug(f"[안전자산] {SAFE_SYMBOL} 자동매도 금지 종목 — 청산 스킵")
+                    continue
                 if has_kofr:
                     sell_reason = None
                     # (a) 시장 정상화
@@ -8058,6 +8087,11 @@ JSON:
                 _trim_min_value = core_cfg_ow.get("trim_min_value", 200000)
                 _individual_max_pct = core_cfg_ow.get("individual_max_pct", 20.0)
                 _rebalance_exclude = set(str(s) for s in core_cfg_ow.get("rebalance_exclude", []))
+                # 자동매도 금지 종목은 트림 대상에서 제외 (CORE-023) — 엔진이 SELL 을 막으면
+                # 트림 잔여액(_remaining)만 깎여 다른 코어 종목 트림이 모자라게 된다
+                if bot.exit_manager:
+                    _rebalance_exclude |= {s for s in portfolio.positions
+                                           if bot.exit_manager.is_exit_exempt(s)}
 
                 equity = portfolio.total_equity
                 if equity > 0:
