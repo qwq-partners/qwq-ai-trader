@@ -13,7 +13,10 @@ from enum import Enum
 import json
 from typing import Callable
 
+from ...risk import kill_switch
+from ...utils import audit_log
 from .guards import GuardDecision
+from .lifecycle import CommandKind
 from .requests import KISRequestBuilder, PreparedTradeRequest, RequestValidationError
 
 
@@ -55,11 +58,33 @@ class TransportResult:
     data: dict = field(default_factory=dict, repr=False)
 
 
+def _record_outcome(result: TransportResult, fields: dict) -> TransportResult:
+    """응답/예외 뒤의 결과를 원장에 남긴다. 기록 실패는 결과를 바꾸지 않는다.
+
+    ACK를 UNKNOWN으로 만들면 실제로 접수된 주문이 미확인으로 뒤집히므로 삼킨다.
+    아래 try/except 는 방어로 남겨 둔 것이다 — 실제 audit_log.record 는 내부에서
+    모든 예외를 삼키므로(src/utils/audit_log.py) 여기까지 올라오는 예외는 없다.
+    """
+    try:
+        audit_log.record(
+            audit_log.EV_ACCEPT if result.status is TransportStatus.ACKNOWLEDGED else audit_log.EV_REJECT,
+            reason=result.reason,
+            unconfirmed=True if result.status is TransportStatus.UNKNOWN else None,
+            **fields,
+        )
+    except Exception:
+        pass
+    return result
+
+
 class GuardedKISTransport:
     """실제 KISBroker 연결/헤더/공용 limiter를 재사용하는 단일 POST.
 
     guard는 정상 승인 시 process-local permit도 동기 소비해야 한다.
     aiohttp 내부 대기 또는 거래소 접수 시점까지 위험 불변을 보장하지 않는다.
+
+    send_prepared 는 운영 submit_order 와 같은 두 안전장치를 통과한다 — 킬스위치
+    (SUBMIT/MODIFY 만, CANCEL 제외)와 감사 원장(시도·결과). raw send 에는 둘 다 없다.
     """
 
     _PATHS = {'submit': 'order-cash', 'cancel': 'order-rvsecncl', 'modify': 'order-rvsecncl'}
@@ -83,11 +108,28 @@ class GuardedKISTransport:
 
         기존 raw send와 별도인 opt-in 경계이며 운영 broker에는 아직 설치하지 않는다.
         hashkey helper의 사본 변형도 거부하고 마지막 검증 이후 단회 POST만 수행한다.
+
+        guard 승인 뒤 POST 직전(동기 구간)에:
+          - 킬스위치: SUBMIT/MODIFY 만 검사한다(CANCEL 은 위험을 줄이는 명령이라 제외 —
+            현행 KISBroker.cancel_order 와 같다). 차단이면 원문은 EV_BLOCKED 행에만 남기고
+            상태는 NOT_SENT/'kill_switch_blocked' 다.
+          - 감사 원장: 시도를 EV_SUBMIT(취소는 EV_CANCEL)로 먼저 남긴다.
+        고정되는 것은 두 호출의 **위치**다(마지막 await 뒤·POST 앞). 실제 audit_log.record 는
+        예외를 삼키므로 원장 쓰기 실패는 주문을 막지 않는다 — 현행 submit_order 와 같은
+        best-effort 이고, 원장 때문에 보호 주문을 막는 쪽이 더 위험하다. 킬스위치도 플래그
+        디렉터리 접근 실패 시 허용한다(fail-open, kill_switch._read_flag) — attach 설치 시
+        그 디렉터리의 가용성이 긴급 정지의 전제다.
+        응답/예외 뒤에는 ACK→EV_ACCEPT, REJECTED/UNKNOWN→EV_REJECT(UNKNOWN 은
+        unconfirmed=True)를 한 시도당 한 번만 남기되, 그 기록 실패는 TransportResult 를
+        바꾸지 않는다. POST 뒤 CancelledError 면 결과 행 없이 submit/cancel 행만 남는다 —
+        모르는 결과를 단정하지 않는다.
+        원장 필드는 attach 구분(path='attach')과 owner 행 연결용 attempt_id/fingerprint 를
+        포함하고 계좌번호·hashkey·토큰·헤더는 포함하지 않는다.
         """
         builder, broker = self._request_builder, self._broker
         if builder is None:
             return TransportResult(TransportStatus.NOT_SENT, 'request_builder_required')
-        dispatched = False
+        dispatched, result = False, None
         try:
             prepared = deepcopy(request)
             builder.validate(prepared)
@@ -134,29 +176,62 @@ class GuardedKISTransport:
                 return TransportResult(TransportStatus.NOT_SENT, 'request_broker_scope_changed')
             payload = prepared.body()
             url = prepared.account.endpoint + prepared.path
+            # 킬스위치·감사 원장 — 운영 submit_order 와 같은 두 안전장치. 둘 다 동기 함수라
+            # guard와 POST 사이에 새 application await를 만들지 않는다.
+            side = prepared.side.value
+            audit_fields = {
+                'market': prepared.market, 'symbol': prepared.symbol, 'side': side,
+                'qty': prepared.quantity, 'price': format(prepared.wire_price, 'f'),
+                'order_type': prepared.order_type.value, 'strategy': prepared.strategy,
+                'path': 'attach', 'attempt_id': prepared.attempt_id, 'fingerprint': fingerprint,
+            }
+            if prepared.command is not CommandKind.CANCEL:
+                # 취소는 위험을 줄이는 명령이라 현행 cancel_order 와 같이 검사하지 않는다.
+                allowed, block_reason = kill_switch.check(side, market=prepared.market)
+                if not allowed:
+                    audit_log.record_blocked(reason=block_reason, **audit_fields)
+                    # 차단 원문은 원장에만 남긴다 (상태 사유에 원문 금지).
+                    return TransportResult(TransportStatus.NOT_SENT, 'kill_switch_blocked')
+            audit_log.record(
+                audit_log.EV_CANCEL if prepared.command is CommandKind.CANCEL else audit_log.EV_SUBMIT,
+                **audit_fields,
+            )
             dispatched = True
             async with broker._session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
-                    return TransportResult(TransportStatus.UNKNOWN, 'http_response_unconfirmed')
-                data = await response.json()
-                if not isinstance(data, dict):
-                    return TransportResult(TransportStatus.UNKNOWN, 'invalid_response')
-                if data.get('rt_cd') == '0':
-                    return TransportResult(TransportStatus.ACKNOWLEDGED, 'command_acknowledged', data)
-                if data.get('rt_cd') == '1' and isinstance(data.get('msg_cd'), str) and data['msg_cd']:
-                    return TransportResult(TransportStatus.REJECTED, 'command_rejected', data)
-                return TransportResult(TransportStatus.UNKNOWN, 'invalid_response')
+                    result = TransportResult(TransportStatus.UNKNOWN, 'http_response_unconfirmed')
+                else:
+                    data = await response.json()
+                    if not isinstance(data, dict):
+                        result = TransportResult(TransportStatus.UNKNOWN, 'invalid_response')
+                    elif data.get('rt_cd') == '0':
+                        result = TransportResult(TransportStatus.ACKNOWLEDGED, 'command_acknowledged', data)
+                    elif data.get('rt_cd') == '1' and isinstance(data.get('msg_cd'), str) and data['msg_cd']:
+                        result = TransportResult(TransportStatus.REJECTED, 'command_rejected', data)
+                    else:
+                        result = TransportResult(TransportStatus.UNKNOWN, 'invalid_response')
+            # 결과 행은 응답 컨텍스트를 닫은 뒤에 쓴다 — __aexit__ 가 터져도 한 시도당 한 행이다.
+            return _record_outcome(result, audit_fields)
         except asyncio.CancelledError:
             raise
         except RequestValidationError:
-            return TransportResult(TransportStatus.UNKNOWN if dispatched else TransportStatus.NOT_SENT,
-                                   'dispatch_unconfirmed' if dispatched else 'invalid_prepared_request')
+            if dispatched:
+                return _record_outcome(
+                    TransportResult(TransportStatus.UNKNOWN, 'dispatch_unconfirmed'), audit_fields)
+            return TransportResult(TransportStatus.NOT_SENT, 'invalid_prepared_request')
         except Exception:
-            return TransportResult(TransportStatus.UNKNOWN if dispatched else TransportStatus.NOT_SENT,
-                                   'dispatch_unconfirmed' if dispatched else 'preparation_failed')
+            if result is not None:
+                # 응답 본문으로 확인한 결과를 컨텍스트 종료 실패가 뒤집지 않는다.
+                # 접수된 주문을 UNKNOWN 으로 되돌리면 attach 의 전역 정지를 부른다.
+                return _record_outcome(result, audit_fields)
+            if dispatched:
+                return _record_outcome(
+                    TransportResult(TransportStatus.UNKNOWN, 'dispatch_unconfirmed'), audit_fields)
+            return TransportResult(TransportStatus.NOT_SENT, 'preparation_failed')
 
     async def send(self, command: str, tr_id: str, payload: dict,
                    guard: Callable[[], GuardDecision]) -> TransportResult:
+        """킬스위치·감사 원장을 거치지 않는다 — 제품에서 쓰지 말 것(호출자 0건)."""
         if command not in self._PATHS:
             return TransportResult(TransportStatus.NOT_SENT, 'unknown_command')
         broker = self._broker

@@ -27,6 +27,8 @@ import socket
 from pathlib import Path
 from typing import List
 
+import pytest
+
 # ── 차단 대상 (import 시점에 실제 HOME 으로 계산 — 이후 monkeypatch 무관) ──────────
 _HOME = Path.home()
 _PROD_ROOT = Path(os.environ.get("QWQ_PROD_ROOT", "/home/ubuntu/projects/qwq-ai-trader"))
@@ -192,6 +194,28 @@ socket.getaddrinfo = _getaddrinfo
 def pytest_runtest_protocol(item, nextitem):
     _CURRENT_TEST[0] = item.nodeid
     return None
+
+
+# ── 킬스위치 플래그·감사 원장 (운영 캐시를 가리키는 모듈 상수) ─────────────────────
+@pytest.fixture(autouse=True)
+def _isolate_order_safety_state(tmp_path, monkeypatch):
+    """두 상수를 테스트마다 전용 임시 경로로 돌린다.
+
+    ``kill_switch.CACHE_DIR`` / ``audit_log.AUDIT_DIR`` 은 운영 캐시를 가리키고,
+    모든 주문 경계(KISBroker.submit_order, GuardedKISTransport.send_prepared)가
+    반드시 통과한다. 개별 테스트의 명시 주입에 맡기면 주문 경로를 타는 시험이
+    전부 운영 플래그를 읽고 운영 원장에 쓰게 된다 — 위 차단 가드가 막아 주기는
+    하지만, 킬스위치는 OSError 를 fail-open 으로 처리하므로 차단에 기대면 안 된다.
+    개별 테스트가 다시 monkeypatch 하면 그 쪽이 이긴다.
+    """
+    from src.risk import kill_switch
+    from src.utils import audit_log
+
+    monkeypatch.setattr(kill_switch, "CACHE_DIR", tmp_path / "kill_switch_flags")
+    monkeypatch.setattr(audit_log, "AUDIT_DIR", tmp_path / "audit")
+    kill_switch.clear_cache()
+    yield
+    kill_switch.clear_cache()
 
 
 # ── curl_cffi (yfinance 백엔드) — C 레벨 curl 이라 socket 패치를 우회한다 (D 재현 중 실측 발견, 2026-09-15)
