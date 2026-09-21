@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 
 import src.core.engine as eng  # noqa: E402
 from src.core.engine import RiskManager  # noqa: E402
-from src.core.event import SignalEvent  # noqa: E402
+from src.core.event import FillEvent, SignalEvent  # noqa: E402
 from src.core.types import (  # noqa: E402
     MarketSession, Order, OrderSide, OrderStatus, OrderType, Position, Signal,
     SignalStrength, StrategyType,
@@ -65,8 +65,8 @@ class LegacyBroker:
 class Broker(LegacyBroker):
     """KISKRBroker 처럼 거래소 실 미체결 조회(TTTC8036R 대응)까지 있는 합성 브로커."""
 
-    async def get_exchange_open_orders(self):
-        self.calls.append("exchange")
+    async def get_exchange_open_orders(self, symbol=None):
+        self.calls.append(("exchange", symbol))
         return None if self._exchange_rows is None else list(self._exchange_rows)
 
 
@@ -190,26 +190,26 @@ def test_zero_cancel_with_tracked_order_keeps_reservation(monkeypatch, status):
 
     assert SYM in rm._pending_orders
     assert rm._reserved_by_order[SYM] == Decimal("101500")
-    assert "exchange" not in broker.calls   # 첫 실패는 조회 없이 한 주기 대기(체결이면 FillEvent 가 지운다)
+    assert ("exchange", SYM) not in broker.calls   # 첫 실패는 조회 없이 한 주기 대기(체결이면 FillEvent 가 지운다)
     assert rm._pending_fallback_count[SYM] == 1
     # 60초 뒤 재시도 — SIGNAL 마다 취소 API 를 때리지 않는다
     assert (now - rm._pending_timestamps[SYM]).total_seconds() == 600 - 60
 
 
-@pytest.mark.parametrize("rows", [[{"symbol": SYM, "side": "buy", "qty": 10}], None],
-                         ids=["거래소 생존", "조회 실패(판단 불가)"])
-def test_zero_cancel_retry_keeps_while_alive_on_exchange(monkeypatch, rows):
+@pytest.mark.parametrize("rows, count_after", [([{"symbol": SYM, "side": "buy", "qty": 10}], 1), (None, 6)],
+                         ids=["거래소 생존 → 연속 판단불가 횟수 초기화", "조회 실패(판단 불가) → 횟수 +1"])
+def test_zero_cancel_retry_keeps_while_alive_on_exchange(monkeypatch, rows, count_after):
     now = datetime(2026, 9, 21, 10, 30)
     broker = Broker(cancelled=0, tracked=[_tracked_buy()], exchange_rows=rows)
     rm = _rm(monkeypatch, broker, now)
     _stale(rm, OrderSide.BUY, now, seconds=700, reserved=Decimal("101500"))
-    rm._pending_fallback_count[SYM] = 1    # 이미 한 주기 기다렸다
+    rm._pending_fallback_count[SYM] = 5    # 이미 여러 주기 기다렸다
 
     _drive(rm)
 
     assert SYM in rm._pending_orders and SYM in rm._reserved_by_order
-    assert "exchange" in broker.calls
-    assert rm._pending_fallback_count[SYM] == 2
+    assert ("exchange", SYM) in broker.calls
+    assert rm._pending_fallback_count[SYM] == count_after
     assert (now - rm._pending_timestamps[SYM]).total_seconds() == 600 - 60
 
 
@@ -239,7 +239,7 @@ def test_zero_cancel_without_tracked_order_still_releases(monkeypatch):
     _drive(rm)
 
     assert SYM not in rm._pending_orders and SYM not in rm._reserved_by_order
-    assert "exchange" not in broker.calls
+    assert ("exchange", SYM) not in broker.calls
     # '미추적'은 방금 체결(FillEvent 대기 중)일 수도 있다 — 포지션 반영 전 같은 종목 재매수 차단
     assert SYM in rm._order_fail_cooldown
 
@@ -269,6 +269,12 @@ def test_confirmed_alive_order_is_never_force_released(monkeypatch):
 
     assert SYM in rm._pending_orders and rm._reserved_by_order[SYM] == Decimal("101500")
     assert SYM not in rm._order_fail_cooldown
+    # 생존 확인이 40회 이어진 뒤 조회가 한 번 실패해도 풀지 않는다 — 상한은 '연속' 판단 불가에만
+    assert rm._pending_fallback_count[SYM] == 1
+    broker._exchange_rows = None
+    rm._pending_timestamps[SYM] = now - timedelta(seconds=700)
+    _drive(rm)
+    assert SYM in rm._pending_orders and rm._pending_fallback_count[SYM] == 2
 
 
 def test_partial_fill_position_releases_so_exits_are_not_blocked(monkeypatch):
@@ -281,7 +287,7 @@ def test_partial_fill_position_releases_so_exits_are_not_blocked(monkeypatch):
     _drive(rm)
 
     assert SYM not in rm._pending_orders and SYM not in rm._reserved_by_order
-    assert "exchange" not in broker.calls
+    assert ("exchange", SYM) not in broker.calls
 
 
 def test_keep_is_bounded_even_if_exchange_query_keeps_failing(monkeypatch):
@@ -294,7 +300,7 @@ def test_keep_is_bounded_even_if_exchange_query_keeps_failing(monkeypatch):
 
     _drive(rm)
 
-    assert "exchange" in broker.calls   # 상한에서도 먼저 한 번 더 확인한다
+    assert ("exchange", SYM) in broker.calls   # 상한에서도 먼저 한 번 더 확인한다(종목 지정 조회)
     assert SYM not in rm._pending_orders and SYM not in rm._reserved_by_order
     assert SYM in rm._order_fail_cooldown   # 살아 있을 수 있는 원 주문 위 재매수 차단(BUY 전용 쿨다운)
 
@@ -365,12 +371,78 @@ def test_new_pending_starts_with_zero_fallback_count(monkeypatch):
 from test_kis_tr_switch import _capture_get, broker as kis_broker  # noqa: E402,F401
 
 
-@pytest.mark.parametrize("tr_cont, undecidable", [("F", True), ("M", True), ("D", False), ("", False)])
-def test_open_order_query_is_undecidable_when_more_pages_remain(kis_broker, tr_cont, undecidable):
-    """첫 페이지만 읽는 조회가 '미체결 없음'을 말하면 살아 있는 주문의 pending 이 풀린다 → 판단 불가(None)."""
-    _capture_get(kis_broker, {"rt_cd": "0", "_tr_cont": tr_cont, "output": [
-        {"pdno": OTHER, "sll_buy_dvsn_cd": "02", "rmn_qty": "3"}]})
+_FIRST_PAGE = [{"pdno": OTHER, "sll_buy_dvsn_cd": "02", "rmn_qty": "3"}]
+_ROWS = [{"symbol": OTHER, "side": "buy", "qty": 3}]
 
-    rows = asyncio.run(kis_broker.get_exchange_open_orders())
 
-    assert (rows is None) if undecidable else (rows == [{"symbol": OTHER, "side": "buy", "qty": 3}])
+@pytest.mark.parametrize("symbol, tr_cont, expected", [
+    (SYM, "F", None), (SYM, "M", None),      # 첫 페이지에 없고 다음 페이지가 남음 → 판단 불가
+    (SYM, "D", _ROWS), (SYM, "", _ROWS),     # 마지막 페이지 → 정말 없음(행 그대로)
+    (OTHER, "F", _ROWS),                     # 찾았으면 생존 증거 — 페이지가 남아도 버리지 않는다
+    (None, "F", _ROWS),                      # 종목 미지정(ExitManager 검증자)은 종전 동작 그대로
+])
+def test_open_order_query_three_states_only_for_the_asked_symbol(kis_broker, symbol, tr_cont, expected):
+    _capture_get(kis_broker, {"rt_cd": "0", "_tr_cont": tr_cont, "output": _FIRST_PAGE})
+
+    rows = asyncio.run(kis_broker.get_exchange_open_orders(symbol=symbol) if symbol is not None
+                       else kis_broker.get_exchange_open_orders())
+
+    assert rows == expected
+
+
+# ── 유지 중이던 BUY 의 부분체결 (on_fill) ────────────────────────────────────
+
+def _fill_ready(rm):
+    rm._pending_exit_reasons = {}
+    rm.config = SimpleNamespace(daily_max_loss_pct=5.0)
+    rm.engine.update_position = lambda fill: None
+    rm.engine.portfolio.total_equity = Decimal("1000000")
+    rm.engine.portfolio.effective_daily_pnl = Decimal("0")
+
+
+@pytest.mark.parametrize("keep_cnt, released", [(1, True), (0, False)],
+                         ids=["취소 실패로 유지 중 → 즉시 해제", "일반 부분체결 → 잔량 추적 유지(종전)"])
+def test_partial_fill_of_a_kept_stale_buy_unblocks_exits(monkeypatch, keep_cnt, released):
+    """pending 은 방향 구분 없이 그 종목의 청산 신호를 막는다 — 유지 중이던 BUY 가 부분체결되면
+    다음 SIGNAL(stale 루프)을 기다리지 않고 풀어야 보유분의 손절이 막히지 않는다."""
+    now = datetime(2026, 9, 21, 10, 30)
+    rm = _rm(monkeypatch, Broker(), now)
+    _fill_ready(rm)
+    _stale(rm, OrderSide.BUY, now, seconds=650, reserved=Decimal("101500"))
+    if keep_cnt:
+        rm._pending_fallback_count[SYM] = keep_cnt
+
+    asyncio.run(rm.on_fill(FillEvent(symbol=SYM, side=OrderSide.BUY, quantity=4, price=PRICE)))
+
+    assert (SYM not in rm._pending_orders) is released
+    assert (SYM not in rm._reserved_by_order) is released
+    if not released:
+        assert rm._pending_quantities[SYM] == 6
+
+
+# ── 0건 해제 직후 같은 호출의 같은 종목 BUY ─────────────────────────────────
+
+def test_same_symbol_buy_in_the_same_call_is_blocked_after_zero_cancel_release(monkeypatch):
+    """'미추적'은 방금 완전체결(FillEvent 가 큐에서 대기)일 수 있다 — 해제를 일으킨 바로 그 BUY 신호가
+    포지션 반영 전에 새 주문으로 이어지면 이중 매수다."""
+    now = datetime(2026, 9, 21, 10, 30)
+    rm = _rm(monkeypatch, Broker(cancelled=0, tracked=[]), now)
+    rm.engine.is_trading_hours = lambda: True
+    rm.engine._get_current_session = lambda: MarketSession.REGULAR
+    rm.engine._market_regime = "neutral"
+    rm._cross_validator = SimpleNamespace(validate=lambda **kw: (True, kw["score"], ""),
+                                          last_memory_adj=0, last_llm_context={})
+    rm._LLM_CHECK_MIN, rm._LLM_BYPASS_AT, rm._LLM_REJECT_SIZE_MULT = 85, 95, 0.5
+    rm._check_factor_budget = lambda _s: None
+    rm._get_core_reserve = lambda: Decimal("0")
+    rm._last_cash_warn_time = None
+    rm.config = SimpleNamespace(strategy_allocation={}, factor_budgets={})
+    rm.engine.get_available_cash = lambda: Decimal("5000000")   # 현금·예산 게이트는 통과 — 막는 것은 쿨다운뿐
+    _stale(rm, OrderSide.BUY, now, seconds=700, reserved=Decimal("101500"))
+
+    sig = Signal(symbol=SYM, side=OrderSide.BUY, strength=SignalStrength.NORMAL,
+                 strategy=StrategyType.SEPA_TREND, price=PRICE, score=70.0, reason="20일 고가 돌파")
+    orders = asyncio.run(rm.on_signal(SignalEvent.from_signal(sig, source="test")))
+
+    assert orders is None
+    assert SYM not in rm._pending_orders    # 새 pending 이 등록되지 않았다

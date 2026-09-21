@@ -1825,6 +1825,7 @@ class RiskManager:
                     # 즉시 재매수(이중 매수)된다. 유지 횟수는 매도 폴백 횟수 장부를 같이 쓴다
                     # (한 종목의 pending 은 한 방향뿐, clear_pending/on_fill 이 지운다).
                     keep_cnt = self._pending_fallback_count.get(s, 0)
+                    live: Optional[bool] = False
                     _held = self.engine.portfolio.positions.get(s)
                     if cancelled:
                         logger.info(f"[리스크] stale 주문 거래소 취소 완료: {s}")
@@ -1854,7 +1855,8 @@ class RiskManager:
                     if not cancel_ok:
                         async with self._pending_lock:
                             if s in self._pending_timestamps:  # await 사이 다른 태스크(스케줄러 정리)가 해제했으면 되살리지 않는다
-                                self._pending_fallback_count[s] = keep_cnt + 1
+                                # 횟수 = 연속 '판단 불가' (생존 확인·첫 회 대기는 1 로 되돌린다 — 1 이상이면 다음부터 거래소 확인)
+                                self._pending_fallback_count[s] = keep_cnt + 1 if live is None else 1
                                 # 60초 뒤 재시도 (SIGNAL 마다 취소 API 호출 방지). 시각을 되감는 방식이라
                                 # 헬스 모니터·대시보드의 경과 표시는 유지 중 9~10분에 머문다(교착 판정은 그대로 발화).
                                 self._pending_timestamps[s] = now - timedelta(
@@ -2272,7 +2274,7 @@ class RiskManager:
             return True
         if not hasattr(broker, "get_exchange_open_orders"):
             return False
-        rows = await broker.get_exchange_open_orders()
+        rows = await broker.get_exchange_open_orders(symbol=symbol)
         if rows is None:
             return None
         if any(r.get("symbol") == symbol and r.get("side") == "buy" for r in rows):
@@ -2403,7 +2405,13 @@ class RiskManager:
                 remaining = 0
             else:
                 remaining = self._pending_quantities.get(event.symbol, 0) - event.quantity
-            if remaining <= 0:
+            # 취소 실패로 유지 중이던 stale BUY(유지 횟수 > 0)가 부분체결되면 잔량 추적을 접는다 — pending 은
+            # 방향 구분 없이 그 종목의 청산 신호를 막으므로, 다음 SIGNAL(stale 루프)을 기다리지 않고 보유분의
+            # 청산을 연다. 잔량은 브로커가 계속 추적해 체결되면 포지션에 반영되고, 재매수는 보유 차단이 막는다.
+            _kept_stale_buy = (event.side == OrderSide.BUY
+                               and self._pending_sides.get(event.symbol) == OrderSide.BUY
+                               and self._pending_fallback_count.get(event.symbol, 0) > 0)
+            if remaining <= 0 or _kept_stale_buy:
                 self._pending_orders.discard(event.symbol)
                 self._pending_quantities.pop(event.symbol, None)
                 self._pending_timestamps.pop(event.symbol, None)
