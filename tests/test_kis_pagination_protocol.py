@@ -1,4 +1,4 @@
-"""KIS 연속조회 요청 규약 + 미체결 조회 잘림 + 취소 POST 재시도 — 2026-09-21.
+"""KIS 연속조회 요청 규약 + 형제 루프의 종료 판정 + 취소 POST 재시도 — 2026-09-21.
 
 기준 자료: koreainvestment/open-trading-api 의 모든 연속조회 예제는 **다음 페이지 요청에
 헤더 tr_cont="N"** 을 보낸다. 제품은 응답 헤더 tr_cont(F/M=다음, D/E=마지막)로 종료만
@@ -6,11 +6,15 @@
 
 고정하는 것:
 1) 1페이지로 끝나는 호출은 요청이 전환 전과 완전히 같다 — 헤더에 tr_cont 키가 없고
-   호출 1회. (세 연속조회 루프 각각)
+   params 가 그대로이며 호출 1회. (세 연속조회 루프 각각, 헤더·params 전량 등식)
 2) F → M → D 3페이지에서 요청 tr_cont 가 (미송신) → "N" → "N" 이고 세 페이지가 합쳐진다.
-3) get_exchange_open_orders 는 다음 페이지가 남았으면(F/M) 잘린 목록 대신 판단 불가(None).
-   D/E/빈 값/키 부재는 현행 그대로. legacy·new 두 모드 모두.
+3) 세 루프가 같은 식으로 끝난다 — 응답 헤더가 D/E 면 ctx 키가 채워져 와도 다음 페이지를
+   조회하지 않는다.
 4) 취소 POST 는 재시도를 유지한다 — 첫 응답 HTTP 500 뒤 재전송해 성공하면 True.
+   두 전송의 본문과 hashkey 헤더가 같다.
+
+미체결 조회(get_exchange_open_orders)의 잘림 처리는 PR #81 이 같은 함수에서 다룬다 —
+이 PR 은 건드리지 않는다.
 
 모두 가짜 HTTP — 실 KIS 호출 0건.
 """
@@ -224,46 +228,7 @@ def test_retry_of_the_same_page_keeps_the_same_tr_cont(broker, monkeypatch):
     assert [h.get("tr_cont") for h in sent] == [None, "N", "N"]
 
 
-# ── 3) 미체결 조회: 잘린 목록 대신 판단 불가 ────────────────────────────────
-
-_ROW = {"pdno": "005930", "sll_buy_dvsn_cd": "01", "rmn_qty": "5", "psbl_qty": "5"}
-
-
-@pytest.mark.parametrize("new", [False, True])
-@pytest.mark.parametrize("tr_cont", ["F", "M"])
-def test_open_orders_truncated_page_is_undecidable(broker, monkeypatch, new, tr_cont):
-    """1회 호출·최대 50건 — 다음 페이지가 있으면 잘린 목록을 올리지 않는다."""
-    _connected(monkeypatch)
-    monkeypatch.setattr(kis_kr, "_TR_NEW", new)
-    _install_pages(broker, [({"rt_cd": "0", "output": [dict(_ROW)]}, tr_cont)])
-    assert asyncio.run(broker.get_exchange_open_orders()) is None
-
-
-@pytest.mark.parametrize("new", [False, True])
-@pytest.mark.parametrize("tr_cont", ["D", "E", ""])
-def test_open_orders_last_page_keeps_current_behaviour(broker, monkeypatch, new, tr_cont):
-    """D/E/빈 값(헤더 부재 포함)은 현행 그대로 목록을 올린다."""
-    _connected(monkeypatch)
-    monkeypatch.setattr(kis_kr, "_TR_NEW", new)
-    _install_pages(broker, [({"rt_cd": "0", "output": [dict(_ROW)]}, tr_cont)])
-    rows = asyncio.run(broker.get_exchange_open_orders())
-    assert rows == [{"symbol": "005930", "side": "sell", "qty": 5}]
-
-
-@pytest.mark.parametrize("new", [False, True])
-def test_open_orders_without_tr_cont_key_keeps_current_behaviour(broker, monkeypatch, new):
-    """_tr_cont 키 자체가 없는 응답(가짜 _api_get 을 쓰는 기존 시임)도 현행 그대로."""
-    monkeypatch.setattr(kis_kr, "_TR_NEW", new)
-    _connected(monkeypatch)
-
-    async def fake_get(url, tr_id, params, tr_cont=""):
-        return {"rt_cd": "0", "output": [dict(_ROW)]}
-    broker._api_get = fake_get
-    rows = asyncio.run(broker.get_exchange_open_orders())
-    assert rows == [{"symbol": "005930", "side": "sell", "qty": 5}]
-
-
-# ── 4) 취소 POST 의 재시도는 유지한다 ───────────────────────────────────────
+# ── 3) 취소 POST 의 재시도는 유지한다 ───────────────────────────────────────
 
 def test_cancel_post_retries_after_http_500_and_succeeds(broker, monkeypatch):
     """전량 취소는 원주문번호 하나를 겨냥한다 — 두 번 닿아도 새 노출을 만들 수 없다.

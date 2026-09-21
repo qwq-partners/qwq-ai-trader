@@ -45,12 +45,11 @@
   첫 페이지에 `tr_cont`를 **싣지 않고**, 2페이지째부터 헤더 `tr_cont: "N"`을 보낸다
   (`_api_get(..., tr_cont="N")`, 같은 페이지의 재시도에도 같은 값 유지). 1페이지로 끝나는
   호출 — 운영 계좌 대부분 — 의 요청은 전환 전과 한 바이트도 같다. 적용 루프 3종:
-  `get_positions`·`get_positions_for_account`(TTTC8434R)·`_query_daily_fills`.
-- **미체결 조회는 잘리면 판단 불가** (2026-09-21): `get_exchange_open_orders`(정정취소가능주문)는
-  페이지 루프가 없는 1회 호출(최대 50건)이다. 응답 헤더가 `F`/`M`이면 목록이 잘린 것이므로
-  `None`(판단 불가)을 돌려준다 — 잘린 목록은 호출자(`run_trader.py`의 pending 검증자)에게
-  "해당 종목 SELL 미체결 없음"으로 읽혀 이중 매도를 부른다. `None`이면 호출자는 pending을
-  유지한다(fail-safe). `D`/`E`/헤더 부재는 현행 그대로.
+  `get_positions`·`get_positions_for_account`(TTTC8434R)·`_query_daily_fills`. 세 루프는 **같은
+  식으로 끝난다** — 행을 합친 직후 `_tr_cont`가 `D`/`E`면 즉시 종료하고, 그 뒤에 남은 빈 ctx
+  키 검사는 헤더가 없는 응답을 위한 뒷받침이다 (`get_positions_for_account`에 2026-09-21 추가:
+  마지막 페이지에도 채워져 오는 ctx 키 때문에 원장 호출이 1회 더 나가던 것이 없어진다).
+  미체결 조회(`get_exchange_open_orders`)의 잘림 처리는 PR #81이 같은 함수에서 다룬다.
 - **잔고 응답 스냅샷** (2026-09-11): `get_account_balance`의 inquire-balance 응답 `output1`을 5초 보관해
   바로 이어지는 `get_positions`가 재사용(1회용, 다음 페이지 있으면 미보관) — 동기화 30초 사이클의 8434R
   2회→1회. 장중 원장 초과(EGW00215)의 절반이 이 두 번째 호출이었다.
