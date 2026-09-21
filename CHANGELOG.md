@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — feat(safety): 10A3a — 로드된 설정에서 owner 정책을 만드는 부품 + owner 게이트 인수 (**호출자 0건·운영 미설치**)
+
+> **부품과 인수이고 설치가 아니다 — 차단 사유를 하나도 닫지 않았다.** 계획·범위 분할은 `docs/superpowers/plans/2026-09-21-10a3-install-preparation.md`, Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 10A3 절.
+
+- **Plan 이 범위를 나눴다(조사 3관점 → 설계 → 적대적 심사 REVISE·must-fix 13건):** 설치 factory 본체는 증거 계약과 사용자 결정 없이는 명세할 수 없다 — `runtime.restore()` 가 KIS 에서 읽은 live 포트폴리오를 저장본 값으로 덮어써 "restore 뒤 대조"는 항진명제이고, 일자 전환 의식 없이는 아침 재기동이 설치 불가이며, 레짐 baseline·최초 checkpoint 의 작성 주체가 곧 차단 사유 2 다. 그래서 **10A3a(지금)** 와 **10A3b(설치 factory·관측·시계 주입 — 사용자 결정 6건과 공식 KIS 증거 뒤)** 로 나눴다.
+- **신규 `src/execution/safety/factory.py`(기존 제품 파일 0줄, 제품 호출자 0건):** `effective_risk_policy`(전 필드를 로드된 `RiskConfig` **인스턴스**에서 — dataclass 기본값·YAML 재파싱 금지, 레짐 최소 현금은 레짐 표에서, 수수료는 `FeeConfig` 에서, 코어 배분 키 부재는 거부) · `execution_config_version`(`qualification.config_version` 의 얇은 어댑터, 5축) · `publish_entry_policy_context`(config_version 을 **안에서 유도**해 게시하고 digest 반환, naive 시각은 KST 규칙으로 aware 화, 게시 직전 `owner.version` 을 `expected_version` 으로).
+- **신규 시험 2개(45건):** `tests/test_execution_policy_factory.py` 34 · `tests/test_execution_owner_gate_authority.py` 11(제품 0줄 — owner 각 게이트가 **단독으로** 결정하는 표본, 3건 누적 미해결 BUY 의 정합, UNKNOWN 정지 범위, 런타임 면제 충돌, 제품 순서의 attach 거부).
+- **확정한 사실(인계 문서 정정):** **UNKNOWN 인 SUBMIT 한 건은 보호 SELL·CANCEL 까지 attach 의 모든 새 명령을 멈춘다**(차단 사유 12) · **런타임 `add_exit_exempt` 는 이중 실패다** — 다음 명령이 `legacy_protection_writer_conflict` 로 통째로 끝나고 그 뒤 성공한 owner 게시가 면제를 지운다(차단 사유 5) · 로더는 YAML 의 `kr.risk.hybrid` 등을 읽지 않는다 · 시계 주입의 세 번째 대상은 레짐 어댑터의 host 벽시계.
+- **검증:** 단계마다 구현(요청 opus/high) → 독립 재현(요청 opus/xhigh) 둘 다 APPROVE(P2 8건 → 보강, 생존 변이 5종 kill 확인). **Codex 6차(요청 gpt-6-astra/xhigh): factory.py 에 P0/P1 없음**, P2 문서 범위 정정 1건 처분. 전체 suite 단독 직렬 **UTC 4917 / KST 4917 passed**(각 기존 xfail 2·격리 위반 0). 독립 인수 37건 기대값 변경 0.
+- main 병합·배포·재시작·주문·설정·Toss grant 무변경, `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-21 — test(safety): B2/B3 S5 — attach 경로의 독립 실큐 인수·최종 broad 리뷰 (**제품 수정 0**·한정 승인·**운영 미설치**)
 
 > **인수 GREEN 은 설치 승인이 아니다.** 제품 attach 호출자 0건·`trading_ready=False`·MODIFY 미지원 그대로이고 모든 송신 표본은 합성 startup 허가 위에 있다. 단계별 Plan/Do/See 는 `docs/reviews/b2b3-stage-ledger-2026-09-20.md` 의 S5 절, 계획은 `docs/superpowers/plans/2026-09-21-s5-independent-acceptance.md`, **설치 차단 사유 15항은 `docs/operations/claude-migration-handoff-2026-09-20.md` 가 정본**이다.

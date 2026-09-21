@@ -964,9 +964,12 @@ def assert_owner_alone_after_pending(f, reason, *, sidecar_quantity):
 # ─────────────── C — UNKNOWN 1건의 정지 범위(차단 사유 12)와 면제 충돌 ───────────────
 
 def test_c1_one_unknown_stops_the_protective_sell_and_the_cancel_too(tmp_path, monkeypatch):
-    """`blocked_unknown` 한 행 뒤에는 **보호 SELL 과 CANCEL 도** 거부된다.
+    """`blocked_unknown` 인 **SUBMIT** 한 행 뒤에는 **보호 SELL 과 CANCEL 도** 거부된다.
 
-    `_evaluate` 의 미해결 증거 검사는 side·kind·종목을 가리지 않는다. 자동 매수만 멈춘다고
+    `_evaluate` 의 미해결 증거 검사는 **새 요청**의 side·kind·종목을 가리지 않는다. 다만 전역
+    정지를 일으키는 **기존 행**은 SUBMIT 뿐이다 — 기존 비-SUBMIT 행은 그 검사에서 제외되고
+    (같은 종목의 새 SUBMIT 만 `unresolved_child_attempt` 로 막는다), 이 표본이 만드는 것도
+    BUY SUBMIT 의 UNKNOWN 이다(Codex 6차의 범위 한정). 자동 매수만 멈춘다고
     읽으면 설치 판단이 실제보다 안전해 보인다 — 여기서 그 범위를 SELL·CANCEL 로 고정한다.
     """
     async def scenario():

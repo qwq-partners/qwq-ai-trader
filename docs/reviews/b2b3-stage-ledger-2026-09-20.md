@@ -585,5 +585,28 @@
 
 | 단계 | 범위 | 상태 | SHA |
 |---|---|---|---|
-| S10A3a-1 | `src/execution/safety/factory.py`(정책 builder·config_version 어댑터·PolicyContext publisher) + 시험 | 진행 중 | — |
-| S10A3a-2 | `tests/test_execution_owner_gate_authority.py`(제품 0줄) | 진행 중 | — |
+| S10A3a-1 | `src/execution/safety/factory.py`(정책 builder·config_version 어댑터·PolicyContext publisher) + 시험 34건 | **완료 — 부품(호출자 0건)·한정 승인**. 독립 재현 APPROVE(P2 6 → 보강), Codex 6차 P0/P1 0 | merge `5b84a69`(`257e5e9`)·`edf5d8e`(`d6ba823`) |
+| S10A3a-2 | `tests/test_execution_owner_gate_authority.py` 11건(제품 0줄) | **완료**. 독립 재현 APPROVE(P2 2 → 보강) | merge `292bb04`(`21b4ee6`)·`edf5d8e` |
+| 10A3b | 설치 factory 본체·관측·시계 주입 | **대기 — 사용자 결정 6건(계획서 §3)과 공식 KIS 증거** | — |
+
+### 10A3a — Do·See 기록 (기준 `996e383` → `edf5d8e` + 문서)
+
+- **Do(두 단계 병렬, 요청 opus/high, 격리 worktree):**
+  - **S10A3a-1**(`257e5e9`): 신규 `src/execution/safety/factory.py`(183줄) — `effective_risk_policy`(16필드 전부를 인자 인스턴스에서)·`execution_config_version`(`qualification.config_version` 의 얇은 어댑터, 5축)·`publish_entry_policy_context`(config_version 을 **안에서 유도**해 게시하고 digest 반환). 시험 `tests/test_execution_policy_factory.py` 33건. RED 커밋이 제품 커밋보다 앞. 변이 13종 전부 kill. **기존 제품 파일 0줄·세 함수의 제품 호출자 0건**(시험 하나가 `src/`·`scripts/` 를 스캔해 이 불변을 고정한다).
+  - **S10A3a-2**(`21b4ee6`): 제품 0줄, 신규 `tests/test_execution_owner_gate_authority.py` 11건 — owner 단독 결정 4(최소 현금·최대 포지션 수·당일 손절 재진입·섹터 한도: 각 표본이 "sidecar 는 통과시켰다"를 함께 단언) · 누적 3(3종목·3섹터·2전략의 미해결 BUY) · UNKNOWN 정지 범위(보호 SELL·CANCEL) · 런타임 면제 충돌 · 제품 순서의 attach 거부. 변이 9종 전부 kill.
+- **See — 독립 재현(요청 opus/xhigh, 다른 실행):** 둘 다 **APPROVE**(P0/P1 0). S10A3a-1 은 변이 22종 재실측(자체 9) 중 5종 생존 → P2 6건, S10A3a-2 는 17종 전부 kill → P2 2건.
+- **P2 보강(`d6ba823`, merge `edf5d8e`):** 생존 변이 5종을 죽이는 단언(빈 추세·sync timeout 을 기본값과 다르게·versions 의 regime/macro=0 결정·**UTC-aware now 가 KST 날짜 경계를 넘는 표본**·naive now 의 거부 사유) · factory docstring 의 과장 한정("이 모듈 자신은 시계를 부르지 않는다" — publisher 가 읽는 `regime_adapter.regime` 은 host 벽시계를 읽는다) · experts 축과 `INTRADAY_CRASH_PARAMS` 의 탐지력 한계 명시 · 게이트 fixture 의 예외 안전 · D1 의 격리 단언. **src 변경은 docstring 뿐**(coordinator 가 diff 로 직접 확인).
+- **전체 suite 단독 직렬:** **UTC 4917 passed / 기존 xfail 2 / 358.98초**, **KST 4917 passed / 기존 xfail 2 / 350.09초**, 격리 위반 0. load 0.37 → 1.04 → 1.13. (4872 + 34 + 11.)
+- **Codex 교차 리뷰 6차(요청 gpt-6-astra/xhigh, 포그라운드, 대상 `edf5d8e`): factory.py 에 P0/P1 없음 — CHANGES_REQUIRED 는 P2 문서 범위 정정 1건.** 필드 출처·단위 오류 없음 · 버전 읽기~context 구성 사이에 await 없음(게시 안의 reducer 가 `expected_version` 을 다시 검사) · naive→KST 규칙은 `qualification._kst` 와 같다.
+  - P2 → 처분: UNKNOWN 전역 정지를 일으키는 **기존 행은 SUBMIT 뿐**이다(기존 비-SUBMIT 행은 건너뛴다). 가리지 않는 것은 **새 요청**의 side·kind 다. 계획서 §1-1·인계 차단 사유 12·C1 시험 독스트링을 그 범위로 한정했다. UNKNOWN 자식 명령의 대조 표본은 없다(취소를 켜는 작업의 인수 조건).
+  - 한정 → 처분: 면제 소실은 "**실제로 성공한** owner 게시" 뒤다 — 거부된 명령이 지우는 것이 아니고 정책 재게시도 같은 등식에 막힌다. 인계 차단 사유 5 를 고쳤다.
+  - 10A3b 설치 계약에 넘긴 것: gateway 의 digest 는 **기동 시 고정**하고 재게시는 독립으로(둘을 같이 덮어쓰면 다시 자기 인증이 된다) · 매크로 조회 실패는 `lookup_failed=True` 로 게시되지만 owner 의 매크로 매수 제한은 그때 건너뛴다(legacy 의미 보존 — fail-open) · naive 원자료가 실제 KST 였는지는 증명되지 않는다 · 같은 날 오래된 context 의 최대 경과시간 검사가 없다.
+  - Codex 의 "미확인": 실행·pytest 없음. `owner.mutate` 의 잠금 구현·실제 설정 생산자의 일치성·reconcile 의 제품 호출자 수는 지정 범위 밖.
+
+**10A3a 가 드러낸 사실(인계 문서·계획서에 반영):**
+1. **런타임 면제 추가는 이중 실패다** — 다음 명령이 `legacy_protection_writer_conflict` 로 통째로 끝나고, 그 뒤 성공한 owner 게시가 면제를 지운다(차단 사유 5).
+2. 로더 `_build_risk_config` 는 YAML 의 `kr.risk.hybrid`(키가 실제로 있다)·`max_core_positions`·`daily_exit_cooldown_threshold` 를 읽지 않는다(켜도 조용히 무시 — 운영 동작 차이는 현재 0).
+3. owner 의 최소 현금 축은 독립 게이트가 아니다(같은 게시값이 두 검사에 들어간다). 섹터 한도는 두 판정 지점이 같은 사유 문자열을 쓴다.
+4. 시계 주입의 세 번째 대상: `MarketRegimeAdapter.effective_regime` 의 host 벽시계(10A3b).
+
+**10A3a 의 성과와 한계 (보고 문장):** 10A3a 는 **부품과 인수**다 — 차단 사유를 하나도 닫지 않았고(호출자 0건) 설치가 아니다. `trading_ready=False`·MODIFY 미지원·main/운영 무변경. 다음(10A3b — 설치 factory 본체·관측·시계 주입)은 계획서 §3 의 **사용자 결정 6건**과 공식 KIS 증거를 기다린다.
