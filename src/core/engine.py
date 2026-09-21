@@ -1277,6 +1277,10 @@ class RiskManager:
 
         # 자동매도 금지 종목 (run_trader에서 exit_manager._exit_exempt live set 주입)
         self._exit_exempt_ref: set = set()
+        # 면제 종목 SELL 차단 경고의 마지막 기록 시각 (로그 스로틀 전용 — 키는 면제 종목뿐이라 유한)
+        self._exempt_block_logged: Dict[str, datetime] = {}
+        # 면제 종목에 남은 미체결 SELL 의 마지막 취소 시도 시각 (60초 스로틀)
+        self._exempt_cancel_last_try: Dict[str, datetime] = {}
         # (2026-08-05 P2 제거) RiskManager._pending_sector_map은 쓰기 지점이 전무한
         # 죽은 dict였음 — 섹터 캐시는 UnifiedEngine._pending_sector_map 단일 소유로 정리.
 
@@ -1671,6 +1675,11 @@ class RiskManager:
             regime = getattr(self.engine, "_market_regime", "neutral")
         return regime
 
+    def _is_exit_exempt(self, symbol: str) -> bool:
+        """자동매도 절대 금지 종목 여부 (CORE-023) — ExitManager live set 참조.
+        getattr: 시험이 object.__new__ 로 만든 인스턴스에는 속성이 없다."""
+        return symbol in getattr(self, "_exit_exempt_ref", set())
+
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
         logger.info(f"[리스크] 신호 수신: {event.symbol} {event.side.value} 가격={event.price} 점수={event.score:.1f}")
@@ -1738,6 +1747,35 @@ class RiskManager:
             ts = self._pending_timestamps.get(s)
             if not ts:
                 continue
+            # 면제 등록(런타임 add_exit_exempt) 전에 나간 SELL — 남은 지정가만 취소하고
+            # 시장가로 재주문하지 않는다 (이 루프는 on_signal 가드를 거치지 않는 직접 제출 경로)
+            if self._is_exit_exempt(s):
+                # 취소 재시도는 60초 간격 (on_signal 은 신호마다 돈다). pending 시각은 건드리지 않는다 —
+                # 경과가 그대로 흘러야 헬스 모니터의 300초 교착 경보가 이 상태를 드러낸다
+                _last_try = self._exempt_cancel_last_try.get(s)
+                if _last_try is not None and (now - _last_try).total_seconds() < 60:
+                    continue
+                self._exempt_cancel_last_try[s] = now
+                _alive = False
+                _broker = self.engine.broker
+                if _broker and hasattr(_broker, 'cancel_all_for_symbol'):
+                    try:
+                        await _broker.cancel_all_for_symbol(s)
+                        # 브로커 cancel 은 실패를 예외로 올리지 않고 건수만 준다(0 = 소멸 또는 실패) —
+                        # 취소에 성공한 주문만 브로커 추적에서 빠지므로 남아 있으면 거래소에 살아 있다
+                        _alive = any(o.symbol == s and o.is_active
+                                     for o in await _broker.get_open_orders())
+                    except Exception as e:
+                        logger.warning(f"[리스크] 면제 종목 SELL 취소 오류: {s} - {e}")
+                        _alive = True
+                if _alive:
+                    # pending 을 풀면 취소 재시도 대상에서 빠진 채 지정가가 체결될 수 있다 → 유지, 60초 뒤 재시도
+                    logger.error(f"[리스크] 자동매도 금지 종목 SELL 취소 실패: {s} — 거래소 주문 생존 가능, 60초 뒤 재시도 (재주문 없음)")
+                    continue
+                logger.warning(f"[리스크] 자동매도 금지 종목 미체결 SELL 취소: {s} → pending 해제 (재주문 없음)")
+                self._exempt_cancel_last_try.pop(s, None)
+                await self.clear_pending(s)
+                continue
             elapsed = (now - ts).total_seconds()
             fallback_cnt = self._pending_fallback_count.get(s, 0)
             if fallback_cnt >= _MAX_FALLBACK:
@@ -1776,6 +1814,9 @@ class RiskManager:
                     quantity=_fb_qty,
                     reason="미체결 폴백: 시장가 전환",
                 )
+                # 위 취소 await 중 면제가 등록됐으면 재주문하지 않는다 — 다음 주기에 루프 머리의 면제 분기가 정리
+                if self._is_exit_exempt(s):
+                    continue
                 try:
                     # 2026-08-05 P2: 반환값 미확인으로 제출 실패가 성공 취급되던 버그
                     # — 실패 시 타임스탬프를 갱신하지 않아 다음 주기에 즉시 재감지·재시도
@@ -1875,6 +1916,23 @@ class RiskManager:
                 logger.warning(
                     f"[리스크] stale pending 유지: {s} ({elapsed:.0f}초) - 거래소 취소 실패, 다음 주기 재시도"
                 )
+
+        # 자동매도 절대 금지 종목 (CORE-023) — SELL 시그널은 발행처와 무관하게 여기서 막는다.
+        # 발행처별 가드가 빠진 경로(코어 조기경보·stale·리밸런싱·트림, 전략 자체 청산)의 최종 방어선.
+        # 수동 매도는 엔진 시그널을 거치지 않는다(MTS·scripts/sell_specific.py·liquidate_all.py 별도 브로커).
+        if event.side == OrderSide.SELL and self._is_exit_exempt(event.symbol):
+            self._pending_exit_reasons.pop(event.symbol, None)
+            # 전략 자체 청산은 틱마다 재발행된다 — 경고는 30초 간격으로만 남긴다.
+            # 신호 쿨다운(_last_signal_time)과 분리: 면제 해제 직후의 정상 SELL 을 막지 않는다.
+            _last_block = self._exempt_block_logged.get(event.symbol)
+            if (_last_block is None
+                    or (now - _last_block).total_seconds() >= self._SIGNAL_COOLDOWN_SECONDS):
+                self._exempt_block_logged[event.symbol] = now
+                logger.warning(
+                    f"[리스크] 자동매도 금지 종목 SELL 차단: {event.symbol} "
+                    f"(source={event.source}, 사유={event.reason})"
+                )
+            return None
 
         # 거래 가능 여부 체크
         if not self.engine.is_trading_hours():
@@ -2325,6 +2383,12 @@ class RiskManager:
             order = event.order
             if order is None:
                 logger.error(f"[리스크] OrderEvent에 Order 객체 없음: {event.symbol}")
+                await self.clear_pending(event.symbol)
+                return None
+
+            # 제출 직전 재검사 — on_signal 통과 뒤(매도호가 조회 await·큐 대기 중) 면제가 등록된 경우
+            if order.side == OrderSide.SELL and self._is_exit_exempt(order.symbol):
+                logger.warning(f"[리스크] 자동매도 금지 종목 SELL 제출 차단: {order.symbol} ({order.reason})")
                 await self.clear_pending(event.symbol)
                 return None
 

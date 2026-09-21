@@ -254,14 +254,19 @@
 ### 종목별 자동매도 절대 금지 (exit_exempt / no_auto_exit_symbols, 2026-06-23~)
 - **용도**: 수동 풀매수·장기보유 종목을 모든 자동매도 로직에서 영구 제외 (코어보다 강한 보호 — 코어는 리밸런싱 교체 가능하나 이건 그것도 면제).
 - **설정**: `config kr.no_auto_exit_symbols: ['087010', ...]` — 기동 시 `run_trader._initialize_kr`가 `exit_manager.add_exit_exempt()`로 복원(재시작에도 유지).
-- **차단 경로 (7개, 누락 시 손절/청산 발생)**:
+- **차단 경로 (발행처 가드 + 엔진 중앙 가드 — 새 SELL 발행처는 6번이 받지만, 알림·상태 부작용이 있으면 발행처에서도 뺀다)**:
   1. ExitManager `update_price` 진입부(`_exit_exempt`) → 손절·트레일링·분할익절·stale·보유기간초과 일괄
   2. `kr_scheduler._check_exit_signal` (WS 실시간) → 즉시 return
   3. `kr_scheduler._run_position_eod_llm_check` → LLM 종가점검 청산 제외
   4. `batch_analyzer.monitor_positions` 루프 → RSI2 청산·보유기간초과·ExitManager 릴레이 스킵
   5. `batch_analyzer._preemptive_stale_exit_on_bear` → 약세장 선제 stale 청산 스킵
-  - 코어 경로(rebalance/stale/early-warning)는 `strategy == "core_holding"` 한정이라 strategy="manual" 종목엔 미적용.
-  6. `kr_scheduler._sync_portfolio` 유령 제거 — KIS 부분 응답 1회로는 제거하지 않고 3주기 연속 누락에서만 (2026-09-13, 이전엔 부분 응답 시 즉시 삭제 + ExitManager 상태 소실)
+  - 코어 경로(조기경보·stale 자동매도·리밸런싱 손절/교체·금요 트림)는 면제 종목을 `rebalance_exclude` 와 같게 대상에서 뺀다 (2026-09-21 — 이전엔 `strategy == "core_holding"` 으로만 걸러 `core_holding` 포지션을 면제로 지정하면 SELL 이 나갔다). 조기경보·stale 은 알림도 함께 빠진다(침묵이 사용자 지시).
+  6. **엔진 중앙 가드 (2026-09-21, 최종 방어선)**: `RiskManager.on_signal` 이 면제 종목의 SELL 시그널을 발행처와 무관하게 주문 생성 전에 막는다(`_exit_exempt_ref` = ExitManager live set). 발행처 가드가 없는 경로 — 전략 자체 청산(`gap_and_go` 갭 시작점 이탈·`theme_chasing` 테마 쿨다운은 `position.strategy` 를 보지 않는다)과 앞으로 추가될 SELL 발행처 — 를 여기서 받는다. pending·ExitManager stage 는 건드리지 않고(해당 등록처는 1·2번 가드 뒤에 있다) 남은 `_pending_exit_reasons` 만 지운다. 경고 로그는 30초 간격(전용 `_exempt_block_logged` — 신호 쿨다운 `_last_signal_time` 과 분리해 면제 해제 직후의 정상 SELL 을 막지 않는다). **수동 매도는 엔진 시그널을 거치지 않으므로 영향 없음**(MTS, `scripts/sell_specific.py`·`scripts/liquidate_all.py` 는 별도 브로커 인스턴스).
+     - `on_signal` 을 거치지 않고 브로커에 직접 SELL 을 내는 경로 둘에도 같은 검사를 둔다. ① **stale SELL 시장가 폴백**(`on_signal` 머리의 루프): 면제가 런타임에 등록되기 전(`run_manual_buy_orders` 의 `add_exit_exempt`, 09:00:05)에 나간 지정가가 남아 있으면 취소만 하고 시장가로 재주문하지 않는다. 브로커 취소는 실패를 예외로 올리지 않고 건수만 주므로(0건 = 소멸 또는 실패) **취소 뒤 브로커 추적(`get_open_orders`)에 그 종목 주문이 남아 있으면 pending 을 풀지 않고 60초 간격으로 다시 취소한다** — 풀어 버리면 취소 재시도 대상에서 빠진 채 지정가가 체결될 수 있다. 같은 확인을 스케줄러의 3분 정리(`kr_scheduler._cleanup_stale_pending` 의 타임아웃·고아 해제 두 경로, `_exempt_sell_still_open`)에도 둔다 — 없으면 엔진이 유지한 pending 을 스케줄러가 다시 푼다. pending 시각은 되감지 않으므로 이 상태가 5분을 넘기면 헬스 모니터의 교착 경보(`pending_deadlock`)가 뜬다(사람이 봐야 하는 상황 — MTS 에서 직접 취소했다면 브로커 추적이 갱신되지 않아 재시작 전까지 유지된다). 비면제로 루프에 들어온 뒤 취소 await 도중 면제가 등록된 경우도 제출 직전 재검사로 멈춘다. ② **안전자산 자동 청산**: 대상은 고정 심볼이 아니라 후보 4종(458730·357870·152470·273130) 중 이름 검증을 통과한 하나 — 그 종목이 면제면 청산을 건너뛴다.
+     - `on_order` 는 `submit_order` 직전에 한 번 더 확인한다(`on_signal` 통과 뒤 매도호가 조회 await·큐 대기 중 면제가 등록된 경우) — 막히면 pending 을 해제한다.
+     - 남는 한계: 발행과 소비 사이(수 ms)에 면제가 등록되면 스케줄러의 `_exit_pending_symbols`·stage 가 남을 수 있으나 기존 `_cleanup_stale_pending`(RiskManager 에 없는 고아 → 해제 + `rollback_stage`)이 회수한다.
+  - **설정 표기**: `no_auto_exit_symbols` 는 기동 시 `str().zfill(6)` 으로 포지션 키와 같은 6자리 문자열로 맞춘다(따옴표 없는 `87010` 도 `087010`). 단 `000660` 처럼 8·9 가 없는 코드를 따옴표 없이 적으면 YAML 이 8진수로 읽어 복구할 수 없다 — **반드시 따옴표로 적는다.**
+  7. `kr_scheduler._sync_portfolio` 유령 제거 — KIS 부분 응답 1회로는 제거하지 않고 3주기 연속 누락에서만 (2026-09-13, 이전엔 부분 응답 시 즉시 삭제 + ExitManager 상태 소실)
 - **수동 매수**: `config kr.manual_buy_orders: [{symbol, name, exit_exempt}]` → 기동 시 1회 실행(보유 시 자동 스킵). KIS 시장가는 주문가능금액을 상한가 기준으로 계산하므로 marketable 지정가(현재가+0.6%)로 전액 체결.
 - ⚠️ **손절 부재 = 하락 100% 노출.** 청산은 전적으로 수동 판단. (펩트론 087010: 2026-06-23 사용자 지시로 전액 매수 + 손절 면제)
 
