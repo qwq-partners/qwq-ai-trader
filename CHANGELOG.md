@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — ops: main `f25b0c6` 운영 반영 (PR #81 병합·배포·재시작)
+
+- **지시·조건:** 사용자 지시 "4회차 리뷰 통과하면 #81 머지하고 운영 반영". 교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh, 세션 기록상 같은 값·응답 측 실효 필드는 미확인, 전부 정적) 1~3회차 병합 불가 → 매회 지적을 실코드로 확인해 반영 → **4회차 병합 가능(P0·P1·P2 0, 대상 `9c9d6dc`·기준 main `d8d78fe`)**. 판정·처분 기록은 PR #81 코멘트.
+- **4회차 뒤의 변화:** 다른 세션의 PR #83(exit_exempt 중앙 가드)이 main 에 들어와 22:29 에 먼저 배포됐고, 같은 stale SELL 루프를 건드린다 → #81 에 병합(`daa790f`, 텍스트 충돌 0). 면제 취소 분기(루프 머리) → 폴백 상한 → 동시호가 유지 순서라 면제 종목은 동시호가에도 취소가 우선하고 동시호가 유지는 비면제 종목에만 적용된다. 두 PR 의 시험 47건 동시 통과, 결합 커밋 `0575a5d` 의 필수 verify SUCCESS. **결합 상태에 대한 교차 리뷰는 다시 받지 않았다**(직접 검토 + 시험 + verify 가 근거).
+- **배포 전 점검(23:04 KST, 장 마감 후):** pending `[]`, 브로커 연결, 운영 트리 청결(`dc508fb`), 설정3파일·킬스위치4경로 지문이 20:37 기록과 동일, 경합 pytest 없음·부하 1.0. 운영 HEAD 대비 제품 경로 변경은 `src/core/engine.py`·`src/execution/broker/kis_kr.py`·`src/schedulers/kr_scheduler.py` 뿐.
+- **배포:** `scripts/deploy/local_deploy.sh f25b0c6` 23:04:35 시작 → 운영 서버 verify **1895 passed / 2 known xfailed / 기존 warning 1**(96.8초) → 재시작 → 헬스 통과, 23:06:38 `[완료]`(자동 롤백 없음). 이전 PID1381422(22:29:25 기동) → **PID1409857, 23:06:23 기동.** 운영 checkout 은 `main` 으로 복귀(트리 동일).
+- **사후 점검:** `KIS API 연결 완료`·`KIS TR 세트: legacy`·축출면제 1종목·`통합 트레이딩 엔진 시작`. ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음). 179초 시점 `ops_check`: HTTP 500·EGW00201·EGW00215·토큰 오류 전부 0, 루프 정체·실패 누적 없음, pending `[]`, 현금 비율 0.4%(매수 불가 상태 지속 — 이번 변경 경로는 매수 재개 뒤에야 실행된다). 지문 7경로 전후 동일, Toss 관측 서비스 PID3335469 무변경. `.env`·설정·킬스위치·주문 변경 0.
+- **남은 것:** 매도 쪽 취소 실패 뒤 재발행(분할 매도 이중 매도)은 PR #84 에서 진행 중(#81 위에 쌓임). 주문 ID 단위 대사 부재·첫 10분 BUY pending 의 청산 차단·거래소 조회 첫 페이지 한계는 `docs/risk/risk-and-exit.md` 첫 절에 잔존 위험으로 기록.
+
 ## 2026-09-21 — ops: main `388411c` 운영 반영 (PR #83 병합·배포·재시작)
 
 - **지시·범위:** 사용자 지시("PR #83 머지해줘" → "배포해줘")로 PR #83(자동매도 금지 종목 SELL 차단)을 병합하고 main 을 운영에 반영했다. 운영 checkout `d8d78fe` → `388411c`. 제품 경로 변경은 #83 의 4파일(`src/core/engine.py`·`src/core/batch_analyzer.py`·`src/schedulers/kr_scheduler.py`·`scripts/run_trader.py`, +117/−2)뿐이다. 면제 종목이 아닌 종목의 주문·청산 경로는 불변(대조군 시험으로 고정).
@@ -37,7 +46,7 @@
 - **사후 점검:** 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`통합 트레이딩 엔진 시작`. ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음). 199초 시점 `ops_check`: 원장 EGW00215 0·토큰 오류 0, 기동 직후 시세 TR(FHKST01010100) EGW00201 2건은 재시도 성공·반복 없음, 루프 정체·실패 누적 없음, pending `[]`. 지문 7경로 전후 동일. Toss 관측 서비스 PID3335469 무변경.
 - **하지 않은 것:** `.env`(`KIS_TR_SET`)·설정·킬스위치·주문·Toss grant/토큰 변경 0. 신 TR 전환은 runbook 의 실계좌 확인 항목이 닫힌 뒤 별도 지시로만 한다. PR #81 은 교차 리뷰(Codex, 병합 불가 → 처분 반영 → 재리뷰 중) 단계라 병합·배포하지 않았다.
 
-## 2026-09-21 — fix(engine): on_signal stale 루프 결함 2건 수정 + 3건 점검 기록 (미배포)
+## 2026-09-21 — fix(engine): on_signal stale 루프 결함 2건 수정 + 3건 점검 기록 (PR #81 — 23:06 KST 배포는 맨 위 ops 항목)
 
 engine 브랜치의 특성화 시험이 드러낸 main `RiskManager.on_signal` 진입부(90초 SELL 폴백·10분 BUY 정리) 결함 5건을 위험도부터 판단했다. **배포·재시작·주문·설정 변경 0** — 현금 고갈로 봇 매매가 없는 상태라 두 경로 모두 현재는 실행되지 않으며, 매수 재개 시점부터 의미가 있다.
 
