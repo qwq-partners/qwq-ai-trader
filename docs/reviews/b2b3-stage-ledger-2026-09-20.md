@@ -177,7 +177,7 @@
 ### S2 의 성과와 한계 (보고 문장 — 이대로 인용한다)
 
 - S2 가 만든 것: 실제 `CrossStrategyValidator`·실제 `_calculate_position_size` 가 낸 값으로 **불변 `EntryDecisionFacts` 를 만드는 부품**(증거 채널·사이징 입력 반출·순수 builder·증거 캡처·게시 함수)과, owner 가 final 에서 **체제를 스스로 재유도해 대조하는 검사**. tests/ 에 0건이던 CV 실인스턴스 특성화 55건.
-- **실효 있는 stale 축은 regime 1개다.** `panel_outlook:*`·`trade_memory:*` 는 결정 시점에만 게시되므로 판단→final 사이 version·digest 대조가 헛돈다 — **replay 구속 전용**(전일·다른 결정의 게시본 재사용과 `as_of` 당일성만 잡는다). config 축은 제품 PolicyContext publisher 가 0건이라 자기 일관성뿐이고 **S3 에서 실효가 생긴다.**
+- **실효 있는 stale 축은 regime 1개다.** `panel_outlook:*`·`trade_memory:*` 는 결정 시점에만 게시되므로 판단→final 사이 version·digest 대조가 헛돈다 — **replay 구속 전용**(전일·다른 결정의 게시본 재사용과 `as_of` 당일성만 잡는다). config 축은 제품 PolicyContext publisher 가 0건이라 자기 일관성뿐이다. **정정(2026-09-21, S5 Codex 5차-B):** 초안의 "S3 에서 실효가 생긴다"는 성립하지 않는다 — S3 는 **버전 불일치 검사를 연결했을 뿐**이다(gateway 가 게시본의 config 와 주입값을 대조하고 owner 가 facts 와 snapshot 의 config 를 대조한다). `publish_policy_context` 의 제품 호출자는 여전히 0건이고 facts 의 config 는 판단 증거가 아니라 gateway 주입값이라, 실제 설정이 바뀌어도 양쪽 라벨이 그대로면 통과한다. 실효는 실제 설정 publisher 와 "판단 당시의 설정 버전"이 결합된 뒤(10A3)에 생긴다. 또 "regime 1개"는 **현재 원천을 독립적으로 다시 읽는 출처 축**이 하나라는 뜻이지 final 검사가 그것뿐이라는 뜻이 아니다 — 손절 변경·만료·수량 재구성 검사는 따로 작동한다.
 - **제품 소비자는 여전히 0건이다.** `publish_qualification` 의 호출자도, `_last_qualification_evidence` 를 읽는 코드도, prepare/dispatch 를 부르는 코드도 없다(S3 gateway). 즉 운영 경로에서 게시·송신은 0건이고 이 단계는 설치가 아니다. 모든 GREEN 은 fake HTTP·주입 시계·시험용 합성 startup 허가 위의 결과다.
 
 ### S3 인수 조건 (누적 — S1·S2 의 리뷰에서 S3 로 넘긴 것. S3 Plan 은 이 목록에서 시작한다)
@@ -487,3 +487,25 @@
 - [ ] 차단 표본마다 분기 도달 증거(`block_gate`·spy 호출 수)가 있는가. POST 는 건수가 아니라 **본문**으로 단언했는가.
 - [ ] `git diff --stat <base>.. -- src/ scripts/` 가 빈 출력인가(제품 수정 0). 파일에 RED·xfail 이 없는가.
 - [ ] 격리 위반 0·`ResourceWarning` 0, 그리고 오버레이 모듈을 먼저 import 하는 파일 뒤에서도 GREEN 인가.
+
+### Codex 교차 리뷰 5차 (S5 최종 broad 리뷰 — 범위를 나눠 포그라운드로, gpt-6-astra/xhigh, 정적 검토)
+
+**5차-A (대상 `b2b68db`, S3 결정 ③ · entry quote 출처) — CHANGES_REQUIRED (P0 0 · P1 2 · P2 2), 전부 문서 정밀화 → coordinator 처분**
+
+- **결정 ③ 은 확인받았다:** attach 에서 ORDER 이벤트를 큐에 싣지 않고 `_submit_signal` 이 gateway 를 한 번 부르는 해석은 상위 계획의 안전 목적(단일 송신로·중복 dispatch 0·legacy writer 차단)에 **부합**한다. 제품의 ORDER 구독자는 `RiskManager.on_order` 한 곳뿐이다. eviction 의 SELL 은 큐 적재·원 BUY 는 같은 호출에서 종료라 재진입 결함이 아니다.
+- P1 — SIGNAL 가격의 재게시는 독립적인 최신 시세 검증이 아니다(게시 시각이 처리 시각으로 다시 찍힌다, freshness 없음) → 인계 문서 차단 사유 6 을 보강.
+- P1 — 가격 없는 SELL 의 차단은 market source 결합만으로 닫히지 않고, 반대로 오래된 양의 신호 가격이 LIMIT SELL 지정가가 될 수 있다(정적 추론) → 차단 사유 10 을 보강.
+- P2 — 끊기는 ORDER 구독자는 없으나 attach 의 조기 반환이 SIGNAL 대시보드 표시·`on_order` 의 SELL 수량 불일치 경보·health monitor 의 pending 교착 검사를 함께 건너뛴다 → 차단 사유 3 을 보강.
+- P2 — S3 계획 결정 ③ 의 "같은 command_scope"·"새 비용이 아니다" 는 구현과 달랐다(scope 는 prepare·dispatch 가 각각 연다, 큐 경계가 사라져 처리 순서가 legacy 와 다르다) → S3 계획서 정정.
+- Codex 의 "미확인": 실행·pytest 없음. 실제 중복 송신 0·동시 도착 시 처리 결과·지연 상한·저장소 밖 동적 구독자는 실증하지 않았다.
+
+**5차-B (대상 `b2b68db`, S4 범위 축소 결정 ①②③ · S2 의 실효 stale 축) — CHANGES_REQUIRED (P0 0 · P1 0 · P2 2), 전부 문서 정정 → coordinator 처분**
+
+- **S4 결정 ①②는 확인받았다:** 취소 체인을 최종성으로 인정하지 않는 코드(`evidence.py`)·`reconcile` 제품 호출 0 이 근거와 일치하고, 그 전제에서 에스컬레이션·owner 취소를 보류한 것은 보수적으로 옳다(미종결 부모는 replacement 를 막고 취소 자식은 `RECONCILING` 에 남는다 — ACK 만으로 예약을 풀고 재주문하는 복원은 타당하지 않다).
+- P2 — **"S3 에서 config 축에 실효가 생긴다"는 성립하지 않는다**(S3 는 버전 불일치 검사를 연결했을 뿐, 제품 publisher 0·facts 의 config 는 gateway 주입값) → 위 "S2 의 성과와 한계"를 정정.
+- P2 — S4 결정 ③ 의 근거가 넓었다: "거부형 가격 재검사를 도입하지 않는 절충"으로 한정하고, 호가 조회가 정상 성공해도 판단→final 사이의 호가 변화는 미검사라는 점을 차단 사유 10 에 추가 → S4 계획서·인계 문서 정정.
+- 표현 한정: "`EXECUTION_FILL` 제품 생산자 0건" 은 "만드는 코드는 있으나 구동하는 실제 관측 공급 경로가 0건"이 정확하다 → 인계 문서 차단 사유 1 정정.
+- "regime 1개"는 현재 원천을 독립적으로 다시 읽는 **출처 축**이 하나라는 뜻으로는 정확하다(손절 변경·만료·수량 재구성 검사는 따로 작동).
+- Codex 의 "미확인": 실행·pytest·실제 KIS 동작 없음. 변경 시나리오는 정적 추론.
+
+**5차의 결론(A+B):** 원장 S5 조건 2 가 확인받으려던 네 결정은 모두 **방향이 옳다**고 확인받았고, 지적은 전부 서술의 정밀화(설치 차단 사유의 보강 5건·과장된 성과 문장 1건·계획서 문구 2건)였다. 제품 코드 수정 요구 0.
