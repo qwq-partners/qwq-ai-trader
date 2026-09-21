@@ -6,10 +6,9 @@ store·실제 runtime·실제 `RequestBoundCommands` 위에서 돌고 외부 I/O
 """
 import asyncio
 from dataclasses import fields, replace
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal as D
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -32,7 +31,6 @@ from src.execution.safety.factory import (
 
 from test_execution_runtime import NOW, setup
 
-KST = ZoneInfo('Asia/Seoul')
 ENDPOINT = 'https://openapi.koreainvestment.com:9443'
 
 
