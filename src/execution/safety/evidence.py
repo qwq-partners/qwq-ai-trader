@@ -66,8 +66,18 @@ def _parse_row(row):
     cancel = _str(row["cncl_yn"])
     if cancel not in ("Y", "N"):
         raise ValueError("invalid cancel flag")
-    numbers = [_int(row[field]) for field in (
-        "ord_qty", "tot_ccld_qty", "rmn_qty", "cnc_cfrm_qty", "rjct_qty")]
+    # 취소확인수량 철자: 공식 저장소는 cnc_cfrm_qty(chk_inquire_daily_ccld.py:41) 한 철자뿐이고
+    # 포털 가이드는 cncl_cfrm_qty다. 어느 쪽이 정본인지 저장소가 판정하지 않으므로(Q24) 두 표기를
+    # 모두 받아들이되, 둘 다 오면 값이 같을 때만 수용하고 다르면 malformed로 거부한다. 둘 다
+    # 없으면 지금처럼 거부한다 — 결측을 0으로 채우지 않는다.
+    cancel_fields = [field for field in ("cnc_cfrm_qty", "cncl_cfrm_qty") if field in row]
+    if not cancel_fields:
+        raise KeyError("cnc_cfrm_qty")
+    cancel_values = [_int(row[field]) for field in cancel_fields]
+    if cancel_values[0] != cancel_values[-1]:
+        raise ValueError("conflicting cancel confirmation quantities")
+    numbers = [_int(row[field]) for field in ("ord_qty", "tot_ccld_qty", "rmn_qty")]
+    numbers.extend((cancel_values[0], _int(row["rjct_qty"])))
     qty, filled, remaining, cancelled, rejected = numbers
     if qty <= 0 or any(q > qty for q in numbers[1:]) or filled + cancelled + rejected + remaining > qty:
         raise ValueError("impossible quantities")
@@ -87,6 +97,13 @@ def _parse_row(row):
 
 
 def _complete(pages, max_pages):
+    """연속조회 종료 판정 — F/M은 다음 페이지, D/E는 마지막, 그 밖은 완결 아님.
+
+    공식 저장소가 같은 규칙을 명시한다: legacy/Sample01/kis_domstk.py:275,278
+    `if tr_cont == "D" or tr_cont == "E": # 마지막 페이지 … elif tr_cont == "F" or tr_cont == "M":`
+    (요청 tr_cont는 2페이지부터 "N" — inquire_daily_ccld.py:193-204). 본문 커서는 마지막
+    페이지에도 채워져 오므로 종료 근거가 못 된다.
+    """
     if not pages or len(pages) > max_pages:
         return False
     expected_cursor = ("", "")
@@ -117,6 +134,11 @@ def parse_order_evidence(ref: OrderRef, symbol: str, side: str, pages: list[Evid
 
     호출자는 실제 요청 계좌/시장과 query_scope를 연결한다. 날짜·거래소·지점·원주문
     식별자는 응답에서도 일치해야 한다. TTTC8001R에 신형 계약을 상속하지 않는다.
+
+    supported의 11개 AND 조건 중 cncl_yn의 Y/N 강제와 ord_dvsn_cd 제한("00"/"01")은
+    보수적 선택이다 — 공식 저장소는 이 두 필드의 값 집합도, 정상 주문에서 어떤 값이
+    오는지도 말하지 않는다(Q25·라벨뿐인 chk_inquire_daily_ccld.py:22-57). 따라서 그 밖의
+    값은 전량체결이어도 unsupported_finality로 남긴다. 좁히는 방향의 오판만 허용한다.
     """
     complete = _complete(pages, max_pages)
     query_scope = dict(query_scope or {})

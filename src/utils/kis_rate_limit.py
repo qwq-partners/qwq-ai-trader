@@ -28,7 +28,11 @@ import time
 MAX_RPS = 10
 MIN_GAP = 1.0 / MAX_RPS   # 연속 호출 최소 간격 — 버스트를 초당 한도 안에서 고르게 분산
 # 원장 조회 TR: 잔고 TTTC8434R / 매수가능 TTTC8908R / 체결 TTTC8001R / 미체결 TTTC8036R / 해외잔고
-LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R", "TTTS3012R", "VTTS3012R"})
+# 체결·미체결은 공식 저장소 현행 TR(TTTC0081R·TTTC0084R)도 함께 넣는다 — 구TR 을 지우지 않는
+# 이유는 양쪽 모드에서 원장 직렬화가 끊기지 않게 하기 위해서다. 신TR 이 원장 유량(EGW00215)
+# 대상인지 저장소는 말하지 않으므로 좁은 쪽(직렬화 유지)을 택한다.
+LEDGER_TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R",
+                           "TTTC0081R", "TTTC0084R", "TTTS3012R", "VTTS3012R"})
 LEDGER_MIN_INTERVAL = 1.05
 # TR별 간격 상향 (2026-09-10): 9/3~9/10 장중 원장 거절 495건/일이 전부 잔고조회 TTTC8434R —
 # 동기화가 30초마다 8434R을 두 번(잔고→포지션) 호출하고 두 번째가 ~50% 거절(≈780쌍 중 387).

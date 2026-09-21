@@ -37,24 +37,24 @@ def collect_pages(pages, **kwargs):
     return LegacyExecutionQueries(fetch, clock=lambda: NOW, request_timeout=1, **kwargs), requests
 
 
-def test_daily_uses_exact_legacy_all_side_full_query_and_no_credentials_in_result_repr():
+def test_daily_uses_exact_all_side_full_query_and_no_credentials_in_result_repr():
     collector, requests = collect_pages([response([{"odno": "001", "account": "RAW_PRIVATE"}])])
     result = asyncio.run(daily(collector))
     request = requests[0]
     assert request.method == "GET"
     assert request.path == "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-    assert request.tr_id == "TTTC8001R" and request.tr_cont == ""
+    assert request.tr_id == "TTTC0081R" and request.tr_cont == ""
     assert dict(request.params) == {
         "CANO": "SYNTHETIC_ACCOUNT", "ACNT_PRDT_CD": "SYNTHETIC_PRODUCT",
         "INQR_STRT_DT": "20260917", "INQR_END_DT": "20260917",
         "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "01", "PDNO": "", "CCLD_DVSN": "00",
         "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
-        "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+        "EXCG_ID_DVSN_CD": "KRX", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
     }
     assert result.complete and result.reason == "complete"
     assert len(result.rows) == 1
     assert result.scope.account_scope == "internal-kr"
-    assert result.scope.market == "KR" and result.scope.exchange_scope == "legacy_unspecified_all"
+    assert result.scope.market == "KR" and result.scope.exchange_scope == "KRX"
     assert result.started_at == NOW and result.completed_at == NOW
     assert result.business_date_kst == "2026-09-17"
     assert result.finality_supported is False and result.trading_permission is False
@@ -62,12 +62,12 @@ def test_daily_uses_exact_legacy_all_side_full_query_and_no_credentials_in_resul
         assert secret not in repr(request) + repr(result) + repr(result.pages)
 
 
-def test_cancelable_uses_legacy_contract_without_manufactured_exchange_or_date_filter():
+def test_cancelable_keeps_its_contract_without_manufactured_exchange_or_date_filter():
     collector, requests = collect_pages([response(kind="cancelable")])
     result = asyncio.run(collector.cancelable(account_scope="internal-kr", account_number="A", product_code="P"))
     request = requests[0]
     assert request.path == "/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
-    assert request.tr_id == "TTTC8036R"
+    assert request.tr_id == "TTTC0084R" and result.scope.exchange_scope == "unspecified"
     assert dict(request.params) == {"CANO": "A", "ACNT_PRDT_CD": "P", "INQR_DVSN_1": "1",
                                     "INQR_DVSN_2": "0", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     assert result.scope.start_date is None and result.scope.end_date is None
