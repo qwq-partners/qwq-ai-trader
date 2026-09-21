@@ -1835,6 +1835,22 @@ class RiskManager:
                     f"[리스크] stale pending 유지: {s} ({elapsed:.0f}초) - 거래소 취소 실패, 다음 주기 재시도"
                 )
 
+        # 자동매도 절대 금지 종목 (CORE-023) — SELL 시그널은 발행처와 무관하게 여기서 막는다.
+        # 발행처별 가드가 빠진 경로(코어 조기경보·stale·리밸런싱·트림, 전략 자체 청산)의 최종 방어선.
+        # 수동 매도는 엔진 시그널을 거치지 않는다(MTS·scripts/sell_specific.py·liquidate_all.py 별도 브로커).
+        if event.side == OrderSide.SELL and event.symbol in getattr(self, "_exit_exempt_ref", set()):
+            self._pending_exit_reasons.pop(event.symbol, None)
+            # 전략 자체 청산은 틱마다 재발행된다 — 경고는 신호 쿨다운 간격으로만 남긴다
+            _last_block = self._last_signal_time.get(event.symbol)
+            if (_last_block is None
+                    or (now - _last_block).total_seconds() >= self._SIGNAL_COOLDOWN_SECONDS):
+                self._last_signal_time[event.symbol] = now
+                logger.warning(
+                    f"[리스크] 자동매도 금지 종목 SELL 차단: {event.symbol} "
+                    f"(source={event.source}, 사유={event.reason})"
+                )
+            return None
+
         # 거래 가능 여부 체크
         if not self.engine.is_trading_hours():
             session = self.engine._get_current_session()

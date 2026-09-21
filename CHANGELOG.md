@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-21 — fix(exit-exempt): 자동매도 금지 종목 SELL 을 엔진에서 막는다 (가드 없는 발행처 공백, **미배포**)
+
+- **배경:** PR #81 독립 리뷰(claude-opus-5)·교차 리뷰(Codex gpt-6-astra/xhigh)에서 확인된 잠재 공백. `exit_exempt`(CORE-023) 가드가 발행처별로 흩어져 있어 두 부류가 비어 있었다. ① 코어 경로(조기경보·stale 자동매도·리밸런싱 폴백 손절/교체·금요 트림)는 `strategy == "core_holding"` + `rebalance_exclude` 로만 걸렀다 — `core_holding` 포지션을 면제로 지정하면 SELL 이 나간다. ② `StrategyManager.on_market_data` 가 보유 포지션을 모든 활성 전략에 넘기고 `gap_and_go._check_exit_signal` 은 `position.strategy` 를 보지 않는다 — 같은 날 갭 후보로 등록된 뒤 MTS 수동 매수로 `manual` 포지션이 된 면제 종목은 갭 시작점 ×0.99 이탈 시 SELL 이 나간다(`theme_chasing` 의 `_position_themes` 도 같은 구조, 현재 폐지 전략). **현재 면제 종목 087010 은 `manual` 이고 당일 갭 후보가 아니라 실제 발생 이력은 없다.**
+- **수정(제품 3파일, +29줄):** `RiskManager.on_signal` 에 중앙 가드 — SELL 이면서 `_exit_exempt_ref`(ExitManager live set)에 든 종목이면 주문 생성 전에 `None`. 남은 `_pending_exit_reasons` 를 지우고, 틱마다 재발행되는 전략 SELL 때문에 경고는 신호 쿨다운(30초) 간격으로만 남긴다. 코어 경로 3곳(`_monitor_core_positions` 대상 목록 → stale 포함, `execute_core_rebalance`·금요 트림의 `rebalance_exclude`)은 면제 종목을 대상에서 뺀다.
+- **왜 중앙 가드 + 코어만 발행처 제외인가:** 중앙 가드 하나로 모든 엔진 SELL 이 막히지만(모든 SELL `SignalEvent` 는 `on_signal` → `on_order` 로만 주문이 된다), 코어 경로는 막히기 전에 부작용을 낸다 — '즉시 매도'/'stale 자동 청산' 텔레그램이 30분마다 반복되고, 리밸런싱은 면제 종목을 `sold` 로 기록해 "매도 미체결 → 매수 보류"에 2일씩 묶이며, 트림은 잔여액만 깎는다. 전략 자체 청산은 부작용이 로그뿐이라 중앙 가드만 둔다.
+- **중앙 가드 부작용 점검:** ① 수동 매도는 엔진 시그널을 거치지 않는다 — MTS, `scripts/sell_specific.py`·`scripts/liquidate_all.py` 는 자체 `KISBroker` 인스턴스, 대시보드 POST 는 매수 시그널 실행뿐, 텔레그램 명령 수신 경로 없음. ② `_exit_pending_symbols`·`_exit_reasons`·ExitManager stage 의 등록처는 `_check_exit_signal`/`update_price` 뿐이고 둘 다 진입부에서 면제 종목을 이미 돌려보내므로 막힌 시그널이 3분짜리 고아 pending·stage 를 남기지 않는다.
+- **그대로 둔 것:** `gap_and_go`/`theme_chasing` 이 남의 전략 포지션(면제 아님)에도 자체 청산을 내는 동작(별도 판단), stale SELL 시장가 폴백 루프(면제 종목은 pending SELL 이 생기지 않아 도달 불가 — PR #81 과 같은 구간이라 무접촉), 안전자산 직접 매도(KOFR 고정 심볼). 금요 트림의 발행처 제외는 스케줄러 루프 안이라 단위 시험이 없고 중앙 가드 시험(`core_trim`)이 받는다.
+- **검증:** 신규 `tests/test_exit_exempt_sell_guard.py` 10건 — 수정 전 **10 failed**(전부 "면제 종목 SELL 이 `OrderEvent`/emit 이 된다" 단언)로 RED 고정 후 커밋, 수정 후 GREEN. 실제 `GapAndGoStrategy` → `StrategyManager` → `on_signal` 연결, 발행처 5종 × 중앙 가드, 비면제 SELL 통과·live set 해제 추종, 코어 조기경보(알림 포함)·리밸런싱 폴백·교체(매수 교착 없음). 인접 on_signal·batch_analyzer 시험 포함 UTC/KST 각각 173 passed·격리 0건.
+- **운영:** 배포·재시작·주문·설정·`.env`·킬스위치 변경 0. 문서 `docs/risk/risk-and-exit.md` 차단 경로 절 갱신.
+
 ## 2026-09-21 — ops: main `2a143c6` 운영 반영 (PR #80 병합·배포·재시작)
 
 - **지시·범위:** 사용자 지시로 진행 중인 PR #81 을 제외하고 main 을 운영에 반영했다. 운영 checkout `93c2fbd` → `2a143c6`. 제품 경로 변경은 PR #80 의 `src/execution/broker/kis_kr.py`·`src/utils/kis_rate_limit.py` 뿐이고(그 사이의 #79 는 시험 전용), 기본 `legacy` 에서 요청 본문·헤더·파싱이 전환 전과 같다.

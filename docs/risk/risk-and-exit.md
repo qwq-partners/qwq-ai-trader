@@ -223,14 +223,15 @@
 ### 종목별 자동매도 절대 금지 (exit_exempt / no_auto_exit_symbols, 2026-06-23~)
 - **용도**: 수동 풀매수·장기보유 종목을 모든 자동매도 로직에서 영구 제외 (코어보다 강한 보호 — 코어는 리밸런싱 교체 가능하나 이건 그것도 면제).
 - **설정**: `config kr.no_auto_exit_symbols: ['087010', ...]` — 기동 시 `run_trader._initialize_kr`가 `exit_manager.add_exit_exempt()`로 복원(재시작에도 유지).
-- **차단 경로 (7개, 누락 시 손절/청산 발생)**:
+- **차단 경로 (발행처 가드 + 엔진 중앙 가드 — 새 SELL 발행처는 6번이 받지만, 알림·상태 부작용이 있으면 발행처에서도 뺀다)**:
   1. ExitManager `update_price` 진입부(`_exit_exempt`) → 손절·트레일링·분할익절·stale·보유기간초과 일괄
   2. `kr_scheduler._check_exit_signal` (WS 실시간) → 즉시 return
   3. `kr_scheduler._run_position_eod_llm_check` → LLM 종가점검 청산 제외
   4. `batch_analyzer.monitor_positions` 루프 → RSI2 청산·보유기간초과·ExitManager 릴레이 스킵
   5. `batch_analyzer._preemptive_stale_exit_on_bear` → 약세장 선제 stale 청산 스킵
-  - 코어 경로(rebalance/stale/early-warning)는 `strategy == "core_holding"` 한정이라 strategy="manual" 종목엔 미적용.
-  6. `kr_scheduler._sync_portfolio` 유령 제거 — KIS 부분 응답 1회로는 제거하지 않고 3주기 연속 누락에서만 (2026-09-13, 이전엔 부분 응답 시 즉시 삭제 + ExitManager 상태 소실)
+  - 코어 경로(조기경보·stale 자동매도·리밸런싱 손절/교체·금요 트림)는 면제 종목을 `rebalance_exclude` 와 같게 대상에서 뺀다 (2026-09-21 — 이전엔 `strategy == "core_holding"` 으로만 걸러 `core_holding` 포지션을 면제로 지정하면 SELL 이 나갔다). 조기경보·stale 은 알림도 함께 빠진다(침묵이 사용자 지시).
+  6. **엔진 중앙 가드 (2026-09-21, 최종 방어선)**: `RiskManager.on_signal` 이 면제 종목의 SELL 시그널을 발행처와 무관하게 주문 생성 전에 막는다(`_exit_exempt_ref` = ExitManager live set). 발행처 가드가 없는 경로 — 전략 자체 청산(`gap_and_go` 갭 시작점 이탈·`theme_chasing` 테마 쿨다운은 `position.strategy` 를 보지 않는다)과 앞으로 추가될 SELL 발행처 — 를 여기서 받는다. pending·ExitManager stage 는 건드리지 않고(해당 등록처는 1·2번 가드 뒤에 있다) 남은 `_pending_exit_reasons` 만 지운다. 경고 로그는 신호 쿨다운(30초) 간격. **수동 매도는 엔진 시그널을 거치지 않으므로 영향 없음**(MTS, `scripts/sell_specific.py`·`scripts/liquidate_all.py` 는 별도 브로커 인스턴스). `on_signal` 을 거치지 않고 브로커에 직접 SELL 을 내는 경로는 둘뿐이다 — 안전자산(KOFR 고정 심볼) 매도, 그리고 이미 pending 인 SELL 의 시장가 폴백(면제 종목은 pending SELL 자체가 생기지 않는다).
+  7. `kr_scheduler._sync_portfolio` 유령 제거 — KIS 부분 응답 1회로는 제거하지 않고 3주기 연속 누락에서만 (2026-09-13, 이전엔 부분 응답 시 즉시 삭제 + ExitManager 상태 소실)
 - **수동 매수**: `config kr.manual_buy_orders: [{symbol, name, exit_exempt}]` → 기동 시 1회 실행(보유 시 자동 스킵). KIS 시장가는 주문가능금액을 상한가 기준으로 계산하므로 marketable 지정가(현재가+0.6%)로 전액 체결.
 - ⚠️ **손절 부재 = 하락 100% 노출.** 청산은 전적으로 수동 판단. (펩트론 087010: 2026-06-23 사용자 지시로 전액 매수 + 손절 면제)
 

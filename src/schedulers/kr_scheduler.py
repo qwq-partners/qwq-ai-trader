@@ -7953,6 +7953,11 @@ JSON:
                 _trim_min_value = core_cfg_ow.get("trim_min_value", 200000)
                 _individual_max_pct = core_cfg_ow.get("individual_max_pct", 20.0)
                 _rebalance_exclude = set(str(s) for s in core_cfg_ow.get("rebalance_exclude", []))
+                # 자동매도 금지 종목은 트림 대상에서 제외 (CORE-023) — 엔진이 SELL 을 막으면
+                # 트림 잔여액(_remaining)만 깎여 다른 코어 종목 트림이 모자라게 된다
+                if bot.exit_manager:
+                    _rebalance_exclude |= {s for s in portfolio.positions
+                                           if bot.exit_manager.is_exit_exempt(s)}
 
                 equity = portfolio.total_equity
                 if equity > 0:
