@@ -62,7 +62,8 @@ def _record_outcome(result: TransportResult, fields: dict) -> TransportResult:
     """응답/예외 뒤의 결과를 원장에 남긴다. 기록 실패는 결과를 바꾸지 않는다.
 
     ACK를 UNKNOWN으로 만들면 실제로 접수된 주문이 미확인으로 뒤집히므로 삼킨다.
-    송신 앞의 기록(EV_SUBMIT/EV_CANCEL)은 반대로 삼키지 않는다 — 거기서 터지면 보내지 않는다.
+    아래 try/except 는 방어로 남겨 둔 것이다 — 실제 audit_log.record 는 내부에서
+    모든 예외를 삼키므로(src/utils/audit_log.py) 여기까지 올라오는 예외는 없다.
     """
     try:
         audit_log.record(
@@ -112,17 +113,23 @@ class GuardedKISTransport:
           - 킬스위치: SUBMIT/MODIFY 만 검사한다(CANCEL 은 위험을 줄이는 명령이라 제외 —
             현행 KISBroker.cancel_order 와 같다). 차단이면 원문은 EV_BLOCKED 행에만 남기고
             상태는 NOT_SENT/'kill_switch_blocked' 다.
-          - 감사 원장: 시도를 EV_SUBMIT(취소는 EV_CANCEL)로 먼저 남긴다. 두 호출 모두
-            dispatched=True 앞이라 여기서 예외가 나면 송신은 0이다.
+          - 감사 원장: 시도를 EV_SUBMIT(취소는 EV_CANCEL)로 먼저 남긴다.
+        고정되는 것은 두 호출의 **위치**다(마지막 await 뒤·POST 앞). 실제 audit_log.record 는
+        예외를 삼키므로 원장 쓰기 실패는 주문을 막지 않는다 — 현행 submit_order 와 같은
+        best-effort 이고, 원장 때문에 보호 주문을 막는 쪽이 더 위험하다. 킬스위치도 플래그
+        디렉터리 접근 실패 시 허용한다(fail-open, kill_switch._read_flag) — attach 설치 시
+        그 디렉터리의 가용성이 긴급 정지의 전제다.
         응답/예외 뒤에는 ACK→EV_ACCEPT, REJECTED/UNKNOWN→EV_REJECT(UNKNOWN 은
-        unconfirmed=True)를 남기되, 그 기록 실패는 TransportResult 를 바꾸지 않는다.
-        원장 필드는 attach 구분(path='attach')과 owner 행 연결용 fingerprint 를 포함하고
-        계좌번호·hashkey·토큰·헤더는 포함하지 않는다.
+        unconfirmed=True)를 한 시도당 한 번만 남기되, 그 기록 실패는 TransportResult 를
+        바꾸지 않는다. POST 뒤 CancelledError 면 결과 행 없이 submit/cancel 행만 남는다 —
+        모르는 결과를 단정하지 않는다.
+        원장 필드는 attach 구분(path='attach')과 owner 행 연결용 attempt_id/fingerprint 를
+        포함하고 계좌번호·hashkey·토큰·헤더는 포함하지 않는다.
         """
         builder, broker = self._request_builder, self._broker
         if builder is None:
             return TransportResult(TransportStatus.NOT_SENT, 'request_builder_required')
-        dispatched = False
+        dispatched, result = False, None
         try:
             prepared = deepcopy(request)
             builder.validate(prepared)
@@ -176,7 +183,7 @@ class GuardedKISTransport:
                 'market': prepared.market, 'symbol': prepared.symbol, 'side': side,
                 'qty': prepared.quantity, 'price': format(prepared.wire_price, 'f'),
                 'order_type': prepared.order_type.value, 'strategy': prepared.strategy,
-                'path': 'attach', 'fingerprint': fingerprint,
+                'path': 'attach', 'attempt_id': prepared.attempt_id, 'fingerprint': fingerprint,
             }
             if prepared.command is not CommandKind.CANCEL:
                 # 취소는 위험을 줄이는 명령이라 현행 cancel_order 와 같이 검사하지 않는다.
@@ -203,7 +210,8 @@ class GuardedKISTransport:
                         result = TransportResult(TransportStatus.REJECTED, 'command_rejected', data)
                     else:
                         result = TransportResult(TransportStatus.UNKNOWN, 'invalid_response')
-                return _record_outcome(result, audit_fields)
+            # 결과 행은 응답 컨텍스트를 닫은 뒤에 쓴다 — __aexit__ 가 터져도 한 시도당 한 행이다.
+            return _record_outcome(result, audit_fields)
         except asyncio.CancelledError:
             raise
         except RequestValidationError:
@@ -212,6 +220,10 @@ class GuardedKISTransport:
                     TransportResult(TransportStatus.UNKNOWN, 'dispatch_unconfirmed'), audit_fields)
             return TransportResult(TransportStatus.NOT_SENT, 'invalid_prepared_request')
         except Exception:
+            if result is not None:
+                # 응답 본문으로 확인한 결과를 컨텍스트 종료 실패가 뒤집지 않는다.
+                # 접수된 주문을 UNKNOWN 으로 되돌리면 attach 의 전역 정지를 부른다.
+                return _record_outcome(result, audit_fields)
             if dispatched:
                 return _record_outcome(
                     TransportResult(TransportStatus.UNKNOWN, 'dispatch_unconfirmed'), audit_fields)

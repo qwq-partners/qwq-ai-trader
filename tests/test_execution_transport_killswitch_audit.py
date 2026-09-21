@@ -25,6 +25,13 @@ from test_kr_prepared_dispatch import fixture
 PERMIT = GuardDecision(True, 'synthetic-owner-permit')
 
 
+class CloseFailure(Response):
+    """응답 컨텍스트 종료(__aexit__)만 터지는 응답 — 본문은 이미 읽은 뒤다."""
+
+    async def __aexit__(self, *args):
+        raise RuntimeError('synthetic-response-close-failure')
+
+
 @pytest.fixture
 def ledger(tmp_path, monkeypatch):
     """킬스위치 플래그·감사 원장을 임시 경로로 주입한다."""
@@ -72,6 +79,7 @@ def test_submit_records_attempt_then_acceptance(ledger):
         assert row['side'] == request.side.value and row['qty'] == request.quantity
         # attach 경로임을 구분할 수 있고 owner 행과 이을 수 있어야 한다.
         assert row['path'] == 'attach' and row['fingerprint'] == request.fingerprint
+        assert row['attempt_id'] == request.attempt_id
     # 계좌번호·hashkey·토큰은 원장에 남기지 않는다.
     raw = ledger.raw()
     for secret in (request.account.account_no, request.account.account_product_cd,
@@ -120,10 +128,11 @@ def test_buy_halt_still_lets_sell_and_cancel_through(ledger):
     assert len(broker._session.posts) == 1
 
 
+@pytest.mark.parametrize('flag', ['KILL_SWITCH_ALL', 'KILL_SWITCH_ALL_KR'])
 @pytest.mark.parametrize('side', [OrderSide.BUY, OrderSide.SELL])
-def test_full_halt_blocks_both_sides(ledger, side):
+def test_full_halt_blocks_both_sides(ledger, side, flag):
     broker, builder, _ = fixture()
-    halt(ledger, 'KILL_SWITCH_ALL')
+    halt(ledger, flag)
     result = dispatch(submit(builder, order=order(side=side)), broker, builder)
 
     assert result.status is TransportStatus.NOT_SENT
@@ -144,7 +153,11 @@ def test_full_halt_does_not_block_cancel(ledger):
 
 @pytest.mark.parametrize('target', ['check', 'record'])
 def test_pre_post_safety_failure_never_sends(ledger, monkeypatch, target):
-    """ⓐ 킬스위치 검사·EV_SUBMIT 기록은 송신 앞이다 — 거기서 터지면 송신 0."""
+    """ⓐ 킬스위치 검사·EV_SUBMIT 기록의 위치가 송신 앞이다.
+
+    실제 audit_log.record 는 예외를 삼키므로 여기 주입한 예외는 운영에서 나오지 않는다 —
+    고정하는 것은 "터지면 송신 0"이라는 운영 보장이 아니라 두 호출의 위치다.
+    """
     broker, builder, _ = fixture()
     def boom(*args, **kwargs):
         raise RuntimeError('synthetic-safety-failure')
@@ -183,6 +196,46 @@ def test_no_application_await_between_guard_and_post():
     between = body.split('decision = guard(prepared)', 1)[1].split('broker._session.post(', 1)[0]
     code = [line.split('#', 1)[0] for line in between.splitlines()]
     assert not any('await' in line for line in code)
+    # 두 안전장치도 그 구간 안이다 — 함수 상단으로 끌어올리면 마지막 await 중의 동결을 놓친다.
+    assert 'kill_switch.check(' in between and 'audit_log.record(' in between
+
+
+def test_kill_switch_is_read_after_the_last_await_not_at_entry(ledger):
+    """ⓓ 검사 시점 — guard 앞의 마지막 await 중에 동결해도 그 POST 가 막혀야 한다."""
+    broker, builder, _ = fixture()
+
+    async def limiter(tr_id):
+        # 실제 사용자는 인증/limiter 대기 중에도 플래그를 만들 수 있다.
+        halt(ledger, 'KILL_SWITCH')
+
+    broker._rate_limit = limiter
+    result = dispatch(submit(builder), broker, builder)
+
+    assert result.status is TransportStatus.NOT_SENT
+    assert result.reason == 'kill_switch_blocked'
+    assert broker._session.posts == []
+    rows = ledger.rows()
+    assert [row['event'] for row in rows] == [audit_log.EV_BLOCKED]
+    assert rows[0]['path'] == 'attach'
+
+
+@pytest.mark.parametrize('data,status,reason,event', [
+    ({'rt_cd': '0'}, TransportStatus.ACKNOWLEDGED, 'command_acknowledged', audit_log.EV_ACCEPT),
+    ({'rt_cd': '1', 'msg_cd': 'APBK0919'}, TransportStatus.REJECTED, 'command_rejected',
+     audit_log.EV_REJECT),
+])
+def test_response_close_failure_keeps_one_outcome_row(ledger, data, status, reason, event):
+    """ⓔ 한 시도당 결과 행 1개 — 본문으로 확인한 결과를 종료 실패가 뒤집지 않는다.
+
+    접수된 주문을 UNKNOWN 으로 뒤집으면 attach 의 전역 정지를 부른다.
+    """
+    broker, builder, _ = fixture(CloseFailure(data=data))
+    result = dispatch(submit(builder), broker, builder)
+
+    assert result.status is status and result.reason == reason
+    rows = ledger.rows()
+    assert [row['event'] for row in rows] == [audit_log.EV_SUBMIT, event]
+    assert 'unconfirmed' not in rows[1]
 
 
 def test_unconfirmed_response_is_recorded_as_a_rejection_marked_unconfirmed(ledger):
