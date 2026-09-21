@@ -263,8 +263,13 @@ class KISBroker(BaseBroker):
         # EGW00123: Access Token 만료, EGW00121: 유효하지 않은 Access Token
         return msg_cd in ("EGW00123", "EGW00121")
 
-    async def _api_get(self, url: str, tr_id: str, params: dict) -> dict:
-        """API GET 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)"""
+    async def _api_get(self, url: str, tr_id: str, params: dict, tr_cont: str = "") -> dict:
+        """API GET 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)
+
+        tr_cont: 연속조회 요청 구분. 공식 저장소 예제는 **다음 페이지 요청에만** "N" 을
+        싣는다. 빈 문자열(기본값)이면 헤더에 넣지 않는다 — 1페이지로 끝나는 호출의 요청은
+        전환 전과 한 바이트도 다르지 않다. 같은 페이지의 재시도에도 같은 값이 유지된다.
+        """
         if not self._session or self._session.closed:
             logger.warning("[API] 세션 없음, 재연결 시도")
             if not await self.connect():
@@ -277,6 +282,8 @@ class KISBroker(BaseBroker):
             try:
                 await self._rate_limit(tr_id)
                 headers = self._get_headers(tr_id)
+                if tr_cont != "":
+                    headers["tr_cont"] = tr_cont
                 async with self._session.get(url, headers=headers, params=params) as resp:
                     if kis_rate_limit.is_ledger(tr_id):
                         kis_rate_limit.release_ledger()  # 원장 응답 수신 — 다음 원장 호출 허용(+1.05초)
@@ -1060,6 +1067,13 @@ class KISBroker(BaseBroker):
             if str(data.get("rt_cd", "")) != "0":
                 logger.warning(f"실 미체결 조회 실패: {data.get('msg1', '')}")
                 return None
+            # 이 조회는 1회 호출(최대 50건)이다. 응답 헤더가 다음 페이지를 알리면(F/M)
+            # 지금 목록은 잘린 것이고, 잘린 목록은 "미체결 없음"으로 오독돼 이중 매도를
+            # 부른다 — 조용히 자르는 대신 판단 불가(None)로 올린다.
+            # ponytail: 미체결 50건 초과 운용이 되면 페이지 루프로
+            if str(data.get("_tr_cont", "") or "") in ("F", "M"):
+                logger.warning("실 미체결 조회: 다음 페이지가 남아 목록이 잘림 → 판단 불가")
+                return None
             rows: List[Dict[str, Any]] = []
             for item in (data.get("output", []) or []):
                 if _TR_NEW:
@@ -1166,7 +1180,11 @@ class KISBroker(BaseBroker):
                     "CTX_AREA_NK100": ctx_nk,
                 }
 
-                data = await self._api_get(url, tr_id, params)
+                # 첫 페이지는 tr_cont 미송신(전환 전과 동일), 다음 페이지부터 "N"
+                if page == 0:
+                    data = await self._api_get(url, tr_id, params)
+                else:
+                    data = await self._api_get(url, tr_id, params, tr_cont="N")
 
                 rt_cd = data.get("rt_cd", "")
                 if str(rt_cd) != "0":
@@ -1246,7 +1264,11 @@ class KISBroker(BaseBroker):
                     "CTX_AREA_NK100": ctx_nk,
                 }
 
-                data = await self._api_get(url, tr_id, params)
+                # 첫 페이지는 tr_cont 미송신(전환 전과 동일), 다음 페이지부터 "N"
+                if page == 0:
+                    data = await self._api_get(url, tr_id, params)
+                else:
+                    data = await self._api_get(url, tr_id, params, tr_cont="N")
 
                 rt_cd = data.get("rt_cd", "")
                 if str(rt_cd) != "0":
@@ -1947,7 +1969,11 @@ class KISBroker(BaseBroker):
                 "ODNO": "",
             }
 
-            data = await self._api_get(url, tr_id, params)
+            # 첫 페이지는 tr_cont 미송신(전환 전과 동일), 다음 페이지부터 "N"
+            if page == 0:
+                data = await self._api_get(url, tr_id, params)
+            else:
+                data = await self._api_get(url, tr_id, params, tr_cont="N")
             if str(data.get("rt_cd", "")) != "0":
                 break
 

@@ -322,10 +322,10 @@ result = value if value is not None else default
 - **파일 수정 시 연관 체크**: types.py ↔ engine.py, exit_manager.py ↔ schedulers, config.py ↔ YAML
 - **수수료 계산**: `FeeCalculator` 단일 사용 — data_collector/storage 내 하드코딩 금지
 - **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
-- **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일
+- **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일. **취소는 예외(재시도 유지)** — 전량 취소는 `ORGN_ODNO` 하나를 겨냥해 두 번 닿아도 새 노출을 만들 수 없고, 빼면 보호 취소 성공률만 떨어진다 (멱등 보장이 아니라 효과 한정 논증 — `docs/integrations/external-apis.md`)
 - **KIS 직접 호출은 `await kis_rate_limit.acquire(tr_id)` 선행**: 브로커·시세·스크리너가 같은 appkey라 초당 한도는 합산(EGW00201). 원장 TR(잔고/매수가능/체결/미체결)은 계좌당 초당 1건(EGW00215) — 새 원장 TR은 `utils/kis_rate_limit.LEDGER_TR_IDS`에 추가. 구/신 TR 양쪽을 다 넣는다(전환·롤백 어느 쪽에서도 직렬화가 끊기면 안 됨). 게이트웨이 상한 수치는 공식 저장소에 없고 전부 운영 실측값이다
 - **KIS TR ID는 리터럴로 쓰지 않는다**: `kis_kr._tr_id("rvsecncl"|"daily"|"cancelable")`, 주문은 `_get_tr_id_for_session(side, use_new)` — `KIS_TR_SET`(기본 legacy, 정확히 `new` 일 때만 전환) 한 곳에서만 구/신이 갈린다. `new` 전용 본문 키(`EXCG_ID_DVSN_CD`·`CNDT_PRIC`)는 그 가드 안에만 두고, hashkey 발급보다 **먼저** 붙인다(hashkey는 본문 무결성 검사). **주문 접수의 신 TR·신 본문은 정규장(`regular`) 세션 한정** — NXT 세션의 `EXCG_ID_DVSN_CD` 값이 공식 저장소에 없어 그 세션은 `new` 에서도 legacy 로 나간다
-- **KIS 연속조회 종료는 응답 헤더 `tr_cont`(F/M 다음, D/E 마지막)로 판정** — 본문 `ctx_area_*100` 키는 마지막 페이지에도 채워져 오므로 종료 근거가 못 된다(2026-09-15 EGW00215 반복 원인: 보유 1종목 계좌가 8434R 을 10회 호출). `_api_get` 이 `data["_tr_cont"]` 로 실어 준다. 요청 헤더 `tr_cont: N` 은 아직 미송신(다중 페이지 후속)
+- **KIS 연속조회 종료는 응답 헤더 `tr_cont`(F/M 다음, D/E 마지막)로 판정** — 본문 `ctx_area_*100` 키는 마지막 페이지에도 채워져 오므로 종료 근거가 못 된다(2026-09-15 EGW00215 반복 원인: 보유 1종목 계좌가 8434R 을 10회 호출). `_api_get` 이 `data["_tr_cont"]` 로 실어 준다. **요청 헤더 `tr_cont` 는 첫 페이지 미송신·2페이지째부터 `"N"`**(2026-09-21, `_api_get(..., tr_cont="N")` — 1페이지로 끝나는 호출의 요청은 무변경). 페이지 루프가 없는 `get_exchange_open_orders` 는 헤더가 F/M 이면 잘린 목록 대신 `None`(판단 불가)을 돌려준다
 
 ---
 
