@@ -1009,6 +1009,11 @@ class KRScheduler:
             live = None
         if bot._exit_pending_timestamps.get(s) != pending_ts:
             return True  # 생존 조회 await 사이에 교체됐다 — 옛 주문의 결과를 새 pending 에 적용하지 않는다
+        if bot.exit_manager and bot.exit_manager.is_exit_exempt(s):
+            # 조회 await 중(또는 그 전에) 자동매도 금지로 등록됐다. 아래 판단 불가 상한의 자체 해제는 호출측의
+            # 면제 확인을 건너뛰어(True 반환 → continue) 살아 있을 수 있는 면제 SELL 의 취소 재시도를 끊는다 →
+            # False 로 돌려 호출측이 면제 확인을 하게 한다(브로커에 남아 있으면 pending 보존·60초 뒤 재취소).
+            return False
         if live is False:
             return False
         unknown_streak = unknown_streak + 1 if live is None else 0

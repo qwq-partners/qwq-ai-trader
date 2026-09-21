@@ -573,6 +573,39 @@ def test_engine_heartbeat_never_market_sells_an_exit_exempt_symbol(monkeypatch):
     assert SYM not in rm._pending_orders and SYM not in rm._pending_cancel_keep
 
 
+def test_engine_exempt_kept_sell_leaves_the_keep_ledger_so_it_cannot_starve_others(monkeypatch):
+    """교차 리뷰 6회차 P2: 면제 분기는 유지 장부의 tried_at 을 갱신하지 않는다 — 남겨 두면 그 종목이 하트비트 정렬의
+    맨 앞을 계속 차지해(60초마다 느린 취소로 5초 예산 소진) 뒤 종목이 굶는다. 면제 분기가 유지를 닫고 넘겨받는다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
+    rm = _engine(monkeypatch, broker, keep=1)
+    rm._exit_exempt_ref, rm._exempt_cancel_last_try = {SYM}, {}
+
+    _beat(rm)
+
+    assert broker.calls == ["cancel"] and broker.orders == []
+    assert SYM in rm._pending_orders                        # 살아 있을 수 있는 면제 SELL — pending 보존(#83)
+    assert SYM not in rm._pending_cancel_keep               # 이후는 면제 분기(SIGNAL 구동·60초 스로틀)가 맡는다
+    _freeze_engine(monkeypatch, NOW + timedelta(seconds=120))
+    _beat(rm)
+    assert broker.calls == ["cancel"]                       # 하트비트는 더 이상 이 종목을 구동하지 않는다
+
+
+def test_engine_exemption_registered_during_the_liveness_await_blocks_the_budget_release(monkeypatch):
+    """교차 리뷰 6회차 P1: 판단 불가 예산의 해제는 조회 await 중 등록된 면제를 다시 보지 않았다 — pending 을 풀면
+    살아 있을 수 있는 면제 SELL 이 취소 재시도 대상에서 빠진 채 체결될 수 있다(main 은 pending 을 보존한다)."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=None)
+    rm = _engine(monkeypatch, broker, keep=3, undecided_for=600)     # 예산은 이미 지났다
+    rm._exit_exempt_ref, rm._exempt_cancel_last_try = set(), {}
+
+    async def register_exemption():
+        rm._exit_exempt_ref.add(SYM)
+    broker.on_open_orders = register_exemption
+
+    _drive(rm)
+
+    assert broker.orders == [] and SYM in rm._pending_orders
+
+
 def test_engine_heartbeat_only_touches_kept_sells_whose_retry_is_due(monkeypatch):
     """하트비트가 구동하는 것은 '간격이 지난 유지분의 재시도'뿐이다 — 폴백 상한 해제 같은 다른 분기를 앞당기지 않는다."""
     broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=ALIVE)
@@ -924,6 +957,27 @@ def test_scheduler_never_releases_a_pending_that_replaced_the_one_it_was_checkin
 
     assert SYM in bot._exit_pending_symbols and bot._exit_pending_timestamps[SYM] == NOW
     assert cleared == [] and state.pending_stage == ExitStage.FIRST
+
+
+@pytest.mark.parametrize("when", ["이미 면제", "조회 await 중 면제 등록"])
+def test_scheduler_budget_release_never_drops_a_live_exempt_sell(home, monkeypatch, when):
+    """교차 리뷰 6회차 P1(병합 상호작용): 분할 표식 + 자동매도 금지 + 브로커에 활성 SELL + 연속 판단 불가.
+    관문이 상한에서 직접 풀고 True 를 돌려주면 호출측의 면제 확인(#83)을 건너뛴다 — main 은 이 상황에서 양쪽 pending 을
+    보존하고 60초 뒤 재취소한다. 면제 종목은 관문이 아니라 면제 확인이 맡는다."""
+    broker = SellBroker(cancelled=0, tracked=[_tracked_sell()], exchange_rows=None)
+    scheduler, bot, state, cleared = _scheduler(monkeypatch, broker)
+    scheduler._stale_cancel_miss = {SYM: (bot._exit_pending_timestamps[SYM], 1, False)}   # 다음 None 이 상한
+    if when == "이미 면제":
+        bot.exit_manager.add_exit_exempt(SYM, reason="test")
+    else:
+        async def register_exemption():
+            bot.exit_manager.add_exit_exempt(SYM, reason="test")
+        broker.on_open_orders = register_exemption
+
+    _sweep(scheduler)
+
+    assert SYM in bot._exit_pending_symbols and cleared == [] and state.pending_stage == ExitStage.FIRST
+    assert scheduler._stale_cancel_last_try[SYM] == NOW     # 60초 뒤 재취소(#83 의 스로틀)
 
 
 def test_scheduler_replacement_during_cancel_is_caught_for_full_exits_too(home, monkeypatch):

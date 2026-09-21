@@ -2257,6 +2257,9 @@ class RiskManager:
         # 면제 등록(런타임 add_exit_exempt) 전에 나간 SELL — 남은 지정가만 취소하고
         # 시장가로 재주문하지 않는다 (이 루프는 on_signal 가드를 거치지 않는 직접 제출 경로)
         if self._is_exit_exempt(s):
+            # 유지 중에 면제로 등록된 종목은 여기서 유지 장부를 닫는다 — 이후는 이 분기(60초 전용 스로틀)가 맡는다.
+            # 남겨 두면 tried_at 이 갱신되지 않아 하트비트 정렬의 맨 앞을 계속 차지하고 뒤 종목을 굶긴다.
+            self._pending_cancel_keep.pop(s, None)
             # 취소 재시도는 60초 간격 (on_signal 은 신호마다 돈다). pending 시각은 건드리지 않는다 —
             # 경과가 그대로 흘러야 헬스 모니터의 300초 교착 경보가 이 상태를 드러낸다
             _last_try = self._exempt_cancel_last_try.get(s)
@@ -2475,6 +2478,10 @@ class RiskManager:
                 live = None
         else:
             logger.warning(f"[리스크] 매도 취소 실패 가능(체결 직후/거래소 생존): {symbol} → 시장가 재주문 보류")
+        if self._is_exit_exempt(symbol):
+            # 위 await 중 자동매도 금지로 등록됐다 — 아래 판단 불가 예산의 해제가 살아 있을 수 있는 면제 SELL 의
+            # 취소 재시도를 끊지 않게, 아무것도 풀지 않고 넘긴다(다음 주기에 _fallback_stale_sell 머리의 면제 분기가 맡는다)
+            return True
         if live is False:
             return False
         if live is None and (now - decided_at).total_seconds() >= self._SELL_UNKNOWN_BUDGET_SECONDS:
