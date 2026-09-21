@@ -2283,6 +2283,22 @@ class RiskManager:
             f"[리스크] stale 주문: 브로커는 추적 중이나 거래소 미체결 없음(수동 취소 등 소멸 추정): {symbol}")
         return False
 
+    async def release_kept_stale_buy(self, symbol: str) -> bool:
+        """취소 실패로 유지 중이던 stale BUY pending 을, 그 종목 포지션이 생겼으면 해제한다 (True = 해제함).
+
+        엔진 pending 은 방향 구분 없이 그 종목의 청산 검사를 막는다. 체결이 FillEvent 로 오면 on_fill 이
+        풀지만, 체결 조회가 비어 잔고 동기화로만 포지션이 반영되면 풀 주체가 없다 — 청산 검사 직전에 부른다.
+        """
+        if (self._pending_sides.get(symbol) != OrderSide.BUY
+                or self._pending_fallback_count.get(symbol, 0) <= 0):
+            return False
+        pos = self.engine.portfolio.positions.get(symbol)
+        if pos is None or pos.quantity <= 0:
+            return False
+        logger.warning(f"[리스크] 유지 중이던 stale 매수가 포지션으로 반영됨: {symbol} → pending 해제(청산 우선)")
+        await self.clear_pending(symbol)
+        return True
+
     async def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):
         """주문 완료/실패 시 pending 해제 (외부에서 호출) - Lock 보호"""
         async with self._pending_lock:

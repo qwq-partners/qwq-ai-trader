@@ -446,3 +446,65 @@ def test_same_symbol_buy_in_the_same_call_is_blocked_after_zero_cancel_release(m
 
     assert orders is None
     assert SYM not in rm._pending_orders    # 새 pending 이 등록되지 않았다
+
+
+# ── FillEvent 없이 잔고 동기화로 포지션이 먼저 반영되는 경로 ────────────────
+
+def _scheduler_with(rm, emitted):
+    """_check_exit_signal 이 만지는 속성만 가진 최소 bot + KRScheduler(초기화 생략)."""
+    from src.schedulers.kr_scheduler import KRScheduler
+
+    async def _no_expire(symbol):
+        return None
+
+    async def _emit(event):
+        emitted.append(event)
+
+    rm.engine.emit = _emit
+    rm.engine.risk_manager = rm
+    bot = SimpleNamespace(
+        engine=rm.engine, broker=rm.engine.broker,
+        exit_manager=SimpleNamespace(
+            is_exit_exempt=lambda symbol: False, maybe_expire_pending=_no_expire,
+            update_price=lambda symbol, price, market_data=None: ("stop_loss", 4, "손절 -5.2%")),
+        _pause_resume_at=None, _exit_pending_symbols=set(), _exit_pending_timestamps={},
+        _sell_blocked_symbols={}, _exit_reasons={}, _strategy_exit_params={},
+    )
+    sched = object.__new__(KRScheduler)
+    sched.bot = bot
+    return sched
+
+
+@pytest.mark.parametrize("keep_cnt, exit_emitted", [(1, True), (0, False)],
+                         ids=["유지 중이던 BUY → 해제 후 손절 발행", "일반 BUY pending → 종전대로 청산 검사 보류"])
+def test_synced_position_of_a_kept_stale_buy_can_exit_without_any_signal(monkeypatch, keep_cnt, exit_emitted):
+    """체결 조회가 비어 FillEvent 가 없고 잔고 동기화로만 4주가 반영됐다. 다른 SIGNAL 이 없어도
+    (stale 루프가 돌지 않아도) 가격 틱의 청산 검사가 손절을 낼 수 있어야 한다."""
+    now = datetime(2026, 9, 21, 10, 40)
+    held = {SYM: Position(symbol=SYM, quantity=4, avg_price=PRICE, current_price=PRICE, strategy="sepa_trend")}
+    rm = _rm(monkeypatch, Broker(), now, positions=held)
+    _stale(rm, OrderSide.BUY, now, seconds=650, reserved=Decimal("101500"))
+    if keep_cnt:
+        rm._pending_fallback_count[SYM] = keep_cnt
+    emitted = []
+
+    asyncio.run(_scheduler_with(rm, emitted)._check_exit_signal(SYM, Decimal("9480")))
+
+    assert bool(emitted) is exit_emitted
+    assert (SYM not in rm._pending_orders) is exit_emitted
+    if exit_emitted:
+        assert emitted[0].side == OrderSide.SELL and emitted[0].symbol == SYM
+
+
+def test_release_kept_stale_buy_leaves_other_pendings_alone(monkeypatch):
+    """SELL pending(횟수 장부를 같이 쓴다)·포지션 없는 유지 BUY 는 건드리지 않는다."""
+    now = datetime(2026, 9, 21, 10, 40)
+    rm = _rm(monkeypatch, Broker(), now, positions=_held())
+    _stale(rm, OrderSide.SELL, now, seconds=30)
+    rm._pending_fallback_count[SYM] = 1
+    assert asyncio.run(rm.release_kept_stale_buy(SYM)) is False and SYM in rm._pending_orders
+
+    rm2 = _rm(monkeypatch, Broker(), now, positions={})
+    _stale(rm2, OrderSide.BUY, now, seconds=650, reserved=Decimal("101500"))
+    rm2._pending_fallback_count[SYM] = 3
+    assert asyncio.run(rm2.release_kept_stale_buy(SYM)) is False and SYM in rm2._reserved_by_order
