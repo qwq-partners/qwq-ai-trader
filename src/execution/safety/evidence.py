@@ -135,10 +135,15 @@ def parse_order_evidence(ref: OrderRef, symbol: str, side: str, pages: list[Evid
     호출자는 실제 요청 계좌/시장과 query_scope를 연결한다. 날짜·거래소·지점·원주문
     식별자는 응답에서도 일치해야 한다. TTTC8001R에 신형 계약을 상속하지 않는다.
 
-    supported의 11개 AND 조건 중 cncl_yn의 Y/N 강제와 ord_dvsn_cd 제한("00"/"01")은
-    보수적 선택이다 — 공식 저장소는 이 두 필드의 값 집합도, 정상 주문에서 어떤 값이
-    오는지도 말하지 않는다(Q25·라벨뿐인 chk_inquire_daily_ccld.py:22-57). 따라서 그 밖의
-    값은 전량체결이어도 unsupported_finality로 남긴다. 좁히는 방향의 오판만 허용한다.
+    supported는 아래 조건 전부의 AND다. 그중 cncl_yn의 Y/N 강제와 ord_dvsn_cd
+    제한("00"/"01")은 보수적 선택이다 — 공식 저장소는 이 두 필드의 값 집합도, 정상
+    주문에서 어떤 값이 오는지도 말하지 않는다(Q25·라벨뿐인
+    chk_inquire_daily_ccld.py:22-57). 따라서 그 밖의 값은 전량체결이어도
+    unsupported_finality로 남긴다. 좁히는 방향의 오판만 허용한다.
+
+    chain 판정은 조회한 거래소 범위에 의존한다 — 수집기는 KRX만 조회하므로 NXT/SOR에
+    있는 자식행은 보이지 않는다(운영 경로의 조회는 ALL이다). 범위를 좁히는 것이 항상
+    fail-closed는 아니다.
     """
     complete = _complete(pages, max_pages)
     query_scope = dict(query_scope or {})

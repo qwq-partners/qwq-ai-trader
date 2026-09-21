@@ -103,7 +103,14 @@ def test_daily_uses_the_repository_tr_and_sends_the_krx_scope_explicitly():
     assert result.scope.tr_id == "TTTC0081R" and result.scope.exchange_scope == "KRX"
 
 
-def test_collected_daily_scope_no_longer_fails_provenance_but_legacy_tr_still_does():
+def test_this_scope_mapping_passes_provenance_and_the_legacy_tr_is_refused_by_finality():
+    """수집기 scope를 이렇게 매핑해 파서에 넘기면 provenance를 통과한다는 것만 잰다.
+
+    통과는 최종성 인정이 아니다 — 수집기 query_kind는 "daily"라 supported의
+    query_kind == "all" 조건에서 이미 걸린다. 뒷부분은 scope와 인자를 **함께**
+    TTTC8001R로 맞춘 경우다: 범위 불일치가 사라지므로 provenance는 통과하고, 거절은
+    invalid_provenance가 아니라 unsupported_finality로 나타난다.
+    """
     result, _ = collect_daily([response([row()])])
     scope = result.scope
     collected = {"account_scope": scope.account_scope, "market": scope.market,
@@ -114,8 +121,9 @@ def test_collected_daily_scope_no_longer_fails_provenance_but_legacy_tr_still_do
                      tr_id=scope.tr_id, query_kind=scope.query_kind)
     assert evidence.reason != "invalid_provenance" and evidence.cumulative_quantity == 10
     legacy = parse([EvidencePage([row()], "D")], query_scope=dict(collected, tr_id="TTTC8001R"),
-                   query_kind=scope.query_kind)
-    assert legacy.reason == "invalid_provenance" and not legacy.supported_finality
+                   tr_id="TTTC8001R", query_kind=scope.query_kind)
+    assert legacy.reason == "unsupported_finality" and not legacy.supported_finality
+    assert legacy.source_contract.endswith(":TTTC8001R")
 
 
 def test_cancelable_uses_the_repository_tr_without_an_exchange_parameter():
@@ -148,6 +156,34 @@ def test_other_order_divisions_stay_unsupported_even_when_fully_filled(ord_dvsn_
     evidence = parse([EvidencePage([row(ord_dvsn_cd=ord_dvsn_cd)], "D")])
     assert evidence.schema_valid and evidence.cumulative_quantity == 10
     assert not evidence.supported_finality and evidence.reason == "unsupported_finality"
+
+
+def test_cancel_flagged_row_stays_unsupported_even_when_fully_filled():
+    """cncl_yn='Y'인 전량체결 행은 schema_valid이지만 최종성을 인정하지 않는다.
+
+    수량은 모두 정상이고(체결 10/10, 잔량·취소확인·거부 0) 취소 표시만 'Y'다. 공식
+    저장소는 이 필드의 값 집합도 전량체결 행에 무엇이 오는지도 말하지 않으므로(Q25)
+    수량만 보고 종결로 올리지 않는다 — supported의 cncl_yn == 'N' 조건을 하중한다.
+    """
+    evidence = parse([EvidencePage([row(cncl_yn="Y")], "D")])
+    assert evidence.schema_valid and evidence.cumulative_quantity == 10
+    assert evidence.cancelled_quantity == 0 and evidence.rejected_quantity == 0
+    assert not evidence.supported_finality and evidence.reason == "unsupported_finality"
+
+
+@pytest.mark.parametrize("changes", [{"rmn_qty": "1"}, {"cnc_cfrm_qty": "1"}, {"rjct_qty": "1"}])
+def test_quantity_conservation_is_what_makes_the_three_zero_conditions_redundant(changes):
+    """supported의 remaining/cancelled/rejected == 0 은 단독으로 하중할 수 없다.
+
+    파서가 filled+cancelled+rejected+remaining > qty 를 malformed로 거부하고 모든 수량이
+    음수가 아니므로, filled == qty 인 순간 나머지 셋은 반드시 0이다. 따라서 그 세 조건을
+    각각 지우는 변이를 죽이는 표본은 존재할 수 없다(보존식 때문에 만들 수 없는 조합).
+    대신 세 조건을 잉여로 만들어 주는 보존식 자체를 여기서 고정한다 — 이 식이 풀리면
+    전량체결과 잔량/취소/거부가 동시에 살아 있는 행이 통과하게 된다.
+    """
+    evidence = parse([EvidencePage([row(**changes)], "D")])
+    assert not evidence.schema_valid and evidence.reason == "malformed_row"
+    assert not evidence.supported_finality
 
 
 # --- (6) 신·구 원장 TR 유량 --------------------------------------------------
