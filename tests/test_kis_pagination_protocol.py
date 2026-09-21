@@ -105,6 +105,39 @@ _BASELINE_HEADERS = {
     "appsecret": "s",
 }
 
+# 1페이지 요청의 기대 params — 제품 코드(origin/main)에서 그대로 옮긴 리터럴이다.
+# 키가 하나라도 늘거나 줄면 이 등식이 깨진다(운영 계좌의 요청 무변경 주장의 근거).
+_BALANCE_PARAMS = {
+    "CANO": "12345678",
+    "ACNT_PRDT_CD": "01",
+    "AFHR_FLPR_YN": "N",
+    "FUND_STTL_ICLD_YN": "N",
+    "FNCG_AMT_AUTO_RDPT_YN": "N",
+    "INQR_DVSN": "01",
+    "OFL_YN": "N",
+    "PRCS_DVSN": "00",
+    "UNPR_DVSN": "01",
+    "CTX_AREA_FK100": "",
+    "CTX_AREA_NK100": "",
+}
+_DAILY_FILL_PARAMS = {
+    "CANO": "12345678",
+    "ACNT_PRDT_CD": "01",
+    "INQR_STRT_DT": "20260921",
+    "INQR_END_DT": "20260921",
+    "SLL_BUY_DVSN_CD": "00",
+    "ORD_GNO_BRNO": "",
+    "CCLD_DVSN": "01",
+    "INQR_DVSN": "00",
+    "INQR_DVSN_1": "",
+    "INQR_DVSN_3": "00",
+    "EXCG_ID_DVSN_CD": "ALL",
+    "CTX_AREA_FK100": "",
+    "CTX_AREA_NK100": "",
+    "PDNO": "",
+    "ODNO": "",
+}
+
 _POS1 = {"pdno": "5930", "hldg_qty": "3", "pchs_avg_pric": "70000", "prpr": "71000",
          "prdt_name": "삼성전자"}
 _POS2 = {"pdno": "660", "hldg_qty": "1", "pchs_avg_pric": "100000", "prpr": "101000",
@@ -128,37 +161,48 @@ def _connected(monkeypatch):
 # ── 1) 1페이지 호출은 전환 전과 한 바이트도 다르지 않다 ──────────────────────
 
 def test_positions_single_page_sends_no_tr_cont_header(broker, monkeypatch):
-    """마지막 페이지(D) 하나로 끝나는 계좌 — 요청 헤더·호출 횟수가 기준선과 같다."""
+    """마지막 페이지(D) 하나로 끝나는 계좌 — 요청 헤더·params·호출 횟수가 기준선과 같다."""
     _connected(monkeypatch)
     sent = _install_pages(broker, [(_balance_page([_POS1]), "D")])
     pos = asyncio.run(broker.get_positions())
     assert pos["005930"].quantity == 3
     assert len(sent) == 1
-    headers = sent[0][0]
+    headers, params = sent[0]
     assert "tr_cont" not in headers
     assert {k: v for k, v in headers.items() if k != "tr_id"} == _BASELINE_HEADERS
     assert headers["tr_id"] == "TTTC8434R"
+    assert params == _BALANCE_PARAMS
 
 
 def test_positions_for_account_single_page_sends_no_tr_cont_header(broker, monkeypatch):
-    """외부 계좌 루프의 종료 근거는 빈 ctx 키다(헤더 D/E 검사 없음 — 이 PR 범위 밖)."""
+    """외부 계좌 루프도 같은 기준선 — CANO 만 다르고 나머지 헤더·params 는 동일하다."""
     _connected(monkeypatch)
     sent = _install_pages(broker, [
         (dict(_balance_page([_POS1], ctx=""), output2=[{"tot_evlu_amt": "1"}]), "D"),
     ])
-    rows, _summary = asyncio.run(broker.get_positions_for_account("87654321", "01"))
+    rows, summary = asyncio.run(broker.get_positions_for_account("87654321", "01"))
     assert [r["symbol"] for r in rows] == ["005930"]
+    assert summary["total_equity"] == 1.0      # 마지막 페이지라도 요약은 채워진다
     assert len(sent) == 1
-    assert "tr_cont" not in sent[0][0]
+    headers, params = sent[0]
+    assert "tr_cont" not in headers
+    assert {k: v for k, v in headers.items() if k != "tr_id"} == _BASELINE_HEADERS
+    assert headers["tr_id"] == "TTTC8434R"
+    assert params == dict(_BALANCE_PARAMS, CANO="87654321")
 
 
 def test_daily_fills_single_page_sends_no_tr_cont_header(broker, monkeypatch):
     _connected(monkeypatch)
+    monkeypatch.setattr(kis_kr, "_TR_NEW", False)   # 기본 legacy 를 명시로 고정
     sent = _install_pages(broker, [(_fill_page([{"ODNO": "1", "pdno": "5930"}]), "D")])
     items = asyncio.run(broker._query_daily_fills("20260921"))
     assert len(items) == 1
     assert len(sent) == 1
-    assert "tr_cont" not in sent[0][0]
+    headers, params = sent[0]
+    assert "tr_cont" not in headers
+    assert {k: v for k, v in headers.items() if k != "tr_id"} == _BASELINE_HEADERS
+    assert headers["tr_id"] == "TTTC8001R"
+    assert params == _DAILY_FILL_PARAMS
 
 
 # ── 2) 2페이지째부터 tr_cont="N" ─────────────────────────────────────────────
@@ -228,7 +272,38 @@ def test_retry_of_the_same_page_keeps_the_same_tr_cont(broker, monkeypatch):
     assert [h.get("tr_cont") for h in sent] == [None, "N", "N"]
 
 
-# ── 3) 취소 POST 의 재시도는 유지한다 ───────────────────────────────────────
+# ── 3) 세 루프가 같은 식으로 끝난다 ─────────────────────────────────────────
+
+def test_positions_for_account_stops_on_header_d_even_with_filled_ctx(broker, monkeypatch):
+    """KIS 는 마지막 페이지에도 ctx 키를 채워 보낸다 — 헤더가 D 면 더 묻지 않는다.
+
+    get_positions·_query_daily_fills 는 이미 이렇게 끝난다. 이 루프만 빈 ctx 키에
+    기대다가 마지막 페이지 뒤로 원장 호출을 한 번 더 내보내고 있었다.
+    """
+    _connected(monkeypatch)
+    sent = _install_pages(broker, [
+        (dict(_balance_page([_POS1], ctx="K1"), output2=[{"tot_evlu_amt": "1"}]), "D"),
+    ])
+    rows, summary = asyncio.run(broker.get_positions_for_account("87654321", "01"))
+    assert [r["symbol"] for r in rows] == ["005930"]
+    assert summary["total_equity"] == 1.0
+    assert len(sent) == 1
+
+
+def test_positions_for_account_two_pages_still_merge(broker, monkeypatch):
+    """F → D 는 두 번 묻고 행을 합친다 — 종료 판정이 조기 종료가 되면 안 된다."""
+    _connected(monkeypatch)
+    sent = _install_pages(broker, [
+        (dict(_balance_page([_POS1], ctx="K1"), output2=[{"tot_evlu_amt": "1"}]), "F"),
+        (_balance_page([_POS2], ctx="K2"), "D"),
+    ])
+    rows, _summary = asyncio.run(broker.get_positions_for_account("87654321", "01"))
+    assert {r["symbol"] for r in rows} == {"005930", "000660"}
+    assert len(sent) == 2
+    assert [h.get("tr_cont") for h, _p in sent] == [None, "N"]
+
+
+# ── 4) 취소 POST 의 재시도는 유지한다 ───────────────────────────────────────
 
 def test_cancel_post_retries_after_http_500_and_succeeds(broker, monkeypatch):
     """전량 취소는 원주문번호 하나를 겨냥한다 — 두 번 닿아도 새 노출을 만들 수 없다.
@@ -252,7 +327,7 @@ def test_cancel_post_retries_after_http_500_and_succeeds(broker, monkeypatch):
     outcomes = [500, 200]
 
     def _post(url, headers=None, json=None):
-        posts.append(dict(json or {}))
+        posts.append((dict(headers or {}), dict(json or {})))
         status = outcomes.pop(0)
         if status == 500:
             resp = _Resp({"rt_cd": "1", "msg_cd": "EGW00201", "msg1": "유량"}, "")
@@ -268,6 +343,9 @@ def test_cancel_post_retries_after_http_500_and_succeeds(broker, monkeypatch):
 
     assert asyncio.run(broker.cancel_order("o1")) is True
     assert len(posts) == 2                       # 재전송이 실제로 나갔다
-    assert posts[0] == posts[1]
-    assert posts[0]["QTY_ALL_ORD_YN"] == "Y"     # 원주문 전량 — 재전송해도 노출이 늘지 않는다
+    assert posts[0][1] == posts[1][1]
+    # hashkey 는 본문 무결성 검사다 — 본문이 같으면 헤더도 같아야 한다(재발급으로 달라지면
+    # 두 전송이 다른 본문을 주장하는 셈이다).
+    assert posts[0][0]["hashkey"] == posts[1][0]["hashkey"] == "h"
+    assert posts[0][1]["QTY_ALL_ORD_YN"] == "Y"  # 원주문 전량 — 재전송해도 노출이 늘지 않는다
     assert "o1" not in broker._pending_orders
