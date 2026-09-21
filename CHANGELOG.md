@@ -8,8 +8,8 @@
 - **사용자가 준 KIS 공식 Wikidocs 핵심이 확정한 것:** 체결통보 `H0STCNI0` 의 `tr_key` 는 HTS ID · 본문은 AES-256-CBC · `CNTG_YN` 1=접수 계열/2=체결 · `ACPT_YN` 1=접수/2=확인 · **`CNTG_QTY` 는 접수 계열 통보에서는 주문수량** · 통보 칼럼 23개(포털 26개). 취소 확인 뒤 추가 체결·재전송·순서 보장은 여전히 말하지 않는다 → KR 체결통보는 붙이지 않고 REST 를 정본으로 둔다(D9).
 - **Plan 워크플로의 적대적 심사(① BLOCK·② REVISE)가 KIS 답과 무관한 새 설치 차단 사유 3건을 찾았다**(인계 문서 표 16~18): **attach 의 주문 POST 가 킬스위치·감사 원장을 우회한다**(`transport.py` 가 `broker._session.post` 로 직접 송신, `src/execution/safety/` 에 `kill_switch`·`audit_log` 참조 0건 — coordinator 확인) · **30초 `_sync_portfolio` 에 attach 분기가 없다**(coordinator 확인) · **attach 에는 체결·종결 증거의 생산자가 0건**(매수 체결이 포지션이 되지 않아 손절 신호 자체가 생기지 않는다). attach 가 현행보다 약한 지점 10곳도 목록화 — 09-21 밤 main 의 PR #81·#83·#84 로 기준선이 올라갔다.
 - **순서 결정:** 게이트를 여는 변경(UNKNOWN 범위 축소 D4·차가운 시작 D6)보다 전제(P0-1 킬스위치·감사 원장 → P0-2 증거 생산자 → P0-3 sync 분기 → P0-4)가 먼저. 다음 구현 단계는 P0-1.
-- **운영(main) 쪽:** PR #80 은 09-21 밤 다른 세션이 사용자 지시로 병합·배포(전환 안 함). 후속 **PR #88**(연속조회 요청 `tr_cont` 헤더 — 2페이지째부터 `N`, 외부계좌 루프의 종료 판정 통일, 취소 재시도 유지의 근거 정정)은 열려 있고 미병합: `verify` 통과·독립 재현 APPROVE·Codex 9차 APPROVE.
-- main 병합·배포·재시작·주문·설정·Toss grant 무변경(이 세션 기준), `trading_ready=False`·MODIFY 미지원 그대로.
+- **운영(main) 쪽:** PR #80 은 09-21 밤 다른 세션이 사용자 지시로 병합·배포(전환 안 함). 후속 **PR #88**(연속조회 요청 `tr_cont` 헤더 — 2페이지째부터 `N`, 외부계좌 루프의 종료 판정 통일, 취소 재시도 유지의 근거 정정)은 `verify` 통과·독립 재현 APPROVE·Codex 9차 APPROVE 뒤 **사용자 지시("PR머지하고 운영배포까지 가자")로 09-22 07:24 KST 병합(`d337494`)·운영 배포**: 개장 전·pending `[]`, 배포 verify 1982 passed/2 xfailed·격리 0, 자동 롤백 없음, PID 1546587, 기동 로그 `KIS TR 세트: legacy`, 170초 시점 `ops_check` KIS 오류·ERROR/Traceback 0. 현재 운영 계좌(1페이지)는 요청이 바뀌지 않는다.
+- 주문·설정·`.env`·킬스위치·Toss grant 무변경, `trading_ready=False`·MODIFY 미지원 그대로.
 
 ## 2026-09-21 — fix(safety): KIS 공식 저장소 기준 정합 — 증거 파서·수집기를 신 TR 모양으로 (**호출자 0건·운영 미설치**)
 
