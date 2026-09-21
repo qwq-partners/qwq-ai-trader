@@ -853,6 +853,11 @@ class KRScheduler:
         # 매 틱 취소 API를 때리면 KIS rate limit을 스스로 소진한다 (2026-08-05 재리뷰 P1)
         if not hasattr(self, '_stale_cancel_last_try'):
             self._stale_cancel_last_try: Dict[str, datetime] = {}
+        # 취소 0건 유지 표식 {종목: (그 pending 의 등록 시각, 연속 '판단 불가' 횟수)} · 생존 경보 발송 종목 (2026-09-21)
+        if not hasattr(self, '_stale_cancel_miss'):
+            self._stale_cancel_miss: Dict[str, Tuple[datetime, int]] = {}
+        if not hasattr(self, '_stale_cancel_alerted'):
+            self._stale_cancel_alerted: Set[str] = set()
 
         for s in stale:
             # KIS 미체결 주문 먼저 취소
@@ -860,6 +865,8 @@ class KRScheduler:
             # → 해제하면 다음 tick에 동일 물량 SELL 재발행(이중 매도) 위험이므로
             #   유지 후 다음 사이클 재시도 (engine.py 폴백 경로와 동일 정책).
             #   단 15분 초과 시 영구 교착 방지 위해 강제 해제.
+            # 2026-09-21: 브로커 cancel 은 실패를 예외로 올리지 않고 0 을 돌려준다 — 0건에 섞인
+            #   "취소 실패(방금 체결/거래소 생존)"는 _keep_exit_pending_after_failed_cancel 이 가린다.
             if bot.broker and hasattr(bot.broker, 'cancel_all_for_symbol'):
                 _last_try = self._stale_cancel_last_try.get(s)
                 if _last_try is not None and (now_time - _last_try).total_seconds() < 60:
@@ -870,6 +877,8 @@ class KRScheduler:
                     self._stale_cancel_last_try.pop(s, None)
                     if cancelled:
                         logger.info(f"[청산 pending] {s} KIS 주문 {cancelled}건 취소 완료")
+                    elif await self._keep_exit_pending_after_failed_cancel(s, now_time):
+                        continue
                 except Exception as e:
                     _pending_age_min = (
                         now_time - bot._exit_pending_timestamps.get(s, now_time)
@@ -887,6 +896,8 @@ class KRScheduler:
                     self._stale_cancel_last_try.pop(s, None)
             bot._exit_pending_symbols.discard(s)
             bot._exit_pending_timestamps.pop(s, None)
+            self._stale_cancel_miss.pop(s, None)
+            self._stale_cancel_alerted.discard(s)
             # RiskManager pending도 동기화 해제
             if bot.engine.risk_manager:
                 await bot.engine.risk_manager.clear_pending(s)
@@ -915,15 +926,64 @@ class KRScheduler:
                         self._stale_cancel_last_try.pop(s, None)
                         if cancelled:
                             logger.info(f"[청산 pending] {s} 고아 KIS 주문 {cancelled}건 취소 완료")
+                        elif await self._keep_exit_pending_after_failed_cancel(s, now_time):
+                            continue
                     except Exception as e:
                         # API 예외 = 원 주문 생존 가능 → 유지 후 다음 사이클 재시도
                         logger.warning(f"[청산 pending] {s} 고아 주문 취소 실패 — 유지: {e}")
                         continue
                 bot._exit_pending_symbols.discard(s)
                 bot._exit_pending_timestamps.pop(s, None)
+                self._stale_cancel_miss.pop(s, None)
+                self._stale_cancel_alerted.discard(s)
                 if bot.exit_manager:
                     bot.exit_manager.rollback_stage(s)
                 logger.warning(f"[청산 pending] {s} 동기화 해제 (RiskManager에 없음 → 고아 pending 정리)")
+
+    async def _keep_exit_pending_after_failed_cancel(self, s: str, now_time: datetime) -> bool:
+        """취소 0건인 청산 pending 을 아직 풀면 안 되는가 — True 면 호출측이 해제·stage 롤백을 건너뛴다.
+
+        브로커가 그 종목의 활성 주문을 추적하지 않으면 종전대로 해제한다(엔진이 SELL 신호를 거부해
+        주문이 없던 고아 등 — 여기서 기다리면 그 종목의 청산 판정이 더 막힌다). 추적 중이면 취소 실패다:
+        첫 회는 조회 없이 60초 스로틀만큼 기다린다 — 방금 체결이면 체결 확인이 이 장부를 지우고,
+        먼저 롤백하면 ExitManager.on_fill 의 stage 승격이 사라져 같은 분할 익절이 다시 나간다.
+        그 뒤에는 거래소 실 미체결로 가린다 — 소멸이면 해제, 생존이면 상한 없이 유지(경보 1회),
+        판단 불가는 **연속** 15회(60초 스로틀 → 종전 상한 15분)까지만 유지한다 — 생존이 확인되면 횟수를
+        되돌려, 오래 살아 있던 주문이 조회 실패 한 번으로 풀리지 않게 한다. 판정은 엔진과 같은 함수를 쓴다.
+        """
+        bot = self.bot
+        rm = bot.engine.risk_manager
+        pending_ts = bot._exit_pending_timestamps.get(s)
+        if rm is None or pending_ts is None:
+            return False
+        miss = self._stale_cancel_miss.get(s)
+        waited = miss is not None and miss[0] == pending_ts  # 표식은 등록 시각에 묶는다(이전 pending 의 표식 무시)
+        unknown_streak = miss[1] if waited else 0
+        try:
+            live = await rm.stale_order_still_live(s, OrderSide.SELL, confirm=waited)
+        except Exception as e:
+            logger.warning(f"[청산 pending] {s} 주문 생존 확인 오류: {e}")
+            live = None
+        if live is False:
+            return False
+        age_min = (now_time - pending_ts).total_seconds() / 60
+        unknown_streak = unknown_streak + 1 if live is None else 0
+        if unknown_streak >= 15:
+            logger.error(f"[청산 pending] {s} 주문 생존 확인 불가 연속 {unknown_streak}회 — 강제 해제 (수동 확인 필요)")
+            return False
+        self._stale_cancel_miss[s] = (pending_ts, unknown_streak)
+        self._stale_cancel_last_try[s] = now_time  # 60초 스로틀 — 매 틱 취소·조회 API 재호출 억제
+        if live is True and waited and s not in self._stale_cancel_alerted:
+            self._stale_cancel_alerted.add(s)
+            await self._send_error_alert(
+                "청산 주문 취소 불가",
+                f"{s} 매도 주문이 거래소에 살아 있으나 취소되지 않습니다 — 이 종목의 청산 판정이 보류됩니다",
+                "MTS 에서 해당 미체결 주문을 확인·취소하면 60초 안에 재판단합니다.",
+                critical=True,
+            )
+        else:
+            logger.warning(f"[청산 pending] {s} 취소 0건 — 원 주문 생존 가능, pending 유지 ({age_min:.0f}분 경과)")
+        return True
 
     async def _check_exit_signal(self, symbol: str, current_price: Decimal,
                                 market_data: Optional[Dict] = None):

@@ -6,6 +6,14 @@
 
 ## 활성 체크포인트
 
+### 배포 후 (매수 재개 시점부터 유효) — 매도 취소 0건 처리 (2026-09-21 수정, 미배포)
+
+- **적용 범위**: `RiskManager.on_signal` 90초 SELL 폴백 + `KRScheduler._cleanup_stale_pending`. 현금 고갈 중에는 SELL pending 이 생기지 않아 관측 대상이 없다.
+- [ ] `journalctl -u qwq-ai-trader | grep -E "매도 취소 0건|취소 0건 — 원 주문 생존 가능"` — 발생 빈도. 대부분 다음 5초 체결 확인에서 FillEvent 로 끝나야 한다(뒤따르는 "시장가 폴백 주문 제출"이 없어야 정상).
+- [ ] 같은 종목에서 `시장가 폴백 주문 제출` 이 `매도 취소 0건` **직후 같은 SIGNAL 에** 나오면 회귀다(이중 매도 경로).
+- [ ] 텔레그램 "청산 주문 취소 불가" 또는 헬스 모니터 `교착 pending` 경보 수신 시: MTS 에서 해당 미체결 매도를 확인·취소 → 엔진 20초·스케줄러 60초 안에 소멸로 판정돼 재판단되는지 확인. 봇 재시작은 필요 없다(재시작하면 인메모리 장부가 비어 판정이 '미추적'으로 바뀐다).
+- [ ] CRITICAL `stale 매도 확인 불가 N회 — 재주문 없이 pending 해제` 는 거래소 조회(TTTC8036R) 연속 실패를 뜻한다 — EGW00215·다음 페이지(`tr_cont` F/M) 로그와 함께 본다.
+
 ### 2026-09-18·21·22 — 독립 Toss 제한 관측 (기존 거래 봇 유지)
 
 - ✅ 09/17 21:47:37 ON/PID3335469·초기 토큰 generation1/ready·receipt1/sender1. 기존 봇 PID3274983/checkout8ff2f55와 보호7경로 동일,21:49 broker 연결 정상/pending0/stale0. [설치·검증 원장](../reviews/toss-observer-service-2026-09-17.md).

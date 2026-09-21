@@ -323,6 +323,7 @@ result = value if value is not None else default
 - **파일 수정 시 연관 체크**: types.py ↔ engine.py, exit_manager.py ↔ schedulers, config.py ↔ YAML
 - **수수료 계산**: `FeeCalculator` 단일 사용 — data_collector/storage 내 하드코딩 금지
 - **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
+- **KIS 취소 0건은 '소멸'이 아니다**: `cancel_order`/`cancel_all_for_symbol` 은 실패를 예외로 올리지 않고 False/0 을 돌려준다 — 0건에는 '방금 체결'·'거래소 생존'이 섞여 있다. 0건을 근거로 재발행·pending 해제·`rollback_stage` 를 하기 전에 `RiskManager.stale_order_still_live`(브로커 장부 → 한 주기 대기 → 거래소 실 미체결)로 가린다. 브로커 장부는 완전 체결·취소 성공에서만 빠진다(수동 취소 주문은 남는다). 상세 `docs/risk/risk-and-exit.md` (2026-09-21)
 - **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일
 - **KIS 직접 호출은 `await kis_rate_limit.acquire(tr_id)` 선행**: 브로커·시세·스크리너가 같은 appkey라 초당 한도는 합산(EGW00201). 원장 TR(잔고/매수가능/체결/미체결)은 계좌당 초당 1건(EGW00215) — 새 원장 TR은 `utils/kis_rate_limit.LEDGER_TR_IDS`에 추가. 구/신 TR 양쪽을 다 넣는다(전환·롤백 어느 쪽에서도 직렬화가 끊기면 안 됨). 게이트웨이 상한 수치는 공식 저장소에 없고 전부 운영 실측값이다
 - **KIS TR ID는 리터럴로 쓰지 않는다**: `kis_kr._tr_id("rvsecncl"|"daily"|"cancelable")`, 주문은 `_get_tr_id_for_session(side, use_new)` — `KIS_TR_SET`(기본 legacy, 정확히 `new` 일 때만 전환) 한 곳에서만 구/신이 갈린다. `new` 전용 본문 키(`EXCG_ID_DVSN_CD`·`CNDT_PRIC`)는 그 가드 안에만 두고, hashkey 발급보다 **먼저** 붙인다(hashkey는 본문 무결성 검사). **주문 접수의 신 TR·신 본문은 정규장(`regular`) 세션 한정** — NXT 세션의 `EXCG_ID_DVSN_CD` 값이 공식 저장소에 없어 그 세션은 `new` 에서도 legacy 로 나간다
