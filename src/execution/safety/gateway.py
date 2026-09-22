@@ -84,8 +84,9 @@ class SignalGateway:
         쓴다(`src/utils/exit_types.py`). reason 의 정본은 engine 이 이미 실어 둔
         `Order.reason` 이고(engine.py 의 `event.reason` 대입) 없으면 신호에서 읽는다.
 
-        BUY 의 `name`(P0-3 G7): 신호가 실어 온 후보명만 쓴다 — 없으면 **키 자체를 싣지 않는다**
-        (빈 문자열은 `invalid_fill_metadata_value` 이고, 종목코드를 이름으로 위조하지 않는다).
+        BUY 의 `name`(P0-3 G7): 신호가 실어 온 후보명만 쓴다 — 없거나 공백뿐이면 **키 자체를
+        싣지 않고** 있으면 앞뒤 공백을 떼어 싣는다(빈 문자열도 공백 낀 문자열도 prepare 의
+        `invalid_fill_metadata_value` 이고, 종목코드를 이름으로 위조하지도 않는다).
         event 는 duck-typing 으로 읽는다: 신호 객체의 종류가 호출자마다 다르다.
         """
         if order.side is not OrderSide.BUY:
@@ -101,8 +102,11 @@ class SignalGateway:
         name = source.get('candidate_name') if type(source) is dict else None
         if name is None and type(source) is dict:
             name = source.get('name')
-        if type(name) is str and name != '':
-            metadata['name'] = name
+        if type(name) is str and name.strip() != '':
+            # prepare 의 검사기(`commands._fill_metadata`)와 **같은 정규화**다. 그쪽은
+            # `item == item.strip()` 을 요구하므로 앞뒤 공백을 그대로 실으면 그 BUY 가
+            # `invalid_fill_metadata_value` 로 통째로 죽는다(공백뿐인 이름은 이름이 아니다).
+            metadata['name'] = name.strip()
         return metadata
 
     def reserved_cash(self) -> Decimal:

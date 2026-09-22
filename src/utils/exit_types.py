@@ -25,8 +25,11 @@ def classify_exit_type(reason) -> str:
       8. 테마 EOD / fill_detected / 기타 → manual
 
     빈 문자열·None 은 `'manual'` 이다(호출자가 빈 태그를 싣지 않게 한다).
+
+    문자열이 아닌 입력도 `'manual'` 이다 — 스케줄러는 `reason or ''` 로 받아 0·False 를
+    빈 문자열처럼 흡수하는데, 이 프로젝트에서 `or` 는 금지 패턴이라 형을 직접 본다.
     """
-    r = reason if reason is not None else ""
+    r = reason if type(reason) is str else ""
     # 2026-08-05 P2: "긴급전량청산" 등이 manual로 오분류되던 데드 조건 복원.
     # risk/manager.record_exit가 ("stop_loss","emergency_stop")를 당일 손절
     # 등록 대상으로 취급하므로 emergency_stop 반환 시 재진입 강화 정책이 걸린다.

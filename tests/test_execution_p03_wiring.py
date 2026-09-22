@@ -24,11 +24,13 @@ def synthetic_home(tmp_path, monkeypatch):
 from src.core.types import Order, OrderSide
 from src.execution.safety.application import ApplicationBlocked, InboxReceipt
 from src.execution.safety.commands import CommandValidationError
+from src.execution.safety.guards import EntryOrigin
 from src.execution.safety.gateway import SignalGateway
 from src.execution.safety.runtime import RECONCILER_STALL_CYCLES
 from src.utils.exit_types import classify_exit_type
 from test_execution_command_owner import fixture, held
-from test_execution_install_factory import assert_untouched, live_snapshot, target
+from test_execution_install_factory import (NOW_KST, SCOPE, assert_untouched, live_snapshot,
+                                            seed_checkpoint, target)
 from test_execution_runtime import opened
 
 # ---------------------------------------------------------------- 분류 함수 동일성
@@ -46,9 +48,10 @@ def test_the_pure_function_classifies_exactly_like_the_scheduler():
     assert len(REASONS) == 20
     for reason in REASONS:
         assert classify_exit_type(reason) == KRScheduler._classify_exit_type(reason)
-    # 스케줄러는 None 을 `reason or ''` 로 받는다 — 순수 함수도 같은 결론이어야 한다.
-    assert classify_exit_type(None) == 'manual'
-    assert classify_exit_type('') == 'manual'
+    # 스케줄러는 reason 을 `reason or ''` 로 받는다 — 문자열이 아닌 입력에서도 같은
+    # 결론이어야 한다(falsy 판정 금지 규칙 때문에 순수 함수는 `or` 를 쓸 수 없다).
+    for odd in (None, '', 0, False):
+        assert classify_exit_type(odd) == KRScheduler._classify_exit_type(odd) == 'manual'
     assert classify_exit_type('손절 -5.2%') == 'stop_loss'
 
 
@@ -76,6 +79,12 @@ def test_sell_binding_carries_the_exit_tag_and_buy_carries_the_candidate_name():
     assert SignalGateway._fill_metadata(event, buy) == {'entry_signal_score': 80.0}
     event.metadata = {'name': '에스케이하이닉스'}
     assert SignalGateway._fill_metadata(event, buy)['name'] == '에스케이하이닉스'
+    # 공백은 prepare 의 검사기(`commands._fill_metadata`)와 같은 정규화로 없앤다 — 앞뒤
+    # 공백을 그대로 실으면 그 BUY 는 `invalid_fill_metadata_value` 로 통째로 죽는다.
+    event.metadata = {'candidate_name': ' 삼성전자 '}
+    assert SignalGateway._fill_metadata(event, buy)['name'] == '삼성전자'
+    event.metadata = {'candidate_name': '   '}
+    assert SignalGateway._fill_metadata(event, buy) == {'entry_signal_score': 80.0}
 
 
 def test_the_sell_tag_survives_prepare_into_the_stored_binding(tmp_path, monkeypatch):
@@ -136,7 +145,11 @@ def test_a_dead_producer_cycle_blocks_the_buy_and_never_the_protective_sell(tmp_
 
 def test_a_started_producer_passes_while_it_completes_cycles_and_stops_when_it_goes_stale(
         tmp_path, monkeypatch):
-    """기동한 주기: 오늘 완료 주기가 신선하면 통과, 낡았는데 기다리는 대상이 있으면 거부."""
+    """기동한 주기: 오늘 완료 조회가 신선하면 통과, 낡았는데 기다리는 대상이 있으면 거부.
+
+    여기서 죽는 것은 **조회** 신선도 절 하나다 — 주기 완주 시각은 내내 신선하게 둔다
+    (주기는 돌지만 조회만 죽은 상태를 고립시킨다).
+    """
     async def scenario():
         f = await fixture(tmp_path, monkeypatch)
         runtime, clock = f['runtime'], f['clock']
@@ -147,17 +160,19 @@ def test_a_started_producer_passes_while_it_completes_cycles_and_stops_when_it_g
             task = asyncio.create_task(idle())
             runtime._reconciler_task = task
             runtime._reconciler_started_at = clock[0]
+            runtime._reconciler_cycle_completed_at = clock[0]
             runtime._reconciler_complete_at = clock[0]
             assert runtime.reconciler_live(clock[0]) is True
             # 접수까지 간 미해결 주문 = 주기가 기다리는 대상이 있다.
             await opened(runtime, 'p03-open')
             assert runtime.reconciler_live(clock[0]) is True
-            # 완료 주기가 낡으면 같은 상태에서 거부다. **진전은 방금 있었다** — B1 재접수는
+            # 완료 조회가 낡으면 같은 상태에서 거부다. **진전은 방금 있었다** — B1 재접수는
             # 조회 없이도 진전을 만들므로 `blocked_reason` 은 None 이고, 조회가 통째로 죽은
-            # 이 상태를 잡는 것은 완료 시각 하나뿐이다.
+            # 이 상태를 잡는 것은 조회 완료 시각 하나뿐이다.
             stale = RECONCILER_STALL_CYCLES * runtime._reconciler_interval + 1
             clock[0] = clock[0] + timedelta(seconds=stale)
             runtime._reconciler_progress_at = clock[0]
+            runtime._reconciler_cycle_completed_at = clock[0]
             assert runtime.reconciler_blocked_reason() is None
             assert runtime.reconciler_live(clock[0]) is False
             second = f['request']('B', symbol='000660')
@@ -169,6 +184,97 @@ def test_a_started_producer_passes_while_it_completes_cycles_and_stops_when_it_g
             runtime._reconciler_progress_at = clock[0]
             assert runtime.reconciler_live(clock[0]) is True
             task.cancel()
+        finally:
+            await f['store'].close()
+    asyncio.run(scenario())
+
+
+async def _until(predicate, limit=5.0):
+    """조건이 설 때까지 실제 루프를 돌린다(주입 시계와 무관한 실시간 대기)."""
+    async def wait():
+        while not predicate():
+            await asyncio.sleep(0.005)
+    await asyncio.wait_for(wait(), limit)
+
+
+def test_a_quiet_account_is_live_only_while_its_cycles_keep_completing(tmp_path, monkeypatch):
+    """대상이 0 이어도 생존은 **주기 완주 시각**으로 잰다(P0-3 S-A 처분 2).
+
+    예전 술어에는 "기다리는 대상이 하나도 없으면 통과" 예외가 있었다 — 미해결 주문이
+    없는 조용한 아침에 주기가 통째로 멈춰도 첫 자동 매수가 증거 생산자 없이 나갔다.
+    여기서 멈추는 것은 가짜 collect 가 아니라 **주기 자신**이다(대상이 0 이라 collect 는
+    아예 불리지 않는다). 주기가 다시 한 바퀴를 끝내면 같은 상태에서 다시 통과한다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        runtime, clock = f['runtime'], f['clock']
+        gate, cycles = asyncio.Event(), []
+        original = runtime._reconcile_cycle
+
+        async def cycle(collect, deadline):
+            cycles.append(1)
+            if len(cycles) > 1:
+                await gate.wait()   # 두 번째 주기부터 끝나지 않는다.
+            return await original(collect, deadline)
+
+        monkeypatch.setattr(runtime, '_reconcile_cycle', cycle)
+
+        async def collect(**kwargs):
+            raise AssertionError('대상이 0 인데 원장 TR 이 나갔다')
+
+        try:
+            runtime.start_reconciler(collect, interval=0.01, cycle_timeout=30.0)
+            await _until(lambda: runtime._reconciler_cycle_completed_at is not None)
+            assert runtime.reconciler_live(clock[0]) is True
+            await _until(lambda: len(cycles) > 1)
+            clock[0] = clock[0] + timedelta(
+                seconds=RECONCILER_STALL_CYCLES * runtime._reconciler_interval + 1)
+            # 주기 task 는 살아 있다 — 잡히는 것은 완주 시각뿐이다.
+            assert runtime._reconciler_task.done() is False
+            assert runtime.reconciler_blocked_reason() is None
+            assert runtime.reconciler_live(clock[0]) is False
+            request = f['request']()
+            await f['quote'](request)
+            with pytest.raises(CommandValidationError, match='reconciler_unavailable'):
+                await f['commands'].prepare(request, f['entry'](request), sector='반도체')
+            # 같은 상태에서 보호 매도는 이 게이트에 걸리지 않는다.
+            sell = f['request']('S', side=OrderSide.SELL, quantity=5)
+            with pytest.raises(CommandValidationError) as blocked:
+                await f['commands'].prepare(sell, f['entry'](sell))
+            assert 'reconciler_unavailable' not in str(blocked.value)
+            gate.set()
+            await _until(lambda: runtime._reconciler_cycle_completed_at == clock[0])
+            assert runtime.reconciler_live(clock[0]) is True
+        finally:
+            gate.set()
+            await runtime.shutdown()
+            await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_manual_buy_is_stopped_by_the_same_gate(tmp_path, monkeypatch):
+    """결정(P0-3 S-A 처분 6): 수동 BUY 도 `reconciler_unavailable` 로 막는다.
+
+    생산자가 죽어 있으면 **수동** 매수의 체결도 관측되지 않아 owner 의 수량·예약이
+    그만큼 틀어진다. 예외는 청산(SELL·CANCEL)뿐이다 — 증거가 없을수록 청산은 나가야 한다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        runtime = f['runtime']
+        try:
+            async def dead():
+                return None
+
+            task = asyncio.create_task(dead())
+            await task
+            runtime._reconciler_task = task
+            runtime._reconciler_started_at = runtime._now()
+            request = f['request']()
+            context = f['entry'](request)
+            assert context.origin is EntryOrigin.USER   # 코드의 이름은 USER, 전략은 'manual'
+            await f['quote'](request)
+            with pytest.raises(CommandValidationError, match='reconciler_unavailable'):
+                await f['commands'].prepare(request, context, sector='반도체')
         finally:
             await f['store'].close()
     asyncio.run(scenario())
@@ -265,13 +371,16 @@ def test_the_apply_window_is_measured_inside_the_owner_task(tmp_path, monkeypatc
             assert second['apply_seconds_last'] < first['apply_seconds_last']
             assert second['apply_seconds_max'] == first['apply_seconds_max']
 
-            # 실패한 적용도 창에서 사라지지 않는다.
+            # 실패한 적용도 창에서 사라지지 않는다 — 앞선 성공의 값이 남은 것으로 읽히지
+            # 않게 마지막 값을 지운 뒤, 실패가 **자기 값**을 다시 쓰는지를 본다.
             async def raises(observation):
+                await asyncio.sleep(0.02)
                 raise RuntimeError('p03')
 
             engine.apply_execution_observation = raises
+            runtime._reconciler_apply_seconds_last = None
             assert await runtime._reapply(observation) is False
-            assert runtime.health()['reconciler']['apply_seconds_last'] is not None
+            assert runtime.health()['reconciler']['apply_seconds_last'] >= 0.02
         finally:
             engine.running = False
             await f['store'].close()
@@ -281,23 +390,68 @@ def test_the_apply_window_is_measured_inside_the_owner_task(tmp_path, monkeypatc
 # ---------------------------------------------------------------- ①②③ 설치기 배선
 
 
+async def _acknowledged(runtime):
+    """설치 뒤에도 남는 미해결 SUBMIT(ACK 까지 간 주문 = 주기의 조회 대상) 하나."""
+    from src.execution.safety.lifecycle import CommandResult, CommandStatus, OrderRef
+    ref = OrderRef(SCOPE, 'KR', NOW_KST.date().isoformat(), 'KRX', '9100003')
+    await runtime.lifecycle.prepare('i-p03', 'a-p03', 10, '005930', 'buy',
+                                    strategy='sepa_trend', reserved_cash='100000')
+    await runtime.lifecycle.claim('a-p03', 'sender')
+    await runtime.lifecycle.record_result('a-p03', 'sender', CommandResult(
+        CommandStatus.ACKNOWLEDGED, 'a-p03', ref))
+
+
 def test_the_installer_starts_the_producer_and_shutdown_drains_it(tmp_path, monkeypatch):
-    """설치 성공 뒤 주기 task 1건, `shutdown()` 뒤 0건(미배수 task 경고 0)."""
+    """설치 성공 뒤 주기 task 1건, `shutdown()` 뒤 0건(미배수 task 경고 0).
+
+    설치기가 넘긴 collect 의 **인자**까지 고정한다: 미해결 ACK 를 하나 심은 checkpoint 로
+    설치해 조회가 실제로 나가게 하고, 그 한 번이 주기 계약(당일·ALL·3페이지) 그대로인지
+    본다. 대상이 0 이면 조회 자체가 없으므로 `collected` 만 보는 단언은 항진이다.
+    """
     async def scenario():
-        f = await target(tmp_path, monkeypatch)
+        path = await seed_checkpoint(tmp_path, mutate=_acknowledged)
+        f = await target(tmp_path, monkeypatch, seed=False, path=path)
+        runtime = f['runtime']
         try:
-            assert f['runtime']._reconciler_tasks == set()
+            assert runtime._reconciler_tasks == set()
             gateway = await f['install']()
-            assert f['runtime'].gateway is gateway
-            assert len(f['runtime']._reconciler_tasks) == 1
-            assert f['runtime'].health()['reconciler']['reconciler_running'] is True
-            # 수집기는 설치 순간에 돌기 시작한다(조회 인자는 주기 계약 그대로다).
-            await asyncio.sleep(0)
-            await f['runtime'].shutdown()
-            assert f['runtime']._reconciler_tasks == set()
-            assert f['collected'] == [] or f['collected'][0]['exchange_scope'] == 'ALL'
+            assert runtime.gateway is gateway
+            assert len(runtime._reconciler_tasks) == 1
+            assert runtime.health()['reconciler']['reconciler_running'] is True
+            day = NOW_KST.date().isoformat()
+            await _until(lambda: f['collected'] != [])
+            assert f['collected'][0] == {'start_date': day, 'end_date': day,
+                                         'exchange_scope': 'ALL', 'max_pages': 3}
+            await runtime.shutdown()
+            assert runtime._reconciler_tasks == set()
         finally:
             await f['store'].close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('wired', ['running', 'closing'])
+def test_an_already_wired_producer_refuses_the_install_before_anything_is_touched(
+        tmp_path, monkeypatch, wired):
+    """설치기는 자기가 세울 생산자가 이미 있는 runtime 에 손을 대지 않는다(처분 5).
+
+    `start_reconciler` 도 같은 두 상태를 거부하지만 그것은 attach **뒤**다 — live 를 바꾼
+    뒤에 거부하면 호출자는 legacy 로 돌아갈 수 없다.
+    """
+    async def scenario():
+        f = await target(tmp_path, monkeypatch)
+        runtime = f['runtime']
+        try:
+            if wired == 'running':
+                runtime.start_reconciler(f['collect'], interval=100.0, cycle_timeout=5.0)
+            else:
+                runtime._closing = True
+            before = live_snapshot(f)
+            with pytest.raises(ApplicationBlocked, match='execution_producer_already_wired'):
+                await f['install']()
+            assert_untouched(f, before)
+        finally:
+            runtime._closing = False
+            await f['teardown']()
     asyncio.run(scenario())
 
 
