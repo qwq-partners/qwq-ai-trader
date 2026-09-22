@@ -152,9 +152,13 @@ def test_a_started_producer_passes_while_it_completes_cycles_and_stops_when_it_g
             # 접수까지 간 미해결 주문 = 주기가 기다리는 대상이 있다.
             await opened(runtime, 'p03-open')
             assert runtime.reconciler_live(clock[0]) is True
-            # 완료 주기가 낡으면 같은 상태에서 거부다.
+            # 완료 주기가 낡으면 같은 상태에서 거부다. **진전은 방금 있었다** — B1 재접수는
+            # 조회 없이도 진전을 만들므로 `blocked_reason` 은 None 이고, 조회가 통째로 죽은
+            # 이 상태를 잡는 것은 완료 시각 하나뿐이다.
             stale = RECONCILER_STALL_CYCLES * runtime._reconciler_interval + 1
             clock[0] = clock[0] + timedelta(seconds=stale)
+            runtime._reconciler_progress_at = clock[0]
+            assert runtime.reconciler_blocked_reason() is None
             assert runtime.reconciler_live(clock[0]) is False
             second = f['request']('B', symbol='000660')
             await f['quote'](second)
