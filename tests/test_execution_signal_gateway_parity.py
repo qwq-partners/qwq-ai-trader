@@ -422,6 +422,8 @@ def test_without_a_runtime_a_sector_lookup_failure_still_falls_back_to_none(tmp_
                                                                             freeze):
     """H3 의 attach 가드를 '항상 참'으로 바꾸면 legacy 매수가 섹터 장애마다 죽는다."""
     async def scenario():
+        # CV 시간 가드는 engine_clock 이 닿지 않는 축이다 — 같은 순간으로 함께 민다.
+        freeze(ENGINE_NOW.hour, ENGINE_NOW.minute, day=ENGINE_NOW.day)
         legacy = UnifiedEngine(TradingConfig(initial_capital=D('2000000')))
         rm = risk_manager(monkeypatch, legacy, validator=cv())
         engine_clock(monkeypatch)

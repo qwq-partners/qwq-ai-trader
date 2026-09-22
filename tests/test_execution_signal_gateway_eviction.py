@@ -379,9 +379,11 @@ def test_without_the_synthetic_permit_the_eviction_sell_is_not_sent(tmp_path, mo
 
 # ── legacy 불변 (§5 의 행동 대조) ───────────────────────────────────────
 
-def legacy(monkeypatch):
+def legacy(monkeypatch, freeze):
     """runtime 없는 실제 엔진 + 실제 inner RiskManager. 보유는 legacy 장부에 직접 심는다."""
     from src.core.types import Position
+    # CV 시간 가드는 engine_clock 이 닿지 않는 축이다 — 같은 순간으로 함께 민다.
+    freeze(ENGINE_NOW.hour, ENGINE_NOW.minute, day=ENGINE_NOW.day)
     engine = UnifiedEngine(TradingConfig(initial_capital=D('2000000')))
     rm = evictable(risk_manager(monkeypatch, engine, validator=cv()))
     rm._pending_orders = Recorder()
@@ -398,7 +400,7 @@ def legacy(monkeypatch):
 def test_the_legacy_path_still_reads_its_own_pending_ledger(tmp_path, monkeypatch, freeze):
     """H9 의 legacy 분기는 `self._pending_orders` **그 객체 그대로**를 본다."""
     async def scenario():
-        f = legacy(monkeypatch)
+        f = legacy(monkeypatch, freeze)
         await drive(f['engine'], buy(SYM, score=99.0))
         # on_signal 의 중복 검사(SYM) 뒤에 축출 루프가 같은 객체로 후보를 걸렀다.
         assert f['rm']._pending_orders.asked == [SYM, WEAK, WEAKER]
@@ -409,7 +411,7 @@ def test_the_legacy_path_still_reads_its_own_pending_ledger(tmp_path, monkeypatc
 def test_the_global_cap_does_not_apply_to_the_legacy_path(tmp_path, monkeypatch, freeze):
     """H10 은 attach 전용이다 — 쿨다운 안 기록이 있어도 legacy 는 그대로 축출한다."""
     async def scenario():
-        f = legacy(monkeypatch)
+        f = legacy(monkeypatch, freeze)
         f['rm']._REPLACEMENT_LAST_EVICT_TS[OTHER] = ENGINE_NOW - timedelta(seconds=10)
         await drive(f['engine'], buy(SYM, score=99.0))
         assert [event.symbol for event in sells(f['engine'])] == [WEAKER]

@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-22 — fix(test): attach 게이트웨이 legacy 시험 4건의 CV 시계 동결 (**제품 0줄 — 시험 3파일만**)
+
+> `src/core/cross_validator.py` 는 한 줄도 바뀌지 않았다. 유령 RED 의 원인은 제품이 아니라 **시험이 시계의 한 축만 동결한 것**이다. P0-3 방법론 기록 ④(원장)의 "UTC 전체 suite 는 18:00~19:30 KST 를 피한다" 회피가 이 4파일에는 더 필요 없다.
+
+- **원인:** `engine_clock`(`tests/test_execution_signal_gateway_wiring.py`)은 `src.core.engine` 모듈의 `datetime` 만 민다. CV 시간 가드는 `validate` 안에서 `from datetime import datetime as _dt` 로 **다시 import** 하므로 그 patch 밖이다. 두 축을 묶어 주는 `freeze`(`test_cross_validator_characterization`)는 **팩토리 fixture** — 인자로 받기만 하고 부르지 않으면 아무것도 동결되지 않는다. 붉던 4건은 전부 `freeze` 를 시그니처에 달고 **한 번도 부르지 않았다**. 그래서 판정이 프로세스 지역시각을 탔다(09:00~09:29 매수 전량 차단 · 09:30~10:30 -8 · 12:30~13:00 +5).
+- **수정(+18/-4줄):** 노출된 생성 지점 3곳에서 **기존 `freeze` 헬퍼**를 `ENGINE_NOW` 와 같은 순간으로 함께 부른다 — `eviction.legacy()`(시험 2건이 공유하는 지점) · `parity::test_without_a_runtime_a_sector_lookup_failure_still_falls_back_to_none` · `wiring::test_eviction_still_runs_on_the_legacy_path`. **새 헬퍼는 만들지 않았다.** 쌍 불변식("engine_clock 은 CV 축에 닿지 않는다")의 근거는 공유 지점인 `engine_clock` docstring 에 한 번만 적었다.
+- **붉던 4건:** `signal_gateway_eviction.py::test_the_legacy_path_still_reads_its_own_pending_ledger` · `::test_the_global_cap_does_not_apply_to_the_legacy_path`(둘 다 09:15·09:45 양쪽) · `signal_gateway_parity.py::test_without_a_runtime_a_sector_lookup_failure_still_falls_back_to_none`(09:15) · `signal_gateway_wiring.py::test_eviction_still_runs_on_the_legacy_path`(양쪽).
+- **보고와 달랐던 것 2가지:** ① 네 번째 파일은 `test_execution_p03_wiring.py` 가 아니라 `test_execution_signal_gateway_wiring.py` 였다 — p03 은 5개 버킷 전부 18 passed 로 시계 무관하다. ② `test_engine_legacy_stale_eviction_characterization.py` 도 `engine_clock` 을 단독으로 쓰지만 5개 버킷 전부 26 passed 라 손대지 않았다(유령 RED 는 CV 가드에 닿는 legacy BUY 시험에만 붙는다).
+- **검증:** faketime 이 없어 `TZ` 로 프로세스 **지역시각 자체**를 5개 버킷(08:45 개장전 · 09:15 하드차단 · 09:45 -8 · 12:15 중립 · 12:45 +5)에 고정했다. 수정 전 재현 **09:15 4 failed · 09:45 3 failed**(나머지 3버킷 green) → 수정 후 **5개 버킷 전부 112 passed**. 과제 지정 명령(TZ=UTC)으로 파일별 20·23·18·25 passed·합산 86 passed, 제품 diff 0줄. 중립 버킷 전체 suite **5116 passed / 2 xfailed / 경고 4**(423초 — P0-4 기준선과 동일, 회귀 0). **범위 한계:** 시계 창 **안에서의** 전체 suite 는 돌리지 않았다(다른 세션이 호스트에서 전체 suite 를 돌던 중 — 원장의 "단독 직렬" 규칙). 따라서 원장 ④ 의 "UTC 전체 suite 는 18:00~19:30 KST 를 피한다" 회피는 나머지 suite 에 대해 그대로 남는다.
+
 ## 2026-09-22 — feat(safety): P0-4 — 래치 설정 조건 축소·예약/세션 계약 고정·stale pending attach 가드 (**제품 변경 2곳: `runtime.py` admit 한 곳·`kr_scheduler.py` 조기 return 1줄(legacy 바이트 동일) — 운영 미설치**)
 
 > 결정 문서 §4 의 약한 지점 2·4·7·9. 계획·심사·처분·마감은 `docs/superpowers/plans/2026-09-22-p0-4-latch-reservation-session-stale.md`(§3 처분·§5 Do·See·§5-4 마감). **설계 초안의 "래치 해제 = 저장 행 재개"는 두 심사(REVISE ×2)가 게이트를 여는 방향으로 판정해 폐기** — 아무도 받지 않는 보호 결정을 커밋해 `pending_stage` 를 영구히 세우고(손절이 조용히 사라짐), 낡은 진입 증거로 BUY 를 열며, 결정적 reducer 실패는 재개로 안 고쳐진다.

@@ -54,7 +54,15 @@ LEDGERS = ('_pending_orders', '_pending_quantities', '_pending_timestamps', '_pe
 
 
 def engine_clock(monkeypatch):
-    """engine 모듈의 naive 시계를 동결한다 — 쿨다운·pending 타임스탬프의 유일한 출처다."""
+    """engine 모듈의 naive 시계를 동결한다 — 쿨다운·pending 타임스탬프의 유일한 출처다.
+
+    **CV 시계는 여기서 닿지 않는다.** `cross_validator.validate` 는 함수 안에서
+    `from datetime import datetime as _dt` 로 다시 import 하므로 모듈 patch 밖이다.
+    legacy `on_signal` 을 태우는 시험은 `freeze`(test_cross_validator_characterization)
+    를 **같은 순간**으로 함께 불러야 한다 — 빠뜨리면 판정이 실제 벽시계를 탄다
+    (09:00~09:29 매수 전량 차단 · 09:30~10:30 -8 · 12:30~13:00 +5). `wired()` 는 이미
+    그 쌍을 지킨다.
+    """
     import src.core.engine as eng
     holder = [ENGINE_NOW]
 
@@ -508,6 +516,8 @@ def test_the_same_signal_keeps_the_legacy_path_unchanged_without_a_runtime(tmp_p
 def test_eviction_still_runs_on_the_legacy_path(tmp_path, monkeypatch, freeze):
     """H5 의 가드를 '항상 참'(= 항상 건너뜀)으로 바꾸면 여기서 죽는다."""
     async def scenario():
+        # CV 시간 가드는 engine_clock 이 닿지 않는 축이다 — 같은 순간으로 함께 민다.
+        freeze(ENGINE_NOW.hour, ENGINE_NOW.minute, day=ENGINE_NOW.day)
         legacy = UnifiedEngine(TradingConfig(initial_capital=D('2000000')))
         rm = risk_manager(monkeypatch, legacy, validator=cv())
         engine_clock(monkeypatch)
