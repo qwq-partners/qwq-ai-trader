@@ -59,8 +59,28 @@ E1 runtime 소유 단일 주기 task(`_day_tasks` 관례, `_protection_failed` �
 9. must-fix 3 → 이미 확정(P0-3 이 활성화 조건). 설치기에 `legacy_portfolio_writer_present` 류 거부를 P0-3 에서 넣는다.
 10. **TR 결정(E4 재검토):** 운영 기본이 legacy 인 한 신 TR 전용 수집기는 어긋난다. main 의 `_TR_SETS` 를 engine 에 들이는 것이 선행이고, 수집기·파서는 **그 출처의 daily TR 을 읽되 종결 조건은 TR 값이 아니라 "응답 스키마 검증 통과"로** 건다. 이는 "tr_id 조건을 넓히는 것이 유일하게 설치 차단 사유를 코드에서 지우는 변경"이라는 초안의 우려를 **스키마 검증 + D10 기록기 확인**으로 대신한다. 이 항목은 개정 설계에서 다시 심사받는다.
 
-## 5. 다음
+## 5. 개정 설계 F1~F12 (요청 opus/high) 와 심사 2관점(요청 opus/xhigh, 둘 다 **REVISE**) → coordinator 처분 = **확정 설계**
 
-- opus 가 복구되면 **개정 설계(위 §4 를 입력으로) → 심사 ① 재실시(돈·상태 손실) + 심사 ②(실현 가능성)**. 설계자와 심사자는 다른 실행·가능하면 다른 공급자.
-- 구현은 개정 설계가 PROCEED 를 받은 뒤. 첫 단계는 제품 호출자 0건인 부품(파서의 chain 노출·어댑터·`request_binding` 확장)부터.
-- **바뀌지 않는 것:** `trading_ready` 상수 False · 제품 호출자 0건 · MODIFY 미지원 · 운영(legacy) 무변경.
+**개정 설계의 골자(초안에서 뒤집은 것):** F1 backoff 를 **지운다**(정상 대기가 스스로 손절 지연을 키운다) — 대상 있으면 고정 3초, 없으면 `asyncio.Event` 에서 조회 0회로 잠들고 ACK 가 `runtime.notify_execution_change()` 로 깨운다 · F2 한 주기는 (A) 조회·reconcile·apply 와 (B) **조회와 무관한 저장 관측 재처리**를 따로 돈다 · F3 supersede 는 **새로 만들지 않는다** — `application.apply` 의 기존 계약(:511-522 stale 분기 → `_supersede` → `ALREADY_APPLIED` → engine 의 `resolve_previous_failures`)이 이미 한다(새 코드 0줄) · F4 파서가 `chain` 을 노출하고 chain 이면 reconcile 도 apply 도 하지 않는다(기록하면 `unresolved_execution_evidence` 가 전 종목 명령을 막는다) · F5 조회는 운영과 같은 **`"ALL"`**, 매칭 키에서 거래소를 빼고 **찾은 행의 거래소를 대조**(`exchange_mismatch`) — "행에서 읽어 ref 를 채운다"(§4-5)는 `record_result`·economics 가 KRX 를 강제해 **불가**하므로 기각 · F6 파싱 2단계(신원 4필드 방어적 스캔 → 후보 행만 15필드 엄격) · F7 health 7키 · F8 side 인지형 심볼 게이트(한 줄) + BUY 한정 `reconciler_unavailable` · F9 `FillObservation.metadata` 는 `request_binding['fill_metadata']` 에서만(identity 가 metadata 를 포함해 **강제**다 — 브로커 응답에서 만들면 두 번째 부분 체결에서 `ObservationError`) · F10 대상은 risk day 의 attempt·inbox 행만, 조회 구간도 그 하루(넓히면 economics 의 cross-day 거부 때문에 observed≠applied 로 전역 정지가 난다 — §4-8 기각) · **F11 TR 은 `TTTC0081R` 고정, `_TR_SETS` 이식 안 함, "스키마 검증으로 종결" 기각(§4-10 기각 — 스키마는 필드의 모양만 보고 의미가 다른 TR 에서도 통과하므로 그것으로 최종성을 인정하면 차단 사유 1·2 를 코드에서 지우는 것)** · F12 **factory 배선은 P0-2 에 없다** → P0-3.
+
+**must-fix 대응(심사 재검증 반영):** 1·3·4 닫힘. 2·5·6·7·8·9·10 은 방향은 맞고 아래 처분으로 닫는다.
+
+| 처분 | 내용 |
+|---|---|
+| P-1 | **주기 전체**(대상 선정~apply~health)를 `asyncio.wait_for(cycle_timeout)` 로 감싼다(초안은 조회만). `cycle_timeout ≥ request_timeout × 예상 페이지수` 를 명시하고 이 단계는 `max_pages` 를 낮춰 맞춘다. health 에 주기 시작 시각. |
+| P-2 | `reconciler_blocked_reason()` 은 task.done/연속 미완결이 아니라 **"대상이 있는데 마지막 상태 전진 이후 경과 > k×interval"** 로 잰다(멈춘 주기·굶은 주기를 같은 문장으로). |
+| P-3 | `unreadable_row > 0` 은 **chain 과 같게**(reconcile·apply 둘 다 skip, `chain_undecidable`). lenient 스캔도 `_parse_row` 와 같은 소문자 정규화·별칭 충돌 검사. |
+| P-4 | A·B 두 집합 모두 `not day_admission_closed and state['risk']['day'] == now(KST).date()` 게이트 **뒤**(조회도 안 한다). health `day_admission_closed`/`prior_day`. 예산 절은 GET 수 + **주기당 checkpoint 커밋 수**(24시간)로 다시 쓴다. |
+| P-5 | **reconcile 은 evidence 가 attempt 행을 바꿀 수 있을 때만** 부른다(`schema_valid` ∧ `order_quantity == attempt['quantity']` ∧ (누적 수량 증가 ∨ 금액 변화 ∨ 종결 전이 가능)). `not_found` 는 호출 자체를 건너뛴다 — 같은 응답 10주기에 `owner.version` 불변이 인수. |
+| P-6 | B 를 두 갈래로: (B1) inbox 행 재접수 · (B2) **inbox 행이 없고 `observed > applied` 인 attempt** 는 저장된 `observed_quantity/observed_amount/order_ref/fill_metadata` 로 `FillObservation` 을 재구성(파서 경로와 **같은 함수** — `observation_id` 가 글자 단위로 같아야 supersede 가 맞물린다). |
+| P-7 | 종료: 수집 task 는 cancel 이 아니라 `_closing` 으로 **자연 종료**하고 진행 중 apply 를 끝까지 기다린다. `runtime.apply_observation` 은 `_closing` 이면 거부. `shutdown` 의 drain 이 in-flight ingress task 를 본다. |
+| P-8 | `prepare(request, context, *, sector=None, fill_metadata=None)` — 화이트리스트(`{name, sector, entry_signal_score, exit_type}`) 밖 키·JSON 비허용 타입은 **prepare 시점에** 거부, score 는 `None`/`float`. 자동 BUY 의 `entry_signal_score` 유한성은 **prepare 에서 `_require`** — 단, 독립 인수 37건의 기대값이 하나라도 바뀌면 P0-3 게이트로 미루고 그 사실을 보고한다. |
+| P-9 | receipt 두 타입(`InboxReceipt`/`FillReceipt`)을 분기해 세고 PARKED 는 별도 카운터. |
+| P-10 | **F8(게이트 변경)은 P0-3 으로 옮긴다**(심사 ① 지적: F12 가 생산자 배선을 P0-3 으로 옮겼으므로 "생산자 0건인 동안 게이트를 열지 않는다"는 D4 순서를 지킨다). P0-2 = 부품(1단계) + runtime 메서드(2단계)뿐. |
+| P-11 | `valid_evidence_provenance` 의 superset 허용은 소비자 **세 곳**(evidence.py·lifecycle.py·**initial_r.py `_validate_finality`**) 모두. |
+| P-12 | **새 설치 차단 사유 19 등록:** 정상 경로에서도 **체결마다 전 종목 명령 정지 창**이 생긴다(미적용 inbox 행 → `_owner_ready` 의 `unapplied_execution_observation`, 급락 때 체결과 보호가 겹치는 순간에 터진다 — legacy `check_fills` 는 매도를 막지 않는다). P0-2 는 창을 P-1 로 유한하게 만들고 health 에 노출한다; **`_owner_ready` 의 범위 축소는 P2(게이트 범위) 결정**. |
+| P-13 | residual 추가: 부분 청산은 `exited_today` 조차 기록되지 않는다(economics 의 `if full:`) — P0-3/P1. F11 의 "PR #80 미병합·미배포" 인용은 낡았다(09-21 밤 병합·배포됨) — 논지("live 파일 0줄" 계약)는 유효. |
+
+**단계(확정):** 1단계 부품(제품 호출자 0건·live 파일 0줄): `evidence.py`(2단계 파싱·`chain`·`exchange_mismatch`·`evidence_pages`·`parser_scope`) · `lifecycle.py`(`OrderEvidence.chain` 기본값 필드, provenance superset) · `initial_r.py`(provenance 소비자) · `application.py`(`observation_from_evidence` — 재구성 경로와 공용) · `queries.py`(`exchange_scope` 가법 kwarg) · `commands.py`(`_prepare` 의 binding `session`·`fill_metadata`, P-8) · `gateway.py`(BUY 의 score/name/sector 전달) → 2단계 runtime(`start_reconciler`/`reconcile_once`/`_reconcile_loop`/`notify_execution_change`/`reconciler_blocked_reason`/health, P-1·P-2·P-4~P-7·P-9) → **P0-3**: 게이트(F8)·factory 배선·`_sync_portfolio` attach 분기·`exit_type`(`_classify_exit_type` 재사용)·실계좌 스모크(D10).
+
+**바뀌지 않는 것:** `trading_ready` 상수 False · 제품 호출자 0건 · MODIFY 미지원 · 운영(legacy) 무변경 · 독립 인수 37건 무수정.
