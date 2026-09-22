@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-22 — feat(safety): P0-2 — attach 의 체결·종결 증거 생산자 (**부품·제품 호출자 0건·운영 미설치**)
+
+> 사용자 결정 "엔진 전체를 옮기도록 하자" 뒤 첫 구현 단계. 설치 차단 사유 18(attach 에 체결·종결 증거 생산자 0건)을 **부품 완성**으로, 3(fill projection)을 닫을 수 있는 상태로. 계획·설계·심사·마감은 `docs/superpowers/plans/2026-09-22-p0-2-fill-evidence-producer.md`.
+
+- **1단계 부품:** `evidence.py` — 파싱 2단계(신원 4필드 방어적 스캔 → 후보 행만 15필드 엄격; 무관한 행의 결측이 우리 행을 무력화하지 않는다), `OrderEvidence.chain` 노출(자식행 또는 읽을 수 없는 행 → 수량 적용 금지), 매칭 키에서 거래소 제거 + 찾은 행의 거래소 대조(`exchange_mismatch`), 어댑터 `evidence_pages`/`parser_scope` · `lifecycle.py`·`initial_r.py` provenance 를 `ALL` superset 허용 · `application.py::observation_from_evidence`(재구성 경로와 공용 → 같은 `observation_id`) · `queries.py` `exchange_scope` kwarg(`{"KRX","ALL"}`) · `commands.py` `prepare(..., fill_metadata=)` 화이트리스트·prepare 시점 거부·float 정규화, binding 에 `session`·`fill_metadata` · `gateway.py` BUY 에 `entry_signal_score`(결측이면 `entry_signal_score_required`).
+- **2단계 runtime 주기 task(`runtime.py::start_reconciler` 등):** 미해결 attempt 가 있을 때만 일별체결조회(`TTTC0081R`·`ALL`·`max_pages=3`) 1회, 고정 3초, ACK 저장 완료가 깨움. 순서 일자 게이트 → B1(inbox 재접수) → A(조회·reconcile) → B2(저장 상태 재구성). **마감시각 기반 예산**(주기 60초, 조회 ≤45초, B2 유보 15초 — 시작뿐 아니라 대기에도). reconcile 은 attempt 를 바꿀 수 있을 때만(`not_found`·퇴행 응답은 호출 0 → `owner.version` 불변). A·B 공통 적용 가능 술어(`evidence_conflict`·economics 가 거부하는 상태 제외). 주기가 시작한 owner 변경은 shield 된 runtime task — 타임아웃은 대기자만 끊고 drain 이 완료를 기다린다(결과·예외·진전은 task 본문이 기록). 종료는 `_closing` 자연 종료·`apply_observation` 거부. `health()['reconciler']`·`reconciler_blocked_reason()`(진전 없음을 시간으로).
+- **확정 결정:** TR 은 `TTTC0081R` 고정(`_TR_SETS` 이식 안 함, "스키마 검증으로 종결" 기각) · 게이트 변경(side 인지형 심볼 게이트)은 P0-3 · **새 설치 차단 사유 19**(정상 경로에서도 체결마다 전 종목 명령 정지 창 — 유한하게만).
+- **검증:** 설계 Codex BLOCK(must-fix 10) → 개정 → 심사 REVISE ×2 → 처분 확정. 구현 독립 재현 2회(APPROVE·CHANGES_REQUIRED→처분). **Codex 11차 P1 3 → 12차 P1 2 → 13차 P1 1 → 14차 APPROVE**(깨움 유실·B 굶음·타임아웃의 커밋 취소·퇴행 churn·B1 뒤 무기한 잠듦·B2 유보·대기 마감·예외 기록 — 각각 실제 결함). 전체 suite 단독 직렬 **UTC 5057 / KST 5057 passed**(각 기존 xfail 2·격리 0). 신규 시험 2파일 +1,4xx 줄, 독립 인수 37건 무수정.
+- **남는 것(P0-3):** `start_reconciler` 배선·기동 순서·환경 거부 · 게이트 F8 · `_sync_portfolio` attach 분기 · SELL `exit_type`·부분 청산 `exited_today` · 실계좌 스모크(`TTTC0081R` 응답·필드 철자·`ALL` — 사용자 확인 대기). 비KRX 체결은 `exchange_mismatch` 로 영구 미해결(P1).
+- main 병합·배포·재시작·주문·설정·Toss grant 무변경, `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-22 — feat(safety): P0-1 — attach 송신 경로가 킬스위치와 감사 원장을 거친다 (**부품·제품 호출자 0건·운영 미설치**)
 
 > 결정 문서 `docs/superpowers/plans/2026-09-22-kis-judgement-decisions.md` §5 의 첫 전제 단계. 설치 차단 사유 16(attach 의 주문 POST 가 킬스위치·감사 원장을 우회)을 **legacy 와 같은 best-effort 수준까지** 닫았다. 상세 §5-1.
