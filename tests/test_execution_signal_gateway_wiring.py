@@ -616,3 +616,40 @@ def test_a_signal_typed_event_without_a_symbol_does_not_stop_the_loop(tmp_path, 
         finally:
             await teardown(f)
     asyncio.run(scenario())
+
+
+# ── P0-4 S-C(C3): 접수 불가 세션의 소멸은 **모양이 다르다** ──────────────
+
+@pytest.mark.parametrize('moment, session', [((15, 31), 'break'), ((20, 1), 'closed')])
+def test_a_session_that_cannot_accept_a_submit_leaves_an_error_event_not_a_result(
+        tmp_path, monkeypatch, freeze, moment, session):
+    """`break`·`closed` 는 요청 객체를 **만들 수조차** 없다(`requests.py:243-244`).
+
+    그래서 소멸의 모양이 `CommandResult(NOT_SENT)` 가 아니라 예외다 — `gateway._bind` 에서
+    올라와 `gateway.submit` 밖으로 새고 engine 이 `errors_count` 를 올리며 ErrorEvent 를
+    낸다. 같은 순간 legacy 도 보내지 못하지만(`kis_kr.py:511-514`) 매 틱 재감지로 의도를
+    살린다 — attach 에는 그 루프가 없다(차단 사유 21). 재준비의 소유자는 생산자다(P1).
+    """
+    async def scenario():
+        f = await wired(tmp_path, monkeypatch, freeze)
+        try:
+            from src.execution.safety.requests import _session_at
+            hour, minute = moment
+            stamp = freeze(hour, minute, day=18)
+            f['now'][0] = stamp
+            f['clock'][0] = f['clock'][0].replace(hour=hour, minute=minute)
+            assert _session_at(f['clock'][0]) == session
+
+            calls = spy(f)
+            before = f['engine'].stats.errors_count
+            await drive(f['engine'], buy(SYM))
+            assert f['engine'].stats.errors_count == before + 1
+            errors = [event for event in f['engine']._event_queue if type(event) is ErrorEvent]
+            assert len(errors) == 1
+            assert 'unsupported_submit_session' in errors[0].message
+            assert posts(f) == []
+            assert f['runtime'].owner.state['attempts'] == {}
+            assert [len(calls[key]) for key in ('submit', 'prepare', 'dispatch')] == [1, 0, 0]
+        finally:
+            await teardown(f)
+    asyncio.run(scenario())
