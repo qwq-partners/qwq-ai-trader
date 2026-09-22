@@ -107,11 +107,13 @@ ORDER, FILL, RISK_ALERT, STOP_TRIGGERED, ERROR는 우선순위 1이다. 큐가 �
 
 ### 2026-09-18 실행 안전성 이행 브랜치 (운영 미설치)
 
-`KRExecutionRuntime`은 명시 checkpoint의 경제·보호·위험 후보를 하나의 SQLite commit으로 저장한 뒤 실제 Portfolio/ExitManager/RiskManager에 게시한다. `ExecutionFillEvent`는 기존 FILL과 다른 중요 큐 이벤트이며 `apply_execution_observation()`은 enqueue가 아니라 적용 receipt까지 기다린다. 명시 설치한 엔진은 legacy 거래 이벤트/직접 체결·가격 writer를 거부하고 자동 legacy fallback을 하지 않는다.
+`KRExecutionRuntime`은 명시 checkpoint의 경제·보호·위험 후보를 하나의 SQLite commit으로 저장한 뒤 실제 Portfolio/ExitManager/RiskManager에 게시한다. `ExecutionFillEvent`는 기존 FILL과 다른 중요 큐 이벤트이며 `apply_execution_observation()`은 enqueue가 아니라 적용 receipt까지 기다린다. 명시 설치한 엔진은 legacy 거래 이벤트/직접 체결 writer를 거부하고 자동 legacy fallback을 하지 않는다. P1 S3 후보에서 attach의 기존 가격 핸들러는 무동작으로 전환해 별도 owner 보호 생산자와 중복 쓰기를 하지 않는다.
 
 현재가 view는 별도로 보존하고 고점/BE/pending은 동일 coordinator로 직렬화한다. 보호 계산 실패는 확인된 보유 수량의 degraded로 경제 사실과 함께 저장한다. outbox는 pending이며 외부 원장 전송은 아직 없다. `trading_ready`는 전 writer/HTTP/startup 연결 전까지 항상 False다.
 
 **아래 운영 경로는 아직 교체하지 않았다.** run_trader/scheduler/broker에 이 runtime을 설치하는 호출이 없고, 일부 연결본 배포는 금지한다. 전체 설계 인수·최초 잔고 cutoff·취소 최종성은 [중간 리뷰](../reviews/engine-execution-safety-2026-09-17.md)를 확인한다.
+
+P1 설치기 후보는 `restore → 정책/게이트웨이 복구 → attach+gateway → reconciler → 보호 생산자 첫 MARKET_DATA 핸들러 → 기동 sweep` 순서다. `indicator_source`는 기존 지표 캐시의 읽기 전용 callable이며 설치 전에 검사한다. 익절10 체결 후 잔량90 보호까지 실제 엔진·합성 HTTP·체결 큐로 검증하지만, 실제 설치·취소 최종성이나 운영 준비를 증명하지 않는다. runtime.health의 생산자 관측도 일반 API·Telegram 연결과 다르다. 후보의 독립 리뷰·통합 여부는 [P1 검증 원장](../reviews/p1-producer-wiring-2026-09-23.md)이 정본이다.
 
 ### 진입 경로
 

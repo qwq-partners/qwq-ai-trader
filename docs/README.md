@@ -41,6 +41,7 @@
 
 ### Reviews (리뷰)
 
+- [P1 S2~S5 후속 결과 원장](reviews/p1-producer-wiring-2026-09-23.md) — 현재 후보·Plan→Do→See·수정/독립 재현·교차 모델/검증/통합 상태의 정본. 아래 과거의 정책/예산 미답·S2 미착수는 사용자 위임과 후속 계획으로 대체됐다. [다음 개발 순서](operations/p1-next-steps-2026-09-23.md), [실행 계획](superpowers/plans/2026-09-23-p1-producer-wiring.md). 운영 미설치·main 전환은 별도
 - [P1 S1·S1′ 보호 기반 부품](reviews/p1-components-2026-09-23.md) — Plan→Do→See, 신규67·독립 재현의 시험공백/실제 익절 단계 유실 수정·부품 한정 승인, UTC/KST 각 5183 passed·기존 2 xfailed·격리 위반0, 개발 통합 `77a3641`. S2 정책/예산 미답·전체 P1/운영 미완
 - [P1 인계 사전 검토](reviews/p1-handoff-preflight-2026-09-22.md) — `dff0e25` 코드 대조·S1 계약 충돌 5건·S1′ 독립 착수 범위·사용자 결정/예산 대기. 정적 검토이며 Do·신규 시험·운영 변경 없음
 - [장전 진단·소비 경로 C4](reviews/morning-regime-owner-2026-09-20.md) — 실제 caller·schema 활성 경합·게시 읽기 보완, 신규53·UTC/KST4403통과·native/Opus 한정 승인; 전체 writer/운영 미완

@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-23 — feat(safety): P1 S2~S5 보호 생산자·엔진·설치기 (운영 미설치)
+
+- 기존 시세 이벤트를 단일 보호 생산자→실 엔진/RiskManager→gateway/owner로 연결하는 개발 후보를 구현했다. 원 intent·가격·수량, 복구 감사, 면제, WS 신선도와 UNKNOWN 보류를 보존하며 기존 command scope로 종료를 배수한다.
+- attach 가격 핸들러는 중복 쓰기 없이 무동작 처리한다. 보호 SELL은 정확한 지정수량으로 regular MARKET/closing LIMIT만 지원하고, invalid 보호 ID의 legacy 폴백을 막는다. 기존30초 cooldown은 유지하며 반복 신호에 의한 보호 기아는 운영 차단으로 명시했다.
+- 설치기는 지표 캐시 callable을 restore 전에 검사하고, 기존 배선 뒤 첫 MARKET_DATA 보호 핸들러와 기동 sweep을 연결한다. 구간2 실패의 legacy 복귀는 금지하며 runtime.health는 읽기 전용 관측만 추가한다. 실제 설치 호출자는0, 제품 trading_ready=False다.
+- 독립 native 리뷰·추가 행동 변이와 실제 `claude-opus-5` 교차 리뷰를 거쳤다. 마지막 조건부 지적은 실제 보호 실패/청산 불변식과 독립5건으로 처분했다. 손상 저장본의 raw KeyError/미송신 한계는 남긴다.
+- 후보 `11b9f3e`에서 **UTC/KST 각5377 passed·기존2 xfailed·경고4·격리0·rc0**. 신규 회귀194건이며 위험/주문 임계값·운영 설정·Toss 권한은 변경하지 않았다. main 통합·배포·재시작·실주문은 미실행. [검증 원장](docs/reviews/p1-producer-wiring-2026-09-23.md), [다음 작업 인계](docs/operations/p1-next-steps-2026-09-23.md).
+
 ## 2026-09-23 — feat(safety): P1 S1·S1′ 보호 복구·episode intent 부품 (운영 미설치)
 
 - 제품 변경은 `runtime.py`·`gateway.py` 두 곳이다. 보호 접수의 A/B/C 처분과 기존 source 무효화를 원자화하고, 실제 새 B commit/게시만 해당 실패 command/generation을 해소한다. SQL 원 접수 영수증과 payload/view를 결합하며, 한 호출에 한 행만 반환해 앞 결정의 유실을 막는다.

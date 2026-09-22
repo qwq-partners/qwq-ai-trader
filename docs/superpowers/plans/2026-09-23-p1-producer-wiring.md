@@ -71,6 +71,11 @@
 현재 첨부 계약에 없어서 생긴 반복 질의를 줄이기 위해 마지막 입력에는 `_submit`·순수
 preview·owner deepcopy·감사 종류/수명 및 실제 설치/종료 경계까지 함께 제공한다.
 
+S4의 마지막 외부 입력을 완결하기 위해 설치 인수 독립 리뷰와 S2/S3 중심의 전체 범위
+독립 리뷰를 먼저 병렬 수행한다. 구체적 지적을 처분한 후보를 호출8에 전달하고, 모든
+작업자가 종료한 뒤 최종 UTC/KST 전체 시험을 직렬 수행한다. 리뷰 게이트를 줄이거나
+전체 검증을 승인 전 정본 통합으로 대체하는 변경은 아니다.
+
 감사 outbox와 intents는 현재 append-only이고 `effect_source`는 완료 표식이 아니라
 intraday 종류 구분이다. 장기 누적 규모별 처리 지연·안전한 보존/압축 정책은 운영 차단
 항목으로 남기며 이번에 임의 삭제하거나 새 schema를 만들지 않는다.
@@ -87,19 +92,19 @@ intraday 종류 구분이다. 장기 누적 규모별 처리 지연·안전한 �
 
 **Interfaces:** `ProtectionProducer(runtime, *, clock, indicator_source)`, `async on_market_data(event)`, `async sweep()`, `health()->dict`. runtime.engine을 사용하며 새 네트워크·주기 loop·durable schema 없음. `indicator_source(symbol)`은 기존 캐시의 ma5/prev_low만 읽는다.
 
-- [ ] RED: 실제 runtime/store fixture로 소비자 없이 남은 손절 결정, WS/REST provenance, EOD/면제, 보류 복구/취소 창을 먼저 실패시킨다. 신규 모듈 부재만 collection error로 보고 끝내지 말고 행동 실패를 확인한다.
-- [ ] GREEN: shared lock이 shield 내부 작업에서 sweep→quote→동기 `_submit_signal`까지 유지된다. 기존 command_scope는 첫 await 전에 열며 task 예외를 health와 callback에서 회수하되 프로그래밍 오류를 성공으로 삼키지 않는다.
-- [ ] sweep: 보류 결정 종목 제외 후 H7; H8는 호출 전 원 admission snapshot과 한 행씩 유일 대조, 결정 보관 후 다음 행. 앞 결과를 뒤 오류로 잃지 않음. admission 닫힌 창에는 복구만 하고 새 제출은 보류, 보류 intent는 다음 틱에도 불변.
-- [ ] session: 주입 aware clock을 KST로 정규화한 뒤 requests._session_at 단일 출처. regular MARKET, closing LIMIT 메타데이터, 나머지(pre_market/pre_close/break/next_market/closed) quote·발행0 + health. 휴장 지원을 이 함수가 증명한다고 하지 않는다.
-- [ ] tick: 보유/면제 확인 → tick 진입 때 새 pp-i- ID → EOD 우선 → degraded quote 제외 → 순수 quote_protection 사전 계산 → 결정이면 즉시 durable 호출, 없으면 종목별20초 throttle. 결정 없는 ID는 버린다.
-- [ ] WS는 observe_market 원 observation + ma5/prev_low; REST는 quote의 market_as_of/source/source_event_id 셋 다 None + high/low. receipt 시각을 시장 시각으로 합성하지 않음. 종목 출처 혼합 처리와 재접속을 명시하며 기존 source gate를 열지 않음.
-- [ ] EOD: 15:10부터 gap_and_go 손익<0, theme_chasing 손익<1%면 원 position.avg_price와 event.close로 전량, reason은 기존 한국어 갭EOD/테마EOD 규약. EOD면 quote호출0. 모든 SELL에 protection_intent_id/quantity/exit_action/source/order_type.
-- [ ] 제출 직전 게시본 면제 재검사, 결정 수량은 정확한 양의int이고 보유량 이하; 초과/불일치는 발행0·health. 미해결 BUY는 owner attempts 순수 순회로 발견하고 blocked_by_open_entry. 미해결 SELL도 중복발행 금지. `_submit_signal` 반환None만으로 성공/실패를 지어내지 말고 실제 intent/attempt를 읽는다.
-- [ ] 기대 ApplicationBlocked는 health 보류(핸들러로 새지 않음), 프로그래밍 오류는 전파. NOT_SENT/REJECTED 확정 미체결만60초 후 새episode, UNKNOWN/nonterminal·관측/적용 체결이 있으면 재발행하지 않는다. 취소/만료를 추측하지 않는다.
-- [ ] health: last_tick_at, last_quote_at, throttled, blocked_by_open_entry, pending_released, resume_dispositions, reemissions, 보류이유/결정, 종료상태. 하트비트 kr_protection_producer는 attempt/success/failure/idle을 구분(0보유 idle). 새 BUY gate 없음.
-- [ ] 시험: R2~R4/R14~R17, pending 실제10익절→잔량90 보호, full/EOD반복, degraded증거불변, 보류원intent,2행재개뒤실패, 정상 quote~prepare 경합, caller취소/종료drain, ApplicationBlocked vs TypeError, 수량불일치, 다른종목 inbox미적용시 순수결정 계산.
-- [ ] 측정: 8종목 합성 ticks의 owner-write 지연과 순간고점 누락을 미스로틀 대조로 기록. 합성 성능을 운영 성능/허용 슬리피지 근거로 과장하지 않음.
-- [ ] See: 작성자 변이 최소3종 + 독립 추가3종, 관련 corpus GREEN. 외부 Opus 도구없는 소스 리뷰(상한 내). 제품등록0 유지. coordinator 전체 UTC/KST 후 feature통합/문서/푸시.
+- [x] RED: 실제 runtime/store fixture로 소비자 없이 남은 손절 결정, WS/REST provenance, EOD/면제, 보류 복구/취소 창을 먼저 실패시킨다. 신규 모듈 부재만 collection error로 보고 끝내지 말고 행동 실패를 확인한다.
+- [x] GREEN: shared lock이 shield 내부 작업에서 sweep→quote→동기 `_submit_signal`까지 유지된다. 기존 command_scope는 첫 await 전에 열며 task 예외를 health와 callback에서 회수하되 프로그래밍 오류를 성공으로 삼키지 않는다.
+- [x] sweep: 보류 결정 종목 제외 후 H7; H8는 호출 전 원 admission snapshot과 한 행씩 유일 대조, 결정 보관 후 다음 행. 앞 결과를 뒤 오류로 잃지 않음. admission 닫힌 창에는 복구만 하고 새 제출은 보류, 보류 intent는 다음 틱에도 불변.
+- [x] session: 주입 aware clock을 KST로 정규화한 뒤 requests._session_at 단일 출처. regular MARKET, closing LIMIT 메타데이터, 나머지(pre_market/pre_close/break/next_market/closed) quote·발행0 + health. 휴장 지원을 이 함수가 증명한다고 하지 않는다.
+- [x] tick: 보유/면제 확인 → tick 진입 때 새 pp-i- ID → EOD 우선 → degraded quote 제외 → 순수 quote_protection 사전 계산 → 결정이면 즉시 durable 호출, 없으면 종목별20초 throttle. 결정 없는 ID는 버린다.
+- [x] WS는 observe_market 원 observation + ma5/prev_low; REST는 quote의 market_as_of/source/source_event_id 셋 다 None + high/low. receipt 시각을 시장 시각으로 합성하지 않음. 종목 출처 혼합 처리와 재접속을 명시하며 기존 source gate를 열지 않음.
+- [x] EOD: 15:10부터 gap_and_go 손익<0, theme_chasing 손익<1%면 원 position.avg_price와 event.close로 전량, reason은 기존 한국어 갭EOD/테마EOD 규약. EOD면 quote호출0. 모든 SELL에 protection_intent_id/quantity/exit_action/source/order_type.
+- [x] 제출 직전 게시본 면제 재검사, 결정 수량은 정확한 양의int이고 보유량 이하; 초과/불일치는 발행0·health. 미해결 BUY는 owner attempts 순수 순회로 발견하고 blocked_by_open_entry. 미해결 SELL도 중복발행 금지. `_submit_signal` 반환None만으로 성공/실패를 지어내지 말고 실제 intent/attempt를 읽는다.
+- [x] 기대 ApplicationBlocked는 health 보류(핸들러로 새지 않음), 프로그래밍 오류는 전파. NOT_SENT/REJECTED 확정 미체결만60초 후 새episode, UNKNOWN/nonterminal·관측/적용 체결이 있으면 재발행하지 않는다. 취소/만료를 추측하지 않는다.
+- [x] health: last_tick_at, last_quote_at, throttled, blocked_by_open_entry, pending_released, resume_dispositions, reemissions, 보류이유/결정, 종료상태. 하트비트 kr_protection_producer는 attempt/success/failure/idle을 구분(0보유 idle). 새 BUY gate 없음.
+- [x] 시험: R2~R4/R14~R17, pending 실제10익절→잔량90 보호, full/EOD반복, degraded증거불변, 보류원intent,2행재개뒤실패, 정상 quote~prepare 경합, caller취소/종료drain, ApplicationBlocked vs TypeError, 수량불일치, 다른종목 inbox미적용시 순수결정 계산.
+- [x] 측정: 8종목 합성 ticks의 owner-write 지연과 순간고점 누락을 미스로틀 대조로 기록. 합성 성능을 운영 성능/허용 슬리피지 근거로 과장하지 않음.
+- [x] See: 작성자 변이 최소3종 + 독립 추가3종, 관련 corpus GREEN. 외부 Opus 도구없는 소스 리뷰(상한 내). 제품등록0 유지. coordinator 전체 UTC/KST 후 feature통합/문서/푸시.
 
 예시 불변식(실제 fixture/필드에 맞춰 시험하며 아래 기대값은 독립 계산):
 
@@ -115,9 +120,9 @@ assert sent.metadata['order_type'] == 'market'
 **Files:** 제품은 `src/core/engine.py`만, Create `tests/test_execution_p1_engine.py`. 기존 `tests/test_execution_signal_gateway_acceptance.py`의 E1 가격 writer 예외 단언만 위 처분대로 갱신 허용.
 **Interfaces:** S2 SignalEvent metadata→RiskManager.on_signal→gateway. runtime.clock의 KST시각·requests._session_at를 사용한다.
 
-- [ ] RED: 실제 MARKET_DATA 처리의 errors_count/전략 도달, regular 보호 SELL wire MARKET, closing LIMIT,15:35/15:45미송신, 정확한 지정수량/초과수량거부.
-- [ ] GREEN: update_position_price의 attach raise만 무동작 return. 보호 intent가 명시된 SELL attach 분기에서 명시 수량을 정확히 사용하며 불일치 전량 보정 금지. regular + market metadata면 호가조회0/MARKET priceNone. closing은 LIMIT만; 호가 결측으로 MARKET fallback하지 않음. 보호 attach는 legacy 거래시간 가드(15:25 CLOSED)를 재사용하지 않고 runtime 시계→KST→requests._session_at를 사용. legacy와 일반 nonprotective 경로는 기존 계약 대조.
-- [ ] See: legacy 본문을 신규 attach guard만 제거해 base와 바이트 비교, 기존S4-0 26 무수정·독립gateway인수37(E1 계약 단언만 갱신) GREEN, 작성자 변이3종 및 독립 추가3종과 실제모델 Opus승인, 전체 UTC/KST 후 feature통합/문서/푸시.
+- [x] RED: 실제 MARKET_DATA 처리의 errors_count/전략 도달, regular 보호 SELL wire MARKET, closing LIMIT,15:35/15:45미송신, 정확한 지정수량/초과수량거부.
+- [x] GREEN: update_position_price의 attach raise만 무동작 return. 보호 intent가 명시된 SELL attach 분기에서 명시 수량을 정확히 사용하며 불일치 전량 보정 금지. regular + market metadata면 호가조회0/MARKET priceNone. closing은 LIMIT만; 호가 결측으로 MARKET fallback하지 않음. 보호 attach는 legacy 거래시간 가드(15:25 CLOSED)를 재사용하지 않고 runtime 시계→KST→requests._session_at를 사용. legacy와 일반 nonprotective 경로는 기존 계약 대조.
+- [x] See: legacy 본문을 신규 attach guard만 제거해 base와 바이트 비교, 기존S4-0 26 무수정·독립gateway인수37(E1 계약 단언만 갱신) GREEN, 작성자 변이3종 및 독립 추가3종과 실제모델 Opus승인, 전체 UTC/KST 후 feature통합/문서/푸시.
 
 ```python
 assert body['ORD_DVSN'] == '01'
@@ -131,14 +136,14 @@ assert engine.stats.errors_count == 0
 **Files:** Modify `src/execution/safety/factory.py`, runtime.py는 위 표의 관측 전용 예외만. Create `tests/test_execution_p1_install.py`. 기존 `test_execution_install_factory.py`의 target kwargs에 신규필수인자를 넣고 live_snapshot에 producer참조·MARKET_DATA 핸들러 identity/순서를 추가해 거부 시 무변경 계약을 강화한다. 다른 기존설치시험은 무수정.
 **Interfaces:** `install_attached_runtime(..., indicator_source)` 필수 callable. 구간1 검증, 구간2 마지막(attach/start_reconciler뒤)에 producer 생성·runtime참조·MARKET_DATA첫핸들러·기동sweep1회. shutdown은 S2 command_scope 경로.
 
-- [ ] RED: invalid indicator_source에서 live무변경, 실제 보호 핸들러 선행, 기동 복구·결정 보류, 종료drain·중복설치거부, runtime.health의 보호 관측.
-- [ ] GREEN: 위 순서를 지키고 구간2 오류는 legacy로 복귀하지 않음. bot 캐시 closure 호출자계약·실제품 설치caller0 유지.
-- [ ] See: 실제engine→producer→owner→fakeHTTP→실큐fill 인수, installer거부 corpus, 독립 변이+Opus 실제모델 승인, 전체 UTC/KST 후 feature통합/문서/푸시. 차단21/24/25는 검증한 범위에서만 설치기 기준 닫힘, 실제 설치아님.
+- [x] RED: invalid indicator_source에서 live무변경, 실제 보호 핸들러 선행, 기동 복구·결정 보류, 종료drain·중복설치거부, runtime.health의 보호 관측.
+- [x] GREEN: 위 순서를 지키고 구간2 오류는 legacy로 복귀하지 않음. bot 캐시 closure 호출자계약·실제품 설치caller0 유지.
+- [x] See: 실제engine→producer→owner→fakeHTTP→실큐fill 인수, installer거부 corpus, 독립 변이+Opus 실제모델 승인, 전체 UTC/KST 후 feature통합/문서/푸시. 차단21/24/25는 검증한 범위에서만 설치기 기준 닫힘, 실제 설치아님.
 
 ## Task 5: 주석·문서·범위 통합리뷰
 
 **Files:** kr_scheduler.py·batch_analyzer.py의 차단21 주석만, CHANGELOG/CLAUDE top/README/위험/아키텍처/인계/원장/최종보고. 원본문 불변을 AST/주석제외 대조로 증명한다.
 
-- [ ] 미설치/운영 금지 경계와 남은 차단23/26/27·미체결BUY/late-fill·초기 인계·정책게시를 문서화.
-- [ ] 독립 Astra/xhigh 최종 범위 리뷰는 이번 시작6394d22 이후 제품과 S1경계만, 기존 전체234+커밋 재승인 아님. 경미한 보류 지적도 재검토.
+- [x] 미설치/운영 금지 경계와 남은 차단23/26/27·미체결BUY/late-fill·초기 인계·정책게시를 문서화.
+- [x] 독립 Astra/xhigh 최종 범위 리뷰는 이번 시작6394d22 이후 제품과 S1경계만, 기존 전체234+커밋 재승인 아님. 경미한 보류 지적도 재검토.
 - [ ] 명령/exit코드·UTC/KST/변이·교차리뷰 actual model/사용량·SHA·설계처분을 보고하고 feature commit/push. 이번 전용clean worktree만 통합 이력 보존 후 정리.

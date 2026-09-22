@@ -1748,12 +1748,10 @@ class BatchAnalyzer:
         # 여기서 대입하면 owner 게시본과 어긋나 `_owner_ready` 의 DTO 동등성이 깨지고
         # owner 의 모든 명령이 멈춘다. attach 의 시세·보호 정본은 owner 의 quote/보호 경로다.
         #
-        # **설치 차단 사유 21** — 이 skip 과 kr_scheduler._check_exit_signal 의 같은 skip 으로
-        # attach 에는 손절·트레일링·분할익절·갭EOD·보유기간 청산의 **구동기가 하나도 없다**.
-        # owner 의 보호 경로는 존재하지만 제품에 시세를 넣는 생산자가 0건이다(조사: engine.py
-        # 의 attach 분기·kr_scheduler 의 runtime 검사 어디에도 `runtime.quote`/`observe_market`
-        # 호출이 없고, engine.update_price 는 attach 에서 ApplicationBlocked 를 올린다).
-        # 닫는 것은 P1 "보호 SELL main 동등"의 owner quote 배선이며 그 전까지 설치 금지다.
+        # P1 설치기 후보의 ProtectionProducer가 owner quote와 기존 송신로를 연결한다.
+        # 이 skip은 중복 writer를 막기 위해 유지한다. 설치기 배선 검증만으로 실제 운영
+        # 설치나 보호 지연·복구·관측 전달 문제의 해소를 뜻하지 않는다. 제품 설치 호출자는
+        # 여전히 0건이며 운영 인계 표(21, 23~31)의 남은 차단을 먼저 해소해야 한다.
         if getattr(self._engine, '_execution_runtime', None) is not None:
             logger.debug("[포지션모니터] attach 설치 — 시세·청산 갱신은 owner 경로가 한다")
             return

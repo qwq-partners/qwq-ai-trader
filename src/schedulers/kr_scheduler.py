@@ -1021,13 +1021,10 @@ class KRScheduler:
         # attach 설치 시: 보호 단계·pending 은 owner 소유다. 여기서 update_price 로 단계를
         # 밀거나 pending 을 등록하면 owner 게시본과 어긋나 `_owner_ready` 가 닫힌다.
         #
-        # **설치 차단 사유 21** — 이 skip 과 batch_analyzer.monitor_positions 의 같은 skip 으로
-        # attach 에는 손절·트레일링·분할익절·갭EOD·보유기간 청산의 **구동기가 하나도 없다**.
-        # owner 의 보호 경로(`runtime.quote`/`apply_quote`)는 존재하지만 제품에 시세를 넣는
-        # 생산자가 0건이고(engine.update_price 는 attach 에서 ApplicationBlocked 를 올린다),
-        # 그래서 attach 는 보호 SELL 에 관해 legacy 보다 계속 덜 안전하다. 닫는 것은 P1 의
-        # "보호 SELL main 동등"에서 owner quote 경로를 배선하는 일이다. 그 전까지 attach 를
-        # 운영에 설치하지 않는다.
+        # P1 설치기 후보는 별도 ProtectionProducer를 MARKET_DATA 첫 핸들러로 연결한다.
+        # 이 legacy skip을 되살려 두 번째 보호 writer를 만들지 않는다. 설치기 인수와
+        # 실제 운영 설치는 다르며 제품 설치 호출자는 여전히 0건이다. 반복 cooldown의
+        # 보호 지연·수동 복구·관측 전달 등 남은 차단은 운영 인계 표(21, 23~31)를 따른다.
         if getattr(getattr(bot, 'engine', None), '_execution_runtime', None) is not None:
             logger.debug(f"[청산] {symbol} attach 설치 — 보호 판단은 owner 경로가 한다")
             return
