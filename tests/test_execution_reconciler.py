@@ -785,39 +785,72 @@ def test_a_stored_ack_wakes_the_cycle_even_when_the_caller_was_cancelled(tmp_pat
 
 # ────────────── ⑰ 조회 예산은 주기 예산과 별개이고 B1 은 조회 앞에 있다 ──────────────
 
-def test_a_stuck_query_never_starves_the_stored_reapply(tmp_path, monkeypatch):
-    """(B1) 은 조회 **앞**에서 돌고 조회에는 주기와 별도의 예산이 있다(Codex 11차 P1).
+async def received_inbox_row(runtime, f):
+    """B1 이 재접수할 잔존 RECEIVED 행 하나 — 관측 저장 뒤 적용 전에 멈춘 잔해다."""
+    ref = f['ref']
+    await observe(runtime, f, 40, D('400000'))
+    observation = FillObservation(ref.account_scope, 'KR', ref.order_date, 'KRX', ref.order_no,
+                                  SYMBOL, 'BUY', 40, D('400000'), org_no=ref.org_no,
+                                  metadata={'entry_signal_score': 80.0})
+    assert (await runtime.owner.receive(
+        observation, ingress_context=runtime.ingress_context(1))).status == 'RECEIVED'
+    return observation
 
-    조회가 주기 예산을 전부 쓰면 저장된 체결이 영영 적용되지 않는다 — inbox 의 RECEIVED
-    행은 조회 지연과 무관하게 재접수돼야 한다. `max_pages` 도 수집기까지 전달된다.
+
+def stuck_query(seen, started, release):
+    async def stuck(*, start_date, end_date, exchange_scope, max_pages):
+        seen.append(max_pages)
+        started.set()
+        await release.wait()
+        raise AssertionError('조회는 자기 예산에서 끊겨야 한다')
+    return stuck
+
+
+def test_the_inbox_reapply_has_already_run_when_the_query_starts(tmp_path, monkeypatch):
+    """(B1) 은 조회 **앞**에서 돈다(Codex 11차 P1).
+
+    A 가 앞이면 조회가 예산을 소진한 주기에서 B 가 한 번도 돌지 않아, 이미 저장된
+    RECEIVED 관측이 조회 장애와 같은 수명을 갖는다. 시각이 아니라 순서로 잰다 —
+    조회에 들어선 순간 재접수가 끝나 있어야 한다.
     """
     async def scenario():
         f = await producer(tmp_path, monkeypatch)
         pump = start_pump(f['engine'])
-        runtime, ref = f['runtime'], f['ref']
-        await observe(runtime, f, 40, D('400000'))
-        observation = FillObservation(ref.account_scope, 'KR', ref.order_date, 'KRX', ref.order_no,
-                                      SYMBOL, 'BUY', 40, D('400000'), org_no=ref.org_no,
-                                      metadata={'entry_signal_score': 80.0})
-        assert (await runtime.owner.receive(
-            observation, ingress_context=runtime.ingress_context(1))).status == 'RECEIVED'
-        started, release = asyncio.Event(), asyncio.Event()
-        seen = []
-
-        async def stuck(*, start_date, end_date, exchange_scope, max_pages):
-            seen.append(max_pages)
-            started.set()
-            await release.wait()
-            raise AssertionError('조회는 자기 예산에서 끊겨야 한다')
-
-        monkeypatch.setattr(runtime_module, 'RECONCILER_QUERY_TIMEOUT', 0.05)
+        runtime = f['runtime']
+        observation = await received_inbox_row(runtime, f)
+        started, release, seen = asyncio.Event(), asyncio.Event(), []
         try:
-            # 주기 예산(5초)은 그대로 남는다 — 끊긴 것은 조회뿐이다.
-            assert await runtime.reconcile_once(stuck) is True
-            assert seen == [RECONCILER_MAX_PAGES] and started.is_set()
+            runtime.start_reconciler(stuck_query(seen, started, release),
+                                     interval=100.0, cycle_timeout=30.0)
+            await asyncio.wait_for(started.wait(), 5)
             assert runtime.owner.state['inbox'][observation.observation_id]['status'] in (
                 'APPLIED', 'SUPERSEDED')
             assert f['engine'].portfolio.positions[SYMBOL].quantity == 40
+        finally:
+            release.set()
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+def test_a_stuck_query_is_cut_by_its_own_budget_not_the_cycle_budget(tmp_path, monkeypatch):
+    """조회에는 주기와 **별도**의 예산이 있고 `max_pages` 는 수집기까지 전달된다.
+
+    조회 예산이 없으면 조회 한 번이 주기 예산 전체를 삼켜 B2 까지 굶는다. 파서에만
+    상한을 걸고 수집기에 안 걸면 수집기는 기본 10페이지를 돌아 그 예산을 넘긴다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime = f['runtime']
+        observation = await received_inbox_row(runtime, f)
+        started, release, seen = asyncio.Event(), asyncio.Event(), []
+        monkeypatch.setattr(runtime_module, 'RECONCILER_QUERY_TIMEOUT', 0.05)
+        try:
+            # 주기 예산(기본 60초)은 그대로 남는다 — 끊긴 것은 조회뿐이다.
+            assert await runtime.reconcile_once(stuck_query(seen, started, release)) is True
+            assert seen == [RECONCILER_MAX_PAGES] and started.is_set()
+            assert runtime.owner.state['inbox'][observation.observation_id]['status'] in (
+                'APPLIED', 'SUPERSEDED')
             assert runtime.health()['reconciler']['skipped'] == {'query_timeout': 1}
         finally:
             release.set()
