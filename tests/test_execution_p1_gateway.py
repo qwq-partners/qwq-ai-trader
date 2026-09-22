@@ -24,10 +24,19 @@ async def fixture(tmp_path, monkeypatch):
 
 
 class UnreadableIntentCache(dict):
-    """보호 신호가 기존 캐시를 읽는 회귀도 잡는다."""
+    """보호 신호의 캐시 조회·멤버십 확인·대입을 모두 금지한다."""
 
     def get(self, *args, **kwargs):
         raise AssertionError('보호 SELL은 자동 intent 캐시를 읽을 수 없다')
+
+    def __contains__(self, key):
+        raise AssertionError('보호 SELL은 자동 intent 캐시를 조회할 수 없다')
+
+    def __getitem__(self, key):
+        raise AssertionError('보호 SELL은 자동 intent 캐시를 읽을 수 없다')
+
+    def __setitem__(self, key, value):
+        raise AssertionError('보호 SELL은 자동 intent 캐시를 쓸 수 없다')
 
 
 @pytest.mark.parametrize('seeded', [False, True])
