@@ -33,10 +33,18 @@ from .market_source import (canonical_observation, observation_from_event, compl
 # 한 주기 전체를 `cycle_timeout`으로 감싼다(P-1). 최악 예산은 조회 한 번이 쓰는 시간이고
 # 그것은 `request_timeout × 페이지 수`다. 수집기 기본 10페이지면 15×10=150초가 되어 손절
 # 지연의 상한이 무의미해지므로 **이 단계는 페이지 상한을 3으로 낮춘다**: 15×3=45초 + 적용/
-# commit 여유 15초 = 기본 60초. 같은 상한을 파서에도 넘겨 4페이지 이상 수집은 complete로
-# 인정하지 않는다(더 넓은 조회가 필요하다고 판명되면 두 값을 함께 올려야 한다).
+# commit 여유 15초 = 기본 60초. 같은 상한을 파서에도 넘기고 `collect(max_pages=)`로 실제
+# 수집기에도 넘긴다 — 셋 중 하나만 올리면 4페이지 이상 수집이 complete 로 인정되거나
+# 주기 예산이 무의미해진다(더 넓은 조회가 필요하면 세 값을 함께 올려야 한다).
+#
+# 상수 관계(주기 안에서 B 가 굶지 않게 하는 유일한 근거):
+#   RECONCILER_QUERY_TIMEOUT == RECONCILER_REQUEST_TIMEOUT × RECONCILER_MAX_PAGES  (= 45s)
+#   RECONCILER_CYCLE_TIMEOUT − RECONCILER_QUERY_TIMEOUT == B 에 남는 시간          (= 15s)
+# 조회에 **별도 예산**을 두지 않으면 조회 한 번이 주기 예산 전체를 삼켜 저장된 체결의
+# 재접수(B)가 영영 돌지 않는다. 순서도 같은 이유로 B1 → A → B2 다(아래 `_reconcile_cycle`).
 RECONCILER_MAX_PAGES = 3
 RECONCILER_REQUEST_TIMEOUT = 15.0
+RECONCILER_QUERY_TIMEOUT = 45.0
 RECONCILER_CYCLE_TIMEOUT = 60.0
 RECONCILER_INTERVAL = 3.0
 # 대상이 있는데 이만큼의 주기 동안 상태가 전진하지 않으면 막힌 것으로 본다(P-2).
@@ -521,8 +529,10 @@ class KRExecutionRuntime:
                          cycle_timeout: float = RECONCILER_CYCLE_TIMEOUT) -> asyncio.Task:
         """명시 기동. 제품 진입점에는 아직 호출자가 없다(배선은 P0-3).
 
-        `collect(start_date=, end_date=, exchange_scope=)`는 수집기 어댑터다. 이 runtime은
-        HTTP/계좌/리미터를 갖지 않으며 조회 실패를 재시도로 덮지 않는다.
+        `collect(start_date=, end_date=, exchange_scope=, max_pages=)`는 수집기 어댑터다.
+        `max_pages`는 실제 수집기(`LegacyExecutionQueries`/`get_execution_daily`)까지 그대로
+        전달돼야 한다 — 파서에만 걸면 수집기는 기본 10페이지를 돌아 조회 예산을 넘긴다.
+        이 runtime은 HTTP/계좌/리미터를 갖지 않으며 조회 실패를 재시도로 덮지 않는다.
         """
         if self._closing:
             raise ApplicationBlocked("reconciler_admission_closed")
@@ -601,9 +611,14 @@ class KRExecutionRuntime:
 
         밖이면 조회도 재접수도 하지 않는다 — 관측을 더 모아도 `reduce_economics`가 계속
         ValueError를 내므로 원장 TR 예산만 쓰고 FAILED ingress 행만 쌓인다. 여기서 빠지는
-        비종결 상태는 `reconciling`·`blocked_unknown` 둘뿐이고, 제품에서 `lifecycle.reconcile`
-        호출자는 이 주기 하나뿐이라(그 경로는 0체결 관측을 저장하지 않는다) `reconciling`은
-        만들어지지 않으며 `blocked_unknown`은 order_ref가 없어 이미 대상이 아니었다.
+        비종결 상태는 `reconciling`·`blocked_unknown` 둘뿐이다.
+
+        **현재의 request-bound 생산 경로에 한정한 관찰**(일반 불변식이 아니다): 그 경로의
+        `lifecycle.reconcile` 호출자는 이 주기 하나뿐이고 그 경로는 0체결 관측을 저장하지
+        않으므로 `reconciling`이 만들어지지 않으며, `blocked_unknown`은 order_ref 없는 ACK
+        실패에서만 생겨 이미 대상이 아니다. 두 상태 모두 **만들 수는 있다** — `lifecycle
+        .reconcile`에 0체결 관측을 직접 주거나 `record_result`에 order_ref 있는 UNKNOWN을
+        주면 된다. 그래서 술어는 그 두 경우에도 fail-closed 여야 하고, 실제로 그렇다.
         """
         return (type(attempt) is dict and not attempt.get("evidence_conflict")
                 and attempt.get("state") in APPLIABLE_ATTEMPT_STATES)
@@ -667,21 +682,47 @@ class KRExecutionRuntime:
         key = kind + ":" + status
         self._reconciler_outcomes[key] = self._reconciler_outcomes.get(key, 0) + 1
 
+    def _owner_task(self, operation):
+        """주기가 **시작한** owner 변경은 주기 예산의 취소로 끊지 않는다.
+
+        `wait_for` 만료가 진행 중 commit 을 취소하면 `_commit_publish` 가 owner 를
+        `_block()` 한 채 남겨 다음 명령(`_owner_ready`)까지 전부 막힌다. 주기 예산은
+        "새 작업 시작"만 멈추고, 수락된 저장 작업의 완료는 `shutdown` 의 drain 이
+        기다린다(같은 집합 `_reconciler_tasks`).
+        """
+        task = asyncio.create_task(operation())
+        self._reconciler_tasks.add(task)
+
+        def completed(done):
+            self._reconciler_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+        return asyncio.shield(task)
+
     async def _reconcile_cycle(self, collect) -> bool:
-        state = self.owner.state
-        business_day, blocked = self._reconciler_day(state)
+        """일자 게이트 → B1(조회 불필요) → A(조회·reconcile) → B2(재구성) 순서다.
+
+        A 를 앞에 두면 조회가 예산을 소진한 주기에서 B 가 한 번도 돌지 않아, 이미 저장된
+        RECEIVED 관측이 조회 장애와 같은 수명을 갖게 된다. B1 은 조회와 무관하므로
+        가장 앞이고, B2 는 A 의 chain 판정을 입력으로 받으므로 뒤다.
+        """
+        business_day, blocked = self._reconciler_day(self.owner.state)
         if business_day is None:
             self._skip_reason(blocked)
             self._reconciler_target_count = 0
             return False
-        targets = self._reconcile_targets(state, business_day)
+        progressed = await self._reapply_inbox(business_day)
+        # B1이 inbox를 바꿨을 수 있다. 대상은 현재 상태에서 다시 고른다.
+        targets = self._reconcile_targets(self.owner.state, business_day)
         self._reconciler_target_count = len(targets)
         chain_blocked: set[str] = set()
-        progressed = False
         if targets:
             # 대상이 0이면 조회 자체를 하지 않는다(원장 TR 예산은 미해결 주문에만 쓴다).
-            progressed = await self._reconcile_observed(collect, business_day, targets, chain_blocked)
-        if await self._reapply_stored(business_day, chain_blocked):
+            if await self._reconcile_observed(collect, business_day, targets, chain_blocked):
+                progressed = True
+        if await self._reapply_reconstructed(business_day, chain_blocked):
             progressed = True
         # 주기 끝에 사유를 한 번 확정한다(P2-d). 막힌 주기의 blocked_reason 접미사는
         # 그 주기가 실제로 멈춘 이유여야 하고, 지난 주기 사유를 물려받으면 안 된다.
@@ -695,10 +736,15 @@ class KRExecutionRuntime:
     async def _reconcile_observed(self, collect, business_day, targets, chain_blocked) -> bool:
         """(A) 한 주기에 조회는 1회. 운영과 같은 ALL 범위로 보고 행의 거래소는 파서가 대조한다."""
         try:
-            collection = await collect(start_date=business_day, end_date=business_day,
-                                       exchange_scope="ALL")
+            collection = await asyncio.wait_for(
+                collect(start_date=business_day, end_date=business_day, exchange_scope="ALL",
+                        max_pages=RECONCILER_MAX_PAGES), RECONCILER_QUERY_TIMEOUT)
         except asyncio.CancelledError:
             raise
+        except asyncio.TimeoutError:
+            # 조회만의 예산이다. 주기 예산을 통째로 삼키지 않아 B2는 이번 주기에도 돈다.
+            self._skip_reason("query_timeout")
+            return False
         except Exception:
             logger.exception("[실행] 체결 조회 실패: day={}", business_day)
             self._skip_reason("collect_failed")
@@ -749,12 +795,18 @@ class KRExecutionRuntime:
         if not evidence.schema_valid:
             self._skip_reason(evidence.reason if evidence.reason else "schema_invalid")
             return False
+        if evidence.cumulative_quantity < attempt["observed_quantity"]:
+            # 퇴행 응답(저장 40주인데 응답 20주)은 금액 차이로 `_evidence_changes_attempt`를
+            # 통과하지만 `lifecycle.reconcile`은 `qty < old_qty`에서 상태를 그대로 반환한다.
+            # 그래도 mutate는 commit하므로 version·게시만 매 주기 전진한다 — 호출을 건너뛴다.
+            self._skip_reason("regressed_observation")
+            return False
         if not self._evidence_changes_attempt(attempt, evidence):
             # 같은 응답을 다시 저장하지 않는다. mutate는 그 자체로 version·게시를 전진시킨다.
             self._skip_reason(evidence.reason if evidence.reason else "no_change")
             return False
         before = attempt["observed_quantity"]
-        await self.lifecycle.reconcile(attempt_id, evidence)
+        await self._owner_task(lambda: self.lifecycle.reconcile(attempt_id, evidence))
         stored = self.owner.state["attempts"][attempt_id]
         return stored["observed_quantity"] > before
 
@@ -772,8 +824,8 @@ class KRExecutionRuntime:
                 and evidence.state.value in TERMINAL_STATES
                 and attempt["state"] not in TERMINAL_STATES)
 
-    async def _reapply_stored(self, business_day, chain_blocked) -> bool:
-        """(B) 조회와 무관한 저장 상태 재처리. 조회가 죽어도 저장된 체결은 적용된다."""
+    async def _reapply_inbox(self, business_day) -> bool:
+        """(B1) 조회와 무관한 잔존 inbox 행의 재접수. 그래서 조회 **앞**에서 돈다."""
         progressed = False
         state = self.owner.state
         for row in state.get("inbox", {}).values():
@@ -795,6 +847,11 @@ class KRExecutionRuntime:
                 continue
             if await self._reapply(observation):
                 progressed = True
+        return progressed
+
+    async def _reapply_reconstructed(self, business_day, chain_blocked) -> bool:
+        """(B2) inbox 행이 없고 `observed > applied` 인 attempt 를 저장 상태만으로 재구성한다."""
+        progressed = False
         # B1이 inbox를 바꿨을 수 있다. 재구성은 현재 상태에서 다시 읽는다.
         state = self.owner.state
         inbox = state.get("inbox", {})
@@ -832,7 +889,8 @@ class KRExecutionRuntime:
 
     async def _reapply(self, observation: FillObservation) -> bool:
         try:
-            receipt = await self.engine.apply_execution_observation(observation)
+            receipt = await self._owner_task(
+                lambda: self.engine.apply_execution_observation(observation))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
