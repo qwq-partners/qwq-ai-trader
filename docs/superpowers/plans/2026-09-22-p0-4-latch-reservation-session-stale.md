@@ -542,7 +542,7 @@ S-A ∥ S-B+S-C(한 작업자, 서로 다른 파일) ∥ S-D — 작업자 3(상
 
 P0/P1 0 · P2 1(C6 docstring: next_market 에서 `ORD_DVSN`·`AFHR_FLPR_YN` 은 같지만 `ORD_UNPR`·fingerprint 는 다르다 — "같은 본문" 서술 부정확 → `a4f8585` 정정). 확인 항목: (a) admit 은 복제 상태의 reducer 안에서 실행되고 반환 뒤에야 commit — 확장된 except 가 commit 뒤 실패를 면제하지 않고, 일반 예외·취소 래치 유지 (b) legacy 본문 바이트 보존·함수 안 emit 부재 (c) 제품 해제 경로 추가 없음(시험의 `owner.mutate` 예약 지우기는 제품 경로 아님) (d) 결정 문서 정정이 인용과 일치.
 
-통합: `3fadf81`→merge · `3773da0`→merge · `c6c1913`→merge `90cfc20` → 처분 `6eaee68` → `a4f8585`. 워크플로 worktree 6개 제거·작업 브랜치 3개 삭제. 전체 suite 단독 직렬(시계 창 회피): **KST 5116 passed**/xfail 2·경고 4·격리 0(`6eaee68`), UTC 는 §5-4.
+통합: `3fadf81`→merge · `3773da0`→merge · `c6c1913`→merge `90cfc20` → 처분 `6eaee68` → `a4f8585`. 워크플로 worktree 6개 제거·작업 브랜치 3개 삭제. 전체 suite 단독 직렬(시계 창 회피): **KST 5116 passed**(`6eaee68`, 21:2x KST) / **UTC 5116 passed**(`1bdcc61` 트리, 13:01~13:08 UTC — 12:30~13:00 창을 피해 시작) — 각 xfail 2·경고 4·격리 0. 그 실행 중(13:04 UTC) 작업 칩 세션이 같은 브랜치에 `bba260c`(gateway legacy 시험 4건의 CV 시계 동결, 제품 0줄·시험 3파일)를 얹었다 — 수집은 13:01 에 끝났으므로 UTC 결과는 `1bdcc61` 내용이고, `bba260c` 의 3파일은 별도 UTC 실행으로 GREEN 확인(77 passed, S-D 파일 포함). 이후 전체 suite 는 시계 창 회피가 필요 없다(그 커밋의 CHANGELOG 항목).
 
 ### 5-4. 마감 — 무엇이 닫혔고 무엇이 아닌가
 
