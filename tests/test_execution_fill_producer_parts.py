@@ -77,6 +77,23 @@ def test_our_order_filled_on_another_exchange_is_named_not_silently_missing():
     assert evidence.cumulative_quantity == 0 and not evidence.supported_finality
 
 
+def test_a_matching_non_krx_row_is_read_but_never_proven_final():
+    """행의 거래소가 ref와 같아도 KRX가 아니면 종결을 인정하지 않는다(대조 가드와 별개).
+
+    대조 가드(`excg_id_dvsn_cd != ref.exchange`)만 남기면 이 행이 통과한다 — supported의
+    `ref.exchange == "KRX"` 는 그 가드가 덮지 않는 조건이고, 여기 없는 거래소의 취소
+    최종성은 공식 자료에도 없다.
+    """
+    ref = OrderRef("account-1", "KR", "2026-09-17", "NXT", "000123", "branch")
+    evidence = parse_order_evidence(
+        ref, "005930", "sell", [EvidencePage([row(excg_id_dvsn_cd="NXT")], "D")],
+        observed_at=NOW, request_started_at=NOW - timedelta(seconds=1), now=NOW,
+        query_scope=ALL_SCOPE)
+    assert evidence.schema_valid and evidence.cumulative_quantity == 10
+    assert not evidence.supported_finality and evidence.reason == "unsupported_finality"
+    assert evidence.state is OrderState.RECONCILING
+
+
 def test_all_scope_query_still_matches_and_finalizes_a_krx_row():
     evidence = parse([EvidencePage([row()], "D")], query_scope=ALL_SCOPE)
     assert evidence.supported_finality and evidence.state is OrderState.FINAL_FILLED
@@ -120,7 +137,8 @@ def test_real_collector_pages_feed_the_parser_and_prove_one_full_fill():
 def test_frozen_collector_rows_without_thawing_are_not_evidence():
     result, _ = collection([], [row()])
     raw = [EvidencePage(list(page.rows), page.response_cont,
-                        page.next_cursor or ("", ""), page.request_cursor, page.request_cont)
+                        page.next_cursor if page.next_cursor is not None else ("", ""),
+                        page.request_cursor, page.request_cont)
            for page in result.pages]
     evidence = parse_order_evidence(REF, "005930", "sell", raw, observed_at=result.completed_at,
                                     request_started_at=result.started_at,
@@ -188,6 +206,9 @@ def test_gateway_binds_the_signal_score_and_refuses_an_unusable_one():
     event = type("E", (), {"score": 80.0})()
     assert SignalGateway._fill_metadata(event, buy) == {"entry_signal_score": 80.0}
     assert SignalGateway._fill_metadata(event, sell) is None
+    # 0점은 유효한 주문 intent다 — falsy 폴백으로 바꾸면 신호 점수 80이 새어 들어온다.
+    buy.signal_score = 0.0
+    assert SignalGateway._fill_metadata(event, buy) == {"entry_signal_score": 0.0}
     buy.signal_score = D("80")
     with pytest.raises(CommandValidationError):
         SignalGateway._fill_metadata(event, buy)
@@ -227,6 +248,8 @@ def test_binding_carries_the_session_and_metadata_and_reconcile_accepts_all_scop
             assert binding["session"] == request.session.session == "regular"
             # 정수 점수는 float으로 정규화한다(Decimal은 encode_state를 통과하지 못한다).
             assert binding["fill_metadata"] == {"entry_signal_score": 80.0, "exit_type": "stop_loss"}
+            # 80 == 80.0 이라 동등 비교만으로는 정규화가 사라져도 통과한다.
+            assert type(binding["fill_metadata"]["entry_signal_score"]) is float
             result = await f["commands"].dispatch(request, f["entry"](request),
                 GuardedKISTransport(f["broker"], request_builder=f["builder"]))
             ref, now = result.order_ref, f["clock"][0]
