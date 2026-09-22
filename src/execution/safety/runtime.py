@@ -10,11 +10,15 @@ from typing import Callable
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .application import ApplicationBlocked, FillApplicationCoordinator, FillObservation, FillReduction, IngressContext
+from loguru import logger
+
+from .application import (ApplicationBlocked, FillApplicationCoordinator, FillObservation,
+                          FillReduction, InboxReceipt, IngressContext, observation_from_evidence)
 from .day_recovery import (DayReceipt, RolloverFence, ValuationEvidence, aware, day, text,
                            scope_reason, unresolved_reason, validate_valuation, reset_daily)
 from .economics import decode_portfolio, reduce_economics, validate_risk, publish_risk
-from .lifecycle import OrderLifecycleCoordinator
+from .evidence import evidence_pages, parse_order_evidence, parser_scope
+from .lifecycle import OrderEvidence, OrderLifecycleCoordinator, OrderRef, TERMINAL_STATES
 from .initial_r import capture_initial_stop, capture_finality, reduce_finalize_initial_r
 from .protection import decode_protection, publish_protection, quote_protection, reduce_protection
 from .protection_recovery import RecoveryReceipt, capture_fill, capture_quote, digest, reduce_repair
@@ -22,6 +26,20 @@ from .store import ExecutionStateStore
 from .market_source import (canonical_observation, observation_from_event, complete_source,
                             validate_sources, completed_duplicate, observation_market_data,
                             quote_price_view, validate_price_views)
+
+
+# ── P0-2 2단계: 체결 증거 생산자(주기 task). 제품 호출자 0건·live 파일 0줄 ──────────
+# 한 주기 전체를 `cycle_timeout`으로 감싼다(P-1). 최악 예산은 조회 한 번이 쓰는 시간이고
+# 그것은 `request_timeout × 페이지 수`다. 수집기 기본 10페이지면 15×10=150초가 되어 손절
+# 지연의 상한이 무의미해지므로 **이 단계는 페이지 상한을 3으로 낮춘다**: 15×3=45초 + 적용/
+# commit 여유 15초 = 기본 60초. 같은 상한을 파서에도 넘겨 4페이지 이상 수집은 complete로
+# 인정하지 않는다(더 넓은 조회가 필요하다고 판명되면 두 값을 함께 올려야 한다).
+RECONCILER_MAX_PAGES = 3
+RECONCILER_REQUEST_TIMEOUT = 15.0
+RECONCILER_CYCLE_TIMEOUT = 60.0
+RECONCILER_INTERVAL = 3.0
+# 대상이 있는데 이만큼의 주기 동안 상태가 전진하지 않으면 막힌 것으로 본다(P-2).
+RECONCILER_STALL_CYCLES = 5
 
 
 class KRExecutionRuntime:
@@ -52,6 +70,20 @@ class KRExecutionRuntime:
         self._intraday_writer = None
         self._regime_writer = None
         self.gateway = None
+        self._reconciler_task = None
+        self._reconciler_tasks: set[asyncio.Task] = set()
+        self._reconciler_wakeup = None
+        self._reconciler_interval = RECONCILER_INTERVAL
+        self._reconciler_cycle_timeout = RECONCILER_CYCLE_TIMEOUT
+        self._reconciler_started_at = None
+        self._reconciler_cycle_started_at = None
+        self._reconciler_complete_at = None
+        self._reconciler_progress_at = None
+        self._reconciler_last_reason = "not_started"
+        self._reconciler_target_count = 0
+        self._reconciler_skipped: dict[str, int] = {}
+        self._reconciler_outcomes: dict[str, int] = {}
+        self._reconciler_parked = 0
         self.owner = FillApplicationCoordinator(store, self._publish, self._reduce,
             registration_scope=self._policy_registration_scope,
             registration_guard=self._require_registration_day)
@@ -474,9 +506,300 @@ class KRExecutionRuntime:
                      intent_id=economic.intent_id, status=status, version=self.owner.version + 1, now=now)
         return FillReduction(economic.state, protection_status=status, journal_pending=True)
 
+    # ───────────────────────── 체결 증거 생산자(P0-2 2단계) ─────────────────────────
+
+    def start_reconciler(self, collect, *, interval: float = RECONCILER_INTERVAL,
+                         cycle_timeout: float = RECONCILER_CYCLE_TIMEOUT) -> asyncio.Task:
+        """명시 기동. 제품 진입점에는 아직 호출자가 없다(배선은 P0-3).
+
+        `collect(start_date=, end_date=, exchange_scope=)`는 수집기 어댑터다. 이 runtime은
+        HTTP/계좌/리미터를 갖지 않으며 조회 실패를 재시도로 덮지 않는다.
+        """
+        if self._closing:
+            raise ApplicationBlocked("reconciler_admission_closed")
+        if not callable(collect):
+            raise ValueError("invalid_execution_collector")
+        for value in (interval, cycle_timeout):
+            if type(value) not in (int, float) or not Decimal(str(value)).is_finite() or value <= 0:
+                raise ValueError("invalid_reconciler_interval")
+        if self._reconciler_task is not None and not self._reconciler_task.done():
+            raise ApplicationBlocked("reconciler_already_running")
+        self._reconciler_wakeup = asyncio.Event()
+        self._reconciler_interval = float(interval)
+        self._reconciler_cycle_timeout = float(cycle_timeout)
+        self._reconciler_started_at = self._now()
+        self._reconciler_last_reason = "started"
+        task = asyncio.create_task(self._reconcile_loop(collect))
+        self._reconciler_task = task
+        self._reconciler_tasks.add(task)
+
+        def completed(done):
+            self._reconciler_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
+        return task
+
+    def notify_execution_change(self) -> None:
+        """새 ACK/미해결 시도를 알린다. 잠든 주기를 즉시 깨워 첫 체결 지연을 만들지 않는다."""
+        wakeup = self._reconciler_wakeup
+        if wakeup is not None:
+            wakeup.set()
+
+    async def _reconcile_loop(self, collect) -> None:
+        """대상이 있으면 고정 interval, 없으면 조회 0회로 Event에서 잠든다(backoff 없음)."""
+        while not self._closing:
+            self._reconciler_wakeup.clear()
+            try:
+                await self.reconcile_once(collect)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 한 주기의 예외가 주기 task를 죽이지 않는다. 사유는 health가 들고 있다.
+                logger.exception("[실행] 체결 대사 주기 실패")
+            if self._closing:
+                break
+            try:
+                if self._reconciler_target_count:
+                    await asyncio.wait_for(self._reconciler_wakeup.wait(), self._reconciler_interval)
+                else:
+                    await self._reconciler_wakeup.wait()
+            except asyncio.TimeoutError:
+                pass
+
+    async def reconcile_once(self, collect) -> bool:
+        """한 주기. 대상 선정~조회~재접수~health **전체**를 cycle_timeout으로 감싼다(P-1)."""
+        self._reconciler_cycle_started_at = self._now()
+        try:
+            return await asyncio.wait_for(self._reconcile_cycle(collect), self._reconciler_cycle_timeout)
+        except asyncio.TimeoutError:
+            self._skip_reason("cycle_timeout")
+            return False
+
+    def _reconciler_day(self, state):
+        """A·B 두 집합의 공통 전제. 아니면 조회도 재처리도 하지 않는다(P-4)."""
+        today = self._now().date().isoformat()
+        if state.get("risk", {}).get("day") != today:
+            return None, "prior_day"
+        if self.day_admission_closed:
+            return None, "day_admission_closed"
+        return today, ""
+
+    @staticmethod
+    def _reconcile_targets(state, business_day) -> dict:
+        """미해결 submit만. 일자가 다른 주문은 economics의 cross-day 거부에 걸린다(F10)."""
+        targets = {}
+        for attempt_id, row in state.get("attempts", {}).items():
+            ref = row.get("order_ref") if type(row) is dict else None
+            if (type(row) is not dict or row.get("kind") != "submit" or ref is None
+                    or row.get("evidence_conflict") or ref.get("order_date") != business_day):
+                continue
+            if (row.get("state") not in TERMINAL_STATES
+                    or row.get("observed_quantity") != row.get("applied_quantity")):
+                targets[attempt_id] = row
+        return targets
+
+    def _skip_reason(self, reason: str) -> None:
+        self._reconciler_skipped[reason] = self._reconciler_skipped.get(reason, 0) + 1
+        self._reconciler_last_reason = reason
+
+    def _apply_outcome(self, kind: str, status: str) -> None:
+        key = kind + ":" + status
+        self._reconciler_outcomes[key] = self._reconciler_outcomes.get(key, 0) + 1
+
+    async def _reconcile_cycle(self, collect) -> bool:
+        state = self.owner.state
+        business_day, blocked = self._reconciler_day(state)
+        if business_day is None:
+            self._skip_reason(blocked)
+            self._reconciler_target_count = 0
+            return False
+        targets = self._reconcile_targets(state, business_day)
+        self._reconciler_target_count = len(targets)
+        chain_blocked: set[str] = set()
+        progressed = False
+        if targets:
+            # 대상이 0이면 조회 자체를 하지 않는다(원장 TR 예산은 미해결 주문에만 쓴다).
+            progressed = await self._reconcile_observed(collect, business_day, targets, chain_blocked)
+        if await self._reapply_stored(business_day, chain_blocked):
+            progressed = True
+        if progressed:
+            self._reconciler_progress_at = self._now()
+        return progressed
+
+    async def _reconcile_observed(self, collect, business_day, targets, chain_blocked) -> bool:
+        """(A) 한 주기에 조회는 1회. 운영과 같은 ALL 범위로 보고 행의 거래소는 파서가 대조한다."""
+        try:
+            collection = await collect(start_date=business_day, end_date=business_day,
+                                       exchange_scope="ALL")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[실행] 체결 조회 실패: day={}", business_day)
+            self._skip_reason("collect_failed")
+            return False
+        if collection.complete is not True:
+            # 불완전 수집은 파서를 부르지 않는다. 뒤 페이지 실패를 '없음'으로 읽지 않는다.
+            self._skip_reason("incomplete_collection")
+            return False
+        self._reconciler_complete_at = self._now()
+        try:
+            pages = evidence_pages(collection)
+        except (AttributeError, TypeError, ValueError):
+            self._skip_reason("collection_shape")
+            return False
+        progressed = False
+        for attempt_id, attempt in targets.items():
+            try:
+                if await self._reconcile_attempt(attempt_id, attempt, collection, pages, chain_blocked):
+                    progressed = True
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 한 시도의 실패가 다른 시도의 관측을 버리지 않는다.
+                logger.exception("[실행] 체결 대사 실패: attempt={}", attempt_id)
+                self._skip_reason("attempt_failed")
+        return progressed
+
+    async def _reconcile_attempt(self, attempt_id, attempt, collection, pages, chain_blocked) -> bool:
+        binding = attempt.get("request_binding")
+        session = None if binding is None else binding.get("session")
+        if type(session) is not str or not session:
+            # 세션은 조회 응답에 없다. 주문 binding에 없으면 종결을 지어내지 않는다.
+            self._skip_reason("missing_session")
+            return False
+        evidence = parse_order_evidence(
+            OrderRef.from_dict(attempt["order_ref"]), attempt["symbol"], attempt["side"], pages,
+            tr_id=collection.scope.tr_id, session=session, query_kind="all",
+            max_pages=RECONCILER_MAX_PAGES, observed_at=collection.completed_at,
+            request_started_at=collection.started_at,
+            query_scope=parser_scope(collection.scope, session=session), now=self._now())
+        if evidence.chain:
+            # 자식행이 보이거나 판정할 수 없으면 수량도 종결도 쓰지 않는다(F4·P-3).
+            chain_blocked.add(attempt_id)
+            self._skip_reason("chain")
+            return False
+        if not evidence.schema_valid:
+            self._skip_reason(evidence.reason if evidence.reason else "schema_invalid")
+            return False
+        if not self._evidence_changes_attempt(attempt, evidence):
+            # 같은 응답을 다시 저장하지 않는다. mutate는 그 자체로 version·게시를 전진시킨다.
+            self._skip_reason(evidence.reason if evidence.reason else "no_change")
+            return False
+        before = attempt["observed_quantity"]
+        await self.lifecycle.reconcile(attempt_id, evidence)
+        stored = self.owner.state["attempts"][attempt_id]
+        return stored["observed_quantity"] > before
+
+    @staticmethod
+    def _evidence_changes_attempt(attempt, evidence) -> bool:
+        """이 관측이 attempt 행을 바꿀 수 있을 때만 reconcile을 부른다(P-5)."""
+        if evidence.reason == "not_found" or evidence.order_quantity != attempt["quantity"]:
+            return False
+        if evidence.cumulative_quantity > attempt["observed_quantity"]:
+            return True
+        if evidence.cumulative_amount != Decimal(attempt["observed_amount"]):
+            return True
+        return (evidence.complete and evidence.supported_finality
+                and evidence.state.value in TERMINAL_STATES
+                and attempt["state"] not in TERMINAL_STATES)
+
+    async def _reapply_stored(self, business_day, chain_blocked) -> bool:
+        """(B) 조회와 무관한 저장 상태 재처리. 조회가 죽어도 저장된 체결은 적용된다."""
+        progressed = False
+        state = self.owner.state
+        for row in state.get("inbox", {}).values():
+            if row.get("status") in ("APPLIED", "SUPERSEDED", "NEEDS_RECONCILIATION"):
+                continue
+            body = row.get("observation")
+            if type(body) is not dict or body.get("trading_day") != business_day:
+                continue
+            try:
+                observation = FillObservation(**body)
+            except (TypeError, ValueError):
+                self._skip_reason("stored_observation_shape")
+                continue
+            if await self._reapply(observation):
+                progressed = True
+        # B1이 inbox를 바꿨을 수 있다. 재구성은 현재 상태에서 다시 읽는다.
+        state = self.owner.state
+        inbox = state.get("inbox", {})
+        for attempt_id, attempt in state.get("attempts", {}).items():
+            ref = attempt.get("order_ref") if type(attempt) is dict else None
+            if (attempt_id in chain_blocked or type(attempt) is not dict
+                    or attempt.get("kind") != "submit" or ref is None
+                    or ref.get("order_date") != business_day
+                    or attempt.get("observed_quantity", 0) <= attempt.get("applied_quantity", 0)):
+                continue
+            try:
+                observation = self._stored_observation(attempt)
+            except (KeyError, TypeError, ValueError):
+                self._skip_reason("stored_attempt_shape")
+                continue
+            if observation.observation_id in inbox:
+                continue  # 같은 행은 B1이 소유한다. 두 곳에서 접수하지 않는다.
+            if await self._reapply(observation):
+                progressed = True
+        return progressed
+
+    @staticmethod
+    def _stored_observation(attempt) -> FillObservation:
+        """저장 상태만으로 관측을 되살린다 — 파서 경로와 **같은 함수**라 observation_id가 같다."""
+        binding = attempt.get("request_binding")
+        metadata = None if binding is None else binding.get("fill_metadata")
+        evidence = OrderEvidence(OrderRef.from_dict(attempt["order_ref"]), attempt["symbol"],
+                                 attempt["side"], attempt["quantity"], attempt["observed_quantity"],
+                                 Decimal(attempt["observed_amount"]))
+        return observation_from_evidence(evidence, trading_day=attempt["order_ref"]["order_date"],
+                                         metadata=metadata)
+
+    async def _reapply(self, observation: FillObservation) -> bool:
+        try:
+            receipt = await self.engine.apply_execution_observation(observation)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._apply_outcome(type(exc).__name__, "raised")
+            return False
+        self._apply_outcome(type(receipt).__name__, str(getattr(receipt, "status", "")))
+        if isinstance(receipt, InboxReceipt):
+            if not receipt.application_complete:
+                self._reconciler_parked += 1
+            return receipt.application_complete
+        return receipt.status in ("APPLIED", "ALREADY_APPLIED")
+
+    def reconciler_blocked_reason(self) -> str | None:
+        """대상이 있는데 마지막 상태 전진 이후 k주기를 넘겼는가(P-2).
+
+        task.done()으로 재지 않는다 — 죽은 주기와 살아 있지만 굶은 주기를 같은 문장으로
+        잰다. 이 단계에는 소비자가 없다(BUY 게이트는 P0-3).
+        """
+        state = self.owner.state
+        business_day, _ = self._reconciler_day(state)
+        if business_day is None:
+            return None  # 일자 게이트는 그 자체가 별도 사유다. 여기서 두 번 세지 않는다.
+        if not self._reconcile_targets(state, business_day):
+            return None
+        if self._reconciler_started_at is None:
+            return "reconciler_not_started"
+        last = self._reconciler_progress_at
+        if last is None:
+            last = self._reconciler_started_at
+        if (self._now() - last).total_seconds() <= RECONCILER_STALL_CYCLES * self._reconciler_interval:
+            return None
+        return "reconciler_no_progress:" + self._reconciler_last_reason
+
+    @staticmethod
+    def _stamp(value):
+        return None if value is None else value.isoformat()
+
     async def apply_observation(self, observation: FillObservation, *, ingress_context=None):
         if not isinstance(observation, FillObservation):
             raise TypeError("누적체결 관측이 필요합니다")
+        if self._closing:
+            # 종료 중에는 새 적용을 시작하지 않는다. 진행 중 적용은 drain이 기다린다(P-7).
+            raise ApplicationBlocked("execution_application_closing")
         def gate():
             if ingress_context and ingress_context.replay_fence_id:
                 self._require_replay(observation, ingress_context.replay_fence_id)
@@ -772,6 +1095,8 @@ class KRExecutionRuntime:
     async def shutdown(self) -> None:
         """admission을 닫고 명령 중 뒤늦게 생긴 결과 저장까지 fixed-point drain한다."""
         self._closing = True
+        # 주기 task는 cancel이 아니라 _closing으로 자연 종료한다. 잠들어 있으면 깨워 준다(P-7).
+        self.notify_execution_change()
         if asyncio.current_task() in self._command_scopes.values():
             raise ApplicationBlocked('command_shutdown_self_wait')
         while True:
@@ -780,7 +1105,10 @@ class KRExecutionRuntime:
                 if task.done():
                     self._command_result_completed(task)
             pending = {task for task in (*self._command_scopes, *self._command_result_tasks,
-                                        *self._day_tasks, *self._protection_tasks) if not task.done()}
+                                        *self._day_tasks, *self._protection_tasks,
+                                        *self._reconciler_tasks,
+                                        *self.engine._execution_ingress_tasks,
+                                        *self.engine._execution_apply_tasks) if not task.done()}
             if not pending:
                 break
             # 종료 caller 취소가 명령/저장 task 취소로 전파되지 않는다.
@@ -817,4 +1145,18 @@ class KRExecutionRuntime:
                                     for row in state.get("inbox", {}).values()),
             "outbox_pending": sum(type(row) is not dict or row.get("status") != "delivered"
                                   for row in state.get("outbox", {}).values()),
+            # 생산자의 관측 창. 이름 충돌(day_admission_closed)을 피해 한 단계 아래에 둔다.
+            "reconciler": {
+                "reconciler_running": (self._reconciler_task is not None
+                                       and not self._reconciler_task.done()),
+                "last_cycle_started_at": self._stamp(self._reconciler_cycle_started_at),
+                "last_complete_at": self._stamp(self._reconciler_complete_at),
+                "last_progress_at": self._stamp(self._reconciler_progress_at),
+                "last_reason": self._reconciler_last_reason,
+                "targets": self._reconciler_target_count,
+                "skipped": dict(self._reconciler_skipped),
+                "apply_outcomes": dict(self._reconciler_outcomes),
+                "parked": self._reconciler_parked,
+                "day_admission_closed": self.day_admission_closed,
+            },
         }

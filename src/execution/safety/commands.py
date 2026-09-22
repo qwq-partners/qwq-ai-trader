@@ -558,6 +558,8 @@ class RequestBoundCommands:
         if not accepted:
             self.owner._block()
             return CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='result_not_recorded')
+        # 저장된 ACK는 곧 새 미해결 시도다. 잠든 대사 주기를 깨워 첫 체결 지연을 없앤다.
+        self.runtime.notify_execution_change()
         return result
 
     async def _unsent(self, request, reason):
