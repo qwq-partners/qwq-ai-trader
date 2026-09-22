@@ -149,11 +149,20 @@ class SignalGateway:
         return self.commands._snapshot(state).pending
 
     def _bind(self, event, order, now):
-        key = (order.symbol, order.side, order.strategy)
-        intent_id = self._intents.get(key)
-        if intent_id is None:
-            intent_id = 'gw-i-' + uuid4().hex
-            self._intents[key] = intent_id
+        metadata = getattr(event, 'metadata', None)
+        protection_intent_id = (metadata.get('protection_intent_id')
+                                if type(metadata) is dict else None)
+        if (order.side is OrderSide.SELL and type(protection_intent_id) is str
+                and protection_intent_id != ''):
+            # 보호 에피소드의 목표 수량과 pending owner를 같은 ID로 묶는다.
+            # 기존 자동 intent 캐시는 읽지도 쓰지도 않는다. 검증은 builder가 맡는다.
+            intent_id = protection_intent_id
+        else:
+            key = (order.symbol, order.side, order.strategy)
+            intent_id = self._intents.get(key)
+            if intent_id is None:
+                intent_id = 'gw-i-' + uuid4().hex
+                self._intents[key] = intent_id
         # 시장가에는 지정가가 없다 — 평가 가격은 신호가 실어 온 값이다.
         valuation = order.price if order.price is not None else event.price
         request = self.commands.builder.prepare_submit(
