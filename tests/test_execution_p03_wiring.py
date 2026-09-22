@@ -189,6 +189,41 @@ def test_a_started_producer_passes_while_it_completes_cycles_and_stops_when_it_g
     asyncio.run(scenario())
 
 
+def test_a_fresh_start_with_a_pending_order_but_no_query_yet_is_not_live(tmp_path, monkeypatch):
+    """기동 15초 안이라도 오늘 성공한 조회가 없으면 대상이 있는 한 거짓이다(Codex 15차 P1).
+
+    첫 `collect` 가 바로 죽은 아침: 주기는 완주(완주 시각 신선)하지만 조회 완료 시각은
+    None 이다. 예전 술어는 기동 시각을 대신 써서 처음 15초 동안 다른 종목 BUY 를 통과시켰다.
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        runtime, clock = f['runtime'], f['clock']
+        try:
+            async def idle():
+                await asyncio.sleep(3600)
+
+            task = asyncio.create_task(idle())
+            runtime._reconciler_task = task
+            runtime._reconciler_started_at = clock[0]
+            runtime._reconciler_cycle_completed_at = clock[0]
+            runtime._reconciler_progress_at = clock[0]
+            assert runtime._reconciler_complete_at is None
+            await opened(runtime, 'p03-open')
+            assert runtime.reconciler_blocked_reason() is None
+            assert runtime.reconciler_live(clock[0]) is False
+            second = f['request']('B', symbol='000660')
+            await f['quote'](second)
+            with pytest.raises(CommandValidationError, match='reconciler_unavailable'):
+                await f['commands'].prepare(second, f['entry'](second), sector='반도체')
+            # 오늘의 조회가 한 번 완료되면 같은 상태에서 통과한다.
+            runtime._reconciler_complete_at = clock[0]
+            assert runtime.reconciler_live(clock[0]) is True
+            task.cancel()
+        finally:
+            await f['store'].close()
+    asyncio.run(scenario())
+
+
 async def _until(predicate, limit=5.0):
     """조건이 설 때까지 실제 루프를 돌린다(주입 시계와 무관한 실시간 대기)."""
     async def wait():
@@ -451,6 +486,25 @@ def test_an_already_wired_producer_refuses_the_install_before_anything_is_touche
             assert_untouched(f, before)
         finally:
             runtime._closing = False
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_a_second_install_names_the_restore_before_the_running_producer(tmp_path, monkeypatch):
+    """설치 성공 뒤 같은 runtime 으로 재호출하면 `execution_runtime_already_restored` 다(Codex 15차 P2).
+
+    그때는 주기 task 도 살아 있어 `execution_producer_already_wired` 가 먼저 날 수 있는데,
+    그 이름은 "구간 1 거부니 legacy 로"를 뜻하므로 살아 있는 live 위에서는 거짓 조치가 된다.
+    """
+    async def scenario():
+        f = await target(tmp_path, monkeypatch)
+        runtime = f['runtime']
+        try:
+            await f['install']()
+            assert runtime.health()['reconciler']['reconciler_running'] is True
+            with pytest.raises(ApplicationBlocked, match='execution_runtime_already_restored'):
+                await f['install']()
+        finally:
             await f['teardown']()
     asyncio.run(scenario())
 

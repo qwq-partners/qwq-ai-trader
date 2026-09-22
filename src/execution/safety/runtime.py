@@ -1085,7 +1085,11 @@ class KRExecutionRuntime:
         3. **주기가 오늘 한 바퀴를 끝낸 지 k주기 안인가**(`_reconciler_cycle_completed_at`).
         4. 기다리는 대상이 있다면, 그 조회가 오늘 완료된 지 k주기 안인가
            (`_reconciler_complete_at`). 조회는 대상이 있을 때만 도므로 대상이 0 이면 묻지
-           않는다 — 그때 생산자의 생존을 재는 것은 3 하나다.
+           않는다 — 그때 생산자의 생존을 재는 것은 3 하나다. **기동 시각으로 대신하지
+           않는다**(Codex 15차 P1): 오늘 성공한 조회가 없으면 기동 뒤 15초 안이라도 거짓이다
+           — 미해결 주문이 있는데 첫 조회가 바로 죽은 아침에 다른 종목 BUY 가 새어 나가면
+           안 된다. `reconciler_blocked_reason()` 의 기동 시각 폴백은 "굶었다"의 유예이고,
+           이 절은 "조회가 있었다"의 사실이라 폴백이 없다.
 
         3 에는 예외가 없다(P0-3 S-A 처분 2). 대신 그 대가를 주기가 치른다: 기다릴 것이
         없어도 같은 interval 로 한 바퀴를 돈다(`_reconcile_loop`). 예전 술어에는 "기다리는
@@ -1114,7 +1118,7 @@ class KRExecutionRuntime:
             return True
         if not self._stalled_targets(self.owner.state, business_day):
             return True
-        return self._fresh(self._reconciler_complete_at, now, fallback=self._reconciler_started_at)
+        return self._fresh(self._reconciler_complete_at, now, fallback=None)
 
     def _fresh(self, last, now: datetime, *, fallback) -> bool:
         """`last` 가 오늘 찍혔고 k주기 안인가. 오늘이 아니면 `fallback`(없으면 거짓)이다."""

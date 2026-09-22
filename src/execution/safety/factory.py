@@ -286,12 +286,6 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
         # `start_reconciler` 도 같은 검사를 하지만 그것은 attach **뒤**다 — live 를 건드린
         # 뒤에 인자 모양으로 실패하면 호출자는 legacy 로 돌아갈 수 없다.
         raise ValueError('invalid_execution_collector')
-    if runtime._closing or (runtime._reconciler_task is not None
-                            and not runtime._reconciler_task.done()):
-        # 같은 이유로 생산자 전제도 여기서 본다. `start_reconciler` 의 두 거부
-        # (`reconciler_admission_closed`·`reconciler_already_running`)는 attach 뒤에 나므로,
-        # 그때 실패하면 live 는 이미 바뀌어 있다. 한 낱말로 닫는다.
-        raise ApplicationBlocked('execution_producer_already_wired')
     # 실계좌 증거(§5 스모크 4항)가 닫히기 전에는 모의투자 계좌의 일별체결 응답으로 체결
     # 최종성을 판정하지 않는다. env 는 요청 경로 전체의 정본이다(builder·broker 공용).
     broker = runtime.engine.broker
@@ -306,6 +300,15 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     # 부른다. 8번 대조가 항진명제로 되살아나는 것도 같은 줄이 막는다.
     if runtime.owner.version != 0 or runtime.owner.state:
         raise ApplicationBlocked('execution_runtime_already_restored')
+    if runtime._closing or (runtime._reconciler_task is not None
+                            and not runtime._reconciler_task.done()):
+        # 생산자 전제도 live 를 건드리기 전에 본다. `start_reconciler` 의 두 거부
+        # (`reconciler_admission_closed`·`reconciler_already_running`)는 attach 뒤에 나므로,
+        # 그때 실패하면 live 는 이미 바뀌어 있다. 한 낱말로 닫는다. **`already_restored`
+        # 뒤**다(Codex 15차 P2): 설치 성공 뒤 같은 runtime 으로 재호출하면 주기 task 도
+        # 살아 있어 이 거부가 먼저 나는데, 그러면 "구간 1 거부니 legacy 로"라는 잘못된
+        # 조치를 부른다 — 앞선 호출이 구간 2 에 들어갔다는 사실이 먼저 보여야 한다.
+        raise ApplicationBlocked('execution_producer_already_wired')
     if engine.running:
         raise ApplicationBlocked('engine_running')
     if engine._execution_runtime is not None:
