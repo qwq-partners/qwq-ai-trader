@@ -495,3 +495,160 @@ def test_a_child_that_failed_after_the_claim_is_not_abandoned(tmp_path, monkeypa
             assert reservations(f['runtime'].owner.state['attempts']['A']) == reservations(parent_before)
         finally: await f['store'].close()
     asyncio.run(scenario())
+
+
+# ── P0-4 S-C: 세션 경계의 조용한 소멸 (약한 지점 7) ─────────────────────
+#
+# attach 는 **전선 본문을 prepare 시점에 굽는다** — 세션이 `ORD_DVSN`·`AFHR_FLPR_YN` 과
+# fingerprint 와 증거 provenance 에 통째로 들어간다(`requests.py:251-260`·`199-202`·`231`,
+# `runtime.py:883-896`). 그래서 dispatch 시점에 세션이 바뀌면 그 요청은 **그 세션에 대해
+# 틀린 주문**이고, owner 는 보내지 않고 시도를 끝낸다. 아래 시험은 그 계약을 고정한다.
+# `session_guard` 의 제품 구현은 0건이므로 guard 는 허용으로 주입해 세션 경계만 격리한다.
+
+T1519 = NOW.replace(hour=15, minute=19)   # regular 의 마지막 1분
+T1521 = NOW.replace(hour=15, minute=21)   # closing(15:20~15:30)
+T1531 = NOW.replace(hour=15, minute=31)   # break(15:30~15:40)
+T1541 = NOW.replace(hour=15, minute=41)   # next_market(15:40~20:00)
+
+
+PROTECTED = 60
+
+
+def session_request(f, moment, *, aid='A', order_type=OrderType.LIMIT, quantity=PROTECTED,
+                    intent_id=None):
+    """그 순간의 세션으로 구운 보호 SELL. 세션은 DTO 생성 시점에 고정된다."""
+    from src.execution.safety.requests import RequestSession, _session_at
+    return f['builder'].prepare_submit(
+        Order(symbol='005930', side=OrderSide.SELL, quantity=quantity, price=D('10000'),
+              order_type=order_type, strategy='sepa_trend'),
+        intent_id='I-A' if intent_id is None else intent_id, attempt_id=aid,
+        session=RequestSession(moment.date().isoformat(), moment, _session_at(moment)),
+        valuation_price=D('10000'))
+
+
+async def prepared_at(tmp_path, monkeypatch, moment, **changes):
+    """주입 시계를 `moment` 로 옮긴 뒤 그 세션의 보호 SELL 한 건을 prepare 해 둔다.
+
+    `ready=True` 는 기존 dispatch 시험과 같은 합성 startup 허가다 — 그래야 dispatch 가
+    `startup_reconciliation` 이 아니라 세션 사유로 끝난다. 보호 SELL 을 쓰는 이유는 그것이
+    약한 지점 7 의 실제 피해자이고, 알파 게이트가 SELL 에는 적용되지 않아 세션 경계만
+    격리되기 때문이다(`guards.py:116`).
+    """
+    from test_execution_command_owner import held
+    f = await command_fixture(tmp_path, monkeypatch, ready=True, origin='automatic',
+                              policy=nominal())
+    await held(f, 100)
+    f['clock'][0] = moment
+    req = session_request(f, moment, **changes)
+    await f['commands'].prepare(req, f['entry'](req))
+    return f, req
+
+
+def test_a_session_boundary_crossed_between_prepare_and_dispatch_ends_the_attempt(
+        tmp_path, monkeypatch):
+    """C1 — 15:19 에 구운 `regular` 요청을 15:21 에 보내면 `request_session_changed` 다.
+
+    `_dispatch` 는 `session=False` 로 들어가지만 세션을 건너뛰지 않는다 — `_bound`→
+    `_evaluate`→`_session`(`commands.py:364`)이 **dispatch 시점 시계**로 다시 대조한다.
+    끝나는 모양은 계약 5 그대로: `final_rejected`/`not_sent`/그 `reason_code` 와 예약 4항 0.
+    `reserved_planned_risk` 는 nominal 사이징이라 처음부터 None 이고 None 으로 남는다.
+    """
+    async def scenario():
+        f, req = await prepared_at(tmp_path, monkeypatch, T1519)
+        calls = spy_abandon(f, monkeypatch)
+        try:
+            attempt = f['runtime'].owner.state['attempts']['A']
+            assert (attempt['state'], attempt['reserved_quantity']) == ('prepared', PROTECTED)
+            assert attempt['reserved_planned_risk'] is None
+
+            f['clock'][0] = T1521
+            result = await send(f, req)
+            assert (result.status, result.reason_code) == (
+                CommandStatus.NOT_SENT, 'request_session_changed')
+            assert CODE.fullmatch(result.reason_code)
+            assert calls == [('A', 'request_session_changed', True)]
+            current = f['runtime'].owner.state['attempts']['A']
+            assert current['state'] == 'final_rejected'
+            assert current['command_status'] == 'not_sent'
+            assert current['claim_id'] is None
+            assert current['reason_code'] == 'request_session_changed'
+            assert reservations(current) == (0, D('0'), D('0'), None)
+            assert pending_sectors(f) == {}
+            assert f['broker']._session.posts == []
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_the_producer_can_reprepare_the_same_intent_in_the_new_session(tmp_path, monkeypatch):
+    """C2 — 재준비의 소유자는 **생산자**다(dispatch 안 재시도가 아니라).
+
+    NOT_SENT 로 닫힌 시도는 `final_rejected`(=TERMINAL_STATES)라 같은 종목의 새 SUBMIT 을
+    막지 않고, 새 세션에서 새로 구운 요청은 본문·fingerprint·증거 라벨이 **함께** 그 세션의
+    것이 된다. 같은 intent 를 유지한 채 attempt 만 새로 발급하는 gateway 모양 그대로다.
+    """
+    async def scenario():
+        f, req = await prepared_at(tmp_path, monkeypatch, T1519)
+        try:
+            f['clock'][0] = T1521
+            assert (await send(f, req)).status is CommandStatus.NOT_SENT
+
+            again = session_request(f, T1521, aid='A2', intent_id=req.intent_id)
+            assert again.session.session == 'closing' and again.fingerprint != req.fingerprint
+            reopened = await f['commands'].prepare(again, f['entry'](again))
+            assert reopened['state'] == 'prepared'
+            assert (await send(f, again)).status is CommandStatus.ACKNOWLEDGED
+            assert len(f['broker']._session.posts) == 1
+            assert f['runtime'].owner.state['attempts']['A2']['intent_id'] == req.intent_id
+        finally: await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_session_label_cannot_be_forged_onto_a_different_moment():
+    """C4 — DTO 생성 시점에 라벨과 시각이 어긋나면 `request_session_mismatch` 다.
+
+    "세션만 갈아끼워 그대로 보낸다"는 완화가 요청 객체 단계에서 이미 불가능하다는 뜻이다.
+    """
+    from src.execution.safety.requests import RequestSession, RequestValidationError, _session_at
+
+    assert _session_at(T1519) == 'regular' and _session_at(T1531) == 'break'
+    with pytest.raises(RequestValidationError) as caught:
+        RequestSession(T1531.date().isoformat(), T1531, 'regular')
+    assert str(caught.value) == 'request_session_mismatch'
+    # 같은 순간의 올바른 라벨은 통과한다(거부가 시각 자체 때문이 아니라는 대조).
+    assert RequestSession(T1531.date().isoformat(), T1531, 'break').session == 'break'
+
+
+def test_the_closing_and_next_market_sessions_bake_different_wire_bodies():
+    """C6 — `closing` 은 시장가를 build 에서 거부하고 `next_market` 은 둘을 같은 본문으로 굽는다.
+
+    15:40~20:00 에서는 지정가·시장가가 **같은 `ORD_DVSN='05'`·`AFHR_FLPR_YN='Y'`** 이고
+    시장가만 `wire_price` 가 0 이다 — 즉 그 구간에서 "시장가 에스컬레이션"은 전선상 지정가와
+    구분되지 않는다(①M8). `closing` 에서의 지정가 강등이냐 15:40 대기냐는 **P1 입력**이다.
+    """
+    from src.execution.safety.requests import (
+        KISRequestBuilder, RequestSession, RequestValidationError, _session_at)
+    from test_execution_requests import account
+
+    builder = KISRequestBuilder(account())
+
+    def build(moment, order_type):
+        return builder.prepare_submit(
+            Order(symbol='005930', side=OrderSide.SELL, quantity=10, price=D('10000'),
+                  order_type=order_type, strategy='sepa_trend'),
+            intent_id='I-S', attempt_id='S-' + order_type.value,
+            session=RequestSession(moment.date().isoformat(), moment, _session_at(moment)),
+            valuation_price=D('10000'))
+
+    assert _session_at(T1521) == 'closing' and _session_at(T1541) == 'next_market'
+    with pytest.raises(RequestValidationError) as caught:
+        build(T1521, OrderType.MARKET)
+    assert str(caught.value) == 'unsupported_submit_session'
+    assert build(T1521, OrderType.LIMIT).body()['ORD_DVSN'] == '00'
+
+    limit, market = build(T1541, OrderType.LIMIT), build(T1541, OrderType.MARKET)
+    for request in (limit, market):
+        assert request.body()['ORD_DVSN'] == '05'
+        assert request.body()['AFHR_FLPR_YN'] == 'Y'
+    assert limit.wire_price == D('10000') and market.wire_price == D('0')
+    assert limit.body()['ORD_UNPR'] == '10000' and market.body()['ORD_UNPR'] == '0'
+    assert limit.fingerprint != market.fingerprint
