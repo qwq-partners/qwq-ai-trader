@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-22 — feat(safety): P0-4 — 래치 설정 조건 축소·예약/세션 계약 고정·stale pending attach 가드 (**제품 변경 2곳: `runtime.py` admit 한 곳·`kr_scheduler.py` 조기 return 1줄(legacy 바이트 동일) — 운영 미설치**)
+
+> 결정 문서 §4 의 약한 지점 2·4·7·9. 계획·심사·처분·마감은 `docs/superpowers/plans/2026-09-22-p0-4-latch-reservation-session-stale.md`(§3 처분·§5 Do·See·§5-4 마감). **설계 초안의 "래치 해제 = 저장 행 재개"는 두 심사(REVISE ×2)가 게이트를 여는 방향으로 판정해 폐기** — 아무도 받지 않는 보호 결정을 커밋해 `pending_stage` 를 영구히 세우고(손절이 조용히 사라짐), 낡은 진입 증거로 BUY 를 열며, 결정적 reducer 실패는 재개로 안 고쳐진다.
+
+- **항목 2 `_protection_failed`(`src/execution/safety/runtime.py` admit):** 사전 거부(`ApplicationBlocked` — freshness 뿐 아니라 **중복 접수 거부** 포함)는 래치하지 않는다(reducer 는 commit 전에 돌고 실패하면 candidate 가 버려진다). 취소·post-commit 예외 래치는 그대로. **해제 경로 0(의도)** → 설치 차단 사유 **23**(durable 보호 접수 행에 해제 경로 없음 + BLOCKED `prepare_day_rollover` 한 번이 `_day_closed` 를 영구 래치 — A6 이 첫 런타임 재현). 시험: A1(현행 RED)·A1b·A5·A6(+래치 단독의 SUBMIT 게이트 고정)·A7.
+- **항목 4 부분 체결 예약(제품 0줄):** 결정 문서 §4-2 항목 4 정정 — **예약 산술은 정상**(`reduce_economics` 가 체결마다 `remaining = max(0, reserved − delta)`, 보유도 같은 commit; owner attempt 에 대사된 체결에 한해 `held−reserved ≥ 0`). 실제 봉쇄는 (a) side 무관 종목 잠금(`unresolved_symbol_attempt` 가 `reserved_quantity_insufficient` 보다 앞, P1/F8 ① 이 연다) (b) 만료 계약 부재(`FINAL_EXPIRED` 미지원 → 영구 `partial` + 일자 전환 BLOCKED) = 차단 사유 **22**. 시험 `tests/test_execution_p04_reservation.py`.
+- **항목 7 세션 경계 소멸(제품 0줄):** durable 흔적(`final_rejected`/`not_sent`/`request_session_changed`·예약 4종 0)·같은 intent 재준비 가능·`break`/`closed`·`closing`+MARKET 은 build 거부(예외 → engine ErrorEvent)·`request_session_mismatch`·legacy 격차(같은 15:21 에 지정가 접수)·next_market 의 `ORD_DVSN='05'` 동일성(`ORD_UNPR`·fingerprint 만 다름). **재준비의 소유자는 생산자**(P1 계약). 시험 `dispatch_reasons`·`gateway_wiring`·신규 `test_engine_legacy_session_characterization.py`.
+- **항목 9 `_cleanup_stale_pending`(`src/schedulers/kr_scheduler.py`):** attach 조기 return 1줄(P0-3 과 같은 술어) — 빈 브로커 캐시의 취소 0건을 "소멸"로 읽어 살아 있는 SELL 위에서 단계를 되감던 경로. 미설치 경로 바이트 동일(기계 증명). 설치 호출자 계약: bot 수준 `_exit_pending_symbols/_timestamps` 비어 있음(설치기가 못 보고 attach 의 `partial_missing` 계산이 읽는다) — `factory.py` docstring. 시험 `tests/test_execution_p04_stale_pending.py`(D1·D1b 고아 블록·D2 주기·D3 legacy·D4 emit 0·D5).
+- **검증:** 조사 2 → 설계 → 심사 2관점 REVISE ×2(must-fix 6+9) → 처분. 구현 3 ∥ 독립 재현 3(S-A CHANGES_REQUIRED P1 1 · S-B/S-C CHANGES_REQUIRED P2 3 · S-D APPROVE P2 2 — 전부 제품 0줄로 처분, 생존 변이 3종 이제 kill) → **Codex 17차 APPROVE**(P2 docstring 1). 전체 suite 단독 직렬 **UTC 5116 / KST 5116 passed**(각 기존 xfail 2·경고 4·격리 0). 신규 시험 3파일 + 3파일 추가.
+- **사용자 결정:** ① partial 만료 처리는 위임된 보수적 기본값(영구 BLOCKED + 차단 22) ②③ closing 의 보호 SELL·재준비 횟수 상한은 P1 입력 ④ **main 별도 PR 후보 M1**(전량 청산 pending 의 "취소 0건=소멸" 해석이 미확인 가정 의존 — live·배포라 사용자 확인 필요, 미검증).
+- **다음 P1:** 보호 SELL 의 main 동등 — owner quote 생산자(차단 21)·취소 뒤 3분류·F8 ①/late-fill/자식 가드·재준비·래치 해제(23)를 한 설계로. main 병합·배포·재시작·주문·설정 무변경, `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-22 — feat(safety): P0-3 — 생산자 배선·BUY 생존 게이트·sync 읽기 전용 관측·live writer 가드 (**live 파일 3개 수정 — 미설치 경로 바이트 동일, 설치기 제품 호출자 0건·운영 미설치**)
 
 > 설치 차단 사유 **17 닫힘**(`_sync_portfolio` attach 분기), **18 설치기 기준 닫힘**(생산자 배선), **20·21 신규 등록**. 계획·심사·처분·마감은 `docs/superpowers/plans/2026-09-22-p0-3-wiring-sync-gate.md`(§3 처분 Q-1~Q-11·§6 Do·See·§7 마감).

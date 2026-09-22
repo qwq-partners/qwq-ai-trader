@@ -517,3 +517,41 @@ S-A ∥ S-B+S-C(한 작업자, 서로 다른 파일) ∥ S-D — 작업자 3(상
 **금지**(전 단계): `trading_ready` 강제 True · MODIFY · falsy 판정·`x or default` · 영어 주석 · legacy 본문 수정 · 새 checkpoint 스키마 행 · `market_source_pending` 종목 단위 축소 · 게이트를 여는 완화 · **래치·durable 행의 해제 경로 추가**.
 
 ## 5. Do·See (진행하며 채운다)
+
+### 5-1. Do — 구현 3 ∥ 독립 재현 3(워크플로 `wya87gk8s`, opus/high 구현 · opus/xhigh(S-A)/high 재현, 격리 worktree, base `9c36068`)
+
+| 단계 | 커밋 | 구현 결과 | 독립 재현 |
+|---|---|---|---|
+| S-A | `3fadf81` | `runtime.py` admit 본문 17/14(try 범위 확장 — H1-1 만), A1 **현행 RED**(`assert True is False` at `_protection_failed`) → GREEN, A1b(취소 창 래치)·A5(두 겹: prepare 는 `_require_ready` 의 ApplicationBlocked 로 먼저 끝나고 `store_or_publication_unhealthy` 는 `_owner_ready` 직접 호출로)·A6(`repair_protection` 충돌로 래치 + 미해결 접수 행 → `prepare_day_rollover` BLOCKED·`_day_closed` True·`day_transition=PREPARED` durable·다음 날 CANCEL `day_transition_admission_closed`·새 runtime `restore()` 뒤에도 같다 — **②M1 첫 런타임 재현**)·A7. 11파일 UTC/KST 각 477 passed. 변이 m1(try/except 제거)·m2(cancelled 래치 제거)·m3(일자 전환의 래치 읽기 제거) kill | **CHANGES_REQUIRED — P1 1:** 래치 **단독**의 SUBMIT 게이트가 corpus 어디에도 고정돼 있지 않아 `market_source_pending` 에서 `or self._protection_failed` 를 지우는 완화(X5)가 257건 전부 통과하며 살아남는다(A1 은 durable 행으로, A6 은 일자 전환 읽기로 증명). 비차단 F2: `except Exception` 으로 넓혀도 못 잡음(E1). 재확인: 콜백 취소 래치 유지, 기존 두 계약 시험 무수정 GREEN, RED-first 정직, 새로 면제되는 갈래는 중복 접수 거부뿐이고 그 순간 행이 반드시 존재해 SUBMIT 은 계속 막힘 |
+| S-B+S-C | `3773da0` | 제품 0줄(`git diff --stat -- src/` 빈 출력), 신규 `tests/test_execution_p04_reservation.py`(B1~B4)·`tests/test_engine_legacy_session_characterization.py`(C5)·`dispatch_reasons`(C1·C2·C4·C6)·`gateway_wiring`(C3), 결정 문서 §4-2 항목 4 정정. 변이 8종 kill. tests/ 에 `request_session_changed`·`unsupported_submit_session`·`request_session_mismatch`·`reserved_quantity_insufficient` 단언이 0 → 13 | **CHANGES_REQUIRED — P2 3:** R1 인용 오기(`economics.py:437` 은 raise, 실제 `:447` — 계획서 §1 에서 전파), R2 결정 문서가 새로 쓴 "side 를 보지 않으며"에 고정 시험 0(변이 X5 side 인지 잠금 생존), R3 B2 주석의 반사실이 거꾸로. 생존 X1(`- reserved` 제거)은 결함이 아니라 F-B1-6 의 런타임 확인(같은 종목 active SELL 은 :394 가 먼저 raise 라 예약 합계가 항상 0 — "예약분을 뺀다"는 P1/F8 ① 뒤에야 고정 가능). B4 후반의 kill 은 `initial_r` 의 `unverified_finality_evidence` 이중 가드 경유(간접) |
+| S-D | `c6c1913` | `kr_scheduler.py` 가드 5줄(주석 3+분기 2, `sed` 로 제거하면 `9c36068` 판과 diff 0 — **바이트 동일 기계 증명**), `factory.py` docstring 한 문단, 신규 `tests/test_execution_p04_stale_pending.py` D1(RED)·D2·D3×3·D4·D5×2. 변이 m1·m2·m3 kill | **APPROVE — P2 2:** P2-1 D1/D2 가 고아 정리 블록(`:986-1006`)을 안 밟는다 — fixture 의 sidecar 장부에 그 종목이 있어 `orphaned` 가 비기 때문(attach 의 실제 상태는 sidecar 빈 집합); 가드를 첫 루프에만 두는 변이 x1 이 생존, probe 로 실해악 재현(취소 POST + `rollback_stage` + 장부 삭제). P2-2 S5 인수 파일의 docstring 이 사실과 어긋남. x2(술어 진리값)는 커밋 코드가 `is not None` 이라 결함 아님 |
+
+### 5-2. 처분(coordinator, `6eaee68` — 제품 0줄)
+
+| 지적 | 처분 |
+|---|---|
+| S-A F1 | A6 의 ① 직후(래치만 서 있고 접수 행 0·task 0·healthy 인 유일한 순간)에 4줄: 접수 행 없음 · `market_source_pending(state) is True` · SUBMIT prepare 가 `market_source_pending` 으로 거부. 변이 X5(래치 항 제거) 이제 A6 에서 죽는다(직접 확인) |
+| S-A F2 | 기록만 — admit 은 전부 commit 전이라 지금은 무해. 예외 종류 경계 시험은 P1 에서 H1-3 을 다룰 때 |
+| S-B R1 | 두 문서(결정 문서·계획서 §1/§2-2) `:437`→`:447` |
+| S-B R2 | B2 에 한 갈래: 미해결 SELL 위의 같은 종목 **BUY** 도 `unresolved_symbol_attempt`(P1/F8 ① 이 여는 날 결정으로 뒤집힌다고 주석). 변이 X5(side 인지 잠금) 이제 죽는다(직접 확인) |
+| S-B R3 | 주석 정정("잠금이 없다면 이 요청은 S1 의 예약 100 때문에 `reserved_quantity_insufficient`") |
+| S-D P2-1 | `scheduler(rm_pending=)` 인자 + D1b(sidecar 장부 빈 집합 = attach 실제 상태 → 고아 블록 경로도 가드 뒤). 변이 x1 이제 D1b 에서 죽는다(직접 확인) |
+| S-D P2-2 | S5 인수 파일 docstring 사실 정정(단언·fixture 무수정 — S5 의 "제품 무수정 통과" 계약은 제품 코드에 대한 것) |
+
+### 5-3. See — Codex 17차(gpt-6-astra/xhigh, 독립·읽기 전용) → APPROVE
+
+P0/P1 0 · P2 1(C6 docstring: next_market 에서 `ORD_DVSN`·`AFHR_FLPR_YN` 은 같지만 `ORD_UNPR`·fingerprint 는 다르다 — "같은 본문" 서술 부정확 → `a4f8585` 정정). 확인 항목: (a) admit 은 복제 상태의 reducer 안에서 실행되고 반환 뒤에야 commit — 확장된 except 가 commit 뒤 실패를 면제하지 않고, 일반 예외·취소 래치 유지 (b) legacy 본문 바이트 보존·함수 안 emit 부재 (c) 제품 해제 경로 추가 없음(시험의 `owner.mutate` 예약 지우기는 제품 경로 아님) (d) 결정 문서 정정이 인용과 일치.
+
+통합: `3fadf81`→merge · `3773da0`→merge · `c6c1913`→merge `90cfc20` → 처분 `6eaee68` → `a4f8585`. 워크플로 worktree 6개 제거·작업 브랜치 3개 삭제. 전체 suite 단독 직렬(시계 창 회피): **KST 5116 passed**/xfail 2·경고 4·격리 0(`6eaee68`), UTC 는 §5-4.
+
+### 5-4. 마감 — 무엇이 닫혔고 무엇이 아닌가
+
+**닫힌 것(engine 브랜치, 운영 미설치·설치기 제품 호출자 0건):**
+- 항목 2(래치) — **설정 조건만**: `admit` 의 모든 사전 거부(중복 접수 포함)는 래치하지 않는다. 취소·post-commit 예외 래치 유지. **해제 경로는 만들지 않았다**(차단 사유 23).
+- 항목 4(예약) — 결정 문서 §4-2 정정(예약 산술 정상·봉쇄는 종목 잠금+만료 계약 부재), 계약 고정 시험 B1~B4(+side 무관 잠금). 차단 사유 22.
+- 항목 7(세션 경계) — 계약 고정 시험 C1~C6: 소멸의 durable 흔적(`final_rejected`/`not_sent`/`request_session_changed`, 예약 4종 0), 같은 intent 재준비 가능, `break`/`closed`·`closing`+MARKET 은 build 거부(예외 → engine `errors_count`+ErrorEvent), `request_session_mismatch`, legacy 는 같은 15:21 에 지정가를 접수(격차 C5), next_market 의 `ORD_DVSN='05'` 동일성. **재준비의 소유자는 생산자**(dispatch 안 재시도·세션 라벨 교체 금지) = P1 계약.
+- 항목 9(stale pending) — attach 조기 return(legacy 바이트 동일), 설치 호출자 계약(bot 수준 장부 비어 있음).
+
+**닫히지 않은 것 / P1 입력:** 래치·durable 행 해제(23, 생산자와 함께) · H1-3 repair 래치 · 만료 종결 계약(22) · closing 의 보호 SELL 처리(지정가 강등 vs 15:40 대기 — next_market 은 `ORD_UNPR` 로만 구분)·재준비 횟수 상한 · break/closed 의 "살려 두는 의도" 저장 자리 · `session_guard` 제품 구현 · C3 의 SELL 표본(생산자 배선 뒤) · `except Exception` 경계 시험 · attach 의 owner CANCEL(D2) · **main 별도 PR 후보 M1**(전량 청산 pending 의 "취소 0건=소멸" 해석이 D1 의 미확인 가정 의존 — 사용자 확인 영역, 이 worktree 에서 main 본문 미검증) · 병합 부채 M3(main 판 `_cleanup_stale_pending` 위에 가드 재적재 — D1b 가 자리를 고정).
+
+**P1 진입 조건(다음 단계 = 보호 SELL 의 main 동등, 결정 문서 D2 방향):** 설계는 owner quote 생산자(차단 21)·취소 뒤 3분류(소멸/생존/판단 불가 180초)·F8 ①/late-fill/자식 가드 side 인지·재준비 소유자·closing 처리·래치 해제(23)를 **한 설계**로 다루고 적대적 심사 2관점을 거친다. 실계좌 스모크(P0-3 §5)는 여전히 사용자 확인 대기.
