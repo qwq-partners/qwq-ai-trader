@@ -5,17 +5,20 @@
 최종성의 증명이 아니다 — 여기서 GREEN 인 것은 주기의 계약(게이트·조회 횟수·chain 처분·
 저장 상태 재처리·종료)뿐이며 설치 승인이 아니다.
 """
+import ast
 import asyncio
+import inspect
 from datetime import timedelta
 from decimal import Decimal as D
 
 import pytest
 
+from src.execution.safety import economics
 from src.execution.safety.application import ApplicationBlocked, FillObservation, observation_from_evidence
 from src.execution.safety.evidence import evidence_pages, parse_order_evidence, parser_scope
 from src.execution.safety.lifecycle import CommandStatus, OrderEvidence, OrderState
 from src.execution.safety.queries import LegacyExecutionQueries
-from src.execution.safety.runtime import RECONCILER_MAX_PAGES
+from src.execution.safety.runtime import APPLIABLE_ATTEMPT_STATES, RECONCILER_MAX_PAGES
 from src.execution.safety.transport import GuardedKISTransport
 from test_execution_command_owner import fixture
 from test_kis_execution_queries import response
@@ -122,8 +125,11 @@ async def teardown(f, pump=None):
         await f['store'].close()
 
 
-async def observe(runtime, f, quantity, amount):
-    """주기 **밖**에서 관측만 저장한다(생산자가 만든 상태가 아니라 준비 상태다)."""
+async def observe(runtime, f, quantity, amount, *, applied=None, accepted=True):
+    """주기 **밖**에서 관측만 저장한다(생산자가 만든 상태가 아니라 준비 상태다).
+
+    `accepted=False` 는 충돌 근거를 넣어 attempt 를 evidence_conflict 로 굳히는 용도다.
+    """
     ref, now = f['ref'], f['clock'][0]
     total = f['order'].quantity
     evidence = OrderEvidence(ref, SYMBOL, 'buy', total, quantity, amount, total - quantity, 0,
@@ -135,7 +141,9 @@ async def observe(runtime, f, quantity, amount):
                                               exchange='ALL', start_date=ref.order_date,
                                               end_date=ref.order_date, tr_id='TTTC0081R',
                                               query_kind='all', session='regular'))
-    assert await runtime.lifecycle.reconcile(f['order'].attempt_id, evidence)
+    result = await runtime.lifecycle.reconcile(f['order'].attempt_id, evidence,
+                                               applied_quantity=applied)
+    assert result is accepted
 
 
 def spy_apply(f):
@@ -223,9 +231,15 @@ def test_repeated_not_found_never_advances_the_owner_but_still_queries(tmp_path,
     asyncio.run(scenario())
 
 
-# ───────────────────────── ④ chain 행: reconcile·apply 둘 다 0 ─────────────────────
+# ──────────────── ④ chain 행: reconcile 과 재구성 재접수(B2) 둘 다 0 ────────────────
 
-def test_a_chain_row_blocks_both_reconcile_and_the_stored_reapply(tmp_path, monkeypatch):
+def test_a_chain_row_blocks_reconcile_and_the_reconstructed_reapply(tmp_path, monkeypatch):
+    """chain 이 막는 범위는 A 와 B2 뿐이다.
+
+    B1(잔존 inbox 행)은 chain 과 무관하게 진행한다 — 그 행은 chain 판정 이전에 이미
+    검증된 durable 관측이고, 자식행이 보인다는 이유로 막으면 설치 차단 사유 19가
+    영구화된다. 여기서 재접수가 0인 것은 attempt 를 다시 읽어 만드는 B2 경로다.
+    """
     async def scenario():
         f = await producer(tmp_path, monkeypatch)
         pump = start_pump(f['engine'])
@@ -408,14 +422,16 @@ def test_a_stalled_apply_ends_at_the_cycle_timeout_and_is_named_blocked(tmp_path
             runtime.start_reconciler(collect, interval=0.01, cycle_timeout=0.05)
 
             async def cycles():
-                while len(calls) < 2:
-                    await asyncio.sleep(0.01)
-            await asyncio.wait_for(cycles(), 3)
+                # 주기 사이에는 A 의 not_found 가 먼저 기록된다. 멈춘 주기가 **끝난**
+                # 순간(사유 확정 직후)을 잡아야 접미사를 고정해 단언할 수 있다.
+                while len(calls) < 2 or runtime.health()['reconciler']['last_reason'] != 'cycle_timeout':
+                    await asyncio.sleep(0.005)
+            await asyncio.wait_for(cycles(), 5)
             assert runtime.reconciler_blocked_reason() is None  # 아직 k주기를 넘지 않았다
             f['clock'][0] += timedelta(seconds=30)
             # 주기 task 는 살아 있다 — task.done() 이 아니라 상태 전진으로 재기 때문에 잡힌다.
             assert runtime.health()['reconciler']['reconciler_running'] is True
-            assert runtime.reconciler_blocked_reason().startswith('reconciler_no_progress:')
+            assert runtime.reconciler_blocked_reason() == 'reconciler_no_progress:cycle_timeout'
             assert runtime.health()['reconciler']['skipped']['cycle_timeout'] >= 1
         finally:
             held.set()
@@ -437,13 +453,20 @@ def test_blocked_reason_names_a_producer_that_was_never_started(tmp_path, monkey
 # ───────────────────────── ⑪ 종료: 진행 중 적용 대기 후 접수 거부 ─────────────────
 
 def test_shutdown_waits_for_the_in_flight_apply_then_refuses_new_ones(tmp_path, monkeypatch):
+    """진행 중 apply 는 **수집 task** 가 들고 있다 — drain 집합은 runtime 소유 task뿐이다.
+
+    engine 의 ingress/apply task 는 engine._shutdown 의 몫이라 runtime.shutdown 이 engine 의
+    사설 속성을 읽지 않는다. 수집 task 는 자연 종료할 때 자기가 시작한 apply 를 스스로
+    기다리므로, 그 하나로 "진행 중 적용을 끝까지 기다린 뒤 새 접수를 거부한다"가 성립한다.
+    """
     async def scenario():
         f = await producer(tmp_path, monkeypatch)
         pump = start_pump(f['engine'])
         runtime, ref = f['runtime'], f['ref']
+        # 저장 상태만으로 B2 가 재구성해 접수할 관측을 만든다(observed 40 > applied 0).
         await observe(runtime, f, 40, D('400000'))
-        observation = FillObservation(ref.account_scope, 'KR', ref.order_date, 'KRX', ref.order_no,
-                                      SYMBOL, 'BUY', 40, D('400000'), org_no=ref.org_no)
+        observation = runtime._stored_observation(
+            runtime.owner.state['attempts'][f['order'].attempt_id])
         reached, release = asyncio.Event(), asyncio.Event()
         original = f['store'].commit
 
@@ -454,24 +477,25 @@ def test_shutdown_waits_for_the_in_flight_apply_then_refuses_new_ones(tmp_path, 
                 await release.wait()
             return await original(expected_version, payload, commit_id, *args, **kwargs)
 
-        tasks = []
+        collect, _ = collector(f, [[response([other_row(ref)])]])
+        closing = None
         try:
             monkeypatch.setattr(f['store'], 'commit', hold)
-            ingress = asyncio.create_task(f['engine'].apply_execution_observation(observation))
-            tasks.append(ingress)
-            await asyncio.wait_for(reached.wait(), 2)
+            runtime.start_reconciler(collect, interval=100.0, cycle_timeout=30.0)
+            await asyncio.wait_for(reached.wait(), 3)
             closing = asyncio.create_task(runtime.shutdown())
-            tasks.append(closing)
             await asyncio.sleep(0)
             assert runtime._closing and not closing.done()
             release.set()
-            await asyncio.wait_for(asyncio.gather(*tasks), 3)
+            await asyncio.wait_for(closing, 5)
             assert runtime.owner.state['inbox'][observation.observation_id]['status'] == 'APPLIED'
+            assert runtime.health()['reconciler']['reconciler_running'] is False
             with pytest.raises(ApplicationBlocked, match='execution_application_closing'):
                 await runtime.apply_observation(observation)
         finally:
             release.set()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            if closing is not None:
+                await asyncio.gather(closing, return_exceptions=True)
             task, stop = pump
             stop.set()
             await asyncio.gather(task, return_exceptions=True)
@@ -516,6 +540,118 @@ def test_every_reconciler_stamp_comes_from_the_injected_clock(tmp_path, monkeypa
             assert health['last_complete_at'] == frozen
             assert health['last_progress_at'] == frozen
         finally:
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+# ─────────────────── ⑬ 적용 가능 술어: A 도 B 도 재접수하지 않는다 ───────────────────
+
+def test_the_appliable_state_set_is_the_one_economics_enforces():
+    """economics 는 이 단계의 허용 파일이 아니다 — 두 곳의 집합이 어긋나면 여기서 깨진다."""
+    source = inspect.getsource(economics._matching_attempt)
+    literal = source.split('attempt.get("state") not in ')[1].split(')')[0] + ')'
+    assert set(ast.literal_eval(literal)) == set(APPLIABLE_ATTEMPT_STATES)
+
+
+def test_an_attempt_economics_can_never_apply_is_not_requeried_or_readmitted(tmp_path, monkeypatch):
+    """evidence_conflict 인 attempt 의 observed>applied 는 새 ingress 행을 만들지 않는다(P1).
+
+    막지 않으면 주기마다 접수 → economics ValueError → FAILED 행이 무한히 쌓인다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime = f['runtime']
+        await observe(runtime, f, 40, D('400000'))
+        # 같은 수량에 더 작은 누적대금 — lifecycle 이 evidence_conflict 로 굳힌다.
+        await observe(runtime, f, 40, D('300000'), accepted=False)
+        attempt = runtime.owner.state['attempts'][f['order'].attempt_id]
+        assert attempt['evidence_conflict'] is True
+        assert attempt['observed_quantity'] == 40 and attempt['applied_quantity'] == 0
+        applied = spy_apply(f)
+        before = len(f['engine']._execution_ingress)
+        collect, calls = collector(f, [[response([fill_row(f['ref'], quantity=100, filled=40,
+                                                           amount=400000)])]])
+        try:
+            assert await runtime.reconcile_once(collect) is False
+            assert calls == [] and applied == []
+            assert len(f['engine']._execution_ingress) == before
+            health = runtime.health()['reconciler']
+            assert health['targets'] == 0
+            assert health['skipped'] == {'unappliable_attempt': 1}
+            assert health['apply_outcomes'] == {}
+        finally:
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+# ────────────── ⑭ 미적용 inbox 행 하나로도 막힌 생산자를 이름 붙인다(P2-a) ──────────────
+
+def test_an_unapplied_inbox_row_alone_names_the_stalled_producer(tmp_path, monkeypatch):
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime, ref, now = f['runtime'], f['ref'], f['clock'][0]
+        # 전량 관측 + 적용까지 반영해 조회 대상(A)을 0으로 만든다.
+        await observe(runtime, f, 100, D('1000000'), applied=100)
+        observation = FillObservation(ref.account_scope, 'KR', ref.order_date, 'KRX', ref.order_no,
+                                      SYMBOL, 'BUY', 40, D('400000'), org_no=ref.org_no)
+        assert (await runtime.owner.receive(
+            observation, ingress_context=runtime.ingress_context(1))).status == 'RECEIVED'
+        tried = []
+
+        async def refuse(row):
+            tried.append(row)
+            raise ApplicationBlocked('synthetic_apply_refused')
+
+        f['engine'].apply_execution_observation = refuse
+        collect, calls = collector(f, [[response([])]])
+        try:
+            runtime.start_reconciler(collect, interval=1.0, cycle_timeout=5.0)
+
+            async def one_cycle():
+                while not tried:
+                    await asyncio.sleep(0)
+            await asyncio.wait_for(one_cycle(), 3)
+            assert calls == []  # 조회 대상 0 — 원장 TR 은 나가지 않았다
+            health = runtime.health()['reconciler']
+            assert health['targets'] == 0 and health['last_reason'] == 'apply_failed'
+            assert runtime.reconciler_blocked_reason() is None  # 아직 k주기 전
+            f['clock'][0] += timedelta(seconds=30)
+            assert runtime.reconciler_blocked_reason() == 'reconciler_no_progress:apply_failed'
+        finally:
+            f['clock'][0] = now
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+# ────────────── ⑮ 주기 도중 일자 park: parked 1, 그 주기는 진전이 아니다(P-9) ──────────
+
+def test_a_day_park_during_the_cycle_is_parked_and_not_progress(tmp_path, monkeypatch):
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime = f['runtime']
+        await observe(runtime, f, 40, D('400000'))
+        original = f['engine'].apply_execution_observation
+
+        async def park(observation):
+            # 일자 게이트를 지난 뒤 fence 가 닫히는 순간을 만든다 — B 는 InboxReceipt 를 받는다.
+            runtime._day_closed = True
+            return await original(observation)
+
+        f['engine'].apply_execution_observation = park
+        collect, _ = collector(f, [[response([other_row(f['ref'])])]])
+        try:
+            assert await runtime.reconcile_once(collect) is False
+            health = runtime.health()['reconciler']
+            assert health['parked'] == 1
+            assert health['apply_outcomes'] == {'InboxReceipt:RECEIVED': 1}
+            assert health['last_progress_at'] is None
+            attempt = runtime.owner.state['attempts'][f['order'].attempt_id]
+            assert attempt['applied_quantity'] == 0
+        finally:
+            runtime._day_closed = False
             await teardown(f, pump)
     asyncio.run(scenario())
 

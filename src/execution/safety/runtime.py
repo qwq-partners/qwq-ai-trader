@@ -18,7 +18,8 @@ from .day_recovery import (DayReceipt, RolloverFence, ValuationEvidence, aware, 
                            scope_reason, unresolved_reason, validate_valuation, reset_daily)
 from .economics import decode_portfolio, reduce_economics, validate_risk, publish_risk
 from .evidence import evidence_pages, parse_order_evidence, parser_scope
-from .lifecycle import OrderEvidence, OrderLifecycleCoordinator, OrderRef, TERMINAL_STATES
+from .lifecycle import (OrderEvidence, OrderLifecycleCoordinator, OrderRef, OrderState,
+                        TERMINAL_STATES)
 from .initial_r import capture_initial_stop, capture_finality, reduce_finalize_initial_r
 from .protection import decode_protection, publish_protection, quote_protection, reduce_protection
 from .protection_recovery import RecoveryReceipt, capture_fill, capture_quote, digest, reduce_repair
@@ -40,6 +41,14 @@ RECONCILER_CYCLE_TIMEOUT = 60.0
 RECONCILER_INTERVAL = 3.0
 # 대상이 있는데 이만큼의 주기 동안 상태가 전진하지 않으면 막힌 것으로 본다(P-2).
 RECONCILER_STALL_CYCLES = 5
+# `economics._matching_attempt` 가 받아 주는 attempt 상태. 이 밖(또는 evidence_conflict)이면
+# `reduce_economics` 가 ValueError 를 내므로 재접수는 FAILED ingress 행만 늘린다. economics.py
+# 는 이 단계의 허용 파일이 아니라 같은 집합을 여기 다시 적는다 —
+# `test_the_appliable_state_set_is_the_one_economics_enforces` 가 어긋남을 잡는다.
+APPLIABLE_ATTEMPT_STATES = frozenset(s.value for s in (
+    OrderState.OPEN, OrderState.PARTIAL, OrderState.FINAL_FILLED,
+    OrderState.FINAL_CANCELLED, OrderState.FINAL_EXPIRED,
+))
 
 
 class KRExecutionRuntime:
@@ -587,18 +596,68 @@ class KRExecutionRuntime:
         return today, ""
 
     @staticmethod
-    def _reconcile_targets(state, business_day) -> dict:
+    def _appliable(attempt) -> bool:
+        """economics가 이 attempt의 체결을 적용할 수 있는가. A·B가 같은 술어를 쓴다(P1).
+
+        밖이면 조회도 재접수도 하지 않는다 — 관측을 더 모아도 `reduce_economics`가 계속
+        ValueError를 내므로 원장 TR 예산만 쓰고 FAILED ingress 행만 쌓인다. 여기서 빠지는
+        비종결 상태는 `reconciling`·`blocked_unknown` 둘뿐이고, 제품에서 `lifecycle.reconcile`
+        호출자는 이 주기 하나뿐이라(그 경로는 0체결 관측을 저장하지 않는다) `reconciling`은
+        만들어지지 않으며 `blocked_unknown`은 order_ref가 없어 이미 대상이 아니었다.
+        """
+        return (type(attempt) is dict and not attempt.get("evidence_conflict")
+                and attempt.get("state") in APPLIABLE_ATTEMPT_STATES)
+
+    @staticmethod
+    def _attempt_for(state, order_key: str):
+        """관측의 order_key를 소유한 submit attempt. economics와 같은 단일 소유 규칙이다."""
+        owners = []
+        for row in state.get("attempts", {}).values():
+            if type(row) is not dict or row.get("kind") != "submit" or not row.get("order_ref"):
+                continue
+            try:
+                if OrderRef.from_dict(row["order_ref"]).key == order_key:
+                    owners.append(row)
+            except (TypeError, ValueError):
+                continue
+        return owners[0] if len(owners) == 1 else None
+
+    @classmethod
+    def _reconcile_targets(cls, state, business_day) -> dict:
         """미해결 submit만. 일자가 다른 주문은 economics의 cross-day 거부에 걸린다(F10)."""
         targets = {}
         for attempt_id, row in state.get("attempts", {}).items():
             ref = row.get("order_ref") if type(row) is dict else None
-            if (type(row) is not dict or row.get("kind") != "submit" or ref is None
-                    or row.get("evidence_conflict") or ref.get("order_date") != business_day):
+            if (not cls._appliable(row) or row.get("kind") != "submit" or ref is None
+                    or ref.get("order_date") != business_day):
                 continue
             if (row.get("state") not in TERMINAL_STATES
                     or row.get("observed_quantity") != row.get("applied_quantity")):
                 targets[attempt_id] = row
         return targets
+
+    @classmethod
+    def _stalled_targets(cls, state, business_day) -> bool:
+        """진전을 기다리는 것이 하나라도 있는가(P2-a).
+
+        조회 대상(A)만 세면 재접수만 막힌 상태 — 미적용 inbox 행, 관측만 앞선 attempt —
+        가 사유 없이 조용히 굳는다. 여기서는 적용 가능 술어로 거르지 않는다: 영원히
+        적용할 수 없는 행일수록 막혔다고 말해야 한다.
+        """
+        if cls._reconcile_targets(state, business_day):
+            return True
+        for row in state.get("inbox", {}).values():
+            body = row.get("observation")
+            if (row.get("status") not in ("APPLIED", "SUPERSEDED")
+                    and type(body) is dict and body.get("trading_day") == business_day):
+                return True
+        for row in state.get("attempts", {}).values():
+            ref = row.get("order_ref") if type(row) is dict else None
+            if (type(row) is dict and row.get("kind") == "submit" and type(ref) is dict
+                    and ref.get("order_date") == business_day
+                    and row.get("observed_quantity", 0) > row.get("applied_quantity", 0)):
+                return True
+        return False
 
     def _skip_reason(self, reason: str) -> None:
         self._reconciler_skipped[reason] = self._reconciler_skipped.get(reason, 0) + 1
@@ -624,8 +683,13 @@ class KRExecutionRuntime:
             progressed = await self._reconcile_observed(collect, business_day, targets, chain_blocked)
         if await self._reapply_stored(business_day, chain_blocked):
             progressed = True
+        # 주기 끝에 사유를 한 번 확정한다(P2-d). 막힌 주기의 blocked_reason 접미사는
+        # 그 주기가 실제로 멈춘 이유여야 하고, 지난 주기 사유를 물려받으면 안 된다.
         if progressed:
             self._reconciler_progress_at = self._now()
+            self._reconciler_last_reason = "progressed"
+        elif not self._stalled_targets(self.owner.state, business_day):
+            self._reconciler_last_reason = "idle"
         return progressed
 
     async def _reconcile_observed(self, collect, business_day, targets, chain_blocked) -> bool:
@@ -667,6 +731,8 @@ class KRExecutionRuntime:
         session = None if binding is None else binding.get("session")
         if type(session) is not str or not session:
             # 세션은 조회 응답에 없다. 주문 binding에 없으면 종결을 지어내지 않는다.
+            # 방어층이다 — prepare가 binding 없이 attempt를 만들지 못한다. 그 계약이
+            # 깨져도 여기서 파서에 빈 세션을 넘겨 provenance를 통과시키지 않는다.
             self._skip_reason("missing_session")
             return False
         evidence = parse_order_evidence(
@@ -695,7 +761,8 @@ class KRExecutionRuntime:
     @staticmethod
     def _evidence_changes_attempt(attempt, evidence) -> bool:
         """이 관측이 attempt 행을 바꿀 수 있을 때만 reconcile을 부른다(P-5)."""
-        if evidence.reason == "not_found" or evidence.order_quantity != attempt["quantity"]:
+        # not_found 는 order_quantity 가 0 이고 주문 수량은 양수라 아래 한 줄이 이미 막는다.
+        if evidence.order_quantity != attempt["quantity"]:
             return False
         if evidence.cumulative_quantity > attempt["observed_quantity"]:
             return True
@@ -720,6 +787,12 @@ class KRExecutionRuntime:
             except (TypeError, ValueError):
                 self._skip_reason("stored_observation_shape")
                 continue
+            # B1은 chain과 무관하게 진행한다(결정) — 그 행은 chain 판정 이전에 검증된
+            # durable 관측이고, 여기서 막으면 설치 차단 사유 19가 영구화된다. 막는 것은
+            # economics가 절대 적용할 수 없는 attempt뿐이다(P1).
+            if not self._appliable(self._attempt_for(self.owner.state, observation.order_key)):
+                self._skip_reason("unappliable_attempt")
+                continue
             if await self._reapply(observation):
                 progressed = True
         # B1이 inbox를 바꿨을 수 있다. 재구성은 현재 상태에서 다시 읽는다.
@@ -731,6 +804,9 @@ class KRExecutionRuntime:
                     or attempt.get("kind") != "submit" or ref is None
                     or ref.get("order_date") != business_day
                     or attempt.get("observed_quantity", 0) <= attempt.get("applied_quantity", 0)):
+                continue
+            if not self._appliable(attempt):
+                self._skip_reason("unappliable_attempt")
                 continue
             try:
                 observation = self._stored_observation(attempt)
@@ -761,6 +837,7 @@ class KRExecutionRuntime:
             raise
         except Exception as exc:
             self._apply_outcome(type(exc).__name__, "raised")
+            self._skip_reason("apply_failed")  # 예외 종류는 apply_outcomes가 들고 있다.
             return False
         self._apply_outcome(type(receipt).__name__, str(getattr(receipt, "status", "")))
         if isinstance(receipt, InboxReceipt):
@@ -770,16 +847,17 @@ class KRExecutionRuntime:
         return receipt.status in ("APPLIED", "ALREADY_APPLIED")
 
     def reconciler_blocked_reason(self) -> str | None:
-        """대상이 있는데 마지막 상태 전진 이후 k주기를 넘겼는가(P-2).
+        """기다리는 것이 있는데 마지막 상태 전진 이후 k주기를 넘겼는가(P-2·P2-a).
 
         task.done()으로 재지 않는다 — 죽은 주기와 살아 있지만 굶은 주기를 같은 문장으로
-        잰다. 이 단계에는 소비자가 없다(BUY 게이트는 P0-3).
+        잰다. 조회 대상뿐 아니라 미적용 inbox 행과 관측만 앞선 attempt도 같은 경과
+        기준으로 잰다. 이 단계에는 소비자가 없다(BUY 게이트는 P0-3).
         """
         state = self.owner.state
         business_day, _ = self._reconciler_day(state)
         if business_day is None:
             return None  # 일자 게이트는 그 자체가 별도 사유다. 여기서 두 번 세지 않는다.
-        if not self._reconcile_targets(state, business_day):
+        if not self._stalled_targets(state, business_day):
             return None
         if self._reconciler_started_at is None:
             return "reconciler_not_started"
@@ -1093,7 +1171,14 @@ class KRExecutionRuntime:
         return task
 
     async def shutdown(self) -> None:
-        """admission을 닫고 명령 중 뒤늦게 생긴 결과 저장까지 fixed-point drain한다."""
+        """admission을 닫고 명령 중 뒤늦게 생긴 결과 저장까지 fixed-point drain한다.
+
+        drain 집합은 runtime 소유 task(수집 task 포함)뿐이다 — engine의 ingress/apply task는
+        engine._shutdown의 몫이고, runtime이 engine의 사설 속성을 들여다보지 않는다. 수집
+        task는 자연 종료할 때 자기가 시작한 apply를 스스로 기다리므로 그것으로 충분하다.
+        제품 순서는 engine._shutdown(수락 차단 → 자기 task drain) → runtime.shutdown이며
+        그 배선은 P0-3에서 고정한다.
+        """
         self._closing = True
         # 주기 task는 cancel이 아니라 _closing으로 자연 종료한다. 잠들어 있으면 깨워 준다(P-7).
         self.notify_execution_change()
@@ -1106,9 +1191,7 @@ class KRExecutionRuntime:
                     self._command_result_completed(task)
             pending = {task for task in (*self._command_scopes, *self._command_result_tasks,
                                         *self._day_tasks, *self._protection_tasks,
-                                        *self._reconciler_tasks,
-                                        *self.engine._execution_ingress_tasks,
-                                        *self.engine._execution_apply_tasks) if not task.done()}
+                                        *self._reconciler_tasks) if not task.done()}
             if not pending:
                 break
             # 종료 caller 취소가 명령/저장 task 취소로 전파되지 않는다.
