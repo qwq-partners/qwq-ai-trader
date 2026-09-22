@@ -364,6 +364,16 @@ class RequestBoundCommands:
         self._session(request)
         _require(self.authority.owns(context), 'untrusted_entry_context')
         _require(request.command is not CommandKind.MODIFY, 'unsupported_modify_contract')
+        if request.command is CommandKind.SUBMIT and request.side is OrderSide.BUY:
+            # F8 ② — 체결 증거 생산자가 죽어 있으면 새 매수를 시작하지 않는다(P0-3 Q-2).
+            # 보호 SELL·CANCEL 은 막지 않는다: 증거가 없을수록 청산은 더 나가야 한다.
+            # 미해결 시도를 보는 아래 순회보다 **앞**이다 — 굶은 생산자는 그 시도들이 왜
+            # 미해결인지의 원인이고, 결과를 먼저 이름 붙이면 사유가 뒤바뀐다.
+            # **출처(origin)는 보지 않는다**(P0-3 S-A 처분 6): 수동 BUY(`EntryOrigin.USER`)
+            # 도 같이 막는다 — 생산자가 죽으면 수동 매수의 체결도 관측되지 않아 owner 의
+            # 수량·예약이 그만큼 틀어진다. 예외는 방향(SELL·CANCEL)뿐이다.
+            # 상세 사유는 `health()['reconciler']` 가 들고 있다(거부 어휘는 한 낱말로 닫는다).
+            _require(self.runtime.reconciler_live(self.runtime._now()), 'reconciler_unavailable')
         snapshot = self._snapshot(state, exclude_attempt=exclude_attempt)
         active = []
         for aid, attempt in state['attempts'].items():

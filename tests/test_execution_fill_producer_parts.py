@@ -205,7 +205,9 @@ def test_gateway_binds_the_signal_score_and_refuses_an_unusable_one():
     sell = Order(symbol="005930", side=OrderSide.SELL, quantity=10, price=D("10000"))
     event = type("E", (), {"score": 80.0})()
     assert SignalGateway._fill_metadata(event, buy) == {"entry_signal_score": 80.0}
-    assert SignalGateway._fill_metadata(event, sell) is None
+    # P0-3 G6 기대값 변경(결정): SELL 은 None 이 아니라 청산 태그를 싣는다. reason 이 어디에도
+    # 없는 이 스텁 event 는 legacy 의 빈 문자열 분류와 같이 'manual' 이다.
+    assert SignalGateway._fill_metadata(event, sell) == {"exit_type": "manual"}
     # 0점은 유효한 주문 intent다 — falsy 폴백으로 바꾸면 신호 점수 80이 새어 들어온다.
     buy.signal_score = 0.0
     assert SignalGateway._fill_metadata(event, buy) == {"entry_signal_score": 0.0}

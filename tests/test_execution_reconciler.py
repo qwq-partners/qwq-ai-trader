@@ -82,8 +82,15 @@ def collector(f, script):
 
 
 async def producer(tmp_path, monkeypatch, *, quantity=100, dispatch=True):
-    """실제 prepare→ACK 로 order_ref·session·fill_metadata 를 가진 미해결 SUBMIT 을 만든다."""
+    """실제 prepare→ACK 로 order_ref·session·fill_metadata 를 가진 미해결 SUBMIT 을 만든다.
+
+    `engine.running` 은 여기서 True 다(P0-3 S-A 처분 1). 이 corpus 가 단언하는 것은 주기의
+    계약이지 engine 플래그가 아니고, 제품에서 그 플래그가 False 로 돌아가는 경로는
+    `stop()`·`_shutdown()` 의 끝뿐이라 곧 `runtime.shutdown()` 의 배수로 이어진다. 설치~run
+    창(플래그가 False 인 동안)의 계약은 `test_execution_p03_wiring` 이 따로 들고 있다.
+    """
     f = await fixture(tmp_path, monkeypatch)
+    f['engine'].running = True
     request = f['request'](quantity=quantity)
     await f['quote'](request)
     await f['commands'].prepare(request, f['entry'](request),

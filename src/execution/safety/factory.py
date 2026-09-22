@@ -224,7 +224,8 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
                                    regime_adapter: MarketRegimeAdapter, fee_config: FeeConfig,
                                    risk: RiskConfig, validator_config: dict, position_pct: dict,
                                    stop_params: dict, exit_config: ExitConfig,
-                                   experts_shadow_mode, now: datetime, vix_fetcher) -> SignalGateway:
+                                   experts_shadow_mode, now: datetime, vix_fetcher,
+                                   collect) -> SignalGateway:
     """기동 시 한 번 attach 런타임을 세우거나 **명명된 사유로 거부한다**.
 
     제품 호출자는 0건이다. 제품에는 이 함수가 요구하는 checkpoint(포트폴리오·보호 대사 +
@@ -258,7 +259,15 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     예외 관례: 인자 모양은 `ValueError`, 상태 거부는 `ApplicationBlocked(<사유>)`, store
     장애(`StoreError`)와 `attach()` 의 `RuntimeError` 는 재작명하지 않고 그대로 올린다.
     `vix_fetcher` 에 기본값을 두지 않는 이유: None 은 "VIX 없음"이 아니라 실제 네트워크
-    조회를 설치한다.
+    조회를 설치한다. `collect` 도 같은 이유로 기본값이 없다 — 체결 증거 생산자 없이 선 attach
+    는 자동 매수를 증거 없이 내보낸다(그 상태는 `reconciler_unavailable` 이 다시 막는다).
+
+    **종료 계약(P0-3 Q-7 — 호출자 몫이다)**: `engine._shutdown()` 의 유일한 도달 경로는
+    `engine.run()` 의 finally 다. 설치가 성공한 뒤 run task 가 만들어지지 않으면 주기의
+    apply 가 `shield(future)` 에서 영구 대기한다. 그래서 호출자는 "설치 → `engine.run()`
+    task 생성"을 **하나의 try/finally** 로 묶어 그 사이의 어떤 실패에서도 `engine._shutdown()`
+    이 돌게 한다(그 뒤 `runtime.shutdown()`·store 닫기). 설치가 세운 주기는 `runtime.shutdown()`
+    이 배수한다 — 아무도 부르지 않으면 'Task was destroyed' 로 끝난다.
     """
     # ── 1. 인자 모양 ──────────────────────────────────────────────
     if type(now) is not datetime or now.utcoffset() is None:
@@ -273,6 +282,21 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
                              position_pct=position_pct, stop_params=stop_params,
                              exit_config=exit_config, experts_shadow_mode=experts_shadow_mode)
     effective_risk_policy(risk, regime=regime_adapter.regime, fee_config=fee_config)
+    if not callable(collect):
+        # `start_reconciler` 도 같은 검사를 하지만 그것은 attach **뒤**다 — live 를 건드린
+        # 뒤에 인자 모양으로 실패하면 호출자는 legacy 로 돌아갈 수 없다.
+        raise ValueError('invalid_execution_collector')
+    if runtime._closing or (runtime._reconciler_task is not None
+                            and not runtime._reconciler_task.done()):
+        # 같은 이유로 생산자 전제도 여기서 본다. `start_reconciler` 의 두 거부
+        # (`reconciler_admission_closed`·`reconciler_already_running`)는 attach 뒤에 나므로,
+        # 그때 실패하면 live 는 이미 바뀌어 있다. 한 낱말로 닫는다.
+        raise ApplicationBlocked('execution_producer_already_wired')
+    # 실계좌 증거(§5 스모크 4항)가 닫히기 전에는 모의투자 계좌의 일별체결 응답으로 체결
+    # 최종성을 판정하지 않는다. env 는 요청 경로 전체의 정본이다(builder·broker 공용).
+    broker = runtime.engine.broker
+    if getattr(getattr(broker, 'config', None), 'env', None) != 'prod':
+        raise ApplicationBlocked('execution_query_environment_required')
 
     # ── 2. 바인딩 선검사 ──────────────────────────────────────────
     engine = runtime.engine
@@ -379,4 +403,7 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     # SIGNAL 은 아무 데도 기록되지 않고 조용히 폐기된다.
     runtime.attach()
     runtime.install_gateway(gateway)
+    # 생산자는 송신로가 선 **뒤**에 돈다. 먼저 돌면 gateway 없는 구간의 관측이 갈 곳이 없고,
+    # 자동 BUY 의 `reconciler_unavailable` 게이트는 이 줄이 돌아야 열린다.
+    runtime.start_reconciler(collect)
     return gateway
