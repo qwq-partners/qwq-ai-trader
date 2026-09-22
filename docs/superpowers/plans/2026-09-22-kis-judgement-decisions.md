@@ -71,7 +71,7 @@
 1. 체결 관측 부재(N3) — 보호 0.
 2. **`_protection_failed` 영구 래치** — True 로만 가고 리셋은 재시작뿐. 보호 task 한 건이 취소·예외로 끝나면 모든 SUBMIT(보호 SELL 포함)이 영구 거부된다. 급락장에서 가장 잘 터진다.
 3. `legacy_portfolio_writer_conflict` 의 전역성(N2).
-4. **부분 체결 뒤 영구 봉쇄** — `reserved_quantity` 는 terminal 전까지 줄지 않는데 보유는 체결분만큼 줄어 `held − reserved < 0` → 잔량 재매도 불가(100주 중 40주 체결이면 60주가 무보호).
+4. **부분 체결 뒤 영구 봉쇄** — *(2026-09-22 P0-4 S-B 정정. 아래 앞 문장은 원래 "`reserved_quantity` 는 terminal 전까지 줄지 않는데 보유는 체결분만큼 줄어 `held − reserved < 0`" 이었고 **코드와 어긋났다**. 결론(잔량 재매도 불가)만 옳았다.)* **예약 산술은 정상이다** — `reduce_economics` 가 체결마다 `remaining = max(0, reserved − delta.quantity)` 로 줄이고(`src/execution/safety/economics.py:467`·`:480`) 보유도 같은 commit 에서 줄어(`:437`) 100주 중 40주 체결이면 `held = reserved = 60`, 차이는 정확히 0 이다. 이 `held − reserved ≥ 0` 은 **owner attempt 에 대사된 체결에 한해** 참이고, 체결 write-set 검증기가 그 범위를 강제한다(`src/execution/safety/application.py:333`). 실제 봉쇄는 둘이다 — **(a) 종목 단위 잠금**: 같은 종목에 비terminal submit 이 하나라도 있으면 새 SUBMIT 은 `unresolved_symbol_attempt` 로 예약 검사에 도달하기 전에 막힌다(`src/execution/safety/commands.py:393-394` 가 `:422-426` 보다 앞). side 를 보지 않으며 여는 것은 P1/F8 ① 이다(late-fill 이 전역 정지를 만든다). **(b) 만료 계약 부재**: 부분 체결 주문이 장 마감으로 소멸해도 owner 는 배울 수 없어(`reconcile` 은 `FINAL_EXPIRED` 를 최종성으로 읽지 않는다 — `src/execution/safety/lifecycle.py:560-562`) attempt 가 영구 `partial` 로 남고 **일자 전환까지 BLOCKED**(`unresolved_submit`·`remaining_reservation` — `src/execution/safety/day_recovery.py:127-133`) 가 된다 = **설치 차단 사유 22**. 잔여 60 의 구제는 예약 수정이 아니라 취소·에스컬레이션(P1/D2)이다. 고정 시험: `tests/test_execution_p04_reservation.py`.
 5. 미체결 SELL 에스컬레이션 없음(D2).
 6. 가격 없는 SELL 거부(D8).
 7. **세션 경계의 조용한 소멸** — prepare 와 dispatch 사이에 15:20·15:30·20:00 을 넘으면 `request_session_changed` → NOT_SENT 로 보호 SELL 이 사라진다.
