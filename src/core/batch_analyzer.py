@@ -1739,7 +1739,17 @@ class BatchAnalyzer:
         return new_state
 
     async def monitor_positions(self):
-        """[매 30분] 보유 포지션 시세 갱신 + 청산 체크"""
+        """[매 30분] 보유 포지션 시세 갱신 + 청산 체크
+
+        attach(`engine._execution_runtime is not None`)에서는 아무것도 하지 않는다 —
+        아래 전부가 live Position 과 ExitManager 의 writer 이기 때문이다(P0-3 Q-3).
+        """
+        # attach 설치 시: live Position 의 시세·고점과 ExitManager 단계는 owner 소유다.
+        # 여기서 대입하면 owner 게시본과 어긋나 `_owner_ready` 의 DTO 동등성이 깨지고
+        # owner 의 모든 명령이 멈춘다. attach 의 시세·보호 정본은 owner 의 quote/보호 경로다.
+        if getattr(self._engine, '_execution_runtime', None) is not None:
+            logger.debug("[포지션모니터] attach 설치 — 시세·청산 갱신은 owner 경로가 한다")
+            return
         if not self._engine.portfolio.positions:
             return
 

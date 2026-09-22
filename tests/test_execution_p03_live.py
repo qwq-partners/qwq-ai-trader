@@ -182,3 +182,106 @@ def test_a_broken_comparison_is_not_charged_to_the_kis_sync(attached_sync, monke
     legacy._run(sched)
     assert bot.risk_manager._sync_fail_count == 1
     assert hb._state("kr_portfolio_sync").failure_reason == "attach 대조 실패: 대조 결함"
+
+
+# ---------------------------------------------------------------- S-D 나머지 두 writer
+
+
+def _exit_state(exit_manager, symbol):
+    """ExitManager 상태의 비교 가능한 사본 — 단계·고점·잔량이 바뀌면 여기가 달라진다."""
+    from dataclasses import asdict
+    return asdict(exit_manager._states[symbol])
+
+
+def test_the_position_monitor_writes_nothing_under_attach(monkeypatch, tmp_path):
+    """attach 에서 monitor_positions 를 돌려도 Position 필드·ExitManager 상태가 그대로다."""
+    import test_t10_repro_a as t10
+    from src.core.batch_analyzer import BatchAnalyzer
+
+    exit_manager = t10._make_exit_manager(tmp_path, monkeypatch)
+    position = t10._register(exit_manager)
+    before_position = (position.current_price, position.highest_price)
+    before_state = _exit_state(exit_manager, position.symbol)
+
+    class _Broker:
+        def __init__(self):
+            self.quotes = 0
+
+        async def get_quote(self, symbol):
+            self.quotes += 1
+            # 대폭 상승 — 미설치라면 current_price/highest_price/단계가 반드시 움직인다.
+            return {"price": 13000, "high": 13000, "low": 12000}
+
+    analyzer = object.__new__(BatchAnalyzer)
+    analyzer._engine = SimpleNamespace(portfolio=SimpleNamespace(positions={position.symbol: position}),
+                                       _execution_runtime=object())
+    analyzer._broker = _Broker()
+    analyzer._exit_manager = exit_manager
+    analyzer._composite_cache_date = None
+    analyzer._config = {}
+
+    asyncio.run(analyzer.monitor_positions())
+
+    assert (position.current_price, position.highest_price) == before_position
+    assert _exit_state(exit_manager, position.symbol) == before_state
+    # 조회조차 하지 않는다 — 읽기 전용이 아니라 아예 owner 경로의 몫이다.
+    assert analyzer._broker.quotes == 0
+
+
+def test_the_rest_feed_exit_check_writes_nothing_under_attach(monkeypatch, tmp_path):
+    """attach 에서 _check_exit_signal 을 돌려도 ExitManager·pending 집합이 그대로다."""
+    import test_t10_repro_a as t10
+    from src.schedulers.kr_scheduler import KRScheduler
+
+    exit_manager = t10._make_exit_manager(tmp_path, monkeypatch)
+    position = t10._register(exit_manager)
+    before_state = _exit_state(exit_manager, position.symbol)
+
+    sched = object.__new__(KRScheduler)
+    sched.bot = SimpleNamespace(
+        exit_manager=exit_manager,
+        broker=object(),
+        engine=SimpleNamespace(portfolio=SimpleNamespace(positions={position.symbol: position}),
+                               risk_manager=None, _execution_runtime=object()),
+        _pause_resume_at=None,
+        _exit_pending_symbols=set(),
+        _exit_pending_timestamps={},
+        _exit_reasons={},
+        _sell_blocked_symbols={},
+        _strategy_exit_params={"_sync": {}},
+    )
+
+    asyncio.run(sched._check_exit_signal(position.symbol, D("13000")))
+
+    assert _exit_state(exit_manager, position.symbol) == before_state
+    assert (sched.bot._exit_pending_symbols, sched.bot._exit_reasons) == (set(), {})
+
+
+def test_both_guards_are_no_ops_when_the_runtime_is_absent(monkeypatch, tmp_path):
+    """미설치에서는 두 함수가 종래대로 쓴다 — 가드가 분기 밖이 아님을 고정한다."""
+    import test_t10_repro_a as t10
+    from src.core.batch_analyzer import BatchAnalyzer
+
+    exit_manager = t10._make_exit_manager(tmp_path, monkeypatch)
+    position = t10._register(exit_manager)
+
+    class _Broker:
+        async def get_quote(self, symbol):
+            return {"price": 13000, "high": 13000, "low": 12000}
+
+    from datetime import date
+
+    analyzer = object.__new__(BatchAnalyzer)
+    # engine 에 `_execution_runtime` 속성 자체가 없는 미설치 상태(운영과 같다).
+    analyzer._engine = SimpleNamespace(portfolio=SimpleNamespace(positions={position.symbol: position}))
+    analyzer._broker = _Broker()
+    analyzer._exit_manager = exit_manager
+    analyzer._composite_cache_date = date.today()   # 복합 캐시 갱신 조기 반환(네트워크 회피)
+    analyzer._ma5_cache = {position.symbol: 12000.0}   # 캐시 미스 보충(네트워크) 회피
+    analyzer._prev_low_cache = {position.symbol: 11000.0}
+    analyzer._max_holding_days = 30
+    analyzer._config = {}
+
+    asyncio.run(analyzer.monitor_positions())
+
+    assert position.current_price == D("13000") and position.highest_price == D("13000")

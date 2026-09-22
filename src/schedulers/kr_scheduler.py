@@ -1007,8 +1007,17 @@ class KRScheduler:
 
     async def _check_exit_signal(self, symbol: str, current_price: Decimal,
                                 market_data: Optional[Dict] = None):
-        """분할 익절/손절 신호 확인"""
+        """분할 익절/손절 신호 확인
+
+        attach(`engine._execution_runtime is not None`)에서는 아무것도 하지 않는다 —
+        아래 전부가 ExitManager 단계·pending 집합의 writer 이기 때문이다(P0-3 Q-3).
+        """
         bot = self.bot
+        # attach 설치 시: 보호 단계·pending 은 owner 소유다. 여기서 update_price 로 단계를
+        # 밀거나 pending 을 등록하면 owner 게시본과 어긋나 `_owner_ready` 가 닫힌다.
+        if getattr(getattr(bot, 'engine', None), '_execution_runtime', None) is not None:
+            logger.debug(f"[청산] {symbol} attach 설치 — 보호 판단은 owner 경로가 한다")
+            return
         if not bot.exit_manager or not bot.broker:
             return
 
