@@ -222,6 +222,9 @@ def test_regular_market_waiting_for_pending_lock_is_refused_after_closing(tmp_pa
                 task = asyncio.create_task(f['drive'](protective_signal()))
                 await asyncio.sleep(0)
                 assert not task.done()
+                assert lock.locked()
+                assert lock._waiters is not None and len(lock._waiters) == 1
+                assert not lock._waiters[0].done()
                 _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=20)
             finally:
                 lock.release()
@@ -374,7 +377,7 @@ def test_bid_await_rechecks_current_holdings_date_and_signal_competition(
             assert snapshot(f) == after_change[0]
             assert f['engine'].stats.errors_count == 0
             if change == 'cooldown':
-                assert any('보호 매도' in message and '쿨다운' in message
+                assert any(message.startswith('[리스크] 보호 매도 최종 주문 진행·신호 쿨다운 차단:')
                            for message in protection_logs)
         finally:
             await f['teardown']()
@@ -466,7 +469,8 @@ def test_explicit_invalid_protection_identity_is_refused(tmp_path, monkeypatch, 
             assert f['prepared'] == []
             assert snapshot(f) == before
             assert f['engine'].stats.errors_count == 0
-            assert any('보호' in message and '식별자' in message for message in protection_logs)
+            assert any(message.startswith('[리스크] 보호 매도 식별자 거부:')
+                       for message in protection_logs)
         finally:
             await f['teardown']()
     asyncio.run(scenario())
@@ -490,7 +494,8 @@ def test_dict_subclass_with_explicit_protection_identity_is_refused(tmp_path, mo
             assert f['prepared'] == []
             assert snapshot(f) == before
             assert f['engine'].stats.errors_count == 0
-            assert any('보호' in message and '식별자' in message for message in protection_logs)
+            assert any(message.startswith('[리스크] 보호 매도 식별자 거부:')
+                       for message in protection_logs)
         finally:
             await f['teardown']()
     asyncio.run(scenario())
@@ -498,31 +503,35 @@ def test_dict_subclass_with_explicit_protection_identity_is_refused(tmp_path, mo
 
 def test_general_signal_cooldown_is_observable_and_retained_protection_retries(
         tmp_path, monkeypatch, protection_logs):
-    """일반 신호의 기존30초 지연을 관측하고 같은 보호 결정을 그 뒤 정확히 송신한다."""
+    """31초마다 일반 신호가 먼저 거부되면 보호가 반복 지연되고, 중단 뒤 재시도된다."""
     async def scenario():
         f = await fixture(tmp_path, monkeypatch)
         try:
             await seed_position(f)
-            f['session'][0] = GuardDecision(False, '합성-일반신호-최종거부')
-            await f['drive'](sell_signal(quantity=10))
-            assert f['posts']() == []
-            assert f['prepared'] == []
-            assert len(f['errors']()) == 1
-            assert f['rm']._last_signal_time['005930'] == NOW_KST.replace(tzinfo=None)
-            f['session'][0] = GuardDecision(True, '합성-세션허용')
             retained = protective_signal()
-            before = snapshot(f)
-            await f['drive'](retained)
-            assert f['posts']() == []
-            assert snapshot(f) == before
-            assert any('보호 매도' in message and '쿨다운' in message
-                       for message in protection_logs)
+            for index in range(2):
+                if index == 1:
+                    advance(31)
+                f['session'][0] = GuardDecision(False, '합성-일반신호-최종거부')
+                await f['drive'](sell_signal(quantity=10))
+                assert f['posts']() == []
+                assert f['prepared'] == []
+                assert len(f['errors']()) == index + 1
+                assert '합성-일반신호-최종거부' in f['errors']()[-1].message
+                assert f['rm']._last_signal_time['005930'] == _CLOCK['kst'].replace(tzinfo=None)
+                f['session'][0] = GuardDecision(True, '합성-세션허용')
+                before = snapshot(f)
+                await f['drive'](retained)
+                assert f['posts']() == []
+                assert snapshot(f) == before
+                assert sum(message.startswith('[리스크] 보호 매도 주문 진행·신호 쿨다운 차단:')
+                           for message in protection_logs) == index + 1
             advance(31)
             await f['drive'](retained)
             assert len(f['posts']()) == 1
             assert f['prepared'][0].intent_id == 'pp-i-engine-test'
             assert f['posts']()[0][1]['json']['ORD_QTY'] == '90'
-            assert len(f['errors']()) == 1
+            assert len(f['errors']()) == 2
         finally:
             await f['teardown']()
     asyncio.run(scenario())
@@ -550,6 +559,8 @@ def test_gateway_existing_session_guards_refuse_regular_market_after_closing(
 
                 f['gateway'].submit = submit
             else:
+                original_limiter = f['broker']._rate_limit
+
                 async def limiter(tr_id):
                     reached.append(tr_id)
                     await asyncio.sleep(0)
@@ -573,6 +584,29 @@ def test_gateway_existing_session_guards_refuse_regular_market_after_closing(
                 attempt = next(iter(f['runtime'].owner.state['attempts'].values()))
                 assert attempt['state'] == 'final_rejected'
                 assert attempt['reserved_quantity'] == 0
+                assert f['engine'].stats.errors_count == 0
+                original_attempts = deepcopy(f['runtime'].owner.state['attempts'])
+                original_intent = deepcopy(f['runtime'].owner.state['intents']['pp-i-engine-test'])
+                f['broker']._rate_limit = original_limiter
+                advance(31)
+                assert (_CLOCK['kst'].hour, _CLOCK['kst'].minute, _CLOCK['kst'].second) == (15, 20, 31)
+                f['broker'].best_bid = D('9800')
+                replacement = protective_signal(order_type='limit')
+                replacement.metadata['protection_intent_id'] = 'pp-i-engine-after-session'
+                await f['drive'](replacement)
+                assert len(f['posts']()) == 1
+                body = f['posts']()[0][1]['json']
+                assert (body['ORD_DVSN'], body['ORD_UNPR'], body['ORD_QTY']) == ('00', '9800', '90')
+                assert len(f['prepared']) == 2
+                assert f['prepared'][-1].intent_id == 'pp-i-engine-after-session'
+                attempts = f['runtime'].owner.state['attempts']
+                assert len(attempts) == 2
+                for attempt_id, original in original_attempts.items():
+                    assert attempts[attempt_id] == original
+                assert f['runtime'].owner.state['intents']['pp-i-engine-test'] == original_intent
+                assert len(set(attempts) - set(original_attempts)) == 1
+                assert len(f['runtime'].owner.state['intents']) == 2
+                assert f['outcomes'][-1].status == CommandStatus.ACKNOWLEDGED
                 assert f['engine'].stats.errors_count == 0
         finally:
             await f['teardown']()
