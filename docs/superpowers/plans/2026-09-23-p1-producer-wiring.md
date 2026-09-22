@@ -39,6 +39,10 @@
 | S2→shutdown | runtime은 생산자 자체 task를 모름 | shield 내부 작업의 첫 await 전에 기존 `with runtime.command_scope():`를 열어 lock 대기~submit까지 추적. `_protection_tasks` 등록은 자기 장벽을 만들므로 금지. 강한 task 참조·취소 후 예외 회수·종료 거부를 시험 |
 | S2→S3 | 현재 engine은 LIMIT/수량 fallback | S2는 실제 runtime·gateway와 경계 어댑터로 검증, 실제 engine의 MARKET/수량 인수는 S3에서 마감. S2 통과를 실배선 통과로 보고하지 않음 |
 | S2→S4 관측 | producer.health()를 runtime health가 현재 읽지 않음 | S4에 runtime.py의 미배선 기본 None·읽기 전용 health 투영만 허용하는 최소 예외. 상태 reducer/게이트 변경0, live 파일은 factory.py 한 곳 |
+| S3 기존 시험 | 독립 gateway 인수 E1은 직접 가격 갱신이 예외를 낼 것을 요구 | S3의 no-op 계약과 무수정37 GREEN은 양립 불가. 해당 단언만 owner·live 상태 무변경으로 바꾸고 다른 writer 거부 단언 유지. 실제 MARKET_DATA의 전략 도달은 신규 시험으로 증명 |
+| S2/S3 병렬 | S3는 고정 SignalEvent metadata와 기존 실제 engine 하네스로 독립 구현 가능 | 같은 base2ddacf4, 별도 worktree·파일 소유로 구현 병렬 허용. 통합/전체 검증은 S2→S3 순서. S2 구현이나 리뷰 결과가 계약을 바꾸면 S3를 재검증 |
+| S2 재시작 cooldown | durable attempt에는 종결 시각이 없어 메모리의 거부 시각이 소실됨 | 기존 보호 intent의 현재 재시도 대상임이 증명된 확정미체결에 한해 첫 관측에서60초를 새 기산. 옛 체결 익절은 새 손절을 막지 않으며 UNKNOWN은시간으로풀지않음. 최신 episode를 증명할 수 없으면 명시 보류,새schema없음 |
+| S3 거래일 | legacy 시간 가드는 KRSession의 주말·휴장일 검사도 포함하나 requests._session_at에는 없음 | 보호 전용 helper도 기존 utils.session.is_kr_market_holiday에 runtime KST날짜를 전달해 방어 유지. 새달력·조회 없음. 시간 라벨과 gateway session_guard는 그대로 두고 await뒤 거래일/세션 재확인 |
 
 ## Review Focus
 
@@ -79,12 +83,12 @@ assert sent.metadata['order_type'] == 'market'
 
 ## Task 3: engine attach 보호 경로
 
-**Files:** Modify `src/core/engine.py`만, Create `tests/test_execution_p1_engine.py`.
+**Files:** 제품은 `src/core/engine.py`만, Create `tests/test_execution_p1_engine.py`. 기존 `tests/test_execution_signal_gateway_acceptance.py`의 E1 가격 writer 예외 단언만 위 처분대로 갱신 허용.
 **Interfaces:** S2 SignalEvent metadata→RiskManager.on_signal→gateway. runtime.clock의 KST시각·requests._session_at를 사용한다.
 
 - [ ] RED: 실제 MARKET_DATA 처리의 errors_count/전략 도달, regular 보호 SELL wire MARKET, closing LIMIT,15:35/15:45미송신, 정확한 지정수량/초과수량거부.
-- [ ] GREEN: update_position_price의 attach raise만 무동작 return. SELL attach 분기에서 명시 수량을 정확히 사용하며 불일치 전량 보정 금지. regular + market metadata면 호가조회0/MARKET priceNone. closing은 LIMIT만; 호가 결측으로 MARKET fallback하지 않음. legacy와 일반 nonprotective 경로는 기존 계약 대조.
-- [ ] See: legacy 본문을 신규 attach guard만 제거해 base와 바이트 비교, 기존S4-0 26·독립gateway인수37 무수정 GREEN, 독립 변이와 실제모델 Opus승인, 전체 UTC/KST 후 feature통합/문서/푸시.
+- [ ] GREEN: update_position_price의 attach raise만 무동작 return. 보호 intent가 명시된 SELL attach 분기에서 명시 수량을 정확히 사용하며 불일치 전량 보정 금지. regular + market metadata면 호가조회0/MARKET priceNone. closing은 LIMIT만; 호가 결측으로 MARKET fallback하지 않음. 보호 attach는 legacy 거래시간 가드(15:25 CLOSED)를 재사용하지 않고 runtime 시계→KST→requests._session_at를 사용. legacy와 일반 nonprotective 경로는 기존 계약 대조.
+- [ ] See: legacy 본문을 신규 attach guard만 제거해 base와 바이트 비교, 기존S4-0 26 무수정·독립gateway인수37(E1 계약 단언만 갱신) GREEN, 작성자 변이3종 및 독립 추가3종과 실제모델 Opus승인, 전체 UTC/KST 후 feature통합/문서/푸시.
 
 ```python
 assert body['ORD_DVSN'] == '01'
@@ -95,7 +99,7 @@ assert engine.stats.errors_count == 0
 
 ## Task 4: factory 설치기 배선·관측
 
-**Files:** Modify `src/execution/safety/factory.py`, runtime.py는 위 표의 관측 전용 예외만. Create `tests/test_execution_p1_install.py`, 기존설치시험 호출에는 신규필수인자만 최소 갱신.
+**Files:** Modify `src/execution/safety/factory.py`, runtime.py는 위 표의 관측 전용 예외만. Create `tests/test_execution_p1_install.py`. 기존 `test_execution_install_factory.py`의 target kwargs에 신규필수인자를 넣고 live_snapshot에 producer참조·MARKET_DATA 핸들러 identity/순서를 추가해 거부 시 무변경 계약을 강화한다. 다른 기존설치시험은 무수정.
 **Interfaces:** `install_attached_runtime(..., indicator_source)` 필수 callable. 구간1 검증, 구간2 마지막(attach/start_reconciler뒤)에 producer 생성·runtime참조·MARKET_DATA첫핸들러·기동sweep1회. shutdown은 S2 command_scope 경로.
 
 - [ ] RED: invalid indicator_source에서 live무변경, 실제 보호 핸들러 선행, 기동 복구·결정 보류, 종료drain·중복설치거부, runtime.health의 보호 관측.
