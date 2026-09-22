@@ -52,10 +52,10 @@ from src.execution.safety.commands import CommandValidationError, RequestBoundCo
 from src.execution.safety.economics import encode_portfolio
 from src.execution.safety.factory import install_attached_runtime
 from src.execution.safety.gateway import SignalGateway
-from src.execution.safety.queries import QueryCollection, QueryScope
 from src.execution.safety.guards import (
     EntryAuthority, FinalEntryGuard, GuardDecision, RiskSnapshot,
 )
+from src.execution.safety.queries import QueryCollection, QueryScope
 from src.execution.safety.lifecycle import (
     CommandKind, CommandResult, CommandStatus, OrderEvidence, OrderRef, OrderState,
 )
