@@ -340,18 +340,28 @@ class KISBroker(BaseBroker):
             tr_cont=request.tr_cont, return_response=True,
         )
 
-    def _execution_queries(self, clock: Callable[[], datetime]) -> LegacyExecutionQueries:
+    def _execution_queries(self, clock: Callable[[], datetime], *,
+                           max_pages: int = 10) -> LegacyExecutionQueries:
         if self.config.env != "prod":
             raise ValueError("legacy execution queries require production environment")
         return LegacyExecutionQueries(self._fetch_execution_query, clock=clock,
-                                      request_timeout=self.config.timeout_seconds)
+                                      request_timeout=self.config.timeout_seconds,
+                                      max_pages=max_pages)
 
     async def get_execution_daily(self, *, account_scope: str, start_date: str,
-                                  end_date: str, clock: Callable[[], datetime]) -> QueryCollection:
-        """실전 legacy 일별 조회 단발 수집. 페이지 완결은 거래 허가/최종성이 아니다."""
-        return await self._execution_queries(clock).daily(
+                                  end_date: str, clock: Callable[[], datetime],
+                                  exchange_scope: str = "KRX",
+                                  max_pages: int = 10) -> QueryCollection:
+        """실전 legacy 일별 조회 단발 수집. 페이지 완결은 거래 허가/최종성이 아니다.
+
+        `exchange_scope`·`max_pages` 는 가법 kwarg 이며 기본값은 종래 동작과 같다.
+        `max_pages` 는 수집기까지 그대로 내려간다 — 파서에만 걸면 수집기가 기본 10페이지를
+        돌아 조회 예산을 넘긴다(P0-3 Q-3/G3).
+        """
+        return await self._execution_queries(clock, max_pages=max_pages).daily(
             account_scope=account_scope, account_number=self.config.account_no,
             product_code=self.config.account_product_cd, start_date=start_date, end_date=end_date,
+            exchange_scope=exchange_scope,
         )
 
     async def get_execution_cancelable(self, *, account_scope: str,

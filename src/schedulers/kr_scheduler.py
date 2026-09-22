@@ -42,6 +42,7 @@ from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
+from ..utils.exit_types import classify_exit_type
 
 
 class _RegimeClassifierLLM:
@@ -862,51 +863,13 @@ class KRScheduler:
 
     @staticmethod
     def _classify_exit_type(reason: str) -> str:
-        """exit_reason 문자열 → exit_type 태그 변환 (단일 출처, 중복 방지)
+        """exit_reason 문자열 → exit_type 태그 변환 (단일 출처는 `src/utils/exit_types.py`).
 
-        ExitManager / batch_analyzer / kr_scheduler 세 곳에서 발생하는
-        모든 reason 패턴을 커버한다.
-
-        패턴 우선순위 (위에서 아래):
-          0. 긴급 청산 (킬스위치/긴급전량청산 — 손절보다 먼저 판별)
-          1. 손절
-          2. 트레일링
-          3. 본전 이탈 (breakeven)
-          4. stale 계열 (횡보·무효화·저효율·보유기간 초과·코어홀딩 조기경보)
-          5. RSI2 청산 → take_profit
-          6. 분할 익절 (3차→2차→1차 순서 — "2차"가 "1차" 포함 오탐 방지)
-          7. 일반 익절
-          8. 테마 EOD / fill_detected / 기타 → manual
+        본문은 P0-3 S-B 에서 순수 함수로 내려갔다 — `src/execution/safety/gateway.py` 가
+        같은 분류를 써야 하는데 스케줄러를 import 하면 순환이 생기기 때문이다(Q-6).
+        이 메서드는 기존 호출 3곳을 위해 남긴 위임이며 동작은 바뀌지 않는다.
         """
-        r = reason or ""
-        # 2026-08-05 P2: "긴급전량청산" 등이 manual로 오분류되던 데드 조건 복원.
-        # risk/manager.record_exit가 ("stop_loss","emergency_stop")를 당일 손절
-        # 등록 대상으로 취급하므로 emergency_stop 반환 시 재진입 강화 정책이 걸린다.
-        # (소비처 확인: DB VARCHAR(30)/저널/메모리/위키 모두 자유 문자열 — 안전)
-        if "긴급" in r or "emergency" in r.lower():
-            return "emergency_stop"
-        if "손절" in r or "stop" in r.lower():
-            return "stop_loss"
-        if "트레일링" in r or "trailing" in r.lower():
-            return "trailing"
-        if "본전 이탈" in r or "breakeven" in r.lower():
-            return "breakeven"
-        if ("횡보 청산" in r or "추세 무효화" in r
-                or "익절후 저효율" in r
-                or "보유기간 초과" in r
-                or "코어홀딩 조기경보" in r):
-            return "stale"
-        if "RSI2 청산" in r:
-            return "take_profit"
-        if "3차" in r:
-            return "third_take_profit"
-        if "2차" in r:
-            return "second_take_profit"
-        if "1차" in r:
-            return "first_take_profit"
-        if "익절" in r or "take_profit" in r.lower():
-            return "take_profit"
-        return "manual"
+        return classify_exit_type(reason)
 
     def _trim_watch_symbols(self):
         """감시 종목 리스트가 최대 수를 초과하면 오래된 비포지션 종목 제거"""
@@ -1044,8 +1007,25 @@ class KRScheduler:
 
     async def _check_exit_signal(self, symbol: str, current_price: Decimal,
                                 market_data: Optional[Dict] = None):
-        """분할 익절/손절 신호 확인"""
+        """분할 익절/손절 신호 확인
+
+        attach(`engine._execution_runtime is not None`)에서는 아무것도 하지 않는다 —
+        아래 전부가 ExitManager 단계·pending 집합의 writer 이기 때문이다(P0-3 Q-3).
+        """
         bot = self.bot
+        # attach 설치 시: 보호 단계·pending 은 owner 소유다. 여기서 update_price 로 단계를
+        # 밀거나 pending 을 등록하면 owner 게시본과 어긋나 `_owner_ready` 가 닫힌다.
+        #
+        # **설치 차단 사유 21** — 이 skip 과 batch_analyzer.monitor_positions 의 같은 skip 으로
+        # attach 에는 손절·트레일링·분할익절·갭EOD·보유기간 청산의 **구동기가 하나도 없다**.
+        # owner 의 보호 경로(`runtime.quote`/`apply_quote`)는 존재하지만 제품에 시세를 넣는
+        # 생산자가 0건이고(engine.update_price 는 attach 에서 ApplicationBlocked 를 올린다),
+        # 그래서 attach 는 보호 SELL 에 관해 legacy 보다 계속 덜 안전하다. 닫는 것은 P1 의
+        # "보호 SELL main 동등"에서 owner quote 경로를 배선하는 일이다. 그 전까지 attach 를
+        # 운영에 설치하지 않는다.
+        if getattr(getattr(bot, 'engine', None), '_execution_runtime', None) is not None:
+            logger.debug(f"[청산] {symbol} attach 설치 — 보호 판단은 owner 경로가 한다")
+            return
         if not bot.exit_manager or not bot.broker:
             return
 
@@ -1239,8 +1219,41 @@ class KRScheduler:
         fallback = params.get("_sync", {})
         return dict(params.get(strategy, fallback) if strategy else fallback)
 
+    def _attached_sync_mismatches(self, balance, kis_positions) -> List[str]:
+        """attach 전용: KIS 잔고/포지션과 owner 게시 포트폴리오의 차이를 모은다 (쓰기 0건).
+
+        - 비교 대상 3종: 종목 대칭차 · 공통 종목 수량 · 현금(1,000원 임계).
+        - 평단가는 비교하지 않는다 — owner 의 평단은 체결 reducer 의 산식이고 KIS 의 평단과
+          반올림 단위가 같다는 증거가 없다(있지도 않은 불일치를 매일 울리게 만든다).
+        - 현금은 legacy 와 같이 available_cash 가 0 이하이면 '정보 없음'으로 보고 제외한다.
+        - 반환 문자열에 계좌번호를 담지 않는다(로그로 그대로 나간다).
+        """
+        portfolio = self.bot.engine.portfolio
+        kis = kis_positions if kis_positions is not None else {}
+        owner_symbols, kis_symbols = set(portfolio.positions.keys()), set(kis.keys())
+        mismatches = []
+        only_owner = sorted(owner_symbols - kis_symbols)
+        only_kis = sorted(kis_symbols - owner_symbols)
+        if only_owner:
+            mismatches.append(f"owner 에만 있음: {', '.join(only_owner)}")
+        if only_kis:
+            mismatches.append(f"KIS 에만 있음: {', '.join(only_kis)}")
+        for symbol in sorted(owner_symbols & kis_symbols):
+            owner_qty, kis_qty = portfolio.positions[symbol].quantity, kis[symbol].quantity
+            if owner_qty != kis_qty:
+                mismatches.append(f"{symbol} 수량 owner {owner_qty} ≠ KIS {kis_qty}")
+        available_cash = Decimal(str(balance.get('available_cash', 0)))
+        cash_gap = abs(portfolio.cash - available_cash)
+        if available_cash > 0 and cash_gap > Decimal('1000'):
+            mismatches.append(f"현금 차 {cash_gap:,.0f}원")
+        return mismatches
+
     async def _sync_portfolio(self):
-        """KIS API와 포트폴리오 동기화"""
+        """KIS API와 포트폴리오 동기화
+
+        attach(`engine._execution_runtime is not None`)에서는 2-1 분기에서 읽기 전용 관측만
+        하고 돌아간다 — 아래 3번 이후의 live writer 는 미설치 경로 전용이다.
+        """
         bot = self.bot
         if not bot.broker:
             return
@@ -1291,6 +1304,44 @@ class KRScheduler:
                         bot.risk_manager.set_sync_status(False)
                     _hb.record_failure("kr_portfolio_sync", _why)
                     return
+
+            # 2-1. attach 설치 시: 읽기 전용 관측 + 불일치 알람 (P0-3 Q-4)
+            # owner 가 게시한 live 포트폴리오를 sync 가 덮으면 `_owner_ready` 의
+            # legacy_portfolio_writer_conflict 로 owner 의 모든 명령이 멈춘다. 그래서 attach 에서는
+            # 포트폴리오·ExitManager·RiskManager 어느 것도 쓰지 않고 대조만 하고 돌아간다.
+            # 불일치의 해소는 owner 의 reducer 몫이고 여기서는 알리기만 한다 — 불일치가 계속되면
+            # legacy 와 같은 sidecar 연속 실패 임계로 신규 매수가 막힌다(10분 강제 해제가 있어
+            # best-effort 이며, 이것이 수동 매매를 owner 에 반영하지는 않는다).
+            #
+            # 이 분기는 2번의 재시도 방어 **뒤**에 있다(시험이 위치를 고정한다) — 재조회한
+            # 응답으로 대조해야 부분 누락 1회를 불일치로 오인하지 않기 때문이다. 그 대가로
+            # 남는 비용: owner 가 모르는 수동 매도로 KIS 에서 종목이 사라지면 `partial_missing`
+            # 이 매 주기 참이라 30초마다 get_positions 가 한 번 더 나가고 `asyncio.sleep(5)` 가
+            # 한 번씩 더 걸린다(원장 TR 이라 계좌당 초당 1건 — EGW00215 예산을 갉는다).
+            # 불일치가 이미 error 로 보고되는 동안에도 계속되므로 P1 후보다. 여기서 고치지
+            # 않는 이유는 재시도 방어 자체가 유령 정리의 전제이고, 건너뛰는 조건을 attach
+            # 에서만 다르게 두면 미설치 경로의 바이트 동일성이 깨지기 때문이다.
+            runtime = getattr(getattr(bot, 'engine', None), '_execution_runtime', None)
+            if runtime is not None:
+                try:
+                    mismatches = self._attached_sync_mismatches(balance, kis_positions)
+                except Exception as _ase:
+                    # 대조 자체의 결함을 KIS 동기화 실패로 오인시키지 않는다(별도 사유).
+                    logger.error(f"[동기화] attach 대조 실패: {_ase}")
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(False)
+                    _hb.record_failure("kr_portfolio_sync", f"attach 대조 실패: {_ase}")
+                    return
+                if mismatches:
+                    logger.error(f"[동기화] attach 불일치 — {'; '.join(mismatches)}")
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(False)
+                    _hb.record_failure("kr_portfolio_sync", f"attach 불일치 {len(mismatches)}건")
+                else:
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(True)
+                    _hb.record_success("kr_portfolio_sync")
+                return
 
             # 3. lock 내에서 포트폴리오 수정
             async with bot._portfolio_lock:
