@@ -921,6 +921,11 @@ class KRScheduler:
           - 정규장 이후:       3분
         """
         bot = self.bot
+        # attach 설치 시: 취소·pending·ExitManager 단계는 owner 소유다. 여기서 정리하면
+        # 빈 브로커 캐시의 취소 0 건을 '이미 소멸'로 읽어 거래소에 살아 있는 SELL 위에서
+        # 단계를 되감는다(차단 사유 21 과 같은 계열). attach 의 정리는 P1 의 owner CANCEL 이다.
+        if getattr(getattr(bot, 'engine', None), '_execution_runtime', None) is not None:
+            return
         if not bot._exit_pending_timestamps:
             return
 

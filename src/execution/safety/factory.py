@@ -262,6 +262,12 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     조회를 설치한다. `collect` 도 같은 이유로 기본값이 없다 — 체결 증거 생산자 없이 선 attach
     는 자동 매수를 증거 없이 내보낸다(그 상태는 `reconciler_unavailable` 이 다시 막는다).
 
+    **설치 전제(P0-4 항목 9 — 호출자 몫이다)**: 호출자는 bot 수준
+    `_exit_pending_symbols`/`_exit_pending_timestamps` 가 비어 있음을 확인한다 — 설치기는
+    bot 을 보지 못하고(여기서 검사하는 것은 `engine.risk_manager` 의 장부뿐이다), 그 집합은
+    attach 에서도 `_sync_portfolio` 의 `partial_missing` 계산에 읽힌다. 남아 있는 행은
+    그 종목의 부분 누락 재조회 방어를 억제한다.
+
     **종료 계약(P0-3 Q-7 — 호출자 몫이다)**: `engine._shutdown()` 의 유일한 도달 경로는
     `engine.run()` 의 finally 다. 설치가 성공한 뒤 run task 가 만들어지지 않으면 주기의
     apply 가 `shield(future)` 에서 영구 대기한다. 그래서 호출자는 "설치 → `engine.run()`
