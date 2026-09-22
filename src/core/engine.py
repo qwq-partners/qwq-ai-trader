@@ -2582,6 +2582,7 @@ class RiskManager:
             position = self.engine.portfolio.positions.get(event.symbol)
             last_signal = self._last_signal_time.get(event.symbol)
             if (now.date() != started_at.date() or _session_at(now) != session
+                    or protection_holiday(now.date())
                     or position is None or quantity > position.quantity
                     or event.symbol in self._pending_orders
                     or (last_signal is not None

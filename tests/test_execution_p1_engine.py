@@ -237,6 +237,37 @@ def test_protection_preserves_holiday_guard_before_bid_lookup(tmp_path, monkeypa
     asyncio.run(scenario())
 
 
+def test_holiday_update_during_bid_wait_refuses_order(tmp_path, monkeypatch):
+    """날짜·세션이 같아도 호가 대기 중 갱신된 휴장은 송신 전에 다시 검사한다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            monkeypatch.setattr(session_module, '_kr_market_holidays', set())
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=25)
+            assert session_module.is_kr_market_holiday(NOW_KST.date()) is False
+            bids = []
+
+            async def bid(symbol):
+                bids.append(symbol)
+                await asyncio.sleep(0)
+                session_module.set_kr_holidays({NOW_KST.date()})
+                return D('9800')
+
+            f['broker'].get_best_bid = bid
+            before = snapshot(f)
+            await f['drive'](protective_signal(order_type='limit'))
+            assert bids == ['005930']
+            assert session_module.is_kr_market_holiday(_CLOCK['kst'].date()) is True
+            assert f['engine'].stats.errors_count == 0
+            assert f['posts']() == []
+            assert f['prepared'] == []
+            assert snapshot(f) == before
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('change', ['quantity', 'date', 'cooldown'])
 def test_bid_await_rechecks_current_holdings_date_and_signal_competition(tmp_path, monkeypatch, change):
     """가격 대기 중 보유 축소·날짜 이월·경쟁 신호가 생기면 이전 결정은 발행하지 않는다."""
