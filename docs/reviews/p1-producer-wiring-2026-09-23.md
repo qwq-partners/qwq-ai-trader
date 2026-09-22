@@ -25,8 +25,8 @@ S2~S5를 개발 브랜치에서 진행한다. 시작은 `6394d22`, 정책·계�
 
 | 단계 | 구현 범위 | 검증/통합 상태 |
 |---|---|---|
-| S2 | 신규 보호 생산자와 실제 owner/store 시험 | fix1 후보 `f5a3ae0`, 소유117/관련330건. 독립 재현 Important4건 해결·한정 승인, 외부 재리뷰 중·통합 전 |
-| S3 | engine attach 가격 writer·매도 수량/유형 | fix2 후보 `a28fd5a`, 관련106건·native 한정 승인. 외부 재리뷰가 실제 lock 대기 및 확정 미송신 후속 시험 보강 요청; fix3 진행·통합 전 |
+| S2 | 신규 보호 생산자와 실제 owner/store 시험 | fix2 후보 `31512bf`, 소유130/관련343건. 호출7 조건부 승인 뒤 독립 재현4 failed/3 passed가 후속2건 확인; fix3 구현 중·통합 전 |
+| S3 | engine attach 가격 writer·매도 수량/유형 | fix3 후보 `0477c29`, 관련106건. native 및 실제 Opus 한정 승인, 전체 검증·통합 전 |
 | S4 | factory 설치 및 runtime 읽기 전용 health | 미착수 |
 | S5 | legacy 주석·문서·범위 통합 리뷰 | 미착수 |
 
@@ -43,7 +43,7 @@ durable 종결 시각이 없는 상황의 보수적 대가이며 UNKNOWN이나 �
 ## 모델·예산·외부 리뷰
 
 - critical 구현: native `gpt-6-astra/high`, 독립 재현·최종 리뷰: `gpt-6-astra/xhigh`.
-- 후속 배선 목록 분석: `gpt-5.6-sol/high`. 문서 통합은 coordinator.
+- 후속 배선 목록 분석: `gpt-5.6-sol/high`, 문서 갱신 위치 대조: `gpt-5.6-luna/medium`. 문서 통합은 coordinator.
 - native 실제 모델/effective effort는 실행 메타데이터 미노출로 미검증이다.
 - 외부 리뷰는 도구0의 `claude-opus-5`, requested xhigh. 회당 CLI 예산 $5,
   총8호출 이내(대조·재시도 포함), 절대600초·시작120초·정체180초다.
@@ -56,11 +56,15 @@ durable 종결 시각이 없는 상황의 보수적 대가이며 UNKNOWN이나 �
 | 2/8 | S2 최초 소스 리뷰 | claude-opus-5, rc0, REQUEST_CHANGES | $1.2563 / 438.555초 | 102341B, SHA-256 `d1e146c7cd249a399f9b8e7e38ba73ca48842c4042b39dcb1a904e6f518d4b3e` |
 | 3/8 | S3 최초 소스 리뷰 `14a396a` | claude-opus-5, rc0, REQUEST_CHANGES | $0.805425 / 305.89초 | 43030B, SHA-256 `6f4c780b7b11a629f93698505e56175f26bb7cf81c91d700c278905424e42d9e` |
 | 4/8 | S3 fix2 재리뷰 `a28fd5a` | claude-opus-5, rc0, REQUEST_CHANGES | $0.74705 / 278.482초 | 44486B, SHA-256 `b6bec1c668b2564572a6618cbedeb7f6a316e9e1418e003abd7e452db89e5bd2` |
-| 5/8 | S2 fix1 재리뷰 `f5a3ae0` | 실행 중·판정 대기 | 미확정 | 103275B, SHA-256 `83ef2a320fa0e1a6b20763329704d93e10e99df2f49213d1ea9adae074c3fddf` |
+| 5/8 | S2 fix1 재리뷰 `f5a3ae0` | claude-opus-5, rc0, 조건부 APPROVE_THIS_SLICE | $1.050285 / 328.248초 | 103275B, SHA-256 `83ef2a320fa0e1a6b20763329704d93e10e99df2f49213d1ea9adae074c3fddf` |
+| 6/8 | S3 fix3 재리뷰 `0477c29` | claude-opus-5, rc0, APPROVE_THIS_SLICE | $0.76057 / 245.304초 | 79671B, SHA-256 `7de10ba85663fa51609bee35baaa03783c831c68df522b3e4de9902689d7e303` |
+| 7/8 | S2 fix2 재리뷰 `31512bf` | claude-opus-5, rc0, 조건부 APPROVE_THIS_SLICE | $0.99541 / 363.509초 | 72679B, SHA-256 `2a5d92db5401108c643296c86fdb50b157e69143d104670aff2489e35c61dda4` |
 
 연결 성공은 코드 승인이 아니다. effective effort는 외부에서도 노출되지 않아 요청값과 구분한다.
 원시 실행·리뷰·변이 출력은 커밋 제외 경로 `.superpowers/sdd/2026-09-23-p1-producer-wiring/`에
 보관하고, 이 문서에는 원격 인계 가능한 요약만 기록한다.
+호출7까지의 누적 실비는 $5.645435다. 마지막8호출은 S2 추가 수정과 S4 설치 배선을
+함께 검토한다. 미승인 후보는 정본 feature에 통합하지 않으며 예산을 무단 증액하지 않는다.
 
 ## 최초 리뷰의 재현과 처분
 
@@ -98,6 +102,35 @@ S3의 정규장 LIMIT 허용과 무효 보호 ID의 legacy 진입은 fix2에서 
 종목 단위30초 cooldown은 보존한다. 이는 단발 지연뿐 아니라 반복 일반 신호와의 경합에서
 보호 지연이 지속될 가능성이 있어, 반복 경로의 특성화 및 운영 전 우선순위 정책 해소가
 필요하다. 이번 개발 배선 승인이 그 운영 위험의 수용을 뜻하지 않는다.
+
+fix3는 실제 lock 대기자 등록 후 세션을 전환해 마지막 방어를 검증했다. limiter 대기 중
+마감으로 넘어가 확정 미송신된 원 attempt를 보존한 채,31초 뒤 새 closing LIMIT 요청이
+정상 ACK되는 경로도 통과했다. 반면 일반 신호를31초마다 넣으면 보호 신호가 계속
+cooldown에 막히는 반례를 두 주기 고정했다. 일반 신호 중단 뒤31초 경과 시 보호 송신은
+회복하지만 **반복 경합의 최대 보호 지연은 증명되지 않았다**. 운영 전환 차단 항목이다.
+
+S2 fix2는 모든 SELL 행의 관측 실패를 먼저 집계하고, 정상 sweep 완료 시에만 현재
+resume invariant 경보를 해소한다. author 관련343건(45.20초,rc0), 독립 focused13건과
+submit 예외/기대 보류 경계1건(각 rc0)을 통과했다. 미식별 감사 종목의 손상은 영향 범위를
+증명할 수 없어 전역 fail-closed를 유지한다. 전용 경보·승인된 수동 복구 절차는 미완이며,
+이 수정에 자동 재수량 계산·TTL 폐기·원 감사 행 삭제 권한을 추가하지 않았다.
+
+최종 범위 리뷰에 남길 경미 항목: 직접 대입된 non-dict Mapping/BUY 보호 표식은 현재
+정상 SignalEvent 생성 계약 밖, asyncio Lock 사적 waiter 단언의 버전 의존성, closing
+후속 attempt 예약90의 명시 단언 보강, 반복 cooldown 특성화 시험의 향후 정책 변경 주석.
+이를 해결되지 않은 주문 안전 지적이 없는 것과 혼동하지 않는다.
+
+호출7 이후에는 기존 None/빈값 감사 종목 시험으로 잡지 못한 공백·phantom 종목을
+독립 재현했다. 잘못된 키에만 보류가 걸리고 실제 보유 종목의 매도100주가 송신돼 전역
+손상 보류 정책과 충돌했다. 또한 실제 stale/abandoned 재개 뒤 생산자 하트비트가 성공을
+기록했지만, runtime의 실패 래치와 abandoned의 degraded는 유지됐다. 두 반례만 fix3에서
+수정하며 이를 기존 runtime 안전 장벽 전체가 사라진 문제로 확대하지 않는다.
+
+추가 계약 확인: `_submit`의 예상 차단은 이유 기록 후 정상 반환이고, 순수 preview는
+owner.state의 deepcopy를 사용한다. `effect_source`는 완료 표식이 아니라 intraday 출처
+분류다. 일반 quote 감사와 intents는 삭제 없이 누적된다. 따라서 intent만 먼저 지우는
+경로는 확인되지 않았으나, 감사 전량 순회의 장기 처리 비용·보존/압축 정책은 미검증이다.
+짧은8종목 합성 성능 시험으로 이 운영 위험을 해소했다고 보지 않는다.
 
 ## 남는 경계
 

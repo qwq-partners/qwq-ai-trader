@@ -56,6 +56,25 @@
 
 ## Review Focus
 
+### 호출7 이후 순서 보완 (2026-09-23)
+
+외부 fix2의 조건부 승인 뒤 독립 실제 재현에서 두 후속 결함을 확인했다. phantom/공백
+감사 종목이 전역 보류를 우회했고, stale/abandoned 배수 뒤 생산자 heartbeat가 성공으로
+표시됐다(기존 runtime 실패 래치·degraded는 남음). S2 fix3에서 이 범위만 수정한다.
+외부 상한8호출은 늘리지 않는다. 마지막8호출은 **S2 추가 diff와 S4 설치 배선을 함께**
+검토하며, 둘 중 하나라도 승인되지 않으면 해당 후보의 정본 feature 통합은 차단한다.
+
+따라서 S2 fix3 native 승인·S3 양측 승인 뒤에는 임시 격리 통합 후보에서 전체 UTC/KST를
+먼저 실행하고, 이 후보 위에서 S4를 개발한다. S2/S3를 정본 feature에 먼저 병합하던
+순서만 최종 교차 승인 뒤로 미룬다. S4 독립 변이/리뷰·교차 승인·전체 UTC/KST도 그대로
+필수다. 임시 후보 commit은 검증 대상 고정을 위한 것이며 완료/통합/운영 승인이 아니다.
+현재 첨부 계약에 없어서 생긴 반복 질의를 줄이기 위해 마지막 입력에는 `_submit`·순수
+preview·owner deepcopy·감사 종류/수명 및 실제 설치/종료 경계까지 함께 제공한다.
+
+감사 outbox와 intents는 현재 append-only이고 `effect_source`는 완료 표식이 아니라
+intraday 종류 구분이다. 장기 누적 규모별 처리 지연·안전한 보존/압축 정책은 운영 차단
+항목으로 남기며 이번에 임의 삭제하거나 새 schema를 만들지 않는다.
+
 1. 보류된 복구 결정이 다음 sweep에서 해제되거나 다른 종목 복구 실패에 잃어버리는 창 → Task2 실제 owner 인수.
 2. caller 취소/종료가 quote commit~prepare 사이에서 발생해 이중 매도·고아 task를 만드는 창 → Task2 lock/shield/scope 인수.
 3. full SELL/EOD는 pending_stage가 없을 수 있어 틱마다 새 주문을 내는 위험 → Task2 실제 attempt/예약 대조와60초 재준비.
