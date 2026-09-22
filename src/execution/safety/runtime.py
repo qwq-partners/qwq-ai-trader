@@ -103,6 +103,7 @@ class KRExecutionRuntime:
         self._closing = False
         self._intraday_writer = None
         self._regime_writer = None
+        self._protection_producer = None
         self.gateway = None
         self._reconciler_task = None
         self._reconciler_tasks: set[asyncio.Task] = set()
@@ -1758,6 +1759,8 @@ class KRExecutionRuntime:
             "published_version": self.owner.published_version,
             "publication_recovery_required": self.owner.publication_recovery_required,
             "protection_updates_failed": self._protection_failed,
+            "protection_producer": (None if self._protection_producer is None
+                                    else self._protection_producer.health()),
             "protection_updates_pending": len(self._protection_tasks),
             "command_operations_pending": len(self._command_scopes),
             "command_results_pending": len(self._command_result_tasks),
