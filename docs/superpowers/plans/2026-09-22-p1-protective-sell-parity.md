@@ -776,3 +776,11 @@ health는 quote/intraday 결정을 분리하고 unknown effect_source는 quote�
 - **설계와 다르게 한 것:** 실패의 command/generation 귀속, A/C 원자적 source 무효화, C를 순수 update_price 오류로 제한, 원 SQL 접수 receipt/version 결합, 한 재개 호출 최대1행, 관측 체결도0인 pending만 해제. 모두 위 처분/실제 반례에 근거하고 새 durable schema·게이트 범위·경제 reducer 변경은 없다.
 - **축소 보증:** 외부 Claude 예산 미답으로 교차 공급자 리뷰는 미실행이다. 인계 §10의 부품 단계 허용만 적용했으며 live S3/S4 게이트는 유지한다. 계산 흐름 복제는 비차단 P3, 정상 quote와 재개 B의 6개 parity만 검증했다. 별도 resume-vs-new-quote 경합 스트레스·partial-cancelled 미적용 창의 독립 표본·S2의 전체 직렬화 창은 미검증이다.
 - 상세 실행 명령·처분·잔여: [P1 부품 보고서](../../reviews/p1-components-2026-09-23.md). main·운영·주문·설정 무변경, S2 이후 미착수다.
+
+### 6-3. 사용자 위임에 따른 S2 이후 재개 (2026-09-23)
+
+사용자가 위 미결정 항목에 대해 "니가 판단해서 진행해"로 결정과 계속 진행을 위임했다.
+regular MARKET·closing LIMIT·영업일 보유기간·20초 고점 손실 실측을 선택했다.
+외부 Opus 리뷰는 회당 CLI예산$5·총8호출(대조/재시도 포함, 설정상$40)·호출당600초로
+제한한다. 운영/main 권한은 확대하지 않는다. 구체 계약·사전 대조·단계별 인수의 현재 정본은
+[S2~S5 실행 계획](2026-09-23-p1-producer-wiring.md)이다. §4의 미답 표기는 이 위임 전 기록이다.
