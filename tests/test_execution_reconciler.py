@@ -941,15 +941,21 @@ def test_a_regressed_response_never_advances_the_owner(tmp_path, monkeypatch):
 # ────────────── ⑳ 주기 예산·깨움·기록(Codex 12차) ──────────────
 
 def hold_applies(f, reached, release):
-    """재접수를 전부 `release` 까지 붙잡는다 — 그동안 어떤 주기도 B1 을 넘어가지 못한다."""
+    """재접수를 전부 `release` 까지 붙잡는다 — 그동안 어떤 주기도 B1 을 넘어가지 못한다.
+
+    돌려주는 목록은 주기마다 하나씩 늘어난다(주기가 B1 에서 끊겨도 다음 주기가 다시 온다).
+    """
     original = f['engine'].apply_execution_observation
+    seen = []
 
     async def apply(observation):
+        seen.append(observation)
         reached.set()
         await release.wait()
         return await original(observation)
 
     f['engine'].apply_execution_observation = apply
+    return seen
 
 
 def hold_commit(f, monkeypatch, prefix, reached, release):
@@ -999,15 +1005,18 @@ def test_a_b1_timeout_does_not_leave_the_loop_asleep(tmp_path, monkeypatch):
         runtime = f['runtime']
         await received_inbox_row(runtime, f)
         reached, release = asyncio.Event(), asyncio.Event()
-        hold_applies(f, reached, release)
+        seen = hold_applies(f, reached, release)
         collect, calls = collector(f, [[response([other_row(f['ref'])])]])
         try:
             runtime.start_reconciler(collect, interval=0.01, cycle_timeout=0.05)
             await asyncio.wait_for(reached.wait(), 5)
             await wait_for_reason(runtime, 'cycle_timeout')
+            # 붙잡힌 채로 다음 주기가 온다 — 완료된 작업이 하나도 없으니 깨움이 아니라
+            # 루프의 판정만이 근거다.
+            await wait_until(lambda: len(seen) >= 2)
             assert calls == []   # 어떤 주기도 B1 에서 막혀 조회까지 가지 못한다
             release.set()
-            await wait_until(lambda: bool(calls))   # 루프는 계속 돌고 있었다
+            await wait_until(lambda: bool(calls))   # 풀리면 그 주기가 조회까지 간다
         finally:
             release.set()
             await teardown(f, pump)
