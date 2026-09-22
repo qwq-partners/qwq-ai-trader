@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-22 — feat(safety): P0-3 — 생산자 배선·BUY 생존 게이트·sync 읽기 전용 관측·live writer 가드 (**live 파일 3개 수정 — 미설치 경로 바이트 동일, 설치기 제품 호출자 0건·운영 미설치**)
+
+> 설치 차단 사유 **17 닫힘**(`_sync_portfolio` attach 분기), **18 설치기 기준 닫힘**(생산자 배선), **20·21 신규 등록**. 계획·심사·처분·마감은 `docs/superpowers/plans/2026-09-22-p0-3-wiring-sync-gate.md`(§3 처분 Q-1~Q-11·§6 Do·See·§7 마감).
+
+- **S-A 부품(`factory.py`·`commands.py`·`gateway.py`·`runtime.py`·신규 `src/utils/exit_types.py`):** `install_attached_runtime(…, collect)` 필수 kwarg — 구간 1 거부 3종(`invalid_execution_collector`·`execution_query_environment_required`(env≠prod)·`execution_producer_already_wired`(`already_restored` 뒤)), attach 직후 `start_reconciler(collect)`, docstring 에 종료 계약(설치 → `engine.run` 생성을 하나의 try/finally 로). **F8 ②:** 자동·수동 BUY 는 `runtime.reconciler_live(now)`(주기 task 생존·굶지 않음·**오늘 주기 완주 ≤5×3초**·대상 있으면 오늘 조회 완료 ≤15초 — 기동 시각 폴백 없음) 없이는 `reconciler_unavailable`, SELL·CANCEL 은 통과. 그 대가로 `_reconcile_loop` 는 대상 0 이어도 3초마다 한 바퀴(조회 0회·원장 TR 예산 0). 미배선 runtime 은 통과(결정 — 설치기가 유일한 attach 경로·배선 강제). `_reapply` 는 `engine.running` 아니면 `engine_not_running` skip, 창 측정 `apply_seconds_last/max`, `health()['reconciler']['last_cycle_completed_at']`. SELL binding 에 `exit_type`(`classify_exit_type` — 스케줄러 본문 이관·`type(reason) is str` 폴백, 스케줄러 3곳 위임), BUY 에 `name`(strip·공백뿐이면 키 없음).
+- **live(`kis_kr.py`·`kr_scheduler.py`·`batch_analyzer.py`):** `get_execution_daily(exchange_scope=, max_pages=)` 가법 kwarg(기본 동일) · `_sync_portfolio` attach 분기 — 빈응답·부분누락 재시도 방어 **뒤**에서 live 를 쓰지 않고 읽기 전용 대조(종목 대칭차·수량·현금 1,000원 임계), 불일치면 `set_sync_status(False)`·하트비트 실패·error, 0 이면 legacy 와 같이 성공(falsy 관용구 1줄 `kis_positions if … is not None else {}`) · `monitor_positions`·`_check_exit_signal` attach 전면 skip → **차단 사유 21**(attach 에 손절·트레일링·분할익절·갭EOD·보유기간 청산 구동기 없음 — owner quote 생산자 0건 조사 확정 → P1 보호 SELL main 동등).
+- **결정:** F8 ①(미체결 BUY 뒤 같은 종목 보호 SELL)은 late-fill 함정으로 **P1** · **차단 사유 20**(`entry_policy_context` 재게시자 0 → 10C) · 수동 BUY 도 같은 게이트(fail-closed) · `_cleanup_stale_pending` 은 P0-4.
+- **검증:** 조사 → 설계 G1~G11 → 심사 2관점 REVISE ×2 → 처분. Do 1차 구현 2 ∥ 독립 재현 2(둘 다 CHANGES_REQUIRED: reconciler 18건 회귀·조용한 계좌 구멍·S-D 구동기 소멸·변이 생존 2) → 처분 구현 2(변이 7종 kill) → 통합 `86022da` → **Codex 15차 P1 2·P2 1**(조회 신선도의 기동 시각 폴백·미배선 통과·설치기 거부 순서) → `80571eb`(2건 수정·1건 결정 유지) → **16차 APPROVE**. 전체 suite 단독 직렬 **UTC 5086 / KST 5086 passed**(각 기존 xfail 2·경고 4·격리 0). 신규 시험 2파일(`test_execution_p03_wiring.py` 18건·`test_execution_p03_live.py` 14건).
+- **시계 창 정정:** cross_validator 의 09:00~09:29 하드 차단·**09:30~10:30 -8**·12:30~13:00 +5 가 프로세스 지역시각에 걸려 gateway eviction/parity 시험이 유령 RED — UTC 전체 suite 는 18:00~19:30 KST 를 피한다(작업 칩).
+- **남는 것(P0-4~):** `_protection_failed` 해제·부분 체결 예약 감소·세션 경계 소멸·`_cleanup_stale_pending`(P0-4) → F8 ①·late-fill·자식 가드 side 인지·차단 사유 21(P1) → D4·`_owner_ready` 범위(P2) → D6 차가운 시작·설치(P3). 실계좌 스모크(계획서 §5)는 사용자 확인 대기. attach 재시도 비용(P1 후보).
+- main 병합·배포·재시작·주문·설정·Toss grant 무변경(Toss 관측 서비스는 18:00:02 KST 승인 만료로 스스로 정상 종료 — 조치 없음), `trading_ready=False`·MODIFY 미지원 그대로.
+
 ## 2026-09-22 — feat(safety): P0-2 — attach 의 체결·종결 증거 생산자 (**부품·제품 호출자 0건·운영 미설치**)
 
 > 사용자 결정 "엔진 전체를 옮기도록 하자" 뒤 첫 구현 단계. 설치 차단 사유 18(attach 에 체결·종결 증거 생산자 0건)을 **부품 완성**으로, 3(fill projection)을 닫을 수 있는 상태로. 계획·설계·심사·마감은 `docs/superpowers/plans/2026-09-22-p0-2-fill-evidence-producer.md`.
