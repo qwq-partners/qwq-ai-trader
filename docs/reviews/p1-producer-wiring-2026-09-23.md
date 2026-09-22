@@ -4,7 +4,9 @@
 
 사용자 "니가 판단해서 진행해"에 따라 [실행 계획](../superpowers/plans/2026-09-23-p1-producer-wiring.md)의
 S2~S5를 개발 브랜치에서 진행한다. 시작은 `6394d22`, 정책·계획 커밋은 `2ddacf4`다.
-**개발 배선 구현·범위 리뷰·최종 전체 검증을 완료했으며 정본 feature 통합 마감 중이다. main 통합·운영 설치를 뜻하지 않는다.**
+**P1 S2~S5의 개발 배선 구현·범위 리뷰·최종 전체 검증·feature 통합/푸시를 완료했다.**
+제품 통합은 `2a51d28508d634d9872adc0f094e5e94140b86df`이고 문서·주석 선행 커밋은
+`474aebd`다. main 통합·운영 설치나 legacy 대비 보호 성능 완전 동등을 뜻하지 않는다.
 
 거래와 잔고는 KIS 정본이다. 실 API·주문·운영 checkout·배포·재시작·설정·킬스위치·Toss
 권한은 변경하지 않는다. 신규 durable schema나 거래 준비 상태 강제도 추가하지 않는다.
@@ -90,6 +92,21 @@ coordinator 단독으로 위 명령을 UTC→Asia/Seoul 순서로 다시 실행�
 계좌 lease 시험3개의 deprecation 경고다. 정적 문법·비밀정보 의심 패턴 검사도 수행하며,
 전체 시험을 이미 직접 실행한 `verify.sh` 단계는 `QWQ_VERIFY_SKIP_TESTS=1`로 구분한다.
 일반 의심 패턴 검사는 완전한 비밀정보 부재의 증명이 아니다.
+
+### 정본 통합 후 확인
+
+문서·주석 선행 커밋 위에 후보를 충돌 없이 합쳤다. `11b9f3e`와 비교해 tests는 바이트
+동일하고 제품 차이는 scheduler/batch의 주석2곳뿐이며 두 파일의 전체 AST가 같다.
+그 외 차이는 Markdown뿐임을 검사했다. 통합본에서 다음8파일의 관련 회귀를 새로 실행해
+**308 passed / 58.84초 / rc0 / 격리0**을 확인한 뒤 제품 merge `2a51d28`을 커밋·푸시했다.
+
+```text
+env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 QWQ_DEPLOY_SSH_KEY=/tmp/qwq-offline-no-ssh-key /home/ubuntu/projects/qwq-ai-trader/venv/bin/python -m pytest tests/test_execution_p1_install.py tests/test_execution_install_factory.py tests/test_execution_p03_wiring.py tests/test_execution_p1_engine.py tests/test_execution_p1_producer.py tests/test_execution_p1_producer_recovery.py tests/test_execution_signal_gateway_acceptance.py tests/test_engine_legacy_stale_eviction_characterization.py -q -p no:cacheprovider --tb=short
+```
+
+원 출력 `merged-focused.txt`를 보존했다. 통합본에서도 문법/비밀정보 의심 패턴 검사 rc0,
+diff check0, 상대 문서 링크135개(최종 마감 문서 재검사137개) 누락0이다. 전체5377쌍은 위 고정 후보의 실행이고,
+문서/주석 포함 통합본의 새 실행은308건으로 구분한다. 제품 운영 설치 호출자0도 유지한다.
 
 ## 모델·예산·외부 리뷰
 
@@ -241,5 +258,8 @@ heartbeat/API로의 관측 전달 부재(30), 감사 누적 비용·순간 고�
 | p1-install-review-20260923 | 설치기 독립4인수 scratch1개 |
 | p1-broad-review-20260923 | 전체 경계2인수 및 Opus 조건5인수 scratch2개 |
 
-정리 대상은 이 작업에서 만든 깨끗한 구현/통합 worktree만이며, 정본 feature에서 해당
-commit의 ancestry와 무변경 상태를 확인한 뒤 처리한다. 다른 세션·운영 worktree는 제외한다.
+정본 feature의 ancestry·원격 푸시·각 트리의 무변경 상태를 확인한 뒤 이번 깨끗한
+`p1-producer-20260923`·`p1-engine-20260923`·`p1-install-20260923`·
+`p1-integration-20260923` worktree4개와 대응 로컬 브랜치4개를 `--force` 없이 제거했다.
+커밋은 모두 `2a51d28` 이력과 원격에 보존되어 복구할 수 있다. 위 독립 리뷰4개/미추적
+시험9개, 정본 작업공간, 다른 세션·운영 worktree는 보존했다.

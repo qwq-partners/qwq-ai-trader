@@ -146,4 +146,9 @@ assert engine.stats.errors_count == 0
 
 - [x] 미설치/운영 금지 경계와 남은 차단23/26/27·미체결BUY/late-fill·초기 인계·정책게시를 문서화.
 - [x] 독립 Astra/xhigh 최종 범위 리뷰는 이번 시작6394d22 이후 제품과 S1경계만, 기존 전체234+커밋 재승인 아님. 경미한 보류 지적도 재검토.
-- [ ] 명령/exit코드·UTC/KST/변이·교차리뷰 actual model/사용량·SHA·설계처분을 보고하고 feature commit/push. 이번 전용clean worktree만 통합 이력 보존 후 정리.
+- [x] 명령/exit코드·UTC/KST/변이·교차리뷰 actual model/사용량·SHA·설계처분을 보고하고 feature commit/push. 이번 전용clean worktree만 통합 이력 보존 후 정리.
+
+**마감:** 제품 merge `2a51d28`을 정본 feature에 푸시했다. 최종 후보 UTC/KST 각5377,
+통합본 관련308 passed이며 [결과 원장](../../reviews/p1-producer-wiring-2026-09-23.md)에
+정확한 tree·명령·조건부 지적 처분·잔여를 기록했다. clean 구현/통합 worktree4개만
+정리했고 독립 scratch가 있는4개는 보존했다. 다음 개발은 [후속 인계](../../operations/p1-next-steps-2026-09-23.md)의 다음1부터다.
