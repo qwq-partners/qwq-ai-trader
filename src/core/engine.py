@@ -943,8 +943,8 @@ class UnifiedEngine:
         트레일링 스탑 계산에 필요합니다.
         """
         if self._execution_runtime is not None:
-            from ..execution.safety.application import ApplicationBlocked
-            raise ApplicationBlocked("가격 보호 변경은 execution.quote로 직렬화해야 합니다")
+            # attach 가격·고점은 owner quote만 게시하고 전략 처리는 계속한다.
+            return
         pos = self.portfolio.positions.get(symbol)
         if not pos:
             return
@@ -1988,6 +1988,14 @@ class RiskManager:
                 or len(self._reserved_by_order) > 0):
             raise RuntimeError("attach 모드에서 legacy 미체결 장부가 남아 있습니다")
 
+        # 보호 수량·주문종류는 생산자 결정이다. legacy 보정·시간 가드를 적용하지 않는다.
+        _protection_meta = event.metadata
+        if (getattr(self.engine, "_execution_runtime", None) is not None
+                and event.side == OrderSide.SELL and type(_protection_meta) is dict
+                and type(_protection_meta.get("protection_intent_id")) is str
+                and _protection_meta["protection_intent_id"] != ""):
+            return await self._on_protective_sell(event)
+
         # stale pending 주문 정리 (매도: 90초, 매수: 10분 타임아웃)
         _SELL_TIMEOUT = 90  # 매도 지정가 미체결 타임아웃
         stale_sells = []
@@ -2518,6 +2526,77 @@ class RiskManager:
                 )
 
         return [OrderEvent.from_order(order, source="risk_manager")]
+
+    async def _on_protective_sell(self, event: SignalEvent) -> Optional[List[Event]]:
+        """보호 결정의 정확한 수량과 세션을 보존해 기존 gateway로 넘긴다."""
+        from zoneinfo import ZoneInfo
+        from aiohttp import ClientError
+        from ..execution.safety.requests import _session_at
+        from ..utils.session import is_kr_market_holiday as protection_holiday
+
+        runtime = self.engine._execution_runtime
+        started_at = runtime._now().astimezone(ZoneInfo("Asia/Seoul"))
+        session = _session_at(started_at)
+        requested_type = event.metadata.get("order_type")
+        if (protection_holiday(started_at.date())
+                or session not in ("regular", "closing")
+                or requested_type not in ("market", "limit")
+                or (session == "closing" and requested_type != "limit")):
+            logger.info(f"[리스크] 보호 매도 세션·주문종류 거부: {event.symbol}")
+            return None
+
+        quantity = event.metadata.get("quantity")
+        position = self.engine.portfolio.positions.get(event.symbol)
+        if (type(quantity) is not int or quantity <= 0 or position is None
+                or quantity > position.quantity):
+            logger.warning(f"[리스크] 보호 매도 지정수량 거부: {event.symbol}")
+            return None
+
+        async with self._pending_lock:
+            last_signal = self._last_signal_time.get(event.symbol)
+            if (event.symbol in self._pending_orders
+                    or (last_signal is not None
+                        and (datetime.now() - last_signal).total_seconds()
+                        < self._SIGNAL_COOLDOWN_SECONDS)):
+                return None
+
+        price = None
+        if requested_type == "limit":
+            broker = self.engine.broker
+            if broker is not None and hasattr(broker, "get_best_bid"):
+                try:
+                    bid = await broker.get_best_bid(event.symbol)
+                except (OSError, TimeoutError, ClientError):
+                    logger.warning(f"[리스크] 보호 매도 호가 조회 일시 실패: {event.symbol}")
+                    bid = None
+                if bid is not None and bid > 0:
+                    price = Decimal(str(bid))
+            if price is None and event.price is not None and event.price > 0:
+                price = event.price
+            if price is None:
+                return None
+
+        # 호가 조회와 lock 대기 동안 세션·보유·경합 조건이 바뀔 수 있다.
+        async with self._pending_lock:
+            now = runtime._now().astimezone(ZoneInfo("Asia/Seoul"))
+            position = self.engine.portfolio.positions.get(event.symbol)
+            last_signal = self._last_signal_time.get(event.symbol)
+            if (now.date() != started_at.date() or _session_at(now) != session
+                    or position is None or quantity > position.quantity
+                    or event.symbol in self._pending_orders
+                    or (last_signal is not None
+                        and (datetime.now() - last_signal).total_seconds()
+                        < self._SIGNAL_COOLDOWN_SECONDS)):
+                return None
+            order = Order(
+                symbol=event.symbol, side=OrderSide.SELL,
+                order_type=OrderType.MARKET if requested_type == "market" else OrderType.LIMIT,
+                quantity=quantity, price=price,
+                strategy=event.strategy.value if event.strategy is not None else "unknown",
+                reason=event.reason, signal_score=event.score,
+            )
+            self._last_signal_time[event.symbol] = datetime.now()
+            return [OrderEvent.from_order(order, source="risk_manager")]
 
     async def _get_sell_price(self, symbol: str, fallback_price: Optional[Decimal]) -> Optional[Decimal]:
         """매도용 최적가 조회: 매수1호가 → fallback_price"""
