@@ -1220,3 +1220,123 @@ def test_queue_lock_waiter_cancellation_keeps_durable_fact_on_shutdown(tmp_path)
                 engine._queue_lock.release()
             await store.close()
     asyncio.run(scenario())
+
+
+def test_a_store_failure_keeps_submit_closed_with_its_own_reason(tmp_path, monkeypatch):
+    """P0-4 A5 대조 — 저장 실패는 보호 래치와 다른 장치로 막는다(완화되지 않았음의 증거)."""
+    async def scenario():
+        from contextlib import suppress
+        from src.execution.safety.store import StoreError
+        from tests.test_execution_command_owner import fixture as command_fixture
+        f = await command_fixture(tmp_path, monkeypatch)
+        runtime, commands = f['runtime'], f['commands']
+        try:
+            request = f['request']()
+            await f['quote'](request)
+            commit = f['store'].commit
+
+            async def broken(version, state, command_id):
+                raise StoreError('synthetic-store-failure')
+
+            monkeypatch.setattr(f['store'], 'commit', broken)
+            with pytest.raises(StoreError):
+                await commands.prepare(request, f['entry'](request))
+            assert runtime.owner.healthy is False
+            assert runtime._protection_failed is False  # 래치가 아니라 저장 건강이 막는다.
+            monkeypatch.setattr(f['store'], 'commit', commit)
+            # 게이트 낱말은 `store_or_publication_unhealthy` 이고, 실제 prepare 는 그보다
+            # 앞선 owner 의 준비 검사에서 끝난다 — 두 겹 다 닫혀 있음을 각각 고정한다.
+            with pytest.raises(ValueError, match='store_or_publication_unhealthy'):
+                commands._owner_ready(runtime.owner.state)
+            with pytest.raises(ApplicationBlocked):
+                await commands.prepare(request, f['entry'](request))
+            assert not f['broker']._session.posts
+        finally:
+            with suppress(ApplicationBlocked):
+                await runtime.shutdown()
+            await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_blocked_rollover_latches_the_day_fence_for_cancel_and_across_restart(tmp_path, monkeypatch):
+    """P0-4 A6 특성화 — 래치·미해결 접수 행이 서면 일자 전환이 BLOCKED 이고 울타리는 재시작을 넘는다.
+
+    코드 추론(F-A1-7·②M1)을 런타임으로 처음 재현한다: BLOCKED 로 끝난 `prepare_day_rollover`
+    한 번이 `day_transition` 을 PREPARED 로 durable 하게 남겨 다음 날 CANCEL 까지 닫고,
+    새 runtime 의 `restore()` 는 프로세스 bool 만 지울 뿐 그 울타리를 열지 못한다(차단 사유 23).
+    """
+    async def scenario():
+        from contextlib import suppress
+        from src.execution.safety.lifecycle import CommandStatus, OrderRef
+        from src.execution.safety.requests import CancelParent
+        from src.execution.safety.runtime import KRExecutionRuntime
+        from src.execution.safety.store import ExecutionStateStore
+        from src.execution.safety.transport import GuardedKISTransport
+        from tests.test_execution_command_owner import fixture as command_fixture
+        f = await command_fixture(tmp_path, monkeypatch)
+        runtime, commands, clock = f['runtime'], f['commands'], f['clock']
+        fresh = None
+        try:
+            request = f['request']()
+            await f['quote'](request)
+            await commands.prepare(request, f['entry'](request))
+            transport = GuardedKISTransport(f['broker'], request_builder=f['builder'])
+            ack = await commands.dispatch(request, f['entry'](request), transport)
+            assert ack.status is CommandStatus.ACKNOWLEDGED
+            # ① 같은 operation_id·다른 본문의 복구 명령은 사전 거부인데도 래치한다(H1-3 은 P1 보류).
+            assert (await runtime.repair_protection('R1', request.symbol,
+                expected_version=runtime.owner.version)).status == 'BLOCKED'
+            with pytest.raises(ValueError, match='recovery_operation_id_conflict'):
+                await runtime.repair_protection('R1', '000660', expected_version=runtime.owner.version)
+            assert runtime._protection_failed is True and runtime.owner.healthy
+            # ② 미해결 보호 접수 행도 남긴다 — 둘 다 따로 일자 전환을 막는다.
+            def admitted(state):
+                state.setdefault('protection_quote_admissions', {})['x'] = {
+                    'symbol': request.symbol, 'status': 'RECEIVED'}
+                return state
+
+            await runtime.owner.mutate('synthetic-unresolved-admission', admitted)
+            # ③ 래치가 서 있어도 당일 CANCEL 은 준비된다 — 래치는 SUBMIT 만 막는다.
+            parent = runtime.owner.state['attempts'][request.attempt_id]
+            ref = CancelParent(request.intent_id, request.attempt_id, parent['version'],
+                OrderRef.from_dict(parent['order_ref']), request.symbol, request.side,
+                request.order_type, parent['reserved_quantity'], request.valuation_price,
+                request.strategy)
+            cancel = f['builder'].prepare_cancel(intent_id=request.intent_id, attempt_id='C',
+                                                 session=request.session, parent=ref)
+            await commands.prepare(cancel, f['entry'](cancel))
+            # ④ 다음 날 일자 전환은 BLOCKED 인데 fence 는 durable 하게 남는다.
+            clock[0] = clock[0] + timedelta(days=1)
+            receipt = await runtime.prepare_day_rollover('P1', expected_version=runtime.owner.version,
+                from_day=runtime.owner.state['risk']['day'], to_day=clock[0].date().isoformat(),
+                valuation_boundary=clock[0])
+            assert receipt.status == 'BLOCKED' and receipt.reason == 'protection_update_failed'
+            assert runtime._day_closed is True
+            assert runtime.owner.state['day_transition']['phase'] == 'PREPARED'
+            # ⑤ 그래서 다음 날에는 CANCEL 까지 닫힌다.
+            with pytest.raises(ApplicationBlocked, match='day_transition_admission_closed'):
+                runtime._require_day_admission()
+            result = await commands.dispatch(cancel, f['entry'](cancel), transport)
+            assert result.status is CommandStatus.NOT_SENT
+            assert result.reason_code == 'command_admission_closed'
+            # ⑥ 재시작은 프로세스 bool 만 지우고 울타리는 그대로다(해제 경로 0).
+            with suppress(ApplicationBlocked):
+                await runtime.shutdown()
+            await f['store'].close()
+            reopened = ExecutionStateStore(f['store'].path)
+            fresh = KRExecutionRuntime(reopened, f['engine'], f['exits'],
+                                       clock=lambda: clock[0], account_scope='test-scope')
+            await fresh.restore()
+            assert fresh._protection_failed is False and fresh._day_closed is True
+            with pytest.raises(ApplicationBlocked, match='day_transition_admission_closed'):
+                fresh._require_day_admission()
+            assert len(f['broker']._session.posts) == 1
+        finally:
+            with suppress(ApplicationBlocked):
+                await runtime.shutdown()
+            await f['store'].close()
+            if fresh is not None:
+                with suppress(ApplicationBlocked):
+                    await fresh.shutdown()
+                await fresh.owner.store.close()
+    asyncio.run(scenario())
