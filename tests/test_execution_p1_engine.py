@@ -7,15 +7,18 @@ from decimal import Decimal as D
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 import src.utils.session as session_module
 from src.core.engine import StrategyManager
 from src.core.event import MarketDataEvent
 from src.core.types import OrderType
 from src.execution.safety.economics import encode_portfolio
+from src.execution.safety.guards import GuardDecision
+from src.execution.safety.lifecycle import CommandStatus
 from src.execution.safety.protection import encode_protection
 from test_execution_signal_gateway_acceptance import (
-    NOW_KST, _CLOCK, fixture, seed_position, sell_signal,
+    NOW_KST, _CLOCK, advance, fixture, seed_position, sell_signal,
 )
 
 
@@ -26,6 +29,17 @@ def synthetic_home(tmp_path, monkeypatch):
     _CLOCK['kst'] = NOW_KST
     yield
     _CLOCK['kst'] = NOW_KST
+
+
+@pytest.fixture
+def protection_logs():
+    """실제 loguru 출력에서 보호 거부 사유의 관측 가능성을 확인한다."""
+    messages = []
+    sink = logger.add(lambda message: messages.append(message.record['message']))
+    try:
+        yield messages
+    finally:
+        logger.remove(sink)
 
 
 def protective_signal(*, quantity=90, order_type='market', price=D('9700')):
@@ -165,20 +179,19 @@ def test_protection_outside_regular_and_closing_never_posts(tmp_path, monkeypatc
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('start,end', [((15, 19), (15, 20)), ((15, 29), (15, 30))])
-def test_session_change_during_bid_lookup_does_not_rebind_old_decision(tmp_path, monkeypatch, start, end):
+def test_session_change_during_bid_lookup_does_not_rebind_old_decision(tmp_path, monkeypatch):
     """호가 await 뒤 세션 재확인을 제거하면 이전 세션의 결정을 새 요청으로 송신한다."""
     async def scenario():
         f = await fixture(tmp_path, monkeypatch)
         try:
             await seed_position(f)
-            _CLOCK['kst'] = NOW_KST.replace(hour=start[0], minute=start[1])
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=29)
             bids = []
 
             async def bid(symbol):
                 bids.append(symbol)
                 await asyncio.sleep(0)
-                _CLOCK['kst'] = NOW_KST.replace(hour=end[0], minute=end[1])
+                _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=30)
                 return D('9800')
 
             f['broker'].get_best_bid = bid
@@ -187,6 +200,62 @@ def test_session_change_during_bid_lookup_does_not_rebind_old_decision(tmp_path,
             assert bids == ['005930']
             assert f['posts']() == []
             assert f['prepared'] == []
+            assert snapshot(f) == before
+            assert f['engine'].stats.errors_count == 0
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_regular_market_waiting_for_pending_lock_is_refused_after_closing(tmp_path, monkeypatch):
+    """실제 pending lock 대기 동안 regular→closing이 되면 MARKET 결정을 폐기한다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        task = None
+        try:
+            await seed_position(f)
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=19, second=59)
+            before = snapshot(f)
+            lock = f['rm']._pending_lock
+            await lock.acquire()
+            try:
+                task = asyncio.create_task(f['drive'](protective_signal()))
+                await asyncio.sleep(0)
+                assert not task.done()
+                _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=20)
+            finally:
+                lock.release()
+            await task
+            assert f['posts']() == []
+            assert f['prepared'] == []
+            assert snapshot(f) == before
+            assert f['engine'].stats.errors_count == 0
+        finally:
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_regular_rejects_limit_protection_before_bid_lookup(tmp_path, monkeypatch):
+    """정규장 보호 LIMIT은 호가 조회 전에 거부하며 시장가로 자동 보정하지 않는다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            bids = []
+
+            async def bid(symbol):
+                bids.append(symbol)
+                return D('9800')
+
+            f['broker'].get_best_bid = bid
+            before = snapshot(f)
+            await f['drive'](protective_signal(order_type='limit'))
+            assert f['posts']() == []
+            assert f['prepared'] == []
+            assert bids == []
             assert snapshot(f) == before
             assert f['engine'].stats.errors_count == 0
         finally:
@@ -216,8 +285,9 @@ def test_protection_preserves_holiday_guard_before_bid_lookup(tmp_path, monkeypa
         f = await fixture(tmp_path, monkeypatch)
         try:
             await seed_position(f)
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=25)
             if holiday == 'weekend':
-                _CLOCK['kst'] = NOW_KST.replace(day=19)
+                _CLOCK['kst'] = _CLOCK['kst'].replace(day=19)
             else:
                 monkeypatch.setattr(session_module, '_kr_market_holidays', {NOW_KST.date()})
             bids = []
@@ -269,12 +339,14 @@ def test_holiday_update_during_bid_wait_refuses_order(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('change', ['quantity', 'date', 'cooldown'])
-def test_bid_await_rechecks_current_holdings_date_and_signal_competition(tmp_path, monkeypatch, change):
+def test_bid_await_rechecks_current_holdings_date_and_signal_competition(
+        tmp_path, monkeypatch, change, protection_logs):
     """가격 대기 중 보유 축소·날짜 이월·경쟁 신호가 생기면 이전 결정은 발행하지 않는다."""
     async def scenario():
         f = await fixture(tmp_path, monkeypatch)
         try:
             await seed_position(f)
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=25)
             after_change = []
 
             async def bid(symbol):
@@ -288,9 +360,9 @@ def test_bid_await_rechecks_current_holdings_date_and_signal_competition(tmp_pat
                     await f['runtime'].owner.mutate('보유축소-호가대기', reduce)
                     assert f['engine'].portfolio.positions[symbol].quantity == 80
                 elif change == 'date':
-                    _CLOCK['kst'] = NOW_KST.replace(day=21)
+                    _CLOCK['kst'] = _CLOCK['kst'].replace(day=21)
                 else:
-                    f['rm']._last_signal_time[symbol] = NOW_KST.replace(tzinfo=None)
+                    f['rm']._last_signal_time[symbol] = _CLOCK['kst'].replace(tzinfo=None)
                 after_change.append(snapshot(f))
                 return D('9800')
 
@@ -301,6 +373,9 @@ def test_bid_await_rechecks_current_holdings_date_and_signal_competition(tmp_pat
             assert f['prepared'] == []
             assert snapshot(f) == after_change[0]
             assert f['engine'].stats.errors_count == 0
+            if change == 'cooldown':
+                assert any('보호 매도' in message and '쿨다운' in message
+                           for message in protection_logs)
         finally:
             await f['teardown']()
     asyncio.run(scenario())
@@ -337,9 +412,10 @@ def test_protection_keeps_cooldown_record_and_does_not_query_on_duplicate(tmp_pa
         f = await fixture(tmp_path, monkeypatch)
         try:
             await seed_position(f)
-            await f['drive'](protective_signal())
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=25)
+            await f['drive'](protective_signal(order_type='limit'))
             assert len(f['posts']()) == 1
-            assert f['rm']._last_signal_time['005930'] == NOW_KST.replace(tzinfo=None)
+            assert f['rm']._last_signal_time['005930'] == _CLOCK['kst'].replace(tzinfo=None)
             bids = []
 
             async def bid(symbol):
@@ -356,21 +432,148 @@ def test_protection_keeps_cooldown_record_and_does_not_query_on_duplicate(tmp_pa
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('intent', ['', None, 123])
-def test_nonprotective_sell_keeps_legacy_limit_and_quantity_coercion(tmp_path, monkeypatch, intent):
-    """비어있거나 문자열 아닌 태그는 보호 분기를 열지 않는다."""
+def test_nonprotective_sell_keeps_legacy_limit_and_quantity_coercion(tmp_path, monkeypatch):
+    """보호 ID 키가 없는 일반 SELL은 기존 LIMIT·문자열 수량 변환을 유지한다."""
     async def scenario():
         f = await fixture(tmp_path, monkeypatch)
         try:
             await seed_position(f)
             f['broker'].best_bid = D('9800')
             event = protective_signal(quantity='90')
-            event.metadata['protection_intent_id'] = intent
+            del event.metadata['protection_intent_id']
             await f['drive'](event)
             assert len(f['posts']()) == 1
             body = f['posts']()[0][1]['json']
             assert (body['ORD_DVSN'], body['ORD_UNPR'], body['ORD_QTY']) == ('00', '9800', '90')
             assert f['engine'].stats.errors_count == 0
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('intent', [None, '', 123, True, ' ', ' pp-i-test', 'pp-i-test '])
+def test_explicit_invalid_protection_identity_is_refused(tmp_path, monkeypatch, intent, protection_logs):
+    """보호 키가 명시된 손상 요청이 일반 SELL 수량 변환·지정가 경로로 흐르지 않는다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            event = protective_signal()
+            event.metadata['protection_intent_id'] = intent
+            before = snapshot(f)
+            await f['drive'](event)
+            assert f['posts']() == []
+            assert f['prepared'] == []
+            assert snapshot(f) == before
+            assert f['engine'].stats.errors_count == 0
+            assert any('보호' in message and '식별자' in message for message in protection_logs)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_dict_subclass_with_explicit_protection_identity_is_refused(tmp_path, monkeypatch, protection_logs):
+    """dict 하위형의 표시 숨김 구현도 실제 저장된 보호 키를 우회할 수 없다."""
+    class Metadata(dict):
+        def __contains__(self, key):
+            return False
+
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            event = protective_signal(quantity='90')
+            event.metadata = Metadata(event.metadata)
+            before = snapshot(f)
+            await f['drive'](event)
+            assert f['posts']() == []
+            assert f['prepared'] == []
+            assert snapshot(f) == before
+            assert f['engine'].stats.errors_count == 0
+            assert any('보호' in message and '식별자' in message for message in protection_logs)
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_general_signal_cooldown_is_observable_and_retained_protection_retries(
+        tmp_path, monkeypatch, protection_logs):
+    """일반 신호의 기존30초 지연을 관측하고 같은 보호 결정을 그 뒤 정확히 송신한다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            f['session'][0] = GuardDecision(False, '합성-일반신호-최종거부')
+            await f['drive'](sell_signal(quantity=10))
+            assert f['posts']() == []
+            assert f['prepared'] == []
+            assert len(f['errors']()) == 1
+            assert f['rm']._last_signal_time['005930'] == NOW_KST.replace(tzinfo=None)
+            f['session'][0] = GuardDecision(True, '합성-세션허용')
+            retained = protective_signal()
+            before = snapshot(f)
+            await f['drive'](retained)
+            assert f['posts']() == []
+            assert snapshot(f) == before
+            assert any('보호 매도' in message and '쿨다운' in message
+                       for message in protection_logs)
+            advance(31)
+            await f['drive'](retained)
+            assert len(f['posts']()) == 1
+            assert f['prepared'][0].intent_id == 'pp-i-engine-test'
+            assert f['posts']()[0][1]['json']['ORD_QTY'] == '90'
+            assert len(f['errors']()) == 1
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('boundary', ['before_bind', 'after_limiter'])
+def test_gateway_existing_session_guards_refuse_regular_market_after_closing(
+        tmp_path, monkeypatch, boundary):
+    """엔진 반환 뒤 builder와 마지막 limiter await 뒤 transport가 각각 세션을 막는다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=19, second=59)
+            reached = []
+            if boundary == 'before_bind':
+                original_submit = f['gateway'].submit
+
+                async def submit(event, order, evidence):
+                    assert order.order_type == OrderType.MARKET
+                    assert order.price is None
+                    reached.append('gateway')
+                    _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=20)
+                    return await original_submit(event, order, evidence)
+
+                f['gateway'].submit = submit
+            else:
+                async def limiter(tr_id):
+                    reached.append(tr_id)
+                    await asyncio.sleep(0)
+                    _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=20)
+
+                f['broker']._rate_limit = limiter
+
+            await f['drive'](protective_signal())
+            assert f['posts']() == []
+            if boundary == 'before_bind':
+                assert reached == ['gateway']
+                assert f['prepared'] == []
+                assert f['runtime'].owner.state['attempts'] == {}
+                assert f['engine'].stats.errors_count == 1
+                assert 'unsupported_submit_session' in f['errors']()[0].message
+            else:
+                assert reached == ['TTTC0801U']
+                assert len(f['prepared']) == 1
+                assert f['outcomes'][0].status == CommandStatus.NOT_SENT
+                assert f['outcomes'][0].reason_code == 'current_request_guard_rejected'
+                attempt = next(iter(f['runtime'].owner.state['attempts'].values()))
+                assert attempt['state'] == 'final_rejected'
+                assert attempt['reserved_quantity'] == 0
+                assert f['engine'].stats.errors_count == 0
         finally:
             await f['teardown']()
     asyncio.run(scenario())

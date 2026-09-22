@@ -1991,9 +1991,13 @@ class RiskManager:
         # 보호 수량·주문종류는 생산자 결정이다. legacy 보정·시간 가드를 적용하지 않는다.
         _protection_meta = event.metadata
         if (getattr(self.engine, "_execution_runtime", None) is not None
-                and event.side == OrderSide.SELL and type(_protection_meta) is dict
-                and type(_protection_meta.get("protection_intent_id")) is str
-                and _protection_meta["protection_intent_id"] != ""):
+                and event.side == OrderSide.SELL and isinstance(_protection_meta, dict)
+                and dict.__contains__(_protection_meta, "protection_intent_id")):
+            _protection_id = dict.get(_protection_meta, "protection_intent_id")
+            if (type(_protection_meta) is not dict or type(_protection_id) is not str
+                    or _protection_id == "" or _protection_id != _protection_id.strip()):
+                logger.warning(f"[리스크] 보호 매도 식별자 거부: {event.symbol}")
+                return None
             return await self._on_protective_sell(event)
 
         # stale pending 주문 정리 (매도: 90초, 매수: 10분 타임아웃)
@@ -2541,6 +2545,7 @@ class RiskManager:
         if (protection_holiday(started_at.date())
                 or session not in ("regular", "closing")
                 or requested_type not in ("market", "limit")
+                or (session == "regular" and requested_type != "market")
                 or (session == "closing" and requested_type != "limit")):
             logger.info(f"[리스크] 보호 매도 세션·주문종류 거부: {event.symbol}")
             return None
@@ -2558,6 +2563,7 @@ class RiskManager:
                     or (last_signal is not None
                         and (datetime.now() - last_signal).total_seconds()
                         < self._SIGNAL_COOLDOWN_SECONDS)):
+                logger.info(f"[리스크] 보호 매도 주문 진행·신호 쿨다운 차단: {event.symbol}")
                 return None
 
         price = None
@@ -2583,11 +2589,13 @@ class RiskManager:
             last_signal = self._last_signal_time.get(event.symbol)
             if (now.date() != started_at.date() or _session_at(now) != session
                     or protection_holiday(now.date())
-                    or position is None or quantity > position.quantity
-                    or event.symbol in self._pending_orders
+                    or position is None or quantity > position.quantity):
+                return None
+            if (event.symbol in self._pending_orders
                     or (last_signal is not None
                         and (datetime.now() - last_signal).total_seconds()
                         < self._SIGNAL_COOLDOWN_SECONDS)):
+                logger.info(f"[리스크] 보호 매도 최종 주문 진행·신호 쿨다운 차단: {event.symbol}")
                 return None
             order = Order(
                 symbol=event.symbol, side=OrderSide.SELL,
