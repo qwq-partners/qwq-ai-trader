@@ -40,9 +40,19 @@
 | S2→S3 | 현재 engine은 LIMIT/수량 fallback | S2는 실제 runtime·gateway와 경계 어댑터로 검증, 실제 engine의 MARKET/수량 인수는 S3에서 마감. S2 통과를 실배선 통과로 보고하지 않음 |
 | S2→S4 관측 | producer.health()를 runtime health가 현재 읽지 않음 | S4에 runtime.py의 미배선 기본 None·읽기 전용 health 투영만 허용하는 최소 예외. 상태 reducer/게이트 변경0, live 파일은 factory.py 한 곳 |
 | S3 기존 시험 | 독립 gateway 인수 E1은 직접 가격 갱신이 예외를 낼 것을 요구 | S3의 no-op 계약과 무수정37 GREEN은 양립 불가. 해당 단언만 owner·live 상태 무변경으로 바꾸고 다른 writer 거부 단언 유지. 실제 MARKET_DATA의 전략 도달은 신규 시험으로 증명 |
-| S2/S3 병렬 | S3는 고정 SignalEvent metadata와 기존 실제 engine 하네스로 독립 구현 가능 | 같은 base2ddacf4, 별도 worktree·파일 소유로 구현 병렬 허용. 통합/전체 검증은 S2→S3 순서. S2 구현이나 리뷰 결과가 계약을 바꾸면 S3를 재검증 |
+| S2/S3 병렬 | S3는 고정 SignalEvent metadata와 기존 실제 engine 하네스로 독립 구현 가능 | 같은 base2ddacf4, 별도 worktree·파일 소유로 구현 병렬 허용. S2→S3 승인 확인 뒤 두 후보를 하나의 개발 통합 후보로 묶고 UTC/KST 전체 검증을1쌍 실행. 각 후보 독립 리뷰/관련 시험은 별도 유지하고 전체 통과 전에는 둘 다 통합 완료로 보고하지 않음. S2 계약 변경 시 S3 재검증 |
 | S2 재시작 cooldown | durable attempt에는 종결 시각이 없어 메모리의 거부 시각이 소실됨 | 기존 보호 intent의 현재 재시도 대상임이 증명된 확정미체결에 한해 첫 관측에서60초를 새 기산. 옛 체결 익절은 새 손절을 막지 않으며 UNKNOWN은시간으로풀지않음. 최신 episode를 증명할 수 없으면 명시 보류,새schema없음 |
 | S3 거래일 | legacy 시간 가드는 KRSession의 주말·휴장일 검사도 포함하나 requests._session_at에는 없음 | 보호 전용 helper도 기존 utils.session.is_kr_market_holiday에 runtime KST날짜를 전달해 방어 유지. 새달력·조회 없음. 시간 라벨과 gateway session_guard는 그대로 두고 await뒤 거래일/세션 재확인 |
+| S2 EOD 신선도 | quote 전에 EOD를 반환하면 원관측·신선도 검증도 건너뛰어 오래된 WS가 전량 청산 가능 | quote0은 durable quote/일반 보호계산0이라는 뜻. EOD 전에도 기존 원관측 검증·읽기 전용 freshness 경계를 재사용, 시장 시각 합성/새 진입 proof 게시 금지 |
+| S2 복구 intent 재시작 | 원 admission에서 복구한 full SELL ID는 pp-i 접두어·pending owner가 없을 수 있음 | 재시작 재시도 식별은 UUID 접두어만으로 끝내지 않음. 기존 durable 보호 결정/원 intent 연결 근거를 대조해 같은60초 계약 적용, 근거 모호함은 명시 보류 |
+| S2 재생성 미제출 pending | quote 완료·submit 보류 뒤에는 admission/intent가 없어도 outbox와 pending에 원결정 증거가 남음 | 증거가 일치하는 pending은 orphan 해제 제외·복구 필요로 관측. 원 admission 없는 outbox를 자동 소비하거나 재주문하지 않음 |
+| S2 다른 부분 매도와 새 결정 | 기존10주 SELL 적용 전에 새 full100을 보관하면 잔량90 뒤 영구 수량 불일치; 일반 손절도 같은 경계 | 다른 보호 pending/미해결·예약 SELL이 있으면 충돌하는 새 결정을 만들지 않음. 일반 경로의 순수 preview는 유지하고 결정이 있을 때 durable quote/보관 전에 검사; 무결정 quote 관측은 유지. 기존 경제적용 완료 뒤 다음 실제 틱에서 새90주 계산. 보류100의 자동90 보정·시간 폐기 금지. 미체결 BUY/late-fill 문제는 P2 잔여 |
+| S2 정상 대기 관측 | ACK 미체결을 매 틱 실패로 기록하면 실패 경보가 무의미해짐 | 실제 ACK·일관된 예약 대기는 pending으로 분리. UNKNOWN/충돌/불명/다른 종목의 진짜 실패는 성공으로 덮지 않음 |
+| S2 지표 타입 | 기존 batch 캐시 ma5/prev_low는 float이며 WS DTO의 OHLC는 Decimal | 캐시의 명시 결측 또는 양의 유한 숫자만 정규화해 수용. bool/NaN/Inf 거부, 새 float 연산·캐시 조회 없음. 원 WS 타입 검증 보존, REST OHLC도 무조건 문자열화하지 않음 |
+| S2 종료 전 미시작 task | shield 내부 scope 실행 전에 shutdown이 끝날 수 있음 | 미시작 task는 closing 거부·상태/송신0·최종 회수로 검증. current-task 소유 scope를 caller에서 빌려 넘기지 않음 |
+| S3 D1 엔진 방어 | 최초 S3는 regular LIMIT도 허용해 생산자 정책에만 의존 | 보호 helper에서도 regular MARKET/closing LIMIT를 엄격히 적용. regular→closing 시험은 호가가 아니라 기존 lock await 경합으로 유지 |
+| S3 손상된 보호 표식 | 명시 protection_intent_id 키가 있으나 값이 무효이면 legacy 수량 변환 경로로 흘러감 | attach SELL에 명시 키가 있으면 유효한 깨끗한 ID만 허용하고 무효는 로그·미송신. 키 없는 일반 SELL/미attach legacy는 본문 불변 |
+| S3 cooldown | 기존 종목 단위30초 신호 cooldown 유지가 실제 손절 지연을 일으킬 수 있음 | 이번 단계에서 키/한도를 바꾸지 않고 거부 사유를 관측. S2 원결정 보류/다음 틱 재시도로 연계. 운영 전 지연 검토 과제로 명시 |
 
 ## Review Focus
 
