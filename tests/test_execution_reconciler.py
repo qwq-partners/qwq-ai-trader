@@ -936,3 +936,252 @@ def test_a_regressed_response_never_advances_the_owner(tmp_path, monkeypatch):
         finally:
             await teardown(f, pump)
     asyncio.run(scenario())
+
+
+# ────────────── ⑳ 주기 예산·깨움·기록(Codex 12차) ──────────────
+
+def hold_applies(f, reached, release):
+    """재접수를 전부 `release` 까지 붙잡는다 — 그동안 어떤 주기도 B1 을 넘어가지 못한다.
+
+    돌려주는 목록은 주기마다 하나씩 늘어난다(주기가 B1 에서 끊겨도 다음 주기가 다시 온다).
+    """
+    original = f['engine'].apply_execution_observation
+    seen = []
+
+    async def apply(observation):
+        seen.append(observation)
+        reached.set()
+        await release.wait()
+        return await original(observation)
+
+    f['engine'].apply_execution_observation = apply
+    return seen
+
+
+def hold_commit(f, monkeypatch, prefix, reached, release):
+    """첫 `prefix` commit 하나만 붙잡는다 — 주기보다 오래 사는 owner 작업을 만든다."""
+    original = f['store'].commit
+
+    async def hold(expected_version, payload, commit_id, *args, **kwargs):
+        if commit_id.startswith(prefix) and not reached.is_set():
+            reached.set()
+            await release.wait()
+        return await original(expected_version, payload, commit_id, *args, **kwargs)
+
+    monkeypatch.setattr(f['store'], 'commit', hold)
+
+
+async def wait_for_reason(runtime, reason, timeout=5):
+    async def named():
+        while runtime.health()['reconciler']['last_reason'] != reason:
+            await asyncio.sleep(0.005)
+    await asyncio.wait_for(named(), timeout)
+
+
+async def wait_until(predicate, timeout=5):
+    async def satisfied():
+        while not predicate():
+            await asyncio.sleep(0.005)
+    await asyncio.wait_for(satisfied(), timeout)
+
+
+def steady_clock(runtime, monkeypatch, start=1000.0):
+    """주기 예산의 단조 시각을 시험이 쥔다 — 예산 경계를 실시간으로 기다리지 않는다."""
+    value = [start]
+    monkeypatch.setattr(runtime, '_steady', lambda: value[0])
+    return value
+
+
+def test_a_b1_timeout_does_not_leave_the_loop_asleep(tmp_path, monkeypatch):
+    """B1 이 첫 주기 예산을 넘겨도 다음 주기는 스스로 돈다(Codex 12차 P1).
+
+    `_reconciler_target_count` 는 B1 **뒤**에야 갱신된다 — B1 에서 주기가 끊기면 초기값 0 이
+    남아 루프가 '대상 없음' 으로 보고 Event 에서 무기한 잔다. 잘지/돌지는 지난 주기의
+    캐시가 아니라 호출 시점의 상태(`_stalled_targets`)로 정해야 한다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime = f['runtime']
+        await received_inbox_row(runtime, f)
+        reached, release = asyncio.Event(), asyncio.Event()
+        seen = hold_applies(f, reached, release)
+        collect, calls = collector(f, [[response([other_row(f['ref'])])]])
+        try:
+            runtime.start_reconciler(collect, interval=0.01, cycle_timeout=0.05)
+            await asyncio.wait_for(reached.wait(), 5)
+            await wait_for_reason(runtime, 'cycle_timeout')
+            # 붙잡힌 채로 다음 주기가 온다 — 완료된 작업이 하나도 없으니 깨움이 아니라
+            # 루프의 판정만이 근거다.
+            await wait_until(lambda: len(seen) >= 2)
+            assert calls == []   # 어떤 주기도 B1 에서 막혀 조회까지 가지 못한다
+            release.set()
+            await wait_until(lambda: bool(calls))   # 풀리면 그 주기가 조회까지 간다
+        finally:
+            release.set()
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+def test_a_surviving_owner_task_wakes_a_loop_that_went_to_sleep(tmp_path, monkeypatch):
+    """주기보다 오래 산 작업의 완료가 잠든 루프를 깨운다(Codex 12차 P1).
+
+    루프가 '기다릴 것 없음' 으로 판정해 Event 에서 잠든 뒤 그 작업이 commit 하면, 깨울
+    근거는 그 완료뿐이다 — 없으면 다음 ACK 까지 그 주문의 체결이 보이지 않는다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime = f['runtime']
+        await received_inbox_row(runtime, f)
+        reached, release = asyncio.Event(), asyncio.Event()
+        hold_applies(f, reached, release)
+        # 루프가 잠들도록 '기다릴 것 없음' 을 고정한다 — 깨움 말고는 다음 주기가 없다.
+        monkeypatch.setattr(runtime, '_stalled_targets', lambda state, business_day: False)
+        collect, calls = collector(f, [[response([other_row(f['ref'])])]])
+        try:
+            runtime.start_reconciler(collect, interval=0.01, cycle_timeout=0.05)
+            await asyncio.wait_for(reached.wait(), 5)
+            await wait_for_reason(runtime, 'cycle_timeout')
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert calls == []   # 잠들었다 — interval 로는 깨어나지 않는다
+            release.set()
+            await wait_until(lambda: bool(calls))
+        finally:
+            release.set()
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('remaining,reason,queries', [(0.2, 'query_timeout', 1),
+                                                      (-5.0, 'query_budget_exhausted', 0)])
+def test_the_query_budget_is_the_cycle_deadline_minus_the_reapply_reserve(
+        tmp_path, monkeypatch, remaining, reason, queries):
+    """조회 예산은 고정 45초가 아니라 `(마감 − 재접수 유보)` 까지다(Codex 12차 P1).
+
+    고정이면 B1 이 쓴 시간이 차감되지 않아 주기 예산이 조회 도중 먼저 끝나고 B2 가 통째로
+    굶는다. 남은 예산이 0 이하면 조회는 시작조차 하지 않는다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime = f['runtime']
+        await received_inbox_row(runtime, f)            # B1 이 재접수할 행(40주)
+        await observe(runtime, f, 100, D('1000000'))    # B2 가 재구성할 잔여(100주)
+        steady = steady_clock(runtime, monkeypatch)
+        original = f['engine'].apply_execution_observation
+        spent = []
+
+        async def spend(observation):
+            if not spent:   # B1 이 주기 예산의 대부분을 쓴다
+                spent.append(observation)
+                steady[0] += (runtime._reconciler_cycle_timeout
+                              - runtime_module.RECONCILER_REAPPLY_RESERVE - remaining)
+            return await original(observation)
+
+        f['engine'].apply_execution_observation = spend
+        started, release, seen = asyncio.Event(), asyncio.Event(), []
+        try:
+            assert await asyncio.wait_for(
+                runtime.reconcile_once(stuck_query(seen, started, release)), 5) is True
+            assert len(seen) == queries
+            assert runtime.health()['reconciler']['skipped'] == {reason: 1}
+            # 유보가 남아 B2 가 같은 주기에 돌았다.
+            assert f['engine'].portfolio.positions[SYMBOL].quantity == 100
+        finally:
+            release.set()
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+def test_a_query_that_ate_the_budget_starts_no_new_reconcile(tmp_path, monkeypatch):
+    """A 의 대상 루프도 유보를 지킨다 — 남은 시간은 B2 의 것이다(Codex 12차 P1)."""
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime, ref = f['runtime'], f['ref']
+        await observe(runtime, f, 40, D('400000'))      # B2 가 재구성할 관측(40주)
+        steady = steady_clock(runtime, monkeypatch)
+        collect, calls = collector(f, [[response([fill_row(ref, quantity=100, filled=100,
+                                                           amount=1000000)])]])
+
+        async def slow(**kwargs):
+            result = await collect(**kwargs)
+            steady[0] += runtime._reconciler_cycle_timeout   # 조회가 유보까지 먹었다
+            return result
+
+        try:
+            assert await runtime.reconcile_once(slow) is True
+            assert len(calls) == 1
+            attempt = runtime.owner.state['attempts'][f['order'].attempt_id]
+            assert attempt['observed_quantity'] == 40    # reconcile 은 시작하지 않았다
+            assert runtime.health()['reconciler']['skipped'] == {'reconcile_budget_exhausted': 1}
+            assert f['engine'].portfolio.positions[SYMBOL].quantity == 40   # B2 는 돌았다
+        finally:
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+def test_a_cycle_timeout_does_not_lose_the_apply_outcome(tmp_path, monkeypatch):
+    """대기자가 취소돼도 receipt 분류·진전 시각은 남는다(Codex 12차 P2).
+
+    기록이 대기자 쪽에 있으면 주기 타임아웃이 그 줄에 도달하지 못해, 성공한 적용이
+    관측창에서 통째로 사라진다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime = f['runtime']
+        await received_inbox_row(runtime, f)
+        reached, release = asyncio.Event(), asyncio.Event()
+        hold_commit(f, monkeypatch, 'fill:', reached, release)
+        collect, _ = collector(f, [[response([other_row(f['ref'])])]])
+        try:
+            runtime.start_reconciler(collect, interval=100.0, cycle_timeout=0.05)
+            await asyncio.wait_for(reached.wait(), 5)
+            await wait_for_reason(runtime, 'cycle_timeout')
+            assert runtime.health()['reconciler']['apply_outcomes'] == {}
+            release.set()
+            await wait_until(lambda: runtime.health()['reconciler']['apply_outcomes'])
+            health = runtime.health()['reconciler']
+            assert health['apply_outcomes'] == {'FillReceipt:APPLIED': 1}
+            assert health['last_progress_at'] == f['clock'][0].isoformat()
+        finally:
+            release.set()
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+def test_a_cycle_timeout_does_not_lose_the_reconcile_progress(tmp_path, monkeypatch):
+    """저장 뒤 observed 증가 판정도 task 본문에 있다(Codex 12차 P2).
+
+    재접수는 실패시켜 둔다 — 여기서 갱신되는 진전 시각의 출처는 살아남은 reconcile 뿐이다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime, ref = f['runtime'], f['ref']
+        reached, release = asyncio.Event(), asyncio.Event()
+        hold_commit(f, monkeypatch, 'command:reconcile:', reached, release)
+
+        async def refuse(observation):
+            raise ApplicationBlocked('synthetic_apply_refused')
+
+        f['engine'].apply_execution_observation = refuse
+        collect, _ = collector(f, [[response([fill_row(ref, quantity=100, filled=40,
+                                                       amount=400000)])]])
+        try:
+            runtime.start_reconciler(collect, interval=100.0, cycle_timeout=0.05)
+            await asyncio.wait_for(reached.wait(), 5)
+            await wait_for_reason(runtime, 'cycle_timeout')
+            assert runtime.health()['reconciler']['last_progress_at'] is None
+            release.set()
+            await wait_until(
+                lambda: runtime.health()['reconciler']['last_progress_at'] is not None)
+            attempt = runtime.owner.state['attempts'][f['order'].attempt_id]
+            assert attempt['observed_quantity'] == 40
+        finally:
+            release.set()
+            await teardown(f, pump)
+    asyncio.run(scenario())

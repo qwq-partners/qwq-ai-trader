@@ -39,13 +39,21 @@ from .market_source import (canonical_observation, observation_from_event, compl
 #
 # 상수 관계(주기 안에서 B 가 굶지 않게 하는 유일한 근거):
 #   RECONCILER_QUERY_TIMEOUT == RECONCILER_REQUEST_TIMEOUT × RECONCILER_MAX_PAGES  (= 45s)
-#   RECONCILER_CYCLE_TIMEOUT − RECONCILER_QUERY_TIMEOUT == B 에 남는 시간          (= 15s)
+#   RECONCILER_CYCLE_TIMEOUT − RECONCILER_REAPPLY_RESERVE == 조회가 쓸 수 있는 최대 (= 45s)
 # 조회에 **별도 예산**을 두지 않으면 조회 한 번이 주기 예산 전체를 삼켜 저장된 체결의
-# 재접수(B)가 영영 돌지 않는다. 순서도 같은 이유로 B1 → A → B2 다(아래 `_reconcile_cycle`).
+# 재접수(B)가 영영 돌지 않는다. 그 예산은 고정 상수가 아니라 **마감시각**으로 지킨다:
+# `reapply_deadline = 주기 시작 + cycle_timeout − 유보` 이고, 조회는 `min(QUERY_TIMEOUT,
+# reapply_deadline − now)` 까지만, A 의 reconcile 은 `now < reapply_deadline` 일 때만 새로
+# 시작한다. 조회를 고정 45초로 두면 B1 이 쓴 시간이 차감되지 않아(B1 20초 + 조회 45초 >
+# 60초) 주기 예산이 조회 도중 먼저 끝나 B2 가 통째로 굶는다 — 유보로 B2 는 항상 남은
+# 시간을 갖는다. 유보는 기본 주기(60초)의 15초이고 주기를 줄여 쓰면 같은 비율로 줄인다
+# (고정 15초면 5초짜리 주기는 조회를 한 번도 시작하지 못한다).
+# 순서도 같은 이유로 B1 → A → B2 다(아래 `_reconcile_cycle`).
 RECONCILER_MAX_PAGES = 3
 RECONCILER_REQUEST_TIMEOUT = 15.0
 RECONCILER_QUERY_TIMEOUT = 45.0
 RECONCILER_CYCLE_TIMEOUT = 60.0
+RECONCILER_REAPPLY_RESERVE = 15.0
 RECONCILER_INTERVAL = 3.0
 # 대상이 있는데 이만큼의 주기 동안 상태가 전진하지 않으면 막힌 것으로 본다(P-2).
 RECONCILER_STALL_CYCLES = 5
@@ -98,6 +106,7 @@ class KRExecutionRuntime:
         self._reconciler_progress_at = None
         self._reconciler_last_reason = "not_started"
         self._reconciler_target_count = 0
+        self._reconciler_in_cycle = False
         self._reconciler_skipped: dict[str, int] = {}
         self._reconciler_outcomes: dict[str, int] = {}
         self._reconciler_parked = 0
@@ -566,8 +575,20 @@ class KRExecutionRuntime:
         if wakeup is not None:
             wakeup.set()
 
+    def _steady(self) -> float:
+        """주기 예산의 단조 시각(초). 주입 벽시계는 얼거나 뒤로 갈 수 있어 예산에 못 쓴다.
+
+        예산 경계를 만드는 손잡이는 이것 하나다 — 시험은 여기만 바꾼다.
+        """
+        return asyncio.get_running_loop().time()
+
     async def _reconcile_loop(self, collect) -> None:
-        """대상이 있으면 고정 interval, 없으면 조회 0회로 Event에서 잠든다(backoff 없음)."""
+        """기다릴 것이 있으면 고정 interval, 없으면 조회 0회로 Event에서 잠든다(backoff 없음).
+
+        잘지/돌지는 지난 주기가 센 대상 수가 아니라 **호출 시점의 상태**로 정한다. 대상 수는
+        B1 **뒤**에야 갱신되므로 B1 에서 주기가 끊기면 초기값 0 이 남고, 그 캐시를 믿으면
+        기다리는 것이 있는데도 Event 에서 무기한 잔다.
+        """
         while not self._closing:
             self._reconciler_wakeup.clear()
             try:
@@ -579,8 +600,11 @@ class KRExecutionRuntime:
                 logger.exception("[실행] 체결 대사 주기 실패")
             if self._closing:
                 break
+            business_day, _ = self._reconciler_day(self.owner.state)
+            waiting = (business_day is not None
+                       and self._stalled_targets(self.owner.state, business_day))
             try:
-                if self._reconciler_target_count:
+                if waiting:
                     await asyncio.wait_for(self._reconciler_wakeup.wait(), self._reconciler_interval)
                 else:
                     await self._reconciler_wakeup.wait()
@@ -590,11 +614,18 @@ class KRExecutionRuntime:
     async def reconcile_once(self, collect) -> bool:
         """한 주기. 대상 선정~조회~재접수~health **전체**를 cycle_timeout으로 감싼다(P-1)."""
         self._reconciler_cycle_started_at = self._now()
+        reserve = RECONCILER_REAPPLY_RESERVE * min(
+            1.0, self._reconciler_cycle_timeout / RECONCILER_CYCLE_TIMEOUT)
+        reapply_deadline = self._steady() + self._reconciler_cycle_timeout - reserve
+        self._reconciler_in_cycle = True
         try:
-            return await asyncio.wait_for(self._reconcile_cycle(collect), self._reconciler_cycle_timeout)
+            return await asyncio.wait_for(self._reconcile_cycle(collect, reapply_deadline),
+                                          self._reconciler_cycle_timeout)
         except asyncio.TimeoutError:
             self._skip_reason("cycle_timeout")
             return False
+        finally:
+            self._reconciler_in_cycle = False
 
     def _reconciler_day(self, state):
         """A·B 두 집합의 공통 전제. 아니면 조회도 재처리도 하지 않는다(P-4)."""
@@ -689,19 +720,29 @@ class KRExecutionRuntime:
         `_block()` 한 채 남겨 다음 명령(`_owner_ready`)까지 전부 막힌다. 주기 예산은
         "새 작업 시작"만 멈추고, 수락된 저장 작업의 완료는 `shutdown` 의 drain 이
         기다린다(같은 집합 `_reconciler_tasks`).
+
+        같은 attempt 에 진행 중인 작업이 있어도 **여기에는 중복 접수를 막는 장치가 없다** —
+        owner `mutate` 의 직렬화(`application` 의 단일 `asyncio.Lock`)에만 의존한다.
         """
         task = asyncio.create_task(operation())
         self._reconciler_tasks.add(task)
 
         def completed(done):
             self._reconciler_tasks.discard(done)
-            if not done.cancelled():
-                done.exception()
+            if done.cancelled():
+                return
+            done.exception()
+            if not self._reconciler_in_cycle:
+                # 주기보다 오래 산 작업이 늦게 끝났다. 그 commit 으로 기다릴 것이 생겨도
+                # 잠든 루프를 깨울 사람이 없다. 주기가 도는 중이면 깨우지 않는다 — 그
+                # 주기가 끝에서 현재 상태로 다시 판정하고, 자기 작업의 완료로 매번 깨우면
+                # 고정 interval 이 사라져 원장 TR 이 쉬지 않고 나간다.
+                self.notify_execution_change()
 
         task.add_done_callback(completed)
         return asyncio.shield(task)
 
-    async def _reconcile_cycle(self, collect) -> bool:
+    async def _reconcile_cycle(self, collect, reapply_deadline: float) -> bool:
         """일자 게이트 → B1(조회 불필요) → A(조회·reconcile) → B2(재구성) 순서다.
 
         A 를 앞에 두면 조회가 예산을 소진한 주기에서 B 가 한 번도 돌지 않아, 이미 저장된
@@ -720,25 +761,32 @@ class KRExecutionRuntime:
         chain_blocked: set[str] = set()
         if targets:
             # 대상이 0이면 조회 자체를 하지 않는다(원장 TR 예산은 미해결 주문에만 쓴다).
-            if await self._reconcile_observed(collect, business_day, targets, chain_blocked):
+            if await self._reconcile_observed(collect, business_day, targets, chain_blocked,
+                                              reapply_deadline):
                 progressed = True
         if await self._reapply_reconstructed(business_day, chain_blocked):
             progressed = True
         # 주기 끝에 사유를 한 번 확정한다(P2-d). 막힌 주기의 blocked_reason 접미사는
         # 그 주기가 실제로 멈춘 이유여야 하고, 지난 주기 사유를 물려받으면 안 된다.
+        # 진전 **시각**은 여기서 찍지 않는다 — owner task 본문이 찍어야 주기가 취소돼도 남는다.
         if progressed:
-            self._reconciler_progress_at = self._now()
             self._reconciler_last_reason = "progressed"
         elif not self._stalled_targets(self.owner.state, business_day):
             self._reconciler_last_reason = "idle"
         return progressed
 
-    async def _reconcile_observed(self, collect, business_day, targets, chain_blocked) -> bool:
+    async def _reconcile_observed(self, collect, business_day, targets, chain_blocked,
+                                  reapply_deadline: float) -> bool:
         """(A) 한 주기에 조회는 1회. 운영과 같은 ALL 범위로 보고 행의 거래소는 파서가 대조한다."""
+        budget = reapply_deadline - self._steady()
+        if budget <= 0:
+            # B1 이 주기 예산을 다 썼다. 지금 조회를 시작하면 B2 의 유보까지 먹는다.
+            self._skip_reason("query_budget_exhausted")
+            return False
         try:
             collection = await asyncio.wait_for(
                 collect(start_date=business_day, end_date=business_day, exchange_scope="ALL",
-                        max_pages=RECONCILER_MAX_PAGES), RECONCILER_QUERY_TIMEOUT)
+                        max_pages=RECONCILER_MAX_PAGES), min(RECONCILER_QUERY_TIMEOUT, budget))
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
@@ -761,6 +809,10 @@ class KRExecutionRuntime:
             return False
         progressed = False
         for attempt_id, attempt in targets.items():
+            if self._steady() >= reapply_deadline:
+                # 남은 시간은 B2 의 것이다. 남은 대상은 다음 주기가 본다.
+                self._skip_reason("reconcile_budget_exhausted")
+                break
             try:
                 if await self._reconcile_attempt(attempt_id, attempt, collection, pages, chain_blocked):
                     progressed = True
@@ -806,9 +858,16 @@ class KRExecutionRuntime:
             self._skip_reason(evidence.reason if evidence.reason else "no_change")
             return False
         before = attempt["observed_quantity"]
-        await self._owner_task(lambda: self.lifecycle.reconcile(attempt_id, evidence))
-        stored = self.owner.state["attempts"][attempt_id]
-        return stored["observed_quantity"] > before
+
+        async def store() -> bool:
+            # 판정·기록을 task 본문에서 끝낸다 — 주기 예산이 대기자를 취소해도 남는다.
+            await self.lifecycle.reconcile(attempt_id, evidence)
+            progressed = self.owner.state["attempts"][attempt_id]["observed_quantity"] > before
+            if progressed:
+                self._reconciler_progress_at = self._now()
+            return progressed
+
+        return await self._owner_task(store)
 
     @staticmethod
     def _evidence_changes_attempt(attempt, evidence) -> bool:
@@ -888,21 +947,27 @@ class KRExecutionRuntime:
                                          metadata=metadata)
 
     async def _reapply(self, observation: FillObservation) -> bool:
-        try:
-            receipt = await self._owner_task(
-                lambda: self.engine.apply_execution_observation(observation))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self._apply_outcome(type(exc).__name__, "raised")
-            self._skip_reason("apply_failed")  # 예외 종류는 apply_outcomes가 들고 있다.
-            return False
-        self._apply_outcome(type(receipt).__name__, str(getattr(receipt, "status", "")))
-        if isinstance(receipt, InboxReceipt):
-            if not receipt.application_complete:
-                self._reconciler_parked += 1
-            return receipt.application_complete
-        return receipt.status in ("APPLIED", "ALREADY_APPLIED")
+        async def apply() -> bool:
+            # 분류·기록을 task 본문에서 끝낸다 — 주기 예산이 대기자를 취소해도, 성공한
+            # 적용도 실패도 관측창에서 사라지지 않는다. 대기자는 결과만 받는다.
+            try:
+                receipt = await self.engine.apply_execution_observation(observation)
+            except Exception as exc:
+                self._apply_outcome(type(exc).__name__, "raised")
+                self._skip_reason("apply_failed")  # 예외 종류는 apply_outcomes가 들고 있다.
+                return False
+            self._apply_outcome(type(receipt).__name__, str(getattr(receipt, "status", "")))
+            if isinstance(receipt, InboxReceipt):
+                progressed = receipt.application_complete
+                if not progressed:
+                    self._reconciler_parked += 1
+            else:
+                progressed = receipt.status in ("APPLIED", "ALREADY_APPLIED")
+            if progressed:
+                self._reconciler_progress_at = self._now()
+            return progressed
+
+        return await self._owner_task(apply)
 
     def reconciler_blocked_reason(self) -> str | None:
         """기다리는 것이 있는데 마지막 상태 전진 이후 k주기를 넘겼는가(P-2·P2-a).
