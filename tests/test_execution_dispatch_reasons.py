@@ -619,11 +619,12 @@ def test_a_session_label_cannot_be_forged_onto_a_different_moment():
 
 
 def test_the_closing_and_next_market_sessions_bake_different_wire_bodies():
-    """C6 — `closing` 은 시장가를 build 에서 거부하고 `next_market` 은 둘을 같은 본문으로 굽는다.
+    """C6 — `closing` 은 시장가를 build 에서 거부하고 `next_market` 은 둘을 같은 주문 구분으로 굽는다.
 
     15:40~20:00 에서는 지정가·시장가가 **같은 `ORD_DVSN='05'`·`AFHR_FLPR_YN='Y'`** 이고
-    시장가만 `wire_price` 가 0 이다 — 즉 그 구간에서 "시장가 에스컬레이션"은 전선상 지정가와
-    구분되지 않는다(①M8). `closing` 에서의 지정가 강등이냐 15:40 대기냐는 **P1 입력**이다.
+    `ORD_UNPR`(지정가 '10000' / 시장가 '0')와 fingerprint 만 다르다 — 즉 그 구간에서 "시장가
+    에스컬레이션"은 주문 구분 코드로는 지정가와 구분되지 않고 가격 0 으로만 구분된다(①M8,
+    Codex 17차 P2 정정). `closing` 에서의 지정가 강등이냐 15:40 대기냐는 **P1 입력**이다.
     """
     from src.execution.safety.requests import (
         KISRequestBuilder, RequestSession, RequestValidationError, _session_at)
