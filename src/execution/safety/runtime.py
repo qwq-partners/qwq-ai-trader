@@ -21,7 +21,8 @@ from .evidence import evidence_pages, parse_order_evidence, parser_scope
 from .lifecycle import (OrderEvidence, OrderLifecycleCoordinator, OrderRef, OrderState,
                         TERMINAL_STATES)
 from .initial_r import capture_initial_stop, capture_finality, reduce_finalize_initial_r
-from .protection import decode_protection, publish_protection, quote_protection, reduce_protection
+from .protection import (decode_protection, encode_protection, publish_protection,
+                         quote_protection, reduce_protection, _degraded)
 from .protection_recovery import RecoveryReceipt, capture_fill, capture_quote, digest, reduce_repair
 from .store import ExecutionStateStore
 from .market_source import (canonical_observation, observation_from_event, complete_source,
@@ -60,6 +61,8 @@ RECONCILER_REAPPLY_RESERVE = 15.0
 RECONCILER_INTERVAL = 3.0
 # 대상이 있는데 이만큼의 주기 동안 상태가 전진하지 않으면 막힌 것으로 본다(P-2).
 RECONCILER_STALL_CYCLES = 5
+# REST 20초 세 주기의 여유. 원 시장시각을 복구 시각으로 바꾸지는 않는다.
+PROTECTION_RESUME_STALE_SECONDS = 60.0
 # `economics._matching_attempt` 가 받아 주는 attempt 상태. 이 밖(또는 evidence_conflict)이면
 # `reduce_economics` 가 ValueError 를 내므로 재접수는 FAILED ingress 행만 늘린다. economics.py
 # 는 이 단계의 허용 파일이 아니라 같은 집합을 여기 다시 적는다 —
@@ -93,7 +96,10 @@ class KRExecutionRuntime:
         self._command_result_tasks: set[asyncio.Task] = set()
         self._command_results_failed = False
         self._quote_lock = asyncio.Lock()
-        self._protection_failed = False
+        self._protection_failures: dict[tuple[str, str], dict] = {}
+        self._protection_failure_generation = 0
+        self._protection_unattributed_failed = False
+        self._protection_recovery_counts: dict[str, int] = {}
         self._closing = False
         self._intraday_writer = None
         self._regime_writer = None
@@ -122,6 +128,45 @@ class KRExecutionRuntime:
         self.lifecycle = OrderLifecycleCoordinator(self.owner, clock=clock,
                                                    admission_guard=self._require_day_admission,
                                                    finality_recorder=capture_finality)
+
+    @property
+    def _protection_failed(self):
+        return self._protection_unattributed_failed or bool(self._protection_failures)
+
+    @_protection_failed.setter
+    def _protection_failed(self, value):
+        # 기존 bool 쓰기는 특정 quote의 복구 증거가 없는 별도 래치다.
+        self._protection_unattributed_failed = bool(value)
+
+    def _record_protection_failure(self, key, *, symbol=None, phase=None):
+        if key is None:
+            self._protection_unattributed_failed = True
+        else:
+            self._protection_failure_generation += 1
+            self._protection_failures[key] = {"generation": self._protection_failure_generation,
+                                              "symbol": symbol, "phase": phase}
+
+    def _protection_task(self, operation, *, failure_key=None, rejected=None, symbol=None, phase=None):
+        """실패를 task 본문에서 먼저 기록한다. 늦은 callback은 보강만 한다."""
+        handled = False
+        async def execute():
+            nonlocal handled
+            try:
+                return await operation()
+            except BaseException:
+                handled = True
+                if rejected is None or not rejected():
+                    self._record_protection_failure(failure_key, symbol=symbol, phase=phase)
+                raise
+        task = asyncio.create_task(execute())
+        self._protection_tasks.add(task)
+        def completed(done):
+            self._protection_tasks.discard(done)
+            failed = done.cancelled() or done.exception() is not None
+            if failed and not handled and (rejected is None or not rejected()):
+                self._record_protection_failure(failure_key, symbol=symbol, phase=phase)
+        task.add_done_callback(completed)
+        return task
 
     @property
     def trading_ready(self) -> bool:
@@ -1302,16 +1347,252 @@ class KRExecutionRuntime:
 
         # 수락된 가격은 호출자의 취소와 분리한다. 강한 참조와 종료 drain으로
         # 앞선 fill commit을 기다리는 동안의 고점/손절 접촉을 버리지 않는다.
-        task = asyncio.create_task(apply_quote())
-        self._protection_tasks.add(task)
-
-        def completed(done):
-            self._protection_tasks.discard(done)
-            if done.cancelled() or (done.exception() is not None and not admission_rejected):
-                self._protection_failed = True
-
-        task.add_done_callback(completed)
+        task = self._protection_task(apply_quote, failure_key=("quote", command_id),
+                                     rejected=lambda: admission_rejected, symbol=symbol, phase="quote")
         return await asyncio.shield(task)
+
+    async def release_protection_pending(self, symbol: str) -> bool:
+        """S2의 직렬화된 sweep만 호출한다. quote→prepare 전체 창은 그 caller가 소유한다."""
+        if self._closing:
+            raise ApplicationBlocked("종료 중에는 pending을 해제하지 않습니다")
+        text(symbol)
+        class NoRelease(Exception):
+            pass
+        def eligible(state):
+            current = asyncio.current_task()
+            if any(task is not current and not task.done() for task in self._protection_tasks):
+                return False
+            dto = state["protection"]
+            owner = dto["pending_owners"].get(symbol)
+            row = dto["states"].get(symbol)
+            if owner is None or row is None or row["pending_stage"] is None:
+                return False
+            # 보호 DTO의 체결 흔적도 실제 증거다. 원장과 모순돼도 지우지 않는다.
+            if (type(row["pending_filled_qty"]) is not int or row["pending_filled_qty"] != 0
+                    or type(row["pending_target_qty"]) is not int or row["pending_target_qty"] <= 0):
+                return False
+            intent = state["intents"].get(owner)
+            actual = {key for key, value in state["attempts"].items()
+                      if type(value) is dict and value.get("intent_id") == owner}
+            if intent is None:
+                return not actual
+            if (type(intent) is not dict or intent.get("symbol") != symbol or intent.get("side") != "sell"
+                    or type(intent.get("target_quantity")) is not int or intent["target_quantity"] <= 0
+                    or type(intent.get("attempt_ids")) is not list or not intent["attempt_ids"]
+                    or any(type(key) is not str for key in intent["attempt_ids"])):
+                return False
+            ids = intent["attempt_ids"]
+            if len(set(ids)) != len(ids) or set(ids) != actual:
+                return False
+            applied = 0
+            for key in ids:
+                attempt = state["attempts"].get(key)
+                if (type(attempt) is not dict or attempt.get("attempt_id") != key
+                        or attempt.get("intent_id") != owner or attempt.get("symbol") != symbol
+                        or attempt.get("side") != "sell" or attempt.get("state") not in TERMINAL_STATES
+                        or any(type(attempt.get(name)) is not int or attempt[name] < 0
+                               for name in ("quantity", "reserved_quantity", "observed_quantity", "applied_quantity"))):
+                    return False
+                applied += attempt["applied_quantity"]
+            return applied == 0
+        self.owner._require_ready()
+        if not eligible(self.owner.state):
+            return False
+        async def release():
+            def reduce(state):
+                if not eligible(state):
+                    raise NoRelease()
+                row = state["protection"]["states"][symbol]
+                row.update(pending_stage=None, pending_since=None, pending_target_qty=0, pending_filled_qty=0)
+                del state["protection"]["pending_owners"][symbol]
+                return state
+            try:
+                await self.owner.mutate("protection-release:" + uuid4().hex, reduce)
+            except NoRelease:
+                return False
+            return True
+        return await asyncio.shield(self._protection_task(release))
+
+    def _resume_request(self, command_id, admission, state):
+        """원 request를 수정 없이 분리·검증한다. 오류는 폐기 근거가 아니다."""
+        fields = {"symbol", "price", "market_data", "intent_id", "observed_at", "market_as_of",
+                  "source", "source_event_id"}
+        metadata = {"payload_digest", "status", "source_version", "admitted_at"}
+        if (type(command_id) is not str or not command_id.startswith("quote:")
+                or len(command_id) <= len("quote:") or type(admission) is not dict):
+            raise ApplicationBlocked("보호 가격 접수 식별자 오류")
+        if "entry_observation" in admission:
+            fields.add("entry_observation")
+        if admission.keys() != fields | metadata or admission["status"] != "RECEIVED":
+            raise ApplicationBlocked("보호 가격 접수 형식 오류")
+        request = {key: deepcopy(admission[key]) for key in fields}
+        if digest(request) != admission["payload_digest"]:
+            raise ApplicationBlocked("보호 가격 접수 증거 불일치")
+        if request["market_data"] is not None and type(request["market_data"]) is not dict:
+            raise ValueError("보호 시장자료 형식 오류")
+        text(request["symbol"])
+        if request["intent_id"] is not None:
+            text(request["intent_id"])
+        if type(request["price"]) is not str:
+            raise ValueError("보호 가격 형식 오류")
+        price = Decimal(request["price"])
+        if not price.is_finite() or price <= 0:
+            raise ValueError("보호 가격 오류")
+        now = self._now()
+        received = aware(datetime.fromisoformat(request["observed_at"]))
+        admitted = aware(datetime.fromisoformat(admission["admitted_at"]))
+        if (received > admitted or admitted > now or type(admission["source_version"]) is not int
+                or not 0 < admission["source_version"] <= self.owner.version):
+            raise ValueError("보호 접수 시각/version 오류")
+        if not self.owner._same(state.get("quote_price_views", {}).get(request["symbol"]),
+                                quote_price_view(request, admission["source_version"])):
+            raise ApplicationBlocked("보호 접수 가격 view 불일치")
+        observed = None
+        if request["market_as_of"] is None:
+            if request["source"] is not None or request["source_event_id"] is not None:
+                raise ValueError("보호 원관측 출처 오류")
+        else:
+            observed = aware(datetime.fromisoformat(request["market_as_of"]))
+            text(request["source"])
+            text(request["source_event_id"])
+            if observed > received:
+                raise ValueError("보호 원관측 시각 오류")
+        if "entry_observation" in request:
+            from ...core.market_observation import MarketObservation
+            observation = canonical_observation(MarketObservation.from_dict(request["entry_observation"]),
+                symbol=request["symbol"], price=price, as_of=observed, source=request["source"],
+                event_id=request["source_event_id"], now=received)
+            if observation_market_data(observation, request["market_data"]) != request["market_data"]:
+                raise ValueError("보호 원관측 본문 불일치")
+        floor = self._quote_time_floor(state, request["symbol"])
+        stale = ((now - received).total_seconds() > PROTECTION_RESUME_STALE_SECONDS
+                 or (observed is not None and floor is not None and observed < floor))
+        return request, received, price, stale
+
+    def _resume_calculation(self, state, request, now, price):
+        """검증/decode/encode는 C 밖이며 순수 update_price 오류만 포기한다."""
+        symbol, dto = request["symbol"], state["protection"]
+        manager = decode_protection(dto, clock=lambda: now)
+        if symbol in dto["degraded"]:
+            return deepcopy(dto), None, False
+        protected = manager.get_state(symbol)
+        names = ("pending_stage", "pending_since", "pending_target_qty", "pending_filled_qty")
+        pending = ({name: getattr(protected, name) for name in names}
+                   if protected is not None and protected.pending_stage is not None else None)
+        history = deepcopy(protected.exit_history) if pending is not None else None
+        if pending is not None:
+            protected.pending_since = now
+        market_data = deepcopy(request["market_data"])
+        try:
+            decision = manager.update_price(symbol, price, market_data)
+        except (ValueError, TypeError, ArithmeticError, KeyError, AttributeError, RuntimeError):
+            position = state["portfolio"]["positions"].get(symbol)
+            quantity = 0 if position is None else position["quantity"]
+            degraded, _ = _degraded(dto, symbol, quantity)
+            return degraded, None, True
+        if pending is not None:
+            for name, value in pending.items():
+                setattr(protected, name, value)
+            protected.exit_history = history
+            decision = None
+        elif protected is not None and protected.pending_stage is not None:
+            if request["intent_id"] is None:
+                raise ValueError("신규 pending 보호 목표에는 intent_id가 필요합니다")
+            manager._execution_protection["pending_owners"][symbol] = request["intent_id"]
+        return encode_protection(manager), decision, False
+
+    async def resume_protection_admission(self) -> list[tuple[str, str, object]]:
+        """한 호출은 접수 최대 한 건만 반환한다. S2는 결정을 인계한 뒤 다음 건을 호출한다.
+
+        앞선 결정을 반환하기 전에 뒤 접수의 오류로 잃지 않도록 한 건씩 처리한다.
+        명시 재개는 원 접수의 보호만 처리하며 일자/진입 권한을 열지 않는다.
+        """
+        if self._closing:
+            raise ApplicationBlocked("종료 중에는 보호 접수를 재개하지 않습니다")
+        failure_recorded = False
+        async def resume():
+            nonlocal failure_recorded
+            results = []
+            async with self._quote_lock:
+                self.owner._require_ready()
+                admissions = self.owner.state.get("protection_quote_admissions", {})
+                if type(admissions) is not dict:
+                    raise ApplicationBlocked("보호 접수 map 오류")
+                # JSON map의 키 정렬(UUID)은 접수 순서가 아니다. 원 접수 version을 따른다.
+                ordered = sorted(admissions.items(), key=lambda item:
+                    item[1]["source_version"] if type(item[1]) is dict
+                    and type(item[1].get("source_version")) is int else -1)
+                for command_id, original in ordered:
+                    key = ("quote", command_id)
+                    symbol = original.get("symbol") if type(original) is dict else None
+                    try:
+                        request, now, price, _ = self._resume_request(command_id, original, self.owner.state)
+                        admitted_version = await self.owner.store.lookup_commit("command:quote-admit:" + command_id)
+                        if admitted_version != original["source_version"]:
+                            raise ApplicationBlocked("보호 원 접수 SQL 증거 불일치")
+                    except BaseException:
+                        self._record_protection_failure(key, symbol=symbol, phase="resume_validation")
+                        failure_recorded = True
+                        raise
+                    failed = self._protection_failures.get(key)
+                    generation = None if failed is None else failed["generation"]
+                    candidate_version = None
+                    disposition, decision = None, None
+                    def reduce(state):
+                        nonlocal candidate_version, disposition, decision
+                        admission = state.get("protection_quote_admissions", {}).get(command_id)
+                        if not self.owner._same(admission, original):
+                            raise ApplicationBlocked("보호 가격 접수 증거 불일치")
+                        verified, _, _, stale = self._resume_request(command_id, admission, state)
+                        if not self.owner._same(verified, request):
+                            raise ApplicationBlocked("보호 가격 원문 불일치")
+                        candidate_version = self.owner.version + 1
+                        disposition = "stale_admission_discarded"
+                        if not stale:
+                            before = deepcopy(state)
+                            dto, decision, abandoned = self._resume_calculation(state, request, now, price)
+                            state["protection"] = dto
+                            disposition = "protection_admission_abandoned" if abandoned else "protection_admission_resumed"
+                            if not abandoned:
+                                protective = decode_protection(dto, clock=self.clock).get_state(symbol)
+                                if protective is not None and symbol in state["portfolio"]["positions"]:
+                                    state["portfolio"]["positions"][symbol]["highest_price"] = str(protective.highest_price)
+                                provenance = {"market_as_of": request["market_as_of"], "source": request["source"],
+                                    "source_event_id": request["source_event_id"], "received_at": request["observed_at"]}
+                                if decision is not None:
+                                    state["outbox"][command_id] = {"kind": "protection_decision", "symbol": symbol,
+                                        "intent_id": request["intent_id"], "decision": list(decision), "status": "pending",
+                                        "observed_at": request["observed_at"], "provenance": provenance}
+                                capture_quote(before, state, symbol, price=price, market_data=request["market_data"],
+                                    intent_id=request["intent_id"], command_id=command_id, decision=decision,
+                                    version=candidate_version, now=now, provenance=provenance)
+                        if symbol in state.get("market_sources", {}):
+                            state["market_sources"][symbol]["invalidated_at_version"] = candidate_version
+                        del state["protection_quote_admissions"][command_id]
+                        return state
+                    try:
+                        version = await self.owner.mutate(command_id, reduce)
+                        if (candidate_version is None or version != candidate_version
+                                or self.owner.version != version or self.owner.published_version != version
+                                or self.engine._execution_version != version or not self.owner.healthy
+                                or command_id in self.owner.state.get("protection_quote_admissions", {})):
+                            raise ApplicationBlocked("새 보호 재개 완료를 확인할 수 없습니다")
+                    except BaseException:
+                        self._record_protection_failure(key, symbol=symbol, phase="resume")
+                        failure_recorded = True
+                        raise
+                    if disposition == "protection_admission_resumed" and generation is not None:
+                        unresolved = self._protection_failures.get(key)
+                        if unresolved is not None and unresolved["generation"] == generation:
+                            del self._protection_failures[key]
+                    self._protection_recovery_counts[disposition] = self._protection_recovery_counts.get(disposition, 0) + 1
+                    if disposition == "protection_admission_abandoned":
+                        logger.critical("보호 계산 재개 포기: 종목={} 접수={}", symbol, command_id)
+                    results.append((symbol, disposition, decision))
+                    return results
+            return results
+        # 각 접수의 저장 실패는 quote ID에 귀속한다. 그 밖 오류는 미귀속으로 남는다.
+        return await asyncio.shield(self._protection_task(resume, rejected=lambda: failure_recorded))
 
     async def repair_protection(self, operation_id: str, symbol: str, *, expected_version: int):
         if self._closing:
@@ -1338,13 +1619,7 @@ class KRExecutionRuntime:
                                    "ALREADY_APPLIED" if not applied_here and row["status"] == "APPLIED" else row["status"],
                                    row["reason"], row["committed_version"])
 
-        task = asyncio.create_task(apply_repair())
-        self._protection_tasks.add(task)
-        def completed(done):
-            self._protection_tasks.discard(done)
-            if done.cancelled() or done.exception() is not None:
-                self._protection_failed = True
-        task.add_done_callback(completed)
+        task = self._protection_task(apply_repair, failure_key=("repair", digest(request)), symbol=symbol, phase="repair")
         return await asyncio.shield(task)
 
     async def finalize_initial_r(self, operation_id: str, order_key: str, *, expected_version: int,
@@ -1489,8 +1764,23 @@ class KRExecutionRuntime:
             "protection_degraded": len(state.get("protection", {}).get("degraded", {})),
             "unapplied_inbox": sum(row.get("status") not in ("APPLIED", "SUPERSEDED")
                                     for row in state.get("inbox", {}).values()),
-            "outbox_pending": sum(type(row) is not dict or row.get("status") != "delivered"
+            "outbox_pending": sum(type(row) is not dict or (row.get("status") != "delivered"
+                                  and row.get("kind") != "protection_decision")
                                   for row in state.get("outbox", {}).values()),
+            "protection_decisions_pending": sum(type(row) is dict and row.get("kind") == "protection_decision"
+                and row.get("status") != "delivered" and "effect_source" not in row
+                for row in state.get("outbox", {}).values()),
+            "preemptive_decisions_pending": sum(type(row) is dict and row.get("kind") == "protection_decision"
+                and row.get("status") != "delivered" and row.get("effect_source") == "intraday_preemptive"
+                for row in state.get("outbox", {}).values()),
+            "unclassified_protection_decisions_pending": sum(type(row) is dict and row.get("kind") == "protection_decision"
+                and row.get("status") != "delivered" and "effect_source" in row
+                and row["effect_source"] != "intraday_preemptive" for row in state.get("outbox", {}).values()),
+            "protection_recovery": {**self._protection_recovery_counts,
+                "unresolved_failures": len(self._protection_failures) + int(self._protection_unattributed_failed),
+                "failures": [{"kind": key[0], "command_id": key[1], **row}
+                             for key, row in self._protection_failures.items()],
+                "unattributed_failure": self._protection_unattributed_failed},
             # 생산자의 관측 창. 이름 충돌(day_admission_closed)을 피해 한 단계 아래에 둔다.
             "reconciler": {
                 "reconciler_running": (self._reconciler_task is not None
