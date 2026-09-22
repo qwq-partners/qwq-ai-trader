@@ -553,10 +553,13 @@ def test_the_appliable_state_set_is_the_one_economics_enforces():
     assert set(ast.literal_eval(literal)) == set(APPLIABLE_ATTEMPT_STATES)
 
 
-def test_an_attempt_economics_can_never_apply_is_not_requeried_or_readmitted(tmp_path, monkeypatch):
-    """evidence_conflict 인 attempt 의 observed>applied 는 새 ingress 행을 만들지 않는다(P1).
+@pytest.mark.parametrize('flaw', ['evidence_conflict', 'unappliable_state'])
+def test_an_attempt_economics_can_never_apply_is_not_requeried_or_readmitted(tmp_path, monkeypatch, flaw):
+    """적용 불가 attempt 의 observed>applied 는 새 ingress 행을 만들지 않는다(P1).
 
     막지 않으면 주기마다 접수 → economics ValueError → FAILED 행이 무한히 쌓인다.
+    lifecycle 은 두 표시(evidence_conflict·blocked_unknown)를 함께 세우지만 economics 는
+    둘을 따로 거부하므로, 한쪽만 남기고 다른 쪽을 되돌려 술어의 두 반쪽을 각각 고정한다.
     """
     async def scenario():
         f = await producer(tmp_path, monkeypatch)
@@ -566,8 +569,18 @@ def test_an_attempt_economics_can_never_apply_is_not_requeried_or_readmitted(tmp
         # 같은 수량에 더 작은 누적대금 — lifecycle 이 evidence_conflict 로 굳힌다.
         await observe(runtime, f, 40, D('300000'), accepted=False)
         attempt = runtime.owner.state['attempts'][f['order'].attempt_id]
-        assert attempt['evidence_conflict'] is True
+        assert attempt['evidence_conflict'] is True and attempt['state'] == 'blocked_unknown'
         assert attempt['observed_quantity'] == 40 and attempt['applied_quantity'] == 0
+
+        def isolate(state):
+            row = state['attempts'][f['order'].attempt_id]
+            if flaw == 'evidence_conflict':
+                row['state'] = 'partial'   # 상태만 보면 적용 가능해 보이게 되돌린다
+            else:
+                row['evidence_conflict'] = False
+            return state
+
+        await runtime.owner.mutate('synthetic-isolate:' + flaw, isolate)
         applied = spy_apply(f)
         before = len(f['engine']._execution_ingress)
         collect, calls = collector(f, [[response([fill_row(f['ref'], quantity=100, filled=40,
@@ -580,6 +593,39 @@ def test_an_attempt_economics_can_never_apply_is_not_requeried_or_readmitted(tmp
             assert health['targets'] == 0
             assert health['skipped'] == {'unappliable_attempt': 1}
             assert health['apply_outcomes'] == {}
+        finally:
+            await teardown(f, pump)
+    asyncio.run(scenario())
+
+
+def test_an_inbox_row_whose_owning_attempt_is_unappliable_is_not_readmitted(tmp_path, monkeypatch):
+    """B1 도 같은 술어를 쓴다 — 행의 order_key 로 소유 attempt 를 찾아서(P1).
+
+    chain 이 아니라 **적용 가능성**만이 B1 을 막는다. 여기서 막지 않으면 잔존 행이
+    주기마다 재접수돼 FAILED ingress 행만 늘어난다.
+    """
+    async def scenario():
+        f = await producer(tmp_path, monkeypatch)
+        pump = start_pump(f['engine'])
+        runtime, ref = f['runtime'], f['ref']
+        await observe(runtime, f, 40, D('400000'))
+        observation = FillObservation(ref.account_scope, 'KR', ref.order_date, 'KRX', ref.order_no,
+                                      SYMBOL, 'BUY', 40, D('400000'), org_no=ref.org_no,
+                                      metadata={'entry_signal_score': 80.0})
+        assert (await runtime.owner.receive(
+            observation, ingress_context=runtime.ingress_context(1))).status == 'RECEIVED'
+        # 행이 남은 뒤에 소유 attempt 가 conflict 로 굳는다.
+        await observe(runtime, f, 40, D('300000'), accepted=False)
+        applied = spy_apply(f)
+        before = len(f['engine']._execution_ingress)
+        collect, calls = collector(f, [[response([other_row(ref)])]])
+        try:
+            assert await runtime.reconcile_once(collect) is False
+            assert calls == [] and applied == []
+            assert len(f['engine']._execution_ingress) == before
+            assert runtime.owner.state['inbox'][observation.observation_id]['status'] == 'RECEIVED'
+            # B1(잔존 행)과 B2(재구성)가 같은 attempt 를 각각 한 번씩 거른다.
+            assert runtime.health()['reconciler']['skipped'] == {'unappliable_attempt': 2}
         finally:
             await teardown(f, pump)
     asyncio.run(scenario())
