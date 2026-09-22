@@ -1,0 +1,66 @@
+# P0-2 — attach 의 체결·종결 증거 생산자 (Plan, 2026-09-22)
+
+> **상태: 설계 초안 BLOCK → 개정 대기.** 사용자 결정 "엔진 전체를 옮기도록 하자"(2026-09-22)에 따른 attach 전환의 두 번째 전제 단계. 설치 차단 사유 **18**(attach 에 체결·종결 증거 생산자가 0건)과 **3**(fill projection)을 닫는다. 상위 결정은 `2026-09-22-kis-judgement-decisions.md` §5.
+
+## 0. 과정과 판정
+
+- Plan 워크플로(읽기 전용·pytest 0·제품 0줄): 조사 2(engine 부품의 실제 계약 / legacy 체결 경로와 attach 거부 지점, 요청 opus/high) → 설계(요청 opus/high) → 적대적 심사 2관점(요청 opus/xhigh).
+- **심사 2건이 API 서버 오류(529 → 재시도 500)로 두 번 연속 실패**했고 대조 호출(opus, 한 줄 응답)도 500 이었다 — 공급자 장애. 재시도 한도(1회)를 썼으므로 정책대로 **교차 공급자로 대체: 심사 ① 을 Codex(요청 gpt-6-astra/xhigh)가 수행**했다. 심사 ②(코드 실현 가능성)는 초안이 BLOCK 이라 **개정본에 대해 실시**한다.
+- **심사 ① 판정: BLOCK — must-fix 10 · 인용 오류 11 · legacy 보다 약한 지점 10.** 아래 §3.
+
+## 1. 조사가 확정한 사실 (코드 기준, 줄은 HEAD `814a746`)
+
+**engine 부품(전부 제품 호출자 0건)**
+- 수집기 `queries.py::LegacyExecutionQueries.daily` — `TTTC0081R`, `PDNO=""`(계좌 전체), `CCLD_DVSN="00"`, `INQR_DVSN="01"`, `EXCG_ID_DVSN_CD=scope.exchange_scope`(기본 `"KRX"`). 출력은 `QueryCollection(pages: tuple[QueryPage])` 이고 파서가 받는 `EvidencePage` 와 **필드명·타입이 다르며 어댑터가 없다.** 종료는 응답 헤더 `tr_cont` 만. `finality_supported`/`trading_permission` 은 하드코딩 False. 리미터·환경 검사는 브로커 어댑터(`kis_kr.get_execution_daily`, `env != "prod"` 면 ValueError)에 있다.
+- 파서 `evidence.py::parse_order_evidence` — 반환 상태는 `FINAL_FILLED` 아니면 `RECONCILING` 둘뿐(FINAL_CANCELLED 불가). supported 는 13 AND: `tr_id == "TTTC0081R"`·`session == "regular"`·`query_kind == "all"`·`ref.exchange == "KRX"`·`not chain`·수량 4조건 등. 행 매칭은 `(ord_dt, odno, ord_gno_brno, orgn_odno, excg_id_dvsn_cd) == ref` — **행의 거래소가 `ref.exchange` 와 문자 그대로 같아야** 하고 attach 의 `OrderRef` 는 `commands.py:506-508` 에서 `'KRX'` 를 **하드코딩**한다. **수집기와 파서의 어휘가 네 곳 어긋난다**(tr_id 는 같으나 `query_kind` "daily"↔"all", `query_scope` 키 이름, session 부재, 거래소 라벨).
+- `lifecycle.reconcile(attempt_id, evidence, *, applied_quantity=None)` — `owner.mutate` 로 직렬화. 거부(조용히 False)·충돌(`evidence_conflict` 영구 래치)·정상 전이. `FillObservation` 을 만들지 않는다(참조 0건).
+- 포트폴리오 반영 입구는 **하나**: `engine.apply_execution_observation(FillObservation)` → durable 접수(inbox) → `EXECUTION_FILL` 이벤트 → `runtime.apply_observation` → `owner.apply`(cursor 대비 `FillDelta`, 충돌이면 `NEEDS_RECONCILIATION`) → `_reduce`(economics/protection/…) → `_publish`(live `engine.portfolio`·ExitManager·RiskManager 를 **직접 대입**). `FillObservation` 생산자는 저장 행 재구성(replay) 뿐.
+- `KRExecutionRuntime` 에는 **주기 task 가 하나도 없다** — 기존 task 는 전부 명령 1건당 단발(`_day_tasks` 예외 회수만 / `_protection_tasks` 는 실패 시 `_protection_failed` **영구 래치**). `shutdown()` 은 fixed-point drain.
+
+**legacy 경로와 attach 의 단절**
+- `run_fill_check`: 간격 `2 if open_orders else 15`(docstring 의 "2초/5초"는 코드와 다르다). `get_open_orders()` 는 **인메모리 캐시**(`_pending_orders`)라 attach(`submit_order` 미사용)에서는 항상 빈 리스트 → `check_fills()` 미호출. 두 번째 겹: 호출돼도 `_order_id_to_kis_no` 매칭이 전부 실패.
+- 운영 조회 파라미터: `TTTC8001R`, **`CCLD_DVSN="01"`(체결만)**, `INQR_DVSN="00"`, **`EXCG_ID_DVSN_CD="ALL"`**, 읽는 키는 `odno`·`tot_ccld_qty`·`avg_prvs` 셋뿐. 원장 TR 예산: 8434R 이 하루 ≈1,100회, **체결 TR(8001R/0081R)은 현재 0회 — 예산이 통째로 비어 있다**(리미터 계좌당 1.05초).
+- attach 의 거부 지점: `engine.py:541-547`(legacy FILL/ORDER/SIGNAL 거부) · `update_position`/`update_position_price`/`on_fill` 의 `ApplicationBlocked`.
+- `KIS_TR_SET` 스위치는 **engine 브랜치에 없다**(main 의 `_TR_SETS` — 이식 전). 운영 기본 legacy 에서 수집기(신 TR 전용)와 제품의 TR 이 어긋난다.
+
+## 2. 설계 초안 E1~E10 (요청 opus/high — 요약, BLOCK 됨)
+
+E1 runtime 소유 단일 주기 task(`_day_tasks` 관례, `_protection_failed` 래치 불사용, shutdown 에서 cancel+drain) · E2 미해결 attempt 있을 때만 폴링, 3초 → 전이 없으면 2배 → 60초 상한 · E3 한 주기에 `reconcile` → `apply_execution_observation` 순서, 같은 수치 · E4 TR·범위는 부품 현행(`TTTC0081R`+KRX) 그대로, 파서 조건 불변 · E5 어댑터가 어휘 번역(`daily`→`all`, session 은 `request_binding['session']` 에서) · E6 `complete=False` 면 파서 미호출 · E7 `QueryPage`→`EvidencePage` 변환 · E8 `FillObservation` 은 evidence 에서 기계적으로(수수료 0·metadata 빈) · E9 판단 복제 0 · E10 factory 의 `install_gateway` 다음 줄에서 기동 + `execution_query_environment_required` 거부. 단계: 부품 3개 → runtime task → factory 배선.
+
+## 3. 심사 ① (Codex gpt-6-astra/xhigh) — BLOCK, must-fix 10
+
+| # | 결정 | 문제(요약) | 요구 변경 |
+|---|---|---|---|
+| 1 | E3 | **40/100 부분 체결 뒤 보호 SELL 이 막힌다** — `_evaluate` 가 같은 종목의 미종결 submit 이 있으면 방향과 무관하게 `unresolved_symbol_attempt` 로 거부(`commands.py:331`). 설계의 "부분 체결 뒤 보호 SELL 가능"은 코드와 반대 | 미체결 BUY 와 **검증된 보유분의 보호**를 분리 — 보유 40주 SELL 경로와 잔여 60주 추가 체결까지 보호 |
+| 2 | E2·E3 | `reconcile` 성공 → apply 전 중단이면 재시작 뒤 포지션 0 이고 다음 조회가 실패하면 저장된 40주도 영영 안 적용. 더 나쁜 경로: 40주 inbox 접수 → 적용 FAILED → 다음 조회 100주 적용 성공 → 남은 40주 inbox·실패 ingress 가 **모든 명령을 막는다** | 조회와 독립된 **저장 관측 재처리** · 이전 누적 관측의 supersede·ingress 정리 · FAILED/NEEDS_RECONCILIATION/PARKED receipt 검사 |
+| 3 | E3·E10 | P0-3 이전 활성화는 30초 sync 와 owner 게시가 보유·보호 상태를 번갈아 지운다 | P0-3 완료를 **실제 활성화 조건**으로 |
+| 4 | E3·E4·E9 | chain(자식행)에서 "종결 포기"만 하고 **수량은 적용**한다 — "자식행이 보이면 수량 해석 포기" 전제 위반 | chain 관측에서는 새 수량을 적용하지 않는다(이미 적용분은 유지) |
+| 5 | E4~E7 | 계좌가 TTTC0081R 을 거절하거나 필드 하나가 없으면 **조용히 무력** — 특히 파서가 계좌 전체 행을 먼저 파싱하므로 **무관한 주문 한 행의 결측이 우리 주문까지 무력화** | 활성화 전 계좌/TR/스키마/세션 지원 검증 · 마지막 유효 관측·미적용 시간·skip 원인을 health 에 노출 · 매칭 행만 엄격 파싱 |
+| 6 | E4 | 주문이 NXT/SOR 로 체결되면 KRX 조회에 안 보이거나 `excg_id_dvsn_cd` 가 달라 매칭 실패 → 실제 노출 40주, owner 0주 | 지원 거래소 범위를 주문 허용 조건과 연결. `ALL` 을 `KRX` 로 라벨링하는 우회 금지 |
+| 7 | E1 | 수집기 사망이 신규 노출을 막지 않는다 — 다른 종목 BUY 는 잔여 자금으로 계속 나간다 | 수집기 정상 동작을 **신규 BUY 의 조건**으로(보호 SELL 은 막지 않는다) |
+| 8 | E2 | 60초는 손절 지연 상한이 아니다 — 미해결 0건 동안에도 delay 가 60초까지 커지고, 10페이지 × 15초 timeout 이 더해져 **≈210초**, 유한한 최악 상한 없음 | 새 attempt(ACK)에 **즉시 깨움** · 경제적 진전과 단순 accept 구분 · attempt 별 try/except |
+| 9 | E8 | `exit_type` 누락 → 당일 손절 종목이 재매수 후보가 된다(legacy 는 `record_exit` + 스크리닝 제외). `entry_signal_score` 0 → 만석 교체의 `+5점` 검사가 뚫린다(**돈 경로다**) | 사유·점수를 브로커 응답이 아니라 **주문 intent/binding 에서** 잇는다 |
+| 10 | E2·E5·E10 | 15:19 관측 저장 → 적용 전 중단 → 다음 날 재시작: "오늘"만 조회하면 전일 주문은 provenance 에서 거부, admission 도 닫힌다 | 미해결 주문일을 포함하는 조회와 전일 관측 적용 절차 |
+
+**인용 오류(설계 초안이 틀린 것, 코드로 확인됨):** `unresolved_reason` 술어를 "그대로" 쓴다는 것(원 함수는 inbox·자식 명령·예약·cursor 까지 본다) · chain 이면 60초로 수렴한다는 예산(같은 수량·금액도 reconcile 은 True 를 돌려줘 3초로 복귀) · 페이지 중복만으로 영구 래치가 선다는 인과(실제 래치 반례는 같은 누적 수량의 금액이 변할 때) · `not_found` 가 상태 불변이라는 것(`owner.mutate` 는 version·live 게시를 전진) · 진입 점수가 "돈 경로 아님"이라는 것.
+
+**legacy 보다 약한 지점:** 수집기 사망 중 신규 노출 허용(E1) · 유휴 backoff 의 첫 체결 지연(E2) · 관측/적용 분리 실패의 전 계좌 정지(E3) · ALL→KRX 축소와 미검증 TR·필드 계약(E4) · session 없는 attempt 영구 skip(E5) · 뒤 페이지 실패가 앞 페이지 체결까지 버림(E6) · 무관한 행 결측의 전면 무력화(E7) · 손절 재진입·교체 오판(E8) · 영구 충돌 제외의 광역 영향(E9) · sync 공존 미해결(E10).
+
+## 4. coordinator 의 개정 방향 (개정 설계의 입력 — 확정이 아니다)
+
+1. **must-fix 1 → P0-2 의 인수 조건으로 당긴다.** D4 의 "미해결 BUY 가 같은 종목의 보호 SELL 을 막지 않는다"는 원래 P2 였으나, 생산자가 생기는 P0-2 가 곧 그 전제다. 인수: 40/100 체결 뒤 **검증된 보유 40주의 SELL 이 owner 게이트를 통과**하고, 60주 예약은 그대로다.
+2. **must-fix 2 → 생산자는 "이번 조회"가 아니라 "저장 상태"에서 적용을 유도한다.** 주기마다 (a) 조회가 성공했으면 reconcile, (b) 조회와 무관하게 `observed_quantity > applied_quantity` 인 attempt 전부에 대해 apply 를 시도한다. 누적 관측의 supersede(같은 attempt 의 이전 inbox 행)와 FAILED/PARKED receipt 처리는 `application.py` 의 실제 계약을 읽고 정한다 — 없으면 이 단계에서 만들지 않고 명명된 거부로 남긴다.
+3. **must-fix 4 → 파서가 chain 을 evidence 에 노출**하고 생산자는 chain 이면 apply 를 건너뛴다.
+4. **must-fix 5·7 → health 와 게이트.** `reconciler` 의 마지막 유효 관측 시각·미적용 attempt 수·skip 사유별 건수를 `health()` 에 노출. `_evaluate` 에 **BUY 한정** `reconciler_unavailable` 거부(task 죽음·N주기 연속 조회 실패). 파싱은 **매칭 후보 행(odno 일치)만 엄격**하게, chain 스캔은 `orgn_odno` 만 읽는다.
+5. **must-fix 6 → 거래소를 하드코딩하지 않는다.** 조회는 운영과 같은 **`ALL`**, 매칭은 `(ord_dt, odno, ord_gno_brno)` 로 하고 `ref.exchange` 는 **행에서 읽어 채운다**(ACK 에는 거래소가 없다). supported 는 `excg_id_dvsn_cd` 가 허용 집합(`{"KRX"}` — Q27~29 확정 전) 안일 때만. chain 스캔도 ALL 범위.
+6. **must-fix 8 → ACK 즉시 깨움.** `commands` 의 dispatch 가 ACK 를 받으면 runtime 의 `asyncio.Event` 를 set; 미해결 0건이면 sleep 없이 대기(조회 0회). backoff 는 "경제적 진전 없음"(observed 불변)에만. attempt 별 try/except.
+7. **must-fix 9 → `request_binding` 에 `exit_type`·`entry_signal_score`·`strategy` 를 싣고** observation metadata 는 거기서만 만든다(브로커 응답에서 추측 0).
+8. **must-fix 10 → 조회 구간 = [미해결 attempt 의 최소 `order_date`, 오늘].** 같은 프로세스 안에서 일자 전환 전이면 전일 체결도 적용된다. **재시작을 넘어가는 복구는 P3(차가운 시작)의 범위**로 명시하고, 설치기의 기존 거부(`startup_unresolved_prepared_attempt`·일자 전환)가 그 경계를 지킨다.
+9. must-fix 3 → 이미 확정(P0-3 이 활성화 조건). 설치기에 `legacy_portfolio_writer_present` 류 거부를 P0-3 에서 넣는다.
+10. **TR 결정(E4 재검토):** 운영 기본이 legacy 인 한 신 TR 전용 수집기는 어긋난다. main 의 `_TR_SETS` 를 engine 에 들이는 것이 선행이고, 수집기·파서는 **그 출처의 daily TR 을 읽되 종결 조건은 TR 값이 아니라 "응답 스키마 검증 통과"로** 건다. 이는 "tr_id 조건을 넓히는 것이 유일하게 설치 차단 사유를 코드에서 지우는 변경"이라는 초안의 우려를 **스키마 검증 + D10 기록기 확인**으로 대신한다. 이 항목은 개정 설계에서 다시 심사받는다.
+
+## 5. 다음
+
+- opus 가 복구되면 **개정 설계(위 §4 를 입력으로) → 심사 ① 재실시(돈·상태 손실) + 심사 ②(실현 가능성)**. 설계자와 심사자는 다른 실행·가능하면 다른 공급자.
+- 구현은 개정 설계가 PROCEED 를 받은 뒤. 첫 단계는 제품 호출자 0건인 부품(파서의 chain 노출·어댑터·`request_binding` 확장)부터.
+- **바뀌지 않는 것:** `trading_ready` 상수 False · 제품 호출자 0건 · MODIFY 미지원 · 운영(legacy) 무변경.
