@@ -745,6 +745,34 @@ P1 이 여는 게이트는 **넷**이다. 각각 막던 결함을 먼저 이름 
 
 ## 6. Do·See (착수 시 채운다)
 
+### 6-1. S1 사전 충돌의 coordinator 처분 (2026-09-23, 구현 전)
+
+사용자의 전체 진행 지시에 따라 아래 최소 보완으로 구현한다. 이 표는 S1의 충돌 지점에 한해 §3/인계 §5를 정정한다. 제품 범위는 runtime.py, 새 durable 스키마 0, 미설치 유지다.
+
+| 지적 | 확정 처분 | 남는 대가/검증 |
+|---|---|---|
+| P1-A source/접수 원자성 | A/B/C 모두 정확한 admission ID·digest·payload 재검증 뒤, 기존 source의 무효화와 대상 admission 제거를 같은 transaction에서 한다. B만 보호 결정/outbox를 만든다. 없는 source 생성·complete_source·가격 view 되감기 금지 | 기존 완료 WS source 위 후속 admission을 세 갈래로 처리하고 publish/restore·BUY 거부를 인수 |
+| P1-B 전역 래치 | 실패를 quote command ID 또는 repair request digest에 귀속하는 **메모리 기록**을 추가한다. 성공한 B가 바로 그 quote 실패만 해소한다. 다른 종목/다른 command·repair·미귀속 bool·A/C 처분은 해소 증거가 아니다 | **차단23은 일부 잔존**: A/C 뒤 래치, repair-only, 이미 commit됐으나 결과/게시를 잃어 행이 없는 실패. 자동 해제/새 증거를 만들지 않음 |
+| P1-C 교차 창 | S1 해제의 제품 호출자는 S2의 단일 생산자 sweep뿐. S2 공개 sweep과 on_market_data는 같은 lock을 shield된 내부 operation이 소유하고 quote→await _submit_signal 완료까지 유지. 내부 호출은 lock 재진입하지 않음. S1은 진행 중 보호 task가 있으면 해제하지 않음 | runtime task 가드만으로 quote 반환→prepare 창이 보호된다고 주장하지 않음. S2에서 외부 caller 취소·경합·보류 결정의 원 intent까지 인수 |
+| P1-D 실패 분류 | C는 검증된 admission의 **순수 보호 계산 구간**에서 생긴 결정적 오류만 격리한다. lookup/encode/commit/publish·증거 불일치·취소는 성공 처분 없이 장벽 보존. 결과 불명은 실제 저장 여부를 지어내지 않음 | C가 처음 만든 degraded 상태는 기존 fill anchor가 없어 repair가 막힐 수 있다. **자동 repair 가능으로 보고하지 않고 별도 증거 계약으로 이월** |
+| P2-E 성공 판정 | 해당 invocation의 reducer 실행·후보 version·mutate 반환 version·정상 게시·admission 완료 후조건을 확인한 새 B commit만 같은 실패 generation을 해소. 내부 task except에서 실패를 먼저 기록하고 완료 callback은 누락 보강만 | WS 완료 중복·commit-ID 중복 반환·뒤늦은 callback이 다른 실패를 지우거나 재래치하지 않는 인수 |
+| P1-F 여러 종목 재개의 부분 성공 인계 | **resume 한 호출은 최대 한 admission만 처리해 기존 list 모양으로 반환한다.** 앞 종목 B commit 뒤 뒤 종목 오류로 반환 전체가 유실되는 batch 의미를 폐기한다. S2의 단일 sweep은 각 반환을 원 intent와 함께 보관/소비한 다음에만 다음 admission 재개를 호출한다 | 한 호출로 전체 행이 끝난다는 가정은 금지. 두 행 중 첫 반환 성공·다음 호출 실패에서 원 결정/outbox·다른 실패를 보존하는 인수. 새 durable 행/API 없음. 순수 오류·결과 불명을 삼키거나 미완 행을 건너뛰지 않음 |
+| P1-G 체결 관측→경제 적용 창 | H7의 **terminal + applied 합계0만으로는 해제하지 않는다. 관측 체결도 0이어야 한다.** 실제 FINAL_FILLED/observed>0/applied0은 미적용 체결이지 미체결 증거가 아니다. pending owner를 보존해 원 체결의 보호 단계 적용까지 연결한다 | 독립 반례: 보유100→first10 결정→실 reconcile FINAL_FILLED/observed10/applied0→기존 해제 True→실큐 체결 적용 뒤90주/stage none. 해제하지 않은 control은 first. 같은 실경로 RED→수정 및 이 guard 제거 변이 인수. 경제 reducer/게이트 범위는 바꾸지 않음 |
+
+R9는 `_protection_failed=True`만 합성해 해제를 기대하지 않고 실제 quote 실패를 유발해 귀속을 만든다. 기존 미해결 admission/뒤 가격 덮어쓰기 금지와 일자 울타리 시험은 유지한다. H7은 누락된 attempt·다른 symbol/side/intent·비정형 수량을 해제 근거로 쓰지 않고, current_stage·고점·포지션·outbox를 바꾸지 않는다. H8의 stale 기준은 60초(기존 REST 20초의 세 주기 여유, 시장 원시각을 합성하지 않음)와 기존 floor를 병행한다. malformed/미래/비일관 시각은 임의 폐기하지 않고 거부한다.
+
+health는 quote/intraday 결정을 분리하고 unknown effect_source는 quote로 가장하지 않는 미분류 계수로 관측한다. delivered는 제외, 비정형 행은 기존 미배달 계수에 남긴다. 결정 감사 행을 실제 경제 outbox 미배달로 합치지 않는다. **S1 완료가 §2-8의 차단23 전체 닫힘을 뜻하지 않는다.**
+
+- **실행 재개(2026-09-23):** 사용자가 "전체 진행해"로 P1 전체 개발·검증을 지시했다. S1·S1′ 착수 계획 확인 완료로 진행한다. 시장가/closing 등 세부 정책과 외부 Claude 예산은 별도 비동기 확인 중이며, 미답인 동안 S2 이후 게이트와 외부 호출 보류는 유지한다. S1′은 기준 `6ee6e20`의 격리 worktree에서 Astra/high가 구현, S1 계약은 별도 Astra/high의 읽기 전용 대조와 coordinator 처분으로 보완한다. 차단 후보24~27을 인계 표에 등록했다. main·운영 전환은 이번 범위 밖.
+
 - **Codex 사전 검토(2026-09-22, 제품 기준 `dff0e25`):** [인계 대조·계약 충돌 처분 제안](../../reviews/p1-handoff-preflight-2026-09-22.md). **Do 미착수.** S1 H8 A/C의 source 무효화 누락, 폐기 뒤 래치와 일자 admission의 상호 잠금, H7 교차 창 인수 모순, 계산 오류와 저장/게시 실패의 구분, 중복 성공과 새 commit 구분을 정적으로 확인했다. 기존 §3의 확정 인터페이스를 조용히 변경하지 않으며, 이 다섯 경계의 처분 전 S1 구현은 보류한다. S1′은 독립 준비 가능하나 착수 계획 확인 전이다. 사용자 4-1~4-4·4-7 및 외부 리뷰 예산 미답, 운영 변경 없음. 아래 기존 착수 게이트와 공급자 치환 처분은 유지한다.
 
 - **인계(2026-09-22 밤):** P1 Do·See 부터는 Codex 세션이 수행한다 — 인계 프롬프트 `docs/operations/codex-handoff-p1-2026-09-22.md`(적대적 검토 2관점 반영). coordinator(Claude) 처분 2건을 여기 기록한다: ① **착수 게이트 완화** — §5 제목의 "§4-1 승인 뒤 착수"를 "4-1 미답이면 S2 부터 착수 금지, S1·S1' 은 RED·GREEN·통합까지 허용"으로(둘은 제품 호출자 0건의 부품이고 차단 23·25 를 위해 4-1 과 무관하게 필요) ② **모델 배정의 공급자 치환** — 구현·재현은 `gpt-6-astra`(high/xhigh), 교차 공급자 리뷰는 `claude-opus-5`/xhigh(`scripts/dev/claude_review.py`); actual model 미확인 리뷰는 교차 리뷰로 세지 않고 live 단계(S3·S4) 통합을 보류한다.
+
+### 6-2. S1·S1′ 구현과 독립 See (2026-09-23)
+
+- **Plan/Do:** `6ee6e20` 같은 base에서 runtime·gateway를 격리 병렬 구현했다. S1 `a3f522b`→관측체결 guard `af6c5e3`, S1′ `8b2b7fa`→캐시 spy `7a8dff0`. 제품2파일·신규3시험파일67개. 기존 실패접수·가격 덮어쓰기·day fence 회귀와 live 파일 변경0. §6-1의 처분이 기존 충돌 계약을 정정한다.
+- **See:** 요청 Astra/high 구현·Astra/xhigh 별도 독립 재현. 실제 모델/effort는 metadata 미노출로 미검증이다. S1′은 기존3+추가3 변이 중 eager cache 읽기 변이가 생존해 spy를 보강하고 한정 승인. S1은 기존5+추가3 변이를 모두 탐지했으나 실제 관측→경제 적용 창의 pending 해제 반례를 찾아 P1-G로 수정했다. 수정 후 같은 독립 대조 GREEN·관측 guard 제거 KILL·한정 승인. 관련 S1 243/S1′42 GREEN. **UTC/KST 각 5183 passed·기존 2 xfailed·경고4·격리 위반0, 종료0. 개발 통합 `77a3641`.**
+- **설계와 다르게 한 것:** 실패의 command/generation 귀속, A/C 원자적 source 무효화, C를 순수 update_price 오류로 제한, 원 SQL 접수 receipt/version 결합, 한 재개 호출 최대1행, 관측 체결도0인 pending만 해제. 모두 위 처분/실제 반례에 근거하고 새 durable schema·게이트 범위·경제 reducer 변경은 없다.
+- **축소 보증:** 외부 Claude 예산 미답으로 교차 공급자 리뷰는 미실행이다. 인계 §10의 부품 단계 허용만 적용했으며 live S3/S4 게이트는 유지한다. 계산 흐름 복제는 비차단 P3, 정상 quote와 재개 B의 6개 parity만 검증했다. 별도 resume-vs-new-quote 경합 스트레스·partial-cancelled 미적용 창의 독립 표본·S2의 전체 직렬화 창은 미검증이다.
+- 상세 실행 명령·처분·잔여: [P1 부품 보고서](../../reviews/p1-components-2026-09-23.md). main·운영·주문·설정 무변경, S2 이후 미착수다.

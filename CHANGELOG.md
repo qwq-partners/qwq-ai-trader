@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-23 — feat(safety): P1 S1·S1′ 보호 복구·episode intent 부품 (운영 미설치)
+
+- 제품 변경은 `runtime.py`·`gateway.py` 두 곳이다. 보호 접수의 A/B/C 처분과 기존 source 무효화를 원자화하고, 실제 새 B commit/게시만 해당 실패 command/generation을 해소한다. SQL 원 접수 영수증과 payload/view를 결합하며, 한 호출에 한 행만 반환해 앞 결정의 유실을 막는다.
+- pending 해제에는 terminal뿐 아니라 **관측·적용 체결 모두0** 증거를 요구한다. 독립 실제 대조가 FINAL_FILLED/observed10/applied0에서 해제하면 체결 후 first 단계가 none으로 남는 결함을 발견해 수정했다.
+- 보호 SELL은 원 episode ID를 builder 전에 전달하고 자동 intent 캐시는 읽거나 쓰지 않는다. BUY·비태그 SELL은 기존 경로를 유지한다. 신규 시험67개, 기존 회귀 파일 무수정.
+- Plan→Do→See: 격리 병렬 구현 Astra/high, 별도 Astra/xhigh 재현. S1′ 시험 공백1·S1 제품 결함1 수정 후 각각 한정 승인. 실제 모델/effort는 metadata 미노출로 미검증, 교차 공급자 리뷰는 예산 미답으로 미실행(부품 축소 보증만 허용).
+- **UTC/KST 각 5183 passed·기존 2 xfailed·경고4·격리 위반0, 종료0. 개발 통합 `77a3641`.** [결과·검증·잔여](docs/reviews/p1-components-2026-09-23.md). 차단23 일부·S2 생산자/S3 engine/S4 factory/S5·운영 전환은 미완. 설정·주문·배포·재시작 변경 없음.
+
 ## 2026-09-22 — docs: P1 인계 사전 검토와 계약 충돌 기록
 
 - `dff0e25`의 코드와 인계 명세를 병렬 정적 검토하고 coordinator가 재확인했다. S1의 접수 폐기/source 무효화·래치/일자 복구·교차 창·저장 오류·중복 성공 처리의 충돌 5건을 기록했다.

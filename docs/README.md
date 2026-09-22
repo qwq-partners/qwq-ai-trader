@@ -41,6 +41,7 @@
 
 ### Reviews (리뷰)
 
+- [P1 S1·S1′ 보호 기반 부품](reviews/p1-components-2026-09-23.md) — Plan→Do→See, 신규67·독립 재현의 시험공백/실제 익절 단계 유실 수정·부품 한정 승인, UTC/KST 각 5183 passed·기존 2 xfailed·격리 위반0, 개발 통합 `77a3641`. S2 정책/예산 미답·전체 P1/운영 미완
 - [P1 인계 사전 검토](reviews/p1-handoff-preflight-2026-09-22.md) — `dff0e25` 코드 대조·S1 계약 충돌 5건·S1′ 독립 착수 범위·사용자 결정/예산 대기. 정적 검토이며 Do·신규 시험·운영 변경 없음
 - [장전 진단·소비 경로 C4](reviews/morning-regime-owner-2026-09-20.md) — 실제 caller·schema 활성 경합·게시 읽기 보완, 신규53·UTC/KST4403통과·native/Opus 한정 승인; 전체 writer/운영 미완
 - [정오·JSON LLM·보호 재생 C3](reviews/noon-regime-protection-replay-2026-09-20.md) — 독립 결함·원시각/결측 보완, 당시 신규79·UTC/KST4350통과·네이티브/Opus 한정 승인; C4는 별도 후속 보고, 전체 writer/운영 미완
@@ -48,10 +49,10 @@
 - [입력 소비 권한 후속](reviews/source-authority-followup-2026-09-20.md) — N1·C2b 지속 전파의 실제 Opus 한정 승인, 리뷰 I1/I2 보완·최종UTC/KST4124통과; 실제2분·정오/LLM/replay는 후속
 - [Opus 리뷰 실행기 진단·수정](reviews/opus-review-runner-2026-09-20.md) — 360초 로컬 종료 원인·동일 입력692초 정상 완료. 실행기 한정 재리뷰 승인·신규53회귀·전체 KST/UTC4021통과·실제 smoke 확인; 엔진 Opus 수정 요청은 별도 후속
 - [C2a Opus 후속 수정·인수](reviews/policy-generation-remediation-2026-09-20.md) — B1/B2/B4 재현·수정, 실제 Opus 한정 승인·UTC/KST 각각4053통과. 다음은 retained source 요청 경계와 지속 소비 권한; 운영 전환 승인은 아님
-- [**B2/B3 단계 원장 (현재 진행 정본)**](reviews/b2b3-stage-ledger-2026-09-20.md) — request-bound qualification·최종 사이징 S1~S5 의 단계별 Plan/Do/See·재현 명령·리뷰 판정·변이 결과·이어받는 체크리스트·잔여·다음 진입 조건. 리뷰·인계는 여기부터
+- [B2/B3 이후 단계 원장](reviews/b2b3-stage-ledger-2026-09-20.md) — request-bound qualification·최종 사이징 및 후속 단계의 Plan/Do/See·재현·리뷰 이력. 현재 P1 인계는 위 부품 보고서와 아래 P1 계획 §6-1 이후부터 읽고, 이 원장은 단계별 근거를 대조할 때 사용
 - [B2/B3 실행 계획·계약](superpowers/plans/2026-09-20-b2b3-request-bound-qualification.md) — immutable decision facts 계약(현재 경제는 snapshot, 판단 시점 값은 facts), 단계 S1~S5·파일 소유권·인수 조건·S1 리뷰 처분·S3 사전 확인
-- [**Codex 인계 프롬프트 — P1 Do·See 부터** (2026-09-22)](operations/codex-handoff-p1-2026-09-22.md) — Codex 세션의 첫 메시지로 붙여 넣는 자기완결 인계: 역할·권한 경계, 시작 상태(HEAD `c521c8d`), 사용자 결정 표(4-1 시장가 전환 미답이면 S2 부터 착수 금지), 읽을 문서 순서, 단계별 고정 인터페이스(S1 runtime·S1' gateway·S2 생산자·S3 engine·S4 factory·S5 주석), 시험 명령·호스트 제약, 절대 금지, 마감 산출물, main 반영 절차의 경계, 모델·effort 표. 적대적 검토 2관점(자기완결성 11건·권한 경계 7건) 반영
-- [P1 — 보호 SELL 의 main 동등 (Plan, 2026-09-22 — **S2부터 §4-1 결정 필요, 현재 Do 미착수**)](superpowers/plans/2026-09-22-p1-protective-sell-parity.md) — 조사 3(main 기준선 체크리스트·owner 부품·생산자 입력) · 설계 초안(**보호 SELL 을 `regular` 세션에서 시장가로 내서 취소·3분류·폴백을 작성하지 않는다**, MARKET_DATA 핸들러 생산자·에피소드 intent·pending 해제·고아 행 재개) · 심사 2관점 REVISE ×2(must-fix 16) · **§3 처분** · **§4 사용자 결정 7건** · §5 단계 S1·S1′·S2·S3·S4·S5 · 새 차단 사유 후보 24~27 · **§6 사전 검토: S1 계약 보완·S1′ 착수 계획 확인 대기**
+- [Codex P1 인계 프롬프트 (09-23 재개 위치 갱신)](operations/codex-handoff-p1-2026-09-22.md) — S1·S1′ 통합 `77a3641` 이후 S2부터 재개. 첫머리 갱신과 P1 계획 §6-1 이후를 우선하며, 아래 09-22 시작 상태/제품 트리 동일성 검사는 과거 기록이다. 정책4-1 미답이면 S2 착수 금지, 외부 리뷰 예산·운영 경계 유지. 역할·인수·시험·호스트 제약은 후속 정정을 반영해 사용
+- [P1 — 보호 SELL 의 main 동등 (Plan→Do→See)](superpowers/plans/2026-09-22-p1-protective-sell-parity.md) — §3 최초 처분·§4 사용자 결정·§5 단계·**§6-1 이후 현재 정본**. S1·S1′ 부품 한정 승인/전체 검증 통과·개발 통합, S2부터 §4-1 결정 필요. 관측 체결과 경제 적용 사이의 pending 보존·한 행씩 복구 인계로 원 계약 보완. 차단23 일부 및 24~27 유지
 - [P0-4 — 래치 설정 조건 축소·예약/세션 계약 고정·stale pending attach 가드 (Plan·Do·See, 2026-09-22)](superpowers/plans/2026-09-22-p0-4-latch-reservation-session-stale.md) — 조사 사실 · 설계 초안 · 심사 2관점 REVISE ×2(**래치 재개 = 게이트 개방** → 폐기) · 처분 §3(S-A 는 admit 사전 거부 면제만·차단 22/23) · **§5 Do·See**(구현 3 ∥ 재현 3 → 처분 · Codex 17차 APPROVE · 5116 passed) · **§5-4 마감**(P1 입력·main PR 후보 M1)
 - [P0-3 — 생산자 배선·BUY 생존 게이트·sync 읽기 전용 관측·live writer 가드 (Plan·Do·See, 2026-09-22)](superpowers/plans/2026-09-22-p0-3-wiring-sync-gate.md) — 조사 사실 · 설계 G1~G11 · 심사 2관점 → 처분 Q-1~Q-11(F8 ① 은 P1, live writer 3곳 가드, BUY 생존 전제, 차단 사유 20) · 단계 S-A~S-E · 실계좌 스모크 명세(사용자 확인 대기) · **§6 Do·See**(구현·독립 재현 둘 다 CHANGES_REQUIRED → 처분·Codex 15차 → 16차 APPROVE) · **§7 마감**(차단 사유 17 닫힘·18 설치기 기준 닫힘·**21 신규: attach 에 보호 청산 구동기 없음**·P0-4 입력)
 - [P0-2 — attach 의 체결·종결 증거 생산자 (Plan, 2026-09-22)](superpowers/plans/2026-09-22-p0-2-fill-evidence-producer.md) — 사용자 결정 "엔진 전체를 옮기도록 하자" 뒤 첫 설계. 조사 사실(수집기·파서·lifecycle·apply 경로의 실제 계약, legacy 체결 경로와 attach 단절) · 설계 초안 E1~E10 · **Codex 적대적 심사 BLOCK(must-fix 10 — 부분 체결 뒤 보호 SELL 차단·저장 관측 재처리·chain 수량 적용·조용한 무력화·거래소 하드코딩·수집기 사망·지연 상한·exit_type/점수 누락·일자 경계)** · coordinator 개정 방향. opus 장애로 심사를 교차 공급자가 대체한 기록 포함
