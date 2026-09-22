@@ -48,6 +48,9 @@ from .market_source import (canonical_observation, observation_from_event, compl
 # 60초) 주기 예산이 조회 도중 먼저 끝나 B2 가 통째로 굶는다 — 유보로 B2 는 항상 남은
 # 시간을 갖는다. 유보는 기본 주기(60초)의 15초이고 주기를 줄여 쓰면 같은 비율로 줄인다
 # (고정 15초면 5초짜리 주기는 조회를 한 번도 시작하지 못한다).
+# 마감은 새 작업의 **시작**만이 아니라 그 **대기**에도 건다 — 44초에 시작한 저장 하나가
+# 60초까지 늦어지면 주기 전체가 취소돼 B2 가 다시 굶는다. 만료는 대기자만 끊고 수락된
+# task 는 계속 돌며 그 완료는 `shutdown` 의 drain 이 기다린다(`_await_owner`).
 # 순서도 같은 이유로 B1 → A → B2 다(아래 `_reconcile_cycle`).
 RECONCILER_MAX_PAGES = 3
 RECONCILER_REQUEST_TIMEOUT = 15.0
@@ -742,6 +745,21 @@ class KRExecutionRuntime:
         task.add_done_callback(completed)
         return asyncio.shield(task)
 
+    async def _await_owner(self, pending, deadline: float, reason: str) -> bool | None:
+        """수락된 owner 작업을 주기 마감까지만 **기다린다**. 포기하면 None 이다.
+
+        시작 검사만으로는 마감 직전에 시작한 저장 하나가 주기 예산을 넘겨 다음 단계가
+        통째로 굶는다. `pending` 은 `_owner_task` 의 shield 라 만료는 대기자만 끊고
+        task 는 계속 돌며 그 완료는 `shutdown` 의 drain 이 기다린다.
+        """
+        try:
+            return await asyncio.wait_for(pending, max(0.0, deadline - self._steady()))
+        except asyncio.TimeoutError:
+            if not pending.cancelled():
+                raise   # 작업 자신이 낸 TimeoutError다. 마감 만료로 오인하지 않는다.
+            self._skip_reason(reason)
+            return None
+
     async def _reconcile_cycle(self, collect, reapply_deadline: float) -> bool:
         """일자 게이트 → B1(조회 불필요) → A(조회·reconcile) → B2(재구성) 순서다.
 
@@ -754,7 +772,7 @@ class KRExecutionRuntime:
             self._skip_reason(blocked)
             self._reconciler_target_count = 0
             return False
-        progressed = await self._reapply_inbox(business_day)
+        progressed = await self._reapply_inbox(business_day, reapply_deadline)
         # B1이 inbox를 바꿨을 수 있다. 대상은 현재 상태에서 다시 고른다.
         targets = self._reconcile_targets(self.owner.state, business_day)
         self._reconciler_target_count = len(targets)
@@ -814,17 +832,35 @@ class KRExecutionRuntime:
                 self._skip_reason("reconcile_budget_exhausted")
                 break
             try:
-                if await self._reconcile_attempt(attempt_id, attempt, collection, pages, chain_blocked):
-                    progressed = True
+                pending = self._reconcile_attempt(attempt_id, attempt, collection, pages,
+                                                  chain_blocked)
+            except Exception:
+                # 한 시도의 실패가 다른 시도의 관측을 버리지 않는다. 여기서 세는 것은 저장
+                # task 를 만들기 **전**의 실패뿐이다 — task 본문의 실패는 그 본문이 남긴다.
+                logger.exception("[실행] 체결 대사 실패: attempt={}", attempt_id)
+                self._skip_reason("attempt_failed")
+                continue
+            if pending is None:
+                continue
+            try:
+                stored = await self._await_owner(pending, reapply_deadline,
+                                                 "reconcile_wait_deadline")
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # 한 시도의 실패가 다른 시도의 관측을 버리지 않는다.
-                logger.exception("[실행] 체결 대사 실패: attempt={}", attempt_id)
-                self._skip_reason("attempt_failed")
+                continue    # 사유·로그는 task 본문이 남겼다. 같은 실패를 두 번 세지 않는다.
+            if stored is None:
+                break       # 마감을 넘겼다. 남은 시간은 B2의 것이고 남은 대상은 다음 주기가 본다.
+            if stored:
+                progressed = True
         return progressed
 
-    async def _reconcile_attempt(self, attempt_id, attempt, collection, pages, chain_blocked) -> bool:
+    def _reconcile_attempt(self, attempt_id, attempt, collection, pages, chain_blocked):
+        """이 시도의 저장을 **시작**한다. 접수하면 그 owner task, 건너뛰면 None 이다.
+
+        대기는 호출자의 몫이다 — 주기 마감 안에서만 기다려야 하고, 판정·기록은 취소돼도
+        남도록 task 본문이 끝낸다. 여기에는 await 가 없어 실패는 전부 접수 전의 실패다.
+        """
         binding = attempt.get("request_binding")
         session = None if binding is None else binding.get("session")
         if type(session) is not str or not session:
@@ -861,13 +897,19 @@ class KRExecutionRuntime:
 
         async def store() -> bool:
             # 판정·기록을 task 본문에서 끝낸다 — 주기 예산이 대기자를 취소해도 남는다.
-            await self.lifecycle.reconcile(attempt_id, evidence)
+            try:
+                await self.lifecycle.reconcile(attempt_id, evidence)
+            except Exception:
+                # 대기자가 떠난 뒤의 실패도 사라지지 않는다. 대기자는 다시 세지 않는다.
+                logger.exception("[실행] 체결 대사 실패: attempt={}", attempt_id)
+                self._skip_reason("attempt_failed")
+                raise
             progressed = self.owner.state["attempts"][attempt_id]["observed_quantity"] > before
             if progressed:
                 self._reconciler_progress_at = self._now()
             return progressed
 
-        return await self._owner_task(store)
+        return self._owner_task(store)
 
     @staticmethod
     def _evidence_changes_attempt(attempt, evidence) -> bool:
@@ -883,7 +925,7 @@ class KRExecutionRuntime:
                 and evidence.state.value in TERMINAL_STATES
                 and attempt["state"] not in TERMINAL_STATES)
 
-    async def _reapply_inbox(self, business_day) -> bool:
+    async def _reapply_inbox(self, business_day, reapply_deadline: float) -> bool:
         """(B1) 조회와 무관한 잔존 inbox 행의 재접수. 그래서 조회 **앞**에서 돈다."""
         progressed = False
         state = self.owner.state
@@ -904,7 +946,10 @@ class KRExecutionRuntime:
             if not self._appliable(self._attempt_for(self.owner.state, observation.order_key)):
                 self._skip_reason("unappliable_attempt")
                 continue
-            if await self._reapply(observation):
+            applied = await self._reapply(observation, reapply_deadline)
+            if applied is None:
+                break       # 마감을 넘겼다. 남은 행은 다음 주기가 본다.
+            if applied:
                 progressed = True
         return progressed
 
@@ -946,7 +991,11 @@ class KRExecutionRuntime:
         return observation_from_evidence(evidence, trading_day=attempt["order_ref"]["order_date"],
                                          metadata=metadata)
 
-    async def _reapply(self, observation: FillObservation) -> bool:
+    async def _reapply(self, observation: FillObservation, deadline: float | None = None):
+        """마감을 받으면 그때까지만 기다리고 포기하면 None 이다.
+
+        마감 없는 호출은 B2 뿐이다 — 주기의 마지막 단계라 굶길 다음 단계가 없다.
+        """
         async def apply() -> bool:
             # 분류·기록을 task 본문에서 끝낸다 — 주기 예산이 대기자를 취소해도, 성공한
             # 적용도 실패도 관측창에서 사라지지 않는다. 대기자는 결과만 받는다.
@@ -967,7 +1016,10 @@ class KRExecutionRuntime:
                 self._reconciler_progress_at = self._now()
             return progressed
 
-        return await self._owner_task(apply)
+        pending = self._owner_task(apply)
+        if deadline is None:
+            return await pending
+        return await self._await_owner(pending, deadline, "reapply_wait_deadline")
 
     def reconciler_blocked_reason(self) -> str | None:
         """기다리는 것이 있는데 마지막 상태 전진 이후 k주기를 넘겼는가(P-2·P2-a).
