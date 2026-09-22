@@ -1,4 +1,4 @@
-"""보호 pending 해제는 종결·미적용 증거에만 의존한다."""
+"""보호 pending 해제는 관측·적용 체결이 모두 없는 종결 증거에만 의존한다."""
 import asyncio
 from copy import deepcopy
 from datetime import timedelta
@@ -83,6 +83,37 @@ def test_real_partial_applied_terminal_sell_keeps_pending(tmp_path):
         finally:
             await runtime.shutdown()
             await store.close()
+    asyncio.run(scenario())
+
+
+def test_observed_unapplied_terminal_fill_preserves_first_stage_like_control(tmp_path):
+    async def scenario():
+        results = {}
+        for invoke_release in (False, True):
+            directory = tmp_path / ("release" if invoke_release else "control")
+            engine, _, store, runtime = await holding(directory)
+            try:
+                decision = await runtime.quote("005930", Decimal("12000"), intent_id="first-take-profit")
+                assert decision[0:2] == ("sell_partial", 10)
+                ref = await opened(runtime, "sell", "sell", quantity=10, intent="first-take-profit")
+                observation = await observed(runtime, ref, 10, "120000", side="sell", total=10)
+                before = runtime.owner.state
+                attempt = before["attempts"]["sell"]
+                assert (attempt["state"], attempt["observed_quantity"], attempt["applied_quantity"]) == (
+                    "final_filled", 10, 0)
+                assert before["protection"]["states"]["005930"]["pending_stage"] == "first"
+                released = await runtime.release_protection_pending("005930") if invoke_release else None
+                receipt = await queued(engine, observation)
+                assert receipt.status == "APPLIED"
+                assert engine.portfolio.positions["005930"].quantity == 90
+                state = runtime.owner.state["protection"]["states"]["005930"]
+                results[invoke_release] = (state["current_stage"], released)
+            finally:
+                await runtime.shutdown()
+                await store.close()
+        assert results[False][0] == "first"
+        assert results[True][0] == "first"
+        assert results[True][1] is False
     asyncio.run(scenario())
 
 

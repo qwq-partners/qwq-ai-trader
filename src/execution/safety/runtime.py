@@ -1352,7 +1352,10 @@ class KRExecutionRuntime:
         return await asyncio.shield(task)
 
     async def release_protection_pending(self, symbol: str) -> bool:
-        """S2의 직렬화된 sweep만 호출한다. quote→prepare 전체 창은 그 caller가 소유한다."""
+        """관측·적용 체결이 모두 없는 종결 intent 또는 orphan의 pending만 해제한다.
+
+        S2의 직렬화된 sweep만 호출한다. quote→prepare 전체 창은 그 caller가 소유한다.
+        """
         if self._closing:
             raise ApplicationBlocked("종료 중에는 pending을 해제하지 않습니다")
         text(symbol)
@@ -1392,6 +1395,9 @@ class KRExecutionRuntime:
                         or attempt.get("side") != "sell" or attempt.get("state") not in TERMINAL_STATES
                         or any(type(attempt.get(name)) is not int or attempt[name] < 0
                                for name in ("quantity", "reserved_quantity", "observed_quantity", "applied_quantity"))):
+                    return False
+                # 관측됐지만 아직 적용되지 않은 체결도 pending의 원 intent를 필요로 한다.
+                if attempt["observed_quantity"] != 0:
                     return False
                 applied += attempt["applied_quantity"]
             return applied == 0
