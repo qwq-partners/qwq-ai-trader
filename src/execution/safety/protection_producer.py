@@ -85,6 +85,11 @@ class ProtectionProducer:
                     await self._sweep(now)
                     if event is not None:
                         await self._tick(event, self._now())
+                    # 접수 배수는 보호 복구 성공과 다르다. 현재 runtime 상태만 읽어 관측한다.
+                    if (self._stats['blocked_reason'] is None
+                            and (self.runtime._protection_failed
+                                 or self.runtime.owner.state['protection']['degraded'])):
+                        self._blocked('runtime_protection_recovery_required')
                     if self._stats['blocked_reason'] is not None:
                         heartbeat.record_failure(_HEARTBEAT, self._stats['blocked_reason'])
                     elif self._pending_reasons:
@@ -208,9 +213,15 @@ class ProtectionProducer:
 
     def _audit_recovery(self, state, now):
         previous, current = self._recovery_required, {}
+        admissions = state.get('protection_quote_admissions', {})
+        known_symbols = (set(state['portfolio']['positions']) | set(state['protection']['states'])
+            | set(state['protection']['degraded']) | set(state['protection']['pending_owners'])
+            | set(self._episodes) | {row['symbol'] for row in state['intents'].values()}
+            | {row.get('symbol') for row in admissions.values() if type(row) is dict
+               and type(row.get('symbol')) is str})
         for command, row in self._audit_decisions(state):
             symbol, identity = row.get('symbol'), row.get('intent_id')
-            if type(symbol) is not str or symbol == '':
+            if type(symbol) is not str or symbol == '' or symbol != symbol.strip():
                 raise ApplicationBlocked('protection_decision_symbol_required')
             intent = state['intents'].get(identity) if type(identity) is str else None
             linked_symbols = {symbol}
@@ -220,6 +231,12 @@ class ProtectionProducer:
                                   if episode.intent_id == identity)
             linked_symbols.update(key for key, pending in state['protection']['pending_owners'].items()
                                   if pending == identity)
+            linked_symbols.update(value['symbol'] for value in admissions.values()
+                                  if type(value) is dict and value.get('intent_id') == identity
+                                  and type(value.get('symbol')) is str)
+            if not linked_symbols.intersection(known_symbols):
+                # 영향 종목을 귀속할 증거가 없으면 phantom 키 보류로 송신을 우회하지 않는다.
+                raise ApplicationBlocked('protection_decision_symbol_required')
             reason = None
             if not self._valid_audit(row) or len(linked_symbols) != 1:
                 reason = 'protection_decision_evidence_mismatch'
@@ -237,7 +254,6 @@ class ProtectionProducer:
                         if tuple(row['decision']) == episode.decision:
                             continue
                         reason = 'protection_decision_evidence_mismatch'
-                    admissions = state.get('protection_quote_admissions', {})
                     if reason is None and (command in admissions or any(value.get('intent_id') == identity
                             and value.get('symbol') == symbol for value in admissions.values())):
                         continue

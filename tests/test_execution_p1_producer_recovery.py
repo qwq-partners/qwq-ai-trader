@@ -582,6 +582,7 @@ def test_audit_must_match_current_retained_unsubmitted_episode(tmp_path, monkeyp
 def test_current_resume_invariant_clears_only_after_successful_recovery(tmp_path, monkeypatch, freeze):
     async def scenario():
         freeze(11,0,day=18)
+        monkeypatch.setattr(heartbeat, '_states', {})
         f = await fixture(tmp_path, monkeypatch)
         try:
             command = await fail_quote(f['runtime'], f['store'], monkeypatch)
@@ -607,6 +608,9 @@ def test_current_resume_invariant_clears_only_after_successful_recovery(tmp_path
             assert f['runtime'].owner.state['protection_quote_admissions'] == {}
             assert len(f['broker']._session.posts) == 1
             assert f['producer'].health()['invariant_violation'] is None
+            assert f['runtime'].health()['protection_updates_failed'] is False
+            assert f['producer'].health()['blocked_reason'] is None
+            assert heartbeat._states['kr_protection_producer'].last_success is not None
         finally: await close(f)
     asyncio.run(scenario())
 
@@ -659,7 +663,8 @@ def test_same_symbol_sell_failure_has_priority_over_ack_in_any_order(tmp_path, m
     asyncio.run(scenario())
 
 
-def test_unknown_audit_symbol_blocks_even_proven_retained_order_globally(tmp_path, monkeypatch, freeze):
+@pytest.mark.parametrize('damaged_symbol', [None, '', 12345, ' 005930', '000000'])
+def test_unknown_audit_symbol_blocks_even_proven_retained_order_globally(tmp_path, monkeypatch, freeze, damaged_symbol):
     async def scenario():
         freeze(11,0,day=18)
         monkeypatch.setattr(heartbeat, '_states', {})
@@ -675,7 +680,7 @@ def test_unknown_audit_symbol_blocks_even_proven_retained_order_globally(tmp_pat
             original = deepcopy(f['producer'].health()['retained_decisions'])
             def corrupt(state):
                 state['outbox']['unknown-symbol-audit'] = dict(kind='protection_decision',
-                    symbol=None, intent_id='unknown-symbol-intent', decision=['sell_all', 100, '손절'])
+                    symbol=damaged_symbol, intent_id='unknown-symbol-intent', decision=['sell_all', 100, '손절'])
                 return state
             await f['runtime'].owner.mutate('synthetic-unknown-audit-symbol', corrupt)
             f['runtime']._day_closed = False
@@ -714,6 +719,107 @@ def test_ws_partial_profit_commits_matching_audit_pending_and_intent_link(tmp_pa
             assert state['protection']['pending_owners'][SYM] == identity
             assert state['protection']['states'][SYM]['pending_target_qty'] == 10
             assert state['intents'][identity]['target_quantity'] == 10
+            assert len(f['broker']._session.posts) == 1
+        finally: await close(f)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('disposition', ['stale', 'abandoned'])
+def test_runtime_unresolved_recovery_remains_visible_on_sweep_and_other_tick(tmp_path, monkeypatch, disposition):
+    async def scenario():
+        from src.strategies.exit_manager import ExitManager
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            command = await fail_quote(f['runtime'], f['store'], monkeypatch)
+            original = deepcopy(f['runtime'].owner.state['protection_quote_admissions'][command])
+            def corrupt(state):
+                state['protection_quote_admissions'][command]['payload_digest'] = 'wrong'
+                return state
+            await f['runtime'].owner.mutate('synthetic-unresolved-bad-admission', corrupt)
+            await f['producer'].sweep()
+            assert f['producer'].health()['invariant_violation'] is not None
+            def restore(state):
+                state['protection_quote_admissions'][command] = deepcopy(original)
+                return state
+            await f['runtime'].owner.mutate('synthetic-unresolved-original-proof', restore)
+            with monkeypatch.context() as patch:
+                if disposition == 'stale': f['clock'][0] += timedelta(seconds=61)
+                else:
+                    def broken(manager, symbol, *args, **kwargs):
+                        raise ValueError('합성 보호 계산 포기')
+                    patch.setattr(ExitManager, 'update_price', broken)
+                monkeypatch.setattr(heartbeat, '_states', {})
+                await f['producer'].sweep()
+            assert f['runtime'].owner.state['protection_quote_admissions'] == {}
+            assert f['runtime'].health()['protection_updates_failed'] is True
+            assert (SYM in f['runtime'].owner.state['protection']['degraded']) is (disposition == 'abandoned')
+            assert f['producer'].health()['invariant_violation'] is None
+            assert f['producer'].health()['blocked_reason'] == 'runtime_protection_recovery_required'
+            assert heartbeat._states['kr_protection_producer'].last_success is None
+            assert heartbeat._states['kr_protection_producer'].last_failure is not None
+            # 현재 실패는 과거 disposition 카운터가 아니라 runtime 래치에서 다시 관측된다.
+            for other_tick in (False, True):
+                monkeypatch.setattr(heartbeat, '_states', {})
+                if other_tick: await f['producer'].on_market_data(tick('10000', symbol='000660'))
+                else: await f['producer'].sweep()
+                assert f['producer'].health()['blocked_reason'] == 'runtime_protection_recovery_required'
+                assert heartbeat._states['kr_protection_producer'].last_success is None
+                assert heartbeat._states['kr_protection_producer'].last_failure is not None
+                assert f['runtime'].health()['protection_updates_failed'] is True
+            assert f['runtime'].owner.state['attempts'] == {}
+            assert f['broker']._session.posts == []
+        finally: await close(f)
+    asyncio.run(scenario())
+
+
+def test_current_degraded_without_failure_latch_is_observed_on_empty_sweep(tmp_path, monkeypatch):
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            def degraded(state):
+                del state['protection']['states'][SYM]
+                state['protection']['degraded'][SYM] = dict(quantity=100, reason='합성 보호 상태 결손')
+                return state
+            await f['runtime'].owner.mutate('synthetic-degraded-observation', degraded)
+            assert f['runtime'].health()['protection_updates_failed'] is False
+            monkeypatch.setattr(heartbeat, '_states', {})
+            before = f['runtime'].owner.state
+            await f['producer'].sweep()
+            assert f['producer'].health()['blocked_reason'] == 'runtime_protection_recovery_required'
+            assert heartbeat._states['kr_protection_producer'].last_success is None
+            assert heartbeat._states['kr_protection_producer'].last_failure is not None
+            assert f['runtime'].owner.state == before
+        finally: await close(f)
+    asyncio.run(scenario())
+
+
+def test_matching_historical_full_audit_without_position_is_not_phantom(tmp_path, monkeypatch, freeze):
+    async def scenario():
+        from src.execution.safety.application import FillObservation
+        from test_execution_runtime import queued
+        freeze(11,0,day=18)
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await strategy(f, 'manual')
+            await f['producer'].on_market_data(tick())
+            result = f['results'][0]
+            assert await f['runtime'].lifecycle.reconcile(result.attempt_id,
+                evidence(f, result, quantity=100, observed=100, amount='900000'))
+            ref = result.order_ref
+            receipt = await queued(f['engine'], FillObservation('test-scope', 'KR', ref.order_date,
+                'KRX', ref.order_no, SYM, 'SELL', 100, D('900000'), org_no=ref.org_no))
+            assert receipt.status == 'APPLIED'
+            state = f['runtime'].owner.state
+            assert SYM not in state['portfolio']['positions']
+            assert SYM not in state['protection']['states']
+            assert len(state['outbox']) > 0 and len(state['intents']) == 1
+            f['producer'] = Producer(f['runtime'], clock=lambda:f['clock'][0], indicator_source=lambda _: {})
+            monkeypatch.setattr(heartbeat, '_states', {})
+            await f['producer'].sweep()
+            assert f['producer'].health()['blocked_reason'] is None
+            assert f['producer'].health()['recovery_required'] == {}
+            assert heartbeat._states['kr_protection_producer'].idle_reason == '보유 종목 없음'
+            assert heartbeat._states['kr_protection_producer'].last_failure is None
             assert len(f['broker']._session.posts) == 1
         finally: await close(f)
     asyncio.run(scenario())
