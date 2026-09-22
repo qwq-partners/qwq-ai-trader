@@ -162,15 +162,21 @@ class ProtectionProducer:
         self._stats['invariant_violation'] = dict(reason=reason, since=since, command_ids=list(commands))
 
     def _new_decision_available(self, symbol):
+        has_open, has_failure = False, False
         for row in self._attempts(symbol):
             if row['side'] != 'sell' or row['state'] in TERMINAL_STATES and row['reserved_quantity'] == 0:
                 continue
-            if (row.get('command_status') == 'acknowledged' and not row.get('evidence_conflict')
+            has_open = True
+            if not (row.get('command_status') == 'acknowledged' and not row.get('evidence_conflict')
                     and row['state'] not in TERMINAL_STATES and row['state'] != 'blocked_unknown'
                     and row['observed_quantity'] == row['applied_quantity']):
-                self._pending(symbol, 'blocked_by_open_exit')
-            else:
+                has_failure = True
+        if has_open:
+            # 행 순서와 관계없이 충돌/미적용 실패가 정상 ACK 대기보다 우선한다.
+            if has_failure:
                 self._blocked('blocked_by_open_exit')
+            else:
+                self._pending(symbol, 'blocked_by_open_exit')
             return False
         dto = self.runtime.owner.state['protection']
         row = dto['states'].get(symbol)
@@ -383,6 +389,8 @@ class ProtectionProducer:
             counts[disposition] = counts.get(disposition, 0) + 1
         for symbol, episode in tuple(self._episodes.items()):
             await self._submit(symbol, episode, now)
+        # 접수 배수와 후속 인계까지 정상 반환한 뒤 현재 복구 불변식 장애를 해제한다.
+        self._stats['invariant_violation'] = None
 
     async def _tick(self, event, now):
         symbol = event.symbol

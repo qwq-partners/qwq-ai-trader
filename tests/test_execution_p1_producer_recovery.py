@@ -577,3 +577,143 @@ def test_audit_must_match_current_retained_unsubmitted_episode(tmp_path, monkeyp
             assert f['producer'].health()['recovery_required'][SYM]['reason'] == 'protection_decision_evidence_mismatch'
         finally: await close(f)
     asyncio.run(scenario())
+
+
+def test_current_resume_invariant_clears_only_after_successful_recovery(tmp_path, monkeypatch, freeze):
+    async def scenario():
+        freeze(11,0,day=18)
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            command = await fail_quote(f['runtime'], f['store'], monkeypatch)
+            original = deepcopy(f['runtime'].owner.state['protection_quote_admissions'][command])
+            def corrupt(state):
+                state['protection_quote_admissions'][command]['payload_digest'] = 'wrong'
+                return state
+            await f['runtime'].owner.mutate('synthetic-invariant-corruption', corrupt)
+            await f['producer'].sweep()
+            violation = f['producer'].health()['invariant_violation']
+            assert violation == dict(reason='protection_resume_blocked',
+                since=f['clock'][0].isoformat(), command_ids=[command])
+            f['clock'][0] += timedelta(seconds=1)
+            await f['producer'].sweep()
+            assert f['producer'].health()['invariant_violation'] == violation
+            assert f['broker']._session.posts == []
+            # 시험에서만 원래 정확한 접수 증거를 복원한다. 제품 복구 API를 만들지 않는다.
+            def restore(state):
+                state['protection_quote_admissions'][command] = deepcopy(original)
+                return state
+            await f['runtime'].owner.mutate('synthetic-invariant-proof-restoration', restore)
+            await f['producer'].sweep()
+            assert f['runtime'].owner.state['protection_quote_admissions'] == {}
+            assert len(f['broker']._session.posts) == 1
+            assert f['producer'].health()['invariant_violation'] is None
+        finally: await close(f)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('failure_first', [False, True])
+@pytest.mark.parametrize('damage', ['conflict', 'unknown', 'observed_unapplied', 'terminal_reservation', 'ack_only'])
+def test_same_symbol_sell_failure_has_priority_over_ack_in_any_order(tmp_path, monkeypatch, freeze, damage, failure_first):
+    async def scenario():
+        from src.core.types import OrderSide
+        from test_execution_qualification_publishers import buy
+        from test_execution_signal_gateway import order
+        freeze(11,0,day=18)
+        monkeypatch.setattr(heartbeat, '_states', {})
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            result = await f['gateway'].submit(buy(SYM), order(side=OrderSide.SELL), None)
+            def damaged_snapshot(state):
+                normal = deepcopy(state['attempts'][result.attempt_id])
+                broken = deepcopy(normal)
+                if damage == 'conflict': broken['evidence_conflict'] = True
+                elif damage == 'unknown': broken['state'] = 'blocked_unknown'
+                elif damage == 'observed_unapplied': broken['observed_quantity'] = 1
+                elif damage == 'terminal_reservation': broken['state'] = 'final_cancelled'
+                # 정상 owner가 막는 다중 미종결 행을 손상 snapshot으로만 합성한다.
+                rows = [broken, normal] if failure_first else [normal, broken]
+                state['attempts'] = {}
+                for identity, row in zip(('a-first', 'z-last'), rows):
+                    row['attempt_id'] = identity
+                    state['attempts'][identity] = row
+                state['intents'][normal['intent_id']]['attempt_ids'] = ['a-first', 'z-last']
+                return state
+            await f['runtime'].owner.mutate('synthetic-multiple-open-sells', damaged_snapshot)
+            before = f['runtime'].owner.state
+            await f['producer'].on_market_data(tick())
+            health = f['producer'].health()
+            if damage == 'ack_only':
+                assert health['blocked_reason'] is None
+                assert health['pending_reasons'] == {SYM:'blocked_by_open_exit'}
+                assert heartbeat._states['kr_protection_producer'].last_failure is None
+                assert heartbeat._states['kr_protection_producer'].idle_reason is not None
+            else:
+                assert health['blocked_reason'] == 'blocked_by_open_exit'
+                assert health['pending_reasons'] == {}
+                assert heartbeat._states['kr_protection_producer'].last_failure is not None
+            assert heartbeat._states['kr_protection_producer'].last_success is None
+            assert health['retained_decisions'] == {}
+            assert f['runtime'].owner.state == before
+            assert len(f['broker']._session.posts) == 1
+        finally: await close(f)
+    asyncio.run(scenario())
+
+
+def test_unknown_audit_symbol_blocks_even_proven_retained_order_globally(tmp_path, monkeypatch, freeze):
+    async def scenario():
+        freeze(11,0,day=18)
+        monkeypatch.setattr(heartbeat, '_states', {})
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            quote = f['runtime'].quote
+            async def close_after_commit(*args, **kwargs):
+                decision = await quote(*args, **kwargs)
+                f['runtime']._day_closed = True
+                return decision
+            monkeypatch.setattr(f['runtime'], 'quote', close_after_commit)
+            await f['producer'].on_market_data(tick())
+            original = deepcopy(f['producer'].health()['retained_decisions'])
+            def corrupt(state):
+                state['outbox']['unknown-symbol-audit'] = dict(kind='protection_decision',
+                    symbol=None, intent_id='unknown-symbol-intent', decision=['sell_all', 100, '손절'])
+                return state
+            await f['runtime'].owner.mutate('synthetic-unknown-audit-symbol', corrupt)
+            f['runtime']._day_closed = False
+            before = f['runtime'].owner.state
+            monkeypatch.setattr(heartbeat, '_states', {})
+            await f['producer'].on_market_data(tick())
+            assert f['runtime'].owner.state == before
+            assert f['broker']._session.posts == []
+            health = f['producer'].health()
+            assert health['blocked_reason'] == 'protection_decision_symbol_required'
+            assert health['retained_decisions'] == original
+            assert heartbeat._states['kr_protection_producer'].last_failure is not None
+            assert heartbeat._states['kr_protection_producer'].consecutive_failures == 1
+            assert heartbeat._states['kr_protection_producer'].last_success is None
+        finally: await close(f)
+    asyncio.run(scenario())
+
+
+def test_ws_partial_profit_commits_matching_audit_pending_and_intent_link(tmp_path, monkeypatch, freeze):
+    async def scenario():
+        freeze(11,0,day=18)
+        f = await fixture(tmp_path, monkeypatch, indicators={'ma5':D('10500'), 'prev_low':None})
+        try:
+            event = await market_event(monkeypatch, f['clock'][0], price='11200')
+            await f['producer'].on_market_data(event)
+            state = f['runtime'].owner.state
+            identity = f['events'][0].metadata['protection_intent_id']
+            assert state['market_sources'][SYM]['request']['market_data'] == {
+                'ma5':'10500', 'prev_low':None, 'low':'11200'}
+            audits = [row for row in state['outbox'].values() if row['kind'] == 'protection_decision']
+            assert len(audits) == 1
+            assert type(audits[0]['decision']) is list
+            assert audits[0]['decision'][:2] == ['sell_partial', 10]
+            assert audits[0]['symbol'] == SYM and audits[0]['intent_id'] == identity
+            assert audits[0].get('effect_source') is None
+            assert state['protection']['pending_owners'][SYM] == identity
+            assert state['protection']['states'][SYM]['pending_target_qty'] == 10
+            assert state['intents'][identity]['target_quantity'] == 10
+            assert len(f['broker']._session.posts) == 1
+        finally: await close(f)
+    asyncio.run(scenario())
