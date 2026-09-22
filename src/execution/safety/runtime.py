@@ -113,6 +113,8 @@ class KRExecutionRuntime:
         self._reconciler_skipped: dict[str, int] = {}
         self._reconciler_outcomes: dict[str, int] = {}
         self._reconciler_parked = 0
+        self._reconciler_apply_seconds_last = None
+        self._reconciler_apply_seconds_max = None
         self.owner = FillApplicationCoordinator(store, self._publish, self._reduce,
             registration_scope=self._policy_registration_scope,
             registration_guard=self._require_registration_day)
@@ -716,6 +718,14 @@ class KRExecutionRuntime:
         key = kind + ":" + status
         self._reconciler_outcomes[key] = self._reconciler_outcomes.get(key, 0) + 1
 
+    def _apply_window(self, started: float) -> None:
+        """관측 한 건의 적용 경과(초). 예산과 같은 단조 시계로 잰다(주입 벽시계 금지)."""
+        elapsed = max(0.0, self._steady() - started)
+        self._reconciler_apply_seconds_last = elapsed
+        previous = self._reconciler_apply_seconds_max
+        if previous is None or elapsed > previous:
+            self._reconciler_apply_seconds_max = elapsed
+
     def _owner_task(self, operation):
         """주기가 **시작한** owner 변경은 주기 예산의 취소로 끊지 않는다.
 
@@ -1000,15 +1010,26 @@ class KRExecutionRuntime:
 
         마감 없는 호출은 B2 뿐이다 — 주기의 마지막 단계라 굶길 다음 단계가 없다.
         """
+        if not self.engine.running:
+            # 설치~`engine.run()` 첫 반복 사이의 창(P0-3 Q-8). 지금 적용하면 같은 행에
+            # 매 주기 새 ingress 가 생기고 그 QUEUE_WAIT 누적이 `_owner_ready` 를 막는다.
+            # run 이 시작하면 다음 주기가 같은 행을 처리한다.
+            self._skip_reason("engine_not_running")
+            return False
+
         async def apply() -> bool:
             # 분류·기록을 task 본문에서 끝낸다 — 주기 예산이 대기자를 취소해도, 성공한
             # 적용도 실패도 관측창에서 사라지지 않는다. 대기자는 결과만 받는다.
+            # 경과도 여기서 잰다 — 대기자 쪽에서 재면 취소된 주기의 적용이 창에서 사라진다.
+            started = self._steady()
             try:
                 receipt = await self.engine.apply_execution_observation(observation)
             except Exception as exc:
+                self._apply_window(started)
                 self._apply_outcome(type(exc).__name__, "raised")
                 self._skip_reason("apply_failed")  # 예외 종류는 apply_outcomes가 들고 있다.
                 return False
+            self._apply_window(started)
             self._apply_outcome(type(receipt).__name__, str(getattr(receipt, "status", "")))
             if isinstance(receipt, InboxReceipt):
                 progressed = receipt.application_complete
@@ -1046,6 +1067,47 @@ class KRExecutionRuntime:
         if (self._now() - last).total_seconds() <= RECONCILER_STALL_CYCLES * self._reconciler_interval:
             return None
         return "reconciler_no_progress:" + self._reconciler_last_reason
+
+    def reconciler_live(self, now: datetime) -> bool:
+        """체결 증거 생산자가 살아 있는가(P0-3 Q-2 의 생존 전제). 새 상태를 만들지 않는다.
+
+        `reconciler_blocked_reason()` 만으로는 부족하다 — 그것은 진전 시각(`_progress_at`)만
+        보므로 B1 재접수가 진전을 만드는 동안 조회가 통째로 죽어 있어도 None 이고, 주기
+        task 가 죽은 아침에도 대상이 0 이면 첫 BUY 를 통과시킨다. 그래서 셋을 더 본다:
+
+        1. 기동한 주기 task 가 아직 살아 있는가 — 죽은 task 는 시각만으로 구분되지 않는다.
+        2. 굶은 주기인가(`reconciler_blocked_reason()`).
+        3. 오늘 완료한 조회 주기가 k주기 안인가(`_reconciler_complete_at`).
+
+        3 이 아니어도 **기다리는 대상이 하나도 없으면** 통과한다. 대상이 0 이면 주기는 조회를
+        하지 않고(`_reconcile_cycle`) Event 에서 자므로 완료 시각이 갱신될 길이 없다 — 그
+        상태는 굶은 주기가 아니라 할 일 없음이고, 이 예외가 없으면 조용한 계좌에서 설치
+        k주기 뒤부터 모든 자동 매수가 영구히 막힌다.
+
+        **Q-2 와 다른 한 곳(보고 대상)**: "주기를 시작하지 않았으면 거부"는 여기서 걸지
+        않는다. 생산자가 배선되지 않은 runtime(`_reconciler_started_at is None`)은 이
+        술어를 통과한다 — 그 조건을 여기에 걸면 수집기를 세우지 않는 기존 owner 인수
+        176건(이 8파일 기준)의 자동/수동 BUY 가 전부 `reconciler_unavailable` 이 된다.
+        그 구멍은 설치기 쪽에서 닫았다: `install_attached_runtime` 은 `collect` 를 필수
+        인자로 받고 attach 마지막에 **무조건** `start_reconciler` 를 부른다. 설치기를 거치지
+        않고 손으로 attach 하는 경로가 생기면 이 술어만으로는 막지 못한다.
+        """
+        if self._reconciler_task is not None and self._reconciler_task.done():
+            return False
+        if self._reconciler_started_at is None:
+            return True
+        if self.reconciler_blocked_reason() is not None:
+            return False
+        business_day, _ = self._reconciler_day(self.owner.state)
+        if business_day is None:
+            # 일자·입장 게이트는 그 자체가 별도 거부다. 같은 상태를 두 이름으로 내지 않는다.
+            return True
+        last = self._reconciler_complete_at
+        if last is None or last.date() != now.date():
+            last = self._reconciler_started_at
+        if (now - last).total_seconds() <= RECONCILER_STALL_CYCLES * self._reconciler_interval:
+            return True
+        return not self._stalled_targets(self.owner.state, business_day)
 
     @staticmethod
     def _stamp(value):
@@ -1419,6 +1481,8 @@ class KRExecutionRuntime:
                 "skipped": dict(self._reconciler_skipped),
                 "apply_outcomes": dict(self._reconciler_outcomes),
                 "parked": self._reconciler_parked,
+                "apply_seconds_last": self._reconciler_apply_seconds_last,
+                "apply_seconds_max": self._reconciler_apply_seconds_max,
                 "day_admission_closed": self.day_admission_closed,
             },
         }

@@ -18,6 +18,7 @@ from uuid import uuid4
 from loguru import logger
 
 from ...core.types import Order, OrderSide
+from ...utils.exit_types import classify_exit_type
 from .commands import RequestBoundCommands, _require, _text
 from .lifecycle import CommandResult
 from .policy_snapshot import PolicyContext
@@ -75,14 +76,34 @@ class SignalGateway:
 
         진입 점수는 `Order.signal_score`가 정본이고 없으면 신호가 실어 온 점수다. 만석 교체의
         점수 비교는 돈 경로라 결측을 허용하지 않는다 — 없으면 보유가 전부 0점으로 보인다.
-        종목명과 섹터는 신호/주문 객체에 필드가 없다 — 섹터는 `request_binding['sector']`가
-        이미 정본이고(economics의 `_entry_sector`) 종목명 생산자는 P0-3 범위다.
+        섹터는 `request_binding['sector']`가 이미 정본이다(economics의 `_entry_sector`).
+
+        SELL 의 `exit_type`(P0-3 G6): legacy 는 `run_fill_check` 가 `record_exit` 에 이 태그를
+        넘겨 당일 손절·청산 카운트를 세운다. attach 에서 None 을 돌려주면 그 태그가 영원히
+        빈 문자열이라 재진입 억제가 fail-open 으로 죽는다. 분류는 legacy 와 **같은 함수**를
+        쓴다(`src/utils/exit_types.py`). reason 의 정본은 engine 이 이미 실어 둔
+        `Order.reason` 이고(engine.py 의 `event.reason` 대입) 없으면 신호에서 읽는다.
+
+        BUY 의 `name`(P0-3 G7): 신호가 실어 온 후보명만 쓴다 — 없으면 **키 자체를 싣지 않는다**
+        (빈 문자열은 `invalid_fill_metadata_value` 이고, 종목코드를 이름으로 위조하지 않는다).
+        event 는 duck-typing 으로 읽는다: 신호 객체의 종류가 호출자마다 다르다.
         """
         if order.side is not OrderSide.BUY:
-            return None
+            reason = order.reason
+            if reason is None or reason == '':
+                reason = getattr(event, 'reason', '')
+            return {'exit_type': classify_exit_type(reason)}
         score = order.signal_score if order.signal_score is not None else event.score
         _require(type(score) in (int, float) and isfinite(score), 'entry_signal_score_required')
-        return {'entry_signal_score': score}
+        metadata = {'entry_signal_score': score}
+        # 이 `or` 는 dict 결측 폴백이고 falsy 판정이 아니다(빈 dict 도 같은 결론이다).
+        source = getattr(event, 'metadata', None) or {}
+        name = source.get('candidate_name') if type(source) is dict else None
+        if name is None and type(source) is dict:
+            name = source.get('name')
+        if type(name) is str and name != '':
+            metadata['name'] = name
+        return metadata
 
     def reserved_cash(self) -> Decimal:
         """owner 미해결 attempt 의 예약 현금 합. `evaluate_entry_policy` 와 같은 식이다."""

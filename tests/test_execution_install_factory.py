@@ -52,6 +52,7 @@ from src.execution.safety.commands import CommandValidationError, RequestBoundCo
 from src.execution.safety.economics import encode_portfolio
 from src.execution.safety.factory import install_attached_runtime
 from src.execution.safety.gateway import SignalGateway
+from src.execution.safety.queries import QueryCollection, QueryScope
 from src.execution.safety.guards import (
     EntryAuthority, FinalEntryGuard, GuardDecision, RiskSnapshot,
 )
@@ -444,10 +445,23 @@ async def target(tmp_path, monkeypatch, *, scope=SCOPE, path=None, seed=True, **
     async def missing_vix():
         return None
 
+    collected = []
+
+    async def collect(*, start_date, end_date, exchange_scope, max_pages):
+        """결정적 수집기: 즉시 complete=True, 페이지 0개(= 조회 대상이 없는 계좌)."""
+        collected.append({'start_date': start_date, 'end_date': end_date,
+                          'exchange_scope': exchange_scope, 'max_pages': max_pages})
+        stamp = _CLOCK['kst']
+        return QueryCollection(
+            QueryScope(SCOPE, 'daily', 'TTTC0081R', start_date, end_date,
+                       exchange_scope=exchange_scope),
+            stamp, stamp, start_date, (), True, 'ok')
+
     kwargs = dict(sidecar=sidecar, regime_adapter=adapter, fee_config=FeeConfig(), risk=risk,
                   validator_config=validator_block(), position_pct=position_table(),
                   stop_params=stop_table(), exit_config=ExitConfig(),
-                  experts_shadow_mode=True, now=NOW_KST, vix_fetcher=missing_vix)
+                  experts_shadow_mode=True, now=NOW_KST, vix_fetcher=missing_vix,
+                  collect=collect)
 
     error_events = []
 
