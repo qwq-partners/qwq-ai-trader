@@ -16,7 +16,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 개발 정본 브랜치 | `feature/engine-safety-design-20260917`, HEAD **`c521c8d`**(원격 동기). main 과의 격차 234 커밋·219 파일 — **main 병합은 차단 상태**(§9) |
+| 개발 정본 브랜치 | `feature/engine-safety-design-20260917`. 이 문서를 담은 커밋이 HEAD 다(원격 동기; `git log -1 --format=%s` 가 "docs(ops): Codex handoff prompt …" 계열이어야 한다). **제품 트리(`src/`·`tests/`)는 `c521c8d` 와 바이트 동일** — 그 뒤 커밋은 문서뿐이다. main 과의 격차 234+ 커밋·219 파일 — **main 병합은 차단 상태**(§9) |
 | 작업 디렉터리 | `/home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/engine-safety-design-20260917`(브랜치가 여기 체크아웃돼 있다. `git worktree list` 로 확인하고, 다른 세션이 그 경로에서 작업 중이면 먼저 사용자에게 알린다) |
 | 가상환경 | `/home/ubuntu/projects/qwq-ai-trader/venv/bin/python` |
 | 운영(main) | `origin/main afa6e1e`(문서만 `d337494` 와 다름). 운영 checkout 은 `d337494` detached, PID 1546587(09-22 07:24 KST 기동). **운영은 legacy 경로로 그대로 운행 중이며 attach 는 미설치·제품 호출자 0건** |
@@ -159,5 +159,5 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTEST_D
 
 1. §3 의 문서를 읽었다는 증거로 **P1 계획서 §3 처분 표의 항목 수와 §5 단계 표의 단계 이름**을 그대로 적는다.
 2. §2 의 결정 표(대가 열 포함)를 보여 주고 빈칸의 답을 받는다(4-1 미답이면 **S2 부터** 착수 금지·S1·S1' 은 진행 — §2 의 게이트 문장 그대로).
-3. `git status --short`·`git rev-parse --short HEAD`(= `c521c8d` 여야 한다)·`git worktree list`·`free -m`·`pgrep -af pytest` 결과를 보고한다.
+3. `git status --short`(비어 있어야 한다)·`git rev-parse --short HEAD` 와 `git diff --stat c521c8d HEAD -- src tests`(**출력이 없어야 한다** — 제품 트리 동일)·`git worktree list`·`free -m`·`pgrep -af pytest` 결과를 보고한다. 제품 diff 가 있으면 다른 세션이 손댄 것이므로 멈추고 사용자에게 알린다.
 4. S1·S1' 의 Plan(파일·인터페이스·RED 목록·변이 목록·작업자 배정과 모델/effort)을 원장 형식으로 적고 착수 승인을 받는다.
