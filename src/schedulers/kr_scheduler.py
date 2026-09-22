@@ -1202,8 +1202,41 @@ class KRScheduler:
         fallback = params.get("_sync", {})
         return dict(params.get(strategy, fallback) if strategy else fallback)
 
+    def _attached_sync_mismatches(self, balance, kis_positions) -> List[str]:
+        """attach 전용: KIS 잔고/포지션과 owner 게시 포트폴리오의 차이를 모은다 (쓰기 0건).
+
+        - 비교 대상 3종: 종목 대칭차 · 공통 종목 수량 · 현금(1,000원 임계).
+        - 평단가는 비교하지 않는다 — owner 의 평단은 체결 reducer 의 산식이고 KIS 의 평단과
+          반올림 단위가 같다는 증거가 없다(있지도 않은 불일치를 매일 울리게 만든다).
+        - 현금은 legacy 와 같이 available_cash 가 0 이하이면 '정보 없음'으로 보고 제외한다.
+        - 반환 문자열에 계좌번호를 담지 않는다(로그로 그대로 나간다).
+        """
+        portfolio = self.bot.engine.portfolio
+        kis = kis_positions if kis_positions else {}
+        owner_symbols, kis_symbols = set(portfolio.positions.keys()), set(kis.keys())
+        mismatches = []
+        only_owner = sorted(owner_symbols - kis_symbols)
+        only_kis = sorted(kis_symbols - owner_symbols)
+        if only_owner:
+            mismatches.append(f"owner 에만 있음: {', '.join(only_owner)}")
+        if only_kis:
+            mismatches.append(f"KIS 에만 있음: {', '.join(only_kis)}")
+        for symbol in sorted(owner_symbols & kis_symbols):
+            owner_qty, kis_qty = portfolio.positions[symbol].quantity, kis[symbol].quantity
+            if owner_qty != kis_qty:
+                mismatches.append(f"{symbol} 수량 owner {owner_qty} ≠ KIS {kis_qty}")
+        available_cash = Decimal(str(balance.get('available_cash', 0)))
+        cash_gap = abs(portfolio.cash - available_cash)
+        if available_cash > 0 and cash_gap > Decimal('1000'):
+            mismatches.append(f"현금 차 {cash_gap:,.0f}원")
+        return mismatches
+
     async def _sync_portfolio(self):
-        """KIS API와 포트폴리오 동기화"""
+        """KIS API와 포트폴리오 동기화
+
+        attach(`engine._execution_runtime is not None`)에서는 2-1 분기에서 읽기 전용 관측만
+        하고 돌아간다 — 아래 3번 이후의 live writer 는 미설치 경로 전용이다.
+        """
         bot = self.bot
         if not bot.broker:
             return
@@ -1254,6 +1287,35 @@ class KRScheduler:
                         bot.risk_manager.set_sync_status(False)
                     _hb.record_failure("kr_portfolio_sync", _why)
                     return
+
+            # 2-1. attach 설치 시: 읽기 전용 관측 + 불일치 알람 (P0-3 Q-4)
+            # owner 가 게시한 live 포트폴리오를 sync 가 덮으면 `_owner_ready` 의
+            # legacy_portfolio_writer_conflict 로 owner 의 모든 명령이 멈춘다. 그래서 attach 에서는
+            # 포트폴리오·ExitManager·RiskManager 어느 것도 쓰지 않고 대조만 하고 돌아간다.
+            # 불일치의 해소는 owner 의 reducer 몫이고 여기서는 알리기만 한다 — 불일치가 계속되면
+            # legacy 와 같은 sidecar 연속 실패 임계로 신규 매수가 막힌다(10분 강제 해제가 있어
+            # best-effort 이며, 이것이 수동 매매를 owner 에 반영하지는 않는다).
+            runtime = getattr(getattr(bot, 'engine', None), '_execution_runtime', None)
+            if runtime is not None:
+                try:
+                    mismatches = self._attached_sync_mismatches(balance, kis_positions)
+                except Exception as _ase:
+                    # 대조 자체의 결함을 KIS 동기화 실패로 오인시키지 않는다(별도 사유).
+                    logger.error(f"[동기화] attach 대조 실패: {_ase}")
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(False)
+                    _hb.record_failure("kr_portfolio_sync", f"attach 대조 실패: {_ase}")
+                    return
+                if mismatches:
+                    logger.error(f"[동기화] attach 불일치 — {'; '.join(mismatches)}")
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(False)
+                    _hb.record_failure("kr_portfolio_sync", f"attach 불일치 {len(mismatches)}건")
+                else:
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(True)
+                    _hb.record_success("kr_portfolio_sync")
+                return
 
             # 3. lock 내에서 포트폴리오 수정
             async with bot._portfolio_lock:

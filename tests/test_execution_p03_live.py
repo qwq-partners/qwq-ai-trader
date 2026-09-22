@@ -69,3 +69,116 @@ def test_the_scheduler_method_delegates_to_the_single_source(monkeypatch):
     from src.schedulers import kr_scheduler
     monkeypatch.setattr(kr_scheduler, "classify_exit_type", lambda reason: f"위임:{reason}")
     assert kr_scheduler.KRScheduler._classify_exit_type("손절 -5.2%") == "위임:손절 -5.2%"
+
+
+# ---------------------------------------------------------------- S-C sync 읽기 전용
+
+
+@pytest.fixture
+def attached_sync(monkeypatch, tmp_path):
+    """미설치 특성화 시험의 가짜 봇을 그대로 쓰고 engine 에 runtime 만 심는다.
+
+    RiskManager 는 진짜다 — 인수가 말하는 것은 기록용 목록이 아니라 `_sync_healthy` 다.
+    """
+    from pathlib import Path
+
+    from src.core.types import RiskConfig
+    from src.risk.manager import RiskManager
+    from src.utils import loop_heartbeat as hb
+    import test_sync_portfolio_characterization as legacy
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hb._states.pop("kr_portfolio_sync", None)
+
+    def make(*, owner_positions, balance, kis_positions, cash="100000", attached=True):
+        sched, bot, _ = legacy._make(monkeypatch, bot_positions=owner_positions,
+                                     balance=balance, kis_seq=[kis_positions] * 20, cash=cash)
+        bot.risk_manager = RiskManager(RiskConfig(), D(cash), "KR")
+        bot.engine._execution_runtime = object() if attached else None
+        return sched, bot
+
+    yield make, legacy, hb
+    hb._states.pop("kr_portfolio_sync", None)
+
+
+def _owner_view(bot):
+    """`_owner_ready` 가 쓰는 바로 그 부호화 — 여기가 바뀌면 게이트가 닫힌다."""
+    from src.execution.safety.economics import encode_portfolio
+    return encode_portfolio(bot.engine.portfolio)
+
+
+def test_a_quiet_account_leaves_the_owner_view_untouched_for_ten_cycles(attached_sync):
+    """조용한 계좌: 10회 sync 후 owner 게시 포트폴리오·ExitManager 가 그대로다.
+
+    수량·현금은 같지만 owner 의 `current_price`(수락된 시세)와 KIS 의 `prpr` 은 다르다 —
+    legacy 꼬리는 그 한 줄을 덮어 `_owner_ready` 의 DTO 동등성을 깨고, 그래서 조용한
+    계좌에서도 30초마다 게이트가 닫힌다(계획서 §1). attach 분기는 그 줄에 닿지 않는다.
+    """
+    make, legacy, hb = attached_sync
+    sched, bot = make(owner_positions=[legacy._pos("005930", qty=10, cur="10000")],
+                      balance={"available_cash": 100000, "stock_value": 105000},
+                      kis_positions={"005930": legacy._pos("005930", qty=10, cur="10500")})
+    before = _owner_view(bot)
+    for _ in range(10):
+        legacy._run(sched)
+    assert _owner_view(bot) == before
+    assert (bot.exit_manager.registered, bot.exit_manager.removed) == ([], [])
+    assert bot.risk_manager._sync_healthy is True
+    assert hb._state("kr_portfolio_sync").consecutive_failures == 0
+    # 조회는 계속 하지만 쓰기는 0 — 재시도 방어를 거치지 않은 단순 경로다.
+    assert bot.broker.get_positions_calls == 10
+
+
+def test_a_manual_sell_is_reported_and_never_written_into_the_owner_view(attached_sync):
+    """수동 매도로 KIS 수량 < owner 수량 → 실패 기록 + error 1건, live 는 그대로."""
+    make, legacy, hb = attached_sync
+    sched, bot = make(owner_positions=[legacy._pos("005930", qty=10)],
+                      balance={"available_cash": 100000, "stock_value": 42000},
+                      kis_positions={"005930": legacy._pos("005930", qty=4)})
+    before = _owner_view(bot)
+    errors = []
+    from src.schedulers import kr_scheduler
+    handle = kr_scheduler.logger.add(lambda message: errors.append(message), level="ERROR")
+    try:
+        legacy._run(sched)
+    finally:
+        kr_scheduler.logger.remove(handle)
+    assert _owner_view(bot) == before
+    assert bot.risk_manager._sync_fail_count == 1
+    assert hb._state("kr_portfolio_sync").consecutive_failures == 1
+    assert len(errors) == 1 and "005930 수량 owner 10 ≠ KIS 4" in errors[0]
+    # 계좌번호가 로그로 새지 않는다.
+    assert "SYNTHETIC_ACCOUNT" not in errors[0]
+
+
+def test_the_symmetric_difference_and_the_cash_gap_are_reported(attached_sync):
+    """종목 대칭차·현금 차(1,000원 임계) 세 갈래를 한 번에 고정한다."""
+    make, legacy, _ = attached_sync
+    sched, bot = make(owner_positions=[legacy._pos("005930", qty=10)],
+                      balance={"available_cash": 100500, "stock_value": 105000},
+                      kis_positions={"000660": legacy._pos("000660", qty=3)})
+    reasons = sched._attached_sync_mismatches(bot.broker.balance, {"000660": legacy._pos("000660")})
+    assert reasons == ["owner 에만 있음: 005930", "KIS 에만 있음: 000660"]
+    # 현금 차는 1,000원 임계 위에서만 센다.
+    assert sched._attached_sync_mismatches({"available_cash": 100999}, {}) == [
+        "owner 에만 있음: 005930"]
+    assert sched._attached_sync_mismatches({"available_cash": 98000}, {}) == [
+        "owner 에만 있음: 005930", "현금 차 2,000원"]
+    # available_cash 가 0 이하이면 legacy 와 같이 '정보 없음' — 불일치로 올리지 않는다.
+    assert sched._attached_sync_mismatches({"available_cash": 0}, {}) == [
+        "owner 에만 있음: 005930"]
+
+
+def test_a_broken_comparison_is_not_charged_to_the_kis_sync(attached_sync, monkeypatch):
+    """대조 자체가 터져도 fail-closed 이고, 사유가 KIS 동기화 실패와 구분된다."""
+    make, legacy, hb = attached_sync
+    sched, bot = make(owner_positions=[], balance={"available_cash": 100000, "stock_value": 0},
+                      kis_positions={})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("대조 결함")
+
+    monkeypatch.setattr(type(sched), "_attached_sync_mismatches", boom)
+    legacy._run(sched)
+    assert bot.risk_manager._sync_fail_count == 1
+    assert hb._state("kr_portfolio_sync").failure_reason == "attach 대조 실패: 대조 결함"
