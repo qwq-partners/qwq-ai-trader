@@ -461,7 +461,7 @@ async def target(tmp_path, monkeypatch, *, scope=SCOPE, path=None, seed=True, **
                   validator_config=validator_block(), position_pct=position_table(),
                   stop_params=stop_table(), exit_config=ExitConfig(),
                   experts_shadow_mode=True, now=NOW_KST, vix_fetcher=missing_vix,
-                  collect=collect)
+                  collect=collect, indicator_source=lambda symbol: {})
 
     error_events = []
 
@@ -499,7 +499,10 @@ def live_snapshot(f):
     return (encode_portfolio(engine.portfolio), encode_protection(f['exits']),
             f['sidecar']._sidecar_active, f['sidecar']._market_trend,
             f['adapter']._current_regime, engine._market_regime,
-            id(engine._execution_runtime), id(runtime.gateway), id(runtime._regime_writer))
+            id(engine._execution_runtime), id(runtime.gateway), id(runtime._regime_writer),
+            id(getattr(runtime, '_protection_producer', None)),
+            tuple(id(handler) for handler in engine._handlers[
+                _engine_module.EventType.MARKET_DATA]))
 
 
 def assert_untouched(f, before):

@@ -1135,14 +1135,22 @@ def test_e1_legacy_ledger_after_attach_refuses_the_signal_without_cancelling(tmp
             assert f['posts']() == []
             assert f['prepared'] == []
             await assert_no_direct_broker_calls(f)
-            # legacy writer 가드 세 곳 전부 명시 거부다. 포지션·현금을 직접 쓰는 것은
+            # 주문·체결 writer는 명시 거부하고 가격 writer는 상태를 유지한다. 포지션·현금을 직접 쓰는 것은
             # `update_position` 하나라 그것이 빠지면 가장 비싼 가드가 무보호가 된다(독립 재현 P1).
             with pytest.raises(ApplicationBlocked):
                 await rm.on_order(OrderEvent.from_order(
                     Order(symbol='005930', side=OrderSide.BUY, order_type=OrderType.MARKET,
                           quantity=1, price=D('10000')), source='legacy'))
-            with pytest.raises(ApplicationBlocked):
-                engine.update_position_price('005930', D('10100'))
+            from copy import deepcopy
+            owner_before = deepcopy(f['runtime'].owner.state)
+            version_before = f['runtime'].owner.version
+            portfolio_before = deepcopy(engine.portfolio)
+            protection_before = deepcopy(f['exits']._states)
+            engine.update_position_price('005930', D('10100'))
+            assert f['runtime'].owner.state == owner_before
+            assert f['runtime'].owner.version == version_before
+            assert engine.portfolio == portfolio_before
+            assert f['exits']._states == protection_before
             cash_before = engine.portfolio.cash
             with pytest.raises(ApplicationBlocked):
                 engine.update_position(Fill(order_id='legacy-fill', symbol='005930',

@@ -35,6 +35,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from ...core.event import EventType
 from ...core.market_regime import MarketRegimeAdapter
 from ...core.types import RiskConfig
 from ...risk.manager import RiskManager
@@ -50,6 +51,7 @@ from .gateway import SignalGateway
 from .policy_generations import versioned_fact
 from .policy_snapshot import PolicyContext
 from .protection import encode_protection
+from .protection_producer import ProtectionProducer
 from .qualification import config_version
 from .regime_owner import POLICY_READS, RegimeOwner
 from .store import ExecutionStateStore
@@ -225,7 +227,7 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
                                    risk: RiskConfig, validator_config: dict, position_pct: dict,
                                    stop_params: dict, exit_config: ExitConfig,
                                    experts_shadow_mode, now: datetime, vix_fetcher,
-                                   collect) -> SignalGateway:
+                                   collect, indicator_source) -> SignalGateway:
     """기동 시 한 번 attach 런타임을 세우거나 **명명된 사유로 거부한다**.
 
     제품 호출자는 0건이다. 제품에는 이 함수가 요구하는 checkpoint(포트폴리오·보호 대사 +
@@ -250,7 +252,8 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     engine 의 레짐)과 `runtime._regime_writer`·`regime_adapter._regime_owner`·
     `sidecar._regime_owner` 가 남으며, 정책 게시까지 갔다면 **store 에 `entry_policy_context`
     와 증가한 version 이 commit 된 채** 남고, sweep 이 일부 행을 끝냈다면 그 종료와 예약 해제도
-    store 에 남는다. `engine._execution_runtime` 은 아직 None 이다(attach 전). **이 뒤의 실패
+    store 에 남는다. attach 전 실패에서는 `engine._execution_runtime`이 None이지만,
+    attach 뒤 보호 생산자 등록·sweep 실패에서는 runtime·gateway 배선도 남는다. **이 뒤의 실패
     에서 호출자는 legacy 로 계속 가면 안 된다**(프로세스를 세우거나 거래를 멈춘다). 같은
     runtime 으로 재호출하면 다른 어떤 거부보다 먼저 `execution_runtime_already_restored` 로
     끝난다. 예외 하나: `restore()` 가 게시 **전**에 실패하면(store 장애·정책 등록 검증 실패)
@@ -261,6 +264,10 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     `vix_fetcher` 에 기본값을 두지 않는 이유: None 은 "VIX 없음"이 아니라 실제 네트워크
     조회를 설치한다. `collect` 도 같은 이유로 기본값이 없다 — 체결 증거 생산자 없이 선 attach
     는 자동 매수를 증거 없이 내보낸다(그 상태는 `reconciler_unavailable` 이 다시 막는다).
+    `indicator_source(symbol)`은 기존 bot 캐시의 ma5/prev_low만 읽는 callable을 호출자가
+    주입한다. 새 조회를 만들지 않으며 필수 인자 검증은 restore 전에 끝낸다.
+    attach·gateway·체결 생산자 뒤에 보호 생산자를 첫 MARKET_DATA 핸들러로 등록하고
+    기동 sweep을 한 번 기다린다. 이 단계의 실패도 롤백하지 않고 종료 계약을 따른다.
 
     **설치 전제(P0-4 항목 9 — 호출자 몫이다)**: 호출자는 bot 수준
     `_exit_pending_symbols`/`_exit_pending_timestamps` 가 비어 있음을 확인한다 — 설치기는
@@ -292,6 +299,8 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
         # `start_reconciler` 도 같은 검사를 하지만 그것은 attach **뒤**다 — live 를 건드린
         # 뒤에 인자 모양으로 실패하면 호출자는 legacy 로 돌아갈 수 없다.
         raise ValueError('invalid_execution_collector')
+    if not callable(indicator_source):
+        raise ValueError('invalid_protection_indicator_source')
     # 실계좌 증거(§5 스모크 4항)가 닫히기 전에는 모의투자 계좌의 일별체결 응답으로 체결
     # 최종성을 판정하지 않는다. env 는 요청 경로 전체의 정본이다(builder·broker 공용).
     broker = runtime.engine.broker
@@ -415,4 +424,9 @@ async def install_attached_runtime(runtime, commands, *, sidecar: RiskManager,
     # 생산자는 송신로가 선 **뒤**에 돈다. 먼저 돌면 gateway 없는 구간의 관측이 갈 곳이 없고,
     # 자동 BUY 의 `reconciler_unavailable` 게이트는 이 줄이 돌아야 열린다.
     runtime.start_reconciler(collect)
+    producer = ProtectionProducer(runtime, clock=runtime.clock, indicator_source=indicator_source)
+    runtime._protection_producer = producer
+    # 전략이 같은 시세를 소비하기 전에 보호 결정을 기존 송신로로 인계한다.
+    engine._handlers[EventType.MARKET_DATA].insert(0, producer.on_market_data)
+    await producer.sweep()
     return gateway
