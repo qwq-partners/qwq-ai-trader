@@ -1202,25 +1202,28 @@ class KRExecutionRuntime:
 
         def admit(state):
             nonlocal admission_rejected
-            # owner 대기 중 기준이 바뀔 수 있다. durable 접수 전에만 재검사한다.
             try:
+                # owner 대기 중 기준이 바뀔 수 있다. durable 접수 전에만 재검사한다.
                 self._require_quote_freshness(state, symbol, observed, market_quote)
+                pending = state.setdefault("protection_quote_admissions", {})
+                if any(row["symbol"] == symbol for row in pending.values()):
+                    raise ApplicationBlocked("미해결 보호 가격 입력을 먼저 대사해야 합니다")
+                pending[command_id] = {**request, "payload_digest": request_digest,
+                                       "status": "RECEIVED", "source_version": self.owner.version + 1,
+                                       "admitted_at": self._now().isoformat()}
+                state.setdefault('quote_price_views', {})[symbol] = quote_price_view(request, self.owner.version + 1)
+                if observed is not None:
+                    # 종목당 한 행만 보관하며 시각 없는 후속 입력은 이 근거를 지우지 않는다.
+                    state.setdefault("latest_explicit_quote", {})[symbol] = {
+                        **market_quote, "received_at": request["observed_at"],
+                        "admission_version": self.owner.version + 1,
+                        "payload_digest": digest(self._market_quote_payload(symbol, market_quote))}
             except ApplicationBlocked:
+                # reducer 는 commit 전에 돈다 — 사전 거부에는 지울 것이 없고 반쯤 게시된 것도
+                # 없다. 그래서 프로세스 래치(전 종목 SUBMIT·일자 전환 영구 정지) 대신 남아 있는
+                # durable 접수 행이 계속 막게 둔다. commit 뒤의 실패는 콜백이 그대로 래치한다.
                 admission_rejected = True
                 raise
-            pending = state.setdefault("protection_quote_admissions", {})
-            if any(row["symbol"] == symbol for row in pending.values()):
-                raise ApplicationBlocked("미해결 보호 가격 입력을 먼저 대사해야 합니다")
-            pending[command_id] = {**request, "payload_digest": request_digest,
-                                   "status": "RECEIVED", "source_version": self.owner.version + 1,
-                                   "admitted_at": self._now().isoformat()}
-            state.setdefault('quote_price_views', {})[symbol] = quote_price_view(request, self.owner.version + 1)
-            if observed is not None:
-                # 종목당 한 행만 보관하며 시각 없는 후속 입력은 이 근거를 지우지 않는다.
-                state.setdefault("latest_explicit_quote", {})[symbol] = {
-                    **market_quote, "received_at": request["observed_at"],
-                    "admission_version": self.owner.version + 1,
-                    "payload_digest": digest(self._market_quote_payload(symbol, market_quote))}
             return state
 
         def reduce(state):

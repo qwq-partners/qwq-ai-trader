@@ -480,3 +480,102 @@ def test_market_pending_does_not_add_a_new_alpha_barrier_to_cancel(tmp_path, mon
             await runtime.shutdown()
             await f['store'].close()
     asyncio.run(scenario())
+
+
+def test_a_duplicate_admission_rejection_does_not_latch_the_whole_account(tmp_path, monkeypatch):
+    """P0-4 A1 — `admit` 의 사전 거부는 계좌 전체를 영구 정지시키지 않는다.
+
+    reducer 는 commit 전에 돌고 실패하면 candidate 가 버려진다 — 사전 거부에는 지울 것이
+    없으므로 프로세스 래치(`_protection_failed`)를 세울 근거가 없다. 그래도 완화는 아니다:
+    durable 접수 행이 남아 `market_source_pending` 이 SUBMIT 을 계속 막는다(fail-closed 유지).
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        runtime, commands = f['runtime'], f['commands']
+        try:
+            request = f['request']()
+            await f['quote'](request)
+
+            def admitted(state):
+                # 앞선 시도가 남긴 미해결 접수 행. 재시작 표본(:392-399)과 같은 모양이다.
+                state.setdefault('protection_quote_admissions', {})['x'] = {
+                    'symbol': request.symbol, 'status': 'RECEIVED'}
+                return state
+
+            await runtime.owner.mutate('synthetic-unresolved-admission', admitted)
+            assert runtime._protection_failed is False
+            with pytest.raises(ApplicationBlocked, match='미해결 보호 가격 입력'):
+                await runtime.quote(request.symbol, Decimal('10100'))
+            assert runtime._protection_failed is False
+            assert runtime.health()['protection_updates_failed'] is False
+            state = runtime.owner.state
+            assert runtime.market_source_pending(state) is True
+            with pytest.raises(ValueError, match='market_source_pending'):
+                await commands.prepare(request, f['entry'](request))
+            assert not f['broker']._session.posts
+        finally:
+            with suppress(ApplicationBlocked): await runtime.shutdown()
+            await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_cancel_after_the_apply_commit_still_latches_protection(tmp_path, monkeypatch):
+    """P0-4 A1b 특성화 — 취소는 사전 거부가 아니다. 현행 래치를 그대로 고정한다.
+
+    두 번째 mutate 가 commit 된 뒤 task 가 취소되면 완료 검증이 돌지 않은 채 끝난다 —
+    그 창은 계속 래치로 덮는다(적대적 심사 ①M2).
+    """
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        runtime = f['runtime']
+        reached, release = asyncio.Event(), asyncio.Event()
+        caller = None
+        try:
+            request = f['request']()
+            await f['quote'](request)
+            commit = f['store'].commit
+
+            async def gate(version, state, command_id):
+                result = await commit(version, state, command_id)
+                if command_id.startswith('command:quote:'):
+                    reached.set()
+                    await release.wait()
+                return result
+
+            monkeypatch.setattr(f['store'], 'commit', gate)
+            caller = asyncio.create_task(runtime.quote(request.symbol, Decimal('10100')))
+            await asyncio.wait_for(reached.wait(), 2)
+            inner, = tuple(runtime._protection_tasks)
+            inner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await caller
+            assert runtime._protection_failed is True
+            assert runtime.health()['protection_updates_failed'] is True
+            assert not f['broker']._session.posts
+        finally:
+            release.set()
+            if caller is not None:
+                await asyncio.gather(caller, return_exceptions=True)
+            with suppress(ApplicationBlocked): await runtime.shutdown()
+            await f['store'].close()
+    asyncio.run(scenario())
+
+
+def test_a_failed_initial_r_finalization_does_not_latch_protection(tmp_path, monkeypatch):
+    """P0-4 A7 대조 — 같은 task 집합이어도 초기 R 확정 실패는 래치하지 않는다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        runtime = f['runtime']
+        try:
+            receipt = await runtime.finalize_initial_r('F1', 'k1', expected_version=runtime.owner.version,
+                initial_stop_evidence_id='s1', finality_evidence_id='e1')
+            assert receipt.status == 'BLOCKED'
+            with pytest.raises(ValueError, match='recovery_operation_id_conflict'):
+                await runtime.finalize_initial_r('F1', 'k2', expected_version=runtime.owner.version,
+                    initial_stop_evidence_id='s1', finality_evidence_id='e1')
+            assert runtime._protection_failed is False
+            assert runtime.health()['protection_updates_failed'] is False
+        finally:
+            with suppress(ApplicationBlocked): await runtime.shutdown()
+            await f['store'].close()
+    asyncio.run(scenario())
