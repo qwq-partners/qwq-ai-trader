@@ -42,6 +42,7 @@ from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
+from ..utils.exit_types import classify_exit_type
 
 
 class _RegimeClassifierLLM:
@@ -862,51 +863,13 @@ class KRScheduler:
 
     @staticmethod
     def _classify_exit_type(reason: str) -> str:
-        """exit_reason 문자열 → exit_type 태그 변환 (단일 출처, 중복 방지)
+        """exit_reason 문자열 → exit_type 태그 변환 (단일 출처는 `src/utils/exit_types.py`).
 
-        ExitManager / batch_analyzer / kr_scheduler 세 곳에서 발생하는
-        모든 reason 패턴을 커버한다.
-
-        패턴 우선순위 (위에서 아래):
-          0. 긴급 청산 (킬스위치/긴급전량청산 — 손절보다 먼저 판별)
-          1. 손절
-          2. 트레일링
-          3. 본전 이탈 (breakeven)
-          4. stale 계열 (횡보·무효화·저효율·보유기간 초과·코어홀딩 조기경보)
-          5. RSI2 청산 → take_profit
-          6. 분할 익절 (3차→2차→1차 순서 — "2차"가 "1차" 포함 오탐 방지)
-          7. 일반 익절
-          8. 테마 EOD / fill_detected / 기타 → manual
+        본문은 P0-3 S-B 에서 순수 함수로 내려갔다 — `src/execution/safety/gateway.py` 가
+        같은 분류를 써야 하는데 스케줄러를 import 하면 순환이 생기기 때문이다(Q-6).
+        이 메서드는 기존 호출 3곳을 위해 남긴 위임이며 동작은 바뀌지 않는다.
         """
-        r = reason or ""
-        # 2026-08-05 P2: "긴급전량청산" 등이 manual로 오분류되던 데드 조건 복원.
-        # risk/manager.record_exit가 ("stop_loss","emergency_stop")를 당일 손절
-        # 등록 대상으로 취급하므로 emergency_stop 반환 시 재진입 강화 정책이 걸린다.
-        # (소비처 확인: DB VARCHAR(30)/저널/메모리/위키 모두 자유 문자열 — 안전)
-        if "긴급" in r or "emergency" in r.lower():
-            return "emergency_stop"
-        if "손절" in r or "stop" in r.lower():
-            return "stop_loss"
-        if "트레일링" in r or "trailing" in r.lower():
-            return "trailing"
-        if "본전 이탈" in r or "breakeven" in r.lower():
-            return "breakeven"
-        if ("횡보 청산" in r or "추세 무효화" in r
-                or "익절후 저효율" in r
-                or "보유기간 초과" in r
-                or "코어홀딩 조기경보" in r):
-            return "stale"
-        if "RSI2 청산" in r:
-            return "take_profit"
-        if "3차" in r:
-            return "third_take_profit"
-        if "2차" in r:
-            return "second_take_profit"
-        if "1차" in r:
-            return "first_take_profit"
-        if "익절" in r or "take_profit" in r.lower():
-            return "take_profit"
-        return "manual"
+        return classify_exit_type(reason)
 
     def _trim_watch_symbols(self):
         """감시 종목 리스트가 최대 수를 초과하면 오래된 비포지션 종목 제거"""
