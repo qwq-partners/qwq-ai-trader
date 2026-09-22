@@ -126,6 +126,24 @@ class FillObservation:
                 "side": self.side, "metadata": _thaw(self.metadata)}
 
 
+def observation_from_evidence(evidence, *, trading_day: str, metadata) -> FillObservation:
+    """관측 하나에서 결정적으로 `FillObservation`을 만든다. 실측 비용은 조회에 없으므로 0이다.
+
+    읽는 것은 `ref`/symbol/side/누적수량/누적금액뿐이다 — 저장된 attempt 행으로 관측을
+    되살리는 재구성 경로도 같은 값으로 이 함수를 불러야 `observation_id`가 글자 단위로
+    같아지고, 그래야 이전 inbox 행의 supersede가 맞물린다. metadata는 주문 intent가
+    정본이며 브로커 응답에서 만들지 않는다.
+    """
+    ref = evidence.ref
+    return FillObservation(
+        account_scope=ref.account_scope, market=ref.market, trading_day=trading_day,
+        exchange=ref.exchange, order_id=ref.order_no, symbol=evidence.symbol,
+        side=evidence.side.upper(), cumulative_quantity=evidence.cumulative_quantity,
+        cumulative_amount=evidence.cumulative_amount, cumulative_fee=Decimal("0"),
+        metadata={} if metadata is None else dict(metadata),
+        org_no=ref.org_no, parent_order_no=ref.parent_order_no)
+
+
 @dataclass(frozen=True)
 class FillDelta:
     quantity: int

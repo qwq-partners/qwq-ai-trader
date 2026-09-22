@@ -12,6 +12,7 @@ engine 을 import 하지 않는다 — 입력은 SignalEvent·Order·증거뿐�
 from __future__ import annotations
 
 from decimal import Decimal
+from math import isfinite
 from uuid import uuid4
 
 from loguru import logger
@@ -64,9 +65,24 @@ class SignalGateway:
             logger.info('[게이트웨이] 판단 사실 게시: intent={} 종목={} 전략={} digest={} '
                         'config={} 만료={}', facts.intent_id, facts.symbol, facts.strategy,
                         facts.digest, facts.config_version, facts.expires_at.isoformat())
-        await self.commands.prepare(request, context)
+        await self.commands.prepare(request, context, fill_metadata=self._fill_metadata(event, order))
         # 같은 attempt 로 재시도하지 않는다(계약 6). create_task 로 감싸면 명령 스코프가 깨진다.
         return await self.commands.dispatch(request, context, transport)
+
+    @staticmethod
+    def _fill_metadata(event, order):
+        """체결 관측이 읽을 값은 여기서 주문 intent에 묶는다(브로커 응답에서 추측 0건).
+
+        진입 점수는 `Order.signal_score`가 정본이고 없으면 신호가 실어 온 점수다. 만석 교체의
+        점수 비교는 돈 경로라 결측을 허용하지 않는다 — 없으면 보유가 전부 0점으로 보인다.
+        종목명과 섹터는 신호/주문 객체에 필드가 없다 — 섹터는 `request_binding['sector']`가
+        이미 정본이고(economics의 `_entry_sector`) 종목명 생산자는 P0-3 범위다.
+        """
+        if order.side is not OrderSide.BUY:
+            return None
+        score = order.signal_score if order.signal_score is not None else event.score
+        _require(type(score) in (int, float) and isfinite(score), 'entry_signal_score_required')
+        return {'entry_signal_score': score}
 
     def reserved_cash(self) -> Decimal:
         """owner 미해결 attempt 의 예약 현금 합. `evaluate_entry_policy` 와 같은 식이다."""
