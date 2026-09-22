@@ -57,14 +57,17 @@ class _ExitManager:
         self.rolled_back.append(symbol)
 
 
-def scheduler(*, attached, broker, stale_minutes=60):
+def scheduler(*, attached, broker, stale_minutes=60, rm_pending=(SYM,)):
     """`_cleanup_stale_pending` 이 만지는 속성만 가진 최소 bot + 스케줄러.
 
     `attached=True` 면 `engine._execution_runtime` 에 표식 객체를 둔다 — 가드의 술어는
     P0-3 이 `:1026`·`:1919` 에 쓴 것과 같아서 None 인지 아닌지만 본다.
+    `rm_pending` 은 sidecar(`engine.risk_manager`) 장부다 — attach 의 실제 상태는 **빈 집합**
+    (pending 은 owner 가 들고 sidecar 는 비어 있다)이고, 그때 bot 장부의 행은 함수 뒷부분의
+    고아 정리 블록으로 간다(재현 P2-1).
     """
     planted = datetime.now() - timedelta(minutes=stale_minutes)
-    rm = _RiskManager(pending={SYM})
+    rm = _RiskManager(pending=set(rm_pending))
     bot = SimpleNamespace(
         broker=broker,
         engine=SimpleNamespace(
@@ -93,6 +96,23 @@ def test_d1_attached_cleanup_sends_no_cancel_and_keeps_the_pending_books():
     """attach 설치 상태에서 stale 행을 심고 직접 호출 → 취소·해제·단계 되감기 전부 0."""
     broker = Broker(cancelled=0)
     sched, bot = scheduler(attached=True, broker=broker)
+    planted = dict(bot._exit_pending_timestamps)
+
+    asyncio.run(sched._cleanup_stale_pending())
+
+    assert broker.calls == []
+    assert bot.engine.risk_manager.cleared == []
+    assert bot.exit_manager.rolled_back == []
+    assert ledgers_intact(bot, planted[SYM])
+
+
+def test_d1b_attached_cleanup_skips_the_orphan_block_too():
+    """attach 의 실제 상태(sidecar 장부 비어 있음)에서는 bot 장부의 행이 **고아** 로 분류돼
+    함수 뒷부분의 고아 정리 블록(취소 POST + `rollback_stage` + 장부 삭제)으로 간다 —
+    가드가 함수 맨 앞이 아니라 첫 stale 루프에만 걸리면 이 표본이 죽는다(재현 P2-1·x1).
+    main 병합 때 가드를 main 판 본문 위에 다시 얹을 자리를 이 시험이 고정한다."""
+    broker = Broker(cancelled=0)
+    sched, bot = scheduler(attached=True, broker=broker, rm_pending=())
     planted = dict(bot._exit_pending_timestamps)
 
     asyncio.run(sched._cleanup_stale_pending())

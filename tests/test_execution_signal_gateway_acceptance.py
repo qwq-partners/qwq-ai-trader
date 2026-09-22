@@ -1116,8 +1116,9 @@ def test_c5_abandon_failure_preserves_the_reason_and_keeps_the_loop_alive(tmp_pa
 def test_e1_legacy_ledger_after_attach_refuses_the_signal_without_cancelling(tmp_path, monkeypatch):
     """H7 — bind 뒤 legacy 장부가 남으면 그 SIGNAL 을 거부한다(90초 stale 취소 루프 미도달).
 
-    이 진술은 엔진 경로에 한정된다 — `KRScheduler._cleanup_stale_pending` 은 attach 를 모른
-    채 취소를 낸다(10C).
+    이 진술은 엔진 경로에 한정된다 — `KRScheduler._cleanup_stale_pending` 은 P0-4 S-D 가
+    넣은 가드로 attach 에서는 취소를 내지 않는다(`tests/test_execution_p04_stale_pending.py`
+    가 고정; 이 문장은 S5 당시 "attach 를 모른 채 취소를 낸다(10C)"였다 — 단언 무수정).
     """
     async def scenario():
         f = await fixture(tmp_path, monkeypatch)

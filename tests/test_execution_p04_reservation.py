@@ -167,11 +167,20 @@ def test_the_symbol_lock_is_evaluated_before_the_reservation_check(tmp_path, mon
                 await f['commands'].prepare(oversell, f['entry'](oversell))
             assert str(locked.value) == 'unresolved_symbol_attempt'
 
-            # 같은 잠금이 보유 범위 안의 요청에도 걸린다(예약 검사라면 통과했을 수량이다).
+            # 보유 범위 안의 수량인데도 같은 잠금이 먼저 말한다(잠금이 없다면 이 요청은 S1 의
+            # 예약 100 때문에 `reserved_quantity_insufficient` 가 된다 — 재현 R3 정정).
             within = f['request']('O2', quantity=1, side=OrderSide.SELL)
             with pytest.raises(ValueError) as still_locked:
                 await f['commands'].prepare(within, f['entry'](within))
             assert str(still_locked.value) == 'unresolved_symbol_attempt'
+            # 잠금은 side 를 보지 않는다 — 미해결 SELL 위의 같은 종목 BUY 도 같은 낱말이다
+            # (재현 R2: 결정 문서 §4-2 의 "side 를 보지 않으며"를 여기서 고정한다. P1/F8 ① 이
+            # 이 줄을 side 인지형으로 여는 날 이 단언은 결정으로 뒤집힌다).
+            buy_back = f['request']('O3', quantity=1, side=OrderSide.BUY)
+            await f['quote'](buy_back)
+            with pytest.raises(ValueError) as side_blind:
+                await f['commands'].prepare(buy_back, f['entry'](buy_back), sector='반도체')
+            assert str(side_blind.value) == 'unresolved_symbol_attempt'
         finally:
             await f['store'].close()
     asyncio.run(scenario())

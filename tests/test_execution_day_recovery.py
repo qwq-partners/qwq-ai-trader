@@ -1289,6 +1289,13 @@ def test_a_blocked_rollover_latches_the_day_fence_for_cancel_and_across_restart(
             with pytest.raises(ValueError, match='recovery_operation_id_conflict'):
                 await runtime.repair_protection('R1', '000660', expected_version=runtime.owner.version)
             assert runtime._protection_failed is True and runtime.owner.healthy
+            # ①' 이 순간은 래치만 서 있다(접수 행 0·보호 task 0·owner healthy) — 래치 **하나만으로**
+            # SUBMIT 이 막히는지를 여기서 고정한다(S-A 재현 F1: 이 단언이 없으면
+            # `market_source_pending` 에서 래치 항을 지우는 완화가 corpus 전체에서 살아남는다).
+            assert not runtime.owner.state.get('protection_quote_admissions')
+            assert runtime.market_source_pending(runtime.owner.state) is True
+            with pytest.raises(ValueError, match='market_source_pending'):
+                await commands.prepare(f['request']('A2'), f['entry'](f['request']('A2')))
             # ② 미해결 보호 접수 행도 남긴다 — 둘 다 따로 일자 전환을 막는다.
             def admitted(state):
                 state.setdefault('protection_quote_admissions', {})['x'] = {
