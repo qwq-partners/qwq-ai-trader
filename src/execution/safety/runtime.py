@@ -848,7 +848,11 @@ class KRExecutionRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                continue    # 사유·로그는 task 본문이 남겼다. 같은 실패를 두 번 세지 않는다.
+                # 사유·로그는 task 본문이 남겼다. 같은 실패를 두 번 세지 않는다. 다만
+                # 접수된 task 의 실패가 아니면 대기 쪽 결함이라 조용히 넘기지 않는다.
+                if not (isinstance(pending, asyncio.Future) and pending.done()):
+                    raise
+                continue
             if stored is None:
                 break       # 마감을 넘겼다. 남은 시간은 B2의 것이고 남은 대상은 다음 주기가 본다.
             if stored:
@@ -868,7 +872,7 @@ class KRExecutionRuntime:
             # 방어층이다 — prepare가 binding 없이 attempt를 만들지 못한다. 그 계약이
             # 깨져도 여기서 파서에 빈 세션을 넘겨 provenance를 통과시키지 않는다.
             self._skip_reason("missing_session")
-            return False
+            return None
         evidence = parse_order_evidence(
             OrderRef.from_dict(attempt["order_ref"]), attempt["symbol"], attempt["side"], pages,
             tr_id=collection.scope.tr_id, session=session, query_kind="all",
@@ -879,20 +883,20 @@ class KRExecutionRuntime:
             # 자식행이 보이거나 판정할 수 없으면 수량도 종결도 쓰지 않는다(F4·P-3).
             chain_blocked.add(attempt_id)
             self._skip_reason("chain")
-            return False
+            return None
         if not evidence.schema_valid:
             self._skip_reason(evidence.reason if evidence.reason else "schema_invalid")
-            return False
+            return None
         if evidence.cumulative_quantity < attempt["observed_quantity"]:
             # 퇴행 응답(저장 40주인데 응답 20주)은 금액 차이로 `_evidence_changes_attempt`를
             # 통과하지만 `lifecycle.reconcile`은 `qty < old_qty`에서 상태를 그대로 반환한다.
             # 그래도 mutate는 commit하므로 version·게시만 매 주기 전진한다 — 호출을 건너뛴다.
             self._skip_reason("regressed_observation")
-            return False
+            return None
         if not self._evidence_changes_attempt(attempt, evidence):
             # 같은 응답을 다시 저장하지 않는다. mutate는 그 자체로 version·게시를 전진시킨다.
             self._skip_reason(evidence.reason if evidence.reason else "no_change")
-            return False
+            return None
         before = attempt["observed_quantity"]
 
         async def store() -> bool:
