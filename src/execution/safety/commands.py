@@ -553,13 +553,17 @@ class RequestBoundCommands:
             self._result_tasks.discard(task)
             if task.cancelled() or task.exception() is not None or task.result() is not True:
                 self.owner._block()
+            else:
+                # 저장된 ACK는 곧 새 미해결 시도다. 잠든 대사 주기를 깨워 첫 체결 지연을
+                # 없앤다. 깨움은 **저장 task 의 완료**에 건다 — 호출자가 취소로 빠져도
+                # 저장 task 는 살아남아 성공하므로, 호출자 뒤에만 두면 attempt 가 OPEN 인데
+                # 수집기는 Event 에서 무기한 잔다.
+                self.runtime.notify_execution_change()
         task.add_done_callback(done)
         accepted = await asyncio.shield(task)
         if not accepted:
             self.owner._block()
             return CommandResult(CommandStatus.UNKNOWN, request.attempt_id, reason_code='result_not_recorded')
-        # 저장된 ACK는 곧 새 미해결 시도다. 잠든 대사 주기를 깨워 첫 체결 지연을 없앤다.
-        self.runtime.notify_execution_change()
         return result
 
     async def _unsent(self, request, reason):
