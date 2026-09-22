@@ -138,6 +138,9 @@ class OrderEvidence:
     observed_at: datetime | None = None
     request_started_at: datetime | None = None
     query_scope: dict = field(default_factory=dict)
+    # 자식행이 보이거나(정정/취소 체인) 자식행 여부를 판정할 수 없을 때 True. 소비자는 이
+    # 관측으로 수량을 적용하지 않는다 — 종결만 포기하고 수량은 쓰는 해석을 막는다.
+    chain: bool = False
 
     def __post_init__(self):
         _quantity(self.order_quantity)
@@ -155,7 +158,12 @@ class OrderEvidence:
 def valid_evidence_provenance(ref: OrderRef, observed_at: datetime | None,
                               request_started_at: datetime | None,
                               query_scope: dict, now: datetime) -> bool:
-    """요청 범위·수신 시각 검증. 원자적 거래소 snapshot 증명은 아니다."""
+    """요청 범위·수신 시각 검증. 원자적 거래소 snapshot 증명은 아니다.
+
+    거래소는 요청 범위가 주문의 거래소를 포함하기만 하면 된다(superset). 운영과 같은
+    "ALL" 조회는 보이는 행을 늘리기만 하므로 종결을 더 어렵게 만든다 — 좁혀서 종결이
+    쉬워지는 방향이 아니다. 행 자체의 거래소 대조는 파서가 따로 한다.
+    """
     stamps = (observed_at, request_started_at, now)
     if any(not isinstance(t, datetime) or t.tzinfo is None or t.utcoffset() is None for t in stamps):
         return False
@@ -169,7 +177,7 @@ def valid_evidence_provenance(ref: OrderRef, observed_at: datetime | None,
             return False
         return (start <= day <= end and query_scope["account_scope"] == ref.account_scope
                 and query_scope["market"] == ref.market
-                and query_scope["exchange"] == ref.exchange
+                and query_scope["exchange"] in (ref.exchange, "ALL")
                 and all(isinstance(query_scope[key], str) and bool(query_scope[key])
                         for key in ("tr_id", "query_kind", "session")))
     except (KeyError, ValueError, TypeError):

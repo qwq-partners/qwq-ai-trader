@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime
 from decimal import Decimal
+import math
 from uuid import uuid4
 
 from loguru import logger
@@ -46,6 +47,34 @@ def _require(condition, reason):
 
 def _text(value):
     _require(type(value) is str and bool(value) and value == value.strip(), 'invalid_command_identity')
+
+
+# 체결 관측 metadata의 허용 키. economics의 화이트리스트(reduce_economics)와 같은 집합이며
+# registration_params는 보호 등록기가 만드는 값이라 주문 intent가 실을 수 없다.
+FILL_METADATA_FIELDS = ('name', 'sector', 'entry_signal_score', 'exit_type')
+
+
+def _fill_metadata(value):
+    """체결 시점이 아니라 prepare 시점에 거부한다.
+
+    metadata는 `observation_id`에 들어가므로 체결 시점에 거부되면 그 주문의 체결은 영영
+    적용되지 않는다(`encode_state`가 Decimal을 거부한다). 점수는 None 또는 float만 싣는다.
+    """
+    if value is None:
+        return {}
+    _require(type(value) is dict, 'invalid_fill_metadata')
+    _require(set(value) <= set(FILL_METADATA_FIELDS), 'unknown_fill_metadata_field')
+    row = {}
+    for key, item in value.items():
+        if key == 'entry_signal_score':
+            _require(item is None or (type(item) in (int, float) and math.isfinite(item)),
+                     'invalid_fill_metadata_value')
+            row[key] = None if item is None else float(item)
+        else:
+            _require(type(item) is str and bool(item) and item == item.strip(),
+                     'invalid_fill_metadata_value')
+            row[key] = item
+    return row
 
 
 def _amount(value):
@@ -419,13 +448,16 @@ class RequestBoundCommands:
             else:
                 raise CommandValidationError('policy_effect_pending')
 
-    async def prepare(self, request, context, *, sector=None):
+    async def prepare(self, request, context, *, sector=None, fill_metadata=None):
         with self.runtime.command_scope():
-            return await self._prepare(request, context, sector=sector)
+            return await self._prepare(request, context, sector=sector, fill_metadata=fill_metadata)
 
-    async def _prepare(self, request, context, *, sector=None):
+    async def _prepare(self, request, context, *, sector=None, fill_metadata=None):
         request, context = self._request(request, context)
         if sector is not None: _text(sector)
+        # 자동 BUY의 점수 존재 강제는 여기가 아니라 게이트웨이에 있다 — prepare에 걸면 기존
+        # 직접 호출자(시험 46건)의 기대값이 바뀐다. 게이트 이관은 P0-3.
+        metadata = _fill_metadata(fill_metadata)
         def reduce(state):
             resources, decision, snapshot, facts = self._evaluate(state, request, context, sector)
             # sector 정본은 facts다. 호출자 kwarg는 같거나 None만 허용한다.
@@ -447,6 +479,8 @@ class RequestBoundCommands:
                 'strategy': request.strategy, 'quantity': request.quantity,
                 'valuation_price': str(request.valuation_price), 'wire_price': str(request.wire_price),
                 'origin': context.origin.value, 'sector': bound_sector,
+                # 체결 관측이 읽을 두 값. 세션은 응답에 없고 metadata는 응답에서 추측하지 않는다.
+                'session': request.session.session, 'fill_metadata': deepcopy(metadata),
                 'source_versions': asdict(snapshot.versions),
                 'decision_facts_digest': None if facts is None else facts.digest,
                 'resources': resources.to_dict(), 'parent_version': None if parent is None else parent.version,

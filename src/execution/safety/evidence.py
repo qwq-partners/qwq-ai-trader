@@ -44,6 +44,70 @@ def _str(value):
     return value
 
 
+IDENTITY_FIELDS = ("ord_dt", "odno", "ord_gno_brno", "orgn_odno")
+
+
+def _identity(row):
+    """모든 행에서 신원 4필드만 방어적으로 읽는다. 읽을 수 없으면 None(unreadable_row).
+
+    후보와 chain 판정은 계좌 전체 행을 봐야 하지만, 무관한 주문의 필드 결측이 우리 주문의
+    관측을 지워서는 안 된다(15필드 엄격 파싱은 후보 행에만 적용한다). 소문자 정규화와 별칭
+    충돌 검사는 `_parse_row`와 같게 하되 **신원 4필드에 한정**한다 — 무관한 필드의 별칭
+    충돌은 우리 행이면 뒤의 엄격 파싱이 잡고, 신원 필드의 충돌은 임의 값을 고르지 않는다.
+    """
+    if not isinstance(row, dict):
+        return None
+    picked = {}
+    for key, value in row.items():
+        if not isinstance(key, str):
+            return None
+        lowered = key.lower()
+        if lowered not in IDENTITY_FIELDS:
+            continue
+        if lowered in picked and picked[lowered] != value:
+            return None
+        picked[lowered] = value
+    if picked.keys() != set(IDENTITY_FIELDS):
+        return None
+    for value in picked.values():
+        if not isinstance(value, str) or value != value.strip():
+            return None
+    if not re.fullmatch(r"[0-9]{8}", picked["ord_dt"]):
+        return None
+    try:
+        day = datetime.strptime(picked["ord_dt"], "%Y%m%d").date().isoformat()
+    except ValueError:
+        return None
+    return (day, picked["odno"], picked["ord_gno_brno"], picked["orgn_odno"])
+
+
+def evidence_pages(collection) -> list[EvidencePage]:
+    """수집기 `QueryCollection`을 파서 입력으로 해동한다(raw row는 로그/저장 대상이 아니다).
+
+    `QueryPage.rows`는 frozen mapping이라 해동하지 않으면 파서가 malformed로 읽는다.
+    수집이 불완전하게 끝나도 여기서 그 사실을 지우지 않는다 — 실패한 페이지는 애초에
+    수집기가 싣지 않으므로 마지막 페이지의 `tr_cont`가 F/M으로 남아 `_complete`가 거짓이 된다.
+    """
+    return [EvidencePage(rows=[dict(row) for row in page.rows],
+                         continuation=page.response_cont,
+                         next_cursor=page.next_cursor if page.next_cursor is not None else ("", ""),
+                         request_cursor=tuple(page.request_cursor),
+                         request_cont=page.request_cont)
+            for page in collection.pages]
+
+
+def parser_scope(scope, *, session: str) -> dict:
+    """수집기 `QueryScope`를 파서의 query_scope 어휘로 옮긴다(daily→all, exchange_scope→exchange).
+
+    세션은 조회 응답에 없다 — 주문의 `request_binding['session']`에서 호출자가 실어 준다.
+    """
+    return {"account_scope": scope.account_scope, "market": scope.market,
+            "exchange": scope.exchange_scope, "start_date": scope.start_date,
+            "end_date": scope.end_date, "tr_id": scope.tr_id,
+            "query_kind": "all" if scope.query_kind == "daily" else scope.query_kind,
+            "session": session}
+
+
 def _parse_row(row):
     if not isinstance(row, dict):
         raise ValueError("invalid row")
@@ -141,9 +205,10 @@ def parse_order_evidence(ref: OrderRef, symbol: str, side: str, pages: list[Evid
     chk_inquire_daily_ccld.py:22-57). 따라서 그 밖의 값은 전량체결이어도
     unsupported_finality로 남긴다. 좁히는 방향의 오판만 허용한다.
 
-    chain 판정은 조회한 거래소 범위에 의존한다 — 수집기는 KRX만 조회하므로 NXT/SOR에
-    있는 자식행은 보이지 않는다(운영 경로의 조회는 ALL이다). 범위를 좁히는 것이 항상
-    fail-closed는 아니다.
+    chain 판정은 조회한 거래소 범위에 의존한다 — KRX만 조회하면 NXT/SOR에 있는 자식행은
+    보이지 않는다. 범위를 좁히는 것이 항상 fail-closed는 아니므로 호출자는 운영과 같은
+    ALL 범위를 보내고(provenance는 ALL을 superset으로 허용한다), 넓혀서 보이게 된 다른
+    거래소의 우리 주문 행은 수량을 싣지 않고 exchange_mismatch로 끝낸다.
     """
     complete = _complete(pages, max_pages)
     query_scope = dict(query_scope or {})
@@ -156,30 +221,62 @@ def parse_order_evidence(ref: OrderRef, symbol: str, side: str, pages: list[Evid
     provenance = provenance and (query_scope["tr_id"], query_scope["session"], query_scope["query_kind"]) == (tr_id, session, query_kind)
     if not provenance:
         return OrderEvidence(**dict(unknown, schema_valid=False, reason="invalid_provenance"))
+    identities, unreadable = [], 0
     try:
-        rows = [_parse_row(row) for page in pages if isinstance(page, EvidencePage)
-                and page.success for row in page.rows]
-    except (ValueError, KeyError, TypeError, InvalidOperation):
+        for page in pages:
+            if not isinstance(page, EvidencePage) or not page.success:
+                continue
+            for raw in page.rows:
+                identity = _identity(raw)
+                if identity is None:
+                    unreadable += 1
+                else:
+                    identities.append((identity, raw))
+    except TypeError:
         return OrderEvidence(**dict(unknown, schema_valid=False, reason="malformed_row"))
-    matches = [r for r in rows if (r["day"], r["odno"], r["ord_gno_brno"], r["orgn_odno"], r["excg_id_dvsn_cd"])
-               == (ref.order_date, ref.order_no, ref.org_no, ref.parent_order_no, ref.exchange)]
-    if not matches:
-        return OrderEvidence(**unknown)
+    # 거래소는 매칭 키가 아니다 — 조회 범위가 ALL이면 같은 주문이 다른 거래소 라벨로 올 수 있고,
+    # 그 사실은 '못 찾았다'가 아니라 아래에서 이름 붙은 exchange_mismatch로 끝나야 한다.
+    wanted = (ref.order_date, ref.order_no, ref.org_no, ref.parent_order_no)
+    candidates = [raw for identity, raw in identities if identity == wanted]
+    # 읽히지 않은 행이 실제로 우리 주문의 자식행일 수 있다 — 자식행이 보이면 수량 해석을
+    # 포기한다는 전제를 지키려면 chain 미상도 chain과 같게 처리해야 한다.
+    chain = (bool(ref.parent_order_no) or bool(unreadable)
+             or any(identity[3] == ref.order_no for identity, _ in identities))
+    if not candidates:
+        if unreadable:
+            # 우리 행이 그 읽히지 않은 행일 수 있으므로 '없음'으로 단정하지 않는다.
+            return OrderEvidence(**dict(unknown, schema_valid=False, reason="chain_undecidable",
+                                        chain=True))
+        return OrderEvidence(**dict(unknown, chain=chain))
+    try:
+        matches = [_parse_row(raw) for raw in candidates]
+    except (ValueError, KeyError, TypeError, InvalidOperation):
+        return OrderEvidence(**dict(unknown, schema_valid=False, reason="malformed_row", chain=chain))
     value = matches[0]
     if any(r != value for r in matches[1:]):
-        return OrderEvidence(**dict(unknown, schema_valid=False, reason="conflicting_rows"))
+        return OrderEvidence(**dict(unknown, schema_valid=False, reason="conflicting_rows", chain=chain))
     if (value["pdno"], value["side"]) != (symbol, side):
-        return OrderEvidence(**dict(unknown, schema_valid=False, reason="identity_conflict"))
-    chain = bool(ref.parent_order_no) or any(r["orgn_odno"] == ref.order_no for r in rows)
+        return OrderEvidence(**dict(unknown, schema_valid=False, reason="identity_conflict", chain=chain))
+    if value["excg_id_dvsn_cd"] != ref.exchange:
+        # 다른 거래소에서 체결된 주문의 수량을 이 ref로 적용하지 않는다. order_key는 사후에
+        # 바꿀 수 없으므로 '행에서 읽어 채우기'가 아니라 '읽어서 대조하기'다.
+        return OrderEvidence(**dict(unknown, schema_valid=False, reason="exchange_mismatch", chain=chain))
     supported = (complete and ref.market == "KR" and ref.exchange == "KRX" and not chain
                  and tr_id == "TTTC0081R" and session == "regular" and query_kind == "all"
                  and value["ord_dvsn_cd"] in ("00", "01") and value["cancel"] == "N"
                  and value["filled"] == value["qty"] and value["remaining"] == 0
                  and value["cancelled"] == 0 and value["rejected"] == 0)
+    if supported:
+        reason = ""
+    elif not complete:
+        reason = "incomplete"
+    elif unreadable:
+        reason = "chain_undecidable"
+    else:
+        reason = "unsupported_finality"
     return OrderEvidence(ref, symbol, side, value["qty"], value["filled"], value["amount"],
                          value["remaining"], value["cancelled"],
                          OrderState.FINAL_FILLED if supported else OrderState.RECONCILING,
                          complete=complete, supported_finality=supported, source_contract=source_contract,
-                         reason="" if supported else ("incomplete" if not complete else "unsupported_finality"),
-                         rejected_quantity=value["rejected"], observed_at=observed_at,
-                         request_started_at=request_started_at, query_scope=query_scope)
+                         reason=reason, rejected_quantity=value["rejected"], observed_at=observed_at,
+                         request_started_at=request_started_at, query_scope=query_scope, chain=chain)

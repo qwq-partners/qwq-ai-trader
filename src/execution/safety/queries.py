@@ -153,14 +153,19 @@ class LegacyExecutionQueries:
                 "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
 
     async def daily(self, *, account_scope: str, account_number: str, product_code: str,
-                    start_date: str, end_date: str) -> QueryCollection:
+                    start_date: str, end_date: str, exchange_scope: str = "KRX") -> QueryCollection:
         """저장소 현행 TTTC0081R 일별 주문체결 조회. EXCG_ID_DVSN_CD를 명시 송신한다.
 
         저장소 예제(inquire_daily_ccld.py:44,173-174)는 기본값 "KRX"를 두되 미입력도
         허용한다 — 다만 "미입력이면 KRX"라는 문장은 없으므로 미입력 동작에 기대지 않고
-        범위를 좁히는 방향으로 "KRX"를 직접 보낸다.
+        직접 보낸다. 호출자는 운영 경로와 같은 "ALL"을 고를 수 있다: 범위를 넓히면 보이는
+        행이 늘기만 하고 늘어난 행은 chain 판정에 들어가 종결을 더 어렵게 만든다. 그 밖의
+        라벨은 실응답으로 확인하기 전까지 보내지 않는다(Q27~29).
         """
-        scope = QueryScope(self._scope_value(account_scope), "daily", "TTTC0081R", start_date, end_date)
+        if exchange_scope not in ("KRX", "ALL"):
+            raise ValueError("unverified exchange scope")
+        scope = QueryScope(self._scope_value(account_scope), "daily", "TTTC0081R", start_date, end_date,
+                           exchange_scope=exchange_scope)
         start, end = self._query_date(start_date), self._query_date(end_date)
         if start > end:
             raise ValueError("invalid query date range")
