@@ -744,3 +744,5 @@ P1 이 여는 게이트는 **넷**이다. 각각 막던 결함을 먼저 이름 
 병렬: S1‖S1'(2) + 독립 재현 1 = 2+1. S3 이후 단독. 모델·effort: S1/S1'/S2 opus/high(구현) + opus/xhigh(재현), S3·S4 는 돈 경로라 opus/high + Codex(astra/xhigh) 교차 리뷰 필수. 각 단계 뒤 전체 suite UTC/KST(시계 창 회피는 `bba260c` 뒤 불필요). **금지:** trading_ready 강제 True · MODIFY · CANCEL 송신 · 만료 계약 · `market_source_pending`/`unresolved_execution_evidence` 범위 축소 · legacy 본문 수정 · 새 checkpoint 스키마 행 · `_owner_ready` 를 보호 계산 경로에서 호출.
 
 ## 6. Do·See (착수 시 채운다)
+
+- **인계(2026-09-22 밤):** P1 Do·See 부터는 Codex 세션이 수행한다 — 인계 프롬프트 `docs/operations/codex-handoff-p1-2026-09-22.md`(적대적 검토 2관점 반영). coordinator(Claude) 처분 2건을 여기 기록한다: ① **착수 게이트 완화** — §5 제목의 "§4-1 승인 뒤 착수"를 "4-1 미답이면 S2 부터 착수 금지, S1·S1' 은 RED·GREEN·통합까지 허용"으로(둘은 제품 호출자 0건의 부품이고 차단 23·25 를 위해 4-1 과 무관하게 필요) ② **모델 배정의 공급자 치환** — 구현·재현은 `gpt-6-astra`(high/xhigh), 교차 공급자 리뷰는 `claude-opus-5`/xhigh(`scripts/dev/claude_review.py`); actual model 미확인 리뷰는 교차 리뷰로 세지 않고 live 단계(S3·S4) 통합을 보류한다.
