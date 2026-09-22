@@ -1015,6 +1015,14 @@ class KRScheduler:
         bot = self.bot
         # attach 설치 시: 보호 단계·pending 은 owner 소유다. 여기서 update_price 로 단계를
         # 밀거나 pending 을 등록하면 owner 게시본과 어긋나 `_owner_ready` 가 닫힌다.
+        #
+        # **설치 차단 사유 21** — 이 skip 과 batch_analyzer.monitor_positions 의 같은 skip 으로
+        # attach 에는 손절·트레일링·분할익절·갭EOD·보유기간 청산의 **구동기가 하나도 없다**.
+        # owner 의 보호 경로(`runtime.quote`/`apply_quote`)는 존재하지만 제품에 시세를 넣는
+        # 생산자가 0건이고(engine.update_price 는 attach 에서 ApplicationBlocked 를 올린다),
+        # 그래서 attach 는 보호 SELL 에 관해 legacy 보다 계속 덜 안전하다. 닫는 것은 P1 의
+        # "보호 SELL main 동등"에서 owner quote 경로를 배선하는 일이다. 그 전까지 attach 를
+        # 운영에 설치하지 않는다.
         if getattr(getattr(bot, 'engine', None), '_execution_runtime', None) is not None:
             logger.debug(f"[청산] {symbol} attach 설치 — 보호 판단은 owner 경로가 한다")
             return
@@ -1221,7 +1229,7 @@ class KRScheduler:
         - 반환 문자열에 계좌번호를 담지 않는다(로그로 그대로 나간다).
         """
         portfolio = self.bot.engine.portfolio
-        kis = kis_positions if kis_positions else {}
+        kis = kis_positions if kis_positions is not None else {}
         owner_symbols, kis_symbols = set(portfolio.positions.keys()), set(kis.keys())
         mismatches = []
         only_owner = sorted(owner_symbols - kis_symbols)
@@ -1304,6 +1312,15 @@ class KRScheduler:
             # 불일치의 해소는 owner 의 reducer 몫이고 여기서는 알리기만 한다 — 불일치가 계속되면
             # legacy 와 같은 sidecar 연속 실패 임계로 신규 매수가 막힌다(10분 강제 해제가 있어
             # best-effort 이며, 이것이 수동 매매를 owner 에 반영하지는 않는다).
+            #
+            # 이 분기는 2번의 재시도 방어 **뒤**에 있다(시험이 위치를 고정한다) — 재조회한
+            # 응답으로 대조해야 부분 누락 1회를 불일치로 오인하지 않기 때문이다. 그 대가로
+            # 남는 비용: owner 가 모르는 수동 매도로 KIS 에서 종목이 사라지면 `partial_missing`
+            # 이 매 주기 참이라 30초마다 get_positions 가 한 번 더 나가고 `asyncio.sleep(5)` 가
+            # 한 번씩 더 걸린다(원장 TR 이라 계좌당 초당 1건 — EGW00215 예산을 갉는다).
+            # 불일치가 이미 error 로 보고되는 동안에도 계속되므로 P1 후보다. 여기서 고치지
+            # 않는 이유는 재시도 방어 자체가 유령 정리의 전제이고, 건너뛰는 조건을 attach
+            # 에서만 다르게 두면 미설치 경로의 바이트 동일성이 깨지기 때문이다.
             runtime = getattr(getattr(bot, 'engine', None), '_execution_runtime', None)
             if runtime is not None:
                 try:

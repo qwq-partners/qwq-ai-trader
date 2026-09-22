@@ -90,9 +90,12 @@ def attached_sync(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     hb._states.pop("kr_portfolio_sync", None)
 
-    def make(*, owner_positions, balance, kis_positions, cash="100000", attached=True):
+    def make(*, owner_positions, balance, kis_positions=None, kis_seq=None,
+             cash="100000", attached=True):
+        # `kis_seq` 는 호출마다 다른 응답을 돌려줘야 하는 재시도 표본용이다(부분 누락 → 정상).
+        sequence = list(kis_seq) if kis_seq is not None else [kis_positions] * 20
         sched, bot, _ = legacy._make(monkeypatch, bot_positions=owner_positions,
-                                     balance=balance, kis_seq=[kis_positions] * 20, cash=cash)
+                                     balance=balance, kis_seq=sequence, cash=cash)
         bot.risk_manager = RiskManager(RiskConfig(), D(cash), "KR")
         bot.engine._execution_runtime = object() if attached else None
         return sched, bot
@@ -113,20 +116,57 @@ def test_a_quiet_account_leaves_the_owner_view_untouched_for_ten_cycles(attached
     수량·현금은 같지만 owner 의 `current_price`(수락된 시세)와 KIS 의 `prpr` 은 다르다 —
     legacy 꼬리는 그 한 줄을 덮어 `_owner_ready` 의 DTO 동등성을 깨고, 그래서 조용한
     계좌에서도 30초마다 게이트가 닫힌다(계획서 §1). attach 분기는 그 줄에 닿지 않는다.
+
+    **불일치 0 경로가 하중을 지게 한다**: 먼저 차단 상태(연속 실패로 `_sync_healthy=False`)
+    와 실패한 하트비트를 만들어 두고 들어간다. 그래야 `set_sync_status(True)`·
+    `record_success` 두 줄을 지우는 변이가 아래 세 단언에서 죽는다 — 초기값이 이미
+    '건강'이면 그 두 줄이 없어도 통과하기 때문이다.
     """
     make, legacy, hb = attached_sync
     sched, bot = make(owner_positions=[legacy._pos("005930", qty=10, cur="10000")],
                       balance={"available_cash": 100000, "stock_value": 105000},
                       kis_positions={"005930": legacy._pos("005930", qty=10, cur="10500")})
+    # 임계는 3회다 — 그 아래로는 `_sync_healthy` 가 내려가지 않는다.
+    for _ in range(bot.risk_manager._sync_fail_threshold):
+        bot.risk_manager.set_sync_status(False)
+    hb.record_failure("kr_portfolio_sync", "사전 실패")
+    assert bot.risk_manager._sync_healthy is False
+    assert hb._state("kr_portfolio_sync").last_success is None
+
     before = _owner_view(bot)
     for _ in range(10):
         legacy._run(sched)
     assert _owner_view(bot) == before
     assert (bot.exit_manager.registered, bot.exit_manager.removed) == ([], [])
+    # 불일치 0 은 '아무것도 안 함'이 아니라 복구다 — 매수 차단이 풀리고 정체 기준이 갱신된다.
     assert bot.risk_manager._sync_healthy is True
+    assert bot.risk_manager._sync_fail_count == 0
+    assert hb._state("kr_portfolio_sync").last_success is not None
     assert hb._state("kr_portfolio_sync").consecutive_failures == 0
     # 조회는 계속 하지만 쓰기는 0 — 재시도 방어를 거치지 않은 단순 경로다.
     assert bot.broker.get_positions_calls == 10
+
+
+def test_the_attach_branch_sits_behind_the_empty_response_retry(attached_sync):
+    """부분 누락 1회는 불일치가 아니다 — 분기가 재시도 방어 **뒤**에 있어야 한다.
+
+    1차 응답에 owner 보유 005930 이 빠지고 2차는 정상인 표본. 분기를 재시도 방어 앞으로
+    올리는 변이는 1차 응답으로 대조해 "owner 에만 있음: 005930" 을 올리고 조회도 1회로
+    끝나므로 아래 세 단언이 전부 깨진다. 실제로 이 오탐은 30초마다 error 를 울리고
+    sidecar 연속 실패로 신규 매수를 막는다.
+    """
+    make, legacy, hb = attached_sync
+    owner = [legacy._pos("005930", qty=10), legacy._pos("000660", qty=3)]
+    full = {"005930": legacy._pos("005930", qty=10), "000660": legacy._pos("000660", qty=3)}
+    sched, bot = make(owner_positions=owner,
+                      balance={"available_cash": 100000, "stock_value": 105000},
+                      kis_seq=[{"000660": legacy._pos("000660", qty=3)}, full])
+    before = _owner_view(bot)
+    legacy._run(sched)
+    assert bot.broker.get_positions_calls == 2
+    assert _owner_view(bot) == before
+    assert bot.risk_manager._sync_healthy is True and bot.risk_manager._sync_fail_count == 0
+    assert hb._state("kr_portfolio_sync").last_success is not None
 
 
 def test_a_manual_sell_is_reported_and_never_written_into_the_owner_view(attached_sync):
@@ -194,9 +234,18 @@ def _exit_state(exit_manager, symbol):
 
 
 def test_the_position_monitor_writes_nothing_under_attach(monkeypatch, tmp_path):
-    """attach 에서 monitor_positions 를 돌려도 Position 필드·ExitManager 상태가 그대로다."""
+    """attach 에서 monitor_positions 를 돌려도 Position 필드·ExitManager 상태가 그대로다.
+
+    이 skip 이 **설치 차단 사유 21** 의 절반이다 — attach 에는 손절·트레일링·분할익절·
+    보유기간 청산의 구동기가 없다. 여기서 GREEN 인 것은 "owner 게시본을 안 덮는다"뿐이고
+    보호가 대신 돈다는 뜻이 아니다(owner quote 배선은 P1 이다).
+
+    스텁은 미설치 경로가 끝까지 도는 데 필요한 필드를 전부 갖춘다 — 그래야 가드를 지우는
+    변이가 AttributeError 로 죽지 않고 아래 단언으로 죽는다.
+    """
     import test_t10_repro_a as t10
     from src.core.batch_analyzer import BatchAnalyzer
+    from datetime import date
 
     exit_manager = t10._make_exit_manager(tmp_path, monkeypatch)
     position = t10._register(exit_manager)
@@ -217,7 +266,10 @@ def test_the_position_monitor_writes_nothing_under_attach(monkeypatch, tmp_path)
                                        _execution_runtime=object())
     analyzer._broker = _Broker()
     analyzer._exit_manager = exit_manager
-    analyzer._composite_cache_date = None
+    analyzer._composite_cache_date = date.today()   # 복합 캐시 갱신 조기 반환(네트워크 회피)
+    analyzer._ma5_cache = {position.symbol: 12000.0}   # 캐시 미스 보충(네트워크) 회피
+    analyzer._prev_low_cache = {position.symbol: 11000.0}
+    analyzer._max_holding_days = 30
     analyzer._config = {}
 
     asyncio.run(analyzer.monitor_positions())
@@ -229,7 +281,11 @@ def test_the_position_monitor_writes_nothing_under_attach(monkeypatch, tmp_path)
 
 
 def test_the_rest_feed_exit_check_writes_nothing_under_attach(monkeypatch, tmp_path):
-    """attach 에서 _check_exit_signal 을 돌려도 ExitManager·pending 집합이 그대로다."""
+    """attach 에서 _check_exit_signal 을 돌려도 ExitManager·pending 집합이 그대로다.
+
+    **설치 차단 사유 21** 의 나머지 절반 — 이 경로가 막히면 갭EOD·손절·분할익절의 마지막
+    구동기도 사라진다. 대체 경로는 owner 의 보호 task 지만 시세 생산자가 아직 0건이다.
+    """
     import test_t10_repro_a as t10
     from src.schedulers.kr_scheduler import KRScheduler
 
@@ -258,9 +314,15 @@ def test_the_rest_feed_exit_check_writes_nothing_under_attach(monkeypatch, tmp_p
 
 
 def test_both_guards_are_no_ops_when_the_runtime_is_absent(monkeypatch, tmp_path):
-    """미설치에서는 두 함수가 종래대로 쓴다 — 가드가 분기 밖이 아님을 고정한다."""
+    """미설치에서는 **두 함수 다** 종래대로 쓴다 — 가드가 분기 밖이 아님을 고정한다.
+
+    미설치는 `engine._execution_runtime` 이 **None** 인 상태다(속성이 없는 게 아니다 —
+    `UnifiedEngine.__init__` 이 `self._execution_runtime = None` 으로 세운다). 스텁도
+    그래서 속성을 빼지 않고 None 을 명시한다.
+    """
     import test_t10_repro_a as t10
     from src.core.batch_analyzer import BatchAnalyzer
+    from src.schedulers.kr_scheduler import KRScheduler
 
     exit_manager = t10._make_exit_manager(tmp_path, monkeypatch)
     position = t10._register(exit_manager)
@@ -271,9 +333,14 @@ def test_both_guards_are_no_ops_when_the_runtime_is_absent(monkeypatch, tmp_path
 
     from datetime import date
 
+    emitted = []
+
+    async def _emit(event):
+        emitted.append(event)
+
     analyzer = object.__new__(BatchAnalyzer)
-    # engine 에 `_execution_runtime` 속성 자체가 없는 미설치 상태(운영과 같다).
-    analyzer._engine = SimpleNamespace(portfolio=SimpleNamespace(positions={position.symbol: position}))
+    analyzer._engine = SimpleNamespace(portfolio=SimpleNamespace(positions={position.symbol: position}),
+                                       emit=_emit, _execution_runtime=None)
     analyzer._broker = _Broker()
     analyzer._exit_manager = exit_manager
     analyzer._composite_cache_date = date.today()   # 복합 캐시 갱신 조기 반환(네트워크 회피)
@@ -285,3 +352,33 @@ def test_both_guards_are_no_ops_when_the_runtime_is_absent(monkeypatch, tmp_path
     asyncio.run(analyzer.monitor_positions())
 
     assert position.current_price == D("13000") and position.highest_price == D("13000")
+    assert len(emitted) == 1   # 1차 익절 SELL — 미설치 경로가 끝까지 돌았다는 증거
+
+    # ── 같은 미설치에서 _check_exit_signal 도 종래대로 쓴다 ────────────────────
+    # attach 시험(위)과 대칭인 표본이다. 이게 없으면 "두 가드"라는 이름이 절반만 참이고,
+    # `_check_exit_signal` 의 가드를 함수 밖으로 올리는 변이가 이 파일에서 살아남는다.
+    # 종목을 바꾼다 — 두 ExitManager 가 같은 일자 stage 파일을 공유해서, 위에서 건 pending
+    # 이 복원되면 여기 update_price 가 재발행을 막는다(이중 매도 방지 그대로).
+    exit_manager_2 = t10._make_exit_manager(tmp_path, monkeypatch)
+    position_2 = t10._register(exit_manager_2, symbol="000660")
+
+    sched = object.__new__(KRScheduler)
+    sched.bot = SimpleNamespace(
+        exit_manager=exit_manager_2,
+        broker=object(),
+        engine=SimpleNamespace(portfolio=SimpleNamespace(positions={position_2.symbol: position_2}),
+                               risk_manager=None, emit=_emit, _execution_runtime=None),
+        _pause_resume_at=None,
+        _exit_pending_symbols=set(),
+        _exit_pending_timestamps={},
+        _exit_reasons={},
+        _sell_blocked_symbols={},
+        _strategy_exit_params={"_sync": {}},
+    )
+
+    asyncio.run(sched._check_exit_signal(position_2.symbol, D("13000")))
+
+    # +30% → 1차 익절 발행: pending 등록 + 사유 기록 + SELL 시그널 emit.
+    assert sched.bot._exit_pending_symbols == {position_2.symbol}
+    assert position_2.symbol in sched.bot._exit_reasons
+    assert len(emitted) == 2
