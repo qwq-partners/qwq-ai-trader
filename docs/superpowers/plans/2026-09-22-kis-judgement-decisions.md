@@ -85,7 +85,7 @@
 |---|---|---|
 | **P0-1** | attach transport 가 킬스위치·감사 원장을 거친다(N1). `send_prepared` 의 POST 직전에 `kill_switch.check` → 차단이면 `NOT_SENT` + `audit_log.record_blocked`, 송신이면 `audit_log.record` | **완료(2026-09-22, 부품·제품 호출자 0건)** — §5-1 |
 | P0-2 | attach 의 체결·종결 증거 생산자(N3) — 수집기(`queries.py`)·파서(`evidence.py`)·`lifecycle.reconcile` 의 제품 배선 | **완료(2026-09-22, 부품·제품 호출자 0건)** — `2026-09-22-p0-2-fill-evidence-producer.md` §7. 배선·게이트·sync 분기는 P0-3 |
-| P0-3 | `_sync_portfolio` 의 attach 분기(N2) — owner 경유 재정합, 수동 매도의 학습 경로 포함 | live 파일 |
+| P0-3 | `_sync_portfolio` 의 attach 분기(N2) — owner 경유 재정합, 수동 매도의 학습 경로 포함 | **완료(2026-09-22 저녁, engine `80571eb`, live 파일 3개·미설치 바이트 동일)** — `2026-09-22-p0-3-wiring-sync-gate.md` §7. 실제 범위: 생산자 배선·BUY 생존 게이트·sync **읽기 전용 관측**(수동 매도의 학습 경로는 만들지 않았다 — 알람뿐, owner 밖 해소는 잔여)·live writer 3곳 가드. 새 차단 사유 20·21(attach 에 보호 청산 구동기 없음 → P1) |
 | P0-4 | `_protection_failed` 의 해제 경로 · 부분 체결 뒤 예약 감소 · 세션 경계 소멸 · `_cleanup_stale_pending` 의 attach 인지 | 10C |
 | P1 | 보호 SELL 의 main 동등(D2 의 방향 결정) | 설계 + 적대적 심사 |
 | P2 | D4(범위 축소) + D5(runbook) | 부품 |
