@@ -1,5 +1,19 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-23 — fix(safety): 보호 신호 cooldown 분리 (개발 검증 완료·운영 미설치)
+
+- 일반 신호가 owner 거부 전 공통 시계를 갱신해 보호 SELL을 계속 늦추는 경로를 분리했다.
+  보호는 종목별 전용30초 시계를 읽고, 후보 생성 시 전용/공통 시계를 함께 갱신한다.
+  일반 신호는 보호 대기를 연장하지 못하며 보호 뒤 일반 신호 억제는 유지한다.
+- 제품은 RiskManager 초기화·보호 helper만 변경했다. 원 intent/수량·예약·UNKNOWN·
+  관측미적용 체결·세션/휴장·복구 실패 장벽 및 producer60초 정책은 그대로다.
+- 후보 `06fc7ed`(제품 `53c8bd6` 동일): 의도된 RED7건 후 관련319·legacy26건,
+  독립 native74/146·후속65건 통과. native·실제 Opus5 범위 승인 후 전체
+  **UTC/KST 각각5386 passed·기존2 xfailed·경고4·격리0·rc0**.
+  전체 지연 상한·수동 복구·설치 차단은 유지한다. [N1 원장](docs/reviews/p1-protection-priority-2026-09-23.md).
+- 운영은 이미 병합된 main `afa6e1e`의 문서2파일만 동기화했다(제품 diff0·재시작0).
+  개발선 통째 배포는 main의 별도 돈 경로 개선 누락 및 설치 차단으로 보류했다.
+
 ## 2026-09-23 — feat(safety): P1 S2~S5 보호 생산자·엔진·설치기 (운영 미설치)
 
 - 기존 시세 이벤트를 단일 보호 생산자→실 엔진/RiskManager→gateway/owner로 연결하는 개발 후보를 구현했다. 원 intent·가격·수량, 복구 감사, 면제, WS 신선도와 UNKNOWN 보류를 보존하며 기존 command scope로 종료를 배수한다.
