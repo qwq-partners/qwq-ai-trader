@@ -232,3 +232,83 @@ def test_unsupported_type_metaclass_is_not_compared(runtime):
         pass
     runtime.owner._state['hostile'] = Hostile()
     assert 'evidence_invalid' in codes(report(runtime))
+
+
+@pytest.mark.parametrize('adapted', ['episode', 'ingress', 'lock'])
+def test_exact_adapter_rejects_dict_subclass_without_hooks(runtime, adapted):
+    from decimal import Decimal
+    from src.execution.safety.application import IngressContext
+    from src.execution.safety.protection_producer import ProtectionProducer, _Episode
+
+    class HostileDict(dict):
+        def __getitem__(self, key):
+            raise AssertionError('mapping hook executed')
+
+    if adapted == 'episode':
+        producer = ProtectionProducer(runtime, clock=lambda: NOW, indicator_source=None)
+        runtime._protection_producer = producer
+        obj = _Episode('intent', ('sell_all', 1, 'reason'), Decimal(1), 'ws')
+        producer._episodes['symbol'] = obj
+    elif adapted == 'ingress':
+        obj = IngressContext(1, 0, NOW)
+        runtime.engine._execution_ingress[1] = {'context': obj}
+    else:
+        obj = runtime.owner._lock
+    original = obj.__dict__
+    object.__setattr__(obj, '__dict__', HostileDict(original))
+    try:
+        assert 'evidence_invalid' in codes(report(runtime))
+    finally:
+        object.__setattr__(obj, '__dict__', original)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('mode', 'PRIVATE_SENTINEL'), ('captured_at', 'PRIVATE_SENTINEL'),
+    ('findings', (('PRIVATE_SENTINEL', 1),)),
+    ('findings', (('unknown_buy', 1), ('unknown_buy', 2))),
+])
+def test_builder_revalidates_bypassed_snapshot(field, value):
+    from src.execution.safety.recovery_diagnostics import RecoverySnapshot
+    snapshot = RecoverySnapshot(NOW.isoformat())
+    object.__setattr__(snapshot, field, value)
+    result = build_recovery_diagnostic(snapshot)
+    assert {'snapshot_unavailable', 'evidence_invalid'} <= codes(result)
+    assert 'PRIVATE_SENTINEL' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('account_scope', 'other'), ('market', 'US'), ('order_date', '2026-09-19'),
+    ('exchange', 'NXT'), ('parent_order_no', 'OTHER'), ('whole', None), ('whole', 'bad'),
+])
+def test_cancel_command_reference_does_not_inherit_unrelated_parent_finality(runtime, field, value):
+    from copy import deepcopy
+    asyncio.run(opened(runtime, 'B1'))
+    parent = runtime.owner._state['attempts']['B1']
+    parent.update(state='final_cancelled', reserved_quantity=0, reserved_cash='0')
+    child = deepcopy(parent)
+    command_ref = dict(parent['order_ref'], order_no='C1', parent_order_no='B1')
+    if field == 'whole':
+        command_ref = value
+    else:
+        command_ref[field] = value
+    child.update(attempt_id='C1', kind='cancel', parent_attempt_id='B1',
+                 command_ref=command_ref, state='cancel_requested')
+    runtime.owner._state['attempts']['C1'] = child
+    runtime.owner._state['intents']['B1']['attempt_ids'].append('C1')
+    result = report(runtime)
+    assert 'cancel_unconfirmed' in codes(result)
+    if command_ref is not None:
+        assert 'attempt_link_inconsistent' in codes(result)
+
+
+def test_cancel_child_order_number_can_differ_from_parent(runtime):
+    from copy import deepcopy
+    asyncio.run(opened(runtime, 'B1'))
+    parent = runtime.owner._state['attempts']['B1']
+    parent.update(state='final_cancelled', reserved_quantity=0, reserved_cash='0')
+    child = deepcopy(parent)
+    child.update(attempt_id='C1', kind='cancel', parent_attempt_id='B1', state='cancel_requested',
+                 command_ref=dict(parent['order_ref'], order_no='CHILD', parent_order_no='B1'))
+    runtime.owner._state['attempts']['C1'] = child
+    runtime.owner._state['intents']['B1']['attempt_ids'].append('C1')
+    assert 'attempt_link_inconsistent' not in codes(report(runtime))

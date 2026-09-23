@@ -51,10 +51,11 @@ class RecoverySnapshot:
             self.snapshot_stable, self.publication_consistent, self.owner_health_confirmed))
         valid = valid and all(value is None or type(value) is int and -1 <= value < 2 ** 256
                              for value in (self.execution_version, self.published_version, self.engine_version))
-        valid = valid and type(self.findings) is tuple and all(
+        valid = valid and type(self.findings) is tuple and len(self.findings) <= len(FINDINGS) and all(
             type(row) is tuple and len(row) == 2 and type(row[0]) is str and row[0] in FINDINGS
             and (type(row[1]) is int and 0 < row[1] <= 100_000
                  or row[0] == 'disposition_not_durable' and row[1] is None) for row in self.findings)
+        valid = valid and len({row[0] for row in self.findings}) == len(self.findings)
         if self.captured_at is not None:
             if type(self.captured_at) is not str or len(self.captured_at) > 40:
                 valid = False
@@ -73,6 +74,16 @@ def build_recovery_diagnostic(snapshot: RecoverySnapshot) -> dict:
     """캡처의 안전 DTO만 JSON tree로 옮긴다. 매번 새 중첩 객체를 만든다."""
     if type(snapshot) is not RecoverySnapshot:
         snapshot = RecoverySnapshot(None, findings=(('snapshot_unavailable', 1),))
+    else:
+        try:
+            # frozen 우회도 경계에서 재검증한다. 검증한 새 값만 반환에 사용한다.
+            snapshot = RecoverySnapshot(
+                snapshot.captured_at, snapshot.mode, snapshot.snapshot_stable,
+                snapshot.publication_consistent, snapshot.owner_health_confirmed,
+                snapshot.execution_version, snapshot.published_version, snapshot.engine_version,
+                snapshot.findings)
+        except (ValueError, TypeError, AttributeError):
+            snapshot = RecoverySnapshot(None, findings=(('snapshot_unavailable', 1), ('evidence_invalid', 1)))
     return {
         'schema_version': 1, 'read_only': True, 'automatic_action_allowed': False,
         'trading_ready': False, 'installation_verified': False,
@@ -174,10 +185,22 @@ def _classify(sample):
                     and parent is not row and parent.get('order_ref') is not None
                     and row.get('order_ref') == parent.get('order_ref')
                     and all(row.get(name) == parent.get(name) for name in ('intent_id', 'symbol', 'side')))
+                command_ref = row.get('command_ref')
+                command_ref_ok = False
+                if parent_ok and type(command_ref) is dict and type(parent.get('order_ref')) is dict:
+                    original_ref = parent['order_ref']
+                    scope = ('account_scope', 'market', 'order_date', 'exchange')
+                    command_ref_ok = (all(type(command_ref.get(name)) is str and command_ref[name]
+                                         and command_ref[name] == original_ref.get(name) for name in scope)
+                                      and type(original_ref.get('order_no')) is str and original_ref['order_no']
+                                      and type(command_ref.get('order_no')) is str and command_ref['order_no']
+                                      and command_ref.get('parent_order_no') == original_ref['order_no'])
+                if command_ref is not None and not command_ref_ok:
+                    parent_ok = False
                 if not parent_ok:
                     add('attempt_link_inconsistent')
                 if kind == 'cancel' and row.get('command_status') not in ('not_sent', 'rejected'):
-                    if (not parent_ok or parent.get('state') not in TERMINAL_STATES
+                    if (not parent_ok or not command_ref_ok or parent.get('state') not in TERMINAL_STATES
                             or parent.get('observed_quantity') != parent.get('applied_quantity')):
                         add('cancel_unconfirmed')
         except (ValueError, TypeError, KeyError, InvalidOperation):

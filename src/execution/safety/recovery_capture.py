@@ -99,7 +99,7 @@ class _Copier:
         self.active.add(id(value))
         try:
             if kind in ADAPTED_FIELDS:
-                data = object.__getattribute__(value, '__dict__')
+                data = _data(value, kind)
                 return {key: self.copy(data[key], depth + 1) for key in ADAPTED_FIELDS[kind]}
             if kind is dict:
                 result = {}
@@ -152,7 +152,7 @@ def _read_sample(runtime):
     locks = (own['_lock'], raw['_quote_lock']) + (() if prod is None else (prod['_lock'],))
     if any(type(lock) is not asyncio.Lock for lock in locks):
         raise _Invalid()
-    lock_states = tuple(object.__getattribute__(lock, '__dict__')['_locked'] for lock in locks)
+    lock_states = tuple(_data(lock, asyncio.Lock)['_locked'] for lock in locks)
     if any(type(locked) is not bool for locked in lock_states):
         raise _Invalid()
     copier.references.extend(locks)
