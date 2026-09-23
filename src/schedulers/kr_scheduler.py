@@ -15,6 +15,7 @@ import aiohttp
 import html
 import inspect
 import json
+import math
 import os
 import re
 import time
@@ -39,6 +40,7 @@ from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
 from ..utils.telegram import send_alert
 from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
+from ..utils.kis_request_metrics import request_source, with_request_source
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
@@ -1269,6 +1271,7 @@ class KRScheduler:
         fallback = params.get("_sync", {})
         return dict(params.get(strategy, fallback) if strategy else fallback)
 
+    @with_request_source("portfolio_sync")
     async def _sync_portfolio(self):
         """KIS API와 포트폴리오 동기화"""
         bot = self.bot
@@ -1309,7 +1312,8 @@ class KRScheduler:
                 )
                 logger.warning(f"[동기화] {_why} → 5초 후 재시도")
                 await asyncio.sleep(5)
-                kis_positions = await bot.broker.get_positions()
+                with request_source("portfolio_sync_consistency_retry"):
+                    kis_positions = await bot.broker.get_positions()
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
                 # 재시도에도 평가액 양수·전체 빈 응답이면 동기화 실패 기록 + 상태 보존
                 # (pending 경과 시간·좀비 후보 마킹은 이 방어를 우회하지 못한다)
@@ -1621,17 +1625,35 @@ class KRScheduler:
                 if _screener is not None:
                     _closes = [float(x) for x in (getattr(_screener, "_kospi_closes", None) or [])]
                     _last_bar_date = getattr(_screener, "_kospi_last_bar_date", None)
-                    # 종가열이 없으면 get_kospi_change() 는 0.0 을 준다 — 쓰지 않는다
-                    c5 = _pct_change(_closes, 5)
-                    c20 = _pct_change(_closes, 20)
                     _loaded_at = getattr(_screener, "_kospi_loaded_at", None)
-                    # 계산 가능한 종가열이 있을 때만 기준 시각을 붙인다 (빈 캐시·0 종가 제외)
-                    if c5 is not None or c20 is not None:
+                    if _closes:
                         kr_as_of = (
                             f"{_loaded_at:%Y-%m-%d %H:%M} (스크리너 벤치마크 로드)"
                             if _loaded_at is not None else "로드 시각 미상 (스크리너 캐시)"
                         )
+                    # 로드 시각은 봉 신선도의 증거가 아니다. 스크리너의 검증 결과와
+                    # 날짜를 함께 확인하며, 호환 객체도 마지막 봉 날짜 없이 사용하지 않는다.
+                    _lb = (_last_bar_date.date() if isinstance(_last_bar_date, datetime)
+                           else _last_bar_date)
+                    _history_action, _history_reason = _today_bar_action(_lb, now.date())
+                    _status_reader = getattr(_screener, "get_benchmark_status", None)
+                    if callable(_status_reader):
+                        _status = _status_reader(now=now)
+                        if _status.get("status") != "fresh":
+                            _history_action = None
+                            _history_reason = _status.get("reason") or "benchmark_missing"
+                    if any(not math.isfinite(x) or x <= 0 for x in _closes):
+                        _history_action, _history_reason = None, "invalid_close_history"
+                    if _history_action is None:
+                        _closes = []
+                        missing_fields.append(f"KOSPI봉({_history_reason})")
+                        kr_as_of = f"{kr_as_of} — 자료 제외({_history_reason})"
+                    else:
+                        c5 = _pct_change(_closes, 5)
+                        c20 = _pct_change(_closes, 20)
             except Exception as e:
+                _closes = []
+                c5 = c20 = None
                 logger.debug(f"[LLM레짐] KOSPI 캐시 조회 실패: {e}")
 
             # 현재 지수의 as_of(kr_as_of)와 **봉 기반 지표(c5/c20)의 as_of** 를 분리한다.
@@ -2050,12 +2072,15 @@ class KRScheduler:
 
             from ..utils.llm import get_llm_manager, LLMTask
 
-            # KOSPI 변화율
-            kospi_change = 0.0
+            # 일봉 5거래일 변화율은 당일 등락이 아니다. 결측은 호환용 0을 쓰지 않는다.
+            kospi_change = None
             try:
                 if bot.batch_analyzer and hasattr(bot.batch_analyzer, '_screener'):
-                    kospi = bot.batch_analyzer._screener.get_kospi_change()
-                    kospi_change = kospi.get("c1", kospi.get("c5", 0))
+                    _screener = bot.batch_analyzer._screener
+                    if _screener.get_benchmark_status().get("status") == "fresh":
+                        _value = float(_screener.get_kospi_change()["c5"])
+                        if math.isfinite(_value):
+                            kospi_change = _value
             except Exception:
                 pass
 
@@ -2091,7 +2116,7 @@ class KRScheduler:
                 return
 
             prompt = f"""장 마감 전 포지션 점검 (15:00 KST)
-오늘 KOSPI: {kospi_change:+.1f}%
+KOSPI 최근 5거래일: {_fmt_pct(kospi_change, 1)} (당일 등락 아님)
 
 보유 종목:
 {chr(10).join(pos_lines)}
@@ -2768,6 +2793,7 @@ JSON:
                     )
             self._entry_fill_lots.pop(key, None)
 
+    @with_request_source("fill_check")
     async def run_fill_check(self):
         """체결 확인 루프 (적응형 폴링: 미체결 유무에 따라 2초/5초)"""
         bot = self.bot

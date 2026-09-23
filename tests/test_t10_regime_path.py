@@ -214,7 +214,8 @@ def test_unknown_last_bar_date_is_not_disguised_as_fresh(monkeypatch, tmp_path):
     asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
 
     meta = _saved(tmp_path).get("input_meta", {})
-    assert meta.get("kospi_c5") == 0.0, f"재계산이 일어났다: {meta}"   # [100]*30 → 0%
+    assert meta.get("kospi_c5") is None, f"날짜 미상 봉을 수치로 사용했다: {meta}"
+    assert meta.get("kospi_c20") is None
     assert any("봉" in m for m in meta.get("missing_fields", [])), meta
     assert "08:20" in (meta.get("kospi_bars_as_of") or ""), (
         f"봉 기준 as_of 가 최신으로 위장됐다: {meta.get('kospi_bars_as_of')}"
@@ -237,8 +238,35 @@ def test_missing_mid_trading_day_is_not_recomputed(monkeypatch, tmp_path):
     asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
 
     meta = _saved(tmp_path).get("input_meta", {})
-    assert meta.get("kospi_c5") == 0.0, f"누락 구간을 무시하고 재계산했다: {meta}"
+    assert meta.get("kospi_c5") is None, f"오래된 봉을 수치로 사용했다: {meta}"
+    assert meta.get("kospi_c20") is None
     assert any("누락" in m for m in meta.get("missing_fields", [])), meta
+
+
+def test_stale_history_is_missing_before_open_without_index_fetch(monkeypatch, tmp_path):
+    now = datetime(2026, 9, 23, 8, 10)
+    bot = _make_bot(closes=[100.0] * 29 + [108.0],
+                    last_bar_date=date(2026, 9, 17), kis_responses={})
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm, now=now)
+    asyncio.run(sched._run_llm_regime_classifier(label="08:10"))
+    meta = _saved(tmp_path)["input_meta"]
+    assert meta["kospi_c5"] is None and meta["kospi_c20"] is None
+    assert "KOSPI_c5" in meta["missing_fields"]
+    assert bot.kis_market_data.calls == []
+
+
+def test_invalid_benchmark_status_cannot_be_overridden_by_current_index(monkeypatch, tmp_path):
+    bot = _make_bot(closes=[100.0] * 30, last_bar_date=PREV_TRADING_DAY,
+                    kis_responses={"0001": {"price": 97.0, "change_pct": -3.0}})
+    bot.batch_analyzer._screener.get_benchmark_status = lambda now=None: {
+        "status": "unknown", "reason": "invalid_close_history", "source": "FDR:KS11"}
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm)
+    asyncio.run(sched._run_llm_regime_classifier(label="12:00"))
+    meta = _saved(tmp_path)["input_meta"]
+    assert meta["kospi_c5"] is None and meta["kospi_c20"] is None
+    assert meta["kospi_today_pct"] == -3.0
 
 
 def test_index_fetch_failure_keeps_bar_as_of_and_marks_missing(monkeypatch, tmp_path):

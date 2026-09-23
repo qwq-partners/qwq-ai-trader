@@ -35,6 +35,7 @@ from src.core.engine import UnifiedEngine, StrategyManager, RiskManager, is_kr_m
 from src.core.types import TradingConfig, Market, MarketSession, Portfolio, RiskConfig
 from src.core.event import EventType
 from src.core.market_context import MarketContext
+from src.utils.kis_request_metrics import with_request_source
 
 
 # ============================================================
@@ -303,6 +304,7 @@ class UnifiedTradingBot:
     # KR 시장 초기화
     # ============================================================
 
+    @with_request_source("startup")
     async def _initialize_kr(self) -> bool:
         """KR 시장 초기화 — ai-trader-v2 TradingBot.initialize()에서 이식"""
         logger.info("[KR] 한국 시장 초기화 시작...")
@@ -1713,6 +1715,7 @@ class UnifiedTradingBot:
     # KR 헬퍼 메서드 (KRScheduler가 접근하는 인터페이스)
     # ============================================================
 
+    @with_request_source("startup")
     async def _load_existing_positions(self):
         """KIS API에서 기존 보유 종목 로드"""
         if not self.broker:

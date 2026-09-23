@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,8 @@ from .types import ExpertOpinion, RegimeBias
 from ..utils.data_freshness import DEFAULT_OVERRIDE_TTL_DAYS
 
 _MANUAL_OVERRIDE_PATH = Path.home() / ".cache" / "ai_trader" / "manual_macro_overrides.json"
+# 단일 현재 문서의 경고 지문만 보관한다. 만료 판정/값의 캐시가 아니다.
+_expired_override_warning: Optional[tuple[str, str]] = None
 
 # 추적할 지표 (yfinance 티커)
 _TICKERS = {
@@ -260,9 +263,12 @@ class MacroEconomist(ExpertAgent):
           - 신규: {"cpi_yoy": {"value": 3.2, "valid_until": "2026-09-30"}}
           - 구형(flat): {"cpi_yoy": 3.2, "fed_decision": "hold"} — valid_until 없음 →
             파일 mtime(작성일 근사)+기본 TTL(DEFAULT_OVERRIDE_TTL_DAYS)로 만료 판정.
-        만료·파싱 불가 항목은 조용히 버리지 않고 경고 로그를 남긴다.
+        만료 자료는 프로세스 내 동일 내용에 요약 경고1회, 변경 시 다시 경고한다.
+        파싱 실패의 기존 경고 정책과 실제 만료 판정은 바꾸지 않는다.
         """
+        global _expired_override_warning
         if not _MANUAL_OVERRIDE_PATH.exists():
+            _expired_override_warning = None
             return {}
         try:
             with _MANUAL_OVERRIDE_PATH.open("r", encoding="utf-8") as f:
@@ -271,6 +277,7 @@ class MacroEconomist(ExpertAgent):
             logger.warning(f"[거시] manual_overrides 로드 실패: {e}")
             return {}
         if not isinstance(data, dict):
+            _expired_override_warning = None
             return {}
 
         try:
@@ -281,6 +288,7 @@ class MacroEconomist(ExpertAgent):
         now = datetime.now()
 
         result: Dict[str, Any] = {}
+        expired = {}
         for key, raw in data.items():
             if isinstance(raw, dict) and "value" in raw:
                 value = raw["value"]
@@ -309,12 +317,24 @@ class MacroEconomist(ExpertAgent):
                 deadline = default_deadline
 
             if now > deadline:
-                logger.warning(
-                    f"[거시] manual_overrides '{key}' 만료(valid_until={deadline.date()}) — 무시"
-                )
+                expired[key] = (raw, deadline.isoformat())
                 continue
             result[key] = value
 
+        if expired:
+            # 원 값/키는 출력하지 않는다. 파일 내용·실효 만료가 달라지면 재경고한다.
+            digest = hashlib.sha256(json.dumps(
+                expired, sort_keys=True, ensure_ascii=True,
+            ).encode("utf-8")).hexdigest()
+            signature = (str(_MANUAL_OVERRIDE_PATH), digest)
+            if signature != _expired_override_warning:
+                logger.warning(
+                    f"[거시] manual_overrides 만료 {len(expired)}개 — 무시 "
+                    "(동일 만료 자료의 반복 경고는 생략)"
+                )
+                _expired_override_warning = signature
+        else:
+            _expired_override_warning = None
         return result
 
     # ─────────────────────────────────────────

@@ -66,6 +66,27 @@ def test_order_reason_reaches_real_journal_without_changing_risk(monkeypatch, ha
     assert h.events[0].fill is fill
 
 
+def test_trade_storage_keeps_explicit_llm_type_in_json_and_db_queue(monkeypatch, harness, tmp_path):
+    from src.data.storage.trade_storage import TradeStorage
+    h = harness
+    monkeypatch.setenv("TRADE_JOURNAL_DIR", str(tmp_path / "storage"))
+    storage = TradeStorage(db_url="")
+    storage._trades[h.trade.id] = h.trade
+    writes = []
+    monkeypatch.setattr(storage, "_enqueue", lambda sql, params: writes.append((sql, params)))
+    h.bot.trade_journal = storage
+    reason = "LLM 종가점검: 본전 이탈 가능성 때문에 종가 청산"
+    drive(monkeypatch, h, reason=reason)
+    assert h.trade.exit_type == "llm_eod"
+    saved = json.loads(next(storage._journal.storage_dir.glob("*.json")).read_text())
+    assert saved["trades"][0]["exit_type"] == "llm_eod"
+    update = next(args for sql, args in writes if "UPDATE trades SET" in sql)
+    insert = next(args for sql, args in writes if "INSERT INTO trade_events" in sql)
+    assert update[3:5] == (reason, "llm_eod")
+    assert insert[6:8] == ("llm_eod", reason)
+    assert h.outcomes[-1]["exit_type"] == "llm_eod"
+
+
 def test_partial_fills_keep_order_reason_after_symbol_cache_is_popped(monkeypatch, harness):
     h = harness
     h.bot._exit_reasons[SYM] = "갭EOD: 이전 주문 캐시"
