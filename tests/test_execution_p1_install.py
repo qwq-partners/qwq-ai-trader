@@ -14,12 +14,14 @@ from src.execution.safety.lifecycle import OrderEvidence, OrderRef, OrderState
 # 동결 fixture 이전에 import하여 제품 datetime 타입 검증을 보존한다.
 from src.execution.safety.protection_producer import ProtectionProducer
 from src.execution.safety.runtime import KRExecutionRuntime
+from src.execution.safety.guards import GuardDecision
 from test_execution_install_factory import (
     NOW_KST, SCOPE, _CLOCK, assert_untouched, filled_position_then_quote,
     live_snapshot, mirror_restore, saved_state, synthetic_home, target,
 )
 from test_execution_p1_resume import fail_quote
 from test_execution_runtime import queued
+from test_execution_signal_gateway_acceptance import sell_signal
 
 SYM = '005930'
 
@@ -36,6 +38,41 @@ async def holding_target(tmp_path, monkeypatch, *, mutate=None):
     f = await target(tmp_path, monkeypatch, mutate=holding)
     await mirror_restore(f)
     return f
+
+
+def test_real_queue_stop_follows_repeated_general_rejections_without_delay(tmp_path, monkeypatch):
+    """실제 생산자·큐가 일반 거부의 공통 cooldown 때문에 손절100주를 보류하면 실패한다."""
+    async def scenario():
+        f = await holding_target(tmp_path, monkeypatch)
+        monkeypatch.setattr(KRExecutionRuntime, 'trading_ready', property(lambda self: True))
+        try:
+            await f['install']()
+            for index in range(3):
+                if index:
+                    _CLOCK['kst'] += timedelta(seconds=31)
+                f['commands'].session_guard = lambda request: GuardDecision(False, 'synthetic-general-reject')
+                await f['drive'](sell_signal(quantity=10))
+                assert len(f['error_events']) == index + 1
+                assert f['posts']() == []
+            f['commands'].session_guard = lambda request: GuardDecision(True, 'synthetic-open')
+            await f['drive'](tick())
+            assert len(f['posts']()) == 1
+            body = f['posts']()[0][1]['json']
+            assert (body['ORD_DVSN'], body['ORD_UNPR'], body['ORD_QTY']) == ('01', '0', '100')
+            runtime = f['runtime']
+            retained = runtime.health()['protection_producer']['retained_decisions'][SYM]
+            sale, = [row for row in runtime.owner.state['attempts'].values() if row['side'] == 'sell']
+            assert sale['intent_id'] == retained['intent_id']
+            assert sale['quantity'] == sale['reserved_quantity'] == retained['decision'][1] == 100
+            original = deepcopy(runtime.owner.state['attempts'])
+            _CLOCK['kst'] += timedelta(seconds=31)
+            await f['drive'](tick())
+            assert len(f['posts']()) == 1
+            assert runtime.owner.state['attempts'] == original
+            assert f['broker'].direct_calls == []
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize('value', [None, {}, 0, 'cache'])
@@ -136,6 +173,15 @@ def test_real_market_handler_protects_before_strategy_and_profit_fill_then_stop_
                     'start_date': day, 'end_date': day, 'tr_id': 'TTTC0081R',
                     'query_kind': 'all', 'session': 'regular'})
             assert await runtime.lifecycle.reconcile(first_id, evidence)
+            # 시계가 만료되어도 관측10주가 경제에 적용되기 전에는 원 pending을 보존한다.
+            _CLOCK['kst'] += timedelta(seconds=31)
+            await f['drive'](tick())
+            observed = runtime.owner.state
+            assert len(f['posts']()) == 1
+            assert observed['attempts'][first_id]['observed_quantity'] == 10
+            assert observed['attempts'][first_id]['applied_quantity'] == 0
+            assert observed['protection']['pending_owners'][SYM] == first['intent_id']
+            assert observed['protection']['states'][SYM]['pending_target_qty'] == 10
             observation = FillObservation(SCOPE, 'KR', day, 'KRX', ref.order_no, SYM,
                 'SELL', 10, D('112000'), org_no=ref.org_no)
             receipt = await queued(f['engine'], observation)

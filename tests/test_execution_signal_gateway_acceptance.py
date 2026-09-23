@@ -264,6 +264,7 @@ def inner_risk_manager(engine, config, *, sidecar, exits, sector_lookup, stop_re
     rm._order_fail_cooldown = {}
     rm._COOLDOWN_SECONDS = 300
     rm._last_signal_time = {}
+    rm._last_protection_signal_time = {}
     rm._SIGNAL_COOLDOWN_SECONDS = 30
     rm._LLM_CHECK_MIN = 85
     rm._LLM_BYPASS_AT = 95

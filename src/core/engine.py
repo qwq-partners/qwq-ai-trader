@@ -1444,6 +1444,7 @@ class RiskManager:
 
         # 신호 중복 제거: 종목별 마지막 신호 시각 (30초 쿨다운)
         self._last_signal_time: Dict[str, datetime] = {}
+        self._last_protection_signal_time: Dict[str, datetime] = {}
         self._SIGNAL_COOLDOWN_SECONDS = 30  # 60→30: 빠른 신호 처리
 
         # 2026-04-23 추가: G4 LLM 검증 임계값 (YAML 토글 가능)
@@ -2538,6 +2539,14 @@ class RiskManager:
         from ..execution.safety.requests import _session_at
         from ..utils.session import is_kr_market_holiday as protection_holiday
 
+        # 일반 신호의 반복 거부는 보호 대기를 연장하지 않는다. 이 RAM 시계의 만료는
+        # owner의 미해결 주문·예약·복구 장벽을 해제하는 근거가 아니다.
+        cooldown_now = datetime.now()
+        expired = [symbol for symbol, stamp in self._last_protection_signal_time.items()
+                   if (cooldown_now - stamp).total_seconds() >= self._SIGNAL_COOLDOWN_SECONDS]
+        for symbol in expired:
+            del self._last_protection_signal_time[symbol]
+
         runtime = self.engine._execution_runtime
         started_at = runtime._now().astimezone(ZoneInfo("Asia/Seoul"))
         session = _session_at(started_at)
@@ -2558,7 +2567,7 @@ class RiskManager:
             return None
 
         async with self._pending_lock:
-            last_signal = self._last_signal_time.get(event.symbol)
+            last_signal = self._last_protection_signal_time.get(event.symbol)
             if (event.symbol in self._pending_orders
                     or (last_signal is not None
                         and (datetime.now() - last_signal).total_seconds()
@@ -2586,7 +2595,7 @@ class RiskManager:
         async with self._pending_lock:
             now = runtime._now().astimezone(ZoneInfo("Asia/Seoul"))
             position = self.engine.portfolio.positions.get(event.symbol)
-            last_signal = self._last_signal_time.get(event.symbol)
+            last_signal = self._last_protection_signal_time.get(event.symbol)
             if (now.date() != started_at.date() or _session_at(now) != session
                     or protection_holiday(now.date())
                     or position is None or quantity > position.quantity):
@@ -2604,7 +2613,10 @@ class RiskManager:
                 strategy=event.strategy.value if event.strategy is not None else "unknown",
                 reason=event.reason, signal_score=event.score,
             )
-            self._last_signal_time[event.symbol] = datetime.now()
+            # 보호끼리30초 억제와 보호 뒤 일반 신호 억제는 같은 후보 시각을 사용한다.
+            candidate_at = datetime.now()
+            self._last_protection_signal_time[event.symbol] = candidate_at
+            self._last_signal_time[event.symbol] = candidate_at
             return [OrderEvent.from_order(order, source="risk_manager")]
 
     async def _get_sell_price(self, symbol: str, fallback_price: Optional[Decimal]) -> Optional[Decimal]:
