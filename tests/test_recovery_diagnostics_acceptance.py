@@ -300,3 +300,39 @@ def test_datetime_with_custom_timezone_does_not_execute_timezone_hook():
     report = report_for(None, captured_at=capture_time)
     assert 'snapshot_unavailable' in codes(report)
     assert calls == []
+
+
+@pytest.mark.parametrize('wiring', ['candidate', 'no_handler', 'finished_reconciler'])
+def test_apparent_wiring_is_never_installation_or_trading_authority(tmp_path, monkeypatch, wiring):
+    # Import before the existing fixture freezes datetime and checks late imports.
+    from src.core.event import EventType
+    from test_execution_signal_gateway_acceptance import fixture
+    api()
+
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch, ready=False)
+        task = None
+        try:
+            runtime, engine = f['runtime'], f['engine']
+            producer = producer_for(runtime)
+            engine._handlers[EventType.MARKET_DATA].insert(0, producer.on_market_data)
+            event = asyncio.Event()
+            task = asyncio.create_task(event.wait())
+            runtime._reconciler_task = task
+            if wiring == 'no_handler':
+                engine._handlers[EventType.MARKET_DATA].pop(0)
+            elif wiring == 'finished_reconciler':
+                event.set()
+                await task
+            report = report_for(runtime)
+            assert report['snapshot_stable'] is True
+            assert report['mode'] == ('attached_candidate' if wiring == 'candidate' else 'partial_install')
+            assert runtime.trading_ready is False
+            assert f['posts']() == []
+        finally:
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                f['runtime']._reconciler_task = None
+            await f['teardown']()
+    asyncio.run(scenario())
