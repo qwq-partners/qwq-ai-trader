@@ -123,7 +123,7 @@ ExitManager에 main의 `is_exit_exempt` 인터페이스가 없어 생긴 Attribu
 
 ## 최종 후보 검증
 
-첫 실패를 고친 뒤 모든 native/외부 작업자 종료 상태에서 coordinator가 직렬 실행한다.
+첫 실패를 고친 뒤 모든 native/외부 작업자 종료 상태에서 coordinator가 직렬 실행했다.
 시험 중 제품·테스트는 고정하고 문서만 편집했다.
 
 - UTC 전체: **5656 passed / 기존2 xfailed /4 warnings**,454.31초, exit0·격리 위반0.
@@ -136,7 +136,21 @@ ExitManager에 main의 `is_exit_exempt` 인터페이스가 없어 생긴 Attribu
 시험한 Git subtree OID: src `1d239dbbe2df4f81913d95b809a608ada90c691d`,
 scripts `fc4cc08b6d605616c27b18974184d8a9e932902b`,
 tests `d598ff3764876e9d7a3aa1ac6185587f0063f153`.
-후속 문서 통합에서 이 제품/시험 tree가 바뀌지 않는지 다시 대조한다.
+후속 문서 통합에서 이 제품/시험 tree가 바뀌지 않았음을 다시 대조했다.
+
+## 개발 통합·인계
+
+제품 통합 커밋은 `5fff86e`다(parent: `808c857`, `3cfcdca`). 관측 후보의 문서 전용
+커밋 `202d52b`를 추가 병합하고 위 src/scripts/tests tree 동일성을 다시 확인했다.
+두 CHANGELOG/README 이력을 모두 남기며 정본 개발 브랜치는
+`feature/engine-safety-design-20260917`이다. 이 통합은 main/운영 변경이 아니다.
+
+운영선 수정은 별도 [PR #90](https://github.com/qwq-partners/qwq-ai-trader/pull/90),
+head `202d52b`, CI Verify 성공(run35851346885). 운영선 후보 전체 시험은 UTC/KST
+각2069 passed/기존2 xfailed이며 N2의5656건과 서로 다른 후보의 결과다.
+이번 인계에서 PR은 미병합, 운영 체크아웃은 `afa6e1e`로 유지한다.
+다음은 PR 반영/운영 배포를 별도 범위로 판단한 뒤 실측하고, owner 개발에서는
+읽기 전용 exporter·관측 전달 및 남은 설치 차단을 순서대로 진행하는 것이다.
 
 ## 남기는 경계
 

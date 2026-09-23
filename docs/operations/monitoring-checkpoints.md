@@ -6,6 +6,26 @@
 
 ## 활성 체크포인트
 
+새 owner 엔진의 복구 진단은 [읽기 전용 절차](protection-recovery-diagnostics.md)를 따른다.
+아래 기존 legacy 운영 절차의 취소·pending 처분을 미설치 owner 경로에 적용하지 않는다.
+
+### 2026-09-23 — 호출 계측·매도 원인·지수 신선도 (미배포)
+
+- [ ] 배포가 별도 승인된 뒤 기존 `/api/health`의 `broker.kis_requests` 확인:
+  available=true, scope=kr_broker_get, window=process_lifetime. 같은 프로세스의
+  두 스냅샷 차분으로 TTTC8434R source별 attempts/retries/egw00215 비교.
+  캐시 계수는 positions만 해당하며 logical 호출 수와 HTTP 전송 수를 더하지 않는다.
+- [ ] broker/limiter 경고 중복을 제외한다. 09-23 기준202줄=101건이었다.
+  운영 관측 전에는 보유 종목 증가나 특정 호출자를 원인으로 확정하지 않는다.
+- [ ] 다음 실제 LLM 종가 매도가 발생하면 주문 근거·부분체결·JSON/DB 유형 llm_eod
+  일치 확인. 과거 원인 없는 거래를 자동 보정하거나 시험 주문을 내지 않는다.
+- [ ] 다음 스캔에서 벤치마크 source/last_bar_date/status 확인. stale 자료는 제외되며
+  5일·20일 LLM 입력은 결측, 종가 LLM c5는 '최근5거래일'로 표기돼야 한다.
+  neutral 호환 폴백은 매수 차단 보장이 아니다.
+- [ ] 동일 만료 macro 자료는 재시작 후 요약1회만 경고하고 계속 무시하는지 확인.
+  만료 파일의 값·유효기간·설정을 바꾸지 않는다.
+- 근거와 미지원 범위: [09-23 보고서](../reviews/operational-findings-2026-09-23.md).
+
 ### 배포 후 (매수 재개 시점부터 유효) — 분할 매도 취소 실패 처리 (2026-09-21 수정, **2026-09-22 00:51 KST 배포** main `2358936`·PID1453603)
 
 - **적용 범위**: `RiskManager.on_signal` 90초 SELL 폴백(+`on_heartbeat` 재시도) + `KRScheduler._cleanup_stale_pending`, **분할 매도에만**(전량 청산은 종전 경로). 현금 고갈 중에는 SELL pending 이 생기지 않아 관측 대상이 없다.

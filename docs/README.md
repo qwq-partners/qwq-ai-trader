@@ -42,6 +42,7 @@
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
+- [09-23 운영 관측 결함](reviews/operational-findings-2026-09-23.md) — EGW00215 중복 집계 정정·호출 주체/페이지 계측·매도 원인·benchmark 신선도·macro 경고, main 정합화와 운영 설치의 분리
 
 - [N2 main 안전 동작 정합화 결과](reviews/main-safety-alignment-2026-09-23.md) — main 계약 RED·26개 특성화 처분·attached heartbeat 차단·독립 리뷰·전체 검증 정본
 - [P1 후속 N1 — 운영 판정·보호 신호 대기 분리](reviews/p1-protection-priority-2026-09-23.md) — 일반 신호의 보호 기아 수정·독립 native/Opus 범위 승인·전체 UTC/KST 각각5386 통과. main 문서-only 동기화·제품 배포/재시작0, 전체 지연/복구·설치 차단 유지
