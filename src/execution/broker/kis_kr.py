@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import aiohttp
 from loguru import logger
 
-from ...utils import kis_rate_limit
+from ...utils import kis_rate_limit, kis_request_metrics
 
 from .base import BaseBroker
 from ...core.types import (
@@ -284,56 +284,65 @@ class KISBroker(BaseBroker):
                 headers = self._get_headers(tr_id)
                 if tr_cont != "":
                     headers["tr_cont"] = tr_cont
-                async with self._session.get(url, headers=headers, params=params) as resp:
-                    if kis_rate_limit.is_ledger(tr_id):
-                        kis_rate_limit.release_ledger()  # 원장 응답 수신 — 다음 원장 호출 허용(+1.05초)
-                    if resp.status == 401 and attempt < 2:
-                        logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
-                        await self._recover_token()
-                        continue
-                    if resp.status in (429, 500, 502, 503):
-                        # HTTP 500 본문에 토큰 오류가 포함될 수 있음. 거절 분류·리미터 계측은 마지막
-                        # 시도에도 수행한다 — 재시도 소진분(3번째 500)이 계측·백오프에서 빠지고 KIS 오류
-                        # 본문이 정상 응답처럼 반환되던 결함 (2026-09-15 원장 한도 조사).
-                        _err_msg = ""
-                        err_data: dict = {}
-                        if resp.status == 500:
-                            try:
-                                _body = await resp.json()
-                                err_data = _body if isinstance(_body, dict) else {}
-                                if self._is_token_error(err_data) and attempt < 2:
-                                    logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
-                                    await self._recover_token()
-                                    continue
-                                _err_msg = f" {err_data.get('msg_cd', '')} {str(err_data.get('msg1', '')).strip()}"
-                                if str(err_data.get("msg_cd", "")) == "EGW00201":
-                                    kis_rate_limit.note_rejection(tr_id)
-                                elif str(err_data.get("msg_cd", "")) == "EGW00215":
-                                    kis_rate_limit.note_ledger_rejection(tr_id)
-                            except Exception:
-                                err_data = {}
-                        if attempt < 2:
-                            wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
-                            logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, {attempt+1}회 재시도 ({wait}초 대기)")
-                            await asyncio.sleep(wait)
+                with kis_request_metrics.http_attempt(tr_id, attempt) as observed:
+                    async with self._session.get(url, headers=headers, params=params) as resp:
+                        if kis_rate_limit.is_ledger(tr_id):
+                            kis_rate_limit.release_ledger()  # 원장 응답 수신 — 다음 원장 호출 허용(+1.05초)
+                        if resp.status == 401 and attempt < 2:
+                            observed("http_error")
+                            logger.warning("[토큰] 401 응답, 토큰 강제 갱신")
+                            await self._recover_token()
                             continue
-                        logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, 재시도 소진 → 실패 반환")
-                        return err_data if err_data else {"rt_cd": "-1", "msg1": f"HTTP {resp.status}{_err_msg}"}
-                    try:
-                        data = await resp.json()
-                    except Exception:
-                        logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
-                        return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
-                    if isinstance(data, dict):
-                        # KIS 연속조회 신호(응답 헤더 tr_cont: F/M=다음 페이지 있음, D/E=마지막) —
-                        # 본문의 ctx_area_*100 키는 마지막 페이지에도 채워져 와서 종료 근거가 못 된다
-                        # (보유 1종목 계좌에서 8434R 을 페이지 상한 10회까지 호출하던 원인, 2026-09-15)
-                        data["_tr_cont"] = str(resp.headers.get("tr_cont", "") or "").strip().upper()
-                    if self._is_token_error(data) and attempt < 2:
-                        logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
-                        await self._recover_token()
-                        continue
-                    return data
+                        if resp.status in (429, 500, 502, 503):
+                            # HTTP 500 본문에 토큰 오류가 포함될 수 있음. 거절 분류·리미터 계측은 마지막
+                            # 시도에도 수행한다 — 재시도 소진분(3번째 500)이 계측·백오프에서 빠지고 KIS 오류
+                            # 본문이 정상 응답처럼 반환되던 결함 (2026-09-15 원장 한도 조사).
+                            _err_msg = ""
+                            err_data: dict = {}
+                            if resp.status == 500:
+                                try:
+                                    _body = await resp.json()
+                                    err_data = _body if isinstance(_body, dict) else {}
+                                    observed("http_error", str(err_data.get("msg_cd", "")) == "EGW00215")
+                                    if self._is_token_error(err_data) and attempt < 2:
+                                        logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
+                                        await self._recover_token()
+                                        continue
+                                    _err_msg = f" {err_data.get('msg_cd', '')} {str(err_data.get('msg1', '')).strip()}"
+                                    if str(err_data.get("msg_cd", "")) == "EGW00201":
+                                        kis_rate_limit.note_rejection(tr_id)
+                                    elif str(err_data.get("msg_cd", "")) == "EGW00215":
+                                        kis_rate_limit.note_ledger_rejection(tr_id)
+                                except Exception:
+                                    err_data = {}
+                            observed("http_error")
+                            if attempt < 2:
+                                wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
+                                logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, {attempt+1}회 재시도 ({wait}초 대기)")
+                                await asyncio.sleep(wait)
+                                continue
+                            logger.warning(f"[API] HTTP {resp.status} {tr_id}{_err_msg}, 재시도 소진 → 실패 반환")
+                            return err_data if err_data else {"rt_cd": "-1", "msg1": f"HTTP {resp.status}{_err_msg}"}
+                        try:
+                            data = await resp.json()
+                        except Exception:
+                            observed("invalid_json")
+                            logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
+                            return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
+                        if isinstance(data, dict):
+                            # KIS 연속조회 신호(응답 헤더 tr_cont: F/M=다음 페이지 있음, D/E=마지막) —
+                            # 본문의 ctx_area_*100 키는 마지막 페이지에도 채워져 와서 종료 근거가 못 된다
+                            # (보유 1종목 계좌에서 8434R 을 페이지 상한 10회까지 호출하던 원인, 2026-09-15)
+                            data["_tr_cont"] = str(resp.headers.get("tr_cont", "") or "").strip().upper()
+                        if isinstance(data, dict):
+                            observed("http_error" if resp.status >= 400 else
+                                     "success" if str(data.get("rt_cd", "")) == "0" else "api_error",
+                                     str(data.get("msg_cd", "")) == "EGW00215")
+                        if self._is_token_error(data) and attempt < 2:
+                            logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
+                            await self._recover_token()
+                            continue
+                        return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if kis_rate_limit.is_ledger(tr_id):
                     kis_rate_limit.release_ledger()  # 응답 없이 실패 — busy 해제
@@ -1038,6 +1047,7 @@ class KISBroker(BaseBroker):
             return self._pending_orders[order_id].status
         return None
 
+    @kis_request_metrics.observe_operation("open_orders")
     async def get_exchange_open_orders(self, symbol: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """거래소 실 미체결 주문 조회 (정정취소가능주문, TTTC8036R / 신 TR TTTC0084R)
 
@@ -1139,6 +1149,7 @@ class KISBroker(BaseBroker):
                 )
         return positions
 
+    @kis_request_metrics.observe_operation("positions")
     async def get_positions(self) -> Dict[str, Position]:
         """보유 포지션 조회 (페이지네이션 포함)"""
         if not self.is_connected:
@@ -1148,6 +1159,7 @@ class KISBroker(BaseBroker):
         # 직전 잔고 조회(get_account_balance)의 output1이 신선하면 재사용 — 원장 8434R 재호출 생략
         snap = self._balance_snapshot
         if snap is not None and time.monotonic() - snap[0] < self._BALANCE_SNAPSHOT_TTL:
+            kis_request_metrics.record_cache("hit")
             self._balance_snapshot = None  # 1회용 — 재시도 경로는 실제 재조회
             positions = self._parse_positions(snap[1])
             logger.debug(f"포지션 조회 완료(잔고 스냅샷 재사용): {len(positions)}개")
@@ -1155,6 +1167,7 @@ class KISBroker(BaseBroker):
         self._balance_snapshot = None
 
         positions = {}
+        kis_request_metrics.record_cache("miss")
 
         try:
             tr_id = "TTTC8434R"
@@ -1181,10 +1194,11 @@ class KISBroker(BaseBroker):
                 }
 
                 # 첫 페이지는 tr_cont 미송신(전환 전과 동일), 다음 페이지부터 "N"
-                if page == 0:
-                    data = await self._api_get(url, tr_id, params)
-                else:
-                    data = await self._api_get(url, tr_id, params, tr_cont="N")
+                with kis_request_metrics.request_page(page + 1):
+                    if page == 0:
+                        data = await self._api_get(url, tr_id, params)
+                    else:
+                        data = await self._api_get(url, tr_id, params, tr_cont="N")
 
                 rt_cd = data.get("rt_cd", "")
                 if str(rt_cd) != "0":
@@ -1218,6 +1232,7 @@ class KISBroker(BaseBroker):
             logger.exception(f"포지션 조회 오류: {e}")
             return positions
 
+    @kis_request_metrics.observe_operation("external_positions")
     async def get_positions_for_account(
         self, cano: str, acnt_prdt_cd: str
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -1265,10 +1280,11 @@ class KISBroker(BaseBroker):
                 }
 
                 # 첫 페이지는 tr_cont 미송신(전환 전과 동일), 다음 페이지부터 "N"
-                if page == 0:
-                    data = await self._api_get(url, tr_id, params)
-                else:
-                    data = await self._api_get(url, tr_id, params, tr_cont="N")
+                with kis_request_metrics.request_page(page + 1):
+                    if page == 0:
+                        data = await self._api_get(url, tr_id, params)
+                    else:
+                        data = await self._api_get(url, tr_id, params, tr_cont="N")
 
                 rt_cd = data.get("rt_cd", "")
                 if str(rt_cd) != "0":
@@ -1402,6 +1418,7 @@ class KISBroker(BaseBroker):
             logger.debug(f"해외 캐시 로드 실패 ({cano}): {e}")
             return [], {}
 
+    @kis_request_metrics.observe_operation("other")
     async def get_overseas_positions_for_account(
         self, cano: str, acnt_prdt_cd: str
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -1544,6 +1561,7 @@ class KISBroker(BaseBroker):
             logger.error(f"외부 해외계좌 조회 오류 ({cano}): {e} → 캐시 폴백")
             return self._load_overseas_cache(cano)
 
+    @kis_request_metrics.observe_operation("account_summary")
     async def get_account_balance(self) -> Dict[str, Any]:
         """
         계좌 잔고 조회
@@ -1631,7 +1649,8 @@ class KISBroker(BaseBroker):
                     "OVRS_ICLD_YN": "N",
                 }
 
-                data2 = await self._api_get(url2, tr_id2, params2)
+                with kis_request_metrics.logical_operation("orderable_cash"):
+                    data2 = await self._api_get(url2, tr_id2, params2)
                 if str(data2.get("rt_cd", "")) == "0":
                     output = data2.get("output", {})
                     # 미수 없는 매수가능금액 (실제 주문 가능 금액)
@@ -1663,6 +1682,7 @@ class KISBroker(BaseBroker):
             logger.exception(f"잔고 조회 오류: {e}")
             return {}
 
+    @kis_request_metrics.observe_operation("other")
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """현재가 조회"""
         if not self.is_connected:
@@ -1706,6 +1726,7 @@ class KISBroker(BaseBroker):
             logger.exception(f"현재가 조회 오류: {e}")
             return {}
 
+    @kis_request_metrics.observe_operation("other")
     async def get_overtime_quote(self, symbol: str) -> Dict[str, Any]:
         """넥스트장(시간외단일가) 현재가 조회 — FHPST02300000
 
@@ -1760,6 +1781,7 @@ class KISBroker(BaseBroker):
             logger.debug(f"시간외현재가 조회 오류 ({symbol}): {e}")
             return {}
 
+    @kis_request_metrics.observe_operation("other")
     async def get_orderbook(self, symbol: str) -> Dict[str, Any]:
         """호가 조회"""
         if not self.is_connected:
@@ -1822,6 +1844,7 @@ class KISBroker(BaseBroker):
     # 과거 일봉 데이터 조회
     # ============================================================
 
+    @kis_request_metrics.observe_operation("other")
     async def get_daily_prices(self, symbol: str, days: int = 60) -> List[Dict[str, Any]]:
         """
         과거 일봉 OHLCV 데이터 조회
@@ -1932,6 +1955,7 @@ class KISBroker(BaseBroker):
     # 체결 확인
     # ============================================================
 
+    @kis_request_metrics.observe_operation("daily_fills")
     async def _query_daily_fills(self, target_date: str = None) -> list:
         """
         KIS 일일 체결 내역 원시 조회 (TTTC8001R / 신 TR TTTC0081R) — 페이지네이션 포함.
@@ -1975,10 +1999,11 @@ class KISBroker(BaseBroker):
             }
 
             # 첫 페이지는 tr_cont 미송신(전환 전과 동일), 다음 페이지부터 "N"
-            if page == 0:
-                data = await self._api_get(url, tr_id, params)
-            else:
-                data = await self._api_get(url, tr_id, params, tr_cont="N")
+            with kis_request_metrics.request_page(page + 1):
+                if page == 0:
+                    data = await self._api_get(url, tr_id, params)
+                else:
+                    data = await self._api_get(url, tr_id, params, tr_cont="N")
             if str(data.get("rt_cd", "")) != "0":
                 break
 
