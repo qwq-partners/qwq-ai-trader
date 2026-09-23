@@ -13,6 +13,16 @@ pending broker/risk/sell0, stale0, metrics available=true. 잔고 TR의 startup1
 재시도/EGW00215는0이었다. Toss inactive/dead/PID0, 운영 main clean을 확인했다.
 장중 호출 제한 해소나 자연 발생 매도 이유/freshness의 실관측 완료로 확대하지 않는다.
 
+**최종 재점검09-24 00:18:14 KST:** 같은 PID active/running·broker connected·pending
+broker/risk/sell0·stale0·metrics available·EGW00215 0은 유지됐다. 다만 모든 GET의 재시도는
+3건으로 늘었다. 고정 분류 `source=unknown/operation=other/tr_id=other`의 attempts1083,
+success1080/http_error3/retries3였고 api_error/network_error/invalid_json/egw00215는0이다.
+이는 요청 단위 추적이 없는 누적 집계이므로 해당 오류가 어떤 요청에서 완전히 회복됐는지,
+원격 HTTP status/원인과 배포의 인과 관계는 단정하지 않는다. 00:00 이후 서비스PID 로그
+17행의 안전 집계에서 ERROR/CRITICAL/Traceback/EGW00215/EGW00201은0이었다.
+연결·pending 상태상 즉시 롤백 근거는 없지만, **기타 GET 오류3건의 원인/분류는 별도 후속**이다.
+장외 정상 확인과 오류 전무를 혼동하지 않으며 확인을 위해 추가 실 KIS 호출을 만들지 않았다.
+
 N4는 이 개발선에서 실제 runtime 타입과 합성 자료만 사용하는 **tests/docs 전용** 작업이다.
 **직렬 측정에서 연결 게이트 실패: health/경보 배선 보류**다. 운영 owner 설치를 수행한 것이
 아니며 설치·C/F/G/R·공식 최종성 차단은 유지한다. 최종 전체 검증 상태는 아래에서 구분한다.
