@@ -65,7 +65,7 @@ Files: coordinator의 spec/plan, 신규 `docs/reviews/recovery-scale-2026-09-23.
 - [x] 각 size/kind를 외부 timeout30초의 opt-in pytest로 실행한다. 원문 식별자/실 상태 출력0.
 - [x] 50ms/지원성 게이트의 원 결과를 표로 저장한다. 실패 시 HTTP/경보 배선을 구현하지 않는다.
 - [x] 작업자 종료 후 UTC/KST 전체, 문법/비밀 패턴/diff 검사를 실행한다.
-- [ ] 승인된 tests/docs만 정본 개발선으로 통합/푸시하고 실제 한계와 후속 재설계를 인계한다.
+- [x] 승인된 tests/docs만 정본 개발선으로 통합/푸시하고 실제 한계와 후속 재설계를 인계한다.
   main과 runtime 설치는 그대로 유지한다. 전체 엔진 승격이나 장기 실운영 성능 완료라고 보고하지 않는다.
 
 ## 측정 판정

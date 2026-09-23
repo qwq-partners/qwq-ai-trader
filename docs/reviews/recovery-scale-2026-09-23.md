@@ -125,9 +125,13 @@ warnings는 pykrx1·기존 fork 관련3이며 새 하네스 경고가 아니다.
 제품/scripts/config의 base 대비 diff는0이다.
 고정 tree: src `7f994a918020c1f35517258a05b02e4414f4091c`,
 tests `083839f002282571473d778138d25e87cfaf510f`, scripts `fc4cc08b6d605616c27b18974184d8a9e932902b`.
-통합 대상은 `feature/engine-safety-design-20260917` 정본 한 곳이다. 원격은 여전히
-`5a2fab8`인 것을 확인했으며 새 main PR/전체 engine 배포는 하지 않는다. 아래 인계 기록은
-실제 fast-forward·통합 focused·원격 확인 후 갱신한다.
+통합 직전 정본의 clean·local/remote `5a2fab8`을 확인한 뒤, 테스트/문서 후보 `dce43f7`을
+`feature/engine-safety-design-20260917` 한 곳에 fast-forward했다. 통합본 diagnostics4파일
+**136 passed/16 skipped/7.89초/rc0/격리0**, source/test/script tree 불변을 재확인한 뒤
+push 성공 및 원격 `dce43f7` 일치를 확인했다. 이 마감 기록은 문서만 갱신하며 제품 변경은 없다.
+새 main PR/전체 engine 배포·재시작·주문·설정 변경은 하지 않았다. 작업/리뷰 증거가 있는
+격리 worktree는 삭제하지 않고 보존한다. 다음 재개 위치는 아래 projection/index 계약이며
+완료한 하네스나 N3 exporter를 중복 구현하지 않는다.
 
 ## 유지하는 한계와 후속
 
