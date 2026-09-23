@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import datetime, tzinfo
+from datetime import datetime, timezone, tzinfo
 from decimal import Decimal
 import importlib
 import importlib.util
@@ -335,4 +335,38 @@ def test_apparent_wiring_is_never_installation_or_trading_authority(tmp_path, mo
                 await asyncio.gather(task, return_exceptions=True)
                 f['runtime']._reconciler_task = None
             await f['teardown']()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('mutation', ['datetime_to_same_text', 'integer_to_bool'])
+def test_two_sample_stability_preserves_types_not_just_python_equality(tmp_path, monkeypatch, mutation):
+    capture, build = api()
+    module = importlib.import_module('src.execution.safety.recovery_capture')
+
+    async def scenario():
+        _, _, store, runtime = await setup(tmp_path)
+        try:
+            producer = producer_for(runtime)
+            producer._last_quote['005930'] = NOW
+            runtime.owner._state['diagnostic_synthetic_metadata'] = 1
+            version = runtime.owner.version
+            original = module._read_sample
+            calls = []
+            def read(value):
+                result = original(value)
+                if not calls:
+                    if mutation == 'datetime_to_same_text':
+                        producer._last_quote['005930'] = NOW.astimezone(timezone.utc).isoformat()
+                    else:
+                        runtime.owner._state['diagnostic_synthetic_metadata'] = True
+                calls.append(1)
+                return result
+            monkeypatch.setattr(module, '_read_sample', read)
+            report = build(capture(runtime, captured_at=NOW))
+            assert len(calls) == 2
+            assert runtime.owner.version == version
+            assert report['snapshot_stable'] is False
+            assert 'snapshot_volatile' in codes(report)
+        finally:
+            await store.close()
     asyncio.run(scenario())
