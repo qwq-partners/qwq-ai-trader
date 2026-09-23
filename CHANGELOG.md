@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-23 — test(safety): 누적 상태 성능 게이트·health 연결 보류
+
+- 실제 합성 lifecycle 종결 이력+작은 live cohort로 capture/owner/cold·warm sweep을 분리한 opt-in 하네스를 추가했다. 제품·운영 설정·보존 정책 변경0이다.
+- 독립 리뷰에서 검증용 복사 비용 혼입·all-open 자료·timeout phase·writer guard 시험 부족을 찾아 수정했고 초기 병렬 수치는 폐기했다. 최종 하네스는 Sol/high 독립 한정 승인이다.
+- 직렬0/100/1000/5000건16사례에서12완료·4timeout.100건 capture59.37ms·sweep680.18~710.98ms,5000건 캡처 거부로 사전50ms 연결 게이트 실패. timeout은 단계별 미완/미측정으로 보존한다.
+- health·경보 배선/전체 engine 배포는 하지 않는다. 원장 보존·revision projection·producer index 후속 계약과 실제 전체 검증/개발 통합 상태는 [N4 원장](docs/reviews/recovery-scale-2026-09-23.md) 참조.
+- 운영선은 별도 PR #90/#91/#92 main `a454277`, 실행 제품 `e5ae602`로09-23 23:18:02 배포·재시작했다. 아래 과거 미배포 문구는 당시 기록이며 주문·전략·위험·Toss grant 무변경이다. 인증 폴백 제거와 노출 인증정보 교체/이력 정리는 구분한다(후자는 미완).
+
 ## 2026-09-23 — feat(safety): 읽기 전용 복구 진단 exporter (운영 미배선)
 
 - 기존 runtime 메모리만 동기 두 번 읽는 bounded adapter와 비식별 frozen DTO/순수 보고서를 추가했다. health/clock/store/복구 함수를 호출하지 않으며 주문·가격·계좌·종목 식별자를 출력하지 않는다.

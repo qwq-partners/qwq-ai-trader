@@ -31,20 +31,20 @@ Files: 신규 `tests/test_recovery_diagnostics_performance.py`만. 공통 helper
 신규 `tests/recovery_scale_harness.py` 하나까지 허용한다. 기존 제품·시험 파일 변경 금지.
 Consumes: `test_execution_runtime.setup/opened`, N3 capture/builder, 실제 ProtectionProducer.
 Produces: `measure_case(size, kind)`의 비식별 dict; kind는 capture/owner/sweep 중 하나이며
-크기·wall_max_ms·loop_stall_ms·peak_bytes·report_bytes·지원 상태·finding codes를 기록한다.
+크기·wall_max_ms·first_yield_delay_ms·peak_bytes·report_bytes·지원 상태·finding codes를 기록한다.
 가령 미측정 값은 `None`이며 `status='not_measured'`, 완료는 `status='measured'`다.
 `classify_measurement(*, snapshot_stable, wall_max_ms)`는 exact bool 안정 표본 여부와
 50ms 한도를 별도 `capture_supported`/`connection_eligible` bool로 판정하는 test-only helper다.
 
 - [x] 승인 env-i로 기존 diagnostics3파일 기준선을 확인했다: **122 passed/7.79초/rc0/격리0**.
-- [ ] 결정적 하네스 계약 시험을 먼저 쓰고 부재/오류로 실패하는 RED를 확인한다.
+- [x] 결정적 하네스 계약 시험을 먼저 쓰고 부재/오류로 실패하는 RED를 확인한다.
   ```python
   def test_report_distinguishes_unavailable_from_fast_success():
       row = classify_measurement(snapshot_stable=None, wall_max_ms=1.0)
       assert row['capture_supported'] is False
       assert row['connection_eligible'] is False
   ```
-- [ ] test-only helper를 구현하고 위5개 Review Focus를 실제 runtime 시험으로 인수한다.
+- [x] test-only helper를 구현하고 위5개 Review Focus를 실제 runtime 시험으로 인수한다.
   ```python
   assert len(runtime.owner._state['intents']) == size
   assert len(runtime.owner._state['attempts']) == size
@@ -53,16 +53,24 @@ Produces: `measure_case(size, kind)`의 비식별 dict; kind는 capture/owner/sw
   assert runtime.owner._state == before
   assert report['automatic_action_allowed'] is False
   ```
-- [ ] opt-in `QWQ_RUN_RECOVERY_SCALE=1` 없으면 장기 벤치만 skip한다. 일반 계약 시험은 skip하지 않는다.
-- [ ] 원 상태와 spy0·finite schema를 검증하고 신규 파일만 커밋한다. coordinator에 실제 명령/rc·측정치·한계를 인계한다.
+- [x] opt-in `QWQ_RUN_RECOVERY_SCALE=1` 없으면 장기 벤치만 skip한다. 일반 계약 시험은 skip하지 않는다.
+- [x] 원 상태와 spy0·finite schema를 검증하고 신규 파일만 커밋한다. coordinator에 실제 명령/rc·측정치·한계를 인계한다.
 
 ## Task 2: 독립 검토·측정·개발 통합
 
 Files: coordinator의 spec/plan, 신규 `docs/reviews/recovery-scale-2026-09-23.md`, 개발 인계 문서의 좁은 최신 상태.
 
-- [ ] Sol/high가 Task1의 자료 링크·진짜 코드 호출·시간 경계·과대 주장 여부를 독립 검토한다.
-- [ ] 각 size/kind를 외부 timeout30초의 opt-in pytest로 실행한다. 원문 식별자/실 상태 출력0.
-- [ ] 50ms/지원성 게이트의 원 결과를 표로 저장한다. 실패 시 HTTP/경보 배선을 구현하지 않는다.
-- [ ] 작업자 종료 후 UTC/KST 전체, 문법/비밀 패턴/diff 검사를 실행한다.
+- [x] Sol/high가 Task1의 자료 링크·진짜 코드 호출·시간 경계·과대 주장 여부를 독립 검토한다.
+- [x] 첫 리뷰의 측정 오염·누적 이력 부재·phase/negative control 누락을 수정하고 재검토한다.
+- [x] 각 size/kind를 외부 timeout30초의 opt-in pytest로 실행한다. 원문 식별자/실 상태 출력0.
+- [x] 50ms/지원성 게이트의 원 결과를 표로 저장한다. 실패 시 HTTP/경보 배선을 구현하지 않는다.
+- [x] 작업자 종료 후 UTC/KST 전체, 문법/비밀 패턴/diff 검사를 실행한다.
 - [ ] 승인된 tests/docs만 정본 개발선으로 통합/푸시하고 실제 한계와 후속 재설계를 인계한다.
   main과 runtime 설치는 그대로 유지한다. 전체 엔진 승격이나 장기 실운영 성능 완료라고 보고하지 않는다.
+
+## 측정 판정
+
+테스트 후보 `435b53f`는 Sol/high 정적 재리뷰 APPROVE·coordinator focused14 passed/16 skipped.
+직렬16사례는12완료·4timeout,100건부터50ms 초과·5000건 캡처 거부로 **연결 게이트 실패**다.
+raw 비식별 JSON과 timeout phase는 `docs/reviews/recovery-scale-2026-09-23.md` 참조.
+후속은 원장 보존·revision projection/producer index의 별도 critical 설계이며 기준 완화가 아니다.

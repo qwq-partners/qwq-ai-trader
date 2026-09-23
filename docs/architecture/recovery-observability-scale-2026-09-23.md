@@ -23,18 +23,31 @@ N3 exporter는 owner RAM 전체를 두 번 복사하고 node100,000/text2MB 상�
 
 - 기준 `0/100/1000/5000`개의 합성 누적 기록. 한 사건에 intent/attempt/outbox가 연결되는
   자료를 만들고 실제 fixture에서 얻은 row 모양을 사용한다. setup 비용은 측정과 분리한다.
-  여러 top-level 행을 한 기록으로 묶었다면 행 수를 따로 표시한다.
+  여러 top-level 행을 한 기록으로 묶었다면 행 수를 따로 표시한다. 주 측정은 실제 합성
+  lifecycle에서 생성한 종결 기록을 반복 종목에 누적하고 작은 live cohort만 남긴다.
+  종결 reservation은0이며 합성 finality를 KIS 공식 최종성 증거로 해석하지 않는다.
 - 읽기 캡처+builder+JSON, owner.state 복사, producer의 실제 sweep을 별도 측정한다.
   sweep은 test-owned producer RAM만 변경 가능하고 owner/store/gateway/네트워크 writer는
   실패 spy로 막는다. 비어 있는 보호 pending/admission으로 자동 재시도를 만들지 않는다.
-- wall time/최대 관측값, asyncio event-loop 대기 지연, 별도 tracemalloc peak와 JSON bytes,
+- wall time/최대 관측값, asyncio 첫 양보까지 callback 대기 지연, 별도 tracemalloc peak와 JSON bytes,
   snapshot_stable/counts_complete/고정 finding code를 각각 표시한다. tracing 비용을 일반
-  latency와 합산하지 않는다. warm/cold producer sweep을 구분한다.
+  latency와 합산하지 않는다. 첫 양보 대기를 전체 실행의 최대 loop stall이라고 부르지 않는다.
+  warm/cold producer sweep을 구분한다. 보존 검증용 pre-image/비교는 timing/tracing 밖에 둔다.
 - 성능 실행은 명시 opt-in 시험으로 두고 평상시 CI에 긴 벤치를 섞지 않는다. 각 규모/종류는
   별도 pytest 프로세스·외부 timeout30초·합성 tmp 저장소만 사용한다. timeout은 PASS가
-  아니라 censored/failure로 기록한다. 미완 사례를0ms/0byte로 만들지 않는다.
+  아니라 censored/failure로 기록한다. setup/warm/reset/normal/tracing/report/cleanup phase를
+  flush하고 마지막 phase 또는 unknown을 함께 남긴다. 프로세스 timeout을 제품 연산이30초
+  넘었다는 증거로 쓰지 않는다. 미완 사례를0ms/0byte로 만들지 않는다.
 - 단위/하네스 시험은 일반 suite에서 실행해 자료 링크·출력 schema·비식별·writer0·
   반복 측정의 원 상태 불변을 인수한다. 수치 타이밍은 CI의 flaky assertion으로 쓰지 않는다.
+
+### 첫 독립 리뷰 후 측정 정정
+
+최초 하네스 `a526cb0`는 타이머 안에 검증용 deepcopy/동등성 검사를 넣었고 capture의 JSON
+직렬화는 제외했다. 모든 행이 서로 다른 종목의 미종결 SELL이라 장기 보관 이력도 대표하지
+못했다. 당시 병렬100건 실행 수치는 **폐기하며50ms 게이트 근거로 쓰지 않는다**. Sol/high
+독립 리뷰도 동일 결함과 timeout phase/negative control 누락을 지적했다. 이후 수정은
+사전 규모·50ms·30초·캡처 상한을 바꾸지 않으며 측정 정의와 fixture를 바로잡는 것이다.
 
 ## 연결 게이트
 

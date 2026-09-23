@@ -1,0 +1,573 @@
+{
+  "schema_version": 1,
+  "source_candidate": "435b53fd10918fb721df42cb457adc06bf244195",
+  "product_base": "5a2fab8a29df33191a7be39e3469c9fb354a7137",
+  "execution": "serial_offline_synthetic_pytest",
+  "timezone": "UTC",
+  "started_at": "2026-09-23 14:54:57 UTC",
+  "ended_at": "2026-09-23 14:57:44 UTC",
+  "trials_per_completed_case": 3,
+  "process_timeout_seconds": 30,
+  "connection_gate_ms": 50,
+  "timeout_semantics": "censored_at_last_flushed_phase; not a product-latency lower bound",
+  "initial_parallel_contaminated_observations": "withdrawn",
+  "findings": "connection_gate_failed; no health/alert wiring",
+  "cases": [
+    {
+      "size": 0,
+      "kind": "capture",
+      "exit_code": 0,
+      "process_seconds": 1.616,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 0,
+          "symbol_count": 0,
+          "terminal_events": 0,
+          "total_events": 0
+        },
+        "connection_eligible": true,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable"
+        ],
+        "first_yield_delay_ms": 1.9047996029257774,
+        "kind": "capture",
+        "peak_bytes": 30256,
+        "record_counts": {
+          "attempts": 0,
+          "intents": 0,
+          "outbox": 0
+        },
+        "report_bytes": 524,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 0,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 1.8699318170547485
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 0,
+      "kind": "owner",
+      "exit_code": 0,
+      "process_seconds": 1.962,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 0,
+          "symbol_count": 0,
+          "terminal_events": 0,
+          "total_events": 0
+        },
+        "connection_eligible": true,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable"
+        ],
+        "first_yield_delay_ms": 0.2504941076040268,
+        "kind": "owner",
+        "peak_bytes": 4680,
+        "record_counts": {
+          "attempts": 0,
+          "intents": 0,
+          "outbox": 0
+        },
+        "report_bytes": 524,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 0,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 0.1420341432094574
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 0,
+      "kind": "sweep-cold",
+      "exit_code": 0,
+      "process_seconds": 2.278,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 0,
+          "symbol_count": 0,
+          "terminal_events": 0,
+          "total_events": 0
+        },
+        "connection_eligible": true,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable"
+        ],
+        "first_yield_delay_ms": 0.6522871553897858,
+        "kind": "sweep",
+        "peak_bytes": 5360,
+        "record_counts": {
+          "attempts": 0,
+          "intents": 0,
+          "outbox": 0
+        },
+        "report_bytes": 524,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 0,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": "cold",
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 0.6241966038942337
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 0,
+      "kind": "sweep-warm",
+      "exit_code": 0,
+      "process_seconds": 1.595,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 0,
+          "symbol_count": 0,
+          "terminal_events": 0,
+          "total_events": 0
+        },
+        "connection_eligible": true,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable"
+        ],
+        "first_yield_delay_ms": 0.6217639893293381,
+        "kind": "sweep",
+        "peak_bytes": 5360,
+        "record_counts": {
+          "attempts": 0,
+          "intents": 0,
+          "outbox": 0
+        },
+        "report_bytes": 524,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 0,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": "warm",
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 0.5836868658661842
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 100,
+      "kind": "capture",
+      "exit_code": 0,
+      "process_seconds": 2.29,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 98,
+          "total_events": 100
+        },
+        "connection_eligible": false,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable",
+          "pending_sell",
+          "remaining_reservation"
+        ],
+        "first_yield_delay_ms": 59.41488593816757,
+        "kind": "capture",
+        "peak_bytes": 1625552,
+        "record_counts": {
+          "attempts": 100,
+          "intents": 100,
+          "outbox": 100
+        },
+        "report_bytes": 768,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 100,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 59.370195493102074
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 100,
+      "kind": "owner",
+      "exit_code": 0,
+      "process_seconds": 1.64,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 98,
+          "total_events": 100
+        },
+        "connection_eligible": true,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable",
+          "pending_sell",
+          "remaining_reservation"
+        ],
+        "first_yield_delay_ms": 3.319268114864826,
+        "kind": "owner",
+        "peak_bytes": 204320,
+        "record_counts": {
+          "attempts": 100,
+          "intents": 100,
+          "outbox": 100
+        },
+        "report_bytes": 768,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 100,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 3.2795006409287453
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 100,
+      "kind": "sweep-cold",
+      "exit_code": 0,
+      "process_seconds": 6.532,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 98,
+          "total_events": 100
+        },
+        "connection_eligible": false,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable",
+          "pending_sell",
+          "remaining_reservation"
+        ],
+        "first_yield_delay_ms": 711.0263491049409,
+        "kind": "sweep",
+        "peak_bytes": 568344,
+        "record_counts": {
+          "attempts": 100,
+          "intents": 100,
+          "outbox": 100
+        },
+        "report_bytes": 768,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 100,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": "cold",
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 710.9793554991484
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 100,
+      "kind": "sweep-warm",
+      "exit_code": 0,
+      "process_seconds": 7.215,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 98,
+          "total_events": 100
+        },
+        "connection_eligible": false,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable",
+          "pending_sell",
+          "remaining_reservation"
+        ],
+        "first_yield_delay_ms": 680.2220111712813,
+        "kind": "sweep",
+        "peak_bytes": 571072,
+        "record_counts": {
+          "attempts": 100,
+          "intents": 100,
+          "outbox": 100
+        },
+        "report_bytes": 768,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 100,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": "warm",
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 680.1760923117399
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 1000,
+      "kind": "capture",
+      "exit_code": 0,
+      "process_seconds": 8.051,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 998,
+          "total_events": 1000
+        },
+        "connection_eligible": false,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable",
+          "pending_sell",
+          "remaining_reservation"
+        ],
+        "first_yield_delay_ms": 322.40820210427046,
+        "kind": "capture",
+        "peak_bytes": 16835392,
+        "record_counts": {
+          "attempts": 1000,
+          "intents": 1000,
+          "outbox": 1000
+        },
+        "report_bytes": 768,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 1000,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 322.3641086369753
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 1000,
+      "kind": "owner",
+      "exit_code": 0,
+      "process_seconds": 2.484,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": true,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 998,
+          "total_events": 1000
+        },
+        "connection_eligible": true,
+        "counts_complete": true,
+        "finding_codes": [
+          "disposition_not_durable",
+          "pending_sell",
+          "remaining_reservation"
+        ],
+        "first_yield_delay_ms": 33.19579269737005,
+        "kind": "owner",
+        "peak_bytes": 2273440,
+        "record_counts": {
+          "attempts": 1000,
+          "intents": 1000,
+          "outbox": 1000
+        },
+        "report_bytes": 768,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 1000,
+        "snapshot_stable": true,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 33.145539462566376
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 1000,
+      "kind": "sweep-cold",
+      "exit_code": 124,
+      "process_seconds": 30.085,
+      "last_phase": "normal",
+      "measurement": null,
+      "isolation_summary": "not_reported_before_timeout"
+    },
+    {
+      "size": 1000,
+      "kind": "sweep-warm",
+      "exit_code": 124,
+      "process_seconds": 30.079,
+      "last_phase": "warm",
+      "measurement": null,
+      "isolation_summary": "not_reported_before_timeout"
+    },
+    {
+      "size": 5000,
+      "kind": "capture",
+      "exit_code": 0,
+      "process_seconds": 6.263,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": false,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 4998,
+          "total_events": 5000
+        },
+        "connection_eligible": false,
+        "counts_complete": false,
+        "finding_codes": [
+          "disposition_not_durable",
+          "evidence_invalid",
+          "snapshot_unavailable"
+        ],
+        "first_yield_delay_ms": 181.5753262490034,
+        "kind": "capture",
+        "peak_bytes": 8973086,
+        "record_counts": {
+          "attempts": 5000,
+          "intents": 5000,
+          "outbox": 5000
+        },
+        "report_bytes": 761,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 5000,
+        "snapshot_stable": null,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 181.52921367436647
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 5000,
+      "kind": "owner",
+      "exit_code": 0,
+      "process_seconds": 4.339,
+      "last_phase": "cleanup",
+      "measurement": {
+        "capture_supported": false,
+        "cohort": {
+          "live_events": 2,
+          "symbol_count": 5,
+          "terminal_events": 4998,
+          "total_events": 5000
+        },
+        "connection_eligible": false,
+        "counts_complete": false,
+        "finding_codes": [
+          "disposition_not_durable",
+          "evidence_invalid",
+          "snapshot_unavailable"
+        ],
+        "first_yield_delay_ms": 222.0315095037222,
+        "kind": "owner",
+        "peak_bytes": 11055248,
+        "record_counts": {
+          "attempts": 5000,
+          "intents": 5000,
+          "outbox": 5000
+        },
+        "report_bytes": 761,
+        "rows_linked": true,
+        "schema_version": 1,
+        "size": 5000,
+        "snapshot_stable": null,
+        "status": "measured",
+        "sweep_phase": null,
+        "synthetic": true,
+        "synthetic_finality": "synthetic_lifecycle_rejected",
+        "terminal_reservations": 0,
+        "unique_rows": true,
+        "wall_max_ms": 221.9764906913042
+      },
+      "isolation_summary": "zero_reported"
+    },
+    {
+      "size": 5000,
+      "kind": "sweep-cold",
+      "exit_code": 124,
+      "process_seconds": 30.086,
+      "last_phase": "normal",
+      "measurement": null,
+      "isolation_summary": "not_reported_before_timeout"
+    },
+    {
+      "size": 5000,
+      "kind": "sweep-warm",
+      "exit_code": 124,
+      "process_seconds": 30.082,
+      "last_phase": "warm",
+      "measurement": null,
+      "isolation_summary": "not_reported_before_timeout"
+    }
+  ]
+}
