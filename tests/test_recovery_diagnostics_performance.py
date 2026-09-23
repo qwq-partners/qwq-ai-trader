@@ -65,6 +65,23 @@ def test_measurement_validates_async_tracing_return_value():
     assert values == [{'async': True}] * 4
 
 
+def test_setup_has_its_marker_before_fixture_work(tmp_path, monkeypatch, capsys):
+    import test_execution_runtime as fixture_module
+
+    original = fixture_module.setup
+
+    async def checked_setup(path):
+        lines = capsys.readouterr().out.splitlines()
+        assert lines and json.loads(lines[-1]) == {'scale_phase': 'setup'}
+        return await original(path)
+
+    monkeypatch.setattr(fixture_module, 'setup', checked_setup)
+    asyncio.run(measure_case(0, 'capture', tmp_path=tmp_path))
+    phases = [json.loads(line)['scale_phase'] for line in capsys.readouterr().out.splitlines()]
+    assert 'warm' not in phases
+    assert 'baseline' in phases
+
+
 def test_validation_rejects_state_mutation_outside_measurement_window():
     class Owner:
         _state = {'value': 1}

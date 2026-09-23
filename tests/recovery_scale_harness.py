@@ -222,9 +222,9 @@ async def measure_case(size, kind, *, tmp_path, sweep_phase=None):
     from src.execution.safety.recovery_capture import capture_recovery_snapshot
     from src.execution.safety.recovery_diagnostics import build_recovery_diagnostic
 
+    _phase("setup")
     _, _, store, runtime = await setup(tmp_path)
     try:
-        _phase("setup")
         # The primary cohort is genuine test-fixture lifecycle rejection history, not padded open rows.
         await runtime.lifecycle.prepare("scale-terminal-template", "scale-terminal-template", 100,
                                         "005930", "sell")
@@ -236,10 +236,11 @@ async def measure_case(size, kind, *, tmp_path, sweep_phase=None):
         cohort = _synthetic_rows(runtime, size)
         producer = ProtectionProducer(runtime, clock=lambda: NOW, indicator_source=lambda _symbol: {})
         runtime._protection_producer = producer
-        _phase("warm")
         if sweep_phase == "warm":
+            _phase("warm")
             # The cold-start index construction is intentionally excluded from warm latency.
             producer._restart_cooldowns(NOW)
+        _phase("baseline")
         state_baseline = deepcopy(runtime.owner._state)
         producer_baseline = _producer_baseline(producer)
 
