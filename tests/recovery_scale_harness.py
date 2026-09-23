@@ -14,6 +14,11 @@ SIZES = (0, 100, 1000, 5000)
 KINDS = ("capture", "owner", "sweep")
 TRIALS = 3
 CONNECTION_GATE_MS = 50.0
+FORBIDDEN_SWEEP_SEAMS = {
+    'owner.mutate', 'owner.store.commit', 'lifecycle.prepare', 'lifecycle.claim',
+    'lifecycle.record_result', 'runtime.release_protection_pending',
+    'runtime.resume_protection_admission', 'producer._submit', 'gateway.any',
+}
 
 
 def classify_measurement(*, snapshot_stable, wall_max_ms):
@@ -29,12 +34,15 @@ def classify_measurement(*, snapshot_stable, wall_max_ms):
 
 
 def _synthetic_rows(runtime, size):
-    """Grow private test RAM from real lifecycle rows, never from public ``owner.state`` copies."""
+    """Grow private RAM from real terminal/live lifecycle rows, never public copies."""
     from test_execution_runtime import NOW
     asyncio.get_running_loop()  # makes accidental use outside the async harness obvious
-    # The caller has already made the template before calling this helper.
-    template_intent = deepcopy(runtime.owner._state["intents"]["scale-template"])
-    template_attempt = deepcopy(runtime.owner._state["attempts"]["scale-template"])
+    # The caller made these through real lifecycle transitions before this test-only copy step.
+    terminal_intent = deepcopy(runtime.owner._state["intents"]["scale-terminal-template"])
+    terminal_attempt = deepcopy(runtime.owner._state["attempts"]["scale-terminal-template"])
+    live_intent = deepcopy(runtime.owner._state["intents"]["scale-live-template"])
+    live_attempt = deepcopy(runtime.owner._state["attempts"]["scale-live-template"])
+    live_count = min(size, 2)
     state = runtime.owner._state
     state["intents"] = {}
     state["attempts"] = {}
@@ -42,12 +50,14 @@ def _synthetic_rows(runtime, size):
     for index in range(size):
         intent_id = f"scale-intent-{index}"
         attempt_id = f"scale-attempt-{index}"
-        symbol = f"scale-symbol-{index}"
-        intent = deepcopy(template_intent)
-        attempt = deepcopy(template_attempt)
+        symbol = f"scale-symbol-{index % 5}"
+        is_live = index < live_count
+        intent = deepcopy(live_intent if is_live else terminal_intent)
+        attempt = deepcopy(live_attempt if is_live else terminal_attempt)
         intent.update(symbol=symbol, attempt_ids=[attempt_id])
         attempt.update(attempt_id=attempt_id, intent_id=intent_id, symbol=symbol)
-        attempt["order_ref"] = dict(attempt["order_ref"], order_no=attempt_id)
+        if attempt["order_ref"] is not None:
+            attempt["order_ref"] = dict(attempt["order_ref"], order_no=attempt_id)
         # This is the exact current protection-decision row shape from runtime quote admission;
         # its links point at the independently copied lifecycle intent above.
         outbox = {
@@ -69,9 +79,11 @@ def _synthetic_rows(runtime, size):
     assert all(state["intents"][row["intent_id"]]["attempt_ids"] == [row["attempt_id"]]
                for row in state["attempts"].values())
     assert all(row["intent_id"] in state["intents"] for row in state["outbox"].values())
-    # All synthetic attempts are explicitly open; no terminal reservation is fabricated.
-    assert all(row["state"] not in ("final_filled", "final_cancelled", "final_rejected")
-               for row in state["attempts"].values())
+    terminal = list(state["attempts"].values())[live_count:]
+    assert all(row["state"] == "final_rejected" and row["command_status"] == "rejected"
+               and row["reserved_quantity"] == 0 and row["reserved_cash"] == "0" for row in terminal)
+    return {"total_events": size, "live_events": live_count,
+            "terminal_events": size - live_count, "symbol_count": min(size, 5)}
 
 
 def _producer_baseline(producer):
@@ -87,8 +99,16 @@ def _restore_case(runtime, producer, state_baseline, producer_baseline):
         setattr(producer, name, deepcopy(value))
 
 
+def _phase(name):
+    print(json.dumps({"scale_phase": name}, sort_keys=True, allow_nan=False), flush=True)
+
+
+def _validate_unchanged(owner, baseline):
+    assert owner._state == baseline
+
+
 async def _timed_once(operation):
-    """Measure synchronous loop blocking separately from elapsed wall time."""
+    """Report one scheduled callback's delay to first yield, not continuous loop stall."""
     loop = asyncio.get_running_loop()
     observed_stall = []
     queued_at = loop.time()
@@ -102,15 +122,18 @@ async def _timed_once(operation):
     return value, elapsed, max(observed_stall, default=0.0)
 
 
-async def _measure(operation, reset):
-    wall, stalls = [], []
+async def _measure(operation, reset, validate):
+    wall, first_yield_delays = [], []
     for _ in range(TRIALS):
-        reset()  # Copies/reset are setup, explicitly outside the latency timer.
-        _, elapsed, stall = await _timed_once(operation)
+        reset()  # Copies/reset are setup, explicitly outside the operation timer.
+        value, elapsed, first_yield_delay = await _timed_once(operation)
+        validate(value)  # Validation is deliberately outside both normal and tracing windows.
         wall.append(elapsed)
-        stalls.append(stall)
+        first_yield_delays.append(first_yield_delay)
 
-    reset()  # Tracing is intentionally a separate operation, never added to wall timing.
+    _phase("reset")
+    reset()
+    _phase("tracing")
     tracemalloc.start()
     try:
         value = operation()
@@ -119,7 +142,8 @@ async def _measure(operation, reset):
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    return max(wall), max(stalls), peak
+    validate(value)
+    return max(wall), max(first_yield_delays), peak
 
 
 @contextmanager
@@ -154,7 +178,7 @@ def _forbid_sweep_writers(runtime, producer):
             originals.append((target, name, getattr(target, name)))
             setattr(target, name, replacement)
     gateway = runtime.gateway
-    runtime.gateway = ForbiddenGateway()
+    runtime.gateway = ForbiddenGateway()  # Sweep must not touch gateway; capture runs after restoration.
     try:
         yield
     finally:
@@ -177,17 +201,26 @@ async def measure_case(size, kind, *, tmp_path, sweep_phase=None):
         raise ValueError("sweep_phase_only_applies_to_sweep")
 
     from test_execution_runtime import NOW, opened, setup
+    from src.execution.safety.lifecycle import CommandResult, CommandStatus
     from src.execution.safety.protection_producer import ProtectionProducer
     from src.execution.safety.recovery_capture import capture_recovery_snapshot
     from src.execution.safety.recovery_diagnostics import build_recovery_diagnostic
 
     _, _, store, runtime = await setup(tmp_path)
     try:
-        # One real lifecycle call supplies the row shape; subsequent records are independent copies.
-        await opened(runtime, "scale-template", side="sell")
-        _synthetic_rows(runtime, size)
+        # The primary cohort is genuine test-fixture lifecycle rejection history, not padded open rows.
+        await runtime.lifecycle.prepare("scale-terminal-template", "scale-terminal-template", 100,
+                                        "005930", "sell")
+        assert await runtime.lifecycle.claim("scale-terminal-template", "scale-sender")
+        assert await runtime.lifecycle.record_result("scale-terminal-template", "scale-sender",
+                                                     CommandResult(CommandStatus.REJECTED,
+                                                                   "scale-terminal-template"))
+        await opened(runtime, "scale-live-template", side="sell")
+        cohort = _synthetic_rows(runtime, size)
         producer = ProtectionProducer(runtime, clock=lambda: NOW, indicator_source=lambda _symbol: {})
         runtime._protection_producer = producer
+        _phase("setup")
+        _phase("warm")
         if sweep_phase == "warm":
             # The cold-start index construction is intentionally excluded from warm latency.
             producer._restart_cooldowns(NOW)
@@ -197,54 +230,68 @@ async def measure_case(size, kind, *, tmp_path, sweep_phase=None):
         def reset():
             _restore_case(runtime, producer, state_baseline, producer_baseline)
 
-        def captured_report():
-            before = deepcopy(runtime.owner._state)
-            report = build_recovery_diagnostic(capture_recovery_snapshot(runtime, captured_at=NOW))
-            assert runtime.owner._state == before
-            assert report["automatic_action_allowed"] is False
-            return report
+        def capture_json():
+            # The capture operation is exactly capture + builder + finite JSON serialization.
+            return json.dumps(build_recovery_diagnostic(
+                capture_recovery_snapshot(runtime, captured_at=NOW)), sort_keys=True,
+                separators=(",", ":"), allow_nan=False)
 
         if kind == "capture":
-            operation = captured_report
+            operation = capture_json
+
+            def validate(value):
+                report = json.loads(value)
+                _validate_unchanged(runtime.owner, state_baseline)
+                assert report["automatic_action_allowed"] is False
+
             guard = None
         elif kind == "owner":
             def operation():
-                before = deepcopy(runtime.owner._state)
-                copied = runtime.owner.state
-                assert copied == before and copied is not runtime.owner._state
-                assert runtime.owner._state == before
-                return copied
+                return runtime.owner.state
+
+            def validate(value):
+                _validate_unchanged(runtime.owner, state_baseline)
+                assert value == state_baseline and value is not runtime.owner._state
+
             guard = None
         else:
             async def operation():
-                before = deepcopy(runtime.owner._state)
                 await producer._sweep(NOW)
-                assert runtime.owner._state == before
+
+            def validate(_value):
+                _validate_unchanged(runtime.owner, state_baseline)
+
             guard = _forbid_sweep_writers(runtime, producer)
 
+        _phase("reset")
+        _phase("normal")
         if guard is None:
-            wall_max_ms, loop_stall_ms, peak_bytes = await _measure(operation, reset)
+            wall_max_ms, first_yield_delay_ms, peak_bytes = await _measure(operation, reset, validate)
         else:
             with guard:
-                wall_max_ms, loop_stall_ms, peak_bytes = await _measure(operation, reset)
+                wall_max_ms, first_yield_delay_ms, peak_bytes = await _measure(operation, reset, validate)
 
+        _phase("reset")
         reset()
-        report = captured_report()  # Schema/status output is outside owner/sweep latency timing.
-        report_json = json.dumps(report, sort_keys=True, separators=(",", ":"))
+        _phase("report")
+        report_json = capture_json()  # Schema/status output is outside owner/sweep latency timing.
+        report = json.loads(report_json)
+        _validate_unchanged(runtime.owner, state_baseline)
         finding_codes = sorted(row["code"] for row in report["findings"])
         classification = classify_measurement(snapshot_stable=report["snapshot_stable"],
                                               wall_max_ms=wall_max_ms)
         return {
             "schema_version": 1, "kind": kind, "sweep_phase": sweep_phase,
             "size": size, "synthetic": True, "status": "measured",
-            "wall_max_ms": wall_max_ms, "loop_stall_ms": loop_stall_ms,
+            "wall_max_ms": wall_max_ms, "first_yield_delay_ms": first_yield_delay_ms,
             "peak_bytes": peak_bytes, "report_bytes": len(report_json),
             "snapshot_stable": report["snapshot_stable"],
             "counts_complete": report["counts_complete"], "finding_codes": finding_codes,
             "record_counts": {"intents": size, "attempts": size, "outbox": size},
             "rows_linked": True, "unique_rows": True, "terminal_reservations": 0,
-            "synthetic_finality": "none",
+            "cohort": cohort, "synthetic_finality": "synthetic_lifecycle_rejected",
             **classification,
         }
     finally:
+        _phase("cleanup")
         await store.close()
