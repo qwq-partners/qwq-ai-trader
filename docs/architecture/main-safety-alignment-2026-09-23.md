@@ -41,8 +41,10 @@
 owner/live를 복원하고 attach 전에 실패하면 engine 참조가 None이어도 legacy가 아니다.
 설치 결과·기존 객체 동일성·복원/배선 증거가 없으면 모드 미상/차단을 유지한다.
 
-`capture_recovery_snapshot(runtime, *, captured_at)`은 owner/state, runtime.health,
-게시 version을 복사하고 시작/끝 version을 비교한다. 새 네트워크·송신·mutate·commit은
+N3에서 아래 제안의 세부 계약을 보완했다([설계](recovery-diagnostics-2026-09-23.md)).
+`capture_recovery_snapshot(runtime, *, captured_at)`은 health/clock 콜백 없이
+owner/state·지정 RAM·게시 version을 private adapter로 복사하고 두 표본을 비교한다.
+새 네트워크·송신·mutate·commit은
 금지한다. `build_recovery_diagnostic(snapshot)`은 순수·결정적·JSON-safe 분류다.
 계좌·자격·브로커 주문번호·시세 원문은 보고서에 포함하지 않는다.
 내부 캡처를 공유 보고서와 분리하고 whitelist/redaction을 적용한다. whole state/health
