@@ -358,3 +358,148 @@ def test_task_codec_cannot_collide_with_user_tuple(runtime, monkeypatch):
             await task
 
     asyncio.run(scenario())
+
+
+def synthetic_zone(key):
+    from io import BytesIO
+    import struct
+    from zoneinfo import ZoneInfo
+    data = (b'TZif\0' + bytes(15) + struct.pack('>6l', 0, 0, 0, 0, 1, 4)
+            + struct.pack('>lBB', 0, 0, 0) + b'UTC\0')
+    return ZoneInfo.from_file(BytesIO(data), key=key)
+
+
+@pytest.mark.parametrize('kind', ['hostile', 'oversized'])
+def test_zoneinfo_metadata_never_bypasses_exact_type_or_size(runtime, kind):
+    from src.execution.safety.recovery_capture import MAX_TEXT
+
+    class Hostile:
+        def __eq__(self, other):
+            raise AssertionError('zone key equality hook')
+        def __str__(self):
+            raise AssertionError('zone key string hook')
+        def __repr__(self):
+            raise AssertionError('zone key repr hook')
+
+    key = Hostile() if kind == 'hostile' else 'x' * (MAX_TEXT + 1)
+    runtime._reconciler_started_at = NOW.replace(tzinfo=synthetic_zone(key))
+    value = report(runtime)
+    assert value['snapshot_stable'] is None
+    assert 'evidence_invalid' in codes(value)
+
+
+def test_inflight_mutation_marks_counts_incomplete(runtime):
+    async def scenario():
+        await runtime.owner._lock.acquire()
+        try:
+            runtime.owner._block()
+            value = report(runtime)
+            assert value['mutation_in_flight'] is True
+            assert value['counts_complete'] is False
+            assert value['snapshot_stable'] is True
+            assert value['publication_consistent'] is False
+        finally:
+            runtime.owner._lock.release()
+
+    asyncio.run(scenario())
+
+
+def test_clean_capture_counts_are_complete_within_supported_scope(runtime):
+    value = report(runtime)
+    assert value['mutation_in_flight'] is False
+    assert value['counts_complete'] is True
+
+
+@pytest.mark.parametrize('failure', ['invalid', 'volatile'])
+def test_unconfirmed_sample_has_unknown_mode_and_incomplete_counts(runtime, monkeypatch, failure):
+    from src.execution.safety import recovery_capture as module
+    if failure == 'invalid':
+        runtime.owner._state['invalid'] = object()
+    else:
+        original = module._read_sample
+
+        def sample(value):
+            result = original(value)
+            value._day_generation += 1
+            return result
+
+        monkeypatch.setattr(module, '_read_sample', sample)
+    value = report(runtime)
+    assert value['mode'] == 'unknown'
+    assert value['mutation_in_flight'] is None
+    assert value['counts_complete'] is False
+
+
+def test_absent_market_handler_key_is_partial_wiring(runtime):
+    from src.core.event import EventType
+    runtime.engine._handlers.pop(EventType.MARKET_DATA)
+    value = report(runtime)
+    assert value['mode'] == 'partial_install'
+    assert value['snapshot_stable'] is True
+
+
+@pytest.mark.parametrize('kind', ['utc', 'kst', 'zone_without_key', 'naive', 'subclass', 'unknown_tz'])
+def test_known_ram_datetime_types_are_explicit(runtime, kind):
+    from datetime import tzinfo
+    from zoneinfo import ZoneInfo
+
+    class DateSubclass(datetime):
+        pass
+
+    class UnknownTimezone(tzinfo):
+        def utcoffset(self, value):
+            raise AssertionError('unknown timezone callback')
+
+    stamps = dict(utc=NOW, kst=NOW.astimezone(ZoneInfo('Asia/Seoul')),
+                  zone_without_key=NOW.replace(tzinfo=synthetic_zone(None)),
+                  naive=NOW.replace(tzinfo=None),
+                  subclass=DateSubclass(2026, 9, 23, tzinfo=timezone.utc),
+                  unknown_tz=NOW.replace(tzinfo=UnknownTimezone()))
+    runtime._reconciler_started_at = stamps[kind]
+    value = report(runtime)
+    if kind in ('utc', 'kst', 'zone_without_key'):
+        assert value['snapshot_stable'] is True
+    else:
+        assert 'evidence_invalid' in codes(value)
+
+
+@pytest.mark.parametrize('budget', ['MAX_DEPTH', 'MAX_NODES', 'MAX_TEXT', 'MAX_TOTAL_TEXT', 'MAX_INTEGER_BITS'])
+def test_capture_budget_rejection_is_fixed_and_unavailable(runtime, monkeypatch, budget):
+    from src.execution.safety import recovery_capture as module
+    monkeypatch.setattr(module, budget, 1)
+    value = report(runtime)
+    assert value['snapshot_stable'] is None
+    assert 'evidence_invalid' in codes(value)
+
+
+@pytest.mark.parametrize('budget', ['text', 'integer', 'depth', 'nodes', 'aggregate'])
+def test_copier_real_budget_edges(budget):
+    from src.execution.safety import recovery_capture as module
+    if budget == 'text':
+        accepted, rejected = 'a' * module.MAX_TEXT, 'a' * (module.MAX_TEXT + 1)
+    elif budget == 'integer':
+        accepted, rejected = (1 << module.MAX_INTEGER_BITS) - 1, 1 << module.MAX_INTEGER_BITS
+    elif budget == 'depth':
+        accepted = None
+        for _ in range(module.MAX_DEPTH):
+            accepted = [accepted]
+        rejected = [accepted]
+    elif budget == 'nodes':
+        accepted, rejected = [None] * (module.MAX_NODES - 1), [None] * module.MAX_NODES
+    else:
+        count, remain = divmod(module.MAX_TOTAL_TEXT, module.MAX_TEXT)
+        accepted = ['a' * module.MAX_TEXT] * count + ['b' * remain]
+        rejected = accepted + ['x']
+    module._Copier().copy(accepted)
+    with pytest.raises(ValueError, match='invalid_capture_evidence'):
+        module._Copier().copy(rejected)
+
+
+@pytest.mark.parametrize('kind', ['decimal', 'datetime'])
+def test_derived_scalar_evidence_consumes_aggregate_budget(monkeypatch, kind):
+    from decimal import Decimal
+    from src.execution.safety import recovery_capture as module
+    monkeypatch.setattr(module, 'MAX_TOTAL_TEXT', 4)
+    value = Decimal('12345') if kind == 'decimal' else NOW
+    with pytest.raises(ValueError, match='invalid_capture_evidence'):
+        module._Copier().copy(value)

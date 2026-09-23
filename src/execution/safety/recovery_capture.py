@@ -55,7 +55,18 @@ def _timestamp(value):
     # exact datetime만으로는 악성 tzinfo 호출을 차단할 수 없어 tz 타입도 한정한다.
     if type(value) is not datetime or not any(type(value.tzinfo) is item for item in (timezone, ZoneInfo)):
         raise _Invalid()
+    _zone_key(value.tzinfo)
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _zone_key(zone):
+    if type(zone) is not ZoneInfo:
+        return None
+    # ZoneInfo.from_file는 key의 타입을 제한하지 않는다.
+    key = zone.key
+    if key is not None and (type(key) is not str or len(key) > MAX_TEXT):
+        raise _Invalid()
+    return key
 
 
 class _Copier:
@@ -65,6 +76,11 @@ class _Copier:
         self.active = set()
         self.references = []
         self.type_evidence = []
+
+    def _charge_text(self, size):
+        self.text_size += size
+        if size > MAX_TEXT or self.text_size > MAX_TOTAL_TEXT:
+            raise _Invalid()
 
     def copy(self, value, depth=0):
         self.nodes += 1
@@ -86,25 +102,32 @@ class _Copier:
             self.type_evidence.append(value)
             return value
         if kind is str:
-            self.text_size += len(value)
-            if len(value) > MAX_TEXT or self.text_size > MAX_TOTAL_TEXT:
-                raise _Invalid()
+            self._charge_text(len(value))
             self.type_evidence.append(value)
             return value
         if kind is float:
             if not math.isfinite(value):
                 raise _Invalid()
-            self.type_evidence.append(value.hex())
+            encoded = value.hex()
+            self._charge_text(len(encoded))
+            self.type_evidence.append(encoded)
             return value
         if kind is Decimal:
-            if not value.is_finite() or len(value.as_tuple().digits) > MAX_TEXT:
+            if not value.is_finite():
                 raise _Invalid()
-            self.type_evidence.append(tuple(value.as_tuple()))
+            encoded = value.as_tuple()
+            self._charge_text(len(encoded.digits))
+            self.type_evidence.append(tuple(encoded))
             return value
         if kind is datetime:
             stamp = _timestamp(value)
-            self.type_evidence.append((value.isoformat(), value.fold,
-                ('zoneinfo', value.tzinfo.key) if type(value.tzinfo) is ZoneInfo else ('timezone',)))
+            original, key = value.isoformat(), _zone_key(value.tzinfo)
+            self._charge_text(len(stamp))
+            self._charge_text(len(original))
+            if key is not None:
+                self._charge_text(len(key))
+            self.type_evidence.append((original, value.fold,
+                ('zoneinfo', key) if type(value.tzinfo) is ZoneInfo else ('timezone',)))
             return stamp
         if kind is asyncio.Task or kind is asyncio.Future:
             self.references.append(value)
@@ -159,7 +182,7 @@ def _read_sample(runtime):
     handlers = eng['_handlers']
     if type(handlers) is not dict or any(type(key) is not EventType for key in handlers):
         raise _Invalid()
-    market_handlers = handlers.get(EventType.MARKET_DATA)
+    market_handlers = handlers.get(EventType.MARKET_DATA, [])
     if type(market_handlers) is not list or len(market_handlers) > MAX_NODES:
         raise _Invalid()
     copier.references.extend(market_handlers)
@@ -239,7 +262,7 @@ def capture_recovery_snapshot(runtime, *, captured_at) -> RecoverySnapshot:
         first, first_refs = _read_sample(runtime)
         second, second_refs = _read_sample(runtime)
         if first != second:
-            return RecoverySnapshot(stamp, mode='partial_install', snapshot_stable=False,
+            return RecoverySnapshot(stamp, snapshot_stable=False,
                                     findings=(('snapshot_volatile', 1),))
         own, eng = second['owner'], second['engine']
         _validate_ram(second)
@@ -260,7 +283,7 @@ def capture_recovery_snapshot(runtime, *, captured_at) -> RecoverySnapshot:
             mode='attached_candidate' if second['candidate'] else 'partial_install',
             snapshot_stable=True, publication_consistent=consistent, owner_health_confirmed=healthy,
             execution_version=versions[0], published_version=versions[1], engine_version=versions[2],
-            findings=tuple(sorted(counts.items())))
+            findings=tuple(sorted(counts.items())), mutation_in_flight=any(second['locks'][1]))
     except (ValueError, TypeError, KeyError, AttributeError, RuntimeError, OverflowError):
-        return RecoverySnapshot(stamp, mode='partial_install',
+        return RecoverySnapshot(stamp,
                                 findings=(('snapshot_unavailable', 1), ('evidence_invalid', 1)))

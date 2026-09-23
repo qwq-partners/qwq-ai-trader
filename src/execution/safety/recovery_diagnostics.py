@@ -11,7 +11,7 @@ from .reservations import has_remaining_reservation
 FINDINGS = {
     'snapshot_unavailable': ('unsupported_capture', 'inspect_capture_support'),
     'snapshot_volatile': ('memory_changed_between_samples', 'capture_again_when_quiet'),
-    'publication_inconsistent': ('publication_versions_disagree', 'inspect_publication'),
+    'publication_inconsistent': ('publication_not_confirmed_at_capture', 'inspect_publication'),
     'owner_health_unconfirmed': ('owner_composite_not_confirmed', 'inspect_owner_barrier'),
     'unapplied_inbox': ('inbox_not_applied', 'inspect_fill_application'),
     'observation_not_applied': ('observed_applied_difference', 'inspect_fill_application'),
@@ -43,12 +43,14 @@ class RecoverySnapshot:
     published_version: int | None = None
     engine_version: int | None = None
     findings: tuple[tuple[str, int | None], ...] = ()
+    mutation_in_flight: bool | None = None
 
     def __post_init__(self):
         valid = (type(self.mode) is str and self.mode in
                  ('unknown', 'partial_install', 'attached_candidate'))
         valid = valid and all(value is None or type(value) is bool for value in (
-            self.snapshot_stable, self.publication_consistent, self.owner_health_confirmed))
+            self.snapshot_stable, self.publication_consistent, self.owner_health_confirmed,
+            self.mutation_in_flight))
         valid = valid and all(value is None or type(value) is int and -1 <= value < 2 ** 256
                              for value in (self.execution_version, self.published_version, self.engine_version))
         valid = valid and type(self.findings) is tuple and len(self.findings) <= len(FINDINGS) and all(
@@ -71,17 +73,26 @@ class RecoverySnapshot:
 
 
 def build_recovery_diagnostic(snapshot: RecoverySnapshot) -> dict:
-    """캡처의 안전 DTO만 JSON tree로 옮긴다. 매번 새 중첩 객체를 만든다."""
+    """안전 DTO만 새 JSON tree로 옮긴다.
+
+    counts_complete는 지원하는 메모리 진단 항목을 모두 평가했다는 뜻이다.
+    False일 때 부재 finding은 0건이 아니다. True도 durable 과거 처분,
+    별도 intraday producer의 연결/수량, 브로커 최종성의 완전성은 뜻하지 않는다.
+    mutation_in_flight는 관측한 owner/quote/producer lock의 상태일 뿐이다.
+    """
     if type(snapshot) is not RecoverySnapshot:
         snapshot = RecoverySnapshot(None, findings=(('snapshot_unavailable', 1),))
     else:
         try:
             # frozen 우회도 경계에서 재검증한다. 검증한 새 값만 반환에 사용한다.
             snapshot = RecoverySnapshot(
-                snapshot.captured_at, snapshot.mode, snapshot.snapshot_stable,
-                snapshot.publication_consistent, snapshot.owner_health_confirmed,
-                snapshot.execution_version, snapshot.published_version, snapshot.engine_version,
-                snapshot.findings)
+                captured_at=snapshot.captured_at, mode=snapshot.mode,
+                snapshot_stable=snapshot.snapshot_stable,
+                publication_consistent=snapshot.publication_consistent,
+                owner_health_confirmed=snapshot.owner_health_confirmed,
+                execution_version=snapshot.execution_version, published_version=snapshot.published_version,
+                engine_version=snapshot.engine_version, findings=snapshot.findings,
+                mutation_in_flight=snapshot.mutation_in_flight)
         except (ValueError, TypeError, AttributeError):
             snapshot = RecoverySnapshot(None, findings=(('snapshot_unavailable', 1), ('evidence_invalid', 1)))
     return {
@@ -91,6 +102,9 @@ def build_recovery_diagnostic(snapshot: RecoverySnapshot) -> dict:
         'snapshot_stable': snapshot.snapshot_stable,
         'publication_consistent': snapshot.publication_consistent,
         'owner_health_confirmed': snapshot.owner_health_confirmed,
+        'mutation_in_flight': snapshot.mutation_in_flight,
+        'counts_complete': (snapshot.snapshot_stable is True and snapshot.mutation_in_flight is False
+                            and not any(code == 'evidence_invalid' for code, _ in snapshot.findings)),
         'versions': {'execution': snapshot.execution_version,
                      'published': snapshot.published_version, 'engine': snapshot.engine_version},
         'findings': [dict(code=code, count=count, evidence=FINDINGS[code][0],
