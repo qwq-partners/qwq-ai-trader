@@ -61,6 +61,12 @@ False이면 findings에 없는 코드를0건으로 읽지 않는다. True도 **�
 포함하지 않는다. None planned risk는 SELL에서도 측정된0이 아니며 해당 위험 증거는
 불충분(evidence_invalid)으로 남긴다. 정상 pending과 위험 증거 부족이 함께 나올 수 있다.
 
+필수 owner 루트(attempts/intents/portfolio/outbox/protection) 및 보호의 states/
+pending_owners/degraded 구조 부재는 지원 계약 위반으로 전체 unavailable이다.
+반면 MARKET_DATA 핸들러 부재는 읽을 수 있는 미완 배선(partial_install) 사실이다.
+exit_exempt는 자동 청산 판단만 면제하며 owner 체결 reducer의 보호 수량 원장은 유지한다.
+따라서 면제 목록만으로 누락된 보호 행을 정상화하지 않는다.
+
 findings는 `{code, count, evidence, next_check}`의 고정 whitelist로 결정적 정렬한다.
 문제 없음이나 0도 거래/복구 허가로 변환하지 않는다. 필수 코드/의미:
 

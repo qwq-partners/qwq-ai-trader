@@ -303,7 +303,7 @@ def test_datetime_with_custom_timezone_does_not_execute_timezone_hook():
     assert calls == []
 
 
-@pytest.mark.parametrize('wiring', ['candidate', 'no_handler', 'finished_reconciler'])
+@pytest.mark.parametrize('wiring', ['candidate', 'no_handler', 'wrong_handler_order', 'finished_reconciler'])
 def test_apparent_wiring_is_never_installation_or_trading_authority(tmp_path, monkeypatch, wiring):
     # Import before the existing fixture freezes datetime and checks late imports.
     from src.core.event import EventType
@@ -322,6 +322,10 @@ def test_apparent_wiring_is_never_installation_or_trading_authority(tmp_path, mo
             runtime._reconciler_task = task
             if wiring == 'no_handler':
                 engine._handlers[EventType.MARKET_DATA].pop(0)
+            elif wiring == 'wrong_handler_order':
+                async def unrelated_handler(_event):
+                    pass
+                engine._handlers[EventType.MARKET_DATA].insert(0, unrelated_handler)
             elif wiring == 'finished_reconciler':
                 event.set()
                 await task
@@ -513,4 +517,28 @@ def test_actual_producer_pending_quote_is_not_an_inconsistent_link(tmp_path, mon
             assert report['counts_complete'] is False
         finally:
             await close(f)
+    asyncio.run(scenario())
+
+
+def test_exit_exemption_skips_decisions_not_owner_quantity_accounting(tmp_path):
+    async def scenario():
+        engine, exits, store, runtime = await setup(tmp_path)
+        try:
+            producer_for(runtime)
+            def exempt(state):
+                state['protection']['exit_exempt'] = ['005930']
+                return state
+            await runtime.owner.mutate('synthetic-exemption', exempt)
+            buy = await opened(runtime, 'B1')
+            receipt = await queued(engine, await observed(runtime, buy, 100, '1000000'))
+            assert receipt.protection_status == 'exempt'
+            assert exits.is_exit_exempt('005930')
+            assert exits.get_state('005930').remaining_quantity == 100
+            assert 'protection_quantity_inconsistent' not in codes(report_for(runtime))
+            # Exemption suppresses automatic exits, not the owner's quantity ledger.
+            # A missing state is corruption in this owner contract, not a normal exemption.
+            runtime.owner._state['protection']['states'].pop('005930')
+            assert 'protection_quantity_inconsistent' in codes(report_for(runtime))
+        finally:
+            await store.close()
     asyncio.run(scenario())
