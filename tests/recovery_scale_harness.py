@@ -125,8 +125,11 @@ async def _timed_once(operation):
 async def _measure(operation, reset, validate):
     wall, first_yield_delays = [], []
     for _ in range(TRIALS):
+        _phase("reset")
         reset()  # Copies/reset are setup, explicitly outside the operation timer.
+        _phase("normal")
         value, elapsed, first_yield_delay = await _timed_once(operation)
+        _phase("validation")
         validate(value)  # Validation is deliberately outside both normal and tracing windows.
         wall.append(elapsed)
         first_yield_delays.append(first_yield_delay)
@@ -138,10 +141,11 @@ async def _measure(operation, reset, validate):
     try:
         value = operation()
         if inspect.isawaitable(value):
-            await value
+            value = await value
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
+    _phase("validation")
     validate(value)
     return max(wall), max(first_yield_delays), peak
 
@@ -161,28 +165,40 @@ def _forbid_sweep_writers(runtime, producer):
         def __getattr__(self, _name):
             blocked()
 
+    owner = getattr(runtime, 'owner', None)
+    lifecycle = getattr(runtime, 'lifecycle', None)
+    store = getattr(owner, 'store', None)
     candidates = (
-        (runtime, "release_protection_pending", blocked_async),
-        (runtime, "resume_protection_admission", blocked_async),
-        (producer, "_submit", blocked_async),
-        (runtime.owner, "mutate", blocked_async),
-        (runtime.lifecycle, "prepare", blocked_async),
-        (runtime.lifecycle, "claim", blocked_async),
-        (runtime.lifecycle, "record_result", blocked_async),
+        ('runtime.release_protection_pending', runtime, 'release_protection_pending'),
+        ('runtime.resume_protection_admission', runtime, 'resume_protection_admission'),
+        ('producer._submit', producer, '_submit'),
+        ('owner.mutate', owner, 'mutate'),
+        ('lifecycle.prepare', lifecycle, 'prepare'),
+        ('lifecycle.claim', lifecycle, 'claim'),
+        ('lifecycle.record_result', lifecycle, 'record_result'),
+        ('owner.store.commit', store, 'commit'),
     )
-    store = getattr(runtime.owner, "store", None)
-    if store is not None:
-        candidates += ((store, "commit", blocked_async),)
-    for target, name, replacement in candidates:
-        if hasattr(target, name):
-            originals.append((target, name, getattr(target, name)))
-            setattr(target, name, replacement)
+    missing = {label for label, target, name in candidates if target is None or not hasattr(target, name)}
+    if not hasattr(runtime, 'gateway'):
+        missing.add('gateway.any')
+    if missing:
+        raise AssertionError('missing forbidden sweep seams: ' + ','.join(sorted(missing)))
+
+    installed, gateway_installed = set(), False
     gateway = runtime.gateway
-    runtime.gateway = ForbiddenGateway()  # Sweep must not touch gateway; capture runs after restoration.
     try:
-        yield
+        for label, target, name in candidates:
+            originals.append((target, name, getattr(target, name)))
+            setattr(target, name, blocked_async)
+            installed.add(label)
+        runtime.gateway = ForbiddenGateway()  # Sweep must not touch gateway; capture never installs this guard.
+        gateway_installed = True
+        installed.add('gateway.any')
+        assert installed == FORBIDDEN_SWEEP_SEAMS
+        yield installed
     finally:
-        runtime.gateway = gateway
+        if gateway_installed:
+            runtime.gateway = gateway
         for target, name, original in reversed(originals):
             setattr(target, name, original)
 
@@ -208,6 +224,7 @@ async def measure_case(size, kind, *, tmp_path, sweep_phase=None):
 
     _, _, store, runtime = await setup(tmp_path)
     try:
+        _phase("setup")
         # The primary cohort is genuine test-fixture lifecycle rejection history, not padded open rows.
         await runtime.lifecycle.prepare("scale-terminal-template", "scale-terminal-template", 100,
                                         "005930", "sell")
@@ -219,7 +236,6 @@ async def measure_case(size, kind, *, tmp_path, sweep_phase=None):
         cohort = _synthetic_rows(runtime, size)
         producer = ProtectionProducer(runtime, clock=lambda: NOW, indicator_source=lambda _symbol: {})
         runtime._protection_producer = producer
-        _phase("setup")
         _phase("warm")
         if sweep_phase == "warm":
             # The cold-start index construction is intentionally excluded from warm latency.
@@ -263,12 +279,11 @@ async def measure_case(size, kind, *, tmp_path, sweep_phase=None):
 
             guard = _forbid_sweep_writers(runtime, producer)
 
-        _phase("reset")
-        _phase("normal")
         if guard is None:
             wall_max_ms, first_yield_delay_ms, peak_bytes = await _measure(operation, reset, validate)
         else:
-            with guard:
+            with guard as installed:
+                assert installed == FORBIDDEN_SWEEP_SEAMS
                 wall_max_ms, first_yield_delay_ms, peak_bytes = await _measure(operation, reset, validate)
 
         _phase("reset")

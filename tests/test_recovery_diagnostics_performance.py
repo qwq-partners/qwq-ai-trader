@@ -45,6 +45,26 @@ def test_measurement_validates_after_its_timed_window():
                for index, item in enumerate(events[:-1]) if item == 'operation')
 
 
+def test_measurement_marks_each_operation_and_validation_phase(capsys):
+    asyncio.run(_measure(lambda: {'value': 1}, lambda: None, lambda _value: None))
+
+    phases = [json.loads(line)['scale_phase'] for line in capsys.readouterr().out.splitlines()]
+    assert phases == ['reset', 'normal', 'validation'] * 3 + [
+        'reset', 'tracing', 'validation',
+    ]
+
+
+def test_measurement_validates_async_tracing_return_value():
+    values = []
+
+    async def operation():
+        return {'async': True}
+
+    asyncio.run(_measure(operation, lambda: None, values.append))
+
+    assert values == [{'async': True}] * 4
+
+
 def test_validation_rejects_state_mutation_outside_measurement_window():
     class Owner:
         _state = {'value': 1}
@@ -59,6 +79,18 @@ def test_validation_rejects_state_mutation_outside_measurement_window():
 
 def test_forbidden_sweep_guard_blocks_store_writer_and_declares_seams():
     class Target:
+        async def mutate(self, *_args):
+            raise AssertionError('unpatched')
+
+        async def prepare(self, *_args):
+            raise AssertionError('unpatched')
+
+        async def claim(self, *_args):
+            raise AssertionError('unpatched')
+
+        async def record_result(self, *_args):
+            raise AssertionError('unpatched')
+
         async def release_protection_pending(self, *_args):
             raise AssertionError('unpatched')
 
@@ -78,16 +110,43 @@ def test_forbidden_sweep_guard_blocks_store_writer_and_declares_seams():
     producer._submit = runtime.release_protection_pending
 
     async def scenario():
-        with _forbid_sweep_writers(runtime, producer):
+        with _forbid_sweep_writers(runtime, producer) as installed:
+            assert installed == FORBIDDEN_SWEEP_SEAMS
             with pytest.raises(AssertionError, match='forbidden writer'):
                 await runtime.owner.store.commit()
 
     asyncio.run(scenario())
+    async def restored():
+        with pytest.raises(AssertionError, match='unpatched'):
+            await runtime.owner.store.commit()
+    asyncio.run(restored())
     assert FORBIDDEN_SWEEP_SEAMS == {
         'owner.mutate', 'owner.store.commit', 'lifecycle.prepare', 'lifecycle.claim',
         'lifecycle.record_result', 'runtime.release_protection_pending',
         'runtime.resume_protection_admission', 'producer._submit', 'gateway.any',
     }
+
+
+def test_forbidden_sweep_guard_fails_closed_when_a_named_seam_is_missing():
+    class Target:
+        async def mutate(self, *_args): pass
+        async def prepare(self, *_args): pass
+        async def record_result(self, *_args): pass
+        async def release_protection_pending(self, *_args): pass
+        async def resume_protection_admission(self, *_args): pass
+        async def _submit(self, *_args): pass
+
+    class Store:
+        async def commit(self, *_args): pass
+
+    runtime = Target()
+    runtime.owner = Target()
+    runtime.owner.store = Store()
+    runtime.lifecycle = Target()  # ``claim`` deliberately absent.
+    runtime.gateway = None
+    with pytest.raises(AssertionError, match='missing forbidden sweep seams'):
+        with _forbid_sweep_writers(runtime, Target()):
+            pass
 
 
 @pytest.mark.parametrize(('kind', 'sweep_phase'), [
