@@ -556,6 +556,34 @@ def test_general_zero_size_cannot_delay_newly_held_protection(tmp_path, monkeypa
     asyncio.run(scenario())
 
 
+def test_closing_general_cooldown_before_bid_still_posts_protection(tmp_path, monkeypatch):
+    """호가 전 검사가 공통 시계를 읽으면 bid 자체가 생략되고 원90주 보호가 굶는다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            _CLOCK['kst'] = NOW_KST.replace(hour=15, minute=25)
+            f['rm']._last_signal_time['005930'] = _CLOCK['kst'].replace(tzinfo=None)
+            assert f['rm']._last_protection_signal_time == {}
+            bids = []
+
+            async def bid(symbol):
+                bids.append(symbol)
+                return D('9800')
+
+            f['broker'].get_best_bid = bid
+            await f['drive'](protective_signal(order_type='limit'))
+            assert bids == ['005930']
+            assert len(f['posts']()) == 1
+            body = f['posts']()[0][1]['json']
+            assert (body['ORD_DVSN'], body['ORD_UNPR'], body['ORD_QTY']) == ('00', '9800', '90')
+            assert f['prepared'][0].intent_id == 'pp-i-engine-test'
+            assert f['engine'].stats.errors_count == 0
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
 def test_protection_thirty_second_boundary_survives_general_rejection(tmp_path, monkeypatch):
     """보호 후보가 두 cooldown을 무장하고 일반 거부는 보호의30초 만료를 연장하지 않는다."""
     async def scenario():

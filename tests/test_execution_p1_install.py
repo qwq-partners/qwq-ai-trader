@@ -47,6 +47,7 @@ def test_real_queue_stop_follows_repeated_general_rejections_without_delay(tmp_p
         monkeypatch.setattr(KRExecutionRuntime, 'trading_ready', property(lambda self: True))
         try:
             await f['install']()
+            original_session_guard = f['commands'].session_guard
             for index in range(3):
                 if index:
                     _CLOCK['kst'] += timedelta(seconds=31)
@@ -54,7 +55,8 @@ def test_real_queue_stop_follows_repeated_general_rejections_without_delay(tmp_p
                 await f['drive'](sell_signal(quantity=10))
                 assert len(f['error_events']) == index + 1
                 assert f['posts']() == []
-            f['commands'].session_guard = lambda request: GuardDecision(True, 'synthetic-open')
+            # 원본도 하네스의 합성 s10a3b_open이다. 실제 거래소 허가를 입증하지 않는다.
+            f['commands'].session_guard = original_session_guard
             await f['drive'](tick())
             assert len(f['posts']()) == 1
             body = f['posts']()[0][1]['json']
