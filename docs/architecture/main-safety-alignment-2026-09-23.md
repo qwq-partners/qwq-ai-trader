@@ -49,7 +49,8 @@ owner/state·지정 RAM·게시 version을 private adapter로 복사하고 두 �
 계좌·자격·브로커 주문번호·시세 원문은 보고서에 포함하지 않는다.
 내부 캡처를 공유 보고서와 분리하고 whitelist/redaction을 적용한다. whole state/health
 직렬화는 account_scope/order_ref/retained price를 노출하므로 금지한다.
-위 함수명은 **미구현 제안 계약**이며 현재 사용 가능한 API가 아니다. snapshot_stable과
+위 함수명은 N2 작성 당시 **미구현 제안 계약**이었다. N3 모듈의 현재 구현/검증 상태는
+[N3 원장](../reviews/recovery-diagnostics-2026-09-23.md)을 따른다. snapshot_stable과
 publication_consistent는 별개다. 같은 owner version이어도 producer/recovery/ingress RAM이
 변할 수 있으므로 관련 투영의 두 복사본/digest 일치 없이는 volatile/insufficient다.
 health.store_healthy는 owner 복합 건강 상태이지 저장소 단독 검사 결과가 아니다.

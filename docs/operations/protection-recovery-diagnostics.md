@@ -4,6 +4,10 @@
 승인하지 않는다. 현재 owner 엔진은 운영 미설치이며 `trading_ready=False`다.
 운영 legacy와 개발 attached 상태를 섞어 판정하지 않는다.
 
+N3 모듈형 exporter의 계약/검증 상태는 [N3 설계](../architecture/recovery-diagnostics-2026-09-23.md)와
+[결과 원장](../reviews/recovery-diagnostics-2026-09-23.md)을 확인한다. 운영 CLI/HTTP/경보
+소비자는 배선하지 않는다. 아래 절차가 실 운영 접근 경로를 제공한다는 뜻이 아니다.
+
 ## 1. 먼저 실행 모드를 확인한다
 
 code SHA·process 시작 시각·관측 시각(KST)·legacy/attached/partial_install 여부를 기록한다.
@@ -13,8 +17,9 @@ code SHA·process 시작 시각·관측 시각(KST)·legacy/attached/partial_ins
   engine._execution_runtime가 None이라고 legacy로 판정하지 않는다.
   owner/version/admission은 **해당 없음**이다. 기존 대시보드·일지·pending
   관측을 이용하고 owner 복구 절차를 실행하지 않는다.
-- attached 개발/인수 환경: 이미 보유한 runtime에서 `runtime.health()`와
-  `runtime.owner.state`의 복사본을 읽는다. 진단을 위해 runtime을 새로 설치하거나
+- attached 개발/인수 환경: 이미 보유한 runtime의 지정 private memory를 N3 adapter로
+  읽는다. `health()`는 clock 콜백과 retry 내부 list alias가 있어 exporter에서 호출하지
+  않는다. 진단을 위해 runtime을 새로 설치하거나
   저장기를 새로 열지 않는다. 생성자/기동 sweep은 읽기 전용으로 간주할 수 없다.
 - partial_install/unsupported_stop: factory의 복원 뒤 attach 전 실패 또는
   gateway/producer/reconciler 배선 실패다. 이미 존재하는 runtime 참조·engine과의
@@ -34,8 +39,10 @@ store_healthy, publication_recovery_required와 health의 pending/실패 계수�
 불일치가 안정적으로 관측될 수도 있다. **스냅샷의 안정성과 게시 정합성을 별도 축**으로
 기록한다. 같은 owner version만 두 번 읽는 것으로는 충분하지 않다. producer의
 episode/recovery/failure RAM, ingress/task 투영은 owner commit 없이 바뀔 수 있다.
-두 캡처의 관련 복사본/정규화 digest도 일치해야 RAM과 durable 사실을 결합하며,
-이를 확보하지 못하면 volatile/insufficient로 표시한다. 안정 캡처가 나올 때까지
+두 캡처의 지정 private 복사본과 유지된 task 참조/상태도 일치해야 RAM과 owner 사실을 결합하며,
+이를 확보하지 못하면 volatile/insufficient로 표시한다. 두 표본 일치는 원자성이나
+중간 변화 뒤 원상복귀(ABA)의 부재, durable 저장소 검사 결과를 증명하지 않는다.
+안정 캡처가 나올 때까지
 자동 반복하거나 읽기를 안정화하려고 task를 멈추지 않는다.
 
 원 상태를 반환하는 API를 새로 만들 때에는 복사본만 제공해야 한다. 진단 함수가
@@ -84,11 +91,38 @@ A/C disposition은 mutating resume 호출의 반환과 메모리 합계로만 �
 진단 exporter를 구현할 때에는 이 함수들을 '호출 시 즉시 실패' spy로 바꾸고,
 진단 전후 owner·RAM·예약·게시 version deep equality를 시험한다. 현재 절차 문서가
 이러한 exporter 구현·운영 설치를 완료했다는 뜻은 아니다.
-현재 health 두 경로는 실제 owner/생산자 하네스에서 위 mutation·network 경계를
-금지하고 전후 동등성/반환 복사본의 중첩 변경을 시험한다
+N2에서는 health 두 경로를 실제 owner/생산자 하네스에서 위 mutation·network 경계를
+금지하고 전후 동등성/일부 반환 복사본의 중첩 변경을 시험했다
 (`test_runtime_and_producer_health_reads_do_not_mutate_or_return_live_state`).
-이는 해당 동기 읽기의 한정 증거이며 향후 exporter·비동기 캡처까지 자동 승인하지 않는다.
-캡처 반환값은 진단 내부에서만 사용하며 raw 객체를 보관·외부 재사용·공유하지 않는다.
+이는 한정 증거다. N3 감사가 확인한 restart_retries.intent_ids alias와 주입 clock
+콜백까지 검증한 것은 아니다. 기존 health 구현을 무부작용 API로 확대 해석하지 않는다.
+N3의 raw 표본은 함수 내부에서만 사용하며 반환 snapshot에는 고정 필드/건수만 담는다.
+raw 객체를 보관·외부 재사용·공유하지 않는다.
+
+## 4-1. 개발 모듈 호출 경계
+
+```python
+from src.execution.safety.recovery_capture import capture_recovery_snapshot
+from src.execution.safety.recovery_diagnostics import build_recovery_diagnostic
+
+def diagnose_existing_runtime(existing_runtime, observation_time):
+    snapshot = capture_recovery_snapshot(existing_runtime, captured_at=observation_time)
+    return build_recovery_diagnostic(snapshot)
+```
+
+호출자가 이미 보유한 runtime과 aware 관측 시각만 받는다. 시각/객체를 얻으려고
+설치기·store·broker를 호출하지 않는다. 지원하지 않는 객체·결측·손상은 unknown/
+insufficient다. 출력의 attached_candidate는 배선 흔적일 뿐 설치 성공 영수증이 아니다.
+수동 소비자도 `installation_verified=False`, `trading_ready=False`를 유지해야 한다.
+원문 가격/식별자를 별도 필드로 보충하거나 JSON default=str로 직렬화하지 않는다.
+
+`mutation_in_flight=True`이면 지정 lock을 잡은 작업이 진행 중이다. 정상 commit의
+SQL 대기 동안에도 게시 latch가 닫히므로 이때의 publication_inconsistent만으로
+영구 고장을 단정하지 않는다. `counts_complete=False`이면 목록에 없는 진단을0건으로
+간주하지 않는다. True도 구현된 owner 진단 범위 안의 뜻이며 A/C 역사·intraday source·
+브로커 최종성·설치 성공을 포함하지 않는다. None planned risk는 정상 SELL에도 있을 수
+있고 위험 증거 부족으로 남는다. pending_sell과 evidence_invalid의 공존을 자동 장애/
+재주문 신호로 사용하지 않는다. 읽기 실패·volatile의 mode는 unknown이다.
 
 ## 5. 사람이 내릴 수 있는 판정
 

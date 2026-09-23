@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-23 — feat(safety): 읽기 전용 복구 진단 exporter (운영 미배선)
+
+- 기존 runtime 메모리만 동기 두 번 읽는 bounded adapter와 비식별 frozen DTO/순수 보고서를 추가했다. health/clock/store/복구 함수를 호출하지 않으며 주문·가격·계좌·종목 식별자를 출력하지 않는다.
+- 게시 정합성·표본 안정성·진행 중 mutation·건수 평가 완전성을 구분한다. unreadable/volatile은 mode unknown, 부족한 증거를0건으로 바꾸지 않는다. 정상 SELL의 None 계획 위험도0으로 가정하지 않는다.
+- UNKNOWN/잔존 예약·미확정 취소·미적용 체결·미제출 보호 감사·수량/연결 불일치를 분류한다. A/C의 durable 종목별 증거 부재는 항상 남기며 모든 거래·복구·설치 권한은 False다.
+- 독립 리뷰의 dictionary hook·취소 command_ref·타입 동등성·ZoneInfo key·in-flight 오판을 RED로 고정하고 보완했다. 실제 정상 보호 pending/전량 청산/취소·오류 경계 인수도 추가했다.
+- 신규 모듈의 운영 소비자는0이다. CLI/HTTP/경보·main 통합·배포·재시작은 별도이며, 최종 검증/리뷰/개발 통합 상태는 [N3 원장](docs/reviews/recovery-diagnostics-2026-09-23.md)이 정본이다.
+
 ## 2026-09-23 — fix(ops): 호출 주체 계측·매도 원인 보존·지수 신선도·만료 경고 (미배포)
 
 - 오늘 EGW00215 202줄은 broker/limiter 중복 기록으로 실제101건이었다(09-21:95,09-22:118). 증가 원인으로 보유 종목 수를 확정하지 않는다.

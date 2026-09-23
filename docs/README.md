@@ -5,6 +5,7 @@
 ## 문서 목록
 
 ### Architecture (아키텍처)
+- [N3 읽기 전용 복구 진단](architecture/recovery-diagnostics-2026-09-23.md) — 콜백 없는 두 표본 비교·비식별 고정 schema, 모듈형 exporter와 운영 배선 분리
 - [main 안전 동작 정합화](architecture/main-safety-alignment-2026-09-23.md) — legacy/attached 경계·KIS 응답/lease·읽기 전용 진단 계약, 운영 전환과 분리
 - [KR 주문·체결 안전성 상세 설계](superpowers/specs/2026-09-17-engine-execution-safety-design.md) — 사용자 승인; 경제/보호·core 큐 검증, 운영 경로 설치/전체 인수 미완
 - [KR 실행 안전성 구현 계획](superpowers/plans/2026-09-17-engine-execution-safety.md) — Plan–Do–See, 작업 소유권·단계별 검증·잔여 통합 조건
@@ -42,6 +43,7 @@
 - [ai-trading-research-2026-08.md](research/ai-trading-research-2026-08.md) — AI/LLM 트레이딩 문헌 조사 (2024~26): 실증 유효/무효 구분, 적용 Top 5, 금지 6항 — 변동성 타게팅·DART 경보·conviction 부스트·검증 규율의 근거 문서
 
 ### Reviews (리뷰)
+- [N3 복구 진단 구현·검증 원장](reviews/recovery-diagnostics-2026-09-23.md) — 실제 owner/큐 인수·독립 경계 시험·native/Opus 검토·현재 한계
 - [09-23 운영 관측 결함](reviews/operational-findings-2026-09-23.md) — EGW00215 중복 집계 정정·호출 주체/페이지 계측·매도 원인·benchmark 신선도·macro 경고, main 정합화와 운영 설치의 분리
 
 - [N2 main 안전 동작 정합화 결과](reviews/main-safety-alignment-2026-09-23.md) — main 계약 RED·26개 특성화 처분·attached heartbeat 차단·독립 리뷰·전체 검증 정본
