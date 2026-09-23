@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-23 — fix(ops): 호출 주체 계측·매도 원인 보존·지수 신선도·만료 경고 (미배포)
+
+- 오늘 EGW00215 202줄은 broker/limiter 중복 기록으로 실제101건이었다(09-21:95,09-22:118). 증가 원인으로 보유 종목 수를 확정하지 않는다.
+- KR GET의 논리 호출·HTTP 시도/재시도·페이지·거절을 고정 차원으로 계측하고 `/api/health`에 노출한다. sync/재조회/fill/startup/batch/dashboard를 구분한다. 추가 KIS·POST·한도·TTL·재시도 정책 변경0.
+- 실제 `Fill.reason`을 일지/DB/복기에 보존, LLM 종가 판단은 `llm_eod`. TradeStorage의 문구 재분류도 명시적 LLM 유형을 보존한다. 리스크 재진입 분류는 무변경, 원인이 없으면 추정하지 않는다.
+- KOSPI 마지막 봉·가격·정렬을 검증하고 기존 FDR Yahoo 지수로 대체한다. 오래된 자료는 MRS/LLM c5/c20에서 제외하며 종가 LLM의 5일 등락을 '오늘'로 잘못 표시하던 문구도 정정했다. neutral 호환 폴백을 새 매수 차단 정책으로 확대하지 않는다.
+- 같은 만료 macro 자료는 요약 경고1회만 남기되 파일 재조회·만료 무시 규칙은 유지한다. 실제 오버라이드/운영 설정은 무변경.
+- 재현·검증·한계와 다음 main 정합화 경계: [09-23 관측 결함 보고서](docs/reviews/operational-findings-2026-09-23.md). 운영 배포·재시작·과거 일지 수정 없음.
+
 ## 2026-09-22 — ops: main `d337494` 운영 반영 (PR #88 병합·배포·재시작)
 
 - **지시·대상:** 사용자 지시 "PR머지하고 운영배포까지 가자". PR #88 `fix/kis-pagination-protocol`(연속조회 요청 헤더 `tr_cont` — 2페이지째부터 `N` · `get_positions_for_account` 의 헤더 `D`/`E` 종료 판정 통일 · 취소 POST 재시도 유지의 특성화와 "취소는 멱등" 문장 정정)을 병합하고 main 을 운영에 반영했다. 운영 checkout `d1e8b2f` → `d337494`.

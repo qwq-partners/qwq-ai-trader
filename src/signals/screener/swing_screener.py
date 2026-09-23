@@ -7,13 +7,15 @@ AI Trading Bot v2 - 스윙 모멘텀 스크리너
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from math import isfinite
 from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
 from src.indicators.technical import TechnicalIndicators
+from src.utils.session import KST, is_kr_market_holiday
 
 
 @dataclass
@@ -43,6 +45,8 @@ class SwingScreener:
         # 언제 자료인지"와 "당일 봉이 이미 포함됐는지"를 판별한다 (2026-09-14 리뷰)
         self._kospi_loaded_at: Optional[datetime] = None
         self._kospi_last_bar_date = None
+        self._kospi_source: Optional[str] = None
+        self._benchmark_failure: Optional[Dict[str, Any]] = None
         # 5일 수급 스코어 (싱글턴 — 스캔 사이클마다 재생성하지 않도록 인스턴스 변수)
         from src.data.providers.supply_score import SupplyScoreProvider
         self._supply5d = SupplyScoreProvider()
@@ -371,7 +375,7 @@ class SwingScreener:
                     return None
 
                 # MRS 계산 (벤치마크 데이터 있을 경우)
-                if self._kospi_closes:
+                if self.get_benchmark_status()["status"] == "fresh":
                     stock_closes = [float(d["close"]) for d in daily_data]
                     mrs_result = self._indicators.calculate_mrs(
                         stock_closes, self._kospi_closes, period=20
@@ -870,7 +874,7 @@ class SwingScreener:
           neutral: 그 외
         """
         closes = self._kospi_closes
-        if not closes or len(closes) < 6:
+        if self.get_benchmark_status()["status"] != "fresh" or len(closes) < 6:
             return "neutral"
 
         c5  = (closes[-1] - closes[-6])  / closes[-6]  * 100 if len(closes) >= 6  else 0.0
@@ -885,69 +889,130 @@ class SwingScreener:
         return "neutral"
 
     def get_kospi_change(self) -> dict:
-        """레짐 판단에 사용된 수치 반환 (로깅/알림용)"""
+        """레짐 수치. 결측의 0은 호환용이며 유효성은 get_benchmark_status로 확인."""
         closes = self._kospi_closes
-        if not closes or len(closes) < 6:
+        if self.get_benchmark_status()["status"] != "fresh" or len(closes) < 6:
             return {"c5": 0.0, "c20": 0.0, "level": 0.0}
         c5  = (closes[-1] - closes[-6])  / closes[-6]  * 100 if len(closes) >= 6  else 0.0
         c20 = (closes[-1] - closes[-21]) / closes[-21] * 100 if len(closes) >= 21 else 0.0
         return {"c5": round(c5, 2), "c20": round(c20, 2), "level": round(closes[-1], 2)}
 
-    async def _load_benchmark_index(self):
-        """벤치마크 지수(KOSPI) 1년치 로드 (MRS 계산용)
+    @staticmethod
+    def _benchmark_date_status(last_bar_date: Optional[date], now: datetime):
+        """당일 부분봉 또는 직전 한국 거래일 봉만 허용한다."""
+        if not isinstance(last_bar_date, date):
+            return "unknown", "last_bar_date_unknown"
+        today = now.date()
+        if last_bar_date > today:
+            return "future", "last_bar_in_future"
+        if is_kr_market_holiday(last_bar_date):
+            return "unknown", "last_bar_not_kr_session"
+        previous = today - timedelta(days=1)
+        while is_kr_market_holiday(previous):
+            previous -= timedelta(days=1)
+        if last_bar_date < previous:
+            return "stale", "older_than_previous_kr_session"
+        return "fresh", "current_day_partial" if last_bar_date == today else "previous_kr_session"
 
-        1차: FDR (FinanceDataReader)
-        2차: KIS API 폴백 (KOSPI 지수 최근 20일)
-        """
-        # 1차: FDR
+    def get_benchmark_status(self, now: Optional[datetime] = None) -> dict:
+        """소비 시점 재검증. 날짜는 date, loaded_at은 기존 소비자용 naive KST."""
+        now = now if now is not None else datetime.now(KST)
+        if now.tzinfo is not None:
+            now = now.astimezone(KST).replace(tzinfo=None)
+        if not self._kospi_closes:
+            failure = getattr(self, "_benchmark_failure", None)
+            if failure is not None:
+                return dict(failure)
+            return {"status": "missing", "source": None, "last_bar_date": None,
+                    "loaded_at": None, "reason": "no_benchmark"}
+        status, reason = self._benchmark_date_status(self._kospi_last_bar_date, now)
+        if len(self._kospi_closes) < 50 or any(
+            not isfinite(value) or value <= 0 for value in self._kospi_closes
+        ):
+            status, reason = "unknown", "invalid_close_history"
+        return {"status": status, "source": getattr(self, "_kospi_source", None),
+                "last_bar_date": self._kospi_last_bar_date,
+                "loaded_at": self._kospi_loaded_at, "reason": reason}
+
+    def _validate_benchmark(self, data, source: str, now: datetime):
+        """자료를 정렬/보간으로 보정하지 않고 날짜·가격 계약을 검증한다."""
+        import pandas as pd
+
+        result = {"status": "missing", "source": source, "last_bar_date": None,
+                  "loaded_at": None, "reason": "no_data"}
+        if data is None or len(data) == 0:
+            return [], result
+        result.update(status="unknown", reason="invalid_history")
         try:
-            loop = asyncio.get_running_loop()
-            start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-            kospi_df = await loop.run_in_executor(
-                None, self._fetch_fdr_data, "KS11", start_date
-            )
-            if kospi_df is not None and len(kospi_df) >= 50:
-                self._kospi_closes = [float(row["Close"]) for _, row in kospi_df.iterrows()]
-                self._kospi_loaded_at = datetime.now()
-                # FDR 은 end 없이 조회하면 당일 부분봉을 포함한다 — 마지막 봉 날짜를
-                # 남겨 소비자가 당일 지수를 또 덧붙이지 않게 한다
-                try:
-                    _last = kospi_df.index[-1]
-                    self._kospi_last_bar_date = (
-                        _last.date() if hasattr(_last, "date") else None
-                    )
-                except Exception:
-                    self._kospi_last_bar_date = None
-                logger.info(
-                    f"[스윙스크리너] KOSPI 벤치마크 로드: {len(self._kospi_closes)}일 "
-                    f"(마지막 봉 {self._kospi_last_bar_date})"
-                )
-                return
-        except Exception as e:
-            logger.warning(f"[스윙스크리너] KOSPI 벤치마크 FDR 로드 오류: {e}")
+            if len(data) < 50 or "Close" not in data:
+                return [], result
+            dates = []
+            for value in data.index:
+                if pd.isna(value) or not isinstance(value, date):
+                    return [], result
+                if getattr(value, "tzinfo", None) is not None:
+                    value = value.astimezone(KST)
+                dates.append(value.date() if hasattr(value, "date") else value)
+            result["last_bar_date"] = dates[-1]
+            if any(a >= b for a, b in zip(dates, dates[1:])):
+                result["reason"] = "unordered_or_duplicate_dates"
+                return [], result
+            closes = [float(value) for value in data["Close"]]
+            if any(not isfinite(value) or value <= 0 for value in closes):
+                result["reason"] = "invalid_close_history"
+                return [], result
+            result["status"], result["reason"] = self._benchmark_date_status(dates[-1], now)
+            if result["status"] == "fresh":
+                result["loaded_at"] = now
+                return closes, result
+        except (TypeError, ValueError, OverflowError):
+            result.update(status="unknown", reason="invalid_history")
+        return [], result
 
-        # 2차: KIS API 폴백 (KOSPI 지수 최근 20일)
+    async def _load_benchmark_index(self):
+        """KS11 캐시 → Yahoo ^KS11 지수 일봉. 두 소스에 동일 검증을 적용한다.
+
+        KIS get_daily_prices('0001')는 주식 일봉 API이므로 지수 대체재가 아니다.
+        """
         self._kospi_closes = []
         self._kospi_loaded_at = None
-        self._kospi_last_bar_date = None  # 봉 날짜 미상 — 소비자는 결측으로 취급
-        if self._broker:
+        self._kospi_last_bar_date = None
+        self._kospi_source = None
+        self._benchmark_failure = None
+        loop = asyncio.get_running_loop()
+        start_date = (datetime.now(KST) - timedelta(days=365)).strftime("%Y-%m-%d")
+        for symbol in ("KS11", "YAHOO:^KS11"):
+            source = f"FDR:{symbol}"
             try:
-                history = await self._broker.get_daily_prices("0001", days=20)
-                if history and len(history) >= 10:
-                    self._kospi_closes = [
-                        float(bar.get("close", 0)) for bar in history
-                        if float(bar.get("close", 0)) > 0
-                    ]
-                    self._kospi_loaded_at = datetime.now()
+                data = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._fetch_fdr_data, symbol, start_date),
+                    timeout=15.0,
+                )
+                now = datetime.now(KST).replace(tzinfo=None)
+                closes, status = self._validate_benchmark(data, source, now)
+                if status["status"] == "fresh":
+                    self._kospi_closes = closes
+                    self._kospi_loaded_at = status["loaded_at"]
+                    self._kospi_last_bar_date = status["last_bar_date"]
+                    self._kospi_source = source
+                    self._benchmark_failure = None
                     logger.info(
-                        f"[스윙스크리너] KOSPI 벤치마크 KIS API 폴백: {len(self._kospi_closes)}일"
+                        f"[스윙스크리너] KOSPI 벤치마크 로드: {len(closes)}일 "
+                        f"(source={source}, 마지막 봉 {self._kospi_last_bar_date})"
                     )
-                else:
-                    logger.warning("[스윙스크리너] KOSPI 벤치마크 KIS API 데이터 부족")
-            except Exception as e2:
-                logger.warning(f"[스윙스크리너] KOSPI 벤치마크 KIS API 폴백 실패: {e2}")
-        else:
-            logger.warning("[스윙스크리너] KOSPI 벤치마크 로드 실패 (FDR + KIS 모두 불가)")
+                    return
+            except Exception as exc:
+                status = {"status": "missing", "source": source, "last_bar_date": None,
+                          "loaded_at": None, "reason": "fetch_failed"}
+                logger.warning(f"[스윙스크리너] KOSPI {source} 조회 실패: {type(exc).__name__}")
+            # 대체 소스 결측으로 먼저 확인한 stale/invalid 근거를 덮지 않는다.
+            if self._benchmark_failure is None or status["status"] != "missing":
+                self._benchmark_failure = status
+            logger.warning(
+                f"[스윙스크리너] KOSPI 자료 제외: source={source}, "
+                f"status={status['status']}, 마지막 봉={status['last_bar_date']}, "
+                f"reason={status['reason']}"
+            )
 
     def _save_supply_demand_cache(self, data: Dict[str, Dict[str, int]]) -> None:
         """수급 데이터를 날짜별 캐시 파일로 저장 (KIS API 성공 시)."""

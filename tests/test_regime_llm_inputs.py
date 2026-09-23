@@ -387,6 +387,8 @@ def test_short_close_series_reports_c20_missing(monkeypatch, tmp_path):
     """종가열이 6개 이상 21개 미만이면 c5 만 유효, c20 은 결측 (0 금지)."""
     screener = _Screener(c5=1.0, c20=0.0, level=2500.0,
                          closes=[2400.0 + i for i in range(10)])
+    # 09-14 월요일의 직전 거래일은 일요일(09-13)이 아니라 금요일이다.
+    screener._kospi_last_bar_date = datetime(2026, 9, 11).date()
     bot = _make_bot(screener=screener)
     llm = _LLM({"regime": "ranging", "confidence": 0.6})
     sched = _patch_env(monkeypatch, tmp_path, bot, llm,
@@ -754,5 +756,6 @@ def test_intraday_recompute_skipped_when_last_bar_date_unknown(monkeypatch, tmp_
     asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
 
     meta = _regime_file(tmp_path).get("input_meta", {})
-    assert meta.get("kospi_c5") == _pct_change(closes, 5), meta   # 로드 시각 기준 값 그대로
+    assert meta.get("kospi_c5") is None, meta  # 로드 시각으로 봉 날짜를 대체하지 않는다.
+    assert meta.get("kospi_c20") is None, meta
     assert any("미상" in m for m in (meta.get("missing_fields") or [])), meta

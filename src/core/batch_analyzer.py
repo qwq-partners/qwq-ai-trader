@@ -32,6 +32,7 @@ from .types import (
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.sizing import atr_position_multiplier
+from ..utils.kis_request_metrics import request_source
 
 
 @dataclass
@@ -1093,7 +1094,8 @@ class BatchAnalyzer:
         # 포트폴리오 가드: 재시작 직후 포지션 미로드 대비
         if not self._engine.portfolio.positions and self._broker:
             try:
-                loaded_positions = await self._broker.get_positions()
+                with request_source("batch_guard"):
+                    loaded_positions = await self._broker.get_positions()
                 if loaded_positions:
                     for sym, pos in loaded_positions.items():
                         self._engine.portfolio.positions[sym] = pos

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ..utils import loop_heartbeat as _hb
+from ..utils import kis_request_metrics
 
 # pykrx: lazy import (동기 블로킹 방지)
 # 실제 사용하는 함수 내부에서 import
@@ -1180,6 +1181,7 @@ class DashboardDataCollector:
     # 외부 계좌 (대시보드 전용)
     # ----------------------------------------------------------
 
+    @kis_request_metrics.with_request_source("dashboard_external_accounts")
     async def get_external_accounts(self) -> list:
         """외부 계좌 보유 포지션 + 요약 (30초 TTL 캐시, Lock 보호)"""
         async with self._ext_accounts_lock:
@@ -1550,11 +1552,18 @@ class DashboardDataCollector:
         # 브로커 상태
         broker_stats = {}
         if bot.broker:
+            from ..execution.broker.kis_kr import KISBroker
+            is_kr_broker = isinstance(bot.broker, KISBroker)
             broker_stats = {
                 "connected": bot.broker.is_connected,
-                "rate_limit_calls_last_sec": len(getattr(bot.broker, '_api_call_times', [])),
+                "rate_limit_calls_last_sec": (
+                    kis_request_metrics.rate_limit_calls_last_sec() if is_kr_broker
+                    else len(getattr(bot.broker, '_api_call_times', []))
+                ),
                 "pending_orders": len(getattr(bot.broker, '_pending_orders', {})),
             }
+            if is_kr_broker:
+                broker_stats["kis_requests"] = kis_request_metrics.snapshot()
 
         # 엔진 리스크 매니저
         risk_stats = {}
@@ -1595,6 +1604,7 @@ class DashboardDataCollector:
     SELL_FEE_RATE = float(_FeeConfig.sell_commission_rate)
     SELL_TAX_RATE = float(_FeeConfig.sell_tax_rate)
 
+    @kis_request_metrics.with_request_source("dashboard_settlement")
     async def get_daily_settlement(self, target_date: date = None) -> Dict[str, Any]:
         """
         KIS 체결 내역 기반 일일 정산.
