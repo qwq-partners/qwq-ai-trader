@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-23 — ops: main `e5ae602` 사후 점검 완료 (PR #90/#91 병합·배포)
+
+- PR #90 `4db5141` 및 PR #91 `e5ae6026b54af3e7efef5e692ba8772390dd03f4`를 병합했다. #91 required CI
+  run `35872425856`은 SUCCESS(1분50초)였다. 배포 verify는 **2076 passed / 2 xfailed / 기존 pykrx
+  warning 1**, rc0, 격리0이었고 새 PID `2386785`가 23:18:02 KST 기동했다.
+- 23:21:14 KST 사후 점검에서 같은 PID, broker connected, pending/stale/failing 0, 계측 available을
+  확인했다. 7개 보호 fingerprint·주문/전략/risk/config/kill은 무변경이다. 상세 [제한 릴리스 원장](docs/operations/release-2026-09-23.md).
+- macro/LLM sell reason/freshness 등 장중 자연 이벤트 항목은 미관측이며, 전체 engine `5a2fab8`/N3와
+  C/F/G/R/install blocker는 미승격이다. credential rotation/history도 미해결이다.
+
 ## 2026-09-23 — fix(deploy): 비대화형 인증 사전검사와 제한 릴리스
 
 - `local_deploy.sh`의 평문/표준입력 인증 폴백을 제거했다. 비파괴 `sudo -n -l` 권한 확인 실패 시 Git 변경·검증·재시작 전에 중단하며 실제 재시작도 `sudo -n`만 사용한다.
