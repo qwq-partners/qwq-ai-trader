@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 import importlib
 import importlib.util
@@ -19,6 +19,7 @@ import pytest
 from src.execution.safety.economics import encode_portfolio
 from src.execution.safety.protection import encode_protection
 from src.execution.safety.protection_producer import ProtectionProducer, _Episode
+from test_cross_validator_characterization import freeze  # noqa: F401
 from test_execution_runtime import NOW, setup, opened, observed, queued
 
 
@@ -369,4 +370,147 @@ def test_two_sample_stability_preserves_types_not_just_python_equality(tmp_path,
             assert 'snapshot_volatile' in codes(report)
         finally:
             await store.close()
+    asyncio.run(scenario())
+
+
+def test_inflight_owner_commit_is_distinguished_from_settled_evidence(tmp_path, monkeypatch):
+    async def scenario():
+        _, _, store, runtime = await setup(tmp_path)
+        release = asyncio.Event()
+        entered = asyncio.Event()
+        operation = None
+        try:
+            producer_for(runtime)
+            original = store.commit
+            async def paused_commit(*args, **kwargs):
+                entered.set()
+                await release.wait()
+                return await original(*args, **kwargs)
+            monkeypatch.setattr(store, 'commit', paused_commit)
+            operation = asyncio.create_task(runtime.owner.mutate(
+                'synthetic-diagnostic-inflight', lambda state: dict(state, synthetic_observation=1)))
+            await asyncio.wait_for(entered.wait(), 2)
+            # Real _commit_publish closes publication before await; this is transient.
+            during = report_for(runtime)
+            assert during['snapshot_stable'] is True
+            assert during['mutation_in_flight'] is True
+            assert during['counts_complete'] is False
+            release.set()
+            await operation
+            after = report_for(runtime)
+            assert after['mutation_in_flight'] is False
+            assert after['publication_consistent'] is True
+            assert after['counts_complete'] is True
+            assert codes(after) == {'disposition_not_durable'}
+        finally:
+            release.set()
+            if operation is not None:
+                await asyncio.gather(operation, return_exceptions=True)
+            await store.close()
+    asyncio.run(scenario())
+
+
+def test_unavailable_evidence_is_explicitly_not_a_zero_count():
+    report = report_for(None)
+    assert report['counts_complete'] is False
+    assert report['mutation_in_flight'] is None
+
+
+def test_nonempty_product_counter_paths_are_supported(tmp_path):
+    async def scenario():
+        _, _, store, runtime = await setup(tmp_path)
+        try:
+            producer_for(runtime)
+            runtime._skip_reason('synthetic-skip')
+            runtime._apply_outcome('synthetic', 'APPLIED')
+            runtime._protection_recovery_counts['synthetic-prior-return'] = 1
+            report = report_for(runtime)
+            assert report['snapshot_stable'] is True
+            assert 'evidence_invalid' not in codes(report)
+            assert codes(report) == {'disposition_not_durable'}
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
+def test_real_full_sale_removes_position_and_protection_without_orphan_alarm(tmp_path):
+    async def scenario():
+        engine, exits, store, runtime = await setup(tmp_path)
+        try:
+            producer_for(runtime)
+            buy = await opened(runtime, 'B1')
+            await queued(engine, await observed(runtime, buy, 100, '1000000'))
+            sell = await opened(runtime, 'S1', 'sell')
+            await queued(engine, await observed(runtime, sell, 100, '1100000', side='sell'))
+            assert engine.portfolio.positions == {}
+            assert exits.get_state('005930') is None
+            assert runtime.owner.state['protection']['states'] == {}
+            report = report_for(runtime)
+            assert codes(report) == {'disposition_not_durable'}
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
+def test_actual_ack_cancel_with_synthetic_final_parent_has_no_chain_alarm(tmp_path):
+    from src.execution.safety.lifecycle import (
+        CommandKind, CommandResult, CommandStatus, OrderEvidence, OrderRef, OrderState)
+    async def scenario():
+        _, _, store, runtime = await setup(tmp_path)
+        try:
+            producer_for(runtime)
+            parent = await opened(runtime, 'S1', 'sell')
+            await runtime.lifecycle.prepare('S1', 'C1', 100, '005930', 'sell',
+                command=CommandKind.CANCEL, parent_attempt_id='S1', order_ref=parent)
+            await runtime.lifecycle.claim('C1', 'synthetic-cancel-sender')
+            child = OrderRef('scope', 'KR', '2026-09-18', 'KRX', 'C1', parent_order_no='S1')
+            await runtime.lifecycle.record_result('C1', 'synthetic-cancel-sender',
+                CommandResult(CommandStatus.ACKNOWLEDGED, 'C1', child))
+            # Explicit unit-test evidence, NOT a proof of the real KIS finality contract.
+            evidence = OrderEvidence(parent, '005930', 'sell', 100, 0, Decimal('0'), 0, 100,
+                OrderState.FINAL_CANCELLED, complete=True, supported_finality=True,
+                source_contract='synthetic-diagnostic-acceptance', observed_at=NOW,
+                request_started_at=NOW - timedelta(seconds=1), query_scope={
+                    'account_scope': 'scope', 'market': 'KR', 'exchange': 'KRX',
+                    'start_date': '2026-09-18', 'end_date': '2026-09-18',
+                    'tr_id': 'TTTC0081R', 'query_kind': 'all', 'session': 'regular'})
+            assert await runtime.lifecycle.reconcile('S1', evidence)
+            state = runtime.owner.state
+            assert state['attempts']['S1']['state'] == 'final_cancelled'
+            assert state['attempts']['C1']['command_ref'] == child.to_dict()
+            assert state['attempts']['C1']['order_ref'] == parent.to_dict()
+            report = report_for(runtime)
+            assert 'attempt_link_inconsistent' not in codes(report)
+            assert 'cancel_unconfirmed' not in codes(report)
+        finally:
+            await store.close()
+    asyncio.run(scenario())
+
+
+def test_actual_producer_pending_quote_is_not_an_inconsistent_link(tmp_path, monkeypatch, freeze):
+    from test_execution_p1_producer import fixture, close, tick
+    api()
+    async def scenario():
+        freeze(11, 0, day=18)
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            runtime = f['runtime']
+            runtime._protection_producer = f['producer']
+            await f['producer'].on_market_data(tick('11200'))
+            state = runtime.owner.state
+            assert state['protection']['pending_owners']
+            assert state['outbox'] and state['attempts']
+            assert len(f['broker']._session.posts) == 1  # Synthetic HTTP transport only.
+            report = report_for(runtime)
+            assert report['snapshot_stable'] is True
+            assert 'pending_sell' in codes(report)
+            assert not ({'protection_unsubmitted', 'protection_link_inconsistent',
+                         'protection_quantity_inconsistent'} & codes(report))
+            # Actual request-bound SELL stores unmeasured planned risk as None.
+            # This is incomplete risk evidence, not a broken protection link or numeric zero.
+            assert all(row['reserved_planned_risk'] is None for row in state['attempts'].values())
+            assert 'evidence_invalid' in codes(report)
+            assert report['counts_complete'] is False
+        finally:
+            await close(f)
     asyncio.run(scenario())

@@ -50,6 +50,16 @@ builder 결과의 중첩 변경은 snapshot이나 runtime을 바꾸지 않는다
 mode는 `unknown`, `partial_install`, `attached_candidate` 중 하나다. runtime 부재는
 legacy 증거가 아니다. 배선 흔적이 완전해 보여도 성공 설치 receipt가 없어 candidate다.
 일반 producer 배선 부재를 정상 legacy로 판정하지 않는다.
+읽기 실패·volatile일 때도 mode는 unknown이다. 지원되는 안정 배선 표본만 partial/
+candidate를 판정한다. `mutation_in_flight`는 지정 lock 중 하나라도 held이면 True,
+읽지 못하면 None이다. commit await 중 정상적으로 게시 latch가 닫힐 수 있으므로
+publication_inconsistent는 영구 결함 확정이 아니라 **관측 시점의 미확인**이다.
+
+`counts_complete`는 안정 표본·진행 중 lock 없음·evidence_invalid 없음일 때만 True다.
+False이면 findings에 없는 코드를0건으로 읽지 않는다. True도 **아래 구현된 진단 범위**
+안에서만 건수 완전성을 의미하며 브로커 최종성/설치/A·C 역사/intraday source 검증은
+포함하지 않는다. None planned risk는 SELL에서도 측정된0이 아니며 해당 위험 증거는
+불충분(evidence_invalid)으로 남긴다. 정상 pending과 위험 증거 부족이 함께 나올 수 있다.
 
 findings는 `{code, count, evidence, next_check}`의 고정 whitelist로 결정적 정렬한다.
 문제 없음이나 0도 거래/복구 허가로 변환하지 않는다. 필수 코드/의미:
@@ -85,3 +95,9 @@ stdin에 선별한 비민감 소스만 전달하고 tools-off 유지. 작업자 
 health/clock/store/network 호출을 실패 spy로 막고 전후 상태·예약·version·RAM을 비교한다.
 출력 비밀 sentinel/중첩 반환 변이, custom hook/순환/불량 수치, owner version 불변인
 RAM/같은 개수 task 교체, partial 설치, 정상 부분체결, null source/역사 감사행을 인수한다.
+
+현재 상한: 깊이32, clone node100,000, 단일 문자열16,384자, 합계 scalar 문자 예산
+2,000,000(Decimal digits/파생 float·datetime·ZoneInfo key 포함), 정수256bit.
+타입·scalar의 비공개 비교 증거로 `1 == True` 및 datetime→문자열/Task→유사 tuple
+충돌을 막는다. 이 비교 증거는 보고서나 DTO에 저장하지 않는다. 정확한 ZoneInfo라도
+from_file의 key는 사용자 객체일 수 있어 exact str/None과 길이를 별도로 검증한다.
