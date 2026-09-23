@@ -1,12 +1,12 @@
 # N5 실행 복구 projection·producer index 상세 설계
 
-> 상태: **Astra/xhigh 독립 설계 재검토 APPROVE. 사용자 승인 대기이며 구현·main 병합·운영
-> 배포 승인이 아니다.**
+> 상태: **Astra/xhigh 독립 설계 및 구현계획 검토 APPROVE(blocking 0, advisory 0).
+> 사용자 실행 방식 선택 대기이며 구현·main 병합·운영 배포 승인이 아니다.**
 > 작성일: 2026-09-24 KST.
 > 기준: `feature/engine-safety-design-20260917`의
 > `0dc3c0f7fdbee727ad849c5bea69cd8ee2612e55`.
 > 우선순위: 전체 엔진 운영 전환을 막는 N4 누적 상태 성능 결함의 최우선 후속.
-> 사용자 지시: N5를 최우선으로 진행. 아래 상세 계약은 별도 검토·승인 대기.
+> 사용자 지시: N5를 최우선으로 진행. 상세 계약과 구현계획 검토는 완료됐고 실행 방식 선택 대기.
 
 ## 1. 결정 요약
 
