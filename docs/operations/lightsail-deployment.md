@@ -38,3 +38,22 @@ bash scripts/deploy/deploy_lightsail.sh --deploy
 - `QWQ_DEPLOY_SSH_KEY`: 기본값 `~/.ssh/lightsail_qwq`
 
 비밀키와 `.env`는 Git에 추가하지 않는다.
+
+## 서버 내부 로컬 배포
+
+`scripts/deploy/local_deploy.sh <고정 SHA>`는 서버 내부용이며 위 SSH 실행기와 별개다.
+현재 요청의 배포/재시작 권한, 장외 시간, pending0, 깨끗한 운영 checkout과 롤백 SHA를
+먼저 확인한다. 운영 checkout을 미리 새 SHA로 당기면 직전 롤백 기준을 잃으므로 피한다.
+이 스크립트는 의존성 설치를 수행하지 않는다.
+
+동시 배포 lock 뒤 비파괴 `sudo -n -l systemctl restart <service>` 검사를 한다.
+거부되면 fetch/checkout/검증/서비스 호출 이전에 종료한다. 실제 restart도 `sudo -n`만
+사용하며 평문·표준입력·대화형 인증으로 우회하지 않는다. 권한 검사는 이후의 restart
+성공을 보장하지 않으므로 실제 실패는 rollback으로 처리한다. 성공 exit0, 복구 exit1,
+복구 실패 exit2를 구별하고 HTTP 응답만으로 전체 거래 안전성을 단정하지 않는다.
+목록 조회 자체가 금지된 호스트에서도 중단한다. exit1은 사전검사 실패에도 사용하므로
+exit1만으로 복구가 실행됐다고 단정하지 않고 `[복구]` 표식과 실제 상태를 함께 본다.
+
+`QWQ_DEPLOY_LOCK_FILE`은 격리 시험용 재정의이며 기본 운영 lock은 유지한다.
+새 코드에서 인증 폴백을 없애도 과거 노출 인증정보나 Git 이력이 폐기되지는 않는다.
+값을 재출력하지 않고 별도 계정 인증정보 교체 절차를 따른다.
