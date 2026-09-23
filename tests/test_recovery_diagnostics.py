@@ -312,3 +312,49 @@ def test_cancel_child_order_number_can_differ_from_parent(runtime):
     runtime.owner._state['attempts']['C1'] = child
     runtime.owner._state['intents']['B1']['attempt_ids'].append('C1')
     assert 'attempt_link_inconsistent' not in codes(report(runtime))
+
+
+@pytest.mark.parametrize('before,after', [(1, True), (NOW, NOW.isoformat()), (1, 1.0)])
+def test_two_sample_comparison_preserves_scalar_types(runtime, monkeypatch, before, after):
+    from src.execution.safety import recovery_capture as module
+    runtime.owner._state['diagnostic_test_metadata'] = before
+    original = module._read_sample
+    calls = []
+
+    def sample(value):
+        result = original(value)
+        if not calls:
+            value.owner._state['diagnostic_test_metadata'] = after
+        calls.append(1)
+        return result
+
+    monkeypatch.setattr(module, '_read_sample', sample)
+    value = report(runtime)
+    assert value['snapshot_stable'] is False
+    assert 'snapshot_volatile' in codes(value)
+
+
+def test_task_codec_cannot_collide_with_user_tuple(runtime, monkeypatch):
+    from src.execution.safety import recovery_capture as module
+    original = module._read_sample
+
+    async def scenario():
+        task = asyncio.create_task(asyncio.sleep(0))
+        runtime.owner._state['diagnostic_test_metadata'] = task
+        calls = []
+
+        def sample(value):
+            result = original(value)
+            if not calls:
+                value.owner._state['diagnostic_test_metadata'] = ('task', id(task), False, False)
+            calls.append(1)
+            return result
+
+        monkeypatch.setattr(module, '_read_sample', sample)
+        try:
+            value = report(runtime)
+            assert value['snapshot_stable'] is False
+        finally:
+            await task
+
+    asyncio.run(scenario())

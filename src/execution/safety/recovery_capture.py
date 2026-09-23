@@ -20,6 +20,8 @@ MAX_NODES = 100_000
 MAX_TEXT = 16_384
 MAX_TOTAL_TEXT = 2_000_000
 MAX_INTEGER_BITS = 256
+_CAPTURE_TYPES = (type(None), bool, int, str, float, Decimal, datetime, asyncio.Task,
+                  asyncio.Future, dict, list, tuple, set, frozenset, IngressContext, _Episode)
 
 RUNTIME_FIELDS = (
     '_day_closed', '_day_generation', '_day_fence_id', '_day_tasks', '_published_day',
@@ -62,33 +64,48 @@ class _Copier:
         self.text_size = 0
         self.active = set()
         self.references = []
+        self.type_evidence = []
 
     def copy(self, value, depth=0):
         self.nodes += 1
         if self.nodes > MAX_NODES or depth > MAX_DEPTH:
             raise _Invalid()
         kind = type(value)
+        # 각 노드의 타입·깊이와 각 scalar의 값을 함께 기록한다. 타입 목록만
+        # 비교하면 dict 순서 변경과 bool/int 동등성이 결합된 교체를 놓친다.
+        tag = next((index for index, expected in enumerate(_CAPTURE_TYPES) if kind is expected), -1)
+        if tag < 0:
+            raise _Invalid()
+        self.type_evidence.append((tag, depth))
         if value is None or kind is bool:
+            self.type_evidence.append(value)
             return value
         if kind is int:
             if value.bit_length() > MAX_INTEGER_BITS:
                 raise _Invalid()
+            self.type_evidence.append(value)
             return value
         if kind is str:
             self.text_size += len(value)
             if len(value) > MAX_TEXT or self.text_size > MAX_TOTAL_TEXT:
                 raise _Invalid()
+            self.type_evidence.append(value)
             return value
         if kind is float:
             if not math.isfinite(value):
                 raise _Invalid()
+            self.type_evidence.append(value.hex())
             return value
         if kind is Decimal:
             if not value.is_finite() or len(value.as_tuple().digits) > MAX_TEXT:
                 raise _Invalid()
+            self.type_evidence.append(tuple(value.as_tuple()))
             return value
         if kind is datetime:
-            return _timestamp(value)
+            stamp = _timestamp(value)
+            self.type_evidence.append((value.isoformat(), value.fold,
+                ('zoneinfo', value.tzinfo.key) if type(value.tzinfo) is ZoneInfo else ('timezone',)))
+            return stamp
         if kind is asyncio.Task or kind is asyncio.Future:
             self.references.append(value)
             return ('task', id(value), kind.done(value), kind.cancelled(value))
@@ -178,6 +195,7 @@ def _read_sample(runtime):
                       and type(raw['_reconciler_task']) is asyncio.Task
                       and not asyncio.Task.done(raw['_reconciler_task'])),
     }
+    sample['type_evidence'] = tuple(copier.type_evidence)
     copier.references.extend((owner, engine, producer, gateway, eng['_execution_runtime']))
     return sample, copier.references
 
