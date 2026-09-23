@@ -150,8 +150,8 @@ def test_in_memory_bad_cancel_parent_link_is_reported_without_identifier_output(
     asyncio.run(scenario())
 
 
-def test_cyclic_custom_attempt_payload_is_refused_without_object_hooks(tmp_path):
-    """Synthetic in-memory corruption must not run repr/str/bool/eq while refusing it."""
+def test_hostile_attempt_payload_is_refused_without_object_hooks(tmp_path):
+    """Synthetic private-RAM corruption must not run repr/str/bool/eq while refusing it."""
     capture, diagnostics = _diagnostics()
     from test_execution_runtime import NOW, setup
 
@@ -171,10 +171,31 @@ def test_cyclic_custom_attempt_payload_is_refused_without_object_hooks(tmp_path)
     async def scenario():
         _, _, store, runtime = await setup(tmp_path)
         try:
-            # Direct RAM mutation is intentional: the durable owner rejects this malformed payload.
-            cyclic = {"payload": HostilePayload()}
+            # The public state property copies; this is intentionally malformed private RAM.
+            runtime.owner._state["attempts"]["private-hostile-attempt"] = HostilePayload()
+            report = diagnostics.build_recovery_diagnostic(
+                capture.capture_recovery_snapshot(runtime, captured_at=NOW))
+            assert report["snapshot_stable"] is None
+            assert "snapshot_unavailable" in _finding_codes(report)
+            assert "private-" not in json.dumps(report, sort_keys=True)
+        finally:
+            await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_cyclic_attempt_payload_is_refused_without_following_the_cycle(tmp_path):
+    """Synthetic private-RAM cycle is refused before it can become output evidence."""
+    capture, diagnostics = _diagnostics()
+    from test_execution_runtime import NOW, setup
+
+    async def scenario():
+        _, _, store, runtime = await setup(tmp_path)
+        try:
+            cyclic = {}
             cyclic["self"] = cyclic
-            runtime.owner.state["attempts"]["private-cyclic-attempt"] = cyclic
+            # The public state property copies; mutate only the deliberately synthetic RAM fixture.
+            runtime.owner._state["attempts"]["private-cyclic-attempt"] = cyclic
             report = diagnostics.build_recovery_diagnostic(
                 capture.capture_recovery_snapshot(runtime, captured_at=NOW))
             assert report["snapshot_stable"] is None
