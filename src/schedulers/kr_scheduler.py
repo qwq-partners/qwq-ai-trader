@@ -791,6 +791,21 @@ class KRScheduler:
             return "take_profit"
         return "manual"
 
+    @classmethod
+    def _journal_exit_reason(cls, fill):
+        """일지 전용 근거: 브로커가 해당 주문에 결합한 사유만 사용한다.
+
+        종목 캐시는 다른 주문·이전 판단일 수 있어 일지 근거로 빌리지 않는다.
+        리스크/재진입 제한은 기존 캐시와 분류를 그대로 사용한다.
+        """
+        reason = getattr(fill, "reason", None)
+        if not isinstance(reason, str) or not reason.strip():
+            return "fill_detected", "manual"
+        # LLM 본문의 '손절/긴급' 등은 판단 텍스트이지 규칙 청산 유형이 아니다.
+        exit_type = ("llm_eod" if reason.lstrip().startswith("LLM 종가점검:")
+                     else cls._classify_exit_type(reason))
+        return reason, exit_type
+
     def _trim_watch_symbols(self):
         """감시 종목 리스트가 최대 수를 초과하면 오래된 비포지션 종목 제거"""
         bot = self.bot
@@ -2147,6 +2162,11 @@ JSON:
                         confidence=0.9,
                         reason=f"LLM 종가점검: {reason}",
                     )
+                    # 판단 근거만 한 줄로 제한한다. 주문/알림의 원문은 바꾸지 않는다.
+                    _log_reason = " ".join(str(reason).split())[:300]
+                    logger.info(
+                        f"[포지션LLM] {symbol} action=exit_today reason={_log_reason}"
+                    )
                     event = SignalEvent.from_signal(signal, source="position_eod_llm")
                     await bot.engine.emit(event)
                     actions_taken.append(f"🔴 {symbol} 청산({pnl_pct:+.1f}%): {reason}")
@@ -2847,6 +2867,7 @@ JSON:
                                 # trade journal SELL 기록
                                 if bot.trade_journal and _sell_pos_snap:
                                     try:
+                                        _journal_reason, _journal_type = self._journal_exit_reason(fill)
                                         # trade_id: position.trade_id 또는 journal open trades 탐색
                                         _tid = getattr(_sell_pos_snap, 'trade_id', None)
                                         if not _tid:
@@ -2855,13 +2876,13 @@ JSON:
                                             if _match:
                                                 _tid = _match[-1].id
                                         if _tid:
-                                            # exit_type 분류 (공통 함수 위임)
-                                            _etype = self._classify_exit_type(_exit_reason_snap)
+                                            # 일지·복기만 주문에 결합된 근거를 사용한다.
+                                            _etype = _journal_type
                                             bot.trade_journal.record_exit(
                                                 trade_id=_tid,
                                                 exit_price=float(fill.price),
                                                 exit_quantity=fill.quantity,
-                                                exit_reason=_exit_reason_snap or "fill_detected",
+                                                exit_reason=_journal_reason,
                                                 exit_type=_etype,
                                                 exit_time=datetime.now(),
                                                 avg_entry_price=float(_sell_pos_snap.avg_price),
@@ -2960,8 +2981,7 @@ JSON:
                                                         _pre_qty = int(getattr(_sell_pos_snap, 'quantity', 0) or 0)
                                                         _remaining_after = _pre_qty - int(fill.quantity)
                                                         _is_full_exit = (_remaining_after <= 0) and (_new_exit_qty >= _db_entry_qty)
-                                                        # exit_type 분류 (공통 함수 위임)
-                                                        _etype2 = self._classify_exit_type(_exit_reason_snap)
+                                                        _etype2 = _journal_type
                                                         _status2 = _etype2 if _is_full_exit else "partial"
                                                         # PnL 계산 (FeeCalculator 사용, 수수료 포함 순손익)
                                                         _fc = get_fee_calculator("KR")
@@ -2984,7 +3004,7 @@ JSON:
                                                                    VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0.0,$12)""",
                                                                 _db_tid, fill.symbol, _sym_name2,
                                                                 _now2, float(fill.price), fill.quantity,
-                                                                _etype2, _exit_reason_snap or 'fill_detected',
+                                                                _etype2, _journal_reason,
                                                                 _this_pnl2, _pnl_pct2, _db_strat, _status2,
                                                             )
                                                             if _is_full_exit:
@@ -2998,7 +3018,7 @@ JSON:
                                                                        pnl_pct=$7, updated_at=$8
                                                                        WHERE id=$9""",
                                                                     _now2, float(fill.price), _new_exit_qty,
-                                                                    _exit_reason_snap or 'fill_detected', _etype2,
+                                                                    _journal_reason, _etype2,
                                                                     _this_pnl2, _pnl_pct2, _now2, _db_tid,
                                                                 )
                                                             else:
