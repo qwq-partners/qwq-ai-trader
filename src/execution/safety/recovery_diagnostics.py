@@ -1,8 +1,9 @@
 """비식별 복구 진단 DTO와 순수 보고서 builder. 어떤 판정도 복구 권한이 아니다."""
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone
+from decimal import InvalidOperation
 
-from .lifecycle import TERMINAL_STATES
+from .lifecycle import TERMINAL_STATES, OrderState
 from .reservations import has_remaining_reservation
 
 
@@ -41,7 +42,31 @@ class RecoverySnapshot:
     execution_version: int | None = None
     published_version: int | None = None
     engine_version: int | None = None
-    findings: tuple[tuple[str, int], ...] = ()
+    findings: tuple[tuple[str, int | None], ...] = ()
+
+    def __post_init__(self):
+        valid = (type(self.mode) is str and self.mode in
+                 ('unknown', 'partial_install', 'attached_candidate'))
+        valid = valid and all(value is None or type(value) is bool for value in (
+            self.snapshot_stable, self.publication_consistent, self.owner_health_confirmed))
+        valid = valid and all(value is None or type(value) is int and -1 <= value < 2 ** 256
+                             for value in (self.execution_version, self.published_version, self.engine_version))
+        valid = valid and type(self.findings) is tuple and all(
+            type(row) is tuple and len(row) == 2 and type(row[0]) is str and row[0] in FINDINGS
+            and (type(row[1]) is int and 0 < row[1] <= 100_000
+                 or row[0] == 'disposition_not_durable' and row[1] is None) for row in self.findings)
+        if self.captured_at is not None:
+            if type(self.captured_at) is not str or len(self.captured_at) > 40:
+                valid = False
+            else:
+                try:
+                    stamp = datetime.fromisoformat(self.captured_at)
+                    valid = valid and stamp.tzinfo is not None and stamp.astimezone(
+                        timezone.utc).isoformat() == self.captured_at
+                except (ValueError, OverflowError):
+                    valid = False
+        if not valid:
+            raise ValueError('invalid_diagnostic_snapshot')
 
 
 def build_recovery_diagnostic(snapshot: RecoverySnapshot) -> dict:
@@ -60,7 +85,7 @@ def build_recovery_diagnostic(snapshot: RecoverySnapshot) -> dict:
         'findings': [dict(code=code, count=count, evidence=FINDINGS[code][0],
                           next_check=FINDINGS[code][1])
                      for code, count in sorted(dict(snapshot.findings,
-                         disposition_not_durable=1).items())],
+                         disposition_not_durable=None).items())],
     }
 
 
@@ -109,6 +134,9 @@ def _classify(sample):
             _mapping(row)
             kind, side = row.get('kind'), row.get('side')
             if kind not in ('submit', 'cancel', 'modify') or side not in ('buy', 'sell'):
+                raise ValueError('invalid_evidence')
+            if (row.get('state') not in tuple(value.value for value in OrderState)
+                    or row.get('command_status') not in (None, 'not_sent', 'acknowledged', 'rejected', 'unknown')):
                 raise ValueError('invalid_evidence')
             observed = _integer(row.get('observed_quantity'))
             applied = _integer(row.get('applied_quantity'))
@@ -173,7 +201,12 @@ def _classify(sample):
     for command, row in _mapping(state.get('outbox')).items():
         try:
             _mapping(row)
-            if row.get('kind') != 'protection_decision' or row.get('effect_source') is not None:
+            if row.get('kind') != 'protection_decision':
+                continue
+            source = row.get('effect_source')
+            if source is not None:
+                if type(source) is not str or source != 'intraday_preemptive':
+                    add('evidence_invalid')
                 continue
             symbol, identity = _identity(row.get('symbol')), _identity(row.get('intent_id'))
             decision = row.get('decision')
@@ -219,9 +252,14 @@ def _classify(sample):
                 add('protection_quantity_inconsistent')
         except (ValueError, TypeError, KeyError):
             add('evidence_invalid')
+    for symbol in positions:
+        if symbol not in protected and symbol not in _mapping(protection.get('degraded')):
+            add('protection_quantity_inconsistent')
     for symbol in pending:
         intent = intents.get(pending[symbol])
         episode = episodes.get(symbol)
+        if intent is not None and (intent.get('symbol') != symbol or intent.get('side') != 'sell'):
+            add('protection_link_inconsistent')
         if (intent is None and (episode is None or episode.get('intent_id') != pending[symbol])
                 and not any(row.get('intent_id') == pending[symbol] and row.get('symbol') == symbol
                             for row in admissions.values())):

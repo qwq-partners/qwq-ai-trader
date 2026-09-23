@@ -3,9 +3,11 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 import math
+from types import MethodType
 from zoneinfo import ZoneInfo
 
 from ...core.engine import UnifiedEngine
+from ...core.event import EventType
 from .application import FillApplicationCoordinator, IngressContext
 from .gateway import SignalGateway
 from .protection_producer import ProtectionProducer, _Episode
@@ -16,6 +18,7 @@ from .recovery_diagnostics import RecoverySnapshot, _classify
 MAX_DEPTH = 32
 MAX_NODES = 100_000
 MAX_TEXT = 16_384
+MAX_TOTAL_TEXT = 2_000_000
 MAX_INTEGER_BITS = 256
 
 RUNTIME_FIELDS = (
@@ -48,7 +51,7 @@ class _Invalid(ValueError):
 
 def _timestamp(value):
     # exact datetime만으로는 악성 tzinfo 호출을 차단할 수 없어 tz 타입도 한정한다.
-    if type(value) is not datetime or type(value.tzinfo) not in (timezone, ZoneInfo):
+    if type(value) is not datetime or not any(type(value.tzinfo) is item for item in (timezone, ZoneInfo)):
         raise _Invalid()
     return value.astimezone(timezone.utc).isoformat()
 
@@ -56,6 +59,7 @@ def _timestamp(value):
 class _Copier:
     def __init__(self):
         self.nodes = 0
+        self.text_size = 0
         self.active = set()
         self.references = []
 
@@ -71,7 +75,8 @@ class _Copier:
                 raise _Invalid()
             return value
         if kind is str:
-            if len(value) > MAX_TEXT:
+            self.text_size += len(value)
+            if len(value) > MAX_TEXT or self.text_size > MAX_TOTAL_TEXT:
                 raise _Invalid()
             return value
         if kind is float:
@@ -87,7 +92,7 @@ class _Copier:
         if kind is asyncio.Task or kind is asyncio.Future:
             self.references.append(value)
             return ('task', id(value), kind.done(value), kind.cancelled(value))
-        if kind not in (dict, list, tuple, set, frozenset, IngressContext, _Episode):
+        if not any(kind is item for item in (dict, list, tuple, set, frozenset, IngressContext, _Episode)):
             raise _Invalid()
         if id(value) in self.active:
             raise _Invalid()
@@ -99,7 +104,7 @@ class _Copier:
             if kind is dict:
                 result = {}
                 for key, item in value.items():
-                    if type(key) not in (str, int, tuple, asyncio.Task, asyncio.Future):
+                    if not any(type(key) is item for item in (str, int, tuple, asyncio.Task, asyncio.Future)):
                         raise _Invalid()
                     result[self.copy(key, depth + 1)] = self.copy(item, depth + 1)
                 return result
@@ -134,6 +139,25 @@ def _read_sample(runtime):
     prod = None if producer is None else _data(producer, ProtectionProducer)
     gate = None if gateway is None else _data(gateway, SignalGateway)
     copier = _Copier()
+    handlers = eng['_handlers']
+    if type(handlers) is not dict or any(type(key) is not EventType for key in handlers):
+        raise _Invalid()
+    market_handlers = handlers.get(EventType.MARKET_DATA)
+    if type(market_handlers) is not list or len(market_handlers) > MAX_NODES:
+        raise _Invalid()
+    copier.references.extend(market_handlers)
+    first_handler = market_handlers[0] if market_handlers else None
+    producer_first = (type(first_handler) is MethodType and first_handler.__self__ is producer
+                      and first_handler.__func__ is ProtectionProducer.on_market_data)
+    locks = (own['_lock'], raw['_quote_lock']) + (() if prod is None else (prod['_lock'],))
+    if any(type(lock) is not asyncio.Lock for lock in locks):
+        raise _Invalid()
+    lock_states = tuple(object.__getattribute__(lock, '__dict__')['_locked'] for lock in locks)
+    if any(type(locked) is not bool for locked in lock_states):
+        raise _Invalid()
+    copier.references.extend(locks)
+    writers = (raw['_intraday_writer'], raw['_regime_writer'])
+    copier.references.extend(writers)
     sample = {
         'state': copier.copy(own['_state']),
         'owner': copier.copy({key: own[key] for key in (
@@ -145,12 +169,43 @@ def _read_sample(runtime):
                      id(eng['_execution_runtime']),
                      None if prod is None else (id(prod['runtime']), id(prod['engine'])),
                      None if gate is None else id(gate['runtime'])),
+        'locks': (tuple(id(lock) for lock in locks), lock_states),
+        'writers': tuple(id(writer) for writer in writers),
+        'handlers': tuple(id(handler) for handler in market_handlers),
         'candidate': (eng['_execution_runtime'] is runtime and prod is not None
                       and prod['runtime'] is runtime and prod['engine'] is engine
-                      and gate is not None and gate['runtime'] is runtime),
+                      and gate is not None and gate['runtime'] is runtime and producer_first
+                      and type(raw['_reconciler_task']) is asyncio.Task
+                      and not asyncio.Task.done(raw['_reconciler_task'])),
     }
     copier.references.extend((owner, engine, producer, gateway, eng['_execution_runtime']))
     return sample, copier.references
+
+
+def _validate_ram(sample):
+    ram, eng, prod = sample['runtime'], sample['engine'], sample['producer']
+    for key in ('_day_closed', '_command_tracking_started', '_command_results_failed',
+                '_protection_unattributed_failed', '_closing', '_reconciler_in_cycle'):
+        if type(ram[key]) is not bool:
+            raise _Invalid()
+    if type(eng['_execution_accepting']) is not bool:
+        raise _Invalid()
+    counters = [ram[key] for key in ('_day_generation', '_protection_failure_generation',
+                '_reconciler_target_count', '_reconciler_parked')]
+    counters.append(eng['_execution_ticket'])
+    for key in ('_protection_recovery_counts', '_reconciler_skipped', '_reconciler_outcomes'):
+        if type(ram[key]) is not dict:
+            raise _Invalid()
+        counters.extend(ram[key].values())
+    if prod is not None:
+        stats = prod['_stats']
+        if type(stats) is not dict or type(stats.get('resume_dispositions')) is not dict:
+            raise _Invalid()
+        counters.extend(stats.get(key) for key in ('throttled', 'pending_released', 'reemissions',
+                                                   'source_transitions'))
+        counters.extend(stats['resume_dispositions'].values())
+    if any(type(value) is not int or value < 0 for value in counters):
+        raise _Invalid()
 
 
 def capture_recovery_snapshot(runtime, *, captured_at) -> RecoverySnapshot:
@@ -169,12 +224,14 @@ def capture_recovery_snapshot(runtime, *, captured_at) -> RecoverySnapshot:
             return RecoverySnapshot(stamp, mode='partial_install', snapshot_stable=False,
                                     findings=(('snapshot_volatile', 1),))
         own, eng = second['owner'], second['engine']
+        _validate_ram(second)
         versions = (own['_version'], own['_published_version'], eng['_execution_version'])
         if any(type(value) is not int or value < -1 for value in versions):
             raise _Invalid()
         if any(type(own[key]) is not bool for key in ('_healthy', '_publication_recovery_required')):
             raise _Invalid()
-        consistent = versions[0] >= 0 and versions[0] == versions[1] == versions[2]
+        consistent = (versions[0] >= 0 and versions[0] == versions[1] == versions[2]
+                      and not own['_publication_recovery_required'])
         healthy = own['_healthy'] and not own['_publication_recovery_required'] and consistent
         counts = _classify(second)
         if not consistent:

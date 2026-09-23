@@ -132,3 +132,103 @@ def test_invalid_time_is_unavailable(stamp):
     value = build_recovery_diagnostic(capture_recovery_snapshot(None, captured_at=stamp))
     assert value['captured_at'] is None
     assert 'evidence_invalid' in codes(value)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('mode', 'PRIVATE_SENTINEL'), ('execution_version', True),
+    ('captured_at', 'PRIVATE_SENTINEL'), ('findings', (('PRIVATE_SENTINEL', 1),)),
+])
+def test_dto_rejects_unapproved_output_fields(field, value):
+    from src.execution.safety.recovery_diagnostics import RecoverySnapshot
+    fields = dict(captured_at=NOW.isoformat())
+    fields[field] = value
+    with pytest.raises(ValueError, match='invalid_diagnostic_snapshot'):
+        RecoverySnapshot(**fields)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('_day_generation', True), ('_reconciler_target_count', -1),
+    ('_protection_unattributed_failed', 1), ('_protection_recovery_counts', {'any': True}),
+])
+def test_malformed_runtime_counter_cannot_look_valid(runtime, field, value):
+    setattr(runtime, field, value)
+    assert 'evidence_invalid' in codes(report(runtime))
+
+
+def test_pending_owner_cross_symbol_is_inconsistent(runtime):
+    asyncio.run(opened(runtime, 'S1', side='sell'))
+    runtime.owner._state['protection']['pending_owners']['OTHER'] = 'S1'
+    assert 'protection_link_inconsistent' in codes(report(runtime))
+
+
+def test_cancel_ack_is_not_parent_finality(runtime):
+    from src.execution.safety.lifecycle import CommandKind, CommandResult, CommandStatus
+
+    async def prepare():
+        ref = await opened(runtime, 'B1')
+        await runtime.lifecycle.prepare('B1', 'C1', 100, '005930', 'buy',
+            command=CommandKind.CANCEL, parent_attempt_id='B1', order_ref=ref)
+        await runtime.lifecycle.claim('C1', 'cancel-sender')
+        await runtime.lifecycle.record_result('C1', 'cancel-sender',
+            CommandResult(CommandStatus.ACKNOWLEDGED, 'C1', ref))
+
+    asyncio.run(prepare())
+    assert 'cancel_unconfirmed' in codes(report(runtime))
+    runtime.owner._state['attempts']['C1']['symbol'] = 'OTHER'
+    assert 'attempt_link_inconsistent' in codes(report(runtime))
+
+
+def test_unapplied_inbox_and_publication_are_independent(runtime):
+    runtime.owner._state['inbox'] = {'private': {'status': 'RECEIVED'}}
+    runtime.owner._published_version -= 1
+    value = report(runtime)
+    assert value['snapshot_stable'] is True
+    assert value['publication_consistent'] is False
+    assert {'publication_inconsistent', 'owner_health_unconfirmed', 'unapplied_inbox'} <= codes(value)
+
+
+def test_unknown_risk_never_becomes_zero_reservation_evidence(runtime):
+    asyncio.run(opened(runtime, 'B1'))
+    runtime.owner._state['attempts']['B1'].update(
+        reserved_quantity=0, reserved_cash='0', reserved_exposure='0', reserved_planned_risk=None)
+    assert 'evidence_invalid' in codes(report(runtime))
+
+
+def test_external_source_is_not_general_protection(runtime):
+    runtime.owner._state['outbox']['private'] = dict(kind='protection_decision',
+        status='delivered', symbol='private', intent_id='private', decision=['sell_all', 1, 'x'],
+        effect_source='intraday_preemptive')
+    assert 'protection_unsubmitted' not in codes(report(runtime))
+
+
+def test_publication_recovery_latch_is_inconsistent(runtime):
+    runtime.owner._publication_recovery_required = True
+    assert report(runtime)['publication_consistent'] is False
+
+
+def test_unsupported_protection_source_is_invalid(runtime):
+    runtime.owner._state['outbox']['private'] = dict(kind='protection_decision', effect_source='unknown')
+    assert 'evidence_invalid' in codes(report(runtime))
+
+
+def test_unprotected_position_is_quantity_inconsistent(runtime):
+    runtime.owner._state['portfolio']['positions']['private'] = {'quantity': 10}
+    assert 'protection_quantity_inconsistent' in codes(report(runtime))
+
+
+def test_invalid_order_state_cannot_be_pending_sell(runtime):
+    asyncio.run(opened(runtime, 'S1', side='sell'))
+    runtime.owner._state['attempts']['S1']['state'] = 'arbitrary'
+    value = report(runtime)
+    assert 'evidence_invalid' in codes(value)
+    assert 'pending_sell' not in codes(value)
+
+
+def test_unsupported_type_metaclass_is_not_compared(runtime):
+    class Meta(type):
+        def __eq__(cls, other):
+            raise AssertionError('metaclass comparison executed')
+    class Hostile(metaclass=Meta):
+        pass
+    runtime.owner._state['hostile'] = Hostile()
+    assert 'evidence_invalid' in codes(report(runtime))
