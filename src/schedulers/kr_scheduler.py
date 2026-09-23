@@ -15,6 +15,7 @@ import aiohttp
 import html
 import inspect
 import json
+import math
 import os
 import re
 import time
@@ -39,6 +40,7 @@ from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
 from ..utils.telegram import send_alert
 from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
+from ..utils.kis_request_metrics import request_source, with_request_source
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
@@ -871,6 +873,21 @@ class KRScheduler:
         """
         return classify_exit_type(reason)
 
+    @classmethod
+    def _journal_exit_reason(cls, fill):
+        """일지 전용 근거: 브로커가 해당 주문에 결합한 사유만 사용한다.
+
+        종목 캐시는 다른 주문·이전 판단일 수 있어 일지 근거로 빌리지 않는다.
+        리스크/재진입 제한은 기존 캐시와 분류를 그대로 사용한다.
+        """
+        reason = getattr(fill, "reason", None)
+        if not isinstance(reason, str) or not reason.strip():
+            return "fill_detected", "manual"
+        # LLM 본문의 '손절/긴급' 등은 판단 텍스트이지 규칙 청산 유형이 아니다.
+        exit_type = ("llm_eod" if reason.lstrip().startswith("LLM 종가점검:")
+                     else cls._classify_exit_type(reason))
+        return reason, exit_type
+
     def _trim_watch_symbols(self):
         """감시 종목 리스트가 최대 수를 초과하면 오래된 비포지션 종목 제거"""
         bot = self.bot
@@ -913,6 +930,22 @@ class KRScheduler:
         else:
             logger.warning(log_msg)
 
+    async def _exempt_sell_still_open(self, symbol: str) -> bool:
+        """자동매도 금지 종목에 미체결 SELL 이 아직 살아 있을 수 있는가 (CORE-023).
+
+        브로커 cancel 은 실패를 예외로 올리지 않고 건수만 준다(0건 = 소멸 또는 실패). 취소에 성공한
+        주문만 브로커 추적에서 빠지므로, 취소 뒤에도 남아 있으면 거래소에 살아 있다고 본다.
+        면제 등록 전에 나간 지정가의 pending 을 풀어 버리면 취소 재시도 대상에서 빠진 채 체결될 수 있다.
+        """
+        bot = self.bot
+        if not (bot.exit_manager and bot.exit_manager.is_exit_exempt(symbol)):
+            return False
+        try:
+            return any(o.symbol == symbol and o.is_active for o in await bot.broker.get_open_orders())
+        except Exception as e:
+            logger.warning(f"[청산 pending] {symbol} 면제 종목 미체결 확인 실패 — 유지: {e}")
+            return True
+
     async def _cleanup_stale_pending(self):
         """교착 pending 정리 — price event 없이도 독립 실행 가능.
 
@@ -938,6 +971,10 @@ class KRScheduler:
         # 매 틱 취소 API를 때리면 KIS rate limit을 스스로 소진한다 (2026-08-05 재리뷰 P1)
         if not hasattr(self, '_stale_cancel_last_try'):
             self._stale_cancel_last_try: Dict[str, datetime] = {}
+        # 취소 실패 유지 표식 {종목: (그 pending 의 등록 시각, 연속 '판단 불가' 횟수, 생존 경보 발송 여부)} (2026-09-21)
+        # — 등록 시각에 묶어, 체결 등 다른 경로로 끝난 이전 pending 의 표식이 새 pending 에 새지 않게 한다
+        if not hasattr(self, '_stale_cancel_miss'):
+            self._stale_cancel_miss: Dict[str, Tuple[datetime, int, bool]] = {}
 
         for s in stale:
             # KIS 미체결 주문 먼저 취소
@@ -945,6 +982,9 @@ class KRScheduler:
             # → 해제하면 다음 tick에 동일 물량 SELL 재발행(이중 매도) 위험이므로
             #   유지 후 다음 사이클 재시도 (engine.py 폴백 경로와 동일 정책).
             #   단 15분 초과 시 영구 교착 방지 위해 강제 해제.
+            # 2026-09-21: 브로커 cancel 은 실패를 예외로 올리지 않고 0 을 돌려준다 — 0건에 섞인
+            #   "취소 실패(방금 체결/거래소 생존)"는 _keep_exit_pending_after_failed_cancel 이 가린다.
+            _gen = bot._exit_pending_timestamps.get(s)  # 이 pending 의 세대(등록 시각) — await 뒤 재검증용
             if bot.broker and hasattr(bot.broker, 'cancel_all_for_symbol'):
                 _last_try = self._stale_cancel_last_try.get(s)
                 if _last_try is not None and (now_time - _last_try).total_seconds() < 60:
@@ -952,9 +992,11 @@ class KRScheduler:
                 self._stale_cancel_last_try[s] = now_time
                 try:
                     cancelled = await bot.broker.cancel_all_for_symbol(s)
-                    self._stale_cancel_last_try.pop(s, None)
                     if cancelled:
                         logger.info(f"[청산 pending] {s} KIS 주문 {cancelled}건 취소 완료")
+                    if await self._keep_exit_pending_after_failed_cancel(s, now_time, _gen):
+                        continue
+                    self._stale_cancel_last_try.pop(s, None)
                 except Exception as e:
                     _pending_age_min = (
                         now_time - bot._exit_pending_timestamps.get(s, now_time)
@@ -970,8 +1012,19 @@ class KRScheduler:
                         f"(수동 확인 필요): {e}"
                     )
                     self._stale_cancel_last_try.pop(s, None)
+            if await self._exempt_sell_still_open(s):
+                self._stale_cancel_last_try[s] = now_time  # 60초 뒤 재취소 (틱마다 API 를 때리지 않게)
+                logger.error(f"[청산 pending] {s} 자동매도 금지 종목 SELL 취소 미확인 — pending 유지, 60초 뒤 재시도")
+                continue
+            if bot._exit_pending_timestamps.get(s) != _gen:
+                # await(취소·생존 조회) 사이에 이 pending 이 체결로 끝나고 같은 종목의 새 청산 pending 이
+                # 등록됐다 — 옛 주문의 결과로 새 pending·stage 를 풀면 그 청산이 중복 발행된다 (2026-09-21)
+                logger.warning(f"[청산 pending] {s} 정리 중 pending 이 교체됨 → 해제 건너뜀")
+                continue
             bot._exit_pending_symbols.discard(s)
             bot._exit_pending_timestamps.pop(s, None)
+            self._stale_cancel_miss.pop(s, None)
+            self._partial_exit_marks().pop(s, None)
             # RiskManager pending도 동기화 해제
             if bot.engine.risk_manager:
                 await bot.engine.risk_manager.clear_pending(s)
@@ -990,6 +1043,7 @@ class KRScheduler:
                         if s not in bot.engine.risk_manager._pending_orders
                         and bot._exit_pending_timestamps.get(s, now_time) < stale_cutoff]
             for s in orphaned:
+                _gen = bot._exit_pending_timestamps.get(s)
                 if bot.broker and hasattr(bot.broker, 'cancel_all_for_symbol'):
                     _lt = self._stale_cancel_last_try.get(s)
                     if _lt is not None and (now_time - _lt).total_seconds() < 60:
@@ -997,18 +1051,103 @@ class KRScheduler:
                     self._stale_cancel_last_try[s] = now_time
                     try:
                         cancelled = await bot.broker.cancel_all_for_symbol(s)
-                        self._stale_cancel_last_try.pop(s, None)
                         if cancelled:
                             logger.info(f"[청산 pending] {s} 고아 KIS 주문 {cancelled}건 취소 완료")
+                        if await self._keep_exit_pending_after_failed_cancel(s, now_time, _gen):
+                            continue
+                        self._stale_cancel_last_try.pop(s, None)
                     except Exception as e:
                         # API 예외 = 원 주문 생존 가능 → 유지 후 다음 사이클 재시도
                         logger.warning(f"[청산 pending] {s} 고아 주문 취소 실패 — 유지: {e}")
                         continue
+                if await self._exempt_sell_still_open(s):
+                    self._stale_cancel_last_try[s] = now_time
+                    logger.error(f"[청산 pending] {s} 자동매도 금지 종목 고아 SELL 취소 미확인 — 유지, 60초 뒤 재시도")
+                    continue
+                if bot._exit_pending_timestamps.get(s) != _gen:
+                    continue  # 정리 중 pending 이 교체됨 — 새 pending 을 옛 결과로 풀지 않는다
                 bot._exit_pending_symbols.discard(s)
                 bot._exit_pending_timestamps.pop(s, None)
+                self._stale_cancel_miss.pop(s, None)
+                self._partial_exit_marks().pop(s, None)
                 if bot.exit_manager:
                     bot.exit_manager.rollback_stage(s)
                 logger.warning(f"[청산 pending] {s} 동기화 해제 (RiskManager에 없음 → 고아 pending 정리)")
+
+    _MAX_EXIT_UNKNOWN = 2  # 연속 '판단 불가' 상한: 등록 후 약 3분 첫 회 대기 → 약 4분 1회 → 약 5분 2회에서 해제 (엔진 270초와 같은 예산)
+
+    def _partial_exit_marks(self) -> Dict[str, datetime]:
+        """분할 매도로 발행한 청산 pending 의 표식 {종목: 그 pending 의 등록 시각} (지연 생성 — 초기화 생략 하네스 호환)."""
+        if not hasattr(self, '_partial_exit_pending'):
+            self._partial_exit_pending: Dict[str, datetime] = {}
+        return self._partial_exit_pending
+
+    async def _keep_exit_pending_after_failed_cancel(self, s: str, now_time: datetime,
+                                                     pending_ts: Optional[datetime]) -> bool:
+        """취소가 실패했을 수 있는 **분할** 청산 pending 을 아직 풀면 안 되는가 — True 면 호출측이 해제·롤백을 건너뛴다.
+
+        분할 매도로 발행한 pending(`_check_exit_signal` 이 `sell_partial` 로 등록하며 남긴 표식 — 등록 시각에
+        묶인다)에만 적용한다. 전량 청산(손절·트레일링·EOD, 수량상 전량인 익절)은 재발행돼도 KIS 가 주문가능수량
+        초과로 거절하므로 종전대로 즉시 해제해 손절 재판단을 늦추지 않는다. ExitManager `pending_stage` 로
+        추정하지 않는다 — 아래 '롤백 없는 해제' 뒤에는 옛 익절 stage 가 남은 채 새 손절 pending 이 등록된다. 브로커가 그 종목의 활성 SELL 을 추적하지 않으면(취소 성공, 또는 엔진이 SELL 신호를 거부해
+        주문이 없던 고아) 역시 종전대로 해제한다. 추적 중이면 취소 실패다: 첫 회는 조회 없이 60초 스로틀만큼
+        기다린다 — 방금 체결됐는데 체결 확인이 아직 장부에서 빼지 않은 경우, 먼저 롤백하면 ExitManager.on_fill 의
+        stage 승격이 사라져 같은 분할 익절이 다시 나간다. 그 뒤에는 거래소 실 미체결로 가린다(엔진과 같은 함수) —
+        소멸이면 해제, 생존이면 상한 없이 유지(텔레그램 경보는 pending 당 1회), 판단 불가가 **연속** 2회(등록 후
+        약 5분)면 이 장부와 엔진 pending 만 풀고 **stage 는 롤백하지 않는다**: 손절·트레일링 판정은 다시 열리고,
+        같은 분할 익절의 재발행은 ExitManager pending 검증자(거래소 확인 후에만 만료)가 계속 막는다.
+        """
+        bot = self.bot
+        rm = bot.engine.risk_manager
+        if rm is None or pending_ts is None or self._partial_exit_marks().get(s) != pending_ts:
+            return False
+        miss = self._stale_cancel_miss.get(s)
+        waited = miss is not None and miss[0] == pending_ts  # 표식은 등록 시각에 묶는다(이전 pending 의 표식 무시)
+        unknown_streak, alerted = (miss[1], miss[2]) if waited else (0, False)
+        try:
+            live = await rm.stale_order_still_live(s, OrderSide.SELL, confirm=waited)
+        except Exception as e:
+            logger.warning(f"[청산 pending] {s} 주문 생존 확인 오류: {e}")
+            live = None
+        if bot._exit_pending_timestamps.get(s) != pending_ts:
+            return True  # 생존 조회 await 사이에 교체됐다 — 옛 주문의 결과를 새 pending 에 적용하지 않는다
+        if bot.exit_manager and bot.exit_manager.is_exit_exempt(s):
+            # 조회 await 중(또는 그 전에) 자동매도 금지로 등록됐다. 아래 판단 불가 상한의 자체 해제는 호출측의
+            # 면제 확인을 건너뛰어(True 반환 → continue) 살아 있을 수 있는 면제 SELL 의 취소 재시도를 끊는다 →
+            # False 로 돌려 호출측이 면제 확인을 하게 한다(브로커에 남아 있으면 pending 보존·60초 뒤 재취소).
+            return False
+        if live is False:
+            return False
+        unknown_streak = unknown_streak + 1 if live is None else 0
+        if unknown_streak >= self._MAX_EXIT_UNKNOWN:
+            logger.error(
+                f"[청산 pending] {s} 주문 생존 확인 불가 연속 {unknown_streak}회 — stage 롤백 없이 pending 해제 "
+                f"(손절 판정 재개, 분할 익절 재발행은 ExitManager 검증자가 보류 — 수동 확인 필요)"
+            )
+            bot._exit_pending_symbols.discard(s)
+            bot._exit_pending_timestamps.pop(s, None)
+            self._stale_cancel_miss.pop(s, None)
+            self._partial_exit_marks().pop(s, None)
+            self._stale_cancel_last_try.pop(s, None)
+            await rm.clear_pending(s)
+            return True
+        age_min = (now_time - pending_ts).total_seconds() / 60
+        should_alert = live is True and waited and not alerted
+        self._stale_cancel_miss[s] = (pending_ts, unknown_streak, alerted or should_alert)
+        # 60초 스로틀 표식(_stale_cancel_last_try)은 호출측이 취소 전에 세웠고 유지하는 동안 지우지 않는다
+        if should_alert:
+            try:
+                await self._send_error_alert(
+                    "청산 주문 취소 불가",
+                    f"{s} 매도 주문이 거래소에 살아 있으나 취소되지 않습니다 — 이 종목의 청산 판정이 보류됩니다",
+                    "MTS 에서 해당 미체결 주문을 확인·취소하면 다음 정리 주기(60초)에 재판단합니다.",
+                    critical=True,
+                )
+            except Exception as e:  # 경보 실패가 호출측의 '예외 → 15분 넘으면 강제 해제'로 번지지 않게
+                logger.error(f"[청산 pending] {s} 취소 불가 경보 발송 실패: {e}")
+        else:
+            logger.warning(f"[청산 pending] {s} 취소 실패 가능 — 원 주문 생존 가능, pending 유지 ({age_min:.0f}분 경과)")
+        return True
 
     async def _check_exit_signal(self, symbol: str, current_price: Decimal,
                                 market_data: Optional[Dict] = None):
@@ -1047,6 +1186,10 @@ class KRScheduler:
             # 이미 매도 주문이 진행 중이면 중복 방지
             if symbol in bot._exit_pending_symbols:
                 return
+            # 취소 실패로 유지 중이던 stale BUY 가 (FillEvent 없이 잔고 동기화로라도) 포지션이 됐으면
+            # pending 을 풀어 아래 검사가 이 종목의 청산을 막지 않게 한다 (2026-09-21)
+            if bot.engine.risk_manager:
+                await bot.engine.risk_manager.release_kept_stale_buy(symbol)
             if bot.engine.risk_manager and symbol in bot.engine.risk_manager._pending_orders:
                 return
 
@@ -1169,9 +1312,15 @@ class KRScheduler:
                 )
 
                 # pending 등록
+                _registered_at = datetime.now()
                 bot._exit_pending_symbols.add(symbol)
-                bot._exit_pending_timestamps[symbol] = datetime.now()
+                bot._exit_pending_timestamps[symbol] = _registered_at
                 bot._exit_reasons[symbol] = reason
+                # 분할 매도 표식 — 취소 실패 시 '살아 있는 주문 위 재발행' 관문은 분할 매도에만 건다 (2026-09-21)
+                if action == "sell_partial":
+                    self._partial_exit_marks()[symbol] = _registered_at
+                else:
+                    self._partial_exit_marks().pop(symbol, None)
 
                 # 매도 시그널 발행
                 signal = Signal(
@@ -1250,6 +1399,7 @@ class KRScheduler:
             mismatches.append(f"현금 차 {cash_gap:,.0f}원")
         return mismatches
 
+    @with_request_source("portfolio_sync")
     async def _sync_portfolio(self):
         """KIS API와 포트폴리오 동기화
 
@@ -1294,7 +1444,8 @@ class KRScheduler:
                 )
                 logger.warning(f"[동기화] {_why} → 5초 후 재시도")
                 await asyncio.sleep(5)
-                kis_positions = await bot.broker.get_positions()
+                with request_source("portfolio_sync_consistency_retry"):
+                    kis_positions = await bot.broker.get_positions()
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
                 # 재시도에도 평가액 양수·전체 빈 응답이면 동기화 실패 기록 + 상태 보존
                 # (pending 경과 시간·좀비 후보 마킹은 이 방어를 우회하지 못한다)
@@ -1651,17 +1802,35 @@ class KRScheduler:
                 if _screener is not None:
                     _closes = [float(x) for x in (getattr(_screener, "_kospi_closes", None) or [])]
                     _last_bar_date = getattr(_screener, "_kospi_last_bar_date", None)
-                    # 종가열이 없으면 get_kospi_change() 는 0.0 을 준다 — 쓰지 않는다
-                    c5 = _pct_change(_closes, 5)
-                    c20 = _pct_change(_closes, 20)
                     _loaded_at = getattr(_screener, "_kospi_loaded_at", None)
-                    # 계산 가능한 종가열이 있을 때만 기준 시각을 붙인다 (빈 캐시·0 종가 제외)
-                    if c5 is not None or c20 is not None:
+                    if _closes:
                         kr_as_of = (
                             f"{_loaded_at:%Y-%m-%d %H:%M} (스크리너 벤치마크 로드)"
                             if _loaded_at is not None else "로드 시각 미상 (스크리너 캐시)"
                         )
+                    # 로드 시각은 봉 신선도의 증거가 아니다. 스크리너의 검증 결과와
+                    # 날짜를 함께 확인하며, 호환 객체도 마지막 봉 날짜 없이 사용하지 않는다.
+                    _lb = (_last_bar_date.date() if isinstance(_last_bar_date, datetime)
+                           else _last_bar_date)
+                    _history_action, _history_reason = _today_bar_action(_lb, now.date())
+                    _status_reader = getattr(_screener, "get_benchmark_status", None)
+                    if callable(_status_reader):
+                        _status = _status_reader(now=now)
+                        if _status.get("status") != "fresh":
+                            _history_action = None
+                            _history_reason = _status.get("reason") or "benchmark_missing"
+                    if any(not math.isfinite(x) or x <= 0 for x in _closes):
+                        _history_action, _history_reason = None, "invalid_close_history"
+                    if _history_action is None:
+                        _closes = []
+                        missing_fields.append(f"KOSPI봉({_history_reason})")
+                        kr_as_of = f"{kr_as_of} — 자료 제외({_history_reason})"
+                    else:
+                        c5 = _pct_change(_closes, 5)
+                        c20 = _pct_change(_closes, 20)
             except Exception as e:
+                _closes = []
+                c5 = c20 = None
                 logger.debug(f"[LLM레짐] KOSPI 캐시 조회 실패: {e}")
 
             # 현재 지수의 as_of(kr_as_of)와 **봉 기반 지표(c5/c20)의 as_of** 를 분리한다.
@@ -2116,12 +2285,15 @@ class KRScheduler:
 
             from ..utils.llm import get_llm_manager, LLMTask
 
-            # KOSPI 변화율
-            kospi_change = 0.0
+            # 일봉 5거래일 변화율은 당일 등락이 아니다. 결측은 호환용 0을 쓰지 않는다.
+            kospi_change = None
             try:
                 if bot.batch_analyzer and hasattr(bot.batch_analyzer, '_screener'):
-                    kospi = bot.batch_analyzer._screener.get_kospi_change()
-                    kospi_change = kospi.get("c1", kospi.get("c5", 0))
+                    _screener = bot.batch_analyzer._screener
+                    if _screener.get_benchmark_status().get("status") == "fresh":
+                        _value = float(_screener.get_kospi_change()["c5"])
+                        if math.isfinite(_value):
+                            kospi_change = _value
             except Exception:
                 pass
 
@@ -2157,7 +2329,7 @@ class KRScheduler:
                 return
 
             prompt = f"""장 마감 전 포지션 점검 (15:00 KST)
-오늘 KOSPI: {kospi_change:+.1f}%
+KOSPI 최근 5거래일: {_fmt_pct(kospi_change, 1)} (당일 등락 아님)
 
 보유 종목:
 {chr(10).join(pos_lines)}
@@ -2227,6 +2399,11 @@ JSON:
                         score=90,
                         confidence=0.9,
                         reason=f"LLM 종가점검: {reason}",
+                    )
+                    # 판단 근거만 한 줄로 제한한다. 주문/알림의 원문은 바꾸지 않는다.
+                    _log_reason = " ".join(str(reason).split())[:300]
+                    logger.info(
+                        f"[포지션LLM] {symbol} action=exit_today reason={_log_reason}"
                     )
                     event = SignalEvent.from_signal(signal, source="position_eod_llm")
                     await bot.engine.emit(event)
@@ -2829,6 +3006,7 @@ JSON:
                     )
             self._entry_fill_lots.pop(key, None)
 
+    @with_request_source("fill_check")
     async def run_fill_check(self):
         """체결 확인 루프 (적응형 폴링: 미체결 유무에 따라 2초/5초)"""
         bot = self.bot
@@ -2928,6 +3106,7 @@ JSON:
                                 # trade journal SELL 기록
                                 if bot.trade_journal and _sell_pos_snap:
                                     try:
+                                        _journal_reason, _journal_type = self._journal_exit_reason(fill)
                                         # trade_id: position.trade_id 또는 journal open trades 탐색
                                         _tid = getattr(_sell_pos_snap, 'trade_id', None)
                                         if not _tid:
@@ -2936,13 +3115,13 @@ JSON:
                                             if _match:
                                                 _tid = _match[-1].id
                                         if _tid:
-                                            # exit_type 분류 (공통 함수 위임)
-                                            _etype = self._classify_exit_type(_exit_reason_snap)
+                                            # 일지·복기만 주문에 결합된 근거를 사용한다.
+                                            _etype = _journal_type
                                             bot.trade_journal.record_exit(
                                                 trade_id=_tid,
                                                 exit_price=float(fill.price),
                                                 exit_quantity=fill.quantity,
-                                                exit_reason=_exit_reason_snap or "fill_detected",
+                                                exit_reason=_journal_reason,
                                                 exit_type=_etype,
                                                 exit_time=datetime.now(),
                                                 avg_entry_price=float(_sell_pos_snap.avg_price),
@@ -3041,8 +3220,7 @@ JSON:
                                                         _pre_qty = int(getattr(_sell_pos_snap, 'quantity', 0) or 0)
                                                         _remaining_after = _pre_qty - int(fill.quantity)
                                                         _is_full_exit = (_remaining_after <= 0) and (_new_exit_qty >= _db_entry_qty)
-                                                        # exit_type 분류 (공통 함수 위임)
-                                                        _etype2 = self._classify_exit_type(_exit_reason_snap)
+                                                        _etype2 = _journal_type
                                                         _status2 = _etype2 if _is_full_exit else "partial"
                                                         # PnL 계산 (FeeCalculator 사용, 수수료 포함 순손익)
                                                         _fc = get_fee_calculator("KR")
@@ -3065,7 +3243,7 @@ JSON:
                                                                    VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0.0,$12)""",
                                                                 _db_tid, fill.symbol, _sym_name2,
                                                                 _now2, float(fill.price), fill.quantity,
-                                                                _etype2, _exit_reason_snap or 'fill_detected',
+                                                                _etype2, _journal_reason,
                                                                 _this_pnl2, _pnl_pct2, _db_strat, _status2,
                                                             )
                                                             if _is_full_exit:
@@ -3079,7 +3257,7 @@ JSON:
                                                                        pnl_pct=$7, updated_at=$8
                                                                        WHERE id=$9""",
                                                                     _now2, float(fill.price), _new_exit_qty,
-                                                                    _exit_reason_snap or 'fill_detected', _etype2,
+                                                                    _journal_reason, _etype2,
                                                                     _this_pnl2, _pnl_pct2, _now2, _db_tid,
                                                                 )
                                                             else:
@@ -5415,6 +5593,8 @@ JSON:
                                 bot.engine.risk_manager._reserved_by_order.clear()
                             if hasattr(bot.engine.risk_manager, '_pending_fallback_count'):
                                 bot.engine.risk_manager._pending_fallback_count.clear()
+                            if hasattr(bot.engine.risk_manager, '_pending_cancel_keep'):
+                                bot.engine.risk_manager._pending_cancel_keep.clear()
 
                         # 거래 로거 일일 기록 플러시 및 초기화
                         trading_logger.flush()
@@ -6820,6 +7000,11 @@ JSON:
                     continue
 
                 # ── 청산 트리거 (보유 시) ──
+                # 자동매도 금지 종목이면 청산하지 않는다 (CORE-023) — 이 매도는 브로커 직접 제출이라
+                # 엔진 on_signal 가드를 거치지 않는다
+                if has_kofr and bot.exit_manager and bot.exit_manager.is_exit_exempt(SAFE_SYMBOL):
+                    logger.debug(f"[안전자산] {SAFE_SYMBOL} 자동매도 금지 종목 — 청산 스킵")
+                    continue
                 if has_kofr:
                     sell_reason = None
                     # (a) 시장 정상화
@@ -8217,6 +8402,11 @@ JSON:
                 _trim_min_value = core_cfg_ow.get("trim_min_value", 200000)
                 _individual_max_pct = core_cfg_ow.get("individual_max_pct", 20.0)
                 _rebalance_exclude = set(str(s) for s in core_cfg_ow.get("rebalance_exclude", []))
+                # 자동매도 금지 종목은 트림 대상에서 제외 (CORE-023) — 엔진이 SELL 을 막으면
+                # 트림 잔여액(_remaining)만 깎여 다른 코어 종목 트림이 모자라게 된다
+                if bot.exit_manager:
+                    _rebalance_exclude |= {s for s in portfolio.positions
+                                           if bot.exit_manager.is_exit_exempt(s)}
 
                 equity = portfolio.total_equity
                 if equity > 0:

@@ -281,6 +281,9 @@ def inner_risk_manager(engine, config, *, sidecar, exits, sector_lookup, stop_re
     rm._pending_quantities = {}
     rm._pending_sides = {}
     rm._pending_fallback_count = {}
+    rm._pending_cancel_keep = {}
+    rm._exempt_cancel_last_try = {}
+    rm._exempt_block_logged = {}
     rm._kis_qty_mismatch_count = {}
     rm._zombie_candidate_symbols = set()
     rm._reserved_by_order = {}
@@ -303,7 +306,8 @@ REQUIRED_RM_ATTRS = (
     '_REPLACEMENT_MIN_SCORE', '_REPLACEMENT_LAST_EVICT_TS', '_REPLACEMENT_COOLDOWN_SEC',
     '_last_cash_warn_time', '_pending_orders', '_pending_signal_cache', '_pending_exit_reasons',
     '_pending_timestamps', '_PENDING_TIMEOUT_SECONDS', '_pending_quantities', '_pending_sides',
-    '_pending_fallback_count', '_kis_qty_mismatch_count', '_zombie_candidate_symbols',
+    '_pending_fallback_count', '_pending_cancel_keep', '_exempt_cancel_last_try', '_exempt_block_logged',
+    '_kis_qty_mismatch_count', '_zombie_candidate_symbols',
     '_reserved_by_order', '_pending_strategy', '_exit_exempt_ref', '_stop_loss_today',
     '_pending_lock',
 )

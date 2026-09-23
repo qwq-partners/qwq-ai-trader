@@ -193,6 +193,9 @@ class TradeStorage:
     @staticmethod
     def _refine_exit_type(exit_type: str, exit_reason: str) -> str:
         """exit_reason에 구체적 정보가 있으면 exit_type 세분화"""
+        # LLM 본문의 위험 표현은 규칙 청산이 아니다. 주문 출처 분류를 보존한다.
+        if exit_type == "llm_eod":
+            return exit_type
         if not exit_reason:
             return exit_type
         r = exit_reason.lower()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -10,13 +11,16 @@ import pytest
 from loguru import logger
 
 import src.utils.session as session_module
-from src.core.engine import StrategyManager
-from src.core.event import MarketDataEvent
-from src.core.types import OrderType
+import src.core.engine as engine_module
+from src.core.engine import StrategyManager, _SellKeep
+from src.core.event import EventType, HeartbeatEvent, MarketDataEvent, OrderEvent
+from src.core.types import Order, OrderSide, OrderType
+from src.execution.safety.application import ApplicationBlocked
 from src.execution.safety.economics import encode_portfolio
 from src.execution.safety.guards import GuardDecision
 from src.execution.safety.lifecycle import CommandStatus
 from src.execution.safety.protection import encode_protection
+from src.execution.safety.protection_producer import ProtectionProducer, _Episode
 from test_execution_signal_gateway_acceptance import (
     NOW_KST, _CLOCK, advance, fixture, seed_position, sell_signal,
 )
@@ -53,6 +57,146 @@ def snapshot(f):
     """직접 writer가 owner와 live 게시본 양쪽을 건드리지 않는지 대조한다."""
     return (f['runtime'].owner.version, deepcopy(f['runtime'].owner.state),
             encode_portfolio(f['engine'].portfolio), encode_protection(f['exits']))
+
+
+@pytest.mark.parametrize('through_queue', [False, True])
+@pytest.mark.parametrize('mode', ['attached', 'attached_without_gateway', 'legacy'])
+def test_heartbeat_isolates_attached_runtime_with_reachable_legacy_control(
+        tmp_path, monkeypatch, through_queue, mode):
+    """main 하트비트 이식이 owner 밖 취소·송신·pending writer를 되살리지 않는다."""
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            rm = f['rm']
+            now = NOW_KST.replace(tzinfo=None)
+            assert engine_module.datetime.now() == now
+            assert 900 <= now.hour * 100 + now.minute < 1530
+            rm._pending_orders.add('005930')
+            rm._pending_sides['005930'] = OrderSide.SELL
+            rm._pending_quantities['005930'] = 30
+            rm._pending_timestamps['005930'] = now - timedelta(seconds=300)
+            rm._pending_cancel_keep = {'005930': _SellKeep(
+                1, now - timedelta(seconds=60), False, False,
+                now - timedelta(seconds=60))}
+            names = ('_pending_orders', '_pending_sides', '_pending_quantities',
+                     '_pending_timestamps', '_pending_cancel_keep')
+            before_pending = deepcopy([getattr(rm, name) for name in names])
+            before = snapshot(f)
+            cancellations = []
+
+            async def forbidden_cancel(symbol):
+                cancellations.append(symbol)
+                raise AssertionError('legacy cancel reached attached runtime')
+
+            f['broker'].cancel_all_for_symbol = forbidden_cancel
+            if mode == 'legacy':
+                f['engine']._execution_runtime = None
+            elif mode == 'attached_without_gateway':
+                f['runtime'].gateway = None
+            event = HeartbeatEvent(source='main-alignment-test')
+            if through_queue:
+                f['engine'].register_handler(EventType.HEARTBEAT, rm.on_heartbeat)
+                await f['drive'](event)
+            else:
+                await rm.on_heartbeat(event)
+            assert cancellations == (['005930'] if mode == 'legacy' else [])
+            assert f['posts']() == []
+            assert snapshot(f) == before
+            assert [getattr(rm, name) for name in names] == before_pending
+            assert f['engine'].stats.errors_count == 0
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('through_queue', [False, True])
+@pytest.mark.parametrize('kind', ['signal', 'order'])
+def test_attached_exempt_sell_never_clears_legacy_reason_or_pending(
+        tmp_path, monkeypatch, through_queue, kind):
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            def exempt(state):
+                state['protection']['exit_exempt'] = ['005930']
+                return state
+            await f['runtime'].owner.mutate('synthetic-exemption', exempt)
+            rm = f['rm']
+            rm._pending_exit_reasons['005930'] = 'legacy-only-marker'
+            names = ('_pending_exit_reasons', '_pending_orders', '_pending_timestamps',
+                     '_reserved_by_order', '_exempt_block_logged')
+            before_pending = deepcopy([getattr(rm, name) for name in names])
+            before = snapshot(f)
+            event = sell_signal(quantity=30) if kind == 'signal' else OrderEvent.from_order(
+                Order(symbol='005930', side=OrderSide.SELL, order_type=OrderType.LIMIT,
+                      quantity=30, price=D('10000')), source='main-alignment-test')
+            if through_queue:
+                await f['drive'](event)
+            elif kind == 'order':
+                with pytest.raises(ApplicationBlocked, match='legacy 주문 경로'):
+                    await rm.on_order(event)
+            else:
+                assert await rm.on_signal(event) is None
+            assert [getattr(rm, name) for name in names] == before_pending
+            assert snapshot(f) == before
+            assert f['posts']() == []
+            assert f['engine'].stats.errors_count == int(through_queue and kind == 'order')
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
+
+
+def test_runtime_and_producer_health_reads_do_not_mutate_or_return_live_state(tmp_path, monkeypatch):
+    async def scenario():
+        f = await fixture(tmp_path, monkeypatch)
+        try:
+            await seed_position(f)
+            runtime = f['runtime']
+            producer = ProtectionProducer(runtime, clock=lambda: NOW_KST,
+                                          indicator_source=lambda _symbol: {})
+            runtime._protection_producer = producer
+            producer._recovery_required['005930'] = {'reason': 'synthetic_unknown'}
+            producer._episodes['005930'] = _Episode(
+                'synthetic-intent', ('sell', 30), D('10000'), 'synthetic')
+            producer._stats['resume_dispositions'] = {'synthetic': 1}
+            before = snapshot(f)
+            fields = ('_recovery_required', '_episodes', '_stats', '_pending_reasons',
+                      '_restart_retries', '_sources', '_last_quote')
+            before_ram = deepcopy([getattr(producer, name) for name in fields])
+            versions = (runtime.owner.published_version, f['engine']._execution_version)
+            attempts = []
+
+            def forbidden(*_args, **_kwargs):
+                attempts.append('mutation-or-network')
+                raise AssertionError('read-only health reached a mutation boundary')
+
+            with monkeypatch.context() as guards:
+                for obj, names in (
+                    (runtime.owner, ('mutate',)), (f['store'], ('commit',)),
+                    (producer, ('_audit_recovery', '_sweep', 'on_market_data')),
+                    (runtime, ('resume_protection_admission', 'repair_protection',
+                               'release_protection_pending')),
+                    (f['broker'], ('_api_get', '_api_post', 'submit_order')),
+                ):
+                    for name in names:
+                        guards.setattr(obj, name, forbidden)
+                first, second = runtime.health(), runtime.health()
+                assert first == second
+                first['protection_producer']['recovery_required']['005930']['reason'] = 'changed copy'
+                first['protection_producer']['retained_decisions']['005930']['decision'][1] = 999
+                first['protection_producer']['resume_dispositions']['synthetic'] = 999
+                owner_copy = runtime.owner.state
+                owner_copy['portfolio']['positions'].clear()
+                assert runtime.health() == second
+                assert snapshot(f) == before
+                assert [getattr(producer, name) for name in fields] == before_ram
+                assert (runtime.owner.published_version, f['engine']._execution_version) == versions
+                assert attempts == []
+                assert f['posts']() == []
+        finally:
+            await f['teardown']()
+    asyncio.run(scenario())
 
 
 def test_market_data_reaches_strategy_without_mutating_owner_publication(tmp_path, monkeypatch):

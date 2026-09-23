@@ -53,6 +53,10 @@ class _ExitManager:
     def __init__(self):
         self.rolled_back = []
 
+    def is_exit_exempt(self, symbol):
+        """이 legacy 대조 표본은 면제 종목이 아니다(main 조회 인터페이스)."""
+        return False
+
     def rollback_stage(self, symbol):
         self.rolled_back.append(symbol)
 

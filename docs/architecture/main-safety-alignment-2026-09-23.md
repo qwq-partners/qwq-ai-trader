@@ -37,16 +37,27 @@
 
 우선 실제 진단 절차를 문서화하고, 별도 함수가 필요한 경우 다음 계약만 구현한다.
 기존 runtime.health와 owner snapshot을 읽는 행위는 복구 실행이 아니다.
+모드는 legacy/attached 외에 partial_install/unsupported_stop을 구분한다. factory가
+owner/live를 복원하고 attach 전에 실패하면 engine 참조가 None이어도 legacy가 아니다.
+설치 결과·기존 객체 동일성·복원/배선 증거가 없으면 모드 미상/차단을 유지한다.
 
 `capture_recovery_snapshot(runtime, *, captured_at)`은 owner/state, runtime.health,
 게시 version을 복사하고 시작/끝 version을 비교한다. 새 네트워크·송신·mutate·commit은
 금지한다. `build_recovery_diagnostic(snapshot)`은 순수·결정적·JSON-safe 분류다.
 계좌·자격·브로커 주문번호·시세 원문은 보고서에 포함하지 않는다.
+내부 캡처를 공유 보고서와 분리하고 whitelist/redaction을 적용한다. whole state/health
+직렬화는 account_scope/order_ref/retained price를 노출하므로 금지한다.
+위 함수명은 **미구현 제안 계약**이며 현재 사용 가능한 API가 아니다. snapshot_stable과
+publication_consistent는 별개다. 같은 owner version이어도 producer/recovery/ingress RAM이
+변할 수 있으므로 관련 투영의 두 복사본/digest 일치 없이는 volatile/insufficient다.
+health.store_healthy는 owner 복합 건강 상태이지 저장소 단독 검사 결과가 아니다.
 
 필수 분류: 게시 version 불일치, 저장 건강 불명, A stale/C abandoned 또는 지속 증거
 부재, 미제출/불일치 보호 감사 결정, admission/RAM/intent/attempt 연결 부족, 수량
 불일치, UNKNOWN BUY, 미확정 cancel child, 관측 미적용 inbox, repair-only/행 없는 실패.
 증거가 없으면 unknown/insufficient이지 정상이나 복구 가능이 아니다.
+A/C는 durable per-symbol 표식이 아니며 당시 승인된 호출 반환 증거가 있어야 귀속한다.
+진단을 위해 resume을 재실행하거나 합계 계수로 source/종목을 추정하지 않는다.
 
 모든 결과에 read_only=true, automatic_action_allowed=false를 둔다. 안정 스냅샷
 두 번과 별도 승인된 브로커 증거를 사람이 대조한다. 결과가 비어도 readiness나

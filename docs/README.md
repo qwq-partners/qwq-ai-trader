@@ -5,6 +5,7 @@
 ## 문서 목록
 
 ### Architecture (아키텍처)
+- [main 안전 동작 정합화](architecture/main-safety-alignment-2026-09-23.md) — legacy/attached 경계·KIS 응답/lease·읽기 전용 진단 계약, 운영 전환과 분리
 - [KR 주문·체결 안전성 상세 설계](superpowers/specs/2026-09-17-engine-execution-safety-design.md) — 사용자 승인; 경제/보호·core 큐 검증, 운영 경로 설치/전체 인수 미완
 - [KR 실행 안전성 구현 계획](superpowers/plans/2026-09-17-engine-execution-safety.md) — Plan–Do–See, 작업 소유권·단계별 검증·잔여 통합 조건
 - [정오 레짐·보호 재생 고정 계약](superpowers/specs/2026-09-20-regime-noon-owner-contract.md) — C3 DTO·source/application·horizon·full 보호 재생 인터페이스, 운영 승인과 구분
@@ -23,6 +24,7 @@
 - [evolution-system.md](evolution/evolution-system.md) — 3계층 메모리, Trade Wiki, 전략 진화, 일일 복기, 품질 검증, 거래 원칙
 
 ### Operations (운영)
+- [보호 수동 복구 진단](operations/protection-recovery-diagnostics.md) — legacy/attached/부분 설치 구분·안정 캡처·증거 분류, 변경/예약 해제/재주문 권한 없음
 - [agent-routing.md](operations/agent-routing.md) — Codex·Claude 전역 배정, Plan–Do–See·통합 동시성·격리/권한 경계와 실제 로딩 검증 범위
 - [퇴역 작업공간 archive/복구](reviews/retired-workspace-archive-2026-09-20.md) — 상시 main·engine 2개, dirty/index/objects 보존·53개 검증·원격7 태그·Claude 인계
 - [Claude 마이그레이션 인계](operations/claude-migration-handoff-2026-09-20.md) — 단일 engine 개발선·C4 완료/운영 미승격·다음 B2/B3 Plan→Do→See·모델/검증/금지 경계
@@ -41,6 +43,7 @@
 
 ### Reviews (리뷰)
 
+- [N2 main 안전 동작 정합화 결과](reviews/main-safety-alignment-2026-09-23.md) — main 계약 RED·26개 특성화 처분·attached heartbeat 차단·독립 리뷰·전체 검증 정본
 - [P1 후속 N1 — 운영 판정·보호 신호 대기 분리](reviews/p1-protection-priority-2026-09-23.md) — 일반 신호의 보호 기아 수정·독립 native/Opus 범위 승인·전체 UTC/KST 각각5386 통과. main 문서-only 동기화·제품 배포/재시작0, 전체 지연/복구·설치 차단 유지
 - [P1 S2~S5 후속 결과 원장](reviews/p1-producer-wiring-2026-09-23.md) — 현재 후보·Plan→Do→See·수정/독립 재현·교차 모델/검증/통합 상태의 정본. 아래 과거의 정책/예산 미답·S2 미착수는 사용자 위임과 후속 계획으로 대체됐다. [다음 개발 순서](operations/p1-next-steps-2026-09-23.md), [실행 계획](superpowers/plans/2026-09-23-p1-producer-wiring.md). 운영 미설치·main 전환은 별도
 - [P1 S1·S1′ 보호 기반 부품](reviews/p1-components-2026-09-23.md) — Plan→Do→See, 신규67·독립 재현의 시험공백/실제 익절 단계 유실 수정·부품 한정 승인, UTC/KST 각 5183 passed·기존 2 xfailed·격리 위반0, 개발 통합 `77a3641`. S2 정책/예산 미답·전체 P1/운영 미완

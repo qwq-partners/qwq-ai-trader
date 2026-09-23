@@ -1,13 +1,14 @@
 """S4-0: runtime 없는 legacy 엔진의 세 경로(90초 SELL 폴백·10분 BUY 정리·eviction) 특성화.
 
-**이 파일은 legacy 불변 대조용이며 옳은 동작의 정의가 아니다.** 아래 현행 결함을 고치지 않고
-그대로 고정한다 — S4 가 이관하지 않는 것을 드러내 두는 것이 목적이다(계획 §4 결정 ④·§6):
+**이 파일은 legacy 특성화이며 옳은 동작 전체의 정의가 아니다.** 09-23 main 정합화에서
+동시호가·exit_exempt 기대값은 main의 수정된 계약으로 명시적으로 교체했다. 남는 한계:
 
-- 동시호가(15:20~15:30)에는 취소만 보내고 재주문이 없다 — 지정가가 그대로 남는다
+- 동시호가(15:20~15:30)에는 취소 없이 원 지정가를 유지한다(기존 결함 수정)
 - 폴백 상한(2회) 뒤에는 취소도 재주문도 없이 `clear_pending` 만 한다 — 원 지정가 방치
 - `submit_order` 예외는 접수 여부를 모른 채 `clear_pending` 한다
-- 10분 BUY 정리는 취소 0건도 최종성으로 읽어 예약(`_reserved_by_order`)까지 푼다
-- 폴백 루프에는 `exit_exempt` 확인이 없다 — 자동매도 금지 종목도 시장가로 나간다
+- 조회 능력이 없는 합성 legacy BUY 브로커는 취소 0건도 예약을 푼다. 실제 추적/조회 능력이
+  있는 브로커의 생존·판단불가·소멸은 test_engine_stale_pending_fixes.py가 별도로 고정한다.
+- exit_exempt는 취소만 시도하고 재주문하지 않는다. 조회 불가는 유지한다(기존 결함 수정).
 - 연쇄 축출이 닫혀 있지 않다 — 같은 배치의 고득점 BUY 두 건이 서로 다른 희생자를 연달아 축출한다
 
 구동은 실제 `UnifiedEngine`(runtime 없음) + 실제 inner `RiskManager` + engine 모듈 naive 시계
@@ -76,6 +77,7 @@ def legacy(monkeypatch, *, broker=None):
     rm._REPLACEMENT_LAST_EVICT_TS = {}
     rm._REPLACEMENT_COOLDOWN_SEC = 600
     rm._exit_exempt_ref = set()
+    rm._exempt_cancel_last_try = {}
     assert engine._execution_runtime is None
     return {'engine': engine, 'rm': rm, 'broker': broker, 'now': now}
 
@@ -178,15 +180,15 @@ def test_the_third_fallback_only_clears_the_pending_and_leaves_the_limit_order(m
     asyncio.run(scenario())
 
 
-def test_in_the_closing_auction_the_cancel_is_sent_and_nothing_is_reordered(monkeypatch):
-    """현행 결함: 15:20~15:30 에는 취소만 나가고 재주문이 없다 — pending 은 그대로 남는다."""
+def test_in_the_closing_auction_the_limit_order_is_kept_without_cancel(monkeypatch):
+    """main 정합화: 재주문 불가 시간에는 원 지정가를 취소하지 않고 pending도 유지한다."""
     async def scenario():
         f = legacy(monkeypatch, broker=Broker())
         f['now'][0] = CLOSING_AUCTION
         hold(f, SYM)
         stale(f['rm'], SYM, side=OrderSide.SELL, now=CLOSING_AUCTION, quantity=30)
         await drive(f['engine'], buy(OTHER))
-        assert kinds(f['broker']) == ['cancel']
+        assert kinds(f['broker']) == []
         rm = f['rm']
         assert rm._pending_timestamps[SYM] == CLOSING_AUCTION - timedelta(seconds=200)
         assert rm._pending_fallback_count[SYM] == 0
@@ -237,24 +239,25 @@ def test_a_cancel_exception_skips_the_reorder_and_keeps_the_pending(monkeypatch)
     asyncio.run(scenario())
 
 
-def test_an_exit_exempt_symbol_is_still_market_sold_by_the_fallback_loop(monkeypatch):
-    """현행 결함: 7개 청산 가드 중 이 루프에는 `_exit_exempt_ref` 확인이 없다."""
+def test_exit_exempt_fallback_only_cancels_and_keeps_unknown_order(monkeypatch):
+    """main 정합화: 조회 능력이 없는 broker의 취소 뒤 생존은 미상. 재주문 없이 유지한다."""
     async def scenario():
         f = legacy(monkeypatch, broker=Broker())
         f['rm']._exit_exempt_ref = {SYM}
         hold(f, SYM)
         stale(f['rm'], SYM, side=OrderSide.SELL, now=ENGINE_NOW, quantity=30)
         await drive(f['engine'], buy(OTHER))
-        assert kinds(f['broker']) == ['cancel', 'submit']
-        assert submitted(f['broker'])[0].symbol == SYM
+        assert kinds(f['broker']) == ['cancel']
+        assert submitted(f['broker']) == []
+        assert SYM in f['rm']._pending_orders
     asyncio.run(scenario())
 
 
-def test_nothing_is_swept_while_no_signal_arrives(monkeypatch):
-    """두 루프는 on_signal 본문 안에만 있다 — 주기 태스크가 아니다(사실 7).
+def test_initial_stale_order_is_not_swept_without_an_event(monkeypatch):
+    """최초 stale 감지는 SIGNAL 의존이며 이 하네스는 하트비트를 보내지 않는다.
 
     이 시험은 엔진을 시작하지 않으므로 구조상 실패할 수 없다 — 주기 태스크의 부재는 이 단언이
-    아니라 소스(stale 루프가 on_signal 본문 밖에 없다)가 뒷받침한다. 의도를 적어 두는 자리다.
+    아니라 소스가 뒷받침한다. 이미 cancel_keep인 SELL의 하트비트 재시도는 main 별도 시험 대상이다.
     """
     async def scenario():
         f = legacy(monkeypatch, broker=Broker())
@@ -270,9 +273,9 @@ def test_nothing_is_swept_while_no_signal_arrives(monkeypatch):
 # ── 10분 BUY 정리 ────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize('cancelled', [0, 3])
-def test_a_stale_buy_is_released_whether_the_cancel_matched_anything_or_not(monkeypatch,
-                                                                            cancelled):
-    """2026-08-04 P1 의 의도된 완화 — 취소 0건과 취소 ACK 를 똑같이 최종성으로 읽는다."""
+def test_a_stale_buy_without_tracking_capability_retains_legacy_release(monkeypatch,
+                                                                         cancelled):
+    """추적·조회 능력 없는 합성 broker의 legacy 호환. 실제 브로커 최종성 증거가 아니다."""
     async def scenario():
         f = legacy(monkeypatch, broker=Broker(cancelled=cancelled))
         rm = f['rm']
@@ -282,7 +285,7 @@ def test_a_stale_buy_is_released_whether_the_cancel_matched_anything_or_not(monk
         rm._pending_strategy[SYM] = 'sepa_trend'
         await drive(f['engine'], buy(OTHER))
         assert kinds(f['broker']) == ['cancel']
-        # 예약·전략·시그널 캐시까지 전부 풀린다 — 취소 0건도 ACK 와 똑같이 읽는다.
+        # 이 fake에는 get_open_orders가 없다. 조회 능력이 있는 브로커 결과로 일반화하지 않는다.
         assert held_in(rm, SYM) == set()
     asyncio.run(scenario())
 

@@ -32,6 +32,7 @@ from .types import (
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.sizing import atr_position_multiplier
+from ..utils.kis_request_metrics import request_source
 
 
 @dataclass
@@ -1093,7 +1094,8 @@ class BatchAnalyzer:
         # 포트폴리오 가드: 재시작 직후 포지션 미로드 대비
         if not self._engine.portfolio.positions and self._broker:
             try:
-                loaded_positions = await self._broker.get_positions()
+                with request_source("batch_guard"):
+                    loaded_positions = await self._broker.get_positions()
                 if loaded_positions:
                     for sym, pos in loaded_positions.items():
                         self._engine.portfolio.positions[sym] = pos
@@ -1925,6 +1927,9 @@ class BatchAnalyzer:
             if p.strategy == "core_holding"
             and sym not in pending_sells
             and sym not in _exclude  # ExitManager/보유기간에서 이미 청산 신호 발행된 종목 제외
+            # 자동매도 금지 종목은 조기경보·stale 대상에서 제외 (CORE-023 — 엔진이 SELL 을 막아도
+            # '즉시 매도' 알림이 30분마다 나가는 오경보를 막는다)
+            and not (self._exit_manager and self._exit_manager.is_exit_exempt(sym))
         ]
         if not core_positions:
             return
@@ -2734,6 +2739,11 @@ class BatchAnalyzer:
 
             # 현재 코어 포지션 확인
             portfolio = self._engine.portfolio
+            # 자동매도 금지 종목은 rebalance_exclude 와 같게 취급 (CORE-023) — 교체 대상에 넣으면
+            # 엔진이 SELL 을 막아 'sold 미체결 → 매수 보류'로 리밸런싱이 묶인다
+            if self._exit_manager:
+                rebalance_exclude |= {s for s in portfolio.positions
+                                      if self._exit_manager.is_exit_exempt(s)}
             current_core = {}
             for sym, pos in portfolio.positions.items():
                 if pos.strategy == "core_holding":

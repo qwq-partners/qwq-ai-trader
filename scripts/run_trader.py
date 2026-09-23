@@ -35,6 +35,7 @@ from src.core.engine import UnifiedEngine, StrategyManager, RiskManager, is_kr_m
 from src.core.types import TradingConfig, Market, MarketSession, Portfolio, RiskConfig
 from src.core.event import EventType
 from src.core.market_context import MarketContext
+from src.utils.kis_request_metrics import with_request_source
 
 
 # ============================================================
@@ -303,6 +304,7 @@ class UnifiedTradingBot:
     # KR 시장 초기화
     # ============================================================
 
+    @with_request_source("startup")
     async def _initialize_kr(self) -> bool:
         """KR 시장 초기화 — ai-trader-v2 TradingBot.initialize()에서 이식"""
         logger.info("[KR] 한국 시장 초기화 시작...")
@@ -648,10 +650,19 @@ class UnifiedTradingBot:
             # 절대 자동매도 금지 종목 복원 (config kr.no_auto_exit_symbols)
             # in-memory exit_exempt는 재시작 시 소실되므로 config에서 매번 복원해 보호 유지.
             _no_auto_exit = kr_cfg.get("no_auto_exit_symbols") or self.config.get("no_auto_exit_symbols") or []
+            # 포지션 키(kis_kr._parse_positions)와 같은 6자리 문자열로 맞춘다 — 따옴표 없이 적은
+            # YAML 정수(87010)는 선행 0 이 사라져 가드가 전부 빗나간다. 000660 처럼 8진수로
+            # 읽힌 값(432)은 복구할 수 없으므로 문자열이 아니면 크게 알린다.
+            if any(not isinstance(_sym, str) for _sym in _no_auto_exit):
+                logger.error(
+                    f"[KR] no_auto_exit_symbols 에 따옴표 없는 값: {_no_auto_exit} — "
+                    f"YAML 이 숫자로 읽어 종목코드가 바뀌었을 수 있다(예: 000660→432). 따옴표로 적을 것"
+                )
+            _no_auto_exit = [str(_sym).zfill(6) for _sym in _no_auto_exit]
             for _sym in _no_auto_exit:
-                self.exit_manager.add_exit_exempt(str(_sym), reason="config: 자동매도 금지")
+                self.exit_manager.add_exit_exempt(_sym, reason="config: 자동매도 금지")
             if _no_auto_exit:
-                logger.info(f"[KR] 자동매도 금지 종목 복원: {[str(s) for s in _no_auto_exit]}")
+                logger.info(f"[KR] 자동매도 금지 종목 복원: {_no_auto_exit}")
 
             # RiskManager에 ExitManager 참조 주입 (max_positions 가중 카운트용, 2026-05-06)
             if self.risk_manager and self.exit_manager:
@@ -1704,6 +1715,7 @@ class UnifiedTradingBot:
     # KR 헬퍼 메서드 (KRScheduler가 접근하는 인터페이스)
     # ============================================================
 
+    @with_request_source("startup")
     async def _load_existing_positions(self):
         """KIS API에서 기존 보유 종목 로드"""
         if not self.broker:

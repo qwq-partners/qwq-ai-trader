@@ -179,7 +179,7 @@ def test_session_and_division_match_real_broker_without_io(monkeypatch, hour, mi
     original = order(side=side)
     request = submit(order=original, session=session(hour, minute, name))
     assert broker._get_current_market_session() == name
-    assert request.tr_id == broker._get_tr_id_for_session(side)
+    assert request.tr_id == broker._get_tr_id_for_session(side, use_new=False)
     assert request.body()['ORD_DVSN'] == broker._get_order_division(original)
     assert request.body()['SLL_TYPE'] == ('01' if side is OrderSide.SELL else '')
     assert ('AFHR_FLPR_YN' in request.body()) == (name in ('pre_market', 'next_market'))
