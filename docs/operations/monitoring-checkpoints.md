@@ -6,11 +6,12 @@
 
 ## 활성 체크포인트
 
-### 2026-09-23 — 호출 계측·매도 원인·지수 신선도 (미배포)
+### 2026-09-23 — 호출 계측·매도 원인·지수 신선도 (09-23 23:18 KST 배포, PID2386785)
 
-- [ ] 배포가 별도 승인된 뒤 기존 `/api/health`의 `broker.kis_requests` 확인:
-  available=true, scope=kr_broker_get, window=process_lifetime. 같은 프로세스의
-  두 스냅샷 차분으로 TTTC8434R source별 attempts/retries/egw00215 비교.
+- [x] 배포 후 `/api/health`의 `broker.kis_requests` 확인: available=true, scope=kr_broker_get,
+  window=process_lifetime. TTTC8434R는 startup1+sync2, retries0, EGW0이었다.
+- [ ] 다음 자연 이벤트에서 호출 주체별 거절률을 확인한다. 같은 프로세스의 두 스냅샷 차분으로
+  TTTC8434R source별 attempts/retries/egw00215를 비교한다.
   캐시 계수는 positions만 해당하며 logical 호출 수와 HTTP 전송 수를 더하지 않는다.
 - [ ] broker/limiter 경고 중복을 제외한다. 09-23 기준202줄=101건이었다.
   운영 관측 전에는 보유 종목 증가나 특정 호출자를 원인으로 확정하지 않는다.
@@ -21,7 +22,10 @@
   neutral 호환 폴백은 매수 차단 보장이 아니다.
 - [ ] 동일 만료 macro 자료는 재시작 후 요약1회만 경고하고 계속 무시하는지 확인.
   만료 파일의 값·유효기간·설정을 바꾸지 않는다.
-- 근거와 미지원 범위: [09-23 보고서](../reviews/operational-findings-2026-09-23.md).
+- [ ] macro expiry warning 0은 경로 미관측으로 미검증이다. 다음 자연 발생 이벤트에서
+  LLM sell reason/freshness/macro repeat-check를 확인한다. 시험 주문은 금지한다.
+- 근거와 미지원 범위: [09-23 제한 릴리스 원장](release-2026-09-23.md),
+  [09-23 보고서](../reviews/operational-findings-2026-09-23.md).
 
 ### 배포 후 (매수 재개 시점부터 유효) — 분할 매도 취소 실패 처리 (2026-09-21 수정, **2026-09-22 00:51 KST 배포** main `2358936`·PID1453603)
 
