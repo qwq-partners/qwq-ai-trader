@@ -20,6 +20,20 @@ from src.execution.safety.recovery_projection import (
 )
 
 
+def canonical_protection(with_position=False):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from src.core.types import Position
+    from src.execution.safety.protection import encode_protection
+    from src.strategies.exit_manager import ExitManager
+    now = datetime(2026, 9, 24, tzinfo=timezone.utc)
+    manager = ExitManager(market="KR", persist=False, clock=lambda: now)
+    if with_position:
+        manager.register_position(Position("S", quantity=1, avg_price=Decimal("10"),
+                                           current_price=Decimal("10"), entry_time=now))
+    return encode_protection(manager)
+
+
 def checkpoint(rows: int = 1):
     attempts, intents, outbox = {}, {}, {}
     for number in range(rows):
@@ -37,11 +51,7 @@ def checkpoint(rows: int = 1):
     return {
         "attempts": attempts, "intents": intents, "inbox": {}, "outbox": outbox,
         "portfolio": {"positions": {}},
-        "protection": {"schema": 1, "market": "KR", "config": {"stop": 10.0}, "states": {},
-                       "entry_times": {}, "exit_exempt": [], "max_holding_days": 5.0,
-                       "current_regime": "neutral", "intraday_crash_level": "normal",
-                       "integrity_reset_symbols": [], "degraded": {}, "orders": {},
-                       "pending_owners": {}},
+        "protection": canonical_protection(),
         "protection_quote_admissions": {}, "latest_explicit_quote": {}, "quote_price_views": {},
         "day_valuation_view": {}, "day_valuations": {},
     }
@@ -259,6 +269,9 @@ def test_cooperative_full_build_does_not_stall_event_loop_over_50ms():
             if "noisy_host_inconclusive" not in outcome.stdout:
                 break
         assert outcome.returncode == 0, outcome.stdout + outcome.stderr
+        for line in outcome.stdout.splitlines():
+            if line.startswith("{"):
+                print(line)
         return
     state = checkpoint(5_000)
     async def run():
@@ -480,36 +493,51 @@ def test_query_source_use_inventory_covers_every_durable_dependency_or_exclusion
     assert not ({"market_sources", "entry_quotes"} & actual)
 
 
-@pytest.mark.parametrize("field,first,second", [
-    ("config", {"stop": 10.0}, {"stop": 11.0}),
-    ("states", {"000000": {"remaining_quantity": 1}}, {"000000": {"remaining_quantity": 2}}),
-    ("entry_times", {"000000": "2026-09-23"}, {"000000": "2026-09-24"}),
-    ("exit_exempt", ["000000"], []), ("max_holding_days", 5.0, 6.0),
-    ("current_regime", "neutral", "bull"), ("intraday_crash_level", "normal", "crash"),
-    ("integrity_reset_symbols", ["000000"], []),
-    ("degraded", {"000000": {"quantity": 1, "reason": "a"}}, {"000000": {"quantity": 2, "reason": "b"}}),
-    ("orders", {"order": {"symbol": "000000", "quantity": 1}}, {"order": {"symbol": "000000", "quantity": 2}}),
-    ("pending_owners", {"000000": "intent-0"}, {"000000": "other"}),
+@pytest.mark.parametrize("field", [
+    "config", "states", "entry_times", "exit_exempt", "max_holding_days", "current_regime",
+    "intraday_crash_level", "integrity_reset_symbols", "degraded", "orders", "pending_owners",
 ])
-def test_every_protection_input_add_update_delete(field, first, second):
-    state = checkpoint()
+def test_every_protection_input_add_update_delete(field):
+    from copy import deepcopy
+    from datetime import datetime, timezone
+    from src.execution.safety.protection import decode_protection
+    state = checkpoint(0)
+    state["protection"] = canonical_protection(with_position=True)
+    state["portfolio"]["positions"] = {"S": {"quantity": 1}}
+    root = state["protection"]
+    first_state = root["states"]["S"]
+    order = {"symbol": "S", "side": "SELL", "intent_id": "intent-0", "kind": "exit",
+             "base_quantity": 1, "cumulative_quantity": 0, "reset_applied": False}
+    first, second = {
+        "config": ({**root["config"], "stop_loss_pct": 10.0}, {**root["config"], "stop_loss_pct": 11.0}),
+        "states": ({"S": first_state}, {"S": {**first_state, "remaining_quantity": 0}}),
+        "entry_times": ({"S": "2026-09-23T00:00:00+00:00"}, {"S": "2026-09-24T00:00:00+00:00"}),
+        "exit_exempt": (["S"], []), "max_holding_days": (5, 6),
+        "current_regime": ("neutral", "trending_bull"), "intraday_crash_level": ("normal", "crash"),
+        "integrity_reset_symbols": (["S"], []),
+        "degraded": ({"S": {"quantity": 1, "reason": "a"}}, {"S": {"quantity": 2, "reason": "b"}}),
+        "orders": ({"order": order}, {"order": {**order, "cumulative_quantity": 1}}),
+        "pending_owners": ({"S": "intent-0"}, {"S": "other"}),
+    }[field]
     snapshots = []
     for value in (first, second, None):
         if value is None:
             state["protection"].pop(field, None)
         else:
-            state["protection"][field] = value
+            state["protection"][field] = deepcopy(value)
+            decode_protection(state["protection"], clock=lambda: datetime(2026, 9, 24, tzinfo=timezone.utc))
         index = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index
-        selected = thaw_checkpoint_facts(index.protection_quote_input("000000"))[field]
+        assert index.complete is (value is not None)
+        selected = thaw_checkpoint_facts(index.protection_quote_input("S"))[field]
         expected = value
         if field in ("states", "entry_times", "degraded", "pending_owners"):
-            expected = None if value is None else value.get("000000")
+            expected = None if value is None else value.get("S")
         elif field == "orders":
             expected = [] if value is None else list(value.values())
         elif field in ("exit_exempt", "integrity_reset_symbols"):
             expected = [] if value is None else value
         assert selected == expected
-        snapshots.append(index.protection_quote_input("000000"))
+        snapshots.append(index.protection_quote_input("S"))
     assert snapshots[0][field] != snapshots[1][field]
 
 
@@ -753,3 +781,193 @@ def test_valid_quote_admission_without_intent_is_complete():
     result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1))
     assert result.index.complete
     assert result.index.admission("quote:one").intent_id is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("entry_times", {"S": True}), ("max_holding_days", True), ("max_holding_days", -1),
+    ("current_regime", "unsupported"), ("intraday_crash_level", "unsupported"),
+    ("config_missing", None), ("config_extra", None), ("config_bool_numeric", True),
+])
+def test_canonical_protection_rejection_never_certifies_producer_complete(field, value):
+    from datetime import datetime, timezone
+    from src.execution.safety.protection import decode_protection
+    state = checkpoint(0)
+    dto = state["protection"]
+    clock = lambda: datetime(2026, 9, 24, tzinfo=timezone.utc)
+    decode_protection(dto, clock=clock)
+    assert build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index.complete
+    if field == "config_missing":
+        dto["config"].pop("stop_loss_pct")
+    elif field == "config_extra":
+        dto["config"]["extra"] = 1
+    elif field == "config_bool_numeric":
+        dto["config"]["stop_loss_pct"] = value
+    else:
+        dto[field] = value
+    with pytest.raises(ValueError):
+        decode_protection(dto, clock=clock)
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1))
+    assert not result.index.complete
+    assert not result.projection.complete
+    assert any(row.category == "protection" for row in result.index.invalid_facts())
+
+
+def test_canonical_protection_valid_root_variants_remain_complete():
+    from datetime import datetime, timezone
+    from src.execution.safety.protection import decode_protection, encode_protection
+    state = checkpoint(0)
+    dto = state["protection"]
+    dto.update(entry_times={"S": "2026-09-24T10:00:00+09:00"}, max_holding_days=0,
+               current_regime="neutral", intraday_crash_level="severe")
+    dto["config"]["stop_loss_pct"] = 10.0
+    decoded = decode_protection(dto, clock=lambda: datetime(2026, 9, 24, tzinfo=timezone.utc))
+    assert encode_protection(decoded) == dto
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1))
+    assert result.index.complete and result.projection.complete
+    assert thaw_checkpoint_facts(result.index.protection_quote_input("S"))["config"] == dto["config"]
+
+
+@pytest.mark.parametrize("symbol", ["", " bad ", "valid-symbol"])
+def test_explicit_quote_symbol_identity_matches_canonical_validator(symbol):
+    from src.execution.safety.runtime import KRExecutionRuntime
+    from src.execution.safety.protection_recovery import digest
+    state = checkpoint(0)
+    row = explicit_quote()
+    runtime = object.__new__(KRExecutionRuntime)
+    row["payload_digest"] = digest(runtime._market_quote_payload(symbol, row))
+    state["latest_explicit_quote"][symbol] = row
+    if symbol == "valid-symbol":
+        runtime._validate_explicit_quotes(state, 4)
+    else:
+        with pytest.raises(ValueError):
+            runtime._validate_explicit_quotes(state, 4)
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 4))
+    assert result.index.complete is (symbol == "valid-symbol")
+    assert result.projection.complete is (symbol == "valid-symbol")
+
+
+def test_none_pending_owner_and_intentless_admission_match_n3_fail_closed():
+    from src.execution.safety.protection_recovery import digest
+    state = checkpoint(0)
+    request = {"symbol": "S", "price": "10", "market_data": {}, "intent_id": None,
+               "observed_at": "2026-09-24T10:00:00+09:00", "market_as_of": None,
+               "source": None, "source_event_id": None}
+    state["protection_quote_admissions"]["quote:one"] = {
+        **request, "payload_digest": digest(request), "status": "RECEIVED", "source_version": 1,
+        "admitted_at": request["observed_at"]}
+    state["protection"]["pending_owners"] = {"S": None}
+    assert owner_oracle(state) == {}
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1))
+    assert dict(result.projection.findings) == {}
+    assert not result.index.complete and not result.projection.complete
+    assert any(row.category == "pending_owner" for row in result.index.invalid_facts())
+
+
+def test_randomized_pending_admission_boundary_matches_uncapped_n3():
+    import random
+    rng = random.Random(40924)
+    for _ in range(1000):
+        state = checkpoint(2)
+        identities = [None, "intent-0", "intent-1", "missing"]
+        state["protection"]["pending_owners"] = {
+            symbol: rng.choice(identities) for symbol in ("S", "000000", "000001") if rng.randrange(2)}
+        state["protection_quote_admissions"] = {
+            command: {"symbol": rng.choice(["S", "000000", "000001"]), "intent_id": rng.choice(identities)}
+            for command in ("audit-0", "audit-1", "quote:one") if rng.randrange(2)}
+        result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 4))
+        assert dict(result.projection.findings) == owner_oracle(state)
+
+
+@pytest.mark.parametrize("rows", [5_000, 100_000, "long_protection_row"])
+@pytest.mark.parametrize("automatic_gc", [True, False], ids=["normal_gc", "controlled_work"])
+def test_every_real_advance_call_including_finalization_stays_below_5ms(rows, automatic_gc):
+    """Separate unpreemptible GC from controllable work; never forgive a seal."""
+    import gc
+    import os
+    import subprocess
+    import sys
+    import time
+    from src.execution.safety.recovery_projection import RecoveryBuildSession
+    if not os.environ.get("RECOVERY_SLICE_CELL"):
+        mode = "normal_gc" if automatic_gc else "controlled_work"
+        node = f"{__file__}::test_every_real_advance_call_including_finalization_stays_below_5ms[{mode}-{rows}]"
+        for _ in range(2):
+            outcome = subprocess.run([sys.executable, "-m", "pytest", node, "-q", "-s", "-p", "no:cacheprovider"],
+                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": "UTC",
+                     "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                     "RECOVERY_SLICE_CELL": "1"}, capture_output=True, text=True, timeout=30)
+            if "noisy_host_inconclusive" not in outcome.stdout:
+                break
+        assert outcome.returncode == 0, outcome.stdout + outcome.stderr
+        for line in outcome.stdout.splitlines():
+            if line.startswith("{"):
+                print(line)
+        return
+    state = checkpoint(0 if rows == "long_protection_row" else rows)
+    if rows == "long_protection_row":
+        from datetime import datetime, timezone
+        from src.execution.safety.protection import decode_protection
+        state["protection"] = canonical_protection(with_position=True)
+        state["portfolio"]["positions"] = {"S": {"quantity": 1}}
+        state["protection"]["states"]["S"]["exit_history"] = [
+            {"timestamp": "2026-09-24T00:00:00+00:00", "action": "sell_partial",
+             "quantity": 1, "reason": "history", "remaining_before": 1} for _ in range(10000)]
+        decode_protection(state["protection"], clock=lambda: datetime(2026, 9, 24, tzinfo=timezone.utc))
+    thresholds = gc.get_threshold()
+    assert gc.isenabled()
+    async def run():
+        loop = asyncio.get_running_loop()
+        baseline = []
+        started = loop.time()
+        while loop.time() - started < .250:
+            deadline = loop.time() + .001
+            future = loop.create_future()
+            loop.call_at(deadline, future.set_result, None)
+            await future
+            baseline.append(loop.time() - deadline + .001)
+        assert max(baseline) <= .025, "noisy_host_inconclusive"
+        session = RecoveryBuildSession(detach_checkpoint(state), token=OwnerToken("a", 0, 0, 1))
+        measurements, collections = [], []
+        gc_started = {}
+        collected_seconds = 0.0
+        def observe_gc(phase, info):
+            nonlocal collected_seconds
+            generation = info["generation"]
+            if phase == "start":
+                gc_started[generation] = time.perf_counter()
+            else:
+                duration = time.perf_counter() - gc_started[generation]
+                collections.append((generation, duration))
+                collected_seconds += duration
+        gc.callbacks.append(observe_gc)
+        if not automatic_gc:
+            # Harness-only isolation, never a product workaround. Normal-GC
+            # slices and the separate strict 50 ms heartbeat remain required.
+            gc.disable()
+        try:
+            while session.result is None:
+                phase = session.phase
+                before_gc = collected_seconds
+                started = time.perf_counter()
+                examined = session.advance()
+                elapsed = time.perf_counter() - started
+                during_gc = collected_seconds - before_gc
+                measurements.append((elapsed, elapsed - during_gc, phase, session.phase, examined, during_gc))
+                assert examined <= 256
+                await asyncio.sleep(0)
+            assert gc.isenabled() is automatic_gc
+        finally:
+            if not automatic_gc:
+                gc.enable()
+            gc.callbacks.remove(observe_gc)
+        print({"rows": rows, "automatic_gc": automatic_gc, "baseline_max": max(baseline),
+               "advance_max": max(measurements), "controlled_max": max(row[1] for row in measurements),
+               "finalization": measurements[-1], "over_5ms_count": sum(row[0] >= .005 for row in measurements),
+               "controlled_overruns": [row for row in measurements if row[1] >= .005],
+               "gc_max": max(collections, key=lambda row: row[1], default=None)})
+        assert session.result.index.complete
+        assert gc.isenabled() and gc.get_threshold() == thresholds
+        # A wall overrun is permitted only for GC overlapping that exact call.
+        assert max(row[1] for row in measurements) < .005
+        assert all(row[0] < .005 or row[5] > 0 for row in measurements)
+    asyncio.run(run())

@@ -7,12 +7,13 @@ incremental replacements rather than using this builder on their hot path.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import inspect
 import heapq
+from itertools import chain
 import marshal
 import math
 import time
@@ -25,7 +26,81 @@ from .market_source import validate_price_views
 from decimal import Decimal, InvalidOperation
 from .reservations import has_remaining_reservation
 from .protection_recovery import digest
-from .protection import _state_from_dict
+from .protection import (
+    _STATE_FIELDS, _state_from_dict, _time as _protection_time, _validate as _validate_protection,
+)
+
+
+class _BuildMap(MutableMapping):
+    """Bound dictionary resize/copy work during large cooperative builds.
+
+    Fixed hash shards keep a single insertion from resizing the whole retained
+    history. A frozen proxy can take ownership without merging the shards.
+    Iteration order is internal only; public ordered buckets are built from the
+    original checkpoint's order (or explicitly sorted).
+    """
+    __slots__ = ("_shards", "_size", "_pop_shard")
+
+    def __init__(self):
+        self._shards = [None] * 256
+        self._size, self._pop_shard = 0, 0
+
+    def __getitem__(self, key):
+        shard = self._shards[hash(key) & 255]
+        if shard is None:
+            raise KeyError(key)
+        return shard[key]
+
+    def get(self, key, default=None):
+        shard = self._shards[hash(key) & 255]
+        return default if shard is None else shard.get(key, default)
+
+    def setdefault(self, key, default=None):
+        shard = self._shards[hash(key) & 255]
+        if shard is None:
+            shard = self._shards[hash(key) & 255] = {}
+        before = len(shard)
+        value = shard.setdefault(key, default)
+        self._size += len(shard) - before
+        return value
+
+    def __setitem__(self, key, value):
+        shard = self._shards[hash(key) & 255]
+        if shard is None:
+            shard = self._shards[hash(key) & 255] = {}
+        if key not in shard:
+            self._size += 1
+        shard[key] = value
+
+    def __delitem__(self, key):
+        del self._shards[hash(key) & 255][key]
+        self._size -= 1
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        for shard in self._shards:
+            if shard:
+                yield from shard
+
+    def items(self):
+        for shard in self._shards:
+            if shard:
+                yield from shard.items()
+
+    def values(self):
+        for shard in self._shards:
+            if shard:
+                yield from shard.values()
+
+    def popitem(self):
+        if not self._size:
+            raise KeyError("empty_build_map")
+        while not self._shards[self._pop_shard]:
+            self._pop_shard = (self._pop_shard + 1) & 255
+        self._size -= 1
+        return self._shards[self._pop_shard].popitem()
 
 
 class FrozenMap(Mapping[str, "FrozenJSON"]):
@@ -80,6 +155,12 @@ class FrozenKeyMap(Mapping[object, int]):
     def __init__(self, values: Mapping[object, int]):
         object.__setattr__(self, "_values", MappingProxyType(dict(values)))
 
+    @classmethod
+    def _take_owned(cls, values):
+        result = object.__new__(cls)
+        object.__setattr__(result, "_values", MappingProxyType(values))
+        return result
+
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("FrozenKeyMap is immutable")
 
@@ -97,6 +178,9 @@ class FrozenKeyMap(Mapping[object, int]):
 
 
 FrozenJSON: TypeAlias = str | int | float | bool | None | tuple["FrozenJSON", ...] | FrozenMap
+_EMPTY_MAP = FrozenMap._take_owned({})
+_ORDER_STATES = frozenset(value.value for value in OrderState)
+_SLICE_BOUNDARY = object()
 
 
 class RecoveryProjectionMode(Enum):
@@ -439,7 +523,7 @@ def _classify_steps(state):
     pending = _mapping(protection.get('pending_owners'))
     episodes = {} if producer is None else _mapping(producer['_episodes'])
     admissions = _mapping(state.get('protection_quote_admissions', {}))
-    members, admissions_by_intent, pending_by_intent = {}, {}, {}
+    members, admissions_by_intent, pending_by_intent = _BuildMap(), _BuildMap(), _BuildMap()
     malformed_admissions = False
     for identity, row in intents.items():
         yield
@@ -453,8 +537,12 @@ def _classify_steps(state):
         yield
         if type(row) is not dict:
             malformed_admissions = True
-        elif type(row.get('intent_id')) is str:
-            admissions_by_intent.setdefault(row['intent_id'], []).append((rank, command, row))
+        elif row.get('intent_id') is None or type(row.get('intent_id')) is str:
+            admissions_by_intent.setdefault(row.get('intent_id'), []).append((rank, command, row))
+        else:
+            # N3 compares even malformed scalar identities. Keep its full scan
+            # on unsupported index keys instead of silently losing a match.
+            malformed_admissions = True
     for symbol, identity in pending.items():
         yield
         if type(identity) is str:
@@ -472,7 +560,7 @@ def _classify_steps(state):
             kind, side = row.get('kind'), row.get('side')
             if kind not in ('submit', 'cancel', 'modify') or side not in ('buy', 'sell'):
                 raise ValueError('invalid_evidence')
-            if (row.get('state') not in tuple(value.value for value in OrderState)
+            if (row.get('state') not in _ORDER_STATES
                     or row.get('command_status') not in (None, 'not_sent', 'acknowledged', 'rejected', 'unknown')):
                 raise ValueError('invalid_evidence')
             observed = _integer(row.get('observed_quantity'))
@@ -583,10 +671,10 @@ def _classify_steps(state):
                         add('protection_link_inconsistent')
             relevant_admissions = admissions.items()
             if not malformed_admissions:
-                relevant_admissions = [(key, value) for _, key, value in admissions_by_intent.get(identity, ())]
+                relevant_admissions = ((key, value) for _, key, value in admissions_by_intent.get(identity, ()))
                 direct = admissions.get(command)
                 if direct is not None and direct.get('intent_id') != identity:
-                    relevant_admissions.append((command, direct))
+                    relevant_admissions = chain(relevant_admissions, ((command, direct),))
             for admission_key, admission in relevant_admissions:
                 yield
                 if admission_key == command or admission.get('intent_id') == identity:
@@ -646,16 +734,15 @@ def _classify_steps(state):
         if producer['_stats'].get('invariant_violation') is not None:
             repair_count += 1
     add('repair_only', repair_count)
+    for temporary in (members, admissions_by_intent, pending_by_intent):
+        yield from _clear_steps(temporary)
     return counts
 
 
 def _join_steps(frozen: FrozenJSON, *, token: OwnerToken) -> OwnerRecoveryJoinView:
     _require_token(token)
     state = _fmap(frozen)
-    audits: dict[str, int] = {}
-    audit_keys: dict[tuple[str, str, tuple[FrozenJSON, ...]], int] = {}
-    unsubmitted: dict[str, int] = {}
-    pending: dict[str, list[str]] = {}
+    audits, audit_keys, unsubmitted, pending = _BuildMap(), _BuildMap(), _BuildMap(), _BuildMap()
     complete = True
     intents = _fmap(state.get("intents"))
     admissions = _fmap(state.get("protection_quote_admissions"))
@@ -693,7 +780,7 @@ def _join_steps(frozen: FrozenJSON, *, token: OwnerToken) -> OwnerRecoveryJoinVi
             pending.setdefault(intent, []).append(symbol)
         else:
             complete = False
-    pairs, pending_frozen = {}, {}
+    pairs, pending_frozen = _BuildMap(), _BuildMap()
     for intent, symbols in pending.items():
         yield
         for symbol in symbols:
@@ -701,9 +788,11 @@ def _join_steps(frozen: FrozenJSON, *, token: OwnerToken) -> OwnerRecoveryJoinVi
             if intent not in intents and (symbol, intent) not in admission_pairs:
                 pairs[symbol, intent] = 1
         pending_frozen[intent] = tuple(sorted(symbols))
-    return OwnerRecoveryJoinView(token, complete, FrozenMap._trusted(audits), FrozenKeyMap(audit_keys),
-                                 FrozenMap._trusted(unsubmitted), FrozenKeyMap(pairs),
-                                 FrozenMap._trusted(pending_frozen))
+    for temporary in (admission_intents, admission_pairs, pending):
+        yield from _clear_steps(temporary)
+    return OwnerRecoveryJoinView(token, complete, FrozenMap._take_owned(audits), FrozenKeyMap._take_owned(audit_keys),
+                                 FrozenMap._take_owned(unsubmitted), FrozenKeyMap._take_owned(pairs),
+                                 FrozenMap._take_owned(pending_frozen))
 
 
 def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIndex:
@@ -725,11 +814,10 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
         if not isinstance(row, FrozenMap) or row.get("status") not in ("APPLIED", "SUPERSEDED", "RECEIVED"):
             bad("inbox", identity)
 
-    attempts_by_symbol: dict[str, list[AttemptFact]] = {}
-    attempts_by_intent: dict[str, list[AttemptFact]] = {}
+    attempts_by_symbol, attempts_by_intent = _BuildMap(), _BuildMap()
     active_buys: set[str] = set()
     raw_attempts, raw_intents = _fmap(state.get("attempts")), _fmap(state.get("intents"))
-    memberships = {}
+    memberships = _BuildMap()
     for identity, row in raw_intents.items():
         yield
         ids = _fmap(row).get("attempt_ids")
@@ -765,8 +853,7 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
                 and (fact.state not in TERMINAL_STATES or _remaining(data))):
             active_buys.add(fact.symbol)
 
-    intents: dict[str, IntentFact] = {}
-    intents_by_symbol: dict[str, list[IntentFact]] = {}
+    intents, intents_by_symbol = _BuildMap(), _BuildMap()
     for identity, row in raw_intents.items():
         yield
         if not isinstance(row, FrozenMap):
@@ -795,9 +882,9 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
             matching = raw_attempts.get(attempt_id)
             if not isinstance(matching, FrozenMap) or matching.get("intent_id") != identity:
                 bad("intent", identity)
+    yield from _clear_steps(memberships)
 
-    audits_by_intent: dict[str, list[AuditFact]] = {}
-    audits_by_symbol: dict[str, list[AuditFact]] = {}
+    audits_by_intent, audits_by_symbol = _BuildMap(), _BuildMap()
     for command, row in _fmap(state.get("outbox")).items():
         yield
         if not isinstance(row, FrozenMap):
@@ -822,9 +909,7 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
         if fact.symbol is not None:
             audits_by_symbol.setdefault(fact.symbol, []).append(fact)
 
-    admissions_by_intent: dict[str, list[AdmissionFact]] = {}
-    admissions_by_symbol: dict[str, list[AdmissionFact]] = {}
-    admissions_by_command: dict[str, AdmissionFact] = {}
+    admissions_by_intent, admissions_by_symbol, admissions_by_command = _BuildMap(), _BuildMap(), _BuildMap()
     admission_heap = []
     for command, row in _fmap(state.get("protection_quote_admissions")).items():
         yield
@@ -846,6 +931,22 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
             admissions_by_symbol.setdefault(fact.symbol, []).append(fact)
 
     protection = _fmap(state.get("protection"))
+    # Delegate the complete scalar/config/root contract to the canonical
+    # decoder's validator. Collections are examined separately, one row at a
+    # time; validating the entire protection history here would not yield.
+    header = {}
+    for name, value in protection.items():
+        yield
+        if name in ("states", "entry_times", "degraded", "orders", "pending_owners"):
+            header[name] = {}
+        elif name in ("exit_exempt", "integrity_reset_symbols"):
+            header[name] = []
+        else:
+            header[name] = thaw_checkpoint_facts(value)
+    try:
+        _validate_protection(header)
+    except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
+        bad("protection", None, "invalid_canonical_root")
     for name in ("config", "states", "entry_times", "degraded", "orders", "pending_owners"):
         yield
         if not isinstance(protection.get(name), FrozenMap):
@@ -863,18 +964,26 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
                 bad("protection", name, "malformed_set")
             else:
                 seen.add(value)
-    protection_by_symbol = {}
+    protection_by_symbol = _BuildMap()
     for symbol, row in _fmap(protection.get("states")).items():
         yield
         if _text(symbol) is None or not isinstance(row, FrozenMap):
             bad("protection", symbol, "malformed")
         else:
             protection_by_symbol[symbol] = ProtectionFact(symbol, row)
-            if not _valid_protection(symbol, row):
+            if not (yield from _valid_protection_steps(symbol, row)):
                 bad("protection", symbol, "malformed")
+            if symbol not in _fmap(protection.get("entry_times")) and symbol not in _fmap(protection.get("degraded")):
+                bad("protection", symbol, "missing_entry_time")
+    for symbol, value in _fmap(protection.get("entry_times")).items():
+        yield
+        try:
+            _identity(symbol)
+            _protection_time(value)
+        except (ValueError, TypeError, OverflowError):
+            bad("protection", symbol, "invalid_entry_time")
     pending_owners = _fmap(protection.get("pending_owners"))
-    pending_by_intent: dict[str, list[str]] = {}
-    pending_owner_values = {}
+    pending_by_intent, pending_owner_values = _BuildMap(), _BuildMap()
     for symbol, intent in pending_owners.items():
         yield
         if _text(symbol) is None or _text(intent) is None:
@@ -890,7 +999,7 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
         if _text(symbol) is None or not isinstance(row, FrozenMap):
             bad("position", symbol, "malformed")
     orders = _fmap(protection.get("orders"))
-    orders_by_symbol = {}
+    orders_by_symbol = _BuildMap()
     for identity, row in orders.items():
         yield
         if not isinstance(row, FrozenMap) or _text(row.get("symbol")) is None:
@@ -921,7 +1030,7 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
         for symbol in source:
             yield
             symbols.add(symbol)
-    inputs = {}
+    inputs = _BuildMap()
     for symbol in symbols:
         yield
         if _text(symbol) is not None:
@@ -929,7 +1038,7 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
     day_view = _fmap(state.get("day_valuation_view"))
     selected = _fmap(_fmap(state.get("day_valuations")).get(day_view.get("evidence_id")))
     prices = _fmap(selected.get("payload")).get("prices", ())
-    day_prices = {}
+    day_prices = _BuildMap()
     if type(prices) is not tuple:
         bad("quote", None, "malformed_day_prices")
         prices = ()
@@ -943,7 +1052,7 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
             day_prices[row["symbol"]] = row
     if day_view.get("evidence_id") is not None and not selected:
         bad("quote", None, "missing_day_valuation")
-    quotes = {}
+    quotes = _BuildMap()
     quote_symbols = set()
     for source in (explicit, quote_views, day_prices):
         for symbol in source:
@@ -990,26 +1099,56 @@ def _index_steps(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRecoveryIn
     buckets = []
     for source in (attempts_by_symbol, attempts_by_intent, intents_by_symbol, audits_by_intent,
                    audits_by_symbol, admissions_by_intent, admissions_by_symbol, pending_by_intent):
-        converted = {}
         for key, rows in source.items():
             yield
-            converted[key] = tuple(rows)
-        buckets.append(FrozenMap._trusted(converted))
+            source[key] = tuple(rows)
+        buckets.append(FrozenMap._take_owned(source))
     ordered_admissions = []
     while admission_heap:
         yield
         ordered_admissions.append(heapq.heappop(admission_heap)[2])
+    pending_recovery = yield from _sorted_steps(pending_owners)
+    open_buys = yield from _sorted_steps(active_buys)
+    recovery = yield from _sorted_steps(active_recovery)
+    # Seals take ownership in O(1); do not copy the entire 100k-key index at
+    # finalization. Scratch containers are released incrementally as well.
+    for temporary in (symbols, quote_symbols, day_prices, orders_by_symbol,
+                      active_buys, active_recovery, exempt, reset):
+        yield from _clear_steps(temporary)
     data = _IndexData(
-        buckets[0], buckets[1], FrozenMap._trusted(intents),
+        buckets[0], buckets[1], FrozenMap._take_owned(intents),
         buckets[2], buckets[3], buckets[4],
-        buckets[5], buckets[6], FrozenMap._trusted(admissions_by_command),
+        buckets[5], buckets[6], FrozenMap._take_owned(admissions_by_command),
         tuple(ordered_admissions),
         buckets[7],
-        FrozenMap._trusted(pending_owner_values),
-        FrozenMap._trusted(protection_by_symbol), FrozenMap._trusted(inputs), FrozenMap._trusted(quotes), tuple(sorted(pending_owners)),
-        tuple(sorted(active_buys)), tuple(sorted(active_recovery)), tuple(invalid), bool(_fmap(protection.get("degraded"))),
+        FrozenMap._take_owned(pending_owner_values),
+        FrozenMap._take_owned(protection_by_symbol), FrozenMap._take_owned(inputs), FrozenMap._take_owned(quotes), pending_recovery,
+        open_buys, recovery, tuple(invalid), bool(_fmap(protection.get("degraded"))),
     )
     return ProducerRecoveryIndex(token, not invalid, data)
+
+
+def _clear_steps(values):
+    """Release scratch objects between deadlines, including nested buckets."""
+    while values:
+        yield
+        if isinstance(values, MutableMapping):
+            _, child = values.popitem()
+            if type(child) in (list, set, dict) or isinstance(child, _BuildMap):
+                yield from _clear_steps(child)
+        else:
+            values.pop()
+
+
+def _sorted_steps(values):
+    heap, ordered = [], []
+    for value in values:
+        yield
+        heapq.heappush(heap, value)
+    while heap:
+        yield
+        ordered.append(heapq.heappop(heap))
+    return tuple(ordered)
 
 
 
@@ -1086,13 +1225,20 @@ class RecoveryBuildSession:
         self.phase = "freeze"
         yield
         frozen = yield from _freeze_steps(state)
-        del state
         self.phase = "join"
         yield
         join_view = yield from _join_steps(frozen, token=token)
         self.phase = "index"
         yield
         index = yield from _index_steps(frozen, token=token)
+        self.phase = "finalize"
+        # Only the private checkpoint root is consumed, never any child fact
+        # or consumer-owned FrozenMap. Drop one root reference per step so
+        # independent history tables are not all decref'd on generator return.
+        while state:
+            yield _SLICE_BOUNDARY
+            state.popitem()
+        yield _SLICE_BOUNDARY
         if (not index.complete or not join_view.complete) and projection.complete:
             projection = OwnerRecoveryProjection(1, token, False, "invalid_index", projection.findings)
         return FullBuildResult(projection, join_view, index)
@@ -1102,9 +1248,14 @@ class RecoveryBuildSession:
             raise ValueError("closed_build_session")
         started, examined = self._clock(), 0
         try:
-            while examined < 256 and self._clock() - started < 0.005:
-                next(self._steps)
+            # Leave headroom for the final bounded step and return bookkeeping.
+            # CPython's automatic GC is unpreemptible; it is measured separately
+            # by the normal-GC continuous-stall acceptance cell.
+            while examined < 256 and self._clock() - started < 0.004:
+                step = next(self._steps)
                 examined += 1
+                if step is _SLICE_BOUNDARY:
+                    break
         except StopIteration as done:
             self.result, self.phase, self._steps = done.value, "complete", None
         except BaseException:
@@ -1164,7 +1315,7 @@ build_owner_recovery_models_async = build_owner_recovery_models_cooperatively
 
 
 def _fmap(value: object) -> FrozenMap:
-    return value if isinstance(value, FrozenMap) else FrozenMap({})
+    return value if isinstance(value, FrozenMap) else _EMPTY_MAP
 
 
 def _require_token(token: object) -> None:
@@ -1188,7 +1339,7 @@ def _valid_attempt(identity: str, row: FrozenMap) -> bool:
 
 
 def _valid_attempt_schema(row: FrozenMap) -> bool:
-    if row.get("state") not in {item.value for item in OrderState}:
+    if row.get("state") not in _ORDER_STATES:
         return False
     if row.get("command_status") not in (None, "not_sent", "acknowledged", "rejected", "unknown"):
         return False
@@ -1241,9 +1392,33 @@ def _valid_admission(row: FrozenMap, command: str, revision: int) -> bool:
         return False
 
 
-def _valid_protection(symbol: str, row: FrozenMap) -> bool:
+def _valid_protection_steps(symbol: str, row: FrozenMap):
+    # The canonical validator deep-copies an entire state's exit_history.
+    # Its checks are separable: validate scalar state once and then each event
+    # using the same canonical validator with a single-event history.
+    if len(row) != len(_STATE_FIELDS):
+        return False
+    raw = {}
+    for name, value in row.items():
+        yield
+        if name != "exit_history":
+            if isinstance(value, FrozenMap) or type(value) is tuple:
+                return False
+            raw[name] = value
+    history = row.get("exit_history")
+    if type(history) is not tuple:
+        return False
+    raw["exit_history"] = []
     try:
-        _state_from_dict(symbol, thaw_checkpoint_facts(row))
+        _state_from_dict(symbol, raw)
+        for event in history:
+            yield
+            if not isinstance(event, FrozenMap) or len(event) != 5:
+                return False
+            if any(isinstance(value, FrozenMap) or type(value) is tuple for value in event.values()):
+                return False
+            raw["exit_history"] = [dict(event)]
+            _state_from_dict(symbol, raw)
     except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
         return False
     return True
@@ -1274,24 +1449,15 @@ def _valid_price_view_for_symbol(state: dict[str, object], symbol: str, revision
 
 
 def _valid_explicit_quote(symbol, row, revision):
-    fields = {"price", "as_of", "source", "source_event_id", "market_data", "received_at",
-              "admission_version", "payload_digest"}
+    # The runtime validator is pure and uses only its static payload helper.
+    # Passing the class avoids constructing a runtime (and any runtime I/O).
+    from .runtime import KRExecutionRuntime
     try:
-        if set(row) != fields or _text(row["source"]) is None or _text(row["source_event_id"]) is None:
-            return False
-        if type(row["price"]) is not str:
-            return False
-        price = Decimal(row["price"])
-        observed, received = datetime.fromisoformat(row["as_of"]), datetime.fromisoformat(row["received_at"])
-        if (not price.is_finite() or price <= 0 or observed.utcoffset() is None or received.utcoffset() is None
-                or observed > received or type(row["admission_version"]) is not int
-                or not 0 < row["admission_version"] <= revision):
-            return False
-        payload = {"symbol": symbol, **{key: thaw_checkpoint_facts(row[key]) for key in
-                   ("price", "as_of", "source", "source_event_id", "market_data")}}
-        return row["payload_digest"] == digest(payload)
-    except (ValueError, TypeError, KeyError, InvalidOperation):
+        KRExecutionRuntime._validate_explicit_quotes(KRExecutionRuntime,
+            {"latest_explicit_quote": {symbol: thaw_checkpoint_facts(row)}}, revision)
+    except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
         return False
+    return True
 
 
 def _protection_input(protection: FrozenMap, symbol: str, orders_by_symbol, exempt, reset) -> FrozenMap:
