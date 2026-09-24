@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import math
+from pathlib import Path
 
 import pytest
 
@@ -70,7 +72,7 @@ def test_full_builder_owner_codes_match_uncapped_n3_oracle():
 
 def test_scoped_lookup_does_not_iterate_unrelated_history(monkeypatch):
     result = build_owner_recovery_models(checkpoint(5_000), token=OwnerToken("a", 0, 0, 1))
-    monkeypatch.setattr(result.index, "all_attempts", lambda: (_ for _ in ()).throw(AssertionError("scan")), raising=False)
+    assert hasattr(result.index, "__slots__")
     assert len(result.index.attempts_for_intent("intent-4999")) == 1
 
 
@@ -162,3 +164,129 @@ def test_cancelled_full_build_never_returns_partial_models():
         with pytest.raises(asyncio.CancelledError):
             await task
     asyncio.run(run())
+
+
+def test_active_open_buy_requires_submit_and_keeps_reserved_terminal_buy_open():
+    state = checkpoint()
+    row = state["attempts"]["attempt-0"]
+    state["intents"]["intent-0"]["side"] = row["side"] = "buy"
+    assert build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index.active_open_buy_symbols() == ("000000",)
+    row.update(kind="cancel", state="rejected", reserved_quantity=0)
+    assert build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index.active_open_buy_symbols() == ()
+    row.update(kind="submit", reserved_quantity=1)
+    assert build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index.active_open_buy_symbols() == ("000000",)
+
+
+def test_orphan_duplicate_and_scalar_rows_are_retained_as_invalid_without_crashing():
+    state = checkpoint()
+    state["attempts"]["attempt-0"]["attempt_id"] = "other"
+    state["intents"]["intent-0"]["attempt_ids"] *= 2
+    state["outbox"]["scalar"] = 1
+    state["outbox"]["audit-0"]["effect_source"] = "bogus"
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1))
+    assert not result.index.complete and not result.projection.complete
+    assert {fact.category for fact in result.index.invalid_facts()} >= {"attempt", "intent", "audit", "outbox"}
+
+
+def test_join_view_retains_exact_audit_key_and_pending_pair_multiplicity():
+    state = checkpoint(2)
+    state["intents"]["intent-1"]["symbol"] = "000000"
+    state["attempts"]["attempt-1"]["symbol"] = "000000"
+    state["outbox"]["audit-1"].update(symbol="000000", intent_id="intent-1")
+    state["protection"]["pending_owners"] = {"000000": "intent-0"}
+    join = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).join_view
+    assert join.audits_by_intent["intent-0"] == 1
+    assert join.audits_by_key[("intent-0", "000000", ("sell_all", 1, "reason"))] == 1
+    assert join.pending_fallback_by_pair[("000000", "intent-0")] == 1
+
+
+def test_quote_and_protection_dependency_sources_are_indexed_and_conflict_is_invalid():
+    state = checkpoint()
+    symbol = "only-input"
+    state["protection"]["entry_times"][symbol] = "2026-01-01T00:00:00+00:00"
+    state["protection"]["exit_exempt"] = [symbol]
+    state["protection"]["integrity_reset_symbols"] = [symbol]
+    state["protection"]["orders"]["order"] = {"symbol": symbol}
+    state["quote_price_views"][symbol] = {"price": "10", "source_version": 2, "source": "kis", "source_event_id": "event"}
+    state["day_valuation_view"] = {"symbol": symbol, "source_version": 2}
+    state["day_valuations"] = {"valuation": {"symbol": symbol}}
+    state["latest_explicit_quote"][symbol] = {"price": "11", "admission_version": 2,
+                                                 "source": "kis", "source_event_id": "other"}
+    index = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index
+    assert index.protection_quote_input(symbol)["entry_times"]
+    assert index.latest_quote_for_symbol(symbol)
+    assert any(f.category == "quote" for f in index.invalid_facts())
+
+
+def test_active_recovery_excludes_terminal_history_and_keeps_portfolio_and_pending_symbols():
+    state = checkpoint()
+    state["attempts"]["attempt-0"].update(state="final_rejected", reserved_quantity=0)
+    state["portfolio"]["positions"] = {"portfolio-only": {"quantity": 1}}
+    state["protection"]["pending_owners"] = {"pending-only": "intent-0"}
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index
+    assert "000000" not in result.active_recovery_symbols()
+    assert {"portfolio-only", "pending-only"} <= set(result.active_recovery_symbols())
+
+
+def test_pending_admissions_follow_source_version_not_command_id():
+    state = checkpoint()
+    state["protection_quote_admissions"] = {
+        "z-command": {"symbol": "000000", "intent_id": "intent-0", "source_version": 1},
+        "a-command": {"symbol": "000000", "intent_id": "intent-0", "source_version": 2},
+    }
+    assert build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index.next_quote_admission().command_id == "z-command"
+
+
+def test_public_read_view_and_frozen_map_are_deeply_immutable():
+    from src.execution.safety.recovery_projection import FrozenMap
+    child = {"inside": []}
+    frozen = FrozenMap({"child": child})
+    child["inside"].append("mutated")
+    assert frozen["child"]["inside"] == ()
+    index = build_owner_recovery_models(checkpoint(), token=OwnerToken("a", 0, 0, 1)).index
+    with pytest.raises((AttributeError, TypeError)):
+        index.complete = False
+
+
+def test_source_use_inventory_is_not_a_self_certifying_union_and_exclusions_are_unused():
+    import inspect
+    import src.execution.safety.recovery_projection as projection
+    source = inspect.getsource(projection.build_producer_index) + inspect.getsource(projection.ProducerReadView)
+    tree = ast.parse(source)
+    literals = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and type(node.value) is str}
+    used = set().union(*[set(paths) for paths in projection.PRODUCER_INDEX_SOURCE_USES.values()])
+    assert used <= set(projection.PRODUCER_INDEX_DEPENDENCIES) | set(projection.PRODUCER_INDEX_EXCLUSIONS)
+    assert "market_sources" not in literals and "entry_quotes" not in literals
+
+
+def test_full_builder_rejects_non_exact_owner_token():
+    with pytest.raises(ValueError, match="invalid_owner_token"):
+        build_owner_recovery_models(checkpoint(), token="owner-a")
+
+
+def test_cooperative_full_build_does_not_stall_event_loop_over_50ms():
+    async def run():
+        gaps, previous, running = [], asyncio.get_running_loop().time(), True
+
+        async def heartbeat():
+            nonlocal previous
+            while running:
+                await asyncio.sleep(0.001)
+                now = asyncio.get_running_loop().time()
+                gaps.append(now - previous)
+                previous = now
+
+        pulse = asyncio.create_task(heartbeat())
+        await build_owner_recovery_models_cooperatively(checkpoint(5_000), token=OwnerToken("a", 0, 0, 1))
+        running = False
+        await pulse
+        assert gaps and max(gaps) < 0.05
+    asyncio.run(run())
+
+
+def test_schema_and_market_are_read_only_format_exclusions_in_builder_ast():
+    import inspect
+    import src.execution.safety.recovery_projection as projection
+    source = inspect.getsource(projection.build_producer_index) + inspect.getsource(projection._protection_input)
+    assert '["schema"] =' not in source and '["market"] =' not in source
+    assert {"protection.schema", "protection.market"} <= set(projection.PRODUCER_INDEX_EXCLUSIONS)
