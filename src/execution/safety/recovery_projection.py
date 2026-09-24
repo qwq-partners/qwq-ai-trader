@@ -7,16 +7,20 @@ incremental replacements rather than using this builder on their hot path.
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
 import inspect
+import sys
 import math
 import time
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
 from .lifecycle import TERMINAL_STATES
+from .lifecycle import OrderState
+from .market_source import validate_price_views
 from .recovery_diagnostics import _classify
 
 
@@ -26,6 +30,8 @@ class FrozenMap(Mapping[str, "FrozenJSON"]):
     __slots__ = ("_values",)
 
     def __init__(self, values: Mapping[str, "FrozenJSON"]):
+        if any(type(key) is not str for key in values):
+            raise ValueError("invalid_checkpoint_key")
         self._values = MappingProxyType({key: _freeze_json(item) for key, item in values.items()})
 
     @classmethod
@@ -52,6 +58,9 @@ class FrozenMap(Mapping[str, "FrozenJSON"]):
     def __repr__(self) -> str:
         return f"FrozenMap({dict(self._values)!r})"
 
+    def __reduce__(self):
+        return (FrozenMap._trusted, (dict(self._values),))
+
 
 class FrozenKeyMap(Mapping[object, int]):
     """Immutable aggregate map for non-JSON composite join keys."""
@@ -71,6 +80,9 @@ class FrozenKeyMap(Mapping[object, int]):
 
     def __len__(self) -> int:
         return len(self._values)
+
+    def __reduce__(self):
+        return (FrozenKeyMap, (dict(self._values),))
 
 
 FrozenJSON: TypeAlias = str | int | float | bool | None | tuple["FrozenJSON", ...] | FrozenMap
@@ -345,9 +357,6 @@ def _freeze_json(value: object) -> FrozenJSON:
                 raise ValueError("invalid_checkpoint_key")
             frozen[key] = _freeze_json(item)
         return FrozenMap(frozen)
-    if isinstance(value, (AttemptFact, IntentFact, AuditFact, AdmissionFact, ProtectionFact,
-                          ExplicitQuoteFact, InvalidRecoveryFact)):
-        return value  # type: ignore[return-value]
     raise ValueError("invalid_checkpoint_value")
 
 
@@ -412,7 +421,9 @@ def build_owner_join_view(frozen: FrozenJSON, *, token: OwnerToken) -> OwnerReco
             pending[intent] = tuple((*pending.get(intent, ()), symbol))
         else:
             complete = False
-    pairs = {(symbol, intent): 1 for intent, symbols in pending.items() for symbol in symbols}
+    pairs = {(symbol, intent): 1 for intent, symbols in pending.items() for symbol in symbols
+             if intent not in intents and not any(isinstance(row, FrozenMap)
+             and row.get("symbol") == symbol and row.get("intent_id") == intent for row in admissions.values())}
     return OwnerRecoveryJoinView(token, complete, _freeze_scalar_map(audits), FrozenKeyMap(audit_keys),
                                  _freeze_scalar_map(unsubmitted), FrozenKeyMap(pairs),
                                  FrozenMap({key: tuple(sorted(value)) for key, value in pending.items()}))
@@ -443,7 +454,7 @@ def build_producer_index(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRe
                   and type(member_ids) is tuple and member_ids.count(identity) == 1
                   and data.get("attempt_id") == identity and intent_row.get("symbol") == fact.symbol
                   and intent_row.get("side") == fact.side)
-        if not _valid_attempt(identity, data) or not linked:
+        if not _valid_attempt(identity, data) or not _valid_attempt_schema(data) or not linked:
             bad("attempt", identity)
         if fact.symbol is not None:
             attempts_by_symbol.setdefault(fact.symbol, []).append(fact)
@@ -491,7 +502,8 @@ def build_producer_index(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRe
         intent = _fmap(raw_intents.get(fact.intent_id))
         if (data.get("effect_source") is not None or fact.intent_id is None or fact.symbol is None
                 or not _valid_decision(fact.decision) or not isinstance(intent, FrozenMap)
-                or intent.get("symbol") != fact.symbol or intent.get("side") != "sell"):
+                or intent.get("symbol") != fact.symbol or intent.get("side") != "sell"
+                or intent.get("target_quantity") != fact.decision[1]):
             bad("audit", command)
         if fact.intent_id is not None:
             audits_by_intent.setdefault(fact.intent_id, []).append(fact)
@@ -510,7 +522,7 @@ def build_producer_index(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRe
         admissions_by_command[command] = fact
         intent = _fmap(raw_intents.get(fact.intent_id))
         if (fact.intent_id is None or fact.symbol is None or not isinstance(intent, FrozenMap)
-                or intent.get("symbol") != fact.symbol):
+                or intent.get("symbol") != fact.symbol or not _valid_admission(data)):
             bad("admission", command)
         if fact.intent_id is not None:
             admissions_by_intent.setdefault(fact.intent_id, []).append(fact)
@@ -520,7 +532,7 @@ def build_producer_index(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRe
     protection = _fmap(state.get("protection"))
     protection_by_symbol = {}
     for symbol, row in _fmap(protection.get("states")).items():
-        if _text(symbol) is None or not isinstance(row, FrozenMap):
+        if _text(symbol) is None or not isinstance(row, FrozenMap) or not _valid_protection(row):
             bad("protection", symbol, "malformed")
         else:
             protection_by_symbol[symbol] = ProtectionFact(symbol, row)
@@ -536,6 +548,12 @@ def build_producer_index(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRe
         if _text(symbol) is None or not isinstance(row, FrozenMap):
             bad("position", symbol, "malformed")
     orders = _fmap(protection.get("orders"))
+    for identity, row in orders.items():
+        if not isinstance(row, FrozenMap) or _text(row.get("symbol")) is None:
+            bad("order", identity, "malformed")
+    for identity, row in _fmap(protection.get("degraded")).items():
+        if _text(identity) is None or not isinstance(row, FrozenMap):
+            bad("degraded", identity, "malformed")
     def order_symbols() -> set[str]:
         return {_text(_fmap(row).get("symbol")) for row in orders.values()
                 if _text(_fmap(row).get("symbol")) is not None}
@@ -546,6 +564,7 @@ def build_producer_index(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRe
                | set(_fmap(protection.get("entry_times"))) | set(_strings(protection.get("exit_exempt")))
                | set(_strings(protection.get("integrity_reset_symbols"))) | order_symbols())
     inputs = {symbol: _protection_input(protection, symbol) for symbol in symbols if _text(symbol) is not None}
+    thawed_state = thaw_checkpoint_facts(frozen)
     quotes = {}
     for symbol in set(explicit) | set(quote_views):
         exact, view = explicit.get(symbol), quote_views.get(symbol)
@@ -553,23 +572,26 @@ def build_producer_index(frozen: FrozenJSON, *, token: OwnerToken) -> ProducerRe
             bad("quote", symbol, "malformed")
             continue
         exact_map, view_map = _fmap(exact), _fmap(view)
-        if exact is not None and view is not None and _quote_conflict(exact_map, view_map):
-            bad("quote", symbol, "conflicting_source_event")
+        if view is not None and not _valid_price_view_for_symbol(thawed_state, symbol, token.revision):
+            bad("quote", symbol, "invalid_or_stale_source")
         quotes[symbol] = ExplicitQuoteFact(symbol, FrozenMap({"explicit": exact_map, "price_view": view_map,
-            "day_valuation_view": state.get("day_valuation_view"), "day_valuations": state.get("day_valuations")}))
+            "day_valuation_view": _scoped_day_view(state.get("day_valuation_view"), symbol),
+            "day_valuations": _fmap(state.get("day_valuations")).get(symbol, FrozenMap({}))}))
     active_recovery = set(pending_owners) | set(_fmap(protection.get("degraded"))) | set(positions)
     for facts in attempts_by_symbol.values():
         for fact in facts:
-            if fact.kind == "submit" and fact.state not in TERMINAL_STATES and fact.symbol:
+            if (fact.kind == "submit" and fact.symbol
+                    and (fact.state not in TERMINAL_STATES or fact.data.get("reserved_quantity") != 0)):
                 active_recovery.add(fact.symbol)
+    active_recovery.update(protection_by_symbol)
     data = _IndexData(
-        _fact_buckets(attempts_by_symbol), _fact_buckets(attempts_by_intent), FrozenMap(intents),
+        _fact_buckets(attempts_by_symbol), _fact_buckets(attempts_by_intent), FrozenMap._trusted(intents),
         _fact_buckets(intents_by_symbol), _fact_buckets(audits_by_intent), _fact_buckets(audits_by_symbol),
-        _fact_buckets(admissions_by_intent), _fact_buckets(admissions_by_symbol), FrozenMap(admissions_by_command),
+        _fact_buckets(admissions_by_intent), _fact_buckets(admissions_by_symbol), FrozenMap._trusted(admissions_by_command),
         tuple(sorted(admissions_by_command.values(), key=lambda fact: (_source_version(fact.data), fact.command_id))),
         FrozenMap({key: tuple(sorted(value)) for key, value in pending_by_intent.items()}),
         FrozenMap({key: value for key, value in pending_owners.items() if type(value) is str}),
-        FrozenMap(protection_by_symbol), FrozenMap(inputs), FrozenMap(quotes), tuple(sorted(pending_owners)),
+        FrozenMap._trusted(protection_by_symbol), FrozenMap(inputs), FrozenMap._trusted(quotes), tuple(sorted(pending_owners)),
         tuple(sorted(active_buys)), tuple(sorted(active_recovery)), tuple(invalid), bool(_fmap(protection.get("degraded"))),
     )
     return ProducerRecoveryIndex(token, not invalid, data)
@@ -581,31 +603,34 @@ def build_owner_recovery_models(state: Mapping[str, object], *, token: OwnerToke
     return _build_frozen_models(frozen, token)
 
 
-async def build_owner_recovery_models_cooperatively(
+def build_owner_recovery_models_cooperatively(
     state: Mapping[str, object], *, token: OwnerToken, yield_hook: Callable[[], object] | None = None,
     clock: Callable[[], float] = time.monotonic,
-) -> FullBuildResult:
+) -> object:
     """Build from a detached payload and expose no partial result on cancellation."""
-    # Full reconstruction is CPU-only.  Keeping every freeze/classify/join/index
-    # phase off the owner loop bounds event-loop stalls; cancellation never gets a
-    # partly constructed object because the sole result is published after await.
+    # This synchronous boundary is intentional: hand an immutable snapshot, never
+    # a caller-owned mapping, to background construction.
     _require_token(token)
-    frozen = await asyncio.to_thread(freeze_checkpoint_facts, state)
-    facts = await asyncio.to_thread(lambda: sum(1 for _ in _walk_facts(frozen)))
-    last_yield = clock()
-    for _ in range(max(1, (facts + 255) // 256)):
-        if yield_hook is not None:
-            value = yield_hook()
-            if inspect.isawaitable(value):
-                await value
-        await asyncio.sleep(0)
-        if clock() - last_yield >= 0.005:
-            last_yield = clock()
-    return await asyncio.to_thread(_build_frozen_models, frozen, token)
+    # C serialization makes a complete value snapshot before the first
+    # await; no worker is ever handed a caller-owned mutable graph.
+    snapshot = deepcopy(state)
+    async def run() -> FullBuildResult:
+        frozen = await asyncio.to_thread(_fast_worker, freeze_checkpoint_facts, snapshot)
+        facts = await asyncio.to_thread(lambda: sum(1 for _ in _walk_facts(frozen)))
+        last_yield = clock()
+        for _ in range(max(1, (facts + 255) // 256)):
+            if yield_hook is not None:
+                value = yield_hook()
+                if inspect.isawaitable(value):
+                    await value
+            await asyncio.sleep(0)
+            if clock() - last_yield >= 0.005:
+                last_yield = clock()
+        return await asyncio.to_thread(_fast_worker, _build_frozen_models, frozen, token)
+    return run()
 
 
 build_owner_recovery_models_async = build_owner_recovery_models_cooperatively
-
 
 def _build_frozen_models(frozen: FrozenJSON, token: OwnerToken) -> FullBuildResult:
     projection = classify_owner_facts(frozen, token=token)
@@ -615,6 +640,16 @@ def _build_frozen_models(frozen: FrozenJSON, token: OwnerToken) -> FullBuildResu
         projection = OwnerRecoveryProjection(projection.schema_version, token, False, "invalid_index",
                                              projection.findings)
     return FullBuildResult(projection, join_view, index)
+
+
+def _fast_worker(function: Callable[..., Any], *args: object) -> Any:
+    """Bound worker GIL ownership so the owner loop can service its heartbeat."""
+    previous = sys.getswitchinterval()
+    try:
+        sys.setswitchinterval(0.0005)
+        return function(*args)
+    finally:
+        sys.setswitchinterval(previous)
 
 
 def _fmap(value: object) -> FrozenMap:
@@ -640,13 +675,33 @@ def _freeze_scalar_map(values: Mapping[str, int]) -> FrozenMap:
 
 
 def _fact_buckets(values: Mapping[str, list[Any]]) -> FrozenMap:
-    return FrozenMap({key: tuple(value) for key, value in values.items()})
+    return FrozenMap._trusted({key: tuple(value) for key, value in values.items()})
 
 
 def _valid_attempt(identity: str, row: FrozenMap) -> bool:
     return (_text(identity) is not None and _text(row.get("intent_id")) is not None
             and _text(row.get("symbol")) is not None and row.get("kind") in ("submit", "cancel", "modify")
             and row.get("side") in ("buy", "sell"))
+
+
+def _valid_attempt_schema(row: FrozenMap) -> bool:
+    if row.get("state") not in {item.value for item in OrderState}:
+        return False
+    if row.get("command_status") not in (None, "not_sent", "acknowledged", "rejected", "unknown"):
+        return False
+    return all(type(row.get(name)) is int and row[name] >= 0
+               for name in ("observed_quantity", "applied_quantity", "reserved_quantity"))
+
+
+def _valid_admission(row: FrozenMap) -> bool:
+    version = row.get("source_version")
+    status = row.get("status")
+    return type(version) is int and version > 0 and (status is None or status == "RECEIVED")
+
+
+def _valid_protection(row: FrozenMap) -> bool:
+    value = row.get("remaining_quantity")
+    return type(value) is int and value >= 0
 
 
 def _valid_decision(value: object) -> bool:
@@ -669,6 +724,30 @@ def _quote_conflict(explicit: FrozenMap, view: FrozenMap) -> bool:
         return False
     pairs = (("price", "price"), ("source", "source"), ("source_event_id", "source_event_id"))
     return any(explicit.get(left) != view.get(right) for left, right in pairs)
+
+
+def _valid_price_view_for_symbol(state: dict[str, object], symbol: str, revision: int) -> bool:
+    """Delegate freshness/source semantics to the product's canonical validator."""
+    views = state.get("quote_price_views")
+    if type(views) is not dict or symbol not in views:
+        return True
+    version = revision
+    row = views[symbol]
+    if type(row) is dict and type(row.get("source_version")) is int:
+        version = max(version, row["source_version"])
+    try:
+        validate_price_views({"quote_price_views": {symbol: row},
+                              "latest_explicit_quote": state.get("latest_explicit_quote", {})}, version)
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return False
+    return True
+
+
+def _scoped_day_view(value: object, symbol: str) -> FrozenJSON:
+    row = _fmap(value)
+    if row.get("symbol") == symbol:
+        return row
+    return FrozenMap({})
 
 
 def _protection_input(protection: FrozenMap, symbol: str) -> FrozenMap:
