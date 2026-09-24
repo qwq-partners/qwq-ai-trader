@@ -14,6 +14,7 @@ from src.execution.safety.recovery_projection import (
     OwnerToken,
     build_owner_recovery_models,
     build_owner_recovery_models_cooperatively,
+    detach_checkpoint,
     freeze_checkpoint_facts,
     thaw_checkpoint_facts,
 )
@@ -62,6 +63,7 @@ def test_full_builder_is_detached_and_matches_uncapped_owner_oracle():
     state["attempts"].clear()
     assert dict(result.projection.findings) == owner_oracle(checkpoint())
     assert result.index.attempts_for_symbol("000000")
+    assert result.index.complete
 
 
 def test_full_builder_owner_codes_match_uncapped_n3_oracle():
@@ -72,7 +74,11 @@ def test_full_builder_owner_codes_match_uncapped_n3_oracle():
 
 def test_scoped_lookup_does_not_iterate_unrelated_history(monkeypatch):
     result = build_owner_recovery_models(checkpoint(5_000), token=OwnerToken("a", 0, 0, 1))
-    assert hasattr(result.index, "__slots__")
+    from src.execution.safety.recovery_projection import FrozenMap, ProducerReadView
+    def forbidden(*args):
+        raise AssertionError("unrelated retained history iteration")
+    monkeypatch.setattr(FrozenMap, "__iter__", forbidden)
+    monkeypatch.setattr(ProducerReadView, "all_attempts", forbidden)
     assert len(result.index.attempts_for_intent("intent-4999")) == 1
 
 
@@ -115,21 +121,6 @@ def test_freeze_rejects_nan_positive_and_negative_infinity(value):
         freeze_checkpoint_facts({"value": value})
 
 
-def test_query_source_use_inventory_covers_every_durable_dependency_or_exclusion():
-    required = {"latest_explicit_quote", "quote_price_views", "day_valuation_view", "day_valuations",
-                "protection.config", "protection.states", "protection.entry_times",
-                "protection.exit_exempt", "protection.max_holding_days", "protection.current_regime",
-                "protection.intraday_crash_level", "protection.integrity_reset_symbols",
-                "protection.degraded", "protection.orders", "protection.pending_owners"}
-    assert required <= set(PRODUCER_INDEX_DEPENDENCIES)
-
-
-def test_protection_schema_and_market_have_no_product_writer():
-    result = build_owner_recovery_models(checkpoint(), token=OwnerToken("a", 0, 0, 1))
-    value = result.index.protection_quote_input("000000")
-    assert value["schema"] == 1 and value["market"] == "KR"
-
-
 def test_bounded_protection_and_quote_queries():
     state = checkpoint(20)
     state["protection"]["states"]["000000"] = {"remaining_quantity": 1}
@@ -149,7 +140,7 @@ def test_cooperative_builder_yields_every_256_facts_or_5ms():
     yields = []
 
     async def run():
-        await build_owner_recovery_models_cooperatively(checkpoint(300), token=OwnerToken("a", 0, 0, 1),
+        await build_owner_recovery_models_cooperatively(detach_checkpoint(checkpoint(300)), token=OwnerToken("a", 0, 0, 1),
                                                         yield_hook=lambda: yields.append(True))
     asyncio.run(run())
     assert yields
@@ -158,7 +149,7 @@ def test_cooperative_builder_yields_every_256_facts_or_5ms():
 def test_cancelled_full_build_never_returns_partial_models():
     async def run():
         task = asyncio.create_task(build_owner_recovery_models_cooperatively(
-            checkpoint(5_000), token=OwnerToken("a", 0, 0, 1)))
+            detach_checkpoint(checkpoint(5_000)), token=OwnerToken("a", 0, 0, 1)))
         await asyncio.sleep(0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -248,51 +239,68 @@ def test_public_read_view_and_frozen_map_are_deeply_immutable():
         index.complete = False
 
 
-def test_source_use_inventory_is_not_a_self_certifying_union_and_exclusions_are_unused():
-    import inspect
-    import src.execution.safety.recovery_projection as projection
-    source = inspect.getsource(projection.build_producer_index) + inspect.getsource(projection.ProducerReadView)
-    tree = ast.parse(source)
-    literals = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and type(node.value) is str}
-    used = set().union(*[set(paths) for paths in projection.PRODUCER_INDEX_SOURCE_USES.values()])
-    assert used <= set(projection.PRODUCER_INDEX_DEPENDENCIES) | set(projection.PRODUCER_INDEX_EXCLUSIONS)
-    assert "market_sources" not in literals and "entry_quotes" not in literals
-
-
 def test_full_builder_rejects_non_exact_owner_token():
     with pytest.raises(ValueError, match="invalid_owner_token"):
         build_owner_recovery_models(checkpoint(), token="owner-a")
 
 
 def test_cooperative_full_build_does_not_stall_event_loop_over_50ms():
+    # Spec §11.2 requires a fresh serial env-i process for each timing cell.
+    import os
+    import subprocess
+    import sys
+    if not os.environ.get("RECOVERY_TIMING_CELL"):
+        for _ in range(2):
+            outcome = subprocess.run([sys.executable, "-m", "pytest", __file__, "-q", "-s",
+                "-p", "no:cacheprovider", "-k", "does_not_stall"],
+                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": "UTC",
+                     "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                     "RECOVERY_TIMING_CELL": "1"}, capture_output=True, text=True, timeout=30)
+            if "noisy_host_inconclusive" not in outcome.stdout:
+                break
+        assert outcome.returncode == 0, outcome.stdout + outcome.stderr
+        return
+    state = checkpoint(5_000)
     async def run():
         gaps, previous, running = [], asyncio.get_running_loop().time(), True
 
         async def heartbeat():
             nonlocal previous
             while running:
-                await asyncio.sleep(0.001)
+                future = asyncio.get_running_loop().create_future()
+                asyncio.get_running_loop().call_at(previous + .001, future.set_result, None)
+                await future
                 now = asyncio.get_running_loop().time()
                 gaps.append(now - previous)
                 previous = now
 
-        # Establish the isolated CPU worker outside the measured reconstruction.
-        await build_owner_recovery_models_cooperatively(checkpoint(), token=OwnerToken("warm", 0, 0, 1))
+        loop = asyncio.get_running_loop()
+        baseline = []
+        started = loop.time()
+        deadline = started + .001
+        while loop.time() - started < .250:
+            future = loop.create_future()
+            loop.call_at(deadline, future.set_result, None)
+            await future
+            now = loop.time()
+            baseline.append(now - deadline + .001)
+            deadline = now + .001
+        assert max(baseline) <= .025, "noisy_host_inconclusive"
         previous = asyncio.get_running_loop().time()
         pulse = asyncio.create_task(heartbeat())
-        await build_owner_recovery_models_cooperatively(checkpoint(5_000), token=OwnerToken("a", 0, 0, 1))
+        await asyncio.sleep(0)
+        started = loop.time()
+        payload = detach_checkpoint(state)
+        detach_seconds = loop.time() - started
+        await build_owner_recovery_models_cooperatively(payload, token=OwnerToken("a", 0, 0, 1))
+        build_seconds = loop.time() - started
         running = False
         await pulse
-        assert gaps and max(gaps) < 0.15
+        print({"baseline_max": max(baseline), "detach_seconds": detach_seconds,
+               "total_seconds": build_seconds, "stall_max": max(gaps)})
+        assert detach_seconds < .05
+        assert gaps and max(gaps) < 0.05
     asyncio.run(run())
-
-
-def test_schema_and_market_are_read_only_format_exclusions_in_builder_ast():
-    import inspect
-    import src.execution.safety.recovery_projection as projection
-    source = inspect.getsource(projection.build_producer_index) + inspect.getsource(projection._protection_input)
-    assert '["schema"] =' not in source and '["market"] =' not in source
-    assert {"protection.schema", "protection.market"} <= set(projection.PRODUCER_INDEX_EXCLUSIONS)
 
 
 def test_invalid_attempt_audit_protection_and_admission_schemas_fail_closed():
@@ -344,9 +352,404 @@ def test_public_freezer_rejects_fact_dtos_and_non_string_frozen_map_keys():
 def test_cooperative_builder_detaches_before_background_work_can_observe_mutation():
     state = checkpoint(2)
     async def run():
-        task = asyncio.create_task(build_owner_recovery_models_cooperatively(state, token=OwnerToken("a", 0, 0, 1)))
+        task = asyncio.create_task(build_owner_recovery_models_cooperatively(detach_checkpoint(state), token=OwnerToken("a", 0, 0, 1)))
         state["attempts"]["attempt-0"]["state"] = "final_rejected"
         result = await task
         return result
     result = asyncio.run(run())
     assert result.index.attempts_for_intent("intent-0")[0].state == "prepared"
+
+
+def test_cooperative_entry_requires_explicit_detached_handoff():
+    with pytest.raises(ValueError, match="detached_checkpoint_required"):
+        build_owner_recovery_models_cooperatively(checkpoint(), token=OwnerToken("a", 0, 0, 1))
+
+
+def test_build_session_advances_real_work_and_cancellation_drops_private_state(monkeypatch):
+    import src.execution.safety.recovery_projection as projection
+    assert hasattr(projection, "RecoveryBuildSession"), "resumable builder API missing"
+    source = checkpoint(300)
+    payload = projection.detach_checkpoint(source)
+    source["attempts"].clear()
+    session = projection.RecoveryBuildSession(payload, token=OwnerToken("a", 0, 0, 1))
+    phases = set()
+    while session.result is None:
+        assert session.advance() <= 256
+        phases.add(session.phase)
+    assert {"freeze", "classify", "join", "index", "complete"} <= phases
+    assert len(session.result.index.attempts_for_symbol("000000")) == 60
+    for phase in ("freeze", "classify", "join", "index"):
+        cancelled = projection.RecoveryBuildSession(projection.detach_checkpoint(checkpoint(300)),
+                                                     token=OwnerToken("a", 0, 0, 1))
+        while cancelled.phase != phase:
+            cancelled.advance()
+        cancelled.close()
+        assert cancelled.result is None
+        assert cancelled.phase == "cancelled"
+        with pytest.raises(ValueError, match="closed_build_session"):
+            cancelled.advance()
+
+
+def test_production_builder_does_not_call_n3_oracle(monkeypatch):
+    import src.execution.safety.recovery_projection as projection
+    def forbidden(*args, **kwargs):
+        raise AssertionError("N3 classifier is test oracle only")
+    monkeypatch.setattr(projection, "_classify", forbidden, raising=False)
+    assert dict(build_owner_recovery_models(checkpoint(3), token=OwnerToken("a", 0, 0, 1)).projection.findings) == {
+        "pending_sell": 3}
+
+
+def test_selected_day_valuation_is_scoped_and_sets_quote_time_floor():
+    state = checkpoint()
+    state["day_valuation_view"] = {"evidence_id": "selected", "rollover_version": 4}
+    state["day_valuations"] = {
+        "selected": {"payload": {"prices": [
+            {"symbol": "wanted", "price": "10", "as_of": "2026-09-24T09:00:00+09:00"},
+            {"symbol": "other", "price": "20", "as_of": "2026-09-24T09:00:00+09:00"}]}},
+        "old": {"payload": {"prices": [{"symbol": "history", "price": "1"}]}},
+    }
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 4)).index
+    quote = result.latest_quote_for_symbol("wanted")
+    assert quote is not None
+    assert quote.data["time_floor"] == "2026-09-24T09:00:00+09:00"
+    assert quote.data["day_valuations"]["symbol"] == "wanted"
+    assert "other" not in repr(quote) and "history" not in repr(quote)
+    assert result.latest_quote_for_symbol("history") is None
+
+
+def test_protection_symbol_input_does_not_embed_other_symbols():
+    state = checkpoint()
+    state["protection"]["exit_exempt"] = ["000000", "unrelated"]
+    state["protection"]["integrity_reset_symbols"] = ["unrelated"]
+    state["protection"]["orders"] = {"x": {"symbol": "000000"}, "y": {"symbol": "unrelated"}}
+    value = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index.protection_quote_input("000000")
+    assert value["exit_exempt"] == ("000000",)
+    assert value["integrity_reset_symbols"] == ()
+    assert "unrelated" not in repr(value)
+
+
+@pytest.mark.parametrize("query,args", [
+    ("protection_for_symbol", ("000000",)), ("protection_quote_input", ("000000",)),
+    ("latest_quote_for_symbol", ("000000",)), ("pending_recovery_symbols", ()),
+    ("pending_admissions", ()), ("admission", ("command",)),
+    ("audits_for_symbol", ("000000",)), ("active_open_buy_symbols", ()),
+    ("has_degraded_protection", ()), ("attempts_for_symbol", ("000000",)),
+    ("attempts_for_intent", ("intent-0",)), ("intent", ("intent-0",)),
+    ("intents_for_symbol", ("000000",)), ("admissions_for_symbol", ("000000",)),
+    ("admissions_for_intent", ("intent-0",)), ("audits_for_intent", ("intent-0",)),
+    ("pending_symbols_for_intent", ("intent-0",)), ("pending_owner_for_symbol", ("000000",)),
+    ("active_recovery_symbols", ()), ("next_quote_admission", ()),
+])
+def test_each_scoped_query_has_no_history_iteration(monkeypatch, query, args):
+    from src.execution.safety.recovery_projection import FrozenMap, ProducerReadView
+    state = checkpoint(10)
+    state["protection"]["states"]["000000"] = {"remaining_quantity": 1}
+    state["protection"]["pending_owners"]["000000"] = "intent-0"
+    state["protection"]["degraded"]["000000"] = {"quantity": 1, "reason": "repair"}
+    state["protection_quote_admissions"]["command"] = {"symbol": "000000", "intent_id": "intent-0"}
+    state["latest_explicit_quote"]["000000"] = {"price": "10"}
+    state["attempts"]["attempt-0"]["side"] = "buy"
+    index = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index
+    def forbidden(*args):
+        raise AssertionError("unrelated retained history iteration")
+    monkeypatch.setattr(FrozenMap, "__iter__", forbidden)
+    monkeypatch.setattr(ProducerReadView, "all_attempts", forbidden)
+    value = getattr(index, query)
+    assert (value(*args) if callable(value) else value)
+
+
+def test_query_source_use_inventory_covers_every_durable_dependency_or_exclusion():
+    import src.execution.safety.recovery_projection as projection
+    reads = set()
+    class TracedMap(projection.FrozenMap):
+        __slots__ = ("path",)
+        def __init__(self, source, path=""):
+            object.__setattr__(self, "_values", source)
+            self.path = path
+        def __getitem__(self, key):
+            if type(key) is not str:
+                raise KeyError(key)
+            path = self.path + "." + key if self.path else key
+            if self.path in ("", "protection", "portfolio"):
+                reads.add(path)
+            value = super().__getitem__(key)
+            return TracedMap(value, path) if isinstance(value, projection.FrozenMap) else value
+    projection.build_producer_index(TracedMap(freeze_checkpoint_facts(checkpoint())), token=OwnerToken("a", 0, 0, 1))
+    actual = reads - {"protection", "portfolio"}
+    assert actual - projection.PRODUCER_INDEX_EXCLUSIONS == projection.PRODUCER_INDEX_DEPENDENCIES
+    assert not ({"market_sources", "entry_quotes"} & actual)
+
+
+@pytest.mark.parametrize("field,first,second", [
+    ("config", {"stop": 10.0}, {"stop": 11.0}),
+    ("states", {"000000": {"remaining_quantity": 1}}, {"000000": {"remaining_quantity": 2}}),
+    ("entry_times", {"000000": "2026-09-23"}, {"000000": "2026-09-24"}),
+    ("exit_exempt", ["000000"], []), ("max_holding_days", 5.0, 6.0),
+    ("current_regime", "neutral", "bull"), ("intraday_crash_level", "normal", "crash"),
+    ("integrity_reset_symbols", ["000000"], []),
+    ("degraded", {"000000": {"quantity": 1, "reason": "a"}}, {"000000": {"quantity": 2, "reason": "b"}}),
+    ("orders", {"order": {"symbol": "000000", "quantity": 1}}, {"order": {"symbol": "000000", "quantity": 2}}),
+    ("pending_owners", {"000000": "intent-0"}, {"000000": "other"}),
+])
+def test_every_protection_input_add_update_delete(field, first, second):
+    state = checkpoint()
+    snapshots = []
+    for value in (first, second, None):
+        if value is None:
+            state["protection"].pop(field, None)
+        else:
+            state["protection"][field] = value
+        index = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index
+        selected = thaw_checkpoint_facts(index.protection_quote_input("000000"))[field]
+        expected = value
+        if field in ("states", "entry_times", "degraded", "pending_owners"):
+            expected = None if value is None else value.get("000000")
+        elif field == "orders":
+            expected = [] if value is None else list(value.values())
+        elif field in ("exit_exempt", "integrity_reset_symbols"):
+            expected = [] if value is None else value
+        assert selected == expected
+        snapshots.append(index.protection_quote_input("000000"))
+    assert snapshots[0][field] != snapshots[1][field]
+
+
+@pytest.mark.parametrize("field,value", [("reserved_cash", "NaN"), ("applied_quantity", 2),
+                                         ("reserved_planned_risk", None)])
+def test_each_invalid_reservation_or_applied_quantity_fails_producer_closed(field, value):
+    state = checkpoint()
+    state["attempts"]["attempt-0"][field] = value
+    assert not build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index.complete
+
+
+def test_terminal_cash_only_reservation_remains_active():
+    state = checkpoint()
+    state["attempts"]["attempt-0"].update(state="final_cancelled", side="buy", reserved_cash="1")
+    state["intents"]["intent-0"]["side"] = "buy"
+    index = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1)).index
+    assert index.active_open_buy_symbols() == ("000000",)
+    assert index.active_recovery_symbols() == ("000000",)
+
+
+def explicit_quote(price="10", event="event", stamp="2026-09-24T10:00:00+09:00"):
+    from src.execution.safety.protection_recovery import digest
+    row = {"price": price, "as_of": stamp, "received_at": stamp,
+           "source": "synthetic", "source_event_id": event, "market_data": {}, "admission_version": 4}
+    payload = {"symbol": "000000", **{key: row[key] for key in
+               ("price", "as_of", "source", "source_event_id", "market_data")}}
+    row["payload_digest"] = digest(payload)
+    return row
+
+
+@pytest.mark.parametrize("fault", ["as_of", "received_at", "source_event_id", "source_version",
+                                   "missing_explicit", "unknown_source", "future_version", "digest"])
+def test_quote_invalidity_matches_real_product_validators(fault):
+    from src.execution.safety.runtime import KRExecutionRuntime
+    from src.execution.safety.market_source import validate_price_views
+    state = checkpoint()
+    exact = explicit_quote()
+    view = {"price": exact["price"], "market_as_of": exact["as_of"], "received_at": exact["received_at"],
+            "source": exact["source"], "source_event_id": exact["source_event_id"], "source_version": 4}
+    state["latest_explicit_quote"]["000000"] = exact
+    state["quote_price_views"]["000000"] = view
+    if fault == "missing_explicit":
+        state["latest_explicit_quote"].clear()
+    elif fault == "unknown_source":
+        view["market_as_of"] = None
+    elif fault == "future_version":
+        view["source_version"] = 5
+    elif fault == "digest":
+        exact["payload_digest"] = "conflicting"
+    elif fault == "source_version":
+        view[fault] = 3
+    else:
+        exact[fault] = "different" if fault == "source_event_id" else "2026-09-24T09:00:00+09:00"
+    runtime = object.__new__(KRExecutionRuntime)
+    with pytest.raises((ValueError, TypeError)):
+        runtime._validate_explicit_quotes(state, 4)
+        validate_price_views(state, 4)
+    index = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 4)).index
+    assert not index.complete
+    assert any(row.category == "quote" for row in index.invalid_facts())
+
+
+@pytest.mark.parametrize("root", ["latest_explicit_quote", "quote_price_views", "day_valuation_view", "day_valuations"])
+def test_quote_sources_add_update_delete_and_stale_floor_match_runtime(root):
+    from datetime import datetime
+    from src.execution.safety.runtime import KRExecutionRuntime
+    runtime = object.__new__(KRExecutionRuntime)
+    state = checkpoint()
+    state["day_valuation_view"] = {"evidence_id": "day", "rollover_version": 4}
+    day = {"payload": {"prices": [{"symbol": "000000", "price": "10",
+                                    "as_of": "2026-09-24T09:00:00+09:00"}]}}
+    state["day_valuations"] = {"day": day}
+    for stage in ("add", "update", "delete"):
+        exact = explicit_quote(event=stage, stamp=f"2026-09-24T{10 if stage == 'add' else 11}:00:00+09:00")
+        if root == "latest_explicit_quote":
+            state[root] = {} if stage == "delete" else {"000000": exact}
+        elif root == "quote_price_views":
+            state["latest_explicit_quote"] = {"000000": exact}
+            state[root] = {} if stage == "delete" else {"000000": {
+                "price": exact["price"], "source_version": 4, "received_at": exact["received_at"],
+                "market_as_of": exact["as_of"], "source": exact["source"], "source_event_id": exact["source_event_id"]}}
+        elif root == "day_valuation_view":
+            state["day_valuations"]["new"] = {"payload": {"prices": [{"symbol": "000000", "price": "20",
+                                                   "as_of": "2026-09-25T09:00:00+09:00"}]}}
+            state[root] = {} if stage == "delete" else {"evidence_id": "day" if stage == "add" else "new", "rollover_version": 4}
+        else:
+            state[root] = {} if stage == "delete" else {"day": {"payload": {"prices": [{"symbol": "000000",
+                "price": "10", "as_of": exact["as_of"]}]}}}
+        index = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 4)).index
+        quote = index.latest_quote_for_symbol("000000")
+        expected = runtime._quote_time_floor(state, "000000")
+        actual = quote.data["time_floor"] if quote else None
+        assert (datetime.fromisoformat(actual) if actual else None) == expected
+        if expected:
+            from src.execution.safety.application import ApplicationBlocked
+            with pytest.raises(ApplicationBlocked, match="stale_market_quote"):
+                runtime._require_quote_freshness(state, "000000", datetime.fromisoformat("2026-09-23T10:00:00+09:00"))
+
+
+def test_all_supported_owner_findings_and_join_cartesian_multiplicity_match_n3():
+    state = checkpoint(6)
+    state["inbox"]["pending"] = {"status": "RECEIVED"}
+    state["attempts"]["attempt-0"].update(side="buy", state="blocked_unknown", command_status="unknown", reserved_cash="1")
+    state["intents"]["intent-0"]["side"] = "buy"
+    state["attempts"]["attempt-1"].update(state="final_cancelled", observed_quantity=1, reserved_quantity=1)
+    state["attempts"]["attempt-2"].update(kind="cancel", parent_attempt_id="missing")
+    state["attempts"]["attempt-3"].update(applied_quantity=1)
+    state["outbox"]["orphan"] = {"kind": "protection_decision", "symbol": "missing", "intent_id": "missing", "decision": ["sell_all", 2, "x"]}
+    state["outbox"]["duplicate"] = dict(state["outbox"]["audit-0"])
+    state["protection"]["pending_owners"] = {"bad-symbol": "intent-0", "another": "intent-0", "orphan": "absent"}
+    state["protection"]["states"] = {"bad-symbol": {"remaining_quantity": 2, "pending_target_qty": 7}}
+    state["protection"]["degraded"] = {"repair": {"quantity": 2, "reason": "repair"}}
+    state["protection_quote_admissions"] = {"a": {"intent_id": "intent-0", "symbol": "x"},
+                                              "b": {"intent_id": "intent-0", "symbol": "y"}}
+    counts = owner_oracle(state)
+    assert set(counts) >= {"unapplied_inbox", "observation_not_applied", "unknown_buy", "remaining_reservation",
+        "terminal_reservation", "cancel_unconfirmed", "attempt_link_inconsistent", "protection_unsubmitted",
+        "protection_link_inconsistent", "protection_quantity_inconsistent", "repair_only", "pending_sell", "evidence_invalid"}
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 4))
+    assert dict(result.projection.findings) == counts
+    assert result.join_view.audits_by_key[("intent-0", "000000", ("sell_all", 1, "reason"))] == 2
+    assert dict(result.join_view.pending_fallback_by_pair) == {("orphan", "absent"): 1}
+
+
+def test_session_time_budget_and_real_phase_cancellation_without_workers(monkeypatch):
+    import src.execution.safety.recovery_projection as projection
+    def forbidden(*args, **kwargs):
+        raise AssertionError("background worker forbidden")
+    monkeypatch.setattr(asyncio, "to_thread", forbidden)
+    ticks = iter(n * .003 for n in range(100000))
+    session = projection.RecoveryBuildSession(detach_checkpoint(checkpoint()), token=OwnerToken("a", 0, 0, 1),
+                                               clock=lambda: next(ticks))
+    assert session.advance() == 1
+    assert session.result is None
+    session.close()
+    async def run():
+        task = asyncio.create_task(build_owner_recovery_models_cooperatively(detach_checkpoint(checkpoint()),
+                                    token=OwnerToken("a", 0, 0, 1)))
+        await task
+    asyncio.run(run())
+
+
+def test_protection_schema_and_market_have_no_product_writer():
+    """Track DTO aliases, item/delete writes, and update/pop/setdefault calls."""
+    violations = []
+    for path in (Path(__file__).parents[1] / "src").rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for function in (node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
+            aliases = {arg.arg for arg in function.args.args if arg.arg == "protection"}
+            if path.name == "protection.py":
+                aliases |= {arg.arg for arg in function.args.args if arg.arg == "dto"}
+            def is_dto(node):
+                if isinstance(node, ast.Name):
+                    return node.id in aliases
+                if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+                    return node.slice.value == "protection"
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id in ("deepcopy", "dict", "_fmap") and node.args:
+                        return is_dto(node.args[0])
+                    return (isinstance(node.func, ast.Attribute) and node.func.attr == "get"
+                            and node.args and isinstance(node.args[0], ast.Constant)
+                            and node.args[0].value == "protection")
+                return False
+            for _ in range(5):
+                for node in ast.walk(function):
+                    if isinstance(node, ast.Assign) and is_dto(node.value):
+                        aliases.update(target.id for target in node.targets if isinstance(target, ast.Name))
+            for node in ast.walk(function):
+                if (isinstance(node, ast.Subscript) and isinstance(node.ctx, (ast.Store, ast.Del))
+                        and isinstance(node.slice, ast.Constant) and node.slice.value in ("schema", "market")
+                        and is_dto(node.value)):
+                    violations.append((str(path), node.lineno))
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and is_dto(node.func.value):
+                    keys = {keyword.arg for keyword in node.keywords}
+                    if node.func.attr in ("pop", "setdefault", "__setitem__") and node.args and isinstance(node.args[0], ast.Constant):
+                        keys.add(node.args[0].value)
+                    if node.func.attr == "update" and node.args and isinstance(node.args[0], ast.Dict):
+                        keys.update(key.value for key in node.args[0].keys if isinstance(key, ast.Constant))
+                    if node.func.attr in ("update", "pop", "setdefault", "__setitem__") and keys & {"schema", "market"}:
+                        violations.append((str(path), node.lineno))
+    assert violations == []
+
+
+@pytest.mark.parametrize("root", ["market_sources", "entry_quotes"])
+def test_excluded_source_change_is_rejected_by_actual_owner_version_gate(tmp_path, monkeypatch, root):
+    from decimal import Decimal
+    from test_execution_command_owner import fixture
+    from test_execution_market_source import market_event
+    async def run():
+        f = await fixture(tmp_path, monkeypatch)
+        runtime, commands = f["runtime"], f["commands"]
+        try:
+            before = runtime.owner.version
+            if root == "market_sources":
+                await runtime.observe_market(await market_event(monkeypatch, f["clock"][0]))
+            else:
+                await commands.observe_entry_quote("005930", Decimal("10000"), as_of=f["clock"][0],
+                    source="synthetic", event_id="first", expected_version=before)
+            state, version = runtime.owner.state, runtime.owner.version
+            assert state[root] and version > before
+            with pytest.raises(ValueError, match="stale_execution_version"):
+                await commands.observe_entry_quote("other", Decimal("10000"), as_of=f["clock"][0],
+                    source="synthetic", event_id="stale", expected_version=before)
+            assert runtime.owner.version == version and runtime.owner.state == state
+            assert not f["broker"]._session.posts
+        finally:
+            await runtime.shutdown()
+            await f["store"].close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("path,value", [
+    (("protection", "states"), []), (("protection", "orders"), []),
+    (("protection", "pending_owners"), []), (("portfolio", "positions"), []),
+    (("protection", "exit_exempt"), [True]), (("protection", "integrity_reset_symbols"), ["x", "x"]),
+    (("protection", "degraded", "000000"), {"reason": "x", "quantity": True}),
+    (("protection", "orders", "order"), {"symbol": "000000", "side": "unsupported"}),
+    (("protection", "states", "000000"), {"remaining_quantity": 1, "pending_target_qty": True}),
+    (("protection_quote_admissions", "command"), {"symbol": "000000", "intent_id": "intent-0", "source_version": 1}),
+])
+def test_malformed_producer_containers_and_rows_never_certify_complete(path, value):
+    state = checkpoint()
+    target = state
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1))
+    assert not result.index.complete
+    assert result.index.invalid_facts()
+
+
+def test_valid_quote_admission_without_intent_is_complete():
+    from src.execution.safety.protection_recovery import digest
+    state = checkpoint(0)
+    request = {"symbol": "000000", "price": "10", "market_data": {}, "intent_id": None,
+               "observed_at": "2026-09-24T10:00:00+09:00", "market_as_of": None,
+               "source": None, "source_event_id": None}
+    state["protection_quote_admissions"]["quote:one"] = {
+        **request, "payload_digest": digest(request), "status": "RECEIVED", "source_version": 1,
+        "admitted_at": request["observed_at"]}
+    result = build_owner_recovery_models(state, token=OwnerToken("a", 0, 0, 1))
+    assert result.index.complete
+    assert result.index.admission("quote:one").intent_id is None
