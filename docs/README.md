@@ -5,6 +5,9 @@
 ## 문서 목록
 
 ### Architecture (아키텍처)
+
+- [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — Task2 raw50ms 차단·미승인 후보 보존, Task3 독립 부품 완료·실제 통합 미완료
+- [N5 projection/index 상세 설계](superpowers/specs/2026-09-24-recovery-projection-index-design.md) · [구현계획](superpowers/plans/2026-09-24-recovery-projection-index.md) — owner token·bounded typed update·협력적 복원·인수 게이트
 - [N4 관측 연결 전 누적 상태 측정](architecture/recovery-observability-scale-2026-09-23.md) — 합성 보관 이력·50ms 개발 게이트·phase별 timeout, 제품/상한/보존 정책 무변경
 - [N3 읽기 전용 복구 진단](architecture/recovery-diagnostics-2026-09-23.md) — 콜백 없는 두 표본 비교·비식별 고정 schema, 모듈형 exporter와 운영 배선 분리
 - [main 안전 동작 정합화](architecture/main-safety-alignment-2026-09-23.md) — legacy/attached 경계·KIS 응답/lease·읽기 전용 진단 계약, 운영 전환과 분리

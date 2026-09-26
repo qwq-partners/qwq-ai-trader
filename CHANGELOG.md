@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — N5 독립 FIFO gate 완료·복구 성능 차단 보존 (통합 미완료)
+
+- 별도 작업트리의 미커밋 복구 후보는 해시 집중 전체 복사·leaf 회전 키 유실을 transient construction/cooperative sealing으로 보완했다. 독립 리뷰는 구조 결함 해소를 확인했지만, raw 5,000행 정체57.748ms로50ms 게이트를 실패해 Task2 미승인 상태를 유지한다. 이 후보는 본 브랜치에 포함하지 않는다.
+- 기능740건 통과와 성능15통과/1실패/4미실행을 구분한다. 이전 실패·기각 패치와 취소 disposal 한계를 보존하며 임계값·제품 GC 정책을 바꾸지 않는다.
+- 승인 Task1 base에서 FIFO gate 부품을 구현했다(`9a01fa1`). 전달된 lock, 취소 후 제출 작업 drain, whole-ticket 예산과 고정 크기 지표를 보존하며, 불변 ticket·drain 도메인 검증·시계 예외 cleanup을 보강했다. 독립 재리뷰 승인, 부품12건·관련129건 통과. 실제 owner 배선/Task4 이후 통합은 보류한다.
+- 실제 승인·검증·진행 상태와 인계 위치는 [N5 진행 원장](docs/reviews/recovery-projection-progress-2026-09-27.md) 참조. main·운영·주문·전략·위험·Toss 설정 변경 없음.
+
 ## 2026-09-23 — test(safety): 누적 상태 성능 게이트·health 연결 보류
 
 - 실제 합성 lifecycle 종결 이력+작은 live cohort로 capture/owner/cold·warm sweep을 분리한 opt-in 하네스를 추가했다. 제품·운영 설정·보존 정책 변경0이다.
