@@ -8,6 +8,7 @@
 - Task 2: **미완료·성능 차단**. 마지막 커밋은 `038aa599f043e62d200df048152fa292167fea72`; 그 위의 세 파일 수정안은 미커밋이며 Task2 전체 승인을 받지 않았다. L1/L2 후속 후보는 **구조 범위 독립 승인**됐고, 표준 diff SHA256은 `721fe1c7bc60bf44876805a823a0d42f253b706f026eea6d8a76fcffd4c0c41c`다. 수정 후 첫 controlled5k 성능 셀이 freeze **13.023871ms >5ms로 실패**, 이후6셀은 미실행이다. 한 번의 별도 trace 진단은 미재현·미확정으로 끝났다. 이전 `8443703…` 후보와 실패 기록도 별도 보존했다.
 - Task 3: **독립 부품 완료·재리뷰 승인**, 커밋 `9a01fa1`. 승인된 Task 1에서 분리한 `feature/owner-ticket-gate-20260926`에 코드·시험 두 파일만 기록했다. 초기 리뷰의 차단 4건을 보완했고 부품 12건·관련 owner/store 포함 129건이 통과했다. Task 2 수정안을 이 브랜치에 복사하지 않았다.
 - Task 4–15: 미완료. 특히 실제 owner commit/restore 경로 연결, 전체 성능 행렬, UTC→KST 전체 검증과 broad review는 아직 완료하지 않았다.
+- L3 후속: 사용자가 서면 설계 제안을 확인한 뒤 source 공급 경로와 소비자 타입 의존성을 읽기 전용으로 분석했다. [L3-P0 실행계획](../superpowers/plans/2026-09-27-recovery-lifecycle-proof.md)을 작성했으며 사용자 계획 검토 전이다. warm SQL source·sequence의 시험용 증명 두 과제로 제한하고 전체 L3/제품 구현은 시작하지 않았다.
 - 이번 작업에서 main·운영 서비스·주문·전략·위험 설정·Toss 승인 범위를 바꾸지 않았다. 운영 상태를 새로 조회했다는 의미도 아니다.
 
 설계 정본은 [N5 상세 설계](../superpowers/specs/2026-09-24-recovery-projection-index-design.md), 실행 항목은 [구현계획](../superpowers/plans/2026-09-24-recovery-projection-index.md)이다. 설계서의 실행 방식 선택 대기 문구는 당시 기록이며, 사용자는 이후 하위 에이전트 방식 실행을 선택했다. 승인된 성능·안전 계약은 그대로다.
@@ -138,10 +139,47 @@ facts 기준의 구분, 종료 뒤 cancel의 no-op을 durable 제안에 반영�
 **APPROVE — DESIGN PROPOSAL ONLY**, 해당 문서 범위 잔여P0/P1/P2 0이다. 검토 대상 설계 제안 파일 SHA256은
 `c9332cf2be7feed744ad9e59a4d9b31c05215e5cedb2a31221aaac2a9f09a58f`다.
 
-이는 구현 가능한 capture/자료 표현을 완성한 명세라는 뜻이 아니다. source lease 공급 경로와
-bounded 표현의 구체 타당성, 사용자 서면 계약 검토·실행계획·RED·실제 성능은 여전히 남았다.
+이는 구현 가능한 capture/자료 표현을 완성한 명세라는 뜻이 아니다. 당시 source lease 공급 경로와
+bounded 표현의 구체 타당성, 사용자 서면 계약 검토·실행계획·RED·실제 성능은 남아 있었다.
 managed 인터페이스·정리 오류 전달·표현 변경을 구현하지 않았으며 이번 tracked 변경은 문서뿐이다.
 독립 리뷰 원문은 Task2 SDD `l3-lifecycle-design-independent-review.md`에 있다.
+
+### L3-P0 후속 계획 — source 공급과 표현의 좁은 증명
+
+사용자의 다음 `ㄱㄱ`는 앞서 제시한 서면 설계 확인으로 기록한다. 이미 선택한 하위 에이전트
+Plan→Do→See 방식을 유지하며 아직 없던 실행계획의 구현 승인으로 확대하지 않는다.
+
+**Plan:** source lease 분석(Astra/high 요청)과 sequence 소비자 조사(Sol/high 요청)를 병렬로
+읽기 전용 수행했다. 현재 store의 `_open/_load`는 managed wrapper보다 먼저 JSON graph를 만들고,
+factory의 선행 load와 owner publication에는 별도 복사/수명 경계가 있다. `FrozenJSON`의 exact
+tuple 검사·thaw/encode·policy digest/identity 때문에 임의 Sequence로의 단순 치환도 불가하다.
+
+**Do:** [L3-P0 실행계획](../superpowers/plans/2026-09-27-recovery-lifecycle-proof.md)을 작성했다.
+첫 산출물은 제품 미연결 시험용 두 부품이다: 이미 열린 합성 SQL DB에서 TEXT/receipt를 한
+snapshot으로 인계하는 source slot, 그리고 후보/iterator/pin을 소유하는 bounded sequence다.
+기존 승인 Task1+Task3 문서 branch를 같은 base로 삼아 별도 worktree에서 구현하고, 실제 테스트는
+직렬 실행한다. frozen Task2 후보와 선행 미승인 커밋은 가져오지 않는다.
+
+**See:** Astra/xhigh 요청 독립 검토가 P1 4건·P2 2건을 지적했고 모두 반영한 뒤 재리뷰에서
+**APPROVE_PROOF_PLAN_ONLY**, 새 중요 지적 없음으로 판정했다. 승인된 실행계획 파일 SHA256은
+`1c494e9c5beb9eded2e9addee404a3c8ff8d3ec846f10625f4a593fc69728418`이다.
+중요 지적은 호출 전후 snapshot만으로 내부 해제를 증명할 수 없음, immutable tuple와 budget1의
+진전 충돌, 임의 reader 생존 검출의 불가능한 약속, fault child의 조기 관측으로 인한 거짓 PASS였다.
+실제 primitive/수명 관측과 오류 변이 검출, private mutable 슬롯, 명시 read lease, 실제 gate drain
+관측으로 보완했다. driver 미시작 감독·고정 주입 API·builtin 변환 trap도 구체화했다.
+관측 독립성이나 구조 계약을 실제로 증명하지 못하면 PROOF_FAIL/미확정으로 종료하도록 고정했다.
+이 턴에는 시제품·RED/GREEN·성능시험을 실행하지 않았다.
+계획 검토와 구조 시험은 기존13.023871ms 실패/6UNRUN을 해결한 근거가 아니다. cold-open,
+allocation-time JSON decode, 실제 소비자 마지막 참조 정리와 전체 owner 연결은 여전히 차단이다.
+Luna/medium 요청 기계적 점검에서 추가 문서 링크/상태 불일치는 없었다. 독립 리뷰와 모델 요청은
+구현·실제 모델 metadata·cross-provider 검증의 증거가 아니다.
+coordinator의 Python 예제 AST·shell 구문·fault JSON 두 예제 파싱, 문서 whitespace·알려진
+비밀정보 패턴 검사를 통과했다. 예제와 제품 시험을 실행한 것은 아니다. 사용자 계획 검토 후에만
+이미 선택한 하위 에이전트 실행 방식으로 두 증명을 시작한다.
+
+상세 read-only 분석과 계획 검토 증거는 Task3 SDD의 `l3-managed-capture-contract-analysis.md`,
+`l3-sequence-consumer-inventory.md`, `l3-proof-plan-independent-review.md`에 보존한다. 원래
+설계 제안 `c9332cf2…`는 수정하지 않으며 문서 첫머리의 당시 계획 부재 문구는 이 절이 갱신한다.
 
 ## Task 3 격리 결정과 계약
 
@@ -169,7 +207,7 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTEST_D
 ## 다음 작업과 금지할 단축
 
 1. 메모리 비교·1회 CPU 진단·L1/L2 구현 및 독립 구조 검토는 완료했다. 새 세션은 `task-2-retirement-review.md`, `gc-cpu-attribution-report-2026-09-27.md`와 후보 `721fe1c7…`를 먼저 대조한다. 완료한 진단/구조 수정은 반복하지 않으며 이전 `8443703…`용 고정 지문 probe를 새 후보에 그대로 실행하지 않는다.
-2. L3 서면 제안을 검토한 뒤 source lease/capture·bounded 표현의 구체 타당성을 닫고 실행계획·RED를 고정한다. gate 선반환·무제한 background queue로 비용을 숨기지 않는다. 설계 제안 승인을 구현 준비 완료로 해석하지 않으며, legacy close/result/예외 의미를 조용히 바꾸지 않는다.
+2. L3-P0 실행계획의 사용자 검토 뒤 warm source·sequence의 두 시험용 증명을 RED부터 진행한다. 전체 source lease/capture·bounded 표현이 이미 확정된 것은 아니다. gate 선반환·무제한 background queue로 비용을 숨기지 않으며 legacy close/result/예외 의미를 조용히 바꾸지 않는다. 계획에 명시한 cold-open/decoder/consumer 수명 차단은 별도 후속 설계로 닫는다.
 3. 새 후보 성능은 첫 controlled5k13.023871ms 실패로 중단됐고 나머지6셀은 미실행이다. source 비교·trace1회로 원인을 확정하지 못했으므로 반복 측정으로 통과값을 고르지 않는다. 다음 진단은 새로운 판별 질문·측정 교란/CPU 구분·유한 중단 조건을 별도로 고정해야 한다. 실제 성능 인수 전에는 Task4 이후 owner 통합을 진행하지 않는다. 제품 GC 비활성화·임계 상향·입력 축소로 우회하지 않으며 과거 policy/100k 실패도 보존한다.
 4. 실제 owner commit/restore·writer/producer 연결, 63셀 성능 행렬·UTC→KST 전체 검증·독립 broad review는 원래 Task 4–15 순서로 진행한다. 전체 C/F/G/R, health/경보 연결과 전체 엔진 운영 전환은 별도 게이트이며 이번 완료 범위가 아니다.
 

@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — N5 L3-P0 입력 인계·sequence 증명 실행계획 (미구현)
+
+- L3 서면 제안 확인 뒤 source 공급 경로와 exact tuple 소비자를 병렬 읽기 전용 분석했다. warm SQL TEXT/receipt 동일 snapshot·취소 소유권, bounded sequence 후보·pin·iterator 정리를 시험 전용으로 검증하는 [실행계획](docs/superpowers/plans/2026-09-27-recovery-lifecycle-proof.md)을 작성했다.
+- 제품·기존 시험 변경 없이 두 별도 worktree의 RED→GREEN·실제 edge 관측·독립 검토를 계획한다. cold `_open`/부분 JSON decode/실제 소비자 수명·full L3는 미해결이며 사용자 계획 검토 전 구현하지 않는다.
+- 독립 계획 리뷰의 P1 4건·P2 2건을 반영해 `APPROVE_PROOF_PLAN_ONLY`를 받았다. 작업 한도별 실제 진전, 명시 reader lease, 독립 해제 관측/변이 검출, 실제 gate drain 이후 fault 판정을 고정했다. 시험 통과를 보고한 것이 아니다.
+- 이 변경은 문서뿐이다. 시험/성능 실행0, 기존 controlled5k13.023871ms 실패·6UNRUN과 Task2/owner 통합 차단 유지. main·운영·주문·설정 무변경. 실제 진행은 [N5 원장](docs/reviews/recovery-projection-progress-2026-09-27.md) 참조.
+
 ## 2026-09-27 — N5 현재 후보 성능 실패·L3 설계 제안 기록 (구현/승격 보류)
 
 - L1/L2 후보 `721fe1c7…`의 제한7셀 절차를 사전 고정해 실행했다. 첫 controlled5k freeze 최대13.023871ms로5ms 기준 실패, baseline1.227688ms·GC0·격리0. 이후6셀은 미실행이며 재시도하지 않았다.
