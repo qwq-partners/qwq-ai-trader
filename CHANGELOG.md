@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — N5 현재 후보 성능 실패·L3 설계 제안 기록 (구현/승격 보류)
+
+- L1/L2 후보 `721fe1c7…`의 제한7셀 절차를 사전 고정해 실행했다. 첫 controlled5k freeze 최대13.023871ms로5ms 기준 실패, baseline1.227688ms·GC0·격리0. 이후6셀은 미실행이며 재시도하지 않았다.
+- 소스 비교와 별도 trace진단1회로 원인을 확정하지 못했다. 진단의 최대2.739247ms/1passed는 미재현·미확정이며 원래 실패를 통과로 바꾸지 않는다. 제품/시험/GC/임계값 수정0.
+- L3 취소·정리·결과 인계 설계 제안에 source lease, 외부 오류 소유권, 신규 edge계수의 별도 승인, 종료 뒤 취소 no-op을 명시했다. 독립 Astra/xhigh 요청 리뷰 지적4건 반영, 설계 제안 한정 승인. capture/표현 타당성·구현계획·인수는 미완이다.
+- 정본은 [진행 원장](docs/reviews/recovery-projection-progress-2026-09-27.md)과 [L3 제안](docs/superpowers/specs/2026-09-27-recovery-build-lifecycle-design.md). 이 변경은 문서뿐이며 Task2 코드/main/운영/주문/설정은 변경하지 않는다. 아래 미측정 문구는 이전 시점 이력이다.
+
 ## 2026-09-27 — N5 후속 진단·L1/L2 구조 한정 승인 문서화 (Task2 전체 미승인)
 
 - 별도 Task2 후보의 L1 임시 테이블 협력적 해제·L2 불변 membership 공유를 RED부터 보완했다. 집중17건·관련757건 통과(성능20셀 제외), 독립 Astra/xhigh 요청 리뷰의 명세·품질 판정은 구조 범위 한정 승인이다. 본 문서 브랜치에는 Task2 코드를 포함하지 않는다.

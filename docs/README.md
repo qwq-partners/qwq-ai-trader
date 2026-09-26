@@ -6,7 +6,8 @@
 
 ### Architecture (아키텍처)
 
-- [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — L1/L2 구조 한정 승인·관련757 passed, 수정 후 성능 미측정·기존 실패 미해결; Task2 전체 미승인·Task3 실제 통합 미완료
+- [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — L1/L2 구조 한정 승인·관련757 passed; 새 controlled5k13.024ms 실패·6셀 미실행·trace 미확정; Task2/실제 owner 통합 차단
+- [N5 L3 취소·자원 수명 설계 제안](superpowers/specs/2026-09-27-recovery-build-lifecycle-design.md) — 논리 취소/물리 정리/결과 인계·source lease·cleanup proof; 독립 제안 한정 승인, capture/표현 타당성·구현 미완
 - [N5 projection/index 상세 설계](superpowers/specs/2026-09-24-recovery-projection-index-design.md) · [구현계획](superpowers/plans/2026-09-24-recovery-projection-index.md) — owner token·bounded typed update·협력적 복원·인수 게이트
 - [N4 관측 연결 전 누적 상태 측정](architecture/recovery-observability-scale-2026-09-23.md) — 합성 보관 이력·50ms 개발 게이트·phase별 timeout, 제품/상한/보존 정책 무변경
 - [N3 읽기 전용 복구 진단](architecture/recovery-diagnostics-2026-09-23.md) — 콜백 없는 두 표본 비교·비식별 고정 schema, 모듈형 exporter와 운영 배선 분리
