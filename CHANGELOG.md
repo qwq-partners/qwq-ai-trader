@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — N5 후속 진단·L1/L2 구조 한정 승인 문서화 (Task2 전체 미승인)
+
+- 별도 Task2 후보의 L1 임시 테이블 협력적 해제·L2 불변 membership 공유를 RED부터 보완했다. 집중17건·관련757건 통과(성능20셀 제외), 독립 Astra/xhigh 요청 리뷰의 명세·품질 판정은 구조 범위 한정 승인이다. 본 문서 브랜치에는 Task2 코드를 포함하지 않는다.
+- 수정 후 성능은 미측정이다. 수정 전 raw5k 57.748ms 및 과거 policy/100k 실패·미실행 stress4셀·취소 해제 한계를 보존한다. 수정 전 후보의 1회 CPU 진단은 raw48.690ms/gen2 CPU43.640ms로50ms 초과를 재현하지 못해 미확정이며 재시도하지 않았다.
+- Task3 FIFO gate는 `9a01fa1` 부품으로 독립 재리뷰 승인됐지만 실제 owner 배선과 Task4 이후 통합은 미완료다. 상세 근거는 [N5 진행 원장](docs/reviews/recovery-projection-progress-2026-09-27.md)에 보존한다. main·운영·주문·설정 변경 없음.
+
 ## 2026-09-27 — N5 독립 FIFO gate 완료·복구 성능 차단 보존 (통합 미완료)
 
 - 별도 작업트리의 미커밋 복구 후보는 해시 집중 전체 복사·leaf 회전 키 유실을 transient construction/cooperative sealing으로 보완했다. 독립 리뷰는 구조 결함 해소를 확인했지만, raw 5,000행 정체57.748ms로50ms 게이트를 실패해 Task2 미승인 상태를 유지한다. 이 후보는 본 브랜치에 포함하지 않는다.
