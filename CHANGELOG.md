@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — N5 L3-P0 한정 검토·진단 종료 (전체 인수 차단·미통합)
+
+- 승인된 계획을 공통 base의 두 격리 worktree에서 실행했다. source live-edge 산술·중간 참조 관측과 sequence의 저장된 known-error traceback을 RED로 재현해 수정했다. 초기 실패·timeout 증거는 보존한다.
+- source의 닫힌 SQLite cursor 내부 참조 누락을 PROOF_FAIL로 기록하고 기존 SQL callable 안에서 native 수명을 끝내도록 보정했다. child 결과 검증도 RED20건 후 보완해 계획 회귀139 passed·조건부 구조 재리뷰 승인이다. exact CPython3.12.3와 CI3.12 micro 지원 충돌은 미해결이다.
+- sequence의 커서 등록 실패·저장된 IndexError·fault 변이 시험 경계는 수정·기능 한정 재리뷰 승인됐다. 신규59건은 통과했지만 관련 기존 controlled100k가33.174ms로 실패해 최종1 failed/175 passed·외부exit124다. 전체 검증·broad review·코드 commit/push는 차단이다.
+- 독립 설계·구현 검토를 거친 단회 index CPU 진단은 미재현·미확정으로 종료했다(원본1 passed/12.78s, 최대4.204637ms, 격리0). 도구 시험27 passed·16 subtests passed다. 재측정·기존 실패 면제·CPU 원인 확정은 하지 않는다.
+- [실행 결과](docs/reviews/l3-proof-results-2026-09-27.md)에 실제 결과·제약을 기록한다. 제품 source·기존 시험·main·운영·주문·설정 변경0이며 과거 controlled5k13.023871ms 실패/6UNRUN을 해소한 것으로 보지 않는다. 아래 문구는 각 시점의 이력이다.
+
 ## 2026-09-27 — N5 L3-P0 입력 인계·sequence 증명 실행계획 (미구현)
 
 - L3 서면 제안 확인 뒤 source 공급 경로와 exact tuple 소비자를 병렬 읽기 전용 분석했다. warm SQL TEXT/receipt 동일 snapshot·취소 소유권, bounded sequence 후보·pin·iterator 정리를 시험 전용으로 검증하는 [실행계획](docs/superpowers/plans/2026-09-27-recovery-lifecycle-proof.md)을 작성했다.
