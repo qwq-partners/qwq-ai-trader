@@ -17,6 +17,10 @@
 
 **Status:** **PLAN_REVIEW_PENDING_ONLY**. 문서2개만 작성했으며 아래 모든 실행 checkbox는 미착수다.
 사용자 자율 진행 지시는 순수 설계 선행을 선택한 근거다. native/safe-harness gate를 충족하지 않았다.
+추가로 **TEST_ORACLE_DESIGN_UNRESOLVED**다. 현 코드에서 managed operation이 없다는 사실은
+정적 근거로 이미 확인된다. 없는 미래 속성을 조회해 False를 만들고 실패시키는 시험은 작성하지 않는다.
+아래 node/명령/기대 실패는 예약된 첫 RED 범위이며 allocation-time decoder 계약 이후 실제 소유
+관계를 관측할 seam이 독립 검토되기 전에는 실행 가능한 시험 명세로 취급하지 않는다.
 
 ## Global Constraints
 
@@ -45,6 +49,10 @@
 
 - [ ] 작성자와 다른 Astra/xhigh가 spec와 본 계획을 함께 검토하고 중요 지적0/처분을 기록한다.
   범위 한정 판정은 문서 승인이지 제품 실행 허가가 아니다. coordinator만 후속 dispatch한다.
+- [ ] decoder 계약 이후 첫 할당 직전 실제 owner root→등록 resource 영역→해당 allocation 책임의
+  관계와 그 관측 위치를 소스 행/객체 identity 기준으로 별도 고정한다. 관측자는 제품의 self-report
+  bool을 신뢰하거나 없는 속성을 getattr 기본값으로 읽지 않는다. 이 seam이 아직 없으므로 현재
+  판단은 static-evidence sufficient / RED deferred다. 이 gate는 native 자격과 별개다.
 - [ ] P3/P4 actual 결과·허용 scope를 확인한다. 순수 CONTRACT_MATCH를 실행권으로 해석하지 않는다.
 - [ ] 별도 capsule/bootstrap 계획 아래 exact source/build/patch/lock/loaded closure/profile·독립
   native 검토·신뢰되는 선행 등록 revision 및 이 **cold 관측 시험 subject**의 실행 자격을 확보한다.
@@ -77,16 +85,19 @@ native thread id, operation 존재/등록 여부, checkpoint revision, reached f
   fixture 준비 단계에서 기록하고 그 준비용 store/connection을 종료한다. unknown nested list와
   정책 등록 사실을 포함하되 실제 계좌 자료0. 새 `ExecutionStateStore`의 `_connection is None`을
   확인한다. fixture 준비와 대상 cold 경로를 구분하며 대상 store의 `_open/load/commit` warmup0.
-- [ ] **관측:** test-scoped observer가 실제 `store._open`의 `json.loads` 호출 직전에 scalar 사건을
-  기록한다. 현 함수/global/local 값은 읽기만 하고 native refcount/layout 관측을 수행하지 않는다.
+- [ ] **관측:** 위 oracle 설계 gate가 열린 뒤 test-scoped observer가 실제 `store._open`의
+  `json.loads` 호출 직전에 scalar 사건을 기록한다. 현 함수/global/local 값은 읽기만 하고 native refcount/layout 관측을 수행하지 않는다.
   observer는 결과에 operation을 사후 붙이거나 graph를 포장하지 않는다. 시험 자체의 보관/관측
-  책임은 제품의 allocation-time owner가 아니다. 기존코드에서 operation 부재를 None/false로 기록한다.
+  책임은 제품의 allocation-time owner가 아니다. 관측 대상은 실제 프레임·선등록 영역의 소유 관계다.
+  `operation_registered_before_allocation`이라는 제품 속성을 새로 가정하거나 만들지 않는다.
 - [ ] **단언:** literal node 이름은
   `test_cold_validation_allocations_require_preregistered_operation`.
   실제 cold JSON 호출 도달≥1·W 스레드·준비 store와 다른 target instance를 먼저 확인한 후,
-  첫 호출 시 `operation_registered_before_allocation is True`를 요구한다.
-  현 기준 코드의 예상 RED는 **이 단언의 False 대 True AssertionError 한 건**이다.
-  `_open` 호출 횟수나 테스트가 만든 counter만으로 판정하지 않는다.
+  첫 호출 이전 책임 관계가 실제 성립한다는 test-level predicate를 요구한다. 그 predicate의
+  계산은 위 oracle gate에서 독립 고정되어야 하며 현재 작성하지 않는다.
+  현 기준 코드의 예상 RED는 **선등록 소유 관계 불성립 AssertionError 한 건**이다.
+  `_open` 호출 횟수나 테스트가 만든 counter/bool만으로 판정하지 않는다. 그러한 관측밖에
+  할 수 없다면 정적 근거만 보고하고 RED를 decoder 계약 뒤로 미룬다.
 - [ ] **정리:** observer 복구와 store.close를 finally에서 수행한다. close/finalizer/guard/controller
   문제가 있으면 의도된 RED와 별개 실패로 보존한다. 현행 비관리 graph의 실행은 이 단계에서만
   위 safe harness가 책임지며 정상 bounded lifetime을 증명한 것으로 보고하지 않는다.

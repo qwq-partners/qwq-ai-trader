@@ -181,6 +181,9 @@ GC 정책 변경, 이력 pruning, schema/JSON/permission/WAL/빈파일 검증 �
    source 일관성과 publication currentness를 별개로 인수하는가?
 5. 취소·error unwind·미인계 Future 마지막 참조에서 소유자가 하나로 유지되고 false cleanup이 막히는가?
 6. 첫 RED가 실제 현행 경계의 소유권 단언 실패이며 import 부재나 runtime 차단을 RED로 오인하지 않는가?
+   없는 미래 속성이나 observer 자체 bool을 검사하는 순환 시험이면 거부한다. 현행 미등록 경계는
+   정적 근거로 충분하며 실제 owner root/등록 영역/할당 책임을 연결하는 observer seam은 decoder
+   계약 뒤 별도 확정한다. 현재 첫 RED의 oracle 설계는 미해결이므로 실행은 보류한다.
 
 선택한 책임/순서는 위와 같다. 미결정은 **구현 승인에 필요한** exact native/capsule·safe harness,
 allocation-time decoder 표현/오류 도메인, 실제 consumer 반납·serialization/identity 호환,
