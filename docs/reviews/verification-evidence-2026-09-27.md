@@ -1,5 +1,7 @@
 # 오프라인 시험 증거 도구 — 진행 원장
 
+> 후속(2026-09-27): [source 수집·격리 경계](source-proof-boundaries-2026-09-27.md)의 개발 검증을 완료했다. 해당 후보의 전체 UTC/KST는 각각6089 passed이며 source108 native 실행·자격 취득은 아니다. 아래는 오프라인 v1 도구 자체의 완료 이력이다.
+
 ## 범위와 상태
 
 2026-09-27 사용자 `rㄱ`으로 [실행계획](../superpowers/plans/2026-09-27-required-source-proof.md)의 구현을 승인받았다.
@@ -93,7 +95,7 @@ python -m scripts.dev.check_verification_evidence --expected expected.json \
 
 현재 구현 검증 후에도 아래 순서가 남는다. 각 단계는 별도 Plan→Do→See와 필요한 승인 범위를 확인하며 자동으로 운영 권한을 확대하지 않는다.
 
-1. source proof 이식·직접 child 격리: 보존한 source/sequence 후보를 읽기 전용 입력으로 삼아 명시 inventory와 직접 자식 격리 RED를 먼저 고정한다. 기존 시험 수집·guard를 우회하지 않는다.
+1. source proof 수집·직접 child 격리 경계는 [후속 원장](source-proof-boundaries-2026-09-27.md)에서 개발 한정 완료했다. native 실행은 여전히 미지원이며 source/sequence 원 후보와 guard를 보존했다.
 2. exact runtime qualification: CPython patch·native loader/closure·bootstrap·독립 oracle의 같은 후보 결속을 입증한다. 현재 qualified runtime은0이며 지문 일치만으로 자격을 부여하지 않는다.
 3. 실제 OS 결과 controller 및 outcome 정책: process rc·timeout·kill/reap·Git/event/run/attempt를 결속하고 skip/xfail의 조건·사유·시험 소스 지문을 검증한다. failed/XPASS·수집 누락·기존 성능 예외를 자동 승인하지 않는다.
 4. standard/source-proof launcher·필수 CI: 앞 단계 완료 후 네 슬롯을 실제 작업에 배선하고 원격 required check와 보호 규칙의 효력을 검증한다.

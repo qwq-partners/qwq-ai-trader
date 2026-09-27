@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — source 증명의 수집·격리 경계 개발 완료
+
+- helper bytes와 원23개 시험·핵심 판정 함수는 보존하고, 별도 cases 경로·고정 guard 실체 검사·직접 child 격리·미자격 native 실행 차단을 추가했다. 원 fault record는 보존하며 엄격한 outer envelope만 덧붙였다.
+- 독립 literal source108/관련31과 실제 명시 수집이 exact 일치했다. 일반 수집은 기존6034개를 모두 유지하고 새 경계73개만 추가했으며 source는 기본 발견0이다. 수집을 native PASS로 해석하지 않는다.
+- Task1 Astra/high·Task2 Terra/high 요청 구현, 별도 Astra/xhigh·Sol/high 리뷰 및 새 Astra/xhigh broad 승인(지적0). 집중168 passed, 전체 UTC/KST 각6089 passed·기존16 skipped/2 xfailed/4 warnings·격리0. [진행 원장](docs/reviews/source-proof-boundaries-2026-09-27.md) 참조.
+- `SOURCE_BOUNDARIES_VALIDATED`는 개발 한정이다. qualified runtime0·source108 call-phase0, 원 성능 예외/실패 보존. 제품·기존 회귀 단언·guard·CI·main·운영 변경0이며 다음은 실제 OS 종료·회수 결속이다.
+
 ## 2026-09-27 — 오프라인 시험 증거 수집·검사·CLI 개발 완료
 
 - 사용자 구현 승인 후 세 새 개발 도구와 대응 시험을 작성했다. 실제 pytest phase/rc/guard 관측을 종료 반환 후 발행하고, 독립 expected와 네 lane×시간대 receipt를 엄격히 대조한다. 결과는 항상 오프라인 범위·`production_eligible=false`다.

@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **source 수집·격리 경계 개발 완료(2026-09-27):** [진행 원장](docs/reviews/source-proof-boundaries-2026-09-27.md)이 최신 정본이다. 후보 `cc18b9c`에서 원 helper·23개 시험/핵심 판정 함수 보존, 독립 source108/관련31 목록과 실제 수집 exact 일치, 기본6034 보존+73추가/source0을 확인했다. 집중168 passed, 전체 UTC/KST 각각6089 passed·기존16 skipped/2 xfailed/4 warnings·격리0, 독립 broad 지적0이다. `SOURCE_BOUNDARIES_VALIDATED`는 개발 경계 한정이며 source108 call-phase/native 실행0·qualified runtime0이다. 다음은 실제 OS 종료·회수 결속. 기존 source/sequence 후보·제품/CI/main/운영·주문/설정은 무변경이다. 아래 안내는 각 시점 이력이다.
+
 > **오프라인 검증 도구 개발 완료(2026-09-27):** 사용자 `rㄱ` 승인 후 실제 pytest evidence·순수 네 슬롯 검사·파일 CLI를 구현했다. [구현 원장](docs/reviews/verification-evidence-2026-09-27.md)이 정본이다. 최종 전체 UTC/KST 각6016 passed(기존16 skipped/2 xfailed/4 warnings), 격리0, 독립 broad·보완 재리뷰 승인 후 개발 코드 `eb7cfa7`로 통합했다. 통합 후 관련100건도 통과했다. [정확한 성능 예외 원장](docs/reviews/recovery-performance-exceptions-2026-09-27.json)의 두 과거 관측은 개발 비차단이며 원시 실패/exit124를 PASS로 바꾸지 않는다. source/sequence 후보·제품 src·기존 시험/CI·main/운영은 변경하지 않았다. qualified runtime0, 실제 OS 종료 결속·skip/xfail 조건 허용·필수 CI는 후속이다. 아래 실패/미승인 안내는 각 시점의 이력이다.
 
 > **추가 진단 종료:** clean-base100k 단회 index CPU 진단은 미재현·미확정(원본1 passed/12.78s·최대4.204637ms)이다. 재시도·원인 확정·기존 실패 면제는 없다. 아래33.174ms·13.023871ms 실패와 Python 지원 충돌, 코드 통합 차단은 유지한다. 최신 근거·후속 조건은 [L3-P0 실행 결과](docs/reviews/l3-proof-results-2026-09-27.md) 참조.

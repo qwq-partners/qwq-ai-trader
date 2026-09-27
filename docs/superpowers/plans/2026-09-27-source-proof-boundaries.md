@@ -41,18 +41,18 @@
 `_bind_exact_guard() -> dict`, `parse_fault_envelope(raw: str | bytes) -> dict`, `setup_module()`.
 고정 path/hash/schema는 spec 그대로 사용한다.
 
-- [ ] 새 시험부터 작성: helper hash equality, exact child evidence, altered hash/wrong path/
+- [x] 새 시험부터 작성: helper hash equality, exact child evidence, altered hash/wrong path/
   duplicate object/non-list/nonzero violations, extra argv, product-import sentinel,
   unqualified direct/call의 원본 provenance/function fixture·seed·SQLite·native 호출0, helper path collision.
   session-scope pytest autouse fixture는 제외하며 sentinel은 기록 뒤 즉시 raise(원 함수 호출0)한다.
-- [ ] 파일 부재/미구현 때문에 실패함을 env-isolated focused pytest로 기록한다.
-- [ ] 원본594line helper를 apply_patch로 bytes 보존 이식하고 SHA256 확인한다.
-- [ ] 원본 cases를 apply_patch로 이식한 뒤 spec의 bootstrap/envelope/path/차단만 추가한다.
+- [x] 파일 부재/미구현 때문에 실패함을 env-isolated focused pytest로 기록한다.
+- [x] 원본594line helper를 apply_patch로 bytes 보존 이식하고 SHA256 확인한다.
+- [x] 원본 cases를 apply_patch로 이식한 뒤 spec의 bootstrap/envelope/path/차단만 추가한다.
   기존 test 함수/parameter/oracle assertion을 그대로 보존한다.
-- [ ] envelope duplicate/extra/missing/type/guard mismatch를 작은 subprocess의 합성 입력으로
+- [x] envelope duplicate/extra/missing/type/guard mismatch를 작은 subprocess의 합성 입력으로
   시험한다. native 함수를 호출하는 방식으로 parser 시험하지 않는다.
-- [ ] focused GREEN, diff/source 원본 대조·hash·isolation0·실행 명령/exit code를 report에 기록한다.
-- [ ] 허용3파일만 commit, push하지 않는다. coordinator가 독립 리뷰 후 통합한다.
+- [x] focused GREEN, diff/source 원본 대조·hash·isolation0·실행 명령/exit code를 report에 기록한다.
+- [x] 허용3파일만 commit, push하지 않는다. coordinator가 독립 리뷰 후 통합한다.
 
 ## Task 2: 독립 exact inventory
 
@@ -64,34 +64,34 @@
 lane은 `source` 또는 `related`만. actual은 exact list[str], duplicate/unknown/missing reject.
 canonical digest는 UTF8 JSON `ensure_ascii=False, separators=(',',':'), allow_nan=False`의 SHA256.
 
-- [ ] 원본 decorator/literal을 읽고 exact expected tuple을 독립 작성한다. 실제 collection 금지.
-- [ ] 정의 부재 RED를 기록한다; sorted108/source, sorted31/related, 고정 hash,
+- [x] 원본 decorator/literal을 읽고 exact expected tuple을 독립 작성한다. 실제 collection 금지.
+- [x] 정의 부재 RED를 기록한다; sorted108/source, sorted31/related, 고정 hash,
   missing/duplicate/unexpected/wrong-lane/type/bool/non-string을 시험한다.
-- [ ] 순수 module 구현; actual 순서는 허용하되 identity multiset은 정확히 같아야 한다.
+- [x] 순수 module 구현; actual 순서는 허용하되 identity multiset은 정확히 같아야 한다.
   bytes 최대 node2048, nodes20000; 실제 collector/CLI/native/runtime 자격 기능 추가 금지.
-- [ ] focused GREEN, independent expected 작성 근거·명령/exit code 기록 후 두 파일 commit.
+- [x] focused GREEN, independent expected 작성 근거·명령/exit code 기록 후 두 파일 commit.
 
 ## Task 3: coordinator 수집·통합 검증
 
 **Owner:** coordinator. worker는 실행하지 않는다. 분석3artifact와 검토 기록은 SDD 경로에 보존.
 
-- [ ] 구현 전 base 기본 `pytest tests --collect-only -q`의 실제 node 집합·rc·guard를 저장한다.
+- [x] 구현 전 base 기본 `pytest tests --collect-only -q`의 실제 node 집합·rc·guard를 저장한다.
   existing pytest_evidence wrapper의 collection receipt를 재사용할 수 있으나 finished/pass 판정 금지.
-- [ ] Task1/2 독립 spec+quality 리뷰를 Sol/high 또는 critical Astra/xhigh로 수행한다.
+- [x] Task1/2 독립 spec+quality 리뷰를 Sol/high 또는 critical Astra/xhigh로 수행한다.
   작성자 외 reviewer, 반려 시 원 writer가 수정·재리뷰한다.
-- [ ] coordinator만 diff 확인 후 feature에 cherry-pick한다. expected tuple 수정 필요 시
+- [x] coordinator만 diff 확인 후 feature에 cherry-pick한다. expected tuple 수정 필요 시
   actual 복사 금지: 원본 decorator와 대조해 사유를 기록하고 reviewer 재확인한다.
-- [ ] 통합 focused 시험을180초 cap으로 실행: 새 두 test파일 + 기존 evidence 관련3파일.
+- [x] 통합 focused 시험을180초 cap으로 실행: 새 두 test파일 + 기존 evidence 관련3파일.
   정확한 exit0/guard0 없이는 완료로 기록하지 않는다.
-- [ ] 기본 collection 기존 집합 포함/source0/새경계시험만 추가를 실제 집합으로 대조한다.
-- [ ] source explicit collection exact108, related exact31을 따로 대조하고 raw receipt 보존한다.
+- [x] 기본 collection 기존 집합 포함/source0/새경계시험만 추가를 실제 집합으로 대조한다.
+- [x] source explicit collection exact108, related exact31을 따로 대조하고 raw receipt 보존한다.
   source의 실제 call-phase108은 실행하지 않는다.
-- [ ] fresh whole-branch Astra/xhigh broad review와 발견사항 수정을 완료한다.
-- [ ] coordinator 단독으로 전체 `python -m pytest tests -x -q -p no:cacheprovider
+- [x] fresh whole-branch Astra/xhigh broad review와 발견사항 수정을 완료한다.
+- [x] coordinator 단독으로 전체 `python -m pytest tests -x -q -p no:cacheprovider
   -p pytest_asyncio.plugin -p pytest_cov.plugin -p anyio.pytest_plugin --tb=short` UTC→KST 실행.
   no HOME, shared lock, timeout900초, 원문 log·exit·guard·skip/xfail identity 보존.
-- [ ] in-memory Python compile·secret pattern·git diff --check, source/guard/frozen hash 보존 확인.
-- [ ] CHANGELOG/CLAUDE/docs README/report에 수집·native 미실행을 구분해 기록한다.
+- [x] in-memory Python compile·secret pattern·git diff --check, source/guard/frozen hash 보존 확인.
+- [x] CHANGELOG/CLAUDE/docs README/report에 수집·native 미실행을 구분해 기록한다.
 - [ ] feature commit/push+remoteSHA 확인. main/배포 변경 없이 다음 OS controller 설계 단계로 진행.
 
 ## Self-review
