@@ -54,7 +54,10 @@ qualified runtime은 여전히0, native 실행0, 운영/제품/CI/main 변경0�
 
 수집 네 실행 모두 exit0·collection_errors0·deselected0·guard 실체1·위반0이다.
 receipt의 `finished=true`는 pytest 반환이며 각 phase는 `not_run`이다. 이를 통과 증거로 쓰지 않는다.
-집중168건은53+20+35+49+11이다. 이전 단계의 관련100건에는 이번 집중 선택에 없는
+집중168건은53+20+36+49+10이다. 후속 OS 계약의 결합 집중시험과 대조하면서
+보존된 integrated collection receipt의 exact node를 파일별로 다시 세어 정정했다.
+기존 표기의35/11은 이전 중간 결과를 잘못 옮긴 것이며, 원문168 passed와 총수는 변하지 않는다.
+이전 단계의 관련100건에는 이번 집중 선택에 없는
 기존 `test_verify.py`5건이 들어 있었으며, 전체 수집에서 누락된 시험은 없다.
 
 목록의 canonical JSON SHA256:
