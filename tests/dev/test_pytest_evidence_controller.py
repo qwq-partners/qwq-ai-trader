@@ -1952,13 +1952,26 @@ def backstop():
     signal.alarm(8)
 def spawn():
     backstop()
+    ready_read, ready_write = os.pipe()
     if os.fork() == 0:
+        os.close(ready_read)
         backstop()
         os.setsid()
         if os.fork() == 0:
             backstop()
+            if os.write(ready_write, b'R') != 1:
+                os._exit(96)
+            os.close(ready_write)
             time.sleep(7)
+            os._exit(0)
+        os.close(ready_write)
         os._exit(0)
+    os.close(ready_write)
+    ready = os.read(ready_read, 1)
+    os.close(ready_read)
+    if ready != b'R':
+        os._exit(96)
+    os.write(1, b'B1_COPIED_DESCENDANTS_READY\\n')
 def test_ok():
     atexit.register(spawn)
 '''
@@ -1969,16 +1982,28 @@ def backstop():
     signal.alarm(8)
 def spawn():
     backstop()
+    ready_read, ready_write = os.pipe()
     if os.fork() == 0:
+        os.close(ready_read)
         backstop()
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if os.fork() == 0:
             backstop()
             os.setsid()
+            if os.write(ready_write, b'R') != 1:
+                os._exit(96)
+            os.close(ready_write)
             time.sleep(7)
             os._exit(0)
+        os.close(ready_write)
         time.sleep(7)
         os._exit(0)
+    os.close(ready_write)
+    ready = os.read(ready_read, 1)
+    os.close(ready_read)
+    if ready != b'R':
+        os._exit(96)
+    os.write(1, b'B1_COPIED_DESCENDANTS_READY\\n')
 def test_ok():
     atexit.register(spawn)
 '''
@@ -1990,6 +2015,7 @@ def test_ok():
     _assert_b1_copied_regular_receipt(repo, doc)
     assert doc["process"]["returncode"] == 0 and doc["process"]["reason"] == "cleanup_error"
     assert doc["process"]["descendant_survived"] is True and doc["process"]["descendants_reaped"] == 2
+    assert (repo / "process.json.stdout.log").read_bytes().count(b"B1_COPIED_DESCENDANTS_READY\n") == 1
     if late:
         assert doc["process"]["kill_sent"] is True
 
@@ -2019,8 +2045,9 @@ def test_b1_copied_real_bad_guard_frame_is_not_success(tmp_path):
     repo = make_repo(tmp_path, b1_isolated=True)
     path = repo / "scripts/dev/pytest_evidence_bootstrap.py"
     before = path.read_bytes()
-    old = b"        if os.write(control, frame) != len(frame):\n"
-    new = b"        frame = frame.replace(b'" + GUARD_HASH.encode() + b"', b'0' * 64)\n" + old
+    old = b"        if os.write(control, frame) != len(frame):\n            raise OSError\n"
+    new = (b"        frame = frame.replace(b'" + GUARD_HASH.encode() + b"', b'0' * 64)\n" + old
+           + b'        os.write(2, b"B1_COPIED_BAD_GUARD_SENT\\n")\n')
     assert before.count(old) == 1 and before.count(new) == 0
     transformed = before.replace(old, new)
     assert transformed.count(old) == 1 and transformed.count(new) == 1
@@ -2032,13 +2059,15 @@ def test_b1_copied_real_bad_guard_frame_is_not_success(tmp_path):
     doc = _assert_b1_copied_document(repo, result, identity)
     assert doc["process"]["guard"] is None and doc["process"]["reason"] == "startup_error"
     assert doc["process"]["cleanup_complete"] is True
+    assert (repo / "process.json.stderr.log").read_bytes().count(b"B1_COPIED_BAD_GUARD_SENT\n") == 1
 
 
-def test_b1_copied_real_contended_lock_starts_no_workload(tmp_path):
+def test_b1_copied_real_contended_lock_has_no_published_workload(tmp_path):
     import fcntl
     repo = make_repo(tmp_path, b1_isolated=True, b1_short_budget=True)
     lock = repo / ".b1-fixture/test-workload.lock"
     before = lock.stat()
+    identity = _b1_copied_identity(repo)
     with lock.open("rb") as held:
         fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
@@ -2050,6 +2079,7 @@ def test_b1_copied_real_contended_lock_starts_no_workload(tmp_path):
             after = lock.stat()
             assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
             assert lock.read_bytes() == b""
+            assert _b1_copied_identity(repo) == identity
         finally:
             fcntl.flock(held.fileno(), fcntl.LOCK_UN)
 
