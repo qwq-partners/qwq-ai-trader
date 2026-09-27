@@ -3370,6 +3370,7 @@ class _MainMatrixCase(_ValidatedBodyCase):
         self.observed = False
         self.owner = None
         self.coord = None
+        self.stream_close_attempts = []
 
     def event(self, name, *args):
         super().event(name, *args)
@@ -3412,6 +3413,13 @@ class _MainMatrixCase(_ValidatedBodyCase):
 
     def stream(self, name):
         stream = super().stream(name)
+        close_record = {"name": name, "attempts": 0}
+        self.stream_close_attempts.append(close_record)
+        original_close = stream.close
+        def close():
+            close_record["attempts"] += 1
+            return original_close()
+        stream.close = close
         original = stream.write
         def write(raw):
             count = original(raw)
@@ -3519,6 +3527,7 @@ def _run_main_matrix(monkeypatch, case, *, profile="b1-standard/v1", overrides=(
             Path("/fixture/context.json"), Path("/fixture/receipt.json"), Path("/fixture/result.json"),
             [Path("/fixture/stdout.log"), Path("/fixture/stderr.log")], ["tests/test_tiny.py"]))
     assert case.violations == []
+    assert all(item["attempts"] <= 1 for item in case.stream_close_attempts), case.stream_close_attempts
     return result, escaped
 
 
@@ -3548,6 +3557,7 @@ def test_b1_main_timeout_preserves_first_reason_with_explicit_stage_precedence(m
     names = [event[0] for event in case.events]
     assert names.count("coord-close") == names.count("bounds-close") == 1
     assert names.index("bounds-close") < names.index("coord-close")
+    assert all(item["attempts"] == 1 for item in case.stream_close_attempts)
     assert len(case.writes) <= 1
     if case.writes:
         process = json.loads(case.writes[0])["process"]
@@ -3755,7 +3765,7 @@ def test_b1_main_partial_acquisition_closes_only_owned_handles_once(monkeypatch,
     assert [event[0] for event in case.events].count("coord-close") == 1
 
 
-@pytest.mark.parametrize("boundary", ["entry", "prepare", "preflight", "probe", "last_nonblocking"])
+@pytest.mark.parametrize("boundary", ["entry", "acquire", "prepare", "preflight", "probe", "last_nonblocking"])
 @pytest.mark.parametrize("cause", ["stopped", "run_end"])
 def test_b1_main_startup_cutoff_cannot_launch_after_boundary(monkeypatch, boundary, cause):
     case = _MainMatrixCase()
@@ -3971,3 +3981,460 @@ def test_b1_main_same_oserror_has_distinct_observer_and_owned_close_channels(mon
     assert escaped is None and result == expected and case.owner.error == "timeout"
     assert recorded == ([failure] if origin == "observer" else [])
     assert case.live == set()
+
+
+@pytest.mark.parametrize("bad", ["bootstrap", "guard", "producer", "context_read", "event", "lane", "oversize", "timezone", "initial_hash"])
+def test_b1_main_unsafe_initial_inputs_never_publish_or_launch(monkeypatch, bad):
+    case = _MainMatrixCase()
+    if bad == "event":
+        case.context["run"]["event"] = "push"
+    if bad == "lane":
+        case.context["slot"]["lane"] = "source-proof"
+    if bad == "timezone":
+        case.context["slot"]["timezone"] = "Asia/Seoul"
+    original_bootstrap, original_hash = case.bootstrap, case.hash
+    def bootstrap():
+        if bad == "bootstrap":
+            case.event("bootstrap")
+            raise RuntimeError("bootstrap setup")
+        value = original_bootstrap()
+        if bad == "guard":
+            case.guard["violations"] = 1
+        original_load = value._load
+        def load(name, path):
+            if bad == "producer":
+                case.event("producer", name, path)
+                raise ImportError("producer setup")
+            producer = original_load(name, path)
+            original_read = producer._read_context
+            def read(context_path):
+                context, raw = original_read(context_path)
+                if bad == "context_read":
+                    raise ValueError("context setup")
+                return context, b"x" * 65537 if bad == "oversize" else raw
+            producer._read_context = read
+            return producer
+        value._load = load
+        return value
+    def initial_hash(path):
+        value = original_hash(path)
+        if bad == "initial_hash":
+            raise OSError(5, "initial hash")
+        return value
+    case.bootstrap, case.hash = bootstrap, initial_hash
+    result, escaped = _run_main_matrix(monkeypatch, case)
+    assert escaped is None and result == 125 and case.spawn == [] and case.writes == []
+    assert not any(event[0] in ("probe", "observe", "receipt") for event in case.events)
+
+
+@pytest.mark.parametrize("entered_cleanup", [False, True])
+def test_b1_main_shares_budget_and_clamps_near_end_spawn(monkeypatch, entered_cleanup):
+    case = _MainMatrixCase()
+    budgets, observations = [], []
+    original_coordination = case.coordination
+    def coordination():
+        coord = original_coordination()
+        original_acquire = coord.acquire_lock
+        def acquire(stopped, budget):
+            budgets.append(budget)
+            return original_acquire(stopped, budget)
+        coord.acquire_lock = acquire
+        return coord
+    def probe(deadline, stopped, *, budget=None, controller_fds=()):
+        budgets.append(budget)
+        case.event("probe", deadline)
+        if entered_cleanup:
+            budget.begin_cleanup(995.5)
+        return True
+    def observe(owner, pipes, logs, guard, deadline, stopped, *, profile=None):
+        budgets.append(owner._budget)
+        observations.append((deadline, owner.startup_end, profile))
+        owner.returncode, owner.reaped = 0, True
+        owner._begin_cleanup(995.5)
+        for fd in list(pipes.values()):
+            case.close(fd)
+        pipes.clear()
+        # Scripted zero-byte observation; expected deadlines above are independent literals.
+        import hashlib
+        owner.observation = {"profile": "b1-standard/v1", "streams": {
+            name: {"bytes": 0, "sha256": hashlib.sha256(), "overflow": False} for name in ("stdout", "stderr")},
+            "observed": {"stdout": 0, "stderr": 0}, "guard": dict(case.guard), "failed_logs": set()}
+        return True, dict(case.guard), {name: {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(),
+            "overflow": False, "observed_bytes": 0} for name in ("stdout", "stderr")}
+    case.coordination, case.probe, case.observe = coordination, probe, observe
+    case.clock = lambda: 995.5
+    result, escaped = _run_main_matrix(monkeypatch, case)
+    assert escaped is None and result == (125 if entered_cleanup else 0)
+    assert len(budgets) == (2 if entered_cleanup else 3)
+    assert all(budget is budgets[0] for budget in budgets)
+    assert (budgets[0].total_end, budgets[0].run_end) == (1000.0, 996.0)
+    assert observations == ([] if entered_cleanup else [(996.0, 996.0, "b1-standard/v1")])
+    assert len(case.spawn) == (0 if entered_cleanup else 1) and case.live == set()
+
+
+@pytest.mark.parametrize("invalid", [False, None, 1])
+def test_b1_main_descriptor_status_is_explicit_and_sticky_after_later_true(monkeypatch, invalid):
+    case = _MainMatrixCase()
+    batches = []
+    def overrides(module, unused):
+        def close_batch(descriptors, owner, *, b1=False):
+            batches.append((tuple(descriptors), b1, owner))
+            while descriptors:
+                case.close(descriptors.pop())
+            if len(batches) == 1:
+                owner.reject("timeout")
+                return invalid
+            return True
+        return [(module, "_close_descriptors", close_batch)]
+    result, escaped = _run_main_matrix(monkeypatch, case, overrides=overrides)
+    assert escaped is None and result == 125
+    assert batches and batches[0][0] == (81, 83, 85)
+    assert all(b1 is True for _, b1, _ in batches)
+    assert all(owner is batches[0][2] for _, _, owner in batches)
+    assert case.live == set() and batches[0][2].error == "timeout"
+
+
+@pytest.mark.parametrize("fresh_clock_fails", [False, True])
+def test_b1_main_emergency_escape_preserves_original_budget_and_remaining_closes(monkeypatch, fresh_clock_fails):
+    case = _MainMatrixCase()
+    calls, fail_clock = [], [False]
+    def observe(owner, pipes, logs, guard, deadline, stopped, *, profile=None):
+        owner.reject("timeout")
+        fail_clock[0] = fresh_clock_fails
+        raise SystemExit(0)
+    def clock():
+        case.event("clock")
+        if fail_clock[0]:
+            raise RuntimeError("clock unavailable after observed105")
+        return 105.0
+    def overrides(module, unused):
+        def emergency(owner, pipes, *, b1=False):
+            calls.append((owner.finish_end, owner._budget.cleanup_end, owner._budget.term_end, b1))
+            for fd in list(pipes.values()):
+                case.close(fd)
+            pipes.clear()
+            raise RuntimeError("emergency escapes after batch")
+        return [(module, "_emergency_cleanup", emergency)]
+    case.observe, case.clock = observe, clock
+    result, escaped = _run_main_matrix(monkeypatch, case, overrides=overrides)
+    assert escaped is None and result == 125 and calls == [(108.0, 108.0, 106.0, True)]
+    assert case.live == set() and all(item["attempts"] == 1 for item in case.stream_close_attempts)
+    assert [event[0] for event in case.events].count("coord-close") == 1
+
+
+@pytest.mark.parametrize(("mode", "expected"), [("overrun", 124), ("clock_error", 125)])
+def test_b1_main_unproved_prepublication_time_skips_discretionary_work(monkeypatch, mode, expected):
+    case = _MainMatrixCase()
+    after_finish = [False]
+    original = case.event
+    def event(name, *args):
+        original(name, *args)
+        if name == "finish":
+            after_finish[0] = True
+    def clock():
+        case.event("clock")
+        if after_finish[0]:
+            if mode == "clock_error":
+                raise RuntimeError("prepublication clock")
+            return 1000.001
+        return 105.0
+    case.event, case.clock = event, clock
+    result, escaped = _run_main_matrix(monkeypatch, case)
+    assert escaped is None and result == expected and case.writes == []
+    names = [event[0] for event in case.events]
+    tail = case.events[names.index("finish") + 1:]
+    assert not any(event[0] in ("hash", "guard", "receipt", "create") for event in tail)
+    assert names.count("bounds-close") == names.count("coord-close") == 1
+    assert all(item["attempts"] == 1 for item in case.stream_close_attempts)
+
+
+@pytest.mark.parametrize(("stage", "later", "expected", "reason"), [
+    ("receipt", None, 125, "interrupted"), ("create", None, 0, "exited"),
+    ("stream-write", None, 0, "exited"), ("stream-write", "close", 125, "exited"),
+    ("stream-write", "overrun", 124, "exited"),
+])
+def test_b1_main_signal_cutoff_does_not_republish_or_hide_later_veto(monkeypatch, stage, later, expected, reason):
+    case = _MainMatrixCase(stage="result_close" if later == "close" else None,
+                           final_time=1000.001 if later == "overrun" else 105.0)
+    handlers = {}
+    original = case.event
+    def event(name, *args):
+        original(name, *args)
+        trigger = name == stage and (name == "receipt" or
+            (name == "create" and args[0] == Path("/fixture/result.json")) or
+            (name == "stream-write" and args[0] == "result"))
+        if trigger:
+            handlers[15](15, None)
+    def overrides(module, unused):
+        def install(sig, handler):
+            handlers[sig] = handler
+            case.event("handler", sig)
+        return [(module.signal, "signal", install)]
+    case.event = event
+    result, escaped = _run_main_matrix(monkeypatch, case, overrides=overrides)
+    assert escaped is None and result == expected and len(case.writes) == 1
+    assert json.loads(case.writes[0])["process"]["reason"] == reason
+    assert sum(event[:3] == ("create", True, Path("/fixture/result.json")) for event in case.events) == 1
+
+
+@pytest.mark.parametrize(("phase", "error_type", "caught"), [
+    ("owner_init", RuntimeError, False), ("preflight", RuntimeError, True), ("preflight", ImportError, False),
+    ("posthash", TypeError, True), ("posthash", AttributeError, False),
+    ("document", TypeError, False), ("publication", TypeError, True), ("publication", RuntimeError, False),
+    ("bounds_close", RuntimeError, False), ("bounds_close_oserror", OSError, True),
+])
+def test_b1_shared_body_retains_remaining_v1_catch_and_finally_boundaries(monkeypatch, phase, error_type, caught):
+    case = _LegacyMatrixCase()
+    failure = error_type("legacy boundary")
+    original_hash, original_bounds = case.hash, case.bounds
+    def hash_value(path):
+        value = original_hash(path)
+        if phase == "posthash" and case.observed:
+            raise failure
+        return value
+    def bounds(paths, *, b1=False):
+        value = original_bounds(paths, b1=b1)
+        close = value.close
+        def close_bounds(*, strict=False):
+            result = close(strict=strict)
+            if phase == "bounds_close":
+                raise failure
+            if phase == "bounds_close_oserror":
+                # Default BoundPaths consumes its internal OSError; main historically ignores this sticky flag.
+                value.close_failed = True
+            return result
+        value.close = close_bounds
+        return value
+    def overrides(module, unused):
+        targets = []
+        def raise_boundary(*args, **kwargs):
+            case.event(phase)
+            raise failure
+        if phase == "owner_init":
+            targets.append((module, "_Owner", raise_boundary))
+        if phase == "preflight":
+            targets.append((module, "_preflight", raise_boundary))
+        canonical = module._canonical
+        def serialize(value):
+            if (phase == "document" and type(value) is list) or (phase == "publication" and type(value) is dict):
+                raise failure
+            return canonical(value)
+        targets.append((module, "_canonical", serialize))
+        return targets
+    case.hash, case.bounds = hash_value, bounds
+    result, escaped = _run_main_matrix(monkeypatch, case, profile=None, overrides=overrides)
+    if caught:
+        assert escaped is None and result == (0 if phase == "bounds_close_oserror" else 125)
+    else:
+        assert escaped is failure
+    names = [event[0] for event in case.events]
+    if phase in ("owner_init", "document") or (phase == "posthash" and not caught):
+        assert "bounds-close" not in names
+    if phase in ("publication", "bounds_close", "bounds_close_oserror"):
+        assert names.count("bounds-close") == 1
+    if phase == "preflight":
+        assert case.logs["stdout"].closed and case.logs["stderr"].closed
+
+
+@pytest.mark.parametrize("escaping", ["retry", "emergency"])
+def test_b1_shared_body_keeps_legacy_recovery_exception_identity(monkeypatch, escaping):
+    case = _LegacyMatrixCase()
+    first, final = RuntimeError("first observer"), ImportError("legacy recovery escape")
+    attempts = []
+    def observe(owner, pipes, logs, guard, deadline, stopped, *, profile=None):
+        attempts.append(owner)
+        if len(attempts) == 1 or escaping == "emergency":
+            raise first
+        raise final
+    emergencies = []
+    def overrides(module, unused):
+        def emergency(owner, pipes, *, b1=False):
+            emergencies.append((owner, b1))
+            raise final
+        return [(module, "_emergency_cleanup", emergency)]
+    case.observe = observe
+    result, escaped = _run_main_matrix(monkeypatch, case, profile=None, overrides=overrides)
+    assert escaped is final and result is None and len(attempts) == 2
+    assert attempts[0] is attempts[1]
+    assert emergencies == ([(attempts[0], False)] if escaping == "emergency" else [])
+    assert case.live == set() and case.logs["stdout"].closed and case.logs["stderr"].closed
+    assert not any(event[0] == "bounds-close" for event in case.events)
+
+
+@pytest.mark.parametrize(("size", "expected"), [(65536, 0), (65537, 125)])
+def test_b1_main_serialized_size_boundary_is_checked_before_create(monkeypatch, size, expected):
+    case = _MainMatrixCase()
+    raw = b'{"a":"' + b"x" * (size - 8) + b'"}'
+    serialized = []
+    def overrides(module, unused):
+        canonical = module._canonical
+        def serialize(value):
+            if isinstance(value, dict) and value.get("schema") == "qwq.verification-process-result/v2":
+                serialized.append(value["schema"])
+                return raw
+            return canonical(value)
+        return [(module, "_canonical", serialize)]
+    result, escaped = _run_main_matrix(monkeypatch, case, overrides=overrides)
+    assert escaped is None and result == expected and serialized == ["qwq.verification-process-result/v2"]
+    assert case.writes == ([raw] if size == 65536 else [])
+    result_creates = [event for event in case.events if event[:3] == ("create", True, Path("/fixture/result.json"))]
+    assert len(result_creates) == (1 if size == 65536 else 0)
+
+
+@pytest.mark.parametrize("failure", ["serialization", "live_hasher", "observed_missing"])
+def test_b1_main_malformed_final_snapshot_cannot_be_replaced_by_empty_success(monkeypatch, failure):
+    case = _MainMatrixCase()
+    original = case.observe
+    def observe(owner, pipes, logs, guard, deadline, stopped, *, profile=None):
+        result = original(owner, pipes, logs, guard, deadline, stopped, profile=profile)
+        if failure == "live_hasher":
+            owner.observation["streams"]["stdout"]["sha256"] = object()
+        if failure == "observed_missing":
+            del owner.observation["observed"]["stderr"]
+        return result
+    def overrides(module, unused):
+        canonical = module._canonical
+        def serialize(value):
+            if failure == "serialization" and isinstance(value, dict) and "process" in value:
+                raise TypeError("cannot serialize actual state")
+            return canonical(value)
+        return [(module, "_canonical", serialize)]
+    case.observe = observe
+    result, escaped = _run_main_matrix(monkeypatch, case, overrides=overrides)
+    assert escaped is None and result == 125 and case.writes == []
+    assert case.owner.returncode == 0 and case.owner.reaped is True
+    assert not any(event[:3] == ("create", True, Path("/fixture/result.json")) for event in case.events)
+    assert all(item["attempts"] == 1 for item in case.stream_close_attempts)
+
+
+@pytest.mark.parametrize("kind", ["float", "int_subclass"])
+def test_b1_main_write_count_must_be_exact_builtin_int(monkeypatch, kind):
+    class Count(int):
+        pass
+    case = _MainMatrixCase()
+    original = case.stream
+    def stream(name):
+        value = original(name)
+        write = value.write
+        def result_write(raw):
+            count = write(raw)
+            return float(count) if kind == "float" else Count(count)
+        if name == "result":
+            value.write = result_write
+        return value
+    case.stream = stream
+    result, escaped = _run_main_matrix(monkeypatch, case)
+    assert escaped is None and result == 125 and len(case.writes) == 1
+    assert all(item["attempts"] == 1 for item in case.stream_close_attempts)
+
+
+@pytest.mark.parametrize("missing", ["leader_reaped", "complete", "guard", "survived", "raw_none", "raw_bool"])
+def test_b1_main_missing_process_gate_never_promotes_raw_zero(monkeypatch, missing):
+    case = _MainMatrixCase()
+    original = case.observe
+    def observe(owner, pipes, logs, guard, deadline, stopped, *, profile=None):
+        complete, child_guard, streams = original(owner, pipes, logs, guard, deadline, stopped, profile=profile)
+        if missing == "leader_reaped":
+            owner.reaped = False
+        if missing == "complete":
+            complete = False
+        if missing == "guard":
+            child_guard = None
+            owner.observation["guard"] = None
+        if missing == "survived":
+            owner.survived = True
+        if missing == "raw_none":
+            owner.returncode = None
+        if missing == "raw_bool":
+            owner.returncode = False
+        return complete, child_guard, streams
+    case.observe = observe
+    result, escaped = _run_main_matrix(monkeypatch, case)
+    assert escaped is None and result == 125 and case.live == set()
+    if missing in ("leader_reaped", "complete"):
+        assert not any(event[0] == "receipt" for event in case.events)
+
+
+@pytest.mark.parametrize("end", ["retry", "emergency"])
+def test_b1_main_recovery_preserves_observed_map_and_live_prefix(monkeypatch, end):
+    import hashlib
+
+    case = _MainMatrixCase()
+    attempts, states = [], []
+    def observe(owner, pipes, logs, guard, deadline, stopped, *, profile=None):
+        attempts.append(owner)
+        if len(attempts) == 1:
+            owner.reject("timeout")
+            owner._begin_cleanup(105.0)
+            owner.observation = {"profile": "b1-standard/v1", "streams": {
+                "stdout": {"bytes": 3, "sha256": hashlib.sha256(b"abc"), "overflow": False},
+                "stderr": {"bytes": 0, "sha256": hashlib.sha256(), "overflow": False}},
+                "observed": {"stdout": 19, "stderr": 23}, "guard": dict(case.guard), "failed_logs": {"stderr"}}
+            states.append(owner.observation)
+            raise RuntimeError("first observation")
+        states.append(owner.observation)
+        owner.observation["observed"]["stdout"] = 29
+        if end == "emergency":
+            raise RuntimeError("second observation")
+        owner.returncode, owner.reaped = 0, True
+        for fd in list(pipes.values()):
+            case.close(fd)
+        pipes.clear()
+        return True, dict(case.guard), {"stdout": {"bytes": 3, "sha256": hashlib.sha256(b"abc").hexdigest(),
+            "overflow": False, "observed_bytes": 29}, "stderr": {"bytes": 0,
+            "sha256": hashlib.sha256(b"").hexdigest(), "overflow": False, "observed_bytes": 23}}
+    def overrides(module, unused):
+        def emergency(owner, pipes, *, b1=False):
+            case.event("emergency-state", b1)
+            states.append(owner.observation)
+            owner.observation["observed"]["stdout"] = 31
+            for fd in list(pipes.values()):
+                case.close(fd)
+            pipes.clear()
+            return True
+        return [(module, "_emergency_cleanup", emergency)]
+    case.observe = observe
+    result, escaped = _run_main_matrix(monkeypatch, case, overrides=overrides)
+    assert escaped is None and result == 124 and len(attempts) == 2
+    assert attempts[0] is attempts[1] and all(state is states[0] for state in states)
+    assert len(case.writes) == 1
+    streams = json.loads(case.writes[0])["streams"]
+    assert streams == {"stdout": {"bytes": 3, "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "overflow": False, "observed_bytes": 29 if end == "retry" else 31},
+        "stderr": {"bytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "overflow": False, "observed_bytes": 23}}
+
+
+def test_b1_main_argv_time_cannot_reuse_preparation_timestamp_for_spawn(monkeypatch):
+    case = _MainMatrixCase()
+    now, builds = [105.0], []
+    case.clock = lambda: now[0]
+    def absolute(path):
+        if path == Path("/fixture/python"):
+            builds.append(str(path))
+            now[0] = 996.0
+        return path
+    result, escaped = _run_main_matrix(monkeypatch, case, overrides=[(Path, "absolute", absolute)])
+    assert escaped is None and result == 124 and builds == ["/fixture/python"]
+    assert case.spawn == [] and case.live == set()
+
+
+def test_b1_main_preobservation_failure_publishes_only_empty_stream_facts(monkeypatch):
+    case = _MainMatrixCase()
+    case.probe = lambda deadline, stopped, **kwargs: False
+    result, escaped = _run_main_matrix(monkeypatch, case)
+    assert escaped is None and result == 125 and case.spawn == []
+    assert len(case.writes) == 1
+    document = json.loads(case.writes[0])
+    assert document["process"]["returncode"] is None and document["process"]["cleanup_complete"] is False
+    assert document["streams"] == {name: {"bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "overflow": False, "observed_bytes": 0} for name in ("stdout", "stderr")}
+
+
+def test_b1_main_missing_receipt_gate_rejects_an_otherwise_valid_zero_status(monkeypatch):
+    case = _MainMatrixCase(stage="receipt_missing")
+    result, escaped = _run_main_matrix(monkeypatch, case)
+    assert escaped is None and result == 125 and case.owner.returncode == 0
+    assert len(case.writes) == 1
+    assert json.loads(case.writes[0])["receipt"] == {"state": "missing", "bytes": 0, "sha256": None}
