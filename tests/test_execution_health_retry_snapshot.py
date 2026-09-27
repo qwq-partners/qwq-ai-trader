@@ -111,8 +111,9 @@ def test_runtime_health_restart_retries_snapshot_copies_intent_id_leaves(tmp_pat
                     'internal-only', 'pp-i-second', 'pp-i-first']
                 assert writer_calls == []
 
-            assert _runtime_snapshot(f, producer) == (
-                before[:-1] + (deepcopy(producer._restart_retries),))
+            expected_retries = deepcopy(before[-1])
+            expected_retries['005930']['intent_ids'][0] = 'internal-only'
+            assert _runtime_snapshot(f, producer) == before[:-1] + (expected_retries,)
             assert writer_calls == []
             assert f['posts']() == []
         finally:
