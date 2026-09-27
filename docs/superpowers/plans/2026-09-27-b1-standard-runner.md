@@ -16,6 +16,22 @@ that cannot accept the old profile or claim semantic/native/CI/production qualif
 **Spec:** `../specs/2026-09-27-b1-standard-runner-design.md`.
 Independent plan review is complete; exact implementation dispatch and every acceptance gate remain required.
 
+Coordinator checkpoint: Task1 contract367, Task2a parser/bootstrap170, and Task3a
+budget/probe/cleanup219 focused cases have scoped independent acceptance. Task3b
+coordination has a valid constructor RED after repairing a preserved harness
+failure; its remaining independent matrix precedes implementation. Output-only
+Task3c is approved for tests-first, main/finalization Task3d still requires its
+own review. MainB1 remains125 and Task4 has not run. Historical checklist items
+below describe whole packages, not permission to infer completed profile acceptance.
+
+Separate approved compatibility exception: only the oversized OS-test parameter
+ID may change, without changing its65537-byte payload or assertion. Candidate
+82e107f and exact109-node focused evidence are documented in
+`../../reviews/b1-nodeid-compatibility-2026-09-27.md`. After both metadata and complete
+runner reviews, they may be composed with accepted B1b into a fresh final candidate
+for Task4. Actual tiny smoke/fullUTC/KST/final independent review remain mandatory
+before final integration; this is not approval of all-suite node IDs or full B1 runs.
+
 Date/base:2026-09-27 KST / `8e75340c3e436813136cafef3679810dc232bcc2`.
 Requested author Astra/high; actual model/effective effort **unverified**, no fallback claimed.
 Author made only the two assigned ignored Markdown artifacts. No tests/import/compile/collect/

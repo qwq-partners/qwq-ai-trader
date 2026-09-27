@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **09-27 별도 실행기 후속:** [B1 표준 실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md)을 따른다. 독립 승인된 순수 계약367건, 인자/bootstrap·기존 controller170건 통과 뒤 fork-FD/lock-open 제안P1 두 건을 보완·재승인했다. budget/probe/cleanup의 실제 첫 RED를 확인하고 후속 독립 시험 작성 중이다. 유효 B1 main은 아직125로 차단되며 실제 프로필·전체 인수 미완, N4097/native/운영 승격 없음.
+> **09-27 별도 실행기 후속:** [B1 표준 실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md)을 따른다. 순수 계약367건·인자170건 뒤 budget/probe/cleanup219건과 독립 한정 리뷰를 마쳤다. coordination은 시험장치의 전역 trap 복원 오류를 고쳐 정상 missing-class RED를 확보하고 독립 행렬 작성 중이다. 출력-only 설계도 tests-first 한정 승인이다. [node ID 한 건](docs/reviews/b1-nodeid-compatibility-2026-09-27.md)은 별도109건·독립 focused 한정 승인, 최종 통합 전이다. 유효 B1 main125·실제 프로필/전체 미인수, N4097/native/운영 승격 없음.
 
 > **09-27 B1b 개발 인수 완료:** [B1b 원장](docs/reviews/decoder-b1b-2026-09-27.md)이 정본이다. 독립 expected/구현·실제 변이17개·critical 지적0 뒤 후보f3416c3 전체 UTC8411/721.87s·KST8411/705.23s(각16skip/2xfail/4warnings·exit0·격리0)를 검증했다. 다섯 신규 시험 파일만236ccb0으로 feature 통합했고 후보와 비문서 diff0이다. `B1B_CONSTRUCTION_CONTROL_OBSERVED_ONLY`이며 private root 유지·full R2/폐기/native/N4097/full L3 미완. 다음 실행기는 별도 후속 인수다. main·운영·주문·설정 변경0. 아래는 이전 단계 이력이다.
 

@@ -52,8 +52,9 @@ Task3b의 예외 우선순위·정리 lifecycle 설계는 지적 보완 뒤 독�
 
 Task3b 최초 constructor 시험2b6cae0는 전역 syscall trap이 pytest의 종료 처리까지
 막는 시험장치 결함으로 exit1이었다. 의도한 missing-class RED 또는 격리0으로
-세지 않는다. 원문을 보존하고 trap을 test-body context로 제한하는 진단 기반 수정
-후 정상 RED를 확인하기 전까지 해당 구현 진행을 멈춘다. 성능 예외로 처리하지 않는다.
+세지 않는다. 원문을 보존하고 trap을 test-body context로 제한한9d6f0f9에서 정상
+missing-class RED(1 failed/0.33s·격리0)를 확인했다. 그 뒤 독립 상태/예외 행렬 작성을
+재개했으며 coordination source는 아직 없다. 성능 예외로 처리하지 않는다.
 
 실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
 제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/
@@ -64,9 +65,9 @@ Task3b 최초 constructor 시험2b6cae0는 전역 syscall trap이 pytest의 종�
 이후 별도 한정 계획의 독립 승인으로 해당65537-byte 입력에 짧은 parameter ID만
 부여한 별도 후보82e107f를 만들었다. fresh collection109(OS73/base36), 이전108개
 이름 불변·지정한 한 이름만 변경·최대178bytes, 두 모듈109 passed/0.52s·격리0이다.
-producer/2048 상한/입력/assertion은 불변이다. 독립 focused 리뷰와 최종 combined
-후보 전체 검증 전에는 최종 인수하지 않으며, 모든 suite ID 또는 B1 full-profile
-적합성이 증명됐다고 확대하지 않는다.
+producer/2048 상한/입력/assertion은 불변이다. [독립 focused 리뷰](b1-nodeid-compatibility-2026-09-27.md)는
+지적0으로 마쳤으나 최종 combined 후보 전체 검증 전에는 최종 인수하지 않는다.
+모든 suite ID 또는 B1 full-profile 적합성이 증명됐다고 확대하지 않는다.
 
 N4097은 별도 의미 전이·전수 oracle·세 실행 예산의 승인과 결과 전까지 UNRUN이다.
 현재 B1b 구성 시험과 파일 소유권을 분리한다. 기존 성능 예외·guard·제품·CI·main·운영·

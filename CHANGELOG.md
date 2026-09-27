@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — 실행기 시간 예산 부분 검증·다음 단계 준비
+
+- 별도 runner 후보fa80b3a에서 budget/probe/cleanup 새·기존219건과 독립 한정 리뷰를 마쳤다. 소스 eadcd7d는 fork 실패·정리 재진입에도 같은 종료 시한을 유지하며 기존 v1 동작은 보존한다. 전체 runner 인수/feature 코드 통합 전이다.
+- coordination tests-first 최초 전역 syscall trap이 pytest 종료를 막던 시험장치 결함은 context/alias 복원으로 수정했다. 원시 실패를 보존하고9d6f0f9의 정상 missing-class RED를 확인했다. 잠금·정리 행렬 작성과 별도 output/main 설계를 잇는다.
+- OS 계약의 큰 입력에 짧은 이름만 지정한 별도82e107f는 exact109개 매핑·109 passed·독립 focused 한정 승인이다. 입력/판정/2048 제한은 불변이며 최종 combined 전체 검증 전 통합하지 않는다. [식별자 원장](docs/reviews/b1-nodeid-compatibility-2026-09-27.md).
+- main·운영·설정·실제 B1 프로필은 변경/인수하지 않았다. [실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md).
+
 ## 2026-09-27 — B1b 구성·제어 시험 개발 인수, 실행기 후속 진행
 
 - 독립 oracle와 분리한 구성·게시·CONT 인계/제거 구현, 신규1884건·기존 B1a 결합2082건·실제 raw17 변이 실패를 확인했다. 별도 critical source 및 전체 증거 리뷰의 P0/P1/P2는0이다.

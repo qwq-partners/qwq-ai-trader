@@ -6,7 +6,8 @@
 
 ### Architecture (아키텍처)
 
-- [B1 2MiB 표준 실행기 진행](reviews/b1-standard-runner-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-b1-standard-runner-design.md) · [계획](superpowers/plans/2026-09-27-b1-standard-runner.md) — 순수 계약367·인자/기존 controller170 통과, 후속 budget RED·독립 시험 작성; main launch125·실제 프로필 미인수
+- [B1 2MiB 표준 실행기 진행](reviews/b1-standard-runner-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-b1-standard-runner-design.md) · [계획](superpowers/plans/2026-09-27-b1-standard-runner.md) — 순수 계약367·인자170·budget219 및 독립 한정 검토 완료, coordination tests-first; main launch125·실제 프로필 미인수
+- [B1 node ID 호환성](reviews/b1-nodeid-compatibility-2026-09-27.md) — 입력/판정 불변의 이름 한 건 수정, exact109개 매핑·109 passed·독립 focused 한정 승인; 최종 combined 전체 인수 전
 
 - [Decoder B1b 구성·제어 인수](reviews/decoder-b1b-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-decoder-b1b-construction-control-design.md) · [계획](superpowers/plans/2026-09-27-decoder-b1b-construction-control.md) — 신규1884·raw17·critical 지적0·전체 UTC/KST 각8411, feature236ccb0 통합; 구성 관측 한정·full B1/native/폐기 미완
 
