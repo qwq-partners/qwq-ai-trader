@@ -1,0 +1,71 @@
+{
+  "schema": "qwq.development-performance-risk/v1",
+  "decision_date": "2026-09-27",
+  "authority": "user_request_in_current_conversation",
+  "request": "기존 성능실패는 예외 처리로 놔두자. 그렇게 크리티컬 한 사례는 아닐꺼라 생각해. 이어서 개발 진행해보자.",
+  "decision": "continue_development_with_known_risk",
+  "changes_test_outcome": false,
+  "preserve_raw_pytest_rc": true,
+  "preserve_outer_rc": true,
+  "future_runs_automatically_waived": false,
+  "operational_approval": false,
+  "review_trigger": "candidate_or_assertion_change_or_before_engine_promotion",
+  "accepted_observations": [
+    {
+      "id": "recovery-controlled-5000-freeze-20260927",
+      "disposition": "ACCEPTED_PERFORMANCE_RISK",
+      "scope": "development_only",
+      "nodeid": "tests/test_recovery_projection.py::test_every_real_advance_call_including_finalization_stays_below_5ms[controlled_work-5000]",
+      "candidate_head": "038aa599f043e62d200df048152fa292167fea72",
+      "candidate_diff_sha256": "721fe1c7bc60bf44876805a823a0d42f253b706f026eea6d8a76fcffd4c0c41c",
+      "test_sha256": "c932ed0df7ea98e457e499d17a34b5353d7b51422c53e4339c7c7e3a1f4521e7",
+      "implementation_sha256": "07c16551897290067beeff171c415cd04d4d22115011255fea7c27fd9d00fbdd",
+      "threshold_ms": 5,
+      "observed_ms": 13.023870997,
+      "phase_before": "freeze",
+      "phase_after": "freeze",
+      "examined": 97,
+      "overlapping_gc_seconds": 0,
+      "original_outcome": "failed",
+      "assertion_source_line": 1677,
+      "mapping_evidence": "frozen_source_and_execution_ledger_not_new_raw_traceback_inspection",
+      "evidence_document": "docs/reviews/recovery-projection-progress-2026-09-27.md"
+    },
+    {
+      "id": "recovery-controlled-100000-index-20260927",
+      "disposition": "ACCEPTED_PERFORMANCE_RISK",
+      "scope": "development_only",
+      "nodeid": "tests/test_recovery_projection.py::test_every_real_advance_call_including_finalization_stays_below_5ms[controlled_work-100000]",
+      "candidate_head": "7208acc8358e1c08bd7725d5d64d5059c24cd65b",
+      "candidate_untracked_files": {
+        "tests/l3_sequence_probe.py": "ea8b961f67228e17b2108b87c256f50417c662495867cda62d3d67067f59b60e",
+        "tests/test_l3_sequence_probe.py": "fdcf8ed26482009ace8b7eabf063826accbfb18d05e3f864729cb84635f56e6a"
+      },
+      "test_sha256": "0a5fe99d5d25f28544a7be65280e49e60195d1e5c432d886e337577127fd306a",
+      "implementation_sha256": "8a822dc2563219c964b4864fe61efe7a3b9366d3e10bffb5dba2a4144a9555ff",
+      "threshold_ms": 5,
+      "observed_ms": 33.173999749,
+      "phase_before": "index",
+      "phase_after": "index",
+      "examined": 95,
+      "overlapping_gc_seconds": 0,
+      "original_outcome": "failed",
+      "assertion_source_line": 971,
+      "mapping_evidence": "source_and_prior_independent_diagnostic_disposition",
+      "enclosing_run_exit_code": 124,
+      "enclosing_timeout_waived": false,
+      "evidence_document": "docs/reviews/l3-proof-results-2026-09-27.md"
+    }
+  ],
+  "excluded": [
+    "automatic_pass_or_xfail_or_skip",
+    "threshold_or_gc_policy_change",
+    "functional_or_economic_or_order_correctness_failure",
+    "source_lifetime_or_cleanup_proof_failure",
+    "isolation_violation",
+    "missing_or_incomplete_tests_or_evidence",
+    "timeout_or_invalid_baseline",
+    "other_historical_or_future_failure_automatic_acceptance",
+    "ci_pass_or_main_merge_or_deployment"
+  ]
+}

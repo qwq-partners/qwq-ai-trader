@@ -4,6 +4,7 @@
 
 ## 현재 판정
 
+- **사용자 후속 결정(2026-09-27):** 직전 설명의 controlled5k13.023871ms·controlled100k33.174ms는 [개발 진행 예외](recovery-performance-exceptions-2026-09-27.json)로 수용됐다. 원시 실패·100k enclosing exit124·다른 미검증은 그대로다. 이 두 이력만으로 개발/전체 회귀 착수를 다시 차단하지 않는다. [오프라인1차 계획](../superpowers/plans/2026-09-27-required-source-proof.md)은 네 지적 보완 뒤 독립 계획 한정 승인·사용자 계획 검토 대기·미구현이다. 아래 성능 차단 문구는 당시 판정이며 정합성·자원 수명·runtime·실제 CI·main/운영 관문은 유지한다.
 - 검증 계약 후속: 사용자는 기존 전체시험에 별도 필수 source proof를 더하는 설계 작성을 승인했다. [서면 설계](../superpowers/specs/2026-09-27-required-source-proof-design.md)는 독립 리뷰 세 지적을 반영해 설계 한정 승인됐으며 사용자 서면 검토 대기다. 구현계획/CI 활성화/runtime qualification은 미실행이고 기존 proof 결과와 성능 실패를 대체하지 않는다.
 - Task 1: `fec1bbc1fde436bfb09609901b71b68b1162c0dd`까지 독립 검토 승인. 이후 Task 2에서 같은 모듈을 수정한 후보까지 승인된 것은 아니다.
 - Task 2: **미완료·성능 차단**. 마지막 커밋은 `038aa599f043e62d200df048152fa292167fea72`; 그 위의 세 파일 수정안은 미커밋이며 Task2 전체 승인을 받지 않았다. L1/L2 후속 후보는 **구조 범위 독립 승인**됐고, 표준 diff SHA256은 `721fe1c7bc60bf44876805a823a0d42f253b706f026eea6d8a76fcffd4c0c41c`다. 수정 후 첫 controlled5k 성능 셀이 freeze **13.023871ms >5ms로 실패**, 이후6셀은 미실행이다. 한 번의 별도 trace 진단은 미재현·미확정으로 끝났다. 이전 `8443703…` 후보와 실패 기록도 별도 보존했다.

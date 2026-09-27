@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **필수 source proof 후속 설계:** [별도 필수 검증 계약](docs/superpowers/specs/2026-09-27-required-source-proof-design.md)은 독립 설계 한정 승인·사용자 서면 검토 대기다. 기존 전체 시험 + 한정 runtime의 명시 proof + 최종 `verify` 모두 필요하며 서면 설계/구현계획 승인 전 구현하지 않는다. qualified capsule0·실행0·CI/제품 변경0, 아래 성능 실패·코드 통합 차단은 그대로다.
+> **성능 예외·개발 재개(2026-09-27):** 사용자는 아래 controlled5k13.023871ms·controlled100k33.174ms를 개발 진행 예외로 수용했다. [정확한 예외 원장](docs/reviews/recovery-performance-exceptions-2026-09-27.json)은 원시 실패/exit124를 PASS로 바꾸지 않는다. [후속 실행계획](docs/superpowers/plans/2026-09-27-required-source-proof.md)은 오프라인 evidence 부품으로 분리해 독립 계획 한정 승인·사용자 계획 검토 대기·미구현이다. 기존 두 실패만으로 개발을 재차 차단하지 않되 다른 정합성·격리·runtime·main/운영 관문은 유지한다. 아래 실패/미승인 안내는 각 시점의 이력이다.
 
 > **추가 진단 종료:** clean-base100k 단회 index CPU 진단은 미재현·미확정(원본1 passed/12.78s·최대4.204637ms)이다. 재시도·원인 확정·기존 실패 면제는 없다. 아래33.174ms·13.023871ms 실패와 Python 지원 충돌, 코드 통합 차단은 유지한다. 최신 근거·후속 조건은 [L3-P0 실행 결과](docs/reviews/l3-proof-results-2026-09-27.md) 참조.
 

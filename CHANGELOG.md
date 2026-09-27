@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — 기존 성능 실패의 개발 예외·오프라인 검증 부품 계획
+
+- 사용자 지시로 controlled5k13.023871ms와 controlled100k33.174ms를 개발 비차단 위험 수용으로 기록했다. [예외 원장](docs/reviews/recovery-performance-exceptions-2026-09-27.json)은 exact node/후보 지문/원 수치를 보존하며 시험·rc·skip/xfail·임계값을 변경하지 않는다.
+- [설계](docs/superpowers/specs/2026-09-27-required-source-proof-design.md)의 기존 성능 재실행 선행권한 조건을 사용자 후속 결정으로 대체하고, [1차 실행계획](docs/superpowers/plans/2026-09-27-required-source-proof.md)을 작성했다. 실제 pytest evidence·순수 네 슬롯 검사·오프라인 CLI를 runtime 확보/CI 활성화와 분리한다.
+- 두 읽기 전용 Sol/high 분석 뒤 독립 Astra/xhigh 리뷰의 실제 TZ·pytest 최종 반환·skip/xfail 조건·새 실패 중단 4건을 보완해 계획 한정 재승인을 받았다. 사용자 계획 검토 대기이며 구현/시험/runtime qualification/운영 변경은 아직 없다. 요청 모델/effective effort 실제 metadata는 미검증이다. 아래 차단 문구는 당시 이력이다.
+
 ## 2026-09-27 — L3 별도 필수 source proof 계약 설계 (미구현)
 
 - 사용자 방향 승인으로 [필수 증명 검증 설계](docs/superpowers/specs/2026-09-27-required-source-proof-design.md)를 작성했다. 기존 전체 시험과 별도 source proof를 모두 요구하며, 동일 SHA/run·실제 성공·격리·정확한 시험 목록을 최종 `verify`가 대조하도록 제안한다.
