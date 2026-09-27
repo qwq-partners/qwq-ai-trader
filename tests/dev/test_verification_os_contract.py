@@ -485,7 +485,7 @@ def test_each_nonqualifying_reason_or_terminal_fact_is_rejected(reason, returnco
         b'{"schema":"qwq.verification-process-result/v1","number":NaN}',
         b"\xff",
         b"{}",
-        b" " * (64 * 1024 + 1),
+        pytest.param(b" " * (64 * 1024 + 1), id="document-too-large"),
     ],
 )
 def test_parse_process_result_rejects_noncanonical_or_oversize_bytes(raw):
