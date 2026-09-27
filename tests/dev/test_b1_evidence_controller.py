@@ -331,3 +331,23 @@ def test_bootstrap_guard_accepts_pinned_bytes_and_rejects_modified_bytes(tmp_pat
         guard_path.write_bytes(source + b"\n")
         with pytest.raises(ValueError, match="PROCESS_GUARD"):
             module._guard(repo)
+
+
+def test_b1_budget_keeps_one_inclusive_deadline_and_first_cleanup_window():
+    """첫 RED: cleanup 재진입이 전체 예산이나 최초 TERM/종료 끝을 연장하면 안 된다."""
+    module = _load_source("_b1_budget_candidate", "pytest_evidence_controller.py")
+    budget = module._B1Budget(100.0)
+
+    assert budget.total_end == 1000.0
+    assert budget.run_end == 996.0
+    assert budget.cleanup_end is None
+    assert budget.term_end is None
+
+    budget.begin_cleanup(200.0)
+    assert budget.cleanup_end == 203.0
+    assert budget.term_end == 201.0
+
+    budget.begin_cleanup(250.0)
+    assert budget.cleanup_end == 203.0
+    assert budget.term_end == 201.0
+    assert (budget.total_end, budget.run_end) == (1000.0, 996.0)
