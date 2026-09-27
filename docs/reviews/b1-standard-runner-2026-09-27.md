@@ -103,6 +103,17 @@ source651e7305…는 그대로이고 비작성자 source/evidence 리뷰가
 보존한다. 다음은 공통 `_run_validated` 경로의 독립 첫 RED·main 행렬이며 공개
 B1 main125 차단·runner 최종 feature 통합 전 상태는 유지한다.
 
+공통 실행 경로의 첫 독립 시험e4f774b는 `_run_validated` 부재의 정상 call-phase
+RED로 실패했다(1 failed/1.16s·격리0·workload1/tee0/tool1). 이후 동결한 시험
+1c7c033은 총1353줄 추가이며 기존3093줄·첫269줄을 보존한다. 독립 리뷰에서
+발견한 실패한 결과 생성 재시도 관측 공백과 별도 확인한 실패한 stream-close
+재시도 공백은 복원 후 외부 시도 횟수를 검사하도록 보완했다. 후속 정적 리뷰는
+`READY_FOR_MAIN_SOURCE_AUTHORING_ORACLE_ONLY`, 미해결 P0/P1/P2 각각0이다.
+문법 검사는 통과했지만 새 행렬의 실행 성공을 주장하지 않는다. 구현 후 실제
+후속 empty-batch 경로의 존재 여부·sticky 실패 보존을 별도로 확인해야 한다.
+source-only 공통 경로 구현을 시작하며 공개125 차단은 유지한다. 원문은
+`task-3d-main-first-red-evidence.md`, `task-3d-main-matrix-review.md`에 보존한다.
+
 후속 경계 검토에서 최초 시계 읽기가 모드 판별보다 앞이라 내부 함수의 hard125
 보장에 포함될 수 없음을 확인했다. 독립 정책 리뷰 후 기존 진입 순서·예외 전파는
 보존하고 hard125 약속은 검증된 내부 실행 진입 이후로 명시했다. 최초 SystemExit(0)

@@ -19,7 +19,7 @@
 
 | 단계 | 다음 산출물 | 아직 열지 않는 경계 |
 | --- | --- | --- |
-| 1. 검증 부품 마감 | runtime/health·B1a 뒤 B1b 신규1884·raw17·critical·UTC/KST 각8411 완료, 통합236ccb0; 별도 runner는 선행 계약/인자 검증 뒤 budget 개발 중 | main/운영·실제 source/native 실행 |
+| 1. 검증 부품 마감 | runtime/health·B1a 뒤 B1b 신규1884·raw17·critical·UTC/KST 각8411 완료, 통합236ccb0; runner의 budget/coordination/출력·예외 정리 선행 부품 인수 뒤 공통 main 구현 중 | main/운영·실제 source/native 실행 |
 | 2. native/source 근거 | exact runtime 원본·빌드/파일 closure·격리 profile·독립 관측/승인 및 별도 실행계획 | host 버전만으로 QUALIFIED, 합성 fixture의 실제 등록 |
 | 3. cold 복구 소유권 | 최초 할당·부분 실패·중복 교체·취소·정리·소비자 인계의 독립 oracle와 인수 | 기존 파서 결과를 나중에 등록해 선소유로 주장 |
 | 4. 실제 owner 연결 | 승인된 index/gate와 모든 commit/restore/writer/result drain의 단일 책임·버전 전파 | full scan 숨기기, history 삭제, stale snapshot의 current 처리 |
@@ -61,10 +61,13 @@ unlink B1a 부분 계획만 새 독립 reviewer가 승인했다. [B1a 원장](..
 아래 네 항목은 B1a 직후의 순서다. 현재 B1b의 CONT/end/고유 key lookup/publish 구성·
 제어 부분은 [B1b 원장](../reviews/decoder-b1b-2026-09-27.md)의 observed-only 범위로
 개발 인수를 마쳤으므로 반복 구현하지 않는다. 다음 실행 가능한 작업은
-[별도 runner 계획](../superpowers/plans/2026-09-27-b1-standard-runner.md)의 budget/
-probe/cleanup → coordination/main → 출력/결과 마감이다. 순수 계약과 인자 시험만
-완료했으며 실제 profile은 미인수다. oversized node ID의 future full-profile 차단도
-별도 호환성 인수 전 유지한다. 그 후 full R2의 교체/WORK/retire/finish/failure/dispose
+[별도 runner 계획](../superpowers/plans/2026-09-27-b1-standard-runner.md)의 공통 main/
+결과 마감 → 별도 공개 활성화 → 실제 프로세스 시험·소규모 profile → 결합 전체 인수다.
+budget/probe·coordination·출력·예외 정리 부품은 각각 독립 focused 인수를 마쳤고,
+공통 main의 독립 시험1353줄은 source 작성 준비 한정 승인됐다. 실제 profile은 여전히
+미인수이며 공개 B1 진입은125로 차단한다. oversized node ID 한 건의 짧은 ID 후보도
+focused 인수까지만 완료했으므로 최종 결합 전체 인수 전 future full-profile 호환성을
+완료로 표시하지 않는다. 그 후 full R2의 교체/WORK/retire/finish/failure/dispose
 계약을 확장한다. native/source 근거·큰 N4097·최초 cold RED를 완료로 세지 않는다.
 
 1. [B1a 계획 §5](../superpowers/plans/2026-09-27-decoder-b1-structural-probe.md)의
