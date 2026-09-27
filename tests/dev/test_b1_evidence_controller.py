@@ -3528,6 +3528,9 @@ def _run_main_matrix(monkeypatch, case, *, profile="b1-standard/v1", overrides=(
             [Path("/fixture/stdout.log"), Path("/fixture/stderr.log")], ["tests/test_tiny.py"]))
     assert case.violations == []
     assert all(item["attempts"] <= 1 for item in case.stream_close_attempts), case.stream_close_attempts
+    result_creates = [event for event in case.events
+                      if event[0] == "create" and event[2] == Path("/fixture/result.json")]
+    assert len(result_creates) <= 1, result_creates
     return result, escaped
 
 
@@ -3559,6 +3562,9 @@ def test_b1_main_timeout_preserves_first_reason_with_explicit_stage_precedence(m
     assert names.index("bounds-close") < names.index("coord-close")
     assert all(item["attempts"] == 1 for item in case.stream_close_attempts)
     assert len(case.writes) <= 1
+    if stage == "result_create":
+        assert sum(event[0] == "create" and event[2] == Path("/fixture/result.json")
+                   for event in case.events) == 1
     if case.writes:
         process = json.loads(case.writes[0])["process"]
         assert process["reason"] == "timeout" and process["returncode"] == 9
