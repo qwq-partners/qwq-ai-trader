@@ -1841,6 +1841,267 @@ def test_b1_copied_fixture_rejects_symlinked_parent_before_copy(tmp_path, compon
     assert list(real.iterdir()) == []
 
 
+def _b1_copied_args():
+    return ["--profile", "b1-standard/v1", "--verification-context", "context.json",
+            "--verification-output", "receipt.json", "--process-output", "process.json",
+            "--timeout-seconds", "900", "--", "tests/test_tiny.py"]
+
+
+def _b1_copied_identity(repo):
+    paths = {"controller": repo / "scripts/dev/pytest_evidence_controller.py",
+             "bootstrap": repo / "scripts/dev/pytest_evidence_bootstrap.py",
+             "producer": repo / "scripts/dev/pytest_evidence.py", "guard": repo / "tests/conftest.py",
+             "executable": Path(sys.executable)}
+    return {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in paths.items()}
+
+
+def _assert_b1_copied_document(repo, result, identity):
+    """독립 파일/리터럴만 대조한다. 변환된 복사본을 실프로파일 자격으로 쓰지 않는다."""
+    import fcntl
+    assert result["complete"] is True
+    assert len(result["statuses"]) == 1  # 후보가 남긴 자손을 하네스가 대신 회수한 성공을 배제한다.
+    raw = (repo / "process.json").read_bytes()
+    assert 0 < len(raw) <= 65536
+    doc = json.loads(raw)
+    assert doc["schema"] == "qwq.verification-process-result/v2"
+    assert doc["scope"] == "local_b1_process_only"
+    assert doc["run"] == CONTEXT["run"] and doc["slot"] == CONTEXT["slot"]
+    assert doc["identity"] == identity == _b1_copied_identity(repo)
+    assert doc["launch"] == {
+        "profile": "b1-standard/v1", "process_scope": "linux-subreaper/v1", "timeout_seconds": 900,
+        "budget_profile": "inclusive-lock-cleanup-publication/v1", "retained_stream_bytes": 2097152,
+        "overflow_observed_bytes": 2097153, "pytest_profile": "b1-x-fixed-plugins/v1",
+        "environment_profile": "b1-env-i-fake-key/v1", "selection_profile": "tests-path-only/v1",
+        "lock_profile": "owner-ticket-workload/v1",
+        "selection_sha256": hashlib.sha256(b'["tests/test_tiny.py"]').hexdigest(),
+    }
+    assert doc["process"]["ownership_probe_passed"] is True
+    assert doc["process"]["leader_reaped"] is True
+    assert type(doc["process"]["returncode"]) is int
+    assert doc["process"]["parent_guard"] == {
+        "path": "tests/conftest.py", "sha256": GUARD_HASH, "module_count": 1, "violations": 0}
+    facts = doc["coordination"]
+    assert set(facts) == {"lock_acquired", "lock_identity_stable", "fake_key_absent_before",
+                          "fake_key_absent_after", "fake_directory_removed", "fake_key_path_sha256"}
+    for name in ("lock_acquired", "lock_identity_stable", "fake_key_absent_before",
+                 "fake_key_absent_after", "fake_directory_removed"):
+        assert facts[name] is True
+    assert type(facts["fake_key_path_sha256"]) is str and len(facts["fake_key_path_sha256"]) == 64
+    assert all(char in "0123456789abcdef" for char in facts["fake_key_path_sha256"])
+    assert set(doc["streams"]) == {"stdout", "stderr"}
+    for name, item in doc["streams"].items():
+        saved = (repo / f"process.json.{name}.log").read_bytes()
+        assert set(item) == {"bytes", "sha256", "overflow", "observed_bytes"}
+        assert type(item["bytes"]) is int and len(saved) == item["bytes"] <= 2097152
+        assert type(item["observed_bytes"]) is int and len(saved) <= item["observed_bytes"] <= 2097153
+        assert type(item["overflow"]) is bool
+        assert item["sha256"] == hashlib.sha256(saved).hexdigest()
+        if item["overflow"]:
+            assert item["observed_bytes"] == 2097153
+    # JSON 후보의 lock 플래그만 믿지 않고, 반환 후 실제 독점 잠금 해제를 확인한다.
+    with (repo / ".b1-fixture/test-workload.lock").open("rb") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return doc
+
+
+def _assert_b1_copied_regular_receipt(repo, doc):
+    raw = (repo / "receipt.json").read_bytes()
+    assert doc["receipt"] == {"state": "regular", "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+    assert doc["process"]["guard"] == {
+        "path": "tests/conftest.py", "sha256": GUARD_HASH, "module_count": 1, "violations": 0}
+    assert doc["process"]["cleanup_complete"] is True
+
+
+@pytest.mark.parametrize(("body", "cli", "raw_status", "reason"), [
+    ("def test_ok():\n    assert True\n", 0, 0, "exited"),
+    ("def test_failure():\n    assert False\n", 1, 1, "exited"),
+    ("import atexit, os\ndef test_ok():\n    atexit.register(lambda: os._exit(9))\n", 9, 9, "exited"),
+    ("import atexit, signal\ndef test_ok():\n    atexit.register(lambda: signal.raise_signal(signal.SIGTERM))\n", 143, -15, "signaled"),
+], ids=["pass", "fail", "exit-nine", "sigterm"])
+def test_b1_copied_real_status_and_receipt(tmp_path, body, cli, raw_status, reason):
+    repo = make_repo(tmp_path, body, b1_isolated=True)
+    identity = _b1_copied_identity(repo)
+    result = run_case(repo, args=_b1_copied_args())
+    assert result["rc"] == cli
+    doc = _assert_b1_copied_document(repo, result, identity)
+    _assert_b1_copied_regular_receipt(repo, doc)
+    assert doc["process"]["returncode"] == raw_status and doc["process"]["reason"] == reason
+    assert doc["process"]["descendant_survived"] is False
+    assert doc["process"]["descendants_reaped"] == 0
+    assert all(item["overflow"] is False for item in doc["streams"].values())
+
+
+def test_b1_copied_real_receipt_then_short_budget_timeout(tmp_path):
+    repo = make_repo(tmp_path, "import atexit, time\ndef test_ok():\n    atexit.register(lambda: time.sleep(7))\n",
+                     b1_isolated=True, b1_short_budget=True)
+    identity = _b1_copied_identity(repo)
+    result = run_case(repo, args=_b1_copied_args())
+    assert result["rc"] == 124
+    doc = _assert_b1_copied_document(repo, result, identity)
+    _assert_b1_copied_regular_receipt(repo, doc)  # 필수 체크포인트: 기동 전 시간초과는 대체 성공이 아니다.
+    assert doc["process"]["returncode"] == -15 and doc["process"]["reason"] == "timeout"
+    assert doc["process"]["term_sent"] is True and doc["process"]["descendant_survived"] is False
+
+
+@pytest.mark.parametrize("late", [False, True], ids=["double-fork", "late-adoption"])
+def test_b1_copied_real_detached_descendants_are_reaped(tmp_path, late):
+    body = '''import atexit, os, signal, time
+def backstop():
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.alarm(8)
+def spawn():
+    backstop()
+    if os.fork() == 0:
+        backstop()
+        os.setsid()
+        if os.fork() == 0:
+            backstop()
+            time.sleep(7)
+        os._exit(0)
+def test_ok():
+    atexit.register(spawn)
+'''
+    if late:
+        body = '''import atexit, os, signal, time
+def backstop():
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.alarm(8)
+def spawn():
+    backstop()
+    if os.fork() == 0:
+        backstop()
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        if os.fork() == 0:
+            backstop()
+            os.setsid()
+            time.sleep(7)
+            os._exit(0)
+        time.sleep(7)
+        os._exit(0)
+def test_ok():
+    atexit.register(spawn)
+'''
+    repo = make_repo(tmp_path, body, b1_isolated=True)
+    identity = _b1_copied_identity(repo)
+    result = run_case(repo, args=_b1_copied_args())
+    assert result["rc"] == 125
+    doc = _assert_b1_copied_document(repo, result, identity)
+    _assert_b1_copied_regular_receipt(repo, doc)
+    assert doc["process"]["returncode"] == 0 and doc["process"]["reason"] == "cleanup_error"
+    assert doc["process"]["descendant_survived"] is True and doc["process"]["descendants_reaped"] == 2
+    if late:
+        assert doc["process"]["kill_sent"] is True
+
+
+def test_b1_copied_real_both_streams_flood_are_bounded(tmp_path):
+    repo = make_repo(tmp_path, '''import atexit, os, signal
+def flood():
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.alarm(8)
+    for _ in range(150):
+        os.write(1, b'x' * 65536)
+        os.write(2, b'y' * 65536)
+def test_ok():
+    atexit.register(flood)
+''', b1_isolated=True)
+    identity = _b1_copied_identity(repo)
+    result = run_case(repo, args=_b1_copied_args())
+    assert result["rc"] == 125
+    doc = _assert_b1_copied_document(repo, result, identity)
+    _assert_b1_copied_regular_receipt(repo, doc)
+    assert doc["process"]["reason"] == "output_limit"
+    assert any(item["overflow"] is True for item in doc["streams"].values())
+    assert all(item["bytes"] > 0 for item in doc["streams"].values())
+
+
+def test_b1_copied_real_bad_guard_frame_is_not_success(tmp_path):
+    repo = make_repo(tmp_path, b1_isolated=True)
+    path = repo / "scripts/dev/pytest_evidence_bootstrap.py"
+    before = path.read_bytes()
+    old = b"        if os.write(control, frame) != len(frame):\n"
+    new = b"        frame = frame.replace(b'" + GUARD_HASH.encode() + b"', b'0' * 64)\n" + old
+    assert before.count(old) == 1 and before.count(new) == 0
+    transformed = before.replace(old, new)
+    assert transformed.count(old) == 1 and transformed.count(new) == 1
+    path.write_bytes(transformed)
+    assert path.read_bytes() == transformed
+    identity = _b1_copied_identity(repo)
+    result = run_case(repo, args=_b1_copied_args())
+    assert result["rc"] == 125
+    doc = _assert_b1_copied_document(repo, result, identity)
+    assert doc["process"]["guard"] is None and doc["process"]["reason"] == "startup_error"
+    assert doc["process"]["cleanup_complete"] is True
+
+
+def test_b1_copied_real_contended_lock_starts_no_workload(tmp_path):
+    import fcntl
+    repo = make_repo(tmp_path, b1_isolated=True, b1_short_budget=True)
+    lock = repo / ".b1-fixture/test-workload.lock"
+    before = lock.stat()
+    with lock.open("rb") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            result = run_case(repo, args=_b1_copied_args())
+            assert result["rc"] == 124 and result["complete"] is True
+            assert len(result["statuses"]) == 1
+            for name in ("receipt.json", "process.json", "process.json.stdout.log", "process.json.stderr.log"):
+                assert not (repo / name).exists()
+            after = lock.stat()
+            assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
+            assert lock.read_bytes() == b""
+        finally:
+            fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+
+
+def test_b1_copied_real_observer_escape_keeps_incomplete_evidence(tmp_path):
+    assert hashlib.sha256((ROOT / "scripts/dev/pytest_evidence_controller.py").read_bytes()).hexdigest() == "bebf44daa73861efb52749a0f9dcbf047aa00665418ae09396512756f3ede1b0"
+    repo = make_repo(tmp_path, b1_isolated=True)
+    path = repo / "scripts/dev/pytest_evidence_controller.py"
+    before = path.read_bytes()
+    old = ('def _observe(owner, pipes, logs, expected_guard, deadline, stopped, *, profile=None):\n'
+           '    """각 fd/회수 배치를 제한하여 기한과 다른 파이프를 굶기지 않는다."""\n').encode()
+    new = old + b'    if profile == "b1-standard/v1":\n        os.write(2, b"B1_COPIED_OBSERVER_FAULT\\n")\n        raise RuntimeError("B1_COPIED_OBSERVER_FAULT")\n'
+    assert before.count(old) == 1 and before.count(new) == 0
+    transformed = before.replace(old, new)
+    assert transformed.count(old) == 1 and transformed.count(new) == 1
+    path.write_bytes(transformed)
+    assert path.read_bytes() == transformed
+    identity = _b1_copied_identity(repo)
+    result = run_case(repo, args=_b1_copied_args())
+    assert result["rc"] == 125
+    assert (repo / "harness-child-2.log").read_bytes() == b"B1_COPIED_OBSERVER_FAULT\n" * 2
+    doc = _assert_b1_copied_document(repo, result, identity)
+    assert doc["process"]["cleanup_complete"] is False and doc["process"]["reason"] == "cleanup_error"
+    assert doc["process"]["guard"] is None
+    assert doc["receipt"] == {"state": "invalid", "bytes": 0, "sha256": None}
+    assert doc["streams"] == {name: {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(),
+                                      "overflow": False, "observed_bytes": 0} for name in ("stdout", "stderr")}
+
+
+def test_b1_copied_real_crash_after_candidate_has_nonzero_terminal(tmp_path):
+    assert hashlib.sha256((ROOT / "scripts/dev/pytest_evidence_controller.py").read_bytes()).hexdigest() == "bebf44daa73861efb52749a0f9dcbf047aa00665418ae09396512756f3ede1b0"
+    repo = make_repo(tmp_path, b1_isolated=True)
+    path = repo / "scripts/dev/pytest_evidence_controller.py"
+    before = path.read_bytes()
+    old = b"        if finalization_failed:\n            return 125\n"
+    new = b'        if publication_complete:\n            os.write(2, b"B1_COPIED_POST_CANDIDATE_CRASH\\n")\n            os._exit(97)\n' + old
+    assert before.count(old) == 1 and before.count(new) == 0
+    transformed = before.replace(old, new)
+    assert transformed.count(old) == 1 and transformed.count(new) == 1
+    path.write_bytes(transformed)
+    assert path.read_bytes() == transformed
+    identity = _b1_copied_identity(repo)
+    result = run_case(repo, args=_b1_copied_args())
+    assert result["rc"] == 97
+    assert (repo / "harness-child-2.log").read_bytes() == b"B1_COPIED_POST_CANDIDATE_CRASH\n"
+    doc = _assert_b1_copied_document(repo, result, identity)
+    _assert_b1_copied_regular_receipt(repo, doc)
+    assert doc["process"]["returncode"] == 0 and doc["process"]["reason"] == "exited"
+    assert doc["process"]["descendant_survived"] is False and doc["process"]["descendants_reaped"] == 0
+    assert all(item["overflow"] is False for item in doc["streams"].values())
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--harness":
         raise SystemExit(_harness(Path(sys.argv[2]), sys.argv[3] == "dummy", sys.argv[3] == "interrupt"))
