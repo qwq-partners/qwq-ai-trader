@@ -101,50 +101,64 @@ class KISMarketData:
             return self._cache[cache_key]
 
         holidays: Set[date] = set()
+        # 한 응답이 달 전체를 덮지 않는다(2026-09 응답이 09-24 에서 끝나 09-25 추석 누락).
+        # 이 TR 의 연속조회(ctx/tr_cont) 의미는 공식 근거가 없어 쓰지 않고, 응답의 가장 늦은
+        # 날짜 다음 날을 BASS_DT 로 새 첫 조회를 다시 보낸다 — 달 말일까지·진전 없음·빈 응답·4회 상한에서 멈춤.
+        calls = 0
 
         try:
+            cursor = datetime.strptime(f"{year_month}01", "%Y%m%d").date()
+            month_end = (cursor + timedelta(days=32)).replace(day=1) - timedelta(days=1)
             session = await self._get_session()
             headers = await self._get_headers("CTCA0903R")
 
             url = f"{self._token_manager.base_url}/uapi/domestic-stock/v1/quotations/chk-holiday"
 
-            params = {
-                "BASS_DT": f"{year_month}01",
-                "CTX_AREA_NK": "",
-                "CTX_AREA_FK": "",
-            }
+            while calls < 4:
+                params = {
+                    "BASS_DT": cursor.strftime("%Y%m%d"),
+                    "CTX_AREA_NK": "",
+                    "CTX_AREA_FK": "",
+                }
 
-            await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
-                if resp.status != 200:
-                    logger.error(f"휴장일 조회 실패: HTTP {resp.status}")
-                    return holidays
+                await kis_rate_limit.acquire()
+                calls += 1
+                async with session.get(url, headers=headers, params=params) as resp:
+                    if resp.status != 200:
+                        # 뒤 조회 실패는 앞에서 모은 휴장일을 유지한다 (캐시하지 않음)
+                        (logger.error if calls == 1 else logger.warning)(
+                            f"휴장일 조회 실패: HTTP {resp.status} (BASS_DT={params['BASS_DT']}, 수집 {len(holidays)}일 유지)")
+                        return holidays
 
-                data = await resp.json()
+                    data = await resp.json()
 
                 if data.get("rt_cd") != "0":
-                    logger.warning(f"휴장일 API 오류: {data.get('msg1')}")
+                    logger.warning(
+                        f"휴장일 API 오류: {data.get('msg1')} (BASS_DT={params['BASS_DT']}, 수집 {len(holidays)}일 유지)")
                     return holidays
 
-                output = data.get("output", [])
-
-                for item in output:
+                latest: Optional[date] = None
+                for item in data.get("output", []):
                     bass_dt = item.get("bass_dt", "")
-                    opnd_yn = item.get("opnd_yn", "")
+                    try:
+                        d = datetime.strptime(bass_dt, "%Y%m%d").date()
+                    except (TypeError, ValueError):
+                        continue
+                    latest = d if latest is None else max(latest, d)
+                    if item.get("opnd_yn", "") == "N":
+                        holidays.add(d)
 
-                    if bass_dt and opnd_yn == "N":
-                        try:
-                            d = datetime.strptime(bass_dt, "%Y%m%d").date()
-                            holidays.add(d)
-                        except ValueError:
-                            continue
+                if latest is None or latest >= month_end or latest <= cursor:
+                    break
+                cursor = latest + timedelta(days=1)
 
             self._set_cache(cache_key, holidays)
-            logger.info(f"[KISMarketData] 휴장일 조회 완료: {year_month} → {len(holidays)}일")
+            logger.info(f"[KISMarketData] 휴장일 조회 완료: {year_month} → {len(holidays)}일 (조회 {calls}회)")
             return holidays
 
         except Exception as e:
-            logger.error(f"휴장일 조회 오류: {e}")
+            (logger.error if calls <= 1 else logger.warning)(
+                f"휴장일 조회 오류: {e} (조회 {calls}회, 수집 {len(holidays)}일 유지)")
             return holidays
 
     # ============================================================
