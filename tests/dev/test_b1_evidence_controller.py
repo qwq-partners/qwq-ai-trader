@@ -4095,6 +4095,8 @@ def test_b1_main_descriptor_status_is_explicit_and_sticky_after_later_true(monke
     result, escaped = _run_main_matrix(monkeypatch, case, overrides=overrides)
     assert escaped is None and result == 125
     assert batches and batches[0][0] == (81, 83, 85)
+    # Frozen shared path actually reaches the later empty True; its result cannot erase the first veto.
+    assert [descriptors for descriptors, _, _ in batches] == [(81, 83, 85), ()]
     assert all(b1 is True for _, b1, _ in batches)
     assert all(owner is batches[0][2] for _, _, owner in batches)
     assert case.live == set() and batches[0][2].error == "timeout"
