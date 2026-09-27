@@ -40,6 +40,13 @@ critical review → independent shared-main/snapshot/order/mixed-exit tests → 
 review → separate public enable gate. No main extraction is bundled into the helper
 amendment, and no component approval substitutes for Task4's real profile/full evidence.
 
+The reviewed preclassification entry-clock limitation in spec §6.1 must be explicit
+before public enablement: retain v1's initial-clock propagation and fixed budget origin;
+hard125 promises begin at validated-body entry. Direct two-profile RuntimeError/
+SystemExit(0) zero-effects/restoration tests and terminal0+missing-evidence rejection
+are required before enablement. This does not allow incomplete invocation evidence
+to pass or weaken any in-body hard-veto row.
+
 Separate approved compatibility exception: only the oversized OS-test parameter
 ID may change, without changing its65537-byte payload or assertion. Candidate
 82e107f and exact109-node focused evidence are documented in

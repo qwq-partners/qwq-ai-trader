@@ -222,6 +222,19 @@ No fallback authority exists when ownership is unsupported or cleanup is incompl
 
 ### 6.1 Reviewed Task3d prerequisite and mixed-failure clarification
 
+Reviewed entry scope: the B1 hard125 matrix below starts at the validated private
+body, after a valid initial timestamp and parsed invocation. Preserve the legacy
+first monotonic read before argument parsing and its exception propagation. An
+initial preclassification SystemExit(0) can propagate0; do not claim universal
+public-entry125 normalization. This narrows the normalization promise, not admission:
+missing/invalid or unlinked invocation/process/receipt/log evidence still rejects,
+even with terminal0. No fabricated timestamp, foreign-attempt artifact, parser
+shortcut, retry or waiver is permitted. Before separate public enablement, direct
+adapters must prove exact RuntimeError/SystemExit(0) propagation for both intended
+profiles, zero parsing/setup/resource/process attempts, and patch restoration;
+retain independent terminal0+missing-evidence rejection. Existing in-body clock,
+BaseException and finalization obligations are unchanged.
+
 The independent Task3d re-review approved this **tests-first contract only**. It
 supersedes ambiguous mixed-exit interpretations of the single-trigger table above;
 it is not an implementation or enablement claim. Public B1 main remains125 until
@@ -291,8 +304,8 @@ invalid/missing bool is hard, and a later empty-batch True cannot clear it.
 | Snapshot/facts/serialization/size failure | Hard; no invented fallback document. |
 | Result create/write/count/close failure | Hard, publication incomplete; preserve partial/candidate file, never republish. |
 | Strict bounds close False/escape; coordination close False/escape | Hard; candidate already final, no new publication/path work. |
-| Any parent BaseException-only escape | Hard; normalize even SystemExit(0) to125 after remaining cleanup. |
-| Main boundary/final clock exception | Hard unproved clock; skip discretionary publication, finish owned cleanup. Probe/emergency use their own rows. |
+| Any validated-body parent BaseException-only escape | Hard; normalize even SystemExit(0) to125 after remaining cleanup. |
+| Validated-body boundary/final clock exception | Hard unproved clock; skip discretionary publication, finish owned cleanup. Probe/emergency use their own rows; initial preclassification entry has the explicit limitation above. |
 | Total overrun with no hard cause | 124, preserve earlier reason/raw status; no new discretionary publication. |
 | Post-cutoff stopped flag alone | Preserve cutoff decision; later actual hard/time failures still apply. |
 

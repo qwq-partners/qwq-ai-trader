@@ -103,6 +103,13 @@ source651e7305…는 그대로이고 비작성자 source/evidence 리뷰가
 보존한다. 다음은 공통 `_run_validated` 경로의 독립 첫 RED·main 행렬이며 공개
 B1 main125 차단·runner 최종 feature 통합 전 상태는 유지한다.
 
+후속 경계 검토에서 최초 시계 읽기가 모드 판별보다 앞이라 내부 함수의 hard125
+보장에 포함될 수 없음을 확인했다. 독립 정책 리뷰 후 기존 진입 순서·예외 전파는
+보존하고 hard125 약속은 검증된 내부 실행 진입 이후로 명시했다. 최초 SystemExit(0)
+가능성을 숨기지 않으며, 반환0만으로는 승인하지 않는 전체 증거 결속 조건은 그대로다.
+공개 활성화 전 두 프로필의 초기 예외 동일성·부작용0·누락 증거 거부 시험이 필요하다.
+정책 검토 기록은 `task-3d-entry-clock-disposition-review.md`이며 구현 승인과 구분한다.
+
 실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
 제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/
 최대149 bytes로 미실행 대상을 교체한다. 기존 OS 회귀·전체 시험·producer 제한은
