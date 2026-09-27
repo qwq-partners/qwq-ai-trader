@@ -792,3 +792,45 @@ def test_b1_probe_already_started_cleanup_blocks_fork_and_preserves_first_ends(m
     assert events == []
     assert (budget.total_end, budget.run_end) == (1000.0, 996.0)
     assert (budget.cleanup_end, budget.term_end) == (103.0, 101.0)
+
+
+def test_b1_coordination_constructor_is_inert(monkeypatch):
+    module = _load_source("_b1_coordination_constructor", "pytest_evidence_controller.py")
+    import os as syscall
+    import tempfile as temporary
+    import time as clock
+    import fcntl as locking
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("coordination 생성자/snapshot에서 I/O 또는 clock 호출")
+
+    for name in ("open", "close", "dup", "fstat", "stat", "listdir", "rmdir",
+                 "mkdir", "unlink", "rename", "read", "write", "chmod", "getuid", "fork"):
+        monkeypatch.setattr(syscall, name, forbidden)
+    monkeypatch.setattr(temporary, "mkdtemp", forbidden)
+    monkeypatch.setattr(clock, "monotonic", forbidden)
+    monkeypatch.setattr(clock, "sleep", forbidden)
+    monkeypatch.setattr(locking, "flock", forbidden)
+
+    coordination = module._B1Coordination()
+    assert coordination.error is None
+    assert coordination.close_failed is False
+    assert coordination.fake_key_path is None
+    assert type(coordination.controller_fds()) is tuple
+    assert coordination.controller_fds() == ()
+    expected = {
+        "lock_acquired": False,
+        "lock_identity_stable": False,
+        "fake_key_absent_before": False,
+        "fake_key_absent_after": False,
+        "fake_directory_removed": False,
+        "fake_key_path_sha256": None,
+    }
+    facts = coordination.facts()
+    assert type(facts) is dict
+    assert facts == expected
+    assert list(facts) == list(expected)
+    facts["lock_acquired"] = True
+    facts["unexpected"] = "not object state"
+    assert coordination.facts() == expected
+    assert coordination.facts() is not facts
