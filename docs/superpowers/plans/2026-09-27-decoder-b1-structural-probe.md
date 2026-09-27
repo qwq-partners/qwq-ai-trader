@@ -15,15 +15,23 @@ full semantic/CONT/retire/dispose와 N4097은 별도 승인 gate에 남긴다.
 
 **Spec:** `docs/superpowers/specs/2026-09-27-decoder-b1-structural-probe-design.md` 전체.
 
-**Status:** `APPROVE_B1A_PLAN_ONLY`, 새 독립 Astra/xhigh가 `da673af`에 차단0·자문N1로 승인했다.
-coordinator가 N1 기본값을 명문화했다. [검토 원장](../../reviews/decoder-b1a-2026-09-27.md).
+**Status:** Task1–4 개발 완료, `B1A_PRIMITIVES_OBSERVED_ONLY`. 독립 critical 승인 뒤 실제
+전체 UTC6527/644.41s·KST6527/664.16s(각각16skip/2xfail/4warnings·격리0·exit0)를 확인하고
+`e41f485`에 다섯 파일만 통합했다. full B1/native/운영은 여전히 미완이다.
+최초 계획은 새 독립 Astra/xhigh가 `da673af`에 차단0·자문N1로 승인했고 coordinator가 N1을
+명문화했다. 이 갱신은 진행 표시·상태 범위 설명이며 동결 전이/API/profile은 변경하지 않는다.
+실행 당시 plan SHA256은 `51cb7f7913fc486c98114c1067a3e8ec13f344235ed0c679a79140bde442e0ef`다.
+[검토 원장](../../reviews/decoder-b1a-2026-09-27.md).
 원525줄은 `d9d57e533582b9d2183a145c14f31c2fea313b2b`에 보존한다.
 R1–R4의 부분 처분이며 R2 full CLOSED/full S GO를 주장하지 않는다.
 
 ## Global Constraints
 
-- `TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED`, `native_qualified=false`,
-  `source_execution_permitted=false`, qualified runtime0, source108 call-phase0 유지.
+- 상위 [cold 소유권 설계](../specs/2026-09-27-recovery-cold-source-ownership-design.md)의
+  `TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED`는 **첫 cold/native 할당 관측**에 대해 유지한다.
+  완료한 B1a 기본 구조 oracle/RED가 미완이라는 뜻이 아니며 B1a 결과로 상위 gate를 닫지 않는다.
+  `native_qualified=false`, `source_execution_permitted=false`, qualified runtime0,
+  source108 call-phase0은 그대로다.
 - 신규 `tests/structural_b1/{subject,observer,fixtures,mutants,test_structure}.py` 다섯 파일만.
   기존 파일/src/helper/proofs/guard/CI/config/registry 수정0, frozen 후보 복사·import0.
 - SQL/native/제품 import/외부 API/SSH/deploy/restart/install/자격·운영 상태 접근0.
@@ -49,11 +57,11 @@ R1–R4의 부분 처분이며 R2 full CLOSED/full S GO를 주장하지 않는�
   없으면 coordinator가 원 리뷰 전체를 제공한 새 독립 Astra/xhigh reviewer로 대체하고 기록한다.
   실제로 원 reviewer의 retention 이탈로 새 reviewer가 전체 원 지적과 최종 두 문서를 읽고
   `APPROVE_B1A_PLAN_ONLY`를 부여했다. 같은 공급자 독립 검토이며 cross-provider가 아니다.
-- [ ] coordinator가 승인 spec/plan SHA·파일·node 목록을 고정해 dispatch한다.
+- [x] coordinator가 승인 spec/plan SHA·파일·node 목록을 고정해 dispatch한다.
   subject=Astra/high 25분, 다른 observer 작성자=Astra/high 30분,
   독립 critical reviewer=Astra/xhigh 20분, 각 fanout0/fallback0.
   소유권 전이·관측 독립성이 critical routing 근거다. author 승인0.
-- [ ] 고유 feature worktree·단일 시험 workload slot을 사용한다. scaffold→observer→
+- [x] 고유 feature worktree·단일 시험 workload slot을 사용한다. scaffold→observer→
   subject 완성→mutant site 보완은 순차이며 앞 단계 검토 commit이 다음 base다.
   사용자 복귀 전 자율 범위 안에서 진행하되 시간 부족은 미완으로 기록한다.
 
@@ -152,10 +160,10 @@ runner/controller나 guard 우회가 아니다. 일반 focused/full에서는 항
 
 **Files:** Create `tests/structural_b1/subject.py`만. **Interfaces:** §0, spec §2.
 
-- [ ] exact layout·shell·identity/사전 거부와 EMPTY constructor를 만든다. 임시 scaffold
+- [x] exact layout·shell·identity/사전 거부와 EMPTY constructor를 만든다. 임시 scaffold
   `_step`은 graph 대입 없이 action=None/phase=IDLE로만 돌아온다. 다음 실제 RED용 입력이며
   완성 구현/성공 증거가 아니다.
-- [ ] root가 실제 slots/constructor site/import closure를 정적으로 검토하고 syntax만 확인한다.
+- [x] root가 실제 slots/constructor site/import closure를 정적으로 검토하고 syntax만 확인한다.
   시험/제품 import0. 허용 파일만 scaffold commit하고 observer의 다음 base로 전달한다.
 
 ## Task 2: 독립 oracle·literal expected·첫 구조 RED
@@ -163,26 +171,26 @@ runner/controller나 guard 우회가 아니다. 일반 focused/full에서는 항
 **Files:** Create observer.py/fixtures.py/mutants.py/test_structure.py. subject 수정0.
 **Interfaces:** spec §3 표 동결본·Task1 타입/slots. 별도 작성자가 expected를 작성한다.
 
-- [ ] `test_append_requires_actual_chain`: append_empty 뒤 head=tail=g1, EMPTY·prev/next=None,
+- [x] `test_append_requires_actual_chain`: append_empty 뒤 head=tail=g1, EMPTY·prev/next=None,
   모든 holder None·constructor 반환1을 literal로 요구한다. scaffold는 call-phase의
   `STRUCTURE_MISSING_CHAIN` assertion으로 실패해야 한다. import 오류는 RED가 아니다.
-- [ ] root가 §1 최초 exact node를 실행하여 raw rc1·해당 assertion을 보존한다.
+- [x] root가 §1 최초 exact node를 실행하여 raw rc1·해당 assertion을 보존한다.
   `test_allocate_to_new_exact_transition`은 정상 A0 generation1/new1/기타 delta0를 고정한다.
-- [ ] `test_append_three_literal_transitions`, `test_unlink_positions_literal_transitions`에
+- [x] `test_append_three_literal_transitions`, `test_unlink_positions_literal_transitions`에
   append1/2/3과 single/head/tail/middle의 모든 A/U행 exact generation/slot/phase를 고정한다.
   None→None은 delta0/실제 source 쓰기1임을 구분한다.
-- [ ] `test_foreign_fault_preserves_each_boundary`는 모든 A/U행 전/후를 별도 작은 fixture로
+- [x] `test_foreign_fault_preserves_each_boundary`는 모든 A/U행 전/후를 별도 작은 fixture로
   재구축하여 원 exception identity·현재 phase/graph/holder·후속 mutation0을 검사한다.
   fault는 정상 terminal을 기대하지 않으며 A0 내부 gap은 제외한다.
-- [ ] `test_action_rejections_are_unchanged`는 malformed/unknown/busy/빈 unlink/wrong middle/
+- [x] `test_action_rejections_are_unchanged`는 malformed/unknown/busy/빈 unlink/wrong middle/
   identity·fault 이후 요청을 포함한다. constructor0·정확한 before=after를 비교한다.
-- [ ] `test_terminal_after_frames_return`, `test_observer_failure_is_inconclusive`,
+- [x] `test_terminal_after_frames_return`, `test_observer_failure_is_inconclusive`,
   `test_allocator_bypass_is_not_qualified`에 실제 alias/census 실패/allocator bypass를 적용한다.
   driver/wrapper/snapshot frame 종료·관측 한계 분류를 검증한다.
-- [ ] spec §5 names의 `test_actual_mutants_rejected`와
+- [x] spec §5 names의 `test_actual_mutants_rejected`와
   `test_net_delta_does_not_prove_write_count`를 작성한다. 후자는 double_write_restore의
   snapshot 한계를 확인하며 structural kill 수에 넣지 않는다.
-- [ ] root/reviewer가 expected 독립성을 검토한 뒤 Task3로 간다. 없는 mutant site는 미결로
+- [x] root/reviewer가 expected 독립성을 검토한 뒤 Task3로 간다. 없는 mutant site는 미결로
   남겨 실제 코드 뒤 연결하며 large node/skip을 만들지 않는다.
 
 ## Task 3: 전이 구현·actual mutants·source-write 검토
@@ -190,17 +198,17 @@ runner/controller나 guard 우회가 아니다. 일반 focused/full에서는 항
 **Files:** subject 담당은 subject.py만. observer 담당은 별도 직렬 단계에서 mutants.py만.
 **Interfaces:** 동일 spec/API/expected. GREEN을 위해 expected/test 완화0.
 
-- [ ] A0–A6/U0–U11을 구현한다. A0만 복합 관측, 다른 행은 분기별 단일 실제 graph 대입이다.
+- [x] A0–A6/U0–U11을 구현한다. A0만 복합 관측, 다른 행은 분기별 단일 실제 graph 대입이다.
   사전 거부와 원 fault/phase/graph 보존을 구현한다. full decoder action0.
-- [ ] 최초 exact RED node를 같은 profile로 GREEN 확인한다. 작은 전체 module은 아래 실제
+- [x] 최초 exact RED node를 같은 profile로 GREEN 확인한다. 작은 전체 module은 아래 실제
   mutant site 연결을 끝낸 뒤 실행하며 미구현 mutant를 skip하거나 기대값을 완화하지 않는다.
   독립 reviewer가 각 분기 쓰기 지점/constructor0·1을 SHA·행 표로 대조한다.
   double_write_restore는 source 감사로 거부하며 snapshot 증명으로 보고하지 않는다. tracing0.
-- [ ] observer 담당이 실제 mutant site를 연결한다. 정상 predicate PASS와 같은 predicate의
+- [x] observer 담당이 실제 mutant site를 연결한다. 정상 predicate PASS와 같은 predicate의
   actual mutant 구조 실패를 한 쌍으로 남긴다. 원시 RED는 아래 고정 one-shot 절차로 보존한다.
   pytest.raises 포장 PASS만 raw RED라 하지 않는다. observer/coverage miss는 별도 분류다.
-- [ ] 실제 mutant 연결 후 §1의 작은 전체 module을 실행한다. 새 실패면 중단하고 raw를 보존한다.
-- [ ] reviewer가 모든 표 행/분기·foreign fault·frame 반환·hidden alias·actual terminal과
+- [x] 실제 mutant 연결 후 §1의 작은 전체 module을 실행한다. 새 실패면 중단하고 raw를 보존한다.
+- [x] reviewer가 모든 표 행/분기·foreign fault·frame 반환·hidden alias·actual terminal과
   source closure를 확인한다. diff/site/SHA/raw node/rc/unresolved를 root에 반환한다.
 
 actual mutant 원시 절차: test_structure에 `test_raw_mutant_probe`를 두되 평상시에는 정상
@@ -234,13 +242,13 @@ positive 방어 대조, double_write_restore는 source 한계 대조이며 이 r
 
 **Files:** 새 코드0; root의 별도 원장 allowlist만 갱신. author 승인0.
 
-- [ ] root가 다섯 파일/금지 import0/전이 source/actual mutant를 대조하고 새 parameterized node
+- [x] root가 다섯 파일/금지 import0/전이 source/actual mutant를 대조하고 새 parameterized node
   literal inventory와 standard collection을 §1 profile로 비교한다. missing large는 미구현이며
   skip/xfail/deselect로 전체를 통과시키지 않았는지 확인한다.
-- [ ] final 작은 module1회 → 독립 critical 승인 → UTC 전체1회 → KST 전체1회 직렬 검증한다.
+- [x] final 작은 module1회 → 독립 critical 승인 → UTC 전체1회 → KST 전체1회 직렬 검증한다.
   raw/tool exit0·격리0·source108 call-phase0·syntax/비밀 패턴/불변 diff를 모두 요구한다.
   새 실패/timeout이면 통합0. 이전 full 기록은 새 후보 PASS를 대신하지 않는다.
-- [ ] 실제 성공한 경우에만 `B1A_PRIMITIVES_OBSERVED_ONLY`로 허용 파일을 개발 통합한다.
+- [x] 실제 성공한 경우에만 `B1A_PRIMITIVES_OBSERVED_ONLY`로 허용 파일을 개발 통합한다.
   full B1/R2/large/S/첫 cold RED/native는 미완으로 명시한다.
 
 ## 5. full B1/N4097 후속 gate — 현재 미승인·UNRUN

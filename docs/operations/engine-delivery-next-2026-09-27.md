@@ -19,7 +19,7 @@
 
 | 단계 | 다음 산출물 | 아직 열지 않는 경계 |
 | --- | --- | --- |
-| 1. 검증 부품 마감 | 18a2196 코드의 독립 broad·관련610·UTC/KST 각6329 완료, 문서/feature push 마감 | main/운영·실제 source/native 실행 |
+| 1. 검증 부품 마감 | runtime/health18a2196 인수 뒤 B1a 시험198·raw12·독립 critical·UTC/KST 각6527 완료, 통합 코드e41f485 | main/운영·실제 source/native 실행 |
 | 2. native/source 근거 | exact runtime 원본·빌드/파일 closure·격리 profile·독립 관측/승인 및 별도 실행계획 | host 버전만으로 QUALIFIED, 합성 fixture의 실제 등록 |
 | 3. cold 복구 소유권 | 최초 할당·부분 실패·중복 교체·취소·정리·소비자 인계의 독립 oracle와 인수 | 기존 파서 결과를 나중에 등록해 선소유로 주장 |
 | 4. 실제 owner 연결 | 승인된 index/gate와 모든 commit/restore/writer/result drain의 단일 책임·버전 전파 | full scan 숨기기, history 삭제, stale snapshot의 current 처리 |
@@ -33,7 +33,8 @@
 
 원 B1 실행계획 초안 d9d57e5는 독립 R1~R4 변경 요청을 받았다. 이후 da673af의 생성·chain·holder·
 unlink B1a 부분 계획만 새 독립 reviewer가 승인했다. [B1a 원장](../reviews/decoder-b1a-2026-09-27.md)의
-최소 subject→독립 RED→전이/변이→전체 검증 순서로 진행한다. 이것은 ordinary Python
+최소 subject→독립 RED→전이/변이→독립 critical→전체 UTC/KST 인수·feature 통합까지 마쳤다.
+결과는 `B1A_PRIMITIVES_OBSERVED_ONLY`다. 이것은 ordinary Python
 반환 후 slot 관측이며 원 native A, 전체 decoder, 최초 cold RED 또는 단계3 완료가 아니다.
 승인된2MiB/stream 실행기와 대형 전수 관측 예산이 없어 N4097은 계획 단계부터 UNRUN이다.
 
@@ -54,3 +55,21 @@ unlink B1a 부분 계획만 새 독립 reviewer가 승인했다. [B1a 원장](..
 미완 항목마다 "구현 가능", "서면 설계만 가능", "외부 근거/권한 필요"를 구분하고 가장 앞의
 실행 가능한 작업 하나를 선택한다. Plan→Do→See와 역할별 모델/effort, 독립 리뷰를 유지한다.
 전체 suite는 모든 worker가 종료한 뒤 coordinator만 직렬 실행한다.
+
+### B1a 마감 이후의 구체적인 첫 작업
+
+1. [B1a 계획 §5](../superpowers/plans/2026-09-27-decoder-b1-structural-probe.md)의
+   미완 항목부터 시작한다. CONT/end/lookup/publish/retire/finish/known_failure/dispose의
+   모든 중간 상태와 fault 전후 보존값을 독립 전이표로 정의한다. 중첩 a/b/key/tag/nonfinite/
+   partial disposal/WORK 변이 인수를 축소하지 않는다. 이 단계는 서면 설계이며 기존의
+   검증된 EMPTY cell 전이를 다시 구현하거나 제품 decoder로 간주하지 않는다.
+2. 작성자 Astra/high와 다른 critical reviewer Astra/xhigh로 계획을 검토한다. source와
+   expected 작성자를 분리하고 허용 파일·원시 RED·예산·종료 조건을 명시한 뒤에만 다음 Do로
+   넘어간다. 실제 모델/effort metadata가 없으면 unverified로 기록한다.
+3. 대형 N4097 전수 시험은 별도 의존성이 있다. stdout/stderr 각각2MiB 강제·보존이 가능한
+   승인 runner와 dedicated1+UTC1+KST1의900초 양립 근거를 먼저 확보한다. 현재의 tee나
+   작게 나온 로그 크기를 출력 상한 증거로 사용하지 않는다. 없는 실행기 개발/설치는
+   현재 B1a 인수 범위 밖이므로 먼저 별도 범위·설계·권한을 확정한다.
+4. native runtime의 실제 자격은 위 합성 구조 시험과 별개다. 빈 registry/실행false를 유지하고
+   근거 확보 이전에는 원 source/cold/실제 owner 실행으로 건너뛰지 않는다. 개발 예외 두 건은
+   이 수명·정합성·실행 근거를 대신하지 않는다.

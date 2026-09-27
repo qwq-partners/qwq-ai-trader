@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — B1a 기본 구조 시험 개발 인수 완료 (제품 decoder 아님)
+
+- 생성·chain·holder·unlink의 시험 전용 전이를 독립 literal oracle와 분리 구현했다. 최초 missing-chain RED를 보존하고 expected 리뷰의 pytest 예약명·foreign operation 관측 공백2건을 수정·재승인했다.
+- 정상198건·actual raw12개의 의도한 slot/terminal 실패를 확인했다. 순변화로 쓰기 수를 증명할 수 없는 double_write_restore는 한계로 보존하며 runtime kill로 세지 않는다. 별도 critical 최종 지적0(요청 Astra/xhigh, actual model/effort metadata 미노출·미검증; 같은 공급자 독립 검토)이다.
+- 후보29210dc 전체 UTC6527 passed/644.41s·KST6527 passed/664.16s, 각각 기존16skip/2xfail/4warnings·workload0/tee0/tool0·격리0. compile550·비밀 패턴·보존 지문 확인 후 신규 다섯 파일만 e41f485로 feature 통합했다. 모든 비문서 tracked 파일은 시험 후보와 동일하다.
+- 결과는 `B1A_PRIMITIVES_OBSERVED_ONLY`. full B1/CONT/retire/dispose·N4097·native 자격·첫 cold RED·실제 owner/소비자·main/운영은 미완이다. 기존 두 성능 예외/guard/제품 설정 무변경. [원장](docs/reviews/decoder-b1a-2026-09-27.md), [후속 순서](docs/operations/engine-delivery-next-2026-09-27.md).
+
 ## 2026-09-27 — B1a 원시 구조 부분 계획 승인 (구현 인수 아님)
 
 - full B1 초안의 생성 인계 모순·중간 전이 누락·실행기/대형 예산 지적을 받아 B1a EMPTY cell 생성/chain/holder/unlink 단계로 분리했다. 정확한 전이표·독립 slot oracle·실제 변이/원시 실패 절차를 고정했다.
