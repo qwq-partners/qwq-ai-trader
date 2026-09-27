@@ -3684,21 +3684,69 @@ def test_b1_public_entry_clock_exception_preserves_identity_before_classificatio
     assert escaped is failure and calls == ["entry-clock"]
 
 
-def test_b1_public_gate_stays_closed_after_validated_parser(monkeypatch):
-    module = _load_source("_b1_public_gate", "pytest_evidence_controller.py")
+def _public_delegation_case(monkeypatch, profile, body_status, body_error=None):
+    module = _load_source("_b1_public_delegation", "pytest_evidence_controller.py")
+    import os
+    import signal
     import time
 
-    parsed = []
+    first_timestamp = 100.25
+    options = SimpleNamespace(profile=profile, timeout_seconds=900)
+    context, receipt, output = Path("/fixture/context.json"), Path("/fixture/receipt.json"), Path("/fixture/result.json")
+    logs = [Path("/fixture/stdout.log"), Path("/fixture/stderr.log")]
+    selected = ["tests/test_second.py", "tests/test_first.py"]
+    parsed_objects = (options, context, receipt, output, logs, selected)
+    argv = _args(profile=() if profile is None else ("--profile", "b1-standard/v1"), selected=selected)
+    events, parsed, delegated = [], [], []
+    def clock():
+        events.append("clock")
+        return first_timestamp
     def arguments(argv):
+        events.append("parse")
         parsed.append(list(argv))
-        return (SimpleNamespace(profile="b1-standard/v1", timeout_seconds=900),
-                Path("/fixture/context.json"), Path("/fixture/receipt.json"), Path("/fixture/result.json"),
-                [Path("/fixture/stdout.log"), Path("/fixture/stderr.log")], ["tests/test_tiny.py"])
-    targets = [(time, "monotonic", lambda: 100.0), (module, "_arguments", arguments),
-               (module, "_load_bootstrap", _prerequisite_forbidden),
-               (module, "_B1Coordination", _prerequisite_forbidden), (module, "_RawPopen", _prerequisite_forbidden)]
-    result, escaped = _prerequisite_call(monkeypatch, targets, lambda patch: module.main(_args()))
-    assert escaped is None and result == 125 and parsed == [_args()]
+        return parsed_objects
+    def body(*args):
+        events.append("body")
+        delegated.append(args)
+        if body_error is not None:
+            raise body_error
+        return body_status
+    targets = [(time, "monotonic", clock), (module, "_arguments", arguments),
+               (module, "_run_validated", body)]
+    targets += [(owner, name, _prerequisite_forbidden) for owner, name in (
+        (module, "_load_bootstrap"), (module, "_B1Budget"), (module, "_Owner"),
+        (module, "_BoundPaths"), (module, "_B1Coordination"), (module, "_preflight"),
+        (module, "_probe"), (module, "_RawPopen"), (module, "_observe"),
+        (os, "open"), (os, "close"), (os, "pipe"), (os, "fork"), (os, "waitpid"),
+        (os, "pidfd_open"), (signal, "signal"), (signal, "pidfd_send_signal"),
+        (fcntl, "flock"), (time, "sleep"))]
+    result, escaped = _prerequisite_call(monkeypatch, targets, lambda patch: module.main(argv))
+    assert events == ["clock", "parse", "body"] and parsed == [argv]
+    assert len(delegated) == 1 and len(delegated[0]) == 7
+    assert delegated[0][0] == 100.25
+    assert all(actual is original for actual, original in zip(delegated[0][1:], parsed_objects))
+    assert selected == ["tests/test_second.py", "tests/test_first.py"]
+    return result, escaped
+
+
+@pytest.mark.parametrize(("profile", "body_status"), [
+    pytest.param("b1-standard/v1", 0, id="b1-zero"),
+    pytest.param("b1-standard/v1", 9, id="b1-nine"),
+    pytest.param("b1-standard/v1", 125, id="b1-rejected"),
+    pytest.param(None, 0, id="legacy-zero"),
+    pytest.param(None, 9, id="legacy-nine"),
+    pytest.param(None, 125, id="legacy-rejected"),
+])
+def test_b1_public_main_delegates_exact_validated_objects_once(monkeypatch, profile, body_status):
+    result, escaped = _public_delegation_case(monkeypatch, profile, body_status)
+    assert escaped is None and type(result) is int and result == body_status
+
+
+@pytest.mark.parametrize("error_type", [ValueError, ImportError, SystemExit])
+def test_b1_public_legacy_body_exception_stays_outside_parser_catch(monkeypatch, error_type):
+    failure = error_type(0)
+    result, escaped = _public_delegation_case(monkeypatch, None, 0, body_error=failure)
+    assert result is None and escaped is failure
 
 
 @pytest.mark.parametrize(("missing", "raw", "error"), [
