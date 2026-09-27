@@ -2371,7 +2371,8 @@ def _prerequisite_call(monkeypatch, targets, operation):
                 hasattr(original, "__func__") and getattr(restored, "__func__", None) is original.__func__
                 and getattr(restored, "__self__", None) is original.__self__
             )
-    assert forbidden_attempts == [], ("forbidden attempts survived candidate catch", forbidden_attempts)
+    if forbidden_attempts:
+        raise AssertionError(("forbidden attempts survived candidate catch", forbidden_attempts))
     return result, escaped
 
 
