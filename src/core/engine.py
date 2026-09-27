@@ -52,10 +52,14 @@ _kr_market_holidays: Set[date] = set()
 
 
 def set_kr_market_holidays(holidays: Set[date]):
-    """외부에서 조회한 휴장일을 주입 (봇 시작 시 호출)"""
+    """외부에서 조회한 휴장일을 주입 (봇 시작·매월 갱신 시 호출)
+
+    utils.session 에도 같은 집합을 넣는다 — session 경유 판정(KOSPI 벤치마크 신선도·스크리너 등)이
+    같은 동적 자료를 보게 한다. 로드 완료 로그는 session 쪽이 남긴다.
+    """
     global _kr_market_holidays
     _kr_market_holidays = holidays
-    logger.info(f"한국 시장 휴장일 {len(holidays)}일 로드 완료")
+    _set_session_holidays(holidays)
 
 
 def is_kr_market_holiday(d: date) -> bool:
@@ -72,6 +76,7 @@ def is_kr_market_holiday(d: date) -> bool:
 
 # 하드코딩 공휴일은 utils.session 한 곳에서 관리한다 (두 벌이 따로 틀리지 않게)
 from src.utils.session import _KR_FALLBACK_HOLIDAYS as _FALLBACK_HOLIDAYS  # noqa: E402
+from src.utils.session import set_kr_holidays as _set_session_holidays  # noqa: E402
 
 
 # 이벤트 핸들러 타입

@@ -101,16 +101,16 @@ def test_stops_on_empty_response(monkeypatch):
     provider, session, _, result = _run(monkeypatch, [_ok(first), _ok([])])
     assert session.bass_dts == ["20260901", "20260925"]
     assert date(2026, 9, 24) in result
-    assert "holidays_202609" in provider._cache  # 예외 경로가 아니라 정상 정지
+    assert "holidays_202609" not in provider._cache  # 월말 미확인 — 캐시 안 함
 
 
 def test_stops_when_no_progress(monkeypatch):
     first = _rows(date(2026, 9, 1), date(2026, 9, 24), CHUSEOK)
-    stale = _rows(date(2026, 9, 20), date(2026, 9, 25), CHUSEOK)  # 가장 늦은 날짜 == 커서
+    stale = _rows(date(2026, 9, 20), date(2026, 9, 24), CHUSEOK)  # 가장 늦은 날짜 < 커서(09-25)
     provider, session, _, result = _run(monkeypatch, [_ok(first), _ok(stale)])
     assert session.bass_dts == ["20260901", "20260925"]
-    assert date(2026, 9, 25) in result
-    assert "holidays_202609" in provider._cache  # 예외 경로가 아니라 정상 정지
+    assert date(2026, 9, 24) in result and date(2026, 9, 25) not in result  # 빠진 날은 fallback 합집합이 덮는다
+    assert "holidays_202609" not in provider._cache  # 월말 미확인 — 캐시 안 함
 
 
 def test_stops_at_four_calls(monkeypatch):
@@ -121,14 +121,26 @@ def test_stops_at_four_calls(monkeypatch):
         _rows(date(2026, 9, 16), date(2026, 9, 20)),
         _rows(date(2026, 9, 21), date(2026, 9, 30)),  # 호출되면 안 됨
     ]
-    _, session, acquired, _ = _run(monkeypatch, [_ok(c) for c in chunks])
+    provider, session, acquired, _ = _run(monkeypatch, [_ok(c) for c in chunks])
     assert session.bass_dts == ["20260901", "20260906", "20260911", "20260916"]
     assert len(acquired) == 4
+    assert "holidays_202609" not in provider._cache  # 09-20 까지만 확인 — 캐시 안 함
 
 
 def test_single_call_when_first_response_covers_month(monkeypatch):
-    _, session, _, _ = _run(monkeypatch, [_ok(_rows(date(2026, 9, 1), date(2026, 9, 30), CHUSEOK))])
+    provider, session, _, _ = _run(monkeypatch, [_ok(_rows(date(2026, 9, 1), date(2026, 9, 30), CHUSEOK))])
     assert session.bass_dts == ["20260901"]
+    assert "holidays_202609" in provider._cache
+
+
+def test_response_ending_at_cursor_is_progress(monkeypatch):
+    # 커서 당일 한 줄만 와도 그날은 소비했으므로 다음 날부터 계속 조회한다
+    first = _rows(date(2026, 9, 1), date(2026, 9, 24), CHUSEOK)
+    one_day = _rows(date(2026, 9, 25), date(2026, 9, 25), CHUSEOK)
+    rest = _rows(date(2026, 9, 26), date(2026, 9, 30), CHUSEOK)
+    provider, session, _, result = _run(monkeypatch, [_ok(first), _ok(one_day), _ok(rest)])
+    assert session.bass_dts == ["20260901", "20260925", "20260926"]
+    assert date(2026, 9, 25) in result and "holidays_202609" in provider._cache
 
 
 @pytest.mark.parametrize("second", [
@@ -180,3 +192,17 @@ def test_fallback_is_single_list_with_corrected_dates(monkeypatch):
         assert engine.is_kr_market_holiday(d) is True, d
     for d in (date(2026, 1, 28), date(2027, 2, 10), date(2027, 6, 7), date(2027, 10, 14)):
         assert engine.is_kr_market_holiday(d) is False, d
+
+
+def test_engine_setter_feeds_session_calendar(monkeypatch):
+    # KOSPI 벤치마크 신선도·스크리너는 session 판정을 쓴다 — KIS 에만 있는 휴장일도 같이 봐야 한다
+    from src.utils import session
+    from src.utils.kospi_benchmark import benchmark_date_status
+    from datetime import datetime
+    monkeypatch.setattr(engine, "_kr_market_holidays", set())
+    monkeypatch.setattr(session, "_kr_market_holidays", set())
+    adhoc = date(2026, 10, 26)  # fallback 에 없는 합성 임시 휴장일(월)
+    engine.set_kr_market_holidays({adhoc})
+    assert engine.is_kr_market_holiday(adhoc) and session.is_kr_market_holiday(adhoc)
+    # 화요일 장전: 직전 거래일은 금요일(10-23) — 금요일 봉이 fresh 여야 한다
+    assert benchmark_date_status(date(2026, 10, 23), datetime(2026, 10, 27, 8, 30))[0] == "fresh"

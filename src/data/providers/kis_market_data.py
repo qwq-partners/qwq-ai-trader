@@ -104,7 +104,9 @@ class KISMarketData:
         # 한 응답이 달 전체를 덮지 않는다(2026-09 응답이 09-24 에서 끝나 09-25 추석 누락).
         # 이 TR 의 연속조회(ctx/tr_cont) 의미는 공식 근거가 없어 쓰지 않고, 응답의 가장 늦은
         # 날짜 다음 날을 BASS_DT 로 새 첫 조회를 다시 보낸다 — 달 말일까지·진전 없음·빈 응답·4회 상한에서 멈춤.
+        # 달 말일까지 확인한 결과만 캐시한다(덜 덮은 결과는 반환만, 판정은 fallback 합집합).
         calls = 0
+        covered = False
 
         try:
             cursor = datetime.strptime(f"{year_month}01", "%Y%m%d").date()
@@ -148,12 +150,20 @@ class KISMarketData:
                     if item.get("opnd_yn", "") == "N":
                         holidays.add(d)
 
-                if latest is None or latest >= month_end or latest <= cursor:
+                if latest is not None and latest >= month_end:
+                    covered = True
+                    break
+                if latest is None or latest < cursor:  # 빈 응답 또는 커서보다 앞 날짜만 옴 = 진전 없음
                     break
                 cursor = latest + timedelta(days=1)
 
-            self._set_cache(cache_key, holidays)
-            logger.info(f"[KISMarketData] 휴장일 조회 완료: {year_month} → {len(holidays)}일 (조회 {calls}회)")
+            if covered:
+                self._set_cache(cache_key, holidays)
+                logger.info(f"[KISMarketData] 휴장일 조회 완료: {year_month} → {len(holidays)}일 (조회 {calls}회)")
+            else:
+                logger.warning(
+                    f"[KISMarketData] 휴장일 조회 {year_month}: 월말까지 확인 못 함 "
+                    f"(조회 {calls}회, 수집 {len(holidays)}일) — 캐시 안 함, 판정은 fallback 합집합")
             return holidays
 
         except Exception as e:
