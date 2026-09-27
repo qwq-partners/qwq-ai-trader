@@ -68,6 +68,67 @@ class _Parser(argparse.ArgumentParser):
         raise ValueError("PROCESS_ARGUMENTS")
 
 
+class _BoundPaths:
+    """시작 전 부모 dirfd를 고정하고 후행 접근도 같은 경로인지 대조한다."""
+
+    def __init__(self, paths):
+        self.root_fd = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self.parents = {}
+        try:
+            for path in paths:
+                self.parents[path] = self._walk(path.parent)
+        except BaseException:
+            self.close()
+            raise
+
+    def _walk(self, parent):
+        parts = parent.relative_to(ROOT).parts
+        if any(part in (".", "..") for part in parts):
+            raise ValueError
+        fd = os.dup(self.root_fd)
+        try:
+            for part in parts:
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                previous = fd
+                fd = following
+                os.close(previous)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def open(self, path, flags):
+        original = self.parents[path]
+        current = self._walk(path.parent)
+        try:
+            before, after = os.fstat(original), os.fstat(current)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise ValueError("PROCESS_OUTPUT_PARENT_CHANGED")
+        finally:
+            os.close(current)
+        # 재검증 뒤에도 최종 이름은 최초 부모 FD에 상대적으로만 연다.
+        return os.open(path.name, flags | os.O_NOFOLLOW, 0o600, dir_fd=original)
+
+    def create(self, path, *, buffering=-1):
+        fd = self.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        try:
+            return os.fdopen(fd, "wb", buffering=buffering)
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def close(self):
+        descriptors = [*self.parents.values(), self.root_fd]
+        self.parents.clear()
+        self.root_fd = -1
+        for fd in descriptors:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
 def _arguments(argv):
     if Path.cwd() != ROOT or "PYTEST_ADDOPTS" in os.environ or "PYTEST_PLUGINS" in os.environ:
         raise ValueError
@@ -286,26 +347,34 @@ def _frame(raw, expected):
     return guard
 
 
-def _receipt(path):
+def _receipt(path, bounds=None):
     invalid = {"state": "invalid", "bytes": 0, "sha256": None}
+    temporary = None
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return {"state": "missing", "bytes": 0, "sha256": None}
-    except OSError:
-        return invalid
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        try:
+            if bounds is None:
+                temporary = _BoundPaths([path])
+                bounds = temporary
+            fd = bounds.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return {"state": "missing", "bytes": 0, "sha256": None}
+        except (OSError, ValueError):
             return invalid
-        with os.fdopen(fd, "rb", closefd=False) as stream:
-            raw = stream.read(32 * 1024 * 1024 + 1)
-        if len(raw) > 32 * 1024 * 1024:
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return invalid
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                raw = stream.read(32 * 1024 * 1024 + 1)
+            if len(raw) > 32 * 1024 * 1024:
+                return invalid
+            return {"state": "regular", "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+        except OSError:
             return invalid
-        return {"state": "regular", "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-    except OSError:
-        return invalid
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        if temporary is not None:
+            temporary.close()
 
 
 def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
@@ -453,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
                 "producer": ROOT / "scripts/dev/pytest_evidence.py", "guard": ROOT / "tests/conftest.py",
                 "executable": Path(sys.executable)}
         identity = {name: _hash(path) for name, path in code.items()}
+        bounds = _BoundPaths([receipt_path, output, *log_paths])
     except (OSError, ValueError, TypeError, ImportError, AttributeError):
         return 125
     deadline = started + options.timeout_seconds
@@ -471,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGTERM, lambda *_: stopped.__setitem__(0, True))
         signal.signal(signal.SIGINT, lambda *_: stopped.__setitem__(0, True))
         for name, path in zip(("stdout", "stderr"), log_paths):
-            logs[name] = path.open("xb", buffering=0)
+            logs[name] = bounds.create(path, buffering=0)
         _preflight()
         probe = _probe(deadline, stopped)
         if not probe:
@@ -532,7 +602,14 @@ def main(argv: list[str] | None = None) -> int:
         owner.reject("identity_changed")
     if owner.survived:
         owner.reject("cleanup_error")
-    receipt = _receipt(receipt_path)
+    receipt = {"state": "invalid", "bytes": 0, "sha256": None}
+    if owner.reaped and complete:
+        try:
+            receipt = _receipt(receipt_path, bounds)
+        except (OSError, ValueError):
+            owner.reject("io_error")
+    if owner.reaped and complete and receipt["state"] == "invalid":
+        owner.reject("io_error")
     reason = owner.error or ("signaled" if owner.returncode is not None and owner.returncode < 0 else "exited")
     if not owner.reaped and owner.error is None:
         reason = "cleanup_error"
@@ -546,10 +623,12 @@ def main(argv: list[str] | None = None) -> int:
                        "ownership_probe_passed": probe, "guard": guard, "parent_guard": parent_guard},
            "streams": streams, "receipt": receipt}
     try:
-        with output.open("xb") as stream:
+        with bounds.create(output) as stream:
             stream.write(_canonical(doc))
     except (OSError, ValueError, TypeError):
         return 125
+    finally:
+        bounds.close()
     if reason == "timeout":
         return 124
     if owner.error or not complete or receipt["state"] != "regular":

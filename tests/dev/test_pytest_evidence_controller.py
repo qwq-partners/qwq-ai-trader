@@ -425,8 +425,9 @@ def test_guard_frame_rejects_extra_bytes_duplicate_and_boolean():
             module._frame(raw, guard)
 
 
-def test_receipt_symlink_and_fifo_never_block_or_become_regular(tmp_path):
+def test_receipt_symlink_and_fifo_never_block_or_become_regular(tmp_path, monkeypatch):
     module = _controller()
+    monkeypatch.setattr(module, "ROOT", tmp_path)
     target = tmp_path / "target"
     target.write_bytes(b"receipt")
     link = tmp_path / "link"
@@ -970,6 +971,550 @@ def test_context_actual_raw_over_64k_is_rejected_before_preflight(tmp_path, monk
             "--process-output", "process.json", "--timeout-seconds", "3", "--", "tests/test_tiny.py"]
     assert module.main(args) == 125
     assert not (repo / "process.json").exists()
+
+
+def _fake_main(tmp_path, monkeypatch):
+    """실제 프로세스를 만들지 않는 main 경계 시험용 고정 의존성이다."""
+    import types
+    module = _controller()
+    repo = make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(module, "ROOT", repo)
+    monkeypatch.setattr(module, "__file__", str(repo / "scripts/dev/pytest_evidence_controller.py"))
+    guard = {"path": "tests/conftest.py", "sha256": GUARD_HASH, "module_count": 1, "violations": 0}
+    producer = types.SimpleNamespace(_read_context=lambda p: (CONTEXT, b"{}"))
+    bootstrap = types.SimpleNamespace(_guard=lambda *a, **k: guard, _load=lambda *a: producer)
+    monkeypatch.setattr(module, "_load_bootstrap", lambda: bootstrap)
+    monkeypatch.setattr(module, "_preflight", lambda: None)
+    monkeypatch.setattr(module, "_probe", lambda *a: True)
+    monkeypatch.setattr(module.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(module, "_RawPopen", lambda *a, **k: types.SimpleNamespace(pid=99, returncode=None))
+    streams = {name: {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "overflow": False}
+               for name in ("stdout", "stderr")}
+    args = ["--verification-context", "context.json", "--verification-output", "receipt.json",
+            "--process-output", "process.json", "--timeout-seconds", "3", "--", "tests/test_tiny.py"]
+    return module, repo, guard, streams, args
+
+
+def test_r1_real_process_parent_replacement_cannot_publish_outside_root(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    repo = make_repo(tmp_path, f'''import atexit
+from pathlib import Path
+def change():
+    Path('evidence').rename('evidence-old')
+    Path('evidence').symlink_to({str(outside)!r}, target_is_directory=True)
+def test_ok():
+    atexit.register(change)
+''')
+    (repo / "evidence").mkdir()
+    args = ["--verification-context", "context.json", "--verification-output", "receipt.json",
+            "--process-output", "evidence/process.json", "--timeout-seconds", "3", "--", "tests/test_tiny.py"]
+    result = run_case(repo, args=args)
+    assert not (outside / "process.json").exists()
+    assert result["rc"] == 125
+
+
+def test_r1_replaced_receipt_parent_never_opens_external_sentinel(tmp_path, monkeypatch):
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    (repo / "receipts").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "receipt.json"
+    sentinel.write_bytes(b"external sentinel must not be read")
+    sentinel_stat = sentinel.stat()
+    args[3] = "receipts/receipt.json"
+    opened = []
+    real_open = os.open
+    def tracked_open(*a, **kw):
+        fd = real_open(*a, **kw)
+        actual = os.fstat(fd)
+        if (actual.st_dev, actual.st_ino) == (sentinel_stat.st_dev, sentinel_stat.st_ino):
+            opened.append(fd)
+        return fd
+    def finished(owner, pipes, *rest):
+        owner.record(99, 0)
+        for fd in list(pipes.values()):
+            os.close(fd)
+        pipes.clear()
+        (repo / "receipts").rename(repo / "receipts-old")
+        (repo / "receipts").symlink_to(outside, target_is_directory=True)
+        return True, guard, streams
+    monkeypatch.setattr(module.os, "open", tracked_open)
+    monkeypatch.setattr(module, "_observe", finished)
+    assert module.main(args) == 125
+    assert opened == []
+    doc = json.loads((repo / "process.json").read_text())
+    assert doc["receipt"] == {"state": "invalid", "bytes": 0, "sha256": None}
+    assert doc["process"]["returncode"] == 0
+
+
+def test_r2_unfinished_lifecycle_never_reads_receipt(tmp_path, monkeypatch):
+    for mode in ("unstarted", "unreaped", "missing_eof", "observer_error"):
+        with monkeypatch.context() as patch:
+            module, repo, guard, streams, args = _fake_main(tmp_path / mode, patch)
+            reads = []
+            patch.setattr(module, "_receipt", lambda *a, **k: reads.append(True) or
+                          {"state": "regular", "bytes": 0, "sha256": hashlib.sha256(b"").hexdigest()})
+            def empty(*args):
+                raise ChildProcessError
+            def unfinished(owner, pipes, *rest):
+                owner.reject("timeout")
+                if mode != "unreaped" and not owner.reaped:
+                    owner.record(99, 9)
+                if mode == "observer_error":
+                    raise RuntimeError("고정 관측 실패")
+                for fd in list(pipes.values()):
+                    os.close(fd)
+                pipes.clear()
+                return False, guard, streams
+            patch.setattr(module, "_observe", unfinished)
+            patch.setattr(module.os, "waitpid", empty)
+            if mode == "unstarted":
+                patch.setattr(module, "_probe", lambda *a: False)
+            rc = module.main(args)
+            assert reads == [], mode
+            assert rc == (125 if mode == "unstarted" else 124)
+            doc = json.loads((repo / "process.json").read_text())
+            assert doc["receipt"] == {"state": "invalid", "bytes": 0, "sha256": None}
+            assert doc["process"]["returncode"] == (None if mode in ("unstarted", "unreaped") else -9)
+            assert doc["process"]["cleanup_complete"] is False
+
+
+def test_main_failed_preflight_or_probe_never_launches_or_touches_children(tmp_path, monkeypatch):
+    import builtins
+    actual_preflight = _controller()._preflight
+    real_listdir, real_open = os.listdir, builtins.open
+    for mode in ("extra_task", "proc", "sigchld", "missing_probe_status", "probe_timeout", "probe_failed"):
+        with monkeypatch.context() as patch:
+            module, repo, guard, streams, args = _fake_main(tmp_path / mode, patch)
+            actions = []
+            def forbidden(*args, **kwargs):
+                actions.append("forbidden child operation")
+                raise AssertionError("미소유 자식 조작 또는 bootstrap 실행")
+            if mode in ("extra_task", "proc", "sigchld"):
+                patch.setattr(module, "_preflight", actual_preflight)
+                patch.setattr(module, "_probe", forbidden)
+                if mode == "extra_task":
+                    patch.setattr(module.os, "listdir", lambda p: ["1", "2"] if p == "/proc/self/task" else real_listdir(p))
+                elif mode == "proc":
+                    def unavailable(path, *a, **k):
+                        if str(path).startswith("/proc/self/task/"):
+                            raise PermissionError("고정 proc 실패")
+                        return real_open(path, *a, **k)
+                    patch.setattr(builtins, "open", unavailable)
+                else:
+                    def initial_empty(*a):
+                        raise ChildProcessError
+                    def reset(sig, handler):
+                        if sig == signal.SIGCHLD:
+                            raise OSError("고정 SIGCHLD reset 실패")
+                    patch.setattr(module.os, "waitid", initial_empty)
+                    patch.setattr(module.signal, "signal", reset)
+            else:
+                patch.setattr(module, "_probe", lambda *a: False)
+            patch.setattr(module, "_RawPopen", forbidden)
+            patch.setattr(module.os, "waitpid", forbidden)
+            patch.setattr(module.signal, "pidfd_send_signal", forbidden)
+            assert module.main(args) == 125
+            assert actions == []
+            doc = json.loads((repo / "process.json").read_text())
+            assert doc["process"]["returncode"] is None
+            assert doc["process"]["leader_reaped"] is False
+            assert doc["process"]["ownership_probe_passed"] is False
+
+
+def test_main_repeated_observer_error_reaps_fake_alive_child_by_pidfd(tmp_path, monkeypatch):
+    import io
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    tick = [0.0]
+    def clock():
+        tick[0] += .03
+        return tick[0]
+    monkeypatch.setattr(module.time, "monotonic", clock)
+    monkeypatch.setattr(module.time, "sleep", lambda *a: None)
+    owners = []
+    deadlines = []
+    def broken(owner, *args):
+        if owner.finish_end is None:
+            owner.finish_end = clock() + 3
+        owners.append(owner)
+        deadlines.append(owner.finish_end)
+        raise RuntimeError("고정 live observer 실패")
+    monkeypatch.setattr(module, "_observe", broken)
+    alive = [True]
+    reaped = [False]
+    events = []
+    def wait(pid, flags):
+        events.append(("wait", pid))
+        if alive[0]:
+            return 0, 0
+        if not reaped[0]:
+            reaped[0] = True
+            return 99, 9
+        raise ChildProcessError
+    def send(fd, sig, *args):
+        events.append(("signal", fd, sig))
+        if sig == signal.SIGKILL:
+            alive[0] = False
+    real_close = os.close
+    def close(fd):
+        if fd == 710:
+            events.append(("close_pidfd", fd))
+        else:
+            real_close(fd)
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    monkeypatch.setattr(module.os, "pidfd_open", lambda *a: events.append(("open_pidfd", 99)) or 710)
+    monkeypatch.setattr(module.signal, "pidfd_send_signal", send)
+    monkeypatch.setattr(module.os, "close", close)
+    monkeypatch.setattr(module, "open", lambda *a, **k: io.BytesIO(b"99"), raising=False)
+    monkeypatch.setattr(module, "_receipt", lambda *a: (_ for _ in ()).throw(AssertionError("미완료 receipt 접근")))
+    assert module.main(args) == 125
+    doc = json.loads((repo / "process.json").read_text())
+    assert doc["process"]["returncode"] == -9
+    assert doc["process"]["term_sent"] is True
+    assert doc["process"]["kill_sent"] is True
+    assert doc["process"]["cleanup_complete"] is False
+    assert deadlines[0] == deadlines[1] == owners[0].finish_end
+    assert reaped == [True]
+    signals = [item for item in events if item[0] == "signal"]
+    assert signals and signals[-1] == ("signal", 710, signal.SIGKILL)
+    assert sum(item[0] == "open_pidfd" for item in events) == sum(item[0] == "close_pidfd" for item in events)
+    for index, item in enumerate(events):
+        if item[0] == "signal":
+            assert events[index - 2:index] == [("open_pidfd", 99), ("wait", 99)]
+
+
+def test_partial_pipe_creation_failure_closes_owned_ends_once_without_launch(tmp_path, monkeypatch):
+    import stat
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    real_pipe, real_close = os.pipe, os.close
+    owned = {}
+    closed = []
+    def partial_pipe():
+        if owned:
+            raise OSError("고정 두 번째 pipe 실패")
+        pair = real_pipe()
+        owned.update({fd: os.fstat(fd).st_ino for fd in pair})
+        return pair
+    def close(fd):
+        actual = os.fstat(fd)
+        if fd in owned and stat.S_ISFIFO(actual.st_mode) and actual.st_ino == owned[fd]:
+            closed.append(fd)
+        real_close(fd)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("부분 pipe 실패 뒤 launch")
+    monkeypatch.setattr(module.os, "pipe", partial_pipe)
+    monkeypatch.setattr(module.os, "close", close)
+    monkeypatch.setattr(module, "_RawPopen", forbidden)
+    assert module.main(args) == 125
+    assert sorted(closed) == sorted(owned)
+    assert len(closed) == 2
+    doc = json.loads((repo / "process.json").read_text())
+    assert doc["process"]["returncode"] is None
+    assert doc["receipt"]["state"] == "invalid"
+
+
+def test_constructor_failure_reaps_fake_owned_child_without_fabricated_leader(tmp_path, monkeypatch):
+    import io
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    def failed_spawn(*args, **kwargs):
+        raise RuntimeError("고정 생성자 실패")
+    phase = ["alive"]
+    def wait(pid, flags):
+        if phase[0] == "alive":
+            return 0, 0
+        if phase[0] == "signaled":
+            phase[0] = "reaped"
+            return 99, 256
+        raise ChildProcessError
+    sent = []
+    def send(fd, sig, *args):
+        sent.append((fd, sig))
+        phase[0] = "signaled"
+    real_close = os.close
+    monkeypatch.setattr(module, "_RawPopen", failed_spawn)
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    monkeypatch.setattr(module.os, "pidfd_open", lambda *a: 710)
+    monkeypatch.setattr(module.signal, "pidfd_send_signal", send)
+    monkeypatch.setattr(module.os, "close", lambda fd: None if fd == 710 else real_close(fd))
+    monkeypatch.setattr(module, "open", lambda *a, **k: io.BytesIO(b"99"), raising=False)
+    assert module.main(args) == 125
+    assert sent == [(710, signal.SIGTERM)]
+    assert phase == ["reaped"]
+    doc = json.loads((repo / "process.json").read_text())
+    assert doc["process"]["returncode"] is None
+    assert doc["process"]["leader_reaped"] is False
+    assert doc["process"]["descendants_reaped"] == 1
+    assert doc["process"]["cleanup_complete"] is False
+
+
+def test_descriptor_close_failure_is_not_retried_or_reassigned(monkeypatch):
+    module = _controller()
+    owner = module._Owner()
+    attempts = []
+    def failed(fd):
+        attempts.append(fd)
+        raise OSError("고정 close 실패")
+    monkeypatch.setattr(module.os, "close", failed)
+    descriptors = [71, 72]
+    module._close_descriptors(descriptors, owner)
+    module._close_descriptors(descriptors, owner)
+    assert attempts == [72, 71]
+    assert descriptors == []
+    assert owner.error == "io_error"
+
+
+def test_empty_proc_does_not_hide_postleader_generic_zero(monkeypatch):
+    import io
+    module = _controller()
+    owner = module._Owner()
+    owner.leader = 99
+    owner.record(99, 0)
+    guard = {"path": "tests/conftest.py", "sha256": GUARD_HASH, "module_count": 1, "violations": 0}
+    frame = json.dumps({"schema": "qwq.pytest-guard-ready/v1", "guard": guard}).encode() + b"\n"
+    chunks = {31: [b""], 32: [b""], 33: [frame, b""]}
+    waits = [0]
+    def wait(pid, flags):
+        waits[0] += 1
+        if waits[0] == 1:
+            return 0, 0
+        raise ChildProcessError
+    proc_reads = []
+    def empty_proc(*args, **kwargs):
+        proc_reads.append(True)
+        return io.BytesIO(b"")
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    monkeypatch.setattr(module.os, "read", lambda fd, n: chunks[fd].pop(0))
+    monkeypatch.setattr(module.os, "close", lambda *a: None)
+    monkeypatch.setattr(module, "open", empty_proc, raising=False)
+    complete, _, _ = module._observe(owner, {"stdout": 31, "stderr": 32, "control": 33},
+                                     {"stdout": io.BytesIO(), "stderr": io.BytesIO()}, guard,
+                                     time.monotonic() + 2, [False])
+    assert complete is True
+    assert proc_reads == [True]
+    assert owner.survived is True
+
+
+def test_preleader_reaped_descendant_does_not_set_survivor():
+    module = _controller()
+    owner = module._Owner()
+    owner.leader = 99
+    owner.record(98, 0)
+    owner.record(99, 0)
+    assert owner.descendants == 1
+    assert owner.survived is False
+    assert owner.returncode == 0
+
+
+def test_raw_popen_destructor_never_calls_implicit_poll(monkeypatch):
+    module = _controller()
+    child = module._RawPopen.__new__(module._RawPopen)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("암묵 Popen 회수")
+    for name in ("poll", "wait", "communicate", "send_signal", "terminate", "kill", "_internal_poll"):
+        monkeypatch.setattr(child, name, forbidden)
+    child._child_created = True
+    child.returncode = None
+    child.__del__()
+    assert child.returncode is None
+
+
+def test_source_loaders_execute_current_bytes_without_loader_exec(tmp_path, monkeypatch):
+    module = _controller()
+    repo = tmp_path / "repo"
+    (repo / "scripts/dev").mkdir(parents=True)
+    path = repo / "scripts/dev/pytest_evidence_bootstrap.py"
+    path.write_bytes(b"ACTUAL_SOURCE = 'current source'\n")
+    monkeypatch.setattr(module, "ROOT", repo)
+    loader_type = type(importlib.util.spec_from_file_location("sample", path).loader)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("pyc 선택 가능한 loader 실행")
+    monkeypatch.setattr(loader_type, "exec_module", forbidden)
+    assert module._load_bootstrap().ACTUAL_SOURCE == "current source"
+    bootstrap_spec = importlib.util.spec_from_file_location("bootstrap_source_test", ROOT / "scripts/dev/pytest_evidence_bootstrap.py")
+    bootstrap = importlib.util.module_from_spec(bootstrap_spec)
+    exec(compile((ROOT / "scripts/dev/pytest_evidence_bootstrap.py").read_bytes(), bootstrap_spec.origin, "exec"), bootstrap.__dict__)
+    monkeypatch.setitem(sys.modules, "_fixed_source_probe", None)
+    assert bootstrap._load("_fixed_source_probe", path).ACTUAL_SOURCE == "current source"
+
+
+def test_main_uses_no_popen_reaper_or_signal_after_successful_spawn(tmp_path, monkeypatch):
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    original = _controller()._RawPopen
+    objects = []
+    class PoisonPopen(original):
+        def __init__(self, *args, **kwargs):
+            self.pid = 99
+            self.returncode = None
+            self._child_created = True
+            objects.append(self)
+            frame = json.dumps({"schema": "qwq.pytest-guard-ready/v1", "guard": guard}).encode() + b"\n"
+            os.write(kwargs["pass_fds"][0], frame)
+            (repo / "receipt.json").write_bytes(b"fixed adapter receipt")
+        def forbidden(self, *args, **kwargs):
+            raise AssertionError("성공 spawn 뒤 Popen 회수/신호 호출")
+        poll = wait = communicate = send_signal = terminate = kill = _internal_poll = forbidden
+    waited = []
+    def wait(pid, flags):
+        waited.append(pid)
+        if len(waited) == 1:
+            return 99, 0
+        raise ChildProcessError
+    monkeypatch.setattr(module, "_RawPopen", PoisonPopen)
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    assert module.main(args) == 0
+    assert objects[0].returncode == 0
+    objects[0].__del__()
+    assert waited[0] == 99
+    assert all(pid == -1 for pid in waited[1:])
+
+
+def test_real_known_zombie_is_adopted_and_reaped(tmp_path):
+    repo = make_repo(tmp_path, '''import atexit, json, os, signal
+from pathlib import Path
+def spawn_zombie():
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.alarm(8)
+    child = os.fork()
+    if child == 0:
+        signal.signal(signal.SIGALRM, signal.SIG_DFL)
+        signal.alarm(8)
+        os._exit(0)
+    status = os.waitid(os.P_PID, child, os.WEXITED | os.WNOWAIT)
+    Path('zombie-observation.json').write_text(json.dumps({'code': status.si_code, 'status': status.si_status}))
+def test_ok():
+    atexit.register(spawn_zombie)
+''')
+    result = run_case(repo)
+    assert json.loads((repo / "zombie-observation.json").read_text()) == {"code": os.CLD_EXITED, "status": 0}
+    doc = json.loads((repo / "process.json").read_text())
+    assert doc["process"]["descendants_reaped"] == 1
+    assert doc["process"]["cleanup_complete"] is True
+    assert doc["process"]["returncode"] == 0
+    # 정책 경계는 실제 leader 회수 관측 시각이며 커널의 과거 생존 시각이 아니다.
+    assert result["rc"] == (125 if doc["process"]["descendant_survived"] else 0)
+
+
+def test_bound_paths_reject_changed_ancestor_and_replacement_directory(tmp_path, monkeypatch):
+    import pytest
+    module = _controller()
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    for mode in ("ancestor_link", "replacement"):
+        parent = tmp_path / mode / "inner"
+        parent.mkdir(parents=True)
+        path = parent / "process.json"
+        bound = module._BoundPaths([path])
+        try:
+            if mode == "ancestor_link":
+                (tmp_path / mode).rename(tmp_path / (mode + "-old"))
+                (tmp_path / mode).symlink_to(tmp_path / (mode + "-old"), target_is_directory=True)
+            else:
+                parent.rename(parent.with_name("old"))
+                parent.mkdir()
+            with pytest.raises((OSError, ValueError)):
+                bound.create(path)
+            assert not path.exists()
+        finally:
+            bound.close()
+
+
+def test_bound_paths_close_all_parent_fds_and_partial_walk_once(tmp_path, monkeypatch):
+    import pytest
+    module = _controller()
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    (tmp_path / "parent").mkdir()
+    bound = module._BoundPaths([tmp_path / "parent" / "result.json"])
+    fds = [bound.root_fd, *bound.parents.values()]
+    bound.close()
+    bound.close()
+    for fd in fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    real_close = os.close
+    attempts = []
+    def fails_once(fd):
+        attempts.append(fd)
+        real_close(fd)
+        if len(attempts) == 1:
+            raise OSError("고정 walk close 실패")
+    monkeypatch.setattr(module.os, "close", fails_once)
+    with pytest.raises(OSError):
+        module._BoundPaths([tmp_path / "parent" / "another.json"])
+    assert len(attempts) == len(set(attempts)) == 3
+
+
+def test_postspawn_write_end_close_failure_keeps_owned_cleanup(tmp_path, monkeypatch):
+    import io
+    import types
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    original_writes = []
+    child_ends = []
+    close_failed = [False]
+    phase = ["alive"]
+    real_close = os.close
+    def spawn(*a, **kwargs):
+        original_writes.extend([kwargs["stdout"], kwargs["stderr"], kwargs["pass_fds"][0]])
+        child_ends.extend(os.dup(fd) for fd in original_writes)
+        frame = json.dumps({"schema": "qwq.pytest-guard-ready/v1", "guard": guard}).encode() + b"\n"
+        os.write(child_ends[2], frame)
+        return types.SimpleNamespace(pid=99, returncode=None)
+    def close(fd):
+        if fd == 710:
+            return
+        real_close(fd)
+        if original_writes and fd == original_writes[2] and not close_failed[0]:
+            close_failed[0] = True
+            raise OSError("고정 postspawn write-end close 실패")
+    def send(fd, sig, *a):
+        assert (fd, sig) == (710, signal.SIGTERM)
+        while child_ends:
+            real_close(child_ends.pop())
+        phase[0] = "exited"
+    def wait(pid, flags):
+        if phase[0] == "alive":
+            return 0, 0
+        if phase[0] == "exited":
+            phase[0] = "reaped"
+            return 99, signal.SIGTERM
+        raise ChildProcessError
+    monkeypatch.setattr(module, "_RawPopen", spawn)
+    monkeypatch.setattr(module.os, "close", close)
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    monkeypatch.setattr(module.os, "pidfd_open", lambda *a: 710)
+    monkeypatch.setattr(module.signal, "pidfd_send_signal", send)
+    monkeypatch.setattr(module, "open", lambda *a, **k: io.BytesIO(b"99"), raising=False)
+    try:
+        assert module.main(args) == 125
+    finally:
+        while child_ends:
+            real_close(child_ends.pop())
+    doc = json.loads((repo / "process.json").read_text())
+    assert close_failed == [True]
+    assert phase == ["reaped"]
+    assert doc["process"]["reason"] == "io_error"
+    assert doc["process"]["returncode"] == -15
+    assert doc["process"]["cleanup_complete"] is True
+
+
+def test_receipt_io_failure_after_cleanup_retains_status_and_failure_artifact(tmp_path, monkeypatch):
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    def finished(owner, pipes, *rest):
+        owner.record(99, 0)
+        for fd in pipes.values():
+            os.close(fd)
+        pipes.clear()
+        return True, guard, streams
+    def failed(*args):
+        raise OSError("고정 receipt close 실패")
+    monkeypatch.setattr(module, "_observe", finished)
+    monkeypatch.setattr(module, "_receipt", failed)
+    assert module.main(args) == 125
+    doc = json.loads((repo / "process.json").read_text())
+    assert doc["receipt"] == {"state": "invalid", "bytes": 0, "sha256": None}
+    assert doc["process"]["reason"] == "io_error"
+    assert doc["process"]["returncode"] == 0
+    assert doc["process"]["cleanup_complete"] is True
 
 
 if __name__ == "__main__":
