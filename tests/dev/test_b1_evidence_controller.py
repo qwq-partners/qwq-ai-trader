@@ -3091,3 +3091,272 @@ def test_b1_prerequisite_oracle_detects_swallowed_forbidden_attempt(monkeypatch)
     assert boundary.waitpid is original
     assert len(caught) == 1 and isinstance(caught[0], AssertionError)
     assert failure.value.args[0] == ("forbidden attempts survived candidate catch", [("waitpid", (41, 1), {})])
+
+
+class _ValidatedBodyCase:
+    """독립 입력과 in-memory 사건 원장; 실제 FD/프로세스를 만들지 않는다."""
+
+    def __init__(self):
+        import hashlib
+
+        self.events, self.violations, self.writes, self.spawn = [], [], [], []
+        self.held = False
+        self.live = set()
+        self.pipe_pairs = iter(((80, 81), (82, 83), (84, 85)))
+        self.context = {"run": {"event": "local", "sha": "a" * 40, "tree": "b" * 40,
+            "contract": "c" * 64, "run_id": "b1-main-literal", "attempt": 1},
+            "slot": {"lane": "standard", "timezone": "UTC"}}
+        self.guard = {"path": "tests/conftest.py",
+            "sha256": "7b7b26940309a2a165d9bdba7611b6730e83b90ae9ea5f9e725764ee4c0a23f7",
+            "module_count": 1, "violations": 0}
+        self.hashes = {"/fixture/scripts/dev/pytest_evidence_controller.py": "1" * 64,
+            "/fixture/scripts/dev/pytest_evidence_bootstrap.py": "2" * 64,
+            "/fixture/scripts/dev/pytest_evidence.py": "3" * 64,
+            "/fixture/tests/conftest.py": self.guard["sha256"], "/fixture/python": "5" * 64}
+        self.fake_path = "/tmp/qwq-b1-independent/deploy-key"
+        self.facts = {"lock_acquired": False, "lock_identity_stable": False,
+            "fake_key_absent_before": False, "fake_key_absent_after": False,
+            "fake_directory_removed": False, "fake_key_path_sha256": None}
+        self.key_hash = hashlib.sha256(b"/tmp/qwq-b1-independent/deploy-key").hexdigest()
+        self.receipt = {"state": "regular", "bytes": 2,
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+        self.streams = {"stdout": {"bytes": 3, "sha256": hashlib.sha256(b"abc").hexdigest(),
+            "overflow": False, "observed_bytes": 3},
+            "stderr": {"bytes": 2, "sha256": hashlib.sha256(b"de").hexdigest(),
+            "overflow": False, "observed_bytes": 2}}
+        self.logs = {}
+
+    def event(self, name, *args):
+        self.events.append((name, self.held, *args))
+
+    def clock(self):
+        self.event("clock")
+        return 105.0
+
+    def pipe(self):
+        pair = next(self.pipe_pairs)
+        self.event("pipe", pair)
+        self.live.update(pair)
+        return pair
+
+    def close(self, fd):
+        self.event("fd-close", fd)
+        if fd not in self.live:
+            self.violations.append(("unowned-close", fd))
+            raise AssertionError("fake FD ownership")
+        self.live.remove(fd)
+
+    def bootstrap(self):
+        self.event("bootstrap")
+        def guard(root, *, install=False):
+            self.event("guard", root, install)
+            return dict(self.guard)
+        def read_context(path):
+            self.event("context", path)
+            return json.loads(json.dumps(self.context)), json.dumps(self.context).encode()
+        def load(name, path):
+            self.event("producer", name, path)
+            return SimpleNamespace(_read_context=read_context)
+        return SimpleNamespace(_guard=guard, _load=load)
+
+    def hash(self, path):
+        self.event("hash", str(path))
+        return self.hashes[str(path)]
+
+    def bounds(self, paths, *, b1=False):
+        self.event("bounds", tuple(paths), b1)
+        case = self
+        class Bounds:
+            close_failed = False
+            def controller_fds(self):
+                return (70, 72, 74)
+            def create(self, path, *, buffering=-1):
+                case.event("create", path, buffering)
+                name = "result" if path == Path("/fixture/result.json") else (
+                    "stdout" if path == Path("/fixture/stdout.log") else "stderr")
+                stream = case.stream(name)
+                if name != "result":
+                    case.logs[name] = stream
+                return stream
+            def close(self, *, strict=False):
+                case.event("bounds-close", strict)
+                return True if strict else None
+        return Bounds()
+
+    def stream(self, name):
+        case = self
+        class Stream:
+            closed = False
+            def write(self, raw):
+                case.event("stream-write", name, bytes(raw))
+                if name == "result":
+                    case.writes.append(bytes(raw))
+                return len(raw)
+            def close(self):
+                case.event("stream-close", name)
+                if self.closed:
+                    case.violations.append(("duplicate-stream-close", name))
+                self.closed = True
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.close()
+        return Stream()
+
+    def coordination(self):
+        self.event("coordination")
+        case = self
+        class Coordination:
+            error = None
+            close_failed = False
+            fake_key_path = None
+            def acquire_lock(self, stopped, budget):
+                case.event("acquire", tuple(stopped), budget.total_end, budget.run_end)
+                case.held = True
+                case.facts["lock_acquired"] = True
+                case.facts["lock_identity_stable"] = True
+                return True
+            def prepare_fake_key(self):
+                case.event("prepare")
+                self.fake_key_path = case.fake_path
+                case.facts["fake_key_absent_before"] = True
+                case.facts["fake_key_path_sha256"] = case.key_hash
+                return case.fake_path
+            def controller_fds(self):
+                return (71, 73)
+            def finish_fake_key(self):
+                case.event("finish")
+                case.facts["fake_key_absent_after"] = True
+                case.facts["fake_directory_removed"] = True
+                return True
+            def check_lock_identity(self):
+                case.event("lock-check")
+                return True
+            def facts(self):
+                case.event("facts")
+                return dict(case.facts)
+            def close(self):
+                case.event("coord-close")
+                case.held = False
+                return True
+        return Coordination()
+
+    def probe(self, deadline, stopped, *, budget=None, controller_fds=()):
+        self.event("probe", deadline, tuple(stopped), budget.total_end, budget.run_end, controller_fds)
+        return True
+
+    def popen(self, command, **kwargs):
+        self.event("spawn")
+        self.spawn.append((list(command), kwargs))
+        return SimpleNamespace(pid=41)
+
+    def observe(self, owner, pipes, logs, parent_guard, deadline, stopped, *, profile=None):
+        import hashlib
+
+        self.event("observe", owner.leader, deadline, owner.startup_end, profile, tuple(pipes.items()),
+                   owner._budget.total_end, owner._budget.run_end, dict(parent_guard))
+        owner.returncode, owner.reaped = 0, True
+        owner._begin_cleanup(105.0)
+        owner.observation = {"profile": "b1-standard/v1", "streams": {
+            "stdout": {"bytes": 3, "sha256": hashlib.sha256(b"abc"), "overflow": False},
+            "stderr": {"bytes": 2, "sha256": hashlib.sha256(b"de"), "overflow": False}},
+            "observed": {"stdout": 3, "stderr": 2}, "failed_logs": set(),
+            "control": bytearray(), "guard": dict(self.guard), "startup_end": 115.0}
+        logs["stdout"].write(b"abc")
+        logs["stderr"].write(b"de")
+        for fd in list(pipes.values()):
+            self.close(fd)
+        pipes.clear()
+        return True, dict(self.guard), {name: dict(item) for name, item in self.streams.items()}
+
+
+def test_b1_validated_body_holds_lock_through_result_close(monkeypatch):
+    module = _load_source("_b1_validated_body_first", "pytest_evidence_controller.py")
+    import builtins
+    import hashlib
+    import os
+    import signal
+    import subprocess
+    import time
+
+    case = _ValidatedBodyCase()
+    context, receipt, output = Path("/fixture/context.json"), Path("/fixture/receipt.json"), Path("/fixture/result.json")
+    logs, selected = [Path("/fixture/stdout.log"), Path("/fixture/stderr.log")], ["tests/test_tiny.py"]
+    options = SimpleNamespace(profile="b1-standard/v1", timeout_seconds=900)
+    def receipt_fact(path, bounds):
+        case.event("receipt", path)
+        return dict(case.receipt)
+    targets = [(module, "ROOT", Path("/fixture")),
+        (module, "__file__", "/fixture/scripts/dev/pytest_evidence_controller.py"),
+        (sys, "executable", "/fixture/python"), (module, "_load_bootstrap", case.bootstrap),
+        (module, "_hash", case.hash), (module, "_BoundPaths", case.bounds),
+        (module, "_B1Coordination", case.coordination), (module, "_probe", case.probe),
+        (module, "_preflight", lambda: case.event("preflight")), (module, "_RawPopen", case.popen),
+        (module, "_observe", case.observe), (module, "_receipt", receipt_fact),
+        (time, "monotonic", case.clock), (os, "pipe", case.pipe), (os, "close", case.close),
+        (os, "set_blocking", lambda fd, flag: case.event("nonblocking", fd, flag)),
+        (signal, "signal", lambda sig, handler: case.event("handler", sig)),
+        (Path, "resolve", lambda path, **kwargs: path), (os, "environ", _parent_env())]
+    targets += [(owner, name, _prerequisite_forbidden) for owner, name in (
+        (builtins, "open"), (Path, "open"), (Path, "read_bytes"), (os, "open"), (os, "fork"),
+        (os, "waitpid"), (os, "pidfd_open"), (os, "read"), (os, "write"), (os, "unlink"),
+        (os, "rmdir"), (signal, "pidfd_send_signal"), (time, "sleep"), (fcntl, "flock"),
+        (subprocess, "Popen"), (module, "_emergency_cleanup"))]
+    result, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._run_validated(100.0, options, context, receipt, output, logs, selected))
+    if escaped is not None:
+        raise escaped
+    assert result == 0 and type(result) is int
+    assert case.violations == [] and case.live == set() and not case.held
+    assert case.spawn == [(["/fixture/python", "-I", "-B",
+        "/fixture/scripts/dev/pytest_evidence_bootstrap.py", "--b1-standard-v1", "85",
+        "/fixture/context.json", "/fixture/receipt.json", "tests/test_tiny.py"], {
+        "cwd": Path("/fixture"), "env": {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "QWQ_DEPLOY_SSH_KEY": "/tmp/qwq-b1-independent/deploy-key"}, "close_fds": True,
+        "start_new_session": True, "pass_fds": (85,), "stdin": -3, "stdout": 81, "stderr": 83})]
+    expected = {"schema": "qwq.verification-process-result/v2", **case.context,
+        "scope": "local_b1_process_only", "identity": {"controller": "1" * 64, "bootstrap": "2" * 64,
+        "producer": "3" * 64, "guard": "7b7b26940309a2a165d9bdba7611b6730e83b90ae9ea5f9e725764ee4c0a23f7",
+        "executable": "5" * 64}, "launch": {"profile": "b1-standard/v1", "process_scope": "linux-subreaper/v1",
+        "timeout_seconds": 900, "budget_profile": "inclusive-lock-cleanup-publication/v1",
+        "retained_stream_bytes": 2097152, "overflow_observed_bytes": 2097153,
+        "pytest_profile": "b1-x-fixed-plugins/v1", "environment_profile": "b1-env-i-fake-key/v1",
+        "selection_profile": "tests-path-only/v1", "lock_profile": "owner-ticket-workload/v1",
+        "selection_sha256": hashlib.sha256(b'["tests/test_tiny.py"]').hexdigest()},
+        "process": {"reason": "exited", "returncode": 0, "term_sent": False, "kill_sent": False,
+        "leader_reaped": True, "descendant_survived": False, "cleanup_complete": True,
+        "descendants_reaped": 0, "ownership_probe_passed": True, "guard": case.guard, "parent_guard": case.guard},
+        "streams": case.streams, "receipt": case.receipt,
+        "coordination": {"lock_acquired": True, "lock_identity_stable": True, "fake_key_absent_before": True,
+        "fake_key_absent_after": True, "fake_directory_removed": True,
+        "fake_key_path_sha256": hashlib.sha256(b"/tmp/qwq-b1-independent/deploy-key").hexdigest()}}
+    assert case.writes == [json.dumps(expected, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()]
+    assert [event for event in case.events if event[0] == "probe"] == [
+        ("probe", True, 106.0, (False,), 1000.0, 996.0, (70, 71, 72, 73, 74))]
+    assert [event for event in case.events if event[0] == "observe"] == [
+        ("observe", True, 41, 996.0, 115.0, "b1-standard/v1",
+         (("stdout", 80), ("stderr", 82), ("control", 84)), 1000.0, 996.0, case.guard)]
+    named = [event[0] for event in case.events]
+    result_close = case.events.index(("stream-close", True, "result"))
+    bounds_close = case.events.index(("bounds-close", True, True))
+    coord_close = case.events.index(("coord-close", True))
+    assert result_close < bounds_close < coord_close < len(case.events) - 1
+    assert case.events[coord_close + 1:] == [("clock", False)]
+    assert named.count("acquire") == named.count("prepare") == named.count("finish") == named.count("lock-check") == 1
+    assert named.index("finish") < named.index("receipt") < named.index("lock-check") < result_close
+    assert all(event[1] for event in case.events[named.index("prepare"):coord_close + 1])
+    assert named.index("handler") < named.index("bootstrap") < named.index("acquire")
+    assert [event for event in case.events if event[0] == "handler"] == [
+        ("handler", False, 15), ("handler", False, 2)]
+    assert [event for event in case.events if event[0] == "bounds"] == [
+        ("bounds", False, (receipt, output, *logs), True)]
+    assert [event for event in case.events if event[0] == "create"] == [
+        ("create", True, logs[0], 0), ("create", True, logs[1], 0), ("create", True, output, 0)]
+    assert named.count("bounds-close") == named.count("coord-close") == 1
+    assert case.logs["stdout"].closed and case.logs["stderr"].closed
+    assert case.events.index(("stream-close", True, "stdout")) < named.index("finish")
+    assert case.events.index(("stream-close", True, "stderr")) < named.index("finish")
+    assert [event for event in case.events if event[0] == "fd-close"] == [
+        ("fd-close", True, 85), ("fd-close", True, 83), ("fd-close", True, 81),
+        ("fd-close", True, 80), ("fd-close", True, 82), ("fd-close", True, 84)]
