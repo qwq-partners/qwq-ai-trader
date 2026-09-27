@@ -213,8 +213,22 @@ def test_ok():
         assert process["process"]["returncode"] == returncode
         assert process["process"]["descendant_survived"] is descendant_survived
         assert process["process"]["cleanup_complete"] is True
-        if name != "failure":
-            receipt = parse_document(receipt_raw, kind="receipt")
+        receipt = parse_document(receipt_raw, kind="receipt")
+        if name == "failure":
+            assert receipt["collected"] == [NODE]
+            assert receipt["results"] == [
+                {"nodeid": NODE, "setup": "passed", "call": "failed", "teardown": "passed"}
+            ]
+            assert validate_receipt(receipt, expected["verification"]) == (
+                "CALL_FAILED",
+                "SESSION_EXIT_NONZERO",
+            )
+            assert decision["errors"] == [
+                "CALL_FAILED",
+                "PROCESS_EXIT_REJECTED",
+                "SESSION_EXIT_NONZERO",
+            ]
+        else:
             assert validate_receipt(receipt, expected["verification"]) == ()
         if descendant_survived:
             assert "PROCESS_DESCENDANT_SURVIVED" in decision["errors"]
