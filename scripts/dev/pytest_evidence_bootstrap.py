@@ -64,6 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     control = None
     try:
+        b1 = bool(args and args[0] == "--b1-standard-v1")
+        if b1:
+            args = args[1:]
+        if any(value.startswith("--b1-") or (b1 and value.startswith("-")) for value in args):
+            raise ValueError
         if len(args) < 4:
             raise ValueError
         control = int(args[0])
@@ -81,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         control = None
         sys.path.insert(0, str(root))
         producer = _load("_qwq_evidence_producer", root / "scripts/dev/pytest_evidence.py")
-        rc = producer.run_with_evidence(PYTEST_ARGS + args[3:],
+        pytest_args = (["-x"] if b1 else []) + PYTEST_ARGS
+        rc = producer.run_with_evidence(pytest_args + args[3:],
                                        context_path=Path(args[1]), output_path=Path(args[2]))
         if _guard(root) != guard:
             return rc if rc != 0 else 125

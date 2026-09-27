@@ -23,6 +23,13 @@ import time
 WALL = 0x40000000
 LIMIT = 8 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[2]
+_B1_PARENT_ENV = (
+    ("PATH", ("/usr/bin:/bin",)),
+    ("LANG", ("C.UTF-8",)),
+    ("TZ", ("UTC", "Asia/Seoul")),
+    ("PYTHONDONTWRITEBYTECODE", ("1",)),
+    ("PYTEST_DISABLE_PLUGIN_AUTOLOAD", ("1",)),
+)
 
 
 def _load_bootstrap():
@@ -136,15 +143,22 @@ def _arguments(argv):
     names = ("--verification-context", "--verification-output", "--process-output", "--timeout-seconds")
     for name in names:
         parser.add_argument(name, required=True)
+    parser.add_argument("--profile", choices=("b1-standard/v1",))
     split = argv.index("--")
     flags = [item.split("=", 1)[0] for item in argv[:split]]
-    if any(flags.count(name) != 1 for name in names):
+    if any(flags.count(name) != 1 for name in names) or flags.count("--profile") > 1:
         raise ValueError
     options = parser.parse_args(argv[:split])
+    if options.profile == "b1-standard/v1":
+        if (set(os.environ) != {name for name, _ in _B1_PARENT_ENV}
+                or any(os.environ[name] not in values for name, values in _B1_PARENT_ENV)):
+            raise ValueError
     if not options.timeout_seconds.isascii() or not options.timeout_seconds.isdecimal():
         raise ValueError
     options.timeout_seconds = int(options.timeout_seconds)
     if not 1 <= options.timeout_seconds <= 900:
+        raise ValueError
+    if options.profile == "b1-standard/v1" and options.timeout_seconds != 900:
         raise ValueError
     context = _path(options.verification_context)
     if not context.is_file() or context.stat().st_size > 65536:
@@ -509,6 +523,9 @@ def main(argv: list[str] | None = None) -> int:
     started = time.monotonic()
     try:
         options, context_path, receipt_path, output, log_paths, selected = _arguments(list(sys.argv[1:] if argv is None else argv))
+        if options.profile == "b1-standard/v1":
+            # 개발 중 임시 차단: Task3의 lock/키/출력/전체 기한 보호 전에는 실행하지 않는다.
+            return 125
         bootstrap = _load_bootstrap()
         parent_guard = bootstrap._guard(ROOT, install=True)
         if parent_guard["violations"]:
