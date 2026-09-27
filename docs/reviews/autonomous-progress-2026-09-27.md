@@ -1,6 +1,6 @@
 # 09-27 자율 후속 개발 — 진행·인계 원장
 
-갱신: 2026-09-27 14:30 KST. **진행 중이며 전체 엔진 완료·운영 전환 보고가 아니다.**
+갱신: 2026-09-27 16:03 KST, OS 단계 개발 검증 완료. **전체 엔진 완료·운영 전환 보고가 아니다.**
 사용자 요청은 18:00 KST 이후 복귀 전까지 승인 범위의 후속을 순차 진행하는 것이다.
 일상적인 재확인은 생략하되 새 실행 권한이나 증거 없는 안전 게이트를 임의로 만들지 않는다.
 
@@ -8,8 +8,8 @@
 
 - 통합 작업: `feature/owner-ticket-gate-20260926`, 통합 worktree
   `.claude/worktrees/owner-ticket-gate-20260926`.
-- 현재 로컬 checkpoint: `0b3c571`. 마지막 확인된 원격 feature: `535e494`.
-  앞 단계 완료분만 push했고 진행 중 코드·문서는 아직 전체 마감하지 않았다.
+- 현재 로컬 코드 checkpoint: `9cf021f`. 마지막 확인된 원격 feature: `535e494`.
+  OS 단계까지 검증을 마쳤으며 문서 마감·feature push 뒤 같은 새 base에서 후속을 시작한다.
 - main·운영·주문·전략·위험 설정·KIS/Toss 자격·서비스는 이번 후속에서 변경하지 않았다.
   main 작업트리의 기존 `config/evolved_overrides.yml` 변경은 읽거나 편집하지 않고 보존했다.
 - 기존 두 정확한 성능 관측의 개발 예외는 유지한다. 새 실패·timeout·수명/정합성 결함을
@@ -21,16 +21,25 @@
 | --- | --- | --- |
 | 오프라인 시험 증거 | 개발 완료·독립 리뷰·feature push | OS 종료 및 native 자격과 구분 유지 |
 | source 수집·격리 경계 | 개발 완료, UTC/KST 각6089 passed, source108 수집만 확인 | source call-phase0·qualified runtime0 유지 |
-| 실제 OS 종료·회수 결속 | 순수 계약/controller 독립 승인·통합, 결합 시험 작성 중 | 실제 결합 인수→fresh broad→전체 UTC/KST→문서/push |
+| 실제 OS 종료·회수 결속 | 독립 리뷰 보완 완료, 전체 UTC/KST 각각6265 passed | 문서/push 후 개발 범위 한정 유지 |
 | runtime 등록 대조 | 독립 계획 승인·문서 저장, 구현 미착수 | 앞 단계 See 뒤 순수 검사기+빈 registry 구현/검증 |
 | cold source 소유권 | 준비 설계 한정 독립 승인·문서 통합 | native/decoder/소비자·독립 할당 관측 기준 미해결 |
 | decoder 호환 선택 | consumer inventory·표현 선택 문서 독립 방향 승인 | 실제 bounded 구조/독립 관측 실현 가능성 설계; 첫 RED 여전히 보류 |
+| health 재시도 목록 복사 | 반환 목록과 내부 RAM의 공유를 정적으로 확인, 최소 수정 설계 | OS See 뒤 RED→leaf 복사→독립 리뷰/검증; 경보 배선과 별개 |
+| health 일자 표시 일관성 | 중복 clock/property 관측을 독립 정적 분석, 첫 필드 단일 관측 권고 | OS See 뒤 RED→health 두 필드만 수정/검증; 실제 admission 무변경 |
 
 controller 기존46건의 coordinator 재실행은21.68s/exit0/격리0이었다. 그 뒤 독립 리뷰가 발견한
 부모 symlink 경로 교체·미완료 정리 중 receipt 읽기는 원 작성자의 RED3건으로 재현됐다.
 최종 controller `995d59e`는 필수 두 지적을 닫고 독립 재리뷰를 통과했다. coordinator도
 최종64 passed/24.90s/exit0/격리0을 확인한 뒤 통합했다. 전체 단계 인수는 아직 아니다.
 순수 계약의 최종 coordinator 결과는 새73+기존36=109 passed/0.52s/exit0/격리0이다.
+
+그 뒤 실제11개 tiny case의 결합 시험과 broad 보완을 포함한349건이 통과했다. 첫 전체 UTC는
+unit이 host의 task count를 가정해 실패했다(1 failed/163 passed). 전체수집 진단에서4tasks를
+확인하고, 제품 경계가 아닌 세 unit의 입력·금지 호출만 보완했다. 작성자 controller100건,
+root 전체수집 선택11건과 독립 재리뷰를 통과한 `9cf021f`에서 전체 UTC6265 passed/641.79s,
+KST6265 passed/639.81s, 각각16 skipped·2 xfailed·4 warnings·exit0·격리0을 확인했다.
+이 새 실패는 기존 두 성능 관측의 예외에 포함하지 않았고 원문을 보존했다.
 
 역할은 bounded 계약 Terra/high, OS 수명 구현·아키텍처 Astra/high, 소비 경로 조사 Sol/high,
 별도 critical 리뷰 Astra/xhigh로 나눴다. 요청 모델과 실제 metadata 입증을 구분하며,
@@ -39,13 +48,20 @@ actual model/effective effort 미노출은 미검증이다. 같은 공급자 독
 
 ## 다음 실제 작업
 
-1. 승인된 OS controller와 실제 producer→OS 관측→순수 consumer의 결합 시험을 추가한다.
-   성공 receipt 뒤 실패/지연/남은 자식도 거부해야 한다.
-2. root 단독 전체 검증 후 OS 단계의 문서·feature push를 마감한다.
+1. 실제 producer→OS 관측→순수 consumer 결합, fresh broad 보완과 전체수집 unit의
+   별도 보완·독립 재리뷰까지 통합했다. 고정된 후보의 전체 검증을 마감했다.
+2. OS 단계의 문서·feature push를 마감하고 원격 SHA를 대조한다.
 3. 승인된 runtime 계약을 RED부터 구현한다. 실제 registry는 빈 상태, 성공 판정도
    실행/native/운영 허가false이며 source 차단을 해제하지 않는다.
 4. cold 복구의 첫 할당·부분 실패·소비자 인계를 설계한다. 기존 파서 후등록/hook는 해법으로
    간주하지 않으며 exact dict/list·canonical bytes·중복키·unknown field·실제 live identity를 대조한다.
+5. 별도 확인된 health `restart_retries[*].intent_ids`의 alias를 명시 list 복사로 분리한다.
+   read-only 관측 결과 수정이 내부 RAM을 바꾸는 문제만 고치며 clock/cooldown/주문·설정,
+   기존 누적 상태 성능 게이트와 health/경보 배선의 미완료는 바꾸지 않는다.
+6. health 한 호출의 두 `day_admission_closed` 표시는 첫 기존 필드 자리에서 얻은 값을
+   공유한다. 실제 property/admission·KST 시계·오류 short-circuit와 요청 간 fresh 판정은
+   유지한다. 위 두 health 후보와 순수 runtime 계약은 파일/인터페이스가 독립적이므로
+   앞 단계 See 뒤 같은 base의 격리 작업트리에서 병렬 작성·독립 리뷰할 수 있다.
 
 ## 이후에도 남는 경계
 

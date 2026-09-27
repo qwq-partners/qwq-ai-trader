@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **09-27 자율 후속 진행 중:** [당일 진행 원장](docs/reviews/autonomous-progress-2026-09-27.md)을 먼저 읽는다. OS 종료·회수의 순수 계약과 controller는 각각 독립 재승인 후 feature에 통합했다(최종 root 집중109/64 passed·격리0). 실제 producer→controller→consumer 결합 및 전체 UTC/KST·fresh broad는 아직 진행 중이다. runtime 순수 등록 계약은 다음 단계이며 실제 registry는 빈 상태로 계획했다. cold/decoder 문서는 준비·방향 한정 승인으로 첫 RED/native/제품 구현 승인이 아니다. 기존 두 정확한 성능 관측의 개발 예외는 유지하되 새 실패·timeout으로 확대하지 않는다. main·운영·주문·전략·위험·KIS/Toss 설정 변경0. 아래 줄은 각 시점의 이력이다.
+> **09-27 자율 후속 진행 중:** [당일 진행 원장](docs/reviews/autonomous-progress-2026-09-27.md)을 먼저 읽는다. OS 종료·회수 개발은 실제 producer→controller→consumer 결합·fresh broad 보완·전체수집 unit 전제 보완을 독립 재승인했고, 최종 `9cf021f`의 전체 UTC/KST 각각6265 passed·격리0으로 마감했다. 다음은 빈 실제 registry를 유지하는 순수 runtime 등록 계약과 별도 health 관측 두 수정이다. cold/decoder 문서는 준비·방향 한정 승인으로 첫 RED/native/제품 구현 승인이 아니다. 기존 두 정확한 성능 관측의 개발 예외는 유지하되 새 실패·timeout으로 확대하지 않는다. main·운영·주문·전략·위험·KIS/Toss 설정 변경0. 아래 줄은 각 시점의 이력이다.
 
 > **source 수집·격리 경계 개발 완료(2026-09-27):** [진행 원장](docs/reviews/source-proof-boundaries-2026-09-27.md)이 최신 정본이다. 후보 `cc18b9c`에서 원 helper·23개 시험/핵심 판정 함수 보존, 독립 source108/관련31 목록과 실제 수집 exact 일치, 기본6034 보존+73추가/source0을 확인했다. 집중168 passed, 전체 UTC/KST 각각6089 passed·기존16 skipped/2 xfailed/4 warnings·격리0, 독립 broad 지적0이다. `SOURCE_BOUNDARIES_VALIDATED`는 개발 경계 한정이며 source108 call-phase/native 실행0·qualified runtime0이다. 다음은 실제 OS 종료·회수 결속. 기존 source/sequence 후보·제품/CI/main/운영·주문/설정은 무변경이다. 아래 안내는 각 시점 이력이다.
 

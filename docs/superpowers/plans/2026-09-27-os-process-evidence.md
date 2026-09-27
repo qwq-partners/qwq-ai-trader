@@ -108,20 +108,25 @@ Task2 최종 `995d59e`는 R1·R2 수정 후 독립 한정 재승인됐다. coord
 **Interfaces:** 실제 Task2 CLI가 쓴 raw receipt/process-result를 Task1 evaluate에 넣는다.
 
 - [x] Task1/2의 독립 scoped review를 완료하고 문제는 원 writer에게 수정·재리뷰시킨다.
-- [ ] 같은 feature에 후보를 통합한 뒤 결합 시험을 RED부터 작성한다: 실제 tiny pytest
+- [x] 같은 feature에 후보를 통합한 뒤 결합 시험을 RED부터 작성한다: 실제 tiny pytest
   고정 node1·독립 literal run/slot/selector·사전 파일 hash 기대값으로 OS_RESULT_BOUND를 확인한다.
   actual.collected를 expected에 복사하지 않는다. exit 뒤 fault는 valid receipt가 있어도 거부한다.
   이미 두 API가 구현되어 최초 실행이 GREEN이면 특성화라고 기록하며 RED를 조작하지 않는다.
-- [ ] focused 새3시험+기존 evidence3시험, guard0·exit0·raw logs를 확인한다.
-- [ ] 전체 변경의 fresh Astra/xhigh broad review와 발견사항 보완·한정 재리뷰를 완료한다.
-- [ ] root단독 전체 UTC→KST를900초 cap으로 실행한다. 일반 suite의16skip/2xfail은 기존 조건을
+- [x] focused 새3시험+기존 evidence3시험, guard0·exit0·raw logs를 확인한다.
+- [x] 전체 변경의 fresh Astra/xhigh broad review와 발견사항 보완·한정 재리뷰를 완료한다.
+- [x] root단독 전체 UTC→KST를900초 cap으로 실행한다. 일반 suite의16skip/2xfail은 기존 조건을
   유지하고 새 OS consumer가 이를 승인했다고 보고하지 않는다. source108 call-phase0.
-- [ ] compile-only·비밀 패턴·diff check, 기존파일/guard/sourcehelperhash 불변 확인 후
+- [x] compile-only·비밀 패턴·diff check, 기존파일/guard/sourcehelperhash 불변 확인 후
   CHANGELOG/CLAUDE/docs index/report에 actual 범위/미지원/원문증거를 기록한다.
 - [ ] feature commit/push+remote SHA 확인 뒤 runtime qualification의 순수 admission 경계 또는
   다음 미해결 개발 단계를 실제 최신 원장 기준으로 선택한다. main/운영 전환은 별도 권한이다.
 
 ## Self-review
+
+Task3 최종 결합 저자 `a77227f`는 scoped 승인을 받았다. fresh broad의 추가 후행 중단
+지적은 `ffcc384`의36사례/최소 latch와 cutoff 명세로 수정하고 같은 broad reviewer의
+한정 재리뷰에서 R1/R2 모두 ADDRESSED·새 지적0을 받았다. coordinator 후보 집중349
+passed/124.84s/exit0/격리0 후 `26dd5ae`로 통합했다. 전체 UTC/KST·마감은 위 체크에 따른다.
 
 spec 필드는 Task1, 관측은 Task2, 양방향 실제 결속은 Task3가 소유한다. 구체 프로세스 신호는
 소유한 test child만 대상으로 하며 이를 운영 승인으로 확장하지 않는다. OS 관측의 이벤트 루프

@@ -9,7 +9,7 @@
 - [Source 수집·격리 경계 원장](reviews/source-proof-boundaries-2026-09-27.md) — source108/관련31 exact 수집, 기존6034 보존+73추가, 집중168·전체 UTC/KST 각6089 passed; native 실행·운영 승인 아님
 - [Source 경계 설계](superpowers/specs/2026-09-27-source-proof-boundaries-design.md) · [실행계획](superpowers/plans/2026-09-27-source-proof-boundaries.md) — helper/oracle 보존·guard 실체·미자격 실행 차단; qualified runtime0
 - [자율 후속 개발 현황](reviews/autonomous-progress-2026-09-27.md) — 단계별 완료·진행·미확보 근거와 다음 순서; 전체 엔진 완료/운영 전환과 구분
-- [OS 종료·회수 증거 원장](reviews/os-process-evidence-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-os-process-evidence-design.md) · [실행계획](superpowers/plans/2026-09-27-os-process-evidence.md) — 두 부품 독립 승인 후 실제 결합 인수 진행; native/CI/운영 자격과 분리
+- [OS 종료·회수 증거 원장](reviews/os-process-evidence-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-os-process-evidence-design.md) · [실행계획](superpowers/plans/2026-09-27-os-process-evidence.md) — 실제 결합·독립 broad 보완 완료, 전체 UTC/KST 각6265 passed; native/CI/운영 자격과 분리
 - [Runtime 등록 대조 설계](superpowers/specs/2026-09-27-runtime-admission-contract-design.md) · [실행계획](superpowers/plans/2026-09-27-runtime-admission-contract.md) — 순수 내용 대조·빈 실제 registry, 계획 승인/구현 대기; 실행 권한을 부여하지 않음
 - [Cold source 소유권 준비 설계](superpowers/specs/2026-09-27-recovery-cold-source-ownership-design.md) · [후속 인수 준비](superpowers/plans/2026-09-27-recovery-cold-source-ownership.md) — 독립 준비 설계 한정 승인; 첫 RED 관측 기준·native/decoder/consumer 근거 미확보, 실행계획 완성·제품 구현 승인이 아님
 - [Decoder 표현·호환 결정](superpowers/specs/2026-09-27-recovery-decoder-compatibility-decision.md) — private bounded 표현의 후속 설계 방향만 독립 승인; 실제 allocator/oracle·consumer·native gate 미해결
@@ -17,10 +17,10 @@
 - [L3 오프라인 검증 도구 구현 원장](reviews/verification-evidence-2026-09-27.md) — 세 부품 개발·독립 검토 완료, 최종 UTC/KST 각6016 passed·통합 후 관련100 passed, 사용법·후속 순서; 전체 엔진/운영 승인 아님
 - [L3 오프라인 검증 부품 실행계획](superpowers/plans/2026-09-27-required-source-proof.md) — 사용자 승인 Task1~3 구현·검증·개발 통합 완료; [기존 성능 실패 개발 예외](reviews/recovery-performance-exceptions-2026-09-27.json) 불변
 - [L3 별도 필수 source proof 계약 설계](superpowers/specs/2026-09-27-required-source-proof-design.md) — 기존 전체시험 + 조건부 runtime 증명 + 동일 실행 최종 gate; 오프라인 부품과 최종 CI 계약 구분, qualified runtime0·운영 미승격
-- [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — L1/L2 구조 한정 승인·관련757 passed; 새 controlled5k13.024ms 실패·6셀 미실행·trace 미확정; Task2/실제 owner 통합 차단
+- [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — L1/L2 구조 한정 승인·관련757 passed; 두 정확한 과거 성능 관측은 개발 예외, 원시 실패·6셀 미실행 보존; native/cold/소비자·실제 owner 통합 미완
 - [N5 L3 취소·자원 수명 설계 제안](superpowers/specs/2026-09-27-recovery-build-lifecycle-design.md) — 논리 취소/물리 정리/결과 인계·source lease·cleanup proof; 독립 제안 한정 승인, capture/표현 타당성·구현 미완
 - [N5 L3-P0 증명 실행계획](superpowers/plans/2026-09-27-recovery-lifecycle-proof.md) — warm SQL source 인계·bounded sequence의 시험 전용 두 과제; 한정 검토 후 전체 인수 차단, 제품/운영 미구현
-- [N5 L3-P0 증명 실행 결과](reviews/l3-proof-results-2026-09-27.md) — source139 passed·조건부 구조 승인, sequence 기능 한정 승인; 단회 진단은 미재현·미확정, 기존100k 성능·CI patch 지원 충돌로 전체 차단; 전체 L3/배포 승인 아님
+- [N5 L3-P0 증명 실행 결과](reviews/l3-proof-results-2026-09-27.md) — source139 passed·조건부 구조 승인, sequence 기능 한정 승인; 단회 진단은 미재현·미확정, 후속 성능 개발 예외는 [별도 원장](reviews/recovery-performance-exceptions-2026-09-27.json); 실제 runtime 자격·전체 L3/배포 미완
 - [N5 projection/index 상세 설계](superpowers/specs/2026-09-24-recovery-projection-index-design.md) · [구현계획](superpowers/plans/2026-09-24-recovery-projection-index.md) — owner token·bounded typed update·협력적 복원·인수 게이트
 - [N4 관측 연결 전 누적 상태 측정](architecture/recovery-observability-scale-2026-09-23.md) — 합성 보관 이력·50ms 개발 게이트·phase별 timeout, 제품/상한/보존 정책 무변경
 - [N3 읽기 전용 복구 진단](architecture/recovery-diagnostics-2026-09-23.md) — 콜백 없는 두 표본 비교·비식별 고정 schema, 모듈형 exporter와 운영 배선 분리
