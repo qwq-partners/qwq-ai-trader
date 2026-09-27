@@ -4,10 +4,10 @@
 
 ## 현재 판정
 
-- **사용자 후속 결정(2026-09-27):** 직전 설명의 controlled5k13.023871ms·controlled100k33.174ms는 [개발 진행 예외](recovery-performance-exceptions-2026-09-27.json)로 수용됐다. 원시 실패·100k enclosing exit124·다른 미검증은 그대로다. 이 두 이력만으로 개발/전체 회귀 착수를 다시 차단하지 않는다. [오프라인1차 계획](../superpowers/plans/2026-09-27-required-source-proof.md)은 네 지적 보완 뒤 독립 계획 한정 승인·사용자 계획 검토 대기·미구현이다. 아래 성능 차단 문구는 당시 판정이며 정합성·자원 수명·runtime·실제 CI·main/운영 관문은 유지한다.
-- 검증 계약 후속: 사용자는 기존 전체시험에 별도 필수 source proof를 더하는 설계 작성을 승인했다. [서면 설계](../superpowers/specs/2026-09-27-required-source-proof-design.md)는 독립 리뷰 세 지적을 반영해 설계 한정 승인됐으며 사용자 서면 검토 대기다. 구현계획/CI 활성화/runtime qualification은 미실행이고 기존 proof 결과와 성능 실패를 대체하지 않는다.
+- **사용자 후속 결정(2026-09-27):** 직전 설명의 controlled5k13.023871ms·controlled100k33.174ms는 [개발 진행 예외](recovery-performance-exceptions-2026-09-27.json)로 수용됐다. 원시 실패·100k enclosing exit124·다른 미검증은 그대로다. 이 두 이력만으로 개발/전체 회귀 착수를 다시 차단하지 않는다. 후속 사용자 승인으로 [오프라인1차 도구](verification-evidence-2026-09-27.md)와 [source 수집·격리 경계](source-proof-boundaries-2026-09-27.md)는 개발·독립 검증·feature push까지 마쳤다. 아래 과거의 계획 검토 대기·성능 차단 문구는 당시 판정이며 정합성·자원 수명·runtime·실제 CI·main/운영 관문은 유지한다.
+- **14시대 현재 후속:** [자율 진행 원장](autonomous-progress-2026-09-27.md)이 단계별 현재 상태를 정리한다. [실제 OS 종료·회수 결속](os-process-evidence-2026-09-27.md)은 구현·재리뷰/결합 인수 중이며 runtime 순수 등록 대조는 계획 승인·미구현이다. cold source 소유권은 준비 설계만 독립 승인됐고 실제 decoder/소비자·첫 할당 관측 기준은 미완이다. CI 활성화/runtime qualification/source108 call-phase는 여전히0이며 과거 proof 결과를 자격으로 재사용하지 않는다.
 - Task 1: `fec1bbc1fde436bfb09609901b71b68b1162c0dd`까지 독립 검토 승인. 이후 Task 2에서 같은 모듈을 수정한 후보까지 승인된 것은 아니다.
-- Task 2: **미완료·성능 차단**. 마지막 커밋은 `038aa599f043e62d200df048152fa292167fea72`; 그 위의 세 파일 수정안은 미커밋이며 Task2 전체 승인을 받지 않았다. L1/L2 후속 후보는 **구조 범위 독립 승인**됐고, 표준 diff SHA256은 `721fe1c7bc60bf44876805a823a0d42f253b706f026eea6d8a76fcffd4c0c41c`다. 수정 후 첫 controlled5k 성능 셀이 freeze **13.023871ms >5ms로 실패**, 이후6셀은 미실행이다. 한 번의 별도 trace 진단은 미재현·미확정으로 끝났다. 이전 `8443703…` 후보와 실패 기록도 별도 보존했다.
+- Task 2: **전체 미승인·고정 후보 보존**. 마지막 커밋은 `038aa599f043e62d200df048152fa292167fea72`; 그 위의 세 파일 수정안은 미커밋이며 Task2 전체 승인을 받지 않았다. L1/L2 후속 후보는 **구조 범위 독립 승인**됐고, 표준 diff SHA256은 `721fe1c7bc60bf44876805a823a0d42f253b706f026eea6d8a76fcffd4c0c41c`다. 수정 후 첫 controlled5k 성능 셀이 freeze **13.023871ms >5ms로 실패**, 이후6셀은 미실행이다. 정확한 실패의 개발 예외 수용은 이 원시 결과를 PASS로 바꾸지 않는다. 한 번의 별도 trace 진단은 미재현·미확정으로 끝났다. 이전 `8443703…` 후보와 실패 기록도 별도 보존했다.
 - Task 3: **독립 부품 완료·재리뷰 승인**, 커밋 `9a01fa1`. 승인된 Task 1에서 분리한 `feature/owner-ticket-gate-20260926`에 코드·시험 두 파일만 기록했다. 초기 리뷰의 차단 4건을 보완했고 부품 12건·관련 owner/store 포함 129건이 통과했다. Task 2 수정안을 이 브랜치에 복사하지 않았다.
 - Task 4–15: 미완료. 특히 실제 owner commit/restore 경로 연결, 전체 성능 행렬, UTC→KST 전체 검증과 broad review는 아직 완료하지 않았다.
 - L3 후속: 승인된 [L3-P0 실행계획](../superpowers/plans/2026-09-27-recovery-lifecycle-proof.md)에 따라 warm SQL source·sequence의 시험용 부품을 구현·보완했다. source는 관련139 passed·조건부 구조 승인, sequence는 기능 한정 승인이다. source의 CPython3.12.3/CI micro 지원 충돌과 별도 clean-base controlled100k33.174ms 실패로 전체 UTC/KST·코드 커밋/푸시·통합은 차단이다. 별도 단회 index CPU 진단은 미재현·미확정(원본1 passed/12.78s·최대4.204637ms)으로 종료했고 기존 실패를 면제하지 않는다. [실행 결과](l3-proof-results-2026-09-27.md)에 실제 실패·미실행과 후속 조건을 구분한다. 전체 L3/제품 구현은 시작하지 않았다.
@@ -209,8 +209,8 @@ env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTEST_D
 ## 다음 작업과 금지할 단축
 
 1. 메모리 비교·1회 CPU 진단·L1/L2 구현 및 독립 구조 검토는 완료했다. 새 세션은 `task-2-retirement-review.md`, `gc-cpu-attribution-report-2026-09-27.md`와 후보 `721fe1c7…`를 먼저 대조한다. 완료한 진단/구조 수정은 반복하지 않으며 이전 `8443703…`용 고정 지문 probe를 새 후보에 그대로 실행하지 않는다.
-2. 승인된 L3-P0 실행계획의 warm source·sequence 두 시험용 증명을 진행 중이다. 전체 source lease/capture·bounded 표현이 이미 확정된 것은 아니다. gate 선반환·무제한 background queue로 비용을 숨기지 않으며 legacy close/result/예외 의미를 조용히 바꾸지 않는다. 사용자는 이후 추가 결정이 불필요한 작업도 순차 진행하도록 지시했다. 현재 증명·리뷰가 통과하면 cold-open/decoder/consumer 수명 차단의 별도 후속 설계로 이어가되, 실패한 인수 게이트를 생략하지 않는다.
-3. 새 후보 성능은 첫 controlled5k13.023871ms 실패로 중단됐고 나머지6셀은 미실행이다. source 비교·trace1회로 원인을 확정하지 못했으므로 반복 측정으로 통과값을 고르지 않는다. 다음 진단은 새로운 판별 질문·측정 교란/CPU 구분·유한 중단 조건을 별도로 고정해야 한다. 실제 성능 인수 전에는 Task4 이후 owner 통합을 진행하지 않는다. 제품 GC 비활성화·임계 상향·입력 축소로 우회하지 않으며 과거 policy/100k 실패도 보존한다.
+2. warm source·sequence의 시험용 후보와 한정 리뷰는 [L3 실행 결과](l3-proof-results-2026-09-27.md)대로 고정 보존한다. 새 검증 도구·source 경계 후속의 완료를 native 자격이나 전체 source lease/capture·bounded 표현 완성으로 바꾸지 않는다. 현재는 OS 결과 결속→runtime 순수 계약과 cold-open/decoder/consumer의 구체 설계를 진행한다. gate 선반환·무제한 background queue·legacy close/result/예외의 암묵 변경은 금지다.
+3. 고정 후보의 첫 controlled5k13.023871ms 실패와 나머지6셀 미실행은 원시 기록이다. 사용자 수용 두 관측의 개발 예외를 다시 개발 착수 차단으로 쓰지 않지만, 새 실패나 다른 후보·미실행 셀까지 면제하지 않는다. 같은 진단을 반복해 통과값을 고르지 않으며 제품 GC 비활성화·임계 상향·입력 축소도 하지 않는다. Task4 이후 실제 owner 통합에는 남은 정합성·수명·source/consumer 및 별도 전체 인수 근거가 필요하다.
 4. 실제 owner commit/restore·writer/producer 연결, 63셀 성능 행렬·UTC→KST 전체 검증·독립 broad review는 원래 Task 4–15 순서로 진행한다. 전체 C/F/G/R, health/경보 연결과 전체 엔진 운영 전환은 별도 게이트이며 이번 완료 범위가 아니다.
 
 ## 재개 위치와 증거 보존

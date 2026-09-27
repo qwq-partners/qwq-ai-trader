@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — OS 종료·회수 부품 통합과 후속 설계 (전체 단계 검증 중)
+
+- 기존 pytest receipt와 실제 OS 종료·자식 회수 관측을 결속하는 순수 계약 및 고정 controller/bootstrap을 추가했다. 부모 경로 교체·미완료 cleanup 중 receipt 읽기를 독립 리뷰에서 발견해 RED 재현·수정·재승인했다.
+- coordinator 최종 집중은 순수 계약 새73+기존36=109 passed, controller64 passed·격리0이다. 두 부품을 통합했지만 실제 결합 인수·전체 UTC/KST·fresh broad는 아직 마감하지 않았다. [OS 원장](docs/reviews/os-process-evidence-2026-09-27.md) 참조.
+- runtime의 순수 등록/관측 계약은 독립 계획 승인 후 구현 대기다. 실제 자격 등록은 빈 상태로 두며 검증 성공도 native/실행/운영 허가로 쓰지 않는다.
+- cold source 준비 설계와 decoder 표현 선택은 독립 방향 한정 승인이다. 실제 allocator·독립 ownership oracle·consumer·native 근거가 없어 첫 RED는 보류하며, 제품 src·기존 시험/guard·CI·main·운영은 변경하지 않는다.
+
 ## 2026-09-27 — source 증명의 수집·격리 경계 개발 완료
 
 - helper bytes와 원23개 시험·핵심 판정 함수는 보존하고, 별도 cases 경로·고정 guard 실체 검사·직접 child 격리·미자격 native 실행 차단을 추가했다. 원 fault record는 보존하며 엄격한 outer envelope만 덧붙였다.

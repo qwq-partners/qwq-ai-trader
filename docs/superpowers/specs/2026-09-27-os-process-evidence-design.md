@@ -178,7 +178,8 @@ eligibility는 `reason=exited`, 실제 rc0, leader_reaped/ownership_probe_passed
 descendant_survived=false와 일치하는 양 guard/receipt/identity/launch, stream overflow=false를
 모두 요구한다. term_sent/kill_sent=true도 거부한다. bytes>8MiB는 overflow=true여야 한다.
 probe false·cleanup false·미관측 guard 등을 parser가 합법적 실패 증거로 읽더라도 승인은 금지다.
-parser 예외는 `INVALID_PROCESS_RESULT` 한 code로 정규화한다. validator는 정렬·중복 제거한
+공개 parser는 고정된 세부 `ProcessEvidenceError`를 낼 수 있고, validator 경계에서 process
+parser 예외를 `INVALID_PROCESS_RESULT` 한 code로 정규화한다. validator는 정렬·중복 제거한
 다음 고정 code와 기존 `validate_receipt` code만 반환한다:
 `INVALID_EXPECTATION`, `INVALID_RECEIPT`, `INVALID_PROCESS_RESULT`, `PROCESS_SCOPE_MISMATCH`,
 `PROCESS_RUN_MISMATCH`, `PROCESS_SLOT_MISMATCH`, `PROCESS_IDENTITY_MISMATCH`,
