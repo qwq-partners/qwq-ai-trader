@@ -2339,3 +2339,681 @@ def test_b1_probe_child_systemexit_close_still_reaches_terminal_125(monkeypatch)
     assert escaped is not close_failure and escaped.code == 125
     assert events == [("fork", 0), ("close", 71), ("close", 72), ("close", 73), ("exit", 125)]
     assert (budget.cleanup_end, budget.term_end) == (None, None)
+
+
+def _prerequisite_call(monkeypatch, targets, operation):
+    """예외도 patch 안에서 포착하되 결과 검사는 stdlib 복원 뒤 호출자가 한다."""
+    originals = [(owner, name, getattr(owner, name)) for owner, name, _ in targets]
+    result, escaped = None, None
+    try:
+        with monkeypatch.context() as patch:
+            for owner, name, replacement in targets:
+                patch.setattr(owner, name, replacement)
+            try:
+                result = operation(patch)
+            except BaseException as error:
+                escaped = error
+    finally:
+        for owner, name, original in originals:
+            restored = getattr(owner, name)
+            assert restored is original or (
+                hasattr(original, "__func__") and getattr(restored, "__func__", None) is original.__func__
+                and getattr(restored, "__self__", None) is original.__self__
+            )
+    return result, escaped
+
+
+@pytest.mark.parametrize("failed_fd", [None, 71, 72])
+@pytest.mark.parametrize("error_type", [SystemExit, KeyboardInterrupt, RuntimeError])
+@pytest.mark.parametrize("b1", [False, True])
+def test_b1_prerequisite_child_terminal_and_v1_exception_identity(monkeypatch, failed_fd, error_type, b1):
+    module = _load_source("_b1_child_baseexceptions", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    events = []
+    failure = error_type(0)
+    def close(fd):
+        events.append(("close", fd))
+        if fd == failed_fd:
+            raise failure
+    def terminal(code):
+        events.append(("exit", code))
+        raise _ProbeExit(code)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("child가 parent 경계에 진입")
+    targets = [(os, "fork", lambda: 0), (os, "close", close), (os, "_exit", terminal),
+               (os, "waitpid", forbidden), (time, "monotonic", lambda: 100.0),
+               (time, "sleep", forbidden), (fcntl, "flock", forbidden),
+               (os, "pidfd_open", forbidden), (module.signal, "pidfd_send_signal", forbidden),
+               (module, "_emergency_cleanup", forbidden)]
+    budget = module._B1Budget(0.0) if b1 else None
+    _, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._probe(896.0, [False], budget=budget, controller_fds=(71, 72, 73)))
+    if failed_fd is None:
+        assert isinstance(escaped, _ProbeExit) and escaped.code == 23
+        assert events == [("close", 71), ("close", 72), ("close", 73), ("exit", 23)]
+    elif b1:
+        assert isinstance(escaped, _ProbeExit) and escaped.code == 125
+        assert events == [("close", 71), ("close", 72), ("close", 73), ("exit", 125)]
+    else:
+        assert escaped is failure
+        assert events == ([("close", 71)] if failed_fd == 71 else [("close", 71), ("close", 72)])
+
+
+@pytest.mark.parametrize("stage", ["prefork_clock", "fork", "clock", "clock_no_fresh", "reap", "sleep", "ordinary_cleanup"])
+@pytest.mark.parametrize("emergency_raises", [False, True])
+def test_b1_prerequisite_probe_keeps_one_owner_and_first_exception(monkeypatch, stage, emergency_raises):
+    module = _load_source("_b1_probe_exception_owner", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = module._B1Budget(0.0)
+    original_owner = module._Owner
+    owners, events, emergencies, obligations = [], [], [], []
+    first, second = RuntimeError("probe first"), SystemExit(0)
+    state = {"forked": False, "clock_failed": False, "now": 100.0}
+    def owner_factory(*, budget=None):
+        owner = original_owner(budget=budget)
+        owners.append(owner)
+        return owner
+    def clock():
+        if stage == "prefork_clock":
+            raise first
+        if state["forked"] and stage in ("clock", "clock_no_fresh"):
+            if not state["clock_failed"] or stage == "clock_no_fresh":
+                obligations.append(owners[0].leader)
+                state["clock_failed"] = True
+                raise first
+            return 101.0
+        return state["now"]
+    def fork():
+        events.append("fork")
+        state["forked"] = True
+        if stage == "fork":
+            raise first
+        return 41
+    def reap(owner):
+        events.append("reap")
+        if stage == "reap" or (stage == "ordinary_cleanup" and state["now"] == 101.0):
+            if stage == "ordinary_cleanup":
+                state["now"] = 102.0
+            raise first
+        return False
+    def sleep(seconds):
+        events.append("sleep")
+        if stage == "sleep":
+            raise first
+        state["now"] = 101.0
+    def emergency(owner, pipes, *, b1=False):
+        emergencies.append((owner, dict(pipes), b1, owner.finish_end, budget.cleanup_end, budget.term_end))
+        if emergency_raises:
+            raise second
+        return False
+    def forbidden(*args, **kwargs):
+        raise AssertionError("미지정 process/FD 경계")
+    targets = [(module, "_Owner", owner_factory), (os, "fork", fork), (os, "waitpid", forbidden),
+               (os, "close", forbidden), (time, "monotonic", clock), (time, "sleep", sleep),
+               (os, "_exit", forbidden), (os, "pidfd_open", forbidden),
+               (module.signal, "pidfd_send_signal", forbidden), (module, "_RawPopen", forbidden),
+               (original_owner, "reap", reap), (original_owner, "signal_children", forbidden),
+               (module, "_emergency_cleanup", emergency)]
+    _, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._probe(896.0, [False], budget=budget, controller_fds=(71,)))
+    assert escaped is first
+    if stage == "prefork_clock":
+        assert len(owners) <= 1
+        assert events == [] and emergencies == []
+        assert (budget.cleanup_end, budget.term_end) == (None, None)
+    else:
+        assert len(owners) == 1 and owners[0].returncode is None
+        assert events.count("fork") == 1 and len(emergencies) == 1
+        expected = (104.0, 102.0) if stage in ("clock", "ordinary_cleanup") else (103.0, 101.0)
+        assert emergencies[0] == (owners[0], {}, True, expected[0], expected[0], expected[1])
+        assert owners[0].leader == (None if stage == "fork" else 41)
+        if stage in ("clock", "clock_no_fresh"):
+            assert obligations and all(pid == 41 for pid in obligations)
+
+
+@pytest.mark.parametrize("b1", [False, True])
+@pytest.mark.parametrize("failed_fd", [73, 72])
+@pytest.mark.parametrize("earlier", [None, "timeout"])
+def test_b1_prerequisite_descriptor_batch_exhausts_before_first_exception(monkeypatch, b1, failed_fd, earlier):
+    module = _load_source("_b1_descriptor_batch", "pytest_evidence_controller.py")
+    import os
+
+    owner = module._Owner(budget=module._B1Budget(0.0))
+    if earlier is not None:
+        owner.reject(earlier)
+    descriptors, closed = [71, 72, 73], []
+    first, second = SystemExit(0), RuntimeError("later close")
+    def close(fd):
+        assert fd not in descriptors
+        closed.append(fd)
+        if fd == failed_fd:
+            raise first
+        if fd == 71:
+            raise second
+    kwargs = {"b1": True} if b1 else {}
+    _, escaped = _prerequisite_call(monkeypatch, [(os, "close", close)],
+        lambda patch: module._close_descriptors(descriptors, owner, **kwargs))
+    assert escaped is first and owner.error == (earlier or ("io_error" if b1 else None))
+    if b1:
+        assert closed == [73, 72, 71] and descriptors == []
+    else:
+        assert closed == ([73] if failed_fd == 73 else [73, 72])
+        assert descriptors == ([71, 72] if failed_fd == 73 else [71])
+
+
+@pytest.mark.parametrize("b1", [False, True])
+@pytest.mark.parametrize("failing", [False, True])
+def test_b1_prerequisite_descriptor_status_is_per_call_not_owner_reason(monkeypatch, b1, failing):
+    module = _load_source("_b1_descriptor_status", "pytest_evidence_controller.py")
+    import os
+
+    owner = module._Owner(budget=module._B1Budget(0.0))
+    owner.reject("timeout")
+    descriptors, closed = [71, 72], []
+    def close(fd):
+        closed.append(fd)
+        if failing and fd == 72:
+            raise OSError(4, "EINTR")
+    kwargs = {"b1": True} if b1 else {}
+    result, escaped = _prerequisite_call(monkeypatch, [(os, "close", close)],
+        lambda patch: module._close_descriptors(descriptors, owner, **kwargs))
+    assert escaped is None and closed == [72, 71] and descriptors == []
+    assert result is ((not failing) if b1 else None)
+    assert owner.error == "timeout"
+    empty, escaped = _prerequisite_call(monkeypatch, [(os, "close", close)],
+        lambda patch: module._close_descriptors(descriptors, owner, **kwargs))
+    assert escaped is None and empty is (True if b1 else None) and closed == [72, 71]
+
+
+@pytest.mark.parametrize("stage", ["clock", "clock_after_reap", "reap", "signal", "sleep", "none"])
+@pytest.mark.parametrize("batch_failure", [False, True])
+def test_b1_prerequisite_emergency_process_exception_wins_after_complete_fd_batch(monkeypatch, stage, batch_failure):
+    module = _load_source("_b1_emergency_exceptions", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = module._B1Budget(0.0)
+    owner = module._Owner(budget=budget)
+    owner._begin_cleanup(100.0)
+    owner.reject("timeout")
+    pipes = {"stdout": 71, "stderr": 72, "control": 73}
+    events = []
+    first, second = RuntimeError("process first"), SystemExit(0)
+    reaped = [False]
+    def clock():
+        events.append(("clock",))
+        if stage == "clock" or (stage == "clock_after_reap" and reaped[0]):
+            raise first
+        return 100.0
+    def reap():
+        events.append(("reap",))
+        reaped[0] = True
+        if stage == "reap":
+            raise first
+        return stage == "none"
+    def signal_children(sig):
+        events.append(("signal", sig))
+        if stage == "signal":
+            raise first
+    def sleep(seconds):
+        events.append(("sleep",))
+        raise first
+    def close(fd):
+        assert pipes == {}
+        events.append(("close", fd))
+        if batch_failure and fd == 72:
+            raise second
+    def forbidden(*args, **kwargs):
+        raise AssertionError("emergency 미지정 syscall")
+    targets = [(time, "monotonic", clock), (time, "sleep", sleep), (owner, "reap", reap),
+               (owner, "signal_children", signal_children), (os, "close", close),
+               (os, "waitpid", forbidden), (os, "fork", forbidden), (os, "pidfd_open", forbidden),
+               (module.signal, "pidfd_send_signal", forbidden)]
+    result, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._emergency_cleanup(owner, pipes, b1=True))
+    assert escaped is (first if stage != "none" else second if batch_failure else None)
+    if stage == "none" and not batch_failure:
+        assert result is True
+    assert [event for event in events if event[0] == "close"] == [("close", 73), ("close", 72), ("close", 71)]
+    assert events.count(("reap",)) == 1 and pipes == {}
+    if stage in ("clock", "clock_after_reap", "reap"):
+        assert not any(event[0] in ("signal", "sleep") for event in events)
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+    assert owner.error == "timeout" and owner.returncode is None
+
+
+@pytest.mark.parametrize("b1", [False, True])
+def test_b1_prerequisite_emergency_oserror_status_does_not_follow_budget_presence(monkeypatch, b1):
+    module = _load_source("_b1_emergency_status", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = module._B1Budget(0.0)
+    budget.begin_cleanup(100.0)
+    owner = module._Owner(budget=budget)
+    owner.reject("timeout")
+    pipes, closed = {"stdout": 71, "stderr": 72}, []
+    def close(fd):
+        closed.append(fd)
+        if fd == 72:
+            raise OSError(5, "close")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("completed reap 이후 process syscall")
+    targets = [(time, "monotonic", lambda: 100.0), (owner, "reap", lambda: True), (os, "close", close),
+               (time, "sleep", forbidden), (owner, "signal_children", forbidden),
+               (os, "waitpid", forbidden), (os, "fork", forbidden), (os, "pidfd_open", forbidden),
+               (module.signal, "pidfd_send_signal", forbidden)]
+    kwargs = {"b1": True} if b1 else {}
+    result, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._emergency_cleanup(owner, pipes, **kwargs))
+    assert escaped is None and result is (False if b1 else None)
+    assert closed == [72, 71] and pipes == {} and owner.error == "timeout"
+
+
+@pytest.mark.parametrize("which", ["batch", "emergency", "bounds"])
+@pytest.mark.parametrize("value", [None, 0, 1, "true", []])
+def test_b1_prerequisite_exact_bool_modes_reject_before_any_effect(monkeypatch, which, value):
+    module = _load_source("_b1_prerequisite_invalid_mode", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    owner = module._Owner(budget=module._B1Budget(0.0))
+    descriptors, pipes, events = [71], {"stdout": 72}, []
+    def forbidden(*args, **kwargs):
+        events.append("unexpected")
+        raise AssertionError("invalid b1 이전 부작용")
+    targets = [(os, "open", forbidden), (os, "close", forbidden), (time, "monotonic", forbidden),
+               (owner, "reap", forbidden), (owner, "signal_children", forbidden),
+               (os, "waitpid", forbidden), (os, "fork", forbidden), (os, "pidfd_open", forbidden),
+               (module.signal, "pidfd_send_signal", forbidden), (time, "sleep", forbidden)]
+    def invoke(patch):
+        if which == "batch":
+            return module._close_descriptors(descriptors, owner, b1=value)
+        if which == "emergency":
+            return module._emergency_cleanup(owner, pipes, b1=value)
+        return module._BoundPaths([], b1=value)
+    _, escaped = _prerequisite_call(monkeypatch, targets, invoke)
+    assert isinstance(escaped, ValueError)
+    assert events == [] and descriptors == [71] and pipes == {"stdout": 72}
+    assert owner.error is None and owner.finish_end is None
+
+
+@pytest.mark.parametrize("precondition", ["no_budget", "no_interval", "no_term", "owner_none", "owner_different"])
+def test_b1_prerequisite_emergency_requires_caller_initialized_interval(monkeypatch, precondition):
+    module = _load_source("_b1_emergency_preconditions", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = None if precondition == "no_budget" else module._B1Budget(0.0)
+    if precondition == "no_term":
+        budget.cleanup_end = 103.0
+    owner = module._Owner(budget=budget)
+    if precondition in ("owner_none", "owner_different"):
+        budget.begin_cleanup(100.0)
+        if precondition == "owner_different":
+            owner.finish_end = 102.0
+    pipes, events = {"stdout": 71}, []
+    def forbidden(*args, **kwargs):
+        events.append("unexpected")
+        raise AssertionError("uninitialized cleanup 부작용")
+    before = owner.finish_end
+    before_budget = None if budget is None else (budget.cleanup_end, budget.term_end)
+    _, escaped = _prerequisite_call(monkeypatch,
+        [(time, "monotonic", forbidden), (os, "close", forbidden), (owner, "reap", forbidden),
+         (owner, "signal_children", forbidden), (os, "waitpid", forbidden), (os, "fork", forbidden),
+         (os, "pidfd_open", forbidden), (module.signal, "pidfd_send_signal", forbidden),
+         (time, "sleep", forbidden)],
+        lambda patch: module._emergency_cleanup(owner, pipes, b1=True))
+    assert isinstance(escaped, ValueError)
+    assert events == [] and pipes == {"stdout": 71} and owner.error is None
+    assert owner.finish_end == before
+    assert (None if budget is None else (budget.cleanup_end, budget.term_end)) == before_budget
+
+
+def _prerequisite_fs_call(monkeypatch, operation, *, bounds=False):
+    module = _load_source("_b1_prerequisite_filesystem", "pytest_evidence_controller.py")
+    import os
+    import time
+    import tempfile
+    import subprocess
+
+    names = ("open", "close", "fstat", "stat", "listdir", "rmdir", "dup", "fdopen", "getuid",
+             "read", "write", "unlink", "remove", "rename", "chmod", "mkdir", "fork", "_exit",
+             "lstat", "scandir", "pidfd_open", "getenv")
+    targets = [(os, name, getattr(os, name)) for name in names]
+    targets += [(time, "monotonic", time.monotonic), (time, "sleep", time.sleep),
+                (tempfile, "mkdtemp", tempfile.mkdtemp), (fcntl, "flock", fcntl.flock),
+                (subprocess, "Popen", subprocess.Popen)]
+    def invoke(patch):
+        calls = _CoordinationSyscalls(patch, bound_paths=bounds)
+        if bounds:
+            patch.setattr(module, "ROOT", Path("/fixture"))
+            calls.metadata["/fixture/a/output"] = SimpleNamespace(st_dev=7, st_ino=900,
+                st_mode=0o100600, st_uid=1001, st_nlink=1)
+        return operation(module, calls)
+    return _prerequisite_call(monkeypatch, targets, invoke)
+
+
+@pytest.mark.parametrize("b1", [False, True])
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("failed_fd", [72, 74])
+@pytest.mark.parametrize("error_type", [SystemExit, KeyboardInterrupt, RuntimeError])
+def test_b1_prerequisite_bounds_retained_batch_and_literal_default_escape(monkeypatch, b1, strict, failed_fd, error_type):
+    data = {}
+    failure = error_type(0)
+    def script(module, calls):
+        kwargs = {"b1": True} if b1 else {}
+        bounds = module._BoundPaths([Path("/fixture/a/one"), Path("/fixture/a/two")], **kwargs)
+        data.update(bounds=bounds, calls=calls, start=len(calls.events))
+        calls.errors[("close", failed_fd)] = failure
+        result = bounds.close(strict=strict)
+        data["end"] = len(calls.events)
+        data["repeat"] = bounds.close(strict=True)
+        return result
+    result, escaped = _prerequisite_fs_call(monkeypatch, script, bounds=True)
+    bounds, calls = data["bounds"], data["calls"]
+    closes = [event[1] for event in calls.events[data["start"]:] if event[0] == "close"]
+    assert bounds.controller_fds() == ()
+    if b1:
+        assert escaped is None and result is (False if strict else None)
+        assert closes == [72, 74, 70] and calls.live == {}
+        assert bounds.close_failed is True and data["repeat"] is False
+        assert len(calls.events) == data["end"]
+    else:
+        assert escaped is failure and bounds.close_failed is False
+        assert closes == ([72] if failed_fd == 72 else [72, 74])
+        assert sorted(calls.live) == ([70, 74] if failed_fd == 72 else [70])
+
+
+@pytest.mark.parametrize("b1", [False, True])
+@pytest.mark.parametrize("temporary_failure", [False, True])
+def test_b1_prerequisite_bounds_constructor_preserves_received_exception_after_owned_cleanup(monkeypatch, b1, temporary_failure):
+    data = {}
+    operation, temporary, retained = FileNotFoundError(2, "component A"), SystemExit(0), RuntimeError("retained C")
+    def script(module, calls):
+        observed = []
+        class Observed(module._BoundPaths):
+            def close(self, *, strict=False):
+                observed.append(self)
+                return super().close(strict=strict)
+        calls.errors[("open", "/fixture/b")] = operation
+        calls.errors[("close", 72)] = retained
+        if temporary_failure:
+            calls.errors[("close", 73)] = temporary
+        data.update(calls=calls, observed=observed)
+        kwargs = {"b1": True} if b1 else {}
+        return Observed([Path("/fixture/a/one"), Path("/fixture/b/two")], **kwargs)
+    _, escaped = _prerequisite_fs_call(monkeypatch, script, bounds=True)
+    calls, bounds = data["calls"], data["observed"][0]
+    assert escaped is ((temporary if temporary_failure else operation) if b1 else retained)
+    assert bounds.controller_fds() == ()
+    assert [event[1] for event in calls.events if event[0] == "close"] == ([71, 73, 72, 70] if b1 else [71, 73, 72])
+    assert bounds.close_failed is b1
+    assert sorted(calls.live) == ([] if b1 else [70])
+
+
+@pytest.mark.parametrize("b1", [False, True])
+@pytest.mark.parametrize("method", ["walk", "open", "create"])
+def test_b1_prerequisite_bounds_temporary_close_keeps_exception_replacement_priority(monkeypatch, b1, method):
+    data = {}
+    operation, closing = OSError(5, "operation A"), KeyboardInterrupt("close B")
+    def script(module, calls):
+        kwargs = {"b1": True} if b1 else {}
+        bounds = module._BoundPaths([Path("/fixture/a/output")], **kwargs)
+        data.update(calls=calls, bounds=bounds)
+        if method == "walk":
+            calls.errors[("open", "/fixture/a")] = operation
+            calls.errors[("close", 73)] = closing
+            invoke = lambda: bounds._walk(Path("/fixture/a"))
+        elif method == "open":
+            calls.errors[("fstat", "/fixture/a")] = operation
+            calls.errors[("close", 74)] = closing
+            invoke = lambda: bounds.open(Path("/fixture/a/output"), 0)
+        else:
+            calls.errors[("fdopen", 75)] = operation
+            calls.errors[("close", 75)] = closing
+            invoke = lambda: bounds.create(Path("/fixture/a/output"))
+        try:
+            invoke()
+        except BaseException as error:
+            data["error"] = error
+        data["sticky"] = bounds.close_failed
+        data["snapshot"] = bounds.controller_fds()
+        data["strict"] = bounds.close(strict=True)
+    _, escaped = _prerequisite_fs_call(monkeypatch, script, bounds=True)
+    assert escaped is None and data["error"] is closing
+    assert data["sticky"] is b1 and data["strict"] is (not b1)
+    assert data["snapshot"] == (70, 72) and data["calls"].live == {}
+    closes = [event[1] for event in data["calls"].events if event[0] == "close"]
+    assert len(closes) == len(set(closes))
+
+
+def test_b1_prerequisite_bounds_root_open_escape_has_no_invented_close(monkeypatch):
+    failure = SystemExit(0)
+    data = {}
+    def script(module, calls):
+        data["calls"] = calls
+        calls.errors[("open", "/fixture")] = failure
+        return module._BoundPaths([], b1=True)
+    _, escaped = _prerequisite_fs_call(monkeypatch, script, bounds=True)
+    assert escaped is failure
+    assert data["calls"].live == {}
+    assert not any(event[0] == "close" for event in data["calls"].events)
+
+
+@pytest.mark.parametrize("where", ["first_directory", "middle_directory", "unlock", "lock_close"])
+@pytest.mark.parametrize("error_type", [SystemExit, KeyboardInterrupt, RuntimeError])
+@pytest.mark.parametrize("prelatched", [False, True])
+def test_b1_prerequisite_coordination_baseexception_batch_is_sticky_and_lock_last(monkeypatch, where, error_type, prelatched):
+    failure = error_type(0)
+    data = {}
+    def script(module, calls):
+        coordination = module._B1Coordination()
+        coordination.acquire_lock([False], module._B1Budget(0.0))
+        coordination.prepare_fake_key()
+        if prelatched:
+            coordination.acquire_lock([False], module._B1Budget(0.0))
+        owned = coordination.controller_fds()
+        lock = next(fd for fd in owned if calls.live[fd][0] == _LOCK_LITERAL)
+        directories = sorted(set(owned) - {lock})
+        target = lock if where in ("unlock", "lock_close") else directories[0 if where == "first_directory" else 1]
+        calls.errors[("flock" if where == "unlock" else "close", target)] = failure
+        def detached(event):
+            if event[0] in ("flock", "close"):
+                assert coordination.controller_fds() == ()
+        calls.on_event = detached
+        data.update(calls=calls, coordination=coordination, owned=owned, lock=lock, start=len(calls.events))
+        data["result"] = coordination.close()
+        data["end"] = len(calls.events)
+        data["repeat"] = coordination.close()
+    _, escaped = _prerequisite_fs_call(monkeypatch, script)
+    assert escaped is None and data["result"] is False and data["repeat"] is False
+    coordination, calls = data["coordination"], data["calls"]
+    events = calls.events[data["start"]:]
+    assert sorted(event[1] for event in events if event[0] == "close") == list(data["owned"])
+    assert events[-2:] == [("flock", data["lock"], 8), ("close", data["lock"], _LOCK_LITERAL)]
+    assert coordination.close_failed is True and coordination.error == ("startup_error" if prelatched else "io_error")
+    assert len(calls.events) == data["end"] and calls.live == {}
+    assert not any(event[0] in ("stat", "rmdir", "mkdtemp", "open") for event in events)
+
+
+@pytest.mark.parametrize("phase", ["acquire", "check"])
+def test_b1_prerequisite_coordination_temporary_baseexception_records_and_reraises(monkeypatch, phase):
+    failure = SystemExit(0)
+    data = {}
+    def script(module, calls):
+        coordination = module._B1Coordination()
+        budget = module._B1Budget(0.0)
+        if phase == "check":
+            coordination.acquire_lock([False], budget)
+        failed = []
+        def fail_once(event):
+            if event[0] == "close" and not failed:
+                failed.append(event[1])
+                raise failure
+        calls.on_event = fail_once
+        try:
+            coordination.acquire_lock([False], budget) if phase == "acquire" else coordination.check_lock_identity()
+        except BaseException as error:
+            data["error"] = error
+        calls.on_event = lambda event: None
+        data.update(coordination=coordination, calls=calls, failed=failed,
+                    snapshot=coordination.controller_fds(), result=coordination.close())
+    _, escaped = _prerequisite_fs_call(monkeypatch, script)
+    assert escaped is None and data["error"] is failure
+    assert data["coordination"].close_failed is True and data["coordination"].error == "io_error"
+    assert data["result"] is False and data["calls"].live == {}
+    assert len(data["failed"]) == 1 and data["failed"][0] not in data["snapshot"]
+    assert len([event for event in data["calls"].events if event[:2] == ("close", data["failed"][0])]) == 1
+
+
+@pytest.mark.parametrize("stage", ["reap", "sleep", "close"])
+def test_b1_prerequisite_default_emergency_keeps_immediate_exception_and_pipe_ownership(monkeypatch, stage):
+    module = _load_source("_b1_default_emergency_literal", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = module._B1Budget(0.0)
+    budget.begin_cleanup(100.0)
+    owner = module._Owner(budget=budget)
+    pipes, events = {"stdout": 71, "stderr": 72}, []
+    failure = RuntimeError("legacy immediate")
+    def reap():
+        events.append("reap")
+        if stage == "reap":
+            raise failure
+        return stage == "close"
+    def sleep(seconds):
+        events.append("sleep")
+        raise failure
+    def close(fd):
+        events.append(("close", fd))
+        raise failure
+    def forbidden(*args, **kwargs):
+        raise AssertionError("default emergency 미지정 syscall")
+    targets = [(time, "monotonic", lambda: 100.0), (time, "sleep", sleep),
+               (owner, "reap", reap), (owner, "signal_children", lambda sig: events.append(("signal", sig))),
+               (os, "close", close), (os, "waitpid", forbidden), (os, "fork", forbidden),
+               (os, "pidfd_open", forbidden), (module.signal, "pidfd_send_signal", forbidden)]
+    _, escaped = _prerequisite_call(monkeypatch, targets, lambda patch: module._emergency_cleanup(owner, pipes))
+    assert escaped is failure
+    assert pipes == ({} if stage == "close" else {"stdout": 71, "stderr": 72})
+    assert [event for event in events if type(event) is tuple and event[0] == "close"] == ([("close", 72)] if stage == "close" else [])
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+
+
+def test_b1_prerequisite_default_probe_parent_exception_does_not_gain_emergency(monkeypatch):
+    module = _load_source("_b1_default_probe_parent", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    failure = RuntimeError("legacy reap")
+    events = []
+    def reap(owner):
+        events.append("reap")
+        raise failure
+    def forbidden(*args, **kwargs):
+        raise AssertionError("legacy 경로에 새 cleanup/syscall")
+    targets = [(os, "fork", lambda: 41), (time, "monotonic", lambda: 100.0),
+               (module._Owner, "reap", reap), (module, "_emergency_cleanup", forbidden),
+               (os, "waitpid", forbidden), (os, "pidfd_open", forbidden),
+               (module.signal, "pidfd_send_signal", forbidden), (time, "sleep", forbidden)]
+    _, escaped = _prerequisite_call(monkeypatch, targets, lambda patch: module._probe(896.0, [False]))
+    assert escaped is failure and events == ["reap"]
+
+
+def test_b1_prerequisite_emergency_at_fixed_end_only_closes_owned_pipes(monkeypatch):
+    module = _load_source("_b1_emergency_expired_interval", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = module._B1Budget(0.0)
+    owner = module._Owner(budget=budget)
+    owner._begin_cleanup(100.0)
+    pipes, closed = {"stdout": 71, "stderr": 72}, []
+    def forbidden(*args, **kwargs):
+        raise AssertionError("cleanup equality에서 새 process 작업")
+    targets = [(time, "monotonic", lambda: 103.0), (time, "sleep", forbidden),
+               (owner, "reap", forbidden), (owner, "signal_children", forbidden),
+               (os, "waitpid", forbidden), (os, "pidfd_open", forbidden),
+               (module.signal, "pidfd_send_signal", forbidden), (os, "close", closed.append)]
+    result, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._emergency_cleanup(owner, pipes, b1=True))
+    assert escaped is None and result is True
+    assert closed == [72, 71] and pipes == {}
+    assert owner.error == "cleanup_error" and owner.returncode is None
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+
+
+def test_b1_prerequisite_coordination_unheld_leaf_never_unlocks_after_baseexception(monkeypatch):
+    data = {}
+    failure = SystemExit(0)
+    def script(module, calls):
+        coordination = module._B1Coordination()
+        calls.flocks = [OSError(5, "acquisition failed")]
+        coordination.acquire_lock([False], module._B1Budget(0.0))
+        owned = coordination.controller_fds()
+        lock = next(fd for fd in owned if calls.live[fd][0] == _LOCK_LITERAL)
+        calls.errors[("close", lock)] = failure
+        data.update(calls=calls, coordination=coordination, owned=owned, start=len(calls.events))
+        return coordination.close()
+    result, escaped = _prerequisite_fs_call(monkeypatch, script)
+    assert escaped is None and result is False
+    events = data["calls"].events[data["start"]:]
+    assert not any(event[0] == "flock" for event in events)
+    assert sorted(event[1] for event in events if event[0] == "close") == list(data["owned"])
+    assert data["calls"].live == {} and data["coordination"].close_failed is True
+    assert data["coordination"].error == "startup_error"
+
+
+def test_b1_prerequisite_default_emergency_syncs_later_initialized_shared_budget(monkeypatch):
+    module = _load_source("_b1_default_late_budget", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = module._B1Budget(0.0)
+    owner = module._Owner(budget=budget)
+    budget.begin_cleanup(100.0)
+    assert owner.finish_end is None and (budget.cleanup_end, budget.term_end) == (103.0, 101.0)
+    pipes, events = {"stdout": 71}, []
+    def forbidden(*args, **kwargs):
+        raise AssertionError("legacy late budget 미지정 syscall")
+    targets = [(time, "monotonic", lambda: 102.0), (owner, "reap", lambda: True),
+               (os, "close", lambda fd: events.append(("close", fd))), (time, "sleep", forbidden),
+               (owner, "signal_children", forbidden), (os, "waitpid", forbidden), (os, "fork", forbidden),
+               (os, "pidfd_open", forbidden), (module.signal, "pidfd_send_signal", forbidden)]
+    result, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._emergency_cleanup(owner, pipes))
+    assert escaped is None and result is None and pipes == {} and events == [("close", 71)]
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+
+
+def test_b1_prerequisite_emergency_failed_first_clock_keeps_priority_over_fallback_reap(monkeypatch):
+    module = _load_source("_b1_emergency_clock_and_reap", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    owner = module._Owner(budget=module._B1Budget(0.0))
+    owner._begin_cleanup(100.0)
+    first, second = RuntimeError("first clock"), SystemExit(0)
+    pipes, events = {"stdout": 71, "stderr": 72}, []
+    def clock():
+        events.append("clock")
+        raise first
+    def reap():
+        events.append("reap")
+        raise second
+    def forbidden(*args, **kwargs):
+        raise AssertionError("failed clock 뒤 stale-time 작업")
+    targets = [(time, "monotonic", clock), (owner, "reap", reap),
+               (os, "close", lambda fd: events.append(("close", fd))), (time, "sleep", forbidden),
+               (owner, "signal_children", forbidden), (os, "waitpid", forbidden), (os, "fork", forbidden),
+               (os, "pidfd_open", forbidden), (module.signal, "pidfd_send_signal", forbidden)]
+    _, escaped = _prerequisite_call(monkeypatch, targets,
+        lambda patch: module._emergency_cleanup(owner, pipes, b1=True))
+    assert escaped is first and events == ["clock", "reap", ("close", 72), ("close", 71)]
+    assert pipes == {} and owner.finish_end == 103.0 and owner._budget.term_end == 101.0
