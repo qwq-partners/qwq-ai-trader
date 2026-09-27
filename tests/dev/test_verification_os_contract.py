@@ -328,7 +328,7 @@ def test_matching_source_proof_or_nonlocal_receipt_is_rejected_by_controlled_sco
     "mutate",
     [
         lambda expected: expected.__setitem__("unknown", 1),
-        lambda expected: expected.pop("verification"),
+        lambda expected: expected.__delitem__("verification"),
         lambda expected: [],
         lambda expected: expected["process_identity"].__setitem__("controller", "A" * 64),
         lambda expected: expected["process_identity"].__setitem__("controller", "a" * 63),
