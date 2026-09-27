@@ -18,10 +18,14 @@ Independent plan review is complete; exact implementation dispatch and every acc
 
 Coordinator checkpoint: Task1 contract367, Task2a parser/bootstrap170, and Task3a
 budget/probe/cleanup219 focused cases have scoped independent acceptance. Task3b
-coordination has a valid constructor RED after repairing a preserved harness
-failure; its remaining independent matrix precedes implementation. Output-only
-Task3c is approved for tests-first, main/finalization Task3d still requires its
-own review. MainB1 remains125 and Task4 has not run. Historical checklist items
+coordination2f5c9c5 has333 focused passes and scoped non-author component approval;
+prepare/finish temporary-close rows are source-confirmed N/A, not runtime passes.
+The earlier harness failure is preserved and not counted as intended RED.
+Output-only Task3c has independent first RED and frozen531-line tests; source is
+in progress. Task3d proposal review requires separate probe exception/child-terminal
+and helper BaseException-cleanup prerequisites plus exact mixed-exit classification.
+These new stronger main guarantees do not retroactively broaden Task3a/3b approval.
+MainB1 remains125 and Task4 has not run. Historical checklist items
 below describe whole packages, not permission to infer completed profile acceptance.
 
 Separate approved compatibility exception: only the oversized OS-test parameter

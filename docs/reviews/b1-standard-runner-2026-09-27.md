@@ -1,6 +1,6 @@
 # B1 표준 실행기 — 별도 프로필 진행 원장
 
-2026-09-27 KST. **순수 계약·인자·시간 예산 adapter 부분 구현/검토 완료, 실제 프로필 검증 전이다.**
+2026-09-27 KST. **순수 계약·인자·시간 예산·coordination 부분 구현/검토 완료, 실제 프로필 검증 전이다.**
 [설계](../superpowers/specs/2026-09-27-b1-standard-runner-design.md)와
 [계획](../superpowers/plans/2026-09-27-b1-standard-runner.md)을 따른다.
 
@@ -53,8 +53,28 @@ Task3b의 예외 우선순위·정리 lifecycle 설계는 지적 보완 뒤 독�
 Task3b 최초 constructor 시험2b6cae0는 전역 syscall trap이 pytest의 종료 처리까지
 막는 시험장치 결함으로 exit1이었다. 의도한 missing-class RED 또는 격리0으로
 세지 않는다. 원문을 보존하고 trap을 test-body context로 제한한9d6f0f9에서 정상
-missing-class RED(1 failed/0.33s·격리0)를 확인했다. 그 뒤 독립 상태/예외 행렬 작성을
-재개했으며 coordination source는 아직 없다. 성능 예외로 처리하지 않는다.
+missing-class RED(1 failed/0.33s·격리0)를 확인했다. 성능 예외로 처리하지 않는다.
+
+독립 상태/예외 행렬873fc189(+918줄) 뒤 source-only2f5c9c5에서 원래 constructor
+1 passed/0.50s, 전체 controller focused **333 passed/38.18s**·격리0·세 exit0을
+확인했다. 비작성자 critical 리뷰는 `READY_FOR_TASK3B_COMPONENT_ACCEPTANCE`,
+P0/P1/P2 지적0이다. prepare/finish의 temporary-close 두 조건부 항목은 해당 소스
+경로에 임시 FD close가 없음을 독립 확인해 N/A로 닫았다(PASS/skip/면제가 아님).
+expected OSError 처리·기존 예외 우선순위·lock-last close에 한정하며 BaseException
+전체 정리나 main 실행을 승인하지 않는다. 원문은 `task-3b-focused-evidence.md`와
+`task-3b-independent-review.md`에 보존한다.
+
+Task3c 출력 전용 시험55bc822의 첫 node는 미구현 profile 인자의 정상 call-phase
+TypeError로 RED(1 failed/0.62s·격리0·workload1/tee0/tool1)다. 후속44fb2a4까지
+총531줄의 독립 시험을 고정하고 별도 source 작성자에게 넘겼다. root가 전체 diff를
+읽었으며 구현 GREEN·최종 source 검토는 아직 미완료다.
+
+Task3d main/finalization 제안의 독립 리뷰는 P1 두 건, P2 한 건으로 변경 요청이다.
+probe 예외 시 정리 소유권·fork 자식의 부모 정리 진입 차단, helper가 FD 목록을
+비운 뒤 BaseException이 나도 남은 close를 시도하는 보장, 종료 실패가 겹칠 때
+124/125 분류가 보완 대상이다. 기존 Task3a/3b의 기대 OSError 범위를 소급 실패로
+바꾸지 않고, main의 더 강한 보장에 필요한 별도 tests-first 선행 작업으로 처리한다.
+제안 수정 중이며 B1 main125 차단은 유지한다.
 
 실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
 제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/
