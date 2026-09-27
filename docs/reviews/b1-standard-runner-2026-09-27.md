@@ -21,7 +21,11 @@ monotonic 전후 관측·연결된 원문을 이용한 보수적 상한으로 �
 
 독립 literal 계약 시험/RED → 순수 v2 검사 → 별도 controller/독립 시험 → critical 검토
 → worker 종료 후 실제 소규모 프로필 관측 → 기존 표준 전체 UTC/KST 순서다.
-지금은 코드·시계 관측·새 프로필 시험 성공을 주장하지 않는다. 원문은
+독립 tests-only `4534e44`의 첫 node는 의도된 새 API 부재의 call-phase
+AttributeError로 실패했다(1 failed/0.16s, workload1/tee0/tool1·격리0).
+수집/임포트 오류가 아니며 순수 계약 구현으로 진행했다. 원문과 분류는
+후속 원장의 `first-contract-red-evidence.md` 및 raw log에 보존한다.
+계약 GREEN·controller 변경·시계 관측·새 프로필 인수 성공을 아직 주장하지 않는다. 원문은
 `.superpowers/sdd/2026-09-27-decoder-followup/`에, 후속 실행 원장은
 `.superpowers/sdd/2026-09-27-b1-standard-runner/`에 보존한다.
 
