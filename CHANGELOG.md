@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-28 — 미국 거래 영구 중단 반영 (`--market` 기본값 kr)
+
+- 사용자 결정으로 미국 증권 거래를 영구 중단한다. 운영 systemd 는 이미 `--market kr` 로 기동 중이라 동작 변경은 없고, `scripts/run_trader.py` 의 `--market` 기본값을 `both` → `kr` 로 바꿔 수동 기동 실수로 US 엔진이 켜지는 일을 막는다(`us`/`both` 는 명시 시에만). CLAUDE.md US 전략 절에 중단 사실과 "US 시험·적용은 예외 처리" 규칙을 명시. `config/default.yml` 의 `us:` 섹션과 `us_market_expert`(KR 레짐 입력)는 유지.
+- 참고: 09-23 점검에서 발견한 LLM 종가점검 매도의 일지 사유 오기록(`fill_detected`)은 `3dee0e2`(PR #92) 로 이미 수정·배포됨(운영 a454277, 09-26 06:36 기동) — 이 PR 범위 아님.
+
 ## 2026-09-23 — ops: main `e5ae602` 사후 점검 완료 (PR #90/#91 병합·배포)
 
 - PR #90 `4db5141` 및 PR #91 `e5ae6026b54af3e7efef5e692ba8772390dd03f4`를 병합했다. #91 required CI
