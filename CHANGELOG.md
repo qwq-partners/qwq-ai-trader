@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — 실행기 공통 경로 부품 검증
+
+- 별도 후보dfcf5e6에서 기존 v1과 B1이 같은 owner/자식 실행 경로를 사용하도록 구현하고 종료·정리·결과 발행 실패의 우선순위를 고정했다. 공개 B1 main125 차단은 별도 활성화 검증 전까지 유지한다.
+- 독립 시험1353줄과 관측 횟수 보완 뒤 최초 사례/후속 빈 정리 경로4 passed, 새·기존 controller757 passed/52.43s·격리0·exit0을 확인했다. 비작성자 critical source/evidence 리뷰는 미해결 지적0으로 공통 경로 부품만 인수했다.
+- 다음은 최소 공개 차단 해제 tests-first와 실제 프로세스 시험이다. runner 최종 feature 통합·실제 profile·결합 전체·native·운영 인수와 구분한다. [실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md).
+
 ## 2026-09-27 — 실행기 예외 정리 선행 부품 검증
 
 - B1의 probe 자식 terminal 처리·단일 owner 예외 정리, FD batch·잠금 해제·부분 생성 실패의 BaseException 처리를 구현했다. 기본 v1 의미는 보존했고 공개 B1 main125는 그대로다.

@@ -114,6 +114,15 @@ RED로 실패했다(1 failed/1.16s·격리0·workload1/tee0/tool1). 이후 동�
 source-only 공통 경로 구현을 시작하며 공개125 차단은 유지한다. 원문은
 `task-3d-main-first-red-evidence.md`, `task-3d-main-matrix-review.md`에 보존한다.
 
+이후 source95bdb1f(+437/-39)로 단일 owner/Popen 경로를 공유하고 기존 v1의
+catch/finally·argv/env·결과 형식을 보존했다. 실제 후속 빈 close batch를 확인한
+tests-only dfcf5e6(+2)까지 결합해 원래 node와 실패 상태3건 **4 passed/1.47s**,
+새·기존 controller 전체 **757 passed/52.43s**·격리0·세 exit0이다. 독립 검토는
+`READY_TASK3D_SHARED_MAIN_COMPONENT_ONLY`, P0/P1/P2 각각0이며 정리 소유권·
+복합 종료·결과 발행·v1 보존과 조건부 oracle를 인수했다. 공개 B1 차단 해제,
+copied 실제 프로세스·원형 profile·결합 UTC/KST 전체 검증은 다음 별도 단계다.
+원문은 `task-3d-main-focused-evidence.md`, `task-3d-main-source-independent-review.md`다.
+
 후속 경계 검토에서 최초 시계 읽기가 모드 판별보다 앞이라 내부 함수의 hard125
 보장에 포함될 수 없음을 확인했다. 독립 정책 리뷰 후 기존 진입 순서·예외 전파는
 보존하고 hard125 약속은 검증된 내부 실행 진입 이후로 명시했다. 최초 SystemExit(0)
