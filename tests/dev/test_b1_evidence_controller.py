@@ -1,6 +1,8 @@
 """B1 실행 경계의 독립 리터럴 시험. 이 파일은 실제 자식을 만들지 않는다."""
 
+import fcntl
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -351,3 +353,388 @@ def test_b1_budget_keeps_one_inclusive_deadline_and_first_cleanup_window():
     assert budget.cleanup_end == 203.0
     assert budget.term_end == 201.0
     assert (budget.total_end, budget.run_end) == (1000.0, 996.0)
+
+
+def _clock_trace(module, monkeypatch, points):
+    """시계 읽기 횟수와 무관하게 sleep 경계에서만 독립 리터럴 시각으로 진행한다."""
+    now = [points[0]]
+    remaining = list(points[1:])
+
+    def sleep(_seconds):
+        assert remaining, "고정 시각 trace를 넘겨 계속 대기함"
+        now[0] = remaining.pop(0)
+
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(module.time, "sleep", sleep)
+    return now
+
+
+class _ProbeExit(BaseException):
+    def __init__(self, code):
+        self.code = code
+
+
+def _probe_adapters(module, monkeypatch, now, *, child=False):
+    """fork/wait/close/exit/signals는 합성 경계만 사용하며 /proc도 읽지 않는다."""
+    events = []
+
+    def fork():
+        events.append(("fork",))
+        return 0 if child else 41
+
+    def exit_child(code):
+        events.append(("exit", code))
+        raise _ProbeExit(code)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("지정하지 않은 probe syscall 또는 unlock에 도달함")
+
+    monkeypatch.setattr(module.os, "fork", fork)
+    monkeypatch.setattr(module.os, "_exit", exit_child)
+    monkeypatch.setattr(module.os, "close", lambda fd: events.append(("close", fd)))
+    monkeypatch.setattr(module.os, "waitpid", forbidden)
+    monkeypatch.setattr(module.os, "pidfd_open", forbidden)
+    monkeypatch.setattr(module.signal, "pidfd_send_signal", forbidden)
+    monkeypatch.setattr(module._Owner, "signal_children", lambda self, sig: events.append(("signal", now[0], sig)))
+    monkeypatch.setattr(fcntl, "flock", forbidden)
+    return events
+
+
+@pytest.mark.parametrize(("cleanup_at", "cleanup_end", "term_end"), [
+    (200.0, 203.0, 201.0),
+    (995.0, 998.0, 996.0),
+    (996.0, 999.0, 997.0),
+    (997.0, 999.0, 998.0),
+    (998.0, 999.0, 999.0),
+    (998.5, 999.0, 999.0),
+    (999.0, 999.0, 999.0),
+    (1000.0, 999.0, 999.0),
+    (1001.0, 999.0, 999.0),
+])
+def test_b1_budget_clamps_cleanup_and_term_without_extending_total(cleanup_at, cleanup_end, term_end):
+    module = _load_source("_b1_budget_boundaries", "pytest_evidence_controller.py")
+    budget = module._B1Budget(100.0)
+    budget.begin_cleanup(cleanup_at)
+    assert (budget.total_end, budget.run_end) == (1000.0, 996.0)
+    assert (budget.cleanup_end, budget.term_end) == (cleanup_end, term_end)
+    budget.begin_cleanup(1005.0)
+    assert (budget.cleanup_end, budget.term_end) == (cleanup_end, term_end)
+
+
+@pytest.mark.parametrize("snapshot", [None, [71, 72], {71, 72}, (71, 71), (True,), (-1,), (71.0,), ("71",)])
+def test_b1_probe_invalid_fd_snapshot_rejected_before_any_fork_or_close(monkeypatch, snapshot):
+    module = _load_source("_b1_probe_bad_fds", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (0.0,))
+    events = _probe_adapters(module, monkeypatch, now)
+    budget = module._B1Budget(0.0)
+    try:
+        result = module._probe(896.0, [False], budget=budget, controller_fds=snapshot)
+    except ValueError:
+        result = False
+    assert result is False
+    assert events == []
+
+
+def test_b1_probe_fd_snapshot_rejects_tuple_and_integer_subclasses(monkeypatch):
+    class Descriptor(int):
+        pass
+
+    class Snapshot(tuple):
+        pass
+
+    module = _load_source("_b1_probe_fd_types", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (0.0,))
+    events = _probe_adapters(module, monkeypatch, now)
+    for snapshot in (Snapshot((71,)), (Descriptor(71),)):
+        try:
+            result = module._probe(896.0, [False], budget=module._B1Budget(0.0), controller_fds=snapshot)
+        except ValueError:
+            result = False
+        assert result is False
+    assert events == []
+
+
+@pytest.mark.parametrize(("snapshot", "expected_events"), [
+    ((), [("fork",), ("exit", 23)]),
+    ((71, 72), [("fork",), ("close", 71), ("close", 72), ("exit", 23)]),
+    ((0, 72), [("fork",), ("close", 0), ("close", 72), ("exit", 23)]),
+])
+def test_b1_probe_child_closes_exact_owned_snapshot_before_exit_without_unlock(monkeypatch, snapshot, expected_events):
+    module = _load_source("_b1_probe_child", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (0.0,))
+    events = _probe_adapters(module, monkeypatch, now, child=True)
+    budget = module._B1Budget(0.0)
+    with pytest.raises(_ProbeExit) as exited:
+        module._probe(896.0, [False], budget=budget, controller_fds=snapshot)
+    assert exited.value.code == 23
+    assert events == expected_events
+    assert budget.cleanup_end is None
+    assert budget.term_end is None
+
+
+@pytest.mark.parametrize("failed_fd", [71, 72])
+def test_b1_probe_child_close_failure_still_closes_remaining_fds_and_exits_125(monkeypatch, failed_fd):
+    module = _load_source("_b1_probe_close_error", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (0.0,))
+    events = _probe_adapters(module, monkeypatch, now, child=True)
+
+    def close(fd):
+        events.append(("close", fd))
+        if fd == failed_fd:
+            raise OSError("합성 close 실패")
+
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(_ProbeExit) as exited:
+        module._probe(896.0, [False], budget=module._B1Budget(0.0), controller_fds=(71, 72, 73))
+    assert exited.value.code == 125
+    assert events == [("fork",), ("close", 71), ("close", 72), ("close", 73), ("exit", 125)]
+
+
+@pytest.mark.parametrize(("now_value", "stopped"), [(0.0, True), (896.0, False), (897.0, False)])
+def test_b1_probe_never_forks_when_stopped_or_at_run_end(monkeypatch, now_value, stopped):
+    module = _load_source("_b1_probe_prestart", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (now_value,))
+    events = _probe_adapters(module, monkeypatch, now)
+    assert module._probe(896.0, [stopped], budget=module._B1Budget(0.0), controller_fds=(71,)) is False
+    assert events == []
+
+
+@pytest.mark.parametrize("b1", [False, True])
+def test_b1_probe_normal_23_and_echild_preserve_parent_fds_and_cleanup_budget(monkeypatch, b1):
+    module = _load_source("_b1_probe_parent", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (895.5,))
+    events = _probe_adapters(module, monkeypatch, now)
+    budget = module._B1Budget(0.0) if b1 else None
+
+    def wait(pid, flags):
+        assert flags == 0x40000001
+        events.append(("wait", pid))
+        if pid == 41:
+            return 41, 5888
+        raise ChildProcessError
+
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    if b1:
+        assert module._probe(896.0, [False], budget=budget, controller_fds=(71, 72)) is True
+    else:
+        assert module._probe(896.0, [False]) is True
+    assert events == [("fork",), ("wait", 41), ("wait", -1)]
+    if b1:
+        assert budget.cleanup_end is None
+        assert budget.term_end is None
+        assert (budget.total_end, budget.run_end) == (900.0, 896.0)
+
+
+@pytest.mark.parametrize("raw_status", [0, 2304, 32000, 9])
+def test_b1_probe_non_23_terminal_status_rejects_and_uses_shared_cleanup(monkeypatch, raw_status):
+    module = _load_source("_b1_probe_bad_status", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (995.0,))
+    events = _probe_adapters(module, monkeypatch, now)
+    budget = module._B1Budget(100.0)
+
+    def wait(pid, flags):
+        if pid == 41:
+            return 41, raw_status
+        raise ChildProcessError
+
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    assert module._probe(996.0, [False], budget=budget, controller_fds=(71,)) is False
+    assert events == [("fork",)]
+    assert (budget.cleanup_end, budget.term_end) == (998.0, 996.0)
+
+
+def test_b1_probe_23_without_final_echild_cannot_qualify(monkeypatch):
+    module = _load_source("_b1_probe_no_echild", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (0.0, 1.0, 2.0, 3.0, 4.0))
+    events = _probe_adapters(module, monkeypatch, now)
+    budget = module._B1Budget(0.0)
+
+    def wait(pid, flags):
+        return (41, 5888) if pid == 41 else (0, 0)
+
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    assert module._probe(896.0, [False], budget=budget) is False
+    assert budget.cleanup_end is not None
+    assert budget.cleanup_end <= 4.0
+    assert budget.term_end <= 2.0
+    assert events[0] == ("fork",)
+
+
+@pytest.mark.parametrize("missing_status", [False, True])
+def test_b1_probe_failure_after_clock_gap_clamps_cleanup_to_original_total(monkeypatch, missing_status):
+    module = _load_source("_b1_probe_late_failure", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (995.5, 998.5, 999.0))
+    events = _probe_adapters(module, monkeypatch, now)
+    budget = module._B1Budget(100.0)
+
+    def wait(pid, flags):
+        if missing_status:
+            raise ChildProcessError
+        return 0, 0
+
+    monkeypatch.setattr(module.os, "waitpid", wait)
+    assert module._probe(996.0, [False], budget=budget, controller_fds=(71,)) is False
+    assert budget.cleanup_end <= 999.0
+    assert budget.term_end <= 999.0
+    if not missing_status:
+        assert (budget.cleanup_end, budget.term_end) == (999.0, 999.0)
+        assert events == [("fork",), ("signal", 998.5, 15)]
+    assert not any(event[0] == "close" for event in events)
+
+
+def test_v1_probe_default_empty_fd_snapshot_keeps_child_exit_23(monkeypatch):
+    module = _load_source("_b1_probe_legacy_child", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (0.0,))
+    events = _probe_adapters(module, monkeypatch, now, child=True)
+    with pytest.raises(_ProbeExit) as exited:
+        module._probe(10.0, [False])
+    assert exited.value.code == 23
+    assert events == [("fork",), ("exit", 23)]
+
+
+def _pending_owner(module, monkeypatch, now, *, budget):
+    owner = module._Owner() if budget is None else module._Owner(budget=budget)
+    events = []
+
+    def pending_read(fd, size):
+        raise BlockingIOError
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("관측기 합성 시험에서 실제 프로세스 작업을 시도함")
+
+    monkeypatch.setattr(module.os, "fork", forbidden)
+    monkeypatch.setattr(module.os, "_exit", forbidden)
+    monkeypatch.setattr(module.os, "pidfd_open", forbidden)
+    monkeypatch.setattr(module.signal, "pidfd_send_signal", forbidden)
+    monkeypatch.setattr(fcntl, "flock", forbidden)
+    monkeypatch.setattr(module.os, "waitpid", lambda *args: (0, 0))
+    monkeypatch.setattr(module.os, "read", pending_read)
+    monkeypatch.setattr(module.os, "close", lambda fd: events.append(("close", fd)))
+    monkeypatch.setattr(owner, "signal_children", lambda sig: events.append(("signal", now[0], sig)))
+    return owner, events
+
+
+@pytest.mark.parametrize(("b1", "points", "deadline", "finish", "signals"), [
+    (True, (998.5, 999.0), 996.0, 999.0, [("signal", 998.5, 15)]),
+    (False, (998.5, 999.0, 999.5, 1001.5), 2000.0, 1001.5,
+     [("signal", 998.5, 15), ("signal", 999.0, 15), ("signal", 999.5, 9)]),
+])
+def test_b1_observe_clamped_term_window_and_v1_literal_deadlines(monkeypatch, b1, points, deadline, finish, signals):
+    module = _load_source("_b1_observe_deadline", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, points)
+    budget = module._B1Budget(100.0) if b1 else None
+    owner, events = _pending_owner(module, monkeypatch, now, budget=budget)
+    owner.reject("io_error")
+    pipes = {"stdout": 31}
+    complete, _, streams = module._observe(
+        owner, pipes, {"stdout": io.BytesIO(), "stderr": io.BytesIO()}, _guard_fact(), deadline, [False],
+    )
+    assert complete is False
+    assert owner.error == "io_error"
+    assert owner.finish_end == finish
+    assert events == signals + [("close", 31)]
+    assert pipes == {}
+    assert streams["stdout"]["bytes"] == 0
+    if b1:
+        assert (budget.cleanup_end, budget.term_end) == (999.0, 999.0)
+
+
+@pytest.mark.parametrize(("b1", "points", "finish", "signals"), [
+    (True, (998.5, 999.0), 999.0, [("signal", 998.5, 15)]),
+    (False, (998.5, 999.0, 999.5, 1001.5), 1001.5,
+     [("signal", 998.5, 15), ("signal", 999.0, 15), ("signal", 999.5, 9)]),
+])
+def test_b1_emergency_clamped_term_window_and_v1_literal_deadlines(monkeypatch, b1, points, finish, signals):
+    module = _load_source("_b1_emergency_deadline", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, points)
+    budget = module._B1Budget(100.0) if b1 else None
+    owner, events = _pending_owner(module, monkeypatch, now, budget=budget)
+    pipes = {"stdout": 31}
+    module._emergency_cleanup(owner, pipes)
+    assert owner.error == "cleanup_error"
+    assert owner.finish_end == finish
+    assert events == signals + [("close", 31)]
+    assert pipes == {}
+    if b1:
+        assert (budget.cleanup_end, budget.term_end) == (999.0, 999.0)
+
+
+@pytest.mark.parametrize("which", ["observe", "emergency"])
+def test_b1_cleanup_uses_term_equality_for_kill_and_never_signals_at_cleanup_end(monkeypatch, which):
+    module = _load_source("_b1_cleanup_equality", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (100.0, 101.0, 102.0, 103.0))
+    budget = module._B1Budget(0.0)
+    owner, events = _pending_owner(module, monkeypatch, now, budget=budget)
+    if which == "observe":
+        owner.reject("io_error")
+        complete, _, _ = module._observe(owner, {}, {}, _guard_fact(), 896.0, [False])
+        assert complete is False
+    else:
+        module._emergency_cleanup(owner, {})
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+    assert events == [("signal", 100.0, 15), ("signal", 101.0, 9), ("signal", 102.0, 9)]
+
+
+@pytest.mark.parametrize(("finish_at", "expected_complete"), [(103.0, True), (103.25, False)])
+def test_b1_observe_retry_late_adoption_and_emergency_share_first_cleanup(monkeypatch, finish_at, expected_complete):
+    module = _load_source("_b1_cleanup_reentry", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (100.0, finish_at))
+    budget = module._B1Budget(0.0)
+    owner = module._Owner(budget=budget)
+    owner.leader = 41
+    owner.record(41, 0)
+    owner.startup_end = 500.0
+    closed = []
+
+    def empty_wait(*args):
+        raise ChildProcessError
+
+    def interrupted_read(fd, size):
+        if fd == 31:
+            return b""
+        raise RuntimeError("독립 합성 관측기 중단")
+
+    monkeypatch.setattr(module.os, "waitpid", empty_wait)
+    monkeypatch.setattr(module.os, "read", interrupted_read)
+    monkeypatch.setattr(module.os, "close", closed.append)
+    monkeypatch.setattr(owner, "signal_children", lambda sig: pytest.fail("ECHILD 뒤 signal 시도"))
+    pipes = {"stdout": 31, "stderr": 32, "control": 33}
+    logs = {"stdout": io.BytesIO(), "stderr": io.BytesIO()}
+    with pytest.raises(RuntimeError, match="독립 합성"):
+        module._observe(owner, pipes, logs, _guard_fact(), 896.0, [False])
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+    assert closed == [31]
+
+    now[0] = 102.0
+    owner.record(42, 0)
+    owner.reject("io_error")
+    frame = json.dumps({"schema": "qwq.pytest-guard-ready/v1", "guard": _guard_fact()}).encode() + b"\n"
+    chunks = {32: [b""], 33: [frame, b""]}
+    monkeypatch.setattr(module.os, "read", lambda fd, size: chunks[fd].pop(0))
+    complete, guard, _ = module._observe(owner, pipes, logs, _guard_fact(), 896.0, [False])
+    assert complete is expected_complete
+    assert guard == _guard_fact()
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+    assert owner.survived is True
+    assert owner.returncode == 0
+    assert owner.error == "io_error"
+    assert closed == [31, 32, 33]
+
+    now[0] = 104.0
+    leftover = {"stdout": 51}
+    module._emergency_cleanup(owner, leftover)
+    assert leftover == {}
+    assert closed == [31, 32, 33, 51]
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+    assert owner.error == "io_error"
+
+
+def test_b1_emergency_on_new_owner_consumes_already_started_budget(monkeypatch):
+    module = _load_source("_b1_shared_cleanup", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (102.0, 103.0))
+    budget = module._B1Budget(0.0)
+    budget.begin_cleanup(100.0)
+    owner, events = _pending_owner(module, monkeypatch, now, budget=budget)
+    module._emergency_cleanup(owner, {})
+    assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
+    assert events == [("signal", 102.0, 9)]
