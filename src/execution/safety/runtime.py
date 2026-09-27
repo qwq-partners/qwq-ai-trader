@@ -1765,7 +1765,7 @@ class KRExecutionRuntime:
             "command_operations_pending": len(self._command_scopes),
             "command_results_pending": len(self._command_result_tasks),
             "command_results_failed": self._command_results_failed,
-            "day_admission_closed": self.day_admission_closed,
+            "day_admission_closed": (observed_day_admission_closed := self.day_admission_closed),
             "ingress_pending": sum(row["state"] not in ("SETTLED", "PARKED", "FAILED", "RESOLVED")
                                    for row in self.engine._execution_ingress.values()),
             "protection_quote_admissions_pending": len(state.get("protection_quote_admissions", {})),
@@ -1805,6 +1805,6 @@ class KRExecutionRuntime:
                 "parked": self._reconciler_parked,
                 "apply_seconds_last": self._reconciler_apply_seconds_last,
                 "apply_seconds_max": self._reconciler_apply_seconds_max,
-                "day_admission_closed": self.day_admission_closed,
+                "day_admission_closed": observed_day_admission_closed,
             },
         }
