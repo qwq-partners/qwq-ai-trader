@@ -804,33 +804,37 @@ def test_b1_coordination_constructor_is_inert(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("coordination 생성자/snapshot에서 I/O 또는 clock 호출")
 
-    for name in ("open", "close", "dup", "fstat", "stat", "listdir", "rmdir",
-                 "mkdir", "unlink", "rename", "read", "write", "chmod", "getuid", "fork"):
-        monkeypatch.setattr(syscall, name, forbidden)
-    monkeypatch.setattr(temporary, "mkdtemp", forbidden)
-    monkeypatch.setattr(clock, "monotonic", forbidden)
-    monkeypatch.setattr(clock, "sleep", forbidden)
-    monkeypatch.setattr(locking, "flock", forbidden)
-
-    coordination = module._B1Coordination()
-    assert coordination.error is None
-    assert coordination.close_failed is False
-    assert coordination.fake_key_path is None
-    assert type(coordination.controller_fds()) is tuple
-    assert coordination.controller_fds() == ()
-    expected = {
-        "lock_acquired": False,
-        "lock_identity_stable": False,
-        "fake_key_absent_before": False,
-        "fake_key_absent_after": False,
-        "fake_directory_removed": False,
-        "fake_key_path_sha256": None,
-    }
-    facts = coordination.facts()
-    assert type(facts) is dict
-    assert facts == expected
-    assert list(facts) == list(expected)
-    facts["lock_acquired"] = True
-    facts["unexpected"] = "not object state"
-    assert coordination.facts() == expected
-    assert coordination.facts() is not facts
+    targets = [(syscall, name) for name in (
+        "open", "close", "dup", "fstat", "stat", "listdir", "rmdir", "mkdir",
+        "unlink", "rename", "read", "write", "chmod", "getuid", "fork",
+    )] + [(temporary, "mkdtemp"), (clock, "monotonic"), (clock, "sleep"), (locking, "flock")]
+    originals = [(owner, name, getattr(owner, name)) for owner, name in targets]
+    try:
+        with monkeypatch.context() as patch:
+            for owner, name in targets:
+                patch.setattr(owner, name, forbidden)
+            assert all(getattr(owner, name) is forbidden for owner, name in targets)
+            coordination = module._B1Coordination()
+            assert coordination.error is None
+            assert coordination.close_failed is False
+            assert coordination.fake_key_path is None
+            assert type(coordination.controller_fds()) is tuple
+            assert coordination.controller_fds() == ()
+            expected = {
+                "lock_acquired": False,
+                "lock_identity_stable": False,
+                "fake_key_absent_before": False,
+                "fake_key_absent_after": False,
+                "fake_directory_removed": False,
+                "fake_key_path_sha256": None,
+            }
+            facts = coordination.facts()
+            assert type(facts) is dict
+            assert facts == expected
+            assert list(facts) == list(expected)
+            facts["lock_acquired"] = True
+            facts["unexpected"] = "not object state"
+            assert coordination.facts() == expected
+            assert coordination.facts() is not facts
+    finally:
+        assert all(getattr(owner, name) is original for owner, name, original in originals)
