@@ -1,4 +1,4 @@
-"""B1a 독립 구조 RED의 입력인 최소 scaffold. 실제 전이는 아직 미구현이다."""
+"""B1a EMPTY cell 생성·chain·holder·unlink의 행별 원시 전이."""
 
 Action = tuple[str, None]
 
@@ -157,11 +157,85 @@ def tick(
 
 
 def _step(operation: Operation) -> None:
-    # Task 1 전용: 실제 chain을 만들지 않아 독립 missing-chain RED를 남긴다.
-    operation.action = None
-    operation.phase = "IDLE"
+    # 각 분기는 표의 한 행이다. phase/action은 graph 슬롯과 별개다.
+    if operation.phase == "A0":
+        operation.holders.new = _new_cell()
+        operation.phase = "A1"
+    elif operation.phase == "A1":
+        operation.holders.new.prev = operation.arena.tail
+        operation.phase = "A2"
+    elif operation.phase == "A2":
+        if operation.arena.tail is None:
+            operation.arena.head = operation.holders.new
+        else:
+            operation.arena.tail.next = operation.holders.new
+        operation.phase = "A3"
+    elif operation.phase == "A3":
+        operation.arena.tail = operation.holders.new
+        operation.phase = "A4"
+    elif operation.phase == "A4":
+        operation.holders.cursor = operation.holders.new
+        operation.phase = "A5"
+    elif operation.phase == "A5":
+        operation.holders.new = None
+        operation.phase = "A6"
+    elif operation.phase == "A6":
+        operation.holders.cursor = None
+        operation.action = None
+        operation.phase = "IDLE"
+    elif operation.phase == "U0":
+        if operation.action[0] == "unlink_head":
+            operation.holders.cursor = operation.arena.head
+        elif operation.action[0] == "unlink_tail":
+            operation.holders.cursor = operation.arena.tail
+        else:
+            operation.holders.cursor = operation.arena.head.next
+        operation.phase = "U1"
+    elif operation.phase == "U1":
+        operation.holders.unlink = operation.holders.cursor
+        operation.phase = "U2"
+    elif operation.phase == "U2":
+        operation.holders.left = operation.holders.cursor.prev
+        operation.phase = "U3"
+    elif operation.phase == "U3":
+        operation.holders.right = operation.holders.cursor.next
+        operation.phase = "U4"
+    elif operation.phase == "U4":
+        if operation.holders.left is not None:
+            operation.holders.left.next = operation.holders.right
+        else:
+            operation.arena.head = operation.holders.right
+        operation.phase = "U5"
+    elif operation.phase == "U5":
+        if operation.holders.right is not None:
+            operation.holders.right.prev = operation.holders.left
+        else:
+            operation.arena.tail = operation.holders.left
+        operation.phase = "U6"
+    elif operation.phase == "U6":
+        operation.holders.cursor.prev = None
+        operation.phase = "U7"
+    elif operation.phase == "U7":
+        operation.holders.cursor.next = None
+        operation.phase = "U8"
+    elif operation.phase == "U8":
+        operation.holders.left = None
+        operation.phase = "U9"
+    elif operation.phase == "U9":
+        operation.holders.right = None
+        operation.phase = "U10"
+    elif operation.phase == "U10":
+        operation.holders.unlink = None
+        operation.phase = "U11"
+    elif operation.phase == "U11":
+        # 옛 링크와 이웃/unlink holder를 비운 뒤 마지막 cell 참조를 해제한다.
+        operation.holders.cursor = None
+        operation.action = None
+        operation.phase = "IDLE"
+    else:
+        raise ValueError("INVALID_PHASE")
 
 
 def _new_cell() -> Cell:
-    # Cell 생성 호출은 이 지점 하나이며 scaffold 전이는 호출하지 않는다.
+    # 유일한 Cell 생성 지점이며 A0의 new holder 인계에서만 호출한다.
     return Cell()
