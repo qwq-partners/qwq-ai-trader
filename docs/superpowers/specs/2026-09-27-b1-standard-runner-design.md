@@ -245,8 +245,13 @@ Prerequisites before main wiring:
   `_emergency_cleanup` retain default None/exception behavior even for budget owners.
   Explicit True exhausts remaining FD batches before propagating the first
   non-OSError; expected close OSError returns False, clean batch True. Emergency
-  requires an existing budget and initialized cleanup/TERM endpoints, always closes
-  transferred pipes, and preserves a process exception over a batch exception.
+  requires an existing budget, initialized budget cleanup/TERM endpoints, and a
+  non-None owner.finish_end equal to budget.cleanup_end before any effects. Missing
+  or unequal Owner ends reject without clock/reap/signal/sleep/pipe/state effects;
+  the callee neither initializes nor synchronizes them. The caller may synchronize
+  through existing owner._begin_cleanup without extending already-fixed ends.
+  A new Owner already holding valid equal ends is also valid. Emergency always
+  closes transferred pipes and preserves a process exception over a batch exception.
   Bool is close status only. Invalid mode/preconditions reject before effects.
 - `_BoundPaths(paths, *, b1=False)` preserves default temporary-close/constructor
   exception identity and priority. Only explicit True initializes partial ownership
