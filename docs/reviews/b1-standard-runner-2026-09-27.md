@@ -1,10 +1,29 @@
 # B1 표준 실행기 — 별도 프로필 진행 원장
 
-2026-09-27 KST. **순수 계약·인자·시간 예산·coordination 부분 구현/검토 완료, 실제 프로필 검증 전이다.**
+2026-09-28 KST 갱신. **공개 B1 경로와 복사 시험 도구의 부품 검증 완료, 실제 프로필·결합 전체 인수 전이다.** 아래 각 단계의 미완 표기는 당시 이력이며 최신 상태는 다음 절을 따른다.
 [설계](../superpowers/specs/2026-09-27-b1-standard-runner-design.md)와
 [계획](../superpowers/plans/2026-09-27-b1-standard-runner.md)을 따른다.
 
 ## Plan
+
+### 2026-09-28 Claude 인계 후 결과 — 결합 후보 df9fd43 인수 (OBSERVED_ONLY)
+
+- **결합:** W 10423c1 + C c93f567 + M 82e107f → `feature/b1-runner-combined-20260928` HEAD `df9fd436641f9c59e499d8a50841396aee0b7b18` / tree `b8716217…`(base b073b54, 경로 W16/C6/M1 중복 0, B1b 5 blob·guard 7b7b2694… 보존, R 미이식). 이후 W에 ff 통합(비문서 diff 0).
+- **A 사후 리뷰:** copied 12건 실행 결과 비작성자 리뷰(요청 opus/xhigh, 실제 unverified) `APPROVE_WITH_RECORDED_LIMITS`, P0/P1/P2 0, P3 3(contention 원인 미구분·`--tb=short` 서술 누락·부가 속성 미단언). raw 는 -q 출력뿐이며 env/flock/세션 연결은 서술 — 기록만.
+- **C 정적·focused:** py_compile 7 rc0, 비밀 패턴(파일명·내용·verify.sh 정본 패턴) 0, focused 8모듈 **3244 passed/126.01s**·격리0·workload/tee 0/0 (`combined-focused-df9fd43.log` 7c74b5ce…). readiness 리뷰 `APPROVE_WITH_CONDITIONS`(P2-1 초안 CWD 가 C worktree, P2-2 결합 worktree `.superpowers` 비ignore → 산출물을 ignored `logs/b1-smoke-df9fd43/` 로 고정).
+- **D 원형 tiny profile 1회:** 동결 `b1-smoke-dispatch-df9fd43.md`(1ac8243a…) → controller 직접 실행(`exec env -i` 5변수, 외부 flock/tee/timeout 없음, `--profile b1-standard/v1 --timeout-seconds 900`, 1파일). raw rc 0, pre/post monotonic **17014274900ns**(같은 host/boot_id), receipt 36/36 passed·collected = 독립 inventory(a7c65f1a…), runtime e694f620…·selection 41f6e286… 독립 계산과 일치, stream 172/0 bytes·hash 일치, coordination 전부 true, pure binder **B1_PROCESS_BOUND errors []**, outcomes/native/CI/production false. 결과 `b1-smoke-evidence-df9fd43.md`, 원본 `b1-smoke-df9fd43-artifacts/`. 한계: 1 slot(UTC/standard)만 실행, `contract` 는 spec sha256 literal.
+- **E 전체 UTC→KST:** legacy launcher(timeout 900, `tests`, -x), expected inventory 9379. UTC #1 1 failed(`test_recovery_projection…stays_below_5ms[normal_gc-100000]` controlled_max 12.4ms), UTC #2 **9361/16/2 744.92s**; KST #1 1 failed(`test_toss_observation…[circuit_open-provider_failure]` 189≠200, 실시간 예산), KST #2 **9361/16/2 766.73s**. 두 실패 시험·소스 base 대비 diff 0, 다른 TZ 통과, 2 vCPU·운영 봇 상주. 사용자 결정 "1안으로 재실행해…" 로 TZ당 1회 재실행, 첫 실패 raw 2건 보존, 기존 두 성능 예외 원장 불변·새 예외 0. 기록 `combined-full-evidence-df9fd43.md`.
+- **final critical 리뷰:** 비작성자(요청 opus/xhigh, unverified) `APPROVE_WITH_CONDITIONS`, P0/P1 0. P2-1 `tests/dev/test_source_runtime_contract.py:489-496` 1,048,677-byte node ID — B1 full-profile receipt 의 새 차단 사유(M 82e107f 는 부분 해결). P3: ignored pycache 잔존(PYTHONDONTWRITEBYTECODE 미전달 자식 시험), v1 bootstrap 은 `--b1-*` 인자 거부가 추가돼 바이트 동일 아님(controller v1 8MiB 경로는 동일).
+- coordinator 모델: 사용자 선택 claude-fable-5-1(정책상 worker 라우팅 제외, coordinator 역할만). 리뷰어 3회 모두 요청 opus/xhigh·실제 unverified·cross-provider 아님.
+- **미승인·불변:** N4097 UNRUN, native/source108/full R2/CI/production 미자격, main 병합·운영 배포·재시작·주문·전략/위험/KIS/Toss 설정 변경 0. 후속 정리 후보(별도 계획): 벽시계 시험 2건 시계 주입, oversized id `pytest.param(id=)`, pycache 남기는 시험 확인.
+
+### 최신 진행 상태 (2026-09-28 인계 시점 — 위 절이 최신)
+
+- 별도 후보748f0ad에서 임시 공개125 차단 세 줄만 제거했다. 독립 위임 시험의 실제 RED 뒤 17건 및 새·기존 controller **765 passed/53.97s**·격리0·workload/tee/tool0을 확인했고, 비작성자 리뷰는 `PUBLIC_ENABLE_COMPONENT_ONLY`·미해결 지적0이다.
+- 복사 시험 도구는 기본 v1 바이트를 보존하며 닫힌 B1 옵션만 추가했다. 독립 리뷰가 찾은 repo/scripts 심볼릭 링크 우회를 실제 실패 시험으로 재현하고 새 전용 디렉터리 생성으로 막았다. acf18ce의 관련 **15 passed/0.57s**·격리0·세 exit0, 비작성자 `APPROVE_COPIED_HELPER_COMPONENT_ONLY`다.
+- 실제 프로세스 후보c93f567은 자손 준비 신호·잘못된 guard 전송 체크포인트 보강 뒤 비작성자 oracle 한정 승인·지적0이다. 독립 실패 dummy **1 passed/1.71s**를 먼저 확인한 뒤 복사본 12사례가 **12 passed/19.30s**·격리0·세 exit0으로 종료됐다. 잠금 경합의 실제 관측 범위와 adapter의 zero-birth 증명을 구분하며 기존 하네스/8초 자식 backstop·정리 한도는 불변이다. 실행 결과의 독립 재검토는 다음 단계다.
+- runner 코드의 최종 feature 통합, 원형 B1 소규모 프로필, 결합 전체 UTC/KST·최종 독립 리뷰는 아직이다. 운영 배포·main·주문·설정 변경은 없다. 원문은 `task-3d-public-enable-evidence.md`, `task-3d-copy-helper-evidence.md`와 관련 리뷰에 보존한다.
+- 사용자의 Claude 인계 지시로 새 구현·시험·통합을 멈췄다. 마지막 실행 원문은 `task-3d-copied-runtime-evidence.md`, 후속 지시는 [상세 인계 프롬프트](../operations/claude-handoff-b1-runner-2026-09-28.md)를 따른다.
 
 기존 실행기의 8MiB/v1 동작은 보존하고, 고정 B1 프로필에 스트림별 2MiB 보존·초과 감지,
 공통 lock·격리 환경·종료/회수·900초 전체 상한을 결속한다. 기존 owner를 재사용하며

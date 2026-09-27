@@ -16,7 +16,26 @@ that cannot accept the old profile or claim semantic/native/CI/production qualif
 **Spec:** `../specs/2026-09-27-b1-standard-runner-design.md`.
 Independent plan review is complete; exact implementation dispatch and every acceptance gate remain required.
 
-Coordinator checkpoint: Task1 contract367, Task2a parser/bootstrap170, and Task3a
+Coordinator checkpoint (2026-09-28, after Claude handoff): combined candidate df9fd43
+(W10423c1 + C c93f567 + M82e107f) passed combined focused3244, one original tiny
+B1 profile run (rc0, bracket17014274900ns, 36/36, B1_PROCESS_BOUND), and whole UTC/KST
+9361 passed/16 skipped/2 xfailed each (first attempts per TZ stopped on one wall-clock
+test, raw preserved, user-approved single rerun, no new exception). Non-author final
+critical review APPROVE_WITH_CONDITIONS; feature integration done. New full-profile
+blocker recorded: `tests/dev/test_source_runtime_contract.py:489-496` 1,048,677-byte
+node ID. Ledger: `docs/reviews/b1-standard-runner-2026-09-27.md`.
+
+Previous coordinator checkpoint (2026-09-28 handoff): shared-main757 and public-enable765
+focused cases have independent component acceptance. Copied-fixture helper acf18ce
+has15 passes after preserving/reproducing three symlink-path defects, with independent
+helper-only approval. The c93f567 copied-case oracle received independent approval;
+actual failed-dummy1 then copied12 passed (1.71s/19.30s, guard0/all exits0). Runtime
+evidence review remains pending. Work now transfers to Claude at the user's request.
+Actual-profile, combined focused/full
+UTC/KST and final critical acceptance remain mandatory. The implementation-history
+paragraphs below record earlier states, not current C public-main125 behavior.
+
+Historical coordinator checkpoint: Task1 contract367, Task2a parser/bootstrap170, and Task3a
 budget/probe/cleanup219 focused cases have scoped independent acceptance. Task3b
 coordination2f5c9c5 has333 focused passes and scoped non-author component approval;
 prepare/finish temporary-close rows are source-confirmed N/A, not runtime passes.

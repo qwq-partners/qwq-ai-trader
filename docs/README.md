@@ -2,6 +2,8 @@
 
 > 에이전트 참조용 구조화 문서. 개발/분석 시 카테고리별 참조.
 
+> **09-28 Claude 인계 → 결합 후보 인수 완료:** [인계 프롬프트](operations/claude-handoff-b1-runner-2026-09-28.md) §6 A~E 수행. W/C/M 결합 df9fd43, 원형 B1 tiny profile 1회 `B1_PROCESS_BOUND`, 전체 UTC/KST 9361/16/2, final 리뷰 APPROVE_WITH_CONDITIONS 후 feature 통합. main/운영 변경 없음. 결과는 [원장](reviews/b1-standard-runner-2026-09-27.md) 09-28 절.
+
 ## 문서 목록
 
 ### Architecture (아키텍처)

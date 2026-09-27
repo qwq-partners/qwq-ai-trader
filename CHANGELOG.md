@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-28 — B1 실행기 결합 후보 인수 (원형 tiny profile·전체 UTC/KST 통과, feature 통합)
+
+- Claude 인계 후 W 10423c1 + C c93f567(runner 6파일) + M 82e107f(node ID 1줄)을 `feature/b1-runner-combined-20260928` **df9fd43**으로 결합했다(충돌 0, 예상 밖 diff 0, B1b 5 blob 보존). copied 12건 실행의 비작성자 사후 리뷰 APPROVE_WITH_RECORDED_LIMITS, 결합 focused 8모듈 **3244 passed/126s**, readiness 리뷰 APPROVE_WITH_CONDITIONS(초안 CWD·산출물 경로 P2 2건은 동결 문서에서 해소).
+- 원형 B1 tiny profile(`tests/dev/test_verification_contract.py` 36 nodes, UTC/standard)을 controller 직접 실행으로 1회 수행: raw rc 0, 동일 host monotonic bracket **17014274900ns**, 36/36 passed, stream/receipt hash 디스크 일치, pure binder **B1_PROCESS_BOUND** errors 0, 4 자격 플래그 false. 재시도 0.
+- 결합 전체 회귀(legacy launcher, cap900, -x): UTC·KST 각각 **9361 passed/16 skipped/2 xfailed**(744.92s/766.73s) = 동결 inventory 9379. 각 TZ 첫 시도는 벽시계 의존 시험 1건(recovery `stays_below_5ms[normal_gc-100000]` 12.4ms, toss `circuit_open` 189/200)에서 -x 중단 — 코드 base 대비 변경 0·다른 TZ 통과·2 vCPU 공유 호스트 요인으로 판단, 사용자 결정(1안)으로 TZ당 1회 재실행, 첫 실패 raw 보존, 예외·skip·상한 변경 0.
+- 비작성자 final critical 리뷰 APPROVE_WITH_CONDITIONS(P0/P1 0) 후 W에 ff 통합(비문서 diff 0). 새 차단 사유 기록: `tests/dev/test_source_runtime_contract.py:489-496`의 1,048,677-byte node ID(M은 부분 해결). 후속 정리 후보: 벽시계 시험 2건 시계 주입, oversized id, pycache 남기는 시험. **main 병합·운영 배포·재시작·주문·설정 변경 없음.** N4097/native/full R2/CI/production 미승인. [원장](docs/reviews/b1-standard-runner-2026-09-27.md) · [인계](docs/operations/claude-handoff-b1-runner-2026-09-28.md)
+
 ## 2026-09-27 — 실행기 공통 경로 부품 검증
 
 - 별도 후보dfcf5e6에서 기존 v1과 B1이 같은 owner/자식 실행 경로를 사용하도록 구현하고 종료·정리·결과 발행 실패의 우선순위를 고정했다. 공개 B1 main125 차단은 별도 활성화 검증 전까지 유지한다.
