@@ -110,6 +110,13 @@ B1 main125 차단·runner 최종 feature 통합 전 상태는 유지한다.
 공개 활성화 전 두 프로필의 초기 예외 동일성·부작용0·누락 증거 거부 시험이 필요하다.
 정책 검토 기록은 `task-3d-entry-clock-disposition-review.md`이며 구현 승인과 구분한다.
 
+후속 실제 copied-harness 시험의 닫힌 배치도 정책 한정 승인받았다. 일반 복사본은900초,
+시간 의존 사례만 복사본 내부 total6을 사용하며 실제 정책·기존 외부 안전 한도는
+바꾸지 않는다. 타이머 시작점이 달라6<8<12를 절대 시한 보장으로 주장하지 않으며,
+실제 작업 checkpoint·회수 증거가 없으면 중단한다. 아직 helper 수정/실행하지 않았고
+공개 활성화 우회나 실제 B1 qualification 승인이 아니다. 상세 조건은 설계 §8과
+`task-3d-copied-harness-policy-review.md`에 보존한다.
+
 실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
 제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/
 최대149 bytes로 미실행 대상을 교체한다. 기존 OS 회귀·전체 시험·producer 제한은

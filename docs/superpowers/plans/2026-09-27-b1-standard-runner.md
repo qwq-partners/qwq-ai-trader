@@ -260,6 +260,11 @@ observed_bytes. Process v2 exact spec; fake-dir/lock helpers stay private and fi
   rewrite the fixed lock literal to a private synthetic lock; record changed source identity and
   never claim actual standard profile qualification from such results. Keep sole test-harness
   owner independent from the candidate. Verify its failed-dummy cleanup before unsafe fixtures.
+  Apply the reviewed spec §8 closed arrangement: default v1 unchanged, normal isolated B1 budget900,
+  optional total6 only for duration-dependent timeout/contention, exact full-line counts and all
+  external backstops unchanged. Different clock origins prohibit an absolute nesting claim;
+  require the intended checkpoint, not prelaunch timeout/backstop termination. Public enable
+  and later observer/crash fault-anchor reviews remain separate prerequisites.
 - [ ] Implement cap accounting and coordination/deadline branches using the existing drain/owner
   code. Keep latched errors and absolute finish deadline across retries/emergency paths; cleanup
   excludes unrelated processes and early lock release. Fix no unrelated reaper behavior.

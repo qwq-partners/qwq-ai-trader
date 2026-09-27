@@ -453,6 +453,27 @@ Lock-contention tests assert no launch rather than weakening the profile. Final 
 stays under the existing approved standard launcher until this new profile is independently
 accepted; it is not self-approved by its own synthetic tests.
 
+Reviewed copied-harness arrangement (policy only): coordinator may extend the existing
+helper with exact-bool/default-false isolated and short-budget choices; short requires
+isolated, invalid combinations reject before effects. Normal finite/flood/descendant
+copies retain900. Isolated copies replace exactly one complete `_LOCK` declaration
+with a new same-UID regular private fixture leaf, rejecting pre-existing/symlink paths.
+Only duration-dependent timeout/contention copies may additionally replace exactly
+`        self.total_end = started + 900` with `        self.total_end = started + 6`.
+Check old/new counts1/0→0/1 and preserve run-minus4, cleanup3/total-minus1, TERM1,
+lock240/startup10/probe1 and serialized/CLI900. Record transformed identity; no public
+gate-removal replacement, arbitrary path/duration/source hook or new reaper is allowed.
+
+Synthetic total6 gives relative run2/cleanup≤5/final6 durations. The alarm/harness
+clocks have different origins:6<8<12 is not an absolute-deadline nesting or cold-start
+proof. Require the intended workload/receipt checkpoint and actual raw cleanup/harness
+evidence; prelaunch timeout or a backstop kill is not a passing workload-timeout case.
+Missing/late proof or unexpected failure stops the batch, without retry-based tuning,
+new exceptions or enlarged backstops. Short contention does not prove the real240
+ceiling or necessarily lock_timeout. Dummy-cleanup proof and separate public enable
+must precede real cases. Observer-fault/post-candidate-crash real fixtures still need
+separately reviewed frozen-source fault anchors; adapter evidence is not real coverage.
+
 Required adversarial coverage: both streams at2097151/2097152/2097153; chunk-spanning/last chunk;
 simultaneous floods; short/failed log writes; old8388609 behavior; timeout inclusive of lock and
 cleanup; startup after lock; nested lock/unsafe lock/no release on leader exit; parent/child env;
