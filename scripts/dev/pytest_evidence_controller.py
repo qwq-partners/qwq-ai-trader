@@ -764,8 +764,20 @@ def _receipt(path, bounds=None):
             temporary.close()
 
 
-def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
+def _observe(owner, pipes, logs, expected_guard, deadline, stopped, *, profile=None):
     """각 fd/회수 배치를 제한하여 기한과 다른 파이프를 굶기지 않는다."""
+    if profile is not None and (type(profile) is not str or profile != "b1-standard/v1"):
+        raise ValueError("PROCESS_OBSERVATION_PROFILE")
+    b1 = profile is not None
+    if b1 and owner._budget is None:
+        raise ValueError("PROCESS_OBSERVATION_PROFILE")
+    if owner.observation is not None:
+        if "profile" in owner.observation:
+            marker = owner.observation["profile"]
+            if type(marker) is not str or marker != "b1-standard/v1" or not b1:
+                raise ValueError("PROCESS_OBSERVATION_PROFILE")
+        elif b1:
+            raise ValueError("PROCESS_OBSERVATION_PROFILE")
     if owner._budget is not None:
         deadline = min(deadline, owner._budget.run_end)
         if owner._budget.cleanup_end is not None:
@@ -779,6 +791,8 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
             "startup_end": (min(deadline, time.monotonic() + 10) if owner.startup_end is None
                             else min(deadline, owner.startup_end)),
         }
+        if b1:
+            owner.observation["profile"] = "b1-standard/v1"
     state = owner.observation
     streams, observed, failed_logs = state["streams"], state["observed"], state["failed_logs"]
     pending = pipes
@@ -828,6 +842,34 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
                 control.extend(chunk[:max(0, 4097 - len(control))])
                 if len(control) > 4096 or control.count(b"\n") > 1 or (b"\n" in control and not control.endswith(b"\n")):
                     owner.reject("startup_error")
+            elif b1:
+                item = streams[name]
+                observed[name] = min(2097153, observed[name] + len(chunk))
+                if observed[name] == 2097153:
+                    item["overflow"] = True
+                    owner.reject("output_limit")
+                if name not in failed_logs:
+                    prefix = chunk[:max(0, 2097152 - item["bytes"])]
+                    if prefix:
+                        try:
+                            written = logs[name].write(prefix)
+                        except OSError:
+                            failed_logs.add(name)
+                            owner.reject("io_error")
+                        except BaseException:
+                            failed_logs.add(name)
+                            owner.reject("io_error")
+                            raise
+                        else:
+                            if type(written) is not int or not 0 <= written <= len(prefix):
+                                failed_logs.add(name)
+                                owner.reject("io_error")
+                            else:
+                                item["bytes"] += written
+                                item["sha256"].update(prefix[:written])
+                                if written != len(prefix):
+                                    failed_logs.add(name)
+                                    owner.reject("io_error")
             else:
                 item = streams[name]
                 observed[name] = min(LIMIT + 1, observed[name] + len(chunk))
@@ -865,6 +907,9 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
     for name in tuple(pending):
         close_pipe(name)
     result = {name: {**item, "sha256": item["sha256"].hexdigest()} for name, item in streams.items()}
+    if b1:
+        for name, item in result.items():
+            item["observed_bytes"] = observed[name]
     return complete, guard, result
 
 
