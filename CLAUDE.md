@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **필수 source proof 후속 설계:** [별도 필수 검증 계약](docs/superpowers/specs/2026-09-27-required-source-proof-design.md)은 독립 설계 한정 승인·사용자 서면 검토 대기다. 기존 전체 시험 + 한정 runtime의 명시 proof + 최종 `verify` 모두 필요하며 서면 설계/구현계획 승인 전 구현하지 않는다. qualified capsule0·실행0·CI/제품 변경0, 아래 성능 실패·코드 통합 차단은 그대로다.
+
 > **추가 진단 종료:** clean-base100k 단회 index CPU 진단은 미재현·미확정(원본1 passed/12.78s·최대4.204637ms)이다. 재시도·원인 확정·기존 실패 면제는 없다. 아래33.174ms·13.023871ms 실패와 Python 지원 충돌, 코드 통합 차단은 유지한다. 최신 근거·후속 조건은 [L3-P0 실행 결과](docs/reviews/l3-proof-results-2026-09-27.md) 참조.
 
 > **2026-09-27 N5 후속 정본:** [N5 진행 원장](docs/reviews/recovery-projection-progress-2026-09-27.md)을 먼저 읽는다. Task2 L1/L2는 구조 한정 승인(집중17·관련757 passed, 성능20셀 제외)이지만 후보 `721fe1c7…`의 새 controlled5k가 freeze13.023871ms로5ms 기준을 실패했다. 첫 실패에서 중단해 나머지6셀 미실행, 별도 trace1회는 미재현·미확정이며 재시도/수정0이다. 후보는 미커밋·전체 미승인, 과거 raw5k57.748ms와policy/100k 실패도 보존한다. [L3-P0 실행계획](docs/superpowers/plans/2026-09-27-recovery-lifecycle-proof.md) 승인 후 시험용 두 부품을 구현·보완했다. [실행 결과](docs/reviews/l3-proof-results-2026-09-27.md) 기준 source139 passed·조건부 구조 승인, sequence 기능 한정 재리뷰 승인이다. 그러나 source의 exact CPython3.12.3와 CI3.12 micro 미고정의 충돌 및 기존 controlled100k33.174ms 실패로 전체 검증·코드 commit/push·통합은 차단이다. 과거 frozen5k와 새 clean-base100k 실패를 혼합하지 않는다. cold-open/decode/consumer 수명·전체 L3는 미해결, 제품 변경0이다. Task3 FIFO gate는 독립 부품 승인(`9a01fa1`, 관련129 passed)만 받았고 실제 owner 배선·Task4 이후 통합·main·운영 전환은 차단이다. 아래 상태 줄은 각 시점 이력이다.

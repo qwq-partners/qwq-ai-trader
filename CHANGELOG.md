@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — L3 별도 필수 source proof 계약 설계 (미구현)
+
+- 사용자 방향 승인으로 [필수 증명 검증 설계](docs/superpowers/specs/2026-09-27-required-source-proof-design.md)를 작성했다. 기존 전체 시험과 별도 source proof를 모두 요구하며, 동일 SHA/run·실제 성공·격리·정확한 시험 목록을 최종 `verify`가 대조하도록 제안한다.
+- 새 source proof만 비기본 파일명으로 명시 수집하고 기존 tracked 회귀·conftest 보호는 유지한다. 고정 runtime의 bootstrap 관측과 독립 자격 승인을 구분한다. 현재 qualified capsule0이며 CI·시험·제품 변경이나 qualification 실행은 없다.
+- 독립 리뷰의 세 지적(gate 파일 신뢰 경계·성능 실행 선행권한·lane×시간대별 증거 비교)을 반영해 재리뷰에서 설계 한정 승인을 받았다. 사용자 서면 검토·별도 구현계획 승인 전에는 구현하지 않는다. 기존33.174ms·13.023871ms 성능 실패와 전체 통합/운영 차단은 유지한다.
+
 ## 2026-09-27 — N5 L3-P0 한정 검토·진단 종료 (전체 인수 차단·미통합)
 
 - 승인된 계획을 공통 base의 두 격리 worktree에서 실행했다. source live-edge 산술·중간 참조 관측과 sequence의 저장된 known-error traceback을 RED로 재현해 수정했다. 초기 실패·timeout 증거는 보존한다.

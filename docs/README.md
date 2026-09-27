@@ -6,6 +6,7 @@
 
 ### Architecture (아키텍처)
 
+- [L3 별도 필수 source proof 계약 설계](superpowers/specs/2026-09-27-required-source-proof-design.md) — 기존 전체시험 + 조건부 runtime 증명 + 동일 실행 최종 gate; 독립 설계 한정 승인·사용자 서면 검토 대기·미구현·qualified runtime0, 성능 차단 유지
 - [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — L1/L2 구조 한정 승인·관련757 passed; 새 controlled5k13.024ms 실패·6셀 미실행·trace 미확정; Task2/실제 owner 통합 차단
 - [N5 L3 취소·자원 수명 설계 제안](superpowers/specs/2026-09-27-recovery-build-lifecycle-design.md) — 논리 취소/물리 정리/결과 인계·source lease·cleanup proof; 독립 제안 한정 승인, capture/표현 타당성·구현 미완
 - [N5 L3-P0 증명 실행계획](superpowers/plans/2026-09-27-recovery-lifecycle-proof.md) — warm SQL source 인계·bounded sequence의 시험 전용 두 과제; 한정 검토 후 전체 인수 차단, 제품/운영 미구현
