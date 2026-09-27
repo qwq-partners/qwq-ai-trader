@@ -94,6 +94,14 @@
 - 시장구분: `CM`=야간(18:00~05:00, 기준가=주간 종가 → prdy_ctrt=밤사이 변동률), `F`=주간
 - 아침 스크리닝 선행지표로 사용 (US 지수보다 우선, kr_scheduler)
 
+### 휴장일 조회 (kis_market_data.fetch_holidays, CTCA0903R)
+- 한 응답이 달 전체를 덮지 않는다 — 운영 관측 `202609 → 7일`(09-01~09-24 범위), `202610 → 9일`(10-01~10-24)로 약 24일치에서 끝났다.
+  연속조회(ctx/tr_cont) 의미는 공식 근거가 없어 쓰지 않고, 응답의 가장 늦은 날짜 다음 날을 BASS_DT 로 **새 첫 조회**를 보낸다
+  (월말 도달·진전 없음·빈 응답·4회 상한에서 정지, 매 호출 `kis_rate_limit.acquire()`, 뒤 조회 실패 시 모은 날짜 유지·캐시 안 함). 2026-09-28~
+- 기동 시(`run_trader.py`) 이번 달·다음 달, 매월 25일 이후(`kr_scheduler`) 다음 달을 받아 `engine.set_kr_market_holidays` 에 넣는다.
+  판정은 `engine.is_kr_market_holiday` = 동적 ∪ fallback(`utils/session._KR_FALLBACK_HOLIDAYS` 한 곳). fallback 에 잘못 든 날은
+  KIS 가 되돌릴 수 없으므로 확정된 날만 둔다. API 문서의 '1일 1회 호출 권장' 대비 월 2회 수준.
+
 ## 데이터 — 토스증권 Open API (별도 제한 관측 ON, **거래 소비자 미연결**)
 
 > [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [관측 실행 경계](../operations/toss-shadow-runtime.md) · [실제 활성화 원장](../reviews/toss-observer-service-2026-09-17.md). 사용자 승인으로09/17 별도 서비스 ON·초기 발급 성공,09/18·21·22 관측/09/22 18시만료. 기존 거래 봇과 KIS 소비자는 그대로이며 장외 시점의 시세 표본은0이다.
@@ -129,6 +137,14 @@
   (`storage/stock_master.py` 2026-04-21, `dashboard/data_collector.py` 2026-09-03)
 - `get_market_sector_classifications`(WICS 업종): KRX 인증 없이는 항상 JSON 오류 →
   `sector_momentum`이 실패 시 **6시간 백오프** 후 키워드/파일 캐시 매핑 사용 (2026-09-03)
+
+## 데이터 — FinanceDataReader 지수 일봉
+
+- FDR 0.9.110 `DataReader("KS11"/"KQ11"/"KS200")` 는 KRX 를 부르지 않고 GitHub `FinanceData/fdr_krx_data_cache` 연도별 CSV 를 읽는다.
+  읽기 실패를 삼키고 신선도 검사가 없어 **상류가 멈춰도 예외 없이 오래된 프레임**을 준다 — 2026-09-17 장중 부분봉(6724.34)에서 정지 확인(09-28).
+- KOSPI 결정 소비처(스크리너 레짐·변동성 타게팅·수확 shadow)는 `utils/kospi_benchmark.load_kospi_daily`(1순위 `YAHOO:^KS11`, 신선도 검증)를 쓴다.
+  FDR Yahoo 리더는 `end` 를 배타 경계로 쓴다(마지막 날 포함하려면 하루 더).
+- `scripts/` 백테스트(backtest_strategies·backtest_t1_gate·quick_backtest·ab_exit_policy)는 아직 KS11 — 09-17 이후 구간 벤치마크는 정지값.
 
 ## 데이터 — yfinance
 
