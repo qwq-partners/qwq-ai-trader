@@ -1565,9 +1565,6 @@ def main(argv: list[str] | None = None) -> int:
     started = time.monotonic()
     try:
         options, context_path, receipt_path, output, log_paths, selected = _arguments(list(sys.argv[1:] if argv is None else argv))
-        if options.profile == "b1-standard/v1":
-            # 개발 중 임시 차단: 공유 본문 검증과 별도 enable 승인 전에는 실행하지 않는다.
-            return 125
     except (OSError, ValueError, TypeError, ImportError, AttributeError):
         return 125
     return _run_validated(started, options, context_path, receipt_path, output, log_paths, selected)
