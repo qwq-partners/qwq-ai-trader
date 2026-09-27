@@ -312,6 +312,22 @@ def test_registry_state_and_mode_boundaries(state, mode, status, error):
     assert_offline_only(decision)
 
 
+@pytest.mark.parametrize("mode", ["", "BOOTSTRAP", "unknown", None, True, [], 1])
+def test_invalid_mode_is_rejected_without_exposing_declared_state(mode):
+    # 나머지 문서가 유효해도 mode 오류를 정상 등록 상태로 가리지 않는다.
+    decision = evaluate_runtime_contract(
+        canonical(LITERAL_SUBJECT), canonical(LITERAL_BOOTSTRAP_REGISTRY),
+        canonical(LITERAL_OBSERVATION), mode=mode,
+        binding={"expected_revision": "a" * 40, "observed_revision": "a" * 40,
+                 "expected_sha256": LITERAL_REGISTRY_SHA256},
+    )
+    assert decision["status"] == "REJECTED"
+    assert decision["errors"] == ["INVALID_MODE"]
+    assert decision["mode"] is None
+    assert decision["declared_state"] is None
+    assert_offline_only(decision)
+
+
 def test_rejection_precedes_unregistered_or_state_unsupported_and_malformed_hides_state():
     # invalid 관측을 빈/UNKNOWN registry가 UNSUPPORTED로 가리는 회귀를 막는다.
     document = subject()
