@@ -838,3 +838,921 @@ def test_b1_coordination_constructor_is_inert(monkeypatch):
             assert coordination.facts() is not facts
     finally:
         assert all(getattr(owner, name) is original for owner, name, original in originals)
+
+
+_LOCK_LITERAL = "/home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/owner-ticket-gate-20260926/.superpowers/sdd/2026-09-27-runtime-admission-contract/test-workload.lock"
+_FAKE_DIRECTORY = "/tmp/qwq-b1-runner-fixed"
+_FAKE_PATH = "/tmp/qwq-b1-runner-fixed/nonexistent-key"
+_FAKE_HASH = "d70c45e8937aa7851510aebf49a37d0a82cf1f372c325c97fd59a340c3490c88"
+
+
+def _scoped_stdlib_adapters(test):
+    """본문 예외도 pytest 보고 전에 모든 전역 adapter를 반드시 복원한다."""
+    from functools import wraps
+
+    @wraps(test)
+    def scoped(*args, **kwargs):
+        with kwargs["monkeypatch"].context() as patch:
+            kwargs["monkeypatch"] = patch
+            return test(*args, **kwargs)
+
+    return scoped
+
+
+class _CoordinationSyscalls:
+    """제품의 저장 구조를 모르는 독립 경로/FD/metadata ledger."""
+
+    def __init__(self, monkeypatch, *, bound_paths=False):
+        import os
+        import time
+        import tempfile
+        import subprocess
+
+        self.events = []
+        self.live = {}
+        self.next_fd = 70
+        self.now = 0.0
+        self.polls = []
+        self.flocks = []
+        self.errors = {}
+        self.metadata = {}
+        self.contents = []
+        self.created_path = _FAKE_DIRECTORY
+        self.on_event = lambda event: None
+        self.bound_paths = bound_paths
+        directories = ["/", "/tmp", _FAKE_DIRECTORY, "/fixture", "/fixture/a"]
+        directories += [str(path) for path in Path(_LOCK_LITERAL).parents]
+        for index, path in enumerate(dict.fromkeys(directories)):
+            self.metadata[path] = SimpleNamespace(st_dev=7, st_ino=100 + index,
+                                                  st_mode=0o40700, st_uid=1001, st_nlink=1)
+        self.metadata[_LOCK_LITERAL] = SimpleNamespace(st_dev=7, st_ino=501,
+                                                       st_mode=0o100600, st_uid=1001, st_nlink=1)
+        for name in ("open", "close", "fstat", "stat", "listdir", "rmdir", "dup", "fdopen"):
+            monkeypatch.setattr(os, name, getattr(self, name))
+        monkeypatch.setattr(os, "getuid", lambda: 1001)
+        monkeypatch.setattr(time, "monotonic", lambda: self.now)
+        monkeypatch.setattr(time, "sleep", self.sleep)
+        monkeypatch.setattr(tempfile, "mkdtemp", self.mkdtemp)
+        monkeypatch.setattr(fcntl, "flock", self.flock)
+        monkeypatch.setattr(subprocess, "Popen", self.forbidden)
+        for name in ("read", "write", "unlink", "remove", "rename", "chmod", "mkdir",
+                     "fork", "_exit", "lstat", "scandir", "pidfd_open", "getenv"):
+            monkeypatch.setattr(os, name, self.forbidden)
+
+    def forbidden(self, *args, **kwargs):
+        pytest.fail("coordination 허용 밖의 syscall")
+
+    def event(self, *event):
+        self.events.append(event)
+        self.on_event(event)
+        failure = self.errors.get((event[0], event[1] if len(event) > 1 else None))
+        if failure is not None:
+            raise failure
+
+    def path(self, path, dir_fd=None):
+        value = str(path)
+        if dir_fd is not None:
+            assert not value.startswith("/")
+            return str(Path(self.live[dir_fd][0]) / value)
+        assert value.startswith("/")
+        return value
+
+    def allocate(self, path, metadata):
+        fd = self.next_fd
+        self.next_fd += 1
+        self.live[fd] = (path, metadata)
+        return fd
+
+    def open(self, path, flags, mode=0o777, *, dir_fd=None):
+        original_name = str(path)
+        path = self.path(path, dir_fd)
+        self.event("open", path, flags, dir_fd)
+        assert path != _FAKE_PATH
+        if not self.bound_paths:
+            assert flags == (657408 if path == _LOCK_LITERAL else 720896)
+            if dir_fd is None:
+                assert original_name in ("/", "/tmp")
+            else:
+                assert "/" not in original_name and original_name not in (".", "..")
+        metadata = self.metadata[path]
+        if flags & 131072 and metadata.st_mode & 0o170000 == 0o120000:
+            raise OSError(40, "NOFOLLOW symlink")
+        if flags & 65536 and metadata.st_mode & 0o170000 != 0o40000:
+            raise NotADirectoryError(20, "DIRECTORY component")
+        return self.allocate(path, metadata)
+
+    def close(self, fd):
+        assert fd in self.live, "소유하지 않거나 이미 소비한 FD를 close함"
+        path, _ = self.live.pop(fd)
+        self.event("close", fd, path)
+
+    def fstat(self, fd):
+        path, metadata = self.live[fd]
+        self.event("fstat", path, fd)
+        current = self.metadata.get(path)
+        if current is not None and (current.st_dev, current.st_ino) == (metadata.st_dev, metadata.st_ino):
+            return current
+        return metadata
+
+    def stat(self, path, *, dir_fd=None, follow_symlinks=True):
+        path = self.path(path, dir_fd)
+        self.event("stat", path, dir_fd, follow_symlinks)
+        assert follow_symlinks is False
+        if path not in self.metadata:
+            raise FileNotFoundError(2, "독립 ENOENT")
+        return self.metadata[path]
+
+    def listdir(self, fd):
+        assert type(fd) is int
+        assert self.live[fd][0] == _FAKE_DIRECTORY
+        self.event("listdir", fd)
+        return list(self.contents)
+
+    def rmdir(self, name, *, dir_fd):
+        assert name == "qwq-b1-runner-fixed"
+        assert self.live[dir_fd][0] == "/tmp"
+        self.event("rmdir", name, dir_fd)
+
+    def mkdtemp(self, *, prefix, dir):
+        assert (prefix, dir) == ("qwq-b1-runner-", "/tmp")
+        self.event("mkdtemp", prefix, dir)
+        return self.created_path
+
+    def flock(self, fd, flags):
+        assert self.live[fd][0] == _LOCK_LITERAL
+        assert flags in (6, 8)
+        self.event("flock", fd, flags)
+        if flags == 6 and self.flocks:
+            action = self.flocks.pop(0)
+            if isinstance(action, BaseException):
+                raise action
+            action()
+
+    def sleep(self, seconds):
+        assert 0 < seconds <= 0.005
+        self.event("sleep", seconds)
+        assert self.polls, "독립 sleep trace 소진"
+        self.now = self.polls.pop(0)
+
+    def dup(self, fd):
+        assert self.bound_paths
+        self.event("dup", fd)
+        return self.allocate(*self.live[fd])
+
+    def fdopen(self, fd, mode, *, buffering=-1):
+        self.event("fdopen", fd, mode, buffering)
+        pytest.fail("이 행렬에서 성공 fdopen은 필요하지 않음")
+
+
+def _coordination_case(monkeypatch):
+    module = _load_source("_b1_coordination_matrix", "pytest_evidence_controller.py")
+    calls = _CoordinationSyscalls(monkeypatch)
+    return module, calls, module._B1Coordination(), module._B1Budget(0.0)
+
+
+def _assert_close_once(calls, coordination):
+    before = set(calls.live)
+    lock = {fd for fd, item in calls.live.items() if item[0] == _LOCK_LITERAL}
+    start = len(calls.events)
+    result = coordination.close()
+    closes = [event[1] for event in calls.events[start:] if event[0] == "close"]
+    assert sorted(closes) == sorted(before)
+    assert len(closes) == len(set(closes))
+    if lock:
+        assert closes[-1] in lock
+    assert coordination.controller_fds() == ()
+    assert calls.live == {}
+    end = len(calls.events)
+    assert coordination.close() is result
+    assert len(calls.events) == end
+    return result
+
+
+@_scoped_stdlib_adapters
+def test_b1_coordination_safe_lock_fake_path_and_lock_last_close(monkeypatch):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    assert coordination.acquire_lock([False], budget) is True
+    assert coordination.prepare_fake_key() == _FAKE_PATH
+    snapshot = coordination.controller_fds()
+    assert type(snapshot) is tuple
+    assert coordination.controller_fds() is not snapshot
+    assert snapshot == tuple(sorted(calls.live))
+    assert len(snapshot) == 4
+    assert {calls.live[fd][0] for fd in snapshot} == {
+        str(Path(_LOCK_LITERAL).parent), _LOCK_LITERAL, "/tmp", _FAKE_DIRECTORY,
+    }
+    assert coordination.fake_key_path == _FAKE_PATH
+    assert coordination.facts() == {
+        "lock_acquired": True, "lock_identity_stable": False,
+        "fake_key_absent_before": True, "fake_key_absent_after": False,
+        "fake_directory_removed": False, "fake_key_path_sha256": _FAKE_HASH,
+    }
+    assert coordination.finish_fake_key() is True
+    assert coordination.check_lock_identity() is True
+    assert coordination.facts() == {
+        "lock_acquired": True, "lock_identity_stable": True,
+        "fake_key_absent_before": True, "fake_key_absent_after": True,
+        "fake_directory_removed": True, "fake_key_path_sha256": _FAKE_HASH,
+    }
+    assert _assert_close_once(calls, coordination) is True
+    assert len(snapshot) == 4
+    assert calls.events[-2][0] == "flock" and calls.events[-2][2] == 8
+    assert calls.events[-1][0] == "close"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("st_mode", 0o10600), ("st_mode", 0o40600), ("st_mode", 0o20600),
+    ("st_mode", 0o140600), ("st_mode", 0o120600), ("st_uid", 1002), ("st_nlink", 2),
+])
+@_scoped_stdlib_adapters
+def test_b1_coordination_unsafe_lock_leaf_never_flocks(monkeypatch, field, value):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    setattr(calls.metadata[_LOCK_LITERAL], field, value)
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == "startup_error"
+    assert not any(event[0] == "flock" for event in calls.events)
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize(("entry", "stopped", "reason"), [
+    (0.0, True, "interrupted"), (896.0, False, "timeout"), (896.0, True, "interrupted"),
+])
+@_scoped_stdlib_adapters
+def test_b1_coordination_entry_rejection_has_no_path_work(monkeypatch, entry, stopped, reason):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    calls.now = entry
+    assert coordination.acquire_lock([stopped], budget) is False
+    assert coordination.error == reason
+    assert calls.events == []
+
+
+@pytest.mark.parametrize(("entry", "end", "reason", "failure"), [
+    (0.0, 240.0, "lock_timeout", BlockingIOError(11, "busy")),
+    (0.0, 240.0, "lock_timeout", OSError(13, "busy")),
+    (700.0, 896.0, "timeout", BlockingIOError(11, "busy")),
+    (0.0, 240.0, "startup_error", InterruptedError(4, "interrupted")),
+])
+@_scoped_stdlib_adapters
+def test_b1_coordination_lock_deadline_is_not_renewed(monkeypatch, entry, end, reason, failure):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    calls.now = entry
+    calls.polls = [end]
+    calls.flocks = [failure]
+    if isinstance(failure, InterruptedError):
+        calls.flocks = [lambda: (setattr(calls, "now", end), (_ for _ in ()).throw(failure))]
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == reason
+    assert len([event for event in calls.events if event[0] == "flock"]) == 1
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize("phase", ["setup", "flock", "recheck"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_time_consumed_at_boundaries_prevents_success(monkeypatch, phase):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    acquired = [False]
+
+    def advance(event):
+        if event[0] == "flock" and event[2] == 6:
+            acquired[0] = True
+            if phase == "flock":
+                calls.now = 896.0
+        if phase == "setup" and event[:2] == ("open", _LOCK_LITERAL):
+            calls.now = 240.0
+        if phase == "recheck" and acquired[0] and event[0] == "stat":
+            calls.now = 896.0
+
+    calls.on_event = advance
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == ("startup_error" if phase == "setup" else "timeout")
+    assert coordination.facts()["lock_acquired"] is (phase != "setup")
+    assert not any(event[0] == "flock" and event[2] == 8 for event in calls.events)
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize("stage", ["prepare", "finish"])
+@pytest.mark.parametrize("bad", ["uid", "mode", "special_mode", "type", "identity", "leaf", "symlink", "entry"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_unsafe_fake_directory_is_never_removed(monkeypatch, stage, bad):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    assert coordination.acquire_lock([False], budget) is True
+    if stage == "finish":
+        assert coordination.prepare_fake_key() == _FAKE_PATH
+    metadata = dict(vars(calls.metadata[_FAKE_DIRECTORY]))
+    changes = {"uid": ("st_uid", 1002), "mode": ("st_mode", 0o40755),
+               "special_mode": ("st_mode", 0o44700), "type": ("st_mode", 0o100700),
+               "identity": ("st_ino", 999)}
+    if bad in changes:
+        name, value = changes[bad]
+        metadata[name] = value
+        if bad == "identity" and stage == "prepare":
+            calls.on_event = lambda event: calls.metadata.__setitem__(
+                _FAKE_DIRECTORY, SimpleNamespace(**metadata)) if event[:2] == ("fstat", _FAKE_DIRECTORY) else None
+        else:
+            calls.metadata[_FAKE_DIRECTORY] = SimpleNamespace(**metadata)
+    elif bad in ("leaf", "symlink"):
+        calls.metadata[_FAKE_PATH] = SimpleNamespace(st_dev=7, st_ino=800,
+            st_mode=0o100600 if bad == "leaf" else 0o120777, st_uid=1001, st_nlink=1)
+    else:
+        calls.contents = ["unexpected"]
+    if stage == "prepare":
+        assert coordination.prepare_fake_key() is None
+        assert coordination.error == "startup_error"
+        assert coordination.fake_key_path == _FAKE_PATH
+        assert coordination.facts()["fake_key_path_sha256"] == _FAKE_HASH
+        assert coordination.facts()["fake_key_absent_before"] is False
+    else:
+        assert coordination.finish_fake_key() is False
+        assert coordination.error == "identity_changed"
+        count = len(calls.events)
+        assert coordination.finish_fake_key() is False
+        assert len(calls.events) == count
+    assert not any(event[0] == "rmdir" for event in calls.events)
+    assert coordination.facts()["fake_directory_removed"] is False
+    assert _assert_close_once(calls, coordination) is True
+
+
+def _quiet_coordination_call(monkeypatch, calls, operation, expected):
+    import os
+    import time
+
+    count = len(calls.events)
+    with monkeypatch.context() as patch:
+        patch.setattr(time, "monotonic", calls.forbidden)
+        patch.setattr(os, "getuid", calls.forbidden)
+        assert operation() is expected
+    assert len(calls.events) == count
+
+
+@pytest.mark.parametrize(("state", "finished", "reason"), [
+    ("new", True, None), ("acquire_failed", True, "interrupted"),
+    ("held", True, None), ("creation_failed", False, "startup_error"),
+    ("unbound", False, "startup_error"), ("bound_failed", True, "startup_error"),
+    ("prepared", True, None),
+])
+@_scoped_stdlib_adapters
+def test_b1_coordination_first_finish_is_terminal_and_cached(monkeypatch, state, finished, reason):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    if state == "acquire_failed":
+        assert coordination.acquire_lock([True], budget) is False
+    elif state != "new":
+        assert coordination.acquire_lock([False], budget) is True
+    if state == "creation_failed":
+        calls.errors[("mkdtemp", "qwq-b1-runner-")] = OSError(5, "creation")
+        assert coordination.prepare_fake_key() is None
+    elif state == "unbound":
+        calls.metadata[_FAKE_DIRECTORY].st_uid = 1002
+        assert coordination.prepare_fake_key() is None
+    elif state == "bound_failed":
+        calls.contents = ["unexpected"]
+        assert coordination.prepare_fake_key() is None
+        calls.contents = []
+    elif state == "prepared":
+        assert coordination.prepare_fake_key() == _FAKE_PATH
+    if state == "creation_failed":
+        assert coordination.fake_key_path is None
+        assert coordination.facts()["fake_key_path_sha256"] is None
+    if state == "unbound":
+        assert coordination.fake_key_path == _FAKE_PATH
+        assert coordination.facts()["fake_key_path_sha256"] == _FAKE_HASH
+    if state in ("bound_failed", "prepared"):
+        assert coordination.finish_fake_key() is finished
+        assert coordination.facts()["fake_directory_removed"] is True
+    else:
+        _quiet_coordination_call(monkeypatch, calls, coordination.finish_fake_key, finished)
+        assert coordination.facts()["fake_directory_removed"] is False
+    assert coordination.error == reason
+    observed = coordination.facts()
+    snapshot = coordination.controller_fds()
+    _quiet_coordination_call(monkeypatch, calls, coordination.finish_fake_key, finished)
+    _quiet_coordination_call(monkeypatch, calls, lambda: coordination.acquire_lock([False], budget), False)
+    _quiet_coordination_call(monkeypatch, calls, coordination.prepare_fake_key, None)
+    assert coordination.error == (reason or "startup_error")
+    assert coordination.facts() == observed
+    assert coordination.controller_fds() == snapshot
+    assert _assert_close_once(calls, coordination) is True
+    _quiet_coordination_call(monkeypatch, calls, coordination.finish_fake_key, finished)
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+@_scoped_stdlib_adapters
+def test_b1_coordination_first_finish_after_close_cannot_remove_or_restart(monkeypatch, prepared):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    if prepared:
+        assert coordination.acquire_lock([False], budget) is True
+        assert coordination.prepare_fake_key() == _FAKE_PATH
+        assert coordination.check_lock_identity() is True
+    observed = coordination.facts()
+    assert _assert_close_once(calls, coordination) is True
+    assert coordination.facts() == observed
+    _quiet_coordination_call(monkeypatch, calls, coordination.finish_fake_key, False)
+    _quiet_coordination_call(monkeypatch, calls, coordination.prepare_fake_key, None)
+    _quiet_coordination_call(monkeypatch, calls, lambda: coordination.acquire_lock([False], budget), False)
+    assert coordination.error == "startup_error"
+    assert coordination.facts() == observed
+    _quiet_coordination_call(monkeypatch, calls, coordination.check_lock_identity, False)
+    assert coordination.facts()["lock_identity_stable"] is False
+    assert coordination.facts()["fake_directory_removed"] is False
+    assert not any(event[0] == "rmdir" for event in calls.events)
+
+
+@pytest.mark.parametrize("failed_action", ["unlock", "close", "lock_close", "both"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_finalization_failure_is_sticky_and_detaches_before_syscall(monkeypatch, failed_action):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    assert coordination.acquire_lock([False], budget) is True
+    assert coordination.prepare_fake_key() == _FAKE_PATH
+    assert coordination.finish_fake_key() is True
+    owned = coordination.controller_fds()
+    lock_fd = next(fd for fd in owned if calls.live[fd][0] == _LOCK_LITERAL)
+    if failed_action in ("unlock", "both"):
+        calls.errors[("flock", lock_fd)] = OSError(5, "unlock")
+    if failed_action == "close":
+        calls.errors[("close", owned[0])] = OSError(4, "close EINTR")
+    if failed_action in ("lock_close", "both"):
+        calls.errors[("close", lock_fd)] = OSError(9, "lock close EBADF")
+
+    def already_detached(event):
+        if event[0] in ("close", "flock"):
+            assert coordination.controller_fds() == ()
+
+    calls.on_event = already_detached
+    assert _assert_close_once(calls, coordination) is False
+    assert coordination.close_failed is True
+    assert coordination.error == "io_error"
+    _quiet_coordination_call(monkeypatch, calls, coordination.finish_fake_key, True)
+    assert coordination.error == "io_error"
+
+
+def _bound_paths_case(monkeypatch):
+    module = _load_source("_b1_bound_paths_matrix", "pytest_evidence_controller.py")
+    calls = _CoordinationSyscalls(monkeypatch, bound_paths=True)
+    monkeypatch.setattr(module, "ROOT", Path("/fixture"))
+    path = Path("/fixture/a/output")
+    calls.metadata[str(path)] = SimpleNamespace(st_dev=7, st_ino=900,
+        st_mode=0o100600, st_uid=1001, st_nlink=1)
+    return module, calls, path
+
+
+@pytest.mark.parametrize(("first_strict", "fail_fd"), [(False, None), (True, None), (False, 70), (True, 72)])
+@_scoped_stdlib_adapters
+def test_b1_bound_paths_strict_close_preserves_default_and_sticky_result(monkeypatch, first_strict, fail_fd):
+    module, calls, path = _bound_paths_case(monkeypatch)
+    bounds = module._BoundPaths([path])
+    snapshot = bounds.controller_fds()
+    assert type(snapshot) is tuple and snapshot == (70, 72)
+    assert bounds.controller_fds() is not snapshot
+    assert bounds.close_failed is False
+    if fail_fd is not None:
+        calls.errors[("close", fail_fd)] = OSError(4, "EINTR close")
+    start = len(calls.events)
+
+    def detached(event):
+        if event[0] == "close":
+            assert bounds.controller_fds() == ()
+
+    calls.on_event = detached
+    if first_strict:
+        assert bounds.close(strict=True) is (fail_fd is None)
+    else:
+        assert bounds.close() is None
+    assert sorted(event[1] for event in calls.events[start:] if event[0] == "close") == [70, 72]
+    assert bounds.close_failed is (fail_fd is not None)
+    assert calls.live == {}
+    assert snapshot == (70, 72)
+    end = len(calls.events)
+    assert bounds.close(strict=True) is (fail_fd is None)
+    assert bounds.close() is None
+    assert len(calls.events) == end
+
+
+@pytest.mark.parametrize("case", ["operation_only", "operation_then_close", "previous_close", "previous_then_current_close"])
+@_scoped_stdlib_adapters
+def test_b1_bound_paths_walk_exception_identity_and_close_once(monkeypatch, case):
+    module, calls, path = _bound_paths_case(monkeypatch)
+    bounds = module._BoundPaths([path])
+    operation = FileNotFoundError(2, "component A")
+    previous = OSError(5, "close B")
+    current = OSError(9, "close C")
+    expected = operation
+    if case.startswith("operation"):
+        calls.errors[("open", "/fixture/a")] = operation
+    if case in ("operation_then_close", "previous_close", "previous_then_current_close"):
+        calls.errors[("close", 73)] = previous
+        expected = previous
+    if case == "previous_then_current_close":
+        calls.errors[("close", 74)] = current
+        expected = current
+    start = len(calls.events)
+    with pytest.raises(OSError) as caught:
+        bounds._walk(Path("/fixture/a"))
+    assert caught.value is expected
+    assert caught.value.errno == (2 if case == "operation_only" else 9 if case == "previous_then_current_close" else 5)
+    closes = [event[1] for event in calls.events[start:] if event[0] == "close"]
+    assert closes == ([73] if case.startswith("operation") else [73, 74])
+    assert bounds.close_failed is (case != "operation_only")
+    assert bounds.controller_fds() == (70, 72)
+    assert bounds.close(strict=True) is (case == "operation_only")
+    assert calls.live == {}
+
+
+@pytest.mark.parametrize(("operation_fails", "close_fails"), [(True, False), (True, True), (False, True)])
+@_scoped_stdlib_adapters
+def test_b1_bound_paths_open_preserves_finally_exception_precedence(monkeypatch, operation_fails, close_fails):
+    module, calls, path = _bound_paths_case(monkeypatch)
+    bounds = module._BoundPaths([path])
+    operation = OSError(13, "identity A")
+    closing = OSError(5, "close B")
+    if operation_fails:
+        calls.errors[("fstat", "/fixture/a")] = operation
+    if close_fails:
+        calls.errors[("close", 74)] = closing
+    start = len(calls.events)
+    with pytest.raises(OSError) as caught:
+        bounds.open(path, 0)
+    assert caught.value is (closing if close_fails else operation)
+    assert caught.value.errno == (5 if close_fails else 13)
+    assert [event[1] for event in calls.events[start:] if event[0] == "close"] == [73, 74]
+    assert not any(event[:2] == ("open", "/fixture/a/output") for event in calls.events)
+    assert bounds.close_failed is close_fails
+    assert bounds.close(strict=True) is (not close_fails)
+    assert calls.live == {}
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+@_scoped_stdlib_adapters
+def test_b1_bound_paths_create_preserves_fdopen_cleanup_exception_precedence(monkeypatch, close_fails):
+    module, calls, path = _bound_paths_case(monkeypatch)
+    bounds = module._BoundPaths([path])
+    operation = OSError(12, "fdopen A")
+    closing = OSError(5, "close B")
+    calls.errors[("fdopen", 75)] = operation
+    if close_fails:
+        calls.errors[("close", 75)] = closing
+    start = len(calls.events)
+    with pytest.raises(OSError) as caught:
+        bounds.create(path)
+    assert caught.value is (closing if close_fails else operation)
+    assert caught.value.errno == (5 if close_fails else 12)
+    assert [event[1] for event in calls.events[start:] if event[0] == "close"] == [73, 74, 75]
+    assert len([event for event in calls.events[start:] if event[0] == "fdopen"]) == 1
+    assert bounds.close_failed is close_fails
+    assert bounds.close(strict=True) is (not close_fails)
+    assert calls.live == {}
+
+
+@_scoped_stdlib_adapters
+def test_b1_bound_paths_constructor_keeps_operation_error_after_default_close_failure(monkeypatch):
+    module, calls, path = _bound_paths_case(monkeypatch)
+    operation = FileNotFoundError(2, "parent A")
+    closing = OSError(5, "root close B")
+    calls.errors[("open", "/fixture/a")] = operation
+    calls.errors[("close", 70)] = closing
+    observed = []
+
+    class ObservedBounds(module._BoundPaths):
+        def close(self, *, strict=False):
+            observed.append(self)
+            return super().close(strict=strict)
+
+    with pytest.raises(FileNotFoundError) as caught:
+        ObservedBounds([path])
+    assert caught.value is operation and caught.value.errno == 2
+    assert len(observed) == 1
+    bounds = observed[0]
+    assert bounds.close_failed is True
+    assert bounds.controller_fds() == ()
+    assert [event[1] for event in calls.events if event[0] == "close"] == [71, 70]
+    end = len(calls.events)
+    assert bounds.close(strict=True) is False
+    assert len(calls.events) == end
+    assert calls.live == {}
+
+
+@_scoped_stdlib_adapters
+def test_b1_bound_paths_receipt_missing_component_then_close_eio_stays_invalid(monkeypatch):
+    module, calls, path = _bound_paths_case(monkeypatch)
+    bounds = module._BoundPaths([path])
+    calls.errors[("open", "/fixture/a")] = FileNotFoundError(2, "missing component")
+    calls.errors[("close", 73)] = OSError(5, "cleanup EIO")
+    assert module._receipt(path, bounds) == {"state": "invalid", "bytes": 0, "sha256": None}
+    assert bounds.close_failed is True
+    assert bounds.close(strict=True) is False
+    assert calls.live == {}
+
+
+@pytest.mark.parametrize("phase", ["acquire", "check"])
+@pytest.mark.parametrize("prelatched", [False, True])
+@_scoped_stdlib_adapters
+def test_b1_coordination_transient_close_failure_vetoes_operation(monkeypatch, phase, prelatched):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    if phase == "check":
+        assert coordination.acquire_lock([False], budget) is True
+        if prelatched:
+            _quiet_coordination_call(monkeypatch, calls, lambda: coordination.acquire_lock([False], budget), False)
+    elif prelatched:
+        # acquire는 기존 error가 있으면 새 I/O 자체가 금지된다.
+        assert coordination.acquire_lock([True], budget) is False
+        _quiet_coordination_call(monkeypatch, calls, lambda: coordination.acquire_lock([False], budget), False)
+        assert coordination.error == "interrupted"
+        assert coordination.close_failed is False
+        return
+    failed = []
+
+    def fail_once(event):
+        if event[0] == "close" and not failed:
+            failed.append(event[1])
+            raise OSError(5, "transient close")
+
+    calls.on_event = fail_once
+    start = len(calls.events)
+    result = coordination.acquire_lock([False], budget) if phase == "acquire" else coordination.check_lock_identity()
+    assert result is False
+    assert len(failed) == 1
+    assert coordination.close_failed is True
+    assert coordination.error == ("startup_error" if prelatched else "io_error")
+    assert coordination.facts()["lock_identity_stable"] is False
+    assert not any(event[0] == "flock" for event in calls.events[start:])
+    assert failed[0] not in coordination.controller_fds()
+    calls.on_event = lambda event: None
+    assert _assert_close_once(calls, coordination) is False
+    assert len([event for event in calls.events if event[:2] == ("close", failed[0])]) == 1
+
+
+@pytest.mark.parametrize(("bad", "path"), [
+    ("missing", _LOCK_LITERAL), ("open_error", "/home"),
+    ("symlink", "/home"), ("not_directory", "/home"),
+    ("parent_replaced", str(Path(_LOCK_LITERAL).parent)), ("leaf_replaced", _LOCK_LITERAL),
+])
+@_scoped_stdlib_adapters
+def test_b1_coordination_failed_lock_binding_never_reaches_flock(monkeypatch, bad, path):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    if bad in ("missing", "open_error"):
+        calls.errors[("open", path)] = OSError(2 if bad == "missing" else 13, "binding")
+    elif bad in ("symlink", "not_directory"):
+        calls.metadata[path].st_mode = 0o120777 if bad == "symlink" else 0o100600
+    else:
+        changed = dict(vars(calls.metadata[path]), st_ino=999)
+
+        def replace(event):
+            trigger = ("open", _LOCK_LITERAL) if bad == "parent_replaced" else ("fstat", _LOCK_LITERAL)
+            if event[:2] == trigger:
+                calls.metadata[path] = SimpleNamespace(**changed)
+
+        calls.on_event = replace
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == "startup_error"
+    assert not any(event[0] == "flock" for event in calls.events)
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize("bad", ["leaf_identity", "parent_identity", "mode", "uid", "nlink", "stat_error"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_explicit_recheck_invalidates_stability_without_unlock(monkeypatch, bad):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    assert coordination.acquire_lock([False], budget) is True
+    assert coordination.check_lock_identity() is True
+    if bad == "stat_error":
+        calls.errors[("stat", _LOCK_LITERAL)] = OSError(5, "stat")
+    else:
+        path = str(Path(_LOCK_LITERAL).parent) if bad == "parent_identity" else _LOCK_LITERAL
+        metadata = dict(vars(calls.metadata[path]))
+        key, value = {"leaf_identity": ("st_ino", 999), "parent_identity": ("st_ino", 999),
+                      "mode": ("st_mode", 0o10600), "uid": ("st_uid", 1002), "nlink": ("st_nlink", 2)}[bad]
+        metadata[key] = value
+        calls.metadata[path] = SimpleNamespace(**metadata)
+    start = len(calls.events)
+    assert coordination.check_lock_identity() is False
+    assert coordination.error == "identity_changed"
+    assert coordination.facts()["lock_identity_stable"] is False
+    assert coordination.facts()["lock_acquired"] is True
+    assert not any(event[0] == "flock" for event in calls.events[start:])
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize("boundary", ["poll", "success", "interrupted"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_stopped_wins_at_post_syscall_boundaries(monkeypatch, boundary):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    stopped = [False]
+    calls.polls = [896.0]
+    if boundary == "poll":
+        calls.flocks = [BlockingIOError(11, "busy")]
+        calls.on_event = lambda event: stopped.__setitem__(0, True) if event[0] == "sleep" else None
+    else:
+        def stop():
+            stopped[0] = True
+            calls.now = 896.0
+            if boundary == "interrupted":
+                raise InterruptedError(4, "interrupted")
+        calls.flocks = [stop]
+    assert coordination.acquire_lock(stopped, budget) is False
+    assert coordination.error == "interrupted"
+    assert coordination.facts()["lock_acquired"] is (boundary == "success")
+    assert _assert_close_once(calls, coordination) is True
+
+
+@_scoped_stdlib_adapters
+def test_b1_coordination_non_contention_flock_error_is_startup_error(monkeypatch):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    calls.flocks = [OSError(5, "flock EIO")]
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == "startup_error"
+    assert not any(event[0] == "sleep" for event in calls.events)
+    assert _assert_close_once(calls, coordination) is True
+    assert not any(event[0] == "flock" and event[2] == 8 for event in calls.events)
+
+
+@pytest.mark.parametrize("returned", ["relative", "/var/qwq-b1-runner-x", "/tmp/qwq-b1-runner-",
+                                       "/tmp/other", "/tmp/qwq-b1-runner-x/child"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_invalid_returned_fake_name_never_confers_removal(monkeypatch, returned):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    assert coordination.acquire_lock([False], budget) is True
+    calls.created_path = returned
+    assert coordination.prepare_fake_key() is None
+    assert coordination.error == "startup_error"
+    assert coordination.fake_key_path is None
+    assert coordination.facts()["fake_key_path_sha256"] is None
+    _quiet_coordination_call(monkeypatch, calls, coordination.finish_fake_key, False)
+    assert not any(event[0] == "rmdir" for event in calls.events)
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize(("phase", "bad"), [
+    ("prepare", "parent"), ("prepare", "leaf_stat"), ("prepare", "listing"),
+    ("prepare", "dir_open"), ("prepare", "dir_fstat"), ("prepare", "dir_stat"),
+    ("finish", "parent"), ("finish", "leaf_stat"), ("finish", "listing"), ("finish", "rmdir"),
+    ("finish", "dir_fstat"), ("finish", "dir_stat"),
+])
+@_scoped_stdlib_adapters
+def test_b1_coordination_fake_finalization_failures_preserve_unexpected_paths(monkeypatch, phase, bad):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    assert coordination.acquire_lock([False], budget) is True
+    if phase == "finish":
+        assert coordination.prepare_fake_key() == _FAKE_PATH
+    if bad == "parent":
+        replacement = SimpleNamespace(**dict(vars(calls.metadata["/tmp"]), st_ino=999))
+        if phase == "prepare":
+            calls.on_event = lambda event: calls.metadata.__setitem__("/tmp", replacement) if event[:2] == ("open", _FAKE_DIRECTORY) else None
+        else:
+            calls.metadata["/tmp"] = replacement
+    elif bad == "leaf_stat":
+        calls.errors[("stat", _FAKE_PATH)] = PermissionError(13, "not absence")
+    elif bad == "rmdir":
+        calls.errors[("rmdir", "qwq-b1-runner-fixed")] = OSError(39, "late entry")
+    elif bad.startswith("dir_"):
+        operation = {"dir_open": "open", "dir_fstat": "fstat", "dir_stat": "stat"}[bad]
+        calls.errors[(operation, _FAKE_DIRECTORY)] = OSError(5, "directory metadata")
+    else:
+        calls.on_event = lambda event: (_ for _ in ()).throw(OSError(5, "listing")) if event[0] == "listdir" else None
+    if phase == "prepare":
+        assert coordination.prepare_fake_key() is None
+        assert coordination.error == "startup_error"
+    else:
+        assert coordination.finish_fake_key() is False
+        assert coordination.error == ("identity_changed" if bad == "parent" else "io_error")
+        _quiet_coordination_call(monkeypatch, calls, coordination.finish_fake_key, False)
+        assert coordination.facts()["fake_key_absent_after"] is (bad == "rmdir")
+    assert coordination.facts()["fake_directory_removed"] is False
+    assert len([event for event in calls.events if event[0] == "rmdir"]) == (1 if bad == "rmdir" else 0)
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize("state", ["new", "failed_lock", "rejected_held_lock", "repeated_prepare"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_prepare_guard_never_creates_or_retries(monkeypatch, state):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    reason = "startup_error"
+    if state == "failed_lock":
+        assert coordination.acquire_lock([True], budget) is False
+        reason = "interrupted"
+    elif state == "rejected_held_lock":
+        calls.flocks = [lambda: setattr(calls, "now", 896.0)]
+        assert coordination.acquire_lock([False], budget) is False
+        reason = "timeout"
+    elif state == "repeated_prepare":
+        assert coordination.acquire_lock([False], budget) is True
+        assert coordination.prepare_fake_key() == _FAKE_PATH
+    observed = coordination.facts()
+    snapshot = coordination.controller_fds()
+    path = coordination.fake_key_path
+    _quiet_coordination_call(monkeypatch, calls, coordination.prepare_fake_key, None)
+    assert coordination.error == reason
+    assert coordination.facts() == observed
+    assert coordination.controller_fds() == snapshot
+    assert coordination.fake_key_path == path
+    assert _assert_close_once(calls, coordination) is True
+    assert not any(event[0] == "rmdir" for event in calls.events)
+
+
+@pytest.mark.parametrize("failed_lock", [False, True])
+@_scoped_stdlib_adapters
+def test_b1_coordination_missing_held_lock_check_is_quiet(monkeypatch, failed_lock):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    if failed_lock:
+        assert coordination.acquire_lock([True], budget) is False
+    _quiet_coordination_call(monkeypatch, calls, coordination.check_lock_identity, False)
+    assert coordination.error == ("interrupted" if failed_lock else "startup_error")
+    assert coordination.facts()["lock_identity_stable"] is False
+    assert coordination.controller_fds() == ()
+
+
+@_scoped_stdlib_adapters
+def test_b1_coordination_close_failure_cannot_replace_prior_timeout(monkeypatch):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    calls.flocks = [lambda: setattr(calls, "now", 896.0)]
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == "timeout"
+    lock_fd = next(fd for fd, item in calls.live.items() if item[0] == _LOCK_LITERAL)
+    calls.errors[("close", lock_fd)] = OSError(5, "close")
+    assert _assert_close_once(calls, coordination) is False
+    assert coordination.error == "timeout"
+    assert coordination.close_failed is True
+
+
+@_scoped_stdlib_adapters
+def test_b1_coordination_owned_snapshots_are_pure_copies(monkeypatch):
+    import os
+    import time
+
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    assert coordination.acquire_lock([False], budget) is True
+    assert coordination.prepare_fake_key() == _FAKE_PATH
+    expected_fds = tuple(sorted(calls.live))
+    with monkeypatch.context() as patch:
+        for name in ("open", "close", "dup", "fstat", "stat", "listdir", "getuid"):
+            patch.setattr(os, name, calls.forbidden)
+        patch.setattr(time, "monotonic", calls.forbidden)
+        patch.setattr(fcntl, "flock", calls.forbidden)
+        first = coordination.controller_fds()
+        assert first == expected_fds and type(first) is tuple
+        assert coordination.controller_fds() is not first
+        facts = coordination.facts()
+        facts["fake_key_absent_before"] = False
+        assert coordination.facts()["fake_key_absent_before"] is True
+    assert _assert_close_once(calls, coordination) is True
+    assert first == expected_fds
+
+
+@_scoped_stdlib_adapters
+def test_b1_coordination_poll_sleep_is_capped_by_remaining_window(monkeypatch):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    calls.polls = [240.0]
+
+    def busy_near_end():
+        calls.now = 239.999
+        raise BlockingIOError(11, "busy")
+
+    calls.flocks = [busy_near_end]
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == "lock_timeout"
+    sleeps = [event[1] for event in calls.events if event[0] == "sleep"]
+    assert sleeps and all(0 < seconds <= 0.001001 for seconds in sleeps)
+    assert _assert_close_once(calls, coordination) is True
+
+
+@_scoped_stdlib_adapters
+def test_b1_bound_paths_create_temporary_close_failure_never_reaches_leaf_or_fdopen(monkeypatch):
+    module, calls, path = _bound_paths_case(monkeypatch)
+    bounds = module._BoundPaths([path])
+    closing = OSError(5, "walk close")
+    calls.errors[("close", 73)] = closing
+    start = len(calls.events)
+    with pytest.raises(OSError) as caught:
+        bounds.create(path)
+    assert caught.value is closing and caught.value.errno == 5
+    assert [event[1] for event in calls.events[start:] if event[0] == "close"] == [73, 74]
+    assert not any(event[0] == "fdopen" or event[:2] == ("open", "/fixture/a/output") for event in calls.events)
+    assert bounds.close_failed is True
+    assert bounds.close(strict=True) is False
+    assert calls.live == {}
+
+
+@pytest.mark.parametrize("path", [_LOCK_LITERAL, str(Path(_LOCK_LITERAL).parent)])
+@_scoped_stdlib_adapters
+def test_b1_coordination_post_flock_replacement_preserves_acquisition_but_rejects(monkeypatch, path):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    replacement = SimpleNamespace(**dict(vars(calls.metadata[path]), st_ino=999))
+    calls.flocks = [lambda: calls.metadata.__setitem__(path, replacement)]
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == "startup_error"
+    assert coordination.facts()["lock_acquired"] is True
+    assert not any(event[0] == "flock" and event[2] == 8 for event in calls.events)
+    _quiet_coordination_call(monkeypatch, calls, coordination.prepare_fake_key, None)
+    assert _assert_close_once(calls, coordination) is True
+
+
+@pytest.mark.parametrize("stage", ["before_flock", "after_flock"])
+@_scoped_stdlib_adapters
+def test_b1_coordination_lock_fstat_error_never_claims_success(monkeypatch, stage):
+    module, calls, coordination, budget = _coordination_case(monkeypatch)
+    failure = OSError(5, "fstat")
+    if stage == "before_flock":
+        calls.errors[("fstat", _LOCK_LITERAL)] = failure
+    else:
+        calls.flocks = [lambda: calls.errors.__setitem__(("fstat", _LOCK_LITERAL), failure)]
+    assert coordination.acquire_lock([False], budget) is False
+    assert coordination.error == "startup_error"
+    assert coordination.facts()["lock_acquired"] is (stage == "after_flock")
+    assert _assert_close_once(calls, coordination) is True
