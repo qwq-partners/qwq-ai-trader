@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — B1 2MiB 표준 실행기 별도 계획 승인
+
+- 기존8MiB/v1을 유지하는 고정 B1 프로필·strict v2 프로세스 결속 계약을 설계했다. 호출별 대기시간으로 전체 수명을 재던 계획 공백을 독립 monotonic 전후 상한/원문 결속으로 수정해 critical 계획 한정 재승인받았다.
+- 구현·실제 프로필 검증은 미완, N4097은 UNRUN이다. 프로세스 종료 결속을 skip/xfail 허용이나 native/운영 승인으로 쓰지 않는다. [원장](docs/reviews/b1-standard-runner-2026-09-27.md).
+
 ## 2026-09-27 — B1b 구성·제어 전이 계획 한정 승인
 
 - B1a 보존 위에 고유 키 구성·순서 게시·중첩 CONT 인계의 test-only 계획을 고정했다. 별도 critical 리뷰의 pytest 파일명 충돌을 수정하고 tail-index 후속 정리 의무·private 생성자 반환 경계를 보완해 계획 한정 재승인받았다.

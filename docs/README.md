@@ -6,6 +6,8 @@
 
 ### Architecture (아키텍처)
 
+- [B1 2MiB 표준 실행기 진행](reviews/b1-standard-runner-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-b1-standard-runner-design.md) · [계획](superpowers/plans/2026-09-27-b1-standard-runner.md) — 고정 프로필·기존8MiB 보존·독립 전체 시간 관측, 계획 한정 승인/구현 미완
+
 - [Decoder B1b 구성·제어 진행](reviews/decoder-b1b-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-decoder-b1b-construction-control-design.md) · [계획](superpowers/plans/2026-09-27-decoder-b1b-construction-control.md) — 계획 한정 독립 재승인, 구현·인수 미완; B1a 보존·별도 파일명·full B1/native/폐기와 분리
 
 - [Decoder B1a 기본 구조 시험 인수](reviews/decoder-b1a-2026-09-27.md) — 독립 oracle/전이·198건·actual raw12·critical 지적0, 전체 UTC/KST 각6527 passed·feature e41f485 통합; full B1/native/대형 UNRUN과 분리
