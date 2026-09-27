@@ -738,3 +738,57 @@ def test_b1_emergency_on_new_owner_consumes_already_started_budget(monkeypatch):
     module._emergency_cleanup(owner, {})
     assert (owner.finish_end, budget.cleanup_end, budget.term_end) == (103.0, 103.0, 101.0)
     assert events == [("signal", 102.0, 9)]
+
+
+def test_b1_probe_fork_oserror_clamps_shared_budget_without_retry_or_parent_close(monkeypatch):
+    """fork 실패를 재시도하거나 새 cleanup 예산을 허용하는 회귀를 잡는다."""
+    module = _load_source("_b1_probe_fork_failure", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (995.5,))
+    events = _probe_adapters(module, monkeypatch, now)
+    budget = module._B1Budget(100.0)
+
+    def failed_fork():
+        assert events == [], "실패한 fork를 재시도함"
+        events.append(("fork",))
+        now[0] = 998.5
+        raise OSError("합성 fork 실패")
+
+    monkeypatch.setattr(module.os, "fork", failed_fork)
+    assert module._probe(996.0, [False], budget=budget, controller_fds=(71, 72)) is False
+    assert events == [("fork",)]
+    assert (budget.total_end, budget.run_end) == (1000.0, 996.0)
+    assert (budget.cleanup_end, budget.term_end) == (999.0, 999.0)
+
+
+def test_v1_probe_fork_oserror_preserves_exception_identity_without_retry_or_parent_close(monkeypatch):
+    """B1 예외 처리가 legacy 예외 전파까지 바꾸는 회귀를 잡는다."""
+    module = _load_source("_v1_probe_fork_failure", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (995.5,))
+    events = _probe_adapters(module, monkeypatch, now)
+    failure = OSError("합성 legacy fork 실패")
+
+    def failed_fork():
+        assert events == [], "실패한 fork를 재시도함"
+        events.append(("fork",))
+        raise failure
+
+    monkeypatch.setattr(module.os, "fork", failed_fork)
+    with pytest.raises(OSError) as caught:
+        module._probe(996.0, [False], controller_fds=(71, 72))
+    assert caught.value is failure
+    assert events == [("fork",)]
+
+
+def test_b1_probe_already_started_cleanup_blocks_fork_and_preserves_first_ends(monkeypatch):
+    """run_end 전이어도 이미 소비한 cleanup을 새 probe가 재사용하지 못한다."""
+    module = _load_source("_b1_probe_used_cleanup", "pytest_evidence_controller.py")
+    now = _clock_trace(module, monkeypatch, (101.0,))
+    events = _probe_adapters(module, monkeypatch, now)
+    budget = module._B1Budget(100.0)
+    budget.begin_cleanup(100.0)
+    assert (budget.cleanup_end, budget.term_end) == (103.0, 101.0)
+
+    assert module._probe(996.0, [False], budget=budget, controller_fds=(71, 72)) is False
+    assert events == []
+    assert (budget.total_end, budget.run_end) == (1000.0, 996.0)
+    assert (budget.cleanup_end, budget.term_end) == (103.0, 101.0)
