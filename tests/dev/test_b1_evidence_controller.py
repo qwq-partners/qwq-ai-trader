@@ -1756,3 +1756,94 @@ def test_b1_coordination_lock_fstat_error_never_claims_success(monkeypatch, stag
     assert coordination.error == "startup_error"
     assert coordination.facts()["lock_acquired"] is (stage == "after_flock")
     assert _assert_close_once(calls, coordination) is True
+
+
+class _OutputCase:
+    """출력 전용 syscall script. 생성은 stdlib patch보다 먼저 끝난다."""
+
+    def __init__(self, stdout=(), stderr=(), *, budget=True):
+        self.module = _load_source("_b1_output_matrix", "pytest_evidence_controller.py")
+        self.budget = self.module._B1Budget(0.0) if budget else None
+        self.owner = self.module._Owner(budget=self.budget)
+        self.owner.leader = 41
+        self.pipes = {"stdout": 31, "stderr": 32, "control": 33}
+        self.logs = {"stdout": io.BytesIO(), "stderr": io.BytesIO()}
+        frame = json.dumps({"schema": "qwq.pytest-guard-ready/v1", "guard": _guard_fact()}).encode() + b"\n"
+        self.chunks = {31: list(stdout) + [b""], 32: list(stderr) + [b""], 33: [frame, b""]}
+        self.events = []
+        self.now = 1.0
+        self.times = []
+        self.passes = 0
+        self.echild = True
+        self.stopped = [False]
+
+    def read(self, fd, size):
+        assert size == 65536
+        self.events.append(("read", self.passes, fd))
+        item = self.chunks[fd].pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        assert type(item) is bytes and len(item) <= 65536
+        return item
+
+    def waitpid(self, pid, flags):
+        assert flags == 1073741825
+        self.events.append(("wait", pid))
+        if pid == 41:
+            return 41, 0
+        assert pid == -1
+        if self.echild:
+            raise ChildProcessError
+        return 0, 0
+
+    def monotonic(self):
+        self.events.append(("clock",))
+        return self.now
+
+    def sleep(self, seconds):
+        self.events.append(("sleep", seconds))
+        self.passes += 1
+        assert self.passes < 300, "고정 output trace 소진"
+        if self.times:
+            self.now = self.times.pop(0)
+
+
+def _run_output_case(monkeypatch, case, **options):
+    import os
+    import time
+
+    targets = [(os, "read", case.read), (os, "waitpid", case.waitpid),
+               (os, "close", lambda fd: case.events.append(("close", fd))),
+               (time, "monotonic", case.monotonic), (time, "sleep", case.sleep),
+               (case.module._Owner, "signal_children", lambda owner, sig: case.events.append(("signal", sig)))]
+    originals = [(owner, name, getattr(owner, name)) for owner, name, _ in targets]
+    try:
+        with monkeypatch.context() as patch:
+            for owner, name, replacement in targets:
+                patch.setattr(owner, name, replacement)
+            return case.module._observe(
+                case.owner, case.pipes, case.logs, _guard_fact(), 896.0, case.stopped, **options,
+            )
+    finally:
+        assert all(getattr(owner, name) is original for owner, name, original in originals)
+
+
+def test_b1_observer_exact_cap_has_observed_bytes(monkeypatch):
+    import hashlib
+
+    retained = b"A" * 2097152
+    expected_hash = hashlib.sha256(retained).hexdigest()
+    case = _OutputCase([b"A" * 65536] * 32)
+    complete, guard, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True and guard == _guard_fact()
+    assert case.owner.error is None
+    assert case.owner.returncode == 0
+    assert case.pipes == {}
+    assert case.logs["stdout"].getvalue() == retained
+    assert streams == {
+        "stdout": {"bytes": 2097152, "sha256": expected_hash, "overflow": False, "observed_bytes": 2097152},
+        "stderr": {"bytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                   "overflow": False, "observed_bytes": 0},
+    }
+    assert list(streams["stdout"]) == ["bytes", "sha256", "overflow", "observed_bytes"]
+    assert [event[1] for event in case.events if event[0] == "close"] == [32, 33, 31]
