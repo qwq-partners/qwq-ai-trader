@@ -2341,13 +2341,24 @@ def test_b1_probe_child_systemexit_close_still_reaches_terminal_125(monkeypatch)
     assert (budget.cleanup_end, budget.term_end) == (None, None)
 
 
+def _prerequisite_forbidden(*args, **kwargs):
+    """명시적 금지 adapter marker: scoped caller가 태그 원장부터 기록한다."""
+    raise AssertionError("prerequisite forbidden boundary")
+
+
 def _prerequisite_call(monkeypatch, targets, operation):
     """예외도 patch 안에서 포착하되 결과 검사는 stdlib 복원 뒤 호출자가 한다."""
     originals = [(owner, name, getattr(owner, name)) for owner, name, _ in targets]
+    forbidden_attempts = []
     result, escaped = None, None
     try:
         with monkeypatch.context() as patch:
             for owner, name, replacement in targets:
+                if replacement is _prerequisite_forbidden:
+                    def recorded_forbidden(*args, _tag=name, **kwargs):
+                        forbidden_attempts.append((_tag, args, kwargs))
+                        return _prerequisite_forbidden(*args, **kwargs)
+                    replacement = recorded_forbidden
                 patch.setattr(owner, name, replacement)
             try:
                 result = operation(patch)
@@ -2360,6 +2371,7 @@ def _prerequisite_call(monkeypatch, targets, operation):
                 hasattr(original, "__func__") and getattr(restored, "__func__", None) is original.__func__
                 and getattr(restored, "__self__", None) is original.__self__
             )
+    assert forbidden_attempts == [], ("forbidden attempts survived candidate catch", forbidden_attempts)
     return result, escaped
 
 
@@ -2380,8 +2392,7 @@ def test_b1_prerequisite_child_terminal_and_v1_exception_identity(monkeypatch, f
     def terminal(code):
         events.append(("exit", code))
         raise _ProbeExit(code)
-    def forbidden(*args, **kwargs):
-        raise AssertionError("child가 parent 경계에 진입")
+    forbidden = _prerequisite_forbidden
     targets = [(os, "fork", lambda: 0), (os, "close", close), (os, "_exit", terminal),
                (os, "waitpid", forbidden), (time, "monotonic", lambda: 100.0),
                (time, "sleep", forbidden), (fcntl, "flock", forbidden),
@@ -2450,8 +2461,7 @@ def test_b1_prerequisite_probe_keeps_one_owner_and_first_exception(monkeypatch, 
         if emergency_raises:
             raise second
         return False
-    def forbidden(*args, **kwargs):
-        raise AssertionError("미지정 process/FD 경계")
+    forbidden = _prerequisite_forbidden
     targets = [(module, "_Owner", owner_factory), (os, "fork", fork), (os, "waitpid", forbidden),
                (os, "close", forbidden), (time, "monotonic", clock), (time, "sleep", sleep),
                (os, "_exit", forbidden), (os, "pidfd_open", forbidden),
@@ -2567,8 +2577,7 @@ def test_b1_prerequisite_emergency_process_exception_wins_after_complete_fd_batc
         events.append(("close", fd))
         if batch_failure and fd == 72:
             raise second
-    def forbidden(*args, **kwargs):
-        raise AssertionError("emergency 미지정 syscall")
+    forbidden = _prerequisite_forbidden
     targets = [(time, "monotonic", clock), (time, "sleep", sleep), (owner, "reap", reap),
                (owner, "signal_children", signal_children), (os, "close", close),
                (os, "waitpid", forbidden), (os, "fork", forbidden), (os, "pidfd_open", forbidden),
@@ -2601,8 +2610,7 @@ def test_b1_prerequisite_emergency_oserror_status_does_not_follow_budget_presenc
         closed.append(fd)
         if fd == 72:
             raise OSError(5, "close")
-    def forbidden(*args, **kwargs):
-        raise AssertionError("completed reap 이후 process syscall")
+    forbidden = _prerequisite_forbidden
     targets = [(time, "monotonic", lambda: 100.0), (owner, "reap", lambda: True), (os, "close", close),
                (time, "sleep", forbidden), (owner, "signal_children", forbidden),
                (os, "waitpid", forbidden), (os, "fork", forbidden), (os, "pidfd_open", forbidden),
@@ -2624,7 +2632,7 @@ def test_b1_prerequisite_exact_bool_modes_reject_before_any_effect(monkeypatch, 
     owner = module._Owner(budget=module._B1Budget(0.0))
     descriptors, pipes, events = [71], {"stdout": 72}, []
     def forbidden(*args, **kwargs):
-        events.append("unexpected")
+        events.append(("invalid-mode-effect", args, kwargs))
         raise AssertionError("invalid b1 이전 부작용")
     targets = [(os, "open", forbidden), (os, "close", forbidden), (time, "monotonic", forbidden),
                (owner, "reap", forbidden), (owner, "signal_children", forbidden),
@@ -2658,7 +2666,7 @@ def test_b1_prerequisite_emergency_requires_caller_initialized_interval(monkeypa
             owner.finish_end = 102.0
     pipes, events = {"stdout": 71}, []
     def forbidden(*args, **kwargs):
-        events.append("unexpected")
+        events.append(("uninitialized-cleanup-effect", args, kwargs))
         raise AssertionError("uninitialized cleanup 부작용")
     before = owner.finish_end
     before_budget = None if budget is None else (budget.cleanup_end, budget.term_end)
@@ -2688,14 +2696,30 @@ def _prerequisite_fs_call(monkeypatch, operation, *, bounds=False):
     targets += [(time, "monotonic", time.monotonic), (time, "sleep", time.sleep),
                 (tempfile, "mkdtemp", tempfile.mkdtemp), (fcntl, "flock", fcntl.flock),
                 (subprocess, "Popen", subprocess.Popen)]
+    ledgers = []
     def invoke(patch):
         calls = _CoordinationSyscalls(patch, bound_paths=bounds)
+        calls.close_attempts = []
+        calls.close_violations = []
+        ledgers.append(calls)
+        delegated_close = calls.close
+        def recorded_close(fd):
+            calls.close_attempts.append(fd)
+            if type(fd) is not int or fd not in calls.live:
+                calls.close_violations.append(("unowned-or-consumed", fd))
+                raise AssertionError("invalid prerequisite close ownership")
+            return delegated_close(fd)
+        patch.setattr(os, "close", recorded_close)
         if bounds:
             patch.setattr(module, "ROOT", Path("/fixture"))
             calls.metadata["/fixture/a/output"] = SimpleNamespace(st_dev=7, st_ino=900,
                 st_mode=0o100600, st_uid=1001, st_nlink=1)
         return operation(module, calls)
-    return _prerequisite_call(monkeypatch, targets, invoke)
+    result, escaped = _prerequisite_call(monkeypatch, targets, invoke)
+    for calls in ledgers:
+        assert calls.close_violations == [], ("close ownership violations", calls.close_violations)
+        assert calls.close_attempts == [event[1] for event in calls.events if event[0] == "close"]
+    return result, escaped
 
 
 @pytest.mark.parametrize("b1", [False, True])
@@ -2817,16 +2841,20 @@ def test_b1_prerequisite_coordination_baseexception_batch_is_sticky_and_lock_las
         coordination.prepare_fake_key()
         if prelatched:
             coordination.acquire_lock([False], module._B1Budget(0.0))
-        owned = coordination.controller_fds()
+        owned = tuple(sorted(calls.live))
+        snapshot = coordination.controller_fds()
         lock = next(fd for fd in owned if calls.live[fd][0] == _LOCK_LITERAL)
         directories = sorted(set(owned) - {lock})
         target = lock if where in ("unlock", "lock_close") else directories[0 if where == "first_directory" else 1]
         calls.errors[("flock" if where == "unlock" else "close", target)] = failure
+        detach_snapshots = []
         def detached(event):
             if event[0] in ("flock", "close"):
-                assert coordination.controller_fds() == ()
+                detach_snapshots.append((event[:2], coordination.controller_fds()))
         calls.on_event = detached
-        data.update(calls=calls, coordination=coordination, owned=owned, lock=lock, start=len(calls.events))
+        data.update(calls=calls, coordination=coordination, owned=owned, snapshot=snapshot,
+                    detach_snapshots=detach_snapshots, lock=lock, start=len(calls.events),
+                    attempt_start=len(calls.close_attempts))
         data["result"] = coordination.close()
         data["end"] = len(calls.events)
         data["repeat"] = coordination.close()
@@ -2834,6 +2862,10 @@ def test_b1_prerequisite_coordination_baseexception_batch_is_sticky_and_lock_las
     assert escaped is None and data["result"] is False and data["repeat"] is False
     coordination, calls = data["coordination"], data["calls"]
     events = calls.events[data["start"]:]
+    assert data["snapshot"] == data["owned"]
+    assert data["detach_snapshots"] == [(event[:2], ()) for event in events if event[0] in ("flock", "close")]
+    assert sorted(calls.close_attempts[data["attempt_start"]:]) == list(data["owned"])
+    assert calls.close_attempts[-1] == data["lock"]
     assert sorted(event[1] for event in events if event[0] == "close") == list(data["owned"])
     assert events[-2:] == [("flock", data["lock"], 8), ("close", data["lock"], _LOCK_LITERAL)]
     assert coordination.close_failed is True and coordination.error == ("startup_error" if prelatched else "io_error")
@@ -2893,8 +2925,7 @@ def test_b1_prerequisite_default_emergency_keeps_immediate_exception_and_pipe_ow
     def close(fd):
         events.append(("close", fd))
         raise failure
-    def forbidden(*args, **kwargs):
-        raise AssertionError("default emergency 미지정 syscall")
+    forbidden = _prerequisite_forbidden
     targets = [(time, "monotonic", lambda: 100.0), (time, "sleep", sleep),
                (owner, "reap", reap), (owner, "signal_children", lambda sig: events.append(("signal", sig))),
                (os, "close", close), (os, "waitpid", forbidden), (os, "fork", forbidden),
@@ -2916,8 +2947,7 @@ def test_b1_prerequisite_default_probe_parent_exception_does_not_gain_emergency(
     def reap(owner):
         events.append("reap")
         raise failure
-    def forbidden(*args, **kwargs):
-        raise AssertionError("legacy 경로에 새 cleanup/syscall")
+    forbidden = _prerequisite_forbidden
     targets = [(os, "fork", lambda: 41), (time, "monotonic", lambda: 100.0),
                (module._Owner, "reap", reap), (module, "_emergency_cleanup", forbidden),
                (os, "waitpid", forbidden), (os, "pidfd_open", forbidden),
@@ -2935,8 +2965,7 @@ def test_b1_prerequisite_emergency_at_fixed_end_only_closes_owned_pipes(monkeypa
     owner = module._Owner(budget=budget)
     owner._begin_cleanup(100.0)
     pipes, closed = {"stdout": 71, "stderr": 72}, []
-    def forbidden(*args, **kwargs):
-        raise AssertionError("cleanup equality에서 새 process 작업")
+    forbidden = _prerequisite_forbidden
     targets = [(time, "monotonic", lambda: 103.0), (time, "sleep", forbidden),
                (owner, "reap", forbidden), (owner, "signal_children", forbidden),
                (os, "waitpid", forbidden), (os, "pidfd_open", forbidden),
@@ -2956,14 +2985,17 @@ def test_b1_prerequisite_coordination_unheld_leaf_never_unlocks_after_baseexcept
         coordination = module._B1Coordination()
         calls.flocks = [OSError(5, "acquisition failed")]
         coordination.acquire_lock([False], module._B1Budget(0.0))
-        owned = coordination.controller_fds()
+        owned = tuple(sorted(calls.live))
+        snapshot = coordination.controller_fds()
         lock = next(fd for fd in owned if calls.live[fd][0] == _LOCK_LITERAL)
         calls.errors[("close", lock)] = failure
-        data.update(calls=calls, coordination=coordination, owned=owned, start=len(calls.events))
+        data.update(calls=calls, coordination=coordination, owned=owned, snapshot=snapshot,
+                    start=len(calls.events))
         return coordination.close()
     result, escaped = _prerequisite_fs_call(monkeypatch, script)
     assert escaped is None and result is False
     events = data["calls"].events[data["start"]:]
+    assert data["snapshot"] == data["owned"]
     assert not any(event[0] == "flock" for event in events)
     assert sorted(event[1] for event in events if event[0] == "close") == list(data["owned"])
     assert data["calls"].live == {} and data["coordination"].close_failed is True
@@ -2980,8 +3012,7 @@ def test_b1_prerequisite_default_emergency_syncs_later_initialized_shared_budget
     budget.begin_cleanup(100.0)
     assert owner.finish_end is None and (budget.cleanup_end, budget.term_end) == (103.0, 101.0)
     pipes, events = {"stdout": 71}, []
-    def forbidden(*args, **kwargs):
-        raise AssertionError("legacy late budget 미지정 syscall")
+    forbidden = _prerequisite_forbidden
     targets = [(time, "monotonic", lambda: 102.0), (owner, "reap", lambda: True),
                (os, "close", lambda fd: events.append(("close", fd))), (time, "sleep", forbidden),
                (owner, "signal_children", forbidden), (os, "waitpid", forbidden), (os, "fork", forbidden),
@@ -3007,8 +3038,7 @@ def test_b1_prerequisite_emergency_failed_first_clock_keeps_priority_over_fallba
     def reap():
         events.append("reap")
         raise second
-    def forbidden(*args, **kwargs):
-        raise AssertionError("failed clock 뒤 stale-time 작업")
+    forbidden = _prerequisite_forbidden
     targets = [(time, "monotonic", clock), (owner, "reap", reap),
                (os, "close", lambda fd: events.append(("close", fd))), (time, "sleep", forbidden),
                (owner, "signal_children", forbidden), (os, "waitpid", forbidden), (os, "fork", forbidden),
@@ -3017,3 +3047,46 @@ def test_b1_prerequisite_emergency_failed_first_clock_keeps_priority_over_fallba
         lambda patch: module._emergency_cleanup(owner, pipes, b1=True))
     assert escaped is first and events == ["clock", "reap", ("close", 72), ("close", 71)]
     assert pipes == {} and owner.finish_end == 103.0 and owner._budget.term_end == 101.0
+
+
+@pytest.mark.parametrize("invalid", ["duplicate", "unknown", "bool", "noninteger"])
+def test_b1_prerequisite_oracle_detects_swallowed_close_ownership_violation(monkeypatch, invalid):
+    import os
+
+    original_close = os.close
+    caught, observations = [], {}
+    injected = SystemExit(0)
+    def operation(module, calls):
+        fd = calls.allocate("/fixture", calls.metadata["/fixture"])
+        calls.errors[("close", fd)] = injected
+        bad_fd = {"duplicate": fd, "unknown": 999, "bool": True, "noninteger": "70"}[invalid]
+        for attempted in (fd, bad_fd):
+            try:
+                os.close(attempted)
+            except BaseException as error:
+                caught.append(error)
+        observations.update(attempts=list(calls.close_attempts), violations=list(calls.close_violations))
+    with pytest.raises(AssertionError, match="close ownership violations"):
+        _prerequisite_fs_call(monkeypatch, operation, bounds=True)
+    assert os.close is original_close
+    assert caught[0] is injected and isinstance(caught[1], AssertionError)
+    expected_bad = {"duplicate": 70, "unknown": 999, "bool": True, "noninteger": "70"}[invalid]
+    assert observations == {"attempts": [70, expected_bad],
+                            "violations": [("unowned-or-consumed", expected_bad)]}
+
+
+def test_b1_prerequisite_oracle_detects_swallowed_forbidden_attempt(monkeypatch):
+    original = lambda: None
+    boundary = SimpleNamespace(waitpid=original)
+    caught = []
+    def operation(patch):
+        try:
+            boundary.waitpid(41, 1)
+        except BaseException as error:
+            caught.append(error)
+        return False
+    with pytest.raises(AssertionError, match="forbidden attempts survived candidate catch") as failure:
+        _prerequisite_call(monkeypatch, [(boundary, "waitpid", _prerequisite_forbidden)], operation)
+    assert boundary.waitpid is original
+    assert len(caught) == 1 and isinstance(caught[0], AssertionError)
+    assert failure.value.args[0] == ("forbidden attempts survived candidate catch", [("waitpid", (41, 1), {})])
