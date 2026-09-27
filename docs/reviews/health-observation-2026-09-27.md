@@ -1,6 +1,6 @@
 # Health 반환값·일자 관측 정합성 — 개발 인수
 
-2026-09-27 KST. **부품 독립 승인·feature 통합과 집중 검증 완료, 전체 검증은 대기 중.** 운영 health/경보 연결이나
+2026-09-27 KST. **부품 독립 승인·feature 통합·집중 및 전체 UTC/KST 검증 완료.** 운영 health/경보 연결이나
 전체 엔진 승격 보고가 아니다. 공통 구현 base는 `af098769d7095c5630bbaa7c98301794ad213fd5`다.
 
 ## Plan
@@ -43,11 +43,18 @@ retry 저자 후보 `c5bd69a`, day 저자 후보 `40ab862`는 독립 Astra/xhigh
 | root day `40ab862` | 146 passed/31.11s, 실제 도구 exit0/격리0 |
 | root M1 보완 | 1 passed/2.07s, 실제 도구 exit0/격리0 |
 | root 결합 `059c7c4` | 201 passed/39.49s, 실제 도구 exit0/격리0 |
+| runtime/기존 도구 포함 결합 | 610 passed/164.68s, 실제 도구 exit0/격리0 |
+| 전체 UTC `18a2196` 코드 | 6329 passed/641.35s, 기존16 skipped/2 xfailed/4 warnings·실제 도구 exit0/격리0 |
+| 전체 KST 동일 코드 | 6329 passed/643.67s, 기존16 skipped/2 xfailed/4 warnings·실제 도구 exit0/격리0 |
 
 최초 저자 원문은 실행 시점 파일이 없었던 절차 한계를 남긴다. 특히 retry의 과거 원명령에는
 요청한 timeout이 없었다. root의 새 실행은 모두 실제300초 cap·공통 lock·env-i·pipefail+tee로
 동시에 원문을 저장했으며 새 GREEN으로 과거 RED 보존 공백을 덮지 않는다. 정확한 명령/cwd/
-후보·도구 exit는 root 실행 기록과 함께 읽는다. 전체 UTC/KST는 완료 후 별도 기록한다.
+후보·도구 exit는 root 실행 기록과 함께 읽는다. 전체는 worker 종료 뒤 coordinator 단독으로
+같은 환경/plugin/lock 아래 각각900초 cap으로 직렬 실행했다. 새 Astra/xhigh broad와 문서 보완
+재검토도 C0/I0/M0으로 승인했다. compile-only545·비밀 패턴·diff·보존 지문 검사도 완료했다.
+검증 중 계획 진행 체크 문서만 바뀌었고 source/test bytes는 동일하다. 전체 원문/명령은
+옆 runtime-admission 원장의 `full-*-18a2196.log` 및 `coordinator-validation-ledger.md`를 참조한다.
 
 ## See와 다음 경계
 

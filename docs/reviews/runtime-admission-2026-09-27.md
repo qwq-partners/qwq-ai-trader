@@ -1,6 +1,6 @@
 # Runtime 등록 대조 — 개발 인수 원장
 
-2026-09-27 KST. **부품 독립 승인·feature 통합 완료, 통합 전체 검증 대기.**
+2026-09-27 KST. **부품 독립 승인·feature 통합·전체 UTC/KST 검증 완료.**
 설계/계획은 [순수 계약](../superpowers/specs/2026-09-27-runtime-admission-contract-design.md)과
 [실행계획](../superpowers/plans/2026-09-27-runtime-admission-contract.md)이다.
 공통 시작점은 `af098769d7095c5630bbaa7c98301794ad213fd5`다.
@@ -31,13 +31,25 @@ cross-provider 승인으로 표시하지 않는다. 구현자·보완자·승인
 | 보완 writer | 53 passed/0.64s·기록된 exit0/격리0 |
 | root `7606440` | 53 passed/1.12s·실제 도구 exit0/격리0 |
 | root `697846f` | 60 passed/1.06s·실제 도구 exit0/격리0 |
-| 통합 관련·전체 검증 | 진행 중, 완료 뒤 실제 결과 기록 |
+| 통합 결합 `aa4ab4c` 코드 | 610 passed/164.68s·실제 도구 exit0/격리0 |
+| 전체 UTC `18a2196` 코드 | 6329 passed/641.35s·16 skipped/2 xfailed/4 warnings·실제 도구 exit0/격리0 |
+| 전체 KST 동일 코드 | 6329 passed/643.67s·16 skipped/2 xfailed/4 warnings·실제 도구 exit0/격리0 |
+
+작성자·앞 한정 리뷰어와 다른 Astra/xhigh가 `af09876..a130330` 전체 delta를 검토했다.
+필수 지적0, 문서 자문M1은 `18a2196`으로 닫고 새 C0/I0/M0·Spec/Quality 승인이다.
+worker 종료 후 coordinator만 두 전체를 직렬·각900초 cap으로 실행했다. 검증 중 변경은
+계획 진행 체크 문서뿐이며 src/scripts/tests/config/CI bytes는 `18a2196`과 같다.
+기존 skip/xfail/경고를 숨기거나 새 예외를 추가하지 않았다. compile-only545와 비밀 패턴·
+diff·원 source/guard/성능 예외/controller 지문도 확인했다. 이 기록은 개발 인수다.
 
 첫 writer의 모듈 부재 RED는 당시 tool 기록만 있고 완전 raw 파일은 없다. 보완 중 첫 GREEN의
 NameError 파일도 후속 실행에 덮어써졌다. root는 덮이기 전 읽었던 출력 excerpt만 사후 보존했으며
 이를 완전한 최초 원문으로 주장하지 않는다. 보고서의 commit0/invalid mode 완료/원문 보존
 문구는 사실과 맞게 정정했다. 새 GREEN으로 이 절차 공백을 숨기거나 과거 RED를 재창작하지 않는다.
-최종 root 실행은 공통 lock·180초 cap·env-i·pipefail+tee로 동시에 원문을 저장했다.
+최종 root 집중 실행은 공통 lock·180초 cap·env-i·pipefail+tee로 동시에 원문을 저장했다.
+전체는 같은 환경/plugin/lock 아래900초 cap과 `tests -x -q`를 사용했다.
+실제 원문은 `full-utc-18a2196.log`, `full-kst-18a2196.log`이며 pytest 출력과 도구 exit는
+`coordinator-validation-ledger.md`의 후보/cwd/명령 기록과 함께 읽는다.
 
 ## 한계와 다음
 

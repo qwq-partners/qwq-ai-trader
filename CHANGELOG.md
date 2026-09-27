@@ -1,10 +1,11 @@
 # QWQ AI Trader - Changelog
 
-## 2026-09-27 — runtime 순수 계약·health 관측 정합 (전체 검증 중)
+## 2026-09-27 — runtime 순수 계약·health 관측 정합 개발 인수 완료
 
 - 빈 실제 registry와 strict subject/registry/observation 대조를 추가했다. 독립 리뷰의 직접 dict 크기·binding 키·독립 fixture·깊이 및 invalid mode 인수를 보완, 최종60건·격리0과 한정 재승인 후 통합했다. 실행/신뢰/native/운영 권한은 항상 false다. [원장](docs/reviews/runtime-admission-2026-09-27.md).
-- health retry의 내부 list 공유를 leaf 복사로 끊고 한 응답의 일자 차단 표시를 첫 관측값으로 통일했다. 실제 admission/clock/주문·위험 설정은 그대로다. 독립 리뷰·시험 보완 재승인과 결합201건·격리0, 전체 UTC/KST는 대기다. [원장](docs/reviews/health-observation-2026-09-27.md).
-- B1 decoder 준비 설계의 work-pop 종결과 중첩 old/new 범위를 한정해 독립 재승인했다. 구조 실험 계획은 별도 검토 중이며 실제 source/native/cold RED는 여전히 미실행이다. [후속 순서](docs/operations/engine-delivery-next-2026-09-27.md).
+- health retry의 내부 list 공유를 leaf 복사로 끊고 한 응답의 일자 차단 표시를 첫 관측값으로 통일했다. 실제 admission/clock/주문·위험 설정은 그대로다. 독립 리뷰·시험 보완 재승인과 결합201건·격리0을 확인했다. [원장](docs/reviews/health-observation-2026-09-27.md).
+- fresh broad의 필수 지적0·문서 자문 보완 후 C0/I0/M0으로 승인됐다. `18a2196` 코드의 결합610건, 전체 UTC6329 passed/641.35s·KST6329 passed/643.67s, 각각 기존16 skipped·2 xfailed·4 warnings·exit0·격리0이다. compile545·비밀 패턴·diff·원 source/guard/성능 예외 지문을 확인했다. 과거 원문 보존 공백은 인수 한계로 명시했다.
+- B1 decoder 준비 설계의 work-pop 종결과 중첩 old/new 범위는 독립 한정 재승인됐다. 별도 구조 실행계획 초안 `d9d57e5`는 독립 리뷰 R1~R4로 CHANGES_REQUIRED이며 생성 인계·전이표·실행기/예산 보완 중이다. 실제 source/native/cold RED는 여전히 미실행이다. [후속 순서](docs/operations/engine-delivery-next-2026-09-27.md).
 
 ## 2026-09-27 — OS 종료·회수 증거 개발 완료 (native/운영 승격 아님)
 

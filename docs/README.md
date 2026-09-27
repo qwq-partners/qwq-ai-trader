@@ -6,15 +6,15 @@
 
 ### Architecture (아키텍처)
 
-- [Runtime 등록 대조 인수](reviews/runtime-admission-2026-09-27.md) — 순수 부품60건·독립 보완 승인, 실제 registry 빈 상태·실행 권한false; 전체 검증 진행
-- [Health 관측 정합 인수](reviews/health-observation-2026-09-27.md) — retry leaf 복사·일자 표시 단일 관측, 결합201건·독립 승인; 경보 배선/성능 승인과 구분
+- [Runtime 등록 대조 인수](reviews/runtime-admission-2026-09-27.md) — 순수 부품60건·fresh broad 승인, 통합 전체 UTC/KST 각6329 passed; 실제 registry 빈 상태·실행 권한false
+- [Health 관측 정합 인수](reviews/health-observation-2026-09-27.md) — retry leaf 복사·일자 표시 단일 관측, 결합201건·통합 전체 UTC/KST 각6329 passed; 경보 배선/성능 승인과 구분
 - [전체 엔진의 다음 전달 순서](operations/engine-delivery-next-2026-09-27.md) — 당일 완료 부품과 native/cold/owner/실제 소비자/운영 전환의 미완 경계
 
 - [Source 수집·격리 경계 원장](reviews/source-proof-boundaries-2026-09-27.md) — source108/관련31 exact 수집, 기존6034 보존+73추가, 집중168·전체 UTC/KST 각6089 passed; native 실행·운영 승인 아님
 - [Source 경계 설계](superpowers/specs/2026-09-27-source-proof-boundaries-design.md) · [실행계획](superpowers/plans/2026-09-27-source-proof-boundaries.md) — helper/oracle 보존·guard 실체·미자격 실행 차단; qualified runtime0
 - [자율 후속 개발 현황](reviews/autonomous-progress-2026-09-27.md) — 단계별 완료·진행·미확보 근거와 다음 순서; 전체 엔진 완료/운영 전환과 구분
 - [OS 종료·회수 증거 원장](reviews/os-process-evidence-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-os-process-evidence-design.md) · [실행계획](superpowers/plans/2026-09-27-os-process-evidence.md) — 실제 결합·독립 broad 보완 완료, 전체 UTC/KST 각6265 passed; native/CI/운영 자격과 분리
-- [Runtime 등록 대조 설계](superpowers/specs/2026-09-27-runtime-admission-contract-design.md) · [실행계획](superpowers/plans/2026-09-27-runtime-admission-contract.md) — 순수 내용 대조·빈 실제 registry,60건 인수·독립 보완 승인/전체 검증 대기; 실행 권한을 부여하지 않음
+- [Runtime 등록 대조 설계](superpowers/specs/2026-09-27-runtime-admission-contract-design.md) · [실행계획](superpowers/plans/2026-09-27-runtime-admission-contract.md) — 순수 내용 대조·빈 실제 registry,60건 인수·독립 보완 및 전체 검증 완료; 실행 권한을 부여하지 않음
 - [Cold source 소유권 준비 설계](superpowers/specs/2026-09-27-recovery-cold-source-ownership-design.md) · [후속 인수 준비](superpowers/plans/2026-09-27-recovery-cold-source-ownership.md) — 독립 준비 설계 한정 승인; 첫 RED 관측 기준·native/decoder/consumer 근거 미확보, 실행계획 완성·제품 구현 승인이 아님
 - [Decoder 표현·호환 결정](superpowers/specs/2026-09-27-recovery-decoder-compatibility-decision.md) — private bounded 표현의 후속 설계 방향만 독립 승인; 실제 allocator/oracle·consumer·native gate 미해결
 

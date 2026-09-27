@@ -19,7 +19,7 @@
 
 | 단계 | 다음 산출물 | 아직 열지 않는 경계 |
 | --- | --- | --- |
-| 1. 검증 부품 마감 | 고정 후보의 독립 리뷰·관련 시험·UTC/KST 전체·feature push | main/운영·실제 source/native 실행 |
+| 1. 검증 부품 마감 | 18a2196 코드의 독립 broad·관련610·UTC/KST 각6329 완료, 문서/feature push 마감 | main/운영·실제 source/native 실행 |
 | 2. native/source 근거 | exact runtime 원본·빌드/파일 closure·격리 profile·독립 관측/승인 및 별도 실행계획 | host 버전만으로 QUALIFIED, 합성 fixture의 실제 등록 |
 | 3. cold 복구 소유권 | 최초 할당·부분 실패·중복 교체·취소·정리·소비자 인계의 독립 oracle와 인수 | 기존 파서 결과를 나중에 등록해 선소유로 주장 |
 | 4. 실제 owner 연결 | 승인된 index/gate와 모든 commit/restore/writer/result drain의 단일 책임·버전 전파 | full scan 숨기기, history 삭제, stale snapshot의 current 처리 |
@@ -30,6 +30,11 @@
 2와3의 서면 설계는 병렬 준비할 수 있다. 하지만 런타임 자격이나 실제 할당/해제 관측이
 없는 상태를 더 많은 합성 테스트로 해결한 것으로 세지 않는다. 설치·다운로드·native 실행
 등 새 권한이 필요하면 필요한 대상과 근거를 특정해 요청하고 해당 실행은 멈춘다.
+
+현재 B1 실행계획 초안 d9d57e5는 독립 R1~R4 변경 요청 상태다. 생성·chain·holder·unlink의
+작은 B1a 전이를 별도 부분 단계로 고정하는 설계 보완을 진행한다. 이것은 ordinary Python
+반환 후 slot 관측이며 원 native A, 전체 decoder, 최초 cold RED 또는 단계3 완료가 아니다.
+승인된2MiB/stream 실행기와 대형 전수 관측 예산이 없어 N4097은 계획 단계부터 UNRUN이다.
 
 ## 지금 유지하는 결정
 

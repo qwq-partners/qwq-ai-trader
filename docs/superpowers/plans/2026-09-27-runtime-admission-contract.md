@@ -11,6 +11,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-27-runtime-admission-contract-design.md`.
 
+**진행:** 최종 부품60건·독립 Spec/Quality 승인, 통합 결합610건·격리0.
+`18a2196` 문서 보완까지 fresh broad 승인(C0/I0/M0)을 받았다.
+전체 UTC6329/641.35s·KST6329/643.67s, 각각 기존16skip/2xfail/4warnings·exit0/격리0,
+compile545·비밀 패턴·diff·보존 지문 검사를 완료했다. 검증 코드 `18a2196`의 feature push와
+원격 SHA 일치를 확인했으며 마감 문서도 같은 feature에 commit/push한다.
+아래 원문 보존 공백은
+현재 GREEN으로 소급 충족하지 않으며 [인수 원장](../../reviews/runtime-admission-2026-09-27.md)에 남긴다.
+
 ## Global Constraints
 
 - 독립 계획 리뷰 APPROVE_PLAN_ONLY. 앞 OS 단계 검증 뒤 실제 base SHA를 확정하고 착수한다.
@@ -40,39 +48,44 @@
 **Interfaces:** spec의 RuntimeContractError, parse_runtime_document,
 subject_digest, evaluate_runtime_contract. IO/환경/Git/OS/native/다른 product import 금지.
 
-- [ ] 독립 literal fixture를 test 내부에 작성한다. runtime/source 역할 파일과 manifest·관측은
+- [x] 독립 literal fixture를 test 내부에 작성한다. runtime/source 역할 파일과 manifest·관측은
   합성 bytes/hash임을 표시하고 실제 runtime의 관측으로 보고하지 않는다.
-- [ ] `test_empty_registry_never_permits_execution`과
+- [x] `test_empty_registry_never_permits_execution`과
   `test_matching_declarations_are_offline_only`에서 각각 UNSUPPORTED/CONTRACT_MATCH 및
-  trust/native/source_execution/production false를 단언한다. module 부재 RED를 보존한다.
-- [ ] strict parser·subject_digest부터 구현하고 fixture 정상/subject byte변화와 후작성
+  trust/native/source_execution/production false를 단언한다.
+- [ ] 최초 module 부재 RED의 완전 raw 보존: 당시 tool 기록만 남아 미충족이다.
+  이미 구현된 module을 지워 과거 RED를 재창작하지 않는다. 개발 인수 한계로 별도 기록했다.
+- [x] strict parser·subject_digest부터 구현하고 fixture 정상/subject byte변화와 후작성
   registry review변화의 독립성을 검사한다. sort_keys canonical JSON·정확한 path 계약을 따른다.
-- [ ] 등록/상태/외부 binding/관측 대조를 구현한다. mode exact two값, 상태 대체 없음,
+- [x] 등록/상태/외부 binding/관측 대조를 구현한다. mode exact two값, 상태 대체 없음,
   malformed REJECTED 우선, subject 미등록/UNKNOWN/RETIRED UNSUPPORTED를 고정한다.
   빈/UNKNOWN/RETIRED와 binding/관측 불일치를 결합해 REJECTED 우선순위를 검사하고,
   malformed 입력의 declared_state가 부분 추출되지 않고 null인지 확인한다.
-- [ ] `test_changed_file_identity_is_rejected`에서 interpreter/libpython/SQLite/loader/
+- [x] `test_changed_file_identity_is_rejected`에서 interpreter/libpython/SQLite/loader/
   cases/guard/controller를 각각 변경한다. map 추가/누락, source/profile/provenance mismatch,
   registry revision/hash 불일치, state/mode 경계, 중복 entry를 별도 반례로 고정한다.
-- [ ] size/depth/map/entry/path UTF8 한도 직전/초과·duplicate JSON·NaN·surrogate·bool-as-int·
+- [x] size/depth/map/entry/path UTF8 한도 직전/초과·duplicate JSON·NaN·surrogate·bool-as-int·
   subclass·unknown field/role·path traversal을 pure fixture로 검사한다. 실제 파일/프로세스0.
-- [ ] 빈 registry 파일의 exact semantic keys/entries=[]를 root-relative fixture read로 검증한다.
+- [x] 빈 registry 파일의 exact semantic keys/entries=[]를 root-relative fixture read로 검증한다.
   module 자체는 파일을 읽지 않는다. qualified fixture를 실제 registry에 쓰지 않는다.
-- [ ] focused GREEN/exit0/격리0·명령/원문·제약을 report에 기록하고 허용3파일만 local commit.
+- [x] focused GREEN/exit0/격리0·명령/원문·제약을 report에 기록하고 허용3파일만 local commit.
 
 ## Task 2: coordinator See와 인계
 
 **Owner:** coordinator; independent Astra/xhigh reviewer는 저자와 다르다.
 **Files:** 관련 CHANGELOG/CLAUDE/docs README/report/계획 체크만.
 
-- [ ] whole3file diff+RED/GREEN·spec을 독립 검토하고 findings는 원 writer가 RED로 수정·재리뷰한다.
-- [ ] 승인 후보를 feature에 통합하고 집중시험+기존 계약/source boundary/OS 통합 시험을 실행한다.
+- [x] whole3file diff+실제로 남은 RED/GREEN·spec을 독립 검토하고 findings를 수정·재리뷰한다.
+  보완은 별도 Terra/high, 마지막 mode 시험은 coordinator가 맡았고 독립 reviewer는 유지했다.
+  원 writer만 수정한다는 최초 역할 배치와 달라진 사실·최초 raw 공백을 인수 원장에 명시했다.
+- [x] 승인 후보를 feature에 통합하고 집중시험+기존 계약/source boundary/OS 통합 시험을 실행한다.
   실제 registry 비어 있음/source 차단 무변경·외부 실행0을 확인한다.
-- [ ] root단독 전체 UTC→KST cap900, 기존16skip/2xfail 조건 보존·격리0과 actual rc를 확인한다.
+- [x] root단독 전체 UTC→KST cap900, 기존16skip/2xfail 조건 보존·격리0과 actual rc를 확인한다.
   full suite 성공을 이 새 계약의 실행 허가로 바꾸지 않는다.
-- [ ] compile-only·secret scan·diff check·원본 guard/source/기존file 지문 보존을 확인한다.
-- [ ] 최종 보고서에 실제 완료/미확보 증거·qualified0·다음 별도 capsule 제작 조건을 기록한다.
-- [ ] feature commit/push+remote SHA 확인. main/운영/주문/설정·CI 활성화는 진행하지 않는다.
+- [x] compile-only·secret scan·diff check·원본 guard/source/기존file 지문 보존을 확인한다.
+- [x] 최종 보고서에 실제 완료/미확보 증거·qualified0·다음 별도 capsule 제작 조건을 기록한다.
+- [x] 검증 코드의 feature commit/push+remote SHA 확인(`18a2196301fe6421192f409c2f87fd25481bc96d`).
+  마감 문서는 같은 feature에 후속 commit/push한다. main/운영/주문/설정·CI 활성화는 진행하지 않는다.
 
 ## Self-review
 
