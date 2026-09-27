@@ -29,7 +29,8 @@
 - B1b 후보f3416c3는 전체 UTC8411 passed/721.87s·KST8411 passed/705.23s,
   각16skip/2xfail/4warnings·workload0/tee0/tool0·격리0, 독립 최종 지적0이다.
   검증된 다섯 신규 시험 파일만236ccb01f2bcf7ee2749f2c1dc87bdd021e91e85로 feature
-  통합했고 후보와 모든 비문서 tracked 파일은 diff0이다. 원격 반영은 아직 별도 확인 전이다.
+  통합했고 후보와 모든 비문서 tracked 파일은 diff0이다. 문서 포함2fc2531은 feature push 후
+  `git ls-remote` exact 대조까지 완료했다. 이후 변경의 원격 상태와 구분한다.
   상세는 [B1b 원장](decoder-b1b-2026-09-27.md), [실행기 후속](b1-standard-runner-2026-09-27.md).
 
 ## Plan → Do → See
@@ -43,7 +44,7 @@
 | cold source 소유권 | 준비 설계 한정 독립 승인·문서 통합 | native/decoder/소비자·독립 할당 관측 기준 미해결 |
 | decoder 기본 구조 시험 | 독립 oracle/전이/actual mutant·critical 승인,198건·raw12·전체 UTC/KST 각6527 passed, e41f485 통합 | B1a 부분 인수만 완료; full B1·N4097·native/첫 cold RED는 미완 |
 | decoder 구성·제어 시험 | 신규1884·raw17·critical source/증거 승인, 전체 UTC/KST 각8411 passed,236ccb0 통합 | B1b observed-only; full R2/폐기/native 미완 |
-| B1 표준 실행기 | 순수 계약367건·인자/기존 controller170건 통과, budget 실제 첫 RED 및 독립 시험 작성 중 | main launch125 유지; coordination/output/실제 smoke/전체 인수 미완 |
+| B1 표준 실행기 | 순수 계약367건·인자/기존 controller170건, budget/probe/cleanup219건·독립 한정 승인 | main launch125 유지; coordination 시험장치 수정·output/실제 smoke/전체 인수 미완 |
 | health 재시도 목록 복사 | 독립 승인·M1 시험 보완 재승인·통합 전체 UTC/KST 각각6329 passed | 개발 인수 완료; bounded health/경보 배선과 별개 |
 | health 일자 표시 일관성 | 독립 승인·통합 전체 UTC/KST 각각6329 passed | 실제 admission 무변경·요청 간 fresh 관측 유지 |
 
