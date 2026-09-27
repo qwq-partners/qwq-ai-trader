@@ -220,6 +220,94 @@ failure publication is useful but never mandatory proof of success. Receipt is r
 leader terminal status and complete cleanup, with current nofollow/nonblocking/regular32MiB rules.
 No fallback authority exists when ownership is unsupported or cleanup is incomplete.
 
+### 6.1 Reviewed Task3d prerequisite and mixed-failure clarification
+
+The independent Task3d re-review approved this **tests-first contract only**. It
+supersedes ambiguous mixed-exit interpretations of the single-trigger table above;
+it is not an implementation or enablement claim. Public B1 main remains125 until
+the separate helper, shared-main and enable reviews. Accepted Task3a/3b OSError
+contracts are historical scoped evidence, not proof of these stronger guarantees.
+
+Prerequisites before main wiring:
+
+- B1 probe child catches BaseException only around each approved FD close, attempts
+  the remaining known tuple once, then terminal `_exit(125)` on any failure or23
+  otherwise. No parent finish/unlock/publication/workload path is entered. The exit
+  itself is outside the close/parent catches; test sentinels never enter source.
+- The same private probe Owner retains parent-side exceptional cleanup, including
+  an unknown non-OSError fork escape. At most one exceptional emergency attempt,
+  first exception preserved, existing endpoints never reset, no replacement reaper.
+  A failed fresh clock may use the last observed timestamp only to initialize an
+  unset cleanup interval; no stale-time signal/sleep. Failed clock before any reap
+  permits at most one nonblocking reap; a failed reap is not retried. This proves
+  only a bounded attempt, never child death or cleanup success without evidence.
+- Private exact-bool `b1=False` modes on `_close_descriptors` and
+  `_emergency_cleanup` retain default None/exception behavior even for budget owners.
+  Explicit True exhausts remaining FD batches before propagating the first
+  non-OSError; expected close OSError returns False, clean batch True. Emergency
+  requires an existing budget and initialized cleanup/TERM endpoints, always closes
+  transferred pipes, and preserves a process exception over a batch exception.
+  Bool is close status only. Invalid mode/preconditions reject before effects.
+- `_BoundPaths(paths, *, b1=False)` preserves default temporary-close/constructor
+  exception identity and priority. Only explicit True initializes partial ownership
+  before acquisition and exhausts retained closes despite BaseException; strict
+  close returns sticky False. B1 constructor failure exhausts its owned batch then
+  propagates the constructor's received exception, including any temporary-close
+  replacement. Every such constructor escape is a hard main veto.
+- B1 coordination temporary close records/rethrows any close exception after
+  consuming its FD. Final close protects every directory close, LOCK_UN and lock
+  close separately, attempts all once, lock last, and retains sticky False.
+  Main similarly removes each owned stream before its individual close. No stale
+  snapshot retry, FD sweep, unrequested path deletion or broader v1 fix is permitted.
+
+For B1 the final precedence is **hard125 > total-overrun124 > first-timeout124 >
+other rejection125 > valid actual raw status**. A hard flag is sticky and separate
+from the first reason; neither reason nor raw status is rewritten. Exact total-end
+equality is allowed, strictly later is overrun. After every coordination acquire,
+prepare, finish, check and close, including escapes, consume its error and independently
+its close_failed flag. Check returned bounds.close_failed likewise. Explicit B1
+descriptor/emergency callers must consume exact bool status immediately; False or
+invalid/missing bool is hard, and a later empty-batch True cannot clear it.
+
+| B1 stage/outcome | Classification / publication constraint |
+| --- | --- |
+| Ordinary bootstrap/guard/context/initial identity failure | Soft startup/identity reason; incomplete or unsafe inputs prohibit publication. |
+| Any B1 bounds constructor escape | Hard; no usable bounds, no publication. |
+| Acquire False / prepare None / normal probe False | Soft reason; close_failed independently hard; no downstream startup. Probe False is not cleanup evidence. |
+| Any escaping probe exception after its owned attempt | Hard; no workload or workload receipt; only safe honest failure facts may be published. |
+| Observer-internal handled IO / incomplete cleanup / ordinary observer escape followed by bounded retry | Soft first reason; persistent failure snapshot, not success. Do not guess internal exception origin. |
+| Emergency False/escape; main-owned stream or explicit batch close failure | Hard, complete=False for emergency; continue remaining cleanup. |
+| Expected fake finish False, including caught rmdir OSError | Soft recorded reason unless close_failed; no retry/deletion. |
+| Ordinary exception escaping acquire/prepare/finish/lock-check | Hard plus recorded coordination reason/close flag; no retry. |
+| Code/guard mismatch or ordinary check exception | Soft identity/startup reason; unknown guard remains unknown; publication only through still-safe binding. |
+| Receipt missing | Soft failed gate; no new reason required; no0 inferred. |
+| Receipt invalid / ordinary receipt exception | Soft io_error, invalid fact; bounds.close_failed independently hard. |
+| Expected lock recheck False | Soft recorded reason unless close_failed; never reacquire/repair. |
+| Snapshot/facts/serialization/size failure | Hard; no invented fallback document. |
+| Result create/write/count/close failure | Hard, publication incomplete; preserve partial/candidate file, never republish. |
+| Strict bounds close False/escape; coordination close False/escape | Hard; candidate already final, no new publication/path work. |
+| Any parent BaseException-only escape | Hard; normalize even SystemExit(0) to125 after remaining cleanup. |
+| Main boundary/final clock exception | Hard unproved clock; skip discretionary publication, finish owned cleanup. Probe/emergency use their own rows. |
+| Total overrun with no hard cause | 124, preserve earlier reason/raw status; no new discretionary publication. |
+| Post-cutoff stopped flag alone | Preserve cutoff decision; later actual hard/time failures still apply. |
+
+Thus timeout+expected rmdir/receipt-invalid/lock-False remains124 without a close
+failure; timeout+close_failed/unexpected coordination escape/result-close failure
+is125. An observer-internal handled OSError after timeout is soft124, whereas the
+same errno exposed by a main-owned B1 batch as False is hard125. No publication
+can certify a later close, unlock or terminal exit; independent invocation evidence
+remains required. Raw child0 with skipped or incomplete publication still returns125
+via the missing-publication gate when there is no earlier timeout or hard cause;
+valid raw status is considered only after all required gates pass. Source tests must
+distinguish these event channels explicitly.
+
+First independent prerequisite RED injects SystemExit(0) into a direct probe child
+close; a distinct fake-exit sentinel is captured inside a short patch context, then
+patch identities are restored before assertions. Complete literal helper/constructor
+matrices and non-author source review precede shared-main tests/implementation.
+Catchable-operation guarantees exclude arbitrary destruction/kernel hangs. Actual
+profile/full/native/N4097/operations qualification is not conferred by this section.
+
 ## 7. Separate typed B1 evidence and consumer
 
 Leave v1 public parser/binder/evaluator behavior unchanged, including rejecting skip/xfail.

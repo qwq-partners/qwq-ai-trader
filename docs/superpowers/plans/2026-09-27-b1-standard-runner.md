@@ -22,11 +22,18 @@ coordination2f5c9c5 has333 focused passes and scoped non-author component approv
 prepare/finish temporary-close rows are source-confirmed N/A, not runtime passes.
 The earlier harness failure is preserved and not counted as intended RED.
 Output-only Task3c c632e57 has415 focused passes and non-author scoped component
-approval after frozen531-line tests. Task3d proposal review requires separate probe exception/child-terminal
-and helper BaseException-cleanup prerequisites plus exact mixed-exit classification.
+approval after frozen531-line tests. Task3d revised proposal is approved for tests-first:
+separate probe exception/child-terminal and helper BaseException-cleanup prerequisites
+precede shared-main wiring. The accepted exact mixed-exit matrix is in spec §6.1.
 These new stronger main guarantees do not retroactively broaden Task3a/3b approval.
 MainB1 remains125 and Task4 has not run. Historical checklist items
 below describe whole packages, not permission to infer completed profile acceptance.
+
+Task3d ordering is mandatory: independent direct-probe RED and bounded prerequisite
+matrix → source-only helper/constructor amendment → focused regression and non-author
+critical review → independent shared-main/snapshot/order/mixed-exit tests → source and
+review → separate public enable gate. No main extraction is bundled into the helper
+amendment, and no component approval substitutes for Task4's real profile/full evidence.
 
 Separate approved compatibility exception: only the oversized OS-test parameter
 ID may change, without changing its65537-byte payload or assertion. Candidate

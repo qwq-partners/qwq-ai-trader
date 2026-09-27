@@ -78,7 +78,14 @@ probe 예외 시 정리 소유권·fork 자식의 부모 정리 진입 차단, h
 비운 뒤 BaseException이 나도 남은 close를 시도하는 보장, 종료 실패가 겹칠 때
 124/125 분류가 보완 대상이다. 기존 Task3a/3b의 기대 OSError 범위를 소급 실패로
 바꾸지 않고, main의 더 강한 보장에 필요한 별도 tests-first 선행 작업으로 처리한다.
-제안 수정 중이며 B1 main125 차단은 유지한다.
+수정안은 독립 재리뷰에서 `APPROVE_TASK3D_TESTS_ONLY`를 받았다. 승인된 종료
+우선순위와 선행 정리 계약을 [설계 §6.1](../superpowers/specs/2026-09-27-b1-standard-runner-design.md#61-reviewed-task3d-prerequisite-and-mixed-failure-clarification)에 기록한다.
+별도 probe-child RED·helper 행렬 → 구현 → critical 검토 뒤 shared main 단계로
+진행하며, B1 main125 차단은 유지한다. 설계 지적 해소를 구현 완료로 세지 않는다.
+첫 prerequisite 시험9386774에서 close의 SystemExit(0)이 자식 terminal125 경계까지
+이어지지 않는 결함을 실제 RED로 확인했다(1 failed/0.92s·격리0·세 exit1/0/1).
+실제 fork 없이 독립 adapter를 사용했고 시험 종료 전 patch 복원을 확인했다.
+나머지 helper 행렬 작성 중이며 source 수정은 아직 시작하지 않았다.
 
 실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
 제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/

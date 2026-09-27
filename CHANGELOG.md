@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — 실행기 coordination·출력 부품 한정 검증
+
+- 별도 source2f5c9c5의 잠금/임시 경로 관리333건, c632e57의2MiB 출력 처리415건을 실제 focused 검증하고 각각 비작성자 critical 리뷰에서 지적0으로 인수했다. 시험 작성자와 구현자는 분리했고 기존 v1 출력·예외 의미는 보존했다.
+- 최초 coordination 시험장치 실패·정상 수정 RED·원시 결과를 모두 보존했다. prepare/finish 임시-close 두 행은 해당 소스에 임시 FD close가 없어 독립 N/A 판정이며 PASS/면제가 아니다.
+- 최종 main 설계의 probe 예외 소유권·fork 자식 terminal 처리·FD 정리 중 BaseException·복합 종료 코드 지적을 보완해 tests-first 계획 한정 재승인받았다. 선행 helper 시험/수정/리뷰 뒤 main 배선, 공개 실행 차단 해제는 별도다.
+- B1 main125·실제 프로필/전체 미인수, runner 코드는 최종 feature 통합 전이다. 기존 성능 예외·main·운영·설정 무변경. [원장](docs/reviews/b1-standard-runner-2026-09-27.md), [종료 정책](docs/superpowers/specs/2026-09-27-b1-standard-runner-design.md#61-reviewed-task3d-prerequisite-and-mixed-failure-clarification).
+
 ## 2026-09-27 — 실행기 시간 예산 부분 검증·다음 단계 준비
 
 - 별도 runner 후보fa80b3a에서 budget/probe/cleanup 새·기존219건과 독립 한정 리뷰를 마쳤다. 소스 eadcd7d는 fork 실패·정리 재진입에도 같은 종료 시한을 유지하며 기존 v1 동작은 보존한다. 전체 runner 인수/feature 코드 통합 전이다.
