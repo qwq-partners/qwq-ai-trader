@@ -120,7 +120,7 @@ retry for a smaller bound. These one-shot clock observations add no persistent h
 none is executed during this design correction. The exact context, expected inventory, selected
 file, cwd, candidate SHA, artifact paths and receipt linkage must be frozen before the smoke.
 
-## Task1: Independent strict B1 contract and literal expected tests
+## Task 1: Independent strict B1 contract and literal expected tests
 
 **Files:** Modify `scripts/dev/verification_os_contract.py`; create
 `tests/dev/test_b1_process_contract.py`. V1 tests are read-only.
@@ -161,7 +161,7 @@ constructing this value, not a property the two-field pure API can verify. No op
   regression file paths were checked statically during drafting.
 - [ ] Independent review of literal contract and v1 compatibility precedes controller integration.
 
-## Task2: Narrow immutable profile and parent/child launch
+## Task 2: Narrow immutable profile and parent/child launch
 
 **Files:** Controller/bootstrap only. Consumes Task1 exact schema, not its fixture implementation.
 **Interfaces:** Existing `main(argv: list[str]|None=None)->int` unchanged. `_observe` may gain
@@ -182,7 +182,7 @@ contains the spec §3 literal values; it is never serialized from caller configu
 - [ ] Reviewer/coordinator inspect delta for arbitrary command/env/cap surfaces, default serialization
   order and old8388609 boundary. Author cannot approve this critical change.
 
-## Task3: Output, coordination, deadline and failure evidence
+## Task 3: Output, coordination, deadline and failure evidence
 
 **Files:** Same controller/bootstrap author; independent test author owns new controller test file.
 Coordinator alone adjusts existing harness helpers if needed; preserve original assertions.
@@ -217,7 +217,7 @@ observed_bytes. Process v2 exact spec; fake-dir/lock helpers stay private and fi
 - [ ] Independently review all ownership-sensitive changes, output cap at exact byte boundaries,
   env key order/values, guard bytes and no duplicate reaper. No semantic B1 tests are modified.
 
-## Task4: Coordinator acceptance, real profile smoke, and future handoff
+## Task 4: Coordinator acceptance, real profile smoke, and future handoff
 
 **Files:** Coordinator docs/ledger only after integrating reviewed code/test deltas; no source-native
 execution, large-node creation, main/CI/product settings or operational changes.
