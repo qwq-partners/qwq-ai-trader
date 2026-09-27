@@ -208,6 +208,8 @@ def test_action_rejections_are_unchanged(monkeypatch, case):
         operation.outcome = "DISPOSAL_FAULT"
     before = observer.snapshot(supervisor, census)
     supplied_operation = subject.Operation(fixtures.TOKEN) if case == "wrong_operation" else operation
+    foreign_shell = subject.Supervisor(supplied_operation) if case == "wrong_operation" else None
+    foreign_before = observer.snapshot(foreign_shell, census) if foreign_shell is not None else None
     supplied_token = tuple([1, 2, 3, 4]) if case == "wrong_token" else fixtures.TOKEN
     if case == "wrong_token":
         assert supplied_token == fixtures.TOKEN and supplied_token is not fixtures.TOKEN
@@ -225,6 +227,8 @@ def test_action_rejections_are_unchanged(monkeypatch, case):
         if case == "owner_missing":
             supervisor.active = operation
     assert observer.snapshot(supervisor, census) == before
+    if foreign_shell is not None:
+        assert observer.snapshot(foreign_shell, census) == foreign_before, "STRUCTURE_FOREIGN_OPERATION_MUTATION"
 
 
 @pytest.mark.parametrize("token", (None, [1, 2, 3, 4], TupleSubclass((1, 2, 3, 4)),
@@ -352,20 +356,70 @@ def test_actual_mutants_rejected(monkeypatch, name):
 
 
 @pytest.mark.parametrize("name", mutants.IDENTITY_NAMES)
-@pytest.mark.parametrize("request", ("submit", "tick"))
-def test_identity_mutants_rejected_before_allocation(monkeypatch, name, request):
+@pytest.mark.parametrize("request_kind", ("submit", "tick"))
+def test_identity_mutants_rejected_before_allocation(monkeypatch, name, request_kind):
     supervisor, operation, census = _start(monkeypatch)
-    if request == "tick":
+    if request_kind == "tick":
         subject.submit(supervisor, operation, fixtures.TOKEN, fixtures.APPEND)
     before = observer.snapshot(supervisor, census)
-    mutants.install_mutant(monkeypatch, subject, name, mutants.ExternalHolder())
-    with pytest.raises(ValueError, match="INVALID_IDENTITY"):
-        if request == "submit":
-            subject.submit(supervisor, operation, fixtures.TOKEN, fixtures.APPEND)
-        else:
-            subject.tick(supervisor, operation, fixtures.TOKEN)
+    if name == "wrong_operation":
+        # Keep the supplied foreign operation observable; the generic mutant
+        # builds it inside its wrapper, where its state cannot be compared here.
+        foreign_operation = subject.Operation(fixtures.TOKEN)
+        _assert_foreign_operation_rejected(supervisor, operation, foreign_operation, census, request_kind)
+    else:
+        mutants.install_mutant(monkeypatch, subject, name, mutants.ExternalHolder())
+        with pytest.raises(ValueError, match="INVALID_IDENTITY"):
+            if request_kind == "submit":
+                subject.submit(supervisor, operation, fixtures.TOKEN, fixtures.APPEND)
+            else:
+                subject.tick(supervisor, operation, fixtures.TOKEN)
     assert observer.snapshot(supervisor, census) == before
     assert census.reached == census.returned == 0
+
+
+def _assert_foreign_operation_rejected(supervisor, operation, foreign_operation, census, request_kind):
+    # This observation shell never replaces the real supervisor.active.
+    foreign_shell = subject.Supervisor(foreign_operation)
+    original_before = observer.snapshot(supervisor, census)
+    foreign_before = observer.snapshot(foreign_shell, census)
+    with pytest.raises(ValueError, match="INVALID_IDENTITY"):
+        if request_kind == "submit":
+            subject.submit(supervisor, foreign_operation, fixtures.TOKEN, fixtures.APPEND)
+        else:
+            subject.tick(supervisor, foreign_operation, fixtures.TOKEN)
+    assert supervisor.active is operation
+    assert foreign_shell.active is foreign_operation
+    assert observer.snapshot(supervisor, census) == original_before
+    assert census.reached == census.returned == 0
+    assert observer.snapshot(foreign_shell, census) == foreign_before, "STRUCTURE_FOREIGN_OPERATION_MUTATION"
+
+
+@pytest.mark.parametrize("request_kind", ("submit", "tick"))
+def test_foreign_only_phase_mutation_is_detected(monkeypatch, request_kind):
+    supervisor, operation, census = _start(monkeypatch)
+    if request_kind == "tick":
+        subject.submit(supervisor, operation, fixtures.TOKEN, fixtures.APPEND)
+    foreign_operation = subject.Operation(fixtures.TOKEN)
+    original_submit, original_tick = subject.submit, subject.tick
+
+    def corrupt_then_submit(owner, supplied, token, action):
+        if owner.active is not None and owner.active is not supplied:
+            supplied.phase = "CORRUPTED"
+        return original_submit(owner, supplied, token, action)
+
+    def corrupt_then_tick(owner, supplied, token):
+        if owner.active is not None and owner.active is not supplied:
+            supplied.phase = "CORRUPTED"
+        return original_tick(owner, supplied, token)
+
+    # An actual foreign-only slot write followed by the original guard's real
+    # rejection must fail the same predicate used by the normal identity tests.
+    monkeypatch.setattr(subject, "submit", corrupt_then_submit)
+    monkeypatch.setattr(subject, "tick", corrupt_then_tick)
+    with pytest.raises(AssertionError, match="STRUCTURE_FOREIGN_OPERATION_MUTATION"):
+        _assert_foreign_operation_rejected(supervisor, operation, foreign_operation, census, request_kind)
+    assert foreign_operation.phase == "CORRUPTED"
 
 
 def test_net_delta_does_not_prove_write_count(monkeypatch):
