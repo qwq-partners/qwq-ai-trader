@@ -560,7 +560,8 @@ class ProtectionProducer:
                 and (row['state'] not in TERMINAL_STATES or row['reserved_quantity'] != 0)}),
             pending_reasons=dict(self._pending_reasons),
             sources=dict(self._sources), recovery_required=deepcopy(self._recovery_required), restart_retries={symbol: {
-                **row, 'started_at': row['started_at'].isoformat() if row['started_at'] is not None else None}
+                **row, 'intent_ids': list(row['intent_ids']),
+                'started_at': row['started_at'].isoformat() if row['started_at'] is not None else None}
                 for symbol, row in self._restart_retries.items()}, retained_decisions={symbol: {
                 'intent_id': row.intent_id, 'decision': list(row.decision), 'price': str(row.price),
                 'command_id': row.command_id, 'reason': row.reason,
