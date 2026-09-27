@@ -9,6 +9,7 @@ import pytest
 
 from scripts.dev.source_runtime_contract import (
     RuntimeContractError,
+    _validate_tree,
     evaluate_runtime_contract,
     parse_runtime_document,
     subject_digest,
@@ -17,6 +18,120 @@ from scripts.dev.source_runtime_contract import (
 
 ROOT = Path(__file__).resolve().parents[2]
 H = lambda character: character * 64
+MAX_DOCUMENT_BYTES = 1024 * 1024
+LITERAL_SUBJECT_SHA256 = "ed5747d807b2f00c3142b4793017f780b28e5e7674c861f71ae7fb64b32009f2"
+LITERAL_PROFILE_SHA256 = "ce4b6a9b87c853703f5efb020f5b91edd585ecfab1b46ccd930bd9c29d3f62bb"
+LITERAL_REGISTRY_SHA256 = "dba0f408736323fe92176175af4a1113c4eaa7910c01656d7d1d1c575caa7c6f"
+
+# 이 fixture와 아래 digest는 합성 선언일 뿐 실제 runtime 관측이 아니다. 기대 digest는
+# 구현의 subject_digest가 아니라 독립 canonical JSON bytes의 SHA-256으로 고정했다.
+LITERAL_SUBJECT = {
+    "schema": "qwq.source-runtime-subject/v1",
+    "platform": {
+        "image_sha256": H("e"),
+        "os_id": "debian-12",
+        "architecture": "x86_64",
+    },
+    "runtime": {
+        "implementation": "cpython",
+        "version": "3.12.3",
+        "soabi": "cpython-312-x86_64-linux-gnu",
+        "build_sha256": H("f"),
+    },
+    "provenance": {
+        "cpython_source": H("0"),
+        "cpython_patches": H("1"),
+        "sqlite_source": H("2"),
+        "sqlite_patches": H("3"),
+        "build_recipe": H("4"),
+        "dependency_lock": H("5"),
+    },
+    "profile": {
+        "id": "linux-ro-network-off/v1",
+        "kernel_policy_sha256": H("6"),
+        "runtime_readonly": True,
+        "source_readonly": True,
+        "network_enabled": False,
+        "home_mounted": False,
+        "credentials_mounted": False,
+        "private_tmp": True,
+    },
+    "runtime_files": {
+        "bin/python": H("1"),
+        "lib/libpython.so": H("2"),
+        "lib/sqlite_extension.so": H("3"),
+        "lib/libsqlite3.so": H("4"),
+        "lib/ld-linux.so": H("5"),
+    },
+    "source_files": {
+        "source/helper.py": H("6"),
+        "source/cases.py": H("7"),
+        "source/guard.py": H("8"),
+        "source/controller.py": H("9"),
+        "source/bootstrap.py": H("a"),
+        "source/inventory.py": H("b"),
+        "source/oracle.py": H("c"),
+        "source/dependency-manifest.txt": H("d"),
+    },
+    "roles": {
+        "interpreter": "bin/python",
+        "libpython": "lib/libpython.so",
+        "sqlite_extension": "lib/sqlite_extension.so",
+        "sqlite_library": "lib/libsqlite3.so",
+        "loader": "lib/ld-linux.so",
+        "helper": "source/helper.py",
+        "cases": "source/cases.py",
+        "guard": "source/guard.py",
+        "controller": "source/controller.py",
+        "bootstrap": "source/bootstrap.py",
+        "inventory": "source/inventory.py",
+        "oracle": "source/oracle.py",
+        "dependency_manifest": "source/dependency-manifest.txt",
+    },
+}
+
+LITERAL_OBSERVATION = {
+    "schema": "qwq.source-runtime-observation/v1",
+    "subject_sha256": LITERAL_SUBJECT_SHA256,
+    "profile_sha256": LITERAL_PROFILE_SHA256,
+    "runtime_files": {
+        "bin/python": H("1"),
+        "lib/libpython.so": H("2"),
+        "lib/sqlite_extension.so": H("3"),
+        "lib/libsqlite3.so": H("4"),
+        "lib/ld-linux.so": H("5"),
+    },
+    "source_files": {
+        "source/helper.py": H("6"),
+        "source/cases.py": H("7"),
+        "source/guard.py": H("8"),
+        "source/controller.py": H("9"),
+        "source/bootstrap.py": H("a"),
+        "source/inventory.py": H("b"),
+        "source/oracle.py": H("c"),
+        "source/dependency-manifest.txt": H("d"),
+    },
+    "provenance": {
+        "cpython_source": H("0"),
+        "cpython_patches": H("1"),
+        "sqlite_source": H("2"),
+        "sqlite_patches": H("3"),
+        "build_recipe": H("4"),
+        "dependency_lock": H("5"),
+    },
+}
+
+LITERAL_BOOTSTRAP_REGISTRY = {
+    "schema": "qwq.source-runtime-registry/v1",
+    "entries": [{
+        "subject_sha256": LITERAL_SUBJECT_SHA256,
+        "state": "BOOTSTRAP_ALLOWED",
+        "profile_sha256": LITERAL_PROFILE_SHA256,
+        "bootstrap_plan_sha256": H("a"),
+        "evidence_sha256": None,
+        "review_sha256": None,
+    }],
+}
 
 
 def canonical(value):
@@ -26,72 +141,7 @@ def canonical(value):
 
 
 def subject():
-    runtime_files = {
-        "bin/python": H("1"),
-        "lib/libpython.so": H("2"),
-        "lib/sqlite_extension.so": H("3"),
-        "lib/libsqlite3.so": H("4"),
-        "lib/ld-linux.so": H("5"),
-    }
-    source_files = {
-        "source/helper.py": H("6"),
-        "source/cases.py": H("7"),
-        "source/guard.py": H("8"),
-        "source/controller.py": H("9"),
-        "source/bootstrap.py": H("a"),
-        "source/inventory.py": H("b"),
-        "source/oracle.py": H("c"),
-        "source/dependency-manifest.txt": H("d"),
-    }
-    return {
-        "schema": "qwq.source-runtime-subject/v1",
-        "platform": {
-            "image_sha256": H("e"),
-            "os_id": "debian-12",
-            "architecture": "x86_64",
-        },
-        "runtime": {
-            "implementation": "cpython",
-            "version": "3.12.3",
-            "soabi": "cpython-312-x86_64-linux-gnu",
-            "build_sha256": H("f"),
-        },
-        "provenance": {
-            "cpython_source": H("0"),
-            "cpython_patches": H("1"),
-            "sqlite_source": H("2"),
-            "sqlite_patches": H("3"),
-            "build_recipe": H("4"),
-            "dependency_lock": H("5"),
-        },
-        "profile": {
-            "id": "linux-ro-network-off/v1",
-            "kernel_policy_sha256": H("6"),
-            "runtime_readonly": True,
-            "source_readonly": True,
-            "network_enabled": False,
-            "home_mounted": False,
-            "credentials_mounted": False,
-            "private_tmp": True,
-        },
-        "runtime_files": runtime_files,
-        "source_files": source_files,
-        "roles": {
-            "interpreter": "bin/python",
-            "libpython": "lib/libpython.so",
-            "sqlite_extension": "lib/sqlite_extension.so",
-            "sqlite_library": "lib/libsqlite3.so",
-            "loader": "lib/ld-linux.so",
-            "helper": "source/helper.py",
-            "cases": "source/cases.py",
-            "guard": "source/guard.py",
-            "controller": "source/controller.py",
-            "bootstrap": "source/bootstrap.py",
-            "inventory": "source/inventory.py",
-            "oracle": "source/oracle.py",
-            "dependency_manifest": "source/dependency-manifest.txt",
-        },
-    }
+    return copy.deepcopy(LITERAL_SUBJECT)
 
 
 def observation(document):
@@ -163,8 +213,18 @@ def test_empty_registry_never_permits_execution():
 
 
 def test_matching_declarations_are_offline_only():
-    # 일치 선언이 native qualification으로 승격되는 회귀를 막는다.
-    decision = evaluate()
+    # 고정한 독립 합성 bytes/hash의 일치는 native qualification으로 승격되지 않는다.
+    decision = evaluate_runtime_contract(
+        canonical(LITERAL_SUBJECT),
+        canonical(LITERAL_BOOTSTRAP_REGISTRY),
+        canonical(LITERAL_OBSERVATION),
+        mode="bootstrap",
+        binding={
+            "expected_revision": "a" * 40,
+            "observed_revision": "a" * 40,
+            "expected_sha256": LITERAL_REGISTRY_SHA256,
+        },
+    )
     assert decision["status"] == "CONTRACT_MATCH"
     assert decision["errors"] == []
     assert decision["declared_state"] == "BOOTSTRAP_ALLOWED"
@@ -186,6 +246,23 @@ def test_subject_digest_is_canonical_and_excludes_registry_review_history():
     second = evaluate(document, registered_state="QUALIFIED", mode="required", registry_document=second_registry)
     assert first["status"] == second["status"] == "CONTRACT_MATCH"
     assert subject_digest(document) == digest_before
+
+
+@pytest.mark.parametrize("mutator", [
+    lambda value: value["platform"].update({"image_sha256": H("0")} ),
+    lambda value: value["runtime"].update({"build_sha256": H("0")} ),
+    lambda value: value["provenance"].update({"build_recipe": H("0")} ),
+    lambda value: value["profile"].update({"kernel_policy_sha256": H("0")} ),
+    lambda value: value["runtime_files"].update({"bin/python": H("0")} ),
+    lambda value: value["source_files"].update({"source/helper.py": H("0")} ),
+    lambda value: value["roles"].update({"helper": "source/cases.py"}),
+])
+def test_subject_digest_uses_the_whole_independent_literal_subject(mutator):
+    # 전체 subject 대신 source_files만 hash하는 구현은 platform 등 축의 이 변이를 놓친다.
+    document = copy.deepcopy(LITERAL_SUBJECT)
+    assert subject_digest(document) == LITERAL_SUBJECT_SHA256
+    mutator(document)
+    assert subject_digest(document) != LITERAL_SUBJECT_SHA256
 
 
 @pytest.mark.parametrize(
@@ -259,6 +336,33 @@ def test_rejection_precedes_unregistered_or_state_unsupported_and_malformed_hide
     assert result["declared_state"] is None
 
 
+@pytest.mark.parametrize("state", [None, "UNKNOWN", "RETIRED"])
+@pytest.mark.parametrize("mismatch, expected", [
+    ("binding", "REGISTRY_BINDING_MISMATCH"),
+    ("observation", "SOURCE_FILES_MISMATCH"),
+])
+def test_valid_mismatch_precedes_empty_unknown_or_retired_registry(state, mismatch, expected):
+    # 모든 문서가 schema-valid여도 mismatch는 UNSUPPORTED보다 먼저 REJECTED여야 한다.
+    document = subject()
+    registry_document = (
+        {"schema": "qwq.source-runtime-registry/v1", "entries": []}
+        if state is None else registry(document, state)
+    )
+    registry_raw = canonical(registry_document)
+    observed = observation(document)
+    caller_binding = binding(registry_raw)
+    if mismatch == "binding":
+        caller_binding["expected_sha256"] = H("e")
+    else:
+        observed["source_files"]["source/helper.py"] = H("e")
+    result = evaluate_runtime_contract(
+        canonical(document), registry_raw, canonical(observed), mode="bootstrap", binding=caller_binding,
+    )
+    assert result["status"] == "REJECTED"
+    assert result["errors"] == [expected]
+    assert result["declared_state"] is None
+
+
 def test_binding_is_exact_and_binding_mismatch_is_rejected():
     # 서로 다른 revision 또는 registry bytes를 binding으로 수용하는 회귀를 막는다.
     document = subject()
@@ -281,6 +385,90 @@ def test_binding_is_exact_and_binding_mismatch_is_rejected():
     assert result["status"] == "REJECTED"
     assert result["errors"] == ["REGISTRY_BINDING_MISMATCH"]
 
+
+def test_binding_rejects_subclassed_string_key():
+    # dict 자체가 exact여도 str subclass key를 normal key처럼 받아들이면 안 된다.
+    class Key(str):
+        pass
+
+    document = subject()
+    registry_raw = canonical(registry(document))
+    keyed_binding = binding(registry_raw)
+    value = keyed_binding.pop("expected_revision")
+    keyed_binding[Key("expected_revision")] = value
+    result = evaluate_runtime_contract(
+        canonical(document), registry_raw, canonical(observation(document)),
+        mode="bootstrap", binding=keyed_binding,
+    )
+    assert result["status"] == "REJECTED"
+    assert result["errors"] == ["INVALID_BINDING"]
+
+
+def _padding_path(index, length):
+    prefix = f"padding-{index}-"
+    assert len(prefix) <= length <= 512
+    parts = [prefix]
+    remaining = length - len(prefix)
+    first_extra = min(128 - len(parts[0]), remaining)
+    parts[0] += "x" * first_extra
+    remaining -= first_extra
+    while remaining:
+        assert remaining >= 2
+        part_length = min(128, remaining - 1)
+        parts.append("x" * part_length)
+        remaining -= part_length + 1
+    return "/".join(parts)
+
+
+def _subject_with_canonical_size(size):
+    """유효 subject를 만든 뒤 독립 canonical bytes 길이를 정확히 맞춘다."""
+    document = subject()
+    base_size = len(canonical(document))
+    required = size - base_size
+    assert required > 0
+    # ASCII path entry는 `,"<path>":"<64 hex>"`라 정확히 path bytes + 70 bytes다.
+    maximum_entry_bytes = 512 + 70
+    count = (required + maximum_entry_bytes - 1) // maximum_entry_bytes
+    deficit = count * maximum_entry_bytes - required
+    for index in range(count):
+        minimum_length = len(f"padding-{index}-")
+        reduction = min(deficit, 512 - minimum_length)
+        document["source_files"][_padding_path(index, 512 - reduction)] = H("e")
+        deficit -= reduction
+    assert deficit == 0
+    assert len(document["source_files"]) <= 4096
+    assert len(canonical(document)) == size
+    return document
+
+
+def test_document_limit_is_per_document_and_direct_subject_digest_has_same_cap():
+    # 공백 padding은 JSON 형식을 보존하므로 세 raw 입력의 개별 cap을 직접 검증한다.
+    exact_subject = _subject_with_canonical_size(MAX_DOCUMENT_BYTES)
+    assert len(canonical(exact_subject)) == MAX_DOCUMENT_BYTES
+    assert subject_digest(exact_subject)
+    oversized_subject = _subject_with_canonical_size(MAX_DOCUMENT_BYTES + 1)
+    assert len(canonical(oversized_subject)) == MAX_DOCUMENT_BYTES + 1
+    with pytest.raises(RuntimeContractError) as error:
+        subject_digest(oversized_subject)
+    assert str(error.value) == "INVALID_RUNTIME_DOCUMENT"
+
+    documents = (
+        (exact_subject, "subject"),
+        (registry(subject()), "registry"),
+        (observation(subject()), "observation"),
+    )
+    padded = []
+    for document, kind in documents:
+        raw = canonical(document)
+        exact_raw = raw + b" " * (MAX_DOCUMENT_BYTES - len(raw))
+        assert len(exact_raw) == MAX_DOCUMENT_BYTES
+        assert parse_runtime_document(exact_raw, kind=kind)
+        padded.append((exact_raw, kind))
+    assert sum(len(raw) for raw, _kind in padded) == 3 * MAX_DOCUMENT_BYTES
+    for raw, kind in padded:
+        with pytest.raises(RuntimeContractError) as error:
+            parse_runtime_document(raw + b" ", kind=kind)
+        assert str(error.value) == "INVALID_RUNTIME_DOCUMENT"
 
 @pytest.mark.parametrize("raw", [
     b'{"schema":"qwq.source-runtime-subject/v1","schema":"duplicate"}',
@@ -310,11 +498,27 @@ def test_parser_enforces_path_utf8_boundaries_and_container_depth():
     with pytest.raises(RuntimeContractError):
         parse_runtime_document(canonical(document), kind="subject")
 
-    nested = "{}"
-    for _ in range(10):
-        nested = '{"x":' + nested + "}"
+    document = subject()
+    component_129 = "가" * 43
+    document["source_files"][component_129] = document["source_files"].pop("source/helper.py")
+    document["roles"]["helper"] = component_129
     with pytest.raises(RuntimeContractError):
-        parse_runtime_document(nested.encode(), kind="subject")
+        parse_runtime_document(canonical(document), kind="subject")
+
+
+def test_validate_tree_counts_only_containers_for_depth():
+    # root container=1: 10번째 container 아래 leaf는 허용, 11번째 container는 거절한다.
+    depth_ten_leaf = "leaf"
+    for _ in range(10):
+        depth_ten_leaf = {"x": depth_ten_leaf}
+    _validate_tree(depth_ten_leaf)
+
+    depth_eleven_container = "leaf"
+    for _ in range(11):
+        depth_eleven_container = {"x": depth_eleven_container}
+    with pytest.raises(RuntimeContractError) as error:
+        _validate_tree(depth_eleven_container)
+    assert str(error.value) == "INVALID_RUNTIME_DOCUMENT"
 
 
 def test_parser_enforces_file_map_and_registry_entry_boundaries():

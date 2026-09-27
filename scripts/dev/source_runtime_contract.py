@@ -55,8 +55,6 @@ def _reject_constant(_value):
 
 def _validate_tree(value, depth=1, active=None):
     """직접 전달된 객체와 JSON 결과의 exact type/UTF-8/depth를 확인한다."""
-    if depth > _MAX_DEPTH:
-        _invalid()
     if type(value) is str:
         try:
             value.encode("utf-8")
@@ -66,6 +64,8 @@ def _validate_tree(value, depth=1, active=None):
     if type(value) in (bool, int) or value is None:
         return
     if type(value) not in (dict, list):
+        _invalid()
+    if depth > _MAX_DEPTH:
         _invalid()
     if active is None:
         active = set()
@@ -79,10 +79,10 @@ def _validate_tree(value, depth=1, active=None):
                 if type(key) is not str:
                     _invalid()
                 _validate_tree(key, depth, active)
-                _validate_tree(item, depth + 1, active)
+                _validate_tree(item, depth + 1 if type(item) in (dict, list) else depth, active)
         else:
             for item in value:
-                _validate_tree(item, depth + 1, active)
+                _validate_tree(item, depth + 1 if type(item) in (dict, list) else depth, active)
     finally:
         active.remove(identity)
 
@@ -287,7 +287,10 @@ def subject_digest(subject: dict) -> str:
     try:
         _validate_tree(subject)
         _validate_subject(subject)
-        return hashlib.sha256(_canonical(subject)).hexdigest()
+        canonical = _canonical(subject)
+        if len(canonical) > _MAX_DOCUMENT_BYTES:
+            _invalid()
+        return hashlib.sha256(canonical).hexdigest()
     except RuntimeContractError:
         raise
     except (TypeError, ValueError, RecursionError):
@@ -301,6 +304,7 @@ def _profile_digest(subject):
 def _validate_binding(binding):
     if type(binding) is not dict:
         raise ValueError
+    _validate_tree(binding)
     binding = _exact_dict(binding, {"expected_revision", "observed_revision", "expected_sha256"})
     for key in ("expected_revision", "observed_revision"):
         value = _string(binding[key])
