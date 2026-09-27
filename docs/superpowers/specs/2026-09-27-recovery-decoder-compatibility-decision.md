@@ -201,3 +201,50 @@ cold latency·전체 회귀/full L3 인수는 각각 남는다. 첫 RED 파일 �
 
 문서 자체 검토·diff/링크/비밀 패턴 확인은 작성자 보고서에 기록한다. critical 최종 승인과 통합은
 coordinator가 배정한 독립 reviewer의 책임이며 작성자는 자신을 승인자로 기록하지 않는다.
+
+## 9. B1 최소 구조 후보 — 서면 검토 보완안
+
+이 절은 09-27 후속 `decoder-feasibility-next-slice.md`의 준비 설계에 대한 보완이다.
+원문 SHA-256은 `1067c29ecf8563a9a99284adc7fe8ef98e17f86290d8af019f7c2452a9c34e59`이며
+원문과 독립 `decoder-feasibility-review.md`는 위 ROOT의 runtime-admission-contract
+artifact 디렉터리에 보존한다. **독립 한정 재리뷰는 F1/F2 CLOSED·새 지적0,
+APPROVE_PREPARATORY_DESIGN_ONLY다. 구현/실험 승인이 아니다.**
+
+작은 private cell을 allocation chain이 보유하고 semantic graph는 별도로 연결하는 B1만
+준비한다. semantic edge를 끊어도 모든 cell의 chain 경로가 먼저 유지돼야 한다. bounded
+slot 수는 실제 allocator/GC latency나 native free의 증명이 아니다. constructor 반환 뒤의
+slot/weakref 관측 S와 최초 할당·부분 실패·반환 gap·실제 free 관측 A를 구분한다. S로 A를
+대체하지 않는다. 다음 두 규칙은 원문 retire 1~4단계의 모호한 표현보다 우선한다.
+
+### F1 — work 자체의 정리는 추가 work를 만들지 않는다
+
+JSON cell의 semantic child와 work cell의 control slot(`target`, `next`)은 다른 도메인이다.
+각 원 JSON semantic edge는 해당 child를 처리할 work를 최대 한 번만 만든다. work를 pop할
+때에는 target을 정리 cursor holder로, next를 work-head holder로 먼저 옮긴 뒤 소비된
+work의 target/next를 비운다. 빈 work를 allocation chain에서 직접 unlink하며, **work의
+control slot을 일반 semantic child처럼 재등록하거나 work를 해제할 work를 만들지 않는다.**
+
+current 및 양쪽 이웃은 unlink가 끝날 때까지 holder가 잡는다. head/tail/유일 cell과 중간
+실패의 전이표는 다음 별도 structural 계획에서 정한다. 원 graph가 유한하고 각 semantic
+edge가 한 번만 work를 만들며 pop은 work를 추가하지 않는다는 진행 관계를 독립 expected에
+넣는다. work-next를 일반 child로 재등록하는 변이는 그 관계를 위반해야 한다. 일반 child
+작업 생성은 여전히 할당할 수 있고 실패 시 DISPOSAL_FAULT를 유지한다. 모든 정리를 무할당으로
+수행하거나 OOM에서 반드시 진전한다는 새 보증은 아니다.
+
+### F2 — old/new 동시 보유는 개별 교체의 국소 관계다
+
+한 교체에서 old/new가 겹치며 활성 retire 배치는 최대 하나다. 해당 배치를 마치기 전에
+다음 형제 construction을 시작하지 않는다. 그러나 중첩 duplicate를 구성하는 동안 아직
+교체되지 않은 조상의 old 값과 안쪽 old/new는 함께 살아 있을 수 있다. 그 조상 값은
+live semantic domain이지 retire backlog가 아니다. continuation은 중첩 construction의
+책임을 보유하며 깊이·전체 live cell 수가 두 subtree로 제한된다고 주장하지 않는다.
+
+다음 독립 action 목록에는 바깥 `a`의 old array를 유지한 채 새 object의 `b`를 다시
+교체하는 중첩 사례를 넣는다. 실제 live/retire/holder 도메인을 대조하며 단일 pending count로
+그 관계를 대체하지 않는다. 입력 depth cap 또는 parser 구현을 이 문서에서 추가하지 않는다.
+
+S 관측 정지점은 정상 전이 완료와 관측용 중간 정지점을 구분한다. wrapper의 cell local과
+weakref 역참조 local이 살아 있는 관측 도메인을 기록하고 해당 frame 종료 후 terminal을
+관측한다. observer/census 실패는 harness 오류 또는 INCONCLUSIVE다. intended RED나 정상
+cleanup으로 바꾸지 않는다. 전체 `TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED`,
+qualified0/source108 call-phase0와 §7의 후속 gate는 그대로다.
