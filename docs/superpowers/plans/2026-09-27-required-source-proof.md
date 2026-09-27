@@ -10,15 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-27-required-source-proof-design.md`와 2026-09-27 사용자의 기존 성능 실패 예외·개발 진행 지시.
 
-**Status:** 독립 계획 한정 승인(`APPROVE_PLAN_ONLY`)·사용자 written-plan 검토 대기·미구현.
+**Status:** 사용자 `rㄱ` 구현 승인 후 Task1/2 독립 검토·개발 통합, Task3 포함 관련98건·전체 UTC/KST 각각6014 passed. 최종 Astra 검토 대기이며 전체 source proof·운영 승인은 아니다.
 첫 리뷰 P1 세 건/P2 한 건을 반영했고 재리뷰에서 전부 closed·새 지적0이다.
 검토한 계획 SHA256은 `6565eecf8e4d7bc5844df25490d847c897d3ac90f65ed9c97bb9f4edf7b1d651`,
 재리뷰 artifact `plan-rereview.md` SHA256은 `16a20fa80204afc118357e41206f6efb8e1196e33b364900449b6a6307fe0645`다.
-리뷰 뒤 변경은 이 상태/근거 기록뿐이다. 실제 모델/effective effort는 metadata 미노출로 미검증이다.
+이후 실행 기준은 `3bdcfaa5d2bd17d8351b058f2ffe7709bcb73097`이며 [진행 원장](../../reviews/verification-evidence-2026-09-27.md)에 구현 해석·실제 검증을 기록한다. 실제 모델/effective effort는 metadata 미노출로 미검증이다.
 
 ## Global Constraints
 
-- 독립 검토된 실행계획이며 사용자 written-plan 검토 대기다. 구현·CI 활성화·runtime 자격 취득 완료가 아니다.
+- 독립 검토된 실행계획이며 사용자 구현 승인을 받았다. CI 활성화·runtime 자격 취득 완료가 아니다.
 - 기준 `450a6ed593c0a0873e2bde0db8a1a8d956fe5d37`, coordinator는 기존 격리 feature worktree를 사용한다.
 - 주문·전략·위험 설정·제품 소스·운영·main 변경 없음. KIS 거래/잔고·Toss 관측 역할 불변.
 - 기존 실패 기록·원본 시험 단언을 보존한다. 성능 예외는 PASS, 임계 상향, blanket skip/xfail이 아니다.
@@ -84,14 +84,14 @@ def evaluate_bundle(receipts: list[dict], expected: dict) -> dict: ...
 
 `parse_document`는 duplicate key·NaN/Infinity·UTF-8 오류·unknown schema/field·잘못된 타입을
 `EvidenceError`로 거부한다. bool을 정수로 받지 않는다. document≤32MiB, depth≤12,
-nodes≤20,000, nodeid≤2,048 UTF-8 bytes, code/hash는 고정된 길이를 검증한다. 기대값은 결과에서
+각 시험 inventory/results 목록의 nodes≤20,000(JSON scalar 총개수 아님), nodeid≤2,048 UTF-8 bytes, code/hash는 고정된 길이를 검증한다. 기대값은 결과에서
 자동 생성하지 않는다. 동등 비교용 목록은 정렬하되 중복은 제거하지 않고 오류로 처리한다.
 
 Receipt schema `qwq.verification-receipt/v1`의 exact 최상위 필드:
 
 - `schema`, `run`, `slot`, `identity`, `collected`, `results`, `session`, `guard`.
 - `run`: `event`, `sha`(40 lowercase hex), `tree`(40 lowercase hex), `contract`(64 lowercase hex),
-  `run_id`(1~128 ASCII 식별자), `attempt`(양의 정수). event는 `local`, `pull_request`, `push`, `merge_group`, `workflow_dispatch` 중 하나.
+  `run_id`(`[A-Za-z0-9_.:-]{1,128}` ASCII 식별자), `attempt`(양의 정수). event는 `local`, `pull_request`, `push`, `merge_group`, `workflow_dispatch` 중 하나.
 - `slot`: `lane`(`standard` 또는 `source-proof`), `timezone`(`UTC` 또는 `Asia/Seoul`).
 - `identity`: `runtime`, `producer`, `inventory`(각64 lowercase hex). runtime은 관측 환경 지문이지 자격 승인 문자열이 아니다.
 - `collected`: 중복 없는 실제 nodeid 목록. `results`: node마다 `nodeid`, `setup`, `call`, `teardown`.
@@ -126,7 +126,7 @@ Bundle 출력 exact 필드: `schema="qwq.verification-decision/v1"`,
 **Files:** 위 소유권 표의 Task1 두 파일.
 **Interfaces:** 위 public API를 생산한다. pytest·제품·network·GitHub를 import/실행하지 않는다.
 
-- [ ] **Step 1 — RED:** 다음 반례를 먼저 작성한다.
+- [x] **Step 1 — RED:** 다음 반례를 먼저 작성한다.
 
 ```python
 def test_bundle_requires_four_distinct_matching_slots():
@@ -142,10 +142,10 @@ def test_known_performance_failure_is_not_automatic_pass():
   missing/duplicate/extra node·guard 미로딩/두 module/위반1·session 미완료/exit124,
   setup/teardown 실패·skip/xfail/XPASS·잘못된 inventory 지문 거부.
   같은 node를 allowed_outcomes에 추가해 skip을 허용하려는 입력도 거부한다.
-- [ ] **Step 2 — RED 확인:** 아래 공통 집중 명령으로 이 파일을 실행해 누락 구현으로 실패함을 기록한다.
-- [ ] **Step 3 — 최소 구현:** exact schema와 expected 대조만 구현한다. 원시 failed를 수동 예외 JSON으로 바꾸는 분기를 만들지 않는다.
-- [ ] **Step 4 — GREEN/리뷰:** 같은 명령의 통과·격리0을 확인하고 Sol/high에게 diff·실제 증거를 넘긴다.
-- [ ] **Step 5 — 통합:** 승인된 두 파일만 coordinator가 feature에 커밋한다. 다른 task 파일을 일괄 stage하지 않는다.
+- [x] **Step 2 — RED 확인:** 아래 공통 집중 명령으로 이 파일을 실행해 누락 구현으로 실패함을 기록한다.
+- [x] **Step 3 — 최소 구현:** exact schema와 expected 대조만 구현한다. 원시 failed를 수동 예외 JSON으로 바꾸는 분기를 만들지 않는다.
+- [x] **Step 4 — GREEN/리뷰:** 같은 명령의 통과·격리0을 확인하고 Sol/high에게 diff·실제 증거를 넘긴다.
+- [x] **Step 5 — 통합:** 승인된 두 파일만 coordinator가 feature에 커밋한다. 다른 task 파일을 일괄 stage하지 않는다.
 
 ### Task 2: 실제 pytest evidence 생산자
 
@@ -173,16 +173,16 @@ wrapper는 시작 전 실제 `TZ`가 `UTC` 또는 `Asia/Seoul`이며 context와 
 고정 epoch의 UTC offset(0/32400초)을 확인한다. 반환 뒤에도 TZ/offset을 재검사한다.
 시스템 시간대·HOME은 변경하지 않는다. 해당 API/zoneinfo가 없는 환경은 미지원이다.
 
-- [ ] **Step 1 — RED:** 실제 tmp repo/소형 pytest subprocess로 다음을 고정한다.
+- [x] **Step 1 — RED:** 실제 tmp repo/소형 pytest subprocess로 다음을 고정한다.
   `test_real_pass_and_failure_keep_pytest_exit_codes`는 정상0·assertion 실패1을 그대로 요구한다.
   `test_swallowed_guard_violation_is_recorded`는 합성 guard의 VIOLATIONS1이 receipt에 남음을 요구한다.
   setup 실패/teardown 실패/strict xfail/XPASS/collection 오류/deselected/중도 종료,
   guard0개/동일 이름 다른 경로/동일 파일 두 module/기존 output 파일 거부를 추가한다.
   실제 `TZ=UTC/context=Asia/Seoul`과 역방향·누락·종료시 변조를 RED로 고정한다.
   늦은 sessionfinish exit 변경/guard 위반, unconfigure 예외의 실제 소형 hook도 추가한다.
-- [ ] **Step 2 — RED 확인:** 소형 자식에 실제 guard를 설치한 격리 환경에서 실패를 기록한다.
+- [x] **Step 2 — RED 확인:** 소형 자식에 실제 guard를 설치한 격리 환경에서 실패를 기록한다.
   자식은 root/tests의 진짜 conftest를 제품 import 전에 로드한다. 실제 외부 접속/운영 경로 접근으로 negative를 만들지 않는다.
-- [ ] **Step 3 — 최소 구현:** plugin은 collection/report 사실만 축적한다. wrapper가 `pytest.main(..., plugins=[observer])`
+- [x] **Step 3 — 최소 구현:** plugin은 collection/report 사실만 축적한다. wrapper가 `pytest.main(..., plugins=[observer])`
   반환 **후** 실제 반환 rc와 최종 guard identity/위반을 읽고 receipt를 발행한다. sessionfinish에서는
   완주 receipt를 발행하지 않는다. `finished`는 pytest.main이 정상 반환했음을 뜻하며 OS process 종료 증거가 아니다.
   반환 전 예외/unconfigure 오류는 정상 receipt를 남기지 않는다. 정상 반환 시 wrapper exit는 원 pytest rc,
@@ -195,8 +195,8 @@ wrapper는 시작 전 실제 `TZ`가 `UTC` 또는 `Asia/Seoul`이며 context와 
   process가 강제 종료돼 파일이 없으면 consumer가 실패로 처리한다. 운영 원문·traceback locals는 저장하지 않는다.
   receipt 발행 뒤 강제 종료/atexit 실패까지 이 파일로 증명하지 않는다. 미래 controller가 실제 OS rc·timeout·reap를
   별도 결속하기 전에는 최종 CI 게이트로 사용할 수 없다. 합성 자식 시험은30초 상한·양 스트림 회수·timeout 후 kill/reap를 고정한다.
-- [ ] **Step 4 — GREEN/리뷰:** 소형 pytest의 실제 raw rc·생산 JSON·격리0을 검토한다. Astra/xhigh가 작성자와 독립 리뷰한다.
-- [ ] **Step 5 — 통합:** 승인된 두 파일만 feature에 통합한다. artifact나 tmp repo는 커밋하지 않는다.
+- [x] **Step 4 — GREEN/리뷰:** 소형 pytest의 실제 raw rc·생산 JSON·격리0을 검토한다. Astra/xhigh가 작성자와 독립 리뷰한다.
+- [x] **Step 5 — 통합:** 승인된 두 파일만 feature에 통합한다. artifact나 tmp repo는 커밋하지 않는다.
 
 ### Task 3: 오프라인 CLI·결합 인수·문서
 
@@ -205,12 +205,12 @@ wrapper는 시작 전 실제 `TZ`가 `UTC` 또는 `Asia/Seoul`이며 context와 
 반복 `--receipt PATH`(정확히4개). stdout은 위 decision JSON 하나, 정상0·검사 거부1·인자/읽기 오류2.
 명령 실행·자식 프로세스·native SQL·자격 등록·네트워크·artifact 업로드 기능을 넣지 않는다.
 
-- [ ] **Step 1 — RED:** 실제 CLI subprocess로 valid4/누락/중복/다른 run/잘린 JSON/oversize/nonregular 입력을 검증한다.
+- [x] **Step 1 — RED:** 실제 CLI subprocess로 valid4/누락/중복/다른 run/잘린 JSON/oversize/nonregular 입력을 검증한다.
   Task2 소형 실제 pytest receipt를 모아 Task1에 넘기는 integration test를 만든다.
   실패를 수동 성능 예외 원장에 적어도 CLI가0으로 바뀌지 않는 반례를 고정한다.
-- [ ] **Step 2 — RED 확인:** 두 선행 모듈은 승인된 실제 구현을 사용한다. 핵심 parser/producer를 mock하지 않는다.
-- [ ] **Step 3 — 최소 구현:** 파일당 상한과 읽기 오류를 처리하고 pure API를 호출한다. file 읽기는 크기 사전 점검과 bounded read로 제한한다.
-- [ ] **Step 4 — GREEN/전체 검증:** 집중 세 파일+기존 `tests/dev/test_verify.py`를 검증한 뒤 전체 UTC/KST를 직렬 실행한다.
+- [x] **Step 2 — RED 확인:** 두 선행 모듈은 승인된 실제 구현을 사용한다. 핵심 parser/producer를 mock하지 않는다.
+- [x] **Step 3 — 최소 구현:** 파일당 상한과 읽기 오류를 처리하고 pure API를 호출한다. file 읽기는 크기 사전 점검과 bounded read로 제한한다.
+- [x] **Step 4 — GREEN/전체 검증:** 집중 세 파일+기존 `tests/dev/test_verify.py`를 검증한 뒤 전체 UTC/KST를 직렬 실행한다.
   원시 실패/미완료는 모두 보고하고 알려진 이력의 개발 예외와 실제 이번 결과를 구분한다. 이력 면제로 pytest PASS를 주장하지 않는다.
   이번 UTC에 새 실패/미완료가 있으면 KST와 자동 완료·통합은 중단한다. 새 관측의 정확한 원인/범위를
   별도로 처분하기 전 기존 두 관측과 같은 예외로 간주하지 않는다. 이는 과거 두 관측만으로 개발 착수를 다시 막는 조건이 아니다.
@@ -226,6 +226,12 @@ timeout --signal=TERM 180s env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHOND
 
 전체시험은 위 명령의 timeout을900s, 파일 선택을`tests`로 바꾸고 UTC 후 `Asia/Seoul`을 사용한다.
 실제 프로젝트에 필요한 plugin은 기존 로딩 계약을 조사해 명시하고 숨은 선택 옵션은 받지 않는다.
+실행 시 첫 실패 중단 의미를 `-x`로 고정하고, 설치된 기존 plugin 세 개(`pytest_asyncio.plugin`,
+`pytest_cov.plugin`, `anyio.pytest_plugin`)를 명시한다. 최초 UTC는 fake-SSH 배포 시험의
+`HOME` 기본값 확장으로 실패했다. 원인을 대조한 뒤 기존 시험 입력 `QWQ_DEPLOY_SSH_KEY`에
+새 임시 디렉터리의 존재하지 않는 파일 경로만 지정하여 단일 시험1 passed를 확인했다.
+이 비밀정보 없는 fixture 입력을 전체 명령에 추가한다. `HOME`·실제 키는 전달하지 않고
+실제 SSH나 배포를 실행하지 않는다. 최초 실패와 보정 실행은 별도 기록으로 보존한다.
 이번 실행의 첫 실패/미확정/인프라 오류에서 후속 workload와 자동 완료·통합을 중단하며 해당 task를 성공으로 보고하지 않는다.
 성능 실패가 다시 나오면 원시 결과는 보존하고 이미 승인된 관측과 동일시하지 않는다.
 

@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **성능 예외·개발 재개(2026-09-27):** 사용자는 아래 controlled5k13.023871ms·controlled100k33.174ms를 개발 진행 예외로 수용했다. [정확한 예외 원장](docs/reviews/recovery-performance-exceptions-2026-09-27.json)은 원시 실패/exit124를 PASS로 바꾸지 않는다. [후속 실행계획](docs/superpowers/plans/2026-09-27-required-source-proof.md)은 오프라인 evidence 부품으로 분리해 독립 계획 한정 승인·사용자 계획 검토 대기·미구현이다. 기존 두 실패만으로 개발을 재차 차단하지 않되 다른 정합성·격리·runtime·main/운영 관문은 유지한다. 아래 실패/미승인 안내는 각 시점의 이력이다.
+> **오프라인 검증 도구 구현(2026-09-27):** 사용자 `rㄱ` 승인 후 실제 pytest evidence·순수 네 슬롯 검사·파일 CLI를 구현했다. 현재 후보·시험·독립 리뷰 상태는 [구현 원장](docs/reviews/verification-evidence-2026-09-27.md)이 정본이다. Task1/2는 독립 검토 후 개발 통합했고 Task3는 최종 인수 중이다. [정확한 성능 예외 원장](docs/reviews/recovery-performance-exceptions-2026-09-27.json)의 두 과거 관측은 개발 비차단이며 원시 실패/exit124를 PASS로 바꾸지 않는다. source/sequence 후보·제품 src·기존 시험/CI·main/운영은 변경하지 않는다. qualified runtime0, 실제 OS 종료 결속·skip/xfail 조건 허용·필수 CI는 후속이다. 아래 실패/미승인 안내는 각 시점의 이력이다.
 
 > **추가 진단 종료:** clean-base100k 단회 index CPU 진단은 미재현·미확정(원본1 passed/12.78s·최대4.204637ms)이다. 재시도·원인 확정·기존 실패 면제는 없다. 아래33.174ms·13.023871ms 실패와 Python 지원 충돌, 코드 통합 차단은 유지한다. 최신 근거·후속 조건은 [L3-P0 실행 결과](docs/reviews/l3-proof-results-2026-09-27.md) 참조.
 

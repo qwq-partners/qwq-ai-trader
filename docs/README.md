@@ -6,8 +6,9 @@
 
 ### Architecture (아키텍처)
 
-- [L3 오프라인 검증 부품 실행계획](superpowers/plans/2026-09-27-required-source-proof.md) — 실제 pytest evidence·네 슬롯 검사·CLI 3작업; [기존 성능 실패 개발 예외](reviews/recovery-performance-exceptions-2026-09-27.json) 반영, 독립 계획 승인·사용자 계획 검토 대기·미구현
-- [L3 별도 필수 source proof 계약 설계](superpowers/specs/2026-09-27-required-source-proof-design.md) — 기존 전체시험 + 조건부 runtime 증명 + 동일 실행 최종 gate; 사용자 성능 위험 수용으로 개발 차단 해제, 미구현·qualified runtime0·운영 미승격
+- [L3 오프라인 검증 도구 구현 원장](reviews/verification-evidence-2026-09-27.md) — 실제 수집기·네 슬롯 검사·CLI 후보, 원시 RED/GREEN·독립 검토·전체 인수 현황과 사용법; 전체 엔진/운영 승인 아님
+- [L3 오프라인 검증 부품 실행계획](superpowers/plans/2026-09-27-required-source-proof.md) — 사용자 구현 승인, Task1/2 검토·개발 통합 및 Task3 인수 중; [기존 성능 실패 개발 예외](reviews/recovery-performance-exceptions-2026-09-27.json) 불변
+- [L3 별도 필수 source proof 계약 설계](superpowers/specs/2026-09-27-required-source-proof-design.md) — 기존 전체시험 + 조건부 runtime 증명 + 동일 실행 최종 gate; 오프라인 부품과 최종 CI 계약 구분, qualified runtime0·운영 미승격
 - [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — L1/L2 구조 한정 승인·관련757 passed; 새 controlled5k13.024ms 실패·6셀 미실행·trace 미확정; Task2/실제 owner 통합 차단
 - [N5 L3 취소·자원 수명 설계 제안](superpowers/specs/2026-09-27-recovery-build-lifecycle-design.md) — 논리 취소/물리 정리/결과 인계·source lease·cleanup proof; 독립 제안 한정 승인, capture/표현 타당성·구현 미완
 - [N5 L3-P0 증명 실행계획](superpowers/plans/2026-09-27-recovery-lifecycle-proof.md) — warm SQL source 인계·bounded sequence의 시험 전용 두 과제; 한정 검토 후 전체 인수 차단, 제품/운영 미구현

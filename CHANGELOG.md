@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — 오프라인 시험 증거 수집·검사·CLI 후보
+
+- 사용자 구현 승인 후 세 새 개발 도구와 대응 시험을 작성했다. 실제 pytest phase/rc/guard 관측을 종료 반환 후 발행하고, 독립 expected와 네 lane×시간대 receipt를 엄격히 대조한다. 결과는 항상 오프라인 범위·`production_eligible=false`다.
+- Task1 독립 리뷰의 malformed JSON·빈 inventory 승인 결함2건을 RED로 재현·수정·재승인했다. Task2는 별도 Astra 검토를 통과했다. Task3 CLI는 잘못된 NUL 경로를 고정 오류로 처리하며 실제 생산자→검사기 인수를 포함한다.
+- 관련98건·격리0, UTC/KST 각각 전체6014 passed/기존16 skipped/2 xfailed·격리0. 최초 UTC의 fake-SSH fixture `HOME` 누락은 임시 더미 키 경로 입력으로만 보정했고 최초 실패를 별도 보존한다. 최종 broad 리뷰 대기이며 [구현 원장](docs/reviews/verification-evidence-2026-09-27.md)이 현재 상태 정본이다.
+- 기존 성능 예외·원시 실패·시험 단언·source/sequence 후보·제품/CI/설정/main/운영은 변경하지 않는다. native qualification·실제 OS 결과 controller·조건을 결속한 skip/xfail 허용·원격 필수 gate는 후속 범위다.
+
 ## 2026-09-27 — 기존 성능 실패의 개발 예외·오프라인 검증 부품 계획
 
 - 사용자 지시로 controlled5k13.023871ms와 controlled100k33.174ms를 개발 비차단 위험 수용으로 기록했다. [예외 원장](docs/reviews/recovery-performance-exceptions-2026-09-27.json)은 exact node/후보 지문/원 수치를 보존하며 시험·rc·skip/xfail·임계값을 변경하지 않는다.
