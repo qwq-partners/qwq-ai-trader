@@ -40,7 +40,7 @@ _PROCESS_KEYS = {"reason", "returncode", "term_sent", "kill_sent", "leader_reape
 
 
 def parse_process_result(raw: bytes) -> dict:
-    """64KiB 이내의 process-result v1 바이트를 엄격하게 해석한다."""
+    """64KiB process-result을 해석하고 세부 ProcessEvidenceError를 낸다."""
     if type(raw) is not bytes:
         raise ProcessEvidenceError("RAW_NOT_BYTES")
     if len(raw) > _MAX_BYTES:
@@ -73,7 +73,7 @@ def parse_process_result(raw: bytes) -> dict:
 def validate_controlled_receipt(
     receipt_raw: bytes, process_raw: bytes, expected: dict
 ) -> tuple[str, ...]:
-    """독립 expectation과 한 슬롯의 receipt/process 결과를 대조한다."""
+    """한 슬롯을 대조하며 process parser 예외는 고정 오류로 정규화한다."""
     errors: set[str] = set()
     try:
         verification, process_identity, launch = _validate_expected(expected)
@@ -116,6 +116,10 @@ def validate_controlled_receipt(
         errors.add("PROCESS_SCOPE_MISMATCH")
 
     observed = process["process"]
+    if process["identity"]["producer"] != receipt["identity"]["producer"]:
+        errors.add("PROCESS_IDENTITY_MISMATCH")
+    if process["identity"]["guard"] != receipt["guard"]["sha256"]:
+        errors.add("PROCESS_GUARD_MISMATCH")
     if observed["guard"] != receipt["guard"] or observed["parent_guard"] != receipt["guard"]:
         errors.add("PROCESS_GUARD_MISMATCH")
     receipt_fact = process["receipt"]
@@ -210,9 +214,9 @@ def _validate_run_slot(run: Any, slot: Any) -> None:
 
 def _validate_launch(launch: Any) -> None:
     _require_exact_dict(launch, {"profile", "process_scope", "timeout_seconds", "selection_sha256"})
-    if launch["profile"] != "pytest-evidence-bootstrap/v1":
+    if type(launch["profile"]) is not str or launch["profile"] != "pytest-evidence-bootstrap/v1":
         raise ProcessEvidenceError("INVALID_LAUNCH")
-    if launch["process_scope"] != "linux-subreaper/v1":
+    if type(launch["process_scope"]) is not str or launch["process_scope"] != "linux-subreaper/v1":
         raise ProcessEvidenceError("INVALID_LAUNCH")
     if type(launch["timeout_seconds"]) is not int or not 1 <= launch["timeout_seconds"] <= 900:
         raise ProcessEvidenceError("INVALID_LAUNCH")
@@ -329,7 +333,7 @@ def _validate_unicode(value: Any) -> None:
 def _canonical_json(value: Any) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+    except (RecursionError, TypeError, ValueError, UnicodeEncodeError) as exc:
         raise ProcessEvidenceError("INVALID_JSON_VALUE") from exc
 
 

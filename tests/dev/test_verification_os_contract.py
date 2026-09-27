@@ -66,7 +66,7 @@ def _expected():
         "process_identity": {
             "controller": "5" * 64,
             "bootstrap": "6" * 64,
-            "producer": "7" * 64,
+            "producer": "d" * 64,
             "guard": GUARD64,
             "executable": "8" * 64,
         },
@@ -79,8 +79,8 @@ def _expected():
     }
 
 
-def _receipt(expected):
-    slot = expected["verification"]["slots"][0]
+def _receipt(expected, position=0):
+    slot = expected["verification"]["slots"][position]
     return {
         "schema": "qwq.verification-receipt/v1",
         "run": copy.deepcopy(expected["verification"]["run"]),
@@ -109,12 +109,13 @@ def _raw(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def _process(expected, receipt_raw):
-    guard = expected["verification"]["slots"][0]["guard"]
+def _process(expected, receipt_raw, position=0):
+    slot = expected["verification"]["slots"][position]
+    guard = slot["guard"]
     return {
         "schema": "qwq.verification-process-result/v1",
         "run": copy.deepcopy(expected["verification"]["run"]),
-        "slot": {"lane": "standard", "timezone": "UTC"},
+        "slot": copy.deepcopy(slot["slot"]),
         "scope": "local_os_process_only",
         "identity": copy.deepcopy(expected["process_identity"]),
         "launch": copy.deepcopy(expected["launch"]),
@@ -149,6 +150,11 @@ def _valid_raws():
     return expected, receipt_raw, _raw(_process(expected, receipt_raw))
 
 
+def _coherent_valid_raws():
+    """receipt와 process가 같은 producer/guard 파일을 가리키는 정상 증거다."""
+    return _valid_raws()
+
+
 def test_evaluate_binds_literal_standard_local_evidence_without_claiming_native_or_ci():
     expected, receipt_raw, process_raw = _valid_raws()
 
@@ -162,6 +168,191 @@ def test_evaluate_binds_literal_standard_local_evidence_without_claiming_native_
         "ci_provenance_verified": False,
         "production_eligible": False,
     }
+
+
+def test_validate_rejects_process_producer_identity_not_bound_to_receipt():
+    expected, receipt_raw, process_raw = _coherent_valid_raws()
+    process = json.loads(process_raw)
+    process["identity"]["producer"] = "f" * 64
+    expected["process_identity"]["producer"] = "f" * 64
+    assert validate_controlled_receipt(receipt_raw, _raw(process), expected) == (
+        "PROCESS_IDENTITY_MISMATCH",
+    )
+
+
+def test_validate_rejects_process_guard_identity_not_bound_to_receipt():
+    expected, receipt_raw, process_raw = _coherent_valid_raws()
+    process = json.loads(process_raw)
+    process["identity"]["guard"] = "f" * 64
+    expected["process_identity"]["guard"] = "f" * 64
+    assert validate_controlled_receipt(receipt_raw, _raw(process), expected) == (
+        "PROCESS_GUARD_MISMATCH",
+    )
+
+
+def test_validate_normalizes_deep_direct_expectation_to_fixed_error():
+    expected, receipt_raw, process_raw = _coherent_valid_raws()
+    deep = 0
+    for _ in range(10_000):
+        deep = [deep]
+    expected["verification"] = deep
+    assert validate_controlled_receipt(receipt_raw, process_raw, expected) == (
+        "INVALID_EXPECTATION",
+    )
+    assert evaluate_controlled_slot(receipt_raw, process_raw, expected)["errors"] == [
+        "INVALID_EXPECTATION"
+    ]
+
+
+def test_validate_rejects_direct_launch_equality_object():
+    class EqualToProfile:
+        def __eq__(self, other):
+            return other == "pytest-evidence-bootstrap/v1"
+
+    expected, receipt_raw, process_raw = _coherent_valid_raws()
+    expected["launch"]["profile"] = EqualToProfile()
+    assert validate_controlled_receipt(receipt_raw, process_raw, expected) == (
+        "INVALID_EXPECTATION",
+    )
+
+
+def test_validator_normalizes_multiple_bad_inputs_to_sorted_fixed_errors():
+    assert validate_controlled_receipt(b"{", b"{}", {}) == (
+        "INVALID_EXPECTATION",
+        "INVALID_PROCESS_RESULT",
+        "INVALID_RECEIPT",
+    )
+
+
+def test_process_parser_accepts_exact_byte_limit_and_reaches_depth_guard_before_schema():
+    expected, receipt_raw, _ = _coherent_valid_raws()
+    raw = _raw(_process(expected, receipt_raw))
+    assert len(raw) < 64 * 1024
+    padded = raw + b" " * (64 * 1024 - len(raw))
+    assert parse_process_result(padded)["schema"] == "qwq.verification-process-result/v1"
+
+    nested = 0
+    for _ in range(8):
+        nested = {"nested": nested}
+    with pytest.raises(ProcessEvidenceError, match="DOCUMENT_TOO_DEEP"):
+        parse_process_result(_raw(nested))
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda process: process["process"].__setitem__("returncode", True),
+        lambda process: process["process"].__setitem__("returncode", -65),
+        lambda process: process["process"].__setitem__("returncode", 256),
+        lambda process: process["process"].update(leader_reaped=True, returncode=None),
+        lambda process: process["process"].update(leader_reaped=False, returncode=0),
+        lambda process: process["process"]["guard"].__setitem__("violations", True),
+        lambda process: process["process"].__setitem__("descendants_reaped", 20_001),
+    ],
+)
+def test_process_parser_rejects_terminal_type_and_range_incoherence(mutate):
+    expected, receipt_raw, _ = _coherent_valid_raws()
+    process = _process(expected, receipt_raw)
+    mutate(process)
+    with pytest.raises(ProcessEvidenceError):
+        parse_process_result(_raw(process))
+
+
+@pytest.mark.parametrize(
+    ("stream_name", "bytes_count", "overflow", "parses"),
+    [
+        ("stdout", 8 * 1024 * 1024, False, True),
+        ("stderr", 8 * 1024 * 1024, False, True),
+        ("stdout", 8 * 1024 * 1024 + 1, True, True),
+        ("stderr", 8 * 1024 * 1024 + 1, False, False),
+    ],
+)
+def test_stream_limits_are_strict_and_any_overflow_cannot_bind(stream_name, bytes_count, overflow, parses):
+    expected, receipt_raw, _ = _coherent_valid_raws()
+    process = _process(expected, receipt_raw)
+    process["streams"][stream_name].update(bytes=bytes_count, overflow=overflow)
+    if not parses:
+        with pytest.raises(ProcessEvidenceError):
+            parse_process_result(_raw(process))
+        return
+    assert parse_process_result(_raw(process))["streams"][stream_name]["bytes"] == bytes_count
+    if overflow:
+        assert "PROCESS_STREAM_OVERFLOW" in validate_controlled_receipt(
+            receipt_raw, _raw(process), expected
+        )
+
+
+@pytest.mark.parametrize("state", ["missing", "invalid"])
+def test_nonregular_receipt_fact_and_absent_guard_never_bind(state):
+    expected, receipt_raw, _ = _coherent_valid_raws()
+    process = _process(expected, receipt_raw)
+    process["receipt"] = {"state": state, "bytes": 0, "sha256": None}
+    assert "PROCESS_RECEIPT_MISMATCH" in validate_controlled_receipt(
+        receipt_raw, _raw(process), expected
+    )
+
+    process = _process(expected, receipt_raw)
+    process["process"]["parent_guard"] = None
+    assert "PROCESS_GUARD_MISMATCH" in validate_controlled_receipt(
+        receipt_raw, _raw(process), expected
+    )
+
+
+@pytest.mark.parametrize("outcome", ["skipped", "xfailed", "xpassed"])
+def test_all_unsupported_existing_receipt_outcomes_remain_rejected(outcome):
+    expected, receipt_raw, _ = _coherent_valid_raws()
+    receipt = _receipt(expected)
+    receipt["results"][0]["call"] = outcome
+    receipt_raw = _raw(receipt)
+    assert "UNSUPPORTED_OUTCOME" in validate_controlled_receipt(
+        receipt_raw, _raw(_process(expected, receipt_raw)), expected
+    )
+
+
+def test_matching_source_proof_or_nonlocal_receipt_is_rejected_by_controlled_scope():
+    expected = _expected()
+    receipt_raw = _raw(_receipt(expected, 2))
+    assert "PROCESS_SCOPE_MISMATCH" in validate_controlled_receipt(
+        receipt_raw, _raw(_process(expected, receipt_raw, 2)), expected
+    )
+
+    expected = _expected()
+    expected["verification"]["run"]["event"] = "push"
+    receipt_raw = _raw(_receipt(expected))
+    assert "PROCESS_SCOPE_MISMATCH" in validate_controlled_receipt(
+        receipt_raw, _raw(_process(expected, receipt_raw)), expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "returncode", "term_sent", "kill_sent"),
+    [
+        ("signaled", -9, False, False),
+        ("timeout", 124, False, False),
+        ("interrupted", -15, False, False),
+        ("startup_error", None, False, False),
+        ("output_limit", None, False, False),
+        ("cleanup_error", None, False, False),
+        ("identity_changed", None, False, False),
+        ("io_error", None, False, False),
+        ("exited", 1, False, False),
+        ("exited", 0, True, False),
+        ("exited", 0, False, True),
+    ],
+)
+def test_each_nonqualifying_reason_or_terminal_fact_is_rejected(reason, returncode, term_sent, kill_sent):
+    expected, receipt_raw, _ = _coherent_valid_raws()
+    process = _process(expected, receipt_raw)
+    process["process"].update(
+        reason=reason,
+        returncode=returncode,
+        term_sent=term_sent,
+        kill_sent=kill_sent,
+        leader_reaped=returncode is not None,
+    )
+    assert "PROCESS_EXIT_REJECTED" in validate_controlled_receipt(
+        receipt_raw, _raw(process), expected
+    )
 
 
 @pytest.mark.parametrize(
