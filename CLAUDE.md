@@ -107,7 +107,9 @@
 | VCP 돌파 | (배치 스캔 라인) | 변동성 수축 후 20일 고점 돌파 — **선행 발굴** (2026-08-03~) |
 | 밸류코어 | `value_growth_screener.py` | 가치·성장 2버킷 장기보유 — 🔍 **shadow 관측 중** (2026-08-04~, 주문 없음, 설계 `docs/strategies/value-growth-core-design.md`) |
 
-### US 전략 (4개)
+### US 전략 (4개) — ⛔ **미국 거래 영구 중단 (2026-09-28 사용자 결정)**
+> 운영 systemd 는 `--market kr` 로 기동하며 `run_trader.py` 의 `--market` 기본값도 `kr` 이다(US 엔진·브로커·WS·대시보드 US API 미초기화). 아래 표는 코드 존재 기록일 뿐 운영 대상이 아니다. **US 거래 관련 시험·적용은 활성 경로로 다루지 않고 예외 처리한다.** 단, `us_market_data`·`us_market_expert`(SPY/QQQ/VIX 야간 신호)는 KR 레짐 판단의 입력이라 유지한다.
+
 | 전략 | 파일 | 설명 |
 |------|------|------|
 | 모멘텀 | `us/momentum.py` | 20일 고가 돌파 브레이크아웃 |

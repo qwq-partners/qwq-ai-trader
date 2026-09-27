@@ -2117,9 +2117,9 @@ def parse_args():
     parser.add_argument(
         "--market",
         type=str,
-        default="both",
+        default="kr",
         choices=["kr", "us", "both"],
-        help="운영할 시장 (kr/us/both)"
+        help="운영할 시장 (kr/us/both) — 미국 거래는 영구 중단(2026-09-28), 기본 kr. us/both 는 명시 시에만"
     )
     parser.add_argument(
         "--log-level",
