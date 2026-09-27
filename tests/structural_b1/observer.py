@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 import weakref
 
+import _qwq_b1_subject as subject
+
 
 HOLDER_SLOTS = (
     "new", "replacement", "cursor", "unlink", "left", "right",
@@ -106,6 +108,8 @@ def snapshot(supervisor, census):
             cell = reference()
             if cell is None:
                 continue
+            if type(cell) is not subject.Cell:
+                issues.append("STRUCTURE_CELL_TYPE")
             slots[(generation, "tag")] = _scalar(cell.tag)
             rows[generation] = {}
             for name in CELL_REFS:
@@ -164,6 +168,14 @@ def check_transition(before, after):
 def terminal_live(census):
     """Call only after driver/wrapper/snapshot frames have returned; no GC."""
     return tuple(generation for generation, reference in census.refs.items() if reference() is not None)
+
+
+def coverage_verdict(census, *, bypass_witnessed):
+    """A caller's actual bypass witness defeats census completeness, even at 0."""
+    if bypass_witnessed:
+        return "INCONCLUSIVE_COVERAGE"
+    # Absence of a witness is not evidence that no bypass exists.
+    return "CENSUS_ONLY_NOT_ALLOCATION_QUALIFIED"
 
 
 def terminal_issues(state):

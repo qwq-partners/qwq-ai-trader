@@ -35,6 +35,108 @@ ROWS = {
     "U11": ("IDLE", "holders", "cursor", None),
 }
 
+# Hand-written states after each tick: head, tail, new, cursor, unlink,
+# left, right, and (generation, prev, next) for EVERY census-live cell.
+# None-to-None rows intentionally repeat; snapshots cannot count writes.
+APPEND_STATES = (
+    (
+        (None, None, 1, None, None, None, None, ((1, None, None),)),
+        (None, None, 1, None, None, None, None, ((1, None, None),)),
+        (1, None, 1, None, None, None, None, ((1, None, None),)),
+        (1, 1, 1, None, None, None, None, ((1, None, None),)),
+        (1, 1, 1, 1, None, None, None, ((1, None, None),)),
+        (1, 1, None, 1, None, None, None, ((1, None, None),)),
+        (1, 1, None, None, None, None, None, ((1, None, None),)),
+    ),
+    (
+        (1, 1, 2, None, None, None, None, ((1, None, None), (2, None, None))),
+        (1, 1, 2, None, None, None, None, ((1, None, None), (2, 1, None))),
+        (1, 1, 2, None, None, None, None, ((1, None, 2), (2, 1, None))),
+        (1, 2, 2, None, None, None, None, ((1, None, 2), (2, 1, None))),
+        (1, 2, 2, 2, None, None, None, ((1, None, 2), (2, 1, None))),
+        (1, 2, None, 2, None, None, None, ((1, None, 2), (2, 1, None))),
+        (1, 2, None, None, None, None, None, ((1, None, 2), (2, 1, None))),
+    ),
+    (
+        (1, 2, 3, None, None, None, None, ((1, None, 2), (2, 1, None), (3, None, None))),
+        (1, 2, 3, None, None, None, None, ((1, None, 2), (2, 1, None), (3, 2, None))),
+        (1, 2, 3, None, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, 3, None, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, 3, 3, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 3, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, None, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+    ),
+)
+UNLINK_STATES = {
+    "single": (
+        (1, 1, None, 1, None, None, None, ((1, None, None),)),
+        (1, 1, None, 1, 1, None, None, ((1, None, None),)),
+        (1, 1, None, 1, 1, None, None, ((1, None, None),)),
+        (1, 1, None, 1, 1, None, None, ((1, None, None),)),
+        (None, 1, None, 1, 1, None, None, ((1, None, None),)),
+        (None, None, None, 1, 1, None, None, ((1, None, None),)),
+        (None, None, None, 1, 1, None, None, ((1, None, None),)),
+        (None, None, None, 1, 1, None, None, ((1, None, None),)),
+        (None, None, None, 1, 1, None, None, ((1, None, None),)),
+        (None, None, None, 1, 1, None, None, ((1, None, None),)),
+        (None, None, None, 1, None, None, None, ((1, None, None),)),
+        (None, None, None, None, None, None, None, ()),
+    ),
+    "head": (
+        (1, 3, None, 1, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 1, 1, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 1, 1, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 1, 1, None, 2, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (2, 3, None, 1, 1, None, 2, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (2, 3, None, 1, 1, None, 2, ((1, None, 2), (2, None, 3), (3, 2, None))),
+        (2, 3, None, 1, 1, None, 2, ((1, None, 2), (2, None, 3), (3, 2, None))),
+        (2, 3, None, 1, 1, None, 2, ((1, None, None), (2, None, 3), (3, 2, None))),
+        (2, 3, None, 1, 1, None, 2, ((1, None, None), (2, None, 3), (3, 2, None))),
+        (2, 3, None, 1, 1, None, None, ((1, None, None), (2, None, 3), (3, 2, None))),
+        (2, 3, None, 1, None, None, None, ((1, None, None), (2, None, 3), (3, 2, None))),
+        (2, 3, None, None, None, None, None, ((2, None, 3), (3, 2, None))),
+    ),
+    "tail": (
+        (1, 3, None, 3, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 3, 3, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 3, 3, 2, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 3, 3, 2, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 3, 3, 2, None, ((1, None, 2), (2, 1, None), (3, 2, None))),
+        (1, 2, None, 3, 3, 2, None, ((1, None, 2), (2, 1, None), (3, 2, None))),
+        (1, 2, None, 3, 3, 2, None, ((1, None, 2), (2, 1, None), (3, None, None))),
+        (1, 2, None, 3, 3, 2, None, ((1, None, 2), (2, 1, None), (3, None, None))),
+        (1, 2, None, 3, 3, None, None, ((1, None, 2), (2, 1, None), (3, None, None))),
+        (1, 2, None, 3, 3, None, None, ((1, None, 2), (2, 1, None), (3, None, None))),
+        (1, 2, None, 3, None, None, None, ((1, None, 2), (2, 1, None), (3, None, None))),
+        (1, 2, None, None, None, None, None, ((1, None, 2), (2, 1, None))),
+    ),
+    "middle": (
+        (1, 3, None, 2, None, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 2, 2, None, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 2, 2, 1, None, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 2, 2, 1, 3, ((1, None, 2), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 2, 2, 1, 3, ((1, None, 3), (2, 1, 3), (3, 2, None))),
+        (1, 3, None, 2, 2, 1, 3, ((1, None, 3), (2, 1, 3), (3, 1, None))),
+        (1, 3, None, 2, 2, 1, 3, ((1, None, 3), (2, None, 3), (3, 1, None))),
+        (1, 3, None, 2, 2, 1, 3, ((1, None, 3), (2, None, None), (3, 1, None))),
+        (1, 3, None, 2, 2, None, 3, ((1, None, 3), (2, None, None), (3, 1, None))),
+        (1, 3, None, 2, 2, None, None, ((1, None, 3), (2, None, None), (3, 1, None))),
+        (1, 3, None, 2, None, None, None, ((1, None, 3), (2, None, None), (3, 1, None))),
+        (1, 3, None, None, None, None, None, ((1, None, 3), (3, 1, None))),
+    ),
+}
+APPEND_PHASES = ("A1", "A2", "A3", "A4", "A5", "A6", "IDLE")
+UNLINK_PHASES = ("U1", "U2", "U3", "U4", "U5", "U6", "U7", "U8", "U9", "U10", "U11", "IDLE")
+
+
+def compact(state):
+    slots = dict(state.slots)
+    return (
+        slots[("arena", "head")], slots[("arena", "tail")],
+        *(slots[("holders", name)] for name in ("new", "cursor", "unlink", "left", "right")),
+        tuple((g, slots[(g, "prev")], slots[(g, "next")]) for g in state.live),
+    )
+
 
 def expected_transition(before):
     slots = dict(before.slots)
