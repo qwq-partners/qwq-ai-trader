@@ -88,7 +88,8 @@ tracked 전역 비밀 패턴 검사는 기존 08-18 개발계획의 가짜 priva
 전체 raw 로그 SHA256은 UTC
 `520b3efec732ca44aa7b765bb2f477d686c01f026aad32ed566cb8e6aff8504c`, KST
 `046aa6c934a238f36fdab6b15c99828ba5dacd995b0418a69adc7b1f393c18de`다.
-개발 commit/push는 이 검증 뒤 수행하며 원격 SHA를 실제 조회해 확인한다.
+검증 뒤 문서 마감 `535e4941ffa25b899bde6f906c8eb3b29e853021`를 feature 브랜치에 푸시했다.
+이는 코드 후보 `cc18b9c`와 비문서 파일이 동일하다. main 병합/배포/재시작은0이다.
 
 ## 다음 단계
 

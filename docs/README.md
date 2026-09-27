@@ -8,6 +8,7 @@
 
 - [Source 수집·격리 경계 원장](reviews/source-proof-boundaries-2026-09-27.md) — source108/관련31 exact 수집, 기존6034 보존+73추가, 집중168·전체 UTC/KST 각6089 passed; native 실행·운영 승인 아님
 - [Source 경계 설계](superpowers/specs/2026-09-27-source-proof-boundaries-design.md) · [실행계획](superpowers/plans/2026-09-27-source-proof-boundaries.md) — helper/oracle 보존·guard 실체·미자격 실행 차단; qualified runtime0
+- [OS 종료·회수 증거 설계](superpowers/specs/2026-09-27-os-process-evidence-design.md) · [실행계획](superpowers/plans/2026-09-27-os-process-evidence.md) — 독립 계획 재리뷰 승인, 로컬 standard 한 슬롯 구현 착수; native/CI/운영 자격과 분리
 
 - [L3 오프라인 검증 도구 구현 원장](reviews/verification-evidence-2026-09-27.md) — 세 부품 개발·독립 검토 완료, 최종 UTC/KST 각6016 passed·통합 후 관련100 passed, 사용법·후속 순서; 전체 엔진/운영 승인 아님
 - [L3 오프라인 검증 부품 실행계획](superpowers/plans/2026-09-27-required-source-proof.md) — 사용자 승인 Task1~3 구현·검증·개발 통합 완료; [기존 성능 실패 개발 예외](reviews/recovery-performance-exceptions-2026-09-27.json) 불변

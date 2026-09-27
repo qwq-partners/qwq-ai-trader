@@ -92,7 +92,7 @@ canonical digest는 UTF8 JSON `ensure_ascii=False, separators=(',',':'), allow_n
   no HOME, shared lock, timeout900초, 원문 log·exit·guard·skip/xfail identity 보존.
 - [x] in-memory Python compile·secret pattern·git diff --check, source/guard/frozen hash 보존 확인.
 - [x] CHANGELOG/CLAUDE/docs README/report에 수집·native 미실행을 구분해 기록한다.
-- [ ] feature commit/push+remoteSHA 확인. main/배포 변경 없이 다음 OS controller 설계 단계로 진행.
+- [x] feature commit/push+remoteSHA 확인. main/배포 변경 없이 다음 OS controller 설계 단계로 진행.
 
 ## Self-review
 
