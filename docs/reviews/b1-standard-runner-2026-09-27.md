@@ -66,8 +66,12 @@ expected OSError 처리·기존 예외 우선순위·lock-last close에 한정�
 
 Task3c 출력 전용 시험55bc822의 첫 node는 미구현 profile 인자의 정상 call-phase
 TypeError로 RED(1 failed/0.62s·격리0·workload1/tee0/tool1)다. 후속44fb2a4까지
-총531줄의 독립 시험을 고정하고 별도 source 작성자에게 넘겼다. root가 전체 diff를
-읽었으며 구현 GREEN·최종 source 검토는 아직 미완료다.
+총531줄의 독립 시험 뒤 source-only c632e57에서 동일 node1 passed/0.72s,
+새+기존 controller **415 passed/42.12s**·격리0·세 exit0이다. 시험과 source를
+분리해 검토한 비작성자 리뷰가 `READY_FOR_TASK3C_COMPONENT_ACCEPTANCE`,
+P0/P1/P2 지적0으로 마쳤다. `_observe` 바깥 및 기존 v1 회계 블록은 불변이며,
+main 실행·실제 프로필·전체 suite 인수는 별도다. 원문은 `task-3c-focused-evidence.md`,
+`task-3c-oracle-review.md`, `task-3c-independent-review.md`에 보존한다.
 
 Task3d main/finalization 제안의 독립 리뷰는 P1 두 건, P2 한 건으로 변경 요청이다.
 probe 예외 시 정리 소유권·fork 자식의 부모 정리 진입 차단, helper가 FD 목록을

@@ -21,8 +21,8 @@ budget/probe/cleanup219 focused cases have scoped independent acceptance. Task3b
 coordination2f5c9c5 has333 focused passes and scoped non-author component approval;
 prepare/finish temporary-close rows are source-confirmed N/A, not runtime passes.
 The earlier harness failure is preserved and not counted as intended RED.
-Output-only Task3c has independent first RED and frozen531-line tests; source is
-in progress. Task3d proposal review requires separate probe exception/child-terminal
+Output-only Task3c c632e57 has415 focused passes and non-author scoped component
+approval after frozen531-line tests. Task3d proposal review requires separate probe exception/child-terminal
 and helper BaseException-cleanup prerequisites plus exact mixed-exit classification.
 These new stronger main guarantees do not retroactively broaden Task3a/3b approval.
 MainB1 remains125 and Task4 has not run. Historical checklist items
