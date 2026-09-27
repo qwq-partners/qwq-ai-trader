@@ -15,7 +15,7 @@ full semantic/CONT/retire/dispose와 N4097은 별도 승인 gate에 남긴다.
 
 **Spec:** `docs/superpowers/specs/2026-09-27-decoder-b1-structural-probe-design.md` 전체.
 
-**Status:** `B1A_PARTIAL_PLAN_PROPOSED`, 같은 독립 reviewer 재검토 대기.
+**Status:** `B1A_PARTIAL_PLAN_PROPOSED`, 독립 reviewer 재검토 대기.
 원525줄은 `d9d57e533582b9d2183a145c14f31c2fea313b2b`에 보존한다.
 R1–R4 보완 제안이며 R2 full CLOSED/full S GO를 주장하지 않는다.
 
@@ -44,7 +44,8 @@ R1–R4 보완 제안이며 R2 full CLOSED/full S GO를 주장하지 않는다.
 
 ## 0. 승인·소유권과 미래 API
 
-- [ ] 같은 독립 Astra/xhigh reviewer가 R1–R4와 두 문서를 재검토한다.
+- [ ] 원 독립 Astra/xhigh reviewer가 R1–R4와 두 문서를 재검토한다. 원 reviewer를 재개할 수
+  없으면 coordinator가 원 리뷰 전체를 제공한 새 독립 Astra/xhigh reviewer로 대체하고 기록한다.
   요청 최대 승인명=`APPROVE_B1A_PLAN_ONLY`; 현재 승인받았다는 뜻이 아니다.
 - [ ] coordinator가 승인 spec/plan SHA·파일·node 목록을 고정해 dispatch한다.
   subject=Astra/high 25분, 다른 observer 작성자=Astra/high 30분,
@@ -189,12 +190,14 @@ runner/controller나 guard 우회가 아니다. 일반 focused/full에서는 항
 
 - [ ] A0–A6/U0–U11을 구현한다. A0만 복합 관측, 다른 행은 분기별 단일 실제 graph 대입이다.
   사전 거부와 원 fault/phase/graph 보존을 구현한다. full decoder action0.
-- [ ] 최초 exact RED node를 같은 profile로 GREEN 확인하고 작은 module을 실행한다.
+- [ ] 최초 exact RED node를 같은 profile로 GREEN 확인한다. 작은 전체 module은 아래 실제
+  mutant site 연결을 끝낸 뒤 실행하며 미구현 mutant를 skip하거나 기대값을 완화하지 않는다.
   독립 reviewer가 각 분기 쓰기 지점/constructor0·1을 SHA·행 표로 대조한다.
   double_write_restore는 source 감사로 거부하며 snapshot 증명으로 보고하지 않는다. tracing0.
 - [ ] observer 담당이 실제 mutant site를 연결한다. 정상 predicate PASS와 같은 predicate의
   actual mutant 구조 실패를 한 쌍으로 남긴다. 원시 RED는 아래 고정 one-shot 절차로 보존한다.
   pytest.raises 포장 PASS만 raw RED라 하지 않는다. observer/coverage miss는 별도 분류다.
+- [ ] 실제 mutant 연결 후 §1의 작은 전체 module을 실행한다. 새 실패면 중단하고 raw를 보존한다.
 - [ ] reviewer가 모든 표 행/분기·foreign fault·frame 반환·hidden alias·actual terminal과
   source closure를 확인한다. diff/site/SHA/raw node/rc/unresolved를 root에 반환한다.
 
@@ -256,5 +259,5 @@ positive 방어 대조, double_write_restore는 source 한계 대조이며 이 r
 ## 문서 자체 종료 조건
 
 두 문서 diff·전이/API/spec coverage·공백·비밀 패턴·allowlist를 확인해 local commit만 한다.
-현재 pytest/수집/import/SQL/native/실험0·push0. 같은 독립 재승인 전 Task1 코드 작성0.
+현재 pytest/수집/import/SQL/native/실험0·push0. 독립 재승인 전 Task1 코드 작성0.
 R1/B1a R2/R3 profile·UNRUN/R4 분리를 재검토에 넘기며 full R2는 미완으로 유지한다.

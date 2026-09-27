@@ -14,7 +14,7 @@ CONT/end/lookup/ENTRY·ITEM 게시/duplicate/retire/known_failure/finish/dispose
 N4097도 후속 gate다. B1a 성공의 최대 표현은 `B1A_PRIMITIVES_OBSERVED_ONLY`이며
 원 `S_STRUCTURAL_OBSERVED_ONLY`가 아니다. 이 분리는 개발 순서이며 원 인수를 축소해 통과한 것이 아니다.
 
-현재는 두 문서와 coordinator 지정 보고서만 작성한다. 같은 독립 critical reviewer의
+현재는 두 문서와 coordinator 지정 보고서만 작성한다. 원 R1–R4 전체를 읽은 독립 critical reviewer의
 재검토와 coordinator의 정확한 commit·파일 dispatch 전 코드 작성/수집/실험0이다.
 사용자 자율 위임은 routine 확인을 대체하며 native/제품/운영 권한을 늘리지 않는다.
 `TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED`, `native_qualified=false`,
