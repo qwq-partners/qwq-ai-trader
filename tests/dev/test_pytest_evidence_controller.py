@@ -647,16 +647,31 @@ def test_probe_missing_status_and_timeout_reject_without_bootstrap(monkeypatch):
 
 
 def test_preflight_existing_child_never_consumes_status(monkeypatch):
+    import io
     import pytest
     module = _controller()
     observed = []
-    monkeypatch.setattr(module.os, "waitid", lambda *a: observed.append(a))
+    pid = 4321
+    def one_task(path):
+        observed.append(("tasks", path))
+        return [str(pid)]
+    def empty_children(path, mode):
+        observed.append(("children", path, mode))
+        return io.BytesIO(b"")
+    def existing_status(*args):
+        observed.append(("waitid", args))
+    monkeypatch.setattr(module.os, "listdir", one_task)
+    monkeypatch.setattr(module.os, "getpid", lambda: pid)
+    monkeypatch.setattr(module, "open", empty_children, raising=False)
+    monkeypatch.setattr(module.os, "waitid", existing_status)
     def forbidden(*args):
         raise AssertionError("사전 소유하지 않은 자식 회수")
     monkeypatch.setattr(module.os, "waitpid", forbidden)
     with pytest.raises(ValueError):
         module._preflight()
-    assert observed == [(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT | WALL)]
+    assert observed == [("tasks", "/proc/self/task"),
+                        ("children", f"/proc/self/task/{pid}/children", "rb"),
+                        ("waitid", (os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT | WALL))]
 
 
 def test_real_late_adoption_after_term_budget_is_killed(tmp_path):
@@ -906,12 +921,22 @@ def test_repeated_postspawn_observer_exception_still_publishes_failure(tmp_path,
 
 
 def test_preflight_rejects_unavailable_subreaper_or_pidfd_without_fork(monkeypatch):
+    import io
     import types
     import pytest
     module = _controller()
+    pid = 4321
     for failure in ("set", "get", "readback", "pidfd"):
         with monkeypatch.context() as patch:
+            calls = []
+            def one_task(path):
+                calls.append(("tasks", path))
+                return [str(pid)]
+            def empty_children(path, mode):
+                calls.append(("children", path, mode))
+                return io.BytesIO(b"")
             def prctl(command, value, *rest):
+                calls.append(("prctl", command))
                 if command == 36:
                     return -1 if failure == "set" else 0
                 if failure == "get":
@@ -919,18 +944,35 @@ def test_preflight_rejects_unavailable_subreaper_or_pidfd_without_fork(monkeypat
                 ctypes.cast(value, ctypes.POINTER(ctypes.c_int))[0] = 0 if failure == "readback" else 1
                 return 0
             def empty(*args):
+                calls.append(("waitid", args))
                 raise ChildProcessError
             def unavailable(*args):
+                calls.append(("pidfd", args))
                 raise PermissionError
+            def reset(sig, handler):
+                calls.append(("sigchld", sig, handler))
             def forbidden(*args):
                 raise AssertionError("사전 검증 실패 뒤 fork")
+            patch.setattr(module.os, "listdir", one_task)
+            patch.setattr(module.os, "getpid", lambda: pid)
+            patch.setattr(module, "open", empty_children, raising=False)
             patch.setattr(module.ctypes, "CDLL", lambda *a, **k: types.SimpleNamespace(prctl=prctl))
-            patch.setattr(module.signal, "signal", lambda *a: None)
+            patch.setattr(module.signal, "signal", reset)
             patch.setattr(module.os, "waitid", empty)
             patch.setattr(module.os, "pidfd_open", unavailable)
             patch.setattr(module.os, "fork", forbidden)
             with pytest.raises((ValueError, PermissionError)):
                 module._preflight()
+            expected = [("tasks", "/proc/self/task"),
+                        ("children", f"/proc/self/task/{pid}/children", "rb"),
+                        ("waitid", (os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT | WALL)),
+                        ("sigchld", signal.SIGCHLD, signal.SIG_DFL),
+                        ("prctl", 36)]
+            if failure != "set":
+                expected.append(("prctl", 37))
+            if failure == "pidfd":
+                expected.append(("pidfd", (pid, 0)))
+            assert calls == expected
 
 
 def test_startup_deadline_is_not_restarted_on_observer_entry(monkeypatch):
@@ -1084,35 +1126,47 @@ def test_r2_unfinished_lifecycle_never_reads_receipt(tmp_path, monkeypatch):
 
 
 def test_main_failed_preflight_or_probe_never_launches_or_touches_children(tmp_path, monkeypatch):
-    import builtins
-    actual_preflight = _controller()._preflight
-    real_listdir, real_open = os.listdir, builtins.open
+    import io
+    preflight_module = _controller()
+    actual_preflight = preflight_module._preflight
+    pid = 4321
     for mode in ("extra_task", "proc", "sigchld", "missing_probe_status", "probe_timeout", "probe_failed"):
         with monkeypatch.context() as patch:
             module, repo, guard, streams, args = _fake_main(tmp_path / mode, patch)
             actions = []
+            target_calls = []
             def forbidden(*args, **kwargs):
                 actions.append("forbidden child operation")
                 raise AssertionError("미소유 자식 조작 또는 bootstrap 실행")
             if mode in ("extra_task", "proc", "sigchld"):
                 patch.setattr(module, "_preflight", actual_preflight)
                 patch.setattr(module, "_probe", forbidden)
+                def tasks(path):
+                    target_calls.append(("tasks", path))
+                    return [str(pid), str(pid + 1)] if mode == "extra_task" else [str(pid)]
+                patch.setattr(preflight_module.os, "listdir", tasks)
+                patch.setattr(preflight_module.os, "getpid", lambda: pid)
                 if mode == "extra_task":
-                    patch.setattr(module.os, "listdir", lambda p: ["1", "2"] if p == "/proc/self/task" else real_listdir(p))
+                    pass
                 elif mode == "proc":
                     def unavailable(path, *a, **k):
-                        if str(path).startswith("/proc/self/task/"):
-                            raise PermissionError("고정 proc 실패")
-                        return real_open(path, *a, **k)
-                    patch.setattr(builtins, "open", unavailable)
+                        target_calls.append(("children", path, *a))
+                        raise PermissionError("고정 proc 실패")
+                    patch.setattr(preflight_module, "open", unavailable, raising=False)
                 else:
+                    def empty_children(path, mode):
+                        target_calls.append(("children", path, mode))
+                        return io.BytesIO(b"")
                     def initial_empty(*a):
+                        target_calls.append(("waitid", a))
                         raise ChildProcessError
                     def reset(sig, handler):
                         if sig == signal.SIGCHLD:
+                            target_calls.append(("sigchld", sig, handler))
                             raise OSError("고정 SIGCHLD reset 실패")
-                    patch.setattr(module.os, "waitid", initial_empty)
-                    patch.setattr(module.signal, "signal", reset)
+                    patch.setattr(preflight_module, "open", empty_children, raising=False)
+                    patch.setattr(preflight_module.os, "waitid", initial_empty)
+                    patch.setattr(preflight_module.signal, "signal", reset)
             else:
                 patch.setattr(module, "_probe", lambda *a: False)
             patch.setattr(module, "_RawPopen", forbidden)
@@ -1124,6 +1178,19 @@ def test_main_failed_preflight_or_probe_never_launches_or_touches_children(tmp_p
             assert doc["process"]["returncode"] is None
             assert doc["process"]["leader_reaped"] is False
             assert doc["process"]["ownership_probe_passed"] is False
+            expected = [("tasks", "/proc/self/task")]
+            if mode == "proc":
+                expected.append(("children", f"/proc/self/task/{pid}/children", "rb"))
+            elif mode == "sigchld":
+                expected.extend([
+                    ("children", f"/proc/self/task/{pid}/children", "rb"),
+                    ("waitid", (os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT | WALL)),
+                    ("sigchld", signal.SIGCHLD, signal.SIG_DFL),
+                ])
+            if mode in ("extra_task", "proc", "sigchld"):
+                assert target_calls == expected
+            else:
+                assert target_calls == []
 
 
 def test_main_repeated_observer_error_reaps_fake_alive_child_by_pidfd(tmp_path, monkeypatch):
