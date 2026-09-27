@@ -667,6 +667,11 @@ def test_preflight_existing_child_never_consumes_status(monkeypatch):
     def forbidden(*args):
         raise AssertionError("사전 소유하지 않은 자식 회수")
     monkeypatch.setattr(module.os, "waitpid", forbidden)
+    monkeypatch.setattr(module.os, "fork", forbidden)
+    monkeypatch.setattr(module.signal, "signal", forbidden)
+    monkeypatch.setattr(module.ctypes, "CDLL", forbidden)
+    monkeypatch.setattr(module.os, "pidfd_open", forbidden)
+    monkeypatch.setattr(module.signal, "pidfd_send_signal", forbidden)
     with pytest.raises(ValueError):
         module._preflight()
     assert observed == [("tasks", "/proc/self/task"),
@@ -961,6 +966,8 @@ def test_preflight_rejects_unavailable_subreaper_or_pidfd_without_fork(monkeypat
             patch.setattr(module.os, "waitid", empty)
             patch.setattr(module.os, "pidfd_open", unavailable)
             patch.setattr(module.os, "fork", forbidden)
+            patch.setattr(module.os, "waitpid", forbidden)
+            patch.setattr(module.signal, "pidfd_send_signal", forbidden)
             with pytest.raises((ValueError, PermissionError)):
                 module._preflight()
             expected = [("tasks", "/proc/self/task"),
@@ -1138,6 +1145,11 @@ def test_main_failed_preflight_or_probe_never_launches_or_touches_children(tmp_p
             def forbidden(*args, **kwargs):
                 actions.append("forbidden child operation")
                 raise AssertionError("미소유 자식 조작 또는 bootstrap 실행")
+            def forbidden_preflight_boundary(*args, **kwargs):
+                raise AssertionError("고정 preflight 거부 뒤 OS 경계")
+            def startup_only_signal(sig, handler):
+                if sig not in (signal.SIGTERM, signal.SIGINT):
+                    raise AssertionError("고정 preflight 거부 뒤 신호 설정")
             if mode in ("extra_task", "proc", "sigchld"):
                 patch.setattr(module, "_preflight", actual_preflight)
                 patch.setattr(module, "_probe", forbidden)
@@ -1146,13 +1158,18 @@ def test_main_failed_preflight_or_probe_never_launches_or_touches_children(tmp_p
                     return [str(pid), str(pid + 1)] if mode == "extra_task" else [str(pid)]
                 patch.setattr(preflight_module.os, "listdir", tasks)
                 patch.setattr(preflight_module.os, "getpid", lambda: pid)
+                patch.setattr(preflight_module.ctypes, "CDLL", forbidden_preflight_boundary)
+                patch.setattr(preflight_module.os, "pidfd_open", forbidden_preflight_boundary)
                 if mode == "extra_task":
-                    pass
+                    patch.setattr(preflight_module, "open", forbidden_preflight_boundary, raising=False)
+                    patch.setattr(preflight_module.signal, "signal", startup_only_signal)
                 elif mode == "proc":
                     def unavailable(path, *a, **k):
                         target_calls.append(("children", path, *a))
                         raise PermissionError("고정 proc 실패")
                     patch.setattr(preflight_module, "open", unavailable, raising=False)
+                    patch.setattr(preflight_module.os, "waitid", forbidden_preflight_boundary)
+                    patch.setattr(preflight_module.signal, "signal", startup_only_signal)
                 else:
                     def empty_children(path, mode):
                         target_calls.append(("children", path, mode))
@@ -1169,7 +1186,9 @@ def test_main_failed_preflight_or_probe_never_launches_or_touches_children(tmp_p
                     patch.setattr(preflight_module.signal, "signal", reset)
             else:
                 patch.setattr(module, "_probe", lambda *a: False)
+                patch.setattr(module.signal, "signal", startup_only_signal)
             patch.setattr(module, "_RawPopen", forbidden)
+            patch.setattr(module.os, "fork", forbidden)
             patch.setattr(module.os, "waitpid", forbidden)
             patch.setattr(module.signal, "pidfd_send_signal", forbidden)
             assert module.main(args) == 125
