@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -189,8 +190,13 @@ def run_case(repo, *, dummy=False, args=None, interrupt=False):
     return result
 
 
-def make_repo(tmp_path, body="def test_ok():\n    assert True\n"):
+def make_repo(tmp_path, body="def test_ok():\n    assert True\n", *, b1_isolated=False, b1_short_budget=False):
     """고정 guard/producer와 임시 안전 상태 모듈만 갖는 합성 저장소다."""
+    if (type(b1_isolated) is not bool or type(b1_short_budget) is not bool
+            or (b1_short_budget and not b1_isolated)):
+        raise ValueError("B1_FIXTURE_MODE")
+    if b1_isolated and any(path.is_symlink() for path in (tmp_path, *tmp_path.parents)):
+        raise ValueError("B1_FIXTURE_PATH")
     repo = tmp_path / "repo"
     (repo / "scripts/dev").mkdir(parents=True)
     (repo / "tests").mkdir()
@@ -198,6 +204,38 @@ def make_repo(tmp_path, body="def test_ok():\n    assert True\n"):
         source = ROOT / "scripts/dev" / name
         if source.exists():
             (repo / "scripts/dev" / name).write_bytes(source.read_bytes())
+    if b1_isolated:
+        controller = repo / "scripts/dev/pytest_evidence_controller.py"
+        raw = controller.read_bytes()
+        old_lock = b'    _LOCK = "/home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/owner-ticket-gate-20260926/.superpowers/sdd/2026-09-27-runtime-admission-contract/test-workload.lock"\n'
+        old_total = b"        self.total_end = started + 900\n"
+        short_total = b"        self.total_end = started + 6\n"
+        fixed = (b"        self.run_end = self.total_end - 4\n",
+                 b"            self.cleanup_end = min(now + 3, self.total_end - 1)\n",
+                 b"            self.term_end = min(now + 1, self.cleanup_end)\n")
+        lock = repo / ".b1-fixture/test-workload.lock"
+        new_lock = ("    _LOCK = " + json.dumps(str(lock)) + "\n").encode()
+        if (raw.count(old_lock) != 1 or raw.count(new_lock) != 0
+                or raw.count(old_total) != 1 or raw.count(short_total) != 0
+                or any(raw.count(line) != 1 for line in fixed)):
+            raise ValueError("B1_FIXTURE_ANCHOR")
+        lock.parent.mkdir(mode=0o700)
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                raise ValueError("B1_FIXTURE_LOCK")
+        finally:
+            os.close(fd)
+        raw = raw.replace(old_lock, new_lock)
+        if b1_short_budget:
+            raw = raw.replace(old_total, short_total)
+        if (raw.count(old_lock) != 0 or raw.count(new_lock) != 1
+                or raw.count(old_total) != (0 if b1_short_budget else 1)
+                or raw.count(short_total) != (1 if b1_short_budget else 0)
+                or any(raw.count(line) != 1 for line in fixed)):
+            raise ValueError("B1_FIXTURE_TRANSFORM")
+        controller.write_bytes(raw)
     guard = (ROOT / "tests/conftest.py").read_bytes()
     assert hashlib.sha256(guard).hexdigest() == GUARD_HASH
     (repo / "tests/conftest.py").write_bytes(guard)
@@ -1701,6 +1739,95 @@ def test_finalization_signal_publication_cutoff_preserves_process_evidence(
     decision = evaluate_controlled_slot(receipt_raw, (repo / "process.json").read_bytes(), expected)
     assert decision["status"] == ("OS_RESULT_BOUND" if reason == "exited" else "REJECTED")
     assert decision["errors"] == ([] if reason == "exited" else ["PROCESS_EXIT_REJECTED"])
+
+
+def test_b1_copied_fixture_isolation_is_exact_and_default_bytes_stay_unchanged(tmp_path):
+    original = (ROOT / "scripts/dev/pytest_evidence_controller.py").read_bytes()
+    old_lock = b'    _LOCK = "/home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/owner-ticket-gate-20260926/.superpowers/sdd/2026-09-27-runtime-admission-contract/test-workload.lock"\n'
+    old_total = b"        self.total_end = started + 900\n"
+    short_total = b"        self.total_end = started + 6\n"
+    assert original.count(old_lock) == original.count(old_total) == 1
+    assert original.count(short_total) == 0
+    default = make_repo(tmp_path / "default")
+    assert (default / "scripts/dev/pytest_evidence_controller.py").read_bytes() == original
+    assert not (default / ".b1-fixture").exists()
+    for label, short in (("normal", False), ("duration", True)):
+        repo = make_repo(tmp_path / label, b1_isolated=True, b1_short_budget=short)
+        lock = repo / ".b1-fixture/test-workload.lock"
+        info = lock.lstat()
+        assert stat.S_ISREG(info.st_mode) and not lock.is_symlink()
+        assert info.st_uid == os.getuid() and info.st_nlink == 1
+        assert stat.S_IMODE(info.st_mode) == 0o600
+        assert stat.S_IMODE(lock.parent.stat().st_mode) == 0o700
+        new_lock = ("    _LOCK = " + json.dumps(str(lock)) + "\n").encode()
+        expected = original.replace(old_lock, new_lock)
+        if short:
+            expected = expected.replace(old_total, short_total)
+        copied = (repo / "scripts/dev/pytest_evidence_controller.py").read_bytes()
+        assert copied == expected and copied.count(new_lock) == 1 and copied.count(old_lock) == 0
+        assert copied.count(old_total) == (0 if short else 1)
+        assert copied.count(short_total) == (1 if short else 0)
+        for unchanged in (b"        self.run_end = self.total_end - 4\n",
+                          b"            self.cleanup_end = min(now + 3, self.total_end - 1)\n",
+                          b"            self.term_end = min(now + 1, self.cleanup_end)\n"):
+            assert copied.count(unchanged) == 1
+
+
+@pytest.mark.parametrize(("isolated", "short"), [(False, True), (0, False), (None, False), ("true", False), (True, 1)])
+def test_b1_copied_fixture_invalid_mode_has_no_filesystem_effect(tmp_path, isolated, short):
+    target = tmp_path / "untouched"
+    with pytest.raises(ValueError):
+        make_repo(target, b1_isolated=isolated, b1_short_budget=short)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("fault", ["missing_lock", "duplicate_lock", "missing_total", "changed_cleanup"])
+def test_b1_copied_fixture_rejects_unreviewed_source_before_private_lock(tmp_path, monkeypatch, fault):
+    raw = (ROOT / "scripts/dev/pytest_evidence_controller.py").read_bytes()
+    old_lock = b'    _LOCK = "/home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/owner-ticket-gate-20260926/.superpowers/sdd/2026-09-27-runtime-admission-contract/test-workload.lock"\n'
+    if fault == "missing_lock":
+        raw = raw.replace(old_lock, b'    _LOCK = "/not-the-reviewed-lock"\n')
+    elif fault == "duplicate_lock":
+        raw += old_lock
+    elif fault == "missing_total":
+        raw = raw.replace(b"        self.total_end = started + 900\n", b"        self.total_end = started + 6\n")
+    else:
+        raw = raw.replace(b"            self.cleanup_end = min(now + 3, self.total_end - 1)\n", b"            self.cleanup_end = now + 4\n")
+    fake_root = tmp_path / "source"
+    (fake_root / "scripts/dev").mkdir(parents=True)
+    (fake_root / "scripts/dev/pytest_evidence_controller.py").write_bytes(raw)
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", fake_root)
+    with pytest.raises(ValueError, match="B1_FIXTURE_ANCHOR"):
+        make_repo(tmp_path / "copy", b1_isolated=True)
+    assert not (tmp_path / "copy/repo/.b1-fixture").exists()
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_b1_copied_fixture_never_reuses_existing_lock(tmp_path, symlink):
+    directory = tmp_path / "repo/.b1-fixture"
+    directory.mkdir(parents=True, mode=0o700)
+    victim = tmp_path / "preserve"
+    victim.write_bytes(b"preserve")
+    lock = directory / "test-workload.lock"
+    if symlink:
+        lock.symlink_to(victim)
+    else:
+        lock.write_bytes(b"existing-lock")
+    with pytest.raises(FileExistsError):
+        make_repo(tmp_path, b1_isolated=True)
+    assert victim.read_bytes() == b"preserve"
+    assert lock.is_symlink() is symlink
+    assert lock.read_bytes() == (b"preserve" if symlink else b"existing-lock")
+
+
+def test_b1_copied_fixture_rejects_symlinked_parent_before_copy(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ValueError, match="B1_FIXTURE_PATH"):
+        make_repo(alias, b1_isolated=True)
+    assert list(real.iterdir()) == []
 
 
 if __name__ == "__main__":
