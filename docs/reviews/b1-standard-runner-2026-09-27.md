@@ -85,7 +85,23 @@ probe 예외 시 정리 소유권·fork 자식의 부모 정리 진입 차단, h
 첫 prerequisite 시험9386774에서 close의 SystemExit(0)이 자식 terminal125 경계까지
 이어지지 않는 결함을 실제 RED로 확인했다(1 failed/0.92s·격리0·세 exit1/0/1).
 실제 fork 없이 독립 adapter를 사용했고 시험 종료 전 patch 복원을 확인했다.
-나머지 helper 행렬 작성 중이며 source 수정은 아직 시작하지 않았다.
+후속 독립 행렬c4212c4(+730줄)와 source-only2b19be8(+129/-33줄)를 동결했다.
+그러나 새 BaseException 처리 아래에서는 시험 내부 assertion 자체가 흡수될 수 있다는
+독립 oracle P1을 확인해 GREEN 판정을 보류했다. 최초2341줄과 원래 RED는 보존하고,
+추가 행렬의 close/금지 호출 시도·detach 시점 상태를 바깥 원장으로 검증하도록 보강한다.
+이는 신규 시험의 관측 공백이며 현재 source 결함 판정이나 이전 OSError 한정 승인
+철회가 아니다. 보강 시험과 source의 별도 독립 검토·실행 뒤에만 main 배선으로 진행한다.
+
+보강e1d250f의 독립 oracle 승인 뒤 원래 결함 node는1 passed/0.92s였다. 이어진
+첫 focused는 새 감도 시험이 pytest의 가공된 assertion 메시지를 원래 tuple로
+가정해467 passed/1 failed로 중단됐다. 이 실패를 보존하고 외부 판정 위치·조건을
+유지하는 명시적 AssertionError(+2/-1)만 적용했다. 감도5건·작은 독립 재검토 뒤
+결합5575186에서 **568 passed/42.79s**·격리0·세 exit0을 새로 확인했다.
+source651e7305…는 그대로이고 비작성자 source/evidence 리뷰가
+`READY_FOR_TASK3D_PREREQUISITE_COMPONENT_ACCEPTANCE`, P0/P1/P2 각각0으로
+마쳤다. 원문은 `task-3d-prerequisites-focused-evidence.md`와 관련 raw·리뷰에
+보존한다. 다음은 공통 `_run_validated` 경로의 독립 첫 RED·main 행렬이며 공개
+B1 main125 차단·runner 최종 feature 통합 전 상태는 유지한다.
 
 실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
 제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/

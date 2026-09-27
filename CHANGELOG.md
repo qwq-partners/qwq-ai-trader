@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — 실행기 예외 정리 선행 부품 검증
+
+- B1의 probe 자식 terminal 처리·단일 owner 예외 정리, FD batch·잠금 해제·부분 생성 실패의 BaseException 처리를 구현했다. 기본 v1 의미는 보존했고 공개 B1 main125는 그대로다.
+- 독립 리뷰가 찾은 시험 내부 assertion 흡수 공백은 외부 호출/위반 원장으로 보강했다. 별도 pytest assertion-message 자기검사 실패도 원문을 보존하고 최소 수정·독립 재검토했다.
+- 별도 결합 후보5575186에서 새·기존 controller568 passed/42.79s·격리0·exit0, 비작성자 prerequisite 한정 리뷰 지적0. 다음은 공통 main 경로 tests-first이며 실제 프로필·전체 runner 인수 또는 운영 배포가 아니다. [실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md).
+
 ## 2026-09-27 — 실행기 coordination·출력 부품 한정 검증
 
 - 별도 source2f5c9c5의 잠금/임시 경로 관리333건, c632e57의2MiB 출력 처리415건을 실제 focused 검증하고 각각 비작성자 critical 리뷰에서 지적0으로 인수했다. 시험 작성자와 구현자는 분리했고 기존 v1 출력·예외 의미는 보존했다.

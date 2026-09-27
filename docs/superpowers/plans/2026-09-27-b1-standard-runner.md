@@ -26,6 +26,11 @@ approval after frozen531-line tests. Task3d revised proposal is approved for tes
 separate probe exception/child-terminal and helper BaseException-cleanup prerequisites
 precede shared-main wiring. The accepted exact mixed-exit matrix is in spec §6.1.
 These new stronger main guarantees do not retroactively broaden Task3a/3b approval.
+Prerequisite helpers at combined5575186 now have568 focused passes/42.79s and
+non-author prerequisite-component approval (P0/P1/P2zero). Oracle P1 was corrected
+with external attempt ledgers; the subsequent pytest-message self-test failure is
+preserved separately from fresh GREEN. Shared-main tests-first now follows; helper
+acceptance does not enable the public B1 entry or qualify the complete runner.
 MainB1 remains125 and Task4 has not run. Historical checklist items
 below describe whole packages, not permission to infer completed profile acceptance.
 
