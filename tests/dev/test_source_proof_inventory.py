@@ -12,6 +12,10 @@ SOURCE_DIGEST = "d461b0d8f51ffc2b0c260f20480848aa872e08d94d27e83200406defd5131ef
 RELATED_DIGEST = "4ce0932d927d10b58c182a04fffa5386a41e35dff330efb21ce83df4dd52397e"
 
 
+class StringSubclass(str):
+    pass
+
+
 def test_source_inventory_is_sorted_exactly_108_nodes_with_fixed_digest():
     assert len(SOURCE_NODES) == 108
     assert SOURCE_NODES == tuple(sorted(SOURCE_NODES))
@@ -49,3 +53,24 @@ def test_validate_inventory_accepts_only_an_exact_lane_multiset(actual, lane, co
     else:
         with pytest.raises(ValueError, match=f"^{code}$"):
             validate_inventory(actual, lane=lane)
+
+
+@pytest.mark.parametrize("lane", [[], {}, StringSubclass("source")])
+def test_validate_inventory_rejects_non_exact_string_lanes_with_fixed_code(lane):
+    with pytest.raises(ValueError, match="^source_proof_inventory_invalid_lane$"):
+        validate_inventory([], lane=lane)
+
+
+@pytest.mark.parametrize(
+    ("actual", "code"),
+    [
+        ([f"node-{index}" for index in range(20_000)], "source_proof_inventory_unexpected"),
+        ([SOURCE_NODES[0]] * 20_001, "source_proof_inventory_too_many_nodes"),
+        (["é" * 1024], "source_proof_inventory_unexpected"),
+        (["é" * 1024 + "a"], "source_proof_inventory_node_too_long"),
+        (["\ud800"], "source_proof_inventory_invalid_node"),
+    ],
+)
+def test_validate_inventory_enforces_count_and_utf8_byte_boundaries(actual, code):
+    with pytest.raises(ValueError, match=f"^{code}$"):
+        validate_inventory(actual, lane="source")

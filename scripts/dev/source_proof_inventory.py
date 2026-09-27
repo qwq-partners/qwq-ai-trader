@@ -1,4 +1,4 @@
-"""Immutable source-proof collection inventories; stdlib only."""
+"""불변 source-proof 수집 inventory; 표준 라이브러리만 사용한다."""
 
 import hashlib
 import json
@@ -151,7 +151,7 @@ RELATED_NODES: tuple[str, ...] = (
 
 
 def inventory_digest(nodes: tuple[str, ...]) -> str:
-    """Return the specified canonical JSON SHA-256 for an inventory tuple."""
+    """inventory tuple의 지정된 canonical JSON SHA-256을 반환한다."""
     encoded = json.dumps(
         nodes, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
@@ -159,8 +159,8 @@ def inventory_digest(nodes: tuple[str, ...]) -> str:
 
 
 def validate_inventory(actual: list[str], *, lane: str) -> None:
-    """Require an unordered, duplicate-free exact inventory for one lane."""
-    if lane not in {"source", "related"}:
+    """한 lane의 순서 무관·중복 없는 exact inventory만 허용한다."""
+    if type(lane) is not str or lane not in {"source", "related"}:
         raise ValueError("source_proof_inventory_invalid_lane")
     if type(actual) is not list:
         raise ValueError("source_proof_inventory_invalid_actual")
