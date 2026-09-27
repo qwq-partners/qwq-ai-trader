@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import errno
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -17,12 +19,20 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 
 WALL = 0x40000000
 LIMIT = 8 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[2]
+_B1_PARENT_ENV = (
+    ("PATH", ("/usr/bin:/bin",)),
+    ("LANG", ("C.UTF-8",)),
+    ("TZ", ("UTC", "Asia/Seoul")),
+    ("PYTHONDONTWRITEBYTECODE", ("1",)),
+    ("PYTEST_DISABLE_PLUGIN_AUTOLOAD", ("1",)),
+)
 
 
 def _load_bootstrap():
@@ -71,10 +81,19 @@ class _Parser(argparse.ArgumentParser):
 class _BoundPaths:
     """시작 전 부모 dirfd를 고정하고 후행 접근도 같은 경로인지 대조한다."""
 
-    def __init__(self, paths):
-        self.root_fd = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    def __init__(self, paths, *, b1=False):
+        if type(b1) is not bool:
+            raise ValueError("PROCESS_CLOSE_MODE")
+        self._b1 = b1
+        self.close_failed = False
+        if b1:
+            self.root_fd = -1
+        else:
+            self.root_fd = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         self.parents = {}
         try:
+            if b1:
+                self.root_fd = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             for path in paths:
                 self.parents[path] = self._walk(path.parent)
         except BaseException:
@@ -91,10 +110,10 @@ class _BoundPaths:
                 following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 previous = fd
                 fd = following
-                os.close(previous)
+                self._close_fd(previous)
             return fd
         except BaseException:
-            os.close(fd)
+            self._close_fd(fd)
             raise
 
     def open(self, path, flags):
@@ -105,7 +124,7 @@ class _BoundPaths:
             if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
                 raise ValueError("PROCESS_OUTPUT_PARENT_CHANGED")
         finally:
-            os.close(current)
+            self._close_fd(current)
         # 재검증 뒤에도 최종 이름은 최초 부모 FD에 상대적으로만 연다.
         return os.open(path.name, flags | os.O_NOFOLLOW, 0o600, dir_fd=original)
 
@@ -114,19 +133,331 @@ class _BoundPaths:
         try:
             return os.fdopen(fd, "wb", buffering=buffering)
         except BaseException:
-            os.close(fd)
+            self._close_fd(fd)
             raise
 
-    def close(self):
+    def _close_fd(self, fd):
+        try:
+            os.close(fd)
+        except BaseException as error:
+            if self._b1 or isinstance(error, OSError):
+                self.close_failed = True
+            raise
+
+    def controller_fds(self):
+        return tuple(sorted(fd for fd in [*self.parents.values(), self.root_fd] if fd >= 0))
+
+    def close(self, *, strict=False):
         descriptors = [*self.parents.values(), self.root_fd]
         self.parents.clear()
         self.root_fd = -1
         for fd in descriptors:
             if fd >= 0:
                 try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                    self._close_fd(fd)
+                except BaseException as error:
+                    if not self._b1 and not isinstance(error, OSError):
+                        raise
+        if strict:
+            return not self.close_failed
+
+
+class _B1Coordination:
+    """고정 lock과 생성한 빈 디렉터리만 소유하며 main 배선과는 분리한다."""
+
+    _LOCK = "/home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/owner-ticket-gate-20260926/.superpowers/sdd/2026-09-27-runtime-admission-contract/test-workload.lock"
+    _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+    def __init__(self):
+        self.error = None
+        self.close_failed = False
+        self.fake_key_path = None
+        self._fds = set()
+        self._lock_parent = None
+        self._lock_fd = None
+        self._tmp_fd = None
+        self._fake_fd = None
+        self._lock_parent_identity = None
+        self._lock_identity = None
+        self._tmp_identity = None
+        self._fake_identity = None
+        self._fake_name = None
+        self._held = False
+        self._acquire_attempted = False
+        self._acquired = False
+        self._prepare_attempted = False
+        self._creation_called = False
+        self._fake_bound = False
+        self._closed = False
+        self._finished = False
+        self._finish_result = False
+        self._facts = {
+            "lock_acquired": False, "lock_identity_stable": False,
+            "fake_key_absent_before": False, "fake_key_absent_after": False,
+            "fake_directory_removed": False, "fake_key_path_sha256": None,
+        }
+
+    def _reject(self, reason):
+        if self.error is None:
+            self.error = reason
+
+    def _close_error(self):
+        self.close_failed = True
+        self._reject("io_error")
+
+    def _open_fd(self, path, flags, *, dir_fd=None):
+        fd = os.open(path, flags, dir_fd=dir_fd)
+        self._fds.add(fd)
+        return fd
+
+    def _close_fd(self, fd):
+        self._fds.remove(fd)
+        try:
+            os.close(fd)
+        except BaseException:
+            self._close_error()
+            raise
+
+    @staticmethod
+    def _identity(metadata):
+        return metadata.st_dev, metadata.st_ino
+
+    def _walk_lock_parent(self):
+        fd = self._open_fd("/", self._DIRECTORY_FLAGS)
+        try:
+            for part in self._LOCK.split("/")[1:-1]:
+                following = self._open_fd(part, self._DIRECTORY_FLAGS, dir_fd=fd)
+                previous, fd = fd, following
+                self._close_fd(previous)
+            return fd
+        except BaseException:
+            self._close_fd(fd)
+            raise
+
+    def _validate_lock(self):
+        parent = os.fstat(self._lock_parent)
+        leaf = os.fstat(self._lock_fd)
+        named = os.stat(self._LOCK.rsplit("/", 1)[1], dir_fd=self._lock_parent,
+                        follow_symlinks=False)
+        if (not stat.S_ISDIR(parent.st_mode)
+                or self._identity(parent) != self._lock_parent_identity):
+            raise ValueError
+        uid = os.getuid()
+        for item in (leaf, named):
+            if (not stat.S_ISREG(item.st_mode) or item.st_uid != uid or item.st_nlink != 1
+                    or self._identity(item) != self._lock_identity):
+                raise ValueError
+        current = self._walk_lock_parent()
+        try:
+            metadata = os.fstat(current)
+            if (not stat.S_ISDIR(metadata.st_mode)
+                    or self._identity(metadata) != self._lock_parent_identity):
+                raise ValueError
+        finally:
+            self._close_fd(current)
+
+    def acquire_lock(self, stopped, budget):
+        if self._closed or self._finished or self._acquire_attempted or self.error is not None:
+            self._reject("startup_error")
+            return False
+        self._acquire_attempted = True
+        lock_start = time.monotonic()
+        lock_end = min(lock_start + 240, budget.run_end)
+        contended = False
+
+        def ready(now):
+            if stopped[0]:
+                self._reject("interrupted")
+            elif now >= budget.run_end:
+                self._reject("timeout")
+            elif now >= lock_end:
+                self._reject("lock_timeout" if contended else "startup_error")
+            else:
+                return True
+            return False
+
+        if not ready(lock_start):
+            return False
+        try:
+            self._lock_parent = self._walk_lock_parent()
+            parent = os.fstat(self._lock_parent)
+            if not stat.S_ISDIR(parent.st_mode):
+                raise ValueError
+            self._lock_parent_identity = self._identity(parent)
+            self._lock_fd = self._open_fd(
+                self._LOCK.rsplit("/", 1)[1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                dir_fd=self._lock_parent,
+            )
+            self._lock_identity = self._identity(os.fstat(self._lock_fd))
+            self._validate_lock()
+        except (OSError, ValueError):
+            self._reject("startup_error")
+            return False
+        while ready(time.monotonic()):
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except InterruptedError:
+                continue
+            except OSError as error:
+                if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+                    self._reject("startup_error")
+                    return False
+                contended = True
+                now = time.monotonic()
+                if not ready(now):
+                    return False
+                time.sleep(min(.005, lock_end - now, budget.run_end - now))
+                continue
+            self._held = True
+            self._facts["lock_acquired"] = True
+            if not ready(time.monotonic()):
+                return False
+            try:
+                self._validate_lock()
+            except (OSError, ValueError):
+                self._reject("startup_error")
+                return False
+            if not ready(time.monotonic()):
+                return False
+            self._acquired = True
+            return True
+        return False
+
+    def check_lock_identity(self):
+        self._facts["lock_identity_stable"] = False
+        if self._closed or not self._held:
+            self._reject("startup_error")
+            return False
+        try:
+            self._validate_lock()
+        except (OSError, ValueError):
+            self._reject("identity_changed")
+            return False
+        self._facts["lock_identity_stable"] = True
+        return True
+
+    def _validate_fake_identity(self):
+        parent = os.fstat(self._tmp_fd)
+        named_parent = os.stat("/tmp", follow_symlinks=False)
+        for item in (parent, named_parent):
+            if not stat.S_ISDIR(item.st_mode) or self._identity(item) != self._tmp_identity:
+                raise ValueError
+        directory = os.fstat(self._fake_fd)
+        named = os.stat(self._fake_name, dir_fd=self._tmp_fd, follow_symlinks=False)
+        uid = os.getuid()
+        for item in (directory, named):
+            if (not stat.S_ISDIR(item.st_mode) or item.st_uid != uid
+                    or stat.S_IMODE(item.st_mode) != 0o700
+                    or self._identity(item) != self._fake_identity):
+                raise ValueError
+
+    def _validate_fake_empty(self):
+        try:
+            os.stat("nonexistent-key", dir_fd=self._fake_fd, follow_symlinks=False)
+        except OSError as error:
+            if error.errno != errno.ENOENT:
+                raise
+        else:
+            raise ValueError
+        if os.listdir(self._fake_fd):
+            raise ValueError
+
+    def prepare_fake_key(self):
+        if (self._closed or self._finished or self._prepare_attempted or self.error is not None
+                or not self._acquired or not self._held):
+            self._reject("startup_error")
+            return None
+        self._prepare_attempted = True
+        try:
+            self._tmp_fd = self._open_fd("/tmp", self._DIRECTORY_FLAGS)
+            parent = os.fstat(self._tmp_fd)
+            if not stat.S_ISDIR(parent.st_mode):
+                raise ValueError
+            self._tmp_identity = self._identity(parent)
+            self._creation_called = True
+            path = tempfile.mkdtemp(prefix="qwq-b1-runner-", dir="/tmp")
+            prefix = "/tmp/qwq-b1-runner-"
+            if (type(path) is not str or not path.startswith(prefix) or not path[len(prefix):]
+                    or "/" in path[len(prefix):] or "\x00" in path):
+                raise ValueError
+            self._fake_name = path.rsplit("/", 1)[1]
+            self.fake_key_path = path + "/nonexistent-key"
+            self._facts["fake_key_path_sha256"] = hashlib.sha256(self.fake_key_path.encode("utf-8")).hexdigest()
+            self._fake_fd = self._open_fd(self._fake_name, self._DIRECTORY_FLAGS, dir_fd=self._tmp_fd)
+            self._fake_identity = self._identity(os.fstat(self._fake_fd))
+            self._validate_fake_identity()
+            self._fake_bound = True
+            self._validate_fake_empty()
+        except (OSError, ValueError):
+            self._reject("startup_error")
+            return None
+        self._facts["fake_key_absent_before"] = True
+        return self.fake_key_path
+
+    def finish_fake_key(self):
+        if self._finished:
+            return self._finish_result
+        self._finished = True
+        if self._closed:
+            self._reject("startup_error")
+            return False
+        if not self._creation_called:
+            self._finish_result = True
+            return True
+        if not self._fake_bound or not self._held:
+            self._reject("startup_error")
+            return False
+        try:
+            self._validate_fake_identity()
+            self._validate_fake_empty()
+        except ValueError:
+            self._reject("identity_changed")
+            return False
+        except OSError:
+            self._reject("io_error")
+            return False
+        self._facts["fake_key_absent_after"] = True
+        try:
+            os.rmdir(self._fake_name, dir_fd=self._tmp_fd)
+        except OSError:
+            self._reject("io_error")
+            return False
+        self._facts["fake_directory_removed"] = True
+        self._finish_result = True
+        return True
+
+    def controller_fds(self):
+        return tuple(sorted(self._fds))
+
+    def facts(self):
+        return dict(self._facts)
+
+    def close(self):
+        if self._closed:
+            return not self.close_failed
+        self._closed = True
+        descriptors = self._fds
+        self._fds = set()
+        lock_fd, held = self._lock_fd, self._held
+        self._lock_fd = self._lock_parent = self._tmp_fd = self._fake_fd = None
+        self._held = False
+        for fd in sorted(descriptors - {lock_fd}):
+            try:
+                os.close(fd)
+            except BaseException:
+                self._close_error()
+        if lock_fd in descriptors:
+            if held:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except BaseException:
+                    self._close_error()
+            try:
+                os.close(lock_fd)
+            except BaseException:
+                self._close_error()
+        return not self.close_failed
 
 
 def _arguments(argv):
@@ -136,15 +467,22 @@ def _arguments(argv):
     names = ("--verification-context", "--verification-output", "--process-output", "--timeout-seconds")
     for name in names:
         parser.add_argument(name, required=True)
+    parser.add_argument("--profile", choices=("b1-standard/v1",))
     split = argv.index("--")
     flags = [item.split("=", 1)[0] for item in argv[:split]]
-    if any(flags.count(name) != 1 for name in names):
+    if any(flags.count(name) != 1 for name in names) or flags.count("--profile") > 1:
         raise ValueError
     options = parser.parse_args(argv[:split])
+    if options.profile == "b1-standard/v1":
+        if (set(os.environ) != {name for name, _ in _B1_PARENT_ENV}
+                or any(os.environ[name] not in values for name, values in _B1_PARENT_ENV)):
+            raise ValueError
     if not options.timeout_seconds.isascii() or not options.timeout_seconds.isdecimal():
         raise ValueError
     options.timeout_seconds = int(options.timeout_seconds)
     if not 1 <= options.timeout_seconds <= 900:
+        raise ValueError
+    if options.profile == "b1-standard/v1" and options.timeout_seconds != 900:
         raise ValueError
     context = _path(options.verification_context)
     if not context.is_file() or context.stat().st_size > 65536:
@@ -178,10 +516,25 @@ class _RawPopen(subprocess.Popen):
         """미회수 상태도 Popen의 암묵적 poll/가짜 rc0으로 덮지 않는다."""
 
 
+class _B1Budget:
+    """B1 전체 수명과 최초 cleanup/TERM 끝을 한 번만 고정한다."""
+
+    def __init__(self, started):
+        self.total_end = started + 900
+        self.run_end = self.total_end - 4
+        self.cleanup_end = None
+        self.term_end = None
+
+    def begin_cleanup(self, now):
+        if self.cleanup_end is None:
+            self.cleanup_end = min(now + 3, self.total_end - 1)
+            self.term_end = min(now + 1, self.cleanup_end)
+
+
 class _Owner:
     """관측 상태와 raw wait 기록의 유일한 소유자다."""
 
-    def __init__(self):
+    def __init__(self, *, budget=None):
         self.leader = None
         self.popen = None
         self.returncode = None
@@ -191,13 +544,30 @@ class _Owner:
         self.term = False
         self.kill = False
         self.error = None
-        self.finish_end = None
+        self._budget = budget
+        self.finish_end = None if budget is None else budget.cleanup_end
         self.observation = None
         self.startup_end = None
 
     def reject(self, reason):
         if self.error is None:
             self.error = reason
+
+    def _begin_cleanup(self, now):
+        if self._budget is not None:
+            self._budget.begin_cleanup(now)
+            self.finish_end = self._budget.cleanup_end
+        elif self.finish_end is None:
+            self.finish_end = now + 3
+
+    def _signal_cleanup(self, now):
+        if self._budget is not None:
+            if now >= self._budget.cleanup_end:
+                return
+            term_end = self._budget.term_end
+        else:
+            term_end = self.finish_end - 2
+        self.signal_children(signal.SIGTERM if now < term_end else signal.SIGKILL)
 
     def record(self, pid, status):
         if not (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
@@ -308,24 +678,83 @@ def _preflight():
         os.close(fd)
 
 
-def _probe(deadline, stopped):
-    owner = _Owner()
-    owner.leader = os.fork()
+def _probe(deadline, stopped, *, budget=None, controller_fds=()):
+    if (type(controller_fds) is not tuple
+            or any(type(fd) is not int or fd < 0 for fd in controller_fds)
+            or len(set(controller_fds)) != len(controller_fds)):
+        raise ValueError("PROCESS_PROBE_FDS")
+    owner = _Owner(budget=budget)
+    fork_attempted = False
+    if budget is not None:
+        last_now = now = time.monotonic()
+        if stopped[0] or now >= min(deadline, budget.run_end) or budget.cleanup_end is not None:
+            owner._begin_cleanup(now)
+            return False
+        end = min(deadline, budget.run_end, now + 1)
+
+    def exceptional_cleanup():
+        # 최초 예외를 보존한다. 재시도나 새 소유자를 만들지 않는다.
+        if budget is None or not fork_attempted:
+            return
+        try:
+            if budget.cleanup_end is None:
+                cleanup_now = last_now
+                try:
+                    cleanup_now = time.monotonic()
+                except BaseException:
+                    pass
+                owner._begin_cleanup(cleanup_now)
+            else:
+                owner._begin_cleanup(last_now)
+            result = _emergency_cleanup(owner, {}, b1=True)
+            if type(result) is not bool or not result:
+                owner.reject("cleanup_error")
+        except BaseException:
+            pass
+
+    fork_attempted = True
+    try:
+        owner.leader = os.fork()
+    except OSError:
+        if budget is None:
+            raise
+        owner._begin_cleanup(time.monotonic())
+        return False
+    except BaseException:
+        exceptional_cleanup()
+        raise
     if owner.leader == 0:
-        os._exit(23)
-    end = min(deadline, time.monotonic() + 1)
-    while time.monotonic() < end and not stopped[0]:
-        empty = owner.reap()
-        if empty and owner.reaped:
-            return owner.returncode == 23 and owner.error is None and time.monotonic() <= end
-        time.sleep(.005)
-    finish = time.monotonic() + 3
-    while time.monotonic() < finish:
-        if owner.reap():
-            break
-        owner.signal_children(signal.SIGTERM if time.monotonic() < finish - 2 else signal.SIGKILL)
-        time.sleep(.005)
-    return False
+        failed_close = False
+        for fd in controller_fds:
+            try:
+                os.close(fd)
+            except BaseException as error:
+                if budget is None and not isinstance(error, OSError):
+                    raise
+                failed_close = True
+        os._exit(125 if failed_close else 23)
+    try:
+        if budget is None:
+            end = min(deadline, time.monotonic() + 1)
+        while (last_now := time.monotonic()) < end and not stopped[0]:
+            empty = owner.reap()
+            if empty and owner.reaped:
+                passed = owner.returncode == 23 and owner.error is None and (last_now := time.monotonic()) <= end
+                if budget is not None and (not passed or stopped[0]):
+                    owner._begin_cleanup(last_now := time.monotonic())
+                    return False
+                return passed
+            time.sleep(.005)
+        owner._begin_cleanup(last_now := time.monotonic())
+        while (last_now := time.monotonic()) < owner.finish_end:
+            if owner.reap():
+                break
+            owner._signal_cleanup(last_now := time.monotonic())
+            time.sleep(.005)
+        return False
+    except BaseException:
+        exceptional_cleanup()
+        raise
 
 
 def _frame(raw, expected):
@@ -377,8 +806,24 @@ def _receipt(path, bounds=None):
             temporary.close()
 
 
-def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
+def _observe(owner, pipes, logs, expected_guard, deadline, stopped, *, profile=None):
     """각 fd/회수 배치를 제한하여 기한과 다른 파이프를 굶기지 않는다."""
+    if profile is not None and (type(profile) is not str or profile != "b1-standard/v1"):
+        raise ValueError("PROCESS_OBSERVATION_PROFILE")
+    b1 = profile is not None
+    if b1 and owner._budget is None:
+        raise ValueError("PROCESS_OBSERVATION_PROFILE")
+    if owner.observation is not None:
+        if "profile" in owner.observation:
+            marker = owner.observation["profile"]
+            if type(marker) is not str or marker != "b1-standard/v1" or not b1:
+                raise ValueError("PROCESS_OBSERVATION_PROFILE")
+        elif b1:
+            raise ValueError("PROCESS_OBSERVATION_PROFILE")
+    if owner._budget is not None:
+        deadline = min(deadline, owner._budget.run_end)
+        if owner._budget.cleanup_end is not None:
+            owner.finish_end = owner._budget.cleanup_end
     if owner.observation is None:
         owner.observation = {
             "streams": {name: {"bytes": 0, "sha256": hashlib.sha256(), "overflow": False}
@@ -388,6 +833,8 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
             "startup_end": (min(deadline, time.monotonic() + 10) if owner.startup_end is None
                             else min(deadline, owner.startup_end)),
         }
+        if b1:
+            owner.observation["profile"] = "b1-standard/v1"
     state = owner.observation
     streams, observed, failed_logs = state["streams"], state["observed"], state["failed_logs"]
     pending = pipes
@@ -413,7 +860,7 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
             owner.reject("startup_error")
         empty = owner.reap()
         if owner.finish_end is None and (owner.reaped or owner.error):
-            owner.finish_end = now + 3
+            owner._begin_cleanup(now)
         for name, fd in tuple(pending.items()):
             try:
                 chunk = os.read(fd, 65536)
@@ -437,6 +884,34 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
                 control.extend(chunk[:max(0, 4097 - len(control))])
                 if len(control) > 4096 or control.count(b"\n") > 1 or (b"\n" in control and not control.endswith(b"\n")):
                     owner.reject("startup_error")
+            elif b1:
+                item = streams[name]
+                observed[name] = min(2097153, observed[name] + len(chunk))
+                if observed[name] == 2097153:
+                    item["overflow"] = True
+                    owner.reject("output_limit")
+                if name not in failed_logs:
+                    prefix = chunk[:max(0, 2097152 - item["bytes"])]
+                    if prefix:
+                        try:
+                            written = logs[name].write(prefix)
+                        except OSError:
+                            failed_logs.add(name)
+                            owner.reject("io_error")
+                        except BaseException:
+                            failed_logs.add(name)
+                            owner.reject("io_error")
+                            raise
+                        else:
+                            if type(written) is not int or not 0 <= written <= len(prefix):
+                                failed_logs.add(name)
+                                owner.reject("io_error")
+                            else:
+                                item["bytes"] += written
+                                item["sha256"].update(prefix[:written])
+                                if written != len(prefix):
+                                    failed_logs.add(name)
+                                    owner.reject("io_error")
             else:
                 item = streams[name]
                 observed[name] = min(LIMIT + 1, observed[name] + len(chunk))
@@ -458,7 +933,7 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
                     item["overflow"] = True
                     owner.reject("output_limit")
         if owner.finish_end is None and owner.error:
-            owner.finish_end = time.monotonic() + 3
+            owner._begin_cleanup(time.monotonic())
         if owner.reaped and not pending and owner.wait(-1) == "empty":
             complete = owner.finish_end is not None and time.monotonic() <= owner.finish_end
             if not complete:
@@ -469,46 +944,183 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
                 owner.reject("cleanup_error")
                 break
             if not empty:
-                owner.signal_children(signal.SIGTERM if time.monotonic() < owner.finish_end - 2 else signal.SIGKILL)
+                owner._signal_cleanup(time.monotonic())
         time.sleep(.005)
     for name in tuple(pending):
         close_pipe(name)
     result = {name: {**item, "sha256": item["sha256"].hexdigest()} for name, item in streams.items()}
+    if b1:
+        for name, item in result.items():
+            item["observed_bytes"] = observed[name]
     return complete, guard, result
 
 
-def _close_descriptors(descriptors, owner):
+def _close_descriptors(descriptors, owner, *, b1=False):
     """닫기 시도 전에 소유권 목록에서 제거하여 예외 뒤 중복 close를 막는다."""
+    if type(b1) is not bool:
+        raise ValueError("PROCESS_CLOSE_MODE")
+    complete = True
+    first_exception = None
     while descriptors:
         fd = descriptors.pop()
         try:
             os.close(fd)
-        except OSError:
+        except BaseException as error:
+            if not b1 and not isinstance(error, OSError):
+                raise
             owner.reject("io_error")
+            complete = False
+            if not isinstance(error, OSError) and first_exception is None:
+                first_exception = error
+    if first_exception is not None:
+        raise first_exception
+    if b1:
+        return complete
 
 
-def _emergency_cleanup(owner, pipes):
+def _emergency_cleanup(owner, pipes, *, b1=False):
     """관측기 자체 실패에도 원래 회수 기한 내 양성 자식만 정리한다.
 
     파이프 관측을 잃은 이 경로는 회수 성공을 인증하지 않는다.
     """
+    if type(b1) is not bool:
+        raise ValueError("PROCESS_CLOSE_MODE")
+    if b1:
+        if (owner._budget is None or owner._budget.cleanup_end is None
+                or owner._budget.term_end is None or owner.finish_end is None
+                or owner.finish_end != owner._budget.cleanup_end):
+            raise ValueError("PROCESS_CLEANUP_INTERVAL")
+        owner.reject("cleanup_error")
+        process_exception = None
+        batch_exception = None
+        reap_attempted = False
+        try:
+            while time.monotonic() < owner.finish_end:
+                reap_attempted = True
+                if owner.reap():
+                    break
+                now = time.monotonic()
+                if now >= owner.finish_end:
+                    break
+                owner._signal_cleanup(now)
+                time.sleep(.005)
+        except BaseException as error:
+            process_exception = error
+            if not reap_attempted:
+                # 첫 clock 실패 뒤에는 nonblocking reap 한 번만 허용한다.
+                try:
+                    owner.reap()
+                except BaseException:
+                    pass
+        finally:
+            descriptors = list(pipes.values())
+            pipes.clear()
+            try:
+                complete = _close_descriptors(descriptors, owner, b1=True)
+            except BaseException as error:
+                batch_exception = error
+        if process_exception is not None:
+            raise process_exception
+        if batch_exception is not None:
+            raise batch_exception
+        return complete
     owner.reject("cleanup_error")
-    if owner.finish_end is None:
-        owner.finish_end = time.monotonic() + 3
+    if owner._budget is not None or owner.finish_end is None:
+        owner._begin_cleanup(time.monotonic())
     while time.monotonic() < owner.finish_end:
         if owner.reap():
             break
-        owner.signal_children(signal.SIGTERM if time.monotonic() < owner.finish_end - 2 else signal.SIGKILL)
+        owner._signal_cleanup(time.monotonic())
         time.sleep(.005)
     descriptors = list(pipes.values())
     pipes.clear()
     _close_descriptors(descriptors, owner)
 
 
-def main(argv: list[str] | None = None) -> int:
-    started = time.monotonic()
+def _b1_stream_snapshot(owner):
+    """현재 관측만 복사한다. 미관측과 손상된 관측은 서로 다르다."""
+    state = owner.observation
+    if state is None:
+        return {name: {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(),
+                       "overflow": False, "observed_bytes": 0}
+                for name in ("stdout", "stderr")}
+    profile = state.get("profile")
+    if type(profile) is not str or profile != "b1-standard/v1":
+        raise ValueError("PROCESS_OUTPUT_PROFILE")
+    return {name: {"bytes": state["streams"][name]["bytes"],
+                   "sha256": state["streams"][name]["sha256"].hexdigest(),
+                   "overflow": state["streams"][name]["overflow"],
+                   "observed_bytes": state["observed"][name]}
+            for name in ("stdout", "stderr")}
+
+
+def _run_validated(started, options, context_path, receipt_path, output, log_paths, selected):
+    profile = options.profile
+    if profile is not None and (type(profile) is not str or profile != "b1-standard/v1"):
+        return 125
+    b1 = profile is not None
+    bounds = coordination = None
+    finalization_failed = total_budget_failed = clock_failed = False
+    publication_complete = acquired = False
+    last_clock = started
+    if b1:
+        try:
+            budget = _B1Budget(started)
+            owner = _Owner(budget=budget)
+            deadline = budget.run_end
+            stopped = [False]
+        except BaseException:
+            return 125
+
+    def sample_clock():
+        # 마지막 성공 표본은 emergency 동기화에만 쓰며 성공 증거로 대체하지 않는다.
+        nonlocal last_clock, finalization_failed, total_budget_failed, clock_failed
+        try:
+            now = time.monotonic()
+            last_clock = now
+            if now > budget.total_end:
+                total_budget_failed = True
+                owner.reject("timeout")
+            return now
+        except BaseException:
+            clock_failed = finalization_failed = True
+            owner.reject("io_error")
+            return None
+
+    def startup_clock():
+        if stopped[0]:
+            owner.reject("interrupted")
+            raise ValueError
+        now = sample_clock()
+        if stopped[0]:
+            owner.reject("interrupted")
+            raise ValueError
+        if now is None:
+            raise ValueError
+        if now >= budget.run_end:
+            owner.reject("timeout")
+            raise ValueError
+        if budget.cleanup_end is not None:
+            owner.reject("startup_error")
+            raise ValueError
+        return now
+
+    def consume_close_flags():
+        nonlocal finalization_failed
+        if bounds is not None and bounds.close_failed:
+            finalization_failed = True
+        if coordination is not None:
+            if coordination.error is not None:
+                owner.reject(coordination.error)
+            if coordination.close_failed:
+                finalization_failed = True
+
+    setup_ready = False
     try:
-        options, context_path, receipt_path, output, log_paths, selected = _arguments(list(sys.argv[1:] if argv is None else argv))
+        if b1:
+            signal.signal(signal.SIGTERM, lambda *_: stopped.__setitem__(0, True))
+            signal.signal(signal.SIGINT, lambda *_: stopped.__setitem__(0, True))
+            startup_clock()
         bootstrap = _load_bootstrap()
         parent_guard = bootstrap._guard(ROOT, install=True)
         if parent_guard["violations"]:
@@ -516,37 +1128,97 @@ def main(argv: list[str] | None = None) -> int:
         producer = bootstrap._load("_qwq_parent_producer", ROOT / "scripts/dev/pytest_evidence.py")
         context, context_raw = producer._read_context(context_path)
         if (len(context_raw) > 65536 or context["run"]["event"] != "local"
-                or context["slot"]["lane"] != "standard"):
+                or context["slot"]["lane"] != "standard"
+                or (b1 and context["slot"]["timezone"] != os.environ["TZ"])):
             raise ValueError
         code = {"controller": Path(__file__).resolve(), "bootstrap": ROOT / "scripts/dev/pytest_evidence_bootstrap.py",
                 "producer": ROOT / "scripts/dev/pytest_evidence.py", "guard": ROOT / "tests/conftest.py",
                 "executable": Path(sys.executable)}
         identity = {name: _hash(path) for name, path in code.items()}
-        bounds = _BoundPaths([receipt_path, output, *log_paths])
-    except (OSError, ValueError, TypeError, ImportError, AttributeError):
-        return 125
-    deadline = started + options.timeout_seconds
-    stopped = [False]
-    owner = _Owner()
-    owner.startup_end = min(deadline, started + 10)
+        if b1:
+            try:
+                bounds = _BoundPaths([receipt_path, output, *log_paths], b1=True)
+            except BaseException:
+                finalization_failed = True
+                raise
+        else:
+            bounds = _BoundPaths([receipt_path, output, *log_paths])
+        setup_ready = True
+    except BaseException as error:
+        if not b1:
+            if isinstance(error, (OSError, ValueError, TypeError, ImportError, AttributeError)):
+                return 125
+            raise
+        if not isinstance(error, Exception):
+            finalization_failed = True
+        owner.reject("interrupted" if stopped[0] or isinstance(error, KeyboardInterrupt) else "startup_error")
+    if not b1:
+        deadline = started + options.timeout_seconds
+        stopped = [False]
+        owner = _Owner()
+        owner.startup_end = min(deadline, started + 10)
     probe = False
     guard = None
     complete = False
-    streams = {name: {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "overflow": False} for name in ("stdout", "stderr")}
+    streams = None if b1 else {name: {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "overflow": False} for name in ("stdout", "stderr")}
     logs = {}
     pipes = {}
     writes = []
     spawn_attempted = False
+    observation_started = False
     try:
-        signal.signal(signal.SIGTERM, lambda *_: stopped.__setitem__(0, True))
-        signal.signal(signal.SIGINT, lambda *_: stopped.__setitem__(0, True))
+        if not setup_ready:
+            raise ValueError
+        if b1:
+            startup_clock()
+            try:
+                coordination = _B1Coordination()
+                acquired = coordination.acquire_lock(stopped, budget)
+            except BaseException:
+                finalization_failed = True
+                consume_close_flags()
+                owner.reject("io_error")
+                raise
+            finally:
+                consume_close_flags()
+            if acquired is not True or owner.error is not None or finalization_failed:
+                raise ValueError
+            startup_clock()
+            try:
+                fake_key = coordination.prepare_fake_key()
+            except BaseException:
+                finalization_failed = True
+                consume_close_flags()
+                owner.reject("io_error")
+                raise
+            finally:
+                consume_close_flags()
+            if fake_key is None or owner.error is not None or finalization_failed:
+                raise ValueError
+            startup_clock()
+        else:
+            signal.signal(signal.SIGTERM, lambda *_: stopped.__setitem__(0, True))
+            signal.signal(signal.SIGINT, lambda *_: stopped.__setitem__(0, True))
         for name, path in zip(("stdout", "stderr"), log_paths):
             logs[name] = bounds.create(path, buffering=0)
+        if b1:
+            startup_clock()
         _preflight()
-        probe = _probe(deadline, stopped)
-        if not probe:
+        if b1:
+            now = startup_clock()
+            try:
+                controller_fds = tuple(sorted((*coordination.controller_fds(), *bounds.controller_fds())))
+                probe = _probe(min(now + 1, deadline), stopped, budget=budget, controller_fds=controller_fds)
+            except BaseException:
+                finalization_failed = True
+                raise
+        else:
+            probe = _probe(deadline, stopped)
+        if b1:
+            startup_clock()
+        if (b1 and probe is not True) or not probe:
             raise ValueError
-        if stopped[0] or time.monotonic() >= deadline:
+        if not b1 and (stopped[0] or time.monotonic() >= deadline):
             owner.reject("interrupted" if stopped[0] else "timeout")
             raise ValueError
         for name in ("stdout", "stderr", "control"):
@@ -558,38 +1230,287 @@ def main(argv: list[str] | None = None) -> int:
                "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
         command = [str(Path(sys.executable).absolute()), "-I", "-B", str(code["bootstrap"]), str(writes[2]),
                    str(context_path), str(receipt_path), *selected]
+        if b1:
+            env["QWQ_DEPLOY_SSH_KEY"] = fake_key
+            command.insert(4, "--b1-standard-v1")
+            spawn_started = startup_clock()
+            owner.startup_end = min(spawn_started + 10, deadline)
         spawn_attempted = True
         owner.popen = _RawPopen(command, cwd=ROOT, env=env, close_fds=True,
                                 start_new_session=True, pass_fds=(writes[2],),
                                 stdin=subprocess.DEVNULL, stdout=writes[0], stderr=writes[1])
         owner.leader = owner.popen.pid
-        _close_descriptors(writes, owner)
-        complete, guard, streams = _observe(owner, pipes, logs, parent_guard, deadline, stopped)
-        pipes.clear()
-    except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
-        owner.reject("interrupted" if stopped[0] else "startup_error")
-        _close_descriptors(writes, owner)
-        if owner.leader is not None:
+        if b1:
             try:
-                complete, guard, streams = _observe(owner, pipes, logs, parent_guard, min(deadline, time.monotonic()), stopped)
-            except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+                if _close_descriptors(writes, owner, b1=True) is not True:
+                    finalization_failed = True
+                    owner.reject("io_error")
+            except BaseException:
+                finalization_failed = True
+                raise
+            observation_started = True
+            complete, guard, streams = _observe(owner, pipes, logs, parent_guard, deadline, stopped, profile=profile)
+        else:
+            _close_descriptors(writes, owner)
+            complete, guard, streams = _observe(owner, pipes, logs, parent_guard, deadline, stopped)
+        pipes.clear()
+    except BaseException as error:
+        if not b1:
+            if not isinstance(error, (OSError, ValueError, TypeError, AttributeError, RuntimeError)):
+                raise
+            owner.reject("interrupted" if stopped[0] else "startup_error")
+            _close_descriptors(writes, owner)
+            if owner.leader is not None:
+                try:
+                    complete, guard, streams = _observe(owner, pipes, logs, parent_guard, min(deadline, time.monotonic()), stopped)
+                except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+                    _emergency_cleanup(owner, pipes)
+                    if owner.observation is not None:
+                        guard = owner.observation["guard"]
+                        streams = {name: {**item, "sha256": item["sha256"].hexdigest()}
+                                   for name, item in owner.observation["streams"].items()}
+            elif spawn_attempted:
                 _emergency_cleanup(owner, pipes)
-                if owner.observation is not None:
-                    guard = owner.observation["guard"]
-                    streams = {name: {**item, "sha256": item["sha256"].hexdigest()}
-                               for name, item in owner.observation["streams"].items()}
-        elif spawn_attempted:
-            _emergency_cleanup(owner, pipes)
+        else:
+            ordinary = isinstance(error, Exception)
+            if not ordinary:
+                finalization_failed = True
+            owner.reject("interrupted" if stopped[0] or isinstance(error, KeyboardInterrupt)
+                         else "cleanup_error" if observation_started else "startup_error")
+            try:
+                if _close_descriptors(writes, owner, b1=True) is not True:
+                    finalization_failed = True
+                    owner.reject("io_error")
+            except BaseException:
+                finalization_failed = True
+                owner.reject("io_error")
+                ordinary = False
+            emergency = spawn_attempted
+            if owner.leader is not None and ordinary:
+                now = sample_clock()
+                if now is not None:
+                    try:
+                        complete, guard, streams = _observe(owner, pipes, logs, parent_guard,
+                            min(deadline, now), stopped, profile=profile)
+                        emergency = False
+                    except BaseException as retry_error:
+                        if not isinstance(retry_error, Exception):
+                            finalization_failed = True
+            if emergency:
+                complete = False
+                # 동기화는 이미 고정된 cleanup/TERM 끝을 연장하지 않는다.
+                now = sample_clock()
+                try:
+                    owner._begin_cleanup(last_clock if now is None else now)
+                    if _emergency_cleanup(owner, pipes, b1=True) is not True:
+                        finalization_failed = True
+                        owner.reject("io_error")
+                except BaseException:
+                    finalization_failed = True
+                    owner.reject("cleanup_error")
     finally:
         descriptors = [*writes, *pipes.values()]
         writes.clear()
         pipes.clear()
-        _close_descriptors(descriptors, owner)
-        for stream in logs.values():
+        if b1:
             try:
-                stream.close()
-            except OSError:
+                if _close_descriptors(descriptors, owner, b1=True) is not True:
+                    finalization_failed = True
+                    owner.reject("io_error")
+            except BaseException:
+                finalization_failed = True
                 owner.reject("io_error")
+            for name in list(logs):
+                sample_clock()
+                stream = logs.pop(name)
+                try:
+                    stream.close()
+                except BaseException:
+                    finalization_failed = True
+                    owner.reject("io_error")
+                sample_clock()
+        else:
+            _close_descriptors(descriptors, owner)
+            for stream in logs.values():
+                try:
+                    stream.close()
+                except OSError:
+                    owner.reject("io_error")
+    if b1:
+        receipt = {"state": "invalid", "bytes": 0, "sha256": None}
+        facts = None
+        streams = None
+        try:
+            consume_close_flags()
+            sample_clock()
+            if coordination is not None:
+                try:
+                    finished = coordination.finish_fake_key()
+                    consume_close_flags()
+                    if type(finished) is not bool:
+                        finalization_failed = True
+                    if finished is not True:
+                        owner.reject("io_error")
+                except BaseException:
+                    finalization_failed = True
+                    consume_close_flags()
+                    owner.reject("io_error")
+                finally:
+                    consume_close_flags()
+            sample_clock()
+            if setup_ready and not (clock_failed or total_budget_failed):
+                try:
+                    for name, path in code.items():
+                        if name != "executable" and _hash(path) != identity[name]:
+                            owner.reject("identity_changed")
+                    parent_guard = bootstrap._guard(ROOT)
+                    if parent_guard["violations"] or (guard is not None and guard != parent_guard):
+                        owner.reject("startup_error")
+                except BaseException as error:
+                    parent_guard = None
+                    owner.reject("identity_changed")
+                    if not isinstance(error, Exception):
+                        finalization_failed = True
+            sample_clock()
+            if owner.survived:
+                owner.reject("cleanup_error")
+            if owner.reaped is True and complete is True and not (clock_failed or total_budget_failed):
+                try:
+                    receipt = _receipt(receipt_path, bounds)
+                    if receipt["state"] == "invalid":
+                        owner.reject("io_error")
+                except BaseException as error:
+                    receipt = {"state": "invalid", "bytes": 0, "sha256": None}
+                    owner.reject("io_error")
+                    if not isinstance(error, Exception):
+                        finalization_failed = True
+                finally:
+                    consume_close_flags()
+            sample_clock()
+            if setup_ready and acquired is True and not (clock_failed or total_budget_failed):
+                try:
+                    stable = coordination.check_lock_identity()
+                    consume_close_flags()
+                    if type(stable) is not bool:
+                        finalization_failed = True
+                    if stable is not True:
+                        owner.reject("identity_changed")
+                except BaseException:
+                    finalization_failed = True
+                    consume_close_flags()
+                    owner.reject("io_error")
+                finally:
+                    consume_close_flags()
+                sample_clock()
+                if not (clock_failed or total_budget_failed):
+                    # 이 cutoff 뒤 stopped 단독 변화는 후보나 최종 판정을 바꾸지 않는다.
+                    if stopped[0]:
+                        owner.reject("interrupted")
+                    try:
+                        streams = _b1_stream_snapshot(owner)
+                        if owner.observation is not None:
+                            guard = owner.observation["guard"]
+                        facts = coordination.facts()
+                        reason = owner.error or ("cleanup_error" if owner.returncode is None or not owner.reaped
+                            else "signaled" if owner.returncode < 0 else "exited")
+                        doc = {"schema": "qwq.verification-process-result/v2", **context,
+                            "scope": "local_b1_process_only", "identity": identity,
+                            "launch": {"profile": "b1-standard/v1", "process_scope": "linux-subreaper/v1",
+                                "timeout_seconds": 900, "budget_profile": "inclusive-lock-cleanup-publication/v1",
+                                "retained_stream_bytes": 2097152, "overflow_observed_bytes": 2097153,
+                                "pytest_profile": "b1-x-fixed-plugins/v1", "environment_profile": "b1-env-i-fake-key/v1",
+                                "selection_profile": "tests-path-only/v1", "lock_profile": "owner-ticket-workload/v1",
+                                "selection_sha256": hashlib.sha256(_canonical(selected)).hexdigest()},
+                            "process": {"reason": reason, "returncode": owner.returncode, "term_sent": owner.term,
+                                "kill_sent": owner.kill, "leader_reaped": owner.reaped, "descendant_survived": owner.survived,
+                                "cleanup_complete": complete, "descendants_reaped": min(owner.descendants, 20000),
+                                "ownership_probe_passed": probe, "guard": guard, "parent_guard": parent_guard},
+                            "streams": streams, "receipt": receipt, "coordination": facts}
+                        sample_clock()
+                        if not (clock_failed or total_budget_failed):
+                            raw = _canonical(doc)
+                            if len(raw) > 65536:
+                                raise ValueError("PROCESS_RESULT_SIZE")
+                            sample_clock()
+                            if not (clock_failed or total_budget_failed):
+                                result_stream = bounds.create(output, buffering=0)
+                                written = closed = False
+                                try:
+                                    sample_clock()
+                                    if not (clock_failed or total_budget_failed):
+                                        count = result_stream.write(raw)
+                                        if type(count) is not int or count != len(raw):
+                                            raise ValueError("PROCESS_RESULT_WRITE")
+                                        written = True
+                                finally:
+                                    stream = result_stream
+                                    result_stream = None
+                                    try:
+                                        stream.close()
+                                        closed = True
+                                    except BaseException:
+                                        finalization_failed = True
+                                        owner.reject("io_error")
+                                    sample_clock()
+                                publication_complete = written and closed
+                    except BaseException:
+                        finalization_failed = True
+                        owner.reject("io_error")
+                    finally:
+                        consume_close_flags()
+        except BaseException:
+            finalization_failed = True
+            owner.reject("io_error")
+        finally:
+            sample_clock()
+            if bounds is not None:
+                closing_bounds, bounds = bounds, None
+                try:
+                    if closing_bounds.close(strict=True) is not True:
+                        finalization_failed = True
+                        owner.reject("io_error")
+                except BaseException:
+                    finalization_failed = True
+                    owner.reject("io_error")
+                if closing_bounds.close_failed:
+                    finalization_failed = True
+            sample_clock()
+            if coordination is not None:
+                try:
+                    closed = coordination.close()
+                    consume_close_flags()
+                    if closed is not True:
+                        finalization_failed = True
+                        owner.reject("io_error")
+                except BaseException:
+                    finalization_failed = True
+                    consume_close_flags()
+                    owner.reject("io_error")
+                finally:
+                    consume_close_flags()
+            # lock 해제 뒤에는 이 최종 표본과 순수 반환 판정만 남는다.
+            sample_clock()
+        if finalization_failed:
+            return 125
+        if total_budget_failed or owner.error == "timeout":
+            return 124
+        try:
+            if (owner.error is not None or not publication_complete or probe is not True
+                    or complete is not True or owner.reaped is not True or owner.survived
+                    or type(owner.returncode) is not int or receipt["state"] != "regular"
+                    or guard is None or parent_guard is None or guard != parent_guard or parent_guard["violations"]
+                    or owner.observation is None or owner.observation["failed_logs"]
+                    or any(facts[name] is not True for name in ("lock_acquired", "lock_identity_stable",
+                        "fake_key_absent_before", "fake_key_absent_after", "fake_directory_removed"))
+                    or type(facts["fake_key_path_sha256"]) is not str or len(facts["fake_key_path_sha256"]) != 64
+                    or any(char not in "0123456789abcdef" for char in facts["fake_key_path_sha256"])
+                    or any(type(item["bytes"]) is not int or not 0 <= item["bytes"] <= 2097152
+                        or type(item["observed_bytes"]) is not int or not item["bytes"] <= item["observed_bytes"] <= 2097153
+                        or item["overflow"] is not False for item in streams.values())):
+                return 125
+            return owner.returncode if owner.returncode >= 0 else 128 - owner.returncode
+        except BaseException:
+            return 125
     try:
         for name, path in code.items():
             if name != "executable" and _hash(path) != identity[name]:
@@ -638,6 +1559,15 @@ def main(argv: list[str] | None = None) -> int:
     if owner.error or not complete or receipt["state"] != "regular":
         return 125
     return owner.returncode if owner.returncode >= 0 else 128 - owner.returncode
+
+
+def main(argv: list[str] | None = None) -> int:
+    started = time.monotonic()
+    try:
+        options, context_path, receipt_path, output, log_paths, selected = _arguments(list(sys.argv[1:] if argv is None else argv))
+    except (OSError, ValueError, TypeError, ImportError, AttributeError):
+        return 125
+    return _run_validated(started, options, context_path, receipt_path, output, log_paths, selected)
 
 
 if __name__ == "__main__":

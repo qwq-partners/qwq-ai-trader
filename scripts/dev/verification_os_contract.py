@@ -223,9 +223,10 @@ def _validate_launch(launch: Any) -> None:
     _require_hash(launch["selection_sha256"])
 
 
-def _validate_process(process: Any) -> None:
+def _validate_process(process: Any, *, b1: bool = False) -> None:
     _require_exact_dict(process, _PROCESS_KEYS)
-    if type(process["reason"]) is not str or process["reason"] not in _REASONS:
+    reasons = _REASONS | {"lock_timeout"} if b1 else _REASONS
+    if type(process["reason"]) is not str or process["reason"] not in reasons:
         raise ProcessEvidenceError("INVALID_REASON")
     returncode = process["returncode"]
     if returncode is not None and (type(returncode) is not int or not -64 <= returncode <= 255):
@@ -345,3 +346,252 @@ def _require_exact_dict(value: Any, keys: set[str]) -> None:
 def _require_hash(value: Any) -> None:
     if type(value) is not str or not _HEX64.fullmatch(value):
         raise ProcessEvidenceError("INVALID_HASH")
+
+
+_B1_LAUNCH_LITERALS = {
+    "profile": "b1-standard/v1",
+    "process_scope": "linux-subreaper/v1",
+    "timeout_seconds": 900,
+    "budget_profile": "inclusive-lock-cleanup-publication/v1",
+    "retained_stream_bytes": 2097152,
+    "overflow_observed_bytes": 2097153,
+    "pytest_profile": "b1-x-fixed-plugins/v1",
+    "environment_profile": "b1-env-i-fake-key/v1",
+    "selection_profile": "tests-path-only/v1",
+    "lock_profile": "owner-ticket-workload/v1",
+}
+_B1_COORDINATION_BOOLEANS = {
+    "lock_acquired", "lock_identity_stable", "fake_key_absent_before",
+    "fake_key_absent_after", "fake_directory_removed",
+}
+
+
+def parse_b1_process_result(raw: bytes) -> dict:
+    """v1과 섞이지 않는 strict v2 구조를 읽되 실패 사실도 보존한다."""
+    if type(raw) is not bytes:
+        raise ProcessEvidenceError("RAW_NOT_BYTES")
+    if len(raw) > _MAX_BYTES:
+        raise ProcessEvidenceError("DOCUMENT_TOO_LARGE")
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_no_duplicate_object,
+            parse_constant=_reject_nonfinite,
+            parse_int=_bounded_integer,
+        )
+    except ProcessEvidenceError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise ProcessEvidenceError("INVALID_JSON") from exc
+    try:
+        if type(value) is not dict:
+            raise ProcessEvidenceError("DOCUMENT_NOT_OBJECT")
+        if _depth(value) > _MAX_DEPTH:
+            raise ProcessEvidenceError("DOCUMENT_TOO_DEEP")
+        _validate_unicode(value)
+        _validate_b1_process_result(value)
+    except ProcessEvidenceError:
+        raise
+    except (RecursionError, TypeError, ValueError) as exc:
+        raise ProcessEvidenceError("INVALID_DOCUMENT") from exc
+    return value
+
+
+def validate_b1_process_receipt(
+    receipt_raw: bytes, process_raw: bytes, expected: dict, invocation: dict
+) -> tuple[str, ...]:
+    """프로세스 결속만 검사한다. 원시 호출/시계 출처와 로그는 호출자가 확인한다."""
+    errors: set[str] = set()
+    try:
+        verification, process_identity, launch = _validate_b1_expected(expected)
+    except ProcessEvidenceError:
+        errors.add("INVALID_EXPECTATION")
+        verification = process_identity = launch = None
+    try:
+        receipt = parse_document(receipt_raw, kind="receipt")
+    except Exception:
+        errors.add("INVALID_RECEIPT")
+        receipt = None
+    try:
+        process = parse_b1_process_result(process_raw)
+    except ProcessEvidenceError:
+        errors.add("INVALID_PROCESS_RESULT")
+        process = None
+    try:
+        _validate_b1_invocation(invocation)
+    except ProcessEvidenceError:
+        errors.add("INVALID_INVOCATION")
+    else:
+        if invocation["controller_returncode"] != 0:
+            errors.add("B1_CONTROLLER_EXIT_REJECTED")
+        if invocation["elapsed_ns"] > 900000000000:
+            errors.add("B1_TOTAL_BUDGET_EXCEEDED")
+    if verification is None or process is None or receipt is None:
+        return tuple(sorted(errors))
+
+    # strict expectation은 두 lane×두 timezone을 모두 요구하므로 슬롯은 반드시 있다.
+    # v1의 phase 허용 판정을 호출하거나 그 오류를 제거하지 않는다.
+    target = next(item for item in verification["slots"] if item["slot"] == receipt["slot"])
+    if receipt["run"] != verification["run"]:
+        errors.add("RUN_MISMATCH")
+    if receipt["identity"] != target["identity"]:
+        errors.add("IDENTITY_MISMATCH")
+    if sorted(receipt["collected"]) != sorted(target["nodes"]):
+        errors.add("NODE_SET_MISMATCH")
+    if receipt["guard"] != target["guard"]:
+        errors.add("GUARD_MISMATCH")
+    session = receipt["session"]
+    if not session["finished"]:
+        errors.add("SESSION_UNFINISHED")
+    if session["exit_code"] != 0:
+        errors.add("SESSION_EXIT_NONZERO")
+    if session["collection_errors"] != 0:
+        errors.add("COLLECTION_ERRORS")
+    if session["deselected"] != 0:
+        errors.add("DESELECTED")
+
+    if process["run"] != receipt["run"]:
+        errors.add("PROCESS_RUN_MISMATCH")
+    if process["slot"] != receipt["slot"]:
+        errors.add("PROCESS_SLOT_MISMATCH")
+    if process["identity"] != process_identity:
+        errors.add("PROCESS_IDENTITY_MISMATCH")
+    if process["launch"] != launch:
+        errors.add("PROCESS_LAUNCH_MISMATCH")
+    if (
+        receipt["run"]["event"] != "local"
+        or process["run"]["event"] != "local"
+        or receipt["slot"]["lane"] != "standard"
+        or process["slot"]["lane"] != "standard"
+    ):
+        errors.add("PROCESS_SCOPE_MISMATCH")
+    observed = process["process"]
+    if process["identity"]["producer"] != receipt["identity"]["producer"]:
+        errors.add("PROCESS_IDENTITY_MISMATCH")
+    if process["identity"]["guard"] != receipt["guard"]["sha256"]:
+        errors.add("PROCESS_GUARD_MISMATCH")
+    if observed["guard"] != receipt["guard"] or observed["parent_guard"] != receipt["guard"]:
+        errors.add("PROCESS_GUARD_MISMATCH")
+    receipt_fact = process["receipt"]
+    if (
+        receipt_fact["state"] != "regular"
+        or receipt_fact["bytes"] != len(receipt_raw)
+        or receipt_fact["sha256"] != hashlib.sha256(receipt_raw).hexdigest()
+    ):
+        errors.add("PROCESS_RECEIPT_MISMATCH")
+    if (
+        observed["reason"] != "exited"
+        or observed["returncode"] != 0
+        or observed["term_sent"]
+        or observed["kill_sent"]
+    ):
+        errors.add("PROCESS_EXIT_REJECTED")
+    if not observed["leader_reaped"] or not observed["cleanup_complete"]:
+        errors.add("PROCESS_CLEANUP_INCOMPLETE")
+    if not observed["ownership_probe_passed"]:
+        errors.add("PROCESS_OWNERSHIP_UNPROVEN")
+    if observed["descendant_survived"]:
+        errors.add("PROCESS_DESCENDANT_SURVIVED")
+    for stream in process["streams"].values():
+        if stream["overflow"]:
+            errors.add("PROCESS_STREAM_OVERFLOW")
+        elif stream["bytes"] != stream["observed_bytes"]:
+            # 관측했으나 저장하지 못한 prefix는 성공 증거가 아니다.
+            errors.add("PROCESS_EXIT_REJECTED")
+    coordination = process["coordination"]
+    if (
+        not all(coordination[key] for key in _B1_COORDINATION_BOOLEANS)
+        or coordination["fake_key_path_sha256"] is None
+    ):
+        errors.add("B1_COORDINATION_UNPROVEN")
+    return tuple(sorted(errors))
+
+
+def evaluate_b1_process_slot(
+    receipt_raw: bytes, process_raw: bytes, expected: dict, invocation: dict
+) -> dict:
+    """B1 process-only 결정은 시험 결과 허용/native/CI/운영 자격을 부여하지 않는다."""
+    errors = list(validate_b1_process_receipt(receipt_raw, process_raw, expected, invocation))
+    return {
+        "schema": "qwq.b1-process-decision/v1",
+        "status": "B1_PROCESS_BOUND" if not errors else "REJECTED",
+        "errors": errors,
+        "scope": "local_b1_process_only",
+        "outcomes_accepted": False,
+        "native_qualified": False,
+        "ci_provenance_verified": False,
+        "production_eligible": False,
+    }
+
+
+def _validate_b1_expected(expected: Any) -> tuple[dict, dict, dict]:
+    _require_exact_dict(expected, {"verification", "process_identity", "launch"})
+    try:
+        verification = parse_document(_canonical_json(expected["verification"]), kind="expectation")
+    except Exception as exc:
+        raise ProcessEvidenceError("INVALID_EXPECTATION") from exc
+    identity = expected["process_identity"]
+    _require_exact_dict(identity, {"controller", "bootstrap", "producer", "guard", "executable"})
+    for value in identity.values():
+        _require_hash(value)
+    _validate_b1_launch(expected["launch"])
+    return verification, identity, expected["launch"]
+
+
+def _validate_b1_launch(launch: Any) -> None:
+    _require_exact_dict(launch, set(_B1_LAUNCH_LITERALS) | {"selection_sha256"})
+    for key, literal in _B1_LAUNCH_LITERALS.items():
+        if type(launch[key]) is not type(literal) or launch[key] != literal:
+            raise ProcessEvidenceError("INVALID_LAUNCH")
+    _require_hash(launch["selection_sha256"])
+
+
+def _validate_b1_invocation(invocation: Any) -> None:
+    _require_exact_dict(invocation, {"controller_returncode", "elapsed_ns"})
+    returncode, elapsed = invocation["controller_returncode"], invocation["elapsed_ns"]
+    if (
+        type(returncode) is not int
+        or type(elapsed) is not int
+        or not -(10 ** 128) < returncode < 10 ** 128
+        or not 0 <= elapsed < 10 ** 128
+    ):
+        raise ProcessEvidenceError("INVALID_INVOCATION")
+
+
+def _validate_b1_process_result(value: dict) -> None:
+    _require_exact_dict(value, {
+        "schema", "run", "slot", "scope", "identity", "launch", "process", "streams",
+        "receipt", "coordination",
+    })
+    if value["schema"] != "qwq.verification-process-result/v2" or value["scope"] != "local_b1_process_only":
+        raise ProcessEvidenceError("INVALID_SCHEMA")
+    _validate_run_slot(value["run"], value["slot"])
+    _require_exact_dict(value["identity"], {"controller", "bootstrap", "producer", "guard", "executable"})
+    for item in value["identity"].values():
+        _require_hash(item)
+    _validate_b1_launch(value["launch"])
+    _validate_process(value["process"], b1=True)
+    _validate_b1_streams(value["streams"])
+    _validate_receipt_fact(value["receipt"])
+    coordination = value["coordination"]
+    _require_exact_dict(coordination, _B1_COORDINATION_BOOLEANS | {"fake_key_path_sha256"})
+    for key in _B1_COORDINATION_BOOLEANS:
+        if type(coordination[key]) is not bool:
+            raise ProcessEvidenceError("INVALID_COORDINATION_BOOLEAN")
+    if coordination["fake_key_path_sha256"] is not None:
+        _require_hash(coordination["fake_key_path_sha256"])
+
+
+def _validate_b1_streams(streams: Any) -> None:
+    _require_exact_dict(streams, {"stdout", "stderr"})
+    for stream in streams.values():
+        _require_exact_dict(stream, {"bytes", "sha256", "overflow", "observed_bytes"})
+        if type(stream["bytes"]) is not int or not 0 <= stream["bytes"] <= 2097152:
+            raise ProcessEvidenceError("INVALID_STREAM_BYTES")
+        if type(stream["observed_bytes"]) is not int or not 0 <= stream["observed_bytes"] <= 2097153:
+            raise ProcessEvidenceError("INVALID_STREAM_BYTES")
+        if stream["bytes"] > stream["observed_bytes"]:
+            raise ProcessEvidenceError("INVALID_STREAM_BYTES")
+        _require_hash(stream["sha256"])
+        if type(stream["overflow"]) is not bool or stream["overflow"] != (stream["observed_bytes"] == 2097153):
+            raise ProcessEvidenceError("INVALID_STREAM_OVERFLOW")
