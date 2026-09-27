@@ -195,9 +195,11 @@ def make_repo(tmp_path, body="def test_ok():\n    assert True\n", *, b1_isolated
     if (type(b1_isolated) is not bool or type(b1_short_budget) is not bool
             or (b1_short_budget and not b1_isolated)):
         raise ValueError("B1_FIXTURE_MODE")
-    if b1_isolated and any(path.is_symlink() for path in (tmp_path, *tmp_path.parents)):
-        raise ValueError("B1_FIXTURE_PATH")
     repo = tmp_path / "repo"
+    if b1_isolated and any(path.is_symlink() for path in (repo, *repo.parents)):
+        raise ValueError("B1_FIXTURE_PATH")
+    if b1_isolated:
+        repo.mkdir(parents=True, mode=0o700)
     (repo / "scripts/dev").mkdir(parents=True)
     (repo / "tests").mkdir()
     for name in ("pytest_evidence.py", "pytest_evidence_bootstrap.py", "pytest_evidence_controller.py"):
@@ -1820,12 +1822,21 @@ def test_b1_copied_fixture_never_reuses_existing_lock(tmp_path, symlink):
     assert lock.read_bytes() == (b"preserve" if symlink else b"existing-lock")
 
 
-def test_b1_copied_fixture_rejects_symlinked_parent_before_copy(tmp_path):
+@pytest.mark.parametrize("component", ["parent", "repo", "scripts"])
+def test_b1_copied_fixture_rejects_symlinked_parent_before_copy(tmp_path, component):
     real = tmp_path / "real"
     real.mkdir()
     alias = tmp_path / "alias"
-    alias.symlink_to(real, target_is_directory=True)
-    with pytest.raises(ValueError, match="B1_FIXTURE_PATH"):
+    if component == "parent":
+        alias.symlink_to(real, target_is_directory=True)
+    elif component == "repo":
+        alias.mkdir()
+        (alias / "repo").symlink_to(real, target_is_directory=True)
+    else:
+        (alias / "repo").mkdir(parents=True)
+        (alias / "repo/scripts").symlink_to(real, target_is_directory=True)
+    expected = FileExistsError if component == "scripts" else ValueError
+    with pytest.raises(expected, match=None if component == "scripts" else "B1_FIXTURE_PATH"):
         make_repo(alias, b1_isolated=True)
     assert list(real.iterdir()) == []
 
