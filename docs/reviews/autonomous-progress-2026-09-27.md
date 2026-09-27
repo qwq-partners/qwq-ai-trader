@@ -1,7 +1,7 @@
 # 09-27 자율 후속 개발 — 진행·인계 원장
 
-갱신: 2026-09-27 19:00 KST, runtime/health 후속에 이어 B1a 기본 구조 시험까지 개발 인수·feature 통합 완료. **전체 엔진 완료·운영 전환 보고가 아니다.**
-사용자 요청은 18:00 KST 이후 복귀 전까지 승인 범위의 후속을 순차 진행하는 것이다.
+갱신: 2026-09-27, runtime/health·B1a 이후 B1b 구성·제어 시험까지 개발 인수·feature 통합 완료, 별도 실행기 후속 진행 중. **전체 엔진 완료·운영 전환 보고가 아니다.**
+18:00 KST 전 연속 진행 요청 이후에도 사용자가 다음 단계를 계속 이어가도록 위임했다.
 일상적인 재확인은 생략하되 새 실행 권한이나 증거 없는 안전 게이트를 임의로 만들지 않는다.
 
 ## 범위와 현재 위치
@@ -26,6 +26,12 @@
 - 기존 두 정확한 성능 관측의 개발 예외는 유지한다. 새 실패·timeout·수명/정합성 결함을
   예외로 확대하거나 기존 시험·임계값을 바꾸지 않는다.
 
+- B1b 후보f3416c3는 전체 UTC8411 passed/721.87s·KST8411 passed/705.23s,
+  각16skip/2xfail/4warnings·workload0/tee0/tool0·격리0, 독립 최종 지적0이다.
+  검증된 다섯 신규 시험 파일만236ccb01f2bcf7ee2749f2c1dc87bdd021e91e85로 feature
+  통합했고 후보와 모든 비문서 tracked 파일은 diff0이다. 원격 반영은 아직 별도 확인 전이다.
+  상세는 [B1b 원장](decoder-b1b-2026-09-27.md), [실행기 후속](b1-standard-runner-2026-09-27.md).
+
 ## Plan → Do → See
 
 | 단계 | 실제 진행 | 다음 완료 조건 |
@@ -36,6 +42,8 @@
 | runtime 등록 대조 | 최종60건·통합 결합610건·fresh broad 승인·전체 UTC/KST 각각6329 passed | 개발 인수 완료, 실제 registry 빈 상태·실행 허가false 유지 |
 | cold source 소유권 | 준비 설계 한정 독립 승인·문서 통합 | native/decoder/소비자·독립 할당 관측 기준 미해결 |
 | decoder 기본 구조 시험 | 독립 oracle/전이/actual mutant·critical 승인,198건·raw12·전체 UTC/KST 각6527 passed, e41f485 통합 | B1a 부분 인수만 완료; full B1·N4097·native/첫 cold RED는 미완 |
+| decoder 구성·제어 시험 | 신규1884·raw17·critical source/증거 승인, 전체 UTC/KST 각8411 passed,236ccb0 통합 | B1b observed-only; full R2/폐기/native 미완 |
+| B1 표준 실행기 | 순수 계약367건·인자/기존 controller170건 통과, budget 실제 첫 RED 및 독립 시험 작성 중 | main launch125 유지; coordination/output/실제 smoke/전체 인수 미완 |
 | health 재시도 목록 복사 | 독립 승인·M1 시험 보완 재승인·통합 전체 UTC/KST 각각6329 passed | 개발 인수 완료; bounded health/경보 배선과 별개 |
 | health 일자 표시 일관성 | 독립 승인·통합 전체 UTC/KST 각각6329 passed | 실제 admission 무변경·요청 간 fresh 관측 유지 |
 
@@ -79,12 +87,13 @@ actual model/effective effort 미노출은 미검증이다. 같은 공급자 독
 1. 완료한 OS/runtime/health 부품을 다시 구현하지 않는다. 검증 코드18a2196의 push/원격
    대조는 완료했다. 마감 문서까지 포함한 실제 branch/status·원격 SHA는 재개 때 대조한다.
    main 통합·운영 전환은 이 개발 인수의 일부가 아니다.
-2. 완료한 B1a EMPTY cell 생성/chain/holder/unlink 시험을 반복 구현하지 않는다.
-   [B1a 계획 §5](../superpowers/plans/2026-09-27-decoder-b1-structural-probe.md)에 남은
-   CONT/end/lookup/publish/retire/finish/known_failure/dispose의 모든 중간 상태·fault
-   전이표와 독립 인수 계획부터 확장한다. 작성자와 critical reviewer를 분리한다.
-   N4097의2MiB/stream 강제 runner와 전수3회 예산은 별도 gate이며 현재 UNRUN이다.
-3. B1a 부분 인수가 끝나도 전체 B1·CONT/semantic 교체·retire·대형 인수는 완료가 아니다.
+2. 완료한 B1a와 B1b 구성·제어 시험을 반복 구현하지 않는다. 별도 runner의 budget/
+   probe/cleanup → coordination/main → 출력/결과 처리 → 실제 smoke·전체 인수 순서를
+   잇는다. 독립 tests-first와 source/reviewer 분리를 유지하며 기존 v1은 보존한다.
+   다음 full R2의 교체/WORK/retire/finish/known_failure/dispose는 별도 중간 상태·fault
+   전이표와 인수가 필요하다. N4097의2MiB/stream 강제 runner·full-profile node ID
+   호환성·전수3회 예산은 별도 gate이며 현재 UNRUN이다.
+3. B1a/B1b 부분 인수가 끝나도 전체 B1·semantic 교체·retire·폐기·대형 인수는 완료가 아니다.
    원 source/native 실행·첫 cold RED는 계속 별도 근거가 필요하다. 없는 실행기를 가정하거나
    skip/deselect/표본 축소·과거 성능 예외로 새 실패를 통과시키지 않는다.
 4. cold 복구·실제 owner/writer/consumer 및 health/경보는

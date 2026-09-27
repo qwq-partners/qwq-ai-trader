@@ -30,8 +30,18 @@ AttributeError로 실패했다(1 failed/0.16s, workload1/tee0/tool1·격리0).
 `.superpowers/sdd/2026-09-27-b1-standard-runner/`에 보존한다.
 
 첫 순수 계약 후보153f439에서 원래 RED node가1 passed, 신규+기존 두 모듈367 passed/
-1.41s·격리0·workload0/tee0/tool0이다. 독립 critical 코드 리뷰 중이며 controller/실제
-프로필 인수와 전체 검증은 남았다. 원시 결과는 위 후속 artifact 디렉터리에 보존한다.
+1.41s·격리0·workload0/tee0/tool0이다. 독립 critical 리뷰가 Task1 한정 승인했다.
+후속 Task2a632a369는 parser/bootstrap 및 기존 controller 결합170 passed/33.53s,
+격리0·workload0/tee0/tool0이고 독립 source 검토에서 결함0이다. 유효 B1 main은 아직
+의도적으로125로 차단한다. Task3 제안의 fork 자식 상속 FD·nonblocking lock-open
+경계 P1 두 건은 보완 뒤 `APPROVE_TASK3_SEAMS_ONLY`로 재승인됐다. 다음은 budget/
+probe/cleanup의 독립 tests-first이며 실제 프로필·전체 인수 성공으로 표시하지 않는다.
+원시 결과와 제안/리뷰는 위 후속 artifact 디렉터리에 보존한다.
+
+다음 Task3a tests-only6004865에서 `_B1Budget` 부재의 정상 call-phase RED를 확인했다
+(1 failed/0.20s, workload1/tee0/tool1·격리0). `task-3a-first-red-evidence.md`에 원문
+연결을 보존했으며 별도 작성자가 fake-clock/syscall 경계 시험을 확장 중이다.
+아직 source 구현/GREEN 또는 Task3 전체 완료를 주장하지 않는다.
 
 실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
 제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/

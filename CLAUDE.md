@@ -1,8 +1,8 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **09-27 별도 실행기 후속:** [B1 표준 실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md)의 계획이 독립 재승인됐다. 기존8MiB/v1 보존·고정2MiB/v2·실제 종료와 독립 monotonic 상한 결속이 목표이며 구현/실제 프로필 검증은 미완이다. B1b와 별도 파일·후속 인수로 진행하고 N4097/native/운영 승격을 부여하지 않는다.
+> **09-27 별도 실행기 후속:** [B1 표준 실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md)을 따른다. 독립 승인된 순수 계약367건, 인자/bootstrap·기존 controller170건 통과 뒤 fork-FD/lock-open 제안P1 두 건을 보완·재승인했다. budget/probe/cleanup의 실제 첫 RED를 확인하고 후속 독립 시험 작성 중이다. 유효 B1 main은 아직125로 차단되며 실제 프로필·전체 인수 미완, N4097/native/운영 승격 없음.
 
-> **09-27 B1b 후속 착수:** [B1b 원장](docs/reviews/decoder-b1b-2026-09-27.md)과 승인된 구성·제어 전이 계획을 따른다. B1a 다섯 파일 보존, 새 `test_b1b_structure.py`로 수집 충돌을 피하며 source/독립 expected 작성자를 분리한다. 계획 한정 승인이고 구현·RED·인수는 아직 미완이다. private root를 READY/폐기/native/full L3로 승격하지 않는다. main·운영·주문·설정 변경0. 아래는 이전 단계 이력이다.
+> **09-27 B1b 개발 인수 완료:** [B1b 원장](docs/reviews/decoder-b1b-2026-09-27.md)이 정본이다. 독립 expected/구현·실제 변이17개·critical 지적0 뒤 후보f3416c3 전체 UTC8411/721.87s·KST8411/705.23s(각16skip/2xfail/4warnings·exit0·격리0)를 검증했다. 다섯 신규 시험 파일만236ccb0으로 feature 통합했고 후보와 비문서 diff0이다. `B1B_CONSTRUCTION_CONTROL_OBSERVED_ONLY`이며 private root 유지·full R2/폐기/native/N4097/full L3 미완. 다음 실행기는 별도 후속 인수다. main·운영·주문·설정 변경0. 아래는 이전 단계 이력이다.
 
 > **09-27 B1a 개발 인수 완료:** [B1a 원장](docs/reviews/decoder-b1a-2026-09-27.md)이 최신 정본이다. 독립 expected·전이 구현·actual mutant 연결과 critical 지적0 뒤 후보29210dc를 root 단독 전체 UTC6527/644.41s·KST6527/664.16s(각16skip/2xfail/4warnings·exit0·격리0)로 검증했다. 신규 시험198건·의도한 raw12 실패, 통합 코드e41f485는 후보와 비문서 diff0이다. `B1A_PRIMITIVES_OBSERVED_ONLY`이며 제품 decoder·full R2·N4097·native·첫 cold RED·전체 owner 인수가 아니다. 다음은 [전체 전달 순서](docs/operations/engine-delivery-next-2026-09-27.md)의 남은 중간 전이 계약/실행기·runtime 근거다. main·운영·주문·설정 변경0. 아래는 각 시점 이력이다.
 

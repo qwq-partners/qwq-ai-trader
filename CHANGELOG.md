@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — B1b 구성·제어 시험 개발 인수, 실행기 후속 진행
+
+- 독립 oracle와 분리한 구성·게시·CONT 인계/제거 구현, 신규1884건·기존 B1a 결합2082건·실제 raw17 변이 실패를 확인했다. 별도 critical source 및 전체 증거 리뷰의 P0/P1/P2는0이다.
+- 후보f3416c3 전체 UTC8411 passed/721.87s·KST8411 passed/705.23s, 각 기존16skip/2xfail/4warnings·workload0/tee0/tool0·격리0. 신규파일 compile5·비밀 패턴·보존 검사 뒤 다섯 파일만236ccb0으로 feature 통합했으며 후보와 비문서 diff0이다.
+- 결과는 `B1B_CONSTRUCTION_CONTROL_OBSERVED_ONLY`. private root를 유지하며 full R2/중복 교체/폐기/native/대형/운영은 미완이다. [B1b 원장](docs/reviews/decoder-b1b-2026-09-27.md).
+- 별도 B1 실행기는 순수 계약367건·인자/bootstrap 및 기존 controller170건을 검증했다. fork-probe 상속 FD와 nonblocking lock-open 제안을 보완·독립 재승인하고 다음 budget 시험의 실제 missing-API RED를 확인했다. 아직 main launch125 차단·실제 profile 미인수다. [실행기 원장](docs/reviews/b1-standard-runner-2026-09-27.md).
+
 ## 2026-09-27 — B1 2MiB 표준 실행기 별도 계획 승인
 
 - 기존8MiB/v1을 유지하는 고정 B1 프로필·strict v2 프로세스 결속 계약을 설계했다. 호출별 대기시간으로 전체 수명을 재던 계획 공백을 독립 monotonic 전후 상한/원문 결속으로 수정해 critical 계획 한정 재승인받았다.

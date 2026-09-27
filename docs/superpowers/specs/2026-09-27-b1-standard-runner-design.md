@@ -127,6 +127,14 @@ interruption checks and a fixed maximum240 seconds. Never truncate, unlink, recr
 the lock. Missing/unsafe lock is startup_error; exhausted contention is lock_timeout/CLI125.
 No probe or pytest leader may spawn before acquisition. Imports finish before sole-reaper preflight.
 
+Task3 seam clarification (independently re-reviewed): the leaf open uses
+O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC before its regular/uid/nlink/identity checks;
+unsafe/nonregular open never reaches flock/probe/spawn. The raw-fork probe accepts
+only a private exact tuple snapshot of unique nonnegative integer controller-owned
+coordination FDs. Its child closes each once before exit23, without LOCK_UN;
+close failure attempts remaining closes and exits125. The parent retains ownership.
+The default empty tuple preserves v1; pytest receives only its control FD.
+
 Hold the lock FD only in the controller through descendant drain and publication/finalization.
 Do not pass it to the child. Recheck identity before publication; replacement rejects the run.
 Release/close once in final cleanup; release/close failure is nonzero even if a candidate result
@@ -154,6 +162,11 @@ clamped to the same B1 absolute cleanup boundary, just as `_observe` and `_emerg
 are. Fake-clock tests must cover probe failure near that boundary without changing v1 defaults.
 This is an implementation seam of the existing inclusive-budget requirement, not a new reaper
 or expanded scope.
+
+Check stopped and the same run_end immediately before probe fork, and again after
+pipe/argv setup immediately before workload spawn. At/after run_end starts no child
+and cannot be reclassified as ordinary lock contention. The private budget's first
+cleanup/TERM endpoints are immutable across probe failure, retry and late adoption.
 
 On each stream chunk, first saturate an independent observed counter at2097153. Write only
 the still-unfilled retained prefix up to2097152 bytes. Hash/count only successfully written bytes.

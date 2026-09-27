@@ -6,9 +6,9 @@
 
 ### Architecture (아키텍처)
 
-- [B1 2MiB 표준 실행기 진행](reviews/b1-standard-runner-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-b1-standard-runner-design.md) · [계획](superpowers/plans/2026-09-27-b1-standard-runner.md) — 고정 프로필·기존8MiB 보존·독립 전체 시간 관측, 계획 한정 승인/구현 미완
+- [B1 2MiB 표준 실행기 진행](reviews/b1-standard-runner-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-b1-standard-runner-design.md) · [계획](superpowers/plans/2026-09-27-b1-standard-runner.md) — 순수 계약367·인자/기존 controller170 통과, 후속 budget RED·독립 시험 작성; main launch125·실제 프로필 미인수
 
-- [Decoder B1b 구성·제어 진행](reviews/decoder-b1b-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-decoder-b1b-construction-control-design.md) · [계획](superpowers/plans/2026-09-27-decoder-b1b-construction-control.md) — 계획 한정 독립 재승인, 구현·인수 미완; B1a 보존·별도 파일명·full B1/native/폐기와 분리
+- [Decoder B1b 구성·제어 인수](reviews/decoder-b1b-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-decoder-b1b-construction-control-design.md) · [계획](superpowers/plans/2026-09-27-decoder-b1b-construction-control.md) — 신규1884·raw17·critical 지적0·전체 UTC/KST 각8411, feature236ccb0 통합; 구성 관측 한정·full B1/native/폐기 미완
 
 - [Decoder B1a 기본 구조 시험 인수](reviews/decoder-b1a-2026-09-27.md) — 독립 oracle/전이·198건·actual raw12·critical 지적0, 전체 UTC/KST 각6527 passed·feature e41f485 통합; full B1/native/대형 UNRUN과 분리
 - [Runtime 등록 대조 인수](reviews/runtime-admission-2026-09-27.md) — 순수 부품60건·fresh broad 승인, 통합 전체 UTC/KST 각6329 passed; 실제 registry 빈 상태·실행 권한false

@@ -2,7 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > or superpowers:executing-plans to implement this plan task-by-task.
-> Independently approved plan only; implementation/test acceptance remains outstanding.
+> Completed within the observed-only scope below; do not repeat finished tasks.
+
+2026-09-27 completion: candidatef3416c3 independently reviewed, actual normal1884/
+raw17/combined2082 and full UTC8411/721.87s + KST8411/705.23s verified. Each full
+retains16skip/2xfail/4warnings, workload0/tee0/tool0/isolation0. Exact five new
+files integrated as236ccb0; all non-Markdown tracked files match the tested
+candidate. Final disposition: B1B_CONSTRUCTION_CONTROL_OBSERVED_ONLY. The
+[completion ledger](../../reviews/decoder-b1b-2026-09-27.md) is current; historical
+draft statements at the end describe their writing-time status, not pending work.
 
 **Goal:** Prove small duplicate-free construction, ordered publication and CONT
 handoff/unlink through independent actual-slot observations.
@@ -53,16 +61,16 @@ The coordinator freezes this documentation commit before implementation dispatch
 
 ## 0. Ownership, fixed interfaces and dispatch gates
 
-- [ ] Independent Astra/xhigh critical design reviewer (not author, 20min, no
+- [x] Independent Astra/xhigh critical design reviewer (not author, 20min, no
   fanout/fallback) reads design/plan, transition inventory and full B1a limits.
   Coordinator records decision/findings and freezes accepted spec/plan SHA.
-- [ ] Coordinator records B1a five-file fingerprints and exact node inventory,
+- [x] Coordinator records B1a five-file fingerprints and exact node inventory,
   branch/base and permitted output paths. No active worker duplicates a task.
-- [ ] Subject author Astra/high, 25min per bounded task, and independent expected
+- [x] Subject author Astra/high, 25min per bounded task, and independent expected
   author Astra/high, 30min per bounded task. Critical ownership/observation is
   routing rationale. Final independent reviewer Astra/xhigh, 20min. Record actual
   identity only when exposed; otherwise unverified, not assumed Astra proof.
-- [ ] Sequential stages: scaffold review commit → independent oracle/RED →
+- [x] Sequential stages: scaffold review commit → independent oracle/RED →
   subject implementation → separate mutant connection → fresh review/full suites.
   Each dependent stage uses the coordinator's reviewed predecessor SHA. Parallel
   writers, if used, have separate worktrees from the same designated SHA and
@@ -186,14 +194,14 @@ Full-suite historical base was UTC6527/644.41s and KST6527/664.16s, each
 
 **Owner/files:** subject author; create only subject.py. Exact Interfaces §0/spec.
 
-- [ ] Alias frozen shell types and bootstrap/identity validation. Implement
+- [x] Alias frozen shell types and bootstrap/identity validation. Implement
   scalar-only scaffold admission: exact action `('scalar', exact Scalar)` at a
   fresh root, graph0/constructor0, then phase=V0/action set. `_new_cell` exists
   but is never called by scaffold `_step`.
-- [ ] Scaffold `_step` only clears action and sets IDLE, with graph0. tick has
+- [x] Scaffold `_step` only clears action and sets IDLE, with graph0. tick has
   identity/idle checks and foreign Exception retention. This deliberate absence
   of graph construction is the RED subject, not a claimed finished component.
-- [ ] Coordinator source-checks fixed loader dependency and exact slots, syntax
+- [x] Coordinator source-checks fixed loader dependency and exact slots, syntax
   only under authorized profile, then records reviewed scaffold SHA. No testing
   or synthetic failure flag is inserted. Root permits next task from this SHA.
 
@@ -203,7 +211,7 @@ Full-suite historical base was UTC6527/644.41s and KST6527/664.16s, each
 mutants.py, test_b1b_structure.py; no subject edit. Consumes exact shell API and spec
 tables. Produces all §0 observer/fixture interfaces and raw-case mapping below.
 
-- [ ] Write `test_scalar_requires_private_root` using exact token, original
+- [x] Write `test_scalar_requires_private_root` using exact token, original
   operation, scalar7 and normal drive/check_state. After driver returns first
   assert actual arena.root is not None with `STRUCTURE_MISSING_PRIVATE_ROOT`;
   then assert violations==(), then compare full literal generation1 INT/payload7,
@@ -211,38 +219,38 @@ tables. Produces all §0 observer/fixture interfaces and raw-case mapping below.
   This direct missing-root assertion must run even if drive reports a phase
   mismatch, so scaffold yields the intended structural failure rather than an
   import error or generic harness error. Test holds no Cell in saved state.
-- [ ] Coordinator runs the exact initial RED node UTC180, confirms actual rc1 and
+- [x] Coordinator runs the exact initial RED node UTC180, confirms actual rc1 and
   `STRUCTURE_MISSING_PRIVATE_ROOT` call-phase assertion, preserves raw output.
   Anything else stops; no GREEN code before this evidence.
-- [ ] Literalize every normal fixture/row/branch in spec §6, including submit
+- [x] Literalize every normal fixture/row/branch in spec §6, including submit
   transitions. Renderer may patch previous expected states using literal
   generations only; it cannot inspect actual state or import subject helpers.
-- [ ] Add `test_scalar_types_and_nonfinite_are_private`, `test_empty_containers`,
+- [x] Add `test_scalar_types_and_nonfinite_are_private`, `test_empty_containers`,
   `test_array_order_and_duplicates`, `test_three_unique_object_keys`, and
   `test_nested_end_then_publish` with spec's exact generations, slots, order and
   retained-live sets; no READY, cleanup or legacy materialization assertion.
-- [ ] Add `test_duplicate_hits_fail_closed` for first/middle/last ENTRY with
+- [x] Add `test_duplicate_hits_fail_closed` for first/middle/last ENTRY with
   constructor0 for key action, unchanged semantic slots and unsupported latch;
   subsequent calls unchanged. Add `test_open_parent_admission_is_unchanged` for
   key outside OBJECT, nested start without key, second pending key, publish without
   child, end with pending key/child, scalar/start after private root and idle tick.
-- [ ] Add `test_invalid_input_and_identity_are_constructor_zero`: malformed
+- [x] Add `test_invalid_input_and_identity_are_constructor_zero`: malformed
   action lengths/name/payload, non-None control payload, list/dict/tuple/bytes/
   object scalars, subclasses, token equality without identity, wrong operation,
   missing/foreign active and invalid bootstrap token. Compare original and foreign
   operation snapshots; counts do not change. No user __eq__/__repr__ is invoked.
-- [ ] Add `test_fault_before_and_after_each_reachable_row`, keyed by literal
+- [x] Add `test_fault_before_and_after_each_reachable_row`, keyed by literal
   case/row index/side, covering Q roles, empty/nonempty append, both destinations,
   ENTRY/ITEM first/next, L0 empty/nonempty, L1 repeat/miss/hit, D0 root/parent,
   CONT U middle/tail. Compare exact boundary plus original fault identity and
   subsequent refusal state. Fault before/after final rows and unsupported hit
   must be represented. Do not count B1b-unreachable U head/single as covered.
-- [ ] Add `test_observer_abort_is_inconclusive` at census-record and snapshot
+- [x] Add `test_observer_abort_is_inconclusive` at census-record and snapshot
   failures; ObserverAbort escapes Exception latch, outcome/fault untouched.
   Add `test_uncensused_reference_is_not_qualified`, `test_cont_live_after_frames`,
   and `test_snapshot_cannot_prove_single_physical_write`. No forced GC, no log
   frame/cell refs, no snapshot-delta claim of physical-write proof.
-- [ ] Author literal RAW_CASES and normal mutant contract tests now; site binding
+- [x] Author literal RAW_CASES and normal mutant contract tests now; site binding
   waits for Task3. No missing implementation skip/xfail is added. Coordinator
   freezes expected rows and receives an independent source review of oracle
   independence before dispatching subject implementation.
@@ -254,19 +262,19 @@ expected author modifies mutants.py only to bind actual sites; changing the
 frozen expected/test contract requires coordinator-visible design correction,
 not a quiet GREEN adjustment. Implements spec §3–5 exactly.
 
-- [ ] Implement complete admission and direct finite `_step` branches. Preserve
+- [x] Implement complete admission and direct finite `_step` branches. Preserve
   new through publication, cursor ownership O5–C8, lookup-before-KEY, explicit
   publish, D0 destination-before-D2 source clear, and frozen U1–U11 delegation.
   Never build a generic action-script/expected-table interpreter.
-- [ ] Source-check every branch for one graph assignment, Q0 exception only.
+- [x] Source-check every branch for one graph assignment, Q0 exception only.
   Preserve exact bool/int/float tags, -0.0 payload and deferred nonfinite checking.
   Duplicate hit is unsupported retained state, not known failure. Public
   make_supervisor/submit/tick do not expose Cell handles; private `_new_cell`
   necessarily returns a Cell internally. No normal callback/await/generator.
-- [ ] Coordinator runs the original exact RED node with unchanged profile and
+- [x] Coordinator runs the original exact RED node with unchanged profile and
   verifies GREEN rc0. Review actual diff against frozen expected and subject's
   allowed imports before handing actual sites to the separate mutant author.
-- [ ] Bind executable mutants to actual subject phase/slot/call sites, retaining
+- [x] Bind executable mutants to actual subject phase/slot/call sites, retaining
   wrappers/cells only in declared temporary/external test holders. All patched
   sites restore through monkeypatch. No boolean/count-only fake mutant.
 
@@ -289,18 +297,18 @@ cases and fault/admission setup cases. `nested`, `object_three`, `array_three`,
 exactly to spec §6; normal `none` raw probe uses `nested`. `RAW_CASES` is a literal
 tuple of all seventeen mutant-name/case-name pairs; no generated path/import.
 
-- [ ] `test_actual_mutants_rejected` runs each mapped normal case with the normal
+- [x] `test_actual_mutants_rejected` runs each mapped normal case with the normal
   predicate first, then actual mutant with that identical predicate. `test_raw_mutant_probe`
   reads `os.environ.get('QWQ_B1B_RAW_MUTANT','none')`; none runs normal nested case,
   named mutants choose only literal RAW_CASES, unknown values are harness errors.
   Final assertion is the same exact-state/retained-live predicate, no raises wrapper
   around its raw failure. Normal default node always runs, no skip/deselect.
-- [ ] Coordinator executes small module UTC180 and stops on first unexpected
+- [x] Coordinator executes small module UTC180 and stops on first unexpected
   failure. Then execute each of seventeen raw names once at the fixed raw node,
   UTC180, preserving intended assertion/rc1. Confirm each before proceeding to
   the next; import/observer/census-inconclusive failures do not count as kills.
   Source-review-only double-write control is not one of seventeen raw failures.
-- [ ] Independent reviewer binds row→SHA/source-line mapping and mutant sites,
+- [x] Independent reviewer binds row→SHA/source-line mapping and mutant sites,
   checks scratch disjointness and nested retained-live values, source closure,
   exact preflight rejection and exception retention. Report findings and actual
   node/log/exit evidence; do not approve from worker prose alone.
@@ -312,22 +320,22 @@ updates when ready. Author approval0. Final review uses a different critical
 reviewer from subject/oracle authors. Same-provider independence is not described
 as cross-provider verification.
 
-- [ ] Coordinator compares five new files against allowlist, verifies frozen B1a
+- [x] Coordinator compares five new files against allowlist, verifies frozen B1a
   fingerprints, import closure and unchanged src/source/sequence/guard/config/CI.
   Inspect complete literal row/branch and node inventories against actual standard
   collection using §1 profile; no source explicit collection or large node.
-- [ ] Run focused B1a+B1b check once at final candidate, then independent critical
+- [x] Run focused B1a+B1b check once at final candidate, then independent critical
   review with exact raw/site evidence. Findings requiring code changes reopen
   affected checks and review; no automatic retry of unchanged failed commands.
-- [ ] After critical findings closed, coordinator alone runs full `tests` UTC900
+- [x] After critical findings closed, coordinator alone runs full `tests` UTC900
   then Asia/Seoul900 sequentially under §1. Require raw/tool exit0, isolation0,
   expected existing skip/xfail behavior and source108 call-phase0. Any new failure,
   timeout or log loss blocks integration and is recorded without exception reuse.
-- [ ] Verify only new-file syntax, secret patterns, allowlist diff and final
+- [x] Verify only new-file syntax, secret patterns, allowlist diff and final
   fingerprint preservation. Inspect actual tests/output; prior suite totals do
   not substitute. Coordinator alone integrates the exact verified candidate on
   feature/* and records actual counts, durations, hashes, model metadata, gaps.
-- [ ] Report only `B1B_CONSTRUCTION_CONTROL_OBSERVED_ONLY` if all gates succeed.
+- [x] Report only `B1B_CONSTRUCTION_CONTROL_OBSERVED_ONLY` if all gates succeed.
   Explicitly retain full R2/duplicate-retire/finish/failure/dispose, N4097/runner,
   large scalar/parser/canonical/legacy, A/free/native/cold/consumer/owner/full L3
   blockers. Future full-R2 cleanup must order strong tail-index removal, process

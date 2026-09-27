@@ -209,6 +209,12 @@ observed_bytes. Process v2 exact spec; fake-dir/lock helpers stay private and fi
   tests. Fake monotonic clock proves900 includes wait/cleanup/publication; no sleep900 experiment.
   Explicitly cover `_probe` failure near the existing B1 absolute cleanup deadline: its local
   now+3 cleanup must be clamped just as observer/emergency cleanup is; preserve v1 behavior.
+  Freeze `_probe(deadline, stopped, *, budget=None, controller_fds=())`: adapter tests
+  validate the exact unique-int tuple before fork, child close-once/no-unlock before23,
+  close-failure125 with remaining close attempts, parent ownership and v1 defaults.
+  Assert O_NONBLOCK/O_NOFOLLOW/O_CLOEXEC leaf open and regular/uid/nlink/identity checks
+  before flock; FIFO/unsafe/replace paths never probe/spawn. Fake-clock cases prohibit
+  fork at/after run_end and prohibit spawn after pipe/argv setup exhausts run_end.
 - [ ] Write fake-key private-dir/leaf-nonexistence/replacement/created-leaf/rmdir-failure tests;
   assert no key read/create/unlink, no recursive cleanup, no inherited credentials, exact child env.
 - [ ] Extend independent harness fixture entrypoints only as necessary. Isolated copied fixtures
@@ -227,6 +233,14 @@ observed_bytes. Process v2 exact spec; fake-dir/lock helpers stay private and fi
   First unexpected nonzero/missing harness evidence stops the batch; preserve raw evidence.
 - [ ] Independently review all ownership-sensitive changes, output cap at exact byte boundaries,
   env key order/values, guard bytes and no duplicate reaper. No semantic B1 tests are modified.
+
+Task3 private seams were independently re-reviewed after P1 findings for inherited
+fork-probe lock FDs and potentially blocking lock leaf open. The coordinator's
+`task-3-seam-revision.md` and `task-3-seam-revision-review.md` in the runner artifact
+directory preserve the exact close/deadline/finalization contract and disposition
+`APPROVE_TASK3_SEAMS_ONLY`. This permits independent tests-first, not runtime acceptance.
+Implement bounded budget/probe/cleanup adapters first, then coordination/main and
+retained-output/publication. Keep valid B1 main fail-closed until all parts are ready.
 
 ## Task 4: Coordinator acceptance, real profile smoke, and future handoff
 
