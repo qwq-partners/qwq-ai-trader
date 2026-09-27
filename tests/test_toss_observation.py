@@ -64,7 +64,8 @@ def test_price_runner_persists_attempts_before_chunk_requests_and_keeps_earlier_
         source_success_at=NOW, now=NOW, policy=policy(), kis_quotes={s: quote(s) for s in symbols})
     ledger = ObservationLedger(tmp_path / "ledger", plan_hash="a" * 64, max_bytes=1_000_000); ledger.open()
     client = Client()
-    result = asyncio.run(ObservationRunner(client=client, ledger=ledger, policy=policy(), now=lambda: NOW).prices(slot_id="s", snapshot=snap))
+    result = asyncio.run(ObservationRunner(client=client, ledger=ledger, policy=policy(), now=lambda: NOW,
+                                           clock=lambda: 0.0).prices(slot_id="s", snapshot=snap))
     assert len(client.calls) == 2 and result.observation_count == 200
     assert result.degraded and result.ledger_complete
     assert ledger.summary()["terminal_attempts"] == 201
@@ -150,8 +151,10 @@ def setup_runner(tmp_path, *, symbols=("A",), client=None, p=None, clock=None, n
     ledger.open()
     snap = select_snapshot(candidates=tuple((s, 1) for s in symbols), holdings=(),
         source_success_at=now, now=now, policy=p, kis_quotes={s: quote(s) for s in symbols})
+    # Budget clock is frozen unless a test moves it explicitly: ~400 synchronous
+    # ledger fsyncs must not race the 5s job budget on a loaded host.
     runner = ObservationRunner(client=client or GoodClient(), ledger=ledger, policy=p,
-        now=lambda: now, **({"clock": clock} if clock else {}))
+        now=lambda: now, clock=clock or (lambda: 0.0))
     return runner, ledger, snap
 
 
