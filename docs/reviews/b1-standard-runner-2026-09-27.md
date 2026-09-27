@@ -29,6 +29,16 @@ AttributeError로 실패했다(1 failed/0.16s, workload1/tee0/tool1·격리0).
 `.superpowers/sdd/2026-09-27-decoder-followup/`에, 후속 실행 원장은
 `.superpowers/sdd/2026-09-27-b1-standard-runner/`에 보존한다.
 
+첫 순수 계약 후보153f439에서 원래 RED node가1 passed, 신규+기존 두 모듈367 passed/
+1.41s·격리0·workload0/tee0/tool0이다. 독립 critical 코드 리뷰 중이며 controller/실제
+프로필 인수와 전체 검증은 남았다. 원시 결과는 위 후속 artifact 디렉터리에 보존한다.
+
+실제 소규모 프로필의 원래 대상 파일에서 수집 node ID65647 bytes가 producer2048
+제한을 넘는 문제를 확인했다. 별도 critical 리뷰 후 기존 base-contract 모듈36 nodes/
+최대149 bytes로 미실행 대상을 교체한다. 기존 OS 회귀·전체 시험·producer 제한은
+그대로다. 따라서 향후 B1 receipt 방식의 전체 시험은 별도 호환성 해결 전 차단이며,
+현재 계획의 legacy 전체 검증과 소규모 smoke를 그 해결로 주장하지 않는다.
+
 N4097은 별도 의미 전이·전수 oracle·세 실행 예산의 승인과 결과 전까지 UNRUN이다.
 현재 B1b 구성 시험과 파일 소유권을 분리한다. 기존 성능 예외·guard·제품·CI·main·운영·
 주문·전략·위험/KIS/Toss 설정은 변경하지 않는다.

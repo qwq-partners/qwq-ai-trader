@@ -101,7 +101,7 @@ and all PIPESTATUS values plus final tool exit. This legacy prefix is **not 2 Mi
 No wrapper function is created by this draft. Paths in each Task replace SELECTED_PATHS literally;
 cap300 for focused and cap900 only for whole-suite verification. No `-k`, deselect or skip additions.
 
-The later actual B1 smoke selects `tests/dev/test_verification_os_contract.py` (the existing small
+The later actual B1 smoke selects `tests/dev/test_verification_contract.py` (the existing small
 pure-contract module, not a large decoder workload) and invokes existing absolute Python `-I -B`
 and controller directly under
 the five-variable env-i from the spec, exact --profile and --timeout-seconds900, safe distinct
@@ -119,6 +119,17 @@ sum tool wait durations, deduct gaps, substitute controller/pytest duration, exp
 retry for a smaller bound. These one-shot clock observations add no persistent helper/reaper;
 none is executed during this design correction. The exact context, expected inventory, selected
 file, cwd, candidate SHA, artifact paths and receipt linkage must be frozen before the smoke.
+
+Pre-execution input correction: collection-only evidence found one65647-byte node ID in the
+original OS-contract smoke file, exceeding the unchanged producer2048-byte limit. Independent
+critical review approved only substituting the existing base-contract file (36 nodes, max149
+bytes; frozen SHA2565e2c1fd77236ef2dcc00d12d04b6ac78e91aba7e5a582b2280ca539e483ef53b).
+Recheck its candidate identity and bind the independently collected inventory before smoke.
+The OS file remains required in focused/full regression; no test or producer is modified.
+Current-package full runs still use the legacy launcher. Future receipt-producing B1 full-suite
+runs remain structurally blocked by that oversized ID until a separately reviewed compatibility
+resolution; a successful tiny smoke cannot grant N4097/full-profile GO. Raw evidence and review
+are in `.superpowers/sdd/2026-09-27-b1-standard-runner/smoke-file-revision-*.md`.
 
 ## Task 1: Independent strict B1 contract and literal expected tests
 
