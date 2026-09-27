@@ -121,7 +121,9 @@ spawn 직후 parent가 가진 모든 child-side pipe write end를 닫는다. `cl
 buffer를 버리거나 미관측 EOF를 추정하지 않는다. leader 회수 뒤 generic wait가 zero를 반환한
 경우에도 proc 목록과 무관하게 `descendant_survived`를 latch한다. 후행 nonleader status도 같다.
 이미 발생한 reject latch는 정리가 성공하거나 나중에 rc0을 관측해도 절대 지우지 않는다.
-SIGINT/SIGTERM은 동일 정리를 거쳐 interrupted 기록; SIGKILL/host crash/발행 실패는 누락 증거다.
+아래 결과 판정 cutoff 전 관측한 SIGINT/SIGTERM은 동일 정리를 거쳐 interrupted로 거부한다.
+이미 기록된 오류가 있으면 최초 reason/CLI 정책을 유지한다. 실제 child rc와 cleanup 사실은
+중단으로 덮지 않는다. SIGKILL/host crash/발행 실패는 누락 또는 불완전 증거다.
 일반적인 fork/setsid/double-fork는 인수 대상이고 적대적 namespace/cgroup/ptrace escape는 지원 밖이다.
 시간 상한은 응답 가능한 event loop의 예산이다. 동기 spawn/파일 I/O·커널 D-state/CPU deschedule을
 강제로 선점하는 hard real-time 보증은 아니며 cleanup 실패는 그대로 실패로 남긴다.
@@ -156,6 +158,14 @@ exact 최상위: `schema, run, slot, scope, identity, launch, process, streams, 
 process-result는 cleanup 뒤 마지막으로 exclusive-create한다. 정상 CLI exit는 child raw rc,
 timeout124, child signal128+n, 그 밖의 controller 실패125. child rc0이어도 자손 잔존·격리·
 발행 실패가 있으면125다. CLI0만으로 순수 판정의 승인을 대신하지 않는다.
+**결과 판정 cutoff**는 후행 코드/guard 재검사와 receipt 읽기/invalid 판정을 모두 마친 뒤,
+reason과 결과 문서를 만들기 직전에 `stopped[0]`을 한 번 읽어 지역 값으로 고정하는 시점이다.
+그 읽기 전에 설치된 SIGINT/SIGTERM callback이 세운 flag는 기존 단조 reject latch에 반영한다.
+따라서 선행 오류 없는 child rc0/cleanup_complete=true도 interrupted/CLI125/consumer 거부다.
+그 읽기 뒤의 callback은 판정을 소급 변경하지 않는다. 선택 digest 계산·결과 문서 구성·
+serialization·exclusive create/write는 cutoff **이후**이며, 이 구간의 신호도 같은 제한을 받는다.
+이는 결과 판정을 고정하는 경계이지 파일 게시나 마지막 CLI 명령까지의 원자적 신호 처리가 아니다.
+cutoff 이후에도 발행 I/O 실패는 CLI125이며, 누락/불완전 파일은 성공 증거가 아니다.
 ignored Python atexit 예외가 OS0인 경우까지 clean-atexit라고 인증하지 않는다.
 atexit hang/signal/os._exit9는 실제 deadline/OS rc로 검출한다.
 
@@ -197,6 +207,9 @@ ci_provenance_verified=false, production_eligible=false. 거부는 status=`REJEC
 순수 strict schema/hash/rc/각 reason/guard/skip·xfail 거부 시험과 실제 작은 pytest child를 분리한다.
 실제 exit0/1, receipt 이후 exit9/signal/hang, descendant survivor/setsid/double-fork,
 양 pipe 동시 flood, guard frame 실패, output 기존파일/링크/경로탈출, caller SIGTERM을 RED부터 고정한다.
+후행 hash/receipt의 SIGINT/SIGTERM은 등록 callback을 호출하는 deterministic adapter로 검증한다.
+cutoff 뒤 selection/serialization/create/write 대조와 최초 timeout/io_error 보존을 함께 고정하며,
+실제 rc0/cleanup=true를 유지한 결과를 순수 consumer에 전달해 거부 여부를 확인한다.
 waitability probe의 정상23/유실 status/timeout은 각각 bootstrap 실행 여부를 검증한다.
 실제 실패 시험의 고정 구조는 `pytest → 전용 harness → controller → 고정 fixture tree`다.
 harness는 후보 controller의 helper를 재사용하지 않는 별도 구현이며 시작 전 단일 OS task/

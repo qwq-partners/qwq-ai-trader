@@ -610,6 +610,10 @@ def main(argv: list[str] | None = None) -> int:
             owner.reject("io_error")
     if owner.reaped and complete and receipt["state"] == "invalid":
         owner.reject("io_error")
+    # 결과 판정 cutoff: 이 단일 snapshot 뒤 신호는 아래 발행 판정을 소급 변경하지 않는다.
+    interrupted_before_publication = stopped[0]
+    if interrupted_before_publication:
+        owner.reject("interrupted")
     reason = owner.error or ("signaled" if owner.returncode is not None and owner.returncode < 0 else "exited")
     if not owner.reaped and owner.error is None:
         reason = "cleanup_error"

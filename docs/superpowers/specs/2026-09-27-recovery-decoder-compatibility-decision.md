@@ -1,6 +1,7 @@
 # Recovery decoder 표현·호환성 결정
 
-2026-09-27 KST. **결정 초안 — 독립 검토 대기.** 기준 source는
+2026-09-27 KST. **독립 검토 `APPROVE_DESIGN_DIRECTION_ONLY` — 방향 한정 승인.**
+검토 후보는 `f7b8c0e383c239fa5d80f535b619d32145db4349`다. 기준 source는
 `59fa111c6ff56f09a7a69c91a6c9819d7ca02468`다. 요청 모델/effort는
 gpt-6-astra/high, actual model/effective effort metadata는 미노출로 미검증이다.
 이 문서는 정적 비교와 다음 설계 범위만 정한다. API·자료구조·관측기 구현0, 시험·SQL·native·

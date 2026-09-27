@@ -11,6 +11,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 WALL = 0x40000000
@@ -1515,6 +1517,104 @@ def test_receipt_io_failure_after_cleanup_retains_status_and_failure_artifact(tm
     assert doc["process"]["reason"] == "io_error"
     assert doc["process"]["returncode"] == 0
     assert doc["process"]["cleanup_complete"] is True
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
+@pytest.mark.parametrize("phase", ["posthash", "receipt", "selection", "serialization", "create", "write"])
+@pytest.mark.parametrize("first_error", [None, "timeout", "io_error"])
+def test_finalization_signal_publication_cutoff_preserves_process_evidence(
+        tmp_path, monkeypatch, sig, phase, first_error):
+    """후행 중단 유실/경계 뒤 판정 변경/최초 오류 덮어쓰기를 검출한다."""
+    from scripts.dev.verification_os_contract import evaluate_controlled_slot
+
+    spec = importlib.util.spec_from_file_location(
+        "_finalization_expected", ROOT / "tests/dev/test_controlled_verification_evidence.py")
+    helpers = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helpers)
+    module, repo, guard, streams, args = _fake_main(tmp_path, monkeypatch)
+    expected = helpers._expected_before_run(repo, CONTEXT["run"])
+    slot = expected["verification"]["slots"][0]
+    receipt_raw = json.dumps({
+        "schema": "qwq.verification-receipt/v1", **CONTEXT,
+        "identity": slot["identity"], "collected": ["tests/test_tiny.py::test_ok"],
+        "results": [{"nodeid": "tests/test_tiny.py::test_ok", "setup": "passed",
+                     "call": "passed", "teardown": "passed"}],
+        "session": {"finished": True, "exit_code": 0, "collection_errors": 0, "deselected": 0},
+        "guard": guard,
+    }).encode()
+    callbacks = {}
+    observed = [False]
+    injected = []
+    monkeypatch.setattr(module.signal, "signal", lambda number, callback: callbacks.__setitem__(number, callback))
+
+    def interrupt():
+        injected.append(phase)
+        callbacks[sig](sig, None)
+
+    def finished(owner, pipes, *rest):
+        owner.record(99, 0)
+        if first_error is not None:
+            owner.reject(first_error)
+        for fd in pipes.values():
+            os.close(fd)
+        pipes.clear()
+        (repo / "receipt.json").write_bytes(receipt_raw)
+        observed[0] = True
+        return True, guard, streams
+
+    monkeypatch.setattr(module, "_observe", finished)
+    real_hash, real_receipt, real_canonical = module._hash, module._receipt, module._canonical
+    real_create = module._BoundPaths.create
+
+    def digest(path):
+        value = real_hash(path)
+        if phase == "posthash" and observed[0] and not injected:
+            interrupt()
+        return value
+
+    def receipt(*args):
+        value = real_receipt(*args)
+        if phase == "receipt":
+            interrupt()
+        return value
+
+    def canonical(value):
+        if ((phase == "selection" and type(value) is list)
+                or (phase == "serialization" and type(value) is dict)):
+            interrupt()
+        return real_canonical(value)
+
+    def create(bounds, path, **kwargs):
+        stream = real_create(bounds, path, **kwargs)
+        if path == repo / "process.json":
+            if phase == "create":
+                interrupt()
+            elif phase == "write":
+                real_write = stream.write
+
+                def write(raw):
+                    interrupt()
+                    return real_write(raw)
+
+                stream.write = write
+        return stream
+
+    monkeypatch.setattr(module, "_hash", digest)
+    monkeypatch.setattr(module, "_receipt", receipt)
+    monkeypatch.setattr(module, "_canonical", canonical)
+    monkeypatch.setattr(module._BoundPaths, "create", create)
+    rc = module.main(args)
+    doc = json.loads((repo / "process.json").read_bytes())
+    reason = first_error or ("interrupted" if phase in ("posthash", "receipt") else "exited")
+    assert injected == [phase]
+    assert rc == {"timeout": 124, "io_error": 125, "interrupted": 125, "exited": 0}[reason]
+    assert doc["process"]["reason"] == reason
+    assert doc["process"]["returncode"] == 0
+    assert doc["process"]["leader_reaped"] is True
+    assert doc["process"]["cleanup_complete"] is True
+    decision = evaluate_controlled_slot(receipt_raw, (repo / "process.json").read_bytes(), expected)
+    assert decision["status"] == ("OS_RESULT_BOUND" if reason == "exited" else "REJECTED")
+    assert decision["errors"] == ([] if reason == "exited" else ["PROCESS_EXIT_REJECTED"])
 
 
 if __name__ == "__main__":
