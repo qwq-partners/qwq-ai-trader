@@ -1847,3 +1847,443 @@ def test_b1_observer_exact_cap_has_observed_bytes(monkeypatch):
     }
     assert list(streams["stdout"]) == ["bytes", "sha256", "overflow", "observed_bytes"]
     assert [event[1] for event in case.events if event[0] == "close"] == [32, 33, 31]
+
+
+def _output_chunks(payload):
+    return [payload[index:index + 65536] for index in range(0, len(payload), 65536)]
+
+
+class _OutputSink:
+    def __init__(self, *, at=None, result=None, physical=0):
+        self.at = at
+        self.result = result
+        self.physical = physical
+        self.offered = []
+        self.data = bytearray()
+
+    def write(self, data):
+        self.offered.append(data)
+        if len(self.offered) - 1 == self.at:
+            if isinstance(self.result, BaseException):
+                self.data.extend(data[:self.physical])
+                raise self.result
+            if type(self.result) is int and 0 <= self.result <= len(data):
+                self.data.extend(data[:self.result])
+            return self.result
+        self.data.extend(data)
+        return len(data)
+
+
+class _OutputAbort(BaseException):
+    pass
+
+
+class _OutputCount(int):
+    pass
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("size", [0, 2097151, 2097152, 2097153, 2097160])
+def test_b1_stream_boundaries_keep_patterned_prefix_and_saturate_observation(monkeypatch, stream, size):
+    import hashlib
+
+    prefix = b"abcd" * 524288
+    payload = (prefix + b"!discarded")[:size]
+    case = _OutputCase(**{stream: _output_chunks(payload)})
+    sink = _OutputSink()
+    case.logs[stream] = sink
+    complete, guard, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    retained = prefix[:size]
+    assert complete is True and guard == _guard_fact()
+    assert streams[stream] == {
+        "bytes": min(size, 2097152), "sha256": hashlib.sha256(retained).hexdigest(),
+        "overflow": size > 2097152, "observed_bytes": min(size, 2097153),
+    }
+    assert bytes(sink.data) == retained
+    assert all(sink.offered)
+    assert case.owner.error == ("output_limit" if size > 2097152 else None)
+    assert set(case.owner.observation) == {"streams", "observed", "failed_logs", "control", "guard", "startup_end", "profile"}
+    assert list(case.owner.observation["streams"][stream]) == ["bytes", "sha256", "overflow"]
+
+
+def test_b1_final_chunk_overflow_writes_only_remaining_three_bytes(monkeypatch):
+    import hashlib
+
+    case = _OutputCase([b"A" * 65536] * 31 + [b"A" * 65533, b"XYZ!", b"discarded"])
+    sink = _OutputSink()
+    case.logs["stdout"] = sink
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True
+    assert case.owner.reaped is True and case.owner.returncode == 0
+    assert case.owner.error == "output_limit"
+    assert sink.offered[-1] == b"XYZ"
+    assert len(sink.offered) == 33
+    assert bytes(sink.data) == b"A" * 2097149 + b"XYZ"
+    assert streams["stdout"] == {"bytes": 2097152,
+        "sha256": hashlib.sha256(b"A" * 2097149 + b"XYZ").hexdigest(),
+        "overflow": True, "observed_bytes": 2097153}
+    assert case.events.index(("wait", 41)) < case.events.index(("read", 32, 31))
+    assert case.pipes == {}
+
+
+def test_b1_simultaneous_stream_drain_keeps_independent_caps_and_bounded_passes(monkeypatch):
+    import hashlib
+
+    case = _OutputCase(_output_chunks(b"A" * 2097152 + b"!"), _output_chunks(b"B" * 2097152 + b"?"))
+    complete, guard, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True and guard == _guard_fact()
+    for stream, byte in (("stdout", b"A"), ("stderr", b"B")):
+        assert streams[stream] == {"bytes": 2097152, "sha256": hashlib.sha256(byte * 2097152).hexdigest(),
+                                   "overflow": True, "observed_bytes": 2097153}
+        assert case.logs[stream].getvalue() == byte * 2097152
+    reads = [event for event in case.events if event[0] == "read"]
+    assert reads[:6] == [("read", 0, 31), ("read", 0, 32), ("read", 0, 33),
+                         ("read", 1, 31), ("read", 1, 32), ("read", 1, 33)]
+    assert len({(event[1], event[2]) for event in reads}) == len(reads)
+    assert case.owner.error == "output_limit"
+
+
+@pytest.mark.parametrize("reported", [0, 1, 7, 8])
+def test_b1_short_write_accounting_disables_only_failed_stream(monkeypatch, reported):
+    import hashlib
+
+    case = _OutputCase([b"ABCDEFGH", b"later"], [b"other"])
+    sink = _OutputSink(at=0, result=reported)
+    case.logs["stdout"] = sink
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    expected = b"ABCDEFGH" + b"later" if reported == 8 else b"ABCDEFGH"[:reported]
+    assert complete is True
+    assert streams["stdout"] == {"bytes": len(expected), "sha256": hashlib.sha256(expected).hexdigest(),
+                                  "overflow": False, "observed_bytes": 13}
+    assert sink.offered == ([b"ABCDEFGH", b"later"] if reported == 8 else [b"ABCDEFGH"])
+    assert bytes(sink.data) == expected
+    assert case.logs["stderr"].getvalue() == b"other"
+    assert case.owner.observation["failed_logs"] == (set() if reported == 8 else {"stdout"})
+    assert case.owner.error == (None if reported == 8 else "io_error")
+
+
+@pytest.mark.parametrize("kind", ["none", "bool", "false", "float", "int_subclass", "negative", "too_large", "oserror", "partial_oserror"])
+@pytest.mark.parametrize("crossing", [False, True])
+def test_b1_write_failure_still_detects_overflow_and_preserves_first_reason(monkeypatch, kind, crossing):
+    import hashlib
+
+    if crossing:
+        chunks = [b"A" * 65536] * 31 + [b"A" * 65533, b"XYZ!", b"tail"]
+        at, offered, kept, reason = 32, b"XYZ", b"A" * 2097149, "output_limit"
+    else:
+        chunks = [b"ABCDEFGH"] + _output_chunks(b"A" * 2097152) + [b"tail"]
+        at, offered, kept, reason = 0, b"ABCDEFGH", b"", "io_error"
+    failure = {"none": None, "bool": True, "false": False, "float": 1.0, "int_subclass": _OutputCount(1), "negative": -1,
+               "too_large": len(offered) + 1, "oserror": OSError(5, "write"),
+               "partial_oserror": BlockingIOError(11, "partial physical write", 2)}[kind]
+    case = _OutputCase(chunks, [b"ok"])
+    sink = _OutputSink(at=at, result=failure, physical=2 if kind == "partial_oserror" else 0)
+    case.logs["stdout"] = sink
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True
+    assert case.owner.error == reason
+    assert streams["stdout"] == {"bytes": len(kept), "sha256": hashlib.sha256(kept).hexdigest(),
+                                  "overflow": True, "observed_bytes": 2097153}
+    assert len(sink.offered) == at + 1 and sink.offered[-1] == offered
+    assert bytes(sink.data) == kept + (offered[:2] if kind == "partial_oserror" else b"")
+    assert case.owner.observation["failed_logs"] == {"stdout"}
+    assert case.logs["stderr"].getvalue() == b"ok"
+
+
+@pytest.mark.parametrize("reported", [0, 1, 2])
+def test_b1_crossing_short_write_latches_output_before_io_error(monkeypatch, reported):
+    import hashlib
+
+    case = _OutputCase([b"A" * 65536] * 31 + [b"A" * 65533, b"XYZ!", b"later"])
+    sink = _OutputSink(at=32, result=reported)
+    case.logs["stdout"] = sink
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    retained = b"A" * 2097149 + b"XYZ"[:reported]
+    assert complete is True and case.owner.error == "output_limit"
+    assert streams["stdout"] == {"bytes": 2097149 + reported, "sha256": hashlib.sha256(retained).hexdigest(),
+                                  "overflow": True, "observed_bytes": 2097153}
+    assert bytes(sink.data) == retained and len(sink.offered) == 33
+    assert case.owner.observation["failed_logs"] == {"stdout"}
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError, _OutputAbort])
+@pytest.mark.parametrize("earlier", [None, "interrupted"])
+def test_b1_non_oserror_write_marks_failed_then_reraises_same_exception_for_retry(monkeypatch, error_type, earlier):
+    import hashlib
+
+    failure = error_type("scripted write abort")
+    case = _OutputCase([b"AB", b"CD", b"later"], [b"other"])
+    if earlier is not None:
+        case.owner.reject(earlier)
+    sink = _OutputSink(at=1, result=failure)
+    case.logs["stdout"] = sink
+    with pytest.raises(error_type) as caught:
+        _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert caught.value is failure
+    state = case.owner.observation
+    hasher = state["streams"]["stdout"]["sha256"]
+    control = state["control"]
+    failed_logs, observed = state["failed_logs"], state["observed"]
+    assert case.owner.error == (earlier or "io_error")
+    assert state["failed_logs"] == {"stdout"}
+    assert state["observed"]["stdout"] == 4
+    assert (state["startup_end"], case.owner.finish_end, case.budget.cleanup_end, case.budget.term_end) == (11.0, 4.0, 4.0, 2.0)
+    complete, guard, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True and guard == _guard_fact()
+    assert case.owner.observation is state and state["streams"]["stdout"]["sha256"] is hasher
+    assert state["control"] is control
+    assert state["failed_logs"] is failed_logs and state["observed"] is observed
+    assert streams["stdout"] == {"bytes": 2, "sha256": hashlib.sha256(b"AB").hexdigest(),
+                                  "overflow": False, "observed_bytes": 9}
+    assert sink.offered == [b"AB", b"CD"] and bytes(sink.data) == b"AB"
+    assert (state["startup_end"], case.owner.finish_end, case.budget.cleanup_end, case.budget.term_end) == (11.0, 4.0, 4.0, 2.0)
+
+
+class _OutputProfile(str):
+    pass
+
+
+class _OutputEqualProfile:
+    def __eq__(self, other):
+        return True
+
+
+@pytest.mark.parametrize("profile", [True, False, 1, "", "other", _OutputProfile("b1-standard/v1"), _OutputEqualProfile()],
+                         ids=["true", "false", "int", "empty", "unknown", "str-subclass", "custom-equality"])
+def test_b1_observer_profile_contract_rejects_before_budget_sync_or_io(monkeypatch, profile):
+    case = _OutputCase([b"unread"])
+    case.budget.begin_cleanup(100.0)
+    with pytest.raises(ValueError, match="^PROCESS_OBSERVATION_PROFILE$"):
+        _run_output_case(monkeypatch, case, profile=profile)
+    assert case.events == []
+    assert case.owner.observation is None and case.owner.finish_end is None
+    assert case.owner.error is None and case.owner.reaped is False
+    assert (case.budget.cleanup_end, case.budget.term_end) == (103.0, 101.0)
+    assert (case.budget.total_end, case.budget.run_end) == (900.0, 896.0)
+    assert case.pipes == {"stdout": 31, "stderr": 32, "control": 33}
+    assert case.logs["stdout"].getvalue() == b""
+
+
+def test_b1_observer_profile_contract_requires_existing_budget_without_consuming_pipes(monkeypatch):
+    case = _OutputCase([b"unread"], budget=False)
+    with pytest.raises(ValueError, match="^PROCESS_OBSERVATION_PROFILE$"):
+        _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert case.events == [] and case.owner.observation is None
+    assert case.owner.finish_end is None and case.owner.error is None
+    assert case.pipes == {"stdout": 31, "stderr": 32, "control": 33}
+
+
+@pytest.mark.parametrize(("marker", "requested"), [
+    ("missing", "b1-standard/v1"), ("b1-standard/v1", None),
+    (None, None), (None, "b1-standard/v1"), ("unknown", None),
+    (True, "b1-standard/v1"), (_OutputProfile("b1-standard/v1"), "b1-standard/v1"),
+    (_OutputEqualProfile(), "b1-standard/v1"),
+], ids=["no-promotion", "no-downgrade", "none-not-missing", "none-not-b1", "bad-marker",
+        "boolean-marker", "subclass-marker", "equality-marker"])
+def test_b1_observer_profile_contract_reentry_marker_is_exact_and_validation_precedes_sync(monkeypatch, marker, requested):
+    import hashlib
+
+    case = _OutputCase([b"unread"])
+    state = {"streams": {name: {"bytes": 0, "sha256": hashlib.sha256(), "overflow": False}
+                         for name in ("stdout", "stderr")},
+             "observed": {"stdout": 0, "stderr": 0}, "failed_logs": set(),
+             "control": bytearray(b"saved"), "guard": None, "startup_end": 11.0}
+    if type(marker) is not str or marker != "missing":
+        state["profile"] = marker
+    case.owner.observation = state
+    case.budget.begin_cleanup(100.0)
+    hasher = state["streams"]["stdout"]["sha256"]
+    with pytest.raises(ValueError, match="^PROCESS_OBSERVATION_PROFILE$"):
+        _run_output_case(monkeypatch, case, profile=requested)
+    assert case.events == []
+    assert case.owner.observation is state and case.owner.finish_end is None
+    assert case.owner.error is None and case.owner.reaped is False
+    assert state["control"] == b"saved" and state["startup_end"] == 11.0
+    assert state["observed"] == {"stdout": 0, "stderr": 0} and state["failed_logs"] == set()
+    assert state["streams"]["stdout"]["sha256"] is hasher
+    assert hasher.hexdigest() == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    if type(marker) is str and marker == "missing":
+        assert "profile" not in state
+    else:
+        assert state["profile"] is marker
+    assert (case.budget.cleanup_end, case.budget.term_end) == (103.0, 101.0)
+
+
+@pytest.mark.parametrize("profile", [None, "b1-standard/v1"])
+def test_b1_observer_reentry_preserves_output_hash_control_and_deadlines(monkeypatch, profile):
+    import hashlib
+
+    interruption = RuntimeError("read boundary")
+    case = _OutputCase([b"AB", interruption, b"CD"])
+    with pytest.raises(RuntimeError) as caught:
+        _run_output_case(monkeypatch, case, profile=profile)
+    assert caught.value is interruption
+    state = case.owner.observation
+    hasher = state["streams"]["stdout"]["sha256"]
+    saved_control = bytes(state["control"])
+    assert saved_control and state["guard"] is None
+    assert case.pipes == {"stdout": 31, "control": 33}
+    complete, guard, streams = _run_output_case(monkeypatch, case, profile=profile)
+    assert complete is True and guard == _guard_fact()
+    assert case.owner.observation is state and state["streams"]["stdout"]["sha256"] is hasher
+    assert bytes(state["control"]) == saved_control
+    expected = {"bytes": 4, "sha256": hashlib.sha256(b"ABCD").hexdigest(), "overflow": False}
+    if profile is not None:
+        expected["observed_bytes"] = 4
+        assert state["profile"] == "b1-standard/v1"
+    else:
+        assert "profile" not in state
+    assert streams["stdout"] == expected
+    assert case.logs["stdout"].getvalue() == b"ABCD"
+    assert (state["startup_end"], case.owner.finish_end, case.budget.cleanup_end, case.budget.term_end) == (11.0, 4.0, 4.0, 2.0)
+    streams["stdout"]["bytes"] = 999
+    streams["stdout"]["sha256"] = "not live hash"
+    assert state["streams"]["stdout"]["bytes"] == 4
+    assert hasher.hexdigest() == hashlib.sha256(b"ABCD").hexdigest()
+    assert state["observed"]["stdout"] == 4
+
+
+@pytest.mark.parametrize("budget", [False, True])
+def test_b1_output_preserves_v1_retained_detection_byte_and_empty_prefix_write(monkeypatch, budget):
+    import hashlib
+
+    case = _OutputCase(_output_chunks(b"A" * 8388608 + b"Z!") + [b"later"], budget=budget)
+    sink = _OutputSink()
+    case.logs["stdout"] = sink
+    complete, _, streams = _run_output_case(monkeypatch, case)
+    assert complete is True and case.owner.error == "output_limit"
+    assert streams["stdout"] == {"bytes": 8388609, "sha256": hashlib.sha256(b"A" * 8388608 + b"Z").hexdigest(), "overflow": True}
+    assert bytes(sink.data) == b"A" * 8388608 + b"Z"
+    assert sink.offered[-2:] == [b"Z", b""]
+    assert "profile" not in case.owner.observation
+    assert case.owner.observation["observed"]["stdout"] == 8388609
+
+
+@pytest.mark.parametrize("budget", [False, True])
+def test_b1_output_preserves_v1_write_before_overflow_error_order(monkeypatch, budget):
+    import hashlib
+
+    case = _OutputCase([b"A" * 65536] * 127 + [b"A" * 65535, b"XYZ"], budget=budget)
+    sink = _OutputSink(at=128, result=OSError(5, "write"))
+    case.logs["stdout"] = sink
+    complete, _, streams = _run_output_case(monkeypatch, case, profile=None)
+    assert complete is True and case.owner.error == "io_error"
+    assert streams["stdout"] == {"bytes": 8388607, "sha256": hashlib.sha256(b"A" * 8388607).hexdigest(), "overflow": True}
+    assert sink.offered[-1] == b"XY"
+    assert case.owner.observation["observed"]["stdout"] == 8388609
+
+
+@pytest.mark.parametrize("reason", ["interrupted", "timeout", "cleanup_error"])
+def test_b1_output_cannot_replace_an_earlier_reason(monkeypatch, reason):
+    case = _OutputCase([b"first"] + _output_chunks(b"A" * 2097153))
+    case.owner.reject(reason)
+    case.logs["stdout"] = _OutputSink(at=0, result=OSError(5, "write"))
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True and case.owner.error == reason
+    assert streams["stdout"]["bytes"] == 0
+    assert streams["stdout"]["observed_bytes"] == 2097153
+    assert streams["stdout"]["overflow"] is True
+
+
+@pytest.mark.parametrize("stderr_first", [False, True])
+def test_b1_same_pass_stream_errors_follow_pipe_order(monkeypatch, stderr_first):
+    case = _OutputCase([b"A" * 65536] * 31 + [b"A" * 65533, b"XYZ!"],
+                       [BlockingIOError()] * 32 + [b"oops"])
+    case.logs["stderr"] = _OutputSink(at=0, result=OSError(5, "write"))
+    if stderr_first:
+        case.pipes = {"stderr": 32, "stdout": 31, "control": 33}
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True
+    assert case.owner.error == ("io_error" if stderr_first else "output_limit")
+    assert streams["stdout"]["observed_bytes"] == 2097153
+    assert streams["stderr"]["observed_bytes"] == 4 and streams["stderr"]["bytes"] == 0
+
+
+@pytest.mark.parametrize("error_type", [BlockingIOError, InterruptedError, OSError])
+def test_b1_read_errors_and_eof_do_not_increment_stream_observation(monkeypatch, error_type):
+    case = _OutputCase([error_type(), b"X"])
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True
+    assert streams["stdout"]["observed_bytes"] == 1 and streams["stdout"]["bytes"] == 1
+    assert case.owner.error == ("io_error" if error_type is OSError else None)
+
+
+@pytest.mark.parametrize("missing", ["eof", "echild"])
+def test_b1_stream_completion_still_requires_eof_and_echild(monkeypatch, missing):
+    case = _OutputCase([BlockingIOError(), BlockingIOError()] if missing == "eof" else [])
+    case.echild = missing != "echild"
+    case.times = [4.0]
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is False and case.owner.error == "cleanup_error"
+    assert case.pipes == {}
+    assert streams["stdout"]["bytes"] == 0 and streams["stdout"]["observed_bytes"] == 0
+
+
+@pytest.mark.parametrize("budget", [False, True])
+def test_b1_output_preserves_v1_unexpected_write_exception_state_and_retry(monkeypatch, budget):
+    import hashlib
+
+    failure = RuntimeError("legacy write failure")
+    case = _OutputCase([b"first", b"next"], budget=budget)
+    sink = _OutputSink(at=0, result=failure)
+    case.logs["stdout"] = sink
+    with pytest.raises(RuntimeError) as caught:
+        _run_output_case(monkeypatch, case)
+    assert caught.value is failure
+    assert case.owner.error is None
+    assert case.owner.observation["failed_logs"] == set()
+    complete, _, streams = _run_output_case(monkeypatch, case)
+    assert complete is True and case.owner.error is None
+    assert streams["stdout"] == {"bytes": 4, "sha256": hashlib.sha256(b"next").hexdigest(), "overflow": False}
+    assert case.owner.observation["observed"]["stdout"] == 9
+    assert sink.offered == [b"first", b"next"] and bytes(sink.data) == b"next"
+
+
+def test_b1_guard_failure_does_not_count_control_bytes_as_stream_output(monkeypatch):
+    case = _OutputCase([b"X"])
+    case.chunks[33] = [b"invalid guard\n", b""]
+    complete, guard, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True and guard is None
+    assert case.owner.error == "startup_error"
+    assert streams["stdout"]["bytes"] == 1 and streams["stdout"]["observed_bytes"] == 1
+    assert streams["stderr"]["bytes"] == 0 and streams["stderr"]["observed_bytes"] == 0
+
+
+@pytest.mark.parametrize("initial", [None, "b1-standard/v1"])
+def test_b1_observer_profile_switch_after_bytes_rejects_without_consuming_or_resetting(monkeypatch, initial):
+    import hashlib
+
+    case = _OutputCase([b"AB", RuntimeError("pause"), b"CD"])
+    with pytest.raises(RuntimeError):
+        _run_output_case(monkeypatch, case, profile=initial)
+    state = case.owner.observation
+    before = len(case.events)
+    pending = dict(case.pipes)
+    requested = "b1-standard/v1" if initial is None else None
+    with pytest.raises(ValueError, match="^PROCESS_OBSERVATION_PROFILE$"):
+        _run_output_case(monkeypatch, case, profile=requested)
+    assert len(case.events) == before and case.pipes == pending
+    assert case.owner.observation is state
+    assert state["observed"] == {"stdout": 2, "stderr": 0}
+    assert state["streams"]["stdout"]["bytes"] == 2
+    assert state["streams"]["stdout"]["sha256"].hexdigest() == hashlib.sha256(b"AB").hexdigest()
+    assert case.logs["stdout"].getvalue() == b"AB"
+
+
+def test_b1_crossing_baseexception_keeps_output_limit_before_marked_write_failure(monkeypatch):
+    failure = _OutputAbort("crossing write")
+    case = _OutputCase([b"A" * 65536] * 31 + [b"A" * 65533, b"XYZ!", b"later"])
+    sink = _OutputSink(at=32, result=failure)
+    case.logs["stdout"] = sink
+    with pytest.raises(_OutputAbort) as caught:
+        _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert caught.value is failure
+    assert case.owner.error == "output_limit"
+    assert case.owner.observation["failed_logs"] == {"stdout"}
+    assert case.owner.observation["observed"]["stdout"] == 2097153
+    assert case.owner.observation["streams"]["stdout"]["overflow"] is True
+    complete, _, streams = _run_output_case(monkeypatch, case, profile="b1-standard/v1")
+    assert complete is True and case.owner.error == "output_limit"
+    assert streams["stdout"]["bytes"] == 2097149
+    assert streams["stdout"]["observed_bytes"] == 2097153
+    assert len(sink.offered) == 33
