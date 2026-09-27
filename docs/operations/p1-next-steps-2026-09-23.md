@@ -82,10 +82,11 @@ HTTP 오류3/재시도3을 계측했다. `unknown/other/other` 집계라 요청/
 
 **관측 전달:** `kr_protection_producer`의 record_*는 메모리에 기록되지만, 일반 heartbeat `snapshot/check/loop_status`는 등록된 PERIODS/DAILY/observer만 읽는다. S4 후보의 runtime.health 투영은 해당 단계 검증·통합 여부를 원장에서 확인해야 하며, 그 투영을 일반 `/api/health`·정체 경보·운영 점검에 연결하는 것은 별도 작업이다. 설치되지 않은 legacy에 유령 경보를 만들지 않고, closing 15:20~15:30 및 무보유/휴장/종료 상태도 구분해야 한다. 알람 실제 소비자까지 인수하고 전용 수동 복구 runbook과 연결한다.
 
-N3 이후에는 exporter 자체를 재구현하지 않고 그 고정 schema를 소비한다. 기존 health의
-clock 콜백·restart retry 내부 list 공유는 아직 남아 있으므로, 그 API를 무부작용으로
-가정해 우회 연결하지 않는다. 먼저 시계 호출/복사본 계약을 확정하고 필요한 alias 교정은
-별도 회귀 시험으로 인수한다. `counts_complete=False`와 unknown/volatile/in-flight를
+N3 이후에는 exporter 자체를 재구현하지 않고 그 고정 schema를 소비한다. 09-27 개발선의
+[별도 health 수정](../reviews/health-observation-2026-09-27.md)은 restart retry list 공유와
+한 응답의 일자 표시 상충을 교정한다. 하지만 clock 콜백·full snapshot 비용은 남으므로
+그 API를 무부작용으로 가정해 우회 연결하지 않는다. 실제 검증/통합 상태는 해당 원장을
+확인한다. `counts_complete=False`와 unknown/volatile/in-flight를
 정상0건 또는 영구 고장으로 뭉개지 않으며, 경보에서 복구 writer를 호출하지 않는다.
 
 **저장본/지연:** 일반 보호 감사와 intents/attempts는 현재 append-only다. `effect_source`는 완료 표식이 아니라 intraday 생성자 구분이다. 매 sweep의 감사 전량 순회·owner snapshot 비용을 누적 규모별로 측정하고, replay·원자성·복구 증거를 깨지 않는 보존/압축 계약을 먼저 설계한다. 단기간8종목 측정을 장기 부하 보장으로 사용하지 않는다.20초 무결정 쓰기의 순간 고점 누락도 실제 운영 적용 전에 평가한다.

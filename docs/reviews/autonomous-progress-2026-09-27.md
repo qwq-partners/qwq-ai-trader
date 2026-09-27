@@ -1,6 +1,6 @@
 # 09-27 자율 후속 개발 — 진행·인계 원장
 
-갱신: 2026-09-27 16:03 KST, OS 단계 개발 검증 완료. **전체 엔진 완료·운영 전환 보고가 아니다.**
+갱신: 2026-09-27 16:38 KST, runtime/health 통합 검증 중. **전체 엔진 완료·운영 전환 보고가 아니다.**
 사용자 요청은 18:00 KST 이후 복귀 전까지 승인 범위의 후속을 순차 진행하는 것이다.
 일상적인 재확인은 생략하되 새 실행 권한이나 증거 없는 안전 게이트를 임의로 만들지 않는다.
 
@@ -8,8 +8,9 @@
 
 - 통합 작업: `feature/owner-ticket-gate-20260926`, 통합 worktree
   `.claude/worktrees/owner-ticket-gate-20260926`.
-- 현재 로컬 코드 checkpoint: `9cf021f`. 마지막 확인된 원격 feature: `535e494`.
-  OS 단계까지 검증을 마쳤으며 문서 마감·feature push 뒤 같은 새 base에서 후속을 시작한다.
+- OS 최종 검증 코드: `9cf021f`. 문서 마감 및 확인된 원격 feature:
+  `af098769d7095c5630bbaa7c98301794ad213fd5`. 실제 push와 ls-remote 대조를 완료했다.
+  이 SHA를 공통 base로 후속 세 구현을 격리 작업트리에서 시작했다.
 - main·운영·주문·전략·위험 설정·KIS/Toss 자격·서비스는 이번 후속에서 변경하지 않았다.
   main 작업트리의 기존 `config/evolved_overrides.yml` 변경은 읽거나 편집하지 않고 보존했다.
 - 기존 두 정확한 성능 관측의 개발 예외는 유지한다. 새 실패·timeout·수명/정합성 결함을
@@ -21,12 +22,12 @@
 | --- | --- | --- |
 | 오프라인 시험 증거 | 개발 완료·독립 리뷰·feature push | OS 종료 및 native 자격과 구분 유지 |
 | source 수집·격리 경계 | 개발 완료, UTC/KST 각6089 passed, source108 수집만 확인 | source call-phase0·qualified runtime0 유지 |
-| 실제 OS 종료·회수 결속 | 독립 리뷰 보완 완료, 전체 UTC/KST 각각6265 passed | 문서/push 후 개발 범위 한정 유지 |
-| runtime 등록 대조 | 독립 계획 승인·문서 저장, 구현 미착수 | 앞 단계 See 뒤 순수 검사기+빈 registry 구현/검증 |
+| 실제 OS 종료·회수 결속 | 독립 리뷰 보완·전체 UTC/KST 각각6265 passed·문서/push 완료 | 개발 범위 한정 유지 |
+| runtime 등록 대조 | 독립 리뷰 보완·최종60건·한정 재승인 후 `aa4ab4c`까지 통합 | 기존 부품/health 결합·fresh broad·전체 검증 |
 | cold source 소유권 | 준비 설계 한정 독립 승인·문서 통합 | native/decoder/소비자·독립 할당 관측 기준 미해결 |
 | decoder 호환 선택 | consumer inventory·표현 선택 문서 독립 방향 승인 | 실제 bounded 구조/독립 관측 실현 가능성 설계; 첫 RED 여전히 보류 |
-| health 재시도 목록 복사 | 반환 목록과 내부 RAM의 공유를 정적으로 확인, 최소 수정 설계 | OS See 뒤 RED→leaf 복사→독립 리뷰/검증; 경보 배선과 별개 |
-| health 일자 표시 일관성 | 중복 clock/property 관측을 독립 정적 분석, 첫 필드 단일 관측 권고 | OS See 뒤 RED→health 두 필드만 수정/검증; 실제 admission 무변경 |
+| health 재시도 목록 복사 | 독립 승인·M1 시험 보완 재승인·feature 통합 | 두 부품 결합201 passed, 전체 검증 대기; 경보 배선과 별개 |
+| health 일자 표시 일관성 | 독립 승인·feature 통합 | 실제 admission 무변경, 두 부품 결합201 passed; 전체 검증 대기 |
 
 controller 기존46건의 coordinator 재실행은21.68s/exit0/격리0이었다. 그 뒤 독립 리뷰가 발견한
 부모 symlink 경로 교체·미완료 정리 중 receipt 읽기는 원 작성자의 RED3건으로 재현됐다.

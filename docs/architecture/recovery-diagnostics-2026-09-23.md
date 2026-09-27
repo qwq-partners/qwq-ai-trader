@@ -9,9 +9,11 @@ N2 완료 기준 `3f7a189` 위에서 이미 존재하는 단일 owner runtime의
 
 ## N2 계약 보완
 
-`runtime.health()`는 `day_admission_closed`를 통해 주입 clock을 실행한다.
-producer health의 restart retry 내부 list도 원 RAM과 공유된다. 따라서 N2 제안의
-health 원문 복사 대신 정확한 제품 타입에 한정한 **private memory adapter**를 쓴다.
+N3 설계 당시 `runtime.health()`는 `day_admission_closed`를 통해 주입 clock을 실행하고,
+producer health의 restart retry 내부 list도 원 RAM과 공유했다. 09-27 개발선의
+[별도 수정](../reviews/health-observation-2026-09-27.md)은 retry leaf를 복사하고 일자 차단
+표시를 한 응답에서 한 번만 관측한다. clock 호출 자체와 full snapshot 비용은 남는다.
+따라서 N2 제안의 health 원문 복사 대신 정확한 제품 타입에 한정한 **private memory adapter**를 쓴다.
 health/clock/store/load/restore/audit/sweep/recovery 함수를 호출하지 않는다.
 기존 health 구현 자체를 고치는 작업은 별도이며 이 exporter의 무부작용 보장으로
 기존 health 전체를 승인하지 않는다.

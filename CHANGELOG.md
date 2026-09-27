@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — runtime 순수 계약·health 관측 정합 (전체 검증 중)
+
+- 빈 실제 registry와 strict subject/registry/observation 대조를 추가했다. 독립 리뷰의 직접 dict 크기·binding 키·독립 fixture·깊이 및 invalid mode 인수를 보완, 최종60건·격리0과 한정 재승인 후 통합했다. 실행/신뢰/native/운영 권한은 항상 false다. [원장](docs/reviews/runtime-admission-2026-09-27.md).
+- health retry의 내부 list 공유를 leaf 복사로 끊고 한 응답의 일자 차단 표시를 첫 관측값으로 통일했다. 실제 admission/clock/주문·위험 설정은 그대로다. 독립 리뷰·시험 보완 재승인과 결합201건·격리0, 전체 UTC/KST는 대기다. [원장](docs/reviews/health-observation-2026-09-27.md).
+- B1 decoder 준비 설계의 work-pop 종결과 중첩 old/new 범위를 한정해 독립 재승인했다. 구조 실험 계획은 별도 검토 중이며 실제 source/native/cold RED는 여전히 미실행이다. [후속 순서](docs/operations/engine-delivery-next-2026-09-27.md).
+
 ## 2026-09-27 — OS 종료·회수 증거 개발 완료 (native/운영 승격 아님)
 
 - 기존 pytest receipt와 실제 OS 종료·자식 회수 관측을 결속하는 순수 계약 및 고정 controller/bootstrap을 추가했다. 부모 경로 교체·미완료 cleanup 중 receipt 읽기를 독립 리뷰에서 발견해 RED 재현·수정·재승인했다.
