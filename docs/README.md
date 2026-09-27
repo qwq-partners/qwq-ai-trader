@@ -6,6 +6,8 @@
 
 ### Architecture (아키텍처)
 
+- [Decoder B1b 구성·제어 진행](reviews/decoder-b1b-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-decoder-b1b-construction-control-design.md) · [계획](superpowers/plans/2026-09-27-decoder-b1b-construction-control.md) — 계획 한정 독립 재승인, 구현·인수 미완; B1a 보존·별도 파일명·full B1/native/폐기와 분리
+
 - [Decoder B1a 기본 구조 시험 인수](reviews/decoder-b1a-2026-09-27.md) — 독립 oracle/전이·198건·actual raw12·critical 지적0, 전체 UTC/KST 각6527 passed·feature e41f485 통합; full B1/native/대형 UNRUN과 분리
 - [Runtime 등록 대조 인수](reviews/runtime-admission-2026-09-27.md) — 순수 부품60건·fresh broad 승인, 통합 전체 UTC/KST 각6329 passed; 실제 registry 빈 상태·실행 권한false
 - [Health 관측 정합 인수](reviews/health-observation-2026-09-27.md) — retry leaf 복사·일자 표시 단일 관측, 결합201건·통합 전체 UTC/KST 각6329 passed; 경보 배선/성능 승인과 구분

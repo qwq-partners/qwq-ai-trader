@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **09-27 B1b 후속 착수:** [B1b 원장](docs/reviews/decoder-b1b-2026-09-27.md)과 승인된 구성·제어 전이 계획을 따른다. B1a 다섯 파일 보존, 새 `test_b1b_structure.py`로 수집 충돌을 피하며 source/독립 expected 작성자를 분리한다. 계획 한정 승인이고 구현·RED·인수는 아직 미완이다. private root를 READY/폐기/native/full L3로 승격하지 않는다. main·운영·주문·설정 변경0. 아래는 이전 단계 이력이다.
+
 > **09-27 B1a 개발 인수 완료:** [B1a 원장](docs/reviews/decoder-b1a-2026-09-27.md)이 최신 정본이다. 독립 expected·전이 구현·actual mutant 연결과 critical 지적0 뒤 후보29210dc를 root 단독 전체 UTC6527/644.41s·KST6527/664.16s(각16skip/2xfail/4warnings·exit0·격리0)로 검증했다. 신규 시험198건·의도한 raw12 실패, 통합 코드e41f485는 후보와 비문서 diff0이다. `B1A_PRIMITIVES_OBSERVED_ONLY`이며 제품 decoder·full R2·N4097·native·첫 cold RED·전체 owner 인수가 아니다. 다음은 [전체 전달 순서](docs/operations/engine-delivery-next-2026-09-27.md)의 남은 중간 전이 계약/실행기·runtime 근거다. main·운영·주문·설정 변경0. 아래는 각 시점 이력이다.
 
 > **09-27 자율 후속 진행 중:** [당일 진행 원장](docs/reviews/autonomous-progress-2026-09-27.md)을 먼저 읽는다. 순수 runtime 계약60건과 health 두 수정은 독립 보완·fresh broad 승인(C0/I0/M0) 후 개발 인수를 마쳤다. `18a2196` 코드의 결합610 passed, 전체 UTC6329/641.35s·KST6329/643.67s(각각 기존16skip/2xfail/4warnings·exit0·격리0), compile545·비밀 패턴·보존 지문 확인. 실제 registry는 빈 상태·실행/신뢰 권한false이며 health의 실제 admission/clock은 그대로다. 다음 B1 구조 계획 초안 `d9d57e5`는 R1~R4 변경 요청으로 설계 보완 중이며 구현/실험 승인이 아니다. 과거 원문 미확보/덮어쓰기 한계는 인수 원장에 보존한다. 기존 두 정확한 성능 예외를 새 실패·timeout으로 확대하지 않는다. main·운영·주문·전략·위험·KIS/Toss 설정 변경0. 아래 줄은 각 시점의 이력이다.

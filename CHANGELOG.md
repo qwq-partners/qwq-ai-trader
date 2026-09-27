@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — B1b 구성·제어 전이 계획 한정 승인
+
+- B1a 보존 위에 고유 키 구성·순서 게시·중첩 CONT 인계의 test-only 계획을 고정했다. 별도 critical 리뷰의 pytest 파일명 충돌을 수정하고 tail-index 후속 정리 의무·private 생성자 반환 경계를 보완해 계획 한정 재승인받았다.
+- 구현·실제 RED·전체 검증은 아직 미완이며 private root 구성은 READY/폐기/native/운영 인수가 아니다. [진행 원장](docs/reviews/decoder-b1b-2026-09-27.md). 별도2MiB runner 초안도 구현 승인 전이며 기존 성능 예외·guard·제품 설정은 보존한다.
+
 ## 2026-09-27 — B1a 기본 구조 시험 개발 인수 완료 (제품 decoder 아님)
 
 - 생성·chain·holder·unlink의 시험 전용 전이를 독립 literal oracle와 분리 구현했다. 최초 missing-chain RED를 보존하고 expected 리뷰의 pytest 예약명·foreign operation 관측 공백2건을 수정·재승인했다.
