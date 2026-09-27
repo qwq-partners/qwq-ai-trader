@@ -192,10 +192,25 @@ class _RawPopen(subprocess.Popen):
         """미회수 상태도 Popen의 암묵적 poll/가짜 rc0으로 덮지 않는다."""
 
 
+class _B1Budget:
+    """B1 전체 수명과 최초 cleanup/TERM 끝을 한 번만 고정한다."""
+
+    def __init__(self, started):
+        self.total_end = started + 900
+        self.run_end = self.total_end - 4
+        self.cleanup_end = None
+        self.term_end = None
+
+    def begin_cleanup(self, now):
+        if self.cleanup_end is None:
+            self.cleanup_end = min(now + 3, self.total_end - 1)
+            self.term_end = min(now + 1, self.cleanup_end)
+
+
 class _Owner:
     """관측 상태와 raw wait 기록의 유일한 소유자다."""
 
-    def __init__(self):
+    def __init__(self, *, budget=None):
         self.leader = None
         self.popen = None
         self.returncode = None
@@ -205,13 +220,30 @@ class _Owner:
         self.term = False
         self.kill = False
         self.error = None
-        self.finish_end = None
+        self._budget = budget
+        self.finish_end = None if budget is None else budget.cleanup_end
         self.observation = None
         self.startup_end = None
 
     def reject(self, reason):
         if self.error is None:
             self.error = reason
+
+    def _begin_cleanup(self, now):
+        if self._budget is not None:
+            self._budget.begin_cleanup(now)
+            self.finish_end = self._budget.cleanup_end
+        elif self.finish_end is None:
+            self.finish_end = now + 3
+
+    def _signal_cleanup(self, now):
+        if self._budget is not None:
+            if now >= self._budget.cleanup_end:
+                return
+            term_end = self._budget.term_end
+        else:
+            term_end = self.finish_end - 2
+        self.signal_children(signal.SIGTERM if now < term_end else signal.SIGKILL)
 
     def record(self, pid, status):
         if not (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
@@ -322,22 +354,49 @@ def _preflight():
         os.close(fd)
 
 
-def _probe(deadline, stopped):
-    owner = _Owner()
-    owner.leader = os.fork()
+def _probe(deadline, stopped, *, budget=None, controller_fds=()):
+    if (type(controller_fds) is not tuple
+            or any(type(fd) is not int or fd < 0 for fd in controller_fds)
+            or len(set(controller_fds)) != len(controller_fds)):
+        raise ValueError("PROCESS_PROBE_FDS")
+    owner = _Owner(budget=budget)
+    if budget is not None:
+        now = time.monotonic()
+        if stopped[0] or now >= min(deadline, budget.run_end) or budget.cleanup_end is not None:
+            owner._begin_cleanup(now)
+            return False
+        end = min(deadline, budget.run_end, now + 1)
+    try:
+        owner.leader = os.fork()
+    except OSError:
+        if budget is None:
+            raise
+        owner._begin_cleanup(time.monotonic())
+        return False
     if owner.leader == 0:
-        os._exit(23)
-    end = min(deadline, time.monotonic() + 1)
+        failed_close = False
+        for fd in controller_fds:
+            try:
+                os.close(fd)
+            except OSError:
+                failed_close = True
+        os._exit(125 if failed_close else 23)
+    if budget is None:
+        end = min(deadline, time.monotonic() + 1)
     while time.monotonic() < end and not stopped[0]:
         empty = owner.reap()
         if empty and owner.reaped:
-            return owner.returncode == 23 and owner.error is None and time.monotonic() <= end
+            passed = owner.returncode == 23 and owner.error is None and time.monotonic() <= end
+            if budget is not None and (not passed or stopped[0]):
+                owner._begin_cleanup(time.monotonic())
+                return False
+            return passed
         time.sleep(.005)
-    finish = time.monotonic() + 3
-    while time.monotonic() < finish:
+    owner._begin_cleanup(time.monotonic())
+    while time.monotonic() < owner.finish_end:
         if owner.reap():
             break
-        owner.signal_children(signal.SIGTERM if time.monotonic() < finish - 2 else signal.SIGKILL)
+        owner._signal_cleanup(time.monotonic())
         time.sleep(.005)
     return False
 
@@ -393,6 +452,10 @@ def _receipt(path, bounds=None):
 
 def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
     """각 fd/회수 배치를 제한하여 기한과 다른 파이프를 굶기지 않는다."""
+    if owner._budget is not None:
+        deadline = min(deadline, owner._budget.run_end)
+        if owner._budget.cleanup_end is not None:
+            owner.finish_end = owner._budget.cleanup_end
     if owner.observation is None:
         owner.observation = {
             "streams": {name: {"bytes": 0, "sha256": hashlib.sha256(), "overflow": False}
@@ -427,7 +490,7 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
             owner.reject("startup_error")
         empty = owner.reap()
         if owner.finish_end is None and (owner.reaped or owner.error):
-            owner.finish_end = now + 3
+            owner._begin_cleanup(now)
         for name, fd in tuple(pending.items()):
             try:
                 chunk = os.read(fd, 65536)
@@ -472,7 +535,7 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
                     item["overflow"] = True
                     owner.reject("output_limit")
         if owner.finish_end is None and owner.error:
-            owner.finish_end = time.monotonic() + 3
+            owner._begin_cleanup(time.monotonic())
         if owner.reaped and not pending and owner.wait(-1) == "empty":
             complete = owner.finish_end is not None and time.monotonic() <= owner.finish_end
             if not complete:
@@ -483,7 +546,7 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped):
                 owner.reject("cleanup_error")
                 break
             if not empty:
-                owner.signal_children(signal.SIGTERM if time.monotonic() < owner.finish_end - 2 else signal.SIGKILL)
+                owner._signal_cleanup(time.monotonic())
         time.sleep(.005)
     for name in tuple(pending):
         close_pipe(name)
@@ -507,12 +570,12 @@ def _emergency_cleanup(owner, pipes):
     파이프 관측을 잃은 이 경로는 회수 성공을 인증하지 않는다.
     """
     owner.reject("cleanup_error")
-    if owner.finish_end is None:
-        owner.finish_end = time.monotonic() + 3
+    if owner._budget is not None or owner.finish_end is None:
+        owner._begin_cleanup(time.monotonic())
     while time.monotonic() < owner.finish_end:
         if owner.reap():
             break
-        owner.signal_children(signal.SIGTERM if time.monotonic() < owner.finish_end - 2 else signal.SIGKILL)
+        owner._signal_cleanup(time.monotonic())
         time.sleep(.005)
     descriptors = list(pipes.values())
     pipes.clear()
