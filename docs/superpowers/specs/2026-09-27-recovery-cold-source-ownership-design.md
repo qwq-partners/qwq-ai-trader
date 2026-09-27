@@ -1,7 +1,9 @@
 # Cold source·factory 선행 검증 소유권 설계
 
-2026-09-27 KST. **PLAN_REVIEW_PENDING_ONLY**. 코드·시제품·시험 실행0이며 독립
-Astra/xhigh 설계·계획 검토 전이다. 기준은 `59fa111c6ff56f09a7a69c91a6c9819d7ca02468`.
+2026-09-27 KST. **COLD_SOURCE_OWNERSHIP_DESIGN_REVIEWED_ONLY**이며
+**TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED**다. 후보 `58f6d96`의 독립 Astra/xhigh
+검토는 `APPROVE_PREPARATORY_DESIGN_ONLY`이며 A1 명료화를 반영했다. 실행계획 완성·제품 구현
+승인이 아니고 코드·시제품·시험 실행0이다. 기준은 `59fa111c6ff56f09a7a69c91a6c9819d7ca02468`.
 요청 모델 Astra/high, 실제 모델/effective effort metadata 미노출로 미검증이다.
 
 ## 1. 목적과 진행 권한
@@ -115,6 +117,15 @@ JSON/receipts를 WAL보다 앞에서 검사하는 것은 기존 `_open`의 JSON 
 WAL 변경 전에 발견하는 **명시적 순서 차이**다. 현행 load에서는 receipt 오류가 WAL 후에 드러난다.
 거부를 삭제하지 않고 이 차이의 오류 우선순위/sidecar effect를 별도 parity 인수로 고정한다.
 다중 결함에서는 schema→table→integrity→checkpoint→JSON→receipt의 최초 오류를 유지한다.
+receipt 선검증은 WAL뿐 아니라 factory의 scope/day/대사/prepared 등 preflight보다도 앞서는
+명시 변경이므로, 복수 결함 checkpoint의 최초 거부 사유가 현행 factory와 달라질 수 있다.
+후속 parity 인수는 이 차이의 최초 원인·managed known-error envelope·인계 전 live publication0과
+인계 이후 실패의 destination unavailable/legacy 복귀 금지를 대조하며 기존 legacy 예외 계약을 바꾸지 않는다.
+
+- [ ] invalid receipt와 scope/day/대사/prepared 결함을 각각 결합한 fixture에서 legacy 최초 오류와
+  managed receipt 우선 오류를 구분하고, known-error envelope가 최초 원인을 보존하는지 인수한다.
+- [ ] 인계 전 거부는 live publication0·미인계 자원 책임 유지, 인계 후 실패는 destination unavailable·
+  legacy 복귀 금지라는 경계를 인수한다. capability 인계 자체를 live 게시나 성공 완료로 간주하지 않는다.
 
 동일 read snapshot에는 checkpoint·receipts와 preflight/restore의 입력이 모두 연결된다.
 다른 WAL connection이 중간 commit한 반례에서도 V1 checkpoint+V1 receipts만 소비하고 V2를 섞지
@@ -189,7 +200,9 @@ GC 정책 변경, 이력 pruning, schema/JSON/permission/WAL/빈파일 검증 �
 allocation-time decoder 표현/오류 도메인, 실제 consumer 반납·serialization/identity 호환,
 all-writer barrier 배선과 현재성 증명, cold 성능 인수다. 이들을 임의 prototype API로 채우지 않는다.
 짝 [첫 RED 계획](../plans/2026-09-27-recovery-cold-source-ownership.md)은 실행 전 gate와 한 번의
-반례 실행까지만 고정한다. PLAN_REVIEW_PENDING_ONLY는 문서 작성 종료 상태이며 L3/source/제품 완료가 아니다.
+반례 실행의 예약 범위까지만 고정한다. COLD_SOURCE_OWNERSHIP_DESIGN_REVIEWED_ONLY는 준비 설계
+검토 상태이며 TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED를 유지한다. 실행계획 완성이나
+L3/source/제품 구현 승인이 아니다.
 
 ## 근거 문서
 

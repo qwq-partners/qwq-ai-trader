@@ -15,9 +15,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-27-recovery-cold-source-ownership-design.md` 전체.
 
-**Status:** **PLAN_REVIEW_PENDING_ONLY**. 문서2개만 작성했으며 아래 모든 실행 checkbox는 미착수다.
+**Status:** **COLD_SOURCE_OWNERSHIP_DESIGN_REVIEWED_ONLY**.
+후보 `58f6d96`의 독립 Astra/xhigh 판정은 `APPROVE_PREPARATORY_DESIGN_ONLY`이며 A1 명료화를
+반영했다. 실행계획 완성·제품 구현 승인이 아니고 아래 모든 실행 checkbox는 미착수다.
 사용자 자율 진행 지시는 순수 설계 선행을 선택한 근거다. native/safe-harness gate를 충족하지 않았다.
-추가로 **TEST_ORACLE_DESIGN_UNRESOLVED**다. 현 코드에서 managed operation이 없다는 사실은
+추가로 **TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED**다. 현 코드에서 managed operation이 없다는 사실은
 정적 근거로 이미 확인된다. 없는 미래 속성을 조회해 False를 만들고 실패시키는 시험은 작성하지 않는다.
 아래 node/명령/기대 실패는 예약된 첫 RED 범위이며 allocation-time decoder 계약 이후 실제 소유
 관계를 관측할 seam이 독립 검토되기 전에는 실행 가능한 시험 명세로 취급하지 않는다.
@@ -139,8 +141,19 @@ P4/P5는 현재 제품에 없는 gate/certificate를 시험 mock 성공값으로
 
 ## 설계 이후에도 남는 단계
 
+receipt 선검증은 WAL뿐 아니라 factory scope/day/대사/prepared 등의 preflight보다 앞서므로
+복수 결함 fixture의 최초 오류 순서가 달라지는 명시적 managed 계약 변경이다.
+후속 parity 인수에서는 최초 원인·known-error envelope·인계 전 live publication0과 인계 이후
+실패 의미를 함께 대조하며 기존 legacy 예외 계약 변경으로 확대하지 않는다.
+
+- [ ] receipt 손상과 scope/day/대사/prepared 결함을 각각 결합해 legacy와 managed 최초 오류를
+  별도 기록하고, known-error envelope의 최초 원인 보존을 확인한다.
+- [ ] 인계 전 거부의 live publication0·미인계 자원 책임과 인계 후 실패의 destination unavailable·
+  legacy 복귀 금지를 인수한다. 인계 완료와 live 게시/성공 완료를 구분한다.
+
 allocation-time decoder → preflight/실제 consumer 반납과 tuple·JSON·digest·identity 호환 →
 full managed lifecycle → 원 N5 Task4–15 연결·63셀/전체 회귀·독립 broad 인수 순서를 유지한다.
 이 계획에는 GREEN 구현·기존 시험 수정·성능 재측정·운영 배선 단계가 없다.
-현재 문서 self-review는 §1–8 책임/순서/반례 대응만 확인한다. **PLAN_REVIEW_PENDING_ONLY**로
-coordinator에게 넘기며 최종 critical 승인은 작성자와 다른 Astra/xhigh가 수행해야 한다.
+준비 설계 검토는 **COLD_SOURCE_OWNERSHIP_DESIGN_REVIEWED_ONLY**로 기록하되
+**TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED**를 유지한다. A1 문서 보완은 coordinator가
+대조한 뒤 통합하며, 실제 실행계획·제품 구현의 별도 critical 검토를 대체하지 않는다.
