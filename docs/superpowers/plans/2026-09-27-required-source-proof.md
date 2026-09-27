@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-27-required-source-proof-design.md`와 2026-09-27 사용자의 기존 성능 실패 예외·개발 진행 지시.
 
-**Status:** 사용자 `rㄱ` 구현 승인 후 Task1/2 독립 검토·개발 통합, Task3 포함 관련98건·전체 UTC/KST 각각6014 passed. 최종 Astra 검토 대기이며 전체 source proof·운영 승인은 아니다.
+**Status:** 사용자 `rㄱ` 승인 Task1~3 구현·독립 broad/보완 리뷰·개발 통합 완료. 최종 후보 `2fcca78`의 관련100건·전체 UTC/KST 각각6016 passed, 통합 코드 `eb7cfa7` 관련100건 통과. 아래 1차 부품만 완료했으며 전체 source proof·운영 승인은 아니다. feature 원격 반영 여부는 실제 push 결과와 원격 branch SHA로 확인한다.
 첫 리뷰 P1 세 건/P2 한 건을 반영했고 재리뷰에서 전부 closed·새 지적0이다.
 검토한 계획 SHA256은 `6565eecf8e4d7bc5844df25490d847c897d3ac90f65ed9c97bb9f4edf7b1d651`,
 재리뷰 artifact `plan-rereview.md` SHA256은 `16a20fa80204afc118357e41206f6efb8e1196e33b364900449b6a6307fe0645`다.
@@ -214,7 +214,7 @@ wrapper는 시작 전 실제 `TZ`가 `UTC` 또는 `Asia/Seoul`이며 context와 
   원시 실패/미완료는 모두 보고하고 알려진 이력의 개발 예외와 실제 이번 결과를 구분한다. 이력 면제로 pytest PASS를 주장하지 않는다.
   이번 UTC에 새 실패/미완료가 있으면 KST와 자동 완료·통합은 중단한다. 새 관측의 정확한 원인/범위를
   별도로 처분하기 전 기존 두 관측과 같은 예외로 간주하지 않는다. 이는 과거 두 관측만으로 개발 착수를 다시 막는 조건이 아니다.
-- [ ] **Step 5 — 최종 See:** 아래 완료 조건을 확인하고 Astra/xhigh 전체 변경 리뷰, 문서·비밀정보 검사 후 feature commit/push.
+- [x] **Step 5 — 최종 See:** 아래 완료 조건 확인, Astra/xhigh 전체 변경 리뷰·Sol/high 경미 보완 재리뷰 승인, 문서·비밀정보 검사 후 feature에서 마감. main/운영 미변경.
 
 ## 실행 명령과 최종 See
 
@@ -235,10 +235,10 @@ timeout --signal=TERM 180s env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=UTC PYTHOND
 이번 실행의 첫 실패/미확정/인프라 오류에서 후속 workload와 자동 완료·통합을 중단하며 해당 task를 성공으로 보고하지 않는다.
 성능 실패가 다시 나오면 원시 결과는 보존하고 이미 승인된 관측과 동일시하지 않는다.
 
-- [ ] 네 expected 슬롯과 receipt schema가 일치하고 정상 lane 차이를 잘못 거부하지 않음.
-- [ ] 원시 pytest 종료 코드 불변, 성능 예외 자동 적용0, guard·수집·phase 오류 거부.
-- [ ] 기존 verify/workflow/conftest/src/원본 시험·source/sequence 후보 지문 불변.
-- [ ] 새 파일 집중 RED→GREEN, 전체시험의 실제 결과·미완료·예외를 각각 보고.
-- [ ] 최종 독립 리뷰와 모든 보류 사항 처분 기록. 모델 metadata 미노출은 미검증으로 표기.
-- [ ] 관련 문서·secret scan·diff check·파일 allowlist 확인. 승인된 코드/문서만 feature commit/push.
-- [ ] 전체 source proof·runtime qualification·원격 CI·main·운영은 미완료로 인계하고 다음 단계의 별도 계획으로 연결.
+- [x] 네 expected 슬롯과 receipt schema가 일치하고 정상 lane 차이를 잘못 거부하지 않음.
+- [x] 원시 pytest 종료 코드 불변, 성능 예외 자동 적용0, guard·수집·phase 오류 거부.
+- [x] 기존 verify/workflow/conftest/src/원본 시험·source/sequence 후보 지문 불변.
+- [x] 새 파일 집중 RED→GREEN, 전체시험의 실제 결과·미완료·예외를 각각 보고.
+- [x] 최종 독립 리뷰와 모든 보류 사항 처분 기록. 모델 metadata 미노출은 미검증으로 표기.
+- [x] 관련 문서·secret scan·diff check·파일 allowlist 확인. 승인된 코드/문서만 feature에 기록하며 push는 원격 SHA로 별도 확인.
+- [x] 전체 source proof·runtime qualification·원격 CI·main·운영은 미완료로 인계하고 다음 단계의 별도 계획으로 연결.

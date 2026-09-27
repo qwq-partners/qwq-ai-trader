@@ -1,10 +1,11 @@
 # QWQ AI Trader - Changelog
 
-## 2026-09-27 — 오프라인 시험 증거 수집·검사·CLI 후보
+## 2026-09-27 — 오프라인 시험 증거 수집·검사·CLI 개발 완료
 
 - 사용자 구현 승인 후 세 새 개발 도구와 대응 시험을 작성했다. 실제 pytest phase/rc/guard 관측을 종료 반환 후 발행하고, 독립 expected와 네 lane×시간대 receipt를 엄격히 대조한다. 결과는 항상 오프라인 범위·`production_eligible=false`다.
 - Task1 독립 리뷰의 malformed JSON·빈 inventory 승인 결함2건을 RED로 재현·수정·재승인했다. Task2는 별도 Astra 검토를 통과했다. Task3 CLI는 잘못된 NUL 경로를 고정 오류로 처리하며 실제 생산자→검사기 인수를 포함한다.
-- 관련98건·격리0, UTC/KST 각각 전체6014 passed/기존16 skipped/2 xfailed·격리0. 최초 UTC의 fake-SSH fixture `HOME` 누락은 임시 더미 키 경로 입력으로만 보정했고 최초 실패를 별도 보존한다. 최종 broad 리뷰 대기이며 [구현 원장](docs/reviews/verification-evidence-2026-09-27.md)이 현재 상태 정본이다.
+- 최종 broad 리뷰는 Critical/Important0, Minor 보완 뒤 scoped 재리뷰도 새 지적0으로 승인했다. 완료 session의 null 종료 코드 거부와 원장 exact node/SHA 두 건의 합성 실패 회귀를 보강했다. 기존 dependency/fork4경고는 숨기지 않고 후속 유지보수로 남긴다.
+- 최종 후보 `2fcca78`: 관련100건·격리0, UTC/KST 각각 전체6016 passed/기존16 skipped/2 xfailed/4 warnings·격리0. 통합 코드 `eb7cfa7`는 시험 후보와 비문서 tracked 파일 전체가 동일하며 통합 후100건도 통과했다. 최초 UTC의 fake-SSH fixture `HOME` 누락은 임시 더미 키 경로 입력으로만 보정했고 최초 실패를 별도 보존한다. [구현 원장](docs/reviews/verification-evidence-2026-09-27.md)이 현재 상태 정본이다.
 - 기존 성능 예외·원시 실패·시험 단언·source/sequence 후보·제품/CI/설정/main/운영은 변경하지 않는다. native qualification·실제 OS 결과 controller·조건을 결속한 skip/xfail 허용·원격 필수 gate는 후속 범위다.
 
 ## 2026-09-27 — 기존 성능 실패의 개발 예외·오프라인 검증 부품 계획

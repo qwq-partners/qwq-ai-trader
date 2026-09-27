@@ -6,8 +6,8 @@
 
 ### Architecture (아키텍처)
 
-- [L3 오프라인 검증 도구 구현 원장](reviews/verification-evidence-2026-09-27.md) — 실제 수집기·네 슬롯 검사·CLI 후보, 원시 RED/GREEN·독립 검토·전체 인수 현황과 사용법; 전체 엔진/운영 승인 아님
-- [L3 오프라인 검증 부품 실행계획](superpowers/plans/2026-09-27-required-source-proof.md) — 사용자 구현 승인, Task1/2 검토·개발 통합 및 Task3 인수 중; [기존 성능 실패 개발 예외](reviews/recovery-performance-exceptions-2026-09-27.json) 불변
+- [L3 오프라인 검증 도구 구현 원장](reviews/verification-evidence-2026-09-27.md) — 세 부품 개발·독립 검토 완료, 최종 UTC/KST 각6016 passed·통합 후 관련100 passed, 사용법·후속 순서; 전체 엔진/운영 승인 아님
+- [L3 오프라인 검증 부품 실행계획](superpowers/plans/2026-09-27-required-source-proof.md) — 사용자 승인 Task1~3 구현·검증·개발 통합 완료; [기존 성능 실패 개발 예외](reviews/recovery-performance-exceptions-2026-09-27.json) 불변
 - [L3 별도 필수 source proof 계약 설계](superpowers/specs/2026-09-27-required-source-proof-design.md) — 기존 전체시험 + 조건부 runtime 증명 + 동일 실행 최종 gate; 오프라인 부품과 최종 CI 계약 구분, qualified runtime0·운영 미승격
 - [N5 복구 projection·FIFO 진행 원장](reviews/recovery-projection-progress-2026-09-27.md) — L1/L2 구조 한정 승인·관련757 passed; 새 controlled5k13.024ms 실패·6셀 미실행·trace 미확정; Task2/실제 owner 통합 차단
 - [N5 L3 취소·자원 수명 설계 제안](superpowers/specs/2026-09-27-recovery-build-lifecycle-design.md) — 논리 취소/물리 정리/결과 인계·source lease·cleanup proof; 독립 제안 한정 승인, capture/표현 타당성·구현 미완
