@@ -1,9 +1,11 @@
 # Decoder B1 구조 실험 설계 — B1a 원시 전이 제안
 
-2026-09-27 KST. **B1A_PARTIAL_PLAN_PROPOSED — 독립 재검토 전 Do/실험0.**
+2026-09-27 KST. **APPROVE_B1A_PLAN_ONLY — 독립 부분 계획 승인, 실행 인수 아님.**
 원525줄 B1 문서는 `d9d57e533582b9d2183a145c14f31c2fea313b2b`에 보존한다.
 요청 gpt-6-astra/high, actual model/effective effort metadata 미노출=unverified,
-fallback0·재위임0. 작성자는 승인자가 아니다. R1–R4 처분 제안이며 원 B1 인수 완료가 아니다.
+fallback0·재위임0. 작성자는 승인자가 아니다. 별도 Astra/xhigh가 `da673af`를 부분 승인했고,
+coordinator는 비차단 N1(환경 미설정 기본값)을 명문화했다. [검토 원장](../../reviews/decoder-b1a-2026-09-27.md).
+R1–R4의 부분 처분이며 원 B1 인수 완료가 아니다.
 
 ## 1. 단계 분리와 권한
 
@@ -14,8 +16,9 @@ CONT/end/lookup/ENTRY·ITEM 게시/duplicate/retire/known_failure/finish/dispose
 N4097도 후속 gate다. B1a 성공의 최대 표현은 `B1A_PRIMITIVES_OBSERVED_ONLY`이며
 원 `S_STRUCTURAL_OBSERVED_ONLY`가 아니다. 이 분리는 개발 순서이며 원 인수를 축소해 통과한 것이 아니다.
 
-현재는 두 문서와 coordinator 지정 보고서만 작성한다. 원 R1–R4 전체를 읽은 독립 critical reviewer의
-재검토와 coordinator의 정확한 commit·파일 dispatch 전 코드 작성/수집/실험0이다.
+계획 작성·검토에서는 두 문서와 coordinator 지정 보고서만 작성했다. 원 R1–R4 전체를 읽은
+독립 critical reviewer의 부분 승인을 받았으며, coordinator의 정확한 commit·파일 dispatch
+전 코드 작성/수집/실험0이다. 이후도 B1a의 명시 범위만 허용한다.
 사용자 자율 위임은 routine 확인을 대체하며 native/제품/운영 권한을 늘리지 않는다.
 `TEST_ORACLE_DESIGN_UNRESOLVED / RED_DEFERRED`, `native_qualified=false`,
 `source_execution_permitted=false`, qualified runtime0, source108 call-phase0 유지.
@@ -37,7 +40,9 @@ helper를 답안으로 사용하지 않는다. 두 작성자 dispatch 전에 spe
 기존 src/tests/helper/proofs/guard/CI/config/registry 수정0, frozen source/sequence 복사·import0.
 import closure는 stdlib weakref/dataclasses/typing, sibling loader의 importlib.util/sys/pathlib,
 pytest 및 다섯 파일뿐이다. test_structure만 os.environ의 고정 `QWQ_B1_RAW_MUTANT` 값을
-읽을 수 있다(짝 계획의 raw 대조 선택, 파일/실행/운영 환경 접근0). 기존 conftest 격리를 유지한다.
+읽을 수 있다(짝 계획의 raw 대조 선택, 파일/실행/운영 환경 접근0).
+미설정은 `none`으로 처리하며 명시적으로 주어진 미허용 값만 harness 오류다.
+기존 CI/직접 pytest에 이 변수를 필수화하지 않는다. 기존 conftest 격리를 유지한다.
 SQL/native/외부 API0.
 observer의 scalar list/dict/set은 허용하되 subject graph를 collection/frame/generator에 숨기지 않는다.
 

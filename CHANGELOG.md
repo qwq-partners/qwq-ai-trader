@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-27 — B1a 원시 구조 부분 계획 승인 (구현 인수 아님)
+
+- full B1 초안의 생성 인계 모순·중간 전이 누락·실행기/대형 예산 지적을 받아 B1a EMPTY cell 생성/chain/holder/unlink 단계로 분리했다. 정확한 전이표·독립 slot oracle·실제 변이/원시 실패 절차를 고정했다.
+- 새 독립 Astra/xhigh가 `da673af`를 `APPROVE_B1A_PLAN_ONLY`로 승인했다(차단0). 미설정 raw selector의 정상 기본값 자문을 명문화했다. full R2는 OPEN, N4097·2MiB runner·전체 예산은 UNRUN이며 source/native/cold 인수를 부여하지 않는다. [원장](docs/reviews/decoder-b1a-2026-09-27.md).
+
 ## 2026-09-27 — runtime 순수 계약·health 관측 정합 개발 인수 완료
 
 - 빈 실제 registry와 strict subject/registry/observation 대조를 추가했다. 독립 리뷰의 직접 dict 크기·binding 키·독립 fixture·깊이 및 invalid mode 인수를 보완, 최종60건·격리0과 한정 재승인 후 통합했다. 실행/신뢰/native/운영 권한은 항상 false다. [원장](docs/reviews/runtime-admission-2026-09-27.md).

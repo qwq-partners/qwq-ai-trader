@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **09-27 다음 단계:** [B1a 원장](docs/reviews/decoder-b1a-2026-09-27.md)의 작은 생성/chain/holder/unlink 계획만 새 독립 Astra/xhigh가 승인했다(`da673af`, 차단0·기본값 자문 명문화). coordinator dispatch로 최소 subject→다른 작성자의 실제 slot RED→전이/변이→독립 리뷰/전체 검증 순서로 진행한다. full R2·대형·native·첫 cold RED/전체 owner는 여전히 미완이다. 아래 runtime/health 인수와 원 full 초안 변경 요청은 각 시점 이력이다.
+
 > **09-27 자율 후속 진행 중:** [당일 진행 원장](docs/reviews/autonomous-progress-2026-09-27.md)을 먼저 읽는다. 순수 runtime 계약60건과 health 두 수정은 독립 보완·fresh broad 승인(C0/I0/M0) 후 개발 인수를 마쳤다. `18a2196` 코드의 결합610 passed, 전체 UTC6329/641.35s·KST6329/643.67s(각각 기존16skip/2xfail/4warnings·exit0·격리0), compile545·비밀 패턴·보존 지문 확인. 실제 registry는 빈 상태·실행/신뢰 권한false이며 health의 실제 admission/clock은 그대로다. 다음 B1 구조 계획 초안 `d9d57e5`는 R1~R4 변경 요청으로 설계 보완 중이며 구현/실험 승인이 아니다. 과거 원문 미확보/덮어쓰기 한계는 인수 원장에 보존한다. 기존 두 정확한 성능 예외를 새 실패·timeout으로 확대하지 않는다. main·운영·주문·전략·위험·KIS/Toss 설정 변경0. 아래 줄은 각 시점의 이력이다.
 
 > **source 수집·격리 경계 개발 완료(2026-09-27):** [진행 원장](docs/reviews/source-proof-boundaries-2026-09-27.md)이 최신 정본이다. 후보 `cc18b9c`에서 원 helper·23개 시험/핵심 판정 함수 보존, 독립 source108/관련31 목록과 실제 수집 exact 일치, 기본6034 보존+73추가/source0을 확인했다. 집중168 passed, 전체 UTC/KST 각각6089 passed·기존16 skipped/2 xfailed/4 warnings·격리0, 독립 broad 지적0이다. `SOURCE_BOUNDARIES_VALIDATED`는 개발 경계 한정이며 source108 call-phase/native 실행0·qualified runtime0이다. 다음은 실제 OS 종료·회수 결속. 기존 source/sequence 후보·제품/CI/main/운영·주문/설정은 무변경이다. 아래 안내는 각 시점 이력이다.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > or superpowers:executing-plans to implement this plan task-by-task.
-> 현재 문서 재검토만 허용한다. 아래 checkbox 모두 미착수, 코드 작성/수집/실험0.
+> B1a 부분 계획만 승인됐다. 실제 코드/시험 진행은 아래 checkbox와 인수 원장에서 구분한다.
 
 **Goal:** EMPTY cell allocation/chain/holder/unlink만 독립 actual-slot oracle로 검증할
 B1a 부분 Do를 준비한다. full B1/N4097 인수 완료가 아니다.
@@ -15,9 +15,10 @@ full semantic/CONT/retire/dispose와 N4097은 별도 승인 gate에 남긴다.
 
 **Spec:** `docs/superpowers/specs/2026-09-27-decoder-b1-structural-probe-design.md` 전체.
 
-**Status:** `B1A_PARTIAL_PLAN_PROPOSED`, 독립 reviewer 재검토 대기.
+**Status:** `APPROVE_B1A_PLAN_ONLY`, 새 독립 Astra/xhigh가 `da673af`에 차단0·자문N1로 승인했다.
+coordinator가 N1 기본값을 명문화했다. [검토 원장](../../reviews/decoder-b1a-2026-09-27.md).
 원525줄은 `d9d57e533582b9d2183a145c14f31c2fea313b2b`에 보존한다.
-R1–R4 보완 제안이며 R2 full CLOSED/full S GO를 주장하지 않는다.
+R1–R4의 부분 처분이며 R2 full CLOSED/full S GO를 주장하지 않는다.
 
 ## Global Constraints
 
@@ -44,9 +45,10 @@ R1–R4 보완 제안이며 R2 full CLOSED/full S GO를 주장하지 않는다.
 
 ## 0. 승인·소유권과 미래 API
 
-- [ ] 원 독립 Astra/xhigh reviewer가 R1–R4와 두 문서를 재검토한다. 원 reviewer를 재개할 수
+- [x] 원 독립 Astra/xhigh reviewer가 R1–R4와 두 문서를 재검토한다. 원 reviewer를 재개할 수
   없으면 coordinator가 원 리뷰 전체를 제공한 새 독립 Astra/xhigh reviewer로 대체하고 기록한다.
-  요청 최대 승인명=`APPROVE_B1A_PLAN_ONLY`; 현재 승인받았다는 뜻이 아니다.
+  실제로 원 reviewer의 retention 이탈로 새 reviewer가 전체 원 지적과 최종 두 문서를 읽고
+  `APPROVE_B1A_PLAN_ONLY`를 부여했다. 같은 공급자 독립 검토이며 cross-provider가 아니다.
 - [ ] coordinator가 승인 spec/plan SHA·파일·node 목록을 고정해 dispatch한다.
   subject=Astra/high 25분, 다른 observer 작성자=Astra/high 30분,
   독립 critical reviewer=Astra/xhigh 20분, 각 fanout0/fallback0.
@@ -206,6 +208,9 @@ subject의 literal predicate를 실행한다(항상 수집, skip0). 그 시험�
 `QWQ_B1_RAW_MUTANT`를 읽으며 prefix가 정상에는 `none`, raw에는 아래 literal name을 전달한다.
 허용되지 않은 값은 harness 오류이며 RED가 아니다. name으로 경로/import/callable을 고르지 않고
 literal 분기에서 `install_mutant`를 호출한다. inherited 환경은 env-i로 제거한다.
+미설정은 `os.environ.get("QWQ_B1_RAW_MUTANT", "none")`처럼 `none`으로 처리한다.
+명시적으로 주어진 미허용 값만 오류다. 일반 CI/직접 pytest에서도 미설정 정상 경로를 검증하며,
+이 새 변수 때문에 기존 CI/config를 변경하거나 정상 실행을 막지 않는다.
 
 | raw name | 고정 작은 action fixture / 정상 predicate |
 | --- | --- |
@@ -259,5 +264,6 @@ positive 방어 대조, double_write_restore는 source 한계 대조이며 이 r
 ## 문서 자체 종료 조건
 
 두 문서 diff·전이/API/spec coverage·공백·비밀 패턴·allowlist를 확인해 local commit만 한다.
-현재 pytest/수집/import/SQL/native/실험0·push0. 독립 재승인 전 Task1 코드 작성0.
-R1/B1a R2/R3 profile·UNRUN/R4 분리를 재검토에 넘기며 full R2는 미완으로 유지한다.
+계획 작성·검토 당시 pytest/수집/import/SQL/native/실험0·저자 push0이었다.
+coordinator는 독립 부분 승인과 N1 명문화 뒤 정확한 dispatch로 Task1부터 진행한다.
+R1/B1a R2/R3 profile·UNRUN/R4 분리만 수용됐으며 full R2는 미완으로 유지한다.

@@ -1,6 +1,6 @@
 # 09-27 자율 후속 개발 — 진행·인계 원장
 
-갱신: 2026-09-27 17:17 KST, runtime/health 개발 인수·코드 push 완료·B1 다음 설계 보완 중. **전체 엔진 완료·운영 전환 보고가 아니다.**
+갱신: 2026-09-27 17:36 KST, runtime/health push 완료·B1a 부분 계획 승인. **전체 엔진 완료·운영 전환 보고가 아니다.**
 사용자 요청은 18:00 KST 이후 복귀 전까지 승인 범위의 후속을 순차 진행하는 것이다.
 일상적인 재확인은 생략하되 새 실행 권한이나 증거 없는 안전 게이트를 임의로 만들지 않는다.
 
@@ -15,6 +15,8 @@
   두 전체 검증과 fresh broad 승인 뒤 이 코드를 feature에 push했고 `git ls-remote`로 정확히
   같은 SHA를 확인했다. 아래 마감 문서는 그 뒤 같은 feature의 별도 commit으로 인계한다.
   `af09876`은 앞 OS 단계의 원격 확인 이력이며 현재 소스 HEAD와 구분한다.
+- runtime/health 마감 문서도 `be9196c5e9cff4e78e2cc3026191b656c35dfeb4`로 push·원격 대조를 완료했다.
+  후속 B1a 계획 문서 통합은 코드/시험이 아니라 다음 부분 Do의 승인 기록이다.
 - main·운영·주문·전략·위험 설정·KIS/Toss 자격·서비스는 이번 후속에서 변경하지 않았다.
   main 작업트리의 기존 `config/evolved_overrides.yml` 변경은 읽거나 편집하지 않고 보존했다.
 - 기존 두 정확한 성능 관측의 개발 예외는 유지한다. 새 실패·timeout·수명/정합성 결함을
@@ -29,7 +31,7 @@
 | 실제 OS 종료·회수 결속 | 독립 리뷰 보완·전체 UTC/KST 각각6265 passed·문서/push 완료 | 개발 범위 한정 유지 |
 | runtime 등록 대조 | 최종60건·통합 결합610건·fresh broad 승인·전체 UTC/KST 각각6329 passed | 개발 인수 완료, 실제 registry 빈 상태·실행 허가false 유지 |
 | cold source 소유권 | 준비 설계 한정 독립 승인·문서 통합 | native/decoder/소비자·독립 할당 관측 기준 미해결 |
-| decoder 호환 선택 | 표현/준비 설계만 독립 승인; 별도 실행계획 d9d57e5는 R1~R4 변경 요청 | B1a 원시 전이 분리 설계 보완·재리뷰; 첫 cold RED 여전히 보류 |
+| decoder 호환 선택 | d9d57e5 변경 요청 뒤 da673af의 B1a 부분 계획 독립 승인 | 최소 subject→독립 actual-slot RED→전이 구현/리뷰; full B1/첫 cold RED는 보류 |
 | health 재시도 목록 복사 | 독립 승인·M1 시험 보완 재승인·통합 전체 UTC/KST 각각6329 passed | 개발 인수 완료; bounded health/경보 배선과 별개 |
 | health 일자 표시 일관성 | 독립 승인·통합 전체 UTC/KST 각각6329 passed | 실제 admission 무변경·요청 간 fresh 관측 유지 |
 
@@ -66,8 +68,9 @@ actual model/effective effort 미노출은 미검증이다. 같은 공급자 독
    main 통합·운영 전환은 이 개발 인수의 일부가 아니다.
 2. B1 구조 실행계획 초안은 생성 반환과 new slot 인계의 모순, CONT 등 중간 전이 누락,
    2MiB/stream 실행기 부재, N4097 전수 관측/반복 예산을 독립 리뷰에서 지적받았다.
-   별도 Astra/high가 allocation/chain/holder/unlink의 B1a 부분 계획으로 보완하고
-   원 독립 Astra/xhigh가 재검토한다. 승인 전 코드·시험0이다.
+   별도 Astra/high가 allocation/chain/holder/unlink의 B1a 부분 계획으로 보완했고,
+   원 reviewer retention 이탈로 새 독립 Astra/xhigh가 원 지적 전체와 보완본을 읽고 부분 승인했다.
+   [B1a 원장](decoder-b1a-2026-09-27.md)에 따라 정확한 파일/commit dispatch 뒤 코드·시험을 시작한다.
 3. 소형 부분 계획이 승인돼도 전체 B1·CONT/semantic 교체·retire·대형 인수는 완료가 아니다.
    원 source/native 실행·첫 cold RED는 계속 별도 근거가 필요하다. 없는 실행기를 가정하거나
    skip/deselect/표본 축소·과거 성능 예외로 새 실패를 통과시키지 않는다.

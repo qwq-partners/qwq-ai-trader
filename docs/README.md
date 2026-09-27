@@ -6,6 +6,7 @@
 
 ### Architecture (아키텍처)
 
+- [Decoder B1a 부분 계획 인수](reviews/decoder-b1a-2026-09-27.md) — 생성/chain/holder/unlink만 독립 계획 승인, 구현·시험 인수와 full B1/native/대형 UNRUN은 분리
 - [Runtime 등록 대조 인수](reviews/runtime-admission-2026-09-27.md) — 순수 부품60건·fresh broad 승인, 통합 전체 UTC/KST 각6329 passed; 실제 registry 빈 상태·실행 권한false
 - [Health 관측 정합 인수](reviews/health-observation-2026-09-27.md) — retry leaf 복사·일자 표시 단일 관측, 결합201건·통합 전체 UTC/KST 각6329 passed; 경보 배선/성능 승인과 구분
 - [전체 엔진의 다음 전달 순서](operations/engine-delivery-next-2026-09-27.md) — 당일 완료 부품과 native/cold/owner/실제 소비자/운영 전환의 미완 경계

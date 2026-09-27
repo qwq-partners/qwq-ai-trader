@@ -31,8 +31,9 @@
 없는 상태를 더 많은 합성 테스트로 해결한 것으로 세지 않는다. 설치·다운로드·native 실행
 등 새 권한이 필요하면 필요한 대상과 근거를 특정해 요청하고 해당 실행은 멈춘다.
 
-현재 B1 실행계획 초안 d9d57e5는 독립 R1~R4 변경 요청 상태다. 생성·chain·holder·unlink의
-작은 B1a 전이를 별도 부분 단계로 고정하는 설계 보완을 진행한다. 이것은 ordinary Python
+원 B1 실행계획 초안 d9d57e5는 독립 R1~R4 변경 요청을 받았다. 이후 da673af의 생성·chain·holder·
+unlink B1a 부분 계획만 새 독립 reviewer가 승인했다. [B1a 원장](../reviews/decoder-b1a-2026-09-27.md)의
+최소 subject→독립 RED→전이/변이→전체 검증 순서로 진행한다. 이것은 ordinary Python
 반환 후 slot 관측이며 원 native A, 전체 decoder, 최초 cold RED 또는 단계3 완료가 아니다.
 승인된2MiB/stream 실행기와 대형 전수 관측 예산이 없어 N4097은 계획 단계부터 UNRUN이다.
 
