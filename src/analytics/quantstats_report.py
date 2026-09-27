@@ -75,7 +75,7 @@ def _load_kospi_benchmark(start, end):
 
     try:
         import FinanceDataReader as fdr
-        df = fdr.DataReader("KS11", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+        df = fdr.DataReader("YAHOO:^KS11", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
         if df is not None and not df.empty:
             bench = df["Close"].pct_change().dropna()
             bench.index = pd.to_datetime(bench.index)

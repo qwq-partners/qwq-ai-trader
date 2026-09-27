@@ -42,15 +42,20 @@ def frame(last="2026-09-22", *, rising=True):
     return pd.DataFrame({"Close": values}, index=pd.bdate_range(end=last, periods=60))
 
 
-def load(monkeypatch, screener, primary, fallback=None):
+def load(monkeypatch, screener, ks11, yahoo=None):
+    """원천 순서는 Yahoo ^KS11 → KS11 (2026-09-28). 호출된 원천을 순서대로 돌려준다."""
+    calls = []
+
     def fetch(symbol, start_date):
+        calls.append(symbol)
         if symbol == "KS11":
-            return primary
+            return ks11
         if symbol == "YAHOO:^KS11":
-            return fallback
+            return yahoo
         raise AssertionError(f"예상 밖 데이터 소스: {symbol}")
     monkeypatch.setattr(screener, "_fetch_fdr_data", fetch)
     asyncio.run(screener._load_benchmark_index())
+    return calls
 
 
 @pytest.mark.parametrize("rising", [True, False])
@@ -122,8 +127,9 @@ def test_holiday_bar_is_not_a_market_session(monkeypatch, screener):
     assert screener.get_benchmark_status()["status"] == "unknown"
 
 
-def test_stale_primary_uses_valid_yahoo_history(monkeypatch, screener):
-    load(monkeypatch, screener, frame("2026-09-17"), frame(rising=False))
+def test_valid_yahoo_is_used_without_reading_stale_ks11(monkeypatch, screener):
+    calls = load(monkeypatch, screener, frame("2026-09-17"), frame(rising=False))
+    assert calls == ["YAHOO:^KS11"]
     assert screener.get_market_regime() == "bear"
     status = screener.get_benchmark_status()
     assert status["status"] == "fresh"
@@ -149,12 +155,14 @@ def test_all_sources_fail_without_using_stock_0001(monkeypatch, screener):
 
 
 @pytest.mark.parametrize("fallback", ["stale", "future", "invalid"])
-def test_yahoo_fallback_must_pass_same_validation(monkeypatch, screener, fallback):
+def test_yahoo_must_pass_same_validation(monkeypatch, screener, fallback):
     data = frame("2026-09-17" if fallback == "stale" else "2026-09-28")
     if fallback == "invalid":
         data = frame()
         data.iloc[-1, 0] = float("nan")
-    load(monkeypatch, screener, None, data)
+    calls = load(monkeypatch, screener, None, data)
+    # 거부된 Yahoo 뒤에 KS11 을 시도하고, KS11 결측이 Yahoo 의 거부 근거를 덮지 않는다
+    assert calls == ["YAHOO:^KS11", "KS11"]
     assert screener._kospi_closes == []
     assert screener.get_market_regime() == "neutral"
     assert screener.get_benchmark_status()["status"] == {

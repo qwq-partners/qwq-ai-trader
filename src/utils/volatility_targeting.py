@@ -23,7 +23,7 @@ import asyncio
 import json
 import math
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Tuple
 
@@ -40,7 +40,8 @@ VOL_THRESHOLD = 25.0
 VOL_TARGET = 25.0
 MIN_MULT = 0.4           # 최악 국면에서도 사이즈 40%는 유지 (전면 차단은 하지 않는다)
 LOOKBACK_DAYS = 20       # 실현변동성 창
-FETCH_DAYS = 70          # FDR 조회 여유 (주말/공휴일 포함)
+FETCH_DAYS = 70          # 변동성 계산에 쓰는 최근 일봉 수
+FETCH_START_DAYS = 200   # 조회 시작일 여유 (달력일 — 공용 검증의 50행 이상 요건 충족)
 STALE_LIMIT_DAYS = 3     # 캐시 이 이상 노후 시 무개입(1.0)
 RET_OUTLIER_ABS = 0.12   # 일수익률 |12%| 초과 = 데이터 오류로 간주하고 제외
                          # (지수 서킷브레이커 영역 — 실측: FDR 069500에 +24.2%/일 오염 확인)
@@ -67,18 +68,24 @@ async def refresh_vol_state() -> bool:
     if not _enabled():
         return
     try:
-        import FinanceDataReader as fdr
-        import pandas as pd  # noqa: F401 (fdr 의존)
+        from src.utils.kospi_benchmark import SOURCES, load_kospi_daily
+        from src.utils.session import KST
 
-        def _fetch():
-            # KS11(KRX 지수 API)이 간헐 차단됨(LOGOUT 실측) → KODEX 200 폴백
-            try:
-                df = fdr.DataReader("KS11")
-            except Exception:
-                df = fdr.DataReader("069500")
-            return df["Close"].tail(FETCH_DAYS)
-
-        closes = await asyncio.to_thread(_fetch)
+        # KOSPI 원천(Yahoo ^KS11 → KS11)이 모두 신선하지 않을 때만 KODEX 200 최후 폴백
+        # (변동성이 KOSPI 보다 높아 더 보수적). 세 원천 모두 같은 신선도 검증을 받는다.
+        now = datetime.now(KST)
+        start = (now - timedelta(days=FETCH_START_DAYS)).strftime("%Y-%m-%d")
+        closes, status = await asyncio.to_thread(
+            load_kospi_daily, start, now, sources=SOURCES + ("069500",)
+        )
+        if closes is None:
+            logger.warning(
+                f"[변동성타게팅] 신선한 지수 일봉 없음 — 갱신 생략 "
+                f"(status={status['status']}, source={status['source']}, "
+                f"마지막 봉={status['last_bar_date']}, reason={status['reason']})"
+            )
+            return False
+        closes = closes.tail(FETCH_DAYS)
         rets = closes.pct_change().dropna()
         # 데이터 오류 가드 — 오염된 하루가 변동성을 폭증시켜 최대 축소를 오발동시킨다
         _n_outlier = int((rets.abs() > RET_OUTLIER_ABS).sum())
@@ -102,6 +109,8 @@ async def refresh_vol_state() -> bool:
             "date": date.today().isoformat(),
             "realized_vol": round(realized, 2),
             "mult": round(mult, 3),
+            "last_bar_date": status["last_bar_date"].isoformat(),
+            "source": status["source"],
         }
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _CACHE_FILE.write_text(json.dumps(state, ensure_ascii=False))
@@ -109,6 +118,7 @@ async def refresh_vol_state() -> bool:
         _mem_cache.update(state)
         logger.info(
             f"[변동성타게팅] KOSPI 20일 실현변동성 {realized:.1f}% "
+            f"(source={status['source']}, 마지막 봉 {status['last_bar_date']}) "
             f"(임계 {VOL_THRESHOLD:.0f}%) → 모멘텀 사이징 ×{mult:.2f}"
         )
         return True

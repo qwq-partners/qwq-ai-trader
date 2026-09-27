@@ -15,7 +15,14 @@ from typing import Any, Dict, List, Optional, Set
 from loguru import logger
 
 from src.indicators.technical import TechnicalIndicators
-from src.utils.session import KST, is_kr_market_holiday
+from src.utils.session import KST
+from src.utils.kospi_benchmark import (
+    SOURCES as KOSPI_SOURCES,
+    benchmark_date_status,
+    fetch_failed_status,
+    keep_failure,
+    validate_benchmark,
+)
 
 
 @dataclass
@@ -899,20 +906,8 @@ class SwingScreener:
 
     @staticmethod
     def _benchmark_date_status(last_bar_date: Optional[date], now: datetime):
-        """당일 부분봉 또는 직전 한국 거래일 봉만 허용한다."""
-        if not isinstance(last_bar_date, date):
-            return "unknown", "last_bar_date_unknown"
-        today = now.date()
-        if last_bar_date > today:
-            return "future", "last_bar_in_future"
-        if is_kr_market_holiday(last_bar_date):
-            return "unknown", "last_bar_not_kr_session"
-        previous = today - timedelta(days=1)
-        while is_kr_market_holiday(previous):
-            previous -= timedelta(days=1)
-        if last_bar_date < previous:
-            return "stale", "older_than_previous_kr_session"
-        return "fresh", "current_day_partial" if last_bar_date == today else "previous_kr_session"
+        """당일 부분봉 또는 직전 한국 거래일 봉만 허용한다 (공용 모듈 위임)."""
+        return benchmark_date_status(last_bar_date, now)
 
     def get_benchmark_status(self, now: Optional[datetime] = None) -> dict:
         """소비 시점 재검증. 날짜는 date, loaded_at은 기존 소비자용 naive KST."""
@@ -935,42 +930,12 @@ class SwingScreener:
                 "loaded_at": self._kospi_loaded_at, "reason": reason}
 
     def _validate_benchmark(self, data, source: str, now: datetime):
-        """자료를 정렬/보간으로 보정하지 않고 날짜·가격 계약을 검증한다."""
-        import pandas as pd
-
-        result = {"status": "missing", "source": source, "last_bar_date": None,
-                  "loaded_at": None, "reason": "no_data"}
-        if data is None or len(data) == 0:
-            return [], result
-        result.update(status="unknown", reason="invalid_history")
-        try:
-            if len(data) < 50 or "Close" not in data:
-                return [], result
-            dates = []
-            for value in data.index:
-                if pd.isna(value) or not isinstance(value, date):
-                    return [], result
-                if getattr(value, "tzinfo", None) is not None:
-                    value = value.astimezone(KST)
-                dates.append(value.date() if hasattr(value, "date") else value)
-            result["last_bar_date"] = dates[-1]
-            if any(a >= b for a, b in zip(dates, dates[1:])):
-                result["reason"] = "unordered_or_duplicate_dates"
-                return [], result
-            closes = [float(value) for value in data["Close"]]
-            if any(not isfinite(value) or value <= 0 for value in closes):
-                result["reason"] = "invalid_close_history"
-                return [], result
-            result["status"], result["reason"] = self._benchmark_date_status(dates[-1], now)
-            if result["status"] == "fresh":
-                result["loaded_at"] = now
-                return closes, result
-        except (TypeError, ValueError, OverflowError):
-            result.update(status="unknown", reason="invalid_history")
-        return [], result
+        """자료를 정렬/보간으로 보정하지 않고 날짜·가격 계약을 검증한다 (공용 모듈 위임)."""
+        closes, _dates, result = validate_benchmark(data, source, now)
+        return closes, result
 
     async def _load_benchmark_index(self):
-        """KS11 캐시 → Yahoo ^KS11 지수 일봉. 두 소스에 동일 검증을 적용한다.
+        """Yahoo ^KS11 → KS11 지수 일봉(kospi_benchmark.SOURCES). 두 소스에 동일 검증을 적용한다.
 
         KIS get_daily_prices('0001')는 주식 일봉 API이므로 지수 대체재가 아니다.
         """
@@ -981,7 +946,7 @@ class SwingScreener:
         self._benchmark_failure = None
         loop = asyncio.get_running_loop()
         start_date = (datetime.now(KST) - timedelta(days=365)).strftime("%Y-%m-%d")
-        for symbol in ("KS11", "YAHOO:^KS11"):
+        for symbol in KOSPI_SOURCES:
             source = f"FDR:{symbol}"
             try:
                 data = await asyncio.wait_for(
@@ -1002,12 +967,10 @@ class SwingScreener:
                     )
                     return
             except Exception as exc:
-                status = {"status": "missing", "source": source, "last_bar_date": None,
-                          "loaded_at": None, "reason": "fetch_failed"}
+                status = fetch_failed_status(source)
                 logger.warning(f"[스윙스크리너] KOSPI {source} 조회 실패: {type(exc).__name__}")
             # 대체 소스 결측으로 먼저 확인한 stale/invalid 근거를 덮지 않는다.
-            if self._benchmark_failure is None or status["status"] != "missing":
-                self._benchmark_failure = status
+            self._benchmark_failure = keep_failure(self._benchmark_failure, status)
             logger.warning(
                 f"[스윙스크리너] KOSPI 자료 제외: source={source}, "
                 f"status={status['status']}, 마지막 봉={status['last_bar_date']}, "
