@@ -1,4 +1,4 @@
-"""Strict, offline-only verification receipt contract (v1)."""
+"""엄격한 오프라인 전용 verification receipt 계약(v1)이다."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 
 class EvidenceError(ValueError):
-    """A bounded document violated the offline evidence contract."""
+    """크기 제한 문서가 오프라인 evidence 계약을 위반했다."""
 
 
 _MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
@@ -30,7 +30,7 @@ _DECISION_SCHEMA = "qwq.verification-decision/v1"
 
 
 def parse_document(raw: bytes, *, kind: str) -> dict:
-    """Decode and validate one bounded receipt or expectation document."""
+    """크기 제한 receipt 또는 expectation 문서 하나를 해석하고 검증한다."""
     if type(raw) is not bytes:
         raise EvidenceError("RAW_NOT_BYTES")
     if len(raw) > _MAX_DOCUMENT_BYTES:
@@ -69,7 +69,7 @@ def parse_document(raw: bytes, *, kind: str) -> dict:
 
 
 def validate_receipt(receipt: dict, expected: dict) -> tuple[str, ...]:
-    """Return fixed reason codes for a receipt against a complete expectation."""
+    """완전한 expectation에 대한 receipt의 고정 reason code를 반환한다."""
     errors: set[str] = set()
     try:
         _validate_expectation_document(expected)
@@ -116,7 +116,7 @@ def validate_receipt(receipt: dict, expected: dict) -> tuple[str, ...]:
 
 
 def evaluate_bundle(receipts: list[dict], expected: dict) -> dict:
-    """Decide whether exactly the four expected offline receipts agree."""
+    """정확히 네 개의 예상 오프라인 receipt가 일치하는지 판정한다."""
     errors: set[str] = set()
     if not isinstance(receipts, list):
         errors.add("INVALID_RECEIPT_BUNDLE")
@@ -290,7 +290,10 @@ def _validate_session(session: Any) -> None:
     if type(session["finished"]) is not bool:
         raise EvidenceError("INVALID_FINISHED")
     exit_code = session["exit_code"]
-    if exit_code is not None and type(exit_code) is not int:
+    if exit_code is None:
+        if session["finished"]:
+            raise EvidenceError("INVALID_EXIT_CODE")
+    elif type(exit_code) is not int:
         raise EvidenceError("INVALID_EXIT_CODE")
     for key in ("collection_errors", "deselected"):
         if type(session[key]) is not int or session[key] < 0:

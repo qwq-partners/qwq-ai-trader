@@ -179,6 +179,27 @@ def test_parse_document_rejects_bool_attempt_and_unknown_expected_field():
         parse_document(json.dumps(document).encode(), kind="expectation")
 
 
+def test_finished_session_requires_integer_exit_code_but_unfinished_null_remains_unapproved():
+    document = expected()
+    finished = receipt_for(document, 0)
+    finished["session"]["exit_code"] = None
+
+    with pytest.raises(EvidenceError):
+        parse_document(json.dumps(finished).encode(), kind="receipt")
+    assert validate_receipt(finished, document) == ("INVALID_RECEIPT",)
+    assert "INVALID_RECEIPT" in evaluate_bundle([finished], document)["errors"]
+
+    unfinished = receipt_for(document, 0)
+    unfinished["session"].update(finished=False, exit_code=None)
+
+    assert parse_document(json.dumps(unfinished).encode(), kind="receipt") == unfinished
+    assert validate_receipt(unfinished, document) == (
+        "SESSION_EXIT_NONZERO",
+        "SESSION_UNFINISHED",
+    )
+    assert evaluate_bundle([unfinished], document)["status"] == "REJECTED"
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

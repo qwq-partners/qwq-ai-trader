@@ -1,4 +1,4 @@
-"""Black-box tests for the bounded offline verification decision CLI."""
+"""크기 제한 오프라인 verification decision CLI의 블랙박스 시험이다."""
 
 import hashlib
 import json
@@ -24,6 +24,16 @@ RUN = {
     "attempt": 1,
 }
 NODEIDS = ["tests/test_case.py::test_ok"]
+SYNTHETIC_PERFORMANCE_CASES = [
+    (
+        "tests/test_recovery_projection.py::test_every_real_advance_call_including_finalization_stays_below_5ms[controlled_work-5000]",
+        "038aa599f043e62d200df048152fa292167fea72",
+    ),
+    (
+        "tests/test_recovery_projection.py::test_every_real_advance_call_including_finalization_stays_below_5ms[controlled_work-100000]",
+        "7208acc8358e1c08bd7725d5d64d5059c24cd65b",
+    ),
+]
 DECISION = {
     "schema": "qwq.verification-decision/v1",
     "status": "EVIDENCE_CONSISTENT",
@@ -42,7 +52,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _expected_document() -> dict:
-    """Hand-derive all known child identities before producing any receipt."""
+    """영수증을 만들기 전에 알려진 자식 identity를 독립적으로 계산한다."""
     inventory = hashlib.sha256(_canonical(NODEIDS)).hexdigest()
     runtime = {
         "implementation": sys.implementation.name,
@@ -89,6 +99,65 @@ def _safe_env(timezone: str) -> dict[str, str]:
     }
 
 
+def _synthetic_performance_documents(nodeid: str, candidate_head: str) -> tuple[dict, list[dict]]:
+    """실행하지 않은 성능 사례의 consumer 입력만 독립적으로 구성한다."""
+    nodes = [nodeid]
+    inventory = hashlib.sha256(_canonical(nodes)).hexdigest()
+    run = RUN | {
+        "sha": candidate_head,
+        "tree": candidate_head,
+        "run_id": "synthetic-performance-consumer",
+    }
+    expected = {
+        "schema": "qwq.verification-expectation/v1",
+        "run": run,
+        "slots": [
+            {
+                "slot": {"lane": lane, "timezone": timezone},
+                "identity": {
+                    "runtime": hashlib.sha256(
+                        f"synthetic-runtime-{lane}-{timezone}".encode("utf-8")
+                    ).hexdigest(),
+                    "producer": hashlib.sha256(b"synthetic-consumer-producer").hexdigest(),
+                    "inventory": inventory,
+                },
+                "nodes": nodes,
+                "allowed_outcomes": {},
+                "guard": {
+                    "path": "tests/conftest.py",
+                    "sha256": "e" * 64,
+                    "module_count": 1,
+                    "violations": 0,
+                },
+            }
+            for lane in ("standard", "source-proof")
+            for timezone in ("UTC", "Asia/Seoul")
+        ],
+    }
+    receipts = []
+    for target in expected["slots"]:
+        receipts.append(
+            {
+                "schema": "qwq.verification-receipt/v1",
+                "run": run.copy(),
+                "slot": target["slot"].copy(),
+                "identity": target["identity"].copy(),
+                "collected": nodes.copy(),
+                "results": [
+                    {"nodeid": nodeid, "setup": "passed", "call": "failed", "teardown": "passed"}
+                ],
+                "session": {
+                    "finished": True,
+                    "exit_code": 1,
+                    "collection_errors": 0,
+                    "deselected": 0,
+                },
+                "guard": target["guard"].copy(),
+            }
+        )
+    return expected, receipts
+
+
 def _run_child(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     with subprocess.Popen(
         command,
@@ -111,7 +180,7 @@ def _produce_receipt(parent: Path, *, lane: str, timezone: str) -> Path:
     repo = parent / f"{lane}-{timezone.replace('/', '-') }"
     tests = repo / "tests"
     tests.mkdir(parents=True)
-    # The copied file is exactly the real isolation guard, loaded before product imports.
+    # 복사본은 제품 import 전에 로드하는 실제 격리 guard와 정확히 같다.
     (tests / "conftest.py").write_bytes((ROOT / "tests/conftest.py").read_bytes())
     (tests / "test_case.py").write_text("def test_ok():\n    pass\n", encoding="utf-8")
     (repo / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
@@ -142,7 +211,7 @@ runpy.run_module('scripts.dev.pytest_evidence', run_name='__main__')
 
 @pytest.fixture
 def actual_artifacts(tmp_path):
-    # This happens before receipts are generated; it never derives expected from receipt bytes.
+    # 영수증 생성 전 실행하며 expected를 영수증 bytes에서 파생하지 않는다.
     expected = _expected_document()
     expected_path = tmp_path / "expected.json"
     expected_path.write_bytes(_canonical(expected))
@@ -215,19 +284,21 @@ def test_cli_rejects_missing_duplicate_invalid_or_unreadable_inputs(actual_artif
     assert all(str(path) not in result.stdout for path in [expected, *selected])
 
 
-def test_failing_receipt_is_not_turned_into_success_by_existing_performance_exception_ledger(actual_artifacts):
-    expected, receipts = actual_artifacts
-    assert (ROOT / "docs/reviews/recovery-performance-exceptions-2026-09-27.json").is_file()
-    failed = json.loads(receipts[0].read_text(encoding="utf-8"))
-    failed["results"][0]["call"] = "failed"
-    failed_path = receipts[0].with_name("failing-receipt.json")
-    failed_path.write_bytes(_canonical(failed))
-    receipts[0] = failed_path
+@pytest.mark.parametrize(("nodeid", "candidate_head"), SYNTHETIC_PERFORMANCE_CASES)
+def test_synthetic_ledger_identified_failure_remains_rejected_by_consumer(tmp_path, nodeid, candidate_head):
+    expected, receipts = _synthetic_performance_documents(nodeid, candidate_head)
+    expected_path = tmp_path / "synthetic-expected.json"
+    expected_path.write_bytes(_canonical(expected))
+    receipt_paths = []
+    for index, receipt in enumerate(receipts):
+        path = tmp_path / f"synthetic-receipt-{index}.json"
+        path.write_bytes(_canonical(receipt))
+        receipt_paths.append(path)
 
-    result = _run_cli(expected, receipts)
+    result = _run_cli(expected_path, receipt_paths)
 
     assert result.returncode == 1
-    assert "CALL_FAILED" in _decision(result)["errors"]
+    assert _decision(result)["errors"] == ["CALL_FAILED", "SESSION_EXIT_NONZERO"]
 
 
 def test_direct_main_rejects_embedded_nul_path_with_fixed_decision(capsys):

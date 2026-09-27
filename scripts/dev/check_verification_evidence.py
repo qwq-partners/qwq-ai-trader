@@ -1,4 +1,4 @@
-"""Bounded, offline-only CLI for deciding four verification receipts."""
+"""네 개의 verification receipt를 판정하는 크기 제한 오프라인 전용 CLI다."""
 
 from __future__ import annotations
 
@@ -17,11 +17,11 @@ _DECISION_SCHEMA = "qwq.verification-decision/v1"
 
 
 class _ArgumentError(ValueError):
-    """An argument error whose text is never printed to callers."""
+    """호출자에게 원문을 출력하지 않는 인자 오류다."""
 
 
 class _InputError(ValueError):
-    """A bounded input failure represented only by its fixed public code."""
+    """고정 public code로만 나타내는 크기 제한 입력 실패다."""
 
     def __init__(self, code: str):
         super().__init__(code)
