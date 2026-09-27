@@ -10,13 +10,13 @@
   - 주간 전략 분석 지수(`YAHOO:^KS11`/`^KQ11`)와 성과리포트 벤치마크(`YAHOO:^KS11`, end 배타 경계라 하루 더 조회)는 기호만 교체.
   - 알려진 한계: KS11 2순위는 상류가 장중 부분봉을 직전 거래일 날짜로 남기면 날짜 검사를 통과한다. `scripts/` 백테스트는 아직 KS11 을 쓴다.
 - **KR 휴장일 누락:** 엔진 `is_kr_market_holiday` 는 KIS 동적 자료만 믿었고, KIS 휴장일 조회(CTCA0903R)는 한 응답이 약 24일치에서 끝나(운영 로그 `202609 → 7일`) 09-25(추석)가 빠졌다. 봇은 09-25 를 거래일로 처리해 LLM 레짐 8회·안전자산 루프 70회·스크리너·동기화·변동성 갱신을 돌렸다(주문 0).
-  - 엔진 판정을 `utils.session` 과 같은 동적 ∪ fallback 으로 맞췄다. fallback 목록은 session 한 곳으로 합쳤다(엔진은 import).
-  - `fetch_holidays`: 응답의 가장 늦은 날짜가 월말보다 이르면 그 다음 날을 BASS_DT 로 **새 첫 조회**를 보낸다(연속조회 의미에 기대지 않음). 월말 도달·진전 없음·빈 응답·4회 상한에서 정지, 매 호출 리미터 경유, 뒤 조회 실패 시 모은 날짜 유지·캐시 안 함. 호출 수는 기동 시 약 2회 → 약 4회(월별 2회), 매월 25일 이후 익월 갱신 1회 → 2회.
+  - 엔진 판정을 `utils.session` 과 같은 동적 ∪ fallback 으로 맞췄다. fallback 목록은 session 한 곳으로 합쳤다(엔진은 import). `engine.set_kr_market_holidays` 가 session 에도 같은 동적 집합을 넣어 session 경유 판정(KOSPI 벤치마크 신선도·스크리너·청산 영업일 등)도 KIS 휴장일을 본다(추가 방향만).
+  - `fetch_holidays`: 응답의 가장 늦은 날짜가 월말보다 이르면 그 다음 날을 BASS_DT 로 **새 첫 조회**를 보낸다(연속조회 의미에 기대지 않음). 월말 도달·진전 없음(가장 늦은 날짜 < 커서)·빈 응답·4회 상한에서 정지, 매 호출 리미터 경유. **월말까지 확인한 결과만 캐시**하고 덜 덮은 결과·실패는 수집분만 반환한다. 호출 수는 기동 시 약 2회 → 약 4회(월별 2회), 매월 25일 이후 익월 갱신 1회 → 2회.
   - fallback 교정(우주항공청 월력요항·관공서의 공휴일에 관한 규정·KRX 휴장 공지): 2026 설날 01-27~29(실제 개장일) → 02-16~18, 05-01 근로자의 날·06-03 지방선거·07-17 제헌절 추가, 2027 02-10·06-07(현충일은 대체 대상 아님)·10-13~15 삭제 → 추석 09-14~16, 연말 휴장 2026-12-31·2027-12-31 추가. 합집합이라 잘못 든 날은 KIS 가 되돌릴 수 없으므로 확정된 날만 둔다(2027-07-19 제헌절 대체 등 불확실한 날은 KIS 동적 자료에 맡김).
   - 참고(범위 밖): `utils.session.set_kr_holidays` 는 어디서도 호출되지 않아 session 경유 모듈은 fallback 만 본다.
 - **toss 관측 시험:** `test_later_chunk_failure_preserves_success_and_job_local_degradation[circuit_open-provider_failure]` 가 부하 호스트에서 원장 fsync 약 390회로 실시간 5초 예산을 넘겨 circuit_open 경로에 닿기 전에 budget_skip 으로 끊겼다(09-27 KST 전체 회귀 첫 시도, `provider_failures=0, budget_skips=12`). `setup_runner` 등의 기본 clock 을 고정 시계로 바꿨다. 단언·예산·표본 무변경, fsync 지연 주입으로 수정 전 실패/후 통과 재현.
 - **코드 변경 없음(판정):** EGW00215 는 09-24·25 가 추석 휴장이라 PR #90 계측이 아직 거래일 표본을 못 봤다 → 09-28 장 마감 뒤 07:17 기준선과 차분해 호출 주체별로 판단. 만료 macro 경고는 이미 프로세스당 1회(09-24 07:30, 09-27 22:00)이며 만료 파일(`manual_macro_overrides.json`, 12/12 만료) 정리는 사용자 소유 데이터. KOSPI200 구성 0(pykrx KRX 로그인)은 유니버스 정렬 우선순위에만 영향.
-- **검증:** 통합 후보 `51efdeb` 전체 UTC **2099 passed / 2 xfailed / 기존 pykrx warning 1**(79.28초), KST 같은 결과(74.60초), 격리 위반 0. 작성자와 분리한 리뷰어(요청 opus/xhigh, 실제 모델 미노출) — KOSPI APPROVE_WITH_CONDITIONS(P2 2건: 성과리포트 end 경계 반영, fallback 오류는 휴장일 커밋에서 교정), 휴장일 APPROVE_WITH_CONDITIONS(P2 2건 반영, 변이 M0·M2·M3 kill, M1 은 캐시 단언 보강 뒤 kill). 교차 공급자 리뷰 결과는 PR 에 기록. 주문·전략·위험 설정·임계값 변경 0, 운영 배포·재시작 없음.
+- **검증:** 최종 `58484f8` 전체 UTC **2101 passed / 2 xfailed / 기존 pykrx warning 1**(73.37초), KST 같은 결과(74.60초), 격리 위반 0(1차 후보 `51efdeb` 는 각 2099 passed). 작성자와 분리한 리뷰어(요청 opus/xhigh, 실제 모델 미노출) — KOSPI APPROVE_WITH_CONDITIONS(P2 2건: 성과리포트 end 경계 반영, fallback 오류는 휴장일 커밋에서 교정), 휴장일 APPROVE_WITH_CONDITIONS(P2 2건 반영). 교차 공급자 Codex(요청 gpt-6-astra/xhigh, read-only, 실제 모델 미노출) 1차 `51efdeb` APPROVE_WITH_CONDITIONS(P0/P1 0, P2 2건: 미완결 캐시·session 동적 자료 미전달) → `58484f8` 반영 → 2차 차이분 **APPROVE**(신규 지적 0). 변이: 휴장일 M0·M2·M3·진전 판정·부분 캐시·session 전파 kill(M1 은 결과 동일한 등가 변이). 주문·전략·위험 설정·임계값 변경 0, 운영 배포·재시작 없음.
 
 ## 2026-09-28 — 미국 거래 영구 중단 반영 (`--market` 기본값 kr)
 

@@ -97,9 +97,10 @@
 ### 휴장일 조회 (kis_market_data.fetch_holidays, CTCA0903R)
 - 한 응답이 달 전체를 덮지 않는다 — 운영 관측 `202609 → 7일`(09-01~09-24 범위), `202610 → 9일`(10-01~10-24)로 약 24일치에서 끝났다.
   연속조회(ctx/tr_cont) 의미는 공식 근거가 없어 쓰지 않고, 응답의 가장 늦은 날짜 다음 날을 BASS_DT 로 **새 첫 조회**를 보낸다
-  (월말 도달·진전 없음·빈 응답·4회 상한에서 정지, 매 호출 `kis_rate_limit.acquire()`, 뒤 조회 실패 시 모은 날짜 유지·캐시 안 함). 2026-09-28~
+  (월말 도달·진전 없음(가장 늦은 날짜 < 커서)·빈 응답·4회 상한에서 정지, 매 호출 `kis_rate_limit.acquire()`).
+  월말까지 확인한 결과만 캐시하고, 덜 덮은 결과·뒤 조회 실패는 수집분만 반환한다(warning). 2026-09-28~
 - 기동 시(`run_trader.py`) 이번 달·다음 달, 매월 25일 이후(`kr_scheduler`) 다음 달을 받아 `engine.set_kr_market_holidays` 에 넣는다.
-  판정은 `engine.is_kr_market_holiday` = 동적 ∪ fallback(`utils/session._KR_FALLBACK_HOLIDAYS` 한 곳). fallback 에 잘못 든 날은
+  같은 집합이 `utils.session` 에도 들어간다. 판정은 engine·session 모두 동적 ∪ fallback(`utils/session._KR_FALLBACK_HOLIDAYS` 한 곳). fallback 에 잘못 든 날은
   KIS 가 되돌릴 수 없으므로 확정된 날만 둔다. API 문서의 '1일 1회 호출 권장' 대비 월 2회 수준.
 
 ## 데이터 — 토스증권 Open API (별도 제한 관측 ON, **거래 소비자 미연결**)
