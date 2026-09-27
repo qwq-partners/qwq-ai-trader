@@ -16,6 +16,7 @@ _MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
 _MAX_DEPTH = 12
 _MAX_NODES = 20_000
 _MAX_NODEID_BYTES = 2_048
+_MAX_INTEGER_DIGITS = 128
 _HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _RUN_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
@@ -45,19 +46,25 @@ def parse_document(raw: bytes, *, kind: str) -> dict:
             text,
             object_pairs_hook=_no_duplicate_object,
             parse_constant=_reject_nonfinite,
+            parse_int=_bounded_integer,
         )
     except EvidenceError:
         raise
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
         raise EvidenceError("INVALID_JSON") from exc
     if not isinstance(value, dict):
         raise EvidenceError("DOCUMENT_NOT_OBJECT")
-    if _depth(value) > _MAX_DEPTH:
-        raise EvidenceError("DOCUMENT_TOO_DEEP")
-    if kind == "receipt":
-        _validate_receipt_document(value)
-    else:
-        _validate_expectation_document(value)
+    try:
+        if _depth(value) > _MAX_DEPTH:
+            raise EvidenceError("DOCUMENT_TOO_DEEP")
+        if kind == "receipt":
+            _validate_receipt_document(value)
+        else:
+            _validate_expectation_document(value)
+    except EvidenceError:
+        raise
+    except (RecursionError, UnicodeError, ValueError, TypeError) as exc:
+        raise EvidenceError("INVALID_DOCUMENT") from exc
     return value
 
 
@@ -164,12 +171,25 @@ def _reject_nonfinite(_: str) -> None:
     raise EvidenceError("NONFINITE_NUMBER")
 
 
+def _bounded_integer(value: str) -> int:
+    digits = value[1:] if value.startswith("-") else value
+    if len(digits) > _MAX_INTEGER_DIGITS:
+        raise EvidenceError("INTEGER_TOO_LARGE")
+    return int(value)
+
+
 def _depth(value: Any) -> int:
-    if isinstance(value, dict):
-        return 1 + max((_depth(item) for item in value.values()), default=0)
-    if isinstance(value, list):
-        return 1 + max((_depth(item) for item in value), default=0)
-    return 0
+    deepest = 0
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if isinstance(item, (dict, list)):
+            deepest = max(deepest, depth)
+            if deepest > _MAX_DEPTH:
+                return deepest
+            children = item.values() if isinstance(item, dict) else item
+            pending.extend((child, depth + 1) for child in children)
+    return deepest
 
 
 def _validate_receipt_document(receipt: Any) -> None:
@@ -245,7 +265,7 @@ def _validate_identity(identity: Any) -> None:
 
 
 def _validate_nodes(nodes: Any) -> None:
-    if not isinstance(nodes, list) or len(nodes) > _MAX_NODES:
+    if not isinstance(nodes, list) or not 1 <= len(nodes) <= _MAX_NODES:
         raise EvidenceError("INVALID_NODES")
     _canonical_nodes(nodes)
 
@@ -282,6 +302,10 @@ def _validate_guard(guard: Any) -> None:
     path = guard["path"]
     if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
         raise EvidenceError("INVALID_GUARD_PATH")
+    try:
+        path.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise EvidenceError("INVALID_GUARD_PATH") from exc
     _require_hex(guard["sha256"], 64)
     for key in ("module_count", "violations"):
         if type(guard[key]) is not int or guard[key] < 0:
@@ -305,7 +329,13 @@ def _require_hex(value: Any, length: int) -> None:
 
 
 def _validate_nodeid(value: Any) -> None:
-    if not isinstance(value, str) or not value or len(value.encode("utf-8")) > _MAX_NODEID_BYTES:
+    if not isinstance(value, str) or not value:
+        raise EvidenceError("INVALID_NODEID")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise EvidenceError("INVALID_NODEID") from exc
+    if len(encoded) > _MAX_NODEID_BYTES:
         raise EvidenceError("INVALID_NODEID")
 
 

@@ -139,6 +139,35 @@ def test_parse_document_rejects_depth_thirteen_and_oversize_input():
         parse_document(b" " * (32 * 1024 * 1024 + 1), kind="receipt")
 
 
+def test_parse_document_converts_bounded_adversarial_values_to_evidence_errors():
+    huge_integer = b'{"value":' + b"1" * 5_000 + b"}"
+    with pytest.raises(EvidenceError):
+        parse_document(huge_integer, kind="receipt")
+    nested = "0"
+    for _ in range(500):
+        nested = "[" + nested + "]"
+    with pytest.raises(EvidenceError):
+        parse_document(nested.encode(), kind="receipt")
+    document = expected()
+    raw = json.dumps(document).replace(
+        "tests/dev/test_standard.py::test_ok", "\\ud800", 1
+    ).encode()
+    with pytest.raises(EvidenceError):
+        parse_document(raw, kind="expectation")
+
+
+def test_public_dictionary_validation_fails_closed_for_unpaired_surrogates():
+    valid = expected()
+    malformed = expected()
+    malformed["slots"][0]["nodes"] = ["\ud800"]
+    receipt = receipt_for(valid, 0)
+    assert validate_receipt(receipt, malformed) == ("INVALID_EXPECTATION",)
+    assert evaluate_bundle([receipt], malformed)["errors"] == ["INVALID_EXPECTATION"]
+    malformed_guard = expected()
+    malformed_guard["slots"][0]["guard"]["path"] = "\ud800"
+    assert validate_receipt(receipt, malformed_guard) == ("INVALID_EXPECTATION",)
+
+
 def test_parse_document_rejects_bool_attempt_and_unknown_expected_field():
     document = expected()
     document["run"]["attempt"] = True
@@ -168,6 +197,17 @@ def test_parse_document_turns_wrong_types_and_node_bounds_into_evidence_errors(m
 def test_bundle_accepts_distinct_runtime_per_lane():
     document = expected()
     assert evaluate_bundle(four_valid_receipts(), document)["errors"] == []
+
+
+def test_bundle_rejects_four_empty_expected_and_actual_inventories():
+    document = expected()
+    for item in document["slots"]:
+        item["nodes"] = []
+        item["identity"]["inventory"] = inventory([])
+    receipts = [receipt_for(document, position) for position in range(4)]
+    decision = evaluate_bundle(receipts, document)
+    assert decision["status"] == "REJECTED"
+    assert "INVALID_EXPECTATION" in decision["errors"]
 
 
 @pytest.mark.parametrize(
