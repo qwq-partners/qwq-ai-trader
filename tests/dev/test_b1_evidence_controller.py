@@ -2287,3 +2287,55 @@ def test_b1_crossing_baseexception_keeps_output_limit_before_marked_write_failur
     assert streams["stdout"]["bytes"] == 2097149
     assert streams["stdout"]["observed_bytes"] == 2097153
     assert len(sink.offered) == 33
+
+
+def test_b1_probe_child_systemexit_close_still_reaches_terminal_125(monkeypatch):
+    module = _load_source("_b1_probe_child_terminal_prerequisite", "pytest_evidence_controller.py")
+    import os
+    import time
+
+    budget = module._B1Budget(0.0)
+    events = []
+    close_failure = SystemExit(0)
+    escaped = None
+
+    def fork():
+        events.append(("fork", 0))
+        return 0
+
+    def close(fd):
+        events.append(("close", fd))
+        if fd == 71:
+            raise close_failure
+
+    def terminal(code):
+        events.append(("exit", code))
+        raise _ProbeExit(code)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("probe child가 parent finalization/unlock/workload에 진입함")
+
+    targets = [
+        (os, "fork", fork), (os, "close", close), (os, "_exit", terminal),
+        (time, "monotonic", lambda: 1.0), (fcntl, "flock", forbidden),
+        (module, "_emergency_cleanup", forbidden), (module, "_RawPopen", forbidden),
+        (module._BoundPaths, "close", forbidden),
+        (module._B1Coordination, "close", forbidden),
+        (module._B1Coordination, "finish_fake_key", forbidden),
+    ]
+    originals = [(owner, name, getattr(owner, name)) for owner, name, _ in targets]
+    try:
+        with monkeypatch.context() as patch:
+            for owner, name, replacement in targets:
+                patch.setattr(owner, name, replacement)
+            try:
+                module._probe(896.0, [False], budget=budget, controller_fds=(71, 72, 73))
+            except BaseException as error:
+                escaped = error
+    finally:
+        assert all(getattr(owner, name) is original for owner, name, original in originals)
+
+    assert isinstance(escaped, _ProbeExit)
+    assert escaped is not close_failure and escaped.code == 125
+    assert events == [("fork", 0), ("close", 71), ("close", 72), ("close", 73), ("exit", 125)]
+    assert (budget.cleanup_end, budget.term_end) == (None, None)
