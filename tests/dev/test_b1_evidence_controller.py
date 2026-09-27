@@ -71,6 +71,19 @@ def test_b1_arguments_accept_exact_profile_without_changing_six_result_shape(tmp
     assert selected == ["tests/test_tiny.py"]
 
 
+@pytest.mark.parametrize("timezone", ["UTC", "Asia/Seoul"])
+def test_b1_parser_accepts_exact_parent_environment_in_each_timezone(tmp_path, monkeypatch, timezone):
+    module, _ = _argument_case(tmp_path, monkeypatch)
+    monkeypatch.setattr(module.os, "environ", {
+        "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": timezone,
+        "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    })
+    options, _, _, _, _, selected = module._arguments(_args())
+    assert options.profile == "b1-standard/v1"
+    assert options.timeout_seconds == 900
+    assert selected == ["tests/test_tiny.py"]
+
+
 @pytest.mark.parametrize("timeout", ["1", "30", "900"])
 def test_legacy_arguments_keep_six_results_and_original_timeout_range(tmp_path, monkeypatch, timeout):
     module, repo = _argument_case(tmp_path, monkeypatch)
@@ -181,6 +194,8 @@ def test_b1_parent_environment_rejected_before_dependency_or_guard_loading(tmp_p
     monkeypatch.setattr(module, "_probe", forbidden)
     monkeypatch.setattr(module, "_RawPopen", forbidden)
     monkeypatch.setattr(module.time, "monotonic", lambda: 0.0)
+    with pytest.raises(ValueError):
+        module._arguments(_args())
     assert module.main(_args()) == 125
 
 
@@ -199,6 +214,8 @@ def test_b1_parent_environment_requires_every_fixed_key(tmp_path, monkeypatch, k
     monkeypatch.setattr(module, "_probe", forbidden)
     monkeypatch.setattr(module, "_RawPopen", forbidden)
     monkeypatch.setattr(module.time, "monotonic", lambda: 0.0)
+    with pytest.raises(ValueError):
+        module._arguments(_args())
     assert module.main(_args()) == 125
 
 
