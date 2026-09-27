@@ -81,11 +81,19 @@ class _Parser(argparse.ArgumentParser):
 class _BoundPaths:
     """시작 전 부모 dirfd를 고정하고 후행 접근도 같은 경로인지 대조한다."""
 
-    def __init__(self, paths):
+    def __init__(self, paths, *, b1=False):
+        if type(b1) is not bool:
+            raise ValueError("PROCESS_CLOSE_MODE")
+        self._b1 = b1
         self.close_failed = False
-        self.root_fd = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        if b1:
+            self.root_fd = -1
+        else:
+            self.root_fd = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         self.parents = {}
         try:
+            if b1:
+                self.root_fd = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             for path in paths:
                 self.parents[path] = self._walk(path.parent)
         except BaseException:
@@ -131,8 +139,9 @@ class _BoundPaths:
     def _close_fd(self, fd):
         try:
             os.close(fd)
-        except OSError:
-            self.close_failed = True
+        except BaseException as error:
+            if self._b1 or isinstance(error, OSError):
+                self.close_failed = True
             raise
 
     def controller_fds(self):
@@ -146,8 +155,9 @@ class _BoundPaths:
             if fd >= 0:
                 try:
                     self._close_fd(fd)
-                except OSError:
-                    pass
+                except BaseException as error:
+                    if not self._b1 and not isinstance(error, OSError):
+                        raise
         if strict:
             return not self.close_failed
 
@@ -204,7 +214,7 @@ class _B1Coordination:
         self._fds.remove(fd)
         try:
             os.close(fd)
-        except OSError:
+        except BaseException:
             self._close_error()
             raise
 
@@ -435,17 +445,17 @@ class _B1Coordination:
         for fd in sorted(descriptors - {lock_fd}):
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 self._close_error()
         if lock_fd in descriptors:
             if held:
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                except OSError:
+                except BaseException:
                     self._close_error()
             try:
                 os.close(lock_fd)
-            except OSError:
+            except BaseException:
                 self._close_error()
         return not self.close_failed
 
@@ -674,12 +684,35 @@ def _probe(deadline, stopped, *, budget=None, controller_fds=()):
             or len(set(controller_fds)) != len(controller_fds)):
         raise ValueError("PROCESS_PROBE_FDS")
     owner = _Owner(budget=budget)
+    fork_attempted = False
     if budget is not None:
-        now = time.monotonic()
+        last_now = now = time.monotonic()
         if stopped[0] or now >= min(deadline, budget.run_end) or budget.cleanup_end is not None:
             owner._begin_cleanup(now)
             return False
         end = min(deadline, budget.run_end, now + 1)
+
+    def exceptional_cleanup():
+        # 최초 예외를 보존한다. 재시도나 새 소유자를 만들지 않는다.
+        if budget is None or not fork_attempted:
+            return
+        try:
+            if budget.cleanup_end is None:
+                cleanup_now = last_now
+                try:
+                    cleanup_now = time.monotonic()
+                except BaseException:
+                    pass
+                owner._begin_cleanup(cleanup_now)
+            else:
+                owner._begin_cleanup(last_now)
+            result = _emergency_cleanup(owner, {}, b1=True)
+            if type(result) is not bool or not result:
+                owner.reject("cleanup_error")
+        except BaseException:
+            pass
+
+    fork_attempted = True
     try:
         owner.leader = os.fork()
     except OSError:
@@ -687,32 +720,41 @@ def _probe(deadline, stopped, *, budget=None, controller_fds=()):
             raise
         owner._begin_cleanup(time.monotonic())
         return False
+    except BaseException:
+        exceptional_cleanup()
+        raise
     if owner.leader == 0:
         failed_close = False
         for fd in controller_fds:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException as error:
+                if budget is None and not isinstance(error, OSError):
+                    raise
                 failed_close = True
         os._exit(125 if failed_close else 23)
-    if budget is None:
-        end = min(deadline, time.monotonic() + 1)
-    while time.monotonic() < end and not stopped[0]:
-        empty = owner.reap()
-        if empty and owner.reaped:
-            passed = owner.returncode == 23 and owner.error is None and time.monotonic() <= end
-            if budget is not None and (not passed or stopped[0]):
-                owner._begin_cleanup(time.monotonic())
-                return False
-            return passed
-        time.sleep(.005)
-    owner._begin_cleanup(time.monotonic())
-    while time.monotonic() < owner.finish_end:
-        if owner.reap():
-            break
-        owner._signal_cleanup(time.monotonic())
-        time.sleep(.005)
-    return False
+    try:
+        if budget is None:
+            end = min(deadline, time.monotonic() + 1)
+        while (last_now := time.monotonic()) < end and not stopped[0]:
+            empty = owner.reap()
+            if empty and owner.reaped:
+                passed = owner.returncode == 23 and owner.error is None and (last_now := time.monotonic()) <= end
+                if budget is not None and (not passed or stopped[0]):
+                    owner._begin_cleanup(last_now := time.monotonic())
+                    return False
+                return passed
+            time.sleep(.005)
+        owner._begin_cleanup(last_now := time.monotonic())
+        while (last_now := time.monotonic()) < owner.finish_end:
+            if owner.reap():
+                break
+            owner._signal_cleanup(last_now := time.monotonic())
+            time.sleep(.005)
+        return False
+    except BaseException:
+        exceptional_cleanup()
+        raise
 
 
 def _frame(raw, expected):
@@ -913,21 +955,75 @@ def _observe(owner, pipes, logs, expected_guard, deadline, stopped, *, profile=N
     return complete, guard, result
 
 
-def _close_descriptors(descriptors, owner):
+def _close_descriptors(descriptors, owner, *, b1=False):
     """닫기 시도 전에 소유권 목록에서 제거하여 예외 뒤 중복 close를 막는다."""
+    if type(b1) is not bool:
+        raise ValueError("PROCESS_CLOSE_MODE")
+    complete = True
+    first_exception = None
     while descriptors:
         fd = descriptors.pop()
         try:
             os.close(fd)
-        except OSError:
+        except BaseException as error:
+            if not b1 and not isinstance(error, OSError):
+                raise
             owner.reject("io_error")
+            complete = False
+            if not isinstance(error, OSError) and first_exception is None:
+                first_exception = error
+    if first_exception is not None:
+        raise first_exception
+    if b1:
+        return complete
 
 
-def _emergency_cleanup(owner, pipes):
+def _emergency_cleanup(owner, pipes, *, b1=False):
     """관측기 자체 실패에도 원래 회수 기한 내 양성 자식만 정리한다.
 
     파이프 관측을 잃은 이 경로는 회수 성공을 인증하지 않는다.
     """
+    if type(b1) is not bool:
+        raise ValueError("PROCESS_CLOSE_MODE")
+    if b1:
+        if (owner._budget is None or owner._budget.cleanup_end is None
+                or owner._budget.term_end is None or owner.finish_end is None
+                or owner.finish_end != owner._budget.cleanup_end):
+            raise ValueError("PROCESS_CLEANUP_INTERVAL")
+        owner.reject("cleanup_error")
+        process_exception = None
+        batch_exception = None
+        reap_attempted = False
+        try:
+            while time.monotonic() < owner.finish_end:
+                reap_attempted = True
+                if owner.reap():
+                    break
+                now = time.monotonic()
+                if now >= owner.finish_end:
+                    break
+                owner._signal_cleanup(now)
+                time.sleep(.005)
+        except BaseException as error:
+            process_exception = error
+            if not reap_attempted:
+                # 첫 clock 실패 뒤에는 nonblocking reap 한 번만 허용한다.
+                try:
+                    owner.reap()
+                except BaseException:
+                    pass
+        finally:
+            descriptors = list(pipes.values())
+            pipes.clear()
+            try:
+                complete = _close_descriptors(descriptors, owner, b1=True)
+            except BaseException as error:
+                batch_exception = error
+        if process_exception is not None:
+            raise process_exception
+        if batch_exception is not None:
+            raise batch_exception
+        return complete
     owner.reject("cleanup_error")
     if owner._budget is not None or owner.finish_end is None:
         owner._begin_cleanup(time.monotonic())
