@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-28 — fix: 장중 돌파 RS 정렬의 KOSPI 기준값을 당일 등락으로 (미배포)
+
+- `kr_scheduler` 장중품질 경로의 RS 정렬(`_ib_kospi_chg`)이 `get_kospi_change()` 에 없는 키 `c1` 을 읽고 `c5`(5일 변화율)로 떨어져, 종목의 **당일** `change_pct` 를 KOSPI **5일** 변화율로 나눠 "지수 대비 강세(+5점)"를 판정했다. 주석의 의도("KOSPI 오늘 등락")대로 `bot.risk_manager._market_trend["kospi_pct"]`(kr_market_trend 루프가 2분마다 `fetch_index_price("0001")` 로 갱신)를 3분 이내일 때만 쓴다 — 추가 KIS 호출 0. 캐시가 없거나 묵으면 0.0 → 기존처럼 RS 보정 정렬 생략(`> 0.3%` 일 때만 적용). 모듈 헬퍼 `_intraday_kospi_change` + 시험 3건.
+- 운영 영향: 장중 돌파 후보의 **정렬 순서만** 바뀐다(후보 자격·점수 임계·변동률 상한·일일 한도 무변경). 주문·위험 설정 변경 0.
+- 발견만(범위 밖): 장중 자동 시그널의 약세장 필터(`kr_scheduler` "우선 RiskManager 캐시 활용")가 `bot.engine.risk_manager._market_trend` 를 읽지만 그 캐시는 `bot.risk_manager` 에만 있어 늘 비고, 매 주기 KODEX200/KOSDAQ150 시세 조회 폴백으로 돈다. 차단 입력 원천이 바뀌는 수정이라 별도 결정.
+
 ## 2026-09-28 — fix: KOSPI 지수 원천 정지·KR 휴장일 누락·toss 시험 시계 (미배포)
 
 - **KOSPI 일봉 원천 (돈 경로 — 모멘텀 계열 신규 매수 사이징):** FDR 0.9.110 `DataReader("KS11"/"KQ11")` 는 KRX 가 아니라 GitHub `fdr_krx_data_cache` CSV 를 읽고 읽기 실패를 삼킨다. 상류 지수 파일이 09-17 장중 부분봉(6724.34, 거래량 절반)에서 멈춘 뒤에도 예외 없이 오래된 프레임을 돌려줬고, 변동성 타게팅은 KS11 이 예외를 낼 때만 폴백해 09-17 자료의 실현변동성 31.8%/×0.786 을 매일 '오늘' 날짜로 캐시에 기록했다(노후 3일 가드 무력화).

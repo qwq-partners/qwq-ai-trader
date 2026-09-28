@@ -127,6 +127,20 @@ def _prev_trading_day(d: date, max_back: int = 10) -> Optional[date]:
     return None
 
 
+def _intraday_kospi_change(trend: Optional[dict], now: datetime, max_age_sec: float = 180) -> float:
+    """장중 KOSPI 당일 등락률(%) — kr_market_trend 루프가 2분마다 채우는 risk/manager 캐시에서 읽는다.
+
+    종목 change_pct(당일)와 같은 좌표여야 RS 비교가 성립한다(2026-09-28 — 없는 키 'c1' 대신 5일 c5 를
+    당일 등락처럼 쓰던 결함). 캐시가 없거나 max_age_sec 보다 묵으면 0.0 → 호출부가 RS 보정 정렬을 생략한다.
+    """
+    if not trend or trend.get("ts") is None:
+        return 0.0
+    if (now - trend["ts"]).total_seconds() >= max_age_sec:
+        return 0.0
+    value = trend.get("kospi_pct")
+    return float(value) if value is not None else 0.0
+
+
 def _today_bar_action(last_bar: Optional[date], today: date) -> Tuple[Optional[str], str]:
     """스크리너 종가열에 당일 잠정 종가를 어떻게 반영할지 판정 (T10 F13).
 
@@ -4179,13 +4193,10 @@ JSON:
                             _ib_today_cnt = self._ib_daily_count.get(_ib_today_key, 0)
 
                             # ── Step3: KOSPI 오늘 등락 조회 (RS 정렬 기준) ──
-                            _ib_kospi_chg = 0.0
-                            try:
-                                if bot.batch_analyzer and hasattr(bot.batch_analyzer, '_screener'):
-                                    _ib_kd = bot.batch_analyzer._screener.get_kospi_change()
-                                    _ib_kospi_chg = float(_ib_kd.get("c1", _ib_kd.get("c5", 0)))
-                            except Exception:
-                                pass
+                            # update_market_trend 캐시는 bot.risk_manager(risk/manager.py) 소유 — engine 쪽 아님
+                            _ib_kospi_chg = _intraday_kospi_change(
+                                getattr(bot.risk_manager, "_market_trend", None), datetime.now()
+                            )
 
                             # ATR 기반 동적 변동률 상한 계산
                             # ATR의 70% 수준까지 허용 (최소 config값, 최대 8%)
