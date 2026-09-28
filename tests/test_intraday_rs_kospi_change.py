@@ -35,6 +35,18 @@ def test_intraday_breakout_call_site_uses_risk_trend_cache():
     assert "get_kospi_change" not in block and "engine.risk_manager" not in block
 
 
+def test_screening_regime_filter_reads_trend_cache_from_bot_risk_manager():
+    # 장중 자동 시그널 약세장 필터도 같은 캐시를 쓴다 — engine.risk_manager 엔 _market_trend 가 없어
+    # 늘 빈 dict 로 ETF 시세 폴백만 돌던 결함(2026-09-28)
+    import inspect
+    from src.schedulers import kr_scheduler
+    src = inspect.getsource(kr_scheduler)
+    start = src.index("# 우선 RiskManager 캐시 활용 (이미 2분 주기 갱신)")
+    block = src[start:src.index("# 가중 평균: KOSPI 60% + KOSDAQ 40%", start)]
+    assert '_rm = getattr(bot, "risk_manager", None)' in block
+    assert "engine.risk_manager" not in block
+
+
 def test_negative_change_is_kept_not_treated_as_missing():
     # 하락장 값도 그대로 돌려준다(호출부가 > 0.3 일 때만 정렬 보정) — 0 과 결측을 섞지 않는다
     assert _intraday_kospi_change({"kospi_pct": -0.8, "ts": NOW}, NOW) == -0.8

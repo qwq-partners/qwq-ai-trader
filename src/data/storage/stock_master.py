@@ -454,6 +454,17 @@ class StockMaster:
 
         return None
 
+    async def get_name(self, code: str) -> Optional[str]:
+        """코드 → 종목명 (DB). 없으면 None.
+
+        KIS 현재가(FHKST01010100) 응답에는 종목명이 없어 안전자산 후보 검증이 늘 빈 이름으로
+        실패했다(2026-09-28) — 이름은 이 마스터에서 읽는다.
+        """
+        await self._ensure_connected()
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT corp_name FROM kr_stock_master WHERE ticker = $1", code)
+        return row["corp_name"] if row else None
+
     async def validate_ticker(self, code: str) -> bool:
         """코드 검증"""
         await self._ensure_connected()

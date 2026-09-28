@@ -164,6 +164,30 @@ def _today_bar_action(last_bar: Optional[date], today: date) -> Tuple[Optional[s
     return None, f"중간 거래일 누락(마지막 봉 {last_bar}, 직전 거래일 {prev})"
 
 
+async def _pick_safe_asset(stock_master, candidates) -> Tuple[Optional[str], str, int]:
+    """안전자산 후보 중 종목명이 키워드와 맞는 첫 종목 → (코드|None, 이름, 이름 조회 성공 수).
+
+    이름은 종목 마스터(DB)에서 읽는다 — KIS 현재가(FHKST01010100) 응답엔 종목명이 없어
+    08-31 이후 1278회 전부 빈 이름('API 장애 추정')으로 재시도만 돌았다(2026-09-28).
+    이름 조회 성공 0 이면 호출부가 다음 주기에 재시도하고, 조회는 됐는데 전부 미매칭이면 영구 비활성.
+    """
+    fetched = 0
+    for sym, keywords in candidates:
+        try:
+            name = ((await stock_master.get_name(sym)) or "").strip() if stock_master else ""
+        except Exception as e:
+            logger.warning(f"[안전자산] 후보 {sym} 이름 조회 실패 (일시 오류 가능): {e}")
+            continue
+        if not name:
+            continue
+        fetched += 1
+        if any(kw in name for kw in keywords):
+            logger.info(f"[안전자산] 후보 검증 통과: {sym} = '{name}' (키워드 {keywords[0]} 매칭)")
+            return sym, name, fetched
+        logger.warning(f"[안전자산] 후보 거부: {sym} = '{name}' 키워드({keywords}) 미매칭")
+    return None, "", fetched
+
+
 # 모닝브리프 사후 평가 훅의 최대 대기 시간 (LLM 지연이 20:30 진화 잡을 밀지 않게)
 _MORNING_BRIEF_EVAL_TIMEOUT = 120.0
 
@@ -3666,7 +3690,9 @@ JSON:
                         _regime_block_reason = ""
                         try:
                             # 우선 RiskManager 캐시 활용 (이미 2분 주기 갱신)
-                            _rm = bot.engine.risk_manager if bot.engine else None
+                            # update_market_trend 캐시는 bot.risk_manager(risk/manager.py) 소유 — engine 쪽엔 없어
+                            # 늘 빈 dict 로 ETF 시세 폴백만 돌던 결함 (2026-09-28)
+                            _rm = getattr(bot, "risk_manager", None)
                             _trend = getattr(_rm, "_market_trend", {}) if _rm else {}
                             _trend_age = (datetime.now() - _trend["ts"]).total_seconds() if _trend.get("ts") else 999
 
@@ -6604,40 +6630,16 @@ JSON:
 
                 # 2026-05-19 P0 사고 정정: 종목 키워드 검증 (지연 초기화)
                 if not SAFE_VALIDATED:
-                    _names_fetched = 0  # 이름 조회 성공 건수 — 0이면 API 장애로 간주해 재시도
-                    for _cand_sym, _keywords in SAFE_CANDIDATES:
-                        try:
-                            q = await bot.broker.get_quote(_cand_sym)
-                            if not q:
-                                continue
-                            _name = (q.get("name") or q.get("hts_kor_isnm") or "").strip()
-                            if not _name:
-                                continue
-                            _names_fetched += 1
-                            # 키워드 매칭 검증
-                            _matched = any(kw in _name for kw in _keywords)
-                            if _matched:
-                                SAFE_SYMBOL = _cand_sym
-                                SAFE_NAME = _name
-                                SAFE_VALIDATED = True
-                                logger.info(
-                                    f"[안전자산] 후보 검증 통과: {_cand_sym} = '{_name}' "
-                                    f"(키워드 {_keywords[0]} 매칭)"
-                                )
-                                break
-                            else:
-                                logger.warning(
-                                    f"[안전자산] 후보 거부: {_cand_sym} = '{_name}' "
-                                    f"키워드({_keywords}) 미매칭"
-                                )
-                        except Exception as _ve:
-                            logger.warning(f"[안전자산] 후보 {_cand_sym} 검증 실패 (일시 오류 가능): {_ve}")
+                    SAFE_SYMBOL, SAFE_NAME, _names_fetched = await _pick_safe_asset(
+                        getattr(bot, "stock_master", None), SAFE_CANDIDATES
+                    )
+                    SAFE_VALIDATED = SAFE_SYMBOL is not None
                     if not SAFE_VALIDATED:
                         if _names_fetched == 0:
-                            # 2026-08-05 사고 정정: KIS HTTP 500 등 일시 장애로 이름 조회가
-                            # 전부 실패한 경우까지 영구 비활성 처리하던 문제 — 다음 주기 재검증
+                            # 2026-08-05 사고 정정: 일시 장애로 이름 조회가 전부 실패한 경우까지
+                            # 영구 비활성 처리하던 문제 — 다음 주기 재검증
                             logger.warning(
-                                "[안전자산] 후보 이름 조회 전부 실패 (API 장애 추정) → 다음 주기 재검증"
+                                "[안전자산] 후보 이름 조회 전부 실패 (종목 마스터 미연결/장애) → 다음 주기 재검증"
                             )
                             continue
                         logger.error(
