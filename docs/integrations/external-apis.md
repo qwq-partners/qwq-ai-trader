@@ -144,8 +144,8 @@
 - FDR 0.9.110 `DataReader("KS11"/"KQ11"/"KS200")` 는 KRX 를 부르지 않고 GitHub `FinanceData/fdr_krx_data_cache` 연도별 CSV 를 읽는다.
   읽기 실패를 삼키고 신선도 검사가 없어 **상류가 멈춰도 예외 없이 오래된 프레임**을 준다 — 2026-09-17 장중 부분봉(6724.34)에서 정지 확인(09-28).
 - KOSPI 결정 소비처(스크리너 레짐·변동성 타게팅·수확 shadow)는 `utils/kospi_benchmark.load_kospi_daily`(1순위 `YAHOO:^KS11`, 신선도 검증)를 쓴다.
-  FDR Yahoo 리더는 `end` 를 배타 경계로 쓴다(마지막 날 포함하려면 하루 더).
-- `scripts/` 백테스트(backtest_strategies·backtest_t1_gate·quick_backtest·ab_exit_policy)는 아직 KS11 — 09-17 이후 구간 벤치마크는 정지값.
+  FDR Yahoo 리더는 `end` 를 **로컬 자정** 기준으로 넘겨 KST 에선 end 가 빠지고 UTC 에선 다음 거래일이 섞인다 — `load_kospi_history` 는 하루 더 조회한 뒤 end 이후 행을 잘라 end 포함으로 맞춘다.
+- `scripts/` 백테스트 3개(backtest_strategies·backtest_t1_gate·ab_exit_policy)는 `load_kospi_history`(과거 구간, Yahoo ^KS11 → KS11, end 포함·열린 구간 정지 경고)를 쓴다. quick_backtest 는 연구 venv(loguru 없음)라 FDR `YAHOO:^KS11` 을 직접 읽는다(폴백·정지 경고 없음) (2026-09-28~).
 
 ## 데이터 — yfinance
 

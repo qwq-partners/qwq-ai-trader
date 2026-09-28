@@ -469,20 +469,21 @@ class MarketRegime:
         except Exception:
             pass
 
-        # 2차: FinanceDataReader KOSPI (KS11) — 인증 불필요
+        # 2차: FinanceDataReader KOSPI — 인증 불필요, 공용 로더(Yahoo ^KS11 → KS11).
         #   pykrx 지수 조회는 KRX_ID/KRX_PW가 없으면 실패하므로 이 경로가 사실상 주력이다.
+        #   FDR KS11 캐시는 2026-09-17 에서 예외 없이 멈췄다(2026-09-28 교체).
         if df is None or len(df) < 20:
             try:
-                import FinanceDataReader as fdr
+                from src.utils.kospi_benchmark import load_kospi_history
                 s = f"{start[:4]}-{start[4:6]}-{start[6:]}"
                 e = f"{end[:4]}-{end[4:6]}-{end[6:]}"
-                fdf = fdr.DataReader("KS11", s, e)
+                fdf, _fdr_src = load_kospi_history(s, e)
                 if fdf is not None and not fdf.empty:
                     df = fdf.rename(columns={"Close": "종가", "Open": "시가",
                                              "High": "고가", "Low": "저가",
                                              "Volume": "거래량"})
-                    source = "kospi_fdr"
-                    print("  KOSPI 지수(pykrx) 실패 → FDR KS11 사용")
+                    source = f"kospi_fdr:{_fdr_src}"   # 실제 원천을 캐시 라벨에 남긴다(09-17 KS11 정지 구분)
+                    print(f"  KOSPI 지수(pykrx) 실패 → {_fdr_src} 사용")
             except Exception:
                 pass
 

@@ -52,7 +52,8 @@ def test_optional_import_failure_preserves_all_existing_kr_task_handles(monkeypa
     monkeypatch.setattr(builtins, '__import__', fail_optional)
     monkeypatch.setenv('TOSS_API', '0')
     baseline = scheduler.create_tasks()
-    assert len(baseline) == 12 and imports == []
+    # 2026-09-28 안전자산(kr_safe_asset) 루프 삭제로 12 → 11
+    assert len(baseline) == 11 and "kr_safe_asset" not in baseline and imports == []
     monkeypatch.setenv('TOSS_API', '1')
     assert scheduler.create_tasks() == baseline
     assert created == baseline + baseline and imports == ['toss_shadow']

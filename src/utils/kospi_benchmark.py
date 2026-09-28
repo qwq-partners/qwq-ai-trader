@@ -122,3 +122,49 @@ def load_kospi_daily(start: str, now: datetime, *, sources=SOURCES,
             f"마지막 봉={status['last_bar_date']}, reason={status['reason']}"
         )
     return None, failure
+
+
+def _fdr_fetch_range(symbol: str, start: str, end: Optional[str]):
+    import FinanceDataReader as fdr
+    return fdr.DataReader(symbol, start, end)
+
+
+def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES,
+                       fetch: Optional[Callable] = None, now: Optional[datetime] = None):
+    """백테스트·분석용 KOSPI 일봉 프레임(과거 구간) — 첫 비어 있지 않은 원천. 신선도로 거르지는 않는다.
+
+    end 는 포함한다. FDR Yahoo 리더는 end 를 **로컬 자정** 기준 period2 로 넘겨 KST 에선 end 가 빠지고
+    UTC 에선 다음 거래일이 섞인다 → 하루 더 조회한 뒤 end 이후 행을 잘라 시간대와 무관하게 맞춘다.
+    end 가 없으면(=오늘까지) 마지막 봉이 직전 KR 거래일보다 오래됐을 때 경고한다 — KS11 캐시가 09-17 에서
+    예외 없이 멈춘 것 같은 정지를 드러내려고(2026-09-28, scripts/ 백테스트 벤치마크 교체).
+    Returns: (DataFrame | None, "FDR:<기호>" | None)
+    """
+    import pandas as pd
+
+    fetch = fetch if fetch is not None else _fdr_fetch_range
+    for symbol in sources:
+        stop = end
+        if end is not None and symbol.startswith("YAHOO:"):
+            stop = (date.fromisoformat(end[:10]) + timedelta(days=1)).isoformat()
+        try:
+            df = fetch(symbol, start, stop)
+        except Exception as exc:
+            logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 조회 실패: {type(exc).__name__}")
+            continue
+        if df is None or len(df) == 0:
+            continue
+        if end is not None:
+            idx = df.index
+            if getattr(idx, "tz", None) is not None:   # 시간대가 붙은 인덱스는 KST 거래일로 맞춘다
+                idx = idx.tz_convert(KST).tz_localize(None)
+            df = df[idx.normalize() <= pd.Timestamp(end[:10])]
+            if len(df) == 0:
+                continue
+        if end is None:
+            last = df.index[-1]
+            last = last.date() if hasattr(last, "date") else last
+            ref = now if now is not None else datetime.now(KST).replace(tzinfo=None)
+            if benchmark_date_status(last, ref)[0] == "stale":
+                logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 마지막 봉 {last} — 직전 거래일보다 오래됨(원천 정지 의심)")
+        return df, f"FDR:{symbol}"
+    return None, None
