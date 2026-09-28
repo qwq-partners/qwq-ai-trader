@@ -1018,3 +1018,26 @@ def test_reconciliation_sql_structure():
     assert "SUM(e.quantity)" in outer and "e.event_type = 'SELL'" in outer
     assert "$1" not in outer and "event_time" not in outer        # 바깥 SUM 은 거래의 전체 SELL 합
     assert "event_time::date = $1" in sub and "event_type = 'SELL'" in sub
+
+
+def test_legacy_empty_snapshot_with_legacy_meta_keeps_prev_same_day(tmp_path):
+    """옛 형식: 빈 positions.jsonl + 당일 positions_meta.json + 비어 있지 않은 prev → 당일 보존, 다음 계산일 회전(재리뷰 P2)."""
+    prev_rows = [dict(schema=1, position_id="OK1", net_pnl="1", bench_return="0.01"),
+                 dict(schema=1, position_id="OK2", net_pnl="2", bench_return="0.02")]
+    (tmp_path / "positions.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "positions_meta.json").write_text('{"computed_date": "2026-09-11"}', encoding="utf-8")
+    (tmp_path / "positions_prev.jsonl").write_text("".join(json.dumps(r) + "\n" for r in prev_rows), encoding="utf-8")
+    s, _ = _update(tmp_path, [], [], _kis_rows(), datetime(2026, 9, 11, 21, 0))
+    assert s["drift"] == 2                                       # 기준(prev 2행) 보존 — 오늘 0행과 비교
+    assert len(er.read_snapshot(tmp_path / "positions_prev.jsonl")[1]) == 2
+    s2, _ = _update(tmp_path, [], [], _kis_rows(), datetime(2026, 9, 14, 20, 31))
+    assert s2["drift"] == 0                                      # 다음 계산일 — 오늘 헤더 스냅샷(0행)이 기준
+
+
+def test_undated_legacy_empty_snapshot_does_not_destroy_prev(tmp_path):
+    """날짜를 알 수 없는 빈 옛 스냅샷은 회전하지 않는다 — 기존 기준 보존(재리뷰 P2)."""
+    prev_rows = [dict(schema=1, position_id="OK1", net_pnl="1", bench_return="0.01")]
+    (tmp_path / "positions.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "positions_prev.jsonl").write_text("".join(json.dumps(r) + "\n" for r in prev_rows), encoding="utf-8")
+    s, _ = _update(tmp_path, [], [], _kis_rows(), datetime(2026, 9, 11, 21, 0))
+    assert s["drift"] == 1 and len(er.read_snapshot(tmp_path / "positions_prev.jsonl")[1]) == 1

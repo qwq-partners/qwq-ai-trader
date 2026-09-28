@@ -96,7 +96,7 @@
 
 ## 5. 행 스키마와 분류 규칙
 
-`positions.jsonl` 한 줄이 포지션 하나다(schema 1). 매일 전체를 다시 쓴다. 아래 값은 합성 예시다.
+`positions.jsonl` 은 첫 줄이 계산일 헤더(`{"_meta": {"computed_date", "computed_at"}}` — 날짜와 행을 한 번의 원자적 쓰기로 남긴다)이고, 그 뒤 한 줄이 포지션 하나다(schema 1). 매일 전체를 다시 쓴다. 아래 값은 합성 예시다.
 
 ```json
 {

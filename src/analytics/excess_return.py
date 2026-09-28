@@ -51,6 +51,7 @@ BENCH_FILE = "kodex200_daily.csv"
 SNAPSHOT_FILE = "positions.jsonl"
 PREV_SNAPSHOT_FILE = "positions_prev.jsonl"
 SNAPSHOT_META_KEY = "_meta"       # 스냅샷 첫 줄 헤더 {"_meta": {computed_date, computed_at}} — 행과 한 번에 원자 기록
+LEGACY_META_FILE = "positions_meta.json"   # 2be0049~3179fe7 의 옛 형식(미배포) — 읽기 전용 호환
 SUMMARY_FILE = "summary.json"
 HISTORY_FILE = "summary_history.jsonl"
 
@@ -757,9 +758,19 @@ async def run_daily_update(*, broker: Any, fetch: Any, out_dir: Path, root: Path
         meta, current_rows = read_snapshot(snap_path)
         if meta is not None:
             snap_day = meta.get("computed_date")
-        else:                                    # 헤더 없는 옛 스냅샷 — 첫 행 계산 시각으로 대신 본다
-            snap_day = str(current_rows[0].get("computed_at", ""))[:10] if current_rows else None
-        if snap_day != today.isoformat():
+        else:
+            # 헤더 없는 옛 스냅샷 — 옛 메타 파일(positions_meta.json) → 첫 행 계산 시각 순으로 날짜를 본다
+            snap_day = None
+            legacy_meta = out_dir / LEGACY_META_FILE
+            try:
+                if legacy_meta.is_file():
+                    snap_day = json.loads(legacy_meta.read_text(encoding="utf-8")).get("computed_date")
+            except (OSError, json.JSONDecodeError, AttributeError):
+                snap_day = None
+            if snap_day is None and current_rows:
+                snap_day = str(current_rows[0].get("computed_at", ""))[:10]
+        # 날짜를 알 수 없으면(헤더·메타·행 모두 없음) 기존 기준(prev)을 파괴하지 않는다 — 회전하지 않는다(재리뷰 P2)
+        if snap_day is not None and snap_day != today.isoformat():
             # 직전 계산일 스냅샷 보관(헤더 포함 통째) — 같은 날 재실행은 그날 첫 실행 전 기준을 그대로 쓴다
             atomic_write_text(prev_path, snap_path.read_text(encoding="utf-8"))
     previous = read_snapshot(prev_path)[1]

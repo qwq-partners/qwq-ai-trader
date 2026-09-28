@@ -179,4 +179,4 @@ venv/bin/python -m py_compile src/analytics/excess_return.py scripts/export_risk
 | 1단계 T1~T5 | Claude Opus/high(실제 Opus 5.5) + coordinator 보완 1건(벤치마크 상한) | 새 시험 49·변이 7 kill, 전체 UTC/KST 2163 passed. Codex 구현 리뷰(요청 gpt-6-astra/high, rollout 동일) REQUEST_CHANGES P1 1(coordinator 보완의 결함)·P2 3 → 처분 | `f913781`, 처분 `2be0049` |
 | 2단계 T7·DDL | Claude Opus/high | 새 시험 43(기본 경로 13개 시나리오 기준선 대조) | `2be0049` |
 | 2단계 T8·T9 | Claude Opus/high + coordinator 보완 2건(표 없음 판정 좁힘·거래 본체 SQL KR 필터) | 새 시험 23, 전체 UTC 2234 passed, KST 1차 Toss 간헐 1 failed → 2차 2234 passed | 이번 커밋 |
-
+| 2단계 리뷰 처분 | Claude Opus/high + coordinator(재리뷰 P2) | Codex(요청 gpt-6-astra/xhigh) 1회차 REQUEST_CHANGES P1 2·P2 3 → 처분 `d768198` → 한정 재리뷰 P0·P1 0·P2 1 → coordinator 수정(재리뷰 없음). 최종 전체 UTC·KST 2263 passed / 2 xfailed | `d768198`, 이번 커밋 |
