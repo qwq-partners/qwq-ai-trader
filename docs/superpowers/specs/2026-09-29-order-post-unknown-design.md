@@ -217,3 +217,16 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 | P1-6 | CLI 는 분할 SELL 도 하며, 두 프로세스가 같은 파일을 덮어쓸 수 있다 | D2: 병합 저장. CLI 는 이 단계 보장 범위 밖으로 명시((3)단계 선행조건). 시험 B6 병합 |
 | P2-7 | 비-JSON 4xx 를 접수 전 거절로 볼 근거가 약하다 | D1: 비-JSON 은 상태 무관 UNKNOWN. 401·토큰 재전송 전제를 표에 명시 |
 | P2-8 | 저장 실패 시 재시작 보호의 한계, mtime 시계 의존 | D2 한계 명시 + 알림 표시. 시험 B6 에 mtime 고정·날짜 전환·실패 뒤 재생성 추가 |
+
+## 8. 구현 기록 (2026-09-29)
+
+- 구현 커밋 `5e8d730`(코드·시험), 문서 커밋은 그 다음. 기준 HEAD `296766a`. 작성 Claude Opus 5.5(요청 opus/high). **교차 공급자 구현 리뷰 전, 미배포.**
+- 변경 파일: `src/risk/order_unknown.py`(신규), `src/execution/broker/kis_kr.py`, `src/utils/audit_log.py`(`EV_UNKNOWN`), `src/core/engine.py`, `src/strategies/exit_manager.py`, `scripts/run_trader.py`, 시험 `tests/test_order_post_unknown.py`(신규).
+- 시험: 신규 58건(B1~B6·E0~E4). 대상 9개 파일 331 passed. 전체 UTC **2321 passed / 2 xfailed / pykrx warning 1**, 전체 KST(`TZ=Asia/Seoul`) **2321 passed / 2 xfailed / pykrx warning 1**, 두 실행 모두 "[테스트 격리] 운영 상태·외부 네트워크 접근 시도 0건". 기존 시험 무수정.
+- 변이 확인(가드를 하나씩 끈 뒤 신규 시험 실행 → 되돌림, 해시로 복원 확인): 브로커 UNKNOWN 판정 8건 실패, 전송 직전 재확인 2건(B4c), ExitManager 훅 2건(E0), on_signal 분할 가드 3건(E2), 폴백 가드 2건(E3), 좀비 카운터 제외 1건(E4), 머리 게이트 1건(B2), 엔진 BUY 조기 차단 1건(E1) — 8종 모두 kill.
+- **설계 이탈** (기존 시험을 고치지 않기 위해 — 리뷰 대상):
+  1. D3 전송 직전 재확인: `_api_post(..., gate=...)` 인자 대신 `_api_post` 가 tr_id 가 매수 TR(구/신, `_BUY_TR_IDS`)이면 `self.unknown_buy_hold()` 를 매 시도의 rate-limit 대기 직후 확인한다. `tests/test_kis_tr_switch.py` 의 가짜 `_api_post(url, tr_id, json_data, extra_headers=None, retry=True)` 가 `gate` 키워드를 받지 않아, 인자로 넘기면 BUY 제출이 TypeError → 실패로 바뀐다. 의미(매수만·매 시도·401 재전송 포함)는 같다. 정정 POST 는 매수 TR 이 아니라 대상 밖(설계와 같음).
+  2. D4-2 명시 분할 액션: `_pending_signal_cache` 에 `"sell_partial_action"` 키를 넣지 않고 같은 수명(등록 시 설정/해제, `clear_pending`·`on_fill` 완결 시 삭제)의 별도 집합 `RiskManager._partial_action_marks()` 에 둔다. `tests/test_stale_sell_cancel_failure.py::test_engine_records_the_partial_intent_when_the_sell_is_registered` 가 캐시 값을 `{"sell_partial_intent": True}`/`None` 으로 정확히 비교한다.
+  3. D2 장부 생성: `KISBroker.__init__` 에서 만든다(생성 시 1회 로드). `object.__new__` 시험 브로커는 장부가 없어 조회는 보류 없음이고, 첫 불명 기록 때 `default_path()` 로 지연 생성한다. 조회 시 지연 생성하면 기존 시험 브로커(`test_kis_tr_switch` 의 BUY 제출)가 운영 캐시 경로를 읽어 격리 위반이 된다.
+- 구현 세부(설계 범위 안): 손상 파일(오늘 수정)은 장부에 전 방향·전 종목 표식 1건(`side="*"`, `symbol="*"`)으로 담아 병합 저장에도 보존한다. 보류 사유 문자열은 `[접수불명]` 접두어를 쓰지 않는다(불명 결과와 보류 차단을 구분). 알림 문구는 방향별 효과만 적는다(매수 → 오늘 신규 매수 보류, 매도 → 이 종목 분할 매도 재발행 금지).
+- 남은 한계: §5 그대로. 추가로 — 엔진 `on_signal` 의 분할 가드와 폴백 가드는 경고 로그를 스로틀하지 않는다(ExitManager 가 분할 신호를 만들지 않으므로 반복 발행처는 코어 트림 등 소수). `modify_order`(정정, `retry=False`)는 이번 분류 밖이다(설계 D1 은 `submit_order` 대상).
