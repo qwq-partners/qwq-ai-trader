@@ -210,6 +210,18 @@ def test_history_trims_rows_after_end_regardless_of_timezone():
     assert df.index[-1].date() == date(2026, 9, 23)
 
 
+def test_history_trim_handles_timezone_aware_index_and_empty_result():
+    aware = frame("2026-09-25")
+    aware.index = aware.index.tz_localize("UTC")          # 00:00 UTC = 같은 날 09:00 KST
+    fetch, _ = range_stub(**{"YAHOO:^KS11": aware, "KS11": frame("2026-09-17")})
+    df, source = kb.load_kospi_history("2026-06-01", "20260923", fetch=fetch)
+    assert source == "FDR:YAHOO:^KS11" and df.index[-1].date() == date(2026, 9, 23)
+    late, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-25").loc["2026-09-24":],
+                            "KS11": frame("2026-09-17")})
+    df, source = kb.load_kospi_history("2026-06-01", "2026-09-23", fetch=late)   # 절단 뒤 빈 결과 → 다음 원천
+    assert source == "FDR:KS11"
+
+
 def test_backtest_scripts_do_not_read_frozen_fdr_ks11_directly():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]

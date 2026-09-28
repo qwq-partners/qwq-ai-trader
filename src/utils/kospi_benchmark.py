@@ -151,10 +151,15 @@ def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES
         except Exception as exc:
             logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 조회 실패: {type(exc).__name__}")
             continue
-        if df is not None and end is not None:
-            df = df[df.index <= pd.Timestamp(end[:10])]
         if df is None or len(df) == 0:
             continue
+        if end is not None:
+            idx = df.index
+            if getattr(idx, "tz", None) is not None:   # 시간대가 붙은 인덱스는 KST 거래일로 맞춘다
+                idx = idx.tz_convert(KST).tz_localize(None)
+            df = df[idx.normalize() <= pd.Timestamp(end[:10])]
+            if len(df) == 0:
+                continue
         if end is None:
             last = df.index[-1]
             last = last.date() if hasattr(last, "date") else last
