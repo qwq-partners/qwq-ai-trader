@@ -158,3 +158,52 @@ def test_harvest_skips_run_and_keeps_cursor_when_kospi_is_not_fresh(monkeypatch,
     assert ok is False and "신선하지 않음" in message   # 스케줄러가 dedup 없이 재시도
     assert cursor.read_text(encoding="utf-8") == '{"last_bar": "2026-09-17", "last_d0": {}}'
     assert not (tmp_path / "pending.json").exists()
+
+
+# ── 백테스트·분석용 과거 구간 로더 (scripts/ 벤치마크 교체, 2026-09-28) ──────────
+
+def range_stub(**by_symbol):
+    calls = []
+
+    def fetch(symbol, start, end):
+        calls.append((symbol, start, end))
+        value = by_symbol[symbol]
+        if isinstance(value, Exception):
+            raise value
+        return value
+    return fetch, calls
+
+
+def test_history_prefers_yahoo_and_includes_end_day():
+    fetch, calls = range_stub(**{"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17")})
+    df, source = kb.load_kospi_history("2026-06-01", "2026-09-23", fetch=fetch)
+    assert source == "FDR:YAHOO:^KS11" and df.index[-1].date() == date(2026, 9, 23)
+    assert calls == [("YAHOO:^KS11", "2026-06-01", "2026-09-24")]  # Yahoo end 배타 → 하루 더
+
+
+def test_history_falls_back_to_ks11_on_error_or_empty():
+    fetch, calls = range_stub(**{"YAHOO:^KS11": RuntimeError("차단"), "KS11": frame("2026-09-17")})
+    df, source = kb.load_kospi_history("2026-06-01", "2026-09-17", fetch=fetch)
+    assert source == "FDR:KS11" and calls[-1] == ("KS11", "2026-06-01", "2026-09-17")  # KS11 end 는 포함 그대로
+    fetch, _ = range_stub(**{"YAHOO:^KS11": pd.DataFrame(), "KS11": pd.DataFrame()})
+    assert kb.load_kospi_history("2026-06-01", fetch=fetch) == (None, None)
+
+
+def test_history_warns_when_open_ended_series_is_frozen(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(kb.logger, "warning", lambda msg: warnings.append(msg))
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-17"), "KS11": frame("2026-09-17")})
+    df, source = kb.load_kospi_history("2026-06-01", fetch=fetch)  # end 없음 = 오늘까지
+    assert source == "FDR:YAHOO:^KS11"
+    assert any("직전 거래일보다 오래됨" in w for w in warnings)
+    warnings.clear()
+    kb.load_kospi_history("2026-06-01", "2026-09-17", fetch=fetch)  # 과거 구간 명시 → 경고 없음
+    assert warnings == []
+
+
+def test_backtest_scripts_do_not_read_frozen_fdr_ks11_directly():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for name in ("ab_exit_policy.py", "backtest_strategies.py", "backtest_t1_gate.py", "quick_backtest.py"):
+        text = (root / "scripts" / name).read_text(encoding="utf-8")
+        assert 'DataReader("KS11"' not in text and "load_kospi_history" in text, name

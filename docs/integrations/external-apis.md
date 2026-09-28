@@ -145,7 +145,7 @@
   읽기 실패를 삼키고 신선도 검사가 없어 **상류가 멈춰도 예외 없이 오래된 프레임**을 준다 — 2026-09-17 장중 부분봉(6724.34)에서 정지 확인(09-28).
 - KOSPI 결정 소비처(스크리너 레짐·변동성 타게팅·수확 shadow)는 `utils/kospi_benchmark.load_kospi_daily`(1순위 `YAHOO:^KS11`, 신선도 검증)를 쓴다.
   FDR Yahoo 리더는 `end` 를 배타 경계로 쓴다(마지막 날 포함하려면 하루 더).
-- `scripts/` 백테스트(backtest_strategies·backtest_t1_gate·quick_backtest·ab_exit_policy)는 아직 KS11 — 09-17 이후 구간 벤치마크는 정지값.
+- `scripts/` 백테스트(backtest_strategies·backtest_t1_gate·quick_backtest·ab_exit_policy)는 `load_kospi_history`(과거 구간, Yahoo ^KS11 → KS11, end 포함·열린 구간 정지 경고)를 쓴다(2026-09-28~).
 
 ## 데이터 — yfinance
 

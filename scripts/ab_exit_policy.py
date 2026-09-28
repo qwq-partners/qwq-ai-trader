@@ -197,7 +197,8 @@ def run_cell(cfg, shared: dict, outdir: Path = None, cell: str = "") -> dict:
 
 
 def benchmark_return(start: str, end: str, *, offline: bool = False) -> dict:
-    """KODEX200(069500) 매수보유 수익률 — 리뷰 판정 기준(초과수익). 실패 시 KS11 폴백.
+    """KODEX200(069500) 매수보유 수익률 — 리뷰 판정 기준(초과수익). 실패 시 KOSPI 지수 폴백
+    (공용 로더: Yahoo ^KS11 → KS11 — FDR KS11 캐시가 2026-09-17 에서 예외 없이 멈췄다).
 
     offline 에서는 KODEX200 이 개별 종목이라 다운로드하지 않는다. 캐시가 있으면 쓰고,
     없으면 초과수익은 **미측정(null)** 이다 — 0 으로 채워 통과시키지 않는다 (계획서 T8).
@@ -214,9 +215,13 @@ def benchmark_return(start: str, end: str, *, offline: bool = False) -> dict:
         return {"code": None, "return_pct": None,
                 "source": "offline: KODEX200 캐시 없음 — 초과수익 미측정"}
     import FinanceDataReader as fdr
-    for code in ("069500", "KS11"):
+    from src.utils.kospi_benchmark import load_kospi_history
+    for code in ("069500", "KOSPI"):
         try:
-            df = fdr.DataReader(code, start, end)
+            if code == "069500":
+                df = fdr.DataReader(code, start, end)
+            else:
+                df, code = load_kospi_history(start, end)
             if df is not None and len(df) >= 2:
                 c = df["Close"].astype(float)
                 return {"code": code, "return_pct": (c.iloc[-1] / c.iloc[0] - 1) * 100,

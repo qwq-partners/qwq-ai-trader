@@ -189,9 +189,15 @@ def simulate_exit_engine(d: pd.DataFrame, ei: int, entry: float) -> float:
 
 
 def _regime_ok_dates(start: str) -> set:
-    """체제 게이트 (전략 §2A): KOSPI 지수 종가 > 20일선인 날짜 집합 (D0 판정용)"""
-    import FinanceDataReader as fdr
-    ks = fdr.DataReader("KS11", start)
+    """체제 게이트 (전략 §2A): KOSPI 지수 종가 > 20일선인 날짜 집합 (D0 판정용)
+
+    원천은 공용 로더(Yahoo ^KS11 → KS11) — FDR KS11 캐시가 2026-09-17 에서 예외 없이 멈췄다.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # src 공용 로더
+    from src.utils.kospi_benchmark import load_kospi_history
+    ks, _ = load_kospi_history(start)
+    if ks is None:
+        raise RuntimeError("KOSPI 지수 일봉 조회 실패 (Yahoo ^KS11·KS11)")
     ma20 = ks["Close"].rolling(20).mean()
     ok = ks.index[ks["Close"] > ma20]
     return {str(d)[:10] for d in ok}

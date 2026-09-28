@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-28 — chore: 안전자산 자동 운용 삭제·백테스트 KOSPI 벤치마크 교체 (미배포)
+
+- **안전자산(KOFR) 자동 운용 삭제 — 사용자 결정(운용 계획 없음):** `KRScheduler.run_safe_asset_loop`·`kr_safe_asset` 태스크·`_pick_safe_asset` 헬퍼·시험 삭제. 이 루프는 08-31 이후 검증 통과 0·매수 0 이었고(KIS 현재가에 종목명 없음), 이름 원천을 고친 뒤에도 후보 코드가 전부 다른 종목이라 스스로 꺼지는 상태였다. 브로커 직접 시장가 BUY/SELL 경로 하나가 사라진다. `StockMaster.get_name` 은 swing_screener 유니버스의 이름 폴백 분기가 참조하므로 유지(그 전엔 메서드가 없어 그 분기가 AttributeError). 런타임 상태 파일 `safe_asset_state.json` 은 건드리지 않는다.
+- **백테스트 KOSPI 벤치마크 교체:** `scripts/` 4개(ab_exit_policy 의 KODEX200 폴백, backtest_strategies 레짐 지표 2차, backtest_t1_gate 체제 게이트, quick_backtest turn-of-month)가 09-17 에서 멈춘 FDR KS11 을 읽었다 → 신규 `kospi_benchmark.load_kospi_history`(과거 구간, Yahoo ^KS11 → KS11, end 포함 보정, 끝 없는 조회에서 마지막 봉이 직전 거래일보다 오래되면 경고). 공개 시세 실측: 09-01~09-23 범위 17행·끝 09-23 포함, t1_gate 체제 게이트 끝 09-28(이전 09-17). 운영 코드 경로 무변경.
+- **EGW00215 원인 확정·수용(사용자):** 같은 계좌를 웹 대시보드 등에서 잔고 조회용으로 함께 쓴다. 09-28 거절 65건(전부 동기화 8434R, 재시도 흡수)은 외부 조회와 겹친 것 — **조치하지 않는다**.
+
 ## 2026-09-28 — ops: main `d551ab9` 배포 (PR #94/#95)
 
 - PR #94(`71adac6`, KOSPI 원천·휴장일·toss 시험)와 #95(`d551ab9`, 장중 RS 기준값·약세장 필터 죽은 분기·안전자산 종목명) 모두 required verify SUCCESS 후 head 고정 merge commit. 병합 트리 = 리뷰·시험 트리.

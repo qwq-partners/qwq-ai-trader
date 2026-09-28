@@ -457,8 +457,8 @@ class StockMaster:
     async def get_name(self, code: str) -> Optional[str]:
         """코드 → 종목명 (DB). 없으면 None.
 
-        KIS 현재가(FHKST01010100) 응답에는 종목명이 없어 안전자산 후보 검증이 늘 빈 이름으로
-        실패했다(2026-09-28) — 이름은 이 마스터에서 읽는다.
+        swing_screener 유니버스가 "종목명=코드" 가 아닌 항목에서 이름을 찾을 때 쓴다(그 전엔 메서드가
+        없어 그 분기가 AttributeError 였다). KIS 현재가(FHKST01010100) 응답에는 종목명이 없다(2026-09-28).
         """
         await self._ensure_connected()
         async with self.pool.acquire() as conn:

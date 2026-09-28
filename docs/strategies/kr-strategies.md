@@ -399,7 +399,7 @@ awesome-systematic-trading 재현 백테스트의 저변동 캘린더 이상현�
 | gap_and_go | 15% | 실거래 PF 1.29이나 기대값 -0.41%/건, 백테스터 미지원 → EOD 가드 포함 재검증 전 축소 |
 | vcp_breakout | 10% | 실거래 0건·백테스트 없음 — 탐색 배분 유지 |
 | core_holding | **0%** | 실거래 23건 승률 26%·PF 0.44, 6월 부검 최대 손실원 → 신필터 shadow 재검증 전 신규 진입 중단 |
-| 잔여 | 35% 현금/KOFR | |
+| 잔여 | 35% 현금 | (KOFR 안전자산 자동 운용은 2026-09-28 삭제) |
 
 복원 기준: 포지션 원장 30건+ **그리고** 백테스트 게이트(포지션 단위 R·walk-forward) 통과.
 판정은 KODEX200 대비 초과수익 + 손절 클립 기준(`docs/reviews/strategy-architecture-review-2026-09.md` §5).
