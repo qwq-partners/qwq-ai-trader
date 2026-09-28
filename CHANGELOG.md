@@ -10,6 +10,7 @@
 - **ExitManager:** `set_partial_exit_block(fn)` — 참이면 `_check_partial_exit(allow_partial=False)` 가 단계 익절 중 분할(sell_partial)만 부작용 없이 거른다(구현 리뷰 P2-3 — 잔량 전부인 단계 익절 sell_all·손절·트레일링·본전·THIRD→TRAILING 그대로). 분할 신호가 없으니 스케줄러 청산 pending 이 손절을 가리지 않는다. `scripts/run_trader.py` 가 `broker.has_unknown_sell` 로 배선(브로커 없으면 미배선).
 - **설계 이탈(보고):** ① 전송 직전 재확인을 `gate=` 인자 대신 매수 TR(구/신) 판별로 `_api_post` 안에서 한다 — 기존 시험의 가짜 `_api_post` 가 `gate` 키워드를 받지 않아 인자로 넘기면 기존 시험을 고쳐야 했다. ② 명시 분할 액션 표식을 `_pending_signal_cache` 의 키가 아니라 같은 수명의 별도 집합(`_partial_action_marks`)에 둔다 — 기존 시험이 캐시 값을 정확히 비교한다. ③ 장부는 `KISBroker.__init__` 에서 만들고(로드 1회), `object.__new__` 시험 브로커는 장부 없음 = 보류 없음, 첫 불명 기록 때 지연 생성한다(기존 시험 브로커가 운영 캐시 경로를 읽지 않게).
 - **구현 리뷰 1회차 처분(`7c57bb1`):** P1-1 장부 병합 저장을 `flock` 으로 프로세스 간 직렬화, P1-2 좀비 카운터 제외 삭제, P2-3 잔량 전부인 단계 익절은 허용(분할만 부작용 없이 거름), P2-4 시험 보강(실제 생성자의 오늘 장부 복원·run_trader 배선 AST·ExitManager 시계 고정). 처분표는 설계 §7.
+- **구현 리뷰 2회차(한정, P2 1):** 30분 하드 만료 선행은 기준 동작 유지(변경 없음, 시험으로 고정), 2차·3차 단계 가드 개별 시험 추가 — 제품 코드 무변경. 전체 UTC·KST 각 **2332 passed / 2 xfailed**, 격리 0.
 - 검증: 신규 `tests/test_order_post_unknown.py` 64건(B1~B6·E0~E4, 시계·mtime 주입). 변이 kill — 1차 8종(브로커 불명 판정·전송 직전 재확인·ExitManager 훅·on_signal 분할 가드·폴백 가드·머리 게이트·엔진 BUY 조기 차단, 좀비 제외는 삭제됨) + 리뷰 반영 5종(생성자 장부 생성·배선·`allow_partial` 검사·flock·훅 무시). 전체 UTC **2327 passed / 2 xfailed / pykrx warning 1**, KST **2327 passed / 2 xfailed / pykrx warning 1**(기준선 2263 + 신규 64), 격리 위반 0.
 - 주문·전략·위험 설정·`.env`·킬스위치 변경 0. 추가 KIS 호출 0.
 

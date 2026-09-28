@@ -564,6 +564,65 @@ def test_e0_stage_exit_of_the_whole_remainder_still_goes_out(home, monkeypatch):
     assert em.get_state(SYM).pending_stage == ExitStage.FIRST
 
 
+def _pending_fields(st):
+    return (st.pending_stage, st.pending_since, st.pending_target_qty, st.pending_filled_qty)
+
+
+@pytest.mark.parametrize("stage,price,label", [
+    (ExitStage.FIRST, Decimal("11600"), "2차 익절"),     # +16% ≥ 2차 15%
+    (ExitStage.SECOND, Decimal("12600"), "3차 익절"),    # +26% ≥ 3차 25%
+])
+def test_e0_later_stage_partial_is_blocked_without_side_effects(home, monkeypatch, stage, price, label):
+    """구현 리뷰 2회차: 2차·3차 가드를 각각 고정한다 — 분할이면 None, pending 네 필드·이력·영속 쓰기 불변."""
+    em = _em_with_position(monkeypatch, lambda s: True)
+    st = em.get_state(SYM)
+    st.current_stage = stage
+    st.breakeven_activated = True        # 본전 이동의 영속 쓰기를 분리한다 — 이 시험은 분할 경로만 본다
+    before, history = _pending_fields(st), len(st.exit_history)
+    persisted = []
+    monkeypatch.setattr(em, "_persist_states", lambda: persisted.append(1))
+    assert em.update_price(SYM, price) is None
+    assert _pending_fields(st) == before and len(st.exit_history) == history and persisted == []
+
+    # 대조군 — 훅이 없으면 같은 가격에서 이 단계의 분할이 나간다
+    em.set_partial_exit_block(None)
+    action, qty, reason = em.update_price(SYM, price)
+    assert (action, qty) == ("sell_partial", 50) and label in reason
+
+
+@pytest.mark.parametrize("stage,price,label", [
+    (ExitStage.FIRST, Decimal("11600"), "2차 익절"),
+    (ExitStage.SECOND, Decimal("12600"), "3차 익절"),
+])
+def test_e0_later_stage_exit_of_the_whole_remainder_still_goes_out(home, monkeypatch, stage, price, label):
+    em = _em_with_position(monkeypatch, lambda s: True, qty=1)
+    st = em.get_state(SYM)
+    st.current_stage = stage
+    st.breakeven_activated = True
+    action, qty, reason = em.update_price(SYM, price)
+    assert (action, qty) == ("sell_all", 1) and label in reason
+
+
+def test_e0_hard_expiry_of_an_old_pending_still_runs_when_blocked(home, monkeypatch):
+    """구현 리뷰 2회차 처분(변경 없음 고정): `_check_partial_exit` 머리의 30분 하드 만료는 기준 동작 그대로 틱마다 돈다 —
+    훅이 참이어도 31분 된 pending_stage 는 만료되고, 그 뒤의 분할 후보는 부작용 없이 걸러진다."""
+    em = _em_with_position(monkeypatch, lambda s: True)
+
+    async def _verifier(_symbol):
+        return None
+    em.set_pending_verifier(_verifier)   # 운영처럼 검증자가 배선돼 하드 만료는 30분
+    st = em.get_state(SYM)
+    st.pending_stage, st.pending_since = ExitStage.FIRST, NOW - timedelta(minutes=31)
+    st.pending_target_qty = 10
+    history = len(st.exit_history)
+    persisted = []
+    monkeypatch.setattr(em, "_persist_states", lambda: persisted.append(1))
+
+    assert em.update_price(SYM, Decimal("11300")) is None
+    assert _pending_fields(st) == (None, None, 0, 0)
+    assert persisted == [1] and len(st.exit_history) == history   # 만료 영속 1회뿐 — 새 분할 후보는 흔적 없음
+
+
 def test_e0_third_to_trailing_transition_is_not_blocked(home, monkeypatch):
     em = _em_with_position(monkeypatch, lambda s: True)
     em.get_state(SYM).current_stage = ExitStage.THIRD

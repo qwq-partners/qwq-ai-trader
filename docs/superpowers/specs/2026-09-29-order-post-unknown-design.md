@@ -230,14 +230,24 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 | P2-3 | 단계 조건 훅이 잔량 전부인 단계 익절(`sell_all`)까지 막는다 | `_check_partial_exit(..., allow_partial)` — 분할만 부작용 없이 거른다. 단계 제한 조건 삭제 |
 | P2-4 | 시험 공백: 실제 생성자의 장부 복원, run_trader 배선, E0 시계 | 실제 `KISBroker(config=KISConfig(…))` 로 임시 HOME 의 오늘 장부 복원 시험, run_trader AST 구조 시험, ExitManager `datetime`·`date` 고정 |
 
+### 구현 리뷰 2회차(한정) — 교차 공급자 (2026-09-29)
+
+- 대상 `7c57bb1`·`6542cb8`. Codex, rollout 기준 gpt-6-astra/xhigh. 판정 P0 0 · P1 0 · P2 1. 1회차 P1-1·P1-2·P2-4 는 닫혔다. 제품 코드 변경 없음(시험·문서만).
+
+| # | 지적 | 처분 |
+|---|---|---|
+| P2 | `_check_partial_exit` 머리의 30분 하드 만료가 `allow_partial` 검사보다 먼저 돈다 | **변경 없음** — 기준 `296766a` 에서도 틱마다 도는 기존 동작이다(1회차 이전 훅이 그것까지 건너뛴 것이 기준 이탈이었다). 차단된 후보 자체는 pending·이력·영속을 만들지 않는다. 시험으로 고정: 훅이 참이어도 31분 된 pending_stage 는 만료(영속 1회)되고 새 분할 후보는 흔적이 없다 |
+| 변이 둔감 | 2차·3차 가드를 하나만 지우는 변이를 시험이 잡지 못한다 | FIRST→2차, SECOND→3차 각각 "훅 참 → 분할 None·pending 네 필드·이력·영속 0" + "훅 없음 대조군 → 분할" + "잔량 전부 → sell_all" 시험 추가. 1·2·3차 가드를 각각 하나씩 지운 변이가 모두 실패 |
+
 ## 8. 구현 기록 (2026-09-29)
 
-- 커밋: 구현 `5e8d730`(코드·시험), 문서 `7029527`, 구현 리뷰 1회차 반영 `7c57bb1`(코드·시험) + 그 문서 커밋. 기준 HEAD `296766a`. 작성 Claude Opus 5.5(요청 opus/high). **구현 리뷰 1회차 처분 완료, 재리뷰 전, 미배포.**
+- 커밋: 구현 `5e8d730`(코드·시험), 문서 `7029527`, 구현 리뷰 1회차 반영 `7c57bb1`(코드·시험)·`6542cb8`(문서), 2회차(한정) 반영은 시험·문서 커밋 1개(제품 코드 무변경). 기준 HEAD `296766a`. 작성 Claude Opus 5.5(요청 opus/high). **구현 리뷰 2회차(한정) 처분 완료, 미배포.**
 - 변경 파일: `src/risk/order_unknown.py`(신규), `src/execution/broker/kis_kr.py`, `src/utils/audit_log.py`(`EV_UNKNOWN`), `src/core/engine.py`, `src/strategies/exit_manager.py`, `scripts/run_trader.py`, 시험 `tests/test_order_post_unknown.py`(신규).
-- 시험(1회차 반영 후): 신규 64건. 대상 10개 파일(지정 9개 + `test_exit_manager_characterization.py`) 377 passed. 전체 UTC(`TZ=UTC`) **2327 passed / 2 xfailed / pykrx warning 1**, 전체 KST(`TZ=Asia/Seoul`) **2327 passed / 2 xfailed / pykrx warning 1**, 모두 "[테스트 격리] 운영 상태·외부 네트워크 접근 시도 0건". 기존 시험 무수정.
+- 시험(2회차 반영 후): 신규 69건. 전체 UTC(`TZ=UTC`) **2332 passed / 2 xfailed / pykrx warning 1**, 전체 KST(`TZ=Asia/Seoul`) **2332 passed / 2 xfailed / pykrx warning 1**, 모두 "[테스트 격리] 운영 상태·외부 네트워크 접근 시도 0건". 기존 시험 무수정. (1회차 반영 후: 신규 64건, 대상 10개 파일 377 passed, 전체 UTC·KST 각 2327 passed / 2 xfailed.)
 - 변이 확인(가드를 하나씩 끈 뒤 신규 시험 실행 → 되돌림, 해시로 복원 확인):
   - 1차: 브로커 UNKNOWN 판정 8건 실패, 전송 직전 재확인 2건(B4c), on_signal 분할 가드 3건(E2), 폴백 가드 2건(E3), 머리 게이트 1건(B2), 엔진 BUY 조기 차단 1건(E1). (좀비 카운터 제외는 P1-2 로 삭제, ExitManager 훅은 아래 재확인.)
   - 1회차 반영: 생성자 장부 생성 제거 1건(실제 생성자 복원), run_trader 배선 제거 1건(AST), `allow_partial` 검사 제거(3곳) 3건(E0), `update_price` 훅 무시 3건(E0), flock 제거 2건(재읽기 잠금·잠금 실패) — 모두 kill.
+  - 2회차(한정): 단계 가드를 하나씩 제거 — 1차 4건, 2차 1건(FIRST→2차), 3차 1건(SECOND→3차) 실패 — 모두 kill.
 - **설계 이탈** (기존 시험을 고치지 않기 위해 — 리뷰 대상):
   1. D3 전송 직전 재확인: `_api_post(..., gate=...)` 인자 대신 `_api_post` 가 tr_id 가 매수 TR(구/신, `_BUY_TR_IDS`)이면 `self.unknown_buy_hold()` 를 매 시도의 rate-limit 대기 직후 확인한다. `tests/test_kis_tr_switch.py` 의 가짜 `_api_post(url, tr_id, json_data, extra_headers=None, retry=True)` 가 `gate` 키워드를 받지 않아, 인자로 넘기면 BUY 제출이 TypeError → 실패로 바뀐다. 의미(매수만·매 시도·401 재전송 포함)는 같다. 정정 POST 는 매수 TR 이 아니라 대상 밖(설계와 같음).
   2. D4-2 명시 분할 액션: `_pending_signal_cache` 에 `"sell_partial_action"` 키를 넣지 않고 같은 수명(등록 시 설정/해제, `clear_pending`·`on_fill` 완결 시 삭제)의 별도 집합 `RiskManager._partial_action_marks()` 에 둔다. `tests/test_stale_sell_cancel_failure.py::test_engine_records_the_partial_intent_when_the_sell_is_registered` 가 캐시 값을 `{"sell_partial_intent": True}`/`None` 으로 정확히 비교한다.
