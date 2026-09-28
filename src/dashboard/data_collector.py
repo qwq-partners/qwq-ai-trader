@@ -618,18 +618,13 @@ class DashboardDataCollector:
                     })
             events.sort(key=lambda e: e.get("event_time", ""), reverse=True)
 
-        # is_sync 플래그 추가 (동기화/복구 포지션 식별)
+        # is_sync 플래그 추가 (동기화/복구 포지션 식별) — 초과수익 원장과 같은 공용 규칙 (2026-09-29, sync_detected 청산 포함)
+        from ..analytics.excess_return import is_sync_entry, is_sync_exit
         for ev in events:
             trade_id = ev.get("trade_id", "")
             entry_reason = ev.get("entry_reason", "") or ev.get("reason", "")
             _etype_ev = ev.get("exit_type", "") or ""
-            ev["is_sync"] = (
-                entry_reason == "sync_detected"
-                or (isinstance(trade_id, str) and (
-                    trade_id.startswith("SYNC_") or trade_id.startswith("KIS_SYNC_")
-                ))
-                or _etype_ev in ("kis_sync", "sync_reconcile", "sync_closed", "sync_partial")
-            )
+            ev["is_sync"] = is_sync_entry(trade_id, entry_reason) or is_sync_exit(_etype_ev)
 
         # 종목명 + 미청산 BUY 현재가 보강
         portfolio = self.bot.engine.portfolio

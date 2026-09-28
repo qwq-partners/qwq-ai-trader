@@ -1956,17 +1956,31 @@ class KISBroker(BaseBroker):
     # ============================================================
 
     @kis_request_metrics.observe_operation("daily_fills")
-    async def _query_daily_fills(self, target_date: str = None) -> list:
+    async def _query_daily_fills(self, target_date: str = None, status: Optional[dict] = None) -> list:
         """
         KIS 일일 체결 내역 원시 조회 (TTTC8001R / 신 TR TTTC0081R) — 페이지네이션 포함.
 
         Args:
             target_date: YYYYMMDD 형식. None이면 오늘.
+            status: dict 를 넘기면 조회 완결 판정을 채운다(complete: bool, reason: str|None).
+                None(기본)이면 판정만 건너뛰고 요청·반환·예외는 똑같다 — check_fills(돈 경로)가
+                이 기본 경로를 쓴다. 완결 = 모든 페이지 rt_cd=="0" 이고 마지막 페이지 응답
+                헤더 tr_cont 가 D/E(설계 A §5-1, 2026-09-29). 중간 페이지 헤더 이상(없음/F·M·D·E 밖)이나
+                이미 본 ctx 재등장(비연속 포함)이 한 번이라도 있으면 최종 D/E 여도 미완
+                (missing_tr_cont/repeated_ctx) — 판정만 바뀌고 요청·종료는 기본 경로와 같다.
 
         Returns:
             output1 리스트 (각 항목은 KIS API 응답 dict)
         """
+        def _judge(complete: bool, reason: Optional[str]) -> None:
+            if status is not None:
+                status["complete"] = complete
+                status["reason"] = reason
+
+        # 예외가 올라가면 이 값이 남는다(예외 자체는 기존대로 전파)
+        _judge(False, "exception")
         if not self.is_connected:
+            _judge(False, "not_connected")
             return []
 
         target_date = target_date or datetime.now().strftime("%Y%m%d")
@@ -1978,6 +1992,9 @@ class KISBroker(BaseBroker):
         ctx_nk = ""
         prev_ctx_fk = ""
         prev_ctx_nk = ""
+        # checked 경로 전용 누적(status 가 dict 일 때만 쓴다) — 최종 D/E 가 지우지 못하는 미완 사유
+        sticky_reason: Optional[str] = None
+        seen_ctx: set = set()
 
         for page in range(10):  # 최대 10페이지 (약 300건)
             params = {
@@ -2005,23 +2022,40 @@ class KISBroker(BaseBroker):
                 else:
                     data = await self._api_get(url, tr_id, params, tr_cont="N")
             if str(data.get("rt_cd", "")) != "0":
+                _judge(False, f"rt_cd_failed:{data.get('rt_cd', '')}")
                 break
 
             items = data.get("output1", []) or []
             all_items.extend(items)
 
             # 종료 판정 — get_positions 와 동일(헤더 D/E · 키 비움 · 빈 페이지 · 동일 키, 2026-09-15)
-            if str(data.get("_tr_cont", "") or "") in ("D", "E"):
+            _hdr = str(data.get("_tr_cont", "") or "")
+            if _hdr in ("D", "E"):
+                _judge(sticky_reason is None, sticky_reason)
                 break
+            # 아래 세 종료는 헤더가 '마지막'이라고 하지 않았는데 멈춘 것 — 미완
+            _stop_reason = "contradictory_continuation" if _hdr in ("F", "M") else "missing_tr_cont"
             ctx_fk = (data.get("ctx_area_fk100") or "").strip()
             ctx_nk = (data.get("ctx_area_nk100") or "").strip()
             if not ctx_fk and not ctx_nk:
+                _judge(False, _stop_reason)
                 break
             if len(items) == 0:
+                _judge(False, _stop_reason)
                 break
             if ctx_fk == prev_ctx_fk and ctx_nk == prev_ctx_nk:
+                _judge(False, "repeated_ctx" if _hdr in ("F", "M") else "missing_tr_cont")
                 break
+            if status is not None:
+                if _hdr not in ("F", "M") and sticky_reason is None:
+                    sticky_reason = "missing_tr_cont"
+                if (ctx_fk, ctx_nk) in seen_ctx and sticky_reason is None:
+                    sticky_reason = "repeated_ctx"
+                seen_ctx.add((ctx_fk, ctx_nk))
             prev_ctx_fk, prev_ctx_nk = ctx_fk, ctx_nk
+        else:
+            # 10페이지를 다 읽고도 종료 조건이 안 나왔다 — 상한 미완
+            _judge(False, "page_cap")
 
         # odno 기반 중복 제거 (페이지네이션 중복 방지)
         seen = set()
@@ -2070,6 +2104,67 @@ class KISBroker(BaseBroker):
         except Exception as e:
             logger.error(f"[KIS] 전체 체결 조회 실패: {e}")
             return []
+
+    async def get_fills_for_date_checked(self, target_date=None) -> Tuple[List[Dict], bool, Optional[str]]:
+        """
+        get_all_fills_for_date 와 같은 행을 돌려주되 조회 완결 여부를 함께 준다(설계 A §5-1).
+
+        Returns:
+            (fills, complete, reason) — fills 행 형태는 get_all_fills_for_date 와 같다.
+            complete=False 이면 fills 는 부분 목록일 수 있다. reason 은 _query_daily_fills 의
+            판정 사유 또는 normalize_failed(수량·평균가 변환 실패, 평균가 비유한(NaN/inf),
+            종목코드가 6자리 영숫자가 아님, 방향이 "01"/"02" 밖인 행이 하나라도 있음)/exception.
+        """
+        import math  # 이 함수 전용(허용 범위 밖 모듈 머리 무변경)
+
+        if target_date is not None and hasattr(target_date, "strftime"):
+            date_str = target_date.strftime("%Y%m%d")
+        else:
+            date_str = None
+
+        status: dict = {}
+        try:
+            output1 = await self._query_daily_fills(date_str, status=status)
+        except Exception as e:
+            logger.error(f"[KIS] 체결 조회(완결 판정) 실패: {e}")
+            return [], False, "exception"
+
+        complete = status.get("complete") is True
+        reason = status.get("reason")
+        results = []
+        normalize_failed = False
+        for item in output1:
+            raw_qty = item.get("TOT_CCLD_QTY") if item.get("TOT_CCLD_QTY") is not None else item.get("tot_ccld_qty")
+            raw_px = item.get("AVG_PRVS") if item.get("AVG_PRVS") is not None else item.get("avg_prvs")
+            try:
+                ccld_qty = int(str(raw_qty).strip()) if raw_qty is not None else None
+                if ccld_qty is not None and ccld_qty <= 0:
+                    continue
+                avg_px = float(str(raw_px).strip()) if raw_px is not None else None
+            except (TypeError, ValueError):
+                ccld_qty = None
+                avg_px = None
+            symbol = str(item.get("PDNO") or item.get("pdno", "")).strip()
+            side = str(item.get("SLL_BUY_DVSN_CD") or item.get("sll_buy_dvsn_cd", "")).strip()
+            if (ccld_qty is None or avg_px is None or not math.isfinite(avg_px)
+                    or len(symbol) != 6 or not symbol.isascii() or not symbol.isalnum()
+                    or side not in ("01", "02")):
+                normalize_failed = True
+                logger.warning(f"[KIS] 체결 행 정규화 실패 — 미완 처리: odno={item.get('ODNO') or item.get('odno')}")
+                continue
+            results.append({
+                "symbol": symbol,
+                "name": str(item.get("PRDT_NAME") or item.get("prdt_name", "")).strip(),
+                "sll_buy_dvsn_cd": side,
+                "tot_ccld_qty": ccld_qty,
+                "avg_prvs": avg_px,
+                "odno": str(item.get("ODNO") or item.get("odno", "")).strip(),
+                "ord_tmd": str(item.get("ORD_TMD") or item.get("ord_tmd", "")).strip(),
+            })
+
+        if complete and normalize_failed:
+            complete, reason = False, "normalize_failed"
+        return results, complete, reason
 
     async def check_fills(self) -> List[Fill]:
         """체결 확인"""

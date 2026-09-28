@@ -159,7 +159,7 @@ def _fills_and_exits(trade: Any, fee_calc, closed: bool,
     exits: List[Dict[str, Any]] = []
     exit_quantity = _positive_int(trade.exit_quantity)
     exit_price = _dec(trade.exit_price)
-    if exit_quantity == 0 or exit_price is None or exit_price <= 0:
+    if exit_quantity == 0:
         return fills, exits, False
 
     legs = getattr(trade, "sell_legs", None)          # --source db: trade_events SELL 행
@@ -178,6 +178,10 @@ def _fills_and_exits(trade: Any, fee_calc, closed: bool,
                 "reason": leg.get("reason") or "",
             })
     if len(exits) == 0:
+        # exit_price 가드는 leg 가 없을 때의 폴백에만 적용한다 — DB 직접 부분매도 경로는 trades.exit_price 를
+        # 비워 두고 exit_quantity 만 누적하므로, leg 가 있는데 여기서 막으면 청산이 통째로 사라진다 (2026-09-29)
+        if exit_price is None or exit_price <= 0:
+            return fills, exits, False
         sell = {
             "ts": _iso(trade.exit_time),
             "price": str(exit_price),
@@ -280,6 +284,10 @@ def build_ledger(trades: Sequence[Any], exit_states: Dict[str, Dict],
             # 분할 매도 leg 복원 불가 → lot 구분 불가와 같은 취급(canary 표본 제외)
             "lots_ambiguous": trade.id in ambiguous or aggregated,
             "exits_aggregated": aggregated,
+            # 초과수익 원장 분류용 (canary 는 필수 키만 검사 — 무영향). SimpleNamespace 거래 호환을 위해 getattr
+            "entry_reason": getattr(trade, "entry_reason", "") or "",
+            "exit_type": getattr(trade, "exit_type", "") or "",
+            "pnl_missing": getattr(trade, "pnl_missing", False) is True,
         })
 
     return {
@@ -320,70 +328,82 @@ def load_trades(source: str, days: int) -> List[Any]:
 
 
 async def _load_from_db(storage: Any, days: int) -> List[Any]:
-    """DB 의 trades 를 market_context 포함으로 읽어 저널 캐시에 병합한다.
+    """DB 의 trades 를 market_context 포함으로 읽는다 (CLI 전용 — 자체 연결을 열고 닫는다).
 
     `TradeJournal.sync_from_db` 는 market_context 컬럼을 조회하지 않아 entry_risk 가 유실된다 —
     exporter 는 같은 연결(TradeStorage)로 직접 SELECT 한다.
     """
-    from src.core.evolution.trade_journal import TradeRecord
     await storage.connect()
     try:
         if storage.pool is None:
             print("[exporter] DB 연결 없음 — JSON 저널만 사용", file=sys.stderr)
             return storage._journal.get_recent_trades(days=days)
-        rows = await storage.pool.fetch(
-            """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
-                      entry_reason, entry_strategy, entry_signal_score, market_context,
-                      exit_time, exit_price, exit_quantity, exit_reason, exit_type,
-                      pnl, pnl_pct, holding_minutes
-               FROM trades
-               WHERE entry_time >= $1 AND market = 'KR'
-               ORDER BY entry_time""",
-            datetime.now() - timedelta(days=days),
-        )
-        trades: List[Any] = []
-        for row in rows:
-            ctx = row["market_context"]
-            if isinstance(ctx, str):
-                try:
-                    ctx = json.loads(ctx)
-                except json.JSONDecodeError:
-                    ctx = {}
-            trades.append(TradeRecord(
-                id=row["id"], symbol=row["symbol"], name=row["name"] or "",
-                entry_time=row["entry_time"], entry_price=float(row["entry_price"]),
-                entry_quantity=int(row["entry_quantity"]),
-                entry_reason=row["entry_reason"] or "",
-                entry_strategy=row["entry_strategy"] or "",
-                entry_signal_score=float(row["entry_signal_score"] or 0),
-                exit_time=row["exit_time"], exit_price=float(row["exit_price"] or 0),
-                exit_quantity=int(row["exit_quantity"] or 0),
-                exit_reason=row["exit_reason"] or "", exit_type=row["exit_type"] or "",
-                pnl=float(row["pnl"] or 0), pnl_pct=float(row["pnl_pct"] or 0),
-                holding_minutes=int(row["holding_minutes"] or 0),
-                market_context=ctx if isinstance(ctx, dict) else {},
-            ))
-        # 분할 매도 leg 복원 — trades 는 마지막 매도가만 남기므로 trade_events SELL 행을 붙인다
-        legs = await storage.pool.fetch(
-            """SELECT trade_id, event_time, price, quantity, exit_type, exit_reason
-               FROM trade_events
-               WHERE event_type = 'SELL' AND trade_id = ANY($1::varchar[])
-               ORDER BY event_time""",
-            [t.id for t in trades],
-        )
-        by_trade: Dict[str, List[Dict[str, Any]]] = {}
-        for leg in legs:
-            by_trade.setdefault(leg["trade_id"], []).append({
-                "ts": leg["event_time"],
-                "price": leg["price"],
-                "quantity": leg["quantity"],
-                "reason": leg["exit_type"] or leg["exit_reason"] or "",
-            })
-        for t in trades:
-            t.sell_legs = by_trade.get(t.id, [])
-        return trades
+        return await fetch_trade_records(storage.pool.fetch, days)
     finally:
         await storage.disconnect()
+
+
+async def fetch_trade_records(fetch: Any, days: int) -> List[Any]:
+    """`fetch`(= pool.fetch) 로 trades + SELL leg 를 읽어 TradeRecord 목록을 만든다.
+
+    **connect/disconnect 하지 않는다** — 봇의 운영 pool 을 그대로 받아 쓰는 초과수익 원장(20:30)용.
+    원천 `pnl` NULL 은 TradeRecord.pnl=0 으로 들어가므로 `pnl_missing` 동적 속성으로 따로 보존한다
+    (실제 0원과 구분 — 설계 A §5 원천 결측).
+    """
+    from src.core.evolution.trade_journal import TradeRecord
+    rows = await fetch(
+        """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
+                  entry_reason, entry_strategy, entry_signal_score, market_context,
+                  exit_time, exit_price, exit_quantity, exit_reason, exit_type,
+                  pnl, pnl_pct, holding_minutes
+           FROM trades
+           WHERE entry_time >= $1 AND market = 'KR'
+           ORDER BY entry_time""",
+        datetime.now() - timedelta(days=days),
+    )
+    trades: List[Any] = []
+    for row in rows:
+        ctx = row["market_context"]
+        if isinstance(ctx, str):
+            try:
+                ctx = json.loads(ctx)
+            except json.JSONDecodeError:
+                ctx = {}
+        record = TradeRecord(
+            id=row["id"], symbol=row["symbol"], name=row["name"] or "",
+            entry_time=row["entry_time"], entry_price=float(row["entry_price"]),
+            entry_quantity=int(row["entry_quantity"]),
+            entry_reason=row["entry_reason"] or "",
+            entry_strategy=row["entry_strategy"] or "",
+            entry_signal_score=float(row["entry_signal_score"] or 0),
+            exit_time=row["exit_time"], exit_price=float(row["exit_price"] or 0),
+            exit_quantity=int(row["exit_quantity"] or 0),
+            exit_reason=row["exit_reason"] or "", exit_type=row["exit_type"] or "",
+            pnl=float(row["pnl"] or 0), pnl_pct=float(row["pnl_pct"] or 0),
+            holding_minutes=int(row["holding_minutes"] or 0),
+            market_context=ctx if isinstance(ctx, dict) else {},
+        )
+        record.pnl_missing = row["pnl"] is None
+        trades.append(record)
+    # 분할 매도 leg 복원 — trades 는 마지막 매도가만 남기므로 trade_events SELL 행을 붙인다
+    legs = await fetch(
+        """SELECT trade_id, event_time, price, quantity, exit_type, exit_reason
+           FROM trade_events
+           WHERE event_type = 'SELL' AND trade_id = ANY($1::varchar[])
+           ORDER BY event_time""",
+        [t.id for t in trades],
+    )
+    by_trade: Dict[str, List[Dict[str, Any]]] = {}
+    for leg in legs:
+        by_trade.setdefault(leg["trade_id"], []).append({
+            "ts": leg["event_time"],
+            "price": leg["price"],
+            "quantity": leg["quantity"],
+            "reason": leg["exit_type"] or leg["exit_reason"] or "",
+        })
+    for t in trades:
+        t.sell_legs = by_trade.get(t.id, [])
+    return trades
 
 
 def main(argv: Optional[List[str]] = None) -> int:

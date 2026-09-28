@@ -78,6 +78,7 @@
   - `trade_journal[_kr|_us].json` — 거래 기록
   - `daily_stats[_kr|_us].json` — 일일 손익 영속화
   - `unified_trader.pid` — PID 파일
+  - `excess_return/` — 실거래 KODEX200 초과수익 원장(20:30 갱신, 측정 전용 — 2026-09-29 구현·미배포, 설계 `docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md`)
 
 ## 설정 주의사항
 > **`evolved_overrides.yml`이 `default.yml` 위에 머지됨**

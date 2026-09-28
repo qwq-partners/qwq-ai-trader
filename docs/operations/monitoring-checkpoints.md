@@ -6,6 +6,17 @@
 
 ## 활성 체크포인트
 
+### 배포 후 첫 거래일 20:30 — 실거래 KODEX200 초과수익 원장 (2026-09-29 구현, 미배포)
+
+- [ ] `journalctl -u qwq-ai-trader | grep '\[초과수익\]'` 에 `원장 갱신: 행 N (포함 n) …` 1줄, 경고 없음(시한 초과·exporter 로드 실패·DB pool 없음이면 경고)
+- [ ] `~/.cache/ai_trader/excess_return/` 에 5개 파일(`positions.jsonl`·`summary.json`·`summary_history.jsonl`·`kodex200_daily.csv`, 둘째 날부터 `positions_prev.jsonl`)
+- [ ] 백필 행 수와 제외 사유별 건수·원화(`summary.json` → `windows.all.all.excluded`)가 설명 가능한가 — 특히 `sync_entry`·`exits_missing`·`awaiting_close`
+- [ ] 전략 리뷰 §1 기간(03-09~07-02)의 행 `net_pnl` 합계가 DB 합계와 맞는가(설계 §9 운영 확인)
+- [ ] `execution_day_status` 에 그날 행 1개(`source=kr_excess_20_30`), `incomplete` 면 사유가 실제 기록 불일치인지 확인(사용자 HTS·NXT 체결이 DB 에 없으면 `incomplete` 가 정상)
+- [ ] 첫 토요일 09:30 후속복기에서 `📏 실거래 초과수익…` 한 줄 수신(계산일 표시)
+- [ ] canary 기술 검증에 `net_pnl_mismatch` 가 새로 보이면: exporter 가 SELL leg 로 exits 를 복원한 포지션일 수 있다(판정식 무변경, 2026-09-29 CHANGELOG)
+
+
 ### 2026-09-28 — KOSPI 지수 원천·KR 휴장일 커버리지·장중 RS (15:38 KST 배포 main `d551ab9`, PID3162715)
 
 - [ ] 배포 후 첫 08:30 `[변동성타게팅]` 로그가 `source=FDR:YAHOO:^KS11`·마지막 봉 = 직전 거래일인지, `vol_targeting.json` 에

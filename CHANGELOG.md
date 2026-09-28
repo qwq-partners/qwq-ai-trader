@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — feat: 실거래 KODEX200 초과수익 원장 1단계 (설계 A 구현, 미배포)
+
+- **교차 공급자 구현 리뷰(Codex, 요청 gpt-6-astra/high, rollout `gpt-6-astra`·`high`) REQUEST_CHANGES(P1 1·P2 3) 처분:** P1 — 벤치마크 캐시의 상한 예외는 상한만큼 **실제로 받았을 때만**(2페이지 실패 시 1페이지만 돌아와 긴 캐시가 짧게 덮이던 coordinator 보완 결함) / P2 — 스냅샷 계산일을 `positions_meta.json` 에 따로 둬 빈 스냅샷에서도 drift 기준 유지, 이력 append 전 손상 꼬리 복구, 제외 합계에서 원천 손익 결측을 `net_pnl_missing` 으로 따로 세고 전부 결측이면 null(한 줄에 결측 건수 표시). 시험 5건 추가(`bench_covered`≠`n` 판정 포함).
+- **2단계 앞부분(기록 대사용, 돈 경로 무변경):** `KISBroker._query_daily_fills(…, status=None)` 에 완결 판정(모든 페이지 정상·헤더 D/E 종료·모순/반복 ctx·상한·미연결·예외는 미완, 기본값이면 요청·반환 동일 — 13개 페이지 시나리오 기준선 대조), `get_fills_for_date_checked(d) -> (fills, complete, reason)` 신규(정규화 실패도 미완). `TradeStorage.SCHEMA_SQL` 에 `execution_day_status` 표 1개(`CREATE TABLE IF NOT EXISTS`, 기존 표·`sync_from_kis` 무변경). 시험 43건.
+
+- 신규 `src/analytics/excess_return.py`: DB 왕복 포지션(exporter `fetch_trade_records`→`build_ledger`) × KODEX200(069500, 봇 브로커 KIS 일봉 캐시)로 포지션마다 비용 차감 초과수익·원화 초과·손절 클립(진입 SL / 공통 5%)·overshoot 를 계산해 `~/.cache/ai_trader/excess_return/` 에 매일 전체 재계산 스냅샷·요약·일별 이력으로 남긴다. 분류는 설계 §5 판정 순서 ①~⑩(원천 NULL 손익 `pnl_missing` 은 `exits_missing`, `exits_aggregated` 를 `lots_ambiguous` 보다 먼저). 표본은 `bench_covered`<30 이면 `insufficient_sample`, 자동 판정 없음.
+- `KRScheduler._run_excess_return_step`: 20:30 진화 블록 끝(evolve 성공·실패·부재 모두 뒤), `wait_for` 60초·예외 삼킴, 봇 `trade_journal.pool`(+`_db_available`)·브로커가 없으면 디스크를 건드리지 않고 건너뜀. 토요일 후속복기에서 요약 한 줄(HTML 이스케이프·계산일 포함).
+- `scripts/export_risk_ledger.py`: `fetch_trade_records(fetch, days)` 분리(connect/disconnect 없음 — 봇 pool 보호), `exit_price` 가드를 SELL leg 없는 폴백으로만 이동(DB 직접 부분매도 포지션의 청산 복원), position 에 `entry_reason`·`exit_type`·`pnl_missing` 추가. **알려진 영향:** leg 로 exits 가 새로 복원된 risk cohort 포지션은 canary 기술 검증에 `net_pnl_mismatch` 가 새로 보일 수 있다(판정식 무변경).
+- `scripts/review_risk_canary.py`: 벤치마크 식·파싱을 공용 모듈에서 import(ROOT `sys.path` 삽입, 판정식 무변경). `src/dashboard/data_collector.py`: `is_sync` 를 공용 규칙으로(`sync_detected` 청산 포함 — 표시 전용). `TradeRecord.is_sync`(진화·복기 표본)는 무변경.
+- **2단계 — 20:30 거래일 기록 대사(설계 §5-1, 절충안 1단계):** `verify_day_records` 가 쓰기 큐 대기(20초) 뒤 오늘 KIS 체결(완결 판정 조회)과 DB `trade_events`(KR)를 종목·방향별로 대조(SELL 수량 합·BUY 존재·DB 에만 있는 BUY/SELL)하고, 오늘 SELL 이 있는 거래의 `trades.exit_quantity` ↔ SELL 이벤트 합을 교차 검증한다(손익은 `_reconcile_pnl` 사후 보정 때문에 비교하지 않음). 결과를 `execution_day_status` 에 upsert 하고 같은 실행의 원장에는 저장 성공과 무관하게 이번 결과를 쓴다(`day_status_saved`). 상태 표가 없으면 상태 없음으로, 표가 있는데 조회가 실패하면 파일을 쓰지 않고 중단한다. `complete` 의 뜻은 "불일치를 찾지 못함"(주문번호가 엔진 기록에 없어 완전성 증명은 아님). `sync_from_kis`·쓰기 경로 무변경 — 기동 시 일일 손익·거래 수 복원 입력 보존. 단계 시한 60→90초.
+- **2단계 교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh, rollout `gpt-6-astra`·`xhigh`) REQUEST_CHANGES(P1 2·P2 3) 처분:** 체결 조회 완결 판정이 중간 페이지 헤더 이상·비연속 ctx 재등장을 누적(최종 D/E 로 지워지지 않음 — `status=None` 기본 경로는 무변경, 기준선 시험 무수정 통과), checked 정규화가 종목 6자리 영숫자·방향 `01`/`02`·가격 유한성까지 검증(방향 불명 행이 무시된 채 `complete` 되던 경로 차단), 대사 자체 시한 45초 — 초과 시 `incomplete(verify_timeout)` 을 **저장까지** 한다, 스냅샷 계산일을 `positions.jsonl` 첫 줄 헤더로 옮겨 한 번의 원자적 쓰기로(메타 파일 제거 — 쓰기 사이 실패로 drift 기준이 덮이던 경로 차단, 헤더 없는 옛 형식 호환), 이력 꼬리는 유효 JSON 이면 보존하고 줄바꿈만 보충. 대사 SQL 구조 시험 추가.
+- **2단계 한정 재리뷰(같은 조건, rollout `gpt-6-astra`·`xhigh`):** 해소 4·부분 1, 새 P0·P1 0, P2 1(미배포 중간 형식 `positions_meta.json` 의 빈 스냅샷을 같은 날 전환하면 기준 삭제) → coordinator 가 옛 메타 날짜를 먼저 보고, 날짜를 알 수 없으면 회전하지 않게 고침(시험 2건·변이 kill). 이 마지막 수정은 리뷰를 다시 받지 않았다. 최종 전체 UTC·KST 각 **2263 passed / 2 xfailed**, 격리 위반 0.
+- 추가 KIS 호출: 시세 TR 일봉 1회 + 체결 조회 1회(원장 TR, 장외 20:30)/거래일. 주문·전략·위험 설정·`.env`·킬스위치 변경 0.
+- 전체 회귀(2단계 포함 최종): UTC **2234 passed / 2 xfailed / pykrx warning 1**, KST 1차 **1 failed**(`tests/test_toss_token_storage.py::test_two_process_observations_are_idempotent_and_never_clobber[False]` — Toss 토큰 저장소 2-프로세스 경합 `unsafe_storage`, 변경 파일 아님, 단독 반복 0/15 실패) → KST 2차 **2234 passed / 2 xfailed**. 격리 위반 0.
+- 검증: 새 시험 49건(원장 36·스케줄러 13 — 손 계산·판정 순서·exporter 경유 분류·NULL/0 구분·멱등·drift·부분 응답·브로커 상한·배선 3경우·토요일 실행), 작성자 변이 6종 + coordinator 변이 1종 kill. 전체 UTC·KST 각 **2163 passed / 2 xfailed / 기존 pykrx warning 1**, 격리 위반 0. 작성 Claude Opus 5.5(요청 Opus/high), 리뷰는 커밋 뒤 교차 공급자.
+
+## 2026-09-28 — docs: 실거래 KODEX200 초과수익 원장 설계 A (서면 설계, 구현 없음)
+
+- [설계 문서](docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md): DB `trades`/`trade_events` 왕복 포지션(`export_risk_ledger.build_ledger` 재사용)을 같은 기간 KODEX200(069500, KIS 일봉) 과 비교해 비용 차감 초과수익(수익률·원화)과 손절 클립(진입 SL 또는 공통 5%)을 포지션당 한 행으로 계산한다. 20:30 에 DB 전체를 다시 계산한 스냅샷을 원자적으로 교체하고 일별 요약을 이력 파일에 한 줄씩 쌓는다(비작성자 리뷰 P1: 고정 행은 분할 체결 진입을 조기 확정 — 종결 = Σ매도 ≥ Σ매수). 벤치마크 식은 `review_risk_canary.position_benchmark` 를 공용 함수로 옮겨 한 구현만 쓴다. 표본 <30 은 판정 보류, 자동 판정·승격·설정 연결 없음.
+- 추가 KIS 호출은 시세 TR 일봉 조회 1회/거래일(현재 2페이지, 상한 5 — 원장 TR 0, EGW00215 무관). 주문·전략·위험 설정·`.env`·킬스위치 변경 0, 코드 변경 0. 승인 범위는 비작성자 설계 리뷰까지.
+
 ## 2026-09-28 — chore: 안전자산 자동 운용 삭제·백테스트 KOSPI 벤치마크 교체 (미배포)
 
 - **안전자산(KOFR) 자동 운용 삭제 — 사용자 결정(운용 계획 없음):** `KRScheduler.run_safe_asset_loop`·`kr_safe_asset` 태스크·`_pick_safe_asset` 헬퍼·시험 삭제. 이 루프는 08-31 이후 검증 통과 0·매수 0 이었고(KIS 현재가에 종목명 없음), 이름 원천을 고친 뒤에도 후보 코드가 전부 다른 종목이라 스스로 꺼지는 상태였다. 브로커 직접 시장가 BUY/SELL 경로 하나가 사라진다. `StockMaster.get_name` 은 swing_screener 유니버스의 이름 폴백 분기가 참조하므로 유지(그 전엔 메서드가 없어 그 분기가 AttributeError). 런타임 상태 파일 `safe_asset_state.json` 은 건드리지 않는다.

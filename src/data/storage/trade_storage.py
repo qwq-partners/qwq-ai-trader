@@ -81,6 +81,17 @@ CREATE INDEX IF NOT EXISTS idx_te_event_time ON trade_events(event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_te_trade_id ON trade_events(trade_id);
 CREATE INDEX IF NOT EXISTS idx_te_type ON trade_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_te_date ON trade_events((event_time::date));
+
+-- 거래일 기록 대사 결과(설계 A §5-1, 2026-09-29). complete = '20:30 대사가 불일치를 찾지 못했다'
+-- (완전성 증명 아님). trade_date 는 event_time 과 같은 호스트 로컬 날짜.
+CREATE TABLE IF NOT EXISTS execution_day_status (
+    trade_date  DATE PRIMARY KEY,
+    status      VARCHAR(12) NOT NULL,
+    reasons     TEXT,
+    source      VARCHAR(30),
+    checked_at  TIMESTAMP NOT NULL,
+    updated_at  TIMESTAMP NOT NULL
+);
 """
 
 

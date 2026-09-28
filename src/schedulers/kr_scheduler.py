@@ -5727,6 +5727,9 @@ JSON:
                             # 자체를 하트비트 실패로 확대하지 않는다 (F5 범위: 예외 삼킴만 제거)
                             _hb.record_success("kr_evolution_scheduler", note=_brief_eval_note)
 
+                        # 실거래 KODEX200 초과수익 원장 (설계 A §4) — evolve 성공·실패·부재 모두 뒤, 자체 시한·예외 삼킴
+                        await self._run_excess_return_step(bot, now)
+
                 await asyncio.sleep(60)
 
         except asyncio.CancelledError:
@@ -5735,6 +5738,52 @@ JSON:
             # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"거래 리뷰 스케줄러 오류: {e}")
             raise
+
+    # 실거래 초과수익 원장 단계 시한 (설계 A §4 — 진화 뒤라 진화를 늦추지 않는다)
+    _EXCESS_RETURN_TIMEOUT_SEC = 90   # 대사(쓰기 큐 대기 20초·체결 조회) + 원장 갱신
+
+    async def _run_excess_return_step(self, bot, now: datetime) -> None:
+        """[초과수익] 20:30 일일 갱신 — 측정 전용. 어떤 실패도 로그만 남기고 바깥 루프로 올리지 않는다.
+
+        봇 TradeStorage 의 pool·브로커를 그대로 쓴다(별도 KIS 호출 주체·DB 연결을 만들지 않는다).
+        pool 이 없거나 DB 가 비활성이면 디스크를 건드리기 전에 그날은 건너뛴다.
+        """
+        tj = getattr(bot, "trade_journal", None)
+        pool = getattr(tj, "pool", None)
+        broker = getattr(bot, "broker", None)
+        if pool is None or getattr(tj, "_db_available", False) is not True or broker is None:
+            logger.info("[초과수익] DB pool·브로커 없음 — 오늘 원장 갱신 건너뜀")
+            return
+        try:
+            from ..analytics import excess_return as _er
+            from ..utils.entry_risk import applied_sha
+            await asyncio.wait_for(
+                _er.run_daily_update(
+                    broker=broker, fetch=pool.fetch,
+                    out_dir=Path.home() / ".cache" / "ai_trader" / "excess_return",
+                    root=Path(__file__).resolve().parents[2],
+                    now=now, code_sha=applied_sha(),
+                    # 기록 대사(§5-1) — execute 가 없는 pool 이면 대사 없이 1단계 경로로 돈다
+                    execute=getattr(pool, "execute", None),
+                    write_queue=getattr(tj, "_write_queue", None),
+                ),
+                self._EXCESS_RETURN_TIMEOUT_SEC,
+            )
+        except Exception as e:   # asyncio.TimeoutError 포함 — 바깥 raise 규칙에 닿지 않게
+            logger.warning(f"[초과수익] 원장 갱신 실패 (무시): {type(e).__name__}: {e}")
+
+    async def _send_excess_return_weekly_line(self) -> None:
+        """[초과수익] 토요일 요약 한 줄 — summary.json 이 없으면 보내지 않는다(계산일이 줄에 들어가 옛 값이 드러난다)."""
+        try:
+            from ..analytics import excess_return as _er
+            path = Path.home() / ".cache" / "ai_trader" / "excess_return" / "summary.json"
+            if not path.is_file():
+                logger.info("[초과수익] 요약 파일 없음 — 주간 한 줄 생략")
+                return
+            summary = json.loads(path.read_text(encoding="utf-8"))
+            await send_alert(html.escape(_er.format_weekly_line(summary)))
+        except Exception as e:
+            logger.warning(f"[초과수익] 주간 한 줄 실패 (무시): {type(e).__name__}: {e}")
 
     async def run_weekly_rebalance_scheduler(self):
         """매주 토요일 00:00 전략 예산 리밸런싱
@@ -6510,6 +6559,9 @@ JSON:
                                     logger.info(f"[게이트분석] 결과: {_ga_result.get('error')}")
                             except Exception as _ga_e:
                                 logger.error(f"[게이트분석] 실행 실패: {_ga_e}")
+
+                            # 실거래 KODEX200 초과수익 한 줄 (설계 A §7) — 자체 try, 실패는 로그만
+                            await self._send_excess_return_weekly_line()
                         except Exception as e:
                             logger.error(f"[후속복기] 실행 오류: {e}")
                             await self._send_error_alert(
