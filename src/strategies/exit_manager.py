@@ -330,6 +330,9 @@ class ExitManager:
         # 2026-08-08 P0: pending 만료 검증자 — async fn(symbol) -> Optional[bool]
         # True=거래소 미체결 존재(대기 연장), False=없음(해제 허용), None=판단 불가(유지)
         self._pending_verifier = None
+        # 2026-09-29: 분할 익절 차단 훅 — fn(symbol) -> bool. 정확히 True 면 NONE·FIRST·SECOND 단계의 분할 익절을
+        # 판정하지 않는다(브로커의 오늘 SELL 접수 불명 종목). 손절·트레일링·본전 이동은 그대로 판정한다.
+        self._partial_exit_block = None
 
     # ------------------------------------------------------------------ #
     # Stage 영속화                                                        #
@@ -1047,8 +1050,13 @@ class ExitManager:
                 f"손절: {net_pnl_pct:.2f}% (SL={sl_pct:.2f}%{atr_info})"
             )
 
-        # 2. 분할 익절
-        if self.config.enable_partial_exit:
+        # 2. 분할 익절 — 오늘 SELL 접수 불명 종목은 건너뛴다 (2026-09-29). 신호 자체를 만들지 않아야 스케줄러
+        # 청산 pending 이 등록되지 않는다(엔진에서 버린 분할 신호의 pending 이 약 3분간 손절을 가리지 않게).
+        # THIRD→TRAILING 전환은 막지 않는다.
+        if self.config.enable_partial_exit and not (
+                self._partial_exit_block is not None
+                and state.current_stage in (ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND)
+                and self._partial_exit_block(symbol) is True):
             exit_signal = self._check_partial_exit(state, current_price, net_pnl_pct)
             if exit_signal:
                 return exit_signal
@@ -1703,6 +1711,14 @@ class ExitManager:
           None  = 판단 불가 (API 오류 등) → pending 유지 (fail-safe)
         """
         self._pending_verifier = fn
+
+    def set_partial_exit_block(self, fn) -> None:
+        """분할 익절 차단 훅 배선 (2026-09-29, 주문 접수 불명 분리).
+
+        fn: (symbol) -> bool — 정확히 True 면 그 종목의 NONE·FIRST·SECOND 단계 분할 익절을 판정하지 않는다.
+        운영은 `KISBroker.has_unknown_sell` (오늘 SELL 접수 불명 종목)을 넘긴다.
+        """
+        self._partial_exit_block = fn
 
     async def maybe_expire_pending(self, symbol: str) -> None:
         """5분 초과 pending을 거래소 미체결 확인 후 해제 (호출부: 청산 판정 직전).

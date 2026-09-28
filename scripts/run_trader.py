@@ -889,6 +889,10 @@ class UnifiedTradingBot:
                         return None
                 self.exit_manager.set_pending_verifier(_sell_outstanding)
                 logger.info("[KR] ExitManager pending 검증자 배선 완료 (거래소 실 미체결 대사)")
+                # 오늘 SELL 접수 불명 종목은 분할 익절 신호를 만들지 않는다 (2026-09-29) — 브로커가 장부를 갖는다
+                if callable(getattr(self.broker, "has_unknown_sell", None)):
+                    self.exit_manager.set_partial_exit_block(self.broker.has_unknown_sell)
+                    logger.info("[KR] ExitManager 분할 익절 차단 훅 배선 완료 (주문 접수 불명)")
             logger.info(
                 f"[KR] 엔진 리스크 매니저 등록 완료 "
                 f"(validator: LLM 범위={engine_risk_manager._LLM_CHECK_MIN}~{engine_risk_manager._LLM_BYPASS_AT}, "

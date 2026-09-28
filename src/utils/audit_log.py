@@ -33,6 +33,7 @@ EV_ACCEPT = "accept"        # 브로커 접수 성공
 EV_REJECT = "reject"        # 브로커 거부 / API 오류
 EV_BLOCKED = "blocked"      # 킬스위치·리스크 게이트에 의한 사전 차단
 EV_CANCEL = "cancel"        # 주문 취소
+EV_UNKNOWN = "unknown"      # 주문 POST 뒤 응답 유실 — 접수 여부 불명 (2026-09-29)
 
 
 def _default(o: Any) -> str:
