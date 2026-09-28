@@ -1,6 +1,7 @@
 # 실거래 KODEX200 초과수익 원장 설계 (설계 A)
 
-> **상태 (2026-09-28):** 서면 설계만 있다. 구현·배포·재시작·실주문·설정 변경은 없다. 승인 범위는
+> **상태 (2026-09-29, 보완판):** 설계 승인 뒤 구현 계획 리뷰로 드러난 코드 사실을 반영했다(§12 4회차). 구현은 `docs/superpowers/plans/2026-09-29-kodex200-excess-return-ledger.md`.
+> 처음 상태(2026-09-28): 서면 설계만 있다. 구현·배포·재시작·실주문·설정 변경은 없다. 승인 범위는
 > 작성자가 아닌 리뷰어의 **설계 승인**까지다. 구현은 별도 계획·PR·사용자 지시로 진행한다.
 > 기준: main `e31c632`. 작성: Claude coordinator(세션 모델 Fable 5.1 — 라우팅 정책상 미자격이라 작성자 기록으로만 남긴다).
 
@@ -61,6 +62,7 @@
 
 ```text
 20:30 KR 진화 블록 끝(evolve 이후), 거래일만
+ ├─ ⓪ 거래일 기록 대사(§5-1): 오늘의 KIS 체결(조회 완결 확인)과 DB trade_events 를 종목·방향별로 대조 → execution_day_status
  ├─ ① 벤치마크 캐시 전체 갱신: bot.broker.get_daily_prices("069500", days=N)   ← KIS 시세 TR 조회 1회/일
  │     N = 가장 오래된 포지션 진입일부터 오늘까지의 거래일 수(상한 500 = 브로커 5페이지 한도, 지금 약 140 → 2페이지)
  │     날짜 YYYYMMDD → YYYY-MM-DD 로 바꿔 ~/.cache/ai_trader/excess_return/kodex200_daily.csv
@@ -78,6 +80,9 @@
 - **누적의 의미:** 포지션 행은 매일 DB 에서 다시 계산한 스냅샷이다. 종결 포지션이 늘면 스냅샷에 자동으로 쌓이고,
   날짜별 흐름은 `summary_history.jsonl` 에 하루 한 줄씩 쌓인다. 한 번 쓴 행을 고정하지 않으므로, 분할 체결 진입이
   덜 팔린 상태에서 조기에 확정되는 일이 없고 DB 사후 수정(`kis_sync` 보정 등)도 다음 날 스냅샷에 그대로 반영된다.
+- **DB 접근(보완):** KR 봇의 DB 는 `bot.trade_journal`(TradeStorage)의 `pool` 이다(`run_trader.py:713-715`). `pool` 이 있어도
+  `_db_available=False` 일 수 있으므로(`trade_storage.py:121-134`) 세 조건을 모두 확인한다. 20:30 블록은 `last_review_date` 를 evolve **앞에서**
+  영속하므로(`kr_scheduler.py:5680-5694`) 블록 도중 재시작하면 그날 단계는 다시 돌지 않는다 — 다음 거래일 전체 재계산으로 복구된다.
 - **봇 안에서 도는 이유:** 벤치마크 조회에는 봇의 브로커·리미터·토큰을 써야 한다. 별도 프로세스가 KIS 를 부르면
   초당 한도 합산이 끊기고 토큰 발급이 겹친다. DB 는 봇이 이미 가진 TradeStorage pool 을 쓰고, pool 이 없으면 그날은 건너뛴다.
   exporter 의 현재 `_load_from_db` 를 그대로 부르면 안 된다 — 그 함수가 `storage.connect()`/`disconnect()`(`export_risk_ledger.py:329·386`)로
@@ -108,11 +113,16 @@
 }
 ```
 
+**원천 결측(보완).** exporter SELECT 는 `pnl`·`exit_price` 의 NULL 을 0 으로 읽는다(`export_risk_ledger.py:359·362`). 구현은 원천 NULL 여부를
+`pnl_missing` 으로 보존해 넘기고, 종결 포지션의 `pnl_missing` 은 `exits_missing` 으로 뺀다 — 실제 0원과 NULL 을 섞지 않는다(§6 계약).
+
 **종결 판정.** exporter 의 `closed`(`exit_quantity >= entry_quantity`, `export_risk_ledger.py:233`)만으로는 부족하다.
 DB `trades.entry_quantity` 는 첫 체결 수량으로 고정되고(갱신하는 SQL 이 없다), 매수 leg 는 스냅샷의 누적 `filled_quantity`
 를 쓰기 때문이다(`:141`). 그래서 행의 종결은 **`closed` 이고 Σ매도 leg 수량 ≥ Σ매수 leg 수량** 일 때로 정한다.
-판정 순서: ① `closed` 인데 exits 가 없거나 `net_pnl` 이 없으면 `exits_missing` ② Σ매도 < Σ매수면 `awaiting_close`
-③ Σ매도 > Σ매수면 `quantity_mismatch` ④ 나머지 제외 규칙. ①을 먼저 보지 않으면 exits 가 빈 포지션이 영원히 대기로 남는다.
+판정 순서: ① `closed` 인데 exits 가 없거나 `net_pnl` 이 없거나 `pnl_missing` 이면 `exits_missing` ② Σ매도 < Σ매수면 `awaiting_close`
+③ Σ매도 > Σ매수면 `quantity_mismatch` ④ `exits_aggregated`(exporter 가 이때 `lots_ambiguous` 도 켜므로 먼저 본다, `export_risk_ledger.py:281-282`)
+⑤ `lots_ambiguous` ⑥ `manual_entry` ⑦ `sync_entry` ⑧ `recovered_at_exit` ⑨ `bench_out_of_range` ⑩ `record_incomplete`.
+①을 먼저 보지 않으면 exits 가 빈 포지션이 영원히 대기로 남는다.
 
 | 구분 | 조건 | 처리 |
 | --- | --- | --- |
@@ -123,11 +133,12 @@ DB `trades.entry_quantity` 는 첫 체결 수량으로 고정되고(갱신하는
 | `lots_ambiguous` | 같은 종목의 보유 구간이 겹침(exporter) | 같음 |
 | `exits_aggregated` | 분할 매도 leg 를 복원할 수 없음(exporter) | 같음. 청산일 가중을 할 수 없다 |
 | `manual_entry` | `strategy == "manual"`(수동 풀매수, `kr_scheduler.py:7294`) | 같음. 봇이 판단한 진입이 아니다 |
-| `sync_entry` | 거래 id 가 `KIS_SYNC_`/`SYNC_` 이거나 `entry_reason=="sync_detected"` | 같음. 동기화가 만든 진입은 전략이 기본값 `momentum_breakout` 으로 붙고(`trade_storage.py:995-1006`) 사용자 HTS 매수일 수도 있다 |
+| `sync_entry` | 거래 id 가 `KIS_SYNC_`/`SYNC_` 이거나 `entry_reason=="sync_detected"` | 같음. 동기화가 만든 진입은 전략이 기본값 `momentum_breakout` 으로 붙고(`trade_storage.py:995-1006`) 사용자 HTS 매수일 수도 있다. KR 에서 실제로 걸리는 것은 `KIS_SYNC_` 접두다(`entry_reason="KIS 동기화 복구"`) — `SYNC_`·`sync_detected` 진입은 US 경로다 |
 | `recovered_at_exit` | `entry_reason=="recovered_at_exit"` | 같음. 진입 시각이 청산 시각으로 기록돼(`trade_journal.py:474-484`) b=0 인 가짜 행이 된다 |
 | `bench_out_of_range` | 진입일이 캐시 첫 날짜보다 이르다 | 같음 |
+| `record_incomplete` | 보유 구간 [진입일, 마지막 청산일] 에 `execution_day_status = incomplete` 인 날이 있음(§5-1) | 같음. 상태 행이 없는 날만 걸친 포지션은 빼지 않고 요약의 `day_status_missing` 으로 센다 |
 | 벤치마크 결측 | 진입일 또는 청산일 종가가 캐시에 없음(휴장일 오류 등) | 행은 쓰고 `bench_missing_reason`, x·X·x꜀ 는 null. 0 으로 채우지 않는다 |
-| 동기화 청산 | 청산 leg 중 하나라도 동기화 `exit_type`(`kis_sync`·`sync_reconcile`·`sync_closed`·`sync_partial`·`sync_detected`) | **포함하고** `exit_quality="sync_estimated"`. 요약은 전체와 동기화 제외 두 값을 같이 낸다(리뷰 §1: 31건 가격 정확도 의문) |
+| 동기화 청산 | 청산 leg 중 하나라도 동기화 `exit_type`(`kis_sync`·`sync_reconcile`·`sync_closed`·`sync_partial`·`sync_detected` — `sync_detected` 는 KR 의 청산 유형, `trade_journal.py:512`) | **포함하고** `exit_quality="sync_estimated"`. 요약은 전체와 동기화 제외 두 값을 같이 낸다(리뷰 §1: 31건 가격 정확도 의문) |
 | 사용자 청산 | `exit_type == "manual"` | 포함. `exit_types` 로 식별할 수 있다 |
 
 제외 행도 쓰는 이유는, 무엇을 몇 건·얼마나 뺐는지를 원장만으로 재현하려는 것이다(§7 `excluded` 에 원화 합계를 같이 낸다).
@@ -137,6 +148,21 @@ DB 직접 부분매도 경로가 `exit_price`·`exit_time` 을 비워 두고 `ex
 leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 가 없을 때의 폴백 경로에만 적용한다. canary 입력도 같이
 좋아지는 수정이며 기존 canary 시험은 그대로 통과해야 한다.
 
+### 5-1. 거래일 기록 대사 (보완 — 09-29 절충안 1단계)
+
+실거래 기록(DB `trade_events`)이 KIS 체결과 맞는 날만 원장 판정에 쓴다. **기존 복구 로직(`sync_from_kis`)은 바꾸지 않는다** — 매수 합산·주문번호
+단위 복구는 기동 시 일일 손익·거래 수 복원(`engine.py:930-999`)의 입력을 바꾸므로(계획 리뷰 P1) 이번 범위에서 뺐다. 대신 **검증만** 한다.
+
+- 20:30 단계의 첫 일(⓪, NXT 20:00 종료 뒤): 쓰기 큐가 빌 때까지 기다린다(시한 30초, 넘으면 `incomplete`). 오늘의 KIS 체결을 **완결 판정이 있는**
+  조회로 가져온다(§8 `get_fills_for_date_checked` — 모든 페이지 정상 응답, 헤더 D/E 로 끝남, 페이지 상한 아님, 모순 응답·반복 ctx·미연결·정규화
+  실패 없음). 조회가 완결되지 않으면 `incomplete(fill_query_incomplete)`.
+- 대조: **SELL** 은 종목별 Σ KIS 체결 수량(주문번호별 누적의 합) = Σ DB `trade_events` SELL 수량(오늘). **BUY** 는 KIS 에서 산 종목마다 오늘 DB
+  BUY 이벤트가 있는지만 본다 — 엔진은 첫 체결에만 BUY 행을 쓰므로(`kr_scheduler.py:3162`) 수량 비교는 거짓 불일치를 만든다. 어느 쪽이든 어긋나면
+  `incomplete`(사유에 종목·방향). 체결 0건이고 DB 이벤트도 0건이면 `complete`.
+- `execution_day_status(trade_date DATE PRIMARY KEY, status, reasons, source, checked_at, updated_at)` 에 KST 날짜로 upsert 한다. 뜻은
+  **"조회 시점(20:30)까지 DB 기록이 KIS 체결과 맞았다"** 이다(하루 전체의 영구 보증이 아니다). DB 가 없거나 저장이 실패하면 행이 없다 → `day_status_missing`.
+- 원장 TR 은 오늘 체결 조회 1회(legacy `TTTC8001R`, 장외 20:30)가 늘어난다.
+
 ## 6. 멱등·실패·호출 예산
 
 - **멱등:** 스냅샷과 요약은 원자적 교체라 같은 날 두 번 돌아도 결과가 같다. `summary_history.jsonl` 은 같은 날짜 줄이
@@ -145,8 +171,8 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 - **실패:** 벤치마크 조회가 실패하면 기존 캐시로 진행한다(모자란 날짜는 `bench_missing_reason`). DB 가 없으면 그날은 건너뛰고
   스냅샷·요약을 그대로 둔다. 어떤 실패에서도 0 이나 빈 값으로 행을 쓰지 않는다. 로그 태그는 `[초과수익]`.
   토요일 한 줄에 요약의 `computed_at` 날짜를 넣어, 단계가 계속 실패해 옛 값이 나가는 것을 보이게 한다.
-- **KIS 호출:** 시세 TR `FHKST03010100` 일봉 조회를 거래일마다 1회(지금 2페이지, 상한 5페이지) 부른다. `_api_get` 이
-  `kis_rate_limit` 을 거친다. 원장 TR(`LEDGER_TR_IDS`)은 부르지 않으므로 EGW00215 와 무관하다(09-28 결정: EGW00215 는
+- **KIS 호출:** 시세 TR `FHKST03010100` 일봉 조회를 거래일마다 1회(지금 2페이지, 상한 5페이지) 부른다. §5-1 의 체결 조회 1회(원장 TR, 장외)가 더해진다. `_api_get` 이
+  `kis_rate_limit` 을 거친다. 원장 TR 은 §5-1 의 20:30 체결 조회 1회뿐이고 장외라 장중 EGW00215 와 겹치지 않는다(09-28 결정: EGW00215 는
   외부 조회와 겹친 것으로 수용, 조치 없음).
 - 캐시 CSV 에는 `review_risk_canary.py --benchmark` 가 그대로 읽는 `date,close` 열(`YYYY-MM-DD`)이 들어 있다.
 
@@ -157,7 +183,7 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 
 | 지표 | 정의 |
 | --- | --- |
-| `n`, `awaiting_close`, `drift` | 표본 회계 |
+| `n`, `awaiting_close`, `drift`, `day_status_missing` | 표본 회계(`day_status_missing` = 상태 행이 없는 날만 걸친 포함 포지션 수) |
 | `excluded{사유: {n, net_pnl_sum}}` | 제외 건수와 원화 합계. 손실이 제외군에 몰려 평균이 좋아 보이는 것을 드러낸다 |
 | `mean_excess`, `median_excess` | x 의 평균·중앙값 |
 | `excess_krw_sum`, `excess_krw_excl_top3` | X 합계, 상위 3건을 뺀 합계(꼬리 의존 확인, canary `net_pnl_excl_top3` 와 같은 뜻) |
@@ -178,7 +204,9 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 | `src/analytics/excess_return.py` (신규) | `refresh_benchmark_cache(broker, path, since)`, `load_benchmark(path)`, `position_benchmark(bench, pos)`(canary 에서 이동), `is_sync_entry/is_sync_exit`(data_collector 규칙 + `sync_detected`), `position_row(pos, bench)`, `write_snapshot(path, rows)`, `summarize(rows, previous)`. import 는 표준 라이브러리와 loguru 만 쓰고, 브로커는 인자로 받는다 |
 | `scripts/review_risk_canary.py` | `position_benchmark`·`load_benchmark` 를 위 모듈에서 import 한다(동작 동일). 기존 시험이 회귀 검사를 맡는다 |
 | `scripts/export_risk_ledger.py` | `_load_from_db` 의 SELECT 두 개를 `fetch_trade_records(fetch, days)` 로 분리한다(`fetch` = `pool.fetch`, connect/disconnect 없음). `_fills_and_exits` 의 `exit_price` 가드를 leg 없는 폴백에만 적용한다(§5). CLI 동작은 가드 수정 외 동일 |
-| `src/dashboard/data_collector.py` | `is_sync` 판정을 공용 함수로 바꾼다(`sync_detected` 추가로 대시보드 표시가 조금 넓어진다) |
+| `src/dashboard/data_collector.py` | `is_sync` 판정을 공용 함수로 바꾼다(`sync_detected` 추가로 대시보드 표시가 조금 넓어진다). `TradeRecord.is_sync`(`trade_journal.py:69-81`, 진화·복기 표본)는 **바꾸지 않는다** |
+| `src/execution/broker/kis_kr.py` | `_query_daily_fills(…, status=None)` 에 완결 판정을 더하고(기본값이면 동작·호출 횟수 동일 — `check_fills` 무변경) `get_fills_for_date_checked(d) -> (fills, complete, reason)` 신규 |
+| `src/data/storage/trade_storage.py` | `SCHEMA_SQL` 에 `execution_day_status` 표만 추가(기존 표·UNIQUE·`sync_from_kis` 무변경) |
 | `src/schedulers/kr_scheduler.py` | 20:30 블록 끝에 ①~④ 한 호출(`wait_for` 60초, 예외 삼킴), 토요일 블록에 요약 한 줄 |
 | 문서 | `docs/risk/risk-and-exit.md`(판정 기준 절), `docs/operations/monitoring-checkpoints.md`, `docs/operations/runbook.md`(파일 위치), CHANGELOG, CLAUDE.md 캐시 목록 |
 
@@ -199,7 +227,9 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 7. **배선:** 스케줄러 단계가 진화 이후, `wait_for`·예외 삼킴 안에 있다. 가짜 브로커가 예외를 내도 블록이 끝까지 돈다.
    `fetch_trade_records` 가 pool 을 닫지 않는다.
 8. **격리:** 시험은 `tmp_path` 캐시와 가짜 브로커만 쓴다(conftest 의 운영 캐시·네트워크 차단 준수).
-9. 전체 회귀 UTC·KST 각 1회(조용한 시간대).
+9. **기록 대사(§5-1):** 체결 조회 미완결(1·2페이지 실패, F/M 인데 ctx 없음, 페이지 상한) → `incomplete`; SELL 수량 불일치·BUY 누락 → `incomplete`;
+   0건/0건 → `complete`; DB 없음 → 행 없음; 원천 NULL pnl → `exits_missing`(실제 0원은 포함).
+10. 전체 회귀 UTC·KST 각 1회(조용한 시간대).
 
 운영 첫 실행(배포는 별도 승인) 뒤 확인할 것: 스냅샷 행 수와 제외 건수·원화, 리뷰 §1 기간(03-09~07-02)의 원화 합계가
 DB 합계와 맞는지, `bench_missing`·`awaiting_close` 가 설명 가능한 수준인지.
@@ -229,8 +259,7 @@ DB 합계와 맞는지, `bench_missing`·`awaiting_close` 가 설명 가능한 �
 - 오프라인 CLI 는 만들지 않는다. 재현은 exporter JSON 과 공용 함수 시험으로 충분하다. 외부 검토자가 원하면 추가한다.
 - 설계 B(단일 runtime owner)는 체결 → DB 기록을 writer 하나로 모은다. 그 전까지 이 원장은 현재 DB 를 정본으로 읽는다.
   B 이후에도 행 계약은 그대로 두고 원천만 owner 원장으로 바꾼다.
-- 설계 B(브랜치 `feature/engine-b-minimal-kis-owner-design-20260928`)가 도입하는 거래일별 기록 완전성 표(`execution_day_status`)가
-  생기면, `incomplete` 인 거래일을 건드린 포지션을 제외 사유 `record_incomplete` 로 뺀다. B 구현 전에는 해당 없음(현재 동작 변화 없음).
+- 거래일 기록 상태 표(`execution_day_status`)는 09-29 절충안 채택으로 설계 B 가 아니라 이 설계의 §5-1 대사가 쓴다(설계 B 는 보류).
 
 ## 12. 리뷰 기록
 
@@ -239,3 +268,4 @@ DB 합계와 맞는지, `bench_missing`·`awaiting_close` 가 설명 가능한 �
 | 1 | 독립 설계 리뷰(요청 Claude Opus / high, 실제 모델·effort 미노출, 작성자 아님, 읽기 전용) — `edc1eb5` | APPROVE_WITH_CONDITIONS — P0 0, P1 1, P2 8 | P1-1(분할 체결 진입의 조기 확정·`exits_missing`) → 매일 전체 재계산 스냅샷으로 전환, 종결 = Σ매도 ≥ Σ매수, `awaiting_close`·`exits_missing` 추가, exporter `:162` 가드 수정. P2-1 → 진입·청산 양쪽 동기화 판정(`sync_detected` 포함), `sync_entry`·`recovered_at_exit` 제외. P2-2 → 제외 원화 합계. P2-3 → "클립 수준만 같다", s=−`STOP_CLIP_PCT`. P2-4 → 캐시 전체 교체·날짜 형식·`bench_out_of_range`. P2-5 → 토요일 줄에 계산일. P2-6 → 한계 3개 추가. P2-7 → `bench_suspect` 삭제. P2-8 → pool 을 닫지 않는 분리 명시. 인용 정정: 17:00 호출 `:5478-5479`, NXT 문장. `kr_scheduler.py:7294` 는 `grep` 으로 `strategy="manual"` 줄임을 재확인해 유지 |
 | 2 | 같은 리뷰어 한정 재확인 — `b84b9a3` | **APPROVE** — 네 조건 충족, 새 P2 3건(권고) | P2-a `exits_missing` 판정 순서 명시, P2-b 부분 응답이면 캐시 교체 안 함(+5 여유), P2-c drift 비교 기준을 직전 계산일로 정의. `kr_scheduler.py:7294` 유지가 맞다고 리뷰어가 1차 지적을 철회 |
 | 3 | (승인 후 메모, 리뷰 대상 아님) | — | §11 에 설계 B 의 `execution_day_status` → `record_incomplete` 경계 메모 한 줄 추가. 현재 계약·동작 변화 없음 |
+| 4 | 계획 리뷰(Codex 교차 공급자, 요청 gpt-6-astra/high, rollout model `gpt-6-astra`·effort `high`) — 계획 `b94eba4` | REQUEST_CHANGES(P1 4·P2 4, 계획 대상) | 설계 보완: 원천 NULL `pnl_missing` 보존, 판정 순서(`exits_aggregated` 먼저), `record_incomplete`·`day_status_missing`, §5-1 기록 대사(복구 로직 무변경 — 기동 시 손익 복원 입력 보존), DB 접근·재시작 주석, 호출 예산. 계획은 2판으로 고침 |
