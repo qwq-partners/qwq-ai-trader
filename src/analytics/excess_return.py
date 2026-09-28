@@ -50,7 +50,7 @@ EXCLUSION_REASONS = (
 BENCH_FILE = "kodex200_daily.csv"
 SNAPSHOT_FILE = "positions.jsonl"
 PREV_SNAPSHOT_FILE = "positions_prev.jsonl"
-SNAPSHOT_META_FILE = "positions_meta.json"
+SNAPSHOT_META_KEY = "_meta"       # 스냅샷 첫 줄 헤더 {"_meta": {computed_date, computed_at}} — 행과 한 번에 원자 기록
 SUMMARY_FILE = "summary.json"
 HISTORY_FILE = "summary_history.jsonl"
 
@@ -505,6 +505,14 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def read_snapshot(path: Path) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    """스냅샷 → (헤더 meta, 행). 헤더가 없는 옛 형식은 meta=None 이고 모든 줄이 행이다."""
+    rows = _read_jsonl(path)
+    if rows and isinstance(rows[0], dict) and isinstance(rows[0].get(SNAPSHOT_META_KEY), dict):
+        return rows[0][SNAPSHOT_META_KEY], rows[1:]
+    return None, rows
+
+
 def _jsonl(rows: List[Dict[str, Any]]) -> str:
     return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
 
@@ -538,18 +546,28 @@ async def _refresh_benchmark(broker: Any, path: Path, oldest_entry: Optional[str
 
 
 def _append_history(path: Path, line: Dict[str, Any]) -> None:
-    """같은 계산일 줄이 없을 때만 append + fsync."""
-    for row in _read_jsonl(path):
-        if row.get("computed_date") == line["computed_date"]:
-            return
+    """꼬리 복구 → 같은 계산일 줄이 없을 때만 append + fsync."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file():
         raw = path.read_bytes()
         if raw and not raw.endswith(b"\n"):
-            # append 도중 중단된 꼬리 — 마지막 줄바꿈까지로 되돌려 다음 기록이 같은 물리 줄에 붙지 않게 한다
-            keep = raw[: raw.rfind(b"\n") + 1]
-            logger.warning(f"[초과수익] 이력 손상 꼬리 {len(raw) - len(keep)}바이트 제거: {path.name}")
-            atomic_write_text(path, keep.decode("utf-8", errors="replace"))
+            # 줄바꿈 없는 꼬리 — 완성된 JSON 행이면 줄바꿈만 보충, 파싱 불가(append 도중 중단)면 제거.
+            # 어느 쪽이든 다음 기록이 같은 물리 줄에 붙지 않는다.
+            cut = raw.rfind(b"\n") + 1
+            try:
+                whole = isinstance(json.loads(raw[cut:].decode("utf-8")), dict)
+            except ValueError:                   # JSONDecodeError·UnicodeDecodeError
+                whole = False
+            if whole:
+                fixed = raw + b"\n"
+                logger.warning(f"[초과수익] 이력 마지막 줄 줄바꿈 보충: {path.name}")
+            else:
+                fixed = raw[:cut]
+                logger.warning(f"[초과수익] 이력 손상 꼬리 {len(raw) - cut}바이트 제거: {path.name}")
+            atomic_write_text(path, fixed.decode("utf-8", errors="replace"))
+    for row in _read_jsonl(path):
+        if row.get("computed_date") == line["computed_date"]:
+            return
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
         f.flush()
@@ -561,6 +579,7 @@ def _append_history(path: Path, line: Dict[str, Any]) -> None:
 # 날짜는 호출부 now(호스트 로컬 naive)의 date — event_time 과 같은 규약이라 KST 로 바꾸지 않는다.
 
 WRITE_QUEUE_WAIT_SEC = 20
+VERIFY_TIMEOUT_SEC = 45          # 대사 자체 시한 — 스케줄러 단계 시한 90초 안에서 상태 저장·원장 갱신 여유를 남긴다
 MAX_REASONS = 20
 DAY_STATUS_SOURCE = "kr_excess_20_30"
 
@@ -692,7 +711,14 @@ async def run_daily_update(*, broker: Any, fetch: Any, out_dir: Path, root: Path
     verdict: Optional[Dict[str, Any]] = None
     saved: Optional[bool] = None
     if execute is not None:
-        verdict = await verify_day_records(broker=broker, fetch=fetch, write_queue=write_queue, day=today)
+        try:
+            verdict = await asyncio.wait_for(
+                verify_day_records(broker=broker, fetch=fetch, write_queue=write_queue, day=today),
+                VERIFY_TIMEOUT_SEC)
+        except asyncio.TimeoutError:
+            # 이미 찾은 불일치는 잃지만 '미완'은 반드시 저장한다 — 상태 없음으로 남으면 다음 날 포함될 수 있다
+            logger.warning(f"[초과수익] 기록 대사 시한({VERIFY_TIMEOUT_SEC}초) 초과 — incomplete 로 저장")
+            verdict = {"status": "incomplete", "reasons": ["verify_timeout"], "checked": {}}
         saved = await save_day_status(execute, today, verdict, now)
 
     # ② 먼저 — 가장 오래된 진입일을 알아야 ① 의 조회 범위를 정한다(결과는 설계 순서와 같다)
@@ -727,22 +753,19 @@ async def run_daily_update(*, broker: Any, fetch: Any, out_dir: Path, root: Path
         rows.append(row)
 
     snap_path, prev_path = out_dir / SNAPSHOT_FILE, out_dir / PREV_SNAPSHOT_FILE
-    meta_path = out_dir / SNAPSHOT_META_FILE
     if snap_path.is_file():
-        snap_day = None
-        try:
-            snap_day = json.loads(meta_path.read_text(encoding="utf-8")).get("computed_date") if meta_path.is_file() else None
-        except (OSError, json.JSONDecodeError):
-            snap_day = None
-        if snap_day is None:                     # 메타가 없던 옛 스냅샷 — 첫 행 계산 시각으로 대신 본다
-            current_rows = _read_jsonl(snap_path)
+        meta, current_rows = read_snapshot(snap_path)
+        if meta is not None:
+            snap_day = meta.get("computed_date")
+        else:                                    # 헤더 없는 옛 스냅샷 — 첫 행 계산 시각으로 대신 본다
             snap_day = str(current_rows[0].get("computed_at", ""))[:10] if current_rows else None
         if snap_day != today.isoformat():
-            # 직전 계산일 스냅샷 보관 — 같은 날 재실행은 그날 첫 실행 전 기준을 그대로 쓴다(빈 스냅샷도 날짜로 판정)
+            # 직전 계산일 스냅샷 보관(헤더 포함 통째) — 같은 날 재실행은 그날 첫 실행 전 기준을 그대로 쓴다
             atomic_write_text(prev_path, snap_path.read_text(encoding="utf-8"))
-    previous = _read_jsonl(prev_path)
-    atomic_write_text(snap_path, _jsonl(rows))
-    atomic_write_json(meta_path, {"computed_date": today.isoformat(), "computed_at": computed_at})
+    previous = read_snapshot(prev_path)[1]
+    # 날짜 헤더와 행을 한 번의 원자적 쓰기로 — 둘 사이 실패로 날짜·행이 어긋날 수 없다(구현 리뷰 P2-4)
+    header = {SNAPSHOT_META_KEY: {"computed_date": today.isoformat(), "computed_at": computed_at}}
+    atomic_write_text(snap_path, json.dumps(header, ensure_ascii=False) + "\n" + _jsonl(rows))
 
     # ④ 요약
     summary = summarize(rows, previous, today=today, awaiting_close=awaiting, day_status_missing=gaps)

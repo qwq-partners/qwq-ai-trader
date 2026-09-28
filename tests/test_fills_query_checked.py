@@ -240,3 +240,82 @@ def test_schema_has_execution_day_status_table():
     assert ("CREATE TABLE IF NOT EXISTS execution_day_status ( trade_date DATE PRIMARY KEY, "
             "status VARCHAR(12) NOT NULL, reasons TEXT, source VARCHAR(30), "
             "checked_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL )") in sql
+
+
+# ── 5) 교차 공급자 구현 리뷰(2단계) 처분 — P1-1 누적 헤더 이상·ctx 재등장, P1-2 정규화 ──
+# (페이지 목록, 기대 호출 수, 기대 반환 odno, checked 판정) — 기본 호출은 요청·반환이 변경 전과 같다
+STICKY = {
+    "missing_header_then_D": ([_pg([_F[0]], "K1"), _pg([_F[1]], "K2", "D")], 2, ["0", "1"],
+                              (False, "missing_tr_cont")),
+    "unknown_header_then_D": ([_pg([_F[0]], "K1", "X"), _pg([_F[1]], "K2", "D")], 2, ["0", "1"],
+                              (False, "missing_tr_cont")),
+    "A_B_A_D": ([_pg([_F[0]], "A", "F"), _pg([_F[1]], "B", "M"), _pg([_F[2]], "A", "M"),
+                 _pg([_F[3]], "C", "D")], 4, ["0", "1", "2", "3"], (False, "repeated_ctx")),
+}
+
+
+@pytest.mark.parametrize("name", sorted(STICKY))
+def test_sticky_anomaly_default_call_unchanged(conn, name):
+    pages, n_calls, odnos, _j = STICKY[name]
+    runs = []
+    for kwargs in ({}, {"status": None}, {"status": {}}):
+        sent = _record(conn, pages)
+        out = asyncio.run(conn._query_daily_fills("20260929", **kwargs))
+        runs.append((sent, out))
+    assert runs[0] == runs[1] == runs[2]
+    sent, out = runs[0]
+    assert len(sent) == n_calls and [str(i.get("odno")) for i in out] == odnos
+    assert [t for _tr, _p, t in sent] == [None] + ["N"] * (n_calls - 1)
+
+
+@pytest.mark.parametrize("name", sorted(STICKY))
+def test_sticky_anomaly_final_D_is_not_complete(conn, name):
+    pages, _n, _o, judged = STICKY[name]
+    _record(conn, pages)
+    st: dict = {}
+    asyncio.run(conn._query_daily_fills("20260929", status=st))
+    assert (st["complete"], st["reason"]) == judged
+    _record(conn, pages)
+    _rows, complete, reason = asyncio.run(conn.get_fills_for_date_checked(date(2026, 9, 29)))
+    assert (complete, reason) == judged
+
+
+def _drop(key):
+    f = dict(_F[1])
+    f.pop(key)
+    return f
+
+
+@pytest.mark.parametrize("bad", [
+    _drop("sll_buy_dvsn_cd"), dict(_F[1], sll_buy_dvsn_cd=""), dict(_F[1], sll_buy_dvsn_cd="03"),
+    dict(_F[1], sll_buy_dvsn_cd="1"), dict(_F[1], avg_prvs="NaN"), dict(_F[1], avg_prvs="inf"),
+    dict(_F[1], avg_prvs="-Infinity"), _drop("pdno"), dict(_F[1], pdno="5930"),
+    dict(_F[1], pdno="0059300"), dict(_F[1], pdno="00593?"),
+], ids=["side_missing", "side_empty", "side_03", "side_1", "px_nan", "px_inf", "px_neg_inf",
+        "sym_missing", "sym_short", "sym_long", "sym_symbol_char"])
+def test_checked_rejects_bad_side_symbol_price(conn, bad):
+    _record(conn, [_pg([_F[0], bad], tr_cont="D")])
+    rows, complete, reason = asyncio.run(conn.get_fills_for_date_checked(date(2026, 9, 29)))
+    assert (complete, reason) == (False, "normalize_failed")
+    assert [r["odno"] for r in rows] == ["0"]
+
+
+def test_checked_accepts_alnum_six_char_symbol(conn):
+    """신규 영숫자 단축코드(6자리) 는 정상 — 6자리 숫자만 허용하면 실체결을 미완으로 만든다."""
+    _record(conn, [_pg([dict(_F[0], pdno="0126Z0")], tr_cont="D")])
+    rows, complete, _r = asyncio.run(conn.get_fills_for_date_checked(date(2026, 9, 29)))
+    assert complete is True and rows[0]["symbol"] == "0126Z0"
+
+
+def test_side_missing_row_with_empty_db_is_not_complete(conn):
+    """방향 불명 체결 1건 + 빈 DB → 대사 결과가 complete 가 아니다(리뷰 P1-2 연결 시험)."""
+    from src.analytics import excess_return as er
+    _record(conn, [_pg([_drop("sll_buy_dvsn_cd")], ctx="", tr_cont="D")])
+
+    async def empty_fetch(sql, *args):
+        return []
+
+    r = asyncio.run(er.verify_day_records(broker=conn, fetch=empty_fetch, write_queue=None,
+                                          day=date(2026, 9, 29)))
+    assert r["status"] == "incomplete"
+    assert r["reasons"] == ["fill_query_incomplete:normalize_failed"]

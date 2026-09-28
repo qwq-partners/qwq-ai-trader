@@ -487,7 +487,7 @@ def test_run_daily_update_writes_files_and_is_idempotent(tmp_path):
     assert csv_text.splitlines()[0] == "date,close,source,fetched_at"
     assert "2026-09-01,100.0" in csv_text
     snap1 = (tmp_path / "positions.jsonl").read_text(encoding="utf-8")
-    assert len(snap1.splitlines()) == 2
+    assert len(er.read_snapshot(tmp_path / "positions.jsonl")[1]) == 2     # 첫 줄은 날짜 헤더(리뷰 P2-4)
     assert json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))["computed_date"] == "2026-09-10"
     assert s1["windows"]["all"]["all"]["n"] == 2
 
@@ -526,8 +526,7 @@ def test_benchmark_at_broker_cap_is_accepted_and_older_positions_out_of_range(tm
     s, broker = _update(tmp_path, T, L, _kis_rows(start="2026-09-02"), datetime(2026, 9, 10, 20, 31))
     broker.get_daily_prices.assert_awaited_once_with("069500", days=3)
     assert (tmp_path / "kodex200_daily.csv").is_file()
-    rows = {json.loads(x)["position_id"]: json.loads(x)
-            for x in (tmp_path / "positions.jsonl").read_text(encoding="utf-8").splitlines()}
+    rows = {r["position_id"]: r for r in er.read_snapshot(tmp_path / "positions.jsonl")[1]}
     assert rows["OK1"]["exclusion"] == "bench_out_of_range"      # 09-01 진입 < 캐시 첫 날짜 09-02
     assert rows["OK2"]["exclusion"] is None and rows["OK2"]["bench_return"] is not None
 
@@ -539,14 +538,14 @@ def test_broker_failure_uses_existing_cache(tmp_path):
     broker = SimpleNamespace(get_daily_prices=AsyncMock(side_effect=RuntimeError("KIS 장애(가짜)")))
     s, _ = _update(tmp_path, T, L, None, datetime(2026, 9, 10, 20, 31), broker=broker)
     assert (tmp_path / "kodex200_daily.csv").read_text(encoding="utf-8") == old
-    rows = [json.loads(x) for x in (tmp_path / "positions.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = er.read_snapshot(tmp_path / "positions.jsonl")[1]
     assert all(r["bench_return"] is not None for r in rows)
 
 
 def test_no_benchmark_at_all_writes_null_not_zero(tmp_path):
     T, L = _simple_db()
     _update(tmp_path, T, L, [], datetime(2026, 9, 10, 20, 31))
-    rows = [json.loads(x) for x in (tmp_path / "positions.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = er.read_snapshot(tmp_path / "positions.jsonl")[1]
     assert rows and all(r["bench_return"] is None and r["bench_missing_reason"] == "benchmark_missing" for r in rows)
 
 
@@ -797,8 +796,7 @@ def _ops_update(tmp_path, broker, fetch, execute, now=VNOW):
 
 
 def _rows_by_id(tmp_path):
-    return {json.loads(x)["position_id"]: json.loads(x)
-            for x in (tmp_path / "positions.jsonl").read_text(encoding="utf-8").splitlines()}
+    return {r["position_id"]: r for r in er.read_snapshot(tmp_path / "positions.jsonl")[1]}
 
 
 async def _noop_execute(sql, *args):
@@ -920,3 +918,103 @@ def test_load_day_status_column_missing_is_not_table_missing():
     with _pytest.raises(RuntimeError):
         asyncio.run(er.load_day_status(
             _vfetch(status_exc=RuntimeError('column "status" does not exist')), DAY))
+
+
+# ── 교차 공급자 구현 리뷰(2단계) 처분 시험 — P2-3·P2-4·P2-5·SQL 구조 ─────────────
+
+def test_ops_verify_timeout_saves_incomplete_and_applies(tmp_path, monkeypatch):
+    """대사가 자체 시한을 넘기면 incomplete(verify_timeout) 를 저장하고 원장에도 적용한다(리뷰 P2-3)."""
+    monkeypatch.setattr(er, "VERIFY_TIMEOUT_SEC", 0.05)
+    T, L = _today_db()
+
+    async def slow_fills(day):
+        await asyncio.sleep(5)
+        return [], True, None
+
+    broker = SimpleNamespace(get_daily_prices=AsyncMock(return_value=_kis_rows()),
+                             get_fills_for_date_checked=slow_fills)
+    saved = []
+
+    async def execute(sql, *args):
+        saved.append(args)
+
+    s = _ops_update(tmp_path, broker, _vfetch(base=_fake_fetch(T, L)), execute)
+    assert len(saved) == 1
+    assert saved[0][0] == DAY and saved[0][1] == "incomplete" and json.loads(saved[0][2]) == ["verify_timeout"]
+    assert s["day_status_today"] == "incomplete" and s["day_status_reasons"] == ["verify_timeout"]
+    assert s["day_status_saved"] is True
+    assert _rows_by_id(tmp_path)["TODAY"]["exclusion"] == "record_incomplete"
+
+
+def test_verify_timeout_constant_leaves_room_in_scheduler_budget():
+    from src.schedulers.kr_scheduler import KRScheduler  # noqa: F401 — 클래스 상수만 읽는다
+    budget = KRScheduler._EXCESS_RETURN_TIMEOUT_SEC
+    assert er.VERIFY_TIMEOUT_SEC == 45 and er.WRITE_QUEUE_WAIT_SEC == 20 and budget == 90
+    assert er.WRITE_QUEUE_WAIT_SEC < er.VERIFY_TIMEOUT_SEC < budget
+
+
+def test_snapshot_header_is_first_line_and_no_meta_file(tmp_path):
+    T, L = _simple_db()
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 20, 31))
+    first = json.loads((tmp_path / "positions.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert first == {"_meta": {"computed_date": "2026-09-10", "computed_at": "2026-09-10T20:31:00"}}
+    assert not (tmp_path / "positions_meta.json").exists()
+    meta, rows = er.read_snapshot(tmp_path / "positions.jsonl")
+    assert meta["computed_date"] == "2026-09-10" and len(rows) == 2
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_same_day_rerun_keeps_drift_even_with_stale_meta_file(tmp_path, empty):
+    """이전 판의 positions_meta.json(어제 날짜)이 남아 있어도 무시 — 오늘 스냅샷을 prev 로 회전하지 않는다(리뷰 P2-4)."""
+    T, L = _simple_db()
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 20, 31))                  # 첫날 2행
+    T2, L2 = ([], []) if empty else _simple_db(pnl=47001)
+    s1, _ = _update(tmp_path, T2, L2, _kis_rows(), datetime(2026, 9, 11, 20, 31))
+    expected = 2 if empty else 1
+    assert s1["drift"] == expected
+    (tmp_path / "positions_meta.json").write_text('{"computed_date": "2026-09-10"}', encoding="utf-8")
+    s2, _ = _update(tmp_path, T2, L2, _kis_rows(), datetime(2026, 9, 11, 21, 0))         # 같은 날 재실행
+    assert s2["drift"] == expected
+    prev_meta, prev_rows = er.read_snapshot(tmp_path / "positions_prev.jsonl")
+    assert prev_meta["computed_date"] == "2026-09-10" and len(prev_rows) == 2           # 헤더 포함 통째 회전
+
+
+def test_legacy_snapshot_without_header_is_compatible(tmp_path):
+    """헤더 없는 옛 스냅샷 — 첫 행 computed_at 으로 날짜를 본다(같은 날 회전 없음, 다음 날 회전·drift)."""
+    T, L = _simple_db()
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 20, 31))
+    snap = tmp_path / "positions.jsonl"
+    legacy = "".join(x + "\n" for x in snap.read_text(encoding="utf-8").splitlines()[1:])
+    snap.write_text(legacy, encoding="utf-8")                                           # 옛 형식으로 되돌림
+    assert er.read_snapshot(snap)[0] is None and len(er.read_snapshot(snap)[1]) == 2
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 21, 0))                  # 같은 날 — 회전 없음
+    assert not (tmp_path / "positions_prev.jsonl").exists()
+    snap.write_text(legacy, encoding="utf-8")
+    T2, L2 = _simple_db(pnl=47001)
+    s, _ = _update(tmp_path, T2, L2, _kis_rows(), datetime(2026, 9, 11, 20, 31))        # 다음 날 — 옛 형식이 prev
+    assert s["drift"] == 1
+    assert (tmp_path / "positions_prev.jsonl").read_text(encoding="utf-8") == legacy
+
+
+def test_history_complete_line_without_newline_is_kept(tmp_path):
+    """완성 JSON + 줄바꿈 누락 → 같은 날 재실행은 줄바꿈만 보충(중복 없음), 다음 날은 두 줄 보존(리뷰 P2-5)."""
+    T, L = _simple_db()
+    hist = tmp_path / "summary_history.jsonl"
+    hist.write_text('{"computed_date": "2026-09-10", "n": 99}', encoding="utf-8")
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 21, 0))
+    assert hist.read_text(encoding="utf-8") == '{"computed_date": "2026-09-10", "n": 99}\n'
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 11, 20, 31))
+    lines = [json.loads(x) for x in hist.read_text(encoding="utf-8").splitlines()]
+    assert [x["computed_date"] for x in lines] == ["2026-09-10", "2026-09-11"] and lines[0]["n"] == 99
+
+
+def test_reconciliation_sql_structure():
+    """대사 SQL — KR 필터·당일 조건 위치(리뷰 말미: 가짜 fetch 가 잡지 못하는 변이)."""
+    day_sums = " ".join(er._SQL_DAY_SUMS.split())
+    assert "t.market = 'KR'" in day_sums and "e.event_time::date = $1" in day_sums
+    trade_rows = " ".join(er._SQL_TRADE_ROWS.split())
+    assert "t.market = 'KR'" in trade_rows
+    outer, sub = trade_rows.split("t.id IN (", 1)
+    assert "SUM(e.quantity)" in outer and "e.event_type = 'SELL'" in outer
+    assert "$1" not in outer and "event_time" not in outer        # 바깥 SUM 은 거래의 전체 SELL 합
+    assert "event_time::date = $1" in sub and "event_type = 'SELL'" in sub

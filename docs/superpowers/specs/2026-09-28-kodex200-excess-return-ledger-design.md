@@ -92,7 +92,7 @@
 - **exporter 로드:** exporter 는 `scripts/` 에 있으므로 `backtest_gate.py:191`·`harvest_shadow.py:57` 처럼 파일 경로로 로드한다.
   checkout 만 앞당기고 재시작하지 않아 import 가 어긋나면 이 단계가 예외로 끝나고 로그만 남는다. 다음 재시작 후 복구된다.
   분석 단계라 매매에는 영향이 없다.
-- **격리:** 단계 전체를 `asyncio.wait_for(…, 60)` 와 `try/except` 로 감싼다. 진화 뒤에 두므로 진화를 늦추지 않는다.
+- **격리:** 단계 전체를 `asyncio.wait_for(…, 90)`(단계 90초 — 대사 45초, 큐 대기 20초) 와 `try/except` 로 감싼다. 진화 뒤에 두므로 진화를 늦추지 않는다.
 
 ## 5. 행 스키마와 분류 규칙
 
@@ -153,7 +153,7 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 실거래 기록(DB `trade_events`·`trades`)이 KIS 체결과 **어긋나지 않은** 날만 원장 판정에 쓴다. **기존 복구 로직(`sync_from_kis`)과 쓰기 경로는 바꾸지 않는다** —
 매수 합산·주문번호 단위 복구는 기동 시 일일 손익·거래 수 복원(`engine.py:930-999`)의 입력을 바꾸므로(계획 리뷰 P1) 이번 범위에서 뺐다. 대신 **읽기 전용 대사**만 한다.
 
-- 20:30 단계의 첫 일(⓪, NXT 20:00 종료 뒤): 쓰기 큐가 빌 때까지 기다린다(시한 30초). 오늘의 KIS 체결을 **완결 판정이 있는** 조회로 가져온다(§8
+- 20:30 단계의 첫 일(⓪, NXT 20:00 종료 뒤): 쓰기 큐가 빌 때까지 기다린다(큐 대기 20초, 대사 전체 45초 — 초과는 `incomplete(verify_timeout)` 로 저장). 오늘의 KIS 체결을 **완결 판정이 있는** 조회로 가져온다(§8
   `get_fills_for_date_checked` — 모든 페이지 정상 응답, 헤더 D/E 로 끝남(10번째 페이지 포함), 모순 응답·반복 ctx·미연결·정규화 실패 없음).
 - 대조: **SELL** 은 종목별 Σ KIS 체결 수량 = Σ DB SELL 수량(오늘). **BUY** 는 KIS 에서 산 종목에 DB BUY 가 있는지, DB 에만 BUY 가 있는지를 본다(수량은 비교하지
   않는다 — 엔진은 첫 체결에만 BUY 행을 쓴다, `kr_scheduler.py:3162`). **거래 본체:** 오늘 SELL 이 있는 거래마다 `trades.exit_quantity` = 그 거래 SELL 이벤트 합.
@@ -209,7 +209,7 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 | `src/dashboard/data_collector.py` | `is_sync` 판정을 공용 함수로 바꾼다(`sync_detected` 추가로 대시보드 표시가 조금 넓어진다). `TradeRecord.is_sync`(`trade_journal.py:69-81`, 진화·복기 표본)는 **바꾸지 않는다** |
 | `src/execution/broker/kis_kr.py` | `_query_daily_fills(…, status=None)` 에 완결 판정을 더하고(기본값이면 동작·호출 횟수 동일 — `check_fills` 무변경) `get_fills_for_date_checked(d) -> (fills, complete, reason)` 신규 |
 | `src/data/storage/trade_storage.py` | `SCHEMA_SQL` 에 `execution_day_status` 표만 추가(기존 표·UNIQUE·`sync_from_kis` 무변경) |
-| `src/schedulers/kr_scheduler.py` | 20:30 블록 끝에 ①~④ 한 호출(`wait_for` 60초, 예외 삼킴), 토요일 블록에 요약 한 줄 |
+| `src/schedulers/kr_scheduler.py` | 20:30 블록 끝에 ①~④ 한 호출(`wait_for` 단계 90초(대사 45초, 큐 대기 20초), 예외 삼킴), 토요일 블록에 요약 한 줄 |
 | 문서 | `docs/risk/risk-and-exit.md`(판정 기준 절), `docs/operations/monitoring-checkpoints.md`, `docs/operations/runbook.md`(파일 위치), CHANGELOG, CLAUDE.md 캐시 목록 |
 
 주문·전략·위험 설정·`config/*.yml`·`.env`·킬스위치는 건드리지 않는다. 새 환경변수나 플래그도 만들지 않는다

@@ -1965,7 +1965,9 @@ class KISBroker(BaseBroker):
             status: dict 를 넘기면 조회 완결 판정을 채운다(complete: bool, reason: str|None).
                 None(기본)이면 판정만 건너뛰고 요청·반환·예외는 똑같다 — check_fills(돈 경로)가
                 이 기본 경로를 쓴다. 완결 = 모든 페이지 rt_cd=="0" 이고 마지막 페이지 응답
-                헤더 tr_cont 가 D/E(설계 A §5-1, 2026-09-29).
+                헤더 tr_cont 가 D/E(설계 A §5-1, 2026-09-29). 중간 페이지 헤더 이상(없음/F·M·D·E 밖)이나
+                이미 본 ctx 재등장(비연속 포함)이 한 번이라도 있으면 최종 D/E 여도 미완
+                (missing_tr_cont/repeated_ctx) — 판정만 바뀌고 요청·종료는 기본 경로와 같다.
 
         Returns:
             output1 리스트 (각 항목은 KIS API 응답 dict)
@@ -1990,6 +1992,9 @@ class KISBroker(BaseBroker):
         ctx_nk = ""
         prev_ctx_fk = ""
         prev_ctx_nk = ""
+        # checked 경로 전용 누적(status 가 dict 일 때만 쓴다) — 최종 D/E 가 지우지 못하는 미완 사유
+        sticky_reason: Optional[str] = None
+        seen_ctx: set = set()
 
         for page in range(10):  # 최대 10페이지 (약 300건)
             params = {
@@ -2026,7 +2031,7 @@ class KISBroker(BaseBroker):
             # 종료 판정 — get_positions 와 동일(헤더 D/E · 키 비움 · 빈 페이지 · 동일 키, 2026-09-15)
             _hdr = str(data.get("_tr_cont", "") or "")
             if _hdr in ("D", "E"):
-                _judge(True, None)
+                _judge(sticky_reason is None, sticky_reason)
                 break
             # 아래 세 종료는 헤더가 '마지막'이라고 하지 않았는데 멈춘 것 — 미완
             _stop_reason = "contradictory_continuation" if _hdr in ("F", "M") else "missing_tr_cont"
@@ -2041,6 +2046,12 @@ class KISBroker(BaseBroker):
             if ctx_fk == prev_ctx_fk and ctx_nk == prev_ctx_nk:
                 _judge(False, "repeated_ctx" if _hdr in ("F", "M") else "missing_tr_cont")
                 break
+            if status is not None:
+                if _hdr not in ("F", "M") and sticky_reason is None:
+                    sticky_reason = "missing_tr_cont"
+                if (ctx_fk, ctx_nk) in seen_ctx and sticky_reason is None:
+                    sticky_reason = "repeated_ctx"
+                seen_ctx.add((ctx_fk, ctx_nk))
             prev_ctx_fk, prev_ctx_nk = ctx_fk, ctx_nk
         else:
             # 10페이지를 다 읽고도 종료 조건이 안 나왔다 — 상한 미완
@@ -2101,8 +2112,11 @@ class KISBroker(BaseBroker):
         Returns:
             (fills, complete, reason) — fills 행 형태는 get_all_fills_for_date 와 같다.
             complete=False 이면 fills 는 부분 목록일 수 있다. reason 은 _query_daily_fills 의
-            판정 사유 또는 normalize_failed(수량·평균가 변환 실패 행이 하나라도 있음)/exception.
+            판정 사유 또는 normalize_failed(수량·평균가 변환 실패, 평균가 비유한(NaN/inf),
+            종목코드가 6자리 영숫자가 아님, 방향이 "01"/"02" 밖인 행이 하나라도 있음)/exception.
         """
+        import math  # 이 함수 전용(허용 범위 밖 모듈 머리 무변경)
+
         if target_date is not None and hasattr(target_date, "strftime"):
             date_str = target_date.strftime("%Y%m%d")
         else:
@@ -2130,14 +2144,18 @@ class KISBroker(BaseBroker):
             except (TypeError, ValueError):
                 ccld_qty = None
                 avg_px = None
-            if ccld_qty is None or avg_px is None:
+            symbol = str(item.get("PDNO") or item.get("pdno", "")).strip()
+            side = str(item.get("SLL_BUY_DVSN_CD") or item.get("sll_buy_dvsn_cd", "")).strip()
+            if (ccld_qty is None or avg_px is None or not math.isfinite(avg_px)
+                    or len(symbol) != 6 or not symbol.isascii() or not symbol.isalnum()
+                    or side not in ("01", "02")):
                 normalize_failed = True
                 logger.warning(f"[KIS] 체결 행 정규화 실패 — 미완 처리: odno={item.get('ODNO') or item.get('odno')}")
                 continue
             results.append({
-                "symbol": str(item.get("PDNO") or item.get("pdno", "")).strip(),
+                "symbol": symbol,
                 "name": str(item.get("PRDT_NAME") or item.get("prdt_name", "")).strip(),
-                "sll_buy_dvsn_cd": str(item.get("SLL_BUY_DVSN_CD") or item.get("sll_buy_dvsn_cd", "")).strip(),
+                "sll_buy_dvsn_cd": side,
                 "tot_ccld_qty": ccld_qty,
                 "avg_prvs": avg_px,
                 "odno": str(item.get("ODNO") or item.get("odno", "")).strip(),

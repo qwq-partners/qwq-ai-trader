@@ -71,7 +71,7 @@
 
 - **20:30:** `run_evolution_scheduler` 의 `if bot.strategy_evolver: … else: …` 블록 **전체가 끝난 뒤**(24칸 들여쓰기 — `:5728` 은 else 분기 안이다), `await asyncio.sleep(60)`(`:5730`) 앞, `if last_review_date != today:` 안쪽에 `await self._run_excess_return_step(bot, now)` 한 줄. evolve 성공·실패·부재 세 경우 모두에서 돈다.
 - `KRScheduler._run_excess_return_step(bot, now)`: `tj = getattr(bot, "trade_journal", None)`; `pool`·`_db_available`·`getattr(bot, "broker", None)` 셋 중 하나라도 없으면 **디스크를 건드리기 전에** return(기존 시험의 가짜 봇에는 broker·trade_journal 이 없다 — `test_loop_heartbeat_integration.py:302-309`).
-  `out_dir = Path.home()/".cache"/"ai_trader"/"excess_return"` 는 호출 시점에 계산. `await asyncio.wait_for(run_daily_update(...), 60)` 를 `try/except Exception`(`TimeoutError` 포함)으로 감싸 `logger.warning("[초과수익] …")` 만. 바깥 블록의 `raise` 규칙(`:5734-5737`)에 닿지 않게 한다.
+  `out_dir = Path.home()/".cache"/"ai_trader"/"excess_return"` 는 호출 시점에 계산. `await asyncio.wait_for(run_daily_update(...), 90)`(단계 90초 — 대사 45초, 큐 대기 20초) 를 `try/except Exception`(`TimeoutError` 포함)으로 감싸 `logger.warning("[초과수익] …")` 만. 바깥 블록의 `raise` 규칙(`:5734-5737`)에 닿지 않게 한다.
 - **토요일:** `run_post_exit_review_scheduler` 의 게이트 성능 분석 `except`(`:6511-6512`) 뒤에 자체 try: `summary.json` 을 읽어 `format_weekly_line` → `send_alert(html.escape(line))`. 파일이 없으면 보내지 않는다(로그만). 같은 try 안의 `run_weekly` 가 실패하면 이 줄도 나가지 않는다 — 기존 구조의 한계로 기록.
 - **시험:** 기존 스케줄러 하네스(`test_loop_heartbeat_integration.py:273-331` — `_FakeClockDatetime`·`object.__new__(KRScheduler)`·`asyncio.run(run_evolution_scheduler())`)로 evolve **성공·예외·부재** 세 경우 각각 `_run_excess_return_step` 이 한 번 불리는지 확인(메서드를 기록용 가짜로 교체) + 단계 실행 시험 3개(① 속성 없는 봇 → 파일 0·예외 0 ② 가짜 pool·브로커·`Path.home=tmp_path` → 파일 생성 ③ 브로커 예외·시간 초과 → 예외 전파 0) + 토요일 실행 시험(요약 있음 → `send_alert` 1회·HTML 이스케이프, 요약 없음 → 0회). 기존 `test_evolution_scheduler_*` 무수정 통과·격리 위반 0.
 
@@ -106,7 +106,7 @@
 - **뜻(3판에서 낮춤):** `complete` = **"20:30 대사가 불일치를 찾지 못했다"** — 완전성의 증명이 아니다. 엔진 기록에 주문번호가 없어(`record_entry`/`record_exit`
   INSERT 에 `kis_order_no` 없음) 주문 단위 대응을 증명할 수 없기 때문이다. `incomplete` = 불일치를 찾았거나 대사를 끝내지 못했다.
 - `async verify_day_records(*, broker, fetch, write_queue, day) -> dict` (`excess_return.py`, 저장은 하지 않고 결과만 돌려준다):
-  ① `write_queue` 가 있으면 `await asyncio.wait_for(write_queue.join(), 30)` — 시한 초과면 `incomplete(write_queue_pending)` (join 은 처리 종료만 증명한다 — ⑤ 가 결과를 본다)
+  ① `write_queue` 가 있으면 `await asyncio.wait_for(write_queue.join(), 20)`(큐 대기 20초) — 시한 초과면 `incomplete(write_queue_pending)` (join 은 처리 종료만 증명한다 — ⑤ 가 결과를 본다)
   ② `broker.get_fills_for_date_checked(day)` — 없거나 미완이면 `incomplete(fill_query_incomplete:<reason>)`
   ③ DB 일별 합: `SELECT symbol, event_type, SUM(quantity) FROM trade_events WHERE event_time::date = $1 GROUP BY symbol, event_type`
   ④ SELL: 종목별 Σ KIS(`sll_buy_dvsn_cd=="01"`, 주문번호별 누적 수량의 합) ≠ Σ DB SELL → `incomplete(sell_qty:<종목>)`(DB 에만 있는 종목 포함).
@@ -128,7 +128,7 @@
 - **표가 없는 것(도입 전)과 조회 실패를 구분한다:** 표 없음(`UndefinedTable`)만 "상태 없음"으로 진행하고, 그 밖의 조회 실패는 **이번 갱신을 중단**해 기존 스냅샷·요약을 보존한다
   (이미 제외했던 포지션이 일시 오류로 되살아나지 않게 — 리뷰 P1-3).
 - 보유 구간에 `incomplete` 날이 있으면 `record_incomplete`, 상태 행이 없는 날만 걸친 포지션은 포함하고 `day_status_missing` 으로 센다.
-- **실패 격리:** 대사(T8)부터 요약까지 전부 T5 의 한 `asyncio.wait_for(…, 60)`·`try/except` 안에서 돈다(리뷰 P2-6).
+- **실패 격리:** 대사(T8)부터 요약까지 전부 T5 의 한 `asyncio.wait_for(…, 90)`·`try/except` 안에서 돈다(리뷰 P2-6). 단계 90초 중 대사는 자체 시한 45초(큐 대기 20초 포함) — 초과는 `incomplete(verify_timeout)` 로 저장까지 한다.
 
 ### T10. 2단계 시험·문서
 
