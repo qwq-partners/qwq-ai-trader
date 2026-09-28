@@ -6,7 +6,9 @@
 
 ## 활성 체크포인트
 
-### 배포 후 첫 거래일 20:30 — 실거래 KODEX200 초과수익 원장 (2026-09-29 구현, 미배포)
+### 2026-09-29 20:30 — 실거래 KODEX200 초과수익 원장 첫 실행 (06:45 KST 배포 main `081ab6a`, PID3388744)
+
+- [ ] PR #97 동시 반영분: 로그에 `[안전자산]` 루프 기동·주문 0줄(루프 삭제), 20:30 진화 `BacktestGate` 가 레짐 지표 2차 원천으로 Yahoo ^KS11 을 쓰고 `삼성전자 대리` 폴백 로그가 없는지
 
 - [ ] `journalctl -u qwq-ai-trader | grep '\[초과수익\]'` 에 `원장 갱신: 행 N (포함 n) …` 1줄, 경고 없음(시한 초과·exporter 로드 실패·DB pool 없음이면 경고)
 - [ ] `~/.cache/ai_trader/excess_return/` 에 5개 파일(`positions.jsonl`·`summary.json`·`summary_history.jsonl`·`kodex200_daily.csv`, 둘째 날부터 `positions_prev.jsonl`)

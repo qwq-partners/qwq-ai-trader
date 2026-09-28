@@ -157,7 +157,7 @@
 - 일수익률 |12%| 초과 이상치 제외 (FDR 데이터 오염 실측 대응).
 - 비활성화: `VOL_TARGETING=0`
 
-### 실거래 KODEX200 초과수익 원장 (2026-09-29 구현, 미배포 — 측정 전용)
+### 실거래 KODEX200 초과수익 원장 (2026-09-29 06:45 KST 배포 main `081ab6a` — 측정 전용)
 
 - 판정 기준 "KODEX200 초과수익 + 손절 클립"(전략 리뷰 §5 권고 5)을 **실제로 체결된 왕복 포지션**에 적용한다. 설계
   `docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md`, 코드 `src/analytics/excess_return.py`.
