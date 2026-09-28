@@ -1,5 +1,9 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — 결정: 절충안 채택, 설계 B(attach v1) 보류
+
+- 사용자가 절충안을 택했다: legacy(main) 유지 + 좁은 수정(설계 A 구현·`sync_from_kis` 주문번호 단위화 → POST 불확실성 UNKNOWN 분리 → CLI 거부·`OrderRef` 형식 영속). attach v1 은 폐기가 아니라 보류이며 재개 조건 4개를 [설계 B §0](docs/superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md)에 적었다. 09-22 "엔진 전체를 옮기도록 하자"는 연기. 코드·설정·운영 변경 0.
+
 ## 2026-09-28 — docs: 엔진 본체 최소 설계 B (서면 설계, 구현 없음)
 
 - [설계 문서](docs/superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md): 인계 §8 전부가 아니라 계측 무결성(계좌 전체 체결 → DB writer 하나, 놓친 것은 보정으로 보이게)과 KIS 한 경로 실거래에 필요한 만큼만. 안전 기준은 "legacy 이상"(legacy 공통 한계는 새 방어 없이 명시). 결정 D11~D17 — 주문 유형 고정(정규장 SELL·BUY 시장가, 마감 LIMIT, KRX 만, 취소·정정 미송신), 20:05 장 종료(체결 적용·주문 종료)와 야간 대사(밤 잔고를 경제 checkpoint 로 예약 해제·채택 시 경제 커서 닫기, 기록 완전성은 `execution_day_status`·DB 백필로 분리, 교차일 경제 재생 없음, D3 개정), 모든 시작의 전일 처리, 조용한 종목만 장중 채택, 식별된 외부 SELL 좁은 예외, 방향별 미해결 잠금·UNKNOWN BUY 는 그날 전체 BUY 보류·무결성 실패 전체 정지, 모든 시작에 lease·폴백은 현행 재시작 수준일 때만, 장중 잔고 채택 없음·수량 초과 거절 절차, 한도 전부 유지·재봉인만 제거(B2-0 한도 인벤토리), `OrderRef.key` 기반 계좌 전체 체결 수집·외부 체결·닫힌 lot 뒤 새 lot·한 트랜잭션 projection.
