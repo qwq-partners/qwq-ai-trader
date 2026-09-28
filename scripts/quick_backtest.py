@@ -594,9 +594,10 @@ def idea_kr_growth(top_n: int):
 def idea_tom(symbol: str, months: int):
     """월말 2거래일 + 월초 3거래일 수익률 vs 그 외 — 오버레이 방향성 검증"""
     if symbol.upper() == "KOSPI":
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # src 공용 로더
-        from src.utils.kospi_benchmark import load_kospi_history  # Yahoo ^KS11 → KS11 (KS11 은 09-17 정지)
-        px = load_kospi_history((date.today() - timedelta(days=months * 30)).isoformat())[0]["Close"]
+        import FinanceDataReader as fdr
+        # FDR "KS11"(GitHub 캐시)은 2026-09-17 에서 예외 없이 멈췄다 → Yahoo ^KS11. 연구 venv 엔 loguru 가
+        # 없어 src 공용 로더(kospi_benchmark)를 import 하지 않는다.
+        px = fdr.DataReader("YAHOO:^KS11", (date.today() - timedelta(days=months * 30)).isoformat())["Close"]
     else:
         import yfinance as yf
         px = yf.download(symbol, period=f"{months}mo", auto_adjust=True, progress=False)["Close"]

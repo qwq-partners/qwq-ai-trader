@@ -15,7 +15,7 @@
 - [ ] 08:40 수확 shadow 성공(체제 게이트 fresh). 실패하면 사유가 하트비트에 남고 10분 재시도 — 커서가 전진하지 않았는지 확인.
 - [x] 기동 로그 `[KISMarketData] 휴장일 조회 완료: YYYYMM → N일 (조회 k회)` 의 k 가 2 안팎인지, 뒤 조회 실패 warning 이 없는지.
   ✅ 09-28 15:38: `202609 → 18일 (조회 2회)`, `202610 → 16일 (조회 2회)` — 두 번째 응답이 다음 달 앞부분까지 덮어 포함(9월 10+10월초 8, 10월 11+11월초 5), 합집합 26일, 실패 warning 0.
-- [ ] 다음 평일 휴장(10-05 개천절 대체, 10-09 한글날, 12-25, 12-31)에 LLM레짐·안전자산 루프·스크리너가 돌지 않는지.
+- [ ] 다음 평일 휴장(10-05 개천절 대체, 10-09 한글날, 12-25, 12-31)에 LLM레짐·스크리너가 돌지 않는지(안전자산 루프는 삭제).
 - [ ] **EGW00215 (코드 무변경, 09-28 이 PR #90 계측 첫 거래일):** 장 마감 뒤 `/api/health` `broker.kis_requests` 를 07:17:32 기준선과 차분한다.
   기준선(PID2574272, process_lifetime): TTTC8434R portfolio_sync/account_summary attempts 583·retries 0·egw00215 0, startup 1,
   dashboard_settlement/positions 1, portfolio_sync/positions 583 calls 전부 cache_hit, unknown/other/other attempts 52263·retries 183·http_error 182.

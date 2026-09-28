@@ -3,7 +3,8 @@
 ## 2026-09-28 — chore: 안전자산 자동 운용 삭제·백테스트 KOSPI 벤치마크 교체 (미배포)
 
 - **안전자산(KOFR) 자동 운용 삭제 — 사용자 결정(운용 계획 없음):** `KRScheduler.run_safe_asset_loop`·`kr_safe_asset` 태스크·`_pick_safe_asset` 헬퍼·시험 삭제. 이 루프는 08-31 이후 검증 통과 0·매수 0 이었고(KIS 현재가에 종목명 없음), 이름 원천을 고친 뒤에도 후보 코드가 전부 다른 종목이라 스스로 꺼지는 상태였다. 브로커 직접 시장가 BUY/SELL 경로 하나가 사라진다. `StockMaster.get_name` 은 swing_screener 유니버스의 이름 폴백 분기가 참조하므로 유지(그 전엔 메서드가 없어 그 분기가 AttributeError). 런타임 상태 파일 `safe_asset_state.json` 은 건드리지 않는다.
-- **백테스트 KOSPI 벤치마크 교체:** `scripts/` 4개(ab_exit_policy 의 KODEX200 폴백, backtest_strategies 레짐 지표 2차, backtest_t1_gate 체제 게이트, quick_backtest turn-of-month)가 09-17 에서 멈춘 FDR KS11 을 읽었다 → 신규 `kospi_benchmark.load_kospi_history`(과거 구간, Yahoo ^KS11 → KS11, end 포함 보정, 끝 없는 조회에서 마지막 봉이 직전 거래일보다 오래되면 경고). 공개 시세 실측: 09-01~09-23 범위 17행·끝 09-23 포함, t1_gate 체제 게이트 끝 09-28(이전 09-17). 운영 코드 경로 무변경.
+- **백테스트 KOSPI 벤치마크 교체:** `scripts/` 4개(ab_exit_policy 의 KODEX200 폴백, backtest_strategies 레짐 지표 2차, backtest_t1_gate 체제 게이트, quick_backtest turn-of-month)가 09-17 에서 멈춘 FDR KS11 을 읽었다 → 신규 `kospi_benchmark.load_kospi_history`(과거 구간, Yahoo ^KS11 → KS11, end 포함 보정, 끝 없는 조회에서 마지막 봉이 직전 거래일보다 오래되면 경고). 공개 시세 실측: 09-01~09-23 범위 17행·끝 09-23 포함(UTC/KST 모두 — 조회 뒤 end 이후 행 절단), t1_gate 체제 게이트 끝 09-28(이전 09-17). quick_backtest 는 연구 venv(loguru 없음)라 공용 로더 대신 `YAHOO:^KS11` 기호만 교체. 새 레짐 캐시엔 실제 원천을 라벨로 남긴다(`kospi_fdr:FDR:YAHOO:^KS11`) — 기존 레짐 캐시 2개는 09-11 에서 끝나 정지 영향 없음.
+  - **운영 영향(정정):** 운영 진화 게이트 `BacktestGate`(20:30)가 `scripts/backtest_strategies.py` 를 실행 중 동적으로 로드한다 → 레짐 지표 캐시가 없고 pykrx 가 실패하면 이제 Yahoo ^KS11 을 쓴다(이전: 09-17 정지 KS11). **배포 주의:** 이 스크립트는 새 `load_kospi_history` 를 import 하므로 운영 checkout 만 앞당기고 재시작하지 않으면, 이미 로드된 옛 `kospi_benchmark` 모듈에 그 함수가 없어 import 가 예외로 삼켜지고 삼성전자 대리 폴백으로 떨어진다 — 운영 checkout 은 재시작을 동반한 배포 때만 옮긴다.
 - **EGW00215 원인 확정·수용(사용자):** 같은 계좌를 웹 대시보드 등에서 잔고 조회용으로 함께 쓴다. 09-28 거절 65건(전부 동기화 8434R, 재시도 흡수)은 외부 조회와 겹친 것 — **조치하지 않는다**.
 
 ## 2026-09-28 — ops: main `d551ab9` 배포 (PR #94/#95)

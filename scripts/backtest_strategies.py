@@ -482,7 +482,7 @@ class MarketRegime:
                     df = fdf.rename(columns={"Close": "종가", "Open": "시가",
                                              "High": "고가", "Low": "저가",
                                              "Volume": "거래량"})
-                    source = "kospi_fdr"
+                    source = f"kospi_fdr:{_fdr_src}"   # 실제 원천을 캐시 라벨에 남긴다(09-17 KS11 정지 구분)
                     print(f"  KOSPI 지수(pykrx) 실패 → {_fdr_src} 사용")
             except Exception:
                 pass

@@ -189,16 +189,25 @@ def test_history_falls_back_to_ks11_on_error_or_empty():
     assert kb.load_kospi_history("2026-06-01", fetch=fetch) == (None, None)
 
 
-def test_history_warns_when_open_ended_series_is_frozen(monkeypatch):
+def test_history_warns_only_when_open_ended_series_is_frozen(monkeypatch):
     warnings = []
     monkeypatch.setattr(kb.logger, "warning", lambda msg: warnings.append(msg))
     fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-17"), "KS11": frame("2026-09-17")})
-    df, source = kb.load_kospi_history("2026-06-01", fetch=fetch)  # end 없음 = 오늘까지
+    df, source = kb.load_kospi_history("2026-06-01", fetch=fetch, now=NOW)  # end 없음 = 오늘까지
     assert source == "FDR:YAHOO:^KS11"
     assert any("직전 거래일보다 오래됨" in w for w in warnings)
     warnings.clear()
-    kb.load_kospi_history("2026-06-01", "2026-09-17", fetch=fetch)  # 과거 구간 명시 → 경고 없음
+    kb.load_kospi_history("2026-06-01", "2026-09-17", fetch=fetch, now=NOW)  # 과거 구간 명시 → 경고 없음
+    fresh, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17")})
+    kb.load_kospi_history("2026-06-01", fetch=fresh, now=NOW)  # 추석 뒤 직전 거래일 봉 → 정상
     assert warnings == []
+
+
+def test_history_trims_rows_after_end_regardless_of_timezone():
+    # FDR Yahoo 는 로컬 자정 기준이라 UTC 에선 end 다음 거래일이 섞인다 — 잘라서 end 포함으로 고정
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-25"), "KS11": frame("2026-09-17")})
+    df, _ = kb.load_kospi_history("2026-06-01", "2026-09-23", fetch=fetch)
+    assert df.index[-1].date() == date(2026, 9, 23)
 
 
 def test_backtest_scripts_do_not_read_frozen_fdr_ks11_directly():
@@ -206,4 +215,43 @@ def test_backtest_scripts_do_not_read_frozen_fdr_ks11_directly():
     root = Path(__file__).resolve().parents[1]
     for name in ("ab_exit_policy.py", "backtest_strategies.py", "backtest_t1_gate.py", "quick_backtest.py"):
         text = (root / "scripts" / name).read_text(encoding="utf-8")
-        assert 'DataReader("KS11"' not in text and "load_kospi_history" in text, name
+        assert 'DataReader("KS11"' not in text, name
+        # quick_backtest 는 연구 venv(loguru 없음)라 src 로더 대신 Yahoo 기호를 직접 쓴다
+        assert ('DataReader("YAHOO:^KS11"' in text) if name == "quick_backtest.py" else ("load_kospi_history" in text), name
+
+
+def _load_script(name, alias):
+    import importlib.util
+    import sys
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "scripts" / name
+    spec = importlib.util.spec_from_file_location(alias, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_t1_gate_regime_dates_come_from_shared_history_loader(monkeypatch):
+    closes = [100.0] * 25 + [110.0] * 5          # 마지막 5일만 20일선 위
+    fake = pd.DataFrame({"Close": closes}, index=pd.bdate_range(end="2026-09-23", periods=len(closes)))
+    monkeypatch.setattr(kb, "load_kospi_history", lambda start, end=None: (fake, "FDR:YAHOO:^KS11"))
+    gate = _load_script("backtest_t1_gate.py", "_t1_gate_for_bench_test")
+    ok = gate._regime_ok_dates("2026-06-01")
+    assert ok == {str(d)[:10] for d in fake.index[-5:]}
+    monkeypatch.setattr(kb, "load_kospi_history", lambda start, end=None: (None, None))
+    with pytest.raises(RuntimeError):
+        gate._regime_ok_dates("2026-06-01")
+
+
+def test_ab_exit_policy_benchmark_falls_back_to_shared_loader(monkeypatch):
+    import FinanceDataReader as fdr
+
+    def _no_kodex(code, start, end=None):
+        raise ConnectionError("차단")
+    monkeypatch.setattr(fdr, "DataReader", _no_kodex)
+    fake = pd.DataFrame({"Close": [100.0, 110.0]}, index=pd.bdate_range(end="2026-09-23", periods=2))
+    monkeypatch.setattr(kb, "load_kospi_history", lambda start, end=None: (fake, "FDR:YAHOO:^KS11"))
+    ab = _load_script("ab_exit_policy.py", "_ab_exit_for_bench_test")
+    out = ab.benchmark_return("2026-09-22", "2026-09-23")
+    assert out["code"] == "FDR:YAHOO:^KS11" and round(out["return_pct"], 6) == 10.0
