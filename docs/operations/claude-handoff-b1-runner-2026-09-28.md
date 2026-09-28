@@ -7,6 +7,13 @@
 > 새 full-profile 차단 사유: `tests/dev/test_source_runtime_contract.py:489-496` 1,048,677-byte node ID. 사용자 추가 지시(09-28): 과도한 방어 로직 지양,
 > Toss/KIS 혼용(주문·잔고·계좌는 KIS 만), **미국 거래 영구 중단 — US 관련 시험·적용은 예외 처리**. §7·§8 은 이 결과를 전제로 다음 단계다.
 > main 병합·운영 배포·재시작·실주문은 여전히 미승인.
+>
+> **09-28 후속 (벽시계 시험 2건):** `tests/test_toss_observation.py::…[circuit_open-provider_failure]`(KST 첫 시도 실패)는 원장 fsync 누적이
+> 실시간 5초 예산을 넘긴 시험 좌표 문제로 확정 — main PR #94(`71adac6`, 시험 기본 clock 고정)로 수정됐고 이 브랜치는 다음 main 재병합 때 받는다.
+> `tests/test_recovery_projection.py::…stays_below_5ms[normal_gc-100000]`(UTC 첫 시도 실패)는 벽시계→`time.thread_time` 전환을 검토했으나
+> 비작성자 리뷰(요청 opus/xhigh) REQUEST_CHANGES: 이 호스트 커널(7.0.0-1009-aws)은 `CONFIG_PARAVIRT_TIME_ACCOUNTING`·`CONFIG_IRQ_TIME_ACCOUNTING`
+> 이 꺼져 thread CPU 시간에도 하이퍼바이저 steal·IRQ 가 포함된다(실측: steal +1 tick 호출이 CPU 14.681ms) → 플레이크 해소가 아니다.
+> **사용자 결정 (다): 시험 무변경, 전체 회귀는 조용한 시간대에 실행.** 5ms 상향·steal 면제·재시도 추가는 인계 규칙상 금지 그대로다.
 
 2026-09-28 KST. 아래 내용을 Claude의 후속 작업 지시로 사용한다.
 사용자가 Codex의 새 구현을 중지하고 Claude로 후속을 넘겼다. 실행 중이던 시험의 종료만
