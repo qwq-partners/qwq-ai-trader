@@ -229,6 +229,8 @@ DB 합계와 맞는지, `bench_missing`·`awaiting_close` 가 설명 가능한 �
 - 오프라인 CLI 는 만들지 않는다. 재현은 exporter JSON 과 공용 함수 시험으로 충분하다. 외부 검토자가 원하면 추가한다.
 - 설계 B(단일 runtime owner)는 체결 → DB 기록을 writer 하나로 모은다. 그 전까지 이 원장은 현재 DB 를 정본으로 읽는다.
   B 이후에도 행 계약은 그대로 두고 원천만 owner 원장으로 바꾼다.
+- 설계 B(브랜치 `feature/engine-b-minimal-kis-owner-design-20260928`)가 도입하는 거래일별 기록 완전성 표(`execution_day_status`)가
+  생기면, `incomplete` 인 거래일을 건드린 포지션을 제외 사유 `record_incomplete` 로 뺀다. B 구현 전에는 해당 없음(현재 동작 변화 없음).
 
 ## 12. 리뷰 기록
 
@@ -236,3 +238,4 @@ DB 합계와 맞는지, `bench_missing`·`awaiting_close` 가 설명 가능한 �
 | --- | --- | --- | --- |
 | 1 | 독립 설계 리뷰(요청 Claude Opus / high, 실제 모델·effort 미노출, 작성자 아님, 읽기 전용) — `edc1eb5` | APPROVE_WITH_CONDITIONS — P0 0, P1 1, P2 8 | P1-1(분할 체결 진입의 조기 확정·`exits_missing`) → 매일 전체 재계산 스냅샷으로 전환, 종결 = Σ매도 ≥ Σ매수, `awaiting_close`·`exits_missing` 추가, exporter `:162` 가드 수정. P2-1 → 진입·청산 양쪽 동기화 판정(`sync_detected` 포함), `sync_entry`·`recovered_at_exit` 제외. P2-2 → 제외 원화 합계. P2-3 → "클립 수준만 같다", s=−`STOP_CLIP_PCT`. P2-4 → 캐시 전체 교체·날짜 형식·`bench_out_of_range`. P2-5 → 토요일 줄에 계산일. P2-6 → 한계 3개 추가. P2-7 → `bench_suspect` 삭제. P2-8 → pool 을 닫지 않는 분리 명시. 인용 정정: 17:00 호출 `:5478-5479`, NXT 문장. `kr_scheduler.py:7294` 는 `grep` 으로 `strategy="manual"` 줄임을 재확인해 유지 |
 | 2 | 같은 리뷰어 한정 재확인 — `b84b9a3` | **APPROVE** — 네 조건 충족, 새 P2 3건(권고) | P2-a `exits_missing` 판정 순서 명시, P2-b 부분 응답이면 캐시 교체 안 함(+5 여유), P2-c drift 비교 기준을 직전 계산일로 정의. `kr_scheduler.py:7294` 유지가 맞다고 리뷰어가 1차 지적을 철회 |
+| 3 | (승인 후 메모, 리뷰 대상 아님) | — | §11 에 설계 B 의 `execution_day_status` → `record_incomplete` 경계 메모 한 줄 추가. 현재 계약·동작 변화 없음 |
