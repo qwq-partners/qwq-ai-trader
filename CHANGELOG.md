@@ -2,8 +2,8 @@
 
 ## 2026-09-28 — docs: 엔진 본체 최소 설계 B (서면 설계, 구현 없음)
 
-- [설계 문서](docs/superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md): 인계 §8 전부가 아니라 계측 무결성(체결 → DB writer 하나)과 KIS 한 경로 실거래에 필요한 만큼만. 결정 D11~D17 — 주문 유형 고정(정규장 SELL·BUY 시장가, 마감 LIMIT, 취소·정정 미송신), 당일 소멸 채택(D3 개정), 미상 주문은 그 종목만 잠금, 차가운/따뜻한 시작 술어와 실패 시 legacy 기동, sync 는 관측+2회 연속 보정 제안, owner 정책은 용량 축만(재봉인 제외), 경제 outbox → `trades`/`trade_events` projection.
-- 설치 차단 1~31 과 §8 행을 v1 필수/결정으로 닫힘/이미 닫힘/미지원/관측으로 처분. legacy 대비 달라지는 동작 6건과 사용자 확인 5건(D12·D16·§8 검증 행 제외·legacy 폴백·정규장 SELL 시장가)을 명시. 코드·설정·운영 변경 0, 승인 범위는 비작성자 설계 리뷰까지.
+- [설계 문서](docs/superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md): 인계 §8 전부가 아니라 계측 무결성(계좌 전체 체결 → DB writer 하나)과 KIS 한 경로 실거래에 필요한 만큼만. 결정 D11~D17 — 주문 유형 고정(정규장 SELL·BUY 시장가, 마감 LIMIT, KRX 만, 취소·정정 미송신), 20:05 장 종료 절차(완전한 체결 조회 뒤에만 봇 DAY 주문 종료·예약 해제, 전일 마감 재생, D3 개정), 방향별 미해결 잠금·UNKNOWN BUY 전체 BUY 보류·무결성 실패 전체 정지, 시작 실패 시 저장소가 깨끗할 때만 legacy, 장중 잔고 채택 없음(점검만), 현행 한도 전부 유지·결정 사실 재봉인만 제거, 계좌 전체 체결 수집과 한 트랜잭션 projection(`entry_risk` metadata).
+- 1판(`673b1b2`)은 Codex 교차 공급자 리뷰(gpt-6-astra/xhigh) REQUEST_CHANGES(P1 9) — 근거 코드를 coordinator 가 직접 확인해 전부 반영한 것이 2판. 설치 차단 1~31·§8 행 처분, legacy 대비 달라지는 동작 9건, 사용자 확인 6건 명시. 코드·설정·운영 변경 0.
 
 ## 2026-09-28 — B1 실행기 결합 후보 인수 (원형 tiny profile·전체 UTC/KST 통과, feature 통합)
 
