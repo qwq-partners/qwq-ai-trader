@@ -2,8 +2,8 @@
 
 ## 2026-09-28 — docs: 실거래 KODEX200 초과수익 원장 설계 A (서면 설계, 구현 없음)
 
-- [설계 문서](docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md): DB `trades`/`trade_events` 왕복 포지션(`export_risk_ledger.build_ledger` 재사용)을 같은 기간 KODEX200(069500, KIS 일봉) 과 비교해 비용 차감 초과수익(수익률·원화)과 손절 클립(진입 SL 또는 공통 5%)을 포지션당 한 행으로 20:30 에 append-only 누적한다. 벤치마크 식은 `review_risk_canary.position_benchmark` 를 공용 함수로 옮겨 한 구현만 쓴다. 표본 <30 은 판정 보류, 자동 판정·승격·설정 연결 없음.
-- 추가 KIS 호출은 시세 TR 1회/거래일(원장 TR 0 — EGW00215 무관). 주문·전략·위험 설정·`.env`·킬스위치 변경 0, 코드 변경 0. 승인 범위는 비작성자 설계 리뷰까지.
+- [설계 문서](docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md): DB `trades`/`trade_events` 왕복 포지션(`export_risk_ledger.build_ledger` 재사용)을 같은 기간 KODEX200(069500, KIS 일봉) 과 비교해 비용 차감 초과수익(수익률·원화)과 손절 클립(진입 SL 또는 공통 5%)을 포지션당 한 행으로 계산한다. 20:30 에 DB 전체를 다시 계산한 스냅샷을 원자적으로 교체하고 일별 요약을 이력 파일에 한 줄씩 쌓는다(비작성자 리뷰 P1: 고정 행은 분할 체결 진입을 조기 확정 — 종결 = Σ매도 ≥ Σ매수). 벤치마크 식은 `review_risk_canary.position_benchmark` 를 공용 함수로 옮겨 한 구현만 쓴다. 표본 <30 은 판정 보류, 자동 판정·승격·설정 연결 없음.
+- 추가 KIS 호출은 시세 TR 일봉 조회 1회/거래일(현재 2페이지, 상한 5 — 원장 TR 0, EGW00215 무관). 주문·전략·위험 설정·`.env`·킬스위치 변경 0, 코드 변경 0. 승인 범위는 비작성자 설계 리뷰까지.
 
 ## 2026-09-28 — chore: 안전자산 자동 운용 삭제·백테스트 KOSPI 벤치마크 교체 (미배포)
 
