@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — feat: 실거래 KODEX200 초과수익 원장 1단계 (설계 A 구현, 미배포)
+
+- 신규 `src/analytics/excess_return.py`: DB 왕복 포지션(exporter `fetch_trade_records`→`build_ledger`) × KODEX200(069500, 봇 브로커 KIS 일봉 캐시)로 포지션마다 비용 차감 초과수익·원화 초과·손절 클립(진입 SL / 공통 5%)·overshoot 를 계산해 `~/.cache/ai_trader/excess_return/` 에 매일 전체 재계산 스냅샷·요약·일별 이력으로 남긴다. 분류는 설계 §5 판정 순서 ①~⑩(원천 NULL 손익 `pnl_missing` 은 `exits_missing`, `exits_aggregated` 를 `lots_ambiguous` 보다 먼저). 표본은 `bench_covered`<30 이면 `insufficient_sample`, 자동 판정 없음.
+- `KRScheduler._run_excess_return_step`: 20:30 진화 블록 끝(evolve 성공·실패·부재 모두 뒤), `wait_for` 60초·예외 삼킴, 봇 `trade_journal.pool`(+`_db_available`)·브로커가 없으면 디스크를 건드리지 않고 건너뜀. 토요일 후속복기에서 요약 한 줄(HTML 이스케이프·계산일 포함).
+- `scripts/export_risk_ledger.py`: `fetch_trade_records(fetch, days)` 분리(connect/disconnect 없음 — 봇 pool 보호), `exit_price` 가드를 SELL leg 없는 폴백으로만 이동(DB 직접 부분매도 포지션의 청산 복원), position 에 `entry_reason`·`exit_type`·`pnl_missing` 추가. **알려진 영향:** leg 로 exits 가 새로 복원된 risk cohort 포지션은 canary 기술 검증에 `net_pnl_mismatch` 가 새로 보일 수 있다(판정식 무변경).
+- `scripts/review_risk_canary.py`: 벤치마크 식·파싱을 공용 모듈에서 import(ROOT `sys.path` 삽입, 판정식 무변경). `src/dashboard/data_collector.py`: `is_sync` 를 공용 규칙으로(`sync_detected` 청산 포함 — 표시 전용). `TradeRecord.is_sync`(진화·복기 표본)는 무변경.
+- 추가 KIS 호출: 시세 TR 일봉 1회/거래일(원장 TR 0). 주문·전략·위험 설정·`.env`·킬스위치 변경 0.
+- 검증: 새 시험 49건(원장 36·스케줄러 13 — 손 계산·판정 순서·exporter 경유 분류·NULL/0 구분·멱등·drift·부분 응답·브로커 상한·배선 3경우·토요일 실행), 작성자 변이 6종 + coordinator 변이 1종 kill. 전체 UTC·KST 각 **2163 passed / 2 xfailed / 기존 pykrx warning 1**, 격리 위반 0. 작성 Claude Opus 5.5(요청 Opus/high), 리뷰는 커밋 뒤 교차 공급자.
+
 ## 2026-09-28 — docs: 실거래 KODEX200 초과수익 원장 설계 A (서면 설계, 구현 없음)
 
 - [설계 문서](docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md): DB `trades`/`trade_events` 왕복 포지션(`export_risk_ledger.build_ledger` 재사용)을 같은 기간 KODEX200(069500, KIS 일봉) 과 비교해 비용 차감 초과수익(수익률·원화)과 손절 클립(진입 SL 또는 공통 5%)을 포지션당 한 행으로 계산한다. 20:30 에 DB 전체를 다시 계산한 스냅샷을 원자적으로 교체하고 일별 요약을 이력 파일에 한 줄씩 쌓는다(비작성자 리뷰 P1: 고정 행은 분할 체결 진입을 조기 확정 — 종결 = Σ매도 ≥ Σ매수). 벤치마크 식은 `review_risk_canary.position_benchmark` 를 공용 함수로 옮겨 한 구현만 쓴다. 표본 <30 은 판정 보류, 자동 판정·승격·설정 연결 없음.

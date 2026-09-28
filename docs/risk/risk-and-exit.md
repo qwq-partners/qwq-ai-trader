@@ -157,6 +157,18 @@
 - 일수익률 |12%| 초과 이상치 제외 (FDR 데이터 오염 실측 대응).
 - 비활성화: `VOL_TARGETING=0`
 
+### 실거래 KODEX200 초과수익 원장 (2026-09-29 구현, 미배포 — 측정 전용)
+
+- 판정 기준 "KODEX200 초과수익 + 손절 클립"(전략 리뷰 §5 권고 5)을 **실제로 체결된 왕복 포지션**에 적용한다. 설계
+  `docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md`, 코드 `src/analytics/excess_return.py`.
+- 매일 20:30 진화 블록 끝(`KRScheduler._run_excess_return_step`, 시한 60초·예외 삼킴): DB `trades`/`trade_events` 전체를
+  exporter(`scripts/export_risk_ledger.py` `fetch_trade_records`·`build_ledger`)로 다시 읽어 포지션마다 비용 차감 초과수익
+  (`excess_return` = N/C − 청산 수량 가중 KODEX200 수익률, `excess_krw` = N − C·b)과 손절 클립(진입 SL, 없으면 공통 5%)을 계산한다.
+- 제외(행은 남고 지표에서 빠짐): `exits_missing`(원천 NULL 손익 포함)·`quantity_mismatch`·`exits_aggregated`·`lots_ambiguous`·`manual_entry`·
+  `sync_entry`(`KIS_SYNC_`)·`recovered_at_exit`·`bench_out_of_range`·`record_incomplete`. 청산 진행 중(Σ매도 < Σ매수)은 행 없이 `awaiting_close`.
+- 표본: 벤치마크가 산출된 포함 포지션 30건 미만이면 `insufficient_sample`. **자동 판정·승격·사이징/게이트 연결 없음.**
+- 토요일 후속복기 블록에서 요약 한 줄(계산일 포함)을 텔레그램으로 보낸다.
+
 ### 손절선 초과 방치 워치독 (2026-08-19~)
 - exit_exempt(자동매도 금지) 종목은 제외 (2026-09-03) — 침묵이 사용자 지시인 종목의 상시 오경보 방지
 저녁 품질검증 잡에서 미실현손실 **-12% 미만**(최대 명목 손절 10% + 여유) 포지션을

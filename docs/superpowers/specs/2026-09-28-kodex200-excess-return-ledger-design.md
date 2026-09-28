@@ -195,7 +195,7 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 | `mean_clipped_excess` | x꜀ 평균(전체) |
 | `overshoot_n`, `overshoot_krw_sum` | `entry_stop` 기준 o>0 건수와 원화 합 |
 | `fees_total_est` | exporter 가 현재 수수료율로 다시 계산한 추정치(N 에 들어 있는 실제 비용과 다를 수 있다) |
-| `status` | `insufficient_sample`(n<30) 또는 `measured`. **다른 값은 없다.** 통과·승격을 말하지 않는다 |
+| `status` | `insufficient_sample`(벤치마크가 산출된 포함 포지션 `bench_covered` < 30 — 구현 때 `n` 보다 보수적으로 정함) 또는 `measured`. **다른 값은 없다.** 통과·승격을 말하지 않는다 |
 
 토요일 한 줄 예(합성 값): `📏 실거래 초과수익(KODEX200·비용 차감, 10-19 계산) n=41 평균 -0.42% 합계 -312,000원 t=-0.6 · 클립 -0.18% · 동기화 제외 n=35 -0.30% · 제외 6건 -85,000원 (표본 판정 보류)`.
 

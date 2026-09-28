@@ -59,15 +59,27 @@ R 정의: 완결 포지션 net_pnl ÷ initial_risk_amount. 리포트의 숫자 �
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from collections import Counter
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# 벤치마크 식·파싱은 실거래 초과수익 원장과 구현 하나를 같이 쓴다 (설계 A §2, 2026-09-29)
+from src.analytics.excess_return import (  # noqa: E402
+    buy_fills as _buys,
+    load_benchmark,
+    parse_date as _date,
+    position_benchmark,
+    to_decimal as _dec,
+)
 
 POSITION_REQUIRED = (
     "position_id", "symbol", "strategy", "cohort_id", "applied_sha", "status",
@@ -94,31 +106,6 @@ class LedgerError(Exception):
 
 
 # ── 로딩·구조 검증 ──────────────────────────────────────────────────────────────
-
-def _dec(value: Any) -> Optional[Decimal]:
-    """문자열/숫자 → Decimal(str(x)). None·빈값·파싱 실패는 None."""
-    if value is None or value == "":
-        return None
-    try:
-        return Decimal(str(value))
-    except InvalidOperation:
-        return None
-
-
-def _strip(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _date(ts: Any) -> Optional[str]:
-    """ISO8601 문자열 → 'YYYY-MM-DD' (앞 10자). 형식이 아니면 None."""
-    if not isinstance(ts, str) or len(ts) < 10:
-        return None
-    try:
-        datetime.fromisoformat(ts[:10])
-    except ValueError:
-        return None
-    return ts[:10]
-
 
 def load_ledger(path: Path) -> Dict[str, Any]:
     """원장 JSON 을 읽고 구조를 검증한다. 문제는 LedgerError 로 모아 던진다."""
@@ -157,29 +144,7 @@ def load_ledger(path: Path) -> Dict[str, Any]:
     return data
 
 
-def load_benchmark(path: Optional[Path]) -> Tuple[Optional[Dict[str, Decimal]], Optional[str]]:
-    """벤치마크 CSV(date,close) → {date: close}. 없으면 (None, 사유)."""
-    if path is None:
-        return None, "benchmark_missing"
-    if not path.is_file():
-        return None, f"benchmark_missing: {path}"
-    closes: Dict[str, Decimal] = {}
-    with path.open(encoding="utf-8", newline="") as f:
-        for row in csv.DictReader(f):
-            d = _date(_strip(row.get("date")))
-            c = _dec(_strip(row.get("close")))
-            if d is not None and c is not None and c > 0:
-                closes[d] = c
-    if not closes:
-        return None, f"benchmark_missing: 유효한 date,close 행 없음 ({path})"
-    return closes, None
-
-
 # ── 포지션 단위 계산 ────────────────────────────────────────────────────────────
-
-def _buys(pos: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return [f for f in pos["fills"] if isinstance(f, dict) and f.get("side") == "buy"]
-
 
 def _sells(pos: Dict[str, Any]) -> List[Dict[str, Any]]:
     sells = [f for f in pos["fills"] if isinstance(f, dict) and f.get("side") == "sell"]
@@ -221,30 +186,6 @@ def recompute_net_pnl(pos: Dict[str, Any]) -> Optional[Decimal]:
     if any(p is None for p in parts):
         return None
     return parts[0] - parts[1] - parts[2] - parts[3]
-
-
-def position_benchmark(bench: Optional[Dict[str, Decimal]], pos: Dict[str, Any]) -> Tuple[Optional[Decimal], Optional[str]]:
-    """청산 수량 가중 동일기간 벤치마크 수익률 Σ w_i × (close[t_i]/close[entry] − 1)."""
-    if bench is None:
-        return None, "benchmark_missing"
-    buys = _buys(pos)
-    entry_d = _date(buys[0].get("ts")) if buys else None
-    if entry_d is None or entry_d not in bench:
-        return None, f"benchmark_date_missing: entry {entry_d}"
-    exits = [e for e in pos["exits"] if isinstance(e, dict)]
-    qtys = [_dec(e.get("quantity")) for e in exits]
-    if not exits or any(q is None for q in qtys):
-        return None, "exits_missing"
-    total_q = sum(qtys, Decimal("0"))
-    if total_q <= 0:
-        return None, "exits_missing"
-    acc = Decimal("0")
-    for e in exits:
-        d, q = _date(e.get("ts")), _dec(e.get("quantity"))
-        if d is None or d not in bench or q is None:
-            return None, f"benchmark_date_missing: exit {d}"
-        acc += (q / total_q) * (bench[d] / bench[entry_d] - 1)
-    return acc, None
 
 
 def _last_exit_date(pos: Dict[str, Any]) -> Optional[str]:

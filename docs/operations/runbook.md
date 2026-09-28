@@ -68,6 +68,7 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `~/.cache/ai_trader/evolution/` | 진화 상태 |
 | `~/.cache/ai_trader/journal/` | 거래 저널 + LLM 리뷰 |
 | `~/.cache/ai_trader/unified_trader.pid` | PID 파일 |
+| `~/.cache/ai_trader/excess_return/` | 실거래 KODEX200 초과수익 원장 — `positions.jsonl`(매일 전체 재계산 스냅샷)·`positions_prev.jsonl`(직전 계산일, drift 기준)·`summary.json`·`summary_history.jsonl`(하루 한 줄)·`kodex200_daily.csv`(069500 KIS 일봉 캐시). 20:30 진화 블록 끝에서 갱신, 실패는 `[초과수익]` 경고 로그만 |
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
 | `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
 
