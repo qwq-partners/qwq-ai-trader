@@ -64,7 +64,7 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 
 **메서드**
 
-- `record(side, symbol, qty, reason, now)`: 오늘 항목을 추가한다. 저장은 **파일의 오늘 항목을 다시 읽어 합친 뒤** `atomic_write_json` 으로 한다. 봇과 CLI 가 같은 파일을 써도 서로의 기록을 덮지 않게 하기 위해서다(리뷰 P1-6). 쓰기가 실패해도 메모리 상태는 유지하고 ERROR 로그를 남기며, 알림에 "재시작 보호 없음"을 붙인다(리뷰 P2-8).
+- `record(side, symbol, qty, reason, now)`: 오늘 항목을 추가한다. 저장은 **파일의 오늘 항목을 다시 읽어 합친 뒤** `atomic_write_json` 으로 한다. 봇과 CLI 가 같은 파일을 써도 서로의 기록을 덮지 않게 하기 위해서다(리뷰 P1-6). 쓰기가 실패해도 메모리 상태는 유지하고 ERROR 로그를 남기며, 알림에 "재시작 보호 없음"을 붙인다(리뷰 P2-8). **구현 리뷰 1회차 P1-1:** 재읽기→병합→쓰기 전체를 `<path>.lock` 의 `fcntl.flock(LOCK_EX)`(블로킹) 안에서 한다 — 한쪽이 읽은 뒤 다른 쪽이 쓴 기록을 덮지 않게. 잠금 실패(OSError)는 저장 실패와 같게 처리한다.
 - `buy_hold_reason(today) -> Optional[str]`: 오늘 BUY UNKNOWN 이 하나라도 있으면 사유를 돌려준다.
 - `has_unknown_sell(symbol, today) -> bool`
 
@@ -123,13 +123,13 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 
 **막는 곳 네 군데**
 
-1. **발생원 — ExitManager**(리뷰 P1-1·P1-2의 뿌리): `set_partial_exit_block(fn)` 훅을 추가한다(`set_pending_verifier` 와 같은 주입 방식, `run_trader.py:890` 옆에서 `broker.has_unknown_sell` 로 배선). `update_price` 의 "2. 분할 익절"(`exit_manager.py:1051`)에서 훅이 참이고 `current_stage` 가 NONE·FIRST·SECOND 이면 `_check_partial_exit` 를 건너뛴다.
+1. **발생원 — ExitManager**(리뷰 P1-1·P1-2의 뿌리): `set_partial_exit_block(fn)` 훅을 추가한다(`set_pending_verifier` 와 같은 주입 방식, `run_trader.py:890` 옆에서 `broker.has_unknown_sell` 로 배선). ~~`update_price` 의 "2. 분할 익절"(`exit_manager.py:1051`)에서 훅이 참이고 `current_stage` 가 NONE·FIRST·SECOND 이면 `_check_partial_exit` 를 건너뛴다.~~ **구현 리뷰 1회차 P2-3:** `update_price` 는 항상 `_check_partial_exit(..., allow_partial=not 훅(symbol) is True)` 를 부르고, 1·2·3차 각 분기가 `exit_qty` 직후 pending 설정 전에 `action` 을 계산해 `sell_partial` 이고 허용되지 않으면 부작용 없이 None 을 돌려준다(pending·exit_history·영속 쓰기 없음). 잔량 전부인 단계 청산(`sell_all`)은 그대로 낸다(I1 이 이중 매도를 막는다).
    - 손절(`:1043`)은 그보다 **앞**에서, 트레일링·본전 이동은 뒤에서 그대로 판정된다.
    - 분할 신호 자체가 생기지 않으므로 스케줄러 `_exit_pending_symbols` 가 등록되지 않는다. 그래서 차단된 분할 pending 이 약 3분간 손절을 가리는 문제(P1-2)가 없다.
    - pending_stage 설정·롤백 반복, 틱마다의 영속 쓰기도 생기지 않는다. THIRD→TRAILING 전환은 막지 않는다.
 2. **중앙 가드 — `on_signal`**: 수량을 정한 직후(`engine.py:2005-2018` 뒤)에 `if (분할) and 불명SELL(sym): return None` 을 넣는다. ExitManager 밖의 발행처를 위한 것이다. pending 등록 전이라 정리할 장부가 없다. pending 캐시에 `"sell_partial_action": True`(명시 액션)를 따로 남긴다.
 3. **`_fallback_stale_sell`**: 이 경로는 on_signal 을 거치지 않는다. (`sell_partial_intent` 또는 `sell_partial_action`) 이고 불명SELL 이면 시장가를 재제출하지 않고 `clear_pending` 후 반환한다.
-4. **`on_order` 좀비 카운터**: 불명 SELL 종목의 `APBK0400` 은 세지 않는다. 살아 있는 불명 주문 때문에 전량 재발행이 수량 초과로 거절되는 것은 예상된 결과이지 좀비 신호가 아니다.
+4. ~~**`on_order` 좀비 카운터**: 불명 SELL 종목의 `APBK0400` 은 세지 않는다.~~ **구현 리뷰 1회차 P1-2 로 삭제** — 전량 SELL 불명이 실제 체결되면 동기화가 유령 제거를 미루는데, 재발행의 APBK0400 을 세지 않으면 강제 정리 경로가 끊긴다. 불명 종목도 현행대로 센다(잘못된 좀비 알림 한 통보다 회복 경로가 중요하다. 강제 유령 제거는 KIS 잔고에 없는 종목에만 적용되므로 포지션 손실은 없다).
 
 ### D5. 알림
 
@@ -180,7 +180,8 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 - **E0** ExitManager: 훅이 참이면 분할 익절 조건을 만족해도 `update_price` 가 None 이고 pending_stage 는 None 이다. 같은 가격 흐름에서 손절선 아래로 가면 `sell_all` 이 나온다. 훅이 거짓이면 현행 분할이 나온다. 스케줄러 통합: 차단 후 다음 틱의 손절이 `_exit_pending_symbols` 에 가려지지 않는다.
 - **E2** 분할 SELL 이 불명이면 `None`. `exit_action="sell_partial"` 이고 수량 == 보유량이어도 `None` 이다(P1-1: 불명 체결 → 동기화로 보유만 줄어듦 → 같은 단계 재발행). 같은 종목의 전량 SELL(수량 미지정 또는 `exit_action=sell_all`)은 통과한다.
 - **E3** 폴백: 분할이 불명이면 제출 0회이고 pending 이 해제된다. 폴백 전량은 제출된다.
-- **E4** 불명 SELL 종목의 `APBK0400` 은 좀비 카운터에 들어가지 않는다. 불명이 아닌 종목은 현행대로 센다.
+- **E4** (구현 리뷰 1회차 P1-2 로 대조군 전환) 불명 SELL 종목에서도 `APBK0400` 을 현행대로 센다.
+- **E0b** (P2-3) 차단 시 pending_stage None · exit_history 길이 불변 · 영속 쓰기 0. 잔량 1주처럼 단계 청산이 `sell_all` 이면 훅이 참이어도 낸다.
 
 **회귀**: 전체 suite 를 UTC 와 KST 에서 각각 돌린다(US 제외 규칙 준수).
 
@@ -218,15 +219,28 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 | P2-7 | 비-JSON 4xx 를 접수 전 거절로 볼 근거가 약하다 | D1: 비-JSON 은 상태 무관 UNKNOWN. 401·토큰 재전송 전제를 표에 명시 |
 | P2-8 | 저장 실패 시 재시작 보호의 한계, mtime 시계 의존 | D2 한계 명시 + 알림 표시. 시험 B6 에 mtime 고정·날짜 전환·실패 뒤 재생성 추가 |
 
+### 구현 리뷰 1회차 — 교차 공급자 (2026-09-29)
+
+- 대상 `5e8d730`·`7029527`. Codex, rollout 기준 gpt-6-astra/xhigh. 판정 **REQUEST_CHANGES** — P0 0 · P1 2 · P2 2. coordinator 가 코드와 대조해 아래 처분을 확정했다.
+
+| # | 지적 | 처분 |
+|---|---|---|
+| P1-1 | 병합 저장이 프로세스 간 직렬화되지 않아, 두 기록자가 같은 이전 상태를 읽으면 늦게 쓴 쪽이 먼저 쓴 기록을 지운다 | `record` 의 재읽기→병합→쓰기 전체를 `<path>.lock` 의 `fcntl.flock(LOCK_EX)` 로 감싼다. 잠금 실패는 저장 실패와 같다(False·메모리 유지·재시작 보호 없음 알림). 시험: 첫 장부 재읽기 직후 다른 기록자가 끼어들어도 두 항목 보존 + 재읽기 시점에 잠금이 잡혀 있음(비차단 잠금 시도가 막힘), 잠금 실패 |
+| P1-2 | 좀비 카운터 제외가 전량 SELL 불명 체결 뒤 강제 유령 정리 경로를 끊는다 | 제외 분기 삭제(원래 코드). E4 는 "불명 종목도 센다" 대조군 |
+| P2-3 | 단계 조건 훅이 잔량 전부인 단계 익절(`sell_all`)까지 막는다 | `_check_partial_exit(..., allow_partial)` — 분할만 부작용 없이 거른다. 단계 제한 조건 삭제 |
+| P2-4 | 시험 공백: 실제 생성자의 장부 복원, run_trader 배선, E0 시계 | 실제 `KISBroker(config=KISConfig(…))` 로 임시 HOME 의 오늘 장부 복원 시험, run_trader AST 구조 시험, ExitManager `datetime`·`date` 고정 |
+
 ## 8. 구현 기록 (2026-09-29)
 
-- 구현 커밋 `5e8d730`(코드·시험), 문서 커밋은 그 다음. 기준 HEAD `296766a`. 작성 Claude Opus 5.5(요청 opus/high). **교차 공급자 구현 리뷰 전, 미배포.**
+- 커밋: 구현 `5e8d730`(코드·시험), 문서 `7029527`, 구현 리뷰 1회차 반영 `7c57bb1`(코드·시험) + 그 문서 커밋. 기준 HEAD `296766a`. 작성 Claude Opus 5.5(요청 opus/high). **구현 리뷰 1회차 처분 완료, 재리뷰 전, 미배포.**
 - 변경 파일: `src/risk/order_unknown.py`(신규), `src/execution/broker/kis_kr.py`, `src/utils/audit_log.py`(`EV_UNKNOWN`), `src/core/engine.py`, `src/strategies/exit_manager.py`, `scripts/run_trader.py`, 시험 `tests/test_order_post_unknown.py`(신규).
-- 시험: 신규 58건(B1~B6·E0~E4). 대상 9개 파일 331 passed. 전체 UTC **2321 passed / 2 xfailed / pykrx warning 1**, 전체 KST(`TZ=Asia/Seoul`) **2321 passed / 2 xfailed / pykrx warning 1**, 두 실행 모두 "[테스트 격리] 운영 상태·외부 네트워크 접근 시도 0건". 기존 시험 무수정.
-- 변이 확인(가드를 하나씩 끈 뒤 신규 시험 실행 → 되돌림, 해시로 복원 확인): 브로커 UNKNOWN 판정 8건 실패, 전송 직전 재확인 2건(B4c), ExitManager 훅 2건(E0), on_signal 분할 가드 3건(E2), 폴백 가드 2건(E3), 좀비 카운터 제외 1건(E4), 머리 게이트 1건(B2), 엔진 BUY 조기 차단 1건(E1) — 8종 모두 kill.
+- 시험(1회차 반영 후): 신규 64건. 대상 10개 파일(지정 9개 + `test_exit_manager_characterization.py`) 377 passed. 전체 UTC(`TZ=UTC`) **2327 passed / 2 xfailed / pykrx warning 1**, 전체 KST(`TZ=Asia/Seoul`) **2327 passed / 2 xfailed / pykrx warning 1**, 모두 "[테스트 격리] 운영 상태·외부 네트워크 접근 시도 0건". 기존 시험 무수정.
+- 변이 확인(가드를 하나씩 끈 뒤 신규 시험 실행 → 되돌림, 해시로 복원 확인):
+  - 1차: 브로커 UNKNOWN 판정 8건 실패, 전송 직전 재확인 2건(B4c), on_signal 분할 가드 3건(E2), 폴백 가드 2건(E3), 머리 게이트 1건(B2), 엔진 BUY 조기 차단 1건(E1). (좀비 카운터 제외는 P1-2 로 삭제, ExitManager 훅은 아래 재확인.)
+  - 1회차 반영: 생성자 장부 생성 제거 1건(실제 생성자 복원), run_trader 배선 제거 1건(AST), `allow_partial` 검사 제거(3곳) 3건(E0), `update_price` 훅 무시 3건(E0), flock 제거 2건(재읽기 잠금·잠금 실패) — 모두 kill.
 - **설계 이탈** (기존 시험을 고치지 않기 위해 — 리뷰 대상):
   1. D3 전송 직전 재확인: `_api_post(..., gate=...)` 인자 대신 `_api_post` 가 tr_id 가 매수 TR(구/신, `_BUY_TR_IDS`)이면 `self.unknown_buy_hold()` 를 매 시도의 rate-limit 대기 직후 확인한다. `tests/test_kis_tr_switch.py` 의 가짜 `_api_post(url, tr_id, json_data, extra_headers=None, retry=True)` 가 `gate` 키워드를 받지 않아, 인자로 넘기면 BUY 제출이 TypeError → 실패로 바뀐다. 의미(매수만·매 시도·401 재전송 포함)는 같다. 정정 POST 는 매수 TR 이 아니라 대상 밖(설계와 같음).
   2. D4-2 명시 분할 액션: `_pending_signal_cache` 에 `"sell_partial_action"` 키를 넣지 않고 같은 수명(등록 시 설정/해제, `clear_pending`·`on_fill` 완결 시 삭제)의 별도 집합 `RiskManager._partial_action_marks()` 에 둔다. `tests/test_stale_sell_cancel_failure.py::test_engine_records_the_partial_intent_when_the_sell_is_registered` 가 캐시 값을 `{"sell_partial_intent": True}`/`None` 으로 정확히 비교한다.
   3. D2 장부 생성: `KISBroker.__init__` 에서 만든다(생성 시 1회 로드). `object.__new__` 시험 브로커는 장부가 없어 조회는 보류 없음이고, 첫 불명 기록 때 `default_path()` 로 지연 생성한다. 조회 시 지연 생성하면 기존 시험 브로커(`test_kis_tr_switch` 의 BUY 제출)가 운영 캐시 경로를 읽어 격리 위반이 된다.
-- 구현 세부(설계 범위 안): 손상 파일(오늘 수정)은 장부에 전 방향·전 종목 표식 1건(`side="*"`, `symbol="*"`)으로 담아 병합 저장에도 보존한다. 보류 사유 문자열은 `[접수불명]` 접두어를 쓰지 않는다(불명 결과와 보류 차단을 구분). 알림 문구는 방향별 효과만 적는다(매수 → 오늘 신규 매수 보류, 매도 → 이 종목 분할 매도 재발행 금지).
-- 남은 한계: §5 그대로. 추가로 — 엔진 `on_signal` 의 분할 가드와 폴백 가드는 경고 로그를 스로틀하지 않는다(ExitManager 가 분할 신호를 만들지 않으므로 반복 발행처는 코어 트림 등 소수). `modify_order`(정정, `retry=False`)는 이번 분류 밖이다(설계 D1 은 `submit_order` 대상).
+- 구현 세부(설계 범위 안): 손상 파일(오늘 수정)은 장부에 전 방향·전 종목 표식 1건(`side="*"`, `symbol="*"`)으로 담아 병합 저장에도 보존한다. 보류 사유 문자열은 `[접수불명]` 접두어를 쓰지 않는다(불명 결과와 보류 차단을 구분). 알림 문구는 방향별 효과만 적는다(매수 → 오늘 신규 매수 보류, 매도 → 이 종목 분할 매도 재발행 금지). 잠금 파일 `order_unknown.json.lock` 은 남아도 무해하다(내용 없음, 닫히면 잠금 해제).
+- 남은 한계: §5 그대로. 추가로 — 엔진 `on_signal` 의 분할 가드와 폴백 가드는 경고 로그를 스로틀하지 않는다(ExitManager 가 분할 신호를 만들지 않으므로 반복 발행처는 코어 트림 등 소수). `modify_order`(정정, `retry=False`)는 이번 분류 밖이다(설계 D1 은 `submit_order` 대상). 불명 종목의 좀비 알림은 오탐일 수 있다(P1-2 처분으로 감수). flock 은 같은 호스트의 프로세스 사이에서만 직렬화한다(운영은 단일 호스트).

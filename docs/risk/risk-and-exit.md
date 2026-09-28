@@ -7,13 +7,13 @@
 KIS 주문 POST(`retry=False`)가 서버에 닿은 뒤 응답을 잃으면 접수됐을 수 있다. 종전에는 확정 거절과 똑같이 `(False, msg)` 였다 — 엔진이 pending 을 풀어 BUY 는 5분 뒤 같은 종목 재매수, 분할 SELL 은 스케줄러 3분 정리·90초 폴백이 재발행(합계가 보유 안이라 KIS 가 막지 않는 이중 매도)할 수 있었다.
 
 - **분류는 브로커 한 곳** (`KISBroker.submit_order`): `_api_post` 진입 뒤 응답을 믿을 수 없을 때만 UNKNOWN — 비-JSON 본문(HTTP 상태 무관), 네트워크 오류·시한 초과, `rt_cd` 가 없거나 빈 값·null 이고 `msg_cd` 도 없는 JSON, POST 진입 뒤 예외. 반환은 `(False, "[접수불명] …")`(접두어 `src/risk/order_unknown.PREFIX`), 감사 원장 `unknown`(`reject` 아님), 재전송 없음, 텔레그램 경보. 명시적 거절(`rt_cd≠0` JSON, `msg_cd` 만 있는 JSON 포함)과 POST 전 실패는 현행 그대로다. 표는 `docs/integrations/external-apis.md`.
-- **상태 = 오늘의 접수 불명 장부** (`src/risk/order_unknown.UnknownOrderBook`, 브로커 소유, `~/.cache/ai_trader/order_unknown.json`): 날짜 키. 해제는 **날짜가 바뀔 때만**(봇의 KRX 당일 주문은 그날 소멸 — I2). 장중 자동 해제 없음. 파일은 같은 날 재시작용이며 저장은 파일의 오늘 항목을 다시 읽어 합친다(봇·CLI 가 서로 덮지 않음). 손상 파일은 mtime 이 오늘이면 그날 BUY 보류·전 종목 분할 SELL 금지, 과거면 무시.
+- **상태 = 오늘의 접수 불명 장부** (`src/risk/order_unknown.UnknownOrderBook`, 브로커 소유, `~/.cache/ai_trader/order_unknown.json`): 날짜 키. 해제는 **날짜가 바뀔 때만**(봇의 KRX 당일 주문은 그날 소멸 — I2). 장중 자동 해제 없음. 파일은 같은 날 재시작용이며 저장은 `order_unknown.json.lock` 의 배타 잠금(flock) 안에서 파일의 오늘 항목을 다시 읽어 합친다(봇·CLI 가 서로 덮지 않음, 잠금 실패 = 저장 실패). 손상 파일은 mtime 이 오늘이면 그날 BUY 보류·전 종목 분할 SELL 금지, 과거면 무시.
 - **BUY 불명 → 그날 신규 BUY 전부 보류**: 브로커 머리 게이트(킬스위치 바로 뒤, 엔진·폴백·수동 풀매수·CLI 공통)와 전송 직전 재확인(매수 TR 이면 `_api_post` 가 rate-limit 대기 직후·매 시도마다 확인 — hashkey 를 기다리던 BUY·401 재전송도 막는다). 엔진 `on_signal` 은 크로스 검증·LLM 전에 조기 차단(비용 절감). 엔진의 BUY 실패 처리(`clear_pending`+`block_symbol`)는 그대로 — 그날 BUY 가 전부 막히므로 예약을 유지할 이유가 없고, pending 을 유지하면 그 종목 손절이 막힌다.
-- **SELL 불명 → 그날 그 종목의 분할 SELL 재발행만 금지, 전량 SELL 은 허용**: 전량 재발행은 매도가능수량 초과 거절(I1)이 막으므로 손절을 끄지 않는다. 분할 판정 = 수량 의도(`sell_partial_intent`) **또는** 명시 `exit_action == "sell_partial"`(불명 분할이 체결돼 동기화로 보유만 줄면 같은 단계 재발행이 수량 == 보유량이 된다). 막는 곳 넷:
-  1. ExitManager 발생원 — `set_partial_exit_block(broker.has_unknown_sell)` 가 참이면 NONE·FIRST·SECOND 단계의 분할 익절을 판정하지 않는다(손절은 그 앞, 트레일링·본전 이동·THIRD→TRAILING 은 그대로). 신호가 없으니 스케줄러 청산 pending 도 걸리지 않아 다음 틱 손절이 가려지지 않는다.
+- **SELL 불명 → 그날 그 종목의 분할 SELL 재발행만 금지, 전량 SELL 은 허용**: 전량 재발행은 매도가능수량 초과 거절(I1)이 막으므로 손절을 끄지 않는다. 분할 판정 = 수량 의도(`sell_partial_intent`) **또는** 명시 `exit_action == "sell_partial"`(불명 분할이 체결돼 동기화로 보유만 줄면 같은 단계 재발행이 수량 == 보유량이 된다). 막는 곳 셋:
+  1. ExitManager 발생원 — `set_partial_exit_block(broker.has_unknown_sell)` 가 참이면 단계 익절 중 **분할(sell_partial)만** 내지 않는다(`_check_partial_exit(allow_partial=False)` — pending·exit_history·영속 쓰기 없이 None). 잔량 전부인 단계 익절(sell_all)·손절·트레일링·본전 이동·THIRD→TRAILING 은 그대로. 신호가 없으니 스케줄러 청산 pending 도 걸리지 않아 다음 틱 손절이 가려지지 않는다.
   2. `on_signal` 중앙 가드 — 수량을 정한 직후, pending 등록 전.
   3. `_fallback_stale_sell` — 재제출 직전, 분할이면 제출 없이 `clear_pending`. 명시 액션 표식은 `_pending_signal_cache` 와 같은 수명의 별도 집합(`_partial_action_marks`)에 둔다.
-  4. `on_order` 좀비 카운터 — 불명 SELL 종목의 `APBK0400` 은 세지 않는다(살아 있는 불명 주문 때문의 수량 초과 거절은 예상된 결과).
+  - 좀비 카운터(`on_order` 의 APBK0400)는 **불명 종목도 현행대로 센다** — 전량 SELL 불명이 실제 체결되면 강제 유령 정리가 회복 경로다(구현 리뷰 1회차 P1-2 로 제외 분기 삭제).
 - 엔진은 브로커 메서드를 `getattr`+호출 가능으로 확인하고 **비어 있지 않은 str / 정확히 True** 일 때만 막는다(가짜 브로커·MagicMock 오작동 방지).
 - **알려진 한계**: ① 살아 있는 불명 분할 SELL(지정가)은 주문번호가 없어 취소할 수 없고 그날 손절 전량 SELL 을 막는다(현행에도 있던 한계 — 알림 후 HTS 취소). ② 불명 분할이 실제 체결됐다면 FillEvent 가 없어 stage 가 오르지 않아 다음 날 같은 단계가 한 번 더 나갈 수 있다(최대 분할 1회분·이익 구간). ③ rt_cd 0 인데 ODNO 없음(TEMP_)은 성공 경로 그대로. ④ 장부 저장 실패 뒤 같은 날 재시작하면 보류가 풀린다(알림에 표시). ⑤ CLI(`sell_specific`·`liquidate_all`)는 기록은 하지만 실행 중인 봇이 재시작 전까지 보지 못한다 — 봇 실행 중 CLI 거부는 절충안 (3)단계.
 
