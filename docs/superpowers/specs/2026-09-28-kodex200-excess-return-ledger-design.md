@@ -65,11 +65,13 @@
  │     N = 가장 오래된 포지션 진입일부터 오늘까지의 거래일 수(상한 500 = 브로커 5페이지 한도, 지금 약 140 → 2페이지)
  │     날짜 YYYYMMDD → YYYY-MM-DD 로 바꿔 ~/.cache/ai_trader/excess_return/kodex200_daily.csv
  │     (date,close,source,fetched_at) 를 **통째로 원자적 교체**한다 — 병합 규칙이 없으니 수정주가 소급 변경도 그대로 반영된다
+ │     단, 받아 온 첫 날짜가 가장 오래된 진입일 이하일 때만 교체한다(N 에 +5 여유). 아니면 부분 응답(2페이지 실패 시
+ │     1페이지만 반환, `kis_kr.py:1888-1891`)으로 보고 기존 캐시를 쓰고 로그를 남긴다
  ├─ ② 포지션 원장: exporter.fetch_trade_records(bot TradeStorage pool.fetch, days=730)
  │     → exporter.build_ledger(trades, exit_states={})   ← 종결 포지션만 쓰므로 ExitManager 상태가 필요 없다
  ├─ ③ 스냅샷: 모든 포지션을 position_row(pos, bench) 로 다시 계산 → positions.jsonl 을 **원자적 교체**
  └─ ④ 요약: 스냅샷 → summary.json(원자적 교체) + summary_history.jsonl 에 오늘 한 줄 append(fsync)
-       drift = 어제 스냅샷과 비교해 net_pnl·bench_return 이 바뀐 포지션 수
+       drift = 직전 계산일(오늘과 날짜가 다른 마지막 스냅샷)과 비교해 net_pnl·bench_return 이 바뀐 포지션 수
 토요일 후속복기 블록(게이트 성능 분석 다음): 요약 한 줄 텔레그램(요약 computed_at 날짜 포함)
 ```
 
@@ -109,6 +111,8 @@
 **종결 판정.** exporter 의 `closed`(`exit_quantity >= entry_quantity`, `export_risk_ledger.py:233`)만으로는 부족하다.
 DB `trades.entry_quantity` 는 첫 체결 수량으로 고정되고(갱신하는 SQL 이 없다), 매수 leg 는 스냅샷의 누적 `filled_quantity`
 를 쓰기 때문이다(`:141`). 그래서 행의 종결은 **`closed` 이고 Σ매도 leg 수량 ≥ Σ매수 leg 수량** 일 때로 정한다.
+판정 순서: ① `closed` 인데 exits 가 없거나 `net_pnl` 이 없으면 `exits_missing` ② Σ매도 < Σ매수면 `awaiting_close`
+③ Σ매도 > Σ매수면 `quantity_mismatch` ④ 나머지 제외 규칙. ①을 먼저 보지 않으면 exits 가 빈 포지션이 영원히 대기로 남는다.
 
 | 구분 | 조건 | 처리 |
 | --- | --- | --- |
@@ -137,7 +141,7 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 
 - **멱등:** 스냅샷과 요약은 원자적 교체라 같은 날 두 번 돌아도 결과가 같다. `summary_history.jsonl` 은 같은 날짜 줄이
   이미 있으면 다시 쓰지 않는다.
-- **drift:** 어제 스냅샷과 비교해 바뀐 포지션 수를 요약에 낸다. DB 사후 수정이나 수정주가 소급 변경이 여기서 드러난다.
+- **drift:** 직전 계산일 스냅샷(같은 날 재실행이면 그날 첫 실행 전의 것)과 비교해 바뀐 포지션 수를 요약에 낸다. 그래서 같은 날 두 번 돌아도 요약과 이력 줄의 drift 가 같다. DB 사후 수정이나 수정주가 소급 변경이 여기서 드러난다.
 - **실패:** 벤치마크 조회가 실패하면 기존 캐시로 진행한다(모자란 날짜는 `bench_missing_reason`). DB 가 없으면 그날은 건너뛰고
   스냅샷·요약을 그대로 둔다. 어떤 실패에서도 0 이나 빈 값으로 행을 쓰지 않는다. 로그 태그는 `[초과수익]`.
   토요일 한 줄에 요약의 `computed_at` 날짜를 넣어, 단계가 계속 실패해 옛 값이 나가는 것을 보이게 한다.
@@ -231,3 +235,4 @@ DB 합계와 맞는지, `bench_missing`·`awaiting_close` 가 설명 가능한 �
 | 회차 | 리뷰어(요청 모델/effort, 실제 모델) | 결과 | 처리 |
 | --- | --- | --- | --- |
 | 1 | 독립 설계 리뷰(요청 Claude Opus / high, 실제 모델·effort 미노출, 작성자 아님, 읽기 전용) — `edc1eb5` | APPROVE_WITH_CONDITIONS — P0 0, P1 1, P2 8 | P1-1(분할 체결 진입의 조기 확정·`exits_missing`) → 매일 전체 재계산 스냅샷으로 전환, 종결 = Σ매도 ≥ Σ매수, `awaiting_close`·`exits_missing` 추가, exporter `:162` 가드 수정. P2-1 → 진입·청산 양쪽 동기화 판정(`sync_detected` 포함), `sync_entry`·`recovered_at_exit` 제외. P2-2 → 제외 원화 합계. P2-3 → "클립 수준만 같다", s=−`STOP_CLIP_PCT`. P2-4 → 캐시 전체 교체·날짜 형식·`bench_out_of_range`. P2-5 → 토요일 줄에 계산일. P2-6 → 한계 3개 추가. P2-7 → `bench_suspect` 삭제. P2-8 → pool 을 닫지 않는 분리 명시. 인용 정정: 17:00 호출 `:5478-5479`, NXT 문장. `kr_scheduler.py:7294` 는 `grep` 으로 `strategy="manual"` 줄임을 재확인해 유지 |
+| 2 | 같은 리뷰어 한정 재확인 — `b84b9a3` | **APPROVE** — 네 조건 충족, 새 P2 3건(권고) | P2-a `exits_missing` 판정 순서 명시, P2-b 부분 응답이면 캐시 교체 안 함(+5 여유), P2-c drift 비교 기준을 직전 계산일로 정의. `kr_scheduler.py:7294` 유지가 맞다고 리뷰어가 1차 지적을 철회 |
