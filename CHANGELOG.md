@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-28 — docs: 엔진 본체 최소 설계 B (서면 설계, 구현 없음)
+
+- [설계 문서](docs/superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md): 인계 §8 전부가 아니라 계측 무결성(체결 → DB writer 하나)과 KIS 한 경로 실거래에 필요한 만큼만. 결정 D11~D17 — 주문 유형 고정(정규장 SELL·BUY 시장가, 마감 LIMIT, 취소·정정 미송신), 당일 소멸 채택(D3 개정), 미상 주문은 그 종목만 잠금, 차가운/따뜻한 시작 술어와 실패 시 legacy 기동, sync 는 관측+2회 연속 보정 제안, owner 정책은 용량 축만(재봉인 제외), 경제 outbox → `trades`/`trade_events` projection.
+- 설치 차단 1~31 과 §8 행을 v1 필수/결정으로 닫힘/이미 닫힘/미지원/관측으로 처분. legacy 대비 달라지는 동작 6건과 사용자 확인 5건(D12·D16·§8 검증 행 제외·legacy 폴백·정규장 SELL 시장가)을 명시. 코드·설정·운영 변경 0, 승인 범위는 비작성자 설계 리뷰까지.
+
 ## 2026-09-28 — B1 실행기 결합 후보 인수 (원형 tiny profile·전체 UTC/KST 통과, feature 통합)
 
 - Claude 인계 후 W 10423c1 + C c93f567(runner 6파일) + M 82e107f(node ID 1줄)을 `feature/b1-runner-combined-20260928` **df9fd43**으로 결합했다(충돌 0, 예상 밖 diff 0, B1b 5 blob 보존). copied 12건 실행의 비작성자 사후 리뷰 APPROVE_WITH_RECORDED_LIMITS, 결합 focused 8모듈 **3244 passed/126s**, readiness 리뷰 APPROVE_WITH_CONDITIONS(초안 CWD·산출물 경로 P2 2건은 동결 문서에서 해소).
