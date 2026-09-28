@@ -8,7 +8,7 @@
 
 ### Architecture (아키텍처)
 
-- [엔진 본체 최소 설계 B](superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md) — 단일 runtime owner → KIS 주문 경계 → Toss 조회 보강, 계측·KIS 한 경로에 필요한 만큼만: 브로커 불변식(매도가능수량·봇 DAY 주문 소멸) 뼈대, 취소·정정 미송신, 장 종료 절차(주문 종료≠회계 완료), 방향별 잠금, 한도 유지·재봉인만 제거, 계좌 전체 체결 수집, 설치 차단 1~31·§8 처분. 서면 설계 2판(교차 공급자 1차 REQUEST_CHANGES 처분), 사용자 확인 6건
+- [엔진 본체 최소 설계 B](superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md) — 단일 runtime owner → KIS 주문 경계 → Toss 조회 보강, 계측·KIS 한 경로에 필요한 만큼만: 브로커 불변식(매도가능수량·봇 DAY 주문 소멸) 뼈대, 취소·정정 미송신, 20:05 장 종료·07:50 야간 대사(확정 잔고로 회계 확정, 교차일 재생 없음), 방향별 잠금, 한도 유지·재봉인만 제거(B2-0 인벤토리), 계좌 전체 체결 수집, 안전 기준 = legacy 이상, 설치 차단 1~31·§8 처분. 서면 설계 3판(교차 공급자 1·2차 REQUEST_CHANGES 처분), 사용자 확인 7건
 - [B1 2MiB 표준 실행기 진행](reviews/b1-standard-runner-2026-09-27.md) · [설계](superpowers/specs/2026-09-27-b1-standard-runner-design.md) · [계획](superpowers/plans/2026-09-27-b1-standard-runner.md) — 순수 계약367·인자170·budget219·coordination333·출력415·예외 정리568·공통 main757 및 독립 한정 검토 완료; 공개 활성화 tests-first, main125·실제 프로필 미인수
 - [B1 node ID 호환성](reviews/b1-nodeid-compatibility-2026-09-27.md) — 입력/판정 불변의 이름 한 건 수정, exact109개 매핑·109 passed·독립 focused 한정 승인; 최종 combined 전체 인수 전
 
