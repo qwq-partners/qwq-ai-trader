@@ -150,17 +150,19 @@ leg 가 있는 포지션이 `exits_missing` 으로 빠진다. 이 가드를 leg 
 
 ### 5-1. 거래일 기록 대사 (보완 — 09-29 절충안 1단계)
 
-실거래 기록(DB `trade_events`)이 KIS 체결과 맞는 날만 원장 판정에 쓴다. **기존 복구 로직(`sync_from_kis`)은 바꾸지 않는다** — 매수 합산·주문번호
-단위 복구는 기동 시 일일 손익·거래 수 복원(`engine.py:930-999`)의 입력을 바꾸므로(계획 리뷰 P1) 이번 범위에서 뺐다. 대신 **검증만** 한다.
+실거래 기록(DB `trade_events`·`trades`)이 KIS 체결과 **어긋나지 않은** 날만 원장 판정에 쓴다. **기존 복구 로직(`sync_from_kis`)과 쓰기 경로는 바꾸지 않는다** —
+매수 합산·주문번호 단위 복구는 기동 시 일일 손익·거래 수 복원(`engine.py:930-999`)의 입력을 바꾸므로(계획 리뷰 P1) 이번 범위에서 뺐다. 대신 **읽기 전용 대사**만 한다.
 
-- 20:30 단계의 첫 일(⓪, NXT 20:00 종료 뒤): 쓰기 큐가 빌 때까지 기다린다(시한 30초, 넘으면 `incomplete`). 오늘의 KIS 체결을 **완결 판정이 있는**
-  조회로 가져온다(§8 `get_fills_for_date_checked` — 모든 페이지 정상 응답, 헤더 D/E 로 끝남, 페이지 상한 아님, 모순 응답·반복 ctx·미연결·정규화
-  실패 없음). 조회가 완결되지 않으면 `incomplete(fill_query_incomplete)`.
-- 대조: **SELL** 은 종목별 Σ KIS 체결 수량(주문번호별 누적의 합) = Σ DB `trade_events` SELL 수량(오늘). **BUY** 는 KIS 에서 산 종목마다 오늘 DB
-  BUY 이벤트가 있는지만 본다 — 엔진은 첫 체결에만 BUY 행을 쓰므로(`kr_scheduler.py:3162`) 수량 비교는 거짓 불일치를 만든다. 어느 쪽이든 어긋나면
-  `incomplete`(사유에 종목·방향). 체결 0건이고 DB 이벤트도 0건이면 `complete`.
-- `execution_day_status(trade_date DATE PRIMARY KEY, status, reasons, source, checked_at, updated_at)` 에 KST 날짜로 upsert 한다. 뜻은
-  **"조회 시점(20:30)까지 DB 기록이 KIS 체결과 맞았다"** 이다(하루 전체의 영구 보증이 아니다). DB 가 없거나 저장이 실패하면 행이 없다 → `day_status_missing`.
+- 20:30 단계의 첫 일(⓪, NXT 20:00 종료 뒤): 쓰기 큐가 빌 때까지 기다린다(시한 30초). 오늘의 KIS 체결을 **완결 판정이 있는** 조회로 가져온다(§8
+  `get_fills_for_date_checked` — 모든 페이지 정상 응답, 헤더 D/E 로 끝남(10번째 페이지 포함), 모순 응답·반복 ctx·미연결·정규화 실패 없음).
+- 대조: **SELL** 은 종목별 Σ KIS 체결 수량 = Σ DB SELL 수량(오늘). **BUY** 는 KIS 에서 산 종목에 DB BUY 가 있는지, DB 에만 BUY 가 있는지를 본다(수량은 비교하지
+  않는다 — 엔진은 첫 체결에만 BUY 행을 쓴다, `kr_scheduler.py:3162`). **거래 본체:** 오늘 SELL 이 있는 거래마다 `trades.exit_quantity` = 그 거래 SELL 이벤트 합.
+  어긋나거나 조회를 끝내지 못하면 `incomplete`, 체결·DB 모두 0건이면 `complete`.
+- **뜻:** `complete` = "20:30 대사가 불일치를 찾지 못했다"이다. 엔진 기록에 주문번호가 없어 **완전성의 증명은 아니다** — 같은 종목에서 한 주문의 중복과 다른 주문의
+  누락이 수량으로 상쇄되거나 기존 보유 종목의 추가 매수가 빠지면 찾지 못한다(legacy 와 같은 한계, §10).
+- `execution_day_status(trade_date DATE PRIMARY KEY, status, reasons, source, checked_at, updated_at)` 에 호스트 로컬 날짜(= `event_time` 과 같은 규약, 운영은 KST)로
+  upsert 하고, 같은 실행의 원장 계산에는 저장 성공과 무관하게 이번 결과를 쓴다(`day_status_saved` 를 요약에 남긴다). 상태 표가 없으면(도입 전) 상태 없음으로,
+  표가 있는데 조회가 실패하면 **그날 갱신을 중단**하고 기존 스냅샷을 보존한다.
 - 원장 TR 은 오늘 체결 조회 1회(legacy `TTTC8001R`, 장외 20:30)가 늘어난다.
 
 ## 6. 멱등·실패·호출 예산
@@ -269,3 +271,4 @@ DB 합계와 맞는지, `bench_missing`·`awaiting_close` 가 설명 가능한 �
 | 2 | 같은 리뷰어 한정 재확인 — `b84b9a3` | **APPROVE** — 네 조건 충족, 새 P2 3건(권고) | P2-a `exits_missing` 판정 순서 명시, P2-b 부분 응답이면 캐시 교체 안 함(+5 여유), P2-c drift 비교 기준을 직전 계산일로 정의. `kr_scheduler.py:7294` 유지가 맞다고 리뷰어가 1차 지적을 철회 |
 | 3 | (승인 후 메모, 리뷰 대상 아님) | — | §11 에 설계 B 의 `execution_day_status` → `record_incomplete` 경계 메모 한 줄 추가. 현재 계약·동작 변화 없음 |
 | 4 | 계획 리뷰(Codex 교차 공급자, 요청 gpt-6-astra/high, rollout model `gpt-6-astra`·effort `high`) — 계획 `b94eba4` | REQUEST_CHANGES(P1 4·P2 4, 계획 대상) | 설계 보완: 원천 NULL `pnl_missing` 보존, 판정 순서(`exits_aggregated` 먼저), `record_incomplete`·`day_status_missing`, §5-1 기록 대사(복구 로직 무변경 — 기동 시 손익 복원 입력 보존), DB 접근·재시작 주석, 호출 예산. 계획은 2판으로 고침 |
+| 5 | 계획 2판 재리뷰(Codex, 요청 gpt-6-astra/high, rollout `gpt-6-astra`·`high`) — `932ec5f` | REQUEST_CHANGES(대사 규칙) | §5-1: `complete` 뜻을 '불일치 미발견'으로 낮춤, DB 에만 BUY·거래 본체 교차 검증 추가, 시각 규약·저장 실패 시 이번 결과 적용·조회 실패 시 갱신 중단 |

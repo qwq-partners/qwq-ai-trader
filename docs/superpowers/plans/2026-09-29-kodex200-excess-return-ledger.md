@@ -1,7 +1,9 @@
 # 실거래 KODEX200 초과수익 원장 — 구현 계획 (설계 A + 절충안 1단계)
 
-> **상태 (2026-09-29, 2판):** 계획. 1판(`b94eba4`)은 교차 공급자 리뷰 REQUEST_CHANGES(P1 4·P2 4) — 2판이 그 처분이다(§6). 사용자 지시(원문): "계획서 나오면 리뷰까지 받은 후 설계 보완하고 이후 설계안대로 구현까지 가자".
-> 범위는 **구현·시험·브랜치 커밋**까지다(프로젝트 규칙상 커밋은 브랜치 비강제 푸시와 함께 하며 PR #98 이 갱신된다 — main 병합은 아니다). 배포·재시작·main 병합·설정/`.env`/킬스위치 변경은 하지 않는다(별도 지시).
+> **상태 (2026-09-29, 3판):** 계획. 1판(`b94eba4`)·2판(`932ec5f`) 모두 교차 공급자 리뷰 REQUEST_CHANGES — 3판이 두 회차의 처분이다(§6).
+> 3회차 계획 리뷰는 돌리지 않고 2단계 **구현 리뷰**에서 대사 규칙을 확인한다(반복 비용 대비 — 대사는 본질적으로 최선 노력 검출이다). 사용자 지시(원문): "계획서 나오면 리뷰까지 받은 후 설계 보완하고 이후 설계안대로 구현까지 가자".
+> 범위는 **구현·시험·브랜치 커밋**까지다. 커밋은 프로젝트 규칙(CLAUDE.md "Always commit and push together")대로 feature 브랜치에 **비강제 푸시**하고
+> 그 결과 PR #98 이 갱신된다 — main 병합·배포는 아니다(리뷰 P2-7 은 이 근거로 유지 처분). 배포·재시작·main 병합·설정/`.env`/킬스위치 변경은 하지 않는다(별도 지시).
 > 기준: 브랜치 `claude/kodex200-excess-return-design-64d126`(PR #98) `0c8b32b`, 제품 코드 = main `e31c632`.
 > 설계: `docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md`(비작성자 리뷰 APPROVE).
 > 방향: 09-29 사용자 결정 절충안(설계 B §0) — 이 계획의 2단계가 절충안 순서 (1) 의 "거래일 기록 미완 표시"다. 절충안 문구의
@@ -87,7 +89,8 @@
 ### T7. 체결 조회 완결 판정 — `src/execution/broker/kis_kr.py`
 
 - `_query_daily_fills(target_date=None, status=None)`: `status` 가 dict 일 때만 판정을 채운다. **완결 = 모든 페이지 `rt_cd=="0"` 이고 마지막 페이지의
-  응답 헤더 `tr_cont` 가 D/E**(연속조회 종료 규칙 — CLAUDE.md "KIS 연속조회 종료는 응답 헤더로 판정")이며 페이지 상한 도달이 아닐 때. 헤더가 F/M 인데
+  응답 헤더 `tr_cont` 가 D/E**(연속조회 종료 규칙 — CLAUDE.md "KIS 연속조회 종료는 응답 헤더로 판정")일 때다. **10번째(마지막 허용) 페이지가 D/E 로 끝나도 완결**이고,
+  10페이지 뒤에도 F/M 이면 상한 미완이다. 헤더가 F/M 인데
   ctx 가 비었거나 빈 페이지·같은 ctx 반복으로 루프가 끝나면 **미완**(`reason`=`contradictory_continuation`/`repeated_ctx`), 미연결은 `not_connected`.
   기본값 `None` 이면 **동작·호출 횟수 동일**(`check_fills` 무변경).
 - `get_fills_for_date_checked(d) -> (fills, complete, reason)` 신규: 위 판정 + 행 정규화 실패(`tot_ccld_qty`·`avg_prvs` 변환 실패)도 미완으로 본다.
@@ -100,26 +103,39 @@
 
 - `TradeStorage.SCHEMA_SQL` 에 `CREATE TABLE IF NOT EXISTS execution_day_status (trade_date DATE PRIMARY KEY, status VARCHAR(12) NOT NULL,
   reasons TEXT, source VARCHAR(30), checked_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`. 기존 표·UNIQUE·`_ensure_tables` 마이그레이션 무변경.
-- `async verify_day_records(*, broker, fetch, execute, write_queue, today_kst, now_kst) -> dict` (`excess_return.py`):
-  ① `write_queue` 가 있으면 `await asyncio.wait_for(write_queue.join(), 30)` — 시한 초과면 `incomplete(write_queue_pending)`
-  ② `broker.get_fills_for_date_checked(today)` — 없거나 미완이면 `incomplete(fill_query_incomplete:<reason>)`
-  ③ DB: `SELECT symbol, event_type, SUM(quantity) … FROM trade_events WHERE event_time::date = $1 GROUP BY symbol, event_type`
-  ④ SELL: 종목별 Σ KIS(`sll_buy_dvsn_cd=="01"`, 주문번호별 누적 수량의 합) ≠ Σ DB SELL → `incomplete(sell_qty:<종목>)`; DB 에만 있는 SELL 종목도 불일치.
-     BUY: KIS 매수 종목(`"02"`)마다 DB BUY 이벤트가 없으면 `incomplete(buy_missing:<종목>)`(수량은 비교하지 않는다 — 엔진은 첫 체결에만 BUY 행을 쓴다)
-  ⑤ 체결 0건이고 DB 이벤트 0건이면 `complete`
-  ⑥ `execute` 로 upsert(KST 날짜, `source="kr_excess_20_30"`, `checked_at=now_kst`). 저장 실패는 로그만(→ 그날 `day_status_missing`).
-- 20:30 단계(T5)에서 `run_daily_update` 앞에 부른다. 날짜·시각은 KST 로 고정해 인자로 넘긴다(UTC 호스트 대비). `target_date` 인자는 두지 않는다(과거 날짜 대사는 범위 밖).
-- 뜻은 **"20:30 조회 시점까지 DB 기록이 KIS 체결과 맞았다"**(설계 §5-1). 17:00 뒤 사용자 NXT 체결이 DB 에 없으면 그날은 `incomplete` 가 된다 — 의도된 결과다.
+- **뜻(3판에서 낮춤):** `complete` = **"20:30 대사가 불일치를 찾지 못했다"** — 완전성의 증명이 아니다. 엔진 기록에 주문번호가 없어(`record_entry`/`record_exit`
+  INSERT 에 `kis_order_no` 없음) 주문 단위 대응을 증명할 수 없기 때문이다. `incomplete` = 불일치를 찾았거나 대사를 끝내지 못했다.
+- `async verify_day_records(*, broker, fetch, write_queue, day) -> dict` (`excess_return.py`, 저장은 하지 않고 결과만 돌려준다):
+  ① `write_queue` 가 있으면 `await asyncio.wait_for(write_queue.join(), 30)` — 시한 초과면 `incomplete(write_queue_pending)` (join 은 처리 종료만 증명한다 — ⑤ 가 결과를 본다)
+  ② `broker.get_fills_for_date_checked(day)` — 없거나 미완이면 `incomplete(fill_query_incomplete:<reason>)`
+  ③ DB 일별 합: `SELECT symbol, event_type, SUM(quantity) FROM trade_events WHERE event_time::date = $1 GROUP BY symbol, event_type`
+  ④ SELL: 종목별 Σ KIS(`sll_buy_dvsn_cd=="01"`, 주문번호별 누적 수량의 합) ≠ Σ DB SELL → `incomplete(sell_qty:<종목>)`(DB 에만 있는 종목 포함).
+     BUY: KIS 매수 종목(`"02"`)에 DB BUY 가 없거나, **DB 에만 BUY 가 있으면** `incomplete(buy:<종목>)`. BUY 수량은 비교하지 않는다(엔진은 첫 체결에만 BUY 행을 쓴다 — 거짓 불일치 방지)
+  ⑤ **거래 본체 교차 검증:** 오늘 SELL 이벤트가 있는 거래마다 `trades.exit_quantity` = 그 거래의 SELL 이벤트 수량 전체 합(모든 날짜)인지 확인 — 다르면
+     `incomplete(trade_row:<trade_id>)`. 이벤트는 기록됐는데 `trades` UPDATE 만 실패한 경우(별도 큐 항목, `trade_storage.py:399-429`·직접 경로 `kr_scheduler.py:3033~`)를 잡는다.
+     손익은 비교하지 않는다(`_reconcile_pnl` 이 `trades.pnl` 을 사후 보정해 거짓 불일치가 난다)
+  ⑥ 체결 0건이고 DB 이벤트 0건이면 `complete`
+  ⑦ ③·⑤ 조회가 예외면 `incomplete(db_query_failed)`.
+- **저장과 적용:** 20:30 단계가 결과를 `execute` 로 upsert 하고(`source="kr_excess_20_30"`, `checked_at`), **같은 실행의 원장 계산에는 저장 성공 여부와 무관하게
+  이번 결과를 직접 쓴다**(기존 행을 덮지 못한 저장 실패가 이전 판정을 되살리지 않게). 요약에 `day_status_saved: true/false` 를 남긴다.
+- **시각 규약:** `event_time` 은 호스트 로컬 naive 시각이다(`trade_storage.py:67`, 직접 경로 `kr_scheduler.py:3031`). 대사 날짜 `day` 도 **같은 호스트 로컬 날짜**
+  (20:30 블록의 `today`)를 쓴다 — 운영 호스트는 KST 다. 날짜만 KST 로 바꾸면 UTC 호스트에서 저장 시각과 어긋난다(리뷰 P2-4). 시험은 주입 시계로 UTC·KST 두 TZ 에서 같은 결과여야 한다.
+- 알려진 검출 한계(적는다): 같은 종목에서 한 주문의 중복 기록과 다른 주문의 누락이 수량으로 상쇄되는 경우, 기존 보유 종목의 추가 매수 누락은 잡지 못한다 — legacy 에도 같은 한계이고(원칙: 새 방어를 만들지 않음) 설계 A 의 포지션 단위 규칙(Σ매도 ≥ Σ매수·`quantity_mismatch`)이 일부를 추가로 거른다.
 
 ### T9. 원장이 상태 표를 읽는다 — `src/analytics/excess_return.py`
 
-- `run_daily_update` 가 `SELECT trade_date, status FROM execution_day_status WHERE trade_date >= $1` 로 읽는다. 표가 없거나 조회가 실패하면 상태 없음으로 진행(로그).
+- `run_daily_update` 가 `SELECT trade_date, status FROM execution_day_status WHERE trade_date >= $1` 로 읽고, 오늘 날짜는 T8 의 이번 결과로 덮어 쓴다.
+- **표가 없는 것(도입 전)과 조회 실패를 구분한다:** 표 없음(`UndefinedTable`)만 "상태 없음"으로 진행하고, 그 밖의 조회 실패는 **이번 갱신을 중단**해 기존 스냅샷·요약을 보존한다
+  (이미 제외했던 포지션이 일시 오류로 되살아나지 않게 — 리뷰 P1-3).
 - 보유 구간에 `incomplete` 날이 있으면 `record_incomplete`, 상태 행이 없는 날만 걸친 포지션은 포함하고 `day_status_missing` 으로 센다.
+- **실패 격리:** 대사(T8)부터 요약까지 전부 T5 의 한 `asyncio.wait_for(…, 60)`·`try/except` 안에서 돈다(리뷰 P2-6).
 
 ### T10. 2단계 시험·문서
 
-- `tests/test_excess_return_ledger.py` 에 대사 시험: SELL 수량 일치 → complete, 불일치(DB 5·KIS 10) → incomplete, DB 에만 SELL → incomplete, BUY 누락 → incomplete,
-  0/0 → complete, 조회 미완 → incomplete, 큐 join 시한 초과 → incomplete, 저장 실패 → 예외 전파 0·행 없음, `record_incomplete`·`day_status_missing` 집계.
+- `tests/test_excess_return_ledger.py` 에 대사 시험: SELL 수량 일치 → complete, 불일치(DB 5·KIS 10) → incomplete, DB 에만 SELL → incomplete, BUY 누락·DB 에만 BUY → incomplete,
+  `trades.exit_quantity` ≠ SELL 이벤트 합 → incomplete, 0/0 → complete, 조회 미완 → incomplete, 큐 join 시한 초과 → incomplete, DB 조회 예외 → incomplete,
+  저장 실패(기존 complete 행 위) → 이번 incomplete 가 원장에 적용·`day_status_saved=false`, 상태 표 조회 실패(표 있음) → 갱신 중단·기존 파일 보존, 표 없음 → 상태 없음으로 진행,
+  UTC·KST 두 TZ 결과 동일, `record_incomplete`·`day_status_missing` 집계.
   쓰기 큐는 **실제 `asyncio.Queue`**(task_done 호출 여부로 join 동작 확인)를 쓴다.
 - 문서: `docs/integrations/external-apis.md`(체결 조회 완결 판정), `docs/operations/runbook.md`(상태 표 조회 SQL), CHANGELOG.
 
@@ -154,3 +170,4 @@ venv/bin/python -m py_compile src/analytics/excess_return.py scripts/export_risk
 | 회차 | 리뷰어(요청 모델/effort, 실제 모델) | 결과 | 처리 |
 | --- | --- | --- | --- |
 | 1 | Codex 교차 공급자(요청 gpt-6-astra/high, read-only; rollout model `gpt-6-astra`·effort `high`) — `b94eba4` | REQUEST_CHANGES — P0 0, P1 4, P2 4 | 코드 근거 확인 후 2판: P1-1·2·3 → 2단계를 `sync_from_kis` 무변경 읽기 전용 대사로 축소(돈 경로·복원 입력 보존), P1-4 → 조회 완결 = 헤더 D/E 종료·모순/반복/상한/미연결/정규화 실패 미완, P2-5 → '조회 시점까지'·KST 고정·`target_date` 제거, P2-6 → 삽입 위치(if/else 밖)·하네스 3경우·토요일 실행 시험·실제 Queue, P2-7 → `pnl_missing` 보존, P2-8 → `exits_aggregated` 먼저. 인용 정정(`exit_type` 은 있음, raise `:5734-5737`), canary '판정식 유지', 비밀정보 검사 추가, 범위 문구 |
+| 2 | 같은 조건 2회차(rollout model `gpt-6-astra`·effort `high`) — `932ec5f` | REQUEST_CHANGES — 1회차 해소 6·부분 3·미해소 1, 새 P1 3·P2 4 | 3판: P1-1 → `complete` 뜻을 '불일치 미발견'으로 낮추고 DB 에만 BUY·검출 한계 명시, P1-2 → `trades.exit_quantity` ↔ SELL 이벤트 합 교차 검증(손익 제외), P1-3 → 표 없음/조회 실패 구분·실패 시 갱신 중단, P2-4 → 호스트 로컬 시각 규약·두 TZ 시험, P2-5 → 이번 결과 직접 적용·`day_status_saved`, P2-6 → 대사~요약 한 시한·예외 안, P2-7 → 프로젝트 규칙(커밋=푸시) 근거로 유지. 3회차 계획 리뷰는 생략하고 구현 리뷰에서 확인 |
