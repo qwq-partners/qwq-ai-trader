@@ -2602,11 +2602,7 @@ class RiskManager:
                 # KIS "주문 가능 수량 초과" → 좀비 포지션 의심 (2026-06-09 추가)
                 _err = str(order_id) if order_id else ""
                 if "APBK0400" in _err or "주문 가능한 수량" in _err:
-                    # 오늘 SELL 접수 불명 종목은 세지 않는다 (2026-09-29) — 살아 있는 불명 주문 때문에 전량 재발행이
-                    # 수량 초과로 거절되는 것은 예상된 결과이지 좀비 신호가 아니다.
-                    if order.side == OrderSide.SELL and self._has_unknown_sell(order.symbol):
-                        logger.info(f"[좀비감지] {order.symbol} 매도 수량초과 — 접수 불명 매도 종목이라 집계 제외")
-                    elif order.side == OrderSide.SELL:
+                    if order.side == OrderSide.SELL:
                         sym = order.symbol
                         cnt = self._kis_qty_mismatch_count.get(sym, 0) + 1
                         self._kis_qty_mismatch_count[sym] = cnt

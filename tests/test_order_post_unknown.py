@@ -6,17 +6,20 @@ BUY 는 5분 뒤 재매수, 분할 SELL 은 재발행(이중 매도)이 열렸�
 - 브로커(B1~B6): 응답을 믿을 수 없는 경우만 UNKNOWN(`(False, "[접수불명] …")`, EV_UNKNOWN, 장부 기록).
   오늘 BUY 불명이면 신규 BUY 전부 보류(머리 게이트 + 전송 직전 재확인). 성공·명시 거절 경로는 현행 그대로.
 - 엔진(E0~E4): 오늘 SELL 불명 종목은 **분할** 매도만 막는다 — ExitManager 발생원·on_signal·폴백.
-  전량(손절)은 통과한다. 불명 종목의 수량초과 거절은 좀비로 세지 않는다.
+  전량(손절·잔량 전부인 단계 익절)은 통과한다. 좀비 카운터는 불명 종목도 현행대로 센다(회복 경로 유지).
 
 전부 합성 입력 — 네트워크·운영 캐시 무접촉(장부는 tmp_path, Path.home 은 tmp_path). 시계는 주입·동결한다.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
+import fcntl
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+import threading
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -394,6 +397,74 @@ def test_b6_merge_save_keeps_the_other_writers_entries(tmp_path):
     assert sorted(e["side"] for e in json.loads(path.read_text(encoding="utf-8"))["entries"]) == ["buy", "sell"]
 
 
+def test_b6_merge_rereads_inside_the_lock(tmp_path):
+    """두 장부가 같은 이전 상태(빈 파일)를 읽은 뒤, 첫 장부의 재읽기 직후 다른 기록자가 끼어들어도 두 항목이 남는다.
+    재읽기가 잠금 안이어야 한다 — 그 순간 다른 열기로 비차단 잠금을 시도하면 막혀야 한다."""
+    path = tmp_path / "order_unknown.json"
+    lock_path = tmp_path / "order_unknown.json.lock"
+    bot, cli = UnknownOrderBook(path, now=NOW), UnknownOrderBook(path, now=NOW)
+    seen = {}
+    real_read = bot._read
+
+    def _read_then_race(today):
+        out = real_read(today)
+        with open(lock_path, "a") as probe:
+            try:
+                fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen["held"] = False
+            except BlockingIOError:
+                seen["held"] = True
+        writer = threading.Thread(target=cli.record, args=("buy", OTHER, 3, "CLI 응답 유실", NOW))
+        writer.start()                                      # 다른 기록자가 이 틈에 쓴다(잠금이 있으면 기다린다)
+        writer.join(timeout=0.3)
+        seen["writer"] = writer
+        return out
+    bot._read = _read_then_race
+
+    assert bot.record("sell", SYM, 10, "봇 응답 유실", NOW) is True
+    seen["writer"].join(timeout=10)
+    assert seen["held"] is True
+    fresh = UnknownOrderBook(path, now=NOW)
+    assert fresh.buy_hold_reason(NOW) is not None and fresh.has_unknown_sell(SYM, NOW)
+
+
+def test_b6_lock_failure_is_a_save_failure(tmp_path, monkeypatch):
+    def _no_lock(*_a):
+        raise OSError("잠금 불가")
+    monkeypatch.setattr(order_unknown.fcntl, "flock", _no_lock)
+    book = UnknownOrderBook(tmp_path / "order_unknown.json", now=NOW)
+    assert book.record("buy", SYM, 10, "응답 유실", NOW) is False
+    assert book.buy_hold_reason(NOW) is not None                     # 메모리 보류는 유지
+    assert not (tmp_path / "order_unknown.json").exists()
+
+
+def test_b6_real_constructor_restores_todays_book(home, monkeypatch):
+    """운영 생성자가 임시 HOME 의 오늘 장부를 한 번 읽어 BUY 를 보류한다(같은 날 재시작 보호)."""
+    _freeze_clock(monkeypatch, order_unknown, NOW)
+    _freeze_clock(monkeypatch, kis_kr, NOW)
+    path = home / ".cache" / "ai_trader" / "order_unknown.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"date": "2026-09-29", "entries": [
+        {"side": "buy", "symbol": SYM, "qty": 10, "reason": "응답 유실", "at": "2026-09-29T09:10:00"}]}),
+        encoding="utf-8")
+    b = kis_kr.KISBroker(config=kis_kr.KISConfig(app_key="k", app_secret="s", account_no="12345678"))
+    hold = b.unknown_buy_hold()
+    assert isinstance(hold, str) and SYM in hold
+    assert b.has_unknown_sell(SYM) is False
+
+
+def test_run_trader_wires_the_partial_exit_block_next_to_the_pending_verifier():
+    """배선 회귀 방지 — pending 검증자 배선 블록(브로커가 있을 때만) 안에서 브로커 메서드를 넘긴다."""
+    tree = ast.parse((ROOT / "scripts" / "run_trader.py").read_text(encoding="utf-8"))
+    blocks = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and ast.unparse(n.test) == "self.exit_manager and self.broker"
+              and "set_pending_verifier" in ast.unparse(n)]
+    assert len(blocks) == 1
+    calls = [ast.unparse(c) for c in ast.walk(blocks[0]) if isinstance(c, ast.Call)
+             and isinstance(c.func, ast.Attribute) and c.func.attr == "set_partial_exit_block"]
+    assert calls == ["self.exit_manager.set_partial_exit_block(self.broker.has_unknown_sell)"]
+
+
 def test_b6_default_path_follows_home(home):
     assert order_unknown.default_path() == home / ".cache" / "ai_trader" / "order_unknown.json"
 
@@ -435,9 +506,22 @@ def test_e1_buy_signal_passes_without_a_real_hold_reason(home, monkeypatch, brok
 
 # ── E0 ExitManager 발생원 차단 ──────────────────────────────────────────────
 
-def _em_with_position(block):
+def _freeze_exit_clock(monkeypatch):
+    """ExitManager 의 datetime.now()·date.today() 를 NOW 로 고정한다."""
+    import src.strategies.exit_manager as xm
+    _freeze_clock(monkeypatch, xm, NOW)
+
+    class _Day(date):
+        @classmethod
+        def today(cls):
+            return NOW.date()
+    monkeypatch.setattr(xm, "date", _Day)
+
+
+def _em_with_position(monkeypatch, block, qty=100):
+    _freeze_exit_clock(monkeypatch)
     em = ExitManager(ExitConfig(stop_loss_pct=5.0, min_stop_pct=4.0, max_stop_pct=8.0, atr_multiplier=2.0))
-    em.register_position(Position(symbol=SYM, quantity=100, avg_price=Decimal("10000"),
+    em.register_position(Position(symbol=SYM, quantity=qty, avg_price=Decimal("10000"),
                                   current_price=Decimal("10000"), strategy="sepa_trend"),
                          stop_loss_pct=5.0, trailing_stop_pct=3.0, atr_pct_hint=2.5)
     if block is not None:
@@ -445,8 +529,8 @@ def _em_with_position(block):
     return em
 
 
-def test_e0_blocked_symbol_gets_no_partial_exit_but_keeps_its_stop(home):
-    em = _em_with_position(lambda s: s == SYM)
+def test_e0_blocked_symbol_gets_no_partial_exit_but_keeps_its_stop(home, monkeypatch):
+    em = _em_with_position(monkeypatch, lambda s: s == SYM)
     assert em.update_price(SYM, Decimal("11300")) is None          # +13% — 1차 익절 조건 충족
     assert em.get_state(SYM).pending_stage is None
     action, qty, reason = em.update_price(SYM, Decimal("9300"))     # 같은 흐름에서 손절선 아래로
@@ -454,15 +538,34 @@ def test_e0_blocked_symbol_gets_no_partial_exit_but_keeps_its_stop(home):
 
 
 @pytest.mark.parametrize("block", [None, lambda s: False, lambda s: s == OTHER, MagicMock()])
-def test_e0_partial_exit_is_unchanged_without_a_true_block(home, block):
-    em = _em_with_position(block)
+def test_e0_partial_exit_is_unchanged_without_a_true_block(home, monkeypatch, block):
+    em = _em_with_position(monkeypatch, block)
     action, qty, _ = em.update_price(SYM, Decimal("11300"))
     assert (action, qty) == ("sell_partial", 10)
     assert em.get_state(SYM).pending_stage == ExitStage.FIRST
 
 
-def test_e0_third_to_trailing_transition_is_not_blocked(home):
-    em = _em_with_position(lambda s: True)
+def test_e0_blocked_partial_leaves_no_side_effects(home, monkeypatch):
+    em = _em_with_position(monkeypatch, lambda s: True)
+    st = em.get_state(SYM)
+    history = len(st.exit_history)
+    persisted = []
+    monkeypatch.setattr(em, "_persist_states", lambda: persisted.append(1))
+    assert em.update_price(SYM, Decimal("11300")) is None
+    assert (st.pending_stage, st.pending_since, st.pending_target_qty) == (None, None, 0)
+    assert len(st.exit_history) == history and persisted == []
+
+
+def test_e0_stage_exit_of_the_whole_remainder_still_goes_out(home, monkeypatch):
+    """잔량이 작아 단계 청산이 전량(sell_all)이면 훅이 참이어도 낸다 — 이중 발행은 매도가능수량이 막는다."""
+    em = _em_with_position(monkeypatch, lambda s: True, qty=1)
+    action, qty, reason = em.update_price(SYM, Decimal("11300"))
+    assert (action, qty) == ("sell_all", 1) and "1차 익절" in reason
+    assert em.get_state(SYM).pending_stage == ExitStage.FIRST
+
+
+def test_e0_third_to_trailing_transition_is_not_blocked(home, monkeypatch):
+    em = _em_with_position(monkeypatch, lambda s: True)
     em.get_state(SYM).current_stage = ExitStage.THIRD
     assert em.update_price(SYM, Decimal("12700")) is None           # +27% ≥ 3차 25% + 1
     assert em.get_state(SYM).current_stage == ExitStage.TRAILING
@@ -493,7 +596,7 @@ def _scheduler(monkeypatch, em):
 
 
 def test_e0_scheduler_stop_is_not_masked_by_a_dropped_partial(home, monkeypatch):
-    sched, emitted = _scheduler(monkeypatch, _em_with_position(lambda s: s == SYM))
+    sched, emitted = _scheduler(monkeypatch, _em_with_position(monkeypatch, lambda s: s == SYM))
     asyncio.run(sched._check_exit_signal(SYM, Decimal("11300")))
     assert emitted == [] and sched.bot._exit_pending_symbols == set()   # 분할 신호도 pending 도 없다
 
@@ -504,7 +607,7 @@ def test_e0_scheduler_stop_is_not_masked_by_a_dropped_partial(home, monkeypatch)
 
 def test_e0_scheduler_control_partial_pending_masks_the_next_tick(home, monkeypatch):
     """대조군 — 훅이 없으면 분할 신호가 청산 pending 을 걸고, 다음 틱의 손절 판정은 그 pending 에 가려진다."""
-    sched, emitted = _scheduler(monkeypatch, _em_with_position(None))
+    sched, emitted = _scheduler(monkeypatch, _em_with_position(monkeypatch, None))
     asyncio.run(sched._check_exit_signal(SYM, Decimal("11300")))
     asyncio.run(sched._check_exit_signal(SYM, Decimal("9300")))
     assert [e.metadata["exit_action"] for e in emitted] == ["sell_partial"]
@@ -585,7 +688,9 @@ def test_e3_full_fallback_or_known_symbol_still_submits(monkeypatch, partial, un
 
 # ── E4 on_order 좀비 카운터 ─────────────────────────────────────────────────
 
-def test_e4_qty_exceeded_on_an_unknown_sell_symbol_is_not_counted_as_zombie(home, monkeypatch):
+def test_e4_qty_exceeded_is_still_counted_on_an_unknown_sell_symbol(home, monkeypatch):
+    """구현 리뷰 1회차 P1-2: 불명 전량 SELL 이 실제 체결되면 동기화가 유령 제거를 미룬다 — 재발행의 APBK0400 을
+    세지 않으면 강제 정리 경로가 끊긴다. 불명 종목도 현행대로 센다(잘못된 좀비 알림 한 통보다 회복 경로가 중요)."""
     async def _alert(text, **_k):
         return True
     monkeypatch.setattr("src.utils.telegram.send_alert", _alert)
@@ -609,5 +714,5 @@ def test_e4_qty_exceeded_on_an_unknown_sell_symbol_is_not_counted_as_zombie(home
         await asyncio.sleep(0)
     asyncio.run(run())
 
-    assert SYM not in rm._kis_qty_mismatch_count and SYM not in rm._zombie_candidate_symbols
-    assert rm._kis_qty_mismatch_count[OTHER] == 2 and OTHER in rm._zombie_candidate_symbols
+    assert rm._kis_qty_mismatch_count == {SYM: 2, OTHER: 2}
+    assert rm._zombie_candidate_symbols == {SYM, OTHER}
