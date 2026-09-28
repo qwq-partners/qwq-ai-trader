@@ -49,6 +49,7 @@ EXCLUSION_REASONS = (
 BENCH_FILE = "kodex200_daily.csv"
 SNAPSHOT_FILE = "positions.jsonl"
 PREV_SNAPSHOT_FILE = "positions_prev.jsonl"
+SNAPSHOT_META_FILE = "positions_meta.json"
 SUMMARY_FILE = "summary.json"
 HISTORY_FILE = "summary_history.jsonl"
 
@@ -333,13 +334,15 @@ def _metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         reason = r.get("exclusion")
         if reason is None:
             continue
-        agg = excluded.setdefault(reason, {"n": 0, "net_pnl_sum": Decimal("0")})
+        agg = excluded.setdefault(reason, {"n": 0, "net_pnl_sum": None, "net_pnl_missing": 0})
         agg["n"] += 1
         net = _d(r.get("net_pnl"))
-        if net is not None:
-            agg["net_pnl_sum"] += net
+        if net is None:
+            agg["net_pnl_missing"] += 1          # 원천 손익 결측 — 0원으로 세지 않는다
+        else:
+            agg["net_pnl_sum"] = net if agg["net_pnl_sum"] is None else agg["net_pnl_sum"] + net
     for agg in excluded.values():
-        agg["net_pnl_sum"] = _q(agg["net_pnl_sum"], MONEY_Q)
+        agg["net_pnl_sum"] = _q(agg["net_pnl_sum"], MONEY_Q)   # 전부 결측이면 null
 
     covered = [r for r in included if _d(r.get("excess_return")) is not None]
     xs = [_d(r["excess_return"]) for r in covered]
@@ -439,7 +442,10 @@ def format_weekly_line(summary: Dict[str, Any]) -> str:
     fill = groups.get("exit_quality:fill", {})
     ex = m.get("excluded", {}) or {}
     ex_n = sum(v.get("n", 0) for v in ex.values())
-    ex_sum = sum((_d(v.get("net_pnl_sum")) or Decimal("0") for v in ex.values()), Decimal("0"))
+    known = [_d(v.get("net_pnl_sum")) for v in ex.values()]
+    known = [k for k in known if k is not None]
+    ex_sum = sum(known, Decimal("0")) if known else None
+    ex_missing = sum(v.get("net_pnl_missing", 0) for v in ex.values())
     t = _d(m.get("t_excess"))
     day = str(summary.get("computed_date") or "????-??-??")[5:]
     verdict = "표본 판정 보류" if m.get("status") != "measured" else "측정값 — 자동 판정 없음"
@@ -448,7 +454,7 @@ def format_weekly_line(summary: Dict[str, Any]) -> str:
         f"평균 {_pct(m.get('mean_excess'))} 합계 {_krw(m.get('excess_krw_sum'))} "
         f"t={'-' if t is None else f'{t:.1f}'} · 클립 {_pct(m.get('mean_clipped_excess'))} · "
         f"동기화 제외 n={fill.get('n', 0)} {_pct(fill.get('mean_excess'))} · "
-        f"제외 {ex_n}건 {_krw(ex_sum)} ({verdict})"
+        f"제외 {ex_n}건 {_krw(ex_sum)}{f'(손익 결측 {ex_missing}건)' if ex_missing else ''} ({verdict})"
     )
 
 
@@ -517,9 +523,11 @@ async def _refresh_benchmark(broker: Any, path: Path, oldest_entry: Optional[str
     if not rows:
         logger.warning("[초과수익] 벤치마크 응답 없음 — 기존 캐시 사용")
         return
-    # 상한(500거래일)까지 요청했는데도 진입일에 못 미치면 부분 응답이 아니라 브로커 한계다 — 받은 범위를 쓴다
-    # (그 앞의 포지션은 bench_out_of_range 로 드러난다). 상한 아래에서 모자라면 부분 응답으로 보고 기존 캐시를 쓴다.
-    if rows[0][0] > oldest_entry and days < MAX_BENCH_DAYS:
+    # 상한(500거래일)만큼 요청하고 실제로 그만큼 받았는데도 진입일에 못 미치면 브로커 한계다 — 받은 범위를 쓴다
+    # (그 앞의 포지션은 bench_out_of_range 로 드러난다). 요청이 상한이어도 받은 행이 모자라면(2페이지 실패 시 1페이지만
+    # 돌아온다 — kis_kr.py get_daily_prices) 부분 응답으로 보고 기존 캐시를 쓴다(교차 공급자 리뷰 P1).
+    at_cap = days >= MAX_BENCH_DAYS and len(rows) >= MAX_BENCH_DAYS   # 상한만큼 **실제로 받았을 때만** 브로커 한계로 본다
+    if rows[0][0] > oldest_entry and not at_cap:
         logger.warning(
             f"[초과수익] 벤치마크 부분 응답(첫 날짜 {rows[0][0]} > 진입 {oldest_entry}) — 기존 캐시 사용")
         return
@@ -534,6 +542,13 @@ def _append_history(path: Path, line: Dict[str, Any]) -> None:
         if row.get("computed_date") == line["computed_date"]:
             return
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        raw = path.read_bytes()
+        if raw and not raw.endswith(b"\n"):
+            # append 도중 중단된 꼬리 — 마지막 줄바꿈까지로 되돌려 다음 기록이 같은 물리 줄에 붙지 않게 한다
+            keep = raw[: raw.rfind(b"\n") + 1]
+            logger.warning(f"[초과수익] 이력 손상 꼬리 {len(raw) - len(keep)}바이트 제거: {path.name}")
+            atomic_write_text(path, keep.decode("utf-8", errors="replace"))
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
         f.flush()
@@ -579,14 +594,22 @@ async def run_daily_update(*, broker: Any, fetch: Any, out_dir: Path, root: Path
         rows.append(row)
 
     snap_path, prev_path = out_dir / SNAPSHOT_FILE, out_dir / PREV_SNAPSHOT_FILE
-    current = _read_jsonl(snap_path) if snap_path.is_file() else None
-    if current is not None:
-        snap_day = str(current[0].get("computed_at", ""))[:10] if current else None
+    meta_path = out_dir / SNAPSHOT_META_FILE
+    if snap_path.is_file():
+        snap_day = None
+        try:
+            snap_day = json.loads(meta_path.read_text(encoding="utf-8")).get("computed_date") if meta_path.is_file() else None
+        except (OSError, json.JSONDecodeError):
+            snap_day = None
+        if snap_day is None:                     # 메타가 없던 옛 스냅샷 — 첫 행 계산 시각으로 대신 본다
+            current_rows = _read_jsonl(snap_path)
+            snap_day = str(current_rows[0].get("computed_at", ""))[:10] if current_rows else None
         if snap_day != today.isoformat():
-            # 직전 계산일 스냅샷 보관 — 같은 날 재실행은 그날 첫 실행 전 기준을 그대로 쓴다
-            atomic_write_text(prev_path, _jsonl(current))
+            # 직전 계산일 스냅샷 보관 — 같은 날 재실행은 그날 첫 실행 전 기준을 그대로 쓴다(빈 스냅샷도 날짜로 판정)
+            atomic_write_text(prev_path, snap_path.read_text(encoding="utf-8"))
     previous = _read_jsonl(prev_path)
     atomic_write_text(snap_path, _jsonl(rows))
+    atomic_write_json(meta_path, {"computed_date": today.isoformat(), "computed_at": computed_at})
 
     # ④ 요약
     summary = summarize(rows, previous, today=today, awaiting_close=awaiting, day_status_missing=gaps)

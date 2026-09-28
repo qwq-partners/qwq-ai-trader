@@ -2,6 +2,13 @@
 
 > 최종 갱신: 2026-09-17 (토스 별도 제한 관측 ON·초기 발급 성공, 거래 소비자 미연결)
 
+
+> **일별 체결 조회 완결 판정 (2026-09-29, 미배포):** `KISBroker.get_fills_for_date_checked(d)` 는 `_query_daily_fills(…, status={})` 로
+> 조회 완결 여부를 함께 돌려준다 — 완결 = 모든 페이지 `rt_cd=="0"` 이고 마지막 응답 헤더 `tr_cont` 가 D/E(10번째 페이지 포함).
+> F/M 인데 ctx 가 비었거나(`contradictory_continuation`) 같은 ctx 반복(`repeated_ctx`), 헤더 없음(`missing_tr_cont`), 10페이지 상한(`page_cap`),
+> 미연결·`rt_cd` 실패·예외·행 정규화 실패는 미완. 기본 호출(`status=None`)은 요청·반환이 이전과 같다(`check_fills` 무변경).
+> 소비자는 초과수익 원장의 20:30 거래일 기록 대사다(설계 A §5-1).
+
 ## 브로커 — KIS (한국투자증권)
 
 ### KR (src/execution/broker/kis_kr.py)

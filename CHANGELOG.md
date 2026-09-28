@@ -2,6 +2,9 @@
 
 ## 2026-09-29 — feat: 실거래 KODEX200 초과수익 원장 1단계 (설계 A 구현, 미배포)
 
+- **교차 공급자 구현 리뷰(Codex, 요청 gpt-6-astra/high, rollout `gpt-6-astra`·`high`) REQUEST_CHANGES(P1 1·P2 3) 처분:** P1 — 벤치마크 캐시의 상한 예외는 상한만큼 **실제로 받았을 때만**(2페이지 실패 시 1페이지만 돌아와 긴 캐시가 짧게 덮이던 coordinator 보완 결함) / P2 — 스냅샷 계산일을 `positions_meta.json` 에 따로 둬 빈 스냅샷에서도 drift 기준 유지, 이력 append 전 손상 꼬리 복구, 제외 합계에서 원천 손익 결측을 `net_pnl_missing` 으로 따로 세고 전부 결측이면 null(한 줄에 결측 건수 표시). 시험 5건 추가(`bench_covered`≠`n` 판정 포함).
+- **2단계 앞부분(기록 대사용, 돈 경로 무변경):** `KISBroker._query_daily_fills(…, status=None)` 에 완결 판정(모든 페이지 정상·헤더 D/E 종료·모순/반복 ctx·상한·미연결·예외는 미완, 기본값이면 요청·반환 동일 — 13개 페이지 시나리오 기준선 대조), `get_fills_for_date_checked(d) -> (fills, complete, reason)` 신규(정규화 실패도 미완). `TradeStorage.SCHEMA_SQL` 에 `execution_day_status` 표 1개(`CREATE TABLE IF NOT EXISTS`, 기존 표·`sync_from_kis` 무변경). 시험 43건.
+
 - 신규 `src/analytics/excess_return.py`: DB 왕복 포지션(exporter `fetch_trade_records`→`build_ledger`) × KODEX200(069500, 봇 브로커 KIS 일봉 캐시)로 포지션마다 비용 차감 초과수익·원화 초과·손절 클립(진입 SL / 공통 5%)·overshoot 를 계산해 `~/.cache/ai_trader/excess_return/` 에 매일 전체 재계산 스냅샷·요약·일별 이력으로 남긴다. 분류는 설계 §5 판정 순서 ①~⑩(원천 NULL 손익 `pnl_missing` 은 `exits_missing`, `exits_aggregated` 를 `lots_ambiguous` 보다 먼저). 표본은 `bench_covered`<30 이면 `insufficient_sample`, 자동 판정 없음.
 - `KRScheduler._run_excess_return_step`: 20:30 진화 블록 끝(evolve 성공·실패·부재 모두 뒤), `wait_for` 60초·예외 삼킴, 봇 `trade_journal.pool`(+`_db_available`)·브로커가 없으면 디스크를 건드리지 않고 건너뜀. 토요일 후속복기에서 요약 한 줄(HTML 이스케이프·계산일 포함).
 - `scripts/export_risk_ledger.py`: `fetch_trade_records(fetch, days)` 분리(connect/disconnect 없음 — 봇 pool 보호), `exit_price` 가드를 SELL leg 없는 폴백으로만 이동(DB 직접 부분매도 포지션의 청산 복원), position 에 `entry_reason`·`exit_type`·`pnl_missing` 추가. **알려진 영향:** leg 로 exits 가 새로 복원된 risk cohort 포지션은 canary 기술 검증에 `net_pnl_mismatch` 가 새로 보일 수 있다(판정식 무변경).

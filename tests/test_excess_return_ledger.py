@@ -316,7 +316,9 @@ def test_exclusion_reasons_via_exporter_and_excluded_sums():
     for reason, agg in excluded.items():
         mine = [r for r in rows if r["exclusion"] == reason]
         assert agg["n"] == len(mine)
-        assert D(agg["net_pnl_sum"]) == sum((D(r["net_pnl"]) for r in mine if r["net_pnl"] is not None), D(0))
+        known = [D(r["net_pnl"]) for r in mine if r["net_pnl"] is not None]
+        assert agg["net_pnl_missing"] == len(mine) - len(known)
+        assert (agg["net_pnl_sum"] is None) if not known else (D(agg["net_pnl_sum"]) == sum(known, D(0)))
     assert summary["windows"]["all"]["all"]["n"] == 2
     assert summary["awaiting_close"] == 1
 
@@ -558,3 +560,61 @@ def test_run_daily_update_counts_day_status(tmp_path):
     assert s["day_status_missing"] == 0
     s, _ = _update(tmp_path, T, L, _kis_rows(), now, day_status=dict(full, **{"2026-09-02": "incomplete"}))
     assert s["windows"]["all"]["all"]["excluded"]["record_incomplete"]["n"] == 2
+
+
+# ── 교차 공급자 구현 리뷰(1단계) 처분 시험 ─────────────────────────────────────
+
+def test_cap_request_with_short_response_keeps_existing_cache(tmp_path, monkeypatch):
+    """상한만큼 요청해도 받은 행이 모자라면(2페이지 실패) 부분 응답 — 기존 캐시 보존(리뷰 P1)."""
+    monkeypatch.setattr(er, "MAX_BENCH_DAYS", 5)
+    T, L = _simple_db()
+    old = "date,close,source,fetched_at\n" + "".join(f"{d},{c},old,x\n" for d, c in BENCH.items())
+    (tmp_path / "kodex200_daily.csv").write_text(old, encoding="utf-8")
+    _update(tmp_path, T, L, _kis_rows(start="2026-09-08"), datetime(2026, 9, 10, 20, 31))   # 3행 < 상한 5
+    assert (tmp_path / "kodex200_daily.csv").read_text(encoding="utf-8") == old
+
+
+def test_empty_snapshot_same_day_rerun_keeps_drift_baseline(tmp_path):
+    """비어 있지 않음 → 빈 스냅샷 → 당일 재실행 → drift 기준 유지(리뷰 P2-1)."""
+    T, L = _simple_db()
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 20, 31))                    # 첫날 2행
+    s1, _ = _update(tmp_path, [], [], _kis_rows(), datetime(2026, 9, 11, 20, 31))          # 다음 날 0행 → drift 2
+    assert s1["drift"] == 2
+    s2, _ = _update(tmp_path, [], [], _kis_rows(), datetime(2026, 9, 11, 21, 0))           # 같은 날 재실행
+    assert s2["drift"] == 2
+    s3, _ = _update(tmp_path, [], [], _kis_rows(), datetime(2026, 9, 14, 20, 31))          # 다음 계산일 — 기준은 빈 스냅샷
+    assert s3["drift"] == 0
+
+
+def test_history_torn_tail_is_repaired_before_append(tmp_path):
+    """줄바꿈 없는 손상 꼬리 → 새 날짜 append → 재조회 → 당일 재실행(리뷰 P2-2)."""
+    T, L = _simple_db()
+    hist = tmp_path / "summary_history.jsonl"
+    hist.write_text('{"computed_date": "2026-09-09", "n": 1}\n{"computed_date":', encoding="utf-8")
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 20, 31))
+    _update(tmp_path, T, L, _kis_rows(), datetime(2026, 9, 10, 21, 0))
+    lines = hist.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(x)["computed_date"] for x in lines] == ["2026-09-09", "2026-09-10"]
+
+
+def test_excluded_all_missing_pnl_is_null_and_line_shows_missing():
+    """전부 결측인 제외 사유의 합계는 null, 한 줄에 결측 건수 표시(리뷰 P2-3)."""
+    rows = [dict(schema=1, position_id="X", exclusion="exits_missing", net_pnl=None, last_exit_date="2026-09-03",
+                 strategy="s", exit_quality="fill", cohort_id="c")]
+    s = er.summarize(rows, [], today=date(2026, 9, 10), awaiting_close=0, day_status_missing=0)
+    agg = s["windows"]["all"]["all"]["excluded"]["exits_missing"]
+    assert agg == {"n": 1, "net_pnl_sum": None, "net_pnl_missing": 1}
+    line = er.format_weekly_line(s)
+    assert "제외 1건 -(손익 결측 1건)" in line and "+0원" not in line
+
+
+def test_status_uses_bench_covered_not_n():
+    """포함 30건 중 벤치마크 산출 29건이면 insufficient_sample(리뷰 시험 보강)."""
+    base = dict(schema=1, exclusion=None, last_exit_date="2026-09-03", strategy="s", exit_quality="fill",
+                cohort_id="c", net_return="0.01", clip_basis="common_5", entry_cost="1000", fees_total_est="1")
+    rows = [dict(base, position_id=f"P{i}", excess_return="0.001", excess_krw="1", bench_return="0.009",
+                 clipped_excess_return="0.001") for i in range(29)]
+    rows.append(dict(base, position_id="P29", excess_return=None, excess_krw=None, bench_return=None,
+                     clipped_excess_return=None))
+    m = er.summarize(rows, [], today=date(2026, 9, 10), awaiting_close=0, day_status_missing=0)["windows"]["all"]["all"]
+    assert m["n"] == 30 and m["bench_covered"] == 29 and m["status"] == "insufficient_sample"
