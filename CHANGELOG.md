@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-28 — ops: main `d551ab9` 배포 (PR #94/#95)
+
+- PR #94(`71adac6`, KOSPI 원천·휴장일·toss 시험)와 #95(`d551ab9`, 장중 RS 기준값·약세장 필터 죽은 분기·안전자산 종목명) 모두 required verify SUCCESS 후 head 고정 merge commit. 병합 트리 = 리뷰·시험 트리.
+- **배포 방식(사용자 승인):** 운영 checkout 의 사용자 소유 `config/evolved_overrides.yml` 미커밋 수정(09-26 00:00, 기존 봇이 로드 중) 때문에 `local_deploy.sh` 청결 검사가 막혀, 그 파일 한 개만 허용·보존하고 대상 커밋이 그 파일을 바꾸면 중단하는 사본으로 같은 순서(권한 확인→fetch→checkout→verify→restart→health, 실패 시 롤백)를 실행. 파일 내용은 읽지 않았다.
+- 15:36 KST 장외·pending `[]`·broker pending 0·부하 0.27·보호 지문 7종 확인 → 배포 verify **2113 passed / 2 xfailed / 기존 pykrx warning 1**(74.51초), 격리 0, 자동 롤백 없음. 이전 PID2574272(09-26 06:36) → **PID3162715, 15:38:21 KST 기동**. 보호 지문 7종 배포 전후 동일, Toss observer inactive 무변경, 운영 checkout `main`=`d551ab9` 복귀(evolved_overrides 수정 보존).
+- 사후(15:39): broker connected·pending 0·계측 available, 새 PID ERROR/CRITICAL/Traceback/EGW00215/루프 예외 0, EGW00201 1건(기동 직후 시세 몰림, 재시도). 휴장일 `202609 → 18일 (조회 2회)`·`202610 → 16일 (조회 2회)`, 합집합 26일.
+- 재시작 전 계측(09-28 첫 거래일): EGW00215 65건 전부 portfolio_sync/account_summary(8434R, 시도 944·재시도 63) — 리미터 간격으로 설명 안 됨, 후속 조사. 장중 미관측(내일 확인): 08:30 변동성 원천·값, 스크리너 Yahoo fresh, 수확 shadow, 09:30 안전자산 영구 비활성 로그, 장중 RS 값 — `docs/operations/monitoring-checkpoints.md` 09-28 절.
+- 주문·전략·위험 설정·임계값·킬스위치·`.env` 변경 0.
+
 ## 2026-09-28 — fix: 장중 RS 정렬 KOSPI 기준값·약세장 필터 캐시 소유자·안전자산 종목명 원천 (미배포)
 
 - `kr_scheduler` 장중품질 경로의 RS 정렬(`_ib_kospi_chg`)이 `get_kospi_change()` 에 없는 키 `c1` 을 읽고 `c5`(5일 변화율)로 떨어져, 종목의 **당일** `change_pct` 를 KOSPI **5일** 변화율로 나눠 "지수 대비 강세(+5점)"를 판정했다. 주석의 의도("KOSPI 오늘 등락")대로 `bot.risk_manager._market_trend["kospi_pct"]`(kr_market_trend 루프가 2분마다 `fetch_index_price("0001")` 로 갱신)를 3분 이내일 때만 쓴다 — 추가 KIS 호출 0. 캐시가 없거나 묵으면 0.0 → 기존처럼 RS 보정 정렬 생략(`> 0.3%` 일 때만 적용). 모듈 헬퍼 `_intraday_kospi_change` + 시험 3건.
