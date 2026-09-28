@@ -4,6 +4,8 @@ KIS 현재가 응답엔 종목명이 없어 08-31 이후 검증이 한 번도 �
 후보 코드 3개는 주석과 다른 종목이고(1개는 목록 없음) 전부 미매칭 → 루프가 '영구 비활성'으로 끝난다.
 """
 import asyncio
+from datetime import datetime
+from types import SimpleNamespace
 
 from src.schedulers.kr_scheduler import _pick_safe_asset
 
@@ -50,10 +52,63 @@ def test_no_master_or_all_lookup_failures_mean_retry():
     assert asyncio.run(_pick_safe_asset(failing, CANDIDATES)) == (None, "", 0)
 
 
-def test_safe_asset_loop_reads_names_from_stock_master():
-    # 호출부 고정: KIS get_quote 의 빈 이름으로 되돌리는 변이를 잡는다
-    import inspect
-    from src.schedulers import kr_scheduler
-    src = inspect.getsource(kr_scheduler.KRScheduler.run_safe_asset_loop)
-    assert '_pick_safe_asset(\n                        getattr(bot, "stock_master", None), SAFE_CANDIDATES' in src
-    assert "hts_kor_isnm" not in src
+def test_stock_master_without_pool_counts_as_lookup_failure():
+    from src.data.storage.stock_master import StockMaster
+    assert asyncio.run(_pick_safe_asset(StockMaster("postgresql://unused"), CANDIDATES)) == (None, "", 0)
+
+
+# ── 실제 루프(제품 후보 목록) — 주문 전에 끝나는지 고정 (Codex P2) ─────────────
+
+class _FixedDT(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 9, 28, 10, 0)  # 월요일 장중
+
+
+def _run_loop(monkeypatch, tmp_path, stock_master, max_sleeps=3):
+    from src.schedulers import kr_scheduler as ks
+    submits, sleeps = [], []
+
+    async def _submit(order):
+        submits.append(order)
+        return True, "X"
+
+    async def _quote(symbol):
+        return {"price": 10000.0, "name": ""}  # KIS 현재가엔 종목명이 없다
+
+    bot = SimpleNamespace(running=True, stock_master=stock_master, engine=None, batch_analyzer=None,
+                          risk_manager=None, exit_manager=None,
+                          broker=SimpleNamespace(submit_order=_submit, get_quote=_quote))
+
+    async def _sleep(sec):
+        sleeps.append(sec)
+        if len(sleeps) > max_sleeps:
+            bot.running = False
+
+    monkeypatch.setattr(ks.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(ks, "datetime", _FixedDT)
+    monkeypatch.setattr(ks, "is_kr_market_holiday", lambda d: False)
+    monkeypatch.setattr(ks.Path, "home", classmethod(lambda cls: tmp_path))
+    sched = object.__new__(ks.KRScheduler)
+    sched.bot = bot
+    asyncio.run(sched.run_safe_asset_loop())
+    return submits, sleeps
+
+
+def test_loop_disables_itself_before_any_order_when_all_candidates_mismatch(monkeypatch, tmp_path):
+    master = _Master(REAL_NAMES)
+    submits, sleeps = _run_loop(monkeypatch, tmp_path, master)
+    assert submits == [] and sleeps == [300]  # 첫 주기에 '영구 비활성' 으로 return
+    assert master.calls == ["458730", "357870", "152470", "273130"]
+
+
+def test_loop_retries_without_orders_when_names_unavailable(monkeypatch, tmp_path):
+    submits, sleeps = _run_loop(monkeypatch, tmp_path, None)
+    assert submits == [] and len(sleeps) == 4  # 매 주기 재검증, bot.running=False 로만 끝남
+
+
+def test_loop_validates_once_then_keeps_candidate(monkeypatch, tmp_path):
+    master = _Master({"458730": "KOSEF KOFR액티브"})
+    submits, sleeps = _run_loop(monkeypatch, tmp_path, master)  # engine=None → 포트폴리오 없음 → 주문 전 continue
+    assert submits == [] and len(sleeps) == 4
+    assert master.calls == ["458730"]  # 통과 뒤 재검증 없음

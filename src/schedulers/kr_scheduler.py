@@ -3689,26 +3689,16 @@ JSON:
                         _weighted_chg = 0.0
                         _regime_block_reason = ""
                         try:
-                            # 우선 RiskManager 캐시 활용 (이미 2분 주기 갱신)
-                            # update_market_trend 캐시는 bot.risk_manager(risk/manager.py) 소유 — engine 쪽엔 없어
-                            # 늘 빈 dict 로 ETF 시세 폴백만 돌던 결함 (2026-09-28)
-                            _rm = getattr(bot, "risk_manager", None)
-                            _trend = getattr(_rm, "_market_trend", {}) if _rm else {}
-                            _trend_age = (datetime.now() - _trend["ts"]).total_seconds() if _trend.get("ts") else 999
-
-                            if _trend and _trend_age < 180:
-                                # 캐시 신선 (3분 이내) → 직접 사용
-                                _kospi_chg = _trend.get("kospi_pct", 0.0)
-                                _kosdaq_chg = _trend.get("kosdaq_pct", 0.0)
-                            else:
-                                # 캐시 만료 → API 직접 조회 (병렬)
-                                _kospi_q, _kosdaq_q = await asyncio.gather(
-                                    bot.broker.get_quote("069500"),  # KODEX 200 (KOSPI)
-                                    bot.broker.get_quote("229200"),  # KODEX KOSDAQ150
-                                    return_exceptions=True,
-                                )
-                                _kospi_chg = _kospi_q.get("change_pct", 0.0) if isinstance(_kospi_q, dict) else 0.0
-                                _kosdaq_chg = _kosdaq_q.get("change_pct", 0.0) if isinstance(_kosdaq_q, dict) else 0.0
+                            # KODEX200/KOSDAQ150 시세로 판정 (병렬). 2026-09-28: 예전 'RiskManager 캐시 우선' 분기는 캐시가
+                            # 없는 engine.risk_manager 를 읽어 한 번도 동작하지 않았다. 그 캐시(bot.risk_manager)는 한쪽
+                            # 지수 조회 실패도 0% 로 채워 차단을 놓칠 수 있어 되살리지 않고 지웠다 — 실제 동작은 그대로.
+                            _kospi_q, _kosdaq_q = await asyncio.gather(
+                                bot.broker.get_quote("069500"),  # KODEX 200 (KOSPI)
+                                bot.broker.get_quote("229200"),  # KODEX KOSDAQ150
+                                return_exceptions=True,
+                            )
+                            _kospi_chg = _kospi_q.get("change_pct", 0.0) if isinstance(_kospi_q, dict) else 0.0
+                            _kosdaq_chg = _kosdaq_q.get("change_pct", 0.0) if isinstance(_kosdaq_q, dict) else 0.0
 
                             # 가중 평균: KOSPI 60% + KOSDAQ 40%
                             _weighted_chg = _kospi_chg * 0.6 + _kosdaq_chg * 0.4
