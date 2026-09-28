@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-28 — docs: 실거래 KODEX200 초과수익 원장 설계 A (서면 설계, 구현 없음)
+
+- [설계 문서](docs/superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md): DB `trades`/`trade_events` 왕복 포지션(`export_risk_ledger.build_ledger` 재사용)을 같은 기간 KODEX200(069500, KIS 일봉) 과 비교해 비용 차감 초과수익(수익률·원화)과 손절 클립(진입 SL 또는 공통 5%)을 포지션당 한 행으로 20:30 에 append-only 누적한다. 벤치마크 식은 `review_risk_canary.position_benchmark` 를 공용 함수로 옮겨 한 구현만 쓴다. 표본 <30 은 판정 보류, 자동 판정·승격·설정 연결 없음.
+- 추가 KIS 호출은 시세 TR 1회/거래일(원장 TR 0 — EGW00215 무관). 주문·전략·위험 설정·`.env`·킬스위치 변경 0, 코드 변경 0. 승인 범위는 비작성자 설계 리뷰까지.
+
 ## 2026-09-28 — chore: 안전자산 자동 운용 삭제·백테스트 KOSPI 벤치마크 교체 (미배포)
 
 - **안전자산(KOFR) 자동 운용 삭제 — 사용자 결정(운용 계획 없음):** `KRScheduler.run_safe_asset_loop`·`kr_safe_asset` 태스크·`_pick_safe_asset` 헬퍼·시험 삭제. 이 루프는 08-31 이후 검증 통과 0·매수 0 이었고(KIS 현재가에 종목명 없음), 이름 원천을 고친 뒤에도 후보 코드가 전부 다른 종목이라 스스로 꺼지는 상태였다. 브로커 직접 시장가 BUY/SELL 경로 하나가 사라진다. `StockMaster.get_name` 은 swing_screener 유니버스의 이름 폴백 분기가 참조하므로 유지(그 전엔 메서드가 없어 그 분기가 AttributeError). 런타임 상태 파일 `safe_asset_state.json` 은 건드리지 않는다.
