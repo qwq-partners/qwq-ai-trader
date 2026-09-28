@@ -147,6 +147,8 @@
 - KOSPI 20일 실현변동성 > **25%**(전체 거래일의 ~11% 극단 국면)일 때만 ×(25/vol), 하한 0.4
 - 검증: KODEX200 2015~26 — Sharpe 0.721→0.787, MDD -40.8→-34.8% (CAGR -2.1%p 비용)
 - 캐시: `~/.cache/ai_trader/vol_targeting.json` (매 거래일 08:30 갱신, 노후 3일+ 시 무개입)
+- 원천(2026-09-28~, 미배포): `src/utils/kospi_benchmark.py` 공용 로더 — Yahoo ^KS11 → KS11 → 069500, 신선하지 않으면 캐시 미기록.
+  FDR `KS11` 은 GitHub 캐시 CSV 라 09-17 에서 예외 없이 멈췄다(그동안 31.8%/×0.786 이 매일 재기록됨)
 - 축소 전용(레버리지 없음), 일수익률 |12%| 초과는 데이터 오류로 제외
 - 비활성화: `VOL_TARGETING=0` / 상세: `docs/research/ai-trading-research-2026-08.md`
 
@@ -330,7 +332,8 @@ result = value if value is not None else default
 - **pending 상태 관리**: 예외 핸들러에서 반드시 `clear_pending()` 호출 (누수 방지)
 - **파일 수정 시 연관 체크**: types.py ↔ engine.py, exit_manager.py ↔ schedulers, config.py ↔ YAML
 - **수수료 계산**: `FeeCalculator` 단일 사용 — data_collector/storage 내 하드코딩 금지
-- **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
+- **영업일 계산**: `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리). engine·session 판정은 KIS 동적 ∪ fallback 으로 같다(2026-09-28~).
+  fallback 목록은 `src/utils/session._KR_FALLBACK_HOLIDAYS` 한 곳 — 합집합이라 잘못 넣은 날은 KIS 가 되돌리지 못하니 **확정된 날만** 추가한다
 - **KIS 취소 0건은 '소멸'이 아니다**: `cancel_order`/`cancel_all_for_symbol` 은 실패를 예외로 올리지 않고 False/0 을 돌려준다 — 0건에는 '방금 체결'·'거래소 생존'이 섞여 있다. 0건(또는 같은 종목의 다른 주문이 취소된 건수)을 근거로 **분할 매도**를 재발행·pending 해제·`rollback_stage` 하기 전에 `RiskManager.stale_order_still_live`(브로커 장부의 그 방향 활성 주문 → 한 주기 대기 → 거래소 실 미체결)로 가린다. 전량 청산은 KIS 가 수량 초과로 막으므로 종전 경로(손절 지연 금지). 브로커 장부는 완전 체결·취소 성공에서만 빠진다(수동 취소 주문은 남는다). 취소·조회 `await` 를 건넌 뒤에는 같은 pending 인지 재검증한다 — 수량 장부가 비면 폴백이 보유 전량으로 번진다. 상세 `docs/risk/risk-and-exit.md` (2026-09-21)
 - **자동매도 금지(exit_exempt) 종목의 SELL**: `SignalEvent` 로 나가는 SELL 은 엔진 `RiskManager.on_signal` 중앙 가드가 발행처와 무관하게 막는다(2026-09-21). 그래도 새 SELL 발행처가 emit **전에** 부작용(텔레그램 '자동 청산' 알림, `core_state.sold` 기록, 잔여액 차감)을 내면 발행처에서도 `is_exit_exempt` 로 뺀다. **브로커에 직접 `submit_order` 하는 SELL 경로는 중앙 가드를 안 거치므로 자체 검사 필수.** 면제는 런타임에도 등록되므로(`run_manual_buy_orders`) "면제면 pending SELL 이 없다"고 가정하지 않는다 — 면제 종목의 미체결 SELL 은 브로커 추적(`get_open_orders`)에서 사라진 것을 확인한 뒤에만 pending 을 푼다. 설정의 종목코드는 반드시 따옴표(`000660` → YAML 8진수 432). 상세 `docs/risk/risk-and-exit.md`
 - **엔진 pending 은 종목 단위·방향 무구분**: BUY pending 이 남아 있으면 `_check_exit_signal` 이 반환해 그 종목의 손절 신호 자체가 생성되지 않는다 — pending 을 '안전하게 유지'하는 수정은 부분체결 포지션의 청산을 막는다(보유 중이면 해제, 유지 중 부분체결·동기화 반영은 즉시 해제 — `release_kept_stale_buy`). **브로커 `cancel_order`/`cancel_all_for_symbol`·`submit_order` 는 실패를 예외로 올리지 않는다**(0/False/`(False,msg)`) — 호출부의 `except` 에 기대지 말고 반환값과 브로커 추적(`get_open_orders`)·거래소 실 미체결(`get_exchange_open_orders(symbol=…)`, 첫 페이지 한계)로 가른다 (2026-09-21 PR #81)

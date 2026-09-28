@@ -6,6 +6,21 @@
 
 ## 활성 체크포인트
 
+### 2026-09-28 — KOSPI 지수 원천·KR 휴장일 커버리지 (PR 미병합·미배포)
+
+- [ ] 배포 후 첫 08:30 `[변동성타게팅]` 로그가 `source=FDR:YAHOO:^KS11`·마지막 봉 = 직전 거래일인지, `vol_targeting.json` 에
+  `last_bar_date`·`source` 가 기록되는지 확인. 값은 진단 추정 31.36%/×0.797 부근(이전 31.81%/×0.786 은 09-17 정지 자료).
+- [ ] 08:20/13:30 스윙스크리너가 KS11 을 읽지 않고 Yahoo 로 fresh 인지(`[KOSPI벤치마크] 자료 제외` 경고 0), 08:10/12:00 LLM레짐
+  입력 결측에 `KOSPI봉` 이 없는지. Yahoo 가 개장 전 당일 NaN 행을 내면 invalid_close_history → KS11(stale) 로 떨어질 수 있다(미관측).
+- [ ] 08:40 수확 shadow 성공(체제 게이트 fresh). 실패하면 사유가 하트비트에 남고 10분 재시도 — 커서가 전진하지 않았는지 확인.
+- [ ] 기동 로그 `[KISMarketData] 휴장일 조회 완료: YYYYMM → N일 (조회 k회)` 의 k 가 2 안팎인지, 뒤 조회 실패 warning 이 없는지.
+- [ ] 다음 평일 휴장(10-05 개천절 대체, 10-09 한글날, 12-25, 12-31)에 LLM레짐·안전자산 루프·스크리너가 돌지 않는지.
+- [ ] **EGW00215 (코드 무변경, 09-28 이 PR #90 계측 첫 거래일):** 장 마감 뒤 `/api/health` `broker.kis_requests` 를 07:17:32 기준선과 차분한다.
+  기준선(PID2574272, process_lifetime): TTTC8434R portfolio_sync/account_summary attempts 583·retries 0·egw00215 0, startup 1,
+  dashboard_settlement/positions 1, portfolio_sync/positions 583 calls 전부 cache_hit, unknown/other/other attempts 52263·retries 183·http_error 182.
+  egw00215>0 인 source 가 fill_check/dashboard 에 몰리면 그 호출자 조회를 줄이고, sync 뿐이면 8434R/8908R 간격, 고르게 퍼지면 같은 계좌 외부 사용을 의심한다.
+  그 전에는 재시도·리미터를 건드리지 않는다. 로그 교차 확인은 `note_ledger_rejection` 줄만 센다(브로커 줄과 중복).
+
 ### 2026-09-23 — 호출 계측·매도 원인·지수 신선도 (09-23 23:18 KST 배포, PID2386785)
 
 - [x] 배포 후 `/api/health`의 `broker.kis_requests` 확인: available=true, scope=kr_broker_get,
@@ -20,8 +35,10 @@
 - [ ] 다음 스캔에서 벤치마크 source/last_bar_date/status 확인. stale 자료는 제외되며
   5일·20일 LLM 입력은 결측, 종가 LLM c5는 '최근5거래일'로 표기돼야 한다.
   neutral 호환 폴백은 매수 차단 보장이 아니다.
-- [ ] 동일 만료 macro 자료는 재시작 후 요약1회만 경고하고 계속 무시하는지 확인.
+- [x] 동일 만료 macro 자료는 재시작 후 요약1회만 경고하고 계속 무시하는지 확인.
   만료 파일의 값·유효기간·설정을 바꾸지 않는다.
+  ✅ 09-28 확인: PID2386785 는 09-24 07:30:13 1줄, PID2574272 는 09-27 22:00:48 1줄('만료 12개 — 무시'). 파일 정리는 사용자 소유 데이터.
+- 09-24·25 는 추석 휴장이라 위 미체크 항목은 아직 거래일 표본이 없다(첫 거래일 09-28). 벤치마크 항목은 09-28 절로 이관.
 - [ ] macro expiry warning 0은 경로 미관측으로 미검증이다. 다음 자연 발생 이벤트에서
   LLM sell reason/freshness/macro repeat-check를 확인한다. 시험 주문은 금지한다.
 - 근거와 미지원 범위: [09-23 제한 릴리스 원장](release-2026-09-23.md),

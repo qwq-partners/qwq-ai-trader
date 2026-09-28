@@ -52,70 +52,31 @@ _kr_market_holidays: Set[date] = set()
 
 
 def set_kr_market_holidays(holidays: Set[date]):
-    """외부에서 조회한 휴장일을 주입 (봇 시작 시 호출)"""
+    """외부에서 조회한 휴장일을 주입 (봇 시작·매월 갱신 시 호출)
+
+    utils.session 에도 같은 집합을 넣는다 — session 경유 판정(KOSPI 벤치마크 신선도·스크리너 등)이
+    같은 동적 자료를 보게 한다. 로드 완료 로그는 session 쪽이 남긴다.
+    """
     global _kr_market_holidays
     _kr_market_holidays = holidays
-    logger.info(f"한국 시장 휴장일 {len(holidays)}일 로드 완료")
+    _set_session_holidays(holidays)
 
 
 def is_kr_market_holiday(d: date) -> bool:
     """한국 시장 휴장일 여부 (주말 + 공휴일)
 
-    동적 데이터가 있으면 동적 데이터만 신뢰합니다.
-    동적 데이터가 없을 때만 Fallback(하드코딩)을 사용합니다.
+    동적 데이터(KIS)와 Fallback(하드코딩)의 합집합으로 판정합니다 (utils.session 과 같은 의미).
+    동적 데이터는 조회한 달의 일부만 덮을 수 있어(2026-09 응답이 09-24 에서 끊겨 09-25 추석 누락)
+    동적 데이터만 신뢰하면 빠진 공휴일을 거래일로 처리합니다.
     """
     if d.weekday() >= 5:
         return True
-    if _kr_market_holidays:
-        return d in _kr_market_holidays  # 동적 데이터만 신뢰
-    # 동적 데이터가 없으면 하드코딩 공휴일 체크 (fallback)
-    return d in _FALLBACK_HOLIDAYS
+    return d in _kr_market_holidays or d in _FALLBACK_HOLIDAYS
 
 
-# 하드코딩 공휴일 (동적 조회 실패 시 fallback) - 2026~2027년
-_FALLBACK_HOLIDAYS: Set[date] = {
-    # 2026년
-    date(2026, 1, 1),   # 신정
-    date(2026, 1, 27),  # 설날 전날
-    date(2026, 1, 28),  # 설날
-    date(2026, 1, 29),  # 설날 다음날
-    date(2026, 3, 1),   # 삼일절 (일→3/2 대체)
-    date(2026, 3, 2),   # 삼일절 대체공휴일
-    date(2026, 5, 5),   # 어린이날
-    date(2026, 5, 24),  # 석가탄신일 (일→5/25 대체)
-    date(2026, 5, 25),  # 석가탄신일 대체공휴일
-    date(2026, 6, 6),   # 현충일 (토)
-    date(2026, 8, 15),  # 광복절 (토)
-    date(2026, 8, 17),  # 광복절 대체공휴일
-    date(2026, 9, 24),  # 추석 전날
-    date(2026, 9, 25),  # 추석
-    date(2026, 9, 26),  # 추석 다음날 (토)
-    date(2026, 10, 3),  # 개천절 (토)
-    date(2026, 10, 5),  # 개천절 대체공휴일
-    date(2026, 10, 9),  # 한글날
-    date(2026, 12, 25), # 크리스마스
-    # 2027년
-    date(2027, 1, 1),   # 신정
-    date(2027, 2, 8),   # 설날 전날
-    date(2027, 2, 9),   # 설날
-    date(2027, 2, 10),  # 설날 다음날
-    date(2027, 3, 1),   # 삼일절
-    date(2027, 5, 5),   # 어린이날
-    date(2027, 5, 13),  # 석가탄신일
-    date(2027, 6, 6),   # 현충일 (일→6/7 대체)
-    date(2027, 6, 7),   # 현충일 대체공휴일
-    date(2027, 8, 15),  # 광복절 (일→8/16 대체)
-    date(2027, 8, 16),  # 광복절 대체공휴일
-    date(2027, 10, 3),  # 개천절 (일→10/4 대체)
-    date(2027, 10, 4),  # 개천절 대체공휴일
-    date(2027, 10, 9),  # 한글날 (토)
-    date(2027, 10, 11), # 한글날 대체공휴일
-    date(2027, 10, 13), # 추석 전날
-    date(2027, 10, 14), # 추석
-    date(2027, 10, 15), # 추석 다음날
-    date(2027, 12, 25), # 크리스마스 (토)
-    date(2027, 12, 27), # 크리스마스 대체공휴일
-}
+# 하드코딩 공휴일은 utils.session 한 곳에서 관리한다 (두 벌이 따로 틀리지 않게)
+from src.utils.session import _KR_FALLBACK_HOLIDAYS as _FALLBACK_HOLIDAYS  # noqa: E402
+from src.utils.session import set_kr_holidays as _set_session_holidays  # noqa: E402
 
 
 # 이벤트 핸들러 타입

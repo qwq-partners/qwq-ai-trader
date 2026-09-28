@@ -75,7 +75,9 @@ def _load_kospi_benchmark(start, end):
 
     try:
         import FinanceDataReader as fdr
-        df = fdr.DataReader("KS11", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+        # FDR Yahoo 리더는 end 를 배타 경계로 쓴다 — 리포트 마지막 날을 포함하려고 하루 더
+        end_excl = (end + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        df = fdr.DataReader("YAHOO:^KS11", start.strftime("%Y-%m-%d"), end_excl)
         if df is not None and not df.empty:
             bench = df["Close"].pct_change().dropna()
             bench.index = pd.to_datetime(bench.index)

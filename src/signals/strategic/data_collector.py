@@ -90,7 +90,7 @@ class StrategicDataCollector:
             indices = {}
 
             for name, code in [
-                ("KOSPI", "KS11"), ("KOSDAQ", "KQ11"),
+                ("KOSPI", "YAHOO:^KS11"), ("KOSDAQ", "YAHOO:^KQ11"),
                 ("S&P500", "US500"), ("NASDAQ", "IXIC"),
             ]:
                 try:
