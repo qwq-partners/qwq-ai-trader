@@ -9,7 +9,9 @@
 - `KRScheduler._run_excess_return_step`: 20:30 진화 블록 끝(evolve 성공·실패·부재 모두 뒤), `wait_for` 60초·예외 삼킴, 봇 `trade_journal.pool`(+`_db_available`)·브로커가 없으면 디스크를 건드리지 않고 건너뜀. 토요일 후속복기에서 요약 한 줄(HTML 이스케이프·계산일 포함).
 - `scripts/export_risk_ledger.py`: `fetch_trade_records(fetch, days)` 분리(connect/disconnect 없음 — 봇 pool 보호), `exit_price` 가드를 SELL leg 없는 폴백으로만 이동(DB 직접 부분매도 포지션의 청산 복원), position 에 `entry_reason`·`exit_type`·`pnl_missing` 추가. **알려진 영향:** leg 로 exits 가 새로 복원된 risk cohort 포지션은 canary 기술 검증에 `net_pnl_mismatch` 가 새로 보일 수 있다(판정식 무변경).
 - `scripts/review_risk_canary.py`: 벤치마크 식·파싱을 공용 모듈에서 import(ROOT `sys.path` 삽입, 판정식 무변경). `src/dashboard/data_collector.py`: `is_sync` 를 공용 규칙으로(`sync_detected` 청산 포함 — 표시 전용). `TradeRecord.is_sync`(진화·복기 표본)는 무변경.
-- 추가 KIS 호출: 시세 TR 일봉 1회/거래일(원장 TR 0). 주문·전략·위험 설정·`.env`·킬스위치 변경 0.
+- **2단계 — 20:30 거래일 기록 대사(설계 §5-1, 절충안 1단계):** `verify_day_records` 가 쓰기 큐 대기(20초) 뒤 오늘 KIS 체결(완결 판정 조회)과 DB `trade_events`(KR)를 종목·방향별로 대조(SELL 수량 합·BUY 존재·DB 에만 있는 BUY/SELL)하고, 오늘 SELL 이 있는 거래의 `trades.exit_quantity` ↔ SELL 이벤트 합을 교차 검증한다(손익은 `_reconcile_pnl` 사후 보정 때문에 비교하지 않음). 결과를 `execution_day_status` 에 upsert 하고 같은 실행의 원장에는 저장 성공과 무관하게 이번 결과를 쓴다(`day_status_saved`). 상태 표가 없으면 상태 없음으로, 표가 있는데 조회가 실패하면 파일을 쓰지 않고 중단한다. `complete` 의 뜻은 "불일치를 찾지 못함"(주문번호가 엔진 기록에 없어 완전성 증명은 아님). `sync_from_kis`·쓰기 경로 무변경 — 기동 시 일일 손익·거래 수 복원 입력 보존. 단계 시한 60→90초.
+- 추가 KIS 호출: 시세 TR 일봉 1회 + 체결 조회 1회(원장 TR, 장외 20:30)/거래일. 주문·전략·위험 설정·`.env`·킬스위치 변경 0.
+- 전체 회귀(2단계 포함 최종): UTC **2234 passed / 2 xfailed / pykrx warning 1**, KST 1차 **1 failed**(`tests/test_toss_token_storage.py::test_two_process_observations_are_idempotent_and_never_clobber[False]` — Toss 토큰 저장소 2-프로세스 경합 `unsafe_storage`, 변경 파일 아님, 단독 반복 0/15 실패) → KST 2차 **2234 passed / 2 xfailed**. 격리 위반 0.
 - 검증: 새 시험 49건(원장 36·스케줄러 13 — 손 계산·판정 순서·exporter 경유 분류·NULL/0 구분·멱등·drift·부분 응답·브로커 상한·배선 3경우·토요일 실행), 작성자 변이 6종 + coordinator 변이 1종 kill. 전체 UTC·KST 각 **2163 passed / 2 xfailed / 기존 pykrx warning 1**, 격리 위반 0. 작성 Claude Opus 5.5(요청 Opus/high), 리뷰는 커밋 뒤 교차 공급자.
 
 ## 2026-09-28 — docs: 실거래 KODEX200 초과수익 원장 설계 A (서면 설계, 구현 없음)

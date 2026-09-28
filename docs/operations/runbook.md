@@ -68,7 +68,8 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `~/.cache/ai_trader/evolution/` | 진화 상태 |
 | `~/.cache/ai_trader/journal/` | 거래 저널 + LLM 리뷰 |
 | `~/.cache/ai_trader/unified_trader.pid` | PID 파일 |
-| `~/.cache/ai_trader/excess_return/` | 실거래 KODEX200 초과수익 원장 — `positions.jsonl`(매일 전체 재계산 스냅샷)·`positions_prev.jsonl`(직전 계산일, drift 기준)·`summary.json`·`summary_history.jsonl`(하루 한 줄)·`kodex200_daily.csv`(069500 KIS 일봉 캐시). 20:30 진화 블록 끝에서 갱신, 실패는 `[초과수익]` 경고 로그만 |
+| `execution_day_status`(DB 표) | 거래일 기록 대사 결과 — `SELECT trade_date, status, reasons, checked_at FROM execution_day_status ORDER BY trade_date DESC LIMIT 10;` `complete` = 20:30 대사가 불일치를 찾지 못함(증명 아님), `incomplete` 사유는 JSON 배열(`sell_qty:<종목>`·`buy:<종목>`·`trade_row:<id>`·`fill_query_incomplete:<사유>`·`write_queue_pending`·`db_query_failed`) |
+| `~/.cache/ai_trader/excess_return/` | 실거래 KODEX200 초과수익 원장 — `positions.jsonl`(매일 전체 재계산 스냅샷)·`positions_prev.jsonl`(직전 계산일, drift 기준)·`summary.json`·`summary_history.jsonl`(하루 한 줄)·`positions_meta.json`(스냅샷 계산일)·`kodex200_daily.csv`(069500 KIS 일봉 캐시). 20:30 진화 블록 끝에서 갱신, 실패는 `[초과수익]` 경고 로그만 |
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
 | `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
 

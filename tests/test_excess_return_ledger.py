@@ -618,3 +618,305 @@ def test_status_uses_bench_covered_not_n():
                      clipped_excess_return=None))
     m = er.summarize(rows, [], today=date(2026, 9, 10), awaiting_close=0, day_status_missing=0)["windows"]["all"]["all"]
     assert m["n"] == 30 and m["bench_covered"] == 29 and m["status"] == "insufficient_sample"
+
+
+# ── 2단계 T8~T10: 거래일 기록 대사·상태 표 ─────────────────────────────────────
+
+DAY = date(2026, 9, 10)
+VNOW = datetime(2026, 9, 10, 20, 31)
+
+
+def _kfill(symbol, side, qty, odno="1"):
+    return {"symbol": symbol, "name": "", "sll_buy_dvsn_cd": "01" if side == "SELL" else "02",
+            "tot_ccld_qty": qty, "avg_prvs": 10000.0, "odno": odno, "ord_tmd": "100000"}
+
+
+def _vbroker(fills=(), complete=True, reason=None, bars=None):
+    return SimpleNamespace(
+        get_daily_prices=AsyncMock(return_value=bars if bars is not None else _kis_rows()),
+        get_fills_for_date_checked=AsyncMock(return_value=(list(fills), complete, reason)))
+
+
+def _vfetch(*, sums=(), trade_rows=(), status_rows=None, status_exc=None, sums_exc=None, base=None, calls=None):
+    """대사 SQL(③ 일별 합·⑤ 거래 본체·상태 표)을 먼저 가로채고 나머지는 exporter 가짜로 넘긴다."""
+    base = base or _fake_fetch([], [])
+
+    async def fetch(sql, *args):
+        if calls is not None:
+            calls.append((sql, args))
+        if "GROUP BY e.symbol" in sql:
+            if sums_exc:
+                raise sums_exc
+            return [dict(r) for r in sums]
+        if "t.exit_quantity" in sql:
+            return [dict(r) for r in trade_rows]
+        if "execution_day_status" in sql:
+            if status_exc:
+                raise status_exc
+            return [dict(r) for r in (status_rows or [])]
+        return await base(sql, *args)
+    return fetch
+
+
+def _verify(broker, fetch, write_queue=None, day=DAY):
+    return asyncio.run(er.verify_day_records(broker=broker, fetch=fetch, write_queue=write_queue, day=day))
+
+
+def _sum(symbol, side, qty):
+    return {"symbol": symbol, "event_type": side, "qty": D(qty)}
+
+
+def test_verify_sell_match_is_complete():
+    b = _vbroker([_kfill("A1", "SELL", 60, "1"), _kfill("A1", "SELL", 40, "2"), _kfill("B1", "BUY", 7)])
+    f = _vfetch(sums=[_sum("A1", "SELL", 100), _sum("B1", "BUY", 3)],
+                trade_rows=[{"id": "T1", "exit_quantity": 100, "sold": D(100)}])
+    r = _verify(b, f)
+    assert r["status"] == "complete" and r["reasons"] == []      # BUY 수량 7≠3 은 비교하지 않는다
+    b.get_fills_for_date_checked.assert_awaited_once_with(DAY)
+
+
+def test_verify_sell_qty_mismatch():
+    r = _verify(_vbroker([_kfill("A1", "SELL", 10)]), _vfetch(sums=[_sum("A1", "SELL", 5)]))
+    assert r == r | {"status": "incomplete", "reasons": ["sell_qty:A1"]}
+
+
+def test_verify_sell_only_in_db():
+    r = _verify(_vbroker([]), _vfetch(sums=[_sum("A1", "SELL", 5)]))
+    assert r["status"] == "incomplete" and r["reasons"] == ["sell_qty:A1"]
+
+
+def test_verify_buy_missing_in_db():
+    r = _verify(_vbroker([_kfill("B1", "BUY", 5)]), _vfetch())
+    assert r["status"] == "incomplete" and r["reasons"] == ["buy:B1"]
+
+
+def test_verify_buy_only_in_db():
+    r = _verify(_vbroker([]), _vfetch(sums=[_sum("B1", "BUY", 5)]))
+    assert r["status"] == "incomplete" and r["reasons"] == ["buy:B1"]
+
+
+def test_verify_trade_row_mismatch():
+    calls = []
+    f = _vfetch(sums=[_sum("A1", "SELL", 50)], calls=calls,
+                trade_rows=[{"id": "T1", "exit_quantity": 100, "sold": D(100)},
+                            {"id": "T2", "exit_quantity": 0, "sold": D(50)}])
+    r = _verify(_vbroker([_kfill("A1", "SELL", 50)]), f)
+    assert r["status"] == "incomplete" and r["reasons"] == ["trade_row:T2"]
+    assert all(args == (DAY,) for sql, args in calls)            # 날짜 인자는 day(date) 하나
+
+
+def test_verify_zero_zero_is_complete():
+    r = _verify(_vbroker([]), _vfetch())
+    assert r["status"] == "complete" and r["reasons"] == []
+
+
+def test_verify_fill_query_incomplete():
+    r = _verify(_vbroker([_kfill("A1", "SELL", 5)], complete=False, reason="page_failed"),
+                _vfetch(sums=[_sum("A1", "SELL", 5)]))
+    assert r["status"] == "incomplete" and r["reasons"] == ["fill_query_incomplete:page_failed"]
+
+
+def test_verify_fill_query_unavailable():
+    r = _verify(SimpleNamespace(get_daily_prices=AsyncMock()), _vfetch())
+    assert r["status"] == "incomplete" and r["reasons"] == ["fill_query_unavailable"]
+
+
+def test_verify_write_queue_join_timeout(monkeypatch):
+    monkeypatch.setattr(er, "WRITE_QUEUE_WAIT_SEC", 0.05)
+
+    async def run(done):
+        q = asyncio.Queue()
+        q.put_nowait(("INSERT …", ()))
+        if done:
+            q.get_nowait()
+            q.task_done()
+        return await er.verify_day_records(broker=_vbroker([]), fetch=_vfetch(), write_queue=q, day=DAY)
+
+    assert asyncio.run(run(False))["reasons"] == ["write_queue_pending"]
+    assert asyncio.run(run(True))["status"] == "complete"
+
+
+def test_verify_db_query_exception():
+    r = _verify(_vbroker([]), _vfetch(sums_exc=RuntimeError("DB 끊김(가짜)")))
+    assert r["status"] == "incomplete" and r["reasons"] == ["db_query_failed"]
+
+
+def test_verify_reasons_sorted_and_truncated():
+    sums = [_sum(f"S{i:02d}", "SELL", 1) for i in range(25)]
+    r = _verify(_vbroker([]), _vfetch(sums=list(reversed(sums))))
+    assert r["reasons"][:2] == ["sell_qty:S00", "sell_qty:S01"]
+    assert len(r["reasons"]) == 21 and r["reasons"][-1] == "…(+5)"
+
+
+def test_save_day_status_upsert_and_failure():
+    seen = []
+
+    async def ok(sql, *args):
+        seen.append((sql, args))
+
+    async def boom(sql, *args):
+        raise RuntimeError("쓰기 실패(가짜)")
+
+    result = {"status": "incomplete", "reasons": ["buy:B1"], "checked": {}}
+    assert asyncio.run(er.save_day_status(ok, DAY, result, VNOW)) is True
+    sql, args = seen[0]
+    assert "ON CONFLICT (trade_date) DO UPDATE" in sql and "'kr_excess_20_30'" in sql
+    assert args[0] == DAY and args[1] == "incomplete" and "buy:B1" in args[2] and args[3] == VNOW
+    assert asyncio.run(er.save_day_status(boom, DAY, result, VNOW)) is False
+
+
+def test_load_day_status_table_missing_vs_other_failure():
+    class UndefinedTableError(Exception):
+        pass
+
+    got = asyncio.run(er.load_day_status(_vfetch(status_exc=UndefinedTableError("x")), DAY))
+    assert got == {}
+    assert asyncio.run(er.load_day_status(
+        _vfetch(status_exc=RuntimeError('relation "execution_day_status" does not exist')), DAY)) == {}
+    with pytest.raises(RuntimeError):
+        asyncio.run(er.load_day_status(_vfetch(status_exc=RuntimeError("연결 끊김(가짜)")), DAY))
+    rows = [{"trade_date": date(2026, 9, 9), "status": "complete"}]
+    assert asyncio.run(er.load_day_status(_vfetch(status_rows=rows), DAY)) == {date(2026, 9, 9): "complete"}
+
+
+# run_daily_update 운영 경로(execute 주어짐)
+
+def _today_db():
+    """OK1(09-01→03) + TODAY(09-08→09-10, 오늘 청산)."""
+    T, L = _simple_db()
+    T = T[:1] + [_trow("TODAY", "A00003", "2026-09-08T09:05:00", exit_time="2026-09-10T14:00:00",
+                       exit_price=10500, exit_qty=100, exit_type="trailing", pnl=40000)]
+    L = L[:1] + [_leg("TODAY", "2026-09-10T14:00:00", 100, 10500)]
+    return T, L
+
+
+def _ops_update(tmp_path, broker, fetch, execute, now=VNOW):
+    return asyncio.run(er.run_daily_update(
+        broker=broker, fetch=fetch, out_dir=tmp_path, root=ROOT, now=now, code_sha="sha1",
+        execute=execute))
+
+
+def _rows_by_id(tmp_path):
+    return {json.loads(x)["position_id"]: json.loads(x)
+            for x in (tmp_path / "positions.jsonl").read_text(encoding="utf-8").splitlines()}
+
+
+async def _noop_execute(sql, *args):
+    return None
+
+
+def test_ops_save_failure_applies_this_run_result(tmp_path):
+    """기존 complete 행 위 저장 실패 → 이번 incomplete 가 원장에 적용·day_status_saved=false."""
+    T, L = _today_db()
+    all_complete = [{"trade_date": date.fromisoformat(d), "status": "complete"} for d in BENCH]
+    fetch = _vfetch(sums=[_sum("A00003", "SELL", 100)], status_rows=all_complete, base=_fake_fetch(T, L))
+
+    async def boom(sql, *args):
+        raise RuntimeError("쓰기 실패(가짜)")
+
+    s = _ops_update(tmp_path, _vbroker([]), fetch, boom)          # KIS 0 ≠ DB 100 → incomplete
+    assert s["day_status_today"] == "incomplete" and s["day_status_saved"] is False
+    assert s["day_status_reasons"] == ["sell_qty:A00003"]
+    rows = _rows_by_id(tmp_path)
+    assert rows["TODAY"]["exclusion"] == "record_incomplete"
+    assert rows["OK1"]["exclusion"] is None
+
+
+def test_ops_status_load_failure_aborts_and_keeps_files(tmp_path):
+    T, L = _today_db()
+    for name in ("positions.jsonl", "summary.json", "kodex200_daily.csv"):
+        (tmp_path / name).write_text(f"old-{name}", encoding="utf-8")
+    broker = _vbroker([_kfill("A00003", "SELL", 100)])
+    fetch = _vfetch(sums=[_sum("A00003", "SELL", 100)], base=_fake_fetch(T, L),
+                    status_exc=RuntimeError("연결 끊김(가짜)"))
+    with pytest.raises(RuntimeError):
+        _ops_update(tmp_path, broker, fetch, _noop_execute)
+    for name in ("positions.jsonl", "summary.json", "kodex200_daily.csv"):
+        assert (tmp_path / name).read_text(encoding="utf-8") == f"old-{name}"
+    assert not (tmp_path / "summary_history.jsonl").exists()
+    broker.get_daily_prices.assert_not_awaited()
+
+
+def test_ops_status_table_missing_proceeds_without_status(tmp_path):
+    class UndefinedTableError(Exception):
+        pass
+
+    T, L = _today_db()
+    fetch = _vfetch(sums=[_sum("A00003", "SELL", 100)], base=_fake_fetch(T, L),
+                    status_exc=UndefinedTableError('relation "execution_day_status" does not exist'))
+    seen = []
+
+    async def execute(sql, *args):
+        seen.append(args)
+
+    s = _ops_update(tmp_path, _vbroker([_kfill("A00003", "SELL", 100)]), fetch, execute)
+    assert s["day_status_today"] == "complete" and s["day_status_saved"] is True
+    assert seen and seen[0][0] == DAY
+    # OK1(09-01~03) 은 상태 행 없음 → missing, TODAY(09-08~10) 는 09-08·09 가 없음 → missing
+    assert s["day_status_missing"] == 2 and s["windows"]["all"]["all"]["n"] == 2
+
+
+def test_ops_record_incomplete_and_missing_counts(tmp_path):
+    T, L = _today_db()
+    status = [{"trade_date": date(2026, 9, d), "status": "complete"} for d in (1, 2, 3, 8)]
+    status.append({"trade_date": date(2026, 9, 9), "status": "incomplete"})
+    status.append({"trade_date": DAY, "status": "incomplete"})     # 오늘 옛 판정 — 이번 결과로 덮인다
+    fetch = _vfetch(sums=[_sum("A00003", "SELL", 100)], status_rows=status, base=_fake_fetch(T, L))
+    s = _ops_update(tmp_path, _vbroker([_kfill("A00003", "SELL", 100)]), fetch, _noop_execute)
+    assert s["day_status_today"] == "complete"
+    m = s["windows"]["all"]["all"]
+    assert m["excluded"]["record_incomplete"]["n"] == 1             # TODAY: 09-09 incomplete
+    assert m["n"] == 1 and s["day_status_missing"] == 0            # OK1: 09-01~03 모두 complete
+
+
+def test_ops_status_since_is_oldest_entry(tmp_path):
+    T, L = _today_db()
+    calls = []
+    fetch = _vfetch(base=_fake_fetch(T, L), calls=calls, sums=[_sum("A00003", "SELL", 100)])
+    _ops_update(tmp_path, _vbroker([_kfill("A00003", "SELL", 100)]), fetch, _noop_execute)
+    args = [a for sql, a in calls if "execution_day_status" in sql]
+    assert args == [(date(2026, 9, 1),)]
+
+
+def test_without_execute_summary_has_null_day_status_fields(tmp_path):
+    T, L = _simple_db()
+    s, _ = _update(tmp_path, T, L, _kis_rows(), VNOW)
+    assert s["day_status_today"] is None and s["day_status_reasons"] is None and s["day_status_saved"] is None
+
+
+def test_day_comes_from_now_only_under_utc_and_kst(tmp_path, monkeypatch):
+    """같은 now → TZ=UTC·Asia/Seoul 에서 같은 대사 날짜·같은 요약(호스트 로컬 now.date(), KST 변환 없음)."""
+    import time
+    results = []
+    old_tz = __import__("os").environ.get("TZ")
+    try:
+        for tz in ("UTC", "Asia/Seoul"):
+            monkeypatch.setenv("TZ", tz)
+            time.tzset()
+            T, L = _today_db()
+            calls = []
+            out = tmp_path / tz.replace("/", "_")
+            out.mkdir()
+            broker = _vbroker([_kfill("A00003", "SELL", 100)])
+            fetch = _vfetch(sums=[_sum("A00003", "SELL", 100)], base=_fake_fetch(T, L), calls=calls)
+            s = asyncio.run(er.run_daily_update(
+                broker=broker, fetch=fetch, out_dir=out, root=ROOT, now=datetime(2026, 9, 10, 0, 30),
+                code_sha="sha1", execute=_noop_execute))
+            broker.get_fills_for_date_checked.assert_awaited_once_with(DAY)
+            day_args = [a for sql, a in calls if "GROUP BY e.symbol" in sql or "t.exit_quantity" in sql]
+            assert day_args and all(a == (DAY,) for a in day_args)
+            results.append({k: s[k] for k in ("computed_date", "day_status_today", "day_status_missing", "rows")})
+    finally:
+        monkeypatch.undo()
+        if old_tz is None:
+            __import__("os").environ.pop("TZ", None)
+        time.tzset()
+    assert results[0] == results[1] and results[0]["computed_date"] == "2026-09-10"
+
+
+def test_load_day_status_column_missing_is_not_table_missing():
+    """열 없음 같은 다른 'does not exist' 는 표 없음으로 삼키지 않고 올린다(coordinator 보완)."""
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        asyncio.run(er.load_day_status(
+            _vfetch(status_exc=RuntimeError('column "status" does not exist')), DAY))

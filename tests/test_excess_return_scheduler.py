@@ -258,3 +258,27 @@ def test_wiring_positions_in_source():
 
     step_src = inspect.getsource(KRScheduler._run_excess_return_step)
     assert "wait_for" in step_src and "except Exception" in step_src
+
+
+# ── 2단계: 대사 배선 ─────────────────────────────────────────────────────────
+
+def test_step_passes_execute_and_write_queue(monkeypatch, tmp_path):
+    seen = {}
+
+    async def _capture(**kw):
+        seen.update(kw)
+        return {}
+
+    monkeypatch.setattr(er, "run_daily_update", _capture)
+
+    async def _execute(sql, *args):
+        return None
+
+    queue = object()
+    tj = SimpleNamespace(pool=SimpleNamespace(fetch=_fake_fetch(), execute=_execute),
+                         _db_available=True, _write_queue=queue)
+    sched = object.__new__(KRScheduler)
+    asyncio.run(sched._run_excess_return_step(SimpleNamespace(trade_journal=tj, broker=object()), EVO_NOW))
+    assert seen["execute"] is _execute and seen["write_queue"] is queue
+    assert seen["fetch"] is tj.pool.fetch and seen["now"] == EVO_NOW
+    assert KRScheduler._EXCESS_RETURN_TIMEOUT_SEC == 90

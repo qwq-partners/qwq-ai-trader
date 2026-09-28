@@ -5740,7 +5740,7 @@ JSON:
             raise
 
     # 실거래 초과수익 원장 단계 시한 (설계 A §4 — 진화 뒤라 진화를 늦추지 않는다)
-    _EXCESS_RETURN_TIMEOUT_SEC = 60
+    _EXCESS_RETURN_TIMEOUT_SEC = 90   # 대사(쓰기 큐 대기 20초·체결 조회) + 원장 갱신
 
     async def _run_excess_return_step(self, bot, now: datetime) -> None:
         """[초과수익] 20:30 일일 갱신 — 측정 전용. 어떤 실패도 로그만 남기고 바깥 루프로 올리지 않는다.
@@ -5763,6 +5763,9 @@ JSON:
                     out_dir=Path.home() / ".cache" / "ai_trader" / "excess_return",
                     root=Path(__file__).resolve().parents[2],
                     now=now, code_sha=applied_sha(),
+                    # 기록 대사(§5-1) — execute 가 없는 pool 이면 대사 없이 1단계 경로로 돈다
+                    execute=getattr(pool, "execute", None),
+                    write_queue=getattr(tj, "_write_queue", None),
                 ),
                 self._EXCESS_RETURN_TIMEOUT_SEC,
             )

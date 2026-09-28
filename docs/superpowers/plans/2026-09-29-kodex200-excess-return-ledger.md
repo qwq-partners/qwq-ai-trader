@@ -171,3 +171,12 @@ venv/bin/python -m py_compile src/analytics/excess_return.py scripts/export_risk
 | --- | --- | --- | --- |
 | 1 | Codex 교차 공급자(요청 gpt-6-astra/high, read-only; rollout model `gpt-6-astra`·effort `high`) — `b94eba4` | REQUEST_CHANGES — P0 0, P1 4, P2 4 | 코드 근거 확인 후 2판: P1-1·2·3 → 2단계를 `sync_from_kis` 무변경 읽기 전용 대사로 축소(돈 경로·복원 입력 보존), P1-4 → 조회 완결 = 헤더 D/E 종료·모순/반복/상한/미연결/정규화 실패 미완, P2-5 → '조회 시점까지'·KST 고정·`target_date` 제거, P2-6 → 삽입 위치(if/else 밖)·하네스 3경우·토요일 실행 시험·실제 Queue, P2-7 → `pnl_missing` 보존, P2-8 → `exits_aggregated` 먼저. 인용 정정(`exit_type` 은 있음, raise `:5734-5737`), canary '판정식 유지', 비밀정보 검사 추가, 범위 문구 |
 | 2 | 같은 조건 2회차(rollout model `gpt-6-astra`·effort `high`) — `932ec5f` | REQUEST_CHANGES — 1회차 해소 6·부분 3·미해소 1, 새 P1 3·P2 4 | 3판: P1-1 → `complete` 뜻을 '불일치 미발견'으로 낮추고 DB 에만 BUY·검출 한계 명시, P1-2 → `trades.exit_quantity` ↔ SELL 이벤트 합 교차 검증(손익 제외), P1-3 → 표 없음/조회 실패 구분·실패 시 갱신 중단, P2-4 → 호스트 로컬 시각 규약·두 TZ 시험, P2-5 → 이번 결과 직접 적용·`day_status_saved`, P2-6 → 대사~요약 한 시한·예외 안, P2-7 → 프로젝트 규칙(커밋=푸시) 근거로 유지. 3회차 계획 리뷰는 생략하고 구현 리뷰에서 확인 |
+
+### 구현 기록
+
+| 단계 | 작성(요청/실제) | 결과·리뷰 | 커밋 |
+| --- | --- | --- | --- |
+| 1단계 T1~T5 | Claude Opus/high(실제 Opus 5.5) + coordinator 보완 1건(벤치마크 상한) | 새 시험 49·변이 7 kill, 전체 UTC/KST 2163 passed. Codex 구현 리뷰(요청 gpt-6-astra/high, rollout 동일) REQUEST_CHANGES P1 1(coordinator 보완의 결함)·P2 3 → 처분 | `f913781`, 처분 `2be0049` |
+| 2단계 T7·DDL | Claude Opus/high | 새 시험 43(기본 경로 13개 시나리오 기준선 대조) | `2be0049` |
+| 2단계 T8·T9 | Claude Opus/high + coordinator 보완 2건(표 없음 판정 좁힘·거래 본체 SQL KR 필터) | 새 시험 23, 전체 UTC 2234 passed, KST 1차 Toss 간헐 1 failed → 2차 2234 passed | 이번 커밋 |
+

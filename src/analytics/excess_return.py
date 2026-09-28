@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import importlib.util
 import json
@@ -555,23 +556,155 @@ def _append_history(path: Path, line: Dict[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
+# ── 거래일 기록 대사 (설계 §5-1, 계획 T8·T9) ──────────────────────────────────
+# complete = "20:30 대사가 불일치를 찾지 못했다" — 완전성의 증명이 아니다(엔진 기록에 주문번호가 없다).
+# 날짜는 호출부 now(호스트 로컬 naive)의 date — event_time 과 같은 규약이라 KST 로 바꾸지 않는다.
+
+WRITE_QUEUE_WAIT_SEC = 20
+MAX_REASONS = 20
+DAY_STATUS_SOURCE = "kr_excess_20_30"
+
+_SQL_DAY_SUMS = (
+    "SELECT e.symbol, e.event_type, SUM(e.quantity) AS qty FROM trade_events e "
+    "JOIN trades t ON t.id = e.trade_id WHERE t.market = 'KR' AND e.event_time::date = $1 "
+    "GROUP BY e.symbol, e.event_type")
+_SQL_TRADE_ROWS = (
+    "SELECT t.id, t.exit_quantity, SUM(e.quantity) AS sold FROM trades t "
+    "JOIN trade_events e ON e.trade_id = t.id AND e.event_type = 'SELL' "
+    "WHERE t.market = 'KR' AND t.id IN (SELECT DISTINCT trade_id FROM trade_events WHERE event_type = 'SELL' "
+    "AND event_time::date = $1) GROUP BY t.id, t.exit_quantity")
+_SQL_SAVE_STATUS = (
+    "INSERT INTO execution_day_status (trade_date, status, reasons, source, checked_at, updated_at) "
+    f"VALUES ($1,$2,$3,'{DAY_STATUS_SOURCE}',$4,$4) ON CONFLICT (trade_date) DO UPDATE SET "
+    "status=EXCLUDED.status, reasons=EXCLUDED.reasons, source=EXCLUDED.source, "
+    "checked_at=EXCLUDED.checked_at, updated_at=EXCLUDED.updated_at")
+_SQL_LOAD_STATUS = "SELECT trade_date, status FROM execution_day_status WHERE trade_date >= $1"
+
+
+def _qty(v: Any) -> Decimal:
+    q = to_decimal(v)
+    return q if q is not None else Decimal("0")
+
+
+async def verify_day_records(*, broker: Any, fetch: Any, write_queue: Any, day: date) -> Dict[str, Any]:
+    """KIS 당일 체결(완결 확인) ↔ DB trade_events·trades 대조. 저장하지 않고 결과만 돌려준다."""
+    reasons = set()
+    checked: Dict[str, Any] = {}
+
+    if write_queue is not None:                                              # ①
+        try:
+            await asyncio.wait_for(write_queue.join(), WRITE_QUEUE_WAIT_SEC)
+        except asyncio.TimeoutError:
+            reasons.add("write_queue_pending")
+
+    fills = None                                                             # ②
+    query = getattr(broker, "get_fills_for_date_checked", None)
+    if query is None:
+        reasons.add("fill_query_unavailable")
+    else:
+        try:
+            rows, complete, why = await query(day)
+        except Exception as e:
+            logger.warning(f"[초과수익] 체결 조회 예외: {type(e).__name__}: {e}")
+            rows, complete, why = [], False, "exception"
+        if complete:
+            fills = rows
+        else:
+            reasons.add(f"fill_query_incomplete:{why}")
+
+    try:
+        if fills is not None:                                                # ③ ④ — 미완 조회는 부분 목록이라 비교하지 않는다
+            kis_sell: Dict[str, Decimal] = defaultdict(Decimal)
+            kis_buy = set()
+            for f in fills:
+                if f.get("sll_buy_dvsn_cd") == "01":
+                    kis_sell[f["symbol"]] += _qty(f.get("tot_ccld_qty"))
+                elif f.get("sll_buy_dvsn_cd") == "02":
+                    kis_buy.add(f["symbol"])
+            db_sell: Dict[str, Decimal] = defaultdict(Decimal)
+            db_buy = set()
+            sums = await fetch(_SQL_DAY_SUMS, day)
+            for r in sums:
+                if r["event_type"] == "SELL":
+                    db_sell[r["symbol"]] += _qty(r["qty"])
+                elif r["event_type"] == "BUY":
+                    db_buy.add(r["symbol"])
+            for sym in set(kis_sell) | set(db_sell):
+                if kis_sell.get(sym, Decimal("0")) != db_sell.get(sym, Decimal("0")):
+                    reasons.add(f"sell_qty:{sym}")
+            for sym in kis_buy ^ db_buy:                                     # BUY 수량은 비교하지 않는다
+                reasons.add(f"buy:{sym}")
+            checked.update(kis_fills=len(fills), db_groups=len(sums))
+        trade_rows = await fetch(_SQL_TRADE_ROWS, day)                       # ⑤ 손익은 비교하지 않는다
+        for r in trade_rows:
+            if _qty(r["exit_quantity"]) != _qty(r["sold"]):
+                reasons.add(f"trade_row:{r['id']}")
+        checked["trades_checked"] = len(trade_rows)
+    except Exception as e:                                                   # ⑦
+        logger.warning(f"[초과수익] 기록 대사 DB 조회 실패: {type(e).__name__}: {e}")
+        reasons.add("db_query_failed")
+
+    out = sorted(reasons)
+    if len(out) > MAX_REASONS:
+        out = out[:MAX_REASONS] + [f"…(+{len(out) - MAX_REASONS})"]
+    return {"status": "incomplete" if out else "complete", "reasons": out, "checked": checked}   # ⑥
+
+
+async def save_day_status(execute: Any, day: date, result: Dict[str, Any], now: datetime) -> bool:
+    """execution_day_status upsert. 실패는 로그만 남기고 False."""
+    try:
+        await execute(_SQL_SAVE_STATUS, day, result["status"],
+                      json.dumps(result["reasons"], ensure_ascii=False), now)
+        return True
+    except Exception as e:
+        logger.warning(f"[초과수익] 거래일 상태 저장 실패: {type(e).__name__}: {e}")
+        return False
+
+
+async def load_day_status(fetch: Any, since: date) -> Dict[Any, str]:
+    """상태 표 조회. 표 없음(도입 전)만 {} — 그 밖의 실패는 올려 이번 갱신을 중단한다(기존 파일 보존)."""
+    try:
+        rows = await fetch(_SQL_LOAD_STATUS, since)
+    except Exception as e:
+        # 표 없음만 — 열 없음(UndefinedColumnError) 등 다른 'does not exist' 는 갱신 중단 쪽으로 올린다(coordinator 보완)
+        if type(e).__name__ == "UndefinedTableError" or 'relation "execution_day_status" does not exist' in str(e):
+            logger.info("[초과수익] execution_day_status 표 없음 — 상태 없음으로 진행")
+            return {}
+        raise
+    return {r["trade_date"]: r["status"] for r in rows}
+
+
 async def run_daily_update(*, broker: Any, fetch: Any, out_dir: Path, root: Path, now: datetime,
-                           code_sha: str, day_status: Optional[Dict[Any, str]] = None) -> Dict[str, Any]:
+                           code_sha: str, day_status: Optional[Dict[Any, str]] = None,
+                           execute: Any = None, write_queue: Any = None) -> Dict[str, Any]:
     """설계 §4 ①~④ — 포지션 원장 → 벤치마크 캐시 → 스냅샷 → 요약. 예외는 호출부(스케줄러)가 삼킨다.
 
     fetch = 봇 TradeStorage `pool.fetch` (connect/disconnect 하지 않는다).
-    day_status = {거래일: 'complete'|'incomplete'} — 1단계는 빈 dict(상태 표는 2단계).
+    execute 가 있으면(운영) 오늘 기록 대사 → 상태 저장 → 상태 표 읽기(오늘은 이번 결과로 덮음)로 day_status 를 만든다.
+    상태 표 조회 실패(표 없음 제외)는 파일을 하나도 쓰기 전에 예외로 올린다.
+    execute 가 없으면 day_status 인자를 그대로 쓴다(1단계 경로).
     """
     out_dir = Path(out_dir)
     today = now.date()
     computed_at = now.isoformat()
     exporter = load_exporter(root)
 
+    verdict: Optional[Dict[str, Any]] = None
+    saved: Optional[bool] = None
+    if execute is not None:
+        verdict = await verify_day_records(broker=broker, fetch=fetch, write_queue=write_queue, day=today)
+        saved = await save_day_status(execute, today, verdict, now)
+
     # ② 먼저 — 가장 오래된 진입일을 알아야 ① 의 조회 범위를 정한다(결과는 설계 순서와 같다)
     trades = await exporter.fetch_trade_records(fetch, LEDGER_DAYS)
     positions = exporter.build_ledger(trades, {})["positions"]
     entries = [e for e in (_span(p)[0] for p in positions if p.get("status") == "closed") if e is not None]
     oldest_entry = min(entries) if entries else None
+
+    if verdict is not None:
+        since = date.fromisoformat(oldest_entry) if oldest_entry is not None else today
+        day_status = _norm_status(await load_day_status(fetch, since))
+        day_status[today.isoformat()] = verdict["status"]      # 저장 성공 여부와 무관하게 이번 결과
 
     # ① 벤치마크 캐시
     bench_path = out_dir / BENCH_FILE
@@ -619,6 +752,9 @@ async def run_daily_update(*, broker: Any, fetch: Any, out_dir: Path, root: Path
         "bench_missing_reason": bench_reason,
         "bench_first_date": min(bench) if bench else None,
         "bench_last_date": max(bench) if bench else None,
+        "day_status_today": verdict["status"] if verdict else None,
+        "day_status_reasons": verdict["reasons"] if verdict else None,
+        "day_status_saved": saved,
     })
     atomic_write_json(out_dir / SUMMARY_FILE, summary, indent=2)
     head = summary["windows"]["all"]["all"]
