@@ -1,6 +1,6 @@
 # 주문 POST 접수 불명(UNKNOWN) 분리 — 설계 (절충안 2단계, 2026-09-29)
 
-> **상태**: 설계 초안이며 아직 리뷰 전이다. 기준은 main `081ab6a`.
+> **상태**: 설계 v2 — 교차 공급자 리뷰 1회차(REQUEST_CHANGES P1 6·P2 2) 처분 반영(§7). 기준 main `081ab6a`.
 > **위험 등급**: 돈 경로(critical)다. 결함 주입 시험과 다른 공급자 리뷰가 필수다.
 > **절충안 순서**(설계 B §0, 09-29 사용자 결정): (1) 초과수익 원장 ✅ 배포 → **(2) 이 문서** → (3) 봇 실행 중 CLI 거부·OrderRef 영속.
 > **사용자 원칙**
@@ -37,16 +37,18 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 |---|---|
 | POST 전 실패: 세션·토큰 발급 실패, 킬스위치, 세션/NXT/가격/hashkey 거절 | REJECT (현행) |
 | 응답 JSON 에 `rt_cd` 가 있고 `"0"` 이 아님. HTTP 5xx JSON(예: EGW00201) 포함 | REJECT (현행). 서버가 거절을 명시했다 |
-| HTTP 4xx, 본문이 JSON 이 아님 | REJECT. 클라이언트 오류라 처리 전이다 |
-| HTTP 200·5xx, 본문이 JSON 이 아님 | **UNKNOWN** |
+| 본문이 JSON 이 아님 (HTTP 상태 무관) | **UNKNOWN**. 응답 생성 주체를 확인할 수 없다(리뷰 P2-7) |
+| JSON 인데 `rt_cd` 가 없거나 빈 값·null 이고 `msg_cd` 도 없음 (`{}`, `{"output":…}`) | **UNKNOWN** (리뷰 P1-3). `msg_cd` 가 있으면 KIS 가 오류를 명시한 것으로 REJECT |
+| 401 · 본문 토큰 오류(EGW00121/123) | 현행: 토큰 갱신 후 같은 본문 재전송(최대 3회). 인증 거절은 접수 전이라는 전제다. 마지막 시도의 비-JSON 401 은 위 규칙으로 UNKNOWN |
 | retry=False 의 `aiohttp.ClientError`·`asyncio.TimeoutError` | **UNKNOWN**. 연결 수립 전 실패(ClientConnectorError)도 구분하지 않는다. 드물고, 한데 묶는 쪽이 안전하다 |
 | `submit_order` 에서 POST 진입 뒤의 예외 | **UNKNOWN**. 비-dict 본문, 접수 후 파싱 예외를 포함한다 |
+| POST 진입 뒤의 `asyncio.CancelledError`(종료 신호) | **UNKNOWN 기록 후 다시 raise** (리뷰 P1-4). 알림은 보내지 않는다 |
 | rt_cd 0 인데 ODNO 가 없음(TEMP_) | 범위 밖. 성공 경로를 바꾸지 않는다. 관측 0건 (§5 한계) |
 
 구현은 두 곳이다.
 
 - `_api_post` 의 해당 두 갈래가 반환 dict 에 `"_unknown": True` 를 싣는다. 취소(`retry=True`)에도 이 키가 실리지만 `cancel_order` 는 읽지 않으므로 무해하다.
-- `submit_order` 는 `_api_post` 호출 직전에 `posted = True` 를 세운다.
+- `submit_order` 는 `_api_post` 호출 직전에 `posted = True` 를 세운다. "POST 진입"은 `_api_post` 에 들어간 것까지를 뜻한다. 그 안의 rate-limit 대기 중 취소처럼 실제로는 전송 전인 경우도 UNKNOWN 으로 묶는다. 종료 순간에만 생기며, 보수적인 쪽(그날 BUY 보류)이다.
 
 **반환 계약 `Tuple[bool, str]` 은 그대로 둔다.** UNKNOWN 은 `(False, "[접수불명] …")` 로 돌려준다.
 
@@ -62,7 +64,7 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 
 **메서드**
 
-- `record(side, symbol, qty, reason, now)`: 오늘 항목을 추가하고 `atomic_write_json` 으로 저장한다. 쓰기가 실패해도 메모리 상태는 유지하고 ERROR 로그를 남긴다.
+- `record(side, symbol, qty, reason, now)`: 오늘 항목을 추가한다. 저장은 **파일의 오늘 항목을 다시 읽어 합친 뒤** `atomic_write_json` 으로 한다. 봇과 CLI 가 같은 파일을 써도 서로의 기록을 덮지 않게 하기 위해서다(리뷰 P1-6). 쓰기가 실패해도 메모리 상태는 유지하고 ERROR 로그를 남기며, 알림에 "재시작 보호 없음"을 붙인다(리뷰 P2-8).
 - `buy_hold_reason(today) -> Optional[str]`: 오늘 BUY UNKNOWN 이 하나라도 있으면 사유를 돌려준다.
 - `has_unknown_sell(symbol, today) -> bool`
 
@@ -83,11 +85,15 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 - 공개 메서드는 `unknown_buy_hold()` 와 `has_unknown_sell(symbol)` 이다.
 - "오늘"은 브로커 세션 판정과 같은 로컬 `datetime.now()` 를 쓴다(운영 서버 KST). 시험은 `now` 를 주입한다.
 
-**다른 프로세스와 공유하지 않는다.** 공유가 필요한 경로가 없기 때문이다.
+**실행 중인 프로세스끼리는 상태를 공유하지 않는다.** 파일은 **같은 날 재시작**(과 병합 저장)에만 쓰인다.
 
-- CLI(`liquidate_all`, `sell_specific`)는 전량 SELL 만 하므로 I1 이 보호한다.
 - 수동 풀매수는 봇 프로세스 안에서 돈다.
-- 파일은 **같은 날 재시작**에만 쓰인다.
+- CLI(`liquidate_all`, `sell_specific`)는 운영자가 직접 실행하는 도구이고, 이 단계의 D4 보장 범위 **밖**이다(리뷰 P1-6).
+  - `sell_specific` 은 임의 수량(분할 포함)을 직접 제출한다. 봇도 CLI 의 불명 주문을 재시작 전까지 보지 못한다.
+  - CLI 도 브로커를 거치므로 불명이면 파일에 기록되고 출력에 `[접수불명]` 이 찍힌다. 같은 날 봇을 재시작하면 반영된다.
+  - 봇 실행 중 CLI 거부는 절충안 **(3)단계**의 범위이며, 거기서 닫는다.
+
+**알려진 한계**: 저장이 실패한 채 같은 날 재시작하면 빈 장부로 열린다(이전 정상 파일이나 파일 부재가 남는다). 알림으로 운영자에게 알린다.
 
 **해제는 날짜가 바뀔 때만 일어난다(I2).**
 
@@ -99,6 +105,7 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 **차단 지점**
 
 - **브로커 게이트**(권위): `submit_order` 머리, 킬스위치 바로 뒤다. BUY 이고 `unknown_buy_hold()` 가 사유를 주면 `record_blocked` 를 남기고 `(False, reason)` 을 반환한다. 엔진·폴백·수동 풀매수를 모두 덮는다.
+- **전송 직전 재확인**(리뷰 P1-5): `_api_post(..., gate=...)` 를 추가한다. BUY 는 `gate=self.unknown_buy_hold` 를 넘긴다. `_api_post` 는 매 시도마다 `await self._rate_limit()` 직후, POST 전에 `gate()` 를 확인한다(401 재전송 포함). 사유가 있으면 전송하지 않고 `{"rt_cd":"-1","msg1":사유,"_blocked":True}` 를 반환하며, `submit_order` 는 이를 `record_blocked` + `(False, 사유)` 로 처리한다. 머리 게이트를 통과한 뒤 hashkey·rate-limit 을 기다리던 BUY 가, 그사이 생긴 UNKNOWN 을 넘어 전송되는 경쟁을 닫는다. 이미 전송된 주문은 되돌릴 수 없다(경계).
 - **엔진 조기 차단**(비용 절감): `on_signal` 의 "기존 포지션 보유 차단"(`engine.py:1847-1850`) 바로 뒤, 크로스 검증·LLM 호출 전이다. `getattr(broker, "unknown_buy_hold", None)` 가 호출 가능하고 **결과가 비어 있지 않은 str 일 때만** 차단한다. 가짜 브로커나 MagicMock 이 우연히 차단을 켜지 않게 하기 위해서다.
 
 **엔진의 BUY 실패 처리는 현행 그대로 둔다**(`clear_pending` + `block_symbol`).
@@ -112,13 +119,17 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 
 사용자 문구는 "같은 종목 SELL 재발행 금지"다. 그러나 전량까지 막으면 그날 그 종목의 손절이 꺼진다. 전량 재발행은 I1 이 막으므로 어느 답이 참이어도 안전하다. 그래서 금지는 분할에만 건다.
 
-**막는 곳 세 군데**
+"분할"의 판정: 엔진의 기존 `_sell_partial_intent`(수량 < 보유) **또는** 신호 메타의 명시적 `exit_action == "sell_partial"`. 불명 분할이 실제 체결되면 동기화가 보유량만 줄이고 ExitManager 의 `remaining_quantity` 는 그대로다. 그 상태에서 같은 단계가 재발행되면 수량 == 보유량이 되어 기존 판정으로는 "전량"이 된다(리뷰 P1-1). 그래서 명시적 액션을 같이 본다. 기존 취소 실패용 표식(`sell_partial_intent`)의 의미는 바꾸지 않는다.
 
-1. `on_signal`: `_sell_partial_intent` 를 정한 직후(`engine.py:2005-2018` 뒤)에 `if _sell_partial_intent and 불명SELL(sym): return None` 을 넣는다. pending 등록 전이라 정리할 장부가 없다.
-2. `_fallback_stale_sell`: 이 경로는 on_signal 을 거치지 않는다. `_partial_intent` 이고 불명SELL 이면 시장가를 재제출하지 않고 `clear_pending` 후 반환한다.
-3. `on_order` 좀비 카운터: 불명 SELL 종목의 `APBK0400` 은 세지 않는다. 살아 있는 불명 주문 때문에 전량 재발행이 수량 초과로 거절되는 것은 예상된 결과이지 좀비 신호가 아니다.
+**막는 곳 네 군데**
 
-스케줄러의 `rollback_stage` 는 그대로 둔다. 롤백 뒤 재발행이 1번에서 막히므로 약 3분마다 로그 한 줄이 남을 뿐 무해하다.
+1. **발생원 — ExitManager**(리뷰 P1-1·P1-2의 뿌리): `set_partial_exit_block(fn)` 훅을 추가한다(`set_pending_verifier` 와 같은 주입 방식, `run_trader.py:890` 옆에서 `broker.has_unknown_sell` 로 배선). `update_price` 의 "2. 분할 익절"(`exit_manager.py:1051`)에서 훅이 참이고 `current_stage` 가 NONE·FIRST·SECOND 이면 `_check_partial_exit` 를 건너뛴다.
+   - 손절(`:1043`)은 그보다 **앞**에서, 트레일링·본전 이동은 뒤에서 그대로 판정된다.
+   - 분할 신호 자체가 생기지 않으므로 스케줄러 `_exit_pending_symbols` 가 등록되지 않는다. 그래서 차단된 분할 pending 이 약 3분간 손절을 가리는 문제(P1-2)가 없다.
+   - pending_stage 설정·롤백 반복, 틱마다의 영속 쓰기도 생기지 않는다. THIRD→TRAILING 전환은 막지 않는다.
+2. **중앙 가드 — `on_signal`**: 수량을 정한 직후(`engine.py:2005-2018` 뒤)에 `if (분할) and 불명SELL(sym): return None` 을 넣는다. ExitManager 밖의 발행처를 위한 것이다. pending 등록 전이라 정리할 장부가 없다. pending 캐시에 `"sell_partial_action": True`(명시 액션)를 따로 남긴다.
+3. **`_fallback_stale_sell`**: 이 경로는 on_signal 을 거치지 않는다. (`sell_partial_intent` 또는 `sell_partial_action`) 이고 불명SELL 이면 시장가를 재제출하지 않고 `clear_pending` 후 반환한다.
+4. **`on_order` 좀비 카운터**: 불명 SELL 종목의 `APBK0400` 은 세지 않는다. 살아 있는 불명 주문 때문에 전량 재발행이 수량 초과로 거절되는 것은 예상된 결과이지 좀비 신호가 아니다.
 
 ### D5. 알림
 
@@ -142,26 +153,32 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 
 - **B1** `_api_post` 분류
   - HTTP 200 비-JSON → `_unknown`
-  - HTTP 403 비-JSON → `_unknown` 없음
   - retry=False 에서 TimeoutError·ClientError → `_unknown`, POST 1회
   - 세션 연결 실패 → `_unknown` 없음
   - 5xx JSON → 본문 그대로
+  - HTTP 403 비-JSON → `_unknown` (v2: 비-JSON 은 상태 무관 UNKNOWN)
 - **B2** `submit_order` UNKNOWN BUY
   - 반환이 `(False, "[접수불명]…")` 이다.
   - `EV_UNKNOWN` 1건, `EV_REJECT` 0건이 기록되고 추적 dict 는 비어 있다.
   - 다음 BUY 는 POST 0회로 차단되고 `record_blocked` 가 남는다. SELL 은 POST 된다.
 - **B3** UNKNOWN SELL → `has_unknown_sell(sym)` 이 참이고, BUY 는 보류되지 않는다.
-- **B4** POST 뒤 예외(본문 list) → UNKNOWN. POST 전 예외 → REJECT, 현행 문자열.
+- **B4** POST 뒤 예외(본문 list) → UNKNOWN. POST 전 예외 → REJECT, 현행 문자열. 응답 `{}`·`{"output":{}}`·`{"rt_cd":null}`·`{"rt_cd":""}` → UNKNOWN, `{"msg_cd":"EGW00201"}`(rt_cd 없음) → REJECT.
+- **B4b** POST 응답 대기 중 `CancelledError` → 다시 raise 되고, 같은 날 새 장부가 BUY 를 보류한다.
+- **B4c** 전송 직전 재확인: 첫 BUY 가 hashkey 를 기다리는 사이 다른 BUY 가 UNKNOWN 이 되면, 첫 BUY 는 POST 0회 · `record_blocked`. 401 재전송 직전에도 gate 가 걸린다.
 - **B5** 명시적 거절(rt_cd "1", msg_cd) → 현행 반환·원장, 보류 없음. 성공 경로의 반환·추적은 현행 그대로.
 - **B6** 영속
   - 같은 날 새 장부 → 보류. 다음 날 → 해제.
   - 깨진 파일: mtime 이 오늘이면 보류, 과거면 무시.
-  - 쓰기 실패 → 메모리 보류 유지.
+  - 쓰기 실패 → 메모리 보류 유지, 알림에 재시작 보호 없음 표시. 실패 뒤 새 장부는 보류하지 않는다(문서화된 한계를 고정).
+  - 같은 객체에서 날짜가 바뀌면 해제.
+  - 병합 저장: 다른 장부가 먼저 쓴 오늘 BUY 항목이 내 SELL 기록 뒤에도 남는다.
+  - mtime 은 `os.utime` 으로 고정하고, 시계는 `now` 로 주입한다. UTC/KST 실행이 시계 주입을 대체하지 않는다.
 
 **엔진**
 
 - **E1** BUY 신호에 보류 사유가 있으면 `None` 이고 크로스 검증을 부르지 않는다. 사유가 None 이거나 str 이 아니면 통과한다.
-- **E2** 분할 SELL 이 불명이면 `None`. 같은 종목의 전량 SELL(수량 미지정 또는 `exit_action=sell_all`)은 통과한다.
+- **E0** ExitManager: 훅이 참이면 분할 익절 조건을 만족해도 `update_price` 가 None 이고 pending_stage 는 None 이다. 같은 가격 흐름에서 손절선 아래로 가면 `sell_all` 이 나온다. 훅이 거짓이면 현행 분할이 나온다. 스케줄러 통합: 차단 후 다음 틱의 손절이 `_exit_pending_symbols` 에 가려지지 않는다.
+- **E2** 분할 SELL 이 불명이면 `None`. `exit_action="sell_partial"` 이고 수량 == 보유량이어도 `None` 이다(P1-1: 불명 체결 → 동기화로 보유만 줄어듦 → 같은 단계 재발행). 같은 종목의 전량 SELL(수량 미지정 또는 `exit_action=sell_all`)은 통과한다.
 - **E3** 폴백: 분할이 불명이면 제출 0회이고 pending 이 해제된다. 폴백 전량은 제출된다.
 - **E4** 불명 SELL 종목의 `APBK0400` 은 좀비 카운터에 들어가지 않는다. 불명이 아닌 종목은 현행대로 센다.
 
@@ -185,4 +202,18 @@ KIS 주문 POST(`_api_post(retry=False)`)가 서버에 닿은 뒤 응답을 잃�
 
 ## 7. 리뷰 기록
 
-(리뷰 후 기입)
+### 1회차 — 교차 공급자 설계 리뷰 (2026-09-29)
+
+- 대상 `29f3763`(v1). Codex, 요청 gpt-6-astra/xhigh. **실제 모델 gpt-6-astra, effort xhigh** 는 rollout 세션 파일로 확인했다(thread `01a0ea24-05ee-73a3-a082-7fbf8153e95f`).
+- 판정 **REQUEST_CHANGES** — P0 0 · P1 6 · P2 2. coordinator 가 전부 실코드와 대조해 확인했고, 모두 수용한다.
+
+| # | 지적 | 처분 (v2) |
+|---|---|---|
+| P1-1 | 불명 분할이 체결된 뒤 동기화로 보유만 줄면, 같은 단계 재발행이 "전량"으로 재분류돼 차단을 우회한다 | D4: 분할 판정에 명시 `exit_action=sell_partial` 추가 + ExitManager 발생원 차단. 시험 E0·E2 |
+| P1-2 | 엔진에서 버린 분할 신호의 스케줄러 pending 이 약 3분간 손절을 가린다 | D4-1: ExitManager 훅으로 분할 신호 자체를 만들지 않는다(스케줄러 pending 미등록). 시험 E0 통합 |
+| P1-3 | `rt_cd` 누락·빈 값·null JSON 이 REJECT 로 샌다 | D1: `rt_cd` 무효 + `msg_cd` 없음 → UNKNOWN. 시험 B4 |
+| P1-4 | 응답 대기 중 종료 취소(`CancelledError`)가 기록 없이 사라진다 | D1: POST 진입 뒤 취소는 UNKNOWN 기록 후 re-raise(전송 전 취소도 보수적으로 포함). 시험 B4b |
+| P1-5 | 머리 게이트를 통과한 BUY 가 대기 중 생긴 UNKNOWN 을 넘어 전송된다 | D3: `_api_post` 의 gate — rate-limit 대기 직후·매 시도(401 재전송 포함). 시험 B4c |
+| P1-6 | CLI 는 분할 SELL 도 하며, 두 프로세스가 같은 파일을 덮어쓸 수 있다 | D2: 병합 저장. CLI 는 이 단계 보장 범위 밖으로 명시((3)단계 선행조건). 시험 B6 병합 |
+| P2-7 | 비-JSON 4xx 를 접수 전 거절로 볼 근거가 약하다 | D1: 비-JSON 은 상태 무관 UNKNOWN. 401·토큰 재전송 전제를 표에 명시 |
+| P2-8 | 저장 실패 시 재시작 보호의 한계, mtime 시계 의존 | D2 한계 명시 + 알림 표시. 시험 B6 에 mtime 고정·날짜 전환·실패 뒤 재생성 추가 |
