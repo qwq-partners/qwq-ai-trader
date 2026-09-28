@@ -127,6 +127,20 @@ def _prev_trading_day(d: date, max_back: int = 10) -> Optional[date]:
     return None
 
 
+def _intraday_kospi_change(trend: Optional[dict], now: datetime, max_age_sec: float = 180) -> float:
+    """장중 KOSPI 당일 등락률(%) — kr_market_trend 루프가 2분마다 채우는 risk/manager 캐시에서 읽는다.
+
+    종목 change_pct(당일)와 같은 좌표여야 RS 비교가 성립한다(2026-09-28 — 없는 키 'c1' 대신 5일 c5 를
+    당일 등락처럼 쓰던 결함). 캐시가 없거나 max_age_sec 보다 묵으면 0.0 → 호출부가 RS 보정 정렬을 생략한다.
+    """
+    if not trend or trend.get("ts") is None:
+        return 0.0
+    if (now - trend["ts"]).total_seconds() >= max_age_sec:
+        return 0.0
+    value = trend.get("kospi_pct")
+    return float(value) if value is not None else 0.0
+
+
 def _today_bar_action(last_bar: Optional[date], today: date) -> Tuple[Optional[str], str]:
     """스크리너 종가열에 당일 잠정 종가를 어떻게 반영할지 판정 (T10 F13).
 
@@ -148,6 +162,30 @@ def _today_bar_action(last_bar: Optional[date], today: date) -> Tuple[Optional[s
     if prev is not None and last_bar == prev:
         return "append", ""
     return None, f"중간 거래일 누락(마지막 봉 {last_bar}, 직전 거래일 {prev})"
+
+
+async def _pick_safe_asset(stock_master, candidates) -> Tuple[Optional[str], str, int]:
+    """안전자산 후보 중 종목명이 키워드와 맞는 첫 종목 → (코드|None, 이름, 이름 조회 성공 수).
+
+    이름은 종목 마스터(DB)에서 읽는다 — KIS 현재가(FHKST01010100) 응답엔 종목명이 없어
+    08-31 이후 1278회 전부 빈 이름('API 장애 추정')으로 재시도만 돌았다(2026-09-28).
+    이름 조회 성공 0 이면 호출부가 다음 주기에 재시도하고, 조회는 됐는데 전부 미매칭이면 영구 비활성.
+    """
+    fetched = 0
+    for sym, keywords in candidates:
+        try:
+            name = ((await stock_master.get_name(sym)) or "").strip() if stock_master else ""
+        except Exception as e:
+            logger.warning(f"[안전자산] 후보 {sym} 이름 조회 실패 (일시 오류 가능): {e}")
+            continue
+        if not name:
+            continue
+        fetched += 1
+        if any(kw in name for kw in keywords):
+            logger.info(f"[안전자산] 후보 검증 통과: {sym} = '{name}' (키워드 {keywords[0]} 매칭)")
+            return sym, name, fetched
+        logger.warning(f"[안전자산] 후보 거부: {sym} = '{name}' 키워드({keywords}) 미매칭")
+    return None, "", fetched
 
 
 # 모닝브리프 사후 평가 훅의 최대 대기 시간 (LLM 지연이 20:30 진화 잡을 밀지 않게)
@@ -3651,24 +3689,16 @@ JSON:
                         _weighted_chg = 0.0
                         _regime_block_reason = ""
                         try:
-                            # 우선 RiskManager 캐시 활용 (이미 2분 주기 갱신)
-                            _rm = bot.engine.risk_manager if bot.engine else None
-                            _trend = getattr(_rm, "_market_trend", {}) if _rm else {}
-                            _trend_age = (datetime.now() - _trend["ts"]).total_seconds() if _trend.get("ts") else 999
-
-                            if _trend and _trend_age < 180:
-                                # 캐시 신선 (3분 이내) → 직접 사용
-                                _kospi_chg = _trend.get("kospi_pct", 0.0)
-                                _kosdaq_chg = _trend.get("kosdaq_pct", 0.0)
-                            else:
-                                # 캐시 만료 → API 직접 조회 (병렬)
-                                _kospi_q, _kosdaq_q = await asyncio.gather(
-                                    bot.broker.get_quote("069500"),  # KODEX 200 (KOSPI)
-                                    bot.broker.get_quote("229200"),  # KODEX KOSDAQ150
-                                    return_exceptions=True,
-                                )
-                                _kospi_chg = _kospi_q.get("change_pct", 0.0) if isinstance(_kospi_q, dict) else 0.0
-                                _kosdaq_chg = _kosdaq_q.get("change_pct", 0.0) if isinstance(_kosdaq_q, dict) else 0.0
+                            # KODEX200/KOSDAQ150 시세로 판정 (병렬). 2026-09-28: 예전 'RiskManager 캐시 우선' 분기는 캐시가
+                            # 없는 engine.risk_manager 를 읽어 한 번도 동작하지 않았다. 그 캐시(bot.risk_manager)는 한쪽
+                            # 지수 조회 실패도 0% 로 채워 차단을 놓칠 수 있어 되살리지 않고 지웠다 — 실제 동작은 그대로.
+                            _kospi_q, _kosdaq_q = await asyncio.gather(
+                                bot.broker.get_quote("069500"),  # KODEX 200 (KOSPI)
+                                bot.broker.get_quote("229200"),  # KODEX KOSDAQ150
+                                return_exceptions=True,
+                            )
+                            _kospi_chg = _kospi_q.get("change_pct", 0.0) if isinstance(_kospi_q, dict) else 0.0
+                            _kosdaq_chg = _kosdaq_q.get("change_pct", 0.0) if isinstance(_kosdaq_q, dict) else 0.0
 
                             # 가중 평균: KOSPI 60% + KOSDAQ 40%
                             _weighted_chg = _kospi_chg * 0.6 + _kosdaq_chg * 0.4
@@ -4179,13 +4209,10 @@ JSON:
                             _ib_today_cnt = self._ib_daily_count.get(_ib_today_key, 0)
 
                             # ── Step3: KOSPI 오늘 등락 조회 (RS 정렬 기준) ──
-                            _ib_kospi_chg = 0.0
-                            try:
-                                if bot.batch_analyzer and hasattr(bot.batch_analyzer, '_screener'):
-                                    _ib_kd = bot.batch_analyzer._screener.get_kospi_change()
-                                    _ib_kospi_chg = float(_ib_kd.get("c1", _ib_kd.get("c5", 0)))
-                            except Exception:
-                                pass
+                            # update_market_trend 캐시는 bot.risk_manager(risk/manager.py) 소유 — engine 쪽 아님
+                            _ib_kospi_chg = _intraday_kospi_change(
+                                getattr(bot.risk_manager, "_market_trend", None), datetime.now()
+                            )
 
                             # ATR 기반 동적 변동률 상한 계산
                             # ATR의 70% 수준까지 허용 (최소 config값, 최대 8%)
@@ -6593,40 +6620,16 @@ JSON:
 
                 # 2026-05-19 P0 사고 정정: 종목 키워드 검증 (지연 초기화)
                 if not SAFE_VALIDATED:
-                    _names_fetched = 0  # 이름 조회 성공 건수 — 0이면 API 장애로 간주해 재시도
-                    for _cand_sym, _keywords in SAFE_CANDIDATES:
-                        try:
-                            q = await bot.broker.get_quote(_cand_sym)
-                            if not q:
-                                continue
-                            _name = (q.get("name") or q.get("hts_kor_isnm") or "").strip()
-                            if not _name:
-                                continue
-                            _names_fetched += 1
-                            # 키워드 매칭 검증
-                            _matched = any(kw in _name for kw in _keywords)
-                            if _matched:
-                                SAFE_SYMBOL = _cand_sym
-                                SAFE_NAME = _name
-                                SAFE_VALIDATED = True
-                                logger.info(
-                                    f"[안전자산] 후보 검증 통과: {_cand_sym} = '{_name}' "
-                                    f"(키워드 {_keywords[0]} 매칭)"
-                                )
-                                break
-                            else:
-                                logger.warning(
-                                    f"[안전자산] 후보 거부: {_cand_sym} = '{_name}' "
-                                    f"키워드({_keywords}) 미매칭"
-                                )
-                        except Exception as _ve:
-                            logger.warning(f"[안전자산] 후보 {_cand_sym} 검증 실패 (일시 오류 가능): {_ve}")
+                    SAFE_SYMBOL, SAFE_NAME, _names_fetched = await _pick_safe_asset(
+                        getattr(bot, "stock_master", None), SAFE_CANDIDATES
+                    )
+                    SAFE_VALIDATED = SAFE_SYMBOL is not None
                     if not SAFE_VALIDATED:
                         if _names_fetched == 0:
-                            # 2026-08-05 사고 정정: KIS HTTP 500 등 일시 장애로 이름 조회가
-                            # 전부 실패한 경우까지 영구 비활성 처리하던 문제 — 다음 주기 재검증
+                            # 2026-08-05 사고 정정: 일시 장애로 이름 조회가 전부 실패한 경우까지
+                            # 영구 비활성 처리하던 문제 — 다음 주기 재검증
                             logger.warning(
-                                "[안전자산] 후보 이름 조회 전부 실패 (API 장애 추정) → 다음 주기 재검증"
+                                "[안전자산] 후보 이름 조회 전부 실패 (종목 마스터 미연결/장애) → 다음 주기 재검증"
                             )
                             continue
                         logger.error(
