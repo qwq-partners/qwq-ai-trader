@@ -2,8 +2,8 @@
 
 ## 2026-09-28 — docs: 엔진 본체 최소 설계 B (서면 설계, 구현 없음)
 
-- [설계 문서](docs/superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md): 인계 §8 전부가 아니라 계측 무결성(계좌 전체 체결 → DB writer 하나, 놓친 것은 보정으로 보이게)과 KIS 한 경로 실거래에 필요한 만큼만. 안전 기준은 "legacy 이상"(legacy 공통 한계는 새 방어 없이 명시). 결정 D11~D17 — 주문 유형 고정(정규장 SELL·BUY 시장가, 마감 LIMIT, KRX 만, 취소·정정 미송신), 20:05 장 종료(체결 적용·주문 종료)와 07:50 야간 대사(확정 잔고로 회계 확정·예약 해제, 채택 시 커서 닫기, 교차일 재생 없음, D3 개정), 방향별 미해결 잠금·UNKNOWN BUY 는 그날 전체 BUY 보류·무결성 실패 전체 정지, 모든 시작에 lease·폴백은 현행 재시작 수준일 때만, 장중 잔고 채택 없음·수량 초과 거절 절차, 한도 전부 유지·재봉인만 제거(B2-0 한도 인벤토리), `OrderRef.key` 기반 계좌 전체 체결 수집·외부 체결·닫힌 lot 뒤 새 lot·한 트랜잭션 projection.
-- Codex 교차 공급자 리뷰(gpt-6-astra/xhigh) 1차 `673b1b2`·2차 `4b41058` 모두 REQUEST_CHANGES — 근거 코드를 coordinator 가 직접 확인해 반영한 것이 3판. 사용자 확인 7건 명시. 코드·설정·운영 변경 0.
+- [설계 문서](docs/superpowers/specs/2026-09-28-engine-b-minimal-kis-owner-design.md): 인계 §8 전부가 아니라 계측 무결성(계좌 전체 체결 → DB writer 하나, 놓친 것은 보정으로 보이게)과 KIS 한 경로 실거래에 필요한 만큼만. 안전 기준은 "legacy 이상"(legacy 공통 한계는 새 방어 없이 명시). 결정 D11~D17 — 주문 유형 고정(정규장 SELL·BUY 시장가, 마감 LIMIT, KRX 만, 취소·정정 미송신), 20:05 장 종료(체결 적용·주문 종료)와 야간 대사(밤 잔고를 경제 checkpoint 로 예약 해제·채택 시 경제 커서 닫기, 기록 완전성은 `execution_day_status`·DB 백필로 분리, 교차일 경제 재생 없음, D3 개정), 모든 시작의 전일 처리, 조용한 종목만 장중 채택, 식별된 외부 SELL 좁은 예외, 방향별 미해결 잠금·UNKNOWN BUY 는 그날 전체 BUY 보류·무결성 실패 전체 정지, 모든 시작에 lease·폴백은 현행 재시작 수준일 때만, 장중 잔고 채택 없음·수량 초과 거절 절차, 한도 전부 유지·재봉인만 제거(B2-0 한도 인벤토리), `OrderRef.key` 기반 계좌 전체 체결 수집·외부 체결·닫힌 lot 뒤 새 lot·한 트랜잭션 projection.
+- Codex 교차 공급자 리뷰(gpt-6-astra/xhigh) 1차 `673b1b2`·2차 `4b41058`·3차 `9acef09` 모두 REQUEST_CHANGES(P1 9→9→5) — 근거 코드를 coordinator 가 직접 확인해 반영한 것이 4판이며 **4회차 리뷰는 받지 않았다**(자동 반복 3회 상한). 사용자 확인 8건 명시. 코드·설정·운영 변경 0.
 
 ## 2026-09-28 — B1 실행기 결합 후보 인수 (원형 tiny profile·전체 UTC/KST 통과, feature 통합)
 
