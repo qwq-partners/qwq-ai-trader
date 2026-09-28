@@ -6,20 +6,26 @@
 
 ## 활성 체크포인트
 
-### 2026-09-28 — KOSPI 지수 원천·KR 휴장일 커버리지 (PR 미병합·미배포)
+### 2026-09-28 — KOSPI 지수 원천·KR 휴장일 커버리지·장중 RS/안전자산 (15:38 KST 배포 main `d551ab9`, PID3162715)
 
 - [ ] 배포 후 첫 08:30 `[변동성타게팅]` 로그가 `source=FDR:YAHOO:^KS11`·마지막 봉 = 직전 거래일인지, `vol_targeting.json` 에
   `last_bar_date`·`source` 가 기록되는지 확인. 값은 진단 추정 31.36%/×0.797 부근(이전 31.81%/×0.786 은 09-17 정지 자료).
 - [ ] 08:20/13:30 스윙스크리너가 KS11 을 읽지 않고 Yahoo 로 fresh 인지(`[KOSPI벤치마크] 자료 제외` 경고 0), 08:10/12:00 LLM레짐
   입력 결측에 `KOSPI봉` 이 없는지. Yahoo 가 개장 전 당일 NaN 행을 내면 invalid_close_history → KS11(stale) 로 떨어질 수 있다(미관측).
 - [ ] 08:40 수확 shadow 성공(체제 게이트 fresh). 실패하면 사유가 하트비트에 남고 10분 재시도 — 커서가 전진하지 않았는지 확인.
-- [ ] 기동 로그 `[KISMarketData] 휴장일 조회 완료: YYYYMM → N일 (조회 k회)` 의 k 가 2 안팎인지, 뒤 조회 실패 warning 이 없는지.
+- [x] 기동 로그 `[KISMarketData] 휴장일 조회 완료: YYYYMM → N일 (조회 k회)` 의 k 가 2 안팎인지, 뒤 조회 실패 warning 이 없는지.
+  ✅ 09-28 15:38: `202609 → 18일 (조회 2회)`, `202610 → 16일 (조회 2회)` — 두 번째 응답이 다음 달 앞부분까지 덮어 포함(9월 10+10월초 8, 10월 11+11월초 5), 합집합 26일, 실패 warning 0.
 - [ ] 다음 평일 휴장(10-05 개천절 대체, 10-09 한글날, 12-25, 12-31)에 LLM레짐·안전자산 루프·스크리너가 돌지 않는지.
 - [ ] **EGW00215 (코드 무변경, 09-28 이 PR #90 계측 첫 거래일):** 장 마감 뒤 `/api/health` `broker.kis_requests` 를 07:17:32 기준선과 차분한다.
   기준선(PID2574272, process_lifetime): TTTC8434R portfolio_sync/account_summary attempts 583·retries 0·egw00215 0, startup 1,
   dashboard_settlement/positions 1, portfolio_sync/positions 583 calls 전부 cache_hit, unknown/other/other attempts 52263·retries 183·http_error 182.
   egw00215>0 인 source 가 fill_check/dashboard 에 몰리면 그 호출자 조회를 줄이고, sync 뿐이면 8434R/8908R 간격, 고르게 퍼지면 같은 계좌 외부 사용을 의심한다.
   그 전에는 재시도·리미터를 건드리지 않는다. 로그 교차 확인은 `note_ledger_rejection` 줄만 센다(브로커 줄과 중복).
+  ✅ 09-28 결과(07:17→15:36 차분, 재시작 전 스냅샷): EGW00215 **65건 전부 portfolio_sync/account_summary(8434R)** — 시도 944·재시도 63(재시도 뒤 실패 2).
+  fill_check·dashboard 0, 같은 동기화의 orderable_cash(8908R) 1462 시도 0. 리미터는 이미 원장 1.05초·8434R 2.1초 간격이라 **간격 가설로는 설명 안 됨** →
+  다음 후보: 같은 계좌 외부 사용(HTS/MTS) 또는 서버 집계 방식. 재시도가 거의 전부 흡수해 코드 변경 보류(후속 조사).
+- [ ] 09-29 09:30 이후 첫 장중 주기 `[안전자산] 후보 거부` 3줄 + `모든 후보 검증 실패 → 자동 운용 영구 비활성` 1줄, 주문 0(운영 DB 이름 확인됨 — B 절).
+- [ ] 장중 돌파 `[장중품질] KOSPI=+x.xx% → RS 보정 정렬 적용` 의 값이 당일 KOSPI 등락(대시보드 지수)과 같은지(이전엔 5일 c5).
 
 ### 2026-09-23 — 호출 계측·매도 원인·지수 신선도 (09-23 23:18 KST 배포, PID2386785)
 
