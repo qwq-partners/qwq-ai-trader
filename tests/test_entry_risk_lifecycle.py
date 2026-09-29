@@ -190,8 +190,8 @@ def test_snapshot_planned_risk_within_budget(home, monkeypatch):
 
 # ── 주문 경로: 주문 캐시·signal_events 로그 ────────────────────────────────────
 
-def _order_path(monkeypatch, rm, sig):
-    """실제 on_signal(BUY) 로 주문 캐시·_log_sig 까지 구동. 게이트는 통과 스텁."""
+def _order_path(monkeypatch, rm, sig, cv_delta=0):
+    """실제 on_signal(BUY) 로 주문 캐시·_log_sig 까지 구동. 게이트는 통과 스텁(cv_delta 만큼 점수 조정)."""
     logged = []
 
     class _FakeSigLog:
@@ -202,7 +202,7 @@ def _order_path(monkeypatch, rm, sig):
     monkeypatch.setattr(eng._SigLog, "get", staticmethod(lambda: _FakeSigLog()))
 
     rm._cross_validator = SimpleNamespace(
-        validate=lambda **kw: (True, kw["score"], ""), last_memory_adj=0,
+        validate=lambda **kw: (True, kw["score"] + cv_delta, ""), last_memory_adj=0,
         last_llm_context={},
     )
     rm._risk_validator = None

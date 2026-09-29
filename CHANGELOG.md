@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — fix: 크로스 검증 가점을 '감점'으로 표시·집계하던 문제 (표시·기록·집계만, 미배포)
+
+- **문제(사용자가 대시보드에서 발견):** 크로스 검증으로 점수가 **오른** 신호(100→103, 87→99)가 "감점"으로 보였다. 가점 규칙(점심 +5·외국인 매수 상위 섹터 +5·메모리 보정 ±·전문가 패널 +bonus)이 `penalties` 목록에 감점과 함께 들어가, ① `CrossStrategyValidator` 가 조정이 있으면 방향과 무관하게 `penalized` 를 세고 "감점" 로그를 남겼고 ② 엔진이 `_cv_score != event.score` 면 `block_reason="크로스 검증 감점 a→b"` 로 기록했고 ③ 대시보드가 penalized 를 무조건 "감점"으로 그렸고 ④ 게이트 성적표가 가점·감점을 `PEN_G2_cross` 한 버킷에 묶었다. 지난 1주 로그의 "감점" 63건 중 **32건이 실제로는 상승, 31건이 하락**이었다.
+- **결정 — DB 스키마·event_type 무변경:** `penalized` 는 "크로스 검증/LLM 조정 후 통과" 범주로 그대로 두고, 방향은 저장된 점수로 판정한다. **가점 = `event_type='penalized'` ∧ `block_gate='G2_cross'` ∧ `adjusted_score > score`**(`score`=G2 이전 원점수, `adjusted_score`=G2 이후 — `engine._log_sig`). G4_llm soft-reject 행도 같은 두 점수를 싣기 때문에 G2 가 올린 신호가 G4 에서 거부되면 조정 > 원이 된다 → G4_llm 은 점수와 무관하게 항상 감점(soft-reject). 판정이 저장된 열만 쓰므로 **이미 쌓인 과거 행에도 소급 적용**된다(재기록·마이그레이션 없음).
+- `src/data/storage/signal_event_storage.py`: 판정식 `BOOST_SQL`·`is_cross_boost()`(한 곳). `get_stats` 요약에 `boosted` 추가, `penalized` 는 가점을 뺀 수. `get_recent(event_type=…)` 가 `boosted`(가점만)를 받고 `penalized` 는 가점을 뺀다. 기본 조회의 `IN ('passed','blocked','penalized')` 유지.
+- `src/core/cross_validator.py`: 순 조정 부호로 통계·로그를 가른다 — 양수 `boosted`·"가점", 음수 `penalized`·"감점", 0 은 둘 다 세지 않고 "조정 상쇄" 한 줄. `_stats` 초기값 두 곳에 `boosted`. 점수 계산·캡·차단 판정 무변경.
+- `src/core/engine.py`: G2 조정 행 `block_reason` 이 방향에 따라 "크로스 검증 가점/감점 a→b"(event_type·그 밖의 필드 무변경).
+- `src/analytics/gate_performance.py`: 가점 행은 `BOOST_G2_cross` 버킷, 그 외 penalized 는 기존 `PEN_<gate>`.
+- 대시보드: `dashboard.js` `sigKind()`(판정식 JS 사본) — 가점 행은 초록 "가점"·점수 `a→b` 초록, 통계 칩 "가점 N"·SSE 실시간 카운트 분리, `index.html` 필터 "가점만"(`type=boosted`), `engine.js` AI 패널 "가점 N건"(`/api/risk` 의 `cross_validator.boosted`). API 라우트는 값을 그대로 전달(무변경).
+- `quality_validator._check_cross_validation`: `penalized` 를 읽기만 하고 판정(차단율 = blocked/total)에 쓰지 않는다 → 동작 무변경(결과의 `stats` 사본에 `boosted` 키가 추가될 뿐).
+- 검증: 신규 `tests/test_cross_validation_boost_label.py` 12건(검증기 가점/감점/상쇄 통계·로그 — 시계 동결, 엔진 사유 2건, 저장소 요약·필터를 sqlite 에서 실제 SQL 로 실행 — G4_llm 상승 행은 감점, SQL·파이썬 판정 일치, 게이트 성적표 버킷), 기존 `tests/test_t11_entry_plan.py` 가짜 행에 `boosted` 추가·`tests/test_entry_risk_lifecycle.py` `_order_path(cv_delta=)`. 변이 7종 kill(SQL/파이썬 `G2_cross` 조건 제거·부호 반전, 검증기 boosted 분기 제거, 엔진 방향 반전, 성적표 BOOST 버킷 제거), 모두 sha256 복원 확인. 전체 UTC·KST 각 **2344 passed / 2 xfailed**(기준 2332 + 신규 12), 격리 0.
+- 주문·전략·위험 설정·점수 계산·차단 판정·사이징 변경 0. `.env`·킬스위치 변경 0. 추가 KIS 호출 0.
+
 ## 2026-09-29 — fix: 주문 POST 접수 불명(UNKNOWN) 분리 — 그날 BUY 보류·불명 SELL 종목 분할 재발행 금지 (절충안 2단계, 미배포)
 
 - 설계 [2026-09-29-order-post-unknown-design.md](docs/superpowers/specs/2026-09-29-order-post-unknown-design.md) v2 구현(구현 커밋 `5e8d730`, 구현 리뷰 1회차 반영 `7c57bb1`). 돈 경로 — 교차 공급자 구현 리뷰 1회차(Codex, rollout gpt-6-astra/xhigh) REQUEST_CHANGES(P1 2·P2 2)를 처분했고 재리뷰 전이며 **미배포**.

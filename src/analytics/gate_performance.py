@@ -35,6 +35,8 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from ..data.storage.signal_event_storage import is_cross_boost
+
 CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 RESULT_DIR = CACHE_DIR / "gate_performance"
 
@@ -202,7 +204,9 @@ class GatePerformanceAnalyzer:
             if s["event_type"] == "passed":
                 gate = "PASSED(대조군)"
             elif s["event_type"] == "penalized":
-                gate = f"PEN_{s.get('block_gate') or 'UNKNOWN'}"   # 감점·soft-reject (G4 LLM 등) — 이전엔 미측정
+                # G2 가점은 별도 버킷 (2026-09-29 — 이전엔 PEN_G2_cross 에 감점과 섞였다)
+                gate = ("BOOST_G2_cross" if is_cross_boost(s)
+                        else f"PEN_{s.get('block_gate') or 'UNKNOWN'}")   # 감점·soft-reject (G4 LLM 등)
             else:
                 gate = s.get("block_gate") or "UNKNOWN"
             # 2026-09-13 WikiSkill 계측: G4 LLM 2차 검증에 위키 컨텍스트가 있었던 건은 별도 버킷
