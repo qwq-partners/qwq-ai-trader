@@ -1,6 +1,27 @@
 # QWQ AI Trader - Changelog
 
-## 2026-09-29 — fix: 후속 과제 3건 — sell_specific 폴백 수량 · 재시작 시 살아 있는 BUY 보류 · 게이트 보고/KOSPI 이력 검증 (미배포)
+## 2026-09-29 — ops: main `785f1fe` 배포 (PR #103 + #104), 20:47 KST · 초과수익 원장 첫 실행 결과
+
+- **지시**: 사용자가 PR #103 을 "오늘 밤 20:45 뒤 배포"로, PR #104 를 "#103 + #104 함께"로 선택했다. `config/evolved_overrides.yml` 미커밋 수정 보존은 이번 배포 건으로 다시 승인받았다. 두 PR 모두 필수 verify 통과 뒤 병합했다(#103 `0238e2e`, #104 `785f1fe`). 병합 트리는 시험한 트리와 diff 0줄이다.
+- **20:30 초과수익 원장 첫 실행 (배포 전 PID3588061)**
+  - 로그: `[초과수익] 원장 갱신: 행 263 (포함 251) 대기 1 drift 0 평균 초과 -0.016634 (measured)`. `~/.cache/ai_trader/excess_return/` 에 파일 4개가 생겼다.
+  - **KODEX200 대비 포지션당 평균 초과수익 −1.66%** (중앙값 −2.06%, 손절 클립 평균 −1.43%), **t = −3.98**.
+  - 초과손익 합계 **−907.4만 원**, 상위 3건을 빼면 −1,054.2만 원.
+  - 제외: sync_entry 7(−30.5만), lots_ambiguous 2, quantity_mismatch 1(−16.2만), exits_aggregated 2.
+  - `day_status_missing 251` 은 과거 거래일에 대사 행이 없어서 생긴 값으로 예상한 동작이다. 오늘 `execution_day_status` 행은 DB 를 조회하지 않아 확인하지 못했다(로그에 경고 없음).
+  - 실거래 성과가 KODEX200 보다 **통계적으로 유의하게 뒤처진다**는 첫 자동 측정이다.
+- **사전 점검 (20:45:48)**: NXT 마감 뒤, pending `[]`, 부하 0.03. 운영 checkout 은 `4b8e146`(main, 문서만)이고 porcelain 은 overrides 1줄이다. 보호 지문 7종을 기록했다.
+- **배포**
+  - 보존 사본으로 `785f1fe` 배포 → rc=0, `[완료] 배포 785f1fe (이전 4b8e146)`. 운영 verify **2443 passed / 2 xfailed**(79초), 격리 0, 자동 롤백 없음.
+  - 새 **PID3746308**, 20:47:31 기동. 운영 checkout 은 main 으로 복귀했다(diff 0, overrides 보존).
+- **사후 점검 (20:47~20:50)**
+  - 기동 로그 정상(연결·TR legacy·검증자·분할 익절 훅·엔진 시작). ERROR 0, `[접수불명]` 0, `order_unknown.json` 없음, pending `[]`.
+  - **재시작 미체결 조회 0회**(장외 기동, 설계대로). 락 파일 유지(PID 7바이트).
+  - **운영 수용 점검**: 봇 가동 중 `hold_or_exit("check")` → 안내 4줄 + exit 2. 락 파일 내용은 바뀌지 않았다.
+  - ops_check: HTTP 500·EGW00201·EGW00215·토큰 오류 0, 정체·실패 누적 0. 보호 지문 7종 동일. 보유 3종목, 현금 19.4%.
+- 주문·전략·위험 설정·킬스위치·`.env` 변경 0.
+
+## 2026-09-29 — fix: 후속 과제 3건 — sell_specific 폴백 수량 · 재시작 시 살아 있는 BUY 보류 · 게이트 보고/KOSPI 이력 검증 (PR #104) (09-29 20:47 KST 배포 main `785f1fe`)
 
 - **지시:** 사용자 "후속과제도 개선 바로 들어가자". 격리 worktree 3개에서 병렬로 구현(Claude Opus 5.5, 요청 opus/high)한 뒤 coordinator 가 cherry-pick 으로 통합.
 - **sell_specific 폴백 수량 (`scripts/sell_specific.py`)**
@@ -26,7 +47,7 @@
   - 시험 보강: main 흐름 가짜 브로커, 경계값, 음수 종가, await·connect 뒤 배선, 07:59/15:35/20:00, 마지막 페이지 정상 경로.
 - 주문·전략·위험 설정 변경 0.
 
-## 2026-09-29 — fix: 봇 실행 중 주문 CLI 거부 + EV_ACCEPT 주문 신원(OrderRef) — **미배포** (절충안 3단계)
+## 2026-09-29 — fix: 봇 실행 중 주문 CLI 거부 + EV_ACCEPT 주문 신원(OrderRef) (절충안 3단계, PR #103) (09-29 20:47 KST 배포 main `785f1fe`)
 
 - **설계**: `docs/superpowers/specs/2026-09-29-cli-refusal-orderref-design.md` v2 (설계 리뷰 1회차 반영). 브랜치 `fix/cli-refusal-orderref-20260929`.
 - **CLI 거부 (D1)**
