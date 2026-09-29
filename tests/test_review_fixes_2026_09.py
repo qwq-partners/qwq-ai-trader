@@ -181,6 +181,8 @@ def _post_broker(session, monkeypatch):
         return None
 
     monkeypatch.setattr(kis_kr.asyncio, "sleep", _no_sleep)
+    # 매수 TR 전송 직전 킬스위치 재검사(2026-09-29)가 운영 플래그 파일을 읽지 않게 한다
+    monkeypatch.setattr(kis_kr.kill_switch, "check", lambda side, market="KR": (True, ""))
     b = _bare_broker()
     b._session = session
     b._token = "tok"
