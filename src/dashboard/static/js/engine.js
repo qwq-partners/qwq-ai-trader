@@ -421,13 +421,14 @@ async function fetchAILog() {
         const cvEl = document.getElementById('ai-cv-content');
         if (cvEl) {
             const cv = d.cross_validator || {};
-            const total = cv.total || 0, passed = cv.passed || 0, blocked = cv.blocked || 0, penalized = cv.penalized || 0;
+            const total = cv.total || 0, passed = cv.passed || 0, blocked = cv.blocked || 0, penalized = cv.penalized || 0, boosted = cv.boosted || 0;
             const passRate = total > 0 ? (passed / total * 100).toFixed(1) : '--';
             cvEl.innerHTML =
                 '<div class="mr"><span class="mr-lbl">오늘 시그널</span><span class="mr-val mono">' + total + '건</span></div>' +
                 '<div class="mr"><span class="mr-lbl">통과</span><span class="mr-val mono" style="color:var(--acc-green)">' + passed + '건</span></div>' +
                 '<div class="mr"><span class="mr-lbl">차단</span><span class="mr-val mono" style="color:var(--acc-red)">' + blocked + '건</span></div>' +
                 '<div class="mr"><span class="mr-lbl">감점</span><span class="mr-val mono" style="color:var(--acc-amber)">' + penalized + '건</span></div>' +
+                '<div class="mr"><span class="mr-lbl">가점</span><span class="mr-val mono" style="color:var(--acc-green)">' + boosted + '건</span></div>' +
                 '<div class="mr"><span class="mr-lbl">통과율</span><span class="mr-val mono">' + passRate + '%</span></div>' +
                 '<div style="margin-top:8px;"><div class="confidence-bar"><div class="confidence-fill" style="width:' + (total > 0 ? (passed / total * 100) : 0) + '%;background:var(--acc-green);"></div></div></div>';
         }

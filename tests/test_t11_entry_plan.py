@@ -785,7 +785,7 @@ def test_signal_event_stats_queries_all_exclude_shadow_rows_behaviourally():
     class _Conn:
         async def fetchrow(self, sql, *a):
             executed.append(sql)
-            return _Row(total_buy=0, passed=0, blocked=0, penalized=0)
+            return _Row(total_buy=0, passed=0, blocked=0, penalized=0, boosted=0)
         async def fetch(self, sql, *a):
             executed.append(sql)
             return []

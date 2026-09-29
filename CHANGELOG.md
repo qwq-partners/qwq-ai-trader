@@ -1,5 +1,20 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — fix: 크로스 검증 가점을 '감점'으로 표시·집계하던 문제 (표시·기록·집계만, 미배포)
+
+- **문제(사용자가 대시보드에서 발견):** 크로스 검증으로 점수가 **오른** 신호(100→103, 87→99)가 "감점"으로 보였다. 가점 규칙(점심 +5·외국인 매수 상위 섹터 +5·메모리 보정 ±·전문가 패널 +bonus)이 `penalties` 목록에 감점과 함께 들어가, ① `CrossStrategyValidator` 가 조정이 있으면 방향과 무관하게 `penalized` 를 세고 "감점" 로그를 남겼고 ② 엔진이 `_cv_score != event.score` 면 `block_reason="크로스 검증 감점 a→b"` 로 기록했고 ③ 대시보드가 penalized 를 무조건 "감점"으로 그렸고 ④ 게이트 성적표가 가점·감점을 `PEN_G2_cross` 한 버킷에 묶었다. 지난 1주 로그의 "감점" 63건 중 **32건이 실제로는 상승, 31건이 하락**이었다.
+- **결정 — DB 스키마·event_type 무변경:** `penalized` 는 "크로스 검증/LLM 조정 후 통과" 범주로 그대로 두고, 방향은 저장된 점수로 판정한다. **가점 = `event_type='penalized'` ∧ `block_gate='G2_cross'` ∧ `adjusted_score > score`**(`score`=G2 이전 원점수, `adjusted_score`=G2 이후 — `engine._log_sig`). G4_llm soft-reject 행도 같은 두 점수를 싣기 때문에 G2 가 올린 신호가 G4 에서 거부되면 조정 > 원이 된다 → G4_llm 은 점수와 무관하게 항상 감점(soft-reject). 판정이 저장된 열만 쓰므로 **이미 쌓인 과거 행에도 소급 적용**된다(재기록·마이그레이션 없음).
+- `src/data/storage/signal_event_storage.py`: 판정식 `BOOST_SQL`·`is_cross_boost()`(한 곳). `get_stats` 요약에 `boosted` 추가, `penalized` 는 가점을 뺀 수. `get_recent(event_type=…)` 가 `boosted`(가점만)를 받고 `penalized` 는 가점을 뺀다. 기본 조회의 `IN ('passed','blocked','penalized')` 유지.
+- `src/core/cross_validator.py`: 순 조정 부호로 통계·로그를 가른다 — 양수 `boosted`·"가점", 음수 `penalized`·"감점", 0 은 둘 다 세지 않고 "조정 상쇄" 한 줄. `_stats` 초기값 두 곳에 `boosted`. 점수 계산·캡·차단 판정 무변경.
+- `src/core/engine.py`: G2 조정 행 `block_reason` 이 방향에 따라 "크로스 검증 가점/감점 a→b"(event_type·그 밖의 필드 무변경).
+- `src/analytics/gate_performance.py`: 가점 행은 `BOOST_G2_cross` 버킷, 그 외 penalized 는 기존 `PEN_<gate>`. 이 두 계열(`|wiki` 접미사 포함)은 통과 신호라 판정에서 차단형 권고("게이트가 수익을 버리고 있음. 완화 검토"/"선별 효과 있음")를 빼고 중립 한 줄("점수 조정 후 통과 신호 … — 차단 게이트 아님, 완화/강화 판정 대상 아님")로 쓴다(표본 부족 검사 뒤 — 30건 미만은 기존 "표본 부족", 대조군이 30건 미만이면 비교값 대신 "대조군 표본 부족"). 상세 리포트도 "기회손실/회피성공" 대신 "+3% 이상/-3% 이하" 비율(리뷰 P1 — 가점 버킷에 권고가 거꾸로 붙어 매주 텔레그램으로 나갈 뻔했다. `PEN_` 은 원래부터 통과 신호를 "차단 신호"로 불렀다).
+- **해석 주의:** ① 2026-04-23(`52f1ca0`) 이전 행은 `score` 에도 조정 후 점수가 들어가 `score == adjusted_score` 라 방향을 알 수 없어 감점으로 남는다(소급 범위 한계). ② 이번 배포부터 성적표 `PEN_G2_cross` 시계열의 의미가 바뀐다(가점 분리) — 이전 주간 보고와 직접 비교하지 않는다. ③ 검증기 "가점" 카운트(AI 패널, 프로세스 메모리·당일)는 뒤이어 최소 점수 미달로 차단된 건을 포함할 수 있고, 시그널 칩(DB·7일, 기록된 통과 행)과 원천·기간이 달라 수가 맞지 않을 수 있다.
+- 대시보드: `dashboard.js` `sigKind()`(판정식 JS 사본) — 가점 행은 초록 "가점"·점수 `a→b` 초록, 통계 칩 "가점 N"·SSE 실시간 카운트 분리, `index.html` 필터 "가점만"(`type=boosted`), `engine.js` AI 패널 "가점 N건"(`/api/risk` 의 `cross_validator.boosted`). API 라우트는 값을 그대로 전달(무변경). SSE 실시간 행은 현재 필터에 맞을 때만 목록에 넣는다(통계는 모든 이벤트로 갱신 — 필터 목록에 다른 유형이 섞이던 문제). G4_llm 행은 점수를 조정 후 한 칸만 표시(`score` 가 G2 이전 점수라 "감점" 옆에 상승 화살표가 보였다).
+- `quality_validator._check_cross_validation`: `penalized` 를 읽기만 하고 판정(차단율 = blocked/total)에 쓰지 않는다 → 동작 무변경(결과의 `stats` 사본에 `boosted` 키가 추가될 뿐).
+- 검증: 신규 `tests/test_cross_validation_boost_label.py` 14건(성적표 판정·상세 문구 — BOOST 양·음·`|wiki`, PEN 양, 차단 게이트 대조군, BOOST 1건 "표본 부족"·대조군 29건 "대조군 표본 부족" 포함, 검증기 가점/감점/상쇄 통계·로그 — 시계 동결, 엔진 사유 2건, 저장소 요약·필터를 sqlite 에서 실제 SQL 로 실행 — G4_llm 상승 행은 감점, SQL·파이썬 판정 일치, 게이트 성적표 버킷), 기존 `tests/test_t11_entry_plan.py` 가짜 행에 `boosted` 추가·`tests/test_entry_risk_lifecycle.py` `_order_path(cv_delta=)`. 변이 11종 kill(SQL/파이썬 `G2_cross` 조건 제거·부호 반전, 검증기 boosted 분기 제거, 엔진 방향 반전, 성적표 BOOST 버킷 제거, 판정의 BOOST_/PEN_ 제외 조건 각각 제거, 중립 분기를 표본 검사 앞으로 되돌림, 대조군 None 처리 제거), 모두 sha256 복원 확인. 전체 UTC·KST 각 **2346 passed / 2 xfailed**(기준 2332 + 신규 14), 격리 0.
+- **후속 과제(이번 범위 밖):** 차단 게이트 판정(`_build_verdicts` 의 ✅·➖ 분기)도 대조군 30건 미만(`control_avg is None`)이면 "통과 +0.00%" 로 없는 비교값을 찍는다 — 기존 동작, 별도 수정.
+- 주문·전략·위험 설정·점수 계산·차단 판정·사이징 변경 0. `.env`·킬스위치 변경 0. 추가 KIS 호출 0.
+
 ## 2026-09-29 — fix: KOSPI 원천이 모두 막히면 수확 shadow·스윙스크리너 레짐도 KODEX200(069500) 최후 대체 (결정 R1, 미배포)
 
 - **원인(09-29 운영 로그·공개 시세 확인):** Yahoo ^KS11 일봉에서 09-28(월, 거래일) 행이 빠졌다(yfinance 에 행 없음). FDR `YAHOO:^KS11` 은 그 날짜를 NaN 종가로 돌려줘 `validate_benchmark` 가 `invalid_close_history` 로 이력 전체를 거부하고(09-28 설계 계약 — dropna·보간 안 함, **무변경**), FDR `KS11` 은 09-17 에서 정지(stale). 그 결과 ① 수확 shadow 08:40 이 11분마다 `RuntimeError`·하트비트 정체 경보, ② 스윙스크리너 벤치마크 결측 → `get_market_regime()` neutral → bear·caution 때의 SEPA/VCP 차단·상향이 꺼지고 MRS 가 빠졌다.
