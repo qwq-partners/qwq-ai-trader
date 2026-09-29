@@ -294,6 +294,35 @@ def test_history_trim_handles_timezone_aware_index_and_empty_result():
     assert source == "FDR:KS11"
 
 
+def test_history_skips_source_with_nan_or_nonpositive_close(monkeypatch):
+    """반환 구간 종가에 NaN/inf/0 이하가 있으면 그 원천을 건너뛴다 — dropna·보간 없이 (2026-09-29)."""
+    warnings = []
+    monkeypatch.setattr(kb.logger, "warning", lambda msg: warnings.append(msg))
+    nan = frame("2026-09-28")
+    nan.iloc[-1, 0] = float("nan")                         # 09-29 Yahoo ^KS11 의 09-28 NaN 행
+    fetch, _ = range_stub(**{"YAHOO:^KS11": nan, "KS11": frame("2026-09-28")})
+    df, source = kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch)
+    assert source == "FDR:KS11" and df["Close"].notna().all() and len(df) == 60
+    assert any("YAHOO:^KS11" in w and "원천 제외" in w for w in warnings)
+    zero = frame("2026-09-28")
+    zero.iloc[5, 0] = 0.0
+    fetch, _ = range_stub(**{"YAHOO:^KS11": nan, "KS11": zero})
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch) == (None, None)
+    inf = frame("2026-09-28")
+    inf.iloc[3, 0] = float("inf")
+    fetch, _ = range_stub(**{"YAHOO:^KS11": inf, "KS11": frame("2026-09-28")})
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch)[1] == "FDR:KS11"
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-28"), "KS11": nan})
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch)[1] == "FDR:YAHOO:^KS11"
+
+
+def test_history_checks_close_after_end_trim():
+    tail = frame("2026-09-29")
+    tail.iloc[-1, 0] = float("nan")                        # end 뒤 NaN 행은 잘린 뒤 검사 → 채택
+    fetch, _ = range_stub(**{"YAHOO:^KS11": tail, "KS11": frame("2026-09-17")})
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch)[1] == "FDR:YAHOO:^KS11"
+
+
 def test_backtest_scripts_do_not_read_frozen_fdr_ks11_directly():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]

@@ -200,6 +200,7 @@
   LLM 프롬프트(08:10/12:00 레짐·15:00 포지션 점검)는 대용일 때 `KODEX200 대용 일봉`·마지막 봉 날짜를 표기한다.
   FDR Yahoo 리더는 `end` 를 **로컬 자정** 기준으로 넘겨 KST 에선 end 가 빠지고 UTC 에선 다음 거래일이 섞인다 — `load_kospi_history` 는 하루 더 조회한 뒤 end 이후 행을 잘라 end 포함으로 맞춘다.
 - `scripts/` 백테스트 3개(backtest_strategies·backtest_t1_gate·ab_exit_policy)는 `load_kospi_history`(과거 구간, Yahoo ^KS11 → KS11, end 포함·열린 구간 정지 경고)를 쓴다. quick_backtest 는 연구 venv(loguru 없음)라 FDR `YAHOO:^KS11` 을 직접 읽는다(폴백·정지 경고 없음) (2026-09-28~).
+  `load_kospi_history` 는 end 절단 뒤 반환 구간 종가에 NaN/inf/0 이하가 하나라도 있으면 그 원천을 경고와 함께 건너뛴다(dropna·보간 없음, 모두 무효면 `(None, None)` → backtest_strategies 레짐은 삼성전자 대리(`samsung_proxy` 라벨) 또는 NEUTRAL, NaN 레짐 캐시는 만들지 않는다) (2026-09-29~, Yahoo 09-28 NaN 행).
 
 ## 데이터 — yfinance
 

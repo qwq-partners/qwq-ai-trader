@@ -149,7 +149,7 @@ def _fdr_fetch_range(symbol: str, start: str, end: Optional[str]):
 
 def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES,
                        fetch: Optional[Callable] = None, now: Optional[datetime] = None):
-    """백테스트·분석용 KOSPI 일봉 프레임(과거 구간) — 첫 비어 있지 않은 원천. 신선도로 거르지는 않는다.
+    """백테스트·분석용 KOSPI 일봉 프레임(과거 구간) — 종가가 전부 유한 양수인 첫 원천. 신선도로 거르지는 않는다.
 
     end 는 포함한다. FDR Yahoo 리더는 end 를 **로컬 자정** 기준 period2 로 넘겨 KST 에선 end 가 빠지고
     UTC 에선 다음 거래일이 섞인다 → 하루 더 조회한 뒤 end 이후 행을 잘라 시간대와 무관하게 맞춘다.
@@ -157,6 +157,7 @@ def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES
     예외 없이 멈춘 것 같은 정지를 드러내려고(2026-09-28, scripts/ 백테스트 벤치마크 교체).
     Returns: (DataFrame | None, "FDR:<기호>" | None)
     """
+    import numpy as np
     import pandas as pd
 
     fetch = fetch if fetch is not None else _fdr_fetch_range
@@ -178,6 +179,12 @@ def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES
             df = df[idx.normalize() <= pd.Timestamp(end[:10])]
             if len(df) == 0:
                 continue
+        # 반환 구간 종가가 비유한/0 이하면 원천째 건너뛴다 — dropna·보간 금지(09-28 계약). 09-29 Yahoo 09-28 NaN 행이
+        # 그대로 백테스트 레짐(MA200 NaN → NEUTRAL)과 영구 레짐 캐시로 들어갈 수 있었다.
+        close = pd.to_numeric(df["Close"], errors="coerce") if "Close" in df else None
+        if close is None or not np.isfinite(close.to_numpy(dtype=float)).all() or (close <= 0).any():
+            logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 종가에 NaN/inf/0 이하 값 — 원천 제외")
+            continue
         if end is None:
             last = df.index[-1]
             last = last.date() if hasattr(last, "date") else last
