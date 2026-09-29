@@ -161,7 +161,7 @@ Phase 0 지표는 6개월·200건까지 계속 누적 (기존 주간 잡이 자�
   실전 경로 완전 분리 (주문 구조적 불가), 실패 시 dedup 미기록·10분 재시도,
   창 놓친 날 catch-up.
 - 체제 게이트 원천(2026-09-28~): `utils/kospi_benchmark.load_kospi_daily`(Yahoo ^KS11 우선, 신선도 검증 —
-  2026-09-29~ `FALLBACK_SOURCES`: KOSPI 원천이 모두 막히면 KODEX200(069500) 최후 대체, 채택 시 WARNING 로그, 미배포) +
+  2026-09-29~ `FALLBACK_SOURCES`: KOSPI 원천이 모두 막히면 KODEX200(069500) 최후 대체, 채택 시 WARNING 로그, 2026-09-29 15:33 KST 배포 main `974a71f`) +
   `regime_ok_dates`(종가 > 20일선, 백테스트와 같은 규칙). 신선하지 않으면 실패로 올려 커서·상태를 저장하지 않는다.
   이전 FDR KS11 이 09-17 에서 멈춰 09-18~09-23 D0 가 게이트에서 조용히 탈락하고 커서가 전진했다(복구하지 않음).
 - 실코드 대조로 반박된 Codex 지적: runner 당일 전환·채널 shift(1)·ratchet stop은

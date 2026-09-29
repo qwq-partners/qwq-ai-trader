@@ -1,6 +1,6 @@
 # 봇 실행 중 주문 CLI 거부 · OrderRef 형식 영속 — 설계 (절충안 3단계, 2026-09-29)
 
-> 상태: 설계 v2 · 구현 완료(미배포, §8) — 설계 리뷰 1회차(Codex REQUEST_CHANGES P1 3·P2 3, 독립 Claude 운영 안전 REQUEST_CHANGES P1 2) 처분 반영(§7). 기준 main 은 `4b8e146` 이고, 운영 코드(15:33 배포 `974a71f`)와 같다.
+> 상태: 설계 v2 · 구현 완료(§8) · **2026-09-29 20:47 KST main `785f1fe` 배포(PR #103)** — 설계 리뷰 1회차(Codex REQUEST_CHANGES P1 3·P2 3, 독립 Claude 운영 안전 REQUEST_CHANGES P1 2) 처분 반영(§7). 기준 main 은 `4b8e146` 이고, 운영 코드(15:33 배포 `974a71f`)와 같다.
 > 절충안 순서: (1) 초과수익 원장 ✅ → (2) 주문 POST 접수 불명 분리 ✅(PR #100) → **(3) 이 문서**.
 > 근거 원문(설계 B, `origin/feature/engine-b-minimal-kis-owner-design-20260928`):
 > - §0(B:23-25): "(3) 봇 기동 중 CLI 매도 스크립트 거부 + 주문 신원을 W `OrderRef` 형식으로 영속(나중의 attach 입양 입력)"

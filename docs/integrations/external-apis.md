@@ -1,9 +1,9 @@
 # 외부 API 연동
 
-> 최종 갱신: 2026-09-17 (토스 별도 제한 관측 ON·초기 발급 성공, 거래 소비자 미연결)
+> 최종 갱신: 2026-09-29 (접수 불명 분리·주문 CLI 거부·OrderRef·KOSPI 069500 대체 배포 반영). 토스 제한 관측은 09-22 18:00 KST grant 만료 뒤 서비스 disabled/inactive(재발급·퇴역은 사용자 결정 대기), 거래 소비자 미연결.
 
 
-> **일별 체결 조회 완결 판정 (2026-09-29, 미배포):** `KISBroker.get_fills_for_date_checked(d)` 는 `_query_daily_fills(…, status={})` 로
+> **일별 체결 조회 완결 판정 (2026-09-29, 06:45 KST 배포 main `081ab6a`):** `KISBroker.get_fills_for_date_checked(d)` 는 `_query_daily_fills(…, status={})` 로
 > 조회 완결 여부를 함께 돌려준다 — 완결 = 모든 페이지 `rt_cd=="0"` 이고 마지막 응답 헤더 `tr_cont` 가 D/E(10번째 페이지 포함).
 > F/M 인데 ctx 가 비었거나(`contradictory_continuation`) 같은 ctx 반복(`repeated_ctx`), 헤더 없음(`missing_tr_cont`), 10페이지 상한(`page_cap`),
 > 미연결·`rt_cd` 실패·예외·행 정규화 실패는 미완. 기본 호출(`status=None`)은 요청·반환이 이전과 같다(`check_fills` 무변경).
@@ -71,7 +71,7 @@
   타임아웃/연결 끊김/5xx 시 이미 접수됐을 수 있어 같은 본문을 다시 보내지 않는다 (hashkey는
   본문 무결성 검사이지 멱등키가 아님). 실패 반환 → 호출자 pending 해제 → 30초 동기화가
   실제 체결분을 sync_detected로 정합.
-- **주문 POST 결과 분류 — 접수 불명(UNKNOWN) 분리** (2026-09-29 구현, 미배포): `submit_order` 가
+- **주문 POST 결과 분류 — 접수 불명(UNKNOWN) 분리** (2026-09-29 구현, 15:33 KST 배포 main `974a71f`): `submit_order` 가
   `_api_post` 진입 뒤 응답을 믿을 수 없으면 `(False, "[접수불명] …")` 를 돌려주고 감사 원장
   `unknown` 을 남긴다(반환 계약 `Tuple[bool, str]` 무변경). 불명의 효과(그날 BUY 보류·분할 SELL
   재발행 금지)는 `docs/risk/risk-and-exit.md` 맨 위 절.
@@ -92,7 +92,7 @@
   매수 TR(구/신)은 `_api_post` 가 매 시도의 rate-limit 대기 직후·전송 전에 킬스위치(`kill_switch.check("buy")`, 2026-09-29 3단계)와
   접수 불명 보류를 다시 확인하고, 걸리면 보내지 않고 `_blocked: True` 로 돌려준다(`submit_order` → `blocked` 기록). SELL 은 재검사하지 않는다.
   취소(`retry=True`)에도 `_unknown` 이 실리지만 `cancel_order` 는 읽지 않는다 — 반환 불변.
-- **감사 원장 `accept` 행의 주문 신원** (2026-09-29 구현, 미배포 — 설계
+- **감사 원장 `accept` 행의 주문 신원** (2026-09-29 구현, 20:47 KST 배포 main `785f1fe` — 설계
   `docs/superpowers/specs/2026-09-29-cli-refusal-orderref-design.md` D3): `submit_order` 성공 경로의
   EV_ACCEPT 한 곳에 필드를 더한다(기존 `order_id` 등·반환·추적 dict 무변경). 브로커 한 곳이라 봇·수동 매수·CLI 가 모두 덮인다.
 
@@ -107,7 +107,7 @@
   이 필드로 재시작 때 브로커 `_pending_orders` 를 복원하지 않는다(누적 체결 이중 계상). 감사 원장은 fsync 가 없어
   응답 직후 크래시하면 행이 빠질 수 있다(그날 주문은 당일 소멸). 조회:
   `grep '"accept"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl`.
-- **봇 실행 중 주문 CLI 거부** (2026-09-29 구현, 미배포): `scripts/liquidate_all.py`(`--dry-run` 포함)·
+- **봇 실행 중 주문 CLI 거부** (2026-09-29 구현, 20:47 KST 배포 main `785f1fe`): `scripts/liquidate_all.py`(`--dry-run` 포함)·
   `sell_specific.py` 는 파싱 직후 `src/utils/trader_lock.hold_or_exit()` 로 봇 싱글톤 flock
   (`~/.cache/ai_trader/unified_trader.lock`)을 잡아 보고, 봇·다른 CLI 가 쥐고 있으면 KIS 호출·토큰 발급 전에 exit 2.
   별도 프로세스의 `KISBroker` 는 봇 장부·레이트 리미터(원장 TR 합산 EGW00215)를 공유하지 않기 때문이다.
@@ -151,7 +151,7 @@
   같은 집합이 `utils.session` 에도 들어간다. 판정은 engine·session 모두 동적 ∪ fallback(`utils/session._KR_FALLBACK_HOLIDAYS` 한 곳). fallback 에 잘못 든 날은
   KIS 가 되돌릴 수 없으므로 확정된 날만 둔다. API 문서의 '1일 1회 호출 권장' 대비 월 2회 수준.
 
-## 데이터 — 토스증권 Open API (별도 제한 관측 ON, **거래 소비자 미연결**)
+## 데이터 — 토스증권 Open API (별도 제한 관측 — 09-22 18:00 grant 만료, 서비스 inactive, **거래 소비자 미연결**)
 
 > [설계서](../superpowers/plans/2026-09-15-toss-securities-fallback.md) · [관측 실행 경계](../operations/toss-shadow-runtime.md) · [실제 활성화 원장](../reviews/toss-observer-service-2026-09-17.md). 사용자 승인으로09/17 별도 서비스 ON·초기 발급 성공,09/18·21·22 관측/09/22 18시만료. 기존 거래 봇과 KIS 소비자는 그대로이며 장외 시점의 시세 표본은0이다.
 
@@ -192,7 +192,7 @@
 - FDR 0.9.110 `DataReader("KS11"/"KQ11"/"KS200")` 는 KRX 를 부르지 않고 GitHub `FinanceData/fdr_krx_data_cache` 연도별 CSV 를 읽는다.
   읽기 실패를 삼키고 신선도 검사가 없어 **상류가 멈춰도 예외 없이 오래된 프레임**을 준다 — 2026-09-17 장중 부분봉(6724.34)에서 정지 확인(09-28).
 - KOSPI 결정 소비처(스크리너 레짐·변동성 타게팅·수확 shadow)는 `utils/kospi_benchmark.load_kospi_daily`(1순위 `YAHOO:^KS11`, 신선도 검증)를 쓴다.
-  세 소비처 모두 `FALLBACK_SOURCES`(`YAHOO:^KS11` → `KS11` → `069500` 최후 대체, 같은 검증)로 읽는다(스크리너·수확은 2026-09-29~, 미배포).
+  세 소비처 모두 `FALLBACK_SOURCES`(`YAHOO:^KS11` → `KS11` → `069500` 최후 대체, 같은 검증)로 읽는다(스크리너·수확은 2026-09-29 15:33 KST 배포 main `974a71f`~).
   Yahoo 는 거래일 행을 빠뜨릴 수 있고(09-28 봉 결손 → FDR 이 NaN 종가로 채워 이력 전체 거부) 그 날은 069500 이 채택된다.
   069500 은 원 단위라 지수 pt 와 섞지 않는다 — 12:00 LLM 레짐 재분류는 대용 계열에 당일 KIS 지수 레벨을 잇지 않는다.
   FDR 069500 은 +24.2%/일 오염 이력이 있어, 스크리너·수확은 채택 전 소비 구간 |일수익률| > 12% 를 `proxy_outlier` 로 검사해 걸리면 채택하지 않는다(`proxy_return_outlier`).

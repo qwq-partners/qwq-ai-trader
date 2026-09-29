@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — docs: 배포 완료 기능의 '미배포' 표기·CLAUDE.md 오래된 절 정리 (F 묶음)
+
+- **지시**: 사용자 "A·F 두 묶음을 지금 진행". 09-29 전수 감사의 문서·메모리 불일치 정리. 작업자(Claude Opus 5.5, 요청 opus/medium, 격리 worktree) 커밋 `3566184` + coordinator 검토·보강.
+- '미배포' 표기: 기능 도입 커밋의 git 조상 관계로 배포 SHA 를 확인한 것만 고쳤다(CLAUDE.md 3·external-apis 5·asymmetric-harvest 1·설계 문서 머리 2). 보고서의 당시 서술은 유지. runbook·risk-and-exit·CHANGELOG 의 표기는 PR #106 에서 처리.
+- CLAUDE.md: 옛 '현재 운영 상태' 머리 3개 → '운영 상태 이력', 현금 고갈 절 → 해소(현금 19.4%), 섀도우 표 '수치 오래됨' 표기·팩터 버킷 09-29 기산 ~10-14 재판단, Toss grant 만료·서비스 inactive, 실행 예시 US 제거·dry-run 경고, 하위 에이전트 위임 규칙을 전역 정책(Sonnet/Haiku 미검증)과 정합.
+- monitoring-checkpoints: 안전자산 점검 항목 제거(루프 PR #97 삭제·`081ab6a` 배포), CHANGELOG 09-29 ops 에 근거 있는 4개만 체크(출처 표기).
+- Toss 문서(README·external-apis·toss-shadow-runtime): 'ON' 현재형 → grant 09-22 만료·disabled/inactive, 재발급·퇴역은 사용자 결정 대기.
+- 코드·설정 변경 0.
+
 ## 2026-09-29 — fix: 감사로 확인된 기존 결함 7건 (A 묶음, 미배포)
 
 - **지시**: 사용자 "A·F 두 묶음을 지금 진행". 09-29 전수 감사(문서·코드·계획 3원천)에서 확인됐지만 고치지 않았던 기존 결함이다. 브랜치 `fix/outstanding-defects-20260929`.

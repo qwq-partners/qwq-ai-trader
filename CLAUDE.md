@@ -3,16 +3,16 @@
 > **운영 상태 이력 — 2026-09-29 15:36 KST:** main `974a71f`(PR #100 주문 접수 불명 분리 + #101 KOSPI 069500 최후 대체 + #102 크로스 검증 가점 표시) 배포, **PID3588061** 15:33:10 기동. 운영 verify 2369 passed/2 xfailed, 보호 지문 7종 동일, 운영 checkout `main` 복귀(사용자 소유 `config/evolved_overrides.yml` 미커밋 수정 보존 — 사용자 승인 사본 스크립트). KIS 오류·ERROR 0, 새 분할 익절 차단 훅 배선 확인. 보유 3종목·현금 19.4%. Yahoo ^KS11 09-28 결측은 10:30 전후 상류 보완으로 해소(069500 대체는 안전망). 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-29 ops.
 > **운영 상태 이력 — 2026-09-29 06:51 KST:** main `081ab6a`(PR #98 + 미배포였던 PR #97) 배포, **PID3388744** 06:45:15 기동. 운영 verify 2263 passed/2 xfailed, 보호 지문 7종 동일, 운영 checkout `main` 복귀(사용자 소유 `config/evolved_overrides.yml` 미커밋 수정 보존 — 사용자 승인 사본 스크립트). 새로 켜진 것: 20:30 실거래 KODEX200 초과수익 원장·거래일 기록 대사(측정 전용), 안전자산 루프 삭제. **현금 비중 22.9% — 봇 신규 매수 가능 상태.** 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-29 ops.
 > **운영 상태 이력 — 2026-09-28 15:39 KST:** main `d551ab9`(PR #94/#95) 배포, PID3162715 active. 운영 verify 2113 passed/2 xfailed, 보호 지문 7종 동일, 운영 checkout `main` 복귀(사용자 소유 `config/evolved_overrides.yml` 미커밋 수정 보존 — 표준 `local_deploy.sh` 는 이 상태에서 청결 검사로 멈춘다). KOSPI 일봉 원천 Yahoo 우선·휴장일 월말까지 조회·장중 RS 당일 KOSPI·안전자산 후보 코드 오류로 자동 비활성(주문 0). 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-28 ops.
-> **현재 운영 상태 — 2026-09-23 23:21 KST:** main `e5ae602`(PR #90/#91) 배포 후 PID2386785가 active/running. broker connected=true, pending/stale/failing 0, 계측 available=true(scope `kr_broker_get`, process_lifetime), TTTC8434R startup1+sync2·retries0·EGW0. 7개 보호 fingerprint 및 주문·전략·risk/config·kill 변경 없음. 장중 LLM 매도 이유/신선도/macro 반복경고는 미관측이며, 전체 engine `5a2fab8`/N3와 C/F/G/R/install blocker는 미승격. 정본은 `docs/operations/release-2026-09-23.md`.
+> **운영 상태 이력 — 2026-09-23 23:21 KST:** main `e5ae602`(PR #90/#91) 배포 후 PID2386785가 active/running. broker connected=true, pending/stale/failing 0, 계측 available=true(scope `kr_broker_get`, process_lifetime), TTTC8434R startup1+sync2·retries0·EGW0. 7개 보호 fingerprint 및 주문·전략·risk/config·kill 변경 없음. 장중 LLM 매도 이유/신선도/macro 반복경고는 미관측이며, 전체 engine `5a2fab8`/N3와 C/F/G/R/install blocker는 미승격. 정본은 `docs/operations/release-2026-09-23.md`.
 > **09-23 제한 릴리스 진행:** PR #90은 main `4db5141`에 병합했다. 호출 계측·매도 사유 보존·지수 신선도·macro 중복 경고 수정과 local deploy 비대화형 인증 수정만 운영 후보로 삼는다. 전체 engine 개발선은 전체 C/F/G/R·설치 차단으로 제외한다. 사용자가 주문·전략·위험 설정 유지, 검증된 코드 배포/재시작을 확인했다. 실제 검증/배포 SHA·PID 및 미관측 항목은 `docs/operations/release-2026-09-23.md`가 정본이다. 이 문서 작성 시 운영 checkout `afa6e1e`·PID2259506(09-23 06:28 기동), Toss inactive이며 아직 재시작하지 않았다. 아래 날짜별 상태는 과거 기록이다.
-> **현재 운영 상태 — 2026-09-22 07:24 KST:** 사용자 지시("PR머지하고 운영배포까지 가자")로 PR #88 `fix/kis-pagination-protocol`(연속조회 요청 헤더 `tr_cont` — 2페이지째부터 `N` · `get_positions_for_account` 의 헤더 `D`/`E` 종료 판정 통일 · 취소 POST 재시도 유지의 특성화와 "취소는 멱등" 문장 정정)을 병합하고 main `d337494` 를 `local_deploy.sh` 로 배포·재시작했다(이전 checkout `d1e8b2f`·PID1453603 → **PID1546587**, 07:24:06 기동). 제품 경로 변경은 `src/execution/broker/kis_kr.py` 하나이고 **1페이지로 끝나는 조회(현재 운영: 보유 1종목)는 요청이 바뀌지 않는다** — 2페이지 이상에서만 요청 헤더 `tr_cont: N` 이 붙고, 외부계좌 표시용 조회는 마지막 페이지 뒤의 불필요한 원장 호출 1회가 없어진다. 병합 전 head `9c3f6ff` 의 필수 verify SUCCESS·독립 재현(요청 opus/xhigh) APPROVE(기준선·브랜치 양쪽의 실제 요청 비교로 1페이지 요청 diff 0줄·변이 8종 kill)·교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh) APPROVE(P0/P1/P2 0)·coordinator 의 제품 diff 직접 검토, `mergeable CLEAN` 에서 merge commit 병합(2026-09-21T22:21:45Z). 배포 전 점검(07:22, 개장 전) pending `[]`·부하 1.24, 운영 서버 verify **1982 passed / 2 xfailed / 경고 1(pykrx)**(90.29초)·격리 위반 0·자동 롤백 없음, 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`통합 트레이딩 엔진 시작`, 새 PID ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음), 170초 시점 `ops_check` HTTP 500 0·EGW00201 0·원장 EGW00215 0·토큰 오류 0·루프 정체 0·pending `[]`·`cash_ratio` 0.43%(매수 불가 상태 그대로), Toss 관측 서비스 PID3335469 무변경. `.env`(`KIS_TR_SET`)·설정·킬스위치·주문·Toss grant/토큰 변경 0 — **신 TR 전환은 runbook 의 실계좌 확인 항목이 닫힌 뒤 별도 지시로만** 한다. **남은 일: 운영 checkout 이 `d337494` 에 detached 로 남아 있다**(배포 세션이 worktree 격리라 다른 checkout 에 git 을 실행할 수 없었다 — 트리는 main 과 동일해 재시작은 불필요) → `git -C /home/ubuntu/projects/qwq-ai-trader checkout main` 후 `pull --ff-only origin main` 으로 복귀. 아래 운영 SHA/PID 는 과거 시점 기록이다.
+> **운영 상태 이력 — 2026-09-22 07:24 KST:** 사용자 지시("PR머지하고 운영배포까지 가자")로 PR #88 `fix/kis-pagination-protocol`(연속조회 요청 헤더 `tr_cont` — 2페이지째부터 `N` · `get_positions_for_account` 의 헤더 `D`/`E` 종료 판정 통일 · 취소 POST 재시도 유지의 특성화와 "취소는 멱등" 문장 정정)을 병합하고 main `d337494` 를 `local_deploy.sh` 로 배포·재시작했다(이전 checkout `d1e8b2f`·PID1453603 → **PID1546587**, 07:24:06 기동). 제품 경로 변경은 `src/execution/broker/kis_kr.py` 하나이고 **1페이지로 끝나는 조회(현재 운영: 보유 1종목)는 요청이 바뀌지 않는다** — 2페이지 이상에서만 요청 헤더 `tr_cont: N` 이 붙고, 외부계좌 표시용 조회는 마지막 페이지 뒤의 불필요한 원장 호출 1회가 없어진다. 병합 전 head `9c3f6ff` 의 필수 verify SUCCESS·독립 재현(요청 opus/xhigh) APPROVE(기준선·브랜치 양쪽의 실제 요청 비교로 1페이지 요청 diff 0줄·변이 8종 kill)·교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh) APPROVE(P0/P1/P2 0)·coordinator 의 제품 diff 직접 검토, `mergeable CLEAN` 에서 merge commit 병합(2026-09-21T22:21:45Z). 배포 전 점검(07:22, 개장 전) pending `[]`·부하 1.24, 운영 서버 verify **1982 passed / 2 xfailed / 경고 1(pykrx)**(90.29초)·격리 위반 0·자동 롤백 없음, 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`통합 트레이딩 엔진 시작`, 새 PID ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음), 170초 시점 `ops_check` HTTP 500 0·EGW00201 0·원장 EGW00215 0·토큰 오류 0·루프 정체 0·pending `[]`·`cash_ratio` 0.43%(매수 불가 상태 그대로), Toss 관측 서비스 PID3335469 무변경. `.env`(`KIS_TR_SET`)·설정·킬스위치·주문·Toss grant/토큰 변경 0 — **신 TR 전환은 runbook 의 실계좌 확인 항목이 닫힌 뒤 별도 지시로만** 한다. **남은 일: 운영 checkout 이 `d337494` 에 detached 로 남아 있다**(배포 세션이 worktree 격리라 다른 checkout 에 git 을 실행할 수 없었다 — 트리는 main 과 동일해 재시작은 불필요) → `git -C /home/ubuntu/projects/qwq-ai-trader checkout main` 후 `pull --ff-only origin main` 으로 복귀. 아래 운영 SHA/PID 는 과거 시점 기록이다.
 > **운영 상태 이력 — 2026-09-22 00:51 KST:** 사용자 지시(교차 리뷰 통과 시 병합·반영)로 PR #84(취소 0건인 '살아 있는 SELL' 위 재발행 금지 — 분할 매도 이중 발행 차단, 엔진 90초 SELL 폴백 + `on_heartbeat` 재시도 + 스케줄러 3분 정리)를 병합하고 main `2358936` 을 `local_deploy.sh` 로 배포·재시작했다(이전 checkout `d3954a7`·PID1409857 → **PID1453603**, 00:51:02 기동). 운영 서버 verify 1972 passed/2 known xfailed·자동 롤백 없음, 기동 로그 `KIS TR 세트: legacy`, 새 PID ERROR 0·원장 EGW00215 0·루프 정체 0·pending0, 설정3파일·킬스위치4경로 지문 동일, Toss 관측 서비스(PID3335469) 무변경. 주문·설정·`.env` 변경 0. 교차 공급자 리뷰(Codex 요청 gpt-6-astra/xhigh, 정적) 1~6회차 병합 불가 → **7회차 병합 가능**(최종 head `9fe95ed`, 기록은 PR #84 코멘트). 배포 후 확인 항목은 `docs/operations/monitoring-checkpoints.md` 맨 위 — 분할 매도 경로라 매수 재개 뒤에야 관측된다. 아래 운영 SHA/PID 는 과거 시점 기록이다.
 > **운영 상태 이력 — 2026-09-21 23:06 KST:** 사용자 지시(교차 리뷰 4회차 통과 시 병합·반영)로 PR #81(`on_signal` stale 루프 — 동시호가 지정가 유지·BUY 취소 0건의 의미 분리)을 병합하고 main `f25b0c6` 을 `local_deploy.sh` 로 배포·재시작했다(이전 checkout `dc508fb`·PID1381422 → **PID1409857**, 23:06:23 기동). 운영 서버 verify 1895 passed/2 known xfailed·자동 롤백 없음, 기동 로그 `KIS TR 세트: legacy`·축출면제 1종목, KIS 오류 0·ERROR 0·루프 정체 0·pending0, 설정3파일·킬스위치4경로 지문 동일, Toss 관측 서비스(PID3335469) 무변경. 주문·설정·`.env` 변경 0. 교차 공급자 리뷰(Codex 요청 gpt-6-astra/xhigh) 1~3회차 병합 불가 → 4회차 병합 가능; 4회차 뒤 들어온 PR #83 과의 결합 상태는 직접 검토·양쪽 시험·verify 로 확인했고 교차 리뷰는 다시 받지 않았다. 아래 운영 SHA/PID 는 과거 시점 기록이다.
 > **운영 상태 이력 — 2026-09-21 22:29 KST:** 사용자 지시로 PR #83(자동매도 금지 종목 SELL 을 엔진 `on_signal` 에서 차단 + 코어 경로 제외 + 직접 제출 경로 면제 검사)을 병합하고 main `388411c` 를 `local_deploy.sh` 로 배포·재시작했다(이전 checkout `d8d78fe`·PID1193531 → **PID1381422**, 22:29:25 기동). 운영 verify 1865 passed/2 known xfailed·자동 롤백 없음, 기동 로그 `자동매도 금지 종목 복원: ['087010']`·`축출면제=1종목`·`KIS TR 세트: legacy`, pending0·브로커 연결·루프 정체0·ERROR0, 설정3파일·킬스위치4경로 지문 동일. Toss 관측 서비스(PID3335469)는 재시작·변경 없음. 주문·설정·`.env` 변경 0. PR #81 은 여전히 **미병합·미배포**(머지 전 main 재머지 필요 — #83 과 같은 stale SELL 루프, 사전 병합 트리 충돌 0). 아래 운영 SHA/PID 는 과거 시점 기록이다.
 > **운영 상태 이력 — 2026-09-21 20:44 KST:** 사용자 지시로 PR #80(KIS 구/신 TR 전환 스위치, 기본 legacy = 동작 변경 0)을 병합하고 main `2a143c6` 을 `local_deploy.sh` 로 배포·재시작했다(이전 checkout `93c2fbd`·PID3534327 → **PID1193531**, 20:44:08 기동). 배포 verify 통과·자동 롤백 없음, 기동 로그 `KIS TR 세트: legacy`(`KIS_TR_SET` 미설정 — 전환 안 함), pending0·브로커 연결·루프 정체0·ERROR0, 설정3파일·킬스위치4경로 지문 동일. Toss 관측 서비스(PID3335469, 09-17 기동)는 재시작·변경 없음. 주문·설정·`.env` 변경 0. PR #81(on_signal stale 루프 수정)은 교차 리뷰 처분 중이라 **미병합·미배포**. 아래 운영 SHA/PID 는 과거 시점 기록이다.
 > **2026-09-20 추가 정리 완료:** 상시 개발선은 main·`feature/engine-safety-design-20260917` 두 개다. 퇴역 local54/remote7/worktree53(dirty28/staged12)을 복구 가능한 archive로 전환했다. 이전 worker 원경로를 사용하지 않는다. 보관소·복구 검증은 `docs/reviews/retired-workspace-archive-2026-09-20.md`, 다음 Claude 시작점은 `docs/operations/claude-migration-handoff-2026-09-20.md`다. 제품 소스/운영 무변경·전체 엔진 승격 차단 유지. 아래 보존 개수/경로는 이전 시점 기록이다.
 > **2026-09-20 브랜치 정리·Claude 인계:** 운영 기준은 main, 개발 정본은 `feature/engine-safety-design-20260917`(C4 source `ab044c4`)다. 병합 완료 local166/remote67/clean worktree83개 정리, dirty·고유 이력·증거 보존. root checkout을 `8ff2f55→465a029`로 동기화했고 기존 거래 코드·PID3534327/Toss PID3335469·보호7경로는 불변, 재시작0. 엔진 전체는 미병합·운영 미승격이며 다음은10B2/B3 request-bound qualification/최종 sizing이다. 새 세션은 **`docs/operations/claude-migration-handoff-2026-09-20.md`**부터 읽는다. 아래 운영 SHA/PID는 과거 시점 기록이다.
-> **현재 운영 상태 — 2026-09-17 21:49 KST:** 사용자가09/18·21·22/09/22 18시만료를 확정했고, 별도 `qwq-toss-observer.service`를21:47:37 ON(PID3335469, release877768e)했다. 초기 발급 generation1/ready·단일 sender·장외idle/표본0. 기존 거래 봇 PID3274983/checkout8ff2f55/설정7경로 그대로, 재시작0. 아래 미설치/일정대기 문구는 이전 인계 이력이다. **observer 같은 grant 재시작·토큰/영수증 삭제 금지**, 장애 시 새 서비스만 중단하고 상태를 보존한다. 정본: `docs/reviews/toss-observer-service-2026-09-17.md`.
+> **운영 상태 이력 — 2026-09-17 21:49 KST(Toss grant 09-22 18:00 만료, 현재 서비스 disabled/inactive):** 사용자가09/18·21·22/09/22 18시만료를 확정했고, 별도 `qwq-toss-observer.service`를21:47:37 ON(PID3335469, release877768e)했다. 초기 발급 generation1/ready·단일 sender·장외idle/표본0. 기존 거래 봇 PID3274983/checkout8ff2f55/설정7경로 그대로, 재시작0. 아래 미설치/일정대기 문구는 이전 인계 이력이다. **observer 같은 grant 재시작·토큰/영수증 삭제 금지**, 장애 시 새 서비스만 중단하고 상태를 보존한다. 정본: `docs/reviews/toss-observer-service-2026-09-17.md`.
 > 2026-09-17 21:34 KST: 독립 관측 서비스 PR #74는 required CI1809 passed/기존xfail2 후 원격 main `c2fe787`에 병합됐다. **기존 거래 봇 로컬 checkout8ff2f55/PID3274983 유지, 새 서비스 설치/ON 미실행**. 새 관측 날짜09/18·21·22와09/22 18:00 KST 만료는 아직 사용자 답변 대기이며 자동 연장하지 않는다. 최종 artifact/CI/운영 대기 근거는 `docs/reviews/toss-observer-service-2026-09-17.md`.
 > 2026-09-17 관측 서비스 후속: 사용자가 **기존 거래 봇 유지·별도 Toss 서비스 ON·단일 발급 주체·추가 KIS 조회0·주문 무영향** 상세 설계를 승인했다. 격리 병렬 구현·독립 broad/한정 리뷰(C/I/M0), UTC/KST 각각1809 passed/기존xfail2를 완료했다. CI/main 병합은 PR #74에서 확인하며 **운영 설치/ON은 아직 미실행**이다. 첫 관측일 경과로 새 일정 사용자 확인이 남았다. 현재 상태 정본은 `docs/reviews/toss-observer-service-2026-09-17.md`. 보유 종목만 관측하며 근거 없는 KIS 가격 비교는 제외한다. 기존 거래 봇 checkout/설정/PID는 변경하지 않는다.
 > 2026-09-17 후속: PR #70/#68/#72 병합 후 **main `84ec1cc` 00:47:47 KST 배포·재시작(PID3274983)**. 운영 verify1684 passed/2 known xfailed·설정/킬스위치7경로 지문 동일. Toss는 기본 OFF·실관측 미시작이며 실제 launcher/관측 서비스 연결 방식 확인이 남았다. 현황 정본 `docs/reviews/toss-pr-integration-2026-09-17.md`.
@@ -50,8 +50,8 @@
 
 ## 하위 에이전트 위임 규칙 (2026-09-14 사용자 지시)
 - Agent/Workflow 로 하위 에이전트를 띄울 때는 기본값을 쓰지 말고 **작업 성격에 맞춰 모델·effort 를 매번 명시**한다.
-  - 기계적·저위험(복사·포맷·grep 요약·단순 테스트 실행) → haiku/sonnet, low~medium
-  - 일반 구현·특성화 테스트·문서 초안 → sonnet(또는 세션 기본), medium~high
+  - 모델 역할·기본값은 전역 정책 `/home/ubuntu/.config/ai-agents/model-routing.md` 를 따른다(2026-09-29 정합화). Claude Sonnet/Haiku 는 이 환경에서 **미검증**이라 실제 모델 신원을 확인하기 전에는 운영 작업에 배정하지 않는다 — 기본은 검증된 opus(또는 세션 기본).
+  - 기계적·저위험(복사·포맷·grep 요약·단순 테스트 실행) → low~medium, 일반 구현·특성화 테스트·문서 초안 → medium~high
   - 돈이 걸린 경로(사이징·주문·청산·동기화)·백테스트 판정·보안·독립/적대적 리뷰·최종 통합 판단 → opus/세션 최상위, high~xhigh
 - 같은 워크플로 안에서도 단계별로 다르게 지정하고, 선택 근거를 label/프롬프트 첫 줄에 남긴다.
 
@@ -63,6 +63,8 @@
 - 크로스 전략 검증 게이트 + 시장 체제 사전 적응
 
 ### 토스 후속 작업 상태 (2026-09-16)
+
+> **현재(2026-09-29):** 관측 grant 는 09-22 18:00 KST 에 만료됐고 `qwq-toss-observer.service` 는 disabled/inactive 다. 재발급·퇴역은 사용자 결정 대기 — 같은 grant 재시작·자동 연장 금지. 아래는 당시 기록이다.
 
 아래는 09-16 인계 당시 기록이다. 09-17 사용자가 열린 PR 전체 통합·배포·재시작·활성화를 지시해 #68 보류 결정은 검토 후 정합화 방식으로 변경됐다. 원본의 안전하지 않은 구현을 복구하지 않으며 실행 트리는 #67/#70을 유지한다. 실관측 연결·승인 정책의 준비와 실제 활성화 결과는 후속 보고서로 구분한다.
 
@@ -154,7 +156,7 @@
 - 캐시: `~/.cache/ai_trader/vol_targeting.json` (매 거래일 08:30 갱신, 노후 3일+ 시 무개입)
 - 원천(2026-09-28 배포): `src/utils/kospi_benchmark.py` 공용 로더 — Yahoo ^KS11 → KS11 → 069500, 신선하지 않으면 캐시 미기록.
   FDR `KS11` 은 GitHub 캐시 CSV 라 09-17 에서 예외 없이 멈췄다(그동안 31.8%/×0.786 이 매일 재기록됨)
-  수확 shadow·스윙스크리너 레짐도 같은 `FALLBACK_SOURCES`(Yahoo → KS11 → 069500 최후 대체, 같은 검증)를 쓴다 (2026-09-29, 미배포)
+  수확 shadow·스윙스크리너 레짐도 같은 `FALLBACK_SOURCES`(Yahoo → KS11 → 069500 최후 대체, 같은 검증)를 쓴다 (2026-09-29, 15:33 KST 배포 main `974a71f`)
 - 축소 전용(레버리지 없음), 일수익률 |12%| 초과는 데이터 오류로 제외
 - 비활성화: `VOL_TARGETING=0` / 상세: `docs/research/ai-trading-research-2026-08.md`
 
@@ -198,13 +200,12 @@
 - **승격 보류 (2026-08-19)**: 8월 매수 0건으로 초과 이벤트 표본 부재 →
   일일 노출 스냅샷(`factor_exposure_log.jsonl`, 저녁 품질검증 잡) 2주 축적 후 재판단
   → **2026-09-03 재판단 불가**: 전략 포지션 0건이라 스냅샷 전부 0% — 매수 재개 후 2주로 이월
+  → **2026-09-29 매수 가능 상태 확인**(현금 19.4%) — 2주 관측을 09-29 기산, ~10-14 재판단
 
-### 운영 상태 — 현금 고갈 (2026-07-01~, 2026-09-03 확인)
-- 펩트론 087010 120주(`manual`, exit_exempt)가 자산의 **99.6%**, 현금 **0.4%(~7.8만원)**
-  → 봇 신규 매수가 구조적으로 불가 (8·9월 주문 0건은 버그가 아니라 현금 부족).
-  진화·CF·승격 표본 축적 전부 정지 상태. 해소는 사용자 판단(펩트론 일부 매도/입금).
-- `/api/portfolio`의 `cash_ratio`로 즉시 확인. 코어홀딩 "빈슬롯 매수 시도(예산 잔여 2.9M)"
-  로그는 equity 기준 예산이라 현금과 무관 — 0건 반복은 정상.
+### 운영 상태 — 현금 (현금 고갈 해소, 2026-09-29 확인)
+- 현금 비중 **19.4%**·보유 3종목(09-29 20:47 배포 사후 점검) — 봇 신규 매수 가능. 09-29 06:51 에 22.9% 로 처음 확인.
+- 이력: 2026-07-01~(09-03 확인) 펩트론 087010 120주(`manual`, exit_exempt)가 자산 99.6%·현금 0.4% 라 신규 매수·진화/CF 표본 축적이 정지됐었다.
+- `/api/portfolio`의 `cash_ratio`로 즉시 확인. 코어홀딩 "빈슬롯 매수 시도" 로그의 예산은 equity 기준이라 현금과 무관하다.
 
 ### 2026-09-15 Codex 후속 수정 — PR #58 배포 완료, Codex 독립 리뷰 후속
 
@@ -225,8 +226,8 @@
 - 구조 원인: 연 91배 회전(수수료 = 손실 전부) · 1차 익절이 타이트 청산 무장(p90 +4.9%) · 명목 사이징 3~4종목 집중 · 배분 55%가 근거 없는 라인 · 레짐 4겹 후행
 - 판정 기준은 **KODEX200 초과수익 + 손절 클립** (절대수익 판정으로 04-23·08-20 결정이 뒤집힘). 권고 1~8·금지 목록은 리뷰 §5~6
 
-### 섀도우 관측 현황 (2026-09-03 운영 서버 점검 기준)
-관측 전용(주문 무관) 항목 전체 목록 — 상세는 각 문서 참조:
+### 섀도우 관측 현황 (2026-09-03 운영 서버 점검 기준 — ⚠️ 수치는 오래됨, 재점검 전까지 참고용)
+관측 전용(주문 무관) 항목 전체 목록 — 상세는 각 문서 참조. 09-29 부터 현금 고갈이 풀려 매수 재개 전제 항목(팩터 버킷·CF 등)이 다시 표본을 쌓을 수 있다:
 
 | 항목 | 시작 | 상태 |
 |------|------|------|
@@ -235,7 +236,7 @@
 | 에이전트 팀 심의 (`trading_team`) | 08-02 | ✅ 장중 10:30/11:30/13:00/14:00 4슬롯 verdicts 축적 중 (T11: append-only 원장 병행) |
 | 규칙 #11 전문가 BEAR (`experts.shadow_mode`) | 08-02 | ⏳ 14건 축적 / 승격 기준 CF 9/20건·r5 56% |
 | 규칙 #12 섹터 카운슬 | 08-07 | ⏸ hit 0건 (BEAR 섹터 매수 후보 없음) |
-| 팩터 버킷 (`factor_budgets.enforce: false`) | 08-08 | ⏸ 초과 표본 없음 → 노출 스냅샷으로 보완 (08-19~) |
+| 팩터 버킷 (`factor_budgets.enforce: false`) | 08-08 | ⏸ 초과 표본 없음 → 노출 스냅샷으로 보완 (08-19~). 매수 가능 상태 09-29 확인 → 2주 관측 09-29 기산, ~10-14 재판단 |
 | Counterfactual 추적 | 08-08 | ✅ 209건 추적 중 (신규 매수 0건이라 증가분은 규칙 게이트 발화분) |
 | Shadow Lab (calibration/bandit) | 08-10 | ✅ 주기 리포트 발송 중 |
 | LLM Shadow A/B (`openai_model_light_shadow`) | 06-17 | 🚫 **비활성화 (08-19)** — 발화 경로 소멸로 8/3 이후 표본 0 |
@@ -344,8 +345,8 @@ result = value if value is not None else default
 - **자동매도 금지(exit_exempt) 종목의 SELL**: `SignalEvent` 로 나가는 SELL 은 엔진 `RiskManager.on_signal` 중앙 가드가 발행처와 무관하게 막는다(2026-09-21). 그래도 새 SELL 발행처가 emit **전에** 부작용(텔레그램 '자동 청산' 알림, `core_state.sold` 기록, 잔여액 차감)을 내면 발행처에서도 `is_exit_exempt` 로 뺀다. **브로커에 직접 `submit_order` 하는 SELL 경로는 중앙 가드를 안 거치므로 자체 검사 필수.** 면제는 런타임에도 등록되므로(`run_manual_buy_orders`) "면제면 pending SELL 이 없다"고 가정하지 않는다 — 면제 종목의 미체결 SELL 은 브로커 추적(`get_open_orders`)에서 사라진 것을 확인한 뒤에만 pending 을 푼다. 설정의 종목코드는 반드시 따옴표(`000660` → YAML 8진수 432). 상세 `docs/risk/risk-and-exit.md`
 - **엔진 pending 은 종목 단위·방향 무구분**: BUY pending 이 남아 있으면 `_check_exit_signal` 이 반환해 그 종목의 손절 신호 자체가 생성되지 않는다 — pending 을 '안전하게 유지'하는 수정은 부분체결 포지션의 청산을 막는다(보유 중이면 해제, 유지 중 부분체결·동기화 반영은 즉시 해제 — `release_kept_stale_buy`). **브로커 `cancel_order`/`cancel_all_for_symbol`·`submit_order` 는 실패를 예외로 올리지 않는다**(0/False/`(False,msg)`) — 호출부의 `except` 에 기대지 말고 반환값과 브로커 추적(`get_open_orders`)·거래소 실 미체결(`get_exchange_open_orders(symbol=…)`, 첫 페이지 한계)로 가른다 (2026-09-21 PR #81)
 - **KIS 주문 POST는 재전송 금지**: 접수/정정은 `_api_post(retry=False)` — 응답 유실 시 재전송하면 중복 주문 (2026-09-03 P0). 새 주문 계열 TR도 동일. **취소는 예외(재시도 유지)** — 전량 취소는 `ORGN_ODNO` 하나를 겨냥해 두 번 닿아도 새 노출을 만들 수 없고, 빼면 보호 취소 성공률만 떨어진다 (멱등 보장이 아니라 효과 한정 논증 — `docs/integrations/external-apis.md`)
-- **KIS 주문 POST 접수 불명은 거절이 아니다** (2026-09-29 구현, 미배포): POST 진입 뒤 응답을 믿을 수 없으면(비-JSON·네트워크 오류·`rt_cd`·`msg_cd` 없는 JSON·POST 뒤 예외) `submit_order` 가 `(False, "[접수불명] …")` 를 돌려주고 브로커 장부(`~/.cache/ai_trader/order_unknown.json`)에 남긴다 → 그날 BUY 전부 보류, 불명 SELL 종목은 분할 SELL 재발행 금지(전량은 허용). 해제는 날짜 변경뿐. 새 주문 경로도 `submit_order` 를 거치고, 엔진은 `broker.unknown_buy_hold()`/`has_unknown_sell()` 를 **비어 있지 않은 str / 정확히 True** 일 때만 믿는다. 상세 `docs/risk/risk-and-exit.md`
-- **새 주문 CLI 는 인자 파싱 직후 `src.utils.trader_lock.hold_or_exit("<도구명>")` 를 부른다** — 봇 싱글톤 flock 을 잡아 보고 봇·다른 CLI 가 실행 중이면 KIS 호출 전에 exit 2(2026-09-29, 미배포). 별도 프로세스 `KISBroker` 는 봇 장부·레이트 리미터를 공유하지 않는다. 락 파일은 지우지 않는다(봇 `release_singleton_lock` 도 unlink 안 함)
+- **KIS 주문 POST 접수 불명은 거절이 아니다** (2026-09-29 구현, 15:33 KST 배포 main `974a71f`): POST 진입 뒤 응답을 믿을 수 없으면(비-JSON·네트워크 오류·`rt_cd`·`msg_cd` 없는 JSON·POST 뒤 예외) `submit_order` 가 `(False, "[접수불명] …")` 를 돌려주고 브로커 장부(`~/.cache/ai_trader/order_unknown.json`)에 남긴다 → 그날 BUY 전부 보류, 불명 SELL 종목은 분할 SELL 재발행 금지(전량은 허용). 해제는 날짜 변경뿐. 새 주문 경로도 `submit_order` 를 거치고, 엔진은 `broker.unknown_buy_hold()`/`has_unknown_sell()` 를 **비어 있지 않은 str / 정확히 True** 일 때만 믿는다. 상세 `docs/risk/risk-and-exit.md`
+- **새 주문 CLI 는 인자 파싱 직후 `src.utils.trader_lock.hold_or_exit("<도구명>")` 를 부른다** — 봇 싱글톤 flock 을 잡아 보고 봇·다른 CLI 가 실행 중이면 KIS 호출 전에 exit 2(2026-09-29, 20:47 KST 배포 main `785f1fe`). 별도 프로세스 `KISBroker` 는 봇 장부·레이트 리미터를 공유하지 않는다. 락 파일은 지우지 않는다(봇 `release_singleton_lock` 도 unlink 안 함)
 - **KIS 직접 호출은 `await kis_rate_limit.acquire(tr_id)` 선행**: 브로커·시세·스크리너가 같은 appkey라 초당 한도는 합산(EGW00201). 원장 TR(잔고/매수가능/체결/미체결)은 계좌당 초당 1건(EGW00215) — 새 원장 TR은 `utils/kis_rate_limit.LEDGER_TR_IDS`에 추가. 구/신 TR 양쪽을 다 넣는다(전환·롤백 어느 쪽에서도 직렬화가 끊기면 안 됨). 게이트웨이 상한 수치는 공식 저장소에 없고 전부 운영 실측값이다
 - **KIS TR ID는 리터럴로 쓰지 않는다**: `kis_kr._tr_id("rvsecncl"|"daily"|"cancelable")`, 주문은 `_get_tr_id_for_session(side, use_new)` — `KIS_TR_SET`(기본 legacy, 정확히 `new` 일 때만 전환) 한 곳에서만 구/신이 갈린다. `new` 전용 본문 키(`EXCG_ID_DVSN_CD`·`CNDT_PRIC`)는 그 가드 안에만 두고, hashkey 발급보다 **먼저** 붙인다(hashkey는 본문 무결성 검사). **주문 접수의 신 TR·신 본문은 정규장(`regular`) 세션 한정** — NXT 세션의 `EXCG_ID_DVSN_CD` 값이 공식 저장소에 없어 그 세션은 `new` 에서도 legacy 로 나간다
 - **KIS 연속조회 종료는 응답 헤더 `tr_cont`(F/M 다음, D/E 마지막)로 판정** — 본문 `ctx_area_*100` 키는 마지막 페이지에도 채워져 오므로 종료 근거가 못 된다(2026-09-15 EGW00215 반복 원인: 보유 1종목 계좌가 8434R 을 10회 호출). `_api_get` 이 `data["_tr_cont"]` 로 실어 준다. **요청 헤더 `tr_cont` 는 첫 페이지 미송신·2페이지째부터 `"N"`**(2026-09-21, `_api_get(..., tr_cont="N")` — 1페이지로 끝나는 호출의 요청은 무변경). 미체결 조회(`get_exchange_open_orders`)의 잘림 처리는 PR #81 이 같은 함수에서 다룬다 — 이 PR 은 건드리지 않는다
@@ -442,7 +443,8 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 ## 실행 방법
 ```bash
 source venv/bin/activate
-python scripts/run_trader.py --market both                # KR+US 동시 실거래
-python scripts/run_trader.py --market kr --dry-run        # KR 테스트
-python scripts/run_trader.py --market us                  # US만 실거래
+python scripts/run_trader.py --market kr                  # KR 실거래 (운영은 systemd 로만 기동 — 직접 실행 금지)
+python scripts/run_trader.py --market kr --dry-run        # KR 테스트 — ⚠️ 운영 봇이 떠 있으면 실행 금지
+# (PR #106 배포 전 코드는 싱글톤 락이 PID 파일의 운영 봇을 SIGTERM/SIGKILL 한다. 배포 후엔 exit 1 로 거부)
+# --market us / both: 미국 거래 영구 중단(2026-09-28) — 사용하지 않는다
 ```
