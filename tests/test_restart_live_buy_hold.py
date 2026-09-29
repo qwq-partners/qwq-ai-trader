@@ -81,6 +81,10 @@ def test_query_failure_or_exception_holds_all_buys_and_returns(ub, result):
     hold = ub.unknown_buy_hold()
     assert hold is not None and "재시작 시 거래소 미체결 조회 실패/불완전" in hold
     assert _events(ub) == ["unknown"] and len(ub.alerts) == 1
+    assert ub.has_unknown_sell(SYM) is False and ub.has_unknown_sell(OTHER) is False   # '*' BUY 는 매도 무관
+    # 운영자 표시 — '*' 항목은 종목·수량 없이 사유만('오늘 매수 * 0주' 가 실제 주문처럼 보이지 않게)
+    assert hold.startswith("접수 불명 보류: 재시작 시 거래소 미체결 조회 실패/불완전")
+    assert hold.endswith(" — 신규 매수 보류(날짜 변경 시 해제)") and "*" not in hold and "0주" not in hold
     ok, _ = _submit(ub, _order(symbol=OTHER))              # 다른 종목도 보류
     assert ok is False and ub._session.calls == 0
 
@@ -109,8 +113,31 @@ def test_existing_callers_keep_the_first_page_rows(ub, tr_cont):
     assert asyncio.run(ub.get_exchange_open_orders(require_complete=True)) is None
 
 
+@pytest.mark.parametrize("tr_cont", ["D", "E", ""])
+def test_require_complete_returns_rows_on_the_last_page(ub, tr_cont):
+    """require_complete=True 정상 경로 — 마지막 페이지(D/E)·헤더 없음은 행을 그대로 돌려준다."""
+    _api_get_returning(ub, tr_cont, [(SYM, "buy", 7), (OTHER, "sell", 3)])
+    rows = asyncio.run(ub.get_exchange_open_orders(require_complete=True))
+    assert rows == [{"symbol": SYM, "side": "buy", "qty": 7}, {"symbol": OTHER, "side": "sell", "qty": 3}]
+
+
+def test_hold_reason_text_star_vs_real_order(tmp_path):
+    """'*' 항목은 사유만, 실제 주문 항목은 종전 문구 그대로."""
+    star = UnknownOrderBook(tmp_path / "a.json", now=NOW)
+    star.record("buy", "*", 0, "재시작 시 거래소 미체결 조회 실패/불완전", NOW)
+    assert star.buy_hold_reason(NOW) == ("접수 불명 보류: 재시작 시 거래소 미체결 조회 실패/불완전"
+                                         " — 신규 매수 보류(날짜 변경 시 해제)")
+    assert star.has_unknown_sell(SYM, NOW) is False
+    real = UnknownOrderBook(tmp_path / "b.json", now=NOW)
+    real.record("buy", SYM, 7, "응답 유실", NOW)
+    assert real.buy_hold_reason(NOW) == (f"접수 불명 보류: 오늘 매수 {SYM} 7주 접수 불명(응답 유실)"
+                                         " — 신규 매수 보류(날짜 변경 시 해제)")
+
+
 @pytest.mark.parametrize("when", [
     datetime(2026, 9, 29, 7, 0),     # 장전 배포
+    datetime(2026, 9, 29, 7, 59),    # 창 시작 1분 전
+    datetime(2026, 9, 29, 20, 0),    # 창 끝(20:00 은 closed)
     datetime(2026, 9, 29, 20, 45),   # 장후 배포
     datetime(2026, 10, 3, 10, 30),   # 토요일 장중 시각
 ])
@@ -130,7 +157,8 @@ def test_fixed_holiday_on_a_weekday_queries_nothing(ub, monkeypatch):
 
 
 @pytest.mark.parametrize("when", [datetime(2026, 9, 29, 8, 0), datetime(2026, 9, 29, 8, 55),
-                                  datetime(2026, 9, 29, 15, 25), datetime(2026, 9, 29, 19, 59)])
+                                  datetime(2026, 9, 29, 15, 25), datetime(2026, 9, 29, 15, 35),  # 15:35 = break
+                                  datetime(2026, 9, 29, 19, 59)])
 def test_whole_0800_2000_window_including_gaps_queries(ub, monkeypatch, when):
     monkeypatch.setattr(kis_kr.KISBroker, "_get_current_market_session", _REAL_SESSION)
     _freeze_clock(monkeypatch, kis_kr, when)
@@ -160,3 +188,11 @@ def test_run_trader_calls_it_once_inside_a_try_after_holidays():
     assert len(tries) == 1 and tries[0].handlers
     assert ast.unparse(fn).count("hold_buys_for_live_orders_at_restart") == 1
     assert src.index("set_kr_market_holidays(all_holidays)") < src.index("hold_buys_for_live_orders_at_restart")
+    # await 로 부르고(코루틴을 버리면 조회가 안 돈다), broker.connect() 성공 뒤다(연결 전 조회는 실패→전면 보류)
+    call = next(n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                and ast.unparse(n.func).endswith("hold_buys_for_live_orders_at_restart"))
+    awaits = [n for n in ast.walk(fn) if isinstance(n, ast.Await) and n.value is call]
+    assert len(awaits) == 1
+    connect = next(n for n in ast.walk(fn) if isinstance(n, ast.Await)
+                   and ast.unparse(n.value) == "self.broker.connect()")
+    assert connect.lineno < awaits[0].lineno
