@@ -189,9 +189,17 @@ def test_dirty_evolved_overrides_is_allowed_and_preserved(deployment):
     assert "[완료]" in result.stdout
 
 
-@pytest.mark.parametrize("other", ["version.txt", "config/default.yml"])
+@pytest.mark.parametrize("other", ["version.txt", "config/default.yml", "config/evolved_overrides.yml.orig"])
 def test_other_dirty_file_still_stops_before_changes(deployment, other):
     repo, old, _, _, _ = deployment
+    if other.endswith(".orig"):   # 추적 중인 비슷한 이름 — 줄 전체 일치(-x)만 허용해야 한다
+        git(repo, "checkout", "-q", "main")
+        (repo / other).write_text("tracked\n", encoding="utf-8")
+        git(repo, "add", other)
+        git(repo, "commit", "-qm", "track similar name")
+        git(repo, "push", "-q", "origin", "main")
+        old = git(repo, "rev-parse", "HEAD")
+        git(repo, "checkout", "-q", "--detach", old)
     (repo / "config/evolved_overrides.yml").write_text("runtime: 2\n", encoding="utf-8")
     (repo / other).write_text("hand edit\n", encoding="utf-8")
     result, events = deploy(deployment)
