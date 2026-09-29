@@ -1,5 +1,26 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — fix: 후속 과제 3건 — sell_specific 폴백 수량 · 재시작 시 살아 있는 BUY 보류 · 게이트 보고/KOSPI 이력 검증 (미배포)
+
+- **지시:** 사용자 "후속과제도 개선 바로 들어가자". 격리 worktree 3개에서 병렬로 구현(Claude Opus 5.5, 요청 opus/high)한 뒤 coordinator 가 cherry-pick 으로 통합.
+- **sell_specific 폴백 수량 (`scripts/sell_specific.py`)**
+  - 15초 시장가 폴백을 보유 전량에서 '요청 수량 − 이미 팔린 수량'으로 줄였다. 팔린 수량은 첫 주문 전 스냅샷에서 현재 보유를 뺀 값이고, 현재 보유를 상한으로 둔다.
+  - 스냅샷 조회에 실패했거나 스냅샷에 없는 종목은 폴백하지 않는다. 이 경우 1차 지정가가 남을 수 있으니 MTS/HTS 에서 확인한다.
+  - 순수 함수 `fallback_qty` 를 추가했고 시험은 9건이다. `liquidate_all` 과 `hold_or_exit` 는 바꾸지 않았다.
+- **재시작 시 거래소에 살아 있는 BUY 보류 (`KISBroker.hold_buys_for_live_orders_at_restart`, `run_trader._initialize_kr`)**
+  - KR 거래일 08:00~20:00(브로커 세션이 closed 가 아닐 때) 기동하면 거래소 미체결을 1회 조회한다(원장 TR).
+  - BUY 행이 있거나, 조회가 실패·불완전(`require_complete=True` 이고 tr_cont 가 F/M)하거나, 예외가 나면 (2)단계 접수 불명 장부에 그날 BUY 보류를 기록한다. 게이트·영속·날짜 해제·알림은 기존 것을 재사용한다.
+  - 장외·휴장일에는 조회하지 않는다.
+  - `get_exchange_open_orders` 의 새 인자는 키워드 전용이고 기본값이 False 라 기존 호출부는 바뀌지 않는다. 시험은 18건이다.
+  - 사용자 HTS BUY 와는 구분할 수 없지만(D17), 막는 쪽으로 틀리므로 안전하다.
+- **게이트 보고 (`gate_performance._build_verdicts`)**
+  - 대조군이 30건 미만이면 차단 게이트의 '통과 +0.00%' 가상 비교와 완화 검토·선별 효과·효과 불명확 판정을 내지 않는다. 대신 "대조군 표본 부족 — 비교 판정 보류"로 쓴다.
+  - -3% 이하 절대 회피 구간은 ➖ 로 계속 표시한다.
+- **KOSPI 이력 (`kospi_benchmark.load_kospi_history`)**
+  - 반환 구간 종가에 NaN·inf·0 이하가 있으면 그 원천을 건너뛴다(dropna·보간 없음). 09-28 Yahoo NaN 행이 BacktestGate 레짐과 레짐 캐시로 들어가던 경로를 막는다.
+  - 모든 원천이 무효면 `(None, None)` 을 반환하고, 호출부는 기존 폴백을 탄다(삼성전자 대리 → NEUTRAL, 캐시 저장 안 함).
+- 주문·전략·위험 설정 변경 0.
+
 ## 2026-09-29 — fix: 봇 실행 중 주문 CLI 거부 + EV_ACCEPT 주문 신원(OrderRef) — **미배포** (절충안 3단계)
 
 - **설계**: `docs/superpowers/specs/2026-09-29-cli-refusal-orderref-design.md` v2 (설계 리뷰 1회차 반영). 브랜치 `fix/cli-refusal-orderref-20260929`.
