@@ -278,6 +278,13 @@ def test_history_skips_frozen_source_relative_to_end_or_today(monkeypatch):
     # end 가 미래여도 기준일은 오늘(now)
     fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17")})
     assert kb.load_kospi_history("2026-06-01", "2026-12-31", fetch=fetch, now=NOW)[1] == "FDR:YAHOO:^KS11"
+    # 30일 넘은 과거 end 는 검사하지 않는다 — 옛 연휴(대체 휴장일 목록 밖)의 멀쩡한 자료를 버리지 않게 (리뷰 P2-1)
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2025-10-02"), "KS11": frame("2025-10-02")})
+    assert kb.load_kospi_history("2025-06-01", "2025-10-09", fetch=fetch, now=NOW)[1] == "FDR:YAHOO:^KS11"
+    # 시간대가 붙은 now 도 받는다
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17")})
+    aware_now = NOW.replace(tzinfo=kb.KST)
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch, now=aware_now)[1] == "FDR:YAHOO:^KS11"
     fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-17"), "KS11": frame("2026-09-17")})
     warnings.clear()
     kb.load_kospi_history("2026-06-01", "2026-09-17", fetch=fetch, now=NOW)  # 과거 구간 명시 → 경고 없음

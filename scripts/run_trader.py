@@ -104,7 +104,7 @@ def release_singleton_lock():
     except Exception as e:
         logger.warning(f"flock 해제 실패: {e}")
     # 락 파일은 지우지 않는다 (2026-09-29): LOCK_UN→close→unlink 틈에 주문 CLI 가 옛 inode 를 잡으면
-    # 다음 봇이 새 inode 로 락을 잡아 둘이 동시에 돈다. 남은 파일은 다음 기동의 open('w')+flock 이 그대로 쓴다.
+    # 다음 봇이 새 inode 로 락을 잡아 둘이 동시에 돈다. 남은 파일은 다음 기동의 open('a')+flock 이 그대로 쓴다.
 
 
 # ============================================================

@@ -187,10 +187,15 @@ def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES
             continue
         last = df.index[-1]
         last = last.date() if hasattr(last, "date") else last
-        ref = now if now is not None else datetime.now(KST).replace(tzinfo=None)
+        today = now if now is not None else datetime.now(KST).replace(tzinfo=None)
+        if today.tzinfo is not None:
+            today = today.astimezone(KST).replace(tzinfo=None)
+        ref = today
         if end is not None:
             ref = min(ref, datetime.combine(date.fromisoformat(end[:10]), datetime.max.time()))
-        if benchmark_date_status(last, ref)[0] == "stale":
+        # 정지는 '오늘 근처' 구간에서만 문제다. 30일 넘은 과거 end 는 검사하지 않는다 — 휴장일 대체 목록이
+        # 2026~ 만 있어 옛 연휴의 직전 거래일을 잘못 잡고 멀쩡한 자료를 버린다(독립 리뷰 P2-1).
+        if (today - ref).days <= 30 and benchmark_date_status(last, ref)[0] == "stale":
             logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 마지막 봉 {last} — 기준일 {ref.date()} 의 직전 거래일보다 "
                            f"오래됨(원천 정지 의심) — 원천 제외")
             continue
