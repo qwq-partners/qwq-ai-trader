@@ -310,7 +310,9 @@ class GatePerformanceAnalyzer:
                 continue
             if control_avg is None:
                 # 대조군 표본 부족 — '통과 +0.00%' 가상값과 비교하지 않는다. 절대 회피 구간 여부만 남긴다 (2026-09-29)
-                _abs = (f" — 절대 기준 회피 구간(≤{AVOIDANCE_THRESHOLD:.0f}%)" if avg <= AVOIDANCE_THRESHOLD else "")
+                # 판정은 절대수익률 avg_return 으로 — avg 는 초과수익일 수 있다 (회피 비율 avoided_pct 도 절대 기준)
+                _abs = (f" — 절대 기준 회피 구간(절대 {g['avg_return']:+.2f}% ≤{AVOIDANCE_THRESHOLD:.0f}%)"
+                        if g["avg_return"] <= AVOIDANCE_THRESHOLD else "")
                 verdicts.append(
                     f"➖ {gate}: 차단 신호 {_lbl} {avg:+.2f}% vs 대조군 표본 부족 "
                     f"(기회손실 {opp:.0f}%, 회피 {g['avoided_pct']:.0f}%, {n}건{_clip}){_abs} — 비교 판정 보류"

@@ -312,6 +312,10 @@ def test_history_skips_source_with_nan_or_nonpositive_close(monkeypatch):
     inf.iloc[3, 0] = float("inf")
     fetch, _ = range_stub(**{"YAHOO:^KS11": inf, "KS11": frame("2026-09-28")})
     assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch)[1] == "FDR:KS11"
+    neg = frame("2026-09-28")
+    neg.iloc[7, 0] = -1.0                                  # 음수 종가도 '0 이하' — '== 0' 으로 좁히면 채택된다
+    fetch, _ = range_stub(**{"YAHOO:^KS11": neg, "KS11": frame("2026-09-28")})
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch)[1] == "FDR:KS11"
     fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-28"), "KS11": nan})
     assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch)[1] == "FDR:YAHOO:^KS11"
 

@@ -32,3 +32,22 @@ def test_enough_control_keeps_existing_verdicts():
     assert "선별 효과" in lines["G1_regime"] and "< 통과 +1.00%" in lines["G1_regime"]
     assert "효과 불명확" in lines["G3_flat"]
     assert not any("표본 부족" in v for v in lines.values())
+
+
+def test_thin_control_avoidance_mark_uses_absolute_return_not_excess():
+    """대조군 부족 분기의 '절대 기준 회피 구간' 표시는 초과수익이 아니라 절대수익률로 판정한다 (2026-09-29)."""
+    ga = GatePerformanceAnalyzer.__new__(GatePerformanceAnalyzer)
+
+    def g(abs_ret, excess):
+        return {**_g(abs_ret), "avg_excess": excess}
+
+    gates = {"PASSED(대조군)": _g(1.0, n=29),
+             "G_up_abs": g(2.0, -4.0),       # 절대 +2%·초과 -4% → 회피 표시 없음
+             "G_dn_abs": g(-4.0, 1.0),       # 절대 -4%·초과 +1% → 회피 표시
+             "G_edge": g(-3.0, 0.5),         # 정확히 -3% 경계 → 회피 표시
+             "G_above": g(-2.99, -5.0)}      # 경계 바로 위 → 표시 없음
+    lines = {v.split(":")[0].lstrip("⚠️✅➖ "): v for v in ga._build_verdicts(gates) if not v.startswith("[")}
+    assert "초과 -4.00%" in lines["G_up_abs"] and "절대 기준 회피 구간" not in lines["G_up_abs"], lines["G_up_abs"]
+    assert "절대 기준 회피 구간(절대 -4.00%" in lines["G_dn_abs"], lines["G_dn_abs"]
+    assert "절대 기준 회피 구간(절대 -3.00%" in lines["G_edge"], lines["G_edge"]
+    assert "절대 기준 회피 구간" not in lines["G_above"], lines["G_above"]
