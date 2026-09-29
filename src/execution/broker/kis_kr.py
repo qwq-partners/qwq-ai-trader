@@ -10,6 +10,7 @@ import asyncio
 import collections
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -110,6 +111,9 @@ class KISBroker(BaseBroker):
     - 프리장 (08:00~08:50): 시간외 단일가 (NXT)
     - 넥스트장 (15:30~20:00): 시간외 단일가 (NXT)
     """
+
+    # 감사 원장 EV_ACCEPT 의 source — None 이면 기록 시 실행 스크립트명(sys.argv[0]) (2026-09-29)
+    order_source: Optional[str] = None
 
     def __init__(self, config: Optional[KISConfig] = None, token_manager=None):
         self.config = config or KISConfig.from_env()
@@ -648,10 +652,18 @@ class KISBroker(BaseBroker):
                 f"주문 제출 성공: {order.symbol} {order.side.value} "
                 f"{order.quantity}주 @ {ord_unpr}원 -> KIS#{kis_ord_no}"
             )
+            # 주문 신원 (2026-09-29) — W OrderRef 필드 순서. 거래소가 확정된 KRX 세션이고 ODNO·ORGNO 가
+            # 실값일 때만 order_ref 를 싣는다(NXT 거래소 값은 근거 없음). 원시 필드는 항상 남긴다.
+            order_date = datetime.now().date().isoformat()
+            ref_ok = (session in ("regular", "pre_close", "closing")
+                      and not str(kis_ord_no).startswith("TEMP_") and bool(orgno))
             audit_log.record(
                 audit_log.EV_ACCEPT, market="KR", symbol=order.symbol,
                 side=order.side.value, qty=order.quantity, price=ord_unpr,
                 order_id=kis_ord_no, strategy=order.strategy,
+                odno=kis_ord_no, org_no=orgno, order_date=order_date, account_scope="primary",
+                order_ref=["primary", "KR", order_date, "KRX", kis_ord_no, orgno, ""] if ref_ok else None,
+                session=session, source=self.order_source or Path(sys.argv[0]).name,
             )
             return True, kis_ord_no
 

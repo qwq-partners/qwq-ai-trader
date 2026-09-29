@@ -95,6 +95,7 @@ def acquire_singleton_lock() -> bool:
         _lock_fd.flush()
     except (IOError, OSError):
         logger.error("flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중")
+        logger.error(f"  누가 쥐었나: fuser -v {LOCK_FILE} (주문 CLI 면 끝나기를 기다린다)")
         if _lock_fd:
             _lock_fd.close()
             _lock_fd = None
@@ -125,12 +126,8 @@ def release_singleton_lock():
             _lock_fd = None
     except Exception as e:
         logger.warning(f"flock 해제 실패: {e}")
-
-    try:
-        if LOCK_FILE.exists():
-            LOCK_FILE.unlink()
-    except Exception:
-        pass
+    # 락 파일은 지우지 않는다 (2026-09-29): LOCK_UN→close→unlink 틈에 주문 CLI 가 옛 inode 를 잡으면
+    # 다음 봇이 새 inode 로 락을 잡아 둘이 동시에 돈다. 남은 파일은 다음 기동의 open('w')+flock 이 그대로 쓴다.
 
 
 # ============================================================

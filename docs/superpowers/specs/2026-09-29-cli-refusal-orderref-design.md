@@ -1,6 +1,6 @@
 # 봇 실행 중 주문 CLI 거부 · OrderRef 형식 영속 — 설계 (절충안 3단계, 2026-09-29)
 
-> 상태: 설계 v2 — 설계 리뷰 1회차(Codex REQUEST_CHANGES P1 3·P2 3, 독립 Claude 운영 안전 REQUEST_CHANGES P1 2) 처분 반영(§7). 기준 main 은 `4b8e146` 이고, 운영 코드(15:33 배포 `974a71f`)와 같다.
+> 상태: 설계 v2 · 구현 완료(미배포, §8) — 설계 리뷰 1회차(Codex REQUEST_CHANGES P1 3·P2 3, 독립 Claude 운영 안전 REQUEST_CHANGES P1 2) 처분 반영(§7). 기준 main 은 `4b8e146` 이고, 운영 코드(15:33 배포 `974a71f`)와 같다.
 > 절충안 순서: (1) 초과수익 원장 ✅ → (2) 주문 POST 접수 불명 분리 ✅(PR #100) → **(3) 이 문서**.
 > 근거 원문(설계 B, `origin/feature/engine-b-minimal-kis-owner-design-20260928`):
 > - §0(B:23-25): "(3) 봇 기동 중 CLI 매도 스크립트 거부 + 주문 신원을 W `OrderRef` 형식으로 영속(나중의 attach 입양 입력)"
@@ -175,3 +175,19 @@ sudo systemctl stop qwq-ai-trader                                     # 2) 봇 �
 | P2 | 시험 격리(import 시점 상수, CLI 최상위 `load_env()`, 벽시계) | §4: 경로 명시 주입·AST·상수 monkeypatch·고정 |
 | P2 (Claude) | 거부 메시지가 runbook 참조뿐 · 폴더 없음 트레이스백 · source 자동 구분 · 운영 수용 확인 · tmux | D1 메시지·mkdir, D3 `sys.argv[0]`, §5 점검 명령, D2 tmux |
 | P2 (Claude) | `"a"` 보존 시험은 쓰는 곳 없는 성질 | 시험·변이에서 제외(`"a"` 는 유지) |
+
+## 8. 구현 기록 (2026-09-29, 미배포)
+
+- 브랜치 `fix/cli-refusal-orderref-20260929`, 기준 `de53941`(= main `4b8e146` + 이 문서). 작성 Claude Opus(요청 opus/high).
+- 변경
+  - 신규 `src/utils/trader_lock.py` — `lock_path()`, `hold_or_exit(tool, path=None)`(`"a"`·부모 mkdir·`LOCK_EX|LOCK_NB`·실패 시 D1 안내 stderr + exit 2·fd 모듈 전역 `_held` 유지·파일 미삭제).
+  - `scripts/sell_specific.py`·`scripts/liquidate_all.py` — `args = …` 바로 다음 문장에서 호출(토큰·브로커·dry-run 분기 전, US 경로 포함 한 곳).
+  - `scripts/run_trader.py` — `release_singleton_lock` 의 LOCK_FILE unlink 삭제, 락 획득 실패 로그에 `fuser -v {LOCK_FILE}` 한 줄. acquire 1단계 무변경.
+  - `src/execution/broker/kis_kr.py` — EV_ACCEPT 에 `odno`·`org_no`·`order_date`·`account_scope`·`order_ref`(조건부)·`session`·`source`. 클래스 속성 `order_source = None`.
+    `order_ref` 생략은 `None` 전달 → 감사 원장의 기존 None 제외 규칙으로 키 자체가 빠진다. `TEMP_` 판정은 `str(kis_ord_no)` — 성공 경로에 새 예외를 만들지 않기 위해.
+- 시험 `tests/test_cli_refusal_orderref.py` — T1 4건·T2 3건·T3 1건·T4 9건(`test_kis_tr_switch` 의 `broker` 픽스처·`_order`, `test_t11_entry_plan._freeze_clock` 재사용).
+  T4 는 W `OrderRef.__post_init__`(`daf8b3e:src/execution/safety/lifecycle.py:78-90`) 규칙을 시험 안에 옮겨 검증한다(W 코드는 main 에 없음).
+- 변이 8종 전부 검출(sha256 복원 확인): 거부 분기 제거·exit 코드 제거·unlink 복원·NXT 조건 제거·TEMP_ 조건 제거·ORGNO 조건 제거·sell_specific/liquidate_all 호출을 브로커 생성 뒤로.
+- 스모크: `async main()` 안의 `sys.exit(2)` 가 `asyncio.run` 을 거쳐 프로세스 종료코드 2 로 나온다(tmp 락 경로, KIS·`.env` 무관).
+- 회귀: `TZ=UTC`·`TZ=Asia/Seoul` 각각 `pytest -q -p no:cacheprovider tests/` → **2386 passed / 2 xfailed**(기준 2369 + 신규 17), `[테스트 격리] … 0건`, 종료코드 0. toss 플레이크 미발생.
+- 설계 이탈 없음. 리뷰·배포는 아직(사용자 지시 대기).
