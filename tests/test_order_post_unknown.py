@@ -749,8 +749,11 @@ def test_e3_full_fallback_or_known_symbol_still_submits(monkeypatch, partial, un
 
 def test_e4_qty_exceeded_is_still_counted_on_an_unknown_sell_symbol(home, monkeypatch):
     """구현 리뷰 1회차 P1-2: 불명 전량 SELL 이 실제 체결되면 동기화가 유령 제거를 미룬다 — 재발행의 APBK0400 을
-    세지 않으면 강제 정리 경로가 끊긴다. 불명 종목도 현행대로 센다(잘못된 좀비 알림 한 통보다 회복 경로가 중요)."""
+    세지 않으면 강제 정리 경로가 끊긴다. 불명 종목도 현행대로 센다. 알림 문구만 불명 SELL 가능성을 알린다 (2026-09-29)."""
+    alerts = []
+
     async def _alert(text, **_k):
+        alerts.append(text)
         return True
     monkeypatch.setattr("src.utils.telegram.send_alert", _alert)
     rm = _sell_rm_unknown(monkeypatch)
@@ -775,3 +778,6 @@ def test_e4_qty_exceeded_is_still_counted_on_an_unknown_sell_symbol(home, monkey
 
     assert rm._kis_qty_mismatch_count == {SYM: 2, OTHER: 2}
     assert rm._zombie_candidate_symbols == {SYM, OTHER}
+    by_sym = {sym: [a for a in alerts if sym in a] for sym in (SYM, OTHER)}
+    assert len(by_sym[SYM]) == 1 and "접수 불명 SELL" in by_sym[SYM][0] and "잔고 0주 의심" not in by_sym[SYM][0]
+    assert len(by_sym[OTHER]) == 1 and "잔고 0주 의심" in by_sym[OTHER][0] and "접수 불명" not in by_sym[OTHER][0]

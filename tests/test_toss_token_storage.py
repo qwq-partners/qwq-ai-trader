@@ -508,10 +508,23 @@ def _observe_process(directory, digest, barrier, results):
     import conftest  # noqa: F401
     from pathlib import Path
     _, storage = modules()
+    import time
     store = storage.SecureTokenStore(Path(directory), "offline-client")
+
+    def observe():
+        # 게시자의 link→unlink 사이(nlink=2)에 읽으면 독자는 unsafe_storage 로 안전 거부한다 — 제품 계약
+        # (token_store._publish_immutable 주석). 그 구간만 짧게 재시도하고, 지속되면 그대로 실패시킨다 (2026-09-29 플레이크).
+        for attempt in range(20):
+            try:
+                return store.observe_revocation(digest, 1)
+            except storage.TokenError as exc:
+                if exc.code != "unsafe_storage" or attempt == 19:
+                    raise
+                time.sleep(0.01)
+
     barrier.wait(timeout=3)
-    store.observe_revocation(digest, 1)
-    store.observe_revocation(digest, 1)
+    observe()
+    observe()
     results.put("observed")
 
 

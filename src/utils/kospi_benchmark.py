@@ -149,12 +149,12 @@ def _fdr_fetch_range(symbol: str, start: str, end: Optional[str]):
 
 def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES,
                        fetch: Optional[Callable] = None, now: Optional[datetime] = None):
-    """백테스트·분석용 KOSPI 일봉 프레임(과거 구간) — 종가가 전부 유한 양수인 첫 원천. 신선도로 거르지는 않는다.
+    """백테스트·분석용 KOSPI 일봉 프레임(과거 구간) — 종가가 전부 유한 양수이고 멈추지 않은 첫 원천.
 
     end 는 포함한다. FDR Yahoo 리더는 end 를 **로컬 자정** 기준 period2 로 넘겨 KST 에선 end 가 빠지고
     UTC 에선 다음 거래일이 섞인다 → 하루 더 조회한 뒤 end 이후 행을 잘라 시간대와 무관하게 맞춘다.
-    end 가 없으면(=오늘까지) 마지막 봉이 직전 KR 거래일보다 오래됐을 때 경고한다 — KS11 캐시가 09-17 에서
-    예외 없이 멈춘 것 같은 정지를 드러내려고(2026-09-28, scripts/ 백테스트 벤치마크 교체).
+    마지막 봉이 기준일(min(end, 오늘), end 없으면 오늘)의 직전 KR 거래일보다 오래됐으면 원천째 건너뛴다 —
+    KS11 캐시가 09-17 에서 예외 없이 멈춘 채 BacktestGate(end 지정)로 조용히 채택되던 경로 (2026-09-29).
     Returns: (DataFrame | None, "FDR:<기호>" | None)
     """
     import numpy as np
@@ -185,11 +185,19 @@ def load_kospi_history(start: str, end: Optional[str] = None, *, sources=SOURCES
         if close is None or not np.isfinite(close.to_numpy(dtype=float)).all() or (close <= 0).any():
             logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 종가에 NaN/inf/0 이하 값 — 원천 제외")
             continue
-        if end is None:
-            last = df.index[-1]
-            last = last.date() if hasattr(last, "date") else last
-            ref = now if now is not None else datetime.now(KST).replace(tzinfo=None)
-            if benchmark_date_status(last, ref)[0] == "stale":
-                logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 마지막 봉 {last} — 직전 거래일보다 오래됨(원천 정지 의심)")
+        last = df.index[-1]
+        last = last.date() if hasattr(last, "date") else last
+        today = now if now is not None else datetime.now(KST).replace(tzinfo=None)
+        if today.tzinfo is not None:
+            today = today.astimezone(KST).replace(tzinfo=None)
+        ref = today
+        if end is not None:
+            ref = min(ref, datetime.combine(date.fromisoformat(end[:10]), datetime.max.time()))
+        # 정지는 '오늘 근처' 구간에서만 문제다. 30일 넘은 과거 end 는 검사하지 않는다 — 휴장일 대체 목록이
+        # 2026~ 만 있어 옛 연휴의 직전 거래일을 잘못 잡고 멀쩡한 자료를 버린다(독립 리뷰 P2-1).
+        if (today - ref).days <= 30 and benchmark_date_status(last, ref)[0] == "stale":
+            logger.warning(f"[KOSPI벤치마크] FDR:{symbol} 마지막 봉 {last} — 기준일 {ref.date()} 의 직전 거래일보다 "
+                           f"오래됨(원천 정지 의심) — 원천 제외")
+            continue
         return df, f"FDR:{symbol}"
     return None, None

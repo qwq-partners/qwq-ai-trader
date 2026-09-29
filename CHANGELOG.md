@@ -9,6 +9,21 @@
 - Toss 문서(README·external-apis·toss-shadow-runtime): 'ON' 현재형 → grant 09-22 만료·disabled/inactive, 재발급·퇴역은 사용자 결정 대기.
 - 코드·설정 변경 0.
 
+## 2026-09-29 — fix: 감사로 확인된 기존 결함 7건 (A 묶음, 미배포)
+
+- **지시**: 사용자 "A·F 두 묶음을 지금 진행". 09-29 전수 감사(문서·코드·계획 3원천)에서 확인됐지만 고치지 않았던 기존 결함이다. 브랜치 `fix/outstanding-defects-20260929`.
+- **A1 싱글톤 락이 운영 봇을 죽이던 함정 (`scripts/run_trader.py`)**: `acquire_singleton_lock` 1단계(PID 파일 프로세스 SIGTERM→3초→SIGKILL)를 삭제했다. 운영 봇이 도는 중 `run_trader.py --dry-run` 을 띄우면 운영 봇이 죽었고, 크래시 뒤 재사용된 PID 면 무관한 프로세스를 죽일 수 있었다. 이제 flock 실패 = 아무것도 죽이지 않고 False(exit 1). 락 파일을 `'a'` 로 열어 실패한 쪽이 쥔 쪽의 PID 를 지우지 않고, 획득 뒤에만 truncate. systemd 재시작은 stop 완료 뒤 start 라 kill 단계가 필요 없다.
+- **A2 ExitManager pending 검증자 종목 지정**: `_sell_outstanding` 이 `get_exchange_open_orders(symbol=_sym)` 로 조회한다. 첫 페이지에 그 종목이 없고 다음 페이지가 남으면 '미체결 없음'(5분 해제 → 분할 익절 재발행 가능) 대신 판단 불가(None → 하드 만료 30분까지 유지). 첫 페이지에서 찾은 생존 증거는 그대로다(교차 재리뷰 지적과 충돌 없음).
+- **A3 BacktestGate 의 멈춘 KOSPI 원천 채택 (`kospi_benchmark.load_kospi_history`)**: 마지막 봉이 기준일(min(end, 오늘), end 없으면 오늘)의 직전 KR 거래일보다 오래됐으면 경고 후 원천째 건너뛴다. 종전엔 end 지정 호출(BacktestGate)은 검사하지 않아, Yahoo 무효인 날 09-17 에 멈춘 KS11 이 조용히 채택되고 레짐 캐시에 저장될 수 있었다. end 없는 호출은 경고만 → 건너뛰기로 통일(모두 무효면 `(None, None)` → 호출부 기존 폴백). 휴장일 봉('unknown')은 종전대로 통과. 기준일이 오늘보다 30일 넘게 과거면 검사하지 않는다(리뷰 P2-1 — 휴장일 대체 목록이 2026~ 만 있어 2025 이전 연휴 end 에서 멀쩡한 자료를 버렸다).
+- **A4 저장소 systemd 파일**: `qwq-ai-trader.service` 를 운영 설치본(`User=ubuntu`·`--market kr`·`EnvironmentFile`)과 같게 맞췄다(종전 `/home/user`·`User=user`). 설치된 적 없는 `scripts/service/healthcheck.sh` 삭제 — 평문 sudo 비밀번호와 장중에도 무조건 재시작하는 분기가 있었다(`systemctl list-timers` 에 해당 timer 없음 확인). `scripts/self_healer/qwq-self-healer.service` 도 `/home/user` 기준이고 미설치다 — 경로를 고치면 설치하기 쉬워질 뿐이라 그대로 뒀다.
+- **A5 신호 기록 조정 점수 0**: `SignalEventStorage.log` 의 `adjusted_score or score` → `is not None`.
+- **A6 좀비 알림 문구**: APBK0400 수량초과 2회 누적 알림이, 오늘 접수 불명 SELL 이 있는 종목이면 '실제 잔고 0주 의심' 대신 '접수 불명 SELL 이 수량을 묶고 있을 수 있음 — HTS 확인 / KIS 잔고에 남아 있으면 제거되지 않음'으로 나간다. **카운트·마킹은 그대로**(구현 리뷰 P1-2: 불명 전량 SELL 이 실제 체결되면 강제 정리가 회복 경로). 처음엔 카운트 자체를 빼려다 그 설계 기록을 보고 문구만 바꿨다.
+- **A7 플레이키 `test_two_process_observations_are_idempotent_and_never_clobber`**: 원인은 게시자의 `os.link`→`unlink` 사이(nlink=2)에 다른 관측자가 슬롯을 읽으면 `unsafe_storage` 로 안전 거부되는 **제품 계약**(주석 명시)이다 — 수동 hard link 로 확정 재현. 시험 자식 프로세스가 그 오류만 10ms 간격 최대 20회 재시도하게 했다(지속되면 실패). 제품 코드 무변경.
+- **문서**: runbook 싱글톤 락 절(기동은 아무것도 죽이지 않음), risk-and-exit(검증자 종목 지정·좀비 알림), 이미 배포된 기능의 '미배포' 표기 정리(runbook 5·risk 4·CHANGELOG 09-28 제목 2 — git 조상 확인으로 배포 SHA 표기).
+- **검증**: 새 시험 `tests/test_outstanding_defects_20260929.py`(A1 2·A2 1·A5 3), `test_kospi_benchmark` 멈춘 원천 시험 교체, `test_order_post_unknown` E4 문구 검증 추가. 되돌림 변이 6종(락 'w'·검증자 종목 없음·`or score`·stale continue 삭제·end 기준 무시·알림 분기) 전부 해당 시험 실패. toss 2-프로세스 시험 15회 반복 15/15.
+- **독립 리뷰(Claude Opus 5.5, 요청 opus/xhigh — 작성자와 다른 모델, 같은 공급자라 교차 공급자 리뷰는 아님): APPROVE, P0/P1 0.** 처분 — P2-1 과거 연휴 오판: 30일 창으로 수정+시험·변이 kill. P2-2 주석 `open('w')`→`'a'` 수정. 사소: 시간대 붙은 `now` 의 aware/naive 비교 TypeError → KST 로 떼어 냄+시험. P2-3(잔존 한계, 미수정): 규칙상 금지된 systemd 밖 봇(`nohup`)이 떠 있으면 종전엔 새 봇이 죽였지만 이제 systemd 봇이 exit 1 재시도 루프를 돌고, 8080 은 밖의 봇이 응답해 `local_deploy.sh` 헬스체크가 배포 성공으로 오판할 수 있다 — 배포 전 `fuser -v ~/.cache/ai_trader/unified_trader.lock` 로 쥔 PID 가 systemd MainPID 인지 확인(runbook 싱글톤 락 절).
+- 주문·전략·위험 설정·킬스위치·`.env` 변경 0.
+
 ## 2026-09-29 — ops: main `785f1fe` 배포 (PR #103 + #104), 20:47 KST · 초과수익 원장 첫 실행 결과
 
 - **지시**: 사용자가 PR #103 을 "오늘 밤 20:45 뒤 배포"로, PR #104 를 "#103 + #104 함께"로 선택했다. `config/evolved_overrides.yml` 미커밋 수정 보존은 이번 배포 건으로 다시 승인받았다. 두 PR 모두 필수 verify 통과 뒤 병합했다(#103 `0238e2e`, #104 `785f1fe`). 병합 트리는 시험한 트리와 diff 0줄이다.
@@ -216,7 +231,7 @@
 - 재시작 전 계측(09-28 첫 거래일): EGW00215 65건 전부 portfolio_sync/account_summary(8434R, 시도 944·재시도 63) — 리미터 간격으로 설명 안 됨, 후속 조사. 장중 미관측(내일 확인): 08:30 변동성 원천·값, 스크리너 Yahoo fresh, 수확 shadow, 09:30 안전자산 영구 비활성 로그, 장중 RS 값 — `docs/operations/monitoring-checkpoints.md` 09-28 절.
 - 주문·전략·위험 설정·임계값·킬스위치·`.env` 변경 0.
 
-## 2026-09-28 — fix: 장중 RS 정렬 KOSPI 기준값·약세장 필터 캐시 소유자·안전자산 종목명 원천 (미배포)
+## 2026-09-28 — fix: 장중 RS 정렬 KOSPI 기준값·약세장 필터 캐시 소유자·안전자산 종목명 원천 (09-28 15:39 배포 main `d551ab9`)
 
 - `kr_scheduler` 장중품질 경로의 RS 정렬(`_ib_kospi_chg`)이 `get_kospi_change()` 에 없는 키 `c1` 을 읽고 `c5`(5일 변화율)로 떨어져, 종목의 **당일** `change_pct` 를 KOSPI **5일** 변화율로 나눠 "지수 대비 강세(+5점)"를 판정했다. 주석의 의도("KOSPI 오늘 등락")대로 `bot.risk_manager._market_trend["kospi_pct"]`(kr_market_trend 루프가 2분마다 `fetch_index_price("0001")` 로 갱신)를 3분 이내일 때만 쓴다 — 추가 KIS 호출 0. 캐시가 없거나 묵으면 0.0 → 기존처럼 RS 보정 정렬 생략(`> 0.3%` 일 때만 적용). 모듈 헬퍼 `_intraday_kospi_change` + 시험 3건.
 - 운영 영향: 장중 돌파 후보의 **정렬 순서만** 바뀐다(후보 자격·점수 임계·변동률 상한·일일 한도 무변경). 주문·위험 설정 변경 0.
@@ -224,7 +239,7 @@
 - **약세장 필터 죽은 분기 삭제:** 장중 자동 시그널의 약세장 필터("우선 RiskManager 캐시 활용")는 `bot.engine.risk_manager._market_trend` 를 읽었지만 그 캐시는 `bot.risk_manager` 에만 있어 한 번도 쓰이지 않았고 실제 동작은 늘 KODEX200/KOSDAQ150 ETF 시세 조회였다. 소유자를 고쳐 캐시를 쓰게 하는 안은 Codex 교차 리뷰 P1(그 캐시는 한쪽 지수 조회 실패도 0% 로 채워 가중 -0.9% 로 차단을 놓칠 수 있음)로 기각하고, 죽은 분기만 지웠다 — **동작 변화 0**.
 - **안전자산 후보 종목명 원천:** KIS 현재가(FHKST01010100) 응답엔 종목명(`hts_kor_isnm`)이 없어 08-31 이후 1278회 전부 "이름 조회 실패(API 장애 추정)"로 5분마다 후보 4종 현재가만 조회하며 재시도했다(검증 통과 0, 매수 0). `StockMaster.get_name`(DB) 으로 이름을 읽는 `_pick_safe_asset` 헬퍼로 교체. 마스터 이름으로 보면 후보 코드 3개가 주석과 다른 종목(458730=TIGER 미국배당다우존스, 357870=TIGER CD금리투자KIS(합성), 273130=KODEX 종합채권(AA-이상)액티브)이고 152470 은 목록에 없어 **전부 미매칭 → 설계대로 "자동 운용 영구 비활성" 후 루프 종료**(주문 0). 실제 운용은 올바른 후보 코드 선정(사용자 결정) 뒤.
 
-## 2026-09-28 — fix: KOSPI 지수 원천 정지·KR 휴장일 누락·toss 시험 시계 (미배포)
+## 2026-09-28 — fix: KOSPI 지수 원천 정지·KR 휴장일 누락·toss 시험 시계 (09-28 15:39 배포 main `d551ab9`)
 
 - **KOSPI 일봉 원천 (돈 경로 — 모멘텀 계열 신규 매수 사이징):** FDR 0.9.110 `DataReader("KS11"/"KQ11")` 는 KRX 가 아니라 GitHub `fdr_krx_data_cache` CSV 를 읽고 읽기 실패를 삼킨다. 상류 지수 파일이 09-17 장중 부분봉(6724.34, 거래량 절반)에서 멈춘 뒤에도 예외 없이 오래된 프레임을 돌려줬고, 변동성 타게팅은 KS11 이 예외를 낼 때만 폴백해 09-17 자료의 실현변동성 31.8%/×0.786 을 매일 '오늘' 날짜로 캐시에 기록했다(노후 3일 가드 무력화).
   - 신규 `src/utils/kospi_benchmark.py`: 스크리너에 있던 날짜·이력 검증(당일 부분봉 또는 직전 KR 거래일만 fresh, 50행 이상·날짜 엄격 증가·종가 유한 양수, 실패 우선순위)을 옮기고 원천 순서를 `YAHOO:^KS11` → `KS11` 로 바꿨다. 스크리너 속성 계약·15초 대기·로그 형태는 유지.

@@ -2622,11 +2622,16 @@ class RiskManager:
                                 _pos = self.engine.portfolio.positions.get(sym)
                                 _name = getattr(_pos, "name", "?") if _pos else "?"
                                 _qty = getattr(_pos, "quantity", "?") if _pos else "?"
+                                # 오늘 접수 불명 SELL 이 수량을 묶고 있으면 잔고 0 이 아닐 수 있다 — 세기는 그대로
+                                # (불명 전량 체결 시 강제 정리 경로), 알림만 바로잡는다 (2026-09-29)
+                                _cause = ("오늘 접수 불명 SELL 이 수량을 묶고 있을 수 있음 — HTS 미체결 확인\n"
+                                          "KIS 잔고에 남아 있으면 제거되지 않습니다"
+                                          if self._has_unknown_sell(sym) else
+                                          "실제 잔고 0주 의심\n다음 portfolio_sync에서 자동 제거됩니다")
                                 _alert_task = asyncio.create_task(send_alert(
                                     f"⚠️ <b>좀비 포지션 감지</b>\n"
                                     f"{sym} {_name} (엔진 {_qty}주)\n"
-                                    f"KIS 매도 수량초과 {cnt}회 연속 — 실제 잔고 0주 의심\n"
-                                    f"다음 portfolio_sync에서 자동 제거됩니다"
+                                    f"KIS 매도 수량초과 {cnt}회 연속 — {_cause}"
                                 ))
                                 # 2026-08-08 P2: 발송 예외 관찰 (미회수 예외 방지)
                                 _alert_task.add_done_callback(

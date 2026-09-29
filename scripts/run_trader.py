@@ -49,59 +49,36 @@ _lock_fd = None  # 전역 파일 디스크립터 (프로세스 수명 동안 유
 
 def acquire_singleton_lock() -> bool:
     """
-    flock 기반 싱글톤 락 획득
+    flock 기반 싱글톤 락 획득 — 쥔 쪽이 있으면 아무것도 죽이지 않고 False.
 
-    1단계: 실행 중인 다른 프로세스를 SIGTERM → SIGKILL
-    2단계: flock 파일 락으로 race condition 완전 차단
-    3단계: PID 파일 기록
+    2026-09-29: 예전 1단계(PID 파일의 프로세스 SIGTERM→SIGKILL)를 없앴다. 운영 봇이 도는 중에
+    `--dry-run` 을 띄우면 운영 봇을 죽였고, 크래시 뒤 재사용된 PID 면 무관한 프로세스를 죽일 수 있었다.
+    락을 잡았다면 락을 쥔 봇이 없다는 뜻이라 죽일 대상도 없다. systemd 재시작은 stop 이 끝난 뒤 start 한다.
 
     Returns:
         True: 락 획득 성공 (유일한 프로세스)
-        False: 락 획득 실패
+        False: 락 획득 실패 (봇 또는 주문 CLI 가 실행 중)
     """
     global _lock_fd
-    import time
 
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1단계: PID 파일에서 기존 프로세스 종료 (안전: PID 파일에 기록된 프로세스만 종료)
+    # flock 획득 (non-blocking). "a" 로 연다 — 실패해도 쥔 쪽이 쓴 PID 를 지우지 않는다.
     try:
-        if PID_FILE.exists():
-            old_pid = int(PID_FILE.read_text().strip())
-            if old_pid != os.getpid():
-                try:
-                    os.kill(old_pid, signal.SIGTERM)
-                    logger.warning(f"기존 프로세스 PID={old_pid} SIGTERM 전송")
-                    time.sleep(3)
-                    try:
-                        os.kill(old_pid, 0)  # 아직 살아있는지 확인
-                        os.kill(old_pid, signal.SIGKILL)
-                        logger.warning(f"기존 프로세스 PID={old_pid} SIGKILL 전송")
-                        time.sleep(1)
-                    except ProcessLookupError:
-                        pass
-                except ProcessLookupError:
-                    pass  # 이미 종료됨
-                except ValueError:
-                    pass  # PID 파일 손상
-    except Exception as e:
-        logger.debug(f"기존 프로세스 확인 실패: {e}")
-
-    # 2단계: flock 획득 (non-blocking)
-    try:
-        _lock_fd = open(LOCK_FILE, 'w')
+        _lock_fd = open(LOCK_FILE, 'a')
         fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fd.truncate(0)
         _lock_fd.write(str(os.getpid()))
         _lock_fd.flush()
     except (IOError, OSError):
-        logger.error("flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중")
+        logger.error("flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중 (아무 프로세스도 종료하지 않음)")
         logger.error(f"  누가 쥐었나: fuser -v {LOCK_FILE} (주문 CLI 면 끝나기를 기다린다)")
         if _lock_fd:
             _lock_fd.close()
             _lock_fd = None
         return False
 
-    # 3단계: PID 파일 기록
+    # PID 파일 기록
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
@@ -127,7 +104,7 @@ def release_singleton_lock():
     except Exception as e:
         logger.warning(f"flock 해제 실패: {e}")
     # 락 파일은 지우지 않는다 (2026-09-29): LOCK_UN→close→unlink 틈에 주문 CLI 가 옛 inode 를 잡으면
-    # 다음 봇이 새 inode 로 락을 잡아 둘이 동시에 돈다. 남은 파일은 다음 기동의 open('w')+flock 이 그대로 쓴다.
+    # 다음 봇이 새 inode 로 락을 잡아 둘이 동시에 돈다. 남은 파일은 다음 기동의 open('a')+flock 이 그대로 쓴다.
 
 
 # ============================================================
@@ -883,7 +860,8 @@ class UnifiedTradingBot:
                     # 로컬 get_open_orders() 캐시는 재시작 후 비어 항상 False가 되어
                     # 이중 매도 방지가 무력화됐었다. 조회 실패는 None(pending 유지).
                     try:
-                        _rows = await _b.get_exchange_open_orders()
+                        # 종목 지정 — 첫 페이지에 없고 다음 페이지가 남았으면 None(판단 불가)을 받는다 (2026-09-29)
+                        _rows = await _b.get_exchange_open_orders(symbol=_sym)
                         if _rows is None:
                             return None  # 판단 불가 — pending 유지 (fail-safe)
                         return any(
