@@ -1,4 +1,4 @@
-# 운영 설치본(/etc/systemd/system/qwq-ai-trader.service)의 사본 — 2026-09-29 동기화. 설치본이 정본이다.
+# 운영 설치본(/etc/systemd/system/qwq-ai-trader.service)의 사본 — 2026-09-30 동기화(OOMScoreAdjust 추가). 설치본이 정본이다.
 [Unit]
 Description=QWQ AI Trader
 After=network-online.target postgresql.service cloudflared.service
@@ -16,6 +16,8 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 LimitNOFILE=65536
+# 호스트 메모리 부족 시 봇보다 다른 프로세스를 먼저 죽인다 (2026-09-30, 09-29 22:21 OOM kill 재발 방지)
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target

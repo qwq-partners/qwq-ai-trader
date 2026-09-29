@@ -153,7 +153,7 @@ upstream 훅은 HTTP가 아니라 **파일**로 상태를 남긴다
 ```bash
 bash tools/office/build.sh                    # 고정 커밋 재현 빌드
 UPSTREAM_REF=main bash tools/office/build.sh  # upstream 최신 반영
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+sudo systemctl restart qwq-ai-trader
 ```
 
 `static/office/`를 직접 수정하면 다음 빌드에서 사라진다. 문구 수정은 `tools/office/ko.json`에서.

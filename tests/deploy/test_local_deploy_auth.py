@@ -42,6 +42,8 @@ def deployment(tmp_path):
     executable(verify, '#!/bin/bash\nprintf "verify\\n" >> "$QWQ_TEST_EVENTS"\n'
                '[[ ${QWQ_TEST_FAILURE:-} != verify ]]\n')
     (repo / "version.txt").write_text("old\n", encoding="utf-8")
+    (repo / "config").mkdir()
+    (repo / "config/evolved_overrides.yml").write_text("committed: 1\n", encoding="utf-8")
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "old")
     old = git(repo, "rev-parse", "HEAD")
@@ -172,3 +174,49 @@ def test_failed_rollback_is_emergency_exit_two(deployment, failure):
     else:
         assert "health new" in events
         assert "health old" in events
+
+
+# ── 봇이 쓰는 evolved_overrides.yml 미커밋 수정 허용 (2026-09-30 사용자 결정) ──
+
+def test_dirty_evolved_overrides_is_allowed_and_preserved(deployment):
+    repo, _, target, _, _ = deployment
+    overrides = repo / "config/evolved_overrides.yml"
+    overrides.write_text("runtime: 2\n", encoding="utf-8")
+    result, events = deploy(deployment)
+    assert result.returncode == 0, result.stderr
+    assert git(repo, "rev-parse", "HEAD") == target
+    assert overrides.read_text(encoding="utf-8") == "runtime: 2\n"
+    assert "[완료]" in result.stdout
+
+
+@pytest.mark.parametrize("other", ["version.txt", "config/default.yml", "config/evolved_overrides.yml.orig"])
+def test_other_dirty_file_still_stops_before_changes(deployment, other):
+    repo, old, _, _, _ = deployment
+    if other.endswith(".orig"):   # 추적 중인 비슷한 이름 — 줄 전체 일치(-x)만 허용해야 한다
+        git(repo, "checkout", "-q", "main")
+        (repo / other).write_text("tracked\n", encoding="utf-8")
+        git(repo, "add", other)
+        git(repo, "commit", "-qm", "track similar name")
+        git(repo, "push", "-q", "origin", "main")
+        old = git(repo, "rev-parse", "HEAD")
+        git(repo, "checkout", "-q", "--detach", old)
+    (repo / "config/evolved_overrides.yml").write_text("runtime: 2\n", encoding="utf-8")
+    (repo / other).write_text("hand edit\n", encoding="utf-8")
+    result, events = deploy(deployment)
+    assert result.returncode == 1 and "evolved_overrides 외" in result.stderr
+    assert git(repo, "rev-parse", "HEAD") == old
+    assert events == ["preflight"]
+
+
+def test_target_changing_overrides_stops_when_runtime_copy_is_dirty(deployment):
+    repo, old, _, env, _ = deployment
+    git(repo, "checkout", "-q", "main")
+    (repo / "config/evolved_overrides.yml").write_text("committed: 3\n", encoding="utf-8")
+    git(repo, "commit", "-qam", "change overrides")
+    target = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "--detach", old)
+    (repo / "config/evolved_overrides.yml").write_text("runtime: 2\n", encoding="utf-8")
+    result = run(["bash", str(SCRIPT), target], env=env)
+    assert result.returncode == 1 and "충돌" in result.stderr
+    assert git(repo, "rev-parse", "HEAD") == old
+    assert (repo / "config/evolved_overrides.yml").read_text(encoding="utf-8") == "runtime: 2\n"

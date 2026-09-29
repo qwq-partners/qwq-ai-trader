@@ -186,14 +186,13 @@ def restart_bot() -> bool:
     """systemctl restart로 새 모델 즉시 반영."""
     import subprocess
     try:
-        subprocess.run(
-            ["sudo", "-S", "-k", "systemctl", "restart", "qwq-ai-trader"],
-            input="user123!\n",
+        result = subprocess.run(
+            ["sudo", "-n", "systemctl", "restart", "qwq-ai-trader"],   # 비대화형 — 비밀번호를 코드에 두지 않는다
             text=True,
             timeout=30,
             check=False,
         )
-        return True
+        return result.returncode == 0
     except Exception as e:
         print(f"[WARN] 봇 재시작 실패: {e}")
         return False

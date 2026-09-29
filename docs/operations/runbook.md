@@ -6,10 +6,10 @@
 
 ```bash
 # 재시작
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+sudo systemctl restart qwq-ai-trader
 
 # 중지
-echo 'user123!' | sudo -S -k systemctl stop qwq-ai-trader
+sudo systemctl stop qwq-ai-trader
 
 # 상태
 systemctl is-active qwq-ai-trader
@@ -27,6 +27,7 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 > (`scripts/deploy/local_deploy.sh <SHA>` — verify→재시작→헬스체크→실패 시 자동 롤백),
 > `/ops-check` (`scripts/dev/ops_check.sh` — 오류·KIS 거절·아침 잡·포트폴리오 요약),
 > `/pr-merge` (`gh` CLI, `~/.gh_token`). WSL에서의 정식 경로는 lightsail-deployment.md.
+> 운영 checkout 의 `config/evolved_overrides.yml` 미커밋 수정(봇 진화 시스템이 쓴다)은 `local_deploy.sh` 가 허용·보존한다(2026-09-30~) — 다른 변경이 있거나 대상 커밋이 그 파일을 바꾸면 중단. 사본 스크립트·매 배포 승인은 더 필요 없다.
 
 1. `python3 -m py_compile <수정파일>` — 문법 검증
 2. 봇 재시작 (위 명령)
@@ -247,11 +248,11 @@ ls src/dashboard/static/office/assets/ || bash tools/office/build.sh
 ```bash
 # 전환: .env 에 한 줄 추가 후 재시작 (import 시점 상수라 재시작 없이는 반영되지 않는다)
 echo 'KIS_TR_SET=new' >> /home/ubuntu/projects/qwq-ai-trader/.env
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+sudo systemctl restart qwq-ai-trader
 
 # 롤백: 그 줄을 지우고 재시작 (값이 'new' 가 아니면 전부 legacy)
 sed -i '/^KIS_TR_SET=/d' /home/ubuntu/projects/qwq-ai-trader/.env
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+sudo systemctl restart qwq-ai-trader
 ```
 
 - 적용 TR 표와 본문 차이는 `docs/integrations/external-apis.md` 의 브로커 절.
@@ -358,7 +359,7 @@ KIS 에 닿았는지 모르는 상태다. 봇은 재전송하지 않고 **그날
 ```bash
 rm ~/.cache/ai_trader/order_unknown.json
 # 장 마감 뒤 (pending 확인 후)
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+sudo systemctl restart qwq-ai-trader
 ```
 
 CLI(`scripts/sell_specific.py`·`liquidate_all.py`)의 불명도 같은 파일에 기록되고 출력에 `[접수불명]` 이 찍히지만,
