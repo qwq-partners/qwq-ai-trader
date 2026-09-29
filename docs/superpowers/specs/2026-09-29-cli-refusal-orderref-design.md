@@ -80,7 +80,8 @@ CLI 의 취소는 자기 인스턴스의 추적만 순회하므로 봇 주문에
 **1순위 — 봇을 멈추지 않는 방법**(가장 빠르다. 봇 내부 청산 경로는 없다):
 1. `touch ~/.cache/ai_trader/KILL_SWITCH` — 봇 신규 매수 차단(2초 안 반영). **`KILL_SWITCH_ALL`·`KILL_SWITCH_ALL_KR` 금지** — CLI·봇 매도까지 막힌다.
 2. MTS/HTS 에서 **미체결 일괄취소**(봇의 살아 있는 BUY 가 청산 뒤 체결되는 것 방지) → 보유 전량 매도.
-3. **30초 뒤 미체결을 다시 확인·취소한다** — 킬스위치 직전 검사를 통과한 BUY 가 hashkey·rate-limit 대기 뒤 늦게 전송될 수 있다(`_api_post` 전송 직전 재검사는 접수 불명 보류만 본다). (구현 리뷰 1회차 P1)
+3. **30초 뒤 미체결을 다시 확인·취소한다** — 킬스위치 직전 검사를 통과한 BUY 가 hashkey·rate-limit 대기 뒤 늦게 전송될 수 있다. (구현 리뷰 1회차 P1)
+   킬스위치를 만들면 그 뒤(최대 2초 캐시) 봇 BUY 는 전송 직전에도 막힌다. 이미 전송 중이던 요청만 남으므로 30초 뒤 재확인으로 닫는다. `_api_post` 의 매수 TR 전송 직전 재확인(매 시도·401 재전송 포함 rate-limit 직후)이 접수 불명 보류와 함께 `kill_switch.check("buy", market="KR")` 도 본다 — SELL 은 재검사하지 않는다. (구현 리뷰 2회차 P1)
 4. 그 재확인 뒤에 잔고·미체결 0 을 확인해 청산 완료로 판정한다. 봇은 30초 동기화로 결과를 반영한다. KILL_SWITCH 는 재개를 판단할 때까지 유지한다.
 
 **2순위 — CLI 로 할 때**(tmux 안에서 실행 — SSH 가 끊겨 SIGHUP 이 15초 대기 중인 CLI 를 죽이면 자기 SELL 이 매도가능수량을 잡아 재실행이 I1 로 거부된다):
@@ -191,6 +192,15 @@ cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.
 | P2 (공통) | runbook·D2 의 CLI 명령이 상대경로 | `cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.py --market kr` |
 | P2 (Claude) | `LOCK_EX`→`LOCK_SH` 변이가 시험에 걸리지 않는다 | 같은 프로세스에서 첫 획득 fd 를 보관·`_held=None` 후 재호출 → exit 2 시험 추가 |
 
+### 구현 리뷰 2회차 (2026-09-29, 대상 `0509545`, 한정 재리뷰)
+
+- Codex(교차 공급자, rollout 기준 gpt-6-astra/xhigh): REQUEST_CHANGES — P1 1 · P2 1. 1회차의 나머지 처분은 종결.
+
+| # | 지적 | 처분 |
+|---|---|---|
+| P1 | 지연 BUY 는 30초 재확인으로 닫히지 않는다 — 머리 킬스위치 검사를 지난 BUY 가 hashkey(15초 시한·최대 3회)·rate-limit(전체 시한 없음) 대기 뒤 운영자 재확인 이후에 전송될 수 있다 | 코드: `_api_post` 매수 TR 전송 직전 재확인에 `kill_switch.check("buy", market="KR")` 추가, 막히면 기존 `_blocked` 반환 → `submit_order` 의 기존 `_blocked` 처리(record_blocked + `(False, 사유)`) 재사용. 위치(매 시도·401 재전송 포함 rate-limit 직후) 유지, SELL 제외. 시험: 머리 허용·전송 직전 차단 → POST 0·blocked·`(False, 사유)`, 401 재전송 직전 차단, 대조군(킬스위치 없음) 성공 경로 그대로, SELL 은 검사 1회. 문서: runbook·D2 1순위에 "킬스위치 뒤(최대 2초 캐시) BUY 는 전송 직전에도 막힌다, 이미 전송 중이던 요청만 30초 재확인으로 닫는다" |
+| P2 | `_accept_identity` "어떤 입력에도 예외 없음" 과장 | docstring 을 "JSON 기본형·내부 문자열 입력에서 예외 없음(str 하위 클래스 등 임의 객체는 보장 밖), `datetime.now()` 사용" 으로 정정. 코드 무변경 |
+
 ## 8. 구현 기록 (2026-09-29, 미배포)
 
 - 브랜치 `fix/cli-refusal-orderref-20260929`, 기준 `de53941`(= main `4b8e146` + 이 문서). 작성 Claude Opus(요청 opus/high).
@@ -211,4 +221,10 @@ cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.
   - 시험 +8(총 25): `sys.argv=[]` BUY·SELL 성공 경로 2, W 신원 반례 5(ODNO int·`local-1`·앞 공백, ORGNO 공백·None), 같은 프로세스 두 번째 획득 거부 1.
   - 변이 5종 추가 검출(sha256 복원 확인): argv 방어 제거, `local-` 검사 제거, 공백 검사 제거, 둘 다 제거, `LOCK_EX`→`LOCK_SH`.
   - 회귀: `TZ=UTC`·`TZ=Asia/Seoul` 각각 **2394 passed / 2 xfailed**(2386 + 8), `[테스트 격리] … 0건`, 종료코드 0.
+- **구현 리뷰 2회차 반영**(§7 처분표):
+  - `kis_kr._api_post` 매수 TR 전송 직전 재확인에 킬스위치 재검사, `_api_post` docstring `_blocked` 설명·`_accept_identity` docstring 정정.
+  - 시험 +4(총 29): 머리 허용·전송 직전 차단, 401 재전송 직전 차단, 대조군, SELL 미검사. 기존 `tests/test_review_fixes_2026_09.py::_post_broker` 가
+    매수 TR 로 `_api_post` 를 직접 불러 운영 킬스위치 플래그를 stat 했으므로(격리 위반 4건) 그 헬퍼에 `kill_switch.check` 가짜 한 줄을 넣었다(허용 파일 밖 — 별도 커밋).
+  - 변이 2종 검출(sha256 복원 확인): 재검사 제거, 재검사 결과 무시.
+  - 회귀: `TZ=UTC`·`TZ=Asia/Seoul` 각각 **2398 passed / 2 xfailed**(2394 + 4), `[테스트 격리] … 0건`, 종료코드 0.
 - 배포는 아직(사용자 지시 대기).

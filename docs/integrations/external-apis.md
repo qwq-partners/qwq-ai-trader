@@ -89,8 +89,8 @@
   | POST 진입 뒤 `asyncio.CancelledError`(종료 신호) | **UNKNOWN 기록 후 다시 raise**(알림 없음) |
   | rt_cd 0 인데 ODNO 없음(TEMP_) | 범위 밖 — 성공 경로 그대로 |
 
-  매수 TR(구/신)은 `_api_post` 가 매 시도의 rate-limit 대기 직후·전송 전에 접수 불명 보류를 다시
-  확인하고, 걸리면 보내지 않고 `_blocked: True` 로 돌려준다(`submit_order` → `blocked` 기록).
+  매수 TR(구/신)은 `_api_post` 가 매 시도의 rate-limit 대기 직후·전송 전에 킬스위치(`kill_switch.check("buy")`, 2026-09-29 3단계)와
+  접수 불명 보류를 다시 확인하고, 걸리면 보내지 않고 `_blocked: True` 로 돌려준다(`submit_order` → `blocked` 기록). SELL 은 재검사하지 않는다.
   취소(`retry=True`)에도 `_unknown` 이 실리지만 `cancel_order` 는 읽지 않는다 — 반환 불변.
 - **감사 원장 `accept` 행의 주문 신원** (2026-09-29 구현, 미배포 — 설계
   `docs/superpowers/specs/2026-09-29-cli-refusal-orderref-design.md` D3): `submit_order` 성공 경로의

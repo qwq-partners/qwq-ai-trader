@@ -105,8 +105,9 @@ def _is_clean_id(value) -> bool:
 
 
 def _accept_identity(odno, orgno, session: str, source: str) -> dict:
-    """감사 원장 EV_ACCEPT 에 붙일 주문 신원 (2026-09-29). 접수 성공 뒤에 부르므로 어떤 입력에도 예외를 내지 않는다
-    (예외면 posted 뒤 경로가 성공 주문을 접수 불명으로 바꾼다).
+    """감사 원장 EV_ACCEPT 에 붙일 주문 신원 (2026-09-29). 접수 성공 뒤에 부르므로 JSON 기본형·내부 문자열 입력에서
+    예외를 내지 않는다(str 하위 클래스 등 임의 객체는 보장 밖; 예외면 posted 뒤 경로가 성공 주문을 접수 불명으로 바꾼다).
+    `order_date` 는 `datetime.now()` 로 구한다.
 
     원시 필드는 항상 싣는다(`org_no` 가 None 이면 "" — 감사 원장은 None 필드를 뺀다). `order_ref` 는 W OrderRef
     필드 순서이며, 거래소가 확정된 KRX 세션이고 ODNO·ORGNO 가 W 신원 규칙(비지 않은 str·앞뒤 공백 없음·
@@ -402,7 +403,7 @@ class KISBroker(BaseBroker):
         반환 dict 표식 (2026-09-29, 주문 접수 불명 분리):
         - `_unknown: True` — 비-JSON 본문(상태 무관), retry=False 의 네트워크 오류·시한 초과. 서버에 닿았을 수 있다.
           취소(retry=True)에도 실리지만 cancel_order 는 읽지 않는다.
-        - `_blocked: True` — 매수 TR 인데 전송 직전 접수 불명 보류가 걸려 보내지 않았다(msg1 = 사유).
+        - `_blocked: True` — 매수 TR 인데 전송 직전 킬스위치 또는 접수 불명 보류가 걸려 보내지 않았다(msg1 = 사유).
         """
         if not self._session or self._session.closed:
             logger.warning("[API] 세션 없음, 재연결 시도")
@@ -416,9 +417,11 @@ class KISBroker(BaseBroker):
             try:
                 await self._rate_limit()
                 # 전송 직전 재확인 (2026-09-29) — submit_order 머리 게이트를 지난 BUY 가 hashkey·rate-limit 을
-                # 기다리는 사이 다른 BUY 가 접수 불명이 됐으면 보내지 않는다. 401 재전송 직전에도 매번 확인한다.
+                # 기다리는 사이 킬스위치가 켜졌거나 다른 BUY 가 접수 불명이 됐으면 보내지 않는다. 401 재전송 직전에도
+                # 매번 확인한다. SELL 은 재검사하지 않는다(긴급 절차는 KILL_SWITCH 만 쓴다).
                 if tr_id in _BUY_TR_IDS:
-                    hold = self.unknown_buy_hold()
+                    allowed, block_reason = kill_switch.check("buy", market="KR")
+                    hold = self.unknown_buy_hold() if allowed else block_reason
                     if hold:
                         return {"rt_cd": "-1", "msg1": hold, "_blocked": True}
                 headers = self._get_headers(tr_id)

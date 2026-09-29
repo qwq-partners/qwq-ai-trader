@@ -26,6 +26,9 @@ from src.execution.broker import kis_kr  # noqa: E402
 from src.utils import trader_lock  # noqa: E402
 
 from test_kis_tr_switch import _order, broker  # noqa: E402,F401
+from test_order_post_unknown import _RecSession, _submit, ub  # noqa: E402,F401
+from test_order_post_unknown import _order as _ub_order  # noqa: E402
+from test_review_fixes_2026_09 import _FakeResp  # noqa: E402
 from test_t11_entry_plan import _freeze_clock  # noqa: E402
 
 NOW = datetime(2026, 9, 29, 10, 30, 0)
@@ -280,3 +283,60 @@ def test_t4_order_ref_follows_w_identity_rules_and_org_no_stays_a_string(broker,
     assert result == (True, output["ODNO"])   # 반환은 원본 값 그대로
     assert "order_ref" not in f
     assert f["odno"] == output["ODNO"] and isinstance(f["org_no"], str) and f["session"] == "regular"
+
+
+# ── 구현 리뷰 2회차: 매수 TR 전송 직전 킬스위치 재검사 ─────────────────────────
+
+_KS_BLOCK = (False, "킬스위치 매수 차단(KILL_SWITCH): 긴급 청산")
+
+
+def _switch(monkeypatch, verdicts):
+    """kill_switch.check 가짜 — n번째 호출에 verdicts[n] (넘치면 마지막 값). 호출 (side, market) 을 기록한다."""
+    calls = []
+
+    def check(side, market="KR"):
+        calls.append((side, market))
+        return verdicts[min(len(calls), len(verdicts)) - 1]
+    monkeypatch.setattr(kis_kr.kill_switch, "check", check)
+    return calls
+
+
+def _events_of(b):
+    return [e for e, _ in b.audits]
+
+
+def test_r2_kill_switch_after_the_head_check_stops_the_buy_before_send(ub, monkeypatch):  # noqa: F811
+    calls = _switch(monkeypatch, [(True, ""), _KS_BLOCK])   # 머리 검사 허용 → 전송 직전 차단
+    assert _submit(ub, _ub_order()) == (False, _KS_BLOCK[1])
+    assert ub._session.sent == []                            # POST 0회
+    assert calls == [("buy", "KR"), ("buy", "KR")]
+    assert [f["reason"] for e, f in ub.audits if e == "blocked"] == [_KS_BLOCK[1]]
+    assert kis_kr.audit_log.EV_UNKNOWN not in _events_of(ub) and kis_kr.audit_log.EV_ACCEPT not in _events_of(ub)
+    assert ub._pending_orders == {} and ub.unknown_buy_hold() is None and ub.alerts == []
+
+
+def test_r2_kill_switch_is_rechecked_before_the_401_resend(ub, monkeypatch):  # noqa: F811
+    ub._session = _RecSession(_FakeResp(401, {}))
+
+    async def _recover():
+        return None
+    ub._recover_token = _recover
+    calls = _switch(monkeypatch, [(True, ""), (True, ""), _KS_BLOCK])   # 머리·1차 전송 허용 → 401 재전송 직전 차단
+    assert _submit(ub, _ub_order()) == (False, _KS_BLOCK[1])
+    assert len(ub._session.sent) == 1 and len(calls) == 3
+    assert "blocked" in _events_of(ub) and kis_kr.audit_log.EV_UNKNOWN not in _events_of(ub)
+
+
+def test_r2_without_kill_switch_the_buy_goes_out_unchanged(ub, monkeypatch):  # noqa: F811
+    calls = _switch(monkeypatch, [(True, "")])
+    order = _ub_order()
+    assert _submit(ub, order) == (True, "0001")
+    assert len(ub._session.sent) == 1 and calls == [("buy", "KR"), ("buy", "KR")]
+    assert _events_of(ub) == [kis_kr.audit_log.EV_SUBMIT, kis_kr.audit_log.EV_ACCEPT]
+    assert ub._order_id_to_kis_no == {order.id: "0001"} and ub._order_id_to_orgno == {order.id: "91252"}
+
+
+def test_r2_sell_is_not_rechecked_before_send(ub, monkeypatch):  # noqa: F811
+    calls = _switch(monkeypatch, [(True, ""), _KS_BLOCK])   # 두 번째 검사가 있었다면 차단됐을 것
+    assert _submit(ub, _ub_order(OrderSide.SELL)) == (True, "0001")
+    assert calls == [("sell", "KR")] and len(ub._session.sent) == 1

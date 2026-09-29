@@ -52,6 +52,7 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 1. `touch ~/.cache/ai_trader/KILL_SWITCH` — 봇 신규 매수 차단(2초 안 반영). **`KILL_SWITCH_ALL`·`KILL_SWITCH_ALL_KR` 금지** — CLI·봇 매도까지 막힌다.
 2. MTS/HTS 에서 **미체결 일괄취소**(봇의 살아 있는 BUY 가 청산 뒤 체결되는 것 방지) → 보유 전량 매도.
 3. **30초 뒤 미체결을 다시 확인·취소한다** — 킬스위치 직전 검사를 통과한 BUY 가 hashkey·rate-limit 대기 뒤 늦게 전송될 수 있다.
+   킬스위치를 만들면 그 뒤(최대 2초 캐시) 봇 BUY 는 전송 직전에도 막힌다. 이미 전송 중이던 요청만 남으므로 30초 뒤 재확인으로 닫는다(2026-09-29 매수 TR 전송 직전 킬스위치 재검사, 미배포).
 4. 그 재확인 뒤에 잔고·미체결 0 을 확인해 청산 완료로 판정한다. 봇은 30초 동기화로 결과를 반영한다. KILL_SWITCH 는 재개를 판단할 때까지 유지한다.
 
 **2순위 — CLI 로 할 때** (**tmux 안에서** 실행 — SSH 가 끊겨 SIGHUP 이 15초 대기 중인 CLI 를 죽이면 자기 SELL 이
