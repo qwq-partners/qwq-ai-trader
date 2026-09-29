@@ -70,6 +70,7 @@ python scripts/liquidate_all.py --force        # 확인 없이
 | `~/.cache/ai_trader/unified_trader.pid` | PID 파일 |
 | `execution_day_status`(DB 표) | 거래일 기록 대사 결과 — `SELECT trade_date, status, reasons, checked_at FROM execution_day_status ORDER BY trade_date DESC LIMIT 10;` `complete` = 20:30 대사가 불일치를 찾지 못함(증명 아님), `incomplete` 사유는 JSON 배열(`sell_qty:<종목>`·`buy:<종목>`·`trade_row:<id>`·`fill_query_incomplete:<사유>`·`write_queue_pending`·`db_query_failed`) |
 | `~/.cache/ai_trader/excess_return/` | 실거래 KODEX200 초과수익 원장 — `positions.jsonl`(매일 전체 재계산 스냅샷)·`positions_prev.jsonl`(직전 계산일, drift 기준)·`summary.json`·`summary_history.jsonl`(하루 한 줄)·`kodex200_daily.csv`(069500 KIS 일봉 캐시). `positions.jsonl` 첫 줄은 계산일 헤더(`{"_meta":…}`)다. 20:30 진화 블록 끝에서 갱신, 실패는 `[초과수익]` 경고 로그만 |
+| `~/.cache/ai_trader/order_unknown.json` | 오늘의 주문 접수 불명 장부 (2026-09-29~, 미배포) — `{"date", "entries":[{side,symbol,qty,reason,at}]}`. 날짜가 오늘이면 BUY 항목 → 신규 매수 보류, SELL 항목 → 그 종목 분할 매도 금지. 기록은 같은 폴더 `order_unknown.json.lock` 의 배타 잠금 안에서 한다(잠금 파일은 지우지 않아도 된다). 대응·해제는 아래 '주문 접수 불명 알림 대응' |
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
 | `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
 
@@ -295,6 +296,36 @@ cat ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
 # 차단된 주문만
 grep '"blocked"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
 ```
+
+## 주문 접수 불명 알림 대응 (2026-09-29~, 미배포)
+
+텔레그램 `⚠️ 주문 접수 불명: {종목} {매수|매도} {수량}주 — KIS 응답 유실(재전송 안 함)` 은 주문 POST 가
+KIS 에 닿았는지 모르는 상태다. 봇은 재전송하지 않고 **그날** 다음처럼 막는다(날짜가 바뀌면 자동 해제).
+
+- 매수 불명 → 오늘 신규 매수 전부 보류(`[접수불명] KR 매수 보류` 로그, 감사 원장 `blocked`)
+- 매도 불명 → 그 종목의 **분할** 매도 재발행 금지. 손절·트레일링 등 전량 매도는 계속 나간다
+
+대응 순서:
+
+1. HTS/MTS 에서 그 종목의 오늘 주문·체결을 확인한다. 로그 `journalctl -u qwq-ai-trader | grep '\[접수불명\]'`,
+   감사 원장 `grep '"unknown"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl`.
+2. 접수돼 체결됐으면: 30초 동기화가 포지션을 들여온다(매수는 손절 보호 등록, 매도는 보유 감소). 추가 조치 없음.
+3. **접수돼 미체결(지정가)로 살아 있으면: HTS 에서 취소한다.** 봇은 주문번호가 없어 취소할 수 없고, 살아 있는
+   불명 분할 SELL 은 그날 손절 전량 SELL 을 수량 초과로 막는다.
+4. 접수되지 않았으면: 그대로 둔다(그날 보류가 전부이고 다음 날 풀린다).
+5. 알림에 `장부 저장 실패 — 재시작 보호 없음` 이 붙었으면 같은 날 재시작하면 보류가 풀린다 — 그날은 재시작하지 않는다.
+
+수동 해제(그날 매수 재개가 꼭 필요할 때만): 파일을 지우고 **장 마감 뒤** 재시작한다. 장부는 기동 때 한 번만
+읽으므로 파일만 지워서는 실행 중인 봇의 보류가 풀리지 않는다.
+
+```bash
+rm ~/.cache/ai_trader/order_unknown.json
+# 장 마감 뒤 (pending 확인 후)
+echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+```
+
+CLI(`scripts/sell_specific.py`·`liquidate_all.py`)의 불명도 같은 파일에 기록되고 출력에 `[접수불명]` 이 찍히지만,
+실행 중인 봇은 재시작 전까지 보지 못한다(봇 실행 중 CLI 거부는 후속 단계).
 
 ## 스토리지 / DB 유지보수 (2026-08-02~)
 

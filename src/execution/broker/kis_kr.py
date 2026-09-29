@@ -25,7 +25,7 @@ from .base import BaseBroker
 from ...core.types import (
     Order, Fill, Position, OrderSide, OrderStatus, OrderType, MarketSession
 )
-from ...risk import kill_switch
+from ...risk import kill_switch, order_unknown
 from ...utils import audit_log
 
 
@@ -58,6 +58,10 @@ _TR_NEW = os.getenv("KIS_TR_SET", "legacy") == "new"
 def _tr_id(key: str) -> str:
     """구/신 TR 매핑 조회 — `_TR_NEW` 를 호출 시점에 읽는다."""
     return _TR_SETS["new" if _TR_NEW else "legacy"][key]
+
+
+# 매수 주문 TR (구/신) — `_api_post` 가 전송 직전에 접수 불명 보류를 다시 확인하는 대상 (2026-09-29)
+_BUY_TR_IDS = frozenset(s["buy"] for s in _TR_SETS.values())
 
 
 @dataclass
@@ -128,6 +132,10 @@ class KISBroker(BaseBroker):
         # 잔고 응답(output1) 1회용 스냅샷 — get_account_balance → get_positions 연속 호출에서
         # inquire-balance(TTTC8434R)를 두 번 치던 것을 한 번으로 (2026-09-11: 장중 원장 초과의 주범)
         self._balance_snapshot: Optional[tuple] = None
+
+        # 오늘의 주문 접수 불명 장부 (2026-09-29) — 생성 시 파일을 한 번 읽는다(같은 날 재시작 보호).
+        # object.__new__ 로 만든 시험 브로커에는 없다: 조회는 보류 없음, 첫 불명 기록 때 만든다.
+        self._unknown_book = order_unknown.UnknownOrderBook(order_unknown.default_path())
 
         # API 레이트 리미터 — 프로세스 공용 (src/utils/kis_rate_limit.py, 2026-09-03):
         # 시세·스크리너 모듈이 같은 appkey로 별도 세션을 쓰므로 초당 한도는 합산으로 걸린다.
@@ -363,6 +371,11 @@ class KISBroker(BaseBroker):
         이미 접수됐을 수 있어 같은 본문을 재전송하지 않는다 (2026-09-03 P0 — 중복 주문 방지).
         실패 응답을 받은 호출자가 pending을 해제하고, 30초 포트폴리오 동기화가 실제 체결분을
         sync_detected로 정합한다. 토큰 오류(401/EGW00123)는 접수 전 거절이라 재전송 허용.
+
+        반환 dict 표식 (2026-09-29, 주문 접수 불명 분리):
+        - `_unknown: True` — 비-JSON 본문(상태 무관), retry=False 의 네트워크 오류·시한 초과. 서버에 닿았을 수 있다.
+          취소(retry=True)에도 실리지만 cancel_order 는 읽지 않는다.
+        - `_blocked: True` — 매수 TR 인데 전송 직전 접수 불명 보류가 걸려 보내지 않았다(msg1 = 사유).
         """
         if not self._session or self._session.closed:
             logger.warning("[API] 세션 없음, 재연결 시도")
@@ -375,6 +388,12 @@ class KISBroker(BaseBroker):
         for attempt in range(3):
             try:
                 await self._rate_limit()
+                # 전송 직전 재확인 (2026-09-29) — submit_order 머리 게이트를 지난 BUY 가 hashkey·rate-limit 을
+                # 기다리는 사이 다른 BUY 가 접수 불명이 됐으면 보내지 않는다. 401 재전송 직전에도 매번 확인한다.
+                if tr_id in _BUY_TR_IDS:
+                    hold = self.unknown_buy_hold()
+                    if hold:
+                        return {"rt_cd": "-1", "msg1": hold, "_blocked": True}
                 headers = self._get_headers(tr_id)
                 if extra_headers:
                     headers.update(extra_headers)
@@ -403,8 +422,9 @@ class KISBroker(BaseBroker):
                     try:
                         data = await resp.json()
                     except Exception:
+                        # 본문이 JSON 이 아니면 응답 주체를 확인할 수 없다 — HTTP 상태와 무관하게 접수 불명 (2026-09-29)
                         logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
-                        return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
+                        return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})", "_unknown": True}
                     if self._is_token_error(data) and attempt < 2:
                         logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
                         await self._recover_token()
@@ -413,7 +433,7 @@ class KISBroker(BaseBroker):
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if not retry:
                     logger.error(f"[API] POST {tr_id} 네트워크 오류 — 재전송 금지 (중복 주문 방지): {e}")
-                    return {"rt_cd": "-1", "msg1": f"네트워크 오류(재전송 금지): {e}"}
+                    return {"rt_cd": "-1", "msg1": f"네트워크 오류(재전송 금지): {e}", "_unknown": True}
                 if attempt < 2:
                     wait = 2 ** attempt
                     logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도 ({wait}초 대기): {e}")
@@ -471,6 +491,19 @@ class KISBroker(BaseBroker):
             )
             return False, block_reason
 
+        # 접수 불명 보류 (2026-09-29) — 오늘 BUY 접수 불명이 있으면 신규 BUY 를 전부 보류한다(날짜가 바뀌면 해제).
+        # 킬스위치와 같은 자리라 엔진·폴백·수동 풀매수·CLI 를 모두 덮는다.
+        if order.side == OrderSide.BUY:
+            hold = self.unknown_buy_hold()
+            if hold:
+                logger.warning(f"[접수불명] KR 매수 보류: {order.symbol} {order.quantity}주 — {hold}")
+                audit_log.record_blocked(
+                    market="KR", symbol=order.symbol, side=order.side.value,
+                    reason=hold, qty=order.quantity,
+                    price=order.price, strategy=order.strategy,
+                )
+                return False, hold
+
         audit_log.record(
             audit_log.EV_SUBMIT, market="KR", symbol=order.symbol,
             side=order.side.value, qty=order.quantity, price=order.price,
@@ -486,6 +519,7 @@ class KISBroker(BaseBroker):
                 )
                 return False, "연결 실패"
 
+        posted = False  # _api_post 진입 뒤 = 서버에 닿았을 수 있다 (2026-09-29 접수 불명 분리)
         try:
             # 현재 세션 확인
             session = self._get_current_market_session()
@@ -559,9 +593,25 @@ class KISBroker(BaseBroker):
 
             # API 호출
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-cash"
+            posted = True
             data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False)
 
+            if data.get("_blocked"):  # 전송 직전 재확인에서 보류 — 보내지 않았다
+                hold = data.get("msg1", "")
+                logger.warning(f"[접수불명] KR 매수 전송 직전 보류: {order.symbol} {order.quantity}주 — {hold}")
+                audit_log.record_blocked(
+                    market="KR", symbol=order.symbol, side=order.side.value,
+                    reason=hold, qty=order.quantity,
+                    price=order.price, strategy=order.strategy,
+                )
+                return False, hold
+
             rt_cd = data.get("rt_cd", "")
+            # 응답을 믿을 수 없음 = 접수 불명: 비-JSON·네트워크 오류(_unknown), 또는 rt_cd 가 없거나 빈 값인데
+            # msg_cd 도 없는 JSON. msg_cd 가 있으면 KIS 가 오류를 명시한 것이라 아래 거절 경로로 간다.
+            if data.get("_unknown") or (rt_cd in (None, "") and not data.get("msg_cd")):
+                detail = data.get("msg1") if data.get("_unknown") else f"응답에 rt_cd 없음: {str(data)[:200]}"
+                return False, self._record_unknown(order, str(detail))
             if str(rt_cd) != "0":
                 msg = data.get("msg1", "알 수 없는 오류")
                 msg_cd = data.get("msg_cd", "")
@@ -605,17 +655,76 @@ class KISBroker(BaseBroker):
             )
             return True, kis_ord_no
 
+        except asyncio.CancelledError:
+            # 종료 신호로 응답 대기 중 취소됐다 — 기록만 하고 다시 올린다(알림 없음). rate-limit 대기 중이라
+            # 실제로는 보내기 전이었던 경우도 여기 묶인다(종료 순간에만 생기고, 그날 BUY 보류 쪽이 보수적).
+            if posted:
+                self._record_unknown(order, "응답 대기 중 취소(종료 신호)", alert=False)
+            raise
         except Exception as e:
             logger.exception(f"주문 제출 오류: {e}")
-            audit_log.record(
-                audit_log.EV_REJECT, market="KR", symbol=order.symbol,
-                side=order.side.value, qty=order.quantity, reason=f"예외: {e}",
-            )
             # pending 좀비 방지: 예외 시 _pending_orders에서 제거
             self._pending_orders.pop(order.id, None)
             self._order_id_to_kis_no.pop(order.id, None)
             self._order_id_to_orgno.pop(order.id, None)
+            if posted:  # POST 진입 뒤의 예외(비-dict 본문·접수 후 파싱 오류) — 접수됐을 수 있다
+                return False, self._record_unknown(order, f"예외: {e}")
+            audit_log.record(
+                audit_log.EV_REJECT, market="KR", symbol=order.symbol,
+                side=order.side.value, qty=order.quantity, reason=f"예외: {e}",
+            )
             return False, str(e)
+
+    # ============================================================
+    # 주문 접수 불명 (2026-09-29)
+    # ============================================================
+
+    def unknown_buy_hold(self) -> Optional[str]:
+        """오늘 BUY 접수 불명이 있으면 신규 매수 보류 사유, 없으면 None (날짜는 로컬 datetime.now())."""
+        book = getattr(self, "_unknown_book", None)
+        return book.buy_hold_reason(datetime.now()) if book is not None else None
+
+    def has_unknown_sell(self, symbol: str) -> bool:
+        """오늘 이 종목의 SELL 접수 불명이 있는가 — 있으면 그 종목의 분할 매도 재발행을 막는다."""
+        book = getattr(self, "_unknown_book", None)
+        return book is not None and book.has_unknown_sell(symbol, datetime.now())
+
+    def _record_unknown(self, order: Order, detail: str, *, alert: bool = True) -> str:
+        """POST 가 나간 뒤 응답을 믿을 수 없는 주문을 접수 불명으로 기록한다. 반환: 호출처에 줄 실패 문자열.
+
+        재전송하지 않는다. 감사 원장에는 EV_UNKNOWN 만 남긴다(EV_REJECT 아님).
+        """
+        side = order.side.value
+        logger.error(
+            f"[접수불명] KR 주문 접수 불명: {order.symbol} {side} {order.quantity}주 — {detail} "
+            f"(재전송 안 함, HTS 확인 필요)"
+        )
+        audit_log.record(
+            audit_log.EV_UNKNOWN, market="KR", symbol=order.symbol, side=side,
+            qty=order.quantity, price=order.price, strategy=order.strategy, reason=detail,
+        )
+        book = getattr(self, "_unknown_book", None)
+        if book is None:
+            book = self._unknown_book = order_unknown.UnknownOrderBook(order_unknown.default_path())
+        saved = book.record(side, order.symbol, order.quantity, detail, datetime.now())
+        if alert:
+            effect = "오늘 신규 매수 보류" if order.side == OrderSide.BUY else "이 종목 분할 매도 재발행 금지"
+            text = (
+                f"⚠️ 주문 접수 불명: {order.symbol} {'매수' if order.side == OrderSide.BUY else '매도'} "
+                f"{order.quantity}주 — KIS 응답 유실(재전송 안 함). {effect}. HTS 에서 주문 확인.\n({detail})"
+            )
+            if not saved:
+                text += "\n⚠️ 장부 저장 실패 — 재시작 보호 없음(같은 날 재시작하면 보류가 풀린다)"
+            try:
+                from ...utils.telegram import send_alert
+                task = asyncio.create_task(send_alert(text))
+                task.add_done_callback(
+                    lambda t: t.cancelled() or t.exception() is None
+                    or logger.warning(f"[접수불명] 알림 발송 실패: {t.exception()}")
+                )
+            except Exception as e:
+                logger.warning(f"[접수불명] 알림 예약 실패: {e}")
+        return f"{order_unknown.PREFIX} {detail}"
 
     def _get_order_division(self, order: Order) -> str:
         """

@@ -1655,6 +1655,30 @@ class RiskManager:
         getattr: 시험이 object.__new__ 로 만든 인스턴스에는 속성이 없다."""
         return symbol in getattr(self, "_exit_exempt_ref", set())
 
+    # ── 주문 접수 불명 (2026-09-29) — 상태는 브로커가 갖는다. 엔진은 묻기만 한다 ──────────────
+    # 가짜 브로커·MagicMock 이 우연히 차단을 켜지 않게, 비어 있지 않은 str / 정확히 True 일 때만 막는다.
+
+    def _unknown_buy_hold(self) -> Optional[str]:
+        """오늘 BUY 접수 불명으로 신규 매수를 보류할 사유 (없으면 None)."""
+        fn = getattr(getattr(self.engine, "broker", None), "unknown_buy_hold", None)
+        hold = fn() if callable(fn) else None
+        return hold if isinstance(hold, str) and hold else None
+
+    def _has_unknown_sell(self, symbol: str) -> bool:
+        """오늘 이 종목의 SELL 접수 불명이 있는가 — 있으면 분할 매도 재발행을 막는다(전량은 매도가능수량이 막는다)."""
+        fn = getattr(getattr(self.engine, "broker", None), "has_unknown_sell", None)
+        return callable(fn) and fn(symbol) is True
+
+    def _partial_action_marks(self) -> set:
+        """명시 분할 액션(exit_action=sell_partial)으로 등록된 SELL pending 종목 (지연 생성 — 초기화 생략 하네스 호환).
+
+        수량 비교로 정하는 `sell_partial_intent` 와 따로 둔다 — 불명 분할이 체결돼 동기화로 보유만 줄면 같은 단계의
+        재발행은 수량 == 보유량이라 의도 표식이 서지 않는다. 수명은 `_pending_signal_cache` 와 같다.
+        """
+        if not hasattr(self, "_pending_partial_action"):
+            self._pending_partial_action: set = set()
+        return self._pending_partial_action
+
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
         logger.info(f"[리스크] 신호 수신: {event.symbol} {event.side.value} 가격={event.price} 점수={event.score:.1f}")
@@ -1849,6 +1873,13 @@ class RiskManager:
             logger.debug(f"[리스크] 기존 포지션 보유 차단: {event.symbol}")
             return None
 
+        # 오늘 BUY 접수 불명 → 신규 매수 보류 (2026-09-29). 권위는 브로커 게이트 — 여기서는 크로스 검증·LLM 비용만 아낀다.
+        if event.side == OrderSide.BUY:
+            _unknown_hold = self._unknown_buy_hold()
+            if _unknown_hold:
+                logger.info(f"[리스크] 접수 불명 매수 보류: {event.symbol} — {_unknown_hold}")
+                return None
+
         # 크로스 전략 검증 게이트 (매수만)
         if event.side == OrderSide.BUY:
             _meta = event.metadata if event.metadata is not None else {}
@@ -2001,10 +2032,12 @@ class RiskManager:
 
         # 포지션 크기 계산
         _sell_partial_intent = False
+        _sell_partial_action = False
         if event.side == OrderSide.SELL:
             pos = self.engine.portfolio.positions.get(event.symbol)
             # metadata에 수량이 지정된 경우 분할 익절/트레일링 수량 사용 (1차/2차/3차)
             _sell_meta = event.metadata if event.metadata is not None else {}
+            _sell_partial_action = _sell_meta.get("exit_action") == "sell_partial"
             _meta_raw = _sell_meta.get("quantity")
             _meta_qty = int(_meta_raw) if _meta_raw is not None else 0
             if _meta_qty and pos and 0 < _meta_qty <= pos.quantity:
@@ -2018,6 +2051,15 @@ class RiskManager:
                 position_size = pos.quantity if pos else 0
         else:
             position_size = self._calculate_position_size(event)
+
+        # 오늘 SELL 접수 불명 종목의 **분할** 매도 재발행 금지 (2026-09-29) — 전량은 KIS 매도가능수량 검사가 막으므로
+        # 통과시킨다(그날 손절을 끄지 않는다). 분할 판정은 수량 의도 또는 명시 액션. pending 등록 전이라 정리할 장부가 없다.
+        if (_sell_partial_intent or _sell_partial_action) and self._has_unknown_sell(event.symbol):
+            logger.warning(
+                f"[리스크] 접수 불명 종목 분할 매도 재발행 차단: {event.symbol} "
+                f"(source={event.source}, 사유={event.reason})"
+            )
+            return None
 
         if position_size <= 0:
             equity = self.engine.portfolio.total_equity
@@ -2157,6 +2199,11 @@ class RiskManager:
                     self._pending_signal_cache[order.symbol] = {"sell_partial_intent": True}
                 else:
                     self._pending_signal_cache.pop(order.symbol, None)
+            # 명시 분할 액션은 따로 남긴다 — 접수 불명 폴백 가드가 읽는다 (2026-09-29)
+            if order.side == OrderSide.SELL and _sell_partial_action:
+                self._partial_action_marks().add(order.symbol)
+            else:
+                self._partial_action_marks().discard(order.symbol)
 
             # BUY 시그널 메타데이터 캐시 (fill 시 entry_tags 구성용)
             if order.side == OrderSide.BUY:
@@ -2311,6 +2358,13 @@ class RiskManager:
             )
             # 위 취소·생존 조회 await 중 면제가 등록됐으면 재주문하지 않는다 — 다음 주기에 이 함수 머리의 면제 분기가 정리
             if self._is_exit_exempt(s):
+                return
+            # 오늘 SELL 접수 불명 종목의 분할 매도는 재제출하지 않는다 (2026-09-29) — 불명 주문이 살아 있거나 체결됐다면
+            # 두 번 팔린다(합계가 보유 안이라 KIS 가 막지 않는다). 전량 폴백은 매도가능수량이 막으므로 종전대로 낸다.
+            if ((_partial_intent or s in self._partial_action_marks())
+                    and self._has_unknown_sell(s)):
+                logger.warning(f"[리스크] 접수 불명 종목 분할 매도 폴백 중단: {s} → 재제출 없이 pending 해제")
+                await self.clear_pending(s)
                 return
             try:
                 # 2026-08-05 P2: 반환값 미확인으로 제출 실패가 성공 취급되던 버그
@@ -2504,6 +2558,7 @@ class RiskManager:
             self._pending_fallback_count.pop(symbol, None)
             self._pending_cancel_keep.pop(symbol, None)
             self._pending_signal_cache.pop(symbol, None)
+            self._partial_action_marks().discard(symbol)
             # 엔진 쪽 섹터 맵 정리 (2026-08-04 P1 — 누수 시 섹터 한도 오차단)
             self.engine._pending_sector_map.pop(symbol, None)
 
@@ -2638,6 +2693,7 @@ class RiskManager:
                 self._pending_cancel_keep.pop(event.symbol, None)
                 self._pending_exit_reasons.pop(event.symbol, None)
                 self._pending_signal_cache.pop(event.symbol, None)
+                self._partial_action_marks().discard(event.symbol)
             else:
                 self._pending_quantities[event.symbol] = remaining
                 # 부분체결분 예약현금 비례 차감 (2026-08-05 P2)

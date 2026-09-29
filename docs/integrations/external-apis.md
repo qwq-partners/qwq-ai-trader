@@ -71,6 +71,27 @@
   타임아웃/연결 끊김/5xx 시 이미 접수됐을 수 있어 같은 본문을 다시 보내지 않는다 (hashkey는
   본문 무결성 검사이지 멱등키가 아님). 실패 반환 → 호출자 pending 해제 → 30초 동기화가
   실제 체결분을 sync_detected로 정합.
+- **주문 POST 결과 분류 — 접수 불명(UNKNOWN) 분리** (2026-09-29 구현, 미배포): `submit_order` 가
+  `_api_post` 진입 뒤 응답을 믿을 수 없으면 `(False, "[접수불명] …")` 를 돌려주고 감사 원장
+  `unknown` 을 남긴다(반환 계약 `Tuple[bool, str]` 무변경). 불명의 효과(그날 BUY 보류·분할 SELL
+  재발행 금지)는 `docs/risk/risk-and-exit.md` 맨 위 절.
+
+  | 경로 | 분류 |
+  |---|---|
+  | POST 전 실패: 세션·토큰 발급 실패, 킬스위치, 세션/NXT/가격/hashkey 거절 | REJECT (현행) |
+  | 응답 JSON 에 `rt_cd` 가 있고 `"0"` 이 아님 — HTTP 5xx JSON(예: EGW00201) 포함 | REJECT (현행) |
+  | JSON 에 `rt_cd` 가 없거나 빈 값·null 이지만 `msg_cd` 가 있음 | REJECT (KIS 가 오류를 명시) |
+  | 본문이 JSON 이 아님 (HTTP 상태 무관) | **UNKNOWN** (`_api_post` 반환에 `_unknown: True`) |
+  | JSON 인데 `rt_cd` 무효이고 `msg_cd` 도 없음 (`{}`, `{"output":…}`) | **UNKNOWN** |
+  | 401·본문 토큰 오류(EGW00121/123) | 현행: 토큰 갱신 후 같은 본문 재전송(최대 3회, 인증 거절은 접수 전이라는 전제). 마지막 시도의 비-JSON 401 은 UNKNOWN |
+  | `retry=False` 의 `aiohttp.ClientError`·`asyncio.TimeoutError` (연결 수립 전 실패 포함) | **UNKNOWN** (`_unknown: True`) |
+  | `submit_order` 에서 POST 진입 뒤의 예외(비-dict 본문 등) | **UNKNOWN** |
+  | POST 진입 뒤 `asyncio.CancelledError`(종료 신호) | **UNKNOWN 기록 후 다시 raise**(알림 없음) |
+  | rt_cd 0 인데 ODNO 없음(TEMP_) | 범위 밖 — 성공 경로 그대로 |
+
+  매수 TR(구/신)은 `_api_post` 가 매 시도의 rate-limit 대기 직후·전송 전에 접수 불명 보류를 다시
+  확인하고, 걸리면 보내지 않고 `_blocked: True` 로 돌려준다(`submit_order` → `blocked` 기록).
+  취소(`retry=True`)에도 `_unknown` 이 실리지만 `cancel_order` 는 읽지 않는다 — 반환 불변.
 - **취소만 재시도 유지** (2026-09-21 재판단): 취소(order-rvsecncl `RVSE_CNCL_DVSN_CD="02"`)는
   `retry=True` 그대로다. 근거는 "멱등이라서"가 **아니라** 효과 한정이다 — ① `_api_post`가
   재전송하는 5xx 다수는 접수 전 거절이다(유량 `EGW00201`이 HTTP 500으로 온다), ② 전량 취소
