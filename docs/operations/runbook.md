@@ -482,7 +482,7 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 
 증상: `flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중` 로 봇 기동이 exit 1 을 반복한다.
 
-기동은 **아무 프로세스도 죽이지 않는다** (2026-09-29~, 미배포 PR). 예전에는 PID 파일의 프로세스를 SIGTERM→SIGKILL 해서
+기동은 **아무 프로세스도 죽이지 않는다** (2026-09-29~, 23:28 배포 main `bb03aa3`). 예전에는 PID 파일의 프로세스를 SIGTERM→SIGKILL 해서
 운영 봇이 도는 중에 `run_trader.py --dry-run` 을 띄우면 운영 봇이 죽었다. 이제 그 dry-run 은 위 증상으로 exit 1 한다 —
 봇이 떠 있는 동안 dry-run 은 돌리지 않는다(같은 락·같은 appkey).
 systemd 밖에서 띄운 봇(`nohup` — 금지)이 남아 있으면 systemd 봇은 exit 1 재시도만 하고 8080 은 밖의 봇이 응답한다 — 배포 헬스체크가 속을 수 있으니 `fuser -v` 의 PID 가 `systemctl show -p MainPID qwq-ai-trader` 와 같은지 본다.

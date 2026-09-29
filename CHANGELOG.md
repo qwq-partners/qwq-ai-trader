@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — ops: main `bb03aa3` 배포 (PR #106 + #107), 23:28 KST · 22:21 OOM 재시작
+
+- **지시**: 사용자 "두 PR 머지하고 운영배포까지 가자, overrides 보존 승인". #106 head `80100f1` verify 통과 → 병합 `36d77c6`. #107 은 CHANGELOG 맨 위 충돌(양쪽 새 항목 유지)을 main 재병합 `8b116c6` 으로 풀고 verify 통과 → 병합 `bb03aa3`.
+- **배포 전 발견 — 22:21 OOM 재시작**: 운영 PID 가 20:47 의 3746308 이 아니라 3770294(22:21:54 기동)였다. journal: `A process of this unit has been killed by the OOM killer` → `status=9/KILL` → `Scheduled restart job, restart counter is at 1`. 커널 로그 `claude invoked oom-killer … global_oom` — dbus-daemon·user systemd 를 먼저 죽이고 봇(메모리 피크 432MB)까지 죽였다. RAM 3.8GB 호스트에 Claude 세션 2개(ccd-cli 각 ~250~300MB)·pyright LSP(~286MB)·MCP 서버 다수가 기동하던 시각. 장외(세션 closed)·pending 없음이라 거래 영향 없음, 재기동 로그 정상. 원인 해소(상주 플러그인·LSP 축소, 봇 `OOMScoreAdjust` 등)는 사용자 결정 — 이번 배포에선 변경하지 않았다.
+- **사전 점검 (23:26)**: pending `[]`, 부하 0.22, 운영 checkout `72ba30a` + overrides 1줄(수정 09-26 00:00 < 기동, 대상 커밋 무변경), 보호 지문 기록, 킬스위치 0.
+- **배포**: 청결 검사 한 줄만 `grep -vxF " M config/evolved_overrides.yml"` 로 좁힌 사본으로 `bb03aa3` → rc=0, `[완료] 배포 bb03aa3 (이전 72ba30ac5337)`. 운영 verify **2449 passed / 2 xfailed**(78초), 격리 0, 자동 롤백 없음. 새 **PID3811677** 23:28:22 기동, 운영 checkout main 복귀(overrides 보존).
+- **사후 점검 (23:28~23:31)**
+  - 기동 로그: `acquire_singleton_lock:86`(새 코드)·KIS 연결·TR legacy·검증자·분할 익절 차단 훅·엔진 시작. ERROR/Traceback 0.
+  - **A1 수용**: 봇 가동 중 `from scripts import run_trader; acquire_singleton_lock()` → `flock 획득 실패 … (아무 프로세스도 종료하지 않음)`·`False`, 봇 PID3811677 active 유지, 락 파일·PID 파일 내용 `3811677` 불변(종전 코드였다면 운영 봇에 SIGTERM).
+  - ops_check(150초): HTTP 500·EGW00201·EGW00215·토큰 0, 정체·실패 누적 0, pending `[]`, `order_unknown.json` 없음. 보호 지문 동일. 보유 3종목, 현금 19.4%.
+- 주문·전략·위험 설정·킬스위치·`.env` 변경 0.
+
 ## 2026-09-29 — docs: 배포 완료 기능의 '미배포' 표기·CLAUDE.md 오래된 절 정리 (F 묶음)
 
 - **지시**: 사용자 "A·F 두 묶음을 지금 진행". 09-29 전수 감사의 문서·메모리 불일치 정리. 작업자(Claude Opus 5.5, 요청 opus/medium, 격리 worktree) 커밋 `3566184` + coordinator 검토·보강.
@@ -9,7 +21,7 @@
 - Toss 문서(README·external-apis·toss-shadow-runtime): 'ON' 현재형 → grant 09-22 만료·disabled/inactive, 재발급·퇴역은 사용자 결정 대기.
 - 코드·설정 변경 0.
 
-## 2026-09-29 — fix: 감사로 확인된 기존 결함 7건 (A 묶음, 미배포)
+## 2026-09-29 — fix: 감사로 확인된 기존 결함 7건 (A 묶음, PR #106) (09-29 23:28 KST 배포 main `bb03aa3`)
 
 - **지시**: 사용자 "A·F 두 묶음을 지금 진행". 09-29 전수 감사(문서·코드·계획 3원천)에서 확인됐지만 고치지 않았던 기존 결함이다. 브랜치 `fix/outstanding-defects-20260929`.
 - **A1 싱글톤 락이 운영 봇을 죽이던 함정 (`scripts/run_trader.py`)**: `acquire_singleton_lock` 1단계(PID 파일 프로세스 SIGTERM→3초→SIGKILL)를 삭제했다. 운영 봇이 도는 중 `run_trader.py --dry-run` 을 띄우면 운영 봇이 죽었고, 크래시 뒤 재사용된 PID 면 무관한 프로세스를 죽일 수 있었다. 이제 flock 실패 = 아무것도 죽이지 않고 False(exit 1). 락 파일을 `'a'` 로 열어 실패한 쪽이 쥔 쪽의 PID 를 지우지 않고, 획득 뒤에만 truncate. systemd 재시작은 stop 완료 뒤 start 라 kill 단계가 필요 없다.
