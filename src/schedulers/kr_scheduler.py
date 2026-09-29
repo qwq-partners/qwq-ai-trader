@@ -1628,12 +1628,16 @@ class KRScheduler:
             kr_source = "batch_analyzer._screener._kospi_closes"
             _closes: List[float] = []
             _last_bar_date = None
+            _bars_source = None
+            _proxy_bars = False
             try:
                 _screener = getattr(self.bot.batch_analyzer, "_screener", None) \
                     if getattr(self.bot, "batch_analyzer", None) else None
                 if _screener is not None:
                     _closes = [float(x) for x in (getattr(_screener, "_kospi_closes", None) or [])]
                     _last_bar_date = getattr(_screener, "_kospi_last_bar_date", None)
+                    _bars_source = getattr(_screener, "_kospi_source", None)
+                    _proxy_bars = _bars_source == "FDR:069500"
                     _loaded_at = getattr(_screener, "_kospi_loaded_at", None)
                     if _closes:
                         kr_as_of = (
@@ -1702,6 +1706,9 @@ class KRScheduler:
                         _bar_action, _bar_reason = None, "당일 지수 가격 결측"
                     elif len(_closes) < 6:
                         _bar_action, _bar_reason = None, "종가열 표본 부족"
+                    elif _proxy_bars:
+                        # KODEX200 대용 종가(원)에 지수 레벨(pt)을 이으면 변화율이 -90% 대로 깨진다
+                        _bar_action, _bar_reason = None, "KODEX200 대용 계열 — 지수와 단위 다름"
                     if _bar_action is not None:
                         try:
                             _series = (_closes[:-1] if _bar_action == "replace" else _closes)
@@ -1761,6 +1768,9 @@ class KRScheduler:
             _missing_line = (
                 ", ".join(missing_fields) if missing_fields else "없음"
             )
+            # 과거 봉이 KODEX200 대용이면 당일 KIS 지수(source)와 구분해 표기 — KOSPI 원천이면 문구 불변
+            _bars_label = (f"(KODEX200 대용 일봉 {_bars_source}, 마지막 봉 {_last_bar_date})"
+                           if _proxy_bars else "")
             prompt = f"""오늘 한국 주식시장 레짐 분류 (KST {label} 기준)
 
 ※ 각 항목의 as_of 는 그 값이 실제로 관측된 시각이다. 결측 항목은 "결측" 으로 표기되며
@@ -1773,7 +1783,7 @@ class KRScheduler:
 
 [KR 지수 ★ 최우선 판단 근거]  as_of {kr_as_of} / 봉 기준 as_of {kr_bars_as_of} / source {kr_source}
 - KOSPI 당일 등락률: {_fmt_pct(kospi_today_pct)}  KOSDAQ 당일: {_fmt_pct(kosdaq_today_pct)}
-- KOSPI 5일 변화율: {_fmt_pct(c5, 1)}  20일: {_fmt_pct(c20, 1)}
+- KOSPI 5일 변화율{_bars_label}: {_fmt_pct(c5, 1)}  20일: {_fmt_pct(c20, 1)}
 
 [장중 급락 감지기]  as_of {crash_as_of or "결측"} / source batch_analyzer._intraday_state
 - 감지기 상태: {crash_level or "결측"}  (감지 시 KOSPI {_fmt_pct(crash_pct)})
@@ -1834,6 +1844,9 @@ class KRScheduler:
                     "us_source": us_source,
                     "kr_as_of": kr_as_of,
                     "kospi_bars_as_of": kr_bars_as_of,
+                    "kospi_bars_source": _bars_source,
+                    "kospi_last_bar_date": (str(_last_bar_date)
+                                            if _last_bar_date is not None else None),
                     "kr_source": kr_source,
                     "kospi_today_pct": kospi_today_pct,
                     "kosdaq_today_pct": kosdaq_today_pct,
@@ -2083,13 +2096,18 @@ class KRScheduler:
 
             # 일봉 5거래일 변화율은 당일 등락이 아니다. 결측은 호환용 0을 쓰지 않는다.
             kospi_change = None
+            _bench_note = ""
             try:
                 if bot.batch_analyzer and hasattr(bot.batch_analyzer, '_screener'):
                     _screener = bot.batch_analyzer._screener
-                    if _screener.get_benchmark_status().get("status") == "fresh":
+                    _bench = _screener.get_benchmark_status()
+                    if _bench.get("status") == "fresh":
                         _value = float(_screener.get_kospi_change()["c5"])
                         if math.isfinite(_value):
                             kospi_change = _value
+                            if _bench.get("source") == "FDR:069500":
+                                _bench_note = (f" — KODEX200 대용 일봉 FDR:069500"
+                                               f"(마지막 봉 {_bench.get('last_bar_date')})")
             except Exception:
                 pass
 
@@ -2125,7 +2143,7 @@ class KRScheduler:
                 return
 
             prompt = f"""장 마감 전 포지션 점검 (15:00 KST)
-KOSPI 최근 5거래일: {_fmt_pct(kospi_change, 1)} (당일 등락 아님)
+KOSPI 최근 5거래일: {_fmt_pct(kospi_change, 1)} (당일 등락 아님){_bench_note}
 
 보유 종목:
 {chr(10).join(pos_lines)}

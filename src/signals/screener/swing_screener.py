@@ -17,10 +17,11 @@ from loguru import logger
 from src.indicators.technical import TechnicalIndicators
 from src.utils.session import KST
 from src.utils.kospi_benchmark import (
-    SOURCES as KOSPI_SOURCES,
+    FALLBACK_SOURCES as KOSPI_SOURCES,
     benchmark_date_status,
     fetch_failed_status,
     keep_failure,
+    proxy_outlier,
     validate_benchmark,
 )
 
@@ -929,13 +930,12 @@ class SwingScreener:
                 "last_bar_date": self._kospi_last_bar_date,
                 "loaded_at": self._kospi_loaded_at, "reason": reason}
 
-    def _validate_benchmark(self, data, source: str, now: datetime):
-        """자료를 정렬/보간으로 보정하지 않고 날짜·가격 계약을 검증한다 (공용 모듈 위임)."""
-        closes, _dates, result = validate_benchmark(data, source, now)
-        return closes, result
-
     async def _load_benchmark_index(self):
-        """Yahoo ^KS11 → KS11 지수 일봉(kospi_benchmark.SOURCES). 두 소스에 동일 검증을 적용한다.
+        """Yahoo ^KS11 → KS11 지수 일봉 → KODEX200(069500) 최후 대체(kospi_benchmark.FALLBACK_SOURCES).
+
+        세 원천에 동일 검증을 적용한다. 069500 은 KOSPI 원천이 모두 신선하지 않을 때만 닿는다
+        (2026-09-29 — Yahoo 가 09-28 봉을 빠뜨려 NaN 거부 + KS11 정지). 종가 단위가 지수와 달라
+        변화율·MRS 처럼 비율로만 쓴다.
 
         KIS get_daily_prices('0001')는 주식 일봉 API이므로 지수 대체재가 아니다.
         """
@@ -954,16 +954,24 @@ class SwingScreener:
                     timeout=15.0,
                 )
                 now = datetime.now(KST).replace(tzinfo=None)
-                closes, status = self._validate_benchmark(data, source, now)
+                closes, dates, status = validate_benchmark(data, source, now)
+                # 대용은 소비 창(MRS 20+기울기 5, c20 21 → 30봉) 안 일수익률 이상치가 있으면 채택하지 않는다
+                bad = proxy_outlier(closes, dates, 30) if symbol == "069500" else None
+                if bad is not None:
+                    status = {**status, "status": "unknown", "loaded_at": None,
+                              "reason": "proxy_return_outlier"}
+                    logger.warning(f"[스윙스크리너] KOSPI 대용 {source} 제외: 최근 30봉 일수익률 이상치 {bad}")
                 if status["status"] == "fresh":
                     self._kospi_closes = closes
                     self._kospi_loaded_at = status["loaded_at"]
                     self._kospi_last_bar_date = status["last_bar_date"]
                     self._kospi_source = source
                     self._benchmark_failure = None
-                    logger.info(
+                    proxy = symbol == "069500"
+                    (logger.warning if proxy else logger.info)(
                         f"[스윙스크리너] KOSPI 벤치마크 로드: {len(closes)}일 "
                         f"(source={source}, 마지막 봉 {self._kospi_last_bar_date})"
+                        + (" — KOSPI 대용(KODEX200)" if proxy else "")
                     )
                     return
             except Exception as exc:

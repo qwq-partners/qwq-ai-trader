@@ -27,3 +27,25 @@ def test_eod_benchmark_has_correct_horizon(monkeypatch, harness, status, expecte
     assert len(prompts) == 1
     assert f"KOSPI 최근 5거래일: {expected}" in prompts[0]
     assert "오늘 KOSPI:" not in prompts[0]
+
+
+@pytest.mark.parametrize("source,note", [
+    ("FDR:069500", " — KODEX200 대용 일봉 FDR:069500(마지막 봉 2026-09-28)"),
+    ("FDR:YAHOO:^KS11", ""),
+])
+def test_eod_benchmark_marks_kodex200_proxy(monkeypatch, harness, source, note):
+    import src.utils.llm as lm
+    prompts = []
+
+    async def complete_json(**kwargs):
+        prompts.append(kwargs["prompt"])
+        return {"positions": []}
+
+    harness.bot.batch_analyzer = SimpleNamespace(_screener=SimpleNamespace(
+        get_benchmark_status=lambda: {"status": "fresh", "source": source,
+                                      "last_bar_date": "2026-09-28"},
+        get_kospi_change=lambda: {"c5": 8.0, "c20": 10.0},
+    ))
+    monkeypatch.setattr(lm, "get_llm_manager", lambda: SimpleNamespace(complete_json=complete_json))
+    asyncio.run(harness.sched._run_position_eod_llm_check())
+    assert f"KOSPI 최근 5거래일: +8.0% (당일 등락 아님){note}\n" in prompts[0]
