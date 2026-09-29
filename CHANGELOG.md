@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-30 — research: index-plus 프로그램 H1·H2 — 둘 다 기각 (연구 전용)
+
+- **지시**: 사용자 "어떻게 하면 KODEX200 을 이길 수 있을지 … 제안해준 순서대로 가보자", 운영 현금의 KODEX200 이동은 반대(유지). 사전 등록 `docs/research/index-plus-program-2026-09.md`(H1 `3b7616f`·H2 `31689b5`, 각 결과 전 커밋).
+- **H1 지수 오버레이(MA200 추세·변동성 타게팅·둘 다)** — `index-plus-h1-2026-09.md`: Yahoo ^KS11 2001~2026-09, 지수 보유 CAGR +11.07%·Sharpe 0.57 을 셋 다 수익률·Sharpe 모두 못 이김(3등분 0/3). 2009~2016 박스권 추세 필터 −0.65%/년. 스크립트 `scripts/research/index_overlay_h1.py`, 시험 3건(미래정보 변이 2종 kill).
+- **H2 대형주 모멘텀(거래대금 상위 100 중 12-1 모멘텀 상위 20, 월 1회)** — `index-plus-h2-2026-09.md`(작업자 Claude Opus 5.5, 요청 opus/high): 2015-08~2026-08 포지션 초과 −0.50%/월(t=−1.24), 4기준 전부 미달, 계좌 CAGR +3.43% vs KOSPI200 +14.24%. 강건성 5종 전부 음수(3종 t≤−2). 진단: 같은 유니버스 동일 비중 −0.85%/월(t=−6.55) — 대형주 집중 지수 대비 크기 역풍이 지배. coordinator 가 원자료로 평균·t·절반·3등분·계좌 CAGR 독립 재계산 일치 확인. 자료 제약: KRX 로그인 없어 시점 상장 목록·과거 시총 불가 → 현재 상장 808종목(생존 편향), 가격 Naver 수정주가 2014-07~, 거래대금 Yahoo.
+- 운영·`src/`·설정·주문 변경 0. KIS 무접촉.
+
 ## 2026-09-30 — research: 장기 구간 SEPA 단독 vs KODEX200 (포지션 단위, 연구 전용)
 
 - **질문**: SEPA 계열이 어느 국면에서든 포지션(왕복) 단위로 KODEX200 을 이기는가(`review-recs-127-status` §3). 정본 `docs/research/long-window-sepa-vs-kodex200-2026-09.md`.
