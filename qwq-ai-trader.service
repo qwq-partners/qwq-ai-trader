@@ -1,29 +1,21 @@
+# 운영 설치본(/etc/systemd/system/qwq-ai-trader.service)의 사본 — 2026-09-29 동기화. 설치본이 정본이다.
 [Unit]
-Description=QWQ AI Trader - KR+US 통합 트레이딩 엔진
-After=network.target postgresql.service
+Description=QWQ AI Trader
+After=network-online.target postgresql.service cloudflared.service
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=user
-WorkingDirectory=/home/user/projects/qwq-ai-trader
-ExecStart=/home/user/projects/qwq-ai-trader/venv/bin/python /home/user/projects/qwq-ai-trader/scripts/run_trader.py --config /home/user/projects/qwq-ai-trader/config/default.yml
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/projects/qwq-ai-trader
+EnvironmentFile=/home/ubuntu/projects/qwq-ai-trader/.env
+ExecStart=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python scripts/run_trader.py --market kr --config /home/ubuntu/projects/qwq-ai-trader/config/default.yml
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=qwq-ai-trader
-
-# 환경변수
-Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH=/home/user/projects/qwq-ai-trader:/home/user/projects/qwq-ai-trader/src
-
-# 리소스 제한
 LimitNOFILE=65536
-MemoryMax=1G
-
-# 종료 시 graceful shutdown (SIGTERM)
-KillSignal=SIGTERM
-TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

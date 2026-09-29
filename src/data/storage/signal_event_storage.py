@@ -134,7 +134,7 @@ class SignalEventStorage:
         """비동기 이벤트 기록 — fire-and-forget"""
         asyncio.create_task(self._write(
             symbol=symbol, name=name, strategy=strategy,
-            score=score, adjusted_score=adjusted_score or score,
+            score=score, adjusted_score=adjusted_score if adjusted_score is not None else score,
             side=side, event_type=event_type,
             block_gate=block_gate, block_reason=block_reason,
             market_regime=market_regime, sector=sector,
