@@ -528,6 +528,36 @@ def test_intraday_recompute_appends_when_last_bar_is_previous_day(monkeypatch, t
     assert meta.get("kospi_c5") == _pct_change(closes + [2100.0], 5), meta
 
 
+def test_intraday_recompute_skips_kodex200_proxy_series(monkeypatch, tmp_path):
+    """스크리너가 069500(원) 대용 종가를 쓰면 지수 레벨(pt)을 잇지 않는다 (2026-09-29).
+
+    이으면 30,000원 계열 뒤에 2,100pt 가 붙어 c5 가 -90% 대로 깨진다. 봉 기반 c5 는 아침 값 그대로,
+    당일 등락은 kospi_today_pct 로 따로 들어간다.
+    """
+    from src.schedulers.kr_scheduler import _pct_change
+
+    closes = [30000.0 + 10 * i for i in range(30)]
+    screener = _Screener(c5=0.0, c20=0.0, level=closes[-1], closes=closes,
+                         last_bar_date=date(2026, 9, 11))
+    screener._kospi_source = "FDR:069500"
+    bot = _make_bot(
+        screener=screener,
+        kis_responses={"0001": {"price": 2100.0, "change_pct": -3.34},
+                       "1001": {"change_pct": -2.78}},
+    )
+    llm = _LLM({"regime": "ranging", "confidence": 0.6})
+    sched = _patch_env(monkeypatch, tmp_path, bot, llm,
+                       indices=_PROVIDER_INDICES,
+                       now=datetime(2026, 9, 14, 12, 0, 0))
+
+    asyncio.run(sched._run_llm_regime_classifier(label="12:00 (장중 업데이트)"))
+
+    meta = _regime_file(tmp_path).get("input_meta", {})
+    assert meta.get("kospi_c5") == _pct_change(closes, 5), meta
+    assert meta.get("kospi_today_pct") == -3.34, meta
+    assert any("KODEX200 대용" in f for f in meta.get("missing_fields", [])), meta
+
+
 # ── 배선 1: 급락 감지기 갱신 → 레짐 어댑터 set_intraday_risk ────────────────────
 
 def test_intraday_risk_is_pushed_to_regime_adapter():

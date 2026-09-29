@@ -1628,12 +1628,14 @@ class KRScheduler:
             kr_source = "batch_analyzer._screener._kospi_closes"
             _closes: List[float] = []
             _last_bar_date = None
+            _proxy_bars = False
             try:
                 _screener = getattr(self.bot.batch_analyzer, "_screener", None) \
                     if getattr(self.bot, "batch_analyzer", None) else None
                 if _screener is not None:
                     _closes = [float(x) for x in (getattr(_screener, "_kospi_closes", None) or [])]
                     _last_bar_date = getattr(_screener, "_kospi_last_bar_date", None)
+                    _proxy_bars = getattr(_screener, "_kospi_source", None) == "FDR:069500"
                     _loaded_at = getattr(_screener, "_kospi_loaded_at", None)
                     if _closes:
                         kr_as_of = (
@@ -1702,6 +1704,9 @@ class KRScheduler:
                         _bar_action, _bar_reason = None, "당일 지수 가격 결측"
                     elif len(_closes) < 6:
                         _bar_action, _bar_reason = None, "종가열 표본 부족"
+                    elif _proxy_bars:
+                        # KODEX200 대용 종가(원)에 지수 레벨(pt)을 이으면 변화율이 -90% 대로 깨진다
+                        _bar_action, _bar_reason = None, "KODEX200 대용 계열 — 지수와 단위 다름"
                     if _bar_action is not None:
                         try:
                             _series = (_closes[:-1] if _bar_action == "replace" else _closes)
