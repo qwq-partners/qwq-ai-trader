@@ -20,11 +20,14 @@
   - 구현 리뷰 2회차(Codex REQUEST_CHANGES P1 1·P2 1) 반영: `_api_post` 매수 TR 전송 직전 재확인(매 시도·401 재전송 포함)에 **킬스위치 재검사** 추가 —
     머리 검사를 지난 BUY 가 hashkey·rate-limit 대기 뒤 킬스위치 이후에 전송되던 틈을 닫는다. 막히면 기존 `_blocked` 경로(record_blocked + `(False, 사유)`). SELL 제외.
     `_accept_identity` docstring 보장 범위 정정. 시험 헬퍼 `tests/test_review_fixes_2026_09.py::_post_broker` 에 킬스위치 가짜 추가(운영 플래그 stat 격리 위반 방지).
+  - 구현 리뷰 3회차(Codex REQUEST_CHANGES P1 1·P2 1) 반영: 재검사 뒤에도 HTTP 대기가 남으므로 runbook 1순위를 초기 대응(KILL_SWITCH → HTS 일괄취소·매도)과
+    완료 판정 전 필수(봇 정지 확인 → HTS 재취소 → 잔고 재조회·잔여분 청산 → 잔고·미체결 0)로 분리하고 '30초 뒤 재확인' 삭제, `trader_lock` 안내 문구 맞춤.
+    `_blocked` 로그 태그 `[접수불명]` → `[주문차단]`(킬스위치 차단이 접수 불명으로 읽히지 않게, 사유 문자열 그대로).
 - **시험**: 신규 `tests/test_cli_refusal_orderref.py`(T1 락 경로 주입, T2 CLI AST 호출 순서, T3 release 가 락 파일 보존, T4 EV_ACCEPT 필드 — 시계·세션·HTTP·킬스위치·감사 기록 가짜).
   변이 8종(거부 분기·exit 코드 제거, unlink 복원, NXT·TEMP_·ORGNO 생략 조건 제거, 두 CLI 호출을 브로커 생성 뒤로) 전부 검출.
   리뷰 반영 +8건(빈 argv BUY·SELL, W 신원 반례 5, 같은 프로세스 두 번째 획득 거부)과 변이 5종(argv 방어·`local-`·공백 검사 제거, `LOCK_EX`→`LOCK_SH`) 검출.
   2회차 +4건(전송 직전 킬스위치 차단·401 재전송 직전 차단·대조군·SELL 미검사)과 변이 2종(재검사 제거·결과 무시) 검출.
-- **문서**: runbook '긴급 전량 매도'(1순위 KILL_SWITCH+HTS·전송 직전 킬스위치 재검사·30초 뒤 미체결 재확인, 2순위 절대경로 봇 정지 후 CLI·tmux·sudo 금지·CLI 중 배포 금지)·'싱글톤 락 충돌'(`rm -f *.lock` 삭제 → `fuser`)·'주문 접수 불명' CLI 문구,
+- **문서**: runbook '긴급 전량 매도'(1순위 초기 대응 KILL_SWITCH+HTS → 완료 판정 전 봇 정지·재취소·잔고 0, 2순위 절대경로 봇 정지 후 CLI·tmux·sudo 금지·CLI 중 배포 금지)·'싱글톤 락 충돌'(`rm -f *.lock` 삭제 → `fuser`)·'주문 접수 불명' CLI 문구,
   `docs/integrations/external-apis.md` 감사 원장 필드, `docs/operations/monitoring-checkpoints.md` 운영 수용 확인, CLAUDE.md 주의사항 한 줄.
 - **남은 한계**: 나중에 추가되는 주문 스크립트는 규칙(`hold_or_exit` 호출)으로만 덮인다. `sudo` 실행은 home 이 달라 통과(추정). `sell_specific` 폴백 전량 매도 결함은 별도 과제.
 - 주문·전략·위험 설정·임계값·킬스위치·`.env` 변경 0. 배포·재시작 안 함.

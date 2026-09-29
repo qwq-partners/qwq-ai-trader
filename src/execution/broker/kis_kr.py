@@ -628,7 +628,7 @@ class KISBroker(BaseBroker):
 
             if data.get("_blocked"):  # 전송 직전 재확인에서 보류 — 보내지 않았다
                 hold = data.get("msg1", "")
-                logger.warning(f"[접수불명] KR 매수 전송 직전 보류: {order.symbol} {order.quantity}주 — {hold}")
+                logger.warning(f"[주문차단] KR 매수 전송 직전 보류: {order.symbol} {order.quantity}주 — {hold}")
                 audit_log.record_blocked(
                     market="KR", symbol=order.symbol, side=order.side.value,
                     reason=hold, qty=order.quantity,

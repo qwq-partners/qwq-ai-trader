@@ -31,7 +31,7 @@ def hold_or_exit(tool: str, path: Path | None = None) -> None:
         sys.stderr.write(
             f"[{tool}] 봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부\n"
             f"  누가 쥐었나: fuser -v ~/.cache/ai_trader/unified_trader.lock\n"
-            f"  봇이면(급할 때 1순위): touch ~/.cache/ai_trader/KILL_SWITCH 후 MTS/HTS 에서 미체결 일괄취소·매도 (30초 뒤 미체결 재확인)\n"
+            f"  봇이면(급할 때 1순위): touch ~/.cache/ai_trader/KILL_SWITCH 후 MTS/HTS 에서 미체결 일괄취소·매도 → 완료 전 봇 정지·재확인\n"
             f"  CLI 로 하려면: KILL_SWITCH → sudo systemctl stop qwq-ai-trader → HTS 미체결 취소 확인 → 이 명령 재실행\n"
         )
         sys.exit(2)

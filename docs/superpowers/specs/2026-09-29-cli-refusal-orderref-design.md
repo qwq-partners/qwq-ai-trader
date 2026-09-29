@@ -50,7 +50,7 @@ CLI 의 취소는 자기 인스턴스의 추적만 순회하므로 봇 주문에
     ```
     [{tool}] 봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부
       누가 쥐었나: fuser -v ~/.cache/ai_trader/unified_trader.lock
-      봇이면(급할 때 1순위): touch ~/.cache/ai_trader/KILL_SWITCH 후 MTS/HTS 에서 미체결 일괄취소·매도 (30초 뒤 미체결 재확인)
+      봇이면(급할 때 1순위): touch ~/.cache/ai_trader/KILL_SWITCH 후 MTS/HTS 에서 미체결 일괄취소·매도 → 완료 전 봇 정지·재확인
       CLI 로 하려면: KILL_SWITCH → sudo systemctl stop qwq-ai-trader → HTS 미체결 취소 확인 → 이 명령 재실행
     ```
   - 성공하면 fd 를 모듈 전역에 붙잡아 **프로세스가 끝날 때까지** 쥔다. 그러면 CLI 가 도는 동안 봇이 재기동하려 해도 기존 코드대로 거부된다(`run_trader.py:2198` exit 1 → systemd 재시도).
@@ -77,12 +77,20 @@ CLI 의 취소는 자기 인스턴스의 추적만 순회하므로 봇 주문에
 
 ### D2. runbook "긴급 전량 매도" 절차를 바꾼다 (리뷰 1회차 P1 반영)
 
-**1순위 — 봇을 멈추지 않는 방법**(가장 빠르다. 봇 내부 청산 경로는 없다):
+**1순위 — 봇을 멈추지 않고 먼저 막는 방법**(가장 빠르다. 봇 내부 청산 경로는 없다):
+
+**초기 대응** (봇은 계속 돌아도 된다):
 1. `touch ~/.cache/ai_trader/KILL_SWITCH` — 봇 신규 매수 차단(2초 안 반영). **`KILL_SWITCH_ALL`·`KILL_SWITCH_ALL_KR` 금지** — CLI·봇 매도까지 막힌다.
 2. MTS/HTS 에서 **미체결 일괄취소**(봇의 살아 있는 BUY 가 청산 뒤 체결되는 것 방지) → 보유 전량 매도.
-3. **30초 뒤 미체결을 다시 확인·취소한다** — 킬스위치 직전 검사를 통과한 BUY 가 hashkey·rate-limit 대기 뒤 늦게 전송될 수 있다. (구현 리뷰 1회차 P1)
-   킬스위치를 만들면 그 뒤(최대 2초 캐시) 봇 BUY 는 전송 직전에도 막힌다. 이미 전송 중이던 요청만 남으므로 30초 뒤 재확인으로 닫는다. `_api_post` 의 매수 TR 전송 직전 재확인(매 시도·401 재전송 포함 rate-limit 직후)이 접수 불명 보류와 함께 `kill_switch.check("buy", market="KR")` 도 본다 — SELL 은 재검사하지 않는다. (구현 리뷰 2회차 P1)
-4. 그 재확인 뒤에 잔고·미체결 0 을 확인해 청산 완료로 판정한다. 봇은 30초 동기화로 결과를 반영한다. KILL_SWITCH 는 재개를 판단할 때까지 유지한다.
+   킬스위치를 만든 뒤(최대 2초 캐시) 봇 BUY 는 전송 직전에도 막힌다. 그러나 이미 전송 중이던 요청은 HTTP 응답 대기
+   (`KIS_API_TIMEOUT_SECONDS` 시한만큼 — 코드 기본 15초)가 남아 늦게 접수될 수 있다. 그래서 시간을 두고 다시 보는 것만으로는 완료를 판정하지 않는다.
+   코드: `_api_post` 의 매수 TR 전송 직전 재확인(매 시도·401 재전송 포함 rate-limit 직후)이 접수 불명 보류와 함께 `kill_switch.check("buy", market="KR")` 도 본다 — SELL 은 재검사하지 않는다(구현 리뷰 2회차 P1). 재검사 뒤 HTTP 대기가 남으므로 완료 판정은 봇 정지 뒤로 둔다(구현 리뷰 3회차 P1).
+
+**완료 판정 전 필수**:
+3. 봇 정지 완료 확인 — `sudo systemctl stop qwq-ai-trader` 후 `systemctl is-active qwq-ai-trader` 가 `inactive`.
+4. MTS/HTS 에서 미체결을 **다시** 일괄취소한다.
+5. 잔고를 다시 조회해 남은 보유분을 청산한다(HTS, 또는 봇이 멈췄으니 아래 2순위 CLI).
+6. 잔고·미체결 0 을 확인해 청산 완료로 판정한다. KILL_SWITCH 는 재개를 판단할 때까지 유지하고, 봇 재기동은 운영자 판단이다.
 
 **2순위 — CLI 로 할 때**(tmux 안에서 실행 — SSH 가 끊겨 SIGHUP 이 15초 대기 중인 CLI 를 죽이면 자기 SELL 이 매도가능수량을 잡아 재실행이 I1 로 거부된다):
 ```bash
@@ -201,6 +209,15 @@ cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.
 | P1 | 지연 BUY 는 30초 재확인으로 닫히지 않는다 — 머리 킬스위치 검사를 지난 BUY 가 hashkey(15초 시한·최대 3회)·rate-limit(전체 시한 없음) 대기 뒤 운영자 재확인 이후에 전송될 수 있다 | 코드: `_api_post` 매수 TR 전송 직전 재확인에 `kill_switch.check("buy", market="KR")` 추가, 막히면 기존 `_blocked` 반환 → `submit_order` 의 기존 `_blocked` 처리(record_blocked + `(False, 사유)`) 재사용. 위치(매 시도·401 재전송 포함 rate-limit 직후) 유지, SELL 제외. 시험: 머리 허용·전송 직전 차단 → POST 0·blocked·`(False, 사유)`, 401 재전송 직전 차단, 대조군(킬스위치 없음) 성공 경로 그대로, SELL 은 검사 1회. 문서: runbook·D2 1순위에 "킬스위치 뒤(최대 2초 캐시) BUY 는 전송 직전에도 막힌다, 이미 전송 중이던 요청만 30초 재확인으로 닫는다" |
 | P2 | `_accept_identity` "어떤 입력에도 예외 없음" 과장 | docstring 을 "JSON 기본형·내부 문자열 입력에서 예외 없음(str 하위 클래스 등 임의 객체는 보장 밖), `datetime.now()` 사용" 으로 정정. 코드 무변경 |
 
+### 구현 리뷰 3회차 (2026-09-29, 대상 `150cbef`, 확인 리뷰)
+
+- Codex(교차 공급자, rollout 기준 gpt-6-astra/xhigh): REQUEST_CHANGES — P1 1 · P2 1. 전송 직전 킬스위치 재검사 코드는 맞다고 확인.
+
+| # | 지적 | 처분 |
+|---|---|---|
+| P1 | 재검사 뒤에도 HTTP 연결 대기(`KIS_API_TIMEOUT_SECONDS`)가 남아 "30초 재확인으로 닫힌다"는 결론이 성립하지 않는다 | 문서만: runbook·D2 1순위를 **초기 대응**(KILL_SWITCH → HTS 일괄취소·매도, 봇 계속 가동 가능)과 **완료 판정 전 필수**(봇 정지 완료 확인 → HTS 미체결 재취소 → 잔고 재조회·잔여분 청산 → 잔고·미체결 0)로 분리, "30초 뒤 재확인" 삭제. `trader_lock` 안내 1순위 줄 "→ 완료 전 봇 정지·재확인" |
+| P2 | 킬스위치 차단도 `[접수불명]` 태그로 로그된다 | `submit_order` `_blocked` 로그 태그를 `[주문차단] KR 매수 전송 직전 보류` 로(사유 문자열 그대로). 단정 시험·운영 문서 grep 에 옛 문자열 없음 |
+
 ## 8. 구현 기록 (2026-09-29, 미배포)
 
 - 브랜치 `fix/cli-refusal-orderref-20260929`, 기준 `de53941`(= main `4b8e146` + 이 문서). 작성 Claude Opus(요청 opus/high).
@@ -227,4 +244,7 @@ cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.
     매수 TR 로 `_api_post` 를 직접 불러 운영 킬스위치 플래그를 stat 했으므로(격리 위반 4건) 그 헬퍼에 `kill_switch.check` 가짜 한 줄을 넣었다(허용 파일 밖 — 별도 커밋).
   - 변이 2종 검출(sha256 복원 확인): 재검사 제거, 재검사 결과 무시.
   - 회귀: `TZ=UTC`·`TZ=Asia/Seoul` 각각 **2398 passed / 2 xfailed**(2394 + 4), `[테스트 격리] … 0건`, 종료코드 0.
+- **구현 리뷰 3회차 반영**(§7 처분표): runbook·D2 1순위를 초기 대응/완료 판정 전 필수로 분리, `trader_lock` 안내 1순위 줄 교체(시험 단정 문구 동반 수정),
+  `_blocked` 로그 태그 `[주문차단]`. 코드 동작 무변경(문자열 2곳).
+  회귀: `TZ=UTC` 전체 **2398 passed / 2 xfailed**, `[테스트 격리] … 0건`, 종료코드 0(문서·문자열만 바뀌어 KST 생략 — coordinator 지시).
 - 배포는 아직(사용자 지시 대기).

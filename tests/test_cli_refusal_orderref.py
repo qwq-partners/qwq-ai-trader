@@ -56,7 +56,7 @@ def test_t1_refuses_with_next_steps_when_another_fd_holds_the_lock(tmp_path, cap
     assert err.startswith("[liquidate_all] 봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부")
     assert "fuser -v ~/.cache/ai_trader/unified_trader.lock" in err
     assert "touch ~/.cache/ai_trader/KILL_SWITCH" in err and "sudo systemctl stop qwq-ai-trader" in err
-    assert "(30초 뒤 미체결 재확인)" in err
+    assert "→ 완료 전 봇 정지·재확인" in err
     assert trader_lock._held is None
 
 
