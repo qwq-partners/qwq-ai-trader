@@ -28,6 +28,7 @@ from ...core.types import (
 )
 from ...risk import kill_switch, order_unknown
 from ...utils import audit_log
+from ...utils.session import is_kr_market_holiday
 
 
 # KIS 구 TR → 신 TR 전환 스위치 (2026-09-21)
@@ -747,16 +748,59 @@ class KISBroker(BaseBroker):
             )
             if not saved:
                 text += "\n⚠️ 장부 저장 실패 — 재시작 보호 없음(같은 날 재시작하면 보류가 풀린다)"
-            try:
-                from ...utils.telegram import send_alert
-                task = asyncio.create_task(send_alert(text))
-                task.add_done_callback(
-                    lambda t: t.cancelled() or t.exception() is None
-                    or logger.warning(f"[접수불명] 알림 발송 실패: {t.exception()}")
-                )
-            except Exception as e:
-                logger.warning(f"[접수불명] 알림 예약 실패: {e}")
+            self._send_unknown_alert(text)
         return f"{order_unknown.PREFIX} {detail}"
+
+    @staticmethod
+    def _send_unknown_alert(text: str) -> None:
+        """접수 불명 텔레그램 알림을 fire-and-forget 으로 예약한다(실패는 경고 로그만)."""
+        try:
+            from ...utils.telegram import send_alert
+            task = asyncio.create_task(send_alert(text))
+            task.add_done_callback(
+                lambda t: t.cancelled() or t.exception() is None
+                or logger.warning(f"[접수불명] 알림 발송 실패: {t.exception()}")
+            )
+        except Exception as e:
+            logger.warning(f"[접수불명] 알림 예약 실패: {e}")
+
+    async def hold_buys_for_live_orders_at_restart(self) -> None:
+        """기동 직후 1회: 거래소에 살아 있는 BUY 가 있으면 그날 신규 BUY 를 보류한다 (2026-09-29).
+
+        재시작하면 엔진 pending·브로커 추적이 비어 재시작 전에 접수된 지정가 BUY 를 모른 채 같은 종목을
+        다시 살 수 있다. KR 거래일 08:00~20:00 에만 거래소 미체결을 한 번 조회한다(장외는 조회 0회).
+        조회 실패·불완전(첫 페이지뿐)·예외 → 전면 보류, BUY 행 → 종목별 보류, SELL 만·없음 → 무기록.
+        HTS 수동 BUY 와 구분하지 못하지만 막는 쪽이라 안전하다(D17). 기록은 접수 불명 장부를 그대로 쓰므로
+        머리·전송 직전 게이트, 엔진 조기 차단, 재시작 영속, 날짜 변경 해제가 모두 재사용된다.
+        """
+        now = datetime.now()
+        fail = "재시작 시 거래소 미체결 조회 실패/불완전"
+        try:
+            if is_kr_market_holiday(now.date()) or self._get_current_market_session() == "closed":
+                return
+            rows = await self.get_exchange_open_orders(require_complete=True)
+            if rows is None:
+                holds = [("*", 0, fail)]
+            else:
+                holds = [(r["symbol"], r["qty"], f"재시작 시 거래소 미체결 BUY {r['symbol']} {r['qty']}")
+                         for r in rows if r["side"] == "buy"]
+        except Exception as e:
+            holds = [("*", 0, f"{fail} (예외: {e})")]
+        if not holds:
+            return
+        book = getattr(self, "_unknown_book", None)
+        if book is None:
+            book = self._unknown_book = order_unknown.UnknownOrderBook(order_unknown.default_path())
+        saved = True
+        for sym, qty, reason in holds:
+            logger.error(f"[접수불명] {reason} — 오늘 신규 매수 보류(날짜 변경 시 해제)")
+            audit_log.record(audit_log.EV_UNKNOWN, market="KR", symbol=sym, side="buy", qty=qty, reason=reason)
+            saved = book.record("buy", sym, qty, reason, now) and saved
+        text = ("⚠️ 재시작 매수 보류: " + "; ".join(r for _, _, r in holds)
+                + " — 오늘 신규 매수 보류(날짜 변경 시 해제). HTS 에서 주문 확인.")
+        if not saved:
+            text += "\n⚠️ 장부 저장 실패 — 재시작 보호 없음(같은 날 재시작하면 보류가 풀린다)"
+        self._send_unknown_alert(text)
 
     def _get_order_division(self, order: Order) -> str:
         """
@@ -1189,7 +1233,8 @@ class KISBroker(BaseBroker):
         return None
 
     @kis_request_metrics.observe_operation("open_orders")
-    async def get_exchange_open_orders(self, symbol: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    async def get_exchange_open_orders(self, symbol: Optional[str] = None, *,
+                                       require_complete: bool = False) -> Optional[List[Dict[str, Any]]]:
         """거래소 실 미체결 주문 조회 (정정취소가능주문, TTTC8036R / 신 TR TTTC0084R)
 
         로컬 `_pending_orders` 캐시와 달리 **재시작 후에도 유효** — ExitManager
@@ -1199,6 +1244,7 @@ class KISBroker(BaseBroker):
         Returns:
             [{"symbol": 종목코드, "side": "sell"|"buy", "qty": 미체결수량}]
             조회 실패 시 None (호출측이 판단 불가로 처리해야 함 — fail-safe)
+            require_complete=True 면 다음 페이지가 남은 첫 페이지(tr_cont F/M)도 None — 재시작 보류 확인 전용.
         """
         if not self.is_connected:
             if not await self.connect():
@@ -1251,6 +1297,9 @@ class KISBroker(BaseBroker):
                     "side": "sell" if str(item.get("sll_buy_dvsn_cd", "")) == "01" else "buy",
                     "qty": qty,
                 })
+            if require_complete and data.get("_tr_cont") in ("F", "M"):
+                logger.warning("실 미체결 조회: 다음 페이지 남음(첫 페이지뿐) → 불완전")
+                return None
             # 이 조회는 첫 페이지만 읽는다(페이지 루프는 별도 PR). 호출측이 물은 종목이 첫 페이지에 없는데
             # 다음 페이지가 남았으면(응답 헤더 tr_cont F/M) "미체결 없음"을 말할 수 없다 → 판단 불가.
             # 찾았으면 생존 증거이므로 그대로 돌려준다. symbol 미지정 호출은 종전 동작 그대로 (2026-09-21).

@@ -372,6 +372,14 @@ class UnifiedTradingBot:
                 logger.warning(f"[KR] KIS 시장 데이터 초기화 실패 (무시): {e}")
                 self.kis_market_data = None
 
+            # 2-1. 재시작 전에 접수된 봇 BUY 가 거래소에 살아 있으면 그날 신규 BUY 보류 (2026-09-29).
+            # 휴장일 로드 뒤·엔진 신호 처리 전에 한 번. 예외가 나도 기동은 계속한다.
+            if getattr(self, "broker", None) is not None and not self.dry_run:
+                try:
+                    await self.broker.hold_buys_for_live_orders_at_restart()
+                except Exception as e:
+                    logger.error(f"[KR] 재시작 미체결 BUY 확인 실패(기동 계속): {e}")
+
             # 3. 종목 마스터 초기화
             sm_cfg = kr_cfg.get("stock_master", self.config.get("stock_master") or {})
             if sm_cfg.get("enabled", True):
