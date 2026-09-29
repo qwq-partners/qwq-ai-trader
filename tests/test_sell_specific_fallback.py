@@ -67,6 +67,8 @@ class FakeBroker:
 
     async def cancel_all_for_symbol(self, sym):
         self.events.append(("cancel", sym))
+        if isinstance(self._cancel, Exception):
+            raise self._cancel
         return self._cancel
 
 
@@ -131,3 +133,11 @@ def test_refetch_failure_means_no_fallback(monkeypatch):
     """재조회 실패(빈 응답) → 현재 보유 0 → 폴백 0."""
     ev = _run(monkeypatch, ["005930:10"], [{"005930": 100}, {}], cancel_count=1)
     assert _markets(ev) == []
+
+
+@pytest.mark.parametrize("cancel", [0, RuntimeError("취소 거절")], ids=["cancel0", "cancel_error"])
+def test_cancel_zero_or_error_with_empty_refetch_warns(monkeypatch, capsys, cancel):
+    """취소 0건(또는 예외 → 0건) + 재조회 빈 응답 → fb=0 이어도 '완료'만 찍지 않고 경고, 추가 주문 0."""
+    ev = _run(monkeypatch, ["005930:10"], [{"005930": 100}, {}], cancel_count=cancel)
+    assert [e for e in ev if e[0] == "submit"] == [("submit", "005930", 10, "LIMIT")]
+    assert "005930 취소 0건·수량 확인 불가 — 상태 불명, 추가 주문 안 함, MTS/HTS 확인" in capsys.readouterr().out

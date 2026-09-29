@@ -112,9 +112,13 @@ async def main():
         pos = positions.get(sym)
         now = pos.quantity if pos else 0
         fb = fallback_qty(qty, before.get(sym), now)
-        if fb > 0 and cancelled[sym] == 0:
-            # 취소 0건: 방금 체결됐는지 취소가 실패해 지정가가 살아 있는지 모른다 — 중복 매도 위험
-            print(f"  {sym} 취소 0건·목표 미달 — 상태 불명, 추가 주문 안 함, MTS/HTS 확인")
+        b = before.get(sym)
+        short = b is None or b - now < qty  # 스냅샷 없으면 매도량을 모른다 → 미달로 본다
+        # 재조회에 없음(조회 실패·전량 매도 구분 불가) 또는 취소 0건(방금 체결/취소 실패로 지정가 생존)·목표 미달
+        # → 목표 달성 판정 없이 경고만. 주문 조건(fb>0·취소≥1건)은 그대로 — 종목이 없으면 fb=0
+        if pos is None or (cancelled[sym] == 0 and short):
+            why = "수량 확인 불가" if pos is None else "목표 미달"
+            print(f"  {sym} 취소 {cancelled[sym]}건·{why} — 상태 불명, 추가 주문 안 함, MTS/HTS 확인")
         elif fb > 0:
             remaining.append((sym, fb))
 
