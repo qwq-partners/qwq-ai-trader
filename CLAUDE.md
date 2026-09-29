@@ -444,6 +444,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 ```bash
 source venv/bin/activate
 python scripts/run_trader.py --market kr                  # KR 실거래 (운영은 systemd 로만 기동 — 직접 실행 금지)
-python scripts/run_trader.py --market kr --dry-run        # KR 테스트
+python scripts/run_trader.py --market kr --dry-run        # KR 테스트 — ⚠️ 운영 봇이 떠 있으면 실행 금지
+# (PR #106 배포 전 코드는 싱글톤 락이 PID 파일의 운영 봇을 SIGTERM/SIGKILL 한다. 배포 후엔 exit 1 로 거부)
 # --market us / both: 미국 거래 영구 중단(2026-09-28) — 사용하지 않는다
 ```
