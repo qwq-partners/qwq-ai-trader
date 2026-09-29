@@ -6,6 +6,8 @@ swing_screener 에 있던 검증을 옮겼다. 스크리너 레짐·변동성 �
 
 원천 순서: FDR "YAHOO:^KS11" → "KS11". FDR 0.9.110 의 "KS11" 은 GitHub 캐시 CSV 를
 읽으며 09-17 장중 부분봉에서 멈춘 채 예외 없이 오래된 프레임을 돌려줬다(09-28 진단).
+FALLBACK_SOURCES 는 끝에 KODEX200(069500)을 붙인다 — 변동성 타게팅(09-28)·수확 shadow·스크리너
+레짐(09-29, Yahoo 가 09-28 봉을 빠뜨려 NaN 거부 + KS11 정지로 두 원천이 모두 막힌 날).
 한계: 상류가 장중 부분봉을 직전 거래일 날짜로 남기면 KS11 도 날짜 검사는 통과한다.
 """
 
@@ -20,6 +22,8 @@ from loguru import logger
 from src.utils.session import KST, is_kr_market_holiday
 
 SOURCES = ("YAHOO:^KS11", "KS11")
+# KOSPI 원천이 모두 신선하지 않을 때만 쓰는 KODEX200 최후 대체 — 같은 검증
+FALLBACK_SOURCES = SOURCES + ("069500",)
 
 
 def benchmark_date_status(last_bar_date: Optional[date], now: datetime):

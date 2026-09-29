@@ -151,6 +151,7 @@
 - 캐시: `~/.cache/ai_trader/vol_targeting.json` (매 거래일 08:30 갱신, 노후 3일+ 시 무개입)
 - 원천(2026-09-28~, 미배포): `src/utils/kospi_benchmark.py` 공용 로더 — Yahoo ^KS11 → KS11 → 069500, 신선하지 않으면 캐시 미기록.
   FDR `KS11` 은 GitHub 캐시 CSV 라 09-17 에서 예외 없이 멈췄다(그동안 31.8%/×0.786 이 매일 재기록됨)
+  수확 shadow·스윙스크리너 레짐도 같은 `FALLBACK_SOURCES`(Yahoo → KS11 → 069500 최후 대체, 같은 검증)를 쓴다 (2026-09-29, 미배포)
 - 축소 전용(레버리지 없음), 일수익률 |12%| 초과는 데이터 오류로 제외
 - 비활성화: `VOL_TARGETING=0` / 상세: `docs/research/ai-trading-research-2026-08.md`
 

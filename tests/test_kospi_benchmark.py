@@ -137,17 +137,34 @@ def test_harvest_regime_rule_matches_backtest():
     assert hs.regime_ok_dates(closes) == {str(closes.index[20])[:10]}
 
 
-def test_harvest_skips_run_and_keeps_cursor_when_kospi_is_not_fresh(monkeypatch, tmp_path):
+def nan_last(last):
+    """09-29 재현: FDR "YAHOO:^KS11" 이 빠진 거래일 행을 NaN 종가로 돌려준다 → 이력 전체 거부."""
+    data = frame(last)
+    data.iloc[-1, 0] = float("nan")
+    return data
+
+
+@pytest.fixture
+def harvest_env(monkeypatch, tmp_path):
     for name, attr in (("pending.json", "_PENDING"), ("positions.json", "_POSITIONS"),
                        ("cursor.json", "_CURSOR")):
         monkeypatch.setattr(hs, attr, tmp_path / name)
     monkeypatch.setattr(hs, "_DIR", tmp_path)
+    monkeypatch.setattr(hs, "datetime", _Clock)
+    monkeypatch.setattr(hs, "_load_bt", lambda: object())
+    logs = []
+    monkeypatch.setattr(hs.logger, "info", lambda msg: logs.append(("INFO", msg)))
+    monkeypatch.setattr(hs.logger, "warning", lambda msg: logs.append(("WARNING", msg)))
+    return tmp_path, logs
+
+
+def test_harvest_skips_run_and_keeps_cursor_when_kospi_is_not_fresh(monkeypatch, harvest_env):
+    tmp_path, _ = harvest_env
     cursor = tmp_path / "cursor.json"
     cursor.write_text('{"last_bar": "2026-09-17", "last_d0": {}}', encoding="utf-8")
-    monkeypatch.setattr(hs, "_load_bt", lambda: object())
-    monkeypatch.setattr(hs, "load_kospi_daily", lambda start, now: (None, {
-        "status": "stale", "source": "FDR:KS11", "last_bar_date": date(2026, 9, 17),
-        "loaded_at": None, "reason": "older_than_previous_kr_session"}))
+    fetch, calls = stub(**{"YAHOO:^KS11": nan_last("2026-09-23"), "KS11": frame("2026-09-17"),
+                           "069500": None})
+    monkeypatch.setattr(kb, "_fdr_fetch", fetch)
 
     def _never(*args, **kwargs):
         raise AssertionError("신선하지 않은 체제 게이트로 판정하면 안 된다")
@@ -155,9 +172,46 @@ def test_harvest_skips_run_and_keeps_cursor_when_kospi_is_not_fresh(monkeypatch,
     monkeypatch.setattr(hs, "_load_universe", _never)
 
     ok, message = asyncio.run(hs.run_daily_shadow_scan())
+    assert calls == ["YAHOO:^KS11", "KS11", "069500"]
     assert ok is False and "신선하지 않음" in message   # 스케줄러가 dedup 없이 재시도
+    assert "source=FDR:KS11" in message and "status=stale" in message   # 먼저 확인한 근거 보존
     assert cursor.read_text(encoding="utf-8") == '{"last_bar": "2026-09-17", "last_d0": {}}'
     assert not (tmp_path / "pending.json").exists()
+
+
+KODEX = [30000.0 + 300 * i * (-1) ** i for i in range(60)]   # 지수와 단위가 다른 대용 종가
+
+
+@pytest.mark.parametrize("case", ["kodex_fallback", "yahoo_fresh"])
+def test_harvest_regime_gate_uses_fallback_only_when_kospi_sources_fail(
+        monkeypatch, harvest_env, case):
+    _, logs = harvest_env
+    if case == "kodex_fallback":   # 2026-09-29 운영 상태: Yahoo NaN 행 + KS11 정지
+        by_symbol = {"YAHOO:^KS11": nan_last("2026-09-23"), "KS11": frame("2026-09-17"),
+                     "069500": frame("2026-09-23", KODEX)}
+        chosen, source, level = "069500", "FDR:069500", "WARNING"
+    else:
+        by_symbol = {"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17"),
+                     "069500": AssertionError("KOSPI 가 신선하면 069500 을 조회하지 않는다")}
+        chosen, source, level = "YAHOO:^KS11", "FDR:YAHOO:^KS11", "INFO"
+    fetch, calls = stub(**by_symbol)
+    monkeypatch.setattr(kb, "_fdr_fetch", fetch)
+    monkeypatch.setattr(hs, "_load_universe", lambda bt: [])
+    seen = {}
+
+    def _process(bt, data, ok_dates, universe, pending, positions, cursor):
+        seen["ok_dates"] = ok_dates
+        return [], 0, cursor
+    monkeypatch.setattr(hs, "_process", _process)
+
+    ok, _ = asyncio.run(hs.run_daily_shadow_scan())
+    assert ok is True
+    assert calls[-1] == chosen and "069500" not in calls[:-1]
+    closes = by_symbol[chosen]["Close"]
+    assert seen["ok_dates"] == hs.regime_ok_dates(closes) and seen["ok_dates"]
+    gate = [(lv, msg) for lv, msg in logs if "체제 게이트 원천" in msg]
+    assert gate == [(level, gate[0][1])] and source in gate[0][1]
+    assert ("KOSPI 대용(KODEX200)" in gate[0][1]) is (level == "WARNING")
 
 
 # ── 백테스트·분석용 과거 구간 로더 (scripts/ 벤치마크 교체, 2026-09-28) ──────────

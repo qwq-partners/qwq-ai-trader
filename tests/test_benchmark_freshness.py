@@ -42,17 +42,16 @@ def frame(last="2026-09-22", *, rising=True):
     return pd.DataFrame({"Close": values}, index=pd.bdate_range(end=last, periods=60))
 
 
-def load(monkeypatch, screener, ks11, yahoo=None):
-    """원천 순서는 Yahoo ^KS11 → KS11 (2026-09-28). 호출된 원천을 순서대로 돌려준다."""
+def load(monkeypatch, screener, ks11, yahoo=None, kodex=None):
+    """원천 순서는 Yahoo ^KS11 → KS11 → 069500(최후 대체, 2026-09-29). 호출된 원천을 순서대로 돌려준다."""
     calls = []
+    by_symbol = {"YAHOO:^KS11": yahoo, "KS11": ks11, "069500": kodex}
 
     def fetch(symbol, start_date):
         calls.append(symbol)
-        if symbol == "KS11":
-            return ks11
-        if symbol == "YAHOO:^KS11":
-            return yahoo
-        raise AssertionError(f"예상 밖 데이터 소스: {symbol}")
+        if symbol not in by_symbol:
+            raise AssertionError(f"예상 밖 데이터 소스: {symbol}")
+        return by_symbol[symbol]
     monkeypatch.setattr(screener, "_fetch_fdr_data", fetch)
     asyncio.run(screener._load_benchmark_index())
     return calls
@@ -138,6 +137,35 @@ def test_valid_yahoo_is_used_without_reading_stale_ks11(monkeypatch, screener):
     assert screener.get_kospi_change()["level"] == 100
 
 
+def test_kodex200_is_last_resort_when_kospi_sources_are_rejected(monkeypatch, screener):
+    """2026-09-29 재현: Yahoo 가 거래일 행을 NaN 으로 줘 거부, KS11 정지 → 069500 종가로 레짐 판정."""
+    warnings = []
+    monkeypatch.setattr(mod.logger, "warning", lambda msg: warnings.append(msg))
+    yahoo = frame()
+    yahoo.iloc[-1, 0] = float("nan")
+    kodex = frame(rising=False) * 300   # 지수와 단위가 다른 대용 종가 (하락 → bear)
+    calls = load(monkeypatch, screener, frame("2026-09-17"), yahoo, kodex)
+    assert calls == ["YAHOO:^KS11", "KS11", "069500"]
+    status = screener.get_benchmark_status()
+    assert (status["status"], status["source"]) == ("fresh", "FDR:069500")
+    assert screener._kospi_closes == list(kodex["Close"])
+    assert screener.get_market_regime() == "bear"
+    assert screener.get_kospi_change() == {"c5": -4.76, "c20": -16.67, "level": 30000.0}
+    loaded = [m for m in warnings if "KOSPI 벤치마크 로드" in m]
+    assert len(loaded) == 1 and "source=FDR:069500" in loaded[0] and "KOSPI 대용(KODEX200)" in loaded[0]
+
+
+def test_kodex200_rejection_keeps_earlier_failure_reason(monkeypatch, screener):
+    yahoo = frame()
+    yahoo.iloc[-1, 0] = float("nan")
+    calls = load(monkeypatch, screener, None, yahoo, frame("2026-09-28") * 300)
+    assert calls == ["YAHOO:^KS11", "KS11", "069500"]
+    assert screener._kospi_closes == [] and screener.get_market_regime() == "neutral"
+    status = screener.get_benchmark_status()
+    # 069500 의 거부(future)도 같은 검증 결과로 남는다 — 결측만 앞 근거를 덮지 못한다
+    assert (status["status"], status["source"]) == ("future", "FDR:069500")
+
+
 def test_all_sources_fail_without_using_stock_0001(monkeypatch, screener):
     stock_requests = []
 
@@ -161,8 +189,8 @@ def test_yahoo_must_pass_same_validation(monkeypatch, screener, fallback):
         data = frame()
         data.iloc[-1, 0] = float("nan")
     calls = load(monkeypatch, screener, None, data)
-    # 거부된 Yahoo 뒤에 KS11 을 시도하고, KS11 결측이 Yahoo 의 거부 근거를 덮지 않는다
-    assert calls == ["YAHOO:^KS11", "KS11"]
+    # 거부된 Yahoo 뒤에 KS11·069500 을 시도하고, 뒤 원천의 결측이 Yahoo 의 거부 근거를 덮지 않는다
+    assert calls == ["YAHOO:^KS11", "KS11", "069500"]
     assert screener._kospi_closes == []
     assert screener.get_market_regime() == "neutral"
     assert screener.get_benchmark_status()["status"] == {
