@@ -1,0 +1,61 @@
+{
+ "cell": "channel/none",
+ "universe": "default60",
+ "elapsed_s": 104.0,
+ "max_rss_mb": 200.6,
+ "config_hash": "91a816502f3f",
+ "calc_version": "2026-09-14.t7",
+ "sizing": "risk",
+ "exit_policy": "channel",
+ "entry_stop_mode": "live_policy",
+ "slot_policy": "live_weighted",
+ "strategies": [
+  "sepa"
+ ],
+ "allocation": {
+  "sepa": 0.4
+ },
+ "missing_tickers": [],
+ "regime_source": "kospi_fdr:FDR:YAHOO:^KS11",
+ "metrics": {
+  "initial": 10000000.0,
+  "final": 33014304.911363795,
+  "total_return_pct": 230.14304911363794,
+  "cagr_pct": 17.770659367855668,
+  "mdd_pct": -27.980731982732078,
+  "mdd_start": "2023-07-25",
+  "mdd_end": "2025-05-13",
+  "sharpe": 0.7693625073158494,
+  "win_rate": 23.51421188630491,
+  "profit_factor": 5.825258491692915,
+  "total_trades": 387,
+  "wins": 91,
+  "losses": 296,
+  "total_fees": 2169358.527870624,
+  "start_date": "2019-06-05",
+  "end_date": "2026-09-23",
+  "avg_holding_days": 13.253229974160206
+ },
+ "position_level": {
+  "trades": 387,
+  "win_rate": 23.51421188630491,
+  "avg_win_pct": 28.80609753966618,
+  "avg_loss_pct": -4.945033354441694,
+  "payoff": 5.825258491692915,
+  "expectancy_pct": 2.9912790780229477,
+  "expectancy_r": 0.5982558156045896,
+  "profit_factor": 1.658357659277509,
+  "net_pnl": 22993580.84912937,
+  "max_consec_losses": 18,
+  "median_holding_days": 5.0,
+  "turnover": 73.54344766255205,
+  "turnover_annual": 10.065001273652605,
+  "fee_drag_pct": 8.448564100454469
+ },
+ "exit_reasons": {
+  "손절": 333,
+  "손절(갭관통)": 39,
+  "채널이탈": 13,
+  "백테스트 종료 청산": 2
+ }
+}
