@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-30 — research: 장기 구간 SEPA 단독 vs KODEX200 (포지션 단위, 연구 전용)
+
+- **질문**: SEPA 계열이 어느 국면에서든 포지션(왕복) 단위로 KODEX200 을 이기는가(`review-recs-127-status` §3). 정본 `docs/research/long-window-sepa-vs-kodex200-2026-09.md`.
+- **실행**: 2019-06-05~2026-09-23(1,794 거래일), SEPA 단독·risk 사이징·`live_policy`·`live_weighted`, 청산 {ladder, channel} × 보유 {current, extended, none} **6셀 전부**. 유니버스 g1 391종목(현재 상장 중형주, 편향이 덜한 쪽) + 민감도 하드코딩 60종목 2셀. OHLCV pykrx(KIS 무접촉), KODEX200 FDR 069500, 국면·보조 벤치 Yahoo ^KS11. 셀당 9~10분·RSS 약 420MB, `nice -n 19` 순차 실행.
+- **결과**: 포지션 단위 KODEX200 초과 평균 −0.79%~+0.41%(t −1.69~+0.65), 중앙값 −3.0~−5.2%, 이긴 비율 22~36%, 상위 3건 제외 −1.39~+0.02%. 연도 48칸 중 |t|≥2 는 3칸(전부 음). MA200 아래 진입은 6셀 모두 양이나 t≤1.56. 계좌는 전 셀 KODEX200(+387%)에 크게 열위(노출 13~27%). 60종목(사후 선택 편향 큼)도 t≈1, top3 제외 음수. → **편향 유니버스에서도 엣지 미입증, 이기는 국면 확인 안 됨.**
+- **자료 점검**: 069500 이상봉 2026-03-04(−12.5%, ^KS11 −12.1% 와 일치)·07-31(+24.2%, 오염) — 07-31 을 진입·청산 기준으로 쓴 포지션 0건. 수정주가 의심 3종목 무보정.
+- 새 파일: `scripts/research/long_window_excess.py`(prep/cell/report, 원장 `position_row` 와 같은 지표), `tests/test_long_window_excess.py`(2건), `results/long_window_sepa_2026-09/`. `scripts/backtest_strategies.py`·`src/`·설정·운영 변경 0. 캐시는 `~/.cache/ai_trader/backtest/` 에만 추가(g1 파일 무변경).
+
 ## 2026-09-30 — research: 리뷰 권고 1·2·7 검증 현황 (문서만)
 
 - **지시**: 매수 중지 뒤 "권고 1·2·7 을 백테스트로 먼저 검증" 승인. 정본 `docs/research/review-recs-127-status-2026-09-30.md`.

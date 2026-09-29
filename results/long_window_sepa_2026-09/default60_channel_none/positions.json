@@ -1,0 +1,8129 @@
+[
+{
+"symbol": "005935",
+"entry_date": "2019-09-27",
+"last_exit_date": "2019-10-04",
+"entry_cost": 1386000.0,
+"net_pnl": -43311.92713225007,
+"net_return": -0.031249586675505103,
+"bench_return": -0.01483641897032717,
+"excess_return": -0.016413167705177933,
+"excess_krw": -22748.650439376615,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.016413167705177933,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2019-10-04"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2019-10-08",
+"last_exit_date": "2019-10-31",
+"entry_cost": 1323200.0,
+"net_pnl": 198165.427104,
+"net_return": 0.14976226353083436,
+"bench_return": 0.01802372208855685,
+"excess_return": 0.1317385414422775,
+"excess_krw": 174316.43803642158,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.1317385414422775,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2019-10-31"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "005935",
+"entry_date": "2019-10-17",
+"last_exit_date": "2019-11-20",
+"entry_cost": 1422750.0,
+"net_pnl": 47684.898313956706,
+"net_return": 0.033516006546446465,
+"bench_return": 0.02544031311154593,
+"excess_return": 0.008075693434900534,
+"excess_krw": 11489.692834504734,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.008075693434900534,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2019-11-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2019-11-21",
+"last_exit_date": "2019-12-02",
+"entry_cost": 1388900.0,
+"net_pnl": -21487.025071608557,
+"net_return": -0.015470534287283863,
+"bench_return": -0.0014423473172340273,
+"excess_return": -0.014028186970049835,
+"excess_krw": -19483.748882702217,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.014028186970049835,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2019-12-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035720",
+"entry_date": "2019-11-01",
+"last_exit_date": "2019-12-05",
+"entry_cost": 1430100.0,
+"net_pnl": 80358.2603221156,
+"net_return": 0.056190658221184256,
+"bench_return": -0.016953337173895133,
+"excess_return": 0.07314399539507939,
+"excess_krw": 104603.22781450303,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.07314399539507939,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2019-12-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035720",
+"entry_date": "2019-12-06",
+"last_exit_date": "2019-12-10",
+"entry_cost": 1435488.0,
+"net_pnl": -9477.484115339428,
+"net_return": -0.006602273314259282,
+"bench_return": 0.009516322561959445,
+"excess_return": -0.01611859587621873,
+"excess_krw": -23138.050957161468,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.01611859587621873,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2019-12-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035420",
+"entry_date": "2019-10-08",
+"last_exit_date": "2020-01-28",
+"entry_cost": 1236000.0,
+"net_pnl": 207296.39053509608,
+"net_return": 0.16771552632289327,
+"bench_return": 0.09252458739605762,
+"excess_return": 0.07519093892683565,
+"excess_krw": 92936.00051356887,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.07519093892683565,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-01-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2019-12-13",
+"last_exit_date": "2020-01-30",
+"entry_cost": 1417000.0,
+"net_pnl": 93858.84986722644,
+"net_return": 0.06623772044264392,
+"bench_return": 0.00596107536220436,
+"excess_return": 0.06027664508043956,
+"excess_krw": 85412.00607898286,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.06027664508043956,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-01-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005935",
+"entry_date": "2019-12-16",
+"last_exit_date": "2020-01-30",
+"entry_cost": 1436800.0,
+"net_pnl": 103762.84121773118,
+"net_return": 0.07221801309697326,
+"bench_return": 0.00631861622304708,
+"excess_return": 0.06589939687392618,
+"excess_krw": 94684.25342845714,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.06589939687392618,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-01-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2020-01-10",
+"last_exit_date": "2020-01-31",
+"entry_cost": 201744.0,
+"net_pnl": 201.81136831041266,
+"net_return": 0.0010003339296852083,
+"bench_return": -0.038703527168732155,
+"excess_return": 0.039703861098417365,
+"excess_krw": 8010.015753439113,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.039703861098417365,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-01-31"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "006400",
+"entry_date": "2020-01-30",
+"last_exit_date": "2020-01-31",
+"entry_cost": 286856.0,
+"net_pnl": -14963.707743568384,
+"net_return": -0.052164527649999945,
+"bench_return": -0.010674201397064542,
+"excess_return": -0.0414903262529354,
+"excess_krw": -11901.749027612037,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03932579860293546,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-01-31"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "207940",
+"entry_date": "2020-01-29",
+"last_exit_date": "2020-02-03",
+"entry_cost": 720713.0,
+"net_pnl": -37595.653216214465,
+"net_return": -0.05216452765000002,
+"bench_return": -0.028225961723593485,
+"excess_return": -0.023938565926406537,
+"excess_krw": -17252.835664518232,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.021774038276406518,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2020-01-31",
+"last_exit_date": "2020-02-03",
+"entry_cost": 1448550.0,
+"net_pnl": -87210.55795100002,
+"net_return": -0.06020541779779782,
+"bench_return": 0.0010313367711225485,
+"excess_return": -0.06123675456892037,
+"excess_krw": -88704.50083080959,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05103133677112255,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-03"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "006400",
+"entry_date": "2020-02-05",
+"last_exit_date": "2020-02-06",
+"entry_cost": 1257076.0,
+"net_pnl": -65574.77576015139,
+"net_return": -0.052164527649999994,
+"bench_return": 0.029692224203426543,
+"excess_return": -0.08185675185342653,
+"excess_krw": -102900.15819289802,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07969222420342655,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2020-02-05",
+"last_exit_date": "2020-02-06",
+"entry_cost": 1447200.0,
+"net_pnl": -75492.50441508005,
+"net_return": -0.052164527650000035,
+"bench_return": 0.029692224203426543,
+"excess_return": -0.08185675185342658,
+"excess_krw": -118463.09128227894,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07969222420342655,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "036570",
+"entry_date": "2020-02-11",
+"last_exit_date": "2020-02-13",
+"entry_cost": 648000.0,
+"net_pnl": -18068.20806693596,
+"net_return": -0.027883037140333272,
+"bench_return": 0.005783624404626986,
+"excess_return": -0.03366666154496026,
+"excess_krw": -21815.996681134246,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03366666154496026,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2020-02-10",
+"last_exit_date": "2020-02-21",
+"entry_cost": 256500.0,
+"net_pnl": -4075.068506500004,
+"net_return": -0.015887206653021457,
+"bench_return": -0.013090603770704479,
+"excess_return": -0.0027966028823169786,
+"excess_krw": -717.3286393143053,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0027966028823169786,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-21"
+],
+"reasons": [
+"채널이탈 (10일 저가 50,900)"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2020-02-12",
+"last_exit_date": "2020-02-25",
+"entry_cost": 564000.0,
+"net_pnl": -29420.79359459996,
+"net_return": -0.05216452764999993,
+"bench_return": -0.05661155475574553,
+"excess_return": 0.004447027105745599,
+"excess_krw": 2508.1232876405193,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.006611554755745527,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "006400",
+"entry_date": "2020-02-10",
+"last_exit_date": "2020-02-26",
+"entry_cost": 1231620.0,
+"net_pnl": -10612.389240016055,
+"net_return": -0.008616610025832687,
+"bench_return": -0.053660025952217416,
+"excess_return": 0.04504341592638473,
+"excess_krw": 55476.37192325396,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.04504341592638473,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-26"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2020-02-06",
+"last_exit_date": "2020-02-28",
+"entry_cost": 1447710.0,
+"net_pnl": 73986.50984301633,
+"net_return": 0.05110589126483642,
+"bench_return": -0.10608342117151026,
+"excess_return": 0.15718931243634668,
+"excess_krw": 227564.53950722347,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.15718931243634668,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035720",
+"entry_date": "2020-02-17",
+"last_exit_date": "2020-02-28",
+"entry_cost": 794838.0,
+"net_pnl": -31218.448332692533,
+"net_return": -0.039276491980369,
+"bench_return": -0.112265879098284,
+"excess_return": 0.072989387117915,
+"excess_krw": 58014.73847802933,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.072989387117915,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-02-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2020-05-26",
+"last_exit_date": "2020-05-28",
+"entry_cost": 200018.0,
+"net_pnl": -10433.844491497704,
+"net_return": -0.05216452765000002,
+"bench_return": 0.0036234937220864794,
+"excess_return": -0.0557880213720865,
+"excess_krw": -11158.608458801998,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05362349372208648,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-05-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2020-06-02",
+"last_exit_date": "2020-06-02",
+"entry_cost": 331278.0,
+"net_pnl": -17280.960390836695,
+"net_return": -0.05216452764999999,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999999,
+"excess_krw": -17280.960390836695,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-06-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "068760",
+"entry_date": "2020-05-13",
+"last_exit_date": "2020-07-03",
+"entry_cost": 1388464.0,
+"net_pnl": 733664.5772827985,
+"net_return": 0.528400143815611,
+"bench_return": 0.12082929835372824,
+"excess_return": 0.4075708454618827,
+"excess_krw": 565897.4463733876,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.4075708454618827,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2020-07-07",
+"last_exit_date": "2020-07-07",
+"entry_cost": 1478641.0,
+"net_pnl": -77132.60932892378,
+"net_return": -0.052164527650000084,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000084,
+"excess_krw": -77132.60932892378,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2020-06-18",
+"last_exit_date": "2020-07-16",
+"entry_cost": 201975.0,
+"net_pnl": 2871.675272837007,
+"net_return": 0.014217973872197089,
+"bench_return": 0.02925425625449596,
+"excess_return": -0.01503628238229887,
+"excess_krw": -3036.953134164814,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.01503628238229887,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2020-07-09",
+"last_exit_date": "2020-07-20",
+"entry_cost": 1400800.0,
+"net_pnl": -73072.07033212003,
+"net_return": -0.05216452765000002,
+"bench_return": 0.011842413820057907,
+"excess_return": -0.06400694147005792,
+"excess_krw": -89660.92361125714,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06184241382005791,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "068760",
+"entry_date": "2020-07-10",
+"last_exit_date": "2020-07-21",
+"entry_cost": 218952.0,
+"net_pnl": -11421.527658022806,
+"net_return": -0.05216452765000003,
+"bench_return": 0.036623386873988695,
+"excess_return": -0.08878791452398872,
+"excess_krw": -19440.291460856377,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0866233868739887,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "036570",
+"entry_date": "2020-05-13",
+"last_exit_date": "2020-07-22",
+"entry_cost": 748000.0,
+"net_pnl": 97242.00559489596,
+"net_return": 0.1300026812765989,
+"bench_return": 0.1519059776388767,
+"excess_return": -0.021903296362277808,
+"excess_krw": -16383.665678983802,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.021903296362277808,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2020-07-23",
+"last_exit_date": "2020-07-24",
+"entry_cost": 1676312.0,
+"net_pnl": -87444.023674027,
+"net_return": -0.052164527650000125,
+"bench_return": -0.005497251374312895,
+"excess_return": -0.04666727627568723,
+"excess_krw": -78228.91522824981,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04450274862568711,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2020-07-24",
+"last_exit_date": "2020-07-27",
+"entry_cost": 653353.0,
+"net_pnl": -34081.85063371043,
+"net_return": -0.05216452764999997,
+"bench_return": 0.009663703131039814,
+"excess_return": -0.061828230781039786,
+"excess_krw": -40395.66006548469,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.059663703131039816,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "068270",
+"entry_date": "2020-06-04",
+"last_exit_date": "2020-07-30",
+"entry_cost": 370416.0,
+"net_pnl": 109974.21587060562,
+"net_return": 0.2968938055337934,
+"bench_return": 0.05557303547549752,
+"excess_return": 0.24132077005829589,
+"excess_krw": 89389.07436191374,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.24132077005829589,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-07-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2020-07-29",
+"last_exit_date": "2020-08-03",
+"entry_cost": 1600500.0,
+"net_pnl": -83489.32650382504,
+"net_return": -0.05216452765000002,
+"bench_return": -0.006566919144808003,
+"excess_return": -0.04559760850519202,
+"excess_krw": -72978.97241255983,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.043433080855192,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-08-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "068270",
+"entry_date": "2020-07-31",
+"last_exit_date": "2020-08-03",
+"entry_cost": 244231.0,
+"net_pnl": -11348.264628860501,
+"net_return": -0.0464652915840352,
+"bench_return": 0.0,
+"excess_return": -0.0464652915840352,
+"excess_krw": -11348.264628860501,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0464652915840352,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-08-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "011200",
+"entry_date": "2020-07-30",
+"last_exit_date": "2020-08-18",
+"entry_cost": 747900.0,
+"net_pnl": 25816.482094533763,
+"net_return": 0.0345186282852437,
+"bench_return": 0.036215954394724026,
+"excess_return": -0.0016973261094803266,
+"excess_krw": -1269.4301972803369,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0016973261094803266,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-08-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2020-08-05",
+"last_exit_date": "2020-08-18",
+"entry_cost": 1658500.0,
+"net_pnl": -86514.86910752498,
+"net_return": -0.05216452764999999,
+"bench_return": 0.02096182085168863,
+"excess_return": -0.07312634850168862,
+"excess_krw": -121280.04899005056,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07096182085168863,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-08-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2020-08-20",
+"last_exit_date": "2020-08-20",
+"entry_cost": 1674400.0,
+"net_pnl": -87344.2850971601,
+"net_return": -0.05216452765000006,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000006,
+"excess_krw": -87344.2850971601,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-08-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "051910",
+"entry_date": "2020-08-27",
+"last_exit_date": "2020-08-31",
+"entry_cost": 774000.0,
+"net_pnl": -40375.34440109999,
+"net_return": -0.05216452764999999,
+"bench_return": -0.010921847311127997,
+"excess_return": -0.04124268033887199,
+"excess_krw": -31921.83458228692,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.039078152688872006,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-08-31"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2020-08-06",
+"last_exit_date": "2020-09-04",
+"entry_cost": 395765.0,
+"net_pnl": -9979.41589061,
+"net_return": -0.025215508927292712,
+"bench_return": 0.0023131415353476736,
+"excess_return": -0.027528650462640386,
+"excess_krw": -10894.876350346873,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.027528650462640386,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-04"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2020-09-03",
+"last_exit_date": "2020-09-04",
+"entry_cost": 208516.0,
+"net_pnl": -19668.568278491995,
+"net_return": -0.09432642232966293,
+"bench_return": -0.014008390812771054,
+"excess_return": -0.08031803151689187,
+"excess_krw": -16747.594659776227,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03599160918722895,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-04"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "336260",
+"entry_date": "2020-09-08",
+"last_exit_date": "2020-09-08",
+"entry_cost": 469400.0,
+"net_pnl": -24486.02927890998,
+"net_return": -0.05216452764999996,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999996,
+"excess_krw": -24486.02927890998,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035420",
+"entry_date": "2020-05-15",
+"last_exit_date": "2020-09-09",
+"entry_cost": 657000.0,
+"net_pnl": 247568.6539617525,
+"net_return": 0.3768168249037329,
+"bench_return": 0.23700679064400165,
+"excess_return": 0.13981003425973126,
+"excess_krw": 91855.19250864343,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.13981003425973126,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2020-09-10",
+"last_exit_date": "2020-09-17",
+"entry_cost": 1025500.0,
+"net_pnl": -53494.723105075005,
+"net_return": -0.05216452765000001,
+"bench_return": 0.0028435345134001366,
+"excess_return": -0.055008062163400144,
+"excess_krw": -56410.76774856685,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05284353451340014,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035720",
+"entry_date": "2020-05-14",
+"last_exit_date": "2020-09-21",
+"entry_cost": 1430682.0,
+"net_pnl": 978286.1915176348,
+"net_return": 0.6837901025648151,
+"bench_return": 0.2484875444839858,
+"excess_return": 0.4353025580808293,
+"excess_krw": 622779.534400197,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.4353025580808293,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-21"
+],
+"reasons": [
+"채널이탈 (20일 저가 73,462)"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2020-08-25",
+"last_exit_date": "2020-09-21",
+"entry_cost": 1669479.0,
+"net_pnl": 109199.7821320846,
+"net_return": 0.06540949729351768,
+"bench_return": 0.005949820788530458,
+"excess_return": 0.05945967650498722,
+"excess_krw": 99266.68127186956,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.05945967650498722,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2020-09-22",
+"last_exit_date": "2020-09-22",
+"entry_cost": 1649956.0,
+"net_pnl": -86069.17538328376,
+"net_return": -0.052164527650000216,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000216,
+"excess_krw": -86069.17538328376,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "051910",
+"entry_date": "2020-09-21",
+"last_exit_date": "2020-09-23",
+"entry_cost": 656000.0,
+"net_pnl": -33047.433507625006,
+"net_return": -0.05037718522503812,
+"bench_return": -0.01956103470391224,
+"excess_return": -0.03081615052112588,
+"excess_krw": -20215.394741858578,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.030438965296087764,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2020-09-02",
+"last_exit_date": "2020-09-25",
+"entry_cost": 712000.0,
+"net_pnl": 11229.98029519118,
+"net_return": 0.015772444234819074,
+"bench_return": -0.025445751822709917,
+"excess_return": 0.041218196057528994,
+"excess_krw": 29347.35559296064,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.041218196057528994,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-09-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "066570",
+"entry_date": "2020-10-12",
+"last_exit_date": "2020-10-16",
+"entry_cost": 1591200.0,
+"net_pnl": -62820.68971409811,
+"net_return": -0.03948007146436533,
+"bench_return": -0.022172949002217335,
+"excess_return": -0.017307122462147995,
+"excess_krw": -27539.093261769885,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.017307122462147995,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-10-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2020-10-22",
+"last_exit_date": "2020-10-26",
+"entry_cost": 1393000.0,
+"net_pnl": -72665.18701645,
+"net_return": -0.05216452765,
+"bench_return": 0.0016464440387988777,
+"excess_return": -0.05381097168879888,
+"excess_krw": -74958.68356249684,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05164644403879888,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-10-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2020-11-06",
+"last_exit_date": "2020-11-06",
+"entry_cost": 205666.0,
+"net_pnl": -10728.46974366488,
+"net_return": -0.0521645276499999,
+"bench_return": 0.0,
+"excess_return": -0.0521645276499999,
+"excess_krw": -10728.46974366488,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-11-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2020-10-30",
+"last_exit_date": "2020-11-17",
+"entry_cost": 1470000.0,
+"net_pnl": -60630.12730282204,
+"net_return": -0.04124498455974288,
+"bench_return": 0.12765323601698064,
+"excess_return": -0.16889822057672352,
+"excess_krw": -248280.3842477836,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.16889822057672352,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-11-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2020-11-10",
+"last_exit_date": "2020-11-18",
+"entry_cost": 410427.0,
+"net_pnl": -21409.730589806615,
+"net_return": -0.05216452765000016,
+"bench_return": 0.04220354165231166,
+"excess_return": -0.09436806930231181,
+"excess_krw": -38731.20357953993,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.09220354165231166,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-11-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "112040",
+"entry_date": "2020-10-28",
+"last_exit_date": "2020-11-26",
+"entry_cost": 1653080.0,
+"net_pnl": 80262.369234346,
+"net_return": 0.04855322745078641,
+"bench_return": 0.12241898480068825,
+"excess_return": -0.07386575734990183,
+"excess_krw": -122106.00615997572,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07386575734990183,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-11-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2020-11-30",
+"last_exit_date": "2020-11-30",
+"entry_cost": 202104.0,
+"net_pnl": -10542.659696175613,
+"net_return": -0.05216452765000006,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000006,
+"excess_krw": -10542.659696175613,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-11-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "096770",
+"entry_date": "2020-11-27",
+"last_exit_date": "2020-12-28",
+"entry_cost": 1353912.0,
+"net_pnl": 42650.42988778277,
+"net_return": 0.03150162631528694,
+"bench_return": 0.08004333556384036,
+"excess_return": -0.048541709248553416,
+"excess_krw": -65721.20265212745,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.048541709248553416,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2020-12-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "068760",
+"entry_date": "2020-11-24",
+"last_exit_date": "2021-01-14",
+"entry_cost": 221702.0,
+"net_pnl": 124909.00757748971,
+"net_return": 0.5634094756812735,
+"bench_return": 0.24304998877737516,
+"excess_return": 0.32035948690389837,
+"excess_krw": 71024.33896556808,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.32035948690389837,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-01-14"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003490",
+"entry_date": "2021-01-15",
+"last_exit_date": "2021-01-15",
+"entry_cost": 338689.0,
+"net_pnl": -17667.551705250848,
+"net_return": -0.052164527649999994,
+"bench_return": 0.0,
+"excess_return": -0.052164527649999994,
+"excess_krw": -17667.551705250848,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-01-15"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000270",
+"entry_date": "2021-01-20",
+"last_exit_date": "2021-01-20",
+"entry_cost": 288000.0,
+"net_pnl": -15023.383963199982,
+"net_return": -0.05216452764999994,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999994,
+"excess_krw": -15023.383963199982,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-01-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "032830",
+"entry_date": "2020-11-20",
+"last_exit_date": "2021-01-25",
+"entry_cost": 1788000.0,
+"net_pnl": 44397.493648036725,
+"net_return": 0.024830813002257677,
+"bench_return": 0.3006298849058471,
+"excess_return": -0.2757990719035894,
+"excess_krw": -493128.7405636178,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.2757990719035894,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-01-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "011200",
+"entry_date": "2020-10-22",
+"last_exit_date": "2021-01-29",
+"entry_cost": 1645660.0,
+"net_pnl": 1191404.6982957278,
+"net_return": 0.7239677079686738,
+"bench_return": 0.3131464977271914,
+"excess_return": 0.41082121024148244,
+"excess_krw": 676072.0328459981,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.41082121024148244,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-01-29"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000270",
+"entry_date": "2021-01-22",
+"last_exit_date": "2021-01-29",
+"entry_cost": 358000.0,
+"net_pnl": -18674.900898699972,
+"net_return": -0.052164527649999924,
+"bench_return": -0.04758443446431815,
+"excess_return": -0.004580093185681776,
+"excess_krw": -1639.6733604740766,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0024155655356818545,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-01-29"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003490",
+"entry_date": "2021-01-26",
+"last_exit_date": "2021-01-29",
+"entry_cost": 1741350.0,
+"net_pnl": -90836.70022332741,
+"net_return": -0.05216452764999995,
+"bench_return": -0.043736641818276634,
+"excess_return": -0.008427885831723318,
+"excess_krw": -14675.898993071401,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.006263358181723369,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-01-29"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "068270",
+"entry_date": "2021-02-02",
+"last_exit_date": "2021-02-03",
+"entry_cost": 1840434.0,
+"net_pnl": -96005.37028100026,
+"net_return": -0.052164527650000084,
+"bench_return": 0.008306692521356407,
+"excess_return": -0.06047122017135649,
+"excess_krw": -111293.28962485031,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05830669252135641,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2021-02-03",
+"last_exit_date": "2021-02-08",
+"entry_cost": 1672000.0,
+"net_pnl": -87219.09023079992,
+"net_return": -0.05216452764999995,
+"bench_return": -0.01400764053119885,
+"excess_return": -0.0381568871188011,
+"excess_krw": -63798.31526263544,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03599235946880115,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000270",
+"entry_date": "2021-02-05",
+"last_exit_date": "2021-02-08",
+"entry_cost": 1789200.0,
+"net_pnl": -93871.62238680002,
+"net_return": -0.05246569549899398,
+"bench_return": -0.009890654766564921,
+"excess_return": -0.042575040732429056,
+"excess_krw": -76175.26287846206,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04010934523343508,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-08"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2021-02-10",
+"last_exit_date": "2021-02-10",
+"entry_cost": 1357200.0,
+"net_pnl": -70797.69692658004,
+"net_return": -0.052164527650000035,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000035,
+"excess_krw": -70797.69692658004,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "036570",
+"entry_date": "2021-02-10",
+"last_exit_date": "2021-02-22",
+"entry_cost": 1018000.0,
+"net_pnl": -53103.48914769995,
+"net_return": -0.052164527649999945,
+"bench_return": -0.008193707652712878,
+"excess_return": -0.04397081999728707,
+"excess_krw": -44762.29475723824,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.041806292347287125,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035720",
+"entry_date": "2021-02-17",
+"last_exit_date": "2021-02-23",
+"entry_cost": 516835.0,
+"net_pnl": -34712.153181620015,
+"net_return": -0.06716293049352311,
+"bench_return": -0.017142559399749846,
+"excess_return": -0.05002037109377326,
+"excess_krw": -25852.278494250306,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03285744060025016,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-23"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "066570",
+"entry_date": "2020-12-29",
+"last_exit_date": "2021-02-24",
+"entry_cost": 1402500.0,
+"net_pnl": 242141.05670204991,
+"net_return": 0.17264959479647052,
+"bench_return": 0.07104316546762579,
+"excess_return": 0.10160642932884473,
+"excess_krw": 142503.01713370474,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.10160642932884473,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "096770",
+"entry_date": "2021-01-05",
+"last_exit_date": "2021-02-24",
+"entry_cost": 224832.0,
+"net_pnl": 38009.45314039887,
+"net_return": 0.16905713217157198,
+"bench_return": 0.006844832287973723,
+"excess_return": 0.16221229988359825,
+"excess_krw": 36470.51580742917,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.16221229988359825,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-02-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009540",
+"entry_date": "2021-02-26",
+"last_exit_date": "2021-03-05",
+"entry_cost": 1443000.0,
+"net_pnl": -75273.41339895008,
+"net_return": -0.052164527650000056,
+"bench_return": 0.00395097564908875,
+"excess_return": -0.056115503299088806,
+"excess_krw": -80974.67126058515,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05395097564908875,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-03-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035720",
+"entry_date": "2021-03-02",
+"last_exit_date": "2021-03-05",
+"entry_cost": 200314.0,
+"net_pnl": -12473.263843767998,
+"net_return": -0.062268557583434,
+"bench_return": -0.007123680922888842,
+"excess_return": -0.055144876660545156,
+"excess_krw": -11046.290823380443,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04287631907711116,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-03-05"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2020-12-02",
+"last_exit_date": "2021-03-09",
+"entry_cost": 205200.0,
+"net_pnl": 37010.963516660995,
+"net_return": 0.18036531928197366,
+"bench_return": 0.151045579764588,
+"excess_return": 0.029319739517385673,
+"excess_krw": 6016.4105489675385,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.029319739517385673,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-03-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2021-02-25",
+"last_exit_date": "2021-03-09",
+"entry_cost": 1692000.0,
+"net_pnl": -88262.3807838,
+"net_return": -0.05216452765,
+"bench_return": -0.03907066694543171,
+"excess_return": -0.013093860704568291,
+"excess_krw": -22154.81231212955,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.010929333054568294,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-03-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "105560",
+"entry_date": "2021-03-09",
+"last_exit_date": "2021-03-18",
+"entry_cost": 1608900.0,
+"net_pnl": -83927.508536085,
+"net_return": -0.05216452765,
+"bench_return": 0.02640811553210587,
+"excess_return": -0.07857264318210587,
+"excess_krw": -126415.52561569013,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07640811553210587,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-03-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035420",
+"entry_date": "2021-03-22",
+"last_exit_date": "2021-03-24",
+"entry_cost": 1610000.0,
+"net_pnl": -93464.64950999992,
+"net_return": -0.05805257733540367,
+"bench_return": -0.013982835601422328,
+"excess_return": -0.044069741733981344,
+"excess_krw": -70952.28419170997,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.036017164398577675,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-03-24"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "009540",
+"entry_date": "2021-03-29",
+"last_exit_date": "2021-04-02",
+"entry_cost": 1735500.0,
+"net_pnl": -90531.53773657494,
+"net_return": -0.052164527649999966,
+"bench_return": 0.02910279772751645,
+"excess_return": -0.08126732537751641,
+"excess_krw": -141039.44319267973,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07910279772751645,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-04-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2021-04-06",
+"last_exit_date": "2021-04-08",
+"entry_cost": 1669440.0,
+"net_pnl": -87085.54904001592,
+"net_return": -0.05216452764999995,
+"bench_return": 0.00147921316240196,
+"excess_return": -0.05364374081240191,
+"excess_krw": -89555.00666185624,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05147921316240196,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-04-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "112040",
+"entry_date": "2021-03-23",
+"last_exit_date": "2021-04-28",
+"entry_cost": 297036.0,
+"net_pnl": 32858.84678456631,
+"net_return": 0.11062243897900023,
+"bench_return": 0.04515275828565257,
+"excess_return": 0.06546968069334766,
+"excess_krw": 19446.85207442921,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.06546968069334766,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-04-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2021-04-12",
+"last_exit_date": "2021-04-29",
+"entry_cost": 1673789.0,
+"net_pnl": -1674024.212546803,
+"net_return": -1.0001405270000001,
+"bench_return": 0.004921234214295023,
+"excess_return": -1.0050617612142951,
+"excess_krw": -1682261.3202411137,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.054921234214295025,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-04-29"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "009540",
+"entry_date": "2021-05-03",
+"last_exit_date": "2021-05-04",
+"entry_cost": 930000.0,
+"net_pnl": -48513.010714500015,
+"net_return": -0.052164527650000014,
+"bench_return": 0.00837666088965916,
+"excess_return": -0.060541188539659174,
+"excess_krw": -56303.30534188303,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05837666088965916,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-05-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086790",
+"entry_date": "2021-03-12",
+"last_exit_date": "2021-05-27",
+"entry_cost": 1851500.0,
+"net_pnl": 191128.7913673811,
+"net_return": 0.1032291608789528,
+"bench_return": 0.01926347114464866,
+"excess_return": 0.08396568973430414,
+"excess_krw": 155462.47454306413,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.08396568973430414,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-05-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "316140",
+"entry_date": "2021-04-23",
+"last_exit_date": "2021-05-27",
+"entry_cost": 220500.0,
+"net_pnl": 6606.2086601269375,
+"net_return": 0.029960129977899944,
+"bench_return": -0.009834288369211741,
+"excess_return": 0.039794418347111685,
+"excess_krw": 8774.669245538127,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.039794418347111685,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-05-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010950",
+"entry_date": "2021-04-29",
+"last_exit_date": "2021-05-31",
+"entry_cost": 617400.0,
+"net_pnl": 29383.222158870274,
+"net_return": 0.047591872625316285,
+"bench_return": 0.003964346789656403,
+"excess_return": 0.04362752583565988,
+"excess_krw": 26935.63445093641,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.04362752583565988,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-05-31"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2021-06-01",
+"last_exit_date": "2021-06-01",
+"entry_cost": 682360.0,
+"net_pnl": -35594.987087254,
+"net_return": -0.052164527649999994,
+"bench_return": 0.0,
+"excess_return": -0.052164527649999994,
+"excess_krw": -35594.987087254,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-01"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003490",
+"entry_date": "2021-06-03",
+"last_exit_date": "2021-06-07",
+"entry_cost": 675000.0,
+"net_pnl": -35211.05616374998,
+"net_return": -0.052164527649999966,
+"bench_return": -0.0002544529262086259,
+"excess_return": -0.05191007472379134,
+"excess_krw": -35039.300438559156,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04974554707379138,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2021-05-13",
+"last_exit_date": "2021-06-10",
+"entry_cost": 279900.0,
+"net_pnl": 15978.858710850012,
+"net_return": 0.057087741017684934,
+"bench_return": 0.030273334039622846,
+"excess_return": 0.02681440697806209,
+"excess_krw": 7505.352513159578,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.02681440697806209,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-10"
+],
+"reasons": [
+"채널이탈 (10일 저가 33,000)"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2021-06-09",
+"last_exit_date": "2021-06-10",
+"entry_cost": 622336.0,
+"net_pnl": -32463.86347959029,
+"net_return": -0.05216452764999983,
+"bench_return": 0.0033531945626661397,
+"excess_return": -0.05551772221266597,
+"excess_krw": -34550.677170941686,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05335319456266614,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "024110",
+"entry_date": "2021-05-07",
+"last_exit_date": "2021-06-14",
+"entry_cost": 1055750.0,
+"net_pnl": 32486.055350528524,
+"net_return": 0.030770594696214564,
+"bench_return": 0.0074847604105043875,
+"excess_return": 0.023285834285710176,
+"excess_krw": 24584.019547138516,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.023285834285710176,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-14"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "011200",
+"entry_date": "2021-02-16",
+"last_exit_date": "2021-06-24",
+"entry_cost": 1823100.0,
+"net_pnl": 3028916.3353939727,
+"net_return": 1.6614098707662623,
+"bench_return": 0.021339106231637484,
+"excess_return": 1.6400707645346249,
+"excess_krw": 2990013.0108230743,
+"stop_pct": 5.0,
+"clipped_excess_return": 1.6400707645346249,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2021-06-28",
+"last_exit_date": "2021-06-28",
+"entry_cost": 205218.0,
+"net_pnl": -10705.100035277721,
+"net_return": -0.052164527650000105,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000105,
+"excess_krw": -10705.100035277721,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "096770",
+"entry_date": "2021-06-25",
+"last_exit_date": "2021-06-29",
+"entry_cost": 1461165.0,
+"net_pnl": -76220.98204371215,
+"net_return": -0.05216452764999993,
+"bench_return": -0.004870822767330307,
+"excess_return": -0.047293704882669624,
+"excess_krw": -69103.90629488596,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.045129177232669695,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-06-29"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "066570",
+"entry_date": "2021-06-15",
+"last_exit_date": "2021-07-09",
+"entry_cost": 954000.0,
+"net_pnl": -2166.5855159999483,
+"net_return": -0.0022710539999999456,
+"bench_return": -0.01209944469916957,
+"excess_return": 0.009828390699169624,
+"excess_krw": 9376.284727007822,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.009828390699169624,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-07-09"
+],
+"reasons": [
+"채널이탈 (10일 저가 160,000)"
+]
+},
+{
+"symbol": "035720",
+"entry_date": "2021-05-28",
+"last_exit_date": "2021-07-20",
+"entry_cost": 2000000.0,
+"net_pnl": 400185.76729301596,
+"net_return": 0.20009288364650799,
+"bench_return": 0.006658376081662309,
+"excess_return": 0.19343450756484568,
+"excess_krw": 386869.01512969134,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.19343450756484568,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-07-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2021-07-01",
+"last_exit_date": "2021-07-28",
+"entry_cost": 1674200.0,
+"net_pnl": 23037.696182375774,
+"net_return": 0.013760420608276057,
+"bench_return": -0.014641547603995497,
+"excess_return": 0.028401968212271554,
+"excess_krw": 47550.57518098503,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.028401968212271554,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-07-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2021-07-27",
+"last_exit_date": "2021-07-28",
+"entry_cost": 213000.0,
+"net_pnl": -11111.04438945,
+"net_return": -0.05216452765,
+"bench_return": 0.002960026768937807,
+"excess_return": -0.05512455441893781,
+"excess_krw": -11741.530091233753,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05296002676893781,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-07-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2021-07-22",
+"last_exit_date": "2021-08-02",
+"entry_cost": 235900.0,
+"net_pnl": -4957.999782094111,
+"net_return": -0.021017379322145445,
+"bench_return": -0.01042491759715869,
+"excess_return": -0.010592461724986756,
+"excess_krw": -2498.761720924376,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.010592461724986756,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2021-07-21",
+"last_exit_date": "2021-08-09",
+"entry_cost": 1750000.0,
+"net_pnl": -88294.3149685,
+"net_return": -0.05045389426771428,
+"bench_return": 0.013504074505238606,
+"excess_return": -0.06395796877295289,
+"excess_krw": -111926.44535266756,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06350407450523861,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-09"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "028260",
+"entry_date": "2021-07-30",
+"last_exit_date": "2021-08-11",
+"entry_cost": 1872000.0,
+"net_pnl": -90355.0752394874,
+"net_return": -0.048266600021093696,
+"bench_return": 0.0006225842434304241,
+"excess_return": -0.04888918426452412,
+"excess_krw": -91520.55294318915,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04888918426452412,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2021-08-17",
+"last_exit_date": "2021-08-18",
+"entry_cost": 268800.0,
+"net_pnl": -18871.4706711,
+"net_return": -0.07020636410379465,
+"bench_return": 0.0050613250495421536,
+"excess_return": -0.0752676891533368,
+"excess_krw": -20231.95484441693,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.055061325049542156,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-18"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "041510",
+"entry_date": "2021-08-04",
+"last_exit_date": "2021-08-20",
+"entry_cost": 255200.0,
+"net_pnl": -4024.2184015960056,
+"net_return": -0.01576888088399689,
+"bench_return": -0.08061992023827558,
+"excess_return": 0.06485103935427869,
+"excess_krw": 16549.985243211922,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.06485103935427869,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "041510",
+"entry_date": "2021-08-25",
+"last_exit_date": "2021-08-25",
+"entry_cost": 583200.0,
+"net_pnl": -30422.352525480055,
+"net_return": -0.0521645276500001,
+"bench_return": 0.0,
+"excess_return": -0.0521645276500001,
+"excess_krw": -30422.352525480055,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2021-08-27",
+"last_exit_date": "2021-08-27",
+"entry_cost": 461500.0,
+"net_pnl": -24073.929510474987,
+"net_return": -0.05216452764999997,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999997,
+"excess_krw": -24073.929510474987,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "207940",
+"entry_date": "2021-08-11",
+"last_exit_date": "2021-08-30",
+"entry_cost": 1391974.0,
+"net_pnl": -36449.15092366625,
+"net_return": -0.026185223950782308,
+"bench_return": -0.031654265937313686,
+"excess_return": 0.005469041986531378,
+"excess_krw": 7612.764250160028,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.005469041986531378,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-08-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2021-09-02",
+"last_exit_date": "2021-09-06",
+"entry_cost": 356000.0,
+"net_pnl": -18570.571843400012,
+"net_return": -0.052164527650000035,
+"bench_return": 0.009974336587559751,
+"excess_return": -0.062138864237559786,
+"excess_krw": -22121.435668571285,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.059974336587559754,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-09-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2021-09-06",
+"last_exit_date": "2021-09-08",
+"entry_cost": 254000.0,
+"net_pnl": -13249.790023099997,
+"net_return": -0.05216452764999999,
+"bench_return": -0.014643474616230945,
+"excess_return": -0.03752105303376904,
+"excess_krw": -9530.347470577337,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03535652538376906,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-09-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010130",
+"entry_date": "2021-09-01",
+"last_exit_date": "2021-09-10",
+"entry_cost": 2116000.0,
+"net_pnl": -110380.14050739998,
+"net_return": -0.05216452764999999,
+"bench_return": -0.02689525007864113,
+"excess_return": -0.025269277571358856,
+"excess_krw": -53469.79134099535,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.023104749921358872,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-09-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2021-06-22",
+"last_exit_date": "2021-09-15",
+"entry_cost": 203454.0,
+"net_pnl": 18606.44628310821,
+"net_return": 0.09145284085399259,
+"bench_return": -0.04534575822385167,
+"excess_return": 0.13679859907784425,
+"excess_krw": 27832.222176783725,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.13679859907784425,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-09-15"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2021-09-16",
+"last_exit_date": "2021-09-23",
+"entry_cost": 247740.0,
+"net_pnl": -2205.463346138851,
+"net_return": -0.00890233045184004,
+"bench_return": 0.0009686011784648674,
+"excess_return": -0.009870931630304907,
+"excess_krw": -2445.4246020917376,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.009870931630304907,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-09-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003490",
+"entry_date": "2021-09-15",
+"last_exit_date": "2021-10-06",
+"entry_cost": 579600.0,
+"net_pnl": -9072.143590345213,
+"net_return": -0.01565242165345965,
+"bench_return": -0.07419655954127213,
+"excess_return": 0.058544137887812486,
+"excess_krw": 33932.18231977611,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.058544137887812486,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-10-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2021-07-14",
+"last_exit_date": "2021-10-07",
+"entry_cost": 1022976.0,
+"net_pnl": 837712.5541506,
+"net_return": 0.8188975637264218,
+"bench_return": -0.10255041065934345,
+"excess_return": 0.9214479743857652,
+"excess_krw": 942619.1630452526,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.9214479743857652,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-10-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010950",
+"entry_date": "2021-09-28",
+"last_exit_date": "2021-10-07",
+"entry_cost": 222000.0,
+"net_pnl": -11580.525138300001,
+"net_return": -0.05216452765000001,
+"bench_return": -0.04105420459176745,
+"excess_return": -0.011110323058232556,
+"excess_krw": -2466.4917189276275,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.008945795408232551,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-10-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2021-09-10",
+"last_exit_date": "2021-10-08",
+"entry_cost": 595156.0,
+"net_pnl": 9650.0910737292,
+"net_return": 0.01621438929243627,
+"bench_return": -0.05131727816389198,
+"excess_return": 0.06753166745632824,
+"excess_krw": 40191.8770766385,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.06753166745632824,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-10-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2021-09-14",
+"last_exit_date": "2021-11-01",
+"entry_cost": 2087500.0,
+"net_pnl": 302206.31934348226,
+"net_return": 0.14476949429627892,
+"bench_return": -0.05325570215266273,
+"excess_return": 0.19802519644894165,
+"excess_krw": 413377.5975871657,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.19802519644894165,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-11-01"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "112040",
+"entry_date": "2021-08-13",
+"last_exit_date": "2021-12-07",
+"entry_cost": 2195036.0,
+"net_pnl": 9001716.763311997,
+"net_return": 4.100942655752342,
+"bench_return": -0.04606586889759612,
+"excess_return": 4.147008524649938,
+"excess_krw": 9102833.003913501,
+"stop_pct": 5.0,
+"clipped_excess_return": 4.147008524649938,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-12-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2021-06-14",
+"last_exit_date": "2021-12-21",
+"entry_cost": 920220.0,
+"net_pnl": 1455474.8394978885,
+"net_return": 1.5816596460606034,
+"bench_return": -0.08509063058463107,
+"excess_return": 1.6667502766452345,
+"excess_krw": 1533776.9395744777,
+"stop_pct": 5.0,
+"clipped_excess_return": 1.6667502766452345,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2021-12-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2021-12-29",
+"last_exit_date": "2022-01-03",
+"entry_cost": 3414393.0,
+"net_pnl": -178110.19805646676,
+"net_return": -0.05216452765000009,
+"bench_return": -0.0037559972583961487,
+"excess_return": -0.04840853039160394,
+"excess_krw": -165285.74730937975,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.046244002741603854,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-01-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2021-12-28",
+"last_exit_date": "2022-01-05",
+"entry_cost": 3225250.0,
+"net_pnl": -168243.64280316266,
+"net_return": -0.05216452765000005,
+"bench_return": -0.02076266549950756,
+"excess_return": -0.03140186215049249,
+"excess_krw": -101278.8559008759,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.029237334500492443,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-01-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2021-12-28",
+"last_exit_date": "2022-01-06",
+"entry_cost": 3434600.0,
+"net_pnl": -243896.07938020013,
+"net_return": -0.07101149460787286,
+"bench_return": -0.030583214793741154,
+"excess_return": -0.040428279814131704,
+"excess_krw": -138854.96984961675,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.01941678520625885,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-01-06"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2022-01-05",
+"last_exit_date": "2022-01-11",
+"entry_cost": 3333960.0,
+"net_pnl": -90030.12799001641,
+"net_return": -0.027003961652214307,
+"bench_return": -0.002262759449115803,
+"excess_return": -0.024741202203098504,
+"excess_krw": -82486.17849704229,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.024741202203098504,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-01-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "316140",
+"entry_date": "2022-01-11",
+"last_exit_date": "2022-02-22",
+"entry_cost": 3434800.0,
+"net_pnl": 103561.61690760001,
+"net_return": 0.030150697830324914,
+"bench_return": -0.06266099227237087,
+"excess_return": 0.09281169010269578,
+"excess_krw": 318789.5931647395,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.09281169010269578,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-02-22"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2022-04-19",
+"last_exit_date": "2022-04-20",
+"entry_cost": 3433600.0,
+"net_pnl": -80606.43924237188,
+"net_return": -0.023475780301249964,
+"bench_return": -0.0008479709267110724,
+"excess_return": -0.02262780937453889,
+"excess_krw": -77694.84626841675,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.02262780937453889,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-04-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010130",
+"entry_date": "2022-04-22",
+"last_exit_date": "2022-04-26",
+"entry_cost": 3140000.0,
+"net_pnl": -119920.29609319002,
+"net_return": -0.03819117709974204,
+"bench_return": -0.011808861222995293,
+"excess_return": -0.026382315876746748,
+"excess_krw": -82840.4718529848,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.026382315876746748,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-04-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "316140",
+"entry_date": "2022-04-20",
+"last_exit_date": "2022-04-28",
+"entry_cost": 3449250.0,
+"net_pnl": -193586.83540844996,
+"net_return": -0.05612432714603174,
+"bench_return": -0.020368574199805978,
+"excess_return": -0.03575575294622576,
+"excess_krw": -123330.53084976919,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.029631425800194025,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-04-28"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2022-04-25",
+"last_exit_date": "2022-05-11",
+"entry_cost": 3264300.0,
+"net_pnl": -107865.7282367963,
+"net_return": -0.033044060973806424,
+"bench_return": -0.015349313156997169,
+"excess_return": -0.017694747816809256,
+"excess_krw": -57760.96529841045,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.017694747816809256,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-05-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2022-08-18",
+"last_exit_date": "2022-08-29",
+"entry_cost": 3352800.0,
+"net_pnl": -60301.89802559989,
+"net_return": -0.017985533889763747,
+"bench_return": -0.03871899199369999,
+"excess_return": 0.020733458103936245,
+"excess_krw": 69515.13833087744,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.020733458103936245,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-08-29"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "329180",
+"entry_date": "2022-08-22",
+"last_exit_date": "2022-09-02",
+"entry_cost": 3300000.0,
+"net_pnl": -118449.58064181602,
+"net_return": -0.03589381231570182,
+"bench_return": -0.03019460977730226,
+"excess_return": -0.0056992025383995615,
+"excess_krw": -18807.368376718558,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0056992025383995615,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-09-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2022-09-13",
+"last_exit_date": "2022-09-14",
+"entry_cost": 3328000.0,
+"net_pnl": -173603.54801920016,
+"net_return": -0.05216452765000005,
+"bench_return": -0.019769134423343826,
+"excess_return": -0.03239539322665622,
+"excess_krw": -107811.8686583119,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.030230865576656177,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-09-14"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010130",
+"entry_date": "2022-11-21",
+"last_exit_date": "2022-11-24",
+"entry_cost": 3265000.0,
+"net_pnl": -170317.18277724978,
+"net_return": -0.05216452764999993,
+"bench_return": 0.008888888888888946,
+"excess_return": -0.06105341653888888,
+"excess_krw": -199339.4049994722,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05888888888888895,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-11-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2022-11-17",
+"last_exit_date": "2022-11-30",
+"entry_cost": 3242355.0,
+"net_pnl": -104818.329974653,
+"net_return": -0.032327838862386445,
+"bench_return": 0.008800731137663664,
+"excess_return": -0.04112857000005011,
+"excess_krw": -133353.42458251247,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04112857000005011,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-11-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2022-12-05",
+"last_exit_date": "2022-12-05",
+"entry_cost": 2823590.0,
+"net_pnl": -147291.23862726346,
+"net_return": -0.05216452764999999,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999999,
+"excess_krw": -147291.23862726346,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-12-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "032830",
+"entry_date": "2022-11-30",
+"last_exit_date": "2022-12-27",
+"entry_cost": 3304100.0,
+"net_pnl": 87590.37722097566,
+"net_return": 0.026509602379157914,
+"bench_return": -0.04925678622957419,
+"excess_return": 0.07576638860873211,
+"excess_krw": 250339.72460211173,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.07576638860873211,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-12-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "033780",
+"entry_date": "2022-12-23",
+"last_exit_date": "2022-12-28",
+"entry_cost": 2813000.0,
+"net_pnl": -203168.33497760017,
+"net_return": -0.07222479025154645,
+"bench_return": -0.003346029259957972,
+"excess_return": -0.06887876099158848,
+"excess_krw": -193755.9546693384,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04665397074004203,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2022-12-28"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2022-12-02",
+"last_exit_date": "2023-01-05",
+"entry_cost": 3274200.0,
+"net_pnl": -5619.06405730941,
+"net_return": -0.0017161639659487539,
+"bench_return": -0.04012282497441144,
+"excess_return": 0.03840666100846269,
+"excess_krw": 125751.08947390853,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.03840666100846269,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-01-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "051910",
+"entry_date": "2023-01-27",
+"last_exit_date": "2023-02-03",
+"entry_cost": 2784000.0,
+"net_pnl": -145226.04497759993,
+"net_return": -0.05216452764999997,
+"bench_return": -0.0058568470100958114,
+"excess_return": -0.04630768063990416,
+"excess_krw": -128920.5829014932,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04414315298990419,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-02-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2023-02-10",
+"last_exit_date": "2023-02-10",
+"entry_cost": 331000.0,
+"net_pnl": -17266.458652150028,
+"net_return": -0.052164527650000084,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000084,
+"excess_krw": -17266.458652150028,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-02-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2023-01-30",
+"last_exit_date": "2023-02-17",
+"entry_cost": 3208500.0,
+"net_pnl": -32917.95204247819,
+"net_return": -0.010259607929711138,
+"bench_return": -0.005326494377589253,
+"excess_return": -0.004933113552121886,
+"excess_krw": -15827.89483198307,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.004933113552121886,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-02-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2023-01-27",
+"last_exit_date": "2023-02-20",
+"entry_cost": 3256896.0,
+"net_pnl": 143956.27946427552,
+"net_return": 0.04420045327338531,
+"bench_return": -0.01779704892570544,
+"excess_return": 0.06199750219909075,
+"excess_krw": 201919.41692220984,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.06199750219909075,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-02-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "006400",
+"entry_date": "2023-03-07",
+"last_exit_date": "2023-03-09",
+"entry_cost": 3050664.0,
+"net_pnl": -159136.4465788599,
+"net_return": -0.0521645276500001,
+"bench_return": -0.01720244420828909,
+"excess_return": -0.034962083441711006,
+"excess_krw": -106657.56932062388,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03279755579171091,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2023-03-08",
+"last_exit_date": "2023-03-09",
+"entry_cost": 753153.0,
+"net_pnl": -39287.87049318043,
+"net_return": -0.05216452764999997,
+"bench_return": -0.0029983492234612052,
+"excess_return": -0.04916617842653877,
+"excess_krw": -37029.65478048295,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0470016507765388,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2023-02-21",
+"last_exit_date": "2023-03-13",
+"entry_cost": 3478000.0,
+"net_pnl": -25425.205448824672,
+"net_return": -0.007310294838649992,
+"bench_return": -0.026621363066569925,
+"excess_return": 0.019311068227919934,
+"excess_krw": 67163.89529670554,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.019311068227919934,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "041510",
+"entry_date": "2023-02-09",
+"last_exit_date": "2023-03-17",
+"entry_cost": 200000.0,
+"net_pnl": 21875.51354511018,
+"net_return": 0.1093775677255509,
+"bench_return": -0.03838984990680483,
+"excess_return": 0.14776741763235574,
+"excess_krw": 29553.483526471147,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.14776741763235574,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2023-03-17",
+"last_exit_date": "2023-03-17",
+"entry_cost": 3896640.0,
+"net_pnl": -203266.38502209657,
+"net_return": -0.052164527650000146,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000146,
+"excess_krw": -203266.38502209657,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003550",
+"entry_date": "2023-03-13",
+"last_exit_date": "2023-03-22",
+"entry_cost": 3616200.0,
+"net_pnl": -188637.36488792978,
+"net_return": -0.05216452764999994,
+"bench_return": 0.00440573423255497,
+"excess_return": -0.05657026188255491,
+"excess_krw": -204569.38101969508,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05440573423255497,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "383310",
+"entry_date": "2023-03-24",
+"last_exit_date": "2023-03-24",
+"entry_cost": 4077584.0,
+"net_pnl": -212705.2433131976,
+"net_return": -0.05216452765,
+"bench_return": 0.0,
+"excess_return": -0.05216452765,
+"excess_krw": -212705.2433131976,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2023-03-24",
+"last_exit_date": "2023-03-24",
+"entry_cost": 511796.0,
+"net_pnl": -26697.59659315946,
+"net_return": -0.05216452765000011,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000011,
+"excess_krw": -26697.59659315946,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-03-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2023-04-11",
+"last_exit_date": "2023-04-11",
+"entry_cost": 1188984.0,
+"net_pnl": -62022.788743407655,
+"net_return": -0.05216452765000005,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000005,
+"excess_krw": -62022.788743407655,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-04-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003550",
+"entry_date": "2023-04-14",
+"last_exit_date": "2023-04-17",
+"entry_cost": 465000.0,
+"net_pnl": -24256.505357250007,
+"net_return": -0.052164527650000014,
+"bench_return": 0.00031708786504736075,
+"excess_return": -0.052481615515047375,
+"excess_krw": -24403.95121449703,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.050317087865047364,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-04-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2023-04-06",
+"last_exit_date": "2023-04-18",
+"entry_cost": 628000.0,
+"net_pnl": -27174.04834992444,
+"net_return": -0.04327077762726822,
+"bench_return": 0.04804205343181289,
+"excess_return": -0.09131283105908111,
+"excess_krw": -57344.457905102936,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.09131283105908111,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-04-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "373220",
+"entry_date": "2023-03-28",
+"last_exit_date": "2023-04-21",
+"entry_cost": 578000.0,
+"net_pnl": -4880.05257797497,
+"net_return": -0.008442997539749083,
+"bench_return": 0.048200040222564855,
+"excess_return": -0.05664303776231394,
+"excess_krw": -32739.675826617455,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05664303776231394,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-04-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2023-04-10",
+"last_exit_date": "2023-04-25",
+"entry_cost": 777600.0,
+"net_pnl": -4934.406741069583,
+"net_return": -0.006345687681416645,
+"bench_return": -0.006350852180675215,
+"excess_return": 5.164499258569592e-06,
+"excess_krw": 4.015914623463686,
+"stop_pct": 5.0,
+"clipped_excess_return": 5.164499258569592e-06,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-04-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "051910",
+"entry_date": "2023-04-20",
+"last_exit_date": "2023-04-25",
+"entry_cost": 790000.0,
+"net_pnl": -41209.97684350003,
+"net_return": -0.052164527650000035,
+"bench_return": -0.024307986000636328,
+"excess_return": -0.027856541649363707,
+"excess_krw": -22006.66790299733,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.025692013999363675,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-04-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2023-02-07",
+"last_exit_date": "2023-05-11",
+"entry_cost": 2888100.0,
+"net_pnl": 8142775.621440729,
+"net_return": 2.819423019092389,
+"bench_return": 0.0179404852537155,
+"excess_return": 2.8014825338386737,
+"excess_krw": 8090961.705979473,
+"stop_pct": 5.0,
+"clipped_excess_return": 2.8014825338386737,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-05-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2023-06-02",
+"last_exit_date": "2023-06-02",
+"entry_cost": 383500.0,
+"net_pnl": -20005.096353774974,
+"net_return": -0.05216452764999993,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999993,
+"excess_krw": -20005.096353774974,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-06-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "373220",
+"entry_date": "2023-06-08",
+"last_exit_date": "2023-06-19",
+"entry_cost": 601000.0,
+"net_pnl": -23318.031860000036,
+"net_return": -0.03879872189683866,
+"bench_return": 0.002317819395512677,
+"excess_return": -0.04111654129235134,
+"excess_krw": -24711.041316703155,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04111654129235134,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-06-19"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "066570",
+"entry_date": "2023-05-11",
+"last_exit_date": "2023-06-23",
+"entry_cost": 2425500.0,
+"net_pnl": 142798.2125695211,
+"net_return": 0.05887372194167021,
+"bench_return": 0.04054888953923186,
+"excess_return": 0.018324832402438353,
+"excess_krw": 44446.880992114224,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.018324832402438353,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-06-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009540",
+"entry_date": "2023-06-21",
+"last_exit_date": "2023-06-30",
+"entry_cost": 949600.0,
+"net_pnl": -49535.435456439984,
+"net_return": -0.05216452764999998,
+"bench_return": -0.0004053127143480717,
+"excess_return": -0.05175921493565191,
+"excess_krw": -49150.55050289506,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04959468728565193,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-06-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2023-07-04",
+"last_exit_date": "2023-07-04",
+"entry_cost": 1079514.0,
+"net_pnl": -56312.33790156221,
+"net_return": -0.052164527650000105,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000105,
+"excess_krw": -56312.33790156221,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2023-05-31",
+"last_exit_date": "2023-07-07",
+"entry_cost": 434400.0,
+"net_pnl": -15176.848485343833,
+"net_return": -0.03493749651322245,
+"bench_return": -0.020080446509307515,
+"excess_return": -0.014857050003914934,
+"excess_krw": -6453.902521700649,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.014857050003914934,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2023-06-26",
+"last_exit_date": "2023-07-07",
+"entry_cost": 2272500.0,
+"net_pnl": -118543.88908462515,
+"net_return": -0.05216452765000006,
+"bench_return": -0.022701122617159508,
+"excess_return": -0.029463405032840555,
+"excess_krw": -66955.58793713016,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.027298877382840495,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "247540",
+"entry_date": "2023-07-12",
+"last_exit_date": "2023-07-12",
+"entry_cost": 2613204.0,
+"net_pnl": -136316.5523130903,
+"net_return": -0.05216452764999989,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999989,
+"excess_krw": -136316.5523130903,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-12"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2023-07-14",
+"last_exit_date": "2023-07-14",
+"entry_cost": 2750000.0,
+"net_pnl": -143452.4510375,
+"net_return": -0.05216452765,
+"bench_return": 0.0,
+"excess_return": -0.05216452765,
+"excess_krw": -143452.4510375,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-14"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005380",
+"entry_date": "2023-07-06",
+"last_exit_date": "2023-07-18",
+"entry_cost": 1836000.0,
+"net_pnl": -23945.432359913913,
+"net_return": -0.01304217448797054,
+"bench_return": 0.021518193224592252,
+"excess_return": -0.034560367712562795,
+"excess_krw": -63452.835120265285,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.034560367712562795,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2023-07-18",
+"last_exit_date": "2023-07-19",
+"entry_cost": 2454800.0,
+"net_pnl": -128053.48247521986,
+"net_return": -0.052164527649999945,
+"bench_return": -0.001166861143523934,
+"excess_return": -0.05099766650647601,
+"excess_krw": -125189.07174009731,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04883313885647607,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2023-05-19",
+"last_exit_date": "2023-07-26",
+"entry_cost": 658125.0,
+"net_pnl": 99095.90415155153,
+"net_return": 0.15057307373455123,
+"bench_return": 0.021953688472731825,
+"excess_return": 0.1286193852618194,
+"excess_krw": 84647.6329254349,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.1286193852618194,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "383310",
+"entry_date": "2023-07-21",
+"last_exit_date": "2023-07-26",
+"entry_cost": 4680078.0,
+"net_pnl": -244134.05823515708,
+"net_return": -0.052164527650000084,
+"bench_return": -0.004774960722097266,
+"excess_return": -0.04738956692790282,
+"excess_krw": -221786.86960880554,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04522503927790274,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "096770",
+"entry_date": "2023-07-26",
+"last_exit_date": "2023-07-26",
+"entry_cost": 1025765.0,
+"net_pnl": -53508.54670490233,
+"net_return": -0.05216452765000008,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000008,
+"excess_krw": -53508.54670490233,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2023-07-24",
+"last_exit_date": "2023-07-27",
+"entry_cost": 225830.0,
+"net_pnl": -11780.315279199494,
+"net_return": -0.05216452764999997,
+"bench_return": 0.0007038805239318879,
+"excess_return": -0.05286840817393186,
+"excess_krw": -11939.272617919032,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05070388052393189,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-07-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2023-07-31",
+"last_exit_date": "2023-08-01",
+"entry_cost": 5504000.0,
+"net_pnl": -287113.56018560013,
+"net_return": -0.05216452765000002,
+"bench_return": 0.016356423558132382,
+"excess_return": -0.0685209512081324,
+"excess_krw": -377139.31544956076,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06635642355813239,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-01"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2023-03-29",
+"last_exit_date": "2023-08-03",
+"entry_cost": 3830000.0,
+"net_pnl": 2285269.0692281444,
+"net_return": 0.5966759971875051,
+"bench_return": 0.0832329317269076,
+"excess_return": 0.5134430654605975,
+"excess_krw": 1966486.9407140883,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.5134430654605975,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "041510",
+"entry_date": "2023-08-03",
+"last_exit_date": "2023-08-03",
+"entry_cost": 4899600.0,
+"net_pnl": -255585.31967393978,
+"net_return": -0.05216452764999996,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999996,
+"excess_krw": -255585.31967393978,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "383310",
+"entry_date": "2023-08-07",
+"last_exit_date": "2023-08-07",
+"entry_cost": 5319195.0,
+"net_pnl": -277473.2946532417,
+"net_return": -0.052164527649999994,
+"bench_return": 0.0,
+"excess_return": -0.052164527649999994,
+"excess_krw": -277473.2946532417,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "383310",
+"entry_date": "2023-08-09",
+"last_exit_date": "2023-08-09",
+"entry_cost": 5221460.0,
+"net_pnl": -272374.9945433687,
+"net_return": -0.052164527649999945,
+"bench_return": 0.0,
+"excess_return": -0.052164527649999945,
+"excess_krw": -272374.9945433687,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "328130",
+"entry_date": "2023-05-12",
+"last_exit_date": "2023-08-16",
+"entry_cost": 2539394.0,
+"net_pnl": 3293567.943568043,
+"net_return": 1.2969897320258468,
+"bench_return": 0.0258119323008561,
+"excess_return": 1.2711777997249907,
+"excess_krw": 3228021.2775548426,
+"stop_pct": 5.0,
+"clipped_excess_return": 1.2711777997249907,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2023-08-14",
+"last_exit_date": "2023-08-16",
+"entry_cost": 5188700.0,
+"net_pnl": -270666.08461755514,
+"net_return": -0.05216452765000003,
+"bench_return": -0.015027450980392154,
+"excess_return": -0.037137076669607874,
+"excess_krw": -192693.14971559437,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03497254901960785,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2023-03-28",
+"last_exit_date": "2023-08-17",
+"entry_cost": 3882090.0,
+"net_pnl": 2044170.2816431504,
+"net_return": 0.5265643716768932,
+"bench_return": 0.04920560434403698,
+"excess_return": 0.4773587673328562,
+"excess_krw": 1853149.697075208,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.4773587673328562,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-17"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2023-08-21",
+"last_exit_date": "2023-08-21",
+"entry_cost": 5042400.0,
+"net_pnl": -263034.4142223604,
+"net_return": -0.052164527650000084,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000084,
+"excess_krw": -263034.4142223604,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2023-08-25",
+"last_exit_date": "2023-08-25",
+"entry_cost": 5011209.0,
+"net_pnl": -28836.456935475086,
+"net_return": -0.0057543911929187315,
+"bench_return": 0.0,
+"excess_return": -0.0057543911929187315,
+"excess_krw": -28836.456935475086,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0057543911929187315,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-08-25"
+],
+"reasons": [
+"채널이탈 (10일 저가 14,046)"
+]
+},
+{
+"symbol": "086520",
+"entry_date": "2023-09-01",
+"last_exit_date": "2023-09-04",
+"entry_cost": 3873824.0,
+"net_pnl": -278174.523465792,
+"net_return": -0.07180876660008095,
+"bench_return": 0.0063585076208583224,
+"excess_return": -0.07816727422093928,
+"excess_krw": -302806.2628916559,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.056358507620858325,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-04"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "328130",
+"entry_date": "2023-09-06",
+"last_exit_date": "2023-09-06",
+"entry_cost": 3840248.0,
+"net_pnl": -200324.72297885705,
+"net_return": -0.05216452764999996,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999996,
+"excess_krw": -200324.72297885705,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "328130",
+"entry_date": "2023-09-08",
+"last_exit_date": "2023-09-08",
+"entry_cost": 3896409.0,
+"net_pnl": -203254.3350162092,
+"net_return": -0.05216452765000009,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000009,
+"excess_krw": -203254.3350162092,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2023-06-12",
+"last_exit_date": "2023-09-15",
+"entry_cost": 394800.0,
+"net_pnl": 206058.72254647556,
+"net_return": 0.5219319213436564,
+"bench_return": 0.004788801571709245,
+"excess_return": 0.5171431197719472,
+"excess_krw": 204168.10368596474,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.5171431197719472,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-15"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2023-08-29",
+"last_exit_date": "2023-09-18",
+"entry_cost": 5009100.0,
+"net_pnl": 35853.732483381704,
+"net_return": 0.007157719447282287,
+"bench_return": 0.02151115042011509,
+"excess_return": -0.0143534309728328,
+"excess_krw": -71897.77108601679,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0143534309728328,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2023-09-04",
+"last_exit_date": "2023-09-20",
+"entry_cost": 801900.0,
+"net_pnl": -38807.78894102887,
+"net_return": -0.04839479852977786,
+"bench_return": -0.006163471366184559,
+"excess_return": -0.042231327163593305,
+"excess_krw": -33865.30125248547,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.042231327163593305,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "041510",
+"entry_date": "2023-09-13",
+"last_exit_date": "2023-09-20",
+"entry_cost": 275600.0,
+"net_pnl": -14376.543820339988,
+"net_return": -0.05216452764999996,
+"bench_return": 0.007156308851224091,
+"excess_return": -0.05932083650122405,
+"excess_krw": -16348.822539737348,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.057156308851224094,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2023-09-19",
+"last_exit_date": "2023-09-21",
+"entry_cost": 5306580.0,
+"net_pnl": -42490.540139711884,
+"net_return": -0.008007142102768993,
+"bench_return": -0.017729722992552932,
+"excess_return": 0.009722580889783939,
+"excess_krw": 51593.65329810965,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.009722580889783939,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-09-21"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2023-09-15",
+"last_exit_date": "2023-10-04",
+"entry_cost": 236000.0,
+"net_pnl": -5755.823957262998,
+"net_return": -0.024389084564673723,
+"bench_return": -0.07488085054381033,
+"excess_return": 0.050491765979136606,
+"excess_krw": 11916.05677107624,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.050491765979136606,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-10-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2023-09-12",
+"last_exit_date": "2023-10-18",
+"entry_cost": 3594060.0,
+"net_pnl": 420312.86867223005,
+"net_return": 0.11694653641626185,
+"bench_return": -0.017495916572433767,
+"excess_return": 0.13444245298869562,
+"excess_krw": 483194.24258855137,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.13444245298869562,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-10-18"
+],
+"reasons": [
+"채널이탈 (20일 저가 44,936)"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2023-11-23",
+"last_exit_date": "2023-11-23",
+"entry_cost": 4712400.0,
+"net_pnl": -245820.12009786014,
+"net_return": -0.05216452765000003,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000003,
+"excess_krw": -245820.12009786014,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-11-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "017670",
+"entry_date": "2023-11-22",
+"last_exit_date": "2023-11-30",
+"entry_cost": 5191400.0,
+"net_pnl": -77380.70849146946,
+"net_return": -0.014905556977206429,
+"bench_return": 0.004957904583723138,
+"excess_return": -0.019863461560929566,
+"excess_krw": -103119.17434740976,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.019863461560929566,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-11-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2023-08-31",
+"last_exit_date": "2023-12-04",
+"entry_cost": 5031457.0,
+"net_pnl": 1780340.8458396695,
+"net_return": 0.3538420075615611,
+"bench_return": 0.008247812126172649,
+"excess_return": 0.34559419543538844,
+"excess_krw": 1738842.3337827532,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.34559419543538844,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-12-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "024110",
+"entry_date": "2023-12-05",
+"last_exit_date": "2023-12-26",
+"entry_cost": 5069700.0,
+"net_pnl": -46578.29659723038,
+"net_return": -0.00918758439300755,
+"bench_return": 0.054680347277032304,
+"excess_return": -0.06386793167003986,
+"excess_krw": -323791.25318760105,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06386793167003986,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-12-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2023-11-29",
+"last_exit_date": "2023-12-28",
+"entry_cost": 4715000.0,
+"net_pnl": 305579.68216049916,
+"net_return": 0.0648101128654293,
+"bench_return": 0.07130152588385807,
+"excess_return": -0.006491413018428774,
+"excess_krw": -30607.01238189166,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.006491413018428774,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2023-12-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2023-12-28",
+"last_exit_date": "2024-01-02",
+"entry_cost": 4839648.0,
+"net_pnl": -252457.95191226766,
+"net_return": -0.0521645276500001,
+"bench_return": 0.006087615053011808,
+"excess_return": -0.058252142703011905,
+"excess_krw": -281919.8659283462,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05608761505301181,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2023-12-15",
+"last_exit_date": "2024-01-03",
+"entry_cost": 274000.0,
+"net_pnl": -1021.4165851999815,
+"net_return": -0.003727797756204312,
+"bench_return": 0.029553327815077024,
+"excess_return": -0.033281125571281336,
+"excess_krw": -9119.028406531086,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.033281125571281336,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-03"
+],
+"reasons": [
+"채널이탈 (10일 저가 137,000)"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2024-01-02",
+"last_exit_date": "2024-01-10",
+"entry_cost": 4692000.0,
+"net_pnl": -244755.9637338002,
+"net_return": -0.05216452765000004,
+"bench_return": -0.056165137083466043,
+"excess_return": 0.004000609433466001,
+"excess_krw": 18770.85946182246,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.006165137083466041,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "323410",
+"entry_date": "2024-01-12",
+"last_exit_date": "2024-01-12",
+"entry_cost": 4573800.0,
+"net_pnl": -238590.1165655697,
+"net_return": -0.05216452764999994,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999994,
+"excess_krw": -238590.1165655697,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-12"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2023-12-04",
+"last_exit_date": "2024-01-15",
+"entry_cost": 5184000.0,
+"net_pnl": 45856.811738169126,
+"net_return": 0.008845835597640649,
+"bench_return": 0.013956538029224363,
+"excess_return": -0.005110702431583715,
+"excess_krw": -26493.881405329972,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.005110702431583715,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-15"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "323410",
+"entry_date": "2024-01-16",
+"last_exit_date": "2024-01-17",
+"entry_cost": 5098500.0,
+"net_pnl": -265960.84422352485,
+"net_return": -0.05216452764999997,
+"bench_return": -0.024505978209970913,
+"excess_return": -0.02765854944002906,
+"excess_krw": -141017.11431998815,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.02549402179002909,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035420",
+"entry_date": "2024-01-17",
+"last_exit_date": "2024-01-17",
+"entry_cost": 4341500.0,
+"net_pnl": -189975.22081750014,
+"net_return": -0.04375796863238515,
+"bench_return": 0.0,
+"excess_return": -0.04375796863238515,
+"excess_krw": -189975.22081750014,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04375796863238515,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-17"
+],
+"reasons": [
+"채널이탈 (10일 저가 219,500)"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2024-01-22",
+"last_exit_date": "2024-01-26",
+"entry_cost": 5044000.0,
+"net_pnl": -263117.8774665999,
+"net_return": -0.05216452764999999,
+"bench_return": 0.00442047841489801,
+"excess_return": -0.056585006064898,
+"excess_krw": -285414.7705913455,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05442047841489801,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2024-01-23",
+"last_exit_date": "2024-01-30",
+"entry_cost": 4450050.0,
+"net_pnl": -232134.75626888257,
+"net_return": -0.052164527650000014,
+"bench_return": 0.009168875721191405,
+"excess_return": -0.06133340337119142,
+"excess_krw": -272936.7116719704,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05916887572119141,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-01-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "028260",
+"entry_date": "2024-02-02",
+"last_exit_date": "2024-02-02",
+"entry_cost": 4434100.0,
+"net_pnl": -231302.73205286494,
+"net_return": -0.05216452764999999,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999999,
+"excess_krw": -231302.73205286494,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-02-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "028260",
+"entry_date": "2024-02-06",
+"last_exit_date": "2024-02-27",
+"entry_cost": 4440000.0,
+"net_pnl": 79724.77281000042,
+"net_return": 0.017956029912162257,
+"bench_return": 0.015387389553405129,
+"excess_return": 0.0025686403587571287,
+"excess_krw": 11404.76319288164,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.0025686403587571287,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-02-27"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2024-02-19",
+"last_exit_date": "2024-02-27",
+"entry_cost": 277900.0,
+"net_pnl": -14496.522233934973,
+"net_return": -0.0521645276499999,
+"bench_return": -0.022197783115793124,
+"excess_return": -0.02996674453420678,
+"excess_krw": -8327.758306056065,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.02780221688420688,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-02-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "316140",
+"entry_date": "2024-01-30",
+"last_exit_date": "2024-03-08",
+"entry_cost": 4968000.0,
+"net_pnl": 240554.11325469092,
+"net_return": 0.04842071522839994,
+"bench_return": 0.073117216230415,
+"excess_return": -0.024696501002015064,
+"excess_krw": -122692.21697801081,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.024696501002015064,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2024-01-05",
+"last_exit_date": "2024-03-11",
+"entry_cost": 4992966.0,
+"net_pnl": 436933.60794962593,
+"net_return": 0.08750983041935914,
+"bench_return": 0.037356148701572556,
+"excess_return": 0.050153681717786586,
+"excess_krw": 250415.62759173,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.050153681717786586,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-11"
+],
+"reasons": [
+"채널이탈 (10일 저가 16,356)"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2024-02-29",
+"last_exit_date": "2024-03-11",
+"entry_cost": 4397800.0,
+"net_pnl": -247081.42806599982,
+"net_return": -0.056182961495747835,
+"bench_return": 0.009498680738786236,
+"excess_return": -0.06568164223453407,
+"excess_krw": -288854.72621903394,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05949868073878624,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-11"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2024-03-14",
+"last_exit_date": "2024-03-19",
+"entry_cost": 4580800.0,
+"net_pnl": -154536.30913889833,
+"net_return": -0.03373565952211368,
+"bench_return": -0.024370845878543435,
+"excess_return": -0.009364813643570245,
+"excess_krw": -42898.338338466565,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.009364813643570245,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2024-03-21",
+"last_exit_date": "2024-03-26",
+"entry_cost": 4347000.0,
+"net_pnl": -226759.20169455002,
+"net_return": -0.05216452765000001,
+"bench_return": 0.0028969359331476596,
+"excess_return": -0.05506146358314767,
+"excess_krw": -239352.1821959429,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05289693593314766,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "105560",
+"entry_date": "2024-03-13",
+"last_exit_date": "2024-03-27",
+"entry_cost": 4951300.0,
+"net_pnl": -216556.61310079196,
+"net_return": -0.043737324157451976,
+"bench_return": 0.032472557393024015,
+"excess_return": -0.07620988155047599,
+"excess_krw": -377337.98652087175,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07620988155047599,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "024110",
+"entry_date": "2024-03-04",
+"last_exit_date": "2024-03-28",
+"entry_cost": 235960.0,
+"net_pnl": -1044.7913330699923,
+"net_return": -0.0044278323998558754,
+"bench_return": 0.04054796104158842,
+"excess_return": -0.0449757934414443,
+"excess_krw": -10612.488220443196,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0449757934414443,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-28"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2024-03-11",
+"last_exit_date": "2024-03-29",
+"entry_cost": 4706000.0,
+"net_pnl": 155679.61330129422,
+"net_return": 0.03308109079925504,
+"bench_return": 0.04905035720508799,
+"excess_return": -0.015969266405832953,
+"excess_krw": -75151.36770584987,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.015969266405832953,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-03-29"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2024-04-01",
+"last_exit_date": "2024-04-01",
+"entry_cost": 4830000.0,
+"net_pnl": -251954.66854950043,
+"net_return": -0.05216452765000009,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000009,
+"excess_krw": -251954.66854950043,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-01"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2024-04-01",
+"last_exit_date": "2024-04-09",
+"entry_cost": 4095000.0,
+"net_pnl": -213613.74072675,
+"net_return": -0.05216452765,
+"bench_return": -0.010512628987191186,
+"excess_return": -0.041651898662808814,
+"excess_krw": -170564.52502420207,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03948737101280882,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010950",
+"entry_date": "2024-04-08",
+"last_exit_date": "2024-04-12",
+"entry_cost": 334000.0,
+"net_pnl": -17422.952235100027,
+"net_return": -0.052164527650000084,
+"bench_return": -0.01625496679540972,
+"excess_return": -0.035909560854590364,
+"excess_krw": -11993.79332543318,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03374503320459028,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-12"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2024-03-22",
+"last_exit_date": "2024-04-16",
+"entry_cost": 238800.0,
+"net_pnl": 3107.180328402924,
+"net_return": 0.01301164291626015,
+"bench_return": -0.038022070121525364,
+"excess_return": 0.05103371303778551,
+"excess_krw": 12186.850673423181,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.05103371303778551,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2024-04-12",
+"last_exit_date": "2024-04-16",
+"entry_cost": 4151400.0,
+"net_pnl": -216555.82008620995,
+"net_return": -0.05216452764999999,
+"bench_return": -0.027398034120438397,
+"excess_return": -0.02476649352956159,
+"excess_krw": -102815.62123862198,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.022601965879561606,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2024-04-03",
+"last_exit_date": "2024-04-18",
+"entry_cost": 4890314.0,
+"net_pnl": -80170.70913623211,
+"net_return": -0.01639377535598575,
+"bench_return": -0.02938210744496106,
+"excess_return": 0.012988332088975308,
+"excess_krw": 63517.0222513652,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.012988332088975308,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-18"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2024-04-04",
+"last_exit_date": "2024-04-23",
+"entry_cost": 4672500.0,
+"net_pnl": 16127.410583508125,
+"net_return": 0.003451559247406768,
+"bench_return": -0.04940897039328329,
+"excess_return": 0.05286052964069006,
+"excess_krw": 246990.8247461243,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.05286052964069006,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "259960",
+"entry_date": "2024-04-24",
+"last_exit_date": "2024-04-25",
+"entry_cost": 4800000.0,
+"net_pnl": -195127.72130526043,
+"net_return": -0.04065160860526259,
+"bench_return": -0.017259578352780025,
+"excess_return": -0.023392030252482564,
+"excess_krw": -112281.74521191632,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.023392030252482564,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-04-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2024-04-16",
+"last_exit_date": "2024-05-07",
+"entry_cost": 205500.0,
+"net_pnl": -8048.613639801304,
+"net_return": -0.03916600311338834,
+"bench_return": 0.044490910146947726,
+"excess_return": -0.08365691326033606,
+"excess_krw": -17191.49567499906,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.08365691326033606,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-05-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005380",
+"entry_date": "2024-04-23",
+"last_exit_date": "2024-05-09",
+"entry_cost": 4000000.0,
+"net_pnl": -180550.12328453595,
+"net_return": -0.04513753082113399,
+"bench_return": 0.03686917109735899,
+"excess_return": -0.08200670191849298,
+"excess_krw": -328026.80767397187,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.08200670191849298,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-05-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "105560",
+"entry_date": "2024-04-29",
+"last_exit_date": "2024-05-28",
+"entry_cost": 4742400.0,
+"net_pnl": 97797.95217279956,
+"net_return": 0.020622037823211783,
+"bench_return": 0.019581651793326937,
+"excess_return": 0.0010403860298848454,
+"excess_krw": 4933.926708125888,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.0010403860298848454,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-05-28"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "259960",
+"entry_date": "2024-05-13",
+"last_exit_date": "2024-05-28",
+"entry_cost": 4136000.0,
+"net_pnl": -188969.66970507984,
+"net_return": -0.04568899170819145,
+"bench_return": 0.002011004664413507,
+"excess_return": -0.047699996372604955,
+"excess_krw": -197287.1849970941,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.047699996372604955,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-05-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2024-05-30",
+"last_exit_date": "2024-06-04",
+"entry_cost": 4698000.0,
+"net_pnl": -131991.3800888129,
+"net_return": -0.028095227775396532,
+"bench_return": 0.010112359550561889,
+"excess_return": -0.03820758732595842,
+"excess_krw": -179499.24525735265,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03820758732595842,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-06-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2024-06-03",
+"last_exit_date": "2024-06-04",
+"entry_cost": 4184700.0,
+"net_pnl": -217489.86339855802,
+"net_return": -0.051972629674423024,
+"bench_return": -0.007304850080693148,
+"excess_return": -0.044667779593729875,
+"excess_krw": -186921.2572658814,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.042695149919306855,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-06-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2024-06-12",
+"last_exit_date": "2024-06-13",
+"entry_cost": 240000.0,
+"net_pnl": -12519.486636000003,
+"net_return": -0.052164527650000014,
+"bench_return": 0.006849887227466267,
+"excess_return": -0.05901441487746628,
+"excess_krw": -14163.459570591907,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05684988722746627,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-06-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005380",
+"entry_date": "2024-06-11",
+"last_exit_date": "2024-07-02",
+"entry_cost": 4057500.0,
+"net_pnl": 61501.71327282739,
+"net_return": 0.01515753869940293,
+"bench_return": 0.03772471910112363,
+"excess_return": -0.022567180401720698,
+"excess_krw": -91566.33447998174,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.022567180401720698,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "259960",
+"entry_date": "2024-06-17",
+"last_exit_date": "2024-07-03",
+"entry_cost": 271000.0,
+"net_pnl": -885.8782611829934,
+"net_return": -0.0032689234729999755,
+"bench_return": 0.028158084363394398,
+"excess_return": -0.03142700783639437,
+"excess_krw": -8516.719123662875,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03142700783639437,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2024-07-05",
+"last_exit_date": "2024-07-09",
+"entry_cost": 267000.0,
+"net_pnl": -13927.928882550008,
+"net_return": -0.05216452765000003,
+"bench_return": 0.00026117843710826705,
+"excess_return": -0.052425706087108295,
+"excess_krw": -13997.663525257914,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05026117843710827,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2024-06-26",
+"last_exit_date": "2024-07-16",
+"entry_cost": 228000.0,
+"net_pnl": -3735.929362424996,
+"net_return": -0.016385655098355247,
+"bench_return": 0.034954818462204384,
+"excess_return": -0.05134047356055963,
+"excess_krw": -11705.627971807597,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05134047356055963,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2024-07-16",
+"last_exit_date": "2024-07-16",
+"entry_cost": 217000.0,
+"net_pnl": -11319.70250005001,
+"net_return": -0.05216452765000005,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000005,
+"excess_krw": -11319.70250005001,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2024-07-18",
+"last_exit_date": "2024-07-18",
+"entry_cost": 333900.0,
+"net_pnl": -17417.735782335,
+"net_return": -0.05216452765,
+"bench_return": 0.0,
+"excess_return": -0.05216452765,
+"excess_krw": -17417.735782335,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "105560",
+"entry_date": "2024-07-03",
+"last_exit_date": "2024-07-19",
+"entry_cost": 3793500.0,
+"net_pnl": -70717.65000115501,
+"net_return": -0.018641795176263347,
+"bench_return": 0.0031538088306646284,
+"excess_return": -0.021795604006927975,
+"excess_krw": -82681.62380028128,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.021795604006927975,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2024-07-08",
+"last_exit_date": "2024-07-22",
+"entry_cost": 263700.0,
+"net_pnl": -13123.535843212212,
+"net_return": -0.04976691635651199,
+"bench_return": -0.0345622723580431,
+"excess_return": -0.015204643998468888,
+"excess_krw": -4009.4646223962463,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.015204643998468888,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2024-04-22",
+"last_exit_date": "2024-07-24",
+"entry_cost": 4848933.0,
+"net_pnl": 554175.3450680862,
+"net_return": 0.11428810112824536,
+"bench_return": 0.06602240408613391,
+"excess_return": 0.04826569704211145,
+"excess_krw": 234037.13115549658,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.04826569704211145,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-07-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2024-07-30",
+"last_exit_date": "2024-08-02",
+"entry_cost": 299000.0,
+"net_pnl": -15597.193767350002,
+"net_return": -0.05216452765000001,
+"bench_return": -0.02544984317393939,
+"excess_return": -0.026714684476060617,
+"excess_krw": -7987.690658342124,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.024550156826060612,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2024-06-07",
+"last_exit_date": "2024-08-05",
+"entry_cost": 4712875.0,
+"net_pnl": 272241.2734849014,
+"net_return": 0.057765434789783604,
+"bench_return": -0.10340022296544038,
+"excess_return": 0.16116565775522398,
+"excess_krw": 759553.5992931512,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.16116565775522398,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "259960",
+"entry_date": "2024-07-24",
+"last_exit_date": "2024-08-05",
+"entry_cost": 4342500.0,
+"net_pnl": -226524.46132012518,
+"net_return": -0.05216452765000004,
+"bench_return": -0.12422072795578909,
+"excess_return": 0.07205620030578905,
+"excess_krw": 312904.04982788896,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.07422072795578909,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2024-07-25",
+"last_exit_date": "2024-08-05",
+"entry_cost": 4800000.0,
+"net_pnl": -250389.73271999974,
+"net_return": -0.052164527649999945,
+"bench_return": -0.1079252398646775,
+"excess_return": 0.05576071221467756,
+"excess_krw": 267651.41863045224,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.0579252398646775,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009540",
+"entry_date": "2024-07-31",
+"last_exit_date": "2024-08-05",
+"entry_cost": 200500.0,
+"net_pnl": -10533.828004300007,
+"net_return": -0.052537795532668366,
+"bench_return": -0.12764053475065762,
+"excess_return": 0.07510273921798925,
+"excess_krw": 15058.099213206844,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.07764053475065762,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-05"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "329180",
+"entry_date": "2024-08-07",
+"last_exit_date": "2024-08-22",
+"entry_cost": 4749500.0,
+"net_pnl": -247755.42407367498,
+"net_return": -0.052164527649999994,
+"bench_return": 0.05651003932933141,
+"excess_return": -0.1086745669793314,
+"excess_krw": -516149.85586833453,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.10651003932933141,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2024-08-20",
+"last_exit_date": "2024-08-23",
+"entry_cost": 289000.0,
+"net_pnl": -15075.54849085002,
+"net_return": -0.05216452765000007,
+"bench_return": -0.0005318702236654094,
+"excess_return": -0.05163265742633466,
+"excess_krw": -14921.837996210717,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04946812977633459,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2024-08-27",
+"last_exit_date": "2024-08-28",
+"entry_cost": 4820400.0,
+"net_pnl": -251453.8890840597,
+"net_return": -0.05216452764999994,
+"bench_return": 0.001782985226693734,
+"excess_return": -0.05394751287669367,
+"excess_krw": -260048.59107081417,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05178298522669374,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-08-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "259960",
+"entry_date": "2024-08-16",
+"last_exit_date": "2024-09-03",
+"entry_cost": 4683000.0,
+"net_pnl": -231629.50658941804,
+"net_return": -0.04946177804600001,
+"bench_return": -0.025361506557560864,
+"excess_return": -0.024100271488439143,
+"excess_krw": -112861.57138036052,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.024100271488439143,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-09-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086790",
+"entry_date": "2024-08-30",
+"last_exit_date": "2024-09-09",
+"entry_cost": 4717500.0,
+"net_pnl": -120092.66485421233,
+"net_return": -0.025456844696176435,
+"bench_return": -0.060294494602830984,
+"excess_return": 0.03483764990665455,
+"excess_krw": 164346.61343464284,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.03483764990665455,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-09-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010130",
+"entry_date": "2024-09-27",
+"last_exit_date": "2024-09-30",
+"entry_cost": 4308000.0,
+"net_pnl": -224724.78511620013,
+"net_return": -0.05216452765000003,
+"bench_return": -0.022924970180083215,
+"excess_return": -0.029239557469916813,
+"excess_krw": -125964.01358040165,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.027075029819916788,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-09-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "259960",
+"entry_date": "2024-09-27",
+"last_exit_date": "2024-10-07",
+"entry_cost": 690000.0,
+"net_pnl": -35993.52407849998,
+"net_return": -0.052164527649999966,
+"bench_return": -0.01829924650161463,
+"excess_return": -0.033865281148385336,
+"excess_krw": -23367.043992385883,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03170075349838537,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-10-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2024-08-07",
+"last_exit_date": "2024-11-21",
+"entry_cost": 4071548.0,
+"net_pnl": 946294.1424532211,
+"net_return": 0.23241630516285725,
+"bench_return": -0.05136469822870149,
+"excess_return": 0.28378100339155876,
+"excess_krw": 1155427.9767968943,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.28378100339155876,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2024-11-21"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "207940",
+"entry_date": "2025-01-31",
+"last_exit_date": "2025-02-03",
+"entry_cost": 3223120.0,
+"net_pnl": -168132.53235926805,
+"net_return": -0.052164527650000014,
+"bench_return": -0.02738716610377645,
+"excess_return": -0.024777361546223564,
+"excess_krw": -79860.4095468641,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.022612833896223553,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-02-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2025-01-31",
+"last_exit_date": "2025-02-04",
+"entry_cost": 4522000.0,
+"net_pnl": -235887.99403329962,
+"net_return": -0.05216452764999992,
+"bench_return": -0.015259441203561597,
+"excess_return": -0.03690508644643832,
+"excess_krw": -166884.80091079406,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.034740558796438406,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-02-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035420",
+"entry_date": "2025-02-06",
+"last_exit_date": "2025-02-13",
+"entry_cost": 4590000.0,
+"net_pnl": -239435.1819135004,
+"net_return": -0.052164527650000084,
+"bench_return": 0.01583282489322757,
+"excess_return": -0.06799735254322765,
+"excess_krw": -312107.84817341494,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06583282489322757,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-02-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2025-02-07",
+"last_exit_date": "2025-02-24",
+"entry_cost": 4109938.0,
+"net_pnl": -63843.508966750145,
+"net_return": -0.015533934810391335,
+"bench_return": 0.04931675111315825,
+"excess_return": -0.06485068592354959,
+"excess_krw": -266532.2984032616,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06485068592354959,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-02-24"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2025-02-17",
+"last_exit_date": "2025-02-28",
+"entry_cost": 4465400.0,
+"net_pnl": -232935.48176831007,
+"net_return": -0.052164527650000014,
+"bench_return": -0.024147853688925802,
+"excess_return": -0.028016673961074212,
+"excess_krw": -125105.65590578079,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0258521463110742,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-02-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "024110",
+"entry_date": "2025-02-03",
+"last_exit_date": "2025-03-05",
+"entry_cost": 4700080.0,
+"net_pnl": 15339.443551653763,
+"net_return": 0.003263655842380079,
+"bench_return": 0.04368962687038325,
+"excess_return": -0.04042597102800317,
+"excess_krw": -190005.29790929714,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04042597102800317,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2025-02-26",
+"last_exit_date": "2025-03-05",
+"entry_cost": 4096400.0,
+"net_pnl": -213686.7710654599,
+"net_return": -0.05216452764999998,
+"bench_return": -0.03219951993443004,
+"excess_return": -0.019965007715569937,
+"excess_krw": -81784.65760606067,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.01780048006556996,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009540",
+"entry_date": "2025-03-07",
+"last_exit_date": "2025-03-07",
+"entry_cost": 4455000.0,
+"net_pnl": -232392.97068075003,
+"net_return": -0.05216452765000001,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000001,
+"excess_krw": -232392.97068075003,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2025-03-07",
+"last_exit_date": "2025-03-07",
+"entry_cost": 4163502.0,
+"net_pnl": -217187.11519983102,
+"net_return": -0.052164527650000174,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000174,
+"excess_krw": -217187.11519983102,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "096770",
+"entry_date": "2025-03-11",
+"last_exit_date": "2025-03-17",
+"entry_cost": 4402200.0,
+"net_pnl": -229638.68362083012,
+"net_return": -0.05216452765000003,
+"bench_return": 0.03637578186676382,
+"excess_return": -0.08854030951676385,
+"excess_krw": -389772.15055469784,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.08637578186676383,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2025-03-19",
+"last_exit_date": "2025-03-19",
+"entry_cost": 4067316.0,
+"net_pnl": -212169.61794328768,
+"net_return": -0.05216452765000007,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000007,
+"excess_krw": -212169.61794328768,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "024110",
+"entry_date": "2025-03-14",
+"last_exit_date": "2025-03-27",
+"entry_cost": 4231370.0,
+"net_pnl": -70145.30159918823,
+"net_return": -0.016577444562680226,
+"bench_return": 0.03010752688172036,
+"excess_return": -0.046684971444400584,
+"excess_krw": -197541.3876206933,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.046684971444400584,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-27"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "259960",
+"entry_date": "2025-03-31",
+"last_exit_date": "2025-03-31",
+"entry_cost": 3817000.0,
+"net_pnl": -199112.00204004988,
+"net_return": -0.052164527649999966,
+"bench_return": 0.0,
+"excess_return": -0.052164527649999966,
+"excess_krw": -199112.00204004988,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-03-31"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2025-03-26",
+"last_exit_date": "2025-04-01",
+"entry_cost": 302400.0,
+"net_pnl": -8465.059484687712,
+"net_return": -0.027992921576348254,
+"bench_return": -0.041957841677168095,
+"excess_return": 0.01396492010081984,
+"excess_krw": 4222.99183848792,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.01396492010081984,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-04-01"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2025-03-21",
+"last_exit_date": "2025-04-03",
+"entry_cost": 3997500.0,
+"net_pnl": -203663.0856000001,
+"net_return": -0.05094761365853661,
+"bench_return": -0.05829943276227578,
+"excess_return": 0.0073518191037391725,
+"excess_krw": 29388.896867197327,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.00829943276227578,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-04-03"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2025-04-03",
+"last_exit_date": "2025-04-04",
+"entry_cost": 4257000.0,
+"net_pnl": 53373.02601351178,
+"net_return": 0.012537708718231566,
+"bench_return": -0.008852788171944903,
+"excess_return": 0.02139049689017647,
+"excess_krw": 91059.34526148124,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.02139049689017647,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-04-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2025-03-12",
+"last_exit_date": "2025-04-07",
+"entry_cost": 4316000.0,
+"net_pnl": -104823.98963042459,
+"net_return": -0.024287300655798098,
+"bench_return": -0.0816594930655189,
+"excess_return": 0.0573721924097208,
+"excess_krw": 247618.38244035497,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.0573721924097208,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-04-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "041510",
+"entry_date": "2025-04-07",
+"last_exit_date": "2025-04-09",
+"entry_cost": 4305400.0,
+"net_pnl": -224589.15734430988,
+"net_return": -0.05216452764999997,
+"bench_return": -0.01712016664496807,
+"excess_return": -0.0350443610050319,
+"excess_krw": -150879.99187106435,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03287983335503193,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-04-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "145020",
+"entry_date": "2025-05-09",
+"last_exit_date": "2025-05-09",
+"entry_cost": 4009500.0,
+"net_pnl": -209153.67361267502,
+"net_return": -0.05216452765000001,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000001,
+"excess_krw": -209153.67361267502,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-05-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "015760",
+"entry_date": "2025-05-13",
+"last_exit_date": "2025-05-13",
+"entry_cost": 4260600.0,
+"net_pnl": -222252.1865055898,
+"net_return": -0.05216452764999995,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999995,
+"excess_krw": -222252.1865055898,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-05-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "041510",
+"entry_date": "2025-05-26",
+"last_exit_date": "2025-05-28",
+"entry_cost": 266600.0,
+"net_pnl": -13907.063071489987,
+"net_return": -0.05216452764999995,
+"bench_return": 0.01677185095530387,
+"excess_return": -0.06893637860530383,
+"excess_krw": -18378.438536174,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06677185095530387,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-05-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "011200",
+"entry_date": "2025-05-15",
+"last_exit_date": "2025-05-30",
+"entry_cost": 4348500.0,
+"net_pnl": -208604.8764101057,
+"net_return": -0.04797168596300005,
+"bench_return": 0.03155030681949755,
+"excess_return": -0.07952199278249761,
+"excess_krw": -345801.38561469084,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07952199278249761,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-05-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2025-05-08",
+"last_exit_date": "2025-06-02",
+"entry_cost": 4324300.0,
+"net_pnl": -187890.5262690501,
+"net_return": -0.04344992860556624,
+"bench_return": 0.05415322699967451,
+"excess_return": -0.09760315560524074,
+"excess_krw": -422065.3257837426,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.09760315560524074,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-06-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2025-05-30",
+"last_exit_date": "2025-06-02",
+"entry_cost": 259500.0,
+"net_pnl": -13536.694925175007,
+"net_return": -0.05216452765000003,
+"bench_return": -0.00042089904035014225,
+"excess_return": -0.051743628609649886,
+"excess_krw": -13427.471624204145,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04957910095964986,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-06-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "015760",
+"entry_date": "2025-05-20",
+"last_exit_date": "2025-06-10",
+"entry_cost": 230800.0,
+"net_pnl": -2349.4621032116147,
+"net_return": -0.010179645161228833,
+"bench_return": 0.10996943676320758,
+"excess_return": -0.12014908192443642,
+"excess_krw": -27730.408108159925,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.12014908192443642,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-06-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "011200",
+"entry_date": "2025-06-16",
+"last_exit_date": "2025-06-16",
+"entry_cost": 225000.0,
+"net_pnl": -11737.018721250002,
+"net_return": -0.05216452765000001,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000001,
+"excess_krw": -11737.018721250002,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-06-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "377300",
+"entry_date": "2025-06-12",
+"last_exit_date": "2025-06-17",
+"entry_cost": 634700.0,
+"net_pnl": -33108.82569945497,
+"net_return": -0.052164527649999945,
+"bench_return": 0.012341207213267369,
+"excess_return": -0.06450573486326731,
+"excess_krw": -40941.78991771577,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06234120721326737,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-06-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2025-06-19",
+"last_exit_date": "2025-06-23",
+"entry_cost": 1188000.0,
+"net_pnl": -61971.45884819993,
+"net_return": -0.052164527649999945,
+"bench_return": 0.012954482200237871,
+"excess_return": -0.06511900985023782,
+"excess_krw": -77361.38370208252,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06295448220023787,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-06-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "015760",
+"entry_date": "2025-06-25",
+"last_exit_date": "2025-06-25",
+"entry_cost": 1920000.0,
+"net_pnl": -100155.89308800003,
+"net_return": -0.052164527650000014,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000014,
+"excess_krw": -100155.89308800003,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-06-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "015760",
+"entry_date": "2025-06-27",
+"last_exit_date": "2025-07-01",
+"entry_cost": 1512400.0,
+"net_pnl": -78893.63161786008,
+"net_return": -0.052164527650000056,
+"bench_return": 0.009300276560855636,
+"excess_return": -0.06146480421085569,
+"excess_krw": -92959.36988849814,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05930027656085564,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-07-01"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009540",
+"entry_date": "2025-06-09",
+"last_exit_date": "2025-07-02",
+"entry_cost": 4557000.0,
+"net_pnl": 354942.8806420557,
+"net_return": 0.07788959417205524,
+"bench_return": 0.08364547612767081,
+"excess_return": -0.005755881955615577,
+"excess_krw": -26229.55407174019,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.005755881955615577,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-07-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2025-07-03",
+"last_exit_date": "2025-07-07",
+"entry_cost": 4777000.0,
+"net_pnl": -265305.54057300003,
+"net_return": -0.05553810771886122,
+"bench_return": -0.017738146603384575,
+"excess_return": -0.03779996111547664,
+"excess_krw": -180570.41424863192,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03226185339661543,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-07-07"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "011200",
+"entry_date": "2025-07-16",
+"last_exit_date": "2025-07-21",
+"entry_cost": 230850.0,
+"net_pnl": -12042.18120800249,
+"net_return": -0.05216452764999996,
+"bench_return": 0.008993184852104319,
+"excess_return": -0.06115771250210428,
+"excess_krw": -14118.257931110773,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05899318485210432,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-07-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2025-06-30",
+"last_exit_date": "2025-07-25",
+"entry_cost": 277500.0,
+"net_pnl": 1365.5214609999941,
+"net_return": 0.004920798057657636,
+"bench_return": 0.03861773789547929,
+"excess_return": -0.033696939837821654,
+"excess_krw": -9350.900804995508,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.033696939837821654,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-07-25"
+],
+"reasons": [
+"채널이탈 (10일 저가 56,200)"
+]
+},
+{
+"symbol": "024110",
+"entry_date": "2025-07-09",
+"last_exit_date": "2025-07-25",
+"entry_cost": 5120400.0,
+"net_pnl": -116824.1047452598,
+"net_return": -0.022815425502941137,
+"bench_return": 0.020306266274875195,
+"excess_return": -0.04312169177781633,
+"excess_krw": -220800.31057913075,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04312169177781633,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-07-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086790",
+"entry_date": "2025-07-04",
+"last_exit_date": "2025-07-28",
+"entry_cost": 789300.0,
+"net_pnl": 15363.527566247154,
+"net_return": 0.01946475049568878,
+"bench_return": 0.04929852862100992,
+"excess_return": -0.029833778125321137,
+"excess_krw": -23547.801074315976,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.029833778125321137,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-07-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2025-07-31",
+"last_exit_date": "2025-08-04",
+"entry_cost": 1352700.0,
+"net_pnl": -70562.95655215498,
+"net_return": -0.05216452764999999,
+"bench_return": -0.029548381162619597,
+"excess_return": -0.02261614648738039,
+"excess_krw": -30592.86135347945,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.020451618837380406,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-08-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035900",
+"entry_date": "2025-08-12",
+"last_exit_date": "2025-08-13",
+"entry_cost": 328400.0,
+"net_pnl": -17130.83088026002,
+"net_return": -0.052164527650000056,
+"bench_return": 0.01028331584470088,
+"excess_return": -0.062447843494700936,
+"excess_krw": -20507.871803659786,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06028331584470088,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-08-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2025-05-08",
+"last_exit_date": "2025-08-19",
+"entry_cost": 3760650.0,
+"net_pnl": 4556020.376844269,
+"net_return": 1.2114981125189181,
+"bench_return": 0.2526262835498476,
+"excess_return": 0.9588718289690705,
+"excess_krw": 3605981.343612535,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.9588718289690705,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-08-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "329180",
+"entry_date": "2025-07-29",
+"last_exit_date": "2025-08-19",
+"entry_cost": 4730000.0,
+"net_pnl": -234773.76080323002,
+"net_return": -0.049635044567279074,
+"bench_return": -0.02063763823978526,
+"excess_return": -0.028997406327493813,
+"excess_krw": -137157.73192904575,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.028997406327493813,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-08-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "030200",
+"entry_date": "2025-08-21",
+"last_exit_date": "2025-08-28",
+"entry_cost": 4901600.0,
+"net_pnl": -173927.41729393398,
+"net_return": -0.0354838047359911,
+"bench_return": 0.017827086741104337,
+"excess_return": -0.05331089147709544,
+"excess_krw": -261308.665664131,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05331089147709544,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-08-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "316140",
+"entry_date": "2025-06-05",
+"last_exit_date": "2025-09-08",
+"entry_cost": 4571500.0,
+"net_pnl": 774229.5212753307,
+"net_return": 0.16936006152801722,
+"bench_return": 0.15958674359318392,
+"excess_return": 0.009773317934833298,
+"excess_krw": 44678.72293909034,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.009773317934833298,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-09-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2025-09-01",
+"last_exit_date": "2025-09-15",
+"entry_cost": 4800000.0,
+"net_pnl": -168065.50119750015,
+"net_return": -0.03501364608281253,
+"bench_return": 0.09856609516562442,
+"excess_return": -0.13357974124843697,
+"excess_krw": -641182.7579924974,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.13357974124843697,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-09-15"
+],
+"reasons": [
+"채널이탈 (10일 저가 311,000)"
+]
+},
+{
+"symbol": "034730",
+"entry_date": "2025-09-10",
+"last_exit_date": "2025-09-24",
+"entry_cost": 4500000.0,
+"net_pnl": -234740.37442500016,
+"net_return": -0.052164527650000035,
+"bench_return": 0.06674716576105189,
+"excess_return": -0.11891169341105193,
+"excess_krw": -535102.6203497336,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.11674716576105189,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-09-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "032830",
+"entry_date": "2025-08-22",
+"last_exit_date": "2025-09-25",
+"entry_cost": 3220000.0,
+"net_pnl": 250853.8008617195,
+"net_return": 0.07790490709991289,
+"bench_return": 0.12197587755389927,
+"excess_return": -0.04407097045398638,
+"excess_krw": -141908.52486183614,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04407097045398638,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-09-25"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "033780",
+"entry_date": "2025-09-29",
+"last_exit_date": "2025-09-30",
+"entry_cost": 2794000.0,
+"net_pnl": -128085.40058199986,
+"net_return": -0.04584302096707225,
+"bench_return": -0.002685557200253763,
+"excess_return": -0.043157463766818484,
+"excess_krw": -120581.95376449084,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.043157463766818484,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-09-30"
+],
+"reasons": [
+"채널이탈 (10일 저가 134,100)"
+]
+},
+{
+"symbol": "329180",
+"entry_date": "2025-10-02",
+"last_exit_date": "2025-10-14",
+"entry_cost": 2645000.0,
+"net_pnl": -137975.17563424987,
+"net_return": -0.05216452764999995,
+"bench_return": 0.005725463028994016,
+"excess_return": -0.05788999067899397,
+"excess_krw": -153119.02534593904,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05572546302899402,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-10-14"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2025-10-10",
+"last_exit_date": "2025-10-14",
+"entry_cost": 357000.0,
+"net_pnl": -14624.772327475524,
+"net_return": -0.04096574881645805,
+"bench_return": -0.019175360158966703,
+"excess_return": -0.021790388657491347,
+"excess_krw": -7779.168750724411,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.021790388657491347,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-10-14"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "035420",
+"entry_date": "2025-09-26",
+"last_exit_date": "2025-10-22",
+"entry_cost": 4778500.0,
+"net_pnl": -34561.11128274353,
+"net_return": -0.0072326276619741605,
+"bench_return": 0.1568766370389454,
+"excess_return": -0.16410926470091955,
+"excess_krw": -784196.1213733441,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.16410926470091955,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-10-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "336260",
+"entry_date": "2025-10-29",
+"last_exit_date": "2025-10-29",
+"entry_cost": 242700.0,
+"net_pnl": -12660.33086065501,
+"net_return": -0.05216452765000004,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000004,
+"excess_krw": -12660.33086065501,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-10-29"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005380",
+"entry_date": "2025-11-03",
+"last_exit_date": "2025-11-04",
+"entry_cost": 297500.0,
+"net_pnl": -15518.946975875002,
+"net_return": -0.05216452765000001,
+"bench_return": -0.027554554318953595,
+"excess_return": -0.024609973331046413,
+"excess_krw": -7321.467065986308,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.022445445681046408,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005935",
+"entry_date": "2025-09-23",
+"last_exit_date": "2025-11-05",
+"entry_cost": 205200.0,
+"net_pnl": 22356.950944814078,
+"net_return": 0.10895200265503936,
+"bench_return": 0.17519224339685713,
+"excess_return": -0.06624024074181777,
+"excess_krw": -13592.497400221004,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06624024074181777,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "015760",
+"entry_date": "2025-10-16",
+"last_exit_date": "2025-11-05",
+"entry_cost": 3000000.0,
+"net_pnl": 128509.16457037139,
+"net_return": 0.042836388190123795,
+"bench_return": 0.08022972168334519,
+"excess_return": -0.037393333493221395,
+"excess_krw": -112180.00047966419,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.037393333493221395,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2025-11-06",
+"last_exit_date": "2025-11-07",
+"entry_cost": 3010000.0,
+"net_pnl": -157015.22822649986,
+"net_return": -0.05216452764999995,
+"bench_return": -0.018072821800562355,
+"excess_return": -0.0340917058494376,
+"excess_krw": -102616.03460680717,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03192717819943765,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2025-08-06",
+"last_exit_date": "2025-11-18",
+"entry_cost": 1228800.0,
+"net_pnl": 401909.2637925721,
+"net_return": 0.3270745961853614,
+"bench_return": 0.295485380116959,
+"excess_return": 0.03158921606840237,
+"excess_krw": 38816.828704852844,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.03158921606840237,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "105560",
+"entry_date": "2025-11-11",
+"last_exit_date": "2025-11-18",
+"entry_cost": 3250000.0,
+"net_pnl": -169534.7148624999,
+"net_return": -0.05216452764999997,
+"bench_return": -0.04115375958725043,
+"excess_return": -0.011010768062749546,
+"excess_krw": -35784.996203936025,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.008846240412749576,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2025-09-17",
+"last_exit_date": "2025-11-19",
+"entry_cost": 4904200.0,
+"net_pnl": 997587.5919699671,
+"net_return": 0.2034149488132554,
+"bench_return": 0.18590158278345625,
+"excess_return": 0.017513366029799138,
+"excess_krw": 85889.04968334094,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.017513366029799138,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2025-09-08",
+"last_exit_date": "2025-11-21",
+"entry_cost": 266570.0,
+"net_pnl": 164721.61942185997,
+"net_return": 0.61793007248325,
+"bench_return": 0.24546422290104597,
+"excess_return": 0.3724658495822041,
+"excess_krw": 99288.22152312814,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.3724658495822041,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-21"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "051910",
+"entry_date": "2025-10-24",
+"last_exit_date": "2025-11-21",
+"entry_cost": 4632000.0,
+"net_pnl": -146728.70519250014,
+"net_return": -0.031677181604598474,
+"bench_return": -0.016231926444513545,
+"excess_return": -0.01544525516008493,
+"excess_krw": -71542.4219015134,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.01544525516008493,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010950",
+"entry_date": "2025-11-20",
+"last_exit_date": "2025-11-24",
+"entry_cost": 4989600.0,
+"net_pnl": -260280.12716244004,
+"net_return": -0.05216452765000001,
+"bench_return": -0.04222443748219884,
+"excess_return": -0.009940090167801167,
+"excess_krw": -49597.07390126071,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.007775562517801163,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-24"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "028260",
+"entry_date": "2025-11-27",
+"last_exit_date": "2025-11-28",
+"entry_cost": 4740000.0,
+"net_pnl": -247259.86106100018,
+"net_return": -0.052164527650000035,
+"bench_return": -0.014611432241490085,
+"excess_return": -0.03755309540850995,
+"excess_krw": -178001.67223633715,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03538856775850992,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-11-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2025-12-02",
+"last_exit_date": "2025-12-04",
+"entry_cost": 4688000.0,
+"net_pnl": -244547.30562320002,
+"net_return": -0.05216452765000001,
+"bench_return": 0.008373333333333344,
+"excess_return": -0.06053786098333335,
+"excess_krw": -283801.4922898667,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.058373333333333347,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "196170",
+"entry_date": "2025-10-28",
+"last_exit_date": "2025-12-05",
+"entry_cost": 372414.0,
+"net_pnl": 18726.02043388735,
+"net_return": 0.05028280471165785,
+"bench_return": 0.038650902034068846,
+"excess_return": 0.011631902677589005,
+"excess_krw": 4331.883403771633,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.011631902677589005,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-05"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005380",
+"entry_date": "2025-12-08",
+"last_exit_date": "2025-12-09",
+"entry_cost": 4815000.0,
+"net_pnl": -251172.20063475007,
+"net_return": -0.052164527650000014,
+"bench_return": -0.005360282695163754,
+"excess_return": -0.04680424495483626,
+"excess_krw": -225362.4394575366,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.04463971730483625,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2025-12-03",
+"last_exit_date": "2025-12-10",
+"entry_cost": 243300.0,
+"net_pnl": -12691.629577245,
+"net_return": -0.05216452765,
+"bench_return": 0.024162065205922678,
+"excess_return": -0.07632659285592268,
+"excess_krw": -18570.260041845988,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.07416206520592268,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "015760",
+"entry_date": "2025-11-26",
+"last_exit_date": "2025-12-11",
+"entry_cost": 4897400.0,
+"net_pnl": -250274.05264551484,
+"net_return": -0.05110345339272161,
+"bench_return": 0.037800934243622075,
+"excess_return": -0.08890438763634369,
+"excess_krw": -435400.3480102296,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.08780093424362208,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2025-12-15",
+"last_exit_date": "2025-12-16",
+"entry_cost": 426411.0,
+"net_pnl": -9392.802673746033,
+"net_return": -0.02202758060590846,
+"bench_return": -0.021756985827377062,
+"excess_return": -0.00027059477853139807,
+"excess_krw": -115.38459010835322,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.00027059477853139807,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2025-12-16",
+"last_exit_date": "2025-12-16",
+"entry_cost": 4580000.0,
+"net_pnl": -238913.53663699955,
+"net_return": -0.0521645276499999,
+"bench_return": 0.0,
+"excess_return": -0.0521645276499999,
+"excess_krw": -238913.53663699955,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2025-11-26",
+"last_exit_date": "2025-12-18",
+"entry_cost": 3750000.0,
+"net_pnl": 6451.589595000092,
+"net_return": 0.0017204238920000246,
+"bench_return": 0.013205174272368003,
+"excess_return": -0.011484750380367979,
+"excess_krw": -43067.81392637992,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.011484750380367979,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-18"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2025-12-15",
+"last_exit_date": "2025-12-18",
+"entry_cost": 4784000.0,
+"net_pnl": -249555.10027760002,
+"net_return": -0.05216452765000001,
+"bench_return": -0.01446970623700261,
+"excess_return": -0.0376948214129974,
+"excess_krw": -180332.02563977952,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03553029376299739,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2025-12-18"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "032830",
+"entry_date": "2025-12-23",
+"last_exit_date": "2026-01-02",
+"entry_cost": 4320000.0,
+"net_pnl": -225350.75944800014,
+"net_return": -0.052164527650000035,
+"bench_return": 0.06938235091821987,
+"excess_return": -0.12154687856821991,
+"excess_krw": -525082.51541471,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.11938235091821987,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-01-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005380",
+"entry_date": "2026-01-12",
+"last_exit_date": "2026-01-12",
+"entry_cost": 383000.0,
+"net_pnl": -19979.014089950015,
+"net_return": -0.052164527650000035,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000035,
+"excess_krw": -19979.014089950015,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-01-12"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2026-01-06",
+"last_exit_date": "2026-01-19",
+"entry_cost": 4642500.0,
+"net_pnl": -257516.06276249982,
+"net_return": -0.05546926499999996,
+"bench_return": 0.0841373223361841,
+"excess_return": -0.13960658733618406,
+"excess_krw": -648123.5817082345,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.13413732233618408,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-01-19"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "000270",
+"entry_date": "2026-01-22",
+"last_exit_date": "2026-01-22",
+"entry_cost": 691600.0,
+"net_pnl": -36076.98732273995,
+"net_return": -0.05216452764999993,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999993,
+"excess_krw": -36076.98732273995,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-01-22"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "015760",
+"entry_date": "2026-01-21",
+"last_exit_date": "2026-01-23",
+"entry_cost": 4505700.0,
+"net_pnl": -235037.71223260483,
+"net_return": -0.05216452764999996,
+"bench_return": 0.017706197871324658,
+"excess_return": -0.06987072552132462,
+"excess_krw": -314816.52798143233,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06770619787132466,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-01-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "032830",
+"entry_date": "2026-02-23",
+"last_exit_date": "2026-02-23",
+"entry_cost": 246000.0,
+"net_pnl": -12832.473801900005,
+"net_return": -0.05216452765000002,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000002,
+"excess_krw": -12832.473801900005,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-02-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "068760",
+"entry_date": "2026-01-27",
+"last_exit_date": "2026-03-03",
+"entry_cost": 4609600.0,
+"net_pnl": 38363.88830790591,
+"net_return": 0.00832260680056966,
+"bench_return": 0.16077612342518366,
+"excess_return": -0.152453516624614,
+"excess_krw": -702749.7302328207,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.152453516624614,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-03"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2025-12-22",
+"last_exit_date": "2026-03-04",
+"entry_cost": 4404000.0,
+"net_pnl": 452139.5714755443,
+"net_return": 0.10266566109798916,
+"bench_return": 0.30047596054356074,
+"excess_return": -0.19781029944557157,
+"excess_krw": -871156.5587582972,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.19781029944557157,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "357780",
+"entry_date": "2026-01-28",
+"last_exit_date": "2026-03-04",
+"entry_cost": 366000.0,
+"net_pnl": -831.2057640000193,
+"net_return": -0.0022710540000000527,
+"bench_return": -0.0025527412208187217,
+"excess_return": 0.000281687220818669,
+"excess_krw": 103.0975228196329,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.000281687220818669,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-04"
+],
+"reasons": [
+"채널이탈 (20일 저가 382,500)"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2026-02-19",
+"last_exit_date": "2026-03-04",
+"entry_cost": 201000.0,
+"net_pnl": -18817.28015719999,
+"net_return": -0.09361830923980095,
+"bench_return": -0.10061062875679805,
+"excess_return": 0.006992319516997095,
+"excess_krw": 1405.4562229164148,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.050610628756798046,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-04"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "006400",
+"entry_date": "2026-02-25",
+"last_exit_date": "2026-03-04",
+"entry_cost": 422000.0,
+"net_pnl": -32890.20792399999,
+"net_return": -0.07793888133649286,
+"bench_return": -0.16492813323588684,
+"excess_return": 0.08698925189939398,
+"excess_krw": 36709.464301544256,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.11492813323588684,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-04"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "003550",
+"entry_date": "2026-02-27",
+"last_exit_date": "2026-03-04",
+"entry_cost": 206600.0,
+"net_pnl": -10777.191412490007,
+"net_return": -0.052164527650000035,
+"bench_return": -0.19358391701866007,
+"excess_return": 0.14141938936866003,
+"excess_krw": 29217.245843565164,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.14358391701866008,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010950",
+"entry_date": "2026-03-04",
+"last_exit_date": "2026-03-04",
+"entry_cost": 3528000.0,
+"net_pnl": -184036.45354920003,
+"net_return": -0.05216452765000001,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000001,
+"excess_krw": -184036.45354920003,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-04"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010950",
+"entry_date": "2026-03-06",
+"last_exit_date": "2026-03-06",
+"entry_cost": 4959500.0,
+"net_pnl": -258709.97488017523,
+"net_return": -0.05216452765000005,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000005,
+"excess_krw": -258709.97488017523,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2026-03-10",
+"last_exit_date": "2026-03-11",
+"entry_cost": 4965000.0,
+"net_pnl": -258996.87978224986,
+"net_return": -0.05216452764999997,
+"bench_return": 0.011157380989959664,
+"excess_return": -0.06332190863995964,
+"excess_krw": -314393.2763973996,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.06115738098995967,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "336260",
+"entry_date": "2026-03-11",
+"last_exit_date": "2026-03-11",
+"entry_cost": 4282600.0,
+"net_pnl": -223399.8061138902,
+"net_return": -0.05216452765000005,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000005,
+"excess_krw": -223399.8061138902,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-11"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "336260",
+"entry_date": "2026-03-13",
+"last_exit_date": "2026-03-13",
+"entry_cost": 4875600.0,
+"net_pnl": -254333.3710103398,
+"net_return": -0.05216452764999996,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999996,
+"excess_krw": -254333.3710103398,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2026-03-17",
+"last_exit_date": "2026-03-17",
+"entry_cost": 4980000.0,
+"net_pnl": -259779.34769700022,
+"net_return": -0.05216452765000004,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000004,
+"excess_krw": -259779.34769700022,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-17"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005380",
+"entry_date": "2026-01-14",
+"last_exit_date": "2026-03-23",
+"entry_cost": 406500.0,
+"net_pnl": 82906.833106257,
+"net_return": 0.20395284896988194,
+"bench_return": 0.1782363702890597,
+"excess_return": 0.025716478680822247,
+"excess_krw": 10453.748583754234,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.025716478680822247,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034020",
+"entry_date": "2026-03-20",
+"last_exit_date": "2026-03-23",
+"entry_cost": 4300000.0,
+"net_pnl": -224307.46889499982,
+"net_return": -0.05216452764999996,
+"bench_return": -0.06503838426071096,
+"excess_return": 0.012873856610710999,
+"excess_krw": 55357.5834260573,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.015038384260710955,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2026-03-19",
+"last_exit_date": "2026-03-26",
+"entry_cost": 4926600.0,
+"net_pnl": -256993.7619204897,
+"net_return": -0.05216452764999994,
+"bench_return": -0.059367458696862774,
+"excess_return": 0.007202931046862836,
+"excess_krw": 35485.96009547447,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.009367458696862771,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2026-03-26",
+"last_exit_date": "2026-03-26",
+"entry_cost": 4118400.0,
+"net_pnl": -214834.39067375983,
+"net_return": -0.05216452764999996,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999996,
+"excess_krw": -214834.39067375983,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-03-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "263750",
+"entry_date": "2026-03-30",
+"last_exit_date": "2026-04-06",
+"entry_cost": 4657400.0,
+"net_pnl": -242951.0710771101,
+"net_return": -0.05216452765000002,
+"bench_return": 0.039015529459922815,
+"excess_return": -0.09118005710992283,
+"excess_krw": -424661.9979837546,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.08901552945992282,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-04-06"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2026-04-08",
+"last_exit_date": "2026-04-08",
+"entry_cost": 4763400.0,
+"net_pnl": -248480.51100801,
+"net_return": -0.05216452765,
+"bench_return": 0.0,
+"excess_return": -0.05216452765,
+"excess_krw": -248480.51100801,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-04-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "017670",
+"entry_date": "2026-04-10",
+"last_exit_date": "2026-04-10",
+"entry_cost": 4750000.0,
+"net_pnl": -247781.50633750012,
+"net_return": -0.05216452765000003,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000003,
+"excess_krw": -247781.50633750012,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-04-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "039030",
+"entry_date": "2026-04-14",
+"last_exit_date": "2026-04-16",
+"entry_cost": 4374000.0,
+"net_pnl": -228167.6439410999,
+"net_return": -0.05216452764999998,
+"bench_return": 0.04732384333715456,
+"excess_return": -0.09948837098715455,
+"excess_krw": -435162.13469781395,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.09732384333715456,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-04-16"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "336260",
+"entry_date": "2026-04-15",
+"last_exit_date": "2026-04-21",
+"entry_cost": 620900.0,
+"net_pnl": -32388.95521788494,
+"net_return": -0.0521645276499999,
+"bench_return": 0.04592208017899613,
+"excess_return": -0.09808660782899603,
+"excess_krw": -60901.974801023636,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.09592208017899613,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-04-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2026-04-27",
+"last_exit_date": "2026-04-30",
+"entry_cost": 219200.0,
+"net_pnl": -11434.464460879997,
+"net_return": -0.05216452764999999,
+"bench_return": 0.0010843808988312276,
+"excess_return": -0.053248908548831214,
+"excess_krw": -11672.160753903801,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05108438089883123,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-04-30"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "096770",
+"entry_date": "2026-04-30",
+"last_exit_date": "2026-05-07",
+"entry_cost": 293000.0,
+"net_pnl": -15284.206601450001,
+"net_return": -0.05216452765000001,
+"bench_return": 0.1572955949610848,
+"excess_return": -0.20946012261108482,
+"excess_krw": -61371.81592504785,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.2072955949610848,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-05-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "066570",
+"entry_date": "2026-05-07",
+"last_exit_date": "2026-05-07",
+"entry_cost": 465000.0,
+"net_pnl": -24256.505357250007,
+"net_return": -0.052164527650000014,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000014,
+"excess_krw": -24256.505357250007,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-05-07"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003670",
+"entry_date": "2026-05-06",
+"last_exit_date": "2026-05-12",
+"entry_cost": 825000.0,
+"net_pnl": -43035.73531125,
+"net_return": -0.05216452765,
+"bench_return": 0.051467596114718406,
+"excess_return": -0.1036321237647184,
+"excess_krw": -85496.5021058927,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.10146759611471841,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-05-12"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003550",
+"entry_date": "2026-05-11",
+"last_exit_date": "2026-05-13",
+"entry_cost": 879200.0,
+"net_pnl": -45863.05270987994,
+"net_return": -0.05216452764999994,
+"bench_return": 0.006975978940440886,
+"excess_return": -0.059140506590440824,
+"excess_krw": -51996.33339431557,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05697597894044089,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-05-13"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "012330",
+"entry_date": "2026-05-15",
+"last_exit_date": "2026-05-15",
+"entry_cost": 1342000.0,
+"net_pnl": -70004.79610630011,
+"net_return": -0.052164527650000084,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000084,
+"excess_krw": -70004.79610630011,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-05-15"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003550",
+"entry_date": "2026-05-19",
+"last_exit_date": "2026-05-19",
+"entry_cost": 779800.0,
+"net_pnl": -40677.898661470055,
+"net_return": -0.05216452765000007,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000007,
+"excess_krw": -40677.898661470055,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-05-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003550",
+"entry_date": "2026-05-22",
+"last_exit_date": "2026-05-28",
+"entry_cost": 357900.0,
+"net_pnl": -18669.684445935003,
+"net_return": -0.05216452765000001,
+"bench_return": 0.0538252830985686,
+"excess_return": -0.10598981074856861,
+"excess_krw": -37933.7532669127,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.1038252830985686,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-05-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "066570",
+"entry_date": "2026-06-01",
+"last_exit_date": "2026-06-02",
+"entry_cost": 375000.0,
+"net_pnl": -19561.697868749994,
+"net_return": -0.05216452764999999,
+"bench_return": 0.0012756005952803129,
+"excess_return": -0.0534401282452803,
+"excess_krw": -20040.048091980112,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.051275600595280316,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "017670",
+"entry_date": "2026-06-02",
+"last_exit_date": "2026-06-02",
+"entry_cost": 1340000.0,
+"net_pnl": -69900.46705100003,
+"net_return": -0.05216452765000002,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000002,
+"excess_krw": -69900.46705100003,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-02"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "033780",
+"entry_date": "2026-04-01",
+"last_exit_date": "2026-06-08",
+"entry_cost": 4007500.0,
+"net_pnl": 368203.17753103026,
+"net_return": 0.09187852215371935,
+"bench_return": 0.46150831077522314,
+"excess_return": -0.3696297886215038,
+"excess_krw": -1481291.3779006766,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.3696297886215038,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "020150",
+"entry_date": "2026-04-20",
+"last_exit_date": "2026-06-08",
+"entry_cost": 4309200.0,
+"net_pnl": -466461.39021525026,
+"net_return": -0.10824779314379705,
+"bench_return": 0.2707976100454772,
+"excess_return": -0.37904540318927427,
+"excess_krw": -1633382.4514232206,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.3207976100454772,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-08"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "105560",
+"entry_date": "2026-06-05",
+"last_exit_date": "2026-06-08",
+"entry_cost": 514500.0,
+"net_pnl": -26838.649475925013,
+"net_return": -0.05216452765000002,
+"bench_return": -0.08753804505758378,
+"excess_return": 0.03537351740758376,
+"excess_krw": 18199.67470620184,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.03753804505758378,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "336260",
+"entry_date": "2026-04-23",
+"last_exit_date": "2026-06-09",
+"entry_cost": 1149600.0,
+"net_pnl": 560870.121813132,
+"net_return": 0.48788284778456154,
+"bench_return": 0.32893996295651995,
+"excess_return": 0.1589428848280416,
+"excess_krw": 182720.74039831664,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.1589428848280416,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2026-05-21",
+"last_exit_date": "2026-06-10",
+"entry_cost": 768796.0,
+"net_pnl": 4604.527958834236,
+"net_return": 0.0059892714827265445,
+"bench_return": 0.0059766146630622075,
+"excess_return": 1.265681966433705e-05,
+"excess_krw": 9.73051233066326,
+"stop_pct": 5.0,
+"clipped_excess_return": 1.265681966433705e-05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "009150",
+"entry_date": "2026-06-10",
+"last_exit_date": "2026-06-10",
+"entry_cost": 3828000.0,
+"net_pnl": -199685.81184420007,
+"net_return": -0.05216452765000002,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000002,
+"excess_krw": -199685.81184420007,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2026-06-10",
+"last_exit_date": "2026-06-10",
+"entry_cost": 1621100.0,
+"net_pnl": -84563.91577341505,
+"net_return": -0.05216452765000003,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000003,
+"excess_krw": -84563.91577341505,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-10"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "403870",
+"entry_date": "2026-06-15",
+"last_exit_date": "2026-06-15",
+"entry_cost": 5248700.0,
+"net_pnl": -273795.9562765547,
+"net_return": -0.05216452764999994,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999994,
+"excess_krw": -273795.9562765547,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-15"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "033780",
+"entry_date": "2026-06-17",
+"last_exit_date": "2026-06-19",
+"entry_cost": 5030100.0,
+"net_pnl": -262392.79053226486,
+"net_return": -0.05216452764999997,
+"bench_return": 0.0341753133618774,
+"excess_return": -0.08633984101187737,
+"excess_krw": -434298.0342738444,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0841753133618774,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005930",
+"entry_date": "2026-06-19",
+"last_exit_date": "2026-06-19",
+"entry_cost": 372500.0,
+"net_pnl": -19431.286549625012,
+"net_return": -0.052164527650000035,
+"bench_return": 0.0,
+"excess_return": -0.052164527650000035,
+"excess_krw": -19431.286549625012,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "067310",
+"entry_date": "2026-06-23",
+"last_exit_date": "2026-06-23",
+"entry_cost": 5142900.0,
+"net_pnl": -268276.94925118476,
+"net_return": -0.05216452764999995,
+"bench_return": 0.0,
+"excess_return": -0.05216452764999995,
+"excess_krw": -268276.94925118476,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "000660",
+"entry_date": "2026-06-25",
+"last_exit_date": "2026-06-26",
+"entry_cost": 2865000.0,
+"net_pnl": -149451.37171725003,
+"net_return": -0.052164527650000014,
+"bench_return": -0.057944027979139334,
+"excess_return": 0.00577950032913932,
+"excess_krw": 16558.268442984147,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.007944027979139331,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034730",
+"entry_date": "2026-06-26",
+"last_exit_date": "2026-06-26",
+"entry_cost": 1736000.0,
+"net_pnl": -90557.62000040009,
+"net_return": -0.05216452765000005,
+"bench_return": 0.0,
+"excess_return": -0.05216452765000005,
+"excess_krw": -90557.62000040009,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.05,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-06-26"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "034730",
+"entry_date": "2026-06-30",
+"last_exit_date": "2026-07-01",
+"entry_cost": 3900000.0,
+"net_pnl": -203441.65783500008,
+"net_return": -0.05216452765000002,
+"bench_return": -0.029262261299629055,
+"excess_return": -0.022902266350370966,
+"excess_krw": -89318.83876644676,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.020737738700370947,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-01"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003490",
+"entry_date": "2026-07-03",
+"last_exit_date": "2026-07-08",
+"entry_cost": 4147200.0,
+"net_pnl": -216336.7290700802,
+"net_return": -0.05216452765000005,
+"bench_return": -0.10796506202866629,
+"excess_return": 0.05580053437866624,
+"excess_krw": 231415.97617520462,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.05796506202866629,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-08"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "005935",
+"entry_date": "2025-12-18",
+"last_exit_date": "2026-07-09",
+"entry_cost": 4719600.0,
+"net_pnl": 5678104.465160937,
+"net_return": 1.2030901909401086,
+"bench_return": 1.0828619558471497,
+"excess_return": 0.12022823509295888,
+"excess_krw": 567429.1783447294,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.12022823509295888,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2026-06-12",
+"last_exit_date": "2026-07-09",
+"entry_cost": 5177496.0,
+"net_pnl": -25083.235409028217,
+"net_return": -0.0048446653380375794,
+"bench_return": -0.08950468955894897,
+"excess_return": 0.08466002422091139,
+"excess_krw": 438326.9367636718,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.08466002422091139,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-09"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "360750",
+"entry_date": "2026-07-13",
+"last_exit_date": "2026-07-14",
+"entry_cost": 4793301.0,
+"net_pnl": -61524.03104269299,
+"net_return": -0.012835419900125818,
+"bench_return": 0.008268800471450621,
+"excess_return": -0.02110422037157644,
+"excess_krw": -101158.88061129772,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.02110422037157644,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-14"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2026-07-06",
+"last_exit_date": "2026-07-20",
+"entry_cost": 429200.0,
+"net_pnl": -22389.015267379997,
+"net_return": -0.052164527649999994,
+"bench_return": -0.20004158228286728,
+"excess_return": 0.1478770546328673,
+"excess_krw": 63468.83184842664,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.1500415822828673,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "105560",
+"entry_date": "2026-07-13",
+"last_exit_date": "2026-07-20",
+"entry_cost": 3539700.0,
+"net_pnl": -184646.77852270493,
+"net_return": -0.05216452764999998,
+"bench_return": -0.04342501450262892,
+"excess_return": -0.008739513147371057,
+"excess_krw": -30935.254687749344,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.00657498549737108,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086790",
+"entry_date": "2026-07-14",
+"last_exit_date": "2026-07-21",
+"entry_cost": 4718000.0,
+"net_pnl": -246112.2414526998,
+"net_return": -0.05216452764999995,
+"bench_return": -0.014401958008748883,
+"excess_return": -0.03776256964125107,
+"excess_krw": -178163.80356742255,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03559804199125112,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-21"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "017670",
+"entry_date": "2026-07-24",
+"last_exit_date": "2026-07-28",
+"entry_cost": 4662400.0,
+"net_pnl": -343577.60530969995,
+"net_return": -0.07369114732963708,
+"bench_return": -0.10050776723723753,
+"excess_return": 0.026816619907600453,
+"excess_krw": 125029.80865719629,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.05050776723723753,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-28"
+],
+"reasons": [
+"손절(갭관통)"
+]
+},
+{
+"symbol": "086790",
+"entry_date": "2026-07-27",
+"last_exit_date": "2026-07-28",
+"entry_cost": 4637500.0,
+"net_pnl": -241912.99697687526,
+"net_return": -0.052164527650000056,
+"bench_return": -0.11190274664459177,
+"excess_return": 0.05973821899459171,
+"excess_krw": 277035.990587419,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.06190274664459176,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-07-28"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "033780",
+"entry_date": "2026-08-10",
+"last_exit_date": "2026-08-12",
+"entry_cost": 4105200.0,
+"net_pnl": -214145.81890877997,
+"net_return": -0.052164527649999994,
+"bench_return": 0.050730168422123745,
+"excess_return": -0.10289469607212373,
+"excess_krw": -422403.30631528236,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.10073016842212375,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-08-12"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2026-08-10",
+"last_exit_date": "2026-08-19",
+"entry_cost": 4544400.0,
+"net_pnl": -237056.4794526601,
+"net_return": -0.05216452765000002,
+"bench_return": 0.0355670889940467,
+"excess_return": -0.08773161664404672,
+"excess_krw": -398687.55867720593,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.0855670889940467,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-08-19"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "010950",
+"entry_date": "2026-08-19",
+"last_exit_date": "2026-08-20",
+"entry_cost": 4584000.0,
+"net_pnl": -239122.1947475997,
+"net_return": -0.05216452764999993,
+"bench_return": 0.06318789308176109,
+"excess_return": -0.11535242073176102,
+"excess_krw": -528775.4966343925,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.1131878930817611,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-08-20"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "086790",
+"entry_date": "2026-08-31",
+"last_exit_date": "2026-09-23",
+"entry_cost": 3975900.0,
+"net_pnl": -131524.94649566108,
+"net_return": -0.033080546919102866,
+"bench_return": 0.05138688844491934,
+"excess_return": -0.08446743536402221,
+"excess_krw": -335834.07626381586,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.08446743536402221,
+"bench_missing_reason": null,
+"forced_end": false,
+"exit_dates": [
+"2026-09-23"
+],
+"reasons": [
+"손절"
+]
+},
+{
+"symbol": "003490",
+"entry_date": "2026-08-27",
+"last_exit_date": "2026-09-23",
+"entry_cost": 4536000.0,
+"net_pnl": 555490.4902469995,
+"net_return": 0.1224626301249999,
+"bench_return": 0.03674348284235118,
+"excess_return": 0.08571914728264872,
+"excess_krw": 388822.05207409454,
+"stop_pct": 5.0,
+"clipped_excess_return": 0.08571914728264872,
+"bench_missing_reason": null,
+"forced_end": true,
+"exit_dates": [
+"2026-09-23"
+],
+"reasons": [
+"백테스트 종료 청산"
+]
+},
+{
+"symbol": "055550",
+"entry_date": "2026-08-28",
+"last_exit_date": "2026-09-23",
+"entry_cost": 4527600.0,
+"net_pnl": 86111.76700139965,
+"net_return": 0.019019296537105674,
+"bench_return": 0.05565403993282336,
+"excess_return": -0.03663474339571769,
+"excess_krw": -165867.4641984514,
+"stop_pct": 5.0,
+"clipped_excess_return": -0.03663474339571769,
+"bench_missing_reason": null,
+"forced_end": true,
+"exit_dates": [
+"2026-09-23"
+],
+"reasons": [
+"백테스트 종료 청산"
+]
+}
+]
