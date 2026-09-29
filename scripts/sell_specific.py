@@ -55,10 +55,11 @@ async def main():
     args = parser.parse_args()
     hold_or_exit("sell_specific")  # 봇·다른 주문 CLI 실행 중이면 exit 2 (KIS 호출 전)
 
-    targets = []
+    req = {}  # 같은 종목이 여러 번 오면 합쳐 1건 — 체결량 이중 차감 방지
     for s in args.orders:
         sym, q = s.split(":")
-        targets.append((sym.strip(), int(q)))
+        req[sym.strip()] = req.get(sym.strip(), 0) + int(q)
+    targets = list(req.items())
 
     token = KISTokenManager()
     broker = KISBroker(token_manager=token)
@@ -94,24 +95,31 @@ async def main():
     print("\n15초 대기...")
     await asyncio.sleep(15)
 
-    # 미체결 → 시장가 폴백
-    positions = await broker.get_positions()
+    # 자기 주문부터 취소(폴백 수량과 무관) → 잔고 재조회 — 조회 뒤 취소하면 그 사이 체결분만큼 넘겨 판다
+    cancelled = {}
+    for sym, _ in targets:
+        try:
+            cancelled[sym] = await broker.cancel_all_for_symbol(sym)
+        except Exception as e:
+            print(f"  {sym} 취소 오류: {e}")
+            cancelled[sym] = 0
+        print(f"  {sym} 자기 주문 취소 {cancelled[sym]}건")
+    await asyncio.sleep(1)
+
+    positions = await broker.get_positions()  # 실패면 {} → 현재 보유 0 → 폴백 0
     remaining = []
     for sym, qty in targets:
         pos = positions.get(sym)
         now = pos.quantity if pos else 0
         fb = fallback_qty(qty, before.get(sym), now)
-        if fb > 0:
+        if fb > 0 and cancelled[sym] == 0:
+            # 취소 0건: 방금 체결됐는지 취소가 실패해 지정가가 살아 있는지 모른다 — 중복 매도 위험
+            print(f"  {sym} 취소 0건·목표 미달 — 상태 불명, 추가 주문 안 함, MTS/HTS 확인")
+        elif fb > 0:
             remaining.append((sym, fb))
 
     if remaining:
         print(f"\n=== 미체결 {len(remaining)}건 시장가 전환 ===")
-        for sym, qty in remaining:
-            try:
-                await broker.cancel_all_for_symbol(sym)
-            except Exception:
-                pass
-        await asyncio.sleep(1)
         for sym, qty in remaining:
             order = Order(symbol=sym, side=OrderSide.SELL,
                           order_type=OrderType.MARKET,
