@@ -23,6 +23,10 @@
    04-23 G4 약화("차단 40건 +5.72%")·08-20 팀 부스트("HOLD 후보 +6.31%")는 강세장 베타였고 초과수익으로는
    각각 -15.1pp·-1.0pp로 결론이 뒤집혔다. gate_performance(`PEN_` 버킷·symbol-day dedup·`avg_excess`)와
    counterfactual summary(`x5`)가 이 기준을 제공한다. 표본은 고유 symbol-day ≥30. 상세: docs/reviews/.
+   크로스 검증이 점수를 **올린** 통과 행은 `PEN_G2_cross` 가 아니라 `BOOST_G2_cross` 버킷이다(2026-09-29 —
+   판정 `signal_event_storage.is_cross_boost`: penalized ∧ G2_cross ∧ adjusted_score > score, 과거 행 소급).
+   그 전 `PEN_G2_cross` 성적은 가점·감점이 섞인 값이다(1주 표본 63건 중 32건이 가점). G4_llm soft-reject 는 항상 `PEN_G4_llm`.
+   `BOOST_`/`PEN_` 버킷은 통과 신호라 차단형 판정(완화 검토/선별 효과) 대상이 아니다 — 중립 한 줄로만 보고한다.
 
 ## WikiSkill 대조 (2026-09-13)
 

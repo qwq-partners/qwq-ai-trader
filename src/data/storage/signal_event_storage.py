@@ -4,7 +4,7 @@ QWQ AI Trader - 시그널 이벤트 저장소
 매수 신호 발생 / 차단 / 통과 이력을 PostgreSQL에 기록합니다.
 - passed  : 모든 게이트 통과 → 실제 주문 실행
 - blocked : 특정 게이트에서 차단됨 (원칙 적용)
-- penalized: 점수 감점 후 통과
+- penalized: 크로스 검증/LLM 조정 후 통과 (가점·감점 모두 — 방향은 저장된 점수로 판정, 아래 BOOST_SQL)
 
 차단 게이트 코드:
   G1_regime   - 마켓 레짐 필터 (약세장 진입 차단)
@@ -27,6 +27,22 @@ import asyncpg
 from loguru import logger
 
 _DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ai_db")
+
+# 크로스 검증 가점 판정 (2026-09-29) — penalized 범주 중 G2_cross 가 점수를 올린 행.
+# score = G2 이전 원점수, adjusted_score = G2 이후 점수(engine._log_sig).
+# G4_llm soft-reject 행도 같은 두 점수를 싣기 때문에 G2 가 올린 신호가 G4 에서 거부되면
+# adjusted > score 가 된다 → gate 를 G2_cross 로 한정한다(G4_llm 은 항상 감점).
+# 스키마·event_type 무변경이라 과거 행에도 소급된다. JS 사본: dashboard.js sigKind().
+# 단 2026-04-23(`52f1ca0`) 이전 행은 score 에도 조정 후 점수가 들어가 score == adjusted 라 방향을 알 수 없어 감점으로 남는다.
+BOOST_SQL = ("COALESCE(event_type='penalized' AND block_gate='G2_cross'"
+             " AND adjusted_score > score, FALSE)")
+
+
+def is_cross_boost(row: Dict[str, Any]) -> bool:
+    """BOOST_SQL 의 파이썬 판정 (gate_performance 등 행 단위 집계용)."""
+    score, adj = row.get("score"), row.get("adjusted_score")
+    return (row.get("event_type") == "penalized" and row.get("block_gate") == "G2_cross"
+            and score is not None and adj is not None and adj > score)
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS signal_events (
@@ -189,9 +205,15 @@ class SignalEventStorage:
         try:
             # type 미지정 기본 조회는 실제 판정 행만 — shadow_plan_check(T11 shadow 기록)가
             # 대시보드 '차단/통과 이력' 창을 잠식하지 않게 한다. shadow 행은 type 을 명시해 조회.
-            where = ("WHERE event_type = $2" if event_type
-                     else "WHERE event_type IN ('passed','blocked','penalized')")
-            params = [limit, event_type] if event_type else [limit]
+            # boosted/penalized 는 같은 penalized 행을 점수 방향으로 나눈 가상 유형(2026-09-29)
+            if event_type == "boosted":
+                where, params = f"WHERE {BOOST_SQL}", [limit]
+            elif event_type == "penalized":
+                where, params = f"WHERE event_type='penalized' AND NOT {BOOST_SQL}", [limit]
+            elif event_type:
+                where, params = "WHERE event_type = $2", [limit, event_type]
+            else:
+                where, params = "WHERE event_type IN ('passed','blocked','penalized')", [limit]
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
                     f"""
@@ -219,12 +241,13 @@ class SignalEventStorage:
             async with self._pool.acquire() as conn:
                 # 전체 집계
                 summary = await conn.fetchrow(
-                    """
+                    f"""
                     SELECT
                         COUNT(*) FILTER (WHERE side='buy' AND event_type IN ('passed','blocked','penalized')) AS total_buy,
                         COUNT(*) FILTER (WHERE side='buy' AND event_type='passed')  AS passed,
                         COUNT(*) FILTER (WHERE side='buy' AND event_type='blocked') AS blocked,
-                        COUNT(*) FILTER (WHERE side='buy' AND event_type='penalized') AS penalized
+                        COUNT(*) FILTER (WHERE side='buy' AND event_type='penalized' AND NOT {BOOST_SQL}) AS penalized,
+                        COUNT(*) FILTER (WHERE side='buy' AND {BOOST_SQL}) AS boosted
                     FROM signal_events
                     WHERE event_time >= NOW() - ($1 || ' days')::interval
                     """,
@@ -281,6 +304,7 @@ class SignalEventStorage:
                 "passed": summary["passed"],
                 "blocked": summary["blocked"],
                 "penalized": summary["penalized"],
+                "boosted": summary["boosted"],
                 "block_rate_pct": block_rate,
                 "by_gate": [{"gate": r["block_gate"], "count": r["cnt"]}
                             for r in gate_rows],

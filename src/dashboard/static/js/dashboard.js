@@ -1464,7 +1464,18 @@ const GATE_META = {
 
 let _sigEvents = [];
 let _sigFilter = '';
-let _sigStats = { passed: 0, blocked: 0, penalized: 0 };
+let _sigStats = { passed: 0, blocked: 0, penalized: 0, boosted: 0 };
+
+// 행 유형 — penalized 중 크로스 검증(G2)이 점수를 올린 행은 '가점'(boosted) (2026-09-29).
+// 서버 판정식 signal_event_storage.BOOST_SQL / is_cross_boost 와 같은 식.
+// G4_llm soft-reject 행은 adjusted(G2 후) > score(G2 전) 여도 감점이므로 G2_cross 만 본다.
+function sigKind(ev) {
+    if (ev.event_type === 'penalized' && ev.block_gate === 'G2_cross'
+        && ev.score != null && ev.adjusted_score != null && ev.adjusted_score > ev.score) {
+        return 'boosted';
+    }
+    return ev.event_type;
+}
 
 async function loadSignalEvents() {
     try {
@@ -1492,9 +1503,11 @@ function renderSignalStats() {
     const ep = document.getElementById('sig-stat-passed');
     const eb = document.getElementById('sig-stat-blocked');
     const en = document.getElementById('sig-stat-pen');
+    const eg = document.getElementById('sig-stat-boost');
     if (ep) ep.textContent = `통과 ${s.passed || 0}`;
     if (eb) eb.textContent = `차단 ${s.blocked || 0}`;
     if (en) en.textContent = `감점 ${s.penalized || 0}`;
+    if (eg) eg.textContent = `가점 ${s.boosted || 0}`;
 
     // 게이트별 통계 바
     const gateEl = document.getElementById('sig-gate-stats');
@@ -1525,9 +1538,10 @@ function renderSignalEvents() {
         const isBlocked   = ev.event_type === 'blocked';
         const isPassed    = ev.event_type === 'passed';
         const isPenalized = ev.event_type === 'penalized';
-        const typeColor   = isBlocked ? '#f87171' : isPassed ? '#34d399' : '#fbbf24';
-        const typeBg      = isBlocked ? 'rgba(248,113,113,0.08)' : isPassed ? 'rgba(52,211,153,0.08)' : 'rgba(251,191,36,0.08)';
-        const typeTxt     = isBlocked ? '차단' : isPassed ? '통과' : '감점';
+        const isBoosted   = sigKind(ev) === 'boosted';
+        const typeColor   = isBlocked ? '#f87171' : isPassed ? '#34d399' : isBoosted ? '#4ade80' : '#fbbf24';
+        const typeBg      = isBlocked ? 'rgba(248,113,113,0.08)' : isPassed ? 'rgba(52,211,153,0.08)' : isBoosted ? 'rgba(74,222,128,0.08)' : 'rgba(251,191,36,0.08)';
+        const typeTxt     = isBlocked ? '차단' : isPassed ? '통과' : isBoosted ? '가점' : '감점';
         const gateMeta    = ev.block_gate ? (GATE_META[ev.block_gate] || { label: ev.block_gate, color: '#8892b0', bg: '#8892b010' }) : null;
 
         const dt = ev.event_time ? (() => {
@@ -1536,8 +1550,11 @@ function renderSignalEvents() {
             const m = String(d.getMinutes()).padStart(2, '0');
             return (h < 12 ? '오전 ' : '오후 ') + h + ':' + m;
         })() : '';
-        const scoreTxt = isPenalized && ev.adjusted_score !== ev.score
-            ? `${ev.score?.toFixed(0)}→<span style="color:#fbbf24;">${ev.adjusted_score?.toFixed(0)}</span>`
+        // G4_llm 행의 score 는 G2 이전 점수라 화살표를 그리면 '감점'과 상승이 같이 보인다 → 조정 후 점수만
+        const scoreTxt = ev.block_gate === 'G4_llm'
+            ? `${ev.adjusted_score?.toFixed(0)}`
+            : isPenalized && ev.adjusted_score !== ev.score
+            ? `${ev.score?.toFixed(0)}→<span style="color:${isBoosted ? '#4ade80' : '#fbbf24'};">${ev.adjusted_score?.toFixed(0)}</span>`
             : `${ev.score?.toFixed(0)}`;
 
         const row = document.createElement('div');
@@ -1565,16 +1582,14 @@ function renderSignalEvents() {
 // SSE 실시간 수신
 sse.on('signal_event', (data) => {
     const ev = data;
-    _sigEvents.unshift(ev);
-    if (_sigEvents.length > 60) _sigEvents.pop();
+    // 통계는 모든 이벤트로 갱신 (가점/감점은 sigKind 로 분리)
+    const kind = sigKind(ev);
+    _sigStats[kind] = (_sigStats[kind] || 0) + 1;
 
-    // 통계 갱신
-    if (ev.event_type === 'passed')    _sigStats.passed = (_sigStats.passed || 0) + 1;
-    if (ev.event_type === 'blocked')   _sigStats.blocked = (_sigStats.blocked || 0) + 1;
-    if (ev.event_type === 'penalized') _sigStats.penalized = (_sigStats.penalized || 0) + 1;
-
-    // 필터 적용 후 렌더
-    if (!_sigFilter || ev.event_type === _sigFilter) {
+    // 목록은 현재 필터에 맞는 이벤트만 (필터 목록에 다른 유형이 섞이지 않게)
+    if (!_sigFilter || kind === _sigFilter) {
+        _sigEvents.unshift(ev);
+        if (_sigEvents.length > 60) _sigEvents.pop();
         renderSignalEvents();
     }
     renderSignalStats();

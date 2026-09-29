@@ -11,7 +11,8 @@ Codex 협의 반영 — 실전 경로 완전 분리:
 
 동작 (매 거래일 08:40, FDR 전일 확정 일봉 기준 — 지연 판정):
   1. 체제 게이트: KOSPI 종가 > 20일선 (백테스트 _regime_ok_dates와 같은 규칙, 원천은
-     공용 kospi_benchmark — 신선하지 않으면 이번 실행 생략·커서 불변)
+     공용 kospi_benchmark FALLBACK_SOURCES — Yahoo ^KS11 → KS11 → KODEX200 최후 대체,
+     신선하지 않으면 이번 실행 생략·커서 불변)
   2. 오픈 포지션 청산 판정: -4% 고정 손절 → 10일→(+30% 후) 20일 채널
      (backtest simulate_exit와 동일 규칙의 증분 버전)
   3. pending 체결 판정: 백테스트 Arm B 로직 그대로 (트리거+대금 게이트+과갭 skip)
@@ -34,7 +35,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from loguru import logger
 
-from src.utils.kospi_benchmark import load_kospi_daily
+from src.utils.kospi_benchmark import FALLBACK_SOURCES, load_kospi_daily, proxy_outlier
 from src.utils.session import KST
 
 _DIR = Path.home() / ".cache" / "ai_trader" / "harvest_shadow"
@@ -354,7 +355,9 @@ async def _run() -> Optional[str]:
     held = list(positions.keys()) + list(pending.keys())
 
     # 체제 게이트 원천 신선도 먼저 확인 — 오래된 지수로 D0 를 판정하고 커서를 넘기면 복구 불가
-    kospi, status = await asyncio.to_thread(load_kospi_daily, "2024-01-01", datetime.now(KST))
+    kospi, status = await asyncio.to_thread(
+        load_kospi_daily, "2024-01-01", datetime.now(KST), sources=FALLBACK_SOURCES
+    )
     if kospi is None:
         # 실패로 올려 스케줄러가 dedup 날짜를 남기지 않고 재시도하게 한다(하트비트에도 사유 노출)
         raise RuntimeError(
@@ -362,6 +365,22 @@ async def _run() -> Optional[str]:
             f"(status={status['status']}, source={status['source']}, "
             f"마지막 봉={status['last_bar_date']}, reason={status['reason']})"
         )
+    proxy = status["source"] == "FDR:069500"
+    if proxy:
+        # 커서 이후 판정일들의 20일선 창을 덮는다 — 창 안 대용 이상치면 채택 안 함(커서 불변).
+        # 커서가 없으면 _process 가 종목별 마지막 봉(지연 종목은 창 밖)을 판정하므로 채택하지 않는다.
+        last_bar = cursor.get("last_bar")
+        reason = "proxy_needs_cursor, 커서 없음"
+        if last_bar:
+            lookback = int((kospi.index > pd.Timestamp(last_bar)).sum()) + 21
+            bad = proxy_outlier(kospi.tolist(), list(kospi.index.date), lookback)
+            reason = None if bad is None else f"proxy_return_outlier, 최근 {lookback}봉 일수익률 이상치 {bad}"
+        if reason:
+            raise RuntimeError(f"KOSPI 대용 FDR:069500 제외 — 이번 실행 생략, 커서 유지 (reason={reason})")
+    (logger.warning if proxy else logger.info)(
+        f"[수확shadow] 체제 게이트 원천: {status['source']} (마지막 봉 {status['last_bar_date']})"
+        + (" — KOSPI 대용(KODEX200)" if proxy else "")
+    )
     ok_dates = regime_ok_dates(kospi)
 
     # 데이터 로드는 스레드로 (FDR 동기 I/O — 이벤트 루프 비차단)

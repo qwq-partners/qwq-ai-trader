@@ -92,6 +92,7 @@ class CrossStrategyValidator:
             "passed": 0,
             "blocked": 0,
             "penalized": 0,
+            "boosted": 0,   # 순 조정 > 0 (2026-09-29 — 가점 규칙도 penalties 목록에 섞여 있다)
         }
         self._stats_date = None
 
@@ -231,7 +232,7 @@ class CrossStrategyValidator:
         # 일일 통계 리셋
         today = datetime.now().date()
         if self._stats_date != today:
-            self._stats = {"total": 0, "passed": 0, "blocked": 0, "penalized": 0}
+            self._stats = {"total": 0, "passed": 0, "blocked": 0, "penalized": 0, "boosted": 0}
             self._stats_date = today
 
         # 2026-06-14 추가: 규칙 #11 dedup / gap 장막판 카운터 일일 리셋
@@ -605,12 +606,19 @@ class CrossStrategyValidator:
                 )
                 adjusted_score = score - TOTAL_PENALTY_CAP
 
-        # 감점 적용 결과
+        # 조정 결과 — penalties 에는 가점 규칙(+5 등)도 섞여 있으므로 순 조정 부호로 가른다 (2026-09-29)
         if penalties:
-            _bump("penalized")
+            if adjusted_score > score:
+                _bump("boosted")
+                _label = "가점"
+            elif adjusted_score < score:
+                _bump("penalized")
+                _label = "감점"
+            else:
+                _label = "조정 상쇄"
             penalty_str = ", ".join(penalties)
             logger.info(
-                f"[크로스검증] {symbol} 감점: {score:.0f}→{adjusted_score:.0f} ({penalty_str})"
+                f"[크로스검증] {symbol} {_label}: {score:.0f}→{adjusted_score:.0f} ({penalty_str})"
             )
 
         # 감점 후 최소 점수 미달이면 차단

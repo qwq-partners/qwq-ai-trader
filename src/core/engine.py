@@ -1917,7 +1917,9 @@ class RiskManager:
                 self._log_sig(event, event_type="penalized", adjusted_score=float(_cv_score),
                               original_score=_orig_score,
                               block_gate="G2_cross",
-                              block_reason=f"크로스 검증 감점 {_orig_score:.0f}→{_cv_score:.0f}",
+                              # 방향은 점수로 (2026-09-29 — 가점도 '감점'으로 기록되던 문제)
+                              block_reason=(f"크로스 검증 {'가점' if _cv_score > _orig_score else '감점'} "
+                                            f"{_orig_score:.0f}→{_cv_score:.0f}"),
                               regime=_regime)
 
             # 2026-04-23 재설계: LLM 이중검증 기준 완화 (튜닝 상수 사용)

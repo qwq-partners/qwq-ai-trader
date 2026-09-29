@@ -35,6 +35,8 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from ..data.storage.signal_event_storage import is_cross_boost
+
 CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 RESULT_DIR = CACHE_DIR / "gate_performance"
 
@@ -49,6 +51,8 @@ MIN_SAMPLES_PER_GATE = 30     # 게이트별 최소 표본 — 고유 symbol-day
 STOP_CLIP_PCT = -5.0          # '회피한 손실'은 손절 구조상 이 아래로 실현되지 않는다 — 클립 수익률로 판정
 BENCH_SYMBOL = "069500"       # KODEX200 — 절대수익 대신 초과수익으로 판정 (베타 혼동 방지)
 CAPACITY_GATES = ("G5_",)     # 예산·현금 게이트는 선별이 아니라 용량 제약 — 판정 대상 아님
+# 점수 조정 후 통과(penalized) 버킷 — 차단 게이트가 아니라 완화/강화 판정 대상 아님 (2026-09-29, `|wiki` 접미사 포함)
+ADJUSTED_PASS_PREFIXES = ("BOOST_", "PEN_")
 
 
 def _is_kr_symbol(symbol: str) -> bool:
@@ -202,7 +206,9 @@ class GatePerformanceAnalyzer:
             if s["event_type"] == "passed":
                 gate = "PASSED(대조군)"
             elif s["event_type"] == "penalized":
-                gate = f"PEN_{s.get('block_gate') or 'UNKNOWN'}"   # 감점·soft-reject (G4 LLM 등) — 이전엔 미측정
+                # G2 가점은 별도 버킷 (2026-09-29 — 이전엔 PEN_G2_cross 에 감점과 섞였다)
+                gate = ("BOOST_G2_cross" if is_cross_boost(s)
+                        else f"PEN_{s.get('block_gate') or 'UNKNOWN'}")   # 감점·soft-reject (G4 LLM 등)
             else:
                 gate = s.get("block_gate") or "UNKNOWN"
             # 2026-09-13 WikiSkill 계측: G4 LLM 2차 검증에 위키 컨텍스트가 있었던 건은 별도 버킷
@@ -285,15 +291,23 @@ class GatePerformanceAnalyzer:
             if gate.startswith(CAPACITY_GATES):
                 verdicts.append(f"{gate}: 용량 게이트(예산·현금) — 선별 판정 대상 아님 ({n}건, 평균 {g['avg_return']:+.2f}%)")
                 continue
-            if n < MIN_SAMPLES_PER_GATE:
-                verdicts.append(f"{gate}: 표본 부족 ({n}건 < {MIN_SAMPLES_PER_GATE}) — 판단 보류")
-                continue
 
             avg = g["avg_excess"] if (use_excess and g.get("avg_excess") is not None) else g["avg_return"]
             opp = g["opportunity_loss_pct"]
-
             _lbl = "초과" if use_excess else "절대"
             _clip = f", 손절클립 {g['avg_clipped']:+.2f}%" if g.get("avg_clipped") is not None else ""
+
+            if n < MIN_SAMPLES_PER_GATE:
+                verdicts.append(f"{gate}: 표본 부족 ({n}건 < {MIN_SAMPLES_PER_GATE}) — 판단 보류")
+                continue
+            # 통과 신호(가점·감점·LLM soft-reject)에 차단형 권고(완화 검토/선별 효과)를 붙이면 거꾸로 읽힌다
+            if gate.startswith(ADJUSTED_PASS_PREFIXES):
+                _vs = (f"vs 통과 {control_avg:+.2f}%" if control_avg is not None else "(대조군 표본 부족)")
+                verdicts.append(
+                    f"➖ {gate}: 점수 조정 후 통과 신호 {_lbl} {avg:+.2f}% {_vs} ({n}건{_clip}) "
+                    f"— 차단 게이트 아님, 완화/강화 판정 대상 아님"
+                )
+                continue
             if control_avg is not None and avg > control_avg and avg > 0:
                 verdicts.append(
                     f"⚠️ {gate}: 차단 신호 {_lbl} {avg:+.2f}% > 통과 {control_avg:+.2f}% "
@@ -342,10 +356,12 @@ class GatePerformanceAnalyzer:
         lines.append("")
         lines.append("— 게이트별 상세 —")
         for gate, g in sorted(result["gates"].items(), key=lambda kv: -kv[1]["samples"]):
-            lines.append(
-                f"{gate}: {g['samples']}건 | 평균 {g['avg_return']:+.2f}% | "
-                f"기회손실 {g['opportunity_loss_pct']:.0f}% | 회피성공 {g['avoided_pct']:.0f}%"
-            )
+            if gate.startswith(ADJUSTED_PASS_PREFIXES):   # 통과 신호 — 기회손실/회피성공은 차단 게이트 용어
+                _bands = (f"+{OPPORTUNITY_THRESHOLD:.0f}% 이상 {g['opportunity_loss_pct']:.0f}% | "
+                          f"{AVOIDANCE_THRESHOLD:.0f}% 이하 {g['avoided_pct']:.0f}%")
+            else:
+                _bands = f"기회손실 {g['opportunity_loss_pct']:.0f}% | 회피성공 {g['avoided_pct']:.0f}%"
+            lines.append(f"{gate}: {g['samples']}건 | 평균 {g['avg_return']:+.2f}% | {_bands}")
         return "\n".join(lines)
 
 
