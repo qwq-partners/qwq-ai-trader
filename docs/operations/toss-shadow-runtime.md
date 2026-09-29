@@ -1,6 +1,8 @@
 # Toss 관측 런타임 운영 경계
 
-상태: **09-17 21:47:37 KST 별도 `qwq-toss-observer.service` ON(PID3335469, release877768e)**. 초기 토큰 발급 성공·장외idle이며 가격/캘린더 관측은 아직0건이다. 기존 거래 봇은 재시작하지 않았고 Toss도 계속 OFF다. 사용자가 확정한 관측일은09/18·21·22, 승인 만료는09/22 18:00 KST다. 실제 설치·검증 증거와 미완 인수는 [관측 원장](../reviews/toss-observer-service-2026-09-17.md)에서 구분한다.
+현재(2026-09-29): 승인 grant 는 09-22 18:00 KST 에 만료됐고 `qwq-toss-observer.service` 는 disabled/inactive 다. 재발급·퇴역은 사용자 결정 대기다. 아래는 09-17 당시 상태다.
+
+당시 상태: **09-17 21:47:37 KST 별도 `qwq-toss-observer.service` ON(PID3335469, release877768e)**. 초기 토큰 발급 성공·장외idle이며 가격/캘린더 관측은 아직0건이다. 기존 거래 봇은 재시작하지 않았고 Toss도 계속 OFF다. 사용자가 확정한 관측일은09/18·21·22, 승인 만료는09/22 18:00 KST다. 실제 설치·검증 증거와 미완 인수는 [관측 원장](../reviews/toss-observer-service-2026-09-17.md)에서 구분한다.
 
 ## 독립 서비스의 추가 경계
 

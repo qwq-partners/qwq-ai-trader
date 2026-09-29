@@ -21,13 +21,13 @@
 > 설계 `docs/superpowers/specs/2026-09-29-cli-refusal-orderref-design.md`. CLI 거부는 운영 checkout 이 이 코드를 받는 순간부터,
 > 봇 쪽(락 파일 unlink 삭제·EV_ACCEPT 필드)은 다음 장외 재시작부터 적용된다.
 
-- [ ] **운영 수용 확인**(봇 가동 중, KIS 호출 없음·장중 무해): `cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python -c 'from src.utils.trader_lock import hold_or_exit; hold_or_exit("check")'; echo $?`
+- [x] **운영 수용 확인**(봇 가동 중, KIS 호출 없음·장중 무해) — ✅ 09-29 20:47~20:50 안내 4줄 + exit 2, 락 파일 내용 불변(CHANGELOG 09-29 ops `785f1fe`): `cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python -c 'from src.utils.trader_lock import hold_or_exit; hold_or_exit("check")'; echo $?`
   → stderr 에 `[check] 봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부` 와 안내 3줄, 종료코드 **2**. 0 이면 봇과 셸의 `Path.home()` 이 다른 것이다(운영 unit 의 `User`/`HOME` 확인 — 저장소 unit 은 `/home/user`) → 가드 불성립, 보고
 - [ ] `fuser -v ~/.cache/ai_trader/unified_trader.lock` 에 봇 PID 하나만 보이는지
 - [ ] 재시작 뒤 첫 접수의 감사 원장: `grep '"accept"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl | tail -3` —
   `odno`·`org_no`·`order_date`·`account_scope:"primary"`·`session`·`source:"run_trader.py"` 가 있고, 정규장·동시호가 접수면
   `order_ref` 7칸(`["primary","KR","YYYY-MM-DD","KRX",ODNO,ORGNO,""]`), NXT 세션·`TEMP_`·ORGNO 공란이면 `order_ref` 없음
-- [ ] 재시작(stop→start) 뒤에도 `~/.cache/ai_trader/unified_trader.lock` 파일이 남아 있고 새 봇이 정상 기동(락 파일 잔존은 무해)
+- [x] 재시작(stop→start) 뒤에도 `~/.cache/ai_trader/unified_trader.lock` 파일이 남아 있고 새 봇이 정상 기동(락 파일 잔존은 무해) — ✅ 09-29 20:47 배포 재시작 뒤 락 파일 유지(PID 7바이트)·PID3746308 정상 기동(CHANGELOG 09-29 ops `785f1fe`)
 - [ ] 봇 기동 락 실패가 생기면 로그에 `누가 쥐었나: fuser -v …unified_trader.lock` 안내 줄이 함께 찍히는지(해당 사건이 없으면 미관측)
 
 ### 배포 후 — 크로스 검증 가점/감점 표시 분리 (2026-09-29 구현, 15:33 KST 배포 main `974a71f`, PID3588061)
@@ -56,7 +56,7 @@
 
 > 불명은 드물다(09-22 이후 1주 제출 성공 32건·불명 0건). 아래 불명 관련 항목은 **관측되지 않을 수 있다** — 관측이 없으면 미관측으로 남기고 해소로 적지 않는다.
 
-- [ ] 기동 로그에 `[KR] ExitManager 분할 익절 차단 훅 배선 완료 (주문 접수 불명)` 1줄
+- [x] 기동 로그에 `[KR] ExitManager 분할 익절 차단 훅 배선 완료 (주문 접수 불명)` 1줄 — ✅ 09-29 15:33 기동 로그(CHANGELOG 09-29 ops `974a71f`)
 - [ ] 평소 주문 성공·명시 거절 로그·감사 원장(`submit`/`accept`/`reject`)이 배포 전과 같은 형태인지, `[접수불명]` 오탐 0
 - [ ] (관측 시) 불명 1건: 텔레그램 경보 1회, 감사 원장 `"unknown"` 1줄(`reject` 없음), `~/.cache/ai_trader/order_unknown.json` 오늘 날짜 항목 1개
 - [ ] (관측 시, 매수 불명) 그날 이후 BUY 가 `[접수불명] KR 매수 보류`/`[리스크] 접수 불명 매수 보류` 로 막히고 다음 거래일에 풀리는지
@@ -69,8 +69,8 @@
 
 - [ ] PR #97 동시 반영분: 로그에 `[안전자산]` 루프 기동·주문 0줄(루프 삭제), 20:30 진화 `BacktestGate` 가 레짐 지표 2차 원천으로 Yahoo ^KS11 을 쓰고 `삼성전자 대리` 폴백 로그가 없는지
 
-- [ ] `journalctl -u qwq-ai-trader | grep '\[초과수익\]'` 에 `원장 갱신: 행 N (포함 n) …` 1줄, 경고 없음(시한 초과·exporter 로드 실패·DB pool 없음이면 경고)
-- [ ] `~/.cache/ai_trader/excess_return/` 에 5개 파일(`positions.jsonl`·`summary.json`·`summary_history.jsonl`·`kodex200_daily.csv`, 둘째 날부터 `positions_prev.jsonl`)
+- [x] `journalctl -u qwq-ai-trader | grep '\[초과수익\]'` 에 `원장 갱신: 행 N (포함 n) …` 1줄, 경고 없음(시한 초과·exporter 로드 실패·DB pool 없음이면 경고) — ✅ 09-29 20:30 `행 263 (포함 251)`, 로그 경고 없음(CHANGELOG 09-29 ops `785f1fe`)
+- [ ] `~/.cache/ai_trader/excess_return/` 에 5개 파일(`positions.jsonl`·`summary.json`·`summary_history.jsonl`·`kodex200_daily.csv`, 둘째 날부터 `positions_prev.jsonl`) — 첫날 09-29 4개 생성 확인(CHANGELOG 09-29 ops), 둘째 날 5개 미확인
 - [ ] 백필 행 수와 제외 사유별 건수·원화(`summary.json` → `windows.all.all.excluded`)가 설명 가능한가 — 특히 `sync_entry`·`exits_missing`·`awaiting_close`
 - [ ] 전략 리뷰 §1 기간(03-09~07-02)의 행 `net_pnl` 합계가 DB 합계와 맞는가(설계 §9 운영 확인)
 - [ ] `execution_day_status` 에 그날 행 1개(`source=kr_excess_20_30`), `incomplete` 면 사유가 실제 기록 불일치인지 확인(사용자 HTS·NXT 체결이 DB 에 없으면 `incomplete` 가 정상)
@@ -96,7 +96,7 @@
   ✅ 09-28 결과(07:17→15:36 차분, 재시작 전 스냅샷): EGW00215 **65건 전부 portfolio_sync/account_summary(8434R)** — 시도 944·재시도 63(재시도 뒤 실패 2).
   fill_check·dashboard 0, 같은 동기화의 orderable_cash(8908R) 1462 시도 0. 리미터는 이미 원장 1.05초·8434R 2.1초 간격이라 **간격 가설로는 설명 안 됨** →
   **원인 확정·수용(2026-09-28 사용자):** 같은 계좌를 웹 대시보드 등에서 잔고 조회용으로 함께 쓴다 → 외부 조회와 겹친 거절. 재시도가 흡수하므로 **조치하지 않는다**(리미터·재시도 변경 금지).
-- [ ] 09-29 09:30 이후 `[안전자산] 후보 거부` 3줄 + `영구 비활성` 1줄·주문 0 — 삭제 PR 이 배포되기 전까지의 현재 코드 동작. 삭제 배포 뒤엔 `[안전자산]` 로그 0 이 정상.
+- (제거) 안전자산 후보 거부 로그 점검 — 루프 삭제(PR #97)가 09-29 06:45 장전에 배포돼 대상 없음. 삭제 확인은 아래 09-29 20:30 절 PR #97 항목.
 - [ ] 장중 돌파 `[장중품질] KOSPI=+x.xx% → RS 보정 정렬 적용` 의 값이 당일 KOSPI 등락(대시보드 지수)과 같은지(이전엔 5일 c5).
 
 ### 2026-09-23 — 호출 계측·매도 원인·지수 신선도 (09-23 23:18 KST 배포, PID2386785)
@@ -132,6 +132,8 @@
 - [ ] 유지가 여러 종목에서 동시에 생기면 EGW00215 집계(`/ops-check`)가 늘었는지 본다 — 유지 1종목당 취소 POST·미체결 조회가 분당 최대 4회씩 더해진다.
 
 ### 2026-09-18·21·22 — 독립 Toss 제한 관측 (기존 거래 봇 유지)
+
+> 현재(2026-09-29): grant 09-22 18:00 KST 만료, `qwq-toss-observer.service` disabled/inactive(재발급·퇴역은 사용자 결정 대기). 아래 미체크 항목의 결과는 이 문서에 기록되지 않았다.
 
 - ✅ 09/17 21:47:37 ON/PID3335469·초기 토큰 generation1/ready·receipt1/sender1. 기존 봇 PID3274983/checkout8ff2f55와 보호7경로 동일,21:49 broker 연결 정상/pending0/stale0. [설치·검증 원장](../reviews/toss-observer-service-2026-09-17.md).
 - [ ] 09/18 08:55 이후: calendar 관측/terminal 원장, 날짜·개장/휴장·결측 처리, source 시각 확인. 휴장/partial을 영업일 성공으로 세지 않는다.
@@ -171,29 +173,7 @@
 - 캐시 확인: `ls ~/.cache/ai_trader/strategic/supply_trend_*.json`
 - 롤백 트리거: 5건 미달 OR delta_ratio≥3 D+1 < 0%
 
-#### B. P1 KOFR 자동 운용 — ⛔ 2026-09-28 삭제(사용자 결정: 운용 계획 없음). 아래는 기록
-- 첫 매수 발동 시점 추적 (다음 폭락 KOSPI -2%↓ + 현금 30%↑)
-- 4-OR 청산 트리거 정확도:
-  - [ ] (a) 시장 정상화 트리거 — caution→normal 시점
-  - [ ] (b) 신규 시그널 트리거 — pending_signals 발견 시점
-  - [ ] (c) 5영업일 한도 트리거
-  - [ ] (d) 수동 청산 (텔레그램 통합 후)
-- 상한 25% 준수 — equity × 0.25 초과 보유 사례 0건 확인
-- 최소 현금 5% 유지 — 다른 시그널 진입 차단 사례 0건
-- 로그 위치: `[안전자산] KOFR 매수/매도`
-- 상태 파일: `~/.cache/ai_trader/safe_asset_state.json`
-- 후보 검증 (2026-08-05 수정): 이름 조회가 전부 실패(KIS HTTP 500 등 일시 장애)하면
-  영구 비활성 대신 다음 5분 주기에 재검증. 영구 비활성은 **이름이 조회됐는데
-  키워드 미매칭**인 경우에만 발동 (`[안전자산] 모든 후보 검증 실패` 로그 확인)
-- **2026-09-28 판정:** KIS 현재가 응답엔 종목명이 없어 08-31 이후 1278회 전부 '이름 조회 실패'로 재시도만 돌았다
-  (검증 통과 0 — 매수 한 번도 없음). 이름을 종목 마스터(DB)에서 읽도록 고치자, 후보 코드가 주석과 다른 종목임이 드러났다:
-  458730=TIGER 미국배당다우존스, 357870=TIGER CD금리투자KIS(합성), 273130=KODEX 종합채권(AA-이상)액티브, 152470=목록 없음.
-  → 배포 후 첫 장중 주기(09:30~)에 `[안전자산] 후보 거부` 3줄 + `모든 후보 검증 실패 → 자동 운용 영구 비활성` 1줄 후 루프 종료가 **정상**.
-  - ~~배포 후 위 로그 확인~~ → 2026-09-28 사용자 결정으로 루프 자체를 삭제(다음 배포부터 태스크 없음).
-- 롤백 트리거:
-  - KOFR 1주 보유 후 SEPA 시그널 발생했는데 (b) 트리거 미발화
-  - 5영업일 초과해도 (c) 자동 청산 안 됨
-  - 매수 시도 후 broker submit_order 실패율 ≥30%
+#### B. P1 KOFR 자동 운용 — 점검 항목 제거: 2026-09-28 사용자 결정으로 루프 삭제(PR #97, 09-29 06:45 KST main `081ab6a` 배포), 더 확인할 대상이 없다.
 
 #### C. P2-a 복합 트레일링 전략별 차등
 - 검증 SQL:

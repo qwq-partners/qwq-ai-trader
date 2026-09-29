@@ -22,7 +22,7 @@
 - [09-23 제한 운영 릴리스](operations/release-2026-09-23.md) — PR #90·비대화형 인증 수정, 전체 엔진 승격 제외, 검증/배포 원장과 후속 health·경보/누적 성능 경계
 - [퇴역 작업공간 archive/복구](reviews/retired-workspace-archive-2026-09-20.md) — 상시 main·engine 2개, dirty/index/objects 보존·53개 검증·원격7 태그·Claude 인계
 - [Claude 마이그레이션 인계](operations/claude-migration-handoff-2026-09-20.md) — 단일 engine 개발선·C4 완료/운영 미승격·다음 B2/B3 Plan→Do→See·모델/검증/금지 경계
-- [toss-shadow-runtime.md](operations/toss-shadow-runtime.md) — 별도 Toss 서비스 ON·승인 만료/재시작 금지·원장/health 경계(기존 거래 봇 Toss OFF)
+- [toss-shadow-runtime.md](operations/toss-shadow-runtime.md) — 별도 Toss 서비스(09-22 18:00 grant 만료, 현재 inactive)·승인 만료/재시작 금지·원장/health 경계(기존 거래 봇 Toss OFF)
 - [local-development.md](operations/local-development.md) — WSL2 기반 Claude Code·Codex 로컬 개발환경 구성과 안전한 PR 흐름
 - [github-quality-gate.md](operations/github-quality-gate.md) — PR 자동 검증과 `main` 브랜치 보호 운영 절차
 - [lightsail-deployment.md](operations/lightsail-deployment.md) — 수동 승인 배포, 상태 확인, 자동 롤백 절차
@@ -57,7 +57,7 @@
 - [토스 독립 관측 서비스 검증 원장](reviews/toss-observer-service-2026-09-17.md) — 독립 리뷰·UTC/KST 각1809건 검증·별도 서비스 ON/초기 발급·장외 대기 및 남은 실관측 인수
 - [토스 관측 Plan→Do→See 구현 계획](superpowers/plans/2026-09-16-toss-runtime-shadow.md) — 역할별 병렬 모델·파일/API 소유권·TDD·독립 리뷰·오프라인 인수
 - [토스 승인 기반 관측 런타임 설계](superpowers/specs/2026-09-16-toss-runtime-shadow-design.md) — #67 보존·기본 OFF·별도 승인·추가 KIS 조회0·지속 원장/worker 설계, 구현/실관측 승인과 구분
-- [external-apis.md](integrations/external-apis.md) — KIS, 토스 Open API(별도 제한 관측 ON·거래 소비자 미연결), pykrx, yfinance, Finnhub, Finviz, LLM(OpenAI/Gemini/Perplexity), Telegram, DART
+- [external-apis.md](integrations/external-apis.md) — KIS, 토스 Open API(별도 제한 관측 — 09-22 grant 만료·서비스 inactive, 거래 소비자 미연결), pykrx, yfinance, Finnhub, Finviz, LLM(OpenAI/Gemini/Perplexity), Telegram, DART
 - [토스 2차 데이터 소스 설계](superpowers/plans/2026-09-15-toss-securities-fallback.md) — T12 단계별 승인·KIS 돈 경로 유지·공식 필드 계약·향후 구현 인수 명세
 - [토스 Phase 1 오프라인 구현 계획](superpowers/plans/2026-09-16-toss-phase1-offline.md) — 보안 토큰·조회 경계·정규화·합성 비교 4작업, 이번 범위와 미완 실자료 단계 분리
 
