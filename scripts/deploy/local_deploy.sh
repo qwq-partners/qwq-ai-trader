@@ -16,10 +16,18 @@ exec 9>"$LOCK_FILE" || fail "배포 잠금 파일 열기 실패"
 flock -n 9 || fail "다른 배포 진행 중"
 # 목록 검사만 수행한다. 인증이나 권한 정책 변경 없이 실패하면 배포 전 중단한다.
 sudo -n -l systemctl restart "$SERVICE" >/dev/null 2>&1 || fail "비대화형 서비스 재시작 권한 없음"
-[[ -z $(git -C "$REPO" status --porcelain) ]] || fail "운영 작업 트리 변경 있음"
+# config/evolved_overrides.yml 은 봇 진화 시스템이 직접 쓰는 파일이라 미커밋 수정을 허용·보존한다 (2026-09-30 사용자 결정).
+# 다른 변경은 여전히 중단. 대상 커밋이 그 파일을 바꾸면 운영 수정과 충돌하므로 아래에서 중단한다.
+KEEP=" M config/evolved_overrides.yml"
+DIRTY=$(git -C "$REPO" status --porcelain)
+[[ -z $(grep -vxF "$KEEP" <<<"$DIRTY") ]] || fail "운영 작업 트리 변경 있음 (evolved_overrides 외)"
 PREV=$(git -C "$REPO" rev-parse HEAD)
 git -C "$REPO" fetch -q origin || fail "fetch 실패"
 git -C "$REPO" cat-file -e "$TARGET^{commit}" 2>/dev/null || fail "대상 커밋 없음: $TARGET"
+if [[ -n $DIRTY ]]; then
+  git -C "$REPO" diff --quiet HEAD "$TARGET" -- config/evolved_overrides.yml \
+    || fail "대상 커밋이 config/evolved_overrides.yml 을 바꾼다 — 운영 미커밋 수정과 충돌, 수동 처리"
+fi
 restart() { sudo -n systemctl restart "$SERVICE"; }
 wait_healthy() { for _ in $(seq 1 12); do systemctl is-active --quiet "$SERVICE" && curl -fsS --max-time 5 "$HEALTH" >/dev/null 2>&1 && return 0; sleep 5; done; return 1; }
 apply() { git -C "$REPO" checkout -q --detach "$TARGET" && QWQ_VERIFY_ROOT="$REPO" QWQ_VERIFY_PYTHON="$REPO/venv/bin/python" bash "$REPO/scripts/dev/verify.sh" && restart && wait_healthy; }

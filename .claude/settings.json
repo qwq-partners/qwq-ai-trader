@@ -17,9 +17,9 @@
       "Bash(ls*)",
       "Bash(cat /home/user/.cache/ai_trader*)",
       "Bash(grep*)",
-      "Bash(echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader*)",
-      "Bash(echo 'user123!' | sudo -S -k systemctl stop qwq-ai-trader*)",
-      "Bash(echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader*)",
+      "Bash(sudo systemctl restart qwq-ai-trader*)",
+      "Bash(sudo systemctl stop qwq-ai-trader*)",
+      "Bash(sudo systemctl start qwq-ai-trader*)",
       "Bash(sleep*)",
       "Read(/home/user/**)"
     ],

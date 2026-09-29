@@ -187,8 +187,7 @@ def restart_bot() -> bool:
     import subprocess
     try:
         subprocess.run(
-            ["sudo", "-S", "-k", "systemctl", "restart", "qwq-ai-trader"],
-            input="user123!\n",
+            ["sudo", "-n", "systemctl", "restart", "qwq-ai-trader"],   # 비대화형 — 비밀번호를 코드에 두지 않는다
             text=True,
             timeout=30,
             check=False,

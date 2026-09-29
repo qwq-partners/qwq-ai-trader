@@ -1,5 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
-> **현재 운영 상태 — 2026-09-29 23:31 KST:** main `bb03aa3`(PR #106 감사 결함 7건 — 싱글톤 락 kill 제거·ExitManager 검증자 종목 지정·멈춘 KOSPI 원천 제외·unit 동기화/healthcheck 삭제·조정점수 0·좀비 알림 문구·toss 시험 플레이크 + #107 문서 정리) 배포, **PID3811677** 23:28:22 기동. 운영 verify 2449 passed/2 xfailed, 보호 지문 동일, 운영 checkout `main` 복귀(사용자 승인 overrides 보존). **A1 수용: 봇 가동 중 락 획득 시도 → False·봇 생존·락/PID 파일 불변.** ops_check KIS 오류·ERROR 0. ⚠️ **22:21:42 호스트 OOM 으로 봇(PID3746308)이 SIGKILL → systemd 자동 재시작(PID3770294)** — 장외·거래 영향 없음, Claude 세션·LSP·MCP 기동과 겹친 전역 메모리 부족(RAM 3.8GB). 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-29 ops(late).
+> **현재 운영 상태 — 2026-09-30 00:50 KST (사용자 D 결정):** **KR 신규 매수 중지 — `KILL_SWITCH_KR`(매수만 차단, 청산·손절 허용)**: 실거래 KODEX200 초과수익 포지션당 −1.66%(t=−3.98, 251건, 펩트론 087010 은 `manual_entry` 로 원장에서 제외돼 0행) — 엣지 입증 전까지. 해제는 사용자 결정(`rm ~/.cache/ai_trader/KILL_SWITCH_KR`). 봇 unit `OOMScoreAdjust=-500`(설치본 반영·실행 PID3811677 에 `choom` 즉시 적용, 재시작 0 — 09-29 22:21 OOM kill 재발 방지). `local_deploy.sh` 가 `config/evolved_overrides.yml` 미커밋 수정만 허용(대상 커밋이 그 파일을 바꾸면 중단 — 매 배포 승인 불필요). 공개 저장소의 평문 sudo 비밀번호 제거(ubuntu 는 NOPASSWD·비밀번호 잠김·SSH 비밀번호 로그인 꺼짐 — 서버 노출 영향 없음, 같은 값을 다른 곳에서 쓰면 사용자가 교체). Toss 관측 퇴역(보존 타이머도 disable, 원장 `/var/lib/qwq-toss-observer` 732K 보존). 설계 B 보류 유지(전략 판단 우선).
+> **운영 상태 이력 — 2026-09-29 23:31 KST:** main `bb03aa3`(PR #106 감사 결함 7건 — 싱글톤 락 kill 제거·ExitManager 검증자 종목 지정·멈춘 KOSPI 원천 제외·unit 동기화/healthcheck 삭제·조정점수 0·좀비 알림 문구·toss 시험 플레이크 + #107 문서 정리) 배포, **PID3811677** 23:28:22 기동. 운영 verify 2449 passed/2 xfailed, 보호 지문 동일, 운영 checkout `main` 복귀(사용자 승인 overrides 보존). **A1 수용: 봇 가동 중 락 획득 시도 → False·봇 생존·락/PID 파일 불변.** ops_check KIS 오류·ERROR 0. ⚠️ **22:21:42 호스트 OOM 으로 봇(PID3746308)이 SIGKILL → systemd 자동 재시작(PID3770294)** — 장외·거래 영향 없음, Claude 세션·LSP·MCP 기동과 겹친 전역 메모리 부족(RAM 3.8GB). 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-29 ops(late).
 > **운영 상태 이력 — 2026-09-29 20:50 KST:** main `785f1fe`(PR #103 봇 실행 중 주문 CLI 거부·매수 전송 직전 킬스위치 재검사·OrderRef 감사 기록 + #104 sell_specific 폴백 수량·재시작 시 살아 있는 BUY 보류·게이트 보고/KOSPI 이력 검증) 배포, **PID3746308** 20:47:31 기동. 운영 verify 2443 passed/2 xfailed, 보호 지문 7종 동일, 운영 checkout `main` 복귀(사용자 소유 `config/evolved_overrides.yml` 수정 보존). CLI 락 수용 점검 exit 2. **20:30 초과수익 원장 첫 실행: 포지션당 KODEX200 대비 평균 −1.66%, t=−3.98, 합계 −907만 원(엣지 음수로 측정됨).** 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-29 ops.
 > **운영 상태 이력 — 2026-09-29 15:36 KST:** main `974a71f`(PR #100 주문 접수 불명 분리 + #101 KOSPI 069500 최후 대체 + #102 크로스 검증 가점 표시) 배포, **PID3588061** 15:33:10 기동. 운영 verify 2369 passed/2 xfailed, 보호 지문 7종 동일, 운영 checkout `main` 복귀(사용자 소유 `config/evolved_overrides.yml` 미커밋 수정 보존 — 사용자 승인 사본 스크립트). KIS 오류·ERROR 0, 새 분할 익절 차단 훅 배선 확인. 보유 3종목·현금 19.4%. Yahoo ^KS11 09-28 결측은 10:30 전후 상류 보완으로 해소(069500 대체는 안전망). 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-29 ops.
 > **운영 상태 이력 — 2026-09-29 06:51 KST:** main `081ab6a`(PR #98 + 미배포였던 PR #97) 배포, **PID3388744** 06:45:15 기동. 운영 verify 2263 passed/2 xfailed, 보호 지문 7종 동일, 운영 checkout `main` 복귀(사용자 소유 `config/evolved_overrides.yml` 미커밋 수정 보존 — 사용자 승인 사본 스크립트). 새로 켜진 것: 20:30 실거래 KODEX200 초과수익 원장·거래일 기록 대사(측정 전용), 안전자산 루프 삭제. **현금 비중 22.9% — 봇 신규 매수 가능 상태.** 주문·전략·위험 설정 변경 0. 상세 CHANGELOG 09-29 ops.
@@ -65,7 +66,7 @@
 
 ### 토스 후속 작업 상태 (2026-09-16)
 
-> **현재(2026-09-29):** 관측 grant 는 09-22 18:00 KST 에 만료됐고 `qwq-toss-observer.service` 는 disabled/inactive 다. 재발급·퇴역은 사용자 결정 대기 — 같은 grant 재시작·자동 연장 금지. 아래는 당시 기록이다.
+> **현재(2026-09-30): 퇴역.** 관측 grant 09-22 18:00 KST 만료, `qwq-toss-observer.service`·`qwq-toss-observer-retention.timer` 모두 disabled/inactive(사용자 결정). 코드·원장 자료(`/var/lib/qwq-toss-observer`)는 보존 — 재가동은 새 grant·새 관측 계획으로만. 아래는 당시 기록이다.
 
 아래는 09-16 인계 당시 기록이다. 09-17 사용자가 열린 PR 전체 통합·배포·재시작·활성화를 지시해 #68 보류 결정은 검토 후 정합화 방식으로 변경됐다. 원본의 안전하지 않은 구현을 복구하지 않으며 실행 트리는 #67/#70을 유지한다. 실관측 연결·승인 정책의 준비와 실제 활성화 결과는 후속 보고서로 구분한다.
 
@@ -223,6 +224,7 @@
 - **T9(2026-09-14 저녁, PR #42~#45)**: 모닝브리프↔실제 장 괴리(-3.26%) 분석 반영 — 12:00 레짐 재분류가 당일 지수·급락 상태(당일 갱신 게이트)를 쓰고 crash/severe 면 bull 미적용, LLM 입력 결측은 '결측'(0 금지)·`input_meta`, 지수 키 정규화·VIX 수집, 유효 레짐 `effective_regime`(장중 위험 당일 게이트, bull→sideways 강등 전용), 모닝브리프는 미국 자료뿐이면 "미국시장 마감 요약"으로 제한·개장 단정 문장 제거·전문가 상충 표시, 전문가 결측 `data_status`(insufficient ≤0.2/partial ≤0.7)·집계 제외·커버리지 게이트(<4명 무보정), 수동 거시 오버라이드 `valid_until`, 야간선물 `fetched_at`, 장전 전망 사후 평가 원장(20:30). verify 456 passed. 2026-09-15 `3f6b1bf` 로 배포됨. 상세 `docs/reviews/remediation-2026-09-14.md` §10
 - **T10(2026-09-15, PR #47·#48 머지·배포)**: T9 후속 교차 리뷰 결함 10건(F13~F22) — 단계는 맞았으나 단계 사이 연결(자료→검증→레짐→소비자→발송→평가)이 끊긴 결함. 정오 당일 봉 교체/직전거래일 추가 구분, 급락 캡을 감지기·이번 조회·어댑터 당일 관측 3소스 중 보수적 값으로 병합, `monitor_positions`의 레짐 재적용 제거(30분 sync 단일화), G2가 어댑터 유효 레짐 우선, 6명 전문가 `data_status` 판정 확장 + `from_dict` unknown 집계 제외, 야간선물 세션 as_of 확인 시만 집계, Yahoo 지수 결측 None 보존, 07:00 문구 한국 방향 단정 제거, 모닝브리프 테마-업종 매핑 사전 고정, 07:30 발송 스냅샷 기준 저녁 평가(날짜별 아카이브 신설). 임계값 무변경. verify 552 passed / 2 xfailed(D 독립 재현 14건 + 통합 E2E 8건), Codex 리뷰 미실행(샌드박스). **2026-09-15 03:08 KST main `3f6b1bf` 배포·재기동 검증 완료**(보고서 §11.8). 상세 `docs/reviews/remediation-2026-09-14.md` §11, 계획서 `docs/superpowers/plans/2026-09-13-review-remediation.md` T10 절
 - **T11(2026-09-15, PR #50~#53 머지 → 15:41 KST main `8c27fe8` 배포·재기동 완료)**: 에이전트 팀 근거 계약(EvidenceItem, positive_basis≠risk_clear, 관측 시각 모르면 None)·판단 v2 shadow(`TeamAssessment`: 매수 매력/위험 허용/자료 충분성/진입 조건 분리, 합의≠확률, 확률 미보정)·EntryPlan(PendingSignal 정본, `check_entry_plan` shadow 기록만)·append-only 심의 원장·실행 상태 6단계(plan_rejected 포함)·CF `team_buy_unfilled`·A/B/C 오프라인 러너(합성 검증만). 기존 TradeProposal/conviction/주문 경로 기준선 불변(특성화 테스트). 승인된 기존 경로 버그 수정 2건(vol_ratio 키, confidence=0 유효 소스). **투자 성능 미검증·운영 승격 없음(shadow 기록만).** 1차 배포(15:33, `04279c6`)는 시각 의존 테스트 7건이 장 마감 후 verify 에서 실패해 자동 롤백 → #53(테스트 시계 동결) 후 재배포. 분석가 산식 수정 2건은 shadow 플래그 밖이라 사이징 차단은 운영 `.env` `TEAM_CONVICTION=0`(+위험모드 0.7% 클램프)에 의존 — 재활성화 시 재평가 필수. 현금 고갈 상태에선 EntryPlan shadow 행·CF 승인 BUY 표본이 쌓이지 않음(엔진 현금 검사가 훅보다 앞). 상세 `docs/agents/trading-team.md` T11 절, 계획서 `docs/superpowers/plans/2026-09-15-agent-team-evidence-entryplan.md`
+- **실거래 초과수익 원장(09-29 20:30 첫 실행): KODEX200 대비 포지션당 −1.66%, t=−3.98, 251건, 보유기간 벤치 평균 +1.28% vs 봇 −0.38% — 시장 탓이 아닌 선택·청산 열위.** 펩트론 등 `strategy=manual` 은 `manual_entry` 로 제외. → 09-30 KR 신규 매수 중지
 - 실거래 266건: 수수료 전 총손익 ≈ 0, 차감 후 -139만, t=-0.18, KOSPI +37% vs 자산 -7.5% — **엣지 미입증**
 - 구조 원인: 연 91배 회전(수수료 = 손실 전부) · 1차 익절이 타이트 청산 무장(p90 +4.9%) · 명목 사이징 3~4종목 집중 · 배분 55%가 근거 없는 라인 · 레짐 4겹 후행
 - 판정 기준은 **KODEX200 초과수익 + 손절 클립** (절대수익 판정으로 04-23·08-20 결정이 뒤집힘). 권고 1~8·금지 목록은 리뷰 §5~6
@@ -251,7 +253,7 @@
 ## 검증 프로토콜 (절대 규칙)
 코드 수정 후 반드시 아래 순서 수행:
 1. `python3 -m py_compile <수정파일>` — 문법 검증
-2. **봇 재시작**: `echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader`
+2. **봇 재시작**: `sudo systemctl restart qwq-ai-trader`
    - ⚠️ `nohup python scripts/run_trader.py` 직접 실행 **절대 금지** (systemd와 충돌)
 3. 상태 확인: `systemctl is-active qwq-ai-trader`
 4. 로그 확인: `journalctl -u qwq-ai-trader -n 20 --no-pager`
@@ -264,8 +266,8 @@ source venv/bin/activate
 find src/ scripts/ -name "*.py" -size +0c -exec python3 -m py_compile {} \;
 
 # 봇 관리 명령어
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader  # 재시작
-echo 'user123!' | sudo -S -k systemctl stop qwq-ai-trader     # 중지
+sudo systemctl restart qwq-ai-trader  # 재시작
+sudo systemctl stop qwq-ai-trader     # 중지
 systemctl is-active qwq-ai-trader                              # 상태
 journalctl -u qwq-ai-trader -f                                 # 실시간 로그
 ```

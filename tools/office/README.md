@@ -24,7 +24,7 @@ UPSTREAM_REF=main bash tools/office/build.sh  # upstream 최신으로 업그레�
 빌드 후 대시보드 재시작:
 
 ```bash
-echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
+sudo systemctl restart qwq-ai-trader
 ```
 
 ## upstream에 적용하는 패치 3가지

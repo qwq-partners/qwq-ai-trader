@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-30 — ops/chore: 사용자 D 결정 5건 반영 · OOMScoreAdjust · KR 신규 매수 중지
+
+- **지시**: 사용자 "OOMScoreAdjust -500 적용 하고 D항목에 대해 진행해보자", 이어 "계산할 때 펩트론 종목은 예외로 하고 해야해". 결정: D1 신규 매수 중지, D2 배포 스크립트 예외, D4 Toss 퇴역, D5 설계 B 보류 유지(사용자: "시장이 좋지 않아 그런 것 아닌지" → 원장은 같은 기간 KODEX200 대비라 시장 방향이 이미 빠진다 — 보유기간 벤치 평균 +1.28% vs 봇 −0.38%, 3월 하락장에서도 −0.39%p).
+- **OOM (운영, 00:1x)**: 설치 unit `/etc/systemd/system/qwq-ai-trader.service` 에 `OOMScoreAdjust=-500`(백업 후 `install`) → `daemon-reload` → 실행 중 PID3811677 에 `choom -n -500` 즉시 적용. **재시작 0**. oom_score 723 → 390 — Claude 세션(ccd-cli ~700)·pyright(~698)·MCP(~674) 보다 뒤. 저장소 `qwq-ai-trader.service` 사본도 동기화.
+- **D1 (운영, 00:32)**: `~/.cache/ai_trader/KILL_SWITCH_KR` 생성(사유 기록) — KR 신규 매수만 차단, 청산·손절 허용(`kill_switch.check` 로 buy False / sell True 확인). 재시작 불필요. **펩트론 확인**: 원장 263행 중 087010 은 0행 — 원장은 청산 완료 포지션만 세고 펩트론은 `strategy=manual` 이라 매도해도 `manual_entry`(`excess_return.py:208`, 설계서 135행)로 제외된다. 따라서 −1.66%/t=−3.98 은 이미 펩트론 제외 값.
+- **D2 (`scripts/deploy/local_deploy.sh`)**: 청결 검사가 ` M config/evolved_overrides.yml` 한 줄만 허용하고, 그 수정이 있으면 대상 커밋이 그 파일을 바꾸는지(`git diff --quiet HEAD <SHA> -- …`) 확인해 바꾸면 중단한다. 사본 스크립트·매 배포 승인 불필요. 시험 4건 추가(허용·보존 / 다른 파일 2종 중단 / 대상 커밋 충돌 중단), 변이 3종(허용 제거·충돌 검사 제거·허용 범위 config 전체로 확대) kill.
+- **D3 (평문 sudo 비밀번호 — 공개 저장소)**: CLAUDE.md 3·runbook 5·virtual-office 1·tools/office/README 1·`.claude/settings.json` 허용 규칙 3(같은 명령, 비밀번호만 제거)·`scripts/llm_migration_monitor.py`(`sudo -n`, 입력 제거). `git grep user123` 0. 서버 확인: ubuntu 는 NOPASSWD sudo·계정 비밀번호 잠김(`passwd -S` → L)·`sshd` PasswordAuthentication no — 공개된 값으로 이 서버에 접근·권한 상승 불가. 같은 값을 다른 곳(WSL 등)에서 쓰면 그쪽 교체는 사용자 몫. git 이력 재작성은 하지 않는다.
+- **D4 (운영)**: `qwq-toss-observer-retention.timer` disable --now(매일 19:00 `observer_retention_incomplete` 실패 중, 만료 원장 삭제는 한 번도 실행 안 됨). 서비스·타이머 모두 disabled/inactive, 원장 `/var/lib/qwq-toss-observer`(732K)·코드 보존.
+- **D5**: 설계 B 보류 유지 — 재개 조건 ①(매수 재개 표본)은 형식상 09-29 성립했으나 D1 로 매수 중지, ④ 동기화 추정 행 11.5%(<20%) 불성립.
+- 주문·전략·위험 설정·`.env` 변경 0 (킬스위치 파일 1개 추가는 D1 결정).
+
 ## 2026-09-29 — ops: main `bb03aa3` 배포 (PR #106 + #107), 23:28 KST · 22:21 OOM 재시작
 
 - **지시**: 사용자 "두 PR 머지하고 운영배포까지 가자, overrides 보존 승인". #106 head `80100f1` verify 통과 → 병합 `36d77c6`. #107 은 CHANGELOG 맨 위 충돌(양쪽 새 항목 유지)을 main 재병합 `8b116c6` 으로 풀고 verify 통과 → 병합 `bb03aa3`.
