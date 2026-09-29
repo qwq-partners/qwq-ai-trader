@@ -33,6 +33,7 @@ _DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:54
 # G4_llm soft-reject 행도 같은 두 점수를 싣기 때문에 G2 가 올린 신호가 G4 에서 거부되면
 # adjusted > score 가 된다 → gate 를 G2_cross 로 한정한다(G4_llm 은 항상 감점).
 # 스키마·event_type 무변경이라 과거 행에도 소급된다. JS 사본: dashboard.js sigKind().
+# 단 2026-04-23(`52f1ca0`) 이전 행은 score 에도 조정 후 점수가 들어가 score == adjusted 라 방향을 알 수 없어 감점으로 남는다.
 BOOST_SQL = ("COALESCE(event_type='penalized' AND block_gate='G2_cross'"
              " AND adjusted_score > score, FALSE)")
 

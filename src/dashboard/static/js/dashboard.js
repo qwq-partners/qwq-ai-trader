@@ -1550,7 +1550,10 @@ function renderSignalEvents() {
             const m = String(d.getMinutes()).padStart(2, '0');
             return (h < 12 ? '오전 ' : '오후 ') + h + ':' + m;
         })() : '';
-        const scoreTxt = isPenalized && ev.adjusted_score !== ev.score
+        // G4_llm 행의 score 는 G2 이전 점수라 화살표를 그리면 '감점'과 상승이 같이 보인다 → 조정 후 점수만
+        const scoreTxt = ev.block_gate === 'G4_llm'
+            ? `${ev.adjusted_score?.toFixed(0)}`
+            : isPenalized && ev.adjusted_score !== ev.score
             ? `${ev.score?.toFixed(0)}→<span style="color:${isBoosted ? '#4ade80' : '#fbbf24'};">${ev.adjusted_score?.toFixed(0)}</span>`
             : `${ev.score?.toFixed(0)}`;
 
@@ -1579,15 +1582,14 @@ function renderSignalEvents() {
 // SSE 실시간 수신
 sse.on('signal_event', (data) => {
     const ev = data;
-    _sigEvents.unshift(ev);
-    if (_sigEvents.length > 60) _sigEvents.pop();
-
-    // 통계 갱신 (가점/감점은 sigKind 로 분리)
+    // 통계는 모든 이벤트로 갱신 (가점/감점은 sigKind 로 분리)
     const kind = sigKind(ev);
     _sigStats[kind] = (_sigStats[kind] || 0) + 1;
 
-    // 필터 적용 후 렌더
+    // 목록은 현재 필터에 맞는 이벤트만 (필터 목록에 다른 유형이 섞이지 않게)
     if (!_sigFilter || kind === _sigFilter) {
+        _sigEvents.unshift(ev);
+        if (_sigEvents.length > 60) _sigEvents.pop();
         renderSignalEvents();
     }
     renderSignalStats();

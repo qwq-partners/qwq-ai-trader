@@ -195,3 +195,28 @@ def test_gate_performance_buckets_boost_separately():
         "BOOST_G2_cross": 1, "PEN_G2_cross": 1, "PEN_G4_llm": 1,
         "PASSED(대조군)": 1, "G2_cross": 1,
     }
+
+
+def _g(avg, n=30):
+    return {"samples": n, "avg_return": avg, "avg_excess": avg, "avg_clipped": avg,
+            "median_return": avg, "opportunity_loss_cnt": 0, "opportunity_loss_pct": 40.0,
+            "avoided_cnt": 0, "avoided_pct": 10.0, "best": None, "worst": None}
+
+
+def test_adjusted_pass_buckets_get_neutral_verdict_and_bands():
+    """점수 조정 후 통과 버킷(BOOST_/PEN_, |wiki 포함)에는 차단형 권고가 붙지 않는다 — 차단 게이트는 그대로."""
+    gates = {"PASSED(대조군)": _g(1.0), "BOOST_G2_cross": _g(5.0), "BOOST_G2_cross|wiki": _g(-5.0),
+             "PEN_G2_cross": _g(5.0), "G2_cross": _g(5.0), "G1_regime": _g(-5.0)}
+    ga = GatePerformanceAnalyzer.__new__(GatePerformanceAnalyzer)
+    lines = {v.split(":")[0].lstrip("⚠️✅➖ "): v for v in ga._build_verdicts(gates) if not v.startswith("[")}
+    for b in ("BOOST_G2_cross", "BOOST_G2_cross|wiki", "PEN_G2_cross"):
+        assert "판정 대상 아님" in lines[b], lines[b]
+        assert not any(w in lines[b] for w in ("완화 검토", "선별 효과", "차단 신호")), lines[b]
+    assert "완화 검토" in lines["G2_cross"] and "선별 효과" in lines["G1_regime"]   # 대조군: 차단 게이트 문구 유지
+
+    report = GatePerformanceAnalyzer.format_report(
+        {"lookback_days": 90, "horizon_days": 20, "total_analyzed": 0, "verdicts": [], "gates": gates})
+    detail = {ln.split(":")[0]: ln for ln in report.splitlines() if "건 | 평균" in ln}
+    assert "+3% 이상 40%" in detail["PEN_G2_cross"] and "기회손실" not in detail["PEN_G2_cross"]
+    assert "-3% 이하 10%" in detail["BOOST_G2_cross|wiki"]
+    assert "기회손실 40%" in detail["G2_cross"]
