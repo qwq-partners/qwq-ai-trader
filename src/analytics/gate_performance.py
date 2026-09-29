@@ -297,16 +297,16 @@ class GatePerformanceAnalyzer:
             _lbl = "초과" if use_excess else "절대"
             _clip = f", 손절클립 {g['avg_clipped']:+.2f}%" if g.get("avg_clipped") is not None else ""
 
-            # 통과 신호(가점·감점·LLM soft-reject)에 차단형 권고(완화 검토/선별 효과)를 붙이면 거꾸로 읽힌다
-            if gate.startswith(ADJUSTED_PASS_PREFIXES):
-                verdicts.append(
-                    f"➖ {gate}: 점수 조정 후 통과 신호 {_lbl} {avg:+.2f}% vs 통과 "
-                    f"{control_avg if control_avg is not None else 0:+.2f}% ({n}건{_clip}) "
-                    f"— 차단 게이트 아님, 완화/강화 판정 대상 아님"
-                )
-                continue
             if n < MIN_SAMPLES_PER_GATE:
                 verdicts.append(f"{gate}: 표본 부족 ({n}건 < {MIN_SAMPLES_PER_GATE}) — 판단 보류")
+                continue
+            # 통과 신호(가점·감점·LLM soft-reject)에 차단형 권고(완화 검토/선별 효과)를 붙이면 거꾸로 읽힌다
+            if gate.startswith(ADJUSTED_PASS_PREFIXES):
+                _vs = (f"vs 통과 {control_avg:+.2f}%" if control_avg is not None else "(대조군 표본 부족)")
+                verdicts.append(
+                    f"➖ {gate}: 점수 조정 후 통과 신호 {_lbl} {avg:+.2f}% {_vs} ({n}건{_clip}) "
+                    f"— 차단 게이트 아님, 완화/강화 판정 대상 아님"
+                )
                 continue
             if control_avg is not None and avg > control_avg and avg > 0:
                 verdicts.append(

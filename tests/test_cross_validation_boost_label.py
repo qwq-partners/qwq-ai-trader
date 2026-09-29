@@ -220,3 +220,13 @@ def test_adjusted_pass_buckets_get_neutral_verdict_and_bands():
     assert "+3% 이상 40%" in detail["PEN_G2_cross"] and "기회손실" not in detail["PEN_G2_cross"]
     assert "-3% 이하 10%" in detail["BOOST_G2_cross|wiki"]
     assert "기회손실 40%" in detail["G2_cross"]
+
+
+def test_adjusted_pass_bucket_small_samples():
+    """표본 부족 검사가 중립 분기보다 먼저 — 없는 대조군 비교값(+0.00%)을 찍지 않는다."""
+    ga = GatePerformanceAnalyzer.__new__(GatePerformanceAnalyzer)
+    one = ga._build_verdicts({"PASSED(대조군)": _g(1.0), "BOOST_G2_cross": _g(5.0, n=1)})
+    assert one == ["[대조군] 통과 신호 초과 +1.00% (30건, 고유 symbol-day)",
+                   "BOOST_G2_cross: 표본 부족 (1건 < 30) — 판단 보류"]
+    thin = ga._build_verdicts({"PASSED(대조군)": _g(1.0, n=29), "BOOST_G2_cross": _g(5.0)})
+    assert len(thin) == 1 and "대조군 표본 부족" in thin[0] and "+0.00%" not in thin[0], thin
