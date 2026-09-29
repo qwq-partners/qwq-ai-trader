@@ -20,10 +20,24 @@ from typing import Callable, Optional
 from loguru import logger
 
 from src.utils.session import KST, is_kr_market_holiday
+from src.utils.volatility_targeting import RET_OUTLIER_ABS
 
 SOURCES = ("YAHOO:^KS11", "KS11")
 # KOSPI 원천이 모두 신선하지 않을 때만 쓰는 KODEX200 최후 대체 — 같은 검증
 FALLBACK_SOURCES = SOURCES + ("069500",)
+
+
+def proxy_outlier(closes, dates, lookback: int) -> Optional[str]:
+    """대용(069500) 종가의 끝 lookback 개 일수익률 중 |r| > RET_OUTLIER_ABS 첫 건 ("날짜 +24.2%") 또는 None.
+
+    FDR 069500 에는 +24.2%/일 오염 실측 이력이 있다. 봉을 지우거나 보간하지 않는다 — 소비 창 안이면
+    호출부가 원천을 채택하지 않고, 창 밖의 오래된 오염은 보지 않는다 (2026-09-29).
+    """
+    for i in range(max(1, len(closes) - lookback), len(closes)):
+        ret = closes[i] / closes[i - 1] - 1
+        if abs(ret) > RET_OUTLIER_ABS:
+            return f"{dates[i]} {ret:+.1%}"
+    return None
 
 
 def benchmark_date_status(last_bar_date: Optional[date], now: datetime):

@@ -21,6 +21,7 @@ from src.utils.kospi_benchmark import (
     benchmark_date_status,
     fetch_failed_status,
     keep_failure,
+    proxy_outlier,
     validate_benchmark,
 )
 
@@ -929,11 +930,6 @@ class SwingScreener:
                 "last_bar_date": self._kospi_last_bar_date,
                 "loaded_at": self._kospi_loaded_at, "reason": reason}
 
-    def _validate_benchmark(self, data, source: str, now: datetime):
-        """자료를 정렬/보간으로 보정하지 않고 날짜·가격 계약을 검증한다 (공용 모듈 위임)."""
-        closes, _dates, result = validate_benchmark(data, source, now)
-        return closes, result
-
     async def _load_benchmark_index(self):
         """Yahoo ^KS11 → KS11 지수 일봉 → KODEX200(069500) 최후 대체(kospi_benchmark.FALLBACK_SOURCES).
 
@@ -958,7 +954,13 @@ class SwingScreener:
                     timeout=15.0,
                 )
                 now = datetime.now(KST).replace(tzinfo=None)
-                closes, status = self._validate_benchmark(data, source, now)
+                closes, dates, status = validate_benchmark(data, source, now)
+                # 대용은 소비 창(MRS 20+기울기 5, c20 21 → 30봉) 안 일수익률 이상치가 있으면 채택하지 않는다
+                bad = proxy_outlier(closes, dates, 30) if symbol == "069500" else None
+                if bad is not None:
+                    status = {**status, "status": "unknown", "loaded_at": None,
+                              "reason": "proxy_return_outlier"}
+                    logger.warning(f"[스윙스크리너] KOSPI 대용 {source} 제외: 최근 30봉 일수익률 이상치 {bad}")
                 if status["status"] == "fresh":
                     self._kospi_closes = closes
                     self._kospi_loaded_at = status["loaded_at"]

@@ -175,6 +175,8 @@
   세 소비처 모두 `FALLBACK_SOURCES`(`YAHOO:^KS11` → `KS11` → `069500` 최후 대체, 같은 검증)로 읽는다(스크리너·수확은 2026-09-29~, 미배포).
   Yahoo 는 거래일 행을 빠뜨릴 수 있고(09-28 봉 결손 → FDR 이 NaN 종가로 채워 이력 전체 거부) 그 날은 069500 이 채택된다.
   069500 은 원 단위라 지수 pt 와 섞지 않는다 — 12:00 LLM 레짐 재분류는 대용 계열에 당일 KIS 지수 레벨을 잇지 않는다.
+  FDR 069500 은 +24.2%/일 오염 이력이 있어, 스크리너·수확은 채택 전 소비 구간 |일수익률| > 12% 를 `proxy_outlier` 로 검사해 걸리면 채택하지 않는다(`proxy_return_outlier`).
+  LLM 프롬프트(08:10/12:00 레짐·15:00 포지션 점검)는 대용일 때 `KODEX200 대용 일봉`·마지막 봉 날짜를 표기한다.
   FDR Yahoo 리더는 `end` 를 **로컬 자정** 기준으로 넘겨 KST 에선 end 가 빠지고 UTC 에선 다음 거래일이 섞인다 — `load_kospi_history` 는 하루 더 조회한 뒤 end 이후 행을 잘라 end 포함으로 맞춘다.
 - `scripts/` 백테스트 3개(backtest_strategies·backtest_t1_gate·ab_exit_policy)는 `load_kospi_history`(과거 구간, Yahoo ^KS11 → KS11, end 포함·열린 구간 정지 경고)를 쓴다. quick_backtest 는 연구 venv(loguru 없음)라 FDR `YAHOO:^KS11` 을 직접 읽는다(폴백·정지 경고 없음) (2026-09-28~).
 

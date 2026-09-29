@@ -179,7 +179,23 @@ def test_harvest_skips_run_and_keeps_cursor_when_kospi_is_not_fresh(monkeypatch,
     assert not (tmp_path / "pending.json").exists()
 
 
-KODEX = [30000.0 + 300 * i * (-1) ** i for i in range(60)]   # 지수와 단위가 다른 대용 종가
+KODEX = [30000.0 + 50 * i + 300 * (-1) ** i for i in range(60)]   # 원 단위 대용 종가, 일 ±2% 안팎
+
+
+def shifted(values, at, factor=1.242):
+    """at 번째 봉부터 수준을 올린다 → at 에만 +24.2% 급 일수익률 1건 (09-28 이전 FDR 069500 오염 실측 크기)."""
+    return [v * factor if i >= at else v for i, v in enumerate(values)]
+
+
+@pytest.mark.parametrize("at,expected", [(59, "+"), (30, "+"), (29, None), (1, None)])
+def test_proxy_outlier_checks_only_last_lookback_returns(at, expected):
+    values = shifted([100.0] * 60, at)
+    dates = list(pd.bdate_range(end="2026-09-23", periods=60).date)
+    found = kb.proxy_outlier(values, dates, 30)   # 끝 30개 수익률 = 인덱스 30..59
+    if expected is None:
+        assert found is None
+    else:
+        assert found == f"{dates[at]} +24.2%"
 
 
 @pytest.mark.parametrize("case", ["kodex_fallback", "yahoo_fresh"])
@@ -190,8 +206,9 @@ def test_harvest_regime_gate_uses_fallback_only_when_kospi_sources_fail(
         by_symbol = {"YAHOO:^KS11": nan_last("2026-09-23"), "KS11": frame("2026-09-17"),
                      "069500": frame("2026-09-23", KODEX)}
         chosen, source, level = "069500", "FDR:069500", "WARNING"
-    else:
-        by_symbol = {"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17"),
+    else:   # Yahoo 는 대용 이상치 검사 대상이 아니다 — 창 안 급등 봉이 있어도 채택
+        by_symbol = {"YAHOO:^KS11": frame("2026-09-23", shifted([100.0 + i for i in range(60)], 55)),
+                     "KS11": frame("2026-09-17"),
                      "069500": AssertionError("KOSPI 가 신선하면 069500 을 조회하지 않는다")}
         chosen, source, level = "YAHOO:^KS11", "FDR:YAHOO:^KS11", "INFO"
     fetch, calls = stub(**by_symbol)
@@ -321,3 +338,31 @@ def test_ab_exit_policy_benchmark_falls_back_to_shared_loader(monkeypatch):
     ab = _load_script("ab_exit_policy.py", "_ab_exit_for_bench_test")
     out = ab.benchmark_return("2026-09-22", "2026-09-23")
     assert out["code"] == "FDR:YAHOO:^KS11" and round(out["return_pct"], 6) == 10.0
+
+
+@pytest.mark.parametrize("last_bar,at,ok", [
+    (None, 30, False), (None, 29, True),                  # 커서 없음 → 끝 30개 수익률
+    ("2026-09-17", 35, False), ("2026-09-17", 34, True),  # 커서 뒤 4봉(09-18·21·22·23) + 21 = 25
+])
+def test_harvest_rejects_proxy_outlier_inside_judgment_window(monkeypatch, harvest_env, last_bar, at, ok):
+    tmp_path, logs = harvest_env
+    cursor = tmp_path / "cursor.json"
+    before = None
+    if last_bar is not None:
+        before = f'{{"last_bar": "{last_bar}", "last_d0": {{}}}}'
+        cursor.write_text(before, encoding="utf-8")
+    fetch, _ = stub(**{"YAHOO:^KS11": nan_last("2026-09-23"), "KS11": frame("2026-09-17"),
+                       "069500": frame("2026-09-23", shifted(KODEX, at))})
+    monkeypatch.setattr(kb, "_fdr_fetch", fetch)
+    monkeypatch.setattr(hs, "_load_universe", lambda bt: [])
+    monkeypatch.setattr(hs, "_process", lambda bt, data, ok_dates, universe, pending, positions, cur:
+                        ([], 0, cur))
+
+    success, message = asyncio.run(hs.run_daily_shadow_scan())
+    assert success is ok
+    if not ok:
+        at_date = pd.bdate_range(end="2026-09-23", periods=60)[at].date()
+        assert "proxy_return_outlier" in message and f"이상치 {at_date} +" in message
+        assert (cursor.read_text(encoding="utf-8") if cursor.exists() else None) == before
+        assert not (tmp_path / "pending.json").exists()
+        assert not any("체제 게이트 원천" in msg for _, msg in logs)

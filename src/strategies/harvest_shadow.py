@@ -35,7 +35,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from loguru import logger
 
-from src.utils.kospi_benchmark import FALLBACK_SOURCES, load_kospi_daily
+from src.utils.kospi_benchmark import FALLBACK_SOURCES, load_kospi_daily, proxy_outlier
 from src.utils.session import KST
 
 _DIR = Path.home() / ".cache" / "ai_trader" / "harvest_shadow"
@@ -366,6 +366,16 @@ async def _run() -> Optional[str]:
             f"마지막 봉={status['last_bar_date']}, reason={status['reason']})"
         )
     proxy = status["source"] == "FDR:069500"
+    if proxy:
+        # 커서 이후 판정일들의 20일선 창을 덮는다 — 창 안 대용 이상치면 채택 안 함(커서 불변)
+        last_bar = cursor.get("last_bar")
+        lookback = int((kospi.index > pd.Timestamp(last_bar)).sum()) + 21 if last_bar else 30
+        bad = proxy_outlier(kospi.tolist(), list(kospi.index.date), lookback)
+        if bad is not None:
+            raise RuntimeError(
+                f"KOSPI 대용 FDR:069500 제외 — 이번 실행 생략, 커서 유지 "
+                f"(reason=proxy_return_outlier, 최근 {lookback}봉 일수익률 이상치 {bad})"
+            )
     (logger.warning if proxy else logger.info)(
         f"[수확shadow] 체제 게이트 원천: {status['source']} (마지막 봉 {status['last_bar_date']})"
         + (" — KOSPI 대용(KODEX200)" if proxy else "")

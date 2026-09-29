@@ -155,6 +155,32 @@ def test_kodex200_is_last_resort_when_kospi_sources_are_rejected(monkeypatch, sc
     assert len(loaded) == 1 and "source=FDR:069500" in loaded[0] and "KOSPI 대용(KODEX200)" in loaded[0]
 
 
+@pytest.mark.parametrize("at,adopted", [(59, False), (30, False), (29, True)])
+def test_kodex200_return_outlier_in_consumed_window_is_not_adopted(monkeypatch, screener, at, adopted):
+    """FDR 069500 +24.2%/일 오염 실측 — 소비 창(끝 30개 수익률) 안이면 채택 안 함, 창 밖이면 채택."""
+    yahoo = frame()
+    yahoo.iloc[-1, 0] = float("nan")
+    kodex = frame(rising=False) * 300
+    kodex.iloc[at:, 0] *= 1.25   # 수준 이동 → at 에만 일수익률 +24% 안팎 1건
+    load(monkeypatch, screener, frame("2026-09-17"), yahoo, kodex)
+    status = screener.get_benchmark_status()
+    if adopted:
+        assert (status["status"], status["source"]) == ("fresh", "FDR:069500")
+        assert screener.get_market_regime() == "bear"
+    else:
+        assert screener._kospi_closes == [] and screener.get_market_regime() == "neutral"
+        assert (status["status"], status["source"], status["reason"]) == (
+            "unknown", "FDR:069500", "proxy_return_outlier")
+
+
+def test_yahoo_is_not_subject_to_proxy_outlier_check(monkeypatch, screener):
+    yahoo = frame(rising=False)
+    yahoo.iloc[55:, 0] *= 1.25
+    calls = load(monkeypatch, screener, frame("2026-09-17"), yahoo)
+    assert calls == ["YAHOO:^KS11"]
+    assert screener.get_benchmark_status()["status"] == "fresh"
+
+
 def test_kodex200_rejection_keeps_earlier_failure_reason(monkeypatch, screener):
     yahoo = frame()
     yahoo.iloc[-1, 0] = float("nan")
