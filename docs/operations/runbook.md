@@ -43,7 +43,7 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 
 ## 긴급 전량 매도
 
-> 2026-09-29(미배포): 봇이 떠 있으면 주문 CLI(`liquidate_all.py`·`sell_specific.py`)는 KIS 호출 전에
+> 2026-09-29(09-29 20:47 배포 main `785f1fe`): 봇이 떠 있으면 주문 CLI(`liquidate_all.py`·`sell_specific.py`)는 KIS 호출 전에
 > `봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부` 를 출력하고 exit 2 한다(`--dry-run` 포함 — 별도 프로세스의
 > 원장 조회가 EGW00215 를 부른다. 봇이 떠 있으면 조회는 대시보드로). 봇 싱글톤 flock 을 CLI 가 잡아 보는 방식이다.
 
@@ -74,7 +74,7 @@ cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.
 
 - `liquidate_all` 은 자동매도 금지 종목(087010)까지 판다(기존 동작).
 - `sell_specific.py` 의 15초 뒤 순서: **대상 종목 전부의 자기 주문을 먼저 취소**(폴백 수량과 무관, 취소 건수 출력) → 1초 뒤 잔고 **재조회** →
-  **요청 수량 중 아직 안 팔린 몫**(첫 주문 전 보유 스냅샷 − 재조회 보유, 재조회 보유 한도)만 시장가로 낸다(2026-09-29 수정, 미배포 — 이전 판은 보유 전량을 팔았고, 그다음 판은 조회 뒤에 취소해 그 사이 체결분만큼 넘겨 팔 수 있었다).
+  **요청 수량 중 아직 안 팔린 몫**(첫 주문 전 보유 스냅샷 − 재조회 보유, 재조회 보유 한도)만 시장가로 낸다(2026-09-29 수정, 09-29 20:47 배포 `785f1fe` — 이전 판은 보유 전량을 팔았고, 그다음 판은 조회 뒤에 취소해 그 사이 체결분만큼 넘겨 팔 수 있었다).
   같은 종목을 여러 번 적으면 합산해 1건으로 낸다.
   **`취소 0건·목표 미달 — 상태 불명` 이 찍히면 추가 주문을 내지 않은 것이다** — 방금 체결됐는지 취소가 실패해 지정가가 살아 있는지 모르므로 MTS/HTS 에서 미체결·잔고를 확인하고 필요하면 수동으로 판다.
   첫 주문 전 보유 조회가 실패했거나 그 종목이 스냅샷에 없으면, 또는 재조회가 실패하면 폴백하지 않는다(취소는 한다).
@@ -106,7 +106,7 @@ cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.
 | `~/.cache/ai_trader/unified_trader.pid` | PID 파일 |
 | `execution_day_status`(DB 표) | 거래일 기록 대사 결과 — `SELECT trade_date, status, reasons, checked_at FROM execution_day_status ORDER BY trade_date DESC LIMIT 10;` `complete` = 20:30 대사가 불일치를 찾지 못함(증명 아님), `incomplete` 사유는 JSON 배열(`sell_qty:<종목>`·`buy:<종목>`·`trade_row:<id>`·`fill_query_incomplete:<사유>`·`write_queue_pending`·`db_query_failed`) |
 | `~/.cache/ai_trader/excess_return/` | 실거래 KODEX200 초과수익 원장 — `positions.jsonl`(매일 전체 재계산 스냅샷)·`positions_prev.jsonl`(직전 계산일, drift 기준)·`summary.json`·`summary_history.jsonl`(하루 한 줄)·`kodex200_daily.csv`(069500 KIS 일봉 캐시). `positions.jsonl` 첫 줄은 계산일 헤더(`{"_meta":…}`)다. 20:30 진화 블록 끝에서 갱신, 실패는 `[초과수익]` 경고 로그만 |
-| `~/.cache/ai_trader/order_unknown.json` | 오늘의 주문 접수 불명 장부 (2026-09-29~, 미배포) — `{"date", "entries":[{side,symbol,qty,reason,at}]}`. 날짜가 오늘이면 BUY 항목 → 신규 매수 보류, SELL 항목 → 그 종목 분할 매도 금지. 기록은 같은 폴더 `order_unknown.json.lock` 의 배타 잠금 안에서 한다(잠금 파일은 지우지 않아도 된다). 대응·해제는 아래 '주문 접수 불명 알림 대응' |
+| `~/.cache/ai_trader/order_unknown.json` | 오늘의 주문 접수 불명 장부 (2026-09-29~, 15:33 배포 `974a71f`) — `{"date", "entries":[{side,symbol,qty,reason,at}]}`. 날짜가 오늘이면 BUY 항목 → 신규 매수 보류, SELL 항목 → 그 종목 분할 매도 금지. 기록은 같은 폴더 `order_unknown.json.lock` 의 배타 잠금 안에서 한다(잠금 파일은 지우지 않아도 된다). 대응·해제는 아래 '주문 접수 불명 알림 대응' |
 | `~/.cache/ai_trader/kis_token_prod.json` | KIS 토큰 캐시 |
 | `~/.cache/ai_trader/office_status.json` | 가상 오피스 외부 푸시 상태 (5분 TTL) |
 
@@ -333,7 +333,7 @@ cat ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
 grep '"blocked"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
 ```
 
-## 주문 접수 불명 알림 대응 (2026-09-29~, 미배포)
+## 주문 접수 불명 알림 대응 (2026-09-29~, 15:33 배포 `974a71f`)
 
 텔레그램 `⚠️ 주문 접수 불명: {종목} {매수|매도} {수량}주 — KIS 응답 유실(재전송 안 함)` 은 주문 POST 가
 KIS 에 닿았는지 모르는 상태다. 봇은 재전송하지 않고 **그날** 다음처럼 막는다(날짜가 바뀌면 자동 해제).
@@ -362,7 +362,7 @@ echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
 ```
 
 CLI(`scripts/sell_specific.py`·`liquidate_all.py`)의 불명도 같은 파일에 기록되고 출력에 `[접수불명]` 이 찍히지만,
-실행 중인 봇은 재시작 전까지 보지 못한다. 2026-09-29 3단계(미배포)부터 CLI 는 봇이 떠 있으면 거부되므로
+실행 중인 봇은 재시작 전까지 보지 못한다. 2026-09-29 3단계(20:47 배포 `785f1fe`)부터 CLI 는 봇이 떠 있으면 거부되므로
 (위 '긴급 전량 매도'), CLI 의 불명은 봇이 멈춘 동안에만 생기고 다음 기동 때 장부를 읽는다.
 
 ## 스토리지 / DB 유지보수 (2026-08-02~)
@@ -481,6 +481,10 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 ### 싱글톤 락 충돌
 
 증상: `flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중` 로 봇 기동이 exit 1 을 반복한다.
+
+기동은 **아무 프로세스도 죽이지 않는다** (2026-09-29~, 미배포 PR). 예전에는 PID 파일의 프로세스를 SIGTERM→SIGKILL 해서
+운영 봇이 도는 중에 `run_trader.py --dry-run` 을 띄우면 운영 봇이 죽었다. 이제 그 dry-run 은 위 증상으로 exit 1 한다 —
+봇이 떠 있는 동안 dry-run 은 돌리지 않는다(같은 락·같은 appkey).
 
 ```bash
 fuser -v ~/.cache/ai_trader/unified_trader.lock    # 락을 쥔 프로세스 확인

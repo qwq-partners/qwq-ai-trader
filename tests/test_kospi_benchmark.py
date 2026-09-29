@@ -261,13 +261,24 @@ def test_history_falls_back_to_ks11_on_error_or_empty():
     assert kb.load_kospi_history("2026-06-01", fetch=fetch) == (None, None)
 
 
-def test_history_warns_only_when_open_ended_series_is_frozen(monkeypatch):
+def test_history_skips_frozen_source_relative_to_end_or_today(monkeypatch):
+    """멈춘 원천은 경고 후 건너뛴다 — end 없음(오늘 기준)·end 지정(BacktestGate) 모두 (2026-09-29)."""
     warnings = []
     monkeypatch.setattr(kb.logger, "warning", lambda msg: warnings.append(msg))
     fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-17"), "KS11": frame("2026-09-17")})
-    df, source = kb.load_kospi_history("2026-06-01", fetch=fetch, now=NOW)  # end 없음 = 오늘까지
-    assert source == "FDR:YAHOO:^KS11"
-    assert any("직전 거래일보다 오래됨" in w for w in warnings)
+    assert kb.load_kospi_history("2026-06-01", fetch=fetch, now=NOW) == (None, None)  # end 없음 = 오늘까지
+    assert any("오래됨" in w and "원천 제외" in w for w in warnings)
+    # BacktestGate: Yahoo 무효(NaN) + KS11 09-17 정지, end=오늘 → 조용히 KS11 을 채택하지 않는다
+    nan = frame("2026-09-23")
+    nan.iloc[-1, 0] = float("nan")
+    fetch, _ = range_stub(**{"YAHOO:^KS11": nan, "KS11": frame("2026-09-17")})
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch, now=NOW) == (None, None)
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-17"), "KS11": frame("2026-09-23")})
+    assert kb.load_kospi_history("2026-06-01", "2026-09-28", fetch=fetch, now=NOW)[1] == "FDR:KS11"
+    # end 가 미래여도 기준일은 오늘(now)
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17")})
+    assert kb.load_kospi_history("2026-06-01", "2026-12-31", fetch=fetch, now=NOW)[1] == "FDR:YAHOO:^KS11"
+    fetch, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-17"), "KS11": frame("2026-09-17")})
     warnings.clear()
     kb.load_kospi_history("2026-06-01", "2026-09-17", fetch=fetch, now=NOW)  # 과거 구간 명시 → 경고 없음
     fresh, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-23"), "KS11": frame("2026-09-17")})
@@ -289,7 +300,7 @@ def test_history_trim_handles_timezone_aware_index_and_empty_result():
     df, source = kb.load_kospi_history("2026-06-01", "20260923", fetch=fetch)
     assert source == "FDR:YAHOO:^KS11" and df.index[-1].date() == date(2026, 9, 23)
     late, _ = range_stub(**{"YAHOO:^KS11": frame("2026-09-25").loc["2026-09-24":],
-                            "KS11": frame("2026-09-17")})
+                            "KS11": frame("2026-09-23")})
     df, source = kb.load_kospi_history("2026-06-01", "2026-09-23", fetch=late)   # 절단 뒤 빈 결과 → 다음 원천
     assert source == "FDR:KS11"
 
