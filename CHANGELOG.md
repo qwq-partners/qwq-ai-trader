@@ -1,5 +1,20 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-29 — fix: KOSPI 원천이 모두 막히면 수확 shadow·스윙스크리너 레짐도 KODEX200(069500) 최후 대체 (결정 R1, 미배포)
+
+- **원인(09-29 운영 로그·공개 시세 확인):** Yahoo ^KS11 일봉에서 09-28(월, 거래일) 행이 빠졌다(yfinance 에 행 없음). FDR `YAHOO:^KS11` 은 그 날짜를 NaN 종가로 돌려줘 `validate_benchmark` 가 `invalid_close_history` 로 이력 전체를 거부하고(09-28 설계 계약 — dropna·보간 안 함, **무변경**), FDR `KS11` 은 09-17 에서 정지(stale). 그 결과 ① 수확 shadow 08:40 이 11분마다 `RuntimeError`·하트비트 정체 경보, ② 스윙스크리너 벤치마크 결측 → `get_market_regime()` neutral → bear·caution 때의 SEPA/VCP 차단·상향이 꺼지고 MRS 가 빠졌다.
+- **결정 R1(사용자):** 09-28 변동성 타게팅에 승인된 선례(`SOURCES + ("069500",)`, 같은 검증을 통과해야 채택)를 두 소비처에도 적용.
+- `src/utils/kospi_benchmark.py`: 공용 상수 `FALLBACK_SOURCES = SOURCES + ("069500",)`. `volatility_targeting.py` 는 이 상수를 쓴다(동작 변경 0 — 기존 시험의 조회 순서 단정 그대로 통과).
+- `src/strategies/harvest_shadow.py`: 체제 게이트 로드를 `sources=FALLBACK_SOURCES` 로. 성공 시 `[수확shadow] 체제 게이트 원천: …` 1줄 — 069500 이면 WARNING(`KOSPI 대용(KODEX200)`), 아니면 INFO.
+- `src/signals/screener/swing_screener.py`: `_load_benchmark_index` 루프 원천을 `FALLBACK_SOURCES` 로. 069500 채택 시 기존 로드 로그를 WARNING 으로 올려 `KOSPI 대용(KODEX200)` 을 적는다(Yahoo·KS11 은 INFO 그대로). Yahoo 가 fresh 면 069500 을 조회하지 않는다.
+- **범위 이탈(보고):** `src/schedulers/kr_scheduler.py` 12:00 LLM 레짐 재분류는 스크리너 `_kospi_closes` 뒤에 KIS 지수 레벨(pt)을 이어 c5/c20 을 다시 계산한다. 069500 종가(원)에 지수 pt 를 이으면 c5 가 -90% 대로 깨지므로, 스크리너 원천이 `FDR:069500` 이면 당일 잠정봉 반영을 생략하고 결측 사유 `KODEX200 대용 계열 — 지수와 단위 다름` 을 남긴다(봉 기반 c5/c20 은 아침 값, 당일 등락은 `kospi_today_pct`·급락 감지기로 그대로 들어간다).
+- **무변경:** `validate_benchmark`·`benchmark_date_status` 계약, `get_market_regime` 임계값, `load_kospi_history`(BacktestGate), US 경로. 069500 은 비율(변화율·20일선·MRS)로만 쓰이며 `get_kospi_change()["level"]` 은 로그 표시뿐이다.
+- 검증: `tests/test_kospi_benchmark.py`(수확 — Yahoo NaN·KS11 stale·069500 fresh 채택과 WARNING, Yahoo fresh 면 069500 미조회와 INFO, 세 원천 실패 시 RuntimeError·커서 불변·KS11 stale 근거 보존), `tests/test_benchmark_freshness.py`(스크리너 — 069500 종가로 bear 판정·WARNING, 069500 거부 시 neutral, 기존 조회 순서 단정 갱신), `tests/test_regime_llm_inputs.py`(대용 계열에 지수 레벨 미접합). 변이 3종 kill(두 호출부 원천 원복·스케줄러 가드 삭제), sha256 복원 확인.
+- **교차 공급자 리뷰(Codex, rollout gpt-6-astra/xhigh) REQUEST_CHANGES(P1 1·P2 1) 처분(둘 다 수용):** P1 — 069500 을 **채택할 때만** 실제 소비 구간의 |일수익률| > 12%(`volatility_targeting.RET_OUTLIER_ABS` 재사용, FDR 069500 +24.2%/일 오염 실측)를 `kospi_benchmark.proxy_outlier` 로 검사해, 걸리면 채택하지 않고 기존 실패 처리로 보낸다(사유 `proxy_return_outlier`, 날짜·수익률 로그, 봉 삭제·보간 없음, 창 밖 오염은 무시). 스크리너는 끝 30개 수익률(MRS 20+기울기 5, c20 21), 수확은 커서 이후 봉 수 + 21(커서 없으면 30) — 수확은 로드 뒤 검사해 `RuntimeError`·커서 불변. 변동성 타게팅은 무변경(자체 이상치 제외). 수확 시험 fixture 를 정상 진폭으로 바꿨다. P2 — 08:10/12:00 LLM 레짐 프롬프트의 5일/20일 줄과 15:00 포지션 점검의 "KOSPI 최근 5거래일" 줄에 069500 일 때만 `KODEX200 대용 일봉 FDR:069500`·마지막 봉 날짜를 붙인다(Yahoo·KS11 이면 문자열 불변). `input_meta` 에 `kospi_bars_source`·`kospi_last_bar_date` 추가(당일 KIS 지수 원천 `kr_source` 와 구분). 정오 가드 시험에 c20 보존 단정 추가.
+- **한정 재리뷰 2회차(같은 조건) REQUEST_CHANGES(P1 1·P2 1) 처분:** P1 — 수확은 커서가 없으면 `_process` 가 종목별 마지막 봉(지연 종목은 검사 창 밖)을 판정하므로 **커서 없음이면 069500 대용을 채택하지 않는다**(`RuntimeError`·커서 불변, `reason=proxy_needs_cursor`; 운영은 커서 보유 — 새 설치에만 해당, shadow 라 실패 쪽이 안전). P2 — 검사 창이 실제 소비 구간보다 약간 넓어 소비하지 않는 과거 오염도 거부할 수 있다 → **코드 무변경, 한계로 기록**: 경계 부근 오염은 대용 미채택 쪽으로 치우치며(=R1 이전 상태로 복귀, 더 나빠지지 않음), 수확은 커서가 고정돼 그 오염이 창에서 빠지지 않아 Yahoo·KS11 회복까지 생략이 이어질 수 있다. 음의 이상치(-24%) 거부 시험 추가(`abs` 제거 변이 kill).
+- **후속 과제:** ① `load_kospi_history`(BacktestGate·scripts 백테스트)는 NaN 종가를 검증하지 않는다 — 같은 Yahoo 결손이 과거 구간 벤치마크에 NaN 으로 섞일 수 있다. ② KIS 에 지수 일봉 원천이 없다(`get_daily_prices('0001')` 은 주식 API) — 지수 원천은 여전히 FDR 두 경로뿐이다.
+- 주문·전략·위험 설정·`.env`·킬스위치 변경 0. 추가 KIS 호출 0.
+
 ## 2026-09-29 — fix: 주문 POST 접수 불명(UNKNOWN) 분리 — 그날 BUY 보류·불명 SELL 종목 분할 재발행 금지 (절충안 2단계, 미배포)
 
 - 설계 [2026-09-29-order-post-unknown-design.md](docs/superpowers/specs/2026-09-29-order-post-unknown-design.md) v2 구현(구현 커밋 `5e8d730`, 구현 리뷰 1회차 반영 `7c57bb1`). 돈 경로 — 교차 공급자 구현 리뷰 1회차(Codex, rollout gpt-6-astra/xhigh) REQUEST_CHANGES(P1 2·P2 2)를 처분했고 재리뷰 전이며 **미배포**.

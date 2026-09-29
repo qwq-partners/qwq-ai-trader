@@ -68,7 +68,7 @@ async def refresh_vol_state() -> bool:
     if not _enabled():
         return
     try:
-        from src.utils.kospi_benchmark import SOURCES, load_kospi_daily
+        from src.utils.kospi_benchmark import FALLBACK_SOURCES, load_kospi_daily
         from src.utils.session import KST
 
         # KOSPI 원천(Yahoo ^KS11 → KS11)이 모두 신선하지 않을 때만 KODEX 200 최후 폴백
@@ -76,7 +76,7 @@ async def refresh_vol_state() -> bool:
         now = datetime.now(KST)
         start = (now - timedelta(days=FETCH_START_DAYS)).strftime("%Y-%m-%d")
         closes, status = await asyncio.to_thread(
-            load_kospi_daily, start, now, sources=SOURCES + ("069500",)
+            load_kospi_daily, start, now, sources=FALLBACK_SOURCES
         )
         if closes is None:
             logger.warning(
