@@ -51,7 +51,8 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 
 1. `touch ~/.cache/ai_trader/KILL_SWITCH` — 봇 신규 매수 차단(2초 안 반영). **`KILL_SWITCH_ALL`·`KILL_SWITCH_ALL_KR` 금지** — CLI·봇 매도까지 막힌다.
 2. MTS/HTS 에서 **미체결 일괄취소**(봇의 살아 있는 BUY 가 청산 뒤 체결되는 것 방지) → 보유 전량 매도.
-3. 잔고·미체결 0 을 확인한다. 봇은 30초 동기화로 결과를 반영한다. KILL_SWITCH 는 재개를 판단할 때까지 유지한다.
+3. **30초 뒤 미체결을 다시 확인·취소한다** — 킬스위치 직전 검사를 통과한 BUY 가 hashkey·rate-limit 대기 뒤 늦게 전송될 수 있다.
+4. 그 재확인 뒤에 잔고·미체결 0 을 확인해 청산 완료로 판정한다. 봇은 30초 동기화로 결과를 반영한다. KILL_SWITCH 는 재개를 판단할 때까지 유지한다.
 
 **2순위 — CLI 로 할 때** (**tmux 안에서** 실행 — SSH 가 끊겨 SIGHUP 이 15초 대기 중인 CLI 를 죽이면 자기 SELL 이
 매도가능수량을 잡아 재실행이 수량 초과로 거부된다):
@@ -60,7 +61,7 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 touch ~/.cache/ai_trader/KILL_SWITCH                                   # 1) 신규 매수 차단
 sudo systemctl stop qwq-ai-trader                                     # 2) 봇 정지 (운영 unit 의 TimeoutStopSec 확인 — 저장소 unit 30초, 과거 90초 기록)
 # 3) MTS/HTS 에서 봇이 남긴 BUY·SELL 미체결 확인·취소 (봇 종료는 주문을 취소하지 않고, CLI 는 봇 주문을 취소할 수 없다)
-/home/ubuntu/projects/qwq-ai-trader/venv/bin/python scripts/liquidate_all.py --market kr   # 4) 청산 (--force: 확인 없이)
+cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.py --market kr   # 4) 청산 (--force: 확인 없이)
 # 5) 잔고·미체결 0 확인 (CLI 는 실패해도 끝에 '완료'를 출력한다)
 ```
 

@@ -50,7 +50,7 @@ CLI 의 취소는 자기 인스턴스의 추적만 순회하므로 봇 주문에
     ```
     [{tool}] 봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부
       누가 쥐었나: fuser -v ~/.cache/ai_trader/unified_trader.lock
-      봇이면(급할 때 1순위): touch ~/.cache/ai_trader/KILL_SWITCH 후 MTS/HTS 에서 미체결 일괄취소·매도
+      봇이면(급할 때 1순위): touch ~/.cache/ai_trader/KILL_SWITCH 후 MTS/HTS 에서 미체결 일괄취소·매도 (30초 뒤 미체결 재확인)
       CLI 로 하려면: KILL_SWITCH → sudo systemctl stop qwq-ai-trader → HTS 미체결 취소 확인 → 이 명령 재실행
     ```
   - 성공하면 fd 를 모듈 전역에 붙잡아 **프로세스가 끝날 때까지** 쥔다. 그러면 CLI 가 도는 동안 봇이 재기동하려 해도 기존 코드대로 거부된다(`run_trader.py:2198` exit 1 → systemd 재시도).
@@ -80,14 +80,15 @@ CLI 의 취소는 자기 인스턴스의 추적만 순회하므로 봇 주문에
 **1순위 — 봇을 멈추지 않는 방법**(가장 빠르다. 봇 내부 청산 경로는 없다):
 1. `touch ~/.cache/ai_trader/KILL_SWITCH` — 봇 신규 매수 차단(2초 안 반영). **`KILL_SWITCH_ALL`·`KILL_SWITCH_ALL_KR` 금지** — CLI·봇 매도까지 막힌다.
 2. MTS/HTS 에서 **미체결 일괄취소**(봇의 살아 있는 BUY 가 청산 뒤 체결되는 것 방지) → 보유 전량 매도.
-3. 잔고·미체결 0 을 확인한다. 봇은 30초 동기화로 결과를 반영한다. KILL_SWITCH 는 재개를 판단할 때까지 유지한다.
+3. **30초 뒤 미체결을 다시 확인·취소한다** — 킬스위치 직전 검사를 통과한 BUY 가 hashkey·rate-limit 대기 뒤 늦게 전송될 수 있다(`_api_post` 전송 직전 재검사는 접수 불명 보류만 본다). (구현 리뷰 1회차 P1)
+4. 그 재확인 뒤에 잔고·미체결 0 을 확인해 청산 완료로 판정한다. 봇은 30초 동기화로 결과를 반영한다. KILL_SWITCH 는 재개를 판단할 때까지 유지한다.
 
 **2순위 — CLI 로 할 때**(tmux 안에서 실행 — SSH 가 끊겨 SIGHUP 이 15초 대기 중인 CLI 를 죽이면 자기 SELL 이 매도가능수량을 잡아 재실행이 I1 로 거부된다):
 ```bash
 touch ~/.cache/ai_trader/KILL_SWITCH                                   # 1) 신규 매수 차단
 sudo systemctl stop qwq-ai-trader                                     # 2) 봇 정지 (운영 unit 의 TimeoutStopSec 확인 — 저장소 unit 30초, 과거 90초 기록)
 # 3) MTS/HTS 에서 봇이 남긴 BUY·SELL 미체결 확인·취소 (봇 종료는 주문을 취소하지 않고, CLI 는 봇 주문을 취소할 수 없다)
-/home/ubuntu/projects/qwq-ai-trader/venv/bin/python scripts/liquidate_all.py --market kr   # 4) 청산
+cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.py --market kr   # 4) 청산
 # 5) 잔고·미체결 0 확인 (CLI 는 실패해도 끝에 '완료'를 출력한다)
 ```
 - `liquidate_all` 은 자동매도 금지 종목(087010)까지 판다(기존 동작 — 한 줄 경고).
@@ -176,6 +177,20 @@ sudo systemctl stop qwq-ai-trader                                     # 2) 봇 �
 | P2 (Claude) | 거부 메시지가 runbook 참조뿐 · 폴더 없음 트레이스백 · source 자동 구분 · 운영 수용 확인 · tmux | D1 메시지·mkdir, D3 `sys.argv[0]`, §5 점검 명령, D2 tmux |
 | P2 (Claude) | `"a"` 보존 시험은 쓰는 곳 없는 성질 | 시험·변이에서 제외(`"a"` 는 유지) |
 
+### 구현 리뷰 1회차 (2026-09-29, 대상 `cc15bf8`)
+
+- Codex(교차 공급자, rollout 기준 gpt-6-astra/xhigh): REQUEST_CHANGES — P1 2 · P2 2.
+- 독립 Claude: APPROVE — P2 3.
+- coordinator 가 코드와 대조해 처분했다.
+
+| # | 지적 | 처분 |
+|---|---|---|
+| P1 (공통, 돈 경로 회귀) | `Path(sys.argv[0])` 가 `audit_log.record` 호출 전에 평가돼, 빈 `sys.argv` 면 IndexError 가 posted 뒤 예외 경로로 흘러 성공 주문이 접수 불명(추적 dict 제거·그날 BUY 보류)이 된다 — 독립 리뷰 재현 | 신원 계산을 순수 함수 `kis_kr._accept_identity(odno, orgno, session, source)` 로 옮기고 `isinstance` 입력 검사만으로 예외가 없게 함(try/except 아님). source 는 `self.order_source or Path((sys.argv[:1] or [""])[0]).name or "unknown"`. 시험: `sys.argv=[]` BUY·SELL 성공 경로 유지·`_record_unknown` 미호출(스파이) |
+| P2 (Codex) | `order_ref` 조건이 W 신원 규칙보다 느슨함(비문자열·공백·`local-`) | ODNO·ORGNO 가 비지 않은 `str`·앞뒤 공백 없음·ODNO 가 `TEMP_`/`local-` 아님·KRX 세션일 때만. `org_no` 는 None 이면 `""`(감사 None 제거 규칙에도 "항상 기록" 유지). 반환·추적 원본 값 무변경. 반례 시험 5건 |
+| P1 (Codex) | 긴급 1순위: 킬스위치 직전 검사를 통과한 BUY 가 hashkey·rate-limit 대기 뒤 늦게 전송될 수 있다 | 코드 변경 없음. D2·runbook 1순위에 "30초 뒤 미체결 재확인·취소" 단계, 청산 완료 판정은 그 뒤. `trader_lock` 안내 1순위 줄에 "(30초 뒤 미체결 재확인)" |
+| P2 (공통) | runbook·D2 의 CLI 명령이 상대경로 | `cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.py --market kr` |
+| P2 (Claude) | `LOCK_EX`→`LOCK_SH` 변이가 시험에 걸리지 않는다 | 같은 프로세스에서 첫 획득 fd 를 보관·`_held=None` 후 재호출 → exit 2 시험 추가 |
+
 ## 8. 구현 기록 (2026-09-29, 미배포)
 
 - 브랜치 `fix/cli-refusal-orderref-20260929`, 기준 `de53941`(= main `4b8e146` + 이 문서). 작성 Claude Opus(요청 opus/high).
@@ -190,4 +205,10 @@ sudo systemctl stop qwq-ai-trader                                     # 2) 봇 �
 - 변이 8종 전부 검출(sha256 복원 확인): 거부 분기 제거·exit 코드 제거·unlink 복원·NXT 조건 제거·TEMP_ 조건 제거·ORGNO 조건 제거·sell_specific/liquidate_all 호출을 브로커 생성 뒤로.
 - 스모크: `async main()` 안의 `sys.exit(2)` 가 `asyncio.run` 을 거쳐 프로세스 종료코드 2 로 나온다(tmp 락 경로, KIS·`.env` 무관).
 - 회귀: `TZ=UTC`·`TZ=Asia/Seoul` 각각 `pytest -q -p no:cacheprovider tests/` → **2386 passed / 2 xfailed**(기준 2369 + 신규 17), `[테스트 격리] … 0건`, 종료코드 0. toss 플레이크 미발생.
-- 설계 이탈 없음. 리뷰·배포는 아직(사용자 지시 대기).
+- 설계 이탈 없음.
+- **구현 리뷰 1회차 반영**(§7 처분표):
+  - `kis_kr._accept_identity`(순수 함수·예외 없음), 모듈 헬퍼 `_is_clean_id`. source 에 빈 argv 방어·`"unknown"`.
+  - 시험 +8(총 25): `sys.argv=[]` BUY·SELL 성공 경로 2, W 신원 반례 5(ODNO int·`local-1`·앞 공백, ORGNO 공백·None), 같은 프로세스 두 번째 획득 거부 1.
+  - 변이 5종 추가 검출(sha256 복원 확인): argv 방어 제거, `local-` 검사 제거, 공백 검사 제거, 둘 다 제거, `LOCK_EX`→`LOCK_SH`.
+  - 회귀: `TZ=UTC`·`TZ=Asia/Seoul` 각각 **2394 passed / 2 xfailed**(2386 + 8), `[테스트 격리] … 0건`, 종료코드 0.
+- 배포는 아직(사용자 지시 대기).

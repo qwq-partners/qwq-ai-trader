@@ -100,6 +100,29 @@ class KISConfig:
         )
 
 
+def _is_clean_id(value) -> bool:
+    return isinstance(value, str) and value != "" and value == value.strip()
+
+
+def _accept_identity(odno, orgno, session: str, source: str) -> dict:
+    """감사 원장 EV_ACCEPT 에 붙일 주문 신원 (2026-09-29). 접수 성공 뒤에 부르므로 어떤 입력에도 예외를 내지 않는다
+    (예외면 posted 뒤 경로가 성공 주문을 접수 불명으로 바꾼다).
+
+    원시 필드는 항상 싣는다(`org_no` 가 None 이면 "" — 감사 원장은 None 필드를 뺀다). `order_ref` 는 W OrderRef
+    필드 순서이며, 거래소가 확정된 KRX 세션이고 ODNO·ORGNO 가 W 신원 규칙(비지 않은 str·앞뒤 공백 없음·
+    ODNO 가 TEMP_/local- 아님)을 만족할 때만 싣는다(NXT 거래소 값은 근거 없음).
+    """
+    order_date = datetime.now().date().isoformat()
+    ref_ok = (session in ("regular", "pre_close", "closing") and _is_clean_id(odno) and _is_clean_id(orgno)
+              and not odno.startswith(("TEMP_", "local-")))
+    return {
+        "odno": odno, "org_no": "" if orgno is None else orgno, "order_date": order_date,
+        "account_scope": "primary",
+        "order_ref": ["primary", "KR", order_date, "KRX", odno, orgno, ""] if ref_ok else None,
+        "session": session, "source": source,
+    }
+
+
 class KISBroker(BaseBroker):
     """
     KIS (한국투자증권) 브로커
@@ -652,18 +675,12 @@ class KISBroker(BaseBroker):
                 f"주문 제출 성공: {order.symbol} {order.side.value} "
                 f"{order.quantity}주 @ {ord_unpr}원 -> KIS#{kis_ord_no}"
             )
-            # 주문 신원 (2026-09-29) — W OrderRef 필드 순서. 거래소가 확정된 KRX 세션이고 ODNO·ORGNO 가
-            # 실값일 때만 order_ref 를 싣는다(NXT 거래소 값은 근거 없음). 원시 필드는 항상 남긴다.
-            order_date = datetime.now().date().isoformat()
-            ref_ok = (session in ("regular", "pre_close", "closing")
-                      and not str(kis_ord_no).startswith("TEMP_") and bool(orgno))
+            source = self.order_source or Path((sys.argv[:1] or [""])[0]).name or "unknown"
             audit_log.record(
                 audit_log.EV_ACCEPT, market="KR", symbol=order.symbol,
                 side=order.side.value, qty=order.quantity, price=ord_unpr,
                 order_id=kis_ord_no, strategy=order.strategy,
-                odno=kis_ord_no, org_no=orgno, order_date=order_date, account_scope="primary",
-                order_ref=["primary", "KR", order_date, "KRX", kis_ord_no, orgno, ""] if ref_ok else None,
-                session=session, source=self.order_source or Path(sys.argv[0]).name,
+                **_accept_identity(kis_ord_no, orgno, session, source),
             )
             return True, kis_ord_no
 

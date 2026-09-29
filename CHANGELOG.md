@@ -13,10 +13,14 @@
     락 획득 실패 로그에 `fuser -v` 안내 한 줄 추가. acquire 1단계(PID kill) 등 나머지 무변경.
 - **주문 신원 (D3)**: `kis_kr.submit_order` 성공 경로의 감사 원장 `accept` 행에 `odno`·`org_no`·`order_date`·`account_scope="primary"`·`session`·`source` 를 항상,
   `order_ref`(W `OrderRef` 순서 7칸)는 regular/pre_close/closing 세션 + ODNO 가 `TEMP_` 아님 + ORGNO 있음일 때만 싣는다.
-  `source` 는 `KISBroker.order_source`(클래스 기본 None) 또는 `Path(sys.argv[0]).name`. 반환·추적 dict·기존 감사 필드·다른 경로 무변경. 재시작 시 pending 복원·DB 스키마 변경 없음.
+  `source` 는 `KISBroker.order_source`(클래스 기본 None) 또는 `Path(sys.argv[0]).name`(빈 argv 면 `"unknown"`). 반환·추적 dict·기존 감사 필드·다른 경로 무변경. 재시작 시 pending 복원·DB 스키마 변경 없음.
+  - 구현 리뷰 1회차(Codex REQUEST_CHANGES P1 2·P2 2, 독립 Claude APPROVE P2 3) 반영: 신원 계산을 예외 없는 순수 함수 `_accept_identity` 로 분리
+    (빈 `sys.argv` 의 IndexError 가 posted 뒤 경로로 흘러 성공 주문을 접수 불명으로 바꾸던 회귀 차단), `order_ref` 조건을 W 신원 규칙
+    (비지 않은 str·앞뒤 공백 없음·`TEMP_`/`local-` 아님)에 맞춤, `org_no` None → `""`.
 - **시험**: 신규 `tests/test_cli_refusal_orderref.py`(T1 락 경로 주입, T2 CLI AST 호출 순서, T3 release 가 락 파일 보존, T4 EV_ACCEPT 필드 — 시계·세션·HTTP·킬스위치·감사 기록 가짜).
   변이 8종(거부 분기·exit 코드 제거, unlink 복원, NXT·TEMP_·ORGNO 생략 조건 제거, 두 CLI 호출을 브로커 생성 뒤로) 전부 검출.
-- **문서**: runbook '긴급 전량 매도'(1순위 KILL_SWITCH+HTS, 2순위 봇 정지 후 CLI·tmux·sudo 금지·CLI 중 배포 금지)·'싱글톤 락 충돌'(`rm -f *.lock` 삭제 → `fuser`)·'주문 접수 불명' CLI 문구,
+  리뷰 반영 +8건(빈 argv BUY·SELL, W 신원 반례 5, 같은 프로세스 두 번째 획득 거부)과 변이 5종(argv 방어·`local-`·공백 검사 제거, `LOCK_EX`→`LOCK_SH`) 검출.
+- **문서**: runbook '긴급 전량 매도'(1순위 KILL_SWITCH+HTS·30초 뒤 미체결 재확인, 2순위 절대경로 봇 정지 후 CLI·tmux·sudo 금지·CLI 중 배포 금지)·'싱글톤 락 충돌'(`rm -f *.lock` 삭제 → `fuser`)·'주문 접수 불명' CLI 문구,
   `docs/integrations/external-apis.md` 감사 원장 필드, `docs/operations/monitoring-checkpoints.md` 운영 수용 확인, CLAUDE.md 주의사항 한 줄.
 - **남은 한계**: 나중에 추가되는 주문 스크립트는 규칙(`hold_or_exit` 호출)으로만 덮인다. `sudo` 실행은 home 이 달라 통과(추정). `sell_specific` 폴백 전량 매도 결함은 별도 과제.
 - 주문·전략·위험 설정·임계값·킬스위치·`.env` 변경 0. 배포·재시작 안 함.

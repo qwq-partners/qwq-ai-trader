@@ -53,6 +53,7 @@ def test_t1_refuses_with_next_steps_when_another_fd_holds_the_lock(tmp_path, cap
     assert err.startswith("[liquidate_all] 봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부")
     assert "fuser -v ~/.cache/ai_trader/unified_trader.lock" in err
     assert "touch ~/.cache/ai_trader/KILL_SWITCH" in err and "sudo systemctl stop qwq-ai-trader" in err
+    assert "(30초 뒤 미체결 재확인)" in err
     assert trader_lock._held is None
 
 
@@ -64,6 +65,19 @@ def test_t1_acquires_and_keeps_holding_until_the_process_ends(tmp_path, released
         with pytest.raises(BlockingIOError):
             fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     assert path.exists()
+
+
+def test_t1_second_holder_is_refused_even_in_the_same_process(tmp_path, released):
+    """배타 락이어야 한다 — 공유 락이면 두 번째 CLI 도 통과한다(LOCK_EX→LOCK_SH 변이 검출)."""
+    path = tmp_path / "unified_trader.lock"
+    trader_lock.hold_or_exit("sell_specific", path=path)
+    first, trader_lock._held = trader_lock._held, None
+    try:
+        with pytest.raises(SystemExit) as exc:
+            trader_lock.hold_or_exit("liquidate_all", path=path)
+        assert exc.value.code == 2 and trader_lock._held is None
+    finally:
+        first.close()
 
 
 def test_t1_missing_parent_directory_is_created_not_a_traceback(tmp_path, released):
@@ -230,3 +244,39 @@ def test_t4_sell_side_gets_the_same_identity(broker, monkeypatch):  # noqa: F811
     assert asyncio.run(broker.submit_order(_order(OrderSide.SELL))) == (True, "0009")
     accept = next(f for e, f in rows if e == kis_kr.audit_log.EV_ACCEPT)
     assert accept["side"] == "sell" and accept["order_ref"][4:6] == ["0009", "91252"]
+
+
+@pytest.mark.parametrize("side", [OrderSide.BUY, OrderSide.SELL])
+def test_t4_empty_argv_keeps_the_success_path_and_never_becomes_unknown(broker, monkeypatch, side):  # noqa: F811
+    """빈 sys.argv(임베디드 인터프리터 등)에서도 성공 주문은 성공 — 신원 계산 예외가 접수 불명으로 새지 않는다."""
+    monkeypatch.setattr(sys, "argv", [])
+    _freeze_clock(monkeypatch, kis_kr, NOW)
+    unknown = []
+    monkeypatch.setattr(kis_kr.KISBroker, "_record_unknown", lambda self, *a, **k: unknown.append(a) or "x")
+    rows = []
+    monkeypatch.setattr(kis_kr.audit_log, "record", lambda event, **f: rows.append((event, f)))
+
+    async def post(url, tr_id, json_data, extra_headers=None, retry=True):
+        return {"rt_cd": "0", "output": {"ODNO": "0001", "KRX_FWDG_ORD_ORGNO": "91252"}}
+    broker._api_post = post
+    assert asyncio.run(broker.submit_order(_order(side))) == (True, "0001")
+    assert unknown == []
+    assert broker._order_id_to_kis_no == {"o1": "0001"} and broker._order_id_to_orgno == {"o1": "91252"}
+    assert list(broker._pending_orders) == ["o1"]
+    accept = [f for e, f in rows if e == kis_kr.audit_log.EV_ACCEPT]
+    assert len(accept) == 1 and accept[0]["source"] == "unknown"
+    assert accept[0]["order_ref"] == ["primary", "KR", "2026-09-29", "KRX", "0001", "91252", ""]
+
+
+@pytest.mark.parametrize("output", [
+    {"ODNO": 123, "KRX_FWDG_ORD_ORGNO": "91252"},        # 문자열 아닌 ODNO
+    {"ODNO": "local-1", "KRX_FWDG_ORD_ORGNO": "91252"},  # W 합성 식별자
+    {"ODNO": " 0001", "KRX_FWDG_ORD_ORGNO": "91252"},    # 앞뒤 공백
+    {"ODNO": "0001", "KRX_FWDG_ORD_ORGNO": " "},         # 공백뿐인 ORGNO
+    {"ODNO": "0001", "ORGNO": None},                     # ORGNO None
+])
+def test_t4_order_ref_follows_w_identity_rules_and_org_no_stays_a_string(broker, monkeypatch, output):  # noqa: F811
+    result, f = _run(broker, monkeypatch, output)
+    assert result == (True, output["ODNO"])   # 반환은 원본 값 그대로
+    assert "order_ref" not in f
+    assert f["odno"] == output["ODNO"] and isinstance(f["org_no"], str) and f["session"] == "regular"
