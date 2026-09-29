@@ -308,19 +308,28 @@ class GatePerformanceAnalyzer:
                     f"— 차단 게이트 아님, 완화/강화 판정 대상 아님"
                 )
                 continue
-            if control_avg is not None and avg > control_avg and avg > 0:
+            if control_avg is None:
+                # 대조군 표본 부족 — '통과 +0.00%' 가상값과 비교하지 않는다. 절대 회피 구간 여부만 남긴다 (2026-09-29)
+                # 판정은 절대수익률 avg_return 으로 — avg 는 초과수익일 수 있다 (회피 비율 avoided_pct 도 절대 기준)
+                _abs = (f" — 절대 기준 회피 구간(절대 {g['avg_return']:+.2f}% ≤{AVOIDANCE_THRESHOLD:.0f}%)"
+                        if g["avg_return"] <= AVOIDANCE_THRESHOLD else "")
+                verdicts.append(
+                    f"➖ {gate}: 차단 신호 {_lbl} {avg:+.2f}% vs 대조군 표본 부족 "
+                    f"(기회손실 {opp:.0f}%, 회피 {g['avoided_pct']:.0f}%, {n}건{_clip}){_abs} — 비교 판정 보류"
+                )
+            elif avg > control_avg and avg > 0:
                 verdicts.append(
                     f"⚠️ {gate}: 차단 신호 {_lbl} {avg:+.2f}% > 통과 {control_avg:+.2f}% "
                     f"(기회손실 {opp:.0f}%, {n}건{_clip}) — 게이트가 수익을 버리고 있음. 완화 검토"
                 )
-            elif avg <= AVOIDANCE_THRESHOLD and (control_avg is None or avg < control_avg):
+            elif avg <= AVOIDANCE_THRESHOLD and avg < control_avg:
                 verdicts.append(
-                    f"✅ {gate}: 차단 신호 {_lbl} {avg:+.2f}% < 통과 {control_avg if control_avg is not None else 0:+.2f}% "
+                    f"✅ {gate}: 차단 신호 {_lbl} {avg:+.2f}% < 통과 {control_avg:+.2f}% "
                     f"(회피 {g['avoided_pct']:.0f}%, {n}건{_clip}) — 선별 효과 있음"
                 )
             else:
                 verdicts.append(
-                    f"➖ {gate}: {_lbl} {avg:+.2f}% vs 통과 {control_avg if control_avg is not None else 0:+.2f}% ({n}건{_clip}) — 효과 불명확"
+                    f"➖ {gate}: {_lbl} {avg:+.2f}% vs 통과 {control_avg:+.2f}% ({n}건{_clip}) — 효과 불명확"
                 )
 
         if control_avg is not None:

@@ -102,6 +102,8 @@ class UnknownOrderBook:
         self._roll(now)
         for e in self._entries:
             if e.get("side") in ("buy", _ANY):
+                if e.get("symbol") == _ANY:   # 실제 주문이 아닌 전면 보류(조회 실패·장부 손상) — 사유만
+                    return f"접수 불명 보류: {e.get('reason')} — 신규 매수 보류(날짜 변경 시 해제)"
                 return (f"접수 불명 보류: 오늘 매수 {e.get('symbol')} {e.get('qty')}주 접수 불명"
                         f"({e.get('reason')}) — 신규 매수 보류(날짜 변경 시 해제)")
         return None
