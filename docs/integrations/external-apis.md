@@ -89,9 +89,29 @@
   | POST 진입 뒤 `asyncio.CancelledError`(종료 신호) | **UNKNOWN 기록 후 다시 raise**(알림 없음) |
   | rt_cd 0 인데 ODNO 없음(TEMP_) | 범위 밖 — 성공 경로 그대로 |
 
-  매수 TR(구/신)은 `_api_post` 가 매 시도의 rate-limit 대기 직후·전송 전에 접수 불명 보류를 다시
-  확인하고, 걸리면 보내지 않고 `_blocked: True` 로 돌려준다(`submit_order` → `blocked` 기록).
+  매수 TR(구/신)은 `_api_post` 가 매 시도의 rate-limit 대기 직후·전송 전에 킬스위치(`kill_switch.check("buy")`, 2026-09-29 3단계)와
+  접수 불명 보류를 다시 확인하고, 걸리면 보내지 않고 `_blocked: True` 로 돌려준다(`submit_order` → `blocked` 기록). SELL 은 재검사하지 않는다.
   취소(`retry=True`)에도 `_unknown` 이 실리지만 `cancel_order` 는 읽지 않는다 — 반환 불변.
+- **감사 원장 `accept` 행의 주문 신원** (2026-09-29 구현, 미배포 — 설계
+  `docs/superpowers/specs/2026-09-29-cli-refusal-orderref-design.md` D3): `submit_order` 성공 경로의
+  EV_ACCEPT 한 곳에 필드를 더한다(기존 `order_id` 등·반환·추적 dict 무변경). 브로커 한 곳이라 봇·수동 매수·CLI 가 모두 덮인다.
+
+  | 필드 | 값 |
+  |---|---|
+  | `odno`, `org_no`, `order_date`, `account_scope` | 항상. `odno`=ODNO(없으면 `TEMP_…` 그대로), `org_no`=`KRX_FWDG_ORD_ORGNO`(없거나 None 이면 `""`), `order_date`=로컬 `datetime.now().date()` ISO, `account_scope`=`"primary"`(단일 주문 계좌 — 원 계좌번호 미기록) |
+  | `order_ref` | `[account_scope, "KR", 주문일, "KRX", ODNO, ORGNO, ""]` — W `OrderRef` 필드 순서. **세션이 regular/pre_close/closing 이고 ODNO·ORGNO 가 W 신원 규칙(비지 않은 `str`·앞뒤 공백 없음·ODNO 가 `TEMP_`/`local-` 아님)을 만족할 때만**. NXT 세션(pre_market/next_market)은 거래소 값 근거가 없어 생략 |
+  | `session` | `submit_order` 가 이미 구한 `_get_current_market_session()` 값 |
+  | `source` | `KISBroker.order_source`, 없으면 `Path(sys.argv[0]).name`(봇 `run_trader.py`, CLI 는 자기 스크립트명, 빈 argv 면 `"unknown"`). 대입으로 바꿀 수 있다 |
+
+  신원 계산은 순수 함수 `kis_kr._accept_identity` 가 입력 검사만으로 예외 없이 한다 — 접수 성공 뒤의 예외는 posted 뒤 경로가 성공 주문을 접수 불명으로 바꾼다.
+  이 필드로 재시작 때 브로커 `_pending_orders` 를 복원하지 않는다(누적 체결 이중 계상). 감사 원장은 fsync 가 없어
+  응답 직후 크래시하면 행이 빠질 수 있다(그날 주문은 당일 소멸). 조회:
+  `grep '"accept"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl`.
+- **봇 실행 중 주문 CLI 거부** (2026-09-29 구현, 미배포): `scripts/liquidate_all.py`(`--dry-run` 포함)·
+  `sell_specific.py` 는 파싱 직후 `src/utils/trader_lock.hold_or_exit()` 로 봇 싱글톤 flock
+  (`~/.cache/ai_trader/unified_trader.lock`)을 잡아 보고, 봇·다른 CLI 가 쥐고 있으면 KIS 호출·토큰 발급 전에 exit 2.
+  별도 프로세스의 `KISBroker` 는 봇 장부·레이트 리미터(원장 TR 합산 EGW00215)를 공유하지 않기 때문이다.
+  **새 주문 CLI 도 `hold_or_exit` 를 부른다.** 절차는 `docs/operations/runbook.md` '긴급 전량 매도'.
 - **취소만 재시도 유지** (2026-09-21 재판단): 취소(order-rvsecncl `RVSE_CNCL_DVSN_CD="02"`)는
   `retry=True` 그대로다. 근거는 "멱등이라서"가 **아니라** 효과 한정이다 — ① `_api_post`가
   재전송하는 5xx 다수는 접수 전 거절이다(유량 `EGW00201`이 HTTP 500으로 온다), ② 전량 취소

@@ -6,6 +6,20 @@
 
 ## 활성 체크포인트
 
+### 배포 후 — 봇 실행 중 주문 CLI 거부 · EV_ACCEPT 주문 신원 (2026-09-29 구현, **미배포**)
+
+> 설계 `docs/superpowers/specs/2026-09-29-cli-refusal-orderref-design.md`. CLI 거부는 운영 checkout 이 이 코드를 받는 순간부터,
+> 봇 쪽(락 파일 unlink 삭제·EV_ACCEPT 필드)은 다음 장외 재시작부터 적용된다.
+
+- [ ] **운영 수용 확인**(봇 가동 중, KIS 호출 없음·장중 무해): `cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python -c 'from src.utils.trader_lock import hold_or_exit; hold_or_exit("check")'; echo $?`
+  → stderr 에 `[check] 봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부` 와 안내 3줄, 종료코드 **2**. 0 이면 봇과 셸의 `Path.home()` 이 다른 것이다(운영 unit 의 `User`/`HOME` 확인 — 저장소 unit 은 `/home/user`) → 가드 불성립, 보고
+- [ ] `fuser -v ~/.cache/ai_trader/unified_trader.lock` 에 봇 PID 하나만 보이는지
+- [ ] 재시작 뒤 첫 접수의 감사 원장: `grep '"accept"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl | tail -3` —
+  `odno`·`org_no`·`order_date`·`account_scope:"primary"`·`session`·`source:"run_trader.py"` 가 있고, 정규장·동시호가 접수면
+  `order_ref` 7칸(`["primary","KR","YYYY-MM-DD","KRX",ODNO,ORGNO,""]`), NXT 세션·`TEMP_`·ORGNO 공란이면 `order_ref` 없음
+- [ ] 재시작(stop→start) 뒤에도 `~/.cache/ai_trader/unified_trader.lock` 파일이 남아 있고 새 봇이 정상 기동(락 파일 잔존은 무해)
+- [ ] 봇 기동 락 실패가 생기면 로그에 `누가 쥐었나: fuser -v …unified_trader.lock` 안내 줄이 함께 찍히는지(해당 사건이 없으면 미관측)
+
 ### 배포 후 — 크로스 검증 가점/감점 표시 분리 (2026-09-29 구현, 15:33 KST 배포 main `974a71f`, PID3588061)
 
 - [ ] 대시보드 "매수 신호 이력"에서 점수가 오른 크로스 검증 행(예: 100→103)이 초록 "가점"·`a→b` 초록, 사유 "크로스 검증 가점 a→b"(배포 뒤 행) — 배포 전 행은 사유 문구가 "감점"으로 남아 있어도 라벨·색은 점수로 "가점"이 맞다(소급)

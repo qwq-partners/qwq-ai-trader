@@ -43,12 +43,43 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 
 ## 긴급 전량 매도
 
+> 2026-09-29(미배포): 봇이 떠 있으면 주문 CLI(`liquidate_all.py`·`sell_specific.py`)는 KIS 호출 전에
+> `봇 또는 다른 주문 CLI 가 실행 중 — 주문 CLI 거부` 를 출력하고 exit 2 한다(`--dry-run` 포함 — 별도 프로세스의
+> 원장 조회가 EGW00215 를 부른다. 봇이 떠 있으면 조회는 대시보드로). 봇 싱글톤 flock 을 CLI 가 잡아 보는 방식이다.
+
+**1순위 — 봇을 멈추지 않고 먼저 막는 방법** (가장 빠르다. 봇 내부 청산 경로는 없다):
+
+**초기 대응** (봇은 계속 돌아도 된다):
+1. `touch ~/.cache/ai_trader/KILL_SWITCH` — 봇 신규 매수 차단(2초 안 반영). **`KILL_SWITCH_ALL`·`KILL_SWITCH_ALL_KR` 금지** — CLI·봇 매도까지 막힌다.
+2. MTS/HTS 에서 **미체결 일괄취소**(봇의 살아 있는 BUY 가 청산 뒤 체결되는 것 방지) → 보유 전량 매도.
+   킬스위치를 만든 뒤(최대 2초 캐시) 봇 BUY 는 전송 직전에도 막힌다. 그러나 이미 전송 중이던 요청은 HTTP 응답 대기
+   (`KIS_API_TIMEOUT_SECONDS` 시한만큼 — 코드 기본 15초)가 남아 늦게 접수될 수 있다. 그래서 시간을 두고 다시 보는 것만으로는 완료를 판정하지 않는다.
+
+**완료 판정 전 필수**:
+3. 봇 정지 완료 확인 — `sudo systemctl stop qwq-ai-trader` 후 `systemctl is-active qwq-ai-trader` 가 `inactive`.
+4. MTS/HTS 에서 미체결을 **다시** 일괄취소한다.
+5. 잔고를 다시 조회해 남은 보유분을 청산한다(HTS, 또는 봇이 멈췄으니 아래 2순위 CLI).
+6. 잔고·미체결 0 을 확인해 청산 완료로 판정한다. KILL_SWITCH 는 재개를 판단할 때까지 유지하고, 봇 재기동은 운영자 판단이다.
+
+**2순위 — CLI 로 할 때** (**tmux 안에서** 실행 — SSH 가 끊겨 SIGHUP 이 15초 대기 중인 CLI 를 죽이면 자기 SELL 이
+매도가능수량을 잡아 재실행이 수량 초과로 거부된다):
+
 ```bash
-source venv/bin/activate
-python scripts/liquidate_all.py --market kr    # KR
-python scripts/liquidate_all.py --market us    # US
-python scripts/liquidate_all.py --force        # 확인 없이
+touch ~/.cache/ai_trader/KILL_SWITCH                                   # 1) 신규 매수 차단
+sudo systemctl stop qwq-ai-trader                                     # 2) 봇 정지 (운영 unit 의 TimeoutStopSec 확인 — 저장소 unit 30초, 과거 90초 기록)
+# 3) MTS/HTS 에서 봇이 남긴 BUY·SELL 미체결 확인·취소 (봇 종료는 주문을 취소하지 않고, CLI 는 봇 주문을 취소할 수 없다)
+cd /home/ubuntu/projects/qwq-ai-trader && venv/bin/python scripts/liquidate_all.py --market kr   # 4) 청산 (--force: 확인 없이)
+# 5) 잔고·미체결 0 확인 (CLI 는 실패해도 끝에 '완료'를 출력한다)
 ```
+
+- `liquidate_all` 은 자동매도 금지 종목(087010)까지 판다(기존 동작).
+- `sell_specific.py` 는 최초 주문만 지정 수량이고 **15초 뒤 폴백은 보유 전량**을 시장가로 낸다(기존 결함, 별도 과제) — 일부만 팔 때 쓰지 않는다.
+- 청산 뒤 봇 재기동은 운영자 판단이다. **CLI 실행 중에는 배포·수동 재기동을 하지 않는다** — 봇 기동이 락 실패로
+  exit 1 을 반복하고, `local_deploy.sh` 는 헬스체크 실패로 롤백을 시도하며, CLI 가 끝나면 systemd 재시도(RestartSec=10)로
+  봇이 운영자 판단 없이 올라온다. KILL_SWITCH 가 남아 있으면 매수는 막힌다.
+- CLI 를 `sudo` 로 실행하지 않는다 — home 이 달라져 락 경로가 바뀌고 거부 검사가 통과해 버린다(추정).
+- 새 주문 CLI 를 만들면 인자 파싱 직후 `from src.utils.trader_lock import hold_or_exit; hold_or_exit("<도구명>")` 를 부른다(자동으로 덮이지 않는다).
+- US 거래는 영구 중단이다(`--market us` 경로는 운영 대상 아님).
 
 ## 로그 파일 위치
 
@@ -325,7 +356,8 @@ echo 'user123!' | sudo -S -k systemctl restart qwq-ai-trader
 ```
 
 CLI(`scripts/sell_specific.py`·`liquidate_all.py`)의 불명도 같은 파일에 기록되고 출력에 `[접수불명]` 이 찍히지만,
-실행 중인 봇은 재시작 전까지 보지 못한다(봇 실행 중 CLI 거부는 후속 단계).
+실행 중인 봇은 재시작 전까지 보지 못한다. 2026-09-29 3단계(미배포)부터 CLI 는 봇이 떠 있으면 거부되므로
+(위 '긴급 전량 매도'), CLI 의 불명은 봇이 멈춘 동안에만 생기고 다음 기동 때 장부를 읽는다.
 
 ## 스토리지 / DB 유지보수 (2026-08-02~)
 
@@ -441,11 +473,18 @@ journalctl -u qwq-ai-trader -n 50 --no-pager
 ```
 
 ### 싱글톤 락 충돌
+
+증상: `flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중` 로 봇 기동이 exit 1 을 반복한다.
+
 ```bash
-echo 'user123!' | sudo -S -k systemctl stop qwq-ai-trader
-rm -f ~/.cache/ai_trader/*.lock ~/.cache/ai_trader/*.pid
-echo 'user123!' | sudo -S -k systemctl start qwq-ai-trader
+fuser -v ~/.cache/ai_trader/unified_trader.lock    # 락을 쥔 프로세스 확인
 ```
+
+- 주문 CLI(`liquidate_all.py`·`sell_specific.py`)면 **끝나기를 기다린다**. 끝나면 systemd 재시도로 봇이 올라온다.
+- 이전 봇 프로세스가 남아 있으면 그 프로세스를 정리한 뒤 `systemctl start`.
+- **락 파일(`*.lock`)은 지우지 않는다** (2026-09-29). 쥔 채 지우면 다음 봇이 새 파일로 락을 잡아 봇·CLI 가 동시에 돈다
+  (같은 glob 이 `order_unknown.json.lock` 도 지운다). 락 파일은 남아도 무해하다 — 다음 기동이 그대로 쓴다.
+- PID 파일(`~/.cache/ai_trader/unified_trader.pid`) 정리는 봇과 주문 CLI 가 **모두 없을 때만** 한다.
 
 ### WebSocket 중복 프로세스
 - "ALREADY IN USE appkey" → `pkill -9 -f "run_trader.py"` 후 단일 재시작

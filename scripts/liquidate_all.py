@@ -45,6 +45,7 @@ from src.utils.token_manager import KISTokenManager
 from src.execution.broker.kis_kr import KISBroker
 from src.execution.broker.kis_us import KISUSBroker
 from src.core.types import Order, OrderSide, OrderType
+from src.utils.trader_lock import hold_or_exit
 
 
 def parse_args():
@@ -189,6 +190,7 @@ async def liquidate_us(broker, dry_run: bool, force: bool):
 
 async def main():
     args = parse_args()
+    hold_or_exit("liquidate_all")  # 봇·다른 주문 CLI 실행 중이면 exit 2 — --dry-run 도 (원장 조회 합산 EGW00215)
     logger.remove()
     logger.add(sys.stdout, format="{time:HH:mm:ss} | {message}", level="INFO")
 

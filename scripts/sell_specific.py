@@ -35,12 +35,14 @@ load_env()
 from src.utils.token_manager import KISTokenManager
 from src.execution.broker.kis_kr import KISBroker
 from src.core.types import Order, OrderSide, OrderType
+from src.utils.trader_lock import hold_or_exit
 
 
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("orders", nargs="+", help="symbol:qty (예: 271560:16)")
     args = parser.parse_args()
+    hold_or_exit("sell_specific")  # 봇·다른 주문 CLI 실행 중이면 exit 2 (KIS 호출 전)
 
     targets = []
     for s in args.orders:

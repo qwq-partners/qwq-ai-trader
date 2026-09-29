@@ -10,6 +10,7 @@ import asyncio
 import collections
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -99,6 +100,30 @@ class KISConfig:
         )
 
 
+def _is_clean_id(value) -> bool:
+    return isinstance(value, str) and value != "" and value == value.strip()
+
+
+def _accept_identity(odno, orgno, session: str, source: str) -> dict:
+    """감사 원장 EV_ACCEPT 에 붙일 주문 신원 (2026-09-29). 접수 성공 뒤에 부르므로 JSON 기본형·내부 문자열 입력에서
+    예외를 내지 않는다(str 하위 클래스 등 임의 객체는 보장 밖; 예외면 posted 뒤 경로가 성공 주문을 접수 불명으로 바꾼다).
+    `order_date` 는 `datetime.now()` 로 구한다.
+
+    원시 필드는 항상 싣는다(`org_no` 가 None 이면 "" — 감사 원장은 None 필드를 뺀다). `order_ref` 는 W OrderRef
+    필드 순서이며, 거래소가 확정된 KRX 세션이고 ODNO·ORGNO 가 W 신원 규칙(비지 않은 str·앞뒤 공백 없음·
+    ODNO 가 TEMP_/local- 아님)을 만족할 때만 싣는다(NXT 거래소 값은 근거 없음).
+    """
+    order_date = datetime.now().date().isoformat()
+    ref_ok = (session in ("regular", "pre_close", "closing") and _is_clean_id(odno) and _is_clean_id(orgno)
+              and not odno.startswith(("TEMP_", "local-")))
+    return {
+        "odno": odno, "org_no": "" if orgno is None else orgno, "order_date": order_date,
+        "account_scope": "primary",
+        "order_ref": ["primary", "KR", order_date, "KRX", odno, orgno, ""] if ref_ok else None,
+        "session": session, "source": source,
+    }
+
+
 class KISBroker(BaseBroker):
     """
     KIS (한국투자증권) 브로커
@@ -110,6 +135,9 @@ class KISBroker(BaseBroker):
     - 프리장 (08:00~08:50): 시간외 단일가 (NXT)
     - 넥스트장 (15:30~20:00): 시간외 단일가 (NXT)
     """
+
+    # 감사 원장 EV_ACCEPT 의 source — None 이면 기록 시 실행 스크립트명(sys.argv[0]) (2026-09-29)
+    order_source: Optional[str] = None
 
     def __init__(self, config: Optional[KISConfig] = None, token_manager=None):
         self.config = config or KISConfig.from_env()
@@ -375,7 +403,7 @@ class KISBroker(BaseBroker):
         반환 dict 표식 (2026-09-29, 주문 접수 불명 분리):
         - `_unknown: True` — 비-JSON 본문(상태 무관), retry=False 의 네트워크 오류·시한 초과. 서버에 닿았을 수 있다.
           취소(retry=True)에도 실리지만 cancel_order 는 읽지 않는다.
-        - `_blocked: True` — 매수 TR 인데 전송 직전 접수 불명 보류가 걸려 보내지 않았다(msg1 = 사유).
+        - `_blocked: True` — 매수 TR 인데 전송 직전 킬스위치 또는 접수 불명 보류가 걸려 보내지 않았다(msg1 = 사유).
         """
         if not self._session or self._session.closed:
             logger.warning("[API] 세션 없음, 재연결 시도")
@@ -389,9 +417,11 @@ class KISBroker(BaseBroker):
             try:
                 await self._rate_limit()
                 # 전송 직전 재확인 (2026-09-29) — submit_order 머리 게이트를 지난 BUY 가 hashkey·rate-limit 을
-                # 기다리는 사이 다른 BUY 가 접수 불명이 됐으면 보내지 않는다. 401 재전송 직전에도 매번 확인한다.
+                # 기다리는 사이 킬스위치가 켜졌거나 다른 BUY 가 접수 불명이 됐으면 보내지 않는다. 401 재전송 직전에도
+                # 매번 확인한다. SELL 은 재검사하지 않는다(긴급 절차는 KILL_SWITCH 만 쓴다).
                 if tr_id in _BUY_TR_IDS:
-                    hold = self.unknown_buy_hold()
+                    allowed, block_reason = kill_switch.check("buy", market="KR")
+                    hold = self.unknown_buy_hold() if allowed else block_reason
                     if hold:
                         return {"rt_cd": "-1", "msg1": hold, "_blocked": True}
                 headers = self._get_headers(tr_id)
@@ -598,7 +628,7 @@ class KISBroker(BaseBroker):
 
             if data.get("_blocked"):  # 전송 직전 재확인에서 보류 — 보내지 않았다
                 hold = data.get("msg1", "")
-                logger.warning(f"[접수불명] KR 매수 전송 직전 보류: {order.symbol} {order.quantity}주 — {hold}")
+                logger.warning(f"[주문차단] KR 매수 전송 직전 보류: {order.symbol} {order.quantity}주 — {hold}")
                 audit_log.record_blocked(
                     market="KR", symbol=order.symbol, side=order.side.value,
                     reason=hold, qty=order.quantity,
@@ -648,10 +678,12 @@ class KISBroker(BaseBroker):
                 f"주문 제출 성공: {order.symbol} {order.side.value} "
                 f"{order.quantity}주 @ {ord_unpr}원 -> KIS#{kis_ord_no}"
             )
+            source = self.order_source or Path((sys.argv[:1] or [""])[0]).name or "unknown"
             audit_log.record(
                 audit_log.EV_ACCEPT, market="KR", symbol=order.symbol,
                 side=order.side.value, qty=order.quantity, price=ord_unpr,
                 order_id=kis_ord_no, strategy=order.strategy,
+                **_accept_identity(kis_ord_no, orgno, session, source),
             )
             return True, kis_ord_no
 
