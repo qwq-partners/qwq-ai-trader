@@ -367,15 +367,16 @@ async def _run() -> Optional[str]:
         )
     proxy = status["source"] == "FDR:069500"
     if proxy:
-        # 커서 이후 판정일들의 20일선 창을 덮는다 — 창 안 대용 이상치면 채택 안 함(커서 불변)
+        # 커서 이후 판정일들의 20일선 창을 덮는다 — 창 안 대용 이상치면 채택 안 함(커서 불변).
+        # 커서가 없으면 _process 가 종목별 마지막 봉(지연 종목은 창 밖)을 판정하므로 채택하지 않는다.
         last_bar = cursor.get("last_bar")
-        lookback = int((kospi.index > pd.Timestamp(last_bar)).sum()) + 21 if last_bar else 30
-        bad = proxy_outlier(kospi.tolist(), list(kospi.index.date), lookback)
-        if bad is not None:
-            raise RuntimeError(
-                f"KOSPI 대용 FDR:069500 제외 — 이번 실행 생략, 커서 유지 "
-                f"(reason=proxy_return_outlier, 최근 {lookback}봉 일수익률 이상치 {bad})"
-            )
+        reason = "proxy_needs_cursor, 커서 없음"
+        if last_bar:
+            lookback = int((kospi.index > pd.Timestamp(last_bar)).sum()) + 21
+            bad = proxy_outlier(kospi.tolist(), list(kospi.index.date), lookback)
+            reason = None if bad is None else f"proxy_return_outlier, 최근 {lookback}봉 일수익률 이상치 {bad}"
+        if reason:
+            raise RuntimeError(f"KOSPI 대용 FDR:069500 제외 — 이번 실행 생략, 커서 유지 (reason={reason})")
     (logger.warning if proxy else logger.info)(
         f"[수확shadow] 체제 게이트 원천: {status['source']} (마지막 봉 {status['last_bar_date']})"
         + (" — KOSPI 대용(KODEX200)" if proxy else "")

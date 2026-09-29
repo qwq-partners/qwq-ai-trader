@@ -187,22 +187,23 @@ def shifted(values, at, factor=1.242):
     return [v * factor if i >= at else v for i, v in enumerate(values)]
 
 
-@pytest.mark.parametrize("at,expected", [(59, "+"), (30, "+"), (29, None), (1, None)])
-def test_proxy_outlier_checks_only_last_lookback_returns(at, expected):
-    values = shifted([100.0] * 60, at)
+@pytest.mark.parametrize("at,factor,expected", [
+    (59, 1.242, "+24.2%"), (30, 1.242, "+24.2%"), (29, 1.242, None), (1, 1.242, None),
+    (40, 0.758, "-24.2%"),   # 음의 오염도 거부 (abs 검사)
+])
+def test_proxy_outlier_checks_only_last_lookback_returns(at, factor, expected):
+    values = shifted([100.0] * 60, at, factor)
     dates = list(pd.bdate_range(end="2026-09-23", periods=60).date)
     found = kb.proxy_outlier(values, dates, 30)   # 끝 30개 수익률 = 인덱스 30..59
-    if expected is None:
-        assert found is None
-    else:
-        assert found == f"{dates[at]} +24.2%"
+    assert found == (None if expected is None else f"{dates[at]} {expected}")
 
 
 @pytest.mark.parametrize("case", ["kodex_fallback", "yahoo_fresh"])
 def test_harvest_regime_gate_uses_fallback_only_when_kospi_sources_fail(
         monkeypatch, harvest_env, case):
-    _, logs = harvest_env
-    if case == "kodex_fallback":   # 2026-09-29 운영 상태: Yahoo NaN 행 + KS11 정지
+    tmp_path, logs = harvest_env
+    (tmp_path / "cursor.json").write_text('{"last_bar": "2026-09-17", "last_d0": {}}', encoding="utf-8")
+    if case == "kodex_fallback":   # 2026-09-29 운영 상태: Yahoo NaN 행 + KS11 정지 (커서 09-23 보유)
         by_symbol = {"YAHOO:^KS11": nan_last("2026-09-23"), "KS11": frame("2026-09-17"),
                      "069500": frame("2026-09-23", KODEX)}
         chosen, source, level = "069500", "FDR:069500", "WARNING"
@@ -341,7 +342,7 @@ def test_ab_exit_policy_benchmark_falls_back_to_shared_loader(monkeypatch):
 
 
 @pytest.mark.parametrize("last_bar,at,ok", [
-    (None, 30, False), (None, 29, True),                  # 커서 없음 → 끝 30개 수익률
+    (None, 1, False), (None, 59, False),                  # 커서 없음 → 이상치와 무관하게 대용 채택 안 함
     ("2026-09-17", 35, False), ("2026-09-17", 34, True),  # 커서 뒤 4봉(09-18·21·22·23) + 21 = 25
 ])
 def test_harvest_rejects_proxy_outlier_inside_judgment_window(monkeypatch, harvest_env, last_bar, at, ok):
@@ -362,7 +363,8 @@ def test_harvest_rejects_proxy_outlier_inside_judgment_window(monkeypatch, harve
     assert success is ok
     if not ok:
         at_date = pd.bdate_range(end="2026-09-23", periods=60)[at].date()
-        assert "proxy_return_outlier" in message and f"이상치 {at_date} +" in message
+        assert ("reason=proxy_needs_cursor" in message if last_bar is None else
+                "reason=proxy_return_outlier" in message and f"이상치 {at_date} +" in message)
         assert (cursor.read_text(encoding="utf-8") if cursor.exists() else None) == before
         assert not (tmp_path / "pending.json").exists()
         assert not any("체제 게이트 원천" in msg for _, msg in logs)
