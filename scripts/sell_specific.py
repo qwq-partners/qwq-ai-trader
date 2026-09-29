@@ -30,6 +30,17 @@ def load_env():
                         os.environ[key] = value
 
 
+def fallback_qty(requested, before, now):
+    """15초 폴백 수량 — 요청 중 아직 안 팔린 몫만, 현재 보유 한도 안에서.
+
+    before 는 첫 주문 전 보유량 스냅샷(조회 실패·종목 없음이면 None → 폴백 안 함).
+    """
+    if before is None:
+        return 0
+    sold = max(0, before - now)
+    return max(0, min(requested - sold, now))
+
+
 load_env()
 
 from src.utils.token_manager import KISTokenManager
@@ -57,6 +68,13 @@ async def main():
     for sym, qty in targets:
         print(f"  {sym}: {qty}주")
 
+    # 폴백 수량 기준 — 조회 실패(예외·빈 응답)나 스냅샷에 없는 종목은 폴백하지 않는다
+    try:
+        before = {sym: pos.quantity for sym, pos in (await broker.get_positions()).items()}
+    except Exception as e:
+        print(f"  보유량 스냅샷 실패 — 시장가 폴백 없음: {e}")
+        before = {}
+
     print("\n=== 1차 매수1호가 지정가 ===")
     for sym, qty in targets:
         bid = await broker.get_best_bid(sym)
@@ -81,8 +99,10 @@ async def main():
     remaining = []
     for sym, qty in targets:
         pos = positions.get(sym)
-        if pos and pos.quantity > 0:
-            remaining.append((sym, pos.quantity))
+        now = pos.quantity if pos else 0
+        fb = fallback_qty(qty, before.get(sym), now)
+        if fb > 0:
+            remaining.append((sym, fb))
 
     if remaining:
         print(f"\n=== 미체결 {len(remaining)}건 시장가 전환 ===")
