@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-30 — docs: 전략 판단 마무리 인계 (매수 중지 유지, 연구 중단)
+
+- **지시**: 추천안 2 승인("ㄱㄱ") — 매수 중지 유지, H4 미착수. 정본 `docs/operations/claude-handoff-2026-09-30.md`(현재 상태·확정 결론·하지 말 것·남은 결정).
+- CLAUDE.md 머리를 13:00 상태로 갱신, 모니터링 체크포인트에 '매수 중지 상태' 관측 항목 추가(20:30 원장 2회차·BacktestGate 원천·needrestart 제외 확인·재부팅 후 점검).
+- 남은 사용자 결정: 새 커널 재부팅(장 마감 후 권장), H4 착수 여부. 코드·설정·운영 변경 0.
+
 ## 2026-09-30 — research: H3 가치·퀄리티 기울기 — 기각 (연구 전용)
 
 - **지시**: 추천 방향 승인("ㄱㄱ") — 매수 중지 유지 + H3 검증. 사전 등록 `index-plus-program-2026-09.md` §3-3(`0f96d8b`, 결과 전). DART 수집은 coordinator 가 키를 환경변수로만 읽어 실행(808사 FY2015~2025, `fnlttMultiAcnt` 216회, 오류 0 — `scripts/research/dart_fundamentals.py`). 백테스트·문서는 작업자(Claude Opus 5.5, 요청 opus/high), coordinator 가 원자료로 평균·t·절반·CAGR·전후 분해 독립 재계산 일치 확인.
