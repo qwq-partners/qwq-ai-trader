@@ -6,6 +6,14 @@
 
 ## 활성 체크포인트
 
+### 매수 중지 상태 — 관측 항목 (2026-09-30~)
+
+- [ ] `KILL_SWITCH_KR` 존재 유지, 매수 시도 로그가 `킬스위치 매수 차단` 으로 끝나는지(재시작 뒤에도)
+- [ ] 09-30 20:30 `[초과수익] 원장 갱신` 2회차 — 행 수 263 근처·경고 없음, `positions_prev.jsonl` 생성(둘째 날)
+- [ ] 09-30 20:30 BacktestGate 원천 로그 — `kospi_fdr:FDR:YAHOO:^KS11` 또는 `원천 제외` 경고(당일 NaN 행) 뒤 대리 폴백
+- [ ] 06시대 `unattended-upgrade` 뒤 봇 재시작 0 (needrestart 제외 확인 — `journalctl -u qwq-ai-trader | grep Stopping`)
+- [ ] 커널 재부팅(사용자 결정) 뒤 `ops_check`·`OOMScoreAdjust` 유지·킬스위치 유지
+
 ### 배포 후 — 감사 결함 7건 (PR #106, 2026-09-29 23:28 KST 배포 main `bb03aa3`, PID3811677)
 
 - [x] 봇 가동 중 락 획득 시도 → `False`·봇 생존·락/PID 파일 불변 — ✅ 09-29 23:28 (CHANGELOG 09-29 ops late)
