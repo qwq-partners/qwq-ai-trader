@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-30 — research: 현재 엔진 B — 손절(고정 vs 진입 ATR) × 유니버스 (연구 전용)
+
+- **지시**: 현재 엔진 기준 B("ㄱㄱ"). 사전 등록 `docs/research/current-engine-b-2026-09.md` §1(커밋 `4225854`, 결과 전).
+- 운영 유효 설정 SEPA ladder/current, 2019-06~2026-09. `atr_entry`(진입 전 봉 ATR×2, 4~8% 진입 시 고정) vs 운영 고정 5%. 백테스터의 `atr_dynamic` 은 당일 봉 ATR 로 당일 손절을 판정하는 미래정보라 제외.
+- **개선은 통과, 엣지는 미달**: 대형 60 +0.35%(t 1.29) vs +0.18%, 중형 391 +0.19% vs +0.18%. 손절 비율 −14pp, MDD 절반 가까이 감소, 계좌 +49→+75%. 그러나 전 셀 뒤 절반·2024~26 음수, t<2 — 사전 등록대로 "덜 지는 것", 운영 변경 권고 없음.
+- `scripts/research/long_window_excess.py` 에 `--stop {fixed,atr_entry}` 추가(백테스터 파일 무변경, 인스턴스 함수만 교체). 운영·`src/`·설정 변경 0.
+
 ## 2026-09-30 — research: 현재 엔진 실거래 손실 분해 (문서만)
 
 - **지시**: "우리 기존(현재) 돌고 있는 엔진이 중요" → 현재 엔진 기준 분석 A. 정본 `docs/research/live-loss-decomposition-2026-09-30.md`.
