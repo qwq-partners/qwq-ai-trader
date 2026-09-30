@@ -205,6 +205,8 @@ def prep(args):
     print(json.dumps({k: v for k, v in meta.items() if k not in ("tickers", "bars")}, ensure_ascii=False))
 
 
+ATR_STOP_MIN, ATR_STOP_MAX = 4.0, 8.0   # 운영 ATR 동적 손절 범위(CLAUDE.md) — current-engine-b §1
+
 def run_cell(args):
     import argparse as ap
     import contextlib
@@ -220,10 +222,15 @@ def run_cell(args):
                       offline=True, end_date=END_DATE)
     cfg = ab.make_config(MONTHS, exit_policy, holding, "risk", "sepa", len(meta["tickers"]), ns, effective)
     engine = bt.BacktestEngine(cfg)
+    if args.stop == "atr_entry":
+        # 진입 전 확정 봉 ATR×2 를 4~8% 로 클램프해 진입 시 한 번 고정 (current-engine-b §1). 이후는 live_policy 와 같다.
+        # 백테스터 파일은 운영 BacktestGate 가 불러 쓰므로 고치지 않고 이 인스턴스만 바꾼다.
+        engine._entry_stop_pct = lambda strategy, atr_pct: (
+            5.0 if atr_pct is None else max(ATR_STOP_MIN, min(ATR_STOP_MAX, atr_pct * cfg.atr_multiplier)))
     engine.universe.tickers = meta["tickers"]
     engine.universe.names = {t: t for t in meta["tickers"]}
     engine.universe.build_universe = lambda ref: None
-    d = out / f"{args.universe}_{args.cell.replace('/', '_')}"
+    d = out / f"{args.universe}_{args.cell.replace('/', '_')}{'' if args.stop == 'fixed' else '_' + args.stop}"
     d.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     with open(d / "run.log", "w", encoding="utf-8") as log, contextlib.redirect_stdout(log):
@@ -237,7 +244,7 @@ def run_cell(args):
     (d / "fills.json").write_text(dumps([vars(t) for t in engine.trades]), encoding="utf-8")
     (d / "equity.json").write_text(dumps(engine.equity_curve), encoding="utf-8")
     (d / "positions.json").write_text(dumps(rows), encoding="utf-8")
-    info = {"cell": args.cell, "universe": args.universe, "elapsed_s": round(elapsed, 1),
+    info = {"cell": args.cell, "universe": args.universe, "stop": args.stop, "elapsed_s": round(elapsed, 1),
             "max_rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
             "config_hash": effective_config_hash(effective), "calc_version": bt.CALC_VERSION,
             "sizing": cfg.sizing, "exit_policy": cfg.exit_policy, "entry_stop_mode": cfg.entry_stop_mode,
@@ -369,6 +376,8 @@ def main():
     ap.add_argument("--universe", choices=["g1", "default60"], default="g1")
     ap.add_argument("--cell", default="ladder/current", help="<ladder|channel>/<current|extended|none>")
     ap.add_argument("--out", default=str(OUT_DEFAULT))
+    ap.add_argument("--stop", choices=["fixed", "atr_entry"], default="fixed",
+                    help="fixed=운영 live_policy 고정 SL, atr_entry=진입 전 봉 ATR×2 (4~8%%) 진입 시 고정")
     args = ap.parse_args()
     {"prep": prep, "cell": run_cell, "report": report}[args.phase](args)
 
