@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-09-30 — ops: needrestart 봇 제외 · 운영 tca.jsonl 시험 행 제거
+
+- **지시**: 사용자 "ㄱㄱ"(운영 2건 → H3). 11:4x KST.
+- `/etc/needrestart/conf.d/qwq-ai-trader.conf`(`$nrconf{override_rc}{qr(^qwq-ai-trader\.service$)} = 0`) 설치, `needrestart -r l -v` 로 eval 확인. 저장소 사본 `scripts/service/needrestart-qwq-ai-trader.conf`. 봇 재시작 0(PID3875500 유지). `Automatic-Reboot` 는 원래 미설정. needrestart 가 새 커널 재부팅을 권고 — 사용자 결정.
+- 운영 `~/.cache/ai_trader/tca.jsonl` 의 09-21 10:37 합성 기록 2행(005930 `o1`) 원자적 제거(20→18행). 원인은 pytest 격리 결함이 아니라 pytest 밖 재현 스크립트가 체결 경로를 호출한 것(가드는 `io.open` 기준이라 `Path.open` 도 막힘). 코드 변경 없음, runbook 에 규칙 추가.
+- 주문·전략·위험 설정·킬스위치 변경 0.
+
 ## 2026-09-30 — research: 현재 엔진 B — 손절(고정 vs 진입 ATR) × 유니버스 (연구 전용)
 
 - **지시**: 현재 엔진 기준 B("ㄱㄱ"). 사전 등록 `docs/research/current-engine-b-2026-09.md` §1(커밋 `4225854`, 결과 전).

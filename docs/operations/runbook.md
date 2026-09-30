@@ -479,6 +479,16 @@ systemctl status qwq-ai-trader
 journalctl -u qwq-ai-trader -n 50 --no-pager
 ```
 
+### 자동 보안 업데이트가 봇을 재시작하지 않게 (2026-09-30~)
+
+우분투 `unattended-upgrade` 뒤 `needrestart` 가 업데이트된 라이브러리를 쓰는 서비스를 자동 재시작한다(09-30 06:13 봇 2회 재시작).
+`/etc/needrestart/conf.d/qwq-ai-trader.conf`(저장소 사본 `scripts/service/needrestart-qwq-ai-trader.conf`)로 봇을 제외했다.
+라이브러리 업데이트는 다음 `local_deploy.sh` 재시작 때 반영된다. 재설치: `sudo install -m 644 scripts/service/needrestart-qwq-ai-trader.conf /etc/needrestart/conf.d/qwq-ai-trader.conf`,
+확인: `sudo needrestart -r l -v 2>&1 | grep qwq-ai-trader.conf`(eval 줄이 보이면 로드됨). 커널 업데이트 재부팅은 별도 사용자 결정.
+
+**재현 스크립트는 운영 캐시에 쓴다**: pytest 밖에서 `check_fills` 등 체결 경로를 합성 주문으로 부르면 격리 가드가 없어
+`~/.cache/ai_trader/tca.jsonl` 같은 운영 파일에 기록된다(09-21 재현 스크립트 2행 → 09-30 제거). 재현은 `HOME` 을 임시 폴더로 바꿔 돌린다.
+
 ### 싱글톤 락 충돌
 
 증상: `flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중` 로 봇 기동이 exit 1 을 반복한다.
