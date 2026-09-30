@@ -1,0 +1,18 @@
+{
+ "candidates": 808,
+ "mapped": 808,
+ "corps": 808,
+ "years": [
+  2014,
+  2025
+ ],
+ "calls": 108,
+ "http_codes": {
+  "200": 108
+ },
+ "rows": 14675,
+ "rows_with_both": 14498,
+ "errors": [],
+ "elapsed_s": 71.5,
+ "api": "fnlttMultiAcnt 11011"
+}
