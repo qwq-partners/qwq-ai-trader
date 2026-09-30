@@ -265,17 +265,33 @@ def run(args):
         res["variants"][name] = ev
         print(f"[run] {name}: {json.dumps(ev['verdict'], ensure_ascii=False)} cagr={ev['account']['cagr']:.4f}", flush=True)
         if name == "H3 본 결과":
+            accts_rows = rows
             pd.DataFrame(rows).to_csv(out / "positions.csv", index=False, float_format="%.6g")
-            g.to_csv(out / "account_monthly.csv", float_format="%.6g")
             with (out / "holdings_monthly.csv").open("w", encoding="utf-8") as fh:
                 fh.write("entry_date,n,codes\n")
                 for k in range(first_k, last_k):
                     fh.write(f"{exec_dates[k].date()},{len(w[k])},{' '.join(sorted(w[k].index))}\n")
     # 2차: H3 vs B 월 초과 IR
     h, bb = accts["H3 본 결과"], accts["B 기준선(점수 가능 유니버스 시총가중)"]
+    h.join(bb[["port", "names"]].add_prefix("b_")).to_csv(out / "account_monthly.csv", float_format="%.6g")
     x = h["port"] - bb["port"]
     res["h3_vs_b"] = {"mean_monthly": float(x.mean()), "ir": float(x.mean() / x.std() * math.sqrt(12)),
-                      "t": float(x.mean() / (x.std() / math.sqrt(len(x))))}
+                      "t": float(x.mean() / (x.std() / math.sqrt(len(x)))),
+                      "thirds": [{"from": p.index[0], "to": p.index[-1], "mean_monthly": float(p.mean()),
+                                  "t": float(p.mean() / (p.std() / math.sqrt(len(p))))}
+                                 for p in (x.iloc[i * len(x) // 3:(i + 1) * len(x) // 3] for i in range(3))]}
+    # 사후 진단(보고만): DART 자료가 FY2023 부터만 있는 종목(주로 금융업)은 2024-03 접수 전까지 유니버스 밖이다.
+    # 그 시점 앞·뒤로 H3 − B 를 나눠 2차 우위가 어디서 왔는지 본다.
+    late = set(fund.groupby("code")["fy"].min().loc[lambda s: s >= 2023].index)
+    cut = "2024-03-29"
+    hp = pd.DataFrame(accts_rows)
+    late_w = hp[hp["symbol"].isin(late)].groupby("month")["weight"].sum().reindex(h.index).fillna(0.0)
+    res["diag_late_fin"] = {"n_late_codes": len(late), "cut_signal_month": cut,
+                            "h3_weight_late_after": float(late_w[late_w.index >= cut].mean())}
+    for lab, sel in (("before", x.index < cut), ("after", x.index >= cut)):
+        p = x[sel]
+        res["diag_late_fin"][lab] = {"months": int(len(p)), "mean_monthly": float(p.mean()),
+                                     "t": float(p.mean() / (p.std() / math.sqrt(len(p))))}
     bx = bb["port"] - bb["bench"]
     res["b_vs_ks200"] = {"mean_monthly": float(bx.mean()), "ir": float(bx.mean() / bx.std() * math.sqrt(12)),
                          "t": float(bx.mean() / (bx.std() / math.sqrt(len(bx))))}
@@ -295,7 +311,7 @@ def report(args):
     us = res["universe_stats"]
     L = ["## H3 본 결과 (점수 상위 100 시총가중, 비용 포함 — 가격 Naver 수정주가)", "",
          f"첫 신호 {res['first_signal']}, 보유 {res['hold']['first_entry']} → {res['hold']['last_exit']} ({res['hold']['n']}개월), "
-         f"후보 {res['candidates']}, 월평균 유니버스 {us['universe']:.1f} · 점수 가능 {us['scored']:.1f} · 재무 없음 {us['missing_fin']:.1f} · "
+         f"후보 {res['candidates']}, 월평균 유니버스 {us['universe']:.1f} · 점수 가능 {us['scored']:.1f} · 재무 미접수 {us['missing_fin']:.1f} · "
          f"자본≤0 {us['equity_le0']:.2f} · 순이익 결측 {us['ni_missing']:.2f}", "",
          "### 계좌 (2차)", "", "| 포트폴리오 | 구간 | 개월 | CAGR | KOSPI200 CAGR | 월 초과 IR(vs KS200) | 월 초과 t | MDD | 벤치 MDD | 평균 종목 | 연 매수 회전(비중) |",
          "|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -311,8 +327,14 @@ def report(args):
     r, rb = m["periods"]["참고 2019-06~"]["account"], b["periods"]["참고 2019-06~"]["account"]
     L.append(f"| 참고 2019-06~ | {r['months']} | {P(r['cagr'])} | {P(rb['cagr'])} | {P(r['bench_cagr'])} | {P(r['ir'], False)} | {P(rb['ir'], False)} |")
     hb, bk = res["h3_vs_b"], res["b_vs_ks200"]
-    L += ["", f"- H3 − B 월 초과: 평균 {P(hb['mean_monthly'])}, IR {hb['ir']:.2f}, t {hb['t']:.2f}",
+    L += ["", f"- H3 − B 월 초과: 평균 {P(hb['mean_monthly'])}, IR {hb['ir']:.2f}, t {hb['t']:.2f} (3등분: "
+          + ", ".join(f"{p['from']}~{p['to']} {P(p['mean_monthly'])} t={p['t']:.2f}" for p in hb["thirds"]) + ", 신호 월말 기준)",
           f"- B − KOSPI200 월 초과: 평균 {P(bk['mean_monthly'])}, IR {bk['ir']:.2f}, t {bk['t']:.2f}",
+          f"- (사후 진단) H3 − B, 신호 월말 {res['diag_late_fin']['cut_signal_month']} 앞: {P(res['diag_late_fin']['before']['mean_monthly'])} "
+          f"t={res['diag_late_fin']['before']['t']:.2f} ({res['diag_late_fin']['before']['months']}개월) / 뒤: "
+          f"{P(res['diag_late_fin']['after']['mean_monthly'])} t={res['diag_late_fin']['after']['t']:.2f} "
+          f"({res['diag_late_fin']['after']['months']}개월) — 뒤 구간 H3 비중 중 FY2023~ 자료 종목(주로 금융, "
+          f"{res['diag_late_fin']['n_late_codes']}종목) {res['diag_late_fin']['h3_weight_late_after'] * 100:.1f}%",
           "", "### 포지션 (종목, 보유 월) KOSPI200 초과 — 동일 가중 (1차)", "",
           "| 구간 | n | 평균 | t | 중앙값 | 벤치 초과 비율 | 상위3 제외 평균 |", "|---|---|---|---|---|---|---|"]
     prs = [("전체", f), ("앞 절반", m["first_half"]), ("뒤 절반", m["second_half"])] + \
