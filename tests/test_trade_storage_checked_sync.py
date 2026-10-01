@@ -72,11 +72,12 @@ def case(monkeypatch, tmp_path):
     logger.remove(sink)
 
 
-def assert_untouched(case):
+def assert_untouched(case, *, allow_reads=False):
     assert case.storage._trades == {}
     assert list(case.storage._journal.storage_dir.glob("*.json")) == []
     assert case.storage._write_queue.empty()
-    assert case.storage.pool.reads == []
+    if not allow_reads:
+        assert case.storage.pool.reads == []
     assert case.storage.pool.writes == []
     assert case.engine == case.engine_before
 
@@ -127,28 +128,26 @@ def test_legacy_only_adapter_is_skipped_without_unchecked_query(case, noncallabl
 def test_complete_empty_is_normal_zero_without_writes(case):
     broker = Broker([])
     asyncio.run(case.storage.sync_from_kis(broker, case.engine))
-    assert_untouched(case)
+    assert_untouched(case, allow_reads=True)
     assert broker.checked_dates == [date.today()]
     assert broker.unchecked_dates == []
     assert any("체결 0건" in message for message in case.messages)
 
 
-def test_complete_buy_preserves_real_cache_json_and_db_queue_pipeline(case):
+def test_complete_buy_without_order_identity_never_invents_a_journal_trade(case):
     broker = Broker([fill()])
-    asyncio.run(case.storage.sync_from_kis(broker, case.engine))
-    trade = case.storage.get_today_trades()[0]
-    assert (trade.symbol, trade.entry_quantity, trade.entry_price) == (
-        "005930", 3, Decimal("11000.0"))
-    assert trade.entry_strategy == "sepa_trend"
-    assert len(list(case.storage._journal.storage_dir.glob("*.json"))) == 1
-    assert case.storage._write_queue.qsize() == 2
+    result = asyncio.run(case.storage.sync_from_kis(broker, case.engine))
+    assert result.status == "ambiguous" and not result.complete
+    assert case.storage.get_today_trades() == []
+    assert list(case.storage._journal.storage_dir.glob("*.json")) == []
+    assert case.storage._write_queue.empty()
     assert case.storage.pool.reads
     assert case.engine == case.engine_before
     assert broker.checked_dates == [date.today()]
     assert broker.unchecked_dates == []
 
 
-def test_complete_sell_preserves_existing_recovery_pipeline(case):
+def test_complete_sell_without_order_identity_preserves_existing_journal(case):
     trade = case.storage.record_entry(
         trade_id="synthetic-entry", symbol="005930", name="합성 종목",
         entry_price=10000, entry_quantity=10, entry_reason="합성 진입",
@@ -156,11 +155,11 @@ def test_complete_sell_preserves_existing_recovery_pipeline(case):
     )
     case.storage._write_queue = asyncio.Queue()
     broker = Broker([fill("01")])
-    asyncio.run(case.storage.sync_from_kis(broker, case.engine))
-    assert trade.exit_quantity == 3
-    assert trade.exit_price == Decimal("11000.0")
-    assert trade.pnl > 0
-    assert case.storage._write_queue.qsize() == 3
+    before = deepcopy(trade)
+    result = asyncio.run(case.storage.sync_from_kis(broker, case.engine))
+    assert result.status == "ambiguous" and not result.complete
+    assert trade == before
+    assert case.storage._write_queue.empty()
     assert case.engine == case.engine_before
     assert broker.checked_dates == [date.today()]
     assert broker.unchecked_dates == []

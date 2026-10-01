@@ -187,6 +187,7 @@ class Order:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
     broker_order_id: Optional[str] = None  # 브로커 주문번호
+    partial_exit: bool = False             # Original intent, even if broker reduces quantity.
 
     @property
     def is_active(self) -> bool:

@@ -1027,6 +1027,23 @@ class KRScheduler:
         rm = bot.engine.risk_manager
         if rm is None or pending_ts is None or self._partial_exit_marks().get(s) != pending_ts:
             return False
+        cancelled = getattr(bot.broker, 'has_unresolved_cancel', None)
+        if callable(cancelled) and cancelled(s) is True:
+            # Keep the stage's fill uncertainty, but release the symbol-level
+            # lock so a protective full exit can be considered. New partial
+            # orders remain blocked by the broker observation guard.
+            order_id = getattr(rm, '_pending_order_ids', {}).get(s)
+            state = bot.exit_manager.get_state(s) if bot.exit_manager else None
+            if order_id and state is not None and state.pending_stage is not None:
+                owners = self.__dict__.setdefault('_canceled_exit_stage_owners', {})
+                owners[order_id] = (state, state.pending_generation)
+            bot._exit_pending_symbols.discard(s)
+            bot._exit_pending_timestamps.pop(s, None)
+            self._partial_exit_marks().pop(s, None)
+            self._stale_cancel_miss.pop(s, None)
+            await rm.clear_pending(s)
+            logger.warning(f"[청산 pending] {s} 취소 체결 미확인 — 단계 보존, 보호 청산 재판단 허용")
+            return True
         miss = self._stale_cancel_miss.get(s)
         waited = miss is not None and miss[0] == pending_ts  # 표식은 등록 시각에 묶는다(이전 pending 의 표식 무시)
         unknown_streak, alerted = (miss[1], miss[2]) if waited else (0, False)
@@ -2768,11 +2785,9 @@ JSON:
             key = self._entry_lot_key(fill)
             lot = self._entry_fill_lots.get(key)
             if lot is None:
-                _rm = getattr(self.bot.engine, 'risk_manager', None)
-                _cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
                 lot = {
                     "symbol": fill.symbol,
-                    "signal": dict(_cache.get(fill.symbol) or {}),
+                    "signal": dict(self._fill_signal_metadata(fill)),
                     "fills": [],
                     "confirmed": False,
                     "em_confirmed": False,
@@ -2791,6 +2806,28 @@ JSON:
         except Exception as e:
             logger.warning(f"[위험계측] {getattr(fill, 'symbol', '?')} 체결 누적 실패 (계측만 생략): {e}")
             return None
+
+    def _fill_owns_pending(self, fill) -> bool:
+        rm = getattr(self.bot.engine, 'risk_manager', None)
+        check = getattr(rm, 'fill_matches_pending', None)
+        return check(fill) is True if callable(check) else True
+
+    def _fill_signal_metadata(self, fill) -> Dict:
+        if not self._fill_owns_pending(fill):
+            return {}
+        rm = getattr(self.bot.engine, 'risk_manager', None)
+        return getattr(rm, '_pending_signal_cache', {}).get(fill.symbol, {})
+
+    def _with_fill_observation_ids(self, open_ids: Optional[Set[str]]) -> Optional[Set[str]]:
+        if open_ids is None:
+            return None
+        check = getattr(self.bot.broker, 'get_fill_observation_order_ids', None)
+        if not callable(check):
+            return open_ids
+        ids = check()
+        if not isinstance(ids, set) or not all(isinstance(oid, str) and oid for oid in ids):
+            return None
+        return open_ids | ids
 
     def _confirm_entry_risk(self, symbol: str, lot: Optional[Dict], exit_params: Dict,
                             order_complete: Optional[bool]) -> None:
@@ -2948,6 +2985,15 @@ JSON:
                 continue
             try:
                 await self._complete_fill_handoff(**handoff)
+                ack = getattr(self.bot.broker, 'acknowledge_fill', None)
+                if callable(ack):
+                    ack(handoff['fill'].order_id, handoff['fill'].quantity)
+                observed = self._with_fill_observation_ids(set())
+                if observed is not None:
+                    owners = getattr(self, '_canceled_exit_stage_owners', {})
+                    for oid in list(owners):
+                        if oid not in observed:
+                            owners.pop(oid, None)
             except asyncio.CancelledError:
                 handoff['failed'] = True
                 raise
@@ -2959,22 +3005,33 @@ JSON:
                 pending.pop(event_id, None)
 
     async def _complete_fill_handoff(self, fill, event, _sell_pos_snap,
-                                     _exit_reason_snap, _entry_lot, _order_done):
+                                     _exit_reason_snap, _entry_lot, _order_done,
+                                     _exit_pending_generation=None):
         """성공적으로 적용된 체결의 청산·저널·구독 후처리. 지연 경로도 같은 코드를 쓴다."""
         bot = self.bot
         if event.position_before is not None:
             _sell_pos_snap = event.position_before
         # 매도 체결 시 _exit_pending 즉시 해제 + ExitManager 상태 갱신 + trade journal 기록
         if fill.side == OrderSide.SELL:
-            bot._exit_pending_symbols.discard(fill.symbol)
-            bot._exit_pending_timestamps.pop(fill.symbol, None)
-            bot._exit_reasons.pop(fill.symbol, None)
+            rm = getattr(bot.engine, 'risk_manager', None)
+            current_owner = getattr(rm, '_pending_order_ids', {}).get(fill.symbol)
+            owns_exit = (event.pending_order_matched is not False
+                         and current_owner in (None, fill.order_id)
+                         and bot._exit_pending_timestamps.get(fill.symbol) == _exit_pending_generation)
+            stage_owner = getattr(self, '_canceled_exit_stage_owners', {}).get(fill.order_id)
+            state = bot.exit_manager.get_state(fill.symbol) if bot.exit_manager else None
+            owns_retained_stage = (stage_owner is not None and stage_owner[0] is state
+                                   and stage_owner[1] == state.pending_generation)
+            if owns_exit:
+                bot._exit_pending_symbols.discard(fill.symbol)
+                bot._exit_pending_timestamps.pop(fill.symbol, None)
+                bot._exit_reasons.pop(fill.symbol, None)
 
             # ExitManager remaining_quantity 즉시 갱신 (30초 sync 의존 제거)
             if bot.exit_manager:
                 bot.exit_manager.on_fill(
                     fill.symbol, fill.quantity,
-                    Decimal(str(fill.price))
+                    Decimal(str(fill.price)), update_pending=owns_exit or owns_retained_stage
                 )
 
             # 재진입 제한 등록 — 저널 기록과 독립 실행 (2026-08-05 P1)
@@ -3211,8 +3268,8 @@ JSON:
                 try:
                     _rm_h = getattr(bot.engine, 'risk_manager', None)
                     _sig_cache_h = getattr(_rm_h, '_pending_signal_cache', {}) if _rm_h else {}
-                    _sig_meta_h = ((_entry_lot or {}).get("signal")
-                                   or _sig_cache_h.get(fill.symbol, {}))
+                    _sig_meta_h = (_entry_lot["signal"] if _entry_lot is not None
+                                   else self._fill_signal_metadata(fill))
                     _atr_meta = _sig_meta_h.get("metadata", {}).get("atr_pct")
                     if _atr_meta is not None and float(_atr_meta) > 0:
                         _atr_hint = float(_atr_meta)
@@ -3271,8 +3328,8 @@ JSON:
                     # 체결 시점 스냅샷이 정본. 엔진 캐시는 pop 하지 않는다 —
                     # 부분체결 잔여분·등록 재시도가 빈 메타를 쓰지 않도록 수명을
                     # 엔진 pending 정리(on_fill 완결·clear_pending)에 맞춘다 (2026-09-14 T3)
-                    _sig_meta = ((_entry_lot or {}).get("signal")
-                                 or _sig_cache.get(fill.symbol, {}))
+                    _sig_meta = (_entry_lot["signal"] if _entry_lot is not None
+                                 else self._fill_signal_metadata(fill))
                     _sig_reason = _sig_meta.get("reason", "")
                     _sig_reasons_list = _sig_meta.get("reasons", []) or []
                     _sig_score_breakdown = _sig_meta.get("score_breakdown", {}) or {}
@@ -3460,9 +3517,11 @@ JSON:
                     # 같은 주기 아래 재시도 블록이 '포지션 없음 = 삭제됨'으로 즉시 버리던 결함 방지 (2026-09-14)
                     _retry_syms = list(self._pending_exit_registrations)
                     # 미체결 주문이 하나도 없으면 진행 중인 진입 주문도 없다 → 전부 완결로 본다
-                    _open_ids: Optional[Set[str]] = set()
+                    _open_ids = self._with_fill_observation_ids(set())
 
-                    if open_orders:
+                    _observe = getattr(bot.broker, 'has_pending_fill_observations', None)
+                    _cancel_observation = callable(_observe) and _observe() is True
+                    if open_orders or _cancel_observation:
                         self._fill_handoff_active = True
                         self._fill_handoff_generation = getattr(self, '_fill_handoff_generation', 0) + 1
                         fills = await bot.broker.check_fills()
@@ -3474,7 +3533,8 @@ JSON:
                         # 주문 완결 판정 (진입 위험 확정용) — check_fills 가 완결 주문을 지운 뒤의
                         # 인메모리 미체결 목록. 조회 실패·id 식별 불가는 None(확정 보류).
                         try:
-                            _open_ids = self._open_order_ids(await bot.broker.get_open_orders())
+                            _open_ids = self._with_fill_observation_ids(
+                                self._open_order_ids(await bot.broker.get_open_orders()))
                         except Exception as _ooe:
                             logger.warning(f"[위험계측] 미체결 주문 조회 실패 — 완결 판정 보류: {_ooe}")
                             _open_ids = None
@@ -3490,12 +3550,16 @@ JSON:
                             _exit_reason_snap = ""
                             if fill.side == OrderSide.SELL:
                                 _sell_pos_snap = bot.engine.portfolio.positions.get(fill.symbol)
-                                _exit_reason_snap = bot._exit_reasons.get(fill.symbol, "")
+                                _owns_pending = self._fill_owns_pending(fill)
+                                _exit_reason_snap = (bot._exit_reasons.get(fill.symbol, "")
+                                                     if _owns_pending else "")
                                 # batch_analyzer 경로 폴백: _pending_exit_reasons 확인
-                                if not _exit_reason_snap:
+                                if not _exit_reason_snap and _owns_pending:
                                     _rm = getattr(bot.engine, 'risk_manager', None)
                                     _per = getattr(_rm, '_pending_exit_reasons', {}) if _rm else {}
                                     _exit_reason_snap = _per.pop(fill.symbol, "")
+                                if not _owns_pending and isinstance(fill.reason, str):
+                                    _exit_reason_snap = fill.reason.strip()
 
                             # ── BUY: 진입 위험 계측용 체결 누적 + 시그널 메타 스냅샷 ──
                             # 엔진 on_fill 이 주문 완결 시 _pending_signal_cache 를 비우므로 emit 전에 복사
@@ -3510,6 +3574,7 @@ JSON:
                                 'fill': fill, 'event': event, '_sell_pos_snap': _sell_pos_snap,
                                 '_exit_reason_snap': _exit_reason_snap, '_entry_lot': _entry_lot,
                                 '_order_done': _order_done,
+                                '_exit_pending_generation': bot._exit_pending_timestamps.get(fill.symbol),
                             }
                             await bot.engine.emit(event)
 
@@ -5670,11 +5735,8 @@ JSON:
                         # KIS 체결 기반 PnL 보정
                         if not getattr(bot, '_last_kis_sync_date', None) == today:
                             try:
-                                tj = bot.trade_journal
-                                if bot.broker and hasattr(tj, 'sync_from_kis'):
-                                    await tj.sync_from_kis(bot.broker, engine=bot.engine)
-                                    bot._last_kis_sync_date = today
-                                    logger.info("[KIS동기화] 장 마감 후 체결 동기화 완료")
+                                from ..data.storage.trade_storage import sync_kis_journal
+                                await sync_kis_journal(bot, close_day=True)
                             except Exception as e:
                                 logger.error(f"[KIS동기화] 장 마감 후 동기화 실패: {e}")
 

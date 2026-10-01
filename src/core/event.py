@@ -246,6 +246,7 @@ class FillEvent(Event):
     # Process-local receipt, not exchange settlement evidence. None=pending,
     # True=portfolio applied, False=failed/unattributable (never auto-retried).
     portfolio_applied: Optional[bool] = field(default=None, init=False)
+    pending_order_matched: Optional[bool] = field(default=None, init=False)
     position_before: Optional[Position] = field(default=None, init=False, repr=False)
     position_after: Optional[Position] = field(default=None, init=False, repr=False)
     position_owner: Optional[Position] = field(default=None, init=False, repr=False)

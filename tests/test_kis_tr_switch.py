@@ -81,7 +81,7 @@ def _capture_post(b) -> list:
     """(tr_id, 본문, retry) 를 기록하는 가짜 _api_post — 접수 성공 응답."""
     sent = []
 
-    async def fake_post(url, tr_id, json_data, extra_headers=None, retry=True):
+    async def fake_post(url, tr_id, json_data, extra_headers=None, retry=True, cancel_guard=None):
         sent.append((tr_id, dict(json_data), retry))
         return {"rt_cd": "0", "output": {"ODNO": "0001", "KRX_FWDG_ORD_ORGNO": "91252"}}
     b._api_post = fake_post
