@@ -900,19 +900,28 @@ class TradeStorage:
 
     async def sync_from_kis(self, broker, engine=None):
         """
-        KIS 당일 체결 내역과 캐시/DB 동기화.
+        완결 조회된 KIS 당일 체결 내역과 캐시/DB 동기화.
 
         1) 누락 매수/매도 복구
         2) 청산 거래 PnL 보정 (수수료+세금 포함 정확한 값으로)
         절대 예외를 전파하지 않습니다.
         """
         try:
-            if not hasattr(broker, "get_all_fills_for_date"):
-                logger.debug("[TradeStorage] broker에 get_all_fills_for_date 없음, 동기화 건너뜀")
+            checked_query = getattr(broker, "get_fills_for_date_checked", None)
+            if not callable(checked_query):
+                logger.warning("[TradeStorage] broker에 get_fills_for_date_checked 없음, 동기화 건너뜀")
                 return
 
             today = date.today()
-            fills = await broker.get_all_fills_for_date(today)
+            fills, complete, reason = await checked_query(today)
+            # 부분 목록으로 복구/PnL 보정을 시작하면 후속 완결 조회 전 장부가 오염된다.
+            # 기존 조회와 같은 한 번의 페이지 순회이며, 미확인 조회로 폴백하지 않는다.
+            if complete is not True:
+                logger.warning(
+                    f"[TradeStorage] KIS 당일 체결 조회 미완결, 동기화 건너뜀: "
+                    f"{reason or '완결 여부 불명'}"
+                )
+                return
             if not fills:
                 logger.info("[TradeStorage] KIS 당일 체결 0건, 동기화 불필요")
                 return
