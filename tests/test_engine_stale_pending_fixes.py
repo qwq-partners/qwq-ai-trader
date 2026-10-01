@@ -396,7 +396,9 @@ def test_open_order_query_three_states_only_for_the_asked_symbol(kis_broker, sym
 def _fill_ready(rm):
     rm._pending_exit_reasons = {}
     rm.config = SimpleNamespace(daily_max_loss_pct=5.0)
-    rm.engine.update_position = lambda fill: None
+    rm.engine.update_position = lambda fill: True  # explicit successful fake application
+    rm.engine.track_fill = lambda event: None
+    rm.engine._acknowledge_fill = lambda event, applied: setattr(event, 'portfolio_applied', applied)
     rm.engine.portfolio.total_equity = Decimal("1000000")
     rm.engine.portfolio.effective_daily_pnl = Decimal("0")
 

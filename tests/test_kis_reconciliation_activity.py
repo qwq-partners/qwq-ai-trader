@@ -153,3 +153,26 @@ def test_paginated_balance_never_reuses_previous_single_page_snapshot(broker):
         assert (await broker.get_account_balance())["available_cash"] == 0
         assert broker._balance_snapshot is None
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("value", [None, "", "NaN", "Infinity", "-1", "absent"])
+def test_missing_or_invalid_orderable_cash_is_not_verified_zero(broker, value):
+    async def get(url, tr_id, params, **kwargs):
+        if tr_id == "TTTC8908R":
+            return {"rt_cd": "0", "output": {} if value == "absent" else {"nrcvb_buy_amt": value}}
+        return {"rt_cd": "0", "_tr_cont": "D", "output1": [],
+                "output2": [{"dnca_tot_amt": "100000"}]}
+    broker._api_get = get
+    assert asyncio.run(broker.get_account_balance()) == {}
+
+
+@pytest.mark.parametrize("value", ["0", 0, "100000"])
+def test_explicit_finite_orderable_cash_is_verified(broker, value):
+    async def get(url, tr_id, params, **kwargs):
+        if tr_id == "TTTC8908R":
+            return {"rt_cd": "0", "output": {"nrcvb_buy_amt": value}}
+        return {"rt_cd": "0", "_tr_cont": "D", "output1": [], "output2": [{}]}
+    broker._api_get = get
+    balance = asyncio.run(broker.get_account_balance())
+    assert balance["available_cash_verified"] is True
+    assert balance["available_cash"] == float(value)

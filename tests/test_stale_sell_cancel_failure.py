@@ -649,7 +649,9 @@ def test_engine_full_fill_clears_the_keep_ledger(monkeypatch):
     rm = _engine(monkeypatch, SellBroker(), keep=3)
     rm._pending_exit_reasons = {}
     rm.config = SimpleNamespace(daily_max_loss_pct=5.0)
-    rm.engine.update_position = lambda fill: None
+    rm.engine.update_position = lambda fill: True  # explicit successful fake application
+    rm.engine.track_fill = lambda event: None
+    rm.engine._acknowledge_fill = lambda event, applied: setattr(event, 'portfolio_applied', applied)
     rm.engine.portfolio.total_equity = Decimal("10000000")
     rm.engine.portfolio.effective_daily_pnl = Decimal("0")
 

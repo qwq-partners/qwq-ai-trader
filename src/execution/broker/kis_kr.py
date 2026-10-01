@@ -1871,6 +1871,7 @@ class KISBroker(BaseBroker):
 
             # 2. 매수가능조회 API (실제 주문 가능 금액)
             available_cash = 0.0
+            available_cash_verified = False
             try:
                 tr_id2 = "TTTC8908R"
                 url2 = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
@@ -1890,7 +1891,15 @@ class KISBroker(BaseBroker):
                 if str(data2.get("rt_cd", "")) == "0":
                     output = data2.get("output", {})
                     # 미수 없는 매수가능금액 (실제 주문 가능 금액)
-                    available_cash = float(output.get("nrcvb_buy_amt", "0") or "0")
+                    try:
+                        cash_value = Decimal(str(output.get("nrcvb_buy_amt")))
+                        if not cash_value.is_finite() or cash_value < 0:
+                            raise ValueError("invalid orderable cash")
+                    except (ValueError, ArithmeticError):
+                        logger.warning("[잔고] 매수가능금액 누락/유효하지 않음 → 잔고 적용 보류")
+                        return {}
+                    available_cash = float(cash_value)
+                    available_cash_verified = True
                 else:
                     # rt_cd 실패(재시도 소진 등)도 예외 경로와 동일하게 예수금 폴백 —
                     # 0원으로 성공 반환하면 기동 시 portfolio.cash=0/initial_capital 과소 (2026-09-03 P2)
@@ -1907,6 +1916,7 @@ class KISBroker(BaseBroker):
             return {
                 "total_equity": total_equity,  # 실제 총자산 (주문가능 + 주식)
                 "available_cash": available_cash,  # 매수 가능 금액 (실제 주문 가능)
+                "available_cash_verified": available_cash_verified,  # 예수금 폴백은 별도 표기
                 "deposit": deposit,  # 예수금 (D+2 정산 전)
                 "stock_value": stock_value,  # 주식 평가액
                 "purchase_amount": purchase_amt,  # 매입 금액
