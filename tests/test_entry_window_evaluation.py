@@ -190,10 +190,15 @@ def test_nonconstant_bootstrap_matches_independent_pcg64_circular_block_calculat
     values = [Decimal("0"), Decimal("0.1"), Decimal("0.3"), Decimal("-0.2"), Decimal("0.4"), Decimal("0.2")]
     got = _linear_ci(values, _bootstrap_indices(len(values)))
     rng = np.random.Generator(np.random.PCG64(20261001))
-    starts = rng.integers(0, len(values), size=(10000, 2))
-    indices = ((starts[:, :, None] + np.arange(5)) % len(values)).reshape(10000, -1)[:, :len(values)]
-    expected = np.quantile(np.array([float(v) for v in values])[indices].mean(axis=1), [0.025, 0.975], method="linear")
-    assert got == tuple(Decimal(str(value)) for value in expected)
+    # Literal protocol loop is independent of production's vectorized reshape.
+    samples = []
+    for _ in range(10000):
+        sample = []
+        for start in rng.integers(0, len(values), size=2):
+            sample.extend(values[(int(start) + offset) % len(values)] for offset in range(5))
+        samples.append(float(sum(sample[:len(values)], Decimal(0)) / len(values)))
+    expected = np.quantile(samples, [0.025, 0.975], method="linear")
+    assert [float(v) for v in got] == pytest.approx(expected, abs=1e-15)
 
 
 @pytest.mark.parametrize("name", ["capture", "study", "observations"])
@@ -229,6 +234,67 @@ def test_unknown_selected_candidate_suppresses_economic_verdict_but_reports_coho
     assert out["economic_verdict"] == "suppressed"
     assert out["scenarios"]["0"]["mean_delta"] is None
     assert out["whole_cohort_unknown_candidates"] == 10
+
+
+def test_cost_specific_unknowns_use_unique_union_and_suppress_all_economics(monkeypatch):
+    import src.analytics.entry_window_evaluation as mod
+    protocol = _protocol(); _install(monkeypatch)
+    builder = mod.build_evaluation_bundle
+    def with_cost_unknowns(*args, **kwargs):
+        bundle = builder(*args, **kwargs)
+        for index, bps in enumerate((0, 30)):
+            report = next(s["result"]["report"] for s in bundle["sensitivity"] if s["slippage_bps_each"] == bps)
+            report["opportunities"][index]["gate_status"] = "unknown"
+        return bundle
+    monkeypatch.setattr(mod, "build_evaluation_bundle", with_cost_unknowns)
+    out = mod.build_window_report(protocol, _days(protocol), as_of=_final_as_of())
+    assert out["selected_unknown_candidates"] == 20
+    assert [out["scenarios"][str(bps)]["selected_unknown_candidates"] for bps in (0, 10, 30)] == [10, 0, 10]
+    assert all(s["mean_delta"] is None and s["bootstrap"] is None for s in out["scenarios"].values())
+
+
+@pytest.mark.parametrize("zero_field,expected", [
+    (None, "conditional_research_criteria_met"),
+    ("delta_net_pnl", "improvement_evidence_not_met"),
+    ("b_net_pnl", "improvement_evidence_not_met"),
+])
+def test_sufficient_sample_requires_both_improvement_and_standalone_profit(monkeypatch, zero_field, expected):
+    import src.analytics.entry_window_evaluation as mod
+    protocol = _protocol(dates=[f"2026-10-{day:02d}" for day in range(6, 17)])
+    _install(monkeypatch); builder = mod.build_evaluation_bundle
+    def set_outcomes(*args, **kwargs):
+        bundle = builder(*args, **kwargs)
+        if zero_field:
+            for scenario in bundle["sensitivity"]:
+                for row in scenario["result"]["report"]["opportunities"]:
+                    row[zero_field] = "0"
+        return bundle
+    monkeypatch.setattr(mod, "build_evaluation_bundle", set_outcomes)
+    out = mod.build_window_report(protocol, _days(protocol), as_of=_final_as_of())
+    assert out["economic_verdict"] == expected
+    assert out["production_eligible"] is False and out["profitability_pass"] is False
+
+
+@pytest.mark.parametrize("field", ["study", "record", "review", "close"])
+def test_final_report_cannot_use_evidence_from_after_its_as_of(field):
+    from src.analytics.entry_window_evaluation import build_window_report
+    from src.analytics.entry_evaluation_bundle import _digest
+    day, epoch = _real_day("2026-11-03")
+    protocol = _protocol(dates=[day["date"]]); protocol["evaluation_epoch"] = epoch
+    future = "2026-11-03T23:00:00+09:00"
+    if field == "study":
+        study = json.loads(day["study_utf8"]); study["as_of"] = future
+        day["study_utf8"] = json.dumps(study)
+    elif field == "record": day["observations"]["records"][0]["observed_at"] = future
+    elif field == "review": day["session_review"]["quotes"][0]["reviewed_at"] = future
+    else:
+        day["observations"]["journal"]["capture_closed_at"] = future
+        day["session_review"]["binding"]["observation_sha256"] = _digest(day["observations"])
+        out = build_window_report(protocol, [day], as_of=_final_as_of())
+        assert out["economic_verdict"] == "suppressed" and out["quality_failures"] == [day["date"]]
+        return
+    with pytest.raises(ValueError, match="after report as_of"):
+        build_window_report(protocol, [day], as_of=_final_as_of())
 
 
 def test_verified_empty_scan_is_zero_but_unsealed_or_dropped_day_suppresses(monkeypatch):
