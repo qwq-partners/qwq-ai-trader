@@ -1,0 +1,863 @@
+{
+  "account_return": null,
+  "baseline_cli_exit": 0,
+  "cases": {
+    "first_bad_quote_remains_unknown": true,
+    "missing_supplement_unknown": 4,
+    "modified_study_rejected_exit": 2,
+    "original_denominator": 4,
+    "paired": 3,
+    "source_files_unchanged": true,
+    "unknown": 1
+  },
+  "close_result": {
+    "error": null,
+    "fsync_confirmed": true,
+    "persisted_records": 16,
+    "sealed": true
+  },
+  "created_at": "2026-10-01T13:40:08.721747+00:00",
+  "frozen_live_proposal_sha256": "bf329d43417d4435407dfdf52adf8ee5a9c677ca691f149e5d7b2370729d4a48",
+  "kind": "synthetic_existing_pipeline_rehearsal_not_profit_evidence",
+  "live_results_available": false,
+  "product_source_unchanged": true,
+  "production_eligible": false,
+  "sensitivity": [
+    {
+      "counts": {
+        "allow": 1,
+        "baseline_cash": 0,
+        "cash": 2,
+        "in_scope": 4,
+        "out_of_scope": 0,
+        "paired_outcomes": 3,
+        "total": 4,
+        "unknown": 1
+      },
+      "derived_context_sha256": "ceadc78d6d58ef3becb0d963e07a069c84a16a9cd88d7027dab3a918d38e238c",
+      "independent_decimal_arithmetic": "passed",
+      "original_study_sha256": "ceadc78d6d58ef3becb0d963e07a069c84a16a9cd88d7027dab3a918d38e238c",
+      "rows": [
+        {
+          "a_net_pnl": "-13043",
+          "a_quantity": 25,
+          "b_net_pnl": "0",
+          "b_quantity": 0,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "645c9ffec9189a7f533399520f875a0db70dfa1f333001ac2a8afec5312f9b74",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "13043",
+          "entry_price_proxy": "10000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "cash",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "9500",
+          "markout_quote_id": "synthetic-mark-SYNTH_LOSS",
+          "max_ask_whole_krw": "9466",
+          "net_rr": "0.3534705141280220769092327074209611",
+          "opportunity_id": "synthetic-scan:SYNTH_LOSS",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12501.75",
+          "reason_codes": [
+            "NET_RR_BELOW_1_5"
+          ],
+          "symbol": "SYNTH_LOSS",
+          "target_net_gain": "4419"
+        },
+        {
+          "a_net_pnl": "24376",
+          "a_quantity": 25,
+          "b_net_pnl": "0",
+          "b_quantity": 0,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "61a464ec9ea300da3536ee8e4e4b713d8754a4710a272889f121a8b34bc51d20",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "-24376",
+          "entry_price_proxy": "10000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "cash",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "11000",
+          "markout_quote_id": "synthetic-mark-SYNTH_GAIN",
+          "max_ask_whole_krw": "9466",
+          "net_rr": "0.3534705141280220769092327074209611",
+          "opportunity_id": "synthetic-scan:SYNTH_GAIN",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12501.75",
+          "reason_codes": [
+            "NET_RR_BELOW_1_5"
+          ],
+          "symbol": "SYNTH_GAIN",
+          "target_net_gain": "4419"
+        },
+        {
+          "a_net_pnl": "11903",
+          "a_quantity": 25,
+          "b_net_pnl": "11903",
+          "b_quantity": 25,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "0880b7fed90509d8664b0b414e742d8c48fb0c3b77b548791632ff68a7bb2b89",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "0",
+          "entry_price_proxy": "10000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "allow",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "10500",
+          "markout_quote_id": "synthetic-mark-SYNTH_ALLOW",
+          "max_ask_whole_krw": "10209",
+          "net_rr": "1.949807027016217729517867498550203",
+          "opportunity_id": "synthetic-scan:SYNTH_ALLOW",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12501.75",
+          "reason_codes": [],
+          "symbol": "SYNTH_ALLOW",
+          "target_net_gain": "24376"
+        }
+      ],
+      "slippage_bps_each": 0,
+      "summary": {
+        "complete_delta_net_pnl": null,
+        "known_avoided_loss": "13043",
+        "known_missed_gain": "24376",
+        "known_pair_delta_net_pnl": "-11333"
+      }
+    },
+    {
+      "counts": {
+        "allow": 1,
+        "baseline_cash": 0,
+        "cash": 2,
+        "in_scope": 4,
+        "out_of_scope": 0,
+        "paired_outcomes": 3,
+        "total": 4,
+        "unknown": 1
+      },
+      "derived_context_sha256": "757e0866bdca63a96e08401798c5cb188b38f94c116770c8f56bcce216170f1d",
+      "independent_decimal_arithmetic": "passed",
+      "original_study_sha256": "ceadc78d6d58ef3becb0d963e07a069c84a16a9cd88d7027dab3a918d38e238c",
+      "rows": [
+        {
+          "a_net_pnl": "-13531",
+          "a_quantity": 25,
+          "b_net_pnl": "0",
+          "b_quantity": 0,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "645c9ffec9189a7f533399520f875a0db70dfa1f333001ac2a8afec5312f9b74",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "13531",
+          "entry_price_proxy": "10010.000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "cash",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "9490.500",
+          "markout_quote_id": "synthetic-mark-SYNTH_LOSS",
+          "max_ask_whole_krw": "9447",
+          "net_rr": "0.3128433585712287991689473999640410",
+          "opportunity_id": "synthetic-scan:SYNTH_LOSS",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12514.250",
+          "reason_codes": [
+            "NET_RR_BELOW_1_5"
+          ],
+          "symbol": "SYNTH_LOSS",
+          "target_net_gain": "3915"
+        },
+        {
+          "a_net_pnl": "23852",
+          "a_quantity": 25,
+          "b_net_pnl": "0",
+          "b_quantity": 0,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "61a464ec9ea300da3536ee8e4e4b713d8754a4710a272889f121a8b34bc51d20",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "-23852",
+          "entry_price_proxy": "10010.000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "cash",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "10989.000",
+          "markout_quote_id": "synthetic-mark-SYNTH_GAIN",
+          "max_ask_whole_krw": "9447",
+          "net_rr": "0.3128433585712287991689473999640410",
+          "opportunity_id": "synthetic-scan:SYNTH_GAIN",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12514.250",
+          "reason_codes": [
+            "NET_RR_BELOW_1_5"
+          ],
+          "symbol": "SYNTH_GAIN",
+          "target_net_gain": "3915"
+        },
+        {
+          "a_net_pnl": "11392",
+          "a_quantity": 25,
+          "b_net_pnl": "11392",
+          "b_quantity": 25,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "0880b7fed90509d8664b0b414e742d8c48fb0c3b77b548791632ff68a7bb2b89",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "0",
+          "entry_price_proxy": "10010.000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "allow",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "10489.500",
+          "markout_quote_id": "synthetic-mark-SYNTH_ALLOW",
+          "max_ask_whole_krw": "10188",
+          "net_rr": "1.905987174620932137363405717482070",
+          "opportunity_id": "synthetic-scan:SYNTH_ALLOW",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12514.250",
+          "reason_codes": [],
+          "symbol": "SYNTH_ALLOW",
+          "target_net_gain": "23852"
+        }
+      ],
+      "slippage_bps_each": 10,
+      "summary": {
+        "complete_delta_net_pnl": null,
+        "known_avoided_loss": "13531",
+        "known_missed_gain": "23852",
+        "known_pair_delta_net_pnl": "-10321"
+      }
+    },
+    {
+      "counts": {
+        "allow": 1,
+        "baseline_cash": 0,
+        "cash": 2,
+        "in_scope": 4,
+        "out_of_scope": 0,
+        "paired_outcomes": 3,
+        "total": 4,
+        "unknown": 1
+      },
+      "derived_context_sha256": "78f493c658af1ee434c4eaf550b22f154ba8de3a4aa4cd3e38870882f4f60fe1",
+      "independent_decimal_arithmetic": "passed",
+      "original_study_sha256": "ceadc78d6d58ef3becb0d963e07a069c84a16a9cd88d7027dab3a918d38e238c",
+      "rows": [
+        {
+          "a_net_pnl": "-14505",
+          "a_quantity": 25,
+          "b_net_pnl": "0",
+          "b_quantity": 0,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "645c9ffec9189a7f533399520f875a0db70dfa1f333001ac2a8afec5312f9b74",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "14505",
+          "entry_price_proxy": "10030.000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "cash",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "9471.500",
+          "markout_quote_id": "synthetic-mark-SYNTH_LOSS",
+          "max_ask_whole_krw": "9410",
+          "net_rr": "0.2317522977849552405446896744223139",
+          "opportunity_id": "synthetic-scan:SYNTH_LOSS",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12539.250",
+          "reason_codes": [
+            "NET_RR_BELOW_1_5"
+          ],
+          "symbol": "SYNTH_LOSS",
+          "target_net_gain": "2906"
+        },
+        {
+          "a_net_pnl": "22803",
+          "a_quantity": 25,
+          "b_net_pnl": "0",
+          "b_quantity": 0,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "61a464ec9ea300da3536ee8e4e4b713d8754a4710a272889f121a8b34bc51d20",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "-22803",
+          "entry_price_proxy": "10030.000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "cash",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "10967.000",
+          "markout_quote_id": "synthetic-mark-SYNTH_GAIN",
+          "max_ask_whole_krw": "9410",
+          "net_rr": "0.2317522977849552405446896744223139",
+          "opportunity_id": "synthetic-scan:SYNTH_GAIN",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12539.250",
+          "reason_codes": [
+            "NET_RR_BELOW_1_5"
+          ],
+          "symbol": "SYNTH_GAIN",
+          "target_net_gain": "2906"
+        },
+        {
+          "a_net_pnl": "10368",
+          "a_quantity": 25,
+          "b_net_pnl": "10368",
+          "b_quantity": 25,
+          "capital_basis": "pre_pending_internal_guard_proxy",
+          "capital_constraints": {
+            "basis": "pre_pending_internal_guard_proxy",
+            "cash_cost_capacity": "2600000",
+            "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+            "position_notional_cap": "1800000",
+            "risk_loss_budget": "70000.0",
+            "risk_stop_pct": "5",
+            "snapshot_ref": "0880b7fed90509d8664b0b414e742d8c48fb0c3b77b548791632ff68a7bb2b89",
+            "strategy_cap_status": "applied",
+            "strategy_notional_remaining": "500000"
+          },
+          "delta_net_pnl": "0",
+          "entry_price_proxy": "10030.000",
+          "evaluation_at": "2026-10-02T00:30:05+00:00",
+          "gate_status": "allow",
+          "markout_observed_at": "2026-10-02T00:30:06+00:00",
+          "markout_price_proxy": "10468.500",
+          "markout_quote_id": "synthetic-mark-SYNTH_ALLOW",
+          "max_ask_whole_krw": "10148",
+          "net_rr": "1.818529816376577546503977510616664",
+          "opportunity_id": "synthetic-scan:SYNTH_ALLOW",
+          "outcome_status": "complete_markout_proxy",
+          "planned_net_loss": "12539.250",
+          "reason_codes": [],
+          "symbol": "SYNTH_ALLOW",
+          "target_net_gain": "22803"
+        }
+      ],
+      "slippage_bps_each": 30,
+      "summary": {
+        "complete_delta_net_pnl": null,
+        "known_avoided_loss": "14505",
+        "known_missed_gain": "22803",
+        "known_pair_delta_net_pnl": "-8298"
+      }
+    }
+  ],
+  "synthetic_input": {
+    "context": {
+      "as_of": "2026-10-02T00:45:00+00:00",
+      "capital_policy": {
+        "configuration_ref": "synthetic-config-only",
+        "fixed_at": "2026-10-01T13:02:06.951364+00:00",
+        "max_position_pct": "18",
+        "max_snapshot_age_seconds": "1",
+        "policy_ref": "synthetic-kr-entry-20261002-declared-0.7pct-risk-18pct-position",
+        "risk_per_trade_pct": "0.7",
+        "source_version_ref": "synthetic-source-only",
+        "version": "pre-pending-guards-v1"
+      },
+      "data_basis": "received_snapshot",
+      "dataset_kind": "synthetic",
+      "evaluation_epoch": "synthetic-pds-rehearsal-20261001",
+      "fee_model_ref": "draft-public-bankis-krx-stock-reference-not-account-verified-2026-10-01",
+      "fees": {
+        "buy_commission_rate": "0.000140527",
+        "sell_commission_rate": "0.000140527",
+        "sell_tax_rate": "0.002"
+      },
+      "markout_policy": {
+        "anchor": "entry_quote_observed_at",
+        "fixed_at": "2026-10-01T13:02:06.951364+00:00",
+        "horizon_seconds": 900,
+        "max_delay_seconds": "5",
+        "policy_ref": "synthetic-kr-entry-20261002-900s-bid-v1",
+        "version": "fixed-horizon-bid-v1"
+      },
+      "outcome_basis": "fixed_horizon_bid_markout",
+      "policy": {
+        "entry_slippage_bps": "0",
+        "exit_slippage_bps": "0",
+        "max_decision_delay_seconds": "5",
+        "max_quote_age_seconds": "1"
+      },
+      "received_policy": {
+        "max_rest_rtt_seconds": "3",
+        "max_target_age_seconds": "30",
+        "version": "received-v1"
+      },
+      "schema_version": 1
+    },
+    "evaluation_inputs": [
+      {
+        "markout_session": {
+          "evidence_ref": "synthetic-session-proof-not-live",
+          "quote_id": "synthetic-mark-SYNTH_LOSS",
+          "session": "KRX_REGULAR_CONTINUOUS"
+        },
+        "opportunity_id": "synthetic-scan:SYNTH_LOSS",
+        "policy_inputs_at": "2026-10-01T13:02:06.951364+00:00",
+        "quote_session": {
+          "evidence_ref": "synthetic-session-proof-not-live",
+          "quote_id": "synthetic-entry-SYNTH_LOSS",
+          "session": "KRX_REGULAR_CONTINUOUS"
+        }
+      },
+      {
+        "markout_session": {
+          "evidence_ref": "synthetic-session-proof-not-live",
+          "quote_id": "synthetic-mark-SYNTH_GAIN",
+          "session": "KRX_REGULAR_CONTINUOUS"
+        },
+        "opportunity_id": "synthetic-scan:SYNTH_GAIN",
+        "policy_inputs_at": "2026-10-01T13:02:06.951364+00:00",
+        "quote_session": {
+          "evidence_ref": "synthetic-session-proof-not-live",
+          "quote_id": "synthetic-entry-SYNTH_GAIN",
+          "session": "KRX_REGULAR_CONTINUOUS"
+        }
+      },
+      {
+        "markout_session": {
+          "evidence_ref": "synthetic-session-proof-not-live",
+          "quote_id": "synthetic-mark-SYNTH_ALLOW",
+          "session": "KRX_REGULAR_CONTINUOUS"
+        },
+        "opportunity_id": "synthetic-scan:SYNTH_ALLOW",
+        "policy_inputs_at": "2026-10-01T13:02:06.951364+00:00",
+        "quote_session": {
+          "evidence_ref": "synthetic-session-proof-not-live",
+          "quote_id": "synthetic-entry-SYNTH_ALLOW",
+          "session": "KRX_REGULAR_CONTINUOUS"
+        }
+      }
+    ],
+    "observations": {
+      "complete": true,
+      "dropped_records": 0,
+      "evaluation_epoch": "synthetic-pds-rehearsal-20261001",
+      "incomplete_reasons": [],
+      "journal": {
+        "capture_closed_at": "2026-10-02T09:45:00+09:00",
+        "capture_id": "f1db581aeab14a2b8194002effd6598e",
+        "dropped_count_exact": true,
+        "durability_confirmed": false,
+        "persistence_dropped_records": 0,
+        "scope": "sealed_window",
+        "sealed": true,
+        "structurally_valid": true,
+        "study_ref": "synthetic-pds-only",
+        "study_sha256": "ceadc78d6d58ef3becb0d963e07a069c84a16a9cd88d7027dab3a918d38e238c"
+      },
+      "records": [
+        {
+          "candidates": [
+            {
+              "candidate_id": "synthetic-scan:SYNTH_LOSS",
+              "score": 100,
+              "symbol": "SYNTH_LOSS"
+            },
+            {
+              "candidate_id": "synthetic-scan:SYNTH_GAIN",
+              "score": 99,
+              "symbol": "SYNTH_GAIN"
+            },
+            {
+              "candidate_id": "synthetic-scan:SYNTH_ALLOW",
+              "score": 98,
+              "symbol": "SYNTH_ALLOW"
+            },
+            {
+              "candidate_id": "synthetic-scan:SYNTH_MISSING",
+              "score": 97,
+              "symbol": "SYNTH_MISSING"
+            }
+          ],
+          "kind": "scan",
+          "observed_at": "2026-10-02T09:15:00+09:00",
+          "population_scope": "first_returned_scan_candidates",
+          "route_origin": "live_screening",
+          "scan_admission_ref": "synthetic-first-scan-only",
+          "scan_id": "synthetic-scan",
+          "sequence": 1,
+          "session": "synthetic-only"
+        },
+        {
+          "candidate_id": "synthetic-scan:SYNTH_LOSS",
+          "kind": "rest_quote",
+          "observed_at": "2026-10-02T09:15:02+09:00",
+          "quote": {
+            "high": "10200"
+          },
+          "requested_at": "2026-10-02T09:15:01+09:00",
+          "sequence": 2,
+          "source": "KIS_FHKST01010100",
+          "source_as_of": null
+        },
+        {
+          "candidate_id": "synthetic-scan:SYNTH_LOSS",
+          "kind": "signal",
+          "observed_at": "2026-10-02T09:15:03+09:00",
+          "sequence": 3,
+          "signal_id": "synthetic-sig-SYNTH_LOSS",
+          "strategy": "gap_and_go"
+        },
+        {
+          "capital_snapshot": {
+            "basis": "engine_memory_not_broker_balance",
+            "captured_at": "2026-10-02T09:15:03.5+09:00",
+            "cash": "3300000",
+            "cash_after_reserve": "2800000",
+            "cash_capacity_before": "2600000",
+            "core_cash_reserved": "100000",
+            "current_order_reservation_included": false,
+            "equity": "10000000",
+            "order_id": "synthetic-order-SYNTH_LOSS",
+            "prior_pending_cash_reserved": "100000",
+            "reference_price": "10000",
+            "requested_quantity": 25,
+            "signal_id": "synthetic-sig-SYNTH_LOSS",
+            "stage": "before_current_pending_registration",
+            "strategy": "gap_and_go",
+            "strategy_allocation_pct": "5",
+            "strategy_cap_notional": "500000",
+            "strategy_held_notional": "0",
+            "strategy_pending_reserved": "0",
+            "strategy_remaining_notional": "500000",
+            "symbol": "SYNTH_LOSS",
+            "version": "pre-pending-capacity-v1"
+          },
+          "capital_snapshot_ref": "645c9ffec9189a7f533399520f875a0db70dfa1f333001ac2a8afec5312f9b74",
+          "capital_snapshot_status": "recorded",
+          "effective_stop_pct": "5",
+          "fill_applied": false,
+          "kind": "order_ready",
+          "observed_at": "2026-10-02T09:15:04+09:00",
+          "order_id": "synthetic-order-SYNTH_LOSS",
+          "order_reference_price": "10000",
+          "order_type": "market",
+          "requested_quantity": 25,
+          "risk_stop_pct": "5",
+          "sequence": 4,
+          "signal_id": "synthetic-sig-SYNTH_LOSS",
+          "stop_basis": "net_pnl",
+          "stop_resolved_at_stage": "order_ready",
+          "stop_snapshot_ref": "synthetic-stop",
+          "strategy": "gap_and_go",
+          "symbol": "SYNTH_LOSS",
+          "transport_status": "not_observed"
+        },
+        {
+          "candidate_id": "synthetic-scan:SYNTH_GAIN",
+          "kind": "rest_quote",
+          "observed_at": "2026-10-02T09:15:02+09:00",
+          "quote": {
+            "high": "10200"
+          },
+          "requested_at": "2026-10-02T09:15:01+09:00",
+          "sequence": 5,
+          "source": "KIS_FHKST01010100",
+          "source_as_of": null
+        },
+        {
+          "candidate_id": "synthetic-scan:SYNTH_GAIN",
+          "kind": "signal",
+          "observed_at": "2026-10-02T09:15:03+09:00",
+          "sequence": 6,
+          "signal_id": "synthetic-sig-SYNTH_GAIN",
+          "strategy": "gap_and_go"
+        },
+        {
+          "capital_snapshot": {
+            "basis": "engine_memory_not_broker_balance",
+            "captured_at": "2026-10-02T09:15:03.5+09:00",
+            "cash": "3300000",
+            "cash_after_reserve": "2800000",
+            "cash_capacity_before": "2600000",
+            "core_cash_reserved": "100000",
+            "current_order_reservation_included": false,
+            "equity": "10000000",
+            "order_id": "synthetic-order-SYNTH_GAIN",
+            "prior_pending_cash_reserved": "100000",
+            "reference_price": "10000",
+            "requested_quantity": 25,
+            "signal_id": "synthetic-sig-SYNTH_GAIN",
+            "stage": "before_current_pending_registration",
+            "strategy": "gap_and_go",
+            "strategy_allocation_pct": "5",
+            "strategy_cap_notional": "500000",
+            "strategy_held_notional": "0",
+            "strategy_pending_reserved": "0",
+            "strategy_remaining_notional": "500000",
+            "symbol": "SYNTH_GAIN",
+            "version": "pre-pending-capacity-v1"
+          },
+          "capital_snapshot_ref": "61a464ec9ea300da3536ee8e4e4b713d8754a4710a272889f121a8b34bc51d20",
+          "capital_snapshot_status": "recorded",
+          "effective_stop_pct": "5",
+          "fill_applied": false,
+          "kind": "order_ready",
+          "observed_at": "2026-10-02T09:15:04+09:00",
+          "order_id": "synthetic-order-SYNTH_GAIN",
+          "order_reference_price": "10000",
+          "order_type": "market",
+          "requested_quantity": 25,
+          "risk_stop_pct": "5",
+          "sequence": 7,
+          "signal_id": "synthetic-sig-SYNTH_GAIN",
+          "stop_basis": "net_pnl",
+          "stop_resolved_at_stage": "order_ready",
+          "stop_snapshot_ref": "synthetic-stop",
+          "strategy": "gap_and_go",
+          "symbol": "SYNTH_GAIN",
+          "transport_status": "not_observed"
+        },
+        {
+          "candidate_id": "synthetic-scan:SYNTH_ALLOW",
+          "kind": "rest_quote",
+          "observed_at": "2026-10-02T09:15:02+09:00",
+          "quote": {
+            "high": "11000"
+          },
+          "requested_at": "2026-10-02T09:15:01+09:00",
+          "sequence": 8,
+          "source": "KIS_FHKST01010100",
+          "source_as_of": null
+        },
+        {
+          "candidate_id": "synthetic-scan:SYNTH_ALLOW",
+          "kind": "signal",
+          "observed_at": "2026-10-02T09:15:03+09:00",
+          "sequence": 9,
+          "signal_id": "synthetic-sig-SYNTH_ALLOW",
+          "strategy": "gap_and_go"
+        },
+        {
+          "capital_snapshot": {
+            "basis": "engine_memory_not_broker_balance",
+            "captured_at": "2026-10-02T09:15:03.5+09:00",
+            "cash": "3300000",
+            "cash_after_reserve": "2800000",
+            "cash_capacity_before": "2600000",
+            "core_cash_reserved": "100000",
+            "current_order_reservation_included": false,
+            "equity": "10000000",
+            "order_id": "synthetic-order-SYNTH_ALLOW",
+            "prior_pending_cash_reserved": "100000",
+            "reference_price": "10000",
+            "requested_quantity": 25,
+            "signal_id": "synthetic-sig-SYNTH_ALLOW",
+            "stage": "before_current_pending_registration",
+            "strategy": "gap_and_go",
+            "strategy_allocation_pct": "5",
+            "strategy_cap_notional": "500000",
+            "strategy_held_notional": "0",
+            "strategy_pending_reserved": "0",
+            "strategy_remaining_notional": "500000",
+            "symbol": "SYNTH_ALLOW",
+            "version": "pre-pending-capacity-v1"
+          },
+          "capital_snapshot_ref": "0880b7fed90509d8664b0b414e742d8c48fb0c3b77b548791632ff68a7bb2b89",
+          "capital_snapshot_status": "recorded",
+          "effective_stop_pct": "5",
+          "fill_applied": false,
+          "kind": "order_ready",
+          "observed_at": "2026-10-02T09:15:04+09:00",
+          "order_id": "synthetic-order-SYNTH_ALLOW",
+          "order_reference_price": "10000",
+          "order_type": "market",
+          "requested_quantity": 25,
+          "risk_stop_pct": "5",
+          "sequence": 10,
+          "signal_id": "synthetic-sig-SYNTH_ALLOW",
+          "stop_basis": "net_pnl",
+          "stop_resolved_at_stage": "order_ready",
+          "stop_snapshot_ref": "synthetic-stop",
+          "strategy": "gap_and_go",
+          "symbol": "SYNTH_ALLOW",
+          "transport_status": "not_observed"
+        },
+        {
+          "ask": "10000",
+          "ask_size": 25,
+          "bid": "9990",
+          "kind": "ws_quote",
+          "observed_at": "2026-10-02T09:15:05+09:00",
+          "provenance": {
+            "exchange_time": "091504",
+            "hour_class_code": "0",
+            "message_count": 1,
+            "received_at": "2026-10-02T09:15:04.5+09:00",
+            "source_as_of": null,
+            "tr_id": "H0STASP0"
+          },
+          "quote_id": "synthetic-entry-SYNTH_LOSS",
+          "sequence": 11,
+          "symbol": "SYNTH_LOSS"
+        },
+        {
+          "ask": "10000",
+          "ask_size": 25,
+          "bid": "9990",
+          "kind": "ws_quote",
+          "observed_at": "2026-10-02T09:15:05+09:00",
+          "provenance": {
+            "exchange_time": "091504",
+            "hour_class_code": "0",
+            "message_count": 1,
+            "received_at": "2026-10-02T09:15:04.5+09:00",
+            "source_as_of": null,
+            "tr_id": "H0STASP0"
+          },
+          "quote_id": "synthetic-entry-SYNTH_GAIN",
+          "sequence": 12,
+          "symbol": "SYNTH_GAIN"
+        },
+        {
+          "ask": "10000",
+          "ask_size": 25,
+          "bid": "9990",
+          "kind": "ws_quote",
+          "observed_at": "2026-10-02T09:15:05+09:00",
+          "provenance": {
+            "exchange_time": "091504",
+            "hour_class_code": "0",
+            "message_count": 1,
+            "received_at": "2026-10-02T09:15:04.5+09:00",
+            "source_as_of": null,
+            "tr_id": "H0STASP0"
+          },
+          "quote_id": "synthetic-entry-SYNTH_ALLOW",
+          "sequence": 13,
+          "symbol": "SYNTH_ALLOW"
+        },
+        {
+          "ask": "9510",
+          "ask_size": 25,
+          "bid": "9500",
+          "bid_size": 25,
+          "kind": "ws_quote",
+          "observed_at": "2026-10-02T09:30:06+09:00",
+          "provenance": {
+            "exchange_time": "093005",
+            "hour_class_code": "0",
+            "message_count": 1,
+            "received_at": "2026-10-02T09:30:05.5+09:00",
+            "source_as_of": null,
+            "tr_id": "H0STASP0"
+          },
+          "quote_id": "synthetic-mark-SYNTH_LOSS",
+          "sequence": 14,
+          "symbol": "SYNTH_LOSS"
+        },
+        {
+          "ask": "11010",
+          "ask_size": 25,
+          "bid": "11000",
+          "bid_size": 25,
+          "kind": "ws_quote",
+          "observed_at": "2026-10-02T09:30:06+09:00",
+          "provenance": {
+            "exchange_time": "093005",
+            "hour_class_code": "0",
+            "message_count": 1,
+            "received_at": "2026-10-02T09:30:05.5+09:00",
+            "source_as_of": null,
+            "tr_id": "H0STASP0"
+          },
+          "quote_id": "synthetic-mark-SYNTH_GAIN",
+          "sequence": 15,
+          "symbol": "SYNTH_GAIN"
+        },
+        {
+          "ask": "10510",
+          "ask_size": 25,
+          "bid": "10500",
+          "bid_size": 25,
+          "kind": "ws_quote",
+          "observed_at": "2026-10-02T09:30:06+09:00",
+          "provenance": {
+            "exchange_time": "093005",
+            "hour_class_code": "0",
+            "message_count": 1,
+            "received_at": "2026-10-02T09:30:05.5+09:00",
+            "source_as_of": null,
+            "tr_id": "H0STASP0"
+          },
+          "quote_id": "synthetic-mark-SYNTH_ALLOW",
+          "sequence": 16,
+          "symbol": "SYNTH_ALLOW"
+        }
+      ],
+      "schema_version": 1
+    }
+  },
+  "synthetic_journal_sha256": "35262c02be377a1fbc9fbb8f1c5ed0246a13d6543dc4ff710a0c77b3c23c4b5d",
+  "synthetic_study_sha256": "ceadc78d6d58ef3becb0d963e07a069c84a16a9cd88d7027dab3a918d38e238c",
+  "arithmetic_contract": "Decimal; buy=ask*quantity*(1+entry_bps/10000); sell=bid*quantity*(1-exit_bps/10000); buy fee and combined sell fee/tax rounded to won ROUND_HALF_UP; final PnL rounded to won ROUND_HALF_UP.",
+  "fixture_corrections": [
+    "The first fixture used an unsupported population_scope; corrected to first_returned_scan_candidates with scan_admission_ref.",
+    "The second independent arithmetic omitted final won rounding; corrected after inspecting the frozen FeeCalculator contract. Product code and frozen policy were not changed."
+  ]
+}

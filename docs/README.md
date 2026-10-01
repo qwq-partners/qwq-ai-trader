@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [27차 남은 평가 PDS](research/current-engine-remaining-pds-2026-10-01.md): 합성 분석 경로와 비용 민감도 검증 완료, 공식 반도체 제외 자료는429로 부분 확보에 그침. 실제 관측·계좌 총수익은 미확정이며26차 설치·10월2일 예약을 보존한다. 아래 단계별 최신 표시는 당시 이력이다.
+
 > [26차 첫 관측 실행 기록](operations/capture-execution-2026-10-02.md): PR #119 병합·토스 비활성 설치·10월 2일 08:55 KST 단발 예약 완료. 현재 봇/매수 중지/설정 보존, 실제 기동·관측·수익 비교는 예정.
 
 > 25차 설계 이력: [첫 관측 설치안](operations/entry-capture-installation-2026-10-02.md) · [10월2일 고정 입력 제안](research/current-engine-capture-proposal-2026-10-02.json). 전체 후보 보존/상위3개 관측·1회 시작을 로컬 검증한 당시 기록이다. 운영 identity/승인/release 결합과 비활성 설치·예약은26차에서 완료했다. 현재 실행 상태는 위26차 실행 기록이 정본이며 아래 단계별 표시는 이력이다.
