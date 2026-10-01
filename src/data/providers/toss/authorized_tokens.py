@@ -148,6 +148,12 @@ class AuthorizedTokenProvider:
     async def get_token(self, *, deadline):
         return await self._call("renewal", lambda bounded: self._query_manager.get_token(deadline=bounded), deadline=deadline)
 
+    async def get_websocket_token(self, *, deadline):
+        bounded = self.authority.require('websocket', deadline=deadline)
+        result = await self.get_token(deadline=bounded)
+        self.authority.require('websocket', deadline=bounded)
+        return result
+
     def observe_revocation(self, failed_token):
         # 안전 기록에는 승인 검사를 두지 않는다. 첫 await 전 fsync 계약 유지.
         self.manager.observe_revocation(failed_token)

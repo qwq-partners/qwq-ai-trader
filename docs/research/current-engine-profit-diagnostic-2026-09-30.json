@@ -1,0 +1,1272 @@
+{
+  "plan": {
+    "frozen_at_utc": "2026-09-30T13:28:03.081876+00:00",
+    "purpose": "Prioritize expected profit improvement: is the observed recent gap loss mainly entry/selection, exit timing, or execution costs? Fixed-entry diagnostics, not a new trading strategy test.",
+    "population": "All nine completed September gap_and_go positions in the existing position ledger, uniquely matched by symbol+entry-date to included excess ledger; no PnL selection. Seven same-day exits and two later exits.",
+    "valuation_endpoints": [
+      "entry-day regular-session close",
+      "next trading-day regular-session close"
+    ],
+    "common_entry": "Recorded avg entry price and original quantity fixed for every endpoint. ETF trading dates define next-day; unavailable values reported, no fallback horizon.",
+    "cost_primary": "Same recorded buy+sell fee cash deduction per position at alternative valuation endpoints; a controlled price-only comparison, not guaranteed executable net liquidation.",
+    "cost_sensitivity": "Also recalculate hypothetical sell fees using each position recorded sell-fee / recorded gross-sale-proceeds ratio. Additional exit-slippage sensitivity fixed at 10 and 30 bps, not tuned to results.",
+    "context_only": "Entry-price vs same-day open and prior-day close describes where the purchase occurred; prior close is not an attainable counterfactual entry after selection. Next-day low stress is an observed post-entry price, not a guaranteed fill or full-path maximum drawdown.",
+    "benchmarks": "Same-date KODEX200 price returns are descriptive opportunity cost; exact-time benchmark and total return unavailable. Semiconductor exclusion remains a separate unfinished diagnosis; does not change absolute account loss.",
+    "statistical_status": "Exploratory: known development period, nine nonindependent positions and few entry dates, mixed pre-latest release versions. No significance/profitability/causal engine-wide claim, no threshold tuning or approval to trade.",
+    "corporate_action_rule": "Use unadjusted close for actual-price comparison only after checking splits/dividend events in each short window. If incompatible event found, flag/exclude affected valuation from numerical contrast until resolved, retain population count.",
+    "source_manifest": {
+      "position_ledger.jsonl": {
+        "sha256": "ae4ed3029a898bf762186293ac9693b1c1eee3da3eb433f2da5fa6962ea0d9c2",
+        "bytes": 4888
+      },
+      "excess_return/positions.jsonl": {
+        "sha256": "2435eb910efc2f7a713150026a78a12cba53255f14c45611e999f93bb619fd91",
+        "bytes": 224068
+      }
+    },
+    "operational_scope": "No application imports, broker queries, DB, credentials, orders, changes, service calls. Public unauthenticated price history only; account originals stay local."
+  },
+  "assembled_at_utc": "2026-09-30T13:31:50.538210+00:00",
+  "all_completed9": {
+    "n": 9,
+    "metrics": {
+      "actual_gross_pct": {
+        "mean": -1.881390192106246,
+        "median": -2.263157894736842,
+        "min": -3.3391915641476273,
+        "max": -0.22026431718061673,
+        "positive_count": 0
+      },
+      "actual_net_pct": {
+        "mean": -2.1044652744128816,
+        "median": -2.4857894736842105,
+        "min": -3.55916813122437,
+        "max": -0.44676945668135093,
+        "positive_count": 0
+      },
+      "fee_pct": {
+        "mean": 0.22307508230663584,
+        "median": 0.22263157894736843,
+        "min": 0.21997656707674282,
+        "max": 0.22650513950073423,
+        "positive_count": 9
+      },
+      "d0_fixed_fee_valuation_pct": {
+        "mean": -1.1870423568975743,
+        "median": -1.4524570024570025,
+        "min": -2.523640366238055,
+        "max": 1.6753022452504318,
+        "positive_count": 2
+      },
+      "d1_fixed_fee_valuation_pct": {
+        "mean": -3.361663084584092,
+        "median": -2.9839395607144645,
+        "min": -8.210741233910342,
+        "max": 0.1038913362701909,
+        "positive_count": 1
+      },
+      "d1_scaled_sell_fee_valuation_pct": {
+        "mean": -3.358984140459389,
+        "median": -2.982958946872593,
+        "min": -8.199394150252923,
+        "max": 0.10271829506666277,
+        "positive_count": 1
+      },
+      "d0_minus_actual_pp": {
+        "mean": 0.9174229175153074,
+        "median": 0.3684210526315789,
+        "min": 0.0,
+        "max": 3.6906854130052724,
+        "positive_count": 7
+      },
+      "d1_minus_actual_pp": {
+        "mean": -1.2571978101712098,
+        "median": -0.4618937644341801,
+        "min": -5.326231691078562,
+        "max": 0.5506607929515418,
+        "positive_count": 3
+      },
+      "entry_vs_previous_close_pct": {
+        "mean": 2.842620501346103,
+        "median": 2.8933092224231465,
+        "min": 1.9860440150295222,
+        "max": 3.588516746411483,
+        "positive_count": 9
+      },
+      "entry_vs_open_pct": {
+        "mean": 1.428873861813707,
+        "median": 1.243781094527363,
+        "min": 0.0,
+        "max": 3.392857142857143,
+        "positive_count": 8
+      },
+      "prior_close_to_d1_pct": {
+        "mean": -0.37833335071613067,
+        "median": -0.2361275088547816,
+        "min": -5.858310626702997,
+        "max": 3.2879818594104306,
+        "positive_count": 4
+      },
+      "open_to_d1_pct": {
+        "mean": -1.7390489314506878,
+        "median": -0.7050528789659224,
+        "min": -7.620320855614973,
+        "max": 2.767857142857143,
+        "positive_count": 2
+      },
+      "d1_low_vs_entry_pct": {
+        "mean": -3.935123558634836,
+        "median": -4.473684210526316,
+        "min": -8.388814913448735,
+        "max": -0.44052863436123346,
+        "positive_count": 0
+      },
+      "observed_mfe_pct": {
+        "mean": 0.6723333333333333,
+        "median": 0.351,
+        "min": 0.0,
+        "max": 2.677,
+        "positive_count": 7
+      },
+      "d1_10bps_exit_slippage_pct": {
+        "mean": -3.4558455524571117,
+        "median": -3.0801971517057347,
+        "min": -8.291404802716306,
+        "max": 0.002387898590891852,
+        "positive_count": 1
+      },
+      "d1_30bps_exit_slippage_pct": {
+        "mean": -3.6495683764525566,
+        "median": -3.2746735613720177,
+        "min": -8.47542610764307,
+        "max": -0.19827289436065,
+        "positive_count": 0
+      },
+      "etf_d0_to_d1_price_pct": {
+        "mean": -1.050131784374702,
+        "median": -0.4045822347486183,
+        "min": -3.221529895267139,
+        "max": 1.1306757239899934,
+        "positive_count": 4
+      }
+    }
+  },
+  "exit_quality_groups": {
+    "fill": {
+      "n": 7,
+      "metrics": {
+        "actual_gross_pct": {
+          "mean": -2.058678777056221,
+          "median": -2.263157894736842,
+          "min": -3.3391915641476273,
+          "max": -0.9237875288683602,
+          "positive_count": 0
+        },
+        "actual_net_pct": {
+          "mean": -2.2813968066852186,
+          "median": -2.4857894736842105,
+          "min": -3.55916813122437,
+          "max": -1.1488837567359507,
+          "positive_count": 0
+        },
+        "fee_pct": {
+          "mean": 0.2227180296289974,
+          "median": 0.22263157894736843,
+          "min": 0.21997656707674282,
+          "max": 0.22509622786759045,
+          "positive_count": 7
+        },
+        "d0_fixed_fee_valuation_pct": {
+          "mean": -1.1175862211070102,
+          "median": -1.4524570024570025,
+          "min": -2.4850421660008877,
+          "max": 1.6753022452504318,
+          "positive_count": 2
+        },
+        "d1_fixed_fee_valuation_pct": {
+          "mean": -3.9107027909732217,
+          "median": -4.4857894736842105,
+          "min": -8.210741233910342,
+          "max": -0.8290155440414507,
+          "positive_count": 0
+        },
+        "d1_scaled_sell_fee_valuation_pct": {
+          "mean": -3.9072309446183673,
+          "median": -4.481524530227022,
+          "min": -8.199394150252923,
+          "max": -0.830119691381768,
+          "positive_count": 0
+        },
+        "d0_minus_actual_pp": {
+          "mean": 1.1638105855782084,
+          "median": 0.3994673768308921,
+          "min": 0.0,
+          "max": 3.6906854130052724,
+          "positive_count": 6
+        },
+        "d1_minus_actual_pp": {
+          "mean": -1.629305984288003,
+          "median": -1.757469244288225,
+          "min": -5.326231691078562,
+          "max": 0.5181347150259067,
+          "positive_count": 2
+        },
+        "entry_vs_previous_close_pct": {
+          "mean": 2.8626194442462385,
+          "median": 2.8933092224231465,
+          "min": 1.9860440150295222,
+          "max": 3.588516746411483,
+          "positive_count": 7
+        },
+        "entry_vs_open_pct": {
+          "mean": 1.3112443705283607,
+          "median": 1.0638297872340425,
+          "min": 0.0,
+          "max": 3.392857142857143,
+          "positive_count": 6
+        },
+        "prior_close_to_d1_pct": {
+          "mean": -0.9224077867144036,
+          "median": -1.6169782718544718,
+          "min": -5.858310626702997,
+          "max": 2.4933214603739984,
+          "positive_count": 3
+        },
+        "open_to_d1_pct": {
+          "mean": -2.406850499945142,
+          "median": -3.1343283582089554,
+          "min": -7.620320855614973,
+          "max": 2.767857142857143,
+          "positive_count": 1
+        },
+        "d1_low_vs_entry_pct": {
+          "mean": -4.306063121621428,
+          "median": -4.473684210526316,
+          "min": -8.388814913448735,
+          "max": -1.468048359240069,
+          "positive_count": 0
+        },
+        "observed_mfe_pct": {
+          "mean": 0.6528571428571428,
+          "median": 0.351,
+          "min": 0.0,
+          "max": 2.677,
+          "positive_count": 5
+        },
+        "d1_10bps_exit_slippage_pct": {
+          "mean": -4.003542959857024,
+          "median": -4.577261372332285,
+          "min": -8.291404802716306,
+          "max": -0.9295152008809044,
+          "positive_count": 0
+        },
+        "d1_30bps_exit_slippage_pct": {
+          "mean": -4.196166990334334,
+          "median": -4.768735056542811,
+          "min": -8.47542610764307,
+          "max": -1.1283062198791773,
+          "positive_count": 0
+        },
+        "etf_d0_to_d1_price_pct": {
+          "mean": -1.051475984013596,
+          "median": -0.4045822347486183,
+          "min": -3.221529895267139,
+          "max": 1.1306757239899934,
+          "positive_count": 3
+        }
+      }
+    },
+    "sync_estimated": {
+      "n": 2,
+      "metrics": {
+        "actual_gross_pct": {
+          "mean": -1.2608801447813325,
+          "median": -1.2608801447813325,
+          "min": -2.3014959723820483,
+          "max": -0.22026431718061673,
+          "positive_count": 0
+        },
+        "actual_net_pct": {
+          "mean": -1.4852049114597028,
+          "median": -1.4852049114597028,
+          "min": -2.523640366238055,
+          "max": -0.44676945668135093,
+          "positive_count": 0
+        },
+        "fee_pct": {
+          "mean": 0.2243247666783703,
+          "median": 0.2243247666783703,
+          "min": 0.2221443938560064,
+          "max": 0.22650513950073423,
+          "positive_count": 2
+        },
+        "d0_fixed_fee_valuation_pct": {
+          "mean": -1.4301388321645487,
+          "median": -1.4301388321645487,
+          "min": -2.523640366238055,
+          "max": -0.3366372980910426,
+          "positive_count": 0
+        },
+        "d1_fixed_fee_valuation_pct": {
+          "mean": -1.4400241122221369,
+          "median": -1.4400241122221369,
+          "min": -2.9839395607144645,
+          "max": 0.1038913362701909,
+          "positive_count": 1
+        },
+        "d1_scaled_sell_fee_valuation_pct": {
+          "mean": -1.4401203259029651,
+          "median": -1.4401203259029651,
+          "min": -2.982958946872593,
+          "max": 0.10271829506666277,
+          "positive_count": 1
+        },
+        "d0_minus_actual_pp": {
+          "mean": 0.05506607929515418,
+          "median": 0.05506607929515418,
+          "min": 0.0,
+          "max": 0.11013215859030837,
+          "positive_count": 1
+        },
+        "d1_minus_actual_pp": {
+          "mean": 0.04518079923756607,
+          "median": 0.04518079923756607,
+          "min": -0.46029919447640966,
+          "max": 0.5506607929515418,
+          "positive_count": 1
+        },
+        "entry_vs_previous_close_pct": {
+          "mean": 2.7726242011956295,
+          "median": 2.7726242011956295,
+          "min": 2.5974025974025974,
+          "max": 2.947845804988662,
+          "positive_count": 2
+        },
+        "entry_vs_open_pct": {
+          "mean": 1.8405770813124185,
+          "median": 1.8405770813124185,
+          "min": 1.5659955257270695,
+          "max": 2.1151586368977675,
+          "positive_count": 2
+        },
+        "prior_close_to_d1_pct": {
+          "mean": 1.5259271752778245,
+          "median": 1.5259271752778245,
+          "min": -0.2361275088547816,
+          "max": 3.2879818594104306,
+          "positive_count": 1
+        },
+        "open_to_d1_pct": {
+          "mean": 0.5982565582799024,
+          "median": 0.5982565582799024,
+          "min": -0.7050528789659224,
+          "max": 1.9015659955257271,
+          "positive_count": 1
+        },
+        "d1_low_vs_entry_pct": {
+          "mean": -2.6368350881817673,
+          "median": -2.6368350881817673,
+          "min": -4.833141542002301,
+          "max": -0.44052863436123346,
+          "positive_count": 0
+        },
+        "observed_mfe_pct": {
+          "mean": 0.7405,
+          "median": 0.7405,
+          "min": 0.33,
+          "max": 1.151,
+          "positive_count": 2
+        },
+        "d1_10bps_exit_slippage_pct": {
+          "mean": -1.5389046265574213,
+          "median": -1.5389046265574213,
+          "min": -3.0801971517057347,
+          "max": 0.002387898590891852,
+          "positive_count": 1
+        },
+        "d1_30bps_exit_slippage_pct": {
+          "mean": -1.736473227866334,
+          "median": -1.736473227866334,
+          "min": -3.2746735613720177,
+          "max": -0.19827289436065,
+          "positive_count": 0
+        },
+        "etf_d0_to_d1_price_pct": {
+          "mean": -1.0454270856385728,
+          "median": -1.0454270856385728,
+          "min": -3.221529895267139,
+          "max": 1.1306757239899934,
+          "positive_count": 1
+        }
+      }
+    }
+  },
+  "same_day_exit7": {
+    "n": 7,
+    "metrics": {
+      "actual_gross_pct": {
+        "mean": -1.7815278498455889,
+        "median": -2.263157894736842,
+        "min": -2.663115845539281,
+        "max": -0.22026431718061673,
+        "positive_count": 0
+      },
+      "actual_net_pct": {
+        "mean": -2.004838439917744,
+        "median": -2.4857894736842105,
+        "min": -2.88450954283178,
+        "max": -0.44676945668135093,
+        "positive_count": 0
+      },
+      "fee_pct": {
+        "mean": 0.22331059007215526,
+        "median": 0.22263157894736843,
+        "min": 0.2213936972924989,
+        "max": 0.22650513950073423,
+        "positive_count": 7
+      },
+      "d0_fixed_fee_valuation_pct": {
+        "mean": -1.7843143913013577,
+        "median": -2.117368421052632,
+        "min": -2.523640366238055,
+        "max": -0.3366372980910426,
+        "positive_count": 0
+      },
+      "d1_fixed_fee_valuation_pct": {
+        "mean": -3.4441878345289685,
+        "median": -2.9839395607144645,
+        "min": -8.210741233910342,
+        "max": 0.1038913362701909,
+        "positive_count": 1
+      },
+      "d1_scaled_sell_fee_valuation_pct": {
+        "mean": -3.4411205913281298,
+        "median": -2.982958946872593,
+        "min": -8.199394150252923,
+        "max": 0.10271829506666277,
+        "positive_count": 1
+      },
+      "d0_minus_actual_pp": {
+        "mean": 0.22052404861638641,
+        "median": 0.2457002457002457,
+        "min": 0.0,
+        "max": 0.4199475065616798,
+        "positive_count": 5
+      },
+      "d1_minus_actual_pp": {
+        "mean": -1.4393493946112244,
+        "median": -0.4618937644341801,
+        "min": -5.326231691078562,
+        "max": 0.5506607929515418,
+        "positive_count": 2
+      },
+      "entry_vs_previous_close_pct": {
+        "mean": 2.7962319234606117,
+        "median": 2.829711975745326,
+        "min": 1.9860440150295222,
+        "max": 3.588516746411483,
+        "positive_count": 7
+      },
+      "entry_vs_open_pct": {
+        "mean": 1.3524296590666027,
+        "median": 1.243781094527363,
+        "min": 0.40106951871657753,
+        "max": 2.1447721179624666,
+        "positive_count": 7
+      },
+      "prior_close_to_d1_pct": {
+        "mean": -0.5067868390857668,
+        "median": -0.2361275088547816,
+        "min": -5.858310626702997,
+        "max": 3.2879818594104306,
+        "positive_count": 3
+      },
+      "open_to_d1_pct": {
+        "mean": -1.9032338167824974,
+        "median": -0.7050528789659224,
+        "min": -7.620320855614973,
+        "max": 1.9015659955257271,
+        "positive_count": 1
+      },
+      "d1_low_vs_entry_pct": {
+        "mean": -4.121628980005372,
+        "median": -4.473684210526316,
+        "min": -8.388814913448735,
+        "max": -0.44052863436123346,
+        "positive_count": 0
+      },
+      "observed_mfe_pct": {
+        "mean": 0.4318571428571429,
+        "median": 0.33,
+        "min": 0.0,
+        "max": 1.151,
+        "positive_count": 5
+      },
+      "d1_10bps_exit_slippage_pct": {
+        "mean": -3.537899714083673,
+        "median": -3.0801971517057347,
+        "min": -8.291404802716306,
+        "max": 0.002387898590891852,
+        "positive_count": 1
+      },
+      "d1_30bps_exit_slippage_pct": {
+        "mean": -3.7314579595947595,
+        "median": -3.2746735613720177,
+        "min": -8.47542610764307,
+        "max": -0.19827289436065,
+        "positive_count": 0
+      },
+      "etf_d0_to_d1_price_pct": {
+        "mean": -0.8321534184795087,
+        "median": 0.4474885844748755,
+        "min": -3.221529895267139,
+        "max": 1.1306757239899934,
+        "positive_count": 4
+      }
+    }
+  },
+  "entry_day_groups": {
+    "2026-09-22": {
+      "n": 3,
+      "metrics": {
+        "actual_gross_pct": {
+          "mean": -1.4397125691308632,
+          "median": -1.4742014742014742,
+          "min": -2.6246719160104988,
+          "max": -0.22026431718061673,
+          "positive_count": 0
+        },
+        "actual_net_pct": {
+          "mean": -1.6636819799780707,
+          "median": -1.6981572481572482,
+          "min": -2.846119235095613,
+          "max": -0.44676945668135093,
+          "positive_count": 0
+        },
+        "fee_pct": {
+          "mean": 0.2239694108472075,
+          "median": 0.22395577395577396,
+          "min": 0.22144731908511436,
+          "max": 0.22650513950073423,
+          "positive_count": 3
+        },
+        "d0_fixed_fee_valuation_pct": {
+          "mean": -1.4050886763606594,
+          "median": -1.4524570024570025,
+          "min": -2.4261717285339333,
+          "max": -0.3366372980910426,
+          "positive_count": 0
+        },
+        "d1_fixed_fee_valuation_pct": {
+          "mean": -2.2726890174078767,
+          "median": -2.3736782902137232,
+          "min": -4.548280098280098,
+          "max": 0.1038913362701909,
+          "positive_count": 1
+        },
+        "d1_scaled_sell_fee_valuation_pct": {
+          "mean": -2.2713910240426123,
+          "median": -2.3746846603743266,
+          "min": -4.542206706820173,
+          "max": 0.10271829506666277,
+          "positive_count": 1
+        },
+        "d0_minus_actual_pp": {
+          "mean": 0.2585933036174113,
+          "median": 0.2457002457002457,
+          "min": 0.11013215859030837,
+          "max": 0.4199475065616798,
+          "positive_count": 3
+        },
+        "d1_minus_actual_pp": {
+          "mean": -0.6090070374298062,
+          "median": 0.47244094488188976,
+          "min": -2.85012285012285,
+          "max": 0.5506607929515418,
+          "positive_count": 2
+        },
+        "entry_vs_previous_close_pct": {
+          "mean": 3.0285279370342506,
+          "median": 2.947845804988662,
+          "min": 2.829711975745326,
+          "max": 3.3080260303687634,
+          "positive_count": 3
+        },
+        "entry_vs_open_pct": {
+          "mean": 1.6515162460722996,
+          "median": 1.5659955257270695,
+          "min": 1.243781094527363,
+          "max": 2.1447721179624666,
+          "positive_count": 3
+        },
+        "prior_close_to_d1_pct": {
+          "mean": 0.9185340953458402,
+          "median": 1.0845986984815619,
+          "min": -1.6169782718544718,
+          "max": 3.2879818594104306,
+          "positive_count": 2
+        },
+        "open_to_d1_pct": {
+          "mean": -0.4287938885440966,
+          "median": -0.05361930294906166,
+          "min": -3.1343283582089554,
+          "max": 1.9015659955257271,
+          "positive_count": 1
+        },
+        "d1_low_vs_entry_pct": {
+          "mean": -2.7178175750793603,
+          "median": -3.0446194225721785,
+          "min": -4.6683046683046685,
+          "max": -0.44052863436123346,
+          "positive_count": 0
+        },
+        "observed_mfe_pct": {
+          "mean": 0.11,
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.33,
+          "positive_count": 1
+        },
+        "d1_10bps_exit_slippage_pct": {
+          "mean": -2.3693423044360515,
+          "median": -2.472532429403198,
+          "min": -4.637882382495849,
+          "max": 0.002387898590891852,
+          "positive_count": 1
+        },
+        "d1_30bps_exit_slippage_pct": {
+          "mean": -2.5652448652229305,
+          "median": -2.6682279674609406,
+          "min": -4.8292337338472,
+          "max": -0.19827289436065,
+          "positive_count": 0
+        },
+        "etf_d0_to_d1_price_pct": {
+          "mean": 1.1306757239899934,
+          "median": 1.1306757239899934,
+          "min": 1.1306757239899934,
+          "max": 1.1306757239899934,
+          "positive_count": 3
+        }
+      }
+    },
+    "2026-09-23": {
+      "n": 4,
+      "metrics": {
+        "actual_gross_pct": {
+          "mean": -2.6417403192014497,
+          "median": -2.4823059089606647,
+          "min": -3.3391915641476273,
+          "max": -2.263157894736842,
+          "positive_count": 0
+        },
+        "actual_net_pct": {
+          "mean": -2.863276878494604,
+          "median": -2.704074954534917,
+          "min": -3.55916813122437,
+          "max": -2.4857894736842105,
+          "positive_count": 0
+        },
+        "fee_pct": {
+          "mean": 0.22153655929315413,
+          "median": 0.22176904557425264,
+          "min": 0.21997656707674282,
+          "max": 0.22263157894736843,
+          "positive_count": 4
+        },
+        "d0_fixed_fee_valuation_pct": {
+          "mean": -1.7486334178776681,
+          "median": -2.3012052935267597,
+          "min": -2.523640366238055,
+          "max": 0.13151728178090216,
+          "positive_count": 1
+        },
+        "d1_fixed_fee_valuation_pct": {
+          "mean": -5.249276910955404,
+          "median": -4.901213424598403,
+          "min": -8.210741233910342,
+          "max": -2.9839395607144645,
+          "positive_count": 0
+        },
+        "d1_scaled_sell_fee_valuation_pct": {
+          "mean": -5.24419276520209,
+          "median": -4.897208981841423,
+          "min": -8.199394150252923,
+          "max": -2.982958946872593,
+          "positive_count": 0
+        },
+        "d0_minus_actual_pp": {
+          "mean": 1.1146434606169358,
+          "median": 0.3839442147312355,
+          "min": 0.0,
+          "max": 3.6906854130052724,
+          "positive_count": 3
+        },
+        "d1_minus_actual_pp": {
+          "mean": -2.386000032460799,
+          "median": -1.8787346221441124,
+          "min": -5.326231691078562,
+          "max": -0.46029919447640966,
+          "positive_count": 0
+        },
+        "entry_vs_previous_close_pct": {
+          "mean": 2.448208032283299,
+          "median": 2.456739445840263,
+          "min": 1.9860440150295222,
+          "max": 2.8933092224231465,
+          "positive_count": 4
+        },
+        "entry_vs_open_pct": {
+          "mean": 0.8950144857120969,
+          "median": 0.7324496529753101,
+          "min": 0.0,
+          "max": 2.1151586368977675,
+          "positive_count": 3
+        },
+        "prior_close_to_d1_pct": {
+          "mean": -2.701758487675896,
+          "median": -2.3562979075729027,
+          "min": -5.858310626702997,
+          "max": -0.2361275088547816,
+          "positive_count": 0
+        },
+        "open_to_d1_pct": {
+          "mean": -4.166678848520144,
+          "median": -4.170670829749842,
+          "min": -7.620320855614973,
+          "max": -0.7050528789659224,
+          "positive_count": 0
+        },
+        "d1_low_vs_entry_pct": {
+          "mean": -5.698075368603301,
+          "median": -4.964901175219077,
+          "min": -8.388814913448735,
+          "max": -4.473684210526316,
+          "positive_count": 0
+        },
+        "observed_mfe_pct": {
+          "mean": 0.58775,
+          "median": 0.442,
+          "min": 0.316,
+          "max": 1.151,
+          "positive_count": 4
+        },
+        "d1_10bps_exit_slippage_pct": {
+          "mean": -5.339165024850429,
+          "median": -4.992529072489837,
+          "min": -8.291404802716306,
+          "max": -3.0801971517057347,
+          "positive_count": 0
+        },
+        "d1_30bps_exit_slippage_pct": {
+          "mean": -5.529109544147103,
+          "median": -5.183169253786664,
+          "min": -8.47542610764307,
+          "max": -3.2746735613720177,
+          "positive_count": 0
+        },
+        "etf_d0_to_d1_price_pct": {
+          "mean": -3.221529895267139,
+          "median": -3.221529895267139,
+          "min": -3.221529895267139,
+          "max": -3.221529895267139,
+          "positive_count": 0
+        }
+      }
+    },
+    "2026-09-28": {
+      "n": 1,
+      "metrics": {
+        "actual_gross_pct": {
+          "mean": -0.9237875288683602,
+          "median": -0.9237875288683602,
+          "min": -0.9237875288683602,
+          "max": -0.9237875288683602,
+          "positive_count": 0
+        },
+        "actual_net_pct": {
+          "mean": -1.1488837567359507,
+          "median": -1.1488837567359507,
+          "min": -1.1488837567359507,
+          "max": -1.1488837567359507,
+          "positive_count": 0
+        },
+        "fee_pct": {
+          "mean": 0.22509622786759045,
+          "median": 0.22509622786759045,
+          "min": 0.22509622786759045,
+          "max": 0.22509622786759045,
+          "positive_count": 1
+        },
+        "d0_fixed_fee_valuation_pct": {
+          "mean": -1.1488837567359507,
+          "median": -1.1488837567359507,
+          "min": -1.1488837567359507,
+          "max": -1.1488837567359507,
+          "positive_count": 0
+        },
+        "d1_fixed_fee_valuation_pct": {
+          "mean": -1.610777521170131,
+          "median": -1.610777521170131,
+          "min": -1.610777521170131,
+          "max": -1.610777521170131,
+          "positive_count": 0
+        },
+        "d1_scaled_sell_fee_valuation_pct": {
+          "mean": -1.6097934398165346,
+          "median": -1.6097934398165346,
+          "min": -1.6097934398165346,
+          "max": -1.6097934398165346,
+          "positive_count": 0
+        },
+        "d0_minus_actual_pp": {
+          "mean": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "positive_count": 0
+        },
+        "d1_minus_actual_pp": {
+          "mean": -0.4618937644341801,
+          "median": -0.4618937644341801,
+          "min": -0.4618937644341801,
+          "max": -0.4618937644341801,
+          "positive_count": 0
+        },
+        "entry_vs_previous_close_pct": {
+          "mean": 3.588516746411483,
+          "median": 3.588516746411483,
+          "min": 3.588516746411483,
+          "max": 3.588516746411483,
+          "positive_count": 1
+        },
+        "entry_vs_open_pct": {
+          "mean": 0.9324009324009324,
+          "median": 0.9324009324009324,
+          "min": 0.9324009324009324,
+          "max": 0.9324009324009324,
+          "positive_count": 1
+        },
+        "prior_close_to_d1_pct": {
+          "mean": 2.15311004784689,
+          "median": 2.15311004784689,
+          "min": 2.15311004784689,
+          "max": 2.15311004784689,
+          "positive_count": 1
+        },
+        "open_to_d1_pct": {
+          "mean": -0.4662004662004662,
+          "median": -0.4662004662004662,
+          "min": -0.4662004662004662,
+          "max": -0.4662004662004662,
+          "positive_count": 0
+        },
+        "d1_low_vs_entry_pct": {
+          "mean": -3.0023094688221708,
+          "median": -3.0023094688221708,
+          "min": -3.0023094688221708,
+          "max": -3.0023094688221708,
+          "positive_count": 0
+        },
+        "observed_mfe_pct": {
+          "mean": 0.693,
+          "median": 0.693,
+          "min": 0.693,
+          "max": 0.693,
+          "positive_count": 1
+        },
+        "d1_10bps_exit_slippage_pct": {
+          "mean": -1.708407758523232,
+          "median": -1.708407758523232,
+          "min": -1.708407758523232,
+          "max": -1.708407758523232,
+          "positive_count": 0
+        },
+        "d1_30bps_exit_slippage_pct": {
+          "mean": -1.905636395936627,
+          "median": -1.905636395936627,
+          "min": -1.905636395936627,
+          "max": -1.905636395936627,
+          "positive_count": 0
+        },
+        "etf_d0_to_d1_price_pct": {
+          "mean": 0.4474885844748755,
+          "median": 0.4474885844748755,
+          "min": 0.4474885844748755,
+          "max": 0.4474885844748755,
+          "positive_count": 1
+        }
+      }
+    },
+    "2026-09-29": {
+      "n": 1,
+      "metrics": {
+        "actual_gross_pct": {
+          "mean": -1.1226252158894645,
+          "median": -1.1226252158894645,
+          "min": -1.1226252158894645,
+          "max": -1.1226252158894645,
+          "positive_count": 0
+        },
+        "actual_net_pct": {
+          "mean": -1.3471502590673574,
+          "median": -1.3471502590673574,
+          "min": -1.3471502590673574,
+          "max": -1.3471502590673574,
+          "positive_count": 0
+        },
+        "fee_pct": {
+          "mean": 0.22452504317789293,
+          "median": 0.22452504317789293,
+          "min": 0.22452504317789293,
+          "max": 0.22452504317789293,
+          "positive_count": 1
+        },
+        "d0_fixed_fee_valuation_pct": {
+          "mean": 1.6753022452504318,
+          "median": 1.6753022452504318,
+          "min": 1.6753022452504318,
+          "max": 1.6753022452504318,
+          "positive_count": 1
+        },
+        "d1_fixed_fee_valuation_pct": {
+          "mean": -0.8290155440414507,
+          "median": -0.8290155440414507,
+          "min": -0.8290155440414507,
+          "max": -0.8290155440414507,
+          "positive_count": 0
+        },
+        "d1_scaled_sell_fee_valuation_pct": {
+          "mean": -0.830119691381768,
+          "median": -0.830119691381768,
+          "min": -0.830119691381768,
+          "max": -0.830119691381768,
+          "positive_count": 0
+        },
+        "d0_minus_actual_pp": {
+          "mean": 3.0224525043177892,
+          "median": 3.0224525043177892,
+          "min": 3.0224525043177892,
+          "max": 3.0224525043177892,
+          "positive_count": 1
+        },
+        "d1_minus_actual_pp": {
+          "mean": 0.5181347150259067,
+          "median": 0.5181347150259067,
+          "min": 0.5181347150259067,
+          "max": 0.5181347150259067,
+          "positive_count": 1
+        },
+        "entry_vs_previous_close_pct": {
+          "mean": 3.116651825467498,
+          "median": 3.116651825467498,
+          "min": 3.116651825467498,
+          "max": 3.116651825467498,
+          "positive_count": 1
+        },
+        "entry_vs_open_pct": {
+          "mean": 3.392857142857143,
+          "median": 3.392857142857143,
+          "min": 3.392857142857143,
+          "max": 3.392857142857143,
+          "positive_count": 1
+        },
+        "prior_close_to_d1_pct": {
+          "mean": 2.4933214603739984,
+          "median": 2.4933214603739984,
+          "min": 2.4933214603739984,
+          "max": 2.4933214603739984,
+          "positive_count": 1
+        },
+        "open_to_d1_pct": {
+          "mean": 2.767857142857143,
+          "median": 2.767857142857143,
+          "min": 2.767857142857143,
+          "max": 2.767857142857143,
+          "positive_count": 1
+        },
+        "d1_low_vs_entry_pct": {
+          "mean": -1.468048359240069,
+          "median": -1.468048359240069,
+          "min": -1.468048359240069,
+          "max": -1.468048359240069,
+          "positive_count": 0
+        },
+        "observed_mfe_pct": {
+          "mean": 2.677,
+          "median": 2.677,
+          "min": 2.677,
+          "max": 2.677,
+          "positive_count": 1
+        },
+        "d1_10bps_exit_slippage_pct": {
+          "mean": -0.9295152008809044,
+          "median": -0.9295152008809044,
+          "min": -0.9295152008809044,
+          "max": -0.9295152008809044,
+          "positive_count": 0
+        },
+        "d1_30bps_exit_slippage_pct": {
+          "mean": -1.1283062198791773,
+          "median": -1.1283062198791773,
+          "min": -1.1283062198791773,
+          "max": -1.1283062198791773,
+          "positive_count": 0
+        },
+        "etf_d0_to_d1_price_pct": {
+          "mean": -0.4045822347486183,
+          "median": -0.4045822347486183,
+          "min": -0.4045822347486183,
+          "max": -0.4045822347486183,
+          "positive_count": 0
+        }
+      }
+    }
+  },
+  "equal_entry_day_weight_means": {
+    "actual_gross_pct": -1.5319664082725344,
+    "actual_net_pct": -1.7557482185689957,
+    "fee_pct": 0.22378181029646127,
+    "d0_fixed_fee_valuation_pct": -0.6568259014309616,
+    "d1_fixed_fee_valuation_pct": -2.4904397483937153,
+    "d1_scaled_sell_fee_valuation_pct": -2.4888742301107514,
+    "d0_minus_actual_pp": 1.098922317138034,
+    "d1_minus_actual_pp": -0.7346915298247196,
+    "entry_vs_previous_close_pct": 3.0454761352991326,
+    "entry_vs_open_pct": 1.7179472017606179,
+    "prior_close_to_d1_pct": 0.7158017789727081,
+    "open_to_d1_pct": -0.573454015101891,
+    "d1_low_vs_entry_pct": -3.2215626929362253,
+    "observed_mfe_pct": 1.0169375,
+    "d1_10bps_exit_slippage_pct": -2.586607572172654,
+    "d1_30bps_exit_slippage_pct": -2.7820742562964593,
+    "etf_d0_to_d1_price_pct": -0.5119869553877221
+  },
+  "public_price_quality": {
+    "instruments": 9,
+    "calendar_dates": [
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30"
+    ],
+    "missing_required_bars": 0,
+    "dividend_or_split_events_returned_in_requested_window": 0,
+    "official_pdf_unit_price_comparisons": 48,
+    "official_pdf_unit_price_matches": 48,
+    "no_events_is_not_complete_corporate_action_attestation": true
+  },
+  "public_source_manifest": [
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/005930.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_005930.KS.json",
+      "sha256": "1bb69515378f974c307b4e2a35eec8d90029f005539ec066ccd5d84c0fa1506f",
+      "bytes": 1668,
+      "captured_at_utc": "2026-09-30T13:29:12.460175+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/007660.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_007660.KS.json",
+      "sha256": "46cae0e60f08e0ab74dabfb3029506ae34244fb606fe377aeb8c72a7834e30ee",
+      "bytes": 1645,
+      "captured_at_utc": "2026-09-30T13:29:12.484155+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/016360.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_016360.KS.json",
+      "sha256": "776756c9f2bedfc3d0dad9c7851d5caaeda3b32f49d6eee9b82126ffc96e0547",
+      "bytes": 1609,
+      "captured_at_utc": "2026-09-30T13:29:12.725823+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/028260.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_028260.KS.json",
+      "sha256": "75c83ecab477f7c7e2a5ddb904a1c415d35cdb9b1b9dc6e696a039831e3b6803",
+      "bytes": 1648,
+      "captured_at_utc": "2026-09-30T13:29:12.735788+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/034220.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_034220.KS.json",
+      "sha256": "a998ff6a9800a6753e6bf87e9f6b616e28e18e2ee2ce29bb64291eef505888a6",
+      "bytes": 1565,
+      "captured_at_utc": "2026-09-30T13:29:12.982278+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/035420.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_035420.KS.json",
+      "sha256": "718a8e68ad30cadaa595380c24fca4642f90947bbd742a82256d3afb59836e2c",
+      "bytes": 1638,
+      "captured_at_utc": "2026-09-30T13:29:12.991472+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/066570.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_066570.KS.json",
+      "sha256": "611f2cae9f7525061319d90ecb5ad400b206a5b8b211a8ac0461f1d85f38bcae",
+      "bytes": 1646,
+      "captured_at_utc": "2026-09-30T13:29:13.357926+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/069500.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_069500.KS.json",
+      "sha256": "2303f6059ec2709bfb189d427463162c6d5f0d45be1e3b9ff95f64e2e42272c2",
+      "bytes": 1643,
+      "captured_at_utc": "2026-09-30T13:29:13.246252+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/071050.KS?period1=1789689600&period2=1790812800&interval=1d&events=div%2Csplits",
+      "file": "public_071050.KS.json",
+      "sha256": "b46dc0ad0e90c5de1666b29df07e843da1ba31d30b732206edf947add3798e7a",
+      "bytes": 1652,
+      "captured_at_utc": "2026-09-30T13:29:13.607179+00:00"
+    }
+  ],
+  "operational_changes": false,
+  "limitations": [
+    "Completed positions only, not all entry signals or full portfolio. Nine positions on four entry dates are not independent tests.",
+    "Recorded fills and costs share engine provenance, not independently broker-verified; two sync-labeled positions preserved and separated.",
+    "Valuation at official-session closing price is not an executable fill guarantee. Quotes from Yahoo KSE/KOSDAQ; official ETF basket corroborates available prior closes.",
+    "D0/D1 fixed-fee values isolate price differences. Scaled fee and 10/30 bps sensitivity are alternative model assumptions, not realized returns.",
+    "Different capital holding times, overlapping trades, slots/cash recycling, dividends/rights completeness and market timing remain outside account reconstruction.",
+    "Entry vs open/previous close describes price context with knowledge of actual buys; not a feasible selection strategy or proof of late entry causality.",
+    "Next-day low is not actual full holding-period MAE; no entry-day low used. Observed MFE is not a fillable exit."
+  ],
+  "later_exit2": {
+    "n": 2,
+    "metrics": {
+      "actual_gross_pct": {
+        "mean": -2.230908390018546,
+        "median": -2.230908390018546,
+        "min": -3.3391915641476273,
+        "max": -1.1226252158894645,
+        "positive_count": 0
+      },
+      "actual_net_pct": {
+        "mean": -2.453159195145864,
+        "median": -2.453159195145864,
+        "min": -3.55916813122437,
+        "max": -1.3471502590673574,
+        "positive_count": 0
+      },
+      "fee_pct": {
+        "mean": 0.22225080512731787,
+        "median": 0.22225080512731787,
+        "min": 0.21997656707674282,
+        "max": 0.22452504317789293,
+        "positive_count": 2
+      },
+      "d0_fixed_fee_valuation_pct": {
+        "mean": 0.903409763515667,
+        "median": 0.903409763515667,
+        "min": 0.13151728178090216,
+        "max": 1.6753022452504318,
+        "positive_count": 2
+      },
+      "d1_fixed_fee_valuation_pct": {
+        "mean": -3.072826459777023,
+        "median": -3.072826459777023,
+        "min": -5.316637375512595,
+        "max": -0.8290155440414507,
+        "positive_count": 0
+      },
+      "d1_scaled_sell_fee_valuation_pct": {
+        "mean": -3.071506562418796,
+        "median": -3.071506562418796,
+        "min": -5.312893433455824,
+        "max": -0.830119691381768,
+        "positive_count": 0
+      },
+      "d0_minus_actual_pp": {
+        "mean": 3.356568958661531,
+        "median": 3.356568958661531,
+        "min": 3.0224525043177892,
+        "max": 3.6906854130052724,
+        "positive_count": 2
+      },
+      "d1_minus_actual_pp": {
+        "mean": -0.6196672646311592,
+        "median": -0.6196672646311592,
+        "min": -1.757469244288225,
+        "max": 0.5181347150259067,
+        "positive_count": 1
+      },
+      "entry_vs_previous_close_pct": {
+        "mean": 3.0049805239453224,
+        "median": 3.0049805239453224,
+        "min": 2.8933092224231465,
+        "max": 3.116651825467498,
+        "positive_count": 2
+      },
+      "entry_vs_open_pct": {
+        "mean": 1.6964285714285714,
+        "median": 1.6964285714285714,
+        "min": 0.0,
+        "max": 3.392857142857143,
+        "positive_count": 1
+      },
+      "prior_close_to_d1_pct": {
+        "mean": 0.07125385857759592,
+        "median": 0.07125385857759592,
+        "min": -2.3508137432188065,
+        "max": 2.4933214603739984,
+        "positive_count": 1
+      },
+      "open_to_d1_pct": {
+        "mean": -1.1644018327893548,
+        "median": -1.1644018327893548,
+        "min": -5.0966608084358525,
+        "max": 2.767857142857143,
+        "positive_count": 1
+      },
+      "d1_low_vs_entry_pct": {
+        "mean": -3.282354583837961,
+        "median": -3.282354583837961,
+        "min": -5.0966608084358525,
+        "max": -1.468048359240069,
+        "positive_count": 0
+      },
+      "observed_mfe_pct": {
+        "mean": 1.514,
+        "median": 1.514,
+        "min": 0.351,
+        "max": 2.677,
+        "positive_count": 2
+      },
+      "d1_10bps_exit_slippage_pct": {
+        "mean": -3.168655986764146,
+        "median": -3.168655986764146,
+        "min": -5.407796772647388,
+        "max": -0.9295152008809044,
+        "positive_count": 0
+      },
+      "d1_30bps_exit_slippage_pct": {
+        "mean": -3.362954835454847,
+        "median": -3.362954835454847,
+        "min": -5.597603451030516,
+        "max": -1.1283062198791773,
+        "positive_count": 0
+      },
+      "etf_d0_to_d1_price_pct": {
+        "mean": -1.8130560650078786,
+        "median": -1.8130560650078786,
+        "min": -3.221529895267139,
+        "max": -0.4045822347486183,
+        "positive_count": 0
+      }
+    }
+  },
+  "public_normalized_csv": {
+    "file": "current-engine-profit-public-prices-2026-09-30.csv",
+    "rows": 63,
+    "sha256": "a50ca53197d51b98fb7f67c78f4127539ff3c90caf7d178af91b95800d9914da",
+    "scope": "Public market prices only. No account quantities, timestamps, order/position IDs, or entry/exit prices included."
+  },
+  "source_code_manifest": {
+    "src/analytics/position_ledger.py": "c4e47317bdd08755f351703f0c0a3a318628b049ee385de9dcd3fc8f68868f1b",
+    "src/core/engine.py": "f76fae08a5b43a59afdf672b5c3a72b1d1ab584b027bfcee04e8e63501f2d638",
+    "src/utils/fee_calculator.py": "c5aa022a1d7605e66b135d78d1da9b819e200659f4f3357547df1ae39e350e6f"
+  }
+}

@@ -204,6 +204,26 @@ def test_three_share_correction_then_cap_allows_two_shares(home, monkeypatch):
     assert rm._calculate_position_size(_sig(2.5, price=Decimal("500000"))) == 2
 
 
+@pytest.mark.parametrize("mode", ["risk", "nominal"])
+@pytest.mark.parametrize("available,expected", [
+    ("350000", 0),
+    ("500000", 1),
+    ("1000000", 2),
+    ("1169999", 2),
+    ("1170000", 3),
+])
+def test_partial_exit_minimum_respects_market_cash_buffer(
+        home, monkeypatch, mode, available, expected):
+    # A 300,000 KRW share needs 390,000 of market-order buying power.
+    # The preferred three-share exit layout must not inflate two shares
+    # back to three unless all 1,170,000 of that buying power is available.
+    rm = _rm(monkeypatch, mode=mode, cash=available, em=_em())
+    price = Decimal("300000")
+    quantity = rm._calculate_position_size(_sig(2.5, price=price))
+    assert quantity == expected
+    assert price * quantity * Decimal("1.3") <= Decimal(available)
+
+
 def test_cap_reduction_below_min_value_is_rejected(home, monkeypatch):
     rm = _rm(monkeypatch, mode="risk", em=_em(), min_value=1200000)
     # 2주 × 50만 = 100만 < 최소 120만 → 명시 거부 (0)

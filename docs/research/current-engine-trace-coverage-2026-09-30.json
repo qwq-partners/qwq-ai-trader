@@ -1,0 +1,714 @@
+{
+  "captured_at_utc": "2026-09-30T13:11:33.530155+00:00",
+  "scope": "Read-only schema and exact-key coverage on the explicitly enumerated analytical files. Not production database coverage, broker reconciliation, or causal attribution. No raw identifiers or individual records exported.",
+  "counts": {
+    "source_files": 52,
+    "pit_days": 36,
+    "pit_rows": 1334,
+    "team_raw": 259,
+    "team_unique": 246,
+    "journal_rows": 7,
+    "tca_rows": 19,
+    "cf_all_rows": 482,
+    "cf_team_rows": 469
+  },
+  "pit_strategies": {
+    "sepa_trend": 1008,
+    "vcp_breakout": 35,
+    "rsi2_reversal": 291
+  },
+  "team_slots": {
+    "10:30": 62,
+    "11:30": 61,
+    "13:00": 61,
+    "14:00": 62
+  },
+  "team_execution_states": {
+    "candidate": 246
+  },
+  "team_approval_and_stance": {
+    "True|hold": 167,
+    "False|hold": 30,
+    "True|buy": 30,
+    "True|sell": 19
+  },
+  "id_and_quote_coverage": {
+    "pit": {
+      "candidate_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "entry_plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "deliberation_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "decision_snapshot_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "signal_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "event_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "order_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "order_ref": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "trade_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "applied_sha": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "config_hash": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "bid": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "bid_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "quote_timestamp": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      }
+    },
+    "team": {
+      "candidate_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "entry_plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "deliberation_id": {
+        "rows_with_nonempty_key_any_depth": 246,
+        "paths": {
+          "deliberation_id": 246
+        }
+      },
+      "decision_snapshot_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "signal_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "event_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "order_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "order_ref": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "trade_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "applied_sha": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "config_hash": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "bid": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "bid_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "quote_timestamp": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      }
+    },
+    "journal": {
+      "candidate_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "entry_plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "deliberation_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "decision_snapshot_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "signal_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "event_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "order_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "order_ref": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "trade_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "applied_sha": {
+        "rows_with_nonempty_key_any_depth": 7,
+        "paths": {
+          "market_context.entry_risk.applied_sha": 7
+        }
+      },
+      "config_hash": {
+        "rows_with_nonempty_key_any_depth": 7,
+        "paths": {
+          "market_context.entry_risk.config_hash": 7
+        }
+      },
+      "bid": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "bid_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "quote_timestamp": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      }
+    },
+    "tca": {
+      "candidate_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "entry_plan_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "deliberation_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "decision_snapshot_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "signal_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "event_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "order_id": {
+        "rows_with_nonempty_key_any_depth": 19,
+        "paths": {
+          "order_id": 19
+        }
+      },
+      "order_ref": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "trade_id": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "applied_sha": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "config_hash": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "bid": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "bid_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "ask_price": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      },
+      "quote_timestamp": {
+        "rows_with_nonempty_key_any_depth": 0,
+        "paths": {}
+      }
+    }
+  },
+  "exact_team_to_daily_counterfactual": {
+    "rows_with_deliberation_ids": 112,
+    "rows_matching_captured_team": 112,
+    "distinct_referenced_ids": 246,
+    "distinct_matching_captured_ids": 246,
+    "referenced_ids_absent_from_captured_team": 0,
+    "rows_with_multiple_deliberation_ids": 66,
+    "matched_id_symbol_or_day_disagreements": 0,
+    "rows_with_both_buy_and_nonbuy_deliberations": 9,
+    "captured_team_without_cf_id_link": 0,
+    "interpretation": "IDs support deliberation-to-daily-price-outcome lineage only; daily BUY-first aggregation is not per-decision selection or real-time entry performance."
+  },
+  "team_symbol_day_multiplicity": {
+    "1": 46,
+    "2": 24,
+    "3": 16,
+    "4": 26
+  },
+  "tca_buy_symbol_day_overlap_not_attribution": {
+    "pit_first_snapshot": {
+      "buy_rows": 10,
+      "zero_same_symbol_day": 9,
+      "one_same_symbol_day": 1,
+      "multiple_same_symbol_day": 0,
+      "interpretation": "Same-symbol-day overlap only; not execution attribution or proof of full scan coverage."
+    },
+    "team_deliberations": {
+      "buy_rows": 10,
+      "zero_same_symbol_day": 0,
+      "one_same_symbol_day": 1,
+      "multiple_same_symbol_day": 9,
+      "interpretation": "Same-symbol-day overlap only; not execution attribution or proof of full scan coverage."
+    }
+  },
+  "same_day_team_before_buy_observation": {
+    "counts": {
+      "buy_rows": 10,
+      "no_earlier_same_day_team": 8,
+      "earlier_approved_buy": 0,
+      "earlier_same_day_team_exists": 2,
+      "earlier_stance_hold": 2
+    },
+    "timezone_markers": {
+      "None": 47
+    },
+    "earliest_team_minus_tca_observation_minutes": {
+      "min": -11.581400133333334,
+      "max": 59.17135198333334
+    },
+    "limitations": [
+      "All compared timestamps are naive local timestamps; comparison assumes shared local clock convention, no external clock attestation.",
+      "TCA time is observation/log time, not actual execution time.",
+      "Absence of an earlier same-day team BUY does not exclude prior-day information or separate engine LLM/strategy checks."
+    ]
+  },
+  "counterfactual_nonbuy_bucket_composition": {
+    "team_hold_rows_with_sell_deliberation": 6,
+    "team_hold_rows_only_sell_deliberations": 3,
+    "mixed_buy_nonbuy_time_order": {
+      "nonbuy_before_first_buy": 5,
+      "buy_before_first_nonbuy": 4
+    },
+    "interpretation": "team_hold is a non-approved-BUY bucket, not a pure HOLD decision population. Entire-day BUY priority loses within-day decision sequence."
+  },
+  "team_report_time_coverage": {
+    "fundamental": {
+      "rows": 246,
+      "data_as_of_nonempty": 246,
+      "observed_at_nonempty": 0,
+      "available_at_nonempty": 0,
+      "data_statuses": {
+        "insufficient": 246
+      }
+    },
+    "news": {
+      "rows": 246,
+      "data_as_of_nonempty": 246,
+      "observed_at_nonempty": 0,
+      "available_at_nonempty": 0,
+      "data_statuses": {
+        "partial": 246
+      }
+    },
+    "technical": {
+      "rows": 246,
+      "data_as_of_nonempty": 246,
+      "observed_at_nonempty": 205,
+      "available_at_nonempty": 0,
+      "data_statuses": {
+        "full": 205,
+        "error": 41
+      }
+    }
+  },
+  "source_manifest": {
+    "excess_return/positions.jsonl": {
+      "sha256": "2435eb910efc2f7a713150026a78a12cba53255f14c45611e999f93bb619fd91",
+      "bytes": 224068
+    },
+    "pit_universe/2026-08-10.json": {
+      "sha256": "564a24f192dad12b5e43f673e048472ad8618ea7f43c9f7dbef7ddfe7a9dcac2",
+      "bytes": 2168
+    },
+    "pit_universe/2026-08-11.json": {
+      "sha256": "b5dfd1318735bee07c165c82f28f422fabbb18497e981d027676299b1f9b1140",
+      "bytes": 1913
+    },
+    "pit_universe/2026-08-12.json": {
+      "sha256": "69383b0b6d20c036e477add70b4673c888719c337731ae42b878eb4785aee467",
+      "bytes": 1917
+    },
+    "pit_universe/2026-08-13.json": {
+      "sha256": "44e31afba0b15f425f5e62c2886cc3889ac936ff0d52803238b0ddb4c22c3afd",
+      "bytes": 2183
+    },
+    "pit_universe/2026-08-14.json": {
+      "sha256": "3ae6f17701beb16004713ec247ff36d90b7f4f0ebfa130e968366daf8c903833",
+      "bytes": 2116
+    },
+    "pit_universe/2026-08-18.json": {
+      "sha256": "0dfb51d08e965465f9108386c80d4571f401f39d2fba37a5d601a68f58f578c9",
+      "bytes": 2101
+    },
+    "pit_universe/2026-08-19.json": {
+      "sha256": "039612d941bdc8a2eb37f85e9ca44b238f5d39659375d4f2463c6e0cd9964367",
+      "bytes": 2179
+    },
+    "pit_universe/2026-08-20.json": {
+      "sha256": "b1da4a3faec650a76cbf6fa043f22542d016da4397a4a963a45c1f41580311dd",
+      "bytes": 2388
+    },
+    "pit_universe/2026-08-21.json": {
+      "sha256": "e9da8006299915babb6045bd0e2d96cff9cc4f46311539c4662dd195449c061d",
+      "bytes": 2262
+    },
+    "pit_universe/2026-08-24.json": {
+      "sha256": "cfce3637c76caf9e81d35c57120701863a5c600c450d3a6e47720218f3497522",
+      "bytes": 2461
+    },
+    "pit_universe/2026-08-25.json": {
+      "sha256": "8c7fc6906e86cdc1ec360138830ecbec5d14c7964040dcffa3d614d0831c7a65",
+      "bytes": 1675
+    },
+    "pit_universe/2026-08-26.json": {
+      "sha256": "5c9310facb90f262f894dc30d52f8cb3a5f8523092595db116ff4b8d54d7bbbb",
+      "bytes": 1676
+    },
+    "pit_universe/2026-08-27.json": {
+      "sha256": "f74557c2cb7eff390c9b13635274485bcae104dbfe211b23c4b279fda3c185f4",
+      "bytes": 2227
+    },
+    "pit_universe/2026-08-28.json": {
+      "sha256": "3694e766f4813f17a460829e0030c5ed913abe8a64ca732d9e92a1014ef0c6eb",
+      "bytes": 2227
+    },
+    "pit_universe/2026-08-31.json": {
+      "sha256": "d634985ed31ad60685569b4c8407a59bd9d25b108f3dc894a5a7dcce4643d135",
+      "bytes": 2105
+    },
+    "pit_universe/2026-09-01.json": {
+      "sha256": "eaf755c1cc280062a9f9e75a8043e7686da3df33db8b9db0744058e07fed7b85",
+      "bytes": 2239
+    },
+    "pit_universe/2026-09-02.json": {
+      "sha256": "5198e8f540295369028d8b833f204a8de7d4c89282101675f6b09ee6512770ca",
+      "bytes": 1993
+    },
+    "pit_universe/2026-09-03.json": {
+      "sha256": "b63f5466b1d231933401b7d9f6409f305ba38f6193ec5b026d12c48490878c61",
+      "bytes": 2589
+    },
+    "pit_universe/2026-09-04.json": {
+      "sha256": "2777ec9efd083b7aa18766940a13d288c3fa7f866e8802710532ee19b3e059b1",
+      "bytes": 2713
+    },
+    "pit_universe/2026-09-07.json": {
+      "sha256": "9118109a8df1b6038ad671657b96287f27bdd881254e7f89e15c349bb059d9c5",
+      "bytes": 2257
+    },
+    "pit_universe/2026-09-08.json": {
+      "sha256": "9d0af4e69ce60214e9290a6abb361f2343f415d765982e5f6f696ebfc4157e3b",
+      "bytes": 2516
+    },
+    "pit_universe/2026-09-09.json": {
+      "sha256": "249d07910ab715d24192b91a39bef4cbbfadff93e6876d1468fbe4f127e52e6b",
+      "bytes": 2514
+    },
+    "pit_universe/2026-09-10.json": {
+      "sha256": "deff3f03519f1d4f0b020f83fdebdcf0b4073e3cddbe57a85c356de89d69ff17",
+      "bytes": 2514
+    },
+    "pit_universe/2026-09-11.json": {
+      "sha256": "24cb758635eb4f0e9f4999e2e8fb5df7bddb9ff25bd653c9f124e4b2ef161543",
+      "bytes": 2570
+    },
+    "pit_universe/2026-09-14.json": {
+      "sha256": "db91c9f730363ad2befe7b52d75f389c35e247e1e1a72b7087d8e325ec9f3656",
+      "bytes": 2501
+    },
+    "pit_universe/2026-09-15.json": {
+      "sha256": "241769ad5342166f37affa39559034ca8aec98809c19571250b7e336c2fda736",
+      "bytes": 3103
+    },
+    "pit_universe/2026-09-16.json": {
+      "sha256": "20ef339a51c0f59895aeb4cf6565f154c97345ab58d1e949bf0563da254a9b57",
+      "bytes": 2768
+    },
+    "pit_universe/2026-09-17.json": {
+      "sha256": "46d9fd73eba070e325227573de6c4e4f6ede750a9e7da023280c05cf488c5eed",
+      "bytes": 2902
+    },
+    "pit_universe/2026-09-18.json": {
+      "sha256": "2b529f795a56cb74d6163326c6fbb6f2c11b0bdbfd3204a9bde99d6f2a19a02f",
+      "bytes": 2750
+    },
+    "pit_universe/2026-09-21.json": {
+      "sha256": "680a71373b92836b24c1c04c1c3a4a034dcd66fd2de7a5fdcf5ab7a327a95b4f",
+      "bytes": 2809
+    },
+    "pit_universe/2026-09-22.json": {
+      "sha256": "939e306663d0564867085ba0853b1250a7015fe9e71a0577726c0ddbac26460d",
+      "bytes": 2941
+    },
+    "pit_universe/2026-09-23.json": {
+      "sha256": "ebc438df6fc7e4af4fa1533ae12d7b9d24efbb87936a599b9e20fc4d358c6ba4",
+      "bytes": 3091
+    },
+    "pit_universe/2026-09-25.json": {
+      "sha256": "83f623082769cd82bba10602df2c9f9c02c1b60ca501f4bcd1751093c30333af",
+      "bytes": 3343
+    },
+    "pit_universe/2026-09-28.json": {
+      "sha256": "5f73964287c964296b6ea0f194d8e959581f3c403d19b042feae3b5757a2f9bb",
+      "bytes": 3155
+    },
+    "pit_universe/2026-09-29.json": {
+      "sha256": "32af500cef1cb8058ad93b619358c3053a84add503fc21e7824a7ce51de643d9",
+      "bytes": 2420
+    },
+    "pit_universe/2026-09-30.json": {
+      "sha256": "5fe66d743dc2b4bd7f7d7f51fcebd8dd17c8dce06f6cce7666f2b3cb1138e57d",
+      "bytes": 2692
+    },
+    "team_ledger/deliberations_20260916.jsonl": {
+      "sha256": "2d36ed708e2599e85ba25235a2f5ff270a93b6133c542b66aa81e2414778df84",
+      "bytes": 427406
+    },
+    "team_ledger/deliberations_20260917.jsonl": {
+      "sha256": "8c23a91b06063a0f67697d429c3f0219a2dd595270fc931ee6c1af871a18061c",
+      "bytes": 427440
+    },
+    "team_ledger/deliberations_20260918.jsonl": {
+      "sha256": "36c45fb41de2d14b41391e9658b2401d48068176db14502a259c0491c3c46dc5",
+      "bytes": 429571
+    },
+    "team_ledger/deliberations_20260921.jsonl": {
+      "sha256": "b7f564f74589e376ccf3e6de30debeee3fdf0fabbfcaf8b9df7511e6601e8f89",
+      "bytes": 427958
+    },
+    "team_ledger/deliberations_20260922.jsonl": {
+      "sha256": "3aefc7a0c3557f4668a582bdfd5ca1687384faaa531e1f35340215d7dd5d32fe",
+      "bytes": 649233
+    },
+    "team_ledger/deliberations_20260923.jsonl": {
+      "sha256": "036563917558f286000a5d1f48cf6d339a27e45ee1bf3c6c927bc0721ef9701b",
+      "bytes": 727611
+    },
+    "team_ledger/deliberations_20260928.jsonl": {
+      "sha256": "cc46a103cad64abab5c21e303d56ab78ad504021f65d64db58010294cecfa03d",
+      "bytes": 484986
+    },
+    "team_ledger/deliberations_20260929.jsonl": {
+      "sha256": "116c7f23a3fbecac7e2dbf4c2508b1b1d2cd6f43a5dcf00791dedf174234af82",
+      "bytes": 503909
+    },
+    "team_ledger/deliberations_20260930.jsonl": {
+      "sha256": "00cc335f2ebe59f9f48528d72a52bfbc94d9f0c42a56e6917d9600067072b37a",
+      "bytes": 577428
+    },
+    "journal/trades_20260923.json": {
+      "sha256": "c20aec9f43a595ba2f471a0ac46ec6ffeeda5b334593e64333a4e02256b8c9ef",
+      "bytes": 10017
+    },
+    "journal/trades_20260928.json": {
+      "sha256": "cc6c883713a4f523d3155a4b2de47c949589c86ff42be269db7128ae9f3d497e",
+      "bytes": 2573
+    },
+    "journal/trades_20260929.json": {
+      "sha256": "a804328a66904aa011f6ec644a5f1a9fbe637ffc44a6107acad3e2045569b80c",
+      "bytes": 4972
+    },
+    "counterfactual_state.json": {
+      "sha256": "15478a171ea7c0cf1abe61f76297c84f3606d2921c37456e87a954924f0cd5fc",
+      "bytes": 138383
+    },
+    "tca.jsonl": {
+      "sha256": "6caa80cd5aa90486bac22115a4d2ab7e24bb4e7af0ca7011cba5b949105a528b",
+      "bytes": 4877
+    },
+    "position_ledger.jsonl": {
+      "sha256": "ae4ed3029a898bf762186293ac9693b1c1eee3da3eb433f2da5fa6962ea0d9c2",
+      "bytes": 4888
+    }
+  },
+  "source_changed_since_first_stage": [],
+  "limitations": [
+    "No current pending orders/signals, trading-state files, DB, service logs or credentials read. Only named analytical files from prior approved source list.",
+    "Absence of a key in these files does not prove missing production DB data or a nonfunctional strategy.",
+    "A symbol/date coincidence does not establish causality; slots and strategies may differ.",
+    "No intraday ask/bid path or all-candidate scan denominator recovered from these files.",
+    "Report timestamps do not by themselves establish original source availability before the decision."
+  ],
+  "source_hashes_stable_after_read": true,
+  "quote_parser_probe": {
+    "probe": "Extracted parser AST only with synthetic H0STASP0 payload and inert event/logger callbacks. Application/broker modules never imported; no WebSocket, credentials, cache, or orders used.",
+    "source_url": "https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/domestic_stock/asking_price_krx/asking_price_krx.py",
+    "captured_at_utc": "2026-09-30T13:13:14.218265+00:00",
+    "official_source_sha256": "6503fd8c4b9139d368d8b8350a7eb94adc0b7e8e0765ae6dcae90b8301926c4a",
+    "repo_source": "src/data/feeds/kis_websocket.py",
+    "repo_source_sha256": "77bb6c2a768e73d59f5eecd8ae3332277a8f7da6f1e74634ba3c7419d8a0aad6",
+    "official_field_indices_zero_based": {
+      "ASKP1": 3,
+      "ASKP2": 4,
+      "BIDP1": 13,
+      "BIDP2": 14,
+      "ASKP_RSQN1": 23,
+      "BIDP_RSQN1": 33
+    },
+    "synthetic_input": {
+      "ASKP1": 10100,
+      "ASKP2": 10200,
+      "BIDP1": 10000,
+      "BIDP2": 9900,
+      "ASKP_RSQN1": 120,
+      "BIDP_RSQN1": 230
+    },
+    "emitted_price_and_size": {
+      "ask_price": "10100",
+      "bid_price": "10000",
+      "ask_size": "10200",
+      "bid_size": "9900"
+    },
+    "expected_sizes": {
+      "ask_size": 120,
+      "bid_size": 230
+    },
+    "finding": "Prices map correctly; sizes read second-best prices (indices4/14) instead of first-level quantities (indices23/33). Reproduced in existing parser function.",
+    "status": "REPRODUCED_NOT_FIXED",
+    "impact_limit": "Subscription/consumer wiring must be traced separately; this is not evidence of an executed trade impact or historical loss cause.",
+    "impact_trace": {
+      "subscription_code_exists": true,
+      "current_run_trader_registers_market_data_only": true,
+      "on_quote_registration_call_found_in_src_scripts_tests": false,
+      "market_data_and_rest_sell_quote_paths_separate": true,
+      "live_connection_or_trade_impact_verified": false,
+      "nxt_schema_verified": false
+    }
+  },
+  "source_code_manifest": {
+    "src/core/batch_analyzer.py": "6b2bbf5c48940711dc43f04fe51051e670d77626b83a375778ad39f689b61b6d",
+    "src/core/engine.py": "f76fae08a5b43a59afdf672b5c3a72b1d1ab584b027bfcee04e8e63501f2d638",
+    "src/core/types.py": "2b86a290911b7173c6e587d9e6bc63d015322a9b61d33eaebdc402441f753a90",
+    "src/core/event.py": "55b3688f68471b06a401be2cdf9968173a0ee7ba2cbca875c538d8e9ecc9e3da",
+    "src/schedulers/kr_scheduler.py": "d4c88578c8cc8a73a579ce9256546acc4fb7d12c93743f08b02d6686c4b936bb",
+    "src/agents/team.py": "60edbe41a9b984a70b9ac2d5f5bbe7e3de290f6acb2b8143b979d63033be2d77",
+    "src/agents/team_ledger.py": "ec34caf8185c9c658f2a4764becf1d95df52ceb5462478322bed04dd50db82e2",
+    "src/analytics/counterfactual_tracker.py": "5eb4df6344abd31aa2d8153dded9d8d1b2efb1298892df12e34ac6b031314595",
+    "src/analytics/tca.py": "c66023f9a0992c3b6d40ca2a9f72f7a2cf02080ff6236b93f6111c70256e27c6",
+    "src/execution/broker/kis_kr.py": "266bc10e4b3b0fcb171f06999e5b0bc427ed10c448be61c13c28bae934c521d1",
+    "src/data/storage/trade_storage.py": "b16ec75a1a3f675ba6ceb272823ab52fd1a24dda3deea52a097fcbd3d14f3257",
+    "src/data/storage/signal_event_storage.py": "4c279879ebde0cb4d705fcddf1ddc2a36e4e660e2725cf9efcf1001868f96103",
+    "src/data/feeds/kis_websocket.py": "77bb6c2a768e73d59f5eecd8ae3332277a8f7da6f1e74634ba3c7419d8a0aad6",
+    "scripts/run_trader.py": "457f4f7203e23dda547466741e444feff4943c3f5c898e41ebddada07537c1ec",
+    "src/utils/team_conviction.py": "56baa03dd49d2117471005c235e530512209eb3b6b3af4de62ae03ca447b6868",
+    "src/agents/types.py": "985b1e9e156ae15ca12d7125f132cd11d2157efe0e35af4757942bcc606951db"
+  },
+  "upstream_source_findings": {
+    "batch_candidate_id_fallback": "symbol|date; not unique per scan",
+    "batch_plan_id": "new uuid prefix per PendingSignal conversion",
+    "all_scans_persisted": false,
+    "realtime_scan_id_persisted": false,
+    "team_targets": "latest screened top5 plus holdings",
+    "team_plan_link": "last pending plan per symbol",
+    "team_execution_state_candidate_means_new_entry": false,
+    "entry_plan_shadow": "after earlier filters and positive sizing, before G3 and broker kill switch; only signals carrying plan",
+    "passed_signal_means_broker_accepted": false,
+    "realtime_gap_signal_has_entry_plan_in_reviewed_producer": false,
+    "team_indirect_influence": "separate same-day BUY conviction sizing; engine conditional G4 LLM is another path"
+  }
+}

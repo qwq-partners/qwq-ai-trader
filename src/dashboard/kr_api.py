@@ -25,6 +25,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
     handler = KRAPIHandler(data_collector)
 
     app.router.add_get("/api/status", handler.get_status)
+    app.router.add_get("/api/internal/entry-anchors", handler.get_entry_anchors)
     app.router.add_get("/api/portfolio", handler.get_portfolio)
     app.router.add_get("/api/positions", handler.get_positions)
     app.router.add_get("/api/risk", handler.get_risk)
@@ -954,3 +955,21 @@ class KRAPIHandler:
         logger.warning("[대시보드] 파라미터 적용 완료 → 봇 재시작")
         import sys
         sys.exit(0)  # systemd/supervisor가 재시작 (graceful shutdown)
+
+    async def get_entry_anchors(self, request):
+        """관측이 설치된 경우에만 로컬 수집기에 제한한 후보 ID를 반환한다."""
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        if (request.remote not in ('127.0.0.1', '::1')
+                or headers.get('host') != '127.0.0.1:8080'
+                or headers.get('x-qwq-observation') != '1'
+                or any(k in ('origin', 'forwarded', 'via') or k.startswith('x-forwarded-') for k in headers)
+                or getattr(request, 'query_string', '')):
+            return web.json_response({'status':'forbidden'}, status=403)
+        runtime = getattr(getattr(self.dc, 'bot', None), '_entry_observation_runtime', None)
+        if runtime is None:
+            return web.json_response({'status':'unavailable'}, status=503)
+        from src.observation.entry_anchor_input import project_anchors
+        try:
+            return web.json_response(project_anchors(runtime), headers={'Cache-Control':'no-store'})
+        except Exception:
+            return web.json_response({'status':'unavailable'}, status=503)

@@ -1,11 +1,27 @@
 # 시스템 아키텍처
 
+> **15차(10-01):** 선택적 `entry_observation_runtime`이 manifest 검증·원장/버퍼 설치·독립 종료 타이머를 소유한다. Runner는 엔진 태스크 시작 전 설치하며 중단 사유 고정과 원장 close를 feed 취소 전에 수행한다. 관측 종료는 봇 중지가 아니다. 기본 비활성·운영 미설치, 상세는 선정·진입 규약15차.
+
+> **14차(2026-10-01) 준비 판정:** 아래 관측 부품을 실제 Runner에서 생성·설치하는 경로와 고정 종료/as_of의 close owner는 아직 없다. callback/owner 접점은 있으나 기본 None이다. 실제 수집에는 WS 시작 전 명시 설치, 연구/자원 설정 검증, 정상 종료 전 원장 봉인과 중도 incomplete 처리가 필요하다. [규약14차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조. 이번 단계는 런타임 코드 변경 없음.
+
+> **13차(2026-10-01) 추가:** 선택적 `scan_scope="first"`는 capture_scan 복사 전에 첫 시도를 예약하고 성공한 첫 후보/Signal ID만 관측에 연결한다. 후속 scan은 None을 반환하지만 원래 emit/주문 생성은 유지한다. 전역 WS/연결 공백은 그대로 보존한다. 원장과 두 입력 조립기가 first 모집단을 명시하며 혼합/중복 범위를 거부한다. 설치·자동 시간 종료·주문 없는 정책 재생 기능은 아니다. [규약13차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
+
+> **12차(2026-10-01) 추가:** 기존 buffer에 명시적으로 `ObservationJournal.open`을 붙인 경우에만 유한 큐→단일 전용 writer→새 JSONL 파일로 보존한다. `close`는 관측 구간을 닫고 잔여 기록을 저장한다. 피드/주문/서비스 생명주기를 조작하지 않는다. CLI가 원장을 strict read하여 기존 prepare_input으로 전달한다. 기존 None 모드는 파일·스레드 부작용이 없다. [규약12차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
+
+
+> **11차(2026-10-01) 추가:** 정지한 `KISWebSocketFeed`에 같은 `EntryObservationBuffer`와 명시 예산을 주입할 때만 채널 조정기를 설치한다. 스크리닝 → 유한 관측 작업 큐 → 기존 WS의 KRX BOOK → 기존 Runner Quote 콜백 → 버퍼 → 오프라인 가격 비교 순서다. 관측은 운영 watch/PRICE 소유권을 추가하지 않는다. 기본 None 경로는 유지한다. [규약 11차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
+
+
+> 2026-10-01 작업 브랜치 10차: 오프라인 비교기에 사전 고정 보유시간의 첫 bid 평가를 추가했다. 운영 청산 엔진을 호출하거나 후보 호가를 구독하지 않는다. 기존 WS subscribe는 PRICE+BOOK을 함께 보내므로 관측용 후보 추가에는 채널 소유권·ACK·재연결 조정이 선행돼야 한다. [규약 10차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
+
 > 소스 기준 최종 갱신: 2026-09-10
 > 기준 진입점: [scripts/run_trader.py](../../scripts/run_trader.py), [src/core/engine.py](../../src/core/engine.py), [src/schedulers/kr_scheduler.py](../../src/schedulers/kr_scheduler.py), [src/schedulers/us_scheduler.py](../../src/schedulers/us_scheduler.py)
 
 이 문서는 현재 실행 코드의 컴포넌트 경계와 데이터 흐름을 설명한다. 전략별 조건과 수치, 리스크 규칙, 운영 절차는 각각의 전용 문서에 두고 여기서는 시스템을 변경할 때 필요한 연결 관계와 실행 불변조건에 집중한다.
 
 ## 1. 핵심 구조
+
+**2026-10-01 작업 브랜치 후속 — 기본 비활성 가격 관측 접점:** KRScheduler는 전체 반환 후보, 기존 REST 응답, live_screening SignalEvent/emit 결과를 `bot._entry_price_observer`에 복사한다. Runner의 Quote 콜백과 RiskManager의 최종 OrderEvent 생성 지점도 같은 선택적 버퍼에 연결된다. 요청 수량·사이징/초기 실효 손절을 구분하며 주문 접수/체결로 해석하지 않는다. 기본값은 None이고 생성/설치·영속 저장·추가 API/구독·정책 재생은 없다. 버퍼 유실은 평가 불명으로 남긴다. 가격 조건은 운영 주문에 적용하지 않는다. 별도 오프라인 수신 기준 모드는 원순서로 고가·첫 호가를 연결한다. 계약은 [선정·진입 규약 9차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
 
 QWQ AI Trader는 하나의 프로세스와 하나의 asyncio 이벤트 루프에서 KR·US 시장, 대시보드, 실시간 피드를 함께 실행한다. 다만 두 시장의 주문 경로는 같지 않다.
 
@@ -457,3 +473,17 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 | 영속 상태 | src/data/storage/, src/core/evolution/, src/analytics/ |
 
 아키텍처를 변경했다면 이 문서와 함께 [문서 인덱스](../README.md), [운영 런북](../operations/runbook.md), 관련 전략·리스크 문서를 검토한다. 스케줄 시각은 코드 주석이 아니라 실효 설정과 실제 조건문을 기준으로 갱신한다.
+
+### 23차 토스 후보 관측 부품(2026-10-01, 로컬 미연결)
+
+`src/data/providers/toss/orderbook_stream.py`는 외부에서 주입한 전용 WS의 수신/ACK/종료만 맡고, `src/analytics/toss_candidate_observation.py`는 기존 엔진 관측 export의 scan→signal→order_ready를 토스 전용 자료와 결합한다. 파일 CLI는 품질 보고만 출력한다. 토스 자료는 KIS ws_quote/EventBus/주문 경로에 발행하지 않는다. 현재 Runner·퇴역 토스 REST 서비스·접속/인증 팩터리·영속 원장과 연결되지 않았으며 실제 수집은 시작하지 않았다. 상세는 [선정·진입 규약23차](../research/current-engine-selection-entry-protocol-2026-09-30.md)를 따른다.
+
+### 24차 토스 후보 수집 실행 경로(2026-10-01, 로컬 구현)
+
+기존 봉인 launcher가 검증한 plan/grant 버전으로 REST(v1)와 후보 WS(v2)를 선택한다. `toss_ws_service`는 기존 승인·토큰 발급권·송신 잠금을 재사용하고 `ws_transport`의 고정 목적지에 한 번만 연결한다. 엔진은 `entry_anchor_input.project_anchors`를 통해 loopback 경로로 제한된 후보/판단 식별자만 제공한다. 이 HTTP 경로는 거래·가격·계좌 API를 호출하지 않는다.
+
+수집 프로세스는 동기 저장을 봇 이벤트 처리와 분리하고 시작/최종 결과만 보존한다. 호가 중간값은 메모리에 있으므로 crash 후 복구되지 않는다. 강제 종료·불완전 원천·후보 변경을 실패 자료로 남긴다. `--artifact` 보고는 해시와 후보 연결을 검사하지만 손익/체결을 판정하지 않는다. 운영 설치/활성화 전이며 상세 승인·수명·한계는 [규약24차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
+
+### 25차 첫 후보 투영/시작 수명
+
+`entry-anchor-projection-v2`는 전체 반환≤100개와 선택 규칙을 보존하고 앞3개 판단만 전달한다. 승인 plan의 선택 규칙과 report의 전체 분모를 함께 검사한다. Runner의 `--entry-observation-once`는 비공개 영수증을 배타 생성·동기화한 뒤 기존 CapturePlan을 읽는다. 이미 소비했거나 지정 구간 밖이면 일반 기동한다. 관측 성공을 뜻하는 영수증은 아니며 원래 주문 경로는 그대로다. [설치안](../operations/entry-capture-installation-2026-10-02.md)과 [규약25차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.

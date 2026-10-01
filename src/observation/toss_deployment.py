@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import stat
 
-from src.data.providers.toss.approval import ApprovalError, ExecutionIdentity, RegistryTrust
+from src.data.providers.toss.approval import ApprovedAuthority, ApprovalError, ExecutionIdentity, RegistryTrust
 from src.data.providers.toss.runtime_factory import Deployment, StartupAttestation
 
 
@@ -16,9 +16,22 @@ def _validate_policy(authority, document):
     """넓은 기존 plan 스키마 안에서 승인한 첫 관측 정책만 허용한다."""
     plan, grant = authority.plan, authority.grant
     if (plan.raw_hash != document['plan_raw_hash'] or plan.canonical_hash != document['plan_canonical_hash']
-            or grant.role != 'issuer' or dict(grant.capabilities) != dict(query=True, renewal=True, bootstrap=True)):
+            or grant.role != 'issuer'):
         raise ApprovalError()
     p = plan.document
+    if p['schema_version'] == 2:
+        # WS는 3일 REST 실험과 별도 계약이다. 한 구간과 종료 후 로컬 봉인 회수만 허용한다.
+        start, end = datetime.fromisoformat(grant.not_before), datetime.fromisoformat(grant.expires_at)
+        retention = datetime.fromisoformat(document['retention_at'])
+        if (dict(grant.capabilities) != dict(query=True, renewal=True, bootstrap=True, websocket=True)
+                or end - start > timedelta(hours=2) or retention != end + timedelta(days=30)
+                or p['limits']['ledger_max_bytes'] > 67108864
+                or p['limits']['auth_max_issues'] > 4
+                or p['limits']['preflight_timeout_seconds'] > 5):
+            raise ApprovalError()
+        return
+    if dict(grant.capabilities) != dict(query=True, renewal=True, bootstrap=True):
+        raise ApprovalError()
     expected = {
         'selection': dict(candidate_limit=0, max_snapshot_age_seconds=300, max_symbols=20,
                           rule='score_desc_symbol_asc_holdings_first'),
@@ -60,6 +73,17 @@ def make_deployment(document: dict) -> Deployment:
     authority = deployment.load()
     _validate_policy(authority, document)
     return deployment
+
+
+def service_for(authority):
+    """검증된 plan의 명시 버전으로만 서비스 선택. --check는 이 import도 하지 않는다."""
+    if type(authority) is not ApprovedAuthority:
+        raise ApprovalError('approval_untrusted')
+    if authority.plan.document['schema_version'] == 2:
+        from .toss_ws_service import run_ws_service
+        return run_ws_service
+    from .toss_service import run_service
+    return run_service
 
 
 def _private_directory(path, document):

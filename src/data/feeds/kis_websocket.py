@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Callable, Coroutine, Dict, List, Optional, Set, Any
@@ -143,6 +143,7 @@ class KISWebSocketFeed:
         self._reconnect_count = 0
         self._logged_first_price = False
         self._rebuild_task: Optional[asyncio.Task] = None
+        self._quote_subscription_owner = None  # 명시 설치 전 기존 구독 경로 유지
 
         logger.info(f"KISWebSocketFeed 초기화: env={self.config.env}, 롤링주기={self.ROLLING_INTERVAL}초")
 
@@ -166,8 +167,176 @@ class KISWebSocketFeed:
     # 연결 관리
     # ============================================================
 
+    def enable_quote_observation(self, observer, **contract):
+        """정지 상태에서만 명시 설치. 호출 자체는 소켓/토큰/태스크를 만들지 않는다."""
+        from .quote_subscription import QuoteSubscriptionCoordinator
+        if (self._connected or self._running or (self._ws and not self._ws.closed)
+                or getattr(self, "_quote_subscription_owner", None) is not None
+                or any(task is not None and not task.done() for task in
+                       (self._rolling_task, self._rebuild_task))):
+            raise RuntimeError("관측 구독은 피드 정지 상태에서만 설치 가능")
+        owner = QuoteSubscriptionCoordinator(observer, **contract)
+        self._quote_subscription_owner = owner
+        self._quote_lifecycle_lock = asyncio.Lock()
+        self._quote_maintenance_task = None
+        self._managed_data_count = 0
+        self._subscribed_symbols.clear()
+        self._pending_subscriptions.clear()
+
+    async def _connect_managed(self):
+        async with self._quote_lifecycle_lock:
+            if not self._should_connect:
+                return False
+            if self.is_connected:
+                return True
+            owner = self._quote_subscription_owner
+            self._connected = False
+            self._subscribed_symbols.clear()
+            await owner.stop()
+            # 새 appkey 세션을 열기 전에 이전 소켓을 실제 종료한다.
+            if self._ws and not self._ws.closed:
+                await self._ws.close()
+                if not self._ws.closed:
+                    return False
+            try:
+                if not self._session or self._session.closed:
+                    self._session = aiohttp.ClientSession()
+                self._approval_key = await self._token_manager.get_approval_key()
+                if not self._approval_key or not self._should_connect:
+                    return False
+                ws = await self._session.ws_connect(self.config.ws_url,
+                    heartbeat=self.config.ping_interval, timeout=aiohttp.ClientTimeout(total=15))
+                self._ws = ws
+                if not self._should_connect:
+                    await ws.close()
+                    return False
+                self._connected = self._running = True
+                approval_key = self._approval_key
+
+                async def send(action, key):
+                    if ws is not self._ws or ws.closed or not self._connected or not self._should_connect:
+                        raise RuntimeError("연결이 변경됨")
+                    await ws.send_json({"header": {"approval_key": approval_key, "custtype": "P",
+                        "tr_type": "1" if action == "subscribe" else "2", "content-type": "utf-8"},
+                        "body": {"input": {"tr_id": key[0], "tr_key": key[1]}}})
+
+                # 최신 운영 요구를 먼저 적용하여 연결 전 들어온 후보가 선점하지 않게 한다.
+                await self._apply_subscriptions()
+                await owner.start(send)
+                if not self._should_connect:
+                    self._connected = self._running = False
+                    await owner.stop()
+                    await ws.close()
+                    return False
+                if self._quote_maintenance_task is None or self._quote_maintenance_task.done():
+                    self._quote_maintenance_task = asyncio.create_task(self._maintain_quote_subscriptions())
+                return True
+            except (Exception, asyncio.CancelledError) as exc:
+                self._connected = False
+                self._subscribed_symbols.clear()
+                await owner.stop()
+                if self._ws and not self._ws.closed:
+                    await self._ws.close()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                logger.warning("[WS 관측] 연결 실패 — 관측 불명 유지")
+                return False
+
+    async def _close_managed_socket(self, socket, generation):
+        async with self._quote_lifecycle_lock:
+            owner = self._quote_subscription_owner
+            if socket is not self._ws or generation != owner.generation:
+                return
+            self._connected = False
+            self._subscribed_symbols.clear()
+            await owner.stop()
+            if socket and not socket.closed:
+                await socket.close()
+
+    async def _disconnect_managed(self):
+        self._should_connect = self._running = self._connected = False
+        self._subscribed_symbols.clear()
+        async with self._quote_lifecycle_lock:
+            # connect await 중 생긴 소켓/태스크도 잠금 획득 후의 현재 값으로 정리한다.
+            self._running = self._connected = False
+            tasks = [getattr(self, name, None) for name in
+                     ("_rolling_task", "_rebuild_task", "_quote_maintenance_task")]
+            for task in tasks:
+                if task is not None and task is not asyncio.current_task():
+                    task.cancel()
+            await asyncio.gather(*(t for t in tasks if t is not None and t is not asyncio.current_task()),
+                                 return_exceptions=True)
+            self._rolling_task = self._rebuild_task = self._quote_maintenance_task = None
+            await self._quote_subscription_owner.cancel_pending()
+            await self._quote_subscription_owner.stop()
+            if self._ws and not self._ws.closed:
+                await self._ws.close()
+            if self._session and not self._session.closed:
+                await self._session.close()
+
+    async def _maintain_quote_subscriptions(self):
+        try:
+            while self._running:
+                await asyncio.sleep(1)
+                await self._quote_subscription_owner.maintain()
+                self._subscribed_symbols = self._quote_subscription_owner.operational_coverage()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._quote_subscription_owner.observer.mark_incomplete("maintenance_failed")
+            logger.warning("[WS 관측] 구독 관리 중단 — 관측 불명 유지")
+
+    async def _run_managed(self):
+        """선택 설치된 피드의 수신 루프. 수신 소켓/세대를 캡처해 늦은 데이터 격리."""
+        self._running = True
+        instant_disconnects = 0
+        try:
+            while self._running:
+                if not self._should_connect or not self._is_market_active():
+                    await self._close_managed_socket(self._ws, self._quote_subscription_owner.generation)
+                    await asyncio.sleep(30)
+                    continue
+                self._current_session = self._kr_session.get_session()
+                if not await self.connect():
+                    await asyncio.sleep(self.config.reconnect_delay)
+                    continue
+                socket, generation = self._ws, self._quote_subscription_owner.generation
+                before = self._managed_data_count  # BOOK도 연결 생존 증거, REST coverage와 별개
+                started = asyncio.get_running_loop().time()
+                try:
+                    await self._apply_subscriptions()
+                    async for msg in socket:
+                        if socket is not self._ws or generation != self._quote_subscription_owner.generation:
+                            break
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await self._handle_message(msg.data, socket=socket, generation=generation)
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning("[WS 관측] 수신 종료 — 재연결 전 관측 공백 기록")
+                finally:
+                    await self._close_managed_socket(socket, generation)
+                # 이전 루프의 종료가 새 연결의 카운터/승인키를 바꾸지 않는다.
+                if socket is not self._ws or generation != self._quote_subscription_owner.generation:
+                    continue
+                short = asyncio.get_running_loop().time() - started < 10
+                instant_disconnects = instant_disconnects + 1 if short and before == self._managed_data_count else 0
+                if instant_disconnects >= 3:
+                    self._token_manager.invalidate()
+                    self._approval_key = None
+                    instant_disconnects = 0
+                if self._running and self._should_connect:
+                    self._reconnect_count += 1
+                    await asyncio.sleep(min(self.config.reconnect_delay * 2 ** min(self._reconnect_count - 1, 5), 120))
+        finally:
+            await self.disconnect()
+
     async def connect(self) -> bool:
         """WebSocket 연결"""
+        if getattr(self, "_quote_subscription_owner", None) is not None:
+            return await self._connect_managed()
         if self._connected:
             return True
 
@@ -215,6 +384,9 @@ class KISWebSocketFeed:
 
     async def disconnect(self):
         """WebSocket 연결 해제"""
+        if getattr(self, "_quote_subscription_owner", None) is not None:
+            await self._disconnect_managed()
+            return
         self._should_connect = False
         self._running = False
         self._connected = False
@@ -390,6 +562,14 @@ class KISWebSocketFeed:
         # 목표 구독 목록
         target = priority | set(window)
 
+        owner = getattr(self, "_quote_subscription_owner", None)
+        if owner is not None:
+            # 운영 target은 모두 보존하고 실제 등록 초과는 stats에 드러낸다.
+            ordered = sorted(priority) + [s for s in window if s not in priority]
+            await owner.set_operational(ordered, *self._get_tr_ids())
+            self._subscribed_symbols = owner.operational_coverage()
+            return
+
         # 해제할 종목
         to_unsubscribe = self._subscribed_symbols - target
         # 신규 구독할 종목
@@ -448,7 +628,7 @@ class KISWebSocketFeed:
 
         # 세션 변경 시 기존 구독 전량 해제 후 새 TR_ID로 재구독
         # (정규장↔NXT 전환 시 TR_ID가 바뀌므로 필수)
-        if self._connected:
+        if self._connected and getattr(self, "_quote_subscription_owner", None) is None:
             for symbol in list(self._subscribed_symbols):
                 await self._unsubscribe_symbol(symbol)
             self._subscribed_symbols.clear()
@@ -480,13 +660,16 @@ class KISWebSocketFeed:
             self._symbol_scores.pop(symbol, None)
 
             # 현재 구독 중이면 해제
-            if symbol in self._subscribed_symbols:
+            if symbol in self._subscribed_symbols and getattr(self, "_quote_subscription_owner", None) is None:
                 if self._connected:
                     await self._unsubscribe_symbol(symbol)
                 self._subscribed_symbols.discard(symbol)
 
         # 롤링 큐 갱신
         self._update_rolling_queue()
+
+        if getattr(self, "_quote_subscription_owner", None) is not None:
+            await self._apply_subscriptions()
 
     def get_subscription_stats(self) -> Dict[str, Any]:
         """구독 통계 반환"""
@@ -500,6 +683,8 @@ class KISWebSocketFeed:
             "rolling_queue_size": len(self._rolling_queue),
             "rolling_index": self._rolling_index,
             "is_rolling": self._rolling_task is not None,
+            **({"channel_observation": self._quote_subscription_owner.snapshot()}
+               if getattr(self, "_quote_subscription_owner", None) is not None else {}),
         }
 
     def _get_tr_ids(self) -> tuple:
@@ -634,6 +819,9 @@ class KISWebSocketFeed:
 
     async def run(self):
         """메시지 수신 루프"""
+        if getattr(self, "_quote_subscription_owner", None) is not None:
+            await self._run_managed()
+            return
         # 시작 시 running 플래그 활성화 (_running은 __init__에서 False로 초기화되어 있음)
         self._running = True
         _was_closed = False
@@ -768,8 +956,13 @@ class KISWebSocketFeed:
 
         await self.disconnect()
 
-    async def _handle_message(self, data: str):
+    async def _handle_message(self, data: str, *, socket=None, generation=None):
         """메시지 처리"""
+        owner = getattr(self, "_quote_subscription_owner", None)
+        if owner is not None and (socket is not self._ws or not self._connected
+                                  or generation != owner.generation):
+            return
+        received_at = datetime.now(timezone.utc).isoformat()
         self._message_count += 1
         self._last_message_time = datetime.now()
 
@@ -777,6 +970,11 @@ class KISWebSocketFeed:
             # JSON 형식 체크
             if data.startswith("{"):
                 msg = json.loads(data)
+                if owner is not None:
+                    await owner.handle_ack(msg, generation)
+                    if socket is not self._ws or generation != owner.generation or not self._connected:
+                        return
+                    self._subscribed_symbols = owner.operational_coverage()
                 # 시스템 메시지 (연결 확인 등)
                 if "header" in msg:
                     tr_id = msg.get("header", {}).get("tr_id", "")
@@ -801,6 +999,8 @@ class KISWebSocketFeed:
             # 파이프 구분 데이터 (실시간 시세)
             parts = data.split("|")
             if len(parts) < 4:
+                if owner is not None:
+                    owner._gap("malformed_frame")
                 logger.debug(f"[WS] 파이프 구분 데이터 부족: {len(parts)}개 파트")
                 return
 
@@ -810,9 +1010,18 @@ class KISWebSocketFeed:
             try:
                 count = int(parts[2])
             except ValueError:
+                if owner is not None:
+                    owner._gap("invalid_frame_count")
                 logger.warning(f"[WS] 데이터 건수 파싱 실패 (숫자 아님): parts[2]='{parts[2]}'")
                 return
             raw_data = parts[3]
+            if owner is not None:
+                symbol = raw_data.split("^", 1)[0]
+                if encrypted != "0" or count != 1:
+                    owner._gap("unsupported_frame_shape")
+                    return
+                if not owner.accepts((tr_id, symbol), generation):
+                    return
 
             # 수신 통계 로깅 (5000건마다)
             if self._message_count % 5000 == 0:
@@ -820,15 +1029,18 @@ class KISWebSocketFeed:
 
             # TR ID별 처리 (정규장 + NXT 공통)
             if tr_id in (KISWebSocketType.PRICE.value, KISWebSocketType.NXT_PRICE.value):
-                await self._handle_price_data(raw_data)
+                await self._handle_price_data(raw_data, tr_id=tr_id, generation=generation)
 
             elif tr_id in (KISWebSocketType.ORDERBOOK.value, KISWebSocketType.NXT_ORDERBOOK.value):
-                await self._handle_orderbook_data(raw_data)
+                await self._handle_orderbook_data(raw_data, tr_id=tr_id, received_at=received_at,
+                                                count=count, generation=generation)
 
         except Exception as e:
+            if owner is not None:
+                owner._gap("message_parse_failed")
             logger.error(f"메시지 처리 오류: {e}")
 
-    async def _handle_price_data(self, data: str):
+    async def _handle_price_data(self, data: str, *, tr_id="", generation=None):
         """실시간 체결가 처리"""
         try:
             fields = data.split("^")
@@ -853,6 +1065,14 @@ class KISWebSocketFeed:
             low_price = int(fields[9])    # 저가
             volume = int(fields[13])      # 누적거래량
             value = int(fields[14])       # 누적거래대금
+
+            owner = getattr(self, "_quote_subscription_owner", None)
+            if owner is not None:
+                if not owner.accepts((tr_id, symbol), generation):
+                    return
+                owner.note_data((tr_id, symbol), generation)
+                self._managed_data_count += 1
+                self._subscribed_symbols = owner.operational_coverage()
 
             self._price_data_count += 1
 
@@ -889,21 +1109,32 @@ class KISWebSocketFeed:
         except Exception as e:
             logger.error(f"체결가 처리 오류: {e}")
 
-    async def _handle_orderbook_data(self, data: str):
+    async def _handle_orderbook_data(self, data: str, *, tr_id: str = "", received_at: Optional[str] = None,
+                                   count: int = 1, generation=None):
         """실시간 호가 처리"""
+        owner = getattr(self, "_quote_subscription_owner", None)
         try:
             fields = data.split("^")
 
             if len(fields) < 40:
+                if owner is not None:
+                    owner._gap("short_orderbook_frame")
                 return
 
             symbol = fields[0].zfill(6)
 
             # 최우선 호가
             ask_price = int(fields[3])   # 매도1호가
-            ask_size = int(fields[4])    # 매도1잔량
+            ask_size = int(fields[23])   # 매도1잔량 (4는 매도2호가 가격)
             bid_price = int(fields[13])  # 매수1호가
-            bid_size = int(fields[14])   # 매수1잔량
+            bid_size = int(fields[33])   # 매수1잔량 (14는 매수2호가 가격)
+
+            owner = getattr(self, "_quote_subscription_owner", None)
+            if owner is not None:
+                if not owner.accepts((tr_id, symbol), generation):
+                    return
+                owner.note_data((tr_id, symbol), generation)
+                self._managed_data_count += 1
 
             event = QuoteEvent(
                 source="kis_websocket",
@@ -912,6 +1143,14 @@ class KISWebSocketFeed:
                 bid_size=bid_size,
                 ask_price=Decimal(str(ask_price)),
                 ask_size=ask_size,
+                metadata={
+                    "tr_id": tr_id, "exchange_time": fields[1], "hour_class_code": fields[2],
+                    "received_at": received_at if received_at is not None else datetime.now(timezone.utc).isoformat(),
+                    "message_count": count,
+                    # 원문 HHMMSS에는 거래일이 없다. 수신일로 원천 날짜를 추정하지 않는다.
+                    "source_as_of": None,
+                    **({"connection_id": owner.connection_id, "generation": generation} if owner else {}),
+                },
             )
 
             # 콜백 호출
@@ -922,6 +1161,8 @@ class KISWebSocketFeed:
                     logger.error(f"호가 콜백 오류: {e}")
 
         except Exception as e:
+            if owner is not None:
+                owner._gap("orderbook_parse_failed")
             logger.error(f"호가 처리 오류: {e}")
 
     # ============================================================

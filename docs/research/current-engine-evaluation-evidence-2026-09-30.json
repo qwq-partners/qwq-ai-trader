@@ -1,0 +1,1112 @@
+{
+  "schema": 1,
+  "captured_at_utc": "2026-09-30T11:40:48.089958+00:00",
+  "scope": "Read-only cached evidence; no DB/broker/network/process verification; no raw account/trade data copied.",
+  "ledger_snapshot": {
+    "computed_date": "2026-09-30",
+    "computed_at": "2026-09-30T20:30:50.347269"
+  },
+  "ledger_rows": 264,
+  "exclusions": {
+    "None": 252,
+    "exits_aggregated": 2,
+    "lots_ambiguous": 2,
+    "quantity_mismatch": 1,
+    "sync_entry": 7
+  },
+  "snapshot_diff": {
+    "previous_meta": {
+      "computed_date": "2026-09-29",
+      "computed_at": "2026-09-29T20:30:28.556012"
+    },
+    "previous_rows": 263,
+    "current_rows": 264,
+    "added": 1,
+    "removed": 0,
+    "common_changed_fields": {}
+  },
+  "position_groups": {
+    "all": {
+      "n": 252,
+      "mean_excess_pct": -1.6604972222222223,
+      "mean_net_pct": -0.38264960317460317,
+      "sum_excess_krw": -9074780.0,
+      "entry_first": "2026-03-09",
+      "entry_last": "2026-09-29",
+      "strategies": {
+        "core_holding": 17,
+        "gap_and_go": 60,
+        "rsi2_reversal": 30,
+        "safe_asset": 1,
+        "sepa_trend": 44,
+        "strategic_swing": 54,
+        "theme_chasing": 43,
+        "unknown": 3
+      }
+    },
+    "legacy_entries_before_july": {
+      "n": 243,
+      "mean_excess_pct": -1.6589777777777777,
+      "mean_net_pct": -0.3188798353909465,
+      "sum_excess_krw": -8965210.0,
+      "entry_first": "2026-03-09",
+      "entry_last": "2026-06-25",
+      "strategies": {
+        "core_holding": 17,
+        "gap_and_go": 51,
+        "rsi2_reversal": 30,
+        "safe_asset": 1,
+        "sepa_trend": 44,
+        "strategic_swing": 54,
+        "theme_chasing": 43,
+        "unknown": 3
+      }
+    },
+    "september_entries": {
+      "n": 9,
+      "mean_excess_pct": -1.7015222222222224,
+      "mean_net_pct": -2.104433333333333,
+      "sum_excess_krw": -109570.0,
+      "entry_first": "2026-09-22",
+      "entry_last": "2026-09-29",
+      "strategies": {
+        "gap_and_go": 9
+      }
+    },
+    "same_day": {
+      "n": 66,
+      "mean_excess_pct": -1.9342878787878788,
+      "mean_net_pct": -1.9342878787878788,
+      "sum_excess_krw": -2919182.0,
+      "entry_first": "2026-03-09",
+      "entry_last": "2026-09-28",
+      "strategies": {
+        "gap_and_go": 21,
+        "rsi2_reversal": 5,
+        "safe_asset": 1,
+        "sepa_trend": 8,
+        "strategic_swing": 7,
+        "theme_chasing": 23,
+        "unknown": 1
+      }
+    },
+    "fill_exits": {
+      "n": 223,
+      "mean_excess_pct": -1.0955094170403588,
+      "mean_net_pct": -0.019641704035874452,
+      "sum_excess_krw": -5440111.0,
+      "entry_first": "2026-03-09",
+      "entry_last": "2026-09-29",
+      "strategies": {
+        "core_holding": 9,
+        "gap_and_go": 53,
+        "rsi2_reversal": 28,
+        "sepa_trend": 41,
+        "strategic_swing": 46,
+        "theme_chasing": 43,
+        "unknown": 3
+      }
+    },
+    "estimated_exits": {
+      "n": 29,
+      "mean_excess_pct": -6.005058620689655,
+      "mean_net_pct": -3.174055172413793,
+      "sum_excess_krw": -3634669.0,
+      "entry_first": "2026-03-09",
+      "entry_last": "2026-09-23",
+      "strategies": {
+        "core_holding": 8,
+        "gap_and_go": 7,
+        "rsi2_reversal": 2,
+        "safe_asset": 1,
+        "sepa_trend": 3,
+        "strategic_swing": 8
+      }
+    },
+    "samsung_hynix": {
+      "n": 20,
+      "mean_excess_pct": -0.64224,
+      "mean_net_pct": 1.106865,
+      "sum_excess_krw": -432815.0,
+      "entry_first": "2026-03-16",
+      "entry_last": "2026-09-23",
+      "strategies": {
+        "core_holding": 1,
+        "gap_and_go": 5,
+        "sepa_trend": 2,
+        "strategic_swing": 5,
+        "theme_chasing": 7
+      }
+    },
+    "excluding_two_stocks": {
+      "n": 232,
+      "mean_excess_pct": -1.7482780172413792,
+      "mean_net_pct": -0.5110560344827586,
+      "sum_excess_krw": -8641965.0,
+      "entry_first": "2026-03-09",
+      "entry_last": "2026-09-29",
+      "strategies": {
+        "core_holding": 16,
+        "gap_and_go": 55,
+        "rsi2_reversal": 30,
+        "safe_asset": 1,
+        "sepa_trend": 42,
+        "strategic_swing": 49,
+        "theme_chasing": 36,
+        "unknown": 3
+      }
+    }
+  },
+  "entry_months": {
+    "2026-03": 54,
+    "2026-04": 69,
+    "2026-05": 59,
+    "2026-06": 61,
+    "2026-09": 9
+  },
+  "cohorts": {
+    "legacy-unmeasured": 243,
+    "risk-gap_and_go-v1": 9
+  },
+  "entry_sha_labels": {
+    "": 243,
+    "081ab6a93a9210ec4a8897a016ff4bc250abb610": 1,
+    "a454277e385842e8c383d96fe4ef47dc86bc65ca": 1,
+    "d337494de3ae272bd94f34f43653aa0c6b8a7e3c": 7
+  },
+  "calculation_sha_labels": {
+    "b1eeb8c6f6838504fb12e36ea07b2bd5919f91b8": 252
+  },
+  "equity": {
+    "n": 148,
+    "first": "2026-03-06",
+    "last": "2026-09-30",
+    "identity_mismatch_dates": [
+      "2026-03-07",
+      "2026-03-14",
+      "2026-03-21",
+      "2026-03-28",
+      "2026-04-13",
+      "2026-04-18"
+    ],
+    "all_mismatches_have_zero_components": true,
+    "cashflow_field_names": []
+  },
+  "pit": {
+    "days": 36,
+    "first": "2026-08-10",
+    "last": "2026-09-30",
+    "rows": 1334,
+    "symbols": 120
+  },
+  "team": {
+    "rows": 259,
+    "unique_deliberations": 246,
+    "execution_states": {
+      "candidate": 246
+    },
+    "entry_plan_ids_present": 0,
+    "report_statuses": {
+      "fundamental:insufficient": 246,
+      "news:partial": 246,
+      "technical:error": 41,
+      "technical:full": 205
+    }
+  },
+  "journal": {
+    "files": 3,
+    "rows": 7,
+    "entry_sha_config_hash_pairs": [
+      {
+        "sha": "081ab6a93a9210ec4a8897a016ff4bc250abb610",
+        "config_hash": "b0697f21b90d5de6c303c2cc090595737396eeba81f977e51c3347df6fab91a5",
+        "rows": 2
+      },
+      {
+        "sha": "a454277e385842e8c383d96fe4ef47dc86bc65ca",
+        "config_hash": "b0697f21b90d5de6c303c2cc090595737396eeba81f977e51c3347df6fab91a5",
+        "rows": 1
+      },
+      {
+        "sha": "d337494de3ae272bd94f34f43653aa0c6b8a7e3c",
+        "config_hash": "1d4e7f3ce5c8d91b3760eeace188c9a3ce05bc71cf6de46bb97be5f34fc78ea8",
+        "rows": 4
+      }
+    ]
+  },
+  "tca": {
+    "rows": 19,
+    "first": "2026-09-22T09:33:04.995684",
+    "last": "2026-09-30T15:10:12.385547",
+    "sides": {
+      "buy": 10,
+      "sell": 9
+    }
+  },
+  "position_fill_ledger": {
+    "rows": 9,
+    "strategies": {
+      "gap_and_go": 9
+    },
+    "unreliable_flags": {
+      "False": 9
+    },
+    "blank_exit_reasons": 9,
+    "total_exits": 9
+  },
+  "cf_matched_dates": {
+    "x5": {
+      "days": 22,
+      "first": "2026-08-14",
+      "last": "2026-09-18",
+      "counts": {
+        "team_buy_unfilled": 68,
+        "team_hold": 190
+      },
+      "mean_pct": {
+        "team_buy_unfilled": -0.8519621212121212,
+        "team_hold": -1.3352450138245593
+      },
+      "buy_minus_hold_pp": 0.483282892612438
+    },
+    "x20": {
+      "days": 11,
+      "first": "2026-08-14",
+      "last": "2026-08-31",
+      "counts": {
+        "team_buy_unfilled": 26,
+        "team_hold": 106
+      },
+      "mean_pct": {
+        "team_buy_unfilled": -2.777878787878788,
+        "team_hold": -4.3335727101181645
+      },
+      "buy_minus_hold_pp": 1.5556939222393766
+    }
+  },
+  "working_config_file_hashes_only_not_runtime_attestation": {
+    "config/default.yml": "81b7cd2545e18e6e40dfb1e7586310a5bd8a1ac4e599f8d05b2696569efa1938",
+    "config/evolved_overrides.yml": "4970f2bf8ebfe6c5ba408336204cde07a8c80669cc9e5ba4edb0761b670b6d68"
+  },
+  "source_manifest": {
+    "excess_return/positions.jsonl": {
+      "sha256": "2435eb910efc2f7a713150026a78a12cba53255f14c45611e999f93bb619fd91",
+      "bytes": 224068
+    },
+    "excess_return/positions_prev.jsonl": {
+      "sha256": "477bcdecf4b4e604174dcc438690e3dd7cefa2e3d33796389d569e7e07ab2fab",
+      "bytes": 223191
+    },
+    "journal/equity_20260306.json": {
+      "sha256": "952e05b4a37bc8056dc4d0ce9c21ca7480de60a3c2c65a93fedfb251e7e83515",
+      "bytes": 1022
+    },
+    "journal/equity_20260307.json": {
+      "sha256": "f6423aab8740c5165d94ae80ee0f3e7825e0fc40465472c548b318243818b85b",
+      "bytes": 258
+    },
+    "journal/equity_20260309.json": {
+      "sha256": "fa0d8c8fb14be7bc7b30792fc915ba8c424f3c8e6efc311e5c322df7562a4566",
+      "bytes": 1292
+    },
+    "journal/equity_20260310.json": {
+      "sha256": "f9a5cc5db6444a5ad515a023998b03df3fc6094477f92b4930a78648c60c7203",
+      "bytes": 1785
+    },
+    "journal/equity_20260311.json": {
+      "sha256": "10f301a1adaad04f5ed47488fecd5d3cf3b0b03326bde6bb794e840ac823e3a9",
+      "bytes": 779
+    },
+    "journal/equity_20260312.json": {
+      "sha256": "d18b1b09e02bb5a4e237d804e8c570418d9e08162388f71a5a0fc1131d278901",
+      "bytes": 1791
+    },
+    "journal/equity_20260313.json": {
+      "sha256": "63fcd1d02f0ae3dc5753dc32dfc97e5e72a375aef11807df87f195ce178d4586",
+      "bytes": 1295
+    },
+    "journal/equity_20260314.json": {
+      "sha256": "a30813a5f0ed22ff559a2c1f69bf744dd0ddf6873c5ce9dd75b10e3400a2c924",
+      "bytes": 257
+    },
+    "journal/equity_20260316.json": {
+      "sha256": "180f54909c2ab9335214768a5c3b4dcc6e8b34cf4d84b46dcd3c87a4e5a022bd",
+      "bytes": 1785
+    },
+    "journal/equity_20260317.json": {
+      "sha256": "1688f43639974d00bfc5249c25ec99df7dea4f118240b882741ac36a24a6a34d",
+      "bytes": 2032
+    },
+    "journal/equity_20260318.json": {
+      "sha256": "00ec030b02fe8c0cd5a8d29a8568e62a05bfe2ac28b5bbfb9b77da514f841883",
+      "bytes": 2288
+    },
+    "journal/equity_20260319.json": {
+      "sha256": "77912d7ceb99639679b99f02615e35c82d17f763ecfd700ab6dc8fe28c7570d3",
+      "bytes": 3015
+    },
+    "journal/equity_20260320.json": {
+      "sha256": "540c6f9e51d478eb29e64e86c55f1a6cad9f2b042160275771905a6ef7a05147",
+      "bytes": 2754
+    },
+    "journal/equity_20260321.json": {
+      "sha256": "080ac263067ae4dd4f3e4020717f56922495b854fdc7a8bd0c31d5e2d5ef9144",
+      "bytes": 255
+    },
+    "journal/equity_20260323.json": {
+      "sha256": "cff3f03cff4d002e0a21dd7ecd0427c3ae8f8274020d12cfee0e53a2992eb84e",
+      "bytes": 1530
+    },
+    "journal/equity_20260324.json": {
+      "sha256": "99906a3cf73fd9d9bf21a5725a32e5076ec5a60aabeac79a670d186e3243f35f",
+      "bytes": 2263
+    },
+    "journal/equity_20260325.json": {
+      "sha256": "7d53464296a21ab323428d05479f68245098f05b8b372fa4da6da4ebb39e3364",
+      "bytes": 2487
+    },
+    "journal/equity_20260326.json": {
+      "sha256": "5079fbd377c6e579f1110355114b3517fcbaab35d2b68d737861f920e7173b52",
+      "bytes": 2772
+    },
+    "journal/equity_20260327.json": {
+      "sha256": "9277e2cfff1d4306f53fe18f036ed2220d7fdaae0d4f61f6cc4295db485ce618",
+      "bytes": 1977
+    },
+    "journal/equity_20260328.json": {
+      "sha256": "33c614a6c8fa01b1dbc7f9628b29f8eeedcd9cdf53ea684dbd7027d4aa186b23",
+      "bytes": 257
+    },
+    "journal/equity_20260330.json": {
+      "sha256": "8856324acb94b3401006fea22e509ea3d6669df8f97b176edd977670e78ee739",
+      "bytes": 2268
+    },
+    "journal/equity_20260331.json": {
+      "sha256": "ea97377698e4755c05838841f66baf7da7a690761e31cd70922e5bc76f730ff3",
+      "bytes": 2240
+    },
+    "journal/equity_20260401.json": {
+      "sha256": "5e785ae3a600ca79d68e9bff35fb1f1526b61eaf1f24733f860d23b5f91ba47b",
+      "bytes": 1982
+    },
+    "journal/equity_20260402.json": {
+      "sha256": "c6ad1444cd208bd45e9eacce1c2a2794ad861f66bf11ce9044be45935eaa7e0d",
+      "bytes": 1257
+    },
+    "journal/equity_20260403.json": {
+      "sha256": "610843a78f88a5d629da4965d546963e2423ec6042f31ba20f43ea9b45bb2a09",
+      "bytes": 2254
+    },
+    "journal/equity_20260406.json": {
+      "sha256": "de7291f2d0e04bd6a86c82809144d17678ce52cadfda1a6c48ad6fbaaccc623d",
+      "bytes": 2250
+    },
+    "journal/equity_20260407.json": {
+      "sha256": "df635e2a6ef676f618044b4f660da39653b88ddcb2f74f94c412fa0096cce4a3",
+      "bytes": 1989
+    },
+    "journal/equity_20260408.json": {
+      "sha256": "9d130d650fb25cd78e0a222a405c70a44e740f975425b69d3686a98b866ac892",
+      "bytes": 2207
+    },
+    "journal/equity_20260409.json": {
+      "sha256": "49b6d60f0e7d4c42dbc9fbe3c56f192413e1a6a7615f3028ebeccf5715026303",
+      "bytes": 2714
+    },
+    "journal/equity_20260410.json": {
+      "sha256": "778dd7b25fe2441672267405407474104c439347fcba80657f91d51785a471ca",
+      "bytes": 2984
+    },
+    "journal/equity_20260413.json": {
+      "sha256": "d162fdd46362ccd0cb964a777906a1c845a21aa61672bb37c740d5f5be7ea043",
+      "bytes": 255
+    },
+    "journal/equity_20260414.json": {
+      "sha256": "82dd1d009283230ba070683b460e1626106c8de71eb1f663e303cce7046e23c2",
+      "bytes": 3236
+    },
+    "journal/equity_20260415.json": {
+      "sha256": "afe07675b05d7cdffc29f871accbe01a5a41aa9777967d55d932412220cebb90",
+      "bytes": 2740
+    },
+    "journal/equity_20260416.json": {
+      "sha256": "4ff44ed14a96ee2748c994057a8be71dfae2fd3796dc0a9e6460d8e0ef9ac0a1",
+      "bytes": 2980
+    },
+    "journal/equity_20260417.json": {
+      "sha256": "68acd8301387dd1dfe9ce295543c26998cfd6b5feb5197df65402163286d8e00",
+      "bytes": 2735
+    },
+    "journal/equity_20260418.json": {
+      "sha256": "cd7b0cfde363ce95f9e5d8fef7a8f876e003990d21593b91f7e95d2ac905627a",
+      "bytes": 255
+    },
+    "journal/equity_20260420.json": {
+      "sha256": "ed39646ca14dabe38ac458e9644e622dacd0b90a50a07a2e7a9ce98ea2c304f4",
+      "bytes": 1767
+    },
+    "journal/equity_20260421.json": {
+      "sha256": "4b3bf4b4ee5c8d24129ddee1ad0a6bee0fb8b5b5c351d322280216b8ae50499a",
+      "bytes": 2487
+    },
+    "journal/equity_20260422.json": {
+      "sha256": "dd5ac99e72292b5f3c032d8dd2978cc2834cdaadd113655ba6ddbff756a9fa79",
+      "bytes": 2222
+    },
+    "journal/equity_20260423.json": {
+      "sha256": "71c5172436332f85bc15f1b2e3e082271e9fd2abe98234a8c56867eda795adad",
+      "bytes": 1751
+    },
+    "journal/equity_20260424.json": {
+      "sha256": "bf1a92991544268135f9c845ebb712bb6933d9064173cbcb2ff5da02a121cc4f",
+      "bytes": 1761
+    },
+    "journal/equity_20260427.json": {
+      "sha256": "93839c44a9c60ceccebc6ad1fbc0a5b8716f02cedd82d64fc3e1f6a3c6e44d50",
+      "bytes": 1772
+    },
+    "journal/equity_20260428.json": {
+      "sha256": "2efbc894f01a6c1d961b3ed1fa015deb546c439ee95e2d9465a622907ea9b9d6",
+      "bytes": 2234
+    },
+    "journal/equity_20260429.json": {
+      "sha256": "021c5bf62c9f3fd45a8d71bbbd38169aaa0cedaa401dbc507d7ebb38de59c062",
+      "bytes": 2006
+    },
+    "journal/equity_20260430.json": {
+      "sha256": "784685b8ecc7a28704cad2fcf72b11bd8450717b0c8125a162c34864d2c0cc28",
+      "bytes": 2262
+    },
+    "journal/equity_20260504.json": {
+      "sha256": "0b562bc7e8ec5c755cd22a6a149a11b15832ed5391f851520e46166675fbe2d8",
+      "bytes": 2719
+    },
+    "journal/equity_20260506.json": {
+      "sha256": "a6904f5b0b11a0444b13be650f1bbf35278653dd1d50077ad02231555dc7c35f",
+      "bytes": 2740
+    },
+    "journal/equity_20260507.json": {
+      "sha256": "1f4a0be0372ccbf9f116f1b40e13f774833c73eb74e172de5a0316ab7307ad48",
+      "bytes": 2968
+    },
+    "journal/equity_20260508.json": {
+      "sha256": "71a01d7d98eab4e6d6217ce95c44224639d5276d4031d2eb31b7df7a4a5095de",
+      "bytes": 3419
+    },
+    "journal/equity_20260511.json": {
+      "sha256": "53ee6a9926484338ce177868ebad0fddc792d02b4872c333a77c455a8aaaee69",
+      "bytes": 3183
+    },
+    "journal/equity_20260512.json": {
+      "sha256": "476caa63a23dc7d130af1ff71c9ec49fbdf5d2aa8d406fddb254fdd972b817b7",
+      "bytes": 1254
+    },
+    "journal/equity_20260513.json": {
+      "sha256": "84da52457ed17409ca20b0d7c8b16404c048e5b3a61b06b6a09049d909070bd4",
+      "bytes": 2446
+    },
+    "journal/equity_20260514.json": {
+      "sha256": "3b371eedd68b3c3facf6a6dc3de2c40dc766642e517fd29796865ef394e2186b",
+      "bytes": 2459
+    },
+    "journal/equity_20260515.json": {
+      "sha256": "cd87e75b166a58e263d65ba0372872f3a84d7e1eb34d2a75ecba46c6e3c7ef3c",
+      "bytes": 1004
+    },
+    "journal/equity_20260518.json": {
+      "sha256": "5b60453d00a9d1452cbaee7839a213c005b70182d03cb442e7e1686ae26907d4",
+      "bytes": 1754
+    },
+    "journal/equity_20260519.json": {
+      "sha256": "ee2cfb21cf73be527b8188b806d6265f3dcd9a5c0f2bab52678cc6cfe3b47725",
+      "bytes": 1019
+    },
+    "journal/equity_20260520.json": {
+      "sha256": "9bfc2c52911898ca43340a1bfcb505bcbc6356bd80e60d2c916660a3dc271723",
+      "bytes": 2249
+    },
+    "journal/equity_20260521.json": {
+      "sha256": "b7ff2d41c8a0f3e04d9bc067e474d4fed58f5b84485ecdc2d0fbfe19e90a0455",
+      "bytes": 1266
+    },
+    "journal/equity_20260522.json": {
+      "sha256": "a93186ced19676db9eca5194867b1df3a27382910026253a014568d447f9f51e",
+      "bytes": 2486
+    },
+    "journal/equity_20260525.json": {
+      "sha256": "2065891c063fbdec54224a964810d4f54a3b301e42a9a3c97ecae0268148fc4c",
+      "bytes": 2479
+    },
+    "journal/equity_20260526.json": {
+      "sha256": "f0ddc1c00cb2ee0c6990a4a9ad7bbafc69637b1984ae3c5dea0e2a42a5d303ab",
+      "bytes": 2732
+    },
+    "journal/equity_20260527.json": {
+      "sha256": "fff66a10c213c5d527fdd47dc98e5c088495f347cc921f2464e54d8314f6c825",
+      "bytes": 2971
+    },
+    "journal/equity_20260528.json": {
+      "sha256": "9d7f89fccfa34d138f1e56c4883c7d16fd6d05d825ade2f21cc41028f6088f89",
+      "bytes": 1010
+    },
+    "journal/equity_20260529.json": {
+      "sha256": "00cb7dd6069882d4aaad9eecfc05eb9074f153b4688f4b41024992ae5848e150",
+      "bytes": 2227
+    },
+    "journal/equity_20260601.json": {
+      "sha256": "3a5301759a403b3ed1c2245ad76f8db5f5d5805b36da2a3d7ac3a435f09dde04",
+      "bytes": 2732
+    },
+    "journal/equity_20260602.json": {
+      "sha256": "9a8269a62bec5fa0219cd040bd952966ddfefdb3c7c8ad7706a2c4715c303677",
+      "bytes": 2962
+    },
+    "journal/equity_20260604.json": {
+      "sha256": "150eacfae63921cd0123955933312b7261d70981651230692bff760aece4b4e6",
+      "bytes": 3226
+    },
+    "journal/equity_20260605.json": {
+      "sha256": "8a9cfcafe38aba6d01d2bffada848942318e9ddfc30a09b66928bdfec230e6a7",
+      "bytes": 1768
+    },
+    "journal/equity_20260608.json": {
+      "sha256": "62af285d6280c1284aad793f5de21bb410ec59cb859de4c3e6b28ae698328aa3",
+      "bytes": 537
+    },
+    "journal/equity_20260609.json": {
+      "sha256": "c65e5c57df4d6eb88dfcf7d4ac1043603a427e855deda50d8cfa0a30e20a283f",
+      "bytes": 1805
+    },
+    "journal/equity_20260610.json": {
+      "sha256": "a2de27ea73a5f491708ce418ac39e47a22775f617d3b93307174dd7dcd7d612a",
+      "bytes": 2036
+    },
+    "journal/equity_20260611.json": {
+      "sha256": "700fc66bd4a2f171b6e8d93e18f34699a078fec9dd93927cd9eb5aea5a1f1fb0",
+      "bytes": 799
+    },
+    "journal/equity_20260612.json": {
+      "sha256": "a181cffbd993794a1d07e6de8c93e19296075d1e05e4ea36349e63c2ce3c1408",
+      "bytes": 2499
+    },
+    "journal/equity_20260615.json": {
+      "sha256": "37fbf1cb88017c4433456fd331ca877e9031c8aa40fd203e6273ecb9d85ebf15",
+      "bytes": 2983
+    },
+    "journal/equity_20260616.json": {
+      "sha256": "bffeffb65916d13d8ab542bc39a1b801fb9372fab16ce02d0b9446c720a753f4",
+      "bytes": 2964
+    },
+    "journal/equity_20260617.json": {
+      "sha256": "286b936c2ad8ec9df139436c4bbcdb8444daedf3051ff3dc4976aea9a0803520",
+      "bytes": 1281
+    },
+    "journal/equity_20260618.json": {
+      "sha256": "99fe361d74f2a15e98635f461048ccf9c388cd6b531d66d00167f3e86b077635",
+      "bytes": 1778
+    },
+    "journal/equity_20260619.json": {
+      "sha256": "77a5029ff3ae1880e3efb089cf47a51c7edb36a886367e27c84016cd3d77897f",
+      "bytes": 1042
+    },
+    "journal/equity_20260622.json": {
+      "sha256": "62d399a89246a6a9aafaf664008705163164d1643613ee43b00baba04859463d",
+      "bytes": 535
+    },
+    "journal/equity_20260623.json": {
+      "sha256": "1b8e938782eddbe5de9f3089afbf719ef8536ef2846e0a7a462a0c664e022af7",
+      "bytes": 1263
+    },
+    "journal/equity_20260624.json": {
+      "sha256": "70dc64465d62551e074ccfeb6cc079524d0d3f9d9f04c332b54514f7d1253a35",
+      "bytes": 785
+    },
+    "journal/equity_20260625.json": {
+      "sha256": "30ddd40e953a091b9b35077b50cd796c394864a60608b3c644f754da5dce9132",
+      "bytes": 1510
+    },
+    "journal/equity_20260626.json": {
+      "sha256": "dec5ce1505e0a5d7fa21b776791295203ad5775434de0edcf4f6959fd2d9a163",
+      "bytes": 1279
+    },
+    "journal/equity_20260629.json": {
+      "sha256": "2701dd3c21719647b47214b2a8e2c8477d7151c2ab00285eef336c4777985d2a",
+      "bytes": 1031
+    },
+    "journal/equity_20260630.json": {
+      "sha256": "7391ee0acda4da87a9f00910abf3fe0485b3f830b81088754ebb105cf25fe901",
+      "bytes": 793
+    },
+    "journal/equity_20260701.json": {
+      "sha256": "4f9a710689f496afc1a41320bab56c58e23b5fbd24556712dbb95539c58b5f02",
+      "bytes": 785
+    },
+    "journal/equity_20260702.json": {
+      "sha256": "e204bb14eb0a16e2821a2e129117787e2024ee4529df62819a340e66e86e1961",
+      "bytes": 537
+    },
+    "journal/equity_20260703.json": {
+      "sha256": "0f2054e94091430eac40f930f338380c1e141b8d8bfa7fd95c84d2550d73a435",
+      "bytes": 534
+    },
+    "journal/equity_20260706.json": {
+      "sha256": "15bde8353536c1f801b1bac14882b101236932cd6f8805bb90e6e5636d297668",
+      "bytes": 534
+    },
+    "journal/equity_20260707.json": {
+      "sha256": "429212d4b12e47d62844c444f34524e7d49781ba954cb87d7e6d83b15cf9f2ae",
+      "bytes": 537
+    },
+    "journal/equity_20260708.json": {
+      "sha256": "19d0c988ec98a19d28eae3b2322467e11b08cb1ff4a6424b296f482bfb8cbb92",
+      "bytes": 538
+    },
+    "journal/equity_20260709.json": {
+      "sha256": "2c6648a96a324555e5d346d93b9e0782501d2b0b628dfd736ae5382eb295f682",
+      "bytes": 536
+    },
+    "journal/equity_20260710.json": {
+      "sha256": "efe243f16ed7eaabf90a8d5f78644535983f6fc943618197da8493ae0764cf92",
+      "bytes": 537
+    },
+    "journal/equity_20260713.json": {
+      "sha256": "e0f43e21c172364adcc77e7eb9b01134909f883e762551c0eca1fa478dcbed53",
+      "bytes": 536
+    },
+    "journal/equity_20260714.json": {
+      "sha256": "23e81e582d6b41f2af662ed96500d75b1414698aa50f5e784f7c8a98e8b1ff44",
+      "bytes": 533
+    },
+    "journal/equity_20260715.json": {
+      "sha256": "0b124e038301d9afaa4c58f43cf656518ea8dfa3397ec615dd57a437a963ef5a",
+      "bytes": 536
+    },
+    "journal/equity_20260716.json": {
+      "sha256": "430dbc37eb38c4df042cf75dac9ff213a2c01cd1b50736350d5d5ae772232689",
+      "bytes": 537
+    },
+    "journal/equity_20260720.json": {
+      "sha256": "9fd46f234f695de3391a82c4cf03d9ee6a3c907f81dcd972ad8f5165858e904b",
+      "bytes": 537
+    },
+    "journal/equity_20260721.json": {
+      "sha256": "a74603c8167c2092251654bc4cc3bf0ad00edbc41373cf1335f5101fec5ef4a6",
+      "bytes": 537
+    },
+    "journal/equity_20260722.json": {
+      "sha256": "e17f38ccda6cb4045ee46864180b5f7cf841b0189728cb9cc75448cf923efdc8",
+      "bytes": 536
+    },
+    "journal/equity_20260723.json": {
+      "sha256": "8eddddcde7df0b63475886ced64d6c45fd90c3dedf17c09be7381a70a33a3a4e",
+      "bytes": 535
+    },
+    "journal/equity_20260724.json": {
+      "sha256": "2a4877de2168422f40687e9674162a10d0017bbde31eaf5fc764fabbd327efa8",
+      "bytes": 532
+    },
+    "journal/equity_20260727.json": {
+      "sha256": "e9befec7bc4879e097f14569758469fa7a13ebb3ab46be19facaf42364f32177",
+      "bytes": 535
+    },
+    "journal/equity_20260728.json": {
+      "sha256": "b54377e7e0512b464cb8a6d12209c2e8eaa5eb687ac3dedd90779da81fa6a8ea",
+      "bytes": 536
+    },
+    "journal/equity_20260729.json": {
+      "sha256": "94746ccc81189d96f74e5574ddeac9555b5b86d33318f98340de4ad3e82339c0",
+      "bytes": 535
+    },
+    "journal/equity_20260730.json": {
+      "sha256": "a4ec245288d45554be763c58b1ce01046d9a78bc9dbc0a0fae875ad30f2eaff2",
+      "bytes": 537
+    },
+    "journal/equity_20260731.json": {
+      "sha256": "9de8100e44f3af0d0d296ef16cf4896f75107a8ae95d812f8ed1f38549e78bf6",
+      "bytes": 533
+    },
+    "journal/equity_20260803.json": {
+      "sha256": "7f15da4581b9ef875869a247e394bd56fca5ba4ab50d926353db867570558e86",
+      "bytes": 536
+    },
+    "journal/equity_20260804.json": {
+      "sha256": "1a759b42a4b54b4c7447b71a9b1812cc57a85c38a322e817cbcfab82ddbd6273",
+      "bytes": 531
+    },
+    "journal/equity_20260805.json": {
+      "sha256": "685eafdf2758fa17257c95d65fc70b88297fc4358761c224b36bcc178ade325f",
+      "bytes": 536
+    },
+    "journal/equity_20260806.json": {
+      "sha256": "7a29f0b759c2d14426a3ff0936f512a484e66ee8289f055633a9886092134b9e",
+      "bytes": 533
+    },
+    "journal/equity_20260807.json": {
+      "sha256": "7ef51e55e6244f2d0517c9025c1e49f19c39777faa00422f3b305a55abd426c7",
+      "bytes": 533
+    },
+    "journal/equity_20260810.json": {
+      "sha256": "cf99cb11e2ac6dc3b1b4a225bf883210f576c738b13ccfc0930b9671f24bb0ac",
+      "bytes": 533
+    },
+    "journal/equity_20260811.json": {
+      "sha256": "5614ad90f5d7956d35b0eeff0318926c31bb867b97a55194cbde3f660646e970",
+      "bytes": 532
+    },
+    "journal/equity_20260812.json": {
+      "sha256": "c8f58a7d1ddd90c4e3db959e5eca4d318648da65e2290319491b8cd0f0bd367a",
+      "bytes": 531
+    },
+    "journal/equity_20260813.json": {
+      "sha256": "9f8ef9c9f9814b24d4f0e40c94107702927a1773891f59597aa674a15be0a641",
+      "bytes": 531
+    },
+    "journal/equity_20260814.json": {
+      "sha256": "cc085432428894124b6734174ba992dae56000cde4e47e769544a77d8aa095f4",
+      "bytes": 533
+    },
+    "journal/equity_20260818.json": {
+      "sha256": "b0af3585f9c27597b33ba158828c66699cc8767d87cb6a1e962bc1d3be8c87f7",
+      "bytes": 536
+    },
+    "journal/equity_20260819.json": {
+      "sha256": "5ce64b463c88762f4efecd5e98ed515baadf01aa2efd9958c56319fbd7db540f",
+      "bytes": 532
+    },
+    "journal/equity_20260820.json": {
+      "sha256": "df5e5625d4cc78e42f3181e738de65f2aa0e1c7d587c7e806b8ffb528a19aec0",
+      "bytes": 526
+    },
+    "journal/equity_20260821.json": {
+      "sha256": "bc11c8bc5d8b6ba0ab2e36c145a429b79f08e41fd26cb407e21a649a36b4af4c",
+      "bytes": 534
+    },
+    "journal/equity_20260824.json": {
+      "sha256": "1c9818e55b5dc29e6350f68e48f015899c8cc08d8d427e2af51e63425d4b80d0",
+      "bytes": 531
+    },
+    "journal/equity_20260825.json": {
+      "sha256": "fec54e88a8843e7904851518d0d5a0c58b4b3778726689095c6c47675eee05ec",
+      "bytes": 532
+    },
+    "journal/equity_20260826.json": {
+      "sha256": "ff7ff733ed9e04731a00c93192ca1ce256668700fa6f1f89ea8d9972bddf37ac",
+      "bytes": 532
+    },
+    "journal/equity_20260827.json": {
+      "sha256": "b7b85a8f1ba6d174ad761938bea06b9613bef6b4e2e8acade6baf1354ace25d6",
+      "bytes": 533
+    },
+    "journal/equity_20260828.json": {
+      "sha256": "515244434085830ee3ae31ba0eb6e5f9f4f363f2fe9ce6f27be4b74d583e286a",
+      "bytes": 531
+    },
+    "journal/equity_20260831.json": {
+      "sha256": "22892c9f7ffffb3b3fb4e4dbc306f57d89f7d26cd7e4b1c2da578a32ec1c2d05",
+      "bytes": 536
+    },
+    "journal/equity_20260901.json": {
+      "sha256": "beab95faa25cd0e40b9cd73079111609d10b4b7066ee0210a529b6f4968d7f51",
+      "bytes": 537
+    },
+    "journal/equity_20260902.json": {
+      "sha256": "367bd058b058a712f7eca7f89897aae59a1eabc3aff938ee73f93f2ae31482e9",
+      "bytes": 536
+    },
+    "journal/equity_20260903.json": {
+      "sha256": "a701bad6078169e621831f3885e2d9ec257f28354d026db913240ffecee6f120",
+      "bytes": 536
+    },
+    "journal/equity_20260904.json": {
+      "sha256": "32204b068c54a4e680aff653f6a5a1eaae593b9166d493f3598efd263d54f5a7",
+      "bytes": 534
+    },
+    "journal/equity_20260907.json": {
+      "sha256": "68267fe5861ebda1cdcafc1a3a81d8bf02b1e292745735773f78c64ba8c3d2e4",
+      "bytes": 534
+    },
+    "journal/equity_20260908.json": {
+      "sha256": "003b6fe0f1a88be0031e7144da5ea0f00752183c84898234d2b95652c825afde",
+      "bytes": 536
+    },
+    "journal/equity_20260909.json": {
+      "sha256": "04197f730b1c4983c012e39335095f9d227544408480e4108ffa4eec5c906c47",
+      "bytes": 535
+    },
+    "journal/equity_20260910.json": {
+      "sha256": "15e97505db9d2b2042496ba175196d5c4166bc074c61007678648de3fae019e7",
+      "bytes": 534
+    },
+    "journal/equity_20260911.json": {
+      "sha256": "5b0f6965b86d5678cac672357162c12d217a96821a5548bacadb768fc0b6b654",
+      "bytes": 536
+    },
+    "journal/equity_20260914.json": {
+      "sha256": "44c2043c29e6fcc6a3333bb9482b07ca822530058c3ed3fb59131a2060a0e06e",
+      "bytes": 533
+    },
+    "journal/equity_20260915.json": {
+      "sha256": "e4227c1df0e15e0e02fa6336ea2543b603865170a2962c90fbbb9feba64ee028",
+      "bytes": 535
+    },
+    "journal/equity_20260916.json": {
+      "sha256": "64c4befefb4fb8c61d934c503cac20a0a6666176fdda97c23d92a5c1ee1ad638",
+      "bytes": 536
+    },
+    "journal/equity_20260917.json": {
+      "sha256": "94f31de5a1a745743b4b3b2bfffb687a1822b35bf213a0d721444457d1e9e3d0",
+      "bytes": 533
+    },
+    "journal/equity_20260918.json": {
+      "sha256": "3bca466aed96500c7a46db3f8dcb794fd7426301799c97a220e12fbeda7281d3",
+      "bytes": 532
+    },
+    "journal/equity_20260921.json": {
+      "sha256": "459b2bb0fac4c6f71c475b65fcbb94cf6d960b149fb1be6649ee1f868cd0da57",
+      "bytes": 533
+    },
+    "journal/equity_20260922.json": {
+      "sha256": "1d53007fb04cb65dd4b330605b32a9fe84d43434f384f47747cbe888e5689262",
+      "bytes": 537
+    },
+    "journal/equity_20260923.json": {
+      "sha256": "5964ddf0ce69a8af3b88293d07c782cf251a812b80d1446ebc2fa191c2f13c99",
+      "bytes": 776
+    },
+    "journal/equity_20260925.json": {
+      "sha256": "0cf7d96c605b13b37890942173db2316046957cb27fe77e30b201b0daaa912b6",
+      "bytes": 770
+    },
+    "journal/equity_20260928.json": {
+      "sha256": "0695517a1c77ba7a967c92a2be57a81fb83ddd38975d74c431391deac9ff8aff",
+      "bytes": 538
+    },
+    "journal/equity_20260929.json": {
+      "sha256": "97818eb12829cb6f36f9f21946d043bd6f1bcdc778810999b17ba314c7bca576",
+      "bytes": 1029
+    },
+    "journal/equity_20260930.json": {
+      "sha256": "16915e282e496e780ae15c17a2b22d3bae74e2de01a5d5d9f3b89dcbb559bd5b",
+      "bytes": 780
+    },
+    "pit_universe/2026-08-10.json": {
+      "sha256": "564a24f192dad12b5e43f673e048472ad8618ea7f43c9f7dbef7ddfe7a9dcac2",
+      "bytes": 2168
+    },
+    "pit_universe/2026-08-11.json": {
+      "sha256": "b5dfd1318735bee07c165c82f28f422fabbb18497e981d027676299b1f9b1140",
+      "bytes": 1913
+    },
+    "pit_universe/2026-08-12.json": {
+      "sha256": "69383b0b6d20c036e477add70b4673c888719c337731ae42b878eb4785aee467",
+      "bytes": 1917
+    },
+    "pit_universe/2026-08-13.json": {
+      "sha256": "44e31afba0b15f425f5e62c2886cc3889ac936ff0d52803238b0ddb4c22c3afd",
+      "bytes": 2183
+    },
+    "pit_universe/2026-08-14.json": {
+      "sha256": "3ae6f17701beb16004713ec247ff36d90b7f4f0ebfa130e968366daf8c903833",
+      "bytes": 2116
+    },
+    "pit_universe/2026-08-18.json": {
+      "sha256": "0dfb51d08e965465f9108386c80d4571f401f39d2fba37a5d601a68f58f578c9",
+      "bytes": 2101
+    },
+    "pit_universe/2026-08-19.json": {
+      "sha256": "039612d941bdc8a2eb37f85e9ca44b238f5d39659375d4f2463c6e0cd9964367",
+      "bytes": 2179
+    },
+    "pit_universe/2026-08-20.json": {
+      "sha256": "b1da4a3faec650a76cbf6fa043f22542d016da4397a4a963a45c1f41580311dd",
+      "bytes": 2388
+    },
+    "pit_universe/2026-08-21.json": {
+      "sha256": "e9da8006299915babb6045bd0e2d96cff9cc4f46311539c4662dd195449c061d",
+      "bytes": 2262
+    },
+    "pit_universe/2026-08-24.json": {
+      "sha256": "cfce3637c76caf9e81d35c57120701863a5c600c450d3a6e47720218f3497522",
+      "bytes": 2461
+    },
+    "pit_universe/2026-08-25.json": {
+      "sha256": "8c7fc6906e86cdc1ec360138830ecbec5d14c7964040dcffa3d614d0831c7a65",
+      "bytes": 1675
+    },
+    "pit_universe/2026-08-26.json": {
+      "sha256": "5c9310facb90f262f894dc30d52f8cb3a5f8523092595db116ff4b8d54d7bbbb",
+      "bytes": 1676
+    },
+    "pit_universe/2026-08-27.json": {
+      "sha256": "f74557c2cb7eff390c9b13635274485bcae104dbfe211b23c4b279fda3c185f4",
+      "bytes": 2227
+    },
+    "pit_universe/2026-08-28.json": {
+      "sha256": "3694e766f4813f17a460829e0030c5ed913abe8a64ca732d9e92a1014ef0c6eb",
+      "bytes": 2227
+    },
+    "pit_universe/2026-08-31.json": {
+      "sha256": "d634985ed31ad60685569b4c8407a59bd9d25b108f3dc894a5a7dcce4643d135",
+      "bytes": 2105
+    },
+    "pit_universe/2026-09-01.json": {
+      "sha256": "eaf755c1cc280062a9f9e75a8043e7686da3df33db8b9db0744058e07fed7b85",
+      "bytes": 2239
+    },
+    "pit_universe/2026-09-02.json": {
+      "sha256": "5198e8f540295369028d8b833f204a8de7d4c89282101675f6b09ee6512770ca",
+      "bytes": 1993
+    },
+    "pit_universe/2026-09-03.json": {
+      "sha256": "b63f5466b1d231933401b7d9f6409f305ba38f6193ec5b026d12c48490878c61",
+      "bytes": 2589
+    },
+    "pit_universe/2026-09-04.json": {
+      "sha256": "2777ec9efd083b7aa18766940a13d288c3fa7f866e8802710532ee19b3e059b1",
+      "bytes": 2713
+    },
+    "pit_universe/2026-09-07.json": {
+      "sha256": "9118109a8df1b6038ad671657b96287f27bdd881254e7f89e15c349bb059d9c5",
+      "bytes": 2257
+    },
+    "pit_universe/2026-09-08.json": {
+      "sha256": "9d0af4e69ce60214e9290a6abb361f2343f415d765982e5f6f696ebfc4157e3b",
+      "bytes": 2516
+    },
+    "pit_universe/2026-09-09.json": {
+      "sha256": "249d07910ab715d24192b91a39bef4cbbfadff93e6876d1468fbe4f127e52e6b",
+      "bytes": 2514
+    },
+    "pit_universe/2026-09-10.json": {
+      "sha256": "deff3f03519f1d4f0b020f83fdebdcf0b4073e3cddbe57a85c356de89d69ff17",
+      "bytes": 2514
+    },
+    "pit_universe/2026-09-11.json": {
+      "sha256": "24cb758635eb4f0e9f4999e2e8fb5df7bddb9ff25bd653c9f124e4b2ef161543",
+      "bytes": 2570
+    },
+    "pit_universe/2026-09-14.json": {
+      "sha256": "db91c9f730363ad2befe7b52d75f389c35e247e1e1a72b7087d8e325ec9f3656",
+      "bytes": 2501
+    },
+    "pit_universe/2026-09-15.json": {
+      "sha256": "241769ad5342166f37affa39559034ca8aec98809c19571250b7e336c2fda736",
+      "bytes": 3103
+    },
+    "pit_universe/2026-09-16.json": {
+      "sha256": "20ef339a51c0f59895aeb4cf6565f154c97345ab58d1e949bf0563da254a9b57",
+      "bytes": 2768
+    },
+    "pit_universe/2026-09-17.json": {
+      "sha256": "46d9fd73eba070e325227573de6c4e4f6ede750a9e7da023280c05cf488c5eed",
+      "bytes": 2902
+    },
+    "pit_universe/2026-09-18.json": {
+      "sha256": "2b529f795a56cb74d6163326c6fbb6f2c11b0bdbfd3204a9bde99d6f2a19a02f",
+      "bytes": 2750
+    },
+    "pit_universe/2026-09-21.json": {
+      "sha256": "680a71373b92836b24c1c04c1c3a4a034dcd66fd2de7a5fdcf5ab7a327a95b4f",
+      "bytes": 2809
+    },
+    "pit_universe/2026-09-22.json": {
+      "sha256": "939e306663d0564867085ba0853b1250a7015fe9e71a0577726c0ddbac26460d",
+      "bytes": 2941
+    },
+    "pit_universe/2026-09-23.json": {
+      "sha256": "ebc438df6fc7e4af4fa1533ae12d7b9d24efbb87936a599b9e20fc4d358c6ba4",
+      "bytes": 3091
+    },
+    "pit_universe/2026-09-25.json": {
+      "sha256": "83f623082769cd82bba10602df2c9f9c02c1b60ca501f4bcd1751093c30333af",
+      "bytes": 3343
+    },
+    "pit_universe/2026-09-28.json": {
+      "sha256": "5f73964287c964296b6ea0f194d8e959581f3c403d19b042feae3b5757a2f9bb",
+      "bytes": 3155
+    },
+    "pit_universe/2026-09-29.json": {
+      "sha256": "32af500cef1cb8058ad93b619358c3053a84add503fc21e7824a7ce51de643d9",
+      "bytes": 2420
+    },
+    "pit_universe/2026-09-30.json": {
+      "sha256": "5fe66d743dc2b4bd7f7d7f51fcebd8dd17c8dce06f6cce7666f2b3cb1138e57d",
+      "bytes": 2692
+    },
+    "team_ledger/deliberations_20260916.jsonl": {
+      "sha256": "2d36ed708e2599e85ba25235a2f5ff270a93b6133c542b66aa81e2414778df84",
+      "bytes": 427406
+    },
+    "team_ledger/deliberations_20260917.jsonl": {
+      "sha256": "8c23a91b06063a0f67697d429c3f0219a2dd595270fc931ee6c1af871a18061c",
+      "bytes": 427440
+    },
+    "team_ledger/deliberations_20260918.jsonl": {
+      "sha256": "36c45fb41de2d14b41391e9658b2401d48068176db14502a259c0491c3c46dc5",
+      "bytes": 429571
+    },
+    "team_ledger/deliberations_20260921.jsonl": {
+      "sha256": "b7f564f74589e376ccf3e6de30debeee3fdf0fabbfcaf8b9df7511e6601e8f89",
+      "bytes": 427958
+    },
+    "team_ledger/deliberations_20260922.jsonl": {
+      "sha256": "3aefc7a0c3557f4668a582bdfd5ca1687384faaa531e1f35340215d7dd5d32fe",
+      "bytes": 649233
+    },
+    "team_ledger/deliberations_20260923.jsonl": {
+      "sha256": "036563917558f286000a5d1f48cf6d339a27e45ee1bf3c6c927bc0721ef9701b",
+      "bytes": 727611
+    },
+    "team_ledger/deliberations_20260928.jsonl": {
+      "sha256": "cc46a103cad64abab5c21e303d56ab78ad504021f65d64db58010294cecfa03d",
+      "bytes": 484986
+    },
+    "team_ledger/deliberations_20260929.jsonl": {
+      "sha256": "116c7f23a3fbecac7e2dbf4c2508b1b1d2cd6f43a5dcf00791dedf174234af82",
+      "bytes": 503909
+    },
+    "team_ledger/deliberations_20260930.jsonl": {
+      "sha256": "00cc335f2ebe59f9f48528d72a52bfbc94d9f0c42a56e6917d9600067072b37a",
+      "bytes": 577428
+    },
+    "journal/trades_20260923.json": {
+      "sha256": "c20aec9f43a595ba2f471a0ac46ec6ffeeda5b334593e64333a4e02256b8c9ef",
+      "bytes": 10017
+    },
+    "journal/trades_20260928.json": {
+      "sha256": "cc6c883713a4f523d3155a4b2de47c949589c86ff42be269db7128ae9f3d497e",
+      "bytes": 2573
+    },
+    "journal/trades_20260929.json": {
+      "sha256": "a804328a66904aa011f6ec644a5f1a9fbe637ffc44a6107acad3e2045569b80c",
+      "bytes": 4972
+    },
+    "counterfactual_state.json": {
+      "sha256": "15478a171ea7c0cf1abe61f76297c84f3606d2921c37456e87a954924f0cd5fc",
+      "bytes": 138383
+    },
+    "tca.jsonl": {
+      "sha256": "6caa80cd5aa90486bac22115a4d2ab7e24bb4e7af0ca7011cba5b949105a528b",
+      "bytes": 4877
+    },
+    "position_ledger.jsonl": {
+      "sha256": "ae4ed3029a898bf762186293ac9693b1c1eee3da3eb433f2da5fa6962ea0d9c2",
+      "bytes": 4888
+    },
+    "config/default.yml": {
+      "sha256": "81b7cd2545e18e6e40dfb1e7586310a5bd8a1ac4e599f8d05b2696569efa1938",
+      "bytes": 27336
+    },
+    "config/evolved_overrides.yml": {
+      "sha256": "4970f2bf8ebfe6c5ba408336204cde07a8c80669cc9e5ba4edb0761b670b6d68",
+      "bytes": 5898
+    }
+  },
+  "limitations": [
+    "No current-engine profit verdict.",
+    "Ledger statistics concern closed included positions only.",
+    "Original KODEX200 benchmark retained in all position groups; excluding_two_stocks is NOT a reconstructed ex-semiconductor benchmark.",
+    "Matched CF is descriptive, overlapping, gross close-based and selection-biased, not causal or out-of-sample.",
+    "Separate files are not an atomic cross-file DB snapshot."
+  ]
+}

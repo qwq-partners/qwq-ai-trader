@@ -1,0 +1,346 @@
+{
+  "schema": 1,
+  "kind": "authorized_operational_readiness_snapshot",
+  "phase": 21,
+  "date": "2026-10-01",
+  "purpose": "Prepare one same-candidate/quantity entry-price data-quality pilot; no performance claim.",
+  "authorization_scope": "User approved read-only operational version/config/resources/WS/buy-halt inspection; no deployment/restart/orders.",
+  "access": "same_host_service_no_ssh_needed",
+  "operational_snapshot": {
+    "captured_at_utc": "2026-10-01T08:14:12.660118+00:00",
+    "mode": "authorized_read_only_operational_check",
+    "access": "same_host_service_no_ssh_needed",
+    "service": {
+      "NRestarts": "0",
+      "ExecMainStartTimestamp": "Wed 2026-09-30 06:13:19 KST",
+      "WorkingDirectory": "/home/ubuntu/projects/qwq-ai-trader",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "process_identity_stable_during_read": true,
+    "startup_allowlist": {
+      "config_argument_present": true,
+      "resolved_config": "/home/ubuntu/projects/qwq-ai-trader/config/default.yml",
+      "market": "kr",
+      "dry_run": false,
+      "observation_plan_present": false
+    },
+    "on_disk_source": {
+      "head": "7ddfb52a04a65baefd5741e31c53100d1b37ed75",
+      "branch": "main",
+      "dirty_summary": {
+        "count": 1,
+        "only_known_override": true
+      },
+      "candidate_files": {
+        "src/analytics/entry_observation_runtime.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        },
+        "src/analytics/entry_observation.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        },
+        "src/analytics/entry_observation_journal.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        },
+        "src/analytics/entry_price_shadow.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        },
+        "src/analytics/received_entry_input.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        },
+        "src/analytics/entry_markout.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        },
+        "src/data/feeds/quote_subscription.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        },
+        "src/data/feeds/kis_websocket.py": {
+          "exists": true,
+          "sha256": "77bb6c2a768e73d59f5eecd8ae3332277a8f7da6f1e74634ba3c7419d8a0aad6",
+          "matches_local_candidate": false
+        },
+        "scripts/run_trader.py": {
+          "exists": true,
+          "sha256": "457f4f7203e23dda547466741e444feff4943c3f5c898e41ebddada07537c1ec",
+          "matches_local_candidate": false
+        },
+        "src/schedulers/kr_scheduler.py": {
+          "exists": true,
+          "sha256": "d4c88578c8cc8a73a579ce9256546acc4fb7d12c93743f08b02d6686c4b936bb",
+          "matches_local_candidate": false
+        },
+        "src/signals/screener/kr_screener.py": {
+          "exists": true,
+          "sha256": "d23ff11fe50198e29233d91e40ee11014e420db1750a0027e8bb29a6d35c6df2",
+          "matches_local_candidate": true
+        },
+        "src/utils/fee_calculator.py": {
+          "exists": true,
+          "sha256": "c5aa022a1d7605e66b135d78d1da9b819e200659f4f3357547df1ae39e350e6f",
+          "matches_local_candidate": true
+        },
+        "src/core/engine.py": {
+          "exists": true,
+          "sha256": "f76fae08a5b43a59afdf672b5c3a72b1d1ab584b027bfcee04e8e63501f2d638",
+          "matches_local_candidate": false
+        },
+        "config/default.yml": {
+          "exists": true,
+          "sha256": "81b7cd2545e18e6e40dfb1e7586310a5bd8a1ac4e599f8d05b2696569efa1938",
+          "matches_local_candidate": true
+        },
+        "src/analytics/entry_capital_limits.py": {
+          "exists": false,
+          "sha256": null,
+          "matches_local_candidate": false
+        }
+      },
+      "loaded_process_source_attested": false
+    },
+    "config_evidence": {
+      "files": {
+        "config/default.yml": {
+          "sha256": "81b7cd2545e18e6e40dfb1e7586310a5bd8a1ac4e599f8d05b2696569efa1938",
+          "mtime_utc": "2026-09-14T18:09:53.165133+00:00",
+          "matches_worktree": true
+        },
+        "config/evolved_overrides.yml": {
+          "sha256": "4970f2bf8ebfe6c5ba408336204cde07a8c80669cc9e5ba4edb0761b670b6d68",
+          "mtime_utc": "2026-09-25T15:00:27.185729+00:00",
+          "matches_worktree": false
+        },
+        "src/utils/config.py": {
+          "sha256": "e2a668db8d39fa0cd824b78f6de05de444c2d5541bd4f44cfb891c24eb5881dc",
+          "mtime_utc": "2026-09-14T18:09:53.193133+00:00",
+          "matches_worktree": true
+        }
+      },
+      "static_merged_risk": {
+        "sizing_mode": "risk",
+        "risk_per_trade_pct": 0.7,
+        "risk_max_position_pct": 18.0,
+        "max_position_pct": 28.0,
+        "min_cash_reserve_pct": 5.0,
+        "min_position_value": 200000,
+        "gap_and_go_allocation_pct": 5.0,
+        "core_holding_allocation_pct": 0.0
+      },
+      "scan_interval_minutes": 5,
+      "realtime_source": "rest_polling",
+      "in_memory_effective_config_attested": false
+    },
+    "kill_switch_existence": {
+      "KILL_SWITCH": false,
+      "KILL_SWITCH_KR": true,
+      "KILL_SWITCH_ALL": false,
+      "KILL_SWITCH_ALL_KR": false
+    },
+    "kr_buy_halt_file_present": true,
+    "all_orders_halt_file_present": false,
+    "host_resources": {
+      "memory": {
+        "MemTotal_KiB": 3924252,
+        "MemAvailable_KiB": 1609472,
+        "SwapTotal_KiB": 2097148,
+        "SwapFree_KiB": 1291884
+      },
+      "project_filesystem_bytes": {
+        "total": 82086711296,
+        "used": 28145479680,
+        "free": 53924454400
+      },
+      "project_directory_writable_for_inspector": true,
+      "actual_journal_directory_selected": false
+    },
+    "boundaries": {
+      "raw_argv_output": false,
+      "environment_read": false,
+      "credentials_read": false,
+      "raw_logs_or_trades_read": false,
+      "broker_api_called": false,
+      "service_mutated": false,
+      "orders_sent": false,
+      "runtime_installed": false
+    }
+  },
+  "existing_ws_summary": {
+    "kind": "authorized_existing_status_allowlist",
+    "endpoint": "http://127.0.0.1:8080/api/status",
+    "http_get_count": 2,
+    "samples": [
+      {
+        "observed_at_utc": "2026-10-01T08:15:48.291718+00:00",
+        "monotonic_ns": 5076956861177262,
+        "request_seconds": 0.002879027,
+        "websocket": {
+          "connected": false,
+          "subscribed_count": 3,
+          "message_count": 324240,
+          "last_message_time": "2026-10-01T15:37:27.324575"
+        }
+      },
+      {
+        "observed_at_utc": "2026-10-01T08:15:58.293271+00:00",
+        "monotonic_ns": 5076966862728081,
+        "request_seconds": 0.001364335,
+        "websocket": {
+          "connected": false,
+          "subscribed_count": 3,
+          "message_count": 324240,
+          "last_message_time": "2026-10-01T15:37:27.324575"
+        }
+      }
+    ],
+    "same_service_process_at_boundaries": true,
+    "elapsed_seconds": 10.001550819,
+    "inbound_text_frame_delta": 0,
+    "ws_text_frames_per_second": 0.0,
+    "krx_regular_session_rate_measured": false,
+    "book_record_rate_measured": false,
+    "server_acknowledged_registration_count": null,
+    "other_apps_session_or_registration_count": null,
+    "rate_limitations": [
+      "Two samples outside KRX regular session; no peak or regular-session BOOK-rate evidence.",
+      "Message counter includes PRICE/BOOK/ACK/errors/heartbeat text and crosses reconnects.",
+      "Subscribed count is local unique symbols, not acknowledged TR/key registrations.",
+      "Last message time is source timezone-naive string; not a verified market timestamp."
+    ],
+    "raw_response_saved": false,
+    "account_or_broker_api_called": false,
+    "state_change_requested": false
+  },
+  "runtime_config_allowlist": {
+    "observed_at_utc": "2026-10-01T08:17:31.923945+00:00",
+    "endpoint": "http://127.0.0.1:8080/api/config",
+    "http_get_count": 1,
+    "risk_fields_exposed": {
+      "max_position_pct": 28.0,
+      "min_cash_reserve_pct": 5.0
+    },
+    "risk_fields_not_exposed": [
+      "sizing_mode",
+      "risk_per_trade_pct",
+      "risk_max_position_pct",
+      "strategy_allocation"
+    ],
+    "same_service_process_at_boundaries": true,
+    "raw_response_saved": false,
+    "initial_capital_saved": false,
+    "account_or_broker_api_called": false,
+    "state_change_requested": false
+  },
+  "config_comparison": {
+    "sizing_mode": {
+      "local_worktree_static": "risk",
+      "operational_disk_static": "risk",
+      "runtime_endpoint_value": null,
+      "runtime_value_status": "not_exposed_not_absent"
+    },
+    "risk_per_trade_pct": {
+      "local_worktree_static": 0.7,
+      "operational_disk_static": 0.7,
+      "runtime_endpoint_value": null,
+      "runtime_value_status": "not_exposed_not_absent"
+    },
+    "risk_max_position_pct": {
+      "local_worktree_static": 18.0,
+      "operational_disk_static": 18.0,
+      "runtime_endpoint_value": null,
+      "runtime_value_status": "not_exposed_not_absent"
+    },
+    "max_position_pct": {
+      "local_worktree_static": 28.0,
+      "operational_disk_static": 28.0,
+      "runtime_endpoint_value": 28.0,
+      "runtime_value_status": "observed"
+    },
+    "min_cash_reserve_pct": {
+      "local_worktree_static": 5.0,
+      "operational_disk_static": 5.0,
+      "runtime_endpoint_value": 5.0,
+      "runtime_value_status": "observed"
+    },
+    "min_position_value": {
+      "local_worktree_static": 200000,
+      "operational_disk_static": 200000,
+      "runtime_endpoint_value": null,
+      "runtime_value_status": "not_exposed_not_absent"
+    },
+    "gap_and_go_allocation_pct": {
+      "local_worktree_static": 15.0,
+      "operational_disk_static": 5.0,
+      "runtime_endpoint_value": null,
+      "runtime_value_status": "not_exposed_not_absent"
+    },
+    "core_holding_allocation_pct": {
+      "local_worktree_static": 0.0,
+      "operational_disk_static": 0.0,
+      "runtime_endpoint_value": null,
+      "runtime_value_status": "not_exposed_not_absent"
+    }
+  },
+  "interpretation": {
+    "service_running": true,
+    "buy_halt_preserved": true,
+    "observation_startup_flag_present": false,
+    "observation_code_installed_on_operational_disk": false,
+    "gap_allocation_discrepancy": "Operational disk 5% vs isolated worktree 15%; preserve operational override, no increase authorized.",
+    "risk_guard_static_values_match": true,
+    "all_runtime_settings_verified": false,
+    "available_memory_gib": 1.534912109375,
+    "free_disk_gib": 50.22106170654297,
+    "resource_snapshot_is_capacity_approval": false,
+    "ws_disconnected_consistent_with_source_regular_only_policy": true,
+    "displayed_symbols_are_acknowledged_channel_count": false,
+    "regular_session_book_rate_or_burst_verified": false,
+    "other_application_same_api_key_use": "Other applications exist; user confirms only this bot uses real-time WebSocket.",
+    "financial_pnl_measured": false
+  },
+  "remaining_before_capture": [
+    "Integrate and independently review the existing local candidate without overwriting operational overrides.",
+    "Verify bot internal acknowledged channels and regular-session volume; external WS reservations set to zero on explicit user statement, not server telemetry.",
+    "Finalize future trading date/session, bounded resources, fresh journal path and exact study/source/config references.",
+    "Prepare reviewed operational installation/startup plan, including expired study arguments on subsequent automatic restart, and obtain explicit execution authorization."
+  ],
+  "source_contract_review": {
+    "requested_model": "gpt-5.6-sol",
+    "requested_effort": "high",
+    "actual_model_verified": false,
+    "effective_effort_verified": false,
+    "mode": "source_only_no_operational_data_or_tests",
+    "findings": "Existing status/config GETs read memory; WS symbol count/text frame count are not ACKed registrations/BOOK rows; risk fields absent from API are not absent from runtime."
+  },
+  "product_code_changed_this_phase": false,
+  "new_full_test_run": false,
+  "prior_test_evidence": {
+    "phase": 19,
+    "passed": 2854,
+    "xfailed": 2,
+    "warnings": 1
+  },
+  "readiness": "read_only_check_complete_capture_not_ready_not_started",
+  "user_confirmed_ws_scope": {
+    "confirmed_at_utc": "2026-10-01T08:22:02.846716+00:00",
+    "statement": "실시간 소켓은 봇에서만 사용중",
+    "same_key_external_websocket_programs": 0,
+    "external_reserved_registration_assumption": 0,
+    "basis": "explicit_user_statement_not_server_telemetry",
+    "server_side_registration_inventory_verified": false,
+    "other_apps_may_use_non_websocket_apis": true
+  }
+}

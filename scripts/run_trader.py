@@ -36,6 +36,7 @@ from src.core.types import TradingConfig, Market, MarketSession, Portfolio, Risk
 from src.core.event import EventType
 from src.core.market_context import MarketContext
 from src.utils.kis_request_metrics import with_request_source
+from src.analytics.entry_observation import capture_quote
 
 
 # ============================================================
@@ -118,11 +119,13 @@ class UnifiedTradingBot:
     각 시장의 스케줄러 태스크를 병렬 실행합니다.
     """
 
-    def __init__(self, config, dry_run: bool = False, market: str = "both"):
+    def __init__(self, config, dry_run: bool = False, market: str = "both", entry_observation_plan=None):
         self.config = config
         self.dry_run = dry_run
         self.market = market  # "kr", "us", "both"
         self.running = False
+        self._entry_observation_plan = entry_observation_plan
+        self._entry_observation_runtime = None
 
         # 통합 엔진
         self.engine = UnifiedEngine(config.trading)
@@ -841,6 +844,8 @@ class UnifiedTradingBot:
                 validator_config=_validator_cfg,
             )
             self.engine.risk_manager = engine_risk_manager
+            # 기본은 관측기 없음. 명시 주입 시에만 주문 생성 결과를 메모리에 복사한다.
+            engine_risk_manager._entry_observation_owner = self
             # 자동매도 금지 종목 세트 주입 — 포지션 교체 축출 경로 가드 (2026-08-04 P0)
             # live set 참조라 이후 add/remove_exit_exempt 변경도 즉시 반영된다.
             if self.exit_manager:
@@ -901,6 +906,7 @@ class UnifiedTradingBot:
                     from src.data.feeds.kis_websocket import KISWebSocketFeed, KISWebSocketConfig
                     self.ws_feed = KISWebSocketFeed(KISWebSocketConfig.from_env())
                     self.ws_feed.on_market_data(self._on_market_data)
+                    self.ws_feed.on_quote(self._on_entry_price_quote)
                     data_cfg = kr_cfg.get("data", self.config.get("data") or {})
                     realtime_source = data_cfg.get("realtime_source", "rest_polling")
                     if realtime_source == "rest_polling":
@@ -1506,6 +1512,39 @@ class UnifiedTradingBot:
     # 실행
     # ============================================================
 
+    async def _install_entry_observation(self):
+        plan = getattr(self, "_entry_observation_plan", None)
+        if plan is None:
+            return
+        from src.analytics.entry_observation_runtime import ObservationRuntime
+        runtime = await ObservationRuntime.install(self, plan)
+        runtime.start()
+
+    async def _close_entry_observation(self, reason):
+        runtime = getattr(self, "_entry_observation_runtime", None)
+        if runtime is None:
+            return
+        caller = asyncio.current_task()
+        cancellations = caller.cancelling()
+        try:
+            await runtime.close(reason)
+            timer = runtime.task
+            if timer is not None and timer is not caller:
+                if timer.done():
+                    if not timer.cancelled():
+                        timer.result()
+                else:
+                    try:
+                        await asyncio.shield(timer)
+                    except asyncio.CancelledError:
+                        # 관측 타이머 자체 취소와 Runner에 새로 들어온 취소를 구분한다.
+                        if not timer.cancelled() or caller.cancelling() > cancellations:
+                            raise
+        except Exception:
+            logger.exception("관측 종료 실패 — 기존 봇 종료 정리는 계속 진행")
+            self._entry_observation_close_result = {"sealed": False, "fsync_confirmed": False,
+                                                     "error": "runtime_close_failed"}
+
     async def run(self):
         """봇 실행"""
         # 초기화(DB/토큰/포지션 복원 등 수십 초)에도 SIGTERM에 응답해야 한다.
@@ -1513,12 +1552,39 @@ class UnifiedTradingBot:
         # systemd 90초 타임아웃 → SIGKILL이 된다.
         self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
+        self._stop_requested = False
 
-        if not await self.initialize():
+        plan = getattr(self, "_entry_observation_plan", None)
+        if plan is not None:
+            from datetime import timezone
+            if self.market not in ("kr", "both") or self.dry_run:
+                raise ValueError("명시 관측은 KR 피드 전용이며 주문 없는 실행 모드가 아님")
+            plan.validate(now=datetime.now(timezone.utc))
+
+        try:
+            if not await self.initialize():
+                if plan is not None:
+                    raise RuntimeError("명시 관측 Runner 초기화 실패")
+                return
+        except BaseException:
+            if plan is not None:
+                await self.shutdown()
+            raise
+
+        if self._stop_requested or self._stop_event.is_set():
+            logger.warning("[종료] 초기화 중 종료 신호 수신 → 태스크 시작 없이 종료")
+            await self.shutdown()
             return
 
-        if self._stop_event.is_set():
-            logger.warning("[종료] 초기화 중 종료 신호 수신 → 태스크 시작 없이 종료")
+        try:
+            await self._install_entry_observation()
+        except BaseException:
+            await self._close_entry_observation("installation_failed")
+            await self.shutdown()
+            raise
+
+        if self._stop_requested or self._stop_event.is_set():
+            await self._close_entry_observation("startup_stopped")
             await self.shutdown()
             return
 
@@ -1573,6 +1639,11 @@ class UnifiedTradingBot:
                     self.ws_feed.run(), name="kr_ws_feed"
                 ))
 
+            # 관측 타이머는 이 gather에 넣지 않는다. 관측 종료가 봇 종료가 되지 않는다.
+            runtime = getattr(self, "_entry_observation_runtime", None)
+            if runtime is not None:
+                runtime.watch_tasks(tasks)
+
             # 모든 태스크 실행
             if tasks:
                 logger.info(f"총 {len(tasks)}개 태스크 시작")
@@ -1598,52 +1669,61 @@ class UnifiedTradingBot:
                             logger.error(f"[태스크 종료] {task_name} 예외 발생: {result}")
                 else:
                     logger.info("[종료] 신호 수신 → 실행 중 태스크 즉시 취소")
+                    await self._close_entry_observation("runner_shutdown")
                     gather_task.cancel()
 
 
         except Exception as e:
             logger.exception(f"실행 오류: {e}")
         finally:
-            # 모든 태스크 안전 종료 (취소에 응답하지 않는 태스크가 있어도 20초 후 진행)
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            if tasks:
-                # gather 대신 wait: 태스크 예외를 되던지지 않고 (done, pending)만 돌려주므로
-                # "무엇이 안 끝났는지"를 정확히 로깅할 수 있다.
-                try:
-                    _done, pending = await asyncio.wait(tasks, timeout=15)
-                    if pending:
-                        stuck = [t.get_name() for t in pending]
-                        logger.warning(
-                            f"[종료] 15초 내 미종료 태스크 {len(stuck)}개 → 강제 진행: {stuck[:5]}"
-                        )
-                except Exception as e:
-                    logger.debug(f"[종료] 태스크 정리 중 예외 (무시): {e}")
-
-            # 보조 Future(gather/stop_waiter)에 담긴 CancelledError를 읽어 회수한다.
-            # asyncio.wait는 "끝났는지"만 알려줄 뿐 예외를 꺼내지 않아, 회수하지 않으면
-            # GC 시점에 "_GatheringFuture exception was never retrieved"가 남는다.
-            # 자식 태스크 정리가 끝난 이 시점이라야 실제로 done 상태다.
-            for _fut in (gather_task, stop_waiter):
-                if _fut is None:
-                    continue
-                if not _fut.done():
-                    _fut.cancel()
+            # 피드 task의 finally가 연결 공백을 기록하기 전에 수집 종료를 고정한다.
+            try:
+                await self._close_entry_observation("runner_shutdown")
+            finally:
+                # 모든 태스크 안전 종료 (취소에 응답하지 않는 태스크가 있어도 20초 후 진행)
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                if tasks:
+                    # gather 대신 wait: 태스크 예외를 되던지지 않고 (done, pending)만 돌려주므로
+                    # "무엇이 안 끝났는지"를 정확히 로깅할 수 있다.
                     try:
-                        await asyncio.wait({_fut}, timeout=2)
-                    except Exception:
-                        pass
-                if _fut.done():
-                    try:
-                        _fut.result()
-                    except BaseException:
-                        pass
+                        _done, pending = await asyncio.wait(tasks, timeout=15)
+                        if pending:
+                            stuck = [t.get_name() for t in pending]
+                            logger.warning(
+                                f"[종료] 15초 내 미종료 태스크 {len(stuck)}개 → 강제 진행: {stuck[:5]}"
+                            )
+                    except Exception as e:
+                        logger.debug(f"[종료] 태스크 정리 중 예외 (무시): {e}")
 
-            await self.shutdown()
+                # 보조 Future(gather/stop_waiter)에 담긴 CancelledError를 읽어 회수한다.
+                # asyncio.wait는 "끝났는지"만 알려줄 뿐 예외를 꺼내지 않아, 회수하지 않으면
+                # GC 시점에 "_GatheringFuture exception was never retrieved"가 남는다.
+                # 자식 태스크 정리가 끝난 이 시점이라야 실제로 done 상태다.
+                for _fut in (gather_task, stop_waiter):
+                    if _fut is None:
+                        continue
+                    if not _fut.done():
+                        _fut.cancel()
+                        try:
+                            await asyncio.wait({_fut}, timeout=2)
+                        except Exception:
+                            pass
+                    if _fut.done():
+                        try:
+                            _fut.result()
+                        except BaseException:
+                            pass
+
+                await self.shutdown()
 
     def stop(self):
         """봇 중지 (시그널 핸들러에서 호출되므로 블로킹 금지)"""
+        self._stop_requested = True
+        runtime = getattr(self, "_entry_observation_runtime", None)
+        if runtime is not None:
+            runtime.interrupt("runner_stop_requested")
         self.running = False
         self.engine.stop()
 
@@ -1658,45 +1738,48 @@ class UnifiedTradingBot:
 
     async def shutdown(self):
         """종료 처리"""
-        logger.info("=== QWQ AI Trader 통합 봇 종료 ===")
-        self.running = False
+        try:
+            await self._close_entry_observation("runner_shutdown")
+        finally:
+            logger.info("=== QWQ AI Trader 통합 봇 종료 ===")
+            self.running = False
 
-        # KR 컨텍스트 종료
-        if self.broker:
-            try:
-                await self.broker.disconnect()
-            except Exception as e:
-                logger.error(f"KR 브로커 연결 해제 실패: {e}")
+            # KR 컨텍스트 종료
+            if self.broker:
+                try:
+                    await self.broker.disconnect()
+                except Exception as e:
+                    logger.error(f"KR 브로커 연결 해제 실패: {e}")
 
-        # US 컨텍스트 종료
-        if self._us_engine and self._us_engine.broker:
-            try:
-                await self._us_engine.broker.disconnect()
-            except Exception as e:
-                logger.error(f"US 브로커 연결 해제 실패: {e}")
+            # US 컨텍스트 종료
+            if self._us_engine and self._us_engine.broker:
+                try:
+                    await self._us_engine.broker.disconnect()
+                except Exception as e:
+                    logger.error(f"US 브로커 연결 해제 실패: {e}")
 
-        # 대시보드 종료
-        if self.dashboard:
-            try:
-                await self.dashboard.stop()
-            except Exception as e:
-                logger.error(f"대시보드 종료 실패: {e}")
+            # 대시보드 종료
+            if self.dashboard:
+                try:
+                    await self.dashboard.stop()
+                except Exception as e:
+                    logger.error(f"대시보드 종료 실패: {e}")
 
-        # WebSocket 종료
-        if self.ws_feed:
-            try:
-                await self.ws_feed.disconnect()
-            except Exception as e:
-                logger.error(f"KR WebSocket 종료 실패: {e}")
+            # WebSocket 종료
+            if self.ws_feed:
+                try:
+                    await self.ws_feed.disconnect()
+                except Exception as e:
+                    logger.error(f"KR WebSocket 종료 실패: {e}")
 
-        # 토큰 매니저 정리
-        if self._token_manager:
-            try:
-                await self._token_manager.close()
-            except Exception as e:
-                logger.error(f"토큰 매니저 종료 실패: {e}")
+            # 토큰 매니저 정리
+            if self._token_manager:
+                try:
+                    await self._token_manager.close()
+                except Exception as e:
+                    logger.error(f"토큰 매니저 종료 실패: {e}")
 
-        logger.info("종료 완료")
+            logger.info("종료 완료")
 
     # ============================================================
     # KR 헬퍼 메서드 (KRScheduler가 접근하는 인터페이스)
@@ -1919,6 +2002,10 @@ class UnifiedTradingBot:
         except Exception:
             pass
 
+    async def _on_entry_price_quote(self, event):
+        """명시 주입한 메모리 관측기만 사용한다. 구독·파일·정책을 추가하지 않는다."""
+        capture_quote(getattr(self, "_entry_price_observer", None), event)
+
     async def _on_market_data(self, event):
         """KR WebSocket 시장 데이터 콜백"""
         try:
@@ -2115,12 +2202,39 @@ def parse_args():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="로그 레벨"
     )
+    observation = parser.add_mutually_exclusive_group()
+    observation.add_argument(
+        "--entry-observation-plan", type=str, default=None,
+        help="명시 study 경로/지문 manifest. 기본 비활성; 주문 없는 실행 모드가 아님"
+    )
+    observation.add_argument(
+        "--entry-observation-once", type=str, default=None,
+        help="명시 시작 구간에서 한 번만 관측을 설치하는 요청 파일; 실패해도 시도는 소비됨"
+    )
     return parser.parse_args()
+
+
+def load_entry_observation_plan(args):
+    """Resolve optional capture before logger/config/API initialization."""
+    manifest = args.entry_observation_plan
+    once = args.entry_observation_once
+    if manifest is None and once is None:
+        return None
+    if args.market not in ("kr", "both") or args.dry_run:
+        raise ValueError("명시 관측은 KR 실제 피드 전용")
+    if once is not None:
+        from src.analytics.entry_observation_startup import claim_once_manifest
+        manifest = claim_once_manifest(once)
+    if manifest is None:
+        return None
+    from src.analytics.entry_observation_runtime import CapturePlan
+    return CapturePlan.load(manifest)
 
 
 async def main():
     """메인 함수"""
     args = parse_args()
+    entry_observation_plan = load_entry_observation_plan(args)
 
     # 로거 설정
     try:
@@ -2183,7 +2297,8 @@ async def main():
         sys.exit(1)
 
     # 봇 실행
-    bot = UnifiedTradingBot(config, dry_run=args.dry_run, market=args.market)
+    bot = UnifiedTradingBot(config, dry_run=args.dry_run, market=args.market,
+                            entry_observation_plan=entry_observation_plan)
     try:
         await bot.run()
     finally:

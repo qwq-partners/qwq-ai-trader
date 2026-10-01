@@ -1,0 +1,186 @@
+{
+  "captured_at_utc": "2026-09-30T11:44:54.862216+00:00",
+  "method": "Unauthenticated GET from official Samsung fund website; sampled dates only; not index return series.",
+  "dates": [
+    {
+      "requested_date": "2023.03.31",
+      "returned_date": "20230331",
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2023.03.31",
+      "response_sha256": "5a462ac2cff776ddc3db18b9c5ee84d0f2fb4993fb24fd20d46f4e05507802f9",
+      "rows": 199,
+      "selected": {
+        "005930": {
+          "secNm": "삼성전자",
+          "evalA": "462687200",
+          "applyQ": "7321",
+          "ratio": "29.1",
+          "curp": "268500",
+          "risep": "-4000"
+        },
+        "000660": {
+          "secNm": "SK하이닉스",
+          "evalA": "77344800",
+          "applyQ": "871",
+          "ratio": "4.87",
+          "curp": "1776000",
+          "risep": "11000"
+        }
+      },
+      "combined_reported_ratio_pct": 33.97
+    },
+    {
+      "requested_date": "2025.09.30",
+      "returned_date": "20250930",
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.09.30",
+      "response_sha256": "101e1d479bdf89ec474c90c36e2d843b7f1f27d5dee0454a53253678db29fdb2",
+      "rows": 201,
+      "selected": {
+        "005930": {
+          "secNm": "삼성전자",
+          "evalA": "597651600",
+          "applyQ": "7098",
+          "ratio": "25.08",
+          "curp": "268500",
+          "risep": "-4000"
+        },
+        "000660": {
+          "secNm": "SK하이닉스",
+          "evalA": "296999000",
+          "applyQ": "851",
+          "ratio": "12.47",
+          "curp": "1776000",
+          "risep": "11000"
+        }
+      },
+      "combined_reported_ratio_pct": 37.55
+    },
+    {
+      "requested_date": "2026.03.03",
+      "returned_date": "20260303",
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2026.03.03",
+      "response_sha256": "ff3c197880742a6d22ea3640166d38da957743ce3341df286827affea5d6e676",
+      "rows": 201,
+      "selected": {
+        "005930": {
+          "secNm": "삼성전자",
+          "evalA": "1522861000",
+          "applyQ": "7034",
+          "ratio": "32.51",
+          "curp": "268500",
+          "risep": "-4000"
+        },
+        "000660": {
+          "secNm": "SK하이닉스",
+          "evalA": "876386000",
+          "applyQ": "826",
+          "ratio": "18.71",
+          "curp": "1776000",
+          "risep": "11000"
+        }
+      },
+      "combined_reported_ratio_pct": 51.22
+    },
+    {
+      "requested_date": "2026.09.23",
+      "returned_date": "20260923",
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2026.09.23",
+      "response_sha256": "ddac5711dd2ff4fccb23669e0018b2f9b21f16d3ad6d132a74a5d490e4b06d1b",
+      "rows": 202,
+      "selected": {
+        "005930": {
+          "secNm": "삼성전자",
+          "evalA": "1916145000",
+          "applyQ": "6930",
+          "ratio": "34.24",
+          "curp": "268500",
+          "risep": "-4000"
+        },
+        "000660": {
+          "secNm": "SK하이닉스",
+          "evalA": "1552960000",
+          "applyQ": "844",
+          "ratio": "27.75",
+          "curp": "1776000",
+          "risep": "11000"
+        }
+      },
+      "combined_reported_ratio_pct": 61.99
+    },
+    {
+      "requested_date": "2026.09.29",
+      "returned_date": "20260929",
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2026.09.29",
+      "response_sha256": "f5933b585741582aff78a1d6db9d7e2b9d21cc5678390b0125641c2a5495fd32",
+      "rows": 202,
+      "selected": {
+        "005930": {
+          "secNm": "삼성전자",
+          "evalA": "1881630000",
+          "applyQ": "6969",
+          "ratio": "34.18",
+          "curp": "268500",
+          "risep": "-4000"
+        },
+        "000660": {
+          "secNm": "SK하이닉스",
+          "evalA": "1501032000",
+          "applyQ": "849",
+          "ratio": "27.27",
+          "curp": "1776000",
+          "risep": "11000"
+        }
+      },
+      "combined_reported_ratio_pct": 61.45
+    }
+  ],
+  "warnings": [
+    "PDF creation/redemption basket proxy, not an official reconstructed KOSPI200 index or audited actual holdings.",
+    "ratio is rounded and excludes cash/deposits; evalA/applyQ effective-date semantics require validation.",
+    "curp/risep are present-time fields even for historical requests: forbidden as historical prices.",
+    "Only five dates verified; no full year daily history or ex-semiconductor return computed."
+  ],
+  "single_date_price_semantics_probe": {
+    "005930": {
+      "implied_eval_price": 276500.0,
+      "local_cached_prices": [
+        {
+          "date": "2026-09-21",
+          "open": "264000",
+          "close": "275000"
+        },
+        {
+          "date": "2026-09-22",
+          "open": "283000",
+          "close": "277500"
+        },
+        {
+          "date": "2026-09-23",
+          "open": "284500",
+          "close": "286500"
+        }
+      ],
+      "local_price_file_sha256": "001bf21e59b4a46163363c5435d7a39638313b876b10962864b8c3b0b5f3c94c"
+    },
+    "000660": {
+      "implied_eval_price": 1840000.0,
+      "local_cached_prices": [
+        {
+          "date": "2026-09-21",
+          "open": "1872000",
+          "close": "1879000"
+        },
+        {
+          "date": "2026-09-22",
+          "open": "1909000",
+          "close": "1841000"
+        },
+        {
+          "date": "2026-09-23",
+          "open": "1899000",
+          "close": "1863000"
+        }
+      ],
+      "local_price_file_sha256": "759995770305007b93e97c816b8a92de91562764360b229a49d829b1a12f0df2"
+    }
+  }
+}
