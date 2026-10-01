@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import inspect
 import os
 import re
 from dataclasses import dataclass, field
@@ -34,6 +35,7 @@ from src.data.providers.kis_market_data import KISMarketData, get_kis_market_dat
 from src.indicators.atr import calculate_atr
 from src.indicators.technical import TechnicalIndicators
 from src.analytics.selection_basis import SelectionBasisBuilder
+from src.analytics.selection_source_status import SourceCapture, mark_source
 
 
 # ============================================================
@@ -42,6 +44,21 @@ from src.analytics.selection_basis import SelectionBasisBuilder
 NAVER_FINANCE_BASE = "https://finance.naver.com"
 NAVER_VOLUME_RANK = f"{NAVER_FINANCE_BASE}/sise/sise_quant.naver"       # 거래량 상위
 NAVER_RISE_RANK = f"{NAVER_FINANCE_BASE}/sise/sise_rise.naver"         # 상승률 상위
+
+
+def _mark_selection_source(event: str, **kwargs) -> None:
+    """관측 sink 실패가 기존 선정 반환값을 바꾸지 않게 한다."""
+    try:
+        mark_source(event, **kwargs)
+    except Exception:
+        pass
+
+
+def _selection_cache_age(cache_times: Dict[str, datetime], key: str) -> Optional[float]:
+    try:
+        return (datetime.now() - cache_times[key]).total_seconds()
+    except Exception:
+        return None
 
 
 @dataclass
@@ -184,6 +201,7 @@ class StockScreener:
         """
         cache_key = "premarket_gap"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key][:limit]
 
         stocks = []
@@ -232,6 +250,7 @@ class StockScreener:
             return stocks[:limit]
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.warning(f"[Screener] 프리마켓 갭 스캔 오류: {e}")
             return stocks
 
@@ -247,6 +266,7 @@ class StockScreener:
         """
         cache_key = "volume_surge"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key]
 
         stocks = []
@@ -281,16 +301,22 @@ class StockScreener:
             await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
+                    _mark_selection_source("error", reason="http")
                     logger.error(f"거래량 순위 조회 실패: {resp.status}")
                     return stocks
 
                 data = await resp.json()
 
                 if data.get("rt_cd") != "0":
+                    _mark_selection_source("error", reason="api")
                     logger.warning(f"거래량 순위 API 오류: {data.get('msg1')}")
                     return stocks
 
                 output = data.get("output", [])
+                if "output" not in data or not isinstance(output, list):
+                    _mark_selection_source("error", reason="schema")
+                else:
+                    _mark_selection_source("payload", count=len(output))
                 no_ratio = 0   # 거래량 비율 산출 불가 건수 (조용한 전량 탈락 감지용)
 
                 for item in output[:limit]:
@@ -359,6 +385,7 @@ class StockScreener:
             return stocks
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"거래량 스크리닝 오류: {e}")
             return stocks
 
@@ -374,6 +401,7 @@ class StockScreener:
         """
         cache_key = "institutional_buying"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key][:limit]
 
         stocks = []
@@ -438,6 +466,7 @@ class StockScreener:
             return stocks[:limit]
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"기관 순매수 스크리닝 오류: {e}")
             return stocks
 
@@ -453,6 +482,7 @@ class StockScreener:
         """
         cache_key = "new_highs"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key]
 
         stocks = []
@@ -481,6 +511,7 @@ class StockScreener:
             await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
+                    _mark_selection_source("error", reason="http")
                     logger.error(f"신고가 종목 조회 실패: {resp.status}")
                     return stocks
 
@@ -488,6 +519,7 @@ class StockScreener:
 
                 rt_cd = data.get("rt_cd")
                 if rt_cd != "0":
+                    _mark_selection_source("error", reason="api")
                     if rt_cd:
                         logger.warning(
                             f"신고가 API 오류: rt_cd={rt_cd}, "
@@ -498,6 +530,10 @@ class StockScreener:
                     return stocks
 
                 output = data.get("output", [])
+                if "output" not in data or not isinstance(output, list):
+                    _mark_selection_source("error", reason="schema")
+                else:
+                    _mark_selection_source("payload", count=len(output))
 
                 for item in output[:limit]:
                     symbol = item.get("mksc_shrn_iscd", "").zfill(6)
@@ -535,6 +571,7 @@ class StockScreener:
             return stocks
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"신고가 스크리닝 오류: {type(e).__name__}: {e}")
             return stocks
 
@@ -550,6 +587,7 @@ class StockScreener:
         """
         cache_key = "fluctuation_rank"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key][:limit]
 
         stocks = []
@@ -595,6 +633,7 @@ class StockScreener:
             return stocks[:limit]
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"등락률 순위 스크리닝 오류: {e}")
             return stocks
 
@@ -610,6 +649,7 @@ class StockScreener:
         """
         cache_key = "foreign_buying"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key][:limit]
 
         stocks = []
@@ -677,6 +717,7 @@ class StockScreener:
             return stocks[:limit]
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"외국인 순매수 스크리닝 오류: {e}")
             return stocks
 
@@ -1457,13 +1498,16 @@ class StockScreener:
             # 갉아먹고 있었다(슬롯 1개 + MIN_GAP 100ms 를 매 호출 소모).
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
+                    _mark_selection_source("error", reason="http")
                     logger.warning(f"네이버 금융 크롤링 실패: {resp.status}")
                     return None
 
                 html = await resp.text()
+                _mark_selection_source("payload", count=None)
                 return BeautifulSoup(html, "html.parser")
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"네이버 크롤링 오류: {e}")
             return None
 
@@ -1479,6 +1523,7 @@ class StockScreener:
             if not table:
                 table = soup.select_one("table.type_2, table.type2, div.box_type_l table")
             if not table:
+                _mark_selection_source("error", reason="schema")
                 logger.warning(f"[스크리너] 네이버 금융 테이블 구조 변경 감지 ('{reason_prefix}' 파싱 실패)")
                 return stocks
 
@@ -1488,6 +1533,9 @@ class StockScreener:
                 try:
                     cols = row.find_all("td")
                     if len(cols) < 10:
+                        if any(re.search(r"code=\d{6}", a.get("href", ""))
+                               for a in row.find_all("a")):
+                            _mark_selection_source("error", reason="schema")
                         continue
 
                     # 종목명/코드 추출
@@ -1509,6 +1557,7 @@ class StockScreener:
                     try:
                         price = float(price_text)
                     except (ValueError, TypeError):
+                        _mark_selection_source("error", reason="parse")
                         price = 0
 
                     # 등락률
@@ -1516,11 +1565,16 @@ class StockScreener:
                     try:
                         change_pct = float(change_pct_text)
                     except (ValueError, TypeError):
+                        _mark_selection_source("error", reason="parse")
                         change_pct = 0
 
                     # 거래량
                     volume_text = cols[5].text.strip().replace(",", "")
-                    volume = int(volume_text) if volume_text.isdigit() else 0
+                    if volume_text.isdigit():
+                        volume = int(volume_text)
+                    else:
+                        _mark_selection_source("error", reason="parse")
+                        volume = 0
 
                     # 필터링
                     if change_pct < 0:  # 하락 종목 제외
@@ -1546,9 +1600,11 @@ class StockScreener:
                     ))
 
                 except Exception as e:
+                    _mark_selection_source("error", reason="parse")
                     continue
 
         except Exception as e:
+            _mark_selection_source("error", reason="parse")
             logger.error(f"네이버 테이블 파싱 오류: {e}")
 
         return stocks
@@ -1561,6 +1617,7 @@ class StockScreener:
         """
         cache_key = "naver_volume"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key]
 
         stocks = []
@@ -1583,6 +1640,7 @@ class StockScreener:
             return stocks
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"네이버 거래량 크롤링 오류: {e}")
             return stocks
 
@@ -1594,6 +1652,7 @@ class StockScreener:
         """
         cache_key = "naver_rise"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key]
 
         stocks = []
@@ -1616,6 +1675,7 @@ class StockScreener:
             return stocks
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"네이버 상승률 크롤링 오류: {e}")
             return stocks
 
@@ -1628,6 +1688,7 @@ class StockScreener:
         """
         cache_key = "naver_new_high"
         if self._is_cache_valid(cache_key):
+            _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key]
 
         # 신고가 페이지 없음 - 상승률 상위에서 높은 등락률 종목으로 대체
@@ -1656,6 +1717,7 @@ class StockScreener:
             return stocks
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"네이버 신고가 후보 추출 오류: {e}")
             return stocks
 
@@ -1757,9 +1819,17 @@ class StockScreener:
             from src.utils.llm import LLMTask
             result = await llm_manager.complete_json(prompt, task=LLMTask.THEME_DETECTION)
 
-            if "error" in result:
+            if not isinstance(result, dict):
+                _mark_selection_source("error", reason="schema")
+            elif "error" in result:
+                _mark_selection_source("error", reason="api")
                 logger.error(f"뉴스 종목 추출 LLM 오류: {result.get('error')}")
                 return stocks
+
+            if not isinstance(result, dict) or "stocks" not in result or not isinstance(result.get("stocks"), list):
+                _mark_selection_source("error", reason="schema")
+            else:
+                _mark_selection_source("payload", count=len(result["stocks"]))
 
             for item in result.get("stocks", []):
                 name = str(item.get("name", "")).strip()
@@ -1793,6 +1863,7 @@ class StockScreener:
             return stocks
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"뉴스 종목 추출 오류: {e}")
             return stocks
 
@@ -1813,6 +1884,7 @@ class StockScreener:
         overnight_sentiment: Optional[str] = None,
         overnight_volatility: Optional[float] = None,
         capture_selection: bool = False,
+        capture_selection_sources: bool = False,
     ) -> List[ScreenedStock]:
         """
         모든 스크리닝 실행 및 통합
@@ -1837,6 +1909,30 @@ class StockScreener:
                 basis = SelectionBasisBuilder()
             except Exception:
                 logger.warning("[선정관측] 초기화 실패 — 선정 흐름 유지")
+
+        selection_sources = None
+        if capture_selection_sources is True:
+            try:
+                selection_sources = SourceCapture()
+            except Exception:
+                logger.warning("[원천관측] 초기화 실패 — 선정 흐름 유지")
+
+        async def call_source(source_id, func, *args, **kwargs):
+            if selection_sources is not None:
+                # SourceCapture가 함수 호출과 await를 한 번만 맡아 ContextVar를 전달한다.
+                return await selection_sources.call(source_id, func, *args, **kwargs)
+            result = func(*args, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        def wrap_selection_sources(stocks, *, fallback=False):
+            if selection_sources is None:
+                return stocks
+            try:
+                return selection_sources.wrap(stocks, fallback=fallback)
+            except Exception:
+                return stocks
 
         def observe_basis(method, *args):
             nonlocal basis
@@ -1882,7 +1978,7 @@ class StockScreener:
         now_hour = datetime.now().hour
         if 8 <= now_hour <= 9:
             try:
-                gap_stocks = await self.screen_premarket_gap(limit=15, min_gap_pct=2.0)
+                gap_stocks = await call_source("premarket_gap", self.screen_premarket_gap, limit=15, min_gap_pct=2.0)
                 for rank, stock in enumerate(gap_stocks, 1):
                     merge_stock(stock, 0.5, "premarket_gap", rank)
             except Exception as e:
@@ -1892,11 +1988,11 @@ class StockScreener:
         # 1. KIS API 스크리닝 (병렬 호출)
         # ============================================================
         kis_results = await asyncio.gather(
-            self.screen_volume_surge(limit=20),
-            self.screen_institutional_buying(limit=20),
-            self.screen_new_highs(limit=15),
-            self.screen_fluctuation_rank(limit=20),
-            self.screen_foreign_buying(limit=20),
+            call_source("kis_volume_surge", self.screen_volume_surge, limit=20),
+            call_source("kis_institutional_buying", self.screen_institutional_buying, limit=20),
+            call_source("kis_new_highs", self.screen_new_highs, limit=15),
+            call_source("kis_fluctuation_rank", self.screen_fluctuation_rank, limit=20),
+            call_source("kis_foreign_buying", self.screen_foreign_buying, limit=20),
             return_exceptions=True,
         )
 
@@ -1937,8 +2033,8 @@ class StockScreener:
 
             # naver_volume + naver_rise 병렬 (naver_new_high는 naver_rise 캐시 의존)
             naver_vr = await asyncio.gather(
-                self.naver_volume_rank(limit=20),
-                self.naver_rise_rank(limit=20),
+                call_source("naver_volume_rank", self.naver_volume_rank, limit=20),
+                call_source("naver_rise_rank", self.naver_rise_rank, limit=20),
                 return_exceptions=True,
             )
 
@@ -1953,7 +2049,7 @@ class StockScreener:
 
             # 신고가 후보 (naver_rise 캐시 활용)
             try:
-                naver_high = await self.naver_new_high(limit=15)
+                naver_high = await call_source("naver_new_high", self.naver_new_high, limit=15)
                 for rank, stock in enumerate(naver_high, 1):
                     merge_stock(stock, 0.4 * naver_weight, "naver_new_high", rank)
             except Exception as e:
@@ -1965,7 +2061,7 @@ class StockScreener:
         # theme_detector가 있으면 호재 종목을 직접 추가 (LLM 호출 스킵으로 중복 제거)
         if theme_detector:
             try:
-                sentiments = theme_detector.get_all_stock_sentiments()
+                sentiments = await call_source("theme_news", theme_detector.get_all_stock_sentiments)
                 news_added = 0
                 for rank, (symbol, data) in enumerate(sentiments.items(), 1):
                     # impact: -10 ~ +10 스케일 (방향 + 강도 통합)
@@ -1991,7 +2087,7 @@ class StockScreener:
             except Exception as e:
                 logger.warning(f"[Screener] theme_detector 연동 오류: {e}")
         elif llm_manager and news_titles:
-            news_stocks = await self.extract_stocks_from_news(news_titles, llm_manager)
+            news_stocks = await call_source("llm_news", self.extract_stocks_from_news, news_titles, llm_manager)
             for rank, stock in enumerate(news_stocks, 1):
                 merge_stock(stock, 0.5, "llm_news", rank)
                 # 뉴스 보너스
@@ -2289,9 +2385,9 @@ class StockScreener:
                         stock.selection_basis["cache_fallback"] = True
                     elif capture_selection is not True:
                         stock.selection_basis = None
-                return fallback
+                return wrap_selection_sources(fallback, fallback=True)
 
-        return result
+        return wrap_selection_sources(result)
 
     # ============================================================
     # 캐시 관리

@@ -185,13 +185,13 @@ def test_observed_emit_preserves_event_and_original_success_or_failure(fail):
 
 
 @pytest.mark.parametrize("subscription_failure", [False, True])
-@pytest.mark.parametrize("selection_enabled", [False, True])
+@pytest.mark.parametrize("selection_enabled", [None, 'selection-basis-v1', 'selection-basis-v2'])
 def test_real_screen_loop_records_before_strategy_gate(monkeypatch, subscription_failure, selection_enabled):
     """운영 초기화 없이 실제 루프를 한 번 실행, 비활성 전략 후보도 분모에 남는다."""
     from loguru import logger
     from src.core.types import MarketSession
     m=observation()
-    settings = {'version':'selection-basis-v1','max_candidates':100,'max_source_terms':16} if selection_enabled else None
+    settings = {'version':selection_enabled,'max_candidates':100,'max_source_terms':16} if selection_enabled else None
     b=m.EntryObservationBuffer(evaluation_epoch="fixed-v1",capacity=10,selection_basis_settings=settings)
     stocks=[SimpleNamespace(symbol="S",name="합성",price=10000,score=80,change_pct=1,reasons=[])]
     screening_args=[]
@@ -221,7 +221,8 @@ def test_real_screen_loop_records_before_strategy_gate(monkeypatch, subscription
     obj=SimpleNamespace(bot=bot,_get_current_session=lambda:MarketSession.REGULAR)
     asyncio.run(scope['run_screening'](obj))
     assert bot._last_screened is stocks
-    assert (screening_args[0].get("capture_selection") is True) is selection_enabled
+    assert (screening_args[0].get("capture_selection") is True) is bool(selection_enabled)
+    assert (screening_args[0].get("capture_selection_sources") is True) is (selection_enabled == 'selection-basis-v2')
     assert bot._watch_symbols == ["S"]
     assert b.export()["complete"] is (not subscription_failure)
     scan=b.export()["records"][0]
