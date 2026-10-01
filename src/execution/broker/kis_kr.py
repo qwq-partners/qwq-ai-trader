@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import aiohttp
@@ -105,6 +106,26 @@ def _is_clean_id(value) -> bool:
     return isinstance(value, str) and value != "" and value == value.strip()
 
 
+def _reconciliation_activity(method):
+    """주문 실행을 직렬화하거나 지연하지 않고 로컬 주문 활동을 표시한다."""
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        # 초기화를 건너뛴 adapter에는 임의의 idle 기준을 만들지 않는다.
+        # 기존 메서드는 그대로 실행하되 reconciliation_token은 미지원으로 남긴다.
+        tracked = (type(getattr(self, '_reconciliation_generation', None)) is int
+                   and type(getattr(self, '_reconciliation_active', None)) is int)
+        if tracked:
+            self._reconciliation_generation += 1
+            self._reconciliation_active += 1
+        try:
+            return await method(self, *args, **kwargs)
+        finally:
+            if tracked:
+                self._reconciliation_active -= 1
+                self._reconciliation_generation += 1
+    return wrapped
+
+
 def _accept_identity(odno, orgno, session: str, source: str) -> dict:
     """감사 원장 EV_ACCEPT 에 붙일 주문 신원 (2026-09-29). 접수 성공 뒤에 부르므로 JSON 기본형·내부 문자열 입력에서
     예외를 내지 않는다(str 하위 클래스 등 임의 객체는 보장 밖; 예외면 posted 뒤 경로가 성공 주문을 접수 불명으로 바꾼다).
@@ -150,6 +171,8 @@ class KISBroker(BaseBroker):
         self._pending_orders: Dict[str, Order] = {}
         self._order_id_to_kis_no: Dict[str, str] = {}
         self._order_id_to_orgno: Dict[str, str] = {}
+        self._reconciliation_generation = 0
+        self._reconciliation_active = 0
 
         # NXT 거래 가능 종목 캐시
         self._nxt_symbols_cache: List[str] = []
@@ -184,6 +207,22 @@ class KISBroker(BaseBroker):
     # ============================================================
     # API 레이트 리미팅
     # ============================================================
+
+    def reconciliation_token(self) -> Optional[int]:
+        """로컬 idle 세대 번호. 거래소 스냅샷 시각이나 체결 watermark가 아니다.
+
+        호출측은 엔진에 전달된 체결도 별도로 추적해야 한다. 접수 불명,
+        취소 전에 관측하지 못한 부분체결, 재시작 이전 주문은 이 메모리
+        활동 추적으로 복구하거나 대사하지 않는다.
+        """
+        generation = getattr(self, '_reconciliation_generation', None)
+        active = getattr(self, '_reconciliation_active', None)
+        pending = getattr(self, '_pending_orders', None)
+        if (type(generation) is not int or generation < 0
+                or type(active) is not int or active != 0
+                or not isinstance(pending, dict) or pending):
+            return None
+        return generation
 
     async def _rate_limit(self, tr_id: str = ""):
         """API 호출 전 레이트 리미트 대기 — 프로세스 공용 슬라이딩 윈도우 + 원장 TR 간격"""
@@ -506,6 +545,7 @@ class KISBroker(BaseBroker):
     # 주문 실행
     # ============================================================
 
+    @_reconciliation_activity
     async def submit_order(self, order: Order) -> Tuple[bool, str]:
         """주문 제출"""
         # 킬스위치 — 모든 KR 주문이 반드시 통과하는 지점 (봇 재시작 없이 즉시 발동)
@@ -1064,6 +1104,7 @@ class KISBroker(BaseBroker):
             "364970", "371460", "395160", "261240", "278530",  # KODEX 2차전지, TIGER 2차전지TOP10, 삼성퓨처모빌리티, KODEX 코스피, KODEX 미국S&P500
         ]
 
+    @_reconciliation_activity
     async def cancel_order(self, order_id: str) -> bool:
         """주문 취소"""
         if order_id not in self._pending_orders:
@@ -1143,6 +1184,7 @@ class KISBroker(BaseBroker):
                 logger.warning(f"[KIS] 종목 {symbol} 주문 {order_id} 취소 실패: {e}")
         return cancelled
 
+    @_reconciliation_activity
     async def modify_order(self, order_id: str, new_quantity: Optional[int] = None,
                            new_price: Optional[Decimal] = None) -> bool:
         """주문 수정"""
@@ -1765,6 +1807,9 @@ class KISBroker(BaseBroker):
         - unrealized_pnl: 평가손익
         - tot_evlu_amt: KIS API 총평가금액 (D+2 정산 등 포함, 참고용)
         """
+        # 연결·조회·요약 검증 실패에도 이전 응답을 get_positions가 재사용하지
+        # 않도록 새 조회의 첫 await 전에 직전 포지션 스냅샷을 버린다.
+        self._balance_snapshot = None
         if not self.is_connected:
             if not await self.connect():
                 return {}
@@ -2357,6 +2402,7 @@ class KISBroker(BaseBroker):
             complete, reason = False, "normalize_failed"
         return results, complete, reason
 
+    @_reconciliation_activity
     async def check_fills(self) -> List[Fill]:
         """체결 확인"""
         if not self.is_connected:
