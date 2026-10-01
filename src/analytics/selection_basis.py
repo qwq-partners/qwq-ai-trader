@@ -86,7 +86,7 @@ class SelectionBasisBuilder:
 
 def validate_settings(settings):
     if (type(settings) is not dict or set(settings) != {'version', 'max_candidates', 'max_source_terms'}
-            or settings['version'] != 'selection-basis-v1'
+            or settings['version'] not in ('selection-basis-v1', 'selection-basis-v2')
             or type(settings['max_candidates']) is not int or not 1 <= settings['max_candidates'] <= 100
             or type(settings['max_source_terms']) is not int or not 1 <= settings['max_source_terms'] <= MAX_TERMS):
         raise ValueError('선정 근거 관측 한도/버전 필요')
@@ -147,7 +147,9 @@ def build_selection_report(observations):
     """전체 반환 후보를 기준으로 명시 근거의 보유/산술만 판정한다."""
     if observations.get('schema_version') != 1 or not isinstance(observations.get('records'), list):
         raise ValueError('선정 관측 원장 필요')
+    from .selection_source_status import read_scan_sources, lineage_diagnostic
     candidates, seen, scans = {}, set(), []
+    source_scans, source_ids = [], set()
     limits_respected = True
     counts = dict(candidates=0, expected=0, recorded=0, accounted=0, cache_fallback=0,
                   unavailable=0, missing_records=0, disabled=0)
@@ -157,6 +159,13 @@ def build_selection_report(observations):
             raise ValueError('선정 관측 순서 불일치')
         kind = record.get('kind')
         if kind == 'scan':
+            source_info = read_scan_sources(record)
+            snapshot = source_info['snapshot']
+            if snapshot is not None:
+                if snapshot['capture_id'] in source_ids:
+                    raise ValueError('원천 관측을 여러 스캔에 재사용')
+                source_ids.add(snapshot['capture_id'])
+            source_scans.append({'scan_id': record['scan_id'], **source_info})
             expected = record.get('selection_basis_expected', False)
             if type(expected) is not bool:
                 raise ValueError('선정 관측 활성 여부 불일치')
@@ -203,13 +212,32 @@ def build_selection_report(observations):
                 basis = validate_basis(basis, score=candidate['score'], rank=row['returned_rank'],
                                        observed_at=scan['observed_at'], max_terms=settings['max_source_terms'])
                 row.update(status='cached_basis' if basis['cache_fallback'] else 'accounted', basis=basis)
+                row['lineage'] = lineage_diagnostic(basis)
                 counts['accounted'] += 1
                 counts['cache_fallback'] += int(basis['cache_fallback'])
             else:
                 raise ValueError('선정 근거 상태 불일치')
     counts['missing_records'] = counts['expected'] - counts['recorded']
-    for group in scans:
+    for group, source_info in zip(scans, source_scans):
         bases = [r['basis'] for r in group if r['basis'] is not None]
+        snapshot = source_info['snapshot']
+        if snapshot is not None:
+            for basis in bases:
+                if basis['cache_fallback'] != snapshot['fallback_used']:
+                    raise ValueError('현재 원천 시도와 과거 후보 폴백 혼합')
+                produced = _time(basis['produced_at'])
+                if not basis['cache_fallback'] and not (_time(snapshot['started_at']) <= produced <= _time(snapshot['completed_at'])):
+                    raise ValueError('현재 원천 호출 밖에서 생성된 선정 근거')
+                if not basis['cache_fallback']:
+                    runs = {r['source_id']: r for r in snapshot['runs']}
+                    for term in basis['source_terms']:
+                        run = runs[term['source_id']]
+                        if (run['returned_count'] is None or term['input_rank'] > run['returned_count']
+                                or run['outcome'] not in ('completed_nonempty', 'cached_nonempty', 'unknown_nonempty', 'partial')
+                                or _time(run['completed_at']) > produced):
+                            raise ValueError('선정 기여 원천의 호출/반환 수/완료시각 모순')
+                if basis['cache_fallback'] and produced > _time(snapshot['started_at']):
+                    raise ValueError('과거 후보 폴백에 현재 계산 근거 혼합')
         if bases:
             profiles = {(b['basis_id'], b['produced_at'], b['normalization_mode'], b['normalization_min'],
                          b['normalization_max'], b['cache_fallback']) for b in bases}
@@ -223,7 +251,7 @@ def build_selection_report(observations):
             'capture_complete': limits_respected and observations.get('complete') is True
                                 and observations.get('dropped_records') == 0,
             'population_limits_respected': limits_respected,
-            'counts': counts, 'candidates': rows, 'profit_contribution_verified': False,
+            'counts': counts, 'candidates': rows, 'source_scans': source_scans, 'profit_contribution_verified': False,
             'production_eligible': False, 'source_status_known': False, 'source_as_of_known': False,
             'limitations': ['반환 후보만 포함하며 스크리너 내부 제외 종목은 포함하지 않음.',
                 '점수 항은 병합 시점 값이며 원천 응답 성공/실패·신선도를 증명하지 않음.',

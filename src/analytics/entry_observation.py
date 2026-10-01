@@ -73,6 +73,11 @@ class EntryObservationBuffer:
         return (self.selection_basis_settings is not None and not self._capture_closed
                 and (self.scan_scope != 'first' or self._first_scan_id is None))
 
+    @property
+    def selection_sources_capture_enabled(self):
+        return (self.selection_capture_enabled
+                and self.selection_basis_settings['version'] == 'selection-basis-v2')
+
     def begin_scan(self):
         """복사 전에 첫 시도를 예약한다. 빈 결과/복사 실패 뒤 재선정하지 않는다."""
         if self._capture_closed or (self.scan_scope == "first" and self._first_scan_id is not None):
@@ -172,6 +177,16 @@ def capture_scan(observer, stocks, session: str) -> str | None:
         if selection is not None:
             record.update(selection_basis_expected=True, selection_basis_max_candidates=selection['max_candidates'],
                           selection_basis_max_terms=selection['max_source_terms'])
+            if selection['version'] == 'selection-basis-v2':
+                record.update(selection_sources_expected=True, selection_sources_status='unavailable')
+                try:
+                    from .selection_source_status import validate_snapshot, snapshot_fields
+                    snapshot = getattr(stocks, 'selection_sources', None)
+                    if snapshot is not None:
+                        snapshot = validate_snapshot(snapshot, observed_at=record['observed_at'])
+                        record.update(snapshot_fields(snapshot), selection_sources_status='observed')
+                except Exception:
+                    observer.mark_incomplete('selection_sources_invalid')
         if not _publish(observer, record):
             return None
         if selection is not None:

@@ -133,7 +133,8 @@ class CapturePlan:
             # 스캔과 후보별 근거의 즉시 발생량을 최소 예산으로 예약한다.
             # 호가/주문 등 전체 구간 유량은 기존 capacity_evidence_ref로 별도 확인한다.
             burst = 1 + selection['max_candidates']
-            if (min(s['buffer_capacity'], s['queue_capacity']) < burst or s['max_record_bytes'] < 32768
+            record_minimum = 65536 if selection['version'] == 'selection-basis-v2' else 32768
+            if (min(s['buffer_capacity'], s['queue_capacity']) < burst or s['max_record_bytes'] < record_minimum
                     or s['max_bytes'] < burst * (s['max_record_bytes'] + 2048) + 2048):
                 raise ValueError('선정 근거의 최소 저장 예산 부족')
         for key in ('open_timeout_seconds', 'close_timeout_seconds'):

@@ -21,6 +21,7 @@ from uuid import uuid4
 from .entry_observation import EntryObservationBuffer
 from .entry_price_shadow import _timestamp as parse_timestamp
 from .selection_basis import BASIS_FIELDS, TERM_FIELDS, MAX_TERMS
+from .selection_source_status import SCAN_FIELDS, RUN_FIELDS, ORDER
 
 MAX_LINE_BYTES = 1024 * 1024
 ZERO_HASH = "0" * 64
@@ -34,6 +35,7 @@ FIELDS = {
     "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at",
 }
 FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS))
+FIELDS['scan'] += ' ' + ' '.join(sorted(SCAN_FIELDS))
 NESTED = {
     "candidates": set("symbol price score screened_at change_pct volume atr_pct candidate_id".split()),
     "quote": set("price open high low volume change_pct".split()),
@@ -44,6 +46,7 @@ NESTED = {
         "strategy_pending_reserved strategy_cap_notional strategy_remaining_notional reference_price").split()),
 }
 NESTED['source_terms'] = TERM_FIELDS
+NESTED['selection_source_runs'] = RUN_FIELDS
 
 
 def _json(value):
@@ -116,8 +119,8 @@ def _record_shape(record, maximum):
             if nested and key in NESTED:
                 if key == "capital_snapshot" and value is None:
                     scalar(None)
-                elif key in ("candidates", "source_terms"):
-                    limit = min(MAX_TERMS, maximum // 4) if key == 'source_terms' else maximum // 4
+                elif key in ("candidates", "source_terms", "selection_source_runs"):
+                    limit = {'source_terms': MAX_TERMS, 'selection_source_runs': len(ORDER)}.get(key, maximum // 4)
                     if not isinstance(value, list) or len(value) > limit:
                         raise ValueError("후보 배열 한도/형식 위반")
                     for item in value:

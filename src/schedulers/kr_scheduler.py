@@ -3606,6 +3606,8 @@ JSON:
                         overnight_volatility=_overnight_volatility,
                         **({'capture_selection': True}
                            if getattr(_entry_observer, 'selection_capture_enabled', False) is True else {}),
+                        **({'capture_selection_sources': True}
+                           if getattr(_entry_observer, 'selection_sources_capture_enabled', False) is True else {}),
                     )
                     # 반환 후보 전체를 포트폴리오/진입 게이트 전에 복사한다. 기본 관측기는 없다.
                     _entry_scan_id = capture_scan(_entry_observer, screened, current_session.value)
