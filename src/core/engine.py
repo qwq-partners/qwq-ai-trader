@@ -137,6 +137,9 @@ class UnifiedEngine:
             cash=config.initial_capital,
             initial_capital=config.initial_capital
         )
+        # 잔고 조회 대기 중 체결을 감지한다(수량이 변했다 원복된 경우 포함).
+        # 로컬 변경 감지용이며 거래소 체결 반영 경계를 뜻하지 않는다.
+        self._position_update_generation = 0
 
         # 리스크 메트릭스
         self.risk_metrics = RiskMetrics()
@@ -544,6 +547,7 @@ class UnifiedEngine:
 
     def update_position(self, fill: Fill):
         """체결로 포지션 업데이트 (KR)"""
+        self._position_update_generation = getattr(self, '_position_update_generation', 0) + 1
         symbol = fill.symbol
 
         if symbol not in self.portfolio.positions:

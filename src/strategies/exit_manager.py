@@ -439,6 +439,27 @@ class ExitManager:
         except Exception as e:
             logger.warning(f"[ExitManager] stage 파일 저장 실패: {e}")
 
+    def reconcile_entry_basis(self, position: Position) -> bool:
+        """진행 주문이 없는 동일 수량의 평단만 보정한다. 조회 순서는 호출자가 검증한다.
+
+        체결을 추정하거나 수량·단계·최초 위험·pending을 바꾸지 않는다.
+        평단은 재기동 시 포지션에서 복원하며 stage 파일에 저장하지 않는다.
+        """
+        state = self._states.get(position.symbol)
+        if (state is None or position.quantity <= 0
+                or position.quantity != state.remaining_quantity
+                or state.pending_stage is not None or state.pending_since is not None
+                or state.pending_target_qty or state.pending_filled_qty):
+            return False
+        try:
+            basis = Decimal(str(position.avg_price))
+        except (ValueError, TypeError, ArithmeticError):
+            return False
+        if not basis.is_finite() or basis <= 0:
+            return False
+        state.entry_price = basis
+        return True
+
     def register_position(
         self,
         position: Position,

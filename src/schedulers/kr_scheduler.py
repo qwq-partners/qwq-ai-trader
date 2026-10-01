@@ -1282,6 +1282,56 @@ class KRScheduler:
         fallback = params.get("_sync", {})
         return dict(params.get(strategy, fallback) if strategy else fallback)
 
+    def _exit_basis_is_idle(self, symbol, state):
+        """알려진 로컬 pending만 사용한다. 미지원 adapter는 평단 보정을 허용하지 않는다."""
+        bot = self.bot
+        orders = getattr(bot.broker, '_pending_orders', None)
+        risk = getattr(bot.engine, 'risk_manager', None)
+        pending = getattr(risk, '_pending_orders', None)
+        quantities = getattr(risk, '_pending_quantities', None)
+        return (isinstance(orders, dict) and isinstance(pending, set)
+                and isinstance(quantities, dict)
+                and all(getattr(order, 'symbol', None) not in (None, symbol)
+                        for order in orders.values())
+                and symbol not in pending and symbol not in quantities
+                and symbol not in bot._exit_pending_symbols
+                and state.pending_stage is None and state.pending_since is None
+                and not state.pending_target_qty and not state.pending_filled_qty)
+
+    def _capture_exit_basis(self):
+        bot = self.bot
+        generation = getattr(bot.engine, '_position_update_generation', None)
+        captured = {}
+        manager = bot.exit_manager
+        if (type(generation) is not int or manager is None
+                or not callable(getattr(manager, 'reconcile_entry_basis', None))):
+            return generation, captured
+        for symbol, pos in bot.engine.portfolio.positions.items():
+            state = manager.get_state(symbol)
+            if state is not None and self._exit_basis_is_idle(symbol, state):
+                captured[symbol] = (pos, pos.quantity, pos.avg_price,
+                                    state, state.remaining_quantity, state.entry_price)
+        return generation, captured
+
+    def _reconcile_exit_basis(self, symbol, broker_position, snapshot):
+        bot = self.bot
+        generation, captured = snapshot
+        previous = captured.get(symbol)
+        if previous is None or generation != getattr(bot.engine, '_position_update_generation', None):
+            return
+        pos, qty, avg, state, remaining, entry = previous
+        if (bot.engine.portfolio.positions.get(symbol) is not pos
+                or bot.exit_manager.get_state(symbol) is not state
+                or (pos.quantity, pos.avg_price, state.remaining_quantity, state.entry_price)
+                   != (qty, avg, remaining, entry)
+                or not self._exit_basis_is_idle(symbol, state)):
+            return
+        if not (qty == broker_position.quantity == remaining and qty > 0):
+            logger.warning(f"[동기화] {symbol} 청산 평단 보정 보류: 수량 대사 필요 (체결 추정 없음)")
+            return
+        if bot.exit_manager.reconcile_entry_basis(broker_position) and entry != state.entry_price:
+            logger.info(f"[동기화] {symbol} 청산 평단 보정: {entry} → {state.entry_price} (수량·단계 보존)")
+
     @with_request_source("portfolio_sync")
     async def _sync_portfolio(self):
         """KIS API와 포트폴리오 동기화"""
@@ -1291,6 +1341,8 @@ class KRScheduler:
 
         _hb.record_attempt("kr_portfolio_sync")
         try:
+            # 첫 await 전에 캡처한다. 적용 직전 재검사와 평단 쓰기 사이에는 await가 없다.
+            _basis_snapshot = self._capture_exit_basis()
             # 1. KIS API에서 실제 잔고/포지션 조회 (lock 밖에서 수행 - IO 작업)
             balance = await bot.broker.get_account_balance()
             if not balance:
@@ -1456,13 +1508,15 @@ class KRScheduler:
                 for symbol in common_symbols:
                     bot_pos = portfolio.positions[symbol]
                     kis_pos = kis_positions[symbol]
+                    self._reconcile_exit_basis(symbol, kis_pos, _basis_snapshot)
                     if bot_pos.quantity != kis_pos.quantity:
                         logger.warning(
                             f"[동기화] 수량 수정: {symbol} "
                             f"{bot_pos.quantity}주 → {kis_pos.quantity}주"
                         )
                         bot_pos.quantity = kis_pos.quantity
-                    if kis_pos.avg_price > 0 and bot_pos.avg_price != kis_pos.avg_price:
+                    if (kis_pos.avg_price.is_finite() and kis_pos.avg_price > 0
+                            and bot_pos.avg_price != kis_pos.avg_price):
                         logger.info(
                             f"[동기화] 평단가 수정: {symbol} "
                             f"{bot_pos.avg_price:,.0f}원 → {kis_pos.avg_price:,.0f}원"

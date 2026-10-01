@@ -62,13 +62,14 @@ MONEY_Q = Decimal("1")
 # ── 공용 파싱 (canary 의 _dec·_date·_buys 와 같은 동작) ─────────────────────────
 
 def to_decimal(value: Any) -> Optional[Decimal]:
-    """문자열/숫자 → Decimal(str(x)). None·빈값·파싱 실패는 None."""
+    """문자열/숫자 → 유한 Decimal(str(x)). None·빈값·파싱 실패·비유한값은 None."""
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
     except InvalidOperation:
         return None
+    return result if result.is_finite() else None
 
 
 def _strip(value: Any) -> str:
@@ -116,7 +117,8 @@ def position_benchmark(bench: Optional[Dict[str, Decimal]], pos: Dict[str, Any])
         return None, "benchmark_missing"
     buys = buy_fills(pos)
     entry_d = parse_date(buys[0].get("ts")) if buys else None
-    if entry_d is None or entry_d not in bench:
+    entry_close = to_decimal(bench.get(entry_d)) if entry_d is not None else None
+    if entry_d is None or entry_close is None or entry_close <= 0:
         return None, f"benchmark_date_missing: entry {entry_d}"
     exits = [e for e in pos["exits"] if isinstance(e, dict)]
     qtys = [to_decimal(e.get("quantity")) for e in exits]
@@ -128,9 +130,10 @@ def position_benchmark(bench: Optional[Dict[str, Decimal]], pos: Dict[str, Any])
     acc = Decimal("0")
     for e in exits:
         d, q = parse_date(e.get("ts")), to_decimal(e.get("quantity"))
-        if d is None or d not in bench or q is None:
+        close = to_decimal(bench.get(d)) if d is not None else None
+        if d is None or close is None or close <= 0 or q is None:
             return None, f"benchmark_date_missing: exit {d}"
-        acc += (q / total_q) * (bench[d] / bench[entry_d] - 1)
+        acc += (q / total_q) * (close / entry_close - 1)
     return acc, None
 
 
@@ -192,7 +195,7 @@ def classify(pos: Dict[str, Any], bench: Optional[Dict[str, Decimal]],
     if pos.get("status") != "closed":
         return "open"
     exits = _exits(pos)
-    if not exits or pos.get("net_pnl") is None or pos.get("pnl_missing") is True:
+    if not exits or to_decimal(pos.get("net_pnl")) is None or pos.get("pnl_missing") is True:
         return "exits_missing"                                            # ①
     sold, bought = _qty_sum(exits), _qty_sum(buy_fills(pos))
     if sold is None or bought is None:
@@ -346,7 +349,8 @@ def _metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     for agg in excluded.values():
         agg["net_pnl_sum"] = _q(agg["net_pnl_sum"], MONEY_Q)   # 전부 결측이면 null
 
-    covered = [r for r in included if _d(r.get("excess_return")) is not None]
+    covered = [r for r in included if (_d(r.get("excess_return")) is not None
+                                        and _d(r.get("bench_return")) is not None)]
     xs = [_d(r["excess_return"]) for r in covered]
     krws = [_d(r["excess_krw"]) for r in covered if _d(r.get("excess_krw")) is not None]
     krw_sum = sum(krws, Decimal("0")) if krws else None
