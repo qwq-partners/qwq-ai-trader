@@ -22,6 +22,22 @@ from loguru import logger
 from src.utils.token_manager import get_token_manager
 from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
 from src.utils.data_freshness import kr_night_futures_as_of  # T10 F17 (2026-09-15)
+from src.analytics.selection_source_status import mark_source
+
+
+def _mark_selection_source(event: str, **kwargs) -> None:
+    """원천 상태 관측은 공급자 반환 계약보다 약하다."""
+    try:
+        mark_source(event, **kwargs)
+    except Exception:
+        pass
+
+
+def _selection_cache_age(cache_times: Dict[str, datetime], key: str) -> Optional[float]:
+    try:
+        return (datetime.now() - cache_times[key]).total_seconds()
+    except Exception:
+        return None
 
 
 class KISMarketData:
@@ -255,6 +271,7 @@ class KISMarketData:
         """
         cache_key = "fluctuation_rank"
         if self._is_cache_valid(cache_key, 300):  # 5분 캐시
+            _mark_selection_source("input_cache", age_seconds=_selection_cache_age(self._cache_ts, cache_key))
             return self._cache[cache_key][:limit]
 
         result: List[Dict] = []
@@ -285,16 +302,22 @@ class KISMarketData:
             await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
+                    _mark_selection_source("error", reason="http")
                     logger.error(f"등락률 순위 조회 실패: HTTP {resp.status}")
                     return result
 
                 data = await resp.json()
 
                 if data.get("rt_cd") != "0":
+                    _mark_selection_source("error", reason="api")
                     logger.warning(f"등락률 순위 API 오류: {data.get('msg1')}")
                     return result
 
                 output = data.get("output", [])
+                if "output" not in data or not isinstance(output, list):
+                    _mark_selection_source("error", reason="schema")
+                else:
+                    _mark_selection_source("payload", count=len(output))
 
                 for item in output:
                     symbol = item.get("stck_shrn_iscd", "").strip()
@@ -321,6 +344,7 @@ class KISMarketData:
             return result[:limit]
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"등락률 순위 조회 오류: {e}")
             return result
 
@@ -346,6 +370,7 @@ class KISMarketData:
         investor_name = "외국인" if investor == "1" else "기관"
         cache_key = f"foreign_inst_{market}_{investor}"
         if self._is_cache_valid(cache_key, 600):  # 10분 캐시
+            _mark_selection_source("input_cache", age_seconds=_selection_cache_age(self._cache_ts, cache_key))
             return self._cache[cache_key]
 
         result: List[Dict] = []
@@ -368,16 +393,22 @@ class KISMarketData:
             await kis_rate_limit.acquire()
             async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status != 200:
+                    _mark_selection_source("error", reason="http")
                     logger.error(f"{investor_name} 매매동향 조회 실패: HTTP {resp.status}")
                     return result
 
                 data = await resp.json()
 
                 if data.get("rt_cd") != "0":
+                    _mark_selection_source("error", reason="api")
                     logger.warning(f"{investor_name} 매매동향 API 오류: {data.get('msg1')}")
                     return result
 
                 output = data.get("output", [])
+                if "output" not in data or not isinstance(output, list):
+                    _mark_selection_source("error", reason="schema")
+                else:
+                    _mark_selection_source("payload", count=len(output))
 
                 for item in output:
                     symbol = item.get("mksc_shrn_iscd", "").zfill(6)
@@ -412,6 +443,7 @@ class KISMarketData:
             return result
 
         except Exception as e:
+            _mark_selection_source("error", reason="exception")
             logger.error(f"{investor_name} 매매동향 조회 오류: {e}")
             return result
 
