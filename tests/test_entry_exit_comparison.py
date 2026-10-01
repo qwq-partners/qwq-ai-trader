@@ -183,6 +183,29 @@ def test_net_loss_boundary_equal_triggers_and_strictly_above_does_not():
     assert loss['stop_trigger_quote_id'] is None
 
 
+@pytest.mark.parametrize('stop_pct,original_trigger', [
+    ('0.25', 'synthetic-entry-SYNTH_LOSS'),
+    ('0.4', 'synthetic-stop-SYNTH_LOSS'),
+])
+def test_entry_spread_and_scenario_cost_can_trigger_stop_on_first_quote(stop_pct, original_trigger):
+    from src.analytics.entry_exit_comparison import build_exit_comparison
+
+    context, observations = fixture(); add_loss_path(observations)
+    order = next(r for r in observations['records']
+                 if r['kind'] == 'order_ready' and r['symbol'] == 'SYNTH_LOSS')
+    order['effective_stop_pct'] = stop_pct
+    raw = study_bytes(context); sha = hashlib.sha256(raw).hexdigest()
+    out = build_exit_comparison(raw, observations, study_sha256=sha,
+                                comparison_policy=policy(sha), session_review=review(context, observations, sha))
+    original = next(r for r in out['original']['candidates'] if r['symbol'] == 'SYNTH_LOSS')
+    stressed = next(r for r in out['sensitivity'][2]['candidates'] if r['symbol'] == 'SYNTH_LOSS')
+    assert original['outcome_status'] == stressed['outcome_status'] == 'known_pair'
+    assert original['stop_trigger_quote_id'] == original_trigger
+    assert out['sensitivity'][2]['slippage_bps_each'] == 30
+    assert stressed['stop_trigger_quote_id'] == 'synthetic-entry-SYNTH_LOSS'
+    assert original['baseline_quantity'] == stressed['baseline_quantity'] == 25
+
+
 def test_cli_exit_policy_adds_comparison_without_replacing_legacy_bundle(tmp_path):
     import asyncio
     from unittest.mock import patch
