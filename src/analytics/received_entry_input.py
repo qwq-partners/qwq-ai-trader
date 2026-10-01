@@ -108,6 +108,10 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
         raise ValueError("records/evaluation_inputs 배열 필요")
     from .entry_observation import observation_population
     population = observation_population(records)
+    if any(isinstance(r, dict) and (r.get('kind') == 'selection_basis' or r.get('selection_basis_expected'))
+           for r in records):
+        from .selection_basis import build_selection_report
+        build_selection_report(observations)
     candidates, signals, orders, quotes, rest = {}, {}, {}, [], {}
     candidate_signals = {}
     quote_ids = set()
@@ -154,6 +158,10 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
         elif kind == "quote_subscription":
             # 상태 기록은 후보 승인이나 호가의 대체 자료가 아니다.
             subscription_gap |= record.get("status") == "connection_gap"
+        elif kind == 'selection_basis':
+            if _timestamp(record.get('observed_at'), '선정 근거 관측 시각') > report_at:
+                raise ValueError('선정 근거 관측이 보고 시각보다 늦음')
+            # 위에서 후보 연결을 검증했다. 선정 점수를 가격/진입 승인으로 사용하지 않는다.
         else:
             raise ValueError("지원하지 않는 관측 kind")
     supplements = {}

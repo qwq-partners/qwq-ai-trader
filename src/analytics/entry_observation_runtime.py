@@ -95,7 +95,10 @@ class CapturePlan:
             'source_version_ref configuration_ref fee_evidence_ref capital_evidence_ref capacity_evidence_ref '
             'journal_path buffer_capacity queue_capacity batch_size max_bytes max_record_bytes '
             'open_timeout_seconds close_timeout_seconds channels').split())
-        if type(s) is not dict or set(s) != expected or s['version'] != 'runner-first-scan-v1':
+        if type(s) is dict and s.get('version') == 'runner-first-scan-v2':
+            expected.add('selection_basis')
+        if (type(s) is not dict or set(s) != expected
+                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2')):
             raise ValueError('지원하지 않는 capture 계약/필드')
         for key in ('study_ref', 'scan_admission_ref', 'source_version_ref', 'configuration_ref',
                     'fee_evidence_ref', 'capital_evidence_ref', 'capacity_evidence_ref'):
@@ -124,6 +127,15 @@ class CapturePlan:
                 raise ValueError('자원 한도는 양의 정수 필요')
         if s['batch_size'] > s['queue_capacity'] or not 1 <= s['max_record_bytes'] <= MAX_LINE_BYTES-2048:
             raise ValueError('저장 batch/레코드 한도 위반')
+        if s['version'] == 'runner-first-scan-v2':
+            from .selection_basis import validate_settings
+            selection = validate_settings(s['selection_basis'])
+            # 스캔과 후보별 근거의 즉시 발생량을 최소 예산으로 예약한다.
+            # 호가/주문 등 전체 구간 유량은 기존 capacity_evidence_ref로 별도 확인한다.
+            burst = 1 + selection['max_candidates']
+            if (min(s['buffer_capacity'], s['queue_capacity']) < burst or s['max_record_bytes'] < 32768
+                    or s['max_bytes'] < burst * (s['max_record_bytes'] + 2048) + 2048):
+                raise ValueError('선정 근거의 최소 저장 예산 부족')
         for key in ('open_timeout_seconds', 'close_timeout_seconds'):
             if type(s[key]) not in (int, float) or not math.isfinite(s[key]) or not 0 < s[key] <= 10:
                 raise ValueError('I/O 대기 한도는 0~10초')
@@ -142,7 +154,8 @@ class _WindowBuffer(EntryObservationBuffer):
     def __init__(self, plan, now):
         s = plan.settings
         super().__init__(evaluation_epoch=plan.context['evaluation_epoch'], capacity=s['buffer_capacity'],
-                         scan_scope='first', scan_admission_ref=s['scan_admission_ref'])
+                         scan_scope='first', scan_admission_ref=s['scan_admission_ref'],
+                         selection_basis_settings=s.get('selection_basis'))
         self._now = now
         self.start_at, self.end_at = plan.start_at, plan.end_at
         self.admission_end = _timestamp(s['admission_end_at'], 'admission_end_at')

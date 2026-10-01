@@ -20,11 +20,12 @@ from uuid import uuid4
 
 from .entry_observation import EntryObservationBuffer
 from .entry_price_shadow import _timestamp as parse_timestamp
+from .selection_basis import BASIS_FIELDS, TERM_FIELDS, MAX_TERMS
 
 MAX_LINE_BYTES = 1024 * 1024
 ZERO_HASH = "0" * 64
 FIELDS = {
-    "scan": "scan_id observed_at session route_origin population_scope candidates scan_admission_ref",
+    "scan": "scan_id observed_at session route_origin population_scope candidates scan_admission_ref selection_basis_expected selection_basis_max_candidates selection_basis_max_terms",
     "rest_quote": "candidate_id observed_at requested_at source source_as_of quote",
     "signal": "candidate_id signal_id observed_at event_timestamp strategy price signal_target_price signal_stop_price",
     "emit_result": "candidate_id signal_id observed_at emitted",
@@ -32,6 +33,7 @@ FIELDS = {
     "ws_quote": "quote_id symbol observed_at ask bid ask_size bid_size provenance",
     "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at",
 }
+FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS))
 NESTED = {
     "candidates": set("symbol price score screened_at change_pct volume atr_pct candidate_id".split()),
     "quote": set("price open high low volume change_pct".split()),
@@ -41,6 +43,7 @@ NESTED = {
         "core_cash_reserved cash_capacity_before strategy_allocation_pct strategy_held_notional "
         "strategy_pending_reserved strategy_cap_notional strategy_remaining_notional reference_price").split()),
 }
+NESTED['source_terms'] = TERM_FIELDS
 
 
 def _json(value):
@@ -113,8 +116,9 @@ def _record_shape(record, maximum):
             if nested and key in NESTED:
                 if key == "capital_snapshot" and value is None:
                     scalar(None)
-                elif key == "candidates":
-                    if not isinstance(value, list) or len(value) > maximum // 4:
+                elif key in ("candidates", "source_terms"):
+                    limit = min(MAX_TERMS, maximum // 4) if key == 'source_terms' else maximum // 4
+                    if not isinstance(value, list) or len(value) > limit:
                         raise ValueError("후보 배열 한도/형식 위반")
                     for item in value:
                         mapping(item, NESTED[key])

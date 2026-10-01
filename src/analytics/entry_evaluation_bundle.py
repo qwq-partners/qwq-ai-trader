@@ -173,8 +173,10 @@ No session assertion is inferred from clock time, channel or hour code.
     status = ('no_comparable_pairs' if min(pairs) == 0 else
               'complete_price_diagnostic' if all(r['summary']['complete_delta_net_pnl'] is not None
                                                for r in reports) else 'partial_price_diagnostic')
+    from .selection_basis import build_selection_report
     return {'version': 'entry-evaluation-bundle-v1', 'dataset_kind': context['dataset_kind'],
             'binding': binding, 'review_tasks': tasks, 'evaluation_inputs': inputs,
+            'selection_basis': build_selection_report(observations),
             'original': original, 'sensitivity': variants,
             'readiness': {'status': status, 'minimum_paired_outcomes_across_scenarios': min(pairs),
                           'original_cohort_count': len(tasks),
