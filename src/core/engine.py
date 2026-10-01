@@ -11,6 +11,7 @@ KR(ai-trader-v2) + US(ai-trader-us) 시장을 단일 이벤트 루프에서 운�
 """
 
 import asyncio
+from copy import copy
 import heapq
 import json
 import os
@@ -140,6 +141,8 @@ class UnifiedEngine:
         # 잔고 조회 대기 중 체결을 감지한다(수량이 변했다 원복된 경우 포함).
         # 로컬 변경 감지용이며 거래소 체결 반영 경계를 뜻하지 않는다.
         self._position_update_generation = 0
+        self._fill_activity_generation = 0
+        self._unapplied_fills: Dict[str, FillEvent] = {}
 
         # 리스크 메트릭스
         self.risk_metrics = RiskMetrics()
@@ -264,6 +267,8 @@ class UnifiedEngine:
 
     async def emit(self, event: Event):
         """이벤트 발행 (큐에 추가)"""
+        if event.type == EventType.FILL:
+            self.track_fill(event)
         async with self._queue_lock:
             if len(self._event_queue) >= self._MAX_QUEUE_SIZE:
                 logger.warning(f"이벤트 큐 포화 ({len(self._event_queue)}건) → 최저 우선순위 이벤트 폐기")
@@ -272,6 +277,9 @@ class UnifiedEngine:
 
     async def emit_many(self, events: List[Event]):
         """여러 이벤트 일괄 발행"""
+        for event in events:
+            if event.type == EventType.FILL:
+                self.track_fill(event)
         async with self._queue_lock:
             # 포화 시 한 번만 정리 (루프마다 sort 반복 방지)
             needed = len(events)
@@ -545,7 +553,25 @@ class UnifiedEngine:
     # 포트폴리오 관리
     # ============================================================
 
-    def update_position(self, fill: Fill):
+    def track_fill(self, event: FillEvent):
+        """체결 소비→큐→handler 사이의 공백도 잔고 동기화에서 보호한다."""
+        if event.portfolio_applied is None and event.id not in self._unapplied_fills:
+            self._unapplied_fills[event.id] = event
+            self._fill_activity_generation += 1
+
+    def reconciliation_token(self):
+        """프로세스 내 체결 적용 경계. 실패한 체결은 자동으로 해제하지 않는다."""
+        if self._unapplied_fills:
+            return None
+        return self._fill_activity_generation, self._position_update_generation
+
+    def _acknowledge_fill(self, event: FillEvent, applied: bool):
+        event.portfolio_applied = applied
+        self._fill_activity_generation += 1
+        if applied:
+            self._unapplied_fills.pop(event.id, None)
+
+    def update_position(self, fill: Fill) -> bool:
         """체결로 포지션 업데이트 (KR)"""
         self._position_update_generation = getattr(self, '_position_update_generation', 0) + 1
         symbol = fill.symbol
@@ -558,7 +584,7 @@ class UnifiedEngine:
                     f"[엔진] SELL fill 수신했으나 포지션 없음: {symbol} {fill.quantity}주 "
                     f"@ {fill.price} → daily_pnl 오염 방지를 위해 무시"
                 )
-                return
+                return False
             # 새 포지션 (BUY)
             _sector_for_pos = self._pending_sector_map.pop(symbol, None)
 
@@ -585,6 +611,11 @@ class UnifiedEngine:
             )
 
         pos = self.portfolio.positions[symbol]
+
+        # 적용 확인을 전량 처리로 오인하지 않도록 초과 SELL은 부분 반영하지 않는다.
+        if fill.side == OrderSide.SELL and not (0 < fill.quantity <= pos.quantity):
+            logger.error(f"[엔진] SELL 수량 대사 필요: {symbol} 체결={fill.quantity}, 보유={pos.quantity}")
+            return False
 
         # 기존 포지션에 메타데이터 없으면 채우기
         if pos.strategy is None and fill.strategy:
@@ -686,6 +717,8 @@ class UnifiedEngine:
                 self.portfolio.daily_trades += 1
             # BUY도 즉시 영속화 — 매수만 있던 날 재시작 시 카운터 유실 방지
             self._save_daily_stats()
+
+        return True
 
     def update_position_price(self, symbol: str, current_price: Decimal):
         """
@@ -2661,17 +2694,31 @@ class RiskManager:
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
         """체결 후 포트폴리오 업데이트 + 리스크 추적 (부분 체결 지원) - Lock 보호"""
+        self.engine.track_fill(event)
+        if event.portfolio_applied is not None:
+            # 같은 이벤트 재전달은 중복 적용하지 않는다. 실패의 자동 재적용도 금지한다.
+            return None
         # 1) 포트폴리오 즉시 업데이트 (포지션 생성/수정/삭제, 현금 차감/증가)
         try:
             fill = event.fill if hasattr(event, 'fill') and event.fill else Fill(
+                order_id=event.order_id,
                 symbol=event.symbol, side=event.side,
                 quantity=event.quantity, price=event.price,
                 commission=getattr(event, 'commission', Decimal("0")),
                 strategy=getattr(event, 'strategy', None),
             )
-            self.engine.update_position(fill)
+            event.position_before = copy(self.engine.portfolio.positions.get(fill.symbol))
+            applied = self.engine.update_position(fill) is True
+            event.position_owner = self.engine.portfolio.positions.get(fill.symbol)
+            event.position_after = copy(event.position_owner)
+            self.engine._acknowledge_fill(event, applied)
+            if not applied:
+                logger.error(f"[리스크] 체결 적용 미확인: {event.symbol} — 잔고 동기화 보류")
+                return None
         except Exception as e:
+            self.engine._acknowledge_fill(event, False)
             logger.error(f"[리스크] 포지션 업데이트 실패: {event.symbol} — {e}")
+            return None
 
         # 1-1) 교체 축출 게이트용 진입 점수 부착 (2026-08-05 P2)
         # _try_evict_weakest_position이 읽는 entry_signal_score를 대입하는 곳이

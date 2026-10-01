@@ -38,6 +38,7 @@ def harness(monkeypatch, tmp_path):
 
     async def emit(event):
         events.append(event)
+        event.portfolio_applied = True  # synthetic portfolio already contains this application
 
     bot.engine.emit = emit
     return SimpleNamespace(sched=sched, bot=bot, sleeps=sleeps, trade=trade,

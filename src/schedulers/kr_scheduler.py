@@ -1332,6 +1332,41 @@ class KRScheduler:
         if bot.exit_manager.reconcile_entry_basis(broker_position) and entry != state.entry_price:
             logger.info(f"[동기화] {symbol} 청산 평단 보정: {entry} → {state.entry_price} (수량·단계 보존)")
 
+    def _reconciliation_token(self):
+        """전체 계좌의 로컬 유휴 경계만 증명한다. 거래소 as-of 경계가 아니다."""
+        bot = self.bot
+        engine_token = getattr(bot.engine, 'reconciliation_token', None)
+        broker_token = getattr(bot.broker, 'reconciliation_token', None)
+        risk = getattr(bot.engine, 'risk_manager', None)
+        pending = getattr(risk, '_pending_orders', None)
+        quantities = getattr(risk, '_pending_quantities', None)
+        if (not callable(engine_token) or not callable(broker_token)
+                or not isinstance(pending, set) or not isinstance(quantities, dict)
+                or pending or quantities
+                or getattr(self, '_fill_handoff_active', False)
+                or getattr(self, '_pending_fill_handoffs', {})):
+            return None
+        engine_value, broker_value = engine_token(), broker_token()
+        if engine_value is None or broker_value is None:
+            return None
+        return (id(bot.engine), id(bot.broker), id(bot.engine.portfolio), id(risk),
+                engine_value, broker_value, getattr(self, '_fill_handoff_generation', 0))
+
+    def _defer_portfolio_sync(self, reason):
+        self._portfolio_sync_deferred_reason = reason
+        failed = (any(item.portfolio_applied is False for item in
+                      getattr(self.bot.engine, '_unapplied_fills', {}).values())
+                  or any(item.get('failed') for item in
+                         getattr(self, '_pending_fill_handoffs', {}).values()))
+        if failed:
+            if self.bot.risk_manager and hasattr(self.bot.risk_manager, 'set_sync_status'):
+                self.bot.risk_manager.set_sync_status(False)
+            _hb.record_failure("kr_portfolio_sync", "체결 적용/후처리 실패 대사 필요")
+            logger.warning("[동기화] 체결 적용/후처리 실패 — 자동 완료 처리 없이 상태 보존")
+            return
+        logger.info(f"[동기화] 상태 보존·다음 주기 대기: {reason}")
+        _hb.record_idle("kr_portfolio_sync", reason)
+
     @with_request_source("portfolio_sync")
     async def _sync_portfolio(self):
         """KIS API와 포트폴리오 동기화"""
@@ -1341,6 +1376,10 @@ class KRScheduler:
 
         _hb.record_attempt("kr_portfolio_sync")
         try:
+            _sync_token = self._reconciliation_token()
+            if _sync_token is None:
+                self._defer_portfolio_sync("로컬 주문/체결 처리 중 또는 적용 확인 불가")
+                return
             # 첫 await 전에 캡처한다. 적용 직전 재검사와 평단 쓰기 사이에는 await가 없다.
             _basis_snapshot = self._capture_exit_basis()
             # 1. KIS API에서 실제 잔고/포지션 조회 (lock 밖에서 수행 - IO 작업)
@@ -1350,6 +1389,16 @@ class KRScheduler:
                 if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                     bot.risk_manager.set_sync_status(False)
                 _hb.record_failure("kr_portfolio_sync", "잔고 조회 실패")
+                return
+            try:
+                available_cash = Decimal(str(balance['available_cash']))
+                if (balance.get('available_cash_verified', True) is not True
+                        or not available_cash.is_finite() or available_cash < 0):
+                    raise ValueError("invalid cash")
+            except (KeyError, ValueError, ArithmeticError):
+                if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                    bot.risk_manager.set_sync_status(False)
+                _hb.record_failure("kr_portfolio_sync", "가용 현금 누락/유효하지 않음")
                 return
             kis_positions = await bot.broker.get_positions()
 
@@ -1389,8 +1438,18 @@ class KRScheduler:
                     _hb.record_failure("kr_portfolio_sync", _why)
                     return
 
-            # 3. lock 내에서 포트폴리오 수정
+            # 메타 복원은 비동기 준비 단계다. 최종 검사 이후 상태 변경에는 await 금지.
+            new_positions = {s: p for s, p in (kis_positions or {}).items()
+                             if s not in bot.engine.portfolio.positions}
+            if new_positions and hasattr(bot, '_restore_position_metadata'):
+                await bot._restore_position_metadata(new_positions)
+
+            # 3. 모든 await 뒤 같은 로컬 유휴 세대일 때만 일괄 수정한다.
             async with bot._portfolio_lock:
+                if _sync_token != self._reconciliation_token():
+                    self._defer_portfolio_sync("잔고 조회 중 로컬 주문/체결 세대 변경")
+                    return
+                self._portfolio_sync_deferred_reason = None
                 portfolio = bot.engine.portfolio
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
                 bot_symbols = set(portfolio.positions.keys())
@@ -1454,11 +1513,6 @@ class KRScheduler:
 
                 # 누락 포지션 추가
                 new_symbols = kis_symbols - bot_symbols
-                if new_symbols:
-                    new_positions = {s: kis_positions[s] for s in new_symbols}
-                    if hasattr(bot, '_restore_position_metadata'):
-                        await bot._restore_position_metadata(new_positions)
-
                 for symbol in new_symbols:
                     pos = kis_positions[symbol]
                     if not pos.strategy and symbol in bot._symbol_strategy:
@@ -1526,14 +1580,12 @@ class KRScheduler:
                         bot_pos.current_price = kis_pos.current_price
 
                 # 현금 동기화
-                available_cash = Decimal(str(balance.get('available_cash', 0)))
-                if available_cash > 0:
-                    old_cash = portfolio.cash
-                    portfolio.cash = available_cash
-                    if abs(old_cash - available_cash) > 1000:
-                        logger.info(
-                            f"[동기화] 현금 수정: {old_cash:,.0f}원 → {available_cash:,.0f}원"
-                        )
+                old_cash = portfolio.cash
+                portfolio.cash = available_cash
+                if abs(old_cash - available_cash) > 1000:
+                    logger.info(
+                        f"[동기화] 현금 수정: {old_cash:,.0f}원 → {available_cash:,.0f}원"
+                    )
 
                 # lock 안에서 로깅 값 캡처
                 _log_ghost = len(ghost_symbols)
@@ -2855,7 +2907,11 @@ JSON:
         """
         if open_ids is None:
             return
+        handoff_lots = {id(item.get('_entry_lot'))
+                        for item in getattr(self, '_pending_fill_handoffs', {}).values()}
         for key, lot in list(self._entry_fill_lots.items()):
+            if id(lot) in handoff_lots:
+                continue  # 적용 확인/후처리 전에는 초기 위험 분모와 저널 맥락을 버리지 않는다.
             if key.split("|", 1)[0] in open_ids:
                 continue   # 잔여 미체결 있음 — 주문 진행 중
             if not lot.get("confirmed") and lot.get("symbol") in self._pending_exit_registrations:
@@ -2876,6 +2932,515 @@ JSON:
                     )
             self._entry_fill_lots.pop(key, None)
 
+    async def _drain_fill_handoffs(self, *, wait):
+        """적용 완료 뒤 후처리한다. 실패한 적용/후처리를 시간 경과로 해제하지 않는다."""
+        pending = getattr(self, '_pending_fill_handoffs', {})
+        for event_id, handoff in list(pending.items()):
+            event = handoff['event']
+            if handoff.get('failed'):
+                continue
+            if wait:
+                for _ in range(10):
+                    if event.portfolio_applied is not None:
+                        break
+                    await asyncio.sleep(0.1)
+            if event.portfolio_applied is not True:
+                continue
+            try:
+                await self._complete_fill_handoff(**handoff)
+            except asyncio.CancelledError:
+                handoff['failed'] = True
+                raise
+            except Exception:
+                # 중간 부작용을 알 수 없으므로 다시 실행해 청산/PnL을 중복 반영하지 않는다.
+                handoff['failed'] = True
+                logger.exception(f"[체결] 후처리 대사 필요: {event.symbol} ({event_id})")
+            else:
+                pending.pop(event_id, None)
+
+    async def _complete_fill_handoff(self, fill, event, _sell_pos_snap,
+                                     _exit_reason_snap, _entry_lot, _order_done):
+        """성공적으로 적용된 체결의 청산·저널·구독 후처리. 지연 경로도 같은 코드를 쓴다."""
+        bot = self.bot
+        if event.position_before is not None:
+            _sell_pos_snap = event.position_before
+        # 매도 체결 시 _exit_pending 즉시 해제 + ExitManager 상태 갱신 + trade journal 기록
+        if fill.side == OrderSide.SELL:
+            bot._exit_pending_symbols.discard(fill.symbol)
+            bot._exit_pending_timestamps.pop(fill.symbol, None)
+            bot._exit_reasons.pop(fill.symbol, None)
+
+            # ExitManager remaining_quantity 즉시 갱신 (30초 sync 의존 제거)
+            if bot.exit_manager:
+                bot.exit_manager.on_fill(
+                    fill.symbol, fill.quantity,
+                    Decimal(str(fill.price))
+                )
+
+            # 재진입 제한 등록 — 저널 기록과 독립 실행 (2026-08-05 P1)
+            # 기존엔 저널 record_exit 성공 이후에만 도달해, 저널 예외
+            # (과거 kwarg 불일치 TypeError 사고) 시 _stop_loss_today
+            # 미등록 → 당일 재매수→재손절 반복이 열려 있었다.
+            if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
+                try:
+                    _rr_etype = self._classify_exit_type(_exit_reason_snap)
+                    _rr_sector = getattr(_sell_pos_snap, 'sector', '') if _sell_pos_snap else ''
+                    # 스냅샷 부재 시 보수적으로 전량 취급 (과차단 방향)
+                    _rr_full = (
+                        True if _sell_pos_snap is None
+                        else fill.quantity >= getattr(_sell_pos_snap, 'quantity', 0)
+                    )
+                    # 다중 부분체결 배치 보강: 직전 on_fill로 ExitManager
+                    # 상태가 소멸했으면 전량 청산 (스냅샷 지연 오분류 방지)
+                    if (not _rr_full and bot.exit_manager
+                            and fill.symbol not in bot.exit_manager._states):
+                        _rr_full = True
+                    bot.risk_manager.record_exit(
+                        fill.symbol, float(fill.price),
+                        sector=_rr_sector, exit_type=_rr_etype,
+                        is_full_exit=_rr_full,
+                    )
+                except Exception as _ree:
+                    logger.error(f"[체결] {fill.symbol} 재진입 제한 등록 실패: {_ree}")
+
+            # trade journal SELL 기록
+            if bot.trade_journal and _sell_pos_snap:
+                try:
+                    _journal_reason, _journal_type = self._journal_exit_reason(fill)
+                    # trade_id: position.trade_id 또는 journal open trades 탐색
+                    _tid = getattr(_sell_pos_snap, 'trade_id', None)
+                    if not _tid:
+                        _open = bot.trade_journal.get_open_trades()
+                        _match = [t for t in _open if t.symbol == fill.symbol]
+                        if _match:
+                            _tid = _match[-1].id
+                    if _tid:
+                        # 일지·복기만 주문에 결합된 근거를 사용한다.
+                        _etype = _journal_type
+                        bot.trade_journal.record_exit(
+                            trade_id=_tid,
+                            exit_price=float(fill.price),
+                            exit_quantity=fill.quantity,
+                            exit_reason=_journal_reason,
+                            exit_type=_etype,
+                            exit_time=datetime.now(),
+                            avg_entry_price=float(_sell_pos_snap.avg_price),
+                        )
+                        logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
+                        # 재진입 제한 등록은 저널 앞 독립 블록으로 이동 (2026-08-05 P1)
+                        # 거래 메모리: Layer 1 기록
+                        if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
+                            try:
+                                _entry_time = getattr(_sell_pos_snap, 'entry_time', None)
+                                _holding = (datetime.now() - _entry_time).days if _entry_time else 0
+                                _pnl_pct = (float(fill.price) - float(_sell_pos_snap.avg_price)) / float(_sell_pos_snap.avg_price) * 100 if _sell_pos_snap.avg_price > 0 else 0
+                                _regime = getattr(bot.engine, '_market_regime', 'neutral')
+                                # 진입 시점 지표 복원 (trade_journal에서)
+                                _mem_indicators = {}
+                                if _tid and bot.trade_journal:
+                                    _tr = bot.trade_journal._trades.get(_tid)
+                                    if _tr and hasattr(_tr, 'indicators_at_entry'):
+                                        _mem_indicators = _tr.indicators_at_entry or {}
+                                # KOSPI 레벨 구간 (시장 변곡점 학습용)
+                                _kospi_level = ""
+                                if hasattr(bot.engine, '_regime_adapter'):
+                                    _rd = getattr(bot.engine._regime_adapter, '_regime_data', {})
+                                    # _rd 비어있으면 (봇 시작 직후 미수집) 레이블 미부여
+                                    if _rd:
+                                        _avg_chg = _rd.get("avg_change", 0)
+                                        # 등락률 구간화: -3%~+3%를 1% 단위로
+                                        if _avg_chg <= -2:
+                                            _kospi_level = "급락(-2%이하)"
+                                        elif _avg_chg <= -1:
+                                            _kospi_level = "하락(-1~-2%)"
+                                        elif _avg_chg < 1:
+                                            _kospi_level = "보합(-1~+1%)"
+                                        elif _avg_chg < 2:
+                                            _kospi_level = "상승(+1~+2%)"
+                                        else:
+                                            _kospi_level = "급등(+2%이상)"
+                                bot.engine.risk_manager._trade_memory.record_outcome(
+                                    symbol=fill.symbol,
+                                    name=getattr(_sell_pos_snap, 'name', ''),
+                                    strategy=_sell_pos_snap.strategy or '',
+                                    sector=getattr(_sell_pos_snap, 'sector', ''),
+                                    entry_date=_entry_time.strftime('%Y-%m-%d') if _entry_time else '',
+                                    exit_date=datetime.now().strftime('%Y-%m-%d'),
+                                    holding_days=_holding,
+                                    pnl_pct=_pnl_pct,
+                                    exit_type=_etype,
+                                    entry_indicators=_mem_indicators,
+                                    market_regime=_regime,
+                                    market_level=_kospi_level,
+                                )
+                                # 위키 Ingest (fire-and-forget)
+                                _wiki = getattr(bot.engine.risk_manager, '_trade_wiki', None)
+                                if _wiki:
+                                    asyncio.create_task(_wiki.ingest({
+                                        "symbol": fill.symbol,
+                                        "name": getattr(_sell_pos_snap, 'name', ''),
+                                        "strategy": _sell_pos_snap.strategy or '',
+                                        "sector": getattr(_sell_pos_snap, 'sector', ''),
+                                        "pnl_pct": _pnl_pct,
+                                        "exit_type": _etype,
+                                        "holding_days": _holding,
+                                        "market_regime": _regime,
+                                    }))
+                            except Exception as _mem_err:
+                                logger.debug(f"[거래메모리] 기록 실패 (무시): {_mem_err}")
+                    else:
+                        # trade_id 없음 → trades DB 직접 조회 후 기록
+                        # (sync_detected 등 journal 미등록 포지션 대응)
+                        logger.warning(f"[체결] {fill.symbol} SELL trade_id 없음 → DB 직접 기록 시도")
+                        _db_pool = getattr(bot.trade_journal, 'pool', None)
+                        if _db_pool:
+                            try:
+                                async with _db_pool.acquire() as _dbc:
+                                    # 2026-04-22 수정: 부분매도 후 재조회 가능하도록
+                                    # exit_time IS NULL 조건 완화 — 오늘 진입분 또는 미청산건 모두 허용
+                                    # (1차 익절로 exit_time 세팅된 건도 잔여 수량 있으면 재사용)
+                                    _db_row = await _dbc.fetchrow(
+                                        """SELECT id, entry_price, entry_strategy,
+                                                  entry_quantity, exit_quantity, exit_time
+                                           FROM trades
+                                           WHERE symbol=$1
+                                             AND (exit_time IS NULL
+                                                  OR COALESCE(exit_quantity, 0) < entry_quantity)
+                                           ORDER BY entry_time DESC LIMIT 1""",
+                                        fill.symbol,
+                                    )
+                                if _db_row:
+                                    _db_tid = str(_db_row['id'])
+                                    _db_ep = float(_db_row['entry_price'] or 0) or float(_sell_pos_snap.avg_price)
+                                    _db_strat = str(_db_row['entry_strategy'] or 'sync_detected')
+                                    _db_entry_qty = int(_db_row['entry_quantity'] or 0)
+                                    _db_prev_exit_qty = int(_db_row['exit_quantity'] or 0)
+                                    _new_exit_qty = _db_prev_exit_qty + int(fill.quantity)
+                                    # 부분매도 판정: 포지션 스냅샷 기준 잔여 수량 + DB 기준 청산합계
+                                    _pre_qty = int(getattr(_sell_pos_snap, 'quantity', 0) or 0)
+                                    _remaining_after = _pre_qty - int(fill.quantity)
+                                    _is_full_exit = (_remaining_after <= 0) and (_new_exit_qty >= _db_entry_qty)
+                                    _etype2 = _journal_type
+                                    _status2 = _etype2 if _is_full_exit else "partial"
+                                    # PnL 계산 (FeeCalculator 사용, 수수료 포함 순손익)
+                                    _fc = get_fee_calculator("KR")
+                                    _this_pnl2_d, _pnl_pct2_d = _fc.calculate_net_pnl(
+                                        Decimal(str(_db_ep)),
+                                        Decimal(str(float(fill.price))),
+                                        fill.quantity,
+                                    )
+                                    _this_pnl2 = int(_this_pnl2_d)
+                                    _pnl_pct2 = round(float(_pnl_pct2_d), 2)
+                                    _sym_name2 = getattr(_sell_pos_snap, 'name', '') or fill.symbol
+                                    _now2 = datetime.now()
+                                    async with _db_pool.acquire() as _dbc:
+                                        await _dbc.execute(
+                                            """INSERT INTO trade_events
+                                               (trade_id, symbol, name,
+                                                event_type, event_time, price, quantity,
+                                                exit_type, exit_reason,
+                                                pnl, pnl_pct, strategy, signal_score, status)
+                                               VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0.0,$12)""",
+                                            _db_tid, fill.symbol, _sym_name2,
+                                            _now2, float(fill.price), fill.quantity,
+                                            _etype2, _journal_reason,
+                                            _this_pnl2, _pnl_pct2, _db_strat, _status2,
+                                        )
+                                        if _is_full_exit:
+                                            # 전량 청산: exit_time 세팅, 누적 pnl/pct/exit_quantity
+                                            await _dbc.execute(
+                                                """UPDATE trades SET
+                                                   exit_time=$1, exit_price=$2,
+                                                   exit_quantity=$3,
+                                                   exit_reason=$4, exit_type=$5,
+                                                   pnl=COALESCE(pnl,0)+$6,
+                                                   pnl_pct=$7, updated_at=$8
+                                                   WHERE id=$9""",
+                                                _now2, float(fill.price), _new_exit_qty,
+                                                _journal_reason, _etype2,
+                                                _this_pnl2, _pnl_pct2, _now2, _db_tid,
+                                            )
+                                        else:
+                                            # 부분매도: exit_time/exit_type은 건드리지 않고
+                                            # exit_quantity 누적 + pnl 누적만 반영
+                                            await _dbc.execute(
+                                                """UPDATE trades SET
+                                                   exit_quantity=$1,
+                                                   pnl=COALESCE(pnl,0)+$2,
+                                                   updated_at=$3
+                                                   WHERE id=$4""",
+                                                _new_exit_qty, _this_pnl2, _now2, _db_tid,
+                                            )
+                                    logger.info(
+                                        f"[체결] {fill.symbol} SELL DB 직접 기록 완료 "
+                                        f"(trade_id={_db_tid}, pnl={_this_pnl2:+,}원, "
+                                        f"누적청산={_new_exit_qty}/{_db_entry_qty}, "
+                                        f"{'전량' if _is_full_exit else '부분'})"
+                                    )
+                                    # 재진입 제한 등록은 저널 앞 독립 블록으로 이동 (2026-08-05 P1)
+                                else:
+                                    logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: 오픈 포지션 없음")
+                            except Exception as _dbe:
+                                logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: {_dbe}")
+                        else:
+                            logger.warning(f"[체결] {fill.symbol} SELL journal 완전 스킵 (pool 없음)")
+                except Exception as _je:
+                    logger.warning(f"[체결] {fill.symbol} SELL journal 기록 실패: {_je}")
+
+        # 매수 체결 시 ExitManager 등록 + WS 우선 구독 + trade journal 기록
+        if fill.side == OrderSide.BUY:
+            # V자 반등 재진입 1회권 소모 — 체결 확인 시점 (2026-08-05 P1)
+            if bot.risk_manager and hasattr(bot.risk_manager, 'on_buy_filled'):
+                try:
+                    bot.risk_manager.on_buy_filled(fill.symbol)
+                except Exception as _obe:
+                    logger.debug(f"[재진입] on_buy_filled 오류 (무시): {_obe}")
+            # 후속 SELL이 이미 적용됐어도 이 BUY 직후 수량부터 청산 상태를 순서대로 갱신한다.
+            pos = event.position_after
+            if pos is not None and event.position_owner is not None:
+                # 같은 보유 생애의 앞선 부분체결이 만든 저널 ID를 지연 스냅샷에도 연결한다.
+                pos.trade_id = event.position_owner.trade_id
+
+            if pos and bot.exit_manager:
+                exit_params = bot._strategy_exit_params.get(
+                    pos.strategy, {}
+                ) if pos.strategy else {}
+                # 시그널 캐시에서 atr_pct hint 추출 (ATR-linked trailing용)
+                # 체결 시점 스냅샷이 정본 — 엔진이 주문 완결 시 캐시를 비운다
+                _atr_hint: Optional[float] = None
+                try:
+                    _rm_h = getattr(bot.engine, 'risk_manager', None)
+                    _sig_cache_h = getattr(_rm_h, '_pending_signal_cache', {}) if _rm_h else {}
+                    _sig_meta_h = ((_entry_lot or {}).get("signal")
+                                   or _sig_cache_h.get(fill.symbol, {}))
+                    _atr_meta = _sig_meta_h.get("metadata", {}).get("atr_pct")
+                    if _atr_meta is not None and float(_atr_meta) > 0:
+                        _atr_hint = float(_atr_meta)
+                except Exception:
+                    _atr_hint = None
+                _registered_ok = False
+                try:
+                    bot.exit_manager.register_position(
+                        pos,
+                        stop_loss_pct=exit_params.get("stop_loss_pct"),
+                        trailing_stop_pct=exit_params.get("trailing_stop_pct"),
+                        first_exit_pct=exit_params.get("first_exit_pct"),
+                        second_exit_pct=exit_params.get("second_exit_pct"),
+                        third_exit_pct=exit_params.get("third_exit_pct"),
+                        first_exit_ratio=exit_params.get("first_exit_ratio"),
+                        second_exit_ratio=exit_params.get("second_exit_ratio"),
+                        third_exit_ratio=exit_params.get("third_exit_ratio"),
+                        stale_high_days=exit_params.get("stale_high_days"),
+                        is_core=exit_params.get("is_core", False),
+                        max_holding_days=exit_params.get("max_holding_days"),
+                        trailing_activate_pct=exit_params.get("trailing_activate_pct"),
+                        atr_pct_hint=_atr_hint,
+                    )
+                    _registered_ok = True
+                    logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%, ATR-hint={_atr_hint})")
+                except Exception as e:
+                    # 포지션은 있는데 등록만 실패 = 손절 부재 → 다음 주기 재시도 대기열 (2026-09-14)
+                    self._pending_exit_registrations.add(fill.symbol)
+                    logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열: {e}")
+                # 등록 성공 직후 초기 위험 확정 (주문 완결 시 1회, 계측 전용)
+                # 계측 예외가 이후 저널 기록·WS 구독을 끊지 못하게 통째로 감싼다
+                if _registered_ok:
+                    try:
+                        self._confirm_entry_risk(fill.symbol, _entry_lot,
+                                                 exit_params, _order_done)
+                        self._sync_journal_entry_risk(fill.symbol, _entry_lot)
+                    except Exception as _ere:
+                        logger.warning(f"[위험계측] {fill.symbol} 진입 위험 확정 생략 (매매 영향 없음): {_ere}")
+            else:
+                # 포지션 미생성 — 다음 fill_check 주기에 재시도
+                self._pending_exit_registrations.add(fill.symbol)
+                logger.error(
+                    f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열 추가 "
+                    f"(pos={'없음' if not pos else 'OK'}, exit_manager={'없음' if not bot.exit_manager else 'OK'})"
+                )
+
+            # trade journal BUY 기록 (trade_id 미설정 시에만)
+            if pos and bot.trade_journal and not getattr(pos, 'trade_id', None):
+                try:
+                    from datetime import datetime as _dt
+                    _tid = f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
+
+                    # ── 시그널 캐시에서 메타데이터 추출 ──────────────
+                    _rm = getattr(bot.engine, 'risk_manager', None)
+                    _sig_cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
+                    # 체결 시점 스냅샷이 정본. 엔진 캐시는 pop 하지 않는다 —
+                    # 부분체결 잔여분·등록 재시도가 빈 메타를 쓰지 않도록 수명을
+                    # 엔진 pending 정리(on_fill 완결·clear_pending)에 맞춘다 (2026-09-14 T3)
+                    _sig_meta = ((_entry_lot or {}).get("signal")
+                                 or _sig_cache.get(fill.symbol, {}))
+                    _sig_reason = _sig_meta.get("reason", "")
+                    _sig_reasons_list = _sig_meta.get("reasons", []) or []
+                    _sig_score_breakdown = _sig_meta.get("score_breakdown", {}) or {}
+                    _sig_context_snapshot = _sig_meta.get("context_snapshot", {}) or {}
+                    _sig_metadata = _sig_meta.get("metadata", {})
+                    _sig_strategy = (
+                        _sig_meta.get("strategy")
+                        or str(pos.strategy or "")
+                    )
+                    _sig_score = _sig_meta.get("score") or float(fill.signal_score or 0.0)
+
+                    # ── 진입근거 태그 구성 (3개 이상 의무) ──────────
+                    _tags = []
+
+                    # Tag 1: 전략명
+                    _strat_label = {
+                        "sepa_trend": "SEPA추세", "rsi2_reversal": "RSI2반전",
+                        "theme_chasing": "테마추종", "momentum_breakout": "모멘텀돌파",
+                        "strategic_swing": "전략스윙", "gap_and_go": "갭상승",
+                        "core_holding": "코어홀딩",
+                    }.get(_sig_strategy, _sig_strategy or "미분류")
+                    _tags.append(f"전략:{_strat_label}")
+
+                    # Tag 2: 시그널 점수
+                    if _sig_score:
+                        _tags.append(f"점수:{_sig_score:.0f}pt")
+
+                    # Tag 3: 등락률 (있으면)
+                    _rt_chg = _sig_metadata.get("rt_change_pct")
+                    if _rt_chg is not None:
+                        _tags.append(f"등락:{_rt_chg:+.1f}%")
+
+                    # Tag 4+: 섹터
+                    _sector = _sig_metadata.get("sector") or getattr(pos, 'sector', None)
+                    if _sector:
+                        _tags.append(f"섹터:{_sector}")
+
+                    # Tag 5+: ATR 변동성
+                    _atr = _sig_metadata.get("atr_pct")
+                    if _atr:
+                        _tags.append(f"ATR:{_atr:.1f}%")
+
+                    # Tag 6+: 뉴스/테마 검증
+                    _news_adj = _sig_metadata.get("news_validation")
+                    if _news_adj and abs(_news_adj) > 0:
+                        _tags.append(f"뉴스:{'호재' if _news_adj > 0 else '악재'}{_news_adj:+.2f}")
+
+                    # Tag 7+: 시그널 소스
+                    _source = _sig_metadata.get("source", "")
+                    if _source:
+                        _source_label = {
+                            "live_screening": "장중스크리닝",
+                            "batch_scan": "배치스캔",
+                            "intraday_quality": "장중품질",
+                            "core_rebalance": "코어리밸런싱",
+                        }.get(_source, _source)
+                        _tags.append(f"소스:{_source_label}")
+
+                    # 3개 미달이면 reason에서 키워드 보충
+                    if len(_tags) < 3 and _sig_reason:
+                        _tags.append(f"근거:{_sig_reason[:30]}")
+
+                    # ── 진입 시 시장 컨텍스트 + 지표 수집 ──────────
+                    _indicators = {}
+                    _market_ctx = {}
+                    _theme = {}
+                    try:
+                        # 지표: 시그널 캐시 + 실시간 데이터
+                        _atr_v = _sig_metadata.get("atr_pct")
+                        if _atr_v is not None:
+                            _indicators["atr_pct"] = float(_atr_v)
+                        _rsi_v = _sig_metadata.get("rsi")
+                        if _rsi_v is not None:
+                            _indicators["rsi"] = float(_rsi_v)
+                        _vol_r = _sig_metadata.get("volume_ratio")
+                        if _vol_r is not None:
+                            _indicators["volume_ratio"] = float(_vol_r)
+                        _chg = _sig_metadata.get("rt_change_pct")
+                        if _chg is not None:
+                            _indicators["change_pct"] = float(_chg)
+                        # 2026-05-11 P0-1 계측: 수급 델타 영속화
+                        # candidate.indicators → signal.metadata['indicators'] 경로
+                        _nested_ind = _sig_metadata.get("indicators") or {}
+                        _dr = _nested_ind.get("supply_delta_ratio")
+                        if _dr is not None:
+                            try:
+                                _indicators["supply_delta_ratio"] = float(_dr)
+                            except (TypeError, ValueError):
+                                pass
+
+                        # 시장 컨텍스트: 레짐 + 세션
+                        _regime_path = Path.home() / ".cache" / "ai_trader" / "llm_regime_today.json"
+                        if _regime_path.exists():
+                            _rd = json.loads(_regime_path.read_text(encoding="utf-8"))
+                            if _rd.get("date") == date.today().isoformat():
+                                # 캐시 원본(raw, 설명용)과 게이트·사이징이 실제로 쓴
+                                # 유효 레짐(effective)을 구분해 남긴다 (T10 F15)
+                                _market_ctx["regime"] = _rd.get("regime", "unknown")
+                                _market_ctx["regime_confidence"] = _rd.get("confidence", 0)
+                        _adapter = getattr(
+                            getattr(self.bot, "engine", None), "_regime_adapter", None
+                        )
+                        _eff = getattr(_adapter, "regime", None)
+                        if _eff is not None:
+                            _market_ctx["regime_effective"] = _eff
+                        _market_ctx["session"] = self._get_current_session().value
+                        _market_ctx["source"] = _sig_metadata.get("source", "")
+
+                        # 테마 정보 (있으면)
+                        _theme_name = _sig_metadata.get("theme_name")
+                        if _theme_name:
+                            _theme["name"] = _theme_name
+                            _theme["score"] = _sig_metadata.get("theme_score", 0)
+                    except Exception:
+                        pass  # 메타데이터 수집 실패 시 빈 dict로 진행
+
+                    # 진입근거: 구조화 reasons 우선, 없으면 _sig_reason 폴백
+                    # context_snapshot은 market_context에 병합
+                    if _sig_context_snapshot:
+                        _market_ctx = {**(_market_ctx or {}), **_sig_context_snapshot}
+
+                    # 진입 위험 스냅샷 (T3) — 스냅샷이 있을 때만 키를 만든다.
+                    # 계획 SL ≠ 실제 SL 이면 stop_pct 는 그대로 두고 actual_stop_pct 에
+                    # 실제값이 들어간다 → canary technical check(stop_pct_mismatch) 발화
+                    _er_ctx = self._entry_risk_context(_entry_lot, _sig_metadata)
+                    if _er_ctx:
+                        _market_ctx["entry_risk"] = _er_ctx
+
+                    _rec = bot.trade_journal.record_entry(
+                        trade_id=_tid,
+                        symbol=fill.symbol,
+                        name=getattr(pos, 'name', fill.symbol),
+                        entry_price=float(fill.price),
+                        entry_quantity=fill.quantity,
+                        entry_reason=_sig_reason or "buy_signal",
+                        entry_reasons=_sig_reasons_list,
+                        entry_strategy=_sig_strategy or "unclassified",
+                        signal_score=_sig_score,
+                        score_breakdown=_sig_score_breakdown,
+                        indicators=_indicators or None,
+                        market_context=_market_ctx or None,
+                        theme_info=_theme or None,
+                        entry_tags=_tags,
+                        market="KR",
+                    )
+                    pos.trade_id = _rec.id
+                    if event.position_owner is not None:
+                        event.position_owner.trade_id = _rec.id
+                    if _entry_lot is not None and _entry_lot.get("confirmed"):
+                        _entry_lot["journal_synced"] = True   # 확정값이 이미 레코드에 들어감
+                    logger.info(
+                        f"[체결] {fill.symbol} BUY journal 기록 완료 "
+                        f"(id={_rec.id}, 전략={_sig_strategy}, 태그={len(_tags)}개)"
+                    )
+                except Exception as _je:
+                    logger.warning(f"[체결] {fill.symbol} BUY journal 기록 실패: {_je}")
+
+            # WS 보유 종목 우선 구독 갱신
+            if bot.ws_feed:
+                try:
+                    pos_symbols = list(bot.engine.portfolio.positions.keys())
+                    bot.ws_feed.set_priority_symbols(pos_symbols)
+                    await bot.ws_feed.subscribe([fill.symbol])
+                    logger.debug(f"[체결] {fill.symbol} WS 우선 구독 추가")
+                except Exception as e:
+                    logger.debug(f"[체결] {fill.symbol} WS 구독 갱신 실패: {e}")
+
+
     @with_request_source("fill_check")
     async def run_fill_check(self):
         """체결 확인 루프 (적응형 폴링: 미체결 유무에 따라 2초/5초)"""
@@ -2886,7 +3451,10 @@ JSON:
         try:
             while bot.running:
                 _hb.record_attempt("kr_fill_checker")
+                if not hasattr(self, '_pending_fill_handoffs'):
+                    self._pending_fill_handoffs = {}
                 try:
+                    await self._drain_fill_handoffs(wait=False)
                     open_orders = await bot.broker.get_open_orders()
                     # 재시도 대상은 이전 주기까지 쌓인 것만 — 이번 주기에 "포지션 미생성"으로 막 넣은 종목을
                     # 같은 주기 아래 재시도 블록이 '포지션 없음 = 삭제됨'으로 즉시 버리던 결함 방지 (2026-09-14)
@@ -2895,7 +3463,14 @@ JSON:
                     _open_ids: Optional[Set[str]] = set()
 
                     if open_orders:
+                        self._fill_handoff_active = True
+                        self._fill_handoff_generation = getattr(self, '_fill_handoff_generation', 0) + 1
                         fills = await bot.broker.check_fills()
+                        # 브로커가 완결 주문을 지운 직후부터 다음 await 전에 보호한다.
+                        # emit 실패도 적용 확인으로 바꾸지 않는다(미해결 체결은 엔진에 남는다).
+                        fill_events = [FillEvent.from_fill(fill, source="kis_broker") for fill in fills]
+                        for _event in fill_events:
+                            bot.engine.track_fill(_event)
                         # 주문 완결 판정 (진입 위험 확정용) — check_fills 가 완결 주문을 지운 뒤의
                         # 인메모리 미체결 목록. 조회 실패·id 식별 불가는 None(확정 보류).
                         try:
@@ -2904,7 +3479,7 @@ JSON:
                             logger.warning(f"[위험계측] 미체결 주문 조회 실패 — 완결 판정 보류: {_ooe}")
                             _open_ids = None
 
-                        for fill in fills:
+                        for fill, event in zip(fills, fill_events):
                             logger.info(
                                 f"[체결] {fill.symbol} {fill.side.value} "
                                 f"{fill.quantity}주 @ {fill.price:,.0f}원"
@@ -2931,486 +3506,14 @@ JSON:
                                 _order_done = (None if _open_ids is None else
                                                str(getattr(fill, 'order_id', '') or '') not in _open_ids)
 
-                            event = FillEvent.from_fill(fill, source="kis_broker")
+                            self._pending_fill_handoffs[event.id] = {
+                                'fill': fill, 'event': event, '_sell_pos_snap': _sell_pos_snap,
+                                '_exit_reason_snap': _exit_reason_snap, '_entry_lot': _entry_lot,
+                                '_order_done': _order_done,
+                            }
                             await bot.engine.emit(event)
 
-                            # 매도 체결 시 _exit_pending 즉시 해제 + ExitManager 상태 갱신 + trade journal 기록
-                            if fill.side == OrderSide.SELL:
-                                bot._exit_pending_symbols.discard(fill.symbol)
-                                bot._exit_pending_timestamps.pop(fill.symbol, None)
-                                bot._exit_reasons.pop(fill.symbol, None)
-
-                                # ExitManager remaining_quantity 즉시 갱신 (30초 sync 의존 제거)
-                                if bot.exit_manager:
-                                    bot.exit_manager.on_fill(
-                                        fill.symbol, fill.quantity,
-                                        Decimal(str(fill.price))
-                                    )
-
-                                # 재진입 제한 등록 — 저널 기록과 독립 실행 (2026-08-05 P1)
-                                # 기존엔 저널 record_exit 성공 이후에만 도달해, 저널 예외
-                                # (과거 kwarg 불일치 TypeError 사고) 시 _stop_loss_today
-                                # 미등록 → 당일 재매수→재손절 반복이 열려 있었다.
-                                if bot.risk_manager and hasattr(bot.risk_manager, 'record_exit'):
-                                    try:
-                                        _rr_etype = self._classify_exit_type(_exit_reason_snap)
-                                        _rr_sector = getattr(_sell_pos_snap, 'sector', '') if _sell_pos_snap else ''
-                                        # 스냅샷 부재 시 보수적으로 전량 취급 (과차단 방향)
-                                        _rr_full = (
-                                            True if _sell_pos_snap is None
-                                            else fill.quantity >= getattr(_sell_pos_snap, 'quantity', 0)
-                                        )
-                                        # 다중 부분체결 배치 보강: 직전 on_fill로 ExitManager
-                                        # 상태가 소멸했으면 전량 청산 (스냅샷 지연 오분류 방지)
-                                        if (not _rr_full and bot.exit_manager
-                                                and fill.symbol not in bot.exit_manager._states):
-                                            _rr_full = True
-                                        bot.risk_manager.record_exit(
-                                            fill.symbol, float(fill.price),
-                                            sector=_rr_sector, exit_type=_rr_etype,
-                                            is_full_exit=_rr_full,
-                                        )
-                                    except Exception as _ree:
-                                        logger.error(f"[체결] {fill.symbol} 재진입 제한 등록 실패: {_ree}")
-
-                                # trade journal SELL 기록
-                                if bot.trade_journal and _sell_pos_snap:
-                                    try:
-                                        _journal_reason, _journal_type = self._journal_exit_reason(fill)
-                                        # trade_id: position.trade_id 또는 journal open trades 탐색
-                                        _tid = getattr(_sell_pos_snap, 'trade_id', None)
-                                        if not _tid:
-                                            _open = bot.trade_journal.get_open_trades()
-                                            _match = [t for t in _open if t.symbol == fill.symbol]
-                                            if _match:
-                                                _tid = _match[-1].id
-                                        if _tid:
-                                            # 일지·복기만 주문에 결합된 근거를 사용한다.
-                                            _etype = _journal_type
-                                            bot.trade_journal.record_exit(
-                                                trade_id=_tid,
-                                                exit_price=float(fill.price),
-                                                exit_quantity=fill.quantity,
-                                                exit_reason=_journal_reason,
-                                                exit_type=_etype,
-                                                exit_time=datetime.now(),
-                                                avg_entry_price=float(_sell_pos_snap.avg_price),
-                                            )
-                                            logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
-                                            # 재진입 제한 등록은 저널 앞 독립 블록으로 이동 (2026-08-05 P1)
-                                            # 거래 메모리: Layer 1 기록
-                                            if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
-                                                try:
-                                                    _entry_time = getattr(_sell_pos_snap, 'entry_time', None)
-                                                    _holding = (datetime.now() - _entry_time).days if _entry_time else 0
-                                                    _pnl_pct = (float(fill.price) - float(_sell_pos_snap.avg_price)) / float(_sell_pos_snap.avg_price) * 100 if _sell_pos_snap.avg_price > 0 else 0
-                                                    _regime = getattr(bot.engine, '_market_regime', 'neutral')
-                                                    # 진입 시점 지표 복원 (trade_journal에서)
-                                                    _mem_indicators = {}
-                                                    if _tid and bot.trade_journal:
-                                                        _tr = bot.trade_journal._trades.get(_tid)
-                                                        if _tr and hasattr(_tr, 'indicators_at_entry'):
-                                                            _mem_indicators = _tr.indicators_at_entry or {}
-                                                    # KOSPI 레벨 구간 (시장 변곡점 학습용)
-                                                    _kospi_level = ""
-                                                    if hasattr(bot.engine, '_regime_adapter'):
-                                                        _rd = getattr(bot.engine._regime_adapter, '_regime_data', {})
-                                                        # _rd 비어있으면 (봇 시작 직후 미수집) 레이블 미부여
-                                                        if _rd:
-                                                            _avg_chg = _rd.get("avg_change", 0)
-                                                            # 등락률 구간화: -3%~+3%를 1% 단위로
-                                                            if _avg_chg <= -2:
-                                                                _kospi_level = "급락(-2%이하)"
-                                                            elif _avg_chg <= -1:
-                                                                _kospi_level = "하락(-1~-2%)"
-                                                            elif _avg_chg < 1:
-                                                                _kospi_level = "보합(-1~+1%)"
-                                                            elif _avg_chg < 2:
-                                                                _kospi_level = "상승(+1~+2%)"
-                                                            else:
-                                                                _kospi_level = "급등(+2%이상)"
-                                                    bot.engine.risk_manager._trade_memory.record_outcome(
-                                                        symbol=fill.symbol,
-                                                        name=getattr(_sell_pos_snap, 'name', ''),
-                                                        strategy=_sell_pos_snap.strategy or '',
-                                                        sector=getattr(_sell_pos_snap, 'sector', ''),
-                                                        entry_date=_entry_time.strftime('%Y-%m-%d') if _entry_time else '',
-                                                        exit_date=datetime.now().strftime('%Y-%m-%d'),
-                                                        holding_days=_holding,
-                                                        pnl_pct=_pnl_pct,
-                                                        exit_type=_etype,
-                                                        entry_indicators=_mem_indicators,
-                                                        market_regime=_regime,
-                                                        market_level=_kospi_level,
-                                                    )
-                                                    # 위키 Ingest (fire-and-forget)
-                                                    _wiki = getattr(bot.engine.risk_manager, '_trade_wiki', None)
-                                                    if _wiki:
-                                                        asyncio.create_task(_wiki.ingest({
-                                                            "symbol": fill.symbol,
-                                                            "name": getattr(_sell_pos_snap, 'name', ''),
-                                                            "strategy": _sell_pos_snap.strategy or '',
-                                                            "sector": getattr(_sell_pos_snap, 'sector', ''),
-                                                            "pnl_pct": _pnl_pct,
-                                                            "exit_type": _etype,
-                                                            "holding_days": _holding,
-                                                            "market_regime": _regime,
-                                                        }))
-                                                except Exception as _mem_err:
-                                                    logger.debug(f"[거래메모리] 기록 실패 (무시): {_mem_err}")
-                                        else:
-                                            # trade_id 없음 → trades DB 직접 조회 후 기록
-                                            # (sync_detected 등 journal 미등록 포지션 대응)
-                                            logger.warning(f"[체결] {fill.symbol} SELL trade_id 없음 → DB 직접 기록 시도")
-                                            _db_pool = getattr(bot.trade_journal, 'pool', None)
-                                            if _db_pool:
-                                                try:
-                                                    async with _db_pool.acquire() as _dbc:
-                                                        # 2026-04-22 수정: 부분매도 후 재조회 가능하도록
-                                                        # exit_time IS NULL 조건 완화 — 오늘 진입분 또는 미청산건 모두 허용
-                                                        # (1차 익절로 exit_time 세팅된 건도 잔여 수량 있으면 재사용)
-                                                        _db_row = await _dbc.fetchrow(
-                                                            """SELECT id, entry_price, entry_strategy,
-                                                                      entry_quantity, exit_quantity, exit_time
-                                                               FROM trades
-                                                               WHERE symbol=$1
-                                                                 AND (exit_time IS NULL
-                                                                      OR COALESCE(exit_quantity, 0) < entry_quantity)
-                                                               ORDER BY entry_time DESC LIMIT 1""",
-                                                            fill.symbol,
-                                                        )
-                                                    if _db_row:
-                                                        _db_tid = str(_db_row['id'])
-                                                        _db_ep = float(_db_row['entry_price'] or 0) or float(_sell_pos_snap.avg_price)
-                                                        _db_strat = str(_db_row['entry_strategy'] or 'sync_detected')
-                                                        _db_entry_qty = int(_db_row['entry_quantity'] or 0)
-                                                        _db_prev_exit_qty = int(_db_row['exit_quantity'] or 0)
-                                                        _new_exit_qty = _db_prev_exit_qty + int(fill.quantity)
-                                                        # 부분매도 판정: 포지션 스냅샷 기준 잔여 수량 + DB 기준 청산합계
-                                                        _pre_qty = int(getattr(_sell_pos_snap, 'quantity', 0) or 0)
-                                                        _remaining_after = _pre_qty - int(fill.quantity)
-                                                        _is_full_exit = (_remaining_after <= 0) and (_new_exit_qty >= _db_entry_qty)
-                                                        _etype2 = _journal_type
-                                                        _status2 = _etype2 if _is_full_exit else "partial"
-                                                        # PnL 계산 (FeeCalculator 사용, 수수료 포함 순손익)
-                                                        _fc = get_fee_calculator("KR")
-                                                        _this_pnl2_d, _pnl_pct2_d = _fc.calculate_net_pnl(
-                                                            Decimal(str(_db_ep)),
-                                                            Decimal(str(float(fill.price))),
-                                                            fill.quantity,
-                                                        )
-                                                        _this_pnl2 = int(_this_pnl2_d)
-                                                        _pnl_pct2 = round(float(_pnl_pct2_d), 2)
-                                                        _sym_name2 = getattr(_sell_pos_snap, 'name', '') or fill.symbol
-                                                        _now2 = datetime.now()
-                                                        async with _db_pool.acquire() as _dbc:
-                                                            await _dbc.execute(
-                                                                """INSERT INTO trade_events
-                                                                   (trade_id, symbol, name,
-                                                                    event_type, event_time, price, quantity,
-                                                                    exit_type, exit_reason,
-                                                                    pnl, pnl_pct, strategy, signal_score, status)
-                                                                   VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,0.0,$12)""",
-                                                                _db_tid, fill.symbol, _sym_name2,
-                                                                _now2, float(fill.price), fill.quantity,
-                                                                _etype2, _journal_reason,
-                                                                _this_pnl2, _pnl_pct2, _db_strat, _status2,
-                                                            )
-                                                            if _is_full_exit:
-                                                                # 전량 청산: exit_time 세팅, 누적 pnl/pct/exit_quantity
-                                                                await _dbc.execute(
-                                                                    """UPDATE trades SET
-                                                                       exit_time=$1, exit_price=$2,
-                                                                       exit_quantity=$3,
-                                                                       exit_reason=$4, exit_type=$5,
-                                                                       pnl=COALESCE(pnl,0)+$6,
-                                                                       pnl_pct=$7, updated_at=$8
-                                                                       WHERE id=$9""",
-                                                                    _now2, float(fill.price), _new_exit_qty,
-                                                                    _journal_reason, _etype2,
-                                                                    _this_pnl2, _pnl_pct2, _now2, _db_tid,
-                                                                )
-                                                            else:
-                                                                # 부분매도: exit_time/exit_type은 건드리지 않고
-                                                                # exit_quantity 누적 + pnl 누적만 반영
-                                                                await _dbc.execute(
-                                                                    """UPDATE trades SET
-                                                                       exit_quantity=$1,
-                                                                       pnl=COALESCE(pnl,0)+$2,
-                                                                       updated_at=$3
-                                                                       WHERE id=$4""",
-                                                                    _new_exit_qty, _this_pnl2, _now2, _db_tid,
-                                                                )
-                                                        logger.info(
-                                                            f"[체결] {fill.symbol} SELL DB 직접 기록 완료 "
-                                                            f"(trade_id={_db_tid}, pnl={_this_pnl2:+,}원, "
-                                                            f"누적청산={_new_exit_qty}/{_db_entry_qty}, "
-                                                            f"{'전량' if _is_full_exit else '부분'})"
-                                                        )
-                                                        # 재진입 제한 등록은 저널 앞 독립 블록으로 이동 (2026-08-05 P1)
-                                                    else:
-                                                        logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: 오픈 포지션 없음")
-                                                except Exception as _dbe:
-                                                    logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: {_dbe}")
-                                            else:
-                                                logger.warning(f"[체결] {fill.symbol} SELL journal 완전 스킵 (pool 없음)")
-                                    except Exception as _je:
-                                        logger.warning(f"[체결] {fill.symbol} SELL journal 기록 실패: {_je}")
-
-                            # 매수 체결 시 ExitManager 등록 + WS 우선 구독 + trade journal 기록
-                            if fill.side == OrderSide.BUY:
-                                # V자 반등 재진입 1회권 소모 — 체결 확인 시점 (2026-08-05 P1)
-                                if bot.risk_manager and hasattr(bot.risk_manager, 'on_buy_filled'):
-                                    try:
-                                        bot.risk_manager.on_buy_filled(fill.symbol)
-                                    except Exception as _obe:
-                                        logger.debug(f"[재진입] on_buy_filled 오류 (무시): {_obe}")
-                                # engine.emit()은 큐에만 넣고 리턴 → FillEvent 처리 전에
-                                # portfolio.positions에 포지션이 없을 수 있음.
-                                # 엔진 루프가 처리할 때까지 최대 1초 대기.
-                                pos = None
-                                for _wait in range(10):
-                                    pos = bot.engine.portfolio.positions.get(fill.symbol)
-                                    if pos:
-                                        break
-                                    await asyncio.sleep(0.1)
-
-                                if pos and bot.exit_manager:
-                                    exit_params = bot._strategy_exit_params.get(
-                                        pos.strategy, {}
-                                    ) if pos.strategy else {}
-                                    # 시그널 캐시에서 atr_pct hint 추출 (ATR-linked trailing용)
-                                    # 체결 시점 스냅샷이 정본 — 엔진이 주문 완결 시 캐시를 비운다
-                                    _atr_hint: Optional[float] = None
-                                    try:
-                                        _rm_h = getattr(bot.engine, 'risk_manager', None)
-                                        _sig_cache_h = getattr(_rm_h, '_pending_signal_cache', {}) if _rm_h else {}
-                                        _sig_meta_h = ((_entry_lot or {}).get("signal")
-                                                       or _sig_cache_h.get(fill.symbol, {}))
-                                        _atr_meta = _sig_meta_h.get("metadata", {}).get("atr_pct")
-                                        if _atr_meta is not None and float(_atr_meta) > 0:
-                                            _atr_hint = float(_atr_meta)
-                                    except Exception:
-                                        _atr_hint = None
-                                    _registered_ok = False
-                                    try:
-                                        bot.exit_manager.register_position(
-                                            pos,
-                                            stop_loss_pct=exit_params.get("stop_loss_pct"),
-                                            trailing_stop_pct=exit_params.get("trailing_stop_pct"),
-                                            first_exit_pct=exit_params.get("first_exit_pct"),
-                                            second_exit_pct=exit_params.get("second_exit_pct"),
-                                            third_exit_pct=exit_params.get("third_exit_pct"),
-                                            first_exit_ratio=exit_params.get("first_exit_ratio"),
-                                            second_exit_ratio=exit_params.get("second_exit_ratio"),
-                                            third_exit_ratio=exit_params.get("third_exit_ratio"),
-                                            stale_high_days=exit_params.get("stale_high_days"),
-                                            is_core=exit_params.get("is_core", False),
-                                            max_holding_days=exit_params.get("max_holding_days"),
-                                            trailing_activate_pct=exit_params.get("trailing_activate_pct"),
-                                            atr_pct_hint=_atr_hint,
-                                        )
-                                        _registered_ok = True
-                                        logger.info(f"[체결] {fill.symbol} ExitManager 등록 완료 (SL={exit_params.get('stop_loss_pct', 'default')}%, ATR-hint={_atr_hint})")
-                                    except Exception as e:
-                                        # 포지션은 있는데 등록만 실패 = 손절 부재 → 다음 주기 재시도 대기열 (2026-09-14)
-                                        self._pending_exit_registrations.add(fill.symbol)
-                                        logger.warning(f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열: {e}")
-                                    # 등록 성공 직후 초기 위험 확정 (주문 완결 시 1회, 계측 전용)
-                                    # 계측 예외가 이후 저널 기록·WS 구독을 끊지 못하게 통째로 감싼다
-                                    if _registered_ok:
-                                        try:
-                                            self._confirm_entry_risk(fill.symbol, _entry_lot,
-                                                                     exit_params, _order_done)
-                                            self._sync_journal_entry_risk(fill.symbol, _entry_lot)
-                                        except Exception as _ere:
-                                            logger.warning(f"[위험계측] {fill.symbol} 진입 위험 확정 생략 (매매 영향 없음): {_ere}")
-                                else:
-                                    # 포지션 미생성 — 다음 fill_check 주기에 재시도
-                                    self._pending_exit_registrations.add(fill.symbol)
-                                    logger.error(
-                                        f"[체결] {fill.symbol} ExitManager 등록 실패 → 재시도 대기열 추가 "
-                                        f"(pos={'없음' if not pos else 'OK'}, exit_manager={'없음' if not bot.exit_manager else 'OK'})"
-                                    )
-
-                                # trade journal BUY 기록 (trade_id 미설정 시에만)
-                                if pos and bot.trade_journal and not getattr(pos, 'trade_id', None):
-                                    try:
-                                        from datetime import datetime as _dt
-                                        _tid = f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
-
-                                        # ── 시그널 캐시에서 메타데이터 추출 ──────────────
-                                        _rm = getattr(bot.engine, 'risk_manager', None)
-                                        _sig_cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
-                                        # 체결 시점 스냅샷이 정본. 엔진 캐시는 pop 하지 않는다 —
-                                        # 부분체결 잔여분·등록 재시도가 빈 메타를 쓰지 않도록 수명을
-                                        # 엔진 pending 정리(on_fill 완결·clear_pending)에 맞춘다 (2026-09-14 T3)
-                                        _sig_meta = ((_entry_lot or {}).get("signal")
-                                                     or _sig_cache.get(fill.symbol, {}))
-                                        _sig_reason = _sig_meta.get("reason", "")
-                                        _sig_reasons_list = _sig_meta.get("reasons", []) or []
-                                        _sig_score_breakdown = _sig_meta.get("score_breakdown", {}) or {}
-                                        _sig_context_snapshot = _sig_meta.get("context_snapshot", {}) or {}
-                                        _sig_metadata = _sig_meta.get("metadata", {})
-                                        _sig_strategy = (
-                                            _sig_meta.get("strategy")
-                                            or str(pos.strategy or "")
-                                        )
-                                        _sig_score = _sig_meta.get("score") or float(fill.signal_score or 0.0)
-
-                                        # ── 진입근거 태그 구성 (3개 이상 의무) ──────────
-                                        _tags = []
-
-                                        # Tag 1: 전략명
-                                        _strat_label = {
-                                            "sepa_trend": "SEPA추세", "rsi2_reversal": "RSI2반전",
-                                            "theme_chasing": "테마추종", "momentum_breakout": "모멘텀돌파",
-                                            "strategic_swing": "전략스윙", "gap_and_go": "갭상승",
-                                            "core_holding": "코어홀딩",
-                                        }.get(_sig_strategy, _sig_strategy or "미분류")
-                                        _tags.append(f"전략:{_strat_label}")
-
-                                        # Tag 2: 시그널 점수
-                                        if _sig_score:
-                                            _tags.append(f"점수:{_sig_score:.0f}pt")
-
-                                        # Tag 3: 등락률 (있으면)
-                                        _rt_chg = _sig_metadata.get("rt_change_pct")
-                                        if _rt_chg is not None:
-                                            _tags.append(f"등락:{_rt_chg:+.1f}%")
-
-                                        # Tag 4+: 섹터
-                                        _sector = _sig_metadata.get("sector") or getattr(pos, 'sector', None)
-                                        if _sector:
-                                            _tags.append(f"섹터:{_sector}")
-
-                                        # Tag 5+: ATR 변동성
-                                        _atr = _sig_metadata.get("atr_pct")
-                                        if _atr:
-                                            _tags.append(f"ATR:{_atr:.1f}%")
-
-                                        # Tag 6+: 뉴스/테마 검증
-                                        _news_adj = _sig_metadata.get("news_validation")
-                                        if _news_adj and abs(_news_adj) > 0:
-                                            _tags.append(f"뉴스:{'호재' if _news_adj > 0 else '악재'}{_news_adj:+.2f}")
-
-                                        # Tag 7+: 시그널 소스
-                                        _source = _sig_metadata.get("source", "")
-                                        if _source:
-                                            _source_label = {
-                                                "live_screening": "장중스크리닝",
-                                                "batch_scan": "배치스캔",
-                                                "intraday_quality": "장중품질",
-                                                "core_rebalance": "코어리밸런싱",
-                                            }.get(_source, _source)
-                                            _tags.append(f"소스:{_source_label}")
-
-                                        # 3개 미달이면 reason에서 키워드 보충
-                                        if len(_tags) < 3 and _sig_reason:
-                                            _tags.append(f"근거:{_sig_reason[:30]}")
-
-                                        # ── 진입 시 시장 컨텍스트 + 지표 수집 ──────────
-                                        _indicators = {}
-                                        _market_ctx = {}
-                                        _theme = {}
-                                        try:
-                                            # 지표: 시그널 캐시 + 실시간 데이터
-                                            _atr_v = _sig_metadata.get("atr_pct")
-                                            if _atr_v is not None:
-                                                _indicators["atr_pct"] = float(_atr_v)
-                                            _rsi_v = _sig_metadata.get("rsi")
-                                            if _rsi_v is not None:
-                                                _indicators["rsi"] = float(_rsi_v)
-                                            _vol_r = _sig_metadata.get("volume_ratio")
-                                            if _vol_r is not None:
-                                                _indicators["volume_ratio"] = float(_vol_r)
-                                            _chg = _sig_metadata.get("rt_change_pct")
-                                            if _chg is not None:
-                                                _indicators["change_pct"] = float(_chg)
-                                            # 2026-05-11 P0-1 계측: 수급 델타 영속화
-                                            # candidate.indicators → signal.metadata['indicators'] 경로
-                                            _nested_ind = _sig_metadata.get("indicators") or {}
-                                            _dr = _nested_ind.get("supply_delta_ratio")
-                                            if _dr is not None:
-                                                try:
-                                                    _indicators["supply_delta_ratio"] = float(_dr)
-                                                except (TypeError, ValueError):
-                                                    pass
-
-                                            # 시장 컨텍스트: 레짐 + 세션
-                                            _regime_path = Path.home() / ".cache" / "ai_trader" / "llm_regime_today.json"
-                                            if _regime_path.exists():
-                                                _rd = json.loads(_regime_path.read_text(encoding="utf-8"))
-                                                if _rd.get("date") == date.today().isoformat():
-                                                    # 캐시 원본(raw, 설명용)과 게이트·사이징이 실제로 쓴
-                                                    # 유효 레짐(effective)을 구분해 남긴다 (T10 F15)
-                                                    _market_ctx["regime"] = _rd.get("regime", "unknown")
-                                                    _market_ctx["regime_confidence"] = _rd.get("confidence", 0)
-                                            _adapter = getattr(
-                                                getattr(self.bot, "engine", None), "_regime_adapter", None
-                                            )
-                                            _eff = getattr(_adapter, "regime", None)
-                                            if _eff is not None:
-                                                _market_ctx["regime_effective"] = _eff
-                                            _market_ctx["session"] = self._get_current_session().value
-                                            _market_ctx["source"] = _sig_metadata.get("source", "")
-
-                                            # 테마 정보 (있으면)
-                                            _theme_name = _sig_metadata.get("theme_name")
-                                            if _theme_name:
-                                                _theme["name"] = _theme_name
-                                                _theme["score"] = _sig_metadata.get("theme_score", 0)
-                                        except Exception:
-                                            pass  # 메타데이터 수집 실패 시 빈 dict로 진행
-
-                                        # 진입근거: 구조화 reasons 우선, 없으면 _sig_reason 폴백
-                                        # context_snapshot은 market_context에 병합
-                                        if _sig_context_snapshot:
-                                            _market_ctx = {**(_market_ctx or {}), **_sig_context_snapshot}
-
-                                        # 진입 위험 스냅샷 (T3) — 스냅샷이 있을 때만 키를 만든다.
-                                        # 계획 SL ≠ 실제 SL 이면 stop_pct 는 그대로 두고 actual_stop_pct 에
-                                        # 실제값이 들어간다 → canary technical check(stop_pct_mismatch) 발화
-                                        _er_ctx = self._entry_risk_context(_entry_lot, _sig_metadata)
-                                        if _er_ctx:
-                                            _market_ctx["entry_risk"] = _er_ctx
-
-                                        _rec = bot.trade_journal.record_entry(
-                                            trade_id=_tid,
-                                            symbol=fill.symbol,
-                                            name=getattr(pos, 'name', fill.symbol),
-                                            entry_price=float(fill.price),
-                                            entry_quantity=fill.quantity,
-                                            entry_reason=_sig_reason or "buy_signal",
-                                            entry_reasons=_sig_reasons_list,
-                                            entry_strategy=_sig_strategy or "unclassified",
-                                            signal_score=_sig_score,
-                                            score_breakdown=_sig_score_breakdown,
-                                            indicators=_indicators or None,
-                                            market_context=_market_ctx or None,
-                                            theme_info=_theme or None,
-                                            entry_tags=_tags,
-                                            market="KR",
-                                        )
-                                        pos.trade_id = _rec.id
-                                        if _entry_lot is not None and _entry_lot.get("confirmed"):
-                                            _entry_lot["journal_synced"] = True   # 확정값이 이미 레코드에 들어감
-                                        logger.info(
-                                            f"[체결] {fill.symbol} BUY journal 기록 완료 "
-                                            f"(id={_rec.id}, 전략={_sig_strategy}, 태그={len(_tags)}개)"
-                                        )
-                                    except Exception as _je:
-                                        logger.warning(f"[체결] {fill.symbol} BUY journal 기록 실패: {_je}")
-
-                                # WS 보유 종목 우선 구독 갱신
-                                if bot.ws_feed:
-                                    try:
-                                        pos_symbols = list(bot.engine.portfolio.positions.keys())
-                                        bot.ws_feed.set_priority_symbols(pos_symbols)
-                                        await bot.ws_feed.subscribe([fill.symbol])
-                                        logger.debug(f"[체결] {fill.symbol} WS 우선 구독 추가")
-                                    except Exception as e:
-                                        logger.debug(f"[체결] {fill.symbol} WS 구독 갱신 실패: {e}")
+                            await self._drain_fill_handoffs(wait=True)
 
                     # 미등록 종목 재시도 (이전 주기에서 포지션 미생성·등록 예외로 실패한 종목)
                     # 성공한 등록만 완료 처리, 실패 중에는 대기열 유지, 포지션이 사라진 종목만 정리
@@ -3513,6 +3616,11 @@ JSON:
                             str(e)
                         )
                         _fill_check_errors = 0
+
+                finally:
+                    if getattr(self, '_fill_handoff_active', False):
+                        self._fill_handoff_active = False
+                        self._fill_handoff_generation += 1
 
                 await asyncio.sleep(check_interval)
 

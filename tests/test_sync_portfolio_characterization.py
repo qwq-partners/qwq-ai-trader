@@ -15,6 +15,7 @@
 """
 
 import asyncio
+from copy import copy
 import sys
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -42,6 +43,10 @@ class _Broker:
         self.positions_seq = list(positions_seq)
         self.get_positions_calls = 0
         self.fills_seq = []   # run_fill_check용: check_fills() 호출마다 하나씩 소비
+        self._pending_orders = {}
+
+    def reconciliation_token(self):
+        return None if getattr(self, '_pending_orders', None) != {} else 0
 
     async def get_open_orders(self):
         return ["open"] if self.fills_seq else []
@@ -106,7 +111,11 @@ def _make(monkeypatch, *, bot_positions, balance, kis_seq, cash="100000",
                         SimpleNamespace(log_portfolio_sync=lambda **kw: None))
 
     async def _emit(event):
-        pass
+        # Scheduler wiring fake: the declared portfolio already includes this fill.
+        # Queue/application races are tested with the actual engine in test_fill_reconciliation.
+        event.portfolio_applied = True
+        event.position_owner = bot.engine.portfolio.positions.get(event.symbol)
+        event.position_after = copy(event.position_owner)
 
     portfolio = Portfolio(cash=Decimal(cash),
                           positions={p.symbol: p for p in bot_positions})
@@ -115,7 +124,10 @@ def _make(monkeypatch, *, bot_positions, balance, kis_seq, cash="100000",
         engine=SimpleNamespace(
             portfolio=portfolio,
             risk_manager=SimpleNamespace(_zombie_candidate_symbols=set(),
-                                         _kis_qty_mismatch_count={}),
+                                         _kis_qty_mismatch_count={},
+                                         _pending_orders=set(), _pending_quantities={}),
+            _position_update_generation=0,
+            track_fill=lambda event: None,
             emit=_emit,
         ),
         running=False,
@@ -133,6 +145,7 @@ def _make(monkeypatch, *, bot_positions, balance, kis_seq, cash="100000",
         _strategy_exit_params=exit_params if exit_params is not None else {"_sync": {}},
     )
     sched = object.__new__(KRScheduler)
+    bot.engine.reconciliation_token = lambda: (0, bot.engine._position_update_generation)
     sched.bot = bot
     sched._pending_exit_registrations = set()
     sched._pending_exit_registration_misses = {}
@@ -556,17 +569,24 @@ def test_buy_fill_with_delayed_position_is_registered_when_position_appears(monk
         exit_params={"_sync": dict(_SYNC_PARAMS)},
     )
     bot.broker.fills_seq = [[_buy_fill("005930")]]
+    delivered = []
+    async def delayed_emit(event): delivered.append(event)
+    bot.engine.emit = delayed_emit
     _fill_check_once(monkeypatch, sched, sleeps)
 
-    assert sleeps.count(0.1) == 10                     # 포지션 생성 최대 1초 대기
-    assert sched._pending_exit_registrations == {"005930"}
+    assert sleeps.count(0.1) == 10                     # 해당 체결의 적용 확인을 최대 1초 대기
+    assert sched._pending_exit_registrations == set()  # 등록 재시도와 미적용 체결 인계를 구분
+    assert len(sched._pending_fill_handoffs) == 1
     assert bot.exit_manager.registered == []
 
     bot.engine.portfolio.positions["005930"] = _pos("005930")   # 엔진이 뒤늦게 포지션 생성 (전략 불명)
+    delivered[0].portfolio_applied = True
+    delivered[0].position_owner = bot.engine.portfolio.positions["005930"]
+    delivered[0].position_after = copy(delivered[0].position_owner)
     _fill_check_once(monkeypatch, sched, sleeps)
     assert sched._pending_exit_registrations == set()
     (pos, kw), = bot.exit_manager.registered
-    assert pos.symbol == "005930" and kw["stop_loss_pct"] == 3.0   # 전략 불명 → _sync 폴백
+    assert pos.symbol == "005930" and kw["stop_loss_pct"] is None  # 지연 체결도 최초 BUY 기본 설정
 
 
 def test_retry_keeps_failing_symbol_and_drops_deleted_position(monkeypatch):

@@ -14,7 +14,7 @@ def test_sync_and_consistency_retry_sources_are_distinct(monkeypatch):
 
     async def balance():
         seen.append(("balance", metrics._source.get()))
-        return {"stock_value": 100000}
+        return {"stock_value": 100000, "available_cash": 100000}
 
     async def positions():
         seen.append(("positions", metrics._source.get()))
