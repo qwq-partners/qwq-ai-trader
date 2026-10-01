@@ -1,5 +1,7 @@
 # 시스템 아키텍처
 
+> **35차(10-02):** KR `KISBroker`가 계좌 범위 `ExecutionHistory/ExecutionLedger`를 기본 생성하고 connect/submit/check_fills 전에 session을 기록한다. POST 전 의도와 Fill 인계 전 누적 증분을 commit하고, Scheduler는 실제 적용 뒤 `portfolio_applied`, 후처리 반환 뒤 `handoff_returned`를 기록한다. `execution_id`는 Engine의 프로세스 내 중복도 막지만 과거 자동 replay 권한이 아니다. [통합 PDS와 흐름](../research/current-engine-integrated-pds-2026-10-02.md#35차-plan--영구-실행-원장과-재시작-경계) 참조. 운영 미배포.
+
 > **30차(10-02):** `selection-basis-v2`에서만 원천 호출의 상태를 스캔에 기록한다. ContextVar로 병렬 호출을 분리하고 원천 오류/캐시와 후보 점수 근거의 시각·순위를 검증한다. 기존 v1·반환 후보·가격 계산은 유지한다. [설계·검증](../research/current-engine-source-status-2026-10-02.md), 운영/예약 미적용.
 
 > **29차(10-02):** 새 `runner-first-scan-v2`의 명시 `selection_basis` 계약이 있을 때 스크리너 계산 근거를 수집한다. 스캔의 전체 반환 후보 뒤에 후보별 레코드를 쓰며, 첫 관측 이후/닫힌 버퍼에는 추가 근거 계산을 요청하지 않는다. 원천/통합 캐시와 반환값 소유권을 분리했다. [선정 근거 기록](../research/current-engine-selection-basis-2026-10-02.md) 참조. 운영 미배포·10월2일 예약 대상5468208 보존. 아래 단계별 표시는 당시 이력이다.

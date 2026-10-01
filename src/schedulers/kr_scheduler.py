@@ -2984,7 +2984,13 @@ JSON:
             if event.portfolio_applied is not True:
                 continue
             try:
+                receipt = getattr(self.bot.broker, 'record_execution_receipt', None)
+                if callable(receipt) and getattr(handoff['fill'], 'execution_id', ''):
+                    await receipt(handoff['fill'], 'portfolio_applied')
                 await self._complete_fill_handoff(**handoff)
+                if callable(receipt) and getattr(handoff['fill'], 'execution_id', ''):
+                    # 함수 반환 영수증이며 trade_journal의 DB/JSON 내구성 증명이 아니다.
+                    await receipt(handoff['fill'], 'handoff_returned')
                 ack = getattr(self.bot.broker, 'acknowledge_fill', None)
                 if callable(ack):
                     ack(handoff['fill'].order_id, handoff['fill'].quantity)
@@ -3540,6 +3546,8 @@ JSON:
                             _open_ids = None
 
                         for fill, event in zip(fills, fill_events):
+                            if event.duplicate_execution or event.portfolio_applied is False:
+                                continue
                             logger.info(
                                 f"[체결] {fill.symbol} {fill.side.value} "
                                 f"{fill.quantity}주 @ {fill.price:,.0f}원"

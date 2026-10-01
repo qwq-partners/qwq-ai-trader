@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import hashlib
 import json
 import os
 import sys
@@ -25,6 +26,7 @@ from loguru import logger
 from ...utils import kis_rate_limit, kis_request_metrics
 
 from .base import BaseBroker
+from ..execution_history import ExecutionHistory
 from ...core.types import (
     Order, Fill, Position, OrderSide, OrderStatus, OrderType, MarketSession
 )
@@ -209,6 +211,13 @@ class KISBroker(BaseBroker):
         # 오늘의 주문 접수 불명 장부 (2026-09-29) — 생성 시 파일을 한 번 읽는다(같은 날 재시작 보호).
         # object.__new__ 로 만든 시험 브로커에는 없다: 조회는 보류 없음, 첫 불명 기록 때 만든다.
         self._unknown_book = order_unknown.UnknownOrderBook(order_unknown.default_path())
+        # 계좌 원문/키는 원장에 저장하지 않는다. 시험은 기존 default_path를 임시 경로로 주입한다.
+        scope = hashlib.sha256(json.dumps([
+            self.config.env, self.config.account_no, self.config.account_product_cd
+        ], separators=(',', ':')).encode()).hexdigest()
+        self._execution_history = ExecutionHistory(
+            order_unknown.default_path().parent / f'executions-{scope}.sqlite3', scope)
+        self._fill_check_lock = asyncio.Lock()
 
         # API 레이트 리미터 — 프로세스 공용 (src/utils/kis_rate_limit.py, 2026-09-03):
         # 시세·스크리너 모듈이 같은 appkey로 별도 세션을 쓰므로 초당 한도는 합산으로 걸린다.
@@ -228,6 +237,28 @@ class KISBroker(BaseBroker):
     # ============================================================
     # API 레이트 리미팅
     # ============================================================
+
+    async def initialize_execution_history(self):
+        history = getattr(self, '_execution_history', None)
+        if history is not None:
+            await history.open()
+
+    def execution_recovery_status(self):
+        history = getattr(self, '_execution_history', None)
+        return history.report() if history is not None else {'status': 'unsupported'}
+
+    async def _execution_outcome(self, order_id, status):
+        history = getattr(self, '_execution_history', None)
+        if history is not None:
+            try:
+                await history.outcome(order_id, status)
+            except Exception:
+                history.fail('outcome_failed')
+
+    async def record_execution_receipt(self, fill, stage):
+        history = getattr(self, '_execution_history', None)
+        if history is not None and fill.execution_id:
+            await history.receipt(fill.execution_id, stage)
 
     def reconciliation_token(self) -> Optional[int]:
         """로컬 idle 세대 번호. 거래소 스냅샷 시각이나 체결 watermark가 아니다.
@@ -298,6 +329,9 @@ class KISBroker(BaseBroker):
 
     async def connect(self) -> bool:
         """KIS API 연결 및 토큰 발급"""
+        if getattr(self, '_execution_closing', False):
+            return False
+        await self.initialize_execution_history()
         try:
             # HTTP 세션 생성
             if not self._session or self._session.closed:
@@ -330,6 +364,14 @@ class KISBroker(BaseBroker):
 
     async def disconnect(self) -> None:
         """연결 해제"""
+        # 첫 await 전에 닫는다. clean commit 이후 기록 없는 보호 SELL이 나가면 안 된다.
+        self._execution_closing = True
+        history = getattr(self, '_execution_history', None)
+        if history is not None and getattr(self, '_reconciliation_active', 0) == 0:
+            try:
+                await history.close()
+            except Exception:
+                history.fail('close_failed')
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
@@ -521,8 +563,15 @@ class KISBroker(BaseBroker):
         for attempt in range(3):
             try:
                 await self._rate_limit()
+                if getattr(self, '_execution_closing', False) and url.endswith('/order-cash'):
+                    return {"rt_cd": "-1", "msg1": "브로커 종료 중", "_blocked": True}
+                history = getattr(self, '_execution_history', None)
+                if url.endswith('/order-cash') and history is not None and not history.session_recorded:
+                    return {"rt_cd": "-1", "msg1": "실행 시작 기록 미확인", "_blocked": True}
                 if cancel_guard is not None:
                     symbol, side, partial = cancel_guard
+                    if partial and self.has_unknown_sell(symbol):
+                        return {"rt_cd": "-1", "msg1": "실행 이력/SELL 접수 미확인", "_blocked": True}
                     if self.has_unresolved_cancel(symbol) and (side == OrderSide.BUY or partial):
                         return {"rt_cd": "-1", "msg1": "취소 주문 최종 체결 미확인", "_blocked": True}
                 # 전송 직전 재확인 (2026-09-29) — submit_order 머리 게이트를 지난 BUY 가 hashkey·rate-limit 을
@@ -617,6 +666,14 @@ class KISBroker(BaseBroker):
     @_reconciliation_activity
     async def submit_order(self, order: Order) -> Tuple[bool, str]:
         """주문 제출"""
+        if getattr(self, '_execution_closing', False):
+            return False, "브로커 종료 중"
+        await self.initialize_execution_history()
+        history = getattr(self, '_execution_history', None)
+        if history is not None and not history.session_recorded:
+            return False, "실행 시작 기록 미확인: 주문 전송 보류"
+        if order.side == OrderSide.SELL and order.partial_exit is True and self.has_unknown_sell(order.symbol):
+            return False, "실행 이력/SELL 접수 미확인: 분할 매도 보류"
         # 킬스위치 — 모든 KR 주문이 반드시 통과하는 지점 (봇 재시작 없이 즉시 발동)
         allowed, block_reason = kill_switch.check(order.side.value, market="KR")
         if not allowed:
@@ -733,13 +790,28 @@ class KISBroker(BaseBroker):
 
             # API 호출
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-cash"
-            posted = True
             submission_date = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+            history = getattr(self, '_execution_history', None)
+            if history is not None:
+                if order.id in history.keys:
+                    return False, "같은 주문 의도 재전송 금지"
+                try:
+                    await history.intent(order, submission_date)
+                except Exception:
+                    history.fail('intent_failed')
+                    if order.side == OrderSide.BUY or order.partial_exit is True:
+                        return False, "주문 의도 저장 실패: 전송 보류"
+                    # 보호 전량 SELL은 유지. 이 세션은 clean close할 수 없다.
+            if getattr(self, '_execution_closing', False):
+                await self._execution_outcome(order.id, 'not_sent')
+                return False, "브로커 종료 중"
+            posted = True
             data = await self._api_post(
                 url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False,
                 cancel_guard=(order.symbol, order.side, order.partial_exit is True))
 
             if data.get("_blocked"):  # 전송 직전 재확인에서 보류 — 보내지 않았다
+                await self._execution_outcome(order.id, 'not_sent')
                 hold = data.get("msg1", "")
                 logger.warning(f"[주문차단] KR 매수 전송 직전 보류: {order.symbol} {order.quantity}주 — {hold}")
                 audit_log.record_blocked(
@@ -753,9 +825,11 @@ class KISBroker(BaseBroker):
             # 응답을 믿을 수 없음 = 접수 불명: 비-JSON·네트워크 오류(_unknown), 또는 rt_cd 가 없거나 빈 값인데
             # msg_cd 도 없는 JSON. msg_cd 가 있으면 KIS 가 오류를 명시한 것이라 아래 거절 경로로 간다.
             if data.get("_unknown") or (rt_cd in (None, "") and not data.get("msg_cd")):
+                await self._execution_outcome(order.id, 'unknown')
                 detail = data.get("msg1") if data.get("_unknown") else f"응답에 rt_cd 없음: {str(data)[:200]}"
                 return False, self._record_unknown(order, str(detail))
             if str(rt_cd) != "0":
+                await self._execution_outcome(order.id, 'rejected')
                 msg = data.get("msg1", "알 수 없는 오류")
                 msg_cd = data.get("msg_cd", "")
                 logger.error(f"주문 실패: [{msg_cd}] {msg}")
@@ -792,6 +866,15 @@ class KISBroker(BaseBroker):
                 order, str(kis_ord_no), str(orgno or ''), submission_date, order.quantity, order.symbol, order.side,
                 modified=not _is_clean_id(kis_ord_no) or str(kis_ord_no).startswith(("TEMP_", "local-")),
             )
+            if history is not None:
+                try:
+                    if self._fill_observations[order.id].modified:
+                        await history.outcome(order.id, 'unknown')
+                    else:
+                        await history.accepted(order.id, str(kis_ord_no), str(orgno or ''))
+                except Exception:
+                    # 브로커의 실제 접수를 기록 실패 때문에 거절로 바꾸지 않는다.
+                    history.fail('accept_failed')
 
             logger.info(
                 f"주문 제출 성공: {order.symbol} {order.side.value} "
@@ -810,6 +893,7 @@ class KISBroker(BaseBroker):
             # 종료 신호로 응답 대기 중 취소됐다 — 기록만 하고 다시 올린다(알림 없음). rate-limit 대기 중이라
             # 실제로는 보내기 전이었던 경우도 여기 묶인다(종료 순간에만 생기고, 그날 BUY 보류 쪽이 보수적).
             if posted:
+                await self._execution_outcome(order.id, 'unknown')
                 self._record_unknown(order, "응답 대기 중 취소(종료 신호)", alert=False)
             raise
         except Exception as e:
@@ -819,6 +903,7 @@ class KISBroker(BaseBroker):
             self._order_id_to_kis_no.pop(order.id, None)
             self._order_id_to_orgno.pop(order.id, None)
             if posted:  # POST 진입 뒤의 예외(비-dict 본문·접수 후 파싱 오류) — 접수됐을 수 있다
+                await self._execution_outcome(order.id, 'unknown')
                 return False, self._record_unknown(order, f"예외: {e}")
             audit_log.record(
                 audit_log.EV_REJECT, market="KR", symbol=order.symbol,
@@ -833,10 +918,19 @@ class KISBroker(BaseBroker):
     def unknown_buy_hold(self) -> Optional[str]:
         """오늘 BUY 접수 불명이 있으면 신규 매수 보류 사유, 없으면 None (날짜는 로컬 datetime.now())."""
         book = getattr(self, "_unknown_book", None)
-        return book.buy_hold_reason(datetime.now()) if book is not None else None
+        known = book.buy_hold_reason(datetime.now()) if book is not None else None
+        if known:
+            return known
+        history = getattr(self, '_execution_history', None)
+        if history is not None and history.hold():
+            return history.hold()
+        return None
 
     def has_unknown_sell(self, symbol: str) -> bool:
         """오늘 이 종목의 SELL 접수 불명이 있는가 — 있으면 그 종목의 분할 매도 재발행을 막는다."""
+        history = getattr(self, '_execution_history', None)
+        if history is not None and history.hold(symbol):
+            return True
         book = getattr(self, "_unknown_book", None)
         return book is not None and book.has_unknown_sell(symbol, datetime.now())
 
@@ -1253,6 +1347,7 @@ class KISBroker(BaseBroker):
             self._order_id_to_orgno.pop(order_id, None)
 
             logger.info(f"주문 취소 성공: {order_id} (KIS#{kis_ord_no})")
+            await self._execution_outcome(order_id, 'canceled')
             return True
 
         except Exception as e:
@@ -1347,6 +1442,7 @@ class KISBroker(BaseBroker):
             except BaseException:
                 if observation is not None:
                     observation.modified = True
+                await self._execution_outcome(order_id, 'modified')
                 raise
             finally:
                 if observation is not None:
@@ -1356,6 +1452,7 @@ class KISBroker(BaseBroker):
             if observation is not None and (str(rt_cd) == "0" or data.get('_unknown')
                     or (rt_cd in (None, '') and not data.get('msg_cd'))):
                 observation.modified = True
+                await self._execution_outcome(order_id, 'modified')
             if str(rt_cd) != "0":
                 msg = data.get("msg1", "")
                 logger.error(f"주문 수정 실패: {msg}")
@@ -2625,6 +2722,7 @@ class KISBroker(BaseBroker):
                 if filled < previous or (filled == previous and filled > 0 and average != previous_average):
                     raise ValueError("cumulative quantity/price regressed or changed")
                 delta = filled - previous
+                execution_id = ''
                 if delta:
                     incremental = (average * filled - previous_average * previous) / delta
                     if not incremental.is_finite() or incremental <= 0:
@@ -2634,10 +2732,18 @@ class KISBroker(BaseBroker):
                     fill_price = round(incremental, 2)
                     if fill_price <= 0:
                         raise ValueError("incremental price rounds to zero")
+                history = getattr(self, '_execution_history', None)
+                if history is not None and history.fault is None:
+                    execution_id = await history.observe(order_id, filled, average, terminal=terminal)
+                    if delta and execution_id is None:
+                        # 같은 누적 경계는 원장에서 한 번만 인계한다.
+                        continue
+                if delta:
                     fill = Fill(order_id=order_id, symbol=record.symbol, side=record.side,
                                 quantity=delta, price=fill_price,
                                 commission=self.calculate_commission(record.side, delta, fill_price),
                                 strategy=order.strategy, reason=order.reason, signal_score=order.signal_score)
+                    fill.execution_id = execution_id or ''
                     fills.append(fill)
                     order.filled_quantity, order.filled_price = filled, average
                     try:
@@ -2656,21 +2762,37 @@ class KISBroker(BaseBroker):
 
     @_reconciliation_activity
     async def check_fills(self) -> List[Fill]:
+        # 영구 기록 await가 추가되어 두 폴링이 같은 증분을 동시에 만들지 않게 한다.
+        lock = getattr(self, '_fill_check_lock', None)
+        if lock is None:
+            lock = self._fill_check_lock = asyncio.Lock()
+        async with lock:
+            await self.initialize_execution_history()
+            return await self._check_fills_once()
+
+    async def _check_fills_once(self) -> List[Fill]:
         """체결 확인"""
         if not self.is_connected:
             return []
 
         fills = []
+        completed_order_ids: set = set()
 
         try:
-            output1 = (await self._query_daily_fills()
-                       if self._pending_orders or not self.has_pending_fill_observations() else [])
+            history = getattr(self, '_execution_history', None)
+            if self._pending_orders or not self.has_pending_fill_observations():
+                if history is not None:
+                    status = {}
+                    output1 = await self._query_daily_fills(status=status, preserve_duplicates=True)
+                    if status.get('complete') is not True:
+                        return []
+                else:
+                    output1 = await self._query_daily_fills()
+            else:
+                output1 = []
 
             # KIS 주문번호 -> 내부 주문 ID 매핑
             kis_to_order_id = {v: k for k, v in self._order_id_to_kis_no.items()}
-
-            # 완전 체결된 주문을 루프 후 일괄 삭제하기 위한 set
-            completed_order_ids: set = set()
 
             for item in output1:
                 odno = str(item.get("ODNO") or item.get("odno", "")).strip()
@@ -2687,8 +2809,30 @@ class KISBroker(BaseBroker):
                     order = self._pending_orders.get(order_id)
 
                     if order:
+                        if history is not None:
+                            observation = self._fill_observations.get(order_id)
+                            if observation is None or observation.modified or observation.modifications_inflight:
+                                continue
+                            # 저장 고장 중 보호 체결도 원주문 근거가 일치할 때만 메모리에 적용한다.
+                            fields = ('ord_dt', 'odno', 'orgn_odno', 'pdno', 'sll_buy_dvsn_cd',
+                                      'ord_qty', 'tot_ccld_qty', 'avg_prvs')
+                            signatures = {tuple(str(self._observation_field(candidate, k)) for k in fields)
+                                          for candidate in output1
+                                          if self._observation_field(candidate, 'odno') == observation.odno}
+                            if len(signatures) != 1:
+                                history.fail('conflicting_fill_rows')
+                                continue
+                            try:
+                                ccld_qty, ccld_price, _ = self._decode_cancel_observation(item, observation)
+                            except (ValueError, ArithmeticError):
+                                history.fail('invalid_fill_identity')
+                                continue
                         # TOT_CCLD_QTY는 누적 체결수량 → 이전 체결분 차감하여 증분만 처리
                         prev_filled = order.filled_quantity or 0
+                        if history is not None and (ccld_qty < prev_filled
+                                or (ccld_qty == prev_filled and ccld_price != order.filled_price)):
+                            history.fail('regressed_fill_evidence')
+                            continue
                         new_qty = ccld_qty - prev_filled
 
                         if new_qty <= 0:
@@ -2697,7 +2841,8 @@ class KISBroker(BaseBroker):
                         # 증분 체결가 역산: AVG_PRVS는 누적 평균가이므로
                         # incremental_price = (cum_avg * cum_qty - prev_avg * prev_qty) / new_qty
                         if prev_filled > 0 and order.filled_price:
-                            prev_cost = float(order.filled_price) * prev_filled
+                            prev_cost = (Decimal(str(order.filled_price)) if history is not None
+                                         else float(order.filled_price)) * prev_filled
                             total_cost = ccld_price * ccld_qty
                             incremental_price = (total_cost - prev_cost) / new_qty if new_qty > 0 else ccld_price
                         else:
@@ -2705,9 +2850,20 @@ class KISBroker(BaseBroker):
 
                         # 증분 체결가 음수 방어 (역산 오차 시 누적 평균가로 폴백)
                         if incremental_price <= 0:
+                            if history is not None:
+                                history.fail('invalid_incremental_price')
+                                continue
                             incremental_price = ccld_price
 
                         fill_price = Decimal(str(round(incremental_price, 2)))
+                        execution_id = ''
+                        history = getattr(self, '_execution_history', None)
+                        if history is not None and history.fault is None:
+                            execution_id = await history.observe(
+                                order_id, ccld_qty, Decimal(str(ccld_price)),
+                                terminal=ccld_qty == order.quantity)
+                            if execution_id is None:
+                                continue
 
                         fill = Fill(
                             order_id=order_id,
@@ -2721,6 +2877,7 @@ class KISBroker(BaseBroker):
                             strategy=order.strategy,
                             reason=order.reason,
                             signal_score=order.signal_score,
+                            execution_id=execution_id or '',
                         )
                         fills.append(fill)
 
@@ -2760,3 +2917,9 @@ class KISBroker(BaseBroker):
         except Exception as e:
             logger.exception(f"체결 확인 오류: {e}")
             return fills
+        finally:
+            # 뒤 행의 조회/저장 오류 때문에 이미 반환한 전량 체결을 pending에 남기지 않는다.
+            for order_id in completed_order_ids:
+                self._pending_orders.pop(order_id, None)
+                self._order_id_to_kis_no.pop(order_id, None)
+                self._order_id_to_orgno.pop(order_id, None)
