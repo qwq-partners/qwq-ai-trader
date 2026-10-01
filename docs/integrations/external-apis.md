@@ -1,5 +1,9 @@
 # 외부 API 연동
 
+> **23차 토스 WS(10-01, 로컬 미배포):** `orderbook_stream`은 인증된 전용 소켓의 소유권을 주입받는 한정 관측기다. 연결/토큰 발급 없이 국내 호가 full-replace1회·ACK 대조·최우선 호가·종료를 처리한다. 통합 KRX+NXT/LOSSY는 별도 후보 품질 보고에만 사용하고 KIS 호가/주문 경로에 투입하지 않는다. [선정·진입 규약23차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
+
+> **15차 관측 수명(10-01):** 명시 Runner 설치가 정지 feed의 기존 관측 조정기를 사용한다. 관측 종료는 후보 lease 수요만 닫고 운영 PRICE/BOOK·미확인 등록을 보존한다. 이미 전송 중인 요청은 해제 완료로 바꾸지 않으며 정확한 해제 ACK 허용 집합은 여전히 기본 빈 값이다. 새 세션/운영 API 호출을 이번 검증에서 실행하지 않았다.
+
 > 최종 갱신: 2026-09-29 (접수 불명 분리·주문 CLI 거부·OrderRef·KOSPI 069500 대체 배포 반영). 토스 제한 관측은 09-22 18:00 KST grant 만료 뒤 서비스 disabled/inactive(재발급·퇴역은 사용자 결정 대기), 거래 소비자 미연결.
 
 
@@ -10,6 +14,8 @@
 > 소비자는 초과수익 원장의 20:30 거래일 기록 대사다(설계 A §5-1).
 
 ## 브로커 — KIS (한국투자증권)
+
+**2026-10-01 작업 브랜치 — WS 호가 관측 입력 정정(미배포):** `kis_websocket`의 H0STASP0/H0NXASP0 최우선 잔량을 0-based 23/33으로 수정했다. 기존 4/14는 2호가 가격이다. [KIS 공식 KRX 필드](https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/domestic_stock/asking_price_krx/asking_price_krx.py), [공식 NXT 필드](https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/domestic_stock/asking_price_nxt/asking_price_nxt.py)를 10-01 확인했다. TR·BSOP_HOUR 원문·HOUR_CLS_CODE·프레임 건수와 aware 수신시각을 metadata로 보존한다. HHMMSS의 거래일은 추정하지 않으며 source_as_of=null이다. 복수 레코드 분할·세션/VI 확정은 미구현, 기존 Event.timestamp/체결가/REST 매도호가 경로는 변경하지 않았다. run_trader에 기본 None 관측기용 콜백만 추가했으며 추가 구독·조회·운영 수집은 없다. 과거 손실과의 인과관계를 입증한 수정이 아니다.
 
 ### KR (src/execution/broker/kis_kr.py)
 - 실시간 호가, 일봉/분봉 캔들
@@ -335,3 +341,25 @@
 |------|------|------|------|
 | KR (한투 BanKIS) | 0.014% | 0.213% (세금 포함) | ~0.227% |
 | US (KIS 해외주식) | 0% | 0% | 0% |
+
+
+### KIS WebSocket 관측 채널 계약 — 11차(2026-10-01)
+
+[공식 유량 공지(2026-04-20 기준)](https://apiportal.koreainvestment.com/community/10000000-0000-0011-0000-000000000001/post/d0d1a83f-6f8d-4437-9700-6d26702fd989)와 [공개 JSON 원문](https://apiportal.koreainvestment.com/api/forums/10000000-0000-0011-0000-000000000001/posts/d0d1a83f-6f8d-4437-9700-6d26702fd989)을 10-01 확인했다. appkey당 한 WS 세션, 국내/해외/파생과 체결가/호가/예상체결/체결통보를 합쳐 41등록이다. `(tr_id, tr_key)`별로 등록을 세는 것은 공지 문구와 공식 요청 구조를 결합한 해석이며, 같은 종목 PRICE+BOOK은 2건으로 예산화한다. 기존 40종목 상수는 이 공식 한도 단위가 아니다. 요청 사이 기본 간격은 공지의 100~150ms 권고에 맞춰 150ms다.
+
+[공식 ACK helper](https://github.com/koreainvestment/open-trading-api/blob/main/examples_user/kis_auth.py#L538-L559)는 header의 TR/key, body의 rt_cd/msg1을 읽는다. rt_cd 문자열 0과 UNSUB prefix를 해제로 분류하지만 안정적인 exact 성공 문자열/코드 목록은 찾지 못했다. 따라서 이번 조정기는 정확한 해제 성공 집합을 기본 비워 둔다. `unsubscribe_success_messages`를 쓸 때는 `unsubscribe_evidence_ref`가 필요하며 합성 응답은 실제 프로토콜 검증이 아니다. msg_cd 부재를 실패로 간주하지 않는다. 미확정/거절/timeout은 슬롯을 유지하고 이전 소켓이 닫힌 재연결에서만 상태를 리셋한다. ACK에 요청 ID가 없으므로 같은 연결에서 해제 완료한 key는 재사용하지 않는다.
+
+새 관측은 별도 WS 세션을 만들지 않고 기존 피드에 선택 설치한다. 외부 등록 예약과 세션 독점 근거는 호출자가 명시하며 문자열 입력 자체가 운영 현황 검증을 대신하지 않는다. 기본 실행에는 이 설치 호출이 없고 브로커 호출/수집 활성화는 하지 않았다.
+
+
+12차 근거 점검: 저장소의 source/docs/tests에는 실제 비식별 해제 ACK fixture가 없고 합성 응답만 있다. 공식 helper의 `rt_cd=0` 및 `UNSUB` 계열 판별 의미는 알려져 있으나, 로컬의 더 엄격한 exact 성공값 계약을 채울 자료는 없다. 이번에는 브로커/운영 로그를 호출하지 않았고 기존 허용 목록을 바꾸지 않았다. 후속 비식별 증거가 생기면 같은 연결·하나의 pending 해제 요청과 ACK의 key/시각/순서, 환경·TR·msg_cd 존재 여부와 정확한 값까지 범위를 한정해야 한다. 하나의 BOOK 응답을 PRICE/NXT/다른 환경에 일반화하거나 source 문자열만으로 진위를 입증했다고 주장하지 않는다. 현재 raw 문자열 tuple 계약의 범위 확장은 별도 구현/검토 대상이다.
+
+### 토스 후보 WS 실행 연결 — 24차(2026-10-01, 미활성화)
+
+[공식 AsyncAPI1.2.2](https://openapi.tossinvest.com/openapi-docs/latest/asyncapi.json)를 고정한 별도 v2 승인에서만 `wss://openapi-ws.tossinvest.com/ws/v1`의 `orderbook:kr`에 연결한다. 기존 REST 승인·퇴역 service 상태는 WS 재활성화 승인이 아니다. 국내 통합 KRX+NXT·LOSSY·초기 snapshot 없음·원천시각 null 가능성을 보존한다. 구현 한도1~3종목/한 구간은 공식 계정 한도와 별개의 첫 pilot 제한이다.
+
+기존 token manager/issuer/sender lock을 재사용하며 발급·접속 대기는 중지/승인 만료에 연결된다. 고정 목적지·redirect/proxy/암묵 retry 금지·전용 소켓·자동 재접속 없음이다. 엔진 후보 ID는64KiB 이하 loopback 투영으로 받고 계좌/현금/원문 호가를 보내지 않는다. 종료 자료는 새 파일의 시작/최종 두 행이며 중간 디스크 보존은 없다. 실제 토큰·연결·휴장일·장중 품질은 시험하지 않았다. 실행 입력/원본 대조/보고 계약은 [규약24차](../research/current-engine-selection-entry-protocol-2026-09-30.md)를 따른다.
+
+### 25차 토스 관측 후보 범위
+
+공식 외부 API 계약은 변경하지 않았다. 내부 후보 투영은 첫 반환≤100개를 보존하고 원래 순위 앞3개만 구독한다. v2 승인 plan에 `candidate_selection_rule=first_three_in_returned_order`를 고정하며 기존 whole-cohort 승인으로 큰 목록의 일부를 임의 구독하지 않는다. 미관측 후보도 report 분모에 남긴다. 토스 WS는 REST status.json을 쓰지 않으므로 종료코드/최종 봉인 자료/엔진 원장으로 확인한다. [10월2일 설치안](../operations/entry-capture-installation-2026-10-02.md)은 아직 미실행이다.

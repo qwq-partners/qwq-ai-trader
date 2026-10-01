@@ -1,0 +1,607 @@
+{
+  "scope": "Stage 3 research only: public annual baseline, partial historical basket collection, sanitized execution-cost aggregates. No orders, deployment, configuration change, or new collector.",
+  "captured_at_utc": "2026-09-30T12:44:08.232705+00:00",
+  "period": {
+    "start_close": "2025-09-30",
+    "end_close": "2026-09-29",
+    "observations": 241,
+    "intervals": 240,
+    "raw_source_rows": 242
+  },
+  "annual_baselines": {
+    "start": {
+      "NAV": 47639.83,
+      "GIJUN_YMD": "20250930",
+      "JISU": 474.03,
+      "PRICE": 47635,
+      "SUIK_PRICE": -0.27,
+      "SUIK_NAV": -0.26,
+      "SUIK_JISU": -0.25
+    },
+    "end": {
+      "NAV": 110025.39,
+      "GIJUN_YMD": "20260929",
+      "JISU": 1088.15,
+      "PRICE": 109990,
+      "SUIK_PRICE": 130.27,
+      "SUIK_NAV": 132.67,
+      "SUIK_JISU": 128.98
+    },
+    "returns_pct": {
+      "JISU": 129.55298187878404,
+      "PRICE": 130.90164794793745,
+      "NAV": 130.95252438978056,
+      "rebased_SUIK_NAV": 133.2765189492681
+    },
+    "return_definitions": {
+      "JISU": "Official KOSPI200 price-index close ratio",
+      "PRICE": "KODEX200 exchange close ratio, excluding cash distributions and trading costs",
+      "NAV": "Raw NAV level ratio, NOT distribution-reinvested return",
+      "rebased_SUIK_NAV": "Approximate pretax NAV distribution-reinvestment return: (100 + end.SUIK_NAV)/(100 + start.SUIK_NAV) - 1. Source cumulative returns rounded to 0.01 percentage points; not exact investor market-price/cost/tax return."
+    },
+    "public_input_csv": "current-engine-annual-benchmark-inputs-2026-09-30.csv",
+    "public_input_sha256": "dc2a36d2485a78a29f69a775d813bdf3e4115e35938fd943b3554031a6067b7d"
+  },
+  "quality_checks": {
+    "positive_price_nav_index": true,
+    "duplicate_dates": 0,
+    "official_market_close_vs_yahoo_matches": 241,
+    "official_distribution_amount_matches": 4,
+    "official_recent_index_values_match_price_endpoint": 20,
+    "missing_official_ex_dates": true
+  },
+  "official_distributions": [
+    {
+      "basicD": "20260731",
+      "dividA": "183",
+      "payD": "20260804",
+      "taxDividA": "168",
+      "dividY": "0.2049"
+    },
+    {
+      "basicD": "20260430",
+      "dividA": "446",
+      "payD": "20260506",
+      "taxDividA": "446",
+      "dividY": "0.4423"
+    },
+    {
+      "basicD": "20260130",
+      "dividA": "80",
+      "payD": "20260203",
+      "taxDividA": "80",
+      "dividY": "0.1049"
+    },
+    {
+      "basicD": "20251031",
+      "dividA": "140",
+      "payD": "20251104",
+      "taxDividA": "122",
+      "dividY": "0.2439"
+    }
+  ],
+  "official_source_manifest": [
+    {
+      "url": "https://www.samsungfund.com/assets/js/product.js?v=20260929074234",
+      "file": "product.js",
+      "sha256": "d91e190c634d4b4be86411b23ac1eb4ef6da59e383c7c3cf0e6bfe259d7de156",
+      "bytes": 5854692,
+      "captured_at_utc": "2026-09-30T12:30:48.029292+00:00"
+    },
+    {
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-price/2ETF01.do?srchTerm=12",
+      "file": "price_12.json",
+      "sha256": "80302fb2033be097fd3f80cd09aadc33bc9e7ff6a2bace126664d75f9b230a55",
+      "bytes": 2427,
+      "captured_at_utc": "2026-09-30T12:31:23.901646+00:00"
+    },
+    {
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-earning/2ETF01.do?srchTerm=12",
+      "file": "earning_12.json",
+      "sha256": "117d1ab9c9e7d66256fe098ba94b7969fe64034c42fa8a29c1daf237fda04015",
+      "bytes": 29941,
+      "captured_at_utc": "2026-09-30T12:31:23.950273+00:00"
+    },
+    {
+      "url": "https://www.samsungfund.com/api/v1/kodex/divid-info.do?id=2ETF01",
+      "file": "distribution.json",
+      "sha256": "f06ebb4797aba707ca8d90f31ad04b7d8017faa812a3e46a8f62c7b2f76238bb",
+      "bytes": 3020,
+      "captured_at_utc": "2026-09-30T12:31:23.915243+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/005930.KS?period1=1759104000&period2=1790726400&interval=1d&events=div%2Csplits",
+      "file": "yahoo_actions_005930.json",
+      "sha256": "4aadb7d3aa83c737430a164bd8f4bd86f2f9ad2aa762d3d9abef7acbeb183559",
+      "bytes": 17815,
+      "captured_at_utc": "2026-09-30T12:32:09.062091+00:00"
+    },
+    {
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/000660.KS?period1=1759104000&period2=1790726400&interval=1d&events=div%2Csplits",
+      "file": "yahoo_actions_000660.json",
+      "sha256": "ab9decffa02a8c070ad21533b12a5b9f68b1c3c904cd404bb5287adcb543d762",
+      "bytes": 17978,
+      "captured_at_utc": "2026-09-30T12:32:09.022958+00:00"
+    }
+  ],
+  "historical_basket_collection": {
+    "status": "STOPPED_HTTP_429_AFTER_ONE_RETRY; annual exclusion returns not computed",
+    "scope": "New stage 3 directory only; prior six-date pilot retained separately",
+    "target_apply_dates": 241,
+    "target_responses": 482,
+    "available_responses": 19,
+    "counts_by_fund": {
+      "2ETF01": 10,
+      "2ETF07": 9
+    },
+    "complete_paired_apply_dates": 9,
+    "first_apply_date": "2025-10-01",
+    "last_complete_apply_date": "2025-10-20",
+    "partial_apply_date": "2025-10-21",
+    "capture_note": "Per-response capture times not retained in this partial collector; URLs/content hashes preserved, no fabricated timestamps.",
+    "error": {
+      "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.21",
+      "utc": "2026-09-30T12:34:35.447745+00:00",
+      "exception": "HTTP Error 429: Too Many Requests",
+      "retry_after": null
+    },
+    "frozen_collection_plan": {
+      "frozen_before_collection": "2026-09-30T12:32:04.306437+00:00",
+      "start_close": "2025-09-30",
+      "end_close": "2026-09-29",
+      "method": "historical daily basket price-return diagnostics; not performance strategy or total-return validation",
+      "daily_index_reconstruction_qc_tolerance_pp": 0.02,
+      "qc_use": "flag/report measurement disagreement, never replace dates or tune exclusions using returns",
+      "ex2": [
+        "005930",
+        "000660"
+      ],
+      "exsector": "ex2 union same-apply-date 2ETF07 equity symbols, intersect same-day 2ETF01 equity symbols",
+      "endpoint_mapping": {
+        "2025-10-01": "2025-09-30",
+        "2025-10-02": "2025-10-01",
+        "2025-10-10": "2025-10-02",
+        "2025-10-13": "2025-10-10",
+        "2025-10-14": "2025-10-13",
+        "2025-10-15": "2025-10-14",
+        "2025-10-16": "2025-10-15",
+        "2025-10-17": "2025-10-16",
+        "2025-10-20": "2025-10-17",
+        "2025-10-21": "2025-10-20",
+        "2025-10-22": "2025-10-21",
+        "2025-10-23": "2025-10-22",
+        "2025-10-24": "2025-10-23",
+        "2025-10-27": "2025-10-24",
+        "2025-10-28": "2025-10-27",
+        "2025-10-29": "2025-10-28",
+        "2025-10-30": "2025-10-29",
+        "2025-10-31": "2025-10-30",
+        "2025-11-03": "2025-10-31",
+        "2025-11-04": "2025-11-03",
+        "2025-11-05": "2025-11-04",
+        "2025-11-06": "2025-11-05",
+        "2025-11-07": "2025-11-06",
+        "2025-11-10": "2025-11-07",
+        "2025-11-11": "2025-11-10",
+        "2025-11-12": "2025-11-11",
+        "2025-11-13": "2025-11-12",
+        "2025-11-14": "2025-11-13",
+        "2025-11-17": "2025-11-14",
+        "2025-11-18": "2025-11-17",
+        "2025-11-19": "2025-11-18",
+        "2025-11-20": "2025-11-19",
+        "2025-11-21": "2025-11-20",
+        "2025-11-24": "2025-11-21",
+        "2025-11-25": "2025-11-24",
+        "2025-11-26": "2025-11-25",
+        "2025-11-27": "2025-11-26",
+        "2025-11-28": "2025-11-27",
+        "2025-12-01": "2025-11-28",
+        "2025-12-02": "2025-12-01",
+        "2025-12-03": "2025-12-02",
+        "2025-12-04": "2025-12-03",
+        "2025-12-05": "2025-12-04",
+        "2025-12-08": "2025-12-05",
+        "2025-12-09": "2025-12-08",
+        "2025-12-10": "2025-12-09",
+        "2025-12-11": "2025-12-10",
+        "2025-12-12": "2025-12-11",
+        "2025-12-15": "2025-12-12",
+        "2025-12-16": "2025-12-15",
+        "2025-12-17": "2025-12-16",
+        "2025-12-18": "2025-12-17",
+        "2025-12-19": "2025-12-18",
+        "2025-12-22": "2025-12-19",
+        "2025-12-23": "2025-12-22",
+        "2025-12-24": "2025-12-23",
+        "2025-12-26": "2025-12-24",
+        "2025-12-29": "2025-12-26",
+        "2025-12-30": "2025-12-29",
+        "2026-01-02": "2025-12-30",
+        "2026-01-05": "2026-01-02",
+        "2026-01-06": "2026-01-05",
+        "2026-01-07": "2026-01-06",
+        "2026-01-08": "2026-01-07",
+        "2026-01-09": "2026-01-08",
+        "2026-01-12": "2026-01-09",
+        "2026-01-13": "2026-01-12",
+        "2026-01-14": "2026-01-13",
+        "2026-01-15": "2026-01-14",
+        "2026-01-16": "2026-01-15",
+        "2026-01-19": "2026-01-16",
+        "2026-01-20": "2026-01-19",
+        "2026-01-21": "2026-01-20",
+        "2026-01-22": "2026-01-21",
+        "2026-01-23": "2026-01-22",
+        "2026-01-26": "2026-01-23",
+        "2026-01-27": "2026-01-26",
+        "2026-01-28": "2026-01-27",
+        "2026-01-29": "2026-01-28",
+        "2026-01-30": "2026-01-29",
+        "2026-02-02": "2026-01-30",
+        "2026-02-03": "2026-02-02",
+        "2026-02-04": "2026-02-03",
+        "2026-02-05": "2026-02-04",
+        "2026-02-06": "2026-02-05",
+        "2026-02-09": "2026-02-06",
+        "2026-02-10": "2026-02-09",
+        "2026-02-11": "2026-02-10",
+        "2026-02-12": "2026-02-11",
+        "2026-02-13": "2026-02-12",
+        "2026-02-19": "2026-02-13",
+        "2026-02-20": "2026-02-19",
+        "2026-02-23": "2026-02-20",
+        "2026-02-24": "2026-02-23",
+        "2026-02-25": "2026-02-24",
+        "2026-02-26": "2026-02-25",
+        "2026-02-27": "2026-02-26",
+        "2026-03-03": "2026-02-27",
+        "2026-03-04": "2026-03-03",
+        "2026-03-05": "2026-03-04",
+        "2026-03-06": "2026-03-05",
+        "2026-03-09": "2026-03-06",
+        "2026-03-10": "2026-03-09",
+        "2026-03-11": "2026-03-10",
+        "2026-03-12": "2026-03-11",
+        "2026-03-13": "2026-03-12",
+        "2026-03-16": "2026-03-13",
+        "2026-03-17": "2026-03-16",
+        "2026-03-18": "2026-03-17",
+        "2026-03-19": "2026-03-18",
+        "2026-03-20": "2026-03-19",
+        "2026-03-23": "2026-03-20",
+        "2026-03-24": "2026-03-23",
+        "2026-03-25": "2026-03-24",
+        "2026-03-26": "2026-03-25",
+        "2026-03-27": "2026-03-26",
+        "2026-03-30": "2026-03-27",
+        "2026-03-31": "2026-03-30",
+        "2026-04-01": "2026-03-31",
+        "2026-04-02": "2026-04-01",
+        "2026-04-03": "2026-04-02",
+        "2026-04-06": "2026-04-03",
+        "2026-04-07": "2026-04-06",
+        "2026-04-08": "2026-04-07",
+        "2026-04-09": "2026-04-08",
+        "2026-04-10": "2026-04-09",
+        "2026-04-13": "2026-04-10",
+        "2026-04-14": "2026-04-13",
+        "2026-04-15": "2026-04-14",
+        "2026-04-16": "2026-04-15",
+        "2026-04-17": "2026-04-16",
+        "2026-04-20": "2026-04-17",
+        "2026-04-21": "2026-04-20",
+        "2026-04-22": "2026-04-21",
+        "2026-04-23": "2026-04-22",
+        "2026-04-24": "2026-04-23",
+        "2026-04-27": "2026-04-24",
+        "2026-04-28": "2026-04-27",
+        "2026-04-29": "2026-04-28",
+        "2026-04-30": "2026-04-29",
+        "2026-05-04": "2026-04-30",
+        "2026-05-06": "2026-05-04",
+        "2026-05-07": "2026-05-06",
+        "2026-05-08": "2026-05-07",
+        "2026-05-11": "2026-05-08",
+        "2026-05-12": "2026-05-11",
+        "2026-05-13": "2026-05-12",
+        "2026-05-14": "2026-05-13",
+        "2026-05-15": "2026-05-14",
+        "2026-05-18": "2026-05-15",
+        "2026-05-19": "2026-05-18",
+        "2026-05-20": "2026-05-19",
+        "2026-05-21": "2026-05-20",
+        "2026-05-22": "2026-05-21",
+        "2026-05-26": "2026-05-22",
+        "2026-05-27": "2026-05-26",
+        "2026-05-28": "2026-05-27",
+        "2026-05-29": "2026-05-28",
+        "2026-06-01": "2026-05-29",
+        "2026-06-02": "2026-06-01",
+        "2026-06-04": "2026-06-02",
+        "2026-06-05": "2026-06-04",
+        "2026-06-08": "2026-06-05",
+        "2026-06-09": "2026-06-08",
+        "2026-06-10": "2026-06-09",
+        "2026-06-11": "2026-06-10",
+        "2026-06-12": "2026-06-11",
+        "2026-06-15": "2026-06-12",
+        "2026-06-16": "2026-06-15",
+        "2026-06-17": "2026-06-16",
+        "2026-06-18": "2026-06-17",
+        "2026-06-19": "2026-06-18",
+        "2026-06-22": "2026-06-19",
+        "2026-06-23": "2026-06-22",
+        "2026-06-24": "2026-06-23",
+        "2026-06-25": "2026-06-24",
+        "2026-06-26": "2026-06-25",
+        "2026-06-29": "2026-06-26",
+        "2026-06-30": "2026-06-29",
+        "2026-07-01": "2026-06-30",
+        "2026-07-02": "2026-07-01",
+        "2026-07-03": "2026-07-02",
+        "2026-07-06": "2026-07-03",
+        "2026-07-07": "2026-07-06",
+        "2026-07-08": "2026-07-07",
+        "2026-07-09": "2026-07-08",
+        "2026-07-10": "2026-07-09",
+        "2026-07-13": "2026-07-10",
+        "2026-07-14": "2026-07-13",
+        "2026-07-15": "2026-07-14",
+        "2026-07-16": "2026-07-15",
+        "2026-07-20": "2026-07-16",
+        "2026-07-21": "2026-07-20",
+        "2026-07-22": "2026-07-21",
+        "2026-07-23": "2026-07-22",
+        "2026-07-24": "2026-07-23",
+        "2026-07-27": "2026-07-24",
+        "2026-07-28": "2026-07-27",
+        "2026-07-29": "2026-07-28",
+        "2026-07-30": "2026-07-29",
+        "2026-07-31": "2026-07-30",
+        "2026-08-03": "2026-07-31",
+        "2026-08-04": "2026-08-03",
+        "2026-08-05": "2026-08-04",
+        "2026-08-06": "2026-08-05",
+        "2026-08-07": "2026-08-06",
+        "2026-08-10": "2026-08-07",
+        "2026-08-11": "2026-08-10",
+        "2026-08-12": "2026-08-11",
+        "2026-08-13": "2026-08-12",
+        "2026-08-14": "2026-08-13",
+        "2026-08-18": "2026-08-14",
+        "2026-08-19": "2026-08-18",
+        "2026-08-20": "2026-08-19",
+        "2026-08-21": "2026-08-20",
+        "2026-08-24": "2026-08-21",
+        "2026-08-25": "2026-08-24",
+        "2026-08-26": "2026-08-25",
+        "2026-08-27": "2026-08-26",
+        "2026-08-28": "2026-08-27",
+        "2026-08-31": "2026-08-28",
+        "2026-09-01": "2026-08-31",
+        "2026-09-02": "2026-09-01",
+        "2026-09-03": "2026-09-02",
+        "2026-09-04": "2026-09-03",
+        "2026-09-07": "2026-09-04",
+        "2026-09-08": "2026-09-07",
+        "2026-09-09": "2026-09-08",
+        "2026-09-10": "2026-09-09",
+        "2026-09-11": "2026-09-10",
+        "2026-09-14": "2026-09-11",
+        "2026-09-15": "2026-09-14",
+        "2026-09-16": "2026-09-15",
+        "2026-09-17": "2026-09-16",
+        "2026-09-18": "2026-09-17",
+        "2026-09-21": "2026-09-18",
+        "2026-09-22": "2026-09-21",
+        "2026-09-23": "2026-09-22",
+        "2026-09-28": "2026-09-23",
+        "2026-09-29": "2026-09-28",
+        "2026-09-30": "2026-09-29"
+      },
+      "status": "source collection; corporate actions must be assessed before reporting annual exclusion returns",
+      "network_request_cap": 485,
+      "serialized_read_only_public_get": true
+    },
+    "public_source_manifest": [
+      {
+        "file": "2ETF01_2025-10-01.json",
+        "sha256": "ae81294e0e562a2bceb75e22f0c80a1a6f8ec8faf51dce80cfce8ab866418088",
+        "bytes": 33840,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.01"
+      },
+      {
+        "file": "2ETF01_2025-10-02.json",
+        "sha256": "cd4062dc5adc56a7250acaef74523d48edf82b4bc5a6aba0252fbce37f2513fe",
+        "bytes": 33837,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.02"
+      },
+      {
+        "file": "2ETF01_2025-10-10.json",
+        "sha256": "647e145e2b7ab79e0e27d79364879cfdbd05eb9a7fea2fb121529297fac14133",
+        "bytes": 33844,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.10"
+      },
+      {
+        "file": "2ETF01_2025-10-13.json",
+        "sha256": "ff8461801fdfc90a41a43d0caea6e6aa5f5ae37edbe02bdeaaa57b37291c14a8",
+        "bytes": 33839,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.13"
+      },
+      {
+        "file": "2ETF01_2025-10-14.json",
+        "sha256": "39d6688c409979b4d25756d66da86dda39710cf00a7ccc9fca00334b92a4df3c",
+        "bytes": 33841,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.14"
+      },
+      {
+        "file": "2ETF01_2025-10-15.json",
+        "sha256": "d34daaedd3b469e004230defed25716afcb939ead2f1cd9a926717b88e841e05",
+        "bytes": 33843,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.15"
+      },
+      {
+        "file": "2ETF01_2025-10-16.json",
+        "sha256": "5c277fed5ce0b62a8f08b3894903a579c1ef96f4f5e5661919621df0790f840d",
+        "bytes": 33839,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.16"
+      },
+      {
+        "file": "2ETF01_2025-10-17.json",
+        "sha256": "e2f69b920b777d022f291c11ecddfec663a57ff231b553eb09f45217cdf19840",
+        "bytes": 33837,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.17"
+      },
+      {
+        "file": "2ETF01_2025-10-20.json",
+        "sha256": "40375492e5c65f47b73a72415ea3be5b943530da61da9ca085f31adcdb7f4a33",
+        "bytes": 33833,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.20"
+      },
+      {
+        "file": "2ETF01_2025-10-21.json",
+        "sha256": "8f18d00e70e4a07266cbf28da3f251c6fc5019637997903957f6f1bbdf9433a0",
+        "bytes": 33840,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF01.do?gijunYMD=2025.10.21"
+      },
+      {
+        "file": "2ETF07_2025-10-01.json",
+        "sha256": "0ec7bc81db6e19982c8df249024ee797e2f4d3b088bc0b17e23bdddf77f3039e",
+        "bytes": 6390,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.01"
+      },
+      {
+        "file": "2ETF07_2025-10-02.json",
+        "sha256": "21abfa6ed1e8a64563ecfb6ecfe1d0e9ec2748324a77eaf2e81e7af7f9ac1b6f",
+        "bytes": 6391,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.02"
+      },
+      {
+        "file": "2ETF07_2025-10-10.json",
+        "sha256": "5018c6a8b1329f2d77569b0829bc6d1c56e12130e56a7ed00790396850e7431c",
+        "bytes": 6391,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.10"
+      },
+      {
+        "file": "2ETF07_2025-10-13.json",
+        "sha256": "c146becc36d2d3e789d5b522a3ab6f122ded3ddb12f3fd12ca5f08aa3a3836cb",
+        "bytes": 6388,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.13"
+      },
+      {
+        "file": "2ETF07_2025-10-14.json",
+        "sha256": "b4190f6f0f5456c8f4f8c8d59f44556116985739a222c88b64b69483d5ec9326",
+        "bytes": 6385,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.14"
+      },
+      {
+        "file": "2ETF07_2025-10-15.json",
+        "sha256": "eecc80c0e9662716efaf5b138b380524018ea0335dfa25fd5b1de0cf1cc0ac3d",
+        "bytes": 6391,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.15"
+      },
+      {
+        "file": "2ETF07_2025-10-16.json",
+        "sha256": "4a54f5aba20e32d78209afb55a4480cca53d46a991bddb4442fdb7a396f78a6b",
+        "bytes": 6387,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.16"
+      },
+      {
+        "file": "2ETF07_2025-10-17.json",
+        "sha256": "2c4997c73b9477b48d14b7a04dc33b1f6461316fc583aa3c9cce84feee8c09df",
+        "bytes": 6390,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.17"
+      },
+      {
+        "file": "2ETF07_2025-10-20.json",
+        "sha256": "dda1a1ead854ead68304f1d186406a3035c72fdbfde74140e518446a61521f9b",
+        "bytes": 6387,
+        "url": "https://www.samsungfund.com/api/v1/kodex/product-pdf/2ETF07.do?gijunYMD=2025.10.20"
+      }
+    ],
+    "annual_ex2_return_pct": null,
+    "annual_exsector_return_pct": null
+  },
+  "execution_cost_observation": {
+    "source_sha256": "6caa80cd5aa90486bac22115a4d2ab7e24bb4e7af0ca7011cba5b949105a528b",
+    "bytes": 4877,
+    "first_date": "2026-09-22",
+    "last_date": "2026-09-30",
+    "groups": {
+      "BUY": {
+        "rows": 10,
+        "unique_orders": 10,
+        "strategies": {
+          "gap_and_go": 10
+        },
+        "order_types": {
+          "market": 10
+        },
+        "mean_cost_bps_unrounded": 9.764622609385084,
+        "notional_weighted_cost_bps": 9.6582248182784,
+        "median_cost_bps": 8.145643880345542,
+        "worst_cost_bps": 24.63054187192118,
+        "favorable": 0,
+        "equal": 4,
+        "adverse": 6,
+        "recorded_formula_matches_round_1": true,
+        "median_order_to_detection_sec": 10.4,
+        "max_order_to_detection_sec": 14.8,
+        "min_order_to_detection_sec": 4.9
+      },
+      "SELL": {
+        "rows": 9,
+        "unique_orders": 9,
+        "strategies": {
+          "sepa_trend": 2,
+          "gap_and_go": 7
+        },
+        "order_types": {
+          "limit": 9
+        },
+        "mean_cost_bps_unrounded": 0.0,
+        "notional_weighted_cost_bps": 0.0,
+        "median_cost_bps": -0.0,
+        "worst_cost_bps": -0.0,
+        "favorable": 0,
+        "equal": 9,
+        "adverse": 0,
+        "recorded_formula_matches_round_1": true,
+        "median_order_to_detection_sec": 6.0,
+        "max_order_to_detection_sec": 13.3,
+        "min_order_to_detection_sec": 2.2
+      }
+    },
+    "limitations": [
+      "Filled observations only: 10 BUY gap_and_go market orders; 9 SELL limit orders across gap_and_go (7) and sepa_trend (2). Different populations; not an order-type experiment.",
+      "decision_price is Order.price, not necessarily candidate discovery/reference market price.",
+      "detect_delay_sec is order creation to fill observation, not broker execution latency.",
+      "No broker credentials or raw account records exported.",
+      "Orders lacking a positive decision price are not recorded. This is not complete execution coverage or a measure of selection/entry-policy benefit."
+    ]
+  },
+  "additional_public_inputs": [
+    {
+      "file": "yahoo_000660.json",
+      "sha256": "c19caceb29be2170fc33f3b1c27c9932720f68b3671ab5905bc34003b26912d7",
+      "bytes": 18102
+    },
+    {
+      "file": "yahoo_005930.json",
+      "sha256": "3b30c61e7976b2dcf09bd72c7c1cce04d5ae2e8a308fa90d5f95e469c4c07685",
+      "bytes": 17939
+    },
+    {
+      "file": "yahoo_069500.json",
+      "sha256": "7c84d24541850108c3f1b949d630c740f6e67349c349c9f8be302063ac46c442",
+      "bytes": 17617
+    }
+  ],
+  "remaining_limitations": [
+    "Account time-weighted total return still unavailable without external cash flows and broker source reconciliation.",
+    "Annual semiconductor-excluded return unavailable; current weights and missing dates not backfilled.",
+    "NAV return rounding and public-source conventions require preservation; no investor-level after-cost/tax return claimed.",
+    "Selection and entry protocol proposed separately; no passive collector implemented or run."
+  ]
+}

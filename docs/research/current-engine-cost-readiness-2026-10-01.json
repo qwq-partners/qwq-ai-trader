@@ -1,0 +1,525 @@
+{
+  "schema": 1,
+  "plan": {
+    "fixed_at_utc": "2026-10-01T03:52:41.186397+00:00",
+    "kind": "synthetic_cost_arithmetic_and_readiness_audit",
+    "purpose": "Quantify costs before prospective capture; no profitability or current-account inference.",
+    "same_notional_krw": "1000000",
+    "entry_reference_price_krw": "10000",
+    "quantity": 100,
+    "entry_and_exit_slippage_bps_each": [
+      0,
+      10,
+      30
+    ],
+    "spread_assumption": "No separate spread added. If actual ask/bid is used, spread is already in those prices.",
+    "fee_account_status": "Public standard schedule reference only; actual API/account concessions unverified.",
+    "historical_trade_repricing": false,
+    "operational_or_default_fee_changes": false
+  },
+  "sources": [
+    {
+      "url": "https://www.truefriend.com/main/customer/guide/_static/TF04ae010000.jsp?templet-bypass=true",
+      "accessed_date": "2026-10-01",
+      "scope": "Public BanKIS online commission table: KRX versus NXT columns, ETF separate row, equity tax table; actual account/API rate unverified."
+    },
+    {
+      "url": "https://advisor.truefriend.com/main/customer/notice/Notice.jsp?cmd=TF04ga000002&num=45782",
+      "accessed_date": "2026-10-01",
+      "scope": "Temporary KRX discount applies 2025-12-15 through 2026-02-13, expected reversion from 2026-02-19; not a permanent buy/sell distinction."
+    },
+    {
+      "url": "https://www.samsungfund.com/etf/insight/guide/view05.do",
+      "accessed_date": "2026-10-01",
+      "scope": "ETF gains/distributions have different tax categories; ETF trading commission comparison does not model distribution or all account taxes."
+    }
+  ],
+  "formula": "((1+entry_slippage)*(1+buy_commission))/((1-exit_slippage)*(1-sell_commission-sell_tax))-1; continuous rates ignore won rounding/tick sizes.",
+  "cost_rows": [
+    {
+      "model": "existing_code_side_split",
+      "fees": {
+        "buy_commission_rate": "0.000140527",
+        "sell_commission_rate": "0.000130527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 0,
+      "exit_slippage_bps": 0,
+      "continuous_reference_price_breakeven_pct": "0.227590287251927988381302100",
+      "flat_reference_net_pnl_krw": "-2272",
+      "buy_fee_krw": "141",
+      "sell_fee_and_tax_krw": "2131"
+    },
+    {
+      "model": "existing_code_side_split",
+      "fees": {
+        "buy_commission_rate": "0.000140527",
+        "sell_commission_rate": "0.000130527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 10,
+      "exit_slippage_bps": 10,
+      "continuous_reference_price_breakeven_pct": "0.428246123662842759128812200",
+      "flat_reference_net_pnl_krw": "-4269",
+      "buy_fee_krw": "141",
+      "sell_fee_and_tax_krw": "2128"
+    },
+    {
+      "model": "existing_code_side_split",
+      "fees": {
+        "buy_commission_rate": "0.000140527",
+        "sell_commission_rate": "0.000130527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 30,
+      "exit_slippage_bps": 30,
+      "continuous_reference_price_breakeven_pct": "0.830765354176212409575171500",
+      "flat_reference_net_pnl_krw": "-8265",
+      "buy_fee_krw": "141",
+      "sell_fee_and_tax_krw": "2124"
+    },
+    {
+      "model": "public_bankis_krx_stock_reference",
+      "fees": {
+        "buy_commission_rate": "0.000140527",
+        "sell_commission_rate": "0.000140527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 0,
+      "exit_slippage_bps": 0,
+      "continuous_reference_price_breakeven_pct": "0.228594713155566745819729300",
+      "flat_reference_net_pnl_krw": "-2282",
+      "buy_fee_krw": "141",
+      "sell_fee_and_tax_krw": "2141"
+    },
+    {
+      "model": "public_bankis_krx_stock_reference",
+      "fees": {
+        "buy_commission_rate": "0.000140527",
+        "sell_commission_rate": "0.000140527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 10,
+      "exit_slippage_bps": 10,
+      "continuous_reference_price_breakeven_pct": "0.429252560429151464029578600",
+      "flat_reference_net_pnl_krw": "-4279",
+      "buy_fee_krw": "141",
+      "sell_fee_and_tax_krw": "2138"
+    },
+    {
+      "model": "public_bankis_krx_stock_reference",
+      "fees": {
+        "buy_commission_rate": "0.000140527",
+        "sell_commission_rate": "0.000140527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 30,
+      "exit_slippage_bps": 30,
+      "continuous_reference_price_breakeven_pct": "0.831775824769341470468594200",
+      "flat_reference_net_pnl_krw": "-8275",
+      "buy_fee_krw": "141",
+      "sell_fee_and_tax_krw": "2134"
+    },
+    {
+      "model": "public_bankis_nxt_stock_reference",
+      "fees": {
+        "buy_commission_rate": "0.000130527",
+        "sell_commission_rate": "0.000130527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 0,
+      "exit_slippage_bps": 0,
+      "continuous_reference_price_breakeven_pct": "0.226588152176091271207772500",
+      "flat_reference_net_pnl_krw": "-2262",
+      "buy_fee_krw": "131",
+      "sell_fee_and_tax_krw": "2131"
+    },
+    {
+      "model": "public_bankis_nxt_stock_reference",
+      "fees": {
+        "buy_commission_rate": "0.000130527",
+        "sell_commission_rate": "0.000130527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 10,
+      "exit_slippage_bps": 10,
+      "continuous_reference_price_breakeven_pct": "0.427241982310577940419399700",
+      "flat_reference_net_pnl_krw": "-4259",
+      "buy_fee_krw": "131",
+      "sell_fee_and_tax_krw": "2128"
+    },
+    {
+      "model": "public_bankis_nxt_stock_reference",
+      "fees": {
+        "buy_commission_rate": "0.000130527",
+        "sell_commission_rate": "0.000130527",
+        "sell_tax_rate": "0.002"
+      },
+      "entry_slippage_bps": 30,
+      "exit_slippage_bps": 30,
+      "continuous_reference_price_breakeven_pct": "0.829757188197211178557067000",
+      "flat_reference_net_pnl_krw": "-8255",
+      "buy_fee_krw": "131",
+      "sell_fee_and_tax_krw": "2124"
+    },
+    {
+      "model": "public_bankis_etf_commission_reference",
+      "fees": {
+        "buy_commission_rate": "0.000146527",
+        "sell_commission_rate": "0.000146527",
+        "sell_tax_rate": "0"
+      },
+      "entry_slippage_bps": 0,
+      "exit_slippage_bps": 0,
+      "continuous_reference_price_breakeven_pct": "0.029309694661629684612797300",
+      "flat_reference_net_pnl_krw": "-294",
+      "buy_fee_krw": "147",
+      "sell_fee_and_tax_krw": "147"
+    },
+    {
+      "model": "public_bankis_etf_commission_reference",
+      "fees": {
+        "buy_commission_rate": "0.000146527",
+        "sell_commission_rate": "0.000146527",
+        "sell_tax_rate": "0"
+      },
+      "entry_slippage_bps": 10,
+      "exit_slippage_bps": 10,
+      "continuous_reference_price_breakeven_pct": "0.229568572929220534832242300",
+      "flat_reference_net_pnl_krw": "-2293",
+      "buy_fee_krw": "147",
+      "sell_fee_and_tax_krw": "146"
+    },
+    {
+      "model": "public_bankis_etf_commission_reference",
+      "fees": {
+        "buy_commission_rate": "0.000146527",
+        "sell_commission_rate": "0.000146527",
+        "sell_tax_rate": "0"
+      },
+      "entry_slippage_bps": 30,
+      "exit_slippage_bps": 30,
+      "continuous_reference_price_breakeven_pct": "0.631291498240335580407859200",
+      "flat_reference_net_pnl_krw": "-6293",
+      "buy_fee_krw": "147",
+      "sell_fee_and_tax_krw": "146"
+    }
+  ],
+  "price_gate_scenarios": [
+    {
+      "model": "existing_code_side_split",
+      "slippage_bps_each": 0,
+      "input": {
+        "schema_version": 1,
+        "dataset_kind": "synthetic",
+        "evaluation_epoch": "test-v1",
+        "as_of": "2026-09-30T16:00:00+09:00",
+        "fee_model_ref": "existing_code_side_split-reference-only",
+        "fees": {
+          "buy_commission_rate": "0.000140527",
+          "sell_commission_rate": "0.000130527",
+          "sell_tax_rate": "0.002"
+        },
+        "policy": {
+          "max_quote_age_seconds": 5,
+          "max_decision_delay_seconds": 5,
+          "entry_slippage_bps": 0,
+          "exit_slippage_bps": 0
+        },
+        "opportunities": [
+          {
+            "opportunity_id": "one",
+            "symbol": "SYNTH1",
+            "evaluation_epoch": "test-v1",
+            "route_origin": "live_screening",
+            "strategy": "gap_and_go",
+            "decision_at": "2026-09-30T10:00:00+09:00",
+            "baseline_basis": "order_free_policy",
+            "baseline_eligible": true,
+            "quantity": 100,
+            "capital_budget": "1100000",
+            "target": {
+              "price": "11000",
+              "basis": "intraday_high_at_decision",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "stop": {
+              "pct": "5",
+              "basis": "net_pnl",
+              "policy_ref": "synthetic-fixed-net5",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "quote": {
+              "ask": "10000",
+              "bid": "9990",
+              "ask_size": 100,
+              "as_of": "2026-09-30T10:00:01+09:00",
+              "received_at": "2026-09-30T10:00:02+09:00",
+              "session": "KRX_REGULAR_CONTINUOUS"
+            }
+          }
+        ]
+      },
+      "input_sha256": "d16b8d17307aa0c6577c7e5b1230649ac05c2539baa181d864216a6040519212",
+      "result": {
+        "gate_status": "allow",
+        "max_ask_whole_krw": "10209",
+        "target_net_gain": "97515",
+        "planned_net_loss": "50007.05",
+        "net_rr": "1.950025046468447948839213670872407"
+      },
+      "outcome_status": "unknown",
+      "complete_delta_net_pnl": null,
+      "production_eligible": false,
+      "account_return": null,
+      "cli_exit": 0,
+      "input_unchanged": true,
+      "independent_integer_cap_enumeration": "passed"
+    },
+    {
+      "model": "public_bankis_krx_stock_reference",
+      "slippage_bps_each": 0,
+      "input": {
+        "schema_version": 1,
+        "dataset_kind": "synthetic",
+        "evaluation_epoch": "test-v1",
+        "as_of": "2026-09-30T16:00:00+09:00",
+        "fee_model_ref": "public_bankis_krx_stock_reference-reference-only",
+        "fees": {
+          "buy_commission_rate": "0.000140527",
+          "sell_commission_rate": "0.000140527",
+          "sell_tax_rate": "0.002"
+        },
+        "policy": {
+          "max_quote_age_seconds": 5,
+          "max_decision_delay_seconds": 5,
+          "entry_slippage_bps": 0,
+          "exit_slippage_bps": 0
+        },
+        "opportunities": [
+          {
+            "opportunity_id": "one",
+            "symbol": "SYNTH1",
+            "evaluation_epoch": "test-v1",
+            "route_origin": "live_screening",
+            "strategy": "gap_and_go",
+            "decision_at": "2026-09-30T10:00:00+09:00",
+            "baseline_basis": "order_free_policy",
+            "baseline_eligible": true,
+            "quantity": 100,
+            "capital_budget": "1100000",
+            "target": {
+              "price": "11000",
+              "basis": "intraday_high_at_decision",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "stop": {
+              "pct": "5",
+              "basis": "net_pnl",
+              "policy_ref": "synthetic-fixed-net5",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "quote": {
+              "ask": "10000",
+              "bid": "9990",
+              "ask_size": 100,
+              "as_of": "2026-09-30T10:00:01+09:00",
+              "received_at": "2026-09-30T10:00:02+09:00",
+              "session": "KRX_REGULAR_CONTINUOUS"
+            }
+          }
+        ]
+      },
+      "input_sha256": "7c55c673e5bb3e92870c8d184b4c5c2948862ac1b3e4e91d820f9652001fa738",
+      "result": {
+        "gate_status": "allow",
+        "max_ask_whole_krw": "10209",
+        "target_net_gain": "97504",
+        "planned_net_loss": "50007.05",
+        "net_rr": "1.949805077484074745460890014507954"
+      },
+      "outcome_status": "unknown",
+      "complete_delta_net_pnl": null,
+      "production_eligible": false,
+      "account_return": null,
+      "cli_exit": 0,
+      "input_unchanged": true,
+      "independent_integer_cap_enumeration": "passed"
+    },
+    {
+      "model": "public_bankis_krx_stock_reference",
+      "slippage_bps_each": 10,
+      "input": {
+        "schema_version": 1,
+        "dataset_kind": "synthetic",
+        "evaluation_epoch": "test-v1",
+        "as_of": "2026-09-30T16:00:00+09:00",
+        "fee_model_ref": "public_bankis_krx_stock_reference-reference-only",
+        "fees": {
+          "buy_commission_rate": "0.000140527",
+          "sell_commission_rate": "0.000140527",
+          "sell_tax_rate": "0.002"
+        },
+        "policy": {
+          "max_quote_age_seconds": 5,
+          "max_decision_delay_seconds": 5,
+          "entry_slippage_bps": 10,
+          "exit_slippage_bps": 10
+        },
+        "opportunities": [
+          {
+            "opportunity_id": "one",
+            "symbol": "SYNTH1",
+            "evaluation_epoch": "test-v1",
+            "route_origin": "live_screening",
+            "strategy": "gap_and_go",
+            "decision_at": "2026-09-30T10:00:00+09:00",
+            "baseline_basis": "order_free_policy",
+            "baseline_eligible": true,
+            "quantity": 100,
+            "capital_budget": "1100000",
+            "target": {
+              "price": "11000",
+              "basis": "intraday_high_at_decision",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "stop": {
+              "pct": "5",
+              "basis": "net_pnl",
+              "policy_ref": "synthetic-fixed-net5",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "quote": {
+              "ask": "10000",
+              "bid": "9990",
+              "ask_size": 100,
+              "as_of": "2026-09-30T10:00:01+09:00",
+              "received_at": "2026-09-30T10:00:02+09:00",
+              "session": "KRX_REGULAR_CONTINUOUS"
+            }
+          }
+        ]
+      },
+      "input_sha256": "7d0e72c9ad70e68bc5f517f30656ddd25c125f3c237bcab07ef8dfe16dd88795",
+      "result": {
+        "gate_status": "allow",
+        "max_ask_whole_krw": "10188",
+        "target_net_gain": "95407",
+        "planned_net_loss": "50057.050",
+        "net_rr": "1.905965293600002397264720953392180"
+      },
+      "outcome_status": "unknown",
+      "complete_delta_net_pnl": null,
+      "production_eligible": false,
+      "account_return": null,
+      "cli_exit": 0,
+      "input_unchanged": true,
+      "independent_integer_cap_enumeration": "passed"
+    },
+    {
+      "model": "public_bankis_krx_stock_reference",
+      "slippage_bps_each": 30,
+      "input": {
+        "schema_version": 1,
+        "dataset_kind": "synthetic",
+        "evaluation_epoch": "test-v1",
+        "as_of": "2026-09-30T16:00:00+09:00",
+        "fee_model_ref": "public_bankis_krx_stock_reference-reference-only",
+        "fees": {
+          "buy_commission_rate": "0.000140527",
+          "sell_commission_rate": "0.000140527",
+          "sell_tax_rate": "0.002"
+        },
+        "policy": {
+          "max_quote_age_seconds": 5,
+          "max_decision_delay_seconds": 5,
+          "entry_slippage_bps": 30,
+          "exit_slippage_bps": 30
+        },
+        "opportunities": [
+          {
+            "opportunity_id": "one",
+            "symbol": "SYNTH1",
+            "evaluation_epoch": "test-v1",
+            "route_origin": "live_screening",
+            "strategy": "gap_and_go",
+            "decision_at": "2026-09-30T10:00:00+09:00",
+            "baseline_basis": "order_free_policy",
+            "baseline_eligible": true,
+            "quantity": 100,
+            "capital_budget": "1100000",
+            "target": {
+              "price": "11000",
+              "basis": "intraday_high_at_decision",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "stop": {
+              "pct": "5",
+              "basis": "net_pnl",
+              "policy_ref": "synthetic-fixed-net5",
+              "as_of": "2026-09-30T10:00:00+09:00",
+              "available_at": "2026-09-30T10:00:00+09:00"
+            },
+            "quote": {
+              "ask": "10000",
+              "bid": "9990",
+              "ask_size": 100,
+              "as_of": "2026-09-30T10:00:01+09:00",
+              "received_at": "2026-09-30T10:00:02+09:00",
+              "session": "KRX_REGULAR_CONTINUOUS"
+            }
+          }
+        ]
+      },
+      "input_sha256": "cc3ca6bb9f16793064d7e9264a6562edcfcb68ce5bb3f4c4e2b66659219f14b4",
+      "result": {
+        "gate_status": "allow",
+        "max_ask_whole_krw": "10148",
+        "target_net_gain": "91211",
+        "planned_net_loss": "50157.050",
+        "net_rr": "1.818508066164178315909727545778709"
+      },
+      "outcome_status": "unknown",
+      "complete_delta_net_pnl": null,
+      "production_eligible": false,
+      "account_return": null,
+      "cli_exit": 0,
+      "input_unchanged": true,
+      "independent_integer_cap_enumeration": "passed"
+    }
+  ],
+  "source_sha256": {
+    "src/utils/fee_calculator.py": "c5aa022a1d7605e66b135d78d1da9b819e200659f4f3357547df1ae39e350e6f",
+    "src/utils/sizing.py": "ff8622f280c4bee5dedf7cfc58b754751ffde1cc4fc01897718e94da64acf324",
+    "src/analytics/entry_price_shadow.py": "e324f7313345900a311826a34841cf7af80f9bf8a3dd3cadee36228a28a8e01e",
+    "scripts/compare_entry_price_shadow.py": "877b15d96ac2fc6e7cce355bf27d764784142e61c6285516bccf9e72ecf16d3d",
+    "scripts/run_trader.py": "9f78ec5e6ef442a2bec1d60ef3938b7e15f41d5194b6306510eddcff734560a4",
+    "src/data/feeds/kis_websocket.py": "14f9be2cb79835ab6d40eb81ede6789f19bd91b151eae9db812ffb723238f69f"
+  },
+  "readiness": {
+    "live_capture_ready": false,
+    "activation_authorized": false,
+    "code_parts_locally_verified": true,
+    "runner_install_hook_present": false,
+    "fixed_end_and_interrupted_close_owner_present": false,
+    "actual_account_fee_verified": false,
+    "live_capital_and_slots_verified": false,
+    "capture_date_and_period_fixed": false,
+    "channel_and_data_capacity_verified": false,
+    "next_required_scope": "Explicit default-off Runner installation/lifecycle design plus actual evidence; current generic pipeline must not be launched as an order-free experiment."
+  },
+  "limitations": [
+    "Arithmetic examples only, no market paths or profit samples.",
+    "Price ceilings do not imply target hit probability or valid exchange order ticks.",
+    "A 0.1bp sell-fee discrepancy cannot by itself establish a material profit edge.",
+    "ETF cost row omits distribution taxes, investment returns, internal fund costs and account taxation.",
+    "No actual past trades, ledgers, production fee defaults, kill switches or services were changed."
+  ]
+}

@@ -20,7 +20,7 @@ import os
 import re
 import time
 import traceback
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional, Dict, List, Set, Tuple
@@ -44,6 +44,8 @@ from ..utils.kis_request_metrics import request_source, with_request_source
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
+from ..analytics.entry_observation import capture_scan, capture_rest_quote, emit_with_observation
+from ..data.feeds.quote_subscription import observe_screen_candidates
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3522,6 +3524,8 @@ JSON:
 
             while bot.running:
                 screened = []
+                _entry_observer = getattr(bot, "_entry_price_observer", None)
+                _entry_scan_id = None
                 _overnight_sentiment = None
                 _overnight_volatility = None
                 try:
@@ -3601,6 +3605,10 @@ JSON:
                         overnight_sentiment=_overnight_sentiment,
                         overnight_volatility=_overnight_volatility,
                     )
+                    # 반환 후보 전체를 포트폴리오/진입 게이트 전에 복사한다. 기본 관측기는 없다.
+                    _entry_scan_id = capture_scan(_entry_observer, screened, current_session.value)
+                    observe_screen_candidates(getattr(bot, "ws_feed", None), _entry_observer,
+                                              _entry_scan_id, screened)
 
                     # 점수 맵 생성
                     scores = {s.symbol: s.score for s in screened}
@@ -3920,10 +3928,14 @@ JSON:
 
                                     # 실시간 가격 검증
                                     try:
+                                        _entry_quote_requested_at = (datetime.now(timezone.utc).isoformat()
+                                                                     if _entry_observer is not None else None)
                                         quote = await bot.broker.get_quote(stock.symbol)
                                     except Exception as e:
                                         logger.debug(f"[스크리닝] {stock.symbol} 호가 조회 실패: {e}")
                                         continue
+                                    capture_rest_quote(_entry_observer, _entry_scan_id, stock.symbol, quote,
+                                                       requested_at=_entry_quote_requested_at)
                                     if not quote or quote.get("price", 0) <= 0:
                                         continue
 
@@ -4123,7 +4135,7 @@ JSON:
 
                                     try:
                                         event = SignalEvent.from_signal(signal, source="live_screening")
-                                        await bot.engine.emit(event)
+                                        await emit_with_observation(bot.engine, event, _entry_observer, _entry_scan_id)
                                     except Exception as e:
                                         logger.error(f"[스크리닝] {stock.symbol} 시그널 발행 실패: {e}", exc_info=True)
                                         break

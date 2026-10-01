@@ -1,0 +1,196 @@
+{
+  "schema": 1,
+  "kind": "dated_engine_capital_reference_and_sizing_fix",
+  "assembled_at_utc": "2026-10-01T06:21:19.220935+00:00",
+  "source_base_sha": "7ddfb52a04a65baefd5741e31c53100d1b37ed75",
+  "source_sha256": {
+    "src/analytics/equity_tracker.py": "0f21ede4282eb3aca04165eabaadd8477c0aa4d498f7968d5ab0357b78fa3f79",
+    "src/core/types.py": "2b86a290911b7173c6e587d9e6bc63d015322a9b61d33eaebdc402441f753a90",
+    "src/core/engine.py": "69b6045fd1ecfa25d0f66feeb7943cc67968e1d39af6cf0c70cd32f31fa711a6",
+    "src/core/market_regime.py": "9553145daf1c83e22cebfc30cdec676a19673704a36bb076bd1bd0eddc31cc94",
+    "src/execution/broker/kis_kr.py": "266bc10e4b3b0fcb171f06999e5b0bc427ed10c448be61c13c28bae934c521d1",
+    "src/execution/broker/base.py": "c007bb5473a049b1c119230ead3140d8e8f9c4daa4506587b976ae76023da95c",
+    "src/core/evolution/trade_journal.py": "705e87c798c6ca3e23fad0ae1542691fd99b3a7986ebc16d4611fc1761f23364",
+    "src/utils/fee_calculator.py": "c5aa022a1d7605e66b135d78d1da9b819e200659f4f3357547df1ae39e350e6f",
+    "src/utils/sizing.py": "ff8622f280c4bee5dedf7cfc58b754751ffde1cc4fc01897718e94da64acf324",
+    "config/default.yml": "81b7cd2545e18e6e40dfb1e7586310a5bd8a1ac4e599f8d05b2696569efa1938",
+    "tests/test_risk_sizing.py": "75880bf3b8c46a670a801c5c4d0c32b7a0902d9db5595b72bd78e1a809888d74"
+  },
+  "scope": "Root read four explicitly named local snapshot paths only; three aggregate projections retained. No symbols, positions, account identifiers or raw source copies. No broker API/credentials/runtime inspection.",
+  "snapshots": [
+    {
+      "date": "2026-09-30",
+      "timestamp": "2026-09-30T16:00:56.272781",
+      "total_equity": 20713580.0,
+      "cash": 4152080.0,
+      "positions_value": 16561500.0,
+      "position_count": 2,
+      "source_file": "equity_20260930.json",
+      "source_sha256": "16915e282e496e780ae15c17a2b22d3bae74e2de01a5d5d9f3b89dcbb559bd5b",
+      "basis": "engine_portfolio_snapshot_not_broker_statement",
+      "timezone_encoded": false,
+      "cash_pct": "20.04520705739905897483679789",
+      "component_difference_krw": "0.0",
+      "position_detail_sum_matches": true,
+      "position_count_matches": true
+    },
+    {
+      "date": "2026-09-29",
+      "timestamp": "2026-09-29T16:00:18.674158",
+      "total_equity": 20644472.0,
+      "cash": 4024422.0,
+      "positions_value": 16620050.0,
+      "position_count": 3,
+      "source_file": "equity_20260929.json",
+      "source_sha256": "97818eb12829cb6f36f9f21946d043bd6f1bcdc778810999b17ba314c7bca576",
+      "basis": "engine_portfolio_snapshot_not_broker_statement",
+      "timezone_encoded": false,
+      "cash_pct": "19.49394491658590251182011339",
+      "component_difference_krw": "0.0",
+      "position_detail_sum_matches": true,
+      "position_count_matches": true
+    },
+    {
+      "date": "2026-09-28",
+      "timestamp": "2026-09-28T16:00:28.872111",
+      "total_equity": 21425492.0,
+      "cash": 4859492.0,
+      "positions_value": 16566000.0,
+      "position_count": 1,
+      "source_file": "equity_20260928.json",
+      "source_sha256": "0695517a1c77ba7a967c92a2be57a81fb83ddd38975d74c431391deac9ff8aff",
+      "basis": "engine_portfolio_snapshot_not_broker_statement",
+      "timezone_encoded": false,
+      "cash_pct": "22.68088872824950764257828945",
+      "component_difference_krw": "0.0",
+      "position_detail_sum_matches": true,
+      "position_count_matches": true
+    }
+  ],
+  "absent_allowlisted_files": [
+    "equity_20261001.json"
+  ],
+  "source_limitations": [
+    "Naive source timestamp is the engine save time with unknown timezone, not a broker response timestamp.",
+    "Only four explicitly dated filenames checked; absence is not proof that no newer record exists elsewhere.",
+    "Internal component arithmetic does not prove broker NAV, cash-flow adjustment, bot-only allocation or executable cash.",
+    "Initialization combines orderable-cash (or deposit fallback) with stock value, not necessarily the broker tot_evlu_amt field.",
+    "Both manual and bot holdings may enter portfolio. No per-position classification inferred.",
+    "Historical backfill can store positive equity with zero cash/positions. This source explanation alone does not classify the previous six anomalous rows.",
+    "Trade journal and Fill commission use a code fee model rather than observed broker settlement fees."
+  ],
+  "capital_contract": {
+    "bot_allocated_capital_krw": null,
+    "actual_decision_budget_krw": null,
+    "actual_regime": null,
+    "actual_pending_krw": null,
+    "actual_core_shortfall_krw": null,
+    "actual_strategy_remaining_krw": null,
+    "basis": "historical_sensitivity_only_not_executable_budget"
+  },
+  "scenario_assumptions": [
+    "Use the latest of the three inspected dated engine snapshots only as historical arithmetic input.",
+    "Source defaults 5%/15% reserves are alternatives, not identification of the actual regime or effective configuration.",
+    "Pending=0 and core shortfall=0%/10% are hypothetical. Real core reserve, pending and strategy consumption are unknown.",
+    "Fresh strategy cap assumes zero existing/pending value in that strategy; stop inputs 3.5%/5% are declared examples.",
+    "Continuous A/1.3 excludes price ticks, integer shares, per-strategy caps, overlays and minimum notional; it is not an order quote.",
+    "The pre-fix minimum-three-share correction could exceed the intermediate 1.3 cap. The local fix preserves that cap; it has not been deployed.",
+    "These cases do not establish an opportunity, profit, actual trade size or grounds to relax cash reserves."
+  ],
+  "risk_budget_reference_krw": "144995.0600",
+  "risk_position_cap_reference_krw": "3728444.400",
+  "scenarios": [
+    {
+      "reserve_pct": "5",
+      "hypothetical_core_shortfall_pct": "0",
+      "hypothetical_pending_krw": "0",
+      "reserve_krw": "1035679.0",
+      "cash_after_reserve_krw": "3116401.0",
+      "hypothetical_core_reserve_krw": "0.0",
+      "noncore_cash_before_strategy_and_share_limits_krw": "3116401.0",
+      "continuous_market_notional_reference_krw": "2397231.538461538461538461538",
+      "fresh_gap_raw_before_overlays_krw": "2071358.000",
+      "fresh_sepa_raw_before_overlays_krw": "2899901.20"
+    },
+    {
+      "reserve_pct": "5",
+      "hypothetical_core_shortfall_pct": "10",
+      "hypothetical_pending_krw": "0",
+      "reserve_krw": "1035679.0",
+      "cash_after_reserve_krw": "3116401.0",
+      "hypothetical_core_reserve_krw": "2071358.0",
+      "noncore_cash_before_strategy_and_share_limits_krw": "1045043.0",
+      "continuous_market_notional_reference_krw": "803879.2307692307692307692308",
+      "fresh_gap_raw_before_overlays_krw": "1045043.0",
+      "fresh_sepa_raw_before_overlays_krw": "1045043.0"
+    },
+    {
+      "reserve_pct": "15",
+      "hypothetical_core_shortfall_pct": "0",
+      "hypothetical_pending_krw": "0",
+      "reserve_krw": "3107037.0",
+      "cash_after_reserve_krw": "1045043.0",
+      "hypothetical_core_reserve_krw": "0.0",
+      "noncore_cash_before_strategy_and_share_limits_krw": "1045043.0",
+      "continuous_market_notional_reference_krw": "803879.2307692307692307692308",
+      "fresh_gap_raw_before_overlays_krw": "1045043.0",
+      "fresh_sepa_raw_before_overlays_krw": "1045043.0"
+    },
+    {
+      "reserve_pct": "15",
+      "hypothetical_core_shortfall_pct": "10",
+      "hypothetical_pending_krw": "0",
+      "reserve_krw": "3107037.0",
+      "cash_after_reserve_krw": "1045043.0",
+      "hypothetical_core_reserve_krw": "2071358.0",
+      "noncore_cash_before_strategy_and_share_limits_krw": "0",
+      "continuous_market_notional_reference_krw": "0E+1",
+      "fresh_gap_raw_before_overlays_krw": "0",
+      "fresh_sepa_raw_before_overlays_krw": "0"
+    }
+  ],
+  "sizing_fix": {
+    "problem": "minimum-three-share preference could re-inflate market-cash-capped two-share quantity",
+    "change": "Require max_qty_for_market >= 3 before the three-share correction; retain affordable zero/one/two shares and final risk cap.",
+    "synthetic_price_krw": "300000",
+    "synthetic_available_cash_krw": "1000000",
+    "before_quantity": 3,
+    "after_quantity": 2,
+    "hypothesis_or_strategy_change": false,
+    "deployed": false,
+    "red_result": "4 failed / 6 passed: both modes returned 3 where 2 expected",
+    "related_result": "83 passed; operating-state/external-network test access attempts 0"
+  },
+  "fee_reference": {
+    "account_rate_verified": false,
+    "source": "local code model only; public table remains a separate reference",
+    "official_table_url": "https://www.truefriend.com/main/customer/guide/_static/TF04ae010000.jsp?templet-bypass=true",
+    "public_table_rechecked_date": "2026-10-01"
+  },
+  "decision": "Preserve candidate ranking and reserve/risk rules; evaluate the same-candidate net entry-price gate with contemporaneous feasible quantity/capital. Do not open another strategy search.",
+  "profit_improvement_measured": false,
+  "operational_changes": false,
+  "validation": {
+    "related_tests_passed": 83,
+    "risk_sizing_independent_tests_passed": 30,
+    "full_standard_suite_passed": 2797,
+    "full_standard_suite_xfailed": 2,
+    "full_standard_suite_warnings": 1,
+    "full_standard_suite_exit_code": 0,
+    "full_standard_suite_seconds": 81.24,
+    "test_isolation_violations": 0,
+    "bare_pytest_exit_code": 1,
+    "bare_pytest_errors": [
+      "scripts/test_new_tr.py::test_tr1_frgnmem_estimate",
+      "scripts/test_new_tr.py::test_tr2_investor_estimate"
+    ],
+    "bare_pytest_reason": "Manual KIS diagnostic functions need kis_md; project standard verify uses tests/ (docs/operations/local-development.md:143). No API invoked; diagnostic script unchanged.",
+    "fraction_arithmetic_cases_verified": 4,
+    "source_fingerprints_verified": 11,
+    "review_requested_model": "gpt-6-astra",
+    "review_requested_effort": "high",
+    "review_actual_model_metadata": "unexposed_unverified",
+    "review_findings_p1_p2": 0,
+    "operational_promotion": false
+  }
+}

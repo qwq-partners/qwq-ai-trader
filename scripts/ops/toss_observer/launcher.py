@@ -362,7 +362,11 @@ def main(argv=None):
         if check:
             return 0
         import asyncio
-        from src.observation.toss_service import run_service
+        from src.observation.toss_deployment import service_for
+        with _timeout(5):
+            authority = deployment.load()
+            run_service = service_for(authority)
+            authority.stop()
         return asyncio.run(run_service(deployment=deployment, settings=document,
             claim_start=lambda authority: claim_start(document, authority)))
     except Exception:

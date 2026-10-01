@@ -1,0 +1,548 @@
+{
+  "schema": 1,
+  "kind": "first_capture_review_draft",
+  "created_at_utc": "2026-10-01T05:34:21.599315+00:00",
+  "status": "blocked_on_actual_inputs_not_registered_not_runnable",
+  "purpose": "Assess data quality for the existing same-candidate entry-price gate; no profit verdict from one pilot.",
+  "live_capture_started": false,
+  "operational_changes": false,
+  "production_eligible": false,
+  "source_base_sha": "7ddfb52a04a65baefd5741e31c53100d1b37ed75",
+  "source_manifest_kind": "local_dirty_worktree_not_running_process",
+  "source_sha256": {
+    "src/analytics/entry_observation_runtime.py": "3aa7e012f6b11e08426643321863233683daece9ae8b822e45f43c221fe526b1",
+    "src/analytics/entry_observation.py": "8ad5d106d3a493174cda286f9f2fddddf64d4c1705901cc0023860b78e3fd273",
+    "src/analytics/entry_observation_journal.py": "ad98f9c99bdd1bef74a61e40c7fe8e0dda0e0ff6787bf309e974a68cad6cc55c",
+    "src/analytics/entry_price_shadow.py": "bdfaac87ca42201aea2b5bb1a81c815f60460f650508c1626d97b8cd4c6ea250",
+    "src/analytics/received_entry_input.py": "254b4823170ade3fed1506db8c718004f4a956095a6a6ec21baf5ad0cc976d62",
+    "src/analytics/entry_markout.py": "ce0fab0b96163b7acfb99be92d557b07a931779d023c378a3dd90cffc5fb21c1",
+    "src/data/feeds/quote_subscription.py": "6bfdf0e81644d978001c53d50c06f23bd0049c593bf8eeb7642ace2e9d180dc2",
+    "src/data/feeds/kis_websocket.py": "14f9be2cb79835ab6d40eb81ede6789f19bd91b151eae9db812ffb723238f69f",
+    "scripts/run_trader.py": "2b18073b02ee40635f173bc3b2cd8b599453ad5e446bfaf9b1230df7f0c2844a",
+    "src/schedulers/kr_scheduler.py": "7f80bcd8661e88951b64cb12c622c459fb34ca8b3429a907dd5b2bc22c64466c",
+    "src/signals/screener/kr_screener.py": "d23ff11fe50198e29233d91e40ee11014e420db1750a0027e8bb29a6d35c6df2",
+    "src/utils/fee_calculator.py": "c5aa022a1d7605e66b135d78d1da9b819e200659f4f3357547df1ae39e350e6f",
+    "src/core/engine.py": "ce3d3a940224dc22644ae002841fa419989337fb2ef1cacda8e036f3d4813d29",
+    "config/default.yml": "81b7cd2545e18e6e40dfb1e7586310a5bd8a1ac4e599f8d05b2696569efa1938",
+    "src/analytics/entry_capital_limits.py": "e761fd1038972bc54c0c59170c08f5a890848b9dedbd3196e5a6179da722583b"
+  },
+  "study_template": {
+    "schema_version": 1,
+    "dataset_kind": "observed",
+    "evaluation_epoch": null,
+    "as_of": null,
+    "fee_model_ref": "draft-public-bankis-krx-stock-reference-not-account-verified-2026-10-01",
+    "fees": {
+      "buy_commission_rate": "0.000140527",
+      "sell_commission_rate": "0.000140527",
+      "sell_tax_rate": "0.002"
+    },
+    "policy": {
+      "max_quote_age_seconds": "1",
+      "max_decision_delay_seconds": "5",
+      "entry_slippage_bps": "0",
+      "exit_slippage_bps": "0"
+    },
+    "data_basis": "received_snapshot",
+    "received_policy": {
+      "version": "received-v1",
+      "max_rest_rtt_seconds": "3",
+      "max_target_age_seconds": "30"
+    },
+    "outcome_basis": "fixed_horizon_bid_markout",
+    "markout_policy": {
+      "version": "fixed-horizon-bid-v1",
+      "policy_ref": null,
+      "fixed_at": null,
+      "horizon_seconds": 900,
+      "max_delay_seconds": "5",
+      "anchor": "entry_quote_observed_at"
+    },
+    "capture": {
+      "version": "runner-first-scan-v1",
+      "study_ref": null,
+      "start_at": null,
+      "admission_end_at": null,
+      "end_at": null,
+      "scan_admission_ref": null,
+      "source_version_ref": null,
+      "configuration_ref": null,
+      "fee_evidence_ref": "draft-public-bankis-krx-stock-reference-not-account-verified-2026-10-01",
+      "capital_evidence_ref": null,
+      "capacity_evidence_ref": null,
+      "journal_path": null,
+      "buffer_capacity": 50000,
+      "queue_capacity": 4096,
+      "batch_size": 256,
+      "max_bytes": 67108864,
+      "max_record_bytes": 65536,
+      "open_timeout_seconds": 5,
+      "close_timeout_seconds": 5,
+      "channels": {
+        "registration_cap": 41,
+        "external_reserved": 0,
+        "operational_headroom": null,
+        "max_candidates": 3,
+        "lease_seconds": 3000,
+        "evidence_ref": "user-confirmed-bot-only-websocket-2026-10-01"
+      }
+    },
+    "capital_policy": {
+      "version": "pre-pending-guards-v1",
+      "policy_ref": null,
+      "fixed_at": null,
+      "source_version_ref": null,
+      "configuration_ref": null,
+      "max_snapshot_age_seconds": "1",
+      "risk_per_trade_pct": "0.7",
+      "max_position_pct": "18"
+    }
+  },
+  "manifest_template": {
+    "study_path": null,
+    "study_sha256": null
+  },
+  "proposed_schedule": {
+    "trade_date": null,
+    "timezone": "Asia/Seoul",
+    "installation_budget_start_local": "09:55:00",
+    "first_scan_not_before_local": "10:00:00",
+    "first_scan_admission_end_exclusive_local": "10:15:00",
+    "capture_end_exclusive_local": "10:45:00",
+    "max_planning_preparation_seconds": 300,
+    "capture_start_to_end_seconds": 2700,
+    "budget_seconds_from_install": 3000,
+    "horizon_seconds": 900,
+    "planned_latest_order_ready_for_margin_local": "10:25:00",
+    "planning_scan_to_order_allowance_seconds": 600,
+    "entry_quote_delay_allowance_seconds": 5,
+    "markout_delay_allowance_seconds": 5,
+    "remaining_margin_after_latest_planned_markout_seconds": 290,
+    "planning_order_deadline_enforced_by_runtime": false,
+    "actual_session_verified": false,
+    "rationale": "One stable intraday data-quality window; times/horizon are proposed design choices, not optimized entry/exit rules.",
+    "late_decision_rule": "Do not replace or drop the candidate. Report delay/maturity/unknown; current as_of and horizon checks decide evaluability.",
+    "admission_warning": "Scheduler has initial 60-second wait and interval after work; first return in this window is not guaranteed.",
+    "budget_start_warning": "Installation substantially before 09:55 invalidates this resource budget; runtime has no earliest-install gate."
+  },
+  "capacity": {
+    "proposed_buffer_records": 50000,
+    "proposed_file_bytes": 67108864,
+    "declared_record_reserve_fraction": 0.25,
+    "quote_record_budget_after_reserve": 37500,
+    "mean_aggregate_quote_records_per_second_budget_after_reserve": 12.5,
+    "retained_memory_mib_at_full_cap_using_probe": 42.36861228942871,
+    "journal_mib_at_full_cap_using_probe": 29.881038665771484,
+    "sensitivity": [
+      {
+        "aggregate_quote_records_per_second_assumed": 10,
+        "seconds": 3000,
+        "estimated_quote_records": 30000,
+        "memory_mib_at_probe_retained_per_record": 25.421167373657227,
+        "journal_mib_at_probe_average_record": 17.92862319946289,
+        "seconds_to_50000_record_cap_ignoring_other_records": 5000.0,
+        "fits_record_cap_before_other_records": true
+      },
+      {
+        "aggregate_quote_records_per_second_assumed": 50,
+        "seconds": 3000,
+        "estimated_quote_records": 150000,
+        "memory_mib_at_probe_retained_per_record": 127.10583686828615,
+        "journal_mib_at_probe_average_record": 89.64311599731445,
+        "seconds_to_50000_record_cap_ignoring_other_records": 1000.0,
+        "fits_record_cap_before_other_records": false
+      },
+      {
+        "aggregate_quote_records_per_second_assumed": 100,
+        "seconds": 3000,
+        "estimated_quote_records": 300000,
+        "memory_mib_at_probe_retained_per_record": 254.2116737365723,
+        "journal_mib_at_probe_average_record": 179.2862319946289,
+        "seconds_to_50000_record_cap_ignoring_other_records": 500.0,
+        "fits_record_cap_before_other_records": false
+      }
+    ],
+    "probe": {
+      "kind": "synthetic_resource_probe_not_market_rate",
+      "record_count": 5000,
+      "retained_tracemalloc_bytes": 4442671,
+      "retained_python_bytes_per_record": 888.5342,
+      "peak_tracemalloc_bytes": 4445179,
+      "publish_seconds_under_tracemalloc": 0.35689674224704504,
+      "persistence": {
+        "journal_bytes": 3133254,
+        "journal_bytes_per_record_including_header_seal": 626.6508,
+        "publish_and_close_seconds": 0.5271596843376756,
+        "restored_records": 5000,
+        "complete": true,
+        "fsync_confirmed": true
+      },
+      "isolation_violations": 0,
+      "limitations": [
+        "5000 synthetic BOOK records, 8 synthetic symbols; not a live message-rate estimate.",
+        "tracemalloc retained Python allocations are not RSS; native allocations/exports/reader/other bot components excluded.",
+        "Synthetic strings/field lengths are not a maximum record size.",
+        "One local writer run is not sustained/burst-rate or event-loop latency evidence."
+      ],
+      "source_sha256": {
+        "src/analytics/entry_observation.py": "530a5594ea96dbf199dee25f0ffa6ee9528b2bed34cb509e4828ede1df91fe43",
+        "src/analytics/entry_observation_journal.py": "567e4ad383430a60e4d9a15c260b330b9b47ff63c0cc7bb4f0839ff0d9eba976",
+        "src/analytics/entry_observation_runtime.py": "5855641803d2f0443f26ce628ee800874b71a47c6d6a1a95ceee818a1301ddef"
+      }
+    },
+    "live_rate_verified": false,
+    "host_memory_and_storage_headroom_verified": false,
+    "burst_drain_verified": false,
+    "actual_first_scan_record_size_verified": false,
+    "notes": [
+      "All callback BOOK records count, including operational symbols; max_candidates does not cap total quote volume.",
+      "25% reserve is a draft allowance, not evidence that non-quote records or the first scan fit.",
+      "The screener returns all merged ranked results; a single scan may exceed max_record_bytes.",
+      "Candidate leases follow original scan order up to 3; unallocated candidates remain in the full scan denominator.",
+      "Do not sample or discard the first quote to force capacity to fit; unsupported capacity means incomplete/no performance claim.",
+      "Phase18 adds pre-pending capital fields to order_ready. The earlier synthetic BOOK-only resource probe does not bound these larger records."
+    ],
+    "host_snapshot_available": true,
+    "host_snapshot_is_capacity_approval": false
+  },
+  "cost_contract": {
+    "public_reference_url": "https://www.truefriend.com/main/customer/guide/_static/TF04ae010000.jsp?templet-bypass=true",
+    "accessed_date": "2026-10-01",
+    "account_applied_rate_verified": false,
+    "revalidate_on_actual_capture_date": true,
+    "scope": "KRX KOSPI/KOSDAQ ordinary stocks only; exclude ETF/ETN/KONEX and NXT pricing from this fee model.",
+    "primary_additional_slippage_bps_each": 0,
+    "stress_slippage_bps_each": [
+      10,
+      30
+    ],
+    "primary_label": "first-ask/first-bid price proxy, not fill evidence",
+    "spread_rule": "Actual observed ask/bid already contains spread; do not add it again.",
+    "stress_rule": "Report both predetermined stresses, never select a best-performing cost assumption.",
+    "llm_data_server_costs_included": false,
+    "pilot_basis": "public_bankis_krx_reference_only",
+    "pilot_basis_selected": true,
+    "public_page_rechecked_at_utc": "2026-10-01T08:08:56.480501+00:00",
+    "api_account_rate_verified": false,
+    "pilot_does_not_require_account_rate": true
+  },
+  "capital_contract": {
+    "bot_allocated_capital_krw": null,
+    "actual_decision_budget_krw": null,
+    "basis": "draft_declared_guards_not_verified_effective_configuration",
+    "synthetic_1000000_or_1100000_reused_as_actual": false,
+    "historical_cash_ratio_reused_as_actual": false,
+    "necessary_per_candidate": "Recorded pre-pending components plus identity, quantity, source/time linkage; missing or failed common-quantity guards remain unknown.",
+    "not_sufficient": "Total capital or a pre-pending snapshot alone is not broker buying-power evidence or the all-in comparator budget. Earlier rejected candidates remain unknown.",
+    "quantity_rule": "Use recorded requested quantity for a same-quantity diagnostic; it is not a confirmed fill.",
+    "historical_reference": "current-engine-capital-readiness-2026-10-01.json",
+    "historical_reference_is_actual_budget": false,
+    "pre_pending_observation_local_code": true,
+    "pre_pending_observation_basis": "engine_memory_not_broker_balance; before own reservation, not the historical inputs used by earlier gates",
+    "automatic_budget_conversion": false,
+    "required_conversion": "No scalar conversion: explicitly opt into pre-pending-guards-v1; independently enforce cash cost, market buffer, strategy notional, declared position and declared risk limits.",
+    "blocked_candidates_have_capital_snapshot": false,
+    "opt_in_internal_guard_proxy_local_code": true,
+    "declared_guard_proposal": {
+      "risk_per_trade_pct": "0.7",
+      "max_position_pct": "18",
+      "max_snapshot_age_seconds": "1",
+      "actual_sizing_configuration_verified": false,
+      "registered_policy": false
+    },
+    "snapshot_hash_is_authentication": false,
+    "actual_engine_sizing_replayed": false,
+    "guard_failure_rule": "unknown; never classify as a price-gate cash choice or avoided loss",
+    "pilot_basis": "recorded_internal_pre_pending_components_with_declared_guards",
+    "pilot_basis_selected": true,
+    "pilot_does_not_require_total_bot_allocation": true,
+    "account_return_requires_bot_allocation_and_cashflows": true,
+    "local_guard_values_match_static_config": true,
+    "runtime_guard_values_verified": false
+  },
+  "evaluation": {
+    "hypothesis_count": 1,
+    "scope": "live_screening/gap_and_go only; not all stock-selection paths or the whole engine",
+    "minimum_net_rr": "1.5",
+    "a": "Existing pre-transport order-ready path priced at first validly selected KRX ask.",
+    "b": "Same A input and quantity; retain the entry only when the existing cost-adjusted price gate permits it.",
+    "exit": "Same fixed-horizon first KRX bid price proxy; no actual ExitManager replay.",
+    "denominator": "All candidates in the successfully persisted first returned scan, including candidate-level failures/unallocated/unknown/out_of_scope; a successfully recorded empty scan has zero candidates.",
+    "required_output": [
+      "full_scan_count",
+      "leased_and_covered_count",
+      "order_ready_count",
+      "ready_count",
+      "unknown_reasons",
+      "paired_net_pnl_a",
+      "paired_net_pnl_b",
+      "avoided_loss",
+      "forgone_profit",
+      "net_delta",
+      "cost_sensitivities"
+    ],
+    "quality_pass": "Journal integrity/no known gap plus preserved population and at least one fully supported pair; partial coverage remains explicitly partial.",
+    "empty_or_no_ready": "Inconclusive data-quality pilot; do not silently choose a later scan or change horizon.",
+    "profit_promotion": "Never promote from one pilot, one day, one positive paired delta, or partial-population results.",
+    "other_limits": [
+      "No capital recycling/concurrent positions/account drawdown or actual fill simulation.",
+      "No reward for raising cash without separately showing foregone profits and market opportunity cost.",
+      "Observed target high is not a probability estimate of reaching that target.",
+      "LLM/data/server incremental costs must be evaluated before any account net-profit claim."
+    ],
+    "benchmark": "Retain full KODEX200 opportunity cost; semiconductor-excluded/version/regime views are auxiliary and require matched data.",
+    "scan_capture_failure": "If the first scan itself cannot be copied/persisted, its full denominator is unrecoverable. Mark pilot incomplete; never replace it with a later scan."
+  },
+  "missing_inputs": [
+    "reviewed integrated release and exact source manifest",
+    "running version, startup configuration path and selected non-secret settings evidence",
+    "bot internal WS registrations and remaining headroom (external WS usage declared zero by user)",
+    "aggregate message volume, first scan record size and host memory/disk headroom",
+    "future session/date, finalized study refs/times and fresh absolute journal path",
+    "explicit operational installation/restart/capture authorization",
+    "candidate-specific quote-session proof and recorded capital evidence after authorized capture"
+  ],
+  "boundaries": [
+    "No production APIs, account files, logs, DB, credentials, SSH, restart, orders, or kill-switch change.",
+    "This draft is not executable; unresolved values stay null and CapturePlan must reject it.",
+    "Phase20 changes preparation documents only. Existing runtime requires startup installation; no operational check or capture was performed."
+  ],
+  "validation": {
+    "source_sha256_matches": 15,
+    "unresolved_template_rejected": true,
+    "rejection_reason": "INVALID:evaluation_epoch",
+    "fully_synthetic_shape_load_only": "passed",
+    "synthetic_schedule_does_not_fix_actual_capture_date": true,
+    "journal_created": false,
+    "runtime_installed": false,
+    "isolation_violations": 0
+  },
+  "updated_at_utc": "2026-10-01T08:37:45.007836+00:00",
+  "local_input_evidence": {
+    "kind": "local_worktree_static_config_only",
+    "risk": {
+      "sizing_mode": "risk",
+      "risk_per_trade_pct": 0.7,
+      "risk_max_position_pct": 18.0,
+      "max_position_pct": 28.0,
+      "min_cash_reserve_pct": 5.0,
+      "min_position_value": 200000,
+      "gap_and_go_allocation_pct": 15.0,
+      "core_holding_allocation_pct": 0.0
+    },
+    "kr_scan_interval_minutes": 5,
+    "kr_realtime_source": "rest_polling",
+    "source_sha256": {
+      "config/default.yml": "81b7cd2545e18e6e40dfb1e7586310a5bd8a1ac4e599f8d05b2696569efa1938",
+      "config/evolved_overrides.yml": "44f927e7117192a0a56f0668b1a411538809dafcacdcc79f8888e1c839b5cf8a",
+      "src/utils/config.py": "e2a668db8d39fa0cd824b78f6de05de444c2d5541bd4f44cfb891c24eb5881dc"
+    },
+    "running_process_verified": false,
+    "operational_configuration_verified": false,
+    "isolation_violations": 0
+  },
+  "input_readiness": {
+    "phase": "20",
+    "purpose": "First capture data quality and same-quantity entry-price proxy, not account profitability.",
+    "resolved_locally": [
+      "public-reference fee basis (not account/API applied rate)",
+      "recorded internal capital basis, without assigning total equity to bot capital",
+      "declared risk/position proposal matches local static config",
+      "frozen one-hypothesis, candidate denominator, horizon and stress-cost reporting design"
+    ],
+    "launch_prerequisites": [
+      "reviewed integrated release and exact source manifest",
+      "running version, startup configuration path and selected non-secret settings evidence",
+      "Verify bot internal channel registrations; external WS reservation zero based on user confirmation.",
+      "aggregate message volume, first scan record size and host memory/disk headroom",
+      "future session/date, finalized study refs/times and fresh absolute journal path",
+      "explicit operational installation/restart/capture authorization"
+    ],
+    "runtime_attachment": "startup_only; install rejects running or connected feed; dry_run unsupported",
+    "read_only_ops_check": {
+      "status": "completed_2026-10-01_under_explicit_user_approval",
+      "authorization_required_by": "AGENTS.md local safety boundary: explicit current request for operational SSH/systemctl",
+      "requested_scope": [
+        "SSH to identified existing bot host if needed",
+        "service show restricted to ActiveState,SubState,MainPID,WorkingDirectory",
+        "process cwd/start time and on-disk source/config hashes; no command line or environment dump",
+        "allowlisted non-secret static settings at confirmed startup config path",
+        "available memory and disk space for proposed journal directory",
+        "already exposed aggregate WS session/registration/rate summaries if available",
+        "startup argument allowlist only: config path, market, dry-run flag, observation-plan presence; never dump full argv",
+        "buy kill-switch active/existence boolean only; maintain current buy halt"
+      ],
+      "not_included": [
+        "account/broker API requests",
+        "credential/environment values",
+        "raw logs or raw trades",
+        "new WebSocket session or subscriptions",
+        "service or settings mutation",
+        "restart/deploy",
+        "orders/kill-switch changes"
+      ],
+      "limits": [
+        "disk source SHA does not establish already loaded process code or effective in-memory configuration",
+        "static YAML does not establish runtime regime reserves, mutable settings or another app session",
+        "missing aggregate registration/rate evidence remains unresolved; do not run injected inspection code"
+      ],
+      "access": "same_host_no_ssh_needed",
+      "findings": [
+        "KR buy halt file exists, service active, no observer plan flag/code installed.",
+        "Operational disk gap allocation is 5%, isolated worktree is 15%; runtime allocation not exposed by existing endpoint.",
+        "Runtime API confirms general cap 28% and base reserve 5%; declared 0.7/18 only verified on disk.",
+        "Current resource snapshot and out-of-regular-session WS samples do not establish capture capacity.",
+        "User confirms bot-only WebSocket usage; external_reserved=0 is declared evidence, not server-side inventory."
+      ],
+      "external_websocket_scope": {
+        "confirmed_at_utc": "2026-10-01T08:22:02.846716+00:00",
+        "statement": "실시간 소켓은 봇에서만 사용중",
+        "same_key_external_websocket_programs": 0,
+        "external_reserved_registration_assumption": 0,
+        "basis": "explicit_user_statement_not_server_telemetry",
+        "server_side_registration_inventory_verified": false,
+        "other_apps_may_use_non_websocket_apis": true
+      }
+    },
+    "account_profit_gate": [
+      "actual fees/slippage/fills",
+      "bot allocated capital and cashflow reconciliation",
+      "real exit and concurrent-position/cash reuse outcomes",
+      "AI/data/server incremental cost",
+      "out-of-sample comparison and full KODEX200 opportunity cost; semiconductor/version/regime views auxiliary"
+    ],
+    "capture_under_buy_halt": "Keep KR buy halt. order_ready precedes broker transport check and may still reserve pending state; missing prior gates remains unknown. No orders or kill-switch change authorized.",
+    "configuration_preservation": {
+      "required": true,
+      "operational_override_sha256": "4970f2bf8ebfe6c5ba408336204cde07a8c80669cc9e5ba4edb0761b670b6d68",
+      "gap_allocation_pct_on_operational_disk": 5,
+      "isolated_worktree_gap_allocation_pct": 15,
+      "no_overwrite_or_allocation_increase_authorized": true
+    }
+  },
+  "operational_readiness_reference": "current-engine-operational-readiness-2026-10-01.json",
+  "operational_readiness_sha256": "830c966e3387b40e35f873c66380efb88b8b1f831075619580a43e18af6f7bfc",
+  "alternative_data_source_review": {
+    "reviewed_at_utc": "2026-10-01T08:37:45.007675+00:00",
+    "trigger": "User proposed Toss WebSocket instead of KIS.",
+    "official_spec_url": "https://openapi.tossinvest.com/openapi-docs/latest/asyncapi.json",
+    "official_guide_url": "https://developers.tossinvest.com/",
+    "asyncapi_version": "1.2.2",
+    "spec_sha256": "130251057fd9535a3e276099f9166b445f8c51f505f30540758e4b209231282e",
+    "spec_size_bytes": 41523,
+    "spec_request_authenticated": false,
+    "official_contract": {
+      "supports_kr_orderbook": true,
+      "max_topics_per_connection": 100,
+      "max_connections_per_account": 2,
+      "topic_unit": "channel x symbol",
+      "kr_venue_basis": "KRX+NXT consolidated only",
+      "orderbook_has_per_level_venue": false,
+      "delivery": "LOSSY",
+      "loss_detection_sequence": false,
+      "initial_subscription_snapshot": false,
+      "timestamp_may_be_null": true,
+      "subscription_model": "full-replace with subscribed/rejected acknowledgement"
+    },
+    "current_repo_toss_transport": "REST observer plus locally implemented explicit-v2 WS transport/service; not installed or activated",
+    "existing_entry_contract": "KIS_FHKST01010100 target + H0STASP0 KRX entry/markout; cannot relabel Toss as KIS",
+    "recommendation": "Evaluate Toss as independent broad candidate observation feed; retain KIS for executable KRX quote checks and execution evidence.",
+    "why_it_may_help": [
+      "Independent of KIS subscription capacity",
+      "Can observe more selected and nonselected candidates under a finite budget",
+      "Venue/latency/spread measurements can test whether multisource selection and entry timing add value"
+    ],
+    "not_established": [
+      "Toss lower latency or better stability",
+      "Complete tick path",
+      "KIS executable prices from consolidated quotes",
+      "No-restart linkage of current engine candidate IDs, decision times, requested quantities and capital snapshots",
+      "Higher net profit"
+    ],
+    "minimal_work_before_use": [
+      "Fix actual date/study/epoch/window/finite budgets/new artifact and explicit v2 plan/grant bindings",
+      "Review concrete release installation and engine startup observation scope while preserving operating overrides",
+      "Capture one bounded cohort, verify source journal linkage and quality, then evaluate same-candidate/same-quantity price gate"
+    ],
+    "old_service_status_basis": "Repository handoff says REST observer retired; no new service lookup this phase",
+    "activation_performed": false,
+    "token_issued": false,
+    "websocket_connected": false,
+    "current_study_contract_changed": false,
+    "independent_source_review": {
+      "requested_model": "gpt-5.6-sol",
+      "requested_effort": "high",
+      "actual_model_verified": false,
+      "effective_effort_verified": false,
+      "product_changes_or_tests": false,
+      "finding": "REST-only Toss path; current KIS venue/time/quantity contract is not drop-in compatible; independent observation still needs candidate/decision/quantity linkage."
+    },
+    "local_implementation": {
+      "phase": 24,
+      "status": "authorized_connection_candidate_projection_final_artifact_and_report_locally_wired",
+      "receiver": "src/data/providers/toss/orderbook_stream.py",
+      "report": "src/analytics/toss_candidate_observation.py",
+      "cli": "scripts/report_toss_candidate_observation.py",
+      "max_fixed_returned_candidates": 3,
+      "auth_and_connection_factory": true,
+      "runtime_candidate_delivery": true,
+      "persistent_toss_journal": false,
+      "runtime_activated": false,
+      "net_profit_measured": false,
+      "existing_kis_study_contract_changed": false,
+      "verification": {
+        "status": "local_checks_complete_not_activated",
+        "new_runtime_tests_passed": 38,
+        "targeted_passed": 168,
+        "full_passed": 2949,
+        "full_xfailed": 2,
+        "full_warnings": 1,
+        "full_seconds": 82.7,
+        "warning": "existing_pykrx_importlib_resources_deprecation",
+        "isolation_attempts": 0,
+        "source_sha256": {
+          "src/data/providers/toss/approval.py": "cd7dfa8bb38ff894b5b42298aaebda881874034017341a871f766a42c5a1e056",
+          "src/data/providers/toss/authorized_tokens.py": "d480e1be738546fb077963defe2fab60a2d099937700241a27660ad1b27f57b0",
+          "src/data/providers/toss/ws_transport.py": "c8a870119d77a22cf95f024a9820181c177ca72afbb759e9e47de28af87f6348",
+          "src/data/providers/toss/orderbook_stream.py": "484824118f2c3f3a428f11790afd172fc89da43d095498c1f3ae0c992006dc6d",
+          "src/observation/entry_anchor_input.py": "c6acacae339e3a9d00b47811e3d938a14bd5eae5dc004b7226c4844987efead1",
+          "src/observation/toss_ws_service.py": "547af5ba3ce96d990ff2e52627ab0e5a6224182fe11fa691a21a9564507e3d2e",
+          "src/observation/toss_deployment.py": "f1bc8dccb48555dbae23c50a4a05a380bb4554e096e9b575508e015b57568362",
+          "src/dashboard/kr_api.py": "3d4660c498c479132147d18df39c86d15620f81b5894a005c087500e7d867e0f",
+          "src/analytics/toss_candidate_observation.py": "b7577a7e2bf7faa575d08d637fe1231df294f75c1418a2fec51e5fe7e6137d32",
+          "scripts/ops/toss_observer/launcher.py": "84e8e635555bd4a1395d9601311f462f137a19a84807f7ac629221e0ca3b2f68",
+          "scripts/report_toss_candidate_observation.py": "1429896bd0bbfa3d104dc0fb054fd2b6f919641b9b33d7d2062dc0e1bef06949",
+          "tests/test_toss_ws_runtime.py": "0b1999286bf3142337016882a8bb0893ba790296dca49907e018f8a7a83758ea"
+        },
+        "independent_source_audit_requested_model": "gpt-5.6-sol",
+        "independent_source_audit_requested_effort": "high",
+        "independent_review_requested_model": "gpt-6-astra",
+        "independent_review_requested_effort": "xhigh",
+        "independent_review_tests_passed": 215,
+        "independent_review_seconds": 5.13,
+        "actual_model_verified": false,
+        "effective_effort_verified": false,
+        "final_review_unresolved_p0_p1_p2": 0,
+        "isolated_import_closure_verified": true,
+        "static_checks": {
+          "changed_files": 60,
+          "python": 37,
+          "json": 10,
+          "local_markdown_links": 192,
+          "root_settings_unchanged": true
+        },
+        "additional_storage_review_tests_passed": 38,
+        "additional_storage_review_seconds": 1.22,
+        "storage_rollback_failure_requires_excluding_service_failed_artifact": true
+      },
+      "persistent_final_artifact": true,
+      "intermediate_quotes_durable": false,
+      "service": "src/observation/toss_ws_service.py",
+      "transport": "src/data/providers/toss/ws_transport.py",
+      "candidate_input": "src/observation/entry_anchor_input.py"
+    }
+  },
+  "latest_capture_proposal": "current-engine-capture-proposal-2026-10-02.json",
+  "latest_capture_phase": 25,
+  "schedule_note": "The old10:00 schedule remains historical; phase25 proposes preopen08:55 start and09:15..09:45 capture. No activation."
+}

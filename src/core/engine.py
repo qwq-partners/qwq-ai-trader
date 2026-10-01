@@ -24,6 +24,7 @@ import sys
 
 from loguru import logger
 
+from ..analytics.entry_observation import capture_order_ready, freeze_pre_pending_capital
 from ..execution.entry_plan import check_entry_plan
 from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
 from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
@@ -2179,11 +2180,15 @@ class RiskManager:
         logger.info(f"주문 생성: {order.side.value} {order.symbol} {order.quantity}주 @ {order.price}")
 
         # 중복 주문 방지: pending 등록 - Lock 보호 (TOCTOU 방지)
+        _capital_snapshot = None
         async with self._pending_lock:
             if order.symbol in self._pending_orders:
                 logger.warning(f"[리스크] 경쟁 조건 감지: {order.symbol} 이미 주문 진행 중 (재검증)")
                 return None
 
+            _capital_snapshot = freeze_pre_pending_capital(
+                getattr(self, "_entry_observation_owner", None), self, event, order
+            )
             self._pending_orders.add(order.symbol)
             self._pending_fallback_count.pop(order.symbol, None)  # 새 pending 은 0회에서 시작 (잔존 값이 SELL 폴백 예산을 깎지 않게)
             self._pending_cancel_keep.pop(order.symbol, None)  # 잔존 값이 새 SELL 의 첫 회 대기를 건너뛰게 하지 않게
@@ -2229,7 +2234,10 @@ class RiskManager:
                     event.strategy.value if event.strategy else (order.strategy or "")
                 )
 
-        return [OrderEvent.from_order(order, source="risk_manager")]
+        events = [OrderEvent.from_order(order, source="risk_manager")]
+        capture_order_ready(getattr(self, "_entry_observation_owner", None), event, order,
+                            capital_snapshot=_capital_snapshot)
+        return events
 
     async def _get_sell_price(self, symbol: str, fallback_price: Optional[Decimal]) -> Optional[Decimal]:
         """매도용 최적가 조회: 매수1호가 → fallback_price"""
@@ -3017,8 +3025,9 @@ class RiskManager:
         MIN_QTY_FOR_PARTIAL_EXIT = 3
         if quantity < MIN_QTY_FOR_PARTIAL_EXIT:
             cost_for_min = price * MIN_QTY_FOR_PARTIAL_EXIT * Decimal("1.001")
-            # 전략 잔여 예산도 존중 — 보정이 캡 재클램프를 우회하던 문제 (2026-09-03 P1)
-            if (cost_for_min <= available and cost_for_min <= max_value
+            # 분할익절 권장 수량도 시장가 증거금·전략 잔여 예산을 넘지 않는다.
+            if (MIN_QTY_FOR_PARTIAL_EXIT <= max_qty_for_market
+                    and cost_for_min <= available and cost_for_min <= max_value
                     and (_strategy_remaining is None or cost_for_min <= _strategy_remaining)):
                 quantity = MIN_QTY_FOR_PARTIAL_EXIT
             elif quantity >= 1:

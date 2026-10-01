@@ -1,5 +1,7 @@
 # Toss 관측 런타임 운영 경계
 
+> **2026-10-01 WS 관측 최신25차:** [10월2일 설치안](entry-capture-installation-2026-10-02.md)을 우선한다. 기존 REST v1 설치기는 재사용/업데이트에 쓰지 않는다. 전체 반환≤100개·상위3개 관측, 새 v2 승인·기존 발급 기록 보존이 필요하다. WS는 status.json을 쓰지 않으며 종료코드/최종 봉인 결과/원본 엔진 원장을 확인한다. 운영 미적용이며 아래 운영 기록은 과거 REST 이력이다.
+
 현재(2026-09-30): **퇴역** — `qwq-toss-observer-retention.timer` 도 disable(매일 `observer_retention_incomplete` 실패 중이었고 만료 원장 삭제는 한 번도 실행되지 않음), 원장 `/var/lib/qwq-toss-observer` 보존. 09-29 기록: 승인 grant 는 09-22 18:00 KST 에 만료됐고 `qwq-toss-observer.service` 는 disabled/inactive 다. 재발급·퇴역은 사용자 결정 대기다. 아래는 09-17 당시 상태다.
 
 당시 상태: **09-17 21:47:37 KST 별도 `qwq-toss-observer.service` ON(PID3335469, release877768e)**. 초기 토큰 발급 성공·장외idle이며 가격/캘린더 관측은 아직0건이다. 기존 거래 봇은 재시작하지 않았고 Toss도 계속 OFF다. 사용자가 확정한 관측일은09/18·21·22, 승인 만료는09/22 18:00 KST다. 실제 설치·검증 증거와 미완 인수는 [관측 원장](../reviews/toss-observer-service-2026-09-17.md)에서 구분한다.

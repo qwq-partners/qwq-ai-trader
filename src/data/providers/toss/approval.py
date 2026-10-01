@@ -20,6 +20,8 @@ from .token_store import ORIGIN
 SPEC_VERSION = "1.2.17"
 SPEC_SHA256 = "791082da4cb379117ed9fdc29a45bd42746f7a1aec368da1e9f4e1f3bfbff5b4"
 MAX_DOCUMENT_BYTES = 262144
+WS_ENDPOINT = "wss://openapi-ws.tossinvest.com/ws/v1"
+WS_SPEC_SHA256 = "130251057fd9535a3e276099f9166b445f8c51f505f30540758e4b209231282e"
 
 
 class ApprovalError(Exception):
@@ -110,6 +112,28 @@ def _time(value):
         _reject()
 
 
+def _websocket_plan(value):
+    _keys(value, "endpoint asyncapi_version asyncapi_sha256 channel evaluation_epoch request_id "
+          "engine_study_sha256 start_at scan_until end_at max_frames max_source_age_seconds poll_seconds"
+          + (' candidate_selection_rule' if type(value) is dict and 'candidate_selection_rule' in value else ''))
+    if value.get('candidate_selection_rule', 'whole_returned_cohort') not in (
+            'whole_returned_cohort', 'first_three_in_returned_order'):
+        _reject()
+    if (value['endpoint'] != WS_ENDPOINT or value['asyncapi_version'] != '1.2.2'
+            or value['asyncapi_sha256'] != WS_SPEC_SHA256 or value['channel'] != 'orderbook:kr'):
+        _reject()
+    for name in ('evaluation_epoch', 'request_id'):
+        if type(value[name]) is not str or re.fullmatch(r'[A-Za-z0-9_.:-]{1,120}', value[name]) is None:
+            _reject()
+    _hash(value['engine_study_sha256'])
+    start, scan, end = (_timestamp(value[k]) for k in ('start_at', 'scan_until', 'end_at'))
+    if not start < scan < end or (end - start).total_seconds() > 3600:
+        _reject()
+    _number(value['max_frames'], 1, 50000, integer=True)
+    _number(value['max_source_age_seconds'], 1, 60, integer=True)
+    _number(value['poll_seconds'], .1, 5)
+
+
 @dataclass(frozen=True)
 class ObservationPlan:
     document: object
@@ -119,9 +143,14 @@ class ObservationPlan:
     @classmethod
     def from_bytes(cls, raw):
         p = _json(raw)
-        _keys(p, "schema_version plan_id dataset_kind origin spec_version spec_sha256 dates sessions calendar_time selection limits comparison acceptance")
-        if type(p["schema_version"]) is not int or p["schema_version"] != 1 or p["dataset_kind"] != "live" or p["origin"] != ORIGIN or p["spec_version"] != SPEC_VERSION or p["spec_sha256"] != SPEC_SHA256:
+        if type(p) is not dict:
             _reject()
+        version = p.get('schema_version')
+        _keys(p, "schema_version plan_id dataset_kind origin spec_version spec_sha256 dates sessions calendar_time selection limits comparison acceptance" + (" websocket" if version == 2 else ""))
+        if type(version) is not int or version not in (1, 2) or p["dataset_kind"] != "live" or p["origin"] != ORIGIN or p["spec_version"] != SPEC_VERSION or p["spec_sha256"] != SPEC_SHA256:
+            _reject()
+        if version == 2:
+            _websocket_plan(p['websocket'])
         _string(p["plan_id"])
         dates = p["dates"]
         if type(dates) is not list or not 1 <= len(dates) <= 366:
@@ -152,6 +181,16 @@ class ObservationPlan:
         intervals.sort()
         if any(left[1] > right[0] for left, right in zip(intervals, intervals[1:])):
             _reject()
+        if version == 2:
+            ws_start, ws_end = (_timestamp(p['websocket'][k]) + timedelta(hours=9)
+                                for k in ('start_at', 'end_at'))
+            # 첫 WS 구간은 명시 날짜의 연속매매 시간 안에서만 허용한다.
+            if (dates != [ws_start.date().isoformat()] or ws_start.date() != ws_end.date()
+                    or ws_start.weekday() >= 5
+                    or not '09:00' <= ws_start.strftime('%H:%M:%S') < ws_end.strftime('%H:%M:%S') <= '15:20:00'
+                    or not any(s['name'] == 'regular' and s['start'] <= ws_start.strftime('%H:%M:%S')
+                               and ws_end.strftime('%H:%M:%S') <= s['end'] + ':00' for s in sessions)):
+                _reject()
         _time(p["calendar_time"])
         s = p["selection"]
         _keys(s, "candidate_limit max_snapshot_age_seconds max_symbols rule")
@@ -229,7 +268,7 @@ class LiveObservationGrant:
     @classmethod
     def from_document(cls, g):
         _keys(g, "schema_version grant_id approval_reference terms_reference storage_reference issuance_ownership_reference not_before expires_at client_identity host_identity service_uid role token_directory sender_lock_path ledger_path release_id config_hash plan_raw_hash plan_canonical_hash origin spec_version spec_sha256 capabilities")
-        if type(g["schema_version"]) is not int or g["schema_version"] != 1 or g["origin"] != ORIGIN or g["spec_version"] != SPEC_VERSION or g["spec_sha256"] != SPEC_SHA256:
+        if type(g["schema_version"]) is not int or g["schema_version"] not in (1, 2) or g["origin"] != ORIGIN or g["spec_version"] != SPEC_VERSION or g["spec_sha256"] != SPEC_SHA256:
             _reject()
         for key in ("grant_id", "approval_reference", "terms_reference", "storage_reference", "issuance_ownership_reference", "client_identity", "host_identity", "release_id"):
             _string(g[key])
@@ -245,7 +284,7 @@ class LiveObservationGrant:
         start, end = _timestamp(g["not_before"]), _timestamp(g["expires_at"])
         if not 0 < (end - start).total_seconds() <= 366 * 86400:
             _reject()
-        _keys(g["capabilities"], "query renewal bootstrap")
+        _keys(g["capabilities"], "query renewal bootstrap" + (" websocket" if g['schema_version'] == 2 else ""))
         if any(type(v) is not bool for v in g["capabilities"].values()):
             _reject()
         if g["role"] == "reader" and (g["capabilities"]["renewal"] or g["capabilities"]["bootstrap"]):
@@ -278,6 +317,14 @@ class ApprovedAuthority:
         if not isinstance(stamp, datetime) or stamp.utcoffset() != timedelta(0) or not math.isfinite(tick):
             _reject()
         start, end = _timestamp(grant.not_before), _timestamp(grant.expires_at)
+        if plan.document['schema_version'] != grant.schema_version:
+            _reject()
+        if grant.schema_version == 2:
+            ws = plan.document['websocket']
+            if (not grant.capabilities['query'] or not grant.capabilities['websocket']
+                    or not start <= _timestamp(ws['start_at']) < _timestamp(ws['end_at'])
+                    or _timestamp(ws['end_at']) + timedelta(seconds=7) > end):
+                _reject()
         bound = dict(plan=plan, grant=grant, clock=clock, now=now,
             authority_hash=hashlib.sha256((plan.raw_hash + hashlib.sha256(_canonical(dict(grant.document, capabilities=dict(grant.capabilities)))).hexdigest()).encode()).hexdigest(),
             _stopped=threading.Event(), _not_before=start, _expires=end,
@@ -292,7 +339,9 @@ class ApprovedAuthority:
     def require(self, operation, *, deadline):
         if self._provenance is not _LOADER_PROVENANCE:
             raise ApprovalError("approval_untrusted")
-        if self._stopped.is_set() or operation not in ("query", "renewal", "bootstrap") or not self.grant.capabilities[operation] or (operation != "query" and self.grant.role != "issuer"):
+        if (self._stopped.is_set() or operation not in ("query", "renewal", "bootstrap", "websocket")
+                or not self.grant.capabilities.get(operation, False)
+                or (operation in ('renewal', 'bootstrap') and self.grant.role != "issuer")):
             raise ApprovalError("approval_denied")
         stamp, tick = self.now(), self.clock()
         if (type(deadline) not in (int, float) or not math.isfinite(deadline)
@@ -302,6 +351,11 @@ class ApprovedAuthority:
         bounded = min(deadline, self._deadline, tick + (self._expires - stamp).total_seconds())
         if not self._not_before <= stamp < self._expires or tick >= bounded:
             raise ApprovalError("approval_expired")
+        if operation == 'websocket':
+            ws = self.plan.document.get('websocket')
+            if ws is None or not _timestamp(ws['start_at']) <= stamp < _timestamp(ws['end_at']):
+                raise ApprovalError('approval_expired')
+            bounded = min(bounded, tick + (_timestamp(ws['end_at']) - stamp).total_seconds())
         return bounded
 
 

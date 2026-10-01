@@ -1,6 +1,11 @@
 # QWQ AI Trader — 기술 문서
 
+> [26차 첫 관측 실행 기록](operations/capture-execution-2026-10-02.md): 사용자 실행 승인 후 사전점검·검증·예약 준비 상태.
+
+> 최신25차: [첫 관측 설치안](operations/entry-capture-installation-2026-10-02.md) · [10월2일 고정 입력 제안](research/current-engine-capture-proposal-2026-10-02.json). 전체 후보 보존/상위3개 관측·1회 시작을 로컬 검증했다. 운영 identity/승인/release 결합과 실제 적용은 남았으며, 아래 단계별 표시는 이력이다.
+
 > 에이전트 참조용 구조화 문서. 개발/분석 시 카테고리별 참조.
+> 현재 엔진 가격 비교의 최신 상태는 [선정·진입 규약 24차](research/current-engine-selection-entry-protocol-2026-09-30.md): 토스 승인·접속·후보 전달·종료 저장 경로를 로컬 연결. 실제 활성화/자료 확보/비용 후 수익 비교는 미완료. 검증은 [평가 24차](research/current-engine-evaluation-2026-09-30.md) 참조.
 
 ## 문서 목록
 
@@ -31,6 +36,8 @@
 - [virtual-office.md](operations/virtual-office.md) — 가상 오피스(`/office`) 픽셀아트 시각화: 역할 매핑, 상태 API, 재빌드
 
 ### Research (리서치)
+- [현재 엔진 평가 기준과 증거](research/current-engine-evaluation-2026-09-30.md) — 버전별 표본·체결 품질 의미 정정·가격/총수익 구분·5구간 반도체 제외/시장 폭 진단·다중 소스/실시간 경로별 기록 공백·최근9건 동일진입 청산 대조와 수익개선 우선순위, 09-30 후속 승인 정본
+- [current-engine-selection-entry-protocol-2026-09-30.md](research/current-engine-selection-entry-protocol-2026-09-30.md) — 선정·진입 측정 초안, 가격 계산기·기본 비활성 관측·수신 기준 진단·사전 고정 보유시간의 bid 평가 사용법(운영 미설치)
 - [실거래 KODEX200 초과수익 원장 설계](superpowers/specs/2026-09-28-kodex200-excess-return-ledger-design.md) — 설계 A(서면 설계만): DB 왕복 포지션 × KODEX200 동일기간, 비용 차감 초과·손절 클립 행을 20:30 에 DB 전체 재계산 스냅샷 + 일별 요약 이력으로 누적, 기존 exporter·canary 식 재사용, 자동 판정 없음
 - [exit-policy-ab-2026-09.md](research/exit-policy-ab-2026-09.md) — 청산(ladder/channel)×보유(current/extended)×사이징(nominal/risk) 2×2×2 백테스트 A/B (2026-09-13, 리뷰 권고 1~3 동시 검증): 포지션 단위 R·PF·WF 3구간·KODEX200 초과, 승자 셀과 게이트 경유 권고 파라미터
 - [long-window-sepa-vs-kodex200-2026-09.md](research/long-window-sepa-vs-kodex200-2026-09.md) — 장기 구간(2019-06~2026-09) SEPA 단독 6셀, 포지션별 KODEX200 초과수익(원장 정의): 전 셀 평균 −0.79~+0.41%·|t|<1.7·top3 제외 ≤0, 연도·KOSPI 국면 분해에서도 유의하게 이기는 국면 없음 — 편향 유니버스에서도 **엣지 미입증**
