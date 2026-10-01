@@ -81,6 +81,46 @@ def _row(pos, bench=BENCH, day_status=None):
 
 # ── 1. 손 계산 일치 ───────────────────────────────────────────────────────────
 
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", float("nan"),
+                                   float("inf"), D("NaN"), D("Infinity")])
+def test_to_decimal_rejects_nonfinite_values(value):
+    assert er.to_decimal(value) is None
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_nonfinite_position_values_are_missing_not_zero(value):
+    bad_pnl = _pos(net_pnl=value)
+    pnl_row = _row(bad_pnl)
+    assert pnl_row["exclusion"] == "exits_missing"
+    assert pnl_row["net_pnl"] is None and pnl_row["net_return"] is None
+
+    bad_cost = _pos(buy_price=value)
+    cost_row = _row(bad_cost)
+    assert cost_row["entry_cost"] is None and cost_row["net_return"] is None
+    assert cost_row["excess_return"] is None and cost_row["excess_krw"] is None
+
+    bad_fee = _pos(buy_fee=value)
+    fee_row = _row(bad_fee)
+    assert fee_row["fees_total_est"] is None
+
+    bad_qty = _pos()
+    bad_qty["exits"][0]["quantity"] = value
+    bad_qty["fills"][-1]["quantity"] = value
+    qty_row = _row(bad_qty)
+    assert qty_row["exclusion"] == "exits_missing"
+    assert qty_row["bench_return"] is None and qty_row["excess_return"] is None
+
+
+@pytest.mark.parametrize("value", [D("NaN"), D("Infinity"), float("-inf")])
+def test_direct_nonfinite_benchmark_is_missing_not_zero(value):
+    bench = dict(BENCH)
+    bench["2026-09-03"] = value
+    row = _row(_pos(), bench=bench)
+    assert row["bench_return"] is None and row["excess_return"] is None
+    assert row["excess_krw"] is None and row["clipped_excess_return"] is None
+    assert row["bench_missing_reason"] == "benchmark_date_missing: exit 2026-09-03"
+
+
 def test_single_exit_hand_calculation():
     row = _row(_pos())
     assert row["schema"] == 1 and row["exclusion"] is None
@@ -617,6 +657,20 @@ def test_status_uses_bench_covered_not_n():
                      clipped_excess_return=None))
     m = er.summarize(rows, [], today=date(2026, 9, 10), awaiting_close=0, day_status_missing=0)["windows"]["all"]["all"]
     assert m["n"] == 30 and m["bench_covered"] == 29 and m["status"] == "insufficient_sample"
+
+
+def test_summary_treats_nonfinite_metrics_as_missing_not_zero():
+    rows = _included_rows(30)
+    rows[-1].update(net_return="NaN", bench_return="Infinity", excess_return="NaN",
+                    excess_krw="-Infinity", clipped_excess_return="NaN",
+                    fees_total_est="Infinity")
+    m = er.summarize(rows, [], today=date(2026, 9, 10), awaiting_close=0,
+                     day_status_missing=0)["windows"]["all"]["all"]
+    assert m["n"] == 30 and m["bench_covered"] == 29
+    assert m["status"] == "insufficient_sample"
+    assert D(m["excess_krw_sum"]) == D("21000") * 29
+    assert D(m["fees_total_est"]) == D("140") * 29
+    assert m["mean_excess"] == "0.021000" and m["mean_bench_return"] == "0.020000"
 
 
 # ── 2단계 T8~T10: 거래일 기록 대사·상태 표 ─────────────────────────────────────
