@@ -50,7 +50,7 @@ def test_inflight_operations_hide_token_and_completed_cycle_changes_it(broker, o
                  "modify": lambda: broker.modify_order(current.id, new_quantity=2),
                  "fills": broker.check_fills}
         task = asyncio.create_task(calls[operation]())
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
         # Pending can disappear concurrently; the operation itself must stay visible.
         broker._pending_orders.clear()
         assert broker.reconciliation_token() is None
@@ -79,7 +79,7 @@ def test_fill_query_outcomes_release_activity_and_invalidate_snapshot(broker, ou
     async def run():
         before = broker.reconciliation_token()
         entered, release = asyncio.Event(), asyncio.Event()
-        async def query():
+        async def query(*args, **kwargs):
             entered.set()
             await release.wait()
             if outcome == "exception":
@@ -87,7 +87,7 @@ def test_fill_query_outcomes_release_activity_and_invalidate_snapshot(broker, ou
             return []
         broker._query_daily_fills = query
         task = asyncio.create_task(broker.check_fills())
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
         assert broker.reconciliation_token() is None
         if outcome == "cancellation":
             task.cancel()
@@ -104,14 +104,14 @@ def test_nested_and_overlapping_operations_remain_busy_until_all_complete(broker
     async def run():
         before = broker.reconciliation_token()
         entered, release = asyncio.Event(), asyncio.Event()
-        async def query():
+        async def query(*args, **kwargs):
             await broker.cancel_order("missing")
             entered.set()
             await release.wait()
             return []
         broker._query_daily_fills = query
         task = asyncio.create_task(broker.check_fills())
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
         await broker.modify_order("missing")
         assert broker.reconciliation_token() is None
         release.set()

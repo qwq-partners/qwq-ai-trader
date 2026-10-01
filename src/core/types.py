@@ -215,6 +215,7 @@ class Fill:
     strategy: Optional[str] = None         # 전략명
     reason: Optional[str] = None           # 체결 사유
     signal_score: Optional[float] = None   # 신호 점수
+    execution_id: str = ""                # 영구 원장의 증분 식별자 (과거 재생 허가 아님)
 
     @property
     def total_value(self) -> Decimal:

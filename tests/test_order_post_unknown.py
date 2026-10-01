@@ -450,6 +450,8 @@ def test_b6_real_constructor_restores_todays_book(home, monkeypatch):
     b = kis_kr.KISBroker(config=kis_kr.KISConfig(app_key="k", app_secret="s", account_no="12345678"))
     hold = b.unknown_buy_hold()
     assert isinstance(hold, str) and SYM in hold
+    # 최초 영구 session 기록 전에는 별도 초기화 보류가 있다. 네트워크 없이 초기화한다.
+    asyncio.run(b.initialize_execution_history())
     assert b.has_unknown_sell(SYM) is False
 
 

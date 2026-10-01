@@ -555,6 +555,27 @@ class UnifiedEngine:
 
     def track_fill(self, event: FillEvent):
         """체결 소비→큐→handler 사이의 공백도 잔고 동기화에서 보호한다."""
+        fill = event.fill
+        execution_id = getattr(fill, 'execution_id', '')
+        if execution_id:
+            owners = getattr(self, '_execution_owners', None)
+            if owners is None:
+                owners = self._execution_owners = {}
+            signature = (fill.order_id, fill.symbol, fill.side, fill.quantity,
+                         fill.price, fill.commission)
+            owner = owners.get(execution_id)
+            if owner is None:
+                owners[execution_id] = (event.id, signature)
+            elif owner[0] != event.id:
+                if owner[1] == signature:
+                    event.duplicate_execution = True
+                    return
+                # 같은 영구 id의 다른 내용은 조용히 무시하지 않고 대사 대상으로 남긴다.
+                event.portfolio_applied = False
+                self._unapplied_fills[event.id] = event
+                self._fill_activity_generation += 1
+                logger.error('[체결] 동일 execution_id의 수량/가격/소유권 충돌')
+                return
         if event.portfolio_applied is None and event.id not in self._unapplied_fills:
             self._unapplied_fills[event.id] = event
             self._fill_activity_generation += 1
@@ -2732,7 +2753,7 @@ class RiskManager:
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
         """체결 후 포트폴리오 업데이트 + 리스크 추적 (부분 체결 지원) - Lock 보호"""
         self.engine.track_fill(event)
-        if event.portfolio_applied is not None:
+        if event.duplicate_execution or event.portfolio_applied is not None:
             # 같은 이벤트 재전달은 중복 적용하지 않는다. 실패의 자동 재적용도 금지한다.
             return None
         # 1) 포트폴리오 즉시 업데이트 (포지션 생성/수정/삭제, 현금 차감/증가)

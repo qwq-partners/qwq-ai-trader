@@ -1,5 +1,7 @@
 # 리스크 관리 + 청산 전략
 
+> **35차(10-02) 실행 이력 보류:** 기존 당일 접수 불명 장부에 별도 영구 원장을 추가한다. 이전 비정상 종료/미완결 처리/기록 오류는 날짜 변경으로 풀리지 않으며 BUY 전체·관련 분할 SELL을 보류한다. 종목 pending으로 구현하지 않아 현재 실행 시작 기록이 있는 경우 기존 보유분의 보호 전량 SELL은 유지한다. **최초 session 기록 실패 또는 브로커 종료 중이면 전량도 새 전송하지 않는다.** 과거 자동 replay/hold 해제는 제공하지 않는다. 운영 적용 전 계좌 baseline과 과거 주문 대사가 필요하며 [35차 계약](../research/current-engine-integrated-pds-2026-10-02.md#35차-plan--영구-실행-원장과-재시작-경계)을 따른다.
+
 ## 주문 POST 접수 불명(UNKNOWN) — 그날 BUY 보류·분할 SELL 재발행 금지 (2026-09-29 구현, 15:33 배포 `974a71f`)
 
 설계 `docs/superpowers/specs/2026-09-29-order-post-unknown-design.md`, 시험 `tests/test_order_post_unknown.py`.

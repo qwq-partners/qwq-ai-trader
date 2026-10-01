@@ -214,18 +214,19 @@ def test_overlap_canceled_queries_emit_one_delta(broker):
     async def run():
         order = await accepted(broker)
         await broker.cancel_order(order.id)
-        both, release = asyncio.Event(), asyncio.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
         calls = 0
         async def get(*args, **kwargs):
             nonlocal calls
             calls += 1
-            if calls == 2:
-                both.set()
+            entered.set()
             await release.wait()
             return {"rt_cd": "0", "_tr_cont": "D", "output1": [row()]}
         broker._api_get = get
         tasks = [asyncio.create_task(broker.check_fills()) for _ in range(2)]
-        await both.wait()
+        await asyncio.wait_for(entered.wait(), 2)
+        # 원장 commit await를 포함한 폴링은 직렬화된다. 두 번째는 여기서 대기한다.
+        assert calls == 1
         release.set()
         results = await asyncio.gather(*tasks)
         assert sum(fill.quantity for result in results for fill in result) == 3
