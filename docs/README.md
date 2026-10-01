@@ -1,11 +1,11 @@
 # QWQ AI Trader — 기술 문서
 
-> [26차 첫 관측 실행 기록](operations/capture-execution-2026-10-02.md): 사용자 실행 승인 후 사전점검·검증·예약 준비 상태.
+> [26차 첫 관측 실행 기록](operations/capture-execution-2026-10-02.md): PR #119 병합·토스 비활성 설치·10월 2일 08:55 KST 단발 예약 완료. 현재 봇/매수 중지/설정 보존, 실제 기동·관측·수익 비교는 예정.
 
-> 최신25차: [첫 관측 설치안](operations/entry-capture-installation-2026-10-02.md) · [10월2일 고정 입력 제안](research/current-engine-capture-proposal-2026-10-02.json). 전체 후보 보존/상위3개 관측·1회 시작을 로컬 검증했다. 운영 identity/승인/release 결합과 실제 적용은 남았으며, 아래 단계별 표시는 이력이다.
+> 25차 설계 이력: [첫 관측 설치안](operations/entry-capture-installation-2026-10-02.md) · [10월2일 고정 입력 제안](research/current-engine-capture-proposal-2026-10-02.json). 전체 후보 보존/상위3개 관측·1회 시작을 로컬 검증한 당시 기록이다. 운영 identity/승인/release 결합과 비활성 설치·예약은26차에서 완료했다. 현재 실행 상태는 위26차 실행 기록이 정본이며 아래 단계별 표시는 이력이다.
 
 > 에이전트 참조용 구조화 문서. 개발/분석 시 카테고리별 참조.
-> 현재 엔진 가격 비교의 최신 상태는 [선정·진입 규약 24차](research/current-engine-selection-entry-protocol-2026-09-30.md): 토스 승인·접속·후보 전달·종료 저장 경로를 로컬 연결. 실제 활성화/자료 확보/비용 후 수익 비교는 미완료. 검증은 [평가 24차](research/current-engine-evaluation-2026-09-30.md) 참조.
+> 24차 구현 이력은 [선정·진입 규약](research/current-engine-selection-entry-protocol-2026-09-30.md)과 [평가 기록](research/current-engine-evaluation-2026-09-30.md) 참조. 토스 승인·접속·후보 전달·종료 저장 경로를 연결한 단계이며, 실제 기동/자료 확보/비용 후 수익 비교의 최신 상태는26차 실행 기록을 따른다.
 
 ## 문서 목록
 

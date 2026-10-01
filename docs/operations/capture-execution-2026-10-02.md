@@ -1,6 +1,6 @@
 # 2026-10-02 첫 관측 실행 기록
 
-현재 상태: **26차 실행 준비 중 — 실제 기동·수집 전**. [25차 실행안](entry-capture-installation-2026-10-02.md)에 대해 사용자가 운영 사전점검·배포·10월2일08:55~08:57 봇1회 재시작·토스09:15~09:45 관측을 승인했다. 매수 중지와 현재 설정을 유지하고 조건 불일치/시간 경과에는 취소한다. 이 승인은 실거래 주문·전략 배분 변경·매수 재개를 포함하지 않는다.
+현재 상태: **26차 설치·단발 예약 완료 — 실제 새 코드 기동·수집 전**. [25차 실행안](entry-capture-installation-2026-10-02.md)에 대해 사용자가 운영 사전점검·배포·10월2일08:55~08:57 봇1회 재시작·토스09:15~09:45 관측을 승인했다. 매수 중지와 현재 설정을 유지하고 조건 불일치/시간 경과에는 취소한다. 이 승인은 실거래 주문·전략 배분 변경·매수 재개를 포함하지 않는다.
 
 ## 확인한 현 상태
 
@@ -30,6 +30,50 @@
 
 독립 검토의 P2 두 건(교체 직후 동기화 실패의 복구 목록 누락, 부분 기록된 drop-in 복구 실패)을 재현 후 수정했다. 최초 저장소+/tmp 혼합 테스트는 탐색 범위가 넓어져 비밀 파일 메타데이터 조회2건을 격리 장치가 차단해 exit4였고 내용은 읽지 않았다. 이후 경로를 분리한 검증은 통과했다. 현재 미해결 P0/P1/P2는 없다.
 
-코드/설치 절차 검증은 완료했고, 필수 CI·실제 staging 및 단발 예약은 이 기록 작성 시점에 진행 전이다. 새 서비스 기동·토큰 발급·실호가 수집·주문은 실행하지 않았다.
+[PR #119](https://github.com/qwq-partners/qwq-ai-trader/pull/119)의 필수 [verify](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/36866465559)는 3,047 passed / 2 xfailed·84.48초·격리0·비밀정보 검사 통과다. 병합 커밋 `5468208e2bf481eabae5c54da490c7da972756e1`의 전체 tree가 검토한 `2ae76e40`와 같고 소스263개 지문도 일치한다. 이 커밋을 실제 활성화 대상으로 고정했다.
+
+최초 staging은 새 release를 기존 런처와 비교하는 검사에서 중단됐다. 기존 launcher/plan/registry/deployment 네 파일은 교체 전이었고 지문 불변, 새 cohort/활성화 설정도 없었다. 검사를 네 파일 교체 후의 복구 가능한 validation 안으로 옮겼다. 명시 inventory·root 소유권·기존 파일 지문이 일치하는 새 미완료 release와 백업만 정리한 뒤 다시 설치했다. 독립 Astra/xhigh delta 리뷰의 staging4개+정리12개=16개 합성 시험이 통과했으며 P0/P1/P2는 없다. 실제 모델 metadata는 미노출로 미검증이다.
+
+수정 후 실제 service UID/GID/그룹으로 새 배포물의 정적 검증이 성공했다. 토스 서비스는 inactive를 유지했고, 기존 인증/토큰/발급 소비 기록은 보존했다. 이어 연구/manifest/once 입력과 root 실행 설정을 설치하고 날짜가 고정된 두 timer만 활성화했다. 별도 Astra/xhigh 예약 절차 리뷰도 승인됐다. `systemd-analyze verify`는 exit0이었고 기존 무관한 claude-session unit의 KillMode 폐기 예정 경고가 1개 나왔으며 해당 unit은 수정하지 않았다.
+
+| 확인 항목 | 실제 결과 |
+|---|---|
+| 실행 예약 | `qwq-entry-capture-20261002.timer`: enabled·active/waiting, NextElapse **2026-10-02 08:55:00 KST**, Persistent=no, LastTrigger 없음 |
+| 보존 만료 예약 | `qwq-entry-capture-retention-20261101.timer`: enabled·active/waiting, NextElapse **2026-11-01 09:46:10 KST**, Persistent=yes |
+| 기존 봇 | active/running·PID3875500·NRestarts0·DropInPaths 없음, 운영 HEAD `7ddfb52` 유지 |
+| 토스/실행기 | 둘 다 inactive/dead·PID0. 새 토스 서비스 자체는 disabled 유지; 단발 실행기가 필요 시 start |
+| 보호 입력 | 기존 기본/override SHA·KR 매수 중지 유지. 설치 입력7개 지문과 소유권/모드 일치 |
+| 일회 상태 | activation.receipt와 실제 봇 drop-in 없음. 설치된 연구/manifest를 읽기 검증했으며 엔진 원장은 아직 생성 전 |
+
+배포물 SHA는 `28d25f2d867683cbc3ed4dd7ebd7b8429ec2ba764b6ec1931051bcfcf3ff13f3`, root 활성화 설정 SHA는 `f1318be4e077ccc9ac2f514744cad4ed85a276b1f301159445375b27157a3017`이다. 설치된 study SHA는 `d29a09634707e9e40b05f2f31d0a913d812ff06265fbac017c63d244557a1660`, 토스 plan SHA는 `2f11dc3cd6f3cbf43ac1381df0b2f879ae2ddc94eb20e49d1b2fbba493e59b1a`이다. 원본 공개 제안 JSON은 설치 전 고정 입력으로 보존하며 그 안의 준비 상태 표시는 이 실행 기록으로 갱신한다.
+
+검토한 일회 운영 절차 지문: staging `2a86b9228a0d3f1caf8070609e0ed4f04ce0db0073ec88557212390156285f57`, 미완료 정리 `f85a78551130c48efee4b2e0a1171c82f72c8b6896eae55f52f21bee314e9b3b`, 예약 `ba236989efca501d5cdf950985558fbfcd8e3f38dc3816cf8d7b6de91d3fbf8b`. 미래 실행기 SHA는 `33dc0b40152f61817038591937e82f8886fd47d44528760e3ad935256ec50751`이다. 새 서비스 기동·토큰 발급·실호가 수집·주문은 아직 실행하지 않았다.
 
 성공 기준은 자료 수집 자체가 아니라, 동일 후보·수량의 비용 후 진입 비교에 쓸 수 있는 원천을 확보하는 것이다. 종료 후 엔진 원장·토스 봉인 파일·종료코드를 대조하고 피한 손실·놓친 이익·unknown을 집계한다. 토스 KRX+NXT 통합 호가는 KIS 체결 증거로 바꾸지 않으며, 계좌 순수익은 청산·현금 재사용·운영비·KODEX200 기회비용까지 확인한 뒤 판단한다.
+
+
+## 다음 세션: 수집 확인 뒤 가격 비교
+
+[최신 체크리스트](monitoring-checkpoints.md)의 실행/봉인/모집단/출처 검사를 먼저 한다. 활성화 결과는 root 전용 `/var/lib/qwq-entry-capture/status.json`·`activation.receipt`에 남으며 예약 자체는 성공 증거가 아니다. 같은 승인/파일로 두 번째 시도를 하거나, 자료가 적다고 임의로 매수 중지를 해제하지 않는다.
+
+첫 scan 전체를 분모로 유지하고, 미관측 부분집합·자료 결측·자본 한도 실패는 cash/0원으로 바꾸지 않는다. A는 전송 전 order_ready 진입 대리치, B는 같은 후보·수량의 비용 후 가격 게이트다. B가 allow면 같은 가격·수량이므로 차이0, B가 cash일 때 A의 손실은 피한 손실이고 A의 이익은 놓친 이익이다. baseline_cash는 가격 게이트의 개선으로 세지 않는다. 게이트 불명 비율과 900초 손익 미짝 비율을 따로 보고하고, 미짝이 남으면 complete_delta_net_pnl은 null이다.
+
+토스 품질 보고는 아래 읽기 전용 CLI를 사용한다. 실행 전 실제 deployment의 plan/ledger 결합과 종료 상태를 대조한다. 토스 전용 UID의 허용된 읽기 범위로 실행하며 파일 권한을 넓히지 않는다.
+
+```bash
+/home/ubuntu/projects/qwq-ai-trader/venv/bin/python scripts/report_toss_candidate_observation.py \
+  --artifact /var/lib/qwq-toss-observer/cohorts/2f11dc3cd6f3cbf43ac1381df0b2f879ae2ddc94eb20e49d1b2fbba493e59b1a/observations.jsonl \
+  --plan-sha256 2f11dc3cd6f3cbf43ac1381df0b2f879ae2ddc94eb20e49d1b2fbba493e59b1a
+```
+
+이 보고는 KRX+NXT LOSSY 후보 품질용이며 profit_comparison_available=false·kis_execution_evidence=false다. KIS 가격 A/B에는 별도 검토된 세션/실효 판단/비용 보충 입력이 필요하다. 아직 실제 자료가 없으므로 그 파일 경로나 결과를 만들어 두지 않는다.
+
+```bash
+/home/ubuntu/projects/qwq-ai-trader/venv/bin/python scripts/compare_entry_price_shadow.py \
+  --journal /home/ubuntu/.local/state/qwq-entry-observation/20261002-pilot1/engine.jsonl \
+  --study /home/ubuntu/.local/share/qwq-entry-observation/20261002-pilot1/study.json \
+  --evaluation-inputs <검토된-명시-보충입력.json> \
+  --max-journal-bytes 67108864
+```
+
+명령은 해당 릴리스의 저장소 루트에서 실행한다. 위 꺾쇠 항목은 실제 검토 파일로 치환하는 설명 자리이며 그대로 실행하지 않는다. 공개 KRX 참조 요율과 양방향 추가 슬리피지0/10/30bp를 각각 표시하고, 이미 ask/bid에 포함된 스프레드를 이중 가산하지 않는다. 900초 가격 대리치는 손절/익절/부분체결·현금 재사용·계좌 수익 재생이 아니다. 첫 표본으로 새 전략이나 순수익을 확정하지 않고, 현재 엔진의 선정/진입 개선 후보를 고르는 데 사용한다.
