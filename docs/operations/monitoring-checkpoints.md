@@ -1,5 +1,19 @@
 # 모니터링 체크포인트
 
+## 10월 2일 첫 관측 — 최신26차
+
+- [x] PR #119 필수 검사/병합, 토스 비활성 설치와 실제 UID 정적 검증, 연구 입력 7개 지문·소유권 대조.
+- [x] 실행 timer active/waiting, 다음 시각 **2026-10-02 08:55:00 KST**, Persistent=false. 보존 만료 timer는 11월 1일 09:46:10 KST. 봇 PID3875500·재시작0·매수 중지·운영 설정 동일, 활성 봇 drop-in과 실행 영수증은 아직 없음.
+- [ ] 08:55~08:57: 실행 영수증/상태에서 실제 대상 SHA·재시작 요청·rollback 여부를 확인하고, 새 PID/NRestarts·KR 매수 중지·설정·관측 endpoint의 study/epoch/capture ID를 대조. 실패/시간 경과 시 자동 재시도나 날짜 연장 금지.
+- [ ] 09:15~09:29 첫 scan 전체 후보≤100/원래 순서 보존, 관측 부분집합=min(N,3), 나머지는 outside_projected_subset/unknown. 빈 scan·불량 첫 호가를 다음 좋은 결과로 교체하지 않음.
+- [ ] 09:45 종료 후 엔진 sealed/fsync_confirmed/error/dropped_records/incomplete_reasons와 토스 서비스 exit·service_complete/service_reason/stop_reason/cleanup_failed를 함께 확인. 파일 구조 정상이나 보고 CLI exit0만으로 성공 판정 금지.09:46 승인 만료 후 추가 송신 중단 확인.
+- [ ] 후보별 scan→signal→order_ready와 ACK/첫 호가/신선도/스프레드/지연을 대조. 토스 KRX+NXT LOSSY 관측은 KIS 실행 가격/체결 근거로 쓰지 않음.
+- [ ] KIS 동일 후보·수량의 기존 진입 대리치와 비용 후 가격 게이트를 900초 첫 bid로 비교. 피한 손실·놓친 이익·unknown, 양방향 추가 슬리피지0/10/30bp를 함께 보고. 게이트 불명 비율과 손익 미짝 비율을 분리하며 미짝이 있으면 전체 개선손익은 null.
+- [ ] 실제 체결·청산·현금 재사용·계좌 비용/입출금·AI/자료/서버 비용과 전체 KODEX200 기회비용을 확인하기 전 계좌 순수익 확정 금지. 반도체 제외·버전/국면 분리는 보조 원인 진단으로 유지.
+
+명령과 정확한 경로는 [실행 기록](capture-execution-2026-10-02.md)을 따른다. 아래 단계별 미적용/승인 대기는 당시 이력이며 최신 상태를 덮지 않는다.
+
+
 - [x] 25차 로컬 준비: 다수 후보의 전체 분모 보존·상위3개 관측, 소비/기간 경과 후 일반 시작. [설치안](entry-capture-installation-2026-10-02.md) 작성.
 - [ ] 운영 승인이 주어지면 현 상태/허용 identity·실행 인자·운영 override5%·KR 매수 중지 보존 확인. 기존 v1 설치기를 업데이트용으로 사용하지 않음.
 - [ ] 10월2일08:55 전 정적 준비.08:55 이후 grant가 유효할 때 launcher/배치 검증 후08:57 전1회 기동. 실패/지연 시 취소·자동 연장 금지.
